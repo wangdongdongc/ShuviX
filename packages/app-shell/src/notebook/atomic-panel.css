@@ -615,8 +615,8 @@ button.cm-atomic-search-btn svg {
 }
 
 /* —— shuvix 契约 md 的 frontmatter 属性卡（notebook/frontmatterCard.ts）——
-   卡片视觉直接复用设置页的 Tailwind 类名（见 frontmatterCard.ts 的 CARD_BOX/ROW/…），
-   这里只留 CM6 语境特有、Tailwind 表达不了的两条。 */
+   卡片视觉全是 Tailwind 类名（见 frontmatterCard.ts 的 ROW/LABEL/VALUE/CONTROL ——
+   无盒无底的两列清单），这里只留 CM6 语境特有、Tailwind 表达不了的两条。 */
 
 /* 揭示态：给 frontmatter 源码行一层极淡的强调底色，标出元数据边界 */
 .cm-shuvix-fm-srcline {

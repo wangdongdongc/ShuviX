@@ -62,6 +62,15 @@ export interface FrontmatterFieldPickerProps {
 type FieldControlProps = Omit<FrontmatterFieldPickerProps, 'kind' | 'fieldKey'>
 
 /**
+ * 卡上控件的共同外观（与 frontmatterCard.ts 的 CONTROL 同一套话）：静止时不描边不填底，
+ * 悬停淡底、聚焦才填底描边 —— 属性卡是一张清单，不到交互那一刻控件不该像控件。
+ * 描边颜色由各控件自己补（正常态 border-transparent，管线下拉的警示态换琥珀）。
+ * 尺寸同样照它的约定：leading-5 + py-px + 1px 描边 = 24px，一行 26px。
+ */
+const FLAT_CONTROL =
+  'appearance-none rounded-md border bg-transparent transition-colors enabled:hover:bg-bg-tertiary/40 focus:outline-none focus:bg-bg-primary focus:border-accent/50'
+
+/**
  * 工具白名单编辑：紧凑触发器 + ToolSelectList 弹层。
  *
  * 弹层经 portal 渲染到 body（fixed 定位 + 空间不足时上翻）—— 属性卡的圆角盒子带
@@ -178,7 +187,7 @@ function ToolsField({ value, onChange, readOnly = false }: FieldControlProps): R
           e.stopPropagation()
           if (!readOnly) toggleOpen()
         }}
-        className="flex items-center gap-1.5 max-w-full px-2 py-1 rounded-md border border-border-secondary/50 bg-bg-primary text-[11px] text-text-primary transition-colors enabled:hover:border-border-secondary disabled:cursor-default disabled:text-text-secondary"
+        className={`${FLAT_CONTROL} border-transparent flex items-center gap-1.5 max-w-full px-2 py-px text-[12px] leading-5 text-text-primary disabled:cursor-default disabled:text-text-secondary`}
       >
         <span className="truncate font-mono">
           {enabled.length > 0 ? enabled.join(', ') : t('notebook.frontmatter.unset')}
@@ -228,6 +237,7 @@ function ModelField({ value, onChange, readOnly = false }: FieldControlProps): R
       placeholder={unresolved ? value.trim() : undefined}
       readonly={readOnly}
       width={230}
+      flat
       allowClear
       onChange={(provider, model) =>
         onChange(provider && model ? formatModelRef(provider, model) : null)
@@ -261,7 +271,7 @@ function TextListField({
       defaultValue={value}
       disabled={readOnly}
       placeholder={t('notebook.frontmatter.unset')}
-      className="cm-shuvix-fmcard-input w-[230px] max-w-full appearance-none bg-bg-primary rounded-md px-2.5 py-1 text-[11.5px] font-mono leading-relaxed text-text-primary border border-transparent transition-colors hover:border-border-secondary/60 focus:outline-none focus:border-accent/60 placeholder:text-text-tertiary disabled:opacity-60"
+      className={`cm-shuvix-fmcard-input ${FLAT_CONTROL} border-transparent w-full max-w-[320px] px-2 py-px text-[12px] font-mono leading-5 text-text-primary placeholder:text-text-tertiary/70 disabled:opacity-60`}
       onBlur={(e) => commit(e.target.value)}
       onKeyDown={(e) => {
         // 卡内按键不外泄给编辑器（同 ToolsField / 属性卡文本行）
@@ -314,7 +324,7 @@ function EnumField({
         <select
           value={current}
           disabled={readOnly}
-          className="cm-shuvix-fmcard-input appearance-none bg-bg-primary rounded-md pl-2.5 pr-6 py-1 text-[11.5px] font-mono leading-relaxed text-text-primary border border-transparent transition-colors hover:border-border-secondary/60 focus:outline-none focus:border-accent/60 disabled:opacity-60 cursor-pointer"
+          className={`cm-shuvix-fmcard-input ${FLAT_CONTROL} border-transparent pl-2 pr-6 py-px text-[12px] font-mono leading-5 text-text-primary disabled:opacity-60 cursor-pointer disabled:cursor-default`}
           onChange={(e) => onChange(e.target.value === '' ? null : e.target.value)}
           onKeyDown={(e) => e.stopPropagation()}
         >
@@ -334,16 +344,11 @@ function EnumField({
   )
 }
 
-const SELECT_CLASS =
-  'cm-shuvix-fmcard-input appearance-none rounded-md pl-2.5 pr-6 py-1 text-[11.5px] font-mono leading-relaxed border transition-colors focus:outline-none focus:border-accent/60 disabled:opacity-60 cursor-pointer disabled:cursor-default'
+const SELECT_CLASS = `cm-shuvix-fmcard-input ${FLAT_CONTROL} pl-2 pr-6 py-px text-[12px] font-mono leading-5 disabled:opacity-60 cursor-pointer disabled:cursor-default`
 
-/** 属性卡下拉的一致外观：正常态透明描边、警示态琥珀描边 + 琥珀文字 */
+/** 属性卡下拉的一致外观：正常态无描边（同其它控件），警示态琥珀描边 + 琥珀文字 */
 function selectClass(warn: boolean): string {
-  return `${SELECT_CLASS} ${
-    warn
-      ? 'bg-bg-primary border-warning/60 text-warning'
-      : 'bg-bg-primary border-transparent text-text-primary hover:border-border-secondary/60'
-  }`
+  return `${SELECT_CLASS} ${warn ? 'border-warning/60 text-warning' : 'border-transparent text-text-primary'}`
 }
 
 const isPlainObject = (v: unknown): v is Record<string, unknown> =>
@@ -437,7 +442,9 @@ function BotPipelineField({
       : t('notebook.frontmatter.botSlotsCount', { count: n })
 
   const workflowMissing = workflow !== '' && !!options && !wf
-  const rowLabel = 'w-14 shrink-0 text-[12px] text-text-secondary pt-1'
+  // 内层标签 128px + 外层 pl-3 的 12px = 属性卡的标签列宽（frontmatterCard.ts 的 LABEL_WIDTH，140px）：
+  // 块内的值与卡上其它行的值落在同一竖线上，块只靠 12px 的缩进说明自己是从属的
+  const rowLabel = 'w-[128px] shrink-0 truncate text-[12px] leading-6 text-text-tertiary'
 
   const slotRow = (
     role: string,
@@ -452,7 +459,7 @@ function BotPipelineField({
     return (
       <div
         key={role}
-        className="flex items-center gap-2"
+        className="flex items-center gap-2 min-h-6"
         title={description ?? ''}
         data-bot-slot={role}
         data-bot-slot-extra={extra ? '' : undefined}
@@ -490,10 +497,11 @@ function BotPipelineField({
   }
 
   return (
-    <div className="cm-shuvix-fmcard-botpipe space-y-1.5 pl-3 pt-0.5" data-bot-pipeline>
+    <div className="cm-shuvix-fmcard-botpipe space-y-0.5 pl-3" data-bot-pipeline>
       <div className="flex items-start gap-3">
         <span className={rowLabel}>{t('notebook.frontmatter.botWorkflow')}</span>
-        <div className="min-w-0 flex-1 flex items-center gap-2 flex-wrap">
+        {/* -ml-2 同卡上其它无描边控件：下拉里的文字与只读值对齐 */}
+        <div className="min-w-0 flex-1 flex items-center gap-2 flex-wrap min-h-6 -ml-2">
           <span className="relative">
             <select
               value={workflow}
@@ -530,11 +538,11 @@ function BotPipelineField({
         <span className={rowLabel} title={t('settings.botSlotHint')}>
           {t('notebook.frontmatter.botSlots')}
         </span>
-        <div className="min-w-0 flex-1 flex flex-col gap-1.5" data-bot-slots={declared.length}>
+        <div className="min-w-0 flex-1 flex flex-col gap-0.5" data-bot-slots={declared.length}>
           {declared.map((s) => slotRow(s.role, s.required, false, s.description))}
           {extraRoles.map((role) => slotRow(role, false, true))}
           {declared.length === 0 && extraRoles.length === 0 && (
-            <span className="text-[12px] text-text-tertiary pt-1">
+            <span className="text-[12px] leading-6 text-text-tertiary/70">
               {options && wf
                 ? t('notebook.frontmatter.botNoSlots')
                 : t('notebook.frontmatter.unset')}
@@ -544,9 +552,9 @@ function BotPipelineField({
       </div>
       <div className="flex items-start gap-3">
         <span className={rowLabel}>{t('notebook.frontmatter.botInput')}</span>
-        <div className="min-w-0 flex-1 pt-1" data-bot-input={input ? Object.keys(input).length : 0}>
+        <div className="min-w-0 flex-1" data-bot-input={input ? Object.keys(input).length : 0}>
           {input && Object.keys(input).length > 0 ? (
-            <div className="flex flex-col gap-0.5 font-mono text-[11.5px]">
+            <div className="flex flex-col font-mono text-[11.5px] leading-6">
               {Object.entries(input).map(([k, v]) => (
                 <div key={k} className="break-all">
                   <span className="text-text-secondary">{k}</span>
@@ -557,7 +565,7 @@ function BotPipelineField({
               ))}
             </div>
           ) : (
-            <span className="text-[12px] text-text-tertiary">
+            <span className="text-[12px] leading-6 text-text-tertiary/70">
               {t('notebook.frontmatter.botInputNone')}
             </span>
           )}

@@ -47,6 +47,11 @@ export interface ModelSelectProps {
   readonly?: boolean
   /** boxed 触发器固定宽度（默认 260px） */
   width?: number
+  /**
+   * boxed：去掉静止态的描边与底色（悬停淡底、聚焦才填底描边），文字随清单行用 12px ——
+   * 给「清单里的一格」用（笔记本属性卡），设置页的下拉框保持默认的盒子。
+   */
+  flat?: boolean
   /** 未选中时的占位文案 */
   placeholder?: string
   /** boxed：显示清除图标以回到未选态 */
@@ -77,6 +82,7 @@ export function ModelSelect({
   variant = 'boxed',
   readonly = false,
   width = 260,
+  flat = false,
   placeholder,
   allowClear = false,
   clearLabel,
@@ -261,7 +267,11 @@ export function ModelSelect({
           // 只读：禁用而非「可点但无反应」—— 后者外观仍是可交互的，与同处一行的其他
           // 只读控件（禁用的输入框/开关）不一致
           disabled={readonly}
-          className="min-w-0 flex-1 flex items-center gap-1.5 bg-bg-primary rounded-md pl-2.5 pr-2 py-1 text-[11px] border border-border-secondary/50 transition-colors enabled:hover:border-border-secondary enabled:cursor-pointer disabled:cursor-default focus:outline-none focus:border-accent/60"
+          className={`min-w-0 flex-1 flex items-center gap-1.5 rounded-md pr-2 border transition-colors enabled:cursor-pointer disabled:cursor-default focus:outline-none focus:border-accent/60 ${
+            flat
+              ? 'pl-2 py-0.5 text-[12px] bg-transparent border-transparent enabled:hover:bg-bg-tertiary/40 focus:bg-bg-primary'
+              : 'pl-2.5 py-1 text-[11px] bg-bg-primary border-border-secondary/50 enabled:hover:border-border-secondary'
+          }`}
         >
           {hasSelection ? (
             <>

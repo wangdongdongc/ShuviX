@@ -299,20 +299,38 @@ function setNestedPaths(view: EditorView, key: string, edits: FrontmatterPathEdi
 // ---------------------------------------------------------------------
 // 卡片 DOM
 //
-// 视觉语言直接沿用设置页的 SettingsSection / SettingsRow（同一套 Tailwind 类名 ——
-// tailwind.config 的 content 覆盖 packages/app-shell/src/**/*.ts，故 .ts 里的类名
-// 照常被扫描）：标题行在外、圆角描边卡片在内、行间 divide 分隔。属性卡本质就是
-// 一张「设置卡片」，没有理由自成一套观感。
+// 视觉语言：Obsidian Properties 那种「键 / 值」两列清单 —— 没有描边盒子、没有底色、
+// 没有行间分隔线；标签一律小字弱色、值左对齐，控件静止时不描边不填底（悬停才浮现）。
+// 元数据在这一页上是配角，正文才是主角：卡片的存在感只该够标出「这几行是属性」。
+// （此前沿用设置页 SettingsSection 的圆角描边卡片 —— 在设置页它是唯一内容，
+// 在笔记本里它压过了正文。）Tailwind 类名照常写在这里：tailwind.config 的 content
+// 覆盖 packages/app-shell/src/**/*.ts。
 //
 // `.cm-shuvix-fmcard*` 类名保留为**测试与宿主的稳定钩子**，不承担样式。
 
-const CARD_BOX =
-  'rounded-xl border border-border-secondary/60 bg-bg-secondary/30 overflow-hidden divide-y divide-border-secondary/40'
-const ROW = 'flex items-center justify-between gap-3 px-4 py-2.5'
-const ROW_BLOCK = 'px-4 py-2.5 space-y-1.5'
-const LABEL = 'min-w-0 flex-1 text-[13px] text-text-primary'
-const VALUE = 'shrink-0 max-w-[62%] text-[13px] text-text-primary text-right break-words'
-const MUTED = 'text-[11px] text-text-tertiary'
+/**
+ * 标签列宽：放得下常见标签的最长者（英文「Instruction files」），更长的截断 + title 兜底。
+ * FrontmatterFieldPicker 的管线块把内层标签设成 128px + 12px 缩进，与这个值列对齐 —— 改这里要一起改。
+ */
+const LABEL_WIDTH = 'w-[140px]'
+const ROW = 'flex items-start gap-3 px-1 py-px'
+const ROW_BLOCK = 'px-1 py-1 space-y-1'
+const LABEL = `${LABEL_WIDTH} shrink-0 truncate text-[12px] leading-6 text-text-tertiary`
+/** 块行（标签在上、内容整宽在下）的标签：同色同号，不截断 */
+const BLOCK_LABEL = 'text-[12px] leading-6 text-text-tertiary'
+const VALUE = 'min-w-0 flex-1 text-[12.5px] leading-6 text-text-primary break-words'
+const MUTED = 'text-[12px] text-text-tertiary/70'
+/**
+ * 卡上可编辑控件的共同外观：静止时与页面同色，悬停淡底、聚焦才填底描边 ——
+ * 不到交互那一刻不像控件。FrontmatterFieldPicker 里的选择器用同一套话（FLAT_CONTROL）。
+ * 尺寸约定：控件一律 24px 高（leading-5 + py-px + 1px 描边），与只读值的 leading-6 同高，
+ * 于是不论一行里放的是文字、开关还是下拉，行高都是 26px。
+ */
+const CONTROL =
+  'appearance-none rounded-md border border-transparent bg-transparent transition-colors enabled:hover:bg-bg-tertiary/40 focus:outline-none focus:bg-bg-primary focus:border-accent/50'
+const STATUS_BASE = 'cm-shuvix-fmcard-status inline-flex items-center gap-1.5 text-[11px]'
+const BANNER_BASE =
+  'cm-shuvix-fmcard-banner mt-1 mb-1.5 px-2.5 py-1.5 rounded-md text-[11px] leading-relaxed break-words'
 
 function el<K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -322,6 +340,13 @@ function el<K extends keyof HTMLElementTagNameMap>(
   const node = document.createElement(tag)
   node.className = cls
   if (text !== undefined) node.textContent = text
+  return node
+}
+
+/** 行标签：列宽固定会截断，title 兜底给全文 */
+function labelEl(cls: string, text: string): HTMLElement {
+  const node = el('span', cls, text)
+  node.title = text
   return node
 }
 
@@ -361,7 +386,7 @@ function buildStructuredValue(kind: ShuvixMdFieldKind, value: unknown): HTMLElem
     if (typeof value !== 'string') return null
     return el(
       'div',
-      'cm-shuvix-fmcard-value cm-shuvix-fmcard-prose text-[13px] leading-relaxed text-text-primary whitespace-pre-wrap break-words',
+      'cm-shuvix-fmcard-value cm-shuvix-fmcard-prose text-[12.5px] leading-relaxed text-text-primary whitespace-pre-wrap break-words',
       value
     )
   }
@@ -521,14 +546,17 @@ function buildTextEditor(
   current: string,
   readOnly: boolean
 ): HTMLElement {
-  const wrap = el('div', 'cm-shuvix-fmcard-value flex-1 min-w-0')
+  // -ml-2 抵消输入框自己的左内边距：静止态它没有描边，文字要与只读值落在同一竖线上
+  const wrap = el('div', 'cm-shuvix-fmcard-value flex-1 min-w-0 -ml-2')
+  // block：textarea 默认 inline-block，会在包裹层的行盒里留出基线下方的空隙，
+  // 于是文本行比其它行高出五六像素 —— 清单的行距靠每行都是 24px 撑起来
   // textarea 而非 input：描述这类长文本在单行输入框里会被裁掉，用户得移动光标才看得全。
   // field-sizing:content 让它随内容自动增高（仓库既有用法，Electron 的 Chromium 支持）。
   // 左对齐：可编辑控件右对齐读起来别扭，长文本换行后尤其乱。
   const input = document.createElement('textarea')
   input.rows = 1
-  input.className = `cm-shuvix-fmcard-input w-full resize-none overflow-hidden [field-sizing:content] appearance-none bg-bg-primary rounded-md px-2.5 py-1 text-[12px] leading-relaxed text-text-primary border border-transparent transition-colors hover:border-border-secondary/60 focus:outline-none focus:border-accent/60 placeholder:text-text-tertiary${
-    spec.kind === 'mono' ? ' font-mono text-[11.5px]' : ''
+  input.className = `cm-shuvix-fmcard-input ${CONTROL} block w-full resize-none overflow-hidden [field-sizing:content] px-2 py-px text-[12.5px] leading-5 text-text-primary placeholder:text-text-tertiary/70${
+    spec.kind === 'mono' ? ' font-mono text-[12px]' : ''
   }`
   input.value = current
   input.placeholder = config.t('notebook.frontmatter.unset')
@@ -569,17 +597,17 @@ function buildFieldRow(
 ): HTMLElement {
   const t = config.t
 
-  // 布尔：设置页 Toggle 的同款开关（w-8 h-[18px] 胶囊 + 14px 白色滑块）
+  // 布尔：设置页 Toggle 的缩小版（w-7 h-4 胶囊 + 12px 白色滑块）—— 清单行只有 24px 高，
+  // 原尺寸放进来显得笨重。开关落在值列起点，缺省态在其后补一句弱色「未设置」。
   if (spec.kind === 'boolean' && (value === undefined || typeof value === 'boolean')) {
     const row = el('div', `cm-shuvix-fmcard-row ${ROW}`)
     row.dataset.key = spec.key
-    row.appendChild(el('span', `cm-shuvix-fmcard-label ${LABEL}`, t(spec.labelKey)))
+    row.appendChild(labelEl(`cm-shuvix-fmcard-label ${LABEL}`, t(spec.labelKey)))
     const state = value === undefined ? 'unset' : value ? 'on' : 'off'
-    const right = el('div', 'shrink-0 flex items-center gap-2')
-    if (state === 'unset') right.appendChild(unsetSpan(t))
+    const right = el('div', 'min-w-0 flex-1 flex items-center gap-2 h-6')
     const toggle = el(
       'button',
-      `cm-shuvix-fmcard-toggle inline-flex items-center w-8 h-[18px] rounded-full px-[2px] transition-colors ${
+      `cm-shuvix-fmcard-toggle inline-flex items-center w-7 h-4 rounded-full px-[2px] transition-colors ${
         state === 'on' ? 'bg-accent' : 'bg-border-secondary'
       } ${state === 'unset' ? 'opacity-50' : ''} ${readOnly ? '' : 'cursor-pointer'}`
     )
@@ -589,8 +617,8 @@ function buildFieldRow(
     toggle.appendChild(
       el(
         'span',
-        `block w-[14px] h-[14px] rounded-full bg-white shadow-sm transition-transform duration-150 ${
-          state === 'on' ? 'translate-x-[14px]' : 'translate-x-0'
+        `block w-3 h-3 rounded-full bg-white shadow-sm transition-transform duration-150 ${
+          state === 'on' ? 'translate-x-3' : 'translate-x-0'
         }`
       )
     )
@@ -602,6 +630,7 @@ function buildFieldRow(
       })
     }
     right.appendChild(toggle)
+    if (state === 'unset') right.appendChild(unsetSpan(t))
     row.appendChild(right)
     return row
   }
@@ -612,9 +641,7 @@ function buildFieldRow(
   if (spec.kind === 'botPipeline') {
     const row = el('div', `cm-shuvix-fmcard-row is-block ${ROW_BLOCK}`)
     row.dataset.key = spec.key
-    row.appendChild(
-      el('div', 'cm-shuvix-fmcard-label text-[13px] text-text-primary', t(spec.labelKey))
-    )
+    row.appendChild(el('div', `cm-shuvix-fmcard-label ${BLOCK_LABEL}`, t(spec.labelKey)))
     if (config.mountField) {
       const slot = el('div', 'cm-shuvix-fmcard-slot')
       row.appendChild(slot)
@@ -652,8 +679,9 @@ function buildFieldRow(
   ) {
     const row = el('div', `cm-shuvix-fmcard-row ${ROW}`)
     row.dataset.key = spec.key
-    row.appendChild(el('span', `cm-shuvix-fmcard-label ${LABEL}`, t(spec.labelKey)))
-    const slot = el('div', 'cm-shuvix-fmcard-slot shrink-0 max-w-[70%]')
+    row.appendChild(labelEl(`cm-shuvix-fmcard-label ${LABEL}`, t(spec.labelKey)))
+    // 槽位占满值列；-ml-2 同文本输入框：无描边控件里的文字要与只读值对齐
+    const slot = el('div', 'cm-shuvix-fmcard-slot min-w-0 flex-1 min-h-6 flex items-center -ml-2')
     row.appendChild(slot)
     const cleanup = config.mountField?.(slot, {
       key: spec.key,
@@ -675,13 +703,7 @@ function buildFieldRow(
   ) {
     const textRow = el('div', `cm-shuvix-fmcard-row ${ROW}`)
     textRow.dataset.key = spec.key
-    textRow.appendChild(
-      el(
-        'span',
-        'cm-shuvix-fmcard-label w-[132px] shrink-0 text-[13px] text-text-primary',
-        t(spec.labelKey)
-      )
-    )
+    textRow.appendChild(labelEl(`cm-shuvix-fmcard-label ${LABEL}`, t(spec.labelKey)))
     textRow.appendChild(
       buildTextEditor(view, config, spec, typeof value === 'string' ? value : '', readOnly)
     )
@@ -694,9 +716,7 @@ function buildFieldRow(
   if (structured) {
     const row = el('div', `cm-shuvix-fmcard-row is-block ${ROW_BLOCK}`)
     row.dataset.key = spec.key
-    row.appendChild(
-      el('div', `cm-shuvix-fmcard-label text-[13px] text-text-primary`, t(spec.labelKey))
-    )
+    row.appendChild(el('div', `cm-shuvix-fmcard-label ${BLOCK_LABEL}`, t(spec.labelKey)))
     row.appendChild(structured)
     return row
   }
@@ -704,17 +724,18 @@ function buildFieldRow(
   // 文本 / 只读列表值
   const row = el('div', `cm-shuvix-fmcard-row ${ROW}`)
   row.dataset.key = spec.key
-  row.appendChild(el('span', `cm-shuvix-fmcard-label ${LABEL}`, t(spec.labelKey)))
-  const mono = spec.kind === 'mono' || spec.kind === 'select' ? ' font-mono text-[11.5px]' : ''
+  row.appendChild(labelEl(`cm-shuvix-fmcard-label ${LABEL}`, t(spec.labelKey)))
+  const mono = spec.kind === 'mono' || spec.kind === 'select' ? ' font-mono text-[12px]' : ''
   const valueEl = el('div', `cm-shuvix-fmcard-value ${VALUE}${mono}`)
   if (value === undefined || value === null || value === '') {
     valueEl.appendChild(unsetSpan(t))
   } else if (spec.kind === 'csv' && typeof value === 'string') {
-    const chips = el('div', 'cm-shuvix-fmcard-chips flex flex-wrap justify-end gap-1')
+    // 只读 chips：淡底无描边，16px 高 + 上下 4px 正好填满 24px 的行
+    const chips = el('div', 'cm-shuvix-fmcard-chips flex flex-wrap gap-1 py-1')
     for (const entry of csvEntries(value)) {
       const chip = el(
         'span',
-        'cm-shuvix-fmcard-chip px-1.5 py-0.5 rounded-md border border-border-secondary/60 bg-bg-primary font-mono text-[11px]',
+        'cm-shuvix-fmcard-chip px-1.5 rounded bg-bg-tertiary/60 font-mono text-[11px] leading-4 text-text-secondary',
         entry
       )
       chip.dataset.value = entry
@@ -731,9 +752,7 @@ function buildFieldRow(
 function buildGenericRow(key: string, value: unknown): HTMLElement {
   const row = el('div', `cm-shuvix-fmcard-row is-generic ${ROW}`)
   row.dataset.key = key
-  row.appendChild(
-    el('span', `cm-shuvix-fmcard-label ${LABEL} font-mono text-[11.5px] text-text-secondary`, key)
-  )
+  row.appendChild(labelEl(`cm-shuvix-fmcard-label ${LABEL} font-mono text-[11.5px]`, key))
   row.appendChild(el('div', `cm-shuvix-fmcard-value ${VALUE}`, scalarText(value)))
   return row
 }
@@ -788,7 +807,10 @@ class FrontmatterCardWidget extends WidgetType {
     // 比真实布局少 24px（= 上下各 12px），卡片以下每一行的 top 都偏这 24px，于是
     // 「点击落点比点的位置低一行」，且 moveVertically 找不到更靠上的位置，ArrowUp 从正文
     // 任意一行都直接跳到文档第 1 行。改 padding 后 DOM 布局逐像素不变、偏移归零。
-    const wrap = el('div', 'cm-shuvix-fmcard py-3')
+    //
+    // group：让「编辑源码」只在悬停 / 卡内聚焦时浮现（见 head）。底边一条极淡的细线是
+    // 元数据与正文的唯一分界 —— 卡片没有盒子了，这条线代替盒子说「属性到此为止」。
+    const wrap = el('div', 'cm-shuvix-fmcard group pt-3 pb-2 border-b border-border-secondary/40')
     wrap.setAttribute('contenteditable', 'false')
 
     // 点卡片空白处（标签、行间、卡片背景）不得把光标送进 frontmatter —— 卡片位于
@@ -820,13 +842,14 @@ class FrontmatterCardWidget extends WidgetType {
 
     const descriptor = descriptorForType(this.marker.type)
 
-    // 标题行在卡片之外（同 SettingsSection）：类型徽章 + 校验态 + 「编辑源码」
-    const head = el('div', 'cm-shuvix-fmcard-head flex items-center gap-2 mb-2 px-1')
+    // 标题行：类型徽章 + 校验态（合法时只是一个绿点）+ 「编辑源码」（悬停才浮现）——
+    // 三者都是小字弱色。它的职责只是「这是一份什么文件」，不是一个区块的抬头。
+    const head = el('div', 'cm-shuvix-fmcard-head flex items-center gap-2 h-6 px-1 mb-0.5')
     const version = this.marker.version !== null ? ` · v${this.marker.version}` : ''
     head.appendChild(
       el(
         'span',
-        'cm-shuvix-fmcard-badge text-[13px] font-semibold text-text-primary',
+        'cm-shuvix-fmcard-badge text-[11px] font-medium tracking-wide text-text-tertiary',
         `${descriptor?.badge ?? `ShuviX ${this.marker.type}`}${version}`
       )
     )
@@ -834,19 +857,24 @@ class FrontmatterCardWidget extends WidgetType {
       head.appendChild(
         el(
           'span',
-          'cm-shuvix-fmcard-err text-[10px] px-1.5 py-0.5 rounded bg-red-500/10 text-red-500',
+          'cm-shuvix-fmcard-err text-[10px] px-1.5 py-px rounded bg-red-500/10 text-red-500',
           t('notebook.frontmatter.yamlError')
         )
       )
     }
-    const statusChip = el('span', 'cm-shuvix-fmcard-status text-[10px] px-1.5 py-0.5 rounded')
+    // 校验态 = 圆点 + 文案：合法态只留圆点（文案进 title），有问题才把话说出来
+    const statusChip = el('span', STATUS_BASE)
     statusChip.hidden = true
+    const statusDot = el('i', 'cm-shuvix-fmcard-status-dot block w-1.5 h-1.5 rounded-full')
+    const statusText = el('span', 'cm-shuvix-fmcard-status-text')
+    statusChip.appendChild(statusDot)
+    statusChip.appendChild(statusText)
     head.appendChild(statusChip)
     head.appendChild(el('div', 'flex-1'))
     if (!readOnly) {
       const src = el(
         'button',
-        'cm-shuvix-fmcard-src shrink-0 flex items-center gap-1 px-2 py-1 rounded text-[10px] border border-dashed border-border-secondary text-text-secondary hover:text-text-primary hover:border-accent/40 hover:bg-accent/5 transition-colors',
+        'cm-shuvix-fmcard-src shrink-0 text-[11px] text-text-tertiary hover:text-text-primary opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 transition-opacity',
         t('notebook.frontmatter.sourceButton')
       )
       src.type = 'button'
@@ -860,10 +888,7 @@ class FrontmatterCardWidget extends WidgetType {
     wrap.appendChild(head)
 
     // 解析器级校验（异步；缓存命中同步上屏）
-    const banner = el(
-      'div',
-      'cm-shuvix-fmcard-banner mb-2 px-3 py-2 rounded-lg text-[11px] leading-relaxed break-words'
-    )
+    const banner = el('div', BANNER_BASE)
     banner.hidden = true
     wrap.appendChild(banner)
     const { validate } = this.config
@@ -871,28 +896,31 @@ class FrontmatterCardWidget extends WidgetType {
       const paint = (result: ShuvixMdValidation): void => {
         if (result.status === 'unknown') return
         const warned = result.status === 'valid' && result.messages.length > 0
-        statusChip.hidden = false
-        statusChip.classList.toggle('is-ok', result.status === 'valid' && !warned)
-        statusChip.classList.toggle('is-warn', warned)
-        statusChip.classList.toggle('is-err', result.status === 'invalid')
-        statusChip.className = `cm-shuvix-fmcard-status text-[10px] px-1.5 py-0.5 rounded ${
-          result.status === 'invalid'
-            ? 'is-err bg-red-500/10 text-red-500'
-            : warned
-              ? 'is-warn bg-amber-500/10 text-amber-600 dark:text-amber-400'
-              : 'is-ok bg-green-500/10 text-green-600 dark:text-green-400'
-        }`
-        statusChip.textContent = t(
-          result.status === 'invalid'
+        const tone = result.status === 'invalid' ? 'err' : warned ? 'warn' : 'ok'
+        const label = t(
+          tone === 'err'
             ? 'notebook.frontmatter.invalid'
-            : warned
+            : tone === 'warn'
               ? 'notebook.frontmatter.warned'
               : 'notebook.frontmatter.valid'
         )
+        statusChip.hidden = false
+        statusChip.className = `${STATUS_BASE} is-${tone} ${
+          tone === 'err'
+            ? 'text-red-500'
+            : tone === 'warn'
+              ? 'text-amber-600 dark:text-amber-400'
+              : 'text-green-600 dark:text-green-400'
+        }`
+        statusDot.className = `cm-shuvix-fmcard-status-dot block w-1.5 h-1.5 rounded-full ${
+          tone === 'err' ? 'bg-red-500' : tone === 'warn' ? 'bg-amber-500' : 'bg-green-500/80'
+        }`
+        statusText.textContent = tone === 'ok' ? '' : label
+        statusChip.title = label
         if (result.messages.length > 0) {
           banner.hidden = false
-          banner.className = `cm-shuvix-fmcard-banner mb-2 px-3 py-2 rounded-lg text-[11px] leading-relaxed break-words ${
-            result.status === 'invalid'
+          banner.className = `${BANNER_BASE} ${
+            tone === 'err'
               ? 'is-err bg-red-500/10 text-red-500'
               : 'is-warn bg-amber-500/10 text-amber-600 dark:text-amber-400'
           }`
@@ -930,7 +958,7 @@ class FrontmatterCardWidget extends WidgetType {
     }
 
     if (fields !== null) {
-      const box = el('div', `cm-shuvix-fmcard-rows ${CARD_BOX}`)
+      const box = el('div', 'cm-shuvix-fmcard-rows')
       const known = descriptor?.fields ?? []
       const seen = new Set<string>([SHUVIX_MARKER_KEY, ...known.map((f) => f.key)])
       for (const f of known) {
