@@ -3,7 +3,6 @@ import {
   listBgTasks,
   readBgTaskLog,
   stopBgTask,
-  writeBgTaskStdin,
   dismissBgTask,
   clearFinishedBgTasks,
   setBgTaskNotify
@@ -14,6 +13,7 @@ import {
  *
  * 这里**没有输出流通道**：子进程的 stdout/stderr 由 OS 直接写日志文件，渲染端要看实时
  * 输出就轮询 `bgTask:readLog` 取字节范围；任务状态变更走 `bg_task` ChatEvent 广播。
+ * 也没有输入通道 —— 后台任务的 stdin 是 /dev/null，见 bgTaskService 文件头第 5 点。
  * 见 docs/background-tasks-design.md。
  */
 export function registerBgTaskHandlers(): void {
@@ -33,11 +33,6 @@ export function registerBgTaskHandlers(): void {
 
   ipcMain.handle('bgTask:stop', (_event, params: { toolCallId: string; force?: boolean }) => ({
     success: stopBgTask(params.toolCallId, params.force)
-  }))
-
-  // 用户干涉：往 stdin 写。智能体无此通道 —— 见设计文档 §7 的安全论证。
-  ipcMain.handle('bgTask:write', (_event, params: { toolCallId: string; data: string }) => ({
-    success: writeBgTaskStdin(params.toolCallId, params.data)
   }))
 
   ipcMain.handle('bgTask:dismiss', (_event, params: { toolCallId: string }) => ({

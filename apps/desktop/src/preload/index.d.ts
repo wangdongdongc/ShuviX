@@ -963,7 +963,6 @@ declare global {
         maxBytes?: number
       }) => Promise<BgTaskLogChunk>
       stop: (params: { toolCallId: string; force?: boolean }) => Promise<{ success: boolean }>
-      write: (params: { toolCallId: string; data: string }) => Promise<{ success: boolean }>
       dismiss: (params: { toolCallId: string }) => Promise<{ success: boolean }>
       clearDone: (params: { sessionId: string }) => Promise<{ cleared: number }>
       setNotify: (params: { toolCallId: string; enabled: boolean }) => Promise<{ success: boolean }>

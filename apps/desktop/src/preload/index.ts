@@ -594,8 +594,6 @@ const api = {
       ipcRenderer.invoke('bgTask:readLog', params) as Promise<BgTaskLogChunk>,
     stop: (params: { toolCallId: string; force?: boolean }) =>
       ipcRenderer.invoke('bgTask:stop', params) as Promise<{ success: boolean }>,
-    write: (params: { toolCallId: string; data: string }) =>
-      ipcRenderer.invoke('bgTask:write', params) as Promise<{ success: boolean }>,
     dismiss: (params: { toolCallId: string }) =>
       ipcRenderer.invoke('bgTask:dismiss', params) as Promise<{ success: boolean }>,
     clearDone: (params: { sessionId: string }) =>

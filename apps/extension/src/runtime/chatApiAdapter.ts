@@ -387,7 +387,6 @@ export const chatApiAdapter: ChatApi = {
     list: async () => [],
     readLog: async () => ({ exists: false, text: '', fromByte: 0, nextByte: 0, size: 0 }),
     stop: async () => ({ success: false }),
-    write: async () => ({ success: false }),
     dismiss: async () => ({ success: false }),
     clearDone: async () => ({ cleared: 0 }),
     setNotify: async () => ({ success: false })

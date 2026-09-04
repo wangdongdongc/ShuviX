@@ -1,12 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ChevronDown, ChevronRight, Send, Square, X } from 'lucide-react'
+import { ChevronDown, ChevronRight, Square, X } from 'lucide-react'
 import {
   useBgTasks,
   useBgTaskStore,
   getSessionChannelApi,
   getHostApi,
-  isImeComposing,
   TerminalView,
   useBgTaskStatus
 } from '@shuvix/chat-ui'
@@ -75,12 +74,11 @@ function TaskAction({
   )
 }
 
-/** 展开态内容：命令 + 实时输出 + stdin 干涉 + 通知开关 */
+/** 展开态内容：命令 + 实时输出 + 通知开关（后台任务没有输入通道，见 bgTaskService 文件头第 5 点） */
 function TaskDetail({ task }: { task: BgTaskInfo }): React.JSX.Element {
   const { t } = useTranslation()
   const [log, setLog] = useState('')
   const [missing, setMissing] = useState(false)
-  const [draft, setDraft] = useState('')
   // 续读游标：日志只增不减，拿到 nextByte 后每次只取新字节
   const cursorRef = useRef<number | null>(null)
 
@@ -115,17 +113,6 @@ function TaskDetail({ task }: { task: BgTaskInfo }): React.JSX.Element {
     }
   }, [task.toolCallId, task.status])
 
-  const send = useCallback(() => {
-    const data = draft
-    if (!data) return
-    setDraft('')
-    void getHostApi()
-      ?.bgTask.write({ toolCallId: task.toolCallId, data: `${data}\n` })
-      .catch(() => {})
-    // 本地回显 —— 写进的是子进程的 fd，我们插不进那个日志文件，只能在视图里留痕
-    setLog((prev) => `${prev}${prev.endsWith('\n') || !prev ? '' : '\n'}> ${data}\n`)
-  }, [draft, task.toolCallId])
-
   const toggleNotify = useCallback(() => {
     const next = !task.notifyAgent
     useBgTaskStore.getState().upsert({ ...task, notifyAgent: next })
@@ -154,27 +141,8 @@ function TaskDetail({ task }: { task: BgTaskInfo }): React.JSX.Element {
       />
 
       {task.status === 'running' && (
-        <div className="flex items-center gap-1">
-          <input
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !isImeComposing(e)) {
-                e.preventDefault()
-                send()
-              }
-            }}
-            placeholder={t('panel.tasksStdinPlaceholder')}
-            className="flex-1 min-w-0 px-2 py-1 rounded-md bg-bg-primary border border-border-secondary/50 text-[11px] font-mono text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-accent/50"
-          />
-          <button
-            onClick={send}
-            disabled={!draft}
-            className="p-1 rounded-md text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/50 disabled:opacity-30 disabled:hover:bg-transparent transition-colors"
-            title={t('panel.tasksStdinPlaceholder')}
-          >
-            <Send size={12} />
-          </button>
+        <div className="text-[10px] text-text-tertiary leading-relaxed">
+          {t('panel.tasksStdinClosed')}
         </div>
       )}
 

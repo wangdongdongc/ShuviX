@@ -1018,7 +1018,7 @@
     "tasksStop": "タスクを停止",
     "tasksDismiss": "一覧から削除",
     "tasksStatusRunning": "実行中",
-    "tasksStdinPlaceholder": "プロセスに 1 行送信…",
+    "tasksStdinClosed": "バックグラウンドタスクは入力を受け付けません。対話が必要なコマンドは、上のコマンドをコピーしてご自身のターミナルで実行してください。",
     "tasksNotify": "完了時に AI へ知らせる",
     "tasksLogMissing": "ログファイルがありません",
     "tasksLogCapped": "ログが 50 MB を超えています — 末尾のみ表示",

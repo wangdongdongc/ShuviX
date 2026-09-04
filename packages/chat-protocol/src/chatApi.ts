@@ -753,15 +753,18 @@ export interface HostApi {
   runtime: {
     destroy: (params: { sessionId: string; runtimeId: string }) => Promise<{ success: boolean }>
   }
-  /** 后台任务的管理动作（渠道端无权）。注意 write 是**用户**往 stdin 写 —— 智能体没有这条通道 */
+  /**
+   * 后台任务的管理动作（渠道端无权）。
+   *
+   * **没有 write** —— 后台任务的 stdin 是 /dev/null，谁都写不进去。曾经有一条只开给用户的
+   * 干涉通道（不开给智能体，因为那等于往一个已被 ask-on-command 批准的 shell 里再喂任意
+   * 命令、绕过整道门），后来连用户侧也撤了：没人能可靠判断一个任务是不是正卡在等输入，
+   * 那个输入框反而让人以为后台任务支持交互。需要真人参与的命令请在自己的终端里执行。
+   * 见 bgTaskService 文件头第 5 点。
+   */
   bgTask: {
     /** 停止：先 SIGINT，3 秒未退升级 SIGKILL；force 直接 SIGKILL */
     stop: (params: { toolCallId: string; force?: boolean }) => Promise<{ success: boolean }>
-    /**
-     * 用户往任务 stdin 写入（干涉）。**故意不开给智能体** —— 那等于让它往一个已被
-     * ask-on-command 批准的 shell 里再喂任意命令，绕过整道门。见设计文档 §7。
-     */
-    write: (params: { toolCallId: string; data: string }) => Promise<{ success: boolean }>
     /** 移除一条已结束的任务（连同日志文件）；运行中的不移除 */
     dismiss: (params: { toolCallId: string }) => Promise<{ success: boolean }>
     /** 清空会话内所有已结束的任务 */

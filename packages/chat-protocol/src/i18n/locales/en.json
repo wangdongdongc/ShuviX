@@ -1018,7 +1018,7 @@
     "tasksStop": "Stop task",
     "tasksDismiss": "Remove from list",
     "tasksStatusRunning": "Running",
-    "tasksStdinPlaceholder": "Send a line to the process…",
+    "tasksStdinClosed": "Background tasks take no input. For a command that needs you to interact with it, copy the command above and run it in your own terminal.",
     "tasksNotify": "Tell the AI when it finishes",
     "tasksLogMissing": "Log file is gone",
     "tasksLogCapped": "Log exceeds 50 MB — only the tail is shown",

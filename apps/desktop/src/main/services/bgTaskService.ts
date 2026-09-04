@@ -18,6 +18,17 @@
  *  4. **不接工具的 AbortSignal**。用户点「停止生成」不该杀后台任务 —— 那正是后台的意义。
  *     只有删除会话（sessionService.delete）与应用退出（before-quit）才级联杀。
  *
+ *  5. **没有 stdin**。子进程的 fd 0 是 /dev/null，与前台形态完全一致 —— 读 stdin 立刻拿到 EOF。
+ *     这里曾留一个管道供用户在面板上向任务输入，撤销了，两个理由：
+ *       (a) 没人能可靠判断一个任务是不是正卡在等输入 —— 提示符常常不带换行，「在等输入」
+ *           和「跑得慢」在日志里长得一模一样。那个输入框因此实际上没人用得上，
+ *           而它的存在会让人以为后台任务支持交互。
+ *       (b) libuv 在 Unix 上用 socketpair() 实现 'pipe' stdio，而 socket 型 stdin 会让 macOS
+ *           的 bash 误判自己是被 sshd 拉起的，从而抢先执行用户的 ~/.bashrc（见 shell.ts 的
+ *           BASH_ARGS 注释）。那条路已由 `--norc` 独立堵死，此处改成 /dev/null 是把触发条件
+ *           本身也一并移除 —— 前台之所以从来不受影响，正是因为它的 stdin 是 /dev/null。
+ *     需要真人参与的命令就不该跑在这里：把命令交给用户，让他在自己的终端里执行。
+ *
  * 本服务只管四件事：起进程、持句柄、定期 fstat、进程退出时记录状态。数据完全不经手。
  */
 
@@ -283,8 +294,8 @@ export async function startBgTask(params: StartBgTaskParams): Promise<BgTaskStar
     child = spawn(shell, [...args, command], {
       cwd,
       env: buildSpawnEnv(extraEnv),
-      // stdin 留管道给用户干涉（§7：只开给用户，不开给智能体）；stdout/stderr 同一个 fd
-      stdio: ['pipe', fd, fd],
+      // stdin 关成 /dev/null，与前台形态一致（见文件头第 5 点）；stdout/stderr 同一个 fd
+      stdio: ['ignore', fd, fd],
       detached: process.platform !== 'win32'
     })
   } finally {
@@ -419,18 +430,6 @@ export function stopBgTask(toolCallId: string, force = false): boolean {
   }, KILL_ESCALATE_MS)
   task.escalateTimer.unref?.()
   return true
-}
-
-/** 用户往任务 stdin 写一行（**仅用户**，智能体无此通道 —— 见设计文档 §7） */
-export function writeBgTaskStdin(toolCallId: string, data: string): boolean {
-  const task = tasks.get(toolCallId)
-  if (!task || task.status !== 'running' || !task.child.stdin?.writable) return false
-  try {
-    task.child.stdin.write(data)
-    return true
-  } catch {
-    return false
-  }
 }
 
 /** 设置「完成时通知 AI」开关 */

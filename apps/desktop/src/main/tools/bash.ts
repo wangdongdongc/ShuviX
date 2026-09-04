@@ -64,7 +64,12 @@ const BashParamsSchema = Type.Object({
         'Write the command exactly as you would run it in the foreground: do NOT append `&` and ' +
         'do NOT redirect the output yourself — this option already detaches the process and ' +
         'captures stdout+stderr. Doing either makes the tracked process exit immediately, which ' +
-        'loses the real pid and leaves the task untrackable and unstoppable.'
+        'loses the real pid and leaves the task untrackable and unstoppable. ' +
+        'The task has no stdin: reads see EOF immediately, exactly as in the foreground, and ' +
+        'neither you nor the user can send it input. Put any answers in the command itself ' +
+        '(`-y`/`--yes` flags, `yes |`, a heredoc). If a command genuinely needs a person at a ' +
+        'terminal (a password, a TTY-only prompt), do not run it here or in the foreground — ' +
+        'hand the user the exact command to run in their own terminal instead.'
     })
   )
 })
