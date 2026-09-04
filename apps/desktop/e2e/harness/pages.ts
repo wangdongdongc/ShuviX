@@ -492,8 +492,8 @@ export function atPopoverPane(main: CdpClient): AtPopoverPane {
 
 /**
  * 分组头定位目标：项目组按**种子项目名**认（组头 toggle 按钮里的 span.truncate，
- * CSS uppercase 不改 textContent），临时组按 `.lucide-message-circle` 图标认
- * （MessageCircle 只出现在临时组头；会话行的普通图标是 message-square）。
+ * CSS uppercase 不改 textContent），临时组按 `data-group="temp"` 锚点认
+ * —— 临时组是摊开的纯分节（无图标无 toggle 按钮），只剩这个属性可认。
  */
 export type GroupTarget = { project: string } | 'temp'
 
@@ -569,7 +569,7 @@ export function sidebarPane(main: CdpClient): SidebarPane {
   const HEADERS = `[...document.querySelectorAll('div[class*="group/header"]')]`
   const HEADER = (target: GroupTarget): string =>
     target === 'temp'
-      ? `${HEADERS}.find((h) => h.querySelector('.lucide-message-circle'))`
+      ? `${HEADERS}.find((h) => h.getAttribute('data-group') === 'temp')`
       : `${HEADERS}.find(
           (h) =>
             (h.querySelector('button span.truncate')?.textContent ?? '').trim() ===

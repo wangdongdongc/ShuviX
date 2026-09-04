@@ -19,7 +19,7 @@ const GROUP_VISIBLE_LIMIT = 20
 export interface ProjectSessionGroupsProps {
   /** 项目骨架（id + 名称）；分组以项目为骨架、会话填入，末尾追加临时对话组 */
   projects: Array<{ id: string; name: string }>
-  /** 分组折叠集合 + 切换 */
+  /** 分组折叠集合 + 切换（仅项目组：临时组是摊开的纯分节，不参与折叠） */
   collapsed: Set<string>
   onToggleGroup: (key: string) => void
   /** 在某组下新建会话（临时组传 null） */
@@ -53,7 +53,9 @@ export interface ProjectSessionGroupsProps {
 }
 
 /**
- * 按项目分组的会话列表（桌面/扩展共用）—— 项目为骨架，会话填入，末尾临时对话组。
+ * 按项目分组的会话列表（桌面/扩展共用）—— 项目为骨架，会话填入，末尾临时对话组
+ * （摊开的纯分节：无图标无折叠，见 SessionGroup 的 temp 形态；仍受每组 20 条的
+ * 「查看全部」限额约束）。
  * 数据读 chat-ui 的 chatStore（sessions/active/streams/pending/shared/telegram），项目列表由宿主传入。
  * 宿主差异走 caps（pin）+ 注入回调（右键菜单 / 编辑项目 / 会话配置 / 选中）。
  * 桌面日历视图按天复用本组件（sessionsOverride + hideEmptyGroups）。
@@ -229,8 +231,8 @@ export function ProjectSessionGroups({
             key={groupKey}
             label={label}
             variant={isTemp ? 'temp' : 'project'}
-            collapsed={collapsed.has(groupKey)}
-            onToggle={() => onToggleGroup(groupKey)}
+            collapsed={isTemp ? undefined : collapsed.has(groupKey)}
+            onToggle={isTemp ? undefined : () => onToggleGroup(groupKey)}
             onNewChat={() => onNewChat(isTemp ? null : groupKey)}
             onNewBotChat={onNewBotChat ? () => onNewBotChat(isTemp ? null : groupKey) : undefined}
             active={activeGroupKey === groupKey}
