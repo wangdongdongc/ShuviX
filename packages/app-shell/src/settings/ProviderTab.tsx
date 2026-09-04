@@ -21,7 +21,10 @@ import {
   Brain,
   Image as ImageIcon,
   Mic,
-  AlertCircle
+  AlertCircle,
+  KeyRound,
+  LogOut,
+  ExternalLink
 } from 'lucide-react'
 import {
   API_PROTOCOL_OPTIONS,
@@ -40,6 +43,29 @@ import {
   InlineInput,
   InlineSelect
 } from './SettingsPrimitives'
+
+/** 订阅登录状态（宿主查询结果） */
+export interface ProviderOAuthTabStatus {
+  /** 该提供商是否支持订阅登录 */
+  supported: boolean
+  /** 是否已登录 */
+  connected: boolean
+  /** access token 到期时间（毫秒），未登录为 null */
+  expiresAt: number | null
+  /** 是否有登录流程正在进行（例如从别的窗口发起的） */
+  pending: boolean
+}
+
+/** 登录过程事件：设备码，或一行进度文字 */
+export type ProviderOAuthTabEvent =
+  | {
+      providerId: string
+      kind: 'device_code'
+      userCode: string
+      verificationUri: string
+      expiresInSeconds?: number
+    }
+  | { providerId: string; kind: 'message'; message: string }
 
 /** 注入的后端契约（桌面绑 window.api.provider；扩展绑 chatApiAdapter.provider） */
 export interface ProviderTabApi {
@@ -68,6 +94,20 @@ export interface ProviderTabApi {
     id: string
     capabilities: Record<string, unknown>
   }) => Promise<unknown>
+  /**
+   * 订阅登录（可选）——宿主不实现时整块界面不出现。
+   *
+   * `login` 的 Promise 一直挂到用户在浏览器里批准/超时/取消为止，设备码经 `onEvent` 单独推来。
+   */
+  oauth?: {
+    status: (providerId: string) => Promise<ProviderOAuthTabStatus>
+    login: (providerId: string) => Promise<{ success: boolean; error?: string }>
+    cancel: (providerId: string) => Promise<unknown>
+    logout: (providerId: string) => Promise<unknown>
+    onEvent: (callback: (event: ProviderOAuthTabEvent) => void) => () => void
+    /** 打开验证页（桌面 window.api.app.openExternal）—— 登录时宿主已自动打开一次，这是重开入口 */
+    openExternal?: (url: string) => void
+  }
 }
 
 export interface ProviderTabProps {
@@ -118,6 +158,14 @@ export function ProviderTab({
     modelId: string
     caps: Record<string, unknown>
   } | null>(null)
+  // ---- 订阅登录 ----
+  const oauthApi = api.oauth
+  const [oauthStatus, setOauthStatus] = useState<Record<string, ProviderOAuthTabStatus>>({})
+  const [oauthDevice, setOauthDevice] = useState<
+    Record<string, { userCode: string; verificationUri: string } | null>
+  >({})
+  const [oauthBusyId, setOauthBusyId] = useState<string | null>(null)
+  const [oauthError, setOauthError] = useState<Record<string, string | null>>({})
 
   /** 排序：1) 已启用优先；2) 同组内自定义优先 */
   const sortedProviders = useMemo(
@@ -297,6 +345,76 @@ export function ProviderTab({
     await onChanged()
   }
 
+  const refreshOAuthStatus = useCallback(
+    async (providerId: string): Promise<void> => {
+      if (!oauthApi) return
+      try {
+        const status = await oauthApi.status(providerId)
+        setOauthStatus((prev) => ({ ...prev, [providerId]: status }))
+      } catch {
+        // 状态查询失败不该拦住整个设置页：当作不支持处理，用户仍可用 API Key
+      }
+    },
+    [oauthApi]
+  )
+
+  /** 选中的 provider 换了就查一次登录状态（只有支持的那家会返回 supported） */
+  useEffect(() => {
+    if (!oauthApi || !selectedProviderId) return
+    void refreshOAuthStatus(selectedProviderId)
+  }, [oauthApi, selectedProviderId, refreshOAuthStatus])
+
+  /** 登录过程事件：设备码要显示出来，进度文字只在没有设备码时占位 */
+  useEffect(() => {
+    if (!oauthApi) return
+    return oauthApi.onEvent((event) => {
+      if (event.kind === 'device_code') {
+        setOauthDevice((prev) => ({
+          ...prev,
+          [event.providerId]: { userCode: event.userCode, verificationUri: event.verificationUri }
+        }))
+      }
+    })
+  }, [oauthApi])
+
+  const handleOAuthLogin = async (providerId: string): Promise<void> => {
+    if (!oauthApi) return
+    setOauthBusyId(providerId)
+    setOauthError((prev) => ({ ...prev, [providerId]: null }))
+    setOauthDevice((prev) => ({ ...prev, [providerId]: null }))
+    try {
+      const result = await oauthApi.login(providerId)
+      if (!result.success) {
+        setOauthError((prev) => ({
+          ...prev,
+          [providerId]: result.error || t('settings.oauthFailed')
+        }))
+      }
+    } catch (err: unknown) {
+      setOauthError((prev) => ({
+        ...prev,
+        [providerId]: err instanceof Error ? err.message : t('settings.oauthFailed')
+      }))
+    } finally {
+      setOauthBusyId(null)
+      setOauthDevice((prev) => ({ ...prev, [providerId]: null }))
+      await refreshOAuthStatus(providerId)
+      await onChanged()
+    }
+  }
+
+  const handleOAuthCancel = async (providerId: string): Promise<void> => {
+    await oauthApi?.cancel(providerId)
+  }
+
+  const handleOAuthLogout = async (providerId: string): Promise<void> => {
+    if (!oauthApi) return
+    await oauthApi.logout(providerId)
+    setOauthError((prev) => ({ ...prev, [providerId]: null }))
+    await refreshOAuthStatus(providerId)
+    await onChanged()
+  }
+
   const handleSyncModels = async (providerId: string): Promise<void> => {
     setSyncingProviderId(providerId)
     setSyncMessages((prev) => {
@@ -400,6 +518,20 @@ export function ProviderTab({
             saved={savedIds.has(selectedProvider.id)}
             hasEdits={hasEdits(selectedProvider.id)}
             getCustomHeaders={getCustomHeaders}
+            oauth={
+              oauthApi && oauthStatus[selectedProvider.id]?.supported
+                ? {
+                    connected: !!oauthStatus[selectedProvider.id]?.connected,
+                    device: oauthDevice[selectedProvider.id] ?? null,
+                    busy: oauthBusyId === selectedProvider.id,
+                    error: oauthError[selectedProvider.id] ?? null,
+                    onLogin: () => void handleOAuthLogin(selectedProvider.id),
+                    onCancel: () => void handleOAuthCancel(selectedProvider.id),
+                    onLogout: () => void handleOAuthLogout(selectedProvider.id),
+                    onOpenVerification: oauthApi.openExternal
+                  }
+                : null
+            }
             onToggleShowKey={() =>
               setShowKeys((prev) => ({
                 ...prev,
@@ -481,6 +613,17 @@ interface ProviderDetailProps {
   saved: boolean
   hasEdits: boolean
   getCustomHeaders: (p: ProviderInfo) => string
+  /** 订阅登录（该提供商不支持、或宿主没实现时为 null） */
+  oauth: {
+    connected: boolean
+    device: { userCode: string; verificationUri: string } | null
+    busy: boolean
+    error: string | null
+    onLogin: () => void
+    onCancel: () => void
+    onLogout: () => void
+    onOpenVerification?: (url: string) => void
+  } | null
   onToggleShowKey: () => void
   onUpdateEdit: (
     field: 'name' | 'apiKey' | 'baseUrl' | 'apiProtocol' | 'customHeaders',
@@ -510,6 +653,7 @@ function ProviderDetail({
   saved,
   hasEdits,
   getCustomHeaders,
+  oauth,
   onToggleShowKey,
   onUpdateEdit,
   onSave,
@@ -580,6 +724,83 @@ function ProviderDetail({
                 />
               }
             />
+          )}
+          {oauth && (
+            <SettingsBlock
+              label={
+                <span className="inline-flex items-center gap-1.5">
+                  <KeyRound size={12} className="text-text-tertiary" />
+                  {t('settings.oauthTitle')}
+                </span>
+              }
+              description={
+                oauth.connected ? t('settings.oauthConnectedDesc') : t('settings.oauthDesc')
+              }
+            >
+              {oauth.connected ? (
+                <div className="flex items-center gap-3">
+                  <span className="inline-flex items-center gap-1.5 text-[11px] text-emerald-500">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                    {t('settings.oauthConnected')}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={oauth.onLogout}
+                    className="inline-flex items-center gap-1 px-2 py-1 text-[11px] rounded text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors"
+                  >
+                    <LogOut size={11} />
+                    {t('settings.oauthSignOut')}
+                  </button>
+                </div>
+              ) : oauth.busy ? (
+                <div className="space-y-2">
+                  {oauth.device ? (
+                    <>
+                      <div className="text-[11px] text-text-secondary">
+                        {t('settings.oauthDeviceHint')}
+                      </div>
+                      <div className="font-mono text-base tracking-[0.25em] text-text-primary select-all">
+                        {oauth.device.userCode}
+                      </div>
+                      {oauth.onOpenVerification && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            oauth.device && oauth.onOpenVerification?.(oauth.device.verificationUri)
+                          }
+                          className="inline-flex items-center gap-1 px-2 py-1 text-[11px] rounded text-accent hover:bg-accent/10 transition-colors"
+                        >
+                          <ExternalLink size={11} />
+                          {t('settings.oauthOpenPage')}
+                        </button>
+                      )}
+                    </>
+                  ) : (
+                    <div className="text-[11px] text-text-tertiary">
+                      {t('settings.oauthWaiting')}
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    onClick={oauth.onCancel}
+                    className="px-2 py-1 text-[11px] rounded text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors"
+                  >
+                    {t('common.cancel')}
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={oauth.onLogin}
+                  className="px-2.5 py-1 text-[11px] rounded-md bg-accent text-white hover:bg-accent-hover transition-colors"
+                >
+                  {t('settings.oauthSignIn')}
+                </button>
+              )}
+              {oauth.error && (
+                <div className="text-[11px] text-red-500 leading-relaxed">{oauth.error}</div>
+              )}
+            </SettingsBlock>
           )}
           <SettingsRow
             title="API Key"

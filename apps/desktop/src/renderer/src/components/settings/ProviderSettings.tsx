@@ -21,7 +21,15 @@ const providerApi: ProviderTabApi = {
   updateModelCapabilities: (p) =>
     window.api.provider.updateModelCapabilities(
       p as Parameters<typeof window.api.provider.updateModelCapabilities>[0]
-    )
+    ),
+  oauth: {
+    status: (id) => window.api.provider.oauthStatus(id),
+    login: (id) => window.api.provider.oauthLogin(id),
+    cancel: (id) => window.api.provider.oauthCancel(id),
+    logout: (id) => window.api.provider.oauthLogout(id),
+    onEvent: (cb) => window.api.provider.onOAuthEvent(cb),
+    openExternal: (url) => window.api.app.openExternal(url)
+  }
 }
 
 export function ProviderSettings(): React.JSX.Element {

@@ -502,6 +502,17 @@ export const migrations: Migration[] = [
       // 唯一的查询形状：取某个会话的子会话（工具的 list、删除级联、侧栏分组）
       db.exec(`CREATE INDEX IF NOT EXISTS idx_sessions_parentId ON sessions(parentId)`)
     }
+  },
+  {
+    version: 18,
+    description: '订阅登录：providers 增加 oauth 列（加密的 OAuth 凭据 JSON）',
+    up: (db) => {
+      // OAuth 凭据与 apiKey 是并列的两种认证材料，都必须加密落库，但形状不同：apiKey 是
+      // 一个用户填一次的字符串，OAuth 是一组会被刷新改写的字段（access/refresh/expires）。
+      // 不塞 metadata —— 那一列是明文 JSON（customHeaders 住在里面），且会整列覆盖写，
+      // 后台刷新与用户在设置里保存 headers 会互相踩。
+      db.exec(`ALTER TABLE providers ADD COLUMN oauth TEXT NOT NULL DEFAULT ''`)
+    }
   }
 ]
 

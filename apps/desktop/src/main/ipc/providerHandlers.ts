@@ -1,6 +1,8 @@
-import { ipcMain } from 'electron'
+import { ipcMain, shell } from 'electron'
 import { providerService } from '../services/providerService'
+import { providerOAuthService } from '../services/providerOAuthService'
 import type {
+  ProviderOAuthUiEvent,
   ProviderAddModelParams,
   ProviderAddParams,
   ProviderDeleteParams,
@@ -107,4 +109,56 @@ export function registerProviderHandlers(): void {
       return { success: true }
     }
   )
+
+  // ============ 订阅登录（OAuth） ============
+
+  /** 查询某提供商的订阅登录状态 */
+  ipcMain.handle('provider:oauthStatus', (_event, id: string) => {
+    return providerOAuthService.status(id)
+  })
+
+  /**
+   * 发起设备码登录。这个调用会一直挂到用户在浏览器里批准（或超时/取消）为止 ——
+   * 期间的设备码经 `provider:oauth-event` 推给发起方窗口（设置面板是独立窗口，
+   * 所以发给 event.sender 而不是主窗口）。
+   */
+  ipcMain.handle('provider:oauthLogin', async (event, id: string) => {
+    const send = (payload: ProviderOAuthUiEvent): void => {
+      if (event.sender.isDestroyed()) return
+      event.sender.send('provider:oauth-event', payload)
+    }
+    return providerOAuthService.login(id, (e) => {
+      if (e.type === 'device_code') {
+        send({
+          providerId: id,
+          kind: 'device_code',
+          userCode: e.userCode,
+          verificationUri: e.verificationUri,
+          expiresInSeconds: e.expiresInSeconds
+        })
+        // 顺手把验证页打开；打不开也不算失败，界面上有链接和用户码可以手动走
+        void shell.openExternal(e.verificationUri).catch(() => undefined)
+        return
+      }
+      if (e.type === 'auth_url') {
+        send({ providerId: id, kind: 'message', message: e.instructions || e.url })
+        return
+      }
+      if (e.type === 'info' || e.type === 'progress') {
+        send({ providerId: id, kind: 'message', message: e.message })
+      }
+    })
+  })
+
+  /** 取消进行中的登录 */
+  ipcMain.handle('provider:oauthCancel', (_event, id: string) => {
+    providerOAuthService.cancelLogin(id)
+    return { success: true }
+  })
+
+  /** 退出订阅登录（清凭据；API Key 不动） */
+  ipcMain.handle('provider:oauthLogout', async (_event, id: string) => {
+    await providerOAuthService.logout(id)
+    return { success: true }
+  })
 }

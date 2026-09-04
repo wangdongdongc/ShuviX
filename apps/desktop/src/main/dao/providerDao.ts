@@ -2,12 +2,22 @@ import { v7 as uuidv7 } from 'uuid'
 import { BaseDao } from './database'
 import { buildJsonPatch } from './utils'
 import { encrypt, decrypt } from '../utils/crypto'
-import type { Provider, ProviderModel } from './types'
+import type { Provider, ProviderModel, ProviderOAuthCredential } from './types'
 import type { AvailableModel, ModelCapabilities } from '../types'
 
-function decryptProvider<T extends Provider | undefined>(p: T): T {
-  if (!p) return p
-  return { ...p, apiKey: decrypt(p.apiKey) } as T
+/** DB 行：比对外视图多一列密文 oauth，少一个派生的 oauthConnected */
+type ProviderRow = Omit<Provider, 'oauthConnected'> & { oauth?: string }
+
+/**
+ * DB 行 → 对外视图：解密 apiKey，并把 `oauth` 列**换成**一个布尔位。
+ *
+ * 换而不是加：这个对象会原样经 IPC 送到渲染进程，refresh token 到了那边就等于泄漏。
+ * 要凭据本身请走 `readOAuth()`。
+ */
+function toProviderView<T extends ProviderRow | undefined>(row: T): Provider | undefined {
+  if (!row) return undefined
+  const { oauth, ...rest } = row
+  return { ...rest, apiKey: decrypt(rest.apiKey), oauthConnected: oauth ? 1 : 0 }
 }
 
 /**
@@ -20,33 +30,38 @@ export class ProviderDao extends BaseDao {
   findAll(): Provider[] {
     const rows = this.stmt(
       'SELECT * FROM providers ORDER BY isBuiltin ASC, sortOrder ASC'
-    ).all() as Provider[]
-    return rows.map(decryptProvider)
+    ).all() as ProviderRow[]
+    return rows.map((r) => toProviderView(r) as Provider)
   }
 
   /** 获取所有已启用的提供商，自定义在前 */
   findEnabled(): Provider[] {
     const rows = this.stmt(
       'SELECT * FROM providers WHERE isEnabled = 1 ORDER BY isBuiltin ASC, sortOrder ASC'
-    ).all() as Provider[]
-    return rows.map(decryptProvider)
+    ).all() as ProviderRow[]
+    return rows.map((r) => toProviderView(r) as Provider)
   }
 
   /** 根据 ID 获取提供商 */
   findById(id: string): Provider | undefined {
-    const row = this.stmt('SELECT * FROM providers WHERE id = ?').get(id) as Provider | undefined
-    return decryptProvider(row)
+    const row = this.stmt('SELECT * FROM providers WHERE id = ?').get(id) as ProviderRow | undefined
+    return toProviderView(row)
   }
 
   /** 按需查询：只 SELECT 指定字段，apiKey 仅在需要时解密 */
   pick<K extends keyof Provider>(id: string, fields: K[]): Pick<Provider, K> | undefined {
-    const columns = fields.map((f) => String(f)).join(', ')
+    // oauthConnected 是派生位，不是列 —— 取它就得去查密文列再转 0/1
+    const columns = fields.map((f) => (f === 'oauthConnected' ? 'oauth' : String(f))).join(', ')
     const row = this.stmt(`SELECT ${columns} FROM providers WHERE id = ?`).get(id) as
       | Record<string, unknown>
       | undefined
     if (!row) return undefined
     if ('apiKey' in row) {
       row.apiKey = decrypt(row.apiKey as string)
+    }
+    if ('oauth' in row) {
+      row.oauthConnected = row.oauth ? 1 : 0
+      delete row.oauth
     }
     return row as Pick<Provider, K>
   }
@@ -58,6 +73,42 @@ export class ProviderDao extends BaseDao {
       Date.now(),
       id
     )
+  }
+
+  // ============ OAuth 凭据（仅主进程；密文进出，明文不落 IPC） ============
+
+  /** 读取并解密 OAuth 凭据；未登录或密文损坏返回 undefined */
+  readOAuth(id: string): ProviderOAuthCredential | undefined {
+    const row = this.stmt('SELECT oauth FROM providers WHERE id = ?').get(id) as
+      | { oauth?: string }
+      | undefined
+    if (!row?.oauth) return undefined
+    try {
+      const parsed = JSON.parse(decrypt(row.oauth)) as Partial<ProviderOAuthCredential>
+      if (!parsed?.access || !parsed?.refresh) return undefined
+      return {
+        access: parsed.access,
+        refresh: parsed.refresh,
+        expires: typeof parsed.expires === 'number' ? parsed.expires : 0
+      }
+    } catch {
+      // 密钥文件换过 / 手工改坏：当作未登录，用户重新登录即可修复
+      return undefined
+    }
+  }
+
+  /** 写入 OAuth 凭据（登录成功与每次刷新后调用） */
+  saveOAuth(id: string, credential: ProviderOAuthCredential): void {
+    this.stmt('UPDATE providers SET oauth = ?, updatedAt = ? WHERE id = ?').run(
+      encrypt(JSON.stringify(credential)),
+      Date.now(),
+      id
+    )
+  }
+
+  /** 清除 OAuth 凭据（退出登录） */
+  clearOAuth(id: string): void {
+    this.stmt(`UPDATE providers SET oauth = '', updatedAt = ? WHERE id = ?`).run(Date.now(), id)
   }
 
   /** 更新提供商名称（仅自定义提供商） */

@@ -32,6 +32,11 @@ export interface ProviderInfo {
   sortOrder: number
   createdAt: number
   updatedAt: number
+  /**
+   * 是否已完成订阅登录（0/1）。凭据本身永不下发到前端 —— 后端只给这一个位。
+   * 可选：不支持订阅登录的宿主（扩展）不带这个字段。
+   */
+  oauthConnected?: number
 }
 
 /** 提供商模型（前端视图） */

@@ -36,6 +36,7 @@ import { getBuiltinToolEntries } from '../services/toolRegistry'
 import { SkillTool } from '../services/skillTool'
 import { mcpService } from '../services/mcpService'
 import { resolveModel } from '../services/agentModelResolver'
+import { providerOAuthService } from '../services/providerOAuthService'
 import { providerDao } from '../dao/providerDao'
 import { sessionDao } from '../dao/sessionDao'
 import { projectDao } from '../dao/projectDao'
@@ -243,7 +244,14 @@ const desktopAgentHost: AgentHostAdapter = {
       apiProtocol: extra?.apiProtocol
     }),
   resolveProfileModel: resolveProfileModelSpec,
-  getApiKey: (p) => providerDao.pick(p, ['apiKey'])?.apiKey || undefined,
+  // 订阅登录（OAuth）优先于 API Key —— 与 pi 的「存了凭据就归它管」同义：两者都配了时，
+  // 用户配订阅显然是想用订阅额度。刷新失败这里会抛，不静默回退到 Key：一个「今天走订阅、
+  // 明天悄悄走 API 计费」的降级，比一条要求重新登录的报错难查得多。
+  getApiKey: async (p) => {
+    const token = await providerOAuthService.getAccessToken(p)
+    if (token) return token
+    return providerDao.pick(p, ['apiKey'])?.apiKey || undefined
+  },
   openSessionTree: (sessionId, cwd) => ensureSessionTree(sessionId, cwd),
   createExecutionEnv: (cwd) => new NodeExecutionEnv({ cwd }),
   eventSink: electronEventSink,

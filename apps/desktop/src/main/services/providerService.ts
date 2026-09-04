@@ -3,6 +3,7 @@ import { getBuiltinModels } from '@earendil-works/pi-ai/providers/all'
 import { fetchProviderModels } from '@shuvix/chat-protocol/utils/providerModels'
 import { providerDao } from '../dao/providerDao'
 import { litellmService } from './litellmService'
+import { providerOAuthService } from './providerOAuthService'
 import { appEventBus } from '../utils/appEventBus'
 import { createLogger } from '../logger'
 import type {
@@ -241,9 +242,11 @@ export class ProviderService {
       throw new Error(`未找到提供商：${providerId}`)
     }
 
-    const apiKey = provider.apiKey?.trim()
+    // 订阅登录优先：登录之后 apiKey 通常就是空的，拉模型列表也该用订阅令牌
+    const apiKey =
+      (await providerOAuthService.getAccessToken(providerId)) || provider.apiKey?.trim()
     if (!apiKey) {
-      throw new Error('请先配置 API Key')
+      throw new Error('请先配置 API Key 或完成订阅登录')
     }
 
     // 远程拉取（OpenAI 兼容 / Google）—— 复用 @shuvix/chat-protocol 的共享 fetch 逻辑

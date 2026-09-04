@@ -22,6 +22,7 @@ import type {
   ProviderToggleModelEnabledParams,
   ProviderUpdateConfigParams,
   ProviderUpdateModelCapabilitiesParams,
+  ProviderOAuthUiEvent,
   SessionUpdateModelConfigParams,
   SessionUpdateThinkingLevelParams,
   SessionUpdateEnabledToolsParams,
@@ -228,7 +229,21 @@ const api = {
     addModel: (params: ProviderAddModelParams) => ipcRenderer.invoke('provider:addModel', params),
     deleteModel: (id: string) => ipcRenderer.invoke('provider:deleteModel', id),
     updateModelCapabilities: (params: ProviderUpdateModelCapabilitiesParams) =>
-      ipcRenderer.invoke('provider:updateModelCapabilities', params)
+      ipcRenderer.invoke('provider:updateModelCapabilities', params),
+
+    // ---- 订阅登录（OAuth）----
+    oauthStatus: (id: string) => ipcRenderer.invoke('provider:oauthStatus', id),
+    /** 发起设备码登录：Promise 一直挂到用户批准/超时/取消 */
+    oauthLogin: (id: string) => ipcRenderer.invoke('provider:oauthLogin', id),
+    oauthCancel: (id: string) => ipcRenderer.invoke('provider:oauthCancel', id),
+    oauthLogout: (id: string) => ipcRenderer.invoke('provider:oauthLogout', id),
+    /** 监听登录过程事件（设备码、进度） */
+    onOAuthEvent: (callback: (event: ProviderOAuthUiEvent) => void) => {
+      const handler = (_: Electron.IpcRendererEvent, event: ProviderOAuthUiEvent): void =>
+        callback(event)
+      ipcRenderer.on('provider:oauth-event', handler)
+      return () => ipcRenderer.removeListener('provider:oauth-event', handler)
+    }
   },
 
   // ============ 项目管理 ============

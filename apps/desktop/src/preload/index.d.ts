@@ -27,6 +27,8 @@ import type {
   ProviderToggleModelEnabledParams,
   ProviderUpdateConfigParams,
   ProviderUpdateModelCapabilitiesParams,
+  ProviderOAuthStatusInfo,
+  ProviderOAuthUiEvent,
   SessionUpdateModelConfigParams,
   SessionUpdateThinkingLevelParams,
   SessionUpdateEnabledToolsParams,
@@ -561,6 +563,11 @@ declare global {
       updateModelCapabilities: (
         params: ProviderUpdateModelCapabilitiesParams
       ) => Promise<{ success: boolean }>
+      oauthStatus: (id: string) => Promise<ProviderOAuthStatusInfo>
+      oauthLogin: (id: string) => Promise<{ success: boolean; error?: string }>
+      oauthCancel: (id: string) => Promise<{ success: boolean }>
+      oauthLogout: (id: string) => Promise<{ success: boolean }>
+      onOAuthEvent: (callback: (event: ProviderOAuthUiEvent) => void) => () => void
     }
     project: {
       list: () => Promise<Project[]>
