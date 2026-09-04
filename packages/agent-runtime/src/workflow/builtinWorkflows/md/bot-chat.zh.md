@@ -42,13 +42,13 @@ shuvix-workflow-input:
 判定要不要说话、裁定这条消息归谁、作答。
 
 bot 是一份绑定,不是一个 agent:它的 md 指向这份管线,并用 agent 定义填满管线的**槽位**
-(`shuvix-bot-agents: {intent: …, task: …}`)。bot md 的正文 —— 它的人设与它学到的东西 ——
+(`shuvix-bot-pipeline: {workflow: bot-chat, agents: {intent: …, task: …}}`)。bot md 的正文 —— 它的人设与它学到的东西 ——
 不在下面任何一段提示词里。宿主把它围栏后追加到这次 run 派发的每一个 agent 的系统提示词
 末尾,与项目上下文同一机制。把这份正文维护好是任务段 agent 自己的事,用它自己的文件工具;
 没有单独的笔记段。
 
 这里没有 `shuvix-workflow-on`:没有任何埋点通向这份文件。bot 指向它
-(`shuvix-bot-pipeline: bot-chat`),由会话来 invoke。`parallel` 是刻意的:run 级重入
+(`shuvix-bot-pipeline.workflow: bot-chat`),由会话来 invoke。`parallel` 是刻意的:run 级重入
 整个让位,「一次只做一件事」由 `turn()` 提供 —— 它串行化的是**这个 bot 在这个会话里**,
 而不是这份被许多 bot、许多会话同时共用的文件。
 

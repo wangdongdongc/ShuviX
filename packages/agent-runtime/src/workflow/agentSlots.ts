@@ -2,7 +2,7 @@
  * 管线 workflow 声明的 **agent 槽位** —— 从它的 `shuvix-workflow-input` 里读出来。
  *
  * 约定：输入 schema 的 `properties.agents` 是一个 `type: object`，其 `required` 列出必填槽位，
- * `properties` 逐槽位给出 `description`（设置页当提示语用）。bot md 的 `shuvix-bot-agents`
+ * `properties` 逐槽位给出 `description`（属性卡当提示语用）。bot md 的 `shuvix-bot-pipeline.agents`
  * 按槽位名填 agent；漏填必填槽位在 invoke 入参校验处被拦下（引擎沿 `properties` 递归查
  * `required`），不需要宿主再维护一份缺省表 —— 哪些槽位存在、哪些必填，管线文件说了算。
  *

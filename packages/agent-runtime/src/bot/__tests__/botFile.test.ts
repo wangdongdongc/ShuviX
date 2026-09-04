@@ -1,8 +1,17 @@
 /**
  * bot 定义文件（`shuvix: bot v1`）的解析 / 序列化契约。
  *
- * **一个 bot 是一份绑定：身份 + 管线 + 槽位 + 一篇正文。** 它自己不再是 agent ——
+ * **一个 bot 是一份绑定：身份 + 管线绑定块 + 一篇正文。** 它自己不再是 agent ——
  * 模型 / 工具 / 指令文件这些是槽位里那份 agent md 的事，写在 bot 上只是被忽略（BX 组）。
+ *
+ * 管线绑定是**一个嵌套映射** `shuvix-bot-pipeline: { workflow, agents, input }`：
+ *   - `workflow` **必填、没有缺省** —— 写着 bot 的文件必须自己说用哪条管线，缺了整份非法；
+ *     `TEMPLATE_BOT_PIPELINE`（bot-chat）只是「新建 bot」模板预填的名字，解析器不读它；
+ *   - `agents` 是开放的「槽位 → agent 名」表、`input` 是给管线的入参 —— 两者都是**这份管线**
+ *     的从属项，所以住在同一个键下（换了工作流，槽位表就整个换一套）。
+ *   改制前的顶层键 `shuvix-bot-agents` / `shuvix-bot-input` 与标量形 `shuvix-bot-pipeline: x`
+ *   一律整份拒绝并指明新写法（BR-8 / BR-14）—— 不迁移：静默忽略等于让用户的槽位表悄悄消失。
+ *
  * 处理方式与 agent md 同族同策：文件类型标记写入恒有、读取可选；未知键忽略；类型不符 =
  * 整份非法（null + warn 人读原因，**恰一条**）。只有一处比 agent md 严：**description
  * 必填非空** —— 意图段靠它判断相关性，others 块里别的成员也只靠它认识这个 bot。
@@ -10,7 +19,7 @@
  * 正文是这个 bot 的**人设与记忆**（可为空 —— 新建的 bot 什么都还没学），由宿主围栏后
  * 追加到参与执行的每个 agent 的系统提示词末尾（renderBotContext，契约在 botContext.test.ts）。
  * 没有分界线、没有笔记区、也就没有「状态区软失败」：这一层只剩「定义区硬失败」一种失败，
- * warn 通道因此恢复了 agent md 的「恰一条诊断」不变式（BR-13）。
+ * warn 通道因此恢复了 agent md 的「恰一条诊断」不变式（BR-15）。
  *
  * 分组：
  *   BP 合法形状与缺省 · BR 整份拒绝清单 · BX 宽松侧（未知键 / 退役键 / agent 键 / 裸键 / 标记）·
@@ -24,18 +33,21 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import {
-  BOT_AGENTS_KEY as PROTOCOL_AGENTS_KEY,
+  BOT_PIPELINE_AGENTS_KEY as PROTOCOL_AGENTS_KEY,
+  BOT_PIPELINE_INPUT_KEY as PROTOCOL_INPUT_KEY,
   BOT_PIPELINE_KEY as PROTOCOL_PIPELINE_KEY,
+  BOT_PIPELINE_WORKFLOW_KEY as PROTOCOL_WORKFLOW_KEY,
   SHUVIX_MD_DESCRIPTORS
 } from '@shuvix/chat-protocol/shuvixMdDescriptors'
 import { parseAgentDefinitionFile } from '../../agentProfile/definitionFile'
 import {
-  BOT_AGENTS_KEY,
   BOT_FILE_MARKER,
   BOT_FILE_MARKER_KEY,
-  BOT_INPUT_KEY,
+  BOT_PIPELINE_AGENTS_KEY,
+  BOT_PIPELINE_INPUT_KEY,
   BOT_PIPELINE_KEY,
-  DEFAULT_BOT_PIPELINE,
+  BOT_PIPELINE_WORKFLOW_KEY,
+  TEMPLATE_BOT_PIPELINE,
   parseBotDefinitionFile,
   serializeBotDefinitionFile,
   type ParsedBotFile
@@ -43,8 +55,25 @@ import {
 
 const md = (...lines: string[]): string => lines.join('\n')
 
-/** 最小合法 bot：description 必填 + 一行正文 */
-const bot = (...fm: string[]): string => md('---', 'description: d', ...fm, '---', 'body')
+/** 管线块的两条最小行：`shuvix-bot-pipeline:` + 缩进的 `workflow: <name>` */
+const pipelineBlock = (workflow = 'bot-chat'): string[] => [
+  `${BOT_PIPELINE_KEY}:`,
+  `  ${BOT_PIPELINE_WORKFLOW_KEY}: ${workflow}`
+]
+
+/** description + 正文，**没有**管线块 —— 用来摆管线键本身的各种错误形状 */
+const bare = (...fm: string[]): string => md('---', 'description: d', ...fm, '---', 'body')
+
+/** 最小合法 bot：bare + 一个合法管线块（workflow: bot-chat）；`fm` 追加在顶层、管线块之后 */
+const bot = (...fm: string[]): string => bare(...pipelineBlock(), ...fm)
+
+/** 合法 bot，管线块由调用方逐行给（子行自带缩进）—— agents / input 这些从属项都在块里 */
+const withPipeline = (...inner: string[]): string => bare(`${BOT_PIPELINE_KEY}:`, ...inner)
+
+/** 块内常用行（两空格缩进 = 管线块的直接子键） */
+const WF = `  ${BOT_PIPELINE_WORKFLOW_KEY}: my-flow`
+const AGENTS = `  ${BOT_PIPELINE_AGENTS_KEY}:`
+const INPUT = `  ${BOT_PIPELINE_INPUT_KEY}:`
 
 /** 收集一次解析的全部诊断 */
 const parseWithWarn = (
@@ -79,17 +108,18 @@ const PARSED_BOT_KEYS = [
 // ────────────────────────────── BP：合法形状与缺省 ──────────────────────────────
 
 describe('BP —— 解析：合法形状与缺省', () => {
-  it('BP-1 最小合法文件（仅 description + 正文）', () => {
-    const parsed = parseBotDefinitionFile('---\ndescription: d\n---\nbody', 'fn')
+  it('BP-1 最小合法文件（description + 管线块的 workflow + 正文）', () => {
+    const parsed = parseBotDefinitionFile(bot(), 'fn')
     expect(parsed).not.toBeNull()
     // name 省略回退文件 basename，displayName 再回退 name
     expect(parsed!.name).toBe('fn')
     expect(parsed!.displayName).toBe('fn')
     expect(parsed!.description).toBe('d')
+    expect(parsed!.pipeline).toBe('bot-chat')
     expect(parsed!.body).toBe('body')
   })
 
-  it('BP-2 全字段文件逐字段落位（身份 + 管线声明 + 开放槽位表 + 正文）', () => {
+  it('BP-2 全字段文件逐字段落位（身份 + 管线块：workflow / input / 开放槽位表 + 正文）', () => {
     // 槽位表刻意混入管线之外的名字（gate）—— 槽位集合归管线 workflow 定义，本层只校形状
     const raw = md(
       '---',
@@ -97,13 +127,14 @@ describe('BP —— 解析：合法形状与缺省', () => {
       'name: full-bot',
       'description: does everything',
       'shuvix-displayName: 全能 bot',
-      `${BOT_PIPELINE_KEY}: my-pipeline`,
-      `${BOT_INPUT_KEY}:`,
-      '  tone: terse',
-      `${BOT_AGENTS_KEY}:`,
-      '  intent: my-intent',
-      '  task: my-task',
-      '  gate: my-gate',
+      `${BOT_PIPELINE_KEY}:`,
+      `  ${BOT_PIPELINE_WORKFLOW_KEY}: my-pipeline`,
+      `  ${BOT_PIPELINE_INPUT_KEY}:`,
+      '    tone: terse',
+      `  ${BOT_PIPELINE_AGENTS_KEY}:`,
+      '    intent: my-intent',
+      '    task: my-task',
+      '    gate: my-gate',
       '---',
       'Persona paragraph.',
       '',
@@ -123,29 +154,31 @@ describe('BP —— 解析：合法形状与缺省', () => {
     })
   })
 
-  it('BP-3 缺省表：pipeline=bot-chat / pipelineInput={} / agents={} / displayName=name', () => {
+  it('BP-3 缺省表：pipelineInput={} / agents={} / displayName=name —— 而 workflow **没有缺省**', () => {
     const parsed = parseBotDefinitionFile(bot(), 'fn')!
-    expect(parsed.pipeline).toBe(DEFAULT_BOT_PIPELINE)
     expect(parsed.pipelineInput).toEqual({})
     expect(parsed.agents).toEqual({})
     expect(parsed.displayName).toBe(parsed.name)
+    // 没有缺省管线：块里没写 workflow 的文件解析不出来，而不是回落到模板常量（BR-9）
+    expect(parseBotDefinitionFile(withPipeline(AGENTS, '    task: t'), 'fn')).toBeNull()
   })
 
-  it('BP-4 四个键留空（YAML null）等同省略 —— 编辑器里最常见的中间态不得判非法', () => {
+  it('BP-4 三个可选键留空（YAML null）等同省略 —— 编辑器里最常见的中间态不得判非法', () => {
+    // displayName 在顶层，agents / input 在块里；workflow 留空则是 BR-9 的拒绝
     const parsed = parseBotDefinitionFile(
-      bot('shuvix-displayName:', `${BOT_PIPELINE_KEY}:`, `${BOT_INPUT_KEY}:`, `${BOT_AGENTS_KEY}:`),
+      bare('shuvix-displayName:', `${BOT_PIPELINE_KEY}:`, WF, AGENTS, INPUT),
       'fn'
     )
     expect(parsed).not.toBeNull()
     expect(parsed!.displayName).toBe('fn')
-    expect(parsed!.pipeline).toBe(DEFAULT_BOT_PIPELINE)
+    expect(parsed!.pipeline).toBe('my-flow')
     expect(parsed!.pipelineInput).toEqual({})
     expect(parsed!.agents).toEqual({})
   })
 
-  it('BP-5 shuvix-bot-agents: {} / shuvix-bot-input: {} 空映射合法', () => {
+  it('BP-5 agents: {} / input: {} 空映射合法', () => {
     const parsed = parseBotDefinitionFile(
-      bot(`${BOT_AGENTS_KEY}: {}`, `${BOT_INPUT_KEY}: {}`),
+      withPipeline(WF, `  ${BOT_PIPELINE_AGENTS_KEY}: {}`, `  ${BOT_PIPELINE_INPUT_KEY}: {}`),
       'fn'
     )
     expect(parsed).not.toBeNull()
@@ -153,16 +186,17 @@ describe('BP —— 解析：合法形状与缺省', () => {
     expect(parsed!.pipelineInput).toEqual({})
   })
 
-  it('BP-6 值两侧空白被 trim（name / displayName / description / pipeline / 槽位值）', () => {
+  it('BP-6 值两侧空白被 trim（name / displayName / description / workflow / 槽位值）', () => {
     const parsed = parseBotDefinitionFile(
       md(
         '---',
         "name: '  spaced  '",
         "description: '  d  '",
         "shuvix-displayName: '  Spaced  '",
-        `${BOT_PIPELINE_KEY}: '  my-flow  '`,
-        `${BOT_AGENTS_KEY}:`,
-        "  intent: '  my-intent  '",
+        `${BOT_PIPELINE_KEY}:`,
+        `  ${BOT_PIPELINE_WORKFLOW_KEY}: '  my-flow  '`,
+        AGENTS,
+        "    intent: '  my-intent  '",
         '---',
         'body'
       ),
@@ -179,6 +213,7 @@ describe('BP —— 解析：合法形状与缺省', () => {
     const raw = md(
       '---',
       'description: d',
+      ...pipelineBlock(),
       '---',
       '',
       '',
@@ -208,7 +243,10 @@ describe('BP —— 解析：合法形状与缺省', () => {
   it('BP-8 **正文可为空**（新建的 bot 什么都还没学；围栏照样渲染，见 botContext）', () => {
     // 改制前「正文即任务段系统提示词」让空正文整份非法；现在正文是人设与记忆，
     // 空就是「还没有」—— 任务段 agent 会在第一次学到东西时往里写
-    for (const raw of ['---\ndescription: d\n---\n', '---\ndescription: d\n---\n\n   \n\t\n']) {
+    for (const raw of [
+      md('---', 'description: d', ...pipelineBlock(), '---', ''),
+      md('---', 'description: d', ...pipelineBlock(), '---', '', '   ', '\t', '')
+    ]) {
       const { result, messages } = parseWithWarn(raw)
       expect(result, raw).not.toBeNull()
       expect(result!.body, raw).toBe('')
@@ -216,31 +254,32 @@ describe('BP —— 解析：合法形状与缺省', () => {
     }
   })
 
-  it('BP-9 容忍 BOM 与 CRLF（共享 splitFrontmatter 的能力在 bot 侧同样成立）', () => {
-    const raw = '\uFEFF---\r\nname: crlf\r\ndescription: windows file\r\n---\r\nbody line\r\n'
+  it('BP-9 容忍 BOM 与 CRLF（共享 splitFrontmatter 的能力在 bot 侧同样成立，嵌套块也不例外）', () => {
+    const raw = `\uFEFF---\r\nname: crlf\r\ndescription: windows file\r\n${BOT_PIPELINE_KEY}:\r\n  ${BOT_PIPELINE_WORKFLOW_KEY}: my-flow\r\n  ${BOT_PIPELINE_AGENTS_KEY}:\r\n    intent: i\r\n---\r\nbody line\r\n`
     const parsed = parseBotDefinitionFile(raw, 'fn')!
     expect(parsed.name).toBe('crlf')
     expect(parsed.description).toBe('windows file')
+    expect(parsed.pipeline).toBe('my-flow')
+    expect(parsed.agents).toEqual({ intent: 'i' })
     expect(parsed.body).toBe('body line')
     expect(parsed.body).not.toContain('\r')
   })
 
-  it('BP-10 shuvix-bot-pipeline 缺省 bot-chat；留空 / 显式同值等价', () => {
-    for (const fm of [
-      [],
-      [`${BOT_PIPELINE_KEY}:`],
-      [`${BOT_PIPELINE_KEY}: ${DEFAULT_BOT_PIPELINE}`]
-    ]) {
-      expect(parseBotDefinitionFile(bot(...fm), 'fn')!.pipeline, fm.join()).toBe(
-        DEFAULT_BOT_PIPELINE
-      )
-    }
+  it('BP-10 **没有缺省管线**：workflow 写什么就是什么；TEMPLATE_BOT_PIPELINE 只是模板常量，解析器不读它', () => {
+    // 改制前 `shuvix-bot-pipeline` 缺省 bot-chat；现在缺了整份非法（BR-8 / BR-9），而
+    // 「新建 bot」模板预填的 bot-chat 与用户自写的 my-flow 在解析器眼里没有任何区别
+    expect(TEMPLATE_BOT_PIPELINE).toBe('bot-chat')
+    expect(parseBotDefinitionFile(bot(), 'fn')!.pipeline).toBe(TEMPLATE_BOT_PIPELINE)
+    expect(parseBotDefinitionFile(withPipeline(WF), 'fn')!.pipeline).toBe('my-flow')
+    // 没写块 / 块留空：不回落，直接 null
+    expect(parseBotDefinitionFile(bare(), 'fn')).toBeNull()
+    expect(parseBotDefinitionFile(withPipeline(), 'fn')).toBeNull()
   })
 
-  it('BP-11 shuvix-bot-input 任意 YAML 映射原样透传（格式层不校验内容）', () => {
+  it('BP-11 input 任意 YAML 映射原样透传（格式层不校验内容）', () => {
     // 它是给管线 workflow 的入参 —— 嵌套映射 / 数组 / null 原样落位
     const parsed = parseBotDefinitionFile(
-      bot(`${BOT_INPUT_KEY}:`, '  a:', '    b: [1, 2]', '  n:'),
+      withPipeline(WF, INPUT, '    a:', '      b: [1, 2]', '    n:'),
       'fn'
     )!
     expect(parsed.pipelineInput).toEqual({ a: { b: [1, 2] }, n: null })
@@ -250,7 +289,7 @@ describe('BP —— 解析：合法形状与缺省', () => {
     // 把槽位枚举写死在格式层，等于让 md 格式追着某一份管线的实现走：内置 bot-chat 要
     // intent / task（可选 recheck），别的管线自有别的槽位
     const { result, messages } = parseWithWarn(
-      bot(`${BOT_AGENTS_KEY}:`, '  gate: g', '  reply: r', '  Ok-Role_2: o', '  x-1: x')
+      withPipeline(WF, AGENTS, '    gate: g', '    reply: r', '    Ok-Role_2: o', '    x-1: x')
     )
     expect(result).not.toBeNull()
     expect(result!.agents).toEqual({ gate: 'g', reply: 'r', 'Ok-Role_2': 'o', 'x-1': 'x' })
@@ -259,7 +298,7 @@ describe('BP —— 解析：合法形状与缺省', () => {
 
   it.each([['a'], ['A'], ['a_b'], ['a-b'], ['Z9']])('BP-13a 合法槽位名形状（%s）', (role) => {
     expect(
-      parseBotDefinitionFile(bot(`${BOT_AGENTS_KEY}:`, `  ${role}: x`), 'fn')!.agents[role]
+      parseBotDefinitionFile(withPipeline(WF, AGENTS, `    ${role}: x`), 'fn')!.agents[role]
     ).toBe('x')
   })
 
@@ -269,29 +308,52 @@ describe('BP —— 解析：合法形状与缺省', () => {
     ['含空格', 'bad role'],
     ['空串', "''"]
   ])('BP-13b 非法槽位名形状（%s）整份拒绝', (_label, role) => {
-    const msg = rejectReason(bot(`${BOT_AGENTS_KEY}:`, `  ${role}: x`))
-    expect(msg).toContain(`'${BOT_AGENTS_KEY}'`)
+    const msg = rejectReason(withPipeline(WF, AGENTS, `    ${role}: x`))
+    expect(msg).toContain(`'${BOT_PIPELINE_KEY}.${BOT_PIPELINE_AGENTS_KEY}'`)
     expect(msg).toContain('is not a valid slot name')
   })
 
-  it('BP-14 指向不存在的 workflow / agent **不判非法**（惰性化：文件可后补，宿主对照管线现判）', () => {
-    // 哪些槽位必填、填了不存在的 agent 怎么办，都是宿主对照管线才知道的事；
-    // 本层只管形状，运行时在会话里可见地说明
-    for (const fm of [
-      [`${BOT_PIPELINE_KEY}: nope-not-a-real-workflow`],
-      [`${BOT_AGENTS_KEY}:`, '  intent: nope-not-a-real-agent']
+  it('BP-14 指向不存在的 workflow / agent **不判非法**（惰性化：文件可后补，宿主对照注册表现判）', () => {
+    // 哪些槽位必填、填了不存在的 agent 怎么办，都是宿主对照管线才知道的事（桌面的
+    // botService.advise 在属性卡上提示）；本层只管形状，运行时在会话里可见地说明
+    for (const raw of [
+      withPipeline(`  ${BOT_PIPELINE_WORKFLOW_KEY}: nope-not-a-real-workflow`),
+      withPipeline(WF, AGENTS, '    intent: nope-not-a-real-agent')
     ]) {
-      const { result, messages } = parseWithWarn(bot(...fm))
-      expect(result, fm.join()).not.toBeNull()
-      expect(messages, fm.join()).toEqual([])
+      const { result, messages } = parseWithWarn(raw)
+      expect(result, raw).not.toBeNull()
+      expect(messages, raw).toEqual([])
     }
   })
 
   it('BP-15 正文里的 `---` 不重开 frontmatter', () => {
-    const raw = md('---', 'description: d', '---', 'PERSONA', '', '---', '', 'after a rule')
+    const raw = md(
+      '---',
+      'description: d',
+      ...pipelineBlock(),
+      '---',
+      'PERSONA',
+      '',
+      '---',
+      '',
+      'after a rule'
+    )
     const parsed = parseBotDefinitionFile(raw, 'fn')!
     expect(parsed.description).toBe('d')
     expect(parsed.body).toBe(md('PERSONA', '', '---', '', 'after a rule'))
+  })
+
+  it('BP-16 流式写法 `{ workflow: …, agents: { … } }` 与块写法等价（同一份 YAML，本层不分）', () => {
+    // 属性卡改这种文件时会先把它摊成块（frontmatterPatch），那是编辑器的事，解析器只看值
+    const parsed = parseBotDefinitionFile(
+      bare(
+        `${BOT_PIPELINE_KEY}: { ${BOT_PIPELINE_WORKFLOW_KEY}: my-flow, ${BOT_PIPELINE_AGENTS_KEY}: { intent: i, task: t }, ${BOT_PIPELINE_INPUT_KEY}: { tone: terse } }`
+      ),
+      'fn'
+    )!
+    expect(parsed.pipeline).toBe('my-flow')
+    expect(parsed.agents).toEqual({ intent: 'i', task: 't' })
+    expect(parsed.pipelineInput).toEqual({ tone: 'terse' })
   })
 })
 
@@ -321,7 +383,7 @@ describe('BR —— 整份拒绝清单（逐条 + warn 人读原因）', () => {
     expect(rejectReason('---\njust a scalar\n---\nbody')).toContain('frontmatter must be a mapping')
   })
 
-  it('BR-4 description 缺失 —— bot 唯一比 agent 严的一条', () => {
+  it('BR-4 description 缺失 —— bot 唯一比 agent 严的一条（且排在管线检查之前）', () => {
     const msg = rejectReason('---\nname: x\n---\nbody')
     expect(msg).toContain("'description' is required")
     expect(msg).toContain('the intent stage uses it to judge relevance')
@@ -360,13 +422,44 @@ describe('BR —— 整份拒绝清单（逐条 + warn 人读原因）', () => {
   })
 
   it.each([
-    ['数字', '3'],
-    ['列表', '[a, b]'],
-    ['映射', '{a: 1}'],
-    ['纯空白', "'  '"]
-  ])('BR-8 shuvix-bot-pipeline 必须是非空字符串（%s）', (_label, v) => {
-    expect(rejectReason(bot(`${BOT_PIPELINE_KEY}: ${v}`))).toContain(
-      `'${BOT_PIPELINE_KEY}' must be the name of a workflow`
+    ['整个缺失', []],
+    ['留空（YAML null）', [`${BOT_PIPELINE_KEY}:`]],
+    ['改制前的标量形', [`${BOT_PIPELINE_KEY}: bot-chat`]],
+    ['数字', [`${BOT_PIPELINE_KEY}: 3`]],
+    ['列表', [`${BOT_PIPELINE_KEY}: [a, b]`]],
+    ['空串', [`${BOT_PIPELINE_KEY}: ''`]]
+  ])(
+    'BR-8 shuvix-bot-pipeline 必须是映射（%s）→ 点名必填，并把新写法写在拒绝理由里',
+    (_label, fm) => {
+      const msg = rejectReason(bare(...fm))
+      expect(msg).toContain(`'${BOT_PIPELINE_KEY}' is required`)
+      // 拒绝理由本身就是新写法的说明书：三个子键都点名
+      expect(msg).toContain(`'${BOT_PIPELINE_WORKFLOW_KEY}'`)
+      expect(msg).toContain(`'${BOT_PIPELINE_AGENTS_KEY}'`)
+      expect(msg).toContain(`'${BOT_PIPELINE_INPUT_KEY}'`)
+    }
+  )
+
+  it('BR-8b 改制前的标量形 **不迁移**：即便值正是模板管线也整份拒绝，理由是「缺块」不是「pipeline 非字符串」', () => {
+    // 按旧格式写全的存量文件，槽位表在顶层 shuvix-bot-agents 里 —— 那条先被 BR-14 拦下；
+    // 只写了标量管线名的文件走到这里，读到的必须是「要一个带 workflow 的映射」
+    const msg = rejectReason(bare(`${BOT_PIPELINE_KEY}: ${TEMPLATE_BOT_PIPELINE}`))
+    expect(msg).toContain(`'${BOT_PIPELINE_KEY}' is required — a mapping`)
+    expect(msg).not.toContain('must be the name of a workflow')
+  })
+
+  it.each([
+    ['缺失（块里只有 agents）', withPipeline(AGENTS, '    task: t')],
+    ['空映射 {}（块在、workflow 不在）', bare(`${BOT_PIPELINE_KEY}: {}`)],
+    ['留空（YAML null）', withPipeline(`  ${BOT_PIPELINE_WORKFLOW_KEY}:`)],
+    ['空串', withPipeline(`  ${BOT_PIPELINE_WORKFLOW_KEY}: ''`)],
+    ['纯空白', withPipeline(`  ${BOT_PIPELINE_WORKFLOW_KEY}: '  '`)],
+    ['数字', withPipeline(`  ${BOT_PIPELINE_WORKFLOW_KEY}: 3`)],
+    ['列表', withPipeline(`  ${BOT_PIPELINE_WORKFLOW_KEY}: [a, b]`)],
+    ['映射', withPipeline(`  ${BOT_PIPELINE_WORKFLOW_KEY}: {a: 1}`)]
+  ])('BR-9 shuvix-bot-pipeline.workflow 必须是非空字符串（%s）—— 没有缺省可回落', (_label, raw) => {
+    expect(rejectReason(raw)).toContain(
+      `'${BOT_PIPELINE_KEY}.${BOT_PIPELINE_WORKFLOW_KEY}' must be the name of a workflow`
     )
   })
 
@@ -374,9 +467,9 @@ describe('BR —— 整份拒绝清单（逐条 + warn 人读原因）', () => {
     ['列表', '[a]'],
     ['字符串', 'my-input'],
     ['数字', '7']
-  ])('BR-9 shuvix-bot-input 必须是映射（%s）', (_label, v) => {
-    expect(rejectReason(bot(`${BOT_INPUT_KEY}: ${v}`))).toContain(
-      `'${BOT_INPUT_KEY}' must be a mapping of parameters for the pipeline workflow`
+  ])('BR-10 shuvix-bot-pipeline.input 必须是映射（%s）', (_label, v) => {
+    expect(rejectReason(withPipeline(WF, `  ${BOT_PIPELINE_INPUT_KEY}: ${v}`))).toContain(
+      `'${BOT_PIPELINE_KEY}.${BOT_PIPELINE_INPUT_KEY}' must be a mapping of parameters for the pipeline workflow`
     )
   })
 
@@ -384,9 +477,9 @@ describe('BR —— 整份拒绝清单（逐条 + warn 人读原因）', () => {
     ['列表', '[a, b]'],
     ['字符串', 'my-agent'],
     ['数字', '5']
-  ])('BR-10 shuvix-bot-agents 必须是映射（%s）', (_label, v) => {
-    expect(rejectReason(bot(`${BOT_AGENTS_KEY}: ${v}`))).toContain(
-      `'${BOT_AGENTS_KEY}' must be a mapping of slot → agent name`
+  ])('BR-11 shuvix-bot-pipeline.agents 必须是映射（%s）', (_label, v) => {
+    expect(rejectReason(withPipeline(WF, `  ${BOT_PIPELINE_AGENTS_KEY}: ${v}`))).toContain(
+      `'${BOT_PIPELINE_KEY}.${BOT_PIPELINE_AGENTS_KEY}' must be a mapping of slot → agent name`
     )
   })
 
@@ -395,23 +488,72 @@ describe('BR —— 整份拒绝清单（逐条 + warn 人读原因）', () => {
     ['留空（YAML null）', ''],
     ['数字', '42'],
     ['嵌套映射', '{ nested: x }']
-  ])('BR-11 槽位值必须是 agent 名（%s）', (_label, v) => {
-    expect(rejectReason(bot(`${BOT_AGENTS_KEY}:`, `  intent: ${v}`))).toContain(
-      `'${BOT_AGENTS_KEY}.intent' must be an agent name`
+  ])('BR-12 槽位值必须是 agent 名（%s）', (_label, v) => {
+    expect(rejectReason(withPipeline(WF, AGENTS, `    intent: ${v}`))).toContain(
+      `'${BOT_PIPELINE_KEY}.${BOT_PIPELINE_AGENTS_KEY}.intent' must be an agent name`
     )
   })
 
-  it('BR-12 who 的取舍：字段级失败报 frontmatter name，早期失败报 basename', () => {
+  it('BR-13 who 的取舍：字段级失败报 frontmatter name，早期失败报 basename', () => {
     expect(
       rejectReason(
-        md('---', 'name: real-name', 'description: d', `${BOT_AGENTS_KEY}: 5`, '---', 'b'),
+        md(
+          '---',
+          'name: real-name',
+          'description: d',
+          `${BOT_PIPELINE_KEY}:`,
+          WF,
+          `  ${BOT_PIPELINE_AGENTS_KEY}: 5`,
+          '---',
+          'b'
+        ),
         'file.md'
       )
     ).toContain("bot 'real-name'")
     expect(rejectReason('name: real-name\nbody', 'file.md')).toContain("bot 'file.md'")
   })
 
-  it('BR-13 拒绝完整性守卫：每条拒绝路径恰一条诊断，且形状固定', () => {
+  it.each([
+    ['shuvix-bot-agents', BOT_PIPELINE_AGENTS_KEY],
+    ['shuvix-bot-input', BOT_PIPELINE_INPUT_KEY]
+  ])(
+    'BR-14 改制前的顶层键 %s → 整份拒绝：点名退役键并指明它在新块里的位置（%s），值是什么都不看',
+    (retired, subKey) => {
+      // 与 BX-4 那批静默退役的键不同：这两个是旧形状的**骨架**，静默忽略等于让用户的槽位表 /
+      // 入参悄悄消失，跑起来才在会话里报「必填槽位没填」—— 拒绝并说明新写法才是对存量文件负责。
+      // 用 bot()：即便新块也在（用户改了一半），旧键还在就拒
+      for (const value of [':', ': {}', ':\n  intent: bot-intent', ': 5']) {
+        const raw = bot(`${retired}${value}`)
+        const msg = rejectReason(raw)
+        expect(msg, raw).toContain(`'${retired}' is no longer supported`)
+        expect(msg, raw).toContain(`under '${BOT_PIPELINE_KEY}' as '${subKey}'`)
+        // 新块的三个子键都在理由里 —— 不让用户再去翻文档
+        expect(msg, raw).toContain(`'${BOT_PIPELINE_WORKFLOW_KEY}'`)
+      }
+    }
+  )
+
+  it('BR-14b 一份原封不动的旧格式文件：报的是退役键（更有用），不是「缺 workflow」；两个退役键同在也只报一条', () => {
+    const legacy = md(
+      '---',
+      `${BOT_FILE_MARKER_KEY}: ${BOT_FILE_MARKER}`,
+      'name: legacy',
+      'description: d',
+      `${BOT_PIPELINE_KEY}: bot-chat`,
+      'shuvix-bot-input:',
+      '  tone: terse',
+      'shuvix-bot-agents:',
+      '  intent: bot-intent',
+      '  task: default',
+      '---',
+      'PERSONA'
+    )
+    const msg = rejectReason(legacy)
+    expect(msg).toMatch(/'shuvix-bot-(agents|input)' is no longer supported/)
+    expect(msg).not.toContain('is required')
+  })
+
+  it('BR-15 拒绝完整性守卫：每条拒绝路径恰一条诊断，且形状固定', () => {
     // 没有软失败通道之后，agent 侧「恰一条诊断」的不变式在 bot 上重新成立 ——
     // 消费方（botService.parseForWrite 把 messages join 成 error）读到的永远就是那一句原因
     const rejected = [
@@ -424,12 +566,22 @@ describe('BR —— 整份拒绝清单（逐条 + warn 人读原因）', () => {
       "---\nname: x\ndescription: '   '\n---\nbody",
       '---\nname: x\ndescription: 42\n---\nbody',
       bot('shuvix-displayName: [x]'),
-      bot(`${BOT_PIPELINE_KEY}: 3`),
-      bot(`${BOT_INPUT_KEY}: [a]`),
-      bot(`${BOT_AGENTS_KEY}: [a]`),
-      bot(`${BOT_AGENTS_KEY}:`, '  "bad role": x'),
-      bot(`${BOT_AGENTS_KEY}:`, '  _x: y'),
-      bot(`${BOT_AGENTS_KEY}:`, '  intent: 42')
+      bare(),
+      bare(`${BOT_PIPELINE_KEY}:`),
+      bare(`${BOT_PIPELINE_KEY}: bot-chat`),
+      bare(`${BOT_PIPELINE_KEY}: [a]`),
+      bare(`${BOT_PIPELINE_KEY}: {}`),
+      withPipeline(`  ${BOT_PIPELINE_WORKFLOW_KEY}:`),
+      withPipeline(`  ${BOT_PIPELINE_WORKFLOW_KEY}: 3`),
+      withPipeline(AGENTS, '    task: t'),
+      withPipeline(WF, `  ${BOT_PIPELINE_INPUT_KEY}: [a]`),
+      withPipeline(WF, `  ${BOT_PIPELINE_AGENTS_KEY}: [a]`),
+      withPipeline(WF, AGENTS, '    "bad role": x'),
+      withPipeline(WF, AGENTS, '    _x: y'),
+      withPipeline(WF, AGENTS, '    intent: 42'),
+      withPipeline(WF, AGENTS, '    intent: { nested: x }'),
+      bot('shuvix-bot-agents:', '  intent: x'),
+      bot('shuvix-bot-input: {}')
     ]
     for (const raw of rejected) {
       const { result, messages } = parseWithWarn(raw, 'guard.md')
@@ -440,9 +592,9 @@ describe('BR —— 整份拒绝清单（逐条 + warn 人读原因）', () => {
     }
   })
 
-  it('BR-14 warn 是可选参数：不传时不抛、返回值一致', () => {
-    const invalid = bot(`${BOT_AGENTS_KEY}: 5`)
-    const valid = bot(`${BOT_AGENTS_KEY}:`, '  intent: i')
+  it('BR-16 warn 是可选参数：不传时不抛、返回值一致', () => {
+    const invalid = withPipeline(WF, `  ${BOT_PIPELINE_AGENTS_KEY}: 5`)
+    const valid = withPipeline(WF, AGENTS, '    intent: i')
     expect(() => parseBotDefinitionFile(invalid, 'fn')).not.toThrow()
     expect(parseBotDefinitionFile(invalid, 'fn')).toBeNull()
     expect(parseBotDefinitionFile(valid, 'fn')).toEqual(parseWithWarn(valid).result)
@@ -453,7 +605,7 @@ describe('BR —— 整份拒绝清单（逐条 + warn 人读原因）', () => {
 
 describe('BX —— 宽松侧（与 agent md 同口径）', () => {
   it('BX-1 缺文件类型标记仍可解析（写入恒有、读取可选）', () => {
-    expect(parseBotDefinitionFile('---\ndescription: d\n---\nbody', 'fn')).not.toBeNull()
+    expect(parseBotDefinitionFile(bot(), 'fn')).not.toBeNull()
   })
 
   it.each([['agent v1'], ['workflow v1'], ['whatever']])(
@@ -463,7 +615,10 @@ describe('BX —— 宽松侧（与 agent md 同口径）', () => {
       // bots 目录是平铺扫描的，误投一份 agent md 进来即成为一个 bot；若将来在
       // 「标记存在但类型不符」时改判非法，本例反转为拒绝用例。
       expect(
-        parseBotDefinitionFile(`---\nshuvix: ${marker}\ndescription: d\n---\nbody`, 'fn')
+        parseBotDefinitionFile(
+          md('---', `shuvix: ${marker}`, 'description: d', ...pipelineBlock(), '---', 'body'),
+          'fn'
+        )
       ).not.toBeNull()
     }
   )
@@ -486,7 +641,8 @@ describe('BX —— 宽松侧（与 agent md 同口径）', () => {
   ])('BX-4 退役键 %s 是普通未知键：连改制前的非法值也只是被忽略', (key, value) => {
     // 这些键连同门控轴 / 笔记 / 开场白 / 建议问题一起退役了。存量文件里写着它们的 bot
     // 必须照常可用 —— 判非法等于让一次升级把用户正在用的 bot 从会话里删掉。
-    // 值刻意取改制前会整份拒绝的形状：现在它只是一个没人读的键
+    // 值刻意取改制前会整份拒绝的形状：现在它只是一个没人读的键。
+    // （例外是 shuvix-bot-agents / shuvix-bot-input 两个结构键 —— 见 BR-14 的理由）
     const { result, messages } = parseWithWarn(bot(`${key}: ${value}`))
     expect(result, key).not.toBeNull()
     expect(messages, key).toEqual([])
@@ -521,22 +677,44 @@ describe('BX —— 宽松侧（与 agent md 同口径）', () => {
     expect(parseAgentDefinitionFile(bot(...agentKeys), 'fn')).toBeNull()
   })
 
-  it('BX-6 裸键 pipeline / input / agents 被**静默忽略** → 全部回落缺省，零 warn', () => {
-    // 风险钉板：从别家 YAML 迁移过来的人最可能写裸键，而用户以为生效的配置被丢掉 ——
-    // 得到的是一个「跑内置 bot-chat、一个槽位都没填」的 bot，运行时才在会话里报槽位缺失
+  it('BX-6 顶层裸键 pipeline / workflow / input / agents 被**静默忽略**（块里的才算数），零 warn', () => {
+    // 风险钉板：从别家 YAML 迁移过来的人最可能写裸键。管线块本身必填（BR-8）兜住了「整份
+    // 忘写」，但块外多写的裸键仍然静默 —— 用户以为生效的槽位表被丢掉，要到宿主对照管线
+    // 提示「必填槽位没填」或跑起来才发现
     const { result, messages } = parseWithWarn(
-      bot('pipeline: my-flow', 'input: { tone: terse }', 'agents: { intent: x }')
+      bot(
+        'pipeline: other-flow',
+        'workflow: other-flow',
+        'input: { tone: terse }',
+        'agents: { intent: x }'
+      )
     )
-    expect(result!.pipeline).toBe(DEFAULT_BOT_PIPELINE)
+    expect(result!.pipeline).toBe('bot-chat')
     expect(result!.pipelineInput).toEqual({})
     expect(result!.agents).toEqual({})
     expect(messages).toEqual([])
   })
 
-  it.each([['shuvix-bot-agent'], ['shuvix-bot-Agents'], ['shuvix-bot_agents']])(
-    'BX-7 拼错前缀（%s）同样静默忽略 → agents 为空（拼错一个字母就静默成没填槽位）',
+  it.each([['shuvix-bot-Pipeline'], ['shuvix-bot_pipeline'], ['shuvix-bot-pipelines']])(
+    'BX-7 顶层键拼错（%s）→ 等于没写管线块 → 整份拒绝（缺省没了，拼错反而能被发现）',
     (key) => {
-      expect(parseBotDefinitionFile(bot(`${key}: { intent: x }`), 'fn')!.agents).toEqual({})
+      // 改制前拼错一个字母就静默回落成「跑 bot-chat、一个槽位都没填」；现在没有缺省，
+      // 拼错的键是未知键、真键缺席 —— 拒绝理由直接把正确的键名写在脸上
+      const msg = rejectReason(bare(`${key}:`, WF, AGENTS, '    intent: x'))
+      expect(msg).toContain(`'${BOT_PIPELINE_KEY}' is required`)
+    }
+  )
+
+  it.each([['Agents'], ['agent'], ['slots'], ['inputs']])(
+    'BX-7b 块内子键拼错（%s）静默 → 槽位表 / 入参为空（拼错一个字母就静默成没填槽位）',
+    (key) => {
+      // 与顶层键不同，块内没有「必填」兜底（agents / input 本就可省略）—— 这一格靠宿主
+      // 对照管线在属性卡上提示「必填槽位没填」来补
+      const { result, messages } = parseWithWarn(withPipeline(WF, `  ${key}:`, '    intent: x'))
+      expect(result, key).not.toBeNull()
+      expect(result!.agents, key).toEqual({})
+      expect(result!.pipelineInput, key).toEqual({})
+      expect(messages, key).toEqual([])
     }
   )
 
@@ -546,6 +724,7 @@ describe('BX —— 宽松侧（与 agent md 同口径）', () => {
     const raw = md(
       '---',
       'description: d',
+      ...pipelineBlock(),
       '---',
       'PERSONA',
       '',
@@ -557,6 +736,17 @@ describe('BX —— 宽松侧（与 agent md 同口径）', () => {
     expect(result).not.toBeNull()
     expect(messages).toEqual([])
     expect(result!.body).toBe(md('PERSONA', '', '<!-- shuvix:bot-notes -->', '', 'old note line'))
+  })
+
+  it('BX-9 管线块内的陌生子键忽略（同顶层未知键口径），零 warn、产物键集不变', () => {
+    // 有人把 agent 键写进块里（model / tools），或把退役键挪了进来 —— 都只是没人读的键
+    const { result, messages } = parseWithWarn(
+      withPipeline(WF, '  model: gpt', '  tools: [read]', '  shuvix-bot-respond: sometimes')
+    )
+    expect(result).not.toBeNull()
+    expect(messages).toEqual([])
+    expect(result!.pipeline).toBe('my-flow')
+    expect(Object.keys(result!).sort()).toEqual(PARSED_BOT_KEYS)
   })
 })
 
@@ -583,6 +773,14 @@ const frontmatterKeys = (text: string): string[] =>
     .filter((line) => line && !/^\s/.test(line))
     .map((line) => line.split(':')[0])
 
+/** 管线块的直接子键序（恰两空格缩进的行） */
+const pipelineSubKeys = (text: string): string[] =>
+  text
+    .split('\n---')[0]
+    .split('\n')
+    .filter((line) => /^ {2}\S/.test(line))
+    .map((line) => line.trim().split(':')[0])
+
 describe('BS —— 序列化（与解析互逆）', () => {
   it('BS-1 全字段往返保真', () => {
     expect(parseBotDefinitionFile(serializeBotDefinitionFile(FULL), 'other-name')).toEqual(FULL)
@@ -594,34 +792,59 @@ describe('BS —— 序列化（与解析互逆）', () => {
     expect(Object.keys(parseBotDefinitionFile(bot(), 'fn')!).sort()).toEqual(PARSED_BOT_KEYS)
   })
 
-  it('BS-3 缺省值省略：最小对象的序列化结果逐字固定；空正文时闭合 --- 之后什么都没有', () => {
+  it('BS-3 缺省值省略、管线块恒写：最小对象的序列化结果逐字固定；空正文时闭合 --- 之后什么都没有', () => {
     const minimal: ParsedBotFile = {
       name: 'minimal',
       displayName: 'minimal',
       description: 'd',
       body: 'body',
-      pipeline: DEFAULT_BOT_PIPELINE,
+      pipeline: TEMPLATE_BOT_PIPELINE,
       pipelineInput: {},
       agents: {}
     }
+    // agents / input 为空时省略子键，但 workflow 永远在 —— 它是必填，没有「等于缺省就省略」这回事
     expect(serializeBotDefinitionFile(minimal)).toBe(
-      '---\nshuvix: bot v1\nname: minimal\ndescription: d\n---\n\nbody\n'
+      md(
+        '---',
+        'shuvix: bot v1',
+        'name: minimal',
+        'description: d',
+        `${BOT_PIPELINE_KEY}:`,
+        `  ${BOT_PIPELINE_WORKFLOW_KEY}: bot-chat`,
+        '---',
+        '',
+        'body',
+        ''
+      )
     )
     // 空正文：不留一个孤零零的空行（新建 bot 的模板形态 —— 人设由用户写、记忆由 bot 写）
     expect(serializeBotDefinitionFile({ ...minimal, body: '' })).toBe(
-      '---\nshuvix: bot v1\nname: minimal\ndescription: d\n---\n'
+      md(
+        '---',
+        'shuvix: bot v1',
+        'name: minimal',
+        'description: d',
+        `${BOT_PIPELINE_KEY}:`,
+        `  ${BOT_PIPELINE_WORKFLOW_KEY}: bot-chat`,
+        '---',
+        ''
+      )
     )
   })
 
-  it('BS-4 键序固定（属性卡与 diff 的可读性）：身份 → 管线 → 入参 → 槽位', () => {
-    expect(frontmatterKeys(serializeBotDefinitionFile(FULL))).toEqual([
+  it('BS-4 键序固定（属性卡与 diff 的可读性）：顶层 身份 → 管线块；块内 workflow → agents → input', () => {
+    const text = serializeBotDefinitionFile(FULL)
+    expect(frontmatterKeys(text)).toEqual([
       BOT_FILE_MARKER_KEY,
       'name',
       'description',
       'shuvix-displayName',
-      BOT_PIPELINE_KEY,
-      BOT_INPUT_KEY,
-      BOT_AGENTS_KEY
+      BOT_PIPELINE_KEY
+    ])
+    expect(pipelineSubKeys(text)).toEqual([
+      BOT_PIPELINE_WORKFLOW_KEY,
+      BOT_PIPELINE_AGENTS_KEY,
+      BOT_PIPELINE_INPUT_KEY
     ])
   })
 
@@ -632,14 +855,15 @@ describe('BS —— 序列化（与解析互逆）', () => {
   })
 
   it('BS-6 槽位键序恒为字母序（与对象插入序无关 —— 开放集合没有「阶段顺序」可依）', () => {
-    // FULL 的插入序是 task → intent → recheck → gate，输出必须是 gate → intent → recheck → task
+    // FULL 的插入序是 task → intent → recheck → gate，输出必须是 gate → intent → recheck → task；
+    // 槽位行在块的第二层（四空格）
     expect(serializeBotDefinitionFile(FULL)).toContain(
-      `${BOT_AGENTS_KEY}:\n  gate: my-gate\n  intent: my-intent\n  recheck: my-recheck\n  task: my-task\n`
+      `  ${BOT_PIPELINE_AGENTS_KEY}:\n    gate: my-gate\n    intent: my-intent\n    recheck: my-recheck\n    task: my-task\n`
     )
     // 排序用 Array.sort() 的**码点序**，不是 localeCompare —— 大写槽位名排在小写之前。
     // 槽位名允许大写（ROLE_RE），所以这条是真实可达的形状；若将来改用 localeCompare，本例反转。
     const mixedCase = serializeBotDefinitionFile({ ...FULL, agents: { alpha: 'a', Zeta: 'z' } })
-    expect(mixedCase).toContain(`${BOT_AGENTS_KEY}:\n  Zeta: z\n  alpha: a\n`)
+    expect(mixedCase).toContain(`  ${BOT_PIPELINE_AGENTS_KEY}:\n    Zeta: z\n    alpha: a\n`)
   })
 
   it.each([
@@ -648,12 +872,24 @@ describe('BS —— 序列化（与解析互逆）', () => {
     ['以 * 起头（YAML alias 指示符）', '*starred value'],
     ['内含单引号', "o'brien's bot"],
     ['超长不折行', `long text ${'lorem ipsum '.repeat(30)}end`]
-  ])('BS-7 YAML 危险字符（%s）经引号转义后往返逐字相等', (_label, value) => {
-    const text = serializeBotDefinitionFile({ ...FULL, description: value, displayName: value })
-    const parsed = parseBotDefinitionFile(text, 'x')!
-    expect(parsed.description).toBe(value)
-    expect(parsed.displayName).toBe(value)
-  })
+  ])(
+    'BS-7 YAML 危险字符（%s）经引号转义后往返逐字相等（身份 / 工作流名 / 槽位值）',
+    (_label, value) => {
+      // 工作流名与 agent 名通常是标识符，但都接用户自取的名字 —— 块里的标量同样要设防
+      const text = serializeBotDefinitionFile({
+        ...FULL,
+        description: value,
+        displayName: value,
+        pipeline: value,
+        agents: { intent: value }
+      })
+      const parsed = parseBotDefinitionFile(text, 'x')!
+      expect(parsed.description).toBe(value)
+      expect(parsed.displayName).toBe(value)
+      expect(parsed.pipeline).toBe(value)
+      expect(parsed.agents.intent).toBe(value)
+    }
+  )
 
   it('BS-8 多行正文（含空行、--- 分隔线、代码块）往返保真', () => {
     const value: ParsedBotFile = {
@@ -754,6 +990,23 @@ describe('BS —— 序列化（与解析互逆）', () => {
     // 而 save 落的是调用方给的原文，不是 re-serialize 的产物
     expect(botService).toContain('writeFileAtomic(target.basePath, text)')
   })
+
+  it('BS-16 旧形状永不写出：顶层没有 shuvix-bot-agents / shuvix-bot-input，管线键是纯键行而不是标量', () => {
+    const text = serializeBotDefinitionFile(FULL)
+    expect(text).not.toMatch(/^shuvix-bot-(agents|input):/m)
+    expect(text).toMatch(new RegExp(`^${BOT_PIPELINE_KEY}:$`, 'm'))
+    // 写出的文件不会撞上 BR-14 的退役键拒绝，也没有任何软告警
+    expect(parseWithWarn(text).messages).toEqual([])
+  })
+
+  it('BS-17 已知不对称：空 pipeline 串序列化出的文件解析不回来（与 BS-10 同一种不设防）', () => {
+    // 模板常量保证新建路径不会给空串；GUI 直接构造 ParsedBotFile 的话这里就是坏文件的来源
+    const text = serializeBotDefinitionFile({ ...FULL, pipeline: '' })
+    expect(text).toContain(`  ${BOT_PIPELINE_WORKFLOW_KEY}: ""`)
+    expect(rejectReason(text)).toContain(
+      `'${BOT_PIPELINE_KEY}.${BOT_PIPELINE_WORKFLOW_KEY}' must be the name of a workflow`
+    )
+  })
 })
 
 // ─────────────── BD：属性卡描述符（chat-protocol）与解析器的对齐 ───────────────
@@ -761,65 +1014,86 @@ describe('BS —— 序列化（与解析互逆）', () => {
 describe('BD —— 属性卡描述符与解析器的对齐', () => {
   const descriptor = SHUVIX_MD_DESCRIPTORS.find((d) => d.type === 'bot')!
   const cardKeys = descriptor.fields.map((f) => f.key)
-  /** 解析器实际读取的 frontmatter 键（botFile.ts 的白名单） */
-  const parserKeys = [
-    'name',
-    'description',
-    'shuvix-displayName',
-    BOT_PIPELINE_KEY,
-    BOT_INPUT_KEY,
-    BOT_AGENTS_KEY
-  ]
+  /**
+   * 解析器实际读取的**顶层** frontmatter 键 / 管线块内的子键 —— 刻意写成字面量而不是引常量：
+   * BD-4 / BD-5 要用它们反过来钉常量，两边都引常量就什么都钉不住
+   */
+  const parserKeys = ['name', 'description', 'shuvix-displayName', 'shuvix-bot-pipeline']
+  const parserSubKeys = ['workflow', 'agents', 'input']
   const keysOf = (kind: string): string[] =>
     descriptor.fields
       .filter((f) => f.kind === kind)
       .map((f) => f.key)
       .sort()
 
-  it('BD-1 描述符键 ⊆ 解析器读取的键；解析器有而卡片无的恰为 agents / input（嵌套映射）', () => {
-    for (const key of cardKeys) expect(parserKeys, key).toContain(key)
-    // agents / input 是嵌套映射，刻意只落通用 key/value 行：槽位由设置页按管线的输入
-    // schema 渲染成下拉编辑（agentSlotsOf），属性卡不再自己做一遍表单
-    expect(parserKeys.filter((k) => !cardKeys.includes(k)).sort()).toEqual(
-      [BOT_AGENTS_KEY, BOT_INPUT_KEY].sort()
-    )
+  it('BD-1 描述符键 = 解析器读取的顶层键（agents / input 随管线块住进 botPipeline 字段，不再是顶层键）', () => {
+    // 改制前解析器有而卡片无的恰是 agents / input 两个嵌套映射；现在它们是管线块的从属项，
+    // 卡片上由 botPipeline 一个字段整块承接 —— 两份键集因此重合
+    expect([...cardKeys].sort()).toEqual([...parserKeys].sort())
   })
 
-  it('BD-2 卡片上没有 boolean / csv / list / select 字段 —— 那些形状随 agent 键与退役键一起走了', () => {
+  it('BD-2 卡片上没有 boolean / csv / list / select 字段：标量身份走 text / mono，管线块是唯一的 botPipeline', () => {
     // 改制前 notes 是 boolean、tools 是 csv、suggestions 是 list、respond 是 select；
-    // 现在 bot 上只剩标量身份与管线名，属性卡因此只有 text / mono 两种行
+    // 现在 bot 上只剩标量身份 + 一个可编辑的嵌套块
     for (const kind of ['boolean', 'csv', 'list', 'select']) {
       expect(keysOf(kind), kind).toEqual([])
     }
-    expect([...keysOf('text'), ...keysOf('mono')].sort()).toEqual([...cardKeys].sort())
-  })
-
-  it('BD-3 mono 键 = 标识符：name 与 pipeline（解析器拒绝非字符串，卡片当等宽标识符渲染）', () => {
-    expect(keysOf('mono')).toEqual(['name', BOT_PIPELINE_KEY].sort())
-    expect(parseBotDefinitionFile(bot(`${BOT_PIPELINE_KEY}: [a]`), 'x')).toBeNull()
-    expect(parseBotDefinitionFile(bot(`${BOT_PIPELINE_KEY}: my-flow`), 'x')!.pipeline).toBe(
-      'my-flow'
+    expect(keysOf('botPipeline')).toEqual([BOT_PIPELINE_KEY])
+    expect([...keysOf('text'), ...keysOf('mono'), ...keysOf('botPipeline')].sort()).toEqual(
+      [...cardKeys].sort()
     )
   })
 
-  it('BD-4 chat-protocol 与 botFile 的两个键常量是同一个字符串（设置页的槽位编辑器按它改 md）', () => {
-    // 渲染进程够不到 agent-runtime，所以 chat-protocol 另存了一份；两份若漂移，
-    // 设置页 patchFrontmatterMappingEntry 改出来的键解析器就读不到
-    expect(PROTOCOL_PIPELINE_KEY).toBe(BOT_PIPELINE_KEY)
-    expect(PROTOCOL_AGENTS_KEY).toBe(BOT_AGENTS_KEY)
+  it('BD-3 mono 键 = 标识符：只有 name；管线键是 botPipeline（解析器要它是映射，卡片按块渲染）', () => {
+    expect(keysOf('mono')).toEqual(['name'])
+    // 卡片的块控件建立在「值是映射」之上：标量形解析器拒绝，映射形读出 workflow
+    expect(parseBotDefinitionFile(bare(`${BOT_PIPELINE_KEY}: my-flow`), 'x')).toBeNull()
+    expect(parseBotDefinitionFile(withPipeline(WF), 'x')!.pipeline).toBe('my-flow')
   })
 
-  it('BD-5 弱守卫：botFile.ts 里每一个 BOT_*_KEY 常量都在 parserKeys 清单里', () => {
-    // 上面的 parserKeys 是手维护清单，加了新键却忘了补它，BD-1 就会静默失真。
+  it('BD-4 键常量的单一真源在 chat-protocol：botFile 转出口的四个常量与之全等，且字面值就是文件里的写法', () => {
+    // 渲染进程够不到 agent-runtime，属性卡按 chat-protocol 那份改 md（patchFrontmatterPath）；
+    // botFile.ts 只转出口，不另存一份 —— 漂移在类型上就不可能，这里钉的是字面值：
+    // 改常量 = 改文件格式，用户文件里写的是这些串
+    expect(BOT_PIPELINE_KEY).toBe(PROTOCOL_PIPELINE_KEY)
+    expect(BOT_PIPELINE_WORKFLOW_KEY).toBe(PROTOCOL_WORKFLOW_KEY)
+    expect(BOT_PIPELINE_AGENTS_KEY).toBe(PROTOCOL_AGENTS_KEY)
+    expect(BOT_PIPELINE_INPUT_KEY).toBe(PROTOCOL_INPUT_KEY)
+    expect(BOT_PIPELINE_KEY).toBe('shuvix-bot-pipeline')
+    expect(BOT_PIPELINE_WORKFLOW_KEY).toBe('workflow')
+    expect(BOT_PIPELINE_AGENTS_KEY).toBe('agents')
+    expect(BOT_PIPELINE_INPUT_KEY).toBe('input')
+  })
+
+  it('BD-5 弱守卫：chat-protocol 声明的每个 BOT_*_KEY 都在解析器读取的键集里；botFile.ts 自己不再声明任何 BOT_*_KEY', () => {
+    // 上面的 parserKeys / parserSubKeys 是手维护清单，加了新键却忘了补它，BD-1 就会静默失真。
     // 这条从源码里抓键常量，让漏补先在这里响。
-    const source = readFileSync(fileURLToPath(new URL('../botFile.ts', import.meta.url)), 'utf-8')
-    const declared = [...source.matchAll(/export const (BOT_\w*_KEY) = '([^']+)'/g)]
-    // 标记键 + 三个 bot 键；再多出一个就是有新键要补进 parserKeys
-    expect(declared.length).toBeGreaterThanOrEqual(4)
+    const protocolSource = readFileSync(
+      fileURLToPath(
+        new URL('../../../../chat-protocol/src/shuvixMdDescriptors.ts', import.meta.url)
+      ),
+      'utf-8'
+    )
+    const declared = [...protocolSource.matchAll(/export const (BOT_\w*_KEY) = '([^']+)'/g)]
+    // 顶层键 + 三个子键；再多出一个就是有新键要补进清单
+    expect(declared.map(([, constName]) => constName).sort()).toEqual([
+      'BOT_PIPELINE_AGENTS_KEY',
+      'BOT_PIPELINE_INPUT_KEY',
+      'BOT_PIPELINE_KEY',
+      'BOT_PIPELINE_WORKFLOW_KEY'
+    ])
     for (const [, constName, key] of declared) {
-      // 文件类型标记不是解析器读取的字段（BX-2：解析器根本不读标记）
-      if (constName === 'BOT_FILE_MARKER_KEY') continue
-      expect(parserKeys, constName).toContain(key)
+      const known = constName === 'BOT_PIPELINE_KEY' ? parserKeys : parserSubKeys
+      expect(known, constName).toContain(key)
     }
+    // botFile.ts 只剩文件类型标记键是自己声明的 —— 键常量若在这里再声明一份，就是第二个真源
+    const botFileSource = readFileSync(
+      fileURLToPath(new URL('../botFile.ts', import.meta.url)),
+      'utf-8'
+    )
+    const local = [...botFileSource.matchAll(/export const (BOT_\w*_KEY) = '([^']+)'/g)].map(
+      ([, constName]) => constName
+    )
+    expect(local).toEqual(['BOT_FILE_MARKER_KEY'])
   })
 })

@@ -29,7 +29,7 @@ import { v4 as uuidv4 } from 'uuid'
 import { shell } from 'electron'
 import type { AgentMessage } from '@earendil-works/pi-agent-core'
 import {
-  DEFAULT_BOT_PIPELINE,
+  TEMPLATE_BOT_PIPELINE,
   parseBotDefinitionFile,
   renderBotContext,
   serializeBotDefinitionFile,
@@ -74,7 +74,7 @@ export interface BotListItem {
   description: string
   /** 管线框架（workflow 名） */
   pipeline: string
-  /** 槽位 → agent 名（bot md 的 shuvix-bot-agents 原样） */
+  /** 槽位 → agent 名（bot md 的 shuvix-bot-pipeline.agents 原样） */
   agents: Record<string, string>
   /** 正文（人设与记忆）字符数 —— 它进每个参与 agent 的系统提示词，设置页据此提醒体量 */
   bodyChars: number
@@ -111,7 +111,7 @@ export interface ResolvedPipeline {
   exists: boolean
   /** 管线声明的槽位（顺序即声明序）；管线不存在或没声明 = [] */
   slots: PipelineAgentSlot[]
-  /** 槽位 → agent 名：bot md 的 `shuvix-bot-agents` 原样，加上回落覆盖 */
+  /** 槽位 → agent 名：bot md 的 `shuvix-bot-pipeline.agents` 原样，加上回落覆盖 */
   agents: Record<string, string>
 }
 
@@ -119,14 +119,15 @@ export function resolvePipeline(
   bot: ParsedBotFile,
   overrides?: Record<string, string>
 ): ResolvedPipeline {
-  const workflow = bot.pipeline || DEFAULT_BOT_PIPELINE
+  // 没有缺省管线：解析器已保证 workflow 非空，这里不再兜底
+  const workflow = bot.pipeline
   return {
     workflow,
     exists: workflowService.hasWorkflow(workflow),
     slots: workflowService.agentSlots(workflow),
     agents: {
       ...bot.agents,
-      // 回落覆盖用户的 shuvix-bot-agents —— 它正是「那份不可靠的门控 agent」的来源
+      // 回落覆盖用户填的槽位表 —— 它正是「那份不可靠的门控 agent」的来源
       ...overrides
     }
   }
@@ -343,6 +344,60 @@ class BotService {
   /** 目录里无法解析的 bot 文件（设置页显示为可点开修复的告警项） */
   listInvalid(): InvalidBotFile[] {
     return this.scanDir().invalid
+  }
+
+  /**
+   * 对照**当前注册表**给一份已解析的 bot 提意见（属性卡的琥珀横幅）：管线存不存在、重入
+   * 模式对不对、必填槽位填没填、槽位指向的 agent 在不在、有没有填了管线没声明的槽位。
+   * 这些都不是解析器的事（文件可以后补、注册表随时在变），所以不判非法、只提示；
+   * 运行时它们各自会在会话里可见地失败。文案与解析器诊断同口径：人读英文、不本地化。
+   */
+  advise(bot: ParsedBotFile): string[] {
+    const out: string[] = []
+    const pipeline = resolvePipeline(bot)
+    if (!pipeline.exists) {
+      out.push(
+        `pipeline '${pipeline.workflow}' does not exist — dispatch will fail visibly until it does`
+      )
+    } else {
+      const wf = workflowService
+        .listForSettings()
+        .find((w) => w.name === pipeline.workflow && !w.overridden)
+      if (wf && wf.concurrency !== 'parallel') {
+        out.push(
+          `pipeline '${pipeline.workflow}' declares '${wf.concurrency}' reentry — non-parallel: engine reentry fights the mailbox's exclusivity`
+        )
+      }
+    }
+    const declared = new Set(pipeline.slots.map((s) => s.role))
+    for (const slot of pipeline.slots) {
+      const ref = bot.agents[slot.role]
+      if (!ref) {
+        if (slot.required) {
+          out.push(
+            `slot '${slot.role}' is required by the pipeline but not set — this bot cannot run`
+          )
+        }
+      } else if (!agentService.getProfile(ref)) {
+        out.push(
+          `slot '${slot.role}': agent '${ref}' does not exist — dispatch will fail visibly until it does`
+        )
+      }
+    }
+    for (const [role, ref] of Object.entries(bot.agents)) {
+      if (declared.has(role)) continue
+      if (pipeline.exists) {
+        out.push(
+          `slot '${role}' is not declared by pipeline '${pipeline.workflow}' — it is ignored`
+        )
+      }
+      if (!agentService.getProfile(ref)) {
+        out.push(
+          `slot '${role}': agent '${ref}' does not exist — dispatch will fail visibly until it does`
+        )
+      }
+    }
+    return out
   }
 
   /**
@@ -572,7 +627,7 @@ class BotService {
       displayName: params.name,
       description: params.description?.trim() || `${params.name} —— 描述这个 bot 负责什么`,
       body: persona,
-      pipeline: DEFAULT_BOT_PIPELINE,
+      pipeline: TEMPLATE_BOT_PIPELINE,
       pipelineInput: {},
       agents: { intent: BUILTIN_GATE_AGENT, task: DEFAULT_TASK_AGENT }
     })
@@ -1100,7 +1155,7 @@ class BotService {
     attachments?: BotAttachmentRef[]
   }): Promise<MemberOutcome> {
     const { bot, sessionId, messageId, messageSeq } = ctx
-    // 连续故障之后回落内置门控：用户覆盖的 `shuvix-bot-agents.intent` 让位
+    // 连续故障之后回落内置门控：用户填的 `shuvix-bot-pipeline.agents.intent` 让位
     const degraded = this.gateHealth.get(bot.name)?.degraded
     const pipeline = resolvePipeline(bot, degraded ? { intent: BUILTIN_GATE_AGENT } : undefined)
     const ticket: BotTicket = {
@@ -1165,7 +1220,7 @@ class BotService {
         signal: ticket.abort.signal,
         input: {
           ...bot.pipelineInput,
-          // 宿主键铺在用户的 shuvix-bot-input 之后 —— 一份 bot md 不得改写 session.id 这类事实
+          // 宿主键铺在用户的 shuvix-bot-pipeline.input 之后 —— 一份 bot md 不得改写 session.id 这类事实
           bot: {
             name: bot.name,
             displayName: bot.displayName,

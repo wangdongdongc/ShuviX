@@ -88,11 +88,29 @@ const FACTS = {
   recentText: 'User: hi'
 }
 
-function writeBot(name: string, opts: { displayName?: string; pipeline?: string } = {}): void {
+function writeBot(
+  name: string,
+  opts: {
+    displayName?: string
+    /** `shuvix-bot-pipeline.workflow` —— 必填；缺省内置 bot-chat（模板的缺省，解析器没有缺省） */
+    pipeline?: string
+    agents?: Record<string, string>
+    input?: Record<string, unknown>
+  } = {}
+): void {
   mkdirSync(dirs.bots, { recursive: true })
   const lines = ['---', 'shuvix: bot v1', `name: ${name}`, `description: unit bot ${name}`]
   if (opts.displayName) lines.push(`shuvix-displayName: ${opts.displayName}`)
-  if (opts.pipeline) lines.push(`shuvix-bot-pipeline: ${opts.pipeline}`)
+  // 管线绑定是一个嵌套块：workflow 必填，agents / input 是它的从属项
+  lines.push('shuvix-bot-pipeline:', `  workflow: ${opts.pipeline ?? 'bot-chat'}`)
+  if (opts.agents) {
+    lines.push('  agents:')
+    for (const [k, v] of Object.entries(opts.agents)) lines.push(`    ${k}: ${v}`)
+  }
+  if (opts.input) {
+    lines.push('  input:')
+    for (const [k, v] of Object.entries(opts.input)) lines.push(`    ${k}: ${JSON.stringify(v)}`)
+  }
   lines.push('---', '', 'BOT BODY.')
   writeFileSync(join(dirs.bots, `${name}.md`), lines.join('\n'))
 }

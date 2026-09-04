@@ -3,7 +3,7 @@
  * 「停止 ≠ 沉默」（设计 §5.4 / §9.1）。
  *
  * 全程零 LLM：`a2-abort-probe` 是一份参数化 bot 管线，相位窗口（preTurnMs / turnMs）
- * 与结局（sayLine / mode）全部读自各 bot md 的 `shuvix-bot-input`。相位窗口用真实毫秒
+ * 与结局（sayLine / mode）全部读自各 bot md 的 `shuvix-bot-pipeline.input`。相位窗口用真实毫秒
  * —— 「正在输入」行、停止钮、回执都是「窗口期间屏幕上长出来的东西」，每一步先 waitFor
  * 锚相位事件，再进 DOM；固定 sleep 只用于「断不发生」的静置复查。
  *
@@ -43,7 +43,7 @@ let chat: ChatPane
 let sidebar: SidebarPane
 let flow: BotFlowPane
 
-/** 参数化探针管线名 —— bot md 用 `shuvix-bot-pipeline` 指向它 */
+/** 参数化探针管线名 —— bot md 用 `shuvix-bot-pipeline.workflow` 指向它 */
 const PROBE = 'a2-abort-probe'
 
 /**
@@ -58,11 +58,11 @@ const PROBE_MD = [
   '---',
   'shuvix: workflow v1',
   `name: ${PROBE}`,
-  'description: A2 e2e probe — phase windows and endings all come from shuvix-bot-input.',
+  'description: A2 e2e probe — phase windows and endings all come from shuvix-bot-pipeline.input.',
   'shuvix-workflow-concurrency: parallel',
   '---',
   '',
-  'A2 参数化 bot 管线：相位窗口与结局全部来自 bot md 的 `shuvix-bot-input`，零 LLM。',
+  'A2 参数化 bot 管线：相位窗口与结局全部来自 bot md 的 `shuvix-bot-pipeline.input`，零 LLM。',
   '',
   '```js workflow',
   '// started 窗：turn() 之前先睡（「正在输入 · 判断中」那一行的观察窗）',

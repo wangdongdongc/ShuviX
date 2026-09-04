@@ -35,12 +35,12 @@ let dialog: BotDialogPane
 
 const PROBE = 'a4-unread-probe'
 
-/** 只 say 一句的最小管线；说话前的窗口由各 bot md 的 shuvix-bot-input 撑开 */
+/** 只 say 一句的最小管线；说话前的窗口由各 bot md 的 shuvix-bot-pipeline.input 撑开 */
 const PROBE_MD = [
   '---',
   'shuvix: workflow v1',
   `name: ${PROBE}`,
-  'description: A4 unread e2e probe — say one line; pre-say window from shuvix-bot-input.',
+  'description: A4 unread e2e probe — say one line; pre-say window from shuvix-bot-pipeline.input.',
   'shuvix-workflow-concurrency: parallel',
   '---',
   '',

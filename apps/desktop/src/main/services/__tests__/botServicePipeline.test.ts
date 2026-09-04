@@ -1,8 +1,8 @@
 /**
  * botService 管线半边的接线：两张**表**、一个跨 realm 校验器、以及一次派发的**票面**。
  *
- *  - `resolvePipeline`：管线名回落、槽位表（来自管线自己的输入 schema）、槽位 → agent 的映射
- *    （bot 自己填的表 + 回落覆盖，没有缺省行）；
+ *  - `resolvePipeline`：管线名原样（**没有回落** —— `workflow` 必填由解析器保证）、槽位表
+ *    （来自管线自己的输入 schema）、槽位 → agent 的映射（bot 自己填的表 + 回落覆盖，没有缺省行）；
  *  - `asSayContent`：say 正文的投影表 —— 脚本值进入宿主的信任边界，值跨 vm realm 到达，
  *    `instanceof` 不可靠，逐字段 typeof 是唯一防线，因此每一格都值得单独摆一条；
  *  - DP：一次 invoke 带了什么 —— input 的键集、`systemContext` 里那一块正文围栏、派发前替
@@ -85,7 +85,7 @@ vi.mock('../../utils/toolUtils/fileTime', async (importOriginal) => ({
   recordRead: mocks.recordRead
 }))
 
-import { DEFAULT_BOT_PIPELINE, renderBotContext } from '@shuvix/agent-runtime'
+import { renderBotContext } from '@shuvix/agent-runtime'
 import { asSayContent, botService, BUILTIN_GATE_AGENT, resolvePipeline } from '../botService'
 import { chatMessageDao, __reset as resetRows } from './fakeChatMessageDao'
 
@@ -94,7 +94,8 @@ function stubBot(p: Partial<ParsedBotFile> & { name: string }): ParsedBotFile {
     displayName: p.name,
     description: `stub ${p.name}`,
     body: '',
-    pipeline: '',
+    // 解析器保证 workflow 非空 —— 桩也照此，缺省给模板管线的名字
+    pipeline: 'bot-chat',
     pipelineInput: {},
     agents: {},
     ...p
@@ -109,32 +110,30 @@ beforeEach(() => {
 })
 
 describe('resolvePipeline —— 管线名、槽位表与槽位 → agent 的映射', () => {
-  it('未声明 pipeline 时回落 bot-chat', () => {
-    expect(resolvePipeline(stubBot({ name: 'a' })).workflow).toBe(DEFAULT_BOT_PIPELINE)
-  })
-
-  it('声明了 pipeline 就用它', () => {
+  it('workflow 就是 bot md 里 shuvix-bot-pipeline.workflow 原样 —— 没有回落', () => {
+    // 改制前空串回落 bot-chat；现在「必填」由解析器保证（缺了整份非法），宿主不再兜底：
+    // 两层各兜一次，「这次到底跑了谁」就要靠读优先级表才能回答
     expect(resolvePipeline(stubBot({ name: 'a', pipeline: 'my-flow' })).workflow).toBe('my-flow')
+    expect(resolvePipeline(stubBot({ name: 'a', pipeline: 'bot-chat' })).workflow).toBe('bot-chat')
+    // 解析器产不出空串；万一（GUI 直接构造 ParsedBotFile）也原样透传，不替它编一个名字
+    expect(resolvePipeline(stubBot({ name: 'a', pipeline: '' })).workflow).toBe('')
   })
 
-  it.each([[true], [false]])('exists 取自 hasWorkflow(回落后的名字) = %s', (found) => {
+  it.each([[true], [false]])('exists 取自 hasWorkflow(workflow) = %s', (found) => {
     mocks.hasWorkflow.mockReturnValue(found)
-    expect(resolvePipeline(stubBot({ name: 'a' })).exists).toBe(found)
-    expect(mocks.hasWorkflow).toHaveBeenLastCalledWith(DEFAULT_BOT_PIPELINE)
-
-    resolvePipeline(stubBot({ name: 'a', pipeline: 'my-flow' }))
+    expect(resolvePipeline(stubBot({ name: 'a', pipeline: 'my-flow' })).exists).toBe(found)
     expect(mocks.hasWorkflow).toHaveBeenLastCalledWith('my-flow')
   })
 
-  it('slots 取自管线自己的输入 schema（workflowService.agentSlots），按回落后的名字查', () => {
+  it('slots 取自管线自己的输入 schema（workflowService.agentSlots），按 workflow 名查', () => {
     const declared: PipelineAgentSlot[] = [
       { role: 'intent', required: true, description: '门控段' },
       { role: 'task', required: true },
       { role: 'recheck', required: false }
     ]
-    mocks.agentSlots.mockImplementation((name) => (name === DEFAULT_BOT_PIPELINE ? declared : []))
-    expect(resolvePipeline(stubBot({ name: 'a' })).slots).toEqual(declared)
-    expect(mocks.agentSlots).toHaveBeenLastCalledWith(DEFAULT_BOT_PIPELINE)
+    mocks.agentSlots.mockImplementation((name) => (name === 'bot-chat' ? declared : []))
+    expect(resolvePipeline(stubBot({ name: 'a', pipeline: 'bot-chat' })).slots).toEqual(declared)
+    expect(mocks.agentSlots).toHaveBeenLastCalledWith('bot-chat')
     // 管线没声明槽位（或根本不存在）→ 空表：哪些槽位存在、哪些必填，管线文件说了算，宿主不补
     expect(resolvePipeline(stubBot({ name: 'a', pipeline: 'my-flow' })).slots).toEqual([])
     expect(mocks.agentSlots).toHaveBeenLastCalledWith('my-flow')
@@ -308,6 +307,8 @@ describe('DP —— 一次 invoke 带了什么', () => {
     name: string,
     opts: {
       displayName?: string
+      /** `shuvix-bot-pipeline.workflow` —— 必填；缺省内置 bot-chat（模板的缺省，解析器没有缺省） */
+      pipeline?: string
       agents?: Record<string, string>
       input?: Record<string, unknown>
       body?: string
@@ -316,13 +317,15 @@ describe('DP —— 一次 invoke 带了什么', () => {
     mkdirSync(dirs.bots, { recursive: true })
     const lines = ['---', 'shuvix: bot v1', `name: ${name}`, `description: unit bot ${name}`]
     if (opts.displayName) lines.push(`shuvix-displayName: ${opts.displayName}`)
-    if (opts.input) {
-      lines.push('shuvix-bot-input:')
-      for (const [k, v] of Object.entries(opts.input)) lines.push(`  ${k}: ${JSON.stringify(v)}`)
-    }
+    // 管线绑定是一个嵌套块：workflow 必填，agents / input 是它的从属项
+    lines.push('shuvix-bot-pipeline:', `  workflow: ${opts.pipeline ?? 'bot-chat'}`)
     if (opts.agents) {
-      lines.push('shuvix-bot-agents:')
-      for (const [k, v] of Object.entries(opts.agents)) lines.push(`  ${k}: ${v}`)
+      lines.push('  agents:')
+      for (const [k, v] of Object.entries(opts.agents)) lines.push(`    ${k}: ${v}`)
+    }
+    if (opts.input) {
+      lines.push('  input:')
+      for (const [k, v] of Object.entries(opts.input)) lines.push(`    ${k}: ${JSON.stringify(v)}`)
     }
     lines.push('---', '', opts.body ?? BODY)
     const file = join(dirs.bots, `${name}.md`)
@@ -417,7 +420,8 @@ describe('DP —— 一次 invoke 带了什么', () => {
     await prompt('第一句')
 
     const req = request()
-    expect(req.workflow).toBe(DEFAULT_BOT_PIPELINE)
+    // 派发的 workflow 就是 md 里 shuvix-bot-pipeline.workflow 那一行（writeBot 缺省写内置 bot-chat）
+    expect(req.workflow).toBe('bot-chat')
     expect(req.sessionId).toBe(SID)
     expect(Object.keys(req.input).sort()).toEqual(['agents', 'bot', 'message', 'session', 'window'])
     expect(req.input.bot).toEqual({
@@ -433,6 +437,14 @@ describe('DP —— 一次 invoke 带了什么', () => {
     expect(req.input.window).toEqual([])
     const user = userRow()
     expect(req.input.message).toEqual({ id: user.id, seq: user.seq, text: '第一句' })
+  })
+
+  it('DP-1b 派发的 workflow 原样取自 md 的 shuvix-bot-pipeline.workflow —— 没有回落到 bot-chat', async () => {
+    // 宿主这一层不再有缺省管线：md 说 my-flow 就派 my-flow（在不在注册表是 not-found 那条路的事）
+    writeBot('scout', { pipeline: 'my-flow', agents: { intent: 'bot-intent', task: 'default' } })
+    seedSession(['scout'])
+    await prompt()
+    expect(request().workflow).toBe('my-flow')
   })
 
   it('DP-2 window 是已成型的「谁: 说了什么」字符串行，截到本条之前', async () => {
@@ -473,7 +485,7 @@ describe('DP —— 一次 invoke 带了什么', () => {
     })
   })
 
-  it('DP-4 shuvix-bot-input 铺在最前，宿主键压过它 —— 一份 bot md 改写不了 session.id 这类事实', async () => {
+  it('DP-4 shuvix-bot-pipeline.input 铺在最前，宿主键压过它 —— 一份 bot md 改写不了 session.id 这类事实', async () => {
     writeBot('scout', { input: { foo: 1, session: 'hijack' } })
     seedSession(['scout'])
     await prompt()

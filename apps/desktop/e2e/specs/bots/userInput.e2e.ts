@@ -35,7 +35,7 @@ let events: EventRecorder
 let provider: FakeProvider
 
 const MODEL = 'e2e-model'
-/** 探针管线的名字 —— bot md 用 `shuvix-bot-pipeline` 指向它 */
+/** 探针管线的名字 —— bot md 用 `shuvix-bot-pipeline.workflow` 指向它 */
 const PIPELINE = 't-ask'
 const BOT = 'u-ask'
 /**

@@ -12,11 +12,14 @@
  *  - workflowService 的 mock 多补 listForSettings（inspect 读并发模式的那条缝）与
  *    agentSlots（槽位表来自管线自己的输入 schema —— 这里给内置 bot-chat 一份与真件同形的
  *    声明：intent / task 必填，recheck 可选）。
+ *
+ * 同一套夹具也养着 `botService.advise`（AD 组）：它是属性卡琥珀横幅的数据源，回答的是
+ * inspect 的另一面 —— 不是「会解析成什么」而是「跑起来会在哪里可见地失败」。
  */
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest'
 import { mkdirSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
-import type { PipelineAgentSlot } from '@shuvix/agent-runtime'
+import type { ParsedBotFile, PipelineAgentSlot } from '@shuvix/agent-runtime'
 
 const dirs = vi.hoisted(() => {
   const tmp = (process.env.TMPDIR || process.env.TEMP || '/tmp').replace(/[\\/]+$/, '')
@@ -102,18 +105,25 @@ function writeBot(
   name: string,
   opts: {
     displayName?: string
+    /** `shuvix-bot-pipeline.workflow` —— 必填；缺省内置 bot-chat（模板的缺省，解析器没有缺省） */
     pipeline?: string
     agents?: Record<string, string>
+    input?: Record<string, unknown>
     body?: string
   } = {}
 ): void {
   mkdirSync(dirs.bots, { recursive: true })
   const lines = ['---', 'shuvix: bot v1', `name: ${name}`, `description: unit bot ${name}`]
   if (opts.displayName) lines.push(`shuvix-displayName: ${opts.displayName}`)
-  if (opts.pipeline) lines.push(`shuvix-bot-pipeline: ${opts.pipeline}`)
+  // 管线绑定是一个嵌套块：workflow 必填，agents / input 是它的从属项
+  lines.push('shuvix-bot-pipeline:', `  workflow: ${opts.pipeline ?? 'bot-chat'}`)
   if (opts.agents) {
-    lines.push('shuvix-bot-agents:')
-    for (const [k, v] of Object.entries(opts.agents)) lines.push(`  ${k}: ${v}`)
+    lines.push('  agents:')
+    for (const [k, v] of Object.entries(opts.agents)) lines.push(`    ${k}: ${v}`)
+  }
+  if (opts.input) {
+    lines.push('  input:')
+    for (const [k, v] of Object.entries(opts.input)) lines.push(`    ${k}: ${JSON.stringify(v)}`)
   }
   lines.push('---', '', opts.body ?? 'BOT BODY.')
   writeFileSync(join(dirs.bots, `${name}.md`), lines.join('\n'))
@@ -233,7 +243,8 @@ describe('botService.inspect', () => {
     expect('error' in r).toBe(true)
   })
 
-  it('B3 缺省全景：内置管线 + 管线声明的三个槽位（一个都没填）+ 正文字数，无 gateDegraded 键', () => {
+  it('B3 最小全景：只写必填的 workflow（内置 bot-chat）+ 管线声明的三个槽位（一个都没填）+ 正文字数，无 gateDegraded 键', () => {
+    // 管线没有缺省 —— writeBot 缺省写的是模板管线 bot-chat，读数条读到的就是它
     writeBot('b3-panorama')
     const r = ok('b3-panorama')
     expect(r.pipeline).toEqual({ name: 'bot-chat', exists: true, concurrency: 'parallel' })
@@ -305,7 +316,7 @@ describe('botService.inspect', () => {
     expect(slotOf('b6b-override', 'intent')).toMatchObject({ ref: 'bot-intent', missing: false })
   })
 
-  it('B6c 槽位顺序跟管线的声明序，不跟 bot md 里 shuvix-bot-agents 的书写序', () => {
+  it('B6c 槽位顺序跟管线的声明序，不跟 bot md 里 shuvix-bot-pipeline.agents 的书写序', () => {
     writeBot('b6c-order', { agents: { task: 'default', intent: 'bot-intent' } })
     expect(ok('b6c-order').slots.map((s) => s.role)).toEqual(['intent', 'task', 'recheck'])
   })
@@ -382,5 +393,152 @@ describe('botService.inspect', () => {
         JSON.stringify(s)
       ).toBe(true)
     }
+  })
+})
+
+// ────────────────────────── AD：advise —— 对照注册表的提示 ──────────────────────────
+
+/**
+ * `botService.advise` 是属性卡琥珀横幅的数据源：文件**合法**之上，对照**此刻的注册表**说
+ * 「跑起来会在哪里可见地失败」—— 管线在不在、重入模式对不对、必填槽位填没填、槽位指向的
+ * agent 在不在、有没有填了管线没声明的槽位。它们都不是解析器的事（文件可以后补、注册表
+ * 随时在变；两端共用的纯校验器也没有注册表可对照 —— shuvixMdValidate 的 BV-15 钉着那一半），
+ * 所以只提示、不判非法：桌面 IPC 处理器把它们追加到 valid 结果的 messages 里，状态仍是 valid。
+ *
+ * 入参是一份已解析的 bot（属性卡送来的是编辑器里的文本，不是注册表里的那一份），所以这里
+ * 直接构造 ParsedBotFile；agentService 仍用真的（同 B 组的理由）。断言到文案时取 em dash
+ * 之前的「事实」半句 —— 后半句是后果，措辞可变。
+ */
+describe('botService.advise', () => {
+  const HEALTHY = { intent: 'bot-intent', task: 'default' }
+  const parsed = (p: Partial<ParsedBotFile> & { name: string }): ParsedBotFile => ({
+    displayName: p.name,
+    description: `unit bot ${p.name}`,
+    body: '',
+    pipeline: 'bot-chat',
+    pipelineInput: {},
+    agents: {},
+    ...p
+  })
+  /** 每条提示 em dash 之前的「事实」半句 */
+  const facts = (msgs: string[]): string[] => msgs.map((m) => m.split(' — ')[0])
+
+  it('AD-1 健康的 bot → []：管线在、parallel、必填槽位都填了存在的 agent', () => {
+    expect(botService.advise(parsed({ name: 'ad1', agents: HEALTHY }))).toEqual([])
+  })
+
+  it('AD-2 管线不存在 → 点名管线；此时没有槽位表可对照，填了的槽位不报「未声明」', () => {
+    mocks.hasWorkflow.mockImplementation((name: string) => name !== 'no-such-flow')
+    const out = botService.advise(
+      parsed({ name: 'ad2', pipeline: 'no-such-flow', agents: HEALTHY })
+    )
+    expect(facts(out)).toEqual(["pipeline 'no-such-flow' does not exist"])
+  })
+
+  it('AD-2b 管线不存在时槽位指向的 agent 仍查：agent 的存在性不依赖管线', () => {
+    mocks.hasWorkflow.mockImplementation((name: string) => name !== 'no-such-flow')
+    const out = botService.advise(
+      parsed({ name: 'ad2b', pipeline: 'no-such-flow', agents: { task: 'ghost-agent' } })
+    )
+    expect(facts(out)).toEqual([
+      "pipeline 'no-such-flow' does not exist",
+      "slot 'task': agent 'ghost-agent' does not exist"
+    ])
+  })
+
+  it.each([['skip'], ['queue']])(
+    'AD-3 用户同名文件遮蔽内置 bot-chat 且重入模式是 %s（非 parallel）→ 点名该模式',
+    (mode) => {
+      // 生效的是未被遮蔽的那份（同 B8）：内置的 parallel 被用户 bot-chat.md 的
+      // `shuvix-workflow-concurrency: <mode>` 压掉了 —— 引擎级重入会和 mailbox 的独占打架
+      mocks.listForSettings.mockReturnValue([
+        { name: 'bot-chat', concurrency: mode, source: 'user' },
+        { name: 'bot-chat', concurrency: 'parallel', overridden: true }
+      ])
+      const out = botService.advise(parsed({ name: 'ad3', agents: HEALTHY }))
+      expect(facts(out)).toEqual([`pipeline 'bot-chat' declares '${mode}' reentry`])
+      expect(out[0]).toContain('non-parallel')
+    }
+  )
+
+  it('AD-3b 被遮蔽的那份不参与判定：用户覆盖仍是 parallel → 无提示', () => {
+    mocks.listForSettings.mockReturnValue([
+      { name: 'bot-chat', concurrency: 'parallel', source: 'user' },
+      { name: 'bot-chat', concurrency: 'parallel', overridden: true }
+    ])
+    expect(botService.advise(parsed({ name: 'ad3b', agents: HEALTHY }))).toEqual([])
+  })
+
+  it('AD-4 必填槽位没填 → 点名槽位；可选槽位（recheck）没填不提示', () => {
+    const out = botService.advise(parsed({ name: 'ad4', agents: { intent: 'bot-intent' } }))
+    expect(facts(out)).toEqual(["slot 'task' is required by the pipeline but not set"])
+    expect(out[0]).toContain('cannot run')
+    // 两个必填都没填：各一条，按管线的声明序
+    expect(facts(botService.advise(parsed({ name: 'ad4b' })))).toEqual([
+      "slot 'intent' is required by the pipeline but not set",
+      "slot 'task' is required by the pipeline but not set"
+    ])
+  })
+
+  it('AD-5 槽位指向不存在的 agent → 点名槽位与 agent；用户 md 里的 agent 算存在（合并注册表）', () => {
+    writeAgentMd('my-gate')
+    expect(
+      botService.advise(parsed({ name: 'ad5', agents: { intent: 'my-gate', task: 'default' } }))
+    ).toEqual([])
+    const out = botService.advise(
+      parsed({ name: 'ad5b', agents: { intent: 'ghost-agent', task: 'default' } })
+    )
+    expect(facts(out)).toEqual(["slot 'intent': agent 'ghost-agent' does not exist"])
+  })
+
+  it('AD-6 填了管线没声明的槽位 → 提示它被忽略；那个槽位再指向不存在的 agent 时多一条', () => {
+    const out = botService.advise(parsed({ name: 'ad6', agents: { ...HEALTHY, extra: 'default' } }))
+    expect(facts(out)).toEqual(["slot 'extra' is not declared by pipeline 'bot-chat'"])
+    expect(out[0]).toContain('ignored')
+    expect(
+      facts(botService.advise(parsed({ name: 'ad6b', agents: { ...HEALTHY, extra: 'ghost' } })))
+    ).toEqual([
+      "slot 'extra' is not declared by pipeline 'bot-chat'",
+      "slot 'extra': agent 'ghost' does not exist"
+    ])
+  })
+
+  it('AD-7 多处不对时逐条列出，顺序固定：管线 → 声明的槽位（按声明序）→ 额外槽位', () => {
+    mocks.listForSettings.mockReturnValue([
+      { name: 'bot-chat', concurrency: 'queue', source: 'user' }
+    ])
+    const out = botService.advise(
+      parsed({ name: 'ad7', agents: { extra: 'default', intent: 'ghost' } })
+    )
+    expect(facts(out)).toEqual([
+      "pipeline 'bot-chat' declares 'queue' reentry",
+      "slot 'intent': agent 'ghost' does not exist",
+      "slot 'task' is required by the pipeline but not set",
+      "slot 'extra' is not declared by pipeline 'bot-chat'"
+    ])
+  })
+
+  it('AD-8 提示是提示不是拒绝：文案里没有「the whole file is rejected」，也不经 i18n（英文原话，同解析器诊断口径）', () => {
+    mocks.hasWorkflow.mockReturnValue(false)
+    const out = botService.advise(parsed({ name: 'ad8', pipeline: 'gone', agents: { x: 'ghost' } }))
+    expect(out.length).toBeGreaterThan(0)
+    for (const m of out) {
+      expect(m).not.toContain('the whole file is rejected')
+      // i18n 在这里被桩成「返回 key」—— 走了 t() 的文案会长成 `bot.xxx`
+      expect(m).not.toMatch(/^bot\./)
+    }
+  })
+
+  it('AD-9 与 inspect 同源：inspect 标 missing 的槽位恰是 advise 点名「does not exist」的槽位', () => {
+    writeBot('ad9', { agents: { intent: 'ghost', task: 'default' } })
+    const missing = ok('ad9')
+      .slots.filter((s) => s.missing)
+      .map((s) => s.role)
+    const advised = botService
+      .advise(botService.getBot('ad9')!)
+      .filter((m) => m.includes('does not exist'))
+      .map((m) => /^slot '([^']+)'/.exec(m)![1])
+    expect(missing).toEqual(['intent'])
+    expect(advised).toEqual(missing)
   })
 })

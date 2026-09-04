@@ -2099,25 +2099,35 @@ export function botFlowPane(main: CdpClient): BotFlowPane {
 
 // ─────────────────────────────────────────────────────────────────────────
 // 主窗 Bots 分组 + Bot 档案页 —— 侧栏置顶「Bots」分组（BotGroup：bot 行 / 非法文件行 /
-// 组头菜单 / 行菜单）与主区的 BotPage（头部动作 / 运行时读数条 + 槽位编辑器 / 门控模型
-// 选择器 / md 编辑器 / 丢更新冲突对话框）。原设置页「Bots」tab 的两栏整体搬进了主窗：
-// 列表在侧栏分组里，点一行主区就是这一页（与会话互斥：页开着就没有活动会话行）。
+// 组头菜单 / 行菜单）与主区的 BotPage（头部动作 / md 编辑器 / 丢更新冲突对话框）。
+// 原设置页「Bots」tab 的两栏整体搬进了主窗：列表在侧栏分组里，点一行主区就是这一页
+// （与会话互斥：页开着就没有活动会话行）。
 //
 // 锚点：分组头按 `data-group="bots"`（SessionGroup 的 group/header 层）认，行按
 // data-bot-row / data-bot-invalid-row；页面按 data-bot-page="edit|fix|create" 认，其内
 // 沿用 A1 落的 data-*（data-bot-save / data-bot-cancel / data-bot-new-session /
-// data-bot-invalid-error / data-bot-inspect{,-warnings} / data-bot-slots /
-// data-bot-slot{,-select} / data-bot-body-chars / data-bot-gate-model /
-// data-bot-conflict-{reload,overwrite}）。ModelSelect 面板沿用 fmCardPane 的 `.picker-panel`
-// 约定（body portal）。菜单走与会话行同一套桩（armMenu / openMenu / pickFromMenu）。
+// data-bot-invalid-error / data-bot-conflict-{reload,overwrite}）。
+//
+// 管线绑定块 `shuvix-bot-pipeline` 归属性卡：块行（`.cm-shuvix-fmcard-row[data-key=…]`）里
+// 挂着 app-shell 的 BotPipelineField —— 根 `[data-bot-pipeline]`，其内
+// `[data-bot-workflow-select]`（原生下拉，option value = 工作流名）/ `[data-bot-workflow-meta]`
+// （只在工作流不存在或非 parallel 时上屏）/ `[data-bot-slots=<声明数>]` 下每个
+// `[data-bot-slot=<role>]` 行（含 `[data-bot-slot-select=<role>]`，额外槽位带
+// data-bot-slot-extra）/ `[data-bot-input=<n>]`。这些槽位锚点**名字沿用了**旧读数条的，但只在
+// `[data-bot-pipeline]` 之下 —— 查询一律以它为根。下拉改的是**编辑器文档**（一次改写 = 一次
+// 文档变更），磁盘要等头部保存。注册表层面的提示（管线 / 槽位 / agent 存不存在、重入模式）走
+// 卡片的校验横幅（`.cm-shuvix-fmcard-status.is-warn` + `.cm-shuvix-fmcard-banner-line`）——
+// 卡片按 (文件名, YAML 文本) 缓存校验结果，YAML 没变就不重新问主进程。
+// 菜单走与会话行同一套桩（armMenu / openMenu / pickFromMenu）。
 //
 // 分组是**懒扫**的：首次展开才扫，之后展开 / 窗口聚焦 / 组头菜单「刷新」/ `bot.changed`
 // 事件（botService 每次落盘后广播）重扫 —— 「保存后行自己更新」的断言正是靠最后一条，
 // 用例里别在那之前手动 refresh，否则断的就不是事件了。磁盘外写入不广播，种完要 refresh。
 //
-// v3 删掉两个锚点（连同它们描述的能力）：`data-bot-notes-status`（笔记段没了，正文由
-// bot 自己维护）与 `data-bot-limits`（bot→bot 接力没了，hop/扇出上限随之退场）。
-// 它们只在 `retiredAnchors()` 里作否定断言。
+// 退场的锚点（连同它们描述的能力）只在 `retiredAnchors()` 里作否定断言：运行时读数条
+// `data-bot-inspect{,-warnings}` / `data-bot-body-chars`（管线与槽位并进了属性卡，正文字数不再
+// 显示）、门控模型行 `data-bot-gate-model`（全局设置，去 Agents 设置页改 bot-intent 档案），
+// 以及更早的 `data-bot-notes-status`（笔记段）与 `data-bot-limits`（bot→bot 接力上限）。
 
 export interface BotsPaneRow {
   /** bot 身份键（data-bot-row 属性值 = frontmatter name） */
@@ -2130,35 +2140,53 @@ export interface BotsPaneRow {
   selected: boolean
 }
 
-/** 读数条槽位编辑器里的一行（`<label data-bot-slot>` + `<select data-bot-slot-select>`） */
+/** 属性卡管线块里的一个槽位行（`[data-bot-slot]` 行 + 其内的 `[data-bot-slot-select]` 原生下拉） */
 export interface BotsSlotRow {
-  /** 槽位名（data-bot-slot 属性值 = 管线 input schema 里的 agents.properties 键） */
+  /** 槽位名（data-bot-slot 属性值 = 所选工作流 input schema 里的 agents.properties 键） */
   role: string
-  /** 必填星标（`*`）在不在 */
+  /** 必填星标（角色标签里的 ` *`）在不在 */
   required: boolean
-  /** 下拉当前值：'' = 未填 */
+  /** 下拉当前值：'' = 未设置 */
   value: string
-  /** 下拉候选（含 '' 那项）—— 注册表里未被遮蔽的 agent 名 */
+  /** 下拉候选（含 '' 那项）—— 注册表里未被遮蔽的 agent 名；填了个不存在的名字时它也在列（不静默换值） */
   options: string[]
-  /** 警示配色（必填未填 / 填了不存在的 agent） */
+  /** 警示配色（必填未填 / 填了不存在的 agent / 所选工作流没声明的额外槽位） */
   warned: boolean
+  /** 所选工作流没声明的额外槽位（data-bot-slot-extra） */
+  extra: boolean
 }
 
-/** 运行时读数条快照（data-bot-inspect 未上屏时 present=false 其余为空） */
-export interface BotsInspectShot {
+/**
+ * 属性卡里 `shuvix-bot-pipeline` 块行的联动控件快照（`[data-bot-pipeline]`；未上屏时
+ * present=false 其余为空）。候选项（工作流 + agent 名）是控件挂上后经 IPC 异步拉的：
+ * 拉回前下拉全部禁用、所有已填槽位都以「额外」身份显示 —— **`loaded` 为真之前别读槽位**。
+ */
+export interface BotsPipelineShot {
   present: boolean
-  /** 管线行文案：`<workflow>` 或 `<workflow> · <concurrency>` */
-  pipelineText: string
-  /** 槽位行（DOM 序 = 管线声明序，bot 额外填的槽位缀尾） */
+  /** 候选项已拉回（工作流下拉可交互） */
+  loaded: boolean
+  /** 工作流下拉当前值（`shuvix-bot-pipeline.workflow`；缺键为 ''） */
+  workflow: string
+  /** 工作流下拉候选（option value = 工作流名；指向不存在的工作流时那个名字也在列） */
+  workflowOptions: string[]
+  /** 选中项的文案：`<name>  (<source> · <concurrency> · <N slots>)` —— 来源与槽位数是 i18n 文案，只作弱断言 */
+  workflowLabel: string
+  /** 工作流下拉的警示配色（未选 / 指向不存在的工作流） */
+  workflowWarned: boolean
+  /** 琥珀 meta（data-bot-workflow-meta）：工作流不存在 → i18n「not found」；非 parallel → `<mode> ≠ parallel`；其余为空串 */
+  meta: string
+  /** data-bot-slots 属性值 = 所选工作流声明的槽位数 */
+  declaredCount: number
+  /** 槽位行（DOM 序 = 工作流声明序，bot 额外填的槽位缀尾） */
   slots: BotsSlotRow[]
-  /** 正文字符数（data-bot-body-chars 属性值） */
-  bodyChars: number
-  /** 问题区条目数（data-bot-inspect-warnings 属性值）；块未上屏为 0 */
-  warningsCount: number
-  /** 问题区各条文案（DOM 序）—— 只用于「含某个槽位名」这类弱断言，不认整句 i18n */
-  warnings: string[]
-  /** 门控模型选择器行（仅 intent 仍指向内置 bot-intent 时上屏） */
-  gateModelPresent: boolean
+  /** data-bot-input 属性值 = `shuvix-bot-pipeline.input` 的键数（只读摘要） */
+  inputCount: number
+}
+
+/** 属性卡的校验态：状态 chip（is-ok / is-warn / is-err；未上屏为空串）+ 横幅各行文案（DOM 序） */
+export interface BotsCardStatus {
+  chip: 'ok' | 'warn' | 'err' | ''
+  banner: string[]
 }
 
 /** 档案页快照（edit / fix / create 三态通用；不在屏时 present=false 其余为空） */
@@ -2239,20 +2267,31 @@ export interface BotsPane {
    * 字段行不在屏 / 只读返回 false。**不驱动 CM6 打字**的唯一改正文入口。
    */
   setField(key: string, value: string): Promise<boolean>
+  /** 头部保存钮（data-bot-save）此刻可点：刚保存过 / 保存中为 false，文档改动经编辑器的防抖回调后才重新亮起 */
+  saveEnabled(): Promise<boolean>
   /** 头部保存（data-bot-save）；按钮缺失或禁用（刚保存过 / 保存中）直接抛错 */
   clickSave(): Promise<void>
   /** 头部取消（仅 transient 态）→ 等档案页卸载（回欢迎页） */
   clickCancel(): Promise<void>
   /** 头部「新建会话」（data-bot-new-session） */
   clickNewSession(): Promise<void>
-  inspect(): Promise<BotsInspectShot>
+  /** 属性卡管线块的快照（先等 `loaded`） */
+  pipeline(): Promise<BotsPipelineShot>
   /**
-   * 改某个槽位的下拉（native value setter + change 事件，走 React 的 onChange）：
-   * 组件据此给 md 打补丁（`shuvix-bot-agents.<role>` 行）并 `bot:save`，随后重拉原文重挂编辑器。
-   * '' = 清掉该槽位。下拉不存在（槽位没上屏）返回 false。
+   * 改工作流下拉（native value setter + change 事件，走 React 的 onChange）：控件据此给
+   * **编辑器文档**打一次补丁 —— 改 `workflow` 并删掉新工作流没声明的每个 `agents.<role>`；
+   * 磁盘要等头部保存。候选项没拉回 / 名字不在候选里返回 false（原生 select 赋一个不在列的值
+   * 会静默落到空值，那样断的就不是「选了它」）。
+   */
+  pickWorkflow(name: string): Promise<boolean>
+  /**
+   * 改某个槽位的下拉（同上）：控件据此给编辑器文档打补丁（`shuvix-bot-pipeline.agents.<role>`
+   * 那一行，'' = 删掉该行），磁盘要等头部保存。下拉不存在 / 禁用 / 值不在候选里返回 false。
    */
   setSlot(role: string, value: string): Promise<boolean>
-  /** v3 已退场的锚点里此刻还在屏上的（应恒为空数组） */
+  /** 属性卡的校验态（chip + 横幅）—— 注册表层面的提示（管线 / 槽位 / agent 存在性、重入模式）也从这里出 */
+  cardStatus(): Promise<BotsCardStatus>
+  /** 已退场的锚点里此刻还在屏上的（应恒为空数组） */
   retiredAnchors(): Promise<string[]>
 
   /** 丢更新冲突对话框是否在屏（以 data-bot-conflict-reload 的存在为准） */
@@ -2262,20 +2301,6 @@ export interface BotsPane {
   clickConflictReload(): Promise<void>
   clickConflictOverwrite(): Promise<void>
   clickConflictCancel(): Promise<void>
-
-  /** 门控模型：开面板（trigger 监听 click）并等 portal 上屏 */
-  openGateModel(): Promise<void>
-  /** 关面板（面板监听 document 的 mousedown：点外部即关） */
-  closeGateModel(): Promise<void>
-  gateModelOpen(): Promise<boolean>
-  /** 面板里的提供商分组名（型号按钮带 pl-5，据此与分组头区分 —— 同 fmCardPane） */
-  gateModelGroups(): Promise<string[]>
-  expandGateModelGroup(label: string): Promise<boolean>
-  pickGateModel(modelId: string): Promise<boolean>
-  /** 触发器文案（未选态 = 「跟随会话」占位） */
-  gateModelTriggerText(): Promise<string>
-  /** 已选态的清除按钮（.lucide-x）；未选态不存在 → 返回 false */
-  clearGateModel(): Promise<boolean>
 }
 
 /** 主窗侧栏「Bots」分组 + 主区 Bot 档案页（renderer 挂载后即可构造；先 expand 再读行） */
@@ -2294,9 +2319,14 @@ export function botsPane(main: CdpClient): BotsPane {
   const INVALID_ROW = (fileName: string): string =>
     `document.querySelector('[data-bot-invalid-row=${JSON.stringify(fileName)}]')`
   const PAGE = `document.querySelector('[data-bot-page]')`
-  const MODEL_PANEL = `document.querySelector('.picker-panel')`
-  const MODEL_BUTTONS = `[...document.querySelectorAll('.picker-panel button')]`
-  const GATE_ROW = `document.querySelector('[data-bot-gate-model]')`
+  // 属性卡管线块（BotPipelineField）—— 槽位锚点名字与旧读数条相同，故一律以它为根查
+  const PIPELINE = `${PAGE}?.querySelector('[data-bot-pipeline]')`
+  const WF_SELECT = `${PIPELINE}?.querySelector('[data-bot-workflow-select]')`
+  const SLOT_SELECT = (role: string): string =>
+    `${PIPELINE}?.querySelector('[data-bot-slot-select=${JSON.stringify(role)}]')`
+  // 卡片标题行的校验 chip 与其下的横幅（校验结果没回来 / 缓存未命中时两者都 hidden）
+  const CARD_STATUS = `${PAGE}?.querySelector('.cm-shuvix-fmcard-status')`
+  const CARD_BANNER = `${PAGE}?.querySelector('.cm-shuvix-fmcard-banner')`
   const CONFLICT_RELOAD = `document.querySelector('[data-bot-conflict-reload]')`
   const CONFLICT_OVERWRITE = `document.querySelector('[data-bot-conflict-overwrite]')`
 
@@ -2335,7 +2365,25 @@ export function botsPane(main: CdpClient): BotsPane {
       }
     })()`)
 
-  const gateModelOpen = (): Promise<boolean> => main.eval<boolean>(`${MODEL_PANEL} !== null`)
+  /**
+   * 给受控 <select> 赋值：React 装了 value tracker，直接赋 .value 会被判「没变」而不派 onChange，
+   * 必须绕到原型上的原生 setter（同 chatPane.type 对 textarea 的做法）。值不在候选里不赋 ——
+   * 原生 select 会静默落到空值，那断的就不是「选了它」。
+   */
+  const setSelect = async (selector: string, value: string): Promise<boolean> => {
+    const hit = await main.eval<boolean>(`(() => {
+      const sel = ${selector}
+      if (!sel || sel.disabled) return false
+      if (![...sel.options].some((o) => o.value === ${JSON.stringify(value)})) return false
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set
+      setter.call(sel, ${JSON.stringify(value)})
+      sel.dispatchEvent(new Event('change', { bubbles: true }))
+      return true
+    })()`)
+    // 补丁 → 文档变更 → widget 重建 → 控件重挂 + 候选项重拉各是一步 —— 调用方按结果 until 等
+    await sleep(200)
+    return hit
+  }
 
   const requireRow = (name: string): Promise<boolean> =>
     until(() => main.eval<boolean>(`!!${ROW(name)}`), `bot row "${name}"`)
@@ -2376,7 +2424,7 @@ export function botsPane(main: CdpClient): BotsPane {
     selectRow: async (name) => {
       await requireRow(name)
       await main.eval(`${ROW(name)}.click()`)
-      // 选中 → 拉 list + 原文 + inspect，各是一趟 IPC —— 头部路径只在原文到手后渲染，
+      // 选中 → 拉 list + 原文，各是一趟 IPC —— 头部路径只在原文到手后渲染，
       // 拿它当「edit 页真挂上了」的判据（按 bot.list 现查 basePath：改过名的 bot 文件名 ≠ name）
       await until(
         () =>
@@ -2461,6 +2509,11 @@ export function botsPane(main: CdpClient): BotsPane {
       await sleep(200)
       return hit
     },
+    saveEnabled: () =>
+      main.eval<boolean>(`(() => {
+        const btn = ${PAGE}?.querySelector('[data-bot-save]')
+        return !!btn && !btn.disabled
+      })()`),
     clickSave: async () => {
       await main.eval(`(() => {
         const btn = ${PAGE}?.querySelector('[data-bot-save]')
@@ -2477,53 +2530,61 @@ export function botsPane(main: CdpClient): BotsPane {
     clickNewSession: async () => {
       await main.eval(`${PAGE}.querySelector('[data-bot-new-session]').click()`)
     },
-    inspect: () =>
-      main.eval(`(() => {
-        const strip = document.querySelector('[data-bot-inspect]')
-        if (!strip) {
-          return { present: false, pipelineText: '', slots: [], bodyChars: 0, warningsCount: 0, warnings: [], gateModelPresent: false }
+    pipeline: () =>
+      main.eval<BotsPipelineShot>(`(() => {
+        const root = ${PIPELINE}
+        if (!root) {
+          return { present: false, loaded: false, workflow: '', workflowOptions: [], workflowLabel: '',
+                   workflowWarned: false, meta: '', declaredCount: 0, slots: [], inputCount: 0 }
         }
-        // 管线行是槽位列表之前唯一的 font-mono span（槽位名各自也是 font-mono，但住在 label 里）
-        const pipeline = [...strip.querySelectorAll('span.font-mono')].find((s) => !s.closest('[data-bot-slot]'))
-        const warn = strip.querySelector('[data-bot-inspect-warnings]')
-        const chars = strip.querySelector('[data-bot-body-chars]')
+        const wf = root.querySelector('[data-bot-workflow-select]')
+        const slotsBox = root.querySelector('[data-bot-slots]')
+        const input = root.querySelector('[data-bot-input]')
+        // 警示态 = 琥珀描边 + 琥珀文字（selectClass(warn)）；正常态描边透明
+        const warned = (sel) =>
+          !!sel && (sel.className.includes('text-warning') || sel.className.includes('border-warning'))
         return {
           present: true,
-          pipelineText: pipeline?.textContent.trim() ?? '',
-          slots: [...strip.querySelectorAll('[data-bot-slot]')].map((l) => {
-            const sel = l.querySelector('[data-bot-slot-select]')
+          loaded: !!wf && !wf.disabled,
+          workflow: wf?.value ?? '',
+          workflowOptions: wf ? [...wf.options].map((o) => o.value) : [],
+          workflowLabel: (wf?.selectedOptions[0]?.textContent ?? '').trim(),
+          workflowWarned: warned(wf),
+          meta: (root.querySelector('[data-bot-workflow-meta]')?.textContent ?? '').trim(),
+          declaredCount: slotsBox ? Number(slotsBox.getAttribute('data-bot-slots')) : 0,
+          slots: [...root.querySelectorAll('[data-bot-slot]')].map((row) => {
+            const sel = row.querySelector('[data-bot-slot-select]')
             return {
-              role: l.getAttribute('data-bot-slot') ?? '',
-              required: (l.querySelector('span.font-mono')?.textContent ?? '').includes('*'),
+              role: row.getAttribute('data-bot-slot') ?? '',
+              // 角色标签是行里第一个 font-mono span（下拉本身也 font-mono，但它是 select）
+              required: (row.querySelector('span.font-mono')?.textContent ?? '').includes('*'),
               value: sel?.value ?? '',
               options: sel ? [...sel.options].map((o) => o.value) : [],
-              warned: !!sel && sel.className.includes('border-warning')
+              warned: warned(sel),
+              extra: row.hasAttribute('data-bot-slot-extra')
             }
           }),
-          bodyChars: chars ? Number(chars.getAttribute('data-bot-body-chars')) : 0,
-          warningsCount: warn ? Number(warn.getAttribute('data-bot-inspect-warnings')) : 0,
-          warnings: warn ? [...warn.children].map((d) => d.textContent.trim()) : [],
-          gateModelPresent: ${GATE_ROW} !== null
+          inputCount: input ? Number(input.getAttribute('data-bot-input')) : 0
         }
       })()`),
-    setSlot: async (role, value) => {
-      const hit = await main.eval<boolean>(`(() => {
-        const sel = document.querySelector('[data-bot-slot-select=${JSON.stringify(role)}]')
-        if (!sel) return false
-        // React 给受控 select 装了 value tracker：直接赋 .value 会被判「没变」而不派 onChange，
-        // 必须绕到原型上的原生 setter（同 chatPane.type 对 textarea 的做法）
-        const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set
-        setter.call(sel, ${JSON.stringify(value)})
-        sel.dispatchEvent(new Event('change', { bubbles: true }))
-        return true
-      })()`)
-      // 补丁 + bot:save + 重拉原文 + 编辑器重挂各是一趟 IPC/渲染 —— 调用方按结果 until 等
-      await sleep(200)
-      return hit
-    },
+    pickWorkflow: (name) => setSelect(WF_SELECT, name),
+    setSlot: (role, value) => setSelect(SLOT_SELECT(role), value),
+    cardStatus: () =>
+      main.eval<BotsCardStatus>(`(() => {
+        const chip = ${CARD_STATUS}
+        const banner = ${CARD_BANNER}
+        const cls = chip && !chip.hidden ? chip.className : ''
+        return {
+          chip: /is-(ok|warn|err)/.exec(cls)?.[1] ?? '',
+          banner: banner && !banner.hidden
+            ? [...banner.querySelectorAll('.cm-shuvix-fmcard-banner-line')].map((l) => l.textContent.trim())
+            : []
+        }
+      })()`),
     retiredAnchors: () =>
       main.eval<string[]>(
-        `['data-bot-notes-status', 'data-bot-limits'].filter((a) => document.querySelector('[' + a + ']'))`
+        `['data-bot-inspect', 'data-bot-inspect-warnings', 'data-bot-body-chars', 'data-bot-gate-model',
+          'data-bot-notes-status', 'data-bot-limits'].filter((a) => document.querySelector('[' + a + ']'))`
       ),
 
     conflictOpen: () => main.eval<boolean>(`${CONFLICT_RELOAD} !== null`),
@@ -2552,48 +2613,7 @@ export function botsPane(main: CdpClient): BotsPane {
         ).click()`
       )
       await sleep(200)
-    },
-
-    openGateModel: async () => {
-      await main.eval(`${GATE_ROW}.querySelector('button').click()`)
-      await until(gateModelOpen, 'gate model picker panel mounted')
-    },
-    closeGateModel: async () => {
-      await main.eval(`document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))`)
-      await until(async () => !(await gateModelOpen()), 'gate model picker panel closed')
-    },
-    gateModelOpen,
-    gateModelGroups: () =>
-      main.eval(
-        `${MODEL_BUTTONS}.filter((b) => !b.className.includes('pl-5')).map((b) => b.textContent.trim())`
-      ),
-    expandGateModelGroup: (label) =>
-      main.eval<boolean>(`(() => {
-        const head = ${MODEL_BUTTONS}.find(
-          (b) => !b.className.includes('pl-5') && b.textContent.trim() === ${JSON.stringify(label)}
-        )
-        if (!head) return false
-        head.click()
-        return true
-      })()`),
-    pickGateModel: (modelId) =>
-      main.eval<boolean>(`(() => {
-        const item = ${MODEL_BUTTONS}.find(
-          (b) => b.className.includes('pl-5') && b.textContent.trim() === ${JSON.stringify(modelId)}
-        )
-        if (!item) return false
-        item.click()
-        return true
-      })()`),
-    gateModelTriggerText: () =>
-      main.eval<string>(`(${GATE_ROW}?.querySelector('button')?.textContent ?? '').trim()`),
-    clearGateModel: () =>
-      main.eval<boolean>(`(() => {
-        const btn = [...${GATE_ROW}.querySelectorAll('button')].find((b) => b.querySelector('.lucide-x'))
-        if (!btn) return false
-        btn.click()
-        return true
-      })()`)
+    }
   }
 }
 

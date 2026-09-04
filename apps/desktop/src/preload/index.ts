@@ -418,7 +418,8 @@ const api = {
   // ============ shuvix 契约 md 校验（frontmatter 属性卡） ============
   shuvixMd: {
     validate: (params: { type: string; text: string; name?: string }) =>
-      ipcRenderer.invoke('shuvixMd:validate', params)
+      ipcRenderer.invoke('shuvixMd:validate', params),
+    botPipelineOptions: () => ipcRenderer.invoke('shuvixMd:botPipelineOptions')
   },
 
   // ============ 工具 ============

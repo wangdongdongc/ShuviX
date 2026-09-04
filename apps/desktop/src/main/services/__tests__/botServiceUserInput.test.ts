@@ -128,15 +128,23 @@ function peek<T>(p: Promise<T>): Promise<T | typeof PENDING> {
   return Promise.race([p, new Promise<typeof PENDING>((r) => setTimeout(() => r(PENDING), 20))])
 }
 
-/** 一份最小可用的 bot 定义 —— 只为让 L0 组得出 cohort，好让管线真的飞起来 */
-function writeBot(name: string): void {
+/**
+ * 一份最小可用的 bot 定义 —— 只为让 L0 组得出 cohort，好让管线真的飞起来。
+ * 管线绑定块（`workflow` 必填、没有缺省）是「最小」的一部分：缺了它文件整份非法，成员就不在册。
+ */
+function writeBot(
+  name: string,
+  opts: { pipeline?: string; agents?: Record<string, string> } = {}
+): void {
   mkdirSync(dirs.bots, { recursive: true })
-  writeFileSync(
-    join(dirs.bots, `${name}.md`),
-    ['---', 'shuvix: bot v1', `name: ${name}`, `description: unit bot`, '---', '', 'BODY.'].join(
-      '\n'
-    )
-  )
+  const lines = ['---', 'shuvix: bot v1', `name: ${name}`, `description: unit bot`]
+  lines.push('shuvix-bot-pipeline:', `  workflow: ${opts.pipeline ?? 'bot-chat'}`)
+  if (opts.agents) {
+    lines.push('  agents:')
+    for (const [k, v] of Object.entries(opts.agents)) lines.push(`    ${k}: ${v}`)
+  }
+  lines.push('---', '', 'BODY.')
+  writeFileSync(join(dirs.bots, `${name}.md`), lines.join('\n'))
 }
 
 /**

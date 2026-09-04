@@ -11,7 +11,13 @@
  *  - frontmatter 键重复时只动第一处（见 A9 的注释）。
  */
 import { describe, it, expect } from 'vitest'
-import { patchFrontmatterMappingEntry, patchFrontmatterScalar } from './frontmatterPatch'
+import {
+  patchFrontmatterMappingEntry,
+  patchFrontmatterPath,
+  patchFrontmatterPaths,
+  patchFrontmatterScalar,
+  type FrontmatterPathEdit
+} from './frontmatterPatch'
 
 /** 一份典型的 bot-intent 覆盖档案（含注释与正文 —— 它们必须原样活过改写） */
 const DOC = [
@@ -201,9 +207,10 @@ describe('patchFrontmatterScalar', () => {
 })
 
 /**
- * patchFrontmatterMappingEntry —— 设置页「槽位下拉」的唯一写入原语：改/删 bot md 里
- * `shuvix-bot-agents:` 块下的一条 `  槽位: agent名`。与 patchFrontmatterScalar 同一条纪律
- * （块外的行逐字节不动），差别在它动的是一个**嵌套块**：块从解析出的条目重建。
+ * patchFrontmatterMappingEntry —— 改/删一层嵌套映射的一条 `  条目: 值`（改制前 bot md 的
+ * `shuvix-bot-agents:` 块就是这种形状；管线块改制成三层之后，属性卡走的是下面的
+ * patchFrontmatterPath，这个原语原样保留、用例也原样钉住）。与 patchFrontmatterScalar
+ * 同一条纪律（块外的行逐字节不动），差别在它动的是一个**嵌套块**：块从解析出的条目重建。
  *
  * **钉现状，不改实现**。读实现时发现的两处隐患记录在此，供后续裁决（M6 / M9 各钉一条）：
  *  - 流式写法 `key: { a: b }` 整行替换成块时，流式里原有的条目**不被读出**——会丢；
@@ -353,6 +360,471 @@ describe('patchFrontmatterMappingEntry', () => {
         '---',
         'B'
       ].join('\n')
+    )
+  })
+})
+
+/**
+ * patchFrontmatterPath / patchFrontmatterPaths —— 属性卡 bot 管线块（`botPipeline` 字段）的
+ * 唯一写入原语：按路径改/删 `shuvix-bot-pipeline.workflow` / `shuvix-bot-pipeline.agents.<槽位>`。
+ *
+ * 与前两个原语同一条纪律（目标行之外逐字节不动），但它是**行级原位改写**而不是块重建：
+ * 块内注释、空行、缩进风格都活下来 —— M6 / M9 钉住的两处丢失在这里反转（P1 / P8）。
+ * 换工作流 = 改 workflow + 删旧槽位 + 填新槽位，要落成**一次**文档变更，所以有 `patchFrontmatterPaths`。
+ *
+ * ⚠️ 钉现状的几处（P6b / P11 / P17）：块内只剩注释时父键保留、CRLF 文件改写行落 LF、
+ * 目标行整行重铸。它们都不是设计承诺，改了实现就改这里。
+ */
+describe('patchFrontmatterPath / patchFrontmatterPaths', () => {
+  const KEY = 'shuvix-bot-pipeline'
+  /** 路径都从管线键起 */
+  const at = (...rest: string[]): string[] => [KEY, ...rest]
+
+  /** 一份典型的新形状 bot md：三层块（管线 → 槽位表 → 条目）+ 块内注释 + 块外注释 + 正文 */
+  const DOC = [
+    '---',
+    'shuvix: bot v1',
+    'name: scout',
+    '# who I am',
+    'description: scouts code',
+    `${KEY}:`,
+    '  workflow: bot-chat',
+    '  # the slots',
+    '  agents:',
+    '    intent: bot-intent',
+    '    task: default',
+    '  input:',
+    '    tone: terse',
+    '---',
+    '',
+    'PERSONA.',
+    ''
+  ].join('\n')
+
+  it('P1 改三层块里的既有条目：仅该行变，块内注释 / 其它条目 / 键序 / 正文逐字节不变', () => {
+    const out = patchFrontmatterPath(DOC, at('agents', 'task'), 'coding')
+    expect(out).toBe(DOC.replace('    task: default', '    task: coding'))
+    // 行数不变（原位替换，不是删了再插）
+    expect(out.split('\n')).toHaveLength(DOC.split('\n').length)
+    // 两层路径同理：换工作流只动 workflow 那一行
+    expect(patchFrontmatterPath(DOC, at('workflow'), 'my-flow')).toBe(
+      DOC.replace('  workflow: bot-chat', '  workflow: my-flow')
+    )
+  })
+
+  it('P2 该层没有的条目追加在**该层块尾**（task 之后、input 之前），缩进沿用同层已有子行', () => {
+    expect(patchFrontmatterPath(DOC, at('agents', 'recheck'), 'reviewer')).toBe(
+      DOC.replace('    task: default\n', '    task: default\n    recheck: reviewer\n')
+    )
+  })
+
+  it('P3 中间层缺失就地创建在父块块尾：没有 agents: 的管线块长出 agents 及其条目', () => {
+    const noAgents = [
+      '---',
+      'name: x',
+      `${KEY}:`,
+      '  workflow: bot-chat',
+      '  input:',
+      '    tone: terse',
+      '---',
+      'B'
+    ].join('\n')
+    expect(patchFrontmatterPath(noAgents, at('agents', 'intent'), 'bot-intent')).toBe(
+      [
+        '---',
+        'name: x',
+        `${KEY}:`,
+        '  workflow: bot-chat',
+        '  input:',
+        '    tone: terse',
+        '  agents:',
+        '    intent: bot-intent',
+        '---',
+        'B'
+      ].join('\n')
+    )
+  })
+
+  it('P4 顶层键缺失 → 整条路径逐层新建，插在闭合 --- 之前；正文一字不动', () => {
+    const noKey = ['---', 'name: x', '---', '', 'BODY KEEPS EXACTLY.', ''].join('\n')
+    expect(patchFrontmatterPath(noKey, at('workflow'), 'bot-chat')).toBe(
+      [
+        '---',
+        'name: x',
+        `${KEY}:`,
+        '  workflow: bot-chat',
+        '---',
+        '',
+        'BODY KEEPS EXACTLY.',
+        ''
+      ].join('\n')
+    )
+    // 三层路径：三行全新建，缩进逐层 + 2
+    expect(patchFrontmatterPath(noKey, at('agents', 'intent'), 'bot-intent')).toBe(
+      [
+        '---',
+        'name: x',
+        `${KEY}:`,
+        '  agents:',
+        '    intent: bot-intent',
+        '---',
+        '',
+        'BODY KEEPS EXACTLY.',
+        ''
+      ].join('\n')
+    )
+    // 空 frontmatter 块 → 插入恰落在两条 --- 之间
+    expect(patchFrontmatterPath('---\n---\nBODY.', at('workflow'), 'bot-chat')).toBe(
+      `---\n${KEY}:\n  workflow: bot-chat\n---\nBODY.`
+    )
+  })
+
+  it('P5 删一条槽位：该行消失，同层其余条目与父键留下', () => {
+    expect(patchFrontmatterPath(DOC, at('agents', 'intent'), null)).toBe(
+      DOC.replace('    intent: bot-intent\n', '')
+    )
+  })
+
+  it('P6 删到某层块空时连它的键行一起删，逐层向上：agents 的最后一条走了 agents: 也走；管线块空了顶层键也走', () => {
+    // 只剩一条槽位：删它 → `agents:` 一起消失，workflow 留下，块还在
+    const oneSlot = [
+      '---',
+      'name: x',
+      `${KEY}:`,
+      '  workflow: bot-chat',
+      '  agents:',
+      '    task: default',
+      '---',
+      'B'
+    ].join('\n')
+    expect(patchFrontmatterPath(oneSlot, at('agents', 'task'), null)).toBe(
+      ['---', 'name: x', `${KEY}:`, '  workflow: bot-chat', '---', 'B'].join('\n')
+    )
+    // 块里只有 agents 一条槽位：删它 → agents: 与顶层键一起消失，不留值为 null 的裸键
+    const onlyAgents = ['---', 'name: x', `${KEY}:`, '  agents:', '    task: default', '---', 'B']
+    expect(patchFrontmatterPath(onlyAgents.join('\n'), at('agents', 'task'), null)).toBe(
+      ['---', 'name: x', '---', 'B'].join('\n')
+    )
+    // 两层路径同理：删 workflow 后块空，顶层键走
+    const onlyWf = ['---', 'name: x', `${KEY}:`, '  workflow: bot-chat', '---', 'B']
+    expect(patchFrontmatterPath(onlyWf.join('\n'), at('workflow'), null)).toBe(
+      ['---', 'name: x', '---', 'B'].join('\n')
+    )
+  })
+
+  it('P6b ⚠️ 钉现状：块内只剩缩进注释时父键行保留（注释是用户的话，不替他删）—— 留下的是一个值为 null 的 agents:', () => {
+    // 解析侧把 `agents:`（null）当省略，所以文件仍合法；若将来改成「只剩注释也算空」，本例反转
+    const commented = [
+      '---',
+      'name: x',
+      `${KEY}:`,
+      '  workflow: bot-chat',
+      '  agents:',
+      '    # the gate',
+      '    intent: bot-intent',
+      '---',
+      'B'
+    ].join('\n')
+    expect(patchFrontmatterPath(commented, at('agents', 'intent'), null)).toBe(
+      [
+        '---',
+        'name: x',
+        `${KEY}:`,
+        '  workflow: bot-chat',
+        '  agents:',
+        '    # the gate',
+        '---',
+        'B'
+      ].join('\n')
+    )
+  })
+
+  it('P7 删本就不存在的条目 → 原文返回：叶子缺 / 中间层缺 / 顶层键缺，三种都无事发生', () => {
+    expect(patchFrontmatterPath(DOC, at('agents', 'ghost'), null)).toBe(DOC)
+    expect(patchFrontmatterPath(DOC, at('limits', 'maxAgents'), null)).toBe(DOC)
+    const noKey = ['---', 'name: x', '---', 'B'].join('\n')
+    expect(patchFrontmatterPath(noKey, at('agents', 'task'), null)).toBe(noKey)
+  })
+
+  it('P8 父键行是流式映射 `agents: { intent: x, task: y }` → 先摊成块再改，流式里原有的条目**逐条保留**（M6 的丢失在此反转）', () => {
+    const flow = [
+      '---',
+      'name: x',
+      `${KEY}:`,
+      '  workflow: bot-chat',
+      '  agents: { intent: bot-intent, task: default }',
+      '---',
+      'B'
+    ].join('\n')
+    expect(patchFrontmatterPath(flow, at('agents', 'task'), 'coding')).toBe(
+      [
+        '---',
+        'name: x',
+        `${KEY}:`,
+        '  workflow: bot-chat',
+        '  agents:',
+        '    intent: bot-intent',
+        '    task: coding',
+        '---',
+        'B'
+      ].join('\n')
+    )
+    // 删除同理：摊开之后只删那一条，另一条活下来
+    expect(patchFrontmatterPath(flow, at('agents', 'intent'), null)).toBe(
+      [
+        '---',
+        'name: x',
+        `${KEY}:`,
+        '  workflow: bot-chat',
+        '  agents:',
+        '    task: default',
+        '---',
+        'B'
+      ].join('\n')
+    )
+    // 空流式 `{}` 摊成只有新条目的块
+    const empty = ['---', 'name: x', `${KEY}:`, '  agents: {}', '---', 'B'].join('\n')
+    expect(patchFrontmatterPath(empty, at('agents', 'intent'), 'i')).toBe(
+      ['---', 'name: x', `${KEY}:`, '  agents:', '    intent: i', '---', 'B'].join('\n')
+    )
+    // 含嵌套括号的流式值不猜：原样返回、什么都不改
+    const nested = ['---', 'name: x', `${KEY}: { agents: { intent: i } }`, '---', 'B'].join('\n')
+    expect(patchFrontmatterPath(nested, at('agents', 'task'), 'coding')).toBe(nested)
+  })
+
+  it('P9 父键行带标量值（改制前的 `shuvix-bot-pipeline: bot-chat`）→ 标量让位给块；旧值**不**自动搬进 workflow，写什么由调用方说', () => {
+    const legacy = ['---', 'name: x', `${KEY}: bot-chat`, '---', 'B'].join('\n')
+    expect(patchFrontmatterPath(legacy, at('workflow'), 'bot-chat')).toBe(
+      ['---', 'name: x', `${KEY}:`, '  workflow: bot-chat', '---', 'B'].join('\n')
+    )
+    // 三层路径同理：标量行变纯键行，下面长出两层 —— 旧的管线名就此消失（调用方要保它得自己再设一条）
+    expect(patchFrontmatterPath(legacy, at('agents', 'intent'), 'bot-intent')).toBe(
+      ['---', 'name: x', `${KEY}:`, '  agents:', '    intent: bot-intent', '---', 'B'].join('\n')
+    )
+  })
+
+  it('P10 缩进沿用该层已有子行（四空格文件追加四空格）；新起一层时它的子行沿用文件的缩进单位', () => {
+    const four = [
+      '---',
+      'name: x',
+      `${KEY}:`,
+      '    workflow: bot-chat',
+      '    agents:',
+      '        intent: bot-intent',
+      '---',
+      'B'
+    ].join('\n')
+    expect(patchFrontmatterPath(four, at('agents', 'task'), 'default')).toBe(
+      [
+        '---',
+        'name: x',
+        `${KEY}:`,
+        '    workflow: bot-chat',
+        '    agents:',
+        '        intent: bot-intent',
+        '        task: default',
+        '---',
+        'B'
+      ].join('\n')
+    )
+    // 新起一层 input：与同层的 workflow / agents 对齐（四空格）；它自己的子行没有先例可循，
+    // 取文件的缩进单位（frontmatter 里第一条缩进行 = 四空格）落成八空格，与整份文件一个风格
+    expect(patchFrontmatterPath(four, at('input', 'tone'), 'terse')).toBe(
+      [
+        '---',
+        'name: x',
+        `${KEY}:`,
+        '    workflow: bot-chat',
+        '    agents:',
+        '        intent: bot-intent',
+        '    input:',
+        '        tone: terse',
+        '---',
+        'B'
+      ].join('\n')
+    )
+  })
+
+  it('P11 CRLF：`---\\r\\n` 与 `key:\\r` / `key: v\\r` 都可识别；改写行落 LF（与 A13 同一条钉混合行尾的现状）', () => {
+    const text = `---\r\nname: x\r\n${KEY}:\r\n  workflow: old\r\n---\r\nBODY\r\n`
+    expect(patchFrontmatterPath(text, at('workflow'), 'new')).toBe(
+      `---\r\nname: x\r\n${KEY}:\r\n  workflow: new\n---\r\nBODY\r\n`
+    )
+    // 删除：整行连同它的 \r 消失，块空则纯键行（`key:\r`）也走
+    expect(patchFrontmatterPath(text, at('workflow'), null)).toBe(
+      '---\r\nname: x\r\n---\r\nBODY\r\n'
+    )
+    // 追加：新行同样 LF 尾
+    expect(patchFrontmatterPath(text, at('agents', 'intent'), 'i')).toBe(
+      `---\r\nname: x\r\n${KEY}:\r\n  workflow: old\r\n  agents:\n    intent: i\n---\r\nBODY\r\n`
+    )
+  })
+
+  it.each([
+    ['含 `: `', 'Handles: everything', "'Handles: everything'"],
+    ['含 ` #`', 'tagged #1 issues', "'tagged #1 issues'"],
+    ['以 * 起头（alias 指示符）', '*starred', "'*starred'"],
+    ['以 - 起头（序列指示符）', '-dash', "'-dash'"],
+    ['以引号起头', '"quoted"', `'"quoted"'`],
+    ['危险取值里的单引号加倍', "it's: fine", "'it''s: fine'"],
+    ['首尾空白', ' padded ', "' padded '"],
+    ['以冒号收尾', 'trailing:', "'trailing:'"],
+    ['空串', '', "''"]
+  ])('P12 YAML 危险取值（%s）加单引号写出', (_label, value, expected) => {
+    expect(patchFrontmatterPath(DOC, at('agents', 'task'), value)).toContain(
+      `    task: ${expected}\n`
+    )
+  })
+
+  it('P12b 普通标识符原样写出，不加引号（工作流名 / agent 名 / 带斜杠的模型 ref / 内含单引号都不算危险）', () => {
+    for (const v of ['bot-chat', 'my_flow.v2', 'openai/gpt-4.1', 'Ok-Role_2', "o'brien"]) {
+      expect(patchFrontmatterPath(DOC, at('workflow'), v), v).toContain(`  workflow: ${v}\n`)
+    }
+  })
+
+  it('P13 patchFrontmatterPaths 依次应用、落成一份文本：换工作流 = 改 workflow + 填新槽位 + 删旧槽位', () => {
+    const edits: FrontmatterPathEdit[] = [
+      { path: at('workflow'), value: 'my-flow' },
+      { path: at('agents', 'worker'), value: 'coding' },
+      { path: at('agents', 'intent'), value: null },
+      { path: at('agents', 'task'), value: null }
+    ]
+    const out = patchFrontmatterPaths(DOC, edits)
+    expect(out).toBe(edits.reduce((acc, e) => patchFrontmatterPath(acc, e.path, e.value), DOC))
+    expect(out).toBe(
+      DOC.replace('  workflow: bot-chat', '  workflow: my-flow').replace(
+        '    intent: bot-intent\n    task: default\n',
+        '    worker: coding\n'
+      )
+    )
+    // 空批 → 原文（同一引用语义不作承诺，逐字相等即可）
+    expect(patchFrontmatterPaths(DOC, [])).toBe(DOC)
+  })
+
+  it('P13b 顺序即语义：先删空再填 → agents 块被级联删掉后在管线块**尾部**重建（属性卡要保块位就先填后删）', () => {
+    // 先设后删 = 没有；先删后设 = 有
+    const set = { path: at('agents', 'recheck'), value: 'r' }
+    const del = { path: at('agents', 'recheck'), value: null }
+    expect(patchFrontmatterPaths(DOC, [set, del])).toBe(DOC)
+    expect(patchFrontmatterPaths(DOC, [del, set])).toContain('    recheck: r\n')
+    // 两条槽位都删完再填新的：中途 agents: 随 P6 的级联消失，新槽位让它在块尾（input 之后）重生
+    const out = patchFrontmatterPaths(DOC, [
+      { path: at('agents', 'intent'), value: null },
+      { path: at('agents', 'task'), value: null },
+      { path: at('agents', 'worker'), value: 'coding' }
+    ])
+    expect(out).toBe(
+      DOC.replace('  agents:\n    intent: bot-intent\n    task: default\n', '').replace(
+        '    tone: terse\n',
+        '    tone: terse\n  agents:\n    worker: coding\n'
+      )
+    )
+  })
+
+  it('P14 无 frontmatter / 只有开头 --- 没有闭合 / 路径为空 / 首行空行 → 原样返回', () => {
+    const noFm = 'just prose\n---\nnot frontmatter\n---\n'
+    expect(patchFrontmatterPath(noFm, at('workflow'), 'x')).toBe(noFm)
+    expect(patchFrontmatterPath(noFm, at('workflow'), null)).toBe(noFm)
+    const unclosed = `---\nname: x\n${KEY}:\n  workflow: old\nBODY WITHOUT CLOSE.`
+    expect(patchFrontmatterPath(unclosed, at('workflow'), 'new')).toBe(unclosed)
+    expect(patchFrontmatterPath(DOC, [], 'x')).toBe(DOC)
+    const leading = `\n---\n${KEY}:\n  workflow: old\n---\nB`
+    expect(patchFrontmatterPath(leading, at('workflow'), 'new')).toBe(leading)
+  })
+
+  it('P15 正文里的同名块与正文 ---（hr）不受影响（i < close 的边界）', () => {
+    const text = [
+      '---',
+      'name: x',
+      `${KEY}:`,
+      '  workflow: fm-value',
+      '---',
+      '',
+      `${KEY}:`,
+      '  workflow: body-value',
+      '',
+      '---',
+      '',
+      'after the hr.'
+    ].join('\n')
+    expect(patchFrontmatterPath(text, at('workflow'), 'patched')).toBe(
+      text.replace('  workflow: fm-value', '  workflow: patched')
+    )
+    // 删除同理只动 frontmatter 里那两行（叶子 + 级联的顶层键）
+    expect(patchFrontmatterPath(text, at('workflow'), null)).toBe(
+      text.replace(`${KEY}:\n  workflow: fm-value\n`, '')
+    )
+  })
+
+  it('P16 键按字面匹配：含正则元字符的键不误配（`a.b` 不命中 `axb`）；近似前缀键 shuvix-bot-pipeline-extra 不误伤', () => {
+    // 对照 patchFrontmatterScalar 文件头记录的隐患（key 原样拼进正则）—— 这里 escapeRegExp 过了
+    const text = ['---', 'axb: 1', `${KEY}-extra:`, '  workflow: keep-me', '---', 'B'].join('\n')
+    const dotted = patchFrontmatterPath(text, ['a.b'], 'set')
+    expect(dotted).toContain('axb: 1')
+    expect(dotted).toContain('\na.b: set\n')
+    expect(patchFrontmatterPath(text, at('workflow'), 'new')).toBe(
+      [
+        '---',
+        'axb: 1',
+        `${KEY}-extra:`,
+        '  workflow: keep-me',
+        `${KEY}:`,
+        '  workflow: new',
+        '---',
+        'B'
+      ].join('\n')
+    )
+  })
+
+  it('P17 ⚠️ 钉现状：目标行整行重铸 —— 行尾注释与 `key : v` 的空格风格随之消失', () => {
+    const text = ['---', `${KEY}:`, '  workflow : old   # keep?', '---', 'B'].join('\n')
+    expect(patchFrontmatterPath(text, at('workflow'), 'new')).toBe(
+      ['---', `${KEY}:`, '  workflow: new', '---', 'B'].join('\n')
+    )
+  })
+
+  it('P18 父键行存在但为空（`agents:` 下没有子行）→ 子行以父缩进 + 2 追加', () => {
+    const nullAgents = ['---', `${KEY}:`, '  workflow: bot-chat', '  agents:', '---', 'B'].join(
+      '\n'
+    )
+    expect(patchFrontmatterPath(nullAgents, at('agents', 'intent'), 'i')).toBe(
+      ['---', `${KEY}:`, '  workflow: bot-chat', '  agents:', '    intent: i', '---', 'B'].join(
+        '\n'
+      )
+    )
+  })
+
+  it('P19 块内空行算块内、块尾空行不算：追加落在最后一条条目之后，不是空行之后', () => {
+    const spaced = [
+      '---',
+      `${KEY}:`,
+      '  workflow: bot-chat',
+      '',
+      '  agents:',
+      '    intent: bot-intent',
+      '',
+      '---',
+      'B'
+    ].join('\n')
+    // 同层追加：在 intent 之后、空行之前
+    expect(patchFrontmatterPath(spaced, at('agents', 'task'), 'default')).toBe(
+      spaced.replace('    intent: bot-intent\n', '    intent: bot-intent\n    task: default\n')
+    )
+    // 新起一层：同样在块的最后一条之后、尾部空行之前
+    expect(patchFrontmatterPath(spaced, at('input', 'tone'), 'terse')).toBe(
+      spaced.replace(
+        '    intent: bot-intent\n',
+        '    intent: bot-intent\n  input:\n    tone: terse\n'
+      )
+    )
+  })
+
+  it('P20 键重复时只动第一处（与 A9 同一现状：YAML 语义以后者为准，本函数认前者）', () => {
+    const text = ['---', `${KEY}:`, '  workflow: first', '  workflow: second', '---', 'B'].join(
+      '\n'
+    )
+    expect(patchFrontmatterPath(text, at('workflow'), 'patched')).toBe(
+      ['---', `${KEY}:`, '  workflow: patched', '  workflow: second', '---', 'B'].join('\n')
     )
   })
 })

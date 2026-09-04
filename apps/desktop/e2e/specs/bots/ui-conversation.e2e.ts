@@ -12,7 +12,7 @@
  * 但它现在挂在整个气泡的根节点上，而不是卡头那一条。
  *
  * v3 没有开场白：气泡语料全部来自 `a0-say-probe` —— 一份零 LLM 的参数化探针管线
- * （sayLine / secondLine / preSayMs 读自各 bot md 的 `shuvix-bot-input`），发一条用户消息
+ * （sayLine / secondLine / preSayMs 读自各 bot md 的 `shuvix-bot-pipeline.input`），发一条用户消息
  * 换回一两句署名回复。假提供商只给普通会话对照用例的那一条文本回复用。
  */
 import { mkdirSync, writeFileSync } from 'node:fs'
@@ -50,7 +50,7 @@ const PROBE_MD = [
   '---',
   'shuvix: workflow v1',
   `name: ${PROBE}`,
-  'description: A0 e2e probe — say one or two lines; knobs from shuvix-bot-input.',
+  'description: A0 e2e probe — say one or two lines; knobs from shuvix-bot-pipeline.input.',
   'shuvix-workflow-concurrency: parallel',
   '---',
   '',

@@ -5,12 +5,15 @@
  * 模型、工具、指令文件这些是 agent md 的事，bot 只说「用哪份 workflow 当管线、管线的
  * 每个槽位由哪份 agent md 来干」：
  *
- *  - **管线声明** `shuvix-bot-pipeline`：本 bot 采用哪一份 workflow md 作为管线框架，
- *    缺省内置 `bot-chat`；
- *  - **槽位表** `shuvix-bot-agents`：**开放的「槽位 → agent 名」映射**。槽位集合由管线
- *    workflow 定义（内置 bot-chat 要 intent / task，可选 recheck），本层只校验形状不校验
- *    槽位名 —— 把槽位枚举写死在格式层，等于让 md 格式追着某一份管线的实现走。哪些槽位
- *    必填、填了不存在的 agent 怎么办，都是宿主对照管线现判的事（惰性化：agent 文件可后补）；
+ *  - **管线绑定** `shuvix-bot-pipeline`：一个嵌套映射 `{ workflow, agents, input }` ——
+ *    `workflow`（**必填**）是本 bot 采用哪一份 workflow md 作为管线框架；`agents` 是
+ *    **开放的「槽位 → agent 名」映射**（槽位集合由所选 workflow 声明：内置 bot-chat 要
+ *    intent / task，可选 recheck），本层只校验形状不校验槽位名 —— 把槽位枚举写死在格式层，
+ *    等于让 md 格式追着某一份管线的实现走；哪些槽位必填、填了不存在的 agent 怎么办，都是
+ *    宿主对照管线现判的事（惰性化：agent 文件可后补）；`input` 是传给管线的额外入参映射。
+ *    三者合在一个键下，是因为槽位与入参都是**这份管线**的从属项 —— 换了工作流，槽位表就
+ *    整个换一套。**没有缺省管线**：写着 bot 的文件必须自己说用哪条管线，缺了整份非法
+ *    （新建模板会填上内置 `bot-chat`，那是模板的事，不是解析器的事）。
  *  - **正文**：这个 bot 的**人设与记忆**，一篇普通的 markdown 散文。它不是任何一个 agent 的
  *    系统提示词，而是像项目上下文那样，被宿主围栏后**追加到参与本 bot 执行的每一个 agent
  *    的系统提示词末尾**（`renderBotContext`）。正文由 bot 自己维护 —— 任务段 agent 拿自己
@@ -29,17 +32,33 @@
  * 或用户在设置页原样保存，不经这里。
  */
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
+import {
+  BOT_PIPELINE_AGENTS_KEY,
+  BOT_PIPELINE_INPUT_KEY,
+  BOT_PIPELINE_KEY,
+  BOT_PIPELINE_WORKFLOW_KEY
+} from '@shuvix/chat-protocol/shuvixMdDescriptors'
 import { splitFrontmatter } from '../markdownFrontmatter'
 
 export const BOT_FILE_MARKER_KEY = 'shuvix'
 export const BOT_FILE_MARKER = 'bot v1'
 
-export const BOT_PIPELINE_KEY = 'shuvix-bot-pipeline'
-export const BOT_INPUT_KEY = 'shuvix-bot-input'
-export const BOT_AGENTS_KEY = 'shuvix-bot-agents'
+// 键常量的真源在 chat-protocol（属性卡与解析器共用一份，渲染进程够不到本包）；这里转出口
+export {
+  BOT_PIPELINE_KEY,
+  BOT_PIPELINE_WORKFLOW_KEY,
+  BOT_PIPELINE_AGENTS_KEY,
+  BOT_PIPELINE_INPUT_KEY
+}
 
-/** 缺省管线 —— 内置的 `bot-chat` workflow（意图门控 → 任务执行） */
-export const DEFAULT_BOT_PIPELINE = 'bot-chat'
+/**
+ * 「新建 bot」模板预填的管线 —— 内置的 `bot-chat` workflow（意图门控 → 任务执行）。
+ * **只有模板用它**：解析器没有缺省管线，`workflow` 缺失即整份非法。
+ */
+export const TEMPLATE_BOT_PIPELINE = 'bot-chat'
+
+/** 改制前的两个顶层键：读到即整份拒绝并指明新写法（存量文件视为失效，不迁移） */
+const RETIRED_KEYS = ['shuvix-bot-agents', 'shuvix-bot-input'] as const
 
 /** 槽位名的形状（槽位**集合**归管线 workflow 定义，本层只校验形状） */
 const ROLE_RE = /^[a-zA-Z][\w-]*$/
@@ -54,11 +73,11 @@ export interface ParsedBotFile {
    * 每个 agent 的系统提示词末尾 —— 见 `renderBotContext`。
    */
   body: string
-  /** 管线框架：一份 workflow md 的注册表名；缺省 `bot-chat` */
+  /** 管线框架：一份 workflow md 的注册表名（`shuvix-bot-pipeline.workflow`，必填） */
   pipeline: string
-  /** 传给管线 workflow 的额外入参（对应其 `shuvix-workflow-input`）；缺省 `{}` */
+  /** 传给管线 workflow 的额外入参（`shuvix-bot-pipeline.input`，对应其 `shuvix-workflow-input`）；缺省 `{}` */
   pipelineInput: Record<string, unknown>
-  /** 开放的「槽位 → agent 名」表；缺省空表 */
+  /** 开放的「槽位 → agent 名」表（`shuvix-bot-pipeline.agents`）；缺省空表 */
   agents: Record<string, string>
 }
 
@@ -116,42 +135,67 @@ export function parseBotDefinitionFile(
     return reject("'description' is required — the intent stage uses it to judge relevance")
   }
 
-  // ── 管线声明 ──
-  const pipelineRaw = fields[BOT_PIPELINE_KEY] ?? null
-  if (pipelineRaw !== null && (typeof pipelineRaw !== 'string' || !pipelineRaw.trim())) {
-    return reject(`'${BOT_PIPELINE_KEY}' must be the name of a workflow`)
+  // ── 管线绑定块 `shuvix-bot-pipeline: { workflow, agents, input }` ──
+  // 改制前的顶层键先拦：它们的存在说明这是一份旧格式文件，指明新写法比报「缺 workflow」有用
+  for (const retired of RETIRED_KEYS) {
+    if (retired in fields) {
+      return reject(
+        `'${retired}' is no longer supported — move it under '${BOT_PIPELINE_KEY}' as '${retired === 'shuvix-bot-agents' ? BOT_PIPELINE_AGENTS_KEY : BOT_PIPELINE_INPUT_KEY}' (a mapping with '${BOT_PIPELINE_WORKFLOW_KEY}', '${BOT_PIPELINE_AGENTS_KEY}' and '${BOT_PIPELINE_INPUT_KEY}')`
+      )
+    }
   }
-  const inputRaw = fields[BOT_INPUT_KEY] ?? null
+  const pipelineRaw = fields[BOT_PIPELINE_KEY] ?? null
+  if (!isMapping(pipelineRaw)) {
+    return reject(
+      `'${BOT_PIPELINE_KEY}' is required — a mapping with '${BOT_PIPELINE_WORKFLOW_KEY}' (the pipeline workflow's name) plus optional '${BOT_PIPELINE_AGENTS_KEY}' (slot → agent name) and '${BOT_PIPELINE_INPUT_KEY}' (parameters for the workflow)`
+    )
+  }
+  const workflowRaw = pipelineRaw[BOT_PIPELINE_WORKFLOW_KEY] ?? null
+  if (typeof workflowRaw !== 'string' || !workflowRaw.trim()) {
+    return reject(
+      `'${BOT_PIPELINE_KEY}.${BOT_PIPELINE_WORKFLOW_KEY}' must be the name of a workflow`
+    )
+  }
+  const inputRaw = pipelineRaw[BOT_PIPELINE_INPUT_KEY] ?? null
   if (inputRaw !== null && !isMapping(inputRaw)) {
-    return reject(`'${BOT_INPUT_KEY}' must be a mapping of parameters for the pipeline workflow`)
+    return reject(
+      `'${BOT_PIPELINE_KEY}.${BOT_PIPELINE_INPUT_KEY}' must be a mapping of parameters for the pipeline workflow`
+    )
   }
 
   // ── 槽位表（开放：只校验形状，不校验槽位名） ──
   const agents: Record<string, string> = {}
-  const agentsRaw = fields[BOT_AGENTS_KEY] ?? null
+  const agentsRaw = pipelineRaw[BOT_PIPELINE_AGENTS_KEY] ?? null
   if (agentsRaw !== null) {
     if (!isMapping(agentsRaw)) {
-      return reject(`'${BOT_AGENTS_KEY}' must be a mapping of slot → agent name`)
+      return reject(
+        `'${BOT_PIPELINE_KEY}.${BOT_PIPELINE_AGENTS_KEY}' must be a mapping of slot → agent name`
+      )
     }
     for (const [role, value] of Object.entries(agentsRaw)) {
       if (!ROLE_RE.test(role)) {
-        return reject(`'${BOT_AGENTS_KEY}': '${role}' is not a valid slot name`)
+        return reject(
+          `'${BOT_PIPELINE_KEY}.${BOT_PIPELINE_AGENTS_KEY}': '${role}' is not a valid slot name`
+        )
       }
       if (typeof value !== 'string' || !value.trim()) {
-        return reject(`'${BOT_AGENTS_KEY}.${role}' must be an agent name`)
+        return reject(
+          `'${BOT_PIPELINE_KEY}.${BOT_PIPELINE_AGENTS_KEY}.${role}' must be an agent name`
+        )
       }
       agents[role] = value.trim()
     }
   }
-  // 槽位指向不存在的 agent、或管线要求的槽位没填，都**不判非法**：agent 文件可以后补，
-  // 而哪些槽位是必填的只有对照管线才知道。运行时由宿主判定并在会话里可见地说明。
+  // 槽位指向不存在的 agent、管线要求的槽位没填、workflow 指向不存在的工作流，都**不判非法**：
+  // 文件可以后补，而哪些槽位是必填的只有对照管线才知道。宿主对照注册表现判（属性卡横幅），
+  // 运行时在会话里可见地失败。
 
   return {
     name,
     displayName: stringField(fields, 'shuvix-displayName') ?? name,
     description,
     body: split.body.trim(),
-    pipeline: (pipelineRaw as string | null)?.trim() || DEFAULT_BOT_PIPELINE,
+    pipeline: workflowRaw.trim(),
     pipelineInput: (inputRaw as Record<string, unknown> | null) ?? {},
     agents
   }
@@ -171,15 +215,17 @@ export function serializeBotDefinitionFile(data: ParsedBotFile): string {
   if (data.displayName.trim() && data.displayName.trim() !== data.name) {
     fields['shuvix-displayName'] = data.displayName.trim()
   }
-  if (data.pipeline && data.pipeline !== DEFAULT_BOT_PIPELINE) {
-    fields[BOT_PIPELINE_KEY] = data.pipeline
-  }
-  if (Object.keys(data.pipelineInput).length > 0) fields[BOT_INPUT_KEY] = data.pipelineInput
+  // 管线绑定块恒写 —— workflow 是必填，没有「等于缺省就省略」这回事
+  const pipeline: Record<string, unknown> = { [BOT_PIPELINE_WORKFLOW_KEY]: data.pipeline }
   // 槽位是开放集合，没有「阶段顺序」可依；按字母序输出以保证同一份数据恒得同一份文件
   const roles = Object.keys(data.agents).sort()
   if (roles.length > 0) {
-    fields[BOT_AGENTS_KEY] = Object.fromEntries(roles.map((r) => [r, data.agents[r]]))
+    pipeline[BOT_PIPELINE_AGENTS_KEY] = Object.fromEntries(roles.map((r) => [r, data.agents[r]]))
   }
+  if (Object.keys(data.pipelineInput).length > 0) {
+    pipeline[BOT_PIPELINE_INPUT_KEY] = data.pipelineInput
+  }
+  fields[BOT_PIPELINE_KEY] = pipeline
 
   const frontmatter = stringifyYaml(fields, { lineWidth: 0 }).trimEnd()
   const body = data.body.trim()

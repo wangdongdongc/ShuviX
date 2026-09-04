@@ -1,6 +1,7 @@
 import { ElectronAPI } from '@electron-toolkit/preload'
 import type { LucideIconName, ThemeColor } from '@shuvix/chat-protocol/theme'
 import type { ShuvixMdValidation } from '@shuvix/chat-protocol/shuvixMdContract'
+import type { BotPipelineOptions } from '@shuvix/chat-protocol/botPipeline'
 import type { BgTaskInfo, BgTaskLogChunk } from '@shuvix/chat-protocol/types/bgTask'
 import type {
   AgentInitParams,
@@ -417,7 +418,7 @@ declare global {
     description: string
     /** 管线框架（workflow 名） */
     pipeline: string
-    /** 槽位 → agent 名（bot md 的 shuvix-bot-agents 原样） */
+    /** 槽位 → agent 名（bot md 的 shuvix-bot-pipeline.agents 原样） */
     agents: Record<string, string>
     /** 正文（人设与记忆）字符数 */
     bodyChars: number
@@ -777,6 +778,8 @@ declare global {
         text: string
         name?: string
       }) => Promise<ShuvixMdValidation>
+      /** bot 管线字段的候选项（属性卡联动控件用）：生效的工作流及其槽位 + agent 名 */
+      botPipelineOptions: () => Promise<BotPipelineOptions>
     }
     tools: {
       list: (sessionId?: string) => Promise<

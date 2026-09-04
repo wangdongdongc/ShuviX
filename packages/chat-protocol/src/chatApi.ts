@@ -12,6 +12,7 @@
 import type { LucideIconName, ThemeColor } from './theme'
 import type { AppEvent } from './appEvents'
 import type { ShuvixMdValidation } from './shuvixMdContract'
+import type { BotPipelineOptions } from './botPipeline'
 import type { FileReadResult } from './types/filePreview'
 import type { ChatMessage } from './types/chatMessage'
 import type { BgTaskInfo, BgTaskLogChunk } from './types/bgTask'
@@ -576,6 +577,11 @@ export interface SessionChannelApi {
   /** shuvix 契约 md 的解析器级校验（frontmatter 属性卡消费；两端实现共用 agent-runtime） */
   shuvixMd: {
     validate: (params: { type: string; text: string; name?: string }) => Promise<ShuvixMdValidation>
+    /**
+     * bot md 管线字段的候选项（工作流及其声明的槽位、agent 名）—— 属性卡联动控件用。
+     * 可选：没有 bot 面的宿主不实现，控件退化为只读。
+     */
+    botPipelineOptions?: () => Promise<BotPipelineOptions>
   }
   /** 通用内部事件订阅（后端发布的会话级/全局状态事件）。见 docs/internal-events.md */
   events: {

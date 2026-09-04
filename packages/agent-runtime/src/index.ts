@@ -346,9 +346,10 @@ export {
   BOT_FILE_MARKER,
   BOT_FILE_MARKER_KEY,
   BOT_PIPELINE_KEY,
-  BOT_INPUT_KEY,
-  BOT_AGENTS_KEY,
-  DEFAULT_BOT_PIPELINE,
+  BOT_PIPELINE_WORKFLOW_KEY,
+  BOT_PIPELINE_AGENTS_KEY,
+  BOT_PIPELINE_INPUT_KEY,
+  TEMPLATE_BOT_PIPELINE,
   type ParsedBotFile
 } from './bot/botFile'
 export { renderBotContext, BOT_CONTEXT_TAG, type BotContextInput } from './bot/botContext'

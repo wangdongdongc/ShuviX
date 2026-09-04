@@ -4,7 +4,7 @@
  *
  * 除 C-15（真 bot-chat 意图段，需要假提供商喂 `next` 裁决）外全程零 LLM：
  * `a2-ui-probe` 是参数化 bot 管线，结局（mode / sayLine）与相位窗（preTurnMs）
- * 全部读自各 bot md 的 `shuvix-bot-input`。
+ * 全部读自各 bot md 的 `shuvix-bot-pipeline.input`。
  *
  * **v2 删掉的四条用例**（测的是已经取消的能力，不是陈旧的写法）：
  *   - C-8 / C-9「全体沉默提示」的两个出口 —— `bot_cohort_silent` 事件与
@@ -60,11 +60,11 @@ const PROBE_MD = [
   '---',
   'shuvix: workflow v1',
   `name: ${PROBE}`,
-  'description: A2 e2e probe — endings and the pre-turn window come from shuvix-bot-input.',
+  'description: A2 e2e probe — endings and the pre-turn window come from shuvix-bot-pipeline.input.',
   'shuvix-workflow-concurrency: parallel',
   '---',
   '',
-  'A2 参数化 bot 管线（渲染半边）：结局与意图窗全部来自 bot md 的 `shuvix-bot-input`，零 LLM。',
+  'A2 参数化 bot 管线（渲染半边）：结局与意图窗全部来自 bot md 的 `shuvix-bot-pipeline.input`，零 LLM。',
   '',
   '```js workflow',
   '// 「正在输入 · 判断中」那一行的观察窗：说话之前先睡（v2 的脚本 API 只有 say / turn）',

@@ -34,7 +34,7 @@ import {
 let app: E2EApp
 let events: EventRecorder
 
-/** 只 say 一句的探针管线（零 LLM）；说什么由各 bot md 的 shuvix-bot-input 给 */
+/** 只 say 一句的探针管线（零 LLM）；说什么由各 bot md 的 shuvix-bot-pipeline.input 给 */
 const PROBE = 's-say-probe'
 const PROBE_MD = [
   '---',

@@ -5,6 +5,9 @@
  *   - wiki 的 status / entry-type、workflow 的重入策略（select）→ EnumField（契约封闭
  *     枚举的原生下拉；wiki 状态带生命周期圆点）。候选项直接引契约常量 —— 它们是静态
  *     契约，不像工具/模型那样依赖运行时目录。
+ *   - bot 的管线绑定块 `shuvix-bot-pipeline`（botPipeline）→ BotPipelineField：工作流下拉，
+ *     选中后按它声明的槽位列出一排 agent 下拉（候选项经 ChatApi `shuvixMd.botPipelineOptions`
+ *     由宿主提供；没有的宿主退化为只读）。每一次改动经 onPatch 落成一次文档变更。
  *   - 其余 csv 键（如 `shuvix-instruction-files` 的指令文件清单）→ 纯文本逗号串输入。
  *     刻意不给它挂文件选择器：清单里可以写工作目录下任意相对路径，而属性卡编辑档案时
  *     根本不知道这份档案将来跑在哪个工作目录 —— 一个只能列出「此刻某个目录」的选择器
@@ -29,19 +32,28 @@ import {
 } from '@shuvix/chat-protocol/wikiFileContract'
 import {
   AGENT_MODEL_KEY,
+  BOT_PIPELINE_AGENTS_KEY,
+  BOT_PIPELINE_INPUT_KEY,
+  BOT_PIPELINE_WORKFLOW_KEY,
   WORKFLOW_CONCURRENCY_KEY,
   WORKFLOW_CONCURRENCY_MODES
 } from '@shuvix/chat-protocol/shuvixMdDescriptors'
+import type { BotPipelineOptions } from '@shuvix/chat-protocol/botPipeline'
+import type { FrontmatterPathEdit } from '@shuvix/chat-protocol/utils/frontmatterPatch'
 import { ToolSelectList, type ToolItem } from '../common/ToolSelectList'
 
 export interface FrontmatterFieldPickerProps {
   /** frontmatter 键名 —— csv 的控件按它分派（见文件头注释） */
   fieldKey: string
-  kind: 'csv' | 'select'
-  /** 当前行的原始值（csv 逗号串 / 模型 ref） */
+  kind: 'csv' | 'select' | 'botPipeline'
+  /** 当前行的原始值（csv 逗号串 / 模型 ref）；botPipeline 恒为空串 */
   value: string
+  /** botPipeline：该键解析出的映射值（缺键 / 标量 → null） */
+  mapping?: Record<string, unknown> | null
   /** 写回（null = 删除该键） */
   onChange: (next: string | null) => void
+  /** botPipeline：按相对路径改嵌套映射（一批改写 = 一次文档变更） */
+  onPatch?: (edits: FrontmatterPathEdit[]) => void
   /** 只读（内置档案 / 只读预览）：控件照常渲染但不可交互 */
   readOnly?: boolean
 }
@@ -322,13 +334,251 @@ function EnumField({
   )
 }
 
+const SELECT_CLASS =
+  'cm-shuvix-fmcard-input appearance-none rounded-md pl-2.5 pr-6 py-1 text-[11.5px] font-mono leading-relaxed border transition-colors focus:outline-none focus:border-accent/60 disabled:opacity-60 cursor-pointer disabled:cursor-default'
+
+/** 属性卡下拉的一致外观：正常态透明描边、警示态琥珀描边 + 琥珀文字 */
+function selectClass(warn: boolean): string {
+  return `${SELECT_CLASS} ${
+    warn
+      ? 'bg-bg-primary border-warning/60 text-warning'
+      : 'bg-bg-primary border-transparent text-text-primary hover:border-border-secondary/60'
+  }`
+}
+
+const isPlainObject = (v: unknown): v is Record<string, unknown> =>
+  typeof v === 'object' && v !== null && !Array.isArray(v)
+
+/**
+ * bot 管线绑定块的联动控件：工作流下拉 → 它声明的槽位各一个 agent 下拉 → 入参只读摘要。
+ *
+ * 换工作流时旧工作流的槽位条目一并删除（一次 onPatch）：槽位是**这份管线**的从属项，
+ * 留着只会变成一堆「未声明」的孤儿。槽位未填不落 YAML（下拉选「未设置」= 删那一行），
+ * 必填未填 / 指向不存在的 agent / 未声明的额外槽位用琥珀提示 —— 与主进程校验横幅同一
+ * 套判据，这里只是把它落到具体那一行上。候选项拿不到（宿主没有 bot 面 / 请求失败）时
+ * 整块退化为只读：现有值照常显示，下拉禁用。
+ */
+function BotPipelineField({
+  mapping,
+  onPatch,
+  readOnly = false
+}: {
+  mapping: Record<string, unknown> | null
+  onPatch?: (edits: FrontmatterPathEdit[]) => void
+  readOnly?: boolean
+}): React.JSX.Element {
+  const { t } = useTranslation()
+  // undefined = 加载中；null = 拿不到（宿主没有 bot 面 / 请求失败）→ 只读
+  const [options, setOptions] = useState<BotPipelineOptions | null | undefined>(undefined)
+
+  useEffect(() => {
+    const fetchOptions = getChatApi().shuvixMd.botPipelineOptions
+    if (!fetchOptions) {
+      setOptions(null) // eslint-disable-line react-hooks/set-state-in-effect
+      return undefined
+    }
+    let alive = true
+    fetchOptions()
+      .then((o) => {
+        if (alive) setOptions(o)
+      })
+      .catch(() => {
+        if (alive) setOptions(null)
+      })
+    return () => {
+      alive = false
+    }
+  }, [])
+
+  const workflowRaw = mapping?.[BOT_PIPELINE_WORKFLOW_KEY]
+  const workflow = typeof workflowRaw === 'string' ? workflowRaw.trim() : ''
+  const agentsRaw = mapping?.[BOT_PIPELINE_AGENTS_KEY]
+  const agents = useMemo(() => {
+    const out: Record<string, string> = {}
+    if (isPlainObject(agentsRaw)) {
+      for (const [role, ref] of Object.entries(agentsRaw)) {
+        if (typeof ref === 'string' && ref.trim()) out[role] = ref.trim()
+      }
+    }
+    return out
+  }, [agentsRaw])
+  const inputRaw = mapping?.[BOT_PIPELINE_INPUT_KEY]
+  const input = isPlainObject(inputRaw) ? inputRaw : null
+
+  const wf = options?.workflows.find((w) => w.name === workflow)
+  const declared = wf?.slots ?? []
+  const extraRoles = Object.keys(agents).filter((r) => !declared.some((s) => s.role === r))
+  const editable = !readOnly && !!onPatch && !!options
+  const agentNames = options?.agents ?? []
+
+  const pickWorkflow = (name: string): void => {
+    if (!onPatch || !options || !name) return
+    const keep = new Set(options.workflows.find((w) => w.name === name)?.slots.map((s) => s.role))
+    const edits: FrontmatterPathEdit[] = [{ path: [BOT_PIPELINE_WORKFLOW_KEY], value: name }]
+    // 旧工作流的槽位条目随之移除 —— 槽位表是这份管线的从属项
+    for (const role of Object.keys(agents)) {
+      if (!keep.has(role)) edits.push({ path: [BOT_PIPELINE_AGENTS_KEY, role], value: null })
+    }
+    onPatch(edits)
+  }
+  const pickSlot = (role: string, ref: string): void => {
+    onPatch?.([{ path: [BOT_PIPELINE_AGENTS_KEY, role], value: ref || null }])
+  }
+
+  const sourceLabel = (source: 'builtin' | 'user'): string =>
+    t(
+      source === 'builtin'
+        ? 'notebook.frontmatter.botSourceBuiltin'
+        : 'notebook.frontmatter.botSourceUser'
+    )
+  const slotsLabel = (n: number): string =>
+    n === 0
+      ? t('notebook.frontmatter.botNoSlots')
+      : t('notebook.frontmatter.botSlotsCount', { count: n })
+
+  const workflowMissing = workflow !== '' && !!options && !wf
+  const rowLabel = 'w-14 shrink-0 text-[12px] text-text-secondary pt-1'
+
+  const slotRow = (
+    role: string,
+    required: boolean,
+    extra: boolean,
+    description?: string
+  ): React.JSX.Element => {
+    const ref = agents[role] ?? ''
+    const missing = ref !== '' && !!options && !agentNames.includes(ref)
+    const warn = (required && ref === '') || missing || extra
+    const opts = ref && !agentNames.includes(ref) ? [ref, ...agentNames] : agentNames
+    return (
+      <div
+        key={role}
+        className="flex items-center gap-2"
+        title={description ?? ''}
+        data-bot-slot={role}
+        data-bot-slot-extra={extra ? '' : undefined}
+      >
+        <span className="w-[74px] shrink-0 font-mono text-[11.5px] text-text-secondary truncate">
+          {role}
+          {required && <span className="text-text-tertiary"> *</span>}
+        </span>
+        <span className="relative">
+          <select
+            value={ref}
+            disabled={!editable}
+            className={selectClass(warn)}
+            onChange={(e) => pickSlot(role, e.target.value)}
+            onKeyDown={(e) => e.stopPropagation()}
+            data-bot-slot-select={role}
+          >
+            <option value="">{t('notebook.frontmatter.unset')}</option>
+            {opts.map((a) => (
+              <option key={a} value={a}>
+                {a}
+              </option>
+            ))}
+          </select>
+          <ChevronDown
+            size={11}
+            className="absolute right-1.5 top-1/2 -translate-y-1/2 pointer-events-none text-text-tertiary"
+          />
+        </span>
+        {extra && (
+          <span className="text-[10px] text-warning">{t('notebook.frontmatter.botSlotExtra')}</span>
+        )}
+      </div>
+    )
+  }
+
+  return (
+    <div className="cm-shuvix-fmcard-botpipe space-y-1.5 pl-3 pt-0.5" data-bot-pipeline>
+      <div className="flex items-start gap-3">
+        <span className={rowLabel}>{t('notebook.frontmatter.botWorkflow')}</span>
+        <div className="min-w-0 flex-1 flex items-center gap-2 flex-wrap">
+          <span className="relative">
+            <select
+              value={workflow}
+              disabled={!editable}
+              className={selectClass(workflowMissing || workflow === '')}
+              onChange={(e) => pickWorkflow(e.target.value)}
+              onKeyDown={(e) => e.stopPropagation()}
+              data-bot-workflow-select
+            >
+              {workflow === '' && <option value="">{t('notebook.frontmatter.unset')}</option>}
+              {workflowMissing && <option value={workflow}>{workflow}</option>}
+              {(options?.workflows ?? []).map((w) => (
+                <option key={w.name} value={w.name}>
+                  {`${w.name}  (${sourceLabel(w.source)} · ${w.concurrency} · ${slotsLabel(w.slots.length)})`}
+                </option>
+              ))}
+            </select>
+            <ChevronDown
+              size={11}
+              className="absolute right-1.5 top-1/2 -translate-y-1/2 pointer-events-none text-text-tertiary"
+            />
+          </span>
+          {/* 来源与并发已在选中项的文案里；这里只在有问题时补一句琥珀提示 */}
+          {(workflowMissing || (wf && wf.concurrency !== 'parallel')) && (
+            <span className="font-mono text-[11px] text-warning" data-bot-workflow-meta>
+              {workflowMissing
+                ? t('notebook.frontmatter.botWorkflowMissing')
+                : `${wf!.concurrency} ≠ parallel`}
+            </span>
+          )}
+        </div>
+      </div>
+      <div className="flex items-start gap-3">
+        <span className={rowLabel} title={t('settings.botSlotHint')}>
+          {t('notebook.frontmatter.botSlots')}
+        </span>
+        <div className="min-w-0 flex-1 flex flex-col gap-1.5" data-bot-slots={declared.length}>
+          {declared.map((s) => slotRow(s.role, s.required, false, s.description))}
+          {extraRoles.map((role) => slotRow(role, false, true))}
+          {declared.length === 0 && extraRoles.length === 0 && (
+            <span className="text-[12px] text-text-tertiary pt-1">
+              {options && wf
+                ? t('notebook.frontmatter.botNoSlots')
+                : t('notebook.frontmatter.unset')}
+            </span>
+          )}
+        </div>
+      </div>
+      <div className="flex items-start gap-3">
+        <span className={rowLabel}>{t('notebook.frontmatter.botInput')}</span>
+        <div className="min-w-0 flex-1 pt-1" data-bot-input={input ? Object.keys(input).length : 0}>
+          {input && Object.keys(input).length > 0 ? (
+            <div className="flex flex-col gap-0.5 font-mono text-[11.5px]">
+              {Object.entries(input).map(([k, v]) => (
+                <div key={k} className="break-all">
+                  <span className="text-text-secondary">{k}</span>
+                  <span className="ml-2.5 text-text-primary">
+                    {typeof v === 'string' ? v : JSON.stringify(v)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <span className="text-[12px] text-text-tertiary">
+              {t('notebook.frontmatter.botInputNone')}
+            </span>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export function FrontmatterFieldPicker({
   fieldKey,
   kind,
   value,
+  mapping,
   onChange,
+  onPatch,
   readOnly
 }: FrontmatterFieldPickerProps): React.JSX.Element {
+  if (kind === 'botPipeline') {
+    return <BotPipelineField mapping={mapping ?? null} onPatch={onPatch} readOnly={readOnly} />
+  }
   if (kind === 'select') {
     // **按键显式分派**：模型选择器只认模型键。曾经它是 select 的兜底，于是任何新加的
     // select 字段（如工作流的重入策略）都会静默变成一个写着「选择模型」的模型下拉 ——

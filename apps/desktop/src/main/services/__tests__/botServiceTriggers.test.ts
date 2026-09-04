@@ -95,14 +95,26 @@ const FACTS = {
 
 function writeBot(
   name: string,
-  opts: { displayName?: string; agents?: Record<string, string> } = {}
+  opts: {
+    displayName?: string
+    /** `shuvix-bot-pipeline.workflow` —— 必填；缺省内置 bot-chat（模板的缺省，解析器没有缺省） */
+    pipeline?: string
+    agents?: Record<string, string>
+    input?: Record<string, unknown>
+  } = {}
 ): void {
   mkdirSync(dirs.bots, { recursive: true })
   const lines = ['---', 'shuvix: bot v1', `name: ${name}`, `description: unit bot ${name}`]
   if (opts.displayName) lines.push(`shuvix-displayName: ${opts.displayName}`)
+  // 管线绑定是一个嵌套块：workflow 必填，agents / input 是它的从属项
+  lines.push('shuvix-bot-pipeline:', `  workflow: ${opts.pipeline ?? 'bot-chat'}`)
   if (opts.agents) {
-    lines.push('shuvix-bot-agents:')
-    for (const [k, v] of Object.entries(opts.agents)) lines.push(`  ${k}: ${v}`)
+    lines.push('  agents:')
+    for (const [k, v] of Object.entries(opts.agents)) lines.push(`    ${k}: ${v}`)
+  }
+  if (opts.input) {
+    lines.push('  input:')
+    for (const [k, v] of Object.entries(opts.input)) lines.push(`    ${k}: ${JSON.stringify(v)}`)
   }
   lines.push('---', '', 'BOT BODY.')
   writeFileSync(join(dirs.bots, `${name}.md`), lines.join('\n'))
@@ -576,7 +588,7 @@ describe('GH —— 门控回落', () => {
     })
   })
 
-  it('GH-4 回落之后角色表里的 intent 换成内置件（用户的 shuvix-bot-agents 让位）', async () => {
+  it('GH-4 回落之后角色表里的 intent 换成内置件（用户填的 shuvix-bot-pipeline.agents 让位）', async () => {
     mocks.invoke.mockResolvedValue(ran({ gate: 'broken', outcome: 'gate-broken' }))
     await prompt('一')
     await prompt('二')

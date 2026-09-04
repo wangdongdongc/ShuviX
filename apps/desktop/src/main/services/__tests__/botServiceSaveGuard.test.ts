@@ -76,13 +76,29 @@ import { botService } from '../botService'
 
 const NOTES_MARKER = '<!-- shuvix:bot-notes -->'
 
-/** 一份最小可解析的 bot md */
+/** 一份最小可解析的 bot md（管线块的 workflow 必填、没有缺省 —— 缺省写内置 bot-chat） */
 function md(
   name: string,
-  opts: { body?: string; notes?: string; displayName?: string } = {}
+  opts: {
+    body?: string
+    notes?: string
+    displayName?: string
+    pipeline?: string
+    agents?: Record<string, string>
+    input?: Record<string, unknown>
+  } = {}
 ): string {
   const lines = ['---', 'shuvix: bot v1', `name: ${name}`, `description: unit bot ${name}`]
   if (opts.displayName) lines.push(`shuvix-displayName: ${opts.displayName}`)
+  lines.push('shuvix-bot-pipeline:', `  workflow: ${opts.pipeline ?? 'bot-chat'}`)
+  if (opts.agents) {
+    lines.push('  agents:')
+    for (const [k, v] of Object.entries(opts.agents)) lines.push(`    ${k}: ${v}`)
+  }
+  if (opts.input) {
+    lines.push('  input:')
+    for (const [k, v] of Object.entries(opts.input)) lines.push(`    ${k}: ${JSON.stringify(v)}`)
+  }
   lines.push('---', '', opts.body ?? 'BOT BODY.')
   if (opts.notes !== undefined) lines.push('', NOTES_MARKER, '', opts.notes)
   return lines.join('\n')

@@ -33,6 +33,9 @@ import {
  *   exprMap 具名表达式映射（policy 的 lets）
  *   policyRules 规则数组（effect 徽章 + 条件/match 摘要）
  *   workflowBindings 触发绑定数组（埋点 id 徽章 + CEL when/参数摘要）
+ * `botPipeline` 是唯一的**可编辑嵌套映射**：bot md 的管线绑定 `{ workflow, agents, input }`。
+ *   工作流下拉与「按所选工作流联动列出的槽位下拉」由宿主选择器挂进块行（候选项是运行时
+ *   注册表事实，与工具/模型同理），每一次改动都是文档里一行的 scoped edit（见 frontmatterPatch）。
  * 另有 hidden：已知但不渲染（wiki 的 description 横幅是机器面所有权声明，
  * 对人只是噪音 —— 列进描述符防它落通用行，渲染时整行跳过；源码视图仍可见）。
  * 值的实际形状与 kind 不符时一律退回通用标量渲染 —— 合法性判定归解析器，卡片只展示。
@@ -43,6 +46,7 @@ export type ShuvixMdFieldKind =
   | 'boolean'
   | 'csv'
   | 'select'
+  | 'botPipeline'
   | 'prose'
   | 'list'
   | 'conditions'
@@ -195,17 +199,24 @@ const WORKFLOW_DESCRIPTOR: ShuvixMdTypeDescriptor = {
   ]
 }
 
-/** bot md 的管线键（属性卡与设置页的槽位编辑器共用） */
+/**
+ * bot md 的管线绑定键 —— 一个嵌套映射 `{ workflow, agents, input }`（解析器 botFile.ts 与
+ * 属性卡共用这组常量：渲染进程够不到 agent-runtime，所以真源放在这里、解析器引用之）。
+ */
 export const BOT_PIPELINE_KEY = 'shuvix-bot-pipeline'
-/** bot md 的槽位表键：`槽位 → agent 名` 的嵌套映射 */
-export const BOT_AGENTS_KEY = 'shuvix-bot-agents'
+/** `shuvix-bot-pipeline.workflow`：管线 workflow 的注册表名（必填） */
+export const BOT_PIPELINE_WORKFLOW_KEY = 'workflow'
+/** `shuvix-bot-pipeline.agents`：槽位表，`槽位 → agent 名` 的映射（槽位集合由所选 workflow 声明） */
+export const BOT_PIPELINE_AGENTS_KEY = 'agents'
+/** `shuvix-bot-pipeline.input`：传给管线 workflow 的额外入参映射 */
+export const BOT_PIPELINE_INPUT_KEY = 'input'
 
 /**
  * bot 定义文件（agent-runtime bot/botFile.ts 的键集）。设计见 docs/bot-design.md §4。
  *
- * 一个 bot 是一份**绑定**：身份三项 + 管线名 + 槽位表 + 正文（人设与记忆）。模型 / 工具 /
- * 指令文件这些 agent 键不在 bot 上 —— 它们归槽位里那份 agent md。`shuvix-bot-agents`
- * 是嵌套映射，属性卡只落通用行；槽位由设置页按管线的输入 schema 渲染成下拉编辑。
+ * 一个 bot 是一份**绑定**：身份三项 + 一个管线绑定块 + 正文（人设与记忆）。模型 / 工具 /
+ * 指令文件这些 agent 键不在 bot 上 —— 它们归槽位里那份 agent md。管线绑定是一个嵌套映射，
+ * 卡片上它是唯一的可编辑嵌套字段（`botPipeline`）：工作流下拉 + 联动的槽位下拉 + 只读的入参。
  */
 const BOT_DESCRIPTOR: ShuvixMdTypeDescriptor = {
   type: 'bot',
@@ -214,7 +225,7 @@ const BOT_DESCRIPTOR: ShuvixMdTypeDescriptor = {
     { key: 'name', labelKey: 'tool.subAgentName', kind: 'mono' },
     { key: 'shuvix-displayName', labelKey: 'tool.subAgentDisplayName', kind: 'text' },
     { key: 'description', labelKey: 'tool.subAgentDescription', kind: 'text' },
-    { key: BOT_PIPELINE_KEY, labelKey: 'settings.botInspectPipeline', kind: 'mono' }
+    { key: BOT_PIPELINE_KEY, labelKey: 'settings.botInspectPipeline', kind: 'botPipeline' }
   ]
 }
 

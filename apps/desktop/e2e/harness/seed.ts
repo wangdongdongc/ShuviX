@@ -58,15 +58,17 @@ export interface BotMdSeed {
   /** description 是 bot md 的必填项 —— 缺省给一句，测「缺 description」时显式传空串 */
   description?: string
   displayName?: string
-  /** `shuvix-bot-pipeline` —— 指向哪份管线 workflow（缺省 bot-chat） */
+  /** `shuvix-bot-pipeline.workflow` —— 指向哪份管线 workflow（缺省 bot-chat；解析器没有缺省，种子必须写） */
   pipeline?: string
-  /** `shuvix-bot-input` —— 铺进管线 input 的用户键 */
+  /** `shuvix-bot-pipeline.input` —— 铺进管线 input 的用户键 */
   botInput?: Record<string, string | number | boolean>
   /**
-   * `shuvix-bot-agents` —— 槽位表。**缺省填满内置管线的两个必填槽位**
+   * `shuvix-bot-pipeline.agents` —— 槽位表。**缺省填满内置管线的两个必填槽位**
    * （intent: bot-intent / task: default），传 `{}` 得到一份没填槽位的 bot
    */
   agents?: Record<string, string>
+  /** 整个省略 `shuvix-bot-pipeline` 块（测「缺管线即非法」时用） */
+  omitPipeline?: boolean
   /** 正文 = 人设与记忆（围栏后追加到每个参与 agent 的系统提示词） */
   body?: string
   /** 追加的原始 frontmatter 行（测未知键/类型错时用） */
@@ -91,15 +93,19 @@ export function writeBotMd(app: E2EApp, name: string, seed: BotMdSeed = {}): str
   lines.push(`name: ${name}`)
   lines.push(`description: ${seed.description ?? `e2e seeded bot ${name}`}`)
   if (seed.displayName) lines.push(`shuvix-displayName: ${seed.displayName}`)
-  if (seed.pipeline) lines.push(`shuvix-bot-pipeline: ${seed.pipeline}`)
-  if (seed.botInput) {
-    lines.push('shuvix-bot-input:')
-    for (const [k, v] of Object.entries(seed.botInput)) lines.push(`  ${k}: ${String(v)}`)
-  }
-  const agents = seed.agents ?? DEFAULT_BOT_AGENTS
-  if (Object.keys(agents).length) {
-    lines.push('shuvix-bot-agents:')
-    for (const [k, v] of Object.entries(agents)) lines.push(`  ${k}: ${v}`)
+  // 管线绑定是一个嵌套块：workflow 必填、agents / input 可选（解析器没有缺省管线）
+  if (!seed.omitPipeline) {
+    lines.push('shuvix-bot-pipeline:')
+    lines.push(`  workflow: ${seed.pipeline ?? 'bot-chat'}`)
+    const agents = seed.agents ?? DEFAULT_BOT_AGENTS
+    if (Object.keys(agents).length) {
+      lines.push('  agents:')
+      for (const [k, v] of Object.entries(agents)) lines.push(`    ${k}: ${v}`)
+    }
+    if (seed.botInput) {
+      lines.push('  input:')
+      for (const [k, v] of Object.entries(seed.botInput)) lines.push(`    ${k}: ${String(v)}`)
+    }
   }
   if (seed.rawLines) lines.push(...seed.rawLines)
   lines.push('---', '', seed.body ?? 'BOT BODY.')

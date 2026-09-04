@@ -42,14 +42,14 @@ shuvix-workflow-input:
 全部が、順にここにある:話すかを判定し、そのメッセージが誰のものかを決め、答える。
 
 bot は束ねであって agent ではない:その md はこのパイプラインを指し、パイプラインの
-**スロット**を agent 定義で埋める(`shuvix-bot-agents: {intent: …, task: …}`)。bot md の
+**スロット**を agent 定義で埋める(`shuvix-bot-pipeline: {workflow: bot-chat, agents: {intent: …, task: …}}`)。bot md の
 本文 —— その人格と、学んだこと —— は下のどのプロンプトにもない。ホストがそれを囲って、
 この run が派遣する全ての agent のシステムプロンプト末尾に付け足す。プロジェクト文脈と
 同じ仕組みだ。その本文を最新に保つのはタスク段 agent 自身の仕事であり、自分のファイル
 ツールで行う;別立てのノート段はない。
 
 ここに `shuvix-workflow-on` はない:どのトリガーもこのファイルには通じない。bot が
-それを指し(`shuvix-bot-pipeline: bot-chat`)、会話が invoke する。`parallel` は意図的:
+それを指し(`shuvix-bot-pipeline.workflow: bot-chat`)、会話が invoke する。`parallel` は意図的:
 run 級の再入は完全に脇へ退き、「一度に一つ」は `turn()` が提供する —— それが直列化
 するのは**この会話のこの bot** であって、多くの bot と会話が同時に共有するこの
 ファイルではない。

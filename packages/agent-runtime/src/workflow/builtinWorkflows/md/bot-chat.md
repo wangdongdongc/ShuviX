@@ -43,14 +43,14 @@ what a bot does, in order: decide whether to speak, settle who the message belon
 answer.
 
 A bot is a binding, not an agent: its md names this pipeline and fills the pipeline's
-**slots** with agent definitions (`shuvix-bot-agents: {intent: …, task: …}`). The bot md's
+**slots** with agent definitions (`shuvix-bot-pipeline: {workflow: bot-chat, agents: {intent: …, task: …}}`). The bot md's
 body — its persona and what it has learned — is not in any prompt below. The host appends
 it, fenced, to the system prompt of every agent this run dispatches, the way project context
 is appended. Keeping that body current is the task agent's own job, with its own file tools;
 there is no separate notes stage.
 
 There is no `shuvix-workflow-on` here: no trigger leads to this file. A bot points at it
-(`shuvix-bot-pipeline: bot-chat`) and the session invokes it. `parallel` is deliberate:
+(`shuvix-bot-pipeline.workflow: bot-chat`) and the session invokes it. `parallel` is deliberate:
 run-level re-entry gets out of the way entirely, and one-thing-at-a-time is provided by
 `turn()`, which serialises _this bot in this session_ — never the file, which many bots and
 many sessions share at the same moment.
