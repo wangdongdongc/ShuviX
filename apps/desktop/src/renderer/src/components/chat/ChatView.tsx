@@ -2,7 +2,7 @@ import { getSessionChannelApi, getHostApi } from '@shuvix/chat-ui'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { PictureInPicture2, Pin, PinOff, X } from 'lucide-react'
-import { useChatStore } from '@shuvix/chat-ui'
+import { selectActiveBot, useChatStore } from '@shuvix/chat-ui'
 import { useBrowserStore } from '../../stores/browserStore'
 import { useSidebarStore } from '../../stores/sidebarStore'
 import { useBottomPanelStore } from '../../stores/bottomPanelStore'
@@ -27,6 +27,7 @@ import {
 import { EmptySessionHint } from './WelcomeView'
 import { BotMembersBar } from './BotMembersBar'
 import { NotebookSessionView } from '../notebook/NotebookSessionView'
+import { BotPage } from '../bots/BotPage'
 
 /**
  * 聊天主视图（桌面外壳）—— 经共享 <ChatBody> 渲染顶栏 + 欢迎/笔记本/对话三态，
@@ -44,6 +45,9 @@ interface ChatViewProps {
 export function ChatView({ pinnedMode }: ChatViewProps = {}): React.JSX.Element {
   const { t } = useTranslation()
   const { activeSessionId } = useChatStore()
+  // bot 档案页（侧栏「Bots」分组点开）：与会话互斥的主区目标，正文经 contentOverride 顶掉
+  // 欢迎页 —— 此时 activeSessionId 为空，会话面板 / 横幅 / 成员条随之自然不渲染
+  const activeBot = useChatStore(selectActiveBot)
   const [showSessionConfig, setShowSessionConfig] = useState(false)
 
   const toggleBrowser = useBrowserStore((s) => s.toggle)
@@ -226,7 +230,12 @@ export function ChatView({ pinnedMode }: ChatViewProps = {}): React.JSX.Element 
           />
         ) : undefined
       }
-      contentOverride={placeholder}
+      contentOverride={
+        placeholder ??
+        (activeBot && pinnedMode !== 'floating' ? (
+          <BotPage key={JSON.stringify(activeBot)} target={activeBot} />
+        ) : undefined)
+      }
       welcome={<WelcomeView />}
       renderNotebook={(path, sid) => <NotebookSessionView path={path} sessionId={sid} />}
       conversationEmptyState={(sid) => <EmptySessionHint sessionId={sid} />}

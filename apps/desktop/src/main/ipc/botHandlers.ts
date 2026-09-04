@@ -2,12 +2,13 @@ import { ipcMain } from 'electron'
 import { botService } from '../services/botService'
 
 /**
- * Bot IPC 处理器 —— 设置页「Bots」tab（与工作流/策略页同形）。
+ * Bot IPC 处理器 —— 主窗口侧栏「Bots」分组 + bot 档案页（BotPage；原设置页 Bots tab）。
  *
  * 纯 md 驱动：每次 list 现扫 ~/.shuvix/bots。编辑走 **md 原文**（frontmatter 由属性卡
  * 渲染，正文是人设 + 内联记忆区），写盘前经解析器校验（非法拒绝并回传人读原因）。
  * 没有启用开关，文件存在且合法即可用；**不内置 bot**，所以也没有「内置/用户」两源之分 ——
- * 新建走 `bot:template`（用内置管线与阶段 agent 填一份模板）。
+ * 新建走 `bot:template`（用内置管线与阶段 agent 填一份模板）。每条写通道落盘后由
+ * botService 广播 AppEvent `bot.changed`，侧栏分组据此重扫。
  */
 export function registerBotHandlers(): void {
   /** 列出全部 bot */
@@ -39,7 +40,7 @@ export function registerBotHandlers(): void {
   /** 删除用户 bot 文件（同名内置随之恢复） */
   ipcMain.handle('bot:delete', (_e, params: { name: string }) => botService.delete(params.name))
 
-  /** 目录里无法解析的文件（设置页显示为可点开修复的告警项） */
+  /** 目录里无法解析的文件（侧栏分组显示为可点开修复的琥珀行） */
   ipcMain.handle('bot:listInvalid', () => botService.listInvalid())
 
   /** 非法文件的读/写/删（身份是文件名 —— 它解析不出 name） */
@@ -59,7 +60,7 @@ export function registerBotHandlers(): void {
     return { success: true }
   })
 
-  /** 设置页详情的运行时读数：管线/阶段解析结果 + 门控降级 + 笔记调度状态 */
+  /** 档案页的运行时读数：管线/阶段解析结果 + 门控降级 */
   ipcMain.handle('bot:inspect', (_e, params: { name: string }) => botService.inspect(params.name))
 
   /** per-bot 停止（A2）：中止某成员对某条消息的应答；排队与其它消息不受影响 */

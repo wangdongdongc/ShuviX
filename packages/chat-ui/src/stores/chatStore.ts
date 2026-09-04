@@ -157,12 +157,27 @@ interface SessionDraft {
 const sessionDrafts = new Map<string, SessionDraft>()
 
 /**
- * 当前激活目标的唯一来源：会话 / 无。
+ * bot 档案页的目标：编辑一份已注册的 bot / 修一份解析不过的文件 / 从模板新建。
+ * 非法文件解析不出 name，只能按文件名认；新建时还没有任何身份。
+ */
+export type BotPageTarget =
+  | { kind: 'edit'; name: string }
+  | { kind: 'fix'; fileName: string }
+  | { kind: 'create' }
+
+/**
+ * 当前激活目标的唯一来源：会话 / bot 档案页 / 无。
  * 单一来源（active）派生出所有镜像字段，杜绝多个独立「激活字段」相互竞争。
  * 注：md live-preview 现仅经「笔记本会话」进入（普通会话选择，中间区据 session.settings.notebookPath
  * 决定渲染 NotebookView 还是 ChatView），不再有独立的「临时打开任意文件」激活态。
+ * bot 档案页（主窗口里编辑 ~/.shuvix/bots/<name>.md）是会话之外唯一的主区目标：它不是会话
+ * （没有树、没有消息），故不能伪装成一条 session；放进同一个联合，是让「选中会话即离开档案页、
+ * 打开档案页即没有活动会话」由 deriveActive 一处保证，而不是两个 store 互相订阅。
  */
-export type ActiveView = { type: 'session'; id: string } | null
+export type ActiveView =
+  | { type: 'session'; id: string }
+  | { type: 'bot'; target: BotPageTarget }
+  | null
 
 /** 由 active 派生出镜像字段，所有写入都经此，保证状态一致、无竞争 */
 function deriveActive(active: ActiveView): {
@@ -287,6 +302,8 @@ interface ChatState {
   // Actions
   setSessions: (sessions: Session[]) => void
   setActiveSessionId: (id: string | null) => void
+  /** 把主区切到 bot 档案页（活动会话随之为空；当前会话的输入草稿照常暂存） */
+  setActiveBot: (target: BotPageTarget) => void
   /** 请求打开某文件预览（绝对路径）；preview 工具事件 / 笔记本 [[wiki-link]] / Files 面板点击触发。
    *  openedBy 缺省 'user'：只有智能体事件那条路显式传 'agent'（预览面板据此亮出来源横幅）。 */
   requestFilePreview: (absPath: string, openedBy?: 'agent' | 'user') => void
@@ -574,6 +591,10 @@ export const selectAllPendingCounts = (s: ChatState): Record<string, number> => 
 export const selectInputDraft = (s: ChatState, sessionId: string, requestId: string): unknown =>
   s.sessionInputDrafts[sessionId]?.[requestId]
 
+/** 主区当前展示的 bot 档案页目标（不在档案页上为 null） */
+export const selectActiveBot = (s: ChatState): BotPageTarget | null =>
+  s.active?.type === 'bot' ? s.active.target : null
+
 export const useChatStore = create<ChatState>((set, get) => ({
   sessions: [],
   ...deriveActive(null),
@@ -622,6 +643,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
       inputText: draft?.inputText ?? '',
       pendingImages: draft?.pendingImages ?? []
     })
+  },
+  setActiveBot: (target) => {
+    const state = get()
+    // 与切会话同一条纪律：离开时把当前会话的草稿暂存，回来还能接着写
+    if (state.activeSessionId) {
+      sessionDrafts.set(state.activeSessionId, {
+        inputText: state.inputText,
+        pendingImages: state.pendingImages
+      })
+    }
+    set({ ...deriveActive({ type: 'bot', target }), inputText: '', pendingImages: [] })
   },
   requestFilePreview: (absPath, openedBy = 'user') =>
     set((state) => ({

@@ -42,6 +42,7 @@ import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
 import { resolveTokensForAgent } from '@shuvix/chat-protocol/utils/inlineTokens'
 import { botReplyToMarkdown, coerceBotReply } from '@shuvix/chat-protocol/botReply'
 import { getDefaultBotsDir } from '../utils/paths'
+import { appEventBus } from '../utils/appEventBus'
 import { writeFileAtomic } from '../utils/atomicWrite'
 import { recordRead } from '../utils/toolUtils/fileTime'
 import { createLogger } from '../logger'
@@ -481,6 +482,7 @@ class BotService {
     if (stale !== name && !this.listAll().some((b) => b.file.name === stale)) {
       this.migrateRename(stale, name)
     }
+    appEventBus.publish({ type: 'bot.changed' })
     // 成功回新指纹：UI 不必为了「再保存一次」而重新 getSource，否则第二次必然误报冲突
     return { success: true, revision: revisionOf(text) }
   }
@@ -550,6 +552,7 @@ class BotService {
       log.warn(`新建 bot "${name}" 失败:`, e)
       return { success: false, error: e instanceof Error ? e.message : String(e) }
     }
+    appEventBus.publish({ type: 'bot.changed' })
     return { success: true, name }
   }
 
@@ -586,6 +589,7 @@ class BotService {
       return { success: false, error: e instanceof Error ? e.message : String(e) }
     }
     log.info(`已删除 bot "${name}" (${target.basePath})`)
+    appEventBus.publish({ type: 'bot.changed' })
     return { success: true }
   }
 
@@ -621,6 +625,7 @@ class BotService {
       log.warn(`保存 bot 文件 "${fileName}" 失败:`, e)
       return { success: false, error: e instanceof Error ? e.message : String(e) }
     }
+    appEventBus.publish({ type: 'bot.changed' })
     return { success: true }
   }
 
@@ -634,6 +639,7 @@ class BotService {
       return { success: false, error: e instanceof Error ? e.message : String(e) }
     }
     log.info(`已删除 bot 文件 "${fileName}"`)
+    appEventBus.publish({ type: 'bot.changed' })
     return { success: true }
   }
 

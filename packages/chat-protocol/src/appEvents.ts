@@ -33,6 +33,12 @@ export type AppEvent =
    * 变更（IPC/CLI 直建、wiki/memory 笔记去重开会话等），UI 流程的乐观刷新照旧。
    */
   | { type: 'session.listChanged' }
+  /**
+   * bot 注册表变化（保存 / 新建 / 删除 / 非法文件修好）—— 信号事件，消费者重拉 bot.list。
+   * 与 session.listChanged 同口径：不带载荷。只覆盖经 botService 落盘的变更；bot 自己在
+   * 答话途中改 md、用户往目录里丢文件这类外部写入不广播，由消费者在窗口聚焦时重扫兜底。
+   */
+  | { type: 'bot.changed' }
   | { type: 'pinChat.changed'; pinnedSessionIds: string[] }
   | { type: 'widget.changed' }
   /**

@@ -492,11 +492,12 @@ export function atPopoverPane(main: CdpClient): AtPopoverPane {
 
 /**
  * 分组头定位目标：项目组按**种子项目名**认（组头 toggle 按钮里的 span.truncate，
- * CSS uppercase 不改 textContent），临时组 / 知识库组 / 「项目」分节标题按 `data-group`
- * 锚点认 —— 临时组与分节标题是摊开的纯分节（无图标无 toggle 按钮），知识库组的标签是
- * 本地化文案，三者都只剩这个属性可认。
+ * CSS uppercase 不改 textContent），临时组 / 知识库组 / Bots 组 / 「项目」分节标题按
+ * `data-group` 锚点认 —— 临时组与分节标题是摊开的纯分节（无图标无 toggle 按钮），知识库组
+ * 与 Bots 组的标签是本地化文案，四者都只剩这个属性可认。Bots 组的行与页另有自己的 page
+ * object（`botsPane`），这里的 target 只用于组头层面的菜单 / 按钮断言。
  */
-export type GroupTarget = { project: string } | 'temp' | 'wiki' | 'section'
+export type GroupTarget = { project: string } | 'temp' | 'wiki' | 'bots' | 'section'
 
 /**
  * 菜单项原样快照（对齐 `ContextMenuItem`；侧栏不用 role/submenu，故只留这四个键）。
@@ -604,12 +605,95 @@ export interface SidebarPane {
   rowUnread(title: string): Promise<{ badge: string | null; bold: boolean } | null>
 }
 
+// ── 侧栏菜单桩（bootstrap.cjs 顶掉了 `contextMenu:popup`）——会话行 / 分组头 / Bots 组共用 ──
+//
+// 菜单本身是原生的，e2e 驱动不了；桩把 items 写进渲染端的 `window.__E2E_MENU_ITEMS`，
+// 返回值取自 `window.__E2E_MENU_PICK`。下面这组助手是「钉好要选哪一项 → 点 ⋮ / 右键 →
+// 顺带核对该项在不在菜单里」的唯一实现，sidebarPane 与 botsPane 都只是换了 scope 来调。
+
+/** 行/组头尾部那颗 ⋮（RowMenuButton）—— 侧栏一切动作如今的唯一入口 */
+const MENU_BTN = (scope: string): string =>
+  `${scope}?.querySelector('.lucide-ellipsis-vertical')?.closest('button')`
+
+/**
+ * 钉下一次弹出要选中的项，并清掉上一次记下的 items。钉 null = 取消（只看菜单内容时用）。
+ */
+const armMenu = (main: CdpClient, actionId: string | null): Promise<unknown> =>
+  main.eval(`(() => {
+    window.__E2E_MENU_PICK = ${JSON.stringify(actionId)}
+    window.__E2E_MENU_ITEMS = null
+    return true
+  })()`)
+
+/** 桩记下的最近一次菜单项（弹出是异步的，等它到） */
+async function lastMenuItems(main: CdpClient): Promise<MenuItemShot[]> {
+  await until(
+    () => main.eval<boolean>(`Array.isArray(window.__E2E_MENU_ITEMS)`),
+    'context menu popped'
+  )
+  return main.eval<MenuItemShot[]>(`window.__E2E_MENU_ITEMS`)
+}
+
+/** 同上，但只取自定义项的 id（分隔符被滤掉）—— 既有用例的口径，别动 */
+async function lastMenuIds(main: CdpClient): Promise<string[]> {
+  return (await lastMenuItems(main)).filter((it) => it.id).map((it) => it.id as string)
+}
+
+/**
+ * 打开某处的菜单（不选任何项 = 取消）并回原始 items。
+ *
+ * `via` 是**触发方式**而非目标：'menu-button' 点该处的 ⋮，'contextmenu' 合成一个冒泡的
+ * contextmenu 事件派发到该元素本身（会话行监听在整行上，分组头监听在标题行上）。
+ * 元素/⋮ 不在返回 null。
+ */
+async function openMenu(
+  main: CdpClient,
+  scope: string,
+  via: MenuVia
+): Promise<MenuItemShot[] | null> {
+  await armMenu(main, null)
+  const target = via === 'menu-button' ? MENU_BTN(scope) : scope
+  const opened = await main.eval<boolean>(`(() => {
+    const el = ${target}
+    if (!el) return false
+    ${
+      via === 'menu-button'
+        ? 'el.click()'
+        : "el.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }))"
+    }
+    return true
+  })()`)
+  if (!opened) return null
+  return lastMenuItems(main)
+}
+
+/**
+ * 打开某处的 ⋮ 并选中一项：先钉选择再点按钮，随后核对该项**真的在**菜单里 ——
+ * 桩是照钉的 id 回的，菜单里没有这一项也不会报错，只是什么都不会发生（失败点会离真因很远）。
+ */
+async function pickFromMenu(
+  main: CdpClient,
+  scope: string,
+  actionId: string,
+  what: string
+): Promise<void> {
+  await until(() => main.eval<boolean>(`!!${MENU_BTN(scope)}`), `${what} menu button`)
+  await armMenu(main, actionId)
+  await main.eval(`${MENU_BTN(scope)}.click()`)
+  const ids = await lastMenuIds(main)
+  if (!ids.includes(actionId)) {
+    throw new Error(
+      `menu item "${actionId}" not offered by ${what} (got: ${ids.join(', ') || '-'})`
+    )
+  }
+}
+
 /**
  * 主窗侧栏会话列表（SessionItem 无 data-*，按「含 span.truncate 的可点击行」认）。
  *
  * 行与组头的动作只剩一个入口：悬停浮现的 ⋮（点它与右键弹的是同一份菜单）。菜单本身是
  * 原生的，e2e 驱动不了 —— bootstrap.cjs 把 `contextMenu:popup` 顶成了可脚本化的桩，
- * 这里只需「钉好要选哪一项 → 点 ⋮ → 顺带核对该项在不在菜单里」（见 pickFromMenu）。
+ * 这里只需「钉好要选哪一项 → 点 ⋮ → 顺带核对该项在不在菜单里」（见上方 pickFromMenu）。
  */
 export function sidebarPane(main: CdpClient): SidebarPane {
   const ROWS = `[...document.querySelectorAll('div[class*="cursor-pointer"]')]
@@ -640,10 +724,6 @@ export function sidebarPane(main: CdpClient): SidebarPane {
   const ACTION_HEADER = `${HEADERS}.find((h) =>
     ['project', 'temp'].includes(h.getAttribute('data-group'))
   )`
-  /** 行/组头尾部那颗 ⋮（RowMenuButton）—— 侧栏一切动作如今的唯一入口 */
-  const MENU_BTN = (scope: string): string =>
-    `${scope}?.querySelector('.lucide-ellipsis-vertical')?.closest('button')`
-
   /**
    * 「旧的一排小图标」候选集：动作收进 ⋮ 之前，行是齿轮 + 垃圾桶，组头是 + / Bot / 齿轮 /
    * 刷新。改动之后行与组头里**一个都不该剩**，故按类名逐个点名（bot 图标不在名单里 ——
@@ -676,78 +756,14 @@ export function sidebarPane(main: CdpClient): SidebarPane {
     }
   })()`
 
-  /**
-   * 菜单桩（bootstrap.cjs 顶掉了 contextMenu:popup）：钉下一次弹出要选中的项，
-   * 并清掉上一次记下的 items。钉 null = 取消（只看菜单内容时用）。
-   */
-  const armMenu = (actionId: string | null): Promise<unknown> =>
-    main.eval(`(() => {
-      window.__E2E_MENU_PICK = ${JSON.stringify(actionId)}
-      window.__E2E_MENU_ITEMS = null
-      return true
-    })()`)
-
-  /** 桩记下的最近一次菜单项（弹出是异步的，等它到） */
-  const lastMenuItems = async (): Promise<MenuItemShot[]> => {
-    await until(
-      () => main.eval<boolean>(`Array.isArray(window.__E2E_MENU_ITEMS)`),
-      'context menu popped'
-    )
-    return main.eval<MenuItemShot[]>(`window.__E2E_MENU_ITEMS`)
-  }
-
-  /** 同上，但只取自定义项的 id（分隔符被滤掉）—— 既有用例的口径，别动 */
-  const lastMenuIds = async (): Promise<string[]> =>
-    (await lastMenuItems()).filter((it) => it.id).map((it) => it.id as string)
-
-  /**
-   * 打开某处的菜单（不选任何项 = 取消）并回原始 items。
-   *
-   * `via` 是**触发方式**而非目标：'menu-button' 点该处的 ⋮，'contextmenu' 合成一个冒泡的
-   * contextmenu 事件派发到该元素本身（会话行监听在整行上，分组头监听在标题行上）。
-   * 元素/⋮ 不在返回 null。
-   */
-  const openMenu = async (scope: string, via: MenuVia): Promise<MenuItemShot[] | null> => {
-    await armMenu(null)
-    const target = via === 'menu-button' ? MENU_BTN(scope) : scope
-    const opened = await main.eval<boolean>(`(() => {
-      const el = ${target}
-      if (!el) return false
-      ${
-        via === 'menu-button'
-          ? 'el.click()'
-          : "el.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }))"
-      }
-      return true
-    })()`)
-    if (!opened) return null
-    return lastMenuItems()
-  }
-
-  /**
-   * 打开某处的 ⋮ 并选中一项：先钉选择再点按钮，随后核对该项**真的在**菜单里 ——
-   * 桩是照钉的 id 回的，菜单里没有这一项也不会报错，只是什么都不会发生（失败点会离真因很远）。
-   */
-  const pickFromMenu = async (scope: string, actionId: string, what: string): Promise<void> => {
-    await until(() => main.eval<boolean>(`!!${MENU_BTN(scope)}`), `${what} menu button`)
-    await armMenu(actionId)
-    await main.eval(`${MENU_BTN(scope)}.click()`)
-    const ids = await lastMenuIds()
-    if (!ids.includes(actionId)) {
-      throw new Error(
-        `menu item "${actionId}" not offered by ${what} (got: ${ids.join(', ') || '-'})`
-      )
-    }
-  }
-
   const pickGroupMenu = async (target: GroupTarget, actionId: string): Promise<void> => {
     await until(() => main.eval<boolean>(`${HEADER(target)} !== undefined`), 'group header')
-    await pickFromMenu(HEADER(target), actionId, 'group header')
+    await pickFromMenu(main, HEADER(target), actionId, 'group header')
   }
 
   return {
     clickNewChat: async () => {
-      await pickFromMenu(ACTION_HEADER, 'new-chat', 'session group header')
+      await pickFromMenu(main, ACTION_HEADER, 'new-chat', 'session group header')
       await new Promise((r) => setTimeout(r, 800))
     },
     titles: () =>
@@ -794,7 +810,7 @@ export function sidebarPane(main: CdpClient): SidebarPane {
 
     groupMenuItems: async (target) => {
       await until(() => main.eval<boolean>(`${HEADER(target)} !== undefined`), 'group header')
-      await armMenu(null)
+      await armMenu(main, null)
       const clicked = await main.eval<boolean>(`(() => {
         const btn = ${MENU_BTN(HEADER(target))}
         if (!btn) return false
@@ -802,7 +818,7 @@ export function sidebarPane(main: CdpClient): SidebarPane {
         return true
       })()`)
       if (!clicked) return null
-      return lastMenuIds()
+      return lastMenuIds(main)
     },
     clickNewBotChat: async (target) => {
       await pickGroupMenu(target, 'new-bot-chat')
@@ -811,15 +827,15 @@ export function sidebarPane(main: CdpClient): SidebarPane {
 
     rowMenuShots: async (title, via = 'menu-button') => {
       await until(() => main.eval<boolean>(`${ROW(title)} !== undefined`), `session row "${title}"`)
-      return openMenu(ROW(title), via)
+      return openMenu(main, ROW(title), via)
     },
     groupMenuShots: async (target, via = 'menu-button') => {
       await until(() => main.eval<boolean>(`${HEADER(target)} !== undefined`), 'group header')
-      return openMenu(HEADER(target), via)
+      return openMenu(main, HEADER(target), via)
     },
     pickRowMenu: async (title, actionId) => {
       await until(() => main.eval<boolean>(`${ROW(title)} !== undefined`), `session row "${title}"`)
-      await pickFromMenu(ROW(title), actionId, `session row "${title}"`)
+      await pickFromMenu(main, ROW(title), actionId, `session row "${title}"`)
     },
     pickGroupMenu,
 
@@ -1244,6 +1260,34 @@ export async function httpLogPane(settings: CdpClient): Promise<HttpLogPane> {
           ),
         'http log status settled'
       )
+  }
+}
+
+export interface SettingsTabsPane {
+  /** 左栏 tab 导航的按钮文案（DOM 序 = 宿主注入的 tab 序） */
+  labels(): Promise<string[]>
+  /** 当前高亮 tab 的文案（TabButton 的 active 分支：bg-accent/10） */
+  activeLabel(): Promise<string>
+  /** 设置窗口当前 hash（`#settings/<tab>`） */
+  hash(): Promise<string>
+}
+
+/**
+ * 设置窗口的 tab 导航（SettingsContainer 左栏：w-[180px] 列里的 TabButton）。
+ * 「某个 tab 还在不在」这类否定断言的唯一入口 —— 按文案认（精确匹配，别 includes：
+ * 「Telegram Bots」是另一个 tab）。
+ */
+export async function settingsTabsPane(settings: CdpClient): Promise<SettingsTabsPane> {
+  const NAV = `document.querySelector('.w-\\\\[180px\\\\]')`
+  const TABS = `[...(${NAV}?.querySelectorAll(':scope > button') ?? [])]`
+  await until(() => settings.eval<boolean>(`${TABS}.length > 0`), 'settings tab nav ready')
+  return {
+    labels: () => settings.eval<string[]>(`${TABS}.map((b) => (b.textContent ?? '').trim())`),
+    activeLabel: () =>
+      settings.eval<string>(
+        `(${TABS}.find((b) => b.className.includes('bg-accent/10'))?.textContent ?? '').trim()`
+      ),
+    hash: () => settings.eval<string>('location.hash')
   }
 }
 
@@ -2054,15 +2098,22 @@ export function botFlowPane(main: CdpClient): BotFlowPane {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// A1 · 设置页「Bots」tab —— 列表 / md 编辑器 / 运行时读数条 / 门控模型选择器 /
-// 丢更新冲突对话框。
+// 主窗 Bots 分组 + Bot 档案页 —— 侧栏置顶「Bots」分组（BotGroup：bot 行 / 非法文件行 /
+// 组头菜单 / 行菜单）与主区的 BotPage（头部动作 / 运行时读数条 + 槽位编辑器 / 门控模型
+// 选择器 / md 编辑器 / 丢更新冲突对话框）。原设置页「Bots」tab 的两栏整体搬进了主窗：
+// 列表在侧栏分组里，点一行主区就是这一页（与会话互斥：页开着就没有活动会话行）。
 //
-// 锚点全部是 A1 落的 data-*（data-bot-new / data-bot-row / data-bot-save /
-// data-bot-new-session / data-bot-inspect{,-warnings} / data-bot-slots /
+// 锚点：分组头按 `data-group="bots"`（SessionGroup 的 group/header 层）认，行按
+// data-bot-row / data-bot-invalid-row；页面按 data-bot-page="edit|fix|create" 认，其内
+// 沿用 A1 落的 data-*（data-bot-save / data-bot-cancel / data-bot-new-session /
+// data-bot-invalid-error / data-bot-inspect{,-warnings} / data-bot-slots /
 // data-bot-slot{,-select} / data-bot-body-chars / data-bot-gate-model /
-// data-bot-conflict-{reload,overwrite}），左栏与右面板按 DOM 结构从 [data-bot-new]
-// 反推（底栏的父级 = 列表列，其下一个兄弟 = 右面板），不认宽度类。ModelSelect 面板
-// 沿用 fmCardPane 的 `.picker-panel` 约定（body portal）。
+// data-bot-conflict-{reload,overwrite}）。ModelSelect 面板沿用 fmCardPane 的 `.picker-panel`
+// 约定（body portal）。菜单走与会话行同一套桩（armMenu / openMenu / pickFromMenu）。
+//
+// 分组是**懒扫**的：首次展开才扫，之后展开 / 窗口聚焦 / 组头菜单「刷新」/ `bot.changed`
+// 事件（botService 每次落盘后广播）重扫 —— 「保存后行自己更新」的断言正是靠最后一条，
+// 用例里别在那之前手动 refresh，否则断的就不是事件了。磁盘外写入不广播，种完要 refresh。
 //
 // v3 删掉两个锚点（连同它们描述的能力）：`data-bot-notes-status`（笔记段没了，正文由
 // bot 自己维护）与 `data-bot-limits`（bot→bot 接力没了，hop/扇出上限随之退场）。
@@ -2071,8 +2122,11 @@ export function botFlowPane(main: CdpClient): BotFlowPane {
 export interface BotsPaneRow {
   /** bot 身份键（data-bot-row 属性值 = frontmatter name） */
   name: string
+  /** 行显示名（span.truncate） */
   displayName: string
+  /** 行的 title 提示 = description */
   description: string
+  /** 选中态（bg-bg-active）⟺ 主区正开着这个 bot 的档案页 */
   selected: boolean
 }
 
@@ -2107,11 +2161,18 @@ export interface BotsInspectShot {
   gateModelPresent: boolean
 }
 
-/** 右面板编辑器快照（编辑 / 新建 / 修复三态通用） */
+/** 档案页快照（edit / fix / create 三态通用；不在屏时 present=false 其余为空） */
 export interface BotsEditorShot {
+  /** 档案页根（data-bot-page）在屏 —— 加载中也算；编辑器就绪看 text / 各 select* 的等待条件 */
   present: boolean
-  /** 头部有取消按钮 —— 新建/修复这类临时编辑态（常态编辑没有取消） */
+  /** 页面形态（data-bot-page 属性值）：'edit' | 'fix' | 'create'；不在屏为空串 */
+  kind: string
+  /** 头部有取消按钮（data-bot-cancel）—— 新建/修复这类临时态（常态编辑没有取消） */
   transient: boolean
+  /** 头部标题：edit = displayName，fix = 文件名，create = 本地化的「新建 bot」 */
+  headerTitle: string
+  /** 头部 mono 路径（仅 edit：bot 的 basePath；其余为空串） */
+  headerPath: string
   /** 屏幕上的文本：CM6 文档 + 属性卡各输入框 value（后者不进 textContent） */
   text: string
   /** 属性卡 name 行输入框的当前值 */
@@ -2120,38 +2181,74 @@ export interface BotsEditorShot {
   cardBadge: string
   /** 红色错误横幅文案（保存失败/加载失败；无横幅为空串） */
   error: string
+  /** fix 态的琥珀横幅（data-bot-invalid-error）= 解析器的拒绝理由；其余为空串 */
+  invalidError: string
   /** 「新建会话」按钮在屏（仅 edit 态） */
   newSessionPresent: boolean
 }
 
+/** 丢更新冲突对话框的三个决议钮在不在 */
+export interface BotsConflictShot {
+  open: boolean
+  reload: boolean
+  overwrite: boolean
+  cancel: boolean
+}
+
 export interface BotsPane {
-  /** 设置窗口当前 hash（tab 路由断言用） */
-  hash(): Promise<string>
-  newButtonPresent(): Promise<boolean>
+  // ── 分组 ──
+  /** 分组是否展开（AnimatedCollapse 的 grid-template-rows = 1fr） */
+  expanded(): Promise<boolean>
+  /** 分组正文是否已有内容（首次扫描落定前，展开与否正文都是空的） */
+  scanned(): Promise<boolean>
+  /** 展开分组（已展开则不动）并等首次扫描落定（空态文案也算落定） */
+  expand(): Promise<void>
+  /** 空态文案行在屏（既无 bot 也无非法文件） */
+  emptyState(): Promise<boolean>
   rows(): Promise<BotsPaneRow[]>
-  /** 「无法解析」琥珀分组里的文件名（无分组时空数组） */
+  /** 非法文件行（琥珀）的文件名（DOM 序 = 合法行之后） */
   invalidRows(): Promise<string[]>
+  /**
+   * 点 bot 行并等档案页（edit 态）挂好：行选中 + 编辑器上屏 + 头部路径 = 该 bot 的
+   * basePath（按 `bot.list` 现查，改过名的 bot 文件名与 name 不同也认得准）。
+   */
   selectRow(name: string): Promise<void>
+  /** 点非法行并等修复页（fix 态）挂好（编辑器上屏 + 头部标题 = 文件名） */
   selectInvalid(fileName: string): Promise<void>
-  /** 底栏重扫按钮（列表只在挂载/保存后刷新，磁盘外改动需手动重扫） */
+  /** 组头菜单「刷新」—— 磁盘外改动不广播 bot.changed，需手动重扫 */
   refresh(): Promise<void>
-  /** 非法文件详情（文件名 + 解析器拒绝理由） */
-  invalidDetail(): Promise<{ fileName: string; error: string }>
-  /** 非法详情里的「点击修复」按钮 → 打开修复编辑器 */
-  clickInvalidEdit(): Promise<void>
-  editor(): Promise<BotsEditorShot>
-  /** 底栏「新建 bot」 */
+  /** 组头菜单「新建 bot」→ 等新建页挂好 */
   clickNew(): Promise<void>
-  /** 编辑器头部保存（data-bot-save） */
+
+  // ── 菜单：⋮ 与右键的**同一份** items（打开即取消，不选任何项） ──
+  groupMenuShots(via?: MenuVia): Promise<MenuItemShot[] | null>
+  rowMenuShots(name: string, via?: MenuVia): Promise<MenuItemShot[] | null>
+  invalidMenuShots(fileName: string, via?: MenuVia): Promise<MenuItemShot[] | null>
+  /** 开组头 / 行 / 非法行的 ⋮ 并选中一项（自带「该项真的在菜单里」的核对） */
+  pickGroupMenu(actionId: string): Promise<void>
+  pickRowMenu(name: string, actionId: string): Promise<void>
+  pickInvalidMenu(fileName: string, actionId: string): Promise<void>
+
+  // ── 档案页 ──
+  editor(): Promise<BotsEditorShot>
+  /** 编辑器 DOM 身份令牌：两次相同 ⟺ 编辑器没被重挂（页面不在屏为空串） */
+  editorToken(): Promise<string>
+  /**
+   * 改属性卡的文本字段（name / description / shuvix-displayName）：卡片的文本框是裸 DOM
+   * textarea（非 React 受控），赋值后派发 blur 即提交 → 卡片给 md 的那一行打补丁。
+   * 字段行不在屏 / 只读返回 false。**不驱动 CM6 打字**的唯一改正文入口。
+   */
+  setField(key: string, value: string): Promise<boolean>
+  /** 头部保存（data-bot-save）；按钮缺失或禁用（刚保存过 / 保存中）直接抛错 */
   clickSave(): Promise<void>
-  /** 编辑器头部取消（仅 transient 态存在） */
+  /** 头部取消（仅 transient 态）→ 等档案页卸载（回欢迎页） */
   clickCancel(): Promise<void>
-  /** 编辑器头部「新建会话」（data-bot-new-session） */
+  /** 头部「新建会话」（data-bot-new-session） */
   clickNewSession(): Promise<void>
   inspect(): Promise<BotsInspectShot>
   /**
    * 改某个槽位的下拉（native value setter + change 事件，走 React 的 onChange）：
-   * 组件据此给 md 打补丁（`shuvix-bot-agents.<role>` 行）并 `bot:save`。
+   * 组件据此给 md 打补丁（`shuvix-bot-agents.<role>` 行）并 `bot:save`，随后重拉原文重挂编辑器。
    * '' = 清掉该槽位。下拉不存在（槽位没上屏）返回 false。
    */
   setSlot(role: string, value: string): Promise<boolean>
@@ -2160,6 +2257,7 @@ export interface BotsPane {
 
   /** 丢更新冲突对话框是否在屏（以 data-bot-conflict-reload 的存在为准） */
   conflictOpen(): Promise<boolean>
+  conflictShot(): Promise<BotsConflictShot>
   /** 冲突对话框三个决议：加载磁盘版本 / 仍然覆盖 / 取消 */
   clickConflictReload(): Promise<void>
   clickConflictOverwrite(): Promise<void>
@@ -2167,6 +2265,8 @@ export interface BotsPane {
 
   /** 门控模型：开面板（trigger 监听 click）并等 portal 上屏 */
   openGateModel(): Promise<void>
+  /** 关面板（面板监听 document 的 mousedown：点外部即关） */
+  closeGateModel(): Promise<void>
   gateModelOpen(): Promise<boolean>
   /** 面板里的提供商分组名（型号按钮带 pl-5，据此与分组头区分 —— 同 fmCardPane） */
   gateModelGroups(): Promise<string[]>
@@ -2178,139 +2278,207 @@ export interface BotsPane {
   clearGateModel(): Promise<boolean>
 }
 
-/** 设置窗口「Bots」tab（openSettings('bots') 后调用；就绪判据 = data-bot-new 上屏） */
-export async function botsPane(settings: CdpClient): Promise<BotsPane> {
-  await until(
-    () => settings.eval<boolean>(`document.querySelector('[data-bot-new]') !== null`),
-    'bots tab ready'
-  )
-
-  // 列表列 = 底栏（data-bot-new 的父级）的父级；右面板 = 列表列的下一个兄弟
-  const COLUMN = `document.querySelector('[data-bot-new]').parentElement.parentElement`
-  const PANEL = `${COLUMN}.nextElementSibling`
+/** 主窗侧栏「Bots」分组 + 主区 Bot 档案页（renderer 挂载后即可构造；先 expand 再读行） */
+export function botsPane(main: CdpClient): BotsPane {
+  const HEADER = `document.querySelector('div[class*="group/header"][data-group="bots"]')`
+  // 折叠钮 = 组头里包着分组标签（span.truncate）的那颗 button（⋮ 是另一颗）
+  const TOGGLE = `[...(${HEADER}?.querySelectorAll(':scope > button') ?? [])].find((b) => b.querySelector('span.truncate'))`
+  // 组头的下一个兄弟是 AnimatedCollapse（grid 容器：1fr 展开 / 0fr 折叠）；
+  // 其孙节点（overflow-hidden > ml-1.5）才是分组正文 = BotGroup 的 children
+  const COLLAPSE = `${HEADER}?.nextElementSibling`
+  const BODY = `${COLLAPSE}?.firstElementChild?.firstElementChild`
   const ROWS = `[...document.querySelectorAll('[data-bot-row]')]`
-  // 非法行：列表列里带 font-mono 文件名的按钮（合法行显示 displayName，无 font-mono）
-  const INVALID_ROWS = `[...${COLUMN}.querySelectorAll('button')].filter((b) => b.querySelector('span.font-mono'))`
+  const ROW = (name: string): string =>
+    `document.querySelector('[data-bot-row=${JSON.stringify(name)}]')`
+  const INVALID_ROWS = `[...document.querySelectorAll('[data-bot-invalid-row]')]`
+  const INVALID_ROW = (fileName: string): string =>
+    `document.querySelector('[data-bot-invalid-row=${JSON.stringify(fileName)}]')`
+  const PAGE = `document.querySelector('[data-bot-page]')`
   const MODEL_PANEL = `document.querySelector('.picker-panel')`
   const MODEL_BUTTONS = `[...document.querySelectorAll('.picker-panel button')]`
   const GATE_ROW = `document.querySelector('[data-bot-gate-model]')`
   const CONFLICT_RELOAD = `document.querySelector('[data-bot-conflict-reload]')`
+  const CONFLICT_OVERWRITE = `document.querySelector('[data-bot-conflict-overwrite]')`
+
+  const expanded = (): Promise<boolean> =>
+    main.eval<boolean>(`${COLLAPSE}?.style.gridTemplateRows === '1fr'`)
 
   const editorSnapshot = (): Promise<BotsEditorShot> =>
-    settings.eval(`(() => {
-      const panel = ${PANEL}
-      if (!panel?.querySelector('.cm-content')) {
-        return { present: false, transient: false, text: '', nameInput: '', cardBadge: '', error: '', newSessionPresent: false }
+    main.eval(`(() => {
+      const page = ${PAGE}
+      if (!page) {
+        return { present: false, kind: '', transient: false, headerTitle: '', headerPath: '', text: '',
+                 nameInput: '', cardBadge: '', error: '', invalidError: '', newSessionPresent: false }
       }
-      const cancelBtn = [...panel.querySelectorAll('button')].find(
-        (b) => !b.closest('.cm-editor') && b.querySelector('.lucide-x')
-      )
-      // 错误横幅（红色 tailwind 类）在 CM6 之外；属性卡的校验横幅不算
-      const banner = [...panel.querySelectorAll('div')].find(
+      // 头部标题 / 路径 / 错误横幅都在 CM6 之外；正文里的加粗 / 等宽 / 校验横幅一概不算
+      const outside = (sel) => [...page.querySelectorAll(sel)].find((el) => !el.closest('.cm-editor'))
+      const banner = [...page.querySelectorAll('div')].find(
         (d) => !d.closest('.cm-editor') && d.className.includes('text-red-500')
       )
       return {
         present: true,
-        transient: !!cancelBtn,
-        // 属性卡把 name/description 渲染成 <input>，其值不进 textContent —— 一并算上
+        kind: page.getAttribute('data-bot-page') ?? '',
+        transient: !!page.querySelector('[data-bot-cancel]'),
+        headerTitle: (outside('span.font-semibold')?.textContent ?? '').trim(),
+        headerPath: (outside('div.font-mono')?.textContent ?? '').trim(),
+        // 属性卡把 name/description/displayName 渲染成文本框，其值不进 textContent —— 一并算上
         text:
-          (panel.querySelector('.cm-content')?.textContent ?? '') +
-          [...panel.querySelectorAll('.cm-shuvix-fmcard-input')].map((i) => ' ' + i.value).join(''),
+          (page.querySelector('.cm-content')?.textContent ?? '') +
+          [...page.querySelectorAll('.cm-shuvix-fmcard-input')].map((i) => ' ' + i.value).join(''),
         nameInput:
-          panel.querySelector('.cm-shuvix-fmcard-row[data-key="name"] .cm-shuvix-fmcard-input')
+          page.querySelector('.cm-shuvix-fmcard-row[data-key="name"] .cm-shuvix-fmcard-input')
             ?.value ?? '',
-        cardBadge: panel.querySelector('.cm-shuvix-fmcard-badge')?.textContent.trim() ?? '',
+        cardBadge: page.querySelector('.cm-shuvix-fmcard-badge')?.textContent.trim() ?? '',
         error: banner ? banner.textContent.trim() : '',
-        newSessionPresent: !!panel.querySelector('[data-bot-new-session]')
+        invalidError: (page.querySelector('[data-bot-invalid-error]')?.textContent ?? '').trim(),
+        newSessionPresent: !!page.querySelector('[data-bot-new-session]')
       }
     })()`)
 
-  const gateModelOpen = (): Promise<boolean> => settings.eval<boolean>(`${MODEL_PANEL} !== null`)
+  const gateModelOpen = (): Promise<boolean> => main.eval<boolean>(`${MODEL_PANEL} !== null`)
+
+  const requireRow = (name: string): Promise<boolean> =>
+    until(() => main.eval<boolean>(`!!${ROW(name)}`), `bot row "${name}"`)
+  const requireInvalidRow = (fileName: string): Promise<boolean> =>
+    until(() => main.eval<boolean>(`!!${INVALID_ROW(fileName)}`), `invalid bot row "${fileName}"`)
+  const requireHeader = (): Promise<boolean> =>
+    until(() => main.eval<boolean>(`!!${HEADER}`), 'bots group header')
 
   return {
-    hash: () => settings.eval<string>('location.hash'),
-    newButtonPresent: () =>
-      settings.eval<boolean>(`document.querySelector('[data-bot-new]') !== null`),
+    expanded,
+    scanned: () => main.eval<boolean>(`(${BODY}?.childElementCount ?? 0) > 0`),
+    expand: async () => {
+      await until(() => main.eval<boolean>(`!!${TOGGLE}`), 'bots group toggle')
+      if (!(await expanded())) await main.eval(`${TOGGLE}.click()`)
+      // 首次展开才扫：等正文长出内容（空态文案也算）；折叠动画只动高度，不动 DOM
+      await until(
+        () => main.eval<boolean>(`(${BODY}?.childElementCount ?? 0) > 0`),
+        'bots group scanned'
+      )
+    },
+    emptyState: () =>
+      main.eval<boolean>(`(() => {
+        const body = ${BODY}
+        if (!body || !body.childElementCount) return false
+        return ![...body.children].some(
+          (c) => c.hasAttribute('data-bot-row') || c.hasAttribute('data-bot-invalid-row')
+        )
+      })()`),
     rows: () =>
-      settings.eval(`${ROWS}.map((r) => ({
+      main.eval(`${ROWS}.map((r) => ({
         name: r.getAttribute('data-bot-row') ?? '',
-        displayName: r.querySelector('.font-medium')?.textContent.trim() ?? '',
-        description: r.querySelector('.text-\\\\[10px\\\\]')?.textContent.trim() ?? '',
-        selected: r.className.includes('bg-accent/10')
+        displayName: (r.querySelector('span.truncate')?.textContent ?? '').trim(),
+        description: r.getAttribute('title') ?? '',
+        selected: r.className.includes('bg-bg-active')
       }))`),
     invalidRows: () =>
-      settings.eval(
-        `${INVALID_ROWS}.map((b) => b.querySelector('span.font-mono').textContent.trim())`
-      ),
+      main.eval(`${INVALID_ROWS}.map((r) => r.getAttribute('data-bot-invalid-row') ?? '')`),
     selectRow: async (name) => {
-      await settings.eval(
-        `${ROWS}.find((r) => r.getAttribute('data-bot-row') === ${JSON.stringify(name)}).click()`
-      )
-      // 选中 → 拉原文 + inspect，各是一趟 IPC —— 等编辑器真挂上再回
+      await requireRow(name)
+      await main.eval(`${ROW(name)}.click()`)
+      // 选中 → 拉 list + 原文 + inspect，各是一趟 IPC —— 头部路径只在原文到手后渲染，
+      // 拿它当「edit 页真挂上了」的判据（按 bot.list 现查 basePath：改过名的 bot 文件名 ≠ name）
       await until(
         () =>
-          settings.eval<boolean>(`(() => {
-            const row = ${ROWS}.find((r) => r.getAttribute('data-bot-row') === ${JSON.stringify(name)})
-            return !!row && row.className.includes('bg-accent/10') && ${PANEL}?.querySelector('.cm-content') !== null
+          main.eval<boolean>(`(async () => {
+            const row = ${ROW(name)}
+            const page = ${PAGE}
+            if (!row?.className.includes('bg-bg-active')) return false
+            if (page?.getAttribute('data-bot-page') !== 'edit' || !page.querySelector('.cm-content')) return false
+            const path = [...page.querySelectorAll('div.font-mono')].find((d) => !d.closest('.cm-editor'))
+            const hit = (await window.api.bot.list()).find((b) => b.name === ${JSON.stringify(name)})
+            return !!hit && (path?.textContent ?? '').trim() === hit.basePath
           })()`),
-        `bot row selected: ${name}`
+        `bot page (edit) mounted for "${name}"`
       )
     },
     selectInvalid: async (fileName) => {
-      await settings.eval(
-        `${INVALID_ROWS}.find(
-          (b) => b.querySelector('span.font-mono').textContent.trim() === ${JSON.stringify(fileName)}
-        ).click()`
-      )
-      await until(
-        () => settings.eval<boolean>(`${PANEL}?.querySelector('.font-mono') !== null`),
-        `invalid bot file selected: ${fileName}`
-      )
+      await requireInvalidRow(fileName)
+      await main.eval(`${INVALID_ROW(fileName)}.click()`)
+      await until(async () => {
+        const e = await editorSnapshot()
+        return e.kind === 'fix' && e.headerTitle === fileName && e.text !== ''
+      }, `bot page (fix) mounted for "${fileName}"`)
     },
     refresh: async () => {
-      await settings.eval(
-        `[...${COLUMN}.querySelectorAll('button')].find((b) => b.querySelector('.lucide-refresh-cw')).click()`
-      )
+      await requireHeader()
+      await pickFromMenu(main, HEADER, 'refresh', 'bots group header')
       await sleep(400)
     },
-    invalidDetail: () =>
-      settings.eval(`(() => {
-        const panel = ${PANEL}
-        const amber = [...panel.querySelectorAll('div')].find((d) =>
-          d.className.includes('bg-amber-500/10')
-        )
-        return {
-          fileName: panel.querySelector('.font-mono')?.textContent.trim() ?? '',
-          error: amber ? amber.textContent.trim() : ''
-        }
-      })()`),
-    clickInvalidEdit: async () => {
-      await settings.eval(
-        `[...${PANEL}.querySelectorAll('button')].find((b) => b.className.includes('bg-accent')).click()`
-      )
-      await until(async () => (await editorSnapshot()).present, 'bot fix editor mounted')
-    },
-    editor: editorSnapshot,
     clickNew: async () => {
-      await settings.eval(`document.querySelector('[data-bot-new]').click()`)
-      await until(async () => (await editorSnapshot()).transient, 'bot create editor mounted')
+      await requireHeader()
+      await pickFromMenu(main, HEADER, 'new-bot', 'bots group header')
+      await until(async () => {
+        const e = await editorSnapshot()
+        return e.kind === 'create' && e.text !== ''
+      }, 'bot page (create) mounted')
+    },
+
+    groupMenuShots: async (via = 'menu-button') => {
+      await requireHeader()
+      return openMenu(main, HEADER, via)
+    },
+    rowMenuShots: async (name, via = 'menu-button') => {
+      await requireRow(name)
+      return openMenu(main, ROW(name), via)
+    },
+    invalidMenuShots: async (fileName, via = 'menu-button') => {
+      await requireInvalidRow(fileName)
+      return openMenu(main, INVALID_ROW(fileName), via)
+    },
+    pickGroupMenu: async (actionId) => {
+      await requireHeader()
+      await pickFromMenu(main, HEADER, actionId, 'bots group header')
+    },
+    pickRowMenu: async (name, actionId) => {
+      await requireRow(name)
+      await pickFromMenu(main, ROW(name), actionId, `bot row "${name}"`)
+    },
+    pickInvalidMenu: async (fileName, actionId) => {
+      await requireInvalidRow(fileName)
+      await pickFromMenu(main, INVALID_ROW(fileName), actionId, `invalid bot row "${fileName}"`)
+    },
+
+    editor: editorSnapshot,
+    editorToken: () =>
+      main.eval<string>(`(() => {
+        const el = ${PAGE}?.querySelector('.cm-content')
+        if (!el) return ''
+        // 令牌挂在 contentDOM 上：CM6 的 EditorView 存活期间它恒是同一个节点，重挂才换
+        if (!el.__e2eToken) el.__e2eToken = 'cm-' + Math.random().toString(36).slice(2)
+        return el.__e2eToken
+      })()`),
+    setField: async (key, value) => {
+      const hit = await main.eval<boolean>(`(() => {
+        const input = ${PAGE}?.querySelector(
+          '.cm-shuvix-fmcard-row[data-key=${JSON.stringify(key)}] .cm-shuvix-fmcard-input'
+        )
+        if (!input || input.disabled) return false
+        input.value = ${JSON.stringify(value)}
+        input.dispatchEvent(new Event('blur'))
+        return true
+      })()`)
+      await sleep(200)
+      return hit
     },
     clickSave: async () => {
-      await settings.eval(`document.querySelector('[data-bot-save]').click()`)
+      await main.eval(`(() => {
+        const btn = ${PAGE}?.querySelector('[data-bot-save]')
+        if (!btn) throw new Error('bot page save button not found')
+        if (btn.disabled) throw new Error('bot page save button is disabled (already saved / saving)')
+        btn.click()
+        return true
+      })()`)
     },
     clickCancel: async () => {
-      await settings.eval(
-        `[...${PANEL}.querySelectorAll('button')].find(
-          (b) => !b.closest('.cm-editor') && b.querySelector('.lucide-x')
-        ).click()`
-      )
-      await until(async () => !(await editorSnapshot()).transient, 'bot editor closed')
+      await main.eval(`${PAGE}.querySelector('[data-bot-cancel]').click()`)
+      await until(async () => !(await editorSnapshot()).present, 'bot page closed')
     },
     clickNewSession: async () => {
-      await settings.eval(`document.querySelector('[data-bot-new-session]').click()`)
+      await main.eval(`${PAGE}.querySelector('[data-bot-new-session]').click()`)
     },
     inspect: () =>
-      settings.eval(`(() => {
+      main.eval(`(() => {
         const strip = document.querySelector('[data-bot-inspect]')
         if (!strip) {
           return { present: false, pipelineText: '', slots: [], bodyChars: 0, warningsCount: 0, warnings: [], gateModelPresent: false }
@@ -2339,7 +2507,7 @@ export async function botsPane(settings: CdpClient): Promise<BotsPane> {
         }
       })()`),
     setSlot: async (role, value) => {
-      const hit = await settings.eval<boolean>(`(() => {
+      const hit = await main.eval<boolean>(`(() => {
         const sel = document.querySelector('[data-bot-slot-select=${JSON.stringify(role)}]')
         if (!sel) return false
         // React 给受控 select 装了 value tracker：直接赋 .value 会被判「没变」而不派 onChange，
@@ -2349,27 +2517,36 @@ export async function botsPane(settings: CdpClient): Promise<BotsPane> {
         sel.dispatchEvent(new Event('change', { bubbles: true }))
         return true
       })()`)
-      // 补丁 + bot:save + 重扫 + 编辑器重挂各是一趟 IPC/渲染 —— 调用方按结果 until 等
+      // 补丁 + bot:save + 重拉原文 + 编辑器重挂各是一趟 IPC/渲染 —— 调用方按结果 until 等
       await sleep(200)
       return hit
     },
     retiredAnchors: () =>
-      settings.eval<string[]>(
+      main.eval<string[]>(
         `['data-bot-notes-status', 'data-bot-limits'].filter((a) => document.querySelector('[' + a + ']'))`
       ),
 
-    conflictOpen: () => settings.eval<boolean>(`${CONFLICT_RELOAD} !== null`),
+    conflictOpen: () => main.eval<boolean>(`${CONFLICT_RELOAD} !== null`),
+    conflictShot: () =>
+      main.eval<BotsConflictShot>(`(() => {
+        const reload = ${CONFLICT_RELOAD}
+        if (!reload) return { open: false, reload: false, overwrite: false, cancel: false }
+        // 取消是决议行里唯一不带 data-* 的按钮
+        const cancel = [...reload.parentElement.querySelectorAll('button')].some(
+          (b) => !b.hasAttribute('data-bot-conflict-reload') && !b.hasAttribute('data-bot-conflict-overwrite')
+        )
+        return { open: true, reload: true, overwrite: ${CONFLICT_OVERWRITE} !== null, cancel }
+      })()`),
     clickConflictReload: async () => {
-      await settings.eval(`${CONFLICT_RELOAD}.click()`)
+      await main.eval(`${CONFLICT_RELOAD}.click()`)
       await sleep(200)
     },
     clickConflictOverwrite: async () => {
-      await settings.eval(`document.querySelector('[data-bot-conflict-overwrite]').click()`)
+      await main.eval(`${CONFLICT_OVERWRITE}.click()`)
       await sleep(200)
     },
     clickConflictCancel: async () => {
-      // 取消是决议行里唯一不带 data-* 的按钮（JSX 序第一个）
-      await settings.eval(
+      await main.eval(
         `[...${CONFLICT_RELOAD}.parentElement.querySelectorAll('button')].find(
           (b) => !b.hasAttribute('data-bot-conflict-reload') && !b.hasAttribute('data-bot-conflict-overwrite')
         ).click()`
@@ -2378,16 +2555,20 @@ export async function botsPane(settings: CdpClient): Promise<BotsPane> {
     },
 
     openGateModel: async () => {
-      await settings.eval(`${GATE_ROW}.querySelector('button').click()`)
+      await main.eval(`${GATE_ROW}.querySelector('button').click()`)
       await until(gateModelOpen, 'gate model picker panel mounted')
+    },
+    closeGateModel: async () => {
+      await main.eval(`document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))`)
+      await until(async () => !(await gateModelOpen()), 'gate model picker panel closed')
     },
     gateModelOpen,
     gateModelGroups: () =>
-      settings.eval(
+      main.eval(
         `${MODEL_BUTTONS}.filter((b) => !b.className.includes('pl-5')).map((b) => b.textContent.trim())`
       ),
     expandGateModelGroup: (label) =>
-      settings.eval<boolean>(`(() => {
+      main.eval<boolean>(`(() => {
         const head = ${MODEL_BUTTONS}.find(
           (b) => !b.className.includes('pl-5') && b.textContent.trim() === ${JSON.stringify(label)}
         )
@@ -2396,7 +2577,7 @@ export async function botsPane(settings: CdpClient): Promise<BotsPane> {
         return true
       })()`),
     pickGateModel: (modelId) =>
-      settings.eval<boolean>(`(() => {
+      main.eval<boolean>(`(() => {
         const item = ${MODEL_BUTTONS}.find(
           (b) => b.className.includes('pl-5') && b.textContent.trim() === ${JSON.stringify(modelId)}
         )
@@ -2405,9 +2586,9 @@ export async function botsPane(settings: CdpClient): Promise<BotsPane> {
         return true
       })()`),
     gateModelTriggerText: () =>
-      settings.eval<string>(`(${GATE_ROW}?.querySelector('button')?.textContent ?? '').trim()`),
+      main.eval<string>(`(${GATE_ROW}?.querySelector('button')?.textContent ?? '').trim()`),
     clearGateModel: () =>
-      settings.eval<boolean>(`(() => {
+      main.eval<boolean>(`(() => {
         const btn = [...${GATE_ROW}.querySelectorAll('button')].find((b) => b.querySelector('.lucide-x'))
         if (!btn) return false
         btn.click()

@@ -403,3 +403,77 @@ describe('SG-B —— 改名迁移', () => {
     expect(mocks.rewriteBots).not.toHaveBeenCalled()
   })
 })
+
+// ────────────────────── SG-C：注册表变更广播（bot.changed） ──────────────────────
+
+/**
+ * 侧栏「Bots」分组靠这条信号事件重扫（列表侧从设置页搬进主窗口之后，保存 / 新建 / 删除
+ * 的结果得自己长到列表上，不能等用户切一次窗口）。口径同 session.listChanged：**落盘成功
+ * 才广播、不带载荷**；被守卫或校验拒绝的写入什么都没改，不该让消费者白扫一遍。
+ */
+describe('SG-C —— bot.changed 广播', () => {
+  /** 订阅真 appEventBus，数 bot.changed 落了几次 */
+  async function countChanged(run: () => void): Promise<number> {
+    const { appEventBus } = await import('../../utils/appEventBus')
+    let n = 0
+    const off = appEventBus.subscribe((e) => {
+      if (e.type === 'bot.changed') n++
+    })
+    try {
+      run()
+    } finally {
+      off()
+    }
+    return n
+  }
+
+  it('SG-C1 五条写通道落盘成功各广播一次：save / create / delete / saveByFile / deleteByFile', async () => {
+    put('scout', md('scout'))
+    expect(
+      await countChanged(() => {
+        const r = botService.save(
+          'scout',
+          md('scout', { body: '改过' }),
+          sourceOf('scout').revision
+        )
+        expect(r.success).toBe(true)
+      })
+    ).toBe(1)
+    expect(
+      await countChanged(() => {
+        expect(botService.create(md('ranger')).success).toBe(true)
+      })
+    ).toBe(1)
+    expect(
+      await countChanged(() => {
+        expect(botService.delete('ranger').success).toBe(true)
+      })
+    ).toBe(1)
+    // 非法文件修好：先放一份缺 description 的，再经 saveByFile 补齐
+    put('broken', ['---', 'shuvix: bot v1', 'name: broken', '---', '', 'X'].join('\n'))
+    expect(
+      await countChanged(() => {
+        expect(botService.saveByFile('broken.md', md('broken')).success).toBe(true)
+      })
+    ).toBe(1)
+    expect(
+      await countChanged(() => {
+        expect(botService.deleteByFile('broken.md').success).toBe(true)
+      })
+    ).toBe(1)
+  })
+
+  it('SG-C2 被拒绝的写入不广播：指纹冲突 / 非法内容 / 目标不存在', async () => {
+    put('scout', md('scout'))
+    const stale = sourceOf('scout').revision
+    put('scout', md('scout', { notes: '外部改动' }))
+    expect(
+      await countChanged(() => {
+        expect(botService.save('scout', md('scout', { body: '我的' }), stale).success).toBe(false)
+        expect(botService.create('not a bot file').success).toBe(false)
+        expect(botService.delete('ghost').success).toBe(false)
+        expect(botService.deleteByFile('ghost.md').success).toBe(false)
+      })
+    ).toBe(0)
+  })
+})

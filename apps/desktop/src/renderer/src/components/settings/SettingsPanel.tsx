@@ -18,7 +18,6 @@ import {
   Mic,
   FolderClosed,
   Shield,
-  Users,
   Workflow
 } from 'lucide-react'
 import { SettingsContainer, type SettingsTab } from '@shuvix/app-shell'
@@ -32,7 +31,6 @@ import { McpSettings } from './McpSettings'
 import { SkillSettings } from './SkillSettings'
 import { ToolSettings } from './ToolSettings'
 import { AgentSettings } from './AgentSettings'
-import { BotSettings } from './BotSettings'
 import { PolicySettings } from './PolicySettings'
 import { WorkflowSettings } from './WorkflowSettings'
 import { TelegramBotsSettings } from './TelegramBotsSettings'
@@ -43,7 +41,6 @@ const VALID_TABS = new Set([
   'projects',
   'providers',
   'agents',
-  'bots',
   'workflows',
   'policies',
   'tools',
@@ -114,12 +111,6 @@ export function SettingsPanel(): React.JSX.Element {
       label: t('settings.tabAgents'),
       icon: <Bot size={14} />,
       content: <AgentSettings />
-    },
-    {
-      id: 'bots',
-      label: t('settings.tabBots'),
-      icon: <Users size={14} />,
-      content: <BotSettings />
     },
     {
       id: 'workflows',
