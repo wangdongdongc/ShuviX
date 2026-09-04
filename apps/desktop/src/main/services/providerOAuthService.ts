@@ -91,22 +91,27 @@ export class ProviderOAuthService {
   }
 
   /**
-   * provider 行 id → pi-ai slug。
+   * provider 行 id → **内置** provider 的 pi-ai slug；自定义 provider 一律 undefined。
    *
-   * 内置 provider 的 id **不一定**等于 slug：历史上有过一次「提供商 ID 迁移至 UUIDv7」
-   * (7eb9d83)，那之后建的库里内置行的 id 是 uuid、只有 name 是 slug，而且没有迁回的迁移 ——
-   * 于是同一个版本在新库上 id='xai'、在老库上 id='0193…'。所以凡是「这是哪一家」的判断都
-   * 必须看 name，`modelResolver` 里的 `providerInfo.name.toLowerCase()` 同源。
+   * 为什么不能直接用 id：历史上有过一次「提供商 ID 迁移至 UUIDv7」(7eb9d83)，那之后建的库里
+   * 内置行的 id 是 uuid、只有 name 是 slug，而且没有迁回的迁移 —— 同一个版本在新库上 id='xai'、
+   * 在老库上 id='0193…'。`modelResolver` 里的 `providerInfo.name.toLowerCase()` 同源。
+   *
+   * 为什么还要卡 isBuiltin：问题的正确形式是「这是不是内置的那一家」，不是「这行叫什么」。
+   * 今天 name 有 UNIQUE 约束、内置行的 name 也改不动（updateName 带 isBuiltin = 0），所以
+   * 单看 name 也不会撞；但那是两条隔了几层的前提，而这里一旦误判，后果是把 xAI 的订阅令牌
+   * 交给一个 baseUrl 由用户自填的 provider。多一个条件就不必依赖那两条前提。
    *
    * 凭据仍按 id 读写：那是行的主键，与它叫什么无关。
    */
-  private slugOf(providerId: string): string | undefined {
-    const name = providerDao.pick(providerId, ['name'])?.name
-    return name ? name.toLowerCase() : undefined
+  private builtinSlugOf(providerId: string): string | undefined {
+    const row = providerDao.pick(providerId, ['name', 'isBuiltin'])
+    if (!row || row.isBuiltin !== 1) return undefined
+    return row.name ? row.name.toLowerCase() : undefined
   }
 
   private flow(providerId: string): OAuthAuth | undefined {
-    const slug = this.slugOf(providerId)
+    const slug = this.builtinSlugOf(providerId)
     if (!slug) return undefined
     const factory = OAUTH_PROVIDERS[slug]
     if (!factory) return undefined
@@ -119,7 +124,7 @@ export class ProviderOAuthService {
   }
 
   supports(providerId: string): boolean {
-    const slug = this.slugOf(providerId)
+    const slug = this.builtinSlugOf(providerId)
     return !!slug && slug in OAUTH_PROVIDERS
   }
 
