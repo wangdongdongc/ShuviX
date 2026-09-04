@@ -492,10 +492,43 @@ export function atPopoverPane(main: CdpClient): AtPopoverPane {
 
 /**
  * 分组头定位目标：项目组按**种子项目名**认（组头 toggle 按钮里的 span.truncate，
- * CSS uppercase 不改 textContent），临时组按 `data-group="temp"` 锚点认
- * —— 临时组是摊开的纯分节（无图标无 toggle 按钮），只剩这个属性可认。
+ * CSS uppercase 不改 textContent），临时组与知识库组按 `data-group` 锚点认
+ * —— 临时组是摊开的纯分节（无图标无 toggle 按钮），知识库组的标签是本地化文案，
+ * 两者都只剩这个属性可认。
  */
-export type GroupTarget = { project: string } | 'temp'
+export type GroupTarget = { project: string } | 'temp' | 'wiki'
+
+/**
+ * 菜单项原样快照（对齐 `ContextMenuItem`；侧栏不用 role/submenu，故只留这四个键）。
+ *
+ * 断「⋮ 与右键是同一份菜单」时比的是**整个对象**而不只是 id：真要分叉，多半分叉在
+ * label 或 separator 上（两边各自组装一次 items 的写法一冒头就是这个形状）。
+ */
+export interface MenuItemShot {
+  id?: string
+  label?: string
+  type?: 'normal' | 'separator'
+  enabled?: boolean
+}
+
+/** 菜单的触发方式 —— 行/组头的 ⋮ 与右键走的是同一个回调，这里是「从哪一头进去」 */
+export type MenuVia = 'menu-button' | 'contextmenu'
+
+/** 行 / 分组头上「还剩哪些可点的东西」 */
+export interface RowAffordances {
+  /**
+   * 该行（组头）内每个 `<button>` 的可读标识，DOM 序：
+   *   'menu'         行尾那颗 ⋮（RowMenuButton）
+   *   'subs-toggle'  有子会话的父行行首那枚折叠钮（MessagesSquare）
+   *   'toggle'       分组头的折叠钮（含分组标签 span.truncate 的那颗）
+   *   'other'        其余（出现即说明有人往行里塞了新按钮 —— 正是要断死的东西）
+   */
+  buttons: string[]
+  /** ⋮ 的**静止态** opacity（应为 '0'：悬停才浮现）；没有 ⋮ 时为空串 */
+  menuOpacity: string
+  /** 行内命中的「旧的一排小图标」类名（收进 ⋮ 之后应当一个不剩） */
+  legacyActionIcons: string[]
+}
 
 export interface SidebarPane {
   titles(): Promise<string[]>
@@ -539,6 +572,27 @@ export interface SidebarPane {
   groupMenuItems(target: GroupTarget): Promise<string[] | null>
   /** 走分组头菜单的「新建 Bot 会话」（打开成员多选对话框；等待用 botDialogPane.waitOpen） */
   clickNewBotChat(target: GroupTarget): Promise<void>
+
+  // ── 菜单：⋮ 与右键的**同一份** items（打开即取消，不选任何项） ──
+  /**
+   * 会话行菜单的**原始 items**（桩记下的那一份）。`via` 是触发方式：缺省点行尾的 ⋮，
+   * 'contextmenu' 则往整行派发一个冒泡的 contextmenu 事件。行或 ⋮ 找不到返回 null。
+   */
+  rowMenuShots(title: string, via?: MenuVia): Promise<MenuItemShot[] | null>
+  /** 分组头菜单的**原始 items**；`via` 同上（组头的右键监听在标题行上）。找不到返回 null */
+  groupMenuShots(target: GroupTarget, via?: MenuVia): Promise<MenuItemShot[] | null>
+  /** 开会话行的 ⋮ 并选中一项（自带「该项真的在菜单里」的核对） */
+  pickRowMenu(title: string, actionId: string): Promise<void>
+  /** 开分组头的 ⋮ 并选中一项（同上） */
+  pickGroupMenu(target: GroupTarget, actionId: string): Promise<void>
+
+  // ── 行 / 组头上还剩什么可点的 ──
+  /** 会话行的按钮集合与 ⋮ 静止态；行不存在返回 null */
+  rowAffordances(title: string): Promise<RowAffordances | null>
+  /** 分组头的按钮集合与 ⋮ 静止态；组头不存在返回 null */
+  groupAffordances(target: GroupTarget): Promise<RowAffordances | null>
+  /** 当前活动会话行（bg-bg-active）的标题；没有活动行返回空串 */
+  activeTitle(): Promise<string>
   /** 当前活动会话行（bg-bg-active）存在且带 bot 图标 */
   activeRowIsBot(): Promise<boolean>
   /** 按标题认的会话行带 bot 图标；行不存在返回 false */
@@ -567,11 +621,13 @@ export function sidebarPane(main: CdpClient): SidebarPane {
         (d.querySelector(':scope > div > span.truncate')?.textContent ?? '').trim() ===
         ${JSON.stringify(title)}
     )`
+  /** 活动会话行（SessionItem 的 active 分支给行本身加的 bg-bg-active） */
+  const ACTIVE_ROW = `${ROWS}.find((d) => d.className.includes('bg-bg-active'))`
   /** 分组头行（SessionGroup 的 group/header 那层）—— 见 GroupTarget 的定位说明 */
   const HEADERS = `[...document.querySelectorAll('div[class*="group/header"]')]`
   const HEADER = (target: GroupTarget): string =>
-    target === 'temp'
-      ? `${HEADERS}.find((h) => h.getAttribute('data-group') === 'temp')`
+    typeof target === 'string'
+      ? `${HEADERS}.find((h) => h.getAttribute('data-group') === ${JSON.stringify(target)})`
       : `${HEADERS}.find(
           (h) =>
             (h.querySelector('button span.truncate')?.textContent ?? '').trim() ===
@@ -584,6 +640,38 @@ export function sidebarPane(main: CdpClient): SidebarPane {
     `${scope}?.querySelector('.lucide-ellipsis-vertical')?.closest('button')`
 
   /**
+   * 「旧的一排小图标」候选集：动作收进 ⋮ 之前，行是齿轮 + 垃圾桶，组头是 + / Bot / 齿轮 /
+   * 刷新。改动之后行与组头里**一个都不该剩**，故按类名逐个点名（bot 图标不在名单里 ——
+   * 聊天会话行的身份图标一直是它）。
+   */
+  const LEGACY_ICONS = [
+    'lucide-settings',
+    'lucide-trash-2',
+    'lucide-plus',
+    'lucide-refresh-cw',
+    'lucide-pencil',
+    'lucide-download'
+  ]
+  const AFFORDANCES = (scope: string): string => `(() => {
+    const el = ${scope}
+    if (!el) return null
+    const btns = [...el.querySelectorAll('button')]
+    const kind = (b) => {
+      if (b.querySelector('.lucide-ellipsis-vertical')) return 'menu'
+      if (b.querySelector('.lucide-messages-square')) return 'subs-toggle'
+      // 分组头的折叠钮 = 包着分组标签的那颗（按结构认，免得跟 wiki/project 的图标差异纠缠）
+      if (b.querySelector('span.truncate')) return 'toggle'
+      return 'other'
+    }
+    const menu = btns.find((b) => b.querySelector('.lucide-ellipsis-vertical')) ?? null
+    return {
+      buttons: btns.map(kind),
+      menuOpacity: menu ? getComputedStyle(menu).opacity : '',
+      legacyActionIcons: ${JSON.stringify(LEGACY_ICONS)}.filter((c) => el.querySelector('.' + c))
+    }
+  })()`
+
+  /**
    * 菜单桩（bootstrap.cjs 顶掉了 contextMenu:popup）：钉下一次弹出要选中的项，
    * 并清掉上一次记下的 items。钉 null = 取消（只看菜单内容时用）。
    */
@@ -594,13 +682,41 @@ export function sidebarPane(main: CdpClient): SidebarPane {
       return true
     })()`)
 
-  /** 桩记下的最近一次菜单项 id（弹出是异步的，等它到） */
-  const lastMenuIds = async (): Promise<string[]> => {
+  /** 桩记下的最近一次菜单项（弹出是异步的，等它到） */
+  const lastMenuItems = async (): Promise<MenuItemShot[]> => {
     await until(
       () => main.eval<boolean>(`Array.isArray(window.__E2E_MENU_ITEMS)`),
       'context menu popped'
     )
-    return main.eval<string[]>(`window.__E2E_MENU_ITEMS.filter((it) => it.id).map((it) => it.id)`)
+    return main.eval<MenuItemShot[]>(`window.__E2E_MENU_ITEMS`)
+  }
+
+  /** 同上，但只取自定义项的 id（分隔符被滤掉）—— 既有用例的口径，别动 */
+  const lastMenuIds = async (): Promise<string[]> =>
+    (await lastMenuItems()).filter((it) => it.id).map((it) => it.id as string)
+
+  /**
+   * 打开某处的菜单（不选任何项 = 取消）并回原始 items。
+   *
+   * `via` 是**触发方式**而非目标：'menu-button' 点该处的 ⋮，'contextmenu' 合成一个冒泡的
+   * contextmenu 事件派发到该元素本身（会话行监听在整行上，分组头监听在标题行上）。
+   * 元素/⋮ 不在返回 null。
+   */
+  const openMenu = async (scope: string, via: MenuVia): Promise<MenuItemShot[] | null> => {
+    await armMenu(null)
+    const target = via === 'menu-button' ? MENU_BTN(scope) : scope
+    const opened = await main.eval<boolean>(`(() => {
+      const el = ${target}
+      if (!el) return false
+      ${
+        via === 'menu-button'
+          ? 'el.click()'
+          : "el.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }))"
+      }
+      return true
+    })()`)
+    if (!opened) return null
+    return lastMenuItems()
   }
 
   /**
@@ -617,6 +733,11 @@ export function sidebarPane(main: CdpClient): SidebarPane {
         `menu item "${actionId}" not offered by ${what} (got: ${ids.join(', ') || '-'})`
       )
     }
+  }
+
+  const pickGroupMenu = async (target: GroupTarget, actionId: string): Promise<void> => {
+    await until(() => main.eval<boolean>(`${HEADER(target)} !== undefined`), 'group header')
+    await pickFromMenu(HEADER(target), actionId, 'group header')
   }
 
   return {
@@ -679,15 +800,31 @@ export function sidebarPane(main: CdpClient): SidebarPane {
       return lastMenuIds()
     },
     clickNewBotChat: async (target) => {
-      await until(() => main.eval<boolean>(`${HEADER(target)} !== undefined`), 'group header')
-      await pickFromMenu(HEADER(target), 'new-bot-chat', 'group header')
+      await pickGroupMenu(target, 'new-bot-chat')
       await sleep(200)
     },
-    activeRowIsBot: () =>
-      main.eval<boolean>(`(() => {
-        const row = ${ROWS}.find((d) => d.className.includes('bg-bg-active'))
-        return !!row && !!row.querySelector('.lucide-bot')
-      })()`),
+
+    rowMenuShots: async (title, via = 'menu-button') => {
+      await until(() => main.eval<boolean>(`${ROW(title)} !== undefined`), `session row "${title}"`)
+      return openMenu(ROW(title), via)
+    },
+    groupMenuShots: async (target, via = 'menu-button') => {
+      await until(() => main.eval<boolean>(`${HEADER(target)} !== undefined`), 'group header')
+      return openMenu(HEADER(target), via)
+    },
+    pickRowMenu: async (title, actionId) => {
+      await until(() => main.eval<boolean>(`${ROW(title)} !== undefined`), `session row "${title}"`)
+      await pickFromMenu(ROW(title), actionId, `session row "${title}"`)
+    },
+    pickGroupMenu,
+
+    rowAffordances: (title) => main.eval<RowAffordances | null>(AFFORDANCES(ROW(title))),
+    groupAffordances: (target) => main.eval<RowAffordances | null>(AFFORDANCES(HEADER(target))),
+    activeTitle: () =>
+      main.eval<string>(
+        `(${ACTIVE_ROW}?.querySelector(':scope > div > span.truncate')?.textContent ?? '').trim()`
+      ),
+    activeRowIsBot: () => main.eval<boolean>(`!!${ACTIVE_ROW}?.querySelector('.lucide-bot')`),
     rowIsBot: (title) => main.eval<boolean>(`!!${ROW(title)}?.querySelector('.lucide-bot')`),
     rowUnread: (title) =>
       main.eval(`(() => {
@@ -857,6 +994,144 @@ export function botDialogPane(main: CdpClient): BotDialogPane {
         })()`
       )
       await sleep(100)
+    }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 主窗里由侧栏菜单拉起的三个弹窗（会话配置 / 删除确认 / 项目编辑）
+//
+// 三者都长在同一个 `.dialog-panel` 类上，故锚点必须**互相排他**，否则会读到隔壁那一个：
+//   - ConfirmDialog 只有标题 + 描述 + 两个页脚按钮，**没有任何 <input>** —— 这是它与
+//     另外两个的天然分界，也是唯一 load-bearing 的一条（会话配置弹窗自带一个删除
+//     ConfirmDialog，两块 .dialog-panel 会同时在屏）。
+//   - 会话配置与项目编辑都「有 input」，但产品上不可能同时在屏（分别由行菜单与组头菜单
+//     拉起）—— 两个 pane 因此共用同一个形状锚点，用例各自负责别把它们混在一屏里。
+
+export interface SessionConfigPane {
+  /** 等弹窗上屏 */
+  waitOpen(): Promise<void>
+  isOpen(): Promise<boolean>
+  /** 等它真的卸载（关闭动画 120ms 之后才离开 DOM） */
+  waitClosed(): Promise<void>
+  /** 标题输入框的当前值 —— 「这个弹窗开的是哪条会话」的判据 */
+  titleValue(): Promise<string>
+  /** Escape 关闭并等卸载（弹窗在 window 上听 keydown） */
+  close(): Promise<void>
+}
+
+/** 会话配置弹窗（SessionConfigDialog；由行菜单的 session-config 拉起） */
+export function sessionConfigPane(main: CdpClient): SessionConfigPane {
+  const PANEL = `[...document.querySelectorAll('.dialog-panel')].find((p) => p.querySelector('input'))`
+  const isOpen = (): Promise<boolean> => main.eval<boolean>(`${PANEL} !== undefined`)
+  return {
+    waitOpen: async () => {
+      await until(isOpen, 'session config dialog open')
+    },
+    isOpen,
+    waitClosed: async () => {
+      await until(async () => !(await isOpen()), 'session config dialog closed')
+    },
+    // 标题输入框是这个弹窗里唯一的 input（配置面板只有开关，没有输入框）
+    titleValue: () => main.eval<string>(`${PANEL}?.querySelector('input')?.value ?? ''`),
+    close: async () => {
+      await main.eval(
+        `(() => {
+          window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+          return true
+        })()`
+      )
+      await until(async () => !(await isOpen()), 'session config dialog closed')
+    }
+  }
+}
+
+export interface ConfirmSnapshot {
+  open: boolean
+  title: string
+  /** 描述整段文本（含 count 插值出来的数字）—— 断数字，不断本地化文案 */
+  description: string
+}
+
+export interface ConfirmPane {
+  snapshot(): Promise<ConfirmSnapshot>
+  waitOpen(): Promise<void>
+  waitClosed(): Promise<void>
+  /** 页脚第二个按钮 = 确认 */
+  confirm(): Promise<void>
+  /** 页脚第一个按钮 = 取消 */
+  cancel(): Promise<void>
+}
+
+/** 通用确认弹窗（ConfirmDialog）—— 认「有 h3 且没有 input」的那块面板，见本节开头 */
+export function confirmPane(main: CdpClient): ConfirmPane {
+  const PANEL = `[...document.querySelectorAll('.dialog-panel')].find(
+    (p) => p.querySelector('h3') && !p.querySelector('input')
+  )`
+  const isOpen = (): Promise<boolean> => main.eval<boolean>(`${PANEL} !== undefined`)
+  const clickFooter = async (index: number): Promise<void> => {
+    // 页脚 = 两个按钮那一层（照 policiesPane 的口径：[0] 取消，[1] 确认）
+    await main.eval(`[...${PANEL}.querySelectorAll('button')][${index}].click()`)
+    await sleep(200)
+  }
+  return {
+    snapshot: () =>
+      main.eval<ConfirmSnapshot>(`(() => {
+        const panel = ${PANEL}
+        if (!panel) return { open: false, title: '', description: '' }
+        return {
+          open: true,
+          title: (panel.querySelector('h3')?.textContent ?? '').trim(),
+          description: (panel.querySelector('h3 + div')?.textContent ?? '').trim()
+        }
+      })()`),
+    waitOpen: async () => {
+      await until(isOpen, 'confirm dialog open')
+    },
+    waitClosed: async () => {
+      await until(async () => !(await isOpen()), 'confirm dialog closed')
+    },
+    confirm: () => clickFooter(1),
+    cancel: () => clickFooter(0)
+  }
+}
+
+export interface ProjectEditPane {
+  waitOpen(): Promise<void>
+  isOpen(): Promise<boolean>
+  waitClosed(): Promise<void>
+  /** 名称字段的当前值（ProjectInfoForm 的第一个 InlineInput） */
+  nameValue(): Promise<string>
+  close(): Promise<void>
+}
+
+/**
+ * 项目编辑弹窗（ProjectEditDialog → ProjectConfigDialog 外壳；由组头菜单的 edit-project 拉起）。
+ *
+ * ⚠️ 「选择/更换文件夹」按钮**只许做存在性断言，绝不点击**：它走 `dialog:openDirectory`，
+ * 弹的是 OS 级目录面板，e2e 关不掉，整条 spec 会挂死（同 botDialogPane 的「打开 Bots 文件夹」）。
+ */
+export function projectEditPane(main: CdpClient): ProjectEditPane {
+  const PANEL = `[...document.querySelectorAll('.dialog-panel')].find((p) => p.querySelector('input'))`
+  // 弹窗在项目数据到手之前渲染 null，故 isOpen 天然要靠 until 等
+  const isOpen = (): Promise<boolean> => main.eval<boolean>(`${PANEL} !== undefined`)
+  return {
+    waitOpen: async () => {
+      await until(isOpen, 'project edit dialog open')
+    },
+    isOpen,
+    waitClosed: async () => {
+      await until(async () => !(await isOpen()), 'project edit dialog closed')
+    },
+    nameValue: () => main.eval<string>(`${PANEL}?.querySelector('input')?.value ?? ''`),
+    close: async () => {
+      await main.eval(
+        `(() => {
+          window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+          return true
+        })()`
+      )
+      await until(async () => !(await isOpen()), 'project edit dialog closed')
     }
   }
 }

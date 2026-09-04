@@ -293,6 +293,109 @@ export async function installAutoAllow(
   )
 }
 
+/** 捕获到的一次「浏览器下载」 */
+export interface CapturedDownload {
+  /** `<a download>` 的文件名 */
+  download: string
+  /** Blob 的文本内容 */
+  text: string
+}
+
+export interface DownloadCapture {
+  /** 装桩（**在 beforeAll 里装，整文件生效**，理由见 downloadCapture 的说明） */
+  install(): Promise<void>
+  /** 还原原生实现（afterAll） */
+  uninstall(): Promise<void>
+  /** 清掉上一次捕获（每个 it 开头调一次，免得读到上一条用例的文件） */
+  clear(): Promise<void>
+  /** 等下一次下载被捕获并回文件名 + 正文；上界内没有则抛 */
+  wait(timeoutMs?: number): Promise<CapturedDownload>
+  /** 此刻是否已捕获到（「不该下载」的否定断言用） */
+  captured(): Promise<boolean>
+}
+
+/**
+ * 下载出口的桩 —— 扮演浏览器那一端，与 installAutoAllow 同类（顶掉一个 e2e 里没人扮演的角色）。
+ *
+ * 会话导出（`useSessionExport`）最后一跳是 `URL.createObjectURL` + `<a download>` + `a.click()`，
+ * 而桌面主进程**没有** `will-download` 监听 —— 那一击会弹原生「另存为」面板，e2e 关不掉，
+ * 整条 spec 随之挂死。故在渲染端顶两处：createObjectURL（记住 Blob，返回一个假 `blob:e2e-N`）
+ * 与 `HTMLAnchorElement.prototype.click`（**仅当 `download` 非空**时记下并吞掉，其余转调原实现）。
+ *
+ * **必须装在 beforeAll**：若按用例装，中途任何一次抛错都会让后面的导出裸奔一次 ——
+ * 那一次就足以把整个文件挂死在一个没人能关的系统面板上。
+ */
+export function downloadCapture(main: CdpClient): DownloadCapture {
+  const captured = (): Promise<boolean> => main.eval<boolean>(`!!window.__E2E_EXPORT`)
+  return {
+    install: async () => {
+      await main.eval(
+        `(() => {
+          if (window.__E2E_EXPORT_ORIG) return true
+          const origRevoke = URL.revokeObjectURL.bind(URL)
+          const origClick = HTMLAnchorElement.prototype.click
+          window.__E2E_EXPORT_ORIG = {
+            createObjectURL: URL.createObjectURL.bind(URL),
+            revokeObjectURL: origRevoke,
+            click: origClick
+          }
+          window.__E2E_EXPORT = null
+          let seq = 0
+          const blobs = new Map()
+          URL.createObjectURL = (obj) => {
+            const url = 'blob:e2e-' + ++seq
+            blobs.set(url, obj)
+            return url
+          }
+          // 假 URL 交回给我们自己回收；真 URL（别处生成的）照常还给原实现
+          URL.revokeObjectURL = (url) => {
+            if (!blobs.delete(url)) origRevoke(url)
+          }
+          HTMLAnchorElement.prototype.click = function () {
+            if (!this.download) return origClick.call(this)
+            // href 用 getAttribute 取原值：假 blob: URL 不可解析，属性读法会被规范化掉
+            const href = this.getAttribute('href') ?? ''
+            window.__E2E_EXPORT = { download: this.download, href, blob: blobs.get(href) ?? null }
+            return undefined
+          }
+          return true
+        })()`
+      )
+    },
+    uninstall: async () => {
+      await main.eval(
+        `(() => {
+          const orig = window.__E2E_EXPORT_ORIG
+          if (!orig) return true
+          URL.createObjectURL = orig.createObjectURL
+          URL.revokeObjectURL = orig.revokeObjectURL
+          HTMLAnchorElement.prototype.click = orig.click
+          delete window.__E2E_EXPORT_ORIG
+          window.__E2E_EXPORT = null
+          return true
+        })()`
+      )
+    },
+    clear: async () => {
+      await main.eval(`(() => { window.__E2E_EXPORT = null; return true })()`)
+    },
+    captured,
+    wait: (timeoutMs = 10_000) =>
+      until(
+        () =>
+          main.eval<CapturedDownload | null>(
+            `(() => {
+              const hit = window.__E2E_EXPORT
+              if (!hit || !hit.blob) return null
+              return hit.blob.text().then((text) => ({ download: hit.download, text }))
+            })()`
+          ),
+        'a download triggered',
+        timeoutMs
+      )
+  }
+}
+
 /**
  * 等 React 真正挂载（`launchApp` 只等到 preload 的 `window.api`，此后还有 ~1.5s 才上屏）。
  *
