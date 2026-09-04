@@ -822,14 +822,15 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
     expect(warn).not.toHaveBeenCalled()
   })
 
-  // ── protect-bot-notes：唯一一份 force-ask 的内置门 ────────────────────────
+  // ── protect-bot-files：bots 目录写入的 force-ask 内置门 ────────────────────────
   //
-  // 它守的是 `~/.shuvix/bots/` —— agent 唯一会去改**关于它自己**的那份文件。设计 §8.2
-  // 明确接受「每次笔记归纳都撞一张卡」这个代价，所以这一组钉的全是那个代价的形状：
-  // 谁撞、谁不撞、免询问开着还撞不撞、以及撞的时候到底几张卡。
+  // 它守的是 `~/.shuvix/bots/` —— agent 唯一会去改**关于它自己**的那份文件：bot 自己维护
+  // 自己的正文（任务段 agent 在回答半途就地 edit，没人看着）。策略明确接受「每次自我
+  // 编辑都撞一张卡」这个代价，所以这一组钉的全是那个代价的形状：谁撞、谁不撞、
+  // 免询问开着还撞不撞、以及撞的时候到底几张卡。
   //
   // 放在本文件而不是某个 bot 测试里，是因为它是一份**内置策略**：它的判定完全由
-  // md + 引擎决定，与 botService 有没有把笔记派发出去无关。
+  // md + 引擎决定，与 botService 怎样派发任务段无关。
 
   const botFile = (path = '/Users/u/.shuvix/bots/scout.md'): SecurityObject => ({
     type: 'path',
@@ -838,20 +839,20 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
   const autoAllowProvider = (): SecurityHostProvider =>
     makeProvider({ getSessionGrants: () => ({ autoAllow: true, allowList: [] }) })
 
-  it('BP-B1 agent 写 bots 目录 → ask，归因 protect-bot-notes#0（tier 是 force-ask）', () => {
+  it('BP-B1 agent 写 bots 目录 → ask，归因 protect-bot-files#0（tier 是 force-ask）', () => {
     const decision = decide('write', botFile())
     expect(decision.effect).toBe('ask')
-    expect(decision.winning).toBe('protect-bot-notes#0')
+    expect(decision.winning).toBe('protect-bot-files#0')
     // ask-on-write 同样命中（任意写都问）—— 归因取装配序靠前的那条，但 tier 由 force 决定
     expect(decision.matched).toContain('ask-on-write#0')
   })
 
   it('BP-B2 免询问开着照样 ask —— force-ask 压过 session-auto-allow 的 force-allow', () => {
-    // 这是这份策略存在的**全部理由**：笔记段跑在节流之后、没人看着的时候，而一次整份
-    // 重写既可能悄悄丢掉半份笔记，也可能改掉分界线以上的人设。对照组是同一开关下的普通写
+    // 这是这份策略存在的**全部理由**：任务段 agent 在回答你的半途就地改这份文件、没人
+    // 看着，而一次整份重写既可能悄悄丢掉半份记忆，也可能改写人设本身。对照组是同一开关下的普通写
     const provider = autoAllowProvider()
     expect(decide('write', botFile(), { provider }).effect).toBe('ask')
-    expect(decide('write', botFile(), { provider }).winning).toBe('protect-bot-notes#0')
+    expect(decide('write', botFile(), { provider }).winning).toBe('protect-bot-files#0')
     // 对照：工作区里的普通写在同一开关下是放行的 —— 免询问本身没坏，只是盖不住这一道
     expect(decide('write', { type: 'path', path: '/ws/f.txt' }, { provider }).effect).toBe('allow')
   })
@@ -867,7 +868,7 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
     })
     const decision = decide('write', botFile(), { provider })
     expect(decision.effect).toBe('ask')
-    expect(decision.winning).toBe('protect-bot-notes#0')
+    expect(decision.winning).toBe('protect-bot-files#0')
   })
 
   it('BP-B4 force-ask 胜出时不给 rememberEntry —— 不给一个点了不生效的按钮', () => {
@@ -907,7 +908,7 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
     })
     const decision = decide('write', botFile(), { provider, host: 'extension', warn })
     expect(decision.effect).toBe('allow')
-    expect(decision.matched).not.toContain('protect-bot-notes#0')
+    expect(decision.matched).not.toContain('protect-bot-files#0')
     expect(warn).not.toHaveBeenCalled()
   })
 
@@ -925,7 +926,7 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
     ]
     for (const [path, guarded] of table) {
       const decision = decide('write', botFile(path))
-      expect({ path, winning: decision.winning === 'protect-bot-notes#0' }).toEqual({
+      expect({ path, winning: decision.winning === 'protect-bot-files#0' }).toEqual({
         path,
         winning: guarded
       })
@@ -938,15 +939,16 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
     const read = decide('read', botFile())
     expect(read.effect).toBe('ask')
     expect(read.winning).toBe('ask-on-read#0')
-    expect(read.matched).not.toContain('protect-bot-notes#0')
+    expect(read.matched).not.toContain('protect-bot-files#0')
 
     const provider = autoAllowProvider()
     expect(decide('read', botFile(), { provider }).effect).toBe('allow')
   })
 
-  it('BP-B9 一次笔记归纳的账：免询问关着两张卡（read + write），开着一张（只剩 write）', () => {
-    // 策略正文按这个口径记账（D13 修正的就是这句）。笔记段拿的是 read + edit 两个工具，
-    // 而 edit 的写在 apply 层还要过一次 enforcePath —— 所以「两张卡」不是估算，是两次 evaluate
+  it('BP-B9 一次自我编辑的账：免询问关着 read + write 两张卡，开着只剩 write 一张', () => {
+    // 策略正文明写它不管读：正文早在系统提示词里、宿主派发时已 recordRead，自我编辑不必先
+    // read —— 但 agent 若仍去 read，那张卡来自 ask-on-read（区外读），免询问能免掉；write 那张
+    // 才是本策略的，免不掉。edit 的写在 apply 层过一次 enforcePath，所以「一张」是一次 evaluate
     const off = ['read', 'write'].map((a) => decide(a, botFile()).effect)
     expect(off).toEqual(['ask', 'ask'])
 
@@ -955,14 +957,14 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
     expect(on).toEqual(['allow', 'ask'])
   })
 
-  it('BP-B10 询问文案取自 md：写 bots 目录带 protect-bot-notes 那段，且署名在最前', () => {
+  it('BP-B10 询问文案取自 md：写 bots 目录带 protect-bot-files 那段，且署名在最前', () => {
     // 同 tier 只有它自己（ask-on-write 落在下一层 ask，不贡献文案）—— 用户看到的那张卡
     // 只讲「这是一份 bot 自己的定义文件」，不掺一句泛泛的「有人要写文件」
     const decision = decide('write', botFile())
     expect(decision.prompt).toEqual({
-      text: promptOf('protect-bot-notes', 0),
-      rules: ['protect-bot-notes#0'],
-      policies: [displayNameOf('protect-bot-notes')]
+      text: promptOf('protect-bot-files', 0),
+      rules: ['protect-bot-files#0'],
+      policies: [displayNameOf('protect-bot-files')]
     })
   })
 })

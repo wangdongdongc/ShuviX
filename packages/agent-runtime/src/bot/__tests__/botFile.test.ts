@@ -1,19 +1,19 @@
 /**
  * bot 定义文件（`shuvix: bot v1`）的解析 / 序列化契约。
  *
- * bot md 是 **agent md 的超集**：共享六键经 parseAgentSharedFields 与 agent 解析器
- * 逐字同义（SP 组把这一点直接钉成对照表 —— 抽共享函数的全部收益就在那里），
- * 之上加 bot 专属的**管线声明**（pipeline / input）、**开放角色表**（agents）、门控与
- * 表现层键，一条比 agent 更严的规则（**description 必填非空** —— 意图段靠它判断相关性），
- * 以及正文末尾的**笔记区**（纯函数契约在 botNotes.test.ts）。
+ * **一个 bot 是一份绑定：身份 + 管线 + 槽位 + 一篇正文。** 它自己不再是 agent ——
+ * 模型 / 工具 / 指令文件这些是槽位里那份 agent md 的事，写在 bot 上只是被忽略（BX 组）。
+ * 处理方式与 agent md 同族同策：文件类型标记写入恒有、读取可选；未知键忽略；类型不符 =
+ * 整份非法（null + warn 人读原因，**恰一条**）。只有一处比 agent md 严：**description
+ * 必填非空** —— 意图段靠它判断相关性，others 块里别的成员也只靠它认识这个 bot。
  *
- * 一条贯穿全文件的分界线：**定义区硬失败、状态区软失败**。frontmatter 与人设区的任何
- * 类型错误都整份拒绝（BR 组），而笔记区的任何结构异常都只记 warn（BN 组）—— 一次坏的
- * 笔记写入不该把 bot 连人设一起从用户正在用的会话里删掉。
+ * 正文是这个 bot 的**人设与记忆**（可为空 —— 新建的 bot 什么都还没学），由宿主围栏后
+ * 追加到参与执行的每个 agent 的系统提示词末尾（renderBotContext，契约在 botContext.test.ts）。
+ * 没有分界线、没有笔记区、也就没有「状态区软失败」：这一层只剩「定义区硬失败」一种失败，
+ * warn 通道因此恢复了 agent md 的「恰一条诊断」不变式（BR-13）。
  *
  * 分组：
- *   BP 合法形状与缺省 · SP 与 agent md 的共享字段同义 · BR 整份拒绝清单 ·
- *   BN 「接受但有话说」的 warn 纪律（含笔记区软失败）· BX 宽松侧（未知键/裸键/标记）·
+ *   BP 合法形状与缺省 · BR 整份拒绝清单 · BX 宽松侧（未知键 / 退役键 / agent 键 / 裸键 / 标记）·
  *   BS 序列化 · BD 属性卡描述符与解析器的对齐
  *
  * 断言到消息文本时一律用子串/正则而非全等：拒绝理由是 UI 横幅与 IPC error 的唯一
@@ -24,43 +24,27 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import {
-  BOT_RESPOND_MODES as PROTOCOL_RESPOND_MODES,
-  BOT_RESPOND_TO_MODES as PROTOCOL_RESPOND_TO_MODES,
+  BOT_AGENTS_KEY as PROTOCOL_AGENTS_KEY,
+  BOT_PIPELINE_KEY as PROTOCOL_PIPELINE_KEY,
   SHUVIX_MD_DESCRIPTORS
 } from '@shuvix/chat-protocol/shuvixMdDescriptors'
 import { parseAgentDefinitionFile } from '../../agentProfile/definitionFile'
-import { toInProcessAgentType } from '../../subagent/dispatchTool'
 import {
-  BOT_AGENT_REF_PREFIX,
   BOT_AGENTS_KEY,
   BOT_FILE_MARKER,
   BOT_FILE_MARKER_KEY,
-  BOT_GREETING_KEY,
   BOT_INPUT_KEY,
-  BOT_NOTES_KEY,
   BOT_PIPELINE_KEY,
-  BOT_RESPOND_KEY,
-  BOT_RESPOND_MODES,
-  BOT_RESPOND_TO_KEY,
-  BOT_RESPOND_TO_MODES,
-  BOT_SUGGESTIONS_KEY,
   DEFAULT_BOT_PIPELINE,
-  botToInProcessAgentType,
-  parseBotAgentRef,
   parseBotDefinitionFile,
   serializeBotDefinitionFile,
   type ParsedBotFile
 } from '../botFile'
-import { BOT_NOTES_MARKER, splitBotNotes } from '../botNotes'
 
 const md = (...lines: string[]): string => lines.join('\n')
 
-/** 最小合法 bot：description 必填 + 非空正文 */
+/** 最小合法 bot：description 必填 + 一行正文 */
 const bot = (...fm: string[]): string => md('---', 'description: d', ...fm, '---', 'body')
-
-/** 人设 + 一段笔记区的正文（`prose` 为线以下的散文） */
-const bodyWithNotes = (persona: string, ...prose: string[]): string =>
-  md(persona, '', BOT_NOTES_MARKER, '', ...prose, '')
 
 /** 收集一次解析的全部诊断 */
 const parseWithWarn = (
@@ -72,24 +56,27 @@ const parseWithWarn = (
   return { result, messages }
 }
 
-/** 只取拒绝理由（末位那条以 `; the whole file is rejected` 收尾的） */
+/** 只取拒绝理由（恰一条，且以 `; the whole file is rejected` 收尾） */
 const rejectReason = (raw: string, defaultName = 'fn'): string => {
   const { result, messages } = parseWithWarn(raw, defaultName)
   expect(result, raw).toBeNull()
-  const rejects = messages.filter((m) => m.endsWith('; the whole file is rejected'))
-  expect(rejects, raw).toHaveLength(1)
-  return rejects[0]
+  expect(messages, raw).toHaveLength(1)
+  expect(messages[0], raw).toMatch(/; the whole file is rejected$/)
+  return messages[0]
 }
+
+/** ParsedBotFile 的全部字段名（新增字段先在 BS-2 失败） */
+const PARSED_BOT_KEYS = [
+  'agents',
+  'body',
+  'description',
+  'displayName',
+  'name',
+  'pipeline',
+  'pipelineInput'
+]
 
 // ────────────────────────────── BP：合法形状与缺省 ──────────────────────────────
-
-/**
- * 人设 = `systemPrompt` 减去笔记区。解析产物**不存**这个字段（它是切片，存两份就会
- * 各说各话），需要断言「哪半边归谁」的用例在这里自行派生。
- */
-function personaOf(parsed: ParsedBotFile): string {
-  return splitBotNotes(parsed.systemPrompt).persona.trim()
-}
 
 describe('BP —— 解析：合法形状与缺省', () => {
   it('BP-1 最小合法文件（仅 description + 正文）', () => {
@@ -99,219 +86,146 @@ describe('BP —— 解析：合法形状与缺省', () => {
     expect(parsed!.name).toBe('fn')
     expect(parsed!.displayName).toBe('fn')
     expect(parsed!.description).toBe('d')
-    expect(parsed!.systemPrompt).toBe('body')
+    expect(parsed!.body).toBe('body')
   })
 
-  it('BP-2 全字段文件逐字段落位（含管线声明、开放角色表与笔记区）', () => {
-    // 角色表刻意用非「四阶段」的名字（gate）—— 角色集合归管线 workflow 定义，本层只校形状
+  it('BP-2 全字段文件逐字段落位（身份 + 管线声明 + 开放槽位表 + 正文）', () => {
+    // 槽位表刻意混入管线之外的名字（gate）—— 槽位集合归管线 workflow 定义，本层只校形状
     const raw = md(
       '---',
       `${BOT_FILE_MARKER_KEY}: ${BOT_FILE_MARKER}`,
       'name: full-bot',
       'description: does everything',
       'shuvix-displayName: 全能 bot',
-      'shuvix-tools: read, grep',
-      'shuvix-model: openai/gpt-4o',
-      'shuvix-instruction-files: AGENTS.md, CLAUDE.md',
-      'shuvix-project-awareness: true',
       `${BOT_PIPELINE_KEY}: my-pipeline`,
       `${BOT_INPUT_KEY}:`,
       '  tone: terse',
-      `${BOT_RESPOND_KEY}: mention-only`,
-      `${BOT_NOTES_KEY}: false`,
       `${BOT_AGENTS_KEY}:`,
       '  intent: my-intent',
+      '  task: my-task',
       '  gate: my-gate',
-      '  notes: my-notes',
-      `${BOT_GREETING_KEY}: hi there`,
-      `${BOT_SUGGESTIONS_KEY}:`,
-      '  - What changed?',
-      '  - Where is it?',
       '---',
-      bodyWithNotes('Task stage prompt.', '## 关于这个用户', '偏好 pnpm')
+      'Persona paragraph.',
+      '',
+      '## What I learned',
+      '',
+      '- prefers pnpm'
     )
     expect(parseBotDefinitionFile(raw, 'other-name')).toEqual({
       name: 'full-bot',
       displayName: '全能 bot',
       description: 'does everything',
-      // systemPrompt 是**整篇正文**（人设 + 分界线 + 笔记）—— 任务段的 agent 就是这个 bot，
-      // 它当然要知道自己学过什么
-      systemPrompt: md(
-        'Task stage prompt.',
-        '',
-        BOT_NOTES_MARKER,
-        '',
-        '## 关于这个用户',
-        '偏好 pnpm'
-      ),
-      tools: ['read', 'grep'],
-      model: 'openai/gpt-4o',
-      instructionFiles: ['AGENTS.md', 'CLAUDE.md'],
-      projectAwareness: true,
+      // 正文是**整篇**（人设与记忆是同一篇文档的不同段落，没有分界线、没有条目格式）
+      body: md('Persona paragraph.', '', '## What I learned', '', '- prefers pnpm'),
       pipeline: 'my-pipeline',
       pipelineInput: { tone: 'terse' },
-      respond: 'mention-only',
-      respondTo: 'user',
-      notesEnabled: false,
-      agents: { intent: 'my-intent', gate: 'my-gate', notes: 'my-notes' },
-      greeting: 'hi there',
-      suggestions: ['What changed?', 'Where is it?'],
-      // notes 是 systemPrompt 的**派生切片**（线以下那半篇），不是与之并列的另一份内容；
-      // 它本身是**一段普通散文**而不是结构体 —— 不做条目化的全部理由（botNotes 裁决 ①）
-      notes: '## 关于这个用户\n偏好 pnpm'
+      agents: { intent: 'my-intent', task: 'my-task', gate: 'my-gate' }
     })
   })
 
-  it('BP-3 缺省表：respond=auto / notes 开 / agents={} / greeting=空 / suggestions=[]', () => {
-    // 缺省 auto 是行为契约：不写 respond 的 bot 对**每条消息**都跑一次 LLM 门控
+  it('BP-3 缺省表：pipeline=bot-chat / pipelineInput={} / agents={} / displayName=name', () => {
     const parsed = parseBotDefinitionFile(bot(), 'fn')!
-    expect(parsed.respond).toBe('auto')
-    expect(parsed.notesEnabled).toBe(true)
+    expect(parsed.pipeline).toBe(DEFAULT_BOT_PIPELINE)
+    expect(parsed.pipelineInput).toEqual({})
     expect(parsed.agents).toEqual({})
-    expect(parsed.greeting).toBe('')
-    expect(parsed.suggestions).toEqual([])
+    expect(parsed.displayName).toBe(parsed.name)
   })
 
-  it('BP-4 五个 bot 键留空（YAML null）等同省略 —— 编辑器里最常见的中间态不得判非法', () => {
+  it('BP-4 四个键留空（YAML null）等同省略 —— 编辑器里最常见的中间态不得判非法', () => {
     const parsed = parseBotDefinitionFile(
-      bot(
-        `${BOT_RESPOND_KEY}:`,
-        `${BOT_NOTES_KEY}:`,
-        `${BOT_AGENTS_KEY}:`,
-        `${BOT_GREETING_KEY}:`,
-        `${BOT_SUGGESTIONS_KEY}:`
-      ),
+      bot('shuvix-displayName:', `${BOT_PIPELINE_KEY}:`, `${BOT_INPUT_KEY}:`, `${BOT_AGENTS_KEY}:`),
       'fn'
     )
     expect(parsed).not.toBeNull()
-    expect(parsed!.respond).toBe('auto')
-    expect(parsed!.notesEnabled).toBe(true)
+    expect(parsed!.displayName).toBe('fn')
+    expect(parsed!.pipeline).toBe(DEFAULT_BOT_PIPELINE)
+    expect(parsed!.pipelineInput).toEqual({})
     expect(parsed!.agents).toEqual({})
-    expect(parsed!.greeting).toBe('')
-    expect(parsed!.suggestions).toEqual([])
   })
 
-  it('BP-5 shuvix-bot-agents: {} 空映射合法（空映射不是「未知阶段」）', () => {
-    const parsed = parseBotDefinitionFile(bot(`${BOT_AGENTS_KEY}: {}`), 'fn')
+  it('BP-5 shuvix-bot-agents: {} / shuvix-bot-input: {} 空映射合法', () => {
+    const parsed = parseBotDefinitionFile(
+      bot(`${BOT_AGENTS_KEY}: {}`, `${BOT_INPUT_KEY}: {}`),
+      'fn'
+    )
     expect(parsed).not.toBeNull()
     expect(parsed!.agents).toEqual({})
+    expect(parsed!.pipelineInput).toEqual({})
   })
 
-  it('BP-6 值两侧空白被 trim（与 agent md 同策）', () => {
+  it('BP-6 值两侧空白被 trim（name / displayName / description / pipeline / 槽位值）', () => {
     const parsed = parseBotDefinitionFile(
       md(
         '---',
         "name: '  spaced  '",
-        'description: d',
-        `${BOT_GREETING_KEY}: '  hello  '`,
+        "description: '  d  '",
+        "shuvix-displayName: '  Spaced  '",
+        `${BOT_PIPELINE_KEY}: '  my-flow  '`,
         `${BOT_AGENTS_KEY}:`,
         "  intent: '  my-intent  '",
-        `${BOT_SUGGESTIONS_KEY}:`,
-        "  - '  q one  '",
         '---',
         'body'
       ),
       'fn'
     )!
     expect(parsed.name).toBe('spaced')
-    expect(parsed.greeting).toBe('hello')
+    expect(parsed.description).toBe('d')
+    expect(parsed.displayName).toBe('Spaced')
+    expect(parsed.pipeline).toBe('my-flow')
     expect(parsed.agents.intent).toBe('my-intent')
-    expect(parsed.suggestions).toEqual(['q one'])
   })
 
-  it('BP-7 shuvix-bot-notes: false 保真（`?? true` 不得把显式 false 吃掉）', () => {
-    expect(parseBotDefinitionFile(bot(`${BOT_NOTES_KEY}: false`), 'fn')!.notesEnabled).toBe(false)
-  })
-
-  it("RT-1 省略 shuvix-bot-respond-to → 'user'（v1 硬规则的逐字节等价物）", () => {
-    // 缺省是「bot 的回复不触发 bot」——「不写这个键的 bot 存量最多」这件事让它成为一条
-    // 行为契约而不是一个默认值：缺省若哪天改成 'all'，全部存量 bot 会突然开始互相接话
-    expect(parseBotDefinitionFile(bot(), 'fn')!.respondTo).toBe('user')
-  })
-
-  it("RT-2 留空（YAML null）等同省略 → 'user'，不判非法（同 BP-4 的口径）", () => {
-    // 编辑器里最常见的中间态：键敲完了值还没写
-    const parsed = parseBotDefinitionFile(bot(`${BOT_RESPOND_TO_KEY}:`), 'fn')
-    expect(parsed).not.toBeNull()
-    expect(parsed!.respondTo).toBe('user')
-  })
-
-  it.each([['user'], ['all']])('RT-3 显式 %s 各自落位', (mode) => {
-    expect(parseBotDefinitionFile(bot(`${BOT_RESPOND_TO_KEY}: ${mode}`), 'fn')!.respondTo).toBe(
-      mode
+  it('BP-7 正文两端 trim、内部逐字保留；{{shuvix:*}} 原样（替换发生在 createAgent）', () => {
+    const raw = md(
+      '---',
+      'description: d',
+      '---',
+      '',
+      '',
+      'Working dir: {{shuvix:workingDirectory}}',
+      '',
+      '- a list',
+      '',
+      '```js',
+      'const x = 1',
+      '```',
+      '',
+      ''
+    )
+    expect(parseBotDefinitionFile(raw, 'fn')!.body).toBe(
+      md(
+        'Working dir: {{shuvix:workingDirectory}}',
+        '',
+        '- a list',
+        '',
+        '```js',
+        'const x = 1',
+        '```'
+      )
     )
   })
 
-  it.each([
-    ['auto', 'user'],
-    ['auto', 'all'],
-    ['mention-only', 'user'],
-    ['mention-only', 'all']
-  ])('RT-4 两根轴正交（respond=%s × respond-to=%s）', (respond, respondTo) => {
-    // 它们答的是两个不同的问题：respond =「什么条件下我开口」，respond-to =「谁说的话
-    // 算数」。特别是 mention-only × all =「只有别的 bot 点我名我才接话」这一档 ——
-    // 若哪天有人把两轴合并成一个五值枚举，这条先响
-    const parsed = parseBotDefinitionFile(
-      bot(`${BOT_RESPOND_KEY}: ${respond}`, `${BOT_RESPOND_TO_KEY}: ${respondTo}`),
-      'fn'
-    )!
-    expect(parsed.respond).toBe(respond)
-    expect(parsed.respondTo).toBe(respondTo)
+  it('BP-8 **正文可为空**（新建的 bot 什么都还没学；围栏照样渲染，见 botContext）', () => {
+    // 改制前「正文即任务段系统提示词」让空正文整份非法；现在正文是人设与记忆，
+    // 空就是「还没有」—— 任务段 agent 会在第一次学到东西时往里写
+    for (const raw of ['---\ndescription: d\n---\n', '---\ndescription: d\n---\n\n   \n\t\n']) {
+      const { result, messages } = parseWithWarn(raw)
+      expect(result, raw).not.toBeNull()
+      expect(result!.body, raw).toBe('')
+      expect(messages, raw).toEqual([])
+    }
   })
 
-  it('RT-5 两个键名互为前缀但取值互不串扰（YAML 键是全等匹配，不是前缀匹配）', () => {
-    // `shuvix-bot-respond` 是 `shuvix-bot-respond-to` 的真前缀 —— 键查找若哪天改成
-    // startsWith，两个键会互相吃掉对方的值，而症状是「另一根轴莫名其妙地变了」
-    const onlyRespond = parseBotDefinitionFile(bot(`${BOT_RESPOND_KEY}: mention-only`), 'fn')!
-    expect(onlyRespond.respond).toBe('mention-only')
-    expect(onlyRespond.respondTo).toBe('user')
-
-    const onlyRespondTo = parseBotDefinitionFile(bot(`${BOT_RESPOND_TO_KEY}: all`), 'fn')!
-    expect(onlyRespondTo.respondTo).toBe('all')
-    expect(onlyRespondTo.respond).toBe('auto')
-  })
-
-  it('BP-8 正文里的 {{shuvix:*}} 原样保留（替换发生在 createAgent，解析层不动）', () => {
-    const raw = '---\ndescription: d\n---\nWorking dir: {{shuvix:workingDirectory}}'
-    expect(parseBotDefinitionFile(raw, 'fn')!.systemPrompt).toBe(
-      'Working dir: {{shuvix:workingDirectory}}'
-    )
-  })
-
-  it('BP-9 shuvix-bot-agents.task 指定时正文可为空（任务段被整体替换）', () => {
-    const raw = md('---', 'description: d', `${BOT_AGENTS_KEY}:`, '  task: my-task', '---', '')
-    const parsed = parseBotDefinitionFile(raw, 'fn')
-    expect(parsed).not.toBeNull()
-    expect(parsed!.systemPrompt).toBe('')
-  })
-
-  it('BP-10 阶段指向不存在的 agent 不判非法（形状层只管形状，agent 文件可后补）', () => {
-    const parsed = parseBotDefinitionFile(
-      bot(`${BOT_AGENTS_KEY}:`, '  intent: nope-not-a-real-agent'),
-      'fn'
-    )
-    expect(parsed).not.toBeNull()
-    expect(parsed!.agents.intent).toBe('nope-not-a-real-agent')
-  })
-
-  it('BP-11 suggestions 不去重、保序（与 tools 的去重刻意不同：建议问题是展示文案）', () => {
-    const parsed = parseBotDefinitionFile(
-      bot(`${BOT_SUGGESTIONS_KEY}:`, '  - a', '  - a', '  - b'),
-      'fn'
-    )!
-    expect(parsed.suggestions).toEqual(['a', 'a', 'b'])
-  })
-
-  it('BP-12 容忍 BOM 与 CRLF（共享 splitFrontmatter 的能力在 bot 侧同样成立）', () => {
+  it('BP-9 容忍 BOM 与 CRLF（共享 splitFrontmatter 的能力在 bot 侧同样成立）', () => {
     const raw = '\uFEFF---\r\nname: crlf\r\ndescription: windows file\r\n---\r\nbody line\r\n'
     const parsed = parseBotDefinitionFile(raw, 'fn')!
     expect(parsed.name).toBe('crlf')
     expect(parsed.description).toBe('windows file')
-    expect(parsed.systemPrompt).toBe('body line')
-    expect(parsed.systemPrompt).not.toContain('\r')
+    expect(parsed.body).toBe('body line')
+    expect(parsed.body).not.toContain('\r')
   })
 
-  it('BP-13 shuvix-bot-pipeline 缺省 bot-chat；留空 / 显式同值等价，值被 trim', () => {
+  it('BP-10 shuvix-bot-pipeline 缺省 bot-chat；留空 / 显式同值等价', () => {
     for (const fm of [
       [],
       [`${BOT_PIPELINE_KEY}:`],
@@ -321,15 +235,9 @@ describe('BP —— 解析：合法形状与缺省', () => {
         DEFAULT_BOT_PIPELINE
       )
     }
-    expect(parseBotDefinitionFile(bot(`${BOT_PIPELINE_KEY}: '  my-flow  '`), 'fn')!.pipeline).toBe(
-      'my-flow'
-    )
   })
 
-  it('BP-14 shuvix-bot-input 缺省 {}，任意 YAML 值原样透传（格式层不校验内容）', () => {
-    for (const fm of [[], [`${BOT_INPUT_KEY}:`], [`${BOT_INPUT_KEY}: {}`]]) {
-      expect(parseBotDefinitionFile(bot(...fm), 'fn')!.pipelineInput, fm.join()).toEqual({})
-    }
+  it('BP-11 shuvix-bot-input 任意 YAML 映射原样透传（格式层不校验内容）', () => {
     // 它是给管线 workflow 的入参 —— 嵌套映射 / 数组 / null 原样落位
     const parsed = parseBotDefinitionFile(
       bot(`${BOT_INPUT_KEY}:`, '  a:', '    b: [1, 2]', '  n:'),
@@ -338,10 +246,9 @@ describe('BP —— 解析：合法形状与缺省', () => {
     expect(parsed.pipelineInput).toEqual({ a: { b: [1, 2] }, n: null })
   })
 
-  it('BP-15 **开放角色表：任意角色名被接受**（角色集合归管线 workflow 定义）', () => {
-    // 格式层的反转：`reply` 不再是「接受但 v1 忽略」的特例，只是一个普通角色；
-    // `gate` 这种四阶段之外的名字同样合法 —— 把角色枚举写死在格式层，等于让 md 格式
-    // 追着某一份管线的实现走。
+  it('BP-12 **开放槽位表：任意槽位名被接受**，零 warn（槽位集合归管线 workflow 定义）', () => {
+    // 把槽位枚举写死在格式层，等于让 md 格式追着某一份管线的实现走：内置 bot-chat 要
+    // intent / task（可选 recheck），别的管线自有别的槽位
     const { result, messages } = parseWithWarn(
       bot(`${BOT_AGENTS_KEY}:`, '  gate: g', '  reply: r', '  Ok-Role_2: o', '  x-1: x')
     )
@@ -350,7 +257,7 @@ describe('BP —— 解析：合法形状与缺省', () => {
     expect(messages).toEqual([])
   })
 
-  it.each([['a'], ['A'], ['a_b'], ['a-b'], ['Z9']])('BP-16a 合法角色名形状（%s）', (role) => {
+  it.each([['a'], ['A'], ['a_b'], ['a-b'], ['Z9']])('BP-13a 合法槽位名形状（%s）', (role) => {
     expect(
       parseBotDefinitionFile(bot(`${BOT_AGENTS_KEY}:`, `  ${role}: x`), 'fn')!.agents[role]
     ).toBe('x')
@@ -361,256 +268,30 @@ describe('BP —— 解析：合法形状与缺省', () => {
     ['下划线开头', '_x'],
     ['含空格', 'bad role'],
     ['空串', "''"]
-  ])('BP-16b 非法角色名形状（%s）整份拒绝', (_label, role) => {
+  ])('BP-13b 非法槽位名形状（%s）整份拒绝', (_label, role) => {
     const msg = rejectReason(bot(`${BOT_AGENTS_KEY}:`, `  ${role}: x`))
     expect(msg).toContain(`'${BOT_AGENTS_KEY}'`)
-    expect(msg).toContain('is not a valid role name')
+    expect(msg).toContain('is not a valid slot name')
   })
 
-  it('BP-17 **systemPrompt 是整篇正文**（笔记也在其中 —— 那正是笔记存在的意义）', () => {
-    const raw = md(
-      '---',
-      'description: d',
-      '---',
-      bodyWithNotes('PERSONA ONLY', 'secret note line')
-    )
-    const parsed = parseBotDefinitionFile(raw, 'fn')!
-    // 任务段的 agent 就是这个 bot，它当然要知道自己学过什么 —— 整篇正文即它的系统提示词
-    expect(parsed.systemPrompt).toContain('PERSONA ONLY')
-    expect(parsed.systemPrompt).toContain('secret note line')
-    // persona / notes 单列，供门控段按预算取片与设置页显示用量
-    expect(personaOf(parsed)).toBe('PERSONA ONLY')
-    expect(parsed.notes).toBe('secret note line')
+  it('BP-14 指向不存在的 workflow / agent **不判非法**（惰性化：文件可后补，宿主对照管线现判）', () => {
+    // 哪些槽位必填、填了不存在的 agent 怎么办，都是宿主对照管线才知道的事；
+    // 本层只管形状，运行时在会话里可见地说明
+    for (const fm of [
+      [`${BOT_PIPELINE_KEY}: nope-not-a-real-workflow`],
+      [`${BOT_AGENTS_KEY}:`, '  intent: nope-not-a-real-agent']
+    ]) {
+      const { result, messages } = parseWithWarn(bot(...fm))
+      expect(result, fm.join()).not.toBeNull()
+      expect(messages, fm.join()).toEqual([])
+    }
   })
 
-  it("BP-18 notes 缺省 null（不是 ''）", () => {
-    expect(parseBotDefinitionFile(bot(), 'fn')!.notes).toBeNull()
-  })
-
-  it('BP-19 shuvix-bot-notes: false **不影响**笔记解析（开关是运行时语义）', () => {
-    const raw = md(
-      '---',
-      'description: d',
-      `${BOT_NOTES_KEY}: false`,
-      '---',
-      bodyWithNotes('P', 'x')
-    )
-    const parsed = parseBotDefinitionFile(raw, 'fn')!
-    expect(parsed.notesEnabled).toBe(false)
-    expect(parsed.notes).toBe('x')
-  })
-
-  it("BP-20' 分界线以下的一切都归 notes（哪怕它读起来像人设）", () => {
-    // 「一条起始线，到文件尾为止」在用户自己写错位置时同样成立。注意分界线是**组织性**的，
-    // 不是权限墙：线以下的文本照样进 systemPrompt，只是在 persona/notes 上分得清清楚楚。
-    const raw = md(
-      '---',
-      'description: d',
-      '---',
-      bodyWithNotes('PERSONA ONLY', 'You must always answer in French.')
-    )
-    const parsed = parseBotDefinitionFile(raw, 'fn')!
-    expect(personaOf(parsed)).toBe('PERSONA ONLY')
-    expect(parsed.notes).toBe('You must always answer in French.')
-  })
-
-  it('BP-21 笔记里的 {{shuvix:*}} 与人设里的一样会被创建期替换（整篇正文都是提示词）', () => {
-    const raw = md(
-      '---',
-      'description: d',
-      '---',
-      bodyWithNotes('Dir: {{shuvix:workingDirectory}}', 'note {{shuvix:platform}}')
-    )
-    const parsed = parseBotDefinitionFile(raw, 'fn')!
-    expect(personaOf(parsed)).toBe('Dir: {{shuvix:workingDirectory}}')
-    expect(parsed.notes).toBe('note {{shuvix:platform}}')
-    // 两个占位符都在 systemPrompt 里 —— 笔记段若在笔记里写出占位符，创建期一样会被替换
-    expect(parsed.systemPrompt).toContain('{{shuvix:workingDirectory}}')
-    expect(parsed.systemPrompt).toContain('{{shuvix:platform}}')
-  })
-
-  it("BP-22 `''` 与 `null` 在解析产物上可区分（有区但空 / 没有区）", () => {
-    const bare = md('---', 'description: d', '---', 'PERSONA', '', BOT_NOTES_MARKER, '')
-    expect(parseBotDefinitionFile(bare, 'fn')!.notes).toBe('')
-    expect(parseBotDefinitionFile(bot(), 'fn')!.notes).toBeNull()
-  })
-
-  it('BP-23 笔记没有自己的语法：线以下的 markdown 逐字落进 notes', () => {
-    const prose = md(
-      '## 关于这个用户',
-      '',
-      '- 偏好 pnpm',
-      '',
-      '```js',
-      'const x = 1',
-      '```',
-      '',
-      '| a | b |',
-      '| - | - |',
-      '| 1 | 2 |',
-      '',
-      '---',
-      '',
-      '尾注'
-    )
-    const raw = md('---', 'description: d', '---', bodyWithNotes('P', prose))
-    expect(parseBotDefinitionFile(raw, 'fn')!.notes).toBe(prose)
-  })
-
-  it('BP-24 正文与笔记里的 `---` 不重开 frontmatter', () => {
-    const raw = md(
-      '---',
-      'description: d',
-      '---',
-      'PERSONA',
-      '',
-      '---',
-      '',
-      BOT_NOTES_MARKER,
-      '',
-      '---',
-      'note after a rule',
-      ''
-    )
+  it('BP-15 正文里的 `---` 不重开 frontmatter', () => {
+    const raw = md('---', 'description: d', '---', 'PERSONA', '', '---', '', 'after a rule')
     const parsed = parseBotDefinitionFile(raw, 'fn')!
     expect(parsed.description).toBe('d')
-    expect(personaOf(parsed)).toBe('PERSONA\n\n---')
-    expect(parsed.notes).toBe('---\nnote after a rule')
-  })
-})
-
-// ─────────────────── SP：与 agent md 的共享字段逐字同义（防漂移） ───────────────────
-
-/**
- * 同一份 frontmatter 片段分别喂 agent / bot 两个解析器（bot 侧补 description 与正文），
- * 断言共享六键的产物与**拒绝理由原文**一致。parseAgentSharedFields 抽出来的意义就在这里：
- * 两份复制品迟早漂移，而漂移出来的差异没人解释得清。
- */
-describe('SP —— 共享字段与 agent md 逐字同义', () => {
-  /** 共享字段的产物切片（bot 侧多出的 bot 专属键不参与对照） */
-  type Shared = {
-    displayName: string
-    description: string
-    tools: string[]
-    model?: string
-    instructionFiles: string[]
-    projectAwareness: boolean
-  }
-  const sliceShared = (p: {
-    displayName: string
-    description: string
-    tools: string[]
-    model?: string
-    instructionFiles: string[]
-    projectAwareness: boolean
-  }): Shared => ({
-    displayName: p.displayName,
-    description: p.description,
-    tools: p.tools,
-    model: p.model,
-    instructionFiles: p.instructionFiles,
-    projectAwareness: p.projectAwareness
-  })
-
-  /** 同一段 frontmatter 行喂两个解析器（bot 侧恒补 description，agent 侧同样补以求同义） */
-  const both = (
-    ...fm: string[]
-  ): {
-    agent: ReturnType<typeof parseAgentDefinitionFile>
-    bot: ParsedBotFile | null
-    agentMsgs: string[]
-    botMsgs: string[]
-  } => {
-    const text = md('---', 'name: twin', 'description: d', ...fm, '---', 'body')
-    const agentMsgs: string[] = []
-    const botMsgs: string[] = []
-    return {
-      agent: parseAgentDefinitionFile(text, 'twin', (m) => agentMsgs.push(m)),
-      bot: parseBotDefinitionFile(text, 'twin', (m) => botMsgs.push(m)),
-      agentMsgs,
-      botMsgs
-    }
-  }
-
-  /** 两侧同为 null，且拒绝理由除 `agent '…'` / `bot '…'` 前缀外逐字相同 */
-  const expectSameRejection = (...fm: string[]): void => {
-    const { agent, bot: b, agentMsgs, botMsgs } = both(...fm)
-    expect(agent, fm.join('\n')).toBeNull()
-    expect(b, fm.join('\n')).toBeNull()
-    expect(agentMsgs).toHaveLength(1)
-    expect(botMsgs).toHaveLength(1)
-    expect(botMsgs[0].replace(/^bot /, '')).toBe(agentMsgs[0].replace(/^agent /, ''))
-  }
-
-  it('SP-1 tools 归一（大小写 / mcp: / skill: / agent / 去重保序）两侧严格相等', () => {
-    const { agent, bot: b } = both('shuvix-tools: Read, mcp:Context7, skill:x, Agent, read')
-    expect(agent!.tools).toEqual(['read', 'mcp:Context7', 'skill:x', 'agent'])
-    expect(b!.tools).toEqual(agent!.tools)
-  })
-
-  it('SP-2 instruction-files 归一（./ 剥离 / 反斜杠转正斜杠 / 去重保序）两侧相等', () => {
-    const { agent, bot: b } = both(
-      'shuvix-instruction-files: ./AGENTS.md, AGENTS.md, docs\\house.md, CLAUDE.md'
-    )
-    expect(agent!.instructionFiles).toEqual(['AGENTS.md', 'docs/house.md', 'CLAUDE.md'])
-    expect(b!.instructionFiles).toEqual(agent!.instructionFiles)
-  })
-
-  it.each([
-    ['POSIX 绝对路径', '/etc/passwd'],
-    ['Windows 绝对路径', 'C:/secrets.md'],
-    ['越界 ..', '../outside.md'],
-    ['折算后越界', 'a/../../b.md']
-  ])('SP-3 instruction-files 越界（%s）两侧整份拒绝且理由逐字相同', (_label, entry) => {
-    expectSameRejection(`shuvix-instruction-files: ${entry}`)
-    // 回显出错条目 —— 用户照着改才修得好
-    const { botMsgs } = both(`shuvix-instruction-files: ${entry}`)
-    expect(botMsgs[0]).toContain(entry)
-  })
-
-  it.each([
-    ['tools 写成 YAML 列表', 'shuvix-tools: [read, bash]'],
-    ['model 是数字', 'shuvix-model: 4'],
-    ['project-awareness 非布尔', 'shuvix-project-awareness: yes please'],
-    ['instruction-files 布尔（改制前写法）', 'shuvix-instruction-files: true']
-  ])('SP-4 类型不符（%s）两侧整份拒绝且 why 段落逐字相同', (_label, line) => {
-    expectSameRejection(line)
-  })
-
-  it('SP-5 model 原样存取（不拆前缀、不解析模型目录）；省略 / 空串 / 纯空白 = 不声明', () => {
-    const { agent, bot: b } = both('shuvix-model: openrouter/anthropic/claude-3.5')
-    expect(b!.model).toBe('openrouter/anthropic/claude-3.5')
-    expect(b!.model).toBe(agent!.model)
-    for (const line of ['', 'shuvix-model:', "shuvix-model: '   '"]) {
-      const pair = both(...(line ? [line] : []))
-      expect(pair.bot!.model, line).toBeUndefined()
-      expect(pair.agent!.model, line).toBeUndefined()
-    }
-  })
-
-  it('SP-6 project-awareness 布尔往返，缺省 false', () => {
-    expect(both('shuvix-project-awareness: true').bot!.projectAwareness).toBe(true)
-    expect(both().bot!.projectAwareness).toBe(false)
-    expect(both().agent!.projectAwareness).toBe(false)
-  })
-
-  it('SP-7 shuvix-session-awareness 在 bot 侧是未知键（bot 没有「切换为会话档案」概念）', () => {
-    const { agent, bot: b } = both('shuvix-session-awareness: true')
-    expect(agent!.sessionAwareness).toBe(true)
-    // 产物里没有 sessionAwareness 字段，且写了该键不影响合法性
-    expect(b).not.toBeNull()
-    expect(Object.keys(b!)).not.toContain('sessionAwareness')
-  })
-
-  it('SP-合流 六键的产物切片在两侧逐字相等（一次性对照，防将来加键只改一边）', () => {
-    const { agent, bot: b } = both(
-      'shuvix-displayName: 双生',
-      'shuvix-tools: Read, grep',
-      'shuvix-model: openai/gpt-4o',
-      'shuvix-instruction-files: AGENTS.md',
-      'shuvix-project-awareness: true'
-    )
-    expect(sliceShared(b!)).toEqual(sliceShared(agent!))
+    expect(parsed.body).toBe(md('PERSONA', '', '---', '', 'after a rule'))
   })
 })
 
@@ -657,179 +338,25 @@ describe('BR —— 整份拒绝清单（逐条 + warn 人读原因）', () => {
     )
   })
 
-  it('BR-6 shuvix-bot-respond 枚举封闭', () => {
-    const msg = rejectReason(bot(`${BOT_RESPOND_KEY}: sometimes`))
-    expect(msg).toContain(`'${BOT_RESPOND_KEY}' must be one of:`)
-    expect(msg).toContain('auto | mention-only')
-  })
-
   it.each([
-    ['首字母大写', 'Auto'],
-    ['两侧带空白', "' auto '"]
-  ])('BR-7 shuvix-bot-respond 大小写/空白敏感（%s）—— 与 tools 的宽容归一相反', (_label, v) => {
-    // 钉板而非背书：属性卡下拉写出的值当然合法，但手写是 md 家族的一等公民。
-    // 若将来对枚举值也做 trim().toLowerCase() 归一，本例反转为「解析成功」。
-    expect(rejectReason(bot(`${BOT_RESPOND_KEY}: ${v}`))).toContain(`'${BOT_RESPOND_KEY}'`)
-  })
-
-  it('BR-8 shuvix-bot-respond 布尔值同样落枚举分支', () => {
-    expect(rejectReason(bot(`${BOT_RESPOND_KEY}: true`))).toContain('must be one of')
-  })
-
-  it('RT-6 shuvix-bot-respond-to 枚举封闭，理由点名键并回显两个合法值', () => {
-    const msg = rejectReason(bot(`${BOT_RESPOND_TO_KEY}: sometimes`))
-    expect(msg).toContain(`'${BOT_RESPOND_TO_KEY}' must be one of:`)
-    expect(msg).toContain('user | all')
-  })
-
-  it.each([
-    ['首字母大写', 'All'],
-    ['两侧带空白', "' all '"]
-  ])('RT-7 shuvix-bot-respond-to 大小写/空白敏感（%s）—— 同 BR-7 的钉板立场', (_label, v) => {
-    // 钉板而非背书（同 BR-7）：若将来对枚举值统一做 trim().toLowerCase() 归一，本例反转
-    expect(rejectReason(bot(`${BOT_RESPOND_TO_KEY}: ${v}`))).toContain(`'${BOT_RESPOND_TO_KEY}'`)
-  })
-
-  it.each([
-    ['布尔（`yes` 会被 YAML 读成 true）', 'yes'],
-    ['显式布尔', 'true'],
-    ['列表', '[all]']
-  ])('RT-8 shuvix-bot-respond-to 非字符串（%s）同样落枚举分支', (_label, v) => {
-    expect(rejectReason(bot(`${BOT_RESPOND_TO_KEY}: ${v}`))).toContain('must be one of')
-  })
-
-  it.each([
-    ['非布尔字符串', 'yes please'],
-    ['引号包住的 true', '"true"'],
-    ['列表', '[true]']
-  ])('BR-9 shuvix-bot-notes 仅接受布尔（%s）', (_label, v) => {
-    const msg = rejectReason(bot(`${BOT_NOTES_KEY}: ${v}`))
-    expect(msg).toContain(`'${BOT_NOTES_KEY}' must be a boolean`)
-    expect(msg).toContain('true / false')
-  })
-
-  it.each([
-    ['列表', '[a, b]'],
-    ['字符串', 'my-agent']
-  ])('BR-10 shuvix-bot-agents 必须是映射（%s）', (_label, v) => {
-    expect(rejectReason(bot(`${BOT_AGENTS_KEY}: ${v}`))).toContain(
-      `'${BOT_AGENTS_KEY}' must be a mapping of role → agent name`
-    )
-  })
-
-  it.each([
-    ['空串', "''"],
-    ['留空（YAML null）', ''],
     ['数字', '42'],
-    ['嵌套映射', '{ nested: x }']
-  ])('BR-12 角色值必须是 agent 名（%s）', (_label, v) => {
-    expect(rejectReason(bot(`${BOT_AGENTS_KEY}:`, `  intent: ${v}`))).toContain(
-      `'${BOT_AGENTS_KEY}.intent' must be an agent name`
+    ['布尔', 'true'],
+    ['列表', '[a]']
+  ])('BR-6 description 非字符串（%s）→ 点名 description 必须是字符串', (_label, v) => {
+    // 与「缺失」分开报：`description: 42` 是写了但写错了形状，提示「必填」会让人去补第二个
+    expect(rejectReason(md('---', 'name: x', `description: ${v}`, '---', 'body'))).toContain(
+      "'description' must be a string"
     )
   })
 
   it.each([
-    ['列表', '[x]'],
-    ['数字', '7']
-  ])('BR-13 shuvix-bot-greeting 必须是字符串（%s）', (_label, v) => {
-    expect(rejectReason(bot(`${BOT_GREETING_KEY}: ${v}`))).toContain(
-      `'${BOT_GREETING_KEY}' must be a string`
+    ['数字', '42'],
+    ['布尔', 'true'],
+    ['列表', '[a]']
+  ])('BR-7 shuvix-displayName 非字符串（%s）', (_label, v) => {
+    expect(rejectReason(bot(`shuvix-displayName: ${v}`))).toContain(
+      "'shuvix-displayName' must be a string"
     )
-  })
-
-  it('BR-14 shuvix-bot-suggestions 写成逗号串非法 —— 与 tools 刻意相反', () => {
-    // 建议问题是整句，逗号是它的正常内容，故这里唯一合法写法是 YAML 块序列
-    expect(rejectReason(bot(`${BOT_SUGGESTIONS_KEY}: a, b`))).toContain(
-      `'${BOT_SUGGESTIONS_KEY}' must be a list of strings`
-    )
-  })
-
-  it.each([
-    ['空串条目', "  - ''"],
-    ['纯空白条目', "  - '   '"],
-    ['非字符串条目', '  - 42']
-  ])('BR-15 suggestions 条目必须是非空字符串（%s）', (_label, entry) => {
-    expect(rejectReason(bot(`${BOT_SUGGESTIONS_KEY}:`, '  - ok', entry))).toContain(
-      `'${BOT_SUGGESTIONS_KEY}' entries must be non-empty strings`
-    )
-  })
-
-  it('BR-16 正文为空且无 agents.task —— 「正文即任务段系统提示词」的执行机制', () => {
-    const msg = rejectReason('---\ndescription: d\n---\n')
-    expect(msg).toContain("the body is the task stage's system prompt")
-    expect(msg).toContain(`point '${BOT_AGENTS_KEY}.task' at an agent`)
-  })
-
-  it('BR-17 正文仅空白/换行 → trim 后为空，同判', () => {
-    expect(rejectReason('---\ndescription: d\n---\n\n   \n\t\n')).toContain(
-      "the body is the task stage's system prompt"
-    )
-  })
-
-  it('BR-18 who 的取舍：字段级失败报 frontmatter name，早期失败报 basename', () => {
-    expect(
-      rejectReason(
-        md('---', 'name: real-name', 'description: d', 'shuvix-tools: [x]', '---', 'b'),
-        'file.md'
-      )
-    ).toContain("bot 'real-name'")
-    expect(rejectReason('name: real-name\nbody', 'file.md')).toContain("bot 'file.md'")
-  })
-
-  it('BR-19 拒绝完整性守卫：rejected 收尾的诊断恰一条，且恒在**末位**', () => {
-    // 末位这条不变式是本轮新加的：笔记区的软 warn 会与拒绝理由同列（BN-4），
-    // 消费方（botService.parseForWrite 把 messages join 成 error）依赖「最后一行是原因」。
-    const rejected = [
-      'just a plain markdown body',
-      '# Title\n\n---\nname: mid\ndescription: d\n---\nbody',
-      '---\n[unclosed\n---\nbody',
-      '---\n- a\n- b\n---\nbody',
-      '---\njust a scalar\n---\nbody',
-      '---\nname: x\n---\nbody',
-      "---\nname: x\ndescription: '   '\n---\nbody",
-      bot('shuvix-tools: [read]'),
-      bot('shuvix-model: 4'),
-      bot('shuvix-instruction-files: true'),
-      bot('shuvix-instruction-files: ../outside.md'),
-      bot('shuvix-project-awareness: yes please'),
-      bot(`${BOT_RESPOND_KEY}: sometimes`),
-      bot(`${BOT_RESPOND_KEY}: Auto`),
-      // RT-9：第二根轴的非法样本也进这张总表 —— 消费方 botService.parseForWrite 依赖
-      // 「最后一行是原因」，新键的拒绝路径同样得守住这条不变式
-      bot(`${BOT_RESPOND_TO_KEY}: sometimes`),
-      bot(`${BOT_RESPOND_TO_KEY}: All`),
-      bot(`${BOT_RESPOND_TO_KEY}: [all]`),
-      bot(`${BOT_NOTES_KEY}: yes please`),
-      bot(`${BOT_AGENTS_KEY}: [a]`),
-      bot(`${BOT_AGENTS_KEY}:`, '  "bad role": x'),
-      bot(`${BOT_AGENTS_KEY}:`, '  _x: y'),
-      bot(`${BOT_AGENTS_KEY}:`, '  intent: 42'),
-      bot(`${BOT_PIPELINE_KEY}: 3`),
-      bot(`${BOT_INPUT_KEY}: [a]`),
-      bot(`${BOT_GREETING_KEY}: [x]`),
-      bot(`${BOT_SUGGESTIONS_KEY}: a, b`),
-      bot(`${BOT_SUGGESTIONS_KEY}:`, "  - ''"),
-      '---\ndescription: d\n---\n',
-      // 分界线写在正文顶端 → 人设为空 → 整份拒绝（BN-7 的缺口）
-      md('---', 'description: d', '---', BOT_NOTES_MARKER, 'everything', '')
-    ]
-    for (const raw of rejected) {
-      const { result, messages } = parseWithWarn(raw, 'guard.md')
-      expect(result, raw).toBeNull()
-      const rejects = messages.filter((m) => m.endsWith('; the whole file is rejected'))
-      expect(rejects, raw).toHaveLength(1)
-      expect(messages[messages.length - 1], raw).toMatch(/; the whole file is rejected$/)
-      // [\s\S] 而非 . —— YAML 语法错的原因本身是多行代码框
-      expect(rejects[0], raw).toMatch(/^bot '.+': [\s\S]+; the whole file is rejected$/)
-    }
-  })
-
-  it('BR-20 warn 是可选参数：不传时不抛、返回值一致', () => {
-    const invalid = bot(`${BOT_RESPOND_KEY}: sometimes`)
-    const valid = bot(`${BOT_RESPOND_KEY}: mention-only`)
-    expect(() => parseBotDefinitionFile(invalid, 'fn')).not.toThrow()
-    expect(parseBotDefinitionFile(invalid, 'fn')).toBeNull()
-    expect(parseBotDefinitionFile(valid, 'fn')).toEqual(parseWithWarn(valid).result)
   })
 
   it.each([
@@ -837,7 +364,7 @@ describe('BR —— 整份拒绝清单（逐条 + warn 人读原因）', () => {
     ['列表', '[a, b]'],
     ['映射', '{a: 1}'],
     ['纯空白', "'  '"]
-  ])('BR-21 shuvix-bot-pipeline 必须是非空字符串（%s）', (_label, v) => {
+  ])('BR-8 shuvix-bot-pipeline 必须是非空字符串（%s）', (_label, v) => {
     expect(rejectReason(bot(`${BOT_PIPELINE_KEY}: ${v}`))).toContain(
       `'${BOT_PIPELINE_KEY}' must be the name of a workflow`
     )
@@ -847,188 +374,78 @@ describe('BR —— 整份拒绝清单（逐条 + warn 人读原因）', () => {
     ['列表', '[a]'],
     ['字符串', 'my-input'],
     ['数字', '7']
-  ])('BR-22 shuvix-bot-input 必须是映射（%s）', (_label, v) => {
+  ])('BR-9 shuvix-bot-input 必须是映射（%s）', (_label, v) => {
     expect(rejectReason(bot(`${BOT_INPUT_KEY}: ${v}`))).toContain(
       `'${BOT_INPUT_KEY}' must be a mapping of parameters for the pipeline workflow`
     )
   })
 
-  it('BR-23 引用不存在的 workflow / agent **不判非法**（惰性化，同 workflow 未知埋点）', () => {
-    // 管线 md 与角色 agent md 都可以后补；本层只管形状，运行时才回落缺省
-    for (const fm of [
-      [`${BOT_PIPELINE_KEY}: nope-not-a-real-workflow`],
-      [`${BOT_AGENTS_KEY}:`, '  intent: nope-not-a-real-agent']
-    ]) {
-      const { result, messages } = parseWithWarn(bot(...fm))
-      expect(result, fm.join()).not.toBeNull()
-      expect(messages, fm.join()).toEqual([])
-    }
-  })
-})
-
-// ─────────────────── BN：「接受但有话说」的 warn 通道纪律 ───────────────────
-
-describe('BN —— 接受但有话说的 warn 纪律', () => {
-  it('BN-2 agents.task + 非空正文 → 正文被弃用必须说出来', () => {
-    const { result, messages } = parseWithWarn(bot(`${BOT_AGENTS_KEY}:`, '  task: my-task'))
-    expect(result).not.toBeNull()
-    expect(messages).toHaveLength(1)
-    expect(messages[0]).toContain('replaces the task stage — the body is not used')
-  })
-
-  it('BN-3 合法且无话可说的文件彻底安静（一条 warn 就会点亮属性卡的告警徽章）', () => {
-    // BP-2 的全字段样本声明了 agents.task，必然带一条提示 —— 这里取「全字段但角色表
-    // 不含 task」的变体，它才是「全都写了却无话可说」的那份（含管线声明与一段合法笔记）。
-    // 合法的笔记区**一条 warn 都不许有**：旧的成对围栏设计里空区/无条目都会说话，
-    // 一条起始线把那整类噪音消掉了。
-    const quietFull = md(
-      '---',
-      `${BOT_FILE_MARKER_KEY}: ${BOT_FILE_MARKER}`,
-      'name: quiet',
-      'description: d',
-      'shuvix-displayName: Quiet',
-      'shuvix-tools: read',
-      'shuvix-model: openai/gpt-4o',
-      'shuvix-instruction-files: AGENTS.md',
-      'shuvix-project-awareness: true',
-      `${BOT_PIPELINE_KEY}: my-pipeline`,
-      `${BOT_INPUT_KEY}:`,
-      '  tone: terse',
-      `${BOT_RESPOND_KEY}: mention-only`,
-      `${BOT_NOTES_KEY}: false`,
-      `${BOT_AGENTS_KEY}:`,
-      '  intent: my-intent',
-      '  notes: my-notes',
-      `${BOT_GREETING_KEY}: hi`,
-      `${BOT_SUGGESTIONS_KEY}:`,
-      '  - q',
-      '---',
-      bodyWithNotes('body', '## 关于这个用户', '偏好 pnpm')
+  it.each([
+    ['列表', '[a, b]'],
+    ['字符串', 'my-agent'],
+    ['数字', '5']
+  ])('BR-10 shuvix-bot-agents 必须是映射（%s）', (_label, v) => {
+    expect(rejectReason(bot(`${BOT_AGENTS_KEY}: ${v}`))).toContain(
+      `'${BOT_AGENTS_KEY}' must be a mapping of slot → agent name`
     )
-    for (const raw of ['---\ndescription: d\n---\nbody', bot(), quietFull]) {
-      const { result, messages } = parseWithWarn(raw)
-      expect(result, raw).not.toBeNull()
-      expect(messages, raw).toEqual([])
-    }
   })
 
-  it('BN-4 提示与拒绝同时出现：提示在前、拒绝在末位（bot 的 warn 通道混装两类消息）', () => {
-    // agent 侧「恰一条诊断」的不变式在 bot 上不成立 —— 消费方若整段 join 当 error 上抛，
-    // 用户会先读到一句与错误无关的提示。唯一可达这一形状的输入是「多条分界线 +
-    // 分界线写在正文顶端（人设为空）」，因为 frontmatter 级失败会短路在正文切分之前（BN-9）。
-    const { result, messages } = parseWithWarn(
-      md('---', 'description: d', '---', BOT_NOTES_MARKER, 'a', BOT_NOTES_MARKER, 'b', '')
+  it.each([
+    ['空串', "''"],
+    ['留空（YAML null）', ''],
+    ['数字', '42'],
+    ['嵌套映射', '{ nested: x }']
+  ])('BR-11 槽位值必须是 agent 名（%s）', (_label, v) => {
+    expect(rejectReason(bot(`${BOT_AGENTS_KEY}:`, `  intent: ${v}`))).toContain(
+      `'${BOT_AGENTS_KEY}.intent' must be an agent name`
     )
-    expect(result).toBeNull()
-    expect(messages).toHaveLength(2)
-    expect(messages[0]).toContain('notes:')
-    expect(messages[0]).not.toContain('the whole file is rejected')
-    // 以 rejected 收尾的恰一条，且在末位
-    expect(messages.filter((m) => m.endsWith('; the whole file is rejected'))).toHaveLength(1)
-    expect(messages[messages.length - 1]).toMatch(/; the whole file is rejected$/)
   })
 
-  it.each([['多条分界线', [BOT_NOTES_MARKER, 'NOTETEXT', BOT_NOTES_MARKER, 'NOTETEXT2']]])(
-    'BN-6 笔记区异常总表（%s）：文件恒合法、人设不受影响',
-    (_label, region) => {
-      // 这张表从**六行缩到一行**：开而未闭 / 闭在开前 / 多闭锚点 / 坏条目锚点 / 空区 /
-      // 重复 slug 六类异常，随「一条起始线 + 笔记没有自己的语法」整体消失，只剩「多条线」。
-      // 裁决不变：定义区硬失败、**状态区软失败** —— 一次坏的笔记写入不该把 bot 连人设
-      // 一起从用户正在用的会话里删掉。
-      const { result, messages } = parseWithWarn(
-        md('---', 'name: soft', 'description: d', '---', 'PERSONA', '', ...region, '')
+  it('BR-12 who 的取舍：字段级失败报 frontmatter name，早期失败报 basename', () => {
+    expect(
+      rejectReason(
+        md('---', 'name: real-name', 'description: d', `${BOT_AGENTS_KEY}: 5`, '---', 'b'),
+        'file.md'
       )
-      expect(result).not.toBeNull()
-      expect(personaOf(result!).startsWith('PERSONA')).toBe(true)
-      // 笔记正文一个字都不得漏进任务段系统提示词
-      expect(personaOf(result!)).not.toContain('NOTETEXT')
-      expect(personaOf(result!)).not.toContain(BOT_NOTES_MARKER)
-      expect(messages.length).toBeGreaterThan(0)
-      for (const m of messages) {
-        expect(m).toMatch(/^bot 'soft': notes: /)
-        expect(m).not.toMatch(/; the whole file is rejected$/)
-      }
-    }
-  )
-
-  it('BN-7 **缺口：分界线写在正文顶端 → 整份拒绝**（软失败被「人设非空」硬规则击穿）', () => {
-    // 「正文得有东西」这条硬规则按**人设**（分界线之上）判，而分界线之上什么都没有 ——
-    // 于是一份只有笔记的文件整份非法，笔记区的软失败在这里被击穿。可达路径有两条：
-    // 用户手写时把分界线放到了正文顶端，或笔记段（它拿 read/edit 就地改这份 md）
-    // 把线以上的人设删干净了。
-    const onlyNotes = md('---', 'description: d', '---', BOT_NOTES_MARKER, 'ALL OF IT', '')
-    const { result, messages } = parseWithWarn(onlyNotes)
-    expect(result).toBeNull()
-    expect(messages[messages.length - 1]).toContain("the body is the task stage's system prompt")
-    expect(messages[messages.length - 1]).toMatch(/; the whole file is rejected$/)
-
-    // 对照：同一形状 + agents.task → 合法。这条硬规则针对的是「没有任务段提示词」，
-    // 与笔记区无关（BP-9 的推论）。
-    const withTask = md(
-      '---',
-      'description: d',
-      `${BOT_AGENTS_KEY}:`,
-      '  task: t',
-      '---',
-      BOT_NOTES_MARKER,
-      'ALL OF IT',
-      ''
-    )
-    const parsed = parseBotDefinitionFile(withTask, 'fn')
-    expect(parsed).not.toBeNull()
-    // 被判的是人设为空；systemPrompt 仍是整篇正文（笔记连同分界线都在其中）
-    expect(personaOf(parsed!)).toBe('')
-    expect(parsed!.systemPrompt).toBe(md(BOT_NOTES_MARKER, 'ALL OF IT'))
-    expect(parsed!.notes).toBe('ALL OF IT')
+    ).toContain("bot 'real-name'")
+    expect(rejectReason('name: real-name\nbody', 'file.md')).toContain("bot 'file.md'")
   })
 
-  it('BN-8 多条 anomaly 逐条上报、互不吞没', () => {
-    // 三条分界线 → 恰两条 anomaly。注：两条文案完全相同且不含行号，
-    // 消费方（botService.parseForWrite）把 messages join 当 error 上抛，用户会看到
-    // 两行一模一样的话 —— 加个位置很便宜，值得改。
-    const { result, messages } = parseWithWarn(
-      md(
-        '---',
-        'description: d',
-        '---',
-        'PERSONA',
-        BOT_NOTES_MARKER,
-        'x',
-        BOT_NOTES_MARKER,
-        'y',
-        BOT_NOTES_MARKER,
-        'z',
-        ''
-      )
-    )
-    expect(result).not.toBeNull()
-    expect(messages).toHaveLength(2)
-    for (const m of messages) {
-      expect(m).toMatch(/more than one/)
-      expect(m).not.toContain('the whole file is rejected')
+  it('BR-13 拒绝完整性守卫：每条拒绝路径恰一条诊断，且形状固定', () => {
+    // 没有软失败通道之后，agent 侧「恰一条诊断」的不变式在 bot 上重新成立 ——
+    // 消费方（botService.parseForWrite 把 messages join 成 error）读到的永远就是那一句原因
+    const rejected = [
+      'just a plain markdown body',
+      '# Title\n\n---\nname: mid\ndescription: d\n---\nbody',
+      '---\n[unclosed\n---\nbody',
+      '---\n- a\n- b\n---\nbody',
+      '---\njust a scalar\n---\nbody',
+      '---\nname: x\n---\nbody',
+      "---\nname: x\ndescription: '   '\n---\nbody",
+      '---\nname: x\ndescription: 42\n---\nbody',
+      bot('shuvix-displayName: [x]'),
+      bot(`${BOT_PIPELINE_KEY}: 3`),
+      bot(`${BOT_INPUT_KEY}: [a]`),
+      bot(`${BOT_AGENTS_KEY}: [a]`),
+      bot(`${BOT_AGENTS_KEY}:`, '  "bad role": x'),
+      bot(`${BOT_AGENTS_KEY}:`, '  _x: y'),
+      bot(`${BOT_AGENTS_KEY}:`, '  intent: 42')
+    ]
+    for (const raw of rejected) {
+      const { result, messages } = parseWithWarn(raw, 'guard.md')
+      expect(result, raw).toBeNull()
+      expect(messages, raw).toHaveLength(1)
+      // [\s\S] 而非 . —— YAML 语法错的原因本身是多行代码框
+      expect(messages[0], raw).toMatch(/^bot '.+': [\s\S]+; the whole file is rejected$/)
     }
   })
 
-  it('BN-9 硬拒绝短路在软提示之前（frontmatter 级失败发生在正文切分之前）', () => {
-    // 所以「混装两类消息」（BN-4）其实是罕见形状：大多数拒绝根本走不到正文切分
-    const { result, messages } = parseWithWarn(
-      md(
-        '---',
-        'description: d',
-        `${BOT_GREETING_KEY}: [x]`,
-        '---',
-        'PERSONA',
-        BOT_NOTES_MARKER,
-        'x',
-        BOT_NOTES_MARKER,
-        'y',
-        ''
-      )
-    )
-    expect(result).toBeNull()
-    expect(messages).toHaveLength(1)
-    expect(messages[0]).toContain(`'${BOT_GREETING_KEY}' must be a string`)
-    expect(messages.some((m) => m.includes('notes:'))).toBe(false)
+  it('BR-14 warn 是可选参数：不传时不抛、返回值一致', () => {
+    const invalid = bot(`${BOT_AGENTS_KEY}: 5`)
+    const valid = bot(`${BOT_AGENTS_KEY}:`, '  intent: i')
+    expect(() => parseBotDefinitionFile(invalid, 'fn')).not.toThrow()
+    expect(parseBotDefinitionFile(invalid, 'fn')).toBeNull()
+    expect(parseBotDefinitionFile(valid, 'fn')).toEqual(parseWithWarn(valid).result)
   })
 })
 
@@ -1051,49 +468,96 @@ describe('BX —— 宽松侧（与 agent md 同口径）', () => {
     }
   )
 
-  it('BX-3 无前缀陌生键忽略（tools / whenToUse / shuvix-builtin）', () => {
-    const parsed = parseBotDefinitionFile(
-      bot('tools: Read, Grep', 'whenToUse: old style', 'shuvix-builtin: true'),
-      'fn'
-    )!
-    // 通用 tools key 是其他 app 的语义 —— 忽略，白名单仍为空
-    expect(parsed.tools).toEqual([])
+  it('BX-3 无前缀陌生键忽略（tools / whenToUse / shuvix-builtin），零 warn', () => {
+    const { result, messages } = parseWithWarn(
+      bot('tools: Read, Grep', 'whenToUse: old style', 'shuvix-builtin: true')
+    )
+    expect(result).not.toBeNull()
+    expect(messages).toEqual([])
+    expect(Object.keys(result!).sort()).toEqual(PARSED_BOT_KEYS)
   })
 
-  it('BX-4 裸键 respond / notes / agents 被**静默忽略**（文档说整份非法，实现是忽略）', () => {
-    // 风险钉板：从 Coze/Dify 风格 YAML 迁移过来的人最可能写裸键，而用户以为生效的
-    // 配置被丢掉 —— 得到的是一个「对每条消息都跑 LLM 门控」的 auto bot。
-    const parsed = parseBotDefinitionFile(
-      bot('respond: mention-only', 'notes: false', 'agents: { intent: x }'),
-      'fn'
-    )!
-    expect(parsed.respond).toBe('auto')
-    expect(parsed.notesEnabled).toBe(true)
-    expect(parsed.agents).toEqual({})
+  it.each([
+    ['shuvix-bot-respond', 'sometimes'],
+    ['shuvix-bot-respond-to', '[all]'],
+    ['shuvix-bot-notes', 'yes please'],
+    ['shuvix-bot-greeting', '[x]'],
+    ['shuvix-bot-suggestions', 'a, b']
+  ])('BX-4 退役键 %s 是普通未知键：连改制前的非法值也只是被忽略', (key, value) => {
+    // 这些键连同门控轴 / 笔记 / 开场白 / 建议问题一起退役了。存量文件里写着它们的 bot
+    // 必须照常可用 —— 判非法等于让一次升级把用户正在用的 bot 从会话里删掉。
+    // 值刻意取改制前会整份拒绝的形状：现在它只是一个没人读的键
+    const { result, messages } = parseWithWarn(bot(`${key}: ${value}`))
+    expect(result, key).not.toBeNull()
+    expect(messages, key).toEqual([])
+    // 产物里也没有它们的影子（respond / notesEnabled / greeting / suggestions 都不再是字段）
+    expect(Object.keys(result!).sort(), key).toEqual(PARSED_BOT_KEYS)
   })
 
-  it('BX-5 未知 shuvix-bot-* 键被静默忽略（拼错一个字母就静默成 auto bot）', () => {
-    const parsed = parseBotDefinitionFile(
-      bot('shuvix-bot-respnd: mention-only', 'shuvix-bot-unknown: 1'),
-      'fn'
-    )!
-    expect(parsed.respond).toBe('auto')
+  it('BX-5 **agent md 的键写在 bot 上被忽略**（bot 是绑定不是 agent），同一段在 agent 侧却非法', () => {
+    // 模型 / 工具 / 指令文件 / 项目感知 / 会话感知归槽位里那份 agent md。
+    // 值同样刻意取 agent 解析器会拒绝的形状（列表 tools、数字 model、越界指令文件、
+    // 非布尔开关）—— 证明这里不是「宽容地解析了」，而是压根不读
+    const agentKeys = [
+      'shuvix-tools: [read, bash]',
+      'shuvix-model: 4',
+      'shuvix-instruction-files: ../outside.md',
+      'shuvix-project-awareness: yes please',
+      'shuvix-session-awareness: true'
+    ]
+    const { result, messages } = parseWithWarn(bot(...agentKeys))
+    expect(result).not.toBeNull()
+    expect(messages).toEqual([])
+    for (const leak of [
+      'tools',
+      'model',
+      'instructionFiles',
+      'projectAwareness',
+      'sessionAwareness'
+    ]) {
+      expect(result, leak).not.toHaveProperty(leak)
+    }
+    // 对照：同一段 frontmatter 喂 agent 解析器 → 整份非法（这些键在那边才有语义）
+    expect(parseAgentDefinitionFile(bot(...agentKeys), 'fn')).toBeNull()
   })
 
-  it("RT-10 裸键 respond-to 被**静默忽略** → 回落 'user'，零 warn", () => {
-    // 风险钉板：用户以为开了接力，实际得到的是一个「永远不接别的 bot 的话」的 bot，
-    // 而全链路一句提示都没有 —— 它不会报错、不会进决策日志，只是永远不说话
-    const { result, messages } = parseWithWarn(bot('respond-to: all'))
-    expect(result!.respondTo).toBe('user')
+  it('BX-6 裸键 pipeline / input / agents 被**静默忽略** → 全部回落缺省，零 warn', () => {
+    // 风险钉板：从别家 YAML 迁移过来的人最可能写裸键，而用户以为生效的配置被丢掉 ——
+    // 得到的是一个「跑内置 bot-chat、一个槽位都没填」的 bot，运行时才在会话里报槽位缺失
+    const { result, messages } = parseWithWarn(
+      bot('pipeline: my-flow', 'input: { tone: terse }', 'agents: { intent: x }')
+    )
+    expect(result!.pipeline).toBe(DEFAULT_BOT_PIPELINE)
+    expect(result!.pipelineInput).toEqual({})
+    expect(result!.agents).toEqual({})
     expect(messages).toEqual([])
   })
 
-  it.each([['shuvix-bot-respondto'], ['shuvix-bot-respond_to'], ['shuvix-bot-respond-To']])(
-    "RT-11 拼错前缀（%s）同样静默忽略并回落 'user'",
+  it.each([['shuvix-bot-agent'], ['shuvix-bot-Agents'], ['shuvix-bot_agents']])(
+    'BX-7 拼错前缀（%s）同样静默忽略 → agents 为空（拼错一个字母就静默成没填槽位）',
     (key) => {
-      expect(parseBotDefinitionFile(bot(`${key}: all`), 'fn')!.respondTo).toBe('user')
+      expect(parseBotDefinitionFile(bot(`${key}: { intent: x }`), 'fn')!.agents).toEqual({})
     }
   )
+
+  it('BX-8 旧的笔记分界线只是一行普通正文：逐字进 body，零 warn（笔记区这个概念不存在了）', () => {
+    // 存量 bot 的正文里还留着 `<!-- shuvix:bot-notes -->`。它现在既不切分正文也不触发
+    // 任何软告警 —— 人设和记忆是同一篇文档的不同段落，那条线读起来就是一条 HTML 注释
+    const raw = md(
+      '---',
+      'description: d',
+      '---',
+      'PERSONA',
+      '',
+      '<!-- shuvix:bot-notes -->',
+      '',
+      'old note line'
+    )
+    const { result, messages } = parseWithWarn(raw)
+    expect(result).not.toBeNull()
+    expect(messages).toEqual([])
+    expect(result!.body).toBe(md('PERSONA', '', '<!-- shuvix:bot-notes -->', '', 'old note line'))
+  })
 })
 
 // ────────────────────────────── BS：序列化 ──────────────────────────────
@@ -1103,55 +567,12 @@ const FULL: ParsedBotFile = {
   name: 'reviewer-bot',
   displayName: '审查 bot',
   description: 'Reviews things: thoroughly, and with edge-cases.',
-  systemPrompt: 'You are a reviewer.\n\n- be thorough\n- cite lines',
-  tools: ['read', 'grep', 'mcp:Context7', 'skill:pdf', 'agent'],
-  model: 'openrouter/anthropic/claude-3.5',
-  instructionFiles: ['AGENTS.md', 'docs/house-rules.md'],
-  projectAwareness: true,
+  body: 'You are a reviewer.\n\n- be thorough\n- cite lines\n\n## Learned\n\n- prefers pnpm',
   pipeline: 'my-pipeline',
   pipelineInput: { tone: 'terse' },
-  respond: 'mention-only',
-  // 刻意取非缺省值：'user' 是缺省，序列化器会省略它，那样 BS-1 / BS-4 / BS-10 就都
-  // 覆盖不到这个键（「全字段非缺省样本」这个夹具的意义正在于此）
-  respondTo: 'all',
-  notesEnabled: false,
-  agents: { intent: 'my-intent', task: 'my-task', reply: 'my-reply', notes: 'my-notes' },
-  greeting: 'Hi, I review things.',
-  suggestions: ['Review this diff', 'What did I miss, exactly?'],
-  notes: null
+  // 槽位刻意乱序 + 混入管线之外的名字：BS-6 要证明写出去的是字母序
+  agents: { task: 'my-task', intent: 'my-intent', recheck: 'my-recheck', gate: 'my-gate' }
 }
-
-/** 一段有代表性的笔记散文（章节标题 / 列表 / 空行 —— 都是普通 markdown，没有机器格式） */
-const SAMPLE_NOTES = md(
-  '## 关于这个用户',
-  '',
-  '- 偏好 pnpm',
-  '',
-  '## 在做的事',
-  '',
-  '把管线改成 workflow md'
-)
-
-/** ParsedBotFile 的全部字段名（新增字段先在 BS-2 失败） */
-const PARSED_BOT_KEYS = [
-  'agents',
-  'description',
-  'displayName',
-  'greeting',
-  'instructionFiles',
-  'model',
-  'name',
-  'notes',
-  'notesEnabled',
-  'pipeline',
-  'pipelineInput',
-  'projectAwareness',
-  'respond',
-  'respondTo',
-  'suggestions',
-  'systemPrompt',
-  'tools'
-]
 
 /** frontmatter 的**顶层**键序（缩进行属于嵌套结构，不参与） */
 const frontmatterKeys = (text: string): string[] =>
@@ -1169,56 +590,38 @@ describe('BS —— 序列化（与解析互逆）', () => {
 
   it('BS-2 全字段覆盖守卫：接口加了字段却忘了序列化，这里先响', () => {
     expect(Object.keys(FULL).sort()).toEqual(PARSED_BOT_KEYS)
-    // 解析产物的键集同样恒定（model 未声明时也在，值为 undefined）
+    // 解析产物的键集同样恒定
     expect(Object.keys(parseBotDefinitionFile(bot(), 'fn')!).sort()).toEqual(PARSED_BOT_KEYS)
   })
 
-  it('BS-3 缺省值省略：最小对象的序列化结果逐字固定', () => {
+  it('BS-3 缺省值省略：最小对象的序列化结果逐字固定；空正文时闭合 --- 之后什么都没有', () => {
     const minimal: ParsedBotFile = {
       name: 'minimal',
       displayName: 'minimal',
       description: 'd',
-      systemPrompt: 'body',
-      tools: [],
-      instructionFiles: [],
-      projectAwareness: false,
-      pipeline: 'bot-chat',
+      body: 'body',
+      pipeline: DEFAULT_BOT_PIPELINE,
       pipelineInput: {},
-      respond: 'auto',
-      respondTo: 'user',
-      notesEnabled: true,
-      agents: {},
-      greeting: '',
-      suggestions: [],
-      notes: null
+      agents: {}
     }
     expect(serializeBotDefinitionFile(minimal)).toBe(
       '---\nshuvix: bot v1\nname: minimal\ndescription: d\n---\n\nbody\n'
     )
+    // 空正文：不留一个孤零零的空行（新建 bot 的模板形态 —— 人设由用户写、记忆由 bot 写）
+    expect(serializeBotDefinitionFile({ ...minimal, body: '' })).toBe(
+      '---\nshuvix: bot v1\nname: minimal\ndescription: d\n---\n'
+    )
   })
 
-  it('BS-4 键序固定（属性卡与 diff 的可读性）', () => {
-    // 管线声明（pipeline / input / agents）排在门控声明（respond / notes）之前 ——
-    // 「这个 bot 用哪套管线、谁演哪个角色」先于「它什么时候开口」，读起来是顺的
+  it('BS-4 键序固定（属性卡与 diff 的可读性）：身份 → 管线 → 入参 → 槽位', () => {
     expect(frontmatterKeys(serializeBotDefinitionFile(FULL))).toEqual([
       BOT_FILE_MARKER_KEY,
       'name',
       'description',
       'shuvix-displayName',
-      'shuvix-tools',
-      'shuvix-model',
       BOT_PIPELINE_KEY,
       BOT_INPUT_KEY,
-      BOT_AGENTS_KEY,
-      BOT_RESPOND_KEY,
-      // 两根轴相邻：respond-to 紧跟 respond，都在 notes 之前 —— 读起来是
-      // 「什么时候开口 / 谁说的话算数 / 要不要记笔记」
-      BOT_RESPOND_TO_KEY,
-      BOT_NOTES_KEY,
-      BOT_GREETING_KEY,
-      BOT_SUGGESTIONS_KEY,
-      'shuvix-instruction-files',
-      'shuvix-project-awareness'
+      BOT_AGENTS_KEY
     ])
   })
 
@@ -1228,47 +631,15 @@ describe('BS —— 序列化（与解析互逆）', () => {
     )
   })
 
-  it("RT-12 respondTo 缺省 'user' 不写出、'all' 写出（缺省省略是序列化器的通行纪律）", () => {
-    // 与 BS-3 同一条纪律：文件里出现的键都是用户真的作了主的那些。第二根轴上写出一个
-    // 恒等于缺省的 `respond-to: user`，等于让每一份新建 bot 都在文件里声明一件它没选过的事
-    expect(serializeBotDefinitionFile({ ...FULL, respondTo: 'user' })).not.toContain(
-      BOT_RESPOND_TO_KEY
+  it('BS-6 槽位键序恒为字母序（与对象插入序无关 —— 开放集合没有「阶段顺序」可依）', () => {
+    // FULL 的插入序是 task → intent → recheck → gate，输出必须是 gate → intent → recheck → task
+    expect(serializeBotDefinitionFile(FULL)).toContain(
+      `${BOT_AGENTS_KEY}:\n  gate: my-gate\n  intent: my-intent\n  recheck: my-recheck\n  task: my-task\n`
     )
-    expect(serializeBotDefinitionFile({ ...FULL, respondTo: 'all' })).toContain(
-      `${BOT_RESPOND_TO_KEY}: all`
-    )
-  })
-
-  it("RT-14/15 respondTo:'all' 的往返保真与幂等（裸枚举值穿过 YAML 引号规则）", () => {
-    // FULL 已经是 'all'，所以 BS-1 / BS-10 顺带覆盖了这一条；这里再单独钉一次「写出去的
-    // 那个裸值读回来还是同一个枚举成员」—— 序列化器若哪天给值加了引号或大小写归一，
-    // 解析侧的大小写敏感（RT-7）会把它变成一份整份非法的文件
-    const value: ParsedBotFile = { ...FULL, respondTo: 'all' }
-    const once = serializeBotDefinitionFile(value)
-    const readBack = parseBotDefinitionFile(once, 'other-name')!
-    expect(readBack.respondTo).toBe('all')
-    expect(readBack).toEqual(value)
-    expect(serializeBotDefinitionFile(readBack)).toBe(once)
-  })
-
-  it('BS-6 agents 角色键序恒为字母序（与对象插入序无关 —— 开放集合没有「阶段顺序」可依）', () => {
-    // 插入序是 task → intent → notes，输出必须是 intent → notes → task（两者可区分）
-    const text = serializeBotDefinitionFile({
-      ...FULL,
-      agents: { task: 't', intent: 'i', notes: 'n' }
-    })
-    expect(text).toContain(`${BOT_AGENTS_KEY}:\n  intent: i\n  notes: n\n  task: t\n`)
-
-    // 排序用 Array.sort() 的**码点序**，不是 localeCompare —— 大写角色名排在小写之前。
-    // 角色名允许大写（ROLE_RE），所以这条是真实可达的形状；若将来改用 localeCompare，本例反转。
+    // 排序用 Array.sort() 的**码点序**，不是 localeCompare —— 大写槽位名排在小写之前。
+    // 槽位名允许大写（ROLE_RE），所以这条是真实可达的形状；若将来改用 localeCompare，本例反转。
     const mixedCase = serializeBotDefinitionFile({ ...FULL, agents: { alpha: 'a', Zeta: 'z' } })
     expect(mixedCase).toContain(`${BOT_AGENTS_KEY}:\n  Zeta: z\n  alpha: a\n`)
-  })
-
-  it('BS-7 suggestions 写为 YAML 块序列（解析侧要求的形状，不是逗号串）', () => {
-    const text = serializeBotDefinitionFile(FULL)
-    expect(text).toContain(`${BOT_SUGGESTIONS_KEY}:\n  - `)
-    expect(parseBotDefinitionFile(text, 'x')!.suggestions).toEqual(FULL.suggestions)
   })
 
   it.each([
@@ -1277,35 +648,28 @@ describe('BS —— 序列化（与解析互逆）', () => {
     ['以 * 起头（YAML alias 指示符）', '*starred value'],
     ['内含单引号', "o'brien's bot"],
     ['超长不折行', `long text ${'lorem ipsum '.repeat(30)}end`]
-  ])('BS-8 YAML 危险字符（%s）经引号转义后往返逐字相等', (_label, value) => {
-    const text = serializeBotDefinitionFile({
-      ...FULL,
-      description: value,
-      greeting: value,
-      suggestions: [value]
-    })
+  ])('BS-7 YAML 危险字符（%s）经引号转义后往返逐字相等', (_label, value) => {
+    const text = serializeBotDefinitionFile({ ...FULL, description: value, displayName: value })
     const parsed = parseBotDefinitionFile(text, 'x')!
     expect(parsed.description).toBe(value)
-    expect(parsed.greeting).toBe(value)
-    expect(parsed.suggestions).toEqual([value])
+    expect(parsed.displayName).toBe(value)
   })
 
-  it('BS-9 多行 greeting / 多行正文（含空行与 --- 分隔线）往返保真', () => {
+  it('BS-8 多行正文（含空行、--- 分隔线、代码块）往返保真', () => {
     const value: ParsedBotFile = {
       ...FULL,
-      greeting: 'Hello.\n\nI watch this repo.',
-      systemPrompt: 'intro\n\n---\n\noutro'
+      body: md('intro', '', '---', '', '```js', 'const x = 1', '```', '', 'outro')
     }
     expect(parseBotDefinitionFile(serializeBotDefinitionFile(value), 'x')).toEqual(value)
   })
 
-  it('BS-10 序列化幂等（归一化只发生一次）', () => {
+  it('BS-9 序列化幂等（归一化只发生一次）', () => {
     const once = serializeBotDefinitionFile(FULL)
     const twice = serializeBotDefinitionFile(parseBotDefinitionFile(once, 'x')!)
     expect(twice).toBe(once)
   })
 
-  it('BS-11 已知不对称：空 description 序列化出的文件解析不回来', () => {
+  it('BS-10 已知不对称：空 description 序列化出的文件解析不回来', () => {
     // serialize 不设防（空值省略键），产物少了必填键。当前写路径都先 parse 再落盘
     // （botService.parseForWrite 兜底），所以吃不到；GUI 若直接构造 ParsedBotFile
     // 保存就会静默产出坏文件。
@@ -1314,57 +678,44 @@ describe('BS —— 序列化（与解析互逆）', () => {
     expect(rejectReason(text)).toContain("'description' is required")
   })
 
-  it('BS-12 任意角色名原样写回（开放表不设白名单，保存不得吃掉管线自定义的角色）', () => {
-    const agents = { intent: 'i', gate: 'g', reply: 'r', notes: 'n', 'Ok-Role_2': 'o' }
+  it('BS-11 任意槽位名原样写回（开放表不设白名单，保存不得吃掉管线自定义的槽位）', () => {
+    const agents = { intent: 'i', gate: 'g', reply: 'r', 'Ok-Role_2': 'o' }
     const text = serializeBotDefinitionFile({ ...FULL, agents })
     for (const [role, ref] of Object.entries(agents)) expect(text).toContain(`${role}: ${ref}`)
     expect(parseBotDefinitionFile(text, 'x')!.agents).toEqual(agents)
   })
 
-  it('BS-13 带笔记的对象往返保真（含章节标题与空行）', () => {
-    // 笔记写在 `systemPrompt` 里（它就是整篇正文），`notes` 只是解析后**派生**出来的期望值
-    const value: ParsedBotFile = {
-      ...FULL,
-      systemPrompt: md(FULL.systemPrompt, '', BOT_NOTES_MARKER, '', SAMPLE_NOTES),
-      notes: SAMPLE_NOTES
-    }
-    expect(parseBotDefinitionFile(serializeBotDefinitionFile(value), 'other-name')).toEqual(value)
-  })
-
-  it("BS-14' 正文两端的空白在**第一次**序列化时被归一（故它不是不动点，二次才是）", () => {
-    // 与 BS-10 的幂等一起读：序列化 trim 整篇正文、解析再 trim 笔记那一片，所以带空白的
-    // 入参写盘一次就变成 trim 过的值，之后恒定。
-    const padded: ParsedBotFile = {
-      ...FULL,
-      systemPrompt: md(FULL.systemPrompt, '', BOT_NOTES_MARKER, '', '  两端带空白  ', ''),
-      notes: '  两端带空白  \n\n'
-    }
+  it('BS-12 正文两端的空白在**第一次**序列化时被归一（故它不是不动点，二次才是）', () => {
+    // 序列化 trim 整篇正文、解析也 trim，所以带空白的入参写盘一次就变成 trim 过的值，之后恒定
+    const padded: ParsedBotFile = { ...FULL, body: '\n\n  两端带空白  \n\n' }
     const once = serializeBotDefinitionFile(padded)
     const readBack = parseBotDefinitionFile(once, 'x')!
-    expect(readBack.notes).toBe('两端带空白')
+    expect(readBack.body).toBe('两端带空白')
     expect(readBack).not.toEqual(padded)
     expect(serializeBotDefinitionFile(readBack)).toBe(once)
   })
 
-  it('BS-15 **序列化器只认 systemPrompt，完全忽略 notes 字段**', () => {
-    // 正文里已经含笔记了，再从 notes 拼一次就会把同一段文字写两遍；且两个字段一旦不一致，
-    // 没有哪一份说了算。notes 是切片、systemPrompt 是真源 —— 写盘只认后者。
-    const text = serializeBotDefinitionFile({ ...FULL, notes: '不该出现的笔记' })
-    expect(text).not.toContain('不该出现的笔记')
-    expect(text).not.toContain(BOT_NOTES_MARKER)
-    // 同一份 systemPrompt，notes 取 null / '' / 散文都得到逐字相同的文件
-    expect(text).toBe(serializeBotDefinitionFile(FULL))
-    expect(text).toBe(serializeBotDefinitionFile({ ...FULL, notes: '' }))
+  it('BS-13 displayName 等于 name / 为空 / 纯空白 → 不写 shuvix-displayName，读回即 name', () => {
+    for (const displayName of [FULL.name, '', '   ']) {
+      const text = serializeBotDefinitionFile({ ...FULL, displayName })
+      expect(text, JSON.stringify(displayName)).not.toContain('shuvix-displayName')
+      expect(parseBotDefinitionFile(text, 'x')!.displayName, JSON.stringify(displayName)).toBe(
+        FULL.name
+      )
+    }
   })
 
-  it('BS-16 正文里没有分界线时写出的文件里也没有（新建 bot 的模板形态）', () => {
-    expect(serializeBotDefinitionFile(FULL)).not.toContain('shuvix:bot-notes')
+  it('BS-14 {{shuvix:*}} 占位符在正文里原样穿过序列化（替换归 createAgent）', () => {
+    const value: ParsedBotFile = { ...FULL, body: 'Dir: {{shuvix:workingDirectory}}' }
+    const text = serializeBotDefinitionFile(value)
+    expect(text).toContain('{{shuvix:workingDirectory}}')
+    expect(parseBotDefinitionFile(text, 'x')).toEqual(value)
   })
 
-  it('BS-17 **调用点白名单：序列化器只服务「新建 bot」**', () => {
+  it('BS-15 **调用点白名单：序列化器只服务「新建 bot」**', () => {
     // 它从固定键白名单重建 frontmatter，会丢注释、键序与未知键 —— **已存在的文件永远
-    // 不该经过它**：日常的笔记维护由 bot-notes 阶段 agent 用 `edit` 工具就地改，
-    // 用户的编辑由 save 原样落盘。这条守卫在有人图省事用 serialize 实现 save 时先响。
+    // 不该经过它**：日常维护由任务段 agent 用自己的文件工具就地改，用户的编辑由 save
+    // 原样落盘。这条守卫在有人图省事用 serialize 实现 save 时先响。
     const repoRoot = fileURLToPath(new URL('../../../../../', import.meta.url))
     const sources: Array<{ path: string; text: string }> = []
     const walk = (dir: string): void => {
@@ -1401,23 +752,7 @@ describe('BS —— 序列化（与解析互逆）', () => {
     // 唯一调用点在「新建 bot」的模板生成里
     expect(botService).toMatch(/newBotTemplate\([\s\S]*?serializeBotDefinitionFile\(/)
     // 而 save 落的是调用方给的原文，不是 re-serialize 的产物
-    expect(botService).toMatch(/save\([\s\S]*?writeFileAtomic\(target\.basePath, text\)/)
-
-    // 对称的一条：**宿主没有程序化的笔记写路径**。笔记由 bot-notes 用 `edit` 就地改，
-    // 所以仓里不该出现任何「宿主自己拼笔记再写回」的实现 —— 那会与 edit 工具抢同一份
-    // 文件，而且绕过它的「读后被改」检测。这条在有人重新造那条路径时先响。
-    const notesWriters = sources
-      .filter(
-        (s) =>
-          !s.path.endsWith('bot/botNotes.ts') &&
-          s.text
-            .split('\n')
-            .some(
-              (l) => /\b(spliceBotNotes|renderNotesBlock)\(/.test(l) && !l.includes('function ')
-            )
-      )
-      .map((s) => s.path.slice(repoRoot.length))
-    expect(notesWriters).toEqual([])
+    expect(botService).toContain('writeFileAtomic(target.basePath, text)')
   })
 })
 
@@ -1426,23 +761,14 @@ describe('BS —— 序列化（与解析互逆）', () => {
 describe('BD —— 属性卡描述符与解析器的对齐', () => {
   const descriptor = SHUVIX_MD_DESCRIPTORS.find((d) => d.type === 'bot')!
   const cardKeys = descriptor.fields.map((f) => f.key)
-  /** 解析器实际读取的 frontmatter 键（botFile.ts + parseAgentSharedFields 的白名单） */
+  /** 解析器实际读取的 frontmatter 键（botFile.ts 的白名单） */
   const parserKeys = [
     'name',
     'description',
     'shuvix-displayName',
-    'shuvix-tools',
-    'shuvix-model',
-    'shuvix-instruction-files',
-    'shuvix-project-awareness',
     BOT_PIPELINE_KEY,
     BOT_INPUT_KEY,
-    BOT_RESPOND_KEY,
-    BOT_RESPOND_TO_KEY,
-    BOT_NOTES_KEY,
-    BOT_AGENTS_KEY,
-    BOT_GREETING_KEY,
-    BOT_SUGGESTIONS_KEY
+    BOT_AGENTS_KEY
   ]
   const keysOf = (kind: string): string[] =>
     descriptor.fields
@@ -1450,248 +776,50 @@ describe('BD —— 属性卡描述符与解析器的对齐', () => {
       .map((f) => f.key)
       .sort()
 
-  it('BD-1 描述符键 ⊆ 解析器读取的键；解析器有而卡片无的恰为 agents / pipeline / input', () => {
+  it('BD-1 描述符键 ⊆ 解析器读取的键；解析器有而卡片无的恰为 agents / input（嵌套映射）', () => {
     for (const key of cardKeys) expect(parserKeys, key).toContain(key)
-    // agents / input 是嵌套映射，刻意只落通用 key/value 行（做成表单成本高于收益）。
-    // pipeline 则是待裁决的一条：它是「这个 bot 用哪套管线」，比 greeting 更该出现在卡片上；
-    // 若加进 BOT_DESCRIPTOR（kind 'text' 还是 'select'，候选来自 workflow 注册表这个运行时
-    // 事实，同 shuvix-model），本例的期望减去 BOT_PIPELINE_KEY。
+    // agents / input 是嵌套映射，刻意只落通用 key/value 行：槽位由设置页按管线的输入
+    // schema 渲染成下拉编辑（agentSlotsOf），属性卡不再自己做一遍表单
     expect(parserKeys.filter((k) => !cardKeys.includes(k)).sort()).toEqual(
-      [BOT_AGENTS_KEY, BOT_INPUT_KEY, BOT_PIPELINE_KEY].sort()
+      [BOT_AGENTS_KEY, BOT_INPUT_KEY].sort()
     )
   })
 
-  it('BD-2 boolean 键 = 解析器强制布尔的键', () => {
-    const booleanKeys = keysOf('boolean')
-    expect(booleanKeys).toEqual([BOT_NOTES_KEY, 'shuvix-project-awareness'].sort())
-    for (const key of booleanKeys) {
-      expect(parseBotDefinitionFile(bot(`${key}: nope please`), 'x'), key).toBeNull()
-      expect(parseBotDefinitionFile(bot(`${key}: true`), 'x'), key).not.toBeNull()
+  it('BD-2 卡片上没有 boolean / csv / list / select 字段 —— 那些形状随 agent 键与退役键一起走了', () => {
+    // 改制前 notes 是 boolean、tools 是 csv、suggestions 是 list、respond 是 select；
+    // 现在 bot 上只剩标量身份与管线名，属性卡因此只有 text / mono 两种行
+    for (const kind of ['boolean', 'csv', 'list', 'select']) {
+      expect(keysOf(kind), kind).toEqual([])
     }
+    expect([...keysOf('text'), ...keysOf('mono')].sort()).toEqual([...cardKeys].sort())
   })
 
-  it('BD-3 csv 键 = 逗号串键（写成 YAML 列表即整份非法）', () => {
-    const csvKeys = keysOf('csv')
-    expect(csvKeys).toEqual(['shuvix-instruction-files', 'shuvix-tools'])
-    for (const key of csvKeys) {
-      expect(parseBotDefinitionFile(bot(`${key}: [a, b]`), 'x'), key).toBeNull()
-    }
-  })
-
-  it('BD-4 list 键 = YAML 列表键（与 csv 相反 —— bot 描述符里最容易搞反的一行）', () => {
-    expect(keysOf('list')).toEqual([BOT_SUGGESTIONS_KEY])
-    expect(parseBotDefinitionFile(bot(`${BOT_SUGGESTIONS_KEY}: a, b`), 'x')).toBeNull()
-    expect(
-      parseBotDefinitionFile(bot(`${BOT_SUGGESTIONS_KEY}:`, '  - a', '  - b'), 'x')
-    ).not.toBeNull()
-  })
-
-  it('BD-5 两根轴的 select 候选都来自 chat-protocol 常量（解析器与下拉共用单一真源）', () => {
-    // 模型键也是 select，但它的候选是运行时事实（模型目录），不归本契约
-    expect(keysOf('select').filter((k) => k !== 'shuvix-model')).toEqual(
-      [BOT_RESPOND_KEY, BOT_RESPOND_TO_KEY].sort()
+  it('BD-3 mono 键 = 标识符：name 与 pipeline（解析器拒绝非字符串，卡片当等宽标识符渲染）', () => {
+    expect(keysOf('mono')).toEqual(['name', BOT_PIPELINE_KEY].sort())
+    expect(parseBotDefinitionFile(bot(`${BOT_PIPELINE_KEY}: [a]`), 'x')).toBeNull()
+    expect(parseBotDefinitionFile(bot(`${BOT_PIPELINE_KEY}: my-flow`), 'x')!.pipeline).toBe(
+      'my-flow'
     )
-    for (const mode of BOT_RESPOND_MODES) {
-      expect(parseBotDefinitionFile(bot(`${BOT_RESPOND_KEY}: ${mode}`), 'x')!.respond).toBe(mode)
-    }
-    expect(parseBotDefinitionFile(bot(`${BOT_RESPOND_KEY}: whenever`), 'x')).toBeNull()
-    for (const mode of BOT_RESPOND_TO_MODES) {
-      expect(parseBotDefinitionFile(bot(`${BOT_RESPOND_TO_KEY}: ${mode}`), 'x')!.respondTo).toBe(
-        mode
-      )
-    }
-    expect(parseBotDefinitionFile(bot(`${BOT_RESPOND_TO_KEY}: nobody`), 'x')).toBeNull()
-    // botFile 的再导出与 chat-protocol 的常量必须是同一引用
-    expect(BOT_RESPOND_MODES).toBe(PROTOCOL_RESPOND_MODES)
-    expect(BOT_RESPOND_TO_MODES).toBe(PROTOCOL_RESPOND_TO_MODES)
   })
 
-  it('BD-6 弱守卫：botFile.ts 里每一个 BOT_*_KEY 常量都在 parserKeys 清单里', () => {
-    // 上面的 parserKeys 是手维护清单，加了新键却忘了补它，BD-1 就会静默失真
-    // （pipeline / input 落地时正是这样绿着的）。这条从源码里抓键常量，让漏补先在这里响。
+  it('BD-4 chat-protocol 与 botFile 的两个键常量是同一个字符串（设置页的槽位编辑器按它改 md）', () => {
+    // 渲染进程够不到 agent-runtime，所以 chat-protocol 另存了一份；两份若漂移，
+    // 设置页 patchFrontmatterMappingEntry 改出来的键解析器就读不到
+    expect(PROTOCOL_PIPELINE_KEY).toBe(BOT_PIPELINE_KEY)
+    expect(PROTOCOL_AGENTS_KEY).toBe(BOT_AGENTS_KEY)
+  })
+
+  it('BD-5 弱守卫：botFile.ts 里每一个 BOT_*_KEY 常量都在 parserKeys 清单里', () => {
+    // 上面的 parserKeys 是手维护清单，加了新键却忘了补它，BD-1 就会静默失真。
+    // 这条从源码里抓键常量，让漏补先在这里响。
     const source = readFileSync(fileURLToPath(new URL('../botFile.ts', import.meta.url)), 'utf-8')
     const declared = [...source.matchAll(/export const (BOT_\w*_KEY) = '([^']+)'/g)]
-    expect(declared.length).toBeGreaterThan(3)
+    // 标记键 + 三个 bot 键；再多出一个就是有新键要补进 parserKeys
+    expect(declared.length).toBeGreaterThanOrEqual(4)
     for (const [, constName, key] of declared) {
       // 文件类型标记不是解析器读取的字段（BX-2：解析器根本不读标记）
       if (constName === 'BOT_FILE_MARKER_KEY') continue
       expect(parserKeys, constName).toContain(key)
-    }
-    // 从 chat-protocol 再导出的两根门控轴同样在册（正则只抓 botFile.ts 里的 `export
-    // const BOT_*_KEY = '…'`，而这两个是 re-export，抓不到 —— 手动补上）
-    expect(parserKeys).toContain(BOT_RESPOND_KEY)
-    expect(parserKeys).toContain(BOT_RESPOND_TO_KEY)
-  })
-})
-
-// ───────────────── REF：`bot:<name>` 任务段 ref 的解析 ─────────────────
-
-/**
- * 任务段 agent 的 ref 是**全局可寻址的 `bot:<name>`，不是 `bot:self`** —— 引擎的
- * `resolveAgentProfile(ref)` 是一个无 run 上下文的全局 dep，相对 ref 在那里永远解析
- * 不出来。这个纯函数因此是「bot 即 agent」那条投影的入口闸，它认错一个前缀，任务段就
- * 会被当成一个普通 agent 名去查、然后以 `unknown_agent` 收场。
- */
-describe('REF —— parseBotAgentRef', () => {
-  it('REF-1 `bot:<name>` → name', () => {
-    expect(parseBotAgentRef('bot:scout')).toBe('scout')
-  })
-
-  it('REF-2 名字原样保留：CJK / 空格 / 连字符 / 点都合法（bot 名就是文件名）', () => {
-    expect(parseBotAgentRef('bot:研究员')).toBe('研究员')
-    expect(parseBotAgentRef('bot:my bot')).toBe('my bot')
-    expect(parseBotAgentRef('bot:a-b.c')).toBe('a-b.c')
-  })
-
-  it('REF-3 前缀与名字之间的空白被 trim（YAML 里 `bot: x` 这类写法的容错）', () => {
-    expect(parseBotAgentRef('bot:  scout  ')).toBe('scout')
-  })
-
-  it.each([['coding'], ['agent:scout'], ['Bot:scout'], ['bots:scout'], ['']])(
-    'REF-4 不是 bot ref（%s）→ null',
-    (ref) => {
-      expect(parseBotAgentRef(ref)).toBeNull()
-    }
-  )
-
-  it.each([['bot:'], ['bot:   ']])('REF-5 前缀后没有名字（%s）→ null，不是空串', (ref) => {
-    // 回 '' 的话调用方会拿它去查注册表并得到 null，错误消息里的名字是空的
-    expect(parseBotAgentRef(ref)).toBeNull()
-  })
-
-  it('REF-6 名字里再出现冒号时只切最前一段前缀（bot 名不禁止冒号）', () => {
-    expect(parseBotAgentRef('bot:ns:scout')).toBe('ns:scout')
-  })
-
-  it('REF-7 与 BOT_AGENT_REF_PREFIX 同源 —— 前缀常量改了这里跟着改', () => {
-    expect(parseBotAgentRef(`${BOT_AGENT_REF_PREFIX}scout`)).toBe('scout')
-    expect(BOT_AGENT_REF_PREFIX).toBe('bot:')
-  })
-})
-
-// ───────────── PRJ：ParsedBotFile → InProcessAgentType 的运行投影 ─────────────
-
-/**
- * 「agent 即 bot 自身」这条设计（§6.2）的落点：任务段拿到的 systemPrompt 是**整篇正文
- * （含笔记区）**，工具/模型/两个上下文注入声明照常生效。
- *
- * PRJ-6 是本组的看门用例：它把这份投影的键集与 `toInProcessAgentType`（AgentProfile
- * 那条）对齐。两条投影刻意分开写（bot md 多出管线/门控/开场白/笔记这些只有 bot 才有的
- * 字段，硬凑一个类型会让「哪些字段对 agent 有意义」变得不可读），但**产物必须同形** ——
- * 派生执行侧只认 InProcessAgentType，少一个键就是「bot 的某个声明在任务段悄悄失效」。
- */
-describe('PRJ —— botToInProcessAgentType', () => {
-  const parsed = (raw: string): ParsedBotFile => {
-    const out = parseBotDefinitionFile(raw, 'fn')
-    expect(out, raw).not.toBeNull()
-    return out!
-  }
-
-  it('PRJ-1 身份三键取自 bot md（name / displayName / description）', () => {
-    const p = botToInProcessAgentType(
-      parsed(
-        md('---', 'name: scout', 'description: 侦察', 'shuvix-displayName: 侦察兵', '---', 'B')
-      )
-    )
-    expect(p).toMatchObject({ name: 'scout', displayName: '侦察兵', description: '侦察' })
-  })
-
-  it('PRJ-2 systemPrompt 是**整篇正文含笔记区** —— bot 当然要知道自己学过什么', () => {
-    const p = botToInProcessAgentType(
-      parsed(md('---', 'description: d', '---', bodyWithNotes('人设一句', '记得：用户偏好简答')))
-    )
-    expect(p.systemPrompt).toContain('人设一句')
-    expect(p.systemPrompt).toContain('记得：用户偏好简答')
-    expect(p.systemPrompt).toContain(BOT_NOTES_MARKER)
-  })
-
-  it('PRJ-3 tools / instructionFiles 是拷贝而非同一引用（投影不该让调用方改到原件）', () => {
-    const bot = parsed(
-      md(
-        '---',
-        'description: d',
-        'shuvix-tools: read, bash',
-        'shuvix-instruction-files: AGENTS.md',
-        '---',
-        'B'
-      )
-    )
-    const p = botToInProcessAgentType(bot)
-    expect(p.tools).toEqual(['read', 'bash'])
-    expect(p.tools).not.toBe(bot.tools)
-    expect(p.instructionFiles).not.toBe(bot.instructionFiles)
-    p.tools.push('rm -rf')
-    expect(bot.tools).toEqual(['read', 'bash'])
-  })
-
-  it('PRJ-4 model：声明了就带上，没声明则**整个键不铺**（不是 undefined 值）', () => {
-    // 派发侧用 `'model' in x` 之外的写法也不该被一个显式 undefined 骗到：没声明 =
-    // 跟随会话/继承派发方，铺一个 undefined 与不铺在 JSON 序列化后才等价
-    const withModel = botToInProcessAgentType(
-      parsed(md('---', 'description: d', 'shuvix-model: gpt-x', '---', 'B'))
-    )
-    expect(withModel.model).toBe('gpt-x')
-    expect(botToInProcessAgentType(parsed(bot()))).not.toHaveProperty('model')
-  })
-
-  it('PRJ-5 projectAwareness 原样透传（true / 缺省 false）', () => {
-    expect(
-      botToInProcessAgentType(
-        parsed(md('---', 'description: d', 'shuvix-project-awareness: true', '---', 'B'))
-      ).projectAwareness
-    ).toBe(true)
-    expect(botToInProcessAgentType(parsed(bot())).projectAwareness).toBe(false)
-  })
-
-  it('PRJ-6 【键集守卫】与 toInProcessAgentType 的产物同形（bot 专属字段一个都不外泄）', () => {
-    // 两条投影分开写是刻意的，但产物必须同形：派生执行侧只认 InProcessAgentType
-    const agentSide = Object.keys(
-      toInProcessAgentType({
-        name: 'a',
-        displayName: 'A',
-        description: 'd',
-        systemPrompt: 'S',
-        tools: ['read'],
-        model: 'm',
-        instructionFiles: ['AGENTS.md'],
-        projectAwareness: true,
-        // AgentProfile 独有的三个注册表字段 —— 它们**不该**出现在运行投影里，
-        // 所以在这里给上值，让下面那句键集比较真的能证明它们被投影丢掉了
-        sessionAwareness: false,
-        source: 'user',
-        basePath: '/tmp/a.md'
-      })
-    ).sort()
-    const botSide = Object.keys(
-      botToInProcessAgentType(
-        parsed(
-          md(
-            '---',
-            'description: d',
-            'shuvix-tools: read',
-            'shuvix-model: m',
-            'shuvix-instruction-files: AGENTS.md',
-            'shuvix-project-awareness: true',
-            '---',
-            'B'
-          )
-        )
-      )
-    ).sort()
-    expect(botSide).toEqual(agentSide)
-    // 反向：管线/门控/开场白/笔记这些只有 bot 才有的字段不得混进运行投影
-    for (const leak of [
-      'pipeline',
-      'pipelineInput',
-      'respond',
-      'respondTo',
-      'notes',
-      'notesEnabled',
-      'agents',
-      'greeting',
-      'suggestions'
-    ]) {
-      expect(botSide, leak).not.toContain(leak)
     }
   })
 })

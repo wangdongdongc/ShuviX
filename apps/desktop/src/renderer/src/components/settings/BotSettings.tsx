@@ -17,19 +17,24 @@ import { BotAvatar, ModelSelect } from '@shuvix/chat-ui'
 import { formatModelRef, resolveModelRef } from '@shuvix/chat-protocol/agentModelRef'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { ConfirmDialog } from '../common/ConfirmDialog'
-import { patchFrontmatterScalar } from '@shuvix/chat-protocol/utils/frontmatterPatch'
+import {
+  patchFrontmatterMappingEntry,
+  patchFrontmatterScalar
+} from '@shuvix/chat-protocol/utils/frontmatterPatch'
+import { BOT_AGENTS_KEY } from '@shuvix/chat-protocol/shuvixMdDescriptors'
 
 /**
  * 设置页顶层「Bots」tab —— 与工作流 / 安全策略 tab 同形：左侧每个 bot 一个子项（**没有
  * 内置 bot**，列表全部来自 ~/.shuvix/bots/），右侧是整份 md 原文编辑器（frontmatter 由
- * 属性卡的 bot 描述符渲染，正文 = 人设散文 + 分界线下由 bot 自己维护的笔记）。
+ * 属性卡的 bot 描述符渲染，正文 = 这个 bot 的人设与记忆，由 bot 自己维护）。
  *
  * 比其余 md tab 多三件事（设计 §8.5 / A1）：
- *  - **运行时读数条**（bot:inspect）：管线与阶段 agent 按当前注册表解析成什么、门控是否
- *    已 sticky 降级、笔记用量与调度状态 —— 「引用缺失即回落」这类事实埋在 journal 不算呈现;
+ *  - **运行时读数条 + 槽位编辑器**（bot:inspect）：管线按当前注册表解析成什么、管线声明的
+ *    每个槽位由哪份 agent 填（下拉直接改 md 的 `shuvix-bot-agents.<槽位>` 行）、门控是否
+ *    已 sticky 降级、正文体量 —— 「引用缺失」这类事实埋在 journal 不算呈现;
  *  - **门控模型选择器**：全局设置，写 ~/.shuvix/agents/bot-intent.md 覆盖档案的
  *    shuvix-model 行（设计 §6.1 —— GUI 写覆盖文件，模型链零改动）;
- *  - **保存的丢更新守卫**：笔记段会在后台改这份文件，save 带 getSource 时的 revision
+ *  - **保存的丢更新守卫**：bot 会在答话途中改这份文件，save 带 getSource 时的 revision
  *    指纹，冲突时把磁盘版本交回来让用户选（加载 / 覆盖），绝不静默后写胜。
  */
 
@@ -204,8 +209,6 @@ export function BotSettings(): React.JSX.Element {
             </>
           )}
         </div>
-
-        <LoopLimitsBlock />
 
         <div className="border-t border-border-secondary p-2 flex items-center gap-1.5">
           <button
@@ -480,7 +483,16 @@ function BotEditor({
         </div>
       )}
 
-      {bot && <InspectStrip name={bot.name} warnings={bot.warnings} />}
+      {bot && target.kind === 'edit' && (
+        <InspectStrip
+          name={bot.name}
+          warnings={bot.warnings}
+          revision={target.revision}
+          getText={() => editorRef.current?.getMarkdown() ?? mirror.current}
+          onSaved={() => onSaved(bot.name)}
+          onConflict={(current) => setConflict(current)}
+        />
+      )}
 
       <div className="min-h-[320px] p-2">
         <LivePreviewEditor
@@ -544,22 +556,61 @@ function BotEditor({
 }
 
 /**
- * 运行时读数条：管线 / 阶段 agent 的解析结果、门控降级、笔记状态 + 门控模型选择器。
- * 数据来自 bot:inspect（按当前注册表现算）；frontmatter 本身归下方属性卡，这里不重复。
+ * 运行时读数条 + 槽位编辑器：管线的解析结果、每个槽位填的 agent（下拉可改）、门控降级、
+ * 正文体量 + 门控模型选择器。数据来自 bot:inspect（按当前注册表现算）；frontmatter 的
+ * 身份三项归下方属性卡，这里不重复。
+ *
+ * 槽位下拉**改的是 md 原文**（`shuvix-bot-agents.<槽位>` 那一行）：取编辑器里的当前全文
+ * 打补丁再 `bot:save`，所以用户没保存的正文改动一并落盘、不会丢；带 revision 指纹，
+ * 撞上 bot 自己的改动时走与保存按钮同一个冲突对话框。
  */
-function InspectStrip({ name, warnings }: { name: string; warnings: string[] }): React.JSX.Element {
+function InspectStrip({
+  name,
+  warnings,
+  revision,
+  getText,
+  onSaved,
+  onConflict
+}: {
+  name: string
+  warnings: string[]
+  revision: string
+  /** 编辑器里的当前全文（非受控编辑器，保存时直取） */
+  getText: () => string
+  onSaved: () => Promise<void>
+  onConflict: (current: string) => void
+}): React.JSX.Element {
   const { t } = useTranslation()
   const [data, setData] = useState<BotInspect | null>(null)
+  const [agents, setAgents] = useState<string[]>([])
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     let alive = true
-    void window.api.bot.inspect({ name }).then((r) => {
-      if (alive && !('error' in r)) setData(r)
-    })
+    void Promise.all([window.api.bot.inspect({ name }), window.api.subAgent.list()]).then(
+      ([r, list]) => {
+        if (!alive) return
+        if (!('error' in r)) setData(r)
+        // list 是合并语义（用户覆盖生效）；被遮蔽的内置条目带 overridden，跳过
+        setAgents(list.filter((a) => !a.overridden).map((a) => a.name))
+      }
+    )
     return () => {
       alive = false
     }
   }, [name])
+
+  const setSlot = async (role: string, ref: string): Promise<void> => {
+    setError(null)
+    const text = patchFrontmatterMappingEntry(getText(), BOT_AGENTS_KEY, role, ref || null)
+    const r = await window.api.bot.save({ originalName: name, text, revision })
+    if (!r.success) {
+      if (r.conflict) onConflict(r.conflict.current)
+      else setError(r.error || t('settings.botSaveFailed'))
+      return
+    }
+    await onSaved()
+  }
 
   if (!data) return <></>
 
@@ -568,21 +619,13 @@ function InspectStrip({ name, warnings }: { name: string; warnings: string[] }):
     problems.push(t('settings.botPipelineMissing', { name: data.pipeline.name }))
   if (data.pipeline.exists && data.pipeline.concurrency && data.pipeline.concurrency !== 'parallel')
     problems.push(t('settings.botReentryWarn', { mode: data.pipeline.concurrency }))
-  for (const s of data.stages) {
-    if (s.missing) problems.push(`${s.role}: ${t('settings.botStageMissing', { ref: s.ref })}`)
+  for (const s of data.slots) {
+    if (s.required && !s.ref) problems.push(t('settings.botSlotMissingRequired', { role: s.role }))
+    else if (s.missing) problems.push(`${s.role}: ${t('settings.botStageMissing', { ref: s.ref })}`)
   }
   if (data.gateDegraded) problems.push(t('settings.botGateDegraded', { reason: data.gateDegraded }))
-  // 笔记区结构软失败（解析器 warnings）一并进问题区 —— 它们同样是「跑起来会不一样」的事实
+  // 解析器「接受但有话说」的提示一并进问题区 —— 它们同样是「跑起来会不一样」的事实
   problems.push(...warnings)
-
-  const stageLine = data.stages.map((s) => `${s.role}: ${s.ref}`).join(' · ')
-  const notesLine = !data.notes.enabled
-    ? t('settings.botNotesDisabled')
-    : `${t('settings.botNotesUsage', { chars: data.notes.chars, pending: data.notes.pending })} · ${
-        data.notes.lastRunAt > 0
-          ? t('settings.botNotesLastRun', { time: new Date(data.notes.lastRunAt).toLocaleString() })
-          : t('settings.botNotesNever')
-      }`
 
   return (
     <div
@@ -595,15 +638,51 @@ function InspectStrip({ name, warnings }: { name: string; warnings: string[] }):
           {data.pipeline.name}
           {data.pipeline.concurrency ? ` · ${data.pipeline.concurrency}` : ''}
         </span>
-        <span className="text-text-tertiary">{t('settings.botInspectStages')}</span>
-        <span className="font-mono text-text-secondary break-all">{stageLine}</span>
-        <span className="text-text-tertiary">{t('settings.botInspectNotes')}</span>
-        <span className="text-text-secondary" data-bot-notes-status>
-          {notesLine}
+        <span className="text-text-tertiary" title={t('settings.botSlotHint')}>
+          {t('settings.botInspectSlots')}
+        </span>
+        <div className="space-y-1" data-bot-slots={data.slots.length}>
+          {data.slots.map((s) => (
+            <label
+              key={s.role}
+              className="flex items-center gap-2"
+              title={s.description ?? ''}
+              data-bot-slot={s.role}
+            >
+              <span className="font-mono text-text-secondary w-16 shrink-0 truncate">
+                {s.role}
+                {s.required && <span className="text-text-tertiary"> *</span>}
+              </span>
+              <select
+                value={s.ref ?? ''}
+                onChange={(e) => void setSlot(s.role, e.target.value)}
+                className={`min-w-0 flex-1 max-w-[260px] rounded border bg-bg-primary px-1.5 py-0.5 text-[11px] focus:border-accent/50 focus:outline-none ${
+                  (s.required && !s.ref) || s.missing
+                    ? 'border-warning/60 text-warning'
+                    : 'border-border-secondary text-text-secondary'
+                }`}
+                data-bot-slot-select={s.role}
+              >
+                <option value="">{t('settings.botSlotUnset')}</option>
+                {/* 填了一个已经不存在的名字：仍列出来，否则下拉会静默显示成别的值 */}
+                {s.ref && !agents.includes(s.ref) && <option value={s.ref}>{s.ref}</option>}
+                {agents.map((a) => (
+                  <option key={a} value={a}>
+                    {a}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ))}
+        </div>
+        <span className="text-text-tertiary">{t('settings.botInspectBody')}</span>
+        <span className="text-text-secondary" data-bot-body-chars={data.body.chars}>
+          {t('settings.botBodyChars', { chars: data.body.chars })}
         </span>
       </div>
-      {/* 门控模型选择器：仅当 intent 阶段仍指向内置 bot-intent（换了自定义门控就改那个 agent 去） */}
-      {data.stages.some((s) => s.role === 'intent' && s.ref === 'bot-intent') && <GateModelRow />}
+      {/* 门控模型选择器：仅当 intent 槽位指向内置 bot-intent（换了自定义门控就改那个 agent 去） */}
+      {data.slots.some((s) => s.role === 'intent' && s.ref === 'bot-intent') && <GateModelRow />}
+      {error && <div className="text-[11px] text-error">{error}</div>}
       {problems.length > 0 && (
         <div className="space-y-0.5 pt-1" data-bot-inspect-warnings={problems.length}>
           {problems.map((p, i) => (
@@ -622,72 +701,6 @@ function InspectStrip({ name, warnings }: { name: string; warnings: string[] }):
  * 门控模型（全局）：读 bot-intent 档案（用户覆盖优先）的 shuvix-model，改动写回
  * ~/.shuvix/agents/bot-intent.md 覆盖文件（无覆盖文件则从内置原文创建一份再写）。
  */
-/**
- * bot→bot 接力的两道全局护栏（设计 §4.2）。
- *
- * 放在**列表这一侧**而不是某个 bot 的详情里：它们是会话级的安全阀，与「当前选中哪个 bot」
- * 无关；摆进详情面板会让人以为改的是那一个 bot 的事。
- *
- * 只对声明了「响应所有人」的 bot 有意义，所以缺省这一组（2 / 8）下大多数会话根本走不到 ——
- * 这一块因此故意做得轻，不抢列表的注意力。
- */
-function LoopLimitsBlock(): React.JSX.Element {
-  const { t } = useTranslation()
-  const [vals, setVals] = useState<{ hop: string; fanout: string }>({ hop: '', fanout: '' })
-
-  useEffect(() => {
-    void Promise.all([
-      window.api.settings.get('bot.maxHop'),
-      window.api.settings.get('bot.maxFanout')
-    ]).then(([hop, fanout]) => setVals({ hop: hop ?? '2', fanout: fanout ?? '8' }))
-  }, [])
-
-  // 空串不写盘：清空输入框是编辑中途的状态，不是「设成 0」。失焦时若仍是空则回读缺省
-  const write = (key: string, raw: string): void => {
-    const n = Number(raw)
-    if (!raw.trim() || !Number.isInteger(n) || n < 1) return
-    void window.api.settings.set({ key, value: String(n) })
-  }
-
-  const row = (
-    which: 'hop' | 'fanout',
-    key: string,
-    label: string,
-    hint: string,
-    fallback: string
-  ): React.JSX.Element => (
-    <label className="flex items-center gap-2" title={hint}>
-      <span className="min-w-0 flex-1 truncate text-[11px] text-text-tertiary">{label}</span>
-      <input
-        type="number"
-        min={1}
-        value={vals[which]}
-        onChange={(e) => setVals((v) => ({ ...v, [which]: e.target.value }))}
-        onBlur={() => {
-          const raw = vals[which]
-          write(key, raw)
-          if (!raw.trim()) setVals((v) => ({ ...v, [which]: fallback }))
-        }}
-        className="w-12 rounded border border-border-secondary bg-bg-primary px-1 py-0.5 text-right text-[11px] text-text-secondary focus:border-accent/50 focus:outline-none"
-        data-bot-limit={which}
-      />
-    </label>
-  )
-
-  return (
-    <div className="space-y-1 border-t border-border-secondary px-2 py-2" data-bot-limits>
-      {row('hop', 'bot.maxHop', t('settings.botMaxHop'), t('settings.botMaxHopHint'), '2')}
-      {row(
-        'fanout',
-        'bot.maxFanout',
-        t('settings.botMaxFanout'),
-        t('settings.botMaxFanoutHint'),
-        '8'
-      )}
-    </div>
-  )
-}
-
 function GateModelRow(): React.JSX.Element {
   const { t } = useTranslation()
   const availableModels = useSettingsStore((s) => s.availableModels)

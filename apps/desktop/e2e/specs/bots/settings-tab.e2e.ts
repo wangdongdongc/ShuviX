@@ -1,15 +1,17 @@
 /**
- * 设置页「Bots」tab（A1）—— 列表 / 非法文件修复通道 / 运行时读数条 / 门控模型选择器 /
- * 丢更新冲突 UI / 新建与重扫。
+ * 设置页「Bots」tab（A1 / v3）—— 列表 / 非法文件修复通道 / 运行时读数条 + 槽位编辑器 /
+ * 门控模型选择器 / 丢更新冲突 UI / 新建与重扫。
  *
  * DOM 一律经 harness/pages 的 botsPane（data-* 锚点）；能走 IPC 断的（文件内容、
  * session.list、subAgent.list）不碰 DOM。**用例有序**：本 spec 是一条叙事线（空态 →
- * 种 bot → 修非法 → 读数 → 门控 → 冲突 → 新建 → 重扫 → 管线遮蔽），后面的用例依赖
+ * 种 bot → 修非法 → 读数 → 槽位 → 门控 → 冲突 → 新建 → 重扫 → 管线遮蔽），后面的用例依赖
  * 前面留下的注册表状态 —— 各自的 bot 名互不复用，冲突用例一律以**外部 fs 改动**制造
  * 分歧（不驱动 CM6 打字）。
  *
- * 笔记读数不真跑调度：`.notes-state.json` 在**任何 inspect 之前**预置（主进程的
- * BotNotesScheduler 懒加载后进程内缓存 —— 种晚了就再也读不到）。
+ * v3 的读数条：管线行 + **槽位列表**（管线 input schema 声明的每个槽位一行下拉，改下拉
+ * 直接给 md 的 `shuvix-bot-agents.<槽位>` 行打补丁并保存）+ 正文字符数 + 问题区。
+ * 笔记状态行（`data-bot-notes-status`）与循环上限块（`data-bot-limits`）随笔记段与
+ * bot→bot 接力一并退场 —— C4 里做否定断言。
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { appendFileSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
@@ -31,16 +33,14 @@ const GATE_MODEL = 'e2e-gate-model'
 const botPath = (name: string): string => join(app.botsDir, `${name}.md`)
 const botIntentPath = (): string => join(app.agentsDir, 'bot-intent.md')
 
+/** 读数条里某个槽位的下拉值（条未上屏 / 槽位不存在 → undefined） */
+async function slotValue(role: string): Promise<string | undefined> {
+  const s = await pane.inspect()
+  return s.present ? s.slots.find((x) => x.role === role)?.value : undefined
+}
+
 beforeAll(async () => {
   app = await launchApp()
-
-  // 笔记调度状态：**先于本进程第一次 bot:inspect** 落盘（懒加载 + 进程内缓存）。
-  // lastRunAt 取 0（「尚未归纳」）—— 非零会渲染成本地化日期，数字断言就不唯一了
-  mkdirSync(app.botsDir, { recursive: true })
-  writeFileSync(
-    join(app.botsDir, '.notes-state.json'),
-    JSON.stringify({ 'c4-notes': { lastRunAt: 0, pending: 7, sessions: {} } })
-  )
 
   // 模型目录：设置窗挂载时读一次 —— 种子要在 openSettings 之前
   gateProviderId = await seedCustomProvider(app.main, { name: 'E2E Gate' })
@@ -129,87 +129,146 @@ describe('设置页 Bots tab', () => {
     expect(rows[0]).toMatchObject({ name: 'aa-fixed', selected: true })
   })
 
-  it('C4 读数条健康路径：bot-chat · parallel、四缺省角色、预置的笔记读数；notes:false 显禁用文案；无问题区', async () => {
-    writeBotMd(app, 'c4-notes', { description: 'c4 bot', displayName: 'C4' })
-    writeBotMd(app, 'c4-nonotes', { description: 'c4 silent bot', notes: false })
+  it('C4 读数条健康路径：bot-chat · parallel、三个槽位（两必填已填、recheck 未填）、正文字数；无问题区；退场锚点不在', async () => {
+    writeBotMd(app, 'c4-full', { description: 'c4 bot', displayName: 'C4' })
     await pane.refresh()
 
-    await pane.selectRow('c4-notes')
+    await pane.selectRow('c4-full')
     const shot = await until(async () => {
       const s = await pane.inspect()
-      return s.present && s.stagesText.includes('bot:c4-notes') ? s : null
-    }, 'inspect strip for c4-notes')
+      return s.present && s.slots.length ? s : null
+    }, 'inspect strip for c4-full')
     // 内置管线 + 内置并发模式（builtin bot-chat 声明 parallel）
     expect(shot.pipelineText).toBe('bot-chat · parallel')
-    // 恰四个缺省角色，顺序与装配序一致
-    expect(shot.stagesText).toBe(
-      'intent: bot-intent · recheck: bot-intent · notes: bot-notes · task: bot:c4-notes'
-    )
-    // 预置状态文件的 pending 数字上屏（笔记调度不真跑）
-    expect(shot.notesText).toContain('7')
-    // 健康 bot 无 warnings 块
+    // 槽位 = 管线 input schema 的 agents.properties，顺序与声明序一致；必填带星标
+    expect(shot.slots.map((s) => [s.role, s.required, s.value])).toEqual([
+      ['intent', true, 'bot-intent'],
+      ['task', true, 'default'],
+      ['recheck', false, '']
+    ])
+    // 下拉候选 = 「未填」+ 注册表里的 agent 名（内置在列，用户档案此刻还没有）
+    for (const s of shot.slots) {
+      expect(s.options[0]).toBe('')
+      expect(s.options).toContain('bot-intent')
+      expect(s.options).toContain('default')
+      expect(s.warned).toBe(false)
+    }
+    // 正文字数（种子正文 'BOT BODY.'）
+    expect(shot.bodyChars).toBe('BOT BODY.'.length)
+    // 健康 bot 无 warnings 块；缺省 intent=bot-intent → 门控模型行在
     expect(shot.warningsCount).toBe(0)
-
-    await pane.selectRow('c4-nonotes')
-    const off = await until(async () => {
-      const s = await pane.inspect()
-      return s.present && s.stagesText.includes('bot:c4-nonotes') ? s : null
-    }, 'inspect strip for c4-nonotes')
-    // 禁用文案（三语均无数字 —— 不认具体 i18n 串）
-    expect(off.notesText).not.toMatch(/\d/)
+    expect(shot.gateModelPresent).toBe(true)
+    // v3 退场的两个锚点：笔记状态行、循环上限块
+    expect(await pane.retiredAnchors()).toEqual([])
   })
 
-  it('C5 警告聚合：管线缺失 + bot:ghost 悬空 + 双笔记标记 → 问题区 ≥3 条', async () => {
+  it('C5 警告聚合：管线缺失 + 槽位指向不存在的 agent → 问题区 2 条、该槽位警示配色', async () => {
     writeBotMd(app, 'c5-warn', {
       description: 'warn bot',
       pipeline: 'no-such-flow',
-      agents: { task: 'bot:ghost' },
-      body: [
-        'PERSONA.',
-        '',
-        '<!-- shuvix:bot-notes -->',
-        '',
-        'first notes',
-        '',
-        '<!-- shuvix:bot-notes -->',
-        '',
-        'second block'
-      ].join('\n')
+      agents: { intent: 'bot-intent', task: 'ghost-agent' }
     })
     await pane.refresh()
     await pane.selectRow('c5-warn')
     const shot = await until(async () => {
       const s = await pane.inspect()
-      return s.present && s.stagesText.includes('bot:ghost') ? s : null
+      return s.present && s.slots.length ? s : null
     }, 'inspect strip for c5-warn')
-    // 管线不存在：无并发后缀
+    // 管线不存在：无并发后缀；管线没声明槽位，bot 填的两个槽位都以「额外」身份列出（不必填）
     expect(shot.pipelineText).toBe('no-such-flow')
-    expect(shot.warningsCount).toBeGreaterThanOrEqual(3)
+    expect(shot.slots.map((s) => [s.role, s.required, s.value])).toEqual([
+      ['intent', false, 'bot-intent'],
+      ['task', false, 'ghost-agent']
+    ])
+    // 填了一个不存在的名字：下拉仍显示那个值（不静默换成别的），并带警示配色
+    expect(shot.slots.find((s) => s.role === 'task')!.warned).toBe(true)
+    expect(shot.warningsCount).toBe(2)
+    expect(shot.warnings.some((w) => w.includes('ghost-agent'))).toBe(true)
   })
 
-  it('C6 门控行显隐：缺省 intent=bot-intent 时在屏；换自定义门控则隐藏、stages 显自定义 ref', async () => {
+  it('C5b 必填槽位未填 → 问题区点名该槽位；下拉选一个 agent → md 长出那一行、问题区清空', async () => {
+    // 没有缺省表：task 漏填就是漏填 —— 设置页得在跑之前说出来，而不是等会话里失败
+    writeBotMd(app, 'c5-unset', {
+      description: 'task slot left unset',
+      agents: { intent: 'bot-intent' }
+    })
+    await pane.refresh()
+    await pane.selectRow('c5-unset')
+    const shot = await until(async () => {
+      const s = await pane.inspect()
+      return s.present && s.slots.length ? s : null
+    }, 'inspect strip for c5-unset')
+    const task = shot.slots.find((s) => s.role === 'task')!
+    expect(task).toMatchObject({ required: true, value: '', warned: true })
+    expect(shot.warningsCount).toBe(1)
+    expect(shot.warnings[0]).toContain('task')
+
+    // 下拉改槽位 = 给 md 打补丁并保存：文件长出 `  task: default`，其余行不动
+    expect(await pane.setSlot('task', 'default')).toBe(true)
+    const content = await until(() => {
+      const c = readFileSync(botPath('c5-unset'), 'utf-8')
+      return /shuvix-bot-agents:\n(?: {2}[\w-]+: [^\n]+\n)* {2}task: default\n/.test(c) ? c : null
+    }, 'task slot written into the md')
+    expect(content).toContain('  intent: bot-intent\n')
+    expect(content).toContain('task slot left unset')
+    // 读数条随保存重挂并现算：槽位已填、问题区消失
+    await until(async () => (await slotValue('task')) === 'default', 'inspect strip refreshed')
+    expect((await pane.inspect()).warningsCount).toBe(0)
+  })
+
+  it('C6 门控行显隐：缺省 intent=bot-intent 时在屏；换自定义门控则隐藏、intent 下拉显自定义 ref', async () => {
     writeAgentMd(app, 'my-gate', { description: 'custom gate agent' })
     writeBotMd(app, 'c6-gate', { description: 'custom gated bot', agents: { intent: 'my-gate' } })
     await pane.refresh()
 
-    await pane.selectRow('c4-notes')
+    await pane.selectRow('c4-full')
     const withDefault = await until(async () => {
       const s = await pane.inspect()
-      return s.present && s.stagesText.includes('bot:c4-notes') ? s : null
+      return s.present && s.slots.length ? s : null
     }, 'inspect strip (default gate)')
     expect(withDefault.gateModelPresent).toBe(true)
 
     await pane.selectRow('c6-gate')
     const withCustom = await until(async () => {
       const s = await pane.inspect()
-      return s.present && s.stagesText.includes('bot:c6-gate') ? s : null
+      return s.present && s.slots.some((x) => x.role === 'intent' && x.value === 'my-gate')
+        ? s
+        : null
     }, 'inspect strip (custom gate)')
     expect(withCustom.gateModelPresent).toBe(false)
-    expect(withCustom.stagesText).toContain('intent: my-gate')
+    // 用户档案进了下拉候选
+    expect(withCustom.slots.find((s) => s.role === 'intent')!.options).toContain('my-gate')
+  })
+
+  it('C6b 可选槽位写穿：recheck 选 my-gate → md 块里长出那一行；清回「未填」→ 行消失、块其余不动', async () => {
+    await pane.selectRow('c4-full')
+    await until(async () => (await slotValue('recheck')) === '', 'recheck slot unset')
+
+    expect(await pane.setSlot('recheck', 'my-gate')).toBe(true)
+    const withRecheck = await until(() => {
+      const c = readFileSync(botPath('c4-full'), 'utf-8')
+      return /shuvix-bot-agents:\n(?: {2}[\w-]+: [^\n]+\n)* {2}recheck: my-gate\n/.test(c)
+        ? c
+        : null
+    }, 'recheck slot written into the md')
+    expect(withRecheck).toContain('  intent: bot-intent\n')
+    expect(withRecheck).toContain('  task: default\n')
+    await until(async () => (await slotValue('recheck')) === 'my-gate', 'strip shows recheck')
+    // my-gate 真实存在 → 不进问题区
+    expect((await pane.inspect()).warningsCount).toBe(0)
+
+    // 清回「未填」：只拔掉那一行
+    expect(await pane.setSlot('recheck', '')).toBe(true)
+    const cleared = await until(() => {
+      const c = readFileSync(botPath('c4-full'), 'utf-8')
+      return c.includes('recheck') ? null : c
+    }, 'recheck line removed from the md')
+    expect(cleared).toContain('shuvix-bot-agents:\n  intent: bot-intent\n  task: default\n')
+    await until(async () => (await slotValue('recheck')) === '', 'strip shows recheck unset')
   })
 
   it('C7 门控写穿全链路：选型号 → 覆盖文件长出且完整；subAgent.list 见用户条目；清除 → 文件留、model 行消失', async () => {
-    await pane.selectRow('c4-notes')
+    await pane.selectRow('c4-full')
     await until(async () => (await pane.inspect()).gateModelPresent, 'gate model row mounted')
 
     await pane.openGateModel()
@@ -261,8 +320,8 @@ describe('设置页 Bots tab', () => {
     await pane.refresh()
     await pane.selectRow('c8-conflict')
 
-    // 编辑器挂载**之后**外部改盘（模拟笔记段的后台写入）
-    appendFileSync(botPath('c8-conflict'), '\n<!-- shuvix:bot-notes -->\n\nEXTERNAL NOTE C8.\n')
+    // 编辑器挂载**之后**外部改盘（模拟 bot 在答话途中改自己的正文）
+    appendFileSync(botPath('c8-conflict'), '\n\nEXTERNAL NOTE C8.\n')
 
     await pane.clickSave()
     await until(() => pane.conflictOpen(), 'conflict dialog shown')
@@ -276,7 +335,7 @@ describe('设置页 Bots tab', () => {
     expect(readFileSync(botPath('c8-conflict'), 'utf-8')).toContain('EXTERNAL NOTE C8.')
 
     await pane.clickConflictReload()
-    // 编辑器重挂，磁盘版本（含外部标记）进屏
+    // 编辑器重挂，磁盘版本（含外部改动）进屏
     await until(
       async () => (await pane.editor()).text.includes('EXTERNAL NOTE C8.'),
       'editor remounted with disk version'
@@ -293,12 +352,12 @@ describe('设置页 Bots tab', () => {
     expect(readFileSync(botPath('c8-conflict'), 'utf-8')).toContain('EXTERNAL NOTE C8.')
   })
 
-  it('C9 冲突 → 仍然覆盖：编辑器缓冲无指纹重存胜，磁盘不再含外部标记', async () => {
+  it('C9 冲突 → 仍然覆盖：编辑器缓冲无指纹重存胜，磁盘不再含外部改动', async () => {
     writeBotMd(app, 'c9-conflict', { description: 'conflict overwrite bot' })
     await pane.refresh()
     await pane.selectRow('c9-conflict')
 
-    appendFileSync(botPath('c9-conflict'), '\n<!-- shuvix:bot-notes -->\n\nEXTERNAL NOTE C9.\n')
+    appendFileSync(botPath('c9-conflict'), '\n\nEXTERNAL NOTE C9.\n')
     await pane.clickSave()
     await until(() => pane.conflictOpen(), 'conflict dialog shown')
 
@@ -316,14 +375,14 @@ describe('设置页 Bots tab', () => {
     await pane.refresh()
     await pane.selectRow('c10-conflict')
 
-    appendFileSync(botPath('c10-conflict'), '\n<!-- shuvix:bot-notes -->\n\nEXTERNAL NOTE C10.\n')
+    appendFileSync(botPath('c10-conflict'), '\n\nEXTERNAL NOTE C10.\n')
     const before = statSync(botPath('c10-conflict')).mtimeMs
     await pane.clickSave()
     await until(() => pane.conflictOpen(), 'conflict dialog shown')
 
     await pane.clickConflictCancel()
     await until(async () => !(await pane.conflictOpen()), 'conflict dialog dismissed')
-    // 三不动：内容、外部标记、mtime
+    // 三不动：内容、外部改动、mtime
     expect(readFileSync(botPath('c10-conflict'), 'utf-8')).toContain('EXTERNAL NOTE C10.')
     expect(statSync(botPath('c10-conflict')).mtimeMs).toBe(before)
   })
@@ -375,6 +434,17 @@ describe('设置页 Bots tab', () => {
     expect(rows.some((r) => r.name === 'my-bot')).toBe(true)
     // 创建编辑器已关（回到常态编辑）
     expect((await pane.editor()).transient).toBe(false)
+    // 模板预填的两个槽位在读数条里就位（intent → 门控模型行也在）
+    const shot = await until(async () => {
+      const s = await pane.inspect()
+      return s.present && s.slots.length ? s : null
+    }, 'inspect strip for my-bot')
+    expect(shot.slots.map((s) => [s.role, s.value])).toEqual([
+      ['intent', 'bot-intent'],
+      ['task', 'default'],
+      ['recheck', '']
+    ])
+    expect(shot.warningsCount).toBe(0)
 
     // 不改名直接再建 → 服务层拒绝，错误横幅上屏，编辑器留在原地
     await pane.clickNew()
@@ -405,7 +475,7 @@ describe('设置页 Bots tab', () => {
     expect(rows[0]).toMatchObject({ name: 'aa-fixed', selected: true })
   })
 
-  it('C15 用户遮蔽管线端到端：concurrency=skip 的 ~/.shuvix/workflows/bot-chat.md → 管线行 bot-chat · skip + 重入警告', async () => {
+  it('C15 用户遮蔽管线端到端：concurrency=skip 的 ~/.shuvix/workflows/bot-chat.md → 管线行 bot-chat · skip + 重入警告，槽位照常', async () => {
     // 从内置原文整份 fork，只改并发声明 —— 别的手写最小 workflow 反而测不到「同名遮蔽」的真实形态
     const src = await settings.eval<{ text: string } | { error: string }>(
       `window.api.workflow.getSource({ name: 'bot-chat', source: 'builtin' })`
@@ -420,12 +490,13 @@ describe('设置页 Bots tab', () => {
     mkdirSync(wfDir, { recursive: true })
     writeFileSync(join(wfDir, 'bot-chat.md'), forked)
 
-    await pane.selectRow('c4-notes')
+    await pane.selectRow('c4-full')
     const shot = await until(async () => {
       const s = await pane.inspect()
       return s.present && s.pipelineText === 'bot-chat · skip' ? s : null
     }, 'pipeline row shows user-shadowed concurrency')
-    expect(shot.stagesText).toContain('bot:c4-notes')
+    // 槽位表读的是生效的那份 md（fork 保留了 input schema）
+    expect(shot.slots.map((s) => s.role)).toEqual(['intent', 'task', 'recheck'])
     // 非 parallel 的重入模式进问题区（此前健康 bot 的问题区是空的 —— 见 C4）
     expect(shot.warningsCount).toBeGreaterThanOrEqual(1)
   })

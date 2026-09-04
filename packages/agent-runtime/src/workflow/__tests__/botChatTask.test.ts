@@ -7,13 +7,20 @@
  * 不在这里跑真脚本，改坏一个 `if` 只会在某次真实会话里表现为「bot 忽然不说话了」。
  *
  * 假的只有三样：脚本引擎（AsyncFunction，语义等价于宿主的 node:vm 包装）、
- * SubAgentManager（不起真 agent）、以及宿主装配进来的 `say`/`claim`/`turn`
+ * SubAgentManager（不起真 agent）、以及宿主装配进来的 `say`/`turn`
  * （生产里它们由 botService 提供，其自身的表在 botServicePipeline.test.ts）。
  * 引擎、md 解析、提示词渲染、契约透传、超时/中止的 code 归类全是真代码。
  *
+ * 两条前提贯穿全文件：
+ *  - bot 的档案（人设 + 记忆）**不在任何提示词里** —— 宿主随 invoke 传 `systemContext`，
+ *    引擎让这次 run 里每一段的派发都带上它（SC 组）；提示词里给门控的只有名字 + 描述；
+ *  - 任务段是 bot 在 `task` 槽位填的一份**普通 agent md**，不再是「bot 自己」：正文是它
+ *    自己的、工具是它自己声明的，管线不给 `tools` 选项。
+ *
  * 分组：
- *   OC 场合分流 · P 提示词组装 · S 结构化直出（gate 就能答的） · T 任务段派发 ·
- *   RC 出队复核 · F 故障出声 · A 中止要安静 · W wrapProse 的退化输入 · AT attach 转交
+ *   IN 入参闸 · P 提示词组装 · S 结构化直出（gate 就能答的） · T 任务段派发 ·
+ *   RC 出队复核 · F 故障出声 · A 中止要安静 · W wrapProse 的退化输入 · AT attach 转交 ·
+ *   SC systemContext 透传
  */
 import { describe, expect, it, vi } from 'vitest'
 import { buildBuiltinWorkflows } from '../builtinWorkflows'
@@ -30,21 +37,7 @@ import type { InProcessAgentType } from '../../subagent/types'
 const BOT_CHAT = (): ParsedWorkflowFile =>
   buildBuiltinWorkflows({}).find((w) => w.name === 'bot-chat')!
 
-/** bot 的笔记 —— 它住在 bot 自己的 systemPrompt 里（正文含笔记区），也单独喂给门控段 */
-const NOTES = '用户偏好简答；项目根在 ~/work/api。'
-
 /** 内置门控段：无工具，靠 next 交结构化结果 */
-/** 笔记段：共享内置件，声明的工具比脚本给的宽 —— 用来验证脚本确实把它收窄了 */
-const NOTES_AGENT: InProcessAgentType = {
-  name: 'bot-notes',
-  displayName: 'bot-notes',
-  description: 'notes stage',
-  tools: ['read', 'edit', 'bash'],
-  systemPrompt: 'notes stage',
-  instructionFiles: [],
-  projectAwareness: false
-}
-
 const INTENT: InProcessAgentType = {
   name: 'bot-intent',
   displayName: 'Intent',
@@ -53,14 +46,27 @@ const INTENT: InProcessAgentType = {
   systemPrompt: 'You decide whether this bot should speak.'
 }
 
-/** 任务段 agent **就是 bot 自己**：正文（含笔记）即系统提示词，工具即它自己声明的那些 */
-const SELF: InProcessAgentType = {
-  name: 'scout',
-  displayName: '侦察兵',
-  description: '负责代码侦察',
+/** 任务段：bot 在 task 槽位填的一份**普通 agent md** —— 正文是它自己的，工具是它自己声明的 */
+const TASK_AGENT: InProcessAgentType = {
+  name: 'coding',
+  displayName: 'Coding',
+  description: '工程助手',
   tools: ['read', 'grep', 'bash'],
-  systemPrompt: `你是侦察兵。\n\n---\n\n${NOTES}`
+  systemPrompt: '你是工程助手。'
 }
+
+/** 可选的 recheck 槽位人选（缺省回落 intent；RC-7 验证显式指定生效） */
+const RECHECK_AGENT: InProcessAgentType = {
+  name: 'reviewer',
+  displayName: 'Reviewer',
+  description: '',
+  tools: [],
+  systemPrompt: 'You re-judge queued requests.'
+}
+
+/** bot 的档案围栏 —— 生产里由 renderBotContext 渲染好随 invoke 传入；这里只需一段可辨认的文本 */
+const PROFILE_BLOCK =
+  '<bot_profile name="scout" file="/b/scout.md">\n你是侦察兵。用户偏好简答。\n</bot_profile>'
 
 // ── 阶段回复的三种形态 ──────────────────────────────────────────────────
 
@@ -94,16 +100,15 @@ function stageRun(
   })
 }
 
-/** 一次派发属于哪一段 —— 复核与门控用同一个 agent，只有提示词分得开 */
+/** 一次派发属于哪一段 —— 复核缺省与门控用同一个 agent，只有提示词分得开 */
 function stageOf(p: RunTaskParams): 'gate' | 'recheck' | 'task' {
   if (p.prompt.includes('This request was queued while the bot was busy')) return 'recheck'
   return p.agentType.name === INTENT.name ? 'gate' : 'task'
 }
 
-const GATE_REPLY = { decision: 'reply', relevance: 5, reason: '寒暄', reply: '你好，我在。' }
+const GATE_REPLY = { decision: 'reply', reason: '寒暄', reply: '你好，我在。' }
 const GATE_TASK = {
   decision: 'task',
-  relevance: 7,
   reason: '要动手查',
   task: { objective: '查一下 auth 中间件', boundaries: '只读，不要改文件' }
 }
@@ -127,12 +132,12 @@ interface BotChatOpts {
   slot?: Partial<{ superseded: string[]; selfReplied: boolean; queuedMs: number; since: string[] }>
   /** 任务段 ref 解析不出来（配置错） */
   taskAgentMissing?: boolean
-  /** 笔记段 ref 解析不出来 */
-  notesAgentMissing?: boolean
   /** 宿主没有附件回读能力 */
   noAttachmentResolver?: boolean
   /** say 抛出（宿主侧的写入闸挡下） */
   sayThrows?: string
+  /** 随 invoke 固化的上下文块（生产里 = [renderBotContext(...)]） */
+  systemContext?: readonly string[]
 }
 
 type Input = Record<string, unknown>
@@ -141,7 +146,13 @@ function makeBotChat(opts: BotChatOpts = {}): {
   invoke: (over?: Input) => Promise<{ ok?: boolean; output?: unknown; error?: string }>
   invokeWith: (over: Input, signal?: AbortSignal) => Promise<{ ok?: boolean; output?: unknown }>
   /** 不铺 baseInput —— 入参闸的用例要能少传一个键 */
-  invokeRaw: (input: Input) => Promise<{ started?: boolean; reason?: string; error?: string }>
+  invokeRaw: (input: Input) => Promise<{
+    started?: boolean
+    ok?: boolean
+    reason?: string
+    error?: string
+    output?: unknown
+  }>
   says: SayCall[]
   turns: number
   runs: RunTaskParams[]
@@ -181,10 +192,11 @@ function makeBotChat(opts: BotChatOpts = {}): {
     manager: { runTask } as unknown as SubAgentManager,
     script: scriptEngine,
     listWorkflows: () => entries,
+    // 槽位里的名字就是普通 agent 名 —— 没有 `bot:<name>` 这种自引用
     resolveAgentProfile: (ref) => {
       if (ref === 'bot-intent') return INTENT
-      if (ref === 'bot-notes') return opts.notesAgentMissing ? null : NOTES_AGENT
-      if (ref === 'bot:scout') return opts.taskAgentMissing ? null : SELF
+      if (ref === 'coding') return opts.taskAgentMissing ? null : TASK_AGENT
+      if (ref === 'reviewer') return RECHECK_AGENT
       return null
     },
     resolveRunModel: async () => ({ provider: 'p', model: 'm', capabilities: {} }),
@@ -213,6 +225,7 @@ function makeBotChat(opts: BotChatOpts = {}): {
       return typeof fn === 'function' ? await (fn as (s: unknown) => Promise<unknown>)(slot) : slot
     }
   }
+  const context = opts.systemContext ? { systemContext: opts.systemContext } : {}
 
   const invokeWith = async (
     over: Input,
@@ -223,6 +236,7 @@ function makeBotChat(opts: BotChatOpts = {}): {
       sessionId: 'S1',
       label: 'bt-1',
       extraApi,
+      ...context,
       ...(signal ? { signal } : {}),
       input: { ...baseInput(), ...over }
     })
@@ -231,7 +245,14 @@ function makeBotChat(opts: BotChatOpts = {}): {
     invoke: (over = {}) => invokeWith(over),
     invokeWith,
     invokeRaw: (input) =>
-      engine.invoke({ workflow: 'bot-chat', sessionId: 'S1', label: 'bt-1', extraApi, input }),
+      engine.invoke({
+        workflow: 'bot-chat',
+        sessionId: 'S1',
+        label: 'bt-1',
+        extraApi,
+        ...context,
+        input
+      }),
     says,
     get turns() {
       return state.turns
@@ -244,208 +265,75 @@ function makeBotChat(opts: BotChatOpts = {}): {
   }
 }
 
-/** 管线信封的最小合法形态（`shuvix-workflow-input` 的四个 required 键齐全） */
+/** 管线信封的最小合法形态（`shuvix-workflow-input` 的四个 required 键齐全，两个必填槽位齐全） */
 function baseInput(): Input {
   return {
-    occasion: 'message',
     bot: { name: 'scout', displayName: '侦察兵', description: '负责代码侦察', file: '/b/scout.md' },
-    agents: { intent: 'bot-intent', task: 'bot:scout', notes: 'bot-notes' },
-    session: { id: 'S1', arbitrated: false, directed: false, members: ['scout'] },
+    agents: { intent: 'bot-intent', task: 'coding' },
+    session: { id: 'S1', directed: false, members: ['scout'] },
     message: { id: 'e1', seq: 1, text: '帮我看看鉴权那块' },
-    window: [],
-    notes: ''
+    window: []
   }
 }
 
 const outcomeOf = (res: { output?: unknown }): string =>
   String((res.output as { outcome?: unknown } | undefined)?.outcome)
 
-// ────────────────────────────── OC：场合分流 ──────────────────────────────
+const withoutKey = (input: Input, key: string): Input => {
+  const copy = { ...input }
+  delete copy[key]
+  return copy
+}
 
-describe('OC —— 场合分流', () => {
-  it("OC-1 occasion:'notes' 只派发笔记段：零 say、零 claim、不碰仲裁", async () => {
-    // 笔记是离线的：没人在等，也不该往会话里说任何话。它与消息场合共用一份 md，
-    // 但两条路径除了 input 之外没有任何交集
-    const h = makeBotChat()
-    const res = await h.invoke({ occasion: 'notes', since: ['User: 以后用 pnpm'] })
-    expect(outcomeOf(res)).toBe('notes')
-    expect(h.runs).toHaveLength(1)
-    expect(h.runs[0].agentType.name).toBe('bot-notes')
-    expect(h.says).toHaveLength(0)
-  })
+// ────────────────────────────── IN：入参闸 ──────────────────────────────
 
-  it('OC-1b 笔记段拿到的工具恰为 read/edit —— 用户覆盖它也长不出别的', async () => {
-    // 与门控段那行 `tools: []` 同一条理由：这是共享内置件，一份用户覆盖不该能在管线
-    // 背后给自己添工具
-    const h = makeBotChat()
-    await h.invoke({ occasion: 'notes', since: ['User: x'] })
-    // 声明了三个，脚本只给两个 —— 交集就是脚本说了算的那两个
-    expect(h.runs[0].agentType.tools).toEqual(['read', 'edit'])
-  })
-
-  it('OC-1c 笔记段派不出去时不出声、不抛 —— 归纳失败是它自己的事', async () => {
-    // 检查点只在成功后前进，所以失败的这一轮下次会看到同样的材料，不需要补偿动作。
-    // 用「解析不出这个 agent」制造失败：它是唯一一种不依赖计时器的确定性 run 失败
-    const h = makeBotChat({ notesAgentMissing: true })
-    const res = await h.invoke({ occasion: 'notes', since: ['User: x'] })
-    expect(outcomeOf(res)).toBe('notes-failed')
-    expect(h.says).toHaveLength(0)
-  })
-
-  it('OC-1d 笔记段用 notesTimeoutSec（300s）那把尺：过了门控的 60s 还活着', async () => {
-    // 笔记跑在关键路径之外、没人等着，所以它可以慢；门控在首字节路径上，必须快。两处若
-    // 共用一个常量，改宽笔记就等于把每条消息的首字节一起放慢，反过来收紧门控又会让笔记
-    // 在 60 秒上被腰斩 —— 而那一刀之后这批材料要等下一个门槛才有第二次机会。
-    //
-    // 观测点是**墙钟到点时那次 abort**：`timeoutSec` 由引擎自己 setTimeout 兑现，
-    // 并不进 runTask 的入参，所以断言只能落在「到点之前没被拆、到点之后被拆了」上
-    vi.useFakeTimers()
-    try {
-      const h = makeBotChat({ task: { hang: true } })
-      const p = h.invoke({ occasion: 'notes', since: ['User: x'] })
-      await vi.advanceTimersByTimeAsync(61_000)
-      expect(h.runs).toHaveLength(1)
-      expect(h.runs[0].parentAbortSignal?.aborted, '在门控那把尺上就被拆了').toBe(false)
-
-      await vi.advanceTimersByTimeAsync(240_000)
-      expect(h.runs[0].parentAbortSignal?.aborted, '到 300s 仍没拆').toBe(true)
-      await p
-    } finally {
-      vi.useRealTimers()
-    }
-  })
-
-  it('OC-1n 墙钟到点算失败,不算「归纳完了」', async () => {
-    // 无契约的一步此前根本报不出超时:整段失败合成都关在 `schema !== undefined` 里,于是
-    // 300s 到点之后 run() 正常返回、脚本走到 `return {outcome:'notes'}`、宿主据此推进检查点
-    // —— 那批材料就此埋掉。这正是「检查点只在成功后前进」要防的形状,只是走的另一条路
-    vi.useFakeTimers()
-    try {
-      const h = makeBotChat({ task: { hang: true } })
-      const p = h.invoke({ occasion: 'notes', since: ['User: x'] })
-      await vi.advanceTimersByTimeAsync(301_000)
-      expect(outcomeOf(await p)).toBe('notes-failed')
-    } finally {
-      vi.useRealTimers()
-    }
-  })
-
-  it('OC-1e 笔记段没有结果契约 —— 活儿就是那次 edit，没有第二个读者', async () => {
-    // 给它一份 schema 会诱导模型「描述自己改了什么」而不是去改；而那份描述没有任何人读
-    // （宿主只看 outcome，脚本一个字都不碰笔记正文）。也因此正文里不该提 next（BA-14）
-    const h = makeBotChat()
-    await h.invoke({ occasion: 'notes', since: ['User: x'] })
-    expect(h.runs[0].resultContract).toBeUndefined()
-  })
-
-  it('OC-1f 笔记提示词点名那份文件的路径，并要求就地改', async () => {
-    // 宿主传的是 `bot.file` 的绝对路径 —— 笔记段靠它 read/edit，猜不出来也不该猜
-    const h = makeBotChat()
-    await h.invoke({ occasion: 'notes', since: ['User: x'] })
-    const p = h.runs[0].prompt
-    expect(p).toContain('/b/scout.md')
-    expect(p).toContain('edit it in place')
-  })
-
-  it('OC-1g 笔记提示词里「什么都不改是常态」在场（机制侧的对位在 e2e）', async () => {
-    // 提示词与 agent md（BA-10）各说一遍是刻意的：agent md 是这个段的长期人格，
-    // 而这一句在任务里重复，是因为它恰恰是模型最容易违背的那条 —— 一个被派来「更新笔记」
-    // 的 agent 天然倾向于写点什么。**机制上**「一次 edit 都没调」必须算成功，那条在 e2e
-    const h = makeBotChat()
-    await h.invoke({ occasion: 'notes', since: ['User: x'] })
-    expect(h.runs[0].prompt).toContain('Changing nothing is a normal outcome')
-  })
-
-  it('OC-1h since 切到 vars.notesWindow 条（给 80 条只出现最后 60 条）', async () => {
-    // 与门控窗口同一个理由，但这里更要紧：笔记的材料是**跨会话累积**的，一个忙了半小时的
-    // bot 能攒出上千行。宿主侧另有一把尺（NOTES_MAX_LINES），两处都要 —— 一处管提示词，
-    // 一处管被原样写进 run journal 的那份 input
-    const since = Array.from({ length: 80 }, (_, i) => `User: 第${i}条`)
-    const h = makeBotChat()
-    await h.invoke({ occasion: 'notes', since })
-    const p = h.runs[0].prompt
-    expect(p).not.toContain('第19条')
-    expect(p).toContain('第20条')
-    expect(p).toContain('第79条')
-  })
-
-  it('OC-1i since 为空 → 材料块连标题一起消失（不给一个空标题）', async () => {
-    // 认的是**小节标题**而不是散文：notesTask 开头那句「The conversations below have
-    // finished」恒在，可选的只有它下面那一段带 `##` 的材料块
-    const h = makeBotChat()
-    await h.invoke({ occasion: 'notes', since: [] })
-    expect(h.runs).toHaveLength(1)
-    expect(h.runs[0].prompt).not.toContain('## The conversations')
-  })
-
-  it('OC-1j 笔记场合用自己的标题「The conversations」，不复用复核那句「等待期间发生了什么」', async () => {
-    // 两处都渲染一份 `since` 数组，于是很容易顺手复用同一个块 —— 但复核那句的语境是
-    // 「这个 bot 正等着答一条排队的消息」，而笔记场合根本没有谁在等。同一份材料配错标题，
-    // 模型会按「我刚才漏了什么」而不是「这些对话教了我什么」去读它
-    const h = makeBotChat()
-    await h.invoke({ occasion: 'notes', since: ['User: 以后用 pnpm'] })
-    const p = h.runs[0].prompt
-    expect(p).toContain('## The conversations')
-    expect(p).not.toContain('What happened while it waited')
-    expect(p).toContain('以后用 pnpm')
-  })
-
-  it('OC-1k 被中止 ≠ 归纳失败：step_aborted 原样抛出，run 记为失败且不报 notes-failed', async () => {
-    // **这是「检查点只在成功后前进」的兑现处**（宿主那半边在 botServiceNotes）。脚本若把
-    // step_aborted 也 catch 成 `{outcome:'notes-failed'}`，一次用户按停止就会被记成一轮
-    // 「跑过了的归纳」——而宿主只要认了它，这批材料就永远埋掉了。对照 recheck 的同款处理
-    // 笔记段挂住：中止是唯一一种「不是失败、而是根本没跑」的结局
-    // （stageOf 把非 bot-intent 的派发都算作 'task'，笔记段的脚本化因此走 opts.task）
-    const hung = makeBotChat({ task: { hang: true } })
-    const ac = new AbortController()
-    const p = hung.invokeWith({ occasion: 'notes', since: ['User: x'] }, ac.signal)
-    await vi.waitFor(() => expect(hung.runs).toHaveLength(1))
-    ac.abort()
-    const res = await p
-    expect(res.ok).toBe(false)
-    expect(outcomeOf(res)).not.toBe('notes-failed')
-    expect(outcomeOf(res)).not.toBe('notes')
-  })
-
-  it('OC-1l 归纳失败的一轮 run 本身仍是 ok:true —— 「跑完了」不等于「归纳成功了」', async () => {
-    // 脚本 catch 之后是**正常返回**的，所以引擎照例记 ok:true。宿主因此不能只看 result.ok
-    // （那正是 D1 那条缺陷的形状）：判据必须是脚本自报的 outcome
-    const h = makeBotChat({ notesAgentMissing: true })
-    const res = await h.invoke({ occasion: 'notes', since: ['User: x'] })
-    expect(res.ok).toBe(true)
-    expect(outcomeOf(res)).toBe('notes-failed')
-  })
-
-  it('OC-1m 判定不接的成员照样带回 memorable —— 记什么不该由「这条我接不接」决定', async () => {
-    // 一条「以后都用 pnpm」是说给整个会话听的。把 memorable 绑到「开口了的人」身上，
-    // 等于一次对话只教会一个 bot，判定不接的那些下一轮仍然一无所知
-    const h = makeBotChat({
-      gate: { structured: { decision: 'ignore', relevance: 1, reason: '不归我', memorable: true } }
-    })
-    const res = await h.invoke()
-    expect(res.output).toMatchObject({ outcome: 'ignored', memorable: true })
-    expect(h.says).toHaveLength(0)
-  })
-
-  it.each(['occasion', 'bot', 'agents', 'session'])(
-    'OC-2 少了 required 键 %s → invalid-input，脚本一次都没跑',
+describe('IN —— 入参闸：宿主与管线之间的接线契约', () => {
+  it.each(['bot', 'agents', 'session', 'message'])(
+    'IN-1 少了 required 键 %s → invalid-input，脚本一次都没跑',
     async (key) => {
       // 四个键是宿主与管线之间的接线契约，不是模型输出 —— 少一个就是「换了个调用方、
       // 漏传一个字段」，让它跑起来只会在脚本深处炸成一句读不懂的 TypeError
       const h = makeBotChat()
       const res = await h.invokeRaw(withoutKey(baseInput(), key))
       expect(res).toMatchObject({ started: false, reason: 'invalid-input' })
-      expect(String((res as { error?: string }).error)).toContain(key)
+      expect(String(res.error)).toContain(key)
       expect(h.runs).toHaveLength(0)
     }
   )
-})
 
-const withoutKey = (input: Input, key: string): Input => {
-  const copy = { ...input }
-  delete copy[key]
-  return copy
-}
+  it('IN-2 槽位表缺必填槽位 → invalid-input 按路径点名（agents.task），零派发', async () => {
+    // 引擎沿 properties 递归查 required：哪些槽位必填由管线文件说了算，宿主没有缺省表。
+    // 缺的那一个必须按路径点名 —— 「agents」三个字对着一份写了 agents 的 bot md 毫无信息量
+    const h = makeBotChat()
+    const noTask = await h.invokeRaw({ ...baseInput(), agents: { intent: 'bot-intent' } })
+    expect(noTask).toMatchObject({ started: false, reason: 'invalid-input' })
+    expect(String(noTask.error)).toContain('agents.task')
+    expect(String(noTask.error)).not.toContain('agents.intent')
+
+    const noIntent = await h.invokeRaw({ ...baseInput(), agents: { task: 'coding' } })
+    expect(String(noIntent.error)).toContain('agents.intent')
+
+    const empty = await h.invokeRaw({ ...baseInput(), agents: {} })
+    expect(String(empty.error)).toContain('agents.intent, agents.task')
+    expect(h.runs).toHaveLength(0)
+  })
+
+  it('IN-3 agents 不是对象 → invalid-input 指出 input.agents 必须是对象', async () => {
+    const h = makeBotChat()
+    const res = await h.invokeRaw({ ...baseInput(), agents: 'coding' })
+    expect(res).toMatchObject({ started: false, reason: 'invalid-input' })
+    expect(String(res.error)).toContain('input.agents must be an object')
+    expect(h.runs).toHaveLength(0)
+  })
+
+  it('IN-4 recheck 槽位可选、window 可省：不填照常起跑', async () => {
+    // baseInput 本就没填 recheck（复核缺省回落 intent，见 RC-7）；window 不在 required 里
+    const h = makeBotChat()
+    const res = await h.invokeRaw(withoutKey(baseInput(), 'window'))
+    expect(res).toMatchObject({ started: true, ok: true })
+    expect(outcomeOf(res)).toBe('reply')
+  })
+})
 
 // ────────────────────────────── P：提示词组装 ──────────────────────────────
 
@@ -462,14 +350,14 @@ describe('P —— 提示词组装', () => {
     expect(p).toContain('帮我看看鉴权那块')
   })
 
-  it('P-2 笔记非空 → 笔记块整段出现；为空 → 连标题一起消失', async () => {
-    // 「有内容才出现的一整段」必须整体是一个值 —— 模板只有 {{path}}，标题得住在值里面
-    const withNotes = await gatePrompt({ notes: NOTES })
-    expect(withNotes).toContain('What this bot remembers')
-    expect(withNotes).toContain(NOTES)
-
-    const without = await gatePrompt({ notes: '' })
-    expect(without).not.toContain('What this bot remembers')
+  it('P-2 门控提示词里没有笔记块：既无标题也无占位符，脚本也不再拼 notesBlock', async () => {
+    // 从前门控段被单独喂一份截断过的笔记；现在人设与记忆整篇追加在每一段的系统提示词末尾
+    // （SC 组），提示词里再拼一份等于让模型看到同一批事实两次、还是截断过的那份
+    const p = await gatePrompt()
+    expect(p).not.toContain('What this bot remembers')
+    expect(p).not.toContain('{{notesBlock}}')
+    expect(BOT_CHAT().prompts.gate).not.toContain('notesBlock')
+    expect(BOT_CHAT().script).not.toContain('notesBlock')
   })
 
   it('P-3 其它成员非空 → others 块列出各自的显示名与描述；无其他人则整段消失', async () => {
@@ -488,8 +376,8 @@ describe('P —— 提示词组装', () => {
   })
 
   it('P-4 被点名 → addressed 段出现；没点名（哪怕会话里只有它一个）则不出现', async () => {
-    // v2 里 solo 的判据只剩「这条消息点了我的名」。成员数不再参与判断 —— bot 各自独立
-    // 处理消息，「只有我一个」不再意味着「这条一定归我」
+    // solo 的判据只有「这条消息点了我的名」。成员数不参与判断 —— bot 各自独立处理消息，
+    // 「只有我一个」不意味着「这条一定归我」
     expect(await gatePrompt()).not.toContain('This message is addressed to this bot')
 
     const named = { session: { id: 'S1', directed: true, members: ['scout', 'writer'] } }
@@ -523,14 +411,13 @@ describe('P —— 提示词组装', () => {
     expect(await gatePrompt({ window: [] })).not.toContain('Recent conversation')
   })
 
-  it('P-8 笔记超预算 → 在段落边界回退并以 … 收尾（切在半句上会被读成一个说到一半的事实）', async () => {
-    const head = 'A'.repeat(1500)
-    const tail = 'B'.repeat(1000)
-    const p = await gatePrompt({ notes: `${head}\n\n${tail}` })
-    expect(p).toContain('…')
-    expect(p).not.toContain(tail)
-    // 回退到段落边界：截点之前那一整段仍是完整的
-    expect(p).toContain(head)
+  it('P-8 【档案不在提示词里】传了 systemContext，门控提示词仍不含围栏与正文', async () => {
+    // 提示词里给门控的只有身份两项（显示名 + 描述）；完整档案在系统提示词末尾，
+    // 门控段的 agent md 自己说明了去那里找（botStageAgents BA-10）
+    const p = await gatePrompt({}, { systemContext: [PROFILE_BLOCK] })
+    expect(p).toContain('侦察兵 — 负责代码侦察')
+    expect(p).not.toContain('bot_profile')
+    expect(p).not.toContain('你是侦察兵')
   })
 
   it('P-9 任务段提示词带 objective；boundaries 有则出现、无则整段消失', async () => {
@@ -542,7 +429,7 @@ describe('P —— 提示词组装', () => {
     expect(p).toContain('只读，不要改文件')
 
     const bare = makeBotChat({
-      gate: { structured: { decision: 'task', relevance: 7, reason: '就查一下', task: {} } }
+      gate: { structured: { decision: 'task', reason: '就查一下', task: {} } }
     })
     await bare.invoke()
     const p2 = bare.of('task')[0].prompt
@@ -551,19 +438,17 @@ describe('P —— 提示词组装', () => {
     expect(p2).toContain('就查一下')
   })
 
-  it('P-10 【笔记只在 systemPrompt】任务段 prompt 不带笔记块，门控 prompt 才带', async () => {
-    // 任务段 agent **就是 bot 自己**，笔记已在它的正文里。再发一遍等于每条消息多抄一份，
-    // 而且是截断过的那一份 —— 模型于是看到同一批事实两次、还互相打架
-    const h = makeBotChat({ gate: { structured: GATE_TASK } })
-    await h.invoke({ notes: NOTES })
-
-    const gate = h.of('gate')[0].prompt
+  it('P-10 【档案不在提示词里】任务段提示词同样不含档案；agent 的 systemPrompt 是它自己的', async () => {
+    // 任务段是一份普通 agent md：它的 systemPrompt 是它自己的正文，bot 的档案由 createAgent
+    // 经 systemContext 追加在其后 —— 两者在这一层是两个入参，不在提示词里相遇
+    const h = makeBotChat({ gate: { structured: GATE_TASK }, systemContext: [PROFILE_BLOCK] })
+    await h.invoke()
     const task = h.of('task')[0]
-    expect(gate).toContain(NOTES)
-    expect(task.prompt).not.toContain(NOTES)
+    expect(task.prompt).not.toContain('bot_profile')
+    expect(task.prompt).not.toContain('你是侦察兵')
     expect(task.prompt).not.toContain('What this bot remembers')
-    // 但它当然知道自己学过什么 —— 那是它的系统提示词的一部分
-    expect(task.agentType.systemPrompt).toContain(NOTES)
+    expect(task.agentType.systemPrompt).toBe(TASK_AGENT.systemPrompt)
+    expect(task.systemContext).toEqual([PROFILE_BLOCK])
   })
 
   it('P-11 任务段窗口切到 vars.taskWindow 条（比门控宽：干活要更多上下文）', async () => {
@@ -613,7 +498,7 @@ describe('S —— gate 一句话答完，不开任务段', () => {
     // 这个字段，回连就成了永不触发的死代码
     const h = makeBotChat({
       gate: {
-        structured: { decision: 'clarify', relevance: 6, reason: '有歧义', reply: '哪一个？' }
+        structured: { decision: 'clarify', reason: '有歧义', reply: '哪一个？' }
       }
     })
     const res = await h.invoke()
@@ -623,7 +508,7 @@ describe('S —— gate 一句话答完，不开任务段', () => {
 
   it('S-3 说要开口却写了空串 → 按门控破损出声（与从不调 next 同一类故障）', async () => {
     const h = makeBotChat({
-      gate: { structured: { decision: 'reply', relevance: 5, reason: 'x', reply: '   ' } }
+      gate: { structured: { decision: 'reply', reason: 'x', reply: '   ' } }
     })
     const res = await h.invoke()
     expect(h.says).toHaveLength(1)
@@ -632,17 +517,21 @@ describe('S —— gate 一句话答完，不开任务段', () => {
     expect(outcomeOf(res)).toBe('gate-broken')
   })
 
-  it('S-4 memorable 透传到返回值（M9′ 的笔记场合据此排期）', async () => {
-    const h = makeBotChat({
-      gate: { structured: { ...GATE_REPLY, memorable: true } }
+  it('S-4 直出结局的返回形状恰为 {gate, outcome}：不再带 memorable（笔记场合没了）', async () => {
+    // 门控契约里没有 memorable 了；就算模型多填一个，脚本也不再把它带回宿主 ——
+    // 宿主没有任何读它的路径，带回去只会让 journal 里多一个看似有意义的字段
+    const reply = makeBotChat({ gate: { structured: { ...GATE_REPLY, memorable: true } } })
+    expect((await reply.invoke()).output).toEqual({ gate: 'ok', outcome: 'reply' })
+
+    const ignored = makeBotChat({
+      gate: { structured: { decision: 'ignore', reason: '不归我', memorable: true } }
     })
-    const res = await h.invoke()
-    expect((res.output as { memorable?: unknown }).memorable).toBe(true)
+    expect((await ignored.invoke()).output).toEqual({ gate: 'ok', outcome: 'ignored' })
   })
 
-  it('S-5 判定 ignore → 一个字都不说，也不占 turn（v2 里这是 bot 唯一被允许的沉默）', async () => {
+  it('S-5 判定 ignore → 一个字都不说，也不占 turn（这是 bot 唯一被允许的沉默）', async () => {
     const h = makeBotChat({
-      gate: { structured: { decision: 'ignore', relevance: 1, reason: '不归我' } }
+      gate: { structured: { decision: 'ignore', reason: '不归我' } }
     })
     expect(outcomeOf(await h.invoke())).toBe('ignored')
     expect(h.says).toHaveLength(0)
@@ -653,20 +542,20 @@ describe('S —— gate 一句话答完，不开任务段', () => {
 // ────────────────────────────── T：任务段派发 ──────────────────────────────
 
 describe('T —— 任务段派发', () => {
-  it('T-1 decision:task → 进 turn()，任务段恰派发一次，agent 就是 bot 自己', async () => {
+  it('T-1 decision:task → 进 turn()，任务段恰派发一次，agent 是 task 槽位填的那份 agent md', async () => {
     const h = makeBotChat({ gate: { structured: GATE_TASK } })
     await h.invoke()
     expect(h.turns).toBe(1)
     expect(h.of('task')).toHaveLength(1)
-    expect(h.of('task')[0].agentType.name).toBe('scout')
+    expect(h.of('task')[0].agentType.name).toBe('coding')
   })
 
-  it('T-2 【无 tools 选项】任务段拿到 bot 自己声明的全量工具，不被管线收窄', async () => {
-    // 收窄会推翻 bot md 关于它自己的说法 —— 与门控段（共享内置件，必须锁成零工具）
-    // 是相反的立场：这个 agent 就是为这份活写的
+  it('T-2 【无 tools 选项】任务段拿到那份 agent md 自己声明的全量工具，不被管线收窄', async () => {
+    // 收窄会推翻那份 agent md 关于它自己的说法（正文是按它自己的工具清单写的）—— 与门控段
+    // （共享内置件，必须锁成零工具）是相反的立场：这个槽位就是为这份活挑的
     const h = makeBotChat({ gate: { structured: GATE_TASK } })
     await h.invoke()
-    expect(h.of('task')[0].agentType.tools).toEqual(SELF.tools)
+    expect(h.of('task')[0].agentType.tools).toEqual(TASK_AGENT.tools)
     // 对照：门控段被显式锁成空
     expect(h.of('gate')[0].agentType.tools).toEqual([])
   })
@@ -786,20 +675,30 @@ describe('RC —— 排在自己回复之后的那一条要不要再做一遍', 
     expect(p.agentType.tools).toEqual([])
   })
 
-  it('RC-7 复核默认用 agents.intent；显式给了 agents.recheck 就用它', async () => {
-    const h = makeBotChat({
+  it('RC-7 复核缺省用 agents.intent；显式填了 agents.recheck 槽位就用它', async () => {
+    const fallback = makeBotChat({
       gate: { structured: GATE_TASK },
       slot: { selfReplied: true },
       recheck: { structured: { verdict: 'proceed' } }
     })
-    await h.invoke()
-    expect(h.of('recheck')[0].agentType.name).toBe('bot-intent')
+    await fallback.invoke()
+    expect(fallback.of('recheck')[0].agentType.name).toBe('bot-intent')
+
+    // recheck 是管线声明的可选槽位（builtinWorkflows BC-10）：填了就换人，门控段不受影响
+    const explicit = makeBotChat({
+      gate: { structured: GATE_TASK },
+      slot: { selfReplied: true },
+      recheck: { structured: { verdict: 'proceed' } }
+    })
+    await explicit.invoke({ agents: { intent: 'bot-intent', task: 'coding', recheck: 'reviewer' } })
+    expect(explicit.of('recheck')[0].agentType.name).toBe('reviewer')
+    expect(explicit.of('gate')[0].agentType.name).toBe('bot-intent')
   })
 })
 
 // ────────────────────────────── F：故障要出声 ──────────────────────────────
 
-describe('F —— 失败与超时：过了 claim 就没人替我兜底', () => {
+describe('F —— 失败与超时：过了门控就没人替我兜底', () => {
   it('F-1 门控破损 + 单 bot → 出声说「读不懂自己的判断」，outcome gate-broken', async () => {
     const h = makeBotChat({ gate: { prose: '我觉得应该回答' } })
     const res = await h.invoke()
@@ -809,9 +708,8 @@ describe('F —— 失败与超时：过了 claim 就没人替我兜底', () => 
     expect(res.output).toMatchObject({ gate: 'broken', outcome: 'gate-broken' })
   })
 
-  it('F-2 门控破损 + 多 bot → 照样出声：v2 没有「别人会替我兜底」这回事', async () => {
-    // v1 这里是沉默让位（反正胜出的那个会说话）。取消竞争之后，每个 bot 为自己的结局
-    // 负责 —— 它闭嘴，这条消息对它就彻底没有下文了
+  it('F-2 门控破损 + 多 bot → 照样出声：没有「别人会替我兜底」这回事', async () => {
+    // 每个 bot 为自己的结局负责 —— 它闭嘴，这条消息对它就彻底没有下文了
     const h = makeBotChat({ gate: { prose: '……' } })
     const res = await h.invoke({
       session: { id: 'S1', directed: false, members: ['scout', 'writer'] }
@@ -850,12 +748,12 @@ describe('F —— 失败与超时：过了 claim 就没人替我兜底', () => 
     }
   })
 
-  it('F-5 任务段 agent 不存在 → 说这是配置问题并点名那个 ref，outcome task-no-agent', async () => {
+  it('F-5 任务段 agent 不存在 → 说这是配置问题并点名那个槽位里的名字，outcome task-no-agent', async () => {
     // 「重试永远不会好」与「跑到一半挂了」是两回事，把人指向错误的方向比不说还糟
     const h = makeBotChat({ gate: { structured: GATE_TASK }, taskAgentMissing: true })
     const res = await h.invoke()
     expect(h.says).toHaveLength(1)
-    expect(h.says[0].raw).toContain('bot:scout')
+    expect(h.says[0].raw).toContain('`coding`')
     expect(h.says[0].raw).toContain('configuration problem')
     expect(h.says[0].opts).toEqual({ error: true })
     expect(outcomeOf(res)).toBe('task-no-agent')
@@ -882,8 +780,8 @@ describe('F —— 失败与超时：过了 claim 就没人替我兜底', () => 
     expect(outcomeOf(res)).toBe('task-failed')
   })
 
-  it('F-8 say 自己被挡下（仲裁强制点）→ run 以失败收尾，不吞成一次「成功的沉默」', async () => {
-    const h = makeBotChat({ sayThrows: 'another bot won this message' })
+  it('F-8 say 自己抛出（宿主侧的写入闸挡下）→ run 以失败收尾，不吞成一次「成功的沉默」', async () => {
+    const h = makeBotChat({ sayThrows: 'session is closed' })
     const res = await h.invoke()
     expect(res.ok).toBe(false)
     expect(h.says).toHaveLength(0)
@@ -906,7 +804,7 @@ describe('A —— 被拆掉不是故障：安静退出', () => {
     for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0))
   }
 
-  it('A-1 门控段被中止 → run 记为中止，一个字都不说（被别人赢了 / 会话停了）', async () => {
+  it('A-1 门控段被中止 → run 记为中止，一个字都不说（会话停了）', async () => {
     const h = makeBotChat({ gate: { hang: true } })
     const ac = new AbortController()
     const p = h.invokeWith({}, ac.signal)
@@ -1140,5 +1038,54 @@ describe('AT —— attach：脚本转交句柄，宿主在派发那一刻取字
     const res = await h.invoke(withImages())
     expect(h.logs).toContain('attach ignored: host has no attachment resolver')
     expect(outcomeOf(res)).toBe('task')
+  })
+})
+
+// ────────────────── SC：systemContext —— 档案随 invoke 固化，每段都带 ──────────────────
+
+/**
+ * bot 的人设与记忆不是任何一段的提示词材料：宿主用 renderBotContext 围栏好，随本次 invoke 的
+ * `systemContext` 固化进 run plan，引擎让这次 run 里**每一个** `run()` 的派发都带上它，
+ * createAgent 再把它追加到那个 agent 的系统提示词末尾（契约在 createAgent.test.ts）。
+ * 管线脚本对此一无所知 —— 这正是它能换任意一份 agent md 当任务段的前提。
+ */
+describe('SC —— systemContext 透传到每一段', () => {
+  const allStages = (): BotChatOpts => ({
+    gate: { structured: GATE_TASK },
+    slot: { selfReplied: true },
+    recheck: { structured: { verdict: 'proceed' } }
+  })
+
+  it('SC-1 门控 / 复核 / 任务段三段的派发都收到同一份 systemContext', async () => {
+    const h = makeBotChat({ ...allStages(), systemContext: [PROFILE_BLOCK] })
+    await h.invoke()
+    expect(h.of('gate')).toHaveLength(1)
+    expect(h.of('recheck')).toHaveLength(1)
+    expect(h.of('task')).toHaveLength(1)
+    for (const p of h.runs) expect(p.systemContext, stageOf(p)).toEqual([PROFILE_BLOCK])
+  })
+
+  it('SC-2 不传 → 每一段的 systemContext 都是 undefined（键不铺）', async () => {
+    const h = makeBotChat(allStages())
+    await h.invoke()
+    expect(h.runs).toHaveLength(3)
+    for (const p of h.runs) expect(p, stageOf(p)).not.toHaveProperty('systemContext')
+  })
+
+  it('SC-3 传空数组 → 同样不铺（引擎只在非空时透传）', async () => {
+    const h = makeBotChat({ ...allStages(), systemContext: [] })
+    await h.invoke()
+    expect(h.runs).toHaveLength(3)
+    for (const p of h.runs) expect(p, stageOf(p)).not.toHaveProperty('systemContext')
+  })
+
+  it('SC-4 档案不在任何一段的提示词里 —— 三段 prompt 都不含围栏与正文', async () => {
+    // P-8 / P-10 各钉了一段；这里扫全部：管线脚本没有任何一处把 systemContext 拼进文案
+    const h = makeBotChat({ ...allStages(), systemContext: [PROFILE_BLOCK] })
+    await h.invoke()
+    for (const p of h.runs) {
+      expect(p.prompt, stageOf(p)).not.toContain('bot_profile')
+      expect(p.prompt, stageOf(p)).not.toContain('你是侦察兵')
+    }
   })
 })

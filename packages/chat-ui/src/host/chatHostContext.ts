@@ -49,8 +49,6 @@ export interface ChatBotCandidate {
   name: string
   displayName: string
   description: string
-  /** L0 门控模式为 mention-only（弹层里标注 —— @提及是这类成员唯一的入口） */
-  mentionOnly?: boolean
 }
 
 /**

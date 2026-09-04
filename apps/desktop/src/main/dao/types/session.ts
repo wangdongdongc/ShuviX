@@ -59,8 +59,8 @@ export interface SessionSettings {
    * （一个会话在创建那一刻就定死是哪一种）。`chat` 前缀是为了让读代码的人一眼看出
    * 这条只对无根会话有意义。
    *
-   * 刻意**不含 enabledTools**：任务段的 agent 就是 bot 自己，工具来自它 md 里的
-   * `shuvix-tools`，一个会话级的工具勾选在这里不表达任何东西（对应 UI 上隐藏 ToolPicker）。
+   * 刻意**不含 enabledTools**：工具来自 bot 各槽位里那份 agent md 的 `shuvix-tools`，
+   * 一个会话级的工具勾选在这里不表达任何东西（对应 UI 上隐藏 ToolPicker）。
    */
   chatRunConfig?: {
     provider: string

@@ -195,28 +195,17 @@ const WORKFLOW_DESCRIPTOR: ShuvixMdTypeDescriptor = {
   ]
 }
 
-/** bot 的门控模式枚举 —— 解析器与属性卡下拉共用的单一真源（同 WORKFLOW_CONCURRENCY_MODES） */
-export const BOT_RESPOND_MODES = ['auto', 'mention-only'] as const
-
-/** 门控模式字段的 frontmatter 键（属性卡按它分派下拉候选项） */
-export const BOT_RESPOND_KEY = 'shuvix-bot-respond'
-
-/**
- * bot 响应谁说的话（v2）。与 `shuvix-bot-respond`（要不要被点名才响应）是**两个正交轴**，
- * 刻意不合并成一个枚举 —— 两轴组合出最想要的那一档：`mention-only` + `all` =
- * 「只有别的 bot 点名叫我，我才接话」，不需要发明第三个枚举值。
- */
-export const BOT_RESPOND_TO_MODES = ['user', 'all'] as const
-
-/** 缺省 `user` = 只响应用户消息（与 v1 的硬规则逐字节等价） */
-export const BOT_RESPOND_TO_KEY = 'shuvix-bot-respond-to'
+/** bot md 的管线键（属性卡与设置页的槽位编辑器共用） */
+export const BOT_PIPELINE_KEY = 'shuvix-bot-pipeline'
+/** bot md 的槽位表键：`槽位 → agent 名` 的嵌套映射 */
+export const BOT_AGENTS_KEY = 'shuvix-bot-agents'
 
 /**
  * bot 定义文件（agent-runtime bot/botFile.ts 的键集）。设计见 docs/bot-design.md §4。
  *
- * bot md 是 **agent md 的超集**：前半段的键与 agent 卡逐行同义（正文即任务段系统提示词），
- * 后半段是 bot 专属的门控 / 记忆 / 表现层声明。`shuvix-bot-agents` 是嵌套映射，
- * 只落通用行（三个阶段 ref 做成表单的成本高于收益，原文编辑器里一眼可读）。
+ * 一个 bot 是一份**绑定**：身份三项 + 管线名 + 槽位表 + 正文（人设与记忆）。模型 / 工具 /
+ * 指令文件这些 agent 键不在 bot 上 —— 它们归槽位里那份 agent md。`shuvix-bot-agents`
+ * 是嵌套映射，属性卡只落通用行；槽位由设置页按管线的输入 schema 渲染成下拉编辑。
  */
 const BOT_DESCRIPTOR: ShuvixMdTypeDescriptor = {
   type: 'bot',
@@ -225,15 +214,7 @@ const BOT_DESCRIPTOR: ShuvixMdTypeDescriptor = {
     { key: 'name', labelKey: 'tool.subAgentName', kind: 'mono' },
     { key: 'shuvix-displayName', labelKey: 'tool.subAgentDisplayName', kind: 'text' },
     { key: 'description', labelKey: 'tool.subAgentDescription', kind: 'text' },
-    { key: AGENT_MODEL_KEY, labelKey: 'tool.subAgentModel', kind: 'select' },
-    { key: 'shuvix-tools', labelKey: 'tool.subAgentTools', kind: 'csv' },
-    { key: BOT_RESPOND_KEY, labelKey: 'settings.botRespond', kind: 'select' },
-    { key: BOT_RESPOND_TO_KEY, labelKey: 'settings.botRespondTo', kind: 'select' },
-    { key: 'shuvix-bot-notes', labelKey: 'settings.botNotes', kind: 'boolean' },
-    { key: 'shuvix-bot-greeting', labelKey: 'settings.botGreeting', kind: 'text' },
-    { key: 'shuvix-bot-suggestions', labelKey: 'settings.botSuggestions', kind: 'list' },
-    { key: 'shuvix-instruction-files', labelKey: 'tool.subAgentInstructionFiles', kind: 'csv' },
-    { key: 'shuvix-project-awareness', labelKey: 'tool.subAgentProjectAwareness', kind: 'boolean' }
+    { key: BOT_PIPELINE_KEY, labelKey: 'settings.botInspectPipeline', kind: 'mono' }
   ]
 }
 

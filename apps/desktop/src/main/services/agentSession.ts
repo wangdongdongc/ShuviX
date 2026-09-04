@@ -25,7 +25,7 @@ import { createLogger } from '../logger'
 const log = createLogger('AgentSession')
 
 /**
- * 自动续跑开关（现读，同 `bot.maxHop` / `httpLog.enabled` 的口径：改了立刻生效）。
+ * 自动续跑开关（现读，同 `httpLog.enabled` 的口径：改了立刻生效）。
  * **缺省开** —— 只有明确写 'false' 才关：设置项是纯文本键值，一个写坏的值不该把能力关掉。
  */
 export const AUTO_RESUME_KEY = 'session.autoResume'

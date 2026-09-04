@@ -47,17 +47,21 @@ export interface ChatMessageRow {
   attachments?: ChatAttachmentRef[]
   /** 失败 / 降级通告（UI 上错误色气泡） */
   isError?: boolean
-  /** 触发它的那条消息（定向与 bot→bot 链路） */
+  /** 触发它的那条消息（bot 回复指向它回应的那条用户消息） */
   replyToId?: string
-  /** 引发本轮的用户消息 id —— 单轮扇出计数按它归组 */
+  /**
+   * 遗留列（v16 的 bot→bot 接力护栏）：接力已取消，新写入不再填它，读侧照旧原样带出。
+   * 留着列而不做迁移 —— SQLite 删列不值一次 user_version。
+   */
   rootId?: string
-  /** 传播跳数：用户消息 0，由它触发的 bot 回复 1，依此类推。循环护栏的纵向计数 */
+  /** 遗留列，同上；新写入恒为 0 */
   hop: number
   createdAt: number
 }
 
-/** 新增一条消息时调用方要给的字段（id / seq / createdAt 由 DAO 分配） */
-export type ChatMessageInsert = Omit<ChatMessageRow, 'id' | 'seq' | 'createdAt'> & {
+/** 新增一条消息时调用方要给的字段（id / seq / createdAt 由 DAO 分配；hop 缺省 0） */
+export type ChatMessageInsert = Omit<ChatMessageRow, 'id' | 'seq' | 'createdAt' | 'hop'> & {
   /** 显式指定 id（极少用：需要先拿到 id 再写内容时）；缺省由 DAO 生成 */
   id?: string
+  hop?: number
 }

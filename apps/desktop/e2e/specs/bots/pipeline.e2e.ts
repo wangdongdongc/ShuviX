@@ -2,18 +2,23 @@
  * 管线链路的端到端：**消息进 → L0 门 → 参与者名单 → turn → say 落库**。
  *
  * 三个观测面 —— `message.list`（落库 + 署名）、事件录制器（user_message / bot_activity /
- * bot_mailbox / assistant_message）、`~/.shuvix/bots/.runs/`（决策记录与 run journal）。
+ * bot_mailbox / assistant_message）、`~/.shuvix/bots/.runs/`（决策记录与 run journal），
+ * 外加假提供商的请求记录（**发给模型的系统提示词**：bot 正文的围栏就落在那里）。
  *
  * **v2 取消了仲裁**：一条消息不再由多个 bot 抢、也不再只有一个胜出，每个成员各自独立
- * 判断要不要接话。因此原先钉「谁赢了 / 谁记 claim_lost / 谁让位」的三条用例整体退场
- * （claim_solo、relevance 高者胜、门控破损者让位），换成 v2 的对位事实：
- * 各说各的、故障者自己出声。`claim` 这个名字在管线脚本里已经不存在，调它是 ReferenceError。
+ * 判断要不要接话。`claim` 这个名字在管线脚本里已经不存在，调它是 ReferenceError。
+ *
+ * **v3 取消了逐 bot 的门控模式与 bot→bot 接力**：没有 mention-only（每个在册成员都进
+ * cohort，「这条与我无关」由它自己的意图段说），也没有 respond-to / hop / 扇出护栏
+ * （bot 的回复不触发 bot 由结构保证：`appendBotMessage` 不回灌任何门）。那些用例整体
+ * 退场。取而代之的是 v3 的两件新事实：正文经 `<bot_profile>` 围栏进每个参与 agent 的
+ * 系统提示词；必填槽位漏填由管线的入参校验拦下并在会话里可见地说出来。
  */
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { launchApp, type E2EApp } from '../../harness/launch'
-import { sleep, until } from '../../harness/cdp'
+import { sleep } from '../../harness/cdp'
 import { startFakeProvider, type FakeProvider, type FakeRequest } from '../../harness/fakeProvider'
 import {
   createBotSession,
@@ -32,54 +37,10 @@ let provider: FakeProvider
 const MODEL = 'e2e-model'
 
 /**
- * bot→bot 接力的探针管线（v2）—— **零 LLM**：它不跑门控段，落一句话就完事。
- *
- * 护栏（hop / 单轮扇出 / 永不响应自己）判在 L0 里，与管线脚本无关；用真门控只会让每一跳
- * 都多付一次假提供商往返，还把「第几跳停下来」这件事泡在 LLM 的时序噪音里。
- * `delayMs` 是唯一的旋钮：把某个成员的发言推后，好让扇出计数在它发言之前就已经涨上去。
- */
-const RELAY = 'v2-relay-probe'
-const RELAY_MD = [
-  '---',
-  'shuvix: workflow v1',
-  `name: ${RELAY}`,
-  'description: v2 e2e probe — say one line; bot→bot relay comes from the host, not the script.',
-  'shuvix-workflow-concurrency: parallel',
-  '---',
-  '',
-  'v2 接力探针：可选延时 → say 一句，零 LLM。护栏由 L0 判，脚本不参与。',
-  '',
-  '```js workflow',
-  'if (input.delayMs) await sleep(input.delayMs)',
-  "await say(input.sayLine || 'ok')",
-  "return { outcome: 'reply' }",
-  '```',
-  ''
-].join('\n')
-
-/** 落一个接力探针 bot；`relay` 决定它是不是 `shuvix-bot-respond-to: all` */
-function relayBot(
-  name: string,
-  opts: { display: string; relay: boolean; delayMs?: number }
-): string {
-  writeBotMd(app, name, {
-    description: `relay probe ${name}`,
-    displayName: opts.display,
-    pipeline: RELAY,
-    ...(opts.relay ? { respondTo: 'all' } : {}),
-    botInput: {
-      sayLine: `${opts.display} 说话`,
-      ...(opts.delayMs ? { delayMs: opts.delayMs } : {})
-    }
-  })
-  return name
-}
-
-/**
  * 脚本化一次门控判定 —— 意图段靠 `next` 工具交回结构化结果。
  *
  * `when` 是**并发下的必需品**：假提供商的队列按「请求体读完的顺序」消费，而双 bot 的两个
- * 意图段是并行发出的 —— 不按内容认领就必然串号。判据用提示词里带的 displayName。
+ * 意图段是并行发出的 —— 不按内容认领就必然串号。
  */
 function gate(
   verdict: Record<string, unknown>,
@@ -92,17 +53,36 @@ function gate(
   }
 }
 
-/** 提示词里出现了这个 bot 的显示名 —— 双 bot 场景下认领自己那一份脚本 */
+/** 请求体里的系统提示词（openai-completions 把它放在 messages 头部，role 为 system 或 developer） */
+function systemPromptOf(r: FakeRequest): string {
+  const m = (r.body.messages ?? []).find((x) => x.role === 'system' || x.role === 'developer')
+  const c = m?.content
+  if (typeof c === 'string') return c
+  if (Array.isArray(c)) {
+    return c.map((b) => (b as { text?: string }).text ?? '').join('')
+  }
+  return ''
+}
+
+/**
+ * 这一请求属于哪个 bot 的 run —— 按系统提示词末尾的 `<bot_profile name="…">` 围栏认领。
+ *
+ * 不能按显示名认：门控提示词的 others 块会列出**别的**成员的显示名，双 bot 场景下
+ * 「提示词里出现了 Alpha」对 Beta 的请求同样成立。围栏的 name 只属于这次 run 的主人。
+ */
 const forBot =
-  (displayName: string) =>
+  (name: string) =>
   (r: FakeRequest): boolean =>
-    !r.isTitle && r.raw.includes(displayName)
+    !r.isTitle && systemPromptOf(r).includes(`<bot_profile name="${name}"`)
 
 interface Msg {
   id: string
   role?: string
   content?: unknown
-  metadata?: { sender?: { kind: string; name: string; displayName: string } } | null
+  metadata?: {
+    sender?: { kind: string; name: string; displayName: string }
+    botFailure?: unknown
+  } | null
 }
 
 const listMessages = (sid: string): Promise<Msg[]> =>
@@ -141,6 +121,8 @@ async function untilReplies(sid: string, n: number): Promise<Msg[]> {
   return await listMessages(sid)
 }
 
+const ALPHA_BODY = 'ALPHA PERSONA BODY — answer tersely.'
+
 beforeAll(async () => {
   app = await launchApp()
   provider = await startFakeProvider()
@@ -149,23 +131,20 @@ beforeAll(async () => {
   events = eventRecorder(app.main)
   await events.install()
 
-  writeBotMd(app, 'p-alpha', { description: 'alpha', displayName: 'Alpha' })
+  writeBotMd(app, 'p-alpha', { description: 'alpha', displayName: 'Alpha', body: ALPHA_BODY })
   writeBotMd(app, 'p-beta', { description: 'beta', displayName: 'Beta' })
-  writeBotMd(app, 'p-quiet', {
-    description: 'quiet',
-    displayName: 'Quiet',
-    respond: 'mention-only'
-  })
   writeBotMd(app, 'p-task', { description: 'takes the task branch', displayName: 'Tasker' })
   writeBotMd(app, 'p-broken', {
     description: 'points at a pipeline that does not exist',
     displayName: 'Broken',
     pipeline: 'no-such-pipeline'
   })
-
-  const wfDir = join(app.home, '.shuvix', 'workflows')
-  mkdirSync(wfDir, { recursive: true })
-  writeFileSync(join(wfDir, `${RELAY}.md`), RELAY_MD)
+  // 必填槽位 task 漏填：没有缺省表，管线的入参校验会拦下它
+  writeBotMd(app, 'p-unset', {
+    description: 'forgot to fill the task slot',
+    displayName: 'Unset',
+    agents: { intent: 'bot-intent' }
+  })
 }, 120_000)
 
 afterAll(async () => {
@@ -207,33 +186,59 @@ describe('单 bot：消息进 → 内置管线 → say 落库', () => {
   })
 })
 
-describe('L0 门', () => {
-  it('mention-only 未被提及 → 零派发，且决策记录里有痕', async () => {
-    const sid = await createBotSession(app.main, { bots: ['p-quiet'] })
-    await events.clear()
-    await prompt(sid, 'nobody is named here')
-
-    // 给管线一点起跑的时间，然后断言它根本没起
-    await new Promise((r) => setTimeout(r, 600))
-    expect((await listMessages(sid)).filter((m) => m.role === 'assistant')).toHaveLength(0)
-    expect(await typesFor(sid)).toEqual(['user_message'])
-    expect(kindsOf('p-quiet')).toContain('l0_mention_only_skipped')
-  })
-
-  it('裸文本 @提及 → mention-only 也参与（定向压过它）', async () => {
+describe('正文进系统提示词（v3）', () => {
+  it('门控段的系统提示词末尾带 <bot_profile name file> 围栏 + 前言 + 正文；用户提示词里没有它', async () => {
+    // 正文不是任何一个 agent 的系统提示词，也不在管线的任何 prompt 块里 —— 它由宿主围栏后
+    // 随 invoke 的 systemContext 追加到这次 run 派发的每一个 agent 的系统提示词末尾。
+    // 这件事横跨 botService → workflow engine → manager → createAgent 四层，只有真跑一次、
+    // 看发到模型那边的请求体才作数
     provider.reset()
-    provider.script(gate({ decision: 'reply', reason: '被点名', reply: '在的。' }))
-    const sid = await createBotSession(app.main, { bots: ['p-quiet'] })
-    await prompt(sid, '@Quiet 你在吗')
-    const msgs = await untilReplies(sid, 1)
-    expect(msgs.find((m) => m.role === 'assistant')?.metadata?.sender?.name).toBe('p-quiet')
+    provider.script(gate({ decision: 'reply', reason: '寒暄', reply: '在。' }))
+    const sid = await createBotSession(app.main, { bots: ['p-alpha'] })
+    await prompt(sid, 'who are you')
+    await untilReplies(sid, 1)
 
-    const directed = decisions('p-quiet').filter((d) => d.kind === 'l0_directed')
+    const req = provider.chatRequests()[0]
+    expect(req).toBeDefined()
+    const sys = systemPromptOf(req)
+    // 围栏的属性：身份键 + 这份 md 的绝对路径（agent 就是往这里写）
+    const file = join(app.botsDir, 'p-alpha.md')
+    expect(sys).toContain(`<bot_profile name="p-alpha" file="${file}">`)
+    expect(sys).toContain(ALPHA_BODY)
+    // 围栏在系统提示词的**末尾**（排在门控 agent 自己的正文与项目注入之后）
+    expect(sys.trimEnd().endsWith('</bot_profile>')).toBe(true)
+    // 围栏外的前言是宿主在说话：这是谁、这段文字是什么
+    expect(sys).toContain('You are acting on behalf of the chat bot "Alpha" (p-alpha)')
+    // 正文只走系统提示词，不进用户消息
+    expect(req.lastUserText).not.toContain(ALPHA_BODY)
+    expect(req.lastUserText).not.toContain('<bot_profile')
+  })
+})
+
+describe('L0 门', () => {
+  it('裸文本 @提及 → 只有被点名的成员派发（via:text），且拿的是不含 ignore 的契约', async () => {
+    provider.reset()
+    provider.script(
+      gate({ decision: 'reply', reason: '被点名', reply: '在的。' }, forBot('p-beta'))
+    )
+    const sid = await createBotSession(app.main, { bots: ['p-alpha', 'p-beta'] })
+    const alphaBefore = decisions('p-alpha').length
+    await prompt(sid, '@Beta 你在吗')
+    const msgs = await untilReplies(sid, 1)
+    await sleep(800)
+
+    const replies = msgs.filter((m) => m.role === 'assistant')
+    expect(replies).toHaveLength(1)
+    expect(replies[0].metadata?.sender?.name).toBe('p-beta')
+    // 定向压过 cohort：没被点名的 alpha 根本不派发（零增量记录、零请求）
+    expect(decisions('p-alpha').length).toBe(alphaBefore)
+    expect(provider.chatRequestCount()).toBe(1)
+
+    const directed = decisions('p-beta').filter((d) => d.kind === 'l0_directed')
     expect(directed.length).toBeGreaterThan(0)
     expect((directed[directed.length - 1].detail as { via?: string })?.via).toBe('text')
-    // 被点名 = 不给 ignore 的那份契约。v2 收窄了这条判据：门控段的 `solo` 只看
-    // `input.session.directed`，「会话里只有我一个」不再算（`arbitrated` 那个入参没有了）
-    const gateReq = provider.chatRequests().find((r) => r.raw.includes('Quiet'))!
+    // 被点名 = 不给 ignore 的那份契约（门控段的 `solo` 只看 `input.session.directed`）
+    const gateReq = provider.chatRequests().find(forBot('p-beta'))!
     expect(gateReq.raw).not.toContain('\\"ignore\\"')
   })
 
@@ -251,8 +256,8 @@ describe('多 bot：各自独立，没有胜负', () => {
     provider.reset()
     // 两个意图段并行发出 —— 必须按内容认领，否则脚本会串号
     provider.script(
-      gate({ decision: 'reply', reason: '我来答', reply: 'A 的回答' }, forBot('Alpha')),
-      gate({ decision: 'reply', reason: '我也答', reply: 'B 的回答' }, forBot('Beta'))
+      gate({ decision: 'reply', reason: '我来答', reply: 'A 的回答' }, forBot('p-alpha')),
+      gate({ decision: 'reply', reason: '我也答', reply: 'B 的回答' }, forBot('p-beta'))
     )
     const sid = await createBotSession(app.main, { bots: ['p-alpha', 'p-beta'] })
     await prompt(sid, 'who answers this')
@@ -272,8 +277,8 @@ describe('多 bot：各自独立，没有胜负', () => {
     // 也不再触发任何「全体沉默」提示
     provider.reset()
     provider.script(
-      gate({ decision: 'ignore', reason: '明显冲着 Beta 去的' }, forBot('Alpha')),
-      gate({ decision: 'reply', reason: '正是我管的', reply: 'B 的回答' }, forBot('Beta'))
+      gate({ decision: 'ignore', reason: '明显冲着 Beta 去的' }, forBot('p-alpha')),
+      gate({ decision: 'reply', reason: '正是我管的', reply: 'B 的回答' }, forBot('p-beta'))
     )
     const sid = await createBotSession(app.main, { bots: ['p-alpha', 'p-beta'] })
     await prompt(sid, 'beta please take this')
@@ -291,90 +296,6 @@ describe('多 bot：各自独立，没有胜负', () => {
   })
 })
 
-/**
- * bot→bot 接力（v2 新增的第二根轴 `shuvix-bot-respond-to`）与它的两道护栏。
- *
- * 为什么值得一条 e2e：终止性是**结构保证**，而这个结构横跨三处 —— `say` 落库后的
- * `relayToBots`、L0 的 hop/扇出判据、以及计数的两个来源（行上的 `hop` 列与
- * 「同一 rootId 下已有多少条 bot 消息」的查询）。任何一处漏传计数，单测都看不出来：
- * 它们各自的入参都是对的，错的是「一路传下去」这件事本身。
- */
-describe('bot→bot 接力与循环护栏', () => {
-  /** 该会话上的 bot 消息（system 行不在其中 —— 它投影成 error_event） */
-  const botMsgs = async (sid: string): Promise<Msg[]> =>
-    (await listMessages(sid)).filter((m) => m.role === 'assistant')
-
-  it('缺省 respond-to: user —— bot 的发言不触发任何人，两条消息就到头', async () => {
-    // 缺省档与 v1 的硬规则「bot 的回复不触发 bot」逐字节等价：连 relayToBots 的第一句
-    // 都进不去（没有任何成员声明 all）
-    relayBot('rl-u1', { display: 'U1', relay: false })
-    relayBot('rl-u2', { display: 'U2', relay: false })
-    const sid = await createBotSession(app.main, { bots: ['rl-u1', 'rl-u2'] })
-    await prompt(sid, '你们说说')
-    await untilReplies(sid, 2)
-    // 静置窗断「不发生」：接力若漏网，第三条会在这段时间里冒出来
-    await sleep(2000)
-    expect(await botMsgs(sid)).toHaveLength(2)
-  })
-
-  it('respond-to: all + maxHop=2 —— 用户 → 两人各答 → 互相接一手，第 3 跳不再派发', async () => {
-    relayBot('rl-a', { display: 'RelayA', relay: true })
-    relayBot('rl-b', { display: 'RelayB', relay: true })
-    const sid = await createBotSession(app.main, { bots: ['rl-a', 'rl-b'] })
-    await prompt(sid, '开个头')
-
-    // 纵向必然终止：hop0 用户 → hop1 各一条 → hop2 各接一手 → hop2 的消息不再触发任何人
-    await untilReplies(sid, 4)
-    await sleep(2500)
-    const msgs = await botMsgs(sid)
-    expect(msgs).toHaveLength(4)
-    // 每人两条：自己答用户的那条 + 接对方那一手
-    const bySender = msgs.map((m) => m.metadata?.sender?.name).sort()
-    expect(bySender).toEqual(['rl-a', 'rl-a', 'rl-b', 'rl-b'])
-    // 停下来的理由写在决策记录里（不是「恰好没人再说话」）
-    expect(kindsOf('rl-a')).toContain('l0_hop_exceeded')
-    expect(kindsOf('rl-b')).toContain('l0_hop_exceeded')
-  }, 60_000)
-
-  it('单轮扇出触顶 → 停止派发并落一条用户看得见的 system 行，不静默', async () => {
-    // 造触顶的办法：三个快成员先把这一轮撑满（3 条一跳 + 6 条二跳 = 9 > 8），
-    // 第四个成员被 delayMs 推到那之后才发言 —— 它的接力读到的扇出计数已经越界。
-    // 靠时序而不是靠更大的 N：扇出计数是在**每条 bot 消息要往下派发的那一刻**读的，
-    // 而二跳消息（hop=2）根本不派发，所以光堆人数并不会让计数在派发前涨上去
-    for (const [name, display] of [
-      ['rl-f1', 'Fan1'],
-      ['rl-f2', 'Fan2'],
-      ['rl-f3', 'Fan3']
-    ]) {
-      relayBot(name, { display, relay: true })
-    }
-    relayBot('rl-slow', { display: 'FanSlow', relay: true, delayMs: 3000 })
-    const members = ['rl-f1', 'rl-f2', 'rl-f3', 'rl-slow']
-    const sid = await createBotSession(app.main, { bots: members })
-    await prompt(sid, '大家一起来')
-
-    // 触顶不静默：用户在会话里看得到「本轮已达上限」那一行（system 行投影成 error_event）
-    const capped = await until(
-      async () => {
-        const msgs = await listMessages(sid)
-        const hit = msgs.filter((m) => m.role === 'system_notify')
-        return hit.length > 0 ? hit : undefined
-      },
-      'a system row telling the round hit its cap',
-      60_000
-    )
-    expect(String(capped[0].content)).toBeTruthy()
-    // 谁被拦下的写在它自己的决策记录里
-    expect(kindsOf('rl-slow')).toContain('l0_fanout_exceeded')
-
-    // 而且整轮确实收住了：护栏的意义是终止，不是某个精确的条数 ——
-    // 派发是并发的，扇出计数每次派发只读一次，所以上界是「有界」而不是「恰好 8」
-    await sleep(4000)
-    const finalCount = (await botMsgs(sid)).length
-    expect(finalCount).toBeLessThanOrEqual(16)
-  }, 120_000)
-})
-
 describe('管线不存在 —— 失败在会话里看得见', () => {
   it('指向一份不存在的管线 → 落一条可见失败 + pipeline_not_found', async () => {
     const sid = await createBotSession(app.main, { bots: ['p-broken'] })
@@ -384,6 +305,33 @@ describe('管线不存在 —— 失败在会话里看得见', () => {
     // journal 深处的记录不是呈现：用户得在会话里看到这件事
     expect(String(msgs.find((m) => m.role === 'assistant')?.content)).toContain('no-such-pipeline')
     expect(kindsOf('p-broken')).toContain('pipeline_not_found')
+  })
+})
+
+describe('必填槽位漏填 —— 配置错在会话里看得见（v3）', () => {
+  it('task 槽位未填 → 管线拒绝起跑，会话里落一条说出原话的失败；不再补通用失败气泡；零 LLM', async () => {
+    // 没有缺省表：漏填不是「跑到一半坏了」而是配置错。管线的入参校验（沿 properties 递归查
+    // required）把原话交回来，宿主原样说出 —— 用户才知道该去改哪一行
+    provider.reset()
+    const sid = await createBotSession(app.main, { bots: ['p-unset'] })
+    await prompt(sid, 'anything')
+    const msgs = await untilReplies(sid, 1)
+    await sleep(800)
+
+    const replies = (await listMessages(sid)).filter((m) => m.role === 'assistant')
+    expect(replies).toHaveLength(1)
+    const text = String(replies[0].content)
+    expect(text).toContain('refused to start')
+    // 管线的原话：缺的正是 agents.task
+    expect(text).toContain('agents.task')
+    // 通用的「没能处理完」不得叠上来（这条失败已经显形）
+    expect(text).not.toContain("couldn't finish")
+    expect(replies[0].metadata?.botFailure).toBe(true)
+    expect(replies[0].metadata?.sender).toMatchObject({ name: 'p-unset', displayName: 'Unset' })
+    // 记账 + 门控根本没起（一次模型请求都没有）
+    expect(kindsOf('p-unset')).toContain('pipeline_invalid_input')
+    expect(provider.chatRequestCount()).toBe(0)
+    expect(msgs.some((m) => m.role === 'user')).toBe(true)
   })
 })
 
@@ -411,7 +359,7 @@ describe('run journal 落到 bot 自己的目录', () => {
       .filter(Boolean) as Array<Record<string, unknown>>
     const meta = metas.find((m) => m.sessionId === sid)!
     expect(meta).toBeDefined()
-    // 信封里是会话窗口 + 笔记 + 成员表，每个 run 抄一份 —— journal 要答的是「发生了什么」
+    // 信封里是会话窗口 + 成员表，每个 run 抄一份 —— journal 要答的是「发生了什么」
     expect(meta.event).toBeUndefined()
     expect(meta.sessionId).toBe(sid)
   })
@@ -455,7 +403,9 @@ describe('门控故障：破损与超时是故障不是判定', () => {
     // 在群聊形态下这是正确的（失败本就罕见），而「选一个代表出声」的规则已经没有前提
     provider.reset()
     // 只给 Alpha 脚本；Beta 的门控拿不到脚本 → 契约破损
-    provider.script(gate({ decision: 'reply', reason: '我来', reply: '我回答。' }, forBot('Alpha')))
+    provider.script(
+      gate({ decision: 'reply', reason: '我来', reply: '我回答。' }, forBot('p-alpha'))
+    )
     const sid = await createBotSession(app.main, { bots: ['p-alpha', 'p-beta'] })
     await prompt(sid, 'one of you please')
     await untilReplies(sid, 2)

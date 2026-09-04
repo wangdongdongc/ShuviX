@@ -44,6 +44,8 @@ export const chatMessageDao = {
       ...input,
       id: input.id ?? `fake-msg-${++counter}`,
       seq,
+      // hop 是遗留列（接力已取消）：真 DAO 缺省写 0，这里同口径
+      hop: input.hop ?? 0,
       createdAt: Date.now()
     }
     rows.push(row)
@@ -62,11 +64,6 @@ export const chatMessageDao = {
   },
   deleteBySession(sessionId: string): void {
     rows = rows.filter((r) => r.sessionId !== sessionId)
-  },
-  countBotMessagesByRoot(sessionId: string, rootId: string): number {
-    return rows.filter(
-      (r) => r.sessionId === sessionId && r.rootId === rootId && r.authorKind === 'bot'
-    ).length
   }
 }
 

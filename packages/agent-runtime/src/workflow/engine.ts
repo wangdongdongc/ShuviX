@@ -138,6 +138,12 @@ export interface WorkflowInvokeRequest {
   signal?: AbortSignal
   /** 调用来源标签（journal / listRuns 可读） */
   label?: string
+  /**
+   * 追加到本次 run 里**每一个** `run()` 所派发 agent 的系统提示词末尾的上下文块（已围栏）。
+   * 与 `extraApi` 同一种席位：调用方随本次 invoke 装配、引擎不解释内容 —— bot 管线用它把
+   * bot 的人设与记忆带给门控/复核/任务每一段。`fire` 没有调用方，所以那条路径恒为空。
+   */
+  systemContext?: readonly string[]
 }
 
 export interface WorkflowInvokeResult {
@@ -284,6 +290,7 @@ export function createWorkflowEngine(deps: WorkflowEngineDeps): WorkflowEngine {
     sessionId?: string
     extraApi?: Record<string, unknown>
     externalSignal?: AbortSignal
+    systemContext?: readonly string[]
   }
 
   const runs = new Map<string, WorkflowRun>()
@@ -499,6 +506,8 @@ export function createWorkflowEngine(deps: WorkflowEngineDeps): WorkflowEngine {
               modelConfig,
               parentAbortSignal: stepController.signal,
               ...(contextMessages.length ? { contextMessages } : {}),
+              // 调用方随本次 invoke 固化的上下文块：这次 run 里每一段都带同一份
+              ...(plan.systemContext?.length ? { systemContext: plan.systemContext } : {}),
               resultContract: schema
                 ? { schema: schema as Record<string, unknown>, sourceLabel: name, nudges }
                 : undefined
@@ -804,7 +813,8 @@ export function createWorkflowEngine(deps: WorkflowEngineDeps): WorkflowEngine {
           mode: req.reentry?.mode ?? entry.file.concurrency,
           sessionId: req.sessionId,
           extraApi: req.extraApi,
-          externalSignal: req.signal
+          externalSignal: req.signal,
+          systemContext: req.systemContext
         })
       } catch (err) {
         logger?.warn(`workflow invoke("${req.workflow}") failed: ${errText(err)}`)
@@ -897,8 +907,10 @@ export function createWorkflowEngine(deps: WorkflowEngineDeps): WorkflowEngine {
   }
 
   /**
-   * invoke 入参的浅校验 —— 只看 `shuvix-workflow-input` 的 `type: object` 与 `required`。
-   * 深层 JSON Schema 校验刻意不做：入参来自宿主自己的代码（不是模型输出），
+   * invoke 入参的浅校验 —— 只看 `shuvix-workflow-input` 的 `type: object` 与 `required`，
+   * 并沿 `properties` 里同样声明为 `type: object` 的子对象递归下去（bot 管线的
+   * `agents` 槽位表就是这样一个子对象：哪些槽位必填由管线说了算，漏填在这里被拦下）。
+   * 其余 JSON Schema 校验刻意不做：入参来自宿主自己的代码（不是模型输出），
    * 而 required 恰好挡住「换了个调用方、少传一个字段」这类真实错误。
    */
   function checkInput(file: ParsedWorkflowFile, input: unknown): string | null {
@@ -907,8 +919,38 @@ export function createWorkflowEngine(deps: WorkflowEngineDeps): WorkflowEngine {
     if (typeof input !== 'object' || input === null || Array.isArray(input)) {
       return 'input must be an object (this workflow declares shuvix-workflow-input)'
     }
+    return checkRequired(schema, input as Record<string, unknown>, '')
+  }
+
+  function checkRequired(
+    schema: Record<string, unknown>,
+    value: Record<string, unknown>,
+    path: string
+  ): string | null {
     const required = Array.isArray(schema.required) ? schema.required : []
-    const missing = required.filter((k) => !(String(k) in (input as Record<string, unknown>)))
-    return missing.length ? `input is missing required field(s): ${missing.join(', ')}` : null
+    const missing = required.filter((k) => !(String(k) in value))
+    if (missing.length) {
+      const names = missing.map((k) => `${path}${String(k)}`).join(', ')
+      return `input is missing required field(s): ${names}`
+    }
+    const properties = schema.properties
+    if (typeof properties !== 'object' || properties === null) return null
+    for (const [key, sub] of Object.entries(properties as Record<string, unknown>)) {
+      if (typeof sub !== 'object' || sub === null || (sub as { type?: unknown }).type !== 'object')
+        continue
+      const child = value[key]
+      // 缺席且非必填：上面没拦，这里也不下钻（可选子对象整体省略是合法的）
+      if (child === undefined) continue
+      if (typeof child !== 'object' || child === null || Array.isArray(child)) {
+        return `input.${path}${key} must be an object`
+      }
+      const err = checkRequired(
+        sub as Record<string, unknown>,
+        child as Record<string, unknown>,
+        `${path}${key}.`
+      )
+      if (err) return err
+    }
+    return null
   }
 }

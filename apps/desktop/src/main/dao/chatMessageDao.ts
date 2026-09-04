@@ -116,13 +116,13 @@ export class ChatMessageDao extends BaseDao {
         input.isError ? 1 : 0,
         input.replyToId ?? null,
         input.rootId ?? null,
-        input.hop,
+        input.hop ?? 0,
         createdAt
       )
       return seq
     })
     const seq = insert()
-    return { ...input, id, seq, createdAt, hop: input.hop }
+    return { ...input, id, seq, createdAt, hop: input.hop ?? 0 }
   }
 
   /** 会话内消息条数（删除确认弹窗等只要个数的地方） */
@@ -155,15 +155,6 @@ export class ChatMessageDao extends BaseDao {
   /** 清空会话（清空对话 / 删除会话共用） */
   deleteBySession(sessionId: string): void {
     this.stmt('DELETE FROM chat_messages WHERE sessionId = ?').run(sessionId)
-  }
-
-  /** 同一 `rootId` 下已有多少条 bot 消息 —— 单轮扇出护栏的计数口 */
-  countBotMessagesByRoot(sessionId: string, rootId: string): number {
-    const row = this.stmt(
-      `SELECT COUNT(*) as n FROM chat_messages
-       WHERE sessionId = ? AND rootId = ? AND authorKind = 'bot'`
-    ).get(sessionId, rootId) as { n: number }
-    return row.n
   }
 }
 

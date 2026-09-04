@@ -433,14 +433,17 @@ export function chatPane(main: CdpClient): ChatPane {
 //
 // 行锚点是组件自带的 data-at-suggestion：bot 行的值是 `bot:<name>`（身份键），
 // 文件行的值是工作区相对路径 —— 两个名字空间天然不撞。徽标/选中态按**结构类**认
-// （mention-only 徽标 = 行内 bg-warning/10 的 span；键盘选中 = bg-accent/15），
+// （徽标 = 行内 bg-warning/10 的 span；键盘选中 = bg-accent/15），
 // 不认 i18n 文案。bot 候选是异步拉的（bots.list()），行何时出现由 spec 用 until 等。
+//
+// v3 起没有 mention-only 这种逐 bot 的门控模式，弹层行上的那枚徽标随之退场 ——
+// `mentionBadge` 留着只为**否定断言**（任何一行都不该再长出它）。
 
 /** @ 弹层里的一行 */
 export interface AtSuggestionRow {
   /** data-at-suggestion 属性值：bot 行 `bot:<name>`，文件行为相对路径 */
   key: string
-  /** mention-only 徽标节点在不在（bot 行专属；按 bg-warning/10 结构类认） */
+  /** 徽标节点在不在（按 bg-warning/10 结构类认）—— v3 起恒应为 false */
   mentionBadge: boolean
   /** 键盘选中态（bg-accent/15） */
   selected: boolean
@@ -1742,10 +1745,15 @@ export function botFlowPane(main: CdpClient): BotFlowPane {
 // 丢更新冲突对话框。
 //
 // 锚点全部是 A1 落的 data-*（data-bot-new / data-bot-row / data-bot-save /
-// data-bot-new-session / data-bot-inspect{,-warnings} / data-bot-notes-status /
-// data-bot-gate-model / data-bot-conflict-{reload,overwrite}），左栏与右面板按
-// DOM 结构从 [data-bot-new] 反推（底栏的父级 = 列表列，其下一个兄弟 = 右面板），
-// 不认宽度类。ModelSelect 面板沿用 fmCardPane 的 `.picker-panel` 约定（body portal）。
+// data-bot-new-session / data-bot-inspect{,-warnings} / data-bot-slots /
+// data-bot-slot{,-select} / data-bot-body-chars / data-bot-gate-model /
+// data-bot-conflict-{reload,overwrite}），左栏与右面板按 DOM 结构从 [data-bot-new]
+// 反推（底栏的父级 = 列表列，其下一个兄弟 = 右面板），不认宽度类。ModelSelect 面板
+// 沿用 fmCardPane 的 `.picker-panel` 约定（body portal）。
+//
+// v3 删掉两个锚点（连同它们描述的能力）：`data-bot-notes-status`（笔记段没了，正文由
+// bot 自己维护）与 `data-bot-limits`（bot→bot 接力没了，hop/扇出上限随之退场）。
+// 它们只在 `retiredAnchors()` 里作否定断言。
 
 export interface BotsPaneRow {
   /** bot 身份键（data-bot-row 属性值 = frontmatter name） */
@@ -1755,17 +1763,33 @@ export interface BotsPaneRow {
   selected: boolean
 }
 
+/** 读数条槽位编辑器里的一行（`<label data-bot-slot>` + `<select data-bot-slot-select>`） */
+export interface BotsSlotRow {
+  /** 槽位名（data-bot-slot 属性值 = 管线 input schema 里的 agents.properties 键） */
+  role: string
+  /** 必填星标（`*`）在不在 */
+  required: boolean
+  /** 下拉当前值：'' = 未填 */
+  value: string
+  /** 下拉候选（含 '' 那项）—— 注册表里未被遮蔽的 agent 名 */
+  options: string[]
+  /** 警示配色（必填未填 / 填了不存在的 agent） */
+  warned: boolean
+}
+
 /** 运行时读数条快照（data-bot-inspect 未上屏时 present=false 其余为空） */
 export interface BotsInspectShot {
   present: boolean
   /** 管线行文案：`<workflow>` 或 `<workflow> · <concurrency>` */
   pipelineText: string
-  /** 角色行文案：`intent: … · recheck: … · notes: … · task: …` */
-  stagesText: string
-  /** 笔记状态行（data-bot-notes-status）文案 */
-  notesText: string
+  /** 槽位行（DOM 序 = 管线声明序，bot 额外填的槽位缀尾） */
+  slots: BotsSlotRow[]
+  /** 正文字符数（data-bot-body-chars 属性值） */
+  bodyChars: number
   /** 问题区条目数（data-bot-inspect-warnings 属性值）；块未上屏为 0 */
   warningsCount: number
+  /** 问题区各条文案（DOM 序）—— 只用于「含某个槽位名」这类弱断言，不认整句 i18n */
+  warnings: string[]
   /** 门控模型选择器行（仅 intent 仍指向内置 bot-intent 时上屏） */
   gateModelPresent: boolean
 }
@@ -1812,6 +1836,14 @@ export interface BotsPane {
   /** 编辑器头部「新建会话」（data-bot-new-session） */
   clickNewSession(): Promise<void>
   inspect(): Promise<BotsInspectShot>
+  /**
+   * 改某个槽位的下拉（native value setter + change 事件，走 React 的 onChange）：
+   * 组件据此给 md 打补丁（`shuvix-bot-agents.<role>` 行）并 `bot:save`。
+   * '' = 清掉该槽位。下拉不存在（槽位没上屏）返回 false。
+   */
+  setSlot(role: string, value: string): Promise<boolean>
+  /** v3 已退场的锚点里此刻还在屏上的（应恒为空数组） */
+  retiredAnchors(): Promise<string[]>
 
   /** 丢更新冲突对话框是否在屏（以 data-bot-conflict-reload 的存在为准） */
   conflictOpen(): Promise<boolean>
@@ -1968,19 +2000,50 @@ export async function botsPane(settings: CdpClient): Promise<BotsPane> {
       settings.eval(`(() => {
         const strip = document.querySelector('[data-bot-inspect]')
         if (!strip) {
-          return { present: false, pipelineText: '', stagesText: '', notesText: '', warningsCount: 0, gateModelPresent: false }
+          return { present: false, pipelineText: '', slots: [], bodyChars: 0, warningsCount: 0, warnings: [], gateModelPresent: false }
         }
-        const mono = [...strip.querySelectorAll('span.font-mono')]
+        // 管线行是槽位列表之前唯一的 font-mono span（槽位名各自也是 font-mono，但住在 label 里）
+        const pipeline = [...strip.querySelectorAll('span.font-mono')].find((s) => !s.closest('[data-bot-slot]'))
         const warn = strip.querySelector('[data-bot-inspect-warnings]')
+        const chars = strip.querySelector('[data-bot-body-chars]')
         return {
           present: true,
-          pipelineText: mono[0]?.textContent.trim() ?? '',
-          stagesText: mono[1]?.textContent.trim() ?? '',
-          notesText: strip.querySelector('[data-bot-notes-status]')?.textContent.trim() ?? '',
+          pipelineText: pipeline?.textContent.trim() ?? '',
+          slots: [...strip.querySelectorAll('[data-bot-slot]')].map((l) => {
+            const sel = l.querySelector('[data-bot-slot-select]')
+            return {
+              role: l.getAttribute('data-bot-slot') ?? '',
+              required: (l.querySelector('span.font-mono')?.textContent ?? '').includes('*'),
+              value: sel?.value ?? '',
+              options: sel ? [...sel.options].map((o) => o.value) : [],
+              warned: !!sel && sel.className.includes('border-warning')
+            }
+          }),
+          bodyChars: chars ? Number(chars.getAttribute('data-bot-body-chars')) : 0,
           warningsCount: warn ? Number(warn.getAttribute('data-bot-inspect-warnings')) : 0,
+          warnings: warn ? [...warn.children].map((d) => d.textContent.trim()) : [],
           gateModelPresent: ${GATE_ROW} !== null
         }
       })()`),
+    setSlot: async (role, value) => {
+      const hit = await settings.eval<boolean>(`(() => {
+        const sel = document.querySelector('[data-bot-slot-select=${JSON.stringify(role)}]')
+        if (!sel) return false
+        // React 给受控 select 装了 value tracker：直接赋 .value 会被判「没变」而不派 onChange，
+        // 必须绕到原型上的原生 setter（同 chatPane.type 对 textarea 的做法）
+        const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set
+        setter.call(sel, ${JSON.stringify(value)})
+        sel.dispatchEvent(new Event('change', { bubbles: true }))
+        return true
+      })()`)
+      // 补丁 + bot:save + 重扫 + 编辑器重挂各是一趟 IPC/渲染 —— 调用方按结果 until 等
+      await sleep(200)
+      return hit
+    },
+    retiredAnchors: () =>
+      settings.eval<string[]>(
+        `['data-bot-notes-status', 'data-bot-limits'].filter((a) => document.querySelector('[' + a + ']'))`
+      ),
 
     conflictOpen: () => settings.eval<boolean>(`${CONFLICT_RELOAD} !== null`),
     clickConflictReload: async () => {
@@ -2044,13 +2107,14 @@ export async function botsPane(settings: CdpClient): Promise<BotsPane> {
 // A4 · 会话配套 —— 头部成员条 / 会话工具栏胶囊 / 聊天会话空态。
 //
 // 锚点全部是 A4 落的 data-*（data-bot-members / data-bot-member{,-missing} /
-// data-bot-manage-members / data-bot-empty{,-member} / data-bot-suggestion），外加
-// 会话工具栏胶囊的 data-session-tool（共享 SessionToolbar，工具 id 与
-// SessionPanelTool 一一对应）。
+// data-bot-manage-members / data-bot-empty{,-member}），外加会话工具栏胶囊的
+// data-session-tool（共享 SessionToolbar，工具 id 与 SessionPanelTool 一一对应）。
 //
 // v2 删掉「Bot 决策」面板（连同 `bot:decisions` IPC 与 data-bot-decision* 三个锚点）：
 // 竞争与仲裁取消之后，那个面板回答的「谁赢了谁让位」已经不是会发生的事。
 // `decisions.jsonl` 本身留着 —— L0 剔除根本不产生 run，没有那个文件就什么线索都不剩。
+// v3 删掉空态里的建议问题 chip（`data-bot-suggestion`，随 `shuvix-bot-suggestions` 一并退场）：
+// 空态只剩成员介绍行；`suggestionChips` 留着做否定断言。
 
 /** 头部成员条里的一枚胶囊 */
 export interface BotMemberChip {
@@ -2073,13 +2137,16 @@ export interface BotSessionPane {
   /** 点某个工具胶囊（开合面板/切换工具）；无则 false */
   clickToolbarTool(tool: string): Promise<boolean>
 
-  /** 聊天会话空态快照：present = data-bot-empty；cards 按 DOM 序 = 名单序 */
+  /**
+   * 聊天会话空态快照：present = data-bot-empty；cards 按 DOM 序 = 名单序
+   * （display / description 按结构认：成员行里的 .font-medium 与 .text-text-tertiary）；
+   * suggestionChips = 整个空态里 data-bot-suggestion 的个数（v3 起恒应为 0）。
+   */
   emptyState(): Promise<{
     present: boolean
-    cards: Array<{ name: string; suggestions: string[] }>
+    cards: Array<{ name: string; display: string; description: string }>
+    suggestionChips: number
   }>
-  /** 点某成员卡的第 index 个建议 chip（data-bot-suggestion）；无则 false */
-  clickSuggestion(memberName: string, index: number): Promise<boolean>
 }
 
 /** 主窗聊天会话的 A4 配套面（会话已选中后调用） */
@@ -2087,8 +2154,6 @@ export function botSessionPane(main: CdpClient): BotSessionPane {
   const MEMBERS = `document.querySelector('[data-bot-members]')`
   const TOOL_BTNS = `[...document.querySelectorAll('[data-session-tool]')]`
   const EMPTY = `document.querySelector('[data-bot-empty]')`
-  const CARD = (name: string): string =>
-    `document.querySelector('[data-bot-empty-member=${JSON.stringify(name)}]')`
 
   return {
     membersBar: () =>
@@ -2133,26 +2198,16 @@ export function botSessionPane(main: CdpClient): BotSessionPane {
     emptyState: () =>
       main.eval(`(() => {
         const root = ${EMPTY}
-        if (!root) return { present: false, cards: [] }
+        if (!root) return { present: false, cards: [], suggestionChips: 0 }
         return {
           present: true,
           cards: [...root.querySelectorAll('[data-bot-empty-member]')].map((c) => ({
             name: c.getAttribute('data-bot-empty-member') ?? '',
-            suggestions: [...c.querySelectorAll('[data-bot-suggestion]')].map((b) =>
-              (b.textContent ?? '').trim()
-            )
-          }))
+            display: (c.querySelector('.font-medium')?.textContent ?? '').trim(),
+            description: (c.querySelector('.text-text-tertiary')?.textContent ?? '').trim()
+          })),
+          suggestionChips: root.querySelectorAll('[data-bot-suggestion]').length
         }
-      })()`),
-    clickSuggestion: async (memberName, index) => {
-      const hit = await main.eval<boolean>(`(() => {
-        const chips = [...(${CARD(memberName)}?.querySelectorAll('[data-bot-suggestion]') ?? [])]
-        if (!chips[${index}]) return false
-        chips[${index}].click()
-        return true
       })()`)
-      await sleep(300)
-      return hit
-    }
   }
 }

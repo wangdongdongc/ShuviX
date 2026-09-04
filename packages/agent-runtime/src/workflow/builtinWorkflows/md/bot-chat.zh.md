@@ -2,7 +2,7 @@
 shuvix: workflow v1
 shuvix-builtin: true
 name: bot-chat
-description: bot 在聊天会话里跑的管线 —— 判定要不要说话、作答,再在闲时悄悄把自己的笔记整理好。
+description: bot 在聊天会话里跑的管线 —— 判定要不要说话,然后作答。
 shuvix-workflow-concurrency: parallel
 shuvix-workflow-limits:
   maxAgents: 4
@@ -12,29 +12,40 @@ shuvix-workflow-vars:
   taskWindow: 20
   gateTimeoutSec: 60
   taskTimeoutSec: 1800
-  notesTimeoutSec: 300
-  notesWindow: 60
-  notesBudget: 2000
   recheckStale: true
 shuvix-workflow-input:
   type: object
-  required: [occasion, bot, agents, session]
+  required: [bot, agents, session, message]
   properties:
-    occasion: { enum: [message, notes] }
     bot: { type: object, required: [name, displayName, description, file] }
-    agents: { type: object, required: [intent, task, notes] }
+    agents:
+      type: object
+      required: [intent, task]
+      properties:
+        intent:
+          type: string
+          description: Decides whether the bot speaks, and how — one call, no tools, structured verdict
+        task:
+          type: string
+          description: Does the work when the gate says so — its own tools, the bot's profile on its system prompt
+        recheck:
+          type: string
+          description: Optional; re-judges a queued request after the bot already replied to something else (defaults to intent)
     session: { type: object, required: [id, directed, members] }
     message: { type: object, required: [id, text] }
     window: { type: array }
-    notes: { type: string }
-    since: { type: array }
 ---
 
 ## 这是什么
 
 聊天会话里的每个 bot、每条消息都跑一遍这份文件。它就是一个 bot 做的全部事情,按序:
-判定要不要说话、裁定这条消息归谁、作答,以及 —— 稍后、在关键路径之外 —— 把自己的
-笔记整理好。
+判定要不要说话、裁定这条消息归谁、作答。
+
+bot 是一份绑定,不是一个 agent:它的 md 指向这份管线,并用 agent 定义填满管线的**槽位**
+(`shuvix-bot-agents: {intent: …, task: …}`)。bot md 的正文 —— 它的人设与它学到的东西 ——
+不在下面任何一段提示词里。宿主把它围栏后追加到这次 run 派发的每一个 agent 的系统提示词
+末尾,与项目上下文同一机制。把这份正文维护好是任务段 agent 自己的事,用它自己的文件工具;
+没有单独的笔记段。
 
 这里没有 `shuvix-workflow-on`:没有任何埋点通向这份文件。bot 指向它
 (`shuvix-bot-pipeline: bot-chat`),由会话来 invoke。`parallel` 是刻意的:run 级重入
@@ -44,8 +55,6 @@ shuvix-workflow-input:
 也没有一个「只有 bot 才能调用」的键 —— 调用路径不是准入检查。让这份文件成为 bot 管线的,
 只是它的脚本用了 `say` 与 `turn`,而只有 bot 调用方会把这两个名字装配进脚本
 API。从别处启动它,它会在第一个名字上失败,和任何脚本踩到未定义函数一个样。
-
-> **状态。** 三段都是真的:门控、任务段(M8′)与笔记场合(M9′)均已落地。
 
 ## 管线
 
@@ -59,47 +68,8 @@ API。从别处启动它,它会在第一个名字上失败,和任何脚本踩到
 「要么完整要么为空」的一个字符串。
 
 ```js workflow
-if (input.occasion === 'notes') {
-  // The notes occasion. Nobody is waiting: this runs off the critical path, long after the
-  // bot answered. The stage edits the bot's own markdown **in place with `read`/`edit`** —
-  // nothing comes back through here, and the script never touches the notes text itself.
-  //
-  // No result contract on purpose: the work *is* the edit. A schema would only invite the
-  // model to describe what it changed instead of changing it, and there is no reader for
-  // that description.
-  try {
-    // `notesWindow` is the ceiling on how much new material one pass reads. Without it a bot
-    // busy in three sessions for half an hour ships a thousand lines into this prompt.
-    const sinceLines = (input.since || []).slice(-vars.notesWindow)
-    await run(
-      input.agents.notes,
-      prompt('notesTask', {
-        file: input.bot.file,
-        sinceBlock: sinceLines.length ? prompt('sinceNotes', { since: sinceLines }) : ''
-      }),
-      {
-        // Same reason the gate narrows to nothing: this is a shared builtin, and a user's
-        // override of it should not be able to grow a tool list behind the pipeline's back.
-        tools: ['read', 'edit'],
-        timeoutSec: vars.notesTimeoutSec
-      }
-    )
-  } catch (e) {
-    // Being torn down is not a failed pass — it is no pass at all. Rethrow so the run ends as
-    // aborted (the same thing `recheck()` does, and for the same reason): swallowing it would
-    // report a tidy `notes-failed` for something the user chose.
-    if (e && e.code === 'step_aborted') throw e
-    // A failed pass changes nothing and is nobody's emergency — the next one sees the same
-    // material, because the host advances its checkpoints only on the `notes` outcome.
-    log('notes failed: ' + String((e && e.code) || (e && e.message) || e))
-    return { outcome: 'notes-failed' }
-  }
-  return { outcome: 'notes' }
-}
-
 // ── The material. Prompts are prose and live in the blocks below; the script only picks.
 const recent = (input.window || []).slice(-vars.gateWindow)
-const notes = trimNotes(input.notes, vars.notesBudget)
 const otherLines = (input.session.others || []).map(function (o) {
   return '- ' + o.displayName + ': ' + o.description
 })
@@ -109,19 +79,19 @@ const otherLines = (input.session.others || []).map(function (o) {
 // through the normal gate, where this bot decides for itself whether it has anything to say.
 const solo = input.session.directed
 
-const notesBlock = notes ? prompt('notes', { notes: notes }) : ''
 const othersBlock = otherLines.length ? prompt('others', { others: otherLines }) : ''
 const windowBlock = recent.length ? prompt('window', { window: recent }) : ''
 const addressed = solo ? prompt('addressed') : ''
 
-// 1 ── The gate. One call, no tools, a minute of wall clock.
+// 1 ── The gate. One call, no tools, a minute of wall clock. The bot's own profile — persona
+//      and memory — is not in this prompt: the host appends it to the system prompt of every
+//      agent this run dispatches, the gate included.
 let intent = null
 let failure = null
 try {
   intent = await run(
     input.agents.intent,
     prompt('gate', {
-      notesBlock: notesBlock,
       othersBlock: othersBlock,
       windowBlock: windowBlock,
       addressed: addressed
@@ -153,10 +123,9 @@ if (!intent) {
 }
 
 // 3 ── The gate judged this message is not for this bot. That is the one silence a bot is
-//      allowed: no message, no notice, just a line in the run journal. `memorable` still
-//      travels — a bot that heard a durable preference learned it whether or not it replies.
+//      allowed: no message, no notice, just a line in the run journal.
 if (intent.decision === 'ignore') {
-  return { gate: 'ok', outcome: 'ignored', memorable: !!intent.memorable }
+  return { gate: 'ok', outcome: 'ignored' }
 }
 
 // 4 ── Anything answerable in one line is answered here — don't open a task for it.
@@ -169,7 +138,7 @@ if (intent.decision !== 'task') {
     return { gate: 'broken', outcome: 'gate-broken' }
   }
   await say(line, { decision: intent.decision })
-  return { gate: 'ok', outcome: intent.decision, memorable: !!intent.memorable }
+  return { gate: 'ok', outcome: intent.decision }
 }
 
 // 5 ── Take this bot's turn in this session: one job at a time, in arrival order.
@@ -188,10 +157,11 @@ return await turn(async function (slot) {
     }
   }
 
-  // 6 ── The work itself. The agent **is** the bot (`bot:<name>`): its own body is the system
-  //      prompt, its own `shuvix-tools` the tool list. There is deliberately no `tools`
-  //      option here — narrowing it would overrule what the bot md said about itself, and
-  //      unlike the gate (which is a shared builtin) this agent was written for this job.
+  // 6 ── The work itself. `input.agents.task` is whichever agent md the bot put in that slot:
+  //      its own body is the system prompt, its own `shuvix-tools` the tool list, and the
+  //      bot's profile rides along on the system prompt. There is deliberately no `tools`
+  //      option here — narrowing it would overrule what that agent md said about itself, and
+  //      unlike the gate (a shared builtin) this slot was chosen for exactly this job.
   const objective = (intent.task && intent.task.objective) || intent.reason
   const boundaries = (intent.task && intent.task.boundaries) || ''
   const taskLines = (input.window || []).slice(-vars.taskWindow)
@@ -208,10 +178,6 @@ return await turn(async function (slot) {
       prompt('task', {
         objective: objective,
         boundariesBlock: boundaries ? prompt('boundaries', { boundaries: boundaries }) : '',
-        // No notes block here on purpose. The gate is a shared builtin and has to be told
-        // what this bot has learned; the task agent **is** the bot, so its own body already
-        // carries the notes. Sending them again costs a second copy per task message — and a
-        // truncated one at that, so the model would see the same facts twice, disagreeing.
         windowBlock: taskLines.length ? prompt('window', { window: taskLines }) : '',
         sinceBlock: slot.since && slot.since.length ? prompt('since', { since: slot.since }) : ''
       }),
@@ -286,16 +252,6 @@ function stripHeading(line) {
     .trim()
 }
 
-/** Cut the notes to budget, then back off to the last paragraph break — a slice that lands
- *  mid-sentence or mid-heading reads to the model as a fact that stops halfway. */
-function trimNotes(text, budget) {
-  const s = typeof text === 'string' ? text : ''
-  if (s.length <= budget) return s
-  const cut = s.slice(0, budget)
-  const at = cut.lastIndexOf('\n\n')
-  return (at > budget / 2 ? cut.slice(0, at) : cut.replace(/\n[^\n]*$/, '')) + '\n\n…'
-}
-
 /** The dequeue re-check. Failing it means proceeding: the queued request was going to be done
  *  anyway, and the check only ever saves a repeat. */
 async function recheck(slot, windowBlock) {
@@ -343,10 +299,6 @@ async function recheck(slot, windowBlock) {
         "objective": { "type": "string" },
         "boundaries": { "type": "string" }
       }
-    },
-    "memorable": {
-      "type": "boolean",
-      "description": "This message carries a durable preference, correction or fact — set it even when you are only replying"
     }
   }
 }
@@ -369,8 +321,7 @@ async function recheck(slot, windowBlock) {
         "objective": { "type": "string" },
         "boundaries": { "type": "string" }
       }
-    },
-    "memorable": { "type": "boolean" }
+    }
   }
 }
 ```
@@ -426,8 +377,6 @@ async function recheck(slot, windowBlock) {
 
 {{bot.displayName}} —— {{bot.description}}
 
-{{notesBlock}}
-
 {{othersBlock}}
 
 {{addressed}}
@@ -437,24 +386,6 @@ async function recheck(slot, windowBlock) {
 ## 新消息
 
 {{message.text}}
-```
-
-```md prompt=notes
-## 这个 bot 记得的事
-
-{{notes}}
-```
-
-```md prompt=notesTask
-下面这些对话已经结束。把这个 bot 自己的 markdown 更新到位。
-
-文件在 `{{file}}`。读它,然后就地编辑 —— 外科式的,只动会变的那几行。什么内容属于
-那里,你自己的指令里已经写全了。
-
-什么都不改是正常结局。如果这些对话没教会任何下周还用得上的东西,读完文件、下这个
-判断,然后停手。
-
-{{sinceBlock}}
 ```
 
 ```md prompt=others
@@ -491,12 +422,6 @@ async function recheck(slot, windowBlock) {
 {{message.text}}
 
 {{sinceBlock}}
-```
-
-```md prompt=sinceNotes
-## 这些对话
-
-{{since}}
 ```
 
 ```md prompt=since

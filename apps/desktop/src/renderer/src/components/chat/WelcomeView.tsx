@@ -3,19 +3,13 @@ import { useTranslation } from 'react-i18next'
 import { Sliders } from 'lucide-react'
 import { BotAvatar, getHostApi, useChatStore } from '@shuvix/chat-ui'
 import { SessionConfigPanel } from '@shuvix/app-shell'
-import { buildBotToken, makeTokenMarker } from '@shuvix/chat-protocol/utils/inlineTokens'
 
 // WelcomeView 与 SessionConfigPanel 均已移至 @shuvix/app-shell（桌面/扩展共用）。
 // 此文件仅保留桌面专属的 EmptySessionHint 包装（注入桌面能力开关）。
 
-/**
- * 聊天会话（bots）的空态（A4）：成员介绍 + 建议问题。开场白会填掉多数空态,
- * 这里接住没写 greeting 的成员组合。建议问题点击 = 文本进输入框 + **隐式定向本 bot**
- * （草稿带提及胶囊 token,经 requestDraftRestore → rebuildDraftFromContent 重建）。
- */
+/** 聊天会话（bots）的空态：成员介绍（名字 + 一句话描述） */
 function BotEmptyState({ members }: { members: string[] }): React.JSX.Element {
   const { t } = useTranslation()
-  const requestDraftRestore = useChatStore((st) => st.requestDraftRestore)
   const [registry, setRegistry] = useState<Map<string, BotInfo> | null>(null)
 
   useEffect(() => {
@@ -27,13 +21,6 @@ function BotEmptyState({ members }: { members: string[] }): React.JSX.Element {
       alive = false
     }
   }, [])
-
-  const suggest = (name: string, displayName: string, text: string): void => {
-    const uid = 'a0'
-    requestDraftRestore(`${makeTokenMarker(uid)} ${text}`, {
-      [uid]: buildBotToken({ name, displayName })
-    })
-  }
 
   return (
     <div className="mb-6" data-bot-empty>
@@ -59,20 +46,6 @@ function BotEmptyState({ members }: { members: string[] }): React.JSX.Element {
                   </span>
                 )}
               </div>
-              {info && info.suggestions.length > 0 && (
-                <div className="mt-2 flex flex-wrap gap-1.5">
-                  {info.suggestions.map((sug, i) => (
-                    <button
-                      key={i}
-                      onClick={() => suggest(name, info.displayName, sug)}
-                      className="rounded-full border border-accent/30 px-3 py-0.5 text-xs text-accent hover:bg-accent/10 transition-colors"
-                      data-bot-suggestion
-                    >
-                      {sug}
-                    </button>
-                  ))}
-                </div>
-              )}
             </div>
           )
         })}

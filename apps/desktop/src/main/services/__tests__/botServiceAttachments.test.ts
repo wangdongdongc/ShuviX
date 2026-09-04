@@ -29,6 +29,7 @@ vi.mock('../workflowService', () => ({
     invoke: vi.fn(async () => ({ started: false, reason: 'not-found' })),
     abortSessionRuns: vi.fn(() => 0),
     hasWorkflow: vi.fn(() => false),
+    agentSlots: vi.fn(() => []),
     registerRunJournalSink: vi.fn()
   },
   workflowTriggers: { fire: vi.fn() }
@@ -61,9 +62,6 @@ vi.mock('../sessionTriggerFacts', () => ({
   isDefaultTitle: vi.fn(() => false)
 }))
 vi.mock('../sessionService', () => ({ sessionService: { getById: mocks.getById } }))
-// botService 经 settingsService 读两道循环护栏。真件一经导入就把 settingsDao →
-// dao/database 拉进模块图，而 DatabaseManager 构造即开 sqlite（原生绑定是 Electron ABI 的）
-vi.mock('../settingsService', () => ({ settingsService: { get: () => undefined } }))
 
 import { botService } from '../botService'
 import { clearSessionTreeCacheForTests } from '../sessionStorage'
@@ -109,7 +107,6 @@ function seedImageMessage(
     sessionId: sid,
     authorKind: 'user',
     content: text,
-    hop: 0,
     ...(refs.length ? { attachments: refs } : {})
   })
   return id
@@ -118,7 +115,7 @@ function seedImageMessage(
 /** 一条纯文本消息（没有任何图） */
 function seedTextMessage(sid: string): string {
   const id = `seed-${++seeded}`
-  chatMessageDao.append({ id, sessionId: sid, authorKind: 'user', content: '没有图', hop: 0 })
+  chatMessageDao.append({ id, sessionId: sid, authorKind: 'user', content: '没有图' })
   return id
 }
 

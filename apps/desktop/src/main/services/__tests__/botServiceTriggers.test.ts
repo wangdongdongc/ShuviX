@@ -37,6 +37,8 @@ vi.mock('../workflowService', () => ({
     invoke: mocks.invoke,
     abortSessionRuns: mocks.abortSessionRuns,
     hasWorkflow: mocks.hasWorkflow,
+    // 槽位表来自管线的输入 schema —— 这一组不看槽位，空表即可
+    agentSlots: vi.fn(() => []),
     registerRunJournalSink: vi.fn()
   },
   workflowTriggers: { fire: mocks.fire }
@@ -68,9 +70,6 @@ vi.mock('../sessionService', () => ({
   // noteUnreadBotReply：A4 起 appendBotMessage 每次落树都记未读账 —— 本组用例不关心它,给 no-op
   sessionService: { getById: mocks.getById, noteUnreadBotReply: () => {} }
 }))
-// botService 经 settingsService 读两道循环护栏。真件一经导入就把 settingsDao →
-// dao/database 拉进模块图，而 DatabaseManager 构造即开 sqlite（原生绑定是 Electron ABI 的）
-vi.mock('../settingsService', () => ({ settingsService: { get: () => undefined } }))
 
 import { botService } from '../botService'
 import { messageService, setChatSessionPredicate } from '../messageService'
@@ -96,12 +95,11 @@ const FACTS = {
 
 function writeBot(
   name: string,
-  opts: { displayName?: string; respond?: string; agents?: Record<string, string> } = {}
+  opts: { displayName?: string; agents?: Record<string, string> } = {}
 ): void {
   mkdirSync(dirs.bots, { recursive: true })
   const lines = ['---', 'shuvix: bot v1', `name: ${name}`, `description: unit bot ${name}`]
   if (opts.displayName) lines.push(`shuvix-displayName: ${opts.displayName}`)
-  if (opts.respond) lines.push(`shuvix-bot-respond: ${opts.respond}`)
   if (opts.agents) {
     lines.push('shuvix-bot-agents:')
     for (const [k, v] of Object.entries(opts.agents)) lines.push(`  ${k}: ${v}`)
@@ -286,15 +284,15 @@ describe('TR —— 埋点', () => {
     expect(fired('session.prompt-accepted')).toHaveLength(1)
   })
 
-  it('TR-9 【L0 全筛掉也算一轮】没有成员被唤起时仍 fire turn-completed', async () => {
+  it('TR-9 【L0 全筛掉也算一轮】名单里的成员 md 全没了、没人被唤起时仍 fire turn-completed', async () => {
     // 有根会话那侧的契约是「无论成败恒触发」。两边在「什么时候算一轮」上错开，订阅方
-    // 看到的就是「某类会话的工作流莫名其妙不触发」
-    writeBot('quiet', { displayName: 'Quiet', respond: 'mention-only' })
-    seedSession(['quiet'])
-    await prompt('没有点名任何人')
+    // 看到的就是「某类会话的工作流莫名其妙不触发」。v3 起 L0 能筛掉成员的原因只剩一种：
+    // 名单里的 md 不在了（没有 mention-only 这类逐 bot 的门控模式，在册的成员必然进 cohort）
+    seedSession(['ghost'])
+    await prompt('没有人接得住')
 
     expect(mocks.invoke).not.toHaveBeenCalled()
-    expect(kindsOf('quiet')).toContain('l0_mention_only_skipped')
+    expect(kindsOf('ghost')).toEqual(['l0_member_missing'])
     expect(fired('session.turn-completed')).toHaveLength(1)
   })
 

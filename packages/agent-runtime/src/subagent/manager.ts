@@ -140,6 +140,11 @@ export interface RunTaskParams {
    * `structured` 为 undefined，由调用方决定成败。见 subagent/nextTool.ts。
    */
   resultContract?: ResultContract
+  /**
+   * 追加到派生 agent 系统提示词末尾的上下文块（已围栏；透传 `CreateAgentParams.systemContext`）。
+   * bot 管线用它把 bot 的人设与记忆带给这次 run 里的每一个 agent；manager 不解释内容。
+   */
+  systemContext?: readonly string[]
 }
 
 export interface SubAgentManager {
@@ -245,9 +250,17 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
     modelConfig: SubAgentModelConfig
     contextMessages?: AgentMessage[]
     extraTools?: readonly AnyAgentTool[]
+    systemContext?: readonly string[]
   }): Promise<SpawnedAgent> {
-    const { parentSessionId, agentType, description, modelConfig, contextMessages, extraTools } =
-      params
+    const {
+      parentSessionId,
+      agentType,
+      description,
+      modelConfig,
+      contextMessages,
+      extraTools,
+      systemContext
+    } = params
 
     // ── 深度校验：唯一的层级控制点（派发工具全员可用，越界在此拒绝） ──
     const depth = registry.depthOf(parentSessionId) + 1
@@ -285,7 +298,8 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
       cwd: '',
       spawn,
       spawnHelpers: helpers,
-      extraTools
+      extraTools,
+      systemContext
     })
     const runtime = created.runtime
     const piSession = runtime.session
@@ -407,7 +421,8 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
         parentAbortSignal,
         contextMessages,
         promptInlineTokens,
-        resultContract
+        resultContract,
+        systemContext
       } = params
       // 面板「笔记本内容」卡片 = 实际注入的 context 消息文本（与发给 LLM 的 UserMessage 一致）
       const contextNote = contextMessages?.length ? agentMessagesToText(contextMessages) : undefined
@@ -445,7 +460,8 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
         description,
         modelConfig,
         contextMessages,
-        extraTools
+        extraTools,
+        systemContext
       })
 
       deps.broadcast({

@@ -57,31 +57,26 @@ export function writeAgentMd(app: E2EApp, name: string, seed: AgentMdSeed = {}):
 export interface BotMdSeed {
   /** description 是 bot md 的必填项 —— 缺省给一句，测「缺 description」时显式传空串 */
   description?: string
-  /** shuvix-tools 逗号串 */
-  tools?: string
-  model?: string
   displayName?: string
-  /** shuvix-bot-respond：auto | mention-only */
-  respond?: string
-  /** `shuvix-bot-respond-to`：user（缺省，只答用户消息）| all（也答别的 bot 的消息） */
-  respondTo?: string
   /** `shuvix-bot-pipeline` —— 指向哪份管线 workflow（缺省 bot-chat） */
   pipeline?: string
   /** `shuvix-bot-input` —— 铺进管线 input 的用户键 */
   botInput?: Record<string, string | number | boolean>
-  /** `shuvix-bot-agents` —— 阶段角色覆盖（换掉门控/复核/任务段的 agent） */
+  /**
+   * `shuvix-bot-agents` —— 槽位表。**缺省填满内置管线的两个必填槽位**
+   * （intent: bot-intent / task: default），传 `{}` 得到一份没填槽位的 bot
+   */
   agents?: Record<string, string>
-  /** shuvix-bot-notes */
-  notes?: boolean
-  greeting?: string
-  suggestions?: string[]
-  projectAwareness?: boolean
+  /** 正文 = 人设与记忆（围栏后追加到每个参与 agent 的系统提示词） */
   body?: string
   /** 追加的原始 frontmatter 行（测未知键/类型错时用） */
   rawLines?: string[]
   /** 省略文件类型标记（bot md 与 agent md 同口径：读取可选） */
   omitMarker?: boolean
 }
+
+/** 内置管线的两个必填槽位，用内置门控 + 主会话基座档案填满 —— 一个能跑的最小 bot */
+export const DEFAULT_BOT_AGENTS: Record<string, string> = { intent: 'bot-intent', task: 'default' }
 
 /**
  * 写一个 bot 定义文件到隔离实例的 ~/.shuvix/bots/<name>.md。
@@ -96,25 +91,16 @@ export function writeBotMd(app: E2EApp, name: string, seed: BotMdSeed = {}): str
   lines.push(`name: ${name}`)
   lines.push(`description: ${seed.description ?? `e2e seeded bot ${name}`}`)
   if (seed.displayName) lines.push(`shuvix-displayName: ${seed.displayName}`)
-  if (seed.tools) lines.push(`shuvix-tools: ${seed.tools}`)
-  if (seed.model) lines.push(`shuvix-model: ${seed.model}`)
-  if (seed.respond) lines.push(`shuvix-bot-respond: ${seed.respond}`)
-  if (seed.respondTo) lines.push(`shuvix-bot-respond-to: ${seed.respondTo}`)
   if (seed.pipeline) lines.push(`shuvix-bot-pipeline: ${seed.pipeline}`)
   if (seed.botInput) {
     lines.push('shuvix-bot-input:')
     for (const [k, v] of Object.entries(seed.botInput)) lines.push(`  ${k}: ${String(v)}`)
   }
-  if (seed.agents) {
+  const agents = seed.agents ?? DEFAULT_BOT_AGENTS
+  if (Object.keys(agents).length) {
     lines.push('shuvix-bot-agents:')
-    for (const [k, v] of Object.entries(seed.agents)) lines.push(`  ${k}: ${v}`)
+    for (const [k, v] of Object.entries(agents)) lines.push(`  ${k}: ${v}`)
   }
-  if (seed.notes === false) lines.push('shuvix-bot-notes: false')
-  if (seed.greeting) lines.push(`shuvix-bot-greeting: ${seed.greeting}`)
-  if (seed.suggestions) {
-    lines.push('shuvix-bot-suggestions:', ...seed.suggestions.map((s) => `  - ${s}`))
-  }
-  if (seed.projectAwareness) lines.push('shuvix-project-awareness: true')
   if (seed.rawLines) lines.push(...seed.rawLines)
   lines.push('---', '', seed.body ?? 'BOT BODY.')
   const filePath = join(app.botsDir, `${name}.md`)
@@ -470,8 +456,8 @@ export async function createAgentSession(
  * 与 `createAgentSession` 的关键差别是**只 create、不 getInfo**：聊天会话没有根 Agent，
  * `agent.getInfo(sid, { ensure: true })` 恒为 null，读它的 `.systemPrompt` 直接抛。
  *
- * `session:create` 现在是 async 且内部 await 了 `seedGreetings` —— 它 resolve 时开场白
- * 已在树上，调用方不需要 sleep。
+ * v3 起没有开场白：resolve 时会话里**零条消息**。要一条零 LLM 的 bot 消息，
+ * 让成员指向一份只 `say` 一句的探针管线（各 spec 自带）再 `promptBotSession`。
  */
 export async function createBotSession(
   main: CdpClient,

@@ -36,6 +36,8 @@ vi.mock('../workflowService', () => ({
     invoke: mocks.invoke,
     abortSessionRuns: mocks.abortSessionRuns,
     hasWorkflow: mocks.hasWorkflow,
+    // 槽位表来自管线的输入 schema —— 这一组不看槽位，空表即可
+    agentSlots: vi.fn(() => []),
     registerRunJournalSink: vi.fn()
   },
   workflowTriggers: { fire: mocks.fire }
@@ -67,9 +69,6 @@ vi.mock('../sessionService', () => ({
   // noteUnreadBotReply：A4 起 appendBotMessage 每次落树都记未读账 —— 本组用例不关心它,给 no-op
   sessionService: { getById: mocks.getById, noteUnreadBotReply: () => {} }
 }))
-// botService 经 settingsService 读两道循环护栏。真件一经导入就把 settingsDao →
-// dao/database 拉进模块图，而 DatabaseManager 构造即开 sqlite（原生绑定是 Electron ABI 的）
-vi.mock('../settingsService', () => ({ settingsService: { get: () => undefined } }))
 
 import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
 import { botService } from '../botService'

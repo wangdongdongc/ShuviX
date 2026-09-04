@@ -11,9 +11,9 @@
  * 判据是 `metadata.sender`，只有聊天会话的消息带它。`data-bot-sender` 这个锚点没变，
  * 但它现在挂在整个气泡的根节点上，而不是卡头那一条。
  *
- * 模型侧：假提供商只喂两类脚本 —— 普通会话对照用例的一条文本回复、
- * 永不锁用例的四次 `next` 门控裁决（全 ignore，管线不产出任何可见回复）。
- * 开场白与署名本身全程无 LLM。
+ * v3 没有开场白：气泡语料全部来自 `a0-say-probe` —— 一份零 LLM 的参数化探针管线
+ * （sayLine / secondLine / preSayMs 读自各 bot md 的 `shuvix-bot-input`），发一条用户消息
+ * 换回一两句署名回复。假提供商只给普通会话对照用例的那一条文本回复用。
  */
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -21,7 +21,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { botColorFor, botInitial } from '@shuvix/chat-protocol/utils/botIdentity'
 import { sleep, until } from '../../harness/cdp'
 import { launchApp, type E2EApp } from '../../harness/launch'
-import { startFakeProvider, type FakeProvider, type FakeRequest } from '../../harness/fakeProvider'
+import { startFakeProvider, type FakeProvider } from '../../harness/fakeProvider'
 import {
   createBotSession,
   eventRecorder,
@@ -41,24 +41,26 @@ import {
 const MODEL = 'e2e-model'
 
 // 成员表：displayName 用 CJK / emoji 压码点切分（botInitial 按码点取首字）
-const CN = { name: 'ui-cn', display: '小助手' }
-const EMOJI = { name: 'ui-emoji', display: '😀 Bot' }
+const CN = { name: 'ui-cn', display: '小助手', line: '大家好，我是小助手' }
+const EMOJI = { name: 'ui-emoji', display: '😀 Bot', line: 'emoji bot 报到' }
 
-/** 合并头部用的探针管线：一次 run 里连说两句，零 LLM */
-const TWICE_PIPELINE = 'a0-twice-probe'
-const TWICE_MD = [
+/** 参数化探针管线：可选延时 → say 一句 → 可选再 say 一句，零 LLM */
+const PROBE = 'a0-say-probe'
+const PROBE_MD = [
   '---',
   'shuvix: workflow v1',
-  `name: ${TWICE_PIPELINE}`,
-  'description: A0 e2e probe — say two lines in a row so the merged header has something to merge.',
+  `name: ${PROBE}`,
+  'description: A0 e2e probe — say one or two lines; knobs from shuvix-bot-input.',
   'shuvix-workflow-concurrency: parallel',
   '---',
   '',
-  '连说两句的探针：合并头部要有连续同署名的消息才看得见。',
+  'A0 探针：sayLine（必说）/ secondLine（连说第二句，合并头部要有连续同署名的消息才看得见）/',
+  'preSayMs（说话前先睡，让两个成员的落库顺序可控）。',
   '',
   '```js workflow',
-  "await say('第二句')",
-  "await say('第三句')",
+  'if (input.preSayMs) await sleep(input.preSayMs)',
+  "await say(input.sayLine || 'ok')",
+  'if (input.secondLine) await say(input.secondLine)',
   "return { outcome: 'reply' }",
   '```',
   ''
@@ -82,18 +84,11 @@ interface Msg {
 const listMessages = (sid: string): Promise<Msg[]> =>
   app.main.eval(`window.api.message.list(${JSON.stringify(sid)})`)
 
-/** 一次门控裁决脚本：按提示词里出现的 displayName 认领（双 bot 并发下必须按内容认） */
-const ignoreGate = (displayName: string): Parameters<FakeProvider['script']>[0] => ({
-  toolCalls: [
-    {
-      id: 'call_next',
-      name: 'next',
-      args: JSON.stringify({ decision: 'ignore', reason: 'e2e 永不锁用例' })
-    }
-  ],
-  usage: { prompt: 150, completion: 10 },
-  when: (r: FakeRequest) => !r.isTitle && r.raw.includes(displayName)
-})
+/** 经 IPC 发一条消息（聊天会话的 prompt 直到 cohort 收尾才 resolve —— 回复此刻已落库） */
+const prompt = (sid: string, text: string): Promise<void> =>
+  app.main.eval(
+    `window.api.agent.prompt({ sessionId: ${JSON.stringify(sid)}, text: ${JSON.stringify(text)} })`
+  )
 
 beforeAll(async () => {
   app = await launchApp()
@@ -105,27 +100,31 @@ beforeAll(async () => {
   chat = chatPane(app.main)
   sidebar = sidebarPane(app.main)
 
+  const wfDir = join(app.home, '.shuvix', 'workflows')
+  mkdirSync(wfDir, { recursive: true })
+  writeFileSync(join(wfDir, `${PROBE}.md`), PROBE_MD)
+
   writeBotMd(app, CN.name, {
     description: 'cjk display bot',
     displayName: CN.display,
-    greeting: '大家好，我是小助手'
+    pipeline: PROBE,
+    botInput: { sayLine: CN.line }
   })
   writeBotMd(app, EMOJI.name, {
     description: 'emoji display bot',
     displayName: EMOJI.display,
-    greeting: 'emoji bot 打个招呼'
+    pipeline: PROBE,
+    // 晚一拍说话：两条回复的落库序因此确定（CN 在前）
+    botInput: { sayLine: EMOJI.line, preSayMs: 1200 }
   })
-  const wfDir = join(app.home, '.shuvix', 'workflows')
-  mkdirSync(wfDir, { recursive: true })
-  writeFileSync(join(wfDir, `${TWICE_PIPELINE}.md`), TWICE_MD)
   writeBotMd(app, 'ui-twice', {
-    description: 'says three lines in a row',
+    description: 'says two lines in a row',
     displayName: 'Twice',
-    pipeline: TWICE_PIPELINE,
-    greeting: '第一句'
+    pipeline: PROBE,
+    botInput: { sayLine: '第二句', secondLine: '第三句' }
   })
 
-  // 双成员带开场白的聊天会话 + 普通会话对照；显式标题 —— 既是侧栏定位锚，
+  // 双成员聊天会话 + 普通会话对照；显式标题 —— 既是侧栏定位锚，
   // 也让 auto-title 的 isDefaultTitle 条件不成立（titler 不会来消费脚本队列）
   sidBots = await createBotSession(app.main, {
     bots: [CN.name, EMOJI.name],
@@ -148,23 +147,28 @@ afterAll(async () => {
 
 describe('署名气泡与视觉身份', () => {
   // A0-20
-  it('每条开场白气泡带 [data-bot-sender]，document 序 = 名单序，头部文本 = displayName', async () => {
+  it('每条回复气泡带 [data-bot-sender]，document 序 = 落库序，头部文本 = displayName', async () => {
     expect(await sidebar.openSession('C-bots')).toBe(true)
     await chat.ready()
-    await chat.waitItems(2)
+    // v3 没有开场白：会话此刻是空的，发一句换回两个成员各一句
+    expect(await listMessages(sidBots)).toEqual([])
+    await prompt(sidBots, '你们好')
+    await chat.waitItems(3)
 
     const senders = await chat.botSenders()
+    // CN 即答、EMOJI 晚一拍 —— 落库序即 document 序
     expect(senders.map((s) => s.name)).toEqual([CN.name, EMOJI.name])
     expect(senders.map((s) => s.display)).toEqual([CN.display, EMOJI.display])
     // 两条来自不同 bot，谁也不合并头部
     expect(senders.map((s) => s.merged)).toEqual([false, false])
 
     // 与 message.list 的 metadata.sender 逐条对照（DOM 只是那份数据的呈现）
-    const listed = await listMessages(sidBots)
+    const listed = (await listMessages(sidBots)).filter((m) => m.role === 'assistant')
     expect(listed.map((m) => m.metadata?.sender?.name)).toEqual(senders.map((s) => s.name))
     expect(listed.map((m) => m.metadata?.sender?.displayName)).toEqual(
       senders.map((s) => s.display)
     )
+    expect(listed.map((m) => m.content)).toEqual([CN.line, EMOJI.line])
   })
 
   // A0-21 —— 期望值 import 同一份 botIdentity 实现来算；颜色 hex→rgb 精确比较
@@ -195,24 +199,27 @@ describe('署名气泡与视觉身份', () => {
     expect(await sidebar.openSession('C-merge')).toBe(true)
     await chat.ready()
 
-    // 会话此刻只有开场白「第一句」。发一条用户消息后探针再连说两句 ——
-    // 于是消息序是：第一句(bot) → 说两句(user) → 第二句(bot) → 第三句(bot)
-    await app.main.eval(
-      `window.api.agent.prompt({ sessionId: ${JSON.stringify(sid)}, text: '说两句' })`
-    )
-    await until(async () => (await chat.botSenders()).length >= 3, 'three bubbles from one bot')
+    // 探针每次连说两句：第一轮 → 第二句(bot) 第三句(bot)；夹一条用户消息；第二轮再来两句 ——
+    // 于是气泡序是：bot(头) bot(并) user bot(头) bot(并)
+    await prompt(sid, '说两句')
+    await until(async () => (await chat.botSenders()).length >= 2, 'two bubbles from one bot')
+    await prompt(sid, '再说两句')
+    await until(async () => (await chat.botSenders()).length >= 4, 'four bubbles from one bot')
 
     const senders = await chat.botSenders()
+    expect(senders).toHaveLength(4)
     expect(senders.every((s) => s.name === 'ui-twice')).toBe(true)
-    // 第一句：本来就是头一条，带头部
+    // 第二句：头一条，带头部
     expect(senders[0]).toMatchObject({ merged: false, display: 'Twice' })
     expect(senders[0].avatarInitial).toBe(botInitial('Twice'))
-    // 第二句：与第一句之间隔着用户消息 —— **不合并**，头部照常出
-    expect(senders[1]).toMatchObject({ merged: false, display: 'Twice' })
     // 第三句：紧接着第二句，合并 —— 头像与显示名整块消失，只剩气泡
-    expect(senders[2].merged).toBe(true)
-    expect(senders[2].display).toBe('')
-    expect(senders[2].avatarInitial).toBe('')
+    expect(senders[1].merged).toBe(true)
+    expect(senders[1].display).toBe('')
+    expect(senders[1].avatarInitial).toBe('')
+    // 第二轮的第二句：与上一条 bot 消息之间隔着用户消息 —— **不合并**，头部照常出
+    expect(senders[2]).toMatchObject({ merged: false, display: 'Twice' })
+    // 第二轮的第三句：再次合并
+    expect(senders[3].merged).toBe(true)
   })
 })
 
@@ -254,8 +261,8 @@ describe('输入卡工具行的 isBotSession 门', () => {
     expect(await chat.profilePickerPresent()).toBe(false)
     expect(await chat.ctxRingPresent()).toBe(false)
     expect(await chat.modelPickerPresent()).toBe(true)
-    // v2 新增的一道门：ToolPicker 也隐藏 —— 任务段的 agent 就是 bot 自己，工具来自它 md 里的
-    // `shuvix-tools`，会话级的工具勾选在这里不表达任何东西。三个选择器只剩一个 = 两个都没了
+    // v2 新增的一道门：ToolPicker 也隐藏 —— 任务段的工具来自 task 槽位那份 agent md，
+    // 会话级的工具勾选在这里不表达任何东西。三个选择器只剩一个 = 两个都没了
     expect(await chat.pickerCount()).toBe(1)
   })
 })
@@ -265,14 +272,9 @@ describe('永不锁输入', () => {
   it('背靠背发两条：每发后即不忙、输入清空；落定后两条 user 在库、无错误行、无流式占位卡', async () => {
     provider.reset()
     await events.clear()
-    // 2 条消息 × 2 个成员 = 至多 4 次门控，全部 ignore（管线安静收场，不产出可见回复）
-    provider.script(
-      ignoreGate(CN.display),
-      ignoreGate(CN.display),
-      ignoreGate(EMOJI.display),
-      ignoreGate(EMOJI.display)
-    )
 
+    // 两个成员都是零 LLM 的探针（各答一句）：回复来源与「锁不锁」无关，锁的判据只有
+    // 「发送有没有置流式态」
     const sidLock = await createBotSession(app.main, {
       bots: [CN.name, EMOJI.name],
       title: 'C-lock'
@@ -293,7 +295,7 @@ describe('永不锁输入', () => {
     expect(await chat.isBusy()).toBe(false)
     expect(await chat.inputValue()).toBe('')
 
-    // 落定（门控跑完）后复查：依旧不忙、两条 user 都在库里、没有错误行
+    // 落定（探针说完）后复查：依旧不忙、两条 user 都在库里、没有错误行
     await sleep(3000)
     expect(await chat.isBusy()).toBe(false)
     const users = (await listMessages(sidLock))

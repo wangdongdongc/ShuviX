@@ -662,11 +662,6 @@ app.whenReady().then(async () => {
 
 // 应用退出前清理
 app.on('before-quit', () => {
-  // **这里不 flush 笔记**：笔记段第一步就要过写盘询问卡，而此刻窗口正在销毁 ——
-  // `hasUserInputCapability` 已经是 false，询问当场取消、edit 失败、run 失败。也就是说
-  // 那条 flush 几乎必然写不成，只白烧一次 LLM 调用。材料并不会丢：检查点只在成功后前进，
-  // 下次启动照样看得见它。要让退出前归纳真的成立，得先有一条免询问的路径（M9′ 范围里
-  // 那条按 `subject.profile == 'bot-notes'` 收窄的策略），而那是用户该自己决定的事
   destroyAllTabs()
   killAllBgTasks()
   mcpService.disconnectAll().catch(() => {})

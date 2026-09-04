@@ -34,14 +34,13 @@ export function useSettingsChatHost(): ChatHostValue {
         setActiveModel
       },
       voice: { sttLanguage: voiceSttLanguage, ttsEnabled: voiceTtsEnabled },
-      // bot 注册表窄投影（@提及候选）；respond 折算成 mentionOnly,注册表其余字段不外传
+      // bot 注册表窄投影（@提及候选）；注册表其余字段不外传
       bots: {
         list: async () =>
           (await window.api.bot.list()).map((b) => ({
             name: b.name,
             displayName: b.displayName,
-            description: b.description,
-            mentionOnly: b.respond === 'mention-only'
+            description: b.description
           }))
       }
     }),

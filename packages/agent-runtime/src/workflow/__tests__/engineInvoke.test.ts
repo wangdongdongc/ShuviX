@@ -556,3 +556,195 @@ describe('invoke — attach 接缝', () => {
     expect(resolveAttachments.mock.calls[0][1]).toBeUndefined()
   })
 })
+
+/**
+ * `systemContext` —— 调用方随本次 invoke 固化的上下文块（已围栏），这次 run 里**每一个**
+ * `run()` 派发的 agent 都在系统提示词末尾带上它。与 extraApi 同一种席位：引擎不解释内容，
+ * 只透传；fire 没有调用方，所以那条路径恒为空。bot 管线用它把 bot 的人设与记忆带给
+ * 门控 / 复核 / 任务每一段（renderBotContext），追加本身在 createAgent（createAgent.test.ts）。
+ */
+describe('invoke — systemContext 透传', () => {
+  const CTX = ['<bot_profile name="scout" file="/b/scout.md">\nP\n</bot_profile>', 'SECOND']
+  const paramsOf = (eng: ReturnType<typeof makeEngine>, i = 0): RunTaskParams =>
+    eng.runTask.mock.calls[i][0] as RunTaskParams
+  /** 两次派发的脚本 —— 「每一次」而不是「第一次」 */
+  const twoRuns = (): ParsedWorkflowFile =>
+    fileOf({ script: "await run('worker', 'one')\nawait run('worker', 'two')\nreturn 1" })
+
+  it('SC-1 同一 run 里每一次 run() 的派发都带同一份 systemContext', async () => {
+    const eng = makeEngine({ entries: [entryOf(twoRuns())] })
+    expect(await eng.engine.invoke({ workflow: 'wf', systemContext: CTX })).toMatchObject({
+      ok: true
+    })
+    expect(eng.runTask).toHaveBeenCalledTimes(2)
+    expect(paramsOf(eng, 0).systemContext).toEqual(CTX)
+    expect(paramsOf(eng, 1).systemContext).toEqual(CTX)
+  })
+
+  it('SC-2 不传 → 派发入参里没有这个键（不是 undefined 值，也不是空数组）', async () => {
+    const eng = makeEngine({ entries: [entryOf(twoRuns())] })
+    await eng.engine.invoke({ workflow: 'wf' })
+    expect(paramsOf(eng, 0)).not.toHaveProperty('systemContext')
+    expect(paramsOf(eng, 1)).not.toHaveProperty('systemContext')
+  })
+
+  it('SC-3 传空数组 → 同样不铺（只在非空时透传）', async () => {
+    const eng = makeEngine({ entries: [entryOf(twoRuns())] })
+    await eng.engine.invoke({ workflow: 'wf', systemContext: [] })
+    expect(paramsOf(eng)).not.toHaveProperty('systemContext')
+  })
+
+  it('SC-4 fire 路径恒为空：同一份 md 经埋点起跑，派发入参里没有 systemContext', async () => {
+    // fire 是广播、没有调用方 —— 没有谁能替一次埋点触发的 run 装配上下文块
+    const eng = makeEngine({ entries: [entryOf(twoRuns())] })
+    eng.engine.fire('session.prompt-accepted', payload())
+    await eng.waitEnd()
+    expect(eng.runTask).toHaveBeenCalledTimes(2)
+    expect(paramsOf(eng, 0)).not.toHaveProperty('systemContext')
+    expect(paramsOf(eng, 1)).not.toHaveProperty('systemContext')
+  })
+
+  it('SC-5 排队中的调用其 systemContext 随 plan 保留，起跑时照常透传（bot mailbox 依赖）', async () => {
+    // 与 extraApi 同一条：两个 bot 的 run 排在同一分道上，各自的档案不得串
+    const { runTask, gates } = gatedRunTask()
+    const eng = makeEngine({ runTask, entries: [entryOf(calledGate())] })
+    const call = (tag: string): ReturnType<typeof eng.engine.invoke> =>
+      eng.engine.invoke({
+        workflow: 'wf',
+        input: { tag },
+        systemContext: [`ctx-${tag}`],
+        reentry: { key: 'k', mode: 'queue' }
+      })
+
+    const a = call('A')
+    await vi.waitFor(() => expect(gates).toHaveLength(1))
+    const b = call('B')
+    expect(gates[0].params.systemContext).toEqual(['ctx-A'])
+
+    gates[0].release()
+    await vi.waitFor(() => expect(gates).toHaveLength(2))
+    expect(gates[1].params.systemContext).toEqual(['ctx-B'])
+    gates[1].release()
+    await Promise.all([a, b])
+  })
+})
+
+/**
+ * 入参校验的**嵌套** required：`shuvix-workflow-input` 里每个 `type: object` 的子属性，
+ * 若入参给了它，就按它自己的 `required` 再查一层（错误按路径点名，如 `agents.task`）。
+ * bot 管线的槽位表靠这条：哪些槽位必填由管线文件说了算，漏填在起跑前就被拦下 ——
+ * 让它跑起来只会在脚本深处炸成一句 `Cannot read properties of undefined`。
+ */
+describe('invoke — 嵌套 required 校验（沿 properties 递归）', () => {
+  const nested = (): ParsedWorkflowFile =>
+    fileOf({
+      inputSchema: {
+        type: 'object',
+        required: ['agents'],
+        properties: {
+          agents: {
+            type: 'object',
+            required: ['intent', 'task'],
+            properties: {
+              intent: { type: 'string' },
+              task: { type: 'string' },
+              recheck: { type: 'string' }
+            }
+          },
+          // 可选的子对象：整体省略合法，一旦给了就按它自己的 required 查
+          opts: { type: 'object', required: ['mode'] }
+        }
+      },
+      script: 'return input.agents.task'
+    })
+
+  it('NR-1 子对象缺必填 → invalid-input，错误按路径点名（agents.task），零 record', async () => {
+    const eng = makeEngine({ entries: [entryOf(nested())] })
+    const res = await eng.engine.invoke({ workflow: 'wf', input: { agents: { intent: 'i' } } })
+    expect(res).toMatchObject({ started: false, reason: 'invalid-input' })
+    expect(res.error).toContain('agents.task')
+    expect(res.error).not.toContain('agents.intent')
+    expect(eng.records).toEqual([])
+    expect(eng.execute).not.toHaveBeenCalled()
+  })
+
+  it('NR-2 子对象缺多个 → 一次列全（agents.intent, agents.task）', async () => {
+    const eng = makeEngine({ entries: [entryOf(nested())] })
+    const res = await eng.engine.invoke({ workflow: 'wf', input: { agents: {} } })
+    expect(res.reason).toBe('invalid-input')
+    expect(res.error).toContain('agents.intent, agents.task')
+  })
+
+  it.each([
+    ['字符串', 'coding'],
+    ['数组', ['a']],
+    ['显式 null', null]
+  ])('NR-3 子对象不是对象（%s）→ 消息指出 input.agents 必须是对象', async (_label, agents) => {
+    const eng = makeEngine({ entries: [entryOf(nested())] })
+    const res = await eng.engine.invoke({ workflow: 'wf', input: { agents } })
+    expect(res.reason).toBe('invalid-input')
+    expect(res.error).toContain('input.agents must be an object')
+  })
+
+  it('NR-4 必填齐全 + 可选子对象整体省略 → 照常起跑；可选子对象一旦给了就按它的 required 查', async () => {
+    const eng = makeEngine({ entries: [entryOf(nested())] })
+    expect(
+      await eng.engine.invoke({ workflow: 'wf', input: { agents: { intent: 'i', task: 't' } } })
+    ).toMatchObject({ started: true, ok: true, output: 't' })
+
+    const withOpts = await eng.engine.invoke({
+      workflow: 'wf',
+      input: { agents: { intent: 'i', task: 't' }, opts: {} }
+    })
+    expect(withOpts.reason).toBe('invalid-input')
+    expect(withOpts.error).toContain('opts.mode')
+  })
+
+  it('NR-5 顶层缺失先拦、不下钻：错误点名 agents，不是 agents.intent', async () => {
+    const eng = makeEngine({ entries: [entryOf(nested())] })
+    const res = await eng.engine.invoke({ workflow: 'wf', input: {} })
+    expect(res.reason).toBe('invalid-input')
+    expect(res.error).toContain('agents')
+    expect(res.error).not.toContain('agents.intent')
+  })
+
+  it('NR-6 递归只认 type:object 的子 schema：没写 type 的子 required 不查', async () => {
+    const eng = makeEngine({
+      entries: [
+        entryOf(
+          fileOf({
+            inputSchema: { type: 'object', properties: { agents: { required: ['task'] } } },
+            script: 'return 1'
+          })
+        )
+      ]
+    })
+    expect(await eng.engine.invoke({ workflow: 'wf', input: { agents: {} } })).toMatchObject({
+      started: true,
+      ok: true
+    })
+  })
+
+  it('NR-7 多层嵌套按完整路径点名（a.b.c）', async () => {
+    const eng = makeEngine({
+      entries: [
+        entryOf(
+          fileOf({
+            inputSchema: {
+              type: 'object',
+              properties: {
+                a: {
+                  type: 'object',
+                  properties: { b: { type: 'object', required: ['c'] } }
+                }
+              }
+            }
+          })
+        )
+      ]
+    })
+    const res = await eng.engine.invoke({ workflow: 'wf', input: { a: { b: {} } } })
+    expect(res.reason).toBe('invalid-input')
+    expect(res.error).toContain('input is missing required field(s): a.b.c')
+  })
+})

@@ -47,6 +47,8 @@ vi.mock('../workflowService', () => ({
     invoke: mocks.invoke,
     abortSessionRuns: vi.fn(() => 0),
     hasWorkflow: vi.fn(() => true),
+    // 槽位表来自管线的输入 schema —— 这一组不看槽位，空表即可
+    agentSlots: vi.fn(() => []),
     registerRunJournalSink: vi.fn()
   },
   workflowTriggers: { fire: vi.fn() }
@@ -79,9 +81,6 @@ vi.mock('../sessionTriggerFacts', () => ({
 vi.mock('../sessionService', () => ({
   sessionService: { getById: mocks.getById, isBotSession: mocks.isBotSession }
 }))
-// botService 经 settingsService 读两道循环护栏。真件一经导入就把 settingsDao →
-// dao/database 拉进模块图，而 DatabaseManager 构造即开 sqlite（原生绑定是 Electron ABI 的）
-vi.mock('../settingsService', () => ({ settingsService: { get: () => undefined } }))
 vi.mock('../../frontend/core/ChatFrontendRegistry', () => ({
   chatFrontendRegistry: { hasCapability: mocks.hasCapability, broadcast: vi.fn() }
 }))

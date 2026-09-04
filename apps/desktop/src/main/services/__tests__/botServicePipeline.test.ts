@@ -1,28 +1,45 @@
 /**
- * botService 管线半边（M4′）的接线与两个跨 realm 校验器。
+ * botService 管线半边的接线：两张**表**、一个跨 realm 校验器、以及一次派发的**票面**。
  *
- * 这里测的三件事都是**表**，不是流程：管线/角色的回落表（`resolvePipeline`）、
- * say 正文的投影表（`asSayContent`）。仲裁相关的取值表随 v2 去仲裁一并移除。
- * 后两个是脚本值进入宿主的信任边界 —— 值跨 vm realm 到达，`instanceof` 不可靠，
- * 逐字段 typeof 是唯一防线，因此每一格都值得单独摆一条。
+ *  - `resolvePipeline`：管线名回落、槽位表（来自管线自己的输入 schema）、槽位 → agent 的映射
+ *    （bot 自己填的表 + 回落覆盖，没有缺省行）；
+ *  - `asSayContent`：say 正文的投影表 —— 脚本值进入宿主的信任边界，值跨 vm realm 到达，
+ *    `instanceof` 不可靠，逐字段 typeof 是唯一防线，因此每一格都值得单独摆一条；
+ *  - DP：一次 invoke 带了什么 —— input 的键集、`systemContext` 里那一块正文围栏、派发前替
+ *    会话记的那笔读取，以及 `started:false` 的两种收场在会话里各长什么样。
  *
- * mock 面沿用 botServiceMessages 那套（botService 是模块级单例，构造时就读 paths）。
+ * mock 面沿用其它 botService 用例那套（botService 是模块级单例，构造时就读 paths）。
+ * DP 那组打真 fs：bot md 得有一个真路径 —— `input.bot.file`、围栏的 `file` 属性、
+ * `recordRead` 记的那条，三处写的都必须是它。
  */
-import { describe, it, expect, beforeEach, vi } from 'vitest'
-import type { ParsedBotFile } from '@shuvix/agent-runtime'
+import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { join } from 'path'
+import type { ParsedBotFile, PipelineAgentSlot } from '@shuvix/agent-runtime'
 
 const dirs = vi.hoisted(() => {
   const tmp = (process.env.TMPDIR || process.env.TEMP || '/tmp').replace(/[\\/]+$/, '')
   const base = `${tmp}/shuvix-botpipe-${process.pid}`
   return { base, sessions: `${base}/sessions`, bots: `${base}/bots` }
 })
-const mocks = vi.hoisted(() => ({ hasWorkflow: vi.fn(() => false) }))
+const mocks = vi.hoisted(() => ({
+  hasWorkflow: vi.fn((_name: string) => false),
+  agentSlots: vi.fn(
+    (_name: string) => [] as Array<{ role: string; required: boolean; description?: string }>
+  ),
+  invoke: vi.fn(),
+  getById: vi.fn(),
+  recordRead: vi.fn(),
+  t: vi.fn((key: string, _params?: Record<string, unknown>) => key),
+  broadcast: vi.fn()
+}))
 
 vi.mock('../workflowService', () => ({
   workflowService: {
-    invoke: vi.fn(async () => ({ started: false, reason: 'not-found' })),
+    invoke: mocks.invoke,
     abortSessionRuns: vi.fn(() => 0),
     hasWorkflow: mocks.hasWorkflow,
+    agentSlots: mocks.agentSlots,
     registerRunJournalSink: vi.fn()
   },
   workflowTriggers: { fire: vi.fn() }
@@ -34,7 +51,13 @@ vi.mock('../../dao/chatMessageDao', async () => await import('./fakeChatMessageD
 vi.mock('../../utils/paths', () => ({
   // v2 起 botService 经 chatMessageDao 触到 DatabaseManager，它的构造读 getDataDir
   getDataDir: () => `${dirs.base}/data`,
-  getChatAttachmentsDir: (sid: string) => `${dirs.base}/data/chat-attachments/${sid}`,
+  // 真件是 ensureDir(...)：建目录后才返回。不建的话 saveChatAttachments 会逐张写失败
+  // （它只丢那一张，不抛），带图的用例看到的就是「一个附件句柄也没有」
+  getChatAttachmentsDir: (sid: string) => {
+    const dir = `${dirs.base}/data/chat-attachments/${sid}`
+    mkdirSync(dir, { recursive: true })
+    return dir
+  },
   getSessionsDir: () => dirs.sessions,
   getDefaultBotsDir: () => dirs.bots,
   // botService → agentService 的模块作用域构造器在 import 阶段就要它
@@ -43,38 +66,37 @@ vi.mock('../../utils/paths', () => ({
 vi.mock('../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {} })
 }))
-vi.mock('../agentRuntimeAdapters', () => ({ electronEventSink: { broadcast: vi.fn() } }))
+// 会话可见文案走 i18n —— 断言用 key 而不是某一种语言的串；插值参数由 spy 记下
+vi.mock('../../i18n', () => ({ t: mocks.t }))
+vi.mock('../agentRuntimeAdapters', () => ({ electronEventSink: { broadcast: mocks.broadcast } }))
 // 会话域埋点的事实构造器会拉进 sessionDao / messageService / i18n —— 这些用例不测埋点，
 // 桩掉比给 paths mock 补一串无关导出干净
 vi.mock('../sessionTriggerFacts', () => ({
   buildTurnCompletedFacts: vi.fn(async () => null),
   isDefaultTitle: vi.fn(() => false)
 }))
-vi.mock('../sessionService', () => ({ sessionService: { getById: vi.fn() } }))
-// botService 经 settingsService 读两道循环护栏。真件一经导入就把 settingsDao →
-// dao/database 拉进模块图，而 DatabaseManager 构造即开 sqlite（原生绑定是 Electron ABI 的）
-vi.mock('../settingsService', () => ({ settingsService: { get: () => undefined } }))
+vi.mock('../sessionService', () => ({
+  // noteUnreadBotReply：appendBotMessage 每次落库都记未读账 —— 本文件不关心它，给 no-op
+  sessionService: { getById: mocks.getById, noteUnreadBotReply: () => {} }
+}))
+// 派发前替会话记的那笔「已读」：只换掉 recordRead，其余导出原样
+vi.mock('../../utils/toolUtils/fileTime', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../utils/toolUtils/fileTime')>()),
+  recordRead: mocks.recordRead
+}))
 
-import { DEFAULT_BOT_PIPELINE } from '@shuvix/agent-runtime'
-import { asSayContent, botSelfRef, resolvePipeline } from '../botService'
+import { DEFAULT_BOT_PIPELINE, renderBotContext } from '@shuvix/agent-runtime'
+import { asSayContent, botService, BUILTIN_GATE_AGENT, resolvePipeline } from '../botService'
+import { chatMessageDao, __reset as resetRows } from './fakeChatMessageDao'
 
 function stubBot(p: Partial<ParsedBotFile> & { name: string }): ParsedBotFile {
   return {
     displayName: p.name,
     description: `stub ${p.name}`,
-    systemPrompt: '',
-    tools: [],
-    instructionFiles: [],
-    projectAwareness: false,
+    body: '',
     pipeline: '',
     pipelineInput: {},
-    respond: 'auto',
-    respondTo: 'user',
-    notesEnabled: true,
     agents: {},
-    greeting: '',
-    suggestions: [],
-    notes: null,
     ...p
   }
 }
@@ -82,22 +104,11 @@ function stubBot(p: Partial<ParsedBotFile> & { name: string }): ParsedBotFile {
 beforeEach(() => {
   mocks.hasWorkflow.mockReset()
   mocks.hasWorkflow.mockReturnValue(false)
+  mocks.agentSlots.mockReset()
+  mocks.agentSlots.mockReturnValue([])
 })
 
-describe('botSelfRef —— 任务段指向 bot 自己', () => {
-  it('是全局可寻址的 bot:<name>，不是 bot:self', () => {
-    // 引擎的 resolveAgentProfile 是无 run 上下文的全局 dep，相对 ref 在那里永远解析不出来
-    expect(botSelfRef('scout')).toBe('bot:scout')
-    expect(botSelfRef('scout')).not.toBe('bot:self')
-  })
-
-  it('CJK / 含空格的名字原样拼接', () => {
-    expect(botSelfRef('研究员')).toBe('bot:研究员')
-    expect(botSelfRef('my bot')).toBe('bot:my bot')
-  })
-})
-
-describe('resolvePipeline —— 管线与角色的回落表', () => {
+describe('resolvePipeline —— 管线名、槽位表与槽位 → agent 的映射', () => {
   it('未声明 pipeline 时回落 bot-chat', () => {
     expect(resolvePipeline(stubBot({ name: 'a' })).workflow).toBe(DEFAULT_BOT_PIPELINE)
   })
@@ -115,34 +126,59 @@ describe('resolvePipeline —— 管线与角色的回落表', () => {
     expect(mocks.hasWorkflow).toHaveBeenLastCalledWith('my-flow')
   })
 
-  it('默认角色表：intent / recheck / notes 走内置件，task 自指', () => {
-    expect(resolvePipeline(stubBot({ name: 'scout' })).agents).toEqual({
-      intent: 'bot-intent',
-      recheck: 'bot-intent',
-      notes: 'bot-notes',
-      task: 'bot:scout'
-    })
+  it('slots 取自管线自己的输入 schema（workflowService.agentSlots），按回落后的名字查', () => {
+    const declared: PipelineAgentSlot[] = [
+      { role: 'intent', required: true, description: '门控段' },
+      { role: 'task', required: true },
+      { role: 'recheck', required: false }
+    ]
+    mocks.agentSlots.mockImplementation((name) => (name === DEFAULT_BOT_PIPELINE ? declared : []))
+    expect(resolvePipeline(stubBot({ name: 'a' })).slots).toEqual(declared)
+    expect(mocks.agentSlots).toHaveBeenLastCalledWith(DEFAULT_BOT_PIPELINE)
+    // 管线没声明槽位（或根本不存在）→ 空表：哪些槽位存在、哪些必填，管线文件说了算，宿主不补
+    expect(resolvePipeline(stubBot({ name: 'a', pipeline: 'my-flow' })).slots).toEqual([])
+    expect(mocks.agentSlots).toHaveBeenLastCalledWith('my-flow')
   })
 
-  it('bot.agents 逐键覆盖（只给 intent 时其余不动）', () => {
+  it('agents 就是 bot 自己填的表：没填就是空表 —— 没有缺省行，也没有 bot:<self> 自指', () => {
+    // v2 的缺省表（intent/recheck/notes 走内置件、task 自指 bot:<name>）随「bot 即一份
+    // 绑定」一起退场：槽位由 bot md 逐一填写，漏填必填槽位由管线的输入校验在 invoke 时拦下
+    expect(resolvePipeline(stubBot({ name: 'scout' })).agents).toEqual({})
     const r = resolvePipeline(stubBot({ name: 'scout', agents: { intent: 'my-intent' } }))
-    expect(r.agents).toEqual({
-      intent: 'my-intent',
-      recheck: 'bot-intent',
-      notes: 'bot-notes',
-      task: 'bot:scout'
+    expect(r.agents).toEqual({ intent: 'my-intent' })
+    expect(JSON.stringify(r)).not.toContain('bot:')
+  })
+
+  it('overrides 逐键覆盖，其余键原样保留，且不写回 bot 的解析产物', () => {
+    const bot = stubBot({ name: 'scout', agents: { intent: 'my-intent', task: 'coding' } })
+    expect(resolvePipeline(bot, { intent: BUILTIN_GATE_AGENT }).agents).toEqual({
+      intent: BUILTIN_GATE_AGENT,
+      task: 'coding'
+    })
+    // 覆盖只存在于这一次解析里：bot.agents 是设置页读数条要显示的「你配置了什么」
+    expect(bot.agents).toEqual({ intent: 'my-intent', task: 'coding' })
+    // 不传 overrides 与传空表等价
+    expect(resolvePipeline(bot, {}).agents).toEqual(resolvePipeline(bot).agents)
+  })
+
+  it('overrides 可以补 bot 没填的键（回落给一个空的 intent 槽位塞内置件同样成立）', () => {
+    expect(resolvePipeline(stubBot({ name: 'a' }), { intent: BUILTIN_GATE_AGENT }).agents).toEqual({
+      intent: BUILTIN_GATE_AGENT
     })
   })
 
-  it('bot.agents 可以覆盖 task（用户值胜过 botSelfRef）', () => {
-    // 解析期已就此 warn 过，这里只钉运行期语义：铺在最后的就是赢家
-    const r = resolvePipeline(stubBot({ name: 'scout', agents: { task: 'coding' } }))
-    expect(r.agents.task).toBe('coding')
+  it('未知槽位键透传（槽位表是开放的，宿主不按管线声明过滤）', () => {
+    const r = resolvePipeline(stubBot({ name: 'scout', agents: { verify: 'explore' } }))
+    expect(r.agents).toEqual({ verify: 'explore' })
   })
 
-  it('未知角色键透传（角色表是开放的，不做过滤）', () => {
-    const r = resolvePipeline(stubBot({ name: 'scout', agents: { verify: 'explore' } }))
-    expect(r.agents).toMatchObject({ verify: 'explore', intent: 'bot-intent' })
+  it('载荷形状封口：恰 workflow / exists / slots / agents 四键', () => {
+    expect(Object.keys(resolvePipeline(stubBot({ name: 'a' }))).sort()).toEqual([
+      'agents',
+      'exists',
+      'slots',
+      'workflow'
+    ])
   })
 })
 
@@ -254,11 +290,345 @@ describe('asSayContent —— say 的正文投影', () => {
   })
 })
 
+// ────────────────────────── DP：一次 invoke 的票面 ──────────────────────────
+
 /**
- * 「这一轮 cohort 一个字都没换来」的定性 —— 又一张**表**，所以摆在这一层而不是 e2e。
- *
- * 它要答的是两个用户能读懂的问题：会话里到底有没有多出东西（第一问），以及这次沉默
- * 是正常的（大家都判定这条不归自己）还是坏掉了（没有一个走到判定）。两者对用户的意味
- * 完全相反 —— 前者不必管，后者要去看日志。端到端能验的是链路，这张表的每一格只能在
- * 这里逐条摆开。
+ * 派发那一刻宿主替 bot 打包了什么。三处写的必须是同一个路径：`input.bot.file`（脚本 /
+ * 提示词里说「文件在这」）、围栏的 `file` 属性（agent 就往这里写）、`recordRead` 记的那条
+ * （edit 工具据此放行「没 read 过就 edit」）—— 所以这一组打真 fs，不 stub bot 表。
  */
+describe('DP —— 一次 invoke 带了什么', () => {
+  /** 每条用例一条新会话（botService 是模块级单例，按会话 id 记着在飞计数与消息序） */
+  let SID = ''
+  let seq = 0
+  const BODY = 'BOT BODY.\n\n## 记忆\n- 偏好 pnpm'
+
+  /** 一份 bot md 落到真目录里，返回它的路径 */
+  function writeBot(
+    name: string,
+    opts: {
+      displayName?: string
+      agents?: Record<string, string>
+      input?: Record<string, unknown>
+      body?: string
+    } = {}
+  ): string {
+    mkdirSync(dirs.bots, { recursive: true })
+    const lines = ['---', 'shuvix: bot v1', `name: ${name}`, `description: unit bot ${name}`]
+    if (opts.displayName) lines.push(`shuvix-displayName: ${opts.displayName}`)
+    if (opts.input) {
+      lines.push('shuvix-bot-input:')
+      for (const [k, v] of Object.entries(opts.input)) lines.push(`  ${k}: ${JSON.stringify(v)}`)
+    }
+    if (opts.agents) {
+      lines.push('shuvix-bot-agents:')
+      for (const [k, v] of Object.entries(opts.agents)) lines.push(`  ${k}: ${v}`)
+    }
+    lines.push('---', '', opts.body ?? BODY)
+    const file = join(dirs.bots, `${name}.md`)
+    writeFileSync(file, lines.join('\n'))
+    return file
+  }
+
+  const seedSession = (bots: string[]): void => {
+    mocks.getById.mockReturnValue({
+      workingDirectory: dirs.sessions,
+      title: 'Some title',
+      settings: { bots }
+    })
+  }
+
+  /** 一次管线 invoke 的结果 —— 缺省「跑完了，门控正常」 */
+  const ran = (
+    output: Record<string, unknown> = { gate: 'ok', outcome: 'reply' }
+  ): Record<string, unknown> => ({ started: true, ok: true, output })
+
+  const prompt = (text = 'hello', over: Record<string, unknown> = {}): Promise<void> =>
+    botService.handleUserMessage({ sessionId: SID, text, ...over } as never)
+
+  interface InvokeRequest {
+    workflow: string
+    sessionId: string
+    input: Record<string, unknown> & {
+      bot: { name: string }
+      agents: Record<string, string>
+      session: Record<string, unknown>
+      message: Record<string, unknown>
+      window: string[]
+    }
+    systemContext?: readonly string[]
+    extraApi: { say: (raw: unknown, opts?: unknown) => Promise<{ messageId: string | null }> }
+  }
+  /** 第 i 次 invoke 的请求 */
+  const request = (i = 0): InvokeRequest => mocks.invoke.mock.calls[i][0] as InvokeRequest
+  /** 会话里的 bot 行（按 seq） */
+  const botRows = (): ReturnType<typeof chatMessageDao.findBySession> =>
+    chatMessageDao.findBySession(SID).filter((r) => r.authorKind === 'bot')
+  const userRow = (): ReturnType<typeof chatMessageDao.findBySession>[number] => {
+    const row = chatMessageDao.findBySession(SID).find((r) => r.authorKind === 'user')
+    if (!row) throw new Error('no user message')
+    return row
+  }
+
+  /** 某个 bot 的决策记录 kind 序列 */
+  function kindsOf(botName: string): string[] {
+    const file = join(dirs.bots, '.runs', botName, 'decisions.jsonl')
+    if (!existsSync(file)) return []
+    return readFileSync(file, 'utf-8')
+      .trim()
+      .split('\n')
+      .filter(Boolean)
+      .map((l) => String((JSON.parse(l) as Record<string, unknown>).kind))
+  }
+
+  /** 最后一条 bot_activity 广播 —— 这个成员这一轮怎么收的 */
+  const lastActivity = (): Record<string, unknown> => {
+    const list = mocks.broadcast.mock.calls
+      .map((c) => c[0] as Record<string, unknown>)
+      .filter((e) => e.type === 'bot_activity')
+    return list[list.length - 1]
+  }
+
+  beforeEach(() => {
+    seq += 1
+    SID = `pipe-sess-${seq}`
+    rmSync(dirs.base, { recursive: true, force: true })
+    mkdirSync(dirs.sessions, { recursive: true })
+    mkdirSync(dirs.bots, { recursive: true })
+    resetRows()
+    for (const m of [mocks.invoke, mocks.getById, mocks.recordRead, mocks.broadcast, mocks.t]) {
+      m.mockReset()
+    }
+    mocks.t.mockImplementation((key: string) => key)
+    mocks.invoke.mockResolvedValue(ran())
+    mocks.hasWorkflow.mockReturnValue(true)
+  })
+
+  afterAll(() => {
+    rmSync(dirs.base, { recursive: true, force: true })
+  })
+
+  it('DP-1 input 恰 bot / agents / session / window / message 五键 —— 没有 occasion，也没有 notes', async () => {
+    const file = writeBot('scout', {
+      displayName: 'Scout',
+      agents: { intent: 'bot-intent', task: 'default' }
+    })
+    seedSession(['scout'])
+    await prompt('第一句')
+
+    const req = request()
+    expect(req.workflow).toBe(DEFAULT_BOT_PIPELINE)
+    expect(req.sessionId).toBe(SID)
+    expect(Object.keys(req.input).sort()).toEqual(['agents', 'bot', 'message', 'session', 'window'])
+    expect(req.input.bot).toEqual({
+      name: 'scout',
+      displayName: 'Scout',
+      description: 'unit bot scout',
+      file
+    })
+    // 槽位表原样：宿主不补缺省行
+    expect(req.input.agents).toEqual({ intent: 'bot-intent', task: 'default' })
+    expect(req.input.session).toEqual({ id: SID, directed: false, members: ['scout'], others: [] })
+    // 窗口截到本条之前 —— 第一条消息的窗口是空的（它自己在 message.text 里）
+    expect(req.input.window).toEqual([])
+    const user = userRow()
+    expect(req.input.message).toEqual({ id: user.id, seq: user.seq, text: '第一句' })
+  })
+
+  it('DP-2 window 是已成型的「谁: 说了什么」字符串行，截到本条之前', async () => {
+    writeBot('scout', { displayName: 'Scout' })
+    seedSession(['scout'])
+    mocks.invoke.mockImplementationOnce(async (req: InvokeRequest) => {
+      await req.extraApi.say('收到')
+      return ran()
+    })
+    await prompt('第一句')
+    await prompt('第二句')
+
+    // 发言人标签是固定的 User / bot 的 displayName —— 数据标注不是文案，刻意不本地化
+    expect(request(1).input.window).toEqual(['User: 第一句', 'Scout: 收到'])
+    expect(request(1).input.message).toMatchObject({ text: '第二句' })
+  })
+
+  it('DP-3 session.others 是其它成员的身份（displayName + description），不含自己', async () => {
+    writeBot('scout', { displayName: 'Scout' })
+    writeBot('ranger', { displayName: 'Ranger' })
+    seedSession(['scout', 'ranger'])
+    await prompt()
+
+    const inputs = new Map(
+      mocks.invoke.mock.calls.map((c) => {
+        const r = c[0] as InvokeRequest
+        return [r.input.bot.name, r.input]
+      })
+    )
+    expect(inputs.get('scout')?.session).toEqual({
+      id: SID,
+      directed: false,
+      members: ['scout', 'ranger'],
+      others: [{ displayName: 'Ranger', description: 'unit bot ranger' }]
+    })
+    expect(inputs.get('ranger')?.session).toMatchObject({
+      others: [{ displayName: 'Scout', description: 'unit bot scout' }]
+    })
+  })
+
+  it('DP-4 shuvix-bot-input 铺在最前，宿主键压过它 —— 一份 bot md 改写不了 session.id 这类事实', async () => {
+    writeBot('scout', { input: { foo: 1, session: 'hijack' } })
+    seedSession(['scout'])
+    await prompt()
+
+    const input = request().input
+    expect(input.foo).toBe(1)
+    expect(input.session).toMatchObject({ id: SID })
+  })
+
+  it('DP-5 systemContext 恰一块：renderBotContext 围栏后的正文（name / displayName / 文件路径 / 正文）', async () => {
+    const file = writeBot('scout', { displayName: 'Scout' })
+    seedSession(['scout'])
+    await prompt()
+
+    expect(request().systemContext).toEqual([
+      renderBotContext({ name: 'scout', displayName: 'Scout', file, body: BODY })
+    ])
+    // 正文不走 input：它只在每个参与 agent 的系统提示词末尾，提示词模板里没有它
+    expect(JSON.stringify(request().input)).not.toContain('偏好 pnpm')
+  })
+
+  it('DP-6 正文为空也照样围栏 —— agent 得知道文件在哪，才能开始往里写', async () => {
+    const file = writeBot('scout', { body: '' })
+    seedSession(['scout'])
+    await prompt()
+
+    const [block, ...rest] = request().systemContext ?? []
+    expect(rest).toEqual([])
+    expect(block).toBe(renderBotContext({ name: 'scout', displayName: 'scout', file, body: '' }))
+    expect(block).toContain(`<bot_profile name="scout" file="${file}">`)
+  })
+
+  it('DP-7 派发前替这条会话记一笔「已读」：recordRead(sessionId, bot 文件) 先于 invoke', async () => {
+    // 正文已经在每个参与 agent 的系统提示词里了 —— 对文件工具而言这就是「读过」，任务段
+    // 直接 edit 自己的 md 不必先 read（派生 agent 的 fileTime 归根会话，即这条聊天会话）
+    const file = writeBot('scout')
+    seedSession(['scout'])
+    const order: string[] = []
+    mocks.recordRead.mockImplementation(() => {
+      order.push('recordRead')
+    })
+    mocks.invoke.mockImplementation(async () => {
+      order.push('invoke')
+      return ran()
+    })
+    await prompt()
+
+    expect(mocks.recordRead).toHaveBeenCalledTimes(1)
+    expect(mocks.recordRead).toHaveBeenCalledWith(SID, file)
+    expect(order).toEqual(['recordRead', 'invoke'])
+  })
+
+  it('DP-8 每个成员各记自己的文件（不是替整个 cohort 记一次）', async () => {
+    const scout = writeBot('scout')
+    const ranger = writeBot('ranger')
+    seedSession(['scout', 'ranger'])
+    await prompt()
+
+    expect(mocks.recordRead.mock.calls.map((c) => c[1]).sort()).toEqual([ranger, scout].sort())
+    expect(mocks.recordRead.mock.calls.every((c) => c[0] === SID)).toBe(true)
+  })
+
+  it('DP-9 message.attachments 只带句柄不带字节（input 会原样进 run journal）', async () => {
+    writeBot('scout')
+    seedSession(['scout'])
+    const data = Buffer.from('BYTES-dp9').toString('base64')
+    await prompt('看图', { images: [{ data, mimeType: 'image/png' }] })
+
+    const message = request().input.message as { id: string; attachments?: unknown[] }
+    expect(message.attachments).toEqual([
+      { sessionId: SID, messageId: message.id, index: 0, mimeType: 'image/png' }
+    ])
+    expect(JSON.stringify(request().input)).not.toContain(data)
+  })
+
+  it('DP-10 started:false + invalid-input → 一条可见的错误气泡，文案是管线的原话；不再补通用的 runFailed', async () => {
+    // 入参被管线拒绝几乎总是槽位没填全（agents.task 之类）—— 这是配置错，不是「跑到一半
+    // 坏了」：把管线的原话说出来，用户才知道该去改 md 的哪一行。它已经往会话里放了东西
+    //（said），所以「可见结局」兜底不再补第二条通用气泡
+    writeBot('scout', { displayName: 'Scout', agents: { intent: 'bot-intent' } })
+    seedSession(['scout'])
+    const error = 'input is missing required field(s): agents.task'
+    mocks.invoke.mockResolvedValue({ started: false, reason: 'invalid-input', error })
+    await prompt('谁来')
+
+    const rows = botRows()
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({
+      botName: 'scout',
+      displayName: 'Scout',
+      isError: true,
+      content: 'bot.pipelineInvalidInput',
+      replyToId: userRow().id
+    })
+    expect(mocks.t).toHaveBeenCalledWith('bot.pipelineInvalidInput', { name: 'Scout', error })
+    expect(mocks.t).not.toHaveBeenCalledWith('bot.runFailed', expect.anything())
+    expect(kindsOf('scout')).toContain('pipeline_invalid_input')
+    expect(kindsOf('scout')).not.toContain('pipeline_error')
+    expect(lastActivity()).toMatchObject({ phase: 'ended', outcome: 'invalid-input' })
+  })
+
+  it('DP-11 invalid-input 没带 error 串 → 文案参数回落 "invalid input"，气泡照出', async () => {
+    writeBot('scout', { displayName: 'Scout' })
+    seedSession(['scout'])
+    mocks.invoke.mockResolvedValue({ started: false, reason: 'invalid-input' })
+    await prompt()
+
+    expect(botRows().map((r) => r.content)).toEqual(['bot.pipelineInvalidInput'])
+    expect(mocks.t).toHaveBeenCalledWith('bot.pipelineInvalidInput', {
+      name: 'Scout',
+      error: 'invalid input'
+    })
+  })
+
+  it.each([['not-found'], ['skipped'], ['superseded'], ['error']])(
+    'DP-12 started:false + %s → 通用的 runFailed 兜底气泡，不是 invalid-input 那条',
+    async (reason) => {
+      writeBot('scout', { displayName: 'Scout' })
+      seedSession(['scout'])
+      mocks.invoke.mockResolvedValue({ started: false, reason, error: 'whatever' })
+      await prompt()
+
+      const rows = botRows()
+      expect(rows.map((r) => r.content)).toEqual(['bot.runFailed'])
+      expect(rows[0].isError).toBe(true)
+      expect(mocks.t).toHaveBeenCalledWith('bot.runFailed', { name: 'Scout' })
+      expect(mocks.t).not.toHaveBeenCalledWith('bot.pipelineInvalidInput', expect.anything())
+      expect(kindsOf('scout')).toContain('pipeline_error')
+      expect(kindsOf('scout')).not.toContain('pipeline_invalid_input')
+      expect(lastActivity()).toMatchObject({ phase: 'ended', outcome: reason })
+    }
+  )
+
+  it('DP-13 门控连续故障回落之后：只有 intent 换成内置件，其余槽位仍是 bot 自己填的', async () => {
+    // 回落覆盖走的是 resolvePipeline 的 overrides。用一个本文件独占的 bot 名：健康度是
+    // 进程级 sticky 的，没有复位入口也不该有
+    writeBot('dp-degrade', {
+      displayName: 'Degrade',
+      agents: { intent: 'my-intent', task: 'coding', recheck: 'my-intent' }
+    })
+    seedSession(['dp-degrade'])
+    mocks.invoke.mockResolvedValue(ran({ gate: 'broken', outcome: 'gate-broken' }))
+    await prompt('一')
+    await prompt('二')
+    await prompt('三')
+
+    expect(request(0).input.agents).toEqual({
+      intent: 'my-intent',
+      task: 'coding',
+      recheck: 'my-intent'
+    })
+    expect(request(2).input.agents).toEqual({
+      intent: BUILTIN_GATE_AGENT,
+      task: 'coding',
+      recheck: 'my-intent'
+    })
+  })
+})

@@ -170,8 +170,8 @@ export class DefaultChatGateway implements ChatGateway {
   }
 
   async setEnabledTools(sessionId: string, tools: string[]): Promise<void> {
-    // 聊天会话不表达会话级工具勾选：任务段的 agent 就是 bot 自己，工具来自它 md 里的
-    // shuvix-tools。UI 上 ToolPicker 对聊天会话隐藏，这里是对应的后端守卫
+    // 聊天会话不表达会话级工具勾选：工具来自 bot 各槽位里那份 agent md 的 shuvix-tools。
+    // UI 上 ToolPicker 对聊天会话隐藏，这里是对应的后端守卫
     if (sessionService.isBotSession(sessionId)) return
     const agent = sessionService.getAgentSession(sessionId)
     if (agent) await agent.setEnabledTools(tools)

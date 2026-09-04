@@ -16,6 +16,7 @@ import {
 } from '../builtinWorkflows'
 import { createWorkflowEngine, type WorkflowScriptEngine } from '../engine'
 import type { WorkflowRegistryEntry } from '../engine'
+import { agentSlotsOf } from '../agentSlots'
 import type { TriggerPayloadMap } from '../triggerPoints'
 import type { RunTaskParams, SubAgentManager } from '../../subagent/manager'
 import type { InProcessAgentType } from '../../subagent/types'
@@ -283,14 +284,19 @@ describe('bot-chat — 骨架管线的结构钉板', () => {
     const script = botChat().script
     // 平铺只发生在提示词块的渲染作用域；脚本 global 只有基础 API + 调用方装配的那几个
     for (const field of [
-      'occasion',
       'window',
-      'notes',
       'agents.intent',
+      'agents.task',
+      'agents.recheck',
       'session.directed',
       'session.others'
     ]) {
       expect(script, field).toContain(`input.${field}`)
+    }
+    // 退役的入参一个都不再读：occasion（场合分流）/ notes / since（笔记材料）——
+    // 笔记场合没了，bot 的档案经 systemContext 进系统提示词，脚本连碰都不碰
+    for (const gone of ['occasion', 'notes', 'since']) {
+      expect(script, gone).not.toContain(`input.${gone}`)
     }
     // 反过来：新消息的正文脚本一次都不碰 —— 它经模板的 {{message.text}} 进提示词，
     // 那里的作用域才是平铺的。脚本只挑材料，不拼文案
@@ -324,11 +330,16 @@ describe('bot-chat — 骨架管线的结构钉板', () => {
     // 模板语法只有 {{path}}（无条件无循环），而「整行消失」只在该行除占位符外全是空白时
     // 成立 —— 所以「有内容才出现的一整段」必须整体是一个值，标题得住在值**里面**
     const wf = botChat()
-    for (const optional of ['notes', 'others', 'addressed', 'window', 'since']) {
+    for (const optional of ['others', 'addressed', 'window', 'since']) {
       expect(Object.keys(wf.prompts), optional).toContain(optional)
     }
-    expect(wf.prompts.notes).toContain('##')
-    expect(wf.script).toContain("prompt('notes'")
+    // 标题住在值里面：带标题的可选块自带 `##`，脚本按条件把它渲染成整段或空串
+    for (const titled of ['others', 'window', 'since']) {
+      expect(wf.prompts[titled], titled).toContain('##')
+    }
+    // notes 块随笔记场合退役 —— bot 的档案经 systemContext 进系统提示词，不再是可选上下文
+    expect(Object.keys(wf.prompts)).not.toContain('notes')
+    expect(wf.script).not.toContain("prompt('notes'")
   })
 })
 
@@ -341,7 +352,7 @@ describe('bot-chat —— 任务段与 BotReply 的结构钉板', () => {
   const botChat = (): ParsedWorkflowFile =>
     buildBuiltinWorkflows({}).find((w) => w.name === 'bot-chat')!
 
-  it('BC-1 vars 数值钉板：两个窗口、三个墙钟、笔记预算与出队复核开关', () => {
+  it('BC-1 vars 数值钉板：两个窗口、两个墙钟与出队复核开关（notes* 三项随笔记场合退役）', () => {
     // 数值本身没有神圣性，但它们是 e2e 与单测里一堆断言的依据（切片条数、超时秒数），
     // 改一个就该在这里显形一次
     expect(botChat().vars).toEqual({
@@ -349,9 +360,6 @@ describe('bot-chat —— 任务段与 BotReply 的结构钉板', () => {
       taskWindow: 20,
       gateTimeoutSec: 60,
       taskTimeoutSec: 1800,
-      notesTimeoutSec: 300,
-      notesWindow: 60,
-      notesBudget: 2000,
       recheckStale: true
     })
   })
@@ -436,14 +444,18 @@ describe('bot-chat —— 任务段与 BotReply 的结构钉板', () => {
     expect(wf.script).toContain('input.message && input.message.attachments')
   })
 
-  it('BC-7 【刻意不写】任务段提示词不带 notesBlock —— 任务段 agent 就是 bot 自己', () => {
-    const script = botChat().script
-    const taskPrompt = script.slice(script.indexOf("prompt('task'"), script.indexOf('sinceBlock:'))
-    expect(taskPrompt).not.toContain('notesBlock')
-    // 对照：门控段是共享内置件，它必须被告知这个 bot 学过什么
-    expect(script).toContain('notesBlock: notesBlock')
-    expect(botChat().prompts.task).not.toContain('{{notesBlock}}')
-    expect(botChat().prompts.gate).toContain('{{notesBlock}}')
+  it('BC-7 【刻意不写】没有任何提示词带 notesBlock —— bot 的档案不在 prompt 里，它经 systemContext 走', () => {
+    // 门控段曾被单独喂一份截断过的笔记；现在人设与记忆整篇追加在每一段的系统提示词末尾
+    // （renderBotContext），提示词里再拼一份等于让模型看到同一批事实两次、还是截断过的那份
+    const wf = botChat()
+    expect(wf.script).not.toContain('notesBlock')
+    expect(wf.script).not.toContain('trimNotes')
+    for (const [name, body] of Object.entries(wf.prompts)) {
+      expect(body, name).not.toContain('notesBlock')
+      expect(body, name).not.toMatch(/remembers/i)
+    }
+    // 提示词里给门控的只有身份两项：显示名 + 描述（判相关性的材料），档案本身不在
+    expect(wf.prompts.gate).toContain('{{bot.displayName}} — {{bot.description}}')
   })
 
   it('BC-8 失败文案齐备：四种任务段结局各有自己的一句话', () => {
@@ -454,5 +466,38 @@ describe('bot-chat —— 任务段与 BotReply 的结构钉板', () => {
       expect(botChat().prompts[name].trim(), name).not.toBe('')
     }
     expect(botChat().prompts.taskNoAgent).toContain('{{agent}}')
+  })
+
+  it('BC-9 入参 schema 钉板：四个 required 键，agents 声明 intent/task 必填、recheck 可选', () => {
+    // 这是宿主（botService 的 invoke input）与管线之间的接线契约；引擎按它做 required 校验
+    // （含沿 properties 递归的嵌套 required —— 漏填必填槽位在起跑前就被拦下并按路径点名）
+    type Prop = { type?: string; required?: string[]; properties?: Record<string, unknown> }
+    const schema = botChat().inputSchema as { required: string[]; properties: Record<string, Prop> }
+    expect(schema.required).toEqual(['bot', 'agents', 'session', 'message'])
+    expect(schema.properties.bot.required).toEqual(['name', 'displayName', 'description', 'file'])
+    expect(schema.properties.agents.type).toBe('object')
+    expect(schema.properties.agents.required).toEqual(['intent', 'task'])
+    expect(Object.keys(schema.properties.agents.properties!)).toEqual(['intent', 'task', 'recheck'])
+    expect(schema.properties.session.required).toEqual(['id', 'directed', 'members'])
+    expect(schema.properties.message.required).toEqual(['id', 'text'])
+    expect(schema.properties.window.type).toBe('array')
+    // 退役入参不在 schema 里
+    for (const gone of ['occasion', 'notes', 'since']) {
+      expect(Object.keys(schema.properties), gone).not.toContain(gone)
+    }
+  })
+
+  it('BC-10 槽位表（agentSlotsOf）：intent / task 必填、recheck 可选，各带一句提示语', () => {
+    // 设置页的槽位下拉与宿主的 resolvePipeline 都读这一张表 —— 没有宿主侧的缺省表，
+    // 哪些槽位存在、哪些必填，管线文件说了算
+    const slots = agentSlotsOf(botChat())
+    expect(slots.map((s) => [s.role, s.required])).toEqual([
+      ['intent', true],
+      ['task', true],
+      ['recheck', false]
+    ])
+    for (const slot of slots) expect(slot.description, slot.role).toBeTruthy()
+    // recheck 的提示语要说明缺省回落 intent（脚本里 `input.agents.recheck || input.agents.intent`）
+    expect(slots.find((s) => s.role === 'recheck')!.description).toMatch(/defaults to intent/)
   })
 })

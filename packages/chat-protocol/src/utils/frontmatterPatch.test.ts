@@ -11,7 +11,7 @@
  *  - frontmatter 键重复时只动第一处（见 A9 的注释）。
  */
 import { describe, it, expect } from 'vitest'
-import { patchFrontmatterScalar } from './frontmatterPatch'
+import { patchFrontmatterMappingEntry, patchFrontmatterScalar } from './frontmatterPatch'
 
 /** 一份典型的 bot-intent 覆盖档案（含注释与正文 —— 它们必须原样活过改写） */
 const DOC = [
@@ -196,6 +196,163 @@ describe('patchFrontmatterScalar', () => {
     // 插入：新行同样是 LF 尾（与替换同一条纪律）
     expect(patchFrontmatterScalar('---\r\nname: x\r\n---\r\nB\r\n', 'shuvix-model', 'm')).toBe(
       '---\r\nname: x\r\nshuvix-model: m\n---\r\nB\r\n'
+    )
+  })
+})
+
+/**
+ * patchFrontmatterMappingEntry —— 设置页「槽位下拉」的唯一写入原语：改/删 bot md 里
+ * `shuvix-bot-agents:` 块下的一条 `  槽位: agent名`。与 patchFrontmatterScalar 同一条纪律
+ * （块外的行逐字节不动），差别在它动的是一个**嵌套块**：块从解析出的条目重建。
+ *
+ * **钉现状，不改实现**。读实现时发现的两处隐患记录在此，供后续裁决（M6 / M9 各钉一条）：
+ *  - 流式写法 `key: { a: b }` 整行替换成块时，流式里原有的条目**不被读出**——会丢；
+ *  - 块内的缩进注释与空行随重建消失（只有 `entry: value` 行活下来）。
+ */
+describe('patchFrontmatterMappingEntry', () => {
+  const KEY = 'shuvix-bot-agents'
+  /** 一份典型的 bot md（含块外注释、其它键与正文 —— 它们必须原样活过改写） */
+  const BOT = [
+    '---',
+    'shuvix: bot v1',
+    'name: scout',
+    '# who I am',
+    'description: scouts code',
+    `${KEY}:`,
+    '  intent: bot-intent',
+    '  task: default',
+    'shuvix-bot-pipeline: bot-chat',
+    '---',
+    '',
+    'PERSONA.',
+    ''
+  ].join('\n')
+
+  it('M1 既有块加一条：追加在块尾，其余行逐字节不变', () => {
+    expect(patchFrontmatterMappingEntry(BOT, KEY, 'recheck', 'reviewer')).toBe(
+      BOT.replace('  task: default\n', '  task: default\n  recheck: reviewer\n')
+    )
+  })
+
+  it('M2 改既有条：原位替换，其它条目 / 块外注释 / 键序 / 正文不动', () => {
+    const out = patchFrontmatterMappingEntry(BOT, KEY, 'task', 'coding')
+    expect(out).toBe(BOT.replace('  task: default', '  task: coding'))
+    // 行数不变（原位替换，不是删了再插）
+    expect(out.split('\n')).toHaveLength(BOT.split('\n').length)
+  })
+
+  it('M3 键缺失 → 在闭合 --- 之前新起一块；近似前缀键 shuvix-bot-agents-extra 不误伤', () => {
+    const text = ['---', 'name: x', `${KEY}-extra:`, '  keep: me', '---', 'BODY.'].join('\n')
+    expect(patchFrontmatterMappingEntry(text, KEY, 'intent', 'bot-intent')).toBe(
+      [
+        '---',
+        'name: x',
+        `${KEY}-extra:`,
+        '  keep: me',
+        `${KEY}:`,
+        '  intent: bot-intent',
+        '---',
+        'BODY.'
+      ].join('\n')
+    )
+  })
+
+  it('M4 删一条：该行消失，其余条目留下', () => {
+    expect(patchFrontmatterMappingEntry(BOT, KEY, 'intent', null)).toBe(
+      BOT.replace('  intent: bot-intent\n', '')
+    )
+  })
+
+  it('M5 删到块空 → 连 `key:` 那一行一起删（不留一个值为 null 的裸键）', () => {
+    // 留下裸 `shuvix-bot-agents:` 在 YAML 里是 null —— 解析侧把它当省略，但文件读起来像没写完
+    const one = [
+      '---',
+      'name: x',
+      `${KEY}:`,
+      '  task: default',
+      'shuvix-bot-pipeline: bot-chat',
+      '---',
+      'B'
+    ]
+    expect(patchFrontmatterMappingEntry(one.join('\n'), KEY, 'task', null)).toBe(
+      ['---', 'name: x', 'shuvix-bot-pipeline: bot-chat', '---', 'B'].join('\n')
+    )
+  })
+
+  it('M6 流式写法 `key: { … }` 整行替换成块（⚠️ 钉现状：流式里原有的条目不被读出，会丢）', () => {
+    // 用户手写 `shuvix-bot-agents: { intent: bot-intent, task: default }` 后在设置页改一个
+    // 下拉，intent / task 会随这次改写消失 —— 解析器接着报「缺必填槽位」。流式写法在
+    // 新建模板与序列化器里都不会出现（它们写块），所以触发面是手写文件；值得改，先钉住
+    const flow = ['---', 'name: x', `${KEY}: { intent: bot-intent, task: default }`, '---', 'B']
+    expect(patchFrontmatterMappingEntry(flow.join('\n'), KEY, 'recheck', 'reviewer')).toBe(
+      ['---', 'name: x', `${KEY}:`, '  recheck: reviewer', '---', 'B'].join('\n')
+    )
+    // 删除同理：整行流式映射被当成空块删掉
+    expect(patchFrontmatterMappingEntry(flow.join('\n'), KEY, 'task', null)).toBe(
+      ['---', 'name: x', '---', 'B'].join('\n')
+    )
+  })
+
+  it('M7 无 frontmatter / 只有开头 --- 没有闭合 / 删不存在的条 → 原样返回', () => {
+    const noFm = 'just prose\n---\nnot frontmatter\n---\n'
+    expect(patchFrontmatterMappingEntry(noFm, KEY, 'task', 'x')).toBe(noFm)
+    const unclosed = `---\nname: x\n${KEY}:\n  task: default\nBODY WITHOUT CLOSE.`
+    expect(patchFrontmatterMappingEntry(unclosed, KEY, 'task', 'x')).toBe(unclosed)
+    // 删不存在的条（块在 / 块不在）都是无操作
+    expect(patchFrontmatterMappingEntry(BOT, KEY, 'ghost', null)).toBe(BOT)
+    const noKey = ['---', 'name: x', '---', 'B'].join('\n')
+    expect(patchFrontmatterMappingEntry(noKey, KEY, 'task', null)).toBe(noKey)
+  })
+
+  it('M8 正文里的同名块与正文 ---（hr）不受影响（i < close 的边界）', () => {
+    const text = [
+      '---',
+      'name: x',
+      `${KEY}:`,
+      '  task: fm-value',
+      '---',
+      '',
+      `${KEY}:`,
+      '  task: body-value',
+      '',
+      '---',
+      '',
+      'after the hr.'
+    ].join('\n')
+    expect(patchFrontmatterMappingEntry(text, KEY, 'task', 'patched')).toBe(
+      text.replace('  task: fm-value', '  task: patched')
+    )
+    expect(patchFrontmatterMappingEntry(text, KEY, 'task', null)).toBe(
+      text.replace(`${KEY}:\n  task: fm-value\n`, '')
+    )
+  })
+
+  it('M9 块从条目重建（⚠️ 钉现状）：块内缩进注释与空行消失，缩进归一为两空格', () => {
+    // 与 A13 同一种「如实钉住」：md 解析两种写法都认，改写只保证条目语义不变；若将来改成
+    // 逐行原位改写以保住块内注释，本例反转
+    const text = [
+      '---',
+      'name: x',
+      `${KEY}:`,
+      '    # the gate',
+      '    intent: bot-intent',
+      '',
+      '    task: default',
+      'shuvix-bot-pipeline: bot-chat',
+      '---',
+      'B'
+    ].join('\n')
+    expect(patchFrontmatterMappingEntry(text, KEY, 'task', 'coding')).toBe(
+      [
+        '---',
+        'name: x',
+        `${KEY}:`,
+        '  intent: bot-intent',
+        '  task: coding',
+        'shuvix-bot-pipeline: bot-chat',
+        '---',
+        'B'
+      ].join('\n')
     )
   })
 })

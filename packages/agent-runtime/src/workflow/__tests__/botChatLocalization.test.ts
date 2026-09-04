@@ -11,7 +11,7 @@
  * 用例清单（先由契约枚举，BL-6 为读实现后的白盒补充）：
  *  - BL-1 spec↔磁盘拴接：sources 恰 {en, zh, ja}，每份 `?raw` 内联原文与磁盘文件逐字节同
  *  - BL-2 每份语言文件独立解析成功且零 warning；name / shuvix-builtin 标记 / concurrency 恒定
- *  - BL-3 名集合钉板：17 个 prompt 名与 4 个 schema 名的集合，三语言逐语言一致（清单钉死）
+ *  - BL-3 名集合钉板：14 个 prompt 名与 4 个 schema 名的集合，三语言逐语言一致（清单钉死）
  *  - BL-4 ```js workflow`` 脚本块 zh/ja 与 en 逐字节同（提取 helper 与解析产物 script 互校）
  *  - BL-5 每个 ```json schema=<name>`` 块 zh/ja 与 en 逐字节同
  *  - BL-6（白盒）结构字段 vars / limits / inputSchema / bindings 与 en 深度相等
@@ -76,21 +76,20 @@ describe('bot-chat — 三语言守护（脚本与 schema 逐字节同 en）', (
     }
   })
 
-  it('BL-3 名集合钉板：17 个 prompt 名与 4 个 schema 名，三语言逐语言一致', () => {
-    // 清单钉死而不只比 set 相等：改名/增删块应当在这里显形一次，而不是三语言一起改完仍然全绿
+  it('BL-3 名集合钉板：14 个 prompt 名与 4 个 schema 名，三语言逐语言一致', () => {
+    // 清单钉死而不只比 set 相等：改名/增删块应当在这里显形一次，而不是三语言一起改完仍然全绿。
+    // notes / notesTask / sinceNotes 随笔记场合一起退役：bot 的档案经 systemContext 进系统提示词，
+    // 不再是任何一个 prompt 块
     const PROMPT_NAMES = [
       'addressed',
       'boundaries',
       'gate',
       'gateBroken',
       'gateTimeout',
-      'notes',
-      'notesTask',
       'others',
       'recheck',
       'recheckSkipped',
       'since',
-      'sinceNotes',
       'task',
       'taskFailed',
       'taskNoAgent',

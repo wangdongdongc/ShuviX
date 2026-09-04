@@ -1,5 +1,5 @@
 /**
- * 任务段的端到端（M8′）—— **只放穿透进程边界的那几件事**。
+ * 任务段的端到端（M8′ / v3）—— **只放穿透进程边界的那几件事**。
  *
  * 管线脚本的分支、`wrapProse` 的退化输入、BotReply 的全键投影、失败文案都是确定性纯
  * 逻辑，它们在单测里跑真 md、真投影，一轮几毫秒（`packages/agent-runtime/src/workflow/
@@ -7,7 +7,9 @@
  * 放进这里只会让每条断言都先付一次真实例 + 真 LLM 往返的代价，还换不来新信息。
  *
  * 留在这里的是**只有跨了进程才成立**的五件事：
- *   1. 任务段真的带着这个 bot 自己声明的工具被派发出去（工具解析在主进程，脚本看不见）；
+ *   1. 任务段真的带着 task 槽位那份 agent md 自己声明的工具被派发出去（工具解析在主进程，
+ *      脚本看不见），而 bot 的正文以 `<bot_profile>` 围栏落在**门控与任务段两者**的系统
+ *      提示词末尾 —— v3 起 bot 不再是 agent，工具与人格分属两份文件；
  *   2. 用户附的图真的到了 provider 的请求体里，而 run journal 里只有句柄没有字节
  *      —— 两个观测面分处网络与磁盘，任何一层的单测都只看得到其中一半；
  *   3. 聊天会话与有根会话的埋点 payload 形状一致（两个 emit 侧分处两个模块，
@@ -25,6 +27,7 @@ import {
   createBotSession,
   seedFakeProvider,
   waitRendererReady,
+  writeAgentMd,
   writeBotMd
 } from '../../harness/seed'
 
@@ -46,6 +49,11 @@ const REPLY = {
   status: 'warn',
   followups: ['要我直接改吗？']
 }
+
+/** task 槽位那份 agent md 的正文 —— 它才是任务段的系统提示词主体 */
+const WORKER_AGENT_BODY = 'WORKER AGENT PERSONA.'
+/** bot 的正文 —— 人设与记忆，围栏后追加到门控与任务段两者的系统提示词末尾 */
+const WORKER_BOT_BODY = 'WORKER BOT BODY — the bot remembers things here.'
 
 interface Msg {
   id: string
@@ -95,6 +103,17 @@ const isGate = (r: FakeRequest): boolean =>
 const isTask = (r: FakeRequest): boolean =>
   !r.isTitle && r.raw.includes('You are answering a message in a chat session')
 
+/** 请求体里的系统提示词（openai-completions 把它放在 messages 头部，role 为 system 或 developer） */
+function systemPromptOf(r: FakeRequest): string {
+  const m = (r.body.messages ?? []).find((x) => x.role === 'system' || x.role === 'developer')
+  const c = m?.content
+  if (typeof c === 'string') return c
+  if (Array.isArray(c)) {
+    return c.map((b) => (b as { text?: string }).text ?? '').join('')
+  }
+  return ''
+}
+
 /** 等到该会话上出现 n 条 assistant 消息 */
 const untilReplies = (sid: string, n: number): Promise<Msg[]> =>
   until(async () => {
@@ -131,12 +150,18 @@ beforeAll(async () => {
   await seedFakeProvider(app.main, { baseUrl: provider.baseUrl, modelId: MODEL })
   await waitRendererReady(app.main)
 
-  // 任务段 agent 就是 bot 自己：正文即系统提示词，shuvix-tools 即它的工具清单
+  // v3：任务段是 task 槽位指向的那份 agent md —— 正文即系统提示词，shuvix-tools 即它的工具清单；
+  // bot 自己只剩人设与记忆（正文），经围栏进每个参与 agent 的系统提示词
+  writeAgentMd(app, 't-worker-agent', {
+    description: 'the agent behind Worker',
+    tools: 'read, grep',
+    body: WORKER_AGENT_BODY
+  })
   writeBotMd(app, 't-worker', {
     description: 'does the actual work',
     displayName: 'Worker',
-    tools: 'read, grep',
-    body: 'WORKER PERSONA BODY.'
+    agents: { intent: 'bot-intent', task: 't-worker-agent' },
+    body: WORKER_BOT_BODY
   })
   writeBotMd(app, 't-quiet', { description: 'hangs on the task stage', displayName: 'Quiet' })
 }, 120_000)
@@ -146,8 +171,8 @@ afterAll(async () => {
   await provider?.close()
 })
 
-describe('E-1 —— 任务段全链：门控判 task → bot 带着自己的工具干活 → 结构化回复落库', () => {
-  it('工具清单、结果契约、落库的三种形态（content / reply / 署名）逐项落位', async () => {
+describe('E-1 —— 任务段全链：门控判 task → task 槽位的 agent 带着自己的工具干活 → 结构化回复落库', () => {
+  it('工具清单、两段的系统提示词（agent 正文 + bot 围栏）、结果契约、落库的三种形态逐项落位', async () => {
     provider.reset()
     provider.script(
       next({ decision: 'task', reason: '要动手', task: { objective: '查鉴权' } }, isGate),
@@ -159,9 +184,9 @@ describe('E-1 —— 任务段全链：门控判 task → bot 带着自己的工
     const msgs = await untilReplies(sid, 1)
     const reply = msgs.find((m) => m.role === 'assistant')!
 
-    // ① 任务段带的是 **bot md 声明的那几个工具** + 结果契约的 next。
+    // ① 任务段带的是 **task 槽位那份 agent md 声明的那几个工具** + 结果契约的 next。
     //    工具名解析发生在主进程（`resolveTools`），管线脚本压根看不见这一步 ——
-    //    只有真跑一次才知道 `bot:<name>` 那条 ref 确实被解析成了这个 bot 自己
+    //    只有真跑一次才知道槽位表里的名字确实被解析成了那份档案
     const taskReq = provider.chatRequests().find(isTask)!
     const toolNames = (taskReq.body.tools ?? []).map(
       (t) => (t as { function?: { name?: string } }).function?.name
@@ -169,14 +194,26 @@ describe('E-1 —— 任务段全链：门控判 task → bot 带着自己的工
     expect(toolNames).toContain('read')
     expect(toolNames).toContain('grep')
     expect(toolNames).toContain('next')
-    // 系统提示词就是 bot 的正文
-    expect(taskReq.raw).toContain('WORKER PERSONA BODY.')
+    // 系统提示词主体是那份 agent 的正文；bot 的正文以围栏缀在末尾（带身份键与文件路径）
+    const taskSys = systemPromptOf(taskReq)
+    expect(taskSys).toContain(WORKER_AGENT_BODY)
+    expect(taskSys).toContain(
+      `<bot_profile name="t-worker" file="${join(app.botsDir, 't-worker.md')}">`
+    )
+    expect(taskSys).toContain(WORKER_BOT_BODY)
+    expect(taskSys.indexOf(WORKER_AGENT_BODY)).toBeLessThan(taskSys.indexOf('<bot_profile'))
 
-    // ② 对照：门控段是共享内置件，被管线显式锁成「只有 next」
-    const gateToolNames = (provider.chatRequests().find(isGate)!.body.tools ?? []).map(
+    // ② 对照：门控段是共享内置件，被管线显式锁成「只有 next」；它拿到**同一份**围栏
+    //    （这次 run 派发的每一个 agent 都拿），但没有任务段 agent 的正文
+    const gateReq = provider.chatRequests().find(isGate)!
+    const gateToolNames = (gateReq.body.tools ?? []).map(
       (t) => (t as { function?: { name?: string } }).function?.name
     )
     expect(gateToolNames).toEqual(['next'])
+    const gateSys = systemPromptOf(gateReq)
+    expect(gateSys).toContain('<bot_profile name="t-worker"')
+    expect(gateSys).toContain(WORKER_BOT_BODY)
+    expect(gateSys).not.toContain(WORKER_AGENT_BODY)
 
     // ③ content 是**全键 markdown**（模型可见的唯一权威），行上的 reply 列是同源的
     //    结构（UI 用）—— v2 起它就是消息那一行的一列，不再是紧邻的一条署名 entry

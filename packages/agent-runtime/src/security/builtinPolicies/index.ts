@@ -54,9 +54,9 @@ import reviewMemoryWritesEn from './md/review-memory-writes.md?raw'
 import reviewMemoryWritesZh from './md/review-memory-writes.zh.md?raw'
 import reviewMemoryWritesJa from './md/review-memory-writes.ja.md?raw'
 import askOnWriteEn from './md/ask-on-write.md?raw'
-import protectBotNotesEn from './md/protect-bot-notes.md?raw'
-import protectBotNotesZh from './md/protect-bot-notes.zh.md?raw'
-import protectBotNotesJa from './md/protect-bot-notes.ja.md?raw'
+import protectBotFilesEn from './md/protect-bot-files.md?raw'
+import protectBotFilesZh from './md/protect-bot-files.zh.md?raw'
+import protectBotFilesJa from './md/protect-bot-files.ja.md?raw'
 import askOnWriteZh from './md/ask-on-write.zh.md?raw'
 import askOnWriteJa from './md/ask-on-write.ja.md?raw'
 import protectCredentialsEn from './md/protect-credentials.md?raw'
@@ -114,8 +114,8 @@ export const BUILTIN_POLICY_SPECS: readonly BuiltinPolicySpec[] = [
     }
   },
   {
-    name: 'protect-bot-notes',
-    sources: { en: protectBotNotesEn, zh: protectBotNotesZh, ja: protectBotNotesJa }
+    name: 'protect-bot-files',
+    sources: { en: protectBotFilesEn, zh: protectBotFilesZh, ja: protectBotFilesJa }
   },
   {
     name: 'ask-on-read',

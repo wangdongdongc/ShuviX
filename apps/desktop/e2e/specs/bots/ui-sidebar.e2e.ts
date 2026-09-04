@@ -6,7 +6,8 @@
  * 项目归属提示 / 防重入）、创建后的会话形态（projectId + settings.bots）与
  * 侧栏行呈现（活动态 + bot 图标）。
  *
- * 全程无 LLM：创建 Bot 会话只落库 + 播开场白，不碰任何模型。
+ * 全程无 LLM：创建 Bot 会话只落库，不碰任何模型 —— v3 起也**不播开场白**，
+ * 新会话零条消息（A0-16 顺带钉住）。
  * bot md 在用例内按需播种（A0-12/13 依赖 bots 目录为空，**必须**排在播种之前）。
  */
 import { mkdirSync } from 'node:fs'
@@ -40,12 +41,9 @@ const getSession = (
 const botNames = (): Promise<string[]> =>
   app.main.eval<string[]>(`window.api.bot.list().then((bs) => bs.map((b) => b.name))`)
 
-/** 开场白署名序（message.list 的 metadata.sender.name） */
-const greetingSenders = (sid: string): Promise<string[]> =>
-  app.main.eval<string[]>(
-    `window.api.message.list(${JSON.stringify(sid)})
-      .then((ms) => ms.map((m) => m.metadata?.sender?.name).filter(Boolean))`
-  )
+/** 该会话的消息条数（v3 新会话恒为 0 —— 没有开场白） */
+const messageCount = (sid: string): Promise<number> =>
+  app.main.eval<number>(`window.api.message.list(${JSON.stringify(sid)}).then((ms) => ms.length)`)
 
 /** 记录当前会话 id 集，执行 act 后返回新增的那些 id */
 async function newSessionsAfter(act: () => Promise<void>): Promise<string[]> {
@@ -114,16 +112,8 @@ describe('分组头入口与对话框空态', () => {
 describe('成员列表与多选', () => {
   // A0-14
   it('列表 = registry 合法集：2 合法 + 1 非法 → 行名单恰等于 bot.list()', async () => {
-    writeBotMd(app, 'b-echo', {
-      description: 'echo bot',
-      displayName: 'Echo',
-      greeting: 'echo 打个招呼'
-    })
-    writeBotMd(app, 'b-relay', {
-      description: 'relay bot',
-      displayName: 'Relay',
-      greeting: 'relay 打个招呼'
-    })
+    writeBotMd(app, 'b-echo', { description: 'echo bot', displayName: 'Echo' })
+    writeBotMd(app, 'b-relay', { description: 'relay bot', displayName: 'Relay' })
     // 非法文件（description 必填却为空 + 重复键）：进 invalid 通道，不进列表
     writeBotMd(app, 'b-broken', { description: '', rawLines: ['description: '] })
 
@@ -162,7 +152,7 @@ describe('成员列表与多选', () => {
   })
 
   // A0-16
-  it('成员按名单顺序而非点击顺序：settings.bots 与开场白署名序都等于 bot.list() 序', async () => {
+  it('成员按名单顺序而非点击顺序：settings.bots 等于 bot.list() 序；新会话零条消息（无开场白）', async () => {
     const names = await botNames()
 
     await sidebar.clickNewBotChat({ project: PROJECT_NAME })
@@ -179,7 +169,8 @@ describe('成员列表与多选', () => {
 
     const sid = created[0]
     expect((await getSession(sid)).settings.bots).toEqual(names)
-    expect(await greetingSenders(sid)).toEqual(names)
+    // v3：建会话不播开场白 —— 对话从用户的第一句开始
+    expect(await messageCount(sid)).toBe(0)
   })
 })
 

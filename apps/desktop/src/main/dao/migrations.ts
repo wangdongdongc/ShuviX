@@ -453,9 +453,8 @@ export const migrations: Migration[] = [
       // 名字（与 v1 的侧车同一条纪律，历史永不裂）。decision 是 clarify 回连的判定材料
       // （上一条 bot 消息是某个 bot 的 clarify 时，下一条无提及消息硬路由回它）。
       //
-      // hop / rootId 是 bot 响应 bot 的两道护栏：hop 保证链路必然终止（纵向），
-      // rootId 让「同一条用户消息引发了多少条 bot 消息」可数（横向）。缺省
-      // `shuvix-bot-respond-to: user` 下两者恒为 0 / 自身，护栏不生效也不花钱。
+      // hop / rootId 曾是 bot 响应 bot 的两道护栏（纵向跳数 / 横向扇出计数）。接力已经
+      // 取消：新写入 hop 恒为 0、rootId 恒空，两列留作遗留 —— SQLite 删列不值一次迁移。
       db.exec(`
         CREATE TABLE IF NOT EXISTS chat_messages (
           id           TEXT PRIMARY KEY,

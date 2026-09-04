@@ -1,24 +1,26 @@
 /**
  * BotService —— bot 注册表（桌面宿主层）。设计见 docs/bot-design.md §4。
  *
- * 落地分期（docs/bot-implementation-plan.md）：本文件现有两半 ——
- *  - **注册表半边（M1′）**：扫描 / md 原文读写 / 非法文件修复通道 / 新建模板；
- *  - **消息半边（M3′）**：无根会话的用户消息落盘、bot 消息的双 append、greeting 播种、
- *    在飞计数（树钉住用）与 abortSession 会师点；
- *  - **管线半边（M4′）**：L0 门 → cohort → 每成员一次 invoke，以及装配进脚本的
- *    `turn` / `say` 两个回调。L0 门与 mailbox 的算法在 `bot/` 下各自成件。
+ * 本文件有三半 ——
+ *  - **注册表半边**：扫描 / md 原文读写 / 非法文件修复通道 / 新建模板；
+ *  - **消息半边**：无根会话的用户消息落盘、bot 消息的 append、在飞计数与 abortSession 会师点；
+ *  - **管线半边**：L0 门 → cohort → 每成员一次 invoke，以及装配进脚本的 `turn` / `say`
+ *    两个回调。L0 门与 mailbox 的算法在 `bot/` 下各自成件。
  *
- * 笔记写盘（M9′）、真意图段与窗口构建（M5′）、任务段与 BotReply 投影（M8′）尚未接上 ——
- * 内置管线此刻跑的是骨架脚本（确定性占位判定），链路是真的，判断还不是。
+ * **一个 bot 是一份绑定**：身份 + 管线 workflow + 槽位表（槽位 → agent md）+ 正文。
+ * 正文是它的人设与记忆，由 `renderBotContext` 围栏后随 invoke 的 `systemContext` 带给
+ * 这次 run 派发的每一个 agent（门控、复核、任务段都拿同一份），并由 bot 自己维护 ——
+ * 任务段 agent 拿自己的文件工具就地改这份 md。没有笔记段、没有开场白、没有逐 bot 的
+ * 门控模式：每个成员都进 cohort，「这条与我无关」由它自己的意图段说。
  *
- * **不内置任何 bot**（设计 §4.2）：内置的只有管线 workflow（`bot-chat`）与阶段 agent
- * （`bot-intent` / `bot-notes`）。因此这里没有 agent/workflow/policy 三件套那种
- * 「内置 + 用户同名覆盖」的两源合并 —— 目录里有什么就是什么，少一整个概念。
- * 「新建 bot」由 `newBotTemplate()` 用内置件填一份模板，用户取个名字即可（§4.6）。
+ * **不内置任何 bot**（设计 §4.2）：内置的只有管线 workflow（`bot-chat`）与门控段 agent
+ * （`bot-intent`）。因此这里没有 agent/workflow/policy 三件套那种「内置 + 用户同名覆盖」
+ * 的两源合并 —— 目录里有什么就是什么，少一整个概念。「新建 bot」由 `newBotTemplate()`
+ * 用内置件填一份模板，用户取个名字即可（§4.6）。
  *
- * 写盘一律**原子写**（`writeFileAtomic`）：笔记写入之后这些文件会被后台高频改写，而
- * `scanDir` 随时可能读进来 —— `writeFileSync` 的「先截断再写」会让 bot 在注册表里瞬时
- * 消失并落进 invalid 双轨。
+ * 写盘一律**原子写**（`writeFileAtomic`）：bot 在答话途中会改自己的文件，而 `scanDir`
+ * 随时可能读进来 —— `writeFileSync` 的「先截断再写」会让 bot 在注册表里瞬时消失并落进
+ * invalid 双轨。
  */
 import { existsSync, readdirSync, readFileSync, mkdirSync, renameSync, unlinkSync } from 'fs'
 import { createHash } from 'crypto'
@@ -28,10 +30,11 @@ import { shell } from 'electron'
 import type { AgentMessage } from '@earendil-works/pi-agent-core'
 import {
   DEFAULT_BOT_PIPELINE,
-  parseBotAgentRef,
   parseBotDefinitionFile,
+  renderBotContext,
   serializeBotDefinitionFile,
-  type ParsedBotFile
+  type ParsedBotFile,
+  type PipelineAgentSlot
 } from '@shuvix/agent-runtime'
 import type { AgentPromptParams } from '@shuvix/chat-protocol/chatApi'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
@@ -40,10 +43,10 @@ import { resolveTokensForAgent } from '@shuvix/chat-protocol/utils/inlineTokens'
 import { botReplyToMarkdown, coerceBotReply } from '@shuvix/chat-protocol/botReply'
 import { getDefaultBotsDir } from '../utils/paths'
 import { writeFileAtomic } from '../utils/atomicWrite'
+import { recordRead } from '../utils/toolUtils/fileTime'
 import { createLogger } from '../logger'
 import { t } from '../i18n'
 import { chatMessageDao } from '../dao/chatMessageDao'
-import type { ChatMessageRow } from '../dao/types/chatMessage'
 import { rowToChatMessage } from './chatMessageProjection'
 import { setChatSessionPredicate } from './messageService'
 import { readChatAttachment, saveChatAttachments } from './chatAttachments'
@@ -53,21 +56,16 @@ import { buildTurnCompletedFacts, isDefaultTitle } from './sessionTriggerFacts'
 import { appendBotDecision, botRunsDir, pruneBotRuns, type BotDecisionKind } from './bot/botJournal'
 import { runL0Gate, type L0Record, type LastBotSender } from './bot/botGate'
 import { BotMailbox, mailboxKey, type QueueItem, type TurnSlot } from './bot/botMailbox'
-import { BotNotesScheduler } from './bot/botNotesScheduler'
 import { electronEventSink } from './agentRuntimeAdapters'
 import { registerUserInputParticipant } from './userInputBroker'
 import { chatFrontendRegistry } from '../frontend/core/ChatFrontendRegistry'
-import { messageService } from './messageService'
 import { sessionService } from './sessionService'
-import { settingsService } from './settingsService'
 
 const log = createLogger('Bot')
 
 /**
- * 设置页列表项 —— 刻意**不外传** systemPrompt / 笔记区：列表只需要
- * 「是谁、干什么、怎么应答、用哪条管线」，编辑走 getSource 拿整份 md 原文
- * （与 agent/workflow/policy 设置页同形：详情即原文编辑器）。
- * suggestions 自 A4 起外传 —— 聊天会话空态的建议问题按钮以它为数据源。
+ * 设置页列表项 —— 刻意**不外传**正文：列表只需要「是谁、干什么、用哪条管线、槽位填了谁」，
+ * 编辑走 getSource 拿整份 md 原文（与 agent/workflow/policy 设置页同形：详情即原文编辑器）。
  */
 export interface BotListItem {
   name: string
@@ -75,21 +73,13 @@ export interface BotListItem {
   description: string
   /** 管线框架（workflow 名） */
   pipeline: string
-  /** 门控模式 auto | mention-only */
-  respond: string
-  /** 笔记开关 */
-  notesEnabled: boolean
-  /** 笔记字符数（0 = 尚无笔记） */
-  notesChars: number
-  /** 任务段工具白名单 */
-  tools: string[]
-  /** 建议问题（shuvix-bot-suggestions；空态点击 = 文本进输入框 + 隐式定向本 bot） */
-  suggestions: string[]
-  /** 任务段模型（`shuvix-model`）；省略 = 跟随会话 */
-  model?: string
+  /** 槽位 → agent 名（bot md 的 shuvix-bot-agents 原样） */
+  agents: Record<string, string>
+  /** 正文（人设与记忆）字符数 —— 它进每个参与 agent 的系统提示词，设置页据此提醒体量 */
+  bodyChars: number
   /** 文件路径 */
   basePath: string
-  /** 笔记区的结构异常（软失败，不影响可用性；设置页显示为提示） */
+  /** 解析器接受但有话说的提示（不影响可用性；设置页显示为提示） */
   warnings: string[]
 }
 
@@ -106,26 +96,21 @@ export interface InvalidBotFile {
 /** 连续多少次门控故障就回落内置（设计 §6.1） */
 const GATE_FAILURE_STREAK = 2
 
-/** 角色回落表 —— bot md 的 `shuvix-bot-agents` 逐键覆盖它 */
-const DEFAULT_STAGE_AGENTS = {
-  intent: 'bot-intent',
-  recheck: 'bot-intent',
-  notes: 'bot-notes'
-} as const
-
 /**
- * 任务段指向 bot 自己。**必须是全局可寻址的 `bot:<name>` 而不是 `bot:self`** ——
- * 引擎的 `resolveAgentProfile(ref)` 是一个无 run 上下文的全局 dep，相对 ref 在那里
- * 永远解析不出来。解析（`bot:<name>` → InProcessAgentType）归 M8′，此刻只定名。
+ * 内置门控段 —— 门控连续故障时的回落人选，也是新建模板给 `intent` 槽位预填的名字。
+ * **不是缺省表**：槽位由 bot md 逐一填写，漏填必填槽位由管线的输入校验拦下并在会话里说出来。
  */
-export function botSelfRef(botName: string): string {
-  return `bot:${botName}`
-}
+export const BUILTIN_GATE_AGENT = 'bot-intent'
+/** 新建模板给 `task` 槽位预填的名字 —— 主会话基座档案，工具最全的那份通用 agent */
+export const DEFAULT_TASK_AGENT = 'default'
 
 export interface ResolvedPipeline {
   workflow: string
   /** 注册表里有没有这份管线 —— 派发之前就能判，不必靠事后的 not-found */
   exists: boolean
+  /** 管线声明的槽位（顺序即声明序）；管线不存在或没声明 = [] */
+  slots: PipelineAgentSlot[]
+  /** 槽位 → agent 名：bot md 的 `shuvix-bot-agents` 原样，加上回落覆盖 */
   agents: Record<string, string>
 }
 
@@ -137,9 +122,8 @@ export function resolvePipeline(
   return {
     workflow,
     exists: workflowService.hasWorkflow(workflow),
+    slots: workflowService.agentSlots(workflow),
     agents: {
-      ...DEFAULT_STAGE_AGENTS,
-      task: botSelfRef(bot.name),
       ...bot.agents,
       // 回落覆盖用户的 shuvix-bot-agents —— 它正是「那份不可靠的门控 agent」的来源
       ...overrides
@@ -162,10 +146,6 @@ interface BotTicket {
   displayName: string
   messageSeq: number
   messageId: string
-  /** 触发本轮的那条用户消息 id（扇出计数按它归组）。bot 回复原样继承 */
-  rootId: string
-  /** 触发消息的跳数；本 ticket 产出的回复是 hop + 1（循环护栏的纵向计数） */
-  hop: number
   /** run 已收尾（超时 / 被中止）—— `say` 的硬闸，见下 */
   terminal: boolean
   /** 本 ticket 已经往会话里说过话 —— 可见结局兜底据此决定要不要再补一条失败气泡 */
@@ -212,45 +192,6 @@ interface MemberOutcome {
   outcome: string
 }
 
-/**
- * bot→bot 接力两道护栏的**设置键与缺省值**（设计 §4.2）。
- *
- * 放在全局设置而不是 bot md：它们是**会话级的安全阀**，让单个 bot 自己声明能触发多深，
- * 等于把护栏交给被护的人。
- *
- *  - `maxHop = 2`：允许接一手（用户 → A → B 即止）。1 等价于关掉 bot→bot。
- *  - `maxFanout = 8`：同一条用户消息引发的整棵传播树里 bot 消息的总数上限 ——
- *    hop 管纵向，这个管横向（N 个 bot 互相回复是组合增长）。
- *
- * **缺省这一组下横向那道几乎打不到**：maxHop=2 让二跳消息不再派发，于是能读到扇出计数的
- * 只有一跳消息（至多 N 条，N = 成员数），成员不到 8 个就够不着上限。这不是缺陷 —— 它是
- * 为「把 maxHop 调大」准备的那道闸，而正因为 maxHop 可调，这道闸才必须一起可调。
- */
-export const BOT_MAX_HOP_KEY = 'bot.maxHop'
-export const BOT_MAX_FANOUT_KEY = 'bot.maxFanout'
-const BOT_LOOP_DEFAULTS = { maxHop: 2, maxFanout: 8 } as const
-
-/**
- * 实时读取两道护栏（同 `httpLog.enabled` 的口径：改了立刻生效，不必重建会话）。
- * 写坏的值（非数、负数、小数）一律回落缺省 —— 设置项是纯文本键值，UI 之外还有
- * `session` 工具这条写入口，一个 `maxHop: "很多"` 不该把护栏整个关掉。
- */
-function readLoopLimits(): { maxHop: number; maxFanout: number } {
-  const num = (key: string, fallback: number): number => {
-    const raw = settingsService.get(key)
-    // 空串必须先挡掉：`Number('')` 是 0，而 0 不是「没设」—— 它会让 hop 判定当场触顶，
-    // 于是一个被清空的输入框静默地把接力整个关掉。下限取 1 同理（maxFanout 0 意味着
-    // 每一轮都立刻落一条「已达上限」的系统消息）
-    if (!raw?.trim()) return fallback
-    const n = Number(raw)
-    return Number.isInteger(n) && n >= 1 ? n : fallback
-  }
-  return {
-    maxHop: num(BOT_MAX_HOP_KEY, BOT_LOOP_DEFAULTS.maxHop),
-    maxFanout: num(BOT_MAX_FANOUT_KEY, BOT_LOOP_DEFAULTS.maxFanout)
-  }
-}
-
 /** 一条 bot 消息的署名与附带结构（写进 chat_messages 的那几列） */
 interface BotSender {
   botName: string
@@ -290,29 +231,9 @@ function parseInlineTokens(raw?: string): Record<string, InlineToken> | undefine
 }
 
 /**
- * 归纳材料的行数上限。`bot-chat.md` 的 `notesWindow` 是脚本侧的同一把尺，这里是宿主侧的
- * 那一把 —— 两处都要，因为这份 input 既进提示词也进 run journal。
- */
-const NOTES_MAX_LINES = 200
-
-/**
- * 这一轮值得记进笔记吗。
- *
- * `task` 前缀不能一刀切：`task-failed` / `task-timeout` / `task-no-agent` 都是**没干成**，
- * 而 `task-no-agent` 更是配置错（脚本自己的注释就写着重试永远不会好）。让它们把计数顶到
- * 门槛，换来的是一次没有材料价值的归纳 —— 代价是一整份笔记进上下文外加一张询问卡。
- */
-export function isNoteWorthy(
-  output: { outcome?: string; memorable?: boolean } | undefined
-): boolean {
-  if (output?.memorable === true) return true
-  return output?.outcome === 'task' || output?.outcome === 'task-unshaped'
-}
-
-/**
  * 一份 md 原文的版本指纹。
  *
- * 用内容哈希而不是 mtime：笔记段的写入与用户的保存可以落在同一秒里，而 mtime 的分辨率
+ * 用内容哈希而不是 mtime：bot 的自我编辑与用户的保存可以落在同一秒里，而 mtime 的分辨率
  * 恰好会把这种情况判成「没变」——那正是要拦的那一种。
  */
 function revisionOf(raw: string): string {
@@ -355,7 +276,7 @@ class BotService {
         invalid.push({ fileName, error: e instanceof Error ? e.message : String(e) })
         continue
       }
-      // warn 通道同时收「拒绝理由」与「接受但有话说」（笔记区异常、task 覆盖提示）；
+      // warn 通道同时收「拒绝理由」与「接受但有话说」；
       // 只有 parsed 为 null 时这些话才是拒绝原因，否则它们是 warnings
       const messages: string[] = []
       const parsed = parseBotDefinitionFile(raw, fileName.slice(0, -3), (msg) => {
@@ -389,7 +310,7 @@ class BotService {
     return this.listAll().find((b) => b.file.name === name)?.file ?? null
   }
 
-  /** 按名取原始文件内容与路径（笔记写入的读侧入口；未知名返回 null） */
+  /** 按名取原始文件内容与路径（未知名返回 null） */
   readBotFile(name: string): { path: string; raw: string } | null {
     const target = this.listAll().find((b) => b.file.name === name)
     if (!target) return null
@@ -410,12 +331,8 @@ class BotService {
         displayName: file.displayName,
         description: file.description,
         pipeline: file.pipeline,
-        respond: file.respond,
-        notesEnabled: file.notesEnabled,
-        notesChars: file.notes?.length ?? 0,
-        tools: file.tools,
-        suggestions: file.suggestions,
-        model: file.model,
+        agents: { ...file.agents },
+        bodyChars: file.body.length,
         basePath,
         warnings
       }))
@@ -428,19 +345,28 @@ class BotService {
   }
 
   /**
-   * 设置页详情的**运行时读数**（`bot:inspect`）：管线与各阶段 agent 的解析结果、
-   * 门控 sticky 降级、笔记调度状态。frontmatter 本身归属性卡（bot 描述符），这里只回答
-   * 「按现在的注册表状态，这个 bot 跑起来会解析成什么」—— 引用缺失即回落之类的事实
-   * 埋在 journal 里不算呈现（§8.5）。
+   * 设置页详情的**运行时读数**（`bot:inspect`）：管线与各槽位的解析结果、门控 sticky 降级、
+   * 正文用量。frontmatter 本身归属性卡（bot 描述符），这里只回答「按现在的注册表状态，
+   * 这个 bot 跑起来会解析成什么」—— 引用缺失之类的事实埋在 journal 里不算呈现（§8.5）。
    */
   inspect(name: string):
     | {
         pipeline: { name: string; exists: boolean; concurrency?: string }
-        /** 角色 → ref 解析结果；missing = 引用的 agent/bot 不存在（运行时将回落内置并 warn） */
-        stages: Array<{ role: string; ref: string; missing: boolean }>
+        /**
+         * 管线声明的每个槽位 + bot 填的 agent 名；bot 额外填了管线没声明的槽位也列出
+         * （required=false）。ref 缺省 = 没填；missing = 填了但那个 agent 不存在。
+         */
+        slots: Array<{
+          role: string
+          required: boolean
+          description?: string
+          ref?: string
+          missing: boolean
+        }>
         /** 门控段已 sticky 回落内置的原因（broken / timeout）；未降级则缺省 */
         gateDegraded?: string
-        notes: { enabled: boolean; chars: number; pending: number; lastRunAt: number }
+        /** 正文（人设与记忆）的用量 —— 它进每个参与 agent 的系统提示词 */
+        body: { chars: number }
       }
     | { error: string } {
     const bot = this.getBot(name)
@@ -450,37 +376,33 @@ class BotService {
     const wf = workflowService
       .listForSettings()
       .find((w) => w.name === pipeline.workflow && !w.overridden)
-    const stages = Object.entries(pipeline.agents).map(([role, ref]) => {
-      const selfName = parseBotAgentRef(ref)
+    const declared = new Set(pipeline.slots.map((s) => s.role))
+    const extra = Object.keys(bot.agents)
+      .filter((role) => !declared.has(role))
+      .map((role): PipelineAgentSlot => ({ role, required: false }))
+    const slots = [...pipeline.slots, ...extra].map((slot) => {
+      const ref = bot.agents[slot.role]
       return {
-        role,
-        ref,
-        // `bot:<name>` 指向 bot 注册表（task 缺省即自身）；其余对照 agent 档案注册表
-        missing: selfName !== null ? !this.getBot(selfName) : !agentService.getProfile(ref)
+        ...slot,
+        ...(ref ? { ref } : {}),
+        missing: !!ref && !agentService.getProfile(ref)
       }
     })
     const degraded = this.gateDegradedOf(name)
-    const peek = this.notes.peek(name)
     return {
       pipeline: { name: pipeline.workflow, exists: pipeline.exists, concurrency: wf?.concurrency },
-      stages,
+      slots,
       ...(degraded ? { gateDegraded: degraded } : {}),
-      notes: {
-        enabled: bot.notesEnabled,
-        chars: bot.notes?.length ?? 0,
-        pending: peek.pending,
-        lastRunAt: peek.lastRunAt
-      }
+      body: { chars: bot.body.length }
     }
   }
 
   /**
    * 取 md 原文（编辑器数据源），连同一枚**版本指纹**。
    *
-   * 指纹是给 `save` 用的:笔记段会在后台改这份文件,而用户可能在那之前就打开了编辑器。
-   * 没有它,「T0 打开 → T1 笔记段改 → T2 用户保存」会把 T1 的归纳整份吃掉,而且是静默的
-   * (设计 §8.2 把这条记为已知未解,留给 M9′)。`edit` 工具自带的「读后被改」检测保护的是
-   * agent 那一侧,反方向从来没有人守。
+   * 指纹是给 `save` 用的:bot 会在答话途中改这份文件,而用户可能在那之前就打开了编辑器。
+   * 没有它,「T0 打开 → T1 bot 改 → T2 用户保存」会把 T1 的改动整份吃掉,而且是静默的。
+   * `edit` 工具自带的「读后被改」检测保护的是 agent 那一侧,反方向从来没有人守。
    */
   getSource(name: string): { text: string; revision: string } | { error: string } {
     const target = this.readBotFile(name)
@@ -490,7 +412,7 @@ class BotService {
 
   /**
    * 写盘前解析校验。**非法一律拒绝**：一份存在但非法的 bot 会被扫描跳过，与其让它躺在
-   * 磁盘上假装可用，不如把原因交回 UI。笔记区异常不算非法（软失败）。
+   * 磁盘上假装可用，不如把原因交回 UI。
    */
   private parseForWrite(
     text: string,
@@ -506,7 +428,7 @@ class BotService {
    * 覆写 bot 文件（`originalName` 定位文件；frontmatter name 为准，可改名）。
    *
    * `revision` 是 `getSource` 那一刻的指纹。对不上说明这份文件在你编辑期间被改过 ——
-   * 几乎总是笔记段干的 —— 此时**拒绝并让 UI 去解决冲突**，而不是让后写的一方赢。
+   * 几乎总是 bot 自己干的 —— 此时**拒绝并让 UI 去解决冲突**，而不是让后写的一方赢。
    * 不传 revision 的调用方按旧语义直接覆盖（`saveByFile` 的修复通道就该这样：
    * 那条路走的是解析不出来的坏文件，没有可对照的版本）。
    */
@@ -520,7 +442,7 @@ class BotService {
     if (!target) return { success: false, error: `Bot "${originalName}" not found` }
 
     if (revision !== undefined) {
-      // **按路径读而不是按名字查**：笔记段拿的是普通 `edit`，改得动 frontmatter 的
+      // **按路径读而不是按名字查**：bot 拿的是普通 `edit`，改得动 frontmatter 的
       // `name:` 那一行 —— 按旧名字查就查不到，于是最需要三方合并的那一次反而拿不到
       // 盘上的内容。空串同理算「给了一个对不上的指纹」，不是「没给」
       let onDisk = ''
@@ -532,7 +454,8 @@ class BotService {
       if (revisionOf(onDisk) !== revision) {
         return {
           success: false,
-          error: 'This bot changed on disk since you opened it — most likely its own notes pass.',
+          error:
+            'This bot changed on disk since you opened it — most likely the bot itself, updating its own profile.',
           conflict: { current: onDisk }
         }
       }
@@ -565,10 +488,9 @@ class BotService {
   /**
    * 改名之后把散在别处的旧名字迁过来。
    *
-   * bot 的身份是 frontmatter 里的 `name`，而这个名字被三处引用：会话的 `settings.bots`
-   * 成员名单、决策记录与 run journal 的目录、以及笔记检查点。**不迁的话改一次名等于把
-   * 这个 bot 从所有会话里删掉** —— L0 门会把它当成「成员 md 不存在」，而用户看到的是
-   * 「我只是改了个名字」。
+   * bot 的身份是 frontmatter 里的 `name`，而这个名字被两处引用：会话的 `settings.bots`
+   * 成员名单、决策记录与 run journal 的目录。**不迁的话改一次名等于把这个 bot 从所有
+   * 会话里删掉** —— L0 门会把它当成「成员 md 不存在」，而用户看到的是「我只是改了个名字」。
    *
    * **幂等**：每一步都先看目标状态再动手，重复跑一遍不会出错 —— 迁移做了一半崩掉时，
    * 下一次保存（或用户手动改回来再改过去）能把剩下的补上。
@@ -605,8 +527,6 @@ class BotService {
     } catch (e) {
       log.warn(`改名迁移：journal 目录改名失败 ${oldName} → ${newName}:`, e)
     }
-    // ③ 笔记检查点
-    this.notes.rename(oldName, newName)
   }
 
   /** 新建 bot；文件名由 name 净化派生 */
@@ -634,30 +554,24 @@ class BotService {
   }
 
   /**
-   * 「新建 bot」的模板 —— 用内置管线与内置阶段 agent 填一份可直接落盘的 md。
+   * 「新建 bot」的模板 —— 用内置管线填一份可直接落盘的 md，两个必填槽位预填
+   * 内置门控（`bot-intent`）与主会话基座档案（`default`）。
    *
    * 这是「不内置 bot」的另一半（设计 §4.2）：用户不必从空文件起步，取个名字 + 写句人设
    * 就有一个能用的 bot；而内置件的更新照常跟随版本，不会被一份 fork 出来的副本冻住。
    */
   newBotTemplate(params: { name: string; description?: string; persona?: string }): string {
-    const persona = params.persona?.trim() || `你是 ${params.name}。（在这里写它的人设与纪律。）`
+    const persona =
+      params.persona?.trim() ||
+      `你是 ${params.name}。（在这里写它的人设与纪律。这份正文会追加到替它做事的每个 agent 的系统提示词里，bot 自己也会把学到的东西写进来。）`
     return serializeBotDefinitionFile({
       name: params.name,
       displayName: params.name,
       description: params.description?.trim() || `${params.name} —— 描述这个 bot 负责什么`,
-      systemPrompt: persona,
-      tools: [],
-      instructionFiles: [],
-      projectAwareness: false,
+      body: persona,
       pipeline: DEFAULT_BOT_PIPELINE,
       pipelineInput: {},
-      respond: 'auto',
-      respondTo: 'user',
-      notesEnabled: true,
-      agents: {},
-      greeting: '',
-      suggestions: [],
-      notes: null
+      agents: { intent: BUILTIN_GATE_AGENT, task: DEFAULT_TASK_AGENT }
     })
   }
 
@@ -778,13 +692,6 @@ class BotService {
    * 拿它清零会造成「回落 → 成功 → 切回 → 再坏两次」的振荡。sticky 到进程重启为止。
    */
   private readonly gateHealth = new Map<string, { streak: number; degraded?: string }>()
-  /**
-   * 笔记归纳的节流调度（设计 §8）。真正的归纳由 `runNotes` 派发 —— 调度器只管
-   * 「什么时候值得跑、给它看哪些新材料、跑完记到哪儿」
-   */
-  private readonly notes = new BotNotesScheduler({
-    runNotes: (botName, dirty) => this.runNotesPass(botName, dirty)
-  })
   private readonly mailbox = new BotMailbox({
     onChange: (key, snapshot) => {
       const [sessionId, botName] = key.split('\u0000')
@@ -860,8 +767,7 @@ class BotService {
    * **「bot 的回复不得触发 bot」是硬规则**（防循环），而它由**结构**保证：这个方法的唯一
    * 调用链是 `agent:prompt` IPC → gateway 分流，bot 自己的回复走 `appendBotMessage`，
    * 完全旁路这里。所以不写运行期的作者判定 —— `AgentPromptParams` 里加一个恒为 'user'
-   * 的字段等于给自己开一张假证明。将来真出现「bot 消息回灌 prompt 入口」的路径，
-   * 该改的是那条路径。
+   * 的字段等于给自己开一张假证明。
    */
   async handleUserMessage(params: AgentPromptParams): Promise<void> {
     const { sessionId, text, images, inlineTokens } = params
@@ -889,10 +795,7 @@ class BotService {
         authorKind: 'user',
         content: text,
         ...(display ? { inlineTokens: JSON.stringify(inlineTokens) } : {}),
-        ...(attachments.length ? { attachments } : {}),
-        // 用户消息是它自己这一轮传播树的根
-        rootId: messageId,
-        hop: 0
+        ...(attachments.length ? { attachments } : {})
       })
 
       electronEventSink.broadcast({
@@ -916,9 +819,6 @@ class BotService {
         promptText,
         messageId: row.id,
         messageSeq: row.seq,
-        rootId: row.rootId ?? row.id,
-        hop: row.hop,
-        author: { kind: 'user' },
         // **只带描述符，不带字节**：脚本的 input 会被原样写进 run journal（meta 记录带着
         // 整个 envelope），让 base64 进 input 等于每条带图消息都在磁盘上留下一份逐 bot 的
         // 副本。真正的字节由 resolveAttachments 在派发那一刻按索引回读文件
@@ -1002,11 +902,6 @@ class BotService {
     promptText: string
     messageId: string
     messageSeq: number
-    /** 触发本轮的用户消息 id 与这条消息的跳数 —— 传播护栏的两个计数从这里起算 */
-    rootId: string
-    hop: number
-    /** 这条消息是谁说的（bot 消息只触发 respond-to: all 的成员，且永不触发它自己） */
-    author: { kind: 'user' } | { kind: 'bot'; name: string }
     attachments?: BotAttachmentRef[]
   }): Promise<void> {
     const { sessionId, messageId, messageSeq, promptText } = ctx
@@ -1014,19 +909,13 @@ class BotService {
     if (!members.length) return
 
     // listAll 每次现扫全目录 —— cohort 组建只扫一次，别在成员循环里反复扫
-    const known = new Map(this.listAll().map((b) => [b.file.name, b.file]))
-    const paths = new Map(this.listAll().map((b) => [b.file.name, b.basePath]))
+    const scanned = this.listAll()
+    const known = new Map(scanned.map((b) => [b.file.name, b.file]))
+    const paths = new Map(scanned.map((b) => [b.file.name, b.basePath]))
 
-    // 一轮读一次：`fanoutCapped` 的文案要报的正是这一次判定用的那个数
-    const limits = readLoopLimits()
     const gate = runL0Gate({
       members,
       known,
-      author: ctx.author,
-      hop: ctx.hop,
-      // 同一轮里已经落了多少条 bot 消息 —— 横向护栏的计数口
-      fanout: chatMessageDao.countBotMessagesByRoot(sessionId, ctx.rootId),
-      limits,
       text: ctx.text,
       inlineTokens: ctx.inlineTokens,
       lastBotSender: this.lastBotSender(sessionId),
@@ -1038,19 +927,8 @@ class BotService {
       seen.add(gate.consumedClarifyEntryId)
       this.clarifyConsumed.set(sessionId, seen)
     }
-    if (gate.fanoutExceeded) {
-      // 触顶不静默（设计 §4.2）：一条 system 行说明这一轮到此为止，而不是让接力凭空断掉
-      chatMessageDao.append({
-        sessionId,
-        authorKind: 'system',
-        content: t('bot.fanoutCapped', { count: limits.maxFanout }),
-        rootId: ctx.rootId,
-        hop: ctx.hop
-      })
-      electronEventSink.broadcast({ type: 'messages_reloaded', sessionId })
-    }
     if (!gate.cohort.length) {
-      // L0 把所有成员都筛掉了（全是 mention-only 而这条没提及谁）——**这一轮仍然算结束**。
+      // L0 把所有成员都筛掉了（名单里的 md 全没了）——**这一轮仍然算结束**。
       // 有根会话那侧的契约是「无论成败恒触发」，两边在「什么时候算一轮」上错开，订阅方
       // 看到的就是「某类会话的工作流莫名其妙不触发」
       await this.fireTurnCompleted(sessionId, members)
@@ -1076,8 +954,6 @@ class BotService {
             members: gate.cohort,
             known,
             window,
-            rootId: ctx.rootId,
-            hop: ctx.hop,
             attachments: ctx.attachments
           }).catch((e) => {
             // 一个成员炸了不该拖垮整个 cohort：Promise.all 一 reject，后面的沉默判定
@@ -1182,7 +1058,9 @@ class BotService {
         ticketId: ticket.ticketId,
         detail: { after: health.streak, reason: gate }
       })
-      log.warn(`bot "${botName}" 的门控段连续 ${health.streak} 次故障，已回落内置 bot-intent`)
+      log.warn(
+        `bot "${botName}" 的门控段连续 ${health.streak} 次故障，已回落内置 ${BUILTIN_GATE_AGENT}`
+      )
       // 回落是**会话里看得见的行为改变**（设计 §6.1）：这个 bot 从此不再用用户指定的门控
       // agent 了。只落 journal + 设置页徽标的话,用户看到的是「它忽然变得不一样了」而
       // 线索埋在文件系统里。回落是 sticky 的,所以这条一个进程只出一次
@@ -1190,7 +1068,7 @@ class BotService {
         ticket.sessionId,
         { botName, displayName: ticket.displayName, error: true },
         { content: t('bot.gateFallback', { name: ticket.displayName, count: health.streak }) },
-        { replyToId: ticket.messageId, rootId: ticket.rootId, hop: ticket.hop }
+        { replyToId: ticket.messageId }
       ).catch((e) => log.warn(`回落提示落库失败 (${botName}):`, e))
     }
     this.gateHealth.set(botName, health)
@@ -1213,14 +1091,12 @@ class BotService {
     members: string[]
     known: Map<string, ParsedBotFile>
     window: { lines: string[]; after: (messageId: string) => string[] }
-    rootId: string
-    hop: number
     attachments?: BotAttachmentRef[]
   }): Promise<MemberOutcome> {
     const { bot, sessionId, messageId, messageSeq } = ctx
     // 连续故障之后回落内置门控：用户覆盖的 `shuvix-bot-agents.intent` 让位
     const degraded = this.gateHealth.get(bot.name)?.degraded
-    const pipeline = resolvePipeline(bot, degraded ? { intent: 'bot-intent' } : undefined)
+    const pipeline = resolvePipeline(bot, degraded ? { intent: BUILTIN_GATE_AGENT } : undefined)
     const ticket: BotTicket = {
       ticketId: `bt-${uuidv4()}`,
       sessionId,
@@ -1228,8 +1104,6 @@ class BotService {
       displayName: bot.displayName,
       messageSeq,
       messageId,
-      rootId: ctx.rootId,
-      hop: ctx.hop,
       terminal: false,
       said: false,
       abort: new AbortController()
@@ -1255,7 +1129,7 @@ class BotService {
         sessionId,
         { botName: bot.name, displayName: bot.displayName, error: true },
         { content: t('bot.pipelineMissing', { pipeline: pipeline.workflow }) },
-        { replyToId: messageId, rootId: ctx.rootId, hop: ctx.hop }
+        { replyToId: messageId }
       )
       // said=true：这个成员确实往会话里放了东西（一条可见失败）。全体沉默的判据是
       // 「会话里什么都没多出来」，不是「脚本调过 say」—— 否则一条已经显形的失败
@@ -1272,6 +1146,11 @@ class BotService {
     this.activity(ticket, 'started')
     const startedAt = Date.now()
     try {
+      // 正文已经在每个参与 agent 的系统提示词里了 —— 对文件工具而言这就是「读过」：
+      // 派发前替这条会话记一笔读取时间，任务段直接 `edit` 自己的 md 不必先 `read`
+      // （派生 agent 的 fileTime 归根会话，即这条聊天会话）。文件在注入之后被别人改过，
+      // edit 照样拒绝 —— 保障不变，只是省掉一次毫无信息量的读。
+      if (ctx.basePath) recordRead(sessionId, ctx.basePath)
       const result = await workflowService.invoke({
         workflow: pipeline.workflow,
         // 漏传 sessionId 是静默降级：会话授权恒空、工作区落临时目录、ask 变成工具错误
@@ -1281,7 +1160,6 @@ class BotService {
         input: {
           ...bot.pipelineInput,
           // 宿主键铺在用户的 shuvix-bot-input 之后 —— 一份 bot md 不得改写 session.id 这类事实
-          occasion: 'message',
           bot: {
             name: bot.name,
             displayName: bot.displayName,
@@ -1306,32 +1184,47 @@ class BotService {
             seq: messageSeq,
             text: ctx.promptText,
             ...(ctx.attachments?.length ? { attachments: ctx.attachments } : {})
-          },
-          notes: bot.notes ?? ''
+          }
         },
-        extraApi: this.makeBotApi(ticket)
+        extraApi: this.makeBotApi(ticket),
+        // bot 的人设与记忆：这次 run 派发的每一个 agent 都在系统提示词末尾拿到同一份
+        systemContext: [
+          renderBotContext({
+            name: bot.name,
+            displayName: bot.displayName,
+            file: ctx.basePath,
+            body: bot.body
+          })
+        ]
         // reentry 一个字都不传：独占 100% 由 mailbox 提供，引擎重入彻底让位。
         // 只给 mode 不给 key 静默无效，而显式传 mode 等于替用户的管线 md 做主
       })
 
-      const output = result.output as
-        | { outcome?: string; gate?: string; memorable?: boolean }
-        | undefined
+      const output = result.output as { outcome?: string; gate?: string } | undefined
       if (!result.started) {
         decide(result.reason === 'invalid-input' ? 'pipeline_invalid_input' : 'pipeline_error', {
           reason: result.reason,
           error: result.error
         })
+        if (result.reason === 'invalid-input') {
+          // 入参被管线拒绝 —— 几乎总是槽位没填全（`agents.task` 之类）。这是配置错，不是
+          // 「跑到一半坏了」：把管线的原话说出来，用户才知道该去改哪一行，而不是通用的
+          // 「没能处理完」
+          await this.appendBotMessage(
+            sessionId,
+            { botName: bot.name, displayName: bot.displayName, error: true },
+            {
+              content: t('bot.pipelineInvalidInput', {
+                name: bot.displayName,
+                error: result.error ?? 'invalid input'
+              })
+            },
+            { replyToId: messageId }
+          )
+          ticket.said = true
+        }
       } else {
         this.noteGateHealth(bot.name, output?.gate, ticket)
-        // 值得归纳的事：干过一次活，或者意图段觉得这条带着可长期沿用的东西。
-        // 关掉笔记的 bot 连账都不记 —— 攒一堆永远不会被读的计数没有意义
-        const worthNoting = bot.notesEnabled && isNoteWorthy(output)
-        if (worthNoting) {
-          this.notes.note(bot.name, sessionId)
-          // 不 await：归纳是离线的，把它挂在这一轮的收尾上等于让用户等笔记
-          void this.notes.maybeRun(bot.name)
-        }
         decide('run_end', {
           ok: result.ok,
           outcome: output?.outcome,
@@ -1357,7 +1250,7 @@ class BotService {
             error: true
           },
           { content: t('bot.runFailed', { name: bot.displayName }) },
-          { replyToId: ticket.messageId, rootId: ticket.rootId, hop: ticket.hop }
+          { replyToId: ticket.messageId }
         )
         ticket.said = true
       }
@@ -1441,7 +1334,7 @@ class BotService {
             ...(o.error === true ? { error: true as const } : {})
           },
           { content },
-          { replyToId: ticket.messageId, rootId: ticket.rootId, hop: ticket.hop }
+          { replyToId: ticket.messageId }
         )
         if (messageId) {
           ticket.said = true
@@ -1509,111 +1402,6 @@ class BotService {
     // 一条 user 消息装全部图片：模型看到的是「用户随这条消息附了这些图」，拆成多条会让
     // 上下文里凭空多出几轮对话
     return [{ role: 'user', content: out } as AgentMessage]
-  }
-
-  /**
-   * 跑一次笔记归纳。
-   *
-   * **归属会话取最近一个有增量的那条**：笔记本身是跨会话的（per-bot），但派发出去的
-   * agent 要写 `~/.shuvix/bots/<bot>.md` —— 那是工作区之外的路径，会撞 ask-on-write 的
-   * 询问卡（设计 §8.2 明确接受这个代价）。而询问卡必须落在一条用户看得见的会话上：
-   * 不给 sessionId 的话，M7′ 那条路由找不到参与方，每次笔记写入都会被直接拒绝。
-   *
-   * **分道键是 `bot:<name>:notes`**：同一个 bot 的笔记同一时刻只能有一处在改，而这与
-   * 会话无关 —— 它改的是那一份文件。`queue` 而不是 `skip`：排队时被更新的调用顶掉是对的
-   * （检查点只在成功后前进，所以后来者看到的材料是前者的超集），丢掉则是真的丢。
-   */
-  private async runNotesPass(
-    botName: string,
-    dirty: Array<{ sessionId: string; sinceEntryId: string }>
-  ): Promise<boolean> {
-    const bot = this.getBot(botName)
-    if (!bot || !bot.notesEnabled) return false
-    const basePath = this.listAll().find((b) => b.file.name === botName)?.basePath ?? ''
-    if (!basePath) return false
-
-    // 便宜的检查排在读树之前：管线名写坏的 bot 否则每条消息都要白读一遍所有会话树
-    const pipeline = resolvePipeline(bot)
-    if (!pipeline.exists) return false
-
-    // 各会话的增量窗 + 归纳到哪一条的新检查点。一并算出来，免得成功之后再读一遍树
-    const blocks: Array<{ sessionId: string; at: number; lines: string[]; last: string }> = []
-    for (const { sessionId, sinceEntryId } of dirty) {
-      const msgs = await messageService.listBySession(sessionId)
-      let from = 0
-      if (sinceEntryId) {
-        const at = msgs.findIndex((m) => m.id === sinceEntryId)
-        // **找不到就跳过这个会话**，而不是从头再来一遍。检查点可能因为一次回退而不在
-        // 当前分支的投影里了 —— 那时把整段历史当成新材料重灌，代价是成倍的
-        if (at < 0) continue
-        from = at + 1
-      }
-      const fresh = msgs.slice(from).filter((m) => m.role === 'user' || m.role === 'assistant')
-      if (!fresh.length) continue
-      const lines: string[] = []
-      const title = sessionService.getById(sessionId)?.title ?? sessionId
-      lines.push(`--- ${title} ---`)
-      for (const m of fresh) {
-        const who =
-          m.role === 'user'
-            ? 'User'
-            : ((m.metadata as { sender?: { displayName?: string } } | null)?.sender?.displayName ??
-              'Assistant')
-        const text =
-          m.role === 'user' ? resolveTokensForAgent(m.content, m.metadata?.inlineTokens) : m.content
-        lines.push(`${who}: ${String(text ?? '').trim()}`)
-      }
-      blocks.push({
-        sessionId,
-        at: fresh[fresh.length - 1]?.createdAt ?? 0,
-        lines,
-        last: msgs[msgs.length - 1]?.id ?? ''
-      })
-    }
-    if (!blocks.length) return false
-
-    // 归属会话 = **最近有增量的那条**（询问卡落在用户刚才还在看的地方）。dirty 的顺序是
-    // 「这个会话第一次被记账」的插入序，拿它当「最近」会让卡片挂到一条早就冷掉的会话上
-    const owner = [...blocks].sort((a, b) => b.at - a.at)[0].sessionId
-    const checkpoints: Record<string, string> = {}
-    for (const b of blocks) checkpoints[b.sessionId] = b.last
-    // **有上限**：`notesWindow` 声明了就得用上。不设限的话，一个 bot 在三个繁忙会话里
-    // 攒半小时就能把上千行灌进笔记段的提示词 —— 而这份 input 还会被原样写进 run journal
-    const since = blocks.flatMap((b) => b.lines).slice(-NOTES_MAX_LINES)
-    if (!since.length) return false
-    const result = await workflowService.invoke({
-      workflow: pipeline.workflow,
-      sessionId: owner,
-      label: `notes:${botName}`,
-      reentry: { mode: 'queue', key: `bot:${botName}:notes` },
-      input: {
-        ...bot.pipelineInput,
-        occasion: 'notes',
-        bot: {
-          name: bot.name,
-          displayName: bot.displayName,
-          description: bot.description,
-          file: basePath
-        },
-        agents: pipeline.agents,
-        session: { id: owner, directed: false, members: [] },
-        since,
-        notes: bot.notes ?? ''
-      }
-    })
-    // **run 跑完 ≠ 归纳成功**：脚本 catch 掉任何错误之后是正常返回的，于是引擎记 ok:true。
-    // 只认它自报的 outcome —— 少了这一刀，一次失败（甚至用户按停止）都会推进检查点，
-    // 把这批材料永远埋掉，而那恰恰是「检查点只在成功后前进」要防的唯一一件事
-    const output = result.output as { outcome?: string } | undefined
-    const ok = result.started && result.ok === true && output?.outcome === 'notes'
-    if (ok) this.notes.advance(botName, checkpoints)
-    else log.warn(`笔记归纳未完成 (${botName}): ${result.reason ?? result.error ?? 'unknown'}`)
-    return ok
-  }
-
-  /** 会话被删：连它的笔记检查点一起忘掉 */
-  forgetNotesSession(sessionId: string): void {
-    this.notes.forgetSession(sessionId)
   }
 
   // ─── 用户询问（聊天会话没有根运行时，这份生命周期得自己养） ───
@@ -1720,8 +1508,8 @@ class BotService {
    * 把它们配对），中间不许有任何 await 逃逸点，否则署名会挂到别人头上。v2 把「谁说的」
    * 变成行上的两列，那套纪律连同它要防的故障一起消失了。
    *
-   * `origin` 是「这条在回应什么」：它同时决定 replyToId/rootId/hop 三列的取值，以及
-   * **这条发言要不要触发接力**（开场白不带 origin —— 它不回应任何人）。
+   * `origin` 是「这条在回应什么」（replyToId 列）。**bot 的回复不触发 bot**：这里只落库
+   * 广播，不回灌任何门 —— 与 `handleUserMessage` 两条路根本不交汇，由结构保证。
    *
    * 返回消息 id；空正文或会话正在关停时返回 null。
    */
@@ -1729,7 +1517,7 @@ class BotService {
     sessionId: string,
     sender: BotSender,
     message: { content: string },
-    origin?: { replyToId?: string; rootId?: string; hop?: number }
+    origin?: { replyToId?: string }
   ): Promise<string | null> {
     // 空正文投不成一条可读消息，落进去只会在会话里留一个空气泡。宁可不落。
     if (!message.content.trim()) {
@@ -1751,10 +1539,7 @@ class BotService {
         ...(sender.decision ? { decision: sender.decision } : {}),
         ...(sender.reply ? { reply: JSON.stringify(sender.reply) } : {}),
         ...(sender.error === true ? { isError: true } : {}),
-        ...(origin?.replyToId ? { replyToId: origin.replyToId } : {}),
-        ...(origin?.rootId ? { rootId: origin.rootId } : {}),
-        // 由 hop=h 的消息触发的回复是 h+1；开场白之类没有来源的记 0
-        hop: (origin?.hop ?? -1) + 1
+        ...(origin?.replyToId ? { replyToId: origin.replyToId } : {})
       })
 
       electronEventSink.broadcast({
@@ -1765,93 +1550,9 @@ class BotService {
       })
       // 会话侧账（A4）：未读 +1、updatedAt 上浮、列表广播。正在看的一侧随后 markRead 清零
       sessionService.noteUnreadBotReply(sessionId)
-      // bot→bot 接力（v2）：这条消息也可能触发别的成员。**不 await** —— 调用它的正是
-      // 某个 bot 的 `say`，等下一跳跑完等于把接力做成同步递归。护栏（hop / 扇出 / 不响应
-      // 自己）在 L0 里统一判，这里只负责把「谁说的」交出去。
-      //
-      // **只有回应某条消息的发言才接力**（`origin` 在不在就是判据）：会话创建时播的开场白
-      // 没有 origin —— 它不回应任何人。少了这道判断，只要成员里有一个 respond-to: all，
-      // 建会话那一刻就会自动开跑一轮 bot 对话，用户一个字都还没说
-      if (origin) void this.relayToBots(sessionId, row)
       return row.id
     } finally {
       this.leave(sessionId)
-    }
-  }
-
-  /**
-   * 一条 bot 消息是否要触发别的成员（v2 的 bot→bot 接力）。
-   *
-   * **缺省完全不进这条路径**：只要没有任何成员声明 `shuvix-bot-respond-to: all`，
-   * 这里第一句就返回 —— 与 v1「bot 的回复不触发 bot」的硬规则在行为与开销上都等价。
-   *
-   * 真正的护栏（hop 上限、单轮扇出上限、永不响应自己）统一在 L0 里判，不在这里重复：
-   * 两处判会随时间漂移，而 L0 本来就是「谁参与」的唯一裁决点。
-   *
-   * 只由**回应型**的落点触发（见 `appendBotMessage` 里的 `origin` 判据）。
-   *
-   * 调用点是 `void this.relayToBots(...)`，于是这个函数有两条别处没有的纪律：
-   *
-   *  - **在飞票在任何 await 之前就拿**。调用方 `appendBotMessage` 的 finally 紧接着就把
-   *    自己那张票还掉；票晚一步拿，`whenIdle` 就能在这条缝里看到归零 —— `abortSession`
-   *    于是在接力还没起跑时宣告落定，等它的 finally 撤掉禁写位，这一轮接力再若无其事地
-   *    往一个刚被清空/删除的会话里写。
-   *  - **函数体整个在 try 里**，短路判断也不例外。脱手的 Promise 逃出去一个异常就是主
-   *    进程级的 unhandled rejection，而名单读取与 bot 目录全扫同样可能抛。
-   */
-  private async relayToBots(sessionId: string, row: ChatMessageRow): Promise<void> {
-    if (!row.botName) return
-    // 会话正在关停：不起新的一轮（禁写位出了 abortSession 的 finally 就没了，
-    // 所以这道判断只在「起跑前」有意义，起跑后靠 ticket 的 abort 信号收）
-    if (this.blockWrites.has(sessionId)) return
-    this.enter(sessionId)
-    try {
-      const members = sessionService.getById(sessionId)?.settings?.bots ?? []
-      if (members.length < 2) return
-      const known = new Map(this.listAll().map((b) => [b.file.name, b.file]))
-      const anyRelay = members.some((m) => m !== row.botName && known.get(m)?.respondTo === 'all')
-      if (!anyRelay) return
-      await this.dispatchCohort({
-        sessionId,
-        text: row.content,
-        promptText: row.content,
-        messageId: row.id,
-        messageSeq: row.seq,
-        rootId: row.rootId ?? row.id,
-        hop: row.hop,
-        author: { kind: 'bot', name: row.botName }
-      })
-    } catch (e) {
-      // 接力失败不该反噬发言的那一方（它的消息已经落库并广播了）
-      log.warn(`bot→bot 接力失败 session=${sessionId} from=${row.botName}:`, e)
-    } finally {
-      this.leave(sessionId)
-    }
-  }
-
-  /**
-   * 成员的开场白落树（会话创建后由 `session:create` handler await；
-   * 中途加成员时由 `updateBots` 只对**新增**的那几个调）。
-   *
-   * 按成员顺序逐条落；没写 greeting 的成员跳过。`listAll()` 每次现扫全目录，
-   * 所以这里只扫一次再按名取，别在循环里反复扫。
-   *
-   * @param only 只播这几个成员（缺省 = 会话当前的全部成员）
-   */
-  async seedGreetings(sessionId: string, only?: string[]): Promise<void> {
-    const members = sessionService.getById(sessionId)?.settings?.bots ?? []
-    // 传了 only 就按 only 的顺序播（它是「新增顺序」，与名单顺序一致）
-    const names = only ?? members
-    if (!names.length) return
-    const byName = new Map(this.listAll().map((b) => [b.file.name, b.file]))
-    for (const name of names) {
-      const bot = byName.get(name)
-      if (!bot?.greeting.trim()) continue
-      await this.appendBotMessage(
-        sessionId,
-        { botName: bot.name, displayName: bot.displayName },
-        { content: bot.greeting }
-      )
     }
   }
 

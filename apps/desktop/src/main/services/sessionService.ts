@@ -222,9 +222,6 @@ export class SessionService {
     sessionDao.updateSettings(id, { bots: next })
     broadcastSessionConfigChanged(id)
     log.info(`updateBots session=${id} ${current.length} → ${next.length}（新增 ${added.length}）`)
-
-    // 落盘之后再补开场白：seedGreetings 读的是 settings.bots，差集由调用方给
-    if (added.length) await botService.seedGreetings(id, added)
     return { success: true, bots: next, added }
   }
 
@@ -461,8 +458,6 @@ export class SessionService {
     await this.agents.remove(id, 'destroy')
     // 聊天会话的写者不是 AgentSession 而是 botService 的树写锁，并列排空
     await botService.abortSession(id)
-    // 笔记检查点按会话记，会话没了它就没有意义 —— 留着只会让状态文件无限长
-    botService.forgetNotesSession(id)
     // 再清理持久化数据
     messageService.clear(id)
     httpLogDao.deleteBySessionId(id)

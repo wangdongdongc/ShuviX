@@ -33,8 +33,8 @@ import {
   getBuiltinWorkflowSource,
   parseWorkflowDefinitionFile,
   toInProcessAgentType,
-  parseBotAgentRef,
-  botToInProcessAgentType,
+  agentSlotsOf,
+  type PipelineAgentSlot,
   type ParsedWorkflowFile,
   type TriggerId,
   type TriggerPayloadMap,
@@ -128,13 +128,6 @@ class WorkflowService {
       script: nodeVmScriptEngine,
       listWorkflows: () => this.listForEngine(),
       resolveAgentProfile: (ref) => {
-        // `bot:<name>` —— 任务段 agent 即 bot 自身（设计 §6.2）。必须在这里解析而不是靠
-        // 相对 ref：本函数是无 run 上下文的全局 dep，`bot:self` 在这里永远解析不出来
-        const botName = parseBotAgentRef(ref)
-        if (botName) {
-          const bot = botService.getBot(botName)
-          return bot ? botToInProcessAgentType(bot) : null
-        }
         const profile = agentService.getProfile(ref)
         return profile ? toInProcessAgentType(profile) : null
       },
@@ -176,6 +169,15 @@ class WorkflowService {
   /** 注册表里有没有这个名字 —— 派发**之前**就能判「这份管线存在」，不必靠事后的 not-found */
   hasWorkflow(name: string): boolean {
     return this.listForEngine().some((e) => e.file.name === name)
+  }
+
+  /**
+   * 一份管线 workflow 声明的 agent 槽位（读它的 `shuvix-workflow-input.properties.agents`）。
+   * bot 的槽位表按这个渲染与校验；没这份 workflow 或它没声明槽位 → 空数组。
+   */
+  agentSlots(name: string): PipelineAgentSlot[] {
+    const entry = this.listForEngine().find((e) => e.file.name === name)
+    return entry ? agentSlotsOf(entry.file) : []
   }
 
   /**

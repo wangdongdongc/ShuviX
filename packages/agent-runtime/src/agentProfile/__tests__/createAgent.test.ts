@@ -555,3 +555,74 @@ describe('createAgentFactory —— 指令文件注入的接缝口径', () => {
     expect(created.systemPrompt).toBe('BASE PERSONA')
   })
 })
+
+/**
+ * `systemContext` —— 调用方随本次创建给的上下文块（已围栏）。与项目注入同一机制、不同来源：
+ * 项目注入按会话解析，这些块由调用方给（bot 管线经 WorkflowInvokeRequest.systemContext →
+ * manager.runTask → 这里，把 bot 的人设与记忆带给每一个 agent，见 renderBotContext）。
+ * createAgent 只做一件事：逐块以空行分隔追加在**项目注入之后**，空白块跳过。
+ */
+describe('createAgentFactory —— systemContext（调用方追加的上下文块）', () => {
+  const BLOCK_A = '<bot_profile name="scout" file="/b/scout.md">\nP\n</bot_profile>'
+  const BLOCK_B = '<extra>\nE\n</extra>'
+  /** spawned 全开时的系统提示词（「上下文注入:spawned 全开」那条钉过的形状） */
+  const FULL_APPENDS =
+    'BASE PERSONA\n\n' +
+    '<project_instructions file="CLAUDE.md">\nINS\n</project_instructions>\n\n' +
+    '<project_prompt>\nPROJ-PROMPT\n</project_prompt>\n\n' +
+    '<project_memory>\nPROJ-MEMORY\n</project_memory>'
+
+  function spawnFull(
+    b: HostBundle,
+    systemContext?: readonly string[]
+  ): Promise<Awaited<ReturnType<AgentFactory['createAgent']>>> {
+    return createAgentFactory(b.host).createAgent({
+      kind: 'spawned',
+      sessionId: 'sub-9',
+      profile: { ...PROFILE, projectAwareness: true },
+      model: MODEL_CFG,
+      thinkingLevel: 'off',
+      cwd: '',
+      spawn: SPAWN,
+      spawnHelpers: { requestUserInput: vi.fn() },
+      systemContext
+    })
+  }
+
+  it('CTX-1 各块按序追加在项目注入之后，逐块以空行分隔；deps 与 resolveTools 收到同一份', async () => {
+    const b = makeHost()
+    const created = await spawnFull(b, [BLOCK_A, BLOCK_B])
+    const expected = `${FULL_APPENDS}\n\n${BLOCK_A}\n\n${BLOCK_B}`
+    expect(created.systemPrompt).toBe(expected)
+    expect(constructed[constructed.length - 1].deps.systemPrompt).toBe(expected)
+    expect((b.resolveTools.mock.calls[0][0] as ToolResolveRequest).systemPrompt).toBe(expected)
+  })
+
+  it('CTX-2 空白块跳过（不留空段落）；块两端空白被 trim', async () => {
+    const b = makeHost()
+    const created = await spawnFull(b, ['', '   \n\t', `\n  ${BLOCK_A}  \n`])
+    expect(created.systemPrompt).toBe(`${FULL_APPENDS}\n\n${BLOCK_A}`)
+  })
+
+  it('CTX-3 不传 / 空数组 / 全是空白块 → 系统提示词逐字节不变', async () => {
+    for (const systemContext of [undefined, [], ['', '  ']]) {
+      const b = makeHost()
+      const created = await spawnFull(b, systemContext)
+      expect(created.systemPrompt, JSON.stringify(systemContext)).toBe(FULL_APPENDS)
+    }
+  })
+
+  it('CTX-4 root 列同样追加（与项目注入同一机制，不分 root/spawned）', async () => {
+    const b = makeHost()
+    const created = await createAgentFactory(b.host).createAgent({
+      kind: 'root',
+      sessionId: 's1',
+      profile: { ...PROFILE, instructionFiles: [] },
+      model: MODEL_CFG,
+      cwd: '/w',
+      systemContext: [BLOCK_A]
+    })
+    expect(created.systemPrompt).toBe(`BASE PERSONA\n\n${BLOCK_A}`)
+    expect(constructed[0].deps.systemPrompt).toBe(`BASE PERSONA\n\n${BLOCK_A}`)
+  })
+})

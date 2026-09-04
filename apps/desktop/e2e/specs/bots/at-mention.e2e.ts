@@ -13,6 +13,10 @@
  * 第一次回车没把消息发出去）与鼠标（行按钮监听 onMouseDown，pages.ts 派发 bubbling
  * mousedown；element.click() 选不中）。
  *
+ * v3 起没有 mention-only 这种逐 bot 的门控模式：每个在册成员都进 cohort，@ 不再是谁的
+ * 「唯一入口」，而是**定向** —— 被点名的成员单独派发、拿不含 ignore 的契约，没被点名的
+ * 一律不派发（C1 断的正是这一半）。弹层行上的 mention-only 徽标随之退场（C5 改作否定断言）。
+ *
  * C11（同 bot 双胶囊）舍弃：生产端去重发生在 buildOutgoing（hook 内部，B 组明确不建
  * hook 测试设施），门侧的提及去重是 M4′ 既有单测钉过的分支 —— 两头都已有归属，
  * 在这里再走一遍 UI 只是重复。
@@ -68,11 +72,14 @@ function gate(
   }
 }
 
-/** 按提示词里的 displayName 认领自己那一份脚本 */
+/**
+ * 按系统提示词末尾的 `<bot_profile name="…">` 围栏认领自己那一份脚本 —— 显示名不够：
+ * 门控提示词的 others 块会列出别的成员的显示名（同 pipeline.e2e.ts）
+ */
 const forBot =
-  (displayName: string) =>
+  (name: string) =>
   (r: FakeRequest): boolean =>
-    !r.isTitle && r.raw.includes(displayName)
+    !r.isTitle && r.raw.includes(`<bot_profile name=\\"${name}\\"`)
 
 interface Msg {
   id: string
@@ -135,13 +142,9 @@ beforeAll(async () => {
   sidebar = sidebarPane(app.main)
   pop = atPopoverPane(app.main)
 
-  // 成员：auto 一名 + mention-only 一名（@ 是后者唯一入口）+ C4 的双通道语料
-  writeBotMd(app, 'at-alpha', { description: 'auto member', displayName: 'Alpha' })
-  writeBotMd(app, 'at-quiet', {
-    description: 'mention-only member',
-    displayName: 'Quiet',
-    respond: 'mention-only'
-  })
+  // 成员：两名普通成员（v3 没有 mention-only；@ 是定向，不是入口）+ C4 的双通道语料
+  writeBotMd(app, 'at-alpha', { description: 'member alpha', displayName: 'Alpha' })
+  writeBotMd(app, 'at-quiet', { description: 'member quiet', displayName: 'Quiet' })
   writeBotMd(app, 'at-scout', { description: 'CJK display name', displayName: '侦察兵' })
   writeBotMd(app, 'm-alpha', { description: 'identity-key hit', displayName: '旁观者' })
   // 'at-ghost' 刻意不写 —— C8 的幽灵成员
@@ -198,7 +201,7 @@ describe('@ 弹层 → 胶囊 → token 定向（主链路）', () => {
 
     // 脚本化 quiet 的意图段（被点名 = 不给 ignore 的那份契约，恰一发），再第二次回车发送
     provider.script(
-      gate({ decision: 'reply', reason: '被点名', reply: '收到，我在。' }, forBot('Quiet'))
+      gate({ decision: 'reply', reason: '被点名', reply: '收到，我在。' }, forBot('at-quiet'))
     )
     await chat.pressEnter()
 
@@ -206,8 +209,9 @@ describe('@ 弹层 → 胶囊 → token 定向（主链路）', () => {
     expect(botReplies).toHaveLength(1)
     expect(botReplies[0].metadata?.sender?.name).toBe('at-quiet')
     expect(botReplies[0].content).toBe('收到，我在。')
-    // alpha 未被点名：不派发、零增量记录、无第二条回复
+    // 定向压过 cohort：没被点名的 alpha 不派发（零增量记录、无第二条回复）
     expect(decisions('at-alpha').length).toBe(alphaBefore)
+    expect(provider.chatRequestCount()).toBe(1)
 
     // 定向经 token（不是裸文本降级）
     expect(directedOf('at-quiet').length).toBeGreaterThan(0)
@@ -223,7 +227,7 @@ describe('@ 弹层 → 胶囊 → token 定向（主链路）', () => {
     expect(tokens[0]).toMatchObject({ type: 'bot', id: 'at-quiet', displayText: '@Quiet' })
 
     // 发给模型的是展开原文：@Quiet 在、标记不在
-    const req = provider.chatRequests().find((r) => r.raw.includes('Quiet'))
+    const req = provider.chatRequests().find(forBot('at-quiet'))
     expect(req).toBeDefined()
     expect(req!.raw).toContain('@Quiet')
     expect(req!.raw).not.toContain('shuvixInlineToken')
@@ -280,13 +284,15 @@ describe('弹层交互（键盘 / 过滤 / 徽标）', () => {
     }, 'identity-key hit, case-insensitive')
   })
 
-  it('C5 · mention-only 徽标：quiet 行内有徽标节点，普通成员行没有', async () => {
+  it('C5 · 没有 mention-only 徽标：任何成员行都不再长出那枚徽标节点（v3）', async () => {
+    // v2 的徽标标注「这个成员只有被 @ 才会响应」。v3 每个成员都进 cohort，这个区分
+    // 不复存在 —— 徽标若还在，等于在屏幕上宣称一条不再成立的规则
     await openInUi('AT-C3')
     await chat.type('大家 @')
     await until(async () => (await pop.rows()).length === 2, 'member rows listed')
     const rows = await pop.rows()
-    expect(rows.find((r) => r.key === 'bot:at-quiet')!.mentionBadge).toBe(true)
-    expect(rows.find((r) => r.key === 'bot:at-alpha')!.mentionBadge).toBe(false)
+    expect(rows.map((r) => r.key)).toEqual(['bot:at-alpha', 'bot:at-quiet'])
+    expect(rows.every((r) => !r.mentionBadge)).toBe(true)
   })
 })
 
@@ -366,7 +372,7 @@ describe('回退重建与程序化半链', () => {
     // 原样重发：第二次定向仍是 token（胶囊经 restoreFromTokens 重新登记）
     const before = directedOf('at-quiet').length
     provider.script(
-      gate({ decision: 'reply', reason: '再次被点名', reply: '第二次收到。' }, forBot('Quiet'))
+      gate({ decision: 'reply', reason: '再次被点名', reply: '第二次收到。' }, forBot('at-quiet'))
     )
     await chat.pressEnter()
 
@@ -382,7 +388,7 @@ describe('回退重建与程序化半链', () => {
     const sid = await createBotSession(app.main, { bots: ['at-quiet'], title: 'AT-C10' })
     const before = directedOf('at-quiet').length
     provider.script(
-      gate({ decision: 'reply', reason: '被点名', reply: '看到了。' }, forBot('Quiet'))
+      gate({ decision: 'reply', reason: '被点名', reply: '看到了。' }, forBot('at-quiet'))
     )
 
     // 文本里没有任何 @ —— 定向若发生，只可能来自 token（裸文本降级无从命中）

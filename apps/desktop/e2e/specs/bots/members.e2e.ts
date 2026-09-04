@@ -1,23 +1,26 @@
 /**
  * A4 · 成员管理与聊天会话空态 —— 头部成员条（BotMembersBar）/ manage 模式对话框
- * （BotSessionDialog 复用）/ 幽灵成员逃生口 / 缺失标注 / 多 bot 空态与建议问题。
+ * （BotSessionDialog 复用）/ 幽灵成员逃生口 / 缺失标注 / 多 bot 空态。
  *
  * 契约要点：
  *   - 成员条按 settings.bots 的**名单序**铺胶囊（不是注册表字典序）；非聊天会话不渲染；
  *   - manage 模式：当前名单预勾选、项目区不渲染（会话归属早已定死）；
  *   - 保存按 bot.list() 的列表序（`bot:list` 按 name.localeCompare 排序），仍被勾着的
- *     幽灵成员按原名单相对序缀尾；新增成员的开场白即刻落库（行上自带署名）；
+ *     幽灵成员按原名单相对序缀尾；**新增成员不往会话里塞任何东西**（v3 没有开场白）；
  *   - 幽灵成员（名单里有、注册表里没有）灰行呈现且可取消勾选 —— updateBots 刻意不校验
  *     名字，这个对话框就是名单写坏之后的逃生口；
- *   - 空态：成员介绍卡（注册表缺失者不自我介绍）+ 建议问题 chip（shuvix-bot-suggestions），
- *     点击 = 草稿带提及胶囊 token 进输入框（隐式定向本 bot，走 A3 的 draft-rebuild）。
+ *   - 空态：成员介绍行（名字 + 一句话描述；注册表缺失者不自我介绍）。v3 没有建议问题
+ *     chip（`shuvix-bot-suggestions` 随 bot 变成「绑定」一并退场）—— 29 号做否定断言。
  *
  * manage 的错误框留驻路径（onSubmit 返回错误文案 / 抛异常 → setError 同待遇）在此
  * **刻意缺席**：对话框先挡空名单、成员条只在聊天会话上渲染，updateBots 仅有的两个
  * 拒绝分支（非聊天会话 / 空名单）经这条 UI 都构造不出自然通路 —— 不伪造 IPC 故障去
  * 敲开它（risk-9：缺席成因明示于此，而不是硬造一条假路径）。
+ *
+ * 零 LLM：24 号要一条 bot 消息（「有消息之后不出空态」+ 署名快照 + 看着即读），
+ * 让 m-gamma 指向只 say 一句的探针管线，并用裸文本 @点名让其余成员不派发。
  */
-import { unlinkSync } from 'node:fs'
+import { mkdirSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { launchApp, type E2EApp } from '../../harness/launch'
@@ -40,6 +43,25 @@ let chat: ChatPane
 let dialog: BotDialogPane
 let pane: BotSessionPane
 
+/** 只 say 一句的探针管线（零 LLM） */
+const PROBE = 'a4-members-probe'
+const PROBE_MD = [
+  '---',
+  'shuvix: workflow v1',
+  `name: ${PROBE}`,
+  'description: A4 members e2e probe — say one line, zero LLM.',
+  'shuvix-workflow-concurrency: parallel',
+  '---',
+  '',
+  'A4 成员探针：只 say 一句。',
+  '',
+  '```js workflow',
+  "await say(input.sayLine || 'ok')",
+  "return { outcome: 'reply' }",
+  '```',
+  ''
+].join('\n')
+
 interface Msg {
   id: string
   role?: string
@@ -56,6 +78,12 @@ const getBots = (sid: string): Promise<string[] | undefined> =>
 const unreadOf = (sid: string): Promise<number> =>
   app.main.eval(
     `window.api.session.getById(${JSON.stringify(sid)}).then((s) => s?.settings?.unreadCount ?? 0)`
+  )
+
+/** 经 IPC 发一条消息（聊天会话的 prompt 直到 cohort 收尾才 resolve） */
+const prompt = (sid: string, text: string): Promise<void> =>
+  app.main.eval(
+    `window.api.agent.prompt({ sessionId: ${JSON.stringify(sid)}, text: ${JSON.stringify(text)} })`
   )
 
 /** 打开一个已存在的会话并等对话区就绪 */
@@ -79,24 +107,26 @@ beforeAll(async () => {
   dialog = botDialogPane(app.main)
   pane = botSessionPane(app.main)
 
+  const wfDir = join(app.home, '.shuvix', 'workflows')
+  mkdirSync(wfDir, { recursive: true })
+  writeFileSync(join(wfDir, `${PROBE}.md`), PROBE_MD)
+
   writeBotMd(app, 'm-alpha', { description: 'member a', displayName: 'MemA' })
   writeBotMd(app, 'm-beta', { description: 'member b', displayName: 'MemB' })
+  // 24 号的语料成员：零 LLM 地答一句（点名它时其余成员不派发）
   writeBotMd(app, 'm-gamma', {
     description: 'member c',
     displayName: 'MemC',
-    greeting: 'gamma 报到'
+    pipeline: PROBE,
+    botInput: { sayLine: 'gamma 报到' }
   })
   writeBotMd(app, 'g-live', { description: 'stays', displayName: 'GLive' })
   writeBotMd(app, 'g-ghost', { description: 'md will be deleted', displayName: 'GGhost' })
   writeBotMd(app, 'g2-live', { description: 'stays too', displayName: 'G2Live' })
   writeBotMd(app, 'g2-ghost', { description: 'md will be deleted', displayName: 'G2Ghost' })
   writeBotMd(app, 'g2-new', { description: 'joins later', displayName: 'G2New' })
-  // 空态语料：displayName ≠ name（31 号要证 token 展示名走 displayName）
-  writeBotMd(app, 's-nova', {
-    description: 'nova knows the repo',
-    displayName: 'Nova星',
-    suggestions: ['最近有什么变化？', '给我一份摘要']
-  })
+  // 空态语料：displayName ≠ name（29 号要证介绍行显示的是 displayName）
+  writeBotMd(app, 's-nova', { description: 'nova knows the repo', displayName: 'Nova星' })
   writeBotMd(app, 's-quiet', { description: 'quiet member', displayName: 'Quiet' })
 
   // 名单序刻意与字典序相反（22 号要证胶囊跟名单不跟注册表）
@@ -104,7 +134,7 @@ beforeAll(async () => {
   s2 = await createBotSession(app.main, { bots: ['g-live', 'g-ghost'], title: 'A4-M25' })
   // 幽灵在头部（26 号要证「存留幽灵缀尾」是搬位置，不是本来就在尾部）
   s3 = await createBotSession(app.main, { bots: ['g2-ghost', 'g2-live'], title: 'A4-M26' })
-  // 空态两场（29/31 与 30）：断言全按标题走 UI，不需要留 id
+  // 空态两场（29 与 30）：断言全按标题走 UI，不需要留 id
   await createBotSession(app.main, { bots: ['s-nova', 's-quiet'], title: 'A4-M29' })
   await createBotSession(app.main, { bots: ['s-nova', 'zombie-x'], title: 'A4-M30' })
   await app.main.eval(`window.api.session.create({ title: 'A4-M-plain' })`)
@@ -160,7 +190,7 @@ describe('头部成员条', () => {
   })
 
   // A4-24（含 A4-32：有消息之后不出空态）
-  it('加成员保存：名单按列表序落库、胶囊更新、新成员开场白落库、看着即读归 0', async () => {
+  it('加成员保存：名单按列表序落库、胶囊更新、会话里不多任何消息（空态随名单长第三行）；点名新成员 → 署名回复落库、看着即读归 0、空态退场', async () => {
     await open('A4-M22')
     expect(await pane.clickManageMembers()).toBe(true)
     await dialog.waitOpen()
@@ -175,15 +205,24 @@ describe('头部成员条', () => {
       async () => (await chipNames()).join() === 'm-alpha,m-beta,m-gamma',
       'chips updated'
     )
-    // 只有新增成员补开场白，消息行自带落库当时的 displayName
-    const msgs = await listMessages(s1)
-    const assistants = msgs.filter((m) => m.role === 'assistant')
+    // v3：加成员不往会话里塞任何东西 —— 消息列表仍空，空态还在且随名单长出第三行
+    expect(await listMessages(s1)).toEqual([])
+    await until(
+      async () =>
+        (await pane.emptyState()).cards.map((c) => c.name).join() === 'm-alpha,m-beta,m-gamma',
+      'empty state follows the roster'
+    )
+
+    // 点名新成员（裸文本 @显示名 → 只派发它，其余两位不派发，零 LLM）：
+    // 回复行自带落库当时的 displayName
+    await prompt(s1, '@MemC 报到')
+    const assistants = (await listMessages(s1)).filter((m) => m.role === 'assistant')
     expect(assistants).toHaveLength(1)
     expect(assistants[0].content).toBe('gamma 报到')
     expect(assistants[0].metadata?.sender).toMatchObject({ name: 'm-gamma', displayName: 'MemC' })
-    // 会话开着且被看着：开场白到即读（A4-32 的另一半：有消息之后不出空态）
+    // 会话开着且被看着：回复到即读（A4-32 的另一半：有消息之后不出空态）
     await until(async () => (await unreadOf(s1)) === 0, 'watched session auto-read')
-    expect((await pane.emptyState()).present).toBe(false)
+    await until(async () => !(await pane.emptyState()).present, 'empty state gone')
   })
 
   // A4-27
@@ -271,17 +310,22 @@ describe('幽灵成员（名单里有、注册表里没有）', () => {
   })
 })
 
-describe('聊天会话空态（成员介绍 + 建议问题）', () => {
+describe('聊天会话空态（成员介绍）', () => {
   // A4-29
-  it('无 greeting 的双成员会话：data-bot-empty、两张成员卡、建议数各归各；普通会话没有', async () => {
+  it('双成员会话：data-bot-empty、两行成员介绍（displayName + 描述）、没有建议 chip；普通会话没有', async () => {
     await open('A4-M29')
     await until(async () => (await pane.emptyState()).present, 'empty state mounted')
-    // 注册表落定后恰两张卡（成员序），建议 chip 数 2 / 0
-    await until(async () => (await pane.emptyState()).cards.length === 2, 'both cards')
+    // 注册表落定后恰两行（成员序），显示名走 displayName（≠ name）
+    await until(async () => {
+      const cards = (await pane.emptyState()).cards
+      return cards.length === 2 && cards[0].display === 'Nova星'
+    }, 'both member rows with registry resolved')
     expect((await pane.emptyState()).cards).toEqual([
-      { name: 's-nova', suggestions: ['最近有什么变化？', '给我一份摘要'] },
-      { name: 's-quiet', suggestions: [] }
+      { name: 's-nova', display: 'Nova星', description: 'nova knows the repo' },
+      { name: 's-quiet', display: 'Quiet', description: 'quiet member' }
     ])
+    // v3：没有建议问题 chip（bot 不再有自己的台词）
+    expect((await pane.emptyState()).suggestionChips).toBe(0)
 
     // 对照：普通空会话的空态没有 data-bot-empty（走通用引导）
     await open('A4-M-plain')
@@ -289,33 +333,15 @@ describe('聊天会话空态（成员介绍 + 建议问题）', () => {
   })
 
   // A4-30
-  it('注册表缺失的成员不自我介绍：[s-nova, zombie-x] 只出 s-nova 一张卡', async () => {
+  it('注册表缺失的成员不自我介绍：[s-nova, zombie-x] 只出 s-nova 一行', async () => {
     await open('A4-M30')
     await until(async () => (await pane.emptyState()).present, 'empty state mounted')
-    // 注册表落定前 zombie 卡可能闪现（registry===null 的回落分支）——等它收敛到恰一张
+    // 注册表落定前 zombie 行可能闪现（registry===null 的回落分支）——等它收敛到恰一行
     await until(
       async () =>
         JSON.stringify((await pane.emptyState()).cards.map((c) => c.name)) ===
         JSON.stringify(['s-nova']),
-      'zombie card hidden'
+      'zombie row hidden'
     )
-  })
-
-  // A4-31
-  it('建议 chip 点击：输入框恰为 `@<displayName> <建议>`，不含裸 token 标记', async () => {
-    await open('A4-M29')
-    await until(
-      async () => ((await pane.emptyState()).cards[0]?.suggestions.length ?? 0) === 2,
-      'suggestions ready'
-    )
-    expect(await pane.clickSuggestion('s-nova', 0)).toBe(true)
-
-    // 草稿经 A3 的 draft-rebuild 进输入框：提及胶囊显示 `@<displayName>`（≠ name），
-    // 裸 {{shuvixInlineToken:…}} 标记绝不能漏进可编辑明文
-    await until(
-      async () => (await chat.inputValue()) === '@Nova星 最近有什么变化？',
-      'draft with mention capsule'
-    )
-    expect(await chat.inputValue()).not.toContain('{{shuvixInlineToken')
   })
 })

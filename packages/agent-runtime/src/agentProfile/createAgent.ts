@@ -168,6 +168,14 @@ export interface CreateAgentParams {
   spawnHelpers?: SubAgentToolHelpers
   /** 已实例化的附加工具（透传 ToolResolveRequest.extraTools；overlay 重解析时保留） */
   extraTools?: readonly AnyAgentTool[]
+  /**
+   * 调用方追加到系统提示词末尾的上下文块（已围栏的文本，逐块以空行分隔，排在项目注入之后）。
+   *
+   * 与项目上下文同一机制、不同来源：项目注入按会话解析，这些块由**调用方**随本次创建给 ——
+   * bot 管线经 `WorkflowInvokeRequest.systemContext` 把 bot 的人设与记忆带给这次 run 里
+   * 派发的每一个 agent（`renderBotContext`）。引擎与 manager 只透传，不解释内容。
+   */
+  systemContext?: readonly string[]
   /** 仅 root：UserPromptSubmit 通过后的首轮快速标题钩子 */
   onPromptAccepted?: (text: string) => void
 }
@@ -312,6 +320,11 @@ export function createAgentFactory(host: AgentHostAdapter): AgentFactory {
         const text = (await host.resolveProjectMemory(rootSessionId))?.trim()
         if (text) systemPrompt += `\n\n${fenceProjectMemory(text)}`
       }
+    }
+    // 调用方给的上下文块（已围栏）：排在项目注入之后，同样住在系统提示词里、免重注入
+    for (const block of params.systemContext ?? []) {
+      const text = block.trim()
+      if (text) systemPrompt += `\n\n${text}`
     }
 
     const buildResolveRequest = (overlay: readonly string[] | undefined): ToolResolveRequest => ({

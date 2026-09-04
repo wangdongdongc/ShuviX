@@ -408,28 +408,20 @@ declare global {
     error: string
   }
 
-  /** Bot 列表项（设计见 docs/bot-design.md §4；正文/笔记区不外传，编辑走 bot.getSource） */
+  /** Bot 列表项（设计见 docs/bot-design.md §4；正文不外传，编辑走 bot.getSource） */
   interface BotInfo {
     name: string
     displayName: string
     description: string
     /** 管线框架（workflow 名） */
     pipeline: string
-    /** 门控模式 auto | mention-only */
-    respond: string
-    /** 笔记开关 */
-    notesEnabled: boolean
-    /** 笔记字符数 */
-    notesChars: number
-    /** 任务段工具白名单 */
-    tools: string[]
-    /** 建议问题（shuvix-bot-suggestions） */
-    suggestions: string[]
-    /** 任务段模型（`shuvix-model`）；省略 = 跟随会话 */
-    model?: string
+    /** 槽位 → agent 名（bot md 的 shuvix-bot-agents 原样） */
+    agents: Record<string, string>
+    /** 正文（人设与记忆）字符数 */
+    bodyChars: number
     /** 文件路径 */
     basePath: string
-    /** 笔记区的结构异常（软失败，不影响可用性） */
+    /** 解析器接受但有话说的提示（不影响可用性） */
     warnings: string[]
   }
 
@@ -443,11 +435,21 @@ declare global {
   /** bot 详情的运行时读数（bot.inspect；frontmatter 本身归属性卡） */
   interface BotInspect {
     pipeline: { name: string; exists: boolean; concurrency?: string }
-    /** 角色 → ref 解析结果；missing = 引用不存在（运行时回落内置并 warn） */
-    stages: Array<{ role: string; ref: string; missing: boolean }>
+    /**
+     * 管线声明的每个槽位（顺序即声明序）+ bot 填的 agent 名；bot 额外填了管线没声明的槽位
+     * 也列出（required=false）。ref 缺省 = 没填；missing = 填了但那个 agent 不存在。
+     */
+    slots: Array<{
+      role: string
+      required: boolean
+      description?: string
+      ref?: string
+      missing: boolean
+    }>
     /** 门控段已 sticky 回落内置的原因；未降级则缺省 */
     gateDegraded?: string
-    notes: { enabled: boolean; chars: number; pending: number; lastRunAt: number }
+    /** 正文（人设与记忆）的用量 —— 它进每个参与 agent 的系统提示词 */
+    body: { chars: number }
   }
 
   /** Sub-agent 元信息（文件系统驱动；与主进程 AgentProfile 对齐） */
