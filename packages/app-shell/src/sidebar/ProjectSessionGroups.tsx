@@ -292,6 +292,7 @@ export function ProjectSessionGroups({
               isNotebook={!!item.settings.notebookPath}
               isBot={!!item.settings.bots?.length}
               unreadCount={item.settings.unreadCount}
+              autoAllow={item.settings.autoAllow === true}
               isPinned={caps.pin ? pinnedSessionIds?.has(item.id) : undefined}
               isSub={isSub}
               subCount={isSub ? 0 : children.length}

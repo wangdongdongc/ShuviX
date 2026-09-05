@@ -13,8 +13,9 @@ import { ChatHeader, type ChatHeaderCaps } from './ChatHeader'
  *
  * 宿主差异全部走 props / 插槽：
  *   - headerCaps / rightActions / onOpenSessionConfig —— 顶栏能力与右侧按钮簇
- *   - banner —— 顶栏与正文间横幅（桌面/扩展均传 StatusBanner，会话工具栏挂在它的 trailing 上；为空不渲染）
- *   - sessionPanel —— 会话面板（正文区右侧悬浮卡片列，顶栏/横幅之下；有活跃会话且未被 contentOverride 替换时渲染）
+ *   - banner —— 正文列顶部的横幅（桌面传 StatusBanner 列运行时连接；无内容不渲染），
+ *     只压在对话之上，不横穿会话面板那一列
+ *   - sessionPanel —— 会话面板（正文区右侧悬浮卡片列，紧贴顶栏之下；有活跃会话且未被 contentOverride 替换时渲染）
  *   - overlays —— 正文之后的浮层（桌面 SessionConfigDialog 等）
  *   - contentOverride —— 整体替换正文（桌面悬浮窗 placeholder 占位）
  *   - welcome —— 无活跃会话时的欢迎视图
@@ -30,11 +31,11 @@ export interface ChatBodyProps {
   onOpenSessionConfig?: () => void
   /** 顶栏右侧按钮簇（宿主专属：pin/悬浮/浏览器/侧栏开关 …） */
   rightActions?: ReactNode
-  /** 顶栏与正文之间的横幅插槽（为空不渲染） */
+  /** 正文列顶部的横幅插槽（在对话之上、会话面板之外；为空不渲染） */
   banner?: ReactNode
-  /** 会话面板 —— 正文区右侧的悬浮卡片列（顶栏/横幅之下，与对话并排、对话收缩让位），
+  /** 会话面板 —— 正文区右侧的悬浮卡片列（紧贴顶栏之下，与对话并排、对话收缩让位），
    *  如桌面会话 Files 面板。仅在有活跃会话且正文未被 contentOverride 替换时渲染；
-   *  开关/宽度状态由宿主拥有。（会话工具栏不在这里 —— 它由宿主放进 banner 的 trailing） */
+   *  开关/宽度状态由宿主拥有。（会话工具栏不在这里 —— 它由宿主放进顶栏的 rightActions） */
   sessionPanel?: ReactNode
   /** 正文之后的浮层插槽（宿主弹窗，如会话配置对话框） */
   overlays?: ReactNode
@@ -97,11 +98,13 @@ export function ChatBody({
         onOpenSessionConfig={onOpenSessionConfig}
         rightActions={rightActions}
       />
-      {banner}
-      {/* 正文行：左为正文列，右为可选会话面板（悬浮卡片）列 —— 顶栏/横幅保持整宽横贯。
+      {/* 正文行：左为正文列，右为可选会话面板（悬浮卡片）列 —— 只有顶栏整宽横贯。
+          横幅在**正文列之内**（不是顶栏与正文行之间的整宽一条）：它是对话的状态，
+          不该在会话面板与顶栏之间横插一杠，把那张卡片从顶栏下方推下去。
           两列均不设 relative：压缩遮罩 absolute inset-0 仍锚定根容器、罩住整个正文外壳 */}
       <div className="flex flex-1 min-h-0">
         <div className={`flex flex-col flex-1 min-w-0${scrollInset ? ' chat-scroll-inset' : ''}`}>
+          {banner}
           {content}
         </div>
         {sessionUiVisible ? sessionPanel : null}

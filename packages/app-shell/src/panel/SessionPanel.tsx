@@ -7,7 +7,6 @@ import {
   useBgTaskCount,
   useBgTaskRunningCount
 } from '@shuvix/chat-ui'
-import { useFocusDim } from '../sidebar/useFocusDim'
 import { SubAgentPanel } from '../subagent/SubAgentPanel'
 import { usePreviewPanelStore } from '../preview/previewPanelStore'
 import { BgTaskPanel } from './BgTaskPanel'
@@ -16,12 +15,12 @@ import { useSessionPanelStore, type SessionPanelTool } from './sessionPanelStore
 /**
  * 会话面板（桌面 / 扩展共用）—— 经 ChatBody 的 sessionToolbar / sessionPanel 插槽注入：
  *
- *   - SessionToolbar：状态横幅右侧的工具入口组，仅面板收起时显示（展开后隐藏，
- *     切换/收起入口移交面板头部 tabs）。Files 常驻；Preview 仅在宿主注入（showPreview）
+ *   - SessionToolbar：顶栏右侧按钮簇里的工具入口组（在窗口控制那一簇左侧、以竖线分隔）。
+ *     Files 常驻；Preview 仅在宿主注入（showPreview）
  *     **且存在预览目标**时出现（与 Sub-agent 同款「有内容才显示」语义）；Sub-agent 仅当前
  *     会话有子会话时出现（含数量徽标）。点按展开面板并切到该工具。
  *   - SessionPanel：正文区右侧的悬浮卡片（四周留白 + 圆角 + 边框 + 投影，布局上与对话并排、
- *     对话收缩让位）。头部为工具 tabs（与工具栏同一入口列表），点按切换、X 收起。
+ *     对话收缩让位）。头部只有一枚收起按钮（工具切换在顶栏的 tabs）。
  *     装载 Files / Preview / Sub-agent / 后台任务，展开期间各工具均保持挂载、visibility 切换
  *     （保住预览/手风琴等临时 UI 态）；收起时整体卸载（避免后台文件扫描）。
  *
@@ -114,10 +113,14 @@ function useSessionPanelToolItems(
 }
 
 /**
- * 会话工具栏（状态横幅右侧）—— 面板收起与展开时**同一处**的工具入口：
+ * 会话工具栏（顶栏右侧）—— 面板收起与展开时**同一处**的工具入口：
  *   - 收起：仅图标，点按展开并切到该工具；
- *   - 展开：即面板的 tabs（当前工具带文字）+ 收起按钮 —— 面板卡片自身不再有头部，
- *     开合面板时这排控件原地变形，而不是从卡片头部跳到横幅、或反过来。
+ *   - 展开：即面板的 tabs（当前工具带文字），点按切换工具。
+ * **只负责开与切，不负责关**：收起按钮在面板卡片自己的头部（见下方 SessionPanel）——
+ * 关闭一个东西的按钮长在那个东西上，而不是长在另一头的顶栏里。
+ *
+ * 宿主把它放进 ChatHeader 的 rightActions（原先挂在状态横幅右侧，为它单占一行）；
+ * 专注模式的淡化因此由顶栏整体负责 —— 这里再叠一层 opacity 会与顶栏相乘。
  */
 export function SessionToolbar({
   sessionId,
@@ -127,23 +130,15 @@ export function SessionToolbar({
   /** 是否显示 Preview 工具入口（与 SessionPanel 的 previewContent 注入配套） */
   showPreview?: boolean
 }): React.JSX.Element | null {
-  const { t } = useTranslation()
   const openTool = useSessionPanelTool(sessionId)
   const tools = useSessionPanelToolItems(sessionId, showPreview)
-  // 专注模式淡化：与顶栏/侧栏/面板页签同一套判定与手感（悬浮即恢复不透明）。
-  // 注意 hook 必须在下面的早退之前调用。
-  const { dim } = useFocusDim()
   if (!sessionId) return null
 
   // 与 SessionPanel 同款兜底：停在 Preview 但宿主没注入 previewContent → 实际显示的是 Files
   const activeTool = openTool === 'preview' && !showPreview ? 'files' : openTool
 
   return (
-    <div
-      className={`flex items-center gap-0.5 transition-opacity duration-200 ${
-        dim ? 'opacity-30 hover:opacity-100' : ''
-      }`}
-    >
+    <div className="flex items-center gap-0.5">
       {tools.map(({ tool, Icon, label, badge }) => {
         const active = tool === activeTool
         return (
@@ -170,15 +165,6 @@ export function SessionToolbar({
           </button>
         )
       })}
-      {openTool && (
-        <button
-          onClick={() => useSessionPanelStore.getState().close(sessionId)}
-          className="flex items-center p-1 rounded-md text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/50 transition-colors flex-shrink-0"
-          title={t('common.close')}
-        >
-          <X size={13} />
-        </button>
-      )}
     </div>
   )
 }
@@ -197,6 +183,7 @@ export function SessionPanel({
   filesContent,
   previewContent
 }: SessionPanelProps): React.JSX.Element | null {
+  const { t } = useTranslation()
   const rawTool = useSessionPanelTool(sessionId)
   const width = useSessionPanelStore((s) => s.width)
   if (!sessionId || !rawTool) return null
@@ -245,7 +232,23 @@ export function SessionPanel({
           } as React.CSSProperties
         }
       >
-        {/* 内容区 —— 各工具共存，visibility 切换（tabs / 收起在状态横幅右侧，卡片自身无头部） */}
+        {/*
+          头部：只有一枚收起按钮（工具切换是顶栏那排 tabs 的事）。刻意不写工具名 ——
+          顶栏的活动 tab 已经在说「现在是 Files」，这里重复一遍只是把卡片顶白占掉。
+          px-2 与各工具自己的头部（FilesPanel 的路径行等）同一内缩、按钮内边距也同为
+          p-1，于是 X 与其下的搜索/刷新图标竖直对齐；不加下边框，免得与工具头部的
+          边框叠成两道线。
+        */}
+        <div className="flex-shrink-0 flex items-center justify-end h-6 px-2">
+          <button
+            onClick={() => useSessionPanelStore.getState().close(sessionId)}
+            className="p-1 rounded text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/40 transition-colors"
+            title={t('common.close')}
+          >
+            <X size={13} />
+          </button>
+        </div>
+        {/* 内容区 —— 各工具共存，visibility 切换 */}
         <div className="flex-1 min-h-0 relative">
           <div
             className="absolute inset-0"

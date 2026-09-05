@@ -11,7 +11,6 @@ import {
   usePreviewRequestBridge,
   SessionConfigDialog,
   SessionToolbar,
-  StatusBanner,
   useSessionPanelReveal,
   useSidebarStore
 } from '@shuvix/app-shell'
@@ -119,16 +118,6 @@ export function ExtMainLayout({ host }: { host: ChatHostValue }): React.JSX.Elem
             className="relative flex-1 min-w-0 flex flex-col min-h-0"
             headerCaps={{ editableTitle: true, sessionConfig: true }}
             onOpenSessionConfig={() => setShowSessionConfig(true)}
-            banner={
-              // 运行时/分享/询问状态横幅（复用 app-shell；扩展仅免询问项会出现，余项按能力自隐）
-              // 会话工具栏靠右并入其中 —— 悬浮在正文右上角会压住右对齐的用户气泡
-              activeSessionId ? (
-                <StatusBanner
-                  sessionId={activeSessionId}
-                  trailing={<SessionToolbar sessionId={activeSessionId} showPreview />}
-                />
-              ) : undefined
-            }
             overlays={
               // 会话配置弹窗：复用 app-shell 共享组件；绑定分节据宿主能力自动显隐
               showSessionConfig && activeSessionId ? (
@@ -139,13 +128,22 @@ export function ExtMainLayout({ host }: { host: ChatHostValue }): React.JSX.Elem
               ) : undefined
             }
             rightActions={
-              // 折叠会话列表 —— 复用共享按钮，样式与桌面一致（Files/Sub-agent 入口在会话工具栏胶囊）
-              <PanelToggleButton
-                side="left"
-                open={isOpen}
-                onClick={() => useSidebarStore.getState().toggle()}
-                title={t('sidebar.title')}
-              />
+              // 会话工具栏（Files/Preview/Sub-agent 胶囊）+ 竖线 + 折叠会话列表 ——
+              // 与桌面同一排布：会话内容入口在左、窗口/布局开关在右
+              <>
+                {activeSessionId && (
+                  <>
+                    <SessionToolbar sessionId={activeSessionId} showPreview />
+                    <div className="w-px h-3.5 bg-border-secondary/60 mx-0.5" />
+                  </>
+                )}
+                <PanelToggleButton
+                  side="left"
+                  open={isOpen}
+                  onClick={() => useSidebarStore.getState().toggle()}
+                  title={t('sidebar.title')}
+                />
+              </>
             }
             sessionPanel={<ExtSessionPanel sessionId={activeSessionId} />}
             welcome={<WelcomeView enableConfigShare />}

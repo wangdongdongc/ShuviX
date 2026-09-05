@@ -154,7 +154,6 @@
     "emptyHint": "Send a message to start the conversation",
     "rollbackConfirm": "Rollback to here",
     "rollbackWarning": "This will delete all messages after this point. This action cannot be undone.",
-    "autoAllowLabel": "Auto-Allow",
     "autoAllowWarning": "Operations will execute automatically without asking. The AI may perform unexpected actions — use with caution."
   },
   "input": {

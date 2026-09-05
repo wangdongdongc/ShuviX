@@ -154,7 +154,6 @@
     "emptyHint": "メッセージを送信して会話を開始",
     "rollbackConfirm": "ここまでロールバック",
     "rollbackWarning": "この操作により、以降のすべてのメッセージが削除されます。元に戻すことはできません。",
-    "autoAllowLabel": "自動許可",
     "autoAllowWarning": "関連する操作が確認なしで自動実行されます。AI が予期しない操作を行う可能性があります — 注意してご使用ください。"
   },
   "input": {

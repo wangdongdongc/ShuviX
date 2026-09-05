@@ -112,10 +112,24 @@ export function ChatView({ pinnedMode }: ChatViewProps = {}): React.JSX.Element 
     if (res) setAlwaysOnTopState(res.alwaysOnTop)
   }, [activeSessionId, alwaysOnTop])
 
+  /**
+   * 顶栏右侧最左段：会话工具栏（Files / Preview / Sub-agent / 后台任务）+ 一道竖线，
+   * 与其后的窗口控制簇（悬浮/侧栏/终端/右面板）分开 —— 前者管会话内容，后者管窗口。
+   * 无会话 / web / 悬浮占位时整段消失（与 pin 按钮同一道门）。
+   */
+  const sessionTools =
+    !isWeb && pinnedMode !== 'placeholder' && activeSessionId ? (
+      <>
+        <SessionToolbar sessionId={activeSessionId} showPreview={isFloating} />
+        <div className="w-px h-3.5 bg-border-secondary/60 mx-0.5" />
+      </>
+    ) : null
+
   /** 顶栏右侧按钮簇（桌面专属：pin/悬浮/浏览器/侧栏开关），按模式切换 */
   const rightActions =
     pinnedMode === 'floating' ? (
       <>
+        {sessionTools}
         <button
           onClick={handleToggleAlwaysOnTop}
           className={`p-1 rounded-md transition-colors ${
@@ -141,6 +155,7 @@ export function ChatView({ pinnedMode }: ChatViewProps = {}): React.JSX.Element 
         {!isWeb && pinnedMode !== 'placeholder' && activeSessionId && (
           <BotMembersBar sessionId={activeSessionId} />
         )}
+        {sessionTools}
         {!isWeb && pinnedMode !== 'placeholder' && activeSessionId && (
           <button
             onClick={() => void getHostApi()?.pinChat.pin(activeSessionId)}
@@ -218,16 +233,10 @@ export function ChatView({ pinnedMode }: ChatViewProps = {}): React.JSX.Element 
         ) : undefined
       }
       banner={
-        // 会话工具栏靠右并入这条横幅：它原先悬浮在正文右上角，会压住右对齐的用户气泡
+        // 运行时资源横幅（SSH / 数据库连接）—— 无连接时自身返回 null，绝大多数会话看不到它。
+        // 会话工具栏与「免询问」胶囊已不在这里：前者进了顶栏 rightActions，后者删除
         activeSessionId && pinnedMode !== 'placeholder' ? (
-          <StatusBanner
-            sessionId={activeSessionId}
-            trailing={
-              !isWeb ? (
-                <SessionToolbar sessionId={activeSessionId} showPreview={isFloating} />
-              ) : undefined
-            }
-          />
+          <StatusBanner sessionId={activeSessionId} />
         ) : undefined
       }
       contentOverride={

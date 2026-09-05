@@ -31,6 +31,8 @@ export interface SessionItemProps {
   isBot?: boolean
   /** 聊天会话的未读 bot 回复数（A4）：>0 时标题加粗 + accent 计数徽标 */
   unreadCount?: number
+  /** 会话开着「免询问」（settings.autoAllow）—— 行首图标染琥珀 */
+  autoAllow?: boolean
   /** 子会话行：缩进一级（行内 paddingLeft，同知识库的文件行）。其余与顶层行完全一致 */
   isSub?: boolean
   /** 拥有的子会话数（>0 时行首图标变成 MessagesSquare 且可点折叠，标题后跟一个计数） */
@@ -54,6 +56,7 @@ export function SessionItem({
   isNotebook = false,
   isBot = false,
   unreadCount = 0,
+  autoAllow = false,
   isSub = false,
   subCount = 0,
   subCollapsed = false,
@@ -63,6 +66,12 @@ export function SessionItem({
   isPinned = false
 }: SessionItemProps): React.JSX.Element {
   const { t } = useTranslation()
+  /**
+   * 行首图标着色：免询问压过其余一切。工具调用不再逐次询问是会话的常驻状态，而顶栏那枚
+   * 「免询问」胶囊已经撤了 —— 侧栏这枚图标是它在界面上仅剩的常驻痕迹，所以它得压过
+   * accent（选中/流式）而不是被盖掉；流式的 animate-pulse 照旧，仍看得出这条在跑。
+   */
+  const tone = (base: string): string => (autoAllow ? 'text-amber-500' : base)
   return (
     <div
       onClick={() => onSelect(session.id)}
@@ -88,23 +97,19 @@ export function SessionItem({
       {isBot ? (
         <Bot
           size={11}
-          className={`flex-shrink-0 ${
-            isStreaming
-              ? 'text-accent animate-pulse'
-              : active
-                ? 'text-accent'
-                : 'text-text-tertiary/40'
-          }`}
+          className={`flex-shrink-0 ${isStreaming ? 'animate-pulse ' : ''}${tone(
+            isStreaming || active ? 'text-accent' : 'text-text-tertiary/40'
+          )}`}
         />
       ) : isNotebook ? (
         <FileText
           size={11}
-          className={`flex-shrink-0 ${active ? 'text-accent' : 'text-text-tertiary/40'}`}
+          className={`flex-shrink-0 ${tone(active ? 'text-accent' : 'text-text-tertiary/40')}`}
         />
       ) : isPinned ? (
         <PictureInPicture2
           size={11}
-          className={`flex-shrink-0 ${isStreaming ? 'text-accent animate-pulse' : 'text-accent'}`}
+          className={`flex-shrink-0 ${isStreaming ? 'animate-pulse ' : ''}${tone('text-accent')}`}
         />
       ) : subCount > 0 ? (
         // 有子会话：两片叠起来的对话框 = 这里不止一场对话。图标本身就是折叠钮
@@ -119,26 +124,18 @@ export function SessionItem({
         >
           <MessagesSquare
             size={11}
-            className={`${
-              isStreaming
-                ? 'text-accent animate-pulse'
-                : active
-                  ? 'text-accent'
-                  : 'text-text-tertiary/40'
-            }`}
+            className={`${isStreaming ? 'animate-pulse ' : ''}${tone(
+              isStreaming || active ? 'text-accent' : 'text-text-tertiary/40'
+            )}`}
           />
         </button>
       ) : (
         <MessageSquare
           size={11}
           fill={active || isStreaming ? 'currentColor' : 'none'}
-          className={`flex-shrink-0 ${
-            isStreaming
-              ? 'text-accent animate-pulse'
-              : active
-                ? 'text-accent'
-                : 'text-text-tertiary/40'
-          }`}
+          className={`flex-shrink-0 ${isStreaming ? 'animate-pulse ' : ''}${tone(
+            isStreaming || active ? 'text-accent' : 'text-text-tertiary/40'
+          )}`}
         />
       )}
       <div className="flex-1 min-w-0 flex items-center gap-1.5 text-[13px] group-hover:pr-6">

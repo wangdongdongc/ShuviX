@@ -154,7 +154,6 @@
     "emptyHint": "发送一条消息开始对话",
     "rollbackConfirm": "回退到此处",
     "rollbackWarning": "回退将删除该消息之后的所有对话记录，此操作不可恢复。",
-    "autoAllowLabel": "免询问",
     "autoAllowWarning": "相关操作将自动执行，不再逐条询问。AI 可能产生意外操作，请谨慎使用。"
   },
   "input": {

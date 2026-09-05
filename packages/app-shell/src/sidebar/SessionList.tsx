@@ -56,6 +56,7 @@ export function SessionList({ onNew, onSelect, onDelete }: SessionListProps): Re
               active={activeSessionId === s.id}
               isStreaming={sessionStreams[s.id]?.isStreaming}
               pendingCount={pendingCounts[s.id]}
+              autoAllow={s.settings.autoAllow === true}
               onSelect={handleSelect}
               onMenu={onDelete ? openMenu : undefined}
             />
