@@ -959,8 +959,9 @@ describe('BS —— 序列化（与解析互逆）', () => {
         if (ent.name === 'node_modules' || ent.name === '__tests__' || ent.name === 'dist') continue
         const full = join(dir, ent.name)
         if (ent.isDirectory()) walk(full)
+        // 路径归一为 forward-slash：下面的 repoRoot 切片比较与 endsWith 都是 POSIX 字面量
         else if (/\.tsx?$/.test(ent.name))
-          sources.push({ path: full, text: readFileSync(full, 'utf-8') })
+          sources.push({ path: full.replace(/\\/g, '/'), text: readFileSync(full, 'utf-8') })
       }
     }
     walk(join(repoRoot, 'apps/desktop/src'))

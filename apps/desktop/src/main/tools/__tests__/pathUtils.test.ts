@@ -42,14 +42,18 @@ describe('expandPath', () => {
 })
 
 describe('resolveToCwd', () => {
+  // Windows 上 '/workspace' 不是绝对路径（会解析到当前盘符），按平台取合法绝对路径
+  const WS = process.platform === 'win32' ? 'C:\\workspace' : '/workspace'
+  const ABS = process.platform === 'win32' ? 'D:\\absolute\\path.ts' : '/absolute/path.ts'
+
   it('相对路径基于 cwd 解析', () => {
-    const result = resolveToCwd('foo.ts', '/workspace')
-    expect(result).toBe('/workspace/foo.ts')
+    const result = resolveToCwd('foo.ts', WS)
+    expect(result).toBe(join(WS, 'foo.ts'))
   })
 
   it('绝对路径不变', () => {
-    const result = resolveToCwd('/absolute/path.ts', '/workspace')
-    expect(result).toBe('/absolute/path.ts')
+    const result = resolveToCwd(ABS, WS)
+    expect(result).toBe(ABS)
   })
 })
 

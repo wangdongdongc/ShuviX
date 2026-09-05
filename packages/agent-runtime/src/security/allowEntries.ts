@@ -55,11 +55,24 @@ export function buildAllowEntry(toolType: AllowToolType, path: string): string {
  *
  * 文件用全等命中,目录用前缀命中。不引入 glob,也不规范化大小写。
  * 按"路径段边界"前缀匹配避免 /foo 命中 /foobar。
+ *
+ * Windows(sep '\\')下先做分隔符归一(两侧 '\\' → '/'):内置策略的 let 用 '/'
+ * 拼接(如 vars.home + '/' + '.ssh'),用户手写的 allowList 条目也可能混用,
+ * 不归一则混合分隔符的 entry 在 Windows 上恒不命中 —— protect-credentials
+ * 会整个失效。POSIX 下 '\\' 是合法文件名字符,保持严格不妥协。
  */
 export function matchesPathEntry(entryPath: string, absolutePath: string, sep: string): boolean {
-  if (absolutePath === entryPath) return true
-  const withSep = entryPath.endsWith(sep) ? entryPath : entryPath + sep
-  return absolutePath.startsWith(withSep)
+  let entry = entryPath
+  let abs = absolutePath
+  let boundary = sep
+  if (sep === '\\') {
+    entry = entry.replace(/\\/g, '/')
+    abs = abs.replace(/\\/g, '/')
+    boundary = '/'
+  }
+  if (abs === entry) return true
+  const withSep = entry.endsWith(boundary) ? entry : entry + boundary
+  return abs.startsWith(withSep)
 }
 
 /**

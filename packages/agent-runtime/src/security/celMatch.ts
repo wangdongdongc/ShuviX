@@ -19,6 +19,7 @@
  *   hasShortFlags(argv, 'rf')  argv 里是否带齐这些 GNU 短选项（认 `-rf` / `-fr` / `-r -f`）
  *   inDir(p, dirs)  路径段边界的目录包含判定（dirs 接受字符串或字符串列表；
  *                   语义与 allowList 前缀匹配一致，/foo 不命中 /foobar，绑定平台 sep；
+ *                   Windows 下两侧分隔符先归一为 '/'，见 matchesPathEntry；
  *                   空串目录恒不命中 —— '' + sep 会前缀命中一切绝对路径，必须挡掉）
  *
  * **strict 语义**：object 是开放属性文档，访问缺失属性（如对 command 客体取
