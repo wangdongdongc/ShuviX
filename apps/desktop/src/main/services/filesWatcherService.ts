@@ -41,7 +41,9 @@ export async function scanSessionFiles(
     limit: SCAN_LIMIT,
     hidden: true
   })
-  return { paths: files, truncated, root: workingDirectory }
+  // rg 在 Windows 输出反斜杠分隔的相对路径，而 @pierre/trees 只按 `/` 切分目录层级，
+  // 不归一会导致整树被平铺。仓库约定相对路径一律 forward-slash 存储（见 app-shell paths.ts）
+  return { paths: files.map((f) => f.replace(/\\/g, '/')), truncated, root: workingDirectory }
 }
 
 // ─────────────────────────── 单文件内容监听 ───────────────────────────
