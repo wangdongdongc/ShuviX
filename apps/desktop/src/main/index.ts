@@ -144,6 +144,8 @@ function openSettingsWindow(tab?: string): void {
     minHeight: 400,
     show: false,
     title: '设置',
+    // Windows/Linux 下菜单栏默认隐藏（Alt 临时呼出），快捷键不受影响；macOS 菜单本就在系统栏
+    ...(!isMac ? { autoHideMenuBar: true } : {}),
     // macOS 使用隐藏标题栏 + 交通灯按钮
     ...(isMac
       ? {
@@ -373,6 +375,8 @@ function createWindow(): void {
     minHeight: 600,
     show: false,
     icon: join(__dirname, '../../resources/icon.png'),
+    // Windows/Linux 下菜单栏默认隐藏（Alt 临时呼出），快捷键不受影响；macOS 菜单本就在系统栏
+    ...(!isMac ? { autoHideMenuBar: true } : {}),
     // macOS 使用隐藏标题栏 + 交通灯按钮。
     // y=14：全窗顶部为交通灯预留的是 40px 带（侧边栏 pt-10 / 聊天顶栏 h-10），12pt 的圆点
     // 居中即 (40-12)/2=14 —— 与顶栏内 items-center 的标题文字同在 y=20 的中心线上（原 18 会低 4px）
