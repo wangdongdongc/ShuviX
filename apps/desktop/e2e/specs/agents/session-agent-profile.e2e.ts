@@ -9,11 +9,14 @@
  * （档案切换曾经是 `/<agentName>` 斜杠命令，已改由输入框的档案选择器承担；
  * 这里顺带钉住命令源里不再有 agent 项。）
  */
+import { mkdirSync } from 'node:fs'
+import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { until } from '../../harness/cdp'
 import { launchApp, type E2EApp } from '../../harness/launch'
 import {
   createAgentSession,
+  createProject,
   seedCustomProvider,
   seedEnabledModel,
   seedSkill,
@@ -23,6 +26,8 @@ import {
 let app: E2EApp
 /** 自定义提供商 id（uuidv7，beforeAll 里现造）—— slashmodelprofile 的前缀 */
 let customProviderId: string
+/** 项目 id —— 「项目会话走 default、无项目会话走 chat」这条对照需要两种形态各一条 */
+let projectId: string
 
 /** 合成模型 id：避免与启动时从 pi-ai 同步进来的真实模型重名 */
 const MODEL_A = 'e2e-model-a'
@@ -85,6 +90,15 @@ beforeAll(async () => {
     model: 'openai/nope-not-there',
     body: 'BAD MODEL PROFILE BODY.'
   })
+  // 「新会话默认档案」那组用的素材：一份能被设置项指到的普通档案 + 一个项目
+  writeAgentMd(app, 'e2e-route', {
+    description: '默认档案设置指向它',
+    tools: 'read',
+    body: 'ROUTE BODY.'
+  })
+  const projDir = join(app.home, 'route-proj')
+  mkdirSync(projDir, { recursive: true })
+  projectId = (await createProject(app.main, { name: 'RouteProj', path: projDir })).id
 })
 afterAll(async () => {
   await app.stop()
@@ -460,5 +474,61 @@ describe('档案工具种子（shuvix-tools 的 mcp:/skill:）', () => {
     // 重建后的运行时里也确实没有它（档案白名单不再把它并回来）
     const info = await runtimeInfo(sid)
     expect(info.tools.map((t) => t.name)).not.toContain(`skill:${SEED_SKILL}`)
+  })
+})
+
+/**
+ * 新会话的默认档案 —— 两条路线由**会话形态**选设置项（有项目走「默认项目智能体」缺省
+ * `default`，无项目走「默认聊天智能体」缺省 `chat`），并在**创建那一刻**落成显式的
+ * `settings.agentProfile`。
+ */
+describe('新会话的默认档案（创建那一刻定型）', () => {
+  const setSetting = (key: string, value: string): Promise<unknown> =>
+    app.main.eval(
+      `window.api.settings.set({ key: ${JSON.stringify(key)}, value: ${JSON.stringify(value)} })`
+    )
+
+  const stampOf = (sid: string): Promise<string | null> =>
+    app.main.eval(
+      `window.api.session.getById(${JSON.stringify(sid)}).then((s) => s.settings.agentProfile ?? null)`
+    )
+
+  it('两种形态各走各的基座：无项目会话拿到 chat body，项目会话拿到 default body', async () => {
+    // 单测只到「戳写对了」为止，而从戳到真正发给 LLM 的提示词还有三跳（resolveAgentProfileName
+    // → getProfile → createAgent），任何一跳丢掉 profileName，单测依旧全绿。
+    // 锚点取 default 独有的那一节：两份 body 的工具面只差三个检索工具，差异全在文案上。
+    const { sid: chatSid, systemPrompt: chatPrompt } = await createAgentSession(app.main)
+    expect(await stampOf(chatSid)).toBe('chat')
+    expect(chatPrompt).not.toContain('Handing work to a sub-session')
+    expect(chatPrompt).not.toContain('create-sub-session')
+
+    const { sid: projSid, systemPrompt: projPrompt } = await createAgentSession(app.main, {
+      projectId
+    })
+    expect(await stampOf(projSid)).toBe('default')
+    expect(projPrompt).toContain('Handing work to a sub-session')
+    expect(projPrompt).toContain('create-sub-session')
+  })
+
+  it('粘性：改设置只影响之后新建的会话，已有会话的戳与人格分毫不动', async () => {
+    // 「粘性」是这套设计的核心承诺，却没有任何类型在守它 —— 把解析从 create 挪进
+    // resolveAgentProfileName，全部历史会话会在用户改一次设置后集体换人格
+    const { sid: before } = await createAgentSession(app.main)
+    expect(await stampOf(before)).toBe('chat')
+
+    await setSetting('general.defaultChatAgent', 'e2e-route')
+    try {
+      const { sid: after, systemPrompt } = await createAgentSession(app.main)
+      expect(await stampOf(after)).toBe('e2e-route')
+      expect(systemPrompt.startsWith('ROUTE BODY.')).toBe(true)
+
+      // 老会话：戳没被改写，且**重建之后**仍是基座人格（解析读的是戳，不是设置）
+      expect(await stampOf(before)).toBe('chat')
+      await app.main.eval(`window.api.message.clear(${JSON.stringify(before)})`)
+      expect((await runtimeInfo(before)).systemPrompt.startsWith('ROUTE BODY.')).toBe(false)
+    } finally {
+      // 空串 = 未配置（回落基座）—— 本文件后面的用例都假定无项目会话戳的是 chat
+      await setSetting('general.defaultChatAgent', '')
+    }
   })
 })

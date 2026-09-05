@@ -102,3 +102,39 @@ describe('default 覆盖（用户同名档案）', () => {
     expect(systemPrompt.startsWith('OVERRIDE BODY.')).toBe(false)
   })
 })
+
+/**
+ * 与上面 default 那两条对称 —— `chat` 是**不归属项目**的会话的基座，所以这里的会话
+ * 必须**不带 projectId**（上面两条正相反）。覆盖链上刚发生过一批连带改动
+ * （getProfile 的内置兜底扩到全部基座名、builtinProfiles 的按名合并），而 default
+ * 有 e2e 守着、chat 一条都没有。
+ */
+describe('chat 覆盖（用户同名档案）', () => {
+  it('覆盖后：设置页两行并存（内置带 overridden），无项目会话用覆盖 body', async () => {
+    writeAgentMd(app, 'chat', {
+      description: 'my chat override',
+      tools: 'read',
+      body: 'CHAT OVERRIDE.'
+    })
+    const rows = (await listAgents()).filter((a) => a.name === 'chat')
+    expect(rows.map((r) => [r.source, !!r.overridden]).sort()).toEqual([
+      ['builtin', true],
+      ['user', false]
+    ])
+    const { systemPrompt } = await createAgentSession(app.main)
+    expect(systemPrompt.startsWith('CHAT OVERRIDE.')).toBe(true)
+  })
+
+  it('删除覆盖档案：内置恢复单行、无 overridden；新会话回到内置 body', async () => {
+    const res = await app.main.eval<{ success: boolean }>(
+      `window.api.subAgent.delete({ name: 'chat' })`
+    )
+    expect(res.success).toBe(true)
+    const rows = (await listAgents()).filter((a) => a.name === 'chat')
+    expect(rows).toHaveLength(1)
+    expect(rows[0].source).toBe('builtin')
+    expect(rows[0].overridden).toBeFalsy()
+    const { systemPrompt } = await createAgentSession(app.main)
+    expect(systemPrompt.startsWith('CHAT OVERRIDE.')).toBe(false)
+  })
+})

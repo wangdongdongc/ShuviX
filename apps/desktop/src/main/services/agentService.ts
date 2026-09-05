@@ -156,11 +156,7 @@ class AgentService implements AgentProfileRegistry {
    */
   listSwitchable(): AgentProfileSummary[] {
     return this.listAll()
-      .filter(
-        (a) =>
-          SWITCHABLE_BASE_PROFILE_NAMES.has(a.name) ||
-          (!BASE_PROFILE_NAMES.has(a.name) && a.sessionAwareness)
-      )
+      .filter((a) => this.isSessionProfile(a))
       .map((a) => ({
         name: a.name,
         displayName: a.displayName,
@@ -170,12 +166,33 @@ class AgentService implements AgentProfileRegistry {
       }))
   }
 
-  /** 按名取档案（含基座档案的内置兜底 —— 用户同名文件损坏时会话仍可创建） */
+  /**
+   * 这份档案能否**作为某条会话自己的档案**（而不是只能被派发的执行体）。
+   *
+   * 三处入口共用一条判据：选择器名单（listSwitchable）、`/<agentName>` 切换
+   * （sessionService.updateAgentProfile，它另拆成两道门只为给出各自的错误文案）、
+   * 以及新会话的默认档案（sessionService.defaultAgentProfile）。**创建入口与切换入口
+   * 必须同口径** —— 设置里留着一个 `notebook` 或一份后来去掉了会话感知的档案时，
+   * 切换会被拒、创建却照戳，那是同一条规则只实现了一半。
+   */
+  isSessionProfile(profile: AgentProfile): boolean {
+    return (
+      SWITCHABLE_BASE_PROFILE_NAMES.has(profile.name) ||
+      (!BASE_PROFILE_NAMES.has(profile.name) && profile.sessionAwareness)
+    )
+  }
+
+  /**
+   * 按名取档案。
+   *
+   * 这里**不需要**给内置档案再兜一层底：一份解析不了的用户 md 会被 scanDir 静默跳过，
+   * 因而不进 userNames、也就遮蔽不了同名内置 —— `listAll()` 里那份内置原样还在。
+   * 「一份写坏的 `chat.md` / `default.md` 不会让对应形态的会话建不出根 Agent」这条
+   * 性质由那条跳过守住（回归钉在 agentService.test.ts 的 AS-20），不是由这里守住；
+   * 之前那个 `if (found) return found` + 按名重取内置的分支恒不可达，已删。
+   */
   getProfile(name: string): AgentProfile | undefined {
-    const found = this.listAll().find((a) => a.name === name)
-    if (found) return found
-    if (!BASE_PROFILE_NAMES.has(name)) return undefined
-    return this.builtinAgents().find((a) => a.name === name)
+    return this.listAll().find((a) => a.name === name)
   }
 
   /**

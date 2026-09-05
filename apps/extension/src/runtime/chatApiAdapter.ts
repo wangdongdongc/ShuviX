@@ -37,6 +37,7 @@ import {
   BASE_PROFILE_NAMES,
   SWITCHABLE_BASE_PROFILE_NAMES,
   DEFAULT_PROFILE_NAME,
+  type AgentProfile,
   validateShuvixMdText
 } from '@shuvix/agent-runtime'
 import { titlerFor, removeTitler } from './titleRuntime'
@@ -54,6 +55,18 @@ async function activeSelection(): Promise<{ provider: string; model: string }> {
 }
 
 /**
+ * 这份档案能否作为某条会话自己的档案 —— 选择器名单（listAgentProfiles）、`/<agentName>`
+ * 切换（updateAgentProfile，另拆成两道门只为各自的错误文案）与新会话默认档案三处同源。
+ * 口径同桌面 agentService.isSessionProfile。
+ */
+function isSessionProfile(profile: AgentProfile): boolean {
+  return (
+    SWITCHABLE_BASE_PROFILE_NAMES.has(profile.name) ||
+    (!BASE_PROFILE_NAMES.has(profile.name) && profile.sessionAwareness)
+  )
+}
+
+/**
  * 新会话的默认档案名 —— 由**会话形态**选设置项：归属项目（FSA 文件夹）走
  * 「默认项目智能体」（缺省 `default`），不归属项目（OPFS 隔离目录）走「默认聊天智能体」
  * （缺省 `chat`）。设置指向的档案已不存在时回落对应基座 —— 与桌面
@@ -65,7 +78,9 @@ async function defaultAgentProfile(projectId: string | null): Promise<string> {
   const base = inProject ? DEFAULT_PROFILE_NAME : CHAT_PROFILE_NAME
   const configured = (await settingsStore.get(key))?.trim()
   if (!configured || configured === base) return base
-  return extensionSubAgentRegistry.getProfile(configured) ? configured : base
+  const profile = extensionSubAgentRegistry.getProfile(configured)
+  // 准入与切换入口同源（isSessionProfile）：创建与切换必须同口径
+  return profile && isSessionProfile(profile) ? configured : base
 }
 
 export const chatApiAdapter: ChatApi = {
@@ -304,11 +319,7 @@ export const chatApiAdapter: ChatApi = {
     listAgentProfiles: async () =>
       extensionSubAgentRegistry
         .listAll()
-        .filter(
-          (a) =>
-            SWITCHABLE_BASE_PROFILE_NAMES.has(a.name) ||
-            (!BASE_PROFILE_NAMES.has(a.name) && a.sessionAwareness)
-        )
+        .filter((a) => isSessionProfile(a))
         .map((a) => ({
           name: a.name,
           displayName: a.displayName,

@@ -313,8 +313,14 @@ export class SessionService {
    * （缺省 `default`：确认需求、把活儿交给 coding 子会话、验收结果），不归属项目走
    * 「默认聊天智能体」（缺省 `chat`：握全套内置工具、自己把活干完）。
    *
-   * 设置指向的档案已不存在（用户删了那份 md）时回落对应基座 —— 与
-   * resolveAgentProfileName 同一条纪律：会话不该被一个不存在的档案名卡死。
+   * 设置指向的档案已不存在（用户删了那份 md），或它根本不能当会话档案（旧值指着
+   * `notebook`、某份档案后来去掉了 `shuvix-session-awareness`）时回落对应基座 ——
+   * 准入与 `/<agentName>` 切换同源（agentService.isSessionProfile）：**创建入口与切换
+   * 入口必须同口径**，否则切换拒绝、创建照戳，同一条规则只实现一半。
+   *
+   * 回落到**对应基座**而不是一律 `default`，与 resolveAgentProfileName 的回落刻意不同：
+   * 那里在读一条已经存在的会话（无戳 = 改动之前建的，那时的基座就是 default），这里在
+   * 决定一条新会话该从哪条路线起步，形态是已知的。两处别合并。
    */
   private defaultAgentProfile(projectId: string | null): string {
     const inProject = !!projectId
@@ -322,8 +328,9 @@ export class SessionService {
     const base = inProject ? DEFAULT_PROFILE_NAME : CHAT_PROFILE_NAME
     const configured = settingsDao.findByKey(key)?.trim()
     if (!configured || configured === base) return base
-    if (agentService.getProfile(configured)) return configured
-    log.warn(`默认档案 "${configured}"（${key}）已不存在，回落 ${base}`)
+    const profile = agentService.getProfile(configured)
+    if (profile && agentService.isSessionProfile(profile)) return configured
+    log.warn(`默认档案 "${configured}"（${key}）不可用作会话档案，回落 ${base}`)
     return base
   }
 

@@ -158,6 +158,25 @@ describe('updateAgentProfile — 笔记本钉死与正常切换链', () => {
     expect(mocks.daoUpdateSettings).toHaveBeenCalledWith('s1', { agentProfile: 'default' })
   })
 
+  it("'chat' 同样豁免：两个基座互为退路，`/chat` 放行而 `/notebook` 仍不放行", async () => {
+    // 豁免是「用户把 chat.md 写坏之后还能切回来」这条退路的唯一保障 —— 与 default 那条
+    // 同源（agentService.isSessionProfile），只是可切换基座从一个变成了两个。
+    // notebook 是对照：它同为基座却钉死在笔记本会话形态上，切到普通会话只会得到一个
+    // 指向不存在笔记的人格，所以必须仍被 base profile 那道门挡下。
+    mocks.daoPickSettings.mockReturnValue({})
+    mocks.getProfile.mockReturnValue({ tools: ['read'], sessionAwareness: false })
+
+    const ok = await sessionService.updateAgentProfile('s1', 'chat')
+    expect(ok.success).toBe(true)
+    expect(mocks.daoUpdateSettings).toHaveBeenCalledWith('s1', { agentProfile: 'chat' })
+
+    mocks.daoUpdateSettings.mockClear()
+    const denied = await sessionService.updateAgentProfile('s1', 'notebook')
+    expect(denied.success).toBe(false)
+    expect(denied.error).toContain('base profile')
+    expect(mocks.daoUpdateSettings).not.toHaveBeenCalled()
+  })
+
   it('正控制组：普通档案切换走完整链（落库 → invalidate → 工具种子 → 广播）', async () => {
     mocks.daoPickSettings.mockReturnValue({})
     mocks.getProfile.mockReturnValue({

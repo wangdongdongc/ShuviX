@@ -379,6 +379,31 @@ describe('agentService —— 读时投影与文件名边界', () => {
   })
 })
 
+describe('agentService.getProfile —— 一份写坏的同名用户档案不该把会话堵死', () => {
+  it('AS-20 三个基座名（default / chat / notebook）各写坏一份：仍拿得到内置档案', () => {
+    // 用户手改 ~/.shuvix/agents/chat.md 写出语法错，是完全够得着的操作。它若让
+    // getProfile 返回 undefined，无项目会话就整片建不出根 Agent，而项目会话完全正常
+    // —— 一个只影响一半会话、且没有任何报错的失败模式。
+    for (const name of ['default', 'chat', 'notebook']) {
+      writeAgentFile(`${name}.md`, INVALID_MD.replace('name: broken', `name: ${name}`))
+    }
+    for (const name of ['default', 'chat', 'notebook']) {
+      const profile = agentService.getProfile(name)
+      expect(profile, name).toBeDefined()
+      expect(profile!.source, name).toBe('builtin')
+      expect(profile!.systemPrompt.length, name).toBeGreaterThan(0)
+    }
+  })
+
+  it('AS-21 没有内置同名可退的名字仍是 undefined：写坏的纯用户档案 / 查无此人', () => {
+    // 「兜底」只对有内置同名的档案成立 —— 一份写坏的用户自建档案没有任何东西可退，
+    // 它就该消失（扫描静默跳过），而不是被伪造成一份空档案
+    writeAgentFile('myprof.md', INVALID_MD.replace('name: broken', 'name: myprof'))
+    expect(agentService.getProfile('myprof')).toBeUndefined()
+    expect(agentService.getProfile('nope-not-there')).toBeUndefined()
+  })
+})
+
 describe('agentService —— 结构化写路径（属性卡/表单的 saveAgent / createAgent）', () => {
   /** ParsedAgentFile 的最小合法形状；各用例只覆盖它关心的字段 */
   const parsed = (name: string, extra: Partial<ParsedAgentFile> = {}): ParsedAgentFile => ({

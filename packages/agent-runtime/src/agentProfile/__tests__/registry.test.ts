@@ -11,8 +11,10 @@ import {
   BUILTIN_PROFILE_SPECS,
   buildBuiltinProfile,
   buildBuiltinProfiles,
+  CHAT_PROFILE_NAME,
   DEFAULT_PROFILE_NAME,
   NOTEBOOK_PROFILE_NAME,
+  SWITCHABLE_BASE_PROFILE_NAMES,
   WIDGET_SPEC,
   WIKI_SPEC,
   WIKI_WRITER_SPEC,
@@ -307,6 +309,95 @@ describe('default 档案钉板(主会话默认工具集/环境段的唯一事实
         instructionsOn ? ['AGENTS.md', 'CLAUDE.md'] : []
       )
       expect(built.projectAwareness, spec.name).toBe(awarenessOn)
+    }
+  })
+})
+
+describe('chat 档案钉板(不归属项目的会话的创建基座)', () => {
+  it('工具面在 default 之上多出 ls/grep/glob —— 这条路线握全套内置工具自己干活', () => {
+    // 与 default / coding 的清单同一惯例：硬编码钉住（工具注册表导入链含 electron/native
+    // 模块，测试内加载不了），改动需同步 apps/desktop/src/main/tools/allTools.ts
+    expect(profile(CHAT_PROFILE_NAME).tools).toEqual([
+      'bash',
+      'read',
+      'write',
+      'edit',
+      'ls',
+      'grep',
+      'glob',
+      'ask',
+      'browser',
+      'agent',
+      'session'
+    ])
+    // 三个检索工具正是两条路线在工具面上的**全部**差别：default 让检索走 bash 或子会话
+    for (const search of ['ls', 'grep', 'glob']) {
+      expect(profile(CHAT_PROFILE_NAME).tools, `chat 需持有 ${search}`).toContain(search)
+      expect(profile(DEFAULT_PROFILE_NAME).tools, `default 不应持有 ${search}`).not.toContain(
+        search
+      )
+    }
+  })
+
+  it('是基座档案，且与 default 同为可切换基座（notebook 不是）', () => {
+    // SWITCHABLE_BASE_PROFILE_NAMES 是四处准入（选择器名单 / `/<agentName>` 切换 /
+    // 新会话默认档案 / 扩展端同三处）唯一的判据，往里多塞一个名字不该悄无声息
+    expect(BASE_PROFILE_NAMES.has(CHAT_PROFILE_NAME)).toBe(true)
+    expect(profile(CHAT_PROFILE_NAME).sessionAwareness).toBe(true)
+
+    expect([...SWITCHABLE_BASE_PROFILE_NAMES].sort()).toEqual(
+      [DEFAULT_PROFILE_NAME, CHAT_PROFILE_NAME].sort()
+    )
+    expect(SWITCHABLE_BASE_PROFILE_NAMES.has(NOTEBOOK_PROFILE_NAME)).toBe(false)
+    // 可切换基座必须先是基座 —— 两个集合的包含关系是准入表达式成立的前提
+    for (const name of SWITCHABLE_BASE_PROFILE_NAMES) {
+      expect(BASE_PROFILE_NAMES.has(name), `${name} 应同时是基座档案`).toBe(true)
+    }
+  })
+
+  it('三语 body 都不含任何派发/子会话引导 —— 拆分的唯一产品差异就是这段文案', () => {
+    // 工具面只差三个检索工具，「自己干活 / 把活交出去」全靠正文表达，而文案没有类型。
+    // 既有用例只断言了 default 点名 coding，没有一条断言 chat **不**点名它。
+    const HANDOFF = [
+      'coding',
+      'create-sub-session',
+      'sub-session',
+      '子会话',
+      'サブセッション',
+      '派发',
+      'ディスパッチ'
+    ]
+    for (const language of ['en', 'zh', 'ja']) {
+      const body = profile(CHAT_PROFILE_NAME, language).systemPrompt
+      for (const term of HANDOFF) {
+        expect(body, `chat.${language} 不应出现 ${term}`).not.toContain(term)
+      }
+      // 对照组：同一批词在 default 里是必须有的（否则这条用例可能只是在测一份空 body）
+      const def = profile(DEFAULT_PROFILE_NAME, language).systemPrompt
+      for (const term of ['`coding`', 'create-sub-session', 'wait-for-sub-sessions']) {
+        expect(def, `default.${language} 需点名 ${term}`).toContain(term)
+      }
+    }
+  })
+})
+
+describe('default body 与 session 工具的动作枚举', () => {
+  it('三语都逐字点名三个动作与两个参数名（改名后三份 md 会静默失效）', () => {
+    // 提示词里的动作名是模型唯一的调用依据 —— 硬编码钉住，事实源在
+    // apps/desktop/src/main/tools/session.ts 的 ACTIONS 与参数 schema
+    //（与该文件既有的「工具注册序硬编码」同一惯例：那边导入链在测试内加载不了）
+    const ANCHORS = [
+      'create-sub-session',
+      'prompt-sub-session',
+      'wait-for-sub-sessions',
+      'agent_profile',
+      'run_in_background'
+    ]
+    for (const language of ['en', 'zh', 'ja']) {
+      const body = profile(DEFAULT_PROFILE_NAME, language).systemPrompt
+      for (const anchor of ANCHORS) {
+        expect(body, `default.${language} 需含 ${anchor}`).toContain(anchor)
+      }
     }
   })
 })

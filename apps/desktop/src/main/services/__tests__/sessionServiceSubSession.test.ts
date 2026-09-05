@@ -114,6 +114,23 @@ describe('create —— 子会话的 parentId 与项目继承', () => {
     sessionService.create({ parentId: 'gone', projectId: 'p1' })
     expect(inserted()).toMatchObject({ parentId: 'gone', projectId: 'p1' })
   })
+
+  it('子会话的默认档案随继承来的项目形态走，因而与父会话人格天然一致', () => {
+    // `create`（读设置）与 subSessionRunner（读父会话落下的戳）是两处独立计算，相等是
+    // **巧合式耦合**：谁改了 create 的戳规则，subSessionRunner 那句
+    // `profileName !== stamped` 就恒真 —— 每条子会话建好就被 updateAgentProfile 切一次，
+    // 把这条刚建好的会话继承自项目默认的 mcp:/skill: 勾选替换成空。
+    mocks.daoPick.mockReturnValue({ projectId: 'parent-project' })
+    sessionService.create({ parentId: 'P' })
+    expect((inserted() as { settings: Record<string, unknown> }).settings.agentProfile).toBe(
+      'default'
+    )
+
+    vi.clearAllMocks()
+    mocks.daoPick.mockReturnValue({ projectId: null })
+    sessionService.create({ parentId: 'P' })
+    expect((inserted() as { settings: Record<string, unknown> }).settings.agentProfile).toBe('chat')
+  })
 })
 
 describe('delete —— 递归删子会话', () => {
