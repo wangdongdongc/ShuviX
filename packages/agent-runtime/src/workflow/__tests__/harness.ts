@@ -157,3 +157,20 @@ export function gatedRunTask(): {
       )
   }
 }
+
+/**
+ * hang 型 runTask：挂到这一步的 parentAbortSignal 落下为止，然后 **resolve** 交回半截散文 ——
+ * 真 manager 的收法（拿到 abort 之后交回已产出的文本，不 reject）。step_timeout /
+ * step_aborted 的归类靠引擎自己记的 stepStop，不靠 manager 抛错；manager reject 是另一格
+ * （见 engineInvoke.test.ts 的 EC-13）。
+ */
+export function hangUntilAbort(
+  partial = '（半截的散文）'
+): (p: RunTaskParams) => Promise<{ result: string }> {
+  return (p) =>
+    new Promise((resolve) => {
+      const done = (): void => resolve({ result: partial })
+      if (p.parentAbortSignal?.aborted) return done()
+      p.parentAbortSignal?.addEventListener('abort', done, { once: true })
+    })
+}

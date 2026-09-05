@@ -127,16 +127,19 @@ const seedSession = (bots: string[]): void => {
 const fired = (id: string): Array<Record<string, unknown>> =>
   mocks.fire.mock.calls.filter((c) => c[0] === id).map((c) => c[1] as Record<string, unknown>)
 
-/** 某个 bot 的决策记录 kind 序列 */
-function kindsOf(botName: string): string[] {
+/** 某个 bot 的决策记录（一行一条 JSON） */
+function decisions(botName: string): Array<Record<string, unknown>> {
   const file = join(dirs.bots, '.runs', botName, 'decisions.jsonl')
   if (!existsSync(file)) return []
   return readFileSync(file, 'utf-8')
     .trim()
     .split('\n')
     .filter(Boolean)
-    .map((l) => String((JSON.parse(l) as Record<string, unknown>).kind))
+    .map((l) => JSON.parse(l) as Record<string, unknown>)
 }
+
+/** 某个 bot 的决策记录 kind 序列 */
+const kindsOf = (botName: string): string[] => decisions(botName).map((d) => String(d.kind))
 
 /** 广播出去的 ChatEvent（按 type 过滤） */
 const broadcasts = (type: string): Array<Record<string, unknown>> =>
@@ -144,9 +147,25 @@ const broadcasts = (type: string): Array<Record<string, unknown>> =>
     .map((c) => c[0] as Record<string, unknown>)
     .filter((e) => e.type === type)
 
-const ran = (
-  output: Record<string, unknown> = { gate: 'ok', outcome: 'reply' }
-): Record<string, unknown> => ({ started: true, ok: true, output })
+const ran = (output: Record<string, unknown> = { outcome: 'reply' }): Record<string, unknown> => ({
+  started: true,
+  ok: true,
+  output
+})
+
+/** 门控段契约故障的 invoke 结果：errorCode + 第 0 步、intent 槽位的 agent（宿主据此记门控健康） */
+const gateFailed =
+  (code: 'next_not_called' | 'step_timeout' = 'next_not_called') =>
+  async (req: unknown): Promise<Record<string, unknown>> => ({
+    started: true,
+    ok: false,
+    error: `${code} at gate`,
+    errorCode: code,
+    errorStep: {
+      index: 0,
+      agent: (req as { input: { agents: { intent: string } } }).input.agents.intent
+    }
+  })
 
 /** 一次被门控住的 invoke 调用 —— 记下票面（input / signal / extraApi），由测试放行 */
 interface GatedCall {
@@ -281,6 +300,34 @@ describe('AB —— abortBot（粒度到 (bot, 消息)）', () => {
     expect(fired('session.turn-completed')).toHaveLength(1)
   })
 
+  it('A2-B9b 中止后引擎以 {ok:false, errorCode:run_aborted} 收尾 → 零气泡，但 run_end.detail 记下 run_aborted', async () => {
+    // 中止不出声（§9.1），账要记：引擎交回的归类原样落进决策记录 —— 排查「它为什么没回」
+    // 时能看到「有人按了停」而不是一条没有说明的失败。对照 DP-17：同一个 run_aborted、
+    // 没人按停 → 要出声
+    const g = gateCalls()
+    const msg = prompt('停了别再道歉')
+    await g.wait(1)
+    botService.abortBot(SID, 'scout', g.calls[0].input.message.id)
+
+    g.calls[0].finish({
+      started: true,
+      ok: false,
+      error: 'workflow run aborted',
+      errorCode: 'run_aborted'
+    })
+    await msg
+
+    const msgs = await messageService.listBySession(SID)
+    expect(msgs.filter((m) => m.role === 'assistant')).toHaveLength(0)
+    const runEnd = decisions('scout').find((d) => d.kind === 'run_end')
+    expect(runEnd).toBeDefined()
+    expect(runEnd!.detail).toMatchObject({ ok: false, errorCode: 'run_aborted' })
+    // run 级中止没有出错的步，也不是门控裁定
+    expect(runEnd!.detail).not.toHaveProperty('errorStep')
+    expect(runEnd!.detail).not.toHaveProperty('gate')
+    expect(fired('session.turn-completed')).toHaveLength(1)
+  })
+
   it('A2-B10 同 bot 两条消息在飞：abortBot(msg1) 只落 msg1 的 signal，msg2 照常 say 落树', async () => {
     const g = gateCalls()
     const m1 = prompt('第一条')
@@ -384,9 +431,10 @@ describe('HF —— 宿主失败落树带 error', () => {
   })
 
   it('A2-B14c 门控回落提示 → metadata.botFailure === true（脱手 .catch 落树，须 waitFor）', async () => {
-    writeBot('hf-gate', { displayName: 'Gate' })
+    // 门控故障按 intent 槽位的 agent 归因（errorStep.agent === agents.intent）：夹具要把槽位填上
+    writeBot('hf-gate', { displayName: 'Gate', agents: { intent: 'bot-intent', task: 'default' } })
     seedSession(['hf-gate'])
-    mocks.invoke.mockResolvedValue(ran({ gate: 'broken', outcome: 'gate-broken' }))
+    mocks.invoke.mockImplementation(gateFailed())
     await prompt('一')
     await prompt('二')
 
@@ -398,6 +446,36 @@ describe('HF —— 宿主失败落树带 error', () => {
       expect((bubble!.metadata as { botFailure?: unknown }).botFailure).toBe(true)
     })
   })
+
+  it.each([
+    ['gateBroken', 'next_not_called', { index: 0, agent: 'my-intent' }],
+    ['gateTimeout', 'step_timeout', { index: 0, agent: 'my-intent' }],
+    ['taskTimeout', 'step_timeout', { index: 1, agent: 'coding' }],
+    ['taskFailed', 'next_not_called', { index: 1, agent: 'coding' }],
+    ['stepNoAgent', 'unknown_agent', { index: 1, agent: 'ghost' }]
+  ])(
+    'A2-B14d 宿主按 errorCode / errorStep 选的失败句 bot.%s → metadata.botFailure === true',
+    async (key, code, step) => {
+      // 五句新文案与 runFailed 走同一条落树路径（error: true 侧车）—— 投影贯通的验收面在
+      // 这里：任何一句漏了侧车，失败卡样式就只剩 runFailed 有
+      const name = `hf-${key.toLowerCase()}`
+      writeBot(name, { displayName: 'HF', agents: { intent: 'my-intent', task: 'coding' } })
+      seedSession([name])
+      mocks.invoke.mockResolvedValue({
+        started: true,
+        ok: false,
+        error: `${code} at ${step.agent}`,
+        errorCode: code,
+        errorStep: step
+      })
+      await prompt('这条会失败')
+
+      const msgs = await messageService.listBySession(SID)
+      const replies = msgs.filter((m) => m.role === 'assistant')
+      expect(replies.map((m) => m.content)).toEqual([`bot.${key}`])
+      expect((replies[0].metadata as { botFailure?: unknown }).botFailure).toBe(true)
+    }
+  )
 })
 
 // ────────────────────────── BR：广播与重开同源 ──────────────────────────

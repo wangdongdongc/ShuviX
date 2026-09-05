@@ -164,6 +164,24 @@ export interface WorkflowInvokeResult {
   ok?: boolean
   output?: unknown
   error?: string
+  /**
+   * 失败的机器可读归类（started 且 !ok 时可能有）：脚本里 `run()` 抛出的 `e.code`
+   * （`unknown_agent` / `step_timeout` / `step_aborted` / `next_not_called`）、调用方经
+   * `extraApi` 装配的函数抛出的 code（bot 路径的 `mailbox_*`）、或 run 级收尾的
+   * `run_timeout` / `run_aborted`。脚本自己 `throw new Error()` / `fail()` 的没有 code。
+   *
+   * **宿主据此选文案与记账，脚本不必为了报告失败而 try/catch** —— 失败从脚本里原样抛
+   * 出去就是可见的，而且比脚本转述更准（code 是引擎判的，不是脚本猜的）。
+   */
+  errorCode?: string
+  /** 抛出那个错的派发步：本 run 里第几次 `run()`（从 0 数）与它派发的 agent 名 */
+  errorStep?: WorkflowErrorStep
+}
+
+/** 一次派发步的身份 —— 挂在 `run()` 抛出的错误上（`e.step`），随失败结果交回调用方 */
+export interface WorkflowErrorStep {
+  index: number
+  agent: string
 }
 
 /** 一次运行的只读快照（Monitor / 宿主中止面 / 测试） */
@@ -239,10 +257,54 @@ interface RunOpts {
   timeoutSec?: unknown
   /** 宿主给出的不透明附件句柄（见 `resolveAttachments`）——脚本只转交，不解释内容 */
   attach?: unknown
+  /**
+   * `'prose'`：带 `schema` 的一步跑完了却没调 `next` 时，**交回它的散文而不是抛
+   * `next_not_called`**（散文为空仍抛）。给「有人在等答案、无形状的回答也胜过没有回答」
+   * 的收尾步用；超时与被中止不在此列 —— 那是故障，照抛。
+   */
+  fallback?: unknown
 }
 
 function errText(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
+}
+
+/** 错误上的机器可读归类；脚本自己 `throw` 的 / 非 Error 值没有 */
+function errCode(err: unknown): string | undefined {
+  const code = (err as { code?: unknown } | null | undefined)?.code
+  return typeof code === 'string' && code ? code : undefined
+}
+
+/** 错误上挂着的派发步身份（`run()` 抛出的错才有） */
+function errStep(err: unknown): WorkflowErrorStep | undefined {
+  const step = (err as { step?: unknown } | null | undefined)?.step
+  if (typeof step !== 'object' || step === null) return undefined
+  const { index, agent } = step as { index?: unknown; agent?: unknown }
+  return Number.isInteger(index) && typeof agent === 'string'
+    ? { index: index as number, agent }
+    : undefined
+}
+
+/**
+ * 给 `run()` 里抛出的错挂上派发步身份。只挂在还没有的错上：错误对象一路原样上抛，
+ * 脚本 catch 后 rethrow 的还是同一个对象，不会被更外层的 run 改写。
+ */
+function withStep(err: unknown, step: WorkflowErrorStep): unknown {
+  if (typeof err === 'object' && err !== null && !('step' in err)) {
+    ;(err as { step?: WorkflowErrorStep }).step = step
+  }
+  return err
+}
+
+/** run 级中止/超时的错误 —— 带 code，宿主据此区分「墙钟到了」与「有人按了停止」 */
+function runStopError(reason: 'timeout' | 'aborted', maxDurationSec: number): Error {
+  const err = new Error(
+    reason === 'timeout'
+      ? `workflow run timed out after ${maxDurationSec}s`
+      : 'workflow run aborted'
+  ) as Error & { code?: string }
+  err.code = reason === 'timeout' ? 'run_timeout' : 'run_aborted'
+  return err
 }
 
 /** 深冻结（脚本侧的 event/vars/schemas 只读；跨 vm realm 的防御性质，不是安全边界） */
@@ -402,21 +464,33 @@ export function createWorkflowEngine(deps: WorkflowEngineDeps): WorkflowEngine {
       }
 
       const runAgent = async (ref: unknown, prompt: unknown, opts?: RunOpts): Promise<unknown> => {
-        if (controller.signal.aborted) throw new Error('workflow run aborted')
+        if (controller.signal.aborted) throw runStopError('aborted', limits.maxDurationSec)
         if (typeof ref !== 'string' || !ref.trim()) {
           throw new Error('run(agent, prompt): agent ref must be a non-empty string')
         }
         if (typeof prompt !== 'string' || !prompt.trim()) {
           throw new Error('run(agent, prompt): prompt must be a non-empty string')
         }
-        if (++agentCount > limits.maxAgents) {
-          throw new Error(`workflow agent limit reached (maxAgents=${limits.maxAgents})`)
-        }
         const schema = opts?.schema
         if (schema !== undefined) {
           const schemaError = validateContractSchema(schema)
           if (schemaError) throw new Error(`run(): ${schemaError}`)
         }
+        const fallback = opts?.fallback
+        if (fallback !== undefined && fallback !== 'prose') {
+          throw new Error("run(): opts.fallback must be 'prose' when given")
+        }
+        if (opts?.tools !== undefined && !Array.isArray(opts.tools)) {
+          throw new Error('run(): opts.tools must be a string array')
+        }
+        // 入参校验全部过了才占号：一次写错选项的调用是脚本的编程错误，不是一次派发，
+        // 不该让后面的步号跳一格（步号是 errorStep.index，宿主拿它归因）
+        if (++agentCount > limits.maxAgents) {
+          throw new Error(`workflow agent limit reached (maxAgents=${limits.maxAgents})`)
+        }
+        // 本步的身份：第几次派发 + 派发的 agent。挂在这一步抛出的每个错上（`e.step`），
+        // 随失败结果交回调用方 —— 宿主据此知道「坏在哪一段」，脚本不必为此 catch 后转述
+        const step: WorkflowErrorStep = { index: agentCount - 1, agent: ref.trim() }
         await acquire()
         try {
           const profile = deps.resolveAgentProfile(ref.trim())
@@ -429,6 +503,7 @@ export function createWorkflowEngine(deps: WorkflowEngineDeps): WorkflowEngine {
             unknownAgent.code = 'unknown_agent'
             throw unknownAgent
           }
+          step.agent = profile.name
           // opts.tools = 与档案白名单取交集（缺省 = 档案全量）：让一份通用 agent 在这一步
           // 只做窄任务，少给几个工具 = 少一点跑偏与噪声。**不是一道权限闸** —— 档案白名单
           // 不是权限集，agent 能做什么由策略引擎逐次判定，少给工具不改变其中任何一次判定。
@@ -437,9 +512,7 @@ export function createWorkflowEngine(deps: WorkflowEngineDeps): WorkflowEngine {
           // 撞名拒装配同一条纪律）。
           // 两侧统一小写比较：mcp:/skill: 名的余部大小写保留在档案侧，收窄判定不因此漏配
           let tools = [...profile.tools]
-          if (opts?.tools !== undefined) {
-            if (!Array.isArray(opts.tools))
-              throw new Error('run(): opts.tools must be a string array')
+          if (Array.isArray(opts?.tools)) {
             const allow = new Set(opts.tools.map((t) => String(t).toLowerCase()))
             tools = tools.filter((t) => allow.has(t.toLowerCase()))
           }
@@ -535,12 +608,22 @@ export function createWorkflowEngine(deps: WorkflowEngineDeps): WorkflowEngine {
             }
             if (schema !== undefined) {
               if (res.structured === undefined) {
+                // 走到这里 `stepStop` 必为 null（超时与中止在上面已经抛掉），所以只剩一种：
+                // 模型自己跑完了却没交结构化结果。
+                //
+                // `fallback: 'prose'`：这一步的散文就是结果 —— 给「有人在等答案」的收尾步，
+                // 无形状的回答胜过没有回答；散文为空则没有可交的东西，照常按契约破损抛
+                if (fallback === 'prose' && res.result.trim()) {
+                  record({
+                    type: 'log',
+                    message: `agent "${profile.name}" finished without calling \`next\` — returning its prose instead (fallback: prose)`
+                  })
+                  return res.result
+                }
                 // 可编程失败（设计 §5.5）：脚本 catch 后可读 e.code / e.finalText 降级使用散文结果。
                 // 用属性而非错误子类 —— 错误对象要跨脚本膜（vm realm），instanceof 不可靠。
-                //
-                // 走到这里 `stepStop` 必为 null（超时与中止在上面已经抛掉），所以只剩一种：
-                // 模型自己跑完了却没交结构化结果。三种 code 对脚本的意味完全不同 ——
-                // 故障要出声或让位，被中止要安静退出，而这一种是契约破损
+                // 三种 code 对脚本的意味完全不同 —— 故障要出声或让位，被中止要安静退出，
+                // 而这一种是契约破损
                 const err = new Error(
                   `agent "${profile.name}" finished without calling \`next\` — transcript tail: ${res.result.slice(0, 300)}`
                 ) as Error & { code?: string; finalText?: string }
@@ -555,6 +638,8 @@ export function createWorkflowEngine(deps: WorkflowEngineDeps): WorkflowEngine {
             clearTimeout(stepTimeout)
             controller.signal.removeEventListener('abort', onRunAbort)
           }
+        } catch (err) {
+          throw withStep(err, step)
         } finally {
           release()
         }
@@ -589,7 +674,8 @@ export function createWorkflowEngine(deps: WorkflowEngineDeps): WorkflowEngine {
             event: frozenEvent,
             ...(extras && typeof extras === 'object' ? jsonClone(extras as object) : {})
           }
-          return renderPromptTemplate(template, scope)
+          // 块之间的 `{{>name}}` 引用在同一作用域里渲染（promptTemplate.ts）
+          return renderPromptTemplate(template, scope, file.prompts)
         },
         run: runAgent,
         /** 并发辅助：单项失败落为 null（不整体 reject）；并发上限由 run() 内的信号量统一约束 */
@@ -614,7 +700,7 @@ export function createWorkflowEngine(deps: WorkflowEngineDeps): WorkflowEngine {
             // 少了这一条，`while (true) { await sleep(1000) }` 会在 run 记录为「已收尾」
             // 之后永远跑下去 —— run() 首行的同一条守卫，sleep 也要有
             if (controller.signal.aborted) {
-              reject(new Error('workflow run aborted'))
+              reject(runStopError('aborted', limits.maxDurationSec))
               return
             }
             const delay = Math.max(0, Number(ms) || 0)
@@ -623,7 +709,7 @@ export function createWorkflowEngine(deps: WorkflowEngineDeps): WorkflowEngine {
               'abort',
               () => {
                 clearTimeout(timer)
-                reject(new Error('workflow run aborted'))
+                reject(runStopError('aborted', limits.maxDurationSec))
               },
               { once: true }
             )
@@ -670,14 +756,7 @@ export function createWorkflowEngine(deps: WorkflowEngineDeps): WorkflowEngine {
       const output = await Promise.race([
         exec,
         new Promise<never>((_, reject) => {
-          const rejectAborted = (): void =>
-            reject(
-              new Error(
-                abortReason === 'timeout'
-                  ? `workflow run timed out after ${limits.maxDurationSec}s`
-                  : 'workflow run aborted'
-              )
-            )
+          const rejectAborted = (): void => reject(runStopError(abortReason, limits.maxDurationSec))
           // **已 abort 的 signal 不会再派发 abort 事件** —— 少了这一条同步分支，
           // 「传入一个已 aborted 的 signal」会让这一路永不 reject、setTimeout 也因
           // 已 abort 而成空操作：整张墙钟安全网失效，run 与分道被永久占住
@@ -689,9 +768,24 @@ export function createWorkflowEngine(deps: WorkflowEngineDeps): WorkflowEngine {
       logger?.info(`workflow "${name}" run=${runId} ok (${Date.now() - startedAt}ms)`)
       result = { runId, started: true, ok: true, output: jsonClone(output) }
     } catch (err) {
-      record({ type: 'end', ok: false, ms: Date.now() - startedAt, error: errText(err) })
+      // 归类与出错的步随失败一起交回 —— 调用方（bot 宿主）据此选文案、记门控健康，
+      // 脚本因此不必为了报告失败而 catch；journal 的 end 记录同样带上，排查时不用翻 log
+      const code = errCode(err)
+      const failedStep = errStep(err)
+      const failure = {
+        ...(code ? { errorCode: code } : {}),
+        ...(failedStep ? { errorStep: failedStep } : {})
+      }
+      record({
+        type: 'end',
+        ok: false,
+        ms: Date.now() - startedAt,
+        error: errText(err),
+        ...(code ? { code } : {}),
+        ...(failedStep ? { step: failedStep } : {})
+      })
       logger?.warn(`workflow "${name}" run=${runId} failed: ${errText(err)}`)
-      result = { runId, started: true, ok: false, error: errText(err) }
+      result = { runId, started: true, ok: false, error: errText(err), ...failure }
     } finally {
       // race 输掉/超时后脚本稍后才 settle 时不留 unhandled rejection
       exec?.catch(() => {})

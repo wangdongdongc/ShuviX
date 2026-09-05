@@ -39,7 +39,7 @@ shuvix-workflow-input:
 ## 这是什么
 
 聊天会话里的每个 bot、每条消息都跑一遍这份文件。它就是一个 bot 做的全部事情,按序:
-判定要不要说话、裁定这条消息归谁、作答。
+判定这条消息对它意味着什么,然后作答。
 
 bot 是一份绑定,不是一个 agent:它的 md 指向这份管线,并用 agent 定义填满管线的**槽位**
 (`shuvix-bot-pipeline: {workflow: bot-chat, agents: {intent: …, task: …}}`)。bot md 的正文 —— 它的人设与它学到的东西 ——
@@ -58,229 +58,98 @@ API。从别处启动它,它会在第一个名字上失败,和任何脚本踩到
 
 ## 管线
 
-一切都从 `input.*` 上读。脚本作用域里是基础 API 加上调用方装配的那两个
-(`say` / `turn`)—— 它**不会**摊平 `input`,裸写 `message` 或 `agents`
-是 ReferenceError。摊平只发生在 `md prompt=` 块的渲染作用域里。
+脚本就是流程图,别的什么都不是:意图 → 不归我 / 一句话 / 真干活。一切都从 `input.*`
+上读 —— 脚本作用域里是基础 API 加上调用方装配的那两个(`say` / `turn`),它**不会**
+摊平 `input`;摊平只发生在 `md prompt=` 块的渲染作用域里,而提示词的每一个字都住在那些块里。
 
-**可选上下文是嵌套提示词,不是裸占位符。** 模板语言只有一样东西 —— `{{path}}`,
-没有条件没有循环 —— 一行只有当整行都是占位符时才会消失。所以要跟着值一起消失的标题,
-必须住在那个值**里面**:每个可选小节各是一个 `md prompt=` 块,脚本把它变成
-「要么完整要么为空」的一个字符串。
+**这里不接住任何错误。** 哪一段超时、破坏契约、或指向一个不存在的 agent,就抛出去;
+run 结束,宿主在聊天里说出来,措辞按失败的归类选(哪一段、坏在哪)。沉默只留给一件事:
+门控判定这条消息不归这个 bot。
 
 ```js workflow
-// ── The material. Prompts are prose and live in the blocks below; the script only picks.
-const recent = (input.window || []).slice(-vars.gateWindow)
-const otherLines = (input.session.others || []).map(function (o) {
-  return '- ' + o.displayName + ': ' + o.description
-})
+// The flow, top to bottom. Every prompt is a block below; every failure simply throws —
+// the host says so in the chat, with wording picked from the failure's code.
+const window = input.window || []
 
-// A message that named this bot — or that answers its own clarify — is addressed to it:
-// silence is not on the table and `ignore` is not on the contract. Every other message goes
-// through the normal gate, where this bot decides for itself whether it has anything to say.
-const solo = input.session.directed
+// 1 ── Intent: one tool-less call decides what this message is to this bot. A message that
+//      named the bot, or answers its own clarify, gets the directed prompt and contract —
+//      the ones without `ignore`.
+const directed = input.session.directed
+const intent = await run(
+  input.agents.intent,
+  prompt(directed ? 'gateDirected' : 'gate', { window: window.slice(-vars.gateWindow) }),
+  {
+    schema: directed ? schemas.intentDirected : schemas.intent,
+    tools: [],
+    timeoutSec: vars.gateTimeoutSec
+  }
+)
 
-const othersBlock = otherLines.length ? prompt('others', { others: otherLines }) : ''
-const windowBlock = recent.length ? prompt('window', { window: recent }) : ''
-const addressed = solo ? prompt('addressed') : ''
+// 2 ── Not for this bot: the one silence a bot is allowed.
+if (intent.decision === 'ignore') return { outcome: 'ignored' }
 
-// 1 ── The gate. One call, no tools, a minute of wall clock. The bot's own profile — persona
-//      and memory — is not in this prompt: the host appends it to the system prompt of every
-//      agent this run dispatches, the gate included.
-let intent = null
-let failure = null
-try {
-  intent = await run(
-    input.agents.intent,
-    prompt('gate', {
-      othersBlock: othersBlock,
-      windowBlock: windowBlock,
-      addressed: addressed
-    }),
-    {
-      schema: solo ? schemas.intentSolo : schemas.intent,
-      // Narrows whatever the profile declares down to nothing. The builtin gate declares no
-      // tools already; this line is what keeps a user's own override of it from growing any.
-      tools: [],
-      timeoutSec: vars.gateTimeoutSec
-    }
-  )
-} catch (e) {
-  const code = e && e.code
-  // Being torn down is not evidence that the gate is broken: a faster bot won this message,
-  // or the session was stopped. Yielding is the correct outcome and it costs nothing.
-  if (code === 'step_aborted') return { outcome: 'aborted' }
-  if (code !== 'next_not_called' && code !== 'step_timeout') throw e
-  failure = code === 'step_timeout' ? 'timeout' : 'broken'
-  log('gate ' + failure + ': ' + String((e && e.message) || e))
-}
-
-// 2 ── A broken contract or a timeout is a **fault, not a verdict**, and every bot answers
-//      for its own ending: say so. Silence is reserved for one thing only — the gate deciding
-//      this message was not for this bot.
-if (!intent) {
-  await say(prompt(failure === 'timeout' ? 'gateTimeout' : 'gateBroken'), { error: true })
-  return { gate: failure, outcome: 'gate-' + failure }
-}
-
-// 3 ── The gate judged this message is not for this bot. That is the one silence a bot is
-//      allowed: no message, no notice, just a line in the run journal.
-if (intent.decision === 'ignore') {
-  return { gate: 'ok', outcome: 'ignored' }
-}
-
-// 4 ── Anything answerable in one line is answered here — don't open a task for it.
+// 3 ── Answerable in one line (reply / clarify): say it, no task.
 if (intent.decision !== 'task') {
-  const line = typeof intent.reply === 'string' ? intent.reply.trim() : ''
-  if (!line) {
-    // It said it would speak and then wrote nothing. Same class of fault as never calling
-    // `next` — and it already committed to answering.
-    await say(prompt('gateBroken'), { error: true })
-    return { gate: 'broken', outcome: 'gate-broken' }
-  }
-  await say(line, { decision: intent.decision })
-  return { gate: 'ok', outcome: intent.decision }
+  await say(intent.reply, { decision: intent.decision })
+  return { outcome: intent.decision }
 }
 
-// 5 ── Take this bot's turn in this session: one job at a time, in arrival order.
-return await turn(async function (slot) {
-  if (slot.superseded.length) log('merged ' + slot.superseded.join(','))
-
-  // Queued behind our own reply: that reply may already have covered this one.
-  if (vars.recheckStale && slot.selfReplied) {
-    const second = await recheck(slot, windowBlock)
-    if (second && second.verdict === 'skip') {
-      const line = typeof second.reply === 'string' ? second.reply.trim() : ''
-      // Always one line out loud — a skip that says nothing is indistinguishable from a
-      // dropped message.
-      await say(line || prompt('recheckSkipped'), { decision: 'reply' })
-      return { gate: 'ok', outcome: 'recheck-skipped', queuedMs: slot.queuedMs }
-    }
-  }
-
-  // 6 ── The work itself. `input.agents.task` is whichever agent md the bot put in that slot:
-  //      its own body is the system prompt, its own `shuvix-tools` the tool list, and the
-  //      bot's profile rides along on the system prompt. There is deliberately no `tools`
-  //      option here — narrowing it would overrule what that agent md said about itself, and
-  //      unlike the gate (a shared builtin) this slot was chosen for exactly this job.
-  const objective = (intent.task && intent.task.objective) || intent.reason
-  const boundaries = (intent.task && intent.task.boundaries) || ''
-  const taskLines = (input.window || []).slice(-vars.taskWindow)
-  // Handles, not bytes (the script's own input is written to the run journal verbatim).
-  // Nothing in the prompt announces them: whatever the host manages to fetch arrives as a
-  // real user message in context, and a sentence claiming "2 images are above" would be a
-  // lie on exactly the runs where the fetch failed.
-  const attached = (input.message && input.message.attachments) || []
-
-  let reply = null
-  try {
-    reply = await run(
-      input.agents.task,
-      prompt('task', {
-        objective: objective,
-        boundariesBlock: boundaries ? prompt('boundaries', { boundaries: boundaries }) : '',
-        windowBlock: taskLines.length ? prompt('window', { window: taskLines }) : '',
-        sinceBlock: slot.since && slot.since.length ? prompt('since', { since: slot.since }) : ''
-      }),
-      {
-        schema: schemas.reply,
-        timeoutSec: vars.taskTimeoutSec,
-        // Whatever the user attached to the message. These are opaque handles, not bytes:
-        // the script's own input is written into the run journal verbatim, so images travel
-        // by reference and the host fetches them at dispatch.
-        attach: attached
-      }
-    )
-  } catch (e) {
-    const code = e && e.code
-    // Someone stopped the session, or this run lost its place. Saying so would be noise.
-    if (code === 'step_aborted') return { gate: 'ok', outcome: 'aborted', queuedMs: slot.queuedMs }
-
-    // It did the work and then wrote prose instead of filling in the contract. Someone is
-    // waiting for an answer, and an answer with no shape beats no answer at all — so the
-    // first line becomes the conclusion and the rest becomes the explanation.
-    // A task agent that does not exist is a configuration mistake, not a run that broke:
-    // retrying will never fix it, and "it broke partway through" sends the reader looking at
-    // the wrong thing.
-    if (code === 'unknown_agent') {
-      await say(prompt('taskNoAgent', { agent: String(input.agents.task) }), { error: true })
-      return { gate: 'ok', outcome: 'task-no-agent', queuedMs: slot.queuedMs }
-    }
-
-    const prose = ((e && e.finalText) || '').trim()
-    if (code === 'next_not_called' && prose) {
-      await say(wrapProse(prose), { decision: 'task' })
-      return { gate: 'ok', outcome: 'task-unshaped', queuedMs: slot.queuedMs }
-    }
-
-    // Nothing usable came back. The failure has to be said out loud — silence here is
-    // indistinguishable from a dropped message, and this bot already took the turn.
-    await say(prompt(code === 'step_timeout' ? 'taskTimeout' : 'taskFailed'), { error: true })
-    return {
-      gate: 'ok',
-      outcome: code === 'step_timeout' ? 'task-timeout' : 'task-failed',
-      queuedMs: slot.queuedMs
-    }
-  }
-
-  await say(reply, { decision: 'task' })
-  return { gate: 'ok', outcome: 'task', queuedMs: slot.queuedMs, superseded: slot.superseded }
-})
-
-// ── helpers ──────────────────────────────────────────────────────────────────
-
-/** Prose with no shape → the least shape a reply is allowed to have. The first line carries
- *  the conclusion often enough to be worth promoting to one; a leading `#` is markdown
- *  furniture rather than a headline, so it goes. The last resort matters more than it looks:
- *  a `wrapProse` that returns an empty headline would make `say` throw **inside the
- *  degradation path**, turning "answer with no shape" into "no answer". */
-function wrapProse(text) {
-  const lines = text.split('\n')
-  let i = 0
-  while (i < lines.length && !stripHeading(lines[i])) i++
-  const first = stripHeading(lines[i] || '')
-  if (!first) return { headline: text.trim().slice(0, 200) }
-  const rest = lines
-    .slice(i + 1)
-    .join('\n')
-    .trim()
-  return rest ? { headline: first, body: rest } : { headline: first }
-}
-
-function stripHeading(line) {
-  return String(line || '')
-    .replace(/^#+\s*/, '')
-    .trim()
-}
-
-/** The dequeue re-check. Failing it means proceeding: the queued request was going to be done
- *  anyway, and the check only ever saves a repeat. */
-async function recheck(slot, windowBlock) {
-  const sinceLines = (slot.since || []).slice(-vars.gateWindow)
-  try {
-    return await run(
-      input.agents.recheck || input.agents.intent,
-      prompt('recheck', {
-        windowBlock: windowBlock,
-        sinceBlock: sinceLines.length ? prompt('since', { since: sinceLines }) : ''
-      }),
-      { schema: schemas.recheck, tools: [], timeoutSec: vars.gateTimeoutSec }
-    )
-  } catch (e) {
-    if (e && e.code === 'step_aborted') throw e
-    log('recheck skipped: ' + String((e && e.code) || (e && e.message) || e))
-    return null
+// 4 ── Work needs this bot's turn in this session: one job at a time, in arrival order.
+//      Queued behind a reply of its own, the bot first re-checks whether that reply already
+//      covered this one; a re-check that fails just means proceeding.
+const slot = await turn()
+if (vars.recheckStale && slot.selfReplied) {
+  const again = await run(
+    input.agents.recheck || input.agents.intent,
+    prompt('recheck', {
+      window: window.slice(-vars.gateWindow),
+      since: slot.since.slice(-vars.gateWindow)
+    }),
+    { schema: schemas.recheck, tools: [], timeoutSec: vars.gateTimeoutSec }
+  ).catch(() => null)
+  if (again && again.verdict === 'skip') {
+    await say(again.reply || prompt('recheckSkipped'), { decision: 'reply' })
+    return { outcome: 'recheck-skipped', queuedMs: slot.queuedMs }
   }
 }
+
+// 5 ── The task agent — whichever agent md the bot put in that slot, with its own tools —
+//      does the work and answers. Prose instead of the contract still ships: someone is
+//      waiting, and an answer with no shape beats no answer.
+const reply = await run(
+  input.agents.task,
+  prompt('task', {
+    task: intent.task || { objective: intent.reason },
+    window: window.slice(-vars.taskWindow),
+    since: slot.since
+  }),
+  {
+    schema: schemas.reply,
+    timeoutSec: vars.taskTimeoutSec,
+    attach: input.message.attachments,
+    fallback: 'prose'
+  }
+)
+await say(reply, { decision: 'task' })
+return { outcome: 'task', queuedMs: slot.queuedMs, superseded: slot.superseded }
 ```
 
-在这里抛出的任何东西都会结束这个 run,而且会话会在聊天里说出来 —— 失败从不沉默。
-沉默只留给一件事:门控判定这条消息不归这个 bot。
+几处容易被「好心修掉」的选择,先说明白:
+
+- 任务段**不给 `tools` 选项**。`input.agents.task` 是 bot 在那个槽位填的那份 agent md;
+  在这里收窄它的工具等于替那份 md 改口。门控收窄到零工具,是因为它是共享的内置件,
+  职责只是一份结构化裁决。
+- `attach` 传的是**句柄不是字节**,也没有哪段提示词宣告它们:宿主取到什么,就以一条真实的
+  用户消息进上下文;一句「上面有 2 张图」恰恰会在取失败的那些 run 上撒谎。
+- 任务段的 `fallback: 'prose'` 意味着:任务段 agent 把答案写成散文而没调 `next`,答案照样
+  以普通消息交出。
+- 复核刻意吞掉自己的失败:它只可能省掉一次重复,复核坏了就去做本来就要做的活。
 
 ## 契约
 
 每个交回数据的段以调用 `next` 收尾,对象形状取自下面这些块(这条指令连同 schema 本身
-在派发时附加)。只有当别的 bot 还能接住这条消息时,门控才会被给到 `ignore`:
-一对一会话里,沉默与坏掉的 bot 无从分辨。
+在派发时附加)。只有当这条消息不是冲这个 bot 来的,门控才会被给到 `ignore`:
+点了名、或在回答它自己的追问的消息,拿到的是 `intentDirected`。
 
 ```json schema=intent
 {
@@ -295,6 +164,7 @@ async function recheck(slot, windowBlock) {
     "reply": { "type": "string", "description": "The reply itself, for decision reply or clarify" },
     "task": {
       "type": "object",
+      "required": ["objective"],
       "properties": {
         "objective": { "type": "string" },
         "boundaries": { "type": "string" }
@@ -304,7 +174,7 @@ async function recheck(slot, windowBlock) {
 }
 ```
 
-```json schema=intentSolo
+```json schema=intentDirected
 {
   "type": "object",
   "required": ["decision", "reason"],
@@ -317,6 +187,7 @@ async function recheck(slot, windowBlock) {
     "reply": { "type": "string" },
     "task": {
       "type": "object",
+      "required": ["objective"],
       "properties": {
         "objective": { "type": "string" },
         "boundaries": { "type": "string" }
@@ -370,6 +241,11 @@ async function recheck(slot, windowBlock) {
 各段的原话。全部是可编辑的散文:把这份文件拷到 `~/.shuvix/workflows/bot-chat.md`,
 它就是你的了。
 
+`{{path}}` 读这次 run 的 `input`(顶层摊平),外加 `vars`、`event`,以及脚本作为第二个参数
+传给 `prompt()` 的东西 —— 切好的 `window` 就来自那里。`{{>name}}` 把这份文件里的另一个块
+在同一作用域里渲染后贴进来;贴进来的块若占位符全空,就整块消失,连标题一起。下面的可选小节
+就是这么工作的:`others` 只在有其他 bot 时出现,`since` 只在请求排队期间发生了事情时出现。
+
 ```md prompt=gate
 聊天会话里刚到了一条消息。替这个 bot 决定拿它怎么办。
 
@@ -377,28 +253,28 @@ async function recheck(slot, windowBlock) {
 
 {{bot.displayName}} —— {{bot.description}}
 
-{{othersBlock}}
+{{>others}}
 
-{{addressed}}
-
-{{windowBlock}}
+{{>window}}
 
 ## 新消息
 
 {{message.text}}
 ```
 
+```md prompt=gateDirected
+{{>gate}}
+
+这条消息就是冲这个 bot 来的 —— 它被点了名,或这条消息在回答它刚问出的问题。
+作答不是可选项,契约里也没有 `ignore`。
+```
+
 ```md prompt=others
 ## 会话里的其他 bot
 
-{{others}}
+{{session.others}}
 
 这些 bot 也看得到这条消息。明显冲着其中某个去的,是它的,不是你的。
-```
-
-```md prompt=addressed
-这条消息就是冲这个 bot 来的 —— 它被点了名,或这条消息在回答它刚问出的问题。
-作答不是可选项,契约里也没有 `ignore`。
 ```
 
 ```md prompt=window
@@ -415,13 +291,13 @@ async function recheck(slot, windowBlock) {
 
 {{bot.displayName}} —— {{bot.description}}
 
-{{windowBlock}}
+{{>window}}
 
 ## 排队的那条消息
 
 {{message.text}}
 
-{{sinceBlock}}
+{{>since}}
 ```
 
 ```md prompt=since
@@ -434,15 +310,6 @@ async function recheck(slot, windowBlock) {
 我刚才那条回复已经把这件事覆盖了 —— 这条就不再另答了。
 ```
 
-```md prompt=gateBroken
-我没能弄明白该怎么接这条 —— 我负责拿主意的那部分交回了一个我读不懂的形状。
-再问一次,或者换个说法。
-```
-
-```md prompt=gateTimeout
-我在「怎么接这条」上花了太久,放弃了。还要紧的话,再问一次。
-```
-
 ```md prompt=task
 你在替这个 bot 回答聊天会话里的一条消息。先把活干了,再作答。
 
@@ -450,19 +317,19 @@ async function recheck(slot, windowBlock) {
 
 {{bot.displayName}} —— {{bot.description}}
 
-{{windowBlock}}
+{{>window}}
 
 ## 这条消息
 
 {{message.text}}
 
-{{sinceBlock}}
+{{>since}}
 
 ## 你判定它需要什么
 
-{{objective}}
+{{task.objective}}
 
-{{boundariesBlock}}
+{{>boundaries}}
 
 ## 作答
 
@@ -477,18 +344,5 @@ async function recheck(slot, windowBlock) {
 ```md prompt=boundaries
 ### 边界之内
 
-{{boundaries}}
-```
-
-```md prompt=taskNoAgent
-我被配置成把这类活交给 `{{agent}}`,而这个 agent 并不存在。这是我这边的配置问题 ——
-修好之前,再问也没用。
-```
-
-```md prompt=taskTimeout
-这件事我做满了被允许的时长,没能做完。还要紧的话再问一次 —— 把范围收窄会有帮助。
-```
-
-```md prompt=taskFailed
-这件事我接了,半路坏掉了。什么都没做完,这一条别指望我交出任何东西。
+{{task.boundaries}}
 ```

@@ -37,7 +37,16 @@ export const nodeVmScriptEngine: WorkflowScriptEngine = {
     const context = vm.createContext(Object.assign(Object.create(null), api))
     const script = new vm.Script(wrap(source), { filename: 'workflow-script' })
     const result: unknown = script.runInContext(context, { timeout: SYNC_TIMEOUT_MS })
-    if (opts.signal.aborted) throw new Error('workflow run aborted')
+    if (opts.signal.aborted) {
+      // 同步段跑完时 run 已经被中止。脚本的 Promise 还挂着（它的首个 run() 会以 run_aborted
+      // 拒绝），不接住它就是一条无归属的 unhandled rejection；抛出的错带 code —— 引擎的
+      // race 分支对已 aborted 的 signal 同步拒绝，但 exec 在 race 里排在前面，赢的是这一个，
+      // 所以它的归类必须与那一路相同，调用方才不会把「有人按了停止」读成认不出的失败
+      Promise.resolve(result).catch(() => {})
+      const aborted = new Error('workflow run aborted') as Error & { code?: string }
+      aborted.code = 'run_aborted'
+      throw aborted
+    }
     return await Promise.resolve(result)
   }
 }

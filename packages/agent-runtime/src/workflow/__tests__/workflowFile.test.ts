@@ -567,3 +567,118 @@ describe('提示词块（```md prompt=<name>）', () => {
     expect(parsed?.prompts).toEqual({})
   })
 })
+
+/**
+ * prompt 块之间的 `{{>name}}` 引用在解析期校验（checkPromptIncludes）：指向不存在的块、
+ * 或引用成环 → 整份拒绝。与 schema 块同一条纪律 —— 渲染期静默成空会让 prompt() 悄悄
+ * 少一段，而模型只会「答得不太对」。成环报的是整条环路（从第一次重复的名字截起），
+ * 读到就知道该断哪一条；DAG 的汇合点（done 态）不得误判成环。
+ */
+describe('提示词块引用校验（{{>name}}）', () => {
+  const promptBlock = (name: string, ...lines: string[]): string[] => [
+    `\`\`\`md prompt=${name}`,
+    ...lines,
+    '```'
+  ]
+  /** 若干 prompt 块 + 缺省脚本块 */
+  const withPrompts = (...blocks: string[][]): ReturnType<typeof parse> =>
+    parse(md(fm(), [...blocks.flat(), '', SCRIPT_BLOCK]))
+
+  it('WF-1 引用不存在的块 → 整份拒绝：点名引用者与被引用名，提示补一个 md prompt=<name> 块', () => {
+    const { parsed, warns } = withPrompts(promptBlock('gate', '## Others', '{{>others}}'))
+    expect(parsed).toBeNull()
+    expect(warns).toHaveLength(1)
+    expect(warns[0]).toContain("prompt block 'gate' includes unknown prompt block 'others'")
+    expect(warns[0]).toContain('md prompt=others')
+    expect(warns[0]).toContain('the whole file is rejected')
+  })
+
+  it('WF-2 自引 a→a → 整份拒绝，消息报 cycle: a -> a', () => {
+    const { parsed, warns } = withPrompts(promptBlock('a', 'A', '{{>a}}'))
+    expect(parsed).toBeNull()
+    expect(warns[0]).toContain('cycle: a -> a')
+  })
+
+  it('WF-3 双环 a→b→a → cycle: a -> b -> a', () => {
+    const { parsed, warns } = withPrompts(promptBlock('a', '{{>b}}'), promptBlock('b', '{{>a}}'))
+    expect(parsed).toBeNull()
+    expect(warns[0]).toContain('cycle: a -> b -> a')
+  })
+
+  it('WF-4 尾环 a→b→c→b → 只报环本身 b -> c -> b，不以 a 起头', () => {
+    const { parsed, warns } = withPrompts(
+      promptBlock('a', '{{>b}}'),
+      promptBlock('b', '{{>c}}'),
+      promptBlock('c', '{{>b}}')
+    )
+    expect(parsed).toBeNull()
+    expect(warns[0]).toContain('cycle: b -> c -> b')
+    expect(warns[0]).not.toContain('a -> b')
+  })
+
+  it('WF-5 菱形 DAG（a→b, a→c, b→d, c→d）与三层链合法：汇合点不误判成环，prompts 各块齐全', () => {
+    const diamond = withPrompts(
+      promptBlock('a', '{{>b}}', '{{>c}}'),
+      promptBlock('b', '{{>d}}'),
+      promptBlock('c', '{{>d}}'),
+      promptBlock('d', 'leaf {{x}}')
+    )
+    expect(diamond.warns).toEqual([])
+    expect(diamond.parsed?.prompts).toEqual({
+      a: '{{>b}}\n{{>c}}',
+      b: '{{>d}}',
+      c: '{{>d}}',
+      d: 'leaf {{x}}'
+    })
+
+    const chain = withPrompts(
+      promptBlock('a', '{{>b}}'),
+      promptBlock('b', '{{>c}}'),
+      promptBlock('c', 'leaf')
+    )
+    expect(chain.warns).toEqual([])
+    expect(Object.keys(chain.parsed?.prompts ?? {})).toEqual(['a', 'b', 'c'])
+  })
+
+  it('WF-6 `{{ > b }}` 空白变体算引用（b 缺 → 拒绝）；`{{>b.c}}` / `{{>bad name}}` 不算（文件合法、原文保留）', () => {
+    const spaced = withPrompts(promptBlock('a', '{{ > b }}'))
+    expect(spaced.parsed).toBeNull()
+    expect(spaced.warns[0]).toContain("prompt block 'a' includes unknown prompt block 'b'")
+
+    const notRefs = withPrompts(promptBlock('a', '{{>b.c}}', '{{>bad name}}'))
+    expect(notRefs.warns).toEqual([])
+    expect(notRefs.parsed?.prompts).toEqual({ a: '{{>b.c}}\n{{>bad name}}' })
+  })
+
+  it('WF-7 普通 ```md 文档块 / schema 块里的 {{>ghost}} 不参与校验（只有 prompt 块之间才算引用）', () => {
+    const { parsed, warns } = parse(
+      md(fm(), [
+        '```md',
+        'Doc example: {{>ghost}}',
+        '```',
+        '',
+        '```json schema=verdict',
+        '{ "type": "object", "description": "{{>ghost}}" }',
+        '```',
+        '',
+        SCRIPT_BLOCK
+      ])
+    )
+    expect(warns).toEqual([])
+    expect(parsed).not.toBeNull()
+    expect(parsed?.prompts).toEqual({})
+    expect(parsed?.schemas.verdict).toEqual({ type: 'object', description: '{{>ghost}}' })
+  })
+
+  it('WF-8 报错顺序：未知引用先于成环（a→ghost 且 a→b→a → 报 ghost）；脚本块缺失先于引用', () => {
+    const both = withPrompts(promptBlock('a', '{{>ghost}}', '{{>b}}'), promptBlock('b', '{{>a}}'))
+    expect(both.parsed).toBeNull()
+    expect(both.warns[0]).toContain("includes unknown prompt block 'ghost'")
+    expect(both.warns[0]).not.toContain('cycle')
+
+    const noScript = parse(md(fm(), promptBlock('a', '{{>ghost}}')))
+    expect(noScript.parsed).toBeNull()
+    expect(noScript.warns[0]).toContain('missing the `js workflow` script block')
+    expect(noScript.warns[0]).not.toContain('unknown prompt block')
+  })
+})

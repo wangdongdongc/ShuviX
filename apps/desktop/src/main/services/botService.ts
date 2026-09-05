@@ -34,7 +34,8 @@ import {
   renderBotContext,
   serializeBotDefinitionFile,
   type ParsedBotFile,
-  type PipelineAgentSlot
+  type PipelineAgentSlot,
+  type WorkflowInvokeResult
 } from '@shuvix/agent-runtime'
 import type { AgentPromptParams } from '@shuvix/chat-protocol/chatApi'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
@@ -179,6 +180,65 @@ export function asSayContent(raw: unknown): string {
     if (md.trim()) return md
   }
   throw new Error('say(reply): reply must be a non-empty string or carry a headline')
+}
+
+/** 门控段这一轮的裁定 —— 门控健康计数的输入 */
+export type GateVerdict = 'ok' | 'broken' | 'timeout'
+
+/**
+ * 「这次失败坏在门控段」的判据：**第一个派发步、跑的是 intent 槽位的 agent**。
+ *
+ * 两个条件缺一不可：只看 agent 名，intent 与 task 填同一份 agent 时任务段的失败会记到
+ * 门控头上；只看序号，自定义管线的第一步未必是门控。没有 intent 槽位（自定义管线）恒为 false。
+ */
+function failedAtGate(result: WorkflowInvokeResult, intentAgent: string | undefined): boolean {
+  const step = result.errorStep
+  return !!step && step.index === 0 && !!intentAgent && step.agent === intentAgent
+}
+
+/**
+ * 从 invoke 结果推断门控段这一轮怎么样 —— 门控健康计数的唯一信道。
+ *
+ * 此前脚本以返回值的 `gate` 字段自报，代价是脚本得为了报告而 try/catch 每一段；现在证据
+ * 改从引擎交回的 `errorCode` / `errorStep` 上读：脚本正常收尾 = 门控正常（它必然过了
+ * 门控）；门控段死于**契约故障**（超时 / 没调 next）才计一次故障。agent 不存在
+ * （unknown_agent）是配置错，不是「契约还灵不灵」的证据；其余失败（脚本自己抛、mailbox、
+ * 没有模型、任务段坏了）与门控无关 —— 都返回 null，既不递增也不清零。
+ */
+export function gateVerdictOf(
+  result: WorkflowInvokeResult,
+  intentAgent: string | undefined
+): GateVerdict | null {
+  if (!result.started) return null
+  if (result.ok) return 'ok'
+  if (!failedAtGate(result, intentAgent)) return null
+  if (result.errorCode === 'step_timeout') return 'timeout'
+  if (result.errorCode === 'next_not_called') return 'broken'
+  return null
+}
+
+/**
+ * 失败气泡的文案 —— 按引擎交回的 errorCode / errorStep 选一句。
+ *
+ * 这些句子此前是管线 md 里的 prompt 块（gateBroken / taskTimeout …），由脚本逐段 catch
+ * 之后 say 出来。它们是**宿主的通告，不是人设文案**，与 gateFallback / pipelineMissing
+ * 同住 i18n；脚本因此不必为了措辞接住任何错误 —— 抛出去，宿主替它说。
+ * 认不出的失败（脚本自己抛、mailbox、没有模型）落到通用的那句。
+ */
+export function failureCopy(
+  result: WorkflowInvokeResult,
+  intentAgent: string | undefined,
+  name: string
+): string {
+  const code = result.errorCode
+  const step = result.errorStep
+  if (code === 'unknown_agent' && step) return t('bot.stepNoAgent', { name, agent: step.agent })
+  const atGate = failedAtGate(result, intentAgent)
+  if (code === 'step_timeout') return t(atGate ? 'bot.gateTimeout' : 'bot.taskTimeout', { name })
+  if (code === 'next_not_called') return t(atGate ? 'bot.gateBroken' : 'bot.taskFailed', { name })
+  // run 级墙钟到点：整条管线做满了时长 —— 对用户而言与任务段超时是同一件事
+  if (code === 'run_timeout') return t('bot.taskTimeout', { name })
+  return t('bot.runFailed', { name })
 }
 
 /**
@@ -1085,14 +1145,15 @@ class BotService {
   }
 
   /**
-   * 门控段的健康度记账。信道是脚本返回值的 `gate` 字段 —— 宿主看不见脚本内 `run()` 的错，
-   * 而管线自己知道它这一轮是怎么收的。
+   * 门控段的健康度记账。信道是 `gateVerdictOf` 从 invoke 结果推出的裁定 —— 脚本不再
+   * 自报，宿主看引擎交回的「哪一步、怎么坏的」。
    *
-   * `gate` 缺省（自定义管线、`started:false`、脚本自身抛出）→ **既不递增也不清零**：
-   * 这个计数器问的是「内置门控契约还灵不灵」，网络抖动不该把用户的自定义管线打成回落态。
+   * 裁定为 null（自定义管线、`started:false`、脚本自身抛出、非门控段的失败）→
+   * **既不递增也不清零**：这个计数器问的是「intent 槽位那份 agent 的契约还灵不灵」，
+   * 网络抖动不该把用户的自定义管线打成回落态。
    */
-  private noteGateHealth(botName: string, gate: string | undefined, ticket: BotTicket): void {
-    if (gate !== 'ok' && gate !== 'broken' && gate !== 'timeout') return
+  private noteGateHealth(botName: string, gate: GateVerdict | null, ticket: BotTicket): void {
+    if (gate === null) return
     const health = this.gateHealth.get(botName) ?? { streak: 0 }
     if (gate === 'ok') {
       // 已回落的不清零（见 gateHealth 的注释）
@@ -1232,12 +1293,14 @@ class BotService {
             id: sessionId,
             directed: ctx.directed,
             members: ctx.members,
-            // 其它成员的身份 —— 门控段据此判断「这条明显是冲着别人去的」
+            // 其它成员的身份 —— 门控段据此判断「这条明显是冲着别人去的」。
+            // 与 `window` 同一口径：**已成型的行**，模板 `{{session.others}}` 直接按行铺开；
+            // 给对象数组的话渲染出来是一行一个 JSON。标签用 `名字: 描述`，不本地化（数据标注）
             others: ctx.members
               .filter((n) => n !== bot.name)
               .map((n) => ctx.known.get(n))
               .filter((b): b is ParsedBotFile => !!b)
-              .map((b) => ({ displayName: b.displayName, description: b.description }))
+              .map((b) => `${b.displayName}: ${b.description}`)
           },
           window: ctx.window.lines,
           message: {
@@ -1261,7 +1324,8 @@ class BotService {
         // 只给 mode 不给 key 静默无效，而显式传 mode 等于替用户的管线 md 做主
       })
 
-      const output = result.output as { outcome?: string; gate?: string } | undefined
+      const output = result.output as { outcome?: string } | undefined
+      const gate = gateVerdictOf(result, pipeline.agents.intent)
       if (!result.started) {
         decide(result.reason === 'invalid-input' ? 'pipeline_invalid_input' : 'pipeline_error', {
           reason: result.reason,
@@ -1285,18 +1349,22 @@ class BotService {
           ticket.said = true
         }
       } else {
-        this.noteGateHealth(bot.name, output?.gate, ticket)
+        this.noteGateHealth(bot.name, gate, ticket)
         decide('run_end', {
           ok: result.ok,
           outcome: output?.outcome,
-          gate: output?.gate,
+          gate: gate ?? undefined,
           error: result.error,
+          errorCode: result.errorCode,
+          errorStep: result.errorStep,
           ms: Date.now() - startedAt
         })
       }
 
-      // 可见结局兜底（设计 §9）：脚本自己抛了、没有可用模型、mailbox 超时 —— 这些今天
-      // 在会话里什么都不会出现。
+      // 可见结局（设计 §9）：**脚本不为失败出声，宿主替它说**。管线脚本只写流程，每一段
+      // 的失败原样抛出；引擎交回 errorCode / errorStep，这里按它选一句 —— 门控超时、
+      // 契约破损、任务段超时、槽位指向不存在的 agent，各有各的话；认不出的（脚本自己抛、
+      // 没有可用模型、mailbox 超时）落到通用的那句。
       //
       // v2 起**每个 bot 各自为自己的结局负责**：没有胜者，也就没有「只让胜者出声」
       // 那条规则。它自己坏了就自己说 —— N 个同时坏就是 N 条错误气泡，在群聊形态下
@@ -1310,7 +1378,7 @@ class BotService {
             displayName: bot.displayName,
             error: true
           },
-          { content: t('bot.runFailed', { name: bot.displayName }) },
+          { content: failureCopy(result, pipeline.agents.intent, bot.displayName) },
           { replyToId: ticket.messageId }
         )
         ticket.said = true

@@ -72,6 +72,7 @@ vi.mock('../sessionService', () => ({
 }))
 
 import { botService } from '../botService'
+import { chatMessageDao } from './fakeChatMessageDao'
 import { messageService, setChatSessionPredicate } from '../messageService'
 import { clearSessionTreeCacheForTests, withSessionTreeLock } from '../sessionStorage'
 
@@ -141,14 +142,58 @@ function decisions(botName: string): Array<Record<string, unknown>> {
 
 const kindsOf = (botName: string): string[] => decisions(botName).map((d) => String(d.kind))
 
+/** 某个 bot 的 run_end 决策的 detail（按落盘顺序）—— 这一轮怎么收的、坏在哪一步 */
+const runEnds = (botName: string): Array<Record<string, unknown>> =>
+  decisions(botName)
+    .filter((d) => d.kind === 'run_end')
+    .map((d) => d.detail as Record<string, unknown>)
+
+/** gate_broken / gate_timeout 决策上的连击数序列 */
+const streaksOf = (botName: string, kind: 'gate_broken' | 'gate_timeout'): number[] =>
+  decisions(botName)
+    .filter((d) => d.kind === kind)
+    .map((d) => (d.detail as { streak: number }).streak)
+
+/** 回复第 i 条（从 0 数）用户消息的 bot 行正文 —— 某一轮的可见结局 */
+const repliesTo = (userIndex: number): string[] => {
+  const rows = chatMessageDao.findBySession(SID)
+  const user = rows.filter((r) => r.authorKind === 'user')[userIndex]
+  if (!user) throw new Error(`no user message #${userIndex}`)
+  return rows.filter((r) => r.authorKind === 'bot' && r.replyToId === user.id).map((r) => r.content)
+}
+
 /** 一次管线 invoke 的结果 —— 缺省「跑完了，门控正常」 */
 const ran = (
-  output: Record<string, unknown> = { gate: 'ok', outcome: 'reply' }
+  output: Record<string, unknown> = { outcome: 'reply' }
 ): { started: boolean; ok: boolean; output: Record<string, unknown> } => ({
   started: true,
   ok: true,
   output
 })
+
+/**
+ * 一次失败的 invoke 结果 —— 引擎交回的机器可读归类：`errorCode` + 出错的那一步。
+ * 门控健康与失败文案都从这两个字段推（botService.gateVerdictOf / failureCopy），脚本不再自报 gate。
+ */
+const failed = (
+  code: string,
+  step?: { index: number; agent: string }
+): Record<string, unknown> => ({
+  started: true,
+  ok: false,
+  error: `${code} at ${step?.agent ?? '?'}`,
+  errorCode: code,
+  ...(step ? { errorStep: step } : {})
+})
+
+/** 门控段契约故障：第 0 步、跑的正是本次 invoke 入参里 intent 槽位的那个 agent */
+const gateFailed =
+  (code: 'next_not_called' | 'step_timeout' = 'next_not_called') =>
+  async (req: unknown): Promise<Record<string, unknown>> =>
+    failed(code, {
+      index: 0,
+      agent: (req as { input: { agents: { intent: string } } }).input.agents.intent
+    })
 
 /** 拿住写锁并卡住，返回释放函数 —— 用来造「在飞」的确定性窗口 */
 function holdLock(sid?: string): { release: () => void; done: Promise<void> } {
@@ -167,7 +212,7 @@ function holdLock(sid?: string): { release: () => void; done: Promise<void> } {
  * 好几个 await，测试端很难精确等到那一刻，而漏掉一次尚未到达的 invoke 就会让这条会话
  * 永远停在在飞状态 —— 表现为一条与被测行为毫无关系的超时。
  */
-function gateInvoke(output: Record<string, unknown> = { gate: 'ok', outcome: 'reply' }): {
+function gateInvoke(output: Record<string, unknown> = { outcome: 'reply' }): {
   release: () => void
 } {
   const waiters: Array<() => void> = []
@@ -556,14 +601,14 @@ describe('GH —— 门控回落', () => {
   })
 
   it('GH-1 门控正常 → 不记故障，不回落', async () => {
-    mocks.invoke.mockResolvedValue(ran({ gate: 'ok', outcome: 'reply' }))
+    mocks.invoke.mockResolvedValue(ran())
     await prompt()
     expect(kindsOf(BOT)).not.toContain('gate_broken')
     expect(botService.gateDegradedOf(BOT)).toBeUndefined()
   })
 
   it('GH-2 一次破损 → 记 gate_broken（带连击数），但还不换人', async () => {
-    mocks.invoke.mockResolvedValue(ran({ gate: 'broken', outcome: 'gate-broken' }))
+    mocks.invoke.mockImplementation(gateFailed())
     await prompt()
     const rec = decisions(BOT).find((d) => d.kind === 'gate_broken')!
     expect(rec).toBeDefined()
@@ -575,7 +620,7 @@ describe('GH —— 门控回落', () => {
   it('GH-3 连续两次 → 记 gate_fallback，并**在会话里出声**', async () => {
     // 回落是看得见的行为改变：这个 bot 从此不再用用户指定的门控 agent 了。只落 journal
     // 加设置页徽标的话，用户看到的是「它忽然变得不一样了」而线索埋在文件系统里
-    mocks.invoke.mockResolvedValue(ran({ gate: 'broken', outcome: 'gate-broken' }))
+    mocks.invoke.mockImplementation(gateFailed())
     await prompt('一')
     await prompt('二')
 
@@ -589,7 +634,7 @@ describe('GH —— 门控回落', () => {
   })
 
   it('GH-4 回落之后角色表里的 intent 换成内置件（用户填的 shuvix-bot-pipeline.agents 让位）', async () => {
-    mocks.invoke.mockResolvedValue(ran({ gate: 'broken', outcome: 'gate-broken' }))
+    mocks.invoke.mockImplementation(gateFailed())
     await prompt('一')
     await prompt('二')
     await prompt('三')
@@ -599,7 +644,7 @@ describe('GH —— 门控回落', () => {
   })
 
   it('GH-5 回落是 sticky 的：提示只出一次，之后每轮不再重复刷屏', async () => {
-    mocks.invoke.mockResolvedValue(ran({ gate: 'broken', outcome: 'gate-broken' }))
+    mocks.invoke.mockImplementation(gateFailed())
     for (const text of ['一', '二', '三', '四']) await prompt(text)
 
     await vi.waitFor(async () => {
@@ -610,11 +655,11 @@ describe('GH —— 门控回落', () => {
   })
 
   it('GH-6 中途成功一次 → 连击清零，两次故障重新数起', async () => {
-    mocks.invoke.mockResolvedValueOnce(ran({ gate: 'broken', outcome: 'gate-broken' }))
+    mocks.invoke.mockImplementationOnce(gateFailed())
     await prompt('一')
-    mocks.invoke.mockResolvedValueOnce(ran({ gate: 'ok', outcome: 'reply' }))
+    mocks.invoke.mockResolvedValueOnce(ran())
     await prompt('二')
-    mocks.invoke.mockResolvedValueOnce(ran({ gate: 'broken', outcome: 'gate-broken' }))
+    mocks.invoke.mockImplementationOnce(gateFailed())
     await prompt('三')
 
     expect(kindsOf(BOT)).not.toContain('gate_fallback')
@@ -622,21 +667,33 @@ describe('GH —— 门控回落', () => {
   })
 
   it('GH-7 回落之后再成功也不清零（回落是单向的，用户去设置里改回来）', async () => {
-    mocks.invoke.mockResolvedValue(ran({ gate: 'broken', outcome: 'gate-broken' }))
+    mocks.invoke.mockImplementation(gateFailed())
     await prompt('一')
     await prompt('二')
-    mocks.invoke.mockResolvedValue(ran({ gate: 'ok', outcome: 'reply' }))
+    mocks.invoke.mockResolvedValue(ran())
     await prompt('三')
 
     expect(botService.gateDegradedOf(BOT)).toBe('broken')
   })
 
   it.each([
-    ['自定义管线没报 gate', ran({ outcome: 'whatever' })],
     ['压根没起跑', { started: false, reason: 'error' }],
-    ['起跑了但失败了且无 gate', { started: true, ok: false, error: 'boom' }],
-    ['gate 是个不认识的值', ran({ gate: 'weird' })]
-  ])('GH-8 gate 缺省或不认识（%s）→ 既不递增也不清零', async (_n, result) => {
+    ['起跑了但失败了且没有归类（脚本自己抛）', { started: true, ok: false, error: 'boom' }],
+    ['有归类但没有出错的步（mailbox 超时）', failed('mailbox_timeout')],
+    [
+      '第 0 步失败但跑的不是 intent 槽位的 agent',
+      failed('next_not_called', { index: 0, agent: 'someone-else' })
+    ],
+    [
+      'intent 的 agent 失败但不在第 0 步（intent 与 task 同名时的任务段失败）',
+      failed('step_timeout', { index: 1, agent: 'my-intent' })
+    ],
+    [
+      '门控段的 agent 不存在（配置错，不是契约故障）',
+      failed('unknown_agent', { index: 0, agent: 'my-intent' })
+    ],
+    ['门控段被中止（不是坏了）', failed('step_aborted', { index: 0, agent: 'my-intent' })]
+  ])('GH-8 与门控契约无关的失败（%s）→ 既不递增也不清零', async (_n, result) => {
     mocks.invoke.mockResolvedValue(result)
     await prompt('一')
     await prompt('二')
@@ -647,7 +704,7 @@ describe('GH —— 门控回落', () => {
   })
 
   it('GH-9 超时与破损各记各的 kind（两者对用户的意味不同）', async () => {
-    mocks.invoke.mockResolvedValue(ran({ gate: 'timeout', outcome: 'gate-timeout' }))
+    mocks.invoke.mockImplementation(gateFailed('step_timeout'))
     await prompt('一')
     await prompt('二')
     expect(kindsOf(BOT)).toContain('gate_timeout')
@@ -658,7 +715,7 @@ describe('GH —— 门控回落', () => {
   it('GH-10 【回落提示落树失败不拖垮这一轮】它是 .catch 不是 await', async () => {
     // 裸的浮动 Promise 会在这里炸成一次 unhandled rejection（vitest 直接判红），
     // 而 await 它则会把一次「提示没写进去」升级成「这一轮的管线收尾失败」
-    mocks.invoke.mockResolvedValue(ran({ gate: 'broken', outcome: 'gate-broken' }))
+    mocks.invoke.mockImplementation(gateFailed())
     await prompt('一')
     const spy = vi
       .spyOn(botService, 'appendBotMessage')
@@ -668,5 +725,88 @@ describe('GH —— 门控回落', () => {
     expect(kindsOf(BOT)).toContain('gate_fallback')
     // 这一轮照常收尾：埋点没少发
     expect(fired('session.turn-completed')).toHaveLength(2)
+  })
+
+  it('GH-11 run_end.detail 带归类：门控破损 → gate:broken + errorCode/errorStep；任务段失败 → 无 gate 键、errorStep 原样；成功 → gate:ok 且无 errorCode/errorStep', async () => {
+    // 排查「它为什么没回」时读的就是这条记录：坏在哪一步、怎么坏的、宿主把它算不算门控故障，
+    // 三样都要在 detail 上，不用回头翻 run journal。undefined 的键被 JSON 丢掉 —— 所以
+    // 「没有 gate 键」与「gate: undefined」在盘上是同一件事，用 toHaveProperty 钉
+    mocks.invoke.mockImplementationOnce(gateFailed())
+    await prompt('一')
+    mocks.invoke.mockResolvedValueOnce(failed('step_timeout', { index: 1, agent: 'coding' }))
+    await prompt('二')
+    mocks.invoke.mockResolvedValueOnce(ran())
+    await prompt('三')
+
+    const [broken, task, ok] = runEnds(BOT)
+    expect(broken).toMatchObject({
+      ok: false,
+      errorCode: 'next_not_called',
+      errorStep: { index: 0, agent: 'my-intent' },
+      gate: 'broken'
+    })
+    expect(task).toMatchObject({
+      ok: false,
+      errorCode: 'step_timeout',
+      errorStep: { index: 1, agent: 'coding' }
+    })
+    expect(task).not.toHaveProperty('gate')
+    expect(ok).toMatchObject({ ok: true, outcome: 'reply', gate: 'ok' })
+    expect(ok).not.toHaveProperty('errorCode')
+    expect(ok).not.toHaveProperty('errorStep')
+    expect(runEnds(BOT)).toHaveLength(3)
+  })
+
+  it('GH-12 回落之后归因用**解析后**的槽位：第三轮 intent 已是 bot-intent，它的破损照样记账（streak 3），不第二次回落，气泡仍是 gateBroken', async () => {
+    // 最容易漏的一格：failedAtGate 拿的必须是本次 invoke 真正派出去的 intent（回落覆盖之后
+    // 的 bot-intent），而不是 bot md 里用户填的那个 —— 否则回落之后内置门控再坏就没人记账了
+    mocks.invoke.mockImplementation(gateFailed())
+    await prompt('一')
+    await prompt('二')
+    await prompt('三')
+
+    expect(gateOf(2)).toBe('bot-intent')
+    expect(streaksOf(BOT, 'gate_broken')).toEqual([1, 2, 3])
+    expect(decisions(BOT).filter((d) => d.kind === 'gate_fallback')).toHaveLength(1)
+    expect(runEnds(BOT)[2]).toMatchObject({
+      gate: 'broken',
+      errorStep: { index: 0, agent: 'bot-intent' }
+    })
+    expect(repliesTo(2)).toEqual(['bot.gateBroken'])
+  })
+
+  it('GH-12b 对照：回落之后第 0 步报的还是用户原配的 my-intent → 不记账（那不是本轮的门控 agent），文案落 taskFailed', async () => {
+    mocks.invoke.mockImplementationOnce(gateFailed())
+    await prompt('一')
+    mocks.invoke.mockImplementationOnce(gateFailed())
+    await prompt('二')
+    mocks.invoke.mockResolvedValueOnce(failed('next_not_called', { index: 0, agent: 'my-intent' }))
+    await prompt('三')
+
+    expect(gateOf(2)).toBe('bot-intent')
+    expect(streaksOf(BOT, 'gate_broken')).toEqual([1, 2])
+    expect(decisions(BOT).filter((d) => d.kind === 'gate_fallback')).toHaveLength(1)
+    expect(runEnds(BOT)[2]).not.toHaveProperty('gate')
+    expect(repliesTo(2)).toEqual(['bot.taskFailed'])
+  })
+
+  it('GH-13 intent 与 task 同名：任务段（第 1 步）连坏三轮 → 无 gate_* 决策、不回落；门控段（第 0 步）才计数', async () => {
+    // 只看 agent 名的话，同一份 agent 填两个槽位时任务段的故障会记到门控头上 —— 三轮之后
+    // 用户的门控 agent 被无辜换掉
+    writeBot(BOT, { displayName: 'GH', agents: { intent: 'same', task: 'same' } })
+    mocks.invoke.mockResolvedValue(failed('next_not_called', { index: 1, agent: 'same' }))
+    await prompt('一')
+    await prompt('二')
+    await prompt('三')
+
+    expect(kindsOf(BOT).filter((k) => k.startsWith('gate_'))).toEqual([])
+    expect(botService.gateDegradedOf(BOT)).toBeUndefined()
+    expect(gateOf(2)).toBe('same')
+    expect(runEnds(BOT).every((d) => !('gate' in d))).toBe(true)
+
+    mocks.invoke.mockResolvedValue(failed('next_not_called', { index: 0, agent: 'same' }))
+    await prompt('四')
+    expect(streaksOf(BOT, 'gate_broken')).toEqual([1])
+    expect(runEnds(BOT)[3]).toMatchObject({ gate: 'broken' })
   })
 })

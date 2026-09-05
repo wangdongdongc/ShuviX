@@ -19,7 +19,7 @@
  *
  * 分组：
  *   IN 入参闸 · P 提示词组装 · S 结构化直出（gate 就能答的） · T 任务段派发 ·
- *   RC 出队复核 · F 故障出声 · A 中止要安静 · W wrapProse 的退化输入 · AT attach 转交 ·
+ *   RC 出队复核 · F 失败原样上抛（归类交给宿主） · A 中止要安静 · AT attach 转交 ·
  *   SC systemContext 透传
  */
 import { describe, expect, it, vi } from 'vitest'
@@ -210,6 +210,10 @@ function makeBotChat(opts: BotChatOpts = {}): {
   const extraApi = {
     say: async (raw: unknown, o?: unknown): Promise<{ messageId: string }> => {
       if (opts.sayThrows) throw new Error(opts.sayThrows)
+      // 与生产的 asSayContent 同一条：空串 / 空白不是一条回复（S-3 靠它）
+      if (typeof raw === 'string' && !raw.trim()) {
+        throw new Error('say(reply): reply must be a non-empty string')
+      }
       says.push({ raw, opts: o as Record<string, unknown> | undefined })
       return { messageId: 'm-1' }
     },
@@ -360,17 +364,19 @@ describe('P —— 提示词组装', () => {
     expect(BOT_CHAT().script).not.toContain('notesBlock')
   })
 
-  it('P-3 其它成员非空 → others 块列出各自的显示名与描述；无其他人则整段消失', async () => {
+  it('P-3 其它成员非空 → others 块按行列出（宿主已交成「名字: 描述」的行）；无其他人则整段消失', async () => {
+    // 与 window 同一口径：宿主交的是已成型的行，模板 {{session.others}} 按行铺开，
+    // 「有内容才出现的一段」由 {{>others}} 的整块消失规则兑现，脚本不再拼 othersBlock
     const many = await gatePrompt({
       session: {
         id: 'S1',
         directed: false,
         members: ['scout', 'writer'],
-        others: [{ displayName: '写手', description: '负责文案' }]
+        others: ['写手: 负责文案']
       }
     })
     expect(many).toContain('The other bots in this session')
-    expect(many).toContain('- 写手: 负责文案')
+    expect(many).toContain('写手: 负责文案')
 
     expect(await gatePrompt()).not.toContain('The other bots in this session')
   })
@@ -428,13 +434,14 @@ describe('P —— 提示词组装', () => {
     expect(p).toContain('Stay inside')
     expect(p).toContain('只读，不要改文件')
 
+    // 契约里 task 一旦给出必带 objective（schema required）；整个 task 不给 → 目标回落
+    // intent.reason —— 没有目标的任务段等于让它自己猜
     const bare = makeBotChat({
-      gate: { structured: { decision: 'task', reason: '就查一下', task: {} } }
+      gate: { structured: { decision: 'task', reason: '就查一下' } }
     })
     await bare.invoke()
     const p2 = bare.of('task')[0].prompt
     expect(p2).not.toContain('Stay inside')
-    // objective 缺省回落 intent.reason —— 没有目标的任务段等于让它自己猜
     expect(p2).toContain('就查一下')
   })
 
@@ -506,27 +513,26 @@ describe('S —— gate 一句话答完，不开任务段', () => {
     expect(outcomeOf(res)).toBe('clarify')
   })
 
-  it('S-3 说要开口却写了空串 → 按门控破损出声（与从不调 next 同一类故障）', async () => {
+  it('S-3 说要开口却写了空串 → say 拒绝空回复，run 失败（脚本不翻译这一类故障，宿主替它出声）', async () => {
     const h = makeBotChat({
       gate: { structured: { decision: 'reply', reason: 'x', reply: '   ' } }
     })
     const res = await h.invoke()
-    expect(h.says).toHaveLength(1)
-    expect(h.says[0].raw).toContain('shape I could not read')
-    expect(h.says[0].opts).toEqual({ error: true })
-    expect(outcomeOf(res)).toBe('gate-broken')
+    expect(res.ok).toBe(false)
+    expect(h.says).toHaveLength(0)
+    expect(h.of('task')).toHaveLength(0)
   })
 
-  it('S-4 直出结局的返回形状恰为 {gate, outcome}：不再带 memorable（笔记场合没了）', async () => {
+  it('S-4 直出结局的返回形状恰为 {outcome}：不带 memorable，也不再自报 gate（门控健康由宿主从失败归类推）', async () => {
     // 门控契约里没有 memorable 了；就算模型多填一个，脚本也不再把它带回宿主 ——
     // 宿主没有任何读它的路径，带回去只会让 journal 里多一个看似有意义的字段
     const reply = makeBotChat({ gate: { structured: { ...GATE_REPLY, memorable: true } } })
-    expect((await reply.invoke()).output).toEqual({ gate: 'ok', outcome: 'reply' })
+    expect((await reply.invoke()).output).toEqual({ outcome: 'reply' })
 
     const ignored = makeBotChat({
       gate: { structured: { decision: 'ignore', reason: '不归我', memorable: true } }
     })
-    expect((await ignored.invoke()).output).toEqual({ gate: 'ok', outcome: 'ignored' })
+    expect((await ignored.invoke()).output).toEqual({ outcome: 'ignored' })
   })
 
   it('S-5 判定 ignore → 一个字都不说，也不占 turn（这是 bot 唯一被允许的沉默）', async () => {
@@ -589,20 +595,19 @@ describe('T —— 任务段派发', () => {
     })
     const res = await h.invoke()
     expect(res.output).toMatchObject({
-      gate: 'ok',
       outcome: 'task',
       queuedMs: 4200,
       superseded: ['bt-9']
     })
   })
 
-  it('T-7 被合并掉的排队请求记一条 log（否则「我发了三条它只答一条」无从解释）', async () => {
+  it('T-7 被合并进来的排队请求随返回值交回（superseded）—— 合并本身由 mailbox 记 journal，脚本不另记 log', async () => {
     const h = makeBotChat({
       gate: { structured: GATE_TASK },
       slot: { superseded: ['bt-7', 'bt-8'] }
     })
-    await h.invoke()
-    expect(h.logs).toContain('merged bt-7,bt-8')
+    const res = await h.invoke()
+    expect(res.output).toMatchObject({ superseded: ['bt-7', 'bt-8'] })
   })
 })
 
@@ -648,15 +653,19 @@ describe('RC —— 排在自己回复之后的那一条要不要再做一遍', 
     expect(h.of('task')).toHaveLength(1)
   })
 
-  it('RC-5 复核自己坏了 → 记一条 log 然后照常干活（失败即 proceed）', async () => {
-    // 复核只可能省下一次重复，失败的代价必须是「多做一次」而不是「不做」
+  it('RC-5 复核自己坏了 → 照常干活（失败即 proceed），run 仍是成功收尾', async () => {
+    // 复核只可能省下一次重复，失败的代价必须是「多做一次」而不是「不做」——
+    // 脚本里唯一的一处吞错就是它（`.catch(() => null)`）
     const h = makeBotChat({
       gate: { structured: GATE_TASK },
       slot: { selfReplied: true },
       recheck: { prose: '我也不知道' }
     })
-    expect(outcomeOf(await h.invoke())).toBe('task')
-    expect(h.logs.some((l) => l.startsWith('recheck skipped'))).toBe(true)
+    const res = await h.invoke()
+    expect(res.ok).toBe(true)
+    expect(outcomeOf(res)).toBe('task')
+    expect(h.of('task')).toHaveLength(1)
+    expect(h.says[0].opts).toEqual({ decision: 'task' })
   })
 
   it('RC-6 复核提示词带 since 块与会话窗口，走的是 recheck 契约', async () => {
@@ -696,88 +705,108 @@ describe('RC —— 排在自己回复之后的那一条要不要再做一遍', 
   })
 })
 
-// ────────────────────────────── F：故障要出声 ──────────────────────────────
+// ─────────────────────── F：失败原样上抛，宿主替它出声 ───────────────────────
 
-describe('F —— 失败与超时：过了门控就没人替我兜底', () => {
-  it('F-1 门控破损 + 单 bot → 出声说「读不懂自己的判断」，outcome gate-broken', async () => {
+/**
+ * 脚本**不接住任何错误**：门控 / 任务段超时、契约破损、槽位指向不存在的 agent，都以 run
+ * 失败收尾，引擎把 `errorCode` + `errorStep`（第几步、哪个 agent）交回宿主；文案与门控
+ * 健康记账都在宿主侧（botService 的 failureCopy / gateVerdictOf）。这一组因此断言的是
+ * **失败的归类与零 say** —— 脚本一个字都不说，正是「宿主替它说」的前提。
+ */
+describe('F —— 失败原样上抛：脚本不出声，归类交给宿主', () => {
+  it('F-1 门控契约破损 → run 失败，errorCode next_not_called，errorStep 是第 0 步的 intent agent；零 say 零 turn', async () => {
     const h = makeBotChat({ gate: { prose: '我觉得应该回答' } })
     const res = await h.invoke()
-    expect(h.says).toHaveLength(1)
-    expect(h.says[0].raw).toContain('shape I could not read')
-    expect(h.says[0].opts).toEqual({ error: true })
-    expect(res.output).toMatchObject({ gate: 'broken', outcome: 'gate-broken' })
+    expect(res).toMatchObject({
+      ok: false,
+      errorCode: 'next_not_called',
+      errorStep: { index: 0, agent: 'bot-intent' }
+    })
+    expect(h.says).toHaveLength(0)
+    expect(h.turns).toBe(0)
   })
 
-  it('F-2 门控破损 + 多 bot → 照样出声：没有「别人会替我兜底」这回事', async () => {
-    // 每个 bot 为自己的结局负责 —— 它闭嘴，这条消息对它就彻底没有下文了
+  it('F-2 多 bot 会话里门控破损同样上抛 —— 没有「别人会替我兜底」这回事，也没有沉默让位', async () => {
     const h = makeBotChat({ gate: { prose: '……' } })
     const res = await h.invoke({
       session: { id: 'S1', directed: false, members: ['scout', 'writer'] }
     })
-    expect(h.says).toHaveLength(1)
-    expect(h.says[0].opts).toEqual({ error: true })
-    expect(res.output).toMatchObject({ gate: 'broken', outcome: 'gate-broken' })
+    expect(res).toMatchObject({ ok: false, errorCode: 'next_not_called' })
+    expect(h.says).toHaveLength(0)
   })
 
-  it('F-3 门控超时 + 单 bot → 另一句文案，outcome gate-timeout', async () => {
+  it('F-3 门控超时 → errorCode step_timeout，仍是第 0 步', async () => {
     vi.useFakeTimers()
     try {
       const h = makeBotChat({ gate: { hang: true } })
       const p = h.invoke()
       await vi.advanceTimersByTimeAsync(61_000)
       const res = await p
-      expect(h.says[0].raw).toContain('too long deciding')
-      expect(res.output).toMatchObject({ gate: 'timeout', outcome: 'gate-timeout' })
+      expect(res).toMatchObject({
+        ok: false,
+        errorCode: 'step_timeout',
+        errorStep: { index: 0, agent: 'bot-intent' }
+      })
+      expect(h.says).toHaveLength(0)
     } finally {
       vi.useRealTimers()
     }
   })
 
-  it('F-4 任务段超时 → 出声，outcome task-timeout 且带 queuedMs', async () => {
+  it('F-4 任务段超时 → errorCode step_timeout，errorStep 是第 1 步的 task agent；已占的 turn 不再出声', async () => {
     vi.useFakeTimers()
     try {
       const h = makeBotChat({ gate: { structured: GATE_TASK }, task: { hang: true } })
       const p = h.invoke()
       await vi.advanceTimersByTimeAsync(1_801_000)
       const res = await p
-      expect(h.says[0].raw).toContain("as long as I'm allowed")
-      expect(h.says[0].opts).toEqual({ error: true })
-      expect(res.output).toMatchObject({ outcome: 'task-timeout', queuedMs: 12 })
+      expect(res).toMatchObject({
+        ok: false,
+        errorCode: 'step_timeout',
+        errorStep: { index: 1, agent: 'coding' }
+      })
+      expect(h.says).toHaveLength(0)
     } finally {
       vi.useRealTimers()
     }
   })
 
-  it('F-5 任务段 agent 不存在 → 说这是配置问题并点名那个槽位里的名字，outcome task-no-agent', async () => {
-    // 「重试永远不会好」与「跑到一半挂了」是两回事，把人指向错误的方向比不说还糟
+  it('F-5 任务段 agent 不存在 → errorCode unknown_agent，errorStep 带槽位里那个名字（配置错，重试不会好）', async () => {
     const h = makeBotChat({ gate: { structured: GATE_TASK }, taskAgentMissing: true })
     const res = await h.invoke()
-    expect(h.says).toHaveLength(1)
-    expect(h.says[0].raw).toContain('`coding`')
-    expect(h.says[0].raw).toContain('configuration problem')
-    expect(h.says[0].opts).toEqual({ error: true })
-    expect(outcomeOf(res)).toBe('task-no-agent')
+    expect(res).toMatchObject({
+      ok: false,
+      errorCode: 'unknown_agent',
+      errorStep: { index: 1, agent: 'coding' }
+    })
+    expect(h.says).toHaveLength(0)
   })
 
-  it('F-6 任务段没调 next 但留下散文 → 散文降级成回复，outcome task-unshaped', async () => {
-    // 「无形状的回复胜过没有回复」—— 有人在等答案
+  it('F-6 任务段没调 next 但留下散文 → fallback: prose 让散文原样成为回复（普通消息，不是错误气泡）', async () => {
+    // 「无形状的回复胜过没有回复」—— 有人在等答案。形状不再由脚本补（没有 wrapProse 了）：
+    // 裸字符串交给 say，就是一条普通气泡
     const h = makeBotChat({
       gate: { structured: GATE_TASK },
       task: { prose: '查完了，两处可疑\n细节在 auth.ts' }
     })
     const res = await h.invoke()
-    expect(h.says[0].raw).toEqual({ headline: '查完了，两处可疑', body: '细节在 auth.ts' })
-    // 降级的是形状不是身份 —— 它仍是一条正经回复，不是错误气泡
-    expect(h.says[0].opts).toEqual({ decision: 'task' })
-    expect(outcomeOf(res)).toBe('task-unshaped')
+    expect(res.ok).toBe(true)
+    expect(h.says).toEqual([
+      { raw: '查完了，两处可疑\n细节在 auth.ts', opts: { decision: 'task' } }
+    ])
+    expect(outcomeOf(res)).toBe('task')
+    expect(h.logs.some((l) => l.includes('fallback: prose'))).toBe(true)
   })
 
-  it('F-7 任务段既没调 next 又没留下散文 → 承认什么都没做成，outcome task-failed', async () => {
+  it('F-7 任务段既没调 next 又没留下散文 → 没有可交的东西，按契约破损上抛', async () => {
     const h = makeBotChat({ gate: { structured: GATE_TASK }, task: { prose: '   ' } })
     const res = await h.invoke()
-    expect(h.says[0].raw).toContain('broke partway through')
-    expect(h.says[0].opts).toEqual({ error: true })
-    expect(outcomeOf(res)).toBe('task-failed')
+    expect(res).toMatchObject({
+      ok: false,
+      errorCode: 'next_not_called',
+      errorStep: { index: 1, agent: 'coding' }
+    })
+    expect(h.says).toHaveLength(0)
   })
 
   it('F-8 say 自己抛出（宿主侧的写入闸挡下）→ run 以失败收尾，不吞成一次「成功的沉默」', async () => {
@@ -828,8 +857,8 @@ describe('A —— 被拆掉不是故障：安静退出', () => {
   })
 
   it('A-3 复核被中止 → 不吞（否则会在一条正在关停的会话上继续开任务段）', async () => {
-    // recheck 的 catch 对 step_aborted 是 `throw e` 而不是 `return null` —— 吞掉它
-    // 就等于把「会话停了」读成「复核没跑成，那就照常干活」
+    // 复核那句 .catch 会把被中止也吞成 null，但 run 已经中止：下一次 run()（任务段）在第一行
+    // 就拒绝，任务段派发不出去 —— 「会话停了」不会被读成「复核没跑成，那就照常干活」
     const h = makeBotChat({
       gate: { structured: GATE_TASK },
       slot: { selfReplied: true },
@@ -864,116 +893,6 @@ describe('A —— 被拆掉不是故障：安静退出', () => {
     await p
     await settleDetached()
     expect(h.turns).toBe(0)
-  })
-})
-
-// ─────────────────── W：wrapProse —— 降级路径上的最后一道形状 ───────────────────
-
-/**
- * `wrapProse` 只在「任务段跑完了却没调 next、但留下了散文」这一条路径上被调用，所以
- * 它的入参永远是**已经 trim 过的非空串**（脚本里那句 `if (code === 'next_not_called'
- * && prose)`）。这一组因此全部走真管线进去，而不是把函数抠出来单测 —— 抠出来测就等于
- * 自己重述了那条前置条件，而 W-13 的全部价值恰恰在于它成立。
- */
-describe('W —— 散文降级的形状', () => {
-  const wrapped = async (prose: string): Promise<Record<string, unknown>> => {
-    const h = makeBotChat({ gate: { structured: GATE_TASK }, task: { prose } })
-    await h.invoke()
-    expect(h.says, prose).toHaveLength(1)
-    return h.says[0].raw as Record<string, unknown>
-  }
-
-  it('W-1 单行散文 → 整句成为结论，不铺空 body', async () => {
-    expect(await wrapped('查完了，没问题')).toEqual({ headline: '查完了，没问题' })
-  })
-
-  it('W-2 首行 + 余下 → 首行升格为结论，其余成为解释', async () => {
-    expect(await wrapped('结论一句\n然后是解释')).toEqual({
-      headline: '结论一句',
-      body: '然后是解释'
-    })
-  })
-
-  it('W-3 前导空行被跳过（模型爱在正文前空一行）', async () => {
-    expect(await wrapped('\n\n  \n结论一句\n解释')).toEqual({
-      headline: '结论一句',
-      body: '解释'
-    })
-  })
-
-  it.each([
-    ['# 一级', '# 结论\n正文'],
-    ['### 三级', '### 结论\n正文'],
-    ['井号后无空格', '#结论\n正文']
-  ])('W-4 markdown 标题记号被剥掉（%s）—— 它是家具不是结论', async (_n, prose) => {
-    expect(await wrapped(prose)).toEqual({ headline: '结论', body: '正文' })
-  })
-
-  it('W-5 body 保留内部换行与空行（散文的段落结构本身就是信息）', async () => {
-    const out = await wrapped('结论\n第一段\n\n第二段')
-    expect(out.body).toBe('第一段\n\n第二段')
-  })
-
-  it('W-6 body 首尾被 trim（首行之后那串空行不该变成正文开头）', async () => {
-    expect((await wrapped('结论\n\n\n  正文  \n\n')).body).toBe('正文')
-  })
-
-  it('W-7 首行之后全是空白 → 不铺 body（而不是铺一个空串）', async () => {
-    expect(await wrapped('结论\n\n   \n')).toEqual({ headline: '结论' })
-  })
-
-  it('W-8 只有井号的一行 → 落到兜底，整段 trim 后当结论（不产出空 headline）', async () => {
-    expect(await wrapped('###')).toEqual({ headline: '###' })
-  })
-
-  it('W-9 兜底路径截到 200 字（一整篇散文塞进 headline 会把气泡撑爆）', async () => {
-    const out = await wrapped(`#\n${'x'.repeat(400)}`)
-    // 首个非空行是 400 个 x —— 它没有被剥空，所以走的是正常路径
-    expect(String(out.headline)).toHaveLength(400)
-
-    const fallback = await wrapped('#'.repeat(300))
-    expect(String(fallback.headline)).toHaveLength(200)
-  })
-
-  it('W-10 正常路径的首行**不**截断 —— 只有兜底才截（两条路径的口径刻意不同）', async () => {
-    const long = 'y'.repeat(500)
-    expect((await wrapped(`${long}\n余下`)).headline).toBe(long)
-  })
-
-  it('W-11 CRLF 输入：结论行不带残留的回车', async () => {
-    expect((await wrapped('结论\r\n正文')).headline).toBe('结论')
-  })
-
-  it('W-12 首行是列表项 → 原样当结论（`- ` 不是标题记号，剥掉会改写内容）', async () => {
-    expect(await wrapped('- 第一点\n- 第二点')).toEqual({
-      headline: '- 第一点',
-      body: '- 第二点'
-    })
-  })
-
-  it.each([
-    ['单个井号', '#'],
-    ['一串井号', '#####'],
-    ['井号 + 空格', '#   '],
-    ['空白包着一个井号', '  \n # \n '],
-    ['一个标点', '。'],
-    ['单字符', 'x'],
-    ['只有换行与井号', '\n#\n#\n'],
-    ['首行被剥空、次行也被剥空', '#\n##\n真正的内容']
-  ])('W-13 【不变量】非空散文（%s）恒产出非空 headline', async (_n, prose) => {
-    // 脚本注释亲口声明的那条：wrapProse 若吐出空 headline，`say` 会在**降级路径内部**
-    // 抛出，于是「答案没有形状」变成「根本没有答案」——降级路径自己把自己拆了
-    const out = await wrapped(prose)
-    expect(String(out.headline ?? '').trim(), prose).not.toBe('')
-  })
-
-  it('W-14 body 里的 markdown 原样保留（降级只补形状，不改写内容）', async () => {
-    const out = await wrapped('结论\n| A | B |\n| --- | --- |\n| 1 | 2 |')
-    expect(out.body).toContain('| A | B |')
-  })
-
-  it('W-15 降级产物是纯散文形状 —— 没有 points/table/status 被凭空发明出来', async () => {
-    expect(Object.keys(await wrapped('结论\n解释')).sort()).toEqual(['body', 'headline'])
   })
 })
 

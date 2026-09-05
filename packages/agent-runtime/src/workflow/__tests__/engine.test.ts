@@ -20,7 +20,15 @@ import {
 import type { ParsedWorkflowFile, WorkflowConcurrency } from '../workflowFile'
 import type { WorkflowRegistryEntry } from '../engine'
 import type { RunTaskParams } from '../../subagent/manager'
-import { MODEL, entryOf, fileOf, gatedRunTask, makeEngine, payload } from './harness'
+import {
+  MODEL,
+  entryOf,
+  fileOf,
+  gatedRunTask,
+  hangUntilAbort,
+  makeEngine,
+  payload
+} from './harness'
 
 describe('TRIGGER_POINTS 目录钉板', () => {
   it('恰两条目：id === 键、scope session、bindingParamKeys 空；未知 id 查无', () => {
@@ -958,5 +966,217 @@ describe('prompt() —— md 提示词块的脚本 API', () => {
       entries: [entryOf(promptFile("return prompt('task')", { task: 'head\n{{missing}}\ntail' }))]
     })
     expect((await eng.engine.invoke({ workflow: 'wf' })).output).toBe('head\ntail')
+  })
+
+  it('EP-1 {{>name}} 经引擎用 file.prompts 解析：同作用域，extras 在引用块内同样遮蔽 input 同名键', async () => {
+    const eng = makeEngine({
+      entries: [
+        entryOf(
+          promptFile("return [prompt('task'), prompt('task', { window: 'FROM-EXTRAS' })]", {
+            task: 'T\n{{>w}}',
+            w: '{{window}}'
+          })
+        )
+      ]
+    })
+    const res = await eng.engine.invoke({ workflow: 'wf', input: { window: 'FROM-INPUT' } })
+    expect(res.output).toEqual(['T\nFROM-INPUT', 'T\nFROM-EXTRAS'])
+  })
+
+  it('EP-2 直造带未知引用的 prompts（绕过解析器）→ prompt() 不抛、该行消失（引擎路径的恒不抛）', async () => {
+    const eng = makeEngine({
+      entries: [entryOf(promptFile("return prompt('task')", { task: 'head\n{{>ghost}}\ntail' }))]
+    })
+    expect(await eng.engine.invoke({ workflow: 'wf' })).toMatchObject({
+      ok: true,
+      output: 'head\ntail'
+    })
+  })
+})
+
+/**
+ * `run(..., { fallback: 'prose' })` —— 带 schema 的一步跑完了却没调 next 时，交回它的散文
+ * 而不是抛 `next_not_called`。给「有人在等答案、无形状的回答也胜过没有回答」的收尾步用。
+ * 这组钉的全是「什么时候不该兜」：散文为空没有可交的东西，照抛；超时与被中止是故障不是
+ * 契约破损，照抛；structured 已有值时 fallback 根本不参与；无 schema 时它无事可做；
+ * 选项值只认 'prose'，写错是脚本的编程错误 —— 在占号之前就拒。
+ */
+describe("run() 的 fallback: 'prose'", () => {
+  /** 带 schema + fallback 的一次派发（表达式，不含 return） */
+  const proseCall = (extra = ''): string =>
+    `run('worker', 'p', { schema: { type: 'object' }, fallback: 'prose'${extra} })`
+  const fallbackLogs = (eng: ReturnType<typeof makeEngine>): string[] =>
+    eng.records
+      .filter((r) => r.rec.type === 'log')
+      .map((r) => String(r.rec.message))
+      .filter((m) => m.includes('fallback: prose'))
+
+  it('FB-1 schema + 无 structured + 非空散文 → 交回散文原文（不 trim）；step_end captured:false + 一条 fallback log；run ok', async () => {
+    const eng = makeEngine({
+      runTask: async () => ({ result: '  hi  ' }),
+      entries: [entryOf(fileOf({ script: `return await ${proseCall()}` }))]
+    })
+    const res = await eng.engine.invoke({ workflow: 'wf' })
+    expect(res).toMatchObject({ started: true, ok: true, output: '  hi  ' })
+    expect(res).not.toHaveProperty('errorCode')
+    expect(res).not.toHaveProperty('errorStep')
+    const stepEnd = eng.records.find((r) => r.rec.type === 'step_end')!.rec
+    expect(stepEnd.captured).toBe(false)
+    const logs = fallbackLogs(eng)
+    expect(logs).toHaveLength(1)
+    expect(logs[0]).toContain('agent "worker"')
+    expect(logs[0]).toContain('returning its prose instead (fallback: prose)')
+  })
+
+  it.each([
+    ['纯空白', '   '],
+    ['空串', '']
+  ])(
+    'FB-2 散文为%s → 没有可交的东西，照抛 next_not_called（e.finalText 为原文）；不 catch 时 result 带 code 与 step',
+    async (_label, prose) => {
+      const caught = makeEngine({
+        runTask: async () => ({ result: prose }),
+        entries: [
+          entryOf(
+            fileOf({
+              script: [
+                'try {',
+                `  return await ${proseCall()}`,
+                '} catch (e) {',
+                '  return { code: e.code, finalText: e.finalText }',
+                '}'
+              ].join('\n')
+            })
+          )
+        ]
+      })
+      expect((await caught.engine.invoke({ workflow: 'wf' })).output).toEqual({
+        code: 'next_not_called',
+        finalText: prose
+      })
+      expect(fallbackLogs(caught)).toEqual([])
+
+      const bare = makeEngine({
+        runTask: async () => ({ result: prose }),
+        entries: [entryOf(fileOf({ script: `return await ${proseCall()}` }))]
+      })
+      const res = await bare.engine.invoke({ workflow: 'wf' })
+      expect(res).toMatchObject({
+        ok: false,
+        errorCode: 'next_not_called',
+        errorStep: { index: 0, agent: 'worker' }
+      })
+      expect(res.error).toContain('finished without calling `next`')
+    }
+  )
+
+  it('FB-3 structured 有值时 fallback 无关：返回 JSON 克隆、captured:true、没有 fallback log', async () => {
+    const shared = { keep: 1 }
+    const eng = makeEngine({
+      runTask: async () => ({ result: 'ignored prose', structured: shared }),
+      entries: [entryOf(fileOf({ script: `return await ${proseCall()}` }))]
+    })
+    const res = await eng.engine.invoke({ workflow: 'wf' })
+    expect(res).toMatchObject({ ok: true, output: { keep: 1 } })
+    expect(res.output).not.toBe(shared)
+    expect(eng.records.find((r) => r.rec.type === 'step_end')!.rec.captured).toBe(true)
+    expect(fallbackLogs(eng)).toEqual([])
+  })
+
+  it('FB-4 【钉现状】无 schema + fallback 与不传相同：返回散文、无 log、resultContract 为 undefined', async () => {
+    const eng = makeEngine({
+      runTask: async () => ({ result: 'PLAIN' }),
+      entries: [
+        entryOf(fileOf({ script: "return await run('worker', 'p', { fallback: 'prose' })" }))
+      ]
+    })
+    expect(await eng.engine.invoke({ workflow: 'wf' })).toMatchObject({
+      ok: true,
+      output: 'PLAIN'
+    })
+    expect(eng.records.filter((r) => r.rec.type === 'log')).toEqual([])
+    expect((eng.runTask.mock.calls[0][0] as RunTaskParams).resultContract).toBeUndefined()
+  })
+
+  it.each(["'text'", 'true', '1', 'null', '{}', "['prose']"])(
+    "FB-5 fallback 非法值（%s）→ 抛 run(): opts.fallback must be 'prose' when given；不派发、不占号（无 errorCode/errorStep）",
+    async (literal) => {
+      const eng = makeEngine({
+        entries: [
+          entryOf(
+            fileOf({
+              script: `return await run('worker', 'p', { schema: { type: 'object' }, fallback: ${literal} })`
+            })
+          )
+        ]
+      })
+      const res = await eng.engine.invoke({ workflow: 'wf' })
+      expect(res).toMatchObject({
+        started: true,
+        ok: false,
+        error: "run(): opts.fallback must be 'prose' when given"
+      })
+      expect(res).not.toHaveProperty('errorCode')
+      expect(res).not.toHaveProperty('errorStep')
+      expect(eng.runTask).not.toHaveBeenCalled()
+    }
+  )
+
+  it('FB-6 超时不兜：fallback + timeoutSec 到点（manager 交回半截）→ 仍抛 step_timeout，半截在 e.finalText', async () => {
+    const eng = makeEngine({
+      runTask: hangUntilAbort('half-done'),
+      entries: [
+        entryOf(
+          fileOf({
+            script: [
+              'try {',
+              `  return await ${proseCall(', timeoutSec: 0.05')}`,
+              '} catch (e) {',
+              '  return { code: e.code, finalText: e.finalText }',
+              '}'
+            ].join('\n')
+          })
+        )
+      ]
+    })
+    expect((await eng.engine.invoke({ workflow: 'wf' })).output).toEqual({
+      code: 'step_timeout',
+      finalText: 'half-done'
+    })
+    expect(fallbackLogs(eng)).toEqual([])
+  })
+
+  it('FB-7 中止不兜：fallback + run 级中止 → 脚本侧 e.code === step_aborted；run 的结果是 run_aborted', async () => {
+    const eng = makeEngine({
+      runTask: hangUntilAbort('half-done'),
+      entries: [
+        entryOf(
+          fileOf({
+            script: [
+              'try {',
+              `  await ${proseCall()}`,
+              "  log('code:none')",
+              '} catch (e) {',
+              "  log('code:' + e.code)",
+              '}',
+              "return 'after'"
+            ].join('\n')
+          })
+        )
+      ]
+    })
+    const ac = new AbortController()
+    const pending = eng.engine.invoke({ workflow: 'wf', signal: ac.signal })
+    await vi.waitFor(() => expect(eng.runTask).toHaveBeenCalledTimes(1))
+    ac.abort()
+    const res = await pending
+    expect(res).toMatchObject({ ok: false, errorCode: 'run_aborted' })
+    expect(res).not.toHaveProperty('errorStep')
+    // 脚本脱手继续跑：它看到的是这一步的 step_aborted（半截散文没有被兜成结果）
+    await vi.waitFor(() => {
+      const logs = eng.records.filter((r) => r.rec.type === 'log').map((r) => r.rec.message)
+      expect(logs).toContain('code:step_aborted')
+    })
+    expect(fallbackLogs(eng)).toEqual([])
   })
 })

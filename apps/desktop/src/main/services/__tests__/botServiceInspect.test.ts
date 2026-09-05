@@ -183,12 +183,36 @@ const seedSession = (bots: string[]): void => {
 
 /** 一次管线 invoke 的结果 —— 缺省「跑完了，门控正常」（同 botServiceTriggers 的 ran） */
 const ran = (
-  output: Record<string, unknown> = { gate: 'ok', outcome: 'reply' }
+  output: Record<string, unknown> = { outcome: 'reply' }
 ): { started: boolean; ok: boolean; output: Record<string, unknown> } => ({
   started: true,
   ok: true,
   output
 })
+
+/**
+ * 一次失败的 invoke 结果 —— 引擎交回的机器可读归类：`errorCode` + 出错的那一步。
+ * 门控健康与失败文案都从这两个字段推（botService.gateVerdictOf / failureCopy），脚本不再自报 gate。
+ */
+const failed = (
+  code: string,
+  step?: { index: number; agent: string }
+): Record<string, unknown> => ({
+  started: true,
+  ok: false,
+  error: `${code} at ${step?.agent ?? '?'}`,
+  errorCode: code,
+  ...(step ? { errorStep: step } : {})
+})
+
+/** 门控段契约故障：第 0 步、跑的正是本次 invoke 入参里 intent 槽位的那个 agent */
+const gateFailed =
+  (code: 'next_not_called' | 'step_timeout' = 'next_not_called') =>
+  async (req: unknown): Promise<Record<string, unknown>> =>
+    failed(code, {
+      index: 0,
+      agent: (req as { input: { agents: { intent: string } } }).input.agents.intent
+    })
 
 const prompt = (text = 'hello'): Promise<void> =>
   botService.handleUserMessage({ sessionId: SID, text } as never)
@@ -369,7 +393,7 @@ describe('botService.inspect', () => {
       agents: { intent: 'my-intent', task: 'default' }
     })
     seedSession(['b12-degraded'])
-    mocks.invoke.mockResolvedValue(ran({ gate: 'broken', outcome: 'gate-broken' }))
+    mocks.invoke.mockImplementation(gateFailed())
     await prompt('一')
     await prompt('二')
 

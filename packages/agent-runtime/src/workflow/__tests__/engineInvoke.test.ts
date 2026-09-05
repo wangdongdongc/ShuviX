@@ -16,7 +16,15 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { ParsedWorkflowFile } from '../workflowFile'
 import type { RunTaskParams } from '../../subagent/manager'
-import { entryOf, fileOf, gatedRunTask, makeEngine, payload } from './harness'
+import {
+  PROFILE,
+  entryOf,
+  fileOf,
+  gatedRunTask,
+  hangUntilAbort,
+  makeEngine,
+  payload
+} from './harness'
 
 /** 与 engine.ts 的 BASE_API_NAMES 同表 —— 这份 copy 就是「不许悄悄改」的钉板 */
 const BASE_API_NAMES = [
@@ -746,5 +754,450 @@ describe('invoke — 嵌套 required 校验（沿 properties 递归）', () => {
     const res = await eng.engine.invoke({ workflow: 'wf', input: { a: { b: {} } } })
     expect(res.reason).toBe('invalid-input')
     expect(res.error).toContain('input is missing required field(s): a.b.c')
+  })
+})
+
+/**
+ * 失败归类 —— `started && !ok` 的结果带机器可读的 `errorCode` 与出错的派发步 `errorStep`，
+ * journal 的 end 记录同样带上（`code` / `step`）。宿主（bot 路径）据此选文案与记账，脚本不必
+ * 为了报告失败而 try/catch。两者独立：code 是「为什么」（引擎判的，或 extraApi / manager
+ * 带的），step 是「在哪一步」（只有 `run()` 内部抛出的错才挂）—— 可以只有其一。
+ * 步号是从 0 数的派发序号：入参校验失败不占号，`.catch` 吞掉的失败照样占号；
+ * 运行级收尾（run_timeout / run_aborted）是 race 判的，不指认任何一步。
+ */
+describe('invoke — 失败归类 errorCode / errorStep', () => {
+  const end = (eng: ReturnType<typeof makeEngine>): Record<string, unknown> => eng.ends()[0]
+
+  it('EC-0 成功结果与 end 记录都没有 errorCode / errorStep / code / step 键', async () => {
+    const eng = makeEngine({
+      entries: [entryOf(fileOf({ script: "return await run('worker', 'p')" }))]
+    })
+    const res = await eng.engine.invoke({ workflow: 'wf' })
+    expect(res).toMatchObject({ started: true, ok: true, output: 'ok' })
+    for (const key of ['errorCode', 'errorStep', 'error']) expect(res).not.toHaveProperty(key)
+    for (const key of ['code', 'step', 'error']) expect(end(eng)).not.toHaveProperty(key)
+  })
+
+  it('EC-1 unknown_agent：code + step，agent 是脚本给的 ref（trim 后）；end 记录同形', async () => {
+    const eng = makeEngine({
+      entries: [entryOf(fileOf({ script: "return await run(' ghost ', 'p')" }))]
+    })
+    const res = await eng.engine.invoke({ workflow: 'wf' })
+    expect(res).toMatchObject({
+      started: true,
+      ok: false,
+      errorCode: 'unknown_agent',
+      errorStep: { index: 0, agent: 'ghost' }
+    })
+    expect(res.error).toContain('unknown agent "ghost"')
+    expect(end(eng)).toMatchObject({
+      type: 'end',
+      ok: false,
+      code: 'unknown_agent',
+      step: { index: 0, agent: 'ghost' }
+    })
+    expect(eng.runTask).not.toHaveBeenCalled()
+  })
+
+  it('EC-2 第 1 步 next_not_called → index:1；agent 是档案名（profile.name）不是脚本里的 ref', async () => {
+    const eng = makeEngine({
+      resolveAgentProfile: (ref) => (ref === 'alias' ? PROFILE : null),
+      runTask: async () => ({ result: 'prose only' }),
+      entries: [
+        entryOf(
+          fileOf({
+            script:
+              "await run('alias', 'first')\nreturn await run('alias', 'second', { schema: { type: 'object' } })"
+          })
+        )
+      ]
+    })
+    const res = await eng.engine.invoke({ workflow: 'wf' })
+    expect(res).toMatchObject({
+      ok: false,
+      errorCode: 'next_not_called',
+      errorStep: { index: 1, agent: 'worker' }
+    })
+    expect(end(eng)).toMatchObject({
+      code: 'next_not_called',
+      step: { index: 1, agent: 'worker' }
+    })
+  })
+
+  it('EC-3 step_timeout：hang 型派发 + timeoutSec 到点 → code + step，error 含 timed out；end 同形', async () => {
+    const eng = makeEngine({
+      runTask: hangUntilAbort(),
+      entries: [
+        entryOf(fileOf({ script: "return await run('worker', 'p', { timeoutSec: 0.05 })" }))
+      ]
+    })
+    const res = await eng.engine.invoke({ workflow: 'wf' })
+    expect(res).toMatchObject({
+      ok: false,
+      errorCode: 'step_timeout',
+      errorStep: { index: 0, agent: 'worker' }
+    })
+    expect(res.error).toContain('timed out')
+    expect(end(eng)).toMatchObject({ code: 'step_timeout', step: { index: 0, agent: 'worker' } })
+  })
+
+  it('EC-4 extraApi 函数抛带 code 的错 → errorCode 有、errorStep 无（code 可来自调用方，step 只有 run() 会挂）', async () => {
+    const eng = makeEngine({ entries: [entryOf(fileOf({ script: 'return await turn()' }))] })
+    const res = await eng.engine.invoke({
+      workflow: 'wf',
+      extraApi: {
+        turn: async () => {
+          throw Object.assign(new Error('mailbox timed out'), { code: 'mailbox_timeout' })
+        }
+      }
+    })
+    expect(res).toMatchObject({
+      ok: false,
+      error: 'mailbox timed out',
+      errorCode: 'mailbox_timeout'
+    })
+    expect(res).not.toHaveProperty('errorStep')
+    expect(end(eng)).toMatchObject({ code: 'mailbox_timeout' })
+    expect(end(eng)).not.toHaveProperty('step')
+  })
+
+  it.each([
+    ['throw new Error', "throw new Error('x')"],
+    ['fail()', "fail('x')"],
+    ['throw 字符串', "throw 'oops'"],
+    ['code 非字符串', 'throw { code: 42 }'],
+    ['code 空串', "throw { code: '' }"]
+  ])('EC-5 脚本自己抛的（%s）→ 无 errorCode 也无 errorStep', async (_label, script) => {
+    const eng = makeEngine({ entries: [entryOf(fileOf({ script }))] })
+    const res = await eng.engine.invoke({ workflow: 'wf' })
+    expect(res).toMatchObject({ started: true, ok: false })
+    expect(res).not.toHaveProperty('errorCode')
+    expect(res).not.toHaveProperty('errorStep')
+    expect(end(eng)).not.toHaveProperty('code')
+    expect(end(eng)).not.toHaveProperty('step')
+  })
+
+  it('EC-6 run_timeout：maxDurationSec 到点 → errorCode 有、errorStep 无（race 判的，即便有步在飞）；end.code 同', async () => {
+    const eng = makeEngine({
+      runTask: hangUntilAbort(),
+      entries: [
+        entryOf(
+          fileOf({ limits: { maxDurationSec: 0.05 }, script: "return await run('worker', 'p')" })
+        )
+      ]
+    })
+    const res = await eng.engine.invoke({ workflow: 'wf' })
+    expect(res).toMatchObject({ ok: false, errorCode: 'run_timeout' })
+    expect(res.error).toContain('timed out after 0.05s')
+    expect(res).not.toHaveProperty('errorStep')
+    expect(end(eng)).toMatchObject({ code: 'run_timeout' })
+    expect(end(eng)).not.toHaveProperty('step')
+    expect(eng.runTask).toHaveBeenCalledTimes(1)
+  })
+
+  describe('EC-7 run_aborted 三路都是 run 级归类：errorCode 有、errorStep 无', () => {
+    it('外部 signal 在步在飞时落下', async () => {
+      const eng = makeEngine({
+        runTask: hangUntilAbort(),
+        entries: [entryOf(fileOf({ script: "return await run('worker', 'p')" }))]
+      })
+      const ac = new AbortController()
+      const pending = eng.engine.invoke({ workflow: 'wf', signal: ac.signal })
+      await vi.waitFor(() => expect(eng.runTask).toHaveBeenCalledTimes(1))
+      ac.abort()
+      const res = await pending
+      expect(res).toMatchObject({
+        ok: false,
+        error: 'workflow run aborted',
+        errorCode: 'run_aborted'
+      })
+      expect(res).not.toHaveProperty('errorStep')
+      expect(end(eng)).toMatchObject({ code: 'run_aborted' })
+      expect(end(eng)).not.toHaveProperty('step')
+    })
+
+    it('传入已 aborted 的 signal（run() 首行守卫当场拒绝，一次都不派发）', async () => {
+      const eng = makeEngine({
+        entries: [entryOf(fileOf({ script: "return await run('worker', 'p')" }))]
+      })
+      const ac = new AbortController()
+      ac.abort()
+      const res = await eng.engine.invoke({ workflow: 'wf', signal: ac.signal })
+      expect(res).toMatchObject({ ok: false, errorCode: 'run_aborted' })
+      expect(res).not.toHaveProperty('errorStep')
+      expect(eng.runTask).not.toHaveBeenCalled()
+    })
+
+    it('abortRun(runId)', async () => {
+      const eng = makeEngine({
+        runTask: hangUntilAbort(),
+        entries: [entryOf(fileOf({ script: "return await run('worker', 'p')" }))]
+      })
+      const pending = eng.engine.invoke({ workflow: 'wf' })
+      await vi.waitFor(() => expect(eng.runTask).toHaveBeenCalledTimes(1))
+      expect(eng.engine.abortRun(eng.engine.listRuns()[0].runId)).toBe(true)
+      const res = await pending
+      expect(res).toMatchObject({ ok: false, errorCode: 'run_aborted' })
+      expect(res).not.toHaveProperty('errorStep')
+    })
+  })
+
+  it('EC-8 code 可转述、step 不可：catch 后 rethrow 同一对象 → 保留；new Error → 全无；只抄 code → 有 code 无 step', async () => {
+    const scriptOf = (rethrow: string): string =>
+      `try { await run('ghost', 'p') } catch (e) { ${rethrow} }`
+
+    const same = makeEngine({ entries: [entryOf(fileOf({ script: scriptOf('throw e') }))] })
+    expect(await same.engine.invoke({ workflow: 'wf' })).toMatchObject({
+      errorCode: 'unknown_agent',
+      errorStep: { index: 0, agent: 'ghost' }
+    })
+
+    const fresh = makeEngine({
+      entries: [entryOf(fileOf({ script: scriptOf('throw new Error(e.message)') }))]
+    })
+    const freshRes = await fresh.engine.invoke({ workflow: 'wf' })
+    expect(freshRes.ok).toBe(false)
+    expect(freshRes.error).toContain('unknown agent "ghost"')
+    expect(freshRes).not.toHaveProperty('errorCode')
+    expect(freshRes).not.toHaveProperty('errorStep')
+
+    const copied = makeEngine({
+      entries: [
+        entryOf(
+          fileOf({
+            script: scriptOf('throw Object.assign(new Error(e.message), { code: e.code })')
+          })
+        )
+      ]
+    })
+    const copiedRes = await copied.engine.invoke({ workflow: 'wf' })
+    expect(copiedRes).toMatchObject({ errorCode: 'unknown_agent' })
+    expect(copiedRes).not.toHaveProperty('errorStep')
+  })
+
+  it.each([
+    ['index 是字符串', "{ index: '0', agent: 'a' }"],
+    ['缺 agent', '{ index: 0 }'],
+    ['index 非整数', "{ index: 1.5, agent: 'a' }"],
+    ['不是对象', "'0:a'"],
+    ['null', 'null']
+  ])(
+    'EC-9 脚本自造的 step 形状不合规（%s）→ errorStep 缺（code 照常）',
+    async (_label, literal) => {
+      const eng = makeEngine({
+        entries: [
+          entryOf(
+            fileOf({
+              script: `throw Object.assign(new Error('forged'), { code: 'custom', step: ${literal} })`
+            })
+          )
+        ]
+      })
+      const res = await eng.engine.invoke({ workflow: 'wf' })
+      expect(res).toMatchObject({ ok: false, errorCode: 'custom' })
+      expect(res).not.toHaveProperty('errorStep')
+      expect(end(eng)).not.toHaveProperty('step')
+    }
+  )
+
+  it('EC-9 【钉现状】脚本自造合法形状的 step（{index:3, agent:"a"}）→ 原样交回', async () => {
+    const eng = makeEngine({
+      entries: [
+        entryOf(
+          fileOf({
+            script:
+              "throw Object.assign(new Error('forged'), { code: 'custom', step: { index: 3, agent: 'a' } })"
+          })
+        )
+      ]
+    })
+    expect(await eng.engine.invoke({ workflow: 'wf' })).toMatchObject({
+      errorCode: 'custom',
+      errorStep: { index: 3, agent: 'a' }
+    })
+  })
+
+  it('EC-10 .catch 吞掉超时步之后步号照走：再 run(ghost) → index:1', async () => {
+    const eng = makeEngine({
+      runTask: hangUntilAbort(),
+      entries: [
+        entryOf(
+          fileOf({
+            script:
+              "await run('worker', 'p', { timeoutSec: 0.05 }).catch(() => null)\nreturn await run('ghost', 'p')"
+          })
+        )
+      ]
+    })
+    expect(await eng.engine.invoke({ workflow: 'wf' })).toMatchObject({
+      ok: false,
+      errorCode: 'unknown_agent',
+      errorStep: { index: 1, agent: 'ghost' }
+    })
+    expect(eng.runTask).toHaveBeenCalledTimes(1)
+  })
+
+  it('EC-11 .catch 吞掉 step_aborted 后下一次 run() 立即拒绝（run_aborted，不派发）；结果早已封成 run_aborted', async () => {
+    const eng = makeEngine({
+      runTask: hangUntilAbort(),
+      entries: [
+        entryOf(
+          fileOf({
+            script: [
+              "await run('worker', 'first').catch(() => null)",
+              "try { await run('worker', 'second') } catch (e) { log('code:' + e.code) }",
+              "return 'after'"
+            ].join('\n')
+          })
+        )
+      ]
+    })
+    const ac = new AbortController()
+    const pending = eng.engine.invoke({ workflow: 'wf', signal: ac.signal })
+    await vi.waitFor(() => expect(eng.runTask).toHaveBeenCalledTimes(1))
+    ac.abort()
+    const res = await pending
+    expect(res).toMatchObject({ ok: false, errorCode: 'run_aborted' })
+    expect(res).not.toHaveProperty('errorStep')
+    // 脱手的脚本稍后才走到第二次 run()：被首行守卫当场拒绝，第二次派发根本没发生
+    await vi.waitFor(() => {
+      const logs = eng.records.filter((r) => r.rec.type === 'log').map((r) => r.rec.message)
+      expect(logs).toContain('code:run_aborted')
+    })
+    expect(eng.runTask).toHaveBeenCalledTimes(1)
+    // 那条 log 落在 end 之后：run 先封账，脚本才看到被拒
+    const endAt = eng.records.findIndex((r) => r.rec.type === 'end')
+    const logAt = eng.records.findIndex(
+      (r) => r.rec.type === 'log' && r.rec.message === 'code:run_aborted'
+    )
+    expect(endAt).toBeGreaterThanOrEqual(0)
+    expect(endAt).toBeLessThan(logAt)
+  })
+
+  it('EC-12 入参校验失败不占号：非法 schema / 非法 fallback / 空 ref / 空 prompt 之后 run(ghost) 仍是 index:0；也不计入 maxAgents', async () => {
+    const eng = makeEngine({
+      entries: [
+        entryOf(
+          fileOf({
+            script: [
+              "try { await run('worker', 'p', { schema: { type: 'array' } }) } catch {}",
+              "try { await run('worker', 'p', { fallback: 'text' }) } catch {}",
+              "try { await run('', 'p') } catch {}",
+              "try { await run('worker', '') } catch {}",
+              "return await run('ghost', 'p')"
+            ].join('\n')
+          })
+        )
+      ]
+    })
+    expect(await eng.engine.invoke({ workflow: 'wf' })).toMatchObject({
+      errorCode: 'unknown_agent',
+      errorStep: { index: 0, agent: 'ghost' }
+    })
+    expect(eng.runTask).not.toHaveBeenCalled()
+
+    // maxAgents=2：中间一次校验失败不吃配额，第二次真派发照常
+    const quota = makeEngine({
+      entries: [
+        entryOf(
+          fileOf({
+            limits: { maxAgents: 2 },
+            script: [
+              "await run('worker', 'a')",
+              "try { await run('worker', 'p', { schema: { type: 'array' } }) } catch {}",
+              "await run('worker', 'b')",
+              "return 'done'"
+            ].join('\n')
+          })
+        )
+      ]
+    })
+    expect(await quota.engine.invoke({ workflow: 'wf' })).toMatchObject({
+      ok: true,
+      output: 'done'
+    })
+    expect(quota.runTask).toHaveBeenCalledTimes(2)
+  })
+
+  it('EC-12 maxAgents 超限那次在占号之后才拒：错误既无 code 也无 step（超限之后每一次都超限，占号本身不可观测）', async () => {
+    const eng = makeEngine({
+      entries: [
+        entryOf(
+          fileOf({
+            limits: { maxAgents: 1 },
+            script: "await run('worker', 'a')\nreturn await run('worker', 'b')"
+          })
+        )
+      ]
+    })
+    const res = await eng.engine.invoke({ workflow: 'wf' })
+    expect(res).toMatchObject({ ok: false, error: 'workflow agent limit reached (maxAgents=1)' })
+    expect(res).not.toHaveProperty('errorCode')
+    expect(res).not.toHaveProperty('errorStep')
+    expect(eng.runTask).toHaveBeenCalledTimes(1)
+  })
+
+  it('EC-12 opts.tools 非数组同样是入参校验失败：不占号、不带 step，之后 run(ghost) 仍是 index:0', async () => {
+    // 与 schema / fallback 同一格：写错选项是脚本的编程错误，不是一次派发 —— 这条校验若落在
+    // 占号之后，一次 typo 就让宿主拿到的步号跳一格
+    const eng = makeEngine({
+      entries: [
+        entryOf(
+          fileOf({
+            script: [
+              'let caught = null',
+              "try { await run('worker', 'p', { tools: 'read' }) } catch (e) { caught = e }",
+              "log('code:' + (caught && caught.code) + ' step:' + (caught && caught.step))",
+              "return await run('ghost', 'p')"
+            ].join('\n')
+          })
+        )
+      ]
+    })
+    expect(await eng.engine.invoke({ workflow: 'wf' })).toMatchObject({
+      errorCode: 'unknown_agent',
+      errorStep: { index: 0, agent: 'ghost' }
+    })
+    expect(eng.records.filter((r) => r.rec.type === 'log').map((r) => r.rec.message)).toContain(
+      'code:undefined step:undefined'
+    )
+    expect(eng.runTask).not.toHaveBeenCalled()
+  })
+
+  it('EC-13 manager reject（无 code 的 Error）→ errorStep 有（第 0 步）、errorCode 无：code 与 step 独立', async () => {
+    const eng = makeEngine({
+      runTask: async () => {
+        throw new Error('manager blew up')
+      },
+      entries: [entryOf(fileOf({ script: "return await run('worker', 'p')" }))]
+    })
+    const res = await eng.engine.invoke({ workflow: 'wf' })
+    expect(res).toMatchObject({
+      ok: false,
+      error: 'manager blew up',
+      errorStep: { index: 0, agent: 'worker' }
+    })
+    expect(res).not.toHaveProperty('errorCode')
+    expect(end(eng)).toMatchObject({ step: { index: 0, agent: 'worker' } })
+    expect(end(eng)).not.toHaveProperty('code')
+  })
+
+  it('EC-14 map() 内的 run 失败被吞成 null → run ok、无 errorCode（失败只进 log）', async () => {
+    const eng = makeEngine({
+      entries: [
+        entryOf(fileOf({ script: "return await map(['ghost', 'worker'], (a) => run(a, 'p'))" }))
+      ]
+    })
+    const res = await eng.engine.invoke({ workflow: 'wf' })
+    expect(res).toMatchObject({ ok: true, output: [null, 'ok'] })
+    expect(res).not.toHaveProperty('errorCode')
+    expect(res).not.toHaveProperty('errorStep')
+    expect(
+      eng.records.some(
+        (r) =>
+          r.rec.type === 'log' &&
+          String(r.rec.message).startsWith('map[0] failed: unknown agent "ghost"')
+      )
+    ).toBe(true)
   })
 })

@@ -33,6 +33,7 @@ import {
 import { splitFrontmatter } from '../markdownFrontmatter'
 import { getTriggerPoint } from './triggerPoints'
 import { compileWhen } from './when'
+import { promptIncludes } from './promptTemplate'
 
 export const WORKFLOW_FILE_MARKER_KEY = 'shuvix'
 export const WORKFLOW_FILE_MARKER = 'workflow v1'
@@ -356,6 +357,10 @@ export function parseWorkflowDefinitionFile(
   if (script === undefined || !script.trim()) {
     return reject('missing the `js workflow` script block — exactly one is required')
   }
+  // 块之间的 `{{>name}}` 引用：指向不存在的块、或引用成环 → 整份非法。与 schema 块同一条
+  // 纪律 —— 渲染期静默成空会让 prompt() 悄悄少一段，而模型只会「答得不太对」
+  const includeError = checkPromptIncludes(prompts)
+  if (includeError) return reject(includeError)
 
   return {
     name,
@@ -370,4 +375,43 @@ export function parseWorkflowDefinitionFile(
     schemas,
     prompts
   }
+}
+
+/**
+ * prompt 块之间的 `{{>name}}` 引用校验：指向不存在的块、或引用成环 → 人读原因；合法 → null。
+ * 成环检测是三色 DFS，报的是整条环路（`a -> b -> a`），读到就知道该断哪一条。
+ */
+function checkPromptIncludes(prompts: Record<string, string>): string | null {
+  const refs = new Map<string, string[]>()
+  for (const [name, template] of Object.entries(prompts)) {
+    const includes = promptIncludes(template)
+    for (const ref of includes) {
+      if (!(ref in prompts)) {
+        return `prompt block '${name}' includes unknown prompt block '${ref}' — add a \`\`\`md prompt=${ref} block or fix the reference`
+      }
+    }
+    refs.set(name, includes)
+  }
+  const state = new Map<string, 'visiting' | 'done'>()
+  const walk = (name: string, path: string[]): string[] | null => {
+    const seen = state.get(name)
+    if (seen === 'done') return null
+    if (seen === 'visiting') return [...path, name]
+    state.set(name, 'visiting')
+    for (const ref of refs.get(name) ?? []) {
+      const cycle = walk(ref, [...path, name])
+      if (cycle) return cycle
+    }
+    state.set(name, 'done')
+    return null
+  }
+  for (const name of refs.keys()) {
+    const cycle = walk(name, [])
+    if (cycle) {
+      // 只报环本身：从第一次出现被重复的那个名字截起
+      const start = cycle.indexOf(cycle[cycle.length - 1])
+      return `prompt blocks include each other in a cycle: ${cycle.slice(start).join(' -> ')}`
+    }
+  }
+  return null
 }

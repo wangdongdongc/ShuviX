@@ -1,15 +1,18 @@
 /**
  * `md prompt=<name>` 块的占位符渲染（renderPromptTemplate）—— 纯函数、恒不抛。
  *
- * 语法刻意只有 `{{path}}` 一条，所以这张表要钉死的其实是四个口径：
+ * 语法刻意只有 `{{path}}` 与 `{{>name}}` 两条。前几组钉占位符的四个口径：
  *  - **什么算「有值」**（`0` / `false` / `{}` 都算，空串/空数组/null/解析不出不算）；
  *  - **空值怎么收敛**（该行除占位符外只有空白 → 整行消失；否则行内留一个空洞）；
  *  - **形状不像路径的 `{{…}}` 原样保留**（同 agent md 对未知占位符的处置）；
  *  - **怪值只渲染成空、绝不抛**（宿主塞进 extras 的窗口是「一个数组，元素是宿主给的
  *    对象」，循环引用是它的日常，而 prompt() 抛 = 整个 run 失败）。
+ * 最后一组钉块引用：被引用块「占位符全空 → 整块消失」与顶层字面恒保留的不对称、
+ * 同作用域、记号计数不上浮，以及引用不存在 / 成环时的恒不抛兜底（promptIncludes 的
+ * 匹配面一并钉住）。
  */
 import { describe, expect, it } from 'vitest'
-import { renderPromptTemplate } from '../promptTemplate'
+import { promptIncludes, renderPromptTemplate } from '../promptTemplate'
 
 /** 引擎侧 `prompt(name, extras)` 组装作用域的同一顺序（见 engine.ts 的 api.prompt） */
 const scopeOf = (
@@ -143,5 +146,159 @@ describe('恒不抛：作用域里的怪值只渲染成空', () => {
     ['数组里的 Symbol', () => [Symbol('s')]]
   ])('【钉现状】%s → String(sym) 的文本（String 对 symbol 不抛，模板字面量才抛）', (_l, make) => {
     expect(renderPromptTemplate('{{v}}', scopeOf({ v: make() }))).toBe('Symbol(s)')
+  })
+})
+
+/**
+ * `{{>name}}` 块引用 —— 「有内容才出现的一段」直接住在 md 里，脚本不再为每个可选小节预拼
+ * 「要么整段要么空串」的字符串。这组要钉的是被引用块与顶层模板的**不对称**：顶层的字面
+ * 文字恒保留，被引用块的占位符全空则整块（连标题、连块内的说明句）消失；引用在引用者那里
+ * 只算一枚记号，按它渲染出来的空/非空计，内层的记号计数不上浮。引用不存在 / 成环在解析期
+ * 已整份拒绝（workflowFile.test.ts），这里只钉纯函数「恒不抛」的兜底。
+ */
+describe('块引用 {{>name}}', () => {
+  it('PT-1 静态块（无记号）被引用恒出现，引用文本首尾 trim 后代入', () => {
+    expect(renderPromptTemplate('A\n{{>b}}\nC', scopeOf({}), { b: '\n\n## H\nstatic\n\n' })).toBe(
+      'A\n## H\nstatic\nC'
+    )
+  })
+
+  it('PT-2 被引用块占位符全空 → 整块消失：标题与块内的字面说明句一起走，引用行不留空洞', () => {
+    // 易漏：块里有文字 ≠ 有内容 —— 规则只看记号
+    const blocks = { b: '## Others\n{{session.others}}\nThese bots see it too.' }
+    expect(renderPromptTemplate('A\n{{>b}}\nC', scopeOf({ session: { others: [] } }), blocks)).toBe(
+      'A\nC'
+    )
+  })
+
+  it('PT-3 任一占位符非空 → 整块出现，块内其余空占位符行各自消失', () => {
+    expect(renderPromptTemplate('{{>b}}', scopeOf({ a: 'x' }), { b: '## H\n{{a}}\n{{b}}' })).toBe(
+      '## H\nx'
+    )
+  })
+
+  it('PT-4 同作用域：message.text / input.* / vars.* / event.* 在引用块内可达，extras 遮蔽 input 同名键同样生效', () => {
+    const scope = scopeOf(
+      { message: { text: 'hi' }, window: 'FROM-INPUT' },
+      { vars: { k: 'K' }, event: { trigger: 'call' }, extras: { window: 'FROM-EXTRAS' } }
+    )
+    const blocks = {
+      b: [
+        'msg={{message.text}}',
+        'via={{input.message.text}}',
+        'var={{vars.k}}',
+        'trig={{event.trigger}}',
+        'win={{window}}'
+      ].join('\n')
+    }
+    expect(renderPromptTemplate('{{>b}}', scope, blocks)).toBe(
+      'msg=hi\nvia=hi\nvar=K\ntrig=call\nwin=FROM-EXTRAS'
+    )
+  })
+
+  it('PT-5 三层嵌套穿透，空值逐层向上传播；顶层字面保留而被引用块整体消失（不对称）', () => {
+    const blocks = { c: '## C\n{{v}}', b: '## B\n{{>c}}', a: '# Top\n{{>b}}' }
+    // v 有值：三层全出现
+    expect(renderPromptTemplate('# Top\n{{>b}}', scopeOf({ v: 'val' }), blocks)).toBe(
+      '# Top\n## B\n## C\nval'
+    )
+    // v 缺：c 空 → b 的唯一记号空 → b 空 → 顶层只剩自己的字面
+    expect(renderPromptTemplate('# Top\n{{>b}}', scopeOf({}), blocks)).toBe('# Top')
+    // 同一段文字作为被引用块 a：整块消失（'# Top' 也跟着走）
+    expect(renderPromptTemplate('X\n{{>a}}\nY', scopeOf({}), blocks)).toBe('X\nY')
+  })
+
+  it('PT-6 引用块内只有引用：静态 b 透出；空块 b（解析器允许 ""）视作空，向上传播到每一层引用者', () => {
+    expect(renderPromptTemplate('{{>a}}', scopeOf({}), { a: '{{>b}}', b: 'B-static' })).toBe(
+      'B-static'
+    )
+    const blocks = { a: '{{>b}}', b: '', c: '## C\n{{>a}}' }
+    expect(renderPromptTemplate(blocks.a, scopeOf({}), blocks)).toBe('')
+    expect(renderPromptTemplate('{{>a}}', scopeOf({}), blocks)).toBe('')
+    expect(renderPromptTemplate('X\n{{>c}}\nY', scopeOf({}), blocks)).toBe('X\nY')
+  })
+
+  it('PT-7 记号计数不上浮：引用者只多一枚记号，按引用结果的空/非空计', () => {
+    // A 两枚记号（引用 + missing）：引用非空 → 1/2 非空 → A 出现
+    expect(
+      renderPromptTemplate('{{>A}}', scopeOf({}), { A: '{{>B}}\n{{missing}}', B: 'B-static' })
+    ).toBe('B-static')
+    // A 的唯一记号是一枚渲染成空的引用 → A 整块消失
+    expect(
+      renderPromptTemplate('X\n{{>A}}\nY', scopeOf({}), { A: '{{>B}}', B: '{{missing}}' })
+    ).toBe('X\nY')
+    // 对照：B 静态（零记号）时 A 的那枚引用记号非空 → A 连同自己的字面一起出现
+    expect(
+      renderPromptTemplate('X\n{{>A}}\nY', scopeOf({}), { A: 'Label\n{{>B}}', B: 'B-static' })
+    ).toBe('X\nLabel\nB-static\nY')
+  })
+
+  it('PT-8 【钉现状】同行混排与占位符同口径：行内有其他文字则整行保留（含尾随空格），一空一非空亦保留', () => {
+    const blocks = { b: '{{missing}}' }
+    expect(renderPromptTemplate('Intro: {{>b}}\ntail', scopeOf({}), blocks)).toBe('Intro: \ntail')
+    // 行尾空格只在整串末尾才被顶层 trim 吃掉
+    expect(renderPromptTemplate('Intro: {{>b}}', scopeOf({}), blocks)).toBe('Intro:')
+    expect(renderPromptTemplate('head\n{{>b}} {{name}}', scopeOf({ name: 'Ana' }), blocks)).toBe(
+      'head\n Ana'
+    )
+  })
+
+  it('PT-9 恒不抛兜底：引用不存在的块 / blocks 未传 / 引用块内再引用不存在的块 → 渲染成空、该行消失，其余照常', () => {
+    expect(() => renderPromptTemplate('A\n{{>nope}}\nB', scopeOf({}), {})).not.toThrow()
+    expect(renderPromptTemplate('A\n{{>nope}}\nB', scopeOf({}), {})).toBe('A\nB')
+    expect(() => renderPromptTemplate('A\n{{>nope}}\nB', scopeOf({}))).not.toThrow()
+    expect(renderPromptTemplate('A\n{{>nope}}\nB', scopeOf({}))).toBe('A\nB')
+
+    const blocks = { a: '## A\n{{name}}\n{{>nope}}' }
+    expect(() =>
+      renderPromptTemplate('X\n{{>a}}\nY', scopeOf({ name: 'Ana' }), blocks)
+    ).not.toThrow()
+    expect(renderPromptTemplate('X\n{{>a}}\nY', scopeOf({ name: 'Ana' }), blocks)).toBe(
+      'X\n## A\nAna\nY'
+    )
+  })
+
+  it('PT-10 成环兜底：互引 / 自引不抛、不死循环（解析器已拒绝成环，展开层数不钉死）', () => {
+    const mutual = { a: 'A\n{{>b}}', b: 'B\n{{>a}}' }
+    expect(() => renderPromptTemplate(mutual.a, scopeOf({}), mutual)).not.toThrow()
+    // a 作顶层：字面 'A' 保留；b 的唯一记号回指 a、被栈截断为空 → b 整块消失
+    expect(renderPromptTemplate(mutual.a, scopeOf({}), mutual)).toBe('A')
+
+    const self = { a: 'A\n{{>a}}' }
+    let out: unknown
+    expect(() => {
+      out = renderPromptTemplate('{{>a}}', scopeOf({}), self)
+    }).not.toThrow()
+    expect(typeof out).toBe('string')
+  })
+
+  it('PT-11 promptIncludes：去重、按出现序、容忍空白、名字含 -；{{c}} 不算；坏形状不匹配且渲染时原样保留', () => {
+    const template = [
+      '{{>a}}',
+      '{{ > b }}',
+      '{{>a}}',
+      '{{c}}',
+      '{{>x-y_z}}',
+      '{{>bad name}}',
+      '{{>a.b}}'
+    ].join('\n')
+    expect(promptIncludes(template)).toEqual(['a', 'b', 'x-y_z'])
+    expect(renderPromptTemplate('{{>bad name}}\n{{>a.b}}', scopeOf({}), {})).toBe(
+      '{{>bad name}}\n{{>a.b}}'
+    )
+  })
+
+  it('PT-12 bot-chat 式布局的收尾：引用行消失后 3+ 空行收敛成一个空行；数组值在引用块内按行铺开', () => {
+    const blocks = {
+      others: '## Others\n{{others}}',
+      window: '## Recent conversation\n\n{{window}}'
+    }
+    expect(
+      renderPromptTemplate(
+        'Head\n\n{{>others}}\n\n{{>window}}\n\nTail',
+        scopeOf({ others: [], window: ['l1', 'l2'] }),
+        blocks
+      )
+    ).toBe('Head\n\n## Recent conversation\n\nl1\nl2\n\nTail')
   })
 })

@@ -325,10 +325,11 @@ export {
   type WorkflowScriptEngine,
   type WorkflowInvokeRequest,
   type WorkflowInvokeResult,
+  type WorkflowErrorStep,
   type WorkflowReentry,
   type WorkflowRunSnapshot
 } from './workflow/engine'
-export { renderPromptTemplate } from './workflow/promptTemplate'
+export { renderPromptTemplate, promptIncludes } from './workflow/promptTemplate'
 export {
   buildBuiltinWorkflows,
   getBuiltinWorkflowSource,

@@ -21,6 +21,20 @@ function missing(a: string[], b: string[]): string[] {
   return a.filter((k) => !known.has(k)).sort()
 }
 
+/** 按扁平键路径取叶子值（非字符串叶子返回 undefined） */
+function leaf(value: unknown, path: string): string | undefined {
+  const found = path
+    .split('.')
+    .reduce<unknown>((node, key) => (node as Record<string, unknown> | undefined)?.[key], value)
+  return typeof found === 'string' ? found : undefined
+}
+
+/** 一句文案里的 `{{x}}` 插值名（去重、排序） */
+function placeholders(text: string): string[] {
+  const names = [...text.matchAll(/\{\{\s*([^{}\s]+)\s*\}\}/g)].map((m) => m[1])
+  return [...new Set(names)].sort()
+}
+
 describe('i18n 语言包', () => {
   const keys = { en: flatten(en), zh: flatten(zh), ja: flatten(ja) }
 
@@ -36,5 +50,34 @@ describe('i18n 语言包', () => {
   it('键数量三语相等', () => {
     expect(keys.en.length).toBeGreaterThan(0)
     expect([keys.zh.length, keys.ja.length]).toEqual([keys.en.length, keys.en.length])
+  })
+
+  /**
+   * L：`bot.*` 是宿主往会话里说的通告（失败句 / 回落提示 / 排队回执），插值就是它们的全部
+   * 信息量 —— 一门语言漏了 `{{agent}}`，运行期不报错，只是那句话里少了它本该点名的东西
+   * （i18next 对缺参的插值露出原始占位符）。键集合齐平那条断言看不见这种漏译。
+   */
+  it('L-1 bot.* 每个键的 {{x}} 占位符集合三语一致', () => {
+    const botKeys = keys.en.filter((k) => k.startsWith('bot.'))
+    expect(botKeys).toContain('bot.stepNoAgent')
+    // 抽一句钉住「确实在比较插值」：stepNoAgent 三语都点名 agent 与 name
+    expect(placeholders(leaf(en, 'bot.stepNoAgent')!)).toEqual(['agent', 'name'])
+
+    const drift = Object.fromEntries(
+      botKeys
+        .map((k) => [
+          k,
+          {
+            en: placeholders(leaf(en, k) ?? ''),
+            zh: placeholders(leaf(zh, k) ?? ''),
+            ja: placeholders(leaf(ja, k) ?? '')
+          }
+        ])
+        .filter(([, v]) => {
+          const { en: a, zh: b, ja: c } = v as Record<'en' | 'zh' | 'ja', string[]>
+          return a.join() !== b.join() || a.join() !== c.join()
+        })
+    )
+    expect(drift).toEqual({})
   })
 })
