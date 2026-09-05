@@ -44,7 +44,8 @@ export interface SidebarProps {
   groupsPrepend?: React.ReactNode
   /** 宿主弹窗插槽（项目编辑 / 会话配置 / 删除确认等） */
   overlays?: React.ReactNode
-  /** 顶栏文案（默认 sidebar.title = 产品名；扩展日历模式传 sidebar.viewCalendar） */
+  /** 顶栏文案。不传则不渲染标题 —— 桌面端产品名 header 已退役（无实际用途）；
+   *  扩展两种视图都显式传（sidebar.title / sidebar.viewCalendar） */
   title?: string
   /** 项目记忆能力（桌面注入；见 ProjectSessionGroupsProps.memory） */
   memory?: ProjectMemoryAdapter
@@ -53,7 +54,7 @@ export interface SidebarProps {
 }
 
 /**
- * 侧边栏（桌面/扩展共用）—— 顶栏（产品名）+ 知识库插槽 + 按项目分组的会话列表
+ * 侧边栏（桌面/扩展共用）—— 按需顶栏（标题/宿主按钮/macOS 拖拽带）+ 知识库插槽 + 按项目分组的会话列表
  * （ProjectSessionGroups：「项目」与「临时对话」两个并列分节）+ 底部设置。
  * 项目/会话/事件经 getChatApi() 统一访问（宿主无关）；宿主差异走 caps + 注入回调/插槽：
  *   - 打开文件夹（dialog vs FSA）、打开设置、选中（悬浮聚焦）、右键菜单、删除项目均注入；
@@ -143,22 +144,30 @@ export function Sidebar({
   const projectNamesEmpty = projects.length === 0
   const isEmpty = sessions.length === 0 && projectNamesEmpty
   const platform = getChatApi().app.platform
-  const drag = caps.windowDrag ? 'titlebar-drag' : ''
-  const noDrag = caps.windowDrag ? 'titlebar-no-drag' : ''
-  const topPad = caps.windowDrag && platform === 'darwin' ? 'pt-10' : 'pt-3'
+  // 拖拽带只在 macOS 有意义（hiddenInset 交通灯留白 + app-region: drag）；
+  // Windows 是原生标题栏，app-region 惰性，留条空带纯属占位
+  const needDragStrip = !!caps.windowDrag && platform === 'darwin'
+  const drag = needDragStrip ? 'titlebar-drag' : ''
+  const noDrag = needDragStrip ? 'titlebar-no-drag' : ''
+  const topPad = needDragStrip ? 'pt-10' : 'pt-3'
+  // 顶栏按需渲染：标题 / 宿主按钮 / 拖拽带任一存在才占位。
+  // 桌面不传 title（产品名 header 退役）—— Windows 上整行消失；macOS 只留交通灯拖拽带
+  const showHeader = title !== undefined || !!titleActions || needDragStrip
 
   return (
     <div className="flex flex-col h-full bg-bg-secondary/50">
       {/* 标题行（可选窗口拖拽区）+ 宿主额外按钮；打开文件夹在「项目」分节头的菜单里 */}
-      <div
-        className={`${drag} flex items-center pl-3 pr-2 pb-2 ${topPad} transition-opacity duration-200 ${dim ? 'opacity-30 hover:opacity-100' : ''}`}
-      >
-        {/* 产品名而非分组标签：故不 uppercase（"ShuviX" 不是全大写），也比下面的分节标题重一档 */}
-        <h1 className="text-[13px] font-semibold text-text-secondary tracking-wide">
-          {title ?? t('sidebar.title')}
-        </h1>
-        <div className={`${noDrag} ml-auto flex items-center`}>{titleActions}</div>
-      </div>
+      {showHeader && (
+        <div
+          className={`${drag} flex items-center pl-3 pr-2 pb-2 ${topPad} transition-opacity duration-200 ${dim ? 'opacity-30 hover:opacity-100' : ''}`}
+        >
+          {/* 分节标题之下重一档的产品名/视图名；不 uppercase（"ShuviX" 不是全大写） */}
+          {title !== undefined && (
+            <h1 className="text-[13px] font-semibold text-text-secondary tracking-wide">{title}</h1>
+          )}
+          <div className={`${noDrag} ml-auto flex items-center`}>{titleActions}</div>
+        </div>
+      )}
 
       {/* 会话列表（或宿主正文替换，如日历视图） */}
       <div className="flex-1 overflow-y-auto pl-2 pr-1 py-1 no-scrollbar">
