@@ -77,13 +77,13 @@ export const SessionParamsSchema = Type.Object({
   message: Type.Optional(
     Type.String({
       description:
-        'The message to send, written exactly as a user would write it — the sub-session sees only this text, so make it self-contained. Required by "prompt-sub-session"; on "create-sub-session" it is optional and sends this as the new sub-session\'s first message right away.'
+        'For "prompt-sub-session": the message to send, written exactly as a user would write it — the sub-session sees only this text, so make it self-contained. "create-sub-session" does not take it — create the sub-session first, then send it its task.'
     })
   ),
   run_in_background: Type.Optional(
     Type.Boolean({
       description:
-        'For "prompt-sub-session": return a receipt immediately instead of waiting for the answer. Use it ONLY when you have other work to do right now, or when starting several sub-sessions to collect together with "wait-for-sub-sessions". If you need the reply before you can continue, leave this off and let the call wait — waiting costs nothing, while a receipt you then wait around for costs a request every time you check.'
+        'For "prompt-sub-session": return a receipt immediately instead of waiting for the answer, and bring you back when the turn ends. Use it whenever you do not need the reply inside this same call — dispatching work that will take a while, or starting several sub-sessions to collect together with "wait-for-sub-sessions". Leave it off when you cannot continue without the answer: the foreground form waits in one call and costs nothing while it waits.'
     })
   ),
   timeout_seconds: Type.Optional(
@@ -99,14 +99,14 @@ A sub-session is an ordinary session that you own: it has its own conversation, 
 
 Actions:
 - "set-title": rename THIS session. Pass the new title in \`title\` (concise, at most ${TITLE_MAX_CHARS} characters).
-- "create-sub-session": start a sub-session and return its id. Optional \`title\` and \`agent_profile\`; pass \`message\` to send it its first task in the same call. It inherits this session's project and model.
-- "prompt-sub-session": send \`message\` into \`sub_session_id\` as if the user had typed it, and wait for the reply. Add \`run_in_background: true\` to get a receipt immediately instead.
+- "create-sub-session": start a sub-session and return its id. Optional \`title\` and \`agent_profile\`. It inherits this session's project and model, and starts out empty — creating one sends it nothing.
+- "prompt-sub-session": send \`message\` into \`sub_session_id\` as if the user had typed it, and wait for the reply. Add \`run_in_background: true\` to dispatch it and get a receipt immediately instead — you are brought back when the turn ends. This is also how a sub-session gets its first task, right after you create it.
 - "wait-for-sub-sessions": block until your sub-sessions finish and return all their answers at once. Omit \`sub_session_id\` to wait for every one that is running, or pass one to wait for that one.
 - "list-sub-sessions": list your sub-sessions with their status (idle / running / waiting-input).
 - "read-sub-session": the latest answer of \`sub_session_id\`.
 - "stop-sub-session": stop whatever \`sub_session_id\` is currently doing.
 
-Waiting is a single call that costs nothing while it waits. **Never sleep and then poll** with "list-sub-sessions" / "read-sub-session": every poll is a full request, and it buys you nothing that waiting would not have given you for free. If you need the answer to continue, use the foreground form — it cannot hang, because on timeout it leaves the sub-session running and tells you so. Start work in the background only when you genuinely have something else to do first, then collect it with "wait-for-sub-sessions".
+Neither form makes you sit and check on it. The foreground form is one call that waits and costs nothing while it waits, and it cannot hang — on timeout it leaves the sub-session running and tells you so. The background form hands you a receipt and brings you back when the turn ends, so you can get on with other work, or tell the user what you started, and collect the result later with "wait-for-sub-sessions". Use the foreground form when you cannot continue without the answer, the background form when you can. **Never sleep and then poll** with "list-sub-sessions" / "read-sub-session": every poll is a full request, and it buys you nothing that either form gives you for free.
 
 **A sub-session runs one turn at a time.** It is a conversation, not a queue: sending a second message while it is still working is rejected, so either wait for the reply or create another sub-session to work in parallel. A sub-session can also stop and wait for the USER to approve something (\`status="waiting-input"\`) — typically a security prompt for a command it wants to run. Only the user can clear that: you cannot answer it, waiting longer will not help, and rewording the task will not avoid it. Relay what it is waiting for to the user, or stop the sub-session.
 
@@ -125,12 +125,22 @@ interface SessionToolParams {
 }
 
 /**
- * 后台/降级回执的收尾指引。**不写「你会被通知」**：完成通知只在这一轮还没结束时
- * 插得进来（HarnessSession.notify 运行中 steer、空闲则排到下一轮），父级说完话就
- * 收不到了 —— 那句承诺正是模型改用 sleep 轮询的原因。
+ * 后台/降级回执的收尾指引。**明说「跑完会把你叫回来」** —— 那是现在的事实：子会话跑完
+ * 经 `AgentSession.notify` 回报，运行中 steer 进当前轮、空闲则自动续跑（d886985），
+ * 父级说完话照样收得到。
+ *
+ * 这段文案原先刻意不作这个承诺，因为写它的那会儿（9ed4189）确实兑现不了 —— 自动续跑是
+ * **下一个提交**落的。而「你不会被通知，要结果就去等」正是把模型逼回前台阻塞的那句话：
+ * 它读完只剩一条路，就是原地把整轮等完。
+ *
+ * 兑现不了的只剩一种：用户刚显式停过这条会话（或关掉了自动续跑）—— 那时通知退回排队，
+ * 搭下一条用户消息的便车，一条不少但会迟到，所以括号里如实写出来。
+ *
+ * 「不要 sleep 轮询」照旧写死：轮询是唯一真正白烧请求的收法，而两条兑现得了的路
+ *（被叫回来、或一次 wait）这句话里都给全了。
  */
 const COLLECT_HINT =
-  'When you need the result, collect it with action "wait-for-sub-sessions" — one call that blocks until it is done and hands back the answer. Do NOT sleep and poll.'
+  'You do not have to wait here: when the turn ends you are brought back with a notice (at the latest, when the user next speaks). Get on with other work, or tell the user what you started. If you would rather have the answer inside this same turn, collect it with action "wait-for-sub-sessions" — one call that blocks until it is done and hands back the answer. Do NOT sleep and poll.'
 
 /** 结果排版：一段文本，行间空行 —— 与其他工具的多段结果同形 */
 function text(...lines: string[]): AgentToolResult<SessionToolDetails | undefined> {
@@ -242,7 +252,7 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
       case 'set-title':
         return this.setTitle(params.title)
       case 'create-sub-session':
-        return this.createSubSession(params, signal)
+        return this.createSubSession(params)
       case 'prompt-sub-session':
         return this.promptSubSession(params, signal)
       case 'wait-for-sub-sessions':
@@ -266,8 +276,7 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
   // 它握着准入规则）→ 否则把结果排版成一段文本。工具层不作任何判断。
 
   private async createSubSession(
-    params: SessionToolParams,
-    signal?: AbortSignal
+    params: SessionToolParams
   ): Promise<AgentToolResult<SessionToolDetails | undefined>> {
     const res = await subSessionRunner.create(this.ctx.sessionId, {
       title: params.title,
@@ -275,15 +284,19 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
     })
     if ('error' in res) throw new Error(res.error)
 
-    // 带了 message 就顺手把活派下去 —— 「开一条子会话去干 X」本来就是一个动作，
-    // 拆成两次往返只是工具面的偶然。**转交给同一个 prompt 路径**，忙碌/后台/超时
-    // 语义只有一份；静默丢掉这个参数才是坑（模型会以为活已经派下去了）。
-    if (params.message?.trim()) {
-      return this.promptSubSession({ ...params, sub_session_id: res.id }, signal)
-    }
+    // create **只建会话**。曾经它带 message 就顺手转 prompt（少一次往返），代价是
+    // 「开一条子会话去干 X」这个最常见的写法恒为前台形态：派活那一刻就把父会话按住，
+    // 最长 300s 才降级 —— 而派活的人多半根本不需要当场拿到答复。派发的形态选择属于
+    // `prompt-sub-session`（`run_in_background`），不该由「顺手」替它定死。
+    //
+    // 收到 message 不静默丢掉：那才是真的坑 —— 模型会以为活已经派下去了，转头去
+    // wait 一个根本没开始的东西。回执明说没发，并把下一步给全。
     return text(
       `<sub-session id="${attr(res.id)}" title="${attr(res.title)}" status="created"/>`,
-      `Send it work with action "prompt-sub-session".`
+      params.message?.trim()
+        ? 'Nothing was sent to it: "create-sub-session" does not take `message`.'
+        : '',
+      'Send it its task with action "prompt-sub-session" — add `run_in_background: true` to dispatch it without waiting for the reply.'
     )
   }
 

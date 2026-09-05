@@ -206,6 +206,29 @@ describe('SessionTool — 子会话 action', () => {
     expect(textOf(res)).toContain('重构 parser')
   })
 
+  it('create 只建会话：带了 message 也不发，且回执明说没发出去', async () => {
+    // 曾经 create 带 message 会顺手转 prompt —— 于是「开一条子会话去干 X」这个最常见的
+    // 写法恒为前台形态，派活那一刻就把父会话按住。形态的选择权还给 prompt 之后，
+    // 这个参数在 create 上就只剩一种正确处理：**明说没发**。静默丢弃才是坑 ——
+    // 模型会以为活已经派下去了，转头去 wait 一个根本没开始的东西
+    mocks.runnerCreate.mockResolvedValue({ id: 'sub-1', title: '重构 parser' })
+    const res = await tool.execute('tc-1', {
+      action: 'create-sub-session',
+      message: '去把测试跑绿'
+    })
+    expect(mocks.runnerPrompt).not.toHaveBeenCalled()
+    expect(textOf(res)).toContain('Nothing was sent to it')
+    // 下一步给全：派活的形态选择属于 prompt，回执必须把那个参数摆到模型面前，
+    // 否则拆成两步之后它只会用缺省的前台形态，问题原样搬家
+    expect(textOf(res)).toContain('prompt-sub-session')
+    expect(textOf(res)).toContain('run_in_background')
+    // 没带 message 的那条不该无端多出这句
+    mocks.runnerCreate.mockResolvedValue({ id: 'sub-2', title: 'B' })
+    expect(textOf(await tool.execute('tc-1', { action: 'create-sub-session' }))).not.toContain(
+      'Nothing was sent'
+    )
+  })
+
   it('runner 的 error 原样抛出（准入理由只有一份，工具层不复述也不改写）', async () => {
     mocks.runnerCreate.mockResolvedValue({ error: 'Chat sessions cannot have sub-sessions.' })
     await expect(tool.execute('tc-1', { action: 'create-sub-session' })).rejects.toThrow(
@@ -309,11 +332,14 @@ describe('SessionTool — 子会话 action', () => {
     )
     expect(mocks.runnerPrompt).toHaveBeenCalledWith(expect.objectContaining({ background: true }))
     expect(started).toMatch(/background/i)
-    // 收尾指引指向 wait 而不是「你会被通知」——后者兑现不了（notify 只插得进还在跑的那一轮），
-    // 而正是那句话把模型推向 sleep 轮询
+    // 收尾指引**明说会被叫回来**：自动续跑（d886985）落地之后那就是事实 ——
+    // 子会话跑完经 AgentSession.notify 回报，空闲的父会话会自己起一轮。
+    // 原先这里断言的是相反的一句（不承诺通知），而那句话正是把模型逼回前台阻塞的东西：
+    // 它读完只剩「原地把整轮等完」一条路
+    expect(started).toContain('brought back')
+    // 两条兑现得了的收法都得在：被叫回来，或者一次 wait。轮询照旧写死禁止
     expect(started).toContain('wait-for-sub-sessions')
     expect(started).toContain('Do NOT sleep and poll')
-    expect(started).not.toMatch(/notified/i)
 
     mocks.runnerPrompt.mockResolvedValue({ kind: 'timeout' })
     const timedOut = textOf(

@@ -200,8 +200,8 @@ class SubSessionRunner {
     parentId: string,
     params: { title?: string; agentProfile?: string }
   ): Promise<{ error: string } | { id: string; title: string }> {
-    // 注：首条消息不在这里发 —— 见工具层 createSubSession（建完立刻转 prompt，
-    // 复用同一套忙碌/后台/超时语义，不在创建路径上再造一份）
+    // 建完是一条**空会话**：首条消息不在这里发，也不在工具层顺手代发 —— 派活恒经
+    // `prompt`，形态（前台等 / run_in_background）由派活的那次调用自己选。
     const rejected = this.rejectIfNotNormal(parentId)
     if (rejected) return { error: rejected }
 

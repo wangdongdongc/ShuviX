@@ -210,11 +210,14 @@ describe('prompt-sub-session —— 代替用户发消息并等结果', () => {
     await promptParent('后台跑')
 
     const results = toolResults(await listMessages(parentSid))
-    const receipt = results.find((r) => /background/i.test(r)) ?? ''
+    // 认那句独有的回执文案而不是「哪条结果里有 background 这个词」—— 创建回执里也有
+    // （它要把 `run_in_background` 摆给模型看），松判据会挑中它
+    const receipt = results.find((r) => r.includes('Started in the background')) ?? ''
+    // 回执**明说跑完会把你叫回来**（自动续跑之后那是事实），并给出「要当轮就拿到答复」的收法
+    expect(receipt).toContain('brought back')
     expect(receipt).toContain('wait-for-sub-sessions')
-    // 回执不带内容,也不再承诺「你会被通知」（notify 插不进已经结束的那一轮）
+    // 回执不带内容：它会永久留在父会话上下文里并被每一步重发
     expect(receipt).not.toContain('BG DONE.')
-    expect(receipt).not.toMatch(/notified/i)
 
     // wait 一次交回答复：父级不必再 read 一遍；答复同样在围栏里
     const collected = results.find((r) => r.includes('BG DONE.'))
