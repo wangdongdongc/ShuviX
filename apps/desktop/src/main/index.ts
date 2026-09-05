@@ -143,7 +143,9 @@ function openSettingsWindow(tab?: string): void {
     minWidth: 600,
     minHeight: 400,
     show: false,
-    title: '设置',
+    // 任务栏上与主窗口（"ShuviX"）区分；页面 document.title 是产品名，
+    // 加载后会覆盖窗口标题 —— 下方 page-title-updated 拦截保住这个标题
+    title: `ShuviX — ${t('settings.title')}`,
     // Windows/Linux 下菜单栏默认隐藏（Alt 临时呼出），快捷键不受影响；macOS 菜单本就在系统栏
     ...(!isMac ? { autoHideMenuBar: true } : {}),
     // macOS 使用隐藏标题栏 + 交通灯按钮
@@ -168,6 +170,10 @@ function openSettingsWindow(tab?: string): void {
   } else {
     settingsWindow.loadFile(join(__dirname, '../renderer/index.html'), { hash })
   }
+
+  // 页面 <title> 是产品名 "ShuviX"，加载完成会覆盖窗口标题 → 拦住，
+  // 否则任务栏/Alt+Tab 里主窗口与设置窗口同名无法区分
+  settingsWindow.on('page-title-updated', (e) => e.preventDefault())
 
   // 关闭前保存窗口位置和尺寸
   settingsWindow.on('close', () => {
