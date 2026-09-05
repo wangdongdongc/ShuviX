@@ -287,8 +287,12 @@ export async function startBgTask(params: StartBgTaskParams): Promise<BgTaskStar
   const logPath = join(getToolResultsDir(sessionId), `${toolCallId}.log`)
   const { shell, args } = getShellConfig()
 
-  // 'a' 打开：子进程独占追加写。父进程 dup 给子进程后立即关掉自己这份，避免 fd 泄漏。
-  const fd = openSync(logPath, 'a')
+  // Windows 上不能用 'a'：libuv 以 append-only 访问权（FILE_APPEND_DATA，无 FILE_WRITE_DATA）
+  // 打开 O_APPEND 文件，而 MSYS2/cygwin 子进程（Git Bash）对磁盘文件按偏移写，往这种继承
+  // 句柄写字节拿不到 —— 日志恒为空，且最后一个 echo 写失败会把退出码带成 1。
+  // logPath 按 toolCallId 唯一、不存在跨调用追加的场景，'w' 与 'a' 等价；POSIX 保持 'a'。
+  // 回归测试：services/__tests__/bgTaskService.test.ts
+  const fd = openSync(logPath, process.platform === 'win32' ? 'w' : 'a')
   let child: ChildProcess
   try {
     child = spawn(shell, [...args, command], {
