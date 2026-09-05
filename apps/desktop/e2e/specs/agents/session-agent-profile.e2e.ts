@@ -256,7 +256,8 @@ describe('会话档案切换', () => {
     const settings = await app.main.eval<{ agentProfile?: string }>(
       `window.api.session.getById(${JSON.stringify(sid)}).then((s) => s.settings)`
     )
-    expect(settings.agentProfile).toBeUndefined()
+    // 建会话时按会话形态落的默认档案（无项目 ⇒ chat）原样不动 —— 拒绝是零副作用的
+    expect(settings.agentProfile).toBe('chat')
   })
 
   it('拒绝切到 notebook 基座档案（档案存在，但不是切换目标）', async () => {
@@ -267,7 +268,8 @@ describe('会话档案切换', () => {
     const settings = await app.main.eval<{ agentProfile?: string }>(
       `window.api.session.getById(${JSON.stringify(sid)}).then((s) => s.settings)`
     )
-    expect(settings.agentProfile).toBeUndefined()
+    // 建会话时按会话形态落的默认档案（无项目 ⇒ chat）原样不动 —— 拒绝是零副作用的
+    expect(settings.agentProfile).toBe('chat')
   })
 
   it('拒绝切到未声明会话感知的档案（可被派发，但不可切换）', async () => {
@@ -278,7 +280,8 @@ describe('会话档案切换', () => {
     const settings = await app.main.eval<{ agentProfile?: string }>(
       `window.api.session.getById(${JSON.stringify(sid)}).then((s) => s.settings)`
     )
-    expect(settings.agentProfile).toBeUndefined()
+    // 建会话时按会话形态落的默认档案（无项目 ⇒ chat）原样不动 —— 拒绝是零副作用的
+    expect(settings.agentProfile).toBe('chat')
   })
 
   it('档案文件被删：会话回落 default 而非卡死', async () => {

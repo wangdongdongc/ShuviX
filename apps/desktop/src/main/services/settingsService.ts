@@ -37,6 +37,14 @@ export const KNOWN_SETTINGS: Record<string, SettingMeta> = {
   },
   'general.defaultProvider': { labelKey: 'settings.defaultProvider', desc: 'provider id' },
   'general.defaultModel': { labelKey: 'settings.defaultModel', desc: 'model id' },
+  'general.defaultProjectAgent': {
+    labelKey: 'settings.defaultProjectAgentRow',
+    desc: "agent profile name — the base profile a new session inside a project starts from (default 'default')"
+  },
+  'general.defaultChatAgent': {
+    labelKey: 'settings.defaultChatAgentRow',
+    desc: "agent profile name — the base profile a new session outside any project starts from (default 'chat')"
+  },
   'tool.browser.ignoreCertificateErrors': {
     labelKey: 'settings.toolBrowserIgnoreCertificateErrors',
     desc: 'true | false — bypass HTTPS certificate validation for the embedded browser'

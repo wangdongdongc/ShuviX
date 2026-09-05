@@ -19,6 +19,7 @@ import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   pick: vi.fn<(id: string, cols: string[]) => unknown>(),
+  pickSettings: vi.fn<(id: string, keys: string[]) => unknown>(),
   findChildren: vi.fn<(id: string) => Array<Record<string, unknown>>>(),
   create: vi.fn(),
   updateTitle: vi.fn(),
@@ -32,7 +33,11 @@ const mocks = vi.hoisted(() => ({
 }))
 
 vi.mock('../../dao/sessionDao', () => ({
-  sessionDao: { pick: mocks.pick, findChildren: mocks.findChildren }
+  sessionDao: {
+    pick: mocks.pick,
+    pickSettings: mocks.pickSettings,
+    findChildren: mocks.findChildren
+  }
 }))
 vi.mock('../../services/sessionService', () => ({
   sessionService: {
@@ -84,13 +89,15 @@ function defaultWorld(): void {
     if (id === CHILD) return { settings: {}, parentId: PARENT, title: 'Child', updatedAt: 2 }
     return undefined
   })
+  // sessionService.create 已按会话形态把默认档案落进 settings（父会话无项目 ⇒ 'chat'）
+  mocks.pickSettings.mockReturnValue({ agentProfile: 'chat' })
   mocks.findChildren.mockReturnValue([])
   mocks.getAgentSession.mockReturnValue(undefined)
   // 发送成功 = 落定为 {}；带 error 才是「没发出去」
   mocks.gatewayPrompt.mockResolvedValue({})
   mocks.findLastBySession.mockResolvedValue(undefined)
   mocks.resolveRunModelConfig.mockResolvedValue(null)
-  mocks.resolveAgentProfileName.mockReturnValue('default')
+  mocks.resolveAgentProfileName.mockReturnValue('chat')
   mocks.updateAgentProfile.mockResolvedValue({ success: true, applied: { tools: [] } })
   mocks.create.mockReturnValue({ id: CHILD, title: 'Child' })
 }
@@ -195,10 +202,18 @@ describe('create —— 继承与上限', () => {
     expect(mocks.appendModelChange).not.toHaveBeenCalled()
   })
 
-  it('default 不必显式切档案（它就是新会话的回落值）', async () => {
-    mocks.resolveAgentProfileName.mockReturnValue('default')
+  it('与建会话时落下的档案相同 ⇒ 不再显式切一次（切会连带把工具勾选清空）', async () => {
+    mocks.resolveAgentProfileName.mockReturnValue('chat')
+    mocks.pickSettings.mockReturnValue({ agentProfile: 'chat' })
     await runner.create(PARENT, {})
     expect(mocks.updateAgentProfile).not.toHaveBeenCalled()
+  })
+
+  it('父会话档案与默认落值不同 ⇒ 显式切过去（子会话跟随父会话人格）', async () => {
+    mocks.resolveAgentProfileName.mockReturnValue('coding')
+    mocks.pickSettings.mockReturnValue({ agentProfile: 'chat' })
+    await runner.create(PARENT, {})
+    expect(mocks.updateAgentProfile).toHaveBeenCalledWith(CHILD, 'coding')
   })
 
   it('档案不合法不让整个创建失败：会话已建好且可用（回落 default），照常返回 id', async () => {

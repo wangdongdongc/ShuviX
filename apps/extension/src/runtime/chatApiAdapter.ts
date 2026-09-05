@@ -9,6 +9,11 @@ import type { ChatApi } from '@shuvix/chat-protocol/chatApi'
 import { resolveTokensForAgent } from '@shuvix/chat-protocol/utils/inlineTokens'
 import { messageStore } from '../storage/messageStore'
 import { resolveModelRef } from '@shuvix/chat-protocol/agentModelRef'
+import {
+  CHAT_PROFILE_NAME,
+  DEFAULT_CHAT_AGENT_KEY,
+  DEFAULT_PROJECT_AGENT_KEY
+} from '@shuvix/chat-protocol/agentProfile'
 import { capsFor } from './resolveSessionModel'
 import { sessionStore } from '../storage/sessionStore'
 import { settingsStore } from '../storage/settingsStore'
@@ -30,6 +35,7 @@ import { subAgentManager, extensionSubAgentRegistry } from './subAgent'
 import { withTabLease } from './tabLease'
 import {
   BASE_PROFILE_NAMES,
+  SWITCHABLE_BASE_PROFILE_NAMES,
   DEFAULT_PROFILE_NAME,
   validateShuvixMdText
 } from '@shuvix/agent-runtime'
@@ -45,6 +51,21 @@ const ok = { success: true as const }
  */
 async function activeSelection(): Promise<{ provider: string; model: string }> {
   return settingsStore.getNewSessionSelection()
+}
+
+/**
+ * 新会话的默认档案名 —— 由**会话形态**选设置项：归属项目（FSA 文件夹）走
+ * 「默认项目智能体」（缺省 `default`），不归属项目（OPFS 隔离目录）走「默认聊天智能体」
+ * （缺省 `chat`）。设置指向的档案已不存在时回落对应基座 —— 与桌面
+ * sessionService.defaultAgentProfile 同一条纪律。
+ */
+async function defaultAgentProfile(projectId: string | null): Promise<string> {
+  const inProject = !!projectId
+  const key = inProject ? DEFAULT_PROJECT_AGENT_KEY : DEFAULT_CHAT_AGENT_KEY
+  const base = inProject ? DEFAULT_PROFILE_NAME : CHAT_PROFILE_NAME
+  const configured = (await settingsStore.get(key))?.trim()
+  if (!configured || configured === base) return base
+  return extensionSubAgentRegistry.getProfile(configured) ? configured : base
 }
 
 export const chatApiAdapter: ChatApi = {
@@ -237,11 +258,16 @@ export const chatApiAdapter: ChatApi = {
     list: async () => sessionStore.list(),
     create: async (params) => {
       const sel = await activeSelection()
+      const projectId = params?.projectId ?? null
       const session = await sessionStore.create({
         ...sel,
-        projectId: params?.projectId ?? null,
+        projectId,
         notebookPath: params?.notebookPath,
-        title: params?.title
+        title: params?.title,
+        // 档案在创建这一刻定型（口径同桌面 sessionService.create）：按会话形态取设置里
+        // 对应的默认档案。之后改设置只影响更新的会话——档案是粘性的。
+        // 笔记本会话钉死 notebook 基座（buildRuntimeSession），不写这个键
+        ...(params?.notebookPath ? {} : { agentProfile: await defaultAgentProfile(projectId) })
       })
       // 与桌面 sessionService.create 对齐：列表成员变化 → 信号事件，订阅端重拉
       appEventBus.publish({ type: 'session.listChanged' })
@@ -273,13 +299,14 @@ export const chatApiAdapter: ChatApi = {
     },
     getById: async (id) => sessionStore.getById(id),
     // 可切换的会话档案（扩展只有内置档案，无用户目录）：只收声明了会话感知的档案
-    // （不声明 = 只可被派发的执行型档案，政策要求新鲜上下文），排除 notebook 基座，保留 default
+    // （不声明 = 只可被派发的执行型档案，政策要求新鲜上下文），排除 notebook 基座，
+    // 保留 default / chat（普通会话的两条路线，互为退路）
     listAgentProfiles: async () =>
       extensionSubAgentRegistry
         .listAll()
         .filter(
           (a) =>
-            a.name === DEFAULT_PROFILE_NAME ||
+            SWITCHABLE_BASE_PROFILE_NAMES.has(a.name) ||
             (!BASE_PROFILE_NAMES.has(a.name) && a.sessionAwareness)
         )
         .map((a) => ({
@@ -306,13 +333,13 @@ export const chatApiAdapter: ChatApi = {
       }
       const profile = extensionSubAgentRegistry.getProfile(name)
       if (!profile) return { success: false, error: `Unknown agent "${name}"` }
-      // 基座档案不是切换目标（'default' 除外 —— 切回主会话的入口；口径同桌面 sessionService）
-      if (name !== DEFAULT_PROFILE_NAME && BASE_PROFILE_NAMES.has(name)) {
+      // 基座档案不是切换目标（default / chat 除外 —— 普通会话两条路线的入口；口径同桌面）
+      if (!SWITCHABLE_BASE_PROFILE_NAMES.has(name) && BASE_PROFILE_NAMES.has(name)) {
         return { success: false, error: `"${name}" is a base profile and cannot be switched to` }
       }
       // 未声明会话感知的档案只能被派发：切成主会话后长对话会稀释其政策的权重（见 definitionFile）。
-      // 'default' 豁免（与上面的列表同源）：它是主会话本身的基座，不能把退路堵死
-      if (name !== DEFAULT_PROFILE_NAME && !profile.sessionAwareness) {
+      // 可切换基座豁免（与上面的列表同源）：会话本就由它们之一创建，不能把退路堵死
+      if (!SWITCHABLE_BASE_PROFILE_NAMES.has(name) && !profile.sessionAwareness) {
         return { success: false, error: `"${name}" is not session-aware and cannot be switched to` }
       }
       await sessionStore.updateSettings(id, { agentProfile: name })

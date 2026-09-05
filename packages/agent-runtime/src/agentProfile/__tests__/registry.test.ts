@@ -174,10 +174,11 @@ describe('语言解析 — 精确 → 基础 → en，按文件整体回退', ()
 })
 
 describe('buildBuiltinProfiles — 全集现算', () => {
-  it('全参数 → 十一个内置,两个基座档案居首;缺 widget/wiki 根 → 自动跳过', () => {
+  it('全参数 → 十二个内置,三个基座档案居首;缺 widget/wiki 根 → 自动跳过', () => {
     // bot-notes 已退役（bot 自己维护自己的正文，没有单独的笔记段）—— 名单里不该再有它
     expect(buildBuiltinProfiles(ALL_PARAMS).map((a) => a.name)).toEqual([
       'default',
+      'chat',
       'notebook',
       'coding',
       'browser',
@@ -193,6 +194,7 @@ describe('buildBuiltinProfiles — 全集现算', () => {
     //（模型走 shuvix-model 通用链路，内置不声明）
     expect(buildBuiltinProfiles({}).map((a) => a.name)).toEqual([
       'default',
+      'chat',
       'notebook',
       'coding',
       'browser',

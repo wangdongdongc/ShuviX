@@ -20,7 +20,7 @@ import {
   parseAgentDefinitionFile,
   serializeAgentDefinitionFile,
   BASE_PROFILE_NAMES,
-  DEFAULT_PROFILE_NAME,
+  SWITCHABLE_BASE_PROFILE_NAMES,
   type AgentProfile,
   type AgentProfileRegistry,
   type ParsedAgentFile
@@ -150,15 +150,16 @@ class AgentService implements AgentProfileRegistry {
    *
    * 与 updateAgentProfile 的准入同源：只收**声明了 `shuvix-session-awareness`** 的档案
    * （不声明 = 只可被派发的执行体，如 wiki-writer：政策必须跑在新鲜上下文里），
-   * 再排除 notebook（笔记本会话形态的基座，切到聊天会话上只会得到一个指向不存在笔记的
-   * 人格），保留 default（切回主会话基座的唯一入口）。
+   * 再排除 notebook（笔记本会话形态的基座，切到普通会话上只会得到一个指向不存在笔记的
+   * 人格），保留 default / chat（普通会话的两条路线，互为退路）。
    * 不带 systemPrompt —— 选择器不需要，见 AgentProfileSummary。
    */
   listSwitchable(): AgentProfileSummary[] {
     return this.listAll()
       .filter(
         (a) =>
-          a.name === DEFAULT_PROFILE_NAME || (!BASE_PROFILE_NAMES.has(a.name) && a.sessionAwareness)
+          SWITCHABLE_BASE_PROFILE_NAMES.has(a.name) ||
+          (!BASE_PROFILE_NAMES.has(a.name) && a.sessionAwareness)
       )
       .map((a) => ({
         name: a.name,
@@ -169,12 +170,12 @@ class AgentService implements AgentProfileRegistry {
       }))
   }
 
-  /** 按名取档案（含 'default' 内置兜底 —— 用户 default 文件损坏时主会话仍可创建） */
+  /** 按名取档案（含基座档案的内置兜底 —— 用户同名文件损坏时会话仍可创建） */
   getProfile(name: string): AgentProfile | undefined {
     const found = this.listAll().find((a) => a.name === name)
     if (found) return found
-    if (name !== DEFAULT_PROFILE_NAME) return undefined
-    return this.builtinAgents().find((a) => a.name === DEFAULT_PROFILE_NAME)
+    if (!BASE_PROFILE_NAMES.has(name)) return undefined
+    return this.builtinAgents().find((a) => a.name === name)
   }
 
   /**

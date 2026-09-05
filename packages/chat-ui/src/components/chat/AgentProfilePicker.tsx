@@ -4,7 +4,11 @@ import { useTranslation } from 'react-i18next'
 import { Bot, Check, Settings, TriangleAlert } from 'lucide-react'
 import type { AgentProfileSummary } from '@shuvix/chat-protocol/chatApi'
 import type { ModelCapabilities } from '@shuvix/chat-protocol/types/provider'
-import { DEFAULT_PROFILE_NAME } from '@shuvix/chat-protocol/agentProfile'
+import {
+  CHAT_PROFILE_NAME,
+  DEFAULT_CHAT_AGENT_KEY,
+  DEFAULT_PROFILE_NAME
+} from '@shuvix/chat-protocol/agentProfile'
 import { useChatStore } from '../../stores/chatStore'
 import { useClickOutside } from '../../hooks/useClickOutside'
 
@@ -29,9 +33,9 @@ export interface AgentProfilePickerProps {
  * 档案声明的模型与 mcp:/skill: 工具由后端作为**种子**写进会话树，回调交给宿主更新
  * 模型/工具选择器 —— 用户可在此基础上继续调整，改的是会话，不回写档案文件。
  *
- * 常态可见性是它存在的一半理由：非 default 档案用 accent 着色，一眼看出「这个会话现在
- * 不是默认人格」；档案文件被删/改名时（settings 还指着旧名）用 warning 色如实显示，
- * 与后端 resolveAgentProfileName 的回落行为一致。
+ * 常态可见性是它存在的一半理由：非基座档案（default / chat 之外）用 accent 着色，一眼
+ * 看出「这个会话现在不是基座人格」；档案文件被删/改名时（settings 还指着旧名）用 warning
+ * 色如实显示，与后端 resolveAgentProfileName 的回落行为一致。
  */
 export function AgentProfilePicker({
   disabled,
@@ -43,8 +47,19 @@ export function AgentProfilePicker({
     (s) => s.sessions.find((sess) => sess.id === s.activeSessionId)?.settings.agentProfile
   )
   const pendingProfile = useChatStore((s) => s.pendingAgentProfile)
+  // 欢迎页的回落值：那里发送会建一条不归属项目的会话，用的是设置里的「默认聊天智能体」
+  // （缺省 chat）。已有会话不看它 —— 会话建好那一刻档案就写进 settings 了。
+  const [chatDefault, setChatDefault] = useState(CHAT_PROFILE_NAME)
+  useEffect(() => {
+    if (activeSessionId) return
+    void getHostApi()
+      ?.settings.get(DEFAULT_CHAT_AGENT_KEY)
+      .then((v) => setChatDefault(v?.trim() || CHAT_PROFILE_NAME))
+  }, [activeSessionId])
   // 无会话（欢迎页）时选择只记在 store 里，建会话时一并应用
-  const current = (activeSessionId ? sessionProfile : pendingProfile) ?? DEFAULT_PROFILE_NAME
+  const current = activeSessionId
+    ? (sessionProfile ?? DEFAULT_PROFILE_NAME)
+    : (pendingProfile ?? chatDefault)
 
   const ref = useRef<HTMLDivElement>(null)
   const [open, setOpen] = useState(false)
@@ -67,7 +82,8 @@ export function AgentProfilePicker({
   }, [open, fetchProfiles])
 
   const currentProfile = profiles.find((p) => p.name === current)
-  const isDefault = current === DEFAULT_PROFILE_NAME
+  // 两个基座（项目会话的 default / 聊天会话的 chat）都算「基座人格」，不着色
+  const isBase = current === DEFAULT_PROFILE_NAME || current === CHAT_PROFILE_NAME
   // 档案文件已不在（被删/改名）：后端会回落 default 运行，这里如实提示而不是装作没事
   const missing = profiles.length > 0 && !currentProfile
 
@@ -97,7 +113,7 @@ export function AgentProfilePicker({
   const label = missing ? current : (currentProfile?.displayName ?? current)
   const tone = missing
     ? 'text-warning hover:text-warning'
-    : isDefault
+    : isBase
       ? 'text-text-tertiary hover:text-text-secondary'
       : 'text-accent hover:text-accent'
 
@@ -108,7 +124,7 @@ export function AgentProfilePicker({
         onClick={() => !disabled && setOpen(!open)}
         disabled={disabled || switching}
         className={`inline-flex items-center gap-1 text-[11px] rounded px-1.5 py-0.5 transition-colors border border-transparent hover:border-border-secondary disabled:opacity-50 disabled:hover:border-transparent ${tone} ${
-          !isDefault && !missing ? 'bg-accent/10' : ''
+          !isBase && !missing ? 'bg-accent/10' : ''
         }`}
         title={disabled ? t('agentProfile.disabledWhileStreaming') : undefined}
       >

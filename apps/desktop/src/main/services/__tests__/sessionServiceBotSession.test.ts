@@ -50,7 +50,8 @@ vi.mock('../../dao/sessionDao', () => ({
 vi.mock('../../dao/httpLogDao', () => ({ httpLogDao: { deleteBySessionId: mocks.httpLogDelete } }))
 vi.mock('../../dao/providerDao', () => ({ providerDao: {} }))
 vi.mock('../../dao/projectDao', () => ({ projectDao: {} }))
-vi.mock('../../dao/settingsDao', () => ({ settingsDao: {} }))
+// create 会读默认档案设置（general.default*Agent）；未设 ⇒ 回落基座 default / chat
+vi.mock('../../dao/settingsDao', () => ({ settingsDao: { findByKey: vi.fn() } }))
 // 消息层只留 delete 链要的 clear：create / updateBots 若往消息表写任何东西，这里会以 TypeError 红掉
 vi.mock('../messageService', () => ({ messageService: { clear: mocks.messageClear } }))
 vi.mock('../sessionStorage', () => ({

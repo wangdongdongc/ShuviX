@@ -17,8 +17,8 @@ afterAll(async () => {
   await app.stop()
 })
 
-describe('内置 default body 的变量替换', () => {
-  it('无项目会话：已知变量全替换、空块收敛、无残留占位符', async () => {
+describe('内置基座 body 的变量替换', () => {
+  it('无项目会话（chat 基座）：已知变量全替换、空块收敛、无残留占位符', async () => {
     const { systemPrompt: sp } = await createAgentSession(app.main)
     expect(sp).not.toContain('{{shuvix:')
     expect(sp).toContain(`Platform: ${platform()}`)
@@ -28,7 +28,7 @@ describe('内置 default body 的变量替换', () => {
     expect(sp).toBe(sp.trim())
   })
 
-  it('项目会话：workingDirectory=项目路径、git 检测生效', async () => {
+  it('项目会话（default 基座）：workingDirectory=项目路径、git 检测生效', async () => {
     const projDir = join(app.home, 'proj-vars')
     mkdirSync(join(projDir, '.git'), { recursive: true })
     const project = await createProject(app.main, { name: 'VarsProj', path: projDir })
@@ -41,7 +41,8 @@ describe('内置 default body 的变量替换', () => {
 
 describe('用户档案里的占位符', () => {
   it('已知变量替换；未知占位符原样保留（typo 可见）', async () => {
-    writeAgentMd(app, 'default', {
+    // 覆盖 chat：这条断言用的是**无项目**会话，它的基座是 chat 而非 default
+    writeAgentMd(app, 'chat', {
       description: 'ovr',
       tools: 'read',
       body: 'OVR dir={{shuvix:workingDirectory}} plat={{shuvix:platform}} bad={{shuvix:typo}}'
@@ -52,7 +53,7 @@ describe('用户档案里的占位符', () => {
       expect(sp).toContain(`plat=${platform()}`)
       expect(sp).toContain('bad={{shuvix:typo}}')
     } finally {
-      await app.main.eval(`window.api.subAgent.delete({ name: 'default' })`)
+      await app.main.eval(`window.api.subAgent.delete({ name: 'chat' })`)
     }
   })
 })

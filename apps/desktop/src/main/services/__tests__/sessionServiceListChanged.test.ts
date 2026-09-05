@@ -37,7 +37,8 @@ vi.mock('../../dao/sessionDao', () => ({
 vi.mock('../../dao/httpLogDao', () => ({ httpLogDao: { deleteBySessionId: vi.fn() } }))
 vi.mock('../../dao/providerDao', () => ({ providerDao: {} }))
 vi.mock('../../dao/projectDao', () => ({ projectDao: {} }))
-vi.mock('../../dao/settingsDao', () => ({ settingsDao: {} }))
+// create 会读默认档案设置（general.default*Agent）；未设 ⇒ 回落基座 default / chat
+vi.mock('../../dao/settingsDao', () => ({ settingsDao: { findByKey: vi.fn() } }))
 vi.mock('../messageService', () => ({ messageService: { clear: vi.fn() } }))
 vi.mock('../sessionStorage', () => ({
   readSessionRunConfig: vi.fn(),

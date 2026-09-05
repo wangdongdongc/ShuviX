@@ -12,12 +12,16 @@ import i18next from 'i18next'
 import extDefaultEn from './builtinAgents/md/default.md?raw'
 import extDefaultZh from './builtinAgents/md/default.zh.md?raw'
 import extDefaultJa from './builtinAgents/md/default.ja.md?raw'
+import extChatEn from './builtinAgents/md/chat.md?raw'
+import extChatZh from './builtinAgents/md/chat.zh.md?raw'
+import extChatJa from './builtinAgents/md/chat.ja.md?raw'
 import {
   createSubAgentManager,
   buildBuiltinProfile,
   buildBuiltinProfiles,
   createDispatchAgentTool,
   BASE_PROFILE_NAMES,
+  CHAT_PROFILE_NAME,
   DEFAULT_PROFILE_NAME,
   NOTEBOOK_PROFILE_NAME,
   type AgentProfile,
@@ -58,36 +62,51 @@ export function getSessionTools(rootSessionId: string): Map<string, AnyAgentTool
  * 默认子代理不在此：它由 createExtensionDispatchTool 以 defaultAgentType 注入，`agent` 省略即用。
  */
 /**
- * 扩展支持的内置档案子集：两个基座档案 default（主会话）/ notebook（笔记本会话根 Agent）
- * + visualization。explore 依赖 ls/grep/glob（ripgrep）扩展没有，coding 依赖 bash/ssh/database
- * 更是无从谈起；widget/wiki 因缺根目录参数被构建器自动跳过。
+ * 扩展支持的内置档案子集：三个基座档案 default（项目会话）/ chat（不归属项目的会话）/
+ * notebook（笔记本会话根 Agent）+ visualization。explore 依赖 ls/grep/glob（ripgrep）扩展
+ * 没有，coding 依赖 bash/ssh/database 更是无从谈起；widget/wiki 因缺根目录参数被构建器
+ * 自动跳过。
  */
 const EXTENSION_BUILTIN_NAMES = new Set([
   DEFAULT_PROFILE_NAME,
+  CHAT_PROFILE_NAME,
   NOTEBOOK_PROFILE_NAME,
   'visualization'
 ])
 
 /**
- * 扩展的 default 浏览器变体 —— 共享 default 档案点名了 bash/ssh/glob/grep/ls/skill/子代理
- * 等扩展没有的工具，会误导 Agent；这里按扩展真实能力（read/write/edit/ask/浏览器/MCP）
- * 提供整份档案副本，与共享档案同一套语言回退规则。
+ * 扩展的 default / chat 浏览器变体 —— 共享的这两份档案点名了 bash/ssh/glob/grep/ls/skill/
+ * 子会话等扩展没有的工具，会误导 Agent；这里按扩展真实能力（read/write/edit/ask/浏览器/
+ * MCP）各提供整份档案副本，与共享档案同一套语言回退规则。
+ *
+ * 桌面上这两条路线差在「自己干 vs 交给 coding 子会话」，而扩展既没有 shell 也没有子会话，
+ * 两份文案因此只差工作目录形态（项目文件夹 vs 隔离的临时目录）—— 保留两份档案是为了
+ * 让「按会话形态选默认档案」这套配置在两端指同一件事，用户自己写的档案也能选进来。
  */
 const EXTENSION_DEFAULT_SPEC: BuiltinProfileSpec = {
   name: DEFAULT_PROFILE_NAME,
   sources: { en: extDefaultEn, zh: extDefaultZh, ja: extDefaultJa }
 }
 
-/** 内置档案现算（文案按当前语言解析；default 换成扩展的浏览器变体） */
+const EXTENSION_CHAT_SPEC: BuiltinProfileSpec = {
+  name: CHAT_PROFILE_NAME,
+  sources: { en: extChatEn, zh: extChatZh, ja: extChatJa }
+}
+
+const EXTENSION_OVERRIDE_SPECS = new Map<string, BuiltinProfileSpec>([
+  [DEFAULT_PROFILE_NAME, EXTENSION_DEFAULT_SPEC],
+  [CHAT_PROFILE_NAME, EXTENSION_CHAT_SPEC]
+])
+
+/** 内置档案现算（文案按当前语言解析；default / chat 换成扩展的浏览器变体） */
 function builtinProfiles(): AgentProfile[] {
   const language = i18next.language
   return buildBuiltinProfiles({ language })
     .filter((a) => EXTENSION_BUILTIN_NAMES.has(a.name))
-    .map((a) =>
-      a.name === DEFAULT_PROFILE_NAME
-        ? (buildBuiltinProfile(EXTENSION_DEFAULT_SPEC, { language }) ?? a)
-        : a
-    )
+    .map((a) => {
+      const spec = EXTENSION_OVERRIDE_SPECS.get(a.name)
+      return spec ? (buildBuiltinProfile(spec, { language }) ?? a) : a
+    })
 }
 
 export const extensionSubAgentRegistry: AgentProfileRegistry = {

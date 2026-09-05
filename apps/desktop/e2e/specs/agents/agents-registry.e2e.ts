@@ -1,14 +1,21 @@
 /**
  * 档案注册表语义（IPC 层）：内置全集与默认开关、同名覆盖（展示标记 + 运行时生效 + 删除恢复）。
  */
+import { mkdirSync } from 'node:fs'
+import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { launchApp, type E2EApp } from '../../harness/launch'
-import { createAgentSession, writeAgentMd } from '../../harness/seed'
+import { createAgentSession, createProject, writeAgentMd } from '../../harness/seed'
 
 let app: E2EApp
+/** 项目会话用的项目 —— `default` 是**项目会话**的基座，覆盖断言必须落在项目会话上 */
+let projectId: string
 
 beforeAll(async () => {
   app = await launchApp()
+  const path = join(app.home, 'registry-proj')
+  mkdirSync(path, { recursive: true })
+  projectId = (await createProject(app.main, { name: 'RegistryProj', path })).id
 })
 afterAll(async () => {
   await app.stop()
@@ -27,13 +34,14 @@ interface AgentRow {
 const listAgents = (): Promise<AgentRow[]> => app.main.eval('window.api.subAgent.list()')
 
 describe('内置档案', () => {
-  it('十一个内置齐全，上下文注入默认全开（notebook 只开项目感知、派发专用档案全关），描述非空；无启用开关字段', async () => {
+  it('十二个内置齐全，上下文注入默认全开（notebook 只开项目感知、派发专用档案全关），描述非空；无启用开关字段', async () => {
     const builtins = (await listAgents()).filter((a) => a.source === 'builtin')
     // bot-notes 随「笔记」这个概念一并退场（v3）：bot 自己维护自己的正文，
     // 由任务段槽位里那份普通 agent 用文件工具就地改，没有专职的笔记段了
     expect(builtins.map((a) => a.name).sort()).toEqual([
       'bot-intent',
       'browser',
+      'chat',
       'coding',
       'default',
       'explore',
@@ -77,7 +85,7 @@ describe('default 覆盖（用户同名档案）', () => {
       ['builtin', true],
       ['user', false]
     ])
-    const { systemPrompt } = await createAgentSession(app.main)
+    const { systemPrompt } = await createAgentSession(app.main, { projectId })
     expect(systemPrompt.startsWith('OVERRIDE BODY.')).toBe(true)
   })
 
@@ -90,7 +98,7 @@ describe('default 覆盖（用户同名档案）', () => {
     expect(rows).toHaveLength(1)
     expect(rows[0].source).toBe('builtin')
     expect(rows[0].overridden).toBeFalsy()
-    const { systemPrompt } = await createAgentSession(app.main)
+    const { systemPrompt } = await createAgentSession(app.main, { projectId })
     expect(systemPrompt.startsWith('OVERRIDE BODY.')).toBe(false)
   })
 })

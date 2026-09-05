@@ -36,6 +36,8 @@ export const sessionStore = {
     /** 绑定的 md 文件（相对项目根）；提供则创建笔记本会话 */
     notebookPath?: string
     title?: string
+    /** 根 Agent 的档案名（按会话形态取默认档案，见 chatApiAdapter.defaultAgentProfile） */
+    agentProfile?: string
   }): Promise<Session> {
     await ensureLoaded()
     const now = Date.now()
@@ -54,8 +56,10 @@ export const sessionStore = {
       // 不预写运行配置：provider / model / thinkingLevel / enabledTools 的唯一事实源是
       // 会话树（model_change / thinking_level_change / active_tools_change entry）
       // 指令文件不预写配置：留空即「未显式配置」，装配系统提示时按 AGENTS.md → CLAUDE.md 优先级自动选
+      // 档案则相反：它在创建这一刻定型（调用方按会话形态解析后传入），之后归会话自己
       settings: {
-        ...(notebookPath ? { notebookPath } : {})
+        ...(notebookPath ? { notebookPath } : {}),
+        ...(defaults.agentProfile ? { agentProfile: defaults.agentProfile } : {})
       },
       createdAt: now,
       updatedAt: now

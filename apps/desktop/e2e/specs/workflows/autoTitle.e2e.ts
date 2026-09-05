@@ -121,7 +121,8 @@ describe('内置 auto-title —— session.prompt-accepted 埋点链路', () => 
     expect(meta.lane).toBe(`auto-title\u0000${sid}`)
     expect(meta.event!.promptText).toBe('hello')
     expect(meta.event!.isDefaultTitle).toBe(true)
-    expect(meta.event!.profileName).toBe('default')
+    // 埋点如实报会话档案：`session.create({})` 无项目 ⇒ 「默认聊天智能体」的基座 chat
+    expect(meta.event!.profileName).toBe('chat')
 
     // 隔离实例无默认模型：派发在 resolveRunModel 处止步，run 以人读原因收尾
     const end = records.find((r) => r.type === 'end')!

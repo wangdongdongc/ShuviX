@@ -1,7 +1,9 @@
 /**
- * 通用设置（桌面绑定层）—— 外观/语言复用共享 AppearanceTab，默认模型 + 标题模型复用共享
- * ModelDefaultsSettings。本层只负责把 settingsStore 的值/持久化绑进共享组件（存储差异落在此处）。
+ * 通用设置（桌面绑定层）—— 外观/语言复用共享 AppearanceTab，默认模型复用共享
+ * ModelDefaultsSettings，新会话的默认智能体复用共享 DefaultAgentsSettings。
+ * 本层只负责把 settingsStore 的值/持久化绑进共享组件（存储差异落在此处）。
  */
+import { useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   useSettingsStore,
@@ -9,7 +11,12 @@ import {
   type LightThemeId,
   type NotebookThemeId
 } from '../../stores/settingsStore'
-import { AppearanceTab, ModelDefaultsSettings, type ThemeMode } from '@shuvix/app-shell'
+import {
+  AppearanceTab,
+  DefaultAgentsSettings,
+  ModelDefaultsSettings,
+  type ThemeMode
+} from '@shuvix/app-shell'
 
 type Lang = 'zh' | 'en' | 'ja'
 
@@ -47,6 +54,10 @@ export function GeneralSettings(): React.JSX.Element {
     setActiveModel(id)
     window.api.settings.set({ key: 'general.defaultModel', value: id })
   }
+  // 默认智能体：与档案选择器同源的可切换档案列表 + 纯 KV 持久化（无 store 镜像 ——
+  // 它只在建会话那一刻被后端读一次，渲染端没有第二个消费方）
+  const loadAgentProfiles = useCallback(() => window.api.session.listAgentProfiles(), [])
+  const getSetting = useCallback((key: string) => window.api.settings.get(key), [])
   return (
     <div className="flex-1">
       <AppearanceTab
@@ -103,6 +114,12 @@ export function GeneralSettings(): React.JSX.Element {
         defaultModel={activeModel}
         setDefaultProvider={persistDefaultProvider}
         setDefaultModel={persistDefaultModel}
+      />
+
+      <DefaultAgentsSettings
+        loadProfiles={loadAgentProfiles}
+        getSetting={getSetting}
+        setSetting={(key, value) => window.api.settings.set({ key, value })}
       />
     </div>
   )

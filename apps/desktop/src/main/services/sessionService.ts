@@ -30,7 +30,13 @@ import type { Project } from '../dao/types'
 
 import { DEFAULT_THINKING_LEVEL } from '@shuvix/chat-protocol/types/thinking'
 import {
+  DEFAULT_CHAT_AGENT_KEY,
+  DEFAULT_PROJECT_AGENT_KEY
+} from '@shuvix/chat-protocol/agentProfile'
+import {
   BASE_PROFILE_NAMES,
+  SWITCHABLE_BASE_PROFILE_NAMES,
+  CHAT_PROFILE_NAME,
   DEFAULT_PROFILE_NAME,
   NOTEBOOK_PROFILE_NAME,
   SessionManager
@@ -168,6 +174,7 @@ export class SessionService {
     const parent = parentId ? sessionDao.pick(parentId, ['projectId']) : undefined
     const pid = parent ? parent.projectId : (params?.projectId ?? null)
 
+    const isRootless = !!params?.bots?.length
     const session: Session = {
       id,
       title: params?.title ?? (notebookPath ? basename(notebookPath) : t('agent.defaultTitle')),
@@ -178,7 +185,12 @@ export class SessionService {
         ...(notebookPath ? { notebookPath } : {}),
         ...(params?.memorySlug ? { memorySlug: params.memorySlug } : {}),
         // 只在非空时写键：缺省即无键，空数组不算聊天会话
-        ...(params?.bots?.length ? { bots: params.bots } : {})
+        ...(params?.bots?.length ? { bots: params.bots } : {}),
+        // 档案在**创建这一刻**定型（下同 §resolveAgentProfileName）：按会话形态取设置里
+        // 对应的默认档案，落成一个显式的 agentProfile。之后改设置只影响更新的会话 ——
+        // 档案是粘性的，一条已经在跑的会话不该因为改了个全局默认就换人格。
+        // 笔记本会话（钉死 notebook）与无根的聊天会话不写：它们的档案不由这个值决定。
+        ...(notebookPath || isRootless ? {} : { agentProfile: this.defaultAgentProfile(pid) })
       },
       createdAt: now,
       updatedAt: now
@@ -297,14 +309,36 @@ export class SessionService {
   }
 
   /**
+   * 新会话的默认档案名 —— 由**会话形态**选设置项：归属项目走「默认项目智能体」
+   * （缺省 `default`：确认需求、把活儿交给 coding 子会话、验收结果），不归属项目走
+   * 「默认聊天智能体」（缺省 `chat`：握全套内置工具、自己把活干完）。
+   *
+   * 设置指向的档案已不存在（用户删了那份 md）时回落对应基座 —— 与
+   * resolveAgentProfileName 同一条纪律：会话不该被一个不存在的档案名卡死。
+   */
+  private defaultAgentProfile(projectId: string | null): string {
+    const inProject = !!projectId
+    const key = inProject ? DEFAULT_PROJECT_AGENT_KEY : DEFAULT_CHAT_AGENT_KEY
+    const base = inProject ? DEFAULT_PROFILE_NAME : CHAT_PROFILE_NAME
+    const configured = settingsDao.findByKey(key)?.trim()
+    if (!configured || configured === base) return base
+    if (agentService.getProfile(configured)) return configured
+    log.warn(`默认档案 "${configured}"（${key}）已不存在，回落 ${base}`)
+    return base
+  }
+
+  /**
    * 解析会话根 Agent 的档案名。
    *
    * 聊天会话（settings.bots 非空）返回 **null** —— 它没有根 Agent。
    * 笔记本会话（settings.notebookPath 非空）恒为 'notebook' 基座档案，忽略 agentProfile
    * （用户覆盖 `~/.shuvix/agents/notebook.md` 经 getProfile 按名合并自动生效）。
-   * 其余会话：settings.agentProfile 缺省即 'default'；档案文件被删/改名时也回落 'default'
-   * （档案是纯 md 驱动的，用户随时可能删掉某个 `~/.shuvix/agents/<name>.md`，
-   * 会话设置不该因此把根 Agent 卡死在一个不存在的档案上）。
+   * 其余会话读 settings.agentProfile —— 它在 `create` 时就按会话形态落成了显式值
+   * （见 defaultAgentProfile），所以这里**不再判断有没有项目**：默认档案只在创建那一刻
+   * 参与一次，之后是会话自己的事（`/<agentName>` 切换写的也是这个键）。
+   * 缺省（本次改动之前建的老会话）与档案文件被删/改名时一律回落 'default'：档案是纯
+   * md 驱动的，用户随时可能删掉某个 `~/.shuvix/agents/<name>.md`，会话设置不该因此把
+   * 根 Agent 卡死在一个不存在的档案上。
    */
   resolveAgentProfileName(sessionId: string): string | null {
     const settings = sessionDao.pickSettings(sessionId, ['agentProfile', 'notebookPath', 'bots'])
@@ -355,16 +389,16 @@ export class SessionService {
     }
     const profile = agentService.getProfile(name)
     if (!profile) return { success: false, error: `Unknown agent "${name}"` }
-    // 'notebook' 是笔记本会话形态的基座，切到聊天会话上只会得到一个指向不存在笔记的人格
-    // （命令源同样不列它）；'default' 是唯一可切的基座档案 —— 切回主会话的入口。
-    if (name !== DEFAULT_PROFILE_NAME && BASE_PROFILE_NAMES.has(name)) {
+    // 'notebook' 是笔记本会话形态的基座，切到普通会话上只会得到一个指向不存在笔记的人格
+    // （命令源同样不列它）；'default' / 'chat' 是普通会话的两条路线，互为退路，都可切。
+    if (!SWITCHABLE_BASE_PROFILE_NAMES.has(name) && BASE_PROFILE_NAMES.has(name)) {
       return { success: false, error: `"${name}" is a base profile and cannot be switched to` }
     }
     // 未声明会话感知的档案（如 wiki-writer）只可被派发：政策的有效性依赖每次派发都是
     // 新鲜上下文，切成主会话后长对话会稀释系统提示词权重，而它们违规的代价静默且不可逆。
-    // 'default' 豁免（与 listSwitchable 同源）：它是主会话本身的基座 —— 会话本就由它创建，
-    // 一份漏写该键的用户 default.md 不该把「切回主会话」这条唯一退路也堵死。
-    if (name !== DEFAULT_PROFILE_NAME && !profile.sessionAwareness) {
+    // 可切换基座豁免（与 listSwitchable 同源）：会话本就由它们之一创建，一份漏写该键的
+    // 用户 default.md / chat.md 不该把「切回基座」这条退路也堵死。
+    if (!SWITCHABLE_BASE_PROFILE_NAMES.has(name) && !profile.sessionAwareness) {
       return { success: false, error: `"${name}" is not session-aware and cannot be switched to` }
     }
     log.info(`updateAgentProfile session=${sessionId} → ${name}`)

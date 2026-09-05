@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react'
-import { useChatHost, useAppEvent } from '@shuvix/chat-ui'
-import { AppearanceTab, ModelDefaultsSettings } from '@shuvix/app-shell'
+import { useState, useEffect, useCallback } from 'react'
+import { useChatHost, useAppEvent, getChatApi } from '@shuvix/chat-ui'
+import { AppearanceTab, DefaultAgentsSettings, ModelDefaultsSettings } from '@shuvix/app-shell'
 import i18n from '../i18n'
 import { useAppearance, setAppearance } from '../appearanceStore'
 import { settingsStore } from '../../storage/settingsStore'
@@ -8,6 +8,7 @@ import { settingsStore } from '../../storage/settingsStore'
 /** 扩展外观 tab 绑定层（appearanceStore + chrome.storage；隐藏笔记本主题/缩放）。
  *  默认模型一节复用共享 ModelDefaultsSettings：可用模型现读 settingsStore（保证启用后即刷新），
  *  选中值/持久化走 ChatHost.models（即 session.create 用的默认模型）。
+ *  新会话的默认智能体一节复用共享 DefaultAgentsSettings（纯 KV，读写走 ChatApi.settings）。
  *  注：「标题生成模型」设置已废弃 —— 自动标题恒随会话当前模型（titleRuntime）。 */
 export function ExtAppearanceTab(): React.JSX.Element {
   const a = useAppearance()
@@ -31,6 +32,9 @@ export function ExtAppearanceTab(): React.JSX.Element {
     models.setActiveModel(id)
     void settingsStore.set('general.defaultModel', id)
   }
+  // 默认智能体：候选与输入框的档案选择器同源；持久化是纯 KV（建会话时后端读一次）
+  const loadAgentProfiles = useCallback(() => getChatApi().session.listAgentProfiles(), [])
+  const getSetting = useCallback((key: string) => settingsStore.get(key), [])
   return (
     <>
       <AppearanceTab
@@ -57,6 +61,11 @@ export function ExtAppearanceTab(): React.JSX.Element {
         defaultModel={defaultSel.model}
         setDefaultProvider={setDefaultProvider}
         setDefaultModel={setDefaultModel}
+      />
+      <DefaultAgentsSettings
+        loadProfiles={loadAgentProfiles}
+        getSetting={getSetting}
+        setSetting={(key, value) => void settingsStore.set(key, value)}
       />
     </>
   )

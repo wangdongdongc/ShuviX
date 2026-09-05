@@ -21,12 +21,17 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { launchApp, type E2EApp } from '../../harness/launch'
-import { createAgentSession } from '../../harness/seed'
+import { createAgentSession, createProject } from '../../harness/seed'
 
 let app: E2EApp
+/** AE-8 用的项目 —— `default` 是**项目会话**的基座（无项目会话跑 chat） */
+let projectId: string
 
 beforeAll(async () => {
   app = await launchApp()
+  const path = join(app.home, 'ae-proj')
+  mkdirSync(path, { recursive: true })
+  projectId = (await createProject(app.main, { name: 'AeProj', path })).id
 })
 afterAll(async () => {
   await app.stop()
@@ -231,12 +236,12 @@ describe('agent md 原文 IPC —— 取原文 / 新建 / 覆写', () => {
     ])
 
     // 落盘即生效：createAgentSession 的 systemPrompt 与实际发给 LLM 的完全一致
-    const overridden = await createAgentSession(app.main, { title: 'ae8-overridden' })
+    const overridden = await createAgentSession(app.main, { title: 'ae8-overridden', projectId })
     expect(overridden.systemPrompt.startsWith('AE8 OVERRIDE BODY.')).toBe(true)
 
     expect(await deleteAgent('default')).toEqual({ success: true })
     expect(hasAgentFile('default.md')).toBe(false)
-    const restored = await createAgentSession(app.main, { title: 'ae8-restored' })
+    const restored = await createAgentSession(app.main, { title: 'ae8-restored', projectId })
     expect(restored.systemPrompt.startsWith('AE8 OVERRIDE BODY.')).toBe(false)
   })
 

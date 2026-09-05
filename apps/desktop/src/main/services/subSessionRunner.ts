@@ -16,7 +16,6 @@
  * 用户消息落树、`user_message` 广播、埋点、auto-title、自动压缩，全部因此照常发生。
  * 任何绕过这道门的实现都会让「子会话表现与普通会话一致」从第一天起就带例外。
  */
-import { DEFAULT_PROFILE_NAME } from '@shuvix/agent-runtime'
 import { chatGateway } from '../frontend/core'
 import { sessionService } from './sessionService'
 import { messageService } from './messageService'
@@ -221,11 +220,14 @@ class SubSessionRunner {
     if (title) sessionService.updateTitle(session.id, title, 'user')
 
     // 档案：父级点名则用它（准入与 /<agent> 切换同源 —— 未声明会话感知的档案照样被拒），
-    // 否则跟随父会话当前档案。default 不必显式切（它就是新会话的回落值）
+    // 否则跟随父会话当前档案。与 `create` 刚按会话形态落下的默认档案相同就不必再切一次：
+    // updateAgentProfile 会连带把 mcp:/skill: 勾选替换成档案声明的那套，而对一条还没有
+    // 任何工具变更 entry 的新会话来说，那等于把默认工具集清空
+    const stamped = sessionDao.pickSettings(session.id, ['agentProfile'])?.agentProfile
     const profileName =
       params.agentProfile?.trim() || sessionService.resolveAgentProfileName(parentId)
     let profileSeededModel = false
-    if (profileName && profileName !== DEFAULT_PROFILE_NAME) {
+    if (profileName && profileName !== stamped) {
       const applied = await sessionService.updateAgentProfile(session.id, profileName)
       if (applied.success) profileSeededModel = !!applied.applied?.model
       // 档案不合法不该让整个创建失败：会话已经建好且可用（回落 default），记日志即可
