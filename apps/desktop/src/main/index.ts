@@ -580,7 +580,9 @@ registerCustomProtocolSchemes()
 
 app.whenReady().then(async () => {
   mark('app.whenReady')
-  electronApp.setAppUserModelId('com.shuvix')
+  // 必须与 electron-builder.yml 的 appId 一致，否则 Windows 任务栏中
+  // 运行中的窗口无法与固定（pinned）的快捷方式归为一组，会显示成两个图标
+  electronApp.setAppUserModelId('com.shuvix.app')
 
   // shuvix-media:// + shuvix-preview://
   registerCustomProtocolHandlers()
