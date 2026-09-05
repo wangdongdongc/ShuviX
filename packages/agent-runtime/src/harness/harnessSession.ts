@@ -68,6 +68,19 @@ const noopLogger: RuntimeLogger = { info: () => {}, warn: () => {}, error: () =>
 const TURN_GROWTH_RESERVE_RATIO = 0.1
 
 /**
+ * reserve 里「模型输出预算」这一项的封顶。
+ *
+ * 按「典型上限」而非「理论上限」预留，两个理由：
+ *  1. 上游能力数据可能是脏的 —— litellm 会把窗口值原样填进 max_output_tokens
+ *     （实测 xai/grok-4.6：max_input = max_output = 500000，官方根本没公布输出上限）。
+ *     不封顶的话 reserve 直接被顶过窗口、阈值变负，**每一轮都触发压缩**。
+ *  2. 输出被 maxTokens 截断（stopReason='maxTokens'）不是致命错误，内容部分可用、可续；
+ *     真正致命的只有「输入 + 申请输出 > window」整请求 400。32k 已覆盖现实分布的头部
+ *     （xAI 这一代已公布的输出上限就是 30k 量级），超出部分的代价只是截断。
+ */
+const OUTPUT_RESERVE_CAP = 32768
+
+/**
  * 「零内容 assistant 消息」—— provider 偶发返回的空回复（`text: ''`，output 只有 1 个 token）。
  *
  * 它有两重危害，这里只处理第二重：
@@ -321,6 +334,10 @@ export class HarnessSession {
   /**
    * 本次判定用的阈值设置：在 pi 默认值之上，把「模型输出 + 一轮工具结果」的余量让出来。
    *
+   * 结构：`reserve = max(16k, min(maxTokens, OUTPUT_RESERVE_CAP) + 10%×window)` ——
+   * maxTokens 项单独封顶（脏能力数据会把 reserve 顶过窗口、阈值变负，见 OUTPUT_RESERVE_CAP），
+   * 10% 项是诚实的轮增长预留，不做整体钳制。
+   *
    * **只影响「何时压」，不影响「怎么压」** —— `harness.compact()` 内部写死用 pi 的
    * `DEFAULT_COMPACTION_SETTINGS`（保留最近 keepRecentTokens=20k），我们改不了，
    * 所以 `compact()` 里的前置判定也必须继续用 pi 的默认值，否则两边会不一致。
@@ -331,7 +348,8 @@ export class HarnessSession {
       ...DEFAULT_COMPACTION_SETTINGS,
       reserveTokens: Math.max(
         DEFAULT_COMPACTION_SETTINGS.reserveTokens,
-        maxTokens + Math.round(contextWindow * TURN_GROWTH_RESERVE_RATIO)
+        Math.min(maxTokens, OUTPUT_RESERVE_CAP) +
+          Math.round(contextWindow * TURN_GROWTH_RESERVE_RATIO)
       )
     }
   }

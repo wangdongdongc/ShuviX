@@ -3,8 +3,9 @@
  * 覆盖「对话落盘 → 自动压缩」整条链路。压缩只剩自动这一条路径（手动入口已移除），
  * 所以下面全部经 `prompt()` 驱动。
  *
- * 判定：turn 成功结束后按 pi 的 shouldCompact 判定（tokens > contextWindow - 16k，
- * token 数优先取最近 assistant 的真实 usage），超阈值则压缩并广播 messages_reloaded。
+ * 判定：turn 成功结束后按 pi 的 shouldCompact 判定（tokens > contextWindow - reserveTokens，
+ * reserve 见 thresholdSettings：maxTokens 封顶 32k + 窗口的 10%；token 数优先取最近
+ * assistant 的真实 usage），超阈值则压缩并广播 messages_reloaded。
  *
  * 前置短路：pi 的滚动压缩保留最近 keepRecentTokens(20k) 的原始消息，小会话的切点落在
  * 第一条消息上、待摘要区间为空 —— 直接调 harness.compact() 会对空对话生成一条无意义摘要，
@@ -256,7 +257,7 @@ describe('HarnessSession', () => {
 
   /**
    * pi 默认 reserve 16k 恰好等于我们给模型的默认 maxTokens —— 阈值只够模型写完自己那条
-   * 回复，留给本轮工具结果的余量是 0。阈值须额外让出「maxTokens + 窗口的 10%」。
+   * 回复，留给本轮工具结果的余量是 0。阈值须额外让出「maxTokens（封顶 32k）+ 窗口的 10%」。
    */
   it('压缩阈值：reserve 覆盖模型输出预算 + 一轮工具结果余量', async () => {
     // 窗口 128k、maxTokens 32k → reserve = max(16384, 32000+12800) = 44800 → 阈值 83200；
@@ -272,6 +273,30 @@ describe('HarnessSession', () => {
     expect(completeSimpleCalls).toBeGreaterThan(0)
     const types = (await piSession.getBranch()).map((e) => e.type)
     expect(types).toContain('compaction')
+  })
+
+  /**
+   * 脏能力数据回归：litellm 会把窗口值原样填进 max_output_tokens（实测 xai/grok-4.6
+   * max_input = max_output = 500000）。maxTokens 项若不封顶，reserve(550k) 直接顶过
+   * 窗口(500k)、阈值变负 —— 每一轮都触发压缩（真实案例：25 分钟内连压 4 次）。
+   * 封顶后 reserve = 32768 + 50000 = 82768 → 阈值 417232，100k 的会话不该压。
+   */
+  it('压缩阈值：maxTokens 脏数据被封顶，reserve 不会超过窗口', async () => {
+    const auto = makeHarness(true, {
+      ...fakeModel,
+      contextWindow: 500_000,
+      maxTokens: 500_000
+    } as Model<Api>)
+    await piSession.appendMessage(big(120_000))
+    await piSession.appendMessage(big(48_000))
+    await piSession.appendMessage(big(48_000))
+    fakeUsageTokens = 100_000
+
+    await auto.prompt('继续')
+
+    expect(completeSimpleCalls).toBe(0)
+    const types = (await piSession.getBranch()).map((e) => e.type)
+    expect(types).not.toContain('compaction')
   })
 
   it('自动压缩：usage 超阈值但无实质可摘要内容时静默跳过', async () => {
