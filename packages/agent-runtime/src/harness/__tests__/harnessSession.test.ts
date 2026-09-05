@@ -280,6 +280,8 @@ describe('HarnessSession', () => {
    * max_input = max_output = 500000）。maxTokens 项若不封顶，reserve(550k) 直接顶过
    * 窗口(500k)、阈值变负 —— 每一轮都触发压缩（真实案例：25 分钟内连压 4 次）。
    * 封顶后 reserve = 32768 + 50000 = 82768 → 阈值 417232，100k 的会话不该压。
+   * 源头已在 modelResolver 归一（输出上限 ≥ 窗口视为未知），此处直接构造 Model 绕过它，
+   * 验证的是阈值层自己的兜底。
    */
   it('压缩阈值：maxTokens 脏数据被封顶，reserve 不会超过窗口', async () => {
     const auto = makeHarness(true, {

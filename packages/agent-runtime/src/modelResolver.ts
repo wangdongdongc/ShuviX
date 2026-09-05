@@ -64,10 +64,36 @@ export interface ResolveModelParams {
   env: RuntimeEnv
 }
 
+const DEFAULT_CONTEXT_WINDOW = 128000
+const DEFAULT_MAX_TOKENS = 16384
+
+/**
+ * 从能力数据得出 contextWindow / maxTokens（自定义提供商与注册表查不到的内置模型走这里）。
+ *
+ * 输出上限只在「大于 0 且严格小于窗口」时可信。litellm 的目录里有一大类条目把窗口值原样填进
+ * max_output_tokens（随包目录 1976 条 chat 模型里 751 条 max_output == max_input，
+ * xai/*、azure_ai/grok-*、openrouter/x-ai/* 整族如此，官方并没有公布过那样的输出上限），
+ * 另有少数 max_output > max_input 的。这样的值当「未知」处理，与缺失走同一条默认路 ——
+ * 一个大于等于窗口的输出上限在任何请求里都兑现不了。0 与负数同理（能力对话框里手填 0
+ * 会真的落库；0 原样交给 pi 会变成 max_tokens: 0）。窗口本身缺失时按默认窗口比较。
+ *
+ * 归一放在这里而不是 litellm 入口：能力数据早已落库（fillMissingCapabilities 不覆盖已有值），
+ * 用户也可能在能力对话框里手填；这里是两个宿主构造 Model 的唯一汇合点。
+ * 压缩阈值那边另有 OUTPUT_RESERVE_CAP 兜底（见 harnessSession），不依赖这里。
+ */
+function resolveTokenLimits(caps: ModelCapabilities): { contextWindow: number; maxTokens: number } {
+  const contextWindow = caps.maxInputTokens ?? DEFAULT_CONTEXT_WINDOW
+  const maxOutput = caps.maxOutputTokens
+  const maxTokens =
+    maxOutput != null && maxOutput > 0 && maxOutput < contextWindow ? maxOutput : DEFAULT_MAX_TOKENS
+  return { contextWindow, maxTokens }
+}
+
 /** 从 provider + model + capabilities 解析出 pi-ai Model 对象 */
 export function resolveModel(params: ResolveModelParams): Model<Api> {
   const { provider, model, capabilities: caps, providerInfo, env } = params
   const isBuiltin = providerInfo?.isBuiltin ?? false
+  const limits = resolveTokenLimits(caps)
 
   if (!isBuiltin) {
     // 自定义提供商：手动构造 Model 对象
@@ -100,8 +126,8 @@ export function resolveModel(params: ResolveModelParams): Model<Api> {
       reasoning: true,
       input: inputModalities,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: caps.maxInputTokens ?? 128000,
-      maxTokens: caps.maxOutputTokens ?? 16384,
+      contextWindow: limits.contextWindow,
+      maxTokens: limits.maxTokens,
       ...(buildCustomProviderCompat(resolvedApi)
         ? { compat: buildCustomProviderCompat(resolvedApi) }
         : {}),
@@ -146,8 +172,8 @@ export function resolveModel(params: ResolveModelParams): Model<Api> {
       reasoning: true,
       input: inputModalities,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: caps.maxInputTokens ?? 128000,
-      maxTokens: caps.maxOutputTokens ?? 16384,
+      contextWindow: limits.contextWindow,
+      maxTokens: limits.maxTokens,
       ...(buildCustomProviderCompat(resolvedApi)
         ? { compat: buildCustomProviderCompat(resolvedApi) }
         : {})
