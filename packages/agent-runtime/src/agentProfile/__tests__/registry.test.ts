@@ -252,7 +252,7 @@ describe('buildBuiltinProfiles — 全集现算', () => {
 })
 
 describe('default 档案钉板(主会话默认工具集/环境段的唯一事实源)', () => {
-  it('tools 按桌面注册序列出 + Agent 居末;检索/远程/数据库类工具已随工程人格拆去 coding', () => {
+  it('tools 按桌面注册序列出 + Agent/session 居末;远程/数据库类工具随工程人格拆去 coding', () => {
     // 顺序与 apps/desktop/src/main/tools/allTools.ts 的注册序一致(bash→read→write→edit→ask→
     // browser→ls→grep→glob→ssh→database)——LLM 所见工具序列的稳定性依赖它;
     // 工具注册表导入链含 electron/native 模块无法在测试内加载,故硬编码钉住,改动需同步两侧。
@@ -266,11 +266,15 @@ describe('default 档案钉板(主会话默认工具集/环境段的唯一事实
       'edit',
       'ask',
       'browser',
+      'ls',
+      'grep',
+      'glob',
       'agent',
       'session'
     ])
-    // ls/grep/glob 亦不在（通用会话里检索走 bash,成规模的调研切 /coding）
-    for (const gone of ['ls', 'grep', 'glob', 'ssh', 'database', 'git', 'preview']) {
+    // ssh/database 随工程人格去了 coding；git/preview 不进任何基座（见 allTools.ts 的注释：
+    // 主 Agent 默认无，用户可覆盖 default.md 加入，子代理经白名单解析不受默认集限制）
+    for (const gone of ['ssh', 'database', 'git', 'preview']) {
       expect(built.tools, `default 不应持有 ${gone}`).not.toContain(gone)
     }
     // 环境/工作区模板已内化进 body（{{shuvix:*}} 占位符,createAgent 时替换）
@@ -314,7 +318,7 @@ describe('default 档案钉板(主会话默认工具集/环境段的唯一事实
 })
 
 describe('chat 档案钉板(不归属项目的会话的创建基座)', () => {
-  it('工具面在 default 之上多出 ls/grep/glob —— 这条路线握全套内置工具自己干活', () => {
+  it('工具面与 default **逐字相等** —— 两条路线的全部差异在正文，不在工具', () => {
     // 与 default / coding 的清单同一惯例：硬编码钉住（工具注册表导入链含 electron/native
     // 模块，测试内加载不了），改动需同步 apps/desktop/src/main/tools/allTools.ts
     expect(profile(CHAT_PROFILE_NAME).tools).toEqual([
@@ -322,21 +326,18 @@ describe('chat 档案钉板(不归属项目的会话的创建基座)', () => {
       'read',
       'write',
       'edit',
+      'ask',
+      'browser',
       'ls',
       'grep',
       'glob',
-      'ask',
-      'browser',
       'agent',
       'session'
     ])
-    // 三个检索工具正是两条路线在工具面上的**全部**差别：default 让检索走 bash 或子会话
-    for (const search of ['ls', 'grep', 'glob']) {
-      expect(profile(CHAT_PROFILE_NAME).tools, `chat 需持有 ${search}`).toContain(search)
-      expect(profile(DEFAULT_PROFILE_NAME).tools, `default 不应持有 ${search}`).not.toContain(
-        search
-      )
-    }
+    // 这是裁决过的形态：两个基座工具面完全相同，「自己干活 / 把活交给 coding 子会话」
+    // 全靠正文表达（下面那条钉的就是正文差异）。谁想靠收窄 default 的工具来"强制"它
+    // 派活，会在这里撞红 —— 那等于让主会话连验收都做不了。
+    expect(profile(CHAT_PROFILE_NAME).tools).toEqual(profile(DEFAULT_PROFILE_NAME).tools)
   })
 
   it('是基座档案，且与 default 同为可切换基座（notebook 不是）', () => {

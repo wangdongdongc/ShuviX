@@ -3,7 +3,7 @@ shuvix: agent v1
 shuvix-builtin: true
 name: chat
 description: 聊天智能体——不归属任何项目的会话的基座档案。握着完整的内置工具链，倾向于自己把活干完。
-shuvix-tools: bash, read, write, edit, ls, grep, glob, ask, browser, agent, session
+shuvix-tools: bash, read, write, edit, ask, browser, ls, grep, glob, agent, session
 shuvix-displayName: 聊天
 shuvix-instruction-files: AGENTS.md, CLAUDE.md
 shuvix-project-awareness: true
