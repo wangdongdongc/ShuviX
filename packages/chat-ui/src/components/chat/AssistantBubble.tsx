@@ -113,14 +113,10 @@ export const AssistantBubble = memo(function AssistantBubble({
     <div className="group relative px-4 py-3">
       {/* 内容 */}
       <div className="min-w-0">
-        {/* 过程区（步骤 + 思考）— 有正文跟随时以一条细线收尾，把「过程」和「结论」分层
-            （不用左侧竖轴：那会再吃掉一列缩进） */}
+        {/* 过程区（步骤 + 思考）— 有正文跟随时只留一段间距收尾，不画分割线也不用左侧竖轴：
+            步骤行已经比正文轻一级，再加一条线只是多一道视觉噪音 */}
         {(blockGroups.length > 0 || liveThinkingRow) && (
-          <div
-            className={
-              displayContent ? 'mb-2.5 pb-2 border-b border-border-secondary/40' : 'mb-0.5'
-            }
-          >
+          <div className={displayContent ? 'mb-2.5' : 'mb-0.5'}>
             {blockGroups.length > 0 && (
               <div className="space-y-0.5">
                 {blockGroups.map((group) => (
