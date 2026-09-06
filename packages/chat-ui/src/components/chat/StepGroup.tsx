@@ -15,8 +15,9 @@ import { formatStepSequence, summarizeSteps, uniformToolName, type StepBlock } f
  * 两种面孔，同一副骨架：
  *  - 全是同一个工具：`[工具图标] 阅读  alpha.txt · beta.txt  [2]` —— 与从前的同名合并行一模一样，
  *    摘要去重后拼接，同工具不同动作（evaluate / screenshot）仍能一眼看出；
- *  - 混着思考或不同工具：`思考 ×2 · 写入文件 · 阅读 ×2  test.txt  [5]` —— 不出图标，标签位换成
- *    「每种步骤各几次」（按首次出现顺序），摘要位仍是各次调用摘要的去重拼接。
+ *  - 混着思考或不同工具：`写入文件 · 阅读 ×2  test.txt  [5]` —— 不出图标，标签位换成「每种工具
+ *    各几次」（按首次出现顺序），摘要位仍是各次调用摘要的去重拼接。思考不进标签：它几乎每步
+ *    都有、只会把行撑满，计数徽章里仍算它一步，展开后照常逐行可见；全是思考的段才写「思考 ×n」。
  */
 export function StepGroup({ blocks }: { blocks: StepBlock[] }): React.JSX.Element {
   const { t } = useTranslation()
@@ -37,18 +38,13 @@ export function StepGroup({ blocks }: { blocks: StepBlock[] }): React.JSX.Elemen
     return clipLine([...seen].join(' · '), 60)
   }, [blocks])
 
-  // 混合段的标签：每种步骤各几次，`思考 ×2 · 阅读 ×2 · 文本编辑`
-  const sequence = useMemo(
-    () =>
-      formatStepSequence(
-        summarizeSteps(blocks, (b) =>
-          b.type === 'thinking'
-            ? t('steps.thinking')
-            : presentations[b.toolName]?.label || b.toolName
-        )
-      ),
-    [blocks, presentations, t]
-  )
+  // 混合段的标签：每种工具各几次，`阅读 ×2 · 文本编辑`；思考不进标签，除非这一段只有思考
+  const sequence = useMemo(() => {
+    const labelOf = (b: StepBlock): string =>
+      b.type === 'thinking' ? t('steps.thinking') : presentations[b.toolName]?.label || b.toolName
+    const tools = blocks.filter((b) => b.type === 'tool')
+    return formatStepSequence(summarizeSteps(tools.length > 0 ? tools : blocks, labelOf))
+  }, [blocks, presentations, t])
 
   const rowProps = toolName
     ? {
