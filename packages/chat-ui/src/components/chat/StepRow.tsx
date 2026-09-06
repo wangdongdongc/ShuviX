@@ -3,6 +3,7 @@ import type { HTMLAttributes, ReactNode } from 'react'
 /**
  * 图标槽 — 类型图标与状态图标共用同一列。
  * 不给状态单独留槽：done 是常态，空槽会让每行白吃一段缩进。
+ * 两种图标都没有的行（混合步骤的合并行）连这一槽也不出：它没有东西可对齐，留一段空白只是缩进。
  */
 const ICON_SLOT = 'w-3.5 flex-shrink-0 flex items-center justify-center'
 
@@ -42,6 +43,7 @@ export function StepRow({
   onClick,
   className = ''
 }: StepRowProps): React.JSX.Element {
+  const glyph = lead ?? icon
   return (
     <button
       type="button"
@@ -52,7 +54,7 @@ export function StepRow({
           : 'cursor-default'
       } ${className}`}
     >
-      <span className={ICON_SLOT}>{lead ?? icon}</span>
+      {glyph != null && <span className={ICON_SLOT}>{glyph}</span>}
       {badge}
       {label && <span className="font-medium text-text-secondary flex-shrink-0">{label}</span>}
       <span className="flex-1 min-w-0 truncate">{detail}</span>
