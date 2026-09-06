@@ -63,11 +63,8 @@ export function registerBotHandlers(): void {
   /** 档案页的运行时读数：管线/阶段解析结果 + 门控降级 */
   ipcMain.handle('bot:inspect', (_e, params: { name: string }) => botService.inspect(params.name))
 
-  /** per-bot 停止（A2）：中止某成员对某条消息的应答；排队与其它消息不受影响 */
-  ipcMain.handle(
-    'bot:abort',
-    (_e, params: { sessionId: string; botName: string; messageId: string }) => ({
-      aborted: botService.abortBot(params.sessionId, params.botName, params.messageId)
-    })
-  )
+  /** 停止 bot 对某条消息的应答；为其它消息排着的队不受影响 */
+  ipcMain.handle('bot:abort', (_e, params: { sessionId: string; messageId: string }) => ({
+    aborted: botService.abortBot(params.sessionId, params.messageId)
+  }))
 }

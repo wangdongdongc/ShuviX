@@ -19,10 +19,15 @@ export interface SessionSettings {
   /** 路径允许列表，格式 Read(path) / Write(path)（历史 Bash/SSH 条目不再识别，等同失效） */
   allowList?: string[]
   /**
-   * 聊天会话的成员 bot 名单（`~/.shuvix/bots/<name>.md`）。**非空即为聊天会话**：
-   * 它没有根 Agent —— 用户消息由成员各自的管线应答，`resolveAgentProfileName` 因此返回 null。
-   * 判定一律用 `bots?.length`：settings 的 JSON patch 没有删键路径，「移除全部成员」只能
-   * 写 `[]`，而空数组是 truthy。
+   * 聊天会话绑定的 bot（`~/.shuvix/bots/<name>.md`）。**有值即为聊天会话**：一对一，
+   * 没有根 Agent —— 用户消息由这个 bot 的管线应答，`resolveAgentProfileName` 因此返回 null。
+   * 创建那一刻定死，不可转回普通会话。判定一律经 chat-protocol `chatSession.ts` 的
+   * `isChatSessionSettings` / `boundBotOf`（sessionService.isBotSession / boundBot 包了它们）。
+   */
+  bot?: string
+  /**
+   * 遗留键：群聊时代的成员名单。**只读、不再写入**（没有迁移）：带着它的老会话仍被认作
+   * 聊天会话，但视为**未绑定 bot**，由用户在会话头部重新选一个写进 `bot`（`setBot`）。
    */
   bots?: string[]
   /**

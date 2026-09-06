@@ -182,7 +182,7 @@ describe('claims —— 认领的是运行时，不是会话记录', () => {
     mocks.agentCreate.mockResolvedValue(agent)
 
     // 聊天会话：resolveAgentProfileName 返回 null，create 早退
-    mocks.daoPickSettings.mockReturnValue({ bots: ['scout'] })
+    mocks.daoPickSettings.mockReturnValue({ bot: 'scout' })
     expect(await sessionService.ensureAgentSession(chat)).toBeUndefined()
     expect(sessionService.getAgentSession(chat)).toBeUndefined()
     expect(mocks.agentCreate).not.toHaveBeenCalled()

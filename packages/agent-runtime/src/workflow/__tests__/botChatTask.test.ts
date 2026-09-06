@@ -274,7 +274,7 @@ function baseInput(): Input {
   return {
     bot: { name: 'scout', displayName: '侦察兵', description: '负责代码侦察', file: '/b/scout.md' },
     agents: { intent: 'bot-intent', task: 'coding' },
-    session: { id: 'S1', directed: false, members: ['scout'] },
+    session: { id: 'S1' },
     message: { id: 'e1', seq: 1, text: '帮我看看鉴权那块' },
     window: []
   }
@@ -364,44 +364,22 @@ describe('P —— 提示词组装', () => {
     expect(BOT_CHAT().script).not.toContain('notesBlock')
   })
 
-  it('P-3 其它成员非空 → others 块按行列出（宿主已交成「名字: 描述」的行）；无其他人则整段消失', async () => {
-    // 与 window 同一口径：宿主交的是已成型的行，模板 {{session.others}} 按行铺开，
-    // 「有内容才出现的一段」由 {{>others}} 的整块消失规则兑现，脚本不再拼 othersBlock
-    const many = await gatePrompt({
-      session: {
-        id: 'S1',
-        directed: false,
-        members: ['scout', 'writer'],
-        others: ['写手: 负责文案']
-      }
-    })
-    expect(many).toContain('The other bots in this session')
-    expect(many).toContain('写手: 负责文案')
-
-    expect(await gatePrompt()).not.toContain('The other bots in this session')
+  it('P-3 门控提示词里没有群聊时代的成员段：既无「其他 bot」也无「点名」说明，块本身也不在了', async () => {
+    // 一对一没有「别人」，也没有「点名」：宿主不再交 session.others / session.directed，
+    // 两个块连同它们的整块消失规则一起退役 —— 不是「占位符为空所以没出现」
+    const p = await gatePrompt()
+    expect(p).not.toContain('The other bots in this session')
+    expect(p).not.toContain('This message is addressed to this bot')
+    expect(BOT_CHAT().prompts.others).toBeUndefined()
+    expect(BOT_CHAT().prompts.gateDirected).toBeUndefined()
   })
 
-  it('P-4 被点名 → addressed 段出现；没点名（哪怕会话里只有它一个）则不出现', async () => {
-    // solo 的判据只有「这条消息点了我的名」。成员数不参与判断 —— bot 各自独立处理消息，
-    // 「只有我一个」不意味着「这条一定归我」
-    expect(await gatePrompt()).not.toContain('This message is addressed to this bot')
-
-    const named = { session: { id: 'S1', directed: true, members: ['scout', 'writer'] } }
-    expect(await gatePrompt(named)).toContain('This message is addressed to this bot')
-
-    const solo = { session: { id: 'S1', directed: false, members: ['scout'] } }
-    expect(await gatePrompt(solo)).not.toContain('This message is addressed to this bot')
-  })
-
-  it('P-5 契约随点名切换：被点名用 intentSolo（没有 ignore），没点名才给 ignore', async () => {
-    // 点名了还沉默，与坏掉长得一模一样 —— 所以那里根本不提供 ignore 这个选项
-    const named = makeBotChat()
-    await named.invoke({ session: { id: 'S1', directed: true, members: ['scout', 'writer'] } })
-    expect(JSON.stringify(named.of('gate')[0].resultContract?.schema)).not.toContain('ignore')
-
-    const open = makeBotChat()
-    await open.invoke()
-    expect(JSON.stringify(open.of('gate')[0].resultContract?.schema)).toContain('ignore')
+  it('P-4 门控契约没有 ignore：一对一会话里每条消息都是说给这个 bot 的，沉默不在契约上', async () => {
+    const h = makeBotChat()
+    await h.invoke()
+    const schema = JSON.stringify(h.of('gate')[0].resultContract?.schema)
+    expect(schema).not.toContain('ignore')
+    expect(schema).toContain('clarify')
   })
 
   it('P-6 门控窗口切到 vars.gateWindow 条（给 12 条只出现最后 8 条）', async () => {
@@ -528,20 +506,12 @@ describe('S —— gate 一句话答完，不开任务段', () => {
     // 宿主没有任何读它的路径，带回去只会让 journal 里多一个看似有意义的字段
     const reply = makeBotChat({ gate: { structured: { ...GATE_REPLY, memorable: true } } })
     expect((await reply.invoke()).output).toEqual({ outcome: 'reply' })
-
-    const ignored = makeBotChat({
-      gate: { structured: { decision: 'ignore', reason: '不归我', memorable: true } }
-    })
-    expect((await ignored.invoke()).output).toEqual({ outcome: 'ignored' })
   })
 
-  it('S-5 判定 ignore → 一个字都不说，也不占 turn（这是 bot 唯一被允许的沉默）', async () => {
-    const h = makeBotChat({
-      gate: { structured: { decision: 'ignore', reason: '不归我' } }
-    })
-    expect(outcomeOf(await h.invoke())).toBe('ignored')
-    expect(h.says).toHaveLength(0)
-    expect(h.turns).toBe(0)
+  it('S-5 脚本里没有 ignore 分支：一对一没有「不归我」这条沉默的出路', () => {
+    expect(BOT_CHAT().script).not.toContain("=== 'ignore'")
+    expect(BOT_CHAT().script).not.toContain("outcome: 'ignored'")
+    expect(BOT_CHAT().script).not.toContain('session.directed')
   })
 })
 
@@ -724,15 +694,6 @@ describe('F —— 失败原样上抛：脚本不出声，归类交给宿主', (
     })
     expect(h.says).toHaveLength(0)
     expect(h.turns).toBe(0)
-  })
-
-  it('F-2 多 bot 会话里门控破损同样上抛 —— 没有「别人会替我兜底」这回事，也没有沉默让位', async () => {
-    const h = makeBotChat({ gate: { prose: '……' } })
-    const res = await h.invoke({
-      session: { id: 'S1', directed: false, members: ['scout', 'writer'] }
-    })
-    expect(res).toMatchObject({ ok: false, errorCode: 'next_not_called' })
-    expect(h.says).toHaveLength(0)
   })
 
   it('F-3 门控超时 → errorCode step_timeout，仍是第 0 步', async () => {

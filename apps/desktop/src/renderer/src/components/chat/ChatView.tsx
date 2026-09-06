@@ -25,7 +25,7 @@ import {
   useSessionPanelReveal
 } from '@shuvix/app-shell'
 import { EmptySessionHint } from './WelcomeView'
-import { BotMembersBar } from './BotMembersBar'
+import { BotBindingChip } from './BotBindingChip'
 import { NotebookSessionView } from '../notebook/NotebookSessionView'
 import { BotPage } from '../bots/BotPage'
 
@@ -46,7 +46,7 @@ export function ChatView({ pinnedMode }: ChatViewProps = {}): React.JSX.Element 
   const { t } = useTranslation()
   const { activeSessionId } = useChatStore()
   // bot 档案页（侧栏「Bots」分组点开）：与会话互斥的主区目标，正文经 contentOverride 顶掉
-  // 欢迎页 —— 此时 activeSessionId 为空，会话面板 / 横幅 / 成员条随之自然不渲染
+  // 欢迎页 —— 此时 activeSessionId 为空，会话面板 / 横幅 / bot 胶囊随之自然不渲染
   const activeBot = useChatStore(selectActiveBot)
   const [showSessionConfig, setShowSessionConfig] = useState(false)
 
@@ -151,9 +151,9 @@ export function ChatView({ pinnedMode }: ChatViewProps = {}): React.JSX.Element 
       </>
     ) : (
       <>
-        {/* 聊天会话：成员胶囊列 + 管理入口（自空,非 bot 会话不渲染） */}
+        {/* 聊天会话：绑定的 bot 胶囊 / 未绑定时的「选择 bot」（自空,非 bot 会话不渲染） */}
         {!isWeb && pinnedMode !== 'placeholder' && activeSessionId && (
-          <BotMembersBar sessionId={activeSessionId} />
+          <BotBindingChip sessionId={activeSessionId} />
         )}
         {sessionTools}
         {!isWeb && pinnedMode !== 'placeholder' && activeSessionId && (

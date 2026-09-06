@@ -479,20 +479,16 @@ export function chatPane(main: CdpClient): ChatPane {
 // ─────────────────────────────────────────────────────────────────────────
 // A3 · 输入框 `@` 提及弹层（AtMentionPopover）
 //
-// 行锚点是组件自带的 data-at-suggestion：bot 行的值是 `bot:<name>`（身份键），
-// 文件行的值是工作区相对路径 —— 两个名字空间天然不撞。徽标/选中态按**结构类**认
-// （徽标 = 行内 bg-warning/10 的 span；键盘选中 = bg-accent/15），
-// 不认 i18n 文案。bot 候选是异步拉的（bots.list()），行何时出现由 spec 用 until 等。
-//
-// v3 起没有 mention-only 这种逐 bot 的门控模式，弹层行上的那枚徽标随之退场 ——
-// `mentionBadge` 留着只为**否定断言**（任何一行都不该再长出它）。
+// 行锚点是组件自带的 data-at-suggestion：值是工作区相对路径 —— 弹层只列工作区文件。
+// 聊天会话是一对一的，会话里没有「别人」可以点名，所以 bot 行（曾经的 `bot:<name>`
+// 名字空间）整体退场；spec 里 `key.startsWith('bot:')` 只作否定断言。
+// 选中态按**结构类**认（键盘选中 = bg-accent/15），不认 i18n 文案。
+// 文件表是异步拉的（files.scan），行何时出现由 spec 用 until 等。
 
 /** @ 弹层里的一行 */
 export interface AtSuggestionRow {
-  /** data-at-suggestion 属性值：bot 行 `bot:<name>`，文件行为相对路径 */
+  /** data-at-suggestion 属性值：工作区相对路径 */
   key: string
-  /** 徽标节点在不在（按 bg-warning/10 结构类认）—— v3 起恒应为 false */
-  mentionBadge: boolean
   /** 键盘选中态（bg-accent/15） */
   selected: boolean
 }
@@ -500,7 +496,7 @@ export interface AtSuggestionRow {
 export interface AtPopoverPane {
   /** 弹层是否在屏（有至少一行） */
   open(): Promise<boolean>
-  /** 行快照（document 序 = bot 成员序在前、文件在后） */
+  /** 行快照（document 序） */
   rows(): Promise<AtSuggestionRow[]>
   /**
    * 选中某行 —— 派发 **bubbling mousedown**：行按钮监听的是 onMouseDown
@@ -517,9 +513,6 @@ export function atPopoverPane(main: CdpClient): AtPopoverPane {
       main.eval<AtSuggestionRow[]>(
         `${ROWS}.map((b) => ({
           key: b.getAttribute('data-at-suggestion') ?? '',
-          mentionBadge: [...b.querySelectorAll('span')].some((s) =>
-            s.className.includes('bg-warning/10')
-          ),
           selected: b.className.includes('bg-accent/15')
         }))`
       ),
@@ -619,7 +612,7 @@ export interface SidebarPane {
    * 打开一次菜单（不选任何项 = 取消）后读 e2e 桩记下的 items；组头或 ⋮ 找不到返回 null。
    */
   groupMenuItems(target: GroupTarget): Promise<string[] | null>
-  /** 走分组头菜单的「新建 Bot 会话」（打开成员多选对话框；等待用 botDialogPane.waitOpen） */
+  /** 走分组头菜单的「新建 Bot 会话」（打开选 bot 对话框；等待用 botDialogPane.waitOpen） */
   clickNewBotChat(target: GroupTarget): Promise<void>
 
   // ── 菜单：⋮ 与右键的**同一份** items（打开即取消，不选任何项） ──
@@ -910,51 +903,57 @@ export function sidebarPane(main: CdpClient): SidebarPane {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// 新建 Bot 会话对话框（BotSessionDialog）
+// 选 bot 对话框（BotSessionDialog）—— 两个场合共用一份：**create**（组头菜单「新建 Bot
+// 会话」，建一条绑定该 bot 的聊天会话）与 **bind**（头部「选择 bot」，给群聊时代遗留的
+// 未绑定会话补一个 bot）。会话是一对一的，所以对话框是**单选、点行即选定**：没有勾选态、
+// 没有创建钮、没有幽灵行（v3 的 `data-bot-dialog-create` / `data-bot-pick-ghost` /
+// aria-checked 全部退场）。选定成功对话框自关；失败（onPick 回错误文案或抛）留驻并在
+// 列表下显示一个 bg-red-500/10 的错误框。
 //
-// 结构锚点全部来自组件自带的 data-*（data-bot-dialog / data-bot-pick /
-// data-bot-dialog-create）；成员行的勾选态走 aria-checked（role=checkbox）。
+// 结构锚点：根 `data-bot-dialog=<mode>`、行 `<button data-bot-pick=<name>>`。
 // 「打开 Bots 文件夹」按钮**只断存在、绝不点击**：点了会真的弹 Finder 窗口，
 // 隔离实例收不回来。
 
 export interface BotDialogRow {
   /** bot 身份键（data-bot-pick 属性值） */
   name: string
-  /** aria-checked 勾选态 */
-  checked: boolean
 }
 
 export interface BotDialogPane {
   /**
-   * 等对话框**就绪**（由 sidebarPane.clickNewBotChat 触发后调用）：不止元素上屏，
-   * 还要成员列表落定 —— items 是异步拉的（bots.list()），加载中只有一个 '…' 占位，
-   * 这时候读 rows/空态都会踩进空窗期。就绪 = 有成员行，或空态分支已渲染（flex-col 那层）。
+   * 等对话框**就绪**（由 sidebarPane.clickNewBotChat / botSessionPane.clickBind 触发后调用）：
+   * 不止元素上屏，还要 bot 列表落定 —— items 是异步拉的（bots.list()），加载中只有一个
+   * '…' 占位，这时候读 rows/空态都会踩进空窗期。就绪 = 有 bot 行，或空态分支已渲染
+   * （flex-col 那层）。
    */
   waitOpen(): Promise<void>
   isOpen(): Promise<boolean>
   /** 等对话框真的卸载（关闭动画 120ms 之后才离开 DOM，不能同步断） */
   waitClosed(): Promise<void>
-  /** 成员行快照（DOM 序 = bots.list() 序） */
+  /** 场合（data-bot-dialog 属性值）；不在屏为空串 */
+  mode(): Promise<'create' | 'bind' | ''>
+  /** bot 行快照（DOM 序 = bots.list() 序） */
   rows(): Promise<BotDialogRow[]>
   /**
-   * 幽灵成员行快照（A4 manage 模式：名单里有、注册表里没有 —— data-bot-pick-ghost）。
-   * DOM 序 = 原名单相对序。
+   * 点某一行 = 选定它（create：建会话；bind：`session.setBot`）。成功后对话框自关 ——
+   * 调用方接着 `waitClosed`；行不存在返回 false。
    */
-  ghostRows(): Promise<BotDialogRow[]>
-  /** 点一行切换勾选；行不存在返回 false */
-  toggle(name: string): Promise<boolean>
-  /** 点幽灵行切换勾选；行不存在返回 false */
-  toggleGhost(name: string): Promise<boolean>
-  /** 点「创建」（成功后对话框自关，另用 waitClosed 等） */
-  create(): Promise<void>
-  /** 同一次 eval 里连点两下「创建」（防重入用例专用 —— 两下之间不给 React 任何喘息） */
-  createDoubleClick(): Promise<void>
-  createDisabled(): Promise<boolean>
+  pick(name: string): Promise<boolean>
+  /**
+   * 同一次 eval 里连点同一行两下（防重入用例专用 —— 两下之间不给 React 任何喘息：
+   * 隔一个 CDP 来回它早已 re-render 出禁用态，那测的就不是防重入而是禁用属性）。
+   */
+  pickDoubleClick(name: string): Promise<boolean>
+  /** 选定失败时留驻的错误框（bg-red-500/10）文案；没有则空串 */
+  errorText(): Promise<string>
   /** 空态证据：对话框**内**的「打开 Bots 文件夹」按钮是否存在（只认，不点！） */
   emptyState(): Promise<{ openFolderButton: boolean }>
-  /** 无项目警示块（bg-warning/10 那条）是否在屏 */
+  /** 无项目警示块（bg-warning/10 那条）是否在屏 —— 只在 create 场合的临时组渲染 */
   noProjectHintShown(): Promise<boolean>
-  /** 页脚项目归属文案（项目名，或本地化的「无」—— 断言只钉自己种的项目名） */
+  /**
+   * 页脚项目归属文案（项目名，或本地化的「无」—— 断言只钉自己种的项目名）。
+   * 项目区只在 create 场合渲染：bind 下恒为空串（区块整体没渲染，不是渲染了个空值）。
+   */
   projectLabelText(): Promise<string>
   /** Escape 关闭（对话框在 window 上听 keydown，直接派发到 window） */
   pressEscape(): Promise<void>
@@ -962,11 +961,11 @@ export interface BotDialogPane {
 
 export function botDialogPane(main: CdpClient): BotDialogPane {
   const DIALOG = `document.querySelector('[data-bot-dialog]')`
-  // 成员列表容器是唯一的 flex-1 直接子节点（header/footer/操作行都不是）
+  // bot 列表容器是唯一的 flex-1 直接子节点（header/footer/操作行都不是）
   const LIST = `${DIALOG}?.querySelector(':scope > .flex-1')`
-  const CREATE = `${DIALOG}?.querySelector('[data-bot-dialog-create]')`
   const ROWS = `[...(${DIALOG}?.querySelectorAll('[data-bot-pick]') ?? [])]`
-  const GHOST_ROWS = `[...(${DIALOG}?.querySelectorAll('[data-bot-pick-ghost]') ?? [])]`
+  const ROW = (name: string): string =>
+    `${ROWS}.find((d) => d.dataset.botPick === ${JSON.stringify(name)})`
 
   const isOpen = (): Promise<boolean> => main.eval<boolean>(`${DIALOG} !== null`)
 
@@ -981,30 +980,20 @@ export function botDialogPane(main: CdpClient): BotDialogPane {
             // 空态分支（flex-col）已渲染 = items 已从加载态落定为 []
             return !!list.firstElementChild?.className.includes('flex-col')
           })()`),
-        'bot dialog ready (members resolved)'
+        'bot dialog ready (bots resolved)'
       )
     },
     isOpen,
     waitClosed: async () => {
       await until(async () => !(await isOpen()), 'bot dialog closed')
     },
+    mode: () =>
+      main.eval<'create' | 'bind' | ''>(`${DIALOG}?.getAttribute('data-bot-dialog') ?? ''`),
     rows: () =>
-      main.eval<BotDialogRow[]>(
-        `${ROWS}.map((d) => ({
-          name: d.dataset.botPick ?? '',
-          checked: d.getAttribute('aria-checked') === 'true'
-        }))`
-      ),
-    ghostRows: () =>
-      main.eval<BotDialogRow[]>(
-        `${GHOST_ROWS}.map((d) => ({
-          name: d.dataset.botPickGhost ?? '',
-          checked: d.getAttribute('aria-checked') === 'true'
-        }))`
-      ),
-    toggle: async (name) => {
+      main.eval<BotDialogRow[]>(`${ROWS}.map((d) => ({ name: d.dataset.botPick ?? '' }))`),
+    pick: async (name) => {
       const clicked = await main.eval<boolean>(`(() => {
-        const row = ${ROWS}.find((d) => d.dataset.botPick === ${JSON.stringify(name)})
+        const row = ${ROW(name)}
         if (!row) return false
         row.click()
         return true
@@ -1012,32 +1001,22 @@ export function botDialogPane(main: CdpClient): BotDialogPane {
       await sleep(150)
       return clicked
     },
-    toggleGhost: async (name) => {
+    pickDoubleClick: async (name) => {
       const clicked = await main.eval<boolean>(`(() => {
-        const row = ${GHOST_ROWS}.find((d) => d.dataset.botPickGhost === ${JSON.stringify(name)})
+        const row = ${ROW(name)}
         if (!row) return false
+        row.click()
         row.click()
         return true
       })()`)
-      await sleep(150)
+      await sleep(200)
       return clicked
     },
-    create: async () => {
-      await main.eval(`${CREATE}?.click()`)
-      await sleep(200)
-    },
-    createDoubleClick: async () => {
-      // 两下必须落在同一个 eval：隔一个 CDP 来回 React 早已 re-render 出禁用态，
-      // 那测的就不是防重入而是禁用属性
-      await main.eval(`(() => {
-        const btn = ${CREATE}
-        btn.click()
-        btn.click()
-        return true
-      })()`)
-      await sleep(200)
-    },
-    createDisabled: () => main.eval<boolean>(`${CREATE}?.disabled ?? true`),
+    errorText: () =>
+      main.eval<string>(
+        `([...(${DIALOG}?.querySelectorAll('div') ?? [])]
+          .find((d) => d.className.includes('bg-red-500/10'))?.textContent ?? '').trim()`
+      ),
     emptyState: () =>
       main.eval(`({
         openFolderButton: !!${DIALOG}?.querySelector('.lucide-folder-open')
@@ -1955,7 +1934,7 @@ export function fmCardPane(main: CdpClient): FmCardPane {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// A2 · 对话流完整渲染（v2 群聊形态）—— 「正在输入」行 / 失败气泡 / BotReply 双形态 /
+// A2 · 对话流完整渲染（一对一聊天会话）—— 「正在输入」行 / 失败气泡 / BotReply 双形态 /
 // mailbox 回执 / 子代理面板行。
 //
 // 锚点全部是 data-*（data-bot-activity / data-bot-activity-phase / data-bot-stop /
@@ -1963,11 +1942,13 @@ export function fmCardPane(main: CdpClient): FmCardPane {
 // 文案一概不认。IPC 能断的（metadata.botFailure、事件序列）不在这里断 ——
 // 这里只认「屏幕上真的长出来了什么」。
 //
-// v2 删掉的三个锚点（连同它们描述的能力）：`data-bot-deciding`（「正在判断」合并行 ——
-// 现在每个在飞成员各占一行，判断中即 phase='started'）、`data-bot-rescue-chip`
-// （误压制救济，随仲裁一并退场）、`data-bot-silence{,-dismiss}`（全体沉默提示，同上）。
+// 会话是一对一的，所以「正在输入」**至多一行**（store 里一个会话一条活动快照：live 相位
+// 覆写、ended 删键）—— 两条消息同时在飞时那一行显示的是**最近一次相位事件**的那条。
+// v2 删掉的三个锚点（连同它们描述的能力）：`data-bot-deciding`（「正在判断」合并行）、
+// `data-bot-rescue-chip`（误压制救济，随仲裁一并退场）、`data-bot-silence{,-dismiss}`
+// （全体沉默提示，同上）。
 
-/** 一行「正在输入」的快照（BotTypingIndicator 的一行；v1 是一张占位卡） */
+/** 「正在输入」那一行的快照（BotTypingIndicator；v1 是一张占位卡） */
 export interface BotTypingRowShot {
   /** bot 稳定名（data-bot-activity 属性值） */
   name: string
@@ -2024,8 +2005,11 @@ export interface BotFlowPane {
   /** 点某条消息内第 i 个追问 chip（data-bot-followup）；无则 false */
   clickFollowup(msgId: string, index: number): Promise<boolean>
 
-  /** 用户消息下的 mailbox 回执（data-bot-receipt；names 是逗号连的 botName 串） */
-  receipts(): Promise<Array<{ msgId: string; names: string }>>
+  /**
+   * 带 mailbox 回执（data-bot-receipt，布尔属性）的用户消息 id 列表（document 序）——
+   * 一对一会话里回执不再署名，它只说「这条还在排队」。
+   */
+  receipts(): Promise<string[]>
 
   /**
    * 打开会话面板的 Sub-agent 页。入口是状态横幅右侧工具栏的胶囊按钮 ——
@@ -2111,11 +2095,10 @@ export function botFlowPane(main: CdpClient): BotFlowPane {
     },
 
     receipts: () =>
-      main.eval(
-        `[...document.querySelectorAll('[data-bot-receipt]')].map((el) => ({
-          msgId: el.closest('[data-msg-id]')?.getAttribute('data-msg-id') ?? '',
-          names: el.getAttribute('data-bot-receipt') ?? ''
-        }))`
+      main.eval<string[]>(
+        `[...document.querySelectorAll('[data-bot-receipt]')].map(
+          (el) => el.closest('[data-msg-id]')?.getAttribute('data-msg-id') ?? ''
+        )`
       ),
 
     openSubAgentPanel: async () => {
@@ -2666,74 +2649,90 @@ export function botsPane(main: CdpClient): BotsPane {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// A4 · 会话配套 —— 头部成员条 / 会话工具栏胶囊 / 聊天会话空态。
+// A4 · 会话配套 —— 头部绑定胶囊 / 会话工具栏胶囊 / 聊天会话空态。
 //
-// 锚点全部是 A4 落的 data-*（data-bot-members / data-bot-member{,-missing} /
-// data-bot-manage-members / data-bot-empty{,-member}），外加会话工具栏胶囊的
-// data-session-tool（共享 SessionToolbar，工具 id 与 SessionPanelTool 一一对应）。
+// 一对一之后头部不再是成员条（`data-bot-members` / `data-bot-member{,-missing}` /
+// `data-bot-manage-members` 随成员管理一并退场），而是一枚**绑定胶囊**（BotBindingChip）：
+//   - 绑定了 bot：`[data-bot-binding=<name>]` 内含 `[data-bot-bound=<name>]`（md 已删时
+//     再带 `data-bot-bound-missing`，显示名回落身份键、灰显删除线）；胶囊是静态的，
+//     一对一会话不换人；
+//   - 未绑定（群聊时代遗留的会话）：`[data-bot-binding="unbound"]` 内一个 `[data-bot-bind]`
+//     按钮，点开 bind 场合的 BotSessionDialog（随后用 botDialogPane 驱动）。
+// 空态（`data-bot-empty`）至多一张介绍卡 `[data-bot-empty-member=<name>]`（md 已删则没有卡，
+// 只剩提示行）+ 一行含显示名的 `<p>` 提示；遗留未绑定会话是 `data-bot-empty="unbound"`。
+// 会话工具栏胶囊的 data-session-tool（共享 SessionToolbar）不变。
 //
 // v2 删掉「Bot 决策」面板（连同 `bot:decisions` IPC 与 data-bot-decision* 三个锚点）：
 // 竞争与仲裁取消之后，那个面板回答的「谁赢了谁让位」已经不是会发生的事。
-// `decisions.jsonl` 本身留着 —— L0 剔除根本不产生 run，没有那个文件就什么线索都不剩。
-// v3 删掉空态里的建议问题 chip（`data-bot-suggestion`，随 `shuvix-bot-suggestions` 一并退场）：
-// 空态只剩成员介绍行；`suggestionChips` 留着做否定断言。
+// v3 删掉空态里的建议问题 chip（`data-bot-suggestion`）；一对一再删掉成员条与多卡空态。
 
-/** 头部成员条里的一枚胶囊 */
-export interface BotMemberChip {
-  /** bot 身份键（data-bot-member 属性值） */
-  name: string
-  /** 胶囊可见文本（displayName；缺失成员回落身份键） */
-  display: string
-  /** 缺失标注（data-bot-member-missing）在不在 */
+/** 头部绑定胶囊快照 */
+export interface BotBindingChipShot {
+  /** `[data-bot-binding]` 在屏（只有聊天会话渲染它） */
+  present: boolean
+  /** 绑定的 bot 身份键（data-bot-bound 属性值）；未绑定 / 不在屏为 null */
+  bound: string | null
+  /** 遗留未绑定形态（data-bot-binding="unbound"，带 `[data-bot-bind]` 按钮） */
+  unbound: boolean
+  /** md 已删的标注（data-bot-bound-missing）在不在 */
   missing: boolean
+  /** 胶囊可见文本（displayName；md 已删回落身份键；注册表未落定前也是身份键） */
+  display: string
+}
+
+/** 聊天会话空态快照 */
+export interface BotEmptyStateShot {
+  /** `[data-bot-empty]` 在屏 */
+  present: boolean
+  /** 遗留未绑定形态（data-bot-empty="unbound"） */
+  unbound: boolean
+  /** 提示行（空态里第一个 `<p>`）的文本 —— 绑定形态下含 bot 的显示名 */
+  hint: string
+  /**
+   * 介绍卡（display / description 按结构认：卡里的 .font-medium 与 .text-text-tertiary）；
+   * md 已删 / 未绑定 / 注册表未落定时为 null
+   */
+  card: { name: string; display: string; description: string } | null
 }
 
 export interface BotSessionPane {
-  /** 头部成员条快照：present = data-bot-members 在屏；chips 按 DOM 序 = 名单序 */
-  membersBar(): Promise<{ present: boolean; chips: BotMemberChip[] }>
-  /** 点成员条的「管理成员」入口（data-bot-manage-members；随后用 botDialogPane 驱动）；无则 false */
-  clickManageMembers(): Promise<boolean>
+  /** 头部绑定胶囊快照 */
+  bindingChip(): Promise<BotBindingChipShot>
+  /** 点未绑定胶囊上的「选择 bot」（data-bot-bind；随后用 botDialogPane 驱动）；无则 false */
+  clickBind(): Promise<boolean>
 
   /** 会话工具栏的工具胶囊 id 列表（data-session-tool 属性值，DOM 序） */
   toolbarTools(): Promise<string[]>
   /** 点某个工具胶囊（开合面板/切换工具）；无则 false */
   clickToolbarTool(tool: string): Promise<boolean>
 
-  /**
-   * 聊天会话空态快照：present = data-bot-empty；cards 按 DOM 序 = 名单序
-   * （display / description 按结构认：成员行里的 .font-medium 与 .text-text-tertiary）；
-   * suggestionChips = 整个空态里 data-bot-suggestion 的个数（v3 起恒应为 0）。
-   */
-  emptyState(): Promise<{
-    present: boolean
-    cards: Array<{ name: string; display: string; description: string }>
-    suggestionChips: number
-  }>
+  /** 聊天会话空态快照 */
+  emptyState(): Promise<BotEmptyStateShot>
 }
 
 /** 主窗聊天会话的 A4 配套面（会话已选中后调用） */
 export function botSessionPane(main: CdpClient): BotSessionPane {
-  const MEMBERS = `document.querySelector('[data-bot-members]')`
+  const BINDING = `document.querySelector('[data-bot-binding]')`
   const TOOL_BTNS = `[...document.querySelectorAll('[data-session-tool]')]`
   const EMPTY = `document.querySelector('[data-bot-empty]')`
 
   return {
-    membersBar: () =>
-      main.eval(`(() => {
-        const bar = ${MEMBERS}
-        if (!bar) return { present: false, chips: [] }
+    bindingChip: () =>
+      main.eval<BotBindingChipShot>(`(() => {
+        const root = ${BINDING}
+        if (!root) return { present: false, bound: null, unbound: false, missing: false, display: '' }
+        const bound = root.querySelector('[data-bot-bound]')
         return {
           present: true,
-          chips: [...bar.querySelectorAll('[data-bot-member]')].map((c) => ({
-            name: c.getAttribute('data-bot-member') ?? '',
-            display: (c.querySelector('span.truncate')?.textContent ?? '').trim(),
-            missing: c.hasAttribute('data-bot-member-missing')
-          }))
+          bound: bound?.getAttribute('data-bot-bound') ?? null,
+          unbound: root.getAttribute('data-bot-binding') === 'unbound' && !!root.querySelector('[data-bot-bind]'),
+          missing: !!bound?.hasAttribute('data-bot-bound-missing'),
+          display: (bound?.querySelector('span.truncate')?.textContent ?? '').trim()
         }
       })()`),
-    clickManageMembers: async () => {
+    clickBind: async () => {
       const hit = await main.eval<boolean>(`(() => {
-        const btn = document.querySelector('[data-bot-manage-members]')
+        const btn = ${BINDING}?.querySelector('[data-bot-bind]')
         if (!btn) return false
         btn.click()
         return true
@@ -2758,17 +2757,21 @@ export function botSessionPane(main: CdpClient): BotSessionPane {
     },
 
     emptyState: () =>
-      main.eval(`(() => {
+      main.eval<BotEmptyStateShot>(`(() => {
         const root = ${EMPTY}
-        if (!root) return { present: false, cards: [], suggestionChips: 0 }
+        if (!root) return { present: false, unbound: false, hint: '', card: null }
+        const c = root.querySelector('[data-bot-empty-member]')
         return {
           present: true,
-          cards: [...root.querySelectorAll('[data-bot-empty-member]')].map((c) => ({
-            name: c.getAttribute('data-bot-empty-member') ?? '',
-            display: (c.querySelector('.font-medium')?.textContent ?? '').trim(),
-            description: (c.querySelector('.text-text-tertiary')?.textContent ?? '').trim()
-          })),
-          suggestionChips: root.querySelectorAll('[data-bot-suggestion]').length
+          unbound: root.getAttribute('data-bot-empty') === 'unbound',
+          hint: (root.querySelector('p')?.textContent ?? '').trim(),
+          card: c
+            ? {
+                name: c.getAttribute('data-bot-empty-member') ?? '',
+                display: (c.querySelector('.font-medium')?.textContent ?? '').trim(),
+                description: (c.querySelector('.text-text-tertiary')?.textContent ?? '').trim()
+              }
+            : null
         }
       })()`)
   }

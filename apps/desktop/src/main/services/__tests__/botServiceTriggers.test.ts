@@ -121,8 +121,13 @@ function writeBot(
   writeFileSync(join(dirs.bots, `${name}.md`), lines.join('\n'))
 }
 
-const seedSession = (bots: string[], title = 'Some title'): void => {
-  mocks.getById.mockReturnValue({ workingDirectory: dirs.sessions, title, settings: { bots } })
+/** `bot: null` = 群聊时代的遗留会话：只有 bots 名单、没有绑定 */
+const seedSession = (bot: string | null, title = 'Some title'): void => {
+  mocks.getById.mockReturnValue({
+    workingDirectory: dirs.sessions,
+    title,
+    settings: bot === null ? { bots: ['scout'] } : { bot }
+  })
 }
 
 /** 某个埋点 id 的全部 payload */
@@ -251,7 +256,7 @@ beforeEach(() => {
   mocks.invoke.mockResolvedValue(ran())
   mocks.buildFacts.mockResolvedValue(FACTS)
   writeBot('scout', { displayName: 'Scout' })
-  seedSession(['scout'])
+  seedSession('scout')
 })
 
 afterEach(() => {
@@ -275,11 +280,11 @@ describe('TR —— 埋点', () => {
     await prompt('hello there')
     const [p] = fired('session.prompt-accepted')
     expect(fired('session.prompt-accepted')).toHaveLength(1)
-    expect(p).toMatchObject({ sessionId: SID, promptText: 'hello there', bots: ['scout'] })
+    expect(p).toMatchObject({ sessionId: SID, promptText: 'hello there', bot: 'scout' })
   })
 
   it('TR-2 profileName 是空串 —— 无根会话没有档案名，编一个不如空着', async () => {
-    // 订阅方要区分会话种类看的是 bots 的有无，不是 profileName 的真假
+    // 订阅方要区分会话种类看的是 bot 键的有无，不是 profileName 的真假
     await prompt()
     expect(fired('session.prompt-accepted')[0].profileName).toBe('')
   })
@@ -301,15 +306,16 @@ describe('TR —— 埋点', () => {
     expect(text).not.toContain('shuvixInlineToken')
   })
 
-  it('TR-4 bots 现取 —— 名单随时可能被 updateBots 改，不能用建会话时的快照', async () => {
-    seedSession(['scout', 'ranger'])
+  it('TR-4 bot 现取 —— 绑定随时可能被 setBot 改，不能用建会话时的快照', async () => {
+    writeBot('ranger', { displayName: 'Ranger' })
+    seedSession('ranger')
     await prompt()
-    expect(fired('session.prompt-accepted')[0].bots).toEqual(['scout', 'ranger'])
+    expect(fired('session.prompt-accepted')[0].bot).toBe('ranger')
   })
 
   it('TR-5 isDefaultTitle 现算（默认标题随语言变，不是一个常量）', async () => {
     mocks.isDefaultTitle.mockReturnValue(true)
-    seedSession(['scout'], 'New Chat')
+    seedSession('scout', 'New Chat')
     await prompt()
     expect(fired('session.prompt-accepted')[0]).toMatchObject({
       title: 'New Chat',
@@ -321,16 +327,7 @@ describe('TR —— 埋点', () => {
     await prompt()
     const turns = fired('session.turn-completed')
     expect(turns).toHaveLength(1)
-    expect(turns[0]).toMatchObject({ sessionId: SID, profileName: '', bots: ['scout'], ...FACTS })
-  })
-
-  it('TR-7 一轮 = cohort 整体，不是每个成员一次', async () => {
-    // 逐成员 fire 会让订阅方（auto-title）在一条消息上起 N 个 run，而它们互相 skip 的
-    // 结果取决于谁先跑到
-    writeBot('ranger', { displayName: 'Ranger' })
-    seedSession(['scout', 'ranger'])
-    await prompt()
-    expect(fired('session.turn-completed')).toHaveLength(1)
+    expect(turns[0]).toMatchObject({ sessionId: SID, profileName: '', bot: 'scout', ...FACTS })
   })
 
   it('TR-8 事实构造器返回 null（会话已被删）→ 不 fire（不编一份事实出来）', async () => {
@@ -341,37 +338,41 @@ describe('TR —— 埋点', () => {
     expect(fired('session.prompt-accepted')).toHaveLength(1)
   })
 
-  it('TR-9 【L0 全筛掉也算一轮】名单里的成员 md 全没了、没人被唤起时仍 fire turn-completed', async () => {
+  it('TR-9 【绑定的 md 不在了也算一轮】不派发、落一条可见失败，仍 fire turn-completed', async () => {
     // 有根会话那侧的契约是「无论成败恒触发」。两边在「什么时候算一轮」上错开，订阅方
-    // 看到的就是「某类会话的工作流莫名其妙不触发」。v3 起 L0 能筛掉成员的原因只剩一种：
-    // 名单里的 md 不在了（没有 mention-only 这类逐 bot 的门控模式，在册的成员必然进 cohort）
-    seedSession(['ghost'])
+    // 看到的就是「某类会话的工作流莫名其妙不触发」
+    seedSession('ghost')
     await prompt('没有人接得住')
 
     expect(mocks.invoke).not.toHaveBeenCalled()
-    expect(kindsOf('ghost')).toEqual(['l0_member_missing'])
+    const msgs = await messageService.listBySession(SID)
+    expect(msgs.some((m) => m.role === 'assistant' && m.content === 'bot.botGone')).toBe(true)
     expect(fired('session.turn-completed')).toHaveLength(1)
+    expect(fired('session.turn-completed')[0].bot).toBe('ghost')
   })
 
-  it('TR-10 名单为空 → 不 fire turn-completed（这条会话根本不是聊天会话）', async () => {
-    // 与上一条的区别是**分不出成员**与**没有成员**：后者压根没有「一轮」这回事
-    seedSession([])
+  it('TR-10 未绑定 bot（遗留会话）→ 不派发、落一条 system 说明，turn-completed 照 fire 且 bot 为空串', async () => {
+    // 遗留会话仍是聊天会话（消息落表），只是还没重新选 bot：一轮照样算结束 ——
+    // 订阅方要分辨的是「聊天会话」这一形态（bot 键在场），不是它此刻绑没绑
+    seedSession(null)
     await prompt()
-    expect(fired('session.turn-completed')).toHaveLength(0)
-    expect(fired('session.prompt-accepted')).toHaveLength(1)
+    expect(mocks.invoke).not.toHaveBeenCalled()
+    expect(fired('session.prompt-accepted')[0]).toMatchObject({ bot: '' })
+    expect(fired('session.turn-completed')).toHaveLength(1)
+    expect(fired('session.turn-completed')[0]).toMatchObject({ bot: '' })
   })
 
-  it('TR-11 【键集之差恰为 bots】聊天会话的 turn-completed 就是有根会话那份加一个成员名单', async () => {
+  it('TR-11 【键集之差恰为 bot】聊天会话的 turn-completed 就是有根会话那份加一个绑定的 bot 名', async () => {
     // 有根会话那侧铺的是 {sessionId, profileName, ...facts}（agentSession.fireTurnCompleted），
-    // 聊天会话多一个 bots。端到端的那份对照在 e2e 的 task.e2e.ts（E-3），这里钉的是本侧
+    // 聊天会话多一个 bot。端到端的那份对照在 e2e 的 task.e2e.ts（E-3），这里钉的是本侧
     await prompt()
     const keys = Object.keys(fired('session.turn-completed')[0]).sort()
     const rooted = ['sessionId', 'profileName', ...Object.keys(FACTS)].sort()
-    expect(keys.filter((k) => !rooted.includes(k))).toEqual(['bots'])
+    expect(keys.filter((k) => !rooted.includes(k))).toEqual(['bot'])
     expect(rooted.filter((k) => !keys.includes(k))).toEqual([])
   })
 
-  it('TR-12 埋点顺序：prompt-accepted 在派发之前，turn-completed 在全员收尾之后', async () => {
+  it('TR-12 埋点顺序：prompt-accepted 在派发之前，turn-completed 在管线收尾之后', async () => {
     const order: string[] = []
     mocks.fire.mockImplementation((id: string) => order.push(id))
     mocks.invoke.mockImplementation(async () => {
@@ -396,7 +397,7 @@ describe('TR —— 埋点', () => {
     expect(msgs.some((m) => m.role === 'user' && String(m.content).includes('落树顺序'))).toBe(true)
   })
 
-  it('TR-14 一个成员的管线炸了不拖垮埋点（cohort 的结局仍然要收）', async () => {
+  it('TR-14 管线炸了不拖垮埋点（这一轮的结局仍然要收）', async () => {
     mocks.invoke.mockRejectedValue(new Error('boom'))
     await prompt()
     expect(fired('session.turn-completed')).toHaveLength(1)
@@ -597,7 +598,7 @@ describe('GH —— 门控回落', () => {
     seq += 1
     BOT = `gh-bot-${seq}`
     writeBot(BOT, { displayName: 'GH', agents: { intent: 'my-intent' } })
-    seedSession([BOT])
+    seedSession(BOT)
   })
 
   it('GH-1 门控正常 → 不记故障，不回落', async () => {

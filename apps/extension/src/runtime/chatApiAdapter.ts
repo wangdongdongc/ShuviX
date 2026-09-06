@@ -330,9 +330,9 @@ export const chatApiAdapter: ChatApi = {
     // 切换会话根 Agent 的档案：粘性写入会话设置 + 失效运行时，下一条消息按新档案重建
     // （buildRuntimeSession 读 settings.agentProfile）。档案声明的模型与 mcp:/skill: 工具
     // 作为种子写进会话树（口径同桌面：事实源是会话树，档案只在切换这一刻参与一次）。
-    // 扩展端不落 bots（聊天会话是桌面端形态，设计 §12 明确把扩展端列为非目标）。
-    // 契约成员必须在，但不假装支持 —— 静默成功会让调用方以为名单改了
-    updateBots: async () => ({
+    // 扩展端没有聊天会话（桌面端形态，设计 §12 明确把扩展端列为非目标）。
+    // 契约成员必须在，但不假装支持 —— 静默成功会让调用方以为绑定改了
+    setBot: async () => ({
       success: false,
       error: 'Chat sessions are not available in the extension'
     }),

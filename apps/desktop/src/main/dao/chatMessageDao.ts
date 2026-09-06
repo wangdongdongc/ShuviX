@@ -66,19 +66,6 @@ export class ChatMessageDao extends BaseDao {
     return rows.map(parseRow)
   }
 
-  /**
-   * 会话里最后一条 bot 消息 —— clarify 回连的判定材料（上一条 bot 消息是某个 bot 的
-   * clarify 时，下一条无提及消息硬路由回它）。刚落库的用户消息不影响它：按
-   * authorKind 过滤，天然跳过。
-   */
-  findLastBot(sessionId: string): ChatMessageRow | undefined {
-    const row = this.stmt(
-      `SELECT * FROM chat_messages WHERE sessionId = ? AND authorKind = 'bot'
-       ORDER BY seq DESC LIMIT 1`
-    ).get(sessionId) as Row | undefined
-    return row ? parseRow(row) : undefined
-  }
-
   findById(id: string): ChatMessageRow | undefined {
     const row = this.stmt('SELECT * FROM chat_messages WHERE id = ?').get(id) as Row | undefined
     return row ? parseRow(row) : undefined
@@ -86,7 +73,7 @@ export class ChatMessageDao extends BaseDao {
 
   /**
    * 追加一条消息 —— **唯一的写入口**。seq 与 id 在同一个事务里定下，
-   * 并发写者不会拿到相同的 seq（多个 bot 同时回复是常态）。
+   * 并发写者不会拿到相同的 seq（用户连发与 bot 回复交错是常态）。
    */
   append(input: ChatMessageInsert): ChatMessageRow {
     const id = input.id ?? uuidv4()

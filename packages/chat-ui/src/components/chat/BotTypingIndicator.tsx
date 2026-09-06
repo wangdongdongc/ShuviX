@@ -1,19 +1,17 @@
 /**
- * 群聊「正在输入」（v2）—— 渲染在对话滚动区尾部（Footer），每个在飞成员一行。
+ * 「正在输入」—— 渲染在对话滚动区尾部（Footer）：会话绑定的 bot 在飞时的一行。
  *
- * v1 这里是一排带边框的占位卡，因为那时每条在飞消息都要展示自己在竞争的哪一相位
- * （started/claimed/queued/working）。v2 取消了竞争：bot 各自独立处理消息，相位对用户
- * 只剩一个意思 ——「它在打字」。所以形态回到群聊里最自然的那一个：头像 + 名字 + 三点，
- * 与它随后要落下的气泡同列对齐，回复到达时视觉上就是原位替换。
+ * 形态是聊天里最自然的那一个：头像 + 名字 + 三点，与它随后要落下的气泡同列对齐，
+ * 回复到达时视觉上就是原位替换。会话是一对一的，所以至多一行。
  *
  * 相位差异只剩两处仍然要说出口：排队（这条消息还没轮到它，停止无意义，所以不给停止钮）
  * 和意图判断（最长 60s，完全无反馈是死气）。其余一律只显示三点。
- * per-bot 停止（`agent.abortBot`，渠道端可选）移到这一行上 —— 卡片没了，钮跟着走。
+ * 按消息停止（`agent.abortBot`，渠道端可选）就在这一行上。
  */
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Square } from 'lucide-react'
-import { useChatStore, selectBotActivities, type BotActivitySnapshot } from '../../stores/chatStore'
+import { useChatStore, selectBotActivity, type BotActivitySnapshot } from '../../stores/chatStore'
 import { getSessionChannelApi } from '../../api/chatApi'
 import { BotAvatar } from '../common/BotAvatar'
 
@@ -74,9 +72,7 @@ function TypingRow({
       <span className="text-[11px] tabular-nums text-text-tertiary/70">{elapsed}s</span>
       {stoppable && (
         <button
-          onClick={() =>
-            void abortBot({ sessionId, botName: act.botName, messageId: act.messageId! })
-          }
+          onClick={() => void abortBot({ sessionId, messageId: act.messageId! })}
           title={t('bot.stop')}
           // 恒可见（只是压低对比度），不做悬停才显形：伸手按停止的人正处在「它跑偏了」
           // 的当口，让他先找到该往哪儿悬停是最坏的时机。复制钮可以藏，这个不行
@@ -92,16 +88,13 @@ function TypingRow({
 
 export function BotTypingIndicator(): React.JSX.Element | null {
   const sessionId = useChatStore((s) => s.activeSessionId)
-  const activities = useChatStore(selectBotActivities)
-  const list = Object.values(activities)
+  const act = useChatStore(selectBotActivity)
 
-  if (!sessionId || list.length === 0) return null
+  if (!sessionId || !act) return null
 
   return (
     <div className="mx-auto flex w-full max-w-[784px] flex-col py-1" data-bot-activities>
-      {list.map((a) => (
-        <TypingRow key={a.botName} sessionId={sessionId} act={a} />
-      ))}
+      <TypingRow sessionId={sessionId} act={act} />
     </div>
   )
 }

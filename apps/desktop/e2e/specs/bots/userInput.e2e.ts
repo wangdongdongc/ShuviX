@@ -10,9 +10,10 @@
  * 它的 `ask` 带着**根会话 id**（= 这条聊天会话）走 broker → botService.requestUserInput
  * → 广播 `input_request` → 前端答复 → `respondToUserInput(requestId, …)` 回到同一处。
  *
- * 内置 `bot-chat` 的任务段是 M8′ 待做、门控段跑 `tools: []`，今天没有任何内置路径会在聊天
- * 会话里发询问，所以这里自带一份最小探针管线：它只做一件事 —— 派一个带 `ask` 的 agent
- * 出去，把结果说出来。
+ * 内置 `bot-chat` 的门控段跑 `tools: []`、任务段带的是 task 槽位那份 agent md 自己声明的
+ * 工具（不必含 `ask`），没有一条内置路径**保证**会在聊天会话里发询问，所以这里自带一份
+ * 最小探针管线：它只做一件事 —— 派一个带 `ask` 的 agent 出去，把结果说出来。
+ * 会话是一对一的（`settings.bot` 绑定一个 bot），每条消息都归它、每次询问都从它的任务段发出。
  */
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -193,7 +194,7 @@ describe('聊天会话里的询问', () => {
     await events.clear()
     provider.script(askTurn(), afterAnswer())
 
-    const sid = await createBotSession(app.main, { bots: [BOT], title: 'U-ask-arrive' })
+    const sid = await createBotSession(app.main, { bot: BOT, title: 'U-ask-arrive' })
     await promptDetached(sid, '挑个颜色')
 
     const requestId = await waitAsk(sid)
@@ -216,8 +217,8 @@ describe('聊天会话里的询问', () => {
     await events.clear()
     provider.script(askTurn(), afterAnswer())
 
-    const sid = await createBotSession(app.main, { bots: [BOT], title: 'U-ask-route' })
-    const decoy = await createBotSession(app.main, { bots: [BOT], title: 'U-ask-decoy' })
+    const sid = await createBotSession(app.main, { bot: BOT, title: 'U-ask-route' })
+    const decoy = await createBotSession(app.main, { bot: BOT, title: 'U-ask-decoy' })
     await promptDetached(sid, '挑个颜色')
 
     const requestId = await waitAsk(sid)
@@ -247,7 +248,7 @@ describe('聊天会话里的询问', () => {
     // 它只认 `input_request_resolved`，后端既然不会再发，就得由网关补一条。
     // 少了它，用户面对的是一个点下去毫无反应的按钮，唯一的线索在主进程日志里
     await events.clear()
-    const sid = await createBotSession(app.main, { bots: [BOT], title: 'U-ask-orphan' })
+    const sid = await createBotSession(app.main, { bot: BOT, title: 'U-ask-orphan' })
 
     await respond({
       sessionId: sid,
@@ -266,7 +267,7 @@ describe('聊天会话里的询问', () => {
     await events.clear()
     provider.script(askTurn(), afterAnswer())
 
-    const sid = await createBotSession(app.main, { bots: [BOT], title: 'U-ask-abort' })
+    const sid = await createBotSession(app.main, { bot: BOT, title: 'U-ask-abort' })
     await promptDetached(sid, '挑个颜色')
 
     const requestId = await waitAsk(sid)

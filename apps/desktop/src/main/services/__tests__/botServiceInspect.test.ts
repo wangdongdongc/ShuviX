@@ -173,11 +173,11 @@ function slotOf(name: string, role: string): InspectSlot {
   return slot
 }
 
-const seedSession = (bots: string[]): void => {
+const seedSession = (bot: string): void => {
   mocks.getById.mockReturnValue({
     workingDirectory: dirs.sessions,
     title: 'Some title',
-    settings: { bots }
+    settings: { bot }
   })
 }
 
@@ -392,7 +392,7 @@ describe('botService.inspect', () => {
       displayName: 'B12',
       agents: { intent: 'my-intent', task: 'default' }
     })
-    seedSession(['b12-degraded'])
+    seedSession('b12-degraded')
     mocks.invoke.mockImplementation(gateFailed())
     await prompt('一')
     await prompt('二')

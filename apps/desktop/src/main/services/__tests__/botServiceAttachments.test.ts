@@ -150,7 +150,7 @@ beforeEach(() => {
   seeded = 0
   mocks.warn.mockReset()
   mocks.getById.mockReset()
-  mocks.getById.mockReturnValue({ workingDirectory: dirs.sessions, settings: { bots: ['scout'] } })
+  mocks.getById.mockReturnValue({ workingDirectory: dirs.sessions, settings: { bot: 'scout' } })
 })
 
 afterAll(() => {

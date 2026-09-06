@@ -155,7 +155,7 @@ const api = {
 
     /** 中止指定 session 的生成 */
     abort: (sessionId: string) => ipcRenderer.invoke('agent:abort', sessionId),
-    abortBot: (params: { sessionId: string; botName: string; messageId: string }) =>
+    abortBot: (params: { sessionId: string; messageId: string }) =>
       ipcRenderer.invoke('bot:abort', params),
 
     /** 切换模型 */
@@ -284,8 +284,7 @@ const api = {
     listAgentProfiles: () => ipcRenderer.invoke('session:listAgentProfiles'),
     updateAgentProfile: (params: { id: string; name: string }) =>
       ipcRenderer.invoke('session:updateAgentProfile', params),
-    updateBots: (params: { id: string; bots: string[] }) =>
-      ipcRenderer.invoke('session:updateBots', params),
+    setBot: (params: { id: string; bot: string }) => ipcRenderer.invoke('session:setBot', params),
     markRead: (id: string) => ipcRenderer.invoke('session:markRead', id)
     // 配置变更订阅已并入 events.subscribe（AppEvent 'session.configChanged'）
   },

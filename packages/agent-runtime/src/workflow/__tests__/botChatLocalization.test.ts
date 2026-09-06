@@ -76,23 +76,21 @@ describe('bot-chat — 三语言守护（脚本与 schema 逐字节同 en）', (
     }
   })
 
-  it('BL-3 名集合钉板：9 个 prompt 名与 4 个 schema 名，三语言逐语言一致', () => {
+  it('BL-3 名集合钉板：7 个 prompt 名与 3 个 schema 名，三语言逐语言一致', () => {
     // 清单钉死而不只比 set 相等：改名/增删块应当在这里显形一次，而不是三语言一起改完仍然全绿。
     // 五个失败文案块（gateBroken / gateTimeout / taskNoAgent / taskTimeout / taskFailed）随
     // 「失败原样上抛、宿主按 errorCode 选文案」退役 —— 它们是宿主通告，住进 i18n；
-    // addressed 并进 gateDirected（`{{>gate}}` + 点名说明）
+    // gateDirected / others 与 intentDirected 随群聊一起退役：一对一没有「点名」也没有「别人」
     const PROMPT_NAMES = [
       'boundaries',
       'gate',
-      'gateDirected',
-      'others',
       'recheck',
       'recheckSkipped',
       'since',
       'task',
       'window'
     ]
-    const SCHEMA_NAMES = ['intent', 'intentDirected', 'recheck', 'reply']
+    const SCHEMA_NAMES = ['intent', 'recheck', 'reply']
     for (const lang of LANGS) {
       const { wf } = parsed(lang)
       expect(Object.keys(wf.prompts).sort(), `${lang} prompt 名集合漂移`).toEqual(PROMPT_NAMES)
@@ -109,9 +107,9 @@ describe('bot-chat — 三语言守护（脚本与 schema 逐字节同 en）', (
     }
   })
 
-  it('BL-5 四个 schema 块各自 zh/ja 与 en 逐字节同', () => {
+  it('BL-5 三个 schema 块各自 zh/ja 与 en 逐字节同', () => {
     const names = Object.keys(parsed('en').wf.schemas)
-    expect(names).toHaveLength(4)
+    expect(names).toHaveLength(3)
     for (const name of names) {
       const en = block('en', `json schema=${name}`)
       for (const lang of LOCALIZED) {

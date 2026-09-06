@@ -237,10 +237,10 @@ function BotEditor({
     }
   }
 
-  /** 以这个 bot 为唯一成员开一个聊天会话，并切过去（离开档案页 —— 用户要的就是去聊） */
+  /** 和这个 bot 开一个聊天会话，并切过去（离开档案页 —— 用户要的就是去聊） */
   const handleNewSession = async (): Promise<void> => {
     if (!bot) return
-    const session = await getChatApi().session.create({ projectId: null, bots: [bot.name] })
+    const session = await getChatApi().session.create({ projectId: null, bot: bot.name })
     useChatStore.getState().setSessions(await getChatApi().session.list())
     useChatStore.getState().setActiveSessionId(session.id)
   }

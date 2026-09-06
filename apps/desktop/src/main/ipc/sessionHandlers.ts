@@ -22,7 +22,7 @@ export function registerSessionHandlers(): void {
     return sessionService.list()
   })
 
-  /** 创建新会话（笔记本会话：params.notebookPath 非空；聊天会话：params.bots 非空） */
+  /** 创建新会话（笔记本会话：params.notebookPath 非空；聊天会话：params.bot 非空） */
   ipcMain.handle('session:create', (_event, params?: SessionCreateParams) =>
     sessionService.create(params)
   )
@@ -63,9 +63,9 @@ export function registerSessionHandlers(): void {
   /** 可切换的会话档案（输入框档案选择器；纯文件系统驱动，每次现扫） */
   ipcMain.handle('session:listAgentProfiles', () => agentService.listSwitchable())
 
-  /** 改聊天会话的成员名单；新加入的成员在这里 await 完开场白再返回（同 session:create） */
-  ipcMain.handle('session:updateBots', (_event, params: { id: string; bots: string[] }) =>
-    sessionService.updateBots(params.id, params.bots)
+  /** 给聊天会话绑定 bot（含群聊时代遗留的、尚未绑定的会话） */
+  ipcMain.handle('session:setBot', (_event, params: { id: string; bot: string }) =>
+    sessionService.setBot(params.id, params.bot)
   )
 
   /** 清零聊天会话未读（A4）；幂等 */

@@ -7,6 +7,7 @@
  *   - 「触发首条 prompt 的注入路径」允许 LLM 调用失败（隔离实例无 API key）——
  *     prompt 前的系统提示词组装 / 消息树写入已经发生，断言只看这些副作用。
  */
+import { execFileSync } from 'node:child_process'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { deflateSync } from 'node:zlib'
@@ -560,21 +561,22 @@ export async function createAgentSession(
 }
 
 /**
- * 创建一个聊天会话（`settings.bots` 非空 = 无根会话），返回 sid。
+ * 创建一个聊天会话（`settings.bot` 有值 = 绑定了一个 bot 的无根会话），返回 sid。
  *
  * 与 `createAgentSession` 的关键差别是**只 create、不 getInfo**：聊天会话没有根 Agent，
  * `agent.getInfo(sid, { ensure: true })` 恒为 null，读它的 `.systemPrompt` 直接抛。
  *
- * v3 起没有开场白：resolve 时会话里**零条消息**。要一条零 LLM 的 bot 消息，
- * 让成员指向一份只 `say` 一句的探针管线（各 spec 自带）再 `promptBotSession`。
+ * 一对一：一个会话恰绑一个 bot，形态在创建那一刻定死。没有开场白：resolve 时会话里
+ * **零条消息**。要一条零 LLM 的 bot 消息，让 bot 指向一份只 `say` 一句的探针管线
+ * （各 spec 自带）再 `promptBotSession`。
  */
 export async function createBotSession(
   main: CdpClient,
-  opts: { bots: string[]; title?: string; projectId?: string }
+  opts: { bot: string; title?: string; projectId?: string }
 ): Promise<string> {
   return main.eval(
     `window.api.session.create(${JSON.stringify({
-      bots: opts.bots,
+      bot: opts.bot,
       title: opts.title ?? 'e2e-bots',
       ...(opts.projectId ? { projectId: opts.projectId } : {})
     })}).then((s) => s.id)`
@@ -582,10 +584,67 @@ export async function createBotSession(
 }
 
 /**
+ * 造一条**群聊时代遗留形态**的聊天会话（`settings.bots` 名单、没有 `bot` 键），返回 sid。
+ *
+ * 遗留会话没有做迁移：带着 `bots` 的行仍被认作聊天会话（否则它的 chat_messages 历史在普通
+ * 会话的渲染路径下没有来源），但视为**未绑定 bot**，等用户在头部重新选一个。今天没有任何
+ * IPC 会再写出这个形态（`session.create` 只认 `bot`），所以先正常建一条（绑 `bots[0]`），
+ * 再绕过 API 用 sqlite3 CLI 把那一行改写成老样子：`$.bots` 写名单、`$.bot` 删掉。
+ *
+ * 用系统 sqlite3 而不是 better-sqlite3（先例：`e2e/live/probe.ts`）：后者是为 Electron
+ * 编译的，普通 node 里加载会报 NODE_MODULE_VERSION 不符。CLI 没有参数绑定，SQL 由
+ * `JSON.stringify`（名单）与单引号转义（id）现拼；`.timeout` 挡住与主进程写锁的偶发相撞。
+ *
+ * 主进程不缓存会话行（`sessionDao` 每次现查），改完即生效；渲染端的会话表却是一份快照 ——
+ * 借 `session.updateProject`（写回它自己的 projectId）广播一次 `session.listChanged`，
+ * 侧栏与头部才会重拉。resolve 前已验证 `getById` 读回的正是遗留形态。
+ */
+export async function createLegacyBotSession(
+  app: E2EApp,
+  opts: { bots: string[]; title?: string; projectId?: string }
+): Promise<string> {
+  if (opts.bots.length === 0) throw new Error('a legacy roster needs at least one name')
+  const sid = await createBotSession(app.main, {
+    bot: opts.bots[0],
+    title: opts.title,
+    projectId: opts.projectId
+  })
+  const dbPath = join(app.home, 'userdata', 'data', 'shuvix.db')
+  const roster = JSON.stringify(opts.bots).replace(/'/g, "''")
+  const idLit = sid.replace(/'/g, "''")
+  execFileSync('sqlite3', [
+    '-cmd',
+    '.timeout 3000',
+    dbPath,
+    `UPDATE sessions SET settings = json_remove(json_set(settings, '$.bots', json('${roster}')), '$.bot') WHERE id = '${idLit}'`
+  ])
+  const settings = await app.main.eval<Record<string, unknown> | undefined>(
+    `(async () => {
+      const id = ${JSON.stringify(sid)}
+      const s = await window.api.session.getById(id)
+      await window.api.session.updateProject({ id, projectId: s?.projectId ?? null })
+      return (await window.api.session.getById(id))?.settings
+    })()`
+  )
+  if (
+    !settings ||
+    'bot' in settings ||
+    JSON.stringify(settings.bots) !== JSON.stringify(opts.bots)
+  ) {
+    throw new Error(`legacy rewrite did not land: settings=${JSON.stringify(settings)}`)
+  }
+  return sid
+}
+
+/**
  * 给聊天会话发一条消息并返回消息列表。
  *
  * 与 `promptAndListMessages` 的关键差别是**不需要 `.catch()`**：聊天会话的 prompt
  * 根本不碰 LLM（botService 只落盘 + 广播），它若 reject 就是真 bug。
+ *
+ * resolve 时机 = `dispatch` 收尾：绑定的 bot 的管线跑完（探针管线的回复此刻已在库里），
+ * 或派发前的两个分支之一已经落了它那条说明 —— 会话没绑定 bot（system 行）、
+ * 绑定的 md 已被删（署名的错误气泡）。
  */
 export async function promptBotSession(
   main: CdpClient,

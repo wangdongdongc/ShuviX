@@ -5,23 +5,16 @@
  *   - matchMentions —— 已登记引用在明文里的非重叠命中，胶囊镜像与发送替换共用。
  *
  * 只测纯函数导出，不建 hook 测试设施（renderHook/jsdom 都不引）——
- * 状态机部分由 e2e（specs/bots/at-mention.e2e.ts）在真实输入框里钉。
- * 语料偏 bot 提及（CJK 显示名 / 含空格显示名 / 近前缀身份键）：文件引用侧的
- * 老路径已有既有行为兜底，bot 侧的边界（CJK 连写、`@Shuvi`→`@Shuvi2` 续写降级）
- * 是本轮新增的语义。
+ * 状态机部分由 e2e 在真实输入框里钉。
+ * 语料刻意用 CJK 显示名 / 含空格名 / 近前缀名：匹配半边的边界（CJK 连写、
+ * `@Shuvi`→`@Shuvi2` 续写降级）与引用指向什么无关，文件引用同样适用。
  */
 import { describe, it, expect } from 'vitest'
 import { findActiveAt, matchMentions, type AtMention } from '../useAtMentions'
 
-/** 一条已登记的 bot 提及（text 含前导 @；rel 走 `bot:` 名字空间） */
-function botMention(name: string, displayName: string): AtMention {
-  return {
-    kind: 'bot',
-    text: `@${displayName}`,
-    rel: `bot:${name}`,
-    base: displayName,
-    botName: name
-  }
+/** 一条已登记的引用（text 含前导 @；rel 用一个不会撞上明文的路径） */
+function mention(label: string): AtMention {
+  return { text: `@${label}`, rel: `docs/${label}.md`, base: label }
 }
 
 describe('findActiveAt（B1）', () => {
@@ -50,7 +43,7 @@ describe('findActiveAt（B1）', () => {
 
 describe('matchMentions —— CJK 语流边界（B2）', () => {
   it('登记 `@侦察兵` 后 `@侦察兵帮我看看` 命中（CJK 连写放行，后界不要求空白）', () => {
-    const m = botMention('scout', '侦察兵')
+    const m = mention('侦察兵')
     const hits = matchMentions('@侦察兵帮我看看', [m])
     expect(hits).toHaveLength(1)
     expect(hits[0]).toMatchObject({ start: 0, end: 4 })
@@ -58,7 +51,7 @@ describe('matchMentions —— CJK 语流边界（B2）', () => {
   })
 
   it('`@Shuvi` 续写成 `@Shuvi2` → 后界破坏，降级为普通文字（零命中）', () => {
-    const m = botMention('shuvi', 'Shuvi')
+    const m = mention('Shuvi')
     expect(matchMentions('@Shuvi2', [m])).toEqual([])
     // 前后各摆一个完好命中，确认破坏只波及被续写的那一处
     const hits = matchMentions('@Shuvi 和 @Shuvi2', [m])
@@ -69,13 +62,13 @@ describe('matchMentions —— CJK 语流边界（B2）', () => {
 
 describe('matchMentions —— 前界与长 key 优先（B3）', () => {
   it('前界不满足（@ 前是词字符）不命中', () => {
-    const m = botMention('shuvi', 'Shuvi')
+    const m = mention('Shuvi')
     expect(matchMentions('mail@Shuvi ok', [m])).toEqual([])
   })
 
   it('`@Shuvi` 与 `@Shuvi2` 并存：长 key 优先，各归各的引用', () => {
-    const short = botMention('shuvi', 'Shuvi')
-    const long = botMention('shuvi2', 'Shuvi2')
+    const short = mention('Shuvi')
+    const long = mention('Shuvi2')
     const hits = matchMentions('@Shuvi2 @Shuvi', [short, long])
     expect(hits).toHaveLength(2)
     // 长 key 不被短 key 抢占：首个命中整段是 @Shuvi2
@@ -86,7 +79,7 @@ describe('matchMentions —— 前界与长 key 优先（B3）', () => {
   })
 
   it('含空格显示名（`@😀 Bot`）按整体 key 命中单一区间', () => {
-    const m = botMention('emoji-bot', '😀 Bot')
+    const m = mention('😀 Bot')
     const text = 'ping @😀 Bot now'
     const hits = matchMentions(text, [m])
     expect(hits).toHaveLength(1)

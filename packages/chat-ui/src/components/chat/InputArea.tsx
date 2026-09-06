@@ -1,9 +1,5 @@
-import {
-  getSessionChannelApi,
-  getHostApi,
-  useChatHost,
-  type ChatBotCandidate
-} from '@shuvix/chat-ui'
+import { isChatSessionSettings } from '@shuvix/chat-protocol/chatSession'
+import { getSessionChannelApi, getHostApi, useChatHost } from '@shuvix/chat-ui'
 import { useRef, useEffect, useLayoutEffect, useState, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Send, Square, X, Zap, CornerDownLeft, CornerRightDown } from 'lucide-react'
@@ -104,10 +100,10 @@ export function InputArea({
    * 彻底停下才出生 —— 这期间任何发送都无处可去，直接拦在输入框。
    */
   const isAgentClosing = useChatStore(selectIsAgentClosing)
-  // 聊天会话（bots 非空）：无根 Agent —— 档案切换器与上下文用量环都是关于根 Agent 的
+  // 聊天会话（绑定了 bot）：无根 Agent —— 档案切换器与上下文用量环都是关于根 Agent 的
   // UI，一并隐藏（A0）。会话形态创建时定死，此值对同一会话恒定
-  const isBotSession = useChatStore(
-    (s) => !!s.sessions.find((x) => x.id === s.activeSessionId)?.settings?.bots?.length
+  const isBotSession = useChatStore((s) =>
+    isChatSessionSettings(s.sessions.find((x) => x.id === s.activeSessionId)?.settings)
   )
   // 待处理输入请求（步进器选中的那条）——非空时输入框改投「其它」反馈，并按 kind 换描边色
   const activePendingInput = useChatStore(selectActivePendingInput)
@@ -131,43 +127,8 @@ export function InputArea({
   // 斜杠命令自动补全
   const slash = useSlashCommands(slashCommands, inputText)
 
-  // @ 候选里的 bot 成员（聊天会话，A3）：宿主注入注册表窄投影，按会话成员名单过滤、
-  // 名单序呈现。状态带 key 自校验 —— 切会话/改名单后旧列表立即失效，effect 里
-  // 不做同步 setState（异步 .then 落新值即可，无清场需求）
-  const memberKey =
-    useChatStore((s) =>
-      s.sessions.find((x) => x.id === s.activeSessionId)?.settings?.bots?.join(',')
-    ) ?? ''
-  const [botCands, setBotCands] = useState<{ key: string; list: ChatBotCandidate[] }>({
-    key: '',
-    list: []
-  })
-  useEffect(() => {
-    const src = chatHost.bots
-    if (!src || !memberKey) return
-    let alive = true
-    void src
-      .list()
-      .then((all) => {
-        if (!alive) return
-        const byName = new Map(all.map((b) => [b.name, b]))
-        const list = memberKey
-          .split(',')
-          .map((n) => byName.get(n))
-          .filter((b): b is ChatBotCandidate => !!b)
-        setBotCands({ key: memberKey, list })
-      })
-      .catch(() => {
-        /* 注册表读取失败：@ 弹层退回纯文件候选，裸文本提及仍有 L0 降级匹配 */
-      })
-    return () => {
-      alive = false
-    }
-  }, [chatHost.bots, memberKey])
-  const botCandidates = botCands.key === memberKey ? botCands.list : undefined
-
-  // @ 引用自动补全（可在任意位置触发，可多个）：聊天会话成员在前、工作区文件在后
-  const at = useAtMentions(activeSessionId, botCandidates)
+  // @ 引用自动补全（可在任意位置触发，可多个）：工作区文件
+  const at = useAtMentions(activeSessionId)
   // 长文粘贴折叠为芯片（占位明文进 textarea，完整内容随 paste 类型 InlineToken 发送）
   const paste = usePasteChips()
   // 背景镜像层（画 @ / 粘贴胶囊）—— 与 textarea 同步 scrollTop
@@ -419,11 +380,11 @@ export function InputArea({
   ): Promise<void> => {
     resetComposer()
     const store = useChatStore.getState()
-    // 聊天会话（有 bots）**不置流式态**：它没有根 Agent，永远不会发 agent_end / error /
+    // 聊天会话（绑定了 bot）**不置流式态**：它没有根 Agent，永远不会发 agent_end / error /
     // agent_closing，乐观置位之后就再也没人来清 —— 第一条消息之后输入框永久锁死，
     // 回车会被当成「排队」而网关对聊天会话安静早退，用户按下去毫无反应。
     // 设计明写「永不锁输入」；bot 的忙碌状态由 bot_activity 单独呈现（A2）
-    const isBotSession = !!store.sessions.find((x) => x.id === sid)?.settings?.bots?.length
+    const isBotSession = isChatSessionSettings(store.sessions.find((x) => x.id === sid)?.settings)
     if (!isBotSession) {
       store.setIsStreaming(sid, true)
       store.clearStreamingContent(sid)
@@ -670,7 +631,7 @@ export function InputArea({
     <div className="flex-shrink-0 flex items-center gap-1.5">
       {/* 档案选择器居首：档案决定系统提示词与内置工具白名单，是三者里最上位的一层。
           笔记本会话的档案钉死为 notebook 基座（resolveAgentProfileName），无可切项故不显示；
-          聊天会话（bots）没有根 Agent，同样无档案可切 */}
+          聊天会话（绑定了 bot）没有根 Agent，同样无档案可切 */}
       {canEdit && !isNotebook && !isBotSession && (
         <AgentProfilePicker disabled={isStreaming} onApplied={applyProfileSeed} />
       )}

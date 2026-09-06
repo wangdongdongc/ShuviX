@@ -507,12 +507,8 @@ declare global {
       followUp: (params: AgentFollowUpParams) => Promise<{ success: boolean }>
       nextTurn: (params: AgentNextTurnParams) => Promise<{ success: boolean }>
       abort: (sessionId: string) => Promise<{ success: boolean }>
-      /** per-bot 停止（聊天会话）：中止某成员对某条消息的应答（bot:abort 的会话通道别名） */
-      abortBot: (params: {
-        sessionId: string
-        botName: string
-        messageId: string
-      }) => Promise<{ aborted: boolean }>
+      /** 停止 bot 对某条消息的应答（聊天会话；bot:abort 的会话通道别名） */
+      abortBot: (params: { sessionId: string; messageId: string }) => Promise<{ aborted: boolean }>
       setModel: (params: AgentSetModelParams) => Promise<{ success: boolean }>
       setThinkingLevel: (params: AgentSetThinkingLevelParams) => Promise<{ success: boolean }>
       /** 读取运行时 Agent 对象的实时信息（systemPrompt/工具/模型）；Agent 未创建返回 null，
@@ -613,15 +609,10 @@ declare global {
         }
         modelUnavailable?: string
       }>
-      /** 改聊天会话的成员名单（只对聊天会话生效、名单不得为空；新成员补开场白） */
       /** 清零聊天会话未读（A4）；幂等 */
       markRead: (id: string) => Promise<{ success: boolean }>
-      updateBots: (params: { id: string; bots: string[] }) => Promise<{
-        success: boolean
-        error?: string
-        bots?: string[]
-        added?: string[]
-      }>
+      /** 给聊天会话绑定 bot（只对聊天会话生效；遗留的未绑定会话靠它重新选） */
+      setBot: (params: { id: string; bot: string }) => Promise<{ success: boolean; error?: string }>
     }
     message: {
       list: (sessionId: string) => Promise<ChatMessage[]>

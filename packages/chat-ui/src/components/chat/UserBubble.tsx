@@ -1,4 +1,4 @@
-import { memo, useMemo, useState } from 'react'
+import { memo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Copy, Check, CornerDownRight, RotateCcw, ChevronDown, ChevronUp } from 'lucide-react'
 import { copyToClipboard } from '../../utils/clipboard'
@@ -58,17 +58,12 @@ export const UserBubble = memo(function UserBubble({
 
   const source = msg.metadata?.source
 
-  // mailbox 回执（聊天会话，A2）：这条消息还在哪些成员的队列里排着。
-  // 订阅本会话的 mailbox 快照（引用未变时 zustand 不重渲染），再按消息 id 派生名单；
-  // active（正被处理）不出回执 —— 那由对话尾部的占位卡呈现。名字用 botName：
-  // 快照不带 displayName，而 botName 本就是用户起的可读文件名
-  const mailbox = useChatStore((s) => s.sessionBotMailbox[msg.sessionId])
-  const queuedFor = useMemo(() => {
-    if (!mailbox) return []
-    return Object.entries(mailbox)
-      .filter(([, snap]) => snap.queued.some((q) => q.messageId === msg.id))
-      .map(([botName]) => botName)
-  }, [mailbox, msg.id])
+  // mailbox 回执（聊天会话，A2）：这条消息还在 bot 的队列里排着。
+  // 订阅本会话的 mailbox 快照，按消息 id 判定（布尔值，引用稳定）；
+  // active（正被处理）不出回执 —— 那由对话尾部的「正在输入」行呈现
+  const queued = useChatStore(
+    (s) => !!s.sessionBotMailbox[msg.sessionId]?.queued.some((q) => q.messageId === msg.id)
+  )
 
   return (
     <div className="group flex flex-col items-end gap-1 px-4 py-2">
@@ -156,14 +151,11 @@ export const UserBubble = memo(function UserBubble({
         )}
       </div>
 
-      {/* mailbox 回执（聊天会话）：还排着队的成员名单 */}
-      {queuedFor.length > 0 && (
-        <div
-          className="flex items-center gap-1 text-[11px] text-text-tertiary"
-          data-bot-receipt={queuedFor.join(',')}
-        >
+      {/* mailbox 回执（聊天会话）：这条还在排队 */}
+      {queued && (
+        <div className="flex items-center gap-1 text-[11px] text-text-tertiary" data-bot-receipt>
           <CornerDownRight size={10} />
-          {t('bot.receiptQueued', { names: queuedFor.join('、') })}
+          {t('bot.receiptQueued')}
         </div>
       )}
     </div>

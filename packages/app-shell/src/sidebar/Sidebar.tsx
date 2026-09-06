@@ -116,7 +116,7 @@ export function Sidebar({
     await afterCreate(session.id, projectId)
   }
 
-  // Bot 会话：先弹成员多选（BotSessionDialog），确认后带 bots 创建
+  // Bot 会话：先弹 bot 单选（BotSessionDialog），点行即带 bot 创建
   const [botDialogFor, setBotDialogFor] = useState<{ projectId: string | null } | null>(null)
 
   // 菜单栏「新建对话 / 新建项目」（桌面原生菜单；扩展适配器为 no-op）
@@ -235,10 +235,10 @@ export function Sidebar({
               : undefined
           }
           bots={bots}
-          onSubmit={async (names) => {
+          onPick={async (name) => {
             const session = await getChatApi().session.create({
               projectId: botDialogFor.projectId,
-              bots: names
+              bot: name
             })
             await afterCreate(session.id, botDialogFor.projectId)
             return null

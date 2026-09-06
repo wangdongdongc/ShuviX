@@ -1,5 +1,5 @@
 /**
- * A2 · 对话流完整渲染（C 组后半，v2 群聊形态）—— 失败气泡、BotReply 双形态、追问 chip、
+ * A2 · 对话流完整渲染（C 组后半，一对一聊天会话）—— 失败气泡、BotReply 双形态、追问 chip、
  * 「正在输入」行、清空对在飞展示的作废、子代理面板的 bot-intent 折叠纪律。
  *
  * 除 C-15（真 bot-chat 意图段，需要假提供商喂 `next` 裁决）外全程零 LLM：
@@ -11,9 +11,9 @@
  *     `BotSilenceNotice` 随仲裁一并退场：没有胜者，也就没有「有人被压制了」这回事；
  *   - C-11 / C-12「误压制救济 chip」—— 同上，`AssistantMeta.suppressed` 与
  *     `BotRescueChips` 都已删除。
- * C-4 从「N 个成员合并成一行 data-bot-deciding」改成 v2 的对位：每个在飞成员各占一行，
- * 判断中即 `data-bot-activity-phase="started"`。C-10 只留前半段（卡与回执随清空作废），
- * 沉默提示那半段随提示一并删。
+ * C-4 随会话变成一对一再改一次口径：一个会话恰绑一个 bot，「正在输入」**至多一行**，
+ * 判断中即 `data-bot-activity-phase="started"`（v2 的「每个在飞成员各占一行」没有前提了）。
+ * C-10 只留前半段（卡与回执随清空作废），沉默提示那半段随提示一并删。
  *
  * 双断纪律：同一条消息先按 id 走 IPC（message.list 的 metadata），再进 DOM 断视觉物
  * （data-* 锚点，经 pages.ts 的 botFlowPane）—— DOM 只回答「屏幕上长出来了什么」。
@@ -206,9 +206,9 @@ async function waitPhase(
   }
 }
 
-/** 建会话并在 UI 里打开（失败气泡/回执/面板都只对活动会话渲染） */
-async function openBotSession(bots: string[], title: string): Promise<string> {
-  const sid = await createBotSession(app.main, { bots, title })
+/** 建会话（绑定一个 bot）并在 UI 里打开（失败气泡/回执/面板都只对活动会话渲染） */
+async function openBotSession(bot: string, title: string): Promise<string> {
+  const sid = await createBotSession(app.main, { bot, title })
   await until(async () => (await sidebar.titles()).includes(title), `session ${title} listed`)
   expect(await sidebar.openSession(title)).toBe(true)
   await chat.ready()
@@ -243,7 +243,7 @@ describe('失败气泡（C-1 / C-2）', () => {
       displayName: 'Missing',
       pipeline: 'a2-no-such-flow'
     })
-    const sid = await openBotSession(['ul-missing'], 'A2-C1')
+    const sid = await openBotSession('ul-missing', 'A2-C1')
     await prompt(sid, '这条没人接得住')
 
     const msgs = await untilReplies(sid, 1)
@@ -262,7 +262,7 @@ describe('失败气泡（C-1 / C-2）', () => {
 
   it('A2-C2 say({error:true}) 同款失败气泡；结构化 + error 时失败角标与回复卡并存', async () => {
     probe('ul-err', { displayName: 'Degraded', mode: 'say-error', sayLine: '出错降级的一句' })
-    const sidPlain = await openBotSession(['ul-err'], 'A2-C2a')
+    const sidPlain = await openBotSession('ul-err', 'A2-C2a')
     await prompt(sidPlain, '降级出声')
     const plain = await untilReplies(sidPlain, 1)
     expect(plain[0].metadata?.botFailure).toBe(true)
@@ -273,7 +273,7 @@ describe('失败气泡（C-1 / C-2）', () => {
 
     // 变体：结构化 + error —— 失败角标与 BotReply 卡并存（结构照常渲染，角标说明它是通告）
     probe('ul-err-reply', { displayName: 'DegradedReply', mode: 'reply-error' })
-    const sidReply = await openBotSession(['ul-err-reply'], 'A2-C2b')
+    const sidReply = await openBotSession('ul-err-reply', 'A2-C2b')
     await prompt(sidReply, '带结构的降级')
     const withReply = await untilReplies(sidReply, 1)
     expect(withReply[0].metadata?.botFailure).toBe(true)
@@ -289,32 +289,24 @@ describe('失败气泡（C-1 / C-2）', () => {
 })
 
 describe('「正在输入」行（C-4）', () => {
-  it('A2-C4 双成员意图段：两行、各带自己的名字与 started 相位；说完话行就消失', async () => {
-    // v1 这里是一行 `data-bot-deciding="2"`（N 个成员合并成「N 人正在判断」）。
-    // v2 每个在飞成员各占一行 —— 合并那一行存在的理由是「他们在竞争同一条消息」，
-    // 而现在他们各答各的，把两个人压成一个计数反而看不出是谁在说话
+  it('A2-C4 意图段：恰一行、带 bot 自己的名字与 started 相位；说完话行就消失', async () => {
+    // v1 这里是一行 `data-bot-deciding="2"`（N 个成员合并成「N 人正在判断」），v2 是每个
+    // 在飞成员各占一行。一对一之后会话里只有这一个 bot —— 判断中就是**它**的那一行，
+    // 不多不少恰一行，名字与相位都在行上
     probe('ul-dec-a', { displayName: 'DecA', preTurnMs: 2500, sayLine: 'A 的回答' })
-    probe('ul-dec-b', { displayName: 'DecB', preTurnMs: 2500, sayLine: 'B 的回答' })
-    const sid = await openBotSession(['ul-dec-a', 'ul-dec-b'], 'A2-C4')
+    const sid = await openBotSession('ul-dec-a', 'A2-C4')
     await events.clear()
-    await promptDetached(sid, '你们都说说')
+    await promptDetached(sid, '说说看')
 
-    // 意图窗内：两行，各自 started
+    // 意图窗内：恰一行，started
     await until(async () => {
       const rows = await flow.typingRows()
-      return (
-        rows.length === 2 &&
-        rows.every((r) => r.phase === 'started') &&
-        rows
-          .map((r) => r.name)
-          .sort()
-          .join(',') === 'ul-dec-a,ul-dec-b'
-      )
-    }, 'two typing rows, both in the started phase')
+      return rows.length === 1 && rows[0].phase === 'started' && rows[0].name === 'ul-dec-a'
+    }, 'one typing row in the started phase')
 
-    // 说完话：行原位换成气泡，两行都收摊
-    await untilReplies(sid, 2)
-    await until(async () => (await flow.typingRows()).length === 0, 'typing rows gone')
+    // 说完话：行原位换成气泡，收摊
+    await untilReplies(sid, 1)
+    await until(async () => (await flow.typingRows()).length === 0, 'typing row gone')
   })
 })
 
@@ -331,7 +323,7 @@ describe('清空作废在飞展示（C-10）', () => {
       // turnMs 不在本文件 ProbeSeed 里 —— abort.e2e.ts 才大量用它，这里直接写 botInput
       botInput: { sayLine: 'W 的回答', turnMs: 8000 }
     })
-    const sidWork = await openBotSession(['ul-work'], 'A2-C10')
+    const sidWork = await openBotSession('ul-work', 'A2-C10')
     await events.clear()
     await promptDetached(sidWork, '第一条')
     await waitPhase(sidWork, 'ul-work', 'working')
@@ -350,7 +342,7 @@ describe('BotReply 双形态（C-13 / C-14）', () => {
   it('A2-C13 气泡形态：加粗结论 + 散文，无列点/表格/状态 chip；全键形态逐条在屏', async () => {
     // 气泡形态：仅 headline + body
     probe('ul-bubble', { displayName: 'Bubble', mode: 'reply-bubble' })
-    const sidBubble = await openBotSession(['ul-bubble'], 'A2-C13a')
+    const sidBubble = await openBotSession('ul-bubble', 'A2-C13a')
     await prompt(sidBubble, '来一条气泡')
     const [bubble] = await untilReplies(sidBubble, 1)
     expect(bubble.metadata?.reply).toEqual({
@@ -368,7 +360,7 @@ describe('BotReply 双形态（C-13 / C-14）', () => {
 
     // 全键形态：列点 / 表格 / 状态 chip / 追问逐条在屏
     probe('ul-full', { displayName: 'Full', mode: 'reply-full' })
-    const sidFull = await openBotSession(['ul-full'], 'A2-C13b')
+    const sidFull = await openBotSession('ul-full', 'A2-C13b')
     await prompt(sidFull, '来一份全键')
     const [full] = await untilReplies(sidFull, 1)
     expect(full.metadata?.reply).toEqual(FULL_REPLY)
@@ -385,7 +377,7 @@ describe('BotReply 双形态（C-13 / C-14）', () => {
   it('A2-C14 追问 chip 点击只填不发：输入框 value = 文本，message.list 长度不变', async () => {
     // 追问常要改两个字，直接发送还会立刻烧一轮意图段（裁决③）——「直接发出去」在这里是缺陷
     probe('ul-follow', { displayName: 'Follow', mode: 'reply-full' })
-    const sid = await openBotSession(['ul-follow'], 'A2-C14')
+    const sid = await openBotSession('ul-follow', 'A2-C14')
     await prompt(sid, '来一份带追问的')
     const [msg] = await untilReplies(sid, 1)
     await until(async () => (await flow.replyShape(msg.id)).followups.length === 1, 'followup chip')
@@ -419,7 +411,7 @@ describe('子代理面板的 bot-intent 折叠纪律（C-15）', () => {
     provider.reset()
     provider.script(gate('第一轮回复'))
     writeBotMd(app, 'ul-gate', { description: 'real gate for panel', displayName: 'GateBot' })
-    const sid = await openBotSession(['ul-gate'], 'A2-C15')
+    const sid = await openBotSession('ul-gate', 'A2-C15')
     await events.clear()
     await prompt(sid, '第一轮')
     await untilReplies(sid, 1)

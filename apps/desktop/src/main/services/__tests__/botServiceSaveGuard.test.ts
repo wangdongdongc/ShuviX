@@ -25,7 +25,7 @@ const dirs = vi.hoisted(() => {
 
 const mocks = vi.hoisted(() => ({
   list: vi.fn(),
-  rewriteBots: vi.fn(),
+  rewriteBot: vi.fn(),
   getById: vi.fn(),
   warn: vi.fn()
 }))
@@ -65,7 +65,7 @@ vi.mock('../sessionService', () => ({
   sessionService: {
     getById: mocks.getById,
     list: mocks.list,
-    rewriteBots: mocks.rewriteBots
+    rewriteBot: mocks.rewriteBot
   }
 }))
 // botService 经 settingsService 读两道循环护栏。真件一经导入就把 settingsDao →
@@ -119,21 +119,20 @@ const sourceOf = (name: string): { text: string; revision: string } =>
 const runsDir = (botName: string): string => join(dirs.bots, '.runs', botName)
 
 /**
- * 会话表的**可变**替身。`rewriteBots` 真的写回去 —— 迁移会连着跑两趟（一次正常改名，
+ * 会话表的**可变**替身。`rewriteBot` 真的写回去 —— 迁移会连着跑两趟（一次正常改名，
  * 一次「补做」自检），只有让第二趟看得见第一趟的结果，断言才是生产里的那个形状。
  */
-let sessionRows: Array<{ id: string; settings: { bots?: string[] } }> = []
+let sessionRows: Array<{ id: string; settings: { bot?: string } }> = []
 
-function seedSessions(rows: Array<{ id: string; bots?: string[] }>): void {
-  sessionRows = rows.map((r) => ({ id: r.id, settings: r.bots ? { bots: [...r.bots] } : {} }))
+function seedSessions(rows: Array<{ id: string; bot?: string }>): void {
+  sessionRows = rows.map((r) => ({ id: r.id, settings: r.bot ? { bot: r.bot } : {} }))
 }
 
-/** 某条会话此刻的成员名单 */
-const botsOf = (id: string): string[] | undefined =>
-  sessionRows.find((r) => r.id === id)?.settings.bots
+/** 某条会话此刻绑定的 bot */
+const botOf = (id: string): string | undefined => sessionRows.find((r) => r.id === id)?.settings.bot
 
-/** rewriteBots 收到过的会话 id（按调用序） */
-const rewrittenIds = (): string[] => mocks.rewriteBots.mock.calls.map((c) => String(c[0]))
+/** rewriteBot 收到过的会话 id（按调用序） */
+const rewrittenIds = (): string[] => mocks.rewriteBot.mock.calls.map((c) => String(c[0]))
 
 beforeEach(() => {
   rmSync(dirs.base, { recursive: true, force: true })
@@ -142,9 +141,9 @@ beforeEach(() => {
   for (const m of Object.values(mocks)) m.mockReset()
   sessionRows = []
   mocks.list.mockImplementation(() => sessionRows)
-  mocks.rewriteBots.mockImplementation((id: string, bots: string[]) => {
+  mocks.rewriteBot.mockImplementation((id: string, bot: string) => {
     const row = sessionRows.find((r) => r.id === id)
-    if (row) row.settings.bots = bots
+    if (row) row.settings.bot = bot
   })
   mocks.getById.mockReturnValue(null)
 })
@@ -281,7 +280,7 @@ describe('SG-A —— 版本指纹', () => {
 // ────────────────────── SG-B：改名迁移 ──────────────────────
 
 /**
- * 名字被三处引用：会话的 `settings.bots` 成员名单、决策记录与 run journal 的目录、
+ * 名字被三处引用：会话的 `settings.bot` 绑定、决策记录与 run journal 的目录、
  * 以及笔记检查点。每一步都先看目标状态再动手 —— 迁移做了一半崩掉时，下一次保存能把
  * 剩下的补上（SG-B7 就是那次补做）。
  */
@@ -290,50 +289,42 @@ describe('SG-B —— 改名迁移', () => {
   const rename = (from: string, to: string): { success: boolean; error?: string } =>
     botService.save(from, md(to))
 
-  it('SG-B1 会话成员名单里的旧名换成新名（其余成员原位不动）', () => {
+  it('SG-B1 会话绑定里的旧名换成新名', () => {
     put('scout', md('scout'))
-    seedSessions([{ id: 's1', bots: ['scout', 'ranger'] }])
+    seedSessions([{ id: 's1', bot: 'scout' }])
     expect(rename('scout', 'pathfinder').success).toBe(true)
-    expect(botsOf('s1')).toEqual(['pathfinder', 'ranger'])
+    expect(botOf('s1')).toBe('pathfinder')
   })
 
   it('SG-B2 不含旧名的会话一个字都不动（不该为一次改名刷一遍所有会话）', () => {
     put('scout', md('scout'))
-    seedSessions([{ id: 's1', bots: ['ranger'] }, { id: 's2' }])
+    seedSessions([{ id: 's1', bot: 'ranger' }, { id: 's2' }])
     rename('scout', 'pathfinder')
-    expect(mocks.rewriteBots).not.toHaveBeenCalled()
-  })
-
-  it('SG-B3 名单里已经有新名字 → 去重而不是留两条', () => {
-    // 用户可能先手动把新名字加进去过
-    put('scout', md('scout'))
-    seedSessions([{ id: 's1', bots: ['scout', 'pathfinder'] }])
-    rename('scout', 'pathfinder')
-    expect(botsOf('s1')).toEqual(['pathfinder'])
+    expect(mocks.rewriteBot).not.toHaveBeenCalled()
   })
 
   it('SG-B4 逐会话独立 try：一条会话写失败不挡它后面的', () => {
     // 共用一个 try 的话，第 2 条失败就让第 3..N 条全留在旧名上 —— 那会让「迁移了一半」
-    // 这个本就难查的状态再多出一种形态。而「留在旧名上」的后果是 L0 门把它当成
-    // 「成员 md 不存在」，也就是这个 bot 从那条会话里消失了
+    // 这个本就难查的状态再多出一种形态。而「留在旧名上」的后果是派发把它当成
+    // 「bot md 不存在」，也就是这个 bot 从那条会话里消失了
     put('scout', md('scout'))
     seedSessions([
-      { id: 's1', bots: ['scout'] },
-      { id: 's2', bots: ['scout'] },
-      { id: 's3', bots: ['scout'] }
+      { id: 's1', bot: 'scout' },
+      { id: 's2', bot: 'scout' },
+      { id: 's3', bot: 'scout' }
     ])
-    mocks.rewriteBots.mockImplementation((id: string, bots: string[]) => {
+    mocks.rewriteBot.mockImplementation((id: string, bot: string) => {
       if (id === 's2') throw new Error('磁盘满了')
       const row = sessionRows.find((r) => r.id === id)
-      if (row) row.settings.bots = bots
+      if (row) row.settings.bot = bot
     })
 
     expect(rename('scout', 'pathfinder').success).toBe(true)
     expect(new Set(rewrittenIds())).toEqual(new Set(['s1', 's2', 's3']))
-    expect(botsOf('s1')).toEqual(['pathfinder'])
-    expect(botsOf('s3')).toEqual(['pathfinder'])
+    expect(botOf('s1')).toBe('pathfinder')
+    expect(botOf('s3')).toBe('pathfinder')
     // 失败的那条留在旧名上（下一次保存的补做自检会再试一次 —— 见 SG-B8）
-    expect(botsOf('s2')).toEqual(['scout'])
+    expect(botOf('s2')).toBe('scout')
   })
 
   it('SG-B5 会话列表整个读不出来也不影响其余两处迁移', () => {
@@ -384,11 +375,11 @@ describe('SG-B —— 改名迁移', () => {
     // **文件名不随改名变** —— 于是「文件叫 scout.md、里面写着 ranger」本身就是那次
     // 没走完的迁移留下的证据，补迁一次即可
     put('scout', md('ranger')) // 崩在中间的现场
-    seedSessions([{ id: 's1', bots: ['scout'] }])
+    seedSessions([{ id: 's1', bot: 'scout' }])
 
     // 用户对 ranger 做一次与改名毫无关系的普通保存
     expect(botService.save('ranger', md('ranger', { body: '随便改点什么' })).success).toBe(true)
-    expect(botsOf('s1')).toEqual(['ranger'])
+    expect(botOf('s1')).toBe('ranger')
   })
 
   it('SG-B8 补做不误触发：旧名还对应着一个活着的 bot 就不算残留', () => {
@@ -396,11 +387,11 @@ describe('SG-B —— 改名迁移', () => {
     // 而是另一个真实存在的 bot —— 把会话里的 scout 改成 ranger 会是一次静默的破坏
     put('scout', md('ranger'))
     put('scout-real', md('scout'))
-    seedSessions([{ id: 's1', bots: ['scout'] }])
+    seedSessions([{ id: 's1', bot: 'scout' }])
 
     botService.save('ranger', md('ranger', { body: '普通保存' }))
-    expect(mocks.rewriteBots).not.toHaveBeenCalled()
-    expect(botsOf('s1')).toEqual(['scout'])
+    expect(mocks.rewriteBot).not.toHaveBeenCalled()
+    expect(botOf('s1')).toBe('scout')
   })
 
   // 第三处引用（笔记检查点）的迁移在 botServiceNotes.test.ts 的 BN-E3：那里有一份
@@ -410,13 +401,13 @@ describe('SG-B —— 改名迁移', () => {
   it('SG-B10 saveByFile 一个字都不迁 —— 那条通道走的是解析不出来的坏文件', () => {
     // 坏文件没有 name，也就没有「旧名」可迁；那条路的语义就是「把这份文件修好」，
     // 修好之后要不要迁由用户的下一次正经保存决定。钉住它，是因为「顺手也迁一下」
-    // 看起来很对，但会让一次修文件的操作悄悄改写别处的会话名单
+    // 看起来很对，但会让一次修文件的操作悄悄改写别处的会话绑定
     put('broken', '---\nshuvix: bot v1\n这不是合法的 frontmatter')
-    seedSessions([{ id: 's1', bots: ['broken'] }])
+    seedSessions([{ id: 's1', bot: 'broken' }])
 
     const res = botService.saveByFile('broken.md', md('ranger'))
     expect(res.success).toBe(true)
-    expect(mocks.rewriteBots).not.toHaveBeenCalled()
+    expect(mocks.rewriteBot).not.toHaveBeenCalled()
   })
 })
 

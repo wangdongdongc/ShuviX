@@ -115,11 +115,11 @@ function writeBot(
   writeFileSync(join(dirs.bots, `${name}.md`), lines.join('\n'))
 }
 
-const seedSession = (bots: string[]): void => {
+const seedSession = (bot: string): void => {
   mocks.getById.mockReturnValue({
     workingDirectory: dirs.sessions,
     title: 'Some title',
-    settings: { bots }
+    settings: { bot }
   })
 }
 
@@ -210,7 +210,8 @@ const prompt = (text = 'hello'): Promise<void> =>
 /** 表里最后一条 bot 行 —— v2 的「原始存储」就是这一行（decision / error 都是列） */
 async function lastSidecarData(): Promise<Record<string, unknown>> {
   const { chatMessageDao } = await import('./fakeChatMessageDao')
-  const row = chatMessageDao.findLastBot(SID)
+  const rows = chatMessageDao.findBySession(SID).filter((r) => r.authorKind === 'bot')
+  const row = rows[rows.length - 1]
   if (!row) throw new Error('no bot message')
   return {
     botName: row.botName,
@@ -239,7 +240,7 @@ beforeEach(() => {
   mocks.invoke.mockResolvedValue(ran())
   mocks.buildFacts.mockResolvedValue(FACTS)
   writeBot('scout', { displayName: 'Scout' })
-  seedSession(['scout'])
+  seedSession('scout')
 })
 
 afterEach(() => {
@@ -252,7 +253,7 @@ afterAll(() => {
 
 // ────────────────────────── AB：per-bot 停止 ──────────────────────────
 
-describe('AB —— abortBot（粒度到 (bot, 消息)）', () => {
+describe('AB —— abortBot（粒度到消息）', () => {
   it('A2-B7 命中在飞票 → true，且门控住的 invoke 的 req.signal 落下', async () => {
     const g = gateCalls()
     const msg = prompt('停我这条')
@@ -260,22 +261,21 @@ describe('AB —— abortBot（粒度到 (bot, 消息)）', () => {
     const messageId = g.calls[0].input.message.id
     expect(g.calls[0].signal.aborted).toBe(false)
 
-    expect(botService.abortBot(SID, 'scout', messageId)).toBe(true)
+    expect(botService.abortBot(SID, messageId)).toBe(true)
     expect(g.calls[0].signal.aborted).toBe(true)
 
     g.calls[0].finish()
     await msg
   })
 
-  it('A2-B8 messageId / botName / sessionId 任一不匹配 → false，signal 不动', async () => {
+  it('A2-B8 messageId / sessionId 任一不匹配 → false，signal 不动', async () => {
     const g = gateCalls()
     const msg = prompt('别人停不了我')
     await g.wait(1)
     const messageId = g.calls[0].input.message.id
 
-    expect(botService.abortBot(SID, 'scout', 'not-this-message')).toBe(false)
-    expect(botService.abortBot(SID, 'ranger', messageId)).toBe(false)
-    expect(botService.abortBot('another-session', 'scout', messageId)).toBe(false)
+    expect(botService.abortBot(SID, 'not-this-message')).toBe(false)
+    expect(botService.abortBot('another-session', messageId)).toBe(false)
     expect(g.calls[0].signal.aborted).toBe(false)
 
     g.calls[0].finish()
@@ -288,7 +288,7 @@ describe('AB —— abortBot（粒度到 (bot, 消息)）', () => {
     const g = gateCalls()
     const msg = prompt('停了别再道歉')
     await g.wait(1)
-    botService.abortBot(SID, 'scout', g.calls[0].input.message.id)
+    botService.abortBot(SID, g.calls[0].input.message.id)
 
     g.calls[0].finish({ started: true, ok: false, error: 'aborted by user' })
     await msg
@@ -307,7 +307,7 @@ describe('AB —— abortBot（粒度到 (bot, 消息)）', () => {
     const g = gateCalls()
     const msg = prompt('停了别再道歉')
     await g.wait(1)
-    botService.abortBot(SID, 'scout', g.calls[0].input.message.id)
+    botService.abortBot(SID, g.calls[0].input.message.id)
 
     g.calls[0].finish({
       started: true,
@@ -335,11 +335,11 @@ describe('AB —— abortBot（粒度到 (bot, 消息)）', () => {
     const m2 = prompt('第二条')
     await g.wait(2)
 
-    botService.abortBot(SID, 'scout', g.calls[0].input.message.id)
+    botService.abortBot(SID, g.calls[0].input.message.id)
     expect(g.calls[0].signal.aborted).toBe(true)
     expect(g.calls[1].signal.aborted).toBe(false)
 
-    // 被停的那条不说话收尾；另一条照常 say —— 粒度是 (bot, 消息)，不是整个 bot
+    // 被停的那条不说话收尾；另一条照常 say —— 粒度是消息，不是整个会话
     g.calls[0].finish({ started: true, ok: false })
     await expect(g.calls[1].api.say('第二条照常回答')).resolves.toMatchObject({
       messageId: expect.any(String)
@@ -405,7 +405,7 @@ describe('HF —— 宿主失败落树带 error', () => {
   it('A2-B14a 管线缺失的可见失败 → metadata.botFailure === true', async () => {
     mocks.hasWorkflow.mockImplementation((name: string) => name !== 'nope-flow')
     writeBot('hf-miss', { displayName: 'Miss', pipeline: 'nope-flow' })
-    seedSession(['hf-miss'])
+    seedSession('hf-miss')
     await prompt('这条没人接得住')
 
     await vi.waitFor(async () => {
@@ -418,7 +418,7 @@ describe('HF —— 宿主失败落树带 error', () => {
 
   it('A2-B14b runFailed 兜底气泡 → metadata.botFailure === true', async () => {
     writeBot('hf-fail', { displayName: 'Fail' })
-    seedSession(['hf-fail'])
+    seedSession('hf-fail')
     mocks.invoke.mockResolvedValue({ started: true, ok: false, error: 'boom' })
     await prompt('这条会失败')
 
@@ -433,7 +433,7 @@ describe('HF —— 宿主失败落树带 error', () => {
   it('A2-B14c 门控回落提示 → metadata.botFailure === true（脱手 .catch 落树，须 waitFor）', async () => {
     // 门控故障按 intent 槽位的 agent 归因（errorStep.agent === agents.intent）：夹具要把槽位填上
     writeBot('hf-gate', { displayName: 'Gate', agents: { intent: 'bot-intent', task: 'default' } })
-    seedSession(['hf-gate'])
+    seedSession('hf-gate')
     mocks.invoke.mockImplementation(gateFailed())
     await prompt('一')
     await prompt('二')
@@ -460,7 +460,7 @@ describe('HF —— 宿主失败落树带 error', () => {
       // 这里：任何一句漏了侧车，失败卡样式就只剩 runFailed 有
       const name = `hf-${key.toLowerCase()}`
       writeBot(name, { displayName: 'HF', agents: { intent: 'my-intent', task: 'coding' } })
-      seedSession([name])
+      seedSession(name)
       mocks.invoke.mockResolvedValue({
         started: true,
         ok: false,

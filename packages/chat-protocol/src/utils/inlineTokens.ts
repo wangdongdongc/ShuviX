@@ -153,33 +153,6 @@ export function parseSlashCommandInput<C extends SlashCommandLike>(
  *   参数里可再嵌其他类型标记（如 paste），对 payload 追加一次就地替换
  * - 其他类型（at / paste 等）：逐个替换 token 标记处，保留周围文本
  */
-/**
- * 提及胶囊的 token 类型 —— `'at'` 已经被工作区文件引用占用了，所以另起一个。
- *
- * 生产者是输入框的 @提及胶囊（`buildBotToken`，A3），消费者是 L0 门的
- * `mentionsFromTokens` —— 消费必须发生在 `resolveTokensForAgent` **之前**：
- * 展开之后 token 的 type 就永久丢失了。
- */
-export const BOT_MENTION_TOKEN_TYPE = 'bot'
-
-/**
- * 构造一枚 bot 提及 token（输入框胶囊的产物）。
- *
- * `id` 是 bot 的 **name**（身份键，L0 拿它与会话成员名单求交）；displayText 与 payload
- * 都是带 `@` 的显示名 —— 展开给模型的就是这句自然的提及原文（`resolveTokensForAgent`
- * 对非 cmd 类型就地替换 payload），复制侧（resolveTokensForCopy 用 displayText）同理。
- * `name` 存不带 @ 的显示名，供回退重建时还原。
- */
-export function buildBotToken(bot: { name: string; displayName: string }): InlineToken {
-  return {
-    type: BOT_MENTION_TOKEN_TYPE,
-    id: bot.name,
-    displayText: `@${bot.displayName}`,
-    payload: `@${bot.displayName}`,
-    name: bot.displayName
-  }
-}
-
 export function resolveTokensForAgent(
   content: string,
   tokens?: Record<string, InlineToken>
@@ -243,10 +216,8 @@ export interface DraftRebuildResult {
  * 重建为「可编辑草稿」——回退到输入框时使用，避免裸标记落入文本框导致 token 失效丢信息：
  * - paste：替换为占位明文（displayText），调用方据 pasteTokens 重新登记芯片（payload 得以保留）
  * - at：替换为 `@displayText` 明文，调用方据 atTokens 重新登记引用
- * - bot：替换为 displayText **原文**（它已带 `@`，再拼前缀会翻成 `@@`），同样进 atTokens
- *   供重新登记（restoreFromTokens 按 type 分支识别）
  * - cmd：替换为 displayText（如 `/review`）——发送时经 parseSlashCommandInput 按当前命令定义重新展开
- * - 未知类型：替换为 displayText；uid 缺失的标记：丢弃
+ * - 未知类型（含群聊时代遗留的 `bot` 提及 token）：替换为 displayText；uid 缺失的标记：丢弃
  */
 export function rebuildDraftFromContent(
   content: string,
@@ -276,13 +247,6 @@ export function rebuildDraftFromContent(
         atTokens.push(token)
       }
       text += `@${token.displayText}`
-    } else if (token.type === BOT_MENTION_TOKEN_TYPE) {
-      if (!seen.has(seg.uid)) {
-        seen.add(seg.uid)
-        atTokens.push(token)
-      }
-      // displayText 已带 @（`@Shuvi`）——原样回填，拼前缀会翻成 `@@`
-      text += token.displayText
     } else {
       // cmd / 未来类型：displayText 明文（cmd 发送时重新解析展开）
       text += token.displayText

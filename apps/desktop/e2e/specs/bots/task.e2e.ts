@@ -76,7 +76,7 @@ const prompt = (sid: string, text: string, extra = ''): Promise<void> =>
 /**
  * 发消息但**不等它跑完**。
  *
- * 聊天会话的 `agent.prompt` 直到整个 cohort 收尾才 resolve（有根会话那侧是发出去就返回），
+ * 聊天会话的 `agent.prompt` 直到 bot 的管线收尾才 resolve（有根会话那侧是发出去就返回），
  * 所以「任务段挂着的时候按停止」这类用例必须脱手发送 —— 否则测试自己先卡在那条 prompt 上，
  * 停止键根本没机会被按下。
  */
@@ -178,7 +178,7 @@ describe('E-1 —— 任务段全链：门控判 task → task 槽位的 agent �
       next({ decision: 'task', reason: '要动手', task: { objective: '查鉴权' } }, isGate),
       next(REPLY, isTask)
     )
-    const sid = await createBotSession(app.main, { bots: ['t-worker'] })
+    const sid = await createBotSession(app.main, { bot: 't-worker' })
     await prompt(sid, '帮我查一下鉴权那块')
 
     const msgs = await untilReplies(sid, 1)
@@ -240,7 +240,7 @@ describe('E-2 —— 附件：图片到得了 provider，字节进不了 journal
       next({ decision: 'task', reason: '看图', task: { objective: '看这张图' } }, isGate),
       next({ headline: '看到了一张 4×4 的图' }, isTask)
     )
-    const sid = await createBotSession(app.main, { bots: ['t-worker'] })
+    const sid = await createBotSession(app.main, { bot: 't-worker' })
     await prompt(
       sid,
       '这张图什么意思',
@@ -269,7 +269,7 @@ describe('E-2 —— 附件：图片到得了 provider，字节进不了 journal
 })
 
 describe('E-3 —— 两种会话的 turn-completed 形状一致', () => {
-  it('聊天会话的 payload 比有根会话恰好多一个 bots 键', async () => {
+  it('聊天会话的 payload 比有根会话恰好多一个 bot 键', async () => {
     // 两个 emit 侧分处两个模块（AgentSession / botService），共用同一个事实构造器。
     // 它们迟早会在「什么算一轮」上错开，而订阅方的 CEL `when` 是照着同一份形状写的 ——
     // 错开之后只表现为「某类会话的工作流莫名其妙不触发」
@@ -317,13 +317,14 @@ describe('E-3 —— 两种会话的 turn-completed 形状一致', () => {
 
     provider.reset()
     provider.script(next({ decision: 'reply', reason: '寒暄', reply: '你好。' }, isGate))
-    const chat = await createBotSession(app.main, { bots: ['t-worker'] })
+    const chat = await createBotSession(app.main, { bot: 't-worker' })
     await prompt(chat, 'chat turn')
     await untilReplies(chat, 1)
 
     const rootedKeys = Object.keys(await outputFor(rooted)).sort()
     const chatKeys = Object.keys(await outputFor(chat)).sort()
-    expect(chatKeys.filter((k) => !rootedKeys.includes(k))).toEqual(['bots'])
+    // 聊天会话恒带 `bot`（未绑定的遗留会话是空串）；有根会话缺席 —— 订阅方一句 `has(event.bot)` 分开两种会话
+    expect(chatKeys.filter((k) => !rootedKeys.includes(k))).toEqual(['bot'])
     expect(rootedKeys.filter((k) => !chatKeys.includes(k))).toEqual([])
   })
 })
@@ -353,7 +354,7 @@ describe('E-4 —— 自动标题对聊天会话也生效', () => {
     )
     // 标题必须是**当前语言下的默认标题** —— 不传 title 让 session.create 自己填
     const sid = await app.main.eval<string>(
-      `window.api.session.create({ bots: ['t-worker'] }).then((s) => s.id)`
+      `window.api.session.create({ bot: 't-worker' }).then((s) => s.id)`
     )
     await prompt(sid, '帮我看看鉴权')
     await untilReplies(sid, 1)
@@ -391,7 +392,7 @@ describe('E-5/E-6 —— 任务段在飞时被打断，不留残骸', () => {
       next({ decision: 'task', reason: '慢活', task: { objective: '慢慢查' } }, isGate),
       next({ headline: '不会走到这里' }, isTask, 60_000)
     )
-    const sid = await createBotSession(app.main, { bots: ['t-quiet'] })
+    const sid = await createBotSession(app.main, { bot: 't-quiet' })
     await promptDetached(
       sid,
       '开始一个很慢的活',

@@ -129,11 +129,13 @@ describe('create-sub-session', () => {
     expect(toolResults(await listMessages(parentSid)).join('\n')).toContain(subSid)
   })
 
-  it('它就是一条普通会话：既不是笔记本也不是群聊，自己有一条空转写', async () => {
+  it('它就是一条普通会话：既不是笔记本也不是聊天会话，自己有一条空转写', async () => {
     const settings = await app.main.eval<Record<string, unknown>>(
       `window.api.session.getById(${JSON.stringify(subSid)}).then((s) => s.settings)`
     )
     expect(settings.notebookPath).toBeUndefined()
+    // 聊天会话的判据是 `bot`（群聊时代的 `bots` 只是遗留键，新会话从不写它）
+    expect(settings.bot).toBeUndefined()
     expect(settings.bots).toBeUndefined()
     expect(await listMessages(subSid)).toEqual([])
   })

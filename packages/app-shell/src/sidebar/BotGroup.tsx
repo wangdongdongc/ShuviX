@@ -39,7 +39,7 @@ export interface BotGroupAdapter {
   list: () => Promise<{ bots: BotPickItem[]; invalid: BotGroupInvalidFile[] }>
   /** 打开 bots 目录（OS 文件管理器） */
   openFolder: () => void | Promise<unknown>
-  /** 以该 bot 为唯一成员新建聊天会话（宿主负责建会话、刷新列表并选中） */
+  /** 和该 bot 新建一个聊天会话（宿主负责建会话、刷新列表并选中） */
   newSession: (name: string) => void | Promise<void>
   /** 删除 bot（宿主自带确认对话框；删掉后经 `bot.changed` 事件重扫） */
   delete: (name: string) => void

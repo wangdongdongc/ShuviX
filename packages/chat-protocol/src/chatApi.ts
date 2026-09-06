@@ -53,10 +53,15 @@ export interface SessionSettings {
   autoAllow?: boolean
   allowList?: string[]
   /**
-   * 聊天会话的成员 bot 名单（`~/.shuvix/bots/<name>.md`）。**非空即为聊天会话**：
-   * 它没有根 Agent —— 用户消息由成员各自的管线应答，`resolveAgentProfileName` 因此返回 null。
-   * 判定一律用 `bots?.length`：settings 的 JSON patch 没有删键路径，「移除全部成员」只能
-   * 写 `[]`，而空数组是 truthy。
+   * 聊天会话绑定的 bot（`~/.shuvix/bots/<name>.md`）。**有值即为聊天会话**：一对一，
+   * 没有根 Agent —— 用户消息由这个 bot 的管线应答，`resolveAgentProfileName` 因此返回 null。
+   * 创建那一刻定死，不可转回普通会话。判定一律经 `chatSession.ts` 的
+   * `isChatSessionSettings` / `boundBotOf`。
+   */
+  bot?: string
+  /**
+   * 遗留键：群聊时代的成员名单。**只读、不再写入**（没有迁移）：带着它的老会话仍被认作
+   * 聊天会话，但视为**未绑定 bot**，由用户在会话头部重新选一个写进 `bot`。
    */
   bots?: string[]
 
@@ -373,8 +378,8 @@ export interface SessionCreateParams {
   notebookPath?: string
   /** 会话标题；缺省时聊天会话用默认标题、笔记本会话用文件 basename */
   title?: string
-  /** 成员 bot 名单；非空则创建聊天会话（无根会话，见 SessionSettings.bots） */
-  bots?: string[]
+  /** 绑定的 bot 名；提供则创建聊天会话（无根的一对一会话，见 SessionSettings.bot） */
+  bot?: string
 }
 
 export interface SessionUpdateTitleParams {
@@ -512,14 +517,10 @@ export interface SessionChannelApi {
     nextTurn: (params: AgentNextTurnParams) => Promise<{ success: boolean }>
     abort: (sessionId: string) => Promise<{ success: boolean }>
     /**
-     * per-bot 停止（聊天会话，A2）：中止某成员对**某条消息**的应答；该成员的排队与
-     * 其它消息不受影响。可选 —— 渠道端缺省即不渲染停止钮。
+     * 停止 bot 对**某条消息**的应答（聊天会话）：为其它消息排着的队不受影响。
+     * 可选 —— 渠道端缺省即不渲染停止钮。
      */
-    abortBot?: (params: {
-      sessionId: string
-      botName: string
-      messageId: string
-    }) => Promise<{ aborted: boolean }>
+    abortBot?: (params: { sessionId: string; messageId: string }) => Promise<{ aborted: boolean }>
     respondToInput: (params: {
       sessionId: string
       requestId: string
@@ -693,25 +694,13 @@ export interface HostApi {
       modelUnavailable?: string
     }>
     /**
-     * 改聊天会话的成员名单。
+     * 给聊天会话绑定 bot。
      *
-     * **只对聊天会话生效，且名单不得为空** —— 「有没有 bots」决定的是会话形态
-     * （无根 / 有根），把它清空等于中途换一种会话，那不是「管理成员」这个动作该做的事。
-     *
-     * 名单里的名字**不校验是否存在**（与 create 同口径）：bot md 是纯 md 驱动的，
-     * 用户随时可能删掉一个。缺失成员由后续里程碑的降级表处理（L0 剔除、会话头部标灰），
-     * 历史消息靠署名侧车自带的 displayName 永不裂。这个接口本身就是名单写坏之后的逃生口。
-     *
-     * 新加入的成员会补一条开场白落树（只对**新增**的成员，不重播老成员的）。
+     * **只对聊天会话生效**（含群聊时代遗留的、尚未绑定 bot 的会话 —— 这个接口正是它们
+     * 重新选 bot 的口）；名字不得为空。名字**不校验是否存在**（与 create 同口径）：
+     * bot md 是纯 md 驱动的，用户随时可能删掉一个，缺失在会话里可见地失败。
      */
-    updateBots: (params: { id: string; bots: string[] }) => Promise<{
-      success: boolean
-      error?: string
-      /** 实际落库的名单 */
-      bots?: string[]
-      /** 本次新加入、并因此落了开场白的成员 */
-      added?: string[]
-    }>
+    setBot: (params: { id: string; bot: string }) => Promise<{ success: boolean; error?: string }>
     /**
      * 清零聊天会话的未读计数（A4）。可选 —— 渠道端缺省即不维护未读。
      * 幂等：已为 0 时不写库不广播。

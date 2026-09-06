@@ -67,7 +67,7 @@ export function Sidebar(): React.JSX.Element {
 
   const listWikiFiles = useCallback(() => window.api.wiki.listFiles(), [])
 
-  /** bots 能力注入（窄投影）—— 注入即点亮分组里的「新建 Bot 会话」入口与成员多选 */
+  /** bots 能力注入（窄投影）—— 注入即点亮分组里的「新建 Bot 会话」入口与 bot 单选 */
   const botsAdapter = useMemo(
     () => ({
       list: () => window.api.bot.list(),
@@ -92,7 +92,7 @@ export function Sidebar(): React.JSX.Element {
       },
       openFolder: () => window.api.bot.openFolder(),
       newSession: async (name) => {
-        const session = await getChatApi().session.create({ projectId: null, bots: [name] })
+        const session = await getChatApi().session.create({ projectId: null, bot: name })
         useChatStore.getState().setSessions(await getChatApi().session.list())
         setActiveSessionId(session.id)
       },

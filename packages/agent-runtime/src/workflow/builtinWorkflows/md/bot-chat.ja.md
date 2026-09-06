@@ -31,15 +31,15 @@ shuvix-workflow-input:
         recheck:
           type: string
           description: Optional; re-judges a queued request after the bot already replied to something else (defaults to intent)
-    session: { type: object, required: [id, directed, members] }
+    session: { type: object, required: [id] }
     message: { type: object, required: [id, text] }
     window: { type: array }
 ---
 
 ## これは何か
 
-チャット会話の各 bot が、メッセージごとにこのファイルを一度走らせる。bot のやること
-全部が、順にここにある:そのメッセージが自分にとって何かを判定し、答える。
+チャット会話に結び付いた bot が、メッセージごとにこのファイルを一度走らせる。bot のやること
+全部が、順にここにある:そのメッセージに何が要るかを判定し、答える。
 
 bot は束ねであって agent ではない:その md はこのパイプラインを指し、パイプラインの
 **スロット**を agent 定義で埋める(`shuvix-bot-pipeline: {workflow: bot-chat, agents: {intent: …, task: …}}`)。bot md の
@@ -51,8 +51,7 @@ bot は束ねであって agent ではない:その md はこのパイプライ�
 ここに `shuvix-workflow-on` はない:どのトリガーもこのファイルには通じない。bot が
 それを指し(`shuvix-bot-pipeline.workflow: bot-chat`)、会話が invoke する。`parallel` は意図的:
 run 級の再入は完全に脇へ退き、「一度に一つ」は `turn()` が提供する —— それが直列化
-するのは**この会話のこの bot** であって、多くの bot と会話が同時に共有するこの
-ファイルではない。
+するのは**この会話**であって、多くの会話が同時に共有するこのファイルではない。
 
 「bot だけが呼べる」という鍵もない —— 呼び出し経路は入場検査ではない。このファイルを
 bot パイプラインたらしめるのは、スクリプトが `say`・`turn` を使うこと、
@@ -61,47 +60,37 @@ bot パイプラインたらしめるのは、スクリプトが `say`・`turn` 
 
 ## パイプライン
 
-スクリプトはフローチャートそのもので、それ以外ではない:意図 → 自分宛てでない / 一言 /
-本当の仕事。すべて `input.*` から読む —— スクリプトのスコープは基礎 API + 呼び出し側が
+スクリプトはフローチャートそのもので、それ以外ではない:意図 → 一言 / 本当の仕事。すべて `input.*` から読む —— スクリプトのスコープは基礎 API + 呼び出し側が
 組み込んだもの(`say` / `turn`)であり、`input` を**フラット化しない**。フラット化は
 `md prompt=` ブロックの描画スコープだけで起こり、プロンプトの一語一語はそのブロックに住む。
 
 **ここではどの失敗も捕まえない。** タイムアウトした段、契約を破った段、存在しない agent を
 指した段は投げる;run は終わり、ホストがチャットでそれを言う。言い回しは失敗の分類
-(どの段か、何が壊れたか)から選ばれる。沈黙が許されるのは一つだけ:ゲートが「この
-メッセージはこの bot のものではない」と判定したときだ。
+(どの段か、何が壊れたか)から選ばれる。沈黙というものはない:会話は一対一で、どの
+メッセージもこの bot 宛であり、どの run も返信か目に見える失敗で終わる。
 
 ```js workflow
 // The flow, top to bottom. Every prompt is a block below; every failure simply throws —
 // the host says so in the chat, with wording picked from the failure's code.
 const window = input.window || []
 
-// 1 ── Intent: one tool-less call decides what this message is to this bot. A message that
-//      named the bot, or answers its own clarify, gets the directed prompt and contract —
-//      the ones without `ignore`.
-const directed = input.session.directed
+// 1 ── Intent: one tool-less call decides what this message needs. The chat is one-on-one,
+//      so every message is for this bot by definition — the contract has no `ignore`.
 const intent = await run(
   input.agents.intent,
-  prompt(directed ? 'gateDirected' : 'gate', { window: window.slice(-vars.gateWindow) }),
-  {
-    schema: directed ? schemas.intentDirected : schemas.intent,
-    tools: [],
-    timeoutSec: vars.gateTimeoutSec
-  }
+  prompt('gate', { window: window.slice(-vars.gateWindow) }),
+  { schema: schemas.intent, tools: [], timeoutSec: vars.gateTimeoutSec }
 )
 
-// 2 ── Not for this bot: the one silence a bot is allowed.
-if (intent.decision === 'ignore') return { outcome: 'ignored' }
-
-// 3 ── Answerable in one line (reply / clarify): say it, no task.
+// 2 ── Answerable in one line (reply / clarify): say it, no task.
 if (intent.decision !== 'task') {
   await say(intent.reply, { decision: intent.decision })
   return { outcome: intent.decision }
 }
 
-// 4 ── Work needs this bot's turn in this session: one job at a time, in arrival order.
-//      Queued behind a reply of its own, the bot first re-checks whether that reply already
-//      covered this one; a re-check that fails just means proceeding.
+// 3 ── Work needs this session's turn: one job at a time, in arrival order. Queued behind a
+//      reply of its own, the bot first re-checks whether that reply already covered this one;
+//      a re-check that fails just means proceeding.
 const slot = await turn()
 if (vars.recheckStale && slot.selfReplied) {
   const again = await run(
@@ -118,7 +107,7 @@ if (vars.recheckStale && slot.selfReplied) {
   }
 }
 
-// 5 ── The task agent — whichever agent md the bot put in that slot, with its own tools —
+// 4 ── The task agent — whichever agent md the bot put in that slot, with its own tools —
 //      does the work and answers. Prose instead of the contract still ships: someone is
 //      waiting, and an answer with no shape beats no answer.
 const reply = await run(
@@ -156,9 +145,9 @@ return { outcome: 'task', queuedMs: slot.queuedMs, superseded: slot.superseded }
 ## 契約
 
 データを返す各段は、以下のブロックの形をしたオブジェクトで `next` を呼んで終わる
-(その指示は schema 本体とともに派遣時に付加される)。`ignore` がゲートに提示される
-のは、そのメッセージがこの bot 宛てでないときだけ:名指しされた、または自分の問い返しへの
-答えであるメッセージには `intentDirected` が渡される。
+(その指示は schema 本体とともに派遣時に付加される)。ゲートに `ignore` はない:一対一の
+会話ではどのメッセージもこの bot 宛なので、裁定は常に「どう答えるか」であって「答えるか
+どうか」ではない。
 
 ```json schema=intent
 {
@@ -166,34 +155,11 @@ return { outcome: 'task', queuedMs: slot.queuedMs, superseded: slot.superseded }
   "required": ["decision", "reason"],
   "properties": {
     "decision": {
-      "enum": ["reply", "task", "clarify", "ignore"],
-      "description": "reply = you can answer fully right now with no tools; task = it needs work; clarify = one question unblocks you; ignore = plainly meant for another bot"
+      "enum": ["reply", "task", "clarify"],
+      "description": "reply = you can answer fully right now with no tools; task = it needs work; clarify = one question unblocks you. The chat is one-on-one: the message is addressed to you, so answering is not optional."
     },
     "reason": { "type": "string", "maxLength": 200 },
     "reply": { "type": "string", "description": "The reply itself, for decision reply or clarify" },
-    "task": {
-      "type": "object",
-      "required": ["objective"],
-      "properties": {
-        "objective": { "type": "string" },
-        "boundaries": { "type": "string" }
-      }
-    }
-  }
-}
-```
-
-```json schema=intentDirected
-{
-  "type": "object",
-  "required": ["decision", "reason"],
-  "properties": {
-    "decision": {
-      "enum": ["reply", "task", "clarify"],
-      "description": "This message was addressed to you, so answering is not optional. reply = answer now; task = it needs work; clarify = ask the one question that unblocks you."
-    },
-    "reason": { "type": "string", "maxLength": 200 },
-    "reply": { "type": "string" },
     "task": {
       "type": "object",
       "required": ["objective"],
@@ -254,7 +220,7 @@ return { outcome: 'task', queuedMs: slot.queuedMs, superseded: slot.superseded }
 スクリプトが `prompt()` の第二引数に渡したものを読む —— 切り出された `window` はそこから
 来る。`{{>name}}` はこのファイルの別のブロックを同じスコープで描画して貼り込む;貼り込まれた
 ブロックのプレースホルダが全て空なら、見出しごと丸ごと消える。下の任意セクションはそう
-動く:`others` は他の bot がいるときだけ、`since` は待っている間に何かが起きたときだけ現れる。
+動く:`since` は待っている間に何かが起きたときだけ現れる。
 
 ```md prompt=gate
 チャット会話にメッセージが届いた。この bot に代わって、どうするかを決めよ。
@@ -263,29 +229,11 @@ return { outcome: 'task', queuedMs: slot.queuedMs, superseded: slot.superseded }
 
 {{bot.displayName}} —— {{bot.description}}
 
-{{>others}}
-
 {{>window}}
 
 ## 新しいメッセージ
 
 {{message.text}}
-```
-
-```md prompt=gateDirected
-{{>gate}}
-
-このメッセージはこの bot 宛てだ —— 名指しされたか、この bot がいま尋ねた質問への
-答えだ。答えることは選択肢ではなく、契約に `ignore` はない。
-```
-
-```md prompt=others
-## この会話にいる他の bot
-
-{{session.others}}
-
-これらの bot もこのメッセージを見ている。明らかにそのどれかに向けられたものは、
-その bot のものであって、あなたのものではない。
 ```
 
 ```md prompt=window

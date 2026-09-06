@@ -31,15 +31,15 @@ shuvix-workflow-input:
         recheck:
           type: string
           description: Optional; re-judges a queued request after the bot already replied to something else (defaults to intent)
-    session: { type: object, required: [id, directed, members] }
+    session: { type: object, required: [id] }
     message: { type: object, required: [id, text] }
     window: { type: array }
 ---
 
 ## 这是什么
 
-聊天会话里的每个 bot、每条消息都跑一遍这份文件。它就是一个 bot 做的全部事情,按序:
-判定这条消息对它意味着什么,然后作答。
+聊天会话绑定的那个 bot,每条消息都跑一遍这份文件。它就是一个 bot 做的全部事情,按序:
+判定这条消息需要什么,然后作答。
 
 bot 是一份绑定,不是一个 agent:它的 md 指向这份管线,并用 agent 定义填满管线的**槽位**
 (`shuvix-bot-pipeline: {workflow: bot-chat, agents: {intent: …, task: …}}`)。bot md 的正文 —— 它的人设与它学到的东西 ——
@@ -49,8 +49,8 @@ bot 是一份绑定,不是一个 agent:它的 md 指向这份管线,并用 agent
 
 这里没有 `shuvix-workflow-on`:没有任何埋点通向这份文件。bot 指向它
 (`shuvix-bot-pipeline.workflow: bot-chat`),由会话来 invoke。`parallel` 是刻意的:run 级重入
-整个让位,「一次只做一件事」由 `turn()` 提供 —— 它串行化的是**这个 bot 在这个会话里**,
-而不是这份被许多 bot、许多会话同时共用的文件。
+整个让位,「一次只做一件事」由 `turn()` 提供 —— 它串行化的是**这个会话**,
+而不是这份被许多会话同时共用的文件。
 
 也没有一个「只有 bot 才能调用」的键 —— 调用路径不是准入检查。让这份文件成为 bot 管线的,
 只是它的脚本用了 `say` 与 `turn`,而只有 bot 调用方会把这两个名字装配进脚本
@@ -58,45 +58,36 @@ API。从别处启动它,它会在第一个名字上失败,和任何脚本踩到
 
 ## 管线
 
-脚本就是流程图,别的什么都不是:意图 → 不归我 / 一句话 / 真干活。一切都从 `input.*`
+脚本就是流程图,别的什么都不是:意图 → 一句话 / 真干活。一切都从 `input.*`
 上读 —— 脚本作用域里是基础 API 加上调用方装配的那两个(`say` / `turn`),它**不会**
 摊平 `input`;摊平只发生在 `md prompt=` 块的渲染作用域里,而提示词的每一个字都住在那些块里。
 
 **这里不接住任何错误。** 哪一段超时、破坏契约、或指向一个不存在的 agent,就抛出去;
-run 结束,宿主在聊天里说出来,措辞按失败的归类选(哪一段、坏在哪)。沉默只留给一件事:
-门控判定这条消息不归这个 bot。
+run 结束,宿主在聊天里说出来,措辞按失败的归类选(哪一段、坏在哪)。没有沉默这回事:
+会话是一对一的,每条消息都是说给这个 bot 的,每次 run 都以一条回复或一条可见的失败收尾。
 
 ```js workflow
 // The flow, top to bottom. Every prompt is a block below; every failure simply throws —
 // the host says so in the chat, with wording picked from the failure's code.
 const window = input.window || []
 
-// 1 ── Intent: one tool-less call decides what this message is to this bot. A message that
-//      named the bot, or answers its own clarify, gets the directed prompt and contract —
-//      the ones without `ignore`.
-const directed = input.session.directed
+// 1 ── Intent: one tool-less call decides what this message needs. The chat is one-on-one,
+//      so every message is for this bot by definition — the contract has no `ignore`.
 const intent = await run(
   input.agents.intent,
-  prompt(directed ? 'gateDirected' : 'gate', { window: window.slice(-vars.gateWindow) }),
-  {
-    schema: directed ? schemas.intentDirected : schemas.intent,
-    tools: [],
-    timeoutSec: vars.gateTimeoutSec
-  }
+  prompt('gate', { window: window.slice(-vars.gateWindow) }),
+  { schema: schemas.intent, tools: [], timeoutSec: vars.gateTimeoutSec }
 )
 
-// 2 ── Not for this bot: the one silence a bot is allowed.
-if (intent.decision === 'ignore') return { outcome: 'ignored' }
-
-// 3 ── Answerable in one line (reply / clarify): say it, no task.
+// 2 ── Answerable in one line (reply / clarify): say it, no task.
 if (intent.decision !== 'task') {
   await say(intent.reply, { decision: intent.decision })
   return { outcome: intent.decision }
 }
 
-// 4 ── Work needs this bot's turn in this session: one job at a time, in arrival order.
-//      Queued behind a reply of its own, the bot first re-checks whether that reply already
-//      covered this one; a re-check that fails just means proceeding.
+// 3 ── Work needs this session's turn: one job at a time, in arrival order. Queued behind a
+//      reply of its own, the bot first re-checks whether that reply already covered this one;
+//      a re-check that fails just means proceeding.
 const slot = await turn()
 if (vars.recheckStale && slot.selfReplied) {
   const again = await run(
@@ -113,7 +104,7 @@ if (vars.recheckStale && slot.selfReplied) {
   }
 }
 
-// 5 ── The task agent — whichever agent md the bot put in that slot, with its own tools —
+// 4 ── The task agent — whichever agent md the bot put in that slot, with its own tools —
 //      does the work and answers. Prose instead of the contract still ships: someone is
 //      waiting, and an answer with no shape beats no answer.
 const reply = await run(
@@ -148,8 +139,8 @@ return { outcome: 'task', queuedMs: slot.queuedMs, superseded: slot.superseded }
 ## 契约
 
 每个交回数据的段以调用 `next` 收尾,对象形状取自下面这些块(这条指令连同 schema 本身
-在派发时附加)。只有当这条消息不是冲这个 bot 来的,门控才会被给到 `ignore`:
-点了名、或在回答它自己的追问的消息,拿到的是 `intentDirected`。
+在派发时附加)。门控没有 `ignore`:一对一会话里每条消息都是说给这个 bot 的,
+裁决只关乎怎么答,从不关乎答不答。
 
 ```json schema=intent
 {
@@ -157,34 +148,11 @@ return { outcome: 'task', queuedMs: slot.queuedMs, superseded: slot.superseded }
   "required": ["decision", "reason"],
   "properties": {
     "decision": {
-      "enum": ["reply", "task", "clarify", "ignore"],
-      "description": "reply = you can answer fully right now with no tools; task = it needs work; clarify = one question unblocks you; ignore = plainly meant for another bot"
+      "enum": ["reply", "task", "clarify"],
+      "description": "reply = you can answer fully right now with no tools; task = it needs work; clarify = one question unblocks you. The chat is one-on-one: the message is addressed to you, so answering is not optional."
     },
     "reason": { "type": "string", "maxLength": 200 },
     "reply": { "type": "string", "description": "The reply itself, for decision reply or clarify" },
-    "task": {
-      "type": "object",
-      "required": ["objective"],
-      "properties": {
-        "objective": { "type": "string" },
-        "boundaries": { "type": "string" }
-      }
-    }
-  }
-}
-```
-
-```json schema=intentDirected
-{
-  "type": "object",
-  "required": ["decision", "reason"],
-  "properties": {
-    "decision": {
-      "enum": ["reply", "task", "clarify"],
-      "description": "This message was addressed to you, so answering is not optional. reply = answer now; task = it needs work; clarify = ask the one question that unblocks you."
-    },
-    "reason": { "type": "string", "maxLength": 200 },
-    "reply": { "type": "string" },
     "task": {
       "type": "object",
       "required": ["objective"],
@@ -244,7 +212,7 @@ return { outcome: 'task', queuedMs: slot.queuedMs, superseded: slot.superseded }
 `{{path}}` 读这次 run 的 `input`(顶层摊平),外加 `vars`、`event`,以及脚本作为第二个参数
 传给 `prompt()` 的东西 —— 切好的 `window` 就来自那里。`{{>name}}` 把这份文件里的另一个块
 在同一作用域里渲染后贴进来;贴进来的块若占位符全空,就整块消失,连标题一起。下面的可选小节
-就是这么工作的:`others` 只在有其他 bot 时出现,`since` 只在请求排队期间发生了事情时出现。
+就是这么工作的:`since` 只在请求排队期间发生了事情时出现。
 
 ```md prompt=gate
 聊天会话里刚到了一条消息。替这个 bot 决定拿它怎么办。
@@ -253,28 +221,11 @@ return { outcome: 'task', queuedMs: slot.queuedMs, superseded: slot.superseded }
 
 {{bot.displayName}} —— {{bot.description}}
 
-{{>others}}
-
 {{>window}}
 
 ## 新消息
 
 {{message.text}}
-```
-
-```md prompt=gateDirected
-{{>gate}}
-
-这条消息就是冲这个 bot 来的 —— 它被点了名,或这条消息在回答它刚问出的问题。
-作答不是可选项,契约里也没有 `ignore`。
-```
-
-```md prompt=others
-## 会话里的其他 bot
-
-{{session.others}}
-
-这些 bot 也看得到这条消息。明显冲着其中某个去的,是它的,不是你的。
 ```
 
 ```md prompt=window

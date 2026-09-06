@@ -332,21 +332,17 @@ export interface ChatBotActivityEvent extends ChatEventBase {
   type: 'bot_activity'
   botName: string
   displayName: string
-  /**
-   * started=管线起跑 | claimed=拿到本条消息 | queued=在 mailbox 里等 |
-   * working=进独占段 | silent=让给别人或 L0 未参与 | ended=收尾
-   */
-  phase: 'started' | 'queued' | 'working' | 'silent' | 'ended'
+  /** started=管线起跑（意图判定中） | queued=在 mailbox 里等 | working=进独占段 | ended=收尾 */
+  phase: 'started' | 'queued' | 'working' | 'ended'
   /** ended / silent 时的结局，取值与决策记录的 kind 同源 */
   outcome?: string
   /** 本轮用户消息的 entry id（占位卡定位用） */
   messageId?: string
 }
 
-/** 某个 (会话, bot) 的 mailbox 快照 —— 整份替换，前端按 botName upsert */
+/** 会话的 mailbox 快照（一个会话一个 bot、一条 lane）—— 整份替换，空快照即清 */
 export interface ChatBotMailboxEvent extends ChatEventBase {
   type: 'bot_mailbox'
-  botName: string
   active: { messageSeq: number; messageId: string } | null
   queued: Array<{ messageSeq: number; messageId: string; queuedAt: number }>
 }

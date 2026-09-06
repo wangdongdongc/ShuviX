@@ -64,7 +64,9 @@ export interface SessionModelMetadata {
 export interface SessionSettings {
   autoAllow?: boolean
   allowList?: string[]
-  /** 成员 bot 名单；非空即为聊天会话（无根会话）。判定用 `bots?.length`，空数组不算 */
+  /** 绑定的 bot；有值即为聊天会话（无根的一对一会话）。判定经 chat-protocol 的 isChatSessionSettings */
+  bot?: string
+  /** 遗留：群聊时代的成员名单，只读 —— 带着它的老会话仍是聊天会话，但视为未绑定 bot */
   bots?: string[]
   /** 会话根 Agent 采用的档案名（`/<agentName>` 切换）；缺省 / 档案已不存在 → 回落 'default' */
   agentProfile?: string
@@ -291,13 +293,13 @@ interface ChatState {
    */
   sessionThreadOpen: Record<string, boolean>
   /**
-   * 聊天会话（bots）：各 session 在飞的成员活动（bot_activity 事件镜像，键 botName）。
-   * ended/silent 相位即删键 —— 这里只保留「正在发生」的相位，驱动对话尾部的占位卡。
+   * 聊天会话：各 session 里 bot 的在飞活动（bot_activity 事件镜像；一对一，一个会话一条）。
+   * ended 相位即删键 —— 这里只保留「正在发生」的相位，驱动对话尾部的「正在输入」行。
    * bot 会话没有 agent_end / finishStreaming，生命周期由事件自身 + messages_reloaded 收口。
    */
-  sessionBotActivities: Record<string, Record<string, BotActivitySnapshot>>
-  /** 聊天会话：各 session 各成员的 mailbox 快照（bot_mailbox 整份镜像；空快照即删键） */
-  sessionBotMailbox: Record<string, Record<string, BotMailboxSnapshot>>
+  sessionBotActivities: Record<string, BotActivitySnapshot>
+  /** 聊天会话：各 session 的 mailbox 快照（bot_mailbox 整份镜像；空快照即删键） */
+  sessionBotMailbox: Record<string, BotMailboxSnapshot>
 
   // Actions
   setSessions: (sessions: Session[]) => void
@@ -383,13 +385,13 @@ interface ChatState {
   setSessionQueue: (sessionId: string, queue: SessionQueueSnapshot) => void
   /** 设置某会话对话抽屉的展开/折叠态 */
   setThreadOpen: (sessionId: string, open: boolean) => void
-  /** bot_activity 事件唯一写入点：live 相位 upsert，ended/silent 删键；started 顺带清沉默提示 */
+  /** bot_activity 事件唯一写入点：live 相位 upsert，ended 删键 */
   handleBotActivity: (
     sessionId: string,
     ev: { botName: string; displayName: string; phase: string; messageId?: string }
   ) => void
-  /** bot_mailbox 事件唯一写入点：按 botName 整份替换；空快照即删键 */
-  setBotMailbox: (sessionId: string, botName: string, snapshot: BotMailboxSnapshot) => void
+  /** bot_mailbox 事件唯一写入点：整份替换；空快照即删键 */
+  setBotMailbox: (sessionId: string, snapshot: BotMailboxSnapshot) => void
   /** 清某会话全部 bot live 态（messages_reloaded：回退/清空后一切在飞展示作废） */
   clearBotLiveState: (sessionId: string) => void
   /** Batch-apply buffered streaming deltas in a single set() (rAF optimization) */
@@ -513,8 +515,8 @@ export const selectSessionQueueCount = (s: ChatState): number => {
 }
 
 /**
- * 聊天会话：一个成员的在飞活动（bot_activity 的 live 相位镜像）。
- * started = 意图段判断中；claimed = 赢下本条消息；queued = 在 mailbox 排队；working = 独占段执行中。
+ * 聊天会话：bot 的在飞活动（bot_activity 的 live 相位镜像）。
+ * started = 意图段判断中；queued = 在 mailbox 排队；working = 独占段执行中。
  */
 export interface BotActivitySnapshot {
   botName: string
@@ -532,16 +534,13 @@ export interface BotMailboxSnapshot {
   queued: Array<{ messageSeq: number; messageId: string; queuedAt: number }>
 }
 
-const EMPTY_BOT_ACTIVITIES: Record<string, BotActivitySnapshot> = {}
-/** 当前会话的在飞成员活动（无活动时返回稳定空对象引用） */
-export const selectBotActivities = (s: ChatState): Record<string, BotActivitySnapshot> =>
-  (s.activeSessionId ? s.sessionBotActivities[s.activeSessionId] : undefined) ??
-  EMPTY_BOT_ACTIVITIES
+/** 当前会话里 bot 的在飞活动（无活动为 null —— 稳定引用） */
+export const selectBotActivity = (s: ChatState): BotActivitySnapshot | null =>
+  (s.activeSessionId ? s.sessionBotActivities[s.activeSessionId] : undefined) ?? null
 
-const EMPTY_BOT_MAILBOX: Record<string, BotMailboxSnapshot> = {}
-/** 当前会话各成员的 mailbox 快照（无排队时返回稳定空对象引用） */
-export const selectBotMailbox = (s: ChatState): Record<string, BotMailboxSnapshot> =>
-  (s.activeSessionId ? s.sessionBotMailbox[s.activeSessionId] : undefined) ?? EMPTY_BOT_MAILBOX
+/** 当前会话的 mailbox 快照（无排队为 null —— 稳定引用） */
+export const selectBotMailbox = (s: ChatState): BotMailboxSnapshot | null =>
+  (s.activeSessionId ? s.sessionBotMailbox[s.activeSessionId] : undefined) ?? null
 
 /** 当前会话的所有 pending 输入请求(按时间序) */
 const EMPTY_INPUT_REQUESTS: InputRequest[] = []
@@ -1001,14 +1000,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
   handleBotActivity: (sessionId, ev) =>
     set((state) => {
       const live = ev.phase === 'started' || ev.phase === 'queued' || ev.phase === 'working'
-      const cur = state.sessionBotActivities[sessionId]
-      const patch: Partial<ChatState> = {}
       if (live) {
-        patch.sessionBotActivities = {
-          ...state.sessionBotActivities,
-          [sessionId]: {
-            ...(cur ?? {}),
-            [ev.botName]: {
+        return {
+          sessionBotActivities: {
+            ...state.sessionBotActivities,
+            [sessionId]: {
               botName: ev.botName,
               displayName: ev.displayName,
               phase: ev.phase as BotActivitySnapshot['phase'],
@@ -1017,38 +1013,30 @@ export const useChatStore = create<ChatState>((set, get) => ({
             }
           }
         }
-      } else {
-        // ended / silent（以及未来未知相位）：该成员的在飞展示收摊
-        if (!cur?.[ev.botName]) return {}
-        const nextBots = { ...cur }
-        delete nextBots[ev.botName]
-        const next = { ...state.sessionBotActivities }
-        if (Object.keys(nextBots).length) next[sessionId] = nextBots
-        else delete next[sessionId]
-        patch.sessionBotActivities = next
       }
-      return patch
+      // ended（以及未来未知相位）：在飞展示收摊。删键而不是存空值 —— 选择器靠「键不在」回落 null
+      const cur = state.sessionBotActivities[sessionId]
+      if (!cur) return {}
+      // **只收摊它自己那条消息的行**：连发两条时，前一条的 ended 晚于后一条的 working 到达
+      // （say 在 turn 释放独占段之后才发生，而释放当场就把后一条授予了），无条件删键会把
+      // 一条**还在跑**的应答从屏幕上抹掉 —— 连同它那颗停止钮，直到它自己结束都不再回来。
+      // 快照没有 messageId（防御性）时按旧口径无条件删
+      if (ev.messageId && cur.messageId && ev.messageId !== cur.messageId) return {}
+      const next = { ...state.sessionBotActivities }
+      delete next[sessionId]
+      return { sessionBotActivities: next }
     }),
 
-  setBotMailbox: (sessionId, botName, snapshot) =>
+  setBotMailbox: (sessionId, snapshot) =>
     set((state) => {
       const empty = !snapshot.active && snapshot.queued.length === 0
-      const cur = state.sessionBotMailbox[sessionId]
       if (empty) {
-        if (!cur?.[botName]) return {}
-        const nextBots = { ...cur }
-        delete nextBots[botName]
+        if (!state.sessionBotMailbox[sessionId]) return {}
         const next = { ...state.sessionBotMailbox }
-        if (Object.keys(nextBots).length) next[sessionId] = nextBots
-        else delete next[sessionId]
+        delete next[sessionId]
         return { sessionBotMailbox: next }
       }
-      return {
-        sessionBotMailbox: {
-          ...state.sessionBotMailbox,
-          [sessionId]: { ...(cur ?? {}), [botName]: snapshot }
-        }
-      }
+      return { sessionBotMailbox: { ...state.sessionBotMailbox, [sessionId]: snapshot } }
     }),
 
   clearBotLiveState: (sessionId) =>

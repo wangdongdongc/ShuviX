@@ -31,15 +31,15 @@ shuvix-workflow-input:
         recheck:
           type: string
           description: Optional; re-judges a queued request after the bot already replied to something else (defaults to intent)
-    session: { type: object, required: [id, directed, members] }
+    session: { type: object, required: [id] }
     message: { type: object, required: [id, text] }
     window: { type: array }
 ---
 
 ## What this is
 
-Every bot in a chat session runs this file, once per message, per bot. It is the whole of
-what a bot does, in order: decide what the message is to it, then answer.
+The bot bound to a chat session runs this file once per message. It is the whole of what a
+bot does, in order: decide what the message needs, then answer.
 
 A bot is a binding, not an agent: its md names this pipeline and fills the pipeline's
 **slots** with agent definitions (`shuvix-bot-pipeline: {workflow: bot-chat, agents: {intent: …, task: …}}`). The bot md's
@@ -51,8 +51,8 @@ there is no separate notes stage.
 There is no `shuvix-workflow-on` here: no trigger leads to this file. A bot points at it
 (`shuvix-bot-pipeline.workflow: bot-chat`) and the session invokes it. `parallel` is deliberate:
 run-level re-entry gets out of the way entirely, and one-thing-at-a-time is provided by
-`turn()`, which serialises _this bot in this session_ — never the file, which many bots and
-many sessions share at the same moment.
+`turn()`, which serialises _this session_ — never the file, which many sessions share at the
+same moment.
 
 There is also no key saying "only a bot may call this" — the invocation path is not an
 admission check. What makes this file a bot pipeline is simply that its script uses `say`
@@ -62,47 +62,39 @@ on an undefined function.
 
 ## The pipeline
 
-The script is the flowchart and nothing else: intent → not mine / one line / real work.
+The script is the flowchart and nothing else: intent → one line / real work.
 Everything is read off `input.*` — the script scope holds the base API plus what the caller
 assembled (`say` / `turn`) and does **not** flatten `input`; flattening happens only in the
 render scope of a `md prompt=` block, which is where every word of every prompt lives.
 
 **Nothing here catches an error.** A stage that times out, breaks its contract or names an
 agent that does not exist throws; the run ends, and the host says so in the chat, choosing
-the wording from the failure's code (which stage, what went wrong). Silence is reserved for
-one thing only: the gate deciding a message was not for this bot.
+the wording from the failure's code (which stage, what went wrong). There is no silence: the
+chat is one-on-one, every message is for this bot, and every run ends in a reply or a visible
+failure.
 
 ```js workflow
 // The flow, top to bottom. Every prompt is a block below; every failure simply throws —
 // the host says so in the chat, with wording picked from the failure's code.
 const window = input.window || []
 
-// 1 ── Intent: one tool-less call decides what this message is to this bot. A message that
-//      named the bot, or answers its own clarify, gets the directed prompt and contract —
-//      the ones without `ignore`.
-const directed = input.session.directed
+// 1 ── Intent: one tool-less call decides what this message needs. The chat is one-on-one,
+//      so every message is for this bot by definition — the contract has no `ignore`.
 const intent = await run(
   input.agents.intent,
-  prompt(directed ? 'gateDirected' : 'gate', { window: window.slice(-vars.gateWindow) }),
-  {
-    schema: directed ? schemas.intentDirected : schemas.intent,
-    tools: [],
-    timeoutSec: vars.gateTimeoutSec
-  }
+  prompt('gate', { window: window.slice(-vars.gateWindow) }),
+  { schema: schemas.intent, tools: [], timeoutSec: vars.gateTimeoutSec }
 )
 
-// 2 ── Not for this bot: the one silence a bot is allowed.
-if (intent.decision === 'ignore') return { outcome: 'ignored' }
-
-// 3 ── Answerable in one line (reply / clarify): say it, no task.
+// 2 ── Answerable in one line (reply / clarify): say it, no task.
 if (intent.decision !== 'task') {
   await say(intent.reply, { decision: intent.decision })
   return { outcome: intent.decision }
 }
 
-// 4 ── Work needs this bot's turn in this session: one job at a time, in arrival order.
-//      Queued behind a reply of its own, the bot first re-checks whether that reply already
-//      covered this one; a re-check that fails just means proceeding.
+// 3 ── Work needs this session's turn: one job at a time, in arrival order. Queued behind a
+//      reply of its own, the bot first re-checks whether that reply already covered this one;
+//      a re-check that fails just means proceeding.
 const slot = await turn()
 if (vars.recheckStale && slot.selfReplied) {
   const again = await run(
@@ -119,7 +111,7 @@ if (vars.recheckStale && slot.selfReplied) {
   }
 }
 
-// 5 ── The task agent — whichever agent md the bot put in that slot, with its own tools —
+// 4 ── The task agent — whichever agent md the bot put in that slot, with its own tools —
 //      does the work and answers. Prose instead of the contract still ships: someone is
 //      waiting, and an answer with no shape beats no answer.
 const reply = await run(
@@ -158,8 +150,8 @@ A few choices worth knowing about, because they are easy to "fix" by mistake:
 
 Each stage that returns data ends by calling `next` with an object shaped by one of these
 blocks (the instruction to do so is added at dispatch, along with the schema itself). The
-gate is offered `ignore` only when the message was not addressed to this bot: a message
-that named it, or that answers its own clarify, gets `intentDirected` instead.
+gate has no `ignore`: in a one-on-one chat every message is addressed to the bot, so the
+verdict is only ever how to answer, never whether.
 
 ```json schema=intent
 {
@@ -167,34 +159,11 @@ that named it, or that answers its own clarify, gets `intentDirected` instead.
   "required": ["decision", "reason"],
   "properties": {
     "decision": {
-      "enum": ["reply", "task", "clarify", "ignore"],
-      "description": "reply = you can answer fully right now with no tools; task = it needs work; clarify = one question unblocks you; ignore = plainly meant for another bot"
+      "enum": ["reply", "task", "clarify"],
+      "description": "reply = you can answer fully right now with no tools; task = it needs work; clarify = one question unblocks you. The chat is one-on-one: the message is addressed to you, so answering is not optional."
     },
     "reason": { "type": "string", "maxLength": 200 },
     "reply": { "type": "string", "description": "The reply itself, for decision reply or clarify" },
-    "task": {
-      "type": "object",
-      "required": ["objective"],
-      "properties": {
-        "objective": { "type": "string" },
-        "boundaries": { "type": "string" }
-      }
-    }
-  }
-}
-```
-
-```json schema=intentDirected
-{
-  "type": "object",
-  "required": ["decision", "reason"],
-  "properties": {
-    "decision": {
-      "enum": ["reply", "task", "clarify"],
-      "description": "This message was addressed to you, so answering is not optional. reply = answer now; task = it needs work; clarify = ask the one question that unblocks you."
-    },
-    "reason": { "type": "string", "maxLength": 200 },
-    "reply": { "type": "string" },
     "task": {
       "type": "object",
       "required": ["objective"],
@@ -255,8 +224,8 @@ The stages' own words. All of it is editable prose: copy this file to
 whatever the script passed as the second argument to `prompt()` — that is where the sliced
 `window` comes from. `{{>name}}` pastes another block from this file, rendered in the same
 scope; a pasted block whose placeholders all came out empty disappears whole, heading
-included. That is how the optional sections below work: `others` is only there when there
-are other bots, `since` only when something happened while the request waited.
+included. That is how the optional sections below work: `since` is only there when something
+happened while the request waited.
 
 ```md prompt=gate
 A message has just arrived in a chat session. Decide, on this bot's behalf, what to do with
@@ -266,28 +235,11 @@ it.
 
 {{bot.displayName}} — {{bot.description}}
 
-{{>others}}
-
 {{>window}}
 
 ## The new message
 
 {{message.text}}
-```
-
-```md prompt=gateDirected
-{{>gate}}
-
-This message is addressed to this bot — it was named, or it answers a question this bot just
-asked. Answering is not optional, and `ignore` is not on the contract.
-```
-
-```md prompt=others
-## The other bots in this session
-
-{{session.others}}
-
-These bots see this message too. One plainly aimed at one of them is theirs, not yours.
 ```
 
 ```md prompt=window

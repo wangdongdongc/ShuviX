@@ -1,22 +1,23 @@
 /**
- * sessionService —— 聊天会话（`settings.bots` 非空）的「无根会话」判定。
+ * sessionService —— 聊天会话（绑定了 bot 的无根会话）的形态判定。
  *
- * 契约（M3′，v3 收窄）：
- *   - `isBotSession` / `resolveAgentProfileName` 一律看 `bots?.length`，**空数组不算** ——
- *     settings 的 JSON patch 没有删键路径，「移除全部成员」只能写 `[]`，而 `[]` 是 truthy；
- *     写成 `!!bots` 会让被写过空数组的普通会话整片变成无根会话（chat/notebook 两区一起塌）；
+ * 契约（M3′，v3 收窄，一对一改制）：
+ *   - `isBotSession` / `resolveAgentProfileName` 走 chat-protocol 的 `isChatSessionSettings`：
+ *     `bot` 有值即聊天会话；群聊时代遗留的 `bots` 名单**非空**也算（未绑定、等用户重新选），
+ *     空数组不算 —— settings 的 JSON patch 没有删键路径，群聊时代「移除全部成员」只能写 `[]`，
+ *     而 `[]` 是 truthy；写成 `!!bots` 会让被写过空数组的普通会话整片变成无根会话；
  *   - 聊天会话的 `resolveAgentProfileName` 返回 **null**（严格 null，不是 falsy），
  *     且判定先于 notebookPath；
- *   - `create` 只在 `bots?.length` 时写 `bots` 键；
+ *   - `create` 只在 `bot` 有值时写 `bot` 键；
+ *   - `setBot` 只对聊天会话生效（含遗留会话 —— 那正是它重新选 bot 的口）、拒绝空名；
  *   - `updateAgentProfile` 对聊天会话零副作用拒绝（先于 getProfile / 落库 / invalidate）；
- *   - **没有开场白**：`create` / `updateBots` 只动 settings，一个刚建好的聊天会话里零条消息 ——
- *     v3 的 bot 是「管线 + 槽位表 + 正文」的绑定，没有 greeting 这个字段，也就没有要种的东西；
- *   - `delete` 与 botService 只有一个会师点 `abortSession`，没有笔记侧的 forget 钩子可调。
+ *   - **没有开场白**：`create` / `setBot` 只动 settings，一个刚建好的聊天会话里零条消息；
+ *   - `delete` 与 botService 只有一个会师点 `abortSession`。
  *
  * mock 面照抄 sessionServiceNotebookProfile.test.ts，另补 sessionDao.insert（create 用）与
  * delete 链上的几个 no-op。botService 的替身**只有** abortSession / isActive 两个成员：这就是
- * sessionService 今天对它的全部依赖 —— 源码若再往 seedGreetings / forgetNotesSession 伸手，
- * 这里会以 TypeError 红掉，而不是被一个顺手 mock 出来的空函数悄悄吞掉。
+ * sessionService 今天对它的全部依赖 —— 源码若再往别处伸手，这里会以 TypeError 红掉，
+ * 而不是被一个顺手 mock 出来的空函数悄悄吞掉。
  * 本文件**不调用** clearSessionTreeCacheForTests —— sessionService 在模块导入时就
  * addSessionTreePin，清掉会让同文件后续用例里的根会话不再被钉住（这里 sessionStorage
  * 整个是假件，谓词也从未真正注册，但纪律照旧）。
@@ -52,7 +53,7 @@ vi.mock('../../dao/providerDao', () => ({ providerDao: {} }))
 vi.mock('../../dao/projectDao', () => ({ projectDao: {} }))
 // create 会读默认档案设置（general.default*Agent）；未设 ⇒ 回落基座 default / chat
 vi.mock('../../dao/settingsDao', () => ({ settingsDao: { findByKey: vi.fn() } }))
-// 消息层只留 delete 链要的 clear：create / updateBots 若往消息表写任何东西，这里会以 TypeError 红掉
+// 消息层只留 delete 链要的 clear：create / setBot 若往消息表写任何东西，这里会以 TypeError 红掉
 vi.mock('../messageService', () => ({ messageService: { clear: mocks.messageClear } }))
 vi.mock('../sessionStorage', () => ({
   readSessionRunConfig: vi.fn(),
@@ -113,16 +114,26 @@ function insertedSettings(): Record<string, unknown> {
   return mocks.daoInsert.mock.calls[0][0].settings
 }
 
-/** create / updateBots 的「只动 settings」断言：没有任何一条路通向消息表或 botService */
+/** create / setBot 的「只动 settings」断言：没有任何一条路通向消息表或 botService */
 function expectNoMessageSideEffects(): void {
   expect(mocks.messageClear).not.toHaveBeenCalled()
   expect(mocks.abortSession).not.toHaveBeenCalled()
 }
 
-describe('isBotSession —— 非空 bots 才是聊天会话', () => {
-  it('bots 非空 → true', () => {
+describe('isBotSession —— 绑定了 bot、或带着遗留的 bots 名单，才是聊天会话', () => {
+  it('bot 有值 → true', () => {
+    mocks.daoPickSettings.mockReturnValue({ bot: 'a' })
+    expect(sessionService.isBotSession('s1')).toBe(true)
+  })
+
+  it('遗留：bots 非空、没有 bot → true（未绑定，等用户重新选；没有迁移）', () => {
     mocks.daoPickSettings.mockReturnValue({ bots: ['a'] })
     expect(sessionService.isBotSession('s1')).toBe(true)
+  })
+
+  it('bot 为空串 / 空白 → false（不是聊天会话）', () => {
+    mocks.daoPickSettings.mockReturnValue({ bot: '  ' })
+    expect(sessionService.isBotSession('s1')).toBe(false)
   })
 
   it('bots 为空数组 → false，且档案照常解析为 default（`!!bots` 会红）', () => {
@@ -131,7 +142,7 @@ describe('isBotSession —— 非空 bots 才是聊天会话', () => {
     expect(sessionService.resolveAgentProfileName('s1')).toBe('default')
   })
 
-  it('无 bots 键 → false', () => {
+  it('无 bot / bots 键 → false', () => {
     mocks.daoPickSettings.mockReturnValue({})
     expect(sessionService.isBotSession('s1')).toBe(false)
   })
@@ -144,13 +155,18 @@ describe('isBotSession —— 非空 bots 才是聊天会话', () => {
 })
 
 describe('resolveAgentProfileName —— 聊天会话没有根 Agent', () => {
-  it('bots 非空 → 严格 null（不是 falsy 的空串/undefined）', () => {
+  it('bot 有值 → 严格 null（不是 falsy 的空串/undefined）', () => {
+    mocks.daoPickSettings.mockReturnValue({ bot: 'a' })
+    expect(sessionService.resolveAgentProfileName('s1')).toBeNull()
+  })
+
+  it('遗留：bots 非空 → 同样 null（未绑定的聊天会话也没有根 Agent）', () => {
     mocks.daoPickSettings.mockReturnValue({ bots: ['a'] })
     expect(sessionService.resolveAgentProfileName('s1')).toBeNull()
   })
 
-  it('bots 先于 notebookPath 判定：两者同时存在仍返回 null', () => {
-    mocks.daoPickSettings.mockReturnValue({ bots: ['a'], notebookPath: 'notes/a.md' })
+  it('bot 先于 notebookPath 判定：两者同时存在仍返回 null', () => {
+    mocks.daoPickSettings.mockReturnValue({ bot: 'a', notebookPath: 'notes/a.md' })
     expect(sessionService.resolveAgentProfileName('s1')).toBeNull()
   })
 
@@ -166,27 +182,29 @@ describe('resolveAgentProfileName —— 聊天会话没有根 Agent', () => {
   })
 })
 
-describe('create —— bots 键只在非空时写', () => {
-  it('bots 非空 → settings 带 bots', () => {
-    sessionService.create({ bots: ['a', 'b'] })
-    expect(insertedSettings()).toMatchObject({ bots: ['a', 'b'] })
+describe('create —— bot 键只在有值时写', () => {
+  it('bot 有值 → settings 带 bot（trim 后落库），不写 agentProfile（无根会话没有档案）', () => {
+    sessionService.create({ bot: ' a ' })
+    expect(insertedSettings()).toMatchObject({ bot: 'a' })
+    expect('agentProfile' in insertedSettings()).toBe(false)
   })
 
-  it('bots 为空数组 → 不写 bots 键（缺省即无键）', () => {
-    sessionService.create({ bots: [] })
-    expect('bots' in insertedSettings()).toBe(false)
+  it('bot 为空串 / 空白 → 不写 bot 键（缺省即无键），是普通会话', () => {
+    sessionService.create({ bot: '  ' })
+    expect('bot' in insertedSettings()).toBe(false)
+    expect('agentProfile' in insertedSettings()).toBe(true)
   })
 
-  it('不传 bots → 不写键；与 notebookPath / memorySlug 组合时互不干扰', () => {
+  it('不传 bot → 不写键；与 notebookPath / memorySlug 组合时互不干扰', () => {
     sessionService.create({ notebookPath: 'notes/a.md', memorySlug: 'mem' })
     const settings = insertedSettings()
-    expect('bots' in settings).toBe(false)
+    expect('bot' in settings).toBe(false)
     expect(settings).toMatchObject({ notebookPath: 'notes/a.md', memorySlug: 'mem' })
 
     mocks.daoInsert.mockReset()
-    sessionService.create({ bots: ['a'], notebookPath: 'notes/a.md', memorySlug: 'mem' })
+    sessionService.create({ bot: 'a', notebookPath: 'notes/a.md', memorySlug: 'mem' })
     expect(insertedSettings()).toMatchObject({
-      bots: ['a'],
+      bot: 'a',
       notebookPath: 'notes/a.md',
       memorySlug: 'mem'
     })
@@ -195,16 +213,16 @@ describe('create —— bots 键只在非空时写', () => {
   it('新建聊天会话只落一行 settings —— 不种开场白、不碰消息表、不叫 botService', () => {
     // 没有 greeting 这个字段，也就没有要种的东西：会话建好那一刻消息表里是零条，
     // 第一条消息永远是用户说的
-    sessionService.create({ bots: ['a', 'b'] })
+    sessionService.create({ bot: 'a' })
     expect(mocks.daoInsert).toHaveBeenCalledTimes(1)
-    expect(insertedSettings()).toMatchObject({ bots: ['a', 'b'] })
+    expect(insertedSettings()).toMatchObject({ bot: 'a' })
     expectNoMessageSideEffects()
   })
 })
 
 describe('updateAgentProfile —— 聊天会话拒绝一切切换', () => {
   it('拒绝且零副作用：getProfile / 落库 / invalidate / 广播一个都不许发生', async () => {
-    mocks.daoPickSettings.mockReturnValue({ bots: ['a'] })
+    mocks.daoPickSettings.mockReturnValue({ bot: 'a' })
     const res = await sessionService.updateAgentProfile('s1', 'coding')
     expect(res.success).toBe(false)
     expect(res.error).toMatch(/no root agent/i)
@@ -218,7 +236,7 @@ describe('updateAgentProfile —— 聊天会话拒绝一切切换', () => {
   })
 
   it("切 'default' 也被拒 —— 没有「切回去」的后门", async () => {
-    mocks.daoPickSettings.mockReturnValue({ bots: ['a'] })
+    mocks.daoPickSettings.mockReturnValue({ bot: 'a' })
     const res = await sessionService.updateAgentProfile('s1', 'default')
     expect(res.success).toBe(false)
     expect(mocks.daoUpdateSettings).not.toHaveBeenCalled()
@@ -233,7 +251,14 @@ describe('updateAgentProfile —— 聊天会话拒绝一切切换', () => {
     expect(invalidateSpy).toHaveBeenCalledTimes(1)
   })
 
-  it('笔记本的拒绝语句仍在 bots 之后生效（不回归）', async () => {
+  it('遗留会话（只有 bots 名单）同样被拒：它仍是聊天会话', async () => {
+    mocks.daoPickSettings.mockReturnValue({ bots: ['a'] })
+    const res = await sessionService.updateAgentProfile('s1', 'coding')
+    expect(res.success).toBe(false)
+    expect(res.error).toMatch(/no root agent/i)
+  })
+
+  it('笔记本的拒绝语句仍在 bot 之后生效（不回归）', async () => {
     mocks.daoPickSettings.mockReturnValue({ notebookPath: 'notes/a.md' })
     const res = await sessionService.updateAgentProfile('s1', 'coding')
     expect(res.success).toBe(false)
@@ -241,64 +266,49 @@ describe('updateAgentProfile —— 聊天会话拒绝一切切换', () => {
   })
 })
 
-describe('updateBots —— 成员管理，也是名单写坏之后的逃生口', () => {
+describe('setBot —— 绑定 bot，也是遗留会话重新选 bot 的口', () => {
   beforeEach(() => {
     mocks.daoUpdateSettings.mockClear()
   })
 
-  it('改名单：落库、广播、返回实际名单与新增集 —— 新增成员不再补开场白', async () => {
-    mocks.daoPickSettings.mockReturnValue({ bots: ['a', 'b'] })
-    const res = await sessionService.updateBots('s1', ['a', 'c'])
-
-    expect(res).toMatchObject({ success: true, bots: ['a', 'c'], added: ['c'] })
-    expect(mocks.daoUpdateSettings).toHaveBeenCalledWith('s1', { bots: ['a', 'c'] })
+  it('遗留会话（只有 bots 名单）→ 写 bot、广播；名单不动、不碰消息表', () => {
+    // 没有迁移：老会话靠这里重新选。遗留名单留在原处只读（bot 一旦有值就压过它）
+    mocks.daoPickSettings.mockReturnValue({ bots: ['deleted-1', 'typo'] })
+    const res = sessionService.setBot('s1', 'alive')
+    expect(res).toEqual({ success: true })
+    expect(mocks.daoUpdateSettings).toHaveBeenCalledWith('s1', { bot: 'alive' })
     expect(mocks.broadcastSessionConfigChanged).toHaveBeenCalledWith('s1')
-    // added 只是给调用方的差集事实；宿主自己不拿它做任何事（v2 曾用它挑谁播开场白）
     expectNoMessageSideEffects()
   })
 
-  it('名单没变化时 added 为空（差集为空），落库照旧', async () => {
-    mocks.daoPickSettings.mockReturnValue({ bots: ['a', 'b'] })
-    const res = await sessionService.updateBots('s1', ['b', 'a'])
-    expect(res.added).toEqual([])
-    expect(mocks.daoUpdateSettings).toHaveBeenCalledWith('s1', { bots: ['b', 'a'] })
+  it('已绑定的会话可以换绑（名字 trim 后落库）', () => {
+    mocks.daoPickSettings.mockReturnValue({ bot: 'a' })
+    expect(sessionService.setBot('s1', ' b ')).toEqual({ success: true })
+    expect(mocks.daoUpdateSettings).toHaveBeenCalledWith('s1', { bot: 'b' })
   })
 
-  it('去重但保序 —— 名单顺序就是成员展示的顺序', async () => {
-    mocks.daoPickSettings.mockReturnValue({ bots: ['a'] })
-    const res = await sessionService.updateBots('s1', ['c', 'b', 'c', ' b ', 'a'])
-    expect(res.bots).toEqual(['c', 'b', 'a'])
-    expect(res.added).toEqual(['c', 'b'])
+  it('**不校验名字是否存在**：md 已删的名字照样能绑（缺失在会话里可见地失败）', () => {
+    mocks.daoPickSettings.mockReturnValue({ bot: 'a' })
+    expect(sessionService.setBot('s1', 'ghost').success).toBe(true)
+    expect(mocks.daoUpdateSettings).toHaveBeenCalledWith('s1', { bot: 'ghost' })
   })
 
-  it('**这就是逃生口**：成员 md 全被删也照样能把名单改回可用的', async () => {
-    // 名单里全是已经不存在的 bot —— 会话仍是聊天会话（判定只看非空），
-    // 于是这个接口够得着它。校验「名字是否存在」等于把逃生口一起锁上
-    mocks.daoPickSettings.mockReturnValue({ bots: ['deleted-1', 'typo'] })
-    const res = await sessionService.updateBots('s1', ['alive'])
-    expect(res).toMatchObject({ success: true, bots: ['alive'] })
-    expect(mocks.daoUpdateSettings).toHaveBeenCalledWith('s1', { bots: ['alive'] })
+  it.each([[''], ['   ']])('空名被拒（%j）：聊天会话不能没有 bot', (next) => {
+    mocks.daoPickSettings.mockReturnValue({ bot: 'a' })
+    const res = sessionService.setBot('s1', next)
+    expect(res.success).toBe(false)
+    expect(res.error).toMatch(/needs a bot/i)
+    expect(mocks.daoUpdateSettings).not.toHaveBeenCalled()
+    expectNoMessageSideEffects()
   })
-
-  it.each([[[]], [['', '   ']]])(
-    '空名单被拒（%j）：形态不该被「管理成员」顺手改掉',
-    async (next) => {
-      mocks.daoPickSettings.mockReturnValue({ bots: ['a'] })
-      const res = await sessionService.updateBots('s1', next as string[])
-      expect(res.success).toBe(false)
-      expect(res.error).toMatch(/at least one member/i)
-      expect(mocks.daoUpdateSettings).not.toHaveBeenCalled()
-      expectNoMessageSideEffects()
-    }
-  )
 
   it.each([
     ['普通会话', {}],
     ['空数组的会话', { bots: [] }],
     ['笔记本会话', { notebookPath: 'a.md' }]
-  ])('非聊天会话被拒（%s）：零副作用', async (_label, settings) => {
+  ])('非聊天会话被拒（%s）：形态不被顺手改掉，零副作用', (_label, settings) => {
     mocks.daoPickSettings.mockReturnValue(settings)
-    const res = await sessionService.updateBots('s1', ['a'])
+    const res = sessionService.setBot('s1', 'a')
     expect(res.success).toBe(false)
     expect(res.error).toMatch(/not a chat session/i)
     expect(mocks.daoUpdateSettings).not.toHaveBeenCalled()
@@ -310,7 +320,7 @@ describe('delete —— 与 botService 只有 abortSession 一个会师点', () 
   it('删除聊天会话：先会师 abortSession，再清消息 / 日志 / 行；没有笔记侧的 forget 钩子', async () => {
     // v2 的 delete 还要顺手 forgetNotesSession（笔记检查点按会话记）；v3 没有笔记段，
     // botService 替身也没有那个成员 —— 源码若还在调它，这里就是一条 TypeError
-    mocks.daoPickSettings.mockReturnValue({ bots: ['a'] })
+    mocks.daoPickSettings.mockReturnValue({ bot: 'a' })
     await expect(sessionService.delete('s1')).resolves.toBeUndefined()
 
     expect(mocks.abortSession).toHaveBeenCalledWith('s1')

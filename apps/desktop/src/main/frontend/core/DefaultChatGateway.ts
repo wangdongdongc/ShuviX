@@ -43,7 +43,7 @@ export class DefaultChatGateway implements ChatGateway {
     images?: Array<{ type: 'image'; data: string; mimeType: string }>,
     inlineTokens?: Record<string, InlineToken>
   ): Promise<{ error?: string }> {
-    // 聊天会话没有根 Agent：消息交给成员各自的管线。分流必须在 ensureAgentSession
+    // 聊天会话没有根 Agent：消息交给绑定的 bot 的管线。分流必须在 ensureAgentSession
     // **之前**，也必须是 early-return 式互斥 —— 前端的 user_message 走 addMessage
     // （同 id 已存在则整体 no-op，不是 upsert），两边都跑一点会出双气泡且不被去重
     if (sessionService.isBotSession(sessionId)) {

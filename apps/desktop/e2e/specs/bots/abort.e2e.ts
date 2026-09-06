@@ -1,16 +1,18 @@
 /**
- * A2 · per-bot 停止与在飞展示（C 组前半）—— 「正在输入」三相位、停止钮、mailbox 回执、
+ * A2 · 按消息停止与在飞展示（C 组前半）—— 「正在输入」三相位、停止钮、mailbox 回执、
  * 「停止 ≠ 沉默」（设计 §5.4 / §9.1）。
+ *
+ * 会话是一对一的：一个会话恰绑一个 bot（`settings.bot`），每条消息都归它。于是
+ * 「正在输入」**至多一行**（store 里一个会话一条活动快照：live 相位覆写、ended 删键 ——
+ * 两条消息同时在飞时那一行显示的是最近一次相位事件的那条），停止钮停的是**某条消息**的
+ * 应答（`agent.abortBot({ sessionId, messageId })`，不再带 botName），mailbox 回执不再署名
+ * （布尔属性），`bot_mailbox` 快照也不再带 botName。v2 的「停一个不影响另一个」（C-17）
+ * 没有前提了，换成 B4：同一个 bot 连发两条时那一行的相位流转、排队回执与顺位后的停止。
  *
  * 全程零 LLM：`a2-abort-probe` 是一份参数化 bot 管线，相位窗口（preTurnMs / turnMs）
  * 与结局（sayLine / mode）全部读自各 bot md 的 `shuvix-bot-pipeline.input`。相位窗口用真实毫秒
  * —— 「正在输入」行、停止钮、回执都是「窗口期间屏幕上长出来的东西」，每一步先 waitFor
  * 锚相位事件，再进 DOM；固定 sleep 只用于「断不发生」的静置复查。
- *
- * **v2 的两处改形**：① 相位只剩 `started | queued | working`（`claimed` 是仲裁词汇，
- * 随仲裁一并删除），所以 v1 用 preClaim/postClaim 两个窗撑开的观察面合并成一个
- * `preTurnMs`（`turn()` 之前 = started）；② 呈现从占位卡换成一行「正在输入」，
- * per-bot 停止钮跟着搬到那一行上（`data-bot-activity` / `data-bot-stop` 两个锚点没变）。
  *
  * DOM 断言全部经 pages.ts 的 botFlowPane（data-* 锚点）；IPC 能断的（事件序列、
  * message.list、decisions.jsonl）不走 DOM。
@@ -33,6 +35,7 @@ import {
   chatPane,
   sidebarPane,
   type BotFlowPane,
+  type BotTypingRowShot,
   type ChatPane,
   type SidebarPane
 } from '../../harness/pages'
@@ -127,7 +130,7 @@ const listMessages = (sid: string): Promise<Msg[]> =>
 const replies = async (sid: string): Promise<Msg[]> =>
   (await listMessages(sid)).filter((m) => m.role === 'assistant')
 
-/** 发出但**不等** —— 停止用例要在 cohort 还在跑的时候插进去 */
+/** 发出但**不等** —— 停止用例要在管线还在跑的时候插进去 */
 const promptDetached = (sid: string, text: string): Promise<string> =>
   app.main.eval(
     `(window.api.agent.prompt({ sessionId: ${JSON.stringify(sid)}, text: ${JSON.stringify(text)} }).catch(() => undefined), 'sent')`
@@ -138,10 +141,10 @@ const prompt = (sid: string, text: string): Promise<void> =>
     `window.api.agent.prompt({ sessionId: ${JSON.stringify(sid)}, text: ${JSON.stringify(text)} })`
   )
 
-/** per-bot 停止 IPC（A2 的新契约成员） */
-const abortBot = (sid: string, botName: string, messageId: string): Promise<{ aborted: boolean }> =>
+/** 按消息停止 IPC：一对一之后只认 (会话, 消息)，不再点名 bot */
+const abortBot = (sid: string, messageId: string): Promise<{ aborted: boolean }> =>
   app.main.eval(
-    `window.api.agent.abortBot({ sessionId: ${JSON.stringify(sid)}, botName: ${JSON.stringify(botName)}, messageId: ${JSON.stringify(messageId)} })`
+    `window.api.agent.abortBot({ sessionId: ${JSON.stringify(sid)}, messageId: ${JSON.stringify(messageId)} })`
   )
 
 /** 等到该会话第 n 条（1 起）user 消息落库并返回其 id —— 停止钮的 messageId 参数 */
@@ -184,8 +187,8 @@ async function waitPhase(
   }
 }
 
+/** mailbox 快照事件（一对一：没有 botName —— 一个会话一条 lane） */
 interface MailboxEvent extends RecordedEvent {
-  botName: string
   active: { messageId: string } | null
   queued: Array<{ messageId: string }>
 }
@@ -201,9 +204,9 @@ function kindsOf(botName: string): string[] {
     .map((l) => String((JSON.parse(l) as Record<string, unknown>).kind))
 }
 
-/** 建会话 + 在 UI 里打开（占位卡/回执/提示只对活动会话渲染） */
-async function openBotSession(bots: string[], title: string): Promise<string> {
-  const sid = await createBotSession(app.main, { bots, title })
+/** 建会话（绑定一个 bot）+ 在 UI 里打开（「正在输入」行/回执只对活动会话渲染） */
+async function openBotSession(bot: string, title: string): Promise<string> {
+  const sid = await createBotSession(app.main, { bot, title })
   await until(async () => (await sidebar.titles()).includes(title), `session ${title} listed`)
   expect(await sidebar.openSession(title)).toBe(true)
   await chat.ready()
@@ -229,14 +232,14 @@ afterAll(async () => {
 })
 
 describe('「正在输入」三相位（C-3 / C-4 的停止钮半边）', () => {
-  it('A2-C3 started 有停止钮、working 有、queued 无；回复落库后整行消失', async () => {
+  it('A2-C3 started 有停止钮、working 有、queued 无 —— 自始至终恰一行；回复落库后整行消失', async () => {
     probe('ab-flow', {
       displayName: 'Flow',
       preTurnMs: 1500,
       turnMs: 4500,
       sayLine: 'Flow 的回答'
     })
-    const sid = await openBotSession(['ab-flow'], 'A2-flow')
+    const sid = await openBotSession('ab-flow', 'A2-flow')
     await events.clear()
     await promptDetached(sid, '第一条')
 
@@ -245,34 +248,35 @@ describe('「正在输入」三相位（C-3 / C-4 的停止钮半边）', () => 
     await waitPhase(sid, 'ab-flow', 'started')
     await until(async () => {
       const rows = await flow.typingRows()
-      return rows.some((r) => r.name === 'ab-flow' && r.phase === 'started' && r.hasStop)
+      return rows.length === 1 && rows[0].phase === 'started' && rows[0].hasStop
     }, 'started row with stop button')
 
     // working：turn 授予之后仍带停止钮
     await waitPhase(sid, 'ab-flow', 'working')
     await until(async () => {
       const rows = await flow.typingRows()
-      return rows.some((r) => r.name === 'ab-flow' && r.phase === 'working' && r.hasStop)
+      return rows.length === 1 && rows[0].phase === 'working' && rows[0].hasStop
     }, 'working row with stop button')
 
-    // 第二条消息进来：同 bot 在 mailbox 排队 —— 排队那行还没开始做，**没有**停止钮
+    // 第二条消息进来：同一个 bot 在 mailbox 排队 —— 那一行换成排队相位，**没有**停止钮
+    // （还没开始做，无处可停）；仍只有一行：一对一没有第二行的来源
     await promptDetached(sid, '第二条')
     await waitPhase(sid, 'ab-flow', 'queued')
     await until(async () => {
       const rows = await flow.typingRows()
-      return rows.some((r) => r.name === 'ab-flow' && r.phase === 'queued' && !r.hasStop)
+      return rows.length === 1 && rows[0].phase === 'queued' && !rows[0].hasStop
     }, 'queued row without stop button')
 
-    // 两条回复都落库后：「正在输入」全部收摊（原位替换成气泡）
+    // 两条回复都落库后：「正在输入」收摊（原位替换成气泡）
     await untilReplies(sid, 2)
-    await until(async () => (await flow.typingRows()).length === 0, 'typing rows gone')
+    await until(async () => (await flow.typingRows()).length === 0, 'typing row gone')
   })
 })
 
 describe('working 中点停止（C-5）', () => {
   it('A2-C5 停止钮点下去：行消失、零失败气泡、无新增 assistant；再发一条照常应答', async () => {
     probe('ab-stop', { displayName: 'Stopper', turnMs: 6000, sayLine: 'Stopper 的回答' })
-    const sid = await openBotSession(['ab-stop'], 'A2-stop')
+    const sid = await openBotSession('ab-stop', 'A2-stop')
     await events.clear()
     await promptDetached(sid, '这条会被停掉')
 
@@ -301,7 +305,7 @@ describe('working 中点停止（C-5）', () => {
 describe('停止不清 mailbox（C-6）', () => {
   it('A2-C6a 停掉 working 的 msg1 → {aborted:true}，排队的 msg2 顺位授予并落回复', async () => {
     probe('ab-lane', { displayName: 'Lane', turnMs: 3000, sayLine: 'Lane 的回答' })
-    const sid = await createBotSession(app.main, { bots: ['ab-lane'], title: 'A2-lane-a' })
+    const sid = await createBotSession(app.main, { bot: 'ab-lane', title: 'A2-lane-a' })
     await events.clear()
     await promptDetached(sid, '第一条')
     await waitPhase(sid, 'ab-lane', 'working')
@@ -309,7 +313,7 @@ describe('停止不清 mailbox（C-6）', () => {
     await waitPhase(sid, 'ab-lane', 'queued')
 
     const m1 = await userMessageId(sid, 1)
-    expect(await abortBot(sid, 'ab-lane', m1)).toEqual({ aborted: true })
+    expect(await abortBot(sid, m1)).toEqual({ aborted: true })
 
     // msg1 的 run 被停、独占段随它的 finally 释放 → msg2 顺位授予，回复照常落库
     const msgs = await untilReplies(sid, 1)
@@ -320,8 +324,8 @@ describe('停止不清 mailbox（C-6）', () => {
   })
 
   it('A2-C6b 停掉排队的 msg2 → msg1 照常、msg2 无声，decisions 含 mailbox_aborted', async () => {
-    // 同 bot 换会话：lane 键含 sessionId，上一条用例的 lane 不串味
-    const sid = await createBotSession(app.main, { bots: ['ab-lane'], title: 'A2-lane-b' })
+    // 同 bot 换会话：lane 键就是 sessionId，上一条用例的 lane 不串味
+    const sid = await createBotSession(app.main, { bot: 'ab-lane', title: 'A2-lane-b' })
     await events.clear()
     await promptDetached(sid, '第一条')
     await waitPhase(sid, 'ab-lane', 'working')
@@ -329,7 +333,7 @@ describe('停止不清 mailbox（C-6）', () => {
     await waitPhase(sid, 'ab-lane', 'queued')
 
     const m2 = await userMessageId(sid, 2)
-    expect(await abortBot(sid, 'ab-lane', m2)).toEqual({ aborted: true })
+    expect(await abortBot(sid, m2)).toEqual({ aborted: true })
 
     // msg1 不受影响，照常落回复
     const msgs = await untilReplies(sid, 1)
@@ -342,9 +346,9 @@ describe('停止不清 mailbox（C-6）', () => {
 })
 
 describe('mailbox 回执（C-7）', () => {
-  it('A2-C7 排队消息的用户气泡下有回执，active 的没有；全部完成后回执消失', async () => {
+  it('A2-C7 排队消息的用户气泡下有回执，active 的没有；快照不署名；全部完成后回执消失', async () => {
     probe('ab-receipt', { displayName: 'Receipt', turnMs: 3500, sayLine: 'Receipt 的回答' })
-    const sid = await openBotSession(['ab-receipt'], 'A2-receipt')
+    const sid = await openBotSession('ab-receipt', 'A2-receipt')
     await events.clear()
     await promptDetached(sid, '第一条')
     await waitPhase(sid, 'ab-receipt', 'working')
@@ -354,28 +358,27 @@ describe('mailbox 回执（C-7）', () => {
     const m1 = await userMessageId(sid, 1)
     const m2 = await userMessageId(sid, 2)
 
-    // 先断快照（IPC 面）：active=msg1、queued 含 msg2
+    // 先断快照（IPC 面）：active=msg1、queued 含 msg2；一对一的快照不带 botName ——
+    // lane 键就是 sessionId，会话里没有第二个人可署
     const snap = await until(async () => {
       const all = await events.all<MailboxEvent>()
       return all.find(
         (e) =>
           e.type === 'bot_mailbox' &&
           e.sessionId === sid &&
-          e.botName === 'ab-receipt' &&
           e.active?.messageId === m1 &&
           (e.queued ?? []).some((q) => q.messageId === m2)
       )
     }, 'mailbox snapshot active=m1 queued=[m2]')
     expect(snap.active?.messageId).toBe(m1)
+    expect(snap).not.toHaveProperty('botName')
 
     // 再断 DOM：回执只挂在还排着队的 msg2 下（active 由「正在输入」那行呈现，不出回执）
     await until(async () => {
       const receipts = await flow.receipts()
-      return receipts.length === 1 && receipts[0].msgId === m2
+      return receipts.length === 1 && receipts[0] === m2
     }, 'receipt under msg2 only')
-    const receipts = await flow.receipts()
-    expect(receipts[0].names).toContain('ab-receipt')
-    expect(receipts.some((r) => r.msgId === m1)).toBe(false)
+    expect(await flow.receipts()).toEqual([m2])
 
     // 全部完成后回执消失（空快照删键）
     await untilReplies(sid, 2)
@@ -384,9 +387,9 @@ describe('mailbox 回执（C-7）', () => {
 })
 
 describe('对已收尾票的停止（C-16）', () => {
-  it('A2-C16 对已收尾的 (bot, 消息) abortBot → {aborted:false}，不抛、无副作用', async () => {
+  it('A2-C16 对已收尾的消息 abortBot → {aborted:false}，不抛、无副作用', async () => {
     probe('ab-done', { displayName: 'Done', sayLine: 'Done 的回答' })
-    const sid = await createBotSession(app.main, { bots: ['ab-done'], title: 'A2-done' })
+    const sid = await createBotSession(app.main, { bot: 'ab-done', title: 'A2-done' })
     await events.clear()
     await prompt(sid, '快问快答')
     await untilReplies(sid, 1)
@@ -396,7 +399,7 @@ describe('对已收尾票的停止（C-16）', () => {
       (e) => e.type === 'bot_activity' && e.sessionId === sid
     ).length
 
-    expect(await abortBot(sid, 'ab-done', m1)).toEqual({ aborted: false })
+    expect(await abortBot(sid, m1)).toEqual({ aborted: false })
 
     // 静置复查：没有第二条消息、没有新的活动事件 —— 未命中就是纯 no-op
     await sleep(1000)
@@ -408,39 +411,83 @@ describe('对已收尾票的停止（C-16）', () => {
   })
 })
 
-describe('多 bot 停一个 ≠ 让整轮改样（C-17 的 v2 口径 / §9.1）', () => {
+describe('同一个 bot 连发两条（B4）', () => {
   /**
-   * v1 这条用例问的是「停掉胜者会不会误报全体沉默」——**那个问题在 v2 里不存在**：
-   * 没有胜者，也没有 `bot_cohort_silent` 事件与它的一次性提示（连同救济 chip 一起删了）。
-   *
-   * 留下来的是同一处守卫的另一半，而且它在 v2 里更要紧：每个 bot 各自为自己的结局负责，
-   * 所以「run 没成 → 补一条可见失败」是常态路径，**用户按的停止必须是它的例外**
-   * （`!ticket.abort.signal.aborted`）。少了这一条，点一次停止就换来一条
-   * 「XX 出错了」的错误气泡 —— 而错的是提示，不是那次停止。
+   * v1/v2 在这里问的是「多 bot 里停掉一个会不会连累另一个」——一对一之后没有另一个。
+   * 留下来的是同一处守卫在一对一里的样子：一条 lane、一行「正在输入」、一个停止钮，
+   * 两条消息同时在飞时行上显示的是最近一次相位事件的那条；停掉顺位后的第二条，
+   * 它安静收场（`!ticket.abort.signal.aborted` 压掉失败气泡）、回执随排空消失、
+   * 决策记录照常落 run_end。
    */
-  it('A2-C17 停掉其中一个：它安静收场（零错误气泡），另一个照常回答', async () => {
-    probe('ab-stopped', { displayName: 'Stopped', turnMs: 6000, sayLine: '不该出现的回答' })
-    probe('ab-other', { displayName: 'Other', preTurnMs: 2500, sayLine: 'Other 的回答' })
-    const sid = await openBotSession(['ab-stopped', 'ab-other'], 'A2-stop-one')
+  it('B4 恰一行：msg1 working 带停止钮 → msg2 排队（无停止钮 + 回执 + 不署名快照）→ 顺位 working 后点停止：行消失、零错误气泡、回执清空', async () => {
+    probe('ab-burst', { displayName: 'Burst', turnMs: 4500, sayLine: 'Burst 的回答' })
+    const sid = await openBotSession('ab-burst', 'A2-burst')
     await events.clear()
-    await promptDetached(sid, '你们都说说')
 
-    // 被停的那个进了独占段（还没说话），另一个还在它的 preTurn 窗里
-    await waitPhase(sid, 'ab-stopped', 'working')
+    // 采样纪律：整条用例里任何一次读行都不许超过一行 —— 一对一没有第二行的来源
+    const sampleRows = async (): Promise<BotTypingRowShot[]> => {
+      const rows = await flow.typingRows()
+      expect(rows.length).toBeLessThanOrEqual(1)
+      return rows
+    }
+
+    await promptDetached(sid, '第一条')
+    await waitPhase(sid, 'ab-burst', 'working')
+    await until(async () => {
+      const rows = await sampleRows()
+      return rows.length === 1 && rows[0].phase === 'working' && rows[0].hasStop
+    }, 'working row with stop button (msg1)')
+    expect(await sampleRows()).toEqual([{ name: 'ab-burst', phase: 'working', hasStop: true }])
+
+    // 第二条：同一条 lane 上排队 —— 那一行换成 queued，没有停止钮
+    await promptDetached(sid, '第二条')
+    await waitPhase(sid, 'ab-burst', 'queued')
+    await until(async () => {
+      const rows = await sampleRows()
+      return rows.length === 1 && rows[0].phase === 'queued' && !rows[0].hasStop
+    }, 'queued row without stop button (msg2)')
+
     const m1 = await userMessageId(sid, 1)
-    expect(await abortBot(sid, 'ab-stopped', m1)).toEqual({ aborted: true })
+    const m2 = await userMessageId(sid, 2)
+    // mailbox 快照（IPC 面）：active=msg1、queued=[msg2]，且没有 botName 键
+    const snap = await until(async () => {
+      const all = await events.all<MailboxEvent>()
+      return all.find(
+        (e) =>
+          e.type === 'bot_mailbox' &&
+          e.sessionId === sid &&
+          e.active?.messageId === m1 &&
+          (e.queued ?? []).some((q) => q.messageId === m2)
+      )
+    }, 'mailbox snapshot active=m1 queued=[m2]')
+    expect(snap).not.toHaveProperty('botName')
+    expect(snap.queued.map((q) => q.messageId)).toEqual([m2])
+    // 回执只挂在排队的 msg2 下
+    await until(
+      async () => JSON.stringify(await flow.receipts()) === JSON.stringify([m2]),
+      'receipt under msg2 only'
+    )
 
-    // 另一个不受影响：照常落它自己那条
-    const msgs = await untilReplies(sid, 1)
-    expect(msgs[0].metadata?.sender?.name).toBe('ab-other')
-    expect(msgs[0].content).toBe('Other 的回答')
+    // msg1 说完 → msg2 顺位授予：那一行再次是 working + 停止钮。中间隔着 msg1 的 ended
+    // （键被删、行短暂消失）—— 只 until 等它回来，不断言那段空窗里的持续性
+    await untilReplies(sid, 1)
+    await until(async () => {
+      const rows = await sampleRows()
+      return rows.length === 1 && rows[0].phase === 'working' && rows[0].hasStop
+    }, 'working row with stop button (msg2)')
 
-    // 静置窗断「不发生」：盖过被停者 turnMs 的剩余，一条错误气泡都不许有
-    await sleep(5000)
+    expect(await flow.clickStop('ab-burst')).toBe(true)
+    await until(async () => (await sampleRows()).length === 0, 'row gone after stop')
+    // 静置复查：§9.1 —— 用户按的停止不是「无从解释的沉默」，msg2 不补失败气泡；
+    // lane 排空，回执跟着消失
+    await sleep(1500)
     expect(await replies(sid)).toHaveLength(1)
     expect(await chat.errorRows()).toBe(0)
-    // 不出声 ≠ 不记账：两个成员的 run_end 决策照常落盘
-    expect(kindsOf('ab-stopped')).toContain('run_end')
-    expect(kindsOf('ab-other')).toContain('run_end')
+    expect(await flow.receipts()).toEqual([])
+    // 不出声 ≠ 不记账：两个 run（说完的 msg1、被停的 msg2）都落 run_end
+    await until(
+      () => kindsOf('ab-burst').filter((k) => k === 'run_end').length >= 2,
+      'run_end recorded for both runs'
+    )
   })
 })

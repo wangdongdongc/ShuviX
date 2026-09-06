@@ -542,11 +542,11 @@ describe('DP —— 一次 invoke 带了什么', () => {
     return file
   }
 
-  const seedSession = (bots: string[]): void => {
+  const seedSession = (bot: string): void => {
     mocks.getById.mockReturnValue({
       workingDirectory: dirs.sessions,
       title: 'Some title',
-      settings: { bots }
+      settings: { bot }
     })
   }
 
@@ -663,7 +663,7 @@ describe('DP —— 一次 invoke 带了什么', () => {
       displayName: 'Scout',
       agents: { intent: 'bot-intent', task: 'default' }
     })
-    seedSession(['scout'])
+    seedSession('scout')
     await prompt('第一句')
 
     const req = request()
@@ -679,7 +679,8 @@ describe('DP —— 一次 invoke 带了什么', () => {
     })
     // 槽位表原样：宿主不补缺省行
     expect(req.input.agents).toEqual({ intent: 'bot-intent', task: 'default' })
-    expect(req.input.session).toEqual({ id: SID, directed: false, members: ['scout'], others: [] })
+    // 一对一：session 里只有 id —— 没有 directed / members / others 这些群聊时代的键
+    expect(req.input.session).toEqual({ id: SID })
     // 窗口截到本条之前 —— 第一条消息的窗口是空的（它自己在 message.text 里）
     expect(req.input.window).toEqual([])
     const user = userRow()
@@ -689,14 +690,14 @@ describe('DP —— 一次 invoke 带了什么', () => {
   it('DP-1b 派发的 workflow 原样取自 md 的 shuvix-bot-pipeline.workflow —— 没有回落到 bot-chat', async () => {
     // 宿主这一层不再有缺省管线：md 说 my-flow 就派 my-flow（在不在注册表是 not-found 那条路的事）
     writeBot('scout', { pipeline: 'my-flow', agents: { intent: 'bot-intent', task: 'default' } })
-    seedSession(['scout'])
+    seedSession('scout')
     await prompt()
     expect(request().workflow).toBe('my-flow')
   })
 
   it('DP-2 window 是已成型的「谁: 说了什么」字符串行，截到本条之前', async () => {
     writeBot('scout', { displayName: 'Scout' })
-    seedSession(['scout'])
+    seedSession('scout')
     mocks.invoke.mockImplementationOnce(async (req: InvokeRequest) => {
       await req.extraApi.say('收到')
       return ran()
@@ -709,32 +710,9 @@ describe('DP —— 一次 invoke 带了什么', () => {
     expect(request(1).input.message).toMatchObject({ text: '第二句' })
   })
 
-  it('DP-3 session.others 是其它成员的身份行「显示名: 描述」（与 window 同为已成型的行），不含自己', async () => {
-    writeBot('scout', { displayName: 'Scout' })
-    writeBot('ranger', { displayName: 'Ranger' })
-    seedSession(['scout', 'ranger'])
-    await prompt()
-
-    const inputs = new Map(
-      mocks.invoke.mock.calls.map((c) => {
-        const r = c[0] as InvokeRequest
-        return [r.input.bot.name, r.input]
-      })
-    )
-    expect(inputs.get('scout')?.session).toEqual({
-      id: SID,
-      directed: false,
-      members: ['scout', 'ranger'],
-      others: ['Ranger: unit bot ranger']
-    })
-    expect(inputs.get('ranger')?.session).toMatchObject({
-      others: ['Scout: unit bot scout']
-    })
-  })
-
   it('DP-4 shuvix-bot-pipeline.input 铺在最前，宿主键压过它 —— 一份 bot md 改写不了 session.id 这类事实', async () => {
     writeBot('scout', { input: { foo: 1, session: 'hijack' } })
-    seedSession(['scout'])
+    seedSession('scout')
     await prompt()
 
     const input = request().input
@@ -744,7 +722,7 @@ describe('DP —— 一次 invoke 带了什么', () => {
 
   it('DP-5 systemContext 恰一块：renderBotContext 围栏后的正文（name / displayName / 文件路径 / 正文）', async () => {
     const file = writeBot('scout', { displayName: 'Scout' })
-    seedSession(['scout'])
+    seedSession('scout')
     await prompt()
 
     expect(request().systemContext).toEqual([
@@ -756,7 +734,7 @@ describe('DP —— 一次 invoke 带了什么', () => {
 
   it('DP-6 正文为空也照样围栏 —— agent 得知道文件在哪，才能开始往里写', async () => {
     const file = writeBot('scout', { body: '' })
-    seedSession(['scout'])
+    seedSession('scout')
     await prompt()
 
     const [block, ...rest] = request().systemContext ?? []
@@ -769,7 +747,7 @@ describe('DP —— 一次 invoke 带了什么', () => {
     // 正文已经在每个参与 agent 的系统提示词里了 —— 对文件工具而言这就是「读过」，任务段
     // 直接 edit 自己的 md 不必先 read（派生 agent 的 fileTime 归根会话，即这条聊天会话）
     const file = writeBot('scout')
-    seedSession(['scout'])
+    seedSession('scout')
     const order: string[] = []
     mocks.recordRead.mockImplementation(() => {
       order.push('recordRead')
@@ -785,19 +763,9 @@ describe('DP —— 一次 invoke 带了什么', () => {
     expect(order).toEqual(['recordRead', 'invoke'])
   })
 
-  it('DP-8 每个成员各记自己的文件（不是替整个 cohort 记一次）', async () => {
-    const scout = writeBot('scout')
-    const ranger = writeBot('ranger')
-    seedSession(['scout', 'ranger'])
-    await prompt()
-
-    expect(mocks.recordRead.mock.calls.map((c) => c[1]).sort()).toEqual([ranger, scout].sort())
-    expect(mocks.recordRead.mock.calls.every((c) => c[0] === SID)).toBe(true)
-  })
-
   it('DP-9 message.attachments 只带句柄不带字节（input 会原样进 run journal）', async () => {
     writeBot('scout')
-    seedSession(['scout'])
+    seedSession('scout')
     const data = Buffer.from('BYTES-dp9').toString('base64')
     await prompt('看图', { images: [{ data, mimeType: 'image/png' }] })
 
@@ -813,7 +781,7 @@ describe('DP —— 一次 invoke 带了什么', () => {
     // 坏了」：把管线的原话说出来，用户才知道该去改 md 的哪一行。它已经往会话里放了东西
     //（said），所以「可见结局」兜底不再补第二条通用气泡
     writeBot('scout', { displayName: 'Scout', agents: { intent: 'bot-intent' } })
-    seedSession(['scout'])
+    seedSession('scout')
     const error = 'input is missing required field(s): agents.task'
     mocks.invoke.mockResolvedValue({ started: false, reason: 'invalid-input', error })
     await prompt('谁来')
@@ -836,7 +804,7 @@ describe('DP —— 一次 invoke 带了什么', () => {
 
   it('DP-11 invalid-input 没带 error 串 → 文案参数回落 "invalid input"，气泡照出', async () => {
     writeBot('scout', { displayName: 'Scout' })
-    seedSession(['scout'])
+    seedSession('scout')
     mocks.invoke.mockResolvedValue({ started: false, reason: 'invalid-input' })
     await prompt()
 
@@ -851,7 +819,7 @@ describe('DP —— 一次 invoke 带了什么', () => {
     'DP-12 started:false + %s → 通用的 runFailed 兜底气泡，不是 invalid-input 那条',
     async (reason) => {
       writeBot('scout', { displayName: 'Scout' })
-      seedSession(['scout'])
+      seedSession('scout')
       mocks.invoke.mockResolvedValue({ started: false, reason, error: 'whatever' })
       await prompt()
 
@@ -873,7 +841,7 @@ describe('DP —— 一次 invoke 带了什么', () => {
       displayName: 'Degrade',
       agents: { intent: 'my-intent', task: 'coding', recheck: 'my-intent' }
     })
-    seedSession(['dp-degrade'])
+    seedSession('dp-degrade')
     mocks.invoke.mockImplementation(gateFailed())
     await prompt('一')
     await prompt('二')
@@ -907,7 +875,7 @@ describe('DP —— 一次 invoke 带了什么', () => {
     async (_n, code, step, key) => {
       const name = `dp14-${key.slice('bot.'.length).toLowerCase()}-${step?.index ?? 'run'}`
       writeBot(name, { displayName: 'Scout', agents: { intent: 'my-intent', task: 'coding' } })
-      seedSession([name])
+      seedSession(name)
       mocks.invoke.mockResolvedValue(failed(code, step))
       await prompt('这条会失败')
 
@@ -940,7 +908,7 @@ describe('DP —— 一次 invoke 带了什么', () => {
     async (_n, agents, step) => {
       const name = `dp15-${step.index}`
       writeBot(name, { displayName: 'Scout', agents })
-      seedSession([name])
+      seedSession(name)
       mocks.invoke.mockResolvedValue(failed('unknown_agent', step))
       await prompt('这个 agent 不存在')
 
@@ -956,7 +924,7 @@ describe('DP —— 一次 invoke 带了什么', () => {
 
   it('DP-16 intent 与 task 同名：第 1 步超时 → taskTimeout，第 0 步超时 → gateTimeout（文案按步号分，不按名字）', async () => {
     writeBot('dp16-same', { displayName: 'Scout', agents: { intent: 'same', task: 'same' } })
-    seedSession(['dp16-same'])
+    seedSession('dp16-same')
     mocks.invoke.mockResolvedValueOnce(failed('step_timeout', { index: 1, agent: 'same' }))
     await prompt('一')
     mocks.invoke.mockResolvedValueOnce(failed('step_timeout', { index: 0, agent: 'same' }))
@@ -971,7 +939,7 @@ describe('DP —— 一次 invoke 带了什么', () => {
     // 守卫看的是这张票的 signal，不是 errorCode：引擎报 run_aborted 而这边没人按停
     //（外部 signal 从别处落下）仍是「无从解释的沉默」，要出声。对照 A2-B9b（用户中止零气泡）
     writeBot('scout', { displayName: 'Scout', agents: { intent: 'my-intent', task: 'coding' } })
-    seedSession(['scout'])
+    seedSession('scout')
     mocks.invoke.mockResolvedValue(failed('run_aborted'))
     await prompt('没人按停')
 
@@ -985,7 +953,7 @@ describe('DP —— 一次 invoke 带了什么', () => {
   it('DP-18 脚本已经 say 过再失败 → 不补失败气泡，会话里只有它说的那句（said 守卫）', async () => {
     // 它已经往会话里放了东西 —— 再补一条「没办成」只会让用户看到一句回答加一句道歉
     writeBot('scout', { displayName: 'Scout', agents: { intent: 'my-intent', task: 'coding' } })
-    seedSession(['scout'])
+    seedSession('scout')
     mocks.invoke.mockImplementationOnce(async (req: InvokeRequest) => {
       await req.extraApi.say('先说一句')
       return failed('next_not_called', { index: 1, agent: 'coding' })
@@ -1001,31 +969,39 @@ describe('DP —— 一次 invoke 带了什么', () => {
     expect(lastActivity()).toMatchObject({ phase: 'ended', outcome: 'failed' })
   })
 
-  it('DP-19 三成员：others 两行按 members 顺序；名单里 md 缺失的成员被跳过，不留「undefined: undefined」', async () => {
-    writeBot('scout', { displayName: 'Scout' })
-    writeBot('ranger', { displayName: 'Ranger' })
-    writeBot('hunter', { displayName: 'Hunter' })
-    seedSession(['scout', 'ghost', 'ranger', 'hunter'])
+  it('DP-19 会话没绑定 bot（群聊时代的遗留会话）→ 不派发，落一条 system 行说明', async () => {
+    // 遗留会话只有 `bots` 名单没有 `bot`：仍是聊天会话（消息落表），但没有可派发的对象。
+    // 消息已经落库了，不能就这么没有下文 —— 一条 system 行指引用户去头部重新选
+    writeBot('scout')
+    mocks.getById.mockReturnValue({
+      workingDirectory: dirs.sessions,
+      title: 'Some title',
+      settings: { bots: ['scout'] }
+    })
     await prompt()
 
-    const inputs = new Map(
-      mocks.invoke.mock.calls.map((c) => {
-        const r = c[0] as InvokeRequest
-        return [r.input.bot.name, r.input]
-      })
-    )
-    expect([...inputs.keys()]).toEqual(['scout', 'ranger', 'hunter'])
-    expect(inputs.get('scout')?.session).toEqual({
-      id: SID,
-      directed: false,
-      members: ['scout', 'ranger', 'hunter'],
-      others: ['Ranger: unit bot ranger', 'Hunter: unit bot hunter']
+    expect(mocks.invoke).not.toHaveBeenCalled()
+    const rows = chatMessageDao.findBySession(SID)
+    expect(rows.map((r) => r.authorKind)).toEqual(['user', 'system'])
+    expect(rows[1].content).toBe('bot.noBotBound')
+    expect(mocks.t).toHaveBeenCalledWith('bot.noBotBound')
+    // 广播的是投影产物：system 行是一条 error_event 细行，不署名给任何 bot
+    expect(projected(rows[1].id)).toMatchObject({ role: 'system_notify', type: 'error_event' })
+  })
+
+  it('DP-20 绑定的 bot md 已被删 → 不派发，落一条署名给它的失败气泡', async () => {
+    // 历史署名靠行上的 displayName，这里没有 md 可查 —— 名字就是显示名
+    seedSession('ghost')
+    await prompt()
+
+    expect(mocks.invoke).not.toHaveBeenCalled()
+    const [row] = botRows()
+    expect(row).toMatchObject({ botName: 'ghost', displayName: 'ghost', isError: true })
+    expect(row.content).toBe('bot.botGone')
+    expect(mocks.t).toHaveBeenCalledWith('bot.botGone', { name: 'ghost' })
+    expect(projected(row.id).metadata).toMatchObject({
+      botFailure: true,
+      sender: { name: 'ghost', displayName: 'ghost' }
     })
-    expect(inputs.get('hunter')?.session).toMatchObject({
-      others: ['Scout: unit bot scout', 'Ranger: unit bot ranger']
-    })
-    for (const input of inputs.values()) {
-      expect(JSON.stringify(input.session)).not.toContain('undefined')
-    }
   })
 })

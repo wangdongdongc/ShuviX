@@ -31,7 +31,7 @@ export interface VisibleItem {
   msgs?: AssistantMessage[]
   /** 该组末尾是流式占位卡 */
   isStreamingPlaceholder?: boolean
-  /** 群聊气泡：上一项也是同一个 bot 说的 —— 合并头部，只留气泡 */
+  /** bot 气泡：上一项也是同一个 bot 说的 —— 合并头部，只留气泡 */
   mergeHeader?: boolean
 }
 
@@ -126,7 +126,7 @@ function MessageBody({
 
   if (msg.role !== 'assistant' || !item.msgs) return null
 
-  // 群聊会话：bot 的发言是群里的另一个人，不是助手卡。
+  // 聊天会话：bot 的发言是对面的那个人，不是助手卡。
   // 判据是 metadata.sender —— 只有聊天会话的消息带它（有根会话的助手消息永远没有）。
   if (msg.metadata?.sender) {
     return <BotBubble msg={msg} mergeHeader={item.mergeHeader} />

@@ -31,10 +31,6 @@ export const chatMessageDao = {
   findAfterSeq(sessionId: string, seq: number): ChatMessageRow[] {
     return chatMessageDao.findBySession(sessionId).filter((r) => r.seq > seq)
   },
-  findLastBot(sessionId: string): ChatMessageRow | undefined {
-    const bots = chatMessageDao.findBySession(sessionId).filter((r) => r.authorKind === 'bot')
-    return bots.length ? bots[bots.length - 1] : undefined
-  },
   findById(id: string): ChatMessageRow | undefined {
     return rows.find((r) => r.id === id)
   },

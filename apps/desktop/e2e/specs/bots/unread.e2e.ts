@@ -7,8 +7,8 @@
  * 渲染端 useSessionInit 上，只测 IPC 建法等于没测「UI 建出来就已激活」那半边。
  *
  * 回复语料全程零 LLM：`a4-unread-probe` 参数化管线（preSayMs 撑出「发出去、人走了」的窗口）。
- * v3 没有开场白，所以「不激活的会话长未读」（16）的 +2 由两个即答探针成员对同一条消息
- * 各答一句得来，而不是建会话时播两句 —— 账本记的是 bot 消息落库，来源无关。
+ * 没有开场白，会话又是一对一的，所以「不激活的会话长未读」（16）的 +2 由同一个即答探针 bot
+ * 答两条消息得来，而不是建会话时播两句 —— 账本记的是 bot 消息落库，来源无关。
  *
  * 双断纪律：先 IPC（session.getById 的 settings.unreadCount / updatedAt）后 DOM
  * （sidebarPane.rowUnread 的 data-unread 徽标 + 标题加粗）。
@@ -61,7 +61,7 @@ interface SessionShot {
   title: string
   createdAt: number
   updatedAt: number
-  settings: { bots?: string[]; unreadCount?: number | null }
+  settings: { bot?: string; unreadCount?: number | null }
 }
 
 const getSession = (sid: string): Promise<SessionShot> =>
@@ -116,12 +116,6 @@ beforeAll(async () => {
     pipeline: PROBE,
     botInput: { sayLine: '快答一句' }
   })
-  writeBotMd(app, 'u-quick2', {
-    description: 'second instant replier',
-    displayName: 'Quick2',
-    pipeline: PROBE,
-    botInput: { sayLine: '我也快答一句' }
-  })
   writeBotMd(app, 'u-slow', {
     description: 'slow replier',
     displayName: 'Slow',
@@ -137,13 +131,14 @@ afterAll(async () => {
 
 describe('未读账本（IPC 直建路径）', () => {
   // A4-16
-  it('IPC 直建双即答成员会话（不激活）：一条消息两条回复 → 未读=2、行徽标 + 标题加粗、updatedAt 被同一笔账触碰', async () => {
-    sid16 = await createBotSession(app.main, { bots: ['u-quick', 'u-quick2'], title: 'A4-U16' })
-    // v3：新会话零条消息、零未读 —— 账从第一条 bot 回复才开始记
+  it('IPC 直建即答 bot 会话（不激活）：两条消息两条回复 → 未读=2、行徽标 + 标题加粗、updatedAt 被同一笔账触碰', async () => {
+    sid16 = await createBotSession(app.main, { bot: 'u-quick', title: 'A4-U16' })
+    // 新会话零条消息、零未读 —— 账从第一条 bot 回复才开始记
     expect(await unreadOf(sid16)).toBe(0)
 
-    // 会话没被打开：两个成员各答一句，两笔账都没人清
-    await prompt(sid16, '两位报到')
+    // 会话没被打开：同一个 bot 答两条（prompt 直到回复落库才 resolve），两笔账都没人清
+    await prompt(sid16, '报到')
+    await prompt(sid16, '再报一次')
     await until(async () => (await assistantCount(sid16)) === 2, 'both replies landed')
 
     // IPC 先行：两条回复各记一笔
@@ -187,14 +182,14 @@ describe('未读账本（IPC 直建路径）', () => {
 
 describe('未读账本（侧栏 UI 全流程）', () => {
   // A4-19（含 A4-32 的一半：有消息之后不出空态 —— 断在 members spec 的 24 号）
-  it('对话框勾选即答成员创建：创建即激活，回复落库后未读归 0、行无徽标', async () => {
+  it('对话框点选即答 bot 创建：创建即激活，回复落库后未读归 0、行无徽标', async () => {
     // 16 号用例的会话住在临时组 —— 组头已存在
     await sidebar.clickNewBotChat('temp')
     await dialog.waitOpen()
-    expect(await dialog.toggle('u-quick')).toBe(true)
 
     const created = await newSessionsAfter(async () => {
-      await dialog.create()
+      // 单选：点行即创建，对话框自关
+      expect(await dialog.pick('u-quick')).toBe(true)
       await dialog.waitClosed()
     })
     expect(created).toHaveLength(1)
@@ -214,7 +209,7 @@ describe('未读账本（侧栏 UI 全流程）', () => {
 describe('未读账本（管线回复路径）', () => {
   // A4-20
   it('活跃即到即读：开着的 probe 会话说一句，回复落库后未读归 0（全程不切会话）', async () => {
-    const sid = await createBotSession(app.main, { bots: ['u-quick'], title: 'A4-U20' })
+    const sid = await createBotSession(app.main, { bot: 'u-quick', title: 'A4-U20' })
     await until(async () => (await sidebar.titles()).includes('A4-U20'), 'row listed')
     expect(await sidebar.openSession('A4-U20')).toBe(true)
     await chat.ready()
@@ -230,7 +225,7 @@ describe('未读账本（管线回复路径）', () => {
 
   // A4-21
   it('发消息趁 preSay 窗切走：say 后原会话长徽标并浮到切走目的地之上；切回清零', async () => {
-    const sid = await createBotSession(app.main, { bots: ['u-slow'], title: 'A4-U21' })
+    const sid = await createBotSession(app.main, { bot: 'u-slow', title: 'A4-U21' })
     await until(async () => (await sidebar.titles()).includes('A4-U21'), 'row listed')
     expect(await sidebar.openSession('A4-U21')).toBe(true)
     await chat.ready()

@@ -1,3 +1,4 @@
+import { isChatSessionSettings } from '@shuvix/chat-protocol/chatSession'
 import { getHostApi, getSessionChannelApi, useChatHost } from '@shuvix/chat-ui'
 import { DEFAULT_THINKING_LEVEL } from '@shuvix/chat-protocol/types/thinking'
 import { useEffect } from 'react'
@@ -32,7 +33,7 @@ export function useSessionInit(activeSessionId: string | null): void {
       // 服务端幂等；有根会话不维护未读，不发这趟 IPC
       {
         const s = useChatStore.getState().sessions.find((x) => x.id === activeSessionId)
-        if (s?.settings?.bots?.length && (s.settings.unreadCount ?? 0) > 0) {
+        if (isChatSessionSettings(s?.settings) && (s?.settings?.unreadCount ?? 0) > 0) {
           void getHostApi()?.session.markRead?.(activeSessionId)
         }
       }

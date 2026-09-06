@@ -87,7 +87,7 @@ function makeMailbox(): Harness {
     onEvent: (key, kind, item, detail) => events.push({ key, kind, item, detail }),
     onChange: (key) => changes.push(key)
   })
-  return { mb, clock, events, changes, key: mailboxKey('s1', 'bot') }
+  return { mb, clock, events, changes, key: mailboxKey('s1') }
 }
 
 function item(seq: number, suffix = ''): QueueItem {
@@ -455,9 +455,9 @@ describe('selfReplied', () => {
 describe('abortSession / lane 生命周期', () => {
   it('只清本会话的 lane（s1 不误伤 s10）', async () => {
     const { mb } = makeMailbox()
-    const k1 = mailboxKey('s1', 'bot')
-    const k10 = mailboxKey('s10', 'bot')
-    const k2 = mailboxKey('s2', 'bot')
+    const k1 = mailboxKey('s1')
+    const k10 = mailboxKey('s10')
+    const k2 = mailboxKey('s2')
     for (const [i, k] of [k1, k10, k2].entries()) {
       await mb.acquireBare(k, item(i * 10 + 1))
     }

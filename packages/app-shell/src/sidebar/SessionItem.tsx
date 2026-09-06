@@ -27,7 +27,7 @@ export interface SessionItemProps {
   dim?: boolean
   /** 笔记本会话（绑定 md 文件）—— 显示笔记本图标，选中后中间区为 live-preview */
   isNotebook?: boolean
-  /** 聊天会话（settings.bots 非空）—— 显示 bot 图标；与 isNotebook 互斥（创建时定死） */
+  /** 聊天会话（绑定了 bot）—— 显示 bot 图标；与 isNotebook 互斥（创建时定死） */
   isBot?: boolean
   /** 聊天会话的未读 bot 回复数（A4）：>0 时标题加粗 + accent 计数徽标 */
   unreadCount?: number

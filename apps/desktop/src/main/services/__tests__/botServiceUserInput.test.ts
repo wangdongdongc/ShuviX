@@ -69,6 +69,7 @@ vi.mock('../../utils/paths', () => ({
 vi.mock('../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {} })
 }))
+vi.mock('../../i18n', () => ({ t: (key: string) => key }))
 vi.mock('../agentRuntimeAdapters', () => ({
   electronEventSink: { broadcast: mocks.broadcast }
 }))
@@ -129,7 +130,7 @@ function peek<T>(p: Promise<T>): Promise<T | typeof PENDING> {
 }
 
 /**
- * 一份最小可用的 bot 定义 —— 只为让 L0 组得出 cohort，好让管线真的飞起来。
+ * 一份最小可用的 bot 定义 —— 只为让派发找得到它，好让管线真的飞起来。
  * 管线绑定块（`workflow` 必填、没有缺省）是「最小」的一部分：缺了它文件整份非法，成员就不在册。
  */
 function writeBot(
@@ -181,7 +182,7 @@ beforeEach(() => {
   mocks.invoke.mockResolvedValue({ started: false, reason: 'not-found' })
   mocks.broadcast.mockReset()
   mocks.getById.mockReset()
-  mocks.getById.mockReturnValue({ workingDirectory: dirs.sessions, settings: { bots: ['scout'] } })
+  mocks.getById.mockReturnValue({ workingDirectory: dirs.sessions, settings: { bot: 'scout' } })
   mocks.isBotSession.mockReset()
   mocks.isBotSession.mockReturnValue(true)
   mocks.hasCapability.mockReset()
@@ -369,6 +370,7 @@ describe('abortSession —— 在飞询问的收口', () => {
   })
 
   it('下一条用户消息重新开门 —— 中止只该管住那一轮', async () => {
+    writeBot('scout')
     await botService.abortSession(SID)
     await botService.handleUserMessage({ sessionId: SID, text: '再来一次' })
     mocks.broadcast.mockClear()

@@ -116,8 +116,8 @@ beforeEach(() => {
 const err = (r: unknown): string => (r as { error: string }).error
 
 describe('准入 —— 谁能开子会话', () => {
-  it('群聊会话拒绝（它没有根 agent，开子会话不表达任何东西）', async () => {
-    mocks.pick.mockReturnValue({ settings: { bots: ['a'] }, parentId: null })
+  it('聊天会话拒绝（它没有根 agent，开子会话不表达任何东西）', async () => {
+    mocks.pick.mockReturnValue({ settings: { bot: 'a' }, parentId: null })
     expect(err(await runner.create(PARENT, {}))).toMatch(/Chat sessions/)
     expect(err(runner.list(PARENT))).toMatch(/Chat sessions/)
     expect(mocks.create).not.toHaveBeenCalled()

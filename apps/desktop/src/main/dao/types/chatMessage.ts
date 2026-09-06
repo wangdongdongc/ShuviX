@@ -1,7 +1,7 @@
 /**
  * 群聊会话的消息行（表 `chat_messages`，迁移 v16）。
  *
- * 只服务**聊天会话**（`settings.bots` 非空的无根会话）；有根会话的转写仍在 JSONL 会话树里。
+ * 只服务**聊天会话**（绑定了 bot 的无根会话，见 chat-protocol `chatSession.ts`）；有根会话的转写仍在 JSONL 会话树里。
  * 一个会话在创建那一刻就定死是哪一种，两套存储互斥不相交。
  *
  * 为什么是表而不是会话树：群聊消息是**平的** —— 没有分叉、没有工具块/思考块、没有压缩
@@ -37,7 +37,10 @@ export interface ChatMessageRow {
   displayName?: string
   /** markdown：模型可见的唯一权威（结构化回复由 botReplyToMarkdown 投影而来） */
   content: string
-  /** 意图段判定（reply / task / clarify）—— clarify 回连的判定材料 */
+  /**
+   * 意图段判定（reply / task / clarify）。曾是群聊里 clarify 回连的判定材料；一对一里
+   * 每条消息本就说给这个 bot，没有读它的路径了 —— 写侧照旧记着（journal 的交叉材料）。
+   */
   decision?: string
   /** BotReply 结构化原文，仅供 UI 双形态渲染 */
   reply?: string

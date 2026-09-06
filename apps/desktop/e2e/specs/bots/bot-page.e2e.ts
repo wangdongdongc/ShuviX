@@ -66,18 +66,15 @@ const idsOf = (items: MenuItemShot[] | null): string[] =>
 interface SessionRow {
   id: string
   title: string
-  settings?: { bots?: string[] }
+  settings?: { bot?: string; bots?: string[] }
 }
 const listSessions = (): Promise<SessionRow[]> => app.main.eval(`window.api.session.list()`)
 
-/** 等 session.list 里长出成员名单恰为 [name] 的那条会话 */
+/** 等 session.list 里长出绑定了 name 的那条聊天会话（一对一：`settings.bot` 一个名字） */
 const findBotSession = (name: string): Promise<SessionRow> =>
   until(
-    async () =>
-      (await listSessions()).find(
-        (s) => JSON.stringify(s.settings?.bots) === JSON.stringify([name])
-      ) ?? null,
-    `bot session with settings.bots=["${name}"]`
+    async () => (await listSessions()).find((s) => s.settings?.bot === name) ?? null,
+    `bot session with settings.bot=${name}`
   )
 
 /** `shuvixMd.botPipelineOptions` 的形状（与 chat-protocol BotPipelineOptions 对齐，只声明本 spec 读的字段） */
@@ -756,14 +753,15 @@ describe('主窗 Bot 档案页', () => {
 
   // 新建会话的两个用例（C12 / M6）都从「档案页开着 = 没有任何活动会话」出发：之后唯一能被
   // 激活的就是刚建出来的那条，所以哪怕它顶着与别的会话相同的缺省标题，activeTitle 也不会认错。
-  it('C12 新建会话：data-bot-new-session → session.list 长出 settings.bots=[该 bot] 的会话，它成为主窗活动会话、档案页让位', async () => {
+  it('C12 新建会话：data-bot-new-session → session.list 长出 settings.bot=<bot> 的会话，它成为主窗活动会话、档案页让位', async () => {
     await pane.selectRow('zeta-bot')
     expect((await pane.editor()).newSessionPresent).toBe(true)
     expect(await sidebar.activeTitle()).toBe('')
     await pane.clickNewSession()
 
-    // IPC 断：会话真的建出来，成员名单恰为这个 bot
+    // IPC 断：会话真的建出来，绑定的正是这个 bot（一对一：没有群聊时代的 bots 名单）
     const session = await findBotSession('zeta-bot')
+    expect(session.settings?.bots).toBeUndefined()
     // 主窗侧：档案页关了，新会话是活动行（带 bot 图标）
     await until(async () => !(await pane.editor()).present, 'bot page left for the new session')
     await until(
@@ -774,12 +772,13 @@ describe('主窗 Bot 档案页', () => {
     expect((await pane.rows()).some((r) => r.selected)).toBe(false)
   })
 
-  it('M6 行菜单「新建 Bot 会话」：session.list 长出 settings.bots=[该 bot] 的会话并成为活动会话（档案页让位）', async () => {
+  it('M6 行菜单「新建 Bot 会话」：session.list 长出 settings.bot=<bot> 的会话并成为活动会话（档案页让位）', async () => {
     await pane.selectRow('alpha-bot')
     expect(await sidebar.activeTitle()).toBe('')
     await pane.pickRowMenu('alpha-bot', 'new-bot-chat')
 
     const session = await findBotSession('alpha-bot')
+    expect(session.settings?.bots).toBeUndefined()
     await until(async () => !(await pane.editor()).present, 'bot page left for the new session')
     await until(
       async () => (await sidebar.activeTitle()) === session.title,

@@ -1,5 +1,6 @@
 /**
- * mailbox lane（设计 §5.6）—— **一个 bot 在一个会话里一次只做一件事，按消息到达的次序**。
+ * mailbox lane（设计 §5.6）—— **一个会话里一次只做一件事，按消息到达的次序**。
+ * 会话是一对一的（一个会话绑定一个 bot），所以一个会话就是一条 lane，键即 sessionId。
  *
  * 它与引擎的重入策略是**两个粒度**：引擎重入管「要不要起 run」（run 级），mailbox 管
  * 「已经在跑的 run 什么时候进入独占临界区」（run 内）。内置管线因此声明
@@ -114,9 +115,9 @@ export interface MailboxSnapshot {
   queued: Array<{ messageSeq: number; messageId: string; queuedAt: number }>
 }
 
-/** lane 键 —— 宿主自己的键空间，与引擎的 laneKey 无关 */
-export function mailboxKey(sessionId: string, botName: string): string {
-  return `${sessionId}\u0000${botName}`
+/** lane 键 —— 宿主自己的键空间，与引擎的 laneKey 无关。一个会话一条 lane，键就是 sessionId */
+export function mailboxKey(sessionId: string): string {
+  return sessionId
 }
 
 export class BotMailbox {
@@ -235,11 +236,10 @@ export class BotMailbox {
     }
   }
 
-  /** 会话被中止：该会话全部 lane 的等待者立即失败 */
+  /** 会话被中止：该会话 lane 的等待者立即失败 */
   abortSession(sessionId: string): void {
-    const prefix = `${sessionId}\u0000`
     for (const [key, lane] of [...this.lanes]) {
-      if (!key.startsWith(prefix)) continue
+      if (key !== mailboxKey(sessionId)) continue
       for (const w of lane.queue.splice(0)) {
         if (w.timer) this.clearTimer(w.timer)
         this.deps.onEvent?.(key, 'mailbox_aborted', w.item)
@@ -311,10 +311,10 @@ export class BotMailbox {
     return lane
   }
 
-  /** 空 lane 即删条目 —— 键含 sessionId+botName，留 0 值条目会真的长起来 */
+  /** 空 lane 即删条目 —— 键是 sessionId，留 0 值条目会随会话数长起来 */
   private gc(key: string, lane: Lane): void {
     // 判据是「这条道闲下来了」，**不含 repliedSeqs** —— `releaseByTicket` 每次都会往里加一条，
-    // 把它算进条件等于让 lane 永远删不掉（键含 sessionId+botName，会真的长起来）。
+    // 把它算进条件等于让 lane 永远删不掉（键是 sessionId，会随会话数长起来）。
     //
     // 连同 repliedSeqs 一起丢掉是对的：`selfReplied` 要回答的是「**我排队等着的这段时间里**，
     // 我自己是不是已经答过话了」—— 而闲道意味着下一个请求根本没排队，那个问题无从谈起。

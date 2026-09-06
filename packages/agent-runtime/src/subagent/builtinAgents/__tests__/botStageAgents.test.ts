@@ -94,16 +94,16 @@ describe('bot 门控段 agent —— 结构钉板', () => {
   it.each(LANGS)(
     'BA-9 bot-intent.%s：意图契约的枚举词汇在正文里都在场，退役字段一个不剩',
     (language) => {
-      // 结构化输出的枚举值不能被翻译掉 —— 正文若把 `reply`/`ignore` 译成本地词，
+      // 结构化输出的枚举值不能被翻译掉 —— 正文若把 `reply`/`clarify` 译成本地词，
       // 模型写出的判决就对不上结果契约。
       const prompt = build(BOT_INTENT_SPEC, language).systemPrompt
-      for (const token of ['reply', 'task', 'clarify', 'ignore']) {
+      for (const token of ['reply', 'task', 'clarify']) {
         expect(prompt, `bot-intent.${language} 缺 ${token}`).toContain(token)
       }
-      // 反向：`relevance` 评分与 `memorable` 标记已从 intent / intentSolo 契约里删掉
-      // （笔记场合没了，「值不值得记」不再是门控要答的问题）。正文若还教模型填它们，
+      // 反向：`relevance` 评分与 `memorable` 标记已从 intent 契约里删掉（笔记场合没了），
+      // `ignore` 随群聊退役（一对一里每条消息都是说给这个 bot 的）。正文若还教模型填它们，
       // 模型会在契约里找一个不存在的字段 —— 轻则被 typebox 纠错一轮，重则整段判决作废
-      for (const gone of ['memorable', 'relevance']) {
+      for (const gone of ['memorable', 'relevance', 'ignore']) {
         expect(prompt, `bot-intent.${language} 仍提到退役字段 ${gone}`).not.toContain(gone)
       }
     }

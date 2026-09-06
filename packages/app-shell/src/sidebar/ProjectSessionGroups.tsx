@@ -1,3 +1,4 @@
+import { isChatSessionSettings } from '@shuvix/chat-protocol/chatSession'
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useChatStore, selectAllPendingCounts, type Session } from '@shuvix/chat-ui'
@@ -288,7 +289,7 @@ export function ProjectSessionGroups({
               pendingCount={pendingCounts[item.id]}
               dim={dim && activeGroupKey === groupKey && activeSessionId !== item.id}
               isNotebook={!!item.settings.notebookPath}
-              isBot={!!item.settings.bots?.length}
+              isBot={isChatSessionSettings(item.settings)}
               unreadCount={item.settings.unreadCount}
               autoAllow={item.settings.autoAllow === true}
               isPinned={caps.pin ? pinnedSessionIds?.has(item.id) : undefined}

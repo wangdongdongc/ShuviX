@@ -23,16 +23,17 @@ interface SessionTriggerBase {
   sessionId: string
   /**
    * 会话根 Agent 当前档案名。**聊天会话没有根 Agent，这里是空串** —— 要区分两种会话
-   * 看下面的 `bots`，别拿这个字段的真假去猜
+   * 看下面的 `bot`，别拿这个字段的真假去猜
    */
   profileName: string
   /**
-   * 聊天会话的成员名单（`settings.bots`）；有根会话不带这个键。
+   * 聊天会话绑定的 bot 名（`settings.bot`）；有根会话不带这个键。聊天会话**恒带**这个键 ——
+   * 尚未绑定 bot 的遗留会话带的是空串。
    *
    * 埋点因此对两种会话都触发，用户工作流可以旁观聊天会话里发生的事 —— 而想只管一种的
-   * 工作流用 `has(event.bots)` 一句 CEL 就能分开。缺席即「这是一条有根会话」。
+   * 工作流用 `has(event.bot)` 一句 CEL 就能分开。缺席即「这是一条有根会话」。
    */
-  bots?: string[]
+  bot?: string
   /** 会话当前标题 */
   title: string
   /** 标题是否仍是通用默认值（宿主按当前语言的默认标题判定；笔记本会话不经这些埋点） */

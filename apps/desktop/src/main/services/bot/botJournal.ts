@@ -1,8 +1,8 @@
 /**
  * bot 的决策记录（设计 §9「可观测性与失败呈现」）。
  *
- * 回答的是**「这个 bot 为什么没说话」** —— 一条消息进来之后，每个成员各自经历了什么：
- * 被提及了没有、意图判成什么、在 mailbox 里排了多久、最后收尾是什么结局。
+ * 回答的是**「这个 bot 为什么没说话」** —— 一条消息进来之后，这个 bot 经历了什么：
+ * 意图判成什么、在 mailbox 里排了多久、最后收尾是什么结局。
  *
  * 落点 `~/.shuvix/bots/.runs/<bot>/decisions.jsonl`，与该 bot 的 run journal 同目录
  * （`<runId>.jsonl` 由 workflowService 的重定向写进来）。**按 bot 分目录而不是按会话**：
@@ -26,11 +26,6 @@ const DECISIONS_KEEP_LINES = 5000
 const DECISIONS_CHECK_EVERY = 200
 
 export type BotDecisionKind =
-  // L0（这几种根本不产生 run）
-  | 'l0_directed'
-  | 'l0_clarify_relink'
-  | 'l0_member_missing'
-  | 'cohort_formed'
   // 派发
   | 'pipeline_not_found'
   | 'pipeline_invalid_input'

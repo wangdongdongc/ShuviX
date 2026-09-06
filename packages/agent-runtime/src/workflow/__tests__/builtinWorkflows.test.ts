@@ -264,28 +264,27 @@ describe('bot-chat — 骨架管线的结构钉板', () => {
     expect(botChat().concurrency).toBe('parallel')
   })
 
-  it('四个契约块齐全且都是 type:object（M5′/M8′ 直接消费，此刻已是最终形态）', () => {
+  it('三个契约块齐全且都是 type:object（M5′/M8′ 直接消费，此刻已是最终形态）', () => {
     const schemas = botChat().schemas
-    expect(Object.keys(schemas).sort()).toEqual(['intent', 'intentDirected', 'recheck', 'reply'])
+    expect(Object.keys(schemas).sort()).toEqual(['intent', 'recheck', 'reply'])
     for (const [name, schema] of Object.entries(schemas)) {
       expect((schema as { type?: string }).type, name).toBe('object')
     }
   })
 
-  it('intent 有 ignore、intentDirected 没有 —— 点了名还沉默，与坏掉分不开', () => {
+  it('intent 没有 ignore —— 一对一会话里每条消息都是说给这个 bot 的，沉默不在契约上', () => {
     const enumOf = (n: string): string[] =>
       (botChat().schemas[n] as Record<string, Record<string, Record<string, string[]>>>).properties
         .decision.enum ?? []
-    expect(enumOf('intent')).toContain('ignore')
-    expect(enumOf('intentDirected')).not.toContain('ignore')
+    expect(enumOf('intent')).toEqual(['reply', 'task', 'clarify'])
+    // 群聊时代的第二份契约（点名版）随 directed 一起退役
+    expect(botChat().schemas.intentDirected).toBeUndefined()
     // task 一旦给出必带 objective：脚本以 `intent.task || { objective: intent.reason }` 回落，
     // 一个没有 objective 的空 task 对象会让任务段拿到一个没有目标的活
-    for (const name of ['intent', 'intentDirected']) {
-      const task = (
-        botChat().schemas[name] as { properties: Record<string, { required?: string[] }> }
-      ).properties.task
-      expect(task.required, name).toEqual(['objective'])
-    }
+    const task = (
+      botChat().schemas.intent as { properties: Record<string, { required?: string[] }> }
+    ).properties.task
+    expect(task.required).toEqual(['objective'])
   })
 
   it('脚本一律读 input.* —— 脚本作用域不平铺 input（裸名是 ReferenceError）', () => {
@@ -296,14 +295,14 @@ describe('bot-chat — 骨架管线的结构钉板', () => {
       'agents.intent',
       'agents.task',
       'agents.recheck',
-      'session.directed',
       'message.attachments'
     ]) {
       expect(script, field).toContain(`input.${field}`)
     }
-    // 其它成员的身份只进提示词（{{session.others}} 在 others 块里）—— 脚本连碰都不碰
-    expect(script).not.toContain('session.others')
-    expect(botChat().prompts.others).toContain('{{session.others}}')
+    // 群聊时代的成员语义一个都不再读：directed（点名）/ members / others（其它成员）
+    for (const gone of ['session.directed', 'session.members', 'session.others']) {
+      expect(script, gone).not.toContain(gone)
+    }
     // 退役的入参一个都不再读：occasion（场合分流）/ notes / since（笔记材料）——
     // 笔记场合没了，bot 的档案经 systemContext 进系统提示词，脚本连碰都不碰
     for (const gone of ['occasion', 'notes', 'since']) {
@@ -337,13 +336,11 @@ describe('bot-chat — 骨架管线的结构钉板', () => {
 
   it('脚本里每个 prompt(…) 用到的块名都真有对应的块（改名漏一处 = 运行时抛）', () => {
     const wf = botChat()
-    // 第一个实参可能是三元（`directed ? 'gateDirected' : 'gate'`）：收集实参表达式里的全部字符串字面量
+    // 收集实参表达式里的全部字符串字面量（第一个实参若是表达式也能一并收进来）
     const used = [...wf.script.matchAll(/prompt\(([^,)]+)/g)].flatMap((m) =>
       [...m[1].matchAll(/'([A-Za-z][\w-]*)'/g)].map((n) => n[1])
     )
-    expect(new Set(used)).toEqual(
-      new Set(['gate', 'gateDirected', 'recheck', 'recheckSkipped', 'task'])
-    )
+    expect(new Set(used)).toEqual(new Set(['gate', 'recheck', 'recheckSkipped', 'task']))
     for (const name of new Set(used)) {
       expect(Object.keys(wf.prompts), name).toContain(name)
     }
@@ -352,15 +349,15 @@ describe('bot-chat — 骨架管线的结构钉板', () => {
   it('可选上下文是被引用的块（{{>name}}），标题住在块里，脚本不再预拼 xxxBlock', () => {
     // 被引用的块占位符全空即整块消失（promptTemplate）——「有内容才出现的一段」直接住在 md 里
     const wf = botChat()
-    expect(wf.prompts.gate).toContain('{{>others}}')
     expect(wf.prompts.gate).toContain('{{>window}}')
     expect(wf.prompts.task).toContain('{{>window}}')
     expect(wf.prompts.task).toContain('{{>since}}')
     expect(wf.prompts.task).toContain('{{>boundaries}}')
     expect(wf.prompts.recheck).toContain('{{>since}}')
-    // 点名版门控 = 通用门控 + 一段说明，而不是第二份门控提示词
-    expect(wf.prompts.gateDirected).toContain('{{>gate}}')
-    for (const titled of ['others', 'window', 'since', 'boundaries']) {
+    // 群聊时代的两个块（点名说明 / 其它成员）退役：一对一没有「别人」，也没有「点名」
+    expect(wf.prompts.gateDirected).toBeUndefined()
+    expect(wf.prompts.others).toBeUndefined()
+    for (const titled of ['window', 'since', 'boundaries']) {
       expect(wf.prompts[titled], titled).toContain('##')
     }
     for (const gone of [
@@ -462,8 +459,8 @@ describe('bot-chat —— 任务段与 BotReply 的结构钉板', () => {
       expect(i, marker).toBeGreaterThanOrEqual(0)
       return i
     }
-    const gateCall = script.slice(at('1 ── Intent'), at('2 ── Not for this bot'))
-    const taskCall = script.slice(at('5 ── The task agent'))
+    const gateCall = script.slice(at('1 ── Intent'), at('2 ── Answerable in one line'))
+    const taskCall = script.slice(at('4 ── The task agent'))
     expect(gateCall).toContain('tools: []')
     expect(taskCall).not.toContain('tools:')
     expect(taskCall).toContain('schema: schemas.reply')
@@ -515,7 +512,7 @@ describe('bot-chat —— 任务段与 BotReply 的结构钉板', () => {
     expect(schema.properties.agents.type).toBe('object')
     expect(schema.properties.agents.required).toEqual(['intent', 'task'])
     expect(Object.keys(schema.properties.agents.properties!)).toEqual(['intent', 'task', 'recheck'])
-    expect(schema.properties.session.required).toEqual(['id', 'directed', 'members'])
+    expect(schema.properties.session.required).toEqual(['id'])
     expect(schema.properties.message.required).toEqual(['id', 'text'])
     expect(schema.properties.window.type).toBe('array')
     // 退役入参不在 schema 里
