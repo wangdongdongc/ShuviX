@@ -19,9 +19,14 @@
 import { chatGateway } from '../frontend/core'
 import { sessionService } from './sessionService'
 import { messageService } from './messageService'
-import { appendModelChange } from './sessionStorage'
+import {
+  appendModelChange,
+  appendThinkingLevelChange,
+  appendActiveToolsChange
+} from './sessionStorage'
 import { sessionDao } from '../dao/sessionDao'
 import { isChatSessionSettings } from '@shuvix/chat-protocol/chatSession'
+import type { SubAgentModelConfig } from '@shuvix/agent-runtime'
 import { createLogger } from '../logger'
 
 const log = createLogger('SubSession')
@@ -190,9 +195,16 @@ class SubSessionRunner {
   // ─── 创建 ──────────────────────────────────────
 
   /**
-   * 建一条子会话。projectId 恒随父会话（工作目录是会话的地基）；父会话**当前**的模型
-   * 作为种子写进子会话树 —— 不种就会回落全局默认，「我用 opus 干活、我开的子会话掉回
-   * 默认模型」是纯粹的意外。
+   * 建一条子会话。
+   *
+   * **子会话继承父会话此刻的整套设置**：projectId（工作目录是会话的地基）、模型、
+   * 思考档位、mcp:/skill: 勾选，以及免询问开关（后者在 `sessionService.create`，
+   * 它是 settings 一列；其余三项是会话树上的 change entry，在这里种）。不继承就会
+   * 回落全局默认 ——「我用 opus 开着这套 MCP 干活、我开的子会话掉回默认模型、
+   * 一个 skill 都没有」是纯粹的意外，而它跟父级在同一个目录里干同一件事。
+   *
+   * 唯一压过继承的是**档案自己的声明**（更具体的意图）：`shuvix-model` 定了模型就用它，
+   * `shuvix-tools` 里列了 mcp:/skill: 就用它那套。档案没声明 = 没有意见，继承父会话。
    *
    * 标题由父级给 ⇒ 记 `titleOrigin: 'user'`：那是一次刻意命名，auto-title 的 refine
    * 阶段不该覆盖它。父级不给 ⇒ 留默认标题，auto-title 照常接管。
@@ -221,29 +233,53 @@ class SubSessionRunner {
     if (title) sessionService.updateTitle(session.id, title, 'user')
 
     // 档案：父级点名则用它（准入与 /<agent> 切换同源 —— 未声明会话感知的档案照样被拒），
-    // 否则跟随父会话当前档案。与 `create` 刚按会话形态落下的默认档案相同就不必再切一次：
-    // updateAgentProfile 会连带把 mcp:/skill: 勾选替换成档案声明的那套，而对一条还没有
-    // 任何工具变更 entry 的新会话来说，那等于把默认工具集清空
+    // 否则跟随父会话当前档案。与 `create` 刚按会话形态落下的默认档案相同就不必再切一次
+    // （空切一次只是白走一遍失效 + 广播）。切了的那次会把 mcp:/skill: 勾选替换成档案声明的
+    // 那套，紧接着的 seedRunConfig 负责在档案没声明时把父会话那套补回去
     const stamped = sessionDao.pickSettings(session.id, ['agentProfile'])?.agentProfile
     const profileName =
       params.agentProfile?.trim() || sessionService.resolveAgentProfileName(parentId)
-    let profileSeededModel = false
+    let declared: { model?: SubAgentModelConfig; tools: string[] } | undefined
     if (profileName && profileName !== stamped) {
       const applied = await sessionService.updateAgentProfile(session.id, profileName)
-      if (applied.success) profileSeededModel = !!applied.applied?.model
+      if (applied.success) declared = applied.applied
       // 档案不合法不该让整个创建失败：会话已经建好且可用（回落 default），记日志即可
       else log.warn(`子会话 ${session.id} 档案 "${profileName}" 未生效: ${applied.error}`)
     }
-
-    // 模型种子：父会话**当前**的模型。不种就会回落全局默认 ——「我用 opus 干活、
-    // 我开的子会话掉回默认模型」是纯粹的意外。档案自己声明了模型则以档案为准（更具体的意图）
-    if (!profileSeededModel) {
-      const parentModel = await sessionService.resolveRunModelConfig(parentId)
-      if (parentModel) await appendModelChange(session.id, parentModel.provider, parentModel.model)
-    }
+    await this.seedRunConfig(parentId, session.id, declared)
 
     log.info(`create sub-session ${session.id} parent=${parentId} profile=${profileName ?? '-'}`)
     return { id: session.id, title: sessionDao.pick(session.id, ['title'])?.title ?? session.title }
+  }
+
+  /**
+   * 把父会话此刻的运行配置作为种子写进子会话树：模型 / 思考档位 / mcp:/skill: 勾选。
+   *
+   * 抄的是**解析后**的值（`resolveRunConfig`）而不是「树上显式改过的那些」：父会话大多数
+   * 键根本没显式改过，只抄显式值等于什么也没继承 —— 而「回落默认」在子会话身上并不等价，
+   * 档案切换那一步（`updateAgentProfile`）已经把工具勾选显式写成了档案声明的那套。
+   *
+   * `declared` 是档案声明的那部分（档案切换生效时才有），它压过继承 —— 更具体的意图。
+   * 但**空的工具声明不算意见**：内置 coding / explore 之流的 `shuvix-tools` 只列内置工具，
+   * 按「完整声明」解读就等于把项目的 MCP 与 skill 从每一条子会话上摘掉，而那从来不是
+   * 档案作者在那一行里表达的东西（与 `/<agent>` 切换的口径刻意不同：那是用户在一条已经
+   * 跑着的会话上换人格，这里是给一条空会话铺开父级的工作环境）。
+   */
+  private async seedRunConfig(
+    parentId: string,
+    childId: string,
+    declared?: { model?: SubAgentModelConfig; tools: string[] }
+  ): Promise<void> {
+    const parent = await sessionService.resolveRunConfig(parentId)
+    if (!parent) return
+    if (!declared?.model && parent.model) {
+      await appendModelChange(childId, parent.model.provider, parent.model.model)
+    }
+    // 思考档位没有档案声明这一路，恒随父会话
+    await appendThinkingLevelChange(childId, parent.thinkingLevel)
+    if (!declared?.tools.length && parent.enabledTools.length) {
+      await appendActiveToolsChange(childId, parent.enabledTools)
+    }
   }
 
   // ─── 驱动 ──────────────────────────────────────

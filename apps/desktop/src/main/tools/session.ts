@@ -99,7 +99,7 @@ A sub-session is an ordinary session that you own: it has its own conversation, 
 
 Actions:
 - "set-title": rename THIS session. Pass the new title in \`title\` (concise, at most ${TITLE_MAX_CHARS} characters).
-- "create-sub-session": start a sub-session and return its id. Optional \`title\` and \`agent_profile\`. It inherits this session's project and model, and starts out empty — creating one sends it nothing.
+- "create-sub-session": start a sub-session and return its id. Optional \`title\` and \`agent_profile\`. It inherits this session's setup — project, model, thinking level and the MCP servers and skills you have here — and starts out empty: creating one sends it nothing.
 - "prompt-sub-session": send \`message\` into \`sub_session_id\` as if the user had typed it, and wait for the reply. Add \`run_in_background: true\` to dispatch it and get a receipt immediately instead — you are brought back when the turn ends. This is also how a sub-session gets its first task, right after you create it.
 - "wait-for-sub-sessions": block until your sub-sessions finish and return all their answers at once. Omit \`sub_session_id\` to wait for every one that is running, or pass one to wait for that one.
 - "list-sub-sessions": list your sub-sessions with their status (idle / running / waiting-input).

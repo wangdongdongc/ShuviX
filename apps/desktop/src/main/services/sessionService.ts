@@ -165,14 +165,16 @@ export class SessionService {
    *
    * params.parentId 非空时创建**子会话**：形态仍是普通会话，只是多一个父指针。
    * projectId 恒随父会话（工作目录是会话的地基，跨项目的子会话没有可用语义）——
-   * 调用方传的 projectId 在这种情况下被忽略。
+   * 调用方传的 projectId 在这种情况下被忽略；免询问开关（autoAllow）同样跟着抄一份，
+   * 它是 settings 一列所以在这里，而模型 / 思考档位 / 工具勾选那三项是会话树上的
+   * change entry，由 `subSessionRunner.seedRunConfig` 在建完之后种（见那里的说明）。
    */
   create(params?: SessionCreateParams): Session {
     const id = uuidv7()
     const notebookPath = params?.notebookPath
     const now = Date.now()
     const parentId = params?.parentId ?? null
-    const parent = parentId ? sessionDao.pick(parentId, ['projectId']) : undefined
+    const parent = parentId ? sessionDao.pick(parentId, ['projectId', 'settings']) : undefined
     const pid = parent ? parent.projectId : (params?.projectId ?? null)
 
     // 聊天会话：绑定一个 bot，无根。空串 / 空白视同没给
@@ -189,6 +191,12 @@ export class SessionService {
         ...(params?.memorySlug ? { memorySlug: params.memorySlug } : {}),
         // 只在有值时写键：缺省即无键
         ...(bot ? { bot } : {}),
+        // 子会话继承父会话的免询问开关（其余运行配置的种子在 subSessionRunner.create）。
+        // 与「按会话存的授权不可继承」那条原始设计相反，是一次显式裁决：子会话是父级
+        // 派活的地方、同一个工作目录、开它本身还要过一次 ask-on-sub-session ——
+        // 用户为这条对话关掉的询问，不该在它每开一条子会话时原样回来。
+        // 路径授权（allowList）刻意**不**继承：那是一条会长大的记账，快照过去只会漂移。
+        ...(parent?.settings?.autoAllow ? { autoAllow: true } : {}),
         // 档案在**创建这一刻**定型（下同 §resolveAgentProfileName）：按会话形态取设置里
         // 对应的默认档案，落成一个显式的 agentProfile。之后改设置只影响更新的会话 ——
         // 档案是粘性的，一条已经在跑的会话不该因为改了个全局默认就换人格。
@@ -624,14 +632,36 @@ export class SessionService {
   }
 
   /**
+   * 会话**此刻实际在用**的整套运行配置 —— 与运行时创建同一口径
+   * （resolveSessionAgentContext：树上没有 → 回落默认），会话不存在返回 null。
+   *
+   * 给的是**解析后**的值而不是「树上显式写过的那些」：子会话种子（subSessionRunner.create）
+   * 要复制的是父会话跑起来是什么样，而父会话大多数键根本没显式改过 —— 只抄显式值，
+   * 一条从没动过工具勾选的父会话就会把「继承」变成「什么也没继承」。
+   */
+  async resolveRunConfig(sessionId: string): Promise<{
+    model: SubAgentModelConfig | null
+    thinkingLevel: string
+    enabledTools: string[]
+  } | null> {
+    const ctx = await this.resolveSessionAgentContext(sessionId)
+    if (!ctx) return null
+    return {
+      model:
+        ctx.provider && ctx.model
+          ? { provider: ctx.provider, model: ctx.model, capabilities: ctx.capabilities }
+          : null,
+      thinkingLevel: ctx.modelMetadata.thinkingLevel ?? DEFAULT_THINKING_LEVEL,
+      enabledTools: ctx.enabledTools
+    }
+  }
+
+  /**
    * 会话当前模型配置（workflow 引擎会话域 run 的模型回落源）。
-   * 与运行时创建同一口径（resolveSessionAgentContext：树上没有 → 全局默认）；
    * 会话不存在或没有可用模型返回 null —— 调用方（run()）报「无可用模型」。
    */
   async resolveRunModelConfig(sessionId: string): Promise<SubAgentModelConfig | null> {
-    const ctx = await this.resolveSessionAgentContext(sessionId)
-    if (!ctx || !ctx.provider || !ctx.model) return null
-    return { provider: ctx.provider, model: ctx.model, capabilities: ctx.capabilities }
+    return (await this.resolveRunConfig(sessionId))?.model ?? null
   }
 
   /**

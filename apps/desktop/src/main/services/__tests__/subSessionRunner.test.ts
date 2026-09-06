@@ -25,10 +25,12 @@ const mocks = vi.hoisted(() => ({
   updateTitle: vi.fn(),
   updateAgentProfile: vi.fn(),
   resolveAgentProfileName: vi.fn(),
-  resolveRunModelConfig: vi.fn(),
+  resolveRunConfig: vi.fn(),
   getAgentSession: vi.fn(),
   gatewayPrompt: vi.fn(),
   appendModelChange: vi.fn(),
+  appendThinkingLevelChange: vi.fn(),
+  appendActiveToolsChange: vi.fn(),
   findLastBySession: vi.fn()
 }))
 
@@ -45,7 +47,7 @@ vi.mock('../../services/sessionService', () => ({
     updateTitle: mocks.updateTitle,
     updateAgentProfile: mocks.updateAgentProfile,
     resolveAgentProfileName: mocks.resolveAgentProfileName,
-    resolveRunModelConfig: mocks.resolveRunModelConfig,
+    resolveRunConfig: mocks.resolveRunConfig,
     getAgentSession: mocks.getAgentSession
   }
 }))
@@ -53,7 +55,11 @@ vi.mock('../../frontend/core', () => ({ chatGateway: { prompt: mocks.gatewayProm
 vi.mock('../../services/messageService', () => ({
   messageService: { findLastBySession: mocks.findLastBySession }
 }))
-vi.mock('../../services/sessionStorage', () => ({ appendModelChange: mocks.appendModelChange }))
+vi.mock('../../services/sessionStorage', () => ({
+  appendModelChange: mocks.appendModelChange,
+  appendThinkingLevelChange: mocks.appendThinkingLevelChange,
+  appendActiveToolsChange: mocks.appendActiveToolsChange
+}))
 vi.mock('../../logger', () => ({
   createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })
 }))
@@ -96,7 +102,11 @@ function defaultWorld(): void {
   // 发送成功 = 落定为 {}；带 error 才是「没发出去」
   mocks.gatewayPrompt.mockResolvedValue({})
   mocks.findLastBySession.mockResolvedValue(undefined)
-  mocks.resolveRunModelConfig.mockResolvedValue(null)
+  mocks.resolveRunConfig.mockResolvedValue({
+    model: null,
+    thinkingLevel: 'medium',
+    enabledTools: []
+  })
   mocks.resolveAgentProfileName.mockReturnValue('chat')
   mocks.updateAgentProfile.mockResolvedValue({ success: true, applied: { tools: [] } })
   mocks.create.mockReturnValue({ id: CHILD, title: 'Child' })
@@ -177,10 +187,10 @@ describe('create —— 继承与上限', () => {
   })
 
   it('模型种子取父会话当前模型 —— 不种就会回落全局默认（用 opus 干活、子会话掉默认）', async () => {
-    mocks.resolveRunModelConfig.mockResolvedValue({
-      provider: 'p',
-      model: 'opus',
-      capabilities: {}
+    mocks.resolveRunConfig.mockResolvedValue({
+      model: { provider: 'p', model: 'opus', capabilities: {} },
+      thinkingLevel: 'medium',
+      enabledTools: []
     })
     await runner.create(PARENT, {})
     expect(mocks.appendModelChange).toHaveBeenCalledWith(CHILD, 'p', 'opus')
@@ -192,10 +202,10 @@ describe('create —— 继承与上限', () => {
       success: true,
       applied: { model: { provider: 'p', model: 'declared', capabilities: {} }, tools: [] }
     })
-    mocks.resolveRunModelConfig.mockResolvedValue({
-      provider: 'p',
-      model: 'opus',
-      capabilities: {}
+    mocks.resolveRunConfig.mockResolvedValue({
+      model: { provider: 'p', model: 'opus', capabilities: {} },
+      thinkingLevel: 'medium',
+      enabledTools: []
     })
     await runner.create(PARENT, {})
     expect(mocks.updateAgentProfile).toHaveBeenCalledWith(CHILD, 'coding')
