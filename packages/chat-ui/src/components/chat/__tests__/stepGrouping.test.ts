@@ -4,7 +4,7 @@
  *  - **相邻步骤合并**（`groupConsecutiveSteps`）：思考与「已成功落定」的工具调用（不限同名）
  *    并成一行；运行中 / 出错 / 中间文本都把一段切开；键与顺序是渲染层 key 的依据；
  *  - **同工具判定**（`uniformToolName`）：一段全是同一个工具时合并行保持从前的形态；
- *  - **归纳**（`summarizeSteps`）：相邻同标签合并计数；
+ *  - **归纳**（`summarizeSteps`）：按标签聚合计数，首次出现顺序排列；
  *  - **一行文本**（`formatStepSequence`）：`×` 与 ` · ` 两个字符钉死，超长按字符截断。
  *
  * 标签由调用方给（工具显示名 / i18n 文案），这里用静态字符串，不牵扯 store 与 i18n。
@@ -174,14 +174,14 @@ describe('uniformToolName —— 一段是否全是同一个工具', () => {
   })
 })
 
-describe('summarizeSteps —— 步骤序列', () => {
+describe('summarizeSteps —— 每种步骤各几次', () => {
   const labelOf = (b: StepBlock): string => (b.type === 'tool' ? b.toolName : b.type)
 
   it('S-1 空输入 → []', () => {
     expect(summarizeSteps([], labelOf)).toEqual([])
   })
 
-  it('S-2 sequence 保序；labelOf 对每块按序恰调一次；不改写输入', () => {
+  it('S-2 各不相同的标签按出现顺序排列；labelOf 对每块按序恰调一次；不改写输入', () => {
     const blocks: StepBlock[] = [
       thinking('t'),
       tool('a', 'read', { result: 'A' }),
@@ -200,7 +200,8 @@ describe('summarizeSteps —— 步骤序列', () => {
     expect(blocks).toEqual(snapshot)
   })
 
-  it('S-3 相邻同标签合并计数；不相邻的不合并', () => {
+  it('S-3 同标签不论是否相邻都归到一项，位置取首次出现处', () => {
+    // 回归：按相邻去重的话，「思考 → 调用 → 思考 → 调用」交替的过程会吐出一串重复标签
     expect(
       summarizeSteps(
         [
@@ -213,13 +214,28 @@ describe('summarizeSteps —— 步骤序列', () => {
         labelOf
       )
     ).toEqual([
-      { label: 'read', count: 3 },
-      { label: 'grep', count: 1 },
-      { label: 'read', count: 1 }
+      { label: 'read', count: 4 },
+      { label: 'grep', count: 1 }
+    ])
+    // 交替的思考与调用：两项而不是五项
+    expect(
+      summarizeSteps(
+        [
+          thinking('t1'),
+          tool('a', 'bash', { result: 'A' }),
+          thinking('t2'),
+          tool('b', 'bash', { result: 'B' }),
+          thinking('t3')
+        ],
+        labelOf
+      )
+    ).toEqual([
+      { label: 'thinking', count: 3 },
+      { label: 'bash', count: 2 }
     ])
   })
 
-  it('S-4 合并按标签字符串判：两个异名工具映到同一标签就合并；两个相邻思考也合并', () => {
+  it('S-4 归并按标签字符串判：两个异名工具映到同一标签就归到一项；两个思考也归到一项', () => {
     // 归纳只认标签 —— 显示名相同的两个工具在摘要里就是同一种步骤
     expect(
       summarizeSteps(
@@ -233,7 +249,7 @@ describe('summarizeSteps —— 步骤序列', () => {
   })
 })
 
-describe('formatStepSequence —— 步骤序列 → 一行文本', () => {
+describe('formatStepSequence —— 步骤摘要 → 一行文本', () => {
   const step = (label: string, count = 1): StepSequenceItem => ({ label, count })
 
   it('F-1 空序列 → 空串', () => {

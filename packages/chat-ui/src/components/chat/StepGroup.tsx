@@ -15,8 +15,8 @@ import { formatStepSequence, summarizeSteps, uniformToolName, type StepBlock } f
  * 两种面孔，同一副骨架：
  *  - 全是同一个工具：`[工具图标] 阅读  alpha.txt · beta.txt  [2]` —— 与从前的同名合并行一模一样，
  *    摘要去重后拼接，同工具不同动作（evaluate / screenshot）仍能一眼看出；
- *  - 混着思考或不同工具：`思考 · 写入文件 · 阅读 ×2  test.txt  [4]` —— 不出图标（图标槽留空
- *    保持对齐），标签位换成按序去重的步骤序列，摘要位仍是各次调用摘要的去重拼接。
+ *  - 混着思考或不同工具：`思考 ×2 · 写入文件 · 阅读 ×2  test.txt  [5]` —— 不出图标，标签位换成
+ *    「每种步骤各几次」（按首次出现顺序），摘要位仍是各次调用摘要的去重拼接。
  */
 export function StepGroup({ blocks }: { blocks: StepBlock[] }): React.JSX.Element {
   const { t } = useTranslation()
@@ -37,7 +37,7 @@ export function StepGroup({ blocks }: { blocks: StepBlock[] }): React.JSX.Elemen
     return clipLine([...seen].join(' · '), 60)
   }, [blocks])
 
-  // 混合段的标签：按序去重的步骤名，`思考 · 阅读 ×2 · 文本编辑`
+  // 混合段的标签：每种步骤各几次，`思考 ×2 · 阅读 ×2 · 文本编辑`
   const sequence = useMemo(
     () =>
       formatStepSequence(
