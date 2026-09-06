@@ -17,7 +17,11 @@ jobs:
     strategy:
       matrix:
         include:
-          - os: macos-latest
+          # 固定 macos-15：macos-latest 正滚动切到 macos-26 的 20260831 镜像，
+          # electron-builder 26.15 的临时 keychain 导入在其上失败
+          # （security set-key-partition-list → "SecKeychainUnlock: passphrase not correct"），
+          # v0.1.34 / v0.1.36 的失败全是它；分到旧镜像（20260728）的 runner 才会过。
+          - os: macos-15
             platform: mac
           # 固定 windows-2022：windows-latest 已迁到 windows-2025，
           # node-gyp 11 在该镜像上探测不到 VS（"Could not find any Visual Studio installation"），
