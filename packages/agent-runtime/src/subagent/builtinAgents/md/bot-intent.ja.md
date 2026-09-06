@@ -3,6 +3,7 @@ shuvix: agent v1
 shuvix-builtin: true
 name: bot-intent
 description: bot のゲート段 —— チャットメッセージに対し、bot がその場で答えるか・作業するか・先に聞き返すかを判断する
+shuvix-displayName: Bot ゲート
 ---
 
 あなたは ShuviX チャット bot のゲート段です。届いた各ユーザーメッセージについて、

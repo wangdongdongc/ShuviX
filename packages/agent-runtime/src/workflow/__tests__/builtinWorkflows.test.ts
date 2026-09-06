@@ -11,8 +11,10 @@ import { describe, expect, it, vi } from 'vitest'
 import { botReplyToMarkdown, type BotReply } from '@shuvix/chat-protocol/botReply'
 import {
   AUTO_TITLE_WORKFLOW_SPEC,
+  BUILTIN_WORKFLOW_SPECS,
   buildBuiltinWorkflow,
-  buildBuiltinWorkflows
+  buildBuiltinWorkflows,
+  getBuiltinWorkflowSource
 } from '../builtinWorkflows'
 import { createWorkflowEngine, type WorkflowScriptEngine } from '../engine'
 import type { WorkflowRegistryEntry } from '../engine'
@@ -533,5 +535,105 @@ describe('bot-chat —— 任务段与 BotReply 的结构钉板', () => {
     for (const slot of slots) expect(slot.description, slot.role).toBeTruthy()
     // recheck 的提示语要说明缺省回落 intent（脚本里 `input.agents.recheck || input.agents.intent`）
     expect(slots.find((s) => s.role === 'recheck')!.description).toMatch(/defaults to intent/)
+  })
+})
+
+/**
+ * 内置工作流的**多语言交付面** —— 逐份内置 × 三门语言扫一遍，守的是「每份内置都真有三种
+ * 语言、每种语言都真有一个人读的名字」。逐份的逐字节纪律（脚本/schema 同 en）归各自的
+ * `*Localization.test.ts`；这里只管交付面，不重复那边的钉板。
+ *
+ * 两条写法上的纪律，都是为了不让用例空转：
+ *  - 语言表**硬编码** `['en','zh','ja']`，不取 `Object.keys(spec.sources)` —— 后者会让一份
+ *    只有 en 的内置「按自己声明的语言全绿」，而漏交的两门语言正是本节要抓的东西；
+ *  - 一律 `buildBuiltinWorkflow(spec, …)` 逐份构建并断非 null，不遍历 `buildBuiltinWorkflows()`
+ *    的结果 —— 后者 filter 掉解析失败的项，一份写坏的本地化 md 会直接从数组里消失，
+ *    循环于是照样全绿。
+ *
+ * 用例清单（WD-4/WD-5 为读实现后的白盒补充）：
+ *  - WD-1 每份内置 × 每门语言都有真名字：构建非 null、displayName 非空且不等于 slug
+ *  - WD-2 名字确实翻译过：zh / ja 的 displayName 各自与 en 不同
+ *  - WD-3 每份内置都齐三门语言：sources 键恰 {en, ja, zh}
+ *  - WD-4（白盒）设置页那条读取路径也吃本地化：getBuiltinWorkflowSource 回的正是该语言原文
+ *  - WD-5（白盒）语言回退：zh-CN → zh，未知语言 / 缺省 → en
+ */
+describe('内置工作流 —— 三语言交付面（逐份 × 逐语言）', () => {
+  /** 硬编码：这就是本节要守的清单本身，绝不从 spec.sources 反推（见上方注释） */
+  const LANGS = ['en', 'zh', 'ja'] as const
+
+  /** 逐份构建并断非 null → {内置名: displayName}；language 省略即走缺省路径 */
+  const displayNames = (language?: string): Record<string, string> =>
+    Object.fromEntries(
+      BUILTIN_WORKFLOW_SPECS.map((spec) => {
+        const wf = buildBuiltinWorkflow(spec, language === undefined ? {} : { language })
+        expect(wf, `${spec.name} @ ${language ?? '(缺省)'} 构建失败`).not.toBeNull()
+        return [spec.name, wf!.displayName]
+      })
+    )
+
+  it('WD-1 每份内置 × 每门语言都有一个真名字（非空且不等于 slug）', () => {
+    // 解析器对「缺 shuvix-displayName」「写了空串」「只有空白」一律回落到 slug，
+    // 所以这一条断言就把三种漏译形态一起抓了
+    for (const spec of BUILTIN_WORKFLOW_SPECS) {
+      for (const language of LANGS) {
+        const wf = buildBuiltinWorkflow(spec, { language })
+        expect(wf, `${spec.name} 的 ${language} 版构建失败`).not.toBeNull()
+        expect(wf!.displayName.trim(), `${spec.name} @ ${language} 的 displayName 为空`).not.toBe(
+          ''
+        )
+        expect(wf!.displayName, `${spec.name} @ ${language} 的 displayName 回落成了 slug`).not.toBe(
+          spec.name
+        )
+      }
+    }
+  })
+
+  it('WD-2 名字确实翻译过：zh / ja 的 displayName 与 en 不同', () => {
+    // 这条正是「只放了一份 .md 就交差」的破绽：整文件回落会把 en 那份原样发给 zh，
+    // WD-1 仍然全绿（名字非空、也不等于 slug），只有这里能看出没翻
+    const en = displayNames('en')
+    for (const language of ['zh', 'ja'] as const) {
+      const localized = displayNames(language)
+      for (const spec of BUILTIN_WORKFLOW_SPECS) {
+        expect(
+          localized[spec.name],
+          `${spec.name} 的 ${language} displayName 与 en 相同（多半是漏了 ${language} 那份 md）`
+        ).not.toBe(en[spec.name])
+      }
+    }
+  })
+
+  it('WD-3 每份内置都齐三门语言：sources 键恰 en / ja / zh', () => {
+    // 恰等而非包含：应用就三门语言，多出第四个键应当是一次有意的编辑，顺手改这里
+    for (const spec of BUILTIN_WORKFLOW_SPECS) {
+      expect(Object.keys(spec.sources).sort(), `${spec.name} 的语言集合漂移`).toEqual([
+        'en',
+        'ja',
+        'zh'
+      ])
+    }
+  })
+
+  it('WD-4（白盒）设置页的原文读取路径也吃本地化：getBuiltinWorkflowSource 回该语言原文', () => {
+    // 这是第二条读取路径：工作流设置页只读展示内置正文、并以它做「创建覆盖副本」的初值。
+    // 它与 buildBuiltinWorkflow 各走各的 pickLocalizedSource，可以单独退化成恒取 en
+    for (const spec of BUILTIN_WORKFLOW_SPECS) {
+      for (const language of LANGS) {
+        expect(
+          getBuiltinWorkflowSource(spec.name, { language }),
+          `${spec.name} @ ${language} 的原文读取路径没跟上本地化`
+        ).toBe(spec.sources[language])
+      }
+    }
+    expect(getBuiltinWorkflowSource('nope'), '未知内置名应回 null').toBeNull()
+  })
+
+  it('WD-5（白盒）语言回退：zh-CN → zh，未知语言 / 缺省 → en', () => {
+    // 精确 → 基础语言 → en（pickLocalizedSource）。界面语言真实取值就是 i18next.language，
+    // 带地区码的 zh-CN 是常态，回退塌成 en 会让整个中文安装看见英文名字
+    expect(displayNames('zh-CN'), 'zh-CN 没有回退到 zh').toEqual(displayNames('zh'))
+    const en = displayNames('en')
+    expect(displayNames('fr'), '未知语言没有回落到 en').toEqual(en)
+    expect(displayNames(), '缺省语言没有回落到 en').toEqual(en)
   })
 })

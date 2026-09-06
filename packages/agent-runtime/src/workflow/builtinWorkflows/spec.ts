@@ -3,9 +3,12 @@
  * md 是文案与逻辑的唯一事实源（`?raw` 内联进 bundle），spec 只留结构。
  *
  * 语言回退复用 pickLocalizedSource（精确 → 基础语言 → en，按文件整体回退）。
- * 注意：工作流 md 的**脚本与 frontmatter 结构**是行为语义 —— 若未来补本地化文件，
- * 必须沿 policy md 的先例「结构恒取 en、本地化文件只贡献人读面」+ 守护测试钉住；
- * v1 内置工作流仅有 en 文件，回退天然覆盖所有语言，先不引入这条机制。
+ * 注意：工作流 md 的**脚本与 frontmatter 结构**是行为语义，而整文件回落意味着各语言文件
+ * 真的会被逐份解析执行 —— 所以纪律是「本地化只许动人读面（`shuvix-displayName` /
+ * `description` / 散文 / `md prompt=` 块），脚本块、schema 块与结构字段与 en 逐字节同」，
+ * 每份内置各有一条守护测试钉住（workflow/__tests__/*Localization.test.ts）。
+ * 与 policy md 的做法（构建器主动忽略本地化文件的判定字段、结构恒取 en）取向不同：
+ * 那边靠机制，这边靠守护测试 —— 因为工作流没有「判定字段」这样一小撮可枚举的键。
  */
 import { pickLocalizedSource } from '../../subagent/builtinAgents/spec'
 import { parseWorkflowDefinitionFile, type ParsedWorkflowFile } from '../workflowFile'

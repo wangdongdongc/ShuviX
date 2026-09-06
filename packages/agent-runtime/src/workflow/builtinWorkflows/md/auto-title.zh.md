@@ -2,8 +2,8 @@
 shuvix: workflow v1
 shuvix-builtin: true
 name: auto-title
-shuvix-displayName: Automatic Session Titles
-description: Names sessions automatically — a quick title on the first prompt, refined once real conversation has accumulated.
+shuvix-displayName: 自动生成会话标题
+description: 自动为会话命名 —— 首条提示词进来时先给一个快标题,等真聊出内容后再精修一次。
 shuvix-workflow-on:
   - trigger: session.prompt-accepted
     when: event.isDefaultTitle
@@ -13,22 +13,18 @@ shuvix-workflow-on:
       && event.textMessageCount >= 3
 ---
 
-## What this does
+## 这个工作流做什么
 
-Two-phase automatic session titles, as a workflow:
+把两阶段的会话自动标题写成一份工作流:
 
-- **Quick** — when a prompt is accepted and the session still carries the
-  default title, dispatch the `titler` agent with that first message and let it
-  apply a rough title right away.
-- **Refine** — when the second turn completes and the title is still the one
-  automation wrote (the user has not renamed the session), regenerate once from
-  the accumulated conversation.
+- **快标题** —— 提示词被接受、而会话还挂着默认标题时,把这条首消息派给 `titler`
+  智能体,让它当即打上一个粗略的标题。
+- **精修** —— 第二轮对话结束、而标题仍是自动写上去的那个(用户没有重命名过会话)时,
+  按已积累的对话重新生成一次。
 
-The `titler` agent applies the title itself through its `session` tool
-and reports what it did through the `next` result contract below. To customize
-the wording rules, override the `titler` agent (`~/.shuvix/agents/titler.md`);
-to change _when_ titles happen, override this file
-(`~/.shuvix/workflows/auto-title.md`).
+`titler` 智能体用自己的 `session` 工具应用标题,并按下面的 `next` 结果契约回报它做了什么。
+想改措辞规则,覆盖 `titler` 智能体(`~/.shuvix/agents/titler.md`);想改标题**什么时候**生成,
+覆盖这份文件(`~/.shuvix/workflows/auto-title.md`)。
 
 ```json schema=result
 {

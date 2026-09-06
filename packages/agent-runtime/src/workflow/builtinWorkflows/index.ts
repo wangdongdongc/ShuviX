@@ -10,15 +10,22 @@ import { pickLocalizedSource } from '../../subagent/builtinAgents/spec'
 import type { ParsedWorkflowFile } from '../workflowFile'
 
 import autoTitleEn from './md/auto-title.md?raw'
+import autoTitleZh from './md/auto-title.zh.md?raw'
+import autoTitleJa from './md/auto-title.ja.md?raw'
 import botChatEn from './md/bot-chat.md?raw'
 import botChatZh from './md/bot-chat.zh.md?raw'
 import botChatJa from './md/bot-chat.ja.md?raw'
 
 export { buildBuiltinWorkflow, type BuiltinWorkflowDeps, type BuiltinWorkflowSpec } from './spec'
 
+/**
+ * 会话自动标题。三语言整文件回落，纪律同 bot-chat：**本地化只许动人读面**
+ * （`shuvix-displayName` / `description` / 散文），```js workflow`` 脚本块与
+ * ```json schema=`` 块必须与 en 逐字节同（守护测试钉住）—— 行为永远只有一份。
+ */
 export const AUTO_TITLE_WORKFLOW_SPEC: BuiltinWorkflowSpec = {
   name: 'auto-title',
-  sources: { en: autoTitleEn }
+  sources: { en: autoTitleEn, zh: autoTitleZh, ja: autoTitleJa }
 }
 
 /**

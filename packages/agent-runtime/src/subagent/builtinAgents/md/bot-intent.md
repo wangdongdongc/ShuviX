@@ -3,6 +3,7 @@ shuvix: agent v1
 shuvix-builtin: true
 name: bot-intent
 description: Bot gate stage — decides whether a bot answers a chat message right away, does the work, or asks first
+shuvix-displayName: Bot Gate
 ---
 
 You are the gate stage of a ShuviX chat bot. For each incoming user message you

@@ -2,6 +2,7 @@
 shuvix: workflow v1
 shuvix-builtin: true
 name: bot-chat
+shuvix-displayName: Bot Chat Pipeline
 description: The pipeline a bot runs in a chat session — decide whether to speak, then answer.
 shuvix-workflow-concurrency: parallel
 shuvix-workflow-limits:

@@ -512,3 +512,85 @@ describe('notebook 档案钉板(笔记本会话根 Agent 的基座)', () => {
     expect(BASE_PROFILE_NAMES.has(DEFAULT_PROFILE_NAME)).toBe(true)
   })
 })
+
+/**
+ * 内置档案的**多语言交付面** —— 逐份内置 × 三门语言扫一遍，守的是「每份内置都真有三门
+ * 语言、每门语言都真有一个给人读的名字」。逐份的内容纪律（工具面 / 注入开关 / 正文锚点）
+ * 归上面各自的钉板，这里只管交付面，不重复那边的用例。
+ *
+ * 三条写法上的纪律，都是为了不让用例空转：
+ *  - 语言表**硬编码** `['en','zh','ja']`，不取 `Object.keys(spec.sources)` —— 后者会让一份
+ *    只有 en 的内置「按自己声明的语言全绿」，而漏交的两门语言正是本节要抓的东西；
+ *  - 一律 `buildBuiltinProfile(spec, …)` 逐份构建并先断非 null，不遍历 `buildBuiltinProfiles()`
+ *    的结果 —— 后者 filter 掉解析失败的项，一份写坏的本地化 md 会直接从数组里消失，
+ *    循环于是照样全绿；
+ *  - 宿主参数一律给全（ALL_PARAMS）—— 缺参的 spec 构建即返回 null，widget/wiki/wiki-writer
+ *    三份会当场跳过检查，那正是本节要堵的洞。
+ *
+ * 用例清单：
+ *  - AD-1 每份内置 × 每门语言都有真名字：构建非 null、displayName 非空且不等于 slug
+ *  - AD-2 名字确实翻译过：zh / ja 的 displayName 各自与 en 不同
+ *  - AD-3 每份内置都齐三门语言：sources 键恰 {en, ja, zh}
+ */
+describe('内置档案 —— 三语言交付面（逐份 × 逐语言）', () => {
+  /** 硬编码：这就是本节要守的清单本身，绝不从 spec.sources 反推（见上方注释） */
+  const LANGS = ['en', 'zh', 'ja'] as const
+
+  /** 逐份构建并断非 null → {内置名: displayName} */
+  const displayNames = (language: string): Record<string, string> =>
+    Object.fromEntries(
+      BUILTIN_PROFILE_SPECS.map((spec) => {
+        const built = buildBuiltinProfile(spec, { ...ALL_PARAMS, language })
+        expect(built, `${spec.name} @ ${language} 构建失败`).not.toBeNull()
+        return [spec.name, built!.displayName]
+      })
+    )
+
+  it('AD-1 每份内置 × 每门语言都有一个真名字（非空且不等于 slug）', () => {
+    // 解析器对「缺 shuvix-displayName」「写了空串」「只有空白」一律回落到 slug，所以这一条
+    // 断言就把三种漏译形态一起抓了。bot-intent 正是这么漏出去的：三门语言一个名字都没写，
+    // 设置页的 agent 列表里就裸着一个 slug
+    for (const spec of BUILTIN_PROFILE_SPECS) {
+      for (const language of LANGS) {
+        const built = buildBuiltinProfile(spec, { ...ALL_PARAMS, language })
+        expect(built, `${spec.name} 的 ${language} 版构建失败`).not.toBeNull()
+        expect(
+          built!.displayName.trim(),
+          `${spec.name} @ ${language} 的 displayName 为空`
+        ).not.toBe('')
+        expect(
+          built!.displayName,
+          `${spec.name} @ ${language} 的 displayName 回落成了 slug`
+        ).not.toBe(spec.name)
+      }
+    }
+  })
+
+  it('AD-2 名字确实翻译过：zh / ja 的 displayName 与 en 不同', () => {
+    // 这条正是「只放了一份 .md 就交差」的破绽：整文件回退会把 en 那份原样发给 zh，AD-1
+    // 仍然全绿（名字非空、也不等于 slug），只有这里能看出没翻。
+    // 只与 en 比，不断言 zh ≠ ja —— 两门语言正好落在同一个词上不是缺陷（explore 的
+    // zh / ja 都是「探索」）
+    const en = displayNames('en')
+    for (const language of ['zh', 'ja'] as const) {
+      const localized = displayNames(language)
+      for (const spec of BUILTIN_PROFILE_SPECS) {
+        expect(
+          localized[spec.name],
+          `${spec.name} 的 ${language} displayName 与 en 相同（多半是漏了 ${language} 那份 md）`
+        ).not.toBe(en[spec.name])
+      }
+    }
+  })
+
+  it('AD-3 每份内置都齐三门语言：sources 键恰 en / ja / zh', () => {
+    // 恰等而非包含：应用就三门语言，多出第四个键应当是一次有意的编辑，顺手改这里
+    for (const spec of BUILTIN_PROFILE_SPECS) {
+      expect(Object.keys(spec.sources).sort(), `${spec.name} 的语言集合漂移`).toEqual([
+        'en',
+        'ja',
+        'zh'
+      ])
+    }
+  })
+})

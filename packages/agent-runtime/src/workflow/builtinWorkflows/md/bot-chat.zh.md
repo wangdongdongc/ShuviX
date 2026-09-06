@@ -2,6 +2,7 @@
 shuvix: workflow v1
 shuvix-builtin: true
 name: bot-chat
+shuvix-displayName: Bot 聊天管线
 description: bot 在聊天会话里跑的管线 —— 判定要不要说话,然后作答。
 shuvix-workflow-concurrency: parallel
 shuvix-workflow-limits:

@@ -2,6 +2,7 @@
 shuvix: workflow v1
 shuvix-builtin: true
 name: bot-chat
+shuvix-displayName: Bot チャットパイプライン
 description: チャット会話で bot が走らせるパイプライン —— 話すかを判定し、答える。
 shuvix-workflow-concurrency: parallel
 shuvix-workflow-limits:
