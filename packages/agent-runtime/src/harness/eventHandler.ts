@@ -22,6 +22,7 @@ import type {
 import type { AssistantMessage, ImageContent, TextContent } from '@earendil-works/pi-ai'
 import {
   INLINE_TOKENS_CUSTOM_TYPE,
+  SYSTEM_NOTICE_CUSTOM_TYPE,
   aggregateUsage,
   entriesToChatMessages,
   usageDetailOf
@@ -162,11 +163,16 @@ async function handleMessageEnd(
     // 用户消息（含 steer / followUp 注入）：广播供其他前端同步
     const entry = await lastEntry(ctx)
     if (entry) {
-      // 父节点若是内联 Token 侧车，一并投影 —— 广播出的气泡与重载后一致（芯片态）
+      // 父节点若是侧车（内联 Token / 系统通知），一并投影 —— 广播出的那条与重载后一致：
+      // 芯片态原文 / 通知行，而不是用户气泡。少认一种侧车，实时与重开就会各画一样
       let slice: SessionTreeEntry[] = [entry]
       if (entry.parentId) {
         const parent = await ctx.session.getEntry(entry.parentId)
-        if (parent?.type === 'custom' && parent.customType === INLINE_TOKENS_CUSTOM_TYPE) {
+        if (
+          parent?.type === 'custom' &&
+          (parent.customType === INLINE_TOKENS_CUSTOM_TYPE ||
+            parent.customType === SYSTEM_NOTICE_CUSTOM_TYPE)
+        ) {
           slice = [parent, entry]
         }
       }

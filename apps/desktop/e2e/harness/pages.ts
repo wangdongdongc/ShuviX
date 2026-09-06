@@ -25,6 +25,23 @@ export interface ChatItem {
 }
 
 /** 工具行快照（ToolCallBlock 的 data-tool-*） */
+/** 步骤合并行（StepGroup）的快照 */
+export interface ChatStepGroup {
+  state: 'collapsed' | 'expanded'
+  /** 合并进这一行的步骤数（思考 / 已完成的工具调用） */
+  size: number
+  /** 合并行头一行的文本（标签 / 步骤序列 + 摘要 + 计数） */
+  text: string
+}
+
+/** 系统通知行（SystemNoticeRow）的快照 */
+export interface ChatSystemNotice {
+  kind: 'compaction' | 'background' | 'instruction'
+  state: 'collapsed' | 'expanded'
+  /** 整行（含展开正文）的文本 */
+  text: string
+}
+
 export interface ChatToolRow {
   name: string
   status: string
@@ -105,6 +122,12 @@ export interface ChatPane {
   groupBadges(): Promise<string[]>
   /** 展开所有合并行 */
   expandGroups(): Promise<void>
+  /** 步骤合并行快照（展开态 + 步骤数 + 头行文本），按对话流顺序 */
+  stepGroups(): Promise<ChatStepGroup[]>
+  /** 系统通知行快照（压缩摘要 / 后台完成 / 指令注入） */
+  systemNotices(): Promise<ChatSystemNotice[]>
+  /** 切换第 i 个系统通知行的展开态，回其整体文本（**切换**语义） */
+  toggleSystemNotice(index: number): Promise<string>
 
   /** 待处理输入面板（PendingInputsPanel）是否在屏 + 是否顶格在输入卡片内 */
   pendingPanel(): Promise<{ open: boolean; firstInCard: boolean }>
@@ -174,8 +197,12 @@ export function chatPane(main: CdpClient): ChatPane {
   const ITEMS = `[...document.querySelectorAll('[data-msg-id]')]`
   const TOOLS = `[...document.querySelectorAll('[data-tool-name]')]`
   const SCROLLER = `document.querySelector('.conversation-scroller')`
-  // 合并行的计数徽章：对话列内唯一的 tabular-nums（侧栏待处理计数不在这棵子树里）
-  const GROUP_BADGES = `[...(${SCROLLER}?.querySelectorAll('span.tabular-nums') ?? [])]`
+  // 合并行的计数徽章：StepGroup 给它打了 data-group-count。不按 tabular-nums 样式类认 ——
+  // 折叠头的步数、合并通知的条数也是同款徽章，按类认会把它们一并数进来
+  const GROUP_BADGES = `[...(${SCROLLER}?.querySelectorAll('[data-group-count]') ?? [])]`
+  // 步骤合并行（StepGroup 根节点）与系统通知行（SystemNoticeRow 根节点）
+  const GROUPS = `[...(${SCROLLER}?.querySelectorAll('[data-step-group]') ?? [])]`
+  const NOTICES = `[...(${SCROLLER}?.querySelectorAll('[data-system-notice]') ?? [])]`
   const SEND_BTN = `[...document.querySelectorAll('button')].find((b) => b.querySelector('.lucide-send'))`
   // 工具卡片里的模型图：**必须**是 shuvix-preview:// —— 若哪天退回 data: URL（base64
   // 又灌进渲染进程），这里会认不到，用例即红，这正是想要的
@@ -370,6 +397,27 @@ export function chatPane(main: CdpClient): ChatPane {
     expandGroups: async () => {
       await main.eval(`${GROUP_BADGES}.forEach((s) => s.closest('button')?.click())`)
       await new Promise((r) => setTimeout(r, 250))
+    },
+    stepGroups: () =>
+      main.eval<ChatStepGroup[]>(
+        `${GROUPS}.map((el) => ({
+          state: el.dataset.groupState ?? '',
+          size: Number(el.dataset.groupSize ?? 0),
+          text: (el.querySelector('button')?.textContent ?? '').trim()
+        }))`
+      ),
+    systemNotices: () =>
+      main.eval<ChatSystemNotice[]>(
+        `${NOTICES}.map((el) => ({
+          kind: el.dataset.systemNotice ?? '',
+          state: el.dataset.noticeState ?? '',
+          text: (el.textContent ?? '').trim()
+        }))`
+      ),
+    toggleSystemNotice: async (index) => {
+      await main.eval(`${NOTICES}[${index}]?.querySelector('button')?.click()`)
+      await new Promise((r) => setTimeout(r, 250))
+      return main.eval<string>(`(${NOTICES}[${index}]?.textContent ?? '').trim()`)
     },
 
     pendingPanel: () =>

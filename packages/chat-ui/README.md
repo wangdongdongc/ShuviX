@@ -4,7 +4,7 @@
 
 ## 它包含什么
 
-- `<Conversation>` —— 对话区核心：消息列表（虚拟滚动 + 归档回溯）、各类气泡、工具调用块、待处理输入、输入区、模型选择。
+- `<Conversation>` —— 对话区核心：消息列表（虚拟滚动 + 归档回溯）、各类气泡、工具调用块（相邻的思考 / 工具调用合并成一行 `StepGroup`，文本前后各自成组）、系统通知行（压缩摘要 / 后台完成 / 指令注入，`SystemNoticeRow`）、待处理输入、输入区、模型选择。
 - 对话域 stores / hooks（chatStore、useAgentEvents、useSessionInit、useChatActions…）。
 - 两个注入口：**ChatApi**（后端）与 **ChatHost**（宿主外观/模型选择/语音）。
 

@@ -193,12 +193,13 @@
     "summaryLabel": "Conversation Summary (Auto-compacted)"
   },
   "backgroundNotice": {
-    "sender": "System",
     "title": "Background work finished"
   },
   "instruction": {
-    "sender": "System",
-    "loaded": "Project instructions loaded · {{filename}}"
+    "title": "Project instructions"
+  },
+  "steps": {
+    "thinking": "Thinking"
   },
   "voice": {
     "startRecording": "Voice input",

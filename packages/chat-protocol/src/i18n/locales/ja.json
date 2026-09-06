@@ -193,12 +193,13 @@
     "summaryLabel": "会話の要約（自動圧縮済み）"
   },
   "backgroundNotice": {
-    "sender": "システム",
     "title": "バックグラウンドの処理が完了しました"
   },
   "instruction": {
-    "sender": "システム",
-    "loaded": "プロジェクト指示を読み込みました · {{filename}}"
+    "title": "プロジェクト指示"
+  },
+  "steps": {
+    "thinking": "思考"
   },
   "voice": {
     "startRecording": "音声入力",

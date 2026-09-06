@@ -66,7 +66,7 @@ export interface InlineTokensSidecar {
  */
 /**
  * 系统通知侧车：自动续跑（后台任务/子会话跑完）起的那一轮，紧随其后的 user entry
- * 其实是系统写的通知。投影据此把它渲染成 SystemNoticeCard 而不是用户气泡。
+ * 其实是系统写的通知。投影据此把它渲染成 SystemNoticeRow 而不是用户气泡。
  *
  * 为什么是侧车而不是新 entry 类型：那条通知**必须进模型上下文**（agent 要看见它才能
  * 接着干），而 pi 的上下文里只有 user/assistant/toolResult —— 所以它只能是一条 user

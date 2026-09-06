@@ -1,18 +1,7 @@
 import { memo, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import ReactMarkdown from 'react-markdown'
-import {
-  Copy,
-  Check,
-  Code,
-  FileText,
-  RefreshCw,
-  Volume2,
-  Square,
-  Loader2,
-  Archive
-} from 'lucide-react'
-import { SystemNoticeCard } from './SystemNoticeCard'
+import { Copy, Check, Code, FileText, RefreshCw, Volume2, Square, Loader2 } from 'lucide-react'
 import { copyToClipboard } from '../../utils/clipboard'
 import { hasThinkingContent } from '@shuvix/chat-protocol/utils/thinking'
 import { imageSrc } from '@shuvix/chat-protocol/utils/imageSrc'
@@ -22,8 +11,9 @@ import {
   markdownRehypePlugins
 } from './markdownComponents'
 import { ThinkingBlock } from './ThinkingBlock'
-import { ToolCallBlock, ToolCallGroup } from './ToolCallBlock'
-import { groupConsecutiveToolCalls } from './stepGrouping'
+import { ToolCallBlock } from './ToolCallBlock'
+import { StepGroupView } from './StepGroupView'
+import { groupConsecutiveSteps } from './stepGrouping'
 import {
   useChatStore,
   selectStreamingContent,
@@ -65,10 +55,9 @@ export const AssistantBubble = memo(function AssistantBubble({
   const [copied, setCopied] = useState(false)
   const [showRaw, setShowRaw] = useState(false)
   const anchor = msgs[msgs.length - 1]
-  const isCompactionSummary = !!anchor.metadata?.isCompactionSummary
-  // 这里**不再处理 bot 署名/结构化回复/失败通告**：v2 起带 `metadata.sender` 的消息由
-  // MessageRenderer 分流给 BotBubble（群聊气泡），走不到这张卡。留着那套分支只会让人以为
-  // 两处都要跟着改
+  // 这里**不再处理 bot 署名/结构化回复/失败通告/压缩摘要**：带 `metadata.sender` 的消息由
+  // MessageRenderer 分流给 BotBubble（群聊气泡），压缩摘要分流给 CompactionNoticeRow，
+  // 都走不到这张卡。留着那些分支只会让人以为两处都要跟着改
   const { isPlaying, isLoading, playingMessageId, speak, stop } = useTtsPlayback()
   const isThisPlaying = isPlaying && playingMessageId === anchor.id
   const isThisLoading = isLoading && playingMessageId === anchor.id
@@ -101,14 +90,18 @@ export const AssistantBubble = memo(function AssistantBubble({
     return { processBlocks: process, answerText: text }
   }, [msgs])
 
-  // 相邻的同名成功调用合并为一行 + 次数，其余块原样透传
-  const blockGroups = useMemo(() => groupConsecutiveToolCalls(processBlocks), [processBlocks])
+  // 相邻的步骤（思考 / 已完成的工具调用）合并为一行 + 次数；中间文本切段，其余块原样透传
+  const blockGroups = useMemo(() => groupConsecutiveSteps(processBlocks), [processBlocks])
 
   const displayContent = isStreaming ? storeStreamingContent : answerText
   // 落盘后的思考已经是过程区里的块（按原序），这里只补流式期间还在缓冲里的那段
   const liveThinking =
     isStreaming && hasThinkingContent(storeStreamingThinking) ? storeStreamingThinking : null
   const liveImages = isStreaming ? storeStreamingImages : []
+  // 流式期间仍在缓冲的思考 —— 与落盘后同款折叠行，位置也一致（过程区末尾）
+  const liveThinkingRow = liveThinking ? (
+    <ThinkingBlock content={liveThinking} isGenerating={!displayContent && !streamingToolCall} />
+  ) : null
 
   const handleCopy = (): void => {
     copyToClipboard(displayContent)
@@ -122,7 +115,7 @@ export const AssistantBubble = memo(function AssistantBubble({
       <div className="min-w-0">
         {/* 过程区（步骤 + 思考）— 有正文跟随时以一条细线收尾，把「过程」和「结论」分层
             （不用左侧竖轴：那会再吃掉一列缩进） */}
-        {(blockGroups.length > 0 || liveThinking) && (
+        {(blockGroups.length > 0 || liveThinkingRow) && (
           <div
             className={
               displayContent ? 'mb-2.5 pb-2 border-b border-border-secondary/40' : 'mb-0.5'
@@ -130,67 +123,18 @@ export const AssistantBubble = memo(function AssistantBubble({
           >
             {blockGroups.length > 0 && (
               <div className="space-y-0.5">
-                {blockGroups.map((group) => {
-                  if (group.kind === 'toolGroup') {
-                    return (
-                      <ToolCallGroup
-                        key={group.key}
-                        toolName={group.toolName}
-                        blocks={group.blocks}
-                      />
-                    )
-                  }
-                  const block = group.block
-                  if (block.type === 'thinking') {
-                    return <ThinkingBlock key={group.key} content={block.text} />
-                  }
-                  if (block.type === 'text') {
-                    return (
-                      <div key={group.key} className="markdown-body text-sm">
-                        <ReactMarkdown
-                          remarkPlugins={markdownRemarkPlugins}
-                          rehypePlugins={markdownRehypePlugins}
-                          components={markdownComponents}
-                        >
-                          {block.text}
-                        </ReactMarkdown>
-                      </div>
-                    )
-                  }
-                  return (
-                    <ToolCallBlock
-                      key={group.key}
-                      toolName={block.toolName}
-                      toolCallId={block.toolCallId}
-                      args={block.args}
-                      result={block.result}
-                      details={block.details}
-                      status={block.result ? (block.isError ? 'error' : 'done') : 'running'}
-                    />
-                  )
-                })}
+                {blockGroups.map((group) => (
+                  <StepGroupView key={group.key} group={group} />
+                ))}
               </div>
             )}
-
-            {/* 流式期间仍在缓冲的思考 —— 与落盘后同款折叠行，位置也一致（过程区末尾） */}
-            {liveThinking && (
-              <ThinkingBlock
-                content={liveThinking}
-                isGenerating={!displayContent && !streamingToolCall}
-              />
-            )}
+            {liveThinkingRow}
           </div>
         )}
 
-        {/* Markdown / 原始文本 / BotReply 双形态 */}
+        {/* 终答正文：Markdown / 原始文本双形态 */}
         {displayContent &&
-          (isCompactionSummary ? (
-            <SystemNoticeCard
-              icon={<Archive size={14} />}
-              title={t('compact.summaryLabel')}
-              content={displayContent}
-            />
-          ) : showRaw ? (
+          (showRaw ? (
             <pre className="code-surface text-sm text-text-primary font-mono">{displayContent}</pre>
           ) : (
             <div className="markdown-body text-sm">
@@ -283,8 +227,8 @@ export const AssistantBubble = memo(function AssistantBubble({
                 )}
               </button>
             )}
-            {/* 原始/渲染 切换（压缩摘要不显示） */}
-            {displayContent && !isCompactionSummary && (
+            {/* 原始/渲染 切换 */}
+            {displayContent && (
               <button
                 onClick={() => setShowRaw(!showRaw)}
                 className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:text-text-secondary transition-opacity"
@@ -293,8 +237,8 @@ export const AssistantBubble = memo(function AssistantBubble({
                 {showRaw ? <FileText size={12} /> : <Code size={12} />}
               </button>
             )}
-            {/* 重新生成（压缩摘要不显示） */}
-            {onRegenerate && !isCompactionSummary && (
+            {/* 重新生成 */}
+            {onRegenerate && (
               <button
                 onClick={onRegenerate}
                 className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:text-text-secondary transition-opacity"

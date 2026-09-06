@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import type { HTMLAttributes, ReactNode } from 'react'
 
 /**
  * 图标槽 — 类型图标与状态图标共用同一列。
@@ -58,5 +58,23 @@ export function StepRow({
       <span className="flex-1 min-w-0 truncate">{detail}</span>
       {trailing}
     </button>
+  )
+}
+
+/**
+ * 行尾计数徽章 —— 合并行的调用次数、合并通知的条数共用这一枚。
+ * 多余的 props（`data-*` 之类的语义锚点）原样落到 span 上，e2e 据此定位而不必认样式类。
+ */
+export function CountBadge({
+  count,
+  ...rest
+}: { count: number } & HTMLAttributes<HTMLSpanElement>): React.JSX.Element {
+  return (
+    <span
+      {...rest}
+      className="flex-shrink-0 rounded-full bg-bg-tertiary/70 px-1.5 text-[10px] leading-4 tabular-nums"
+    >
+      {count}
+    </span>
   )
 }

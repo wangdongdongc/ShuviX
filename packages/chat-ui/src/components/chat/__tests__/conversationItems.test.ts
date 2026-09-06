@@ -86,6 +86,21 @@ function errMsg(id: string): ErrorEventMessage {
   }
 }
 
+/**
+ * 压缩摘要 —— 形状对齐 `projection.ts` 对 compaction entry 的投影：
+ * 单个 text 块的 assistant 消息 + `metadata.isCompactionSummary`。
+ */
+function compactionMsg(id: string, summary = '此前对话的摘要'): AssistantMessage {
+  return {
+    ...base(id),
+    role: 'assistant',
+    type: 'message',
+    content: summary,
+    blocks: [{ type: 'text', text: summary }],
+    metadata: { isCompactionSummary: true }
+  }
+}
+
 /** 每项的 mergeHeader（不合并时是 undefined —— 循环只写 true） */
 const merges = (items: ReturnType<typeof buildVisibleItems>): Array<boolean | undefined> =>
   items.map((i) => i.mergeHeader)
@@ -249,5 +264,81 @@ describe('buildVisibleItems —— 群聊气泡的头部合并', () => {
     const items = buildVisibleItems(messages, false)
     expect(items.map((i) => i.key)).toEqual(['m1', 'm2', 'm3'])
     expect(merges(items)).toEqual([undefined, true, true])
+  })
+})
+
+/**
+ * 压缩摘要虽然也是 assistant 消息，却是**边界标记**而不是哪一轮的终答：自成一项，
+ * 不并入前后任何一张卡。并进去的话，一段没有终答的过程（中止 / steer）会把摘要
+ * 当成自己的「结论」画在正文位上。
+ */
+describe('buildVisibleItems —— 压缩摘要自成一项', () => {
+  it('C-1 只有一条压缩摘要 → 一项：key 是它的 id，msg 是它，没有 msgs 也没有占位标记', () => {
+    const c = compactionMsg('c')
+    const items = buildVisibleItems([c], false)
+    expect(items).toHaveLength(1)
+    expect(items[0].key).toBe('c')
+    expect(items[0].msg).toBe(c)
+    expect(items[0].msgs).toBeUndefined()
+    expect(items[0].isStreamingPlaceholder).toBeUndefined()
+  })
+
+  it('C-2 未收口的组（带工具块、没有终答）后面来了压缩摘要 → 先 flush 那张卡，摘要另成一项', () => {
+    // 回归：摘要若并入前一组，那张没有终答的卡会拿摘要当终答
+    const m1 = agentMsg('m1', { tools: 1 })
+    const c = compactionMsg('c')
+    const items = buildVisibleItems([m1, c], false)
+    expect(items).toHaveLength(2)
+    expect(items[0]).toMatchObject({ key: 'm1', msgs: [m1] })
+    expect(items[1].key).toBe('c')
+    expect(items[1].msgs).toBeUndefined()
+  })
+
+  it('C-3 压缩摘要之后的终答另起一项：key 取自己的 id，msgs 只有它', () => {
+    // 回归：摘要若留在 group 里当组首，后面终答那张卡的 key 会变成摘要的 id
+    const c = compactionMsg('c')
+    const m2 = agentMsg('m2')
+    const items = buildVisibleItems([c, m2], false)
+    expect(items).toHaveLength(2)
+    expect(items[1]).toMatchObject({ key: 'm2', msgs: [m2] })
+    expect(items[1].msg.id).toBe('m2')
+  })
+
+  it('C-4 u1 → m1(工具) → c → m2(工具) → m3(终答)：keys 为 u1 / m1 / c / m2，末项 msgs=[m2,m3]', () => {
+    const m2 = agentMsg('m2', { tools: 1 })
+    const m3 = agentMsg('m3')
+    const items = buildVisibleItems(
+      [userMsg('u1'), agentMsg('m1', { tools: 1 }), compactionMsg('c'), m2, m3],
+      false
+    )
+    expect(items.map((i) => i.key)).toEqual(['u1', 'm1', 'c', 'm2'])
+    expect(items[3].msgs).toEqual([m2, m3])
+    expect(items[3].msg.id).toBe('m3')
+  })
+
+  it('C-5 流式 + 末尾是压缩摘要 → [摘要项, 占位项]：占位自成一组，不把摘要卷进来', () => {
+    // 摘要 flush 后 group 为空，占位卡另起一组；sessionId 从列表末条（摘要）兜底取
+    const c = compactionMsg('c')
+    const items = buildVisibleItems([c], true)
+    expect(items).toHaveLength(2)
+    expect(items[0]).toMatchObject({ key: 'c', msg: c })
+    expect(items[1].key).toBe(STREAMING_PLACEHOLDER_ID)
+    expect(items[1].isStreamingPlaceholder).toBe(true)
+    expect(items[1].msgs).not.toContain(c)
+    expect(items[1].msgs?.map((m) => m.id)).toEqual([STREAMING_PLACEHOLDER_ID])
+    expect(items[1].msg.sessionId).toBe(c.sessionId)
+  })
+
+  it('C-6 metadata 为 null / 没有该标记 / 标记为 false → 按普通助手消息分组（并入前面的工具卡）', () => {
+    // 判据是 `metadata?.isCompactionSummary` 的真值：三种「不是摘要」的写法都走普通分组
+    const variants: Array<AssistantMessage['metadata']> = [null, {}, { isCompactionSummary: false }]
+    for (const metadata of variants) {
+      const m1 = agentMsg('m1', { tools: 1 })
+      const m2: AssistantMessage = { ...agentMsg('m2'), metadata }
+      const items = buildVisibleItems([m1, m2], false)
+      expect(items).toHaveLength(1)
+      expect(items[0]).toMatchObject({ key: 'm1', msgs: [m1, m2] })
+      expect(items[0].msg.id).toBe('m2')
+    }
   })
 })

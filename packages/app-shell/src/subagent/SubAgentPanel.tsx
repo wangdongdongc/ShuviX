@@ -198,7 +198,7 @@ function SubMessageBubble({ msg }: { msg: ChatMessage }): React.JSX.Element | nu
             args={block.args}
             result={block.result}
             details={block.details}
-            status={block.result ? (block.isError ? 'error' : 'done') : 'running'}
+            status={block.result === undefined ? 'running' : block.isError ? 'error' : 'done'}
           />
         )
       })}

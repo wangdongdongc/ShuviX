@@ -41,6 +41,7 @@ export function streamingPlaceholder(sessionId: string): AssistantMessage {
  * 数据侧一条 entry 一条消息；呈现侧把**连续的 assistant 消息**收成一张卡
  * （过程在上、终答在下），遇到终答、用户消息或列表结束即收口。所以轮中 steer /
  * 中途 abort 都只是「这张卡没有终答」，不需要造合成消息去承载它们。
+ * 压缩摘要虽然也是 assistant 消息，但它是边界标记而不是哪一轮的终答：自成一项。
  *
  * 每项的 key 取组首消息 id：流式占位并入已有组时组首不变，本轮结束换成真实终答
  * 也不会让这一项重挂载 —— 展开着的工具卡/思考块因此不会被折回去。
@@ -65,6 +66,13 @@ export function buildVisibleItems(messages: ChatMessage[], isStreaming: boolean)
     if (msg.role === 'system_notify' && msg.type !== 'error_event') continue
 
     if (isAssistantMessage(msg)) {
+      // 压缩摘要是边界标记，不是某一轮的终答：自成一项，不并入前后任何一张卡 ——
+      // 并进去的话，一段没有终答的过程（中止 / steer）会把摘要当成自己的「结论」
+      if (msg.metadata?.isCompactionSummary) {
+        flush()
+        items.push({ key: msg.id, msg })
+        continue
+      }
       group.push(msg)
       if (isFinalAnswer(msg)) flush()
       continue

@@ -156,6 +156,8 @@ describe('单次工具调用', () => {
 
     const rows = await chat.toolRows()
     expect(rows).toEqual([{ name: 'read', status: 'done' }])
+    // 单个步骤不成组：合并行一行都不该出现
+    expect(await chat.stepGroups()).toEqual([])
     expect(await chat.expandToolRow(0)).toContain('ALPHA CONTENT')
 
     // 重开：details / 结果文本随投影还原
@@ -163,6 +165,7 @@ describe('单次工具调用', () => {
     expect(await sidebar.openSession('T-single')).toBe(true)
     await until(async () => (await chat.toolRows()).length === 1, 'tool row reprojected')
     expect(await chat.toolRows()).toEqual([{ name: 'read', status: 'done' }])
+    expect(await chat.stepGroups()).toEqual([])
     const reopened = toolBlocksOf(await listMessages(sids.single))
     expect(reopened.find((b) => b.toolCallId === 'call_1')?.details?.type).toBe('read')
   })
@@ -199,6 +202,8 @@ describe('一条消息里的多个同名调用', () => {
     expect(cards).toHaveLength(1)
     expect(toolBlocksOf(listed).map((b) => b.toolCallId)).toEqual(['call_a', 'call_b'])
 
+    // 两次同名成功调用 → 一行合并行（单层：没有再往上套的折叠头）
+    expect(await chat.stepGroups()).toMatchObject([{ state: 'collapsed', size: 2 }])
     // 合并行：折叠态只有一行计数徽章，展开后才逐条列出
     expect(await chat.groupBadges()).toEqual(['2'])
     expect(await chat.toolRows()).toHaveLength(0)
@@ -236,6 +241,8 @@ describe('工具报错', () => {
     expect(blocks.find((b) => b.toolCallId === 'call_bad')?.isError).toBe(true)
     expect(blocks.find((b) => b.toolCallId === 'call_ok')?.isError).toBeUndefined()
 
+    // 出错的调用切开一段：两行各自独立，没有合并行
+    expect(await chat.stepGroups()).toEqual([])
     // 出错的那条被 completedToolCall 排除 → 两行都保持独立，无合并徽章
     expect(await chat.groupBadges()).toEqual([])
     const rows = await chat.toolRows()
@@ -246,6 +253,7 @@ describe('工具报错', () => {
     await until(async () => (await chat.toolRows()).length === 2, 'error rows reprojected')
     expect((await chat.toolRows()).map((r) => r.status).sort()).toEqual(['done', 'error'])
     expect(await chat.groupBadges()).toEqual([])
+    expect(await chat.stepGroups()).toEqual([])
   })
 })
 

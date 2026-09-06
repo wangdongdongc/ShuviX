@@ -9,10 +9,17 @@
  * 注入点没有类型错误、没有报错、行为上只是「图片没被换掉」—— 这种缺陷只能靠
  * 「断言 transform 真的被调用、且广播用的是它的返回值」钉住。
  */
-import { describe, it, expect, vi } from 'vitest'
-import type { AgentHarnessEvent, Session } from '@earendil-works/pi-agent-core'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { mkdtempSync, rmSync } from 'fs'
+import { tmpdir } from 'os'
+import { join } from 'path'
+import { JsonlSessionStorage, Session } from '@earendil-works/pi-agent-core'
+import { NodeExecutionEnv } from '@earendil-works/pi-agent-core/node'
+import type { AgentHarnessEvent, AgentMessage } from '@earendil-works/pi-agent-core'
+import type { UserTextMessage } from '@shuvix/chat-protocol/types/chatMessage'
 import { forwardHarnessEvent, createHarnessEventState } from '../eventHandler'
 import type { HarnessEventContext } from '../eventHandler'
+import { INLINE_TOKENS_CUSTOM_TYPE, SYSTEM_NOTICE_CUSTOM_TYPE } from '../projection'
 import { defaultToolResultTransform } from '../../types'
 import type { ChatEvent, ToolResultTransform } from '../../types'
 
@@ -168,5 +175,83 @@ describe('agent_end 的结局归一', () => {
     const { ctx, events } = makeEndCtx()
     await forwardHarnessEvent(ctx, agentEnd([]))
     expect(events.at(-1)).toMatchObject({ type: 'agent_end', reason: 'ok' })
+  })
+})
+
+/**
+ * `user_message` 广播的侧车配对 —— 实时与重开必须画成同一样。
+ *
+ * message_end 时 harness 已把 user entry 落盘；广播走的是**切片投影**（只投刚 append 的
+ * 那一两条 entry），而侧车（内联 Token / 系统通知）是 user entry 的**父节点**，切片若只带
+ * entry 自身，投影就看不见侧车：实时画成用户气泡，重开画成通知行。这里用真实的
+ * JsonlSessionStorage + Session 走完整 append → getLeafId → getEntry 链路，不 mock 会话树。
+ */
+describe('user_message 广播的侧车配对', () => {
+  let dir: string
+  let session: Session
+
+  beforeEach(async () => {
+    dir = mkdtempSync(join(tmpdir(), 'shuvix-eventhandler-'))
+    const env = new NodeExecutionEnv({ cwd: dir })
+    const storage = await JsonlSessionStorage.create(env, join(dir, `${SESSION_ID}.jsonl`), {
+      cwd: dir,
+      sessionId: SESSION_ID
+    })
+    session = new Session(storage)
+  })
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  const userMsg = (text: string): AgentMessage =>
+    ({ role: 'user', content: [{ type: 'text', text }], timestamp: Date.now() }) as AgentMessage
+
+  /** 落盘一条 user 消息并把它的 message_end 喂给转换器，回广播出的那条 user_message */
+  async function broadcastUser(msg: AgentMessage): Promise<UserTextMessage> {
+    await session.appendMessage(msg)
+    const { ctx, events } = makeCtx(defaultToolResultTransform)
+    ctx.session = session
+    await forwardHarnessEvent(ctx, { type: 'message_end', message: msg } as AgentHarnessEvent)
+    const ev = events.find((e) => e.type === 'user_message')
+    expect(ev).toBeDefined()
+    return JSON.parse(
+      (ev as Extract<ChatEvent, { type: 'user_message' }>).message
+    ) as UserTextMessage
+  }
+
+  it('系统通知侧车之后的 user 消息：广播出的消息带 isSystemNotice，id 就是 entry id', async () => {
+    // 回归（今日修复）：切片只认内联 Token 侧车，自动续跑那一轮的通知实时画成了用户气泡
+    await session.appendCustomEntry(SYSTEM_NOTICE_CUSTOM_TYPE, { kind: 'background' })
+    const notice =
+      '<background-task pid="1" status="exited with code 0" duration="3s">\nsleep 3\n</background-task>'
+
+    const projected = await broadcastUser(userMsg(notice))
+
+    expect(projected).toMatchObject({ role: 'user', type: 'text', content: notice })
+    expect(projected.metadata?.isSystemNotice).toBe(true)
+    // 实时与重开同一个 id：广播的 id 就是刚落盘的 leaf entry
+    expect(projected.id).toBe(await session.getLeafId())
+  })
+
+  it('没有侧车的 user 消息：广播出的消息不带 isSystemNotice（侧车不凭空出现）', async () => {
+    const projected = await broadcastUser(userMsg('用户真正说的话'))
+    expect(projected).toMatchObject({ role: 'user', content: '用户真正说的话' })
+    expect(projected.metadata?.isSystemNotice).toBeUndefined()
+  })
+
+  it('内联 Token 侧车仍照旧配对：内容还原成标记态原文，tokens 进 metadata', async () => {
+    // 加认系统通知侧车不能挤掉原有的那一种
+    const tokens = { t0: { type: 'cmd', id: 'review', displayText: '/review', payload: 'REVIEW' } }
+    await session.appendCustomEntry(INLINE_TOKENS_CUSTOM_TYPE, {
+      content: '{{shuvixInlineToken:t0}} 参数',
+      tokens
+    })
+
+    const projected = await broadcastUser(userMsg('REVIEW 参数'))
+
+    expect(projected.content).toBe('{{shuvixInlineToken:t0}} 参数')
+    expect(projected.metadata?.inlineTokens).toEqual(tokens)
+    expect(projected.metadata?.isSystemNotice).toBeUndefined()
   })
 })

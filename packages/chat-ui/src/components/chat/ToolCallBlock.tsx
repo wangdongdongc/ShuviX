@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { DiffViewer } from './DiffViewer'
 import { StepRow } from './StepRow'
@@ -37,7 +37,6 @@ import {
   useChatStore,
   type ToolResultDetails,
   type ToolPresentation,
-  type AssistantToolBlock,
   type FormItemRenderer
 } from '../../stores/chatStore'
 import { buildToolSummary } from '@shuvix/chat-protocol/toolSummaries'
@@ -49,6 +48,7 @@ import { SubAgentInlineView } from './SubAgentInlineView'
 import { copyToClipboard } from '../../utils/clipboard'
 import { CODE_MAX_H, DETAIL_PRE_CLASS, STREAM_PRE_CLASS } from './detailViewport'
 import { BackgroundBadge, BgTaskRowState } from './BgTaskTag'
+import { clipLine } from '../../utils/clipLine'
 
 /** lucide 图标名 → 组件映射（按需扩展） */
 const ICON_MAP: Record<string, LucideIcon> = {
@@ -85,8 +85,8 @@ function resolveLucideIcon(name?: string): LucideIcon {
   return ICON_MAP[name] ?? Wrench
 }
 
-/** 按 presentation 配置渲染工具图标（模块级普通函数：图标组件不在 render 内构造） */
-function renderToolIcon(pres?: ToolPresentation): React.ReactNode {
+/** 按 presentation 配置渲染工具图标（模块级普通函数：图标组件不在 render 内构造）—— 步骤合并行也用它 */
+export function renderToolIcon(pres?: ToolPresentation): React.ReactNode {
   const Icon = resolveLucideIcon(pres?.icon)
   return (
     <Icon
@@ -336,69 +336,6 @@ export function ToolCallBlock({
   )
 }
 
-// ─── 相邻同名工具调用的合并行 ──────────────────────────
-
-/**
- * 工具调用分组块 — 一段相邻的同名成功调用折叠成单行（图标 + 名称 + 去重摘要 + 次数），
- * 展开后逐条列出原始 ToolCallBlock。避免「浏览器 evaluate」连刷五行的重复噪音。
- */
-export function ToolCallGroup({
-  toolName,
-  blocks
-}: {
-  toolName: string
-  blocks: AssistantToolBlock[]
-}): React.JSX.Element {
-  const [expanded, setExpanded] = useState(false)
-  const presentation = useChatStore((s) => s.toolPresentations[toolName])
-  const icon = renderToolIcon(presentation)
-
-  // 各次调用的摘要去重后拼接：同工具不同动作（evaluate / screenshot）仍能一眼看出
-  const detail = useMemo(() => {
-    const seen = new Set<string>()
-    for (const b of blocks) {
-      const first = buildToolSummary(toolName, b.args)?.split('\n')[0]?.trim()
-      if (first) seen.add(first)
-    }
-    const joined = [...seen].join(' · ')
-    return joined.length > 60 ? joined.slice(0, 57) + '...' : joined
-  }, [blocks, toolName])
-
-  const rowProps = {
-    icon,
-    label: presentation?.label || toolName,
-    detail: detail ? <span className="font-mono">{detail}</span> : undefined,
-    trailing: (
-      <span className="flex-shrink-0 rounded-full bg-bg-tertiary/70 px-1.5 text-[10px] leading-4 tabular-nums">
-        {blocks.length}
-      </span>
-    )
-  }
-
-  if (!expanded) {
-    return <StepRow {...rowProps} expandable onClick={() => setExpanded(true)} />
-  }
-
-  return (
-    <div>
-      <StepRow {...rowProps} expandable onClick={() => setExpanded(false)} />
-      <div className="ml-3 pl-2 border-l border-border-secondary/50 space-y-0.5">
-        {blocks.map((b) => (
-          <ToolCallBlock
-            key={b.toolCallId}
-            toolName={b.toolName || toolName}
-            toolCallId={b.toolCallId}
-            args={b.args}
-            result={b.result}
-            details={b.details}
-            status="done"
-          />
-        ))}
-      </div>
-    </div>
-  )
-}
-
 // ─── 折叠态摘要生成（基于 presentation 配置） ─────────
 
 /** 根据 presentation 配置生成折叠态图标 + 摘要文本 */
@@ -412,11 +349,7 @@ function buildPresentationSummary(
 
   // 摘要文本：toolSummaries 注册的摘要函数生成，取首行并限长
   const raw = buildToolSummary(toolName, args)
-  let summary = ''
-  if (raw) {
-    const firstLine = raw.split('\n')[0]
-    summary = firstLine.length > 60 ? firstLine.slice(0, 57) + '...' : firstLine
-  }
+  const summary = raw ? clipLine(raw.split('\n')[0], 60) : ''
 
   return {
     icon: (

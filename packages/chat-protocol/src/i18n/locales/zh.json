@@ -193,12 +193,13 @@
     "summaryLabel": "对话摘要（自动压缩）"
   },
   "backgroundNotice": {
-    "sender": "系统",
     "title": "后台任务已完成"
   },
   "instruction": {
-    "sender": "系统",
-    "loaded": "项目指令已加载 · {{filename}}"
+    "title": "项目指令"
+  },
+  "steps": {
+    "thinking": "思考"
   },
   "voice": {
     "startRecording": "语音输入",

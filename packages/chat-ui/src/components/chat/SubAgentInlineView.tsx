@@ -10,8 +10,9 @@ import {
   markdownRehypePlugins
 } from './markdownComponents'
 import { ThinkingBlock } from './ThinkingBlock'
-import { ToolCallBlock, ToolCallGroup } from './ToolCallBlock'
-import { groupConsecutiveToolCalls } from './stepGrouping'
+import { ToolCallBlock } from './ToolCallBlock'
+import { StepGroupView } from './StepGroupView'
+import { groupConsecutiveSteps } from './stepGrouping'
 import { TokenBadge, InvalidTokenBadge } from './InlineTokenBadge'
 import type { ChatMessage } from '../../stores/chatStore'
 import type { SubSessionState } from '../../stores/subSessionStore'
@@ -45,21 +46,6 @@ function PromptBubble({
   )
 }
 
-/** Markdown 正文（子会话转写用小字号） */
-function SubMarkdown({ content }: { content: string }): React.JSX.Element {
-  return (
-    <div className="markdown-body text-xs">
-      <ReactMarkdown
-        remarkPlugins={markdownRemarkPlugins}
-        rehypePlugins={markdownRehypePlugins}
-        components={markdownComponents}
-      >
-        {content}
-      </ReactMarkdown>
-    </div>
-  )
-}
-
 /**
  * 单条子会话消息 —— 与主对话同构：一条 entry 一项，assistant 卡内按 blocks 顺序展开。
  * memo（默认引用比较）：流式期间历史消息引用稳定 → 跳过整段 markdown 逐帧重解析；
@@ -80,27 +66,12 @@ const SubMessage = memo(function SubMessage({
   }
   if (msg.role !== 'assistant') return null
 
+  // 相邻步骤合并为一行（与主对话同一套分组）
   return (
     <div className="space-y-1">
-      {groupConsecutiveToolCalls(msg.blocks).map((g) => {
-        if (g.kind === 'toolGroup') {
-          return <ToolCallGroup key={g.key} toolName={g.toolName} blocks={g.blocks} />
-        }
-        const block = g.block
-        if (block.type === 'thinking') return <ThinkingBlock key={g.key} content={block.text} />
-        if (block.type === 'text') return <SubMarkdown key={g.key} content={block.text} />
-        return (
-          <ToolCallBlock
-            key={g.key}
-            toolName={block.toolName}
-            toolCallId={block.toolCallId}
-            args={block.args}
-            result={block.result}
-            details={block.details}
-            status={block.result ? (block.isError ? 'error' : 'done') : 'running'}
-          />
-        )
-      })}
+      {groupConsecutiveSteps(msg.blocks).map((g) => (
+        <StepGroupView key={g.key} group={g} markdownClassName="markdown-body text-xs" />
+      ))}
     </div>
   )
 })

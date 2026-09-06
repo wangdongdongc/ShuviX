@@ -5,8 +5,9 @@ import { useChatStore } from '../../stores/chatStore'
 import { UserBubble } from './UserBubble'
 import { BotBubble } from './BotBubble'
 import { AssistantBubble } from './AssistantBubble'
-import { BackgroundNoticeBubble } from './BackgroundNoticeBubble'
-import { InstructionBubble } from './InstructionBubble'
+import { BackgroundNoticeRow } from './BackgroundNoticeRow'
+import { InstructionNoticeRow } from './InstructionNoticeRow'
+import { CompactionNoticeRow } from './CompactionNoticeRow'
 
 /** 流式占位卡的固定 id（Conversation 追加，AssistantBubble 据此读流式状态） */
 export const STREAMING_PLACEHOLDER_ID = 'streaming-live'
@@ -26,7 +27,7 @@ export interface VisibleItem {
   key: string
   /** 代表消息：决定 data-msg-* 与渲染分发（助手组取末条 = 终答） */
   msg: ChatMessage
-  /** 助手组的全部消息（msg 是其末条）；非助手项没有 */
+  /** 助手组的全部消息（msg 是其末条）；非助手项没有，压缩摘要项也没有（它自成一项，不是组） */
   msgs?: AssistantMessage[]
   /** 该组末尾是流式占位卡 */
   isStreamingPlaceholder?: boolean
@@ -106,14 +107,19 @@ function MessageBody({
 
   if (msg.type === 'error_event') return <ErrorEventBlock msg={msg} />
 
+  // 压缩摘要：边界标记，自成一项（见 buildVisibleItems），不是任何一张助手卡的终答
+  if (msg.role === 'assistant' && msg.type === 'message' && msg.metadata?.isCompactionSummary) {
+    return <CompactionNoticeRow msg={msg} />
+  }
+
   if (msg.role === 'user') {
-    // 项目指令注入消息走专用卡片
+    // 项目指令注入消息（历史会话）走系统通知行
     if (msg.metadata?.isInstructionInjection) {
-      return <InstructionBubble msg={msg} />
+      return <InstructionNoticeRow msg={msg} />
     }
     // 自动续跑那一轮的「用户消息」其实是系统写的通知 —— 用户没说过这句话，不能画成用户气泡
     if (msg.metadata?.isSystemNotice) {
-      return <BackgroundNoticeBubble msg={msg} />
+      return <BackgroundNoticeRow msg={msg} />
     }
     return <UserBubble msg={msg} onRollback={onRollback ? () => onRollback(msg.id) : undefined} />
   }
