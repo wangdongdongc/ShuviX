@@ -7,7 +7,8 @@
  *   - 思考 + 工具（异类）并成一行；被 steer 截断、没有终答的卡也同样合并，重开一致；
  *   - 中间文本切段：文本前的单个思考仍是自己那一行，文本后的连续调用另成一组；
  *   - 等审批（未落定）的调用不进组、把段切开，放行落定后才与前一步并成一行；
- *   - 后台任务跑完 → 自动续跑那一轮的「用户消息」经真实生产链路画成通知行，实时与重开一致。
+ *   - 后台任务跑完 → 自动续跑那一轮的「用户消息」经真实生产链路画成通知行，实时与重开一致；
+ *   - 智能体还在跑时任务跑完 → 通知走 steer（pi 自己造 user 消息、没有侧车），靠正文形状认出来。
  *
  * 前置：会话都绑同一个项目，`read` 落在 projDir 内不询问；`write` 撞内置 ask-on-write，
  * 正是 E-2 要的中间态 —— 所以本文件的自动放行**只对 bash 那条后台命令**生效（`only`）。
@@ -85,6 +86,7 @@ beforeAll(async () => {
   sids.split = await createSession('F-split', project.id)
   sids.ask = await createSession('F-ask', project.id)
   sids.bg = await createSession('F-bg', project.id)
+  sids.bgSteer = await createSession('F-bg-steer', project.id)
   sids.scratch = await createSession('F-scratch', project.id)
 
   chat = chatPane(app.main)
@@ -330,5 +332,64 @@ describe('后台完成通知', () => {
       state: 'collapsed'
     })
     expect(listed.filter((m) => m.role === 'user')).toHaveLength(2)
+  })
+
+  it('E-5 智能体运行中任务跑完 → 通知经 steer 插进当前 run（无侧车），仍画成通知行', async () => {
+    provider.reset()
+    await events.clear()
+    provider.script(
+      {
+        toolCalls: [
+          {
+            id: 'call_steer_bg',
+            name: 'bash',
+            args: JSON.stringify({
+              command: BG_COMMAND,
+              description: 'e2e background probe (steer)',
+              run_in_background: true
+            })
+          }
+        ],
+        usage: { prompt: 90, completion: 6 }
+      },
+      // 这一轮挂住 8s：任务 ≈3s 退出时智能体仍在跑，通知只能 steer 进当前 run
+      {
+        text: ['still ', 'working'],
+        chunkDelayMs: 50,
+        holdMs: 8_000,
+        usage: { prompt: 110, completion: 4 }
+      },
+      // steer 消息被 run 捞起后再叫一次模型：请求末条 user 消息就是那条通知
+      {
+        when: (r) => r.lastUserText.includes('<background-task'),
+        text: 'collected after steer',
+        usage: { prompt: 140, completion: 4 }
+      }
+    )
+
+    expect(await sidebar.openSession('F-bg-steer')).toBe(true)
+    await chat.ready()
+    await chat.typeAndSend('run something in the background and keep talking')
+    // 通知到达 → steer 队列有货（queue_update 只是旁证，真正的判据在下面的 user_message）
+    await events.waitFor('agent_end', { sessionId: sids.bgSteer })
+    await chat.waitIdle()
+
+    // 通知那条 user 消息是 pi 在 run 内自己落盘的：没有侧车，靠形状判出 isSystemNotice
+    const listed = await listMessages(sids.bgSteer)
+    const notices = listed.filter((m) => m.metadata?.isSystemNotice)
+    expect(notices).toHaveLength(1)
+    expect(notices[0].content).toContain('<background-task pid=')
+    expect(listed.at(-1)?.content).toBe('collected after steer')
+
+    // 实时路径：对话流里是一条通知行，不是用户气泡
+    const rows = await chat.systemNotices()
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ kind: 'background', state: 'collapsed' })
+    expect(rows[0].text).toContain('exited with code 0')
+    // 两条 user 角色的项：用户那句 + 通知；通知那条已由上面的 systemNotices() 断成通知行
+    expect((await chat.settledItems()).filter((i) => i.role === 'user')).toHaveLength(2)
+
+    await reopen('F-bg-steer')
+    await until(async () => (await chat.systemNotices()).length === 1, 'notice row reprojected')
   })
 })

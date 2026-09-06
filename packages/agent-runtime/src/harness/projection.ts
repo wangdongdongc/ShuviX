@@ -31,6 +31,7 @@ import type {
   UsageInfo
 } from '@shuvix/chat-protocol/types/chatMessage'
 import { hasThinkingContent } from '@shuvix/chat-protocol/utils/thinking'
+import { isSystemNoticeText } from '@shuvix/chat-protocol/systemNoticeContract'
 
 /** 指令注入使用的 custom_message 类型标记（与 instructionInjector 共用） */
 export const INSTRUCTION_CUSTOM_TYPE = 'shuvix:instruction'
@@ -217,14 +218,17 @@ function projectUserMessage(
   // 侧车还原：内容换回标记态原文，tokens 进 metadata（气泡渲染芯片 / 复制 / 草稿重建用）
   const inline = state.pendingInline
   state.pendingInline = null
-  const systemNotice = state.pendingSystemNotice
+  // 侧车是主判据；没有侧车时按正文形状兜底 —— steer / nextTurn 路径的通知由 pi 自己造 user
+  // 消息，宿主插不进侧车（见 harnessSession.notify），投影若只认侧车，这些通知就成了用户气泡
+  const text = inline ? inline.content : textOf(msg.content)
+  const systemNotice = state.pendingSystemNotice || (!inline && isSystemNoticeText(text))
   state.pendingSystemNotice = false
   state.out.push({
     id: entryId,
     sessionId,
     role: 'user',
     type: 'text',
-    content: inline ? inline.content : textOf(msg.content),
+    content: text,
     model: state.model,
     provider: state.provider,
     createdAt,

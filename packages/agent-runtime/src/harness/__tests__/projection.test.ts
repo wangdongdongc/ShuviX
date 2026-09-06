@@ -527,3 +527,51 @@ describe('切片投影的 fallback（entriesToChatMessages 的第三/第四参�
     })
   })
 })
+
+describe('系统通知的形状兜底 —— 没有侧车也认得出 steer / nextTurn 路径的通知', () => {
+  const bgNotice = [
+    '<background-task pid="17162" status="killed by SIGTERM" duration="23s">',
+    'for i in $(seq 1 30); do echo "tick $i"; sleep 2; done',
+    'Last output:',
+    'tick 12 17:36:12',
+    '</background-task>'
+  ].join('\n')
+
+  it('N-1 正文完全由通知块组成的 user 消息、没有侧车 → isSystemNotice（pi 自己造的 steer / nextTurn 消息）', async () => {
+    // 回归：只认侧车时，运行中送达的后台通知会被画成用户气泡
+    await session.appendMessage({
+      role: 'user',
+      content: [{ type: 'text', text: bgNotice }],
+      timestamp: Date.now()
+    } as AgentMessage)
+
+    const msgs = await project()
+    expect(msgs).toHaveLength(1)
+    expect(msgs[0].content).toBe(bgNotice)
+    expect((msgs[0].metadata as UserTextMeta | undefined)?.isSystemNotice).toBe(true)
+  })
+
+  it('N-2 通知块之外还有人写的话 → 不认（宁可漏认，不把用户的话记成系统通知）', async () => {
+    await session.appendMessage({
+      role: 'user',
+      content: [{ type: 'text', text: `${bgNotice}\n顺便看看这个` }],
+      timestamp: Date.now()
+    } as AgentMessage)
+
+    const msgs = await project()
+    expect((msgs[0].metadata as UserTextMeta | undefined)?.isSystemNotice).toBeUndefined()
+  })
+
+  it('N-3 内联 Token 侧车之后的消息不走形状判据（那是用户的话，内容按标记态还原）', async () => {
+    await session.appendCustomEntry(INLINE_TOKENS_CUSTOM_TYPE, { content: bgNotice, tokens: {} })
+    await session.appendMessage({
+      role: 'user',
+      content: [{ type: 'text', text: bgNotice }],
+      timestamp: Date.now()
+    } as AgentMessage)
+
+    const msgs = await project()
+    expect(msgs).toHaveLength(1)
+    expect((msgs[0].metadata as UserTextMeta | undefined)?.isSystemNotice).toBeUndefined()
+  })
+})

@@ -9,6 +9,7 @@
  * 只做「够看」的解析，不做校验：文案格式属于桌面主进程（bgTaskService / subSessionRunner），
  * 这里改动滞后时最坏也只是摘要退回首行 —— 原文原样还在展开态里。
  */
+import { systemNoticeBlockRe } from '@shuvix/chat-protocol/systemNoticeContract'
 import { clipLine } from '../../utils/clipLine'
 
 export interface SystemNoticeSummary {
@@ -16,7 +17,6 @@ export interface SystemNoticeSummary {
   text: string
 }
 
-const TAG_RE = /<(background-task|sub-session)\b([^>]*)>([\s\S]*?)<\/\1>/g
 const ATTR_RE = /([\w-]+)="([^"]*)"/g
 /** 单句上限 —— 行内还要给标签与其他句子留位置 */
 const MAX_LEN = 80
@@ -43,7 +43,8 @@ function firstLine(text: string): string {
 
 export function summarizeSystemNotice(content: string): SystemNoticeSummary[] {
   const out: SystemNoticeSummary[] = []
-  for (const m of content.matchAll(TAG_RE)) {
+  // 标签表与投影层认通知的那份是同一份（chat-protocol 的 systemNoticeContract）
+  for (const m of content.matchAll(systemNoticeBlockRe())) {
     const [, tag, rawAttrs, inner] = m
     const attrs = attrsOf(rawAttrs)
     if (tag === 'background-task') {

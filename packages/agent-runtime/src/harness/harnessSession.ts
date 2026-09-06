@@ -402,6 +402,10 @@ export class HarnessSession {
    *   - `nextTurn`：无 idle 守卫，排队等下一轮 —— `executeTurn` 会把它前置到用户消息之前。
    *
    * harness 的 phase 是私有的，判不了状态，所以只能先试 steer、失败再退到 nextTurn。
+   *
+   * 这两条路径都由 pi 自己构造并落盘 user 消息，宿主插不进 `SYSTEM_NOTICE_CUSTOM_TYPE`
+   * 侧车（只有 `resume` 能先写侧车再 prompt）。渲染侧因此还按正文形状兜底认通知 ——
+   * 见 chat-protocol 的 `isSystemNoticeText`；通知正文必须完整地由那几种标签块组成。
    */
   async notify(text: string): Promise<void> {
     try {
