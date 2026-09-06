@@ -13,7 +13,7 @@ import { useSessionExport } from './useSessionExport'
 
 export const TEMP_GROUP_KEY = '__no_project__'
 
-/** 每组默认最多渲染的会话数，超出部分折叠到「查看全部」后面 */
+/** 每组默认渲染的会话数，也是每点一次「查看更多」再多放出的条数；超出部分折在按钮后面 */
 const GROUP_VISIBLE_LIMIT = 20
 
 export interface ProjectSessionGroupsProps {
@@ -99,8 +99,8 @@ export function ProjectSessionGroups({
   const { dim } = useFocusDim()
   const handleSelect = onSelect ?? setActiveSessionId
 
-  // 已点过「查看全部」的组（展开后渲染该组全部会话）
-  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => new Set())
+  // 各组经「查看更多」额外放出的条数（每点一次加一页），组内会话很多时不至于一下全铺开
+  const [extraVisible, setExtraVisible] = useState<Record<string, number>>({})
 
   // 项目名快查表（用于排序/标签）
   const projectNames = useMemo(() => {
@@ -251,11 +251,9 @@ export function ProjectSessionGroups({
       : projectNames[groupKey] || t('sidebar.unnamedProject')
     // 非活动项目组在专注模式下整组淡化；活动组由逐项 dim 处理非选中会话
     const groupDim = dim && activeGroupKey !== groupKey
-    const expanded = expandedGroups.has(groupKey)
+    const limit = GROUP_VISIBLE_LIMIT + (extraVisible[groupKey] ?? 0)
     const shownSessions =
-      expanded || groupSessions.length <= GROUP_VISIBLE_LIMIT
-        ? groupSessions
-        : groupSessions.slice(0, GROUP_VISIBLE_LIMIT)
+      groupSessions.length <= limit ? groupSessions : groupSessions.slice(0, limit)
     return (
       <SessionGroup
         key={groupKey}
@@ -316,11 +314,10 @@ export function ProjectSessionGroups({
         {shownSessions.length < groupSessions.length && (
           <div
             onClick={() =>
-              setExpandedGroups((prev) => {
-                const next = new Set(prev)
-                next.add(groupKey)
-                return next
-              })
+              setExtraVisible((prev) => ({
+                ...prev,
+                [groupKey]: (prev[groupKey] ?? 0) + GROUP_VISIBLE_LIMIT
+              }))
             }
             // 与同组会话项一致：活动组内逐项淡化（本行永不是选中项，故恒淡）；
             // 非活动组由 SessionGroup 整组淡化，这里不再叠加，否则 0.3×0.3 几乎不可见
@@ -329,7 +326,7 @@ export function ProjectSessionGroups({
             }`}
           >
             <span className="w-[11px] flex-shrink-0" />
-            <span className="text-[13px] truncate">{t('sidebar.viewAll')}</span>
+            <span className="text-[13px] truncate">{t('sidebar.viewMore')}</span>
           </div>
         )}
       </SessionGroup>
