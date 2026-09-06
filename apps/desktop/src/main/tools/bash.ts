@@ -47,7 +47,7 @@ const BashParamsSchema = Type.Object({
   }),
   timeout: Type.Optional(
     Type.Number({
-      description: `Command timeout in seconds (default: ${DEFAULT_TIMEOUT}s). Increase for long-running commands.`
+      description: `Command timeout in seconds (default: ${DEFAULT_TIMEOUT}s). Increase for long-running commands. Pass 0 for no time limit.`
     })
   ),
   run_in_background: Type.Optional(
@@ -110,11 +110,16 @@ function defaultSpawn(
       stderr += sanitizeBinaryOutput(data.toString('utf-8'))
     })
 
-    // 超时处理
-    const timer = setTimeout(() => {
-      killed = true
-      if (child.pid) killProcessTree(child.pid)
-    }, timeout * 1000)
+    // 超时处理：timeout <= 0 表示不限时（不设定时器）。
+    // 0 曾是事故现场 —— setTimeout(kill, 0) 会在 spawn 下一 tick 就杀进程树，
+    // Windows 上还可能把 MSYS CREATE_SUSPENDED 途中的孙进程漏杀成永久挂起的孤儿
+    const timer =
+      timeout > 0
+        ? setTimeout(() => {
+            killed = true
+            if (child.pid) killProcessTree(child.pid)
+          }, timeout * 1000)
+        : undefined
 
     // abort 处理
     const onAbort = (): void => {
