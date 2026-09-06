@@ -1,5 +1,6 @@
 import { getHostApi, useChatStore } from '@shuvix/chat-ui'
 import { X, icons } from 'lucide-react'
+import { useFocusDim } from '../sidebar/useFocusDim'
 
 export interface StatusBannerProps {
   sessionId: string
@@ -17,15 +18,24 @@ export interface StatusBannerProps {
  *   - 会话工具栏（SessionToolbar）进了顶栏右侧按钮簇 —— 它当初从正文右上角的浮层挪来
  *     这条 bar，是为了不压住右对齐的用户气泡；顶栏同样不压正文，还不必为它留一整行。
  * 也因此不再需要定高（min-h）：横幅里只剩等高的胶囊，不会随开合忽高忽低。
+ *
+ * 专注模式淡化与顶栏 / 侧栏 / 面板页签同一套判定与手感（悬浮即恢复不透明）：整条一起淡，
+ * 底色与描边也在内 —— 它是对话上方的一条陈设，不是对话本身。
  */
 export function StatusBanner({ sessionId }: StatusBannerProps): React.JSX.Element | null {
   const runtimes = useChatStore((s) => s.sessionResources[sessionId]?.runtimes)
+  // hook 必须在下面的早退之前调用
+  const { dim } = useFocusDim()
 
   const runtimeEntries = runtimes ? Object.entries(runtimes) : []
   if (runtimeEntries.length === 0) return null
 
   return (
-    <div className="flex-shrink-0 flex items-center gap-2 px-4 py-1 bg-bg-secondary/60 border-b border-border-secondary/30">
+    <div
+      className={`flex-shrink-0 flex items-center gap-2 px-4 py-1 bg-bg-secondary/60 border-b border-border-secondary/30 transition-opacity duration-200 ${
+        dim ? 'opacity-30 hover:opacity-100' : ''
+      }`}
+    >
       {runtimeEntries.map(([runtimeId, info]) => {
         const IconComponent = info.icon ? icons[info.icon as keyof typeof icons] : null
         return (
