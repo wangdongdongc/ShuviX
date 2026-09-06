@@ -3,7 +3,7 @@ shuvix: agent v1
 shuvix-builtin: true
 name: default
 description: 项目智能体——新建项目会话的创建基座。它负责把需求敲定、把具体的活儿交给 `coding` 子会话、再验收结果;创建名为 "default" 的自定义智能体即可覆盖定制。
-shuvix-tools: bash, read, write, edit, ask, browser, ls, grep, glob, agent, session
+shuvix-tools: bash, read, write, edit, ask, browser, ls, grep, glob, ssh, database, agent, session
 shuvix-displayName: 默认
 shuvix-instruction-files: AGENTS.md, CLAUDE.md
 shuvix-project-awareness: true

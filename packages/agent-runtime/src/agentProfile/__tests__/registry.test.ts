@@ -252,7 +252,7 @@ describe('buildBuiltinProfiles — 全集现算', () => {
 })
 
 describe('default 档案钉板(主会话默认工具集/环境段的唯一事实源)', () => {
-  it('tools 按桌面注册序列出 + Agent/session 居末;远程/数据库类工具随工程人格拆去 coding', () => {
+  it('tools 按桌面注册序列出 + Agent/session 居末;git/preview 不进任何基座', () => {
     // 顺序与 apps/desktop/src/main/tools/allTools.ts 的注册序一致(bash→read→write→edit→ask→
     // browser→ls→grep→glob→ssh→database)——LLM 所见工具序列的稳定性依赖它;
     // 工具注册表导入链含 electron/native 模块无法在测试内加载,故硬编码钉住,改动需同步两侧。
@@ -269,12 +269,14 @@ describe('default 档案钉板(主会话默认工具集/环境段的唯一事实
       'ls',
       'grep',
       'glob',
+      'ssh',
+      'database',
       'agent',
       'session'
     ])
-    // ssh/database 随工程人格去了 coding；git/preview 不进任何基座（见 allTools.ts 的注释：
-    // 主 Agent 默认无，用户可覆盖 default.md 加入，子代理经白名单解析不受默认集限制）
-    for (const gone of ['ssh', 'database', 'git', 'preview']) {
+    // git/preview 不进任何基座（见 allTools.ts 的注释：主 Agent 默认无，用户可覆盖
+    // default.md 加入，子代理经白名单解析不受默认集限制）
+    for (const gone of ['git', 'preview']) {
       expect(built.tools, `default 不应持有 ${gone}`).not.toContain(gone)
     }
     // 环境/工作区模板已内化进 body（{{shuvix:*}} 占位符,createAgent 时替换）
@@ -331,6 +333,8 @@ describe('chat 档案钉板(不归属项目的会话的创建基座)', () => {
       'ls',
       'grep',
       'glob',
+      'ssh',
+      'database',
       'agent',
       'session'
     ])
@@ -404,7 +408,7 @@ describe('default body 与 session 工具的动作枚举', () => {
 })
 
 describe('coding 档案钉板(从 default 拆出的工程人格)', () => {
-  it('握有完整工具链 —— default 让出的 ssh/database 在这里', () => {
+  it('工具面与两个基座**逐字相同** —— 三个可切换档案共用一套工具，分工全在正文', () => {
     const built = profile('coding')
     expect(built.tools).toEqual([
       'bash',
@@ -421,6 +425,12 @@ describe('coding 档案钉板(从 default 拆出的工程人格)', () => {
       'agent',
       'session'
     ])
+    // 拆分之初 coding 的卖点之一是「default 让出的 ssh/database 在这里」，那条理由已经
+    // 作废：收窄工具从来不是表达分工的手段（收窄 default 只会让它拿 bash 绕一圈做同一件
+    // 事）。现在 default / chat / coding 三份清单逐字相同，区别全部由正文承担 —— 谁想
+    // 靠改工具面重新制造分工，会在这里撞红。
+    expect(built.tools).toEqual(profile(DEFAULT_PROFILE_NAME).tools)
+    expect(built.tools).toEqual(profile(CHAT_PROFILE_NAME).tools)
   })
 
   it('声明会话感知（可 /coding 切换），且不是基座档案', () => {

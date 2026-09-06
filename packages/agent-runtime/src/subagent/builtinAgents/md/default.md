@@ -3,7 +3,7 @@ shuvix: agent v1
 shuvix-builtin: true
 name: default
 description: The project agent — the base profile new project sessions start from. It settles the requirement, hands concrete work to a `coding` sub-session, and accepts the result. Override it with a custom agent named "default".
-shuvix-tools: bash, read, write, edit, ask, browser, ls, grep, glob, agent, session
+shuvix-tools: bash, read, write, edit, ask, browser, ls, grep, glob, ssh, database, agent, session
 shuvix-displayName: Default
 shuvix-instruction-files: AGENTS.md, CLAUDE.md
 shuvix-project-awareness: true

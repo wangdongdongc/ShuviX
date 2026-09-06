@@ -208,7 +208,7 @@ export const BUILTIN_PROFILE_SPECS: readonly BuiltinProfileSpec[] = [
  *
  * 三者都可被同名用户档案覆盖（这正是自定义人格的入口），但都不该出现在派发工具的
  * 可用名单里（会诱导 LLM 拿基座档案当一次性任务 agent 使 —— 它们是某种会话形态的人格，
- * 不是为一次性任务写的；论工具清单 default 反而比 coding 窄）。
+ * 不是为一次性任务写的；论工具清单它们与 coding 逐字相同，分工全在正文）。
  */
 export const BASE_PROFILE_NAMES: ReadonlySet<string> = new Set([
   DEFAULT_PROFILE_NAME,
