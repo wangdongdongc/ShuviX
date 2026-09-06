@@ -11,6 +11,7 @@ import { SubAgentPanel } from '../subagent/SubAgentPanel'
 import { usePreviewPanelStore } from '../preview/previewPanelStore'
 import { BgTaskPanel } from './BgTaskPanel'
 import { useSessionPanelStore, type SessionPanelTool } from './sessionPanelStore'
+import { PanelCloseInsetContext } from './panelCloseInset'
 
 /**
  * 会话面板（桌面 / 扩展共用）—— 经 ChatBody 的 sessionToolbar / sessionPanel 插槽注入：
@@ -20,7 +21,8 @@ import { useSessionPanelStore, type SessionPanelTool } from './sessionPanelStore
  *     **且存在预览目标**时出现（与 Sub-agent 同款「有内容才显示」语义）；Sub-agent 仅当前
  *     会话有子会话时出现（含数量徽标）。点按展开面板并切到该工具。
  *   - SessionPanel：正文区右侧的悬浮卡片（四周留白 + 圆角 + 边框 + 投影，布局上与对话并排、
- *     对话收缩让位）。头部只有一枚收起按钮（工具切换在顶栏的 tabs）。
+ *     对话收缩让位）。收起按钮悬在卡片右上角、与各工具自己的首行同线（工具切换在顶栏的
+ *     tabs），让位机制见 panelCloseInset.ts。
  *     装载 Files / Preview / Sub-agent / 后台任务，展开期间各工具均保持挂载、visibility 切换
  *     （保住预览/手风琴等临时 UI 态）；收起时整体卸载（避免后台文件扫描）。
  *
@@ -116,7 +118,7 @@ function useSessionPanelToolItems(
  * 会话工具栏（顶栏右侧）—— 面板收起与展开时**同一处**的工具入口：
  *   - 收起：仅图标，点按展开并切到该工具；
  *   - 展开：即面板的 tabs（当前工具带文字），点按切换工具。
- * **只负责开与切，不负责关**：收起按钮在面板卡片自己的头部（见下方 SessionPanel）——
+ * **只负责开与切，不负责关**：收起按钮在面板卡片自己身上（见下方 SessionPanel）——
  * 关闭一个东西的按钮长在那个东西上，而不是长在另一头的顶栏里。
  *
  * 宿主把它放进 ChatHeader 的 rightActions（原先挂在状态横幅右侧，为它单占一行）；
@@ -220,7 +222,7 @@ export function SessionPanel({
         // 叠出一条更重的线（那正是面板一开滚动条就显得变粗变深的原因）。
         // -ml-px：左描边压在滚动条槽最右 1px 上（卡片是后序兄弟，画在对话列之上），
         // 于是「滑块 + 描边」合起来仍是 4px —— 与面板收起时的滚动条等宽，开面板不再让它变粗
-        className="session-panel-card -ml-px flex flex-col h-full rounded-xl border border-border-primary/60 border-l-border-primary/40 bg-bg-secondary shadow-md overflow-hidden"
+        className="session-panel-card -ml-px relative flex flex-col h-full rounded-xl border border-border-primary/60 border-l-border-primary/40 bg-bg-secondary shadow-md overflow-hidden"
         style={
           {
             '--color-bg-primary': 'var(--theme-bg-secondary)',
@@ -233,54 +235,56 @@ export function SessionPanel({
         }
       >
         {/*
-          头部：只有一枚收起按钮（工具切换是顶栏那排 tabs 的事）。刻意不写工具名 ——
-          顶栏的活动 tab 已经在说「现在是 Files」，这里重复一遍只是把卡片顶白占掉。
-          px-2 与各工具自己的头部（FilesPanel 的路径行等）同一内缩、按钮内边距也同为
-          p-1，于是 X 与其下的搜索/刷新图标竖直对齐；不加下边框，免得与工具头部的
-          边框叠成两道线。
+          收起按钮：绝对定位在卡片右上角，**不占一行** —— 各工具首行经 PanelCloseInsetContext
+          让出右侧那一块（见 panelCloseInset.ts），于是它与 Files 的搜索/刷新落在同一条线上。
+          尺寸与定位照抄 Files 头部那两枚按钮（11px 图标 + p-1 + 距边 8px），于是它读起来就是
+          那一行的第三枚图标，而不是一枚压在上面的浮标。
+          底色取 bg-bg-secondary（卡内该 token 已被换成卡片底色）：子代理 / 后台任务是整块
+          滚动区，内容会从按钮下面淌过去，得有块底把它挡住。
         */}
-        <div className="flex-shrink-0 flex items-center justify-end h-6 px-2">
-          <button
-            onClick={() => useSessionPanelStore.getState().close(sessionId)}
-            className="p-1 rounded text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/40 transition-colors"
-            title={t('common.close')}
-          >
-            <X size={13} />
-          </button>
-        </div>
-        {/* 内容区 —— 各工具共存，visibility 切换 */}
-        <div className="flex-1 min-h-0 relative">
-          <div
-            className="absolute inset-0"
-            style={tool === 'files' ? undefined : { visibility: 'hidden', pointerEvents: 'none' }}
-          >
-            {filesContent}
-          </div>
-          {previewContent !== undefined && (
+        <button
+          onClick={() => useSessionPanelStore.getState().close(sessionId)}
+          className="absolute top-1 right-2 z-10 p-1 rounded bg-bg-secondary text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/40 transition-colors"
+          title={t('common.close')}
+        >
+          <X size={11} />
+        </button>
+        {/* 各工具首行据此让出右上角那一块（收起按钮悬在那儿） */}
+        <PanelCloseInsetContext.Provider value={true}>
+          {/* 内容区 —— 各工具共存，visibility 切换 */}
+          <div className="flex-1 min-h-0 relative">
+            <div
+              className="absolute inset-0"
+              style={tool === 'files' ? undefined : { visibility: 'hidden', pointerEvents: 'none' }}
+            >
+              {filesContent}
+            </div>
+            {previewContent !== undefined && (
+              <div
+                className="absolute inset-0"
+                style={
+                  tool === 'preview' ? undefined : { visibility: 'hidden', pointerEvents: 'none' }
+                }
+              >
+                {previewContent}
+              </div>
+            )}
             <div
               className="absolute inset-0"
               style={
-                tool === 'preview' ? undefined : { visibility: 'hidden', pointerEvents: 'none' }
+                tool === 'subagent' ? undefined : { visibility: 'hidden', pointerEvents: 'none' }
               }
             >
-              {previewContent}
+              <SubAgentPanel />
             </div>
-          )}
-          <div
-            className="absolute inset-0"
-            style={
-              tool === 'subagent' ? undefined : { visibility: 'hidden', pointerEvents: 'none' }
-            }
-          >
-            <SubAgentPanel />
+            <div
+              className="absolute inset-0"
+              style={tool === 'tasks' ? undefined : { visibility: 'hidden', pointerEvents: 'none' }}
+            >
+              <BgTaskPanel sessionId={sessionId} />
+            </div>
           </div>
-          <div
-            className="absolute inset-0"
-            style={tool === 'tasks' ? undefined : { visibility: 'hidden', pointerEvents: 'none' }}
-          >
-            <BgTaskPanel sessionId={sessionId} />
-          </div>
-        </div>
+        </PanelCloseInsetContext.Provider>
       </div>
     </div>
   )

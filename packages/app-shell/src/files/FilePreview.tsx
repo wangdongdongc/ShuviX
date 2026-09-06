@@ -47,6 +47,7 @@ import { EbookView } from './EbookView'
 import { OfficeView, SHEET_CONFIRM_BYTES, DOCX_CONFIRM_BYTES } from './OfficeView'
 import { useMediaUrl } from '@shuvix/chat-ui'
 import { basename } from './paths'
+import { usePanelCloseInset } from '../panel/panelCloseInset'
 import type { FileReadResult } from '@shuvix/chat-protocol/types/filePreview'
 
 interface FilePreviewProps {
@@ -74,6 +75,7 @@ export function FilePreview({
   openedBy = 'user'
 }: FilePreviewProps): React.JSX.Element {
   const { t } = useTranslation()
+  const closeInset = usePanelCloseInset()
   const [result, setResult] = useState<FileReadResult | null>(null)
   /** 单行 minified / 长 JSON 等长行场景下让 CodeView 自动换行；切换文件不复位（视为面板偏好）。
    *  对非 markdown 文本，以及 markdown 切到「源码模式」时生效。 */
@@ -147,8 +149,13 @@ export function FilePreview({
 
   return (
     <div className="flex flex-col h-full bg-bg-secondary">
-      {/* 顶栏：左侧只显示文件名（宽度全给文件名，完整路径见 tooltip）；右侧按钮组（wrap 切换 + 关闭） */}
-      <div className="flex-shrink-0 flex items-center justify-between gap-2 px-2 h-7 border-b border-border-secondary/30">
+      {/* 顶栏：左侧只显示文件名（宽度全给文件名，完整路径见 tooltip）；右侧按钮组（wrap 切换 + 关闭）。
+          在会话面板里还要给悬在卡片右上角的收起按钮让位（pr-8 = 8px 内缩 + 21px 按钮 + 缝） */}
+      <div
+        className={`flex-shrink-0 flex items-center justify-between gap-2 px-2 h-7 border-b border-border-secondary/30${
+          closeInset ? ' pr-8' : ''
+        }`}
+      >
         <span className="min-w-0 truncate text-[11px] font-medium text-text-primary" title={path}>
           {fileName}
         </span>

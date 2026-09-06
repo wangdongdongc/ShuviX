@@ -10,6 +10,7 @@ import {
   useBgTaskStatus
 } from '@shuvix/chat-ui'
 import type { BgTaskInfo } from '@shuvix/chat-protocol/types/bgTask'
+import { usePanelCloseInset } from './panelCloseInset'
 
 /**
  * 后台任务面板 —— SessionPanel 的 tasks 页
@@ -170,7 +171,8 @@ function TaskGroup({
   now,
   expandedId,
   onToggleExpand,
-  onClear
+  onClear,
+  reserveTopRight = false
 }: {
   label: string
   tasks: BgTaskInfo[]
@@ -178,6 +180,8 @@ function TaskGroup({
   expandedId: string | null
   onToggleExpand: (toolCallId: string) => void
   onClear?: () => void
+  /** 本组是面板首个可见分组：组头右侧给会话面板悬在卡片右上角的收起按钮让位 */
+  reserveTopRight?: boolean
 }): React.JSX.Element | null {
   const [collapsed, setCollapsed] = useState(false)
   const { t } = useTranslation()
@@ -185,7 +189,7 @@ function TaskGroup({
 
   return (
     <div className="mb-1.5 last:mb-0">
-      <div className="flex items-center gap-1 px-1 py-1">
+      <div className={`flex items-center gap-1 px-1 py-1${reserveTopRight ? ' pr-6' : ''}`}>
         <button
           onClick={() => setCollapsed((v) => !v)}
           className="flex items-center gap-1 min-w-0 text-[11px] text-text-tertiary hover:text-text-secondary transition-colors"
@@ -281,6 +285,7 @@ function TaskRow({
 
 export function BgTaskPanel({ sessionId }: { sessionId: string | null }): React.JSX.Element {
   const { t } = useTranslation()
+  const closeInset = usePanelCloseInset()
   const tasks = useBgTasks(sessionId)
   const [expandedId, setExpandedId] = useState<string | null>(null)
 
@@ -318,12 +323,14 @@ export function BgTaskPanel({ sessionId }: { sessionId: string | null }): React.
 
   return (
     <div className="h-full overflow-y-auto no-scrollbar p-1.5 bg-bg-secondary">
+      {/* 让位只给**首个可见**分组：空组渲染成 null，运行中为空时首行就是「已完成」那条 */}
       <TaskGroup
         label={t('panel.tasksRunning')}
         tasks={running}
         now={now}
         expandedId={expandedId}
         onToggleExpand={toggleExpand}
+        reserveTopRight={closeInset && running.length > 0}
       />
       <TaskGroup
         label={t('panel.tasksFinished')}
@@ -332,6 +339,7 @@ export function BgTaskPanel({ sessionId }: { sessionId: string | null }): React.
         expandedId={expandedId}
         onToggleExpand={toggleExpand}
         onClear={clearFinished}
+        reserveTopRight={closeInset && running.length === 0}
       />
     </div>
   )

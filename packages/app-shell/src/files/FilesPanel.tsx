@@ -12,6 +12,7 @@ import { useTranslation } from 'react-i18next'
 import { Folder, RefreshCw, Search, X } from 'lucide-react'
 import type { FileTree as FileTreeModel } from '@pierre/trees'
 import { FilesTree } from './FilesTree'
+import { usePanelCloseInset } from '../panel/panelCloseInset'
 import { useChatStore, getSessionChannelApi, useAppEvent } from '@shuvix/chat-ui'
 import { isContentOnlyFileChange } from '@shuvix/chat-protocol/utils/fileMap'
 import { AudioDock } from './AudioDock'
@@ -64,6 +65,7 @@ export function FilesPanel({ onOpenFolder }: FilesPanelProps = {}): React.JSX.El
   const { t } = useTranslation()
   const sessionId = useChatStore((s) => s.activeSessionId)
   const projectPath = useChatStore((s) => s.projectPath)
+  const closeInset = usePanelCloseInset()
 
   const [state, setState] = useState<ScanState | null>(null)
   const [error, setError] = useState<ScanError | null>(null)
@@ -269,7 +271,12 @@ export function FilesPanel({ onOpenFolder }: FilesPanelProps = {}): React.JSX.El
   return (
     <div className="flex flex-col h-full bg-bg-secondary">
       {/* 顶栏：左侧工作目录名（大写）+ 右侧 truncated 提示 + 搜索 + 刷新 */}
-      <div className="flex-shrink-0 flex items-center justify-between gap-2 px-2 h-7 border-b border-border-secondary/30">
+      {/* 头部：会话面板里要给悬在卡片右上角的收起按钮让出位置（pr-8 = 8px 内缩 + 21px 按钮 + 缝） */}
+      <div
+        className={`flex-shrink-0 flex items-center justify-between gap-2 px-2 h-7 border-b border-border-secondary/30${
+          closeInset ? ' pr-8' : ''
+        }`}
+      >
         <div className="flex items-center gap-0.5 min-w-0 max-w-[60%]">
           <span
             className="text-[11px] font-medium uppercase tracking-wider text-text-tertiary truncate"

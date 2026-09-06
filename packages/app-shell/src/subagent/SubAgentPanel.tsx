@@ -20,6 +20,7 @@ import { segmentContent, parseSlashCommandInput } from '@shuvix/chat-protocol/ut
 import { hasThinkingContent } from '@shuvix/chat-protocol/utils/thinking'
 import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
 import { useFocusDim } from '../sidebar/useFocusDim'
+import { usePanelCloseInset } from '../panel/panelCloseInset'
 
 /**
  * 折叠头右侧的单一状态/动作按钮 —— 合并原「状态图标 + 关闭按钮」为一个状态唯一的按钮：
@@ -390,6 +391,7 @@ function SubAgentReplyInput({ subSessionId }: { subSessionId: string }): React.J
 
 /** 子 Tab 栏 + 当前活跃子会话内容 */
 export function SubAgentPanel(): React.JSX.Element {
+  const closeInset = usePanelCloseInset()
   const allList = useSubSessionStore(selectSubSessionList)
   const closeSub = useSubSessionStore((s) => s.close)
   const activeSessionId = useChatStore((s) => s.activeSessionId)
@@ -465,10 +467,13 @@ export function SubAgentPanel(): React.JSX.Element {
                 dim && !expanded ? 'opacity-40 hover:opacity-100' : ''
               }`}
             >
-              {/* 折叠头：展开箭头 + 名称 + 状态 + 关闭 */}
+              {/* 折叠头：展开箭头 + 名称 + 状态 + 关闭。首块还要给会话面板悬在卡片右上角的
+                  收起按钮让位（内层卡片已内缩 7px，再让 24px 即够） */}
               <div
                 onClick={() => toggle(sub.subSessionId)}
-                className="flex items-center gap-1.5 px-2 h-7 cursor-pointer select-none text-[11px] text-text-secondary hover:bg-bg-secondary/30 transition-colors"
+                className={`flex items-center gap-1.5 px-2 h-7 cursor-pointer select-none text-[11px] text-text-secondary hover:bg-bg-secondary/30 transition-colors${
+                  closeInset && idx === 0 ? ' pr-6' : ''
+                }`}
               >
                 {expanded ? (
                   <ChevronDown size={13} className="flex-shrink-0 text-text-tertiary" />
