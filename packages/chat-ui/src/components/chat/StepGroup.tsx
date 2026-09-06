@@ -1,6 +1,5 @@
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ListCollapse } from 'lucide-react'
 import { buildToolSummary } from '@shuvix/chat-protocol/toolSummaries'
 import { useChatStore } from '../../stores/chatStore'
 import { clipLine } from '../../utils/clipLine'
@@ -16,8 +15,8 @@ import { formatStepSequence, summarizeSteps, uniformToolName, type StepBlock } f
  * 两种面孔，同一副骨架：
  *  - 全是同一个工具：`[工具图标] 阅读  alpha.txt · beta.txt  [2]` —— 与从前的同名合并行一模一样，
  *    摘要去重后拼接，同工具不同动作（evaluate / screenshot）仍能一眼看出；
- *  - 混着思考或不同工具：`[≡] 思考 · 写入文件 · 阅读 ×2  test.txt  [4]` —— 标签位换成按序去重的
- *    步骤序列，摘要位仍是各次调用摘要的去重拼接（多半是同一个文件名）。
+ *  - 混着思考或不同工具：`思考 · 写入文件 · 阅读 ×2  test.txt  [4]` —— 不出图标（图标槽留空
+ *    保持对齐），标签位换成按序去重的步骤序列，摘要位仍是各次调用摘要的去重拼接。
  */
 export function StepGroup({ blocks }: { blocks: StepBlock[] }): React.JSX.Element {
   const { t } = useTranslation()
@@ -58,7 +57,7 @@ export function StepGroup({ blocks }: { blocks: StepBlock[] }): React.JSX.Elemen
         detail: detail ? <span className="font-mono">{detail}</span> : undefined
       }
     : {
-        icon: <ListCollapse size={12} className="flex-shrink-0" />,
+        // 混合段不出图标：几种工具各有各的图标，再造一枚泛指的只是噪音；图标槽留空保持对齐
         label: sequence,
         detail: detail ? <span className="font-mono">{detail}</span> : undefined
       }
