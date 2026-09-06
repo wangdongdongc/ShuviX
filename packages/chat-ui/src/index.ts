@@ -68,7 +68,6 @@ export { useChatActions } from './hooks/useChatActions'
 export { useSessionMeta } from './hooks/useSessionMeta'
 export { useSlashCommands } from './hooks/useSlashCommands'
 export { useImageUpload } from './hooks/useImageUpload'
-export { useVoiceInput } from './hooks/useVoiceInput'
 export { useTtsPlayback } from './hooks/useTtsPlayback'
 // 通用 UI 小工具（app 其它处也复用）
 export {

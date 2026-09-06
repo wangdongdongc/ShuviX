@@ -516,19 +516,6 @@ const api = {
     list: (params: { sessionId: string | null }) => ipcRenderer.invoke('command:list', params)
   },
 
-  // ============ 语音转文字 ============
-  stt: {
-    /** 调用 Whisper 转写音频 */
-    transcribe: (params: { audioData: string; pcmf32?: string; language?: string }) =>
-      ipcRenderer.invoke('stt:transcribe', params),
-    /** 获取本地 Whisper 状态（模型列表） */
-    getLocalStatus: () => ipcRenderer.invoke('stt:getLocalStatus'),
-    /** 下载指定模型 */
-    downloadModel: (modelId: string) => ipcRenderer.invoke('stt:downloadModel', modelId),
-    /** 删除指定模型 */
-    deleteModel: (modelId: string) => ipcRenderer.invoke('stt:deleteModel', modelId)
-  },
-
   // ============ 文字转语音 ============
   tts: {
     /** TTS 切片合成 — 每片完成通过 onChunk 事件推送 */

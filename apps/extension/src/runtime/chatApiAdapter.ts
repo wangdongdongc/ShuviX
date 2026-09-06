@@ -548,10 +548,6 @@ export const chatApiAdapter: ChatApi = {
     subscribe: (cb) => appEventBus.subscribe(cb)
   },
 
-  stt: {
-    transcribe: async () => ({ text: '' })
-  },
-
   tts: {
     speakOnce: async () => {},
     abortTts: async () => {},

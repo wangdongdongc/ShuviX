@@ -587,14 +587,6 @@ export interface SessionChannelApi {
   events: {
     subscribe: (callback: (event: AppEvent) => void) => () => void
   }
-  /** 语音转文字 */
-  stt: {
-    transcribe: (params: {
-      audioData: string
-      pcmf32?: string
-      language?: string
-    }) => Promise<{ text: string }>
-  }
   /** 文字转语音 */
   tts: {
     speakOnce: (params: { text: string }) => Promise<void>

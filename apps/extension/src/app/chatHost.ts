@@ -1,6 +1,6 @@
 /**
  * 扩展宿主状态 —— 把 settingsStore 组装成 chat-ui 的 ChatHostValue（外观 / 当前选中模型）。
- * 仿桌面 settingsChatHost.ts，但数据源为 chrome.storage；不提供 voice（扩展暂不支持语音）。
+ * 仿桌面 settingsChatHost.ts，但数据源为 chrome.storage；不提供 voice（扩展暂不支持朗读）。
  *
  * 模型「目录」(providers/availableModels)已收进 chat-ui modelCatalogStore（经 ChatApi.provider 拉取 +
  * 订阅 providers.changed），此处只注入当前会话的选中模型镜像。
@@ -45,6 +45,6 @@ export function useExtensionChatHost(): ChatHostValue {
       focusMode: appearance.focusMode
     },
     models: { activeProvider, activeModel, setActiveProvider, setActiveModel }
-    // 不提供 voice —— 扩展暂不支持语音输入/朗读（STT 后端为 noop），据此隐藏麦克风等语音 UI
+    // 不提供 voice —— 扩展暂不支持朗读，据此隐藏语音 UI
   }
 }

@@ -6,7 +6,7 @@ import {
 } from '@shuvix/chat-ui'
 import { useRef, useEffect, useLayoutEffect, useState, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Send, Square, Mic, X, Zap, CornerDownLeft, CornerRightDown } from 'lucide-react'
+import { Send, Square, X, Zap, CornerDownLeft, CornerRightDown } from 'lucide-react'
 import { TokenChip } from './TokenChip'
 import { QueuePanel } from './QueuePanel'
 import {
@@ -24,7 +24,6 @@ import {
   selectActivePendingInput
 } from '../../stores/chatStore'
 import { useImageUpload } from '../../hooks/useImageUpload'
-import { useVoiceInput } from '../../hooks/useVoiceInput'
 import { ModelPicker } from './ModelPicker'
 import { ToolPicker } from './ToolPicker'
 import { AgentProfilePicker } from './AgentProfilePicker'
@@ -125,11 +124,9 @@ export function InputArea({
   const { isDragging, handleDragOver, handleDragLeave, handleDrop, handlePaste } =
     useImageUpload(modelSupportsVision)
 
-  // 语音输入 + 默认模型
+  // 默认模型
   const chatHost = useChatHost()
-  const voiceSttLanguage = chatHost.voice?.sttLanguage ?? 'auto'
   const activeModel = chatHost.models.activeModel
-  const voice = useVoiceInput(voiceSttLanguage)
 
   // 斜杠命令自动补全
   const slash = useSlashCommands(slashCommands, inputText)
@@ -469,9 +466,6 @@ export function InputArea({
 
   /** 发送消息（支持图片） */
   const handleSend = async (): Promise<void> => {
-    // 录音中则先停止录制
-    if (voice.isRecording) voice.stopRecording()
-
     // 待处理请求优先于一切发送路径（普通消息 / steer / 档案切换）：Agent 正等这条输入
     if (activePendingInput) {
       await handleSubmitOther()
@@ -602,13 +596,6 @@ export function InputArea({
       if (slash.handleKeyDown(e)) return
     }
 
-    // Escape 取消录音
-    if (e.key === 'Escape' && voice.isRecording) {
-      e.preventDefault()
-      voice.cancelRecording()
-      return
-    }
-
     // Backspace 光标紧邻 @ 引用 / 粘贴芯片尾部：整体删除（一次退格删掉整颗胶囊）
     if (e.key === 'Backspace' && !at.showPopover) {
       const el = textareaRef.current
@@ -694,34 +681,6 @@ export function InputArea({
       {canEdit && !isBotSession && <ToolPicker />}
     </div>
   )
-
-  const micButton =
-    chatHost.voice && voice.isAvailable && !isStreaming ? (
-      <button
-        onClick={voice.isRecording ? voice.stopRecording : voice.startRecording}
-        disabled={!activeSessionId}
-        className={`p-1 rounded transition-colors ${
-          voice.isRecording
-            ? 'text-error hover:bg-error/10'
-            : 'text-text-tertiary hover:text-text-secondary hover:bg-bg-hover'
-        }`}
-        title={voice.isRecording ? t('voice.stopRecording') : t('voice.startRecording')}
-      >
-        {voice.isRecording ? (
-          <div className="flex items-center gap-1">
-            <span className="relative flex h-2.5 w-2.5">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-error opacity-75" />
-              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-error" />
-            </span>
-            <span className="text-[10px] tabular-nums">
-              {Math.floor(voice.duration / 60)}:{String(voice.duration % 60).padStart(2, '0')}
-            </span>
-          </div>
-        ) : (
-          <Mic size={14} />
-        )}
-      </button>
-    ) : null
 
   const queueDisabled = !inputText.trim()
   const sendStopButtons = isStreaming ? (
@@ -931,16 +890,9 @@ export function InputArea({
               }}
               className="relative z-[1] w-full bg-transparent text-sm text-text-primary placeholder:text-text-tertiary px-4 pt-2 pb-2 resize-none outline-none overflow-y-auto"
             />
-
-            {/* 语音输入错误提示 */}
-            {voice.error && (
-              <div className="absolute right-2 bottom-full mb-1 z-20 rounded-md border border-error/30 bg-error/10 px-2 py-1 text-[11px] text-error whitespace-nowrap">
-                {voice.error}
-              </div>
-            )}
           </div>
 
-          {/* 底部工具行（统一布局）：选择器居左；右侧为上下文用量环，最右为麦克风 + 发送/停止 */}
+          {/* 底部工具行（统一布局）：选择器居左；右侧为上下文用量环，最右为发送/停止 */}
           <div className="flex items-center gap-1.5 px-2 pb-1.5 pt-0.5 text-text-tertiary whitespace-nowrap">
             {pickers}
 
@@ -992,7 +944,6 @@ export function InputArea({
               </span>
             )}
 
-            {micButton}
             {sendStopButtons}
           </div>
         </div>

@@ -21,7 +21,6 @@ export function useSettingsChatHost(): ChatHostValue {
   const setActiveProvider = useSettingsStore((s) => s.setActiveProvider)
   const setActiveModel = useSettingsStore((s) => s.setActiveModel)
 
-  const voiceSttLanguage = useSettingsStore((s) => s.voiceSttLanguage)
   const voiceTtsEnabled = useSettingsStore((s) => s.voiceTtsEnabled)
 
   return useMemo<ChatHostValue>(
@@ -33,7 +32,7 @@ export function useSettingsChatHost(): ChatHostValue {
         setActiveProvider,
         setActiveModel
       },
-      voice: { sttLanguage: voiceSttLanguage, ttsEnabled: voiceTtsEnabled },
+      voice: { ttsEnabled: voiceTtsEnabled },
       // bot 注册表窄投影（@提及候选）；注册表其余字段不外传
       bots: {
         list: async () =>
@@ -54,7 +53,6 @@ export function useSettingsChatHost(): ChatHostValue {
       activeModel,
       setActiveProvider,
       setActiveModel,
-      voiceSttLanguage,
       voiceTtsEnabled
     ]
   )

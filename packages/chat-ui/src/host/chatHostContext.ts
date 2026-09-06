@@ -5,7 +5,7 @@
  * settingsStore / sidebarStore / browserStore，而是从这里取它需要的少量宿主状态：
  *   - appearance：外观（桌面来自 settingsStore；服务端来自浏览器本地配置）
  *   - models：模型/供应商选择（桌面来自 settingsStore；服务端经 ChatApi.provider.* 拉取）
- *   - voice：语音配置（可选；不提供则语音输入/朗读相关 UI 隐藏、自动朗读跳过）
+ *   - voice：语音配置（可选；不提供则朗读相关 UI 隐藏、自动朗读跳过）
  *
  * 这样 settingsStore 等宿主状态既不搬入包、也不被拆分；
  * “外观存后端 / 存浏览器”等差异天然落在宿主侧。
@@ -38,8 +38,6 @@ export interface ChatModelSelection {
 
 /** 语音配置（可选端口） */
 export interface ChatVoiceConfig {
-  /** STT 识别语言（'auto' 等） */
-  sttLanguage: string
   /** 是否启用 TTS 自动朗读 */
   ttsEnabled: boolean
 }

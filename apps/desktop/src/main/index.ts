@@ -593,13 +593,9 @@ app.whenReady().then(async () => {
   // shuvix-media:// + shuvix-preview://
   registerCustomProtocolHandlers()
 
-  // 允许渲染进程请求麦克风权限（语音输入）。
+  // 主窗口（自有页面）的权限请求一律放行。
   // 注意：内置浏览器跑在独立 partition（BROWSER_PARTITION），权限策略由 initBrowserSession() 单独管理。
-  session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
-    if (permission === 'media') {
-      callback(true)
-      return
-    }
+  session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => {
     callback(true)
   })
 

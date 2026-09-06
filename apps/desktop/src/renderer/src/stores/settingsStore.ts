@@ -40,12 +40,6 @@ interface SettingsState {
   uiZoom: number
   /** 专注模式：选中会话时淡化未选中的会话项与边缘 UI 区域 */
   focusMode: boolean
-  /** 语音 STT 后端 */
-  voiceSttBackend: 'openai' | 'local'
-  /** 语音输入语言 */
-  voiceSttLanguage: string
-  /** 本地 Whisper 模型 */
-  voiceLocalModel: string
   /** TTS 自动朗读开关 */
   voiceTtsEnabled: boolean
   /** TTS 语音角色 */
@@ -122,9 +116,6 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   fontSize: 14,
   uiZoom: 100,
   focusMode: true,
-  voiceSttBackend: 'openai',
-  voiceSttLanguage: 'auto',
-  voiceLocalModel: 'large-v3-turbo',
   voiceTtsEnabled: false,
   voiceTtsVoice: 'alloy',
   voiceTtsSpeed: 1.0,
@@ -170,9 +161,6 @@ export const useSettingsStore = create<SettingsState>((set) => ({
       fontSize: Number(settings['general.fontSize']) || 14,
       uiZoom: Number(settings['general.uiZoom']) || 100,
       focusMode: settings['appearance.focusMode'] !== 'false',
-      voiceSttBackend: (settings['voice.sttBackend'] as 'openai' | 'local') || 'openai',
-      voiceSttLanguage: settings['voice.sttLanguage'] || 'auto',
-      voiceLocalModel: settings['voice.localModel'] || 'large-v3-turbo',
       voiceTtsEnabled: settings['voice.tts.enabled'] === 'true',
       voiceTtsVoice: settings['voice.tts.openai.voice'] || 'alloy',
       voiceTtsSpeed: Number(settings['voice.tts.openai.speed']) || 1.0,

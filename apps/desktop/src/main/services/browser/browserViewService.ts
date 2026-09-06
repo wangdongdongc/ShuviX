@@ -60,7 +60,7 @@ const pendingCertPrompts = new Map<string, Promise<boolean>>()
 /**
  * 初始化浏览器 partition 的权限策略。
  *
- * 主应用 defaultSession 的 permission handler 一律放行（语音输入等需要）；
+ * 主应用 defaultSession 的 permission handler 一律放行（自有页面）；
  * 内置浏览器跑用户访问的任意外部站点，安全策略必须独立：默认全部拒绝，
  * 后续如需开启某些权限再做"按域名询问"的对话框。
  *

@@ -936,29 +936,6 @@ declare global {
         callback: (progress: { step: string; messageKey: string; percent: number }) => void
       ) => () => void
     }
-    stt: {
-      /** 调用 Whisper 转写音频 */
-      transcribe: (params: {
-        audioData: string
-        pcmf32?: string
-        language?: string
-      }) => Promise<{ text: string }>
-      /** 获取本地 Whisper 状态（模型列表） */
-      getLocalStatus: () => Promise<{
-        models: Array<{
-          id: string
-          name: string
-          sizeMB: number
-          description: string
-          recommended: boolean
-          downloaded: boolean
-        }>
-      }>
-      /** 下载指定模型 */
-      downloadModel: (modelId: string) => Promise<{ success: boolean }>
-      /** 删除指定模型 */
-      deleteModel: (modelId: string) => Promise<{ success: boolean }>
-    }
     download: {
       /** 监听下载进度事件 */
       onProgress: (callback: (progress: DownloadProgress) => void) => () => void

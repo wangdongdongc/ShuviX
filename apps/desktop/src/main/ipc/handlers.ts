@@ -11,7 +11,6 @@ import { registerSshCredentialHandlers } from './sshCredentialHandlers'
 import { registerDbCredentialHandlers } from './dbCredentialHandlers'
 import { registerTelegramHandlers } from './telegramHandlers'
 import { registerCommandHandlers } from './commandHandlers'
-import { registerSttHandlers } from './sttHandlers'
 import { registerTtsHandlers } from './ttsHandlers'
 import { registerDownloadHandlers } from './downloadHandlers'
 import { registerUpdateHandlers } from './updateHandlers'
@@ -52,7 +51,6 @@ export function registerIpcHandlers(): void {
   registerDbCredentialHandlers()
   registerTelegramHandlers()
   registerCommandHandlers()
-  registerSttHandlers()
   registerTtsHandlers()
   registerDownloadHandlers()
   registerUpdateHandlers()
