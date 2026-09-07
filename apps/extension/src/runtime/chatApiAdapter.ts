@@ -514,6 +514,7 @@ export const chatApiAdapter: ChatApi = {
   // 工作目录文件浏览（Files 面板）：File System Access 实现
   files: {
     scan: ({ sessionId }) => filesRuntime.scan(sessionId),
+    scanDir: ({ sessionId, dir }) => filesRuntime.scanDir(sessionId, dir),
     read: ({ sessionId, path }) => filesRuntime.read(sessionId, path),
     write: ({ sessionId, path, content }) => filesRuntime.write(sessionId, path, content),
     // 单文件内容监听：浏览器沙箱（FSA/OPFS）无稳定的文件变更监听 API（FileSystemObserver 仍实验性）→ no-op。

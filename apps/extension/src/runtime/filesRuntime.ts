@@ -14,6 +14,7 @@ import { sessionStore } from '../storage/sessionStore'
 import { projectStore } from '../storage/projectStore'
 import { createFsaPort, getFile, ensureRwPermission } from './fsaPort'
 import { getTempWorkspaceHandle } from '../storage/opfsWorkspace'
+import { scanDirHandleShallow } from './scanDirShallow'
 
 /** 单次扫描最多收集的文件数；超过则截断（与桌面 watcher 的上限语义一致） */
 const SCAN_FILE_CAP = 5000
@@ -145,6 +146,21 @@ export const filesRuntime = {
       return { paths, truncated, root: handle.name }
     } catch {
       return { paths: [], truncated: false, root: handle.name }
+    }
+  },
+
+  /** 按目录浅扫描（文件树懒加载）：dir 相对工作目录根句柄，空串 = 根 */
+  async scanDir(
+    sessionId: string,
+    dir: string
+  ): Promise<{ files: string[]; dirs: string[]; root: string | null }> {
+    const handle = await handleForSession(sessionId)
+    if (!handle) return { files: [], dirs: [], root: null }
+    try {
+      const { files, dirs } = await scanDirHandleShallow(handle, dir)
+      return { files, dirs, root: handle.name }
+    } catch {
+      return { files: [], dirs: [], root: handle.name }
     }
   },
 

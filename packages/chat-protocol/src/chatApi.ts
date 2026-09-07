@@ -569,6 +569,19 @@ export interface SessionChannelApi {
       truncated: boolean
       root: string | null
     }>
+    /**
+     * 按目录浅扫描（文件树懒加载用）：dir 为相对工作目录的路径，空串 = 根。
+     * 只扫一层（对标 VSCode Explorer 每次展开 resolve 一层）：files 为该目录的直接
+     * 子文件（相对工作目录的完整相对路径，forward-slash，后端排序保证确定性，无截断）；
+     * dirs 为该目录的直接子目录（尾斜杠形式）。浏览场景所见即磁盘所有 —— 不做
+     * .gitignore 过滤（gitignore 语义只留在搜索场景的 scan 全量接口），唯一例外是
+     * `.git` 目录不列出。目录不存在时返回空列表。
+     */
+    scanDir: (params: { sessionId: string; dir: string }) => Promise<{
+      files: string[]
+      dirs: string[]
+      root: string | null
+    }>
     read: (params: { sessionId: string; path: string }) => Promise<FileReadResult>
     /** 监听某个已打开文件的内容变更（笔记本 / 预览自动刷新）；变更经 events.subscribe 广播。
      *  仅监听「当前打开的文件」，不监听整个工作目录。无文件系统的渠道端可 no-op。 */

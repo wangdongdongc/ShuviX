@@ -1114,6 +1114,11 @@ declare global {
         truncated: boolean
         root: string | null
       }>
+      scanDir: (params: { sessionId: string; dir: string }) => Promise<{
+        files: string[]
+        dirs: string[]
+        root: string | null
+      }>
       watch: (params: { sessionId: string; path: string }) => Promise<void>
       unwatch: (params: { sessionId: string; path: string }) => Promise<void>
       read: (params: {

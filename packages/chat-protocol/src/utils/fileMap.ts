@@ -105,7 +105,7 @@ export function isContentOnlyFileChange(
  * 宽松相对化（正斜杠归一）：p 在 root 下 → 相对路径；p 是绝对路径但不在 root 下 → null；
  * 其余视作已是相对路径（如扩展端 UI 路径空间）。
  */
-function relativizeLoose(root: string, p: string): string | null {
+export function relativizeLoose(root: string, p: string): string | null {
   const normRoot = root.replace(/\\/g, '/').replace(/\/+$/, '')
   const norm = p.replace(/\\/g, '/')
   if (norm === normRoot) return null

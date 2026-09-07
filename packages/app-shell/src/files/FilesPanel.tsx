@@ -3,6 +3,12 @@
  * 显示当前会话工作目录的文件树，并实时跟随磁盘变化
  * 基于 @pierre/trees（path-first + Shadow DOM 隔离）
  *
+ * 加载模型是按目录懒加载的分片模型：初始只扫根目录（files.scanDir，浅扫描无截断），
+ * 目录首次展开时再扫该目录（FilesTree 的 onRequestChildren），files.changed 事件与
+ * 聚焦/手动刷新都对「已加载分片」做增量 add/remove，不再整树 rg 重扫（大仓上全量
+ * 扫描有 SCAN_LIMIT 截断且输出顺序不定，会随机丢条目）。全量 files.scan 仅保留给
+ * 搜索：输入搜索词时全量扫一次注入树内，清空后清回懒加载视图。
+ *
  * 文件预览不在本面板内：点击文件（音视频除外，走底部 dock）发 chatStore.requestFilePreview，
  * 由宿主的独立预览面板（桌面右侧 preview tab / 扩展与悬浮窗 PreviewOverlay）承接展示。
  */
@@ -12,9 +18,11 @@ import { useTranslation } from 'react-i18next'
 import { Folder, RefreshCw, Search, X } from 'lucide-react'
 import type { FileTree as FileTreeModel } from '@pierre/trees'
 import { FilesTree } from './FilesTree'
+import { LoadedSlices, dirKeyOf, dirParamOf } from './lazyTree'
 import { usePanelCloseInset } from '../panel/panelCloseInset'
 import { useChatStore, getSessionChannelApi, useAppEvent } from '@shuvix/chat-ui'
-import { isContentOnlyFileChange } from '@shuvix/chat-protocol/utils/fileMap'
+import { isContentOnlyFileChange, relativizeLoose } from '@shuvix/chat-protocol/utils/fileMap'
+import type { AppEvent } from '@shuvix/chat-protocol/appEvents'
 import { AudioDock } from './AudioDock'
 import { VideoDock } from './VideoDock'
 import { extOf, basename, joinPath } from './paths'
@@ -44,16 +52,16 @@ const VIDEO_MIME_BY_EXT: Record<string, string> = {
 interface ScanState {
   /** 此结果对应的工作目录（root），用于判定数据是否仍匹配当前 projectPath */
   forRoot: string
+  /** 根分片 scanDir 结果 —— 只作 FilesTree 的首批 paths，此后不再整树替换 */
   paths: string[]
-  /** paths 的小写集合 —— 供 isContentOnlyFileChange 判断事件是否可能改变列表成员 */
-  pathSet: Set<string>
-  truncated: boolean
 }
 
 interface ScanError {
   forRoot: string
   message: string
 }
+
+type FilesChangedEvent = Extract<AppEvent, { type: 'files.changed' }>
 
 export interface FilesPanelProps {
   /** 在系统文件管理器中打开工作目录（宿主注入）；提供则在工作目录名旁显示按钮。
@@ -69,12 +77,12 @@ export function FilesPanel({ onOpenFolder }: FilesPanelProps = {}): React.JSX.El
 
   const [state, setState] = useState<ScanState | null>(null)
   const [error, setError] = useState<ScanError | null>(null)
-  /** 手动刷新触发器：递增以重跑扫描 effect */
-  const [refreshNonce, setRefreshNonce] = useState(0)
   /** 搜索栏是否展开 */
   const [searchOpen, setSearchOpen] = useState(false)
   /** 搜索查询字符串。空字符串视作未触发搜索 */
   const [searchQuery, setSearchQuery] = useState('')
+  /** 搜索全量扫描的截断信息（已注入路径数）—— 仅搜索场景展示（懒加载浏览无截断） */
+  const [searchTruncCount, setSearchTruncCount] = useState<number | null>(null)
   const searchInputRef = useRef<HTMLInputElement | null>(null)
   /** 媒体 dock 状态（音视频共享同一槽位）—— 独立于文件预览，让用户听/看的同时仍能浏览树。
    *  音视频互斥：放新的会替换旧的。absPath 供 dock 的「展开」按钮转投独立预览面板。 */
@@ -85,59 +93,107 @@ export function FilesPanel({ onOpenFolder }: FilesPanelProps = {}): React.JSX.El
     fileName: string
     type: 'audio' | 'video'
   } | null>(null)
-  /** 暴露的 FilesTree model 句柄：点击文件发预览请求后立即取消 pierre 选中，
-   *  否则同一文件的再次点击不触发 onFileSelect（selection 未变化被短路） */
+  /** 暴露的 FilesTree model 句柄：增量增删与点击后 deselect 都走它 */
   const treeModelRef = useRef<FileTreeModel | null>(null)
+  /** 已加载分片账本（dirKey → 路径集合 + 已知路径计数）；随 projectPath 重建 */
+  const slicesRef = useRef(new LoadedSlices())
+  /** 当前工作目录标识 —— 异步回调里校验结果是否仍匹配当前 projectPath */
+  const rootRef = useRef<string | null>(null)
 
-  // 渲染层防抖：200ms 内的连续 onChanged 事件合并为一次重扫
-  const rescanTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // 渲染层防抖：200ms 内的连续 files.changed 事件合并为一批增量应用
+  const changeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pendingEvents = useRef<FilesChangedEvent[]>([])
 
-  /**
-   * 扫描当前会话工作目录。sessionId 从 store 即时读取，scan 结果按 root 标识 —
-   * 同项目内多个会话切换时 projectPath 不变，scan 不会重复触发；切换到不同项目时
-   * projectPath 变化，下方 effect 重新触发扫描
-   */
-  const scan = useCallback(async (): Promise<void> => {
-    const id = useChatStore.getState().activeSessionId
-    if (!id) return
-    try {
-      const r = await getSessionChannelApi().files.scan({ sessionId: id })
-      const root = r.root
-      if (!root) return
-      // 异步竞态：若用户已切到不同 workingDirectory，丢弃旧结果
-      if (useChatStore.getState().projectPath !== root) return
-      // 排序保证跨次扫描顺序稳定 —— rg --files 并行遍历输出顺序不确定，不排序会让
-      // 下面的等值保险几乎永远失效（树的显示顺序由 pierre 内部 sort 决定，与此无关）
-      const paths = [...r.paths].sort()
-      // 等值保险：文件列表未变时返回原引用 → React 跳过 re-render，避免按需重扫（聚焦/写入）
-      // 反复重挂载文件树（path-first 树本就按路径复用状态，此处再挡掉多余渲染）。
-      setState((prev) =>
-        prev &&
-        prev.forRoot === root &&
-        prev.truncated === r.truncated &&
-        prev.paths.length === paths.length &&
-        prev.paths.every((p, i) => p === paths[i])
-          ? prev
-          : {
-              forRoot: root,
-              paths,
-              pathSet: new Set(paths.map((p) => p.toLowerCase())),
-              truncated: r.truncated
-            }
-      )
-      setError(null)
-    } catch (e) {
-      const currentRoot = useChatStore.getState().projectPath
-      if (!currentRoot) return
-      setError({ forRoot: currentRoot, message: e instanceof Error ? e.message : String(e) })
-    }
+  /** 当前 root 仍有效（未切项目、账本未被重建）才应用异步结果 */
+  const isCurrent = useCallback((root: string, slices: LoadedSlices): boolean => {
+    return useChatStore.getState().projectPath === root && slicesRef.current === slices
   }, [])
 
-  // 仅 projectPath / 手动刷新触发扫描；sessionId 变化但 wd 不变时不重扫
+  const applyOps = useCallback((ops: { add: string[]; remove: string[] }): void => {
+    const model = treeModelRef.current
+    if (!model) return
+    const batch = [
+      ...ops.remove.map((p) => ({ type: 'remove' as const, path: p })),
+      ...ops.add.map((p) => ({ type: 'add' as const, path: p }))
+    ]
+    if (batch.length) model.batch(batch)
+  }, [])
+
+  /**
+   * 扫描一个目录分片并记账。dir 为 scanDir 参数形式（'' = 根，无尾斜杠）。
+   * 返回要注入树的路径列表（目录尾斜杠条目在前）；结果过期/无工作目录时抛错，
+   * 让 FilesTree 的懒加载按失败处理（下次展开重试）。
+   */
+  const loadSlice = useCallback(async (dir: string): Promise<string[]> => {
+    const id = useChatStore.getState().activeSessionId
+    if (!id) throw new Error('no active session')
+    const slices = slicesRef.current
+    const r = await getSessionChannelApi().files.scanDir({ sessionId: id, dir })
+    const root = r.root
+    if (!root) throw new Error('no working directory')
+    // 异步竞态：等待期间用户已切到不同 workingDirectory（账本随之重建）→ 丢弃旧结果
+    if (useChatStore.getState().projectPath !== root || slicesRef.current !== slices) {
+      throw new Error('stale scan result')
+    }
+    const paths = [...r.dirs, ...r.files]
+    slices.load(dirKeyOf(dir), paths)
+    return paths
+  }, [])
+
+  /** 目录首次展开的懒加载回调（FilesTree 保证同一目录只请求一次） */
+  const handleRequestChildren = useCallback(
+    (dirRelPath: string): Promise<string[]> => loadSlice(dirRelPath),
+    [loadSlice]
+  )
+
+  /**
+   * 刷新全部已加载分片（聚焦重扫 / 手动刷新 / 未知形状的文件事件兜底）：
+   * 逐分片 scanDir 后 diff 应用增删，不整树重建。
+   */
+  const refreshSlices = useCallback(async (): Promise<void> => {
+    const id = useChatStore.getState().activeSessionId
+    const root = rootRef.current
+    if (!id || !root) return
+    const slices = slicesRef.current
+    for (const dirKey of slices.dirKeys()) {
+      if (!isCurrent(root, slices)) return
+      try {
+        const r = await getSessionChannelApi().files.scanDir({
+          sessionId: id,
+          dir: dirParamOf(dirKey)
+        })
+        if (r.root !== root || !isCurrent(root, slices)) return
+        applyOps(slices.planRefresh(dirKey, [...r.dirs, ...r.files]))
+      } catch {
+        // 单分片失败（如目录刚被删）跳过，其余分片照常
+      }
+    }
+  }, [applyOps, isCurrent])
+
+  // 仅 projectPath 触发初始根分片扫描；同项目内会话切换（wd 不变）不重扫
   useEffect(() => {
     if (!projectPath) return
-    void scan() // eslint-disable-line react-hooks/set-state-in-effect
-  }, [projectPath, refreshNonce, scan])
+    let cancelled = false
+    const slices = new LoadedSlices()
+    slicesRef.current = slices
+    rootRef.current = projectPath
+    loadSlice('')
+      .then((paths) => {
+        if (cancelled || !isCurrent(projectPath, slices)) return
+        setState({ forRoot: projectPath, paths: [...paths].sort() })
+        setError(null)
+      })
+      .catch((e) => {
+        if (cancelled) return
+        setError({
+          forRoot: projectPath,
+          message: e instanceof Error ? e.message : String(e)
+        })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [projectPath, loadSlice, isCurrent])
 
   // 项目 / 会话切换时停止音视频 dock（避免读到旧会话工作目录里的文件；
   // 独立预览面板持自身 sessionId 快照，不在此关）
@@ -145,49 +201,63 @@ export function FilesPanel({ onOpenFolder }: FilesPanelProps = {}): React.JSX.El
     setPlayingMedia(null) // eslint-disable-line react-hooks/set-state-in-effect
   }, [projectPath, sessionId])
 
-  // 订阅文件变动事件（AppEvent 'files.changed'），按 root 过滤；防抖 200ms 后重扫。
-  // 纯内容变更（edit/write 且路径均已在列表中）不可能改变列表成员 → 跳过，
-  // 笔记本自动保存、agent 编辑已有文件不再触发整目录扫描。
+  /** 应用一批 files.changed 事件：纯内容变更跳过；未知形状（无 paths/kind）兜底刷新分片 */
+  const flushPendingEvents = useCallback((): void => {
+    const events = pendingEvents.current
+    pendingEvents.current = []
+    const root = rootRef.current
+    const slices = slicesRef.current
+    if (!root) return
+    for (const e of events) {
+      if (!e.paths?.length || !e.kind) {
+        void refreshSlices()
+        continue
+      }
+      if (isContentOnlyFileChange(e, (rel) => slices.isKnown(rel))) continue
+      const rels = e.paths
+        .map((p) => relativizeLoose(root, p))
+        .filter((rel): rel is string => !!rel)
+      applyOps(slices.planChange(rels, e.kind))
+    }
+  }, [applyOps, refreshSlices])
+
+  // 订阅文件变动事件（AppEvent 'files.changed'），按 root 过滤；防抖 200ms 后增量应用。
+  // 纯内容变更（edit/write 且路径均已在模型中）不可能改变列表成员 → 跳过，
+  // 笔记本自动保存、agent 编辑已有文件不再触发任何树操作。
   useAppEvent('files.changed', (e) => {
     if (!projectPath || e.root !== projectPath) return
-    if (
-      state &&
-      state.forRoot === projectPath &&
-      isContentOnlyFileChange(e, (rel) => state.pathSet.has(rel))
-    ) {
-      return
-    }
-    if (rescanTimer.current) clearTimeout(rescanTimer.current)
-    rescanTimer.current = setTimeout(() => {
-      rescanTimer.current = null
-      void scan()
+    pendingEvents.current.push(e)
+    if (changeTimer.current) clearTimeout(changeTimer.current)
+    changeTimer.current = setTimeout(() => {
+      changeTimer.current = null
+      flushPendingEvents()
     }, 200)
   })
   // 卸载时清理悬挂的防抖计时器
   useEffect(
     () => () => {
-      if (rescanTimer.current) clearTimeout(rescanTimer.current)
+      if (changeTimer.current) clearTimeout(changeTimer.current)
     },
     []
   )
 
-  // 窗口重新聚焦时按需重扫一次 —— 外部进程（别的编辑器 / git / 构建）增删文件的兜底刷新。
-  // 带 1.5s 节流避免频繁 ripgrep；结果无变化时 scan 的等值保险会挡掉 re-render，不会闪。
+  // 窗口重新聚焦时刷新已加载分片 —— 外部进程（别的编辑器 / git / 构建）增删文件的兜底。
+  // 带 1.5s 节流；逐分片 diff 应用，树不重建、展开状态不丢。
   const lastFocusScan = useRef(0)
   useEffect(() => {
     const onFocus = (): void => {
       const now = Date.now()
       if (now - lastFocusScan.current < 1500) return
       lastFocusScan.current = now
-      void scan()
+      void refreshSlices()
     }
     window.addEventListener('focus', onFocus)
     return () => window.removeEventListener('focus', onFocus)
-  }, [scan])
+  }, [refreshSlices])
 
   const handleRefresh = useCallback(() => {
-    setRefreshNonce((n) => n + 1)
-  }, [])
+    void refreshSlices()
+  }, [refreshSlices])
 
   const toggleSearch = useCallback(() => {
     setSearchOpen((v) => {
@@ -200,6 +270,52 @@ export function FilesPanel({ onOpenFolder }: FilesPanelProps = {}): React.JSX.El
   useEffect(() => {
     if (searchOpen) searchInputRef.current?.focus()
   }, [searchOpen])
+
+  // —— 搜索：首个非空查询触发一次全量 files.scan（保留截断兜底），结果注入树内由
+  // pierre setSearch 按键过滤；清空查询 / 关闭搜索时把注入的额外路径清回已加载分片集合 ——
+  const searchScanned = useRef(false)
+  useEffect(() => {
+    if (!searchOpen || !searchQuery || searchScanned.current) return
+    const timer = setTimeout(() => {
+      const id = useChatStore.getState().activeSessionId
+      if (!id) return
+      getSessionChannelApi()
+        .files.scan({ sessionId: id })
+        .then((r) => {
+          if (!r.root || !isCurrent(r.root, slicesRef.current)) return
+          searchScanned.current = true
+          setSearchTruncCount(r.truncated ? r.paths.length : null)
+          const add = slicesRef.current.addInjected(r.paths)
+          const model = treeModelRef.current
+          if (model && add.length) {
+            model.batch(add.map((p) => ({ type: 'add' as const, path: p })))
+          }
+        })
+        .catch(() => {
+          searchScanned.current = true // 失败不再重试本次搜索会话，下次输入重新扫
+        })
+    }, 300)
+    return () => clearTimeout(timer)
+  }, [searchOpen, searchQuery, isCurrent])
+
+  // 查询清空 / 搜索关闭：移除搜索注入的额外路径，恢复懒加载视图
+  useEffect(() => {
+    if (searchOpen && searchQuery) return
+    if (!searchScanned.current) return
+    searchScanned.current = false
+    setSearchTruncCount(null) // eslint-disable-line react-hooks/set-state-in-effect
+    const remove = slicesRef.current.removeInjected()
+    const model = treeModelRef.current
+    if (model && remove.length) {
+      model.batch(remove.map((p) => ({ type: 'remove' as const, path: p })))
+    }
+  }, [searchOpen, searchQuery])
+
+  // 项目切换（账本重建）时搜索注入随旧树一并废弃，重置搜索扫描标记
+  useEffect(() => {
+    searchScanned.current = false
+    setSearchTruncCount(null) // eslint-disable-line react-hooks/set-state-in-effect
+  }, [projectPath])
 
   // —— 派生状态：state / error 必须与当前 projectPath 匹配才视作有效 ——
   const freshState = state && state.forRoot === projectPath ? state : null
@@ -237,6 +353,7 @@ export function FilesPanel({ onOpenFolder }: FilesPanelProps = {}): React.JSX.El
         searchQuery={searchOpen ? searchQuery : ''}
         // 与并排的对话列滚动条同款（常显 + 同色）；侧栏 WikiView 不传，沿用 pierre 的 hover 才现
         persistentScrollbar
+        onRequestChildren={handleRequestChildren}
         onFileSelect={(rel) => {
           if (!projectPath) return
           const ext = extOf(rel)
@@ -270,7 +387,7 @@ export function FilesPanel({ onOpenFolder }: FilesPanelProps = {}): React.JSX.El
 
   return (
     <div className="flex flex-col h-full bg-bg-secondary">
-      {/* 顶栏：左侧工作目录名（大写）+ 右侧 truncated 提示 + 搜索 + 刷新 */}
+      {/* 顶栏：左侧工作目录名（大写）+ 右侧搜索截断提示 + 搜索 + 刷新 */}
       {/* 头部：会话面板里要给悬在卡片右上角的收起按钮让出位置（pr-8 = 8px 内缩 + 21px 按钮 + 缝） */}
       <div
         className={`flex-shrink-0 flex items-center justify-between gap-2 px-2 h-7 border-b border-border-secondary/30${
@@ -295,9 +412,9 @@ export function FilesPanel({ onOpenFolder }: FilesPanelProps = {}): React.JSX.El
           )}
         </div>
         <div className="flex items-center gap-1 min-w-0">
-          {freshState?.truncated && (
+          {searchOpen && searchTruncCount !== null && (
             <span className="text-[10px] text-text-tertiary/70 truncate">
-              {t('panel.filesTruncated', { count: freshState.paths.length })}
+              {t('panel.filesTruncated', { count: searchTruncCount })}
             </span>
           )}
           <button

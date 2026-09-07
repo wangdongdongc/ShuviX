@@ -1,6 +1,7 @@
 import { BrowserWindow, ipcMain } from 'electron'
 import {
   scanSessionFiles,
+  scanSessionDir,
   watchSessionFile,
   unwatchSessionFile
 } from '../services/filesWatcherService'
@@ -10,6 +11,10 @@ import { reportChartValidation } from '../services/previewValidationBroker'
 export function registerFilesHandlers(): void {
   ipcMain.handle('files:scan', (_event, params: { sessionId: string }) =>
     scanSessionFiles(params.sessionId)
+  )
+  // 按目录浅扫描（文件树懒加载）：dir 相对工作目录，空串 = 根
+  ipcMain.handle('files:scanDir', (_event, params: { sessionId: string; dir: string }) =>
+    scanSessionDir(params.sessionId, params.dir)
   )
   // 监听 / 取消监听单个已打开文件的内容变更（笔记本 / 预览自动刷新）
   ipcMain.handle('files:watch', (_event, params: { sessionId: string; path: string }) => {

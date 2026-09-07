@@ -905,6 +905,13 @@ const api = {
         truncated: boolean
         root: string | null
       }>,
+    /** 按目录浅扫描（文件树懒加载）：dir 相对工作目录，空串 = 根；无截断、后端排序 */
+    scanDir: (params: { sessionId: string; dir: string }) =>
+      ipcRenderer.invoke('files:scanDir', params) as Promise<{
+        files: string[]
+        dirs: string[]
+        root: string | null
+      }>,
     /** 开始监听某个已打开文件的内容变更（笔记本 / 预览自动刷新）；变更经 events.subscribe 广播 */
     watch: (params: { sessionId: string; path: string }) =>
       ipcRenderer.invoke('files:watch', params) as Promise<void>,

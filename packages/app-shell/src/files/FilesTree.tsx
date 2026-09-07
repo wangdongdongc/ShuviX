@@ -4,12 +4,17 @@
  * key 由父组件按 root 切换,保证不同工作目录间彻底重建模型;
  * 同一 root 下的增量更新通过 model.resetPaths 推送。
  *
+ * 懒加载模式（可选）：传入 onRequestChildren 时，订阅 model 变化 diff 出「新展开且尚未
+ * 加载过的目录」，回调拿回路径后用 model.batch 增量注入（同一目录并发展开只请求一次，
+ * 失败在下次展开时重试）。不传则保持全量 paths 行为完全不变。
+ *
  * 搜索过滤完全走 controller.setSearch / closeSearch,不启用库内置的 search input UI
  */
 
 import { useEffect, useRef, useState } from 'react'
 import { FileTree, useFileTreeSearch } from '@pierre/trees/react'
 import { FileTree as FileTreeModel } from '@pierre/trees'
+import { deriveDirPaths, LazyLoadTracker } from './lazyTree'
 
 /**
  * 常显滚动条补丁 —— pierre 默认把 thumb 设为 transparent、hover 才现（且色值是它自己的
@@ -26,7 +31,8 @@ export function FilesTree({
   searchQuery,
   onFileSelect,
   modelOutRef,
-  persistentScrollbar
+  persistentScrollbar,
+  onRequestChildren
 }: {
   paths: string[]
   searchQuery: string
@@ -36,6 +42,11 @@ export function FilesTree({
   modelOutRef?: React.RefObject<FileTreeModel | null>
   /** 滚动条常显（与对话列的 .thin-scrollbar 同款）；缺省沿用 pierre 的 hover 才现 */
   persistentScrollbar?: boolean
+  /**
+   * 懒加载模式：目录首次展开时回调（dirRelPath 无尾斜杠），返回要注入的完整相对路径
+   * 列表（含子目录尾斜杠条目）。不传 = 全量 paths 模式。抛错视为失败，下次展开重试。
+   */
+  onRequestChildren?: (dirRelPath: string) => Promise<string[]>
 }): React.JSX.Element {
   // 用 ref 持有最新回调，组件保留 mount 时的 model 实例
   const onSelectRef = useRef(onFileSelect)
@@ -110,6 +121,50 @@ export function FilesTree({
     })
     return unsubscribe
   }, [model])
+
+  // —— 懒加载：新展开的目录 → 回调取路径 → model.batch 增量注入 ——
+  // 回调走 ref（与 onSelectRef 同理），订阅只挂一次；tracker/knownDirs/expanded 用
+  // useState 惰性初始化自持 —— StrictMode 模拟卸载重挂载时 useRef 惰性值会随首跑
+  // cleanup 丢失重建，展开中途的 inflight 状态不能丢（否则同一目录重复请求）。
+  const requestRef = useRef(onRequestChildren)
+  useEffect(() => {
+    requestRef.current = onRequestChildren
+  }, [onRequestChildren])
+  const [lazyState] = useState(() => ({
+    tracker: new LazyLoadTracker(),
+    knownDirs: deriveDirPaths(paths),
+    expanded: new Set<string>()
+  }))
+  useEffect(() => {
+    if (!onRequestChildren) return // 全量模式：行为完全不变
+    const { tracker, knownDirs } = lazyState
+    const syncExpanded = (): void => {
+      const now = new Set<string>()
+      for (const dir of knownDirs) {
+        const item = model.getItem(dir)
+        if (item && 'isExpanded' in item && item.isExpanded()) now.add(dir)
+      }
+      const prev = lazyState.expanded
+      const newly: string[] = []
+      for (const dir of now) {
+        if (!prev.has(dir)) newly.push(dir)
+      }
+      lazyState.expanded = now
+      for (const dir of newly) {
+        if (!tracker.shouldRequest(dir)) continue
+        requestRef
+          .current?.(dir.replace(/\/+$/, ''))
+          .then((newPaths) => {
+            tracker.markLoaded(dir)
+            if (newPaths.length === 0) return
+            model.batch(newPaths.map((p) => ({ type: 'add' as const, path: p })))
+            for (const d of deriveDirPaths(newPaths)) knownDirs.add(d)
+          })
+          .catch(() => tracker.markFailed(dir))
+      }
+    }
+    return model.subscribe(syncExpanded)
+  }, [model, onRequestChildren, lazyState])
 
   // 首批 paths 已由模型构造函数消费；后续 paths 变化通过 resetPaths 同步。
   // resetPaths 是整树重建（选中有迁移逻辑，展开状态没有）—— 不带 initialExpandedPaths

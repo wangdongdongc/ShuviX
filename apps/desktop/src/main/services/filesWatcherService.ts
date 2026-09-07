@@ -14,6 +14,7 @@
 import { watch, existsSync, type FSWatcher } from 'fs'
 import { dirname, basename } from 'path'
 import { rgFilesList } from '../utils/toolUtils/ripgrep'
+import { scanDirShallow } from '../utils/toolUtils/dirScan'
 import { sessionService } from './sessionService'
 import { resolveReadPath } from '../utils/toolUtils/pathUtils'
 import { appEventBus } from '../utils/appEventBus'
@@ -44,6 +45,24 @@ export async function scanSessionFiles(
   // rg 在 Windows 输出反斜杠分隔的相对路径，而 @pierre/trees 只按 `/` 切分目录层级，
   // 不归一会导致整树被平铺。仓库约定相对路径一律 forward-slash 存储（见 app-shell paths.ts）
   return { paths: files.map((f) => f.replace(/\\/g, '/')), truncated, root: workingDirectory }
+}
+
+/**
+ * 按目录浅扫描（文件树懒加载）：dir 相对会话工作目录，空串 = 根。
+ * 只扫一层：返回该目录的直接子文件 + 直接子目录（尾斜杠），无截断、后端排序。
+ * 目录不存在 / dir 越界时返回空列表（root 照常带回，供前端新鲜度校验）。
+ */
+export async function scanSessionDir(
+  sessionId: string,
+  dir: string
+): Promise<{ files: string[]; dirs: string[]; root: string | null }> {
+  const session = sessionService.getById(sessionId)
+  const workingDirectory = session?.workingDirectory
+  if (!workingDirectory) {
+    return { files: [], dirs: [], root: null }
+  }
+  const { files, dirs } = await scanDirShallow(workingDirectory, dir)
+  return { files, dirs, root: workingDirectory }
 }
 
 // ─────────────────────────── 单文件内容监听 ───────────────────────────
