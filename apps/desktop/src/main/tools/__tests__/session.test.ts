@@ -240,6 +240,7 @@ describe('SessionTool — 子会话 action', () => {
     // info 由 prompt 顺带带回（工具层不再为一个标题重投影整棵转写）
     mocks.runnerPrompt.mockResolvedValue({
       kind: 'answered',
+      id: 'sub-1',
       answer: 'DONE.',
       info: info('sub-1', 'A', 'idle')
     })
@@ -264,7 +265,7 @@ describe('SessionTool — 子会话 action', () => {
 
   it('后台与超时降级的结果带 details.background —— UI 上与 bash 后台任务同一枚标签', async () => {
     const detailsOf = (r: unknown): unknown => (r as { details?: unknown }).details
-    mocks.runnerPrompt.mockResolvedValue({ kind: 'started' })
+    mocks.runnerPrompt.mockResolvedValue({ kind: 'started', id: 'sub-1' })
     expect(
       detailsOf(
         await tool.execute('tc-1', {
@@ -276,7 +277,7 @@ describe('SessionTool — 子会话 action', () => {
       )
     ).toEqual({ type: 'session', background: true })
 
-    mocks.runnerPrompt.mockResolvedValue({ kind: 'timeout' })
+    mocks.runnerPrompt.mockResolvedValue({ kind: 'timeout', id: 'sub-1' })
     expect(
       detailsOf(
         await tool.execute('tc-1', {
@@ -290,6 +291,7 @@ describe('SessionTool — 子会话 action', () => {
     // 前台拿到答复 = 这次调用等到底了，不是后台形态
     mocks.runnerPrompt.mockResolvedValue({
       kind: 'answered',
+      id: 'sub-1',
       answer: 'ok',
       info: info('sub-1', 'A', 'idle')
     })
@@ -321,7 +323,7 @@ describe('SessionTool — 子会话 action', () => {
   })
 
   it('后台形态与超时降级：都只给回执，**不带任何内容**（内容会永久留在上下文并被每步重发）', async () => {
-    mocks.runnerPrompt.mockResolvedValue({ kind: 'started' })
+    mocks.runnerPrompt.mockResolvedValue({ kind: 'started', id: 'sub-1' })
     const started = textOf(
       await tool.execute('tc-1', {
         action: 'prompt-sub-session',
@@ -341,7 +343,7 @@ describe('SessionTool — 子会话 action', () => {
     expect(started).toContain('wait-for-sub-sessions')
     expect(started).toContain('Do NOT sleep and poll')
 
-    mocks.runnerPrompt.mockResolvedValue({ kind: 'timeout' })
+    mocks.runnerPrompt.mockResolvedValue({ kind: 'timeout', id: 'sub-1' })
     const timedOut = textOf(
       await tool.execute('tc-1', {
         action: 'prompt-sub-session',
@@ -358,6 +360,7 @@ describe('SessionTool — 子会话 action', () => {
   it('失败的一轮走 <error> 围栏（同一份事实，但与正常答复分得开）', async () => {
     mocks.runnerPrompt.mockResolvedValue({
       kind: 'answered',
+      id: 'sub-1',
       answer: 'boom',
       isError: true,
       info: info('sub-1', 'A', 'idle')
@@ -479,12 +482,12 @@ describe('SessionTool — 子会话 action', () => {
   })
 
   it('stop-sub-session：停住与本就没在跑，回话不同（模型据此判断要不要再等）', async () => {
-    mocks.runnerStop.mockResolvedValue({ stopped: true })
+    mocks.runnerStop.mockResolvedValue({ stopped: true, id: 'sub-1' })
     expect(
       textOf(await tool.execute('tc-1', { action: 'stop-sub-session', sub_session_id: 'sub-1' }))
     ).toContain('Stopped')
 
-    mocks.runnerStop.mockResolvedValue({ stopped: false })
+    mocks.runnerStop.mockResolvedValue({ stopped: false, id: 'sub-1' })
     expect(
       textOf(await tool.execute('tc-1', { action: 'stop-sub-session', sub_session_id: 'sub-1' }))
     ).toContain('not running')

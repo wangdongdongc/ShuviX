@@ -78,6 +78,8 @@ export interface WaitOutcome {
 export interface PromptOutcome {
   /** 'answered' = 本轮跑完拿到答复；'timeout' = 降级成后台；'started' = 后台形态的启动回执 */
   kind: 'answered' | 'timeout' | 'started'
+  /** 落定的子会话 id —— `sub_session_id` 省略时被自动补全成的那条，回执围栏要用真实 id */
+  id: string
   /** kind==='answered' 时的最终答复（末条消息的正文；出错则是错误原文） */
   answer?: string
   /** 末条消息是错误事件 */
@@ -134,6 +136,36 @@ class SubSessionRunner {
     return { id: childId, title: child.title }
   }
 
+  /**
+   * 把调用方给的 childId 落定到一条确定的子会话。**省略时的补全**：恰好一条子会话
+   * 就自动补全 —— create 完紧接着 prompt 漏抄 id 是实测里的高频失败，而此刻意图
+   * 没有歧义；多于一条不猜（猜错等于把话发进错误的会话），列出候选让它点名。
+   * 给了 id 则照旧校验归属。`wait` 不走这里：它「省略 = 等全部」是刻意语义。
+   */
+  private resolveChild(
+    parentId: string,
+    childId: string
+  ): { id: string; title: string } | { error: string } {
+    if (childId) {
+      const child = this.ownChild(parentId, childId)
+      return child ?? { error: this.unknownChildError(parentId, childId) }
+    }
+    const children = sessionDao.findChildren(parentId)
+    if (children.length === 1) return { id: children[0].id, title: children[0].title }
+    if (children.length === 0) {
+      return {
+        error:
+          'No sub-sessions yet — there is nothing to address. ' +
+          'Create one with action "create-sub-session".'
+      }
+    }
+    return {
+      error:
+        'Which sub-session? Pass its id in `sub_session_id`:\n' +
+        children.map((s) => `  ${s.id}  ${s.title}`).join('\n')
+    }
+  }
+
   // ─── 查询 ──────────────────────────────────────
 
   /**
@@ -170,19 +202,20 @@ class SubSessionRunner {
 
   async read(
     parentId: string,
-    childId: string
+    rawChildId: string
   ): Promise<{ error: string } | { info: SubSessionInfo; answer?: string; isError?: boolean }> {
     const rejected = this.rejectIfNotNormal(parentId)
     if (rejected) return { error: rejected }
-    const child = this.ownChild(parentId, childId)
-    if (!child) return { error: this.unknownChildError(parentId, childId) }
+    const resolved = this.resolveChild(parentId, rawChildId)
+    if ('error' in resolved) return { error: resolved.error }
+    const childId = resolved.id
 
     const last = await this.lastAnswer(childId)
     const row = sessionDao.pick(childId, ['title', 'updatedAt'])
     return {
       info: {
         id: childId,
-        title: row?.title ?? child.title,
+        title: row?.title ?? resolved.title,
         status: this.statusOf(childId),
         driven: this.runs.has(childId),
         updatedAt: row?.updatedAt ?? 0,
@@ -302,11 +335,13 @@ class SubSessionRunner {
     timeoutSeconds: number
     signal?: AbortSignal
   }): Promise<{ error: string } | PromptOutcome> {
-    const { parentId, childId, message, background, timeoutSeconds, signal } = params
+    const { parentId, message, background, timeoutSeconds, signal } = params
     const rejected = this.rejectIfNotNormal(parentId)
     if (rejected) return { error: rejected }
-    const child = this.ownChild(parentId, childId)
-    if (!child) return { error: this.unknownChildError(parentId, childId) }
+    const resolved = this.resolveChild(parentId, params.childId)
+    if ('error' in resolved) return { error: resolved.error }
+    const child = resolved
+    const childId = child.id
     if (!message.trim())
       return { error: 'Pass the message text in `message` (a non-empty string).' }
 
@@ -370,7 +405,7 @@ class SubSessionRunner {
       ])
       if (sendError.error) return { error: this.sendFailedError(child.title, sendError.error) }
       log.info(`prompt sub-session ${childId} (background)`)
-      return { kind: 'started' }
+      return { kind: 'started', id: childId }
     }
 
     const raced = await this.waitForeground(run, timeoutSeconds, signal)
@@ -383,7 +418,7 @@ class SubSessionRunner {
       // 降级：本次调用不再等，运行继续，跑完照后台形态回报
       run.background = true
       log.info(`子会话 ${childId} 前台等待超时 ${timeoutSeconds}s，降级为后台`)
-      return { kind: 'timeout' }
+      return { kind: 'timeout', id: childId }
     }
     if (raced === 'aborted') {
       await this.stopRun(childId)
@@ -395,7 +430,7 @@ class SubSessionRunner {
       this.lastAnswer(childId),
       this.infoOf(parentId, childId)
     ])
-    return { kind: 'answered', ...answer, ...(info ? { info } : {}) }
+    return { kind: 'answered', id: childId, ...answer, ...(info ? { info } : {}) }
   }
 
   /** 单条子会话的快照（不含答复；lastAnswer 另取） */
@@ -566,13 +601,15 @@ class SubSessionRunner {
   }
 
   /** 中止子会话当前的 run（等价用户点「停止生成」） */
-  async stop(parentId: string, childId: string): Promise<{ error: string } | { stopped: boolean }> {
+  async stop(
+    parentId: string,
+    rawChildId: string
+  ): Promise<{ error: string } | { stopped: boolean; id: string }> {
     const rejected = this.rejectIfNotNormal(parentId)
     if (rejected) return { error: rejected }
-    if (!this.ownChild(parentId, childId)) {
-      return { error: this.unknownChildError(parentId, childId) }
-    }
-    return { stopped: await this.stopRun(childId) }
+    const resolved = this.resolveChild(parentId, rawChildId)
+    if ('error' in resolved) return { error: resolved.error }
+    return { stopped: await this.stopRun(resolved.id), id: resolved.id }
   }
 
   private async stopRun(childId: string): Promise<boolean> {

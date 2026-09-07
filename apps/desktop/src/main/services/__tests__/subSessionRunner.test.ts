@@ -275,12 +275,12 @@ describe('prompt —— 前台 / 后台 / 超时 / 中止', () => {
 
   it('前台：等整轮结束，返回末条消息正文', async () => {
     mocks.findLastBySession.mockResolvedValue({ role: 'assistant', content: 'DONE.' })
-    expect(await send()).toEqual({ kind: 'answered', answer: 'DONE.' })
+    expect(await send()).toEqual({ kind: 'answered', id: CHILD, answer: 'DONE.' })
   })
 
   it('末条是错误事件 ⇒ 照样回，并标 isError（父级要看到同一份事实）', async () => {
     mocks.findLastBySession.mockResolvedValue({ role: 'system_notify', content: 'boom' })
-    expect(await send()).toEqual({ kind: 'answered', answer: 'boom', isError: true })
+    expect(await send()).toEqual({ kind: 'answered', id: CHILD, answer: 'boom', isError: true })
   })
 
   it('忙就拒绝、不排队：一个忙着的子会话是父级该知道的状态', async () => {
@@ -307,7 +307,7 @@ describe('prompt —— 前台 / 后台 / 超时 / 中止', () => {
         release = () => r({})
       })
     )
-    expect(await send({ background: true })).toEqual({ kind: 'started' })
+    expect(await send({ background: true })).toEqual({ kind: 'started', id: CHILD })
     release()
   })
 
@@ -345,7 +345,7 @@ describe('prompt —— 前台 / 后台 / 超时 / 中止', () => {
       })
     )
     const res = await send({ timeoutSeconds: 1 })
-    expect(res).toEqual({ kind: 'timeout' })
+    expect(res).toEqual({ kind: 'timeout', id: CHILD })
     expect(childAgent.abort).not.toHaveBeenCalled()
     release()
   })
@@ -755,10 +755,10 @@ describe('list / read / stop', () => {
   })
 
   it('stop：有活跃运行时才 abort；没有就如实说没在跑', async () => {
-    expect(await runner.stop(PARENT, CHILD)).toEqual({ stopped: false })
+    expect(await runner.stop(PARENT, CHILD)).toEqual({ stopped: false, id: CHILD })
     const child = fakeAgent({ isStreaming: true })
     mocks.getAgentSession.mockReturnValue(child)
-    expect(await runner.stop(PARENT, CHILD)).toEqual({ stopped: true })
+    expect(await runner.stop(PARENT, CHILD)).toEqual({ stopped: true, id: CHILD })
     expect(child.abort).toHaveBeenCalled()
   })
 

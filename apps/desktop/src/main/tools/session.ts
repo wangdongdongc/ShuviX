@@ -71,7 +71,7 @@ export const SessionParamsSchema = Type.Object({
   sub_session_id: Type.Optional(
     Type.String({
       description:
-        'For "prompt-sub-session" / "read-sub-session" / "stop-sub-session": the id returned by "create-sub-session" or listed by "list-sub-sessions".'
+        'For "prompt-sub-session" / "read-sub-session" / "stop-sub-session": the id returned by "create-sub-session" or listed by "list-sub-sessions". May be omitted when this session has exactly one sub-session — that one is then addressed. ("wait-for-sub-sessions" may always omit it to wait for every running one.)'
     })
   ),
   message: Type.Optional(
@@ -314,20 +314,19 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
     })
     if ('error' in res) throw new Error(res.error)
 
-    const id = (params.sub_session_id ?? '').trim()
     // 后台/降级的回执刻意不带内容：它会永久留在本会话上下文里并被每一步重发。
     // 收尾指引说的是**真实**机制：完成通知只在这一轮还没结束时插得进来，
     // 所以要结果就 wait（挂住、不花钱），而不是先说完话再回来轮询。
     if (res.kind === 'started') {
       return backgroundText(
-        `<sub-session id="${attr(id)}" status="running"/>`,
+        `<sub-session id="${attr(res.id)}" status="running"/>`,
         `Started in the background.`,
         COLLECT_HINT
       )
     }
     if (res.kind === 'timeout') {
       return backgroundText(
-        `<sub-session id="${attr(id)}" status="running"/>`,
+        `<sub-session id="${attr(res.id)}" status="running"/>`,
         `Still running after ${params.timeout_seconds ?? DEFAULT_PROMPT_TIMEOUT_SEC}s — it was NOT cancelled and keeps going.`,
         COLLECT_HINT
       )
@@ -335,8 +334,8 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
     // info 由 runner 顺带带回（省掉再 read 一次 = 再投影一遍整棵转写）；
     // 它理论上可能缺（会话恰好被删），那时退化成只有围栏骨架的一块
     const info: SubSessionInfo = res.info ?? {
-      id,
-      title: id,
+      id: res.id,
+      title: res.id,
       status: 'idle',
       driven: false,
       updatedAt: 0
@@ -402,10 +401,14 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
   private async stopSubSession(
     params: SessionToolParams
   ): Promise<AgentToolResult<SessionToolDetails | undefined>> {
-    const id = (params.sub_session_id ?? '').trim()
-    const res = await subSessionRunner.stop(this.ctx.sessionId, id)
+    const res = await subSessionRunner.stop(
+      this.ctx.sessionId,
+      (params.sub_session_id ?? '').trim()
+    )
     if ('error' in res) throw new Error(res.error)
-    return text(res.stopped ? `Stopped sub-session ${id}.` : `Sub-session ${id} was not running.`)
+    return text(
+      res.stopped ? `Stopped sub-session ${res.id}.` : `Sub-session ${res.id} was not running.`
+    )
   }
 
   /** 重命名本任务所属会话；笔记本会话的标题绑在文件名上，拒绝而不是悄悄改别的 */
