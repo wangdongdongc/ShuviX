@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import {
   AtomicCodeMirrorEditor,
   type AtomicCodeMirrorEditorHandle,
+  refreshImageBlocks,
   tableContextMenu,
   tableWikiLinks,
   type TableMenuItem,
@@ -18,7 +19,7 @@ import { createRoot } from 'react-dom/client'
 import { useChatStore, getChatApi, getSessionChannelApi, useAppEvent } from '@shuvix/chat-ui'
 import type { ContextMenuRequest, ContextMenuResult } from '@shuvix/chat-protocol/types/contextMenu'
 import { isContentOnlyFileChange } from '@shuvix/chat-protocol/utils/fileMap'
-import { useResolveMediaUrl, type MediaSource } from '@shuvix/chat-ui'
+import { useResolveMediaUrl, type MediaSource, type ResolveMediaUrl } from '@shuvix/chat-ui'
 import { runMarkdownCommand, markdownKeymap } from './markdownCommands'
 import { frontmatterCard, type FrontmatterFieldMount } from './frontmatterCard'
 import { FrontmatterFieldPicker } from './FrontmatterFieldPicker'
@@ -73,6 +74,77 @@ const EMBED_PENDING = new Set<string>()
 /** 各 session 触发 CM6 内嵌图片重算的回调（组件挂载时注册）。供 resolveSrc 异步就绪后调用，
  *  让 resolveSrc 只读模块级 map、不在 render 期访问 React ref（react-hooks/refs）。 */
 const EMBED_REFRESH = new Map<string, () => void>()
+
+/**
+ * abs 路径经注入的 mediaUrl seam 取可加载 URL，带模块级缓存（EMBED_SOURCES/EMBED_PENDING）：
+ * 同步来源（桌面 shuvix-preview://）直接缓存并返回；异步来源（扩展 blob:）先返回 null，
+ * 就绪后写缓存并经 EMBED_REFRESH 触发 CM 重算（下次同步命中缓存）。
+ * `![[image]]` 内嵌与标准 `![](相对路径)` 图片共用同一份缓存与去重，避免两份会漂移的实现。
+ */
+function resolveMediaCached(
+  sessionId: string,
+  abs: string,
+  resolveMedia: ResolveMediaUrl
+): string | null {
+  const cached = EMBED_SOURCES.get(sessionId)?.get(abs)
+  if (cached) return cached.url
+  const store = (s: MediaSource): void => {
+    let m = EMBED_SOURCES.get(sessionId)
+    if (!m) {
+      m = new Map()
+      EMBED_SOURCES.set(sessionId, m)
+    }
+    m.set(abs, s)
+  }
+  const src = resolveMedia({ sessionId, path: abs })
+  if (src instanceof Promise) {
+    const key = `${sessionId}::${abs}`
+    if (!EMBED_PENDING.has(key)) {
+      EMBED_PENDING.add(key)
+      void src
+        .then((s) => {
+          store(s)
+          EMBED_PENDING.delete(key)
+          EMBED_REFRESH.get(sessionId)?.()
+        })
+        .catch(() => EMBED_PENDING.delete(key))
+    }
+    return null
+  }
+  // 同步来源（桌面）：直接缓存并返回
+  store(src)
+  return src.url
+}
+
+/** 宿主绝对路径判定：posix `/`、win 盘符 `C:\` / `C:/`、UNC `\\server\share` */
+const isAbsHostPath = (p: string): boolean =>
+  p.startsWith('/') || p.startsWith('\\\\') || /^[a-zA-Z]:[\\/]/.test(p)
+
+/** 带 scheme 的 URL（http(s):/data:/blob:/shuvix-preview:/file: 等）→ 原样透传 */
+const HAS_SCHEME_RE = /^[a-zA-Z][a-zA-Z0-9+.-]*:/
+
+/**
+ * 把相对图片路径按 md 文件（documentId）所在目录解析为绝对路径。渲染进程无 node:path，
+ * 故用分隔符感知的段处理：`.` 略过、`..` 弹栈但不出根；posix 根（首段 ''）与 win 盘符段天然保留。
+ */
+function resolveAgainstDocDir(docAbsPath: string, rel: string): string | null {
+  const clean = rel.split('#')[0].split('?')[0].trim()
+  if (!clean) return null
+  const win = docAbsPath.includes('\\') && !docAbsPath.includes('/')
+  const sep = win ? '\\' : '/'
+  const parts = docAbsPath.split(/[/\\]/)
+  parts.pop() // 去掉文件名 → 所在目录
+  for (const seg of clean.split(/[/\\]/)) {
+    if (!seg || seg === '.') continue
+    if (seg === '..') {
+      // posix 根 [''] 与 win 盘符 ['C:'] 长度均为 1：不许 .. 越过根
+      if (parts.length <= 1) return null
+      parts.pop()
+    } else parts.push(seg)
+  }
+  const joined = parts.join(sep)
+  return isAbsHostPath(joined) ? joined : null
+}
 
 export type SaveStatus = 'saved' | 'saving'
 
@@ -448,11 +520,13 @@ export function LivePreviewEditor({
   // 写缓存并 dispatch refreshEmbeds 触发重算，此时同步命中缓存。卸载时按 sessionId revoke（释放 blob）。
   useEffect(() => {
     if (!sessionId) return undefined
-    // 注册重算回调（闭包读 panelRef 在 effect 内，合法）；卸载时 revoke 全部 blob 并注销
+    // 注册重算回调（闭包读 panelRef 在 effect 内，合法）；卸载时 revoke 全部 blob 并注销。
+    // 同时刷新 ![[image]] 内嵌（refreshEmbeds）与标准 ![](src) 图片块（refreshImageBlocks）——
+    // 两者共用 EMBED_SOURCES 缓存，异步来源就绪后都需要重建各自的装饰。
     EMBED_REFRESH.set(sessionId, () => {
       const dom = panelRef.current?.querySelector<HTMLElement>('.cm-editor')
       const view = dom ? EditorView.findFromDOM(dom) : null
-      view?.dispatch({ effects: refreshEmbeds.of(null) })
+      view?.dispatch({ effects: [refreshEmbeds.of(null), refreshImageBlocks.of(null)] })
     })
     return () => {
       EMBED_REFRESH.delete(sessionId)
@@ -468,37 +542,29 @@ export function LivePreviewEditor({
       if (!sessionId) return null
       const abs = lookupAbs(FILE_MAPS.get(sessionId) ?? null, name)
       if (!abs || !isImagePath(abs)) return null
-      const cached = EMBED_SOURCES.get(sessionId)?.get(abs)
-      if (cached) return cached.url
       if (!resolveMedia) return null
-      const store = (s: MediaSource): void => {
-        let m = EMBED_SOURCES.get(sessionId)
-        if (!m) {
-          m = new Map()
-          EMBED_SOURCES.set(sessionId, m)
-        }
-        m.set(abs, s)
-      }
-      const src = resolveMedia({ sessionId, path: abs })
-      if (src instanceof Promise) {
-        const key = `${sessionId}::${abs}`
-        if (!EMBED_PENDING.has(key)) {
-          EMBED_PENDING.add(key)
-          void src
-            .then((s) => {
-              store(s)
-              EMBED_PENDING.delete(key)
-              EMBED_REFRESH.get(sessionId)?.()
-            })
-            .catch(() => EMBED_PENDING.delete(key))
-        }
-        return null
-      }
-      // 同步来源（桌面）：直接缓存并返回
-      store(src)
-      return src.url
+      return resolveMediaCached(sessionId, abs, resolveMedia)
     },
     [sessionId, resolveMedia]
+  )
+
+  // 标准 markdown 图片 ![](src) 的 src 解析（atomic imageBlocks 的 resolveSrc）：
+  // - 带 scheme 的 URL（http(s):/data:/blob:/shuvix-preview: 等）与宿主绝对路径 → 原样透传；
+  // - 相对路径（./、../、裸相对名）→ 相对 documentId（md 文件绝对路径）所在目录解析为绝对路径，
+  //   走与 ![[image]] 相同的 mediaUrl seam + 模块级缓存（resolveMediaCached）；
+  //   异步来源（扩展 blob:）首次返回 null（atomic 保持 raw src），就绪后经 EMBED_REFRESH 重建。
+  // 无 sessionId / 无 mediaUrl seam / documentId 非绝对路径 → 返回 null，优雅降级为现状。
+  const resolveMarkdownImageSrc = useCallback(
+    (src: string): string | null => {
+      const s = src.trim()
+      if (!s || !sessionId || !resolveMedia) return null
+      if (HAS_SCHEME_RE.test(s) || isAbsHostPath(s)) return s
+      if (!isAbsHostPath(documentId)) return null
+      const abs = resolveAgainstDocDir(documentId, s)
+      if (!abs) return null
+      return resolveMediaCached(sessionId, abs, resolveMedia)
+    },
+    [sessionId, resolveMedia, documentId]
   )
 
   // 属性卡的字段槽位：把仓库既有的成熟选择器（ToolSelectList / ModelSelect）挂进去。
@@ -591,6 +657,7 @@ export function LivePreviewEditor({
           editorHandleRef={atomicRef}
           codeLanguages={ATOMIC_CODE_LANGUAGES}
           extensions={editorExtensions}
+          imageSrcResolver={resolveMarkdownImageSrc}
           onLinkClick={(url) => caps?.openExternal?.(url)}
           readOnly={readOnly}
         />

@@ -201,6 +201,20 @@ export interface AtomicCodeMirrorEditorProps {
   extensions?: readonly Extension[];
 
   /**
+   * Resolve the raw URL of a markdown image (`![alt](url)`) to the URL
+   * the rendered `<img>` should load. Hosts use this to re-anchor
+   * relative paths onto the document's location — raw relative URLs
+   * would otherwise resolve against the renderer's page URL and 404.
+   * Return null/'' to keep the raw src (e.g. while an async resolution
+   * is pending), then dispatch `refreshImageBlocks` on the view once
+   * the resolved URL is ready.
+   *
+   * Read through a ref at call time, so swapping the callback does NOT
+   * require an editor remount.
+   */
+  imageSrcResolver?: (src: string) => string | null;
+
+  /**
    * Render the document as a non-editable live preview. Adds
    * `EditorState.readOnly` (blocks doc mutation) plus
    * `EditorView.editable=false` (drops contenteditable, so no IME / caret).
@@ -237,6 +251,7 @@ export function AtomicCodeMirrorEditor({
   editorHandleRef,
   codeLanguages = EMPTY_CODE_LANGUAGES,
   extensions = EMPTY_EXTENSIONS,
+  imageSrcResolver,
   readOnly = false,
 }: AtomicCodeMirrorEditorProps) {
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -244,6 +259,7 @@ export function AtomicCodeMirrorEditor({
   const clearRevealTimerRef = useRef<number | null>(null);
   const onMarkdownChangeRef = useRef(onMarkdownChange);
   const onLinkClickRef = useRef(onLinkClick);
+  const imageSrcResolverRef = useRef(imageSrcResolver);
 
   useEffect(() => {
     onMarkdownChangeRef.current = onMarkdownChange;
@@ -252,6 +268,10 @@ export function AtomicCodeMirrorEditor({
   useEffect(() => {
     onLinkClickRef.current = onLinkClick;
   }, [onLinkClick]);
+
+  useEffect(() => {
+    imageSrcResolverRef.current = imageSrcResolver;
+  }, [imageSrcResolver]);
 
   // Mount once per document identity; swapping documents tears down the
   // view so cursor/undo state from the previous doc doesn't leak.
@@ -325,7 +345,9 @@ export function AtomicCodeMirrorEditor({
           tables({
             onLinkClick: (url) => onLinkClickRef.current?.(url),
           }),
-          imageBlocks(),
+          imageBlocks({
+            resolveSrc: (src) => imageSrcResolverRef.current?.(src) ?? null,
+          }),
           mermaidBlocks(),
           mathBlocks(),
           commentBlocks(),

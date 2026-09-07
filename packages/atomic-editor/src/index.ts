@@ -11,7 +11,8 @@ export type {
 // recommended entry point.
 export { inlinePreview } from './inline-preview';
 export type { InlinePreviewConfig } from './inline-preview';
-export { imageBlocks } from './image-blocks';
+export { imageBlocks, refreshImageBlocks } from './image-blocks';
+export type { ImageBlocksConfig } from './image-blocks';
 export { mermaidBlocks, renderMermaid } from './mermaid-blocks';
 export type { MermaidResult, MermaidTheme } from './mermaid-blocks';
 export { mathBlocks, mathMarkdownSyntax, renderMath, scanMathSpans } from './math-blocks';

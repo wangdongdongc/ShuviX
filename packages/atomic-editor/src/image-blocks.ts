@@ -1,5 +1,6 @@
 import { ensureSyntaxTree, syntaxTree } from '@codemirror/language';
 import {
+  StateEffect,
   StateField,
   type EditorState,
   type Extension,
@@ -47,6 +48,31 @@ import { treeGrowthEffect, treeProgressPlugin } from './tree-progress';
 // Setting `width` and `height` attrs from this cache pins the
 // aspect ratio on mount, so there's no grow-after-mount event.
 const dimensionCache = new Map<string, { w: number; h: number }>();
+
+export interface ImageBlocksConfig {
+  /**
+   * Resolve the raw URL from the markdown source (`![alt](url)`) to the
+   * URL the `<img>` should actually load. Hosts use this to re-anchor
+   * relative paths (`./images/x.png`) onto the document's location —
+   * raw relative URLs would otherwise resolve against the renderer's
+   * own page URL and 404.
+   *
+   * Return a non-empty string to override the src; return `null` (or
+   * `''`) to keep the raw src as-is — e.g. while an async resolution
+   * is still pending. Once the resolution is ready, dispatch
+   * `refreshImageBlocks` on the view to rebuild the decorations so the
+   * now-resolvable src gets picked up.
+   */
+  resolveSrc?: (src: string) => string | null;
+}
+
+/**
+ * Dispatched by the host when an asynchronous `resolveSrc` resolution
+ * has become ready (its result now cached): rebuilds the image widgets
+ * so the resolved URLs are picked up. Mirrors `refreshEmbeds` in
+ * app-shell's wikiEmbed.
+ */
+export const refreshImageBlocks = StateEffect.define<null>();
 
 class ImageWidget extends WidgetType {
   constructor(readonly src: string, readonly alt: string) {
@@ -117,7 +143,10 @@ class ImageWidget extends WidgetType {
   }
 }
 
-function buildImageBlocks(state: EditorState): DecorationSet {
+function buildImageBlocks(
+  state: EditorState,
+  resolveSrc?: ImageBlocksConfig['resolveSrc'],
+): DecorationSet {
   const ranges: Range<Decoration>[] = [];
   // Push the parser to cover the whole doc so image nodes in
   // regions CM6 hasn't yet parsed get widgetized. Without this, for
@@ -152,10 +181,16 @@ function buildImageBlocks(state: EditorState): DecorationSet {
       const [, alt, src] = match;
       if (!src) return;
 
+      // Host-injected resolver (e.g. notebook: anchor relative paths on
+      // the document's directory and route through its media URL seam).
+      // Non-empty result wins; null/'' keeps the raw src. The widget's
+      // src (and thereby the dimensionCache key) is the resolved URL.
+      const finalSrc = resolveSrc?.(src) || src;
+
       const line = state.doc.lineAt(node.from);
       ranges.push(
         Decoration.widget({
-          widget: new ImageWidget(src, alt),
+          widget: new ImageWidget(finalSrc, alt),
           block: true,
           // side: 1 places the block widget after the line's content,
           // so the image appears below its source line.
@@ -208,30 +243,33 @@ function changeAffectsImages(tr: Transaction, existing: DecorationSet): boolean 
   return affected;
 }
 
-const imageBlocksField = StateField.define<DecorationSet>({
-  create: (state) => buildImageBlocks(state),
-  update(deco, tr) {
-    // Tree-growth effect: the background parser caught up to a
-    // region that wasn't parsed when we last built. Rebuild so any
-    // newly-visible Image nodes get their widget.
-    for (const effect of tr.effects) {
-      if (effect.is(treeGrowthEffect)) return buildImageBlocks(tr.state);
-    }
-    // Selection and viewport changes don't affect the widget set
-    // (though they do affect whether the surrounding markdown is
-    // shown, which is handled by the inline-preview ViewPlugin).
-    if (!tr.docChanged) return deco;
-    // Most keystrokes on a large atom are in plain prose with no
-    // image nearby. Map existing decorations through the change and
-    // skip the full-doc walk unless the change actually touches an
-    // image.
-    const mapped = deco.map(tr.changes);
-    if (!changeAffectsImages(tr, deco)) return mapped;
-    return buildImageBlocks(tr.state);
-  },
-  provide: (f) => EditorView.decorations.from(f),
-});
-
-export function imageBlocks(): Extension {
+export function imageBlocks(config: ImageBlocksConfig = {}): Extension {
+  const imageBlocksField = StateField.define<DecorationSet>({
+    create: (state) => buildImageBlocks(state, config.resolveSrc),
+    update(deco, tr) {
+      // Tree-growth effect: the background parser caught up to a
+      // region that wasn't parsed when we last built. Rebuild so any
+      // newly-visible Image nodes get their widget. refreshImageBlocks:
+      // the host's async resolveSrc just became ready — rebuild so the
+      // resolved URLs replace the raw fallbacks.
+      for (const effect of tr.effects) {
+        if (effect.is(treeGrowthEffect) || effect.is(refreshImageBlocks)) {
+          return buildImageBlocks(tr.state, config.resolveSrc);
+        }
+      }
+      // Selection and viewport changes don't affect the widget set
+      // (though they do affect whether the surrounding markdown is
+      // shown, which is handled by the inline-preview ViewPlugin).
+      if (!tr.docChanged) return deco;
+      // Most keystrokes on a large atom are in plain prose with no
+      // image nearby. Map existing decorations through the change and
+      // skip the full-doc walk unless the change actually touches an
+      // image.
+      const mapped = deco.map(tr.changes);
+      if (!changeAffectsImages(tr, deco)) return mapped;
+      return buildImageBlocks(tr.state, config.resolveSrc);
+    },
+    provide: (f) => EditorView.decorations.from(f),
+  });
   return [imageBlocksField, treeProgressPlugin];
 }
