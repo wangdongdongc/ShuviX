@@ -45,9 +45,6 @@ import type {
   McpServerUpdateParams,
   McpServerInfo,
   McpToolInfo,
-  McpHostStatus,
-  McpHostToolDesc,
-  McpHostLogSummary,
   Skill,
   SkillUpdateParams,
   SkillDir,
@@ -816,35 +813,6 @@ declare global {
           }
         }>
       >
-    }
-    mcpServer: {
-      getStatus: () => Promise<McpHostStatus>
-      start: () => Promise<McpHostStatus>
-      stop: () => Promise<McpHostStatus>
-      getTools: () => Promise<McpHostToolDesc[]>
-      enableFeature: (feature: string) => Promise<McpHostStatus>
-      disableFeature: (feature: string) => Promise<McpHostStatus>
-      listLogs: (params?: {
-        clientName?: string
-        toolName?: string
-        limit?: number
-      }) => Promise<McpHostLogSummary[]>
-      getLog: (id: string) => Promise<
-        | {
-            id: string
-            sessionId: string
-            clientName: string
-            clientVersion: string
-            toolName: string
-            arguments: string
-            result: string
-            isError: number
-            durationMs: number
-            createdAt: number
-          }
-        | undefined
-      >
-      clearLogs: () => Promise<void>
     }
     config: {
       buildExportSnapshot: () => Promise<ExportSnapshot>

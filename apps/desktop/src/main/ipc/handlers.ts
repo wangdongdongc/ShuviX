@@ -14,7 +14,6 @@ import { registerCommandHandlers } from './commandHandlers'
 import { registerTtsHandlers } from './ttsHandlers'
 import { registerDownloadHandlers } from './downloadHandlers'
 import { registerUpdateHandlers } from './updateHandlers'
-import { registerMcpServerHandlers } from './mcpServerHandlers'
 import { registerSubAgentHandlers } from './subAgentHandlers'
 import { registerPolicyHandlers } from './policyHandlers'
 import { registerWorkflowHandlers } from './workflowHandlers'
@@ -54,7 +53,6 @@ export function registerIpcHandlers(): void {
   registerTtsHandlers()
   registerDownloadHandlers()
   registerUpdateHandlers()
-  registerMcpServerHandlers()
   registerSubAgentHandlers()
   registerPolicyHandlers()
   registerWorkflowHandlers()

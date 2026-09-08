@@ -19,7 +19,6 @@ import { providerService } from './services/providerService'
 import { initI18n, t } from './i18n'
 import { settingsDao } from './dao/settingsDao'
 import { mcpService } from './services/mcpService'
-import { mcpServerService } from './services/mcpServerService'
 import { chatFrontendRegistry, ElectronFrontend } from './frontend'
 // 触发所有内置工具的 registerBuiltinTool() 副作用
 // services / frontend 层消费注册表前必须由 main-entry 先注册
@@ -673,7 +672,6 @@ app.on('before-quit', () => {
   destroyAllTabs()
   killAllBgTasks()
   mcpService.disconnectAll().catch(() => {})
-  mcpServerService.stop().catch(() => {})
   sshManager.disconnectAll().catch(() => {})
   widgetServer.dispose()
   cliServer.stop()
