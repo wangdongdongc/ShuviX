@@ -24,8 +24,8 @@ export interface EditParams {
 }
 
 /**
- * 编辑文件：校验存在 + 读后被改守卫 → 整读 → BOM/行尾处理 → 多级回退匹配替换 →
- * 生成带行号上下文的 diff → 写入前询问 → 写入 → 记录读取时间。
+ * 编辑文件：校验存在 + （读过才做的）读后被改守卫 → 整读（登记为读取基线）→
+ * BOM/行尾处理 → 多级回退匹配替换 → 生成带行号上下文的 diff → 写入前询问 → 写入 → 记录读取时间。
  * readPath 交给 port 解释；displayPath（params.path）用于输出文案与报错。
  *
  * diff 在写入**之前**就算好，因为「预览询问」要拿它给用户看；同一个字符串随后原样进
@@ -51,10 +51,21 @@ export async function applyEdit(
       throw new Error(`File not found: ${params.path}`)
     }
 
-    // 校验文件是否在上次读取后被外部修改（edit 必须先读）
-    await guards.assertNotModifiedSinceRead(readPath)
+    // 校验文件是否在上次读取后被外部修改。仅当本会话读过才校验（与 applyWrite 对齐）：
+    // 没读过不拦 —— 下面紧接着就会整读文件，这次读取即为内容基线；「必须先 read 一遍」
+    // 只是仪式性约束（bash/grep 早已把内容带进上下文，却完全绕过这个守卫）。
+    const wasRead = guards.hasReadTime(readPath)
+    if (wasRead) {
+      await guards.assertNotModifiedSinceRead(readPath)
+    }
 
     const rawContent = await port.readFile(readPath)
+    if (!wasRead) {
+      // 首次编辑：把这次内部整读登记为基线，询问后的二次校验（见下）与后续 edit 的
+      // 前置校验靠它检测「我读完之后、写入之前被外部改动」。读过的文件维持原样 ——
+      // 基线只在写入成功后更新（见函数尾部），询问被拒时不留下新的读取记录。
+      guards.recordRead(readPath)
+    }
 
     // BOM 和行尾处理
     const { bom, text: content } = stripBom(rawContent)

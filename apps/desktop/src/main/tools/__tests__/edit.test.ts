@@ -41,7 +41,7 @@ import type { ToolContext } from '../../services/toolContext'
 
 const ctx: ToolContext = { sessionId: SESSION_ID }
 
-/** 写文件 + 记录“已读”（edit 要求先 read 过；否则 mtime 守卫直接拒绝） */
+/** 写文件 + 记录“已读”（读过才校验 mtime 守卫；未读也能编辑，这里模拟常见的「先读后改」路径） */
 function seed(name: string, content: string): string {
   const p = join(TEST_DIR, name)
   writeFileSync(p, content)
@@ -103,12 +103,12 @@ describe('edit 工具', () => {
     ).rejects.toThrow(/File not found/)
   })
 
-  it('未先读取 → 要求先 read', async () => {
+  it('未先读取也能编辑（内部整读即基线；与 write 对齐）', async () => {
     const p = join(TEST_DIR, 'unread.txt')
     writeFileSync(p, 'data\n') // 不调用 recordRead
-    await expect(
-      makeEditTool(ctx).execute('e7', { path: p, oldText: 'data', newText: 'x' })
-    ).rejects.toThrow(/read.*before|before overwriting/i)
+    const result = await makeEditTool(ctx).execute('e7', { path: p, oldText: 'data', newText: 'x' })
+    expect(readFileSync(p, 'utf-8')).toBe('x\n')
+    expect(result.details).toMatchObject({ type: 'edit' })
   })
 
   it('读取后被外部修改 → 拒绝（mtime 守卫）', async () => {
@@ -118,6 +118,44 @@ describe('edit 工具', () => {
     await expect(
       makeEditTool(ctx).execute('e8', { path: p, oldText: 'orig', newText: 'x' })
     ).rejects.toThrow(/modified since it was last read/)
+  })
+
+  it('从未读文件首次 edit 登记基线：之后拨未来 mtime，第二次 edit 被拒绝', async () => {
+    const p = join(TEST_DIR, 'unread-baseline.txt')
+    writeFileSync(p, 'orig\n') // 不调用 recordRead
+    await makeEditTool(ctx).execute('e9', { path: p, oldText: 'orig', newText: 'one' })
+    expect(readFileSync(p, 'utf-8')).toBe('one\n')
+
+    // 首次 edit 的内部整读/写入已登记基线（墙钟）；把 mtime 拨到基线之后 → 触发守卫
+    const future = new Date(Date.now() + 60_000)
+    utimesSync(p, future, future)
+    await expect(
+      makeEditTool(ctx).execute('e10', { path: p, oldText: 'one', newText: 'two' })
+    ).rejects.toThrow(/modified since it was last read/)
+    expect(readFileSync(p, 'utf-8')).toBe('one\n')
+  })
+
+  it('从未读文件连续两次 edit（无外部改动）都成功：自身写入不触发守卫', async () => {
+    const p = join(TEST_DIR, 'unread-twice.txt')
+    writeFileSync(p, 'a\nb\n') // 不调用 recordRead
+    const tool = makeEditTool(ctx)
+    await tool.execute('e11', { path: p, oldText: 'a', newText: 'A' })
+    await tool.execute('e12', { path: p, oldText: 'b', newText: 'B' })
+    expect(readFileSync(p, 'utf-8')).toBe('A\nB\n')
+  })
+
+  it('从未读文件 mtime 在未来：前置校验跳过，但桌面恒接询问 → 事后复检按墙钟基线抛 modified', async () => {
+    // 裁决口径：基线记墙钟而非 mtime。前置校验对从未读文件整体跳过（所以能走到整读/算 diff），
+    // 但桌面 edit 恒挂 ask hook（allow 只是不弹窗，hook 仍在）→ 事后复检拿墙钟基线比未来 mtime，
+    // 必抛 modified —— 与「已读文件遇未来 mtime 在前置校验被拦」是同一份已接受语义，不修实现。
+    const p = join(TEST_DIR, 'unread-future-mtime.txt')
+    writeFileSync(p, 'data\n') // 不调用 recordRead
+    const future = new Date(Date.now() + 60_000)
+    utimesSync(p, future, future)
+    await expect(
+      makeEditTool(ctx).execute('e13', { path: p, oldText: 'data', newText: 'x' })
+    ).rejects.toThrow(/modified since it was last read/)
+    expect(readFileSync(p, 'utf-8')).toBe('data\n') // 不落盘
   })
 
   it('同文件并发多处 edit 全部累积（原子 read-modify-write，不丢改）', async () => {

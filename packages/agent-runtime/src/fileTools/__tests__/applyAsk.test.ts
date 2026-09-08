@@ -547,3 +547,209 @@ describe('applyEdit/applyWrite — failures before the ask', () => {
     expect(h.recordReads).toEqual([P])
   })
 })
+
+// ─── 组 6：从未读文件的基线登记（「写前必读」守卫放宽） ──────────────────────
+//
+// 放宽后的语义：编辑本会话从未 read 过的已存在文件不再报错，edit 内部整读即登记为
+// 读取基线；唯一保留的守卫报错是「基线之后被外部修改」。两个被钉住的裁决：
+//   - 询问被拒 / oldText 失配时，内部整读登记的基线**留存**（读取确实发生了）；
+//   - 已读文件不在整读处重复登记，基线只在写入成功后更新。
+
+describe('applyEdit — never-read file baseline registration', () => {
+  it('EG-1: never-read + no ask → goes through; internal read registers the baseline before write', async () => {
+    const h = makeHarness()
+    h.seedFile(P, 'alpha\nbeta\n')
+    // 联合探针：recordRead 与 write 的相对顺序（harness 的 events 只记 ask/write）
+    const order: string[] = []
+    const origRecordRead = h.guards.recordRead
+    h.guards.recordRead = (p) => {
+      order.push(`read:${p}`)
+      origRecordRead(p)
+    }
+    const origWriteFile = h.port.writeFile
+    h.port.writeFile = (p, content) => {
+      order.push(`write:${p}`)
+      return origWriteFile(p, content)
+    }
+
+    const res = await applyEdit(h.port, h.guards, P, { path: P, oldText: 'beta', newText: 'BETA' })
+
+    expect(res.details.type).toBe('edit')
+    expect(h.contentOf(P)).toBe('alpha\nBETA\n')
+    expect(h.assertCalls).toEqual([]) // 从未读 → 无前置校验，无 ask → 无事后复检
+    expect(h.recordReads).toEqual([P, P]) // 整读基线 + 写后各一次
+    // 首次 recordRead 早于 write
+    expect(order).toEqual([`read:${P}`, `write:${P}`, `read:${P}`])
+  })
+
+  it('EG-2: never-read + ask, external change during the ask → modified-since; baseline precedes the ask', async () => {
+    const h = makeHarness()
+    h.seedFile(P, 'alpha\nbeta\n')
+    const ask = spyAsk(h, () => {
+      // 核心时序：基线登记先于询问 —— 此刻内部整读已经发生
+      expect(h.recordReads).toEqual([P])
+      h.externalWrite(P, 'someone else typed this\n')
+    })
+
+    await expect(
+      applyEdit(h.port, h.guards, P, { path: P, oldText: 'beta', newText: 'BETA' }, ask.hook)
+    ).rejects.toThrow(/modified since it was last read/)
+
+    expect(ask.calls).toHaveLength(1)
+    expect(h.writes).toEqual([])
+    expect(h.contentOf(P)).toBe('someone else typed this\n')
+  })
+
+  it('EG-3: never-read + ask, untouched during the ask → goes through; only the post-ask re-check runs', async () => {
+    const h = makeHarness()
+    h.seedFile(P, 'alpha\nbeta\n')
+    const ask = spyAsk(h)
+
+    await applyEdit(h.port, h.guards, P, { path: P, oldText: 'beta', newText: 'BETA' }, ask.hook)
+
+    expect(h.contentOf(P)).toBe('alpha\nBETA\n')
+    expect(h.assertCalls).toEqual([P]) // 仅事后复检，无前置
+    expect(h.events).toEqual([`ask:${P}`, `write:${P}`])
+  })
+
+  it('EG-4: already-read file does not re-register at the internal read — recordRead only after write', async () => {
+    const h = makeHarness()
+    h.seedFile(P, 'alpha\nbeta\n')
+    h.seedRead(P)
+
+    await applyEdit(h.port, h.guards, P, { path: P, oldText: 'beta', newText: 'BETA' })
+
+    expect(h.contentOf(P)).toBe('alpha\nBETA\n')
+    expect(h.recordReads).toEqual([P]) // 恰一次：仅写后
+  })
+
+  it('EG-5: ask denied on a never-read file keeps the baseline (the read did happen)', async () => {
+    const h = makeHarness()
+    h.seedFile(P, 'alpha\nbeta\n')
+    const denied = spyAsk(h, () => {
+      throw new Error('User denied access to /ws/file.txt')
+    })
+
+    await expect(
+      applyEdit(h.port, h.guards, P, { path: P, oldText: 'beta', newText: 'BETA' }, denied.hook)
+    ).rejects.toThrow(/User denied access/)
+    expect(h.writes).toEqual([])
+    expect(h.contentOf(P)).toBe('alpha\nbeta\n')
+    // 基线留存
+    expect(h.guards.hasReadTime(P)).toBe(true)
+
+    // 无外部改动 → 以留存的基线通过前置校验，编辑成功
+    await applyEdit(h.port, h.guards, P, { path: P, oldText: 'beta', newText: 'BETA' })
+    expect(h.contentOf(P)).toBe('alpha\nBETA\n')
+
+    // 基线之后被外部改动 → 抛 modified-since
+    h.externalWrite(P, 'typed elsewhere\n')
+    await expect(
+      applyEdit(h.port, h.guards, P, { path: P, oldText: 'BETA', newText: 'X' })
+    ).rejects.toThrow(/modified since it was last read/)
+    expect(h.contentOf(P)).toBe('typed elsewhere\n')
+  })
+
+  it('EG-6: after the first successful edit, the recorded baseline gates the second edit', async () => {
+    // 外部改动 → 第二次 edit 抛 modified-since
+    const h1 = makeHarness()
+    h1.seedFile(P, 'alpha\n')
+    await applyEdit(h1.port, h1.guards, P, { path: P, oldText: 'alpha', newText: 'one' })
+    h1.externalWrite(P, 'external\n')
+    await expect(
+      applyEdit(h1.port, h1.guards, P, { path: P, oldText: 'external', newText: 'two' })
+    ).rejects.toThrow(/modified since/)
+    expect(h1.contentOf(P)).toBe('external\n')
+
+    // 无改动 → 第二次 edit 成功（自身写入不触发守卫）
+    const h2 = makeHarness()
+    h2.seedFile(P, 'alpha\n')
+    await applyEdit(h2.port, h2.guards, P, { path: P, oldText: 'alpha', newText: 'one' })
+    await applyEdit(h2.port, h2.guards, P, { path: P, oldText: 'one', newText: 'two' })
+    expect(h2.contentOf(P)).toBe('two\n')
+  })
+
+  it('EG-7: concurrent edits on a never-read file serialize — the second ask sees the first write', async () => {
+    const h = makeHarness()
+    h.seedFile(P, 'line1\nline2\nline3\n') // 不 seedRead：CONS-10 的 never-read 变体
+
+    let releaseFirst: () => void = () => {}
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve
+    })
+    const first = spyAsk(h, () => firstGate)
+    const second = spyAsk(h)
+
+    const p1 = applyEdit(
+      h.port,
+      h.guards,
+      P,
+      { path: P, oldText: 'line1', newText: 'ONE' },
+      first.hook
+    )
+    const p2 = applyEdit(
+      h.port,
+      h.guards,
+      P,
+      { path: P, oldText: 'line3', newText: 'THREE' },
+      second.hook
+    )
+
+    await vi.waitFor(() => expect(first.calls).toHaveLength(1))
+    expect(second.calls).toHaveLength(0)
+
+    releaseFirst()
+    await Promise.all([p1, p2])
+
+    expect(h.events).toEqual([`ask:${P}`, `write:${P}`, `ask:${P}`, `write:${P}`])
+    // 第二人进锁时第一人已写完（其 recordRead 成为前置校验基线）：预览基于新内容
+    expect(second.calls[0].diff).toContain('ONE')
+    expect(second.calls[0].diff).not.toContain('line1')
+    expect(h.contentOf(P)).toBe('ONE\nline2\nTHREE\n')
+  })
+
+  it('EG-8: a failed match attempt on a never-read file still leaves the read baseline', async () => {
+    // oldText 失配
+    const h = makeHarness()
+    h.seedFile(P, 'alpha\n')
+    const ask = spyAsk(h)
+
+    await expect(
+      applyEdit(h.port, h.guards, P, { path: P, oldText: 'nope', newText: 'x' }, ask.hook)
+    ).rejects.toThrow(/No match found/)
+    expect(ask.calls).toEqual([])
+    expect(h.writes).toEqual([])
+    expect(h.recordReads).toEqual([P]) // 失败尝试仍留基线
+
+    // No change produced 变体同样留基线
+    const h2 = makeHarness()
+    h2.seedFile(P, 'alpha\n')
+    const ask2 = spyAsk(h2)
+    await expect(
+      applyEdit(h2.port, h2.guards, P, { path: P, oldText: 'alpha', newText: 'alpha' }, ask2.hook)
+    ).rejects.toThrow(`No change produced: ${P}`)
+    expect(ask2.calls).toEqual([])
+    expect(h2.writes).toEqual([])
+    expect(h2.recordReads).toEqual([P])
+  })
+
+  it('EG-9: a failing readFile propagates as-is and leaves no half-registered baseline', async () => {
+    const h = makeHarness()
+    h.seedFile(P, 'alpha\n')
+    const origReadFile = h.port.readFile
+    // 注入读取失败（文件存在但读不出来，非 ENOENT）
+    h.port.readFile = () => Promise.reject(new Error('EACCES: permission denied'))
+
+    await expect(
+      applyEdit(h.port, h.guards, P, { path: P, oldText: 'alpha', newText: 'x' })
+    ).rejects.toThrow('EACCES: permission denied')
+    expect(h.recordReads).toEqual([])
+    expect(h.guards.hasReadTime(P)).toBe(false)
+
+    // 重试仍按从未读走：stat 通过 → 整读登记基线 → 成功
+    h.port.readFile = origReadFile
+    await applyEdit(h.port, h.guards, P, { path: P, oldText: 'alpha', newText: 'x' })
+    expect(h.recordReads).toEqual([P, P])
+    expect(h.contentOf(P)).toBe('x\n')
+  })
+})

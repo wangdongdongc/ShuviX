@@ -6,7 +6,7 @@
  * 这里恒不放行，测的是「工作目录内写入要弹窗、read 不弹」以及 diff 预览与落盘的一致性。
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest'
-import { mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
+import { mkdirSync, writeFileSync, readFileSync, rmSync, utimesSync } from 'node:fs'
 import { join, resolve, sep } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
@@ -135,5 +135,59 @@ describe('桌面 write/edit — 工作目录内写入的询问接线', () => {
     expect(details.diff).not.toContain('\r')
     // 落盘仍是 CRLF
     expect(readFileSync(p, 'utf-8')).toBe('a\r\nB\r\nc\r\n')
+  })
+
+  it('EG-13: 从未读文件 edit —— 询问停留期间外部改动，批准后仍被事后复检作废', async () => {
+    const p = join(TEST_DIR, 'eg13.txt')
+    writeFileSync(p, 'alpha\nbeta\n') // 不走 read 工具：本会话从未读
+    state.respond = () => {
+      // 用户在询问卡片上停留期间，外部编辑器改了同一个文件
+      writeFileSync(p, 'someone else typed this\n')
+      const future = new Date(Date.now() + 60_000)
+      utimesSync(p, future, future) // 确保越过 50ms 容差
+      return { kind: 'ask', allowed: true }
+    }
+
+    await expect(
+      makeEditTool(ctx).execute('eg13', { path: p, oldText: 'beta', newText: 'BETA' })
+    ).rejects.toThrow(/modified since/)
+
+    expect(state.requests).toHaveLength(1) // 询问恰一次
+    // 落盘内容保持外部改动，未被预览对应的写入覆盖
+    expect(readFileSync(p, 'utf-8')).toBe('someone else typed this\n')
+  })
+
+  it('EG-14: 从未读文件 edit 正常批准 —— 预览 diff 与 details.diff 一致', async () => {
+    const p = join(TEST_DIR, 'eg14.txt')
+    writeFileSync(p, 'alpha\nbeta\ngamma\n') // 不走 read 工具：本会话从未读
+
+    const res = await makeEditTool(ctx).execute('eg14', {
+      path: p,
+      oldText: 'beta',
+      newText: 'BETA'
+    })
+
+    expect(state.requests).toHaveLength(1)
+    const req = state.requests[0]
+    if (req.kind !== 'ask') throw new Error('expected an ask request')
+    const details = res.details as { type: 'edit'; diff: string }
+    expect(req.preview?.diff).toBe(details.diff)
+    expect(readFileSync(p, 'utf-8')).toBe('alpha\nBETA\ngamma\n')
+  })
+
+  it('EG-15: 从未读文件 edit 被拒 —— 内部整读的基线留存，随后无改动再 edit 成功', async () => {
+    const p = join(TEST_DIR, 'eg15.txt')
+    writeFileSync(p, 'alpha\nbeta\n') // 不走 read 工具：本会话从未读
+    state.respond = () => ({ kind: 'ask', allowed: false })
+
+    await expect(
+      makeEditTool(ctx).execute('eg15a', { path: p, oldText: 'beta', newText: 'BETA' })
+    ).rejects.toThrow(/User denied/)
+    expect(readFileSync(p, 'utf-8')).toBe('alpha\nbeta\n')
+
+    // 拒绝时内部整读已登记基线且无外部改动 → 第二次 edit 前置校验放行，批准后成功
+    state.respond = () => ({ kind: 'ask', allowed: true })
+    await makeEditTool(ctx).execute('eg15b', { path: p, oldText: 'beta', newText: 'BETA' })
+    expect(readFileSync(p, 'utf-8')).toBe('alpha\nBETA\n')
   })
 })
