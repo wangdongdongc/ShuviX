@@ -181,7 +181,9 @@ describe('claims —— 认领的是运行时，不是会话记录', () => {
     const agent = fakeAgent('rooted')
     mocks.agentCreate.mockResolvedValue(agent)
 
-    // 聊天会话：resolveAgentProfileName 返回 null，create 早退
+    // 聊天会话：resolveAgentProfileName 返回 null，create 早退。形态来自 `pick` 那一行
+    // （projectId / parentId / settings）—— 只改 pickSettings 对新实现无效
+    mocks.daoPick.mockReturnValue({ projectId: null, parentId: null, settings: { bot: 'scout' } })
     mocks.daoPickSettings.mockReturnValue({ bot: 'scout' })
     expect(await sessionService.ensureAgentSession(chat)).toBeUndefined()
     expect(sessionService.getAgentSession(chat)).toBeUndefined()
@@ -189,6 +191,7 @@ describe('claims —— 认领的是运行时，不是会话记录', () => {
 
     // 对照组：同一套上下文解析，普通会话建得出来也登记得进去 —— 上面那条早退
     // 因此是「因为它是聊天会话」，不是「因为上下文解析失败」
+    mocks.daoPick.mockReturnValue({ projectId: null, parentId: null, settings: {} })
     mocks.daoPickSettings.mockReturnValue({})
     expect(await sessionService.ensureAgentSession(rooted)).toBe(agent)
     expect(sessionService.getAgentSession(rooted)).toBe(agent)

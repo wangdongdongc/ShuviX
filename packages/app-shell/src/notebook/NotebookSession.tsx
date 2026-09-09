@@ -51,7 +51,6 @@ export function NotebookSession({
         }`}
       >
         <InputArea
-          notebook
           thread={<ThreadDrawer sessionId={sessionId} />}
           accessory={<PendingInputsDrawer onResponse={handleInputResponse} />}
           onHeightChange={handleInputHeightChange}

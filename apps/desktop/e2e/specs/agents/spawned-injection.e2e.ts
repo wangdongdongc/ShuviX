@@ -37,7 +37,7 @@ beforeAll(async () => {
 
   const projDir = join(app.home, 'proj-spawn-inject')
   mkdirSync(projDir, { recursive: true })
-  // 根会话（default 档案）认 AGENTS.md；派生档案只认 SUB.md —— 两份内容互不重叠
+  // 根会话（work 档案）认 AGENTS.md；派生档案只认 SUB.md —— 两份内容互不重叠
   writeFileSync(join(projDir, 'AGENTS.md'), 'ROOT RULES CONTENT.')
   writeFileSync(join(projDir, 'SUB.md'), 'SUB RULES CONTENT.')
   projectId = (await createProject(app.main, { name: 'SpawnInjProj', path: projDir })).id

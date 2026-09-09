@@ -8,13 +8,6 @@
 import type { ChatApi } from '@shuvix/chat-protocol/chatApi'
 import { resolveTokensForAgent } from '@shuvix/chat-protocol/utils/inlineTokens'
 import { messageStore } from '../storage/messageStore'
-import { resolveModelRef } from '@shuvix/chat-protocol/agentModelRef'
-import {
-  CHAT_PROFILE_NAME,
-  DEFAULT_CHAT_AGENT_KEY,
-  DEFAULT_PROJECT_AGENT_KEY
-} from '@shuvix/chat-protocol/agentProfile'
-import { capsFor } from './resolveSessionModel'
 import { sessionStore } from '../storage/sessionStore'
 import { settingsStore } from '../storage/settingsStore'
 import { mcpStore } from '../storage/mcpStore'
@@ -31,15 +24,9 @@ import {
   removeRuntimeSession,
   setSessionModel
 } from './agentRuntime'
-import { subAgentManager, extensionSubAgentRegistry } from './subAgent'
+import { subAgentManager } from './subAgent'
 import { withTabLease } from './tabLease'
-import {
-  BASE_PROFILE_NAMES,
-  SWITCHABLE_BASE_PROFILE_NAMES,
-  DEFAULT_PROFILE_NAME,
-  type AgentProfile,
-  validateShuvixMdText
-} from '@shuvix/agent-runtime'
+import { validateShuvixMdText } from '@shuvix/agent-runtime'
 import { titlerFor, removeTitler } from './titleRuntime'
 import { filesRuntime, workingDirNameForSession } from './filesRuntime'
 import { appEventBus } from './appEventBus'
@@ -52,35 +39,6 @@ const ok = { success: true as const }
  */
 async function activeSelection(): Promise<{ provider: string; model: string }> {
   return settingsStore.getNewSessionSelection()
-}
-
-/**
- * 这份档案能否作为某条会话自己的档案 —— 选择器名单（listAgentProfiles）、`/<agentName>`
- * 切换（updateAgentProfile，另拆成两道门只为各自的错误文案）与新会话默认档案三处同源。
- * 口径同桌面 agentService.isSessionProfile。
- */
-function isSessionProfile(profile: AgentProfile): boolean {
-  return (
-    SWITCHABLE_BASE_PROFILE_NAMES.has(profile.name) ||
-    (!BASE_PROFILE_NAMES.has(profile.name) && profile.sessionAwareness)
-  )
-}
-
-/**
- * 新会话的默认档案名 —— 由**会话形态**选设置项：归属项目（FSA 文件夹）走
- * 「默认项目智能体」（缺省 `default`），不归属项目（OPFS 隔离目录）走「默认聊天智能体」
- * （缺省 `chat`）。设置指向的档案已不存在时回落对应基座 —— 与桌面
- * sessionService.defaultAgentProfile 同一条纪律。
- */
-async function defaultAgentProfile(projectId: string | null): Promise<string> {
-  const inProject = !!projectId
-  const key = inProject ? DEFAULT_PROJECT_AGENT_KEY : DEFAULT_CHAT_AGENT_KEY
-  const base = inProject ? DEFAULT_PROFILE_NAME : CHAT_PROFILE_NAME
-  const configured = (await settingsStore.get(key))?.trim()
-  if (!configured || configured === base) return base
-  const profile = extensionSubAgentRegistry.getProfile(configured)
-  // 准入与切换入口同源（isSessionProfile）：创建与切换必须同口径
-  return profile && isSessionProfile(profile) ? configured : base
 }
 
 export const chatApiAdapter: ChatApi = {
@@ -278,11 +236,9 @@ export const chatApiAdapter: ChatApi = {
         ...sel,
         projectId,
         notebookPath: params?.notebookPath,
-        title: params?.title,
-        // 档案在创建这一刻定型（口径同桌面 sessionService.create）：按会话形态取设置里
-        // 对应的默认档案。之后改设置只影响更新的会话——档案是粘性的。
-        // 笔记本会话钉死 notebook 基座（buildRuntimeSession），不写这个键
-        ...(params?.notebookPath ? {} : { agentProfile: await defaultAgentProfile(projectId) })
+        title: params?.title
+        // 档案不落设置：根 Agent 的档案由会话形态推导（buildRuntimeSession —— 笔记本 notebook /
+        // 项目 work / 无项目 chat），没有可写的东西
       })
       // 与桌面 sessionService.create 对齐：列表成员变化 → 信号事件，订阅端重拉
       appEventBus.publish({ type: 'session.listChanged' })
@@ -313,72 +269,13 @@ export const chatApiAdapter: ChatApi = {
       return ok
     },
     getById: async (id) => sessionStore.getById(id),
-    // 可切换的会话档案（扩展只有内置档案，无用户目录）：只收声明了会话感知的档案
-    // （不声明 = 只可被派发的执行型档案，政策要求新鲜上下文），排除 notebook 基座，
-    // 保留 default / chat（普通会话的两条路线，互为退路）
-    listAgentProfiles: async () =>
-      extensionSubAgentRegistry
-        .listAll()
-        .filter((a) => isSessionProfile(a))
-        .map((a) => ({
-          name: a.name,
-          displayName: a.displayName,
-          description: a.description,
-          source: a.source,
-          model: a.model
-        })),
-    // 切换会话根 Agent 的档案：粘性写入会话设置 + 失效运行时，下一条消息按新档案重建
-    // （buildRuntimeSession 读 settings.agentProfile）。档案声明的模型与 mcp:/skill: 工具
-    // 作为种子写进会话树（口径同桌面：事实源是会话树，档案只在切换这一刻参与一次）。
     // 扩展端没有聊天会话（桌面端形态，设计 §12 明确把扩展端列为非目标）。
     // 契约成员必须在，但不假装支持 —— 静默成功会让调用方以为绑定改了
     setBot: async () => ({
       success: false,
       error: 'Chat sessions are not available in the extension'
-    }),
+    })
 
-    updateAgentProfile: async ({ id, name }) => {
-      // 笔记本会话的档案钉死为 notebook 基座（buildRuntimeSession），不接受任何切换
-      if ((await sessionStore.getById(id))?.settings?.notebookPath) {
-        return { success: false, error: 'Notebook sessions are pinned to the notebook profile' }
-      }
-      const profile = extensionSubAgentRegistry.getProfile(name)
-      if (!profile) return { success: false, error: `Unknown agent "${name}"` }
-      // 基座档案不是切换目标（default / chat 除外 —— 普通会话两条路线的入口；口径同桌面）
-      if (!SWITCHABLE_BASE_PROFILE_NAMES.has(name) && BASE_PROFILE_NAMES.has(name)) {
-        return { success: false, error: `"${name}" is a base profile and cannot be switched to` }
-      }
-      // 未声明会话感知的档案只能被派发：切成主会话后长对话会稀释其政策的权重（见 definitionFile）。
-      // 可切换基座豁免（与上面的列表同源）：会话本就由它们之一创建，不能把退路堵死
-      if (!SWITCHABLE_BASE_PROFILE_NAMES.has(name) && !profile.sessionAwareness) {
-        return { success: false, error: `"${name}" is not session-aware and cannot be switched to` }
-      }
-      await sessionStore.updateSettings(id, { agentProfile: name })
-      // await：旧运行时彻底停下才算解绑，之后再写模型种子才不会和它抢叶子
-      await removeRuntimeSession(id)
-
-      const declared = profile.model
-        ? resolveModelRef(profile.model, settingsStore.listAvailableModels())
-        : undefined
-      if (declared) await setSessionModel(id, declared.providerId, declared.modelId)
-
-      return {
-        success: true,
-        applied: {
-          model: declared
-            ? {
-                provider: declared.providerId,
-                model: declared.modelId,
-                capabilities: capsFor(declared.modelId)
-              }
-            : undefined,
-          // 扩展没有会话级工具勾选（工具集固定为 ask + 已连接的 MCP，见 setEnabledTools），
-          // 故没有可播的工具种子；档案的 mcp:/skill: 声明在扩展端不参与解析
-          tools: []
-        },
-        modelUnavailable: profile.model && !declared ? profile.model : undefined
-      }
-    }
     // 配置变更订阅已并入 events.subscribe（扩展暂不发布 session.configChanged）
   },
 

@@ -12,32 +12,34 @@
  *   - **后台回执不带内容**：内容会永久留在父会话上下文里并被每一步重发（bash 同款纪律）；
  *   - **忙就拒绝、不排队**：一个忙着的子会话是父级该知道并作决策的状态。
  *
- * mock 手法照 sessionServiceNotebookProfile.test.ts：vi.mock + 动态 import；
+ * mock 手法照 sessionServicePinAgentProfile.test.ts：vi.mock + 动态 import；
  * dao / sessionService / gateway / messageService 全部换假件。
+ *
+ * 两处刻意**不给**的成员：`sessionDao.pickSettings`（runner 不再读子会话的戳 —— 留着会让
+ * 「又开始比对戳」的回归静默通过）与 `sessionService.resolveAgentProfileName`（不点名就什么
+ * 也不写，父子形态天然一致，runner 不需要知道父会话跑的是哪个基座）。
  */
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   pick: vi.fn<(id: string, cols: string[]) => unknown>(),
-  pickSettings: vi.fn<(id: string, keys: string[]) => unknown>(),
   findChildren: vi.fn<(id: string) => Array<Record<string, unknown>>>(),
   create: vi.fn(),
   updateTitle: vi.fn(),
-  updateAgentProfile: vi.fn(),
-  resolveAgentProfileName: vi.fn(),
+  pinAgentProfile: vi.fn(),
   resolveRunConfig: vi.fn(),
   getAgentSession: vi.fn(),
   gatewayPrompt: vi.fn(),
   appendModelChange: vi.fn(),
   appendThinkingLevelChange: vi.fn(),
   appendActiveToolsChange: vi.fn(),
-  findLastBySession: vi.fn()
+  findLastBySession: vi.fn(),
+  warn: vi.fn()
 }))
 
 vi.mock('../../dao/sessionDao', () => ({
   sessionDao: {
     pick: mocks.pick,
-    pickSettings: mocks.pickSettings,
     findChildren: mocks.findChildren
   }
 }))
@@ -45,8 +47,7 @@ vi.mock('../../services/sessionService', () => ({
   sessionService: {
     create: mocks.create,
     updateTitle: mocks.updateTitle,
-    updateAgentProfile: mocks.updateAgentProfile,
-    resolveAgentProfileName: mocks.resolveAgentProfileName,
+    pinAgentProfile: mocks.pinAgentProfile,
     resolveRunConfig: mocks.resolveRunConfig,
     getAgentSession: mocks.getAgentSession
   }
@@ -61,7 +62,7 @@ vi.mock('../../services/sessionStorage', () => ({
   appendActiveToolsChange: mocks.appendActiveToolsChange
 }))
 vi.mock('../../logger', () => ({
-  createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })
+  createLogger: () => ({ info: vi.fn(), warn: mocks.warn, error: vi.fn(), debug: vi.fn() })
 }))
 
 type Mod = typeof import('../subSessionRunner')
@@ -95,8 +96,6 @@ function defaultWorld(): void {
     if (id === CHILD) return { settings: {}, parentId: PARENT, title: 'Child', updatedAt: 2 }
     return undefined
   })
-  // sessionService.create 已按会话形态把默认档案落进 settings（父会话无项目 ⇒ 'chat'）
-  mocks.pickSettings.mockReturnValue({ agentProfile: 'chat' })
   mocks.findChildren.mockReturnValue([])
   mocks.getAgentSession.mockReturnValue(undefined)
   // 发送成功 = 落定为 {}；带 error 才是「没发出去」
@@ -107,8 +106,8 @@ function defaultWorld(): void {
     thinkingLevel: 'medium',
     enabledTools: []
   })
-  mocks.resolveAgentProfileName.mockReturnValue('chat')
-  mocks.updateAgentProfile.mockResolvedValue({ success: true, applied: { tools: [] } })
+  // 点名的档案缺省钉得上（普通会话感知档案，没声明模型也没声明 mcp:/skill:）
+  mocks.pinAgentProfile.mockResolvedValue({ success: true, applied: { tools: [] } })
   mocks.create.mockReturnValue({ id: CHILD, title: 'Child' })
 }
 
@@ -196,40 +195,83 @@ describe('create —— 继承与上限', () => {
     expect(mocks.appendModelChange).toHaveBeenCalledWith(CHILD, 'p', 'opus')
   })
 
-  it('档案自己声明了模型 ⇒ 以档案为准，不再拿父会话的模型盖回去', async () => {
-    mocks.resolveAgentProfileName.mockReturnValue('coding')
-    mocks.updateAgentProfile.mockResolvedValue({
-      success: true,
-      applied: { model: { provider: 'p', model: 'declared', capabilities: {} }, tools: [] }
-    })
+  /** 父会话此刻的整套运行配置（模型 / 思考档位 / 一个 skill 勾选）—— 种子的来源 */
+  const parentConfig = (): void => {
     mocks.resolveRunConfig.mockResolvedValue({
       model: { provider: 'p', model: 'opus', capabilities: {} },
       thinkingLevel: 'medium',
-      enabledTools: []
+      enabledTools: ['skill:p']
     })
+  }
+
+  it('SR-1 不点名 ⇒ 零档案动作：pinAgentProfile 不被调用，父级的模型 / 思考档位 / 工具照常种', async () => {
+    // 不点名就什么也不写：projectId 恒随父，父子推导出同一个基座。曾经这里会「读子会话的戳
+    // 与父会话档案比对、不同就切一次」—— 那条路已经不存在，回来就是回归
+    parentConfig()
     await runner.create(PARENT, {})
-    expect(mocks.updateAgentProfile).toHaveBeenCalledWith(CHILD, 'coding')
+    expect(mocks.pinAgentProfile).not.toHaveBeenCalled()
+    expect(mocks.appendModelChange).toHaveBeenCalledWith(CHILD, 'p', 'opus')
+    expect(mocks.appendThinkingLevelChange).toHaveBeenCalledWith(CHILD, 'medium')
+    expect(mocks.appendActiveToolsChange).toHaveBeenCalledWith(CHILD, ['skill:p'])
+  })
+
+  it('SR-2 点名即钉且 trim：恰一次，顺序在 create 之后、resolveRunConfig 之前', async () => {
+    await runner.create(PARENT, { agentProfile: '  coding ' })
+    expect(mocks.pinAgentProfile).toHaveBeenCalledTimes(1)
+    expect(mocks.pinAgentProfile).toHaveBeenCalledWith(CHILD, 'coding')
+    // 钉在种子之前：档案的种子（pin 内部写的 mcp:/skill: 替换）必须先落，seedRunConfig
+    // 才知道「档案有没有意见」；建会话又必须在钉之前 —— 钉的是一条已经存在的子会话
+    const order = [mocks.create, mocks.pinAgentProfile, mocks.resolveRunConfig].map(
+      (m) => m.mock.invocationCallOrder[0]
+    )
+    expect(order).toEqual([...order].sort((a, b) => a - b))
+  })
+
+  it('SR-3 档案声明压过继承：声明了模型与 skill ⇒ 不再种父级的模型与工具，思考档位仍随父', async () => {
+    parentConfig()
+    mocks.pinAgentProfile.mockResolvedValue({
+      success: true,
+      applied: { model: { provider: 'p', model: 'declared', capabilities: {} }, tools: ['skill:x'] }
+    })
+    await runner.create(PARENT, { agentProfile: 'declared-prof' })
     expect(mocks.appendModelChange).not.toHaveBeenCalled()
+    expect(mocks.appendActiveToolsChange).not.toHaveBeenCalled()
+    // 思考档位没有档案声明这一路，恒随父会话
+    expect(mocks.appendThinkingLevelChange).toHaveBeenCalledWith(CHILD, 'medium')
   })
 
-  it('与建会话时落下的档案相同 ⇒ 不再显式切一次（切会连带把工具勾选清空）', async () => {
-    mocks.resolveAgentProfileName.mockReturnValue('chat')
-    mocks.pickSettings.mockReturnValue({ agentProfile: 'chat' })
-    await runner.create(PARENT, {})
-    expect(mocks.updateAgentProfile).not.toHaveBeenCalled()
+  it('SR-4 空的工具声明不算意见：档案没列 mcp:/skill: ⇒ 把父级那套补回去', async () => {
+    // 内置 coding / explore 之流的 shuvix-tools 只列内置工具；pin 那一步按「完整声明」把勾选
+    // 清成 []，这里必须把父级的 MCP / skill 铺回来 —— 否则每条子会话都被摘掉项目的工作环境
+    parentConfig()
+    mocks.pinAgentProfile.mockResolvedValue({ success: true, applied: { tools: [] } })
+    await runner.create(PARENT, { agentProfile: 'coding' })
+    expect(mocks.appendActiveToolsChange).toHaveBeenCalledWith(CHILD, ['skill:p'])
+    // 没声明模型 ⇒ 模型同样随父
+    expect(mocks.appendModelChange).toHaveBeenCalledWith(CHILD, 'p', 'opus')
   })
 
-  it('父会话档案与默认落值不同 ⇒ 显式切过去（子会话跟随父会话人格）', async () => {
-    mocks.resolveAgentProfileName.mockReturnValue('coding')
-    mocks.pickSettings.mockReturnValue({ agentProfile: 'chat' })
-    await runner.create(PARENT, {})
-    expect(mocks.updateAgentProfile).toHaveBeenCalledWith(CHILD, 'coding')
-  })
-
-  it('档案不合法不让整个创建失败：会话已建好且可用（回落 default），照常返回 id', async () => {
-    mocks.updateAgentProfile.mockResolvedValue({ success: false, error: 'not session-aware' })
+  it('SR-5 被拒不失败：会话已建好且可用（落在自己形态的基座上），照常返回 id，模型与工具按父级种，并留一行 warn', async () => {
+    parentConfig()
+    mocks.pinAgentProfile.mockResolvedValue({
+      success: false,
+      error: '"wiki-writer" is not session-aware and cannot run a session of its own'
+    })
     const res = await runner.create(PARENT, { agentProfile: 'wiki-writer' })
-    expect(res).toMatchObject({ id: CHILD })
+    expect(res).toEqual({ id: CHILD, title: 'Child' })
+    // 拒绝 = 档案没有意见：继承照旧
+    expect(mocks.appendModelChange).toHaveBeenCalledWith(CHILD, 'p', 'opus')
+    expect(mocks.appendActiveToolsChange).toHaveBeenCalledWith(CHILD, ['skill:p'])
+    // 日志是「点名没生效」唯一可查的线索：带上点的名字与拒绝理由
+    const warned = mocks.warn.mock.calls.map((c) => String(c[0]))
+    expect(warned.some((m) => m.includes('wiki-writer') && m.includes('not session-aware'))).toBe(
+      true
+    )
+  })
+
+  it('SR-6 空白点名视同不点名：pinAgentProfile 不被调用', async () => {
+    await runner.create(PARENT, { agentProfile: '   ' })
+    expect(mocks.pinAgentProfile).not.toHaveBeenCalled()
   })
 
   it('总数上限：到顶就拒绝并列出现有子会话（让模型复用而不是继续开）', async () => {

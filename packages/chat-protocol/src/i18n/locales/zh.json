@@ -183,12 +183,6 @@
     "pasteChipChars": "[粘贴文本 #{{seq}} · {{chars}} 字符]",
     "pasteName": "粘贴文本 #{{seq}}"
   },
-  "agentProfile": {
-    "manage": "管理智能体…",
-    "missing": "档案 \"{{name}}\" 已不存在，本会话按默认档案运行。",
-    "disabledWhileStreaming": "生成中无法切换档案",
-    "modelUnavailable": "该档案指定的模型 \"{{ref}}\" 当前不可用，会话保持原模型。"
-  },
   "compact": {
     "summaryLabel": "对话摘要（自动压缩）"
   },
@@ -419,12 +413,6 @@
     "defaultModelRow": "模型",
     "defaultModelGroup": "默认模型",
     "defaultModelGroupDesc": "新会话默认使用的提供商与模型",
-    "defaultAgentGroup": "默认智能体",
-    "defaultAgentGroupDesc": "新会话以哪份智能体档案为基座。按会话粘性生效——建好后随时可在输入框的选择器里改。",
-    "defaultProjectAgentRow": "项目会话",
-    "defaultProjectAgentDesc": "归属于某个项目的新会话",
-    "defaultChatAgentRow": "聊天会话",
-    "defaultChatAgentDesc": "不归属任何项目的新会话",
     "sessionModelRow": "会话",
     "providerSectionTitle": "配置大模型提供商",
     "providerConfigGroup": "配置",
@@ -841,7 +829,7 @@
     "subAgentDisplayName": "显示名",
     "subAgentDescPlaceholder": "一句话描述该智能体(用于列表与斜杠命令提示)",
     "subAgentDispatchLabel": "允许继续派发子智能体（嵌套，深度受限）",
-    "subAgentSessionAwareness": "会话感知（可在输入框选为会话的智能体）",
+    "subAgentSessionAwareness": "会话感知（可作为子会话的智能体）",
     "subAgentReadOnly": "内置智能体随应用发布，只读不可编辑。",
     "subAgentCreateOverride": "创建覆盖副本",
     "subAgentOverridden": "已覆盖",

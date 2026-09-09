@@ -10,7 +10,7 @@
  *   - create/save **非法一律拒绝写盘**且旧内容零损伤 —— 一份存在但非法的档案会被扫描
  *     静默跳过（不生效也不遮蔽内置），正是编辑器要消灭的失败模式；
  *   - 改名以 frontmatter `name` 为准、文件路径不变；
- *   - 落盘即生效：覆盖 default 后**下一个会话的系统提示词真的换人**，删除后复原。
+ *   - 落盘即生效：覆盖 work 后**下一个会话的系统提示词真的换人**，删除后复原。
  *
  * agent 侧与 policy 的差异都在这里：`{{shuvix:*}}` 会话变量必须原样留给 createAgent、
  * 工具名归一是读时投影（磁盘原文不被改写）、系统提示词可经 createAgentSession 直接断言。
@@ -24,7 +24,7 @@ import { launchApp, type E2EApp } from '../../harness/launch'
 import { createAgentSession, createProject } from '../../harness/seed'
 
 let app: E2EApp
-/** AE-8 用的项目 —— `default` 是**项目会话**的基座（无项目会话跑 chat） */
+/** AE-8 用的项目 —— `work` 是**项目会话**的基座（无项目会话跑 chat） */
 let projectId: string
 
 beforeAll(async () => {
@@ -150,7 +150,7 @@ describe('agent md 原文 IPC —— 取原文 / 新建 / 覆写', () => {
   })
 
   it('AE-3 内置回写等价 md：自身经 shuvixMd.validate 判合法，会话变量原样、无自述标记', async () => {
-    const result = await getSource('default', 'builtin')
+    const result = await getSource('work', 'builtin')
     expect('text' in result).toBe(true)
     const { text } = result as { text: string }
 
@@ -221,15 +221,15 @@ describe('agent md 原文 IPC —— 取原文 / 新建 / 覆写', () => {
     expect((await listAgents()).find((a) => a.name === 'ae6-dst')!.tools).toEqual(['read'])
   })
 
-  it('AE-8 覆盖内置 default：下一个会话的系统提示词换成覆盖 body，delete 后复原', async () => {
+  it('AE-8 覆盖内置 work：下一个会话的系统提示词换成覆盖 body，delete 后复原', async () => {
     const override = simpleAgent({
-      name: 'default',
+      name: 'work',
       description: 'e2e override via createSource',
       tools: 'read',
       body: 'AE8 OVERRIDE BODY.'
     })
-    expect(await createSource(override)).toEqual({ success: true, name: 'default' })
-    const rows = (await listAgents()).filter((a) => a.name === 'default')
+    expect(await createSource(override)).toEqual({ success: true, name: 'work' })
+    const rows = (await listAgents()).filter((a) => a.name === 'work')
     expect(rows.map((r) => [r.source, !!r.overridden]).sort()).toEqual([
       ['builtin', true],
       ['user', false]
@@ -239,8 +239,8 @@ describe('agent md 原文 IPC —— 取原文 / 新建 / 覆写', () => {
     const overridden = await createAgentSession(app.main, { title: 'ae8-overridden', projectId })
     expect(overridden.systemPrompt.startsWith('AE8 OVERRIDE BODY.')).toBe(true)
 
-    expect(await deleteAgent('default')).toEqual({ success: true })
-    expect(hasAgentFile('default.md')).toBe(false)
+    expect(await deleteAgent('work')).toEqual({ success: true })
+    expect(hasAgentFile('work.md')).toBe(false)
     const restored = await createAgentSession(app.main, { title: 'ae8-restored', projectId })
     expect(restored.systemPrompt.startsWith('AE8 OVERRIDE BODY.')).toBe(false)
   })

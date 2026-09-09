@@ -80,4 +80,29 @@ describe('i18n 语言包', () => {
     )
     expect(drift).toEqual({})
   })
+
+  /**
+   * L-2：会话内切换档案（输入框的档案选择器 + 「默认项目/聊天智能体」设置组）已下线，
+   * 它们的文案不该还留在语言包里 —— 留着的键没有任何 UI 会读，却会让下一个人以为那个入口
+   * 还在。`shuvix-session-awareness` 如今只有一个含义（能否作子会话的档案），它给用户看的
+   * 唯一定义就是 `tool.subAgentSessionAwareness` 这句：三语都得说「子会话」，而不是
+   * 改制前的「可选为会话的智能体」。zh / ja 的键集合由上面那条齐平断言自动跟随。
+   */
+  it('L-2 en 无 agentProfile.* 与默认智能体设置组的键；会话感知文案三语都说「子会话」', () => {
+    expect(keys.en.filter((k) => k.startsWith('agentProfile.'))).toEqual([])
+    // 按叶名匹配而不钉死章节：这组键曾在 settings 章节下，搬到别的章节复活同样算复活
+    const GONE =
+      /\.(defaultAgentGroup|defaultAgentGroupDesc|defaultProjectAgentRow|defaultProjectAgentDesc|defaultChatAgentRow|defaultChatAgentDesc)$/
+    expect(keys.en.filter((k) => GONE.test(k))).toEqual([])
+
+    const KEY = 'tool.subAgentSessionAwareness'
+    const copy = { en: leaf(en, KEY), zh: leaf(zh, KEY), ja: leaf(ja, KEY) }
+    expect(copy.en, KEY).toBeDefined()
+    expect(copy.en).toContain('sub-session')
+    expect(copy.zh).toContain('子会话')
+    expect(copy.ja).toContain('サブセッション')
+    expect(copy.en).not.toContain('selectable as a session')
+    expect(copy.zh).not.toContain('选为会话')
+    expect(copy.ja).not.toContain('セッションのエージェントとして選択')
+  })
 })

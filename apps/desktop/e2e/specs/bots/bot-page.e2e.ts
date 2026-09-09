@@ -268,7 +268,7 @@ describe('主窗 Bot 档案页', () => {
         '  workflow: bot-chat',
         '  agents:',
         '    intent: bot-intent',
-        '    task: default',
+        '    task: work',
         '---',
         '',
         'BROKEN BODY.',
@@ -348,14 +348,14 @@ describe('主窗 Bot 档案页', () => {
     expect(shot.declaredCount).toBe(3)
     expect(slotTuples(shot)).toEqual([
       ['intent', true, 'bot-intent'],
-      ['task', true, 'default'],
+      ['task', true, 'work'],
       ['recheck', false, '']
     ])
     // 下拉候选 = 「未设置」+ 注册表里的 agent 名（内置在列，用户档案此刻还没有）
     for (const s of shot.slots) {
       expect(s.options[0]).toBe('')
       expect(s.options).toContain('bot-intent')
-      expect(s.options).toContain('default')
+      expect(s.options).toContain('work')
       expect(s.warned).toBe(false)
       expect(s.extra).toBe(false)
     }
@@ -393,7 +393,7 @@ describe('主窗 Bot 档案页', () => {
     expect(shot.declaredCount).toBe(0)
     expect(shot.slots.map((s) => [s.role, s.required, s.value, s.extra, s.warned])).toEqual([
       ['intent', false, 'bot-intent', true, true],
-      ['task', false, 'default', true, true]
+      ['task', false, 'work', true, true]
     ])
     const status = await statusIs('warn', 'card warned for c5-warn')
     expect(status.banner).toEqual([
@@ -423,19 +423,19 @@ describe('主窗 Bot 档案页', () => {
     ])
 
     // 下拉改槽位 = 只改编辑器文档：下拉显新值、卡片按新 YAML 重新校验、磁盘还是旧的
-    expect(await pane.setSlot('task', 'default')).toBe(true)
-    await until(async () => (await slotValue('task')) === 'default', 'task select shows default')
+    expect(await pane.setSlot('task', 'work')).toBe(true)
+    await until(async () => (await slotValue('task')) === 'work', 'task select shows work')
     expect(await statusIs('ok', 'card re-validated after filling the slot')).toEqual({
       chip: 'ok',
       banner: []
     })
-    expect(readFileSync(botPath('c5-unset'), 'utf-8')).not.toContain('task: default')
+    expect(readFileSync(botPath('c5-unset'), 'utf-8')).not.toContain('task: work')
 
-    // 保存：文件长出 `    task: default`（块嵌套一层，4 空格缩进），其余行不动
+    // 保存：文件长出 `    task: work`（块嵌套一层，4 空格缩进），其余行不动
     await save()
     const content = await until(() => {
       const c = readFileSync(botPath('c5-unset'), 'utf-8')
-      return /shuvix-bot-pipeline:\n {2}workflow: bot-chat\n {2}agents:\n(?: {4}[\w-]+: [^\n]+\n)* {4}task: default\n/.test(
+      return /shuvix-bot-pipeline:\n {2}workflow: bot-chat\n {2}agents:\n(?: {4}[\w-]+: [^\n]+\n)* {4}task: work\n/.test(
         c
       )
         ? c
@@ -458,7 +458,7 @@ describe('主窗 Bot 档案页', () => {
     // 填了一个不存在的名字：下拉仍显示那个值（不静默换成别的），并带警示配色
     expect(task).toMatchObject({ required: true, value: 'ghost-agent', warned: true, extra: false })
     expect(task.options).toContain('ghost-agent')
-    expect(task.options).toContain('default')
+    expect(task.options).toContain('work')
     expect(shot.slots.find((s) => s.role === 'intent')!.warned).toBe(false)
     const status = await statusIs('warn', 'card warned for c5-ghost')
     expect(status.banner).toEqual([
@@ -470,7 +470,7 @@ describe('主窗 Bot 档案页', () => {
     writeAgentMd(app, 'my-gate', { description: 'custom gate agent' })
     writeBotMd(app, 'c6-gate', {
       description: 'custom gated bot',
-      agents: { intent: 'my-gate', task: 'default' }
+      agents: { intent: 'my-gate', task: 'work' }
     })
     await pane.refresh()
     await pane.selectRow('c6-gate')
@@ -507,7 +507,7 @@ describe('主窗 Bot 档案页', () => {
         : null
     }, 'recheck slot written into the md')
     expect(withRecheck).toContain('    intent: bot-intent\n')
-    expect(withRecheck).toContain('    task: default\n')
+    expect(withRecheck).toContain('    task: work\n')
 
     // 清回「未设置」：只拔掉那一行
     expect(await pane.setSlot('recheck', '')).toBe(true)
@@ -518,7 +518,7 @@ describe('主窗 Bot 档案页', () => {
       return c.includes('recheck') ? null : c
     }, 'recheck line removed from the md')
     expect(cleared).toContain(
-      'shuvix-bot-pipeline:\n  workflow: bot-chat\n  agents:\n    intent: bot-intent\n    task: default\n'
+      'shuvix-bot-pipeline:\n  workflow: bot-chat\n  agents:\n    intent: bot-intent\n    task: work\n'
     )
   })
 
@@ -555,7 +555,7 @@ describe('主窗 Bot 档案页', () => {
     // recheck 已填、带 input 的 bot：换工作流该只删 recheck、留下其余
     writeBotMd(app, 'c7-refork', {
       description: 'switches pipeline',
-      agents: { intent: 'bot-intent', task: 'default', recheck: 'bot-intent' },
+      agents: { intent: 'bot-intent', task: 'work', recheck: 'bot-intent' },
       botInput: { greeting: 'hi' }
     })
     await pane.refresh()
@@ -565,7 +565,7 @@ describe('主窗 Bot 档案页', () => {
     expect(before.workflowOptions).toContain(FORK)
     expect(slotTuples(before)).toEqual([
       ['intent', true, 'bot-intent'],
-      ['task', true, 'default'],
+      ['task', true, 'work'],
       ['recheck', false, 'bot-intent']
     ])
     expect(before.inputCount).toBe(1)
@@ -580,7 +580,7 @@ describe('主窗 Bot 档案页', () => {
     expect(after.declaredCount).toBe(3)
     expect(slotTuples(after)).toEqual([
       ['intent', true, 'bot-intent'],
-      ['task', true, 'default'],
+      ['task', true, 'work'],
       ['reviewer', false, '']
     ])
     expect(after.slots.some((s) => s.extra)).toBe(false)
@@ -601,7 +601,7 @@ describe('主窗 Bot 档案页', () => {
       return c.includes(`  workflow: ${FORK}\n`) ? c : null
     }, 'fork written into the md')
     expect(content).toContain('    intent: bot-intent\n')
-    expect(content).toContain('    task: default\n')
+    expect(content).toContain('    task: work\n')
     expect(content).not.toContain('recheck')
     expect(content).toContain('  input:\n    greeting: hi\n')
     expect(content).toContain('switches pipeline')
@@ -806,7 +806,7 @@ describe('主窗 Bot 档案页', () => {
     expect(tpl.meta).toBe('')
     expect(slotTuples(tpl)).toEqual([
       ['intent', true, 'bot-intent'],
-      ['task', true, 'default'],
+      ['task', true, 'work'],
       ['recheck', false, '']
     ])
     expect(await statusIs('ok', 'template validated ok')).toEqual({ chip: 'ok', banner: [] })
@@ -828,12 +828,12 @@ describe('主窗 Bot 档案页', () => {
     expect(shot.workflow).toBe('bot-chat')
     expect(slotTuples(shot)).toEqual([
       ['intent', true, 'bot-intent'],
-      ['task', true, 'default'],
+      ['task', true, 'work'],
       ['recheck', false, '']
     ])
     expect(await statusIs('ok', 'my-bot validated ok')).toEqual({ chip: 'ok', banner: [] })
     expect(readFileSync(botPath('my-bot'), 'utf-8')).toContain(
-      'shuvix-bot-pipeline:\n  workflow: bot-chat\n  agents:\n    intent: bot-intent\n    task: default\n'
+      'shuvix-bot-pipeline:\n  workflow: bot-chat\n  agents:\n    intent: bot-intent\n    task: work\n'
     )
 
     // 不改名直接再建 → 服务层拒绝，错误横幅上屏，新建页留在原地
@@ -881,7 +881,7 @@ describe('主窗 Bot 档案页', () => {
         'shuvix-bot-pipeline: bot-chat',
         'shuvix-bot-agents:',
         '  intent: bot-intent',
-        '  task: default',
+        '  task: work',
         '---',
         '',
         'LEGACY BODY.',
@@ -956,8 +956,8 @@ describe('主窗 Bot 档案页', () => {
     ])
     expect(await pane.setSlot('intent', 'bot-intent')).toBe(true)
     await until(async () => (await slotValue('intent')) === 'bot-intent', 'intent filled')
-    expect(await pane.setSlot('task', 'default')).toBe(true)
-    await until(async () => (await slotValue('task')) === 'default', 'task filled')
+    expect(await pane.setSlot('task', 'work')).toBe(true)
+    await until(async () => (await slotValue('task')) === 'work', 'task filled')
     expect(await statusIs('ok', 'card ok once both slots are filled')).toEqual({
       chip: 'ok',
       banner: []
@@ -975,7 +975,7 @@ describe('主窗 Bot 档案页', () => {
     )
     const content = readFileSync(botPath('c16-noflow'), 'utf-8')
     expect(content).toContain(
-      'shuvix-bot-pipeline:\n  workflow: bot-chat\n  agents:\n    intent: bot-intent\n    task: default\n'
+      'shuvix-bot-pipeline:\n  workflow: bot-chat\n  agents:\n    intent: bot-intent\n    task: work\n'
     )
     expect(content).toContain('no pipeline block')
   })

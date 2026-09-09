@@ -1,10 +1,11 @@
 /**
  * 笔记本会话的根 Agent —— notebook 基座档案的端到端语义：
  *
- *   - 创建即钉死 notebook 档案：systemPrompt 内嵌 settings.notebookPath 原文
- *     （{{shuvix:notebookPath}} 是 root 级变量），工具白名单取自 builtin notebook md；
+ *   - 笔记本会话恒为 notebook 档案（由会话形态推导）：systemPrompt 内嵌 settings.notebookPath
+ *     原文（{{shuvix:notebookPath}} 是 root 级变量），工具白名单取自 builtin notebook md；
  *   - 发送走普通 agent.prompt 管线，用户消息持久化到会话树；
- *   - updateAgentProfile 对笔记本会话一律 pinned 拒绝，设置与运行时分毫不动；
+ *   - settings 里没有 agentProfile 键；哪怕直写一个戳（coding），笔记本判定先于戳、根会话
+ *     也不读戳，重建后仍是笔记本档案；
  *   - 非笔记本会话引用 {{shuvix:notebookPath}} 替换为空串（不是残留占位符）；
  *   - `~/.shuvix/agents/notebook.md` 按名覆盖 builtin，对新笔记本会话生效。
  *
@@ -19,6 +20,7 @@ import {
   createAgentSession,
   createProject,
   promptAndListMessages,
+  stampAgentProfile,
   writeAgentMd
 } from '../../harness/seed'
 
@@ -73,37 +75,37 @@ describe('笔记本会话的根 Agent', () => {
     expect(messages.some((m) => m.role === 'user' && m.content === 'notebook e2e hello')).toBe(true)
   })
 
-  it('updateAgentProfile 被 pinned 拒绝：设置不落、systemPrompt 仍是笔记本档案', async () => {
-    const res = await app.main.eval<{ success: boolean; error?: string }>(
-      `window.api.session.updateAgentProfile({ id: ${JSON.stringify(nbSid)}, name: 'coding' })`
-    )
-    expect(res.success).toBe(false)
-    expect(res.error).toMatch(/pinned/)
-
+  it('settings 无 agentProfile；直写一个戳（coding）并重建 → 仍是笔记本档案（判定先于戳，根会话也不读戳）', async () => {
     const settings = await app.main.eval<{ agentProfile?: string }>(
       `window.api.session.getById(${JSON.stringify(nbSid)}).then((s) => s.settings)`
     )
     expect(settings.agentProfile).toBeUndefined()
-    expect((await runtimeInfo(nbSid)).systemPrompt).toContain(NOTE_REL)
+
+    // 会话内切换已下线，戳只能这样造出来（唯一的写入口是子会话的 pinAgentProfile）
+    await stampAgentProfile(app, nbSid, 'coding')
+    await app.main.eval(`window.api.message.clear(${JSON.stringify(nbSid)})`)
+    const { systemPrompt } = await runtimeInfo(nbSid)
+    expect(systemPrompt).toContain(NOTE_REL)
+    // coding 正文里的一句 —— 戳若被读了，这里会是 coding 的 body
+    expect(systemPrompt).not.toContain('Only do what the user asked')
   })
 })
 
 describe('非笔记本会话的 {{shuvix:notebookPath}}', () => {
   it('普通会话引用它：替换为空串（标记对可见，无残留占位符）', async () => {
-    writeAgentMd(app, 'nb-probe', {
+    // 根会话的档案不可切换：覆盖无项目会话的基座 chat.md 来引用这个变量（prompt-vars.e2e 同款手法）
+    writeAgentMd(app, 'chat', {
       description: 'probe',
       tools: 'read',
       body: 'NB PROBE nb=[{{shuvix:notebookPath}}] end.'
     })
-    const { sid } = await createAgentSession(app.main)
-    const switched = await app.main.eval<{ success: boolean }>(
-      `window.api.session.updateAgentProfile({ id: ${JSON.stringify(sid)}, name: 'nb-probe' })`
-    )
-    expect(switched.success).toBe(true)
-
-    const { systemPrompt } = await runtimeInfo(sid)
-    expect(systemPrompt).toContain('nb=[] end.')
-    expect(systemPrompt).not.toContain('{{shuvix:notebookPath}}')
+    try {
+      const { systemPrompt } = await createAgentSession(app.main)
+      expect(systemPrompt).toContain('nb=[] end.')
+      expect(systemPrompt).not.toContain('{{shuvix:notebookPath}}')
+    } finally {
+      await app.main.eval(`window.api.subAgent.delete({ name: 'chat' })`)
+    }
   })
 })
 

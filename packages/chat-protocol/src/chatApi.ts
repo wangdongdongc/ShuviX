@@ -66,9 +66,9 @@ export interface SessionSettings {
   bots?: string[]
 
   /**
-   * 会话根 Agent 采用的档案名（`~/.shuvix/agents/<name>.md` 或内置档案）。
-   * 缺省 / 档案已不存在 → 回落 'default'。经 `/<agentName>` 斜杠命令切换，粘性生效：
-   * 系统提示词与内置工具白名单随之更换（会话历史不受影响，切换即重建运行时）。
+   * 子会话被父级钉下的档案名（session 工具 `create-sub-session` 的 `agent_profile`，如 coding）。
+   * 根会话不读它：根 Agent 的档案由会话形态推导 —— 项目会话 `work`、无项目会话 `chat`、
+   * 笔记本会话 `notebook` —— 没有设置项，也没有会话内切换；旧切换时代写下的戳只是遗留数据。
    */
   agentProfile?: string
   /** 笔记本会话绑定的 md 文件（相对项目根，forward-slash；项目记忆为绝对路径）；非空即为笔记本会话（根 Agent 钉死 notebook 基座档案，对话经输入卡片的抽屉呈现） */
@@ -157,21 +157,6 @@ export interface Project {
 export interface ConfigMeta {
   labelKey: string
   desc: string
-}
-
-/**
- * 可切换的会话档案（输入框档案选择器的列表项）——只带选择器要显示的字段。
- *
- * 刻意不复用桌面 preload 的 SubAgentInfo：那个带 systemPrompt 全文，内置档案每个都是
- * 一整页提示词，打开一次选择器要把六七页文本拷进渲染进程；选择器只需要这几项。
- */
-export interface AgentProfileSummary {
-  name: string
-  displayName: string
-  description: string
-  source: 'builtin' | 'user'
-  /** 档案声明的模型（`shuvix-model` 原样值）；选择器据此提示「选它会换模型」 */
-  model?: string
 }
 
 /** 自动更新事件判别联合 */
@@ -679,33 +664,6 @@ export interface HostApi {
     /** 移除允许列表条目（仅路径条目：命令类工具无允许列表，逐条询问） */
     removeAllowListEntry: (params: SessionAllowListRemoveParams) => Promise<{ success: boolean }>
     delete: (id: string) => Promise<{ success: boolean }>
-    /** 可切换的会话档案（含切回基座用的 default，不含 notebook）。纯文件系统驱动，每次现扫 */
-    listAgentProfiles: () => Promise<AgentProfileSummary[]>
-    /**
-     * 切换会话根 Agent 的档案。粘性生效：写入 settings.agentProfile 并失效当前运行时，
-     * 下一条消息按新档案的系统提示词 + 内置工具白名单重建（会话历史/会话树不变）。
-     * 未知档案名返回 `success: false` + error。
-     *
-     * 切换同时把档案声明的运行配置作为**种子**写进会话树（与手动改模型/工具同一路径），
-     * 经 `applied` 回传供调用方就地更新选择器：
-     *  - `model`：`shuvix-model` 解析成功时的模型；未声明则缺省（会话模型不变），
-     *    声明了但不可用时另经 `modelUnavailable` 回传原始值供前端提示；
-     *  - `tools`：`shuvix-tools` 里的 mcp:/skill: 条目，**替换**（不是叠加）会话勾选 ——
-     *    档案对三类工具是完整声明，切过去就是它说的那套，之后用户可在工具选择器里增删。
-     *
-     * 种子只在切换这一刻应用：之后模型/工具以会话树为准，档案不会在重建时再次覆盖。
-     */
-    updateAgentProfile: (params: { id: string; name: string }) => Promise<{
-      success: boolean
-      error?: string
-      applied?: {
-        model?: { provider: string; model: string; capabilities: ModelCapabilities }
-        /** 切换后的会话工具勾选（可能是空数组 = 档案没声明任何 mcp:/skill:） */
-        tools: string[]
-      }
-      /** 档案声明了模型但当前不可用（提供商停用 / 模型已删）时回传原始值 */
-      modelUnavailable?: string
-    }>
     /**
      * 给聊天会话绑定 bot。
      *

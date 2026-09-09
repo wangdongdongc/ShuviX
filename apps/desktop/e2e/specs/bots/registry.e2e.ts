@@ -146,7 +146,7 @@ describe('bot registry', () => {
         'shuvix-bot-pipeline: bot-chat',
         'shuvix-bot-agents:',
         '  intent: bot-intent',
-        '  task: default'
+        '  task: work'
       ]
     })
     expect((await list()).some((b) => b.name === 'e2e-flat')).toBe(false)
@@ -180,7 +180,7 @@ describe('bot registry', () => {
       description: 'inspect me',
       body: 'PERSONA.',
       // 两个必填槽位 + 一个管线没声明的额外槽位（指向不存在的 agent）
-      agents: { intent: 'bot-intent', task: 'default', extra: 'ghost-agent' }
+      agents: { intent: 'bot-intent', task: 'work', extra: 'ghost-agent' }
     })
     const r = await inspect('e2e-inspected')
     if ('error' in r) throw new Error(r.error)
@@ -195,7 +195,7 @@ describe('bot registry', () => {
     ])
     const byRole = Object.fromEntries(r.slots.map((s) => [s.role, s]))
     expect(byRole.intent).toMatchObject({ ref: 'bot-intent', missing: false })
-    expect(byRole.task).toMatchObject({ ref: 'default', missing: false })
+    expect(byRole.task).toMatchObject({ ref: 'work', missing: false })
     // 没填 = 没有 ref，也谈不上 missing
     expect(byRole.recheck.ref).toBeUndefined()
     expect(byRole.recheck.missing).toBe(false)
@@ -224,7 +224,7 @@ describe('bot registry', () => {
       /shuvix-bot-pipeline:\n {2}workflow: bot-chat\n {2}agents:\n(?: {4}[\w-]+: \S+\n)* {4}intent: bot-intent\n/
     )
     expect(tpl.text).toMatch(
-      /shuvix-bot-pipeline:\n {2}workflow: bot-chat\n {2}agents:\n(?: {4}[\w-]+: \S+\n)* {4}task: default\n/
+      /shuvix-bot-pipeline:\n {2}workflow: bot-chat\n {2}agents:\n(?: {4}[\w-]+: \S+\n)* {4}task: work\n/
     )
     expect(tpl.text).not.toContain('shuvix-bot-agents')
 
@@ -234,7 +234,7 @@ describe('bot registry', () => {
     expect(created).toMatchObject({ success: true, name: 'e2e-fresh' })
     const fresh = (await list()).find((b) => b.name === 'e2e-fresh')
     expect(fresh?.pipeline).toBe('bot-chat')
-    expect(fresh?.agents).toEqual({ intent: 'bot-intent', task: 'default' })
+    expect(fresh?.agents).toEqual({ intent: 'bot-intent', task: 'work' })
   })
 
   it('rejects an invalid save and leaves the file on disk untouched', async () => {

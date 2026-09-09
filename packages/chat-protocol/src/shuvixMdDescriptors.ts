@@ -3,7 +3,7 @@
  * 按 `shuvix: <type>` 标记查表，得到已知字段的渲染方式与文案键。
  *
  * 纯数据、零依赖：描述符放 chat-protocol、解析器留 agent-runtime，是本仓既有的分层先例
- * （agentProfile.ts / agentModelRef.ts —— 渲染进程够不到 agent-runtime）。描述符只回答
+ * （agentModelRef.ts —— 渲染进程够不到 agent-runtime）。描述符只回答
  * 「怎么展示/编辑」，不做合法性判定 —— 校验语义永远归各自解析器
  * （definitionFile.ts / policyFile.ts），后续经宿主校验接缝回传 UI。
  *

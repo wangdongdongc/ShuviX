@@ -2,7 +2,7 @@
  * Agent 派发工具（跨端共享）。
  *
  * LLM 只看到一个名为 `agent` 的工具，经 `name` 参数以统一 ref 选择目标
- * （参数名与输入框档案选择器/`session.updateAgentProfile` 用的字段同为 name）：
+ * （参数名与 session 工具 `create-sub-session` 点名档案用的字段同为 name）：
  *   - 具名 ref（如 "explore"）→ 注入的 SubAgentRegistry 按名解析（内置 + 用户全局定义）；
  *   - 路径 ref（含 "/" 或以 .md 结尾）→ 宿主注入的 resolveAgentFile 即时解析定义文件
  *     （frontmatter: name/description/shuvix-tools + 正文为 system prompt）——支持项目内

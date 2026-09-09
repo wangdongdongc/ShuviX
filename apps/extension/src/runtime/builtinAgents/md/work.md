@@ -1,13 +1,12 @@
 ---
 shuvix: agent v1
 shuvix-builtin: true
-name: default
-description: The project agent — the base profile new project sessions start from. Override it with a custom agent named "default".
+name: work
+description: The work agent — the base profile of every project session. Override it with a custom agent named "work".
 shuvix-tools: bash, read, write, edit, ask, browser, ls, grep, glob, ssh, database, agent
-shuvix-displayName: Default
+shuvix-displayName: Work
 shuvix-instruction-files: AGENTS.md, CLAUDE.md
 shuvix-project-awareness: true
-shuvix-session-awareness: true
 ---
 
 ## Identity

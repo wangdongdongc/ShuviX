@@ -8,7 +8,7 @@ import { launchApp, type E2EApp } from '../../harness/launch'
 import { createAgentSession, createProject, writeAgentMd } from '../../harness/seed'
 
 let app: E2EApp
-/** 项目会话用的项目 —— `default` 是**项目会话**的基座，覆盖断言必须落在项目会话上 */
+/** 项目会话用的项目 —— `work` 是**项目会话**的基座，覆盖断言必须落在项目会话上 */
 let projectId: string
 
 beforeAll(async () => {
@@ -43,14 +43,14 @@ describe('内置档案', () => {
       'browser',
       'chat',
       'coding',
-      'default',
       'explore',
       'notebook',
       'titler',
       'visualization',
       'widget',
       'wiki',
-      'wiki-writer'
+      'wiki-writer',
+      'work'
     ])
     // 派发专用的窄档案两样都不要：AGENTS.md/CLAUDE.md 是写代码的工程约定，
     // 而给一条聊天消息定意图（bot-intent）、拟一个标题（titler）都不是工程活，
@@ -63,24 +63,33 @@ describe('内置档案', () => {
       // 指令文件清单顺序即优先级 —— 内置沿用改制前的 AGENTS.md 优先、CLAUDE.md 次之
       expect(a.instructionFiles, a.name).toEqual(instructionsOn ? ['AGENTS.md', 'CLAUDE.md'] : [])
       expect(a.projectAwareness, a.name).toBe(awarenessOn)
-      // 会话感知 = 用户能否在输入框把会话切成它。派发专用的执行体一律不声明：
-      // 三个窄档案，外加 wiki-writer（写入政策的有效性依赖每次派发都是新鲜上下文）
-      const switchable = !narrow.includes(a.name) && a.name !== 'wiki-writer'
-      expect(a.sessionAwareness, a.name).toBe(switchable)
+      // 会话感知 = 父级能否用 agent_profile 点名它作子会话的档案。两类不声明：
+      //  - 三个基座（work / chat / notebook）由会话形态推导、从不被点名，故不声明；
+      //  - 派发专用的执行体（titler / bot-intent，外加 wiki-writer —— 写入政策的有效性
+      //    依赖每次派发都是新鲜上下文）
+      const sessionAware = ![
+        'work',
+        'chat',
+        'notebook',
+        'titler',
+        'bot-intent',
+        'wiki-writer'
+      ].includes(a.name)
+      expect(a.sessionAwareness, a.name).toBe(sessionAware)
       expect(a.description.length, a.name).toBeGreaterThan(0)
       expect('isEnabled' in a, a.name).toBe(false)
     }
   })
 })
 
-describe('default 覆盖（用户同名档案）', () => {
+describe('work 覆盖（用户同名档案）', () => {
   it('覆盖后：设置页两行并存（内置带 overridden），运行时用覆盖 body', async () => {
-    writeAgentMd(app, 'default', {
+    writeAgentMd(app, 'work', {
       description: 'my override',
       tools: 'read',
       body: 'OVERRIDE BODY.'
     })
-    const rows = (await listAgents()).filter((a) => a.name === 'default')
+    const rows = (await listAgents()).filter((a) => a.name === 'work')
     expect(rows.map((r) => [r.source, !!r.overridden]).sort()).toEqual([
       ['builtin', true],
       ['user', false]
@@ -91,10 +100,10 @@ describe('default 覆盖（用户同名档案）', () => {
 
   it('删除覆盖档案：内置恢复单行、无 overridden；新会话回到内置 body', async () => {
     const res = await app.main.eval<{ success: boolean }>(
-      `window.api.subAgent.delete({ name: 'default' })`
+      `window.api.subAgent.delete({ name: 'work' })`
     )
     expect(res.success).toBe(true)
-    const rows = (await listAgents()).filter((a) => a.name === 'default')
+    const rows = (await listAgents()).filter((a) => a.name === 'work')
     expect(rows).toHaveLength(1)
     expect(rows[0].source).toBe('builtin')
     expect(rows[0].overridden).toBeFalsy()
@@ -104,9 +113,9 @@ describe('default 覆盖（用户同名档案）', () => {
 })
 
 /**
- * 与上面 default 那两条对称 —— `chat` 是**不归属项目**的会话的基座，所以这里的会话
+ * 与上面 work 那两条对称 —— `chat` 是**不归属项目**的会话的基座，所以这里的会话
  * 必须**不带 projectId**（上面两条正相反）。覆盖链上刚发生过一批连带改动
- * （getProfile 的内置兜底扩到全部基座名、builtinProfiles 的按名合并），而 default
+ * （getProfile 的内置兜底扩到全部基座名、builtinProfiles 的按名合并），而 work
  * 有 e2e 守着、chat 一条都没有。
  */
 describe('chat 覆盖（用户同名档案）', () => {

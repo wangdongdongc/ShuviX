@@ -142,8 +142,6 @@ export interface ChatPane {
    * 断署名时要么先按 merged 过滤，要么正是在断合并本身。
    */
   botSenders(): Promise<BotSenderShot[]>
-  /** 档案选择器在屏（输入卡工具行内含 .lucide-bot 的按钮 —— 别处的 bot 图标不算） */
-  profilePickerPresent(): Promise<boolean>
   /** 上下文用量环在屏（输入卡工具行内的 circle[r="6"]，轨道圈即可认） */
   ctxRingPresent(): Promise<boolean>
   /** 模型选择器在屏（输入卡工具行选择器簇内 ModelSelect inline 触发器的 chevron） */
@@ -151,8 +149,9 @@ export interface ChatPane {
   /**
    * 选择器簇（工具行第一个子节点）的直接子节点数 —— 「少了哪个选择器」的判据。
    *
-   * 普通会话是三个（档案 / 模型 / 工具），聊天会话只剩模型一个：v2 起 `ToolPicker`
-   * 也对聊天会话隐藏（任务段的 agent 就是 bot 自己，工具来自它 md 里的 `shuvix-tools`）。
+   * 普通会话是两个（模型 / 工具；曾经居首的档案选择器随「会话内切换档案」一并下线），
+   * 聊天会话只剩模型一个：v2 起 `ToolPicker` 也对聊天会话隐藏（任务段的 agent 就是 bot
+   * 自己，工具来自它 md 里的 `shuvix-tools`）。
    * **不按图标认工具选择器**：它的触发钮在没有 MCP / skill 工具时连图标都不渲染，
    * 隔离实例里恰好就是那个空钮；数子节点是这里唯一不靠运气的判据。
    */
@@ -446,9 +445,6 @@ export function chatPane(main: CdpClient): ChatPane {
           }
         })`
       ),
-    // 选择器簇是工具行的第一个子节点（pickers），bot 图标只可能是档案选择器的
-    profilePickerPresent: () =>
-      main.eval<boolean>(`!!${TOOL_ROW}?.firstElementChild?.querySelector('.lucide-bot')`),
     ctxRingPresent: () => main.eval<boolean>(`!!${TOOL_ROW}?.querySelector('svg circle[r="6"]')`),
     modelPickerPresent: () =>
       main.eval<boolean>(`!!${TOOL_ROW}?.firstElementChild?.querySelector('.lucide-chevron-down')`),

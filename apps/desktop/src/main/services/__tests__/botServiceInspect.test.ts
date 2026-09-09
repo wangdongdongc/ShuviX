@@ -19,6 +19,7 @@
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest'
 import { mkdirSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
+import { parseBotDefinitionFile } from '@shuvix/agent-runtime'
 import type { ParsedBotFile, PipelineAgentSlot } from '@shuvix/agent-runtime'
 
 const dirs = vi.hoisted(() => {
@@ -286,7 +287,7 @@ describe('botService.inspect', () => {
   })
 
   it('B4 填了内置档案（bot-intent / default）→ ref 原样、missing false', () => {
-    writeBot('b4-builtin', { agents: { intent: 'bot-intent', task: 'default' } })
+    writeBot('b4-builtin', { agents: { intent: 'bot-intent', task: 'work' } })
     expect(slotOf('b4-builtin', 'intent')).toEqual({
       role: 'intent',
       required: true,
@@ -294,9 +295,22 @@ describe('botService.inspect', () => {
       ref: 'bot-intent',
       missing: false
     })
-    expect(slotOf('b4-builtin', 'task')).toMatchObject({ ref: 'default', missing: false })
+    expect(slotOf('b4-builtin', 'task')).toMatchObject({ ref: 'work', missing: false })
     // 没填的那个照旧没有 ref
     expect('ref' in slotOf('b4-builtin', 'recheck')).toBe(false)
+  })
+
+  it('B4b 新建模板预填的槽位真实存在：task 是 work（不是已改名的 default），经 parse → inspect 都不 missing', () => {
+    // 模板预填一个不存在的名字正是「基座改名」最容易漏的地方：文件合法、槽位填了、
+    // 跑起来才发现 task 指向查无此人。这里把模板产物原样落盘再 inspect（真注册表）
+    const text = botService.newBotTemplate({ name: 'b4b-fresh' })
+    const parsed = parseBotDefinitionFile(text, 'b4b-fresh')
+    expect(parsed).not.toBeNull()
+    expect(parsed!.agents).toEqual({ intent: 'bot-intent', task: 'work' })
+
+    writeFileSync(join(dirs.bots, 'b4b-fresh.md'), text)
+    expect(slotOf('b4b-fresh', 'task')).toMatchObject({ ref: 'work', missing: false })
+    expect(slotOf('b4b-fresh', 'intent')).toMatchObject({ ref: 'bot-intent', missing: false })
   })
 
   it('B5 missing 只在「填了且查无此 agent」时为 true：填错的槽位标红，没填的不标', () => {
@@ -341,7 +355,7 @@ describe('botService.inspect', () => {
   })
 
   it('B6c 槽位顺序跟管线的声明序，不跟 bot md 里 shuvix-bot-pipeline.agents 的书写序', () => {
-    writeBot('b6c-order', { agents: { task: 'default', intent: 'bot-intent' } })
+    writeBot('b6c-order', { agents: { task: 'work', intent: 'bot-intent' } })
     expect(ok('b6c-order').slots.map((s) => s.role)).toEqual(['intent', 'task', 'recheck'])
   })
 
@@ -355,9 +369,9 @@ describe('botService.inspect', () => {
     expect(r.slots).toEqual([])
 
     // 填了的槽位仍要列出来 —— 管线名写坏时用户至少能看见自己填过什么
-    writeBot('b7-noflow-filled', { pipeline: 'no-such-flow', agents: { task: 'default' } })
+    writeBot('b7-noflow-filled', { pipeline: 'no-such-flow', agents: { task: 'work' } })
     expect(ok('b7-noflow-filled').slots).toEqual([
-      { role: 'task', required: false, ref: 'default', missing: false }
+      { role: 'task', required: false, ref: 'work', missing: false }
     ])
   })
 
@@ -390,7 +404,7 @@ describe('botService.inspect', () => {
     writeAgentMd('my-intent')
     writeBot('b12-degraded', {
       displayName: 'B12',
-      agents: { intent: 'my-intent', task: 'default' }
+      agents: { intent: 'my-intent', task: 'work' }
     })
     seedSession('b12-degraded')
     mocks.invoke.mockImplementation(gateFailed())
@@ -405,7 +419,7 @@ describe('botService.inspect', () => {
   })
 
   it('B13 载荷形状封口：顶层恰 body / pipeline / slots 三键，body 恰 chars 一键，槽位无多余键', () => {
-    writeBot('b13-shape', { agents: { intent: 'bot-intent', extra: 'default' } })
+    writeBot('b13-shape', { agents: { intent: 'bot-intent', extra: 'work' } })
     const r = ok('b13-shape')
     // 没有 notes：笔记段连同它的读数一起退场，正文本身就是记忆
     expect(Object.keys(r).sort()).toEqual(['body', 'pipeline', 'slots'])
@@ -434,7 +448,7 @@ describe('botService.inspect', () => {
  * 之前的「事实」半句 —— 后半句是后果，措辞可变。
  */
 describe('botService.advise', () => {
-  const HEALTHY = { intent: 'bot-intent', task: 'default' }
+  const HEALTHY = { intent: 'bot-intent', task: 'work' }
   const parsed = (p: Partial<ParsedBotFile> & { name: string }): ParsedBotFile => ({
     displayName: p.name,
     description: `unit bot ${p.name}`,
@@ -507,16 +521,16 @@ describe('botService.advise', () => {
   it('AD-5 槽位指向不存在的 agent → 点名槽位与 agent；用户 md 里的 agent 算存在（合并注册表）', () => {
     writeAgentMd('my-gate')
     expect(
-      botService.advise(parsed({ name: 'ad5', agents: { intent: 'my-gate', task: 'default' } }))
+      botService.advise(parsed({ name: 'ad5', agents: { intent: 'my-gate', task: 'work' } }))
     ).toEqual([])
     const out = botService.advise(
-      parsed({ name: 'ad5b', agents: { intent: 'ghost-agent', task: 'default' } })
+      parsed({ name: 'ad5b', agents: { intent: 'ghost-agent', task: 'work' } })
     )
     expect(facts(out)).toEqual(["slot 'intent': agent 'ghost-agent' does not exist"])
   })
 
   it('AD-6 填了管线没声明的槽位 → 提示它被忽略；那个槽位再指向不存在的 agent 时多一条', () => {
-    const out = botService.advise(parsed({ name: 'ad6', agents: { ...HEALTHY, extra: 'default' } }))
+    const out = botService.advise(parsed({ name: 'ad6', agents: { ...HEALTHY, extra: 'work' } }))
     expect(facts(out)).toEqual(["slot 'extra' is not declared by pipeline 'bot-chat'"])
     expect(out[0]).toContain('ignored')
     expect(
@@ -532,7 +546,7 @@ describe('botService.advise', () => {
       { name: 'bot-chat', concurrency: 'queue', source: 'user' }
     ])
     const out = botService.advise(
-      parsed({ name: 'ad7', agents: { extra: 'default', intent: 'ghost' } })
+      parsed({ name: 'ad7', agents: { extra: 'work', intent: 'ghost' } })
     )
     expect(facts(out)).toEqual([
       "pipeline 'bot-chat' declares 'queue' reentry",
@@ -554,7 +568,7 @@ describe('botService.advise', () => {
   })
 
   it('AD-9 与 inspect 同源：inspect 标 missing 的槽位恰是 advise 点名「does not exist」的槽位', () => {
-    writeBot('ad9', { agents: { intent: 'ghost', task: 'default' } })
+    writeBot('ad9', { agents: { intent: 'ghost', task: 'work' } })
     const missing = ok('ad9')
       .slots.filter((s) => s.missing)
       .map((s) => s.role)

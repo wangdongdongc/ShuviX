@@ -17,7 +17,7 @@ function resolveLocale(locale: string): string {
 }
 
 // 注：扩展的 default 浏览器变体不再经 i18n 资源覆盖 —— 内置档案文案已改为 md 文件维护，
-// 扩展的整份副本在 runtime/builtinAgents/md/ 下，由 subAgent.ts 的 EXTENSION_DEFAULT_SPEC 取用。
+// 扩展的整份副本在 runtime/builtinAgents/md/ 下，由 subAgent.ts 的 EXTENSION_WORK_SPEC / EXTENSION_CHAT_SPEC 取用。
 
 i18next.use(initReactI18next).init({
   lng: resolveLocale(navigator.language),

@@ -17,6 +17,8 @@ const mocks = vi.hoisted(() => ({
   daoDeleteById: vi.fn(),
   daoPick: vi.fn<(id: string, cols: string[]) => unknown>(),
   daoFindChildren: vi.fn<(id: string) => Array<{ id: string }>>(),
+  findByKey: vi.fn(),
+  getProfile: vi.fn(),
   messageClear: vi.fn(),
   killBySession: vi.fn(),
   agentRemove: vi.fn(async () => {})
@@ -36,8 +38,8 @@ vi.mock('../../dao/sessionDao', () => ({
 vi.mock('../../dao/httpLogDao', () => ({ httpLogDao: { deleteBySessionId: vi.fn() } }))
 vi.mock('../../dao/providerDao', () => ({ providerDao: {} }))
 vi.mock('../../dao/projectDao', () => ({ projectDao: {} }))
-// create 会读默认档案设置（general.default*Agent）；未设 ⇒ 回落基座 default / chat
-vi.mock('../../dao/settingsDao', () => ({ settingsDao: { findByKey: vi.fn() } }))
+// 「默认项目/聊天智能体」设置项已删：create 不再读任何设置（末条用例钉着零调用）
+vi.mock('../../dao/settingsDao', () => ({ settingsDao: { findByKey: mocks.findByKey } }))
 vi.mock('../messageService', () => ({ messageService: { clear: mocks.messageClear } }))
 vi.mock('../sessionStorage', () => ({
   readSessionRunConfig: vi.fn(),
@@ -63,7 +65,7 @@ vi.mock('../botService', () => ({
     isActive: vi.fn(() => false)
   }
 }))
-vi.mock('../agentService', () => ({ agentService: { getProfile: vi.fn() } }))
+vi.mock('../agentService', () => ({ agentService: { getProfile: mocks.getProfile } }))
 vi.mock('../agentSession', () => ({ AgentSession: class {} }))
 vi.mock('../bgTaskService', () => ({
   killBySession: mocks.killBySession,
@@ -115,21 +117,27 @@ describe('create —— 子会话的 parentId 与项目继承', () => {
     expect(inserted()).toMatchObject({ parentId: 'gone', projectId: 'p1' })
   })
 
-  it('子会话的默认档案随继承来的项目形态走，因而与父会话人格天然一致', () => {
-    // `create`（读设置）与 subSessionRunner（读父会话落下的戳）是两处独立计算，相等是
-    // **巧合式耦合**：谁改了 create 的戳规则，subSessionRunner 那句
-    // `profileName !== stamped` 就恒真 —— 每条子会话建好就被 updateAgentProfile 切一次，
-    // 把这条刚建好的会话继承自项目默认的 mcp:/skill: 勾选替换成空。
-    mocks.daoPick.mockReturnValue({ projectId: 'parent-project' })
+  it('子会话不落戳，档案随父形态推导（父有项目 work / 父无项目 chat）', () => {
+    // 「不落戳 + 随父形态」是 subSessionRunner 不再显式切档案的前提：projectId 恒随父，
+    // 于是 resolveAgentProfileName 对父子推导出同一个基座；父级点名档案才由 pinAgentProfile
+    // 写戳。谁把「创建时定型」加回来，这里落库的 settings 就会多出一个键
+    mocks.daoPick.mockReturnValue({ projectId: 'parent-project', settings: {} })
     sessionService.create({ parentId: 'P' })
-    expect((inserted() as { settings: Record<string, unknown> }).settings.agentProfile).toBe(
-      'default'
-    )
+    const row = inserted() as { id: string; settings: Record<string, unknown> }
+    expect('agentProfile' in row.settings).toBe(false)
+    expect(mocks.findByKey).not.toHaveBeenCalled()
+    // 把落库行原样喂回读面：推导结果就是父形态的基座，且不查档案
+    mocks.daoPick.mockReturnValue(row)
+    expect(sessionService.resolveAgentProfileName(row.id)).toBe('work')
+    expect(mocks.getProfile).not.toHaveBeenCalled()
 
     vi.clearAllMocks()
-    mocks.daoPick.mockReturnValue({ projectId: null })
+    mocks.daoPick.mockReturnValue({ projectId: null, settings: {} })
     sessionService.create({ parentId: 'P' })
-    expect((inserted() as { settings: Record<string, unknown> }).settings.agentProfile).toBe('chat')
+    const scratch = inserted() as { id: string; settings: Record<string, unknown> }
+    expect('agentProfile' in scratch.settings).toBe(false)
+    mocks.daoPick.mockReturnValue(scratch)
+    expect(sessionService.resolveAgentProfileName(scratch.id)).toBe('chat')
   })
 })
 

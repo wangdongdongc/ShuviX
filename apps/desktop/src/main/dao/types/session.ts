@@ -31,8 +31,10 @@ export interface SessionSettings {
    */
   bots?: string[]
   /**
-   * 会话根 Agent 采用的档案名（内置档案或 `~/.shuvix/agents/<name>.md`）。
-   * 缺省 / 档案已不存在 → 回落 'default'（见 sessionService.resolveAgentProfileName）。
+   * 子会话被父级钉下的档案名（session 工具 `create-sub-session` 的 `agent_profile`，如 coding；
+   * 唯一写入口 sessionService.pinAgentProfile）。根会话不读它：根 Agent 的档案由会话形态推导
+   * （项目 work / 无项目 chat / 笔记本 notebook，见 resolveAgentProfileName）——旧的会话内切换
+   * 写下的戳（含旧基座名 default）只是遗留数据，刻意不迁移。
    */
   agentProfile?: string
   /** 笔记本会话绑定的 md 文件（相对项目根，forward-slash；项目记忆为绝对路径）；非空即为笔记本会话（根 Agent 钉死 notebook 基座档案，对话经输入卡片的抽屉呈现） */

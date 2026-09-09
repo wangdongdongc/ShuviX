@@ -30,6 +30,7 @@ import { shell } from 'electron'
 import type { AgentMessage } from '@earendil-works/pi-agent-core'
 import {
   TEMPLATE_BOT_PIPELINE,
+  WORK_PROFILE_NAME,
   parseBotDefinitionFile,
   renderBotContext,
   serializeBotDefinitionFile,
@@ -103,8 +104,8 @@ const GATE_FAILURE_STREAK = 2
  * **不是缺省表**：槽位由 bot md 逐一填写，漏填必填槽位由管线的输入校验拦下并在会话里说出来。
  */
 export const BUILTIN_GATE_AGENT = 'bot-intent'
-/** 新建模板给 `task` 槽位预填的名字 —— 主会话基座档案，工具最全的那份通用 agent */
-export const DEFAULT_TASK_AGENT = 'default'
+/** 新建模板给 `task` 槽位预填的名字 —— 项目会话的基座档案 work，握全套内置工具的通用 agent */
+export const DEFAULT_TASK_AGENT = WORK_PROFILE_NAME
 
 export interface ResolvedPipeline {
   workflow: string
@@ -657,7 +658,7 @@ class BotService {
 
   /**
    * 「新建 bot」的模板 —— 用内置管线填一份可直接落盘的 md，两个必填槽位预填
-   * 内置门控（`bot-intent`）与主会话基座档案（`default`）。
+   * 内置门控（`bot-intent`）与项目会话的基座档案（`work`）。
    *
    * 这是「不内置 bot」的另一半（设计 §4.2）：用户不必从空文件起步，取个名字 + 写句人设
    * 就有一个能用的 bot；而内置件的更新照常跟随版本，不会被一份 fork 出来的副本冻住。

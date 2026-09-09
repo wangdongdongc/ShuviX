@@ -183,12 +183,6 @@
     "pasteChipChars": "[Pasted text #{{seq}} · {{chars}} chars]",
     "pasteName": "Pasted text #{{seq}}"
   },
-  "agentProfile": {
-    "manage": "Manage agents…",
-    "missing": "Profile \"{{name}}\" no longer exists — the session runs on the default profile.",
-    "disabledWhileStreaming": "Can't switch profiles while generating",
-    "modelUnavailable": "This profile asks for model \"{{ref}}\", which is unavailable — the session keeps its current model."
-  },
   "compact": {
     "summaryLabel": "Conversation Summary (Auto-compacted)"
   },
@@ -419,12 +413,6 @@
     "defaultModelRow": "Model",
     "defaultModelGroup": "Default Model",
     "defaultModelGroupDesc": "Provider and model used by default for new sessions",
-    "defaultAgentGroup": "Default Agents",
-    "defaultAgentGroupDesc": "Which agent profile a new session starts from. Sticky per session — switch it any time from the picker in the input box.",
-    "defaultProjectAgentRow": "Project sessions",
-    "defaultProjectAgentDesc": "New sessions that belong to a project",
-    "defaultChatAgentRow": "Chat sessions",
-    "defaultChatAgentDesc": "New sessions that belong to no project",
     "sessionModelRow": "Session",
     "providerSectionTitle": "Configure LLM Providers",
     "providerConfigGroup": "Configuration",
@@ -841,7 +829,7 @@
     "subAgentDisplayName": "Display name",
     "subAgentDescPlaceholder": "One-sentence description of this agent (shown in the agents list and slash-command hints)",
     "subAgentDispatchLabel": "Allow dispatching further sub-agents (nested, depth-limited)",
-    "subAgentSessionAwareness": "Session awareness (selectable as a session's agent)",
+    "subAgentSessionAwareness": "Session awareness (can run a sub-session of its own)",
     "subAgentReadOnly": "Built-in agents ship with the app and are read-only.",
     "subAgentCreateOverride": "Create override copy",
     "subAgentOverridden": "Overridden",

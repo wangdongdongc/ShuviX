@@ -6,20 +6,20 @@
  * 写坏，buildBuiltinProfile 返回 null，下面的用例立刻失败。
  */
 import { describe, it, expect } from 'vitest'
+import * as builtinAgentsModule from '../../subagent/builtinAgents'
 import {
   BASE_PROFILE_NAMES,
   BUILTIN_PROFILE_SPECS,
   buildBuiltinProfile,
   buildBuiltinProfiles,
   CHAT_PROFILE_NAME,
-  DEFAULT_PROFILE_NAME,
   NOTEBOOK_PROFILE_NAME,
-  SWITCHABLE_BASE_PROFILE_NAMES,
   WIDGET_SPEC,
   WIKI_SPEC,
   WIKI_WRITER_SPEC,
   WIKI_ENTRY_BANNER,
   WIKI_TOPIC_BANNER,
+  WORK_PROFILE_NAME,
   pickLocalizedSource
 } from '../../subagent/builtinAgents'
 import {
@@ -41,6 +41,7 @@ import { parse as parseYaml } from 'yaml'
 import type { AgentProfile } from '../../subagent/types'
 
 const ALL_PARAMS = { widgetsRoot: '/w', wikiRoot: '/k' }
+const LANGS = ['en', 'zh', 'ja'] as const
 const profile = (name: string, language?: string): AgentProfile =>
   buildBuiltinProfiles({ ...ALL_PARAMS, language }).find((a) => a.name === name)!
 
@@ -66,7 +67,7 @@ describe('buildBuiltinProfile — md 解析 + 宿主参数插值', () => {
   })
 
   it('会话级 {{shuvix:*}} 占位符不在此替换（留给 createAgent）', () => {
-    expect(profile(DEFAULT_PROFILE_NAME).systemPrompt).toContain('{{shuvix:workingDirectory}}')
+    expect(profile(WORK_PROFILE_NAME).systemPrompt).toContain('{{shuvix:workingDirectory}}')
   })
 
   it('缺必需宿主参数 → 返回 null(该端不支持此 agent)', () => {
@@ -75,7 +76,7 @@ describe('buildBuiltinProfile — md 解析 + 宿主参数插值', () => {
   })
 
   it('wiki 两个横幅常量与三语 md 模板互为副本（改一处即失败）', () => {
-    for (const language of ['en', 'zh', 'ja']) {
+    for (const language of LANGS) {
       const prompt = wikiPrompt(language)
       expect(prompt, `wiki.${language} entry banner`).toContain(WIKI_ENTRY_BANNER)
       expect(prompt, `wiki.${language} topic banner`).toContain(WIKI_TOPIC_BANNER)
@@ -91,7 +92,7 @@ describe('buildBuiltinProfile — md 解析 + 宿主参数插值', () => {
       WIKI_SOURCES_KEY,
       WIKI_ALLOWED_TYPES_KEY
     ]
-    for (const language of ['en', 'zh', 'ja']) {
+    for (const language of LANGS) {
       const prompt = wikiPrompt(language)
       for (const key of keys) expect(prompt, `wiki.${language} ${key}`).toContain(`${key}:`)
       for (const marker of [WIKI_ENTRY_MARKER, WIKI_TOPIC_MARKER]) {
@@ -103,8 +104,8 @@ describe('buildBuiltinProfile — md 解析 + 宿主参数插值', () => {
     }
   })
 
-  it('wiki 拆分的结构性保证：对话侧无任何写入工具，执行侧不可切换', () => {
-    for (const language of ['en', 'zh', 'ja']) {
+  it('wiki 拆分的结构性保证：对话侧无任何写入工具，执行侧只可派发', () => {
+    for (const language of LANGS) {
       const desk = buildBuiltinProfile(WIKI_SPEC, { wikiRoot: '/k', language })!
       const writer = buildBuiltinProfile(WIKI_WRITER_SPEC, { wikiRoot: '/k', language })!
       // 拆分的意义就在这份清单上：对话侧拿不到写入类工具，长对话把上下文稀释掉时也不会
@@ -114,7 +115,7 @@ describe('buildBuiltinProfile — md 解析 + 宿主参数插值', () => {
         expect(desk.tools, `wiki.${language} 不得持有 ${forbidden}`).not.toContain(forbidden)
       }
       expect(desk.tools, `wiki.${language} 需能派发`).toContain('agent')
-      expect(desk.sessionAwareness, `wiki.${language} 必须可切换`).toBe(true)
+      expect(desk.sessionAwareness, `wiki.${language} 必须可作子会话档案`).toBe(true)
       expect(writer.sessionAwareness, `wiki-writer.${language} 必须只可派发`).toBe(false)
       // 对话侧必须点名执行侧 —— 派发工具不枚举 agent 名，名字只能来自提示词
       expect(desk.systemPrompt, `wiki.${language} 需点名 wiki-writer`).toContain('wiki-writer')
@@ -127,7 +128,7 @@ describe('buildBuiltinProfile — md 解析 + 宿主参数插值', () => {
   })
 
   it('模板里的条目样例本身就是合法契约文件（提示词与解析器不漂移）', () => {
-    for (const language of ['en', 'zh', 'ja']) {
+    for (const language of LANGS) {
       const sample = markdownSamples(wikiPrompt(language)).find((s) =>
         s.includes(WIKI_ENTRY_MARKER)
       )!
@@ -143,7 +144,7 @@ describe('buildBuiltinProfile — md 解析 + 宿主参数插值', () => {
     // 判定,曾放过条目横幅里的 ": "（裸标量禁止冒号+空格）,LLM 逐字照抄后每个生成条目
     // 都被 frontmatter 卡判为 YAML 语法错。这里用真 YAML 解析器把每个模板样例钉死,并
     // round-trip 断言横幅逐字还原（防引号/特殊字符被解析改写）。
-    for (const language of ['en', 'zh', 'ja']) {
+    for (const language of LANGS) {
       for (const sample of markdownSamples(wikiPrompt(language))) {
         const fm = /^---\n([\s\S]*?)\n---/.exec(sample)?.[1]
         expect(fm, `wiki.${language} 样例缺 frontmatter`).toBeTruthy()
@@ -157,14 +158,14 @@ describe('buildBuiltinProfile — md 解析 + 宿主参数插值', () => {
 
 describe('语言解析 — 精确 → 基础 → en，按文件整体回退', () => {
   it('zh / ja 取对应语言文件；zh-CN 落回 zh', () => {
-    expect(profile(DEFAULT_PROFILE_NAME, 'zh').displayName).toBe('默认')
-    expect(profile(DEFAULT_PROFILE_NAME, 'zh-CN').displayName).toBe('默认')
-    expect(profile(DEFAULT_PROFILE_NAME, 'ja').displayName).toBe('デフォルト')
+    expect(profile(WORK_PROFILE_NAME, 'zh').displayName).toBe('工作')
+    expect(profile(WORK_PROFILE_NAME, 'zh-CN').displayName).toBe('工作')
+    expect(profile(WORK_PROFILE_NAME, 'ja').displayName).toBe('ワーク')
   })
 
   it('未知语言 / 缺省 → en', () => {
-    expect(profile(DEFAULT_PROFILE_NAME, 'fr').displayName).toBe('Default')
-    expect(profile(DEFAULT_PROFILE_NAME).displayName).toBe('Default')
+    expect(profile(WORK_PROFILE_NAME, 'fr').displayName).toBe('Work')
+    expect(profile(WORK_PROFILE_NAME).displayName).toBe('Work')
   })
 
   it('pickLocalizedSource 是纯函数形式的同一套规则', () => {
@@ -179,7 +180,7 @@ describe('buildBuiltinProfiles — 全集现算', () => {
   it('全参数 → 十二个内置,三个基座档案居首;缺 widget/wiki 根 → 自动跳过', () => {
     // bot-notes 已退役（bot 自己维护自己的正文，没有单独的笔记段）—— 名单里不该再有它
     expect(buildBuiltinProfiles(ALL_PARAMS).map((a) => a.name)).toEqual([
-      'default',
+      'work',
       'chat',
       'notebook',
       'coding',
@@ -195,7 +196,7 @@ describe('buildBuiltinProfiles — 全集现算', () => {
     // titler 与 bot 门控段档案无宿主参数依赖：缺 widget/wiki 根也在
     //（模型走 shuvix-model 通用链路，内置不声明）
     expect(buildBuiltinProfiles({}).map((a) => a.name)).toEqual([
-      'default',
+      'work',
       'chat',
       'notebook',
       'coding',
@@ -209,7 +210,7 @@ describe('buildBuiltinProfiles — 全集现算', () => {
 
   it('每个 spec 的三份语言文件都能解析成合法档案', () => {
     for (const spec of BUILTIN_PROFILE_SPECS) {
-      for (const language of ['en', 'zh', 'ja']) {
+      for (const language of LANGS) {
         const built = buildBuiltinProfile(spec, { ...ALL_PARAMS, language })
         expect(built, `${spec.name}.${language}`).not.toBeNull()
         expect(built!.name, `${spec.name}.${language}`).toBe(spec.name)
@@ -251,12 +252,12 @@ describe('buildBuiltinProfiles — 全集现算', () => {
   })
 })
 
-describe('default 档案钉板(主会话默认工具集/环境段的唯一事实源)', () => {
+describe('work 档案钉板(项目会话基座：工具集/环境段的唯一事实源)', () => {
   it('tools 按桌面注册序列出 + Agent/session 居末;git/preview 不进任何基座', () => {
     // 顺序与 apps/desktop/src/main/tools/allTools.ts 的注册序一致(bash→read→write→edit→ask→
     // browser→ls→grep→glob→ssh→database)——LLM 所见工具序列的稳定性依赖它;
     // 工具注册表导入链含 electron/native 模块无法在测试内加载,故硬编码钉住,改动需同步两侧。
-    const built = profile(DEFAULT_PROFILE_NAME)
+    const built = profile(WORK_PROFILE_NAME)
     // session 在末尾：它是「管自己这条会话」的工具（改标题 / 开子会话并驱动它），
     // 与前面那些「对外干活」的工具不同类，所以列在 agent 之后
     expect(built.tools).toEqual([
@@ -275,9 +276,9 @@ describe('default 档案钉板(主会话默认工具集/环境段的唯一事实
       'session'
     ])
     // git/preview 不进任何基座（见 allTools.ts 的注释：主 Agent 默认无，用户可覆盖
-    // default.md 加入，子代理经白名单解析不受默认集限制）
+    // work.md 加入，子代理经白名单解析不受默认集限制）
     for (const gone of ['git', 'preview']) {
-      expect(built.tools, `default 不应持有 ${gone}`).not.toContain(gone)
+      expect(built.tools, `work 不应持有 ${gone}`).not.toContain(gone)
     }
     // 环境/工作区模板已内化进 body（{{shuvix:*}} 占位符,createAgent 时替换）
     for (const v of [
@@ -317,11 +318,21 @@ describe('default 档案钉板(主会话默认工具集/环境段的唯一事实
       expect(built.projectAwareness, spec.name).toBe(awarenessOn)
     }
   })
+
+  it('三语 description 都点名 "work"、不再提 "default"（覆盖提示指向正确的文件名）', () => {
+    // description 是设置页里用户看到的那句「创建名为 X 的自定义智能体即可覆盖」——
+    // 改名后它若还指着 default.md，用户照做就会得到一份不起作用的用户档案
+    for (const language of LANGS) {
+      const desc = profile(WORK_PROFILE_NAME, language).description
+      expect(desc, `work.${language}`).toContain('work')
+      expect(desc, `work.${language}`).not.toContain('default')
+    }
+  })
 })
 
 describe('chat 档案钉板(不归属项目的会话的创建基座)', () => {
-  it('工具面与 default **逐字相等** —— 两条路线的全部差异在正文，不在工具', () => {
-    // 与 default / coding 的清单同一惯例：硬编码钉住（工具注册表导入链含 electron/native
+  it('工具面与 work **逐字相等** —— 两条路线的全部差异在正文，不在工具', () => {
+    // 与 work / coding 的清单同一惯例：硬编码钉住（工具注册表导入链含 electron/native
     // 模块，测试内加载不了），改动需同步 apps/desktop/src/main/tools/allTools.ts
     expect(profile(CHAT_PROFILE_NAME).tools).toEqual([
       'bash',
@@ -339,30 +350,14 @@ describe('chat 档案钉板(不归属项目的会话的创建基座)', () => {
       'session'
     ])
     // 这是裁决过的形态：两个基座工具面完全相同，「自己干活 / 把活交给 coding 子会话」
-    // 全靠正文表达（下面那条钉的就是正文差异）。谁想靠收窄 default 的工具来"强制"它
+    // 全靠正文表达（下面那条钉的就是正文差异）。谁想靠收窄 work 的工具来"强制"它
     // 派活，会在这里撞红 —— 那等于让主会话连验收都做不了。
-    expect(profile(CHAT_PROFILE_NAME).tools).toEqual(profile(DEFAULT_PROFILE_NAME).tools)
-  })
-
-  it('是基座档案，且与 default 同为可切换基座（notebook 不是）', () => {
-    // SWITCHABLE_BASE_PROFILE_NAMES 是四处准入（选择器名单 / `/<agentName>` 切换 /
-    // 新会话默认档案 / 扩展端同三处）唯一的判据，往里多塞一个名字不该悄无声息
-    expect(BASE_PROFILE_NAMES.has(CHAT_PROFILE_NAME)).toBe(true)
-    expect(profile(CHAT_PROFILE_NAME).sessionAwareness).toBe(true)
-
-    expect([...SWITCHABLE_BASE_PROFILE_NAMES].sort()).toEqual(
-      [DEFAULT_PROFILE_NAME, CHAT_PROFILE_NAME].sort()
-    )
-    expect(SWITCHABLE_BASE_PROFILE_NAMES.has(NOTEBOOK_PROFILE_NAME)).toBe(false)
-    // 可切换基座必须先是基座 —— 两个集合的包含关系是准入表达式成立的前提
-    for (const name of SWITCHABLE_BASE_PROFILE_NAMES) {
-      expect(BASE_PROFILE_NAMES.has(name), `${name} 应同时是基座档案`).toBe(true)
-    }
+    expect(profile(CHAT_PROFILE_NAME).tools).toEqual(profile(WORK_PROFILE_NAME).tools)
   })
 
   it('三语 body 都不含任何派发/子会话引导 —— 拆分的唯一产品差异就是这段文案', () => {
-    // 工具面只差三个检索工具，「自己干活 / 把活交出去」全靠正文表达，而文案没有类型。
-    // 既有用例只断言了 default 点名 coding，没有一条断言 chat **不**点名它。
+    // 工具面逐字相同，「自己干活 / 把活交出去」全靠正文表达，而文案没有类型。
+    // 既有用例只断言了 work 点名 coding，没有一条断言 chat **不**点名它。
     const HANDOFF = [
       'coding',
       'create-sub-session',
@@ -372,21 +367,68 @@ describe('chat 档案钉板(不归属项目的会话的创建基座)', () => {
       '派发',
       'ディスパッチ'
     ]
-    for (const language of ['en', 'zh', 'ja']) {
+    for (const language of LANGS) {
       const body = profile(CHAT_PROFILE_NAME, language).systemPrompt
       for (const term of HANDOFF) {
         expect(body, `chat.${language} 不应出现 ${term}`).not.toContain(term)
       }
-      // 对照组：同一批词在 default 里是必须有的（否则这条用例可能只是在测一份空 body）
-      const def = profile(DEFAULT_PROFILE_NAME, language).systemPrompt
+      // 对照组：同一批词在 work 里是必须有的（否则这条用例可能只是在测一份空 body）
+      const work = profile(WORK_PROFILE_NAME, language).systemPrompt
       for (const term of ['`coding`', 'create-sub-session', 'wait-for-sub-sessions']) {
-        expect(def, `default.${language} 需点名 ${term}`).toContain(term)
+        expect(work, `work.${language} 需点名 ${term}`).toContain(term)
       }
     }
   })
 })
 
-describe('default body 与 session 工具的动作枚举', () => {
+/**
+ * 基座名单钉板 —— 会话根 Agent 的档案**由形态推导**（项目 work / 无项目 chat / 笔记本
+ * notebook），三者都不可被点名：不进派发名单，也不可作子会话的 `agent_profile`。
+ * 曾经存在的「可切换基座名单」（SWITCHABLE_BASE_PROFILE_NAMES）与旧基座名 `default`
+ * 已随会话内切换一并下线，这里钉住导出面，防它们悄悄复活。
+ */
+describe('基座名单钉板', () => {
+  it('恰为 chat / notebook / work 三个名字', () => {
+    expect([...BASE_PROFILE_NAMES].sort()).toEqual(['chat', 'notebook', 'work'])
+    expect(BASE_PROFILE_NAMES.has(WORK_PROFILE_NAME)).toBe(true)
+    expect(BASE_PROFILE_NAMES.has(CHAT_PROFILE_NAME)).toBe(true)
+    expect(BASE_PROFILE_NAMES.has(NOTEBOOK_PROFILE_NAME)).toBe(true)
+  })
+
+  it('三基座 × 三语都不声明会话感知 —— 它们从不被点名，这个标志对它们没有意义', () => {
+    // shuvix-session-awareness 如今只有一个含义：父级能否用 agent_profile 点名它作子会话档案。
+    // 基座是形态推导出来的，点名一个基座只会得到说不清的组合，所以三份 md 都不写这一行
+    for (const name of BASE_PROFILE_NAMES) {
+      for (const language of LANGS) {
+        expect(profile(name, language).sessionAwareness, `${name}.${language}`).toBe(false)
+      }
+    }
+  })
+
+  it("内置 spec 名单里没有旧基座名 'default'，导出面上没有切换名单与旧名常量", () => {
+    expect(BUILTIN_PROFILE_SPECS.map((s) => s.name)).not.toContain('default')
+    const exported = Object.keys(builtinAgentsModule)
+    for (const gone of ['SWITCHABLE_BASE_PROFILE_NAMES', 'DEFAULT_PROFILE_NAME', 'DEFAULT_SPEC']) {
+      expect(exported, `${gone} 不该再导出`).not.toContain(gone)
+    }
+    // 正控制组：新名字在
+    expect(exported).toContain('WORK_PROFILE_NAME')
+    expect(exported).toContain('WORK_SPEC')
+  })
+
+  it('可作子会话档案的内置全集恰为 browser / coding / explore / visualization / widget / wiki（三语一致）', () => {
+    // 内置翻一个这个标志，就改变了 agent_profile 的可用集 —— 与派发面无关，只管子会话
+    const EXPECTED = ['browser', 'coding', 'explore', 'visualization', 'widget', 'wiki']
+    for (const language of LANGS) {
+      const aware = BUILTIN_PROFILE_SPECS.filter(
+        (spec) => buildBuiltinProfile(spec, { ...ALL_PARAMS, language })!.sessionAwareness
+      ).map((spec) => spec.name)
+      expect(aware.sort(), language).toEqual(EXPECTED)
+    }
+  })
+})
+
+describe('work body 与 session 工具的动作枚举', () => {
   it('三语都逐字点名三个动作与两个参数名（改名后三份 md 会静默失效）', () => {
     // 提示词里的动作名是模型唯一的调用依据 —— 硬编码钉住，事实源在
     // apps/desktop/src/main/tools/session.ts 的 ACTIONS 与参数 schema
@@ -398,17 +440,17 @@ describe('default body 与 session 工具的动作枚举', () => {
       'agent_profile',
       'run_in_background'
     ]
-    for (const language of ['en', 'zh', 'ja']) {
-      const body = profile(DEFAULT_PROFILE_NAME, language).systemPrompt
+    for (const language of LANGS) {
+      const body = profile(WORK_PROFILE_NAME, language).systemPrompt
       for (const anchor of ANCHORS) {
-        expect(body, `default.${language} 需含 ${anchor}`).toContain(anchor)
+        expect(body, `work.${language} 需含 ${anchor}`).toContain(anchor)
       }
     }
   })
 })
 
-describe('coding 档案钉板(从 default 拆出的工程人格)', () => {
-  it('工具面与两个基座**逐字相同** —— 三个可切换档案共用一套工具，分工全在正文', () => {
+describe('coding 档案钉板(从 work 拆出的工程人格)', () => {
+  it('工具面与两个基座**逐字相同** —— 三份档案共用一套工具，分工全在正文', () => {
     const built = profile('coding')
     expect(built.tools).toEqual([
       'bash',
@@ -425,31 +467,48 @@ describe('coding 档案钉板(从 default 拆出的工程人格)', () => {
       'agent',
       'session'
     ])
-    // 拆分之初 coding 的卖点之一是「default 让出的 ssh/database 在这里」，那条理由已经
-    // 作废：收窄工具从来不是表达分工的手段（收窄 default 只会让它拿 bash 绕一圈做同一件
-    // 事）。现在 default / chat / coding 三份清单逐字相同，区别全部由正文承担 —— 谁想
+    // 拆分之初 coding 的卖点之一是「基座让出的 ssh/database 在这里」，那条理由已经
+    // 作废：收窄工具从来不是表达分工的手段（收窄 work 只会让它拿 bash 绕一圈做同一件
+    // 事）。现在 work / chat / coding 三份清单逐字相同，区别全部由正文承担 —— 谁想
     // 靠改工具面重新制造分工，会在这里撞红。
-    expect(built.tools).toEqual(profile(DEFAULT_PROFILE_NAME).tools)
+    expect(built.tools).toEqual(profile(WORK_PROFILE_NAME).tools)
     expect(built.tools).toEqual(profile(CHAT_PROFILE_NAME).tools)
   })
 
-  it('声明会话感知（可 /coding 切换），且不是基座档案', () => {
+  it('可作 agent_profile（声明会话感知），且不是基座档案', () => {
+    // coding 是子会话的档案（work 开 `coding` 子会话把活交过去），不是用户切换的目标：
+    // 它必须过 pinAgentProfile 的两道门 —— 不是基座名、声明了会话感知
     expect(BASE_PROFILE_NAMES.has('coding')).toBe(false)
     expect(profile('coding').sessionAwareness).toBe(true)
   })
 
-  it('三语 default 都点名 coding —— 切换入口只能从提示词被用户知晓', () => {
-    for (const language of ['en', 'zh', 'ja']) {
-      expect(profile(DEFAULT_PROFILE_NAME, language).systemPrompt, `default.${language}`).toContain(
+  it('三语 description 都指向 work 与子会话、不再提 /coding 切换', () => {
+    // 描述是设置页里对这份档案的定位说明：会话内切换已下线，「/coding」这条入口不存在了
+    const SUB_SESSION_WORD: Record<(typeof LANGS)[number], string> = {
+      en: 'sub-session',
+      zh: '子会话',
+      ja: 'サブセッション'
+    }
+    for (const language of LANGS) {
+      const desc = profile('coding', language).description
+      expect(desc, `coding.${language}`).not.toContain('/coding')
+      expect(desc, `coding.${language}`).toContain('work')
+      expect(desc, `coding.${language}`).toContain(SUB_SESSION_WORD[language])
+    }
+  })
+
+  it('三语 work 都点名 coding —— 子会话该用哪份档案，只能从提示词被模型知晓', () => {
+    for (const language of LANGS) {
+      expect(profile(WORK_PROFILE_NAME, language).systemPrompt, `work.${language}`).toContain(
         '`coding`'
       )
     }
   })
 
   it('两侧派发清单各按场景裁剪（派发工具不枚举 agent 名，名字只能来自提示词）', () => {
-    for (const language of ['en', 'zh', 'ja']) {
+    for (const language of LANGS) {
       const coding = profile('coding', language).systemPrompt
-      const def = profile(DEFAULT_PROFILE_NAME, language).systemPrompt
+      const work = profile(WORK_PROFILE_NAME, language).systemPrompt
       // coding：工程场景只要广域调研 + 作图
       for (const named of ['explore', 'visualization']) {
         expect(coding, `coding.${language} 需点名 ${named}`).toContain(named)
@@ -457,11 +516,11 @@ describe('coding 档案钉板(从 default 拆出的工程人格)', () => {
       for (const gone of ['widget', 'wiki-writer']) {
         expect(coding, `coding.${language} 不应点名 ${gone}`).not.toContain(gone)
       }
-      // default：通用场景要作图/小工具/知识库，广域调研留给 /coding
+      // work：通用场景要作图/小工具/知识库，广域调研留给 coding 子会话
       for (const named of ['visualization', 'widget', 'wiki-writer']) {
-        expect(def, `default.${language} 需点名 ${named}`).toContain(named)
+        expect(work, `work.${language} 需点名 ${named}`).toContain(named)
       }
-      expect(def, `default.${language} 不应点名 explore`).not.toContain('explore')
+      expect(work, `work.${language} 不应点名 explore`).not.toContain('explore')
     }
   })
 })
@@ -471,7 +530,7 @@ describe('titler 档案钉板（auto-title 的执行侧）', () => {
     expect(profile('titler').tools).toEqual(['session'])
   })
 
-  it('不声明会话感知：只可派发、不可 /titler 切换，也不是基座档案', () => {
+  it('不声明会话感知：只可派发、不可作子会话档案，也不是基座档案', () => {
     expect(profile('titler').sessionAwareness).toBe(false)
     expect(BASE_PROFILE_NAMES.has('titler')).toBe(false)
   })
@@ -481,7 +540,7 @@ describe('titler 档案钉板（auto-title 的执行侧）', () => {
   })
 
   it('三语 body 都含 session / next / set-title 与 60（工具协议与长度上限不因翻译走样）', () => {
-    for (const language of ['en', 'zh', 'ja']) {
+    for (const language of LANGS) {
       const body = profile('titler', language).systemPrompt
       for (const anchor of ['`session`', 'next', 'set-title', '60']) {
         expect(body, `titler.${language} 需含 ${anchor}`).toContain(anchor)
@@ -500,16 +559,16 @@ describe('notebook 档案钉板(笔记本会话根 Agent 的基座)', () => {
   })
 
   it('body 引用 notebookPath 占位符 —— 端在渲染时替换为当前笔记路径', () => {
-    for (const language of ['en', 'zh', 'ja']) {
+    for (const language of LANGS) {
       expect(profile(NOTEBOOK_PROFILE_NAME, language).systemPrompt).toContain(
         '{{shuvix:notebookPath}}'
       )
     }
   })
 
-  it('是基座档案,不进派发/切换名单', () => {
+  it('是基座档案,不进派发名单、不可作 agent_profile', () => {
     expect(BASE_PROFILE_NAMES.has(NOTEBOOK_PROFILE_NAME)).toBe(true)
-    expect(BASE_PROFILE_NAMES.has(DEFAULT_PROFILE_NAME)).toBe(true)
+    expect(BASE_PROFILE_NAMES.has(WORK_PROFILE_NAME)).toBe(true)
   })
 })
 
@@ -533,9 +592,6 @@ describe('notebook 档案钉板(笔记本会话根 Agent 的基座)', () => {
  *  - AD-3 每份内置都齐三门语言：sources 键恰 {en, ja, zh}
  */
 describe('内置档案 —— 三语言交付面（逐份 × 逐语言）', () => {
-  /** 硬编码：这就是本节要守的清单本身，绝不从 spec.sources 反推（见上方注释） */
-  const LANGS = ['en', 'zh', 'ja'] as const
-
   /** 逐份构建并断非 null → {内置名: displayName} */
   const displayNames = (language: string): Record<string, string> =>
     Object.fromEntries(

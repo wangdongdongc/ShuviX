@@ -1,13 +1,12 @@
 ---
 shuvix: agent v1
 shuvix-builtin: true
-name: default
-description: プロジェクトエージェント——新しいプロジェクトセッションの基盤プロファイル。"default" という名前のカスタムエージェントで上書きできます。
+name: work
+description: ワークエージェント——すべてのプロジェクトセッションの基盤プロファイル。"work" という名前のカスタムエージェントで上書きできます。
 shuvix-tools: bash, read, write, edit, ask, browser, ls, grep, glob, ssh, database, agent
-shuvix-displayName: デフォルト
+shuvix-displayName: ワーク
 shuvix-instruction-files: AGENTS.md, CLAUDE.md
 shuvix-project-awareness: true
-shuvix-session-awareness: true
 ---
 
 ## アイデンティティ

@@ -265,23 +265,21 @@ class SubSessionRunner {
     const session = sessionService.create({ parentId, ...(title ? { title } : {}) })
     if (title) sessionService.updateTitle(session.id, title, 'user')
 
-    // 档案：父级点名则用它（准入与 /<agent> 切换同源 —— 未声明会话感知的档案照样被拒），
-    // 否则跟随父会话当前档案。与 `create` 刚按会话形态落下的默认档案相同就不必再切一次
-    // （空切一次只是白走一遍失效 + 广播）。切了的那次会把 mcp:/skill: 勾选替换成档案声明的
-    // 那套，紧接着的 seedRunConfig 负责在档案没声明时把父会话那套补回去
-    const stamped = sessionDao.pickSettings(session.id, ['agentProfile'])?.agentProfile
-    const profileName =
-      params.agentProfile?.trim() || sessionService.resolveAgentProfileName(parentId)
+    // 档案：父级点名才钉（准入见 sessionService.pinAgentProfile —— 基座与未声明会话感知的
+    // 档案都被拒），不点名就什么也不写：子会话与父会话同一形态（projectId 恒随父），
+    // resolveAgentProfileName 推导出的基座天然一致。钉了的那次会把 mcp:/skill: 勾选替换成
+    // 档案声明的那套，紧接着的 seedRunConfig 负责在档案没声明时把父会话那套补回去
+    const requested = params.agentProfile?.trim()
     let declared: { model?: SubAgentModelConfig; tools: string[] } | undefined
-    if (profileName && profileName !== stamped) {
-      const applied = await sessionService.updateAgentProfile(session.id, profileName)
+    if (requested) {
+      const applied = await sessionService.pinAgentProfile(session.id, requested)
       if (applied.success) declared = applied.applied
-      // 档案不合法不该让整个创建失败：会话已经建好且可用（回落 default），记日志即可
-      else log.warn(`子会话 ${session.id} 档案 "${profileName}" 未生效: ${applied.error}`)
+      // 档案不合法不该让整个创建失败：会话已经建好且可用（落在自己形态的基座上），记日志即可
+      else log.warn(`子会话 ${session.id} 档案 "${requested}" 未生效: ${applied.error}`)
     }
     await this.seedRunConfig(parentId, session.id, declared)
 
-    log.info(`create sub-session ${session.id} parent=${parentId} profile=${profileName ?? '-'}`)
+    log.info(`create sub-session ${session.id} parent=${parentId} profile=${requested ?? '-'}`)
     return { id: session.id, title: sessionDao.pick(session.id, ['title'])?.title ?? session.title }
   }
 
@@ -290,13 +288,13 @@ class SubSessionRunner {
    *
    * 抄的是**解析后**的值（`resolveRunConfig`）而不是「树上显式改过的那些」：父会话大多数
    * 键根本没显式改过，只抄显式值等于什么也没继承 —— 而「回落默认」在子会话身上并不等价，
-   * 档案切换那一步（`updateAgentProfile`）已经把工具勾选显式写成了档案声明的那套。
+   * 钉档案那一步（`pinAgentProfile`）已经把工具勾选显式写成了档案声明的那套。
    *
    * `declared` 是档案声明的那部分（档案切换生效时才有），它压过继承 —— 更具体的意图。
    * 但**空的工具声明不算意见**：内置 coding / explore 之流的 `shuvix-tools` 只列内置工具，
    * 按「完整声明」解读就等于把项目的 MCP 与 skill 从每一条子会话上摘掉，而那从来不是
-   * 档案作者在那一行里表达的东西（与 `/<agent>` 切换的口径刻意不同：那是用户在一条已经
-   * 跑着的会话上换人格，这里是给一条空会话铺开父级的工作环境）。
+   * 档案作者在那一行里表达的东西（钉档案那一步按「完整声明」替换，是为了让真声明了
+   * mcp:/skill: 的档案说了算；这里则是给一条空会话铺开父级的工作环境）。
    */
   private async seedRunConfig(
     parentId: string,

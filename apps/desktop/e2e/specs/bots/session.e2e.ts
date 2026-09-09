@@ -5,7 +5,7 @@
  *     照常成功（打开会话不该报错）；
  *   - **没有开场白**：`session.create` resolve 时会话里零条消息；
  *   - 发消息只落一条 user 消息、先广播 user_message，随后绑定的 bot 的管线起跑；
- *   - 档案切换、引导/追加/下一轮对它一律拒绝或安静早退；
+ *   - settings 里没有 agentProfile 键（无根即无档案）；引导/追加/下一轮对它一律安静早退；
  *   - 署名自带 displayName：bot md 被删或改名，历史消息的署名不变；
  *   - 清空 / 回退 / 删除三处的 `abortSession` 会师点不抛；
  *   - `session.setBot`：只对聊天会话（含群聊时代遗留、只有 `bots` 名单的未绑定会话）生效，
@@ -78,14 +78,6 @@ const getSettings = (sid: string): Promise<Record<string, unknown> | undefined> 
 /** 经 IPC 建一条**普通**会话（params 原样透传，测 `bot` 空白 / 缺席的形态判定） */
 const createPlainSession = (params: Record<string, unknown>): Promise<string> =>
   app.main.eval(`window.api.session.create(${JSON.stringify(params)}).then((s) => s.id)`)
-
-const updateAgentProfile = (
-  sid: string,
-  name: string
-): Promise<{ success: boolean; error?: string }> =>
-  app.main.eval(
-    `window.api.session.updateAgentProfile({ id: ${JSON.stringify(sid)}, name: ${JSON.stringify(name)} })`
-  )
 
 const setBot = (sid: string, bot: string): Promise<{ success: boolean; error?: string }> =>
   app.main.eval(
@@ -175,15 +167,13 @@ describe('聊天会话 = 无根会话', () => {
     expect(await getInfo(sid)).toBeNull()
   })
 
-  it('updateAgentProfile 被拒且会话设置分毫不动', async () => {
+  it('聊天会话的 settings 没有 agentProfile 键（无根即无档案；档案切换的 IPC 面已不存在）', async () => {
     const sid = await createBotSession(app.main, { bot: 'e2e-alpha' })
-    const res = await updateAgentProfile(sid, 'coding')
-    expect(res.success).toBe(false)
-    expect(res.error).toMatch(/no root agent/i)
-    expect((await getSettings(sid))?.agentProfile).toBeUndefined()
+    const settings = (await getSettings(sid))!
+    expect('agentProfile' in settings).toBe(false)
   })
 
-  it('bot 空白或缺席时创建出来的是普通会话（不写键、不劫持根 Agent）', async () => {
+  it('bot 空白或缺席时创建出来的是普通会话（不写键、不劫持根 Agent）：根 Agent 跑在 chat 基座上', async () => {
     // 空串 / 空白视同没给：形态判定只认一个非空的名字，别让 `'   '` 造出一个无根却
     // 没人应答的会话
     for (const params of [{ bot: '   ' }, {}]) {
@@ -191,8 +181,10 @@ describe('聊天会话 = 无根会话', () => {
       const settings = await getSettings(sid)
       expect(settings && 'bot' in settings).toBe(false)
 
-      expect(await getInfo(sid, true)).not.toBeNull()
-      expect((await updateAgentProfile(sid, 'coding')).success).toBe(true)
+      const info = (await getInfo(sid, true)) as { systemPrompt: string } | null
+      expect(info).not.toBeNull()
+      // 无项目会话的基座是 chat（自己把活干完，没有交给子会话的那一节）
+      expect(info!.systemPrompt).not.toContain('Handing work to a sub-session')
     }
   })
 })
@@ -343,11 +335,10 @@ describe('setBot —— 绑定的 IPC 语义（B7）', () => {
     expect(await getInfo(plain, true)).not.toBeNull()
   })
 
-  it('B7c 群聊时代遗留的会话（只有 bots 名单）：无根、不可切档案；setBot 写 bot，遗留名单不动', async () => {
+  it('B7c 群聊时代遗留的会话（只有 bots 名单）：无根；setBot 写 bot，遗留名单不动', async () => {
     // 遗留会话没有做迁移：带着 `bots` 就仍是聊天会话，只是没绑定 —— setBot 是它唯一的出路
     const sid = await createLegacyBotSession(app, { bots: ['e2e-alpha'], title: 'B7-legacy' })
     expect(await getInfo(sid)).toBeNull()
-    expect((await updateAgentProfile(sid, 'coding')).success).toBe(false)
 
     expect(await setBot(sid, 'e2e-alpha')).toEqual({ success: true })
     const settings = (await getSettings(sid))!

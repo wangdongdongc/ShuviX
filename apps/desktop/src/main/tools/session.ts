@@ -65,7 +65,7 @@ export const SessionParamsSchema = Type.Object({
   agent_profile: Type.Optional(
     Type.String({
       description:
-        'For "create-sub-session": the agent profile the sub-session runs as (e.g. "coding"). Omit to use the same profile as this session.'
+        'For "create-sub-session": the agent profile the sub-session runs as (e.g. "coding"). Omit to run it on the same base profile as this session.'
     })
   ),
   sub_session_id: Type.Optional(

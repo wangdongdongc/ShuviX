@@ -28,7 +28,7 @@ describe('内置基座 body 的变量替换', () => {
     expect(sp).toBe(sp.trim())
   })
 
-  it('项目会话（default 基座）：workingDirectory=项目路径、git 检测生效', async () => {
+  it('项目会话（work 基座）：workingDirectory=项目路径、git 检测生效', async () => {
     const projDir = join(app.home, 'proj-vars')
     mkdirSync(join(projDir, '.git'), { recursive: true })
     const project = await createProject(app.main, { name: 'VarsProj', path: projDir })
@@ -41,7 +41,7 @@ describe('内置基座 body 的变量替换', () => {
 
 describe('用户档案里的占位符', () => {
   it('已知变量替换；未知占位符原样保留（typo 可见）', async () => {
-    // 覆盖 chat：这条断言用的是**无项目**会话，它的基座是 chat 而非 default
+    // 覆盖 chat：这条断言用的是**无项目**会话，它的基座是 chat 而非 work
     writeAgentMd(app, 'chat', {
       description: 'ovr',
       tools: 'read',

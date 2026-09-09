@@ -2,7 +2,7 @@
 shuvix: agent v1
 shuvix-builtin: true
 name: coding
-description: The software engineering agent — the full toolchain (shell, SSH, database, browser) plus the working discipline for multi-file code work. Switch a session to it with /coding.
+description: The software engineering agent — the full toolchain (shell, SSH, database, browser) plus the working discipline for multi-file code work. A `work` session runs it as a `coding` sub-session.
 shuvix-tools: bash, read, write, edit, ask, browser, ls, grep, glob, ssh, database, agent, session
 shuvix-displayName: Coding
 shuvix-instruction-files: AGENTS.md, CLAUDE.md

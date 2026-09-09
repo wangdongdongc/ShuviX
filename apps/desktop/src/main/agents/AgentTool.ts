@@ -24,9 +24,9 @@ import { agentManager } from './AgentManager'
 import { registerBuiltinTool } from '../services/toolRegistry'
 
 /**
- * 派发面注册表：两个基座档案（default 主会话 / notebook 笔记本）不进错误提示的可用名
- * 列表 —— 报出来会诱导 LLM 拿基座档案当一次性任务 agent 使（default 是主会话的人格、
- * notebook 是笔记本的人格，都不是为一次性任务写的；论工具清单 default 反而比 coding 窄）。
+ * 派发面注册表：三个基座档案（work 项目会话 / chat 无项目会话 / notebook 笔记本）不进错误
+ * 提示的可用名列表 —— 报出来会诱导 LLM 拿基座档案当一次性任务 agent 使（它们各是某种会话
+ * 形态的人格，不是为一次性任务写的；论工具清单它们与 coding 逐字相同，分工全在正文）。
  * 显式按名 get 仍可解析：用户在自己的系统提示词里点名某个基座档案属显式意图，不在这里拦。
  */
 const dispatchRegistry: SubAgentRegistry = {

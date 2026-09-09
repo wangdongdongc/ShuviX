@@ -661,7 +661,7 @@ describe('DP —— 一次 invoke 带了什么', () => {
   it('DP-1 input 恰 bot / agents / session / window / message 五键 —— 没有 occasion，也没有 notes', async () => {
     const file = writeBot('scout', {
       displayName: 'Scout',
-      agents: { intent: 'bot-intent', task: 'default' }
+      agents: { intent: 'bot-intent', task: 'work' }
     })
     seedSession('scout')
     await prompt('第一句')
@@ -678,7 +678,7 @@ describe('DP —— 一次 invoke 带了什么', () => {
       file
     })
     // 槽位表原样：宿主不补缺省行
-    expect(req.input.agents).toEqual({ intent: 'bot-intent', task: 'default' })
+    expect(req.input.agents).toEqual({ intent: 'bot-intent', task: 'work' })
     // 一对一：session 里只有 id —— 没有 directed / members / others 这些群聊时代的键
     expect(req.input.session).toEqual({ id: SID })
     // 窗口截到本条之前 —— 第一条消息的窗口是空的（它自己在 message.text 里）
@@ -689,7 +689,7 @@ describe('DP —— 一次 invoke 带了什么', () => {
 
   it('DP-1b 派发的 workflow 原样取自 md 的 shuvix-bot-pipeline.workflow —— 没有回落到 bot-chat', async () => {
     // 宿主这一层不再有缺省管线：md 说 my-flow 就派 my-flow（在不在注册表是 not-found 那条路的事）
-    writeBot('scout', { pipeline: 'my-flow', agents: { intent: 'bot-intent', task: 'default' } })
+    writeBot('scout', { pipeline: 'my-flow', agents: { intent: 'bot-intent', task: 'work' } })
     seedSession('scout')
     await prompt()
     expect(request().workflow).toBe('my-flow')

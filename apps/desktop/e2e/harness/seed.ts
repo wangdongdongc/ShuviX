@@ -28,7 +28,7 @@ export interface AgentMdSeed {
   projectAwareness?: boolean
   /**
    * shuvix-session-awareness —— **缺省 true**：种子代表「用户自己建的档案」，
-   * 而 GUI 新建的初值就是会话感知开。要测「不声明会话感知的档案选不到 / 切不过去」
+   * 而 GUI 新建的初值就是会话感知开。要测「不声明会话感知的档案不能作 `agent_profile`」
    * 时显式传 false。
    */
   sessionAwareness?: boolean
@@ -65,7 +65,7 @@ export interface BotMdSeed {
   botInput?: Record<string, string | number | boolean>
   /**
    * `shuvix-bot-pipeline.agents` —— 槽位表。**缺省填满内置管线的两个必填槽位**
-   * （intent: bot-intent / task: default），传 `{}` 得到一份没填槽位的 bot
+   * （intent: bot-intent / task: work），传 `{}` 得到一份没填槽位的 bot
    */
   agents?: Record<string, string>
   /** 整个省略 `shuvix-bot-pipeline` 块（测「缺管线即非法」时用） */
@@ -79,7 +79,7 @@ export interface BotMdSeed {
 }
 
 /** 内置管线的两个必填槽位，用内置门控 + 主会话基座档案填满 —— 一个能跑的最小 bot */
-export const DEFAULT_BOT_AGENTS: Record<string, string> = { intent: 'bot-intent', task: 'default' }
+export const DEFAULT_BOT_AGENTS: Record<string, string> = { intent: 'bot-intent', task: 'work' }
 
 /**
  * 写一个 bot 定义文件到隔离实例的 ~/.shuvix/bots/<name>.md。
@@ -633,6 +633,57 @@ export async function createLegacyBotSession(
   ) {
     throw new Error(`legacy rewrite did not land: settings=${JSON.stringify(settings)}`)
   }
+  return sid
+}
+
+/**
+ * 绕过 API 直接往会话行的 settings 里写 `agentProfile`（sqlite3 直写，手法同 createLegacyBotSession）。
+ *
+ * 今天唯一会写这个键的入口是 session 工具 `create-sub-session` 的 `agent_profile`（经
+ * sessionService.pinAgentProfile），它没有 IPC 面；「根会话残留的戳被忽略」「子会话的戳生效」
+ * 这两类断言都需要一条**带戳但没经过 pin** 的会话，只能这样造。
+ *
+ * 主进程不缓存会话行（写完即生效），但运行时是懒建的：戳要写在首次
+ * `agent.getInfo(sid, { ensure: true })` 之前，或写完后 `message.clear(sid)` 让它失效重建。
+ */
+export async function stampAgentProfile(app: E2EApp, sid: string, name: string): Promise<void> {
+  const dbPath = join(app.home, 'userdata', 'data', 'shuvix.db')
+  const nameLit = name.replace(/'/g, "''")
+  const idLit = sid.replace(/'/g, "''")
+  execFileSync('sqlite3', [
+    '-cmd',
+    '.timeout 3000',
+    dbPath,
+    `UPDATE sessions SET settings = json_set(settings, '$.agentProfile', '${nameLit}') WHERE id = '${idLit}'`
+  ])
+  const settings = await app.main.eval<Record<string, unknown> | undefined>(
+    `window.api.session.getById(${JSON.stringify(sid)}).then((s) => s && s.settings)`
+  )
+  if (settings?.agentProfile !== name) {
+    throw new Error(`agentProfile stamp did not land: settings=${JSON.stringify(settings)}`)
+  }
+}
+
+/**
+ * 建一条**带戳的子会话**：经 IPC `session.create({ parentId })` 直建（projectId 恒随父），
+ * 再 sqlite 直写 `settings.agentProfile`。等价于 session 工具 `create-sub-session` 带
+ * `agent_profile` 落库之后的形态，但**不经 pinAgentProfile** —— 准入与种子（模型 /
+ * mcp:/skill: 替换）那半截只能在 sessions/ 区用假提供商脚本化的工具调用打；这里只要一条
+ * 「带戳的子会话」给运行时去推导（systemPrompt / 内置工具白名单随戳走）。
+ *
+ * 返回子会话 id。**不 ensure**：调用方决定何时建运行时（戳已在 create 之后落下）。
+ */
+export async function createPinnedChildSession(
+  app: E2EApp,
+  opts: { parentSid: string; agentProfile: string; title?: string }
+): Promise<string> {
+  const sid = await app.main.eval<string>(
+    `window.api.session.create(${JSON.stringify({
+      parentId: opts.parentSid,
+      title: opts.title ?? `pinned:${opts.agentProfile}`
+    })}).then((s) => s.id)`
+  )
+  await stampAgentProfile(app, sid, opts.agentProfile)
   return sid
 }
 

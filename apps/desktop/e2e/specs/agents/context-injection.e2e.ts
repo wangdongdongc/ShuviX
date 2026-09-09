@@ -3,7 +3,9 @@
  * 不落独立消息、环境变量零泄漏、换一份指令文件清单经失效重建生效。
  *
  * 「读哪个指令文件」由 agent 档案的 `shuvix-instruction-files` 清单决定（顺序即优先级），
- * 不再有会话级单选 —— 故换文件 = 换档案。
+ * 不再有会话级单选 —— 故换文件 = 换档案。根会话的档案由形态推导、不可切换，所以「换档案」
+ * 在这里用**带戳的子会话**表达（seed.ts#createPinnedChildSession）：projectId 恒随父，
+ * 工作目录相同，指令文件的解析一模一样，只有档案（清单）不同。
  */
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -11,6 +13,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { launchApp, type E2EApp } from '../../harness/launch'
 import {
   createAgentSession,
+  createPinnedChildSession,
   createProject,
   promptAndListMessages,
   writeAgentMd
@@ -101,16 +104,18 @@ describe('append 注入', () => {
     expect(all).not.toContain('Project environment variables')
   })
 
-  it('切到只列 CLAUDE.md 的档案 → 失效重建 → 指令文件换成 CLAUDE.md（AGENTS.md 内容消失）', async () => {
-    const res = await app.main.eval<{ success: boolean }>(
-      `window.api.session.updateAgentProfile({ id: ${JSON.stringify(sid)}, name: 'claude-only' })`
-    )
-    expect(res.success).toBe(true)
+  it('钉着只列 CLAUDE.md 档案的子会话（同一工作目录）→ 指令文件换成 CLAUDE.md（AGENTS.md 内容消失）', async () => {
+    // 子会话的 projectId 恒随父：工作目录与父会话相同，同一批文件在盘上，命中只随档案清单变
+    const child = await createPinnedChildSession(app, {
+      parentSid: sid,
+      agentProfile: 'claude-only'
+    })
     const sp = await app.main.eval<string>(
       `window.api.agent
-        .getInfo(${JSON.stringify(sid)}, { ensure: true })
+        .getInfo(${JSON.stringify(child)}, { ensure: true })
         .then((info) => info.systemPrompt)`
     )
+    expect(sp.startsWith('CLAUDE-ONLY BODY.')).toBe(true)
     expect(sp).toContain('<project_instructions file="CLAUDE.md">')
     expect(sp).toContain('CLAUDE RULES CONTENT.')
     expect(sp).not.toContain('AGENT RULES CONTENT.')
@@ -124,17 +129,26 @@ describe('append 注入', () => {
 describe('指令文件清单', () => {
   let sid: string
 
-  /** 切档案 → 失效重建 → 取重建后的完整系统提示词（无 LLM 调用） */
+  /** 在项目会话下钉一条该档案的子会话 → 建运行时 → 取完整系统提示词（无 LLM 调用） */
   const switchTo = async (name: string): Promise<string> => {
-    const res = await app.main.eval<{ success: boolean }>(
-      `window.api.session.updateAgentProfile({ id: ${JSON.stringify(sid)}, name: ${JSON.stringify(name)} })`
-    )
-    expect(res.success, `switch to ${name}`).toBe(true)
-    return app.main.eval<string>(
+    const child = await createPinnedChildSession(app, { parentSid: sid, agentProfile: name })
+    const sp = await app.main.eval<string>(
       `window.api.agent
-        .getInfo(${JSON.stringify(sid)}, { ensure: true })
+        .getInfo(${JSON.stringify(child)}, { ensure: true })
         .then((info) => info.systemPrompt)`
     )
+    // 戳确实生效了（否则下面测的是父形态基座的清单，而它恰好也是 AGENTS.md 优先）
+    expect(
+      sp.startsWith(
+        name === 'subdir-house'
+          ? 'SUBDIR BODY.'
+          : name === 'fallback-chain'
+            ? 'FALLBACK BODY.'
+            : 'PREF BODY.'
+      ),
+      `pinned ${name}`
+    ).toBe(true)
+    return sp
   }
 
   beforeAll(async () => {
@@ -189,38 +203,41 @@ describe('布尔存量档案', () => {
 })
 
 describe('会话级选取项已下线', () => {
-  it('IF-E-6 session IPC 面上不再有 scanInstructionFiles / updateInstructionFile', async () => {
+  it('IF-E-6 session IPC 面上不再有 scanInstructionFiles / updateInstructionFile，也没有档案切换', async () => {
     const keys = await app.main.eval<string[]>('Object.keys(window.api.session)')
     expect(keys).not.toContain('scanInstructionFiles')
     expect(keys).not.toContain('updateInstructionFile')
+    // 会话内切换档案（连同它的选择器列表）随「档案由形态推导」一并下线
+    expect(keys).not.toContain('updateAgentProfile')
+    expect(keys).not.toContain('listAgentProfiles')
     // 面本身还在（不是因为 window.api.session 整个没了才「不含」）
-    expect(keys).toContain('updateAgentProfile')
+    expect(keys).toContain('setBot')
   })
 })
 
 /**
- * 覆盖 default 但**省略** `shuvix-instruction-files` = 不注入。
+ * 覆盖 work 但**省略** `shuvix-instruction-files` = 不注入。
  *
- * 独立 describe + 自清理：这条会往 `~/.shuvix/agents/default.md` 落一份覆盖档案，
- * 它对同实例后续所有新会话都生效，漏删就会把别的用例带成「无端不注入」。
+ * 独立 describe + 自清理：这条会往 `~/.shuvix/agents/work.md` 落一份覆盖档案，
+ * 它对同实例后续所有新项目会话都生效，漏删就会把别的用例带成「无端不注入」。
  */
-describe('覆盖 default 的清单省略语义', () => {
-  const defaultMd = (): string => join(app.agentsDir, 'default.md')
+describe('覆盖 work 的清单省略语义', () => {
+  const workMd = (): string => join(app.agentsDir, 'work.md')
 
   afterAll(() => {
-    rmSync(defaultMd(), { force: true })
+    rmSync(workMd(), { force: true })
   })
 
   it('IF-E-4 省略键 → 新会话零注入；删掉覆盖档案 → 内置清单恢复生效', async () => {
-    writeAgentMd(app, 'default', { tools: 'read', body: 'NO-INJECTION DEFAULT BODY.' })
+    writeAgentMd(app, 'work', { tools: 'read', body: 'NO-INJECTION WORK BODY.' })
 
     const overridden = await createAgentSession(app.main, { projectId, title: 'e2e-no-inject' })
-    expect(overridden.systemPrompt.startsWith('NO-INJECTION DEFAULT BODY.')).toBe(true)
+    expect(overridden.systemPrompt.startsWith('NO-INJECTION WORK BODY.')).toBe(true)
     expect(overridden.systemPrompt).not.toContain('<project_instructions')
     expect(overridden.systemPrompt).not.toContain('AGENT RULES CONTENT.')
 
     const res = await app.main.eval<{ success: boolean }>(
-      `window.api.subAgent.delete({ name: 'default' })`
+      `window.api.subAgent.delete({ name: 'work' })`
     )
     expect(res.success).toBe(true)
 

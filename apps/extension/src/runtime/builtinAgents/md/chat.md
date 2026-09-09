@@ -7,7 +7,6 @@ shuvix-tools: bash, read, write, edit, ask, browser, ls, grep, glob, ssh, databa
 shuvix-displayName: Chat
 shuvix-instruction-files: AGENTS.md, CLAUDE.md
 shuvix-project-awareness: true
-shuvix-session-awareness: true
 ---
 
 ## Identity

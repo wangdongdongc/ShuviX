@@ -281,9 +281,6 @@ const api = {
     /** 获取单个会话（含 workingDirectory） */
     getById: (id: string) => ipcRenderer.invoke('session:getById', id),
     /** 切换会话根 Agent 的档案（`/<agentName>` 斜杠命令） */
-    listAgentProfiles: () => ipcRenderer.invoke('session:listAgentProfiles'),
-    updateAgentProfile: (params: { id: string; name: string }) =>
-      ipcRenderer.invoke('session:updateAgentProfile', params),
     setBot: (params: { id: string; bot: string }) => ipcRenderer.invoke('session:setBot', params),
     markRead: (id: string) => ipcRenderer.invoke('session:markRead', id)
     // 配置变更订阅已并入 events.subscribe（AppEvent 'session.configChanged'）

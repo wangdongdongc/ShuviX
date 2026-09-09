@@ -432,7 +432,7 @@ describe('HF —— 宿主失败落树带 error', () => {
 
   it('A2-B14c 门控回落提示 → metadata.botFailure === true（脱手 .catch 落树，须 waitFor）', async () => {
     // 门控故障按 intent 槽位的 agent 归因（errorStep.agent === agents.intent）：夹具要把槽位填上
-    writeBot('hf-gate', { displayName: 'Gate', agents: { intent: 'bot-intent', task: 'default' } })
+    writeBot('hf-gate', { displayName: 'Gate', agents: { intent: 'bot-intent', task: 'work' } })
     seedSession('hf-gate')
     mocks.invoke.mockImplementation(gateFailed())
     await prompt('一')

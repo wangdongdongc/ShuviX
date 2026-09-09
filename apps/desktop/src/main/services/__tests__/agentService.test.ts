@@ -145,13 +145,13 @@ describe('agentService.getSource —— 原文编辑器的数据源', () => {
   })
 
   it('AS-3 内置回写等价 md：条目数与 getProfile 的 tools 一致（readonly 数组拷贝没截断），不含自述标记', () => {
-    const result = agentService.getSource('default', 'builtin')
+    const result = agentService.getSource('work', 'builtin')
     expect('text' in result).toBe(true)
     const { text } = result as { text: string }
 
     expect(text.split('\n')[1]).toBe('shuvix: agent v1')
     // AgentProfile.tools 是 readonly，serialize 要可变数组 —— 拷贝写漏一个条目在这里现形
-    const profileTools = agentService.getProfile('default')!.tools
+    const profileTools = agentService.getProfile('work')!.tools
     expect(profileTools.length).toBeGreaterThan(0)
     expect(toolCountOf(text)).toBe(profileTools.length)
     expect(text).toContain(`shuvix-tools: ${profileTools.join(', ')}`)
@@ -159,13 +159,13 @@ describe('agentService.getSource —— 原文编辑器的数据源', () => {
     // 序列化键集是固定白名单：内置 md 的自述标记不进副本，复制一份去改不会自称内置
     expect(text).not.toContain('shuvix-builtin')
     // 自身可解析（覆盖副本的初值不能一开局就是坏文件）
-    expect(agentService.getSource('default', 'builtin')).toEqual({ text })
+    expect(agentService.getSource('work', 'builtin')).toEqual({ text })
   })
 
   it('AS-4 内置回写保真：{{shuvix:*}} 会话变量原样留给 createAgent，{{wikiRoot}} 宿主参数已插值', () => {
-    const defaultText = (agentService.getSource('default', 'builtin') as { text: string }).text
+    const workText = (agentService.getSource('work', 'builtin') as { text: string }).text
     // 会话级变量在 createAgent 才替换 —— 副本里必须还是占位符，否则用户拿到的是别人的环境
-    expect(defaultText).toContain('{{shuvix:workingDirectory}}')
+    expect(workText).toContain('{{shuvix:workingDirectory}}')
 
     const wikiText = (agentService.getSource('wiki', 'builtin') as { text: string }).text
     // 宿主参数在构建档案时就地替换 —— 用户看到的是真实路径
@@ -253,17 +253,17 @@ describe('agentService.createAgentSource —— 按原文新建', () => {
   })
 
   it('AS-11 覆盖内置放行：同名用户档案生效，listForSettings 里内置转 overridden', () => {
-    const text = agentMd('default', ['shuvix-tools: read'])
-    expect(agentService.createAgentSource(text)).toEqual({ success: true, name: 'default' })
-    expect(files()).toEqual(['default.md'])
+    const text = agentMd('work', ['shuvix-tools: read'])
+    expect(agentService.createAgentSource(text)).toEqual({ success: true, name: 'work' })
+    expect(files()).toEqual(['work.md'])
 
     // 合并语义：listAll 只剩用户那一份
-    const merged = agentService.listAll().filter((a) => a.name === 'default')
+    const merged = agentService.listAll().filter((a) => a.name === 'work')
     expect(merged).toHaveLength(1)
     expect(merged[0].source).toBe('user')
-    expect(agentService.getProfile('default')!.source).toBe('user')
+    expect(agentService.getProfile('work')!.source).toBe('user')
 
-    const rows = agentService.listForSettings().filter((a) => a.name === 'default')
+    const rows = agentService.listForSettings().filter((a) => a.name === 'work')
     expect(rows).toHaveLength(2)
     expect(rows.find((a) => a.source === 'builtin')!.overridden).toBe(true)
   })
@@ -380,14 +380,14 @@ describe('agentService —— 读时投影与文件名边界', () => {
 })
 
 describe('agentService.getProfile —— 一份写坏的同名用户档案不该把会话堵死', () => {
-  it('AS-20 三个基座名（default / chat / notebook）各写坏一份：仍拿得到内置档案', () => {
+  it('AS-20 三个基座名（work / chat / notebook）各写坏一份：仍拿得到内置档案', () => {
     // 用户手改 ~/.shuvix/agents/chat.md 写出语法错，是完全够得着的操作。它若让
     // getProfile 返回 undefined，无项目会话就整片建不出根 Agent，而项目会话完全正常
     // —— 一个只影响一半会话、且没有任何报错的失败模式。
-    for (const name of ['default', 'chat', 'notebook']) {
+    for (const name of ['work', 'chat', 'notebook']) {
       writeAgentFile(`${name}.md`, INVALID_MD.replace('name: broken', `name: ${name}`))
     }
-    for (const name of ['default', 'chat', 'notebook']) {
+    for (const name of ['work', 'chat', 'notebook']) {
       const profile = agentService.getProfile(name)
       expect(profile, name).toBeDefined()
       expect(profile!.source, name).toBe('builtin')
@@ -401,6 +401,60 @@ describe('agentService.getProfile —— 一份写坏的同名用户档案不该
     writeAgentFile('myprof.md', INVALID_MD.replace('name: broken', 'name: myprof'))
     expect(agentService.getProfile('myprof')).toBeUndefined()
     expect(agentService.getProfile('nope-not-there')).toBeUndefined()
+  })
+
+  it('AS-22 旧基座名 default 已彻底不存在：getProfile 为 undefined，内置名单里没有它，也没有别名', () => {
+    // 项目会话的基座从 default 改名为 work，spec 没有留别名：谁把旧名 spec 留成别名，
+    // 这里会先撞红。三个基座名的兜底（AS-20）也不再覆盖它
+    expect(agentService.getProfile('default')).toBeUndefined()
+    expect(agentService.listAll().some((a) => a.name === 'default')).toBe(false)
+    expect(
+      agentService.listForSettings().some((a) => a.name === 'default' && a.source === 'builtin')
+    ).toBe(false)
+
+    // 一份用户自己写的 default.md 只是一份普通用户档案：没有内置行被它「覆盖」
+    writeAgentFile('default.md', agentMd('default'))
+    const rows = agentService.listForSettings().filter((a) => a.name === 'default')
+    expect(rows.map((r) => r.source)).toEqual(['user'])
+    expect(rows[0].overridden).toBeFalsy()
+  })
+})
+
+/**
+ * `isSessionProfile` —— 子会话钉档案（sessionService.pinAgentProfile）准入的唯一判据：
+ * 基座（work / chat / notebook）恒不算（判名字，不看声明），其余看 `shuvix-session-awareness`。
+ * 用真件：内置全集与「用户覆盖 + 声明」的合并都要穿透真注册表。
+ */
+describe('agentService.isSessionProfile —— 可作子会话档案的判据表', () => {
+  const judge = (name: string): boolean => {
+    const profile = agentService.getProfile(name)
+    expect(profile, name).toBeDefined()
+    return agentService.isSessionProfile(profile!)
+  }
+
+  it('AS-23a 三个基座恒 false —— 哪怕用户覆盖 work.md 还写上会话感知（判名字不判声明）', () => {
+    for (const name of ['work', 'chat', 'notebook']) {
+      expect(judge(name), name).toBe(false)
+    }
+    writeAgentFile('work.md', agentMd('work', ['shuvix-session-awareness: true']))
+    expect(agentService.getProfile('work')!.sessionAwareness).toBe(true)
+    expect(judge('work')).toBe(false)
+  })
+
+  it('AS-23b 内置执行体：声明了会话感知的六个为 true，wiki-writer / titler / bot-intent 为 false', () => {
+    for (const name of ['coding', 'browser', 'explore', 'visualization', 'widget', 'wiki']) {
+      expect(judge(name), name).toBe(true)
+    }
+    for (const name of ['wiki-writer', 'titler', 'bot-intent']) {
+      expect(judge(name), name).toBe(false)
+    }
+  })
+
+  it('AS-23c 用户档案：声明 true → true；缺省 → false（只可派发）', () => {
+    writeAgentFile('aware.md', agentMd('aware', ['shuvix-session-awareness: true']))
+    writeAgentFile('plain.md', agentMd('plain'))
+    expect(judge('aware')).toBe(true)
+    expect(judge('plain')).toBe(false)
   })
 })
 

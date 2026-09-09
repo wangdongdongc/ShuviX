@@ -23,7 +23,7 @@ import type { ChatMessage, InlineToken } from '@shuvix/chat-protocol/types/chatM
 import { resolveTokensForAgent } from '@shuvix/chat-protocol/utils/inlineTokens'
 import { sessionDao } from '../../dao/sessionDao'
 import { projectDao } from '../../dao/projectDao'
-import { DEFAULT_PROFILE_NAME } from '@shuvix/agent-runtime'
+import { WORK_PROFILE_NAME } from '@shuvix/agent-runtime'
 import { agentService } from '../../services/agentService'
 import { chatFrontendRegistry } from './ChatFrontendRegistry'
 
@@ -306,9 +306,12 @@ export class DefaultChatGateway implements ChatGateway {
       const project = session?.projectId ? projectDao.pick(session.projectId, ['path']) : null
       projectPath = project?.path
     }
-    // 新会话的默认工具集 = default 档案的白名单（含用户 ~/.shuvix/agents/default.md 覆盖 ——
-    // 覆盖后新会话真的按它创建，UI 的默认勾选就该跟着走）
-    const defaultProfileTools = agentService.getProfile(DEFAULT_PROFILE_NAME)?.tools ?? []
+    // 默认勾选 = 这条会话根 Agent 档案的白名单：档案由会话形态推导（项目 work / 无项目 chat /
+    // 笔记本 notebook，子会话可能被父级钉成 coding），含用户 ~/.shuvix/agents/<name>.md 覆盖 ——
+    // 覆盖后会话真的按它创建，UI 的默认勾选就该跟着走。没有会话 / 聊天会话（无根）回落 work
+    const profileName =
+      (sessionId ? sessionService.resolveAgentProfileName(sessionId) : null) ?? WORK_PROFILE_NAME
+    const defaultProfileTools = agentService.getProfile(profileName)?.tools ?? []
     /** 内置工具（从注册表读取，system 分组不在 UI 中展示） */
     const builtinTools = getBuiltinToolEntries()
       .filter((e) => e.group !== 'system' && !e.hidden)
@@ -317,7 +320,7 @@ export class DefaultChatGateway implements ChatGateway {
         label: e.getLabel(),
         hint: e.getHint(),
         group: e.group,
-        // wire 契约保留：defaultEnabled 由 default 档案清单派生（注册表字段已退役）
+        // wire 契约保留：defaultEnabled 由会话档案清单派生（注册表字段已退役）
         defaultEnabled: defaultProfileTools.includes(e.name)
       }))
     // 过去的 "plugin 工具" (postgres / python) 已合并进 builtinTools，无需再单独拼接

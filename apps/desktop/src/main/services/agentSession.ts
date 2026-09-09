@@ -1,5 +1,5 @@
 import {
-  DEFAULT_PROFILE_NAME,
+  WORK_PROFILE_NAME,
   clearSessionDecisions,
   resolveInitialThinkingLevel,
   toInProcessAgentType,
@@ -49,17 +49,18 @@ export interface AgentSessionCreateParams {
   enabledTools: string[]
   modelMetadata?: SessionModelMetadata
   /**
-   * 会话根 Agent 的档案名（settings.agentProfile 解析结果；缺省 'default'）。
-   * 档案在解析侧已确认存在，这里仍保留 getProfile 的 default 兜底。
+   * 会话根 Agent 的档案名（sessionService.resolveAgentProfileName 按会话形态推导：
+   * 项目会话 work / 无项目 chat / 笔记本 notebook，子会话可被父级钉成具名档案）。
+   * 解析侧已确认存在，这里仍保留 getProfile 的 work 兜底。
    */
-  profileName?: string
+  profileName: string
 }
 
 /**
  * AgentSession — 封装单个 session 的所有 Agent 状态和操作（桌面宿主）。
  *
  * 创建/装配（systemPrompt 组装、工具解析、指令注入）已收敛到统一创建管线
- * （agents/agentHost 的 agentFactory + 'default' 档案）；本类保留桌面特有的
+ * （agents/agentHost 的 agentFactory + 会话档案）；本类保留桌面特有的
  * 生命周期编排：workflow 埋点、setModel 的能力查询、ssh / fileTime 清理。
  *
  * 自动标题不再是这里的业务：本类只在 prompt 受理与轮结束处 fire 两个**通用埋点**
@@ -97,11 +98,10 @@ export class AgentSession {
       profileName
     } = params
 
-    // 会话档案（`/<agentName>` 斜杠命令切换，粘性存 settings.agentProfile）；缺省 'default'。
-    // 'default' 可被用户 ~/.shuvix/agents/default.md 覆盖（getProfile 有内置兜底，恒存在）。
+    // 会话档案由形态推导（见 AgentSessionCreateParams.profileName）。三个基座都可被用户
+    // ~/.shuvix/agents/<name>.md 覆盖，而内置兜底恒存在（getProfile 对写坏的覆盖文件视而不见）
     const profile = toInProcessAgentType(
-      agentService.getProfile(profileName ?? DEFAULT_PROFILE_NAME) ??
-        agentService.getProfile(DEFAULT_PROFILE_NAME)!
+      agentService.getProfile(profileName) ?? agentService.getProfile(WORK_PROFILE_NAME)!
     )
 
     // 前向引用：onPromptAccepted 在 agent 执行期才触发，构造期不会调用

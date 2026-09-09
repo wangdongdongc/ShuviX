@@ -2,8 +2,9 @@
  * Agent 档案注册表接口 —— 纯 md 驱动：文件存在即可用，无启用开关/禁用集。
  *
  * 合并规则（两端共用语义，由各宿主实现）：用户同名覆盖内置。
- * 'default' 的内置兜底由宿主 registry 的 getProfile 保证（内置列表经 buildBuiltinProfiles
- * 现算,恒含 default —— 即使用户覆盖版损坏,主会话创建也永不失败于档案缺失）。
+ * 三个基座档案（work / chat / notebook）的内置兜底由宿主 registry 的 getProfile 保证
+ * （内置列表经 buildBuiltinProfiles 现算，恒含三者 —— 即使用户覆盖版损坏，会话根 Agent
+ * 的创建也永不失败于档案缺失）。
  */
 import type { AgentProfile } from '../subagent/types'
 
@@ -11,6 +12,6 @@ import type { AgentProfile } from '../subagent/types'
 export interface AgentProfileRegistry {
   /** 列出全部档案（用户同名覆盖内置后的合并结果） */
   listAll: () => AgentProfile[]
-  /** 按名取档案（'default' 由实现方以内置现算结果兜底） */
+  /** 按名取档案（基座档案由实现方以内置现算结果兜底） */
   getProfile: (name: string) => AgentProfile | undefined
 }

@@ -12,7 +12,6 @@ import {
   rebuildDraftFromContent
 } from '@shuvix/chat-protocol/utils/inlineTokens'
 import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
-import type { ModelCapabilities } from '@shuvix/chat-protocol/types/provider'
 import {
   useChatStore,
   selectIsStreaming,
@@ -22,7 +21,6 @@ import {
 import { useImageUpload } from '../../hooks/useImageUpload'
 import { ModelPicker } from './ModelPicker'
 import { ToolPicker } from './ToolPicker'
-import { AgentProfilePicker } from './AgentProfilePicker'
 import { SlashCommandPopover } from './SlashCommandPopover'
 import { useSlashCommands } from '../../hooks/useSlashCommands'
 import { AtMentionPopover } from './AtMentionPopover'
@@ -50,12 +48,6 @@ const MIN_H = 44
 const MAX_H = 480
 
 export interface InputAreaProps {
-  /**
-   * 笔记本会话模式（纯外观差异，发送与普通会话同走 `agent.prompt` 主管线）：
-   * 档案钉死 notebook 基座（不显示档案选择器），对话经 thread 插槽以抽屉形态呈现。
-   * 模型/工具选择沿用 ModelPicker/ToolPicker（写会话配置，与普通会话一致）。
-   */
-  notebook?: boolean
   /** 常规流内嵌模式（欢迎页）：外观同悬浮卡片，但随文档流布局、不绝对定位贴底 */
   inline?: boolean
   /** 卡片最顶插槽（对话抽屉）：渲染在待处理输入面板之上，卡片首格的顶圆角由插槽内容自己承担 */
@@ -75,14 +67,12 @@ export interface InputAreaProps {
  * （后端工具收到 other 时不执行副作用，把文本作为 tool result 返回 AI），而不是发普通消息或 steer。
  */
 export function InputArea({
-  notebook,
   inline,
   thread,
   accessory,
   onHeightChange
 }: InputAreaProps = {}): React.JSX.Element {
   const { t } = useTranslation()
-  const isNotebook = !!notebook
   const {
     inputText,
     setInputText,
@@ -328,13 +318,6 @@ export function InputArea({
     if (!host) return null
     const session = await host.session.create()
     const sid = session.id
-    // 欢迎页先选了档案：会话此刻才存在，把选择落到它身上（连带档案声明的模型/工具种子）
-    const pending = useChatStore.getState().pendingAgentProfile
-    if (pending) {
-      const switched = await host.session.updateAgentProfile({ id: sid, name: pending })
-      useChatStore.getState().setPendingAgentProfile(null)
-      if (switched.success && switched.applied) applyProfileSeed(switched.applied)
-    }
     await getSessionChannelApi().agent.init({ sessionId: sid })
     const sessions = await host.session.list()
     const s = useChatStore.getState()
@@ -343,26 +326,7 @@ export function InputArea({
     return sid
   }
 
-  /**
-   * 应用切档案带来的配置种子：后端已把模型 / 工具勾选写进会话树，这里只同步前端显示 ——
-   * 不能回调 setModel / setEnabledTools，那会在树上多写一条重复的 change entry。
-   * 模型部分的落点与 ModelPicker 选中模型后的那套一致。
-   */
-  const applyProfileSeed = (applied: {
-    model?: { provider: string; model: string; capabilities: ModelCapabilities }
-    tools: string[]
-  }): void => {
-    const store = useChatStore.getState()
-    store.setEnabledTools(applied.tools)
-    if (!applied.model) return
-    chatHost.models.setActiveProvider(applied.model.provider)
-    chatHost.models.setActiveModel(applied.model.model)
-    store.setModelSupportsVision(!!applied.model.capabilities.vision)
-    store.setMaxContextTokens(applied.model.capabilities.maxInputTokens || 0)
-    store.setUsedContextTokens(null)
-  }
-
-  /** 清空输入态（正文 / 图片 / 命令芯片 / @ 引用 / 粘贴芯片），发送与纯切档案共用 */
+  /** 清空输入态（正文 / 图片 / 命令芯片 / @ 引用 / 粘贴芯片） */
   const resetComposer = (): void => {
     const store = useChatStore.getState()
     store.setInputText('')
@@ -629,12 +593,6 @@ export function InputArea({
   // 统一布局：全部收纳进卡片底部同一行（普通会话另在右侧追加上下文用量 / Agent 信息 / 压缩入口）。
   const pickers = (
     <div className="flex-shrink-0 flex items-center gap-1.5">
-      {/* 档案选择器居首：档案决定系统提示词与内置工具白名单，是三者里最上位的一层。
-          笔记本会话的档案钉死为 notebook 基座（resolveAgentProfileName），无可切项故不显示；
-          聊天会话（绑定了 bot）没有根 Agent，同样无档案可切 */}
-      {canEdit && !isNotebook && !isBotSession && (
-        <AgentProfilePicker disabled={isStreaming} onApplied={applyProfileSeed} />
-      )}
       <ModelPicker readonly={!canEdit} />
       {/* 工具选择器对聊天会话隐藏：任务段的 agent 就是 bot 自己，工具来自它 md 里的
           shuvix-tools —— 一个会话级的工具勾选在这里不表达任何东西

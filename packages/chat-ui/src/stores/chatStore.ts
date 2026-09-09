@@ -68,7 +68,7 @@ export interface SessionSettings {
   bot?: string
   /** 遗留：群聊时代的成员名单，只读 —— 带着它的老会话仍是聊天会话，但视为未绑定 bot */
   bots?: string[]
-  /** 会话根 Agent 采用的档案名（`/<agentName>` 切换）；缺省 / 档案已不存在 → 回落 'default' */
+  /** 子会话被父级钉下的档案名（session 工具 agent_profile）；根会话的档案由形态推导，不读它 */
   agentProfile?: string
   /** 笔记本会话绑定的 md 文件（相对项目根，forward-slash；项目记忆为绝对路径）；非空即为笔记本会话（根 Agent 钉死 notebook 基座档案，对话经输入卡片的抽屉呈现） */
   notebookPath?: string
@@ -218,11 +218,6 @@ interface ChatState {
     inlineTokens?: Record<string, InlineToken>
     nonce: number
   } | null
-  /**
-   * 欢迎页（还没有会话）选好的档案：会话是发送时才懒创建的，此时无处可写会话设置，
-   * 故先记在这里，`session.create` 时一并带上并清空。有会话时一律以会话设置为准。
-   */
-  pendingAgentProfile: string | null
   /** 当前会话的消息列表 */
   messages: ChatMessage[]
   /** 各 session 的流式状态（按 sessionId 隔离） */
@@ -312,8 +307,6 @@ interface ChatState {
   /** 请求把历史用户消息重建为输入框草稿（消息回退触发）；由 InputArea 消费后 clear */
   requestDraftRestore: (content: string, inlineTokens?: Record<string, InlineToken>) => void
   clearDraftRestore: () => void
-  /** 欢迎页选档案（尚无会话）；null 清除 */
-  setPendingAgentProfile: (name: string | null) => void
   setMessages: (messages: ChatMessage[]) => void
   addMessage: (message: ChatMessage) => void
   removeMessage: (id: string) => void
@@ -599,7 +592,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
   ...deriveActive(null),
   filePreviewRequest: null,
   draftRestoreRequest: null,
-  pendingAgentProfile: null,
   messages: [],
   sessionStreams: {},
   sessionClosing: {},
@@ -667,7 +659,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }
     })),
   clearDraftRestore: () => set({ draftRestoreRequest: null }),
-  setPendingAgentProfile: (name) => set({ pendingAgentProfile: name }),
   setMessages: (messages) => set({ messages }),
   addMessage: (message) =>
     set((state) =>

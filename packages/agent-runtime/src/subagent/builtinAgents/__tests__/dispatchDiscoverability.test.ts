@@ -29,7 +29,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import { buildBuiltinProfile } from '../spec'
-import { BROWSER_SPEC, CODING_SPEC, DEFAULT_SPEC, EXPLORE_SPEC } from '../index'
+import { BROWSER_SPEC, CODING_SPEC, EXPLORE_SPEC, WORK_SPEC } from '../index'
 import type { BuiltinProfileSpec } from '../spec'
 import type { AgentProfile } from '../../types'
 
@@ -45,9 +45,9 @@ describe('派发清单点名了哪些 agent', () => {
     }
   })
 
-  it.each(LANGS)('%s：default 点名 browser', (language) => {
-    // default 手里有 browser 工具，浏览器密集的活儿正是它最该外包的
-    expect(build(DEFAULT_SPEC, language).systemPrompt).toContain('**browser**')
+  it.each(LANGS)('%s：work 点名 browser', (language) => {
+    // work 手里有 browser 工具，浏览器密集的活儿正是它最该外包的
+    expect(build(WORK_SPEC, language).systemPrompt).toContain('**browser**')
   })
 
   it.each(LANGS)('%s：派发 browser 时提示带上浏览器现状', (language) => {

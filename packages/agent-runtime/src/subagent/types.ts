@@ -2,7 +2,7 @@
  * Agent 档案共享类型（跨端）。
  *
  * AgentProfile：注册表里的 agent 档案（与 agent md frontmatter+body 同构），
- *   主会话（'default'）与派生 agent 统一用它描述"创建基座"。
+ *   会话根 Agent（基座档案 work / chat / notebook）与派生 agent 统一用它描述"创建基座"。
  * InProcessAgentType：创建/派发执行时用的运行投影（工具白名单 + 系统提示 + sections 声明）。
  * SubAgentRegistry：档案来源的端适配接口（桌面=文件系统扫描；扩展=内嵌常量）。
  */
@@ -40,9 +40,9 @@ export interface AgentProfile {
   projectAwareness: boolean
   /**
    * `shuvix-session-awareness`：会话感知 —— 该档案懂得「自己是一场会话的人格」，
-   * 因而可被用户选为会话的 agent（`/<agentName>` 切换 / 输入框档案选择器）。
-   * 缺省 false = 只可被派发。只管切换、不管派发；与 BASE_PROFILE_NAMES 不同 ——
-   * 那是「两边都不进」。
+   * 因而可以驾驭一条会话：agent 开子会话时可用 `agent_profile` 点名它。
+   * 缺省 false = 只可被派发（一次性的新鲜上下文）。只管子会话、不管派发；与
+   * BASE_PROFILE_NAMES 不同 —— 那是「两边都不进」（基座由会话形态推导，不被点名）。
    */
   sessionAwareness: boolean
   /** 来源（决定 UI 能否编辑/删除） */

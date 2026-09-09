@@ -127,7 +127,7 @@ const waitForEnds = (name: string, n: number): Promise<void> =>
 const firePrompt = (over: Partial<TriggerPayloadMap['session.prompt-accepted']> = {}): void =>
   workflowService.fire('session.prompt-accepted', {
     sessionId: 's1',
-    profileName: 'default',
+    profileName: 'work',
     title: 'New Chat',
     isDefaultTitle: false,
     promptText: 'hello',

@@ -20,12 +20,10 @@ import {
   parseAgentDefinitionFile,
   serializeAgentDefinitionFile,
   BASE_PROFILE_NAMES,
-  SWITCHABLE_BASE_PROFILE_NAMES,
   type AgentProfile,
   type AgentProfileRegistry,
   type ParsedAgentFile
 } from '@shuvix/agent-runtime'
-import type { AgentProfileSummary } from '@shuvix/chat-protocol/chatApi'
 import { createLogger } from '../logger'
 
 const log = createLogger('AgentService')
@@ -146,40 +144,15 @@ class AgentService implements AgentProfileRegistry {
   }
 
   /**
-   * 会话档案选择器的列表：可切换的档案 + 选择器要显示的字段。
-   *
-   * 与 updateAgentProfile 的准入同源：只收**声明了 `shuvix-session-awareness`** 的档案
-   * （不声明 = 只可被派发的执行体，如 wiki-writer：政策必须跑在新鲜上下文里），
-   * 再排除 notebook（笔记本会话形态的基座，切到普通会话上只会得到一个指向不存在笔记的
-   * 人格），保留 default / chat（普通会话的两条路线，互为退路）。
-   * 不带 systemPrompt —— 选择器不需要，见 AgentProfileSummary。
-   */
-  listSwitchable(): AgentProfileSummary[] {
-    return this.listAll()
-      .filter((a) => this.isSessionProfile(a))
-      .map((a) => ({
-        name: a.name,
-        displayName: a.displayName,
-        description: a.description,
-        source: a.source,
-        model: a.model
-      }))
-  }
-
-  /**
    * 这份档案能否**作为某条会话自己的档案**（而不是只能被派发的执行体）。
    *
-   * 三处入口共用一条判据：选择器名单（listSwitchable）、`/<agentName>` 切换
-   * （sessionService.updateAgentProfile，它另拆成两道门只为给出各自的错误文案）、
-   * 以及新会话的默认档案（sessionService.defaultAgentProfile）。**创建入口与切换入口
-   * 必须同口径** —— 设置里留着一个 `notebook` 或一份后来去掉了会话感知的档案时，
-   * 切换会被拒、创建却照戳，那是同一条规则只实现了一半。
+   * 如今唯一的入口是子会话的钉档案（sessionService.pinAgentProfile —— session 工具
+   * `create-sub-session` 的 `agent_profile`）。基座档案（work / chat / notebook）不算：
+   * 它们由会话形态推导、从不被点名（见 BASE_PROFILE_NAMES）；其余看
+   * `shuvix-session-awareness`（不声明 = 只可派发的执行体，如 wiki-writer）。
    */
   isSessionProfile(profile: AgentProfile): boolean {
-    return (
-      SWITCHABLE_BASE_PROFILE_NAMES.has(profile.name) ||
-      (!BASE_PROFILE_NAMES.has(profile.name) && profile.sessionAwareness)
-    )
+    return !BASE_PROFILE_NAMES.has(profile.name) && profile.sessionAwareness
   }
 
   /**
@@ -187,7 +160,7 @@ class AgentService implements AgentProfileRegistry {
    *
    * 这里**不需要**给内置档案再兜一层底：一份解析不了的用户 md 会被 scanDir 静默跳过，
    * 因而不进 userNames、也就遮蔽不了同名内置 —— `listAll()` 里那份内置原样还在。
-   * 「一份写坏的 `chat.md` / `default.md` 不会让对应形态的会话建不出根 Agent」这条
+   * 「一份写坏的 `chat.md` / `work.md` 不会让对应形态的会话建不出根 Agent」这条
    * 性质由那条跳过守住（回归钉在 agentService.test.ts 的 AS-20），不是由这里守住；
    * 之前那个 `if (found) return found` + 按名重取内置的分支恒不可达，已删。
    */

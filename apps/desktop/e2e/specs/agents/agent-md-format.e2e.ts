@@ -6,7 +6,7 @@ import { readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { launchApp, type E2EApp } from '../../harness/launch'
-import { createAgentSession, writeAgentMd } from '../../harness/seed'
+import { createAgentSession, createPinnedChildSession, writeAgentMd } from '../../harness/seed'
 
 let app: E2EApp
 
@@ -93,27 +93,22 @@ describe('agent md 格式（纯 md 驱动）', () => {
     })
   })
 
-  it('声明不可用的模型 ≠ 档案非法：照常列出、tools/description 正常、可被切换', async () => {
+  it('声明不可用的模型 ≠ 档案非法：照常列出、tools/description 正常、可作子会话档案', async () => {
     const row = (await listAgents()).find((a) => a.name === 'unresolvable-model')
     expect(row).toBeDefined()
     expect(row!.model).toBe('no-such/model')
     expect(row!.tools).toEqual(['read', 'grep'])
     expect(row!.description).toBe('declares a model nobody has')
 
+    // 档案可用性：一条钉着它的子会话照常建出运行时、拿到它的 body
+    //（模型不可用时 pinAgentProfile 的 modelUnavailable 回传归 sessions/sub-session-profile.e2e）
     const { sid } = await createAgentSession(app.main)
-    const res = await app.main.eval<{
-      success: boolean
-      applied?: { model?: unknown }
-      modelUnavailable?: string
-    }>(
-      `window.api.session.updateAgentProfile({ id: ${JSON.stringify(sid)}, name: 'unresolvable-model' })`
-    )
-    expect(res.success).toBe(true)
-    // 模型解析不出来 → 不写模型种子，原始声明值回传给前端提示
-    expect(res.applied?.model).toBeUndefined()
-    expect(res.modelUnavailable).toBe('no-such/model')
+    const child = await createPinnedChildSession(app, {
+      parentSid: sid,
+      agentProfile: 'unresolvable-model'
+    })
     const info = await app.main.eval<{ systemPrompt: string }>(
-      `window.api.agent.getInfo(${JSON.stringify(sid)}, { ensure: true })`
+      `window.api.agent.getInfo(${JSON.stringify(child)}, { ensure: true })`
     )
     expect(info.systemPrompt.startsWith('UNRESOLVABLE MODEL BODY.')).toBe(true)
   })

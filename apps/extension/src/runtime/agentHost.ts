@@ -1,7 +1,7 @@
 /**
  * 扩展 AgentHostAdapter —— 统一创建管线（createAgentFactory）的浏览器端适配。
  *
- * root（根会话）：按 default 档案名单装配工具（ask/browser/read/write/edit；
+ * root（根会话）：按会话基座档案（work / chat / notebook）的名单装配工具（ask/browser/read/write/edit；
  * bash/ls/grep/glob/ssh/database 等宿主缺失名自动跳过）+ 全部已连接 MCP（宿主策略，
  * 等价旧「全量注入不过滤」）；工具池登记进 sessionTools 供派生复用；systemPrompt 经
  * persona/workspace 两个具名段组装（'project' 段扩展不注册 → 引用时跳过）；

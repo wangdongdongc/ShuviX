@@ -30,16 +30,11 @@ import type { Project } from '../dao/types'
 
 import { DEFAULT_THINKING_LEVEL } from '@shuvix/chat-protocol/types/thinking'
 import {
-  DEFAULT_CHAT_AGENT_KEY,
-  DEFAULT_PROJECT_AGENT_KEY
-} from '@shuvix/chat-protocol/agentProfile'
-import {
   BASE_PROFILE_NAMES,
-  SWITCHABLE_BASE_PROFILE_NAMES,
   CHAT_PROFILE_NAME,
-  DEFAULT_PROFILE_NAME,
   NOTEBOOK_PROFILE_NAME,
-  SessionManager
+  SessionManager,
+  WORK_PROFILE_NAME
 } from '@shuvix/agent-runtime'
 import type { SubAgentModelConfig } from '@shuvix/agent-runtime'
 import { isChatSessionSettings } from '@shuvix/chat-protocol/chatSession'
@@ -179,7 +174,6 @@ export class SessionService {
 
     // 聊天会话：绑定一个 bot，无根。空串 / 空白视同没给
     const bot = params?.bot?.trim() || undefined
-    const isRootless = !!bot
     const session: Session = {
       id,
       title: params?.title ?? (notebookPath ? basename(notebookPath) : t('agent.defaultTitle')),
@@ -196,12 +190,10 @@ export class SessionService {
         // 派活的地方、同一个工作目录、开它本身还要过一次 ask-on-sub-session ——
         // 用户为这条对话关掉的询问，不该在它每开一条子会话时原样回来。
         // 路径授权（allowList）刻意**不**继承：那是一条会长大的记账，快照过去只会漂移。
-        ...(parent?.settings?.autoAllow ? { autoAllow: true } : {}),
-        // 档案在**创建这一刻**定型（下同 §resolveAgentProfileName）：按会话形态取设置里
-        // 对应的默认档案，落成一个显式的 agentProfile。之后改设置只影响更新的会话 ——
-        // 档案是粘性的，一条已经在跑的会话不该因为改了个全局默认就换人格。
-        // 笔记本会话（钉死 notebook）与无根的聊天会话不写：它们的档案不由这个值决定。
-        ...(notebookPath || isRootless ? {} : { agentProfile: this.defaultAgentProfile(pid) })
+        ...(parent?.settings?.autoAllow ? { autoAllow: true } : {})
+        // 档案**不在这里写**：根 Agent 的档案由会话形态推导（项目会话 work / 无项目 chat /
+        // 笔记本 notebook，见 resolveAgentProfileName），没有可选的东西。只有子会话在父级
+        // 点名档案时由 subSessionRunner 经 pinAgentProfile 钉一个显式值。
       },
       createdAt: now,
       updatedAt: now
@@ -303,79 +295,58 @@ export class SessionService {
   }
 
   /**
-   * 新会话的默认档案名 —— 由**会话形态**选设置项：归属项目走「默认项目智能体」
-   * （缺省 `default`：确认需求、把活儿交给 coding 子会话、验收结果），不归属项目走
-   * 「默认聊天智能体」（缺省 `chat`：握全套内置工具、自己把活干完）。
+   * 解析会话根 Agent 的档案名 —— **由会话形态推导**，不是用户选的：
    *
-   * 设置指向的档案已不存在（用户删了那份 md），或它根本不能当会话档案（旧值指着
-   * `notebook`、某份档案后来去掉了 `shuvix-session-awareness`）时回落对应基座 ——
-   * 准入与 `/<agentName>` 切换同源（agentService.isSessionProfile）：**创建入口与切换
-   * 入口必须同口径**，否则切换拒绝、创建照戳，同一条规则只实现一半。
+   *  - 聊天会话（见 isBotSession）返回 **null**：它没有根 Agent；
+   *  - 笔记本会话（settings.notebookPath 非空）恒为 `notebook`
+   *    （用户覆盖 `~/.shuvix/agents/notebook.md` 经 getProfile 按名合并自动生效）；
+   *  - 子会话可以带一个父级点名、`pinAgentProfile` 钉下的 `settings.agentProfile`
+   *    （如 `coding`）：档案还在就用它。档案是纯 md 驱动的，用户随时可能删掉某个
+   *    `~/.shuvix/agents/<name>.md`，钉着一个已不存在的名字时回落形态基座而不是卡死；
+   *  - 其余一律按形态：归属项目 → `work`，不归属任何项目 → `chat`。
    *
-   * 回落到**对应基座**而不是一律 `default`，与 resolveAgentProfileName 的回落刻意不同：
-   * 那里在读一条已经存在的会话（无戳 = 改动之前建的，那时的基座就是 default），这里在
-   * 决定一条新会话该从哪条路线起步，形态是已知的。两处别合并。
-   */
-  private defaultAgentProfile(projectId: string | null): string {
-    const inProject = !!projectId
-    const key = inProject ? DEFAULT_PROJECT_AGENT_KEY : DEFAULT_CHAT_AGENT_KEY
-    const base = inProject ? DEFAULT_PROFILE_NAME : CHAT_PROFILE_NAME
-    const configured = settingsDao.findByKey(key)?.trim()
-    if (!configured || configured === base) return base
-    const profile = agentService.getProfile(configured)
-    if (profile && agentService.isSessionProfile(profile)) return configured
-    log.warn(`默认档案 "${configured}"（${key}）不可用作会话档案，回落 ${base}`)
-    return base
-  }
-
-  /**
-   * 解析会话根 Agent 的档案名。
-   *
-   * 聊天会话（见 isBotSession）返回 **null** —— 它没有根 Agent。
-   * 笔记本会话（settings.notebookPath 非空）恒为 'notebook' 基座档案，忽略 agentProfile
-   * （用户覆盖 `~/.shuvix/agents/notebook.md` 经 getProfile 按名合并自动生效）。
-   * 其余会话读 settings.agentProfile —— 它在 `create` 时就按会话形态落成了显式值
-   * （见 defaultAgentProfile），所以这里**不再判断有没有项目**：默认档案只在创建那一刻
-   * 参与一次，之后是会话自己的事（`/<agentName>` 切换写的也是这个键）。
-   * 缺省（本次改动之前建的老会话）与档案文件被删/改名时一律回落 'default'：档案是纯
-   * md 驱动的，用户随时可能删掉某个 `~/.shuvix/agents/<name>.md`，会话设置不该因此把
-   * 根 Agent 卡死在一个不存在的档案上。
+   * 根会话上的 `agentProfile` **不读**：那是会话内切换档案时代写下的戳（含旧基座名
+   * `default`），改制刻意不做迁移 —— 项目会话就是 work、无项目会话就是 chat，没有设置项、
+   * 没有切换命令、没有选择器，键留在 settings 里只是遗留数据。
    */
   resolveAgentProfileName(sessionId: string): string | null {
-    const settings = sessionDao.pickSettings(sessionId, [
-      'agentProfile',
-      'notebookPath',
-      'bot',
-      'bots'
-    ])
+    const session = sessionDao.pick(sessionId, ['projectId', 'parentId', 'settings'])
+    const settings = session?.settings
     // 聊天会话没有根 Agent：消息由绑定的 bot 的管线应答。返回类型因此是可空的 ——
     // 把「这个会话没有档案」变成编译期事实，胜过再造一个与它并行、迟早漂移的谓词
     if (isChatSessionSettings(settings)) return null
     if (settings?.notebookPath) return NOTEBOOK_PROFILE_NAME
-    const name = settings?.agentProfile
-    if (!name || name === DEFAULT_PROFILE_NAME) return DEFAULT_PROFILE_NAME
-    if (agentService.getProfile(name)) return name
-    log.warn(`会话档案 "${name}" 已不存在，回落 default（session=${sessionId}）`)
-    return DEFAULT_PROFILE_NAME
+    const pinned = session?.parentId ? settings?.agentProfile : undefined
+    if (pinned) {
+      if (agentService.getProfile(pinned)) return pinned
+      log.warn(`子会话档案 "${pinned}" 已不存在，回落形态基座（session=${sessionId}）`)
+    }
+    return session?.projectId ? WORK_PROFILE_NAME : CHAT_PROFILE_NAME
   }
 
   /**
-   * 切换会话根 Agent 的档案（`/<agentName>` 斜杠命令）。粘性：写入会话设置后一直生效。
+   * 给一条**刚建好的子会话**钉上父级点名的档案（session 工具 `create-sub-session` 的
+   * `agent_profile`；唯一调用方是 subSessionRunner.create）。这是 `settings.agentProfile`
+   * 如今唯一的写入口 —— 根会话的档案由形态推导（见 resolveAgentProfileName），没有可写
+   * 的东西，也就没有会话内切换：用户想改一种形态的人格，去覆盖对应的基座 md。
    *
-   * 档案决定系统提示词与内置工具白名单，两者都在 createAgent 时定型 —— 与指令文件同
-   * 一套失效重建路径：会话树/历史一概不动，下一条消息用新档案重建运行时。
+   * 准入与派发面互补（agentService.isSessionProfile）：基座档案（work / chat / notebook）
+   * 不接受 —— 子会话不点名就自然落到自己形态的基座上，点名一个基座只会得到说不清的组合
+   * （无项目的父级开一条 `work` 子会话？）；未声明 `shuvix-session-awareness` 的档案不接受
+   * —— 那是只可派发的执行体（如 wiki-writer），政策的有效性依赖每次派发都是新鲜上下文，
+   * 当一条长会话的人格会稀释系统提示词权重，而它们违规的代价静默且不可逆。
    *
-   * 切换同时把档案声明的运行配置作为**种子**写进会话树（与用户手动改模型/工具同一条
-   * 路径）：root 的事实源始终是会话树，档案只在切换这一刻参与一次，之后用户改什么就是
-   * 什么 —— 若让 createAgent 每次重建都按档案覆盖，用户手选的会被默默还原。
+   * 钉下的同时把档案声明的运行配置作为**种子**写进会话树（与用户手动改模型/工具同一条
+   * 路径）：会话的事实源始终是会话树，档案只在这一刻参与一次，之后用户改什么就是什么
+   * —— 若让 createAgent 每次重建都按档案覆盖，用户手选的会被默默还原。
    *  - 模型（`shuvix-model`）：解析成功才写；不可用则保持当前模型，把原始值经
-   *    `modelUnavailable` 回传供前端提示（后端日志之外用户也该看得见）。
+   *    `modelUnavailable` 回传（后端日志之外调用方也该看得见）。
    *  - 工具（`shuvix-tools` 里的 mcp:/skill:）：**替换**会话勾选，没声明就是清空 ——
-   *    档案对三类工具是完整声明，切过去就是它说的那套；内置工具不进勾选（选择器不展示，
-   *    它们恒由档案白名单决定）。
-   * 种子结果随 `applied` 回传，调用方据此就地更新选择器（免去一次重新 init）。
+   *    档案对三类工具是完整声明；内置工具不进勾选（它们恒由档案白名单决定）。紧接着的
+   *    subSessionRunner.seedRunConfig 会在档案没声明时把父会话那套补回去。
+   * 种子结果随 `applied` 回传。
    */
-  async updateAgentProfile(
+  async pinAgentProfile(
     sessionId: string,
     name: string
   ): Promise<{
@@ -384,32 +355,26 @@ export class SessionService {
     applied?: { model?: SubAgentModelConfig; tools: string[] }
     modelUnavailable?: string
   }> {
-    // 两类会话的档案都不接受切换（见 resolveAgentProfileName）。守在方法体第一句：
-    // 拒绝必须先于 getProfile / 落库 / 种子写入 / invalidateAgent，零副作用
-    const pinned = sessionDao.pickSettings(sessionId, ['notebookPath', 'bot', 'bots'])
-    if (isChatSessionSettings(pinned)) {
-      return { success: false, error: 'Chat sessions have no root agent to switch' }
-    }
-    if (pinned?.notebookPath) {
-      return { success: false, error: 'Notebook sessions are pinned to the notebook profile' }
+    // 只有子会话可钉。守在方法体第一句：拒绝必须先于 getProfile / 落库 / 种子写入 /
+    // invalidateAgent，零副作用
+    const row = sessionDao.pick(sessionId, ['parentId'])
+    if (!row?.parentId) {
+      return { success: false, error: 'Only a sub-session can be pinned to an agent profile' }
     }
     const profile = agentService.getProfile(name)
     if (!profile) return { success: false, error: `Unknown agent "${name}"` }
-    // 'notebook' 是笔记本会话形态的基座，切到普通会话上只会得到一个指向不存在笔记的人格
-    // （命令源同样不列它）；'default' / 'chat' 是普通会话的两条路线，互为退路，都可切。
-    if (!SWITCHABLE_BASE_PROFILE_NAMES.has(name) && BASE_PROFILE_NAMES.has(name)) {
-      return { success: false, error: `"${name}" is a base profile and cannot be switched to` }
+    if (!agentService.isSessionProfile(profile)) {
+      return {
+        success: false,
+        error: BASE_PROFILE_NAMES.has(name)
+          ? `"${name}" is a base profile; omit agent_profile to run the sub-session on this session's own base`
+          : `"${name}" is not session-aware and cannot run a session of its own`
+      }
     }
-    // 未声明会话感知的档案（如 wiki-writer）只可被派发：政策的有效性依赖每次派发都是
-    // 新鲜上下文，切成主会话后长对话会稀释系统提示词权重，而它们违规的代价静默且不可逆。
-    // 可切换基座豁免（与 listSwitchable 同源）：会话本就由它们之一创建，一份漏写该键的
-    // 用户 default.md / chat.md 不该把「切回基座」这条退路也堵死。
-    if (!SWITCHABLE_BASE_PROFILE_NAMES.has(name) && !profile.sessionAwareness) {
-      return { success: false, error: `"${name}" is not session-aware and cannot be switched to` }
-    }
-    log.info(`updateAgentProfile session=${sessionId} → ${name}`)
+    log.info(`pinAgentProfile session=${sessionId} → ${name}`)
     sessionDao.updateSettings(sessionId, { agentProfile: name })
-    // await：旧运行时彻底停下才算解绑，之后往树上追加种子才不会和它抢叶子
+    // 刚建好的子会话还没有运行时；仍走一遍失效是为守住不变量 —— 钉档案与重建之间不能有
+    // 一个还在写树的旧运行时（await：解绑必须发生在关停之后，之后往树上追加种子才不会和它抢叶子）
     await this.invalidateAgent(sessionId)
 
     // 种子：运行时已在上一行失效，故直接往树上追加（没有活跃 Agent 需要同步）
@@ -420,7 +385,7 @@ export class SessionService {
       if (resolved) {
         await appendModelChange(sessionId, resolved.provider, resolved.model)
         model = resolved
-        log.info(`updateAgentProfile 应用档案模型 ${resolved.provider}/${resolved.model}`)
+        log.info(`pinAgentProfile 应用档案模型 ${resolved.provider}/${resolved.model}`)
       } else {
         modelUnavailable = profile.model
         log.warn(`档案 "${name}" 声明的模型 "${profile.model}" 当前不可用，保持会话现有模型`)

@@ -1,7 +1,7 @@
 /**
  * 浏览器 Agent 运行时 —— 根会话经统一创建管线（runtime/agentHost 的 extensionAgentFactory）
  * 在 Side Panel 进程内驱动 pi AgentHarness，事件经 eventBus 派发给 chat-ui。
- * 档案：笔记本会话恒为 notebook 基座，其余按 settings.agentProfile（缺省 'default'）。
+ * 档案由会话形态推导：笔记本会话恒为 notebook 基座，项目会话 work，不归属项目的会话 chat。
  *
  * 与桌面 AgentSession 的对应：这里是「扩展宿主 wrapper」——生命周期簿记（SessionManager）
  * 与运行配置读写；工具装配 / systemPrompt 组装 / instruction 懒注入全部收敛在 agentHost。
@@ -9,9 +9,10 @@
  * 不再拼进 systemPrompt 字符串。
  */
 import {
-  DEFAULT_PROFILE_NAME,
+  CHAT_PROFILE_NAME,
   NOTEBOOK_PROFILE_NAME,
   SessionManager,
+  WORK_PROFILE_NAME,
   resolveInitialThinkingLevel,
   toInProcessAgentType,
   type CreatedAgent
@@ -99,16 +100,16 @@ async function buildRuntimeSession(sessionId: string): Promise<CreatedAgent> {
   // 工作目录（虚拟标签）：项目会话用文件夹名，临时会话用 'scratch'
   const cwd = projectHandle?.name ?? 'scratch'
 
-  // 会话档案：笔记本会话（settings.notebookPath 非空）恒为 notebook 基座档案，忽略 agentProfile；
-  // 其余按 `/<agentName>` 切换写入的 settings.agentProfile，缺省 / 档案已不存在 → 回落 'default'
-  // （扩展注册表无用户档案，内置兜底恒存在）
+  // 会话档案由**形态推导**（口径同桌面 sessionService.resolveAgentProfileName）：笔记本会话
+  // （settings.notebookPath 非空）恒为 notebook 基座，归属项目（FSA 文件夹）的会话为 work，
+  // 不归属项目（OPFS 隔离目录）的为 chat。没有设置项、没有会话内切换；扩展也没有子会话，
+  // 所以 settings.agentProfile 在这一端从不被写、也从不被读（扩展注册表只有内置档案，恒存在）
   const profileName = session?.settings?.notebookPath
     ? NOTEBOOK_PROFILE_NAME
-    : session?.settings?.agentProfile
-  const profile = toInProcessAgentType(
-    (profileName ? extensionSubAgentRegistry.getProfile(profileName) : undefined) ??
-      extensionSubAgentRegistry.getProfile(DEFAULT_PROFILE_NAME)!
-  )
+    : session?.projectId
+      ? WORK_PROFILE_NAME
+      : CHAT_PROFILE_NAME
+  const profile = toInProcessAgentType(extensionSubAgentRegistry.getProfile(profileName)!)
 
   return await extensionAgentFactory.createAgent({
     kind: 'root',

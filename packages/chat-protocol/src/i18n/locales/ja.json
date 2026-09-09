@@ -183,12 +183,6 @@
     "pasteChipChars": "[貼り付けテキスト #{{seq}} · {{chars}} 文字]",
     "pasteName": "貼り付けテキスト #{{seq}}"
   },
-  "agentProfile": {
-    "manage": "エージェントを管理…",
-    "missing": "プロファイル \"{{name}}\" は存在しません。セッションは既定のプロファイルで動作します。",
-    "disabledWhileStreaming": "生成中はプロファイルを切り替えられません",
-    "modelUnavailable": "このプロファイルが指定するモデル \"{{ref}}\" は現在利用できません。セッションは現在のモデルのままです。"
-  },
   "compact": {
     "summaryLabel": "会話の要約（自動圧縮済み）"
   },
@@ -419,12 +413,6 @@
     "defaultModelRow": "モデル",
     "defaultModelGroup": "デフォルトモデル",
     "defaultModelGroupDesc": "新規セッションで既定として使用するプロバイダーとモデル",
-    "defaultAgentGroup": "デフォルトエージェント",
-    "defaultAgentGroupDesc": "新しいセッションの基となるエージェントプロファイル。セッションごとに固定され、入力欄のピッカーからいつでも変更できます。",
-    "defaultProjectAgentRow": "プロジェクトセッション",
-    "defaultProjectAgentDesc": "プロジェクトに属する新しいセッション",
-    "defaultChatAgentRow": "チャットセッション",
-    "defaultChatAgentDesc": "どのプロジェクトにも属さない新しいセッション",
     "sessionModelRow": "セッション",
     "providerSectionTitle": "LLM プロバイダー設定",
     "providerConfigGroup": "設定",
@@ -841,7 +829,7 @@
     "subAgentDisplayName": "表示名",
     "subAgentDescPlaceholder": "このエージェントの一文説明(一覧やスラッシュコマンドのヒントに表示)",
     "subAgentDispatchLabel": "さらにサブエージェントの派遣を許可（ネスト・深さ制限あり）",
-    "subAgentSessionAwareness": "セッション認識（セッションのエージェントとして選択可能）",
+    "subAgentSessionAwareness": "セッション認識（サブセッションのエージェントとして起動可能）",
     "subAgentReadOnly": "組み込みエージェントはアプリに同梱され、読み取り専用です。",
     "subAgentCreateOverride": "上書きコピーを作成",
     "subAgentOverridden": "上書き済み",

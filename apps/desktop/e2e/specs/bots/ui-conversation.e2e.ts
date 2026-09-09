@@ -3,8 +3,8 @@
  *
  * 被测面：bot 气泡的署名头部（BotBubble 的 [data-bot-sender] + BotAvatar，视觉身份来自
  * chat-protocol 的 botColorFor/botInitial，spec 直接 import 同一实现算期望）、连续同一
- * bot 的**合并头部**、InputArea 的 isBotSession 门（档案选择器 / 上下文用量环 /
- * 工具选择器隐藏，ModelPicker 保留）、「永不锁输入」（聊天会话没有根 Agent，
+ * bot 的**合并头部**、InputArea 的 isBotSession 门（上下文用量环 / 工具选择器隐藏，
+ * ModelPicker 保留）、「永不锁输入」（聊天会话没有根 Agent，
  * 发送不置流式态），以及 `@` 弹层在聊天会话里**只列工作区文件**（会话是一对一的，
  * 没有「别人」可以点名 —— 曾经的 bot 行与整份 @提及 spec 一并退场）。
  *
@@ -247,12 +247,12 @@ describe('署名气泡与视觉身份', () => {
 
 describe('输入卡工具行的 isBotSession 门', () => {
   // A0-22
-  it('普通会话对照：档案选择器与上下文环在屏；假回复的 assistant 卡无署名卡头', async () => {
+  it('普通会话对照：模型 / 工具两个选择器与上下文环在屏；假回复的 assistant 卡无署名卡头', async () => {
     await open('C-plain')
 
-    // 档案选择器（工具行内含 bot 图标的按钮）挂载即在；三个选择器齐活
-    expect(await chat.profilePickerPresent()).toBe(true)
-    expect(await chat.pickerCount()).toBe(3)
+    // 选择器簇挂载即在：模型 / 工具两个（档案选择器已随「会话内切换档案」一并下线 ——
+    // 根 Agent 的档案由会话形态推导，工具行里没有可选的东西）
+    expect(await chat.pickerCount()).toBe(2)
     // 上下文环等 useSessionInit 把模型能力（maxInputTokens=200000）同步进 store 后出现；
     // 环不出 = caps 前置没立起来，修前置而不是弱化断言
     await until(() => chat.ctxRingPresent(), 'context ring visible (caps synced)')
@@ -275,14 +275,13 @@ describe('输入卡工具行的 isBotSession 门', () => {
   })
 
   // A0-23
-  it('切到 Bot 会话：档案选择器 / 环 / 工具选择器都消失，只剩 ModelPicker', async () => {
+  it('切到 Bot 会话：环 / 工具选择器都消失，只剩 ModelPicker', async () => {
     await open('C-bots')
 
-    expect(await chat.profilePickerPresent()).toBe(false)
     expect(await chat.ctxRingPresent()).toBe(false)
     expect(await chat.modelPickerPresent()).toBe(true)
     // ToolPicker 也隐藏 —— 任务段的工具来自 task 槽位那份 agent md，
-    // 会话级的工具勾选在这里不表达任何东西。三个选择器只剩一个 = 两个都没了
+    // 会话级的工具勾选在这里不表达任何东西。两个选择器只剩一个 = 工具选择器没了
     expect(await chat.pickerCount()).toBe(1)
   })
 })

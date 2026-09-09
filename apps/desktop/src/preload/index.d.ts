@@ -281,7 +281,7 @@ declare global {
   interface SessionSettings {
     autoAllow?: boolean
     allowList?: string[]
-    /** 会话根 Agent 采用的档案名；缺省 / 档案已不存在 → 回落 'default' */
+    /** 子会话被父级钉下的档案名（session 工具 agent_profile）；根会话的档案由形态推导，不读它 */
     agentProfile?: string
   }
 
@@ -588,24 +588,6 @@ declare global {
       delete: (id: string) => Promise<{ success: boolean }>
       /** 获取单个会话（含计算属性） */
       getById: (id: string) => Promise<SessionInfo | null>
-      /** 可切换的会话档案（含 default，不含 notebook 基座） */
-      listAgentProfiles: () => Promise<
-        import('@shuvix/chat-protocol/chatApi').AgentProfileSummary[]
-      >
-      /**
-       * 切换会话根 Agent 的档案（粘性；未知档案名返回 success:false + error）。
-       * 档案声明的模型与 mcp:/skill: 工具作为种子写进会话树并经 applied 回传
-       * （工具是替换语义；模型不可用时经 modelUnavailable 回传原始值）。
-       */
-      updateAgentProfile: (params: { id: string; name: string }) => Promise<{
-        success: boolean
-        error?: string
-        applied?: {
-          model?: { provider: string; model: string; capabilities: ModelCapabilities }
-          tools: string[]
-        }
-        modelUnavailable?: string
-      }>
       /** 清零聊天会话未读（A4）；幂等 */
       markRead: (id: string) => Promise<{ success: boolean }>
       /** 给聊天会话绑定 bot（只对聊天会话生效；遗留的未绑定会话靠它重新选） */

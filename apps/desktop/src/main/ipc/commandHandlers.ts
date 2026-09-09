@@ -28,9 +28,8 @@ function gatherSlashCommands(projectPath: string | null): SlashCommand[] {
   // 3. （未来）其他内置命令源在此处追加，统一通过 taken 去重
   //
   // 注：会话档案切换曾经也是一个命令源（kind 'agent'，`/<agentName> [prompt]`），已下线 ——
-  // 改由输入框的档案选择器承担。那条路径顺带甩掉了三条只为 "/name 参数" 解析而生的限制：
-  // 名字含空白的档案被丢弃、与项目/skill 命令重名的被让位、笔记本会话要单独关掉整段。
-  // 档案列表现在走 session.listAgentProfiles。
+  // 会话内切换档案这件事本身已经不存在：根 Agent 的档案由会话形态推导（项目会话 work /
+  // 无项目 chat / 笔记本 notebook），定制人格的入口是覆盖对应的基座 md。
 
   return [...projectCommands, ...skillCommands]
 }

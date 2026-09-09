@@ -1,7 +1,7 @@
 /**
  * 内置档案（md 文件 + 统一构建器，跨端共享）。
  *
- * 所有内置 agent —— 含两个基座档案 default / notebook —— 的文案都以 `md/<name>[.<lang>].md`
+ * 所有内置 agent —— 含三个基座档案 work / chat / notebook —— 的文案都以 `md/<name>[.<lang>].md`
  * 维护，格式与用户档案 `~/.shuvix/agents/<name>.md` 完全一致、经同一个解析器读取。
  * 构建期由 `?raw` 内联进 bundle（部署后不落磁盘，用户看不到也改不到，与迁移前的 TS
  * 字面量鲁棒性相同）；宿主 registry 调 buildBuiltinProfiles(deps) 现算列表（语言切换 /
@@ -12,9 +12,9 @@
 import type { AgentProfile } from '../types'
 import { buildBuiltinProfile, type BuiltinProfileDeps, type BuiltinProfileSpec } from './spec'
 
-import defaultEn from './md/default.md?raw'
-import defaultZh from './md/default.zh.md?raw'
-import defaultJa from './md/default.ja.md?raw'
+import workEn from './md/work.md?raw'
+import workZh from './md/work.zh.md?raw'
+import workJa from './md/work.ja.md?raw'
 import chatEn from './md/chat.md?raw'
 import chatZh from './md/chat.zh.md?raw'
 import chatJa from './md/chat.ja.md?raw'
@@ -57,9 +57,17 @@ export {
   type BuiltinProfileSources
 } from './spec'
 
-// 基座档案名的事实源在 chat-protocol —— 渲染层（档案选择器）也要用它，而那边够不到本包
-import { CHAT_PROFILE_NAME, DEFAULT_PROFILE_NAME } from '@shuvix/chat-protocol/agentProfile'
-export { CHAT_PROFILE_NAME, DEFAULT_PROFILE_NAME }
+/**
+ * 三个基座档案名 —— 会话根 Agent 的档案由**会话形态推导**，不是选出来的：归属项目的
+ * 会话恒为 `work`，不归属任何项目的会话恒为 `chat`，笔记本会话恒为 `notebook`。
+ * 没有设置项、没有会话内切换；三者都可被同名用户档案 `~/.shuvix/agents/<name>.md`
+ * 覆盖 —— 那是定制人格的唯一入口，名字本身固定。
+ *
+ * 曾经它们放在 chat-protocol（输入框的档案选择器要按名着色）；选择器随「会话内切换
+ * 档案」一并下线后，渲染层不再需要这些名字，事实源就回到了唯一还用它们的这一层。
+ */
+export const WORK_PROFILE_NAME = 'work'
+export const CHAT_PROFILE_NAME = 'chat'
 export const NOTEBOOK_PROFILE_NAME = 'notebook'
 
 /**
@@ -70,16 +78,20 @@ export const NOTEBOOK_PROFILE_NAME = 'notebook'
  */
 export { WIKI_ENTRY_BANNER, WIKI_TOPIC_BANNER } from '@shuvix/chat-protocol/wikiFileContract'
 
-export const DEFAULT_SPEC: BuiltinProfileSpec = {
-  name: DEFAULT_PROFILE_NAME,
-  sources: { en: defaultEn, zh: defaultZh, ja: defaultJa }
+/**
+ * 工作档案 —— 归属项目的会话的基座（形态推导，见 WORK_PROFILE_NAME）：把需求敲定、
+ * 把成规模的活儿交给 `coding` 子会话、自己做验收。
+ */
+export const WORK_SPEC: BuiltinProfileSpec = {
+  name: WORK_PROFILE_NAME,
+  sources: { en: workEn, zh: workZh, ja: workJa }
 }
 
 /**
- * 聊天档案 —— 不归属任何项目的会话的创建基座，与 default 是**两条路线**而非强弱之分：
+ * 聊天档案 —— 不归属任何项目的会话的基座，与 work 是**两条路线**而非强弱之分：
  * 它握着完整的内置工具（含 ls/grep/glob）、正文只讲「自己把活干完」，不写任何把活外包
- * 出去的引导；default 则相反，把成规模的活儿交给 `coding` 子会话、自己做需求与验收。
- * 哪条路线用在哪种会话由设置里的两个默认档案决定（宿主读 general.default*Agent）。
+ * 出去的引导；work 则相反，把成规模的活儿交给 `coding` 子会话、自己做需求与验收。
+ * 哪条路线用在哪种会话由会话形态决定（有没有项目），不是配置。
  */
 export const CHAT_SPEC: BuiltinProfileSpec = {
   name: CHAT_PROFILE_NAME,
@@ -92,8 +104,9 @@ export const NOTEBOOK_SPEC: BuiltinProfileSpec = {
 }
 
 /**
- * 编码智能体 —— 从 default 里拆出来的工程人格：完整工具链（含 ssh / database）+ 做事纪律。
- * default 只留通用助手的薄壳，遇到成规模的工程活儿引导用户 `/coding` 切过来。
+ * 编码智能体 —— 从 work 里拆出来的工程人格：完整工具链（含 ssh / database）+ 做事纪律。
+ * work 只留编排的薄壳，遇到成规模的工程活儿开一条 `coding` 子会话把活交过去
+ * （session 工具的 `agent_profile`）—— 它是子会话的档案，不是用户切换的目标。
  */
 export const CODING_SPEC: BuiltinProfileSpec = {
   name: 'coding',
@@ -167,7 +180,7 @@ export const TITLER_SPEC: BuiltinProfileSpec = {
 /**
  * 聊天会话（bot）管线的门控段档案 —— 设计见 docs/bot-design.md §6.1。它是内置 bot-chat
  * 管线 `intent` 槽位（与 `recheck` 槽位）的缺省人选；`task` 槽位没有内置专属档案，bot md
- * 自己指定任意一份 agent md（新建模板预填 `default`）。
+ * 自己指定任意一份 agent md（新建模板预填 `work`）。
  *
  * 不声明会话感知：切成主会话人格毫无意义，它只在 bot 管线里被派发。
  *
@@ -184,11 +197,11 @@ export const BOT_INTENT_SPEC: BuiltinProfileSpec = {
 }
 
 /**
- * 内置 spec 全集（三个基座档案 default / chat / notebook 居首，其后为可派发的具名 agent；
+ * 内置 spec 全集（三个基座档案 work / chat / notebook 居首，其后为可派发的具名 agent；
  * widget/wiki 依赖宿主根目录参数，缺参自动跳过）
  */
 export const BUILTIN_PROFILE_SPECS: readonly BuiltinProfileSpec[] = [
-  DEFAULT_SPEC,
+  WORK_SPEC,
   CHAT_SPEC,
   NOTEBOOK_SPEC,
   CODING_SPEC,
@@ -203,30 +216,18 @@ export const BUILTIN_PROFILE_SPECS: readonly BuiltinProfileSpec[] = [
 ]
 
 /**
- * 「基座档案」——某种会话形态的创建基座，而非可派发的具名 agent：
- * `default` 是项目会话，`chat` 是不归属项目的会话，`notebook` 是笔记本会话的根 Agent。
+ * 「基座档案」——某种会话形态的根 Agent 人格，由形态推导、按名钉死，而非可派发的具名 agent：
+ * `work` 是项目会话，`chat` 是不归属项目的会话，`notebook` 是笔记本会话。
  *
- * 三者都可被同名用户档案覆盖（这正是自定义人格的入口），但都不该出现在派发工具的
- * 可用名单里（会诱导 LLM 拿基座档案当一次性任务 agent 使 —— 它们是某种会话形态的人格，
- * 不是为一次性任务写的；论工具清单它们与 coding 逐字相同，分工全在正文）。
+ * 三者都可被同名用户档案覆盖（这正是自定义人格的入口），但都不该被点名：不进派发工具
+ * 的可用名单（会诱导 LLM 拿基座档案当一次性任务 agent 使 —— 它们是某种会话形态的人格，
+ * 不是为一次性任务写的；论工具清单它们与 coding 逐字相同，分工全在正文），也不接受作为
+ * 子会话的 `agent_profile`（子会话不点名就自然落到自己形态的基座上）。
  */
 export const BASE_PROFILE_NAMES: ReadonlySet<string> = new Set([
-  DEFAULT_PROFILE_NAME,
+  WORK_PROFILE_NAME,
   CHAT_PROFILE_NAME,
   NOTEBOOK_PROFILE_NAME
-])
-
-/**
- * 可作为 `/<agentName>` 切换目标的基座档案 —— 普通会话的两条路线互为退路：
- * `/default` 切回编排型主会话，`/chat` 切回自己动手的聊天人格。设置里的两个默认档案
- * 只决定**新会话**从哪一条起步，切换则是会话中途换路线的入口，两处必须都放行。
- *
- * `notebook` 不在其中：它钉死在笔记本会话形态上，切到普通会话只会得到一个指向不存在
- * 笔记的人格（笔记本会话本身也拒绝一切切换）。
- */
-export const SWITCHABLE_BASE_PROFILE_NAMES: ReadonlySet<string> = new Set([
-  DEFAULT_PROFILE_NAME,
-  CHAT_PROFILE_NAME
 ])
 
 /** 按宿主 deps 现算全部可用内置档案（文案按当前语言解析） */
