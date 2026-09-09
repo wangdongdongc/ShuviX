@@ -30,7 +30,6 @@ import type { Project } from '../dao/types'
 
 import { DEFAULT_THINKING_LEVEL } from '@shuvix/chat-protocol/types/thinking'
 import {
-  BASE_PROFILE_NAMES,
   CHAT_PROFILE_NAME,
   NOTEBOOK_PROFILE_NAME,
   SessionManager,
@@ -332,9 +331,7 @@ export class SessionService {
    *
    * 准入与派发面互补（agentService.isSessionProfile）：基座档案（work / chat / notebook）
    * 不接受 —— 子会话不点名就自然落到自己形态的基座上，点名一个基座只会得到说不清的组合
-   * （无项目的父级开一条 `work` 子会话？）；未声明 `shuvix-session-awareness` 的档案不接受
-   * —— 那是只可派发的执行体（如 wiki-writer），政策的有效性依赖每次派发都是新鲜上下文，
-   * 当一条长会话的人格会稀释系统提示词权重，而它们违规的代价静默且不可逆。
+   * （无项目的父级开一条 `work` 子会话？）；其余任何档案都可以。
    *
    * 钉下的同时把档案声明的运行配置作为**种子**写进会话树（与用户手动改模型/工具同一条
    * 路径）：会话的事实源始终是会话树，档案只在这一刻参与一次，之后用户改什么就是什么
@@ -366,9 +363,7 @@ export class SessionService {
     if (!agentService.isSessionProfile(profile)) {
       return {
         success: false,
-        error: BASE_PROFILE_NAMES.has(name)
-          ? `"${name}" is a base profile; omit agent_profile to run the sub-session on this session's own base`
-          : `"${name}" is not session-aware and cannot run a session of its own`
+        error: `"${name}" is a base profile; omit agent_profile to run the sub-session on this session's own base`
       }
     }
     log.info(`pinAgentProfile session=${sessionId} → ${name}`)

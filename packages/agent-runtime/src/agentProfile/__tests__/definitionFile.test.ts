@@ -122,27 +122,21 @@ describe('parseAgentDefinitionFile', () => {
     }
   })
 
-  it('shuvix-session-awareness：布尔往返，缺省 false（= 只可派发），非布尔视为文件非法', () => {
-    const on = parseAgentDefinitionFile('---\nshuvix-session-awareness: true\n---\nbody', 'x')
-    expect(on!.sessionAwareness).toBe(true)
-    // 缺省 false 是这个键的整个要点：不声明的档案用户在输入框里选不到
-    expect(parseAgentDefinitionFile('---\nname: x\n---\nbody', 'x')!.sessionAwareness).toBe(false)
-    expect(
-      parseAgentDefinitionFile('---\nshuvix-session-awareness: sure\n---\nbody', 'x')
-    ).toBeNull()
-    // 退役的反向开关只是未知键（取值相反，不做迁移）：写了不报错，也不再让档案可切换
-    const legacy = parseAgentDefinitionFile('---\nshuvix-dispatch-only: true\n---\nbody', 'x')
-    expect(legacy!.sessionAwareness).toBe(false)
-    expect(serializeAgentDefinitionFile({ ...legacy!, name: 'x' })).not.toContain(
-      'shuvix-dispatch-only'
-    )
-    // 序列化往返：false 不写 key（与其他布尔同策），true 必须写出，否则保存一次档案就选不到了
-    expect(serializeAgentDefinitionFile({ ...on!, name: 'x' })).toContain(
-      'shuvix-session-awareness: true'
-    )
-    expect(
-      serializeAgentDefinitionFile({ ...on!, name: 'x', sessionAwareness: false })
-    ).not.toContain('shuvix-session-awareness')
+  it('shuvix-session-awareness 与 shuvix-dispatch-only 都已退役：只是未知键，不报错、不进结果、不回写', () => {
+    // 「能否当一场会话的人格」不再是档案的属性：根档案由会话形态推导，子会话的 agent_profile
+    // 只看「不是基座」。老文件里的这一行按未知键忽略（刻意不做迁移），非布尔取值也不再报错
+    for (const raw of [
+      'shuvix-session-awareness: true',
+      'shuvix-session-awareness: sure',
+      'shuvix-dispatch-only: true'
+    ]) {
+      const parsed = parseAgentDefinitionFile(`---\nname: x\n${raw}\n---\nbody`, 'x')
+      expect(parsed, raw).not.toBeNull()
+      expect(parsed, raw).not.toHaveProperty('sessionAwareness')
+      const out = serializeAgentDefinitionFile(parsed!)
+      expect(out, raw).not.toContain('shuvix-session-awareness')
+      expect(out, raw).not.toContain('shuvix-dispatch-only')
+    }
   })
 
   it('正文里的 {{shuvix:*}} 占位符原样保留（替换发生在 createAgent，解析层不动）', () => {
@@ -252,8 +246,7 @@ describe('serializeAgentDefinitionFile', () => {
       systemPrompt: 'You are a reviewer.\n\n- be thorough\n- cite lines',
       tools: ['read', 'grep', 'mcp:Context7', 'skill:pdf', 'agent'],
       instructionFiles: ['AGENTS.md', 'docs/house-rules.md'],
-      projectAwareness: true,
-      sessionAwareness: false
+      projectAwareness: true
     }
     const md = serializeAgentDefinitionFile(def)
     expect(md).toContain('shuvix-instruction-files: AGENTS.md, docs/house-rules.md')
@@ -269,8 +262,7 @@ describe('serializeAgentDefinitionFile', () => {
       systemPrompt: 'body',
       tools: [],
       instructionFiles: [],
-      projectAwareness: false,
-      sessionAwareness: false
+      projectAwareness: false
     })
     expect(md).toBe('---\nshuvix: agent v1\nname: minimal\n---\n\nbody\n')
     expect(parseAgentDefinitionFile(md, 'x')).toEqual({
@@ -280,8 +272,7 @@ describe('serializeAgentDefinitionFile', () => {
       systemPrompt: 'body',
       tools: [],
       instructionFiles: [],
-      projectAwareness: false,
-      sessionAwareness: false
+      projectAwareness: false
     })
   })
 
@@ -293,8 +284,7 @@ describe('serializeAgentDefinitionFile', () => {
       systemPrompt: 'body',
       tools: [],
       instructionFiles: [],
-      projectAwareness: false,
-      sessionAwareness: false
+      projectAwareness: false
     }
     expect(serializeAgentDefinitionFile({ ...base, model: 'openai/gpt-4o' })).toContain(
       'shuvix-model: openai/gpt-4o'
@@ -313,8 +303,7 @@ describe('serializeAgentDefinitionFile', () => {
       tools: ['read'],
       model: 'openai/gpt-4o',
       instructionFiles: ['AGENTS.md'],
-      projectAwareness: true,
-      sessionAwareness: false
+      projectAwareness: true
     })
     const keys = md
       .split('\n---')[0]
@@ -346,8 +335,7 @@ describe('serializeAgentDefinitionFile', () => {
       tools: ['read', 'grep'],
       model,
       instructionFiles: ['AGENTS.md'],
-      projectAwareness: false,
-      sessionAwareness: false
+      projectAwareness: false
     }
     expect(parseAgentDefinitionFile(serializeAgentDefinitionFile(def), 'other-name')).toEqual(def)
   })
@@ -365,8 +353,7 @@ describe('serializeAgentDefinitionFile', () => {
       tools: [],
       model,
       instructionFiles: [],
-      projectAwareness: false,
-      sessionAwareness: false
+      projectAwareness: false
     })
     expect(parseAgentDefinitionFile(md, 'x')!.model).toBe(model)
   })
@@ -379,8 +366,7 @@ describe('serializeAgentDefinitionFile', () => {
       systemPrompt: 'body',
       tools: [],
       instructionFiles: [],
-      projectAwareness: false,
-      sessionAwareness: false
+      projectAwareness: false
     })
     expect(md.split('\n')[1]).toBe(`${AGENT_FILE_MARKER_KEY}: ${AGENT_FILE_MARKER}`)
   })
@@ -394,8 +380,7 @@ describe('serializeAgentDefinitionFile', () => {
       systemPrompt: 'body',
       tools: ['read'],
       instructionFiles: [],
-      projectAwareness: false,
-      sessionAwareness: false
+      projectAwareness: false
     })
   })
 
@@ -408,8 +393,7 @@ describe('serializeAgentDefinitionFile', () => {
       systemPrompt: '',
       tools: [],
       instructionFiles: [],
-      projectAwareness: false,
-      sessionAwareness: false
+      projectAwareness: false
     })
     const parsed = parseAgentDefinitionFile(md, 'x')
     expect(parsed).not.toBeNull()
@@ -504,16 +488,16 @@ describe('WU —— parseAgentDefinitionFile 的 warn 诊断通道', () => {
     expect(msg).toContain('relative path')
   })
 
-  it.each([
-    ['WU-7', 'shuvix-project-awareness'],
-    ['WU-8', 'shuvix-session-awareness']
-  ])('%s %s 非布尔：点名该键并给出 true / false', (_id, key) => {
-    // `yes please` 是最真实的误写：YAML 里 `yes` 本身是布尔，加了词才落回字符串
-    const msg = soleWarn(`---\nname: b\n${key}: yes please\n---\nbody`)
-    expect(msg).toContain(`'${key}'`)
-    expect(msg).toContain('must be a boolean')
-    expect(msg).toContain('true / false')
-  })
+  it.each([['WU-7', 'shuvix-project-awareness']])(
+    '%s %s 非布尔：点名该键并给出 true / false',
+    (_id, key) => {
+      // `yes please` 是最真实的误写：YAML 里 `yes` 本身是布尔，加了词才落回字符串
+      const msg = soleWarn(`---\nname: b\n${key}: yes please\n---\nbody`)
+      expect(msg).toContain(`'${key}'`)
+      expect(msg).toContain('must be a boolean')
+      expect(msg).toContain('true / false')
+    }
+  )
 
   it('WU-9 who 的取舍：字段级失败报 frontmatter name，早期失败才回退文件名', () => {
     // 字段级失败：name 已经解析出来了，报它才对得上用户在编辑器里看到的档案
@@ -578,8 +562,7 @@ describe('DG —— 诊断完整性守卫', () => {
       '---\nshuvix-model: [a]\n---\nbody',
       '---\nshuvix-instruction-files: true\n---\nbody',
       '---\nshuvix-instruction-files: ../outside.md\n---\nbody',
-      '---\nshuvix-project-awareness: [a]\n---\nbody',
-      '---\nshuvix-session-awareness: sure\n---\nbody'
+      '---\nshuvix-project-awareness: [a]\n---\nbody'
     ]
     for (const raw of rejected) {
       const messages: string[] = []
@@ -792,16 +775,15 @@ describe('WB —— 属性卡描述符与解析器的键集对齐', () => {
       'shuvix-model',
       'shuvix-tools',
       'shuvix-instruction-files',
-      'shuvix-project-awareness',
-      'shuvix-session-awareness'
+      'shuvix-project-awareness'
     ])
 
-    // boolean kind 的键 = 解析器强制布尔的两个（非布尔即整份非法）
+    // boolean kind 的键 = 解析器强制布尔的唯一一个（非布尔即整份非法）
     const booleanKeys = agentDescriptor.fields
       .filter((f) => f.kind === 'boolean')
       .map((f) => f.key)
       .sort()
-    expect(booleanKeys).toEqual(['shuvix-project-awareness', 'shuvix-session-awareness'])
+    expect(booleanKeys).toEqual(['shuvix-project-awareness'])
     for (const key of booleanKeys) {
       expect(parseAgentDefinitionFile(`---\n${key}: nope\n---\nbody`, 'x'), key).toBeNull()
       expect(parseAgentDefinitionFile(`---\n${key}: true\n---\nbody`, 'x'), key).not.toBeNull()

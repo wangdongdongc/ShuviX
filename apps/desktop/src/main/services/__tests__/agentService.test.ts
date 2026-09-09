@@ -422,8 +422,9 @@ describe('agentService.getProfile —— 一份写坏的同名用户档案不该
 
 /**
  * `isSessionProfile` —— 子会话钉档案（sessionService.pinAgentProfile）准入的唯一判据：
- * 基座（work / chat / notebook）恒不算（判名字，不看声明），其余看 `shuvix-session-awareness`。
- * 用真件：内置全集与「用户覆盖 + 声明」的合并都要穿透真注册表。
+ * 只判名字 —— 基座（work / chat / notebook）恒不算，其余任何档案都算。曾经的第二道门
+ * `shuvix-session-awareness` 已退役（解析器把它当未知键忽略）。用真件：内置全集与用户覆盖
+ * 都要穿透真注册表。
  */
 describe('agentService.isSessionProfile —— 可作子会话档案的判据表', () => {
   const judge = (name: string): boolean => {
@@ -432,29 +433,37 @@ describe('agentService.isSessionProfile —— 可作子会话档案的判据表
     return agentService.isSessionProfile(profile!)
   }
 
-  it('AS-23a 三个基座恒 false —— 哪怕用户覆盖 work.md 还写上会话感知（判名字不判声明）', () => {
+  it('AS-23a 三个基座恒 false —— 用户覆盖 work.md 也一样（判名字）', () => {
     for (const name of ['work', 'chat', 'notebook']) {
       expect(judge(name), name).toBe(false)
     }
-    writeAgentFile('work.md', agentMd('work', ['shuvix-session-awareness: true']))
-    expect(agentService.getProfile('work')!.sessionAwareness).toBe(true)
+    writeAgentFile('work.md', agentMd('work'))
+    expect(agentService.getProfile('work')!.source).toBe('user')
     expect(judge('work')).toBe(false)
   })
 
-  it('AS-23b 内置执行体：声明了会话感知的六个为 true，wiki-writer / titler / bot-intent 为 false', () => {
-    for (const name of ['coding', 'browser', 'explore', 'visualization', 'widget', 'wiki']) {
+  it('AS-23b 其余内置全部为 true —— 含曾经只可派发的 wiki-writer / titler / bot-intent', () => {
+    for (const name of [
+      'coding',
+      'browser',
+      'explore',
+      'visualization',
+      'widget',
+      'wiki',
+      'wiki-writer',
+      'titler',
+      'bot-intent'
+    ]) {
       expect(judge(name), name).toBe(true)
-    }
-    for (const name of ['wiki-writer', 'titler', 'bot-intent']) {
-      expect(judge(name), name).toBe(false)
     }
   })
 
-  it('AS-23c 用户档案：声明 true → true；缺省 → false（只可派发）', () => {
-    writeAgentFile('aware.md', agentMd('aware', ['shuvix-session-awareness: true']))
+  it('AS-23c 用户档案：不声明任何开关也是 true；老文件里的 shuvix-session-awareness 只是未知键', () => {
     writeAgentFile('plain.md', agentMd('plain'))
-    expect(judge('aware')).toBe(true)
-    expect(judge('plain')).toBe(false)
+    writeAgentFile('legacy-off.md', agentMd('legacy-off', ['shuvix-session-awareness: false']))
+    expect(judge('plain')).toBe(true)
+    expect(judge('legacy-off')).toBe(true)
+    expect(agentService.getProfile('legacy-off')).not.toHaveProperty('sessionAwareness')
   })
 })
 
@@ -468,7 +477,6 @@ describe('agentService —— 结构化写路径（属性卡/表单的 saveAgent
     tools: ['read'],
     instructionFiles: [],
     projectAwareness: false,
-    sessionAwareness: false,
     ...extra
   })
 

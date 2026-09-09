@@ -194,7 +194,7 @@ describe('resolveAgentProfileName —— 聊天会话没有根 Agent', () => {
 
   it('bots 为空数组 + agentProfile：根会话忽略戳（chat），只有子会话才读它（coding）', () => {
     // 空数组不劫持普通会话；而戳只对子会话生效 —— 根会话上的 agentProfile 是遗留数据
-    mocks.getProfile.mockReturnValue({ name: 'coding', tools: [], sessionAwareness: true })
+    mocks.getProfile.mockReturnValue({ name: 'coding', tools: [] })
     row({ bots: [], agentProfile: 'coding' })
     expect(sessionService.resolveAgentProfileName('s1')).toBe('chat')
     expect(mocks.getProfile).not.toHaveBeenCalled()
@@ -249,7 +249,7 @@ describe('pinAgentProfile —— 聊天会话是根会话，被子会话门拒�
     // 会话内切换档案这个入口已经不存在：pinAgentProfile 只认 parentId，聊天会话恒为根会话，
     // 在方法体第一句就被挡下 —— 不需要（也不该）先判它是不是聊天会话
     mocks.daoPick.mockReturnValue({ parentId: null, settings: { bot: 'a' } })
-    mocks.getProfile.mockReturnValue({ name: 'coding', tools: ['read'], sessionAwareness: true })
+    mocks.getProfile.mockReturnValue({ name: 'coding', tools: ['read'] })
     const res = await sessionService.pinAgentProfile('s1', 'coding')
     expect(res.success).toBe(false)
     expect(res.error).toContain('Only a sub-session')

@@ -19,7 +19,6 @@ const PROFILE: AgentProfile = {
   tools: ['read', 'grep'],
   instructionFiles: [],
   projectAwareness: false,
-  sessionAwareness: false,
   source: 'builtin',
   basePath: ''
 }

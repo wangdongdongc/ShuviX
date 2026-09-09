@@ -651,26 +651,19 @@ describe('BX —— 宽松侧（与 agent md 同口径）', () => {
   })
 
   it('BX-5 **agent md 的键写在 bot 上被忽略**（bot 是绑定不是 agent），同一段在 agent 侧却非法', () => {
-    // 模型 / 工具 / 指令文件 / 项目感知 / 会话感知归槽位里那份 agent md。
+    // 模型 / 工具 / 指令文件 / 项目感知归槽位里那份 agent md。
     // 值同样刻意取 agent 解析器会拒绝的形状（列表 tools、数字 model、越界指令文件、
     // 非布尔开关）—— 证明这里不是「宽容地解析了」，而是压根不读
     const agentKeys = [
       'shuvix-tools: [read, bash]',
       'shuvix-model: 4',
       'shuvix-instruction-files: ../outside.md',
-      'shuvix-project-awareness: yes please',
-      'shuvix-session-awareness: true'
+      'shuvix-project-awareness: yes please'
     ]
     const { result, messages } = parseWithWarn(bot(...agentKeys))
     expect(result).not.toBeNull()
     expect(messages).toEqual([])
-    for (const leak of [
-      'tools',
-      'model',
-      'instructionFiles',
-      'projectAwareness',
-      'sessionAwareness'
-    ]) {
+    for (const leak of ['tools', 'model', 'instructionFiles', 'projectAwareness']) {
       expect(result, leak).not.toHaveProperty(leak)
     }
     // 对照：同一段 frontmatter 喂 agent 解析器 → 整份非法（这些键在那边才有语义）

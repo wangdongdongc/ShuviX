@@ -11,8 +11,8 @@
  *     agent md 迁移到其他应用时被误读。省略 = 空白名单（无工具）；
  *     条目大小写不敏感（内置工具名归一为小写注册名），`agent` 为嵌套派发 opt-in，
  *     `mcp:<server>` / `skill:<name>` 前缀语法为 ShuviX 扩展（余部大小写保留）；
- *   - ShuviX 自有字段带 `shuvix-` 前缀：`shuvix-displayName`、模型 `shuvix-model`、
- *     曝光开关 `shuvix-session-awareness`，与两个上下文注入声明：
+ *   - ShuviX 自有字段带 `shuvix-` 前缀：`shuvix-displayName`、模型 `shuvix-model`，
+ *     与两个上下文注入声明：
  *     `shuvix-instruction-files`（**逗号分隔的文件清单**，如
  *     `shuvix-instruction-files: AGENTS.md, CLAUDE.md`：该 agent 认哪些项目指令文件，
  *     按列出顺序取**第一个存在且非空**的注入，至多一个；省略 = 不注入），
@@ -29,14 +29,6 @@
  *     （builtin/user 的判定在加载方——buildBuiltinProfile 恒标 builtin，目录扫描恒标 user），
  *     它只在 md 里声明「这份文案出自 ShuviX 内置集」。GUI 写出的用户档案不会带上它
  *     （serialize 的键集是固定白名单），所以复制一份内置档案去改也不会自称内置；
- *   - `shuvix-session-awareness: true`（**会话感知**）表示该档案懂得「自己是一场会话的人格」，
- *     因而可以驾驭一条会话 —— agent 开子会话时可用 `agent_profile` 点名它。**缺省 false** ——
- *     一个 agent 默认只是被派发的执行体：派发是一次性的新鲜上下文，而当一条会话的人格意味着
- *     它要在一场长对话里持续成立，这是要显式声明才成立的能力（那些「政策必须跑在新鲜
- *     上下文里」的执行型 agent，如 wiki-writer，正是不声明它的原因：长对话会稀释系统
- *     提示词的权重，而它们违反政策的代价静默且不可逆）。只管子会话、不管派发 ——
- *     不声明照样可被派发；与 BASE_PROFILE_NAMES 的区别是那是「两边都不进」——基座档案
- *     由会话形态推导（项目会话 work / 无项目 chat / 笔记本 notebook），从不被点名；
  *   - `shuvix-model` 指定该 agent 用哪个模型：GUI 写出恒为 `<providerId>/<modelId>`
  *     （与 `agent.setModel` 的入参一一对应），手写的裸 `<modelId>` 也能读；省略 = 不声明
  *     （跟随会话 / 继承派发方）。本层只做「原样存取」，取值解释（拆前缀 / 对模型目录解析 /
@@ -46,12 +38,14 @@
  *   - frontmatter 用完整 YAML 解析（支持多行字符串、引号、注释等）。
  *
  * 无历史兼容：旧方言 key（`whenToUse` / `displayName`）、已废弃的 requiredMcp 系 key、
- * 被 `shuvix-session-awareness` 取代的反向开关 `shuvix-dispatch-only`（取值相反：旧文件
- * 不写这个键即可切换，新语义下不写 = 不可切换 —— 刻意不做迁移，见上），
+ * 曝光开关 `shuvix-dispatch-only` 及后来取代它的 `shuvix-session-awareness`（「能否当一场
+ * 会话的人格」曾是档案的属性；会话内切换档案下线、根档案改由会话形态推导之后，唯一还问
+ * 这个问题的是子会话的 `agent_profile`，而它只需要「不是基座」——一个只剩一个消费方、
+ * 又要用户自己在 GUI 里勾的开关不值得留，刻意不做迁移：老文件里的这一行按未知键忽略），
  * `shuvix-prompt-sections`（动态段机制已被 {{shuvix:*}} 变量取代）、被 `shuvix-project-awareness`
  * 合并掉的 `shuvix-project-prompt` / `shuvix-project-memory` 与通用 `tools` key
  * （其他 app 语义，见上）都不再读取（未知 key 忽略）；`shuvix-tools` /
- * `shuvix-instruction-files` / `shuvix-model` 仅接受字符串、两个布尔 key 仅接受布尔，
+ * `shuvix-instruction-files` / `shuvix-model` 仅接受字符串、布尔 key `shuvix-project-awareness` 仅接受布尔，
  * 类型不符视为文件非法（跳过并记警告），宁可整体拒绝也不静默降级 —— 包括
  * `shuvix-instruction-files: true` 这种改制前的写法：布尔已不再是合法取值，
  * 拒绝理由里直说「改列文件名」，比默默按老语义猜一份清单可诊断。
@@ -86,11 +80,6 @@ export interface ParsedAgentFile {
    * （两者同一开关，都按根会话的项目解析）；缺省 false。
    */
   projectAwareness: boolean
-  /**
-   * `shuvix-session-awareness`：会话感知 —— 该档案可被选为会话自己的 agent
-   * （`/<agentName>` 切换目标 / 输入框档案选择器）；缺省 false = 只可被派发。
-   */
-  sessionAwareness: boolean
 }
 
 /**
@@ -143,8 +132,7 @@ function stringField(fields: Record<string, unknown>, key: string): string | und
  * bot md（`shuvix: bot v1`）是 agent md 的**超集**，这几个键在两种文件里必须逐字同义：
  * 同一套类型纪律、同一句拒绝理由。抽成共享函数而非各写一遍，是为了让 agent md 将来
  * 加键/改纪律时 bot 自动跟上 —— 两份复制品迟早会漂移，而漂移出来的差异没人解释得清。
- *
- * `shuvix-session-awareness` 不在其列：它是「能否被切成会话档案」的开关，bot 没有这个概念。
+ * agent md 自己的键只剩 `name` 与正文，形状字段与 bot md 完全重合。
  */
 export interface AgentSharedFields {
   displayName: string
@@ -254,16 +242,10 @@ export function parseAgentDefinitionFile(
   const shared = parseAgentSharedFields(fields, name)
   if ('error' in shared) return reject(shared.error)
 
-  const sessionAwarenessRaw = fields['shuvix-session-awareness'] ?? null
-  if (sessionAwarenessRaw !== null && typeof sessionAwarenessRaw !== 'boolean') {
-    return reject("'shuvix-session-awareness' must be a boolean (true / false)")
-  }
-
   return {
     name,
     ...shared.fields,
-    systemPrompt: split.body.trim(),
-    sessionAwareness: sessionAwarenessRaw ?? false
+    systemPrompt: split.body.trim()
   }
 }
 
@@ -288,7 +270,6 @@ export function serializeAgentDefinitionFile(data: ParsedAgentFile): string {
     fields['shuvix-instruction-files'] = data.instructionFiles.join(', ')
   }
   if (data.projectAwareness) fields['shuvix-project-awareness'] = true
-  if (data.sessionAwareness) fields['shuvix-session-awareness'] = true
 
   const frontmatter = stringifyYaml(fields, { lineWidth: 0 }).trimEnd()
   const body = data.systemPrompt.trim()

@@ -265,8 +265,8 @@ class SubSessionRunner {
     const session = sessionService.create({ parentId, ...(title ? { title } : {}) })
     if (title) sessionService.updateTitle(session.id, title, 'user')
 
-    // 档案：父级点名才钉（准入见 sessionService.pinAgentProfile —— 基座与未声明会话感知的
-    // 档案都被拒），不点名就什么也不写：子会话与父会话同一形态（projectId 恒随父），
+    // 档案：父级点名才钉（准入见 sessionService.pinAgentProfile —— 基座被拒），
+    // 不点名就什么也不写：子会话与父会话同一形态（projectId 恒随父），
     // resolveAgentProfileName 推导出的基座天然一致。钉了的那次会把 mcp:/skill: 勾选替换成
     // 档案声明的那套，紧接着的 seedRunConfig 负责在档案没声明时把父会话那套补回去
     const requested = params.agentProfile?.trim()

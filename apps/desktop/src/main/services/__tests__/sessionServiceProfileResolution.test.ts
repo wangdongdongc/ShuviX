@@ -143,8 +143,7 @@ function world(shape: Shape): void {
 /** 一份真存在的档案（getProfile 有值即可，resolve 只看「在不在」） */
 const existing = (name: string): Partial<AgentProfile> => ({
   name,
-  tools: [],
-  sessionAwareness: true
+  tools: []
 })
 
 const resolve = (): string | null => sessionService.resolveAgentProfileName(SID)

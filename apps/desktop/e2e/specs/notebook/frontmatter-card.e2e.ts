@@ -228,12 +228,12 @@ describe('frontmatter 属性卡', () => {
       )
     ).toBe('AGENTS.md, CLAUDE.md')
 
-    // 两个布尔字段按描述符顺序（项目感知 → 会话感知），均缺省 unset
-    // —— instruction-files 是清单不是开关，项目提示词与项目记忆已合成项目感知一个开关
+    // 唯一的布尔字段是项目感知，缺省 unset —— instruction-files 是清单不是开关，项目提示词
+    // 与项目记忆已合成项目感知一个开关，会话感知已退役
     const toggles = await app.main.eval<string[]>(
       `[...document.querySelectorAll('.cm-shuvix-fmcard-toggle')].map((n) => n.dataset.state)`
     )
-    expect(toggles).toEqual(['unset', 'unset'])
+    expect(toggles).toEqual(['unset'])
 
     // 未知键（shuvix-builtin）落通用 key/value 行；类型标记键本身不成行
     const labels = await app.main.eval<string[]>(

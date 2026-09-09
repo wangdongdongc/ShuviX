@@ -40,14 +40,8 @@ const NOTE_REL = 'notes/fd-note.md'
 
 beforeAll(async () => {
   app = await launchApp()
-  // 会话感知缺省 true：可作子会话的档案
+  // 任何非基座档案都可作子会话的档案（没有开关要写）
   writeAgentMd(app, PINNED, { description: '可作子会话档案', tools: 'read', body: PINNED_BODY })
-  writeAgentMd(app, 'e2e-dispatch-only', {
-    description: '只可派发',
-    tools: 'read',
-    sessionAwareness: false,
-    body: 'DISPATCH ONLY BODY.'
-  })
   const projDir = join(app.home, 'fd-proj')
   mkdirSync(join(projDir, 'notes'), { recursive: true })
   writeFileSync(join(projDir, 'notes', 'fd-note.md'), '# FD note\n')

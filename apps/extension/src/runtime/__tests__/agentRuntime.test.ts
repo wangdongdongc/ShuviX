@@ -60,7 +60,6 @@ const minimalProfile = (name: string): AgentProfile => ({
   tools: [],
   instructionFiles: [],
   projectAwareness: false,
-  sessionAwareness: false,
   source: 'builtin',
   basePath: ''
 })

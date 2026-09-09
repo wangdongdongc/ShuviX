@@ -3,11 +3,12 @@
  *
  * 它是 `settings.agentProfile` 如今唯一的写入口（session 工具 `create-sub-session` 的
  * `agent_profile`，经 subSessionRunner.create 调用）。钉的是：
- *   - **准入四拒**：非子会话（含会话不存在）/ 未知名 / 基座名（work / chat / notebook）/
- *     未声明 `shuvix-session-awareness` —— 且每一种拒绝都**零副作用**：不落库、不失效运行时、
- *     不往会话树写种子、不广播；非子会话那一拒还在 getProfile 之前（方法体第一句）；
- *   - 基座拒绝的判据是**名字**不是声明：用户覆盖 work.md 还写上会话感知，仍然被拒 ——
- *     子会话不点名就自然落到自己形态的基座上，点名一个基座只会得到说不清的组合；
+ *   - **准入三拒**：非子会话（含会话不存在）/ 未知名 / 基座名（work / chat / notebook）——
+ *     且每一种拒绝都**零副作用**：不落库、不失效运行时、不往会话树写种子、不广播；
+ *     非子会话那一拒还在 getProfile 之前（方法体第一句）。曾经的第四拒「未声明
+ *     `shuvix-session-awareness`」随该键退役而消失：其余任何档案都可以被点名；
+ *   - 基座拒绝的判据是**名字**：子会话不点名就自然落到自己形态的基座上，点名一个基座
+ *     只会得到说不清的组合；
  *   - **成功链顺序**：落库 → invalidateAgent → 种子（模型 / mcp:/skill: 工具）→ 广播。
  *     落库在 invalidate 前、种子在 invalidate 后：钉档案与重建之间不能有一个还在写树的旧运行时；
  *   - **工具种子是替换不是叠加**：没声明 mcp:/skill: 就写一个空数组（清空，不是跳过）——
@@ -16,7 +17,7 @@
  *     其余照常；未声明 → 不去解析。
  *
  * mock 面照旧（import 图全换假件，只留 chat-protocol / agent-runtime 真件）。`isSessionProfile`
- * 在假件里用**真判据**复算（`!BASE_PROFILE_NAMES.has(name) && sessionAwareness`，名单常量取真件）
+ * 在假件里用**真判据**复算（`!BASE_PROFILE_NAMES.has(name)`，名单常量取真件）
  * —— 真 agentService 要 electron + 用户目录，本文件够不到；假件退化成「恒 true」会让基座那一拒
  * 失去意义。invalidateAgent 用实例级 spy（经 this. 动态派发可拦截，保留穿透：底层
  * SessionManager.remove 对无运行时的会话直接 resolve）。
@@ -65,7 +66,7 @@ vi.mock('../agentService', () => ({
   agentService: {
     getProfile: mocks.getProfile,
     // 与 agentService.isSessionProfile 同一条表达式（名单常量取真件）
-    isSessionProfile: (p: AgentProfile) => !BASE_PROFILE_NAMES.has(p.name) && p.sessionAwareness
+    isSessionProfile: (p: AgentProfile) => !BASE_PROFILE_NAMES.has(p.name)
   }
 }))
 vi.mock('../agentSession', () => ({ AgentSession: class {} }))
@@ -102,14 +103,13 @@ beforeEach(() => {
 
 const SID = 'child-1'
 
-/** 一份档案（name 决定基座判定；sessionAwareness 决定第二道门） */
+/** 一份档案（name 决定基座判定，那是准入唯一看的东西） */
 const profile = (
   name: string,
-  over: Partial<Pick<AgentProfile, 'tools' | 'sessionAwareness' | 'model'>> = {}
+  over: Partial<Pick<AgentProfile, 'tools' | 'model'>> = {}
 ): Partial<AgentProfile> => ({
   name,
   tools: over.tools ?? ['read'],
-  sessionAwareness: over.sessionAwareness ?? true,
   ...(over.model ? { model: over.model } : {})
 })
 
@@ -127,7 +127,7 @@ function expectNoSideEffects(): void {
   expect(mocks.resolveProfileModelSpec).not.toHaveBeenCalled()
 }
 
-describe('准入 —— 四种拒绝，都零副作用', () => {
+describe('准入 —— 三种拒绝，都零副作用', () => {
   it.each([
     ['根会话（parentId 为 null）', { parentId: null }],
     ['会话不存在', undefined]
@@ -150,11 +150,10 @@ describe('准入 —— 四种拒绝，都零副作用', () => {
   })
 
   it.each(['work', 'chat', 'notebook'])(
-    'PIN-3 基座名 %s 拒绝，判据是名字不是声明：哪怕档案自称会话感知也一样',
+    'PIN-3 基座名 %s 拒绝：错误含 base profile 与 omit agent_profile',
     async (name) => {
-      // 模拟用户覆盖 work.md 还写了 shuvix-session-awareness: true —— 仍然是基座。
-      // 错误文案含 base profile 与「omit agent_profile」：后者是模型的下一步
-      mocks.getProfile.mockReturnValue(profile(name, { sessionAwareness: true }))
+      // 用户覆盖的 work.md 也是基座（判名字）。错误文案里的「omit agent_profile」是模型的下一步
+      mocks.getProfile.mockReturnValue(profile(name))
       const res = await pin(name)
       expect(res.success).toBe(false)
       expect(res.error).toContain('base profile')
@@ -163,21 +162,19 @@ describe('准入 —— 四种拒绝，都零副作用', () => {
     }
   )
 
-  it.each(['wiki-writer', 'my-dispatch-only'])(
-    'PIN-4 未声明会话感知的档案 %s 拒绝：错误含 not session-aware，零副作用',
+  it.each(['wiki-writer', 'titler', 'my-plain-agent'])(
+    'PIN-4 曾经只可派发的档案 %s 现在照常钉得上 —— 会话感知这道门已退役',
     async (name) => {
-      // 只可派发的执行体：政策的有效性依赖每次派发都是新鲜上下文
-      mocks.getProfile.mockReturnValue(profile(name, { sessionAwareness: false }))
+      mocks.getProfile.mockReturnValue(profile(name))
       const res = await pin(name)
-      expect(res.success).toBe(false)
-      expect(res.error).toContain('not session-aware')
-      expectNoSideEffects()
+      expect(res.success).toBe(true)
+      expect(mocks.daoUpdateSettings).toHaveBeenCalledWith(SID, { agentProfile: name })
     }
   )
 })
 
 describe('成功链', () => {
-  it('PIN-5 普通会话感知档案：落库 → invalidate → 工具种子 → 广播，返回 applied', async () => {
+  it('PIN-5 普通具名档案：落库 → invalidate → 工具种子 → 广播，返回 applied', async () => {
     mocks.getProfile.mockReturnValue(profile('myprof', { tools: ['read', 'skill:x', 'mcp:y'] }))
     const res = await pin('myprof')
 
@@ -279,15 +276,6 @@ describe('PIN-8 拒绝矩阵：拒绝路径不回传半截结果', () => {
         mocks.getProfile.mockReturnValue(profile('work', { model: 'openai/gpt-x' }))
       },
       'work'
-    ],
-    [
-      '未声明会话感知',
-      (): void => {
-        mocks.getProfile.mockReturnValue(
-          profile('wiki-writer', { sessionAwareness: false, model: 'openai/gpt-x' })
-        )
-      },
-      'wiki-writer'
     ]
   ])(
     '%s：applied 与 modelUnavailable 都不存在，只有 success 与 error 两个键',

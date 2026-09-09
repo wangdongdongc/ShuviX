@@ -144,15 +144,16 @@ class AgentService implements AgentProfileRegistry {
   }
 
   /**
-   * 这份档案能否**作为某条会话自己的档案**（而不是只能被派发的执行体）。
+   * 这份档案能否**作为某条会话自己的档案** —— 子会话钉档案的准入
+   * （sessionService.pinAgentProfile：session 工具 `create-sub-session` 的 `agent_profile`）。
    *
-   * 如今唯一的入口是子会话的钉档案（sessionService.pinAgentProfile —— session 工具
-   * `create-sub-session` 的 `agent_profile`）。基座档案（work / chat / notebook）不算：
-   * 它们由会话形态推导、从不被点名（见 BASE_PROFILE_NAMES）；其余看
-   * `shuvix-session-awareness`（不声明 = 只可派发的执行体，如 wiki-writer）。
+   * 判据只有名字：基座档案（work / chat / notebook）不算，它们由会话形态推导、从不被点名
+   * （见 BASE_PROFILE_NAMES）；其余任何档案都可以。曾经还有第二道门 `shuvix-session-awareness`
+   * （只可派发的执行体如 wiki-writer 不声明它），随会话内切换档案一并退役：能点名子会话档案的
+   * 只剩 LLM 自己，而它被提示词导向 `coding`；为这一种误用留一个要用户在 GUI 里勾的开关不值。
    */
   isSessionProfile(profile: AgentProfile): boolean {
-    return !BASE_PROFILE_NAMES.has(profile.name) && profile.sessionAwareness
+    return !BASE_PROFILE_NAMES.has(profile.name)
   }
 
   /**

@@ -37,11 +37,9 @@ describe('bot 门控段 agent —— 结构钉板', () => {
     }
   })
 
-  it('BA-2 不声明会话感知（只可派发）且 name 恒等于 spec.name', () => {
-    // 门控段切成主会话人格毫无意义 —— 不声明会话感知，用户在输入框里选不到
+  it('BA-2 name 恒等于 spec.name', () => {
     for (const language of LANGS) {
       const profile = build(BOT_INTENT_SPEC, language)
-      expect(profile.sessionAwareness, language).toBe(false)
       expect(profile.name, language).toBe(BOT_INTENT_SPEC.name)
     }
   })

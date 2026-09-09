@@ -38,13 +38,6 @@ export interface AgentProfile {
    * 项目提示词（项目设置的纯文本）与项目记忆索引一并注入（派生按根会话的项目解析）。
    */
   projectAwareness: boolean
-  /**
-   * `shuvix-session-awareness`：会话感知 —— 该档案懂得「自己是一场会话的人格」，
-   * 因而可以驾驭一条会话：agent 开子会话时可用 `agent_profile` 点名它。
-   * 缺省 false = 只可被派发（一次性的新鲜上下文）。只管子会话、不管派发；与
-   * BASE_PROFILE_NAMES 不同 —— 那是「两边都不进」（基座由会话形态推导，不被点名）。
-   */
-  sessionAwareness: boolean
   /** 来源（决定 UI 能否编辑/删除） */
   source: 'builtin' | 'user'
   /** 配置所在路径（桌面=agent md 文件路径；扩展可为空） */

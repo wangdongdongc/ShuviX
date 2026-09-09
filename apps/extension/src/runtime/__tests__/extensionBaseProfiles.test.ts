@@ -6,9 +6,9 @@
  * 东西，直接用会误导 Agent。但代价是漂移无声 —— 最危险的一种是把桌面 `work` 新增的
  * 「交给子会话去做」整节同步过来：扩展根本没有 `session` 工具，模型会照着提示词调一个
  * 不存在的动作。故这里钉四样：
- *   - **结构字段与共享版逐项相等**（name / 会话感知 / 指令文件 / 项目感知）；
- *   - **两份副本都不声明会话感知**（显式钉住，不只与共享版比 —— 逐项相等那条在两边同时
- *     漂到 true 时是空转的）：基座由会话形态推导、从不被点名，这个标志对它们没有意义；
+ *   - **结构字段与共享版逐项相等**（name / 指令文件 / 项目感知）；
+ *   - **六份 md 都不带退役的 `shuvix-session-awareness`**：这个键随会话内切换档案一并退役，
+ *     副本是用户「创建覆盖副本」的样板，样板里留一行死键等于教用户去写它；
  *   - **两份副本的工具面完全相等** —— 桌面上两条路线差在「自己干 vs 交给 coding 子会话」，
  *     扩展既没有 shell 也没有子会话，两份文案只该差工作目录形态（项目文件夹 vs 隔离临时
  *     目录）。工具面一旦分叉，「项目会话 work / 无项目会话 chat」这条形态推导在两端就不再
@@ -77,7 +77,7 @@ describe('扩展端基座档案 — 结构字段与共享版对齐', () => {
     }
   })
 
-  it('name / 会话感知 / 指令文件 / 项目感知与共享版逐项相等（displayName 与描述允许各说各话）', () => {
+  it('name / 指令文件 / 项目感知与共享版逐项相等（displayName 与描述允许各说各话）', () => {
     for (const name of [WORK_PROFILE_NAME, CHAT_PROFILE_NAME]) {
       for (const language of LANGUAGES) {
         const a = ext(name, language)
@@ -85,14 +85,12 @@ describe('扩展端基座档案 — 结构字段与共享版对齐', () => {
         expect(
           {
             name: a.name,
-            sessionAwareness: a.sessionAwareness,
             instructionFiles: a.instructionFiles,
             projectAwareness: a.projectAwareness
           },
           `${name}.${language}`
         ).toEqual({
           name: b.name,
-          sessionAwareness: b.sessionAwareness,
           instructionFiles: b.instructionFiles,
           projectAwareness: b.projectAwareness
         })
@@ -100,12 +98,10 @@ describe('扩展端基座档案 — 结构字段与共享版对齐', () => {
     }
   })
 
-  it('两份副本三语都不声明会话感知（显式钉住：基座由形态推导、从不被点名）', () => {
-    // 上一条只保证「与共享版相等」—— 两边同时漂到 true 时它照样绿。这个标志如今只有一个
-    // 含义（能否作子会话的 agent_profile），基座对它没有意义，三语六份都不该写这一行
-    for (const name of [WORK_PROFILE_NAME, CHAT_PROFILE_NAME]) {
-      for (const language of LANGUAGES) {
-        expect(ext(name, language).sessionAwareness, `${name}.${language}`).toBe(false)
+  it('六份 md 都不带退役的 shuvix-session-awareness', () => {
+    for (const [name, spec] of Object.entries(SPECS)) {
+      for (const [language, source] of Object.entries(spec.sources)) {
+        expect(source, `${name}.${language}`).not.toContain('shuvix-session-awareness')
       }
     }
   })
@@ -118,7 +114,6 @@ describe('扩展端基座档案 — 结构字段与共享版对齐', () => {
         expect(loc.tools, `${name}.${language} tools`).toEqual(en.tools)
         expect(loc.instructionFiles, `${name}.${language}`).toEqual(en.instructionFiles)
         expect(loc.projectAwareness, `${name}.${language}`).toBe(en.projectAwareness)
-        expect(loc.sessionAwareness, `${name}.${language}`).toBe(en.sessionAwareness)
       }
     }
   })

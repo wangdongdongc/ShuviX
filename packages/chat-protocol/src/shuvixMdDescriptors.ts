@@ -97,8 +97,7 @@ const AGENT_DESCRIPTOR: ShuvixMdTypeDescriptor = {
     { key: AGENT_MODEL_KEY, labelKey: 'tool.subAgentModel', kind: 'select' },
     { key: 'shuvix-tools', labelKey: 'tool.subAgentTools', kind: 'csv' },
     { key: 'shuvix-instruction-files', labelKey: 'tool.subAgentInstructionFiles', kind: 'csv' },
-    { key: 'shuvix-project-awareness', labelKey: 'tool.subAgentProjectAwareness', kind: 'boolean' },
-    { key: 'shuvix-session-awareness', labelKey: 'tool.subAgentSessionAwareness', kind: 'boolean' }
+    { key: 'shuvix-project-awareness', labelKey: 'tool.subAgentProjectAwareness', kind: 'boolean' }
   ]
 }
 

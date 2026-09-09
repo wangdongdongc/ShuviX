@@ -107,7 +107,6 @@ describe('buildBuiltinProfile — md 解析 + 宿主参数插值', () => {
   it('wiki 拆分的结构性保证：对话侧无任何写入工具，执行侧只可派发', () => {
     for (const language of LANGS) {
       const desk = buildBuiltinProfile(WIKI_SPEC, { wikiRoot: '/k', language })!
-      const writer = buildBuiltinProfile(WIKI_WRITER_SPEC, { wikiRoot: '/k', language })!
       // 拆分的意义就在这份清单上：对话侧拿不到写入类工具，长对话把上下文稀释掉时也不会
       // 顺手改坏知识库（真要保证不被改坏得靠 security 策略，这里是少给工具少跑偏）。
       // git 也不给 —— 它是单个工具带 commit 子命令，给了就等于把写入动作放回对话侧的清单里。
@@ -115,8 +114,6 @@ describe('buildBuiltinProfile — md 解析 + 宿主参数插值', () => {
         expect(desk.tools, `wiki.${language} 不得持有 ${forbidden}`).not.toContain(forbidden)
       }
       expect(desk.tools, `wiki.${language} 需能派发`).toContain('agent')
-      expect(desk.sessionAwareness, `wiki.${language} 必须可作子会话档案`).toBe(true)
-      expect(writer.sessionAwareness, `wiki-writer.${language} 必须只可派发`).toBe(false)
       // 对话侧必须点名执行侧 —— 派发工具不枚举 agent 名，名字只能来自提示词
       expect(desk.systemPrompt, `wiki.${language} 需点名 wiki-writer`).toContain('wiki-writer')
       // 派发调用形状与确认通道必须写明 —— 弱模型曾靠猜参数名连番失败、把批准确认写成纯文本
@@ -395,12 +392,12 @@ describe('基座名单钉板', () => {
     expect(BASE_PROFILE_NAMES.has(NOTEBOOK_PROFILE_NAME)).toBe(true)
   })
 
-  it('三基座 × 三语都不声明会话感知 —— 它们从不被点名，这个标志对它们没有意义', () => {
-    // shuvix-session-awareness 如今只有一个含义：父级能否用 agent_profile 点名它作子会话档案。
-    // 基座是形态推导出来的，点名一个基座只会得到说不清的组合，所以三份 md 都不写这一行
-    for (const name of BASE_PROFILE_NAMES) {
-      for (const language of LANGS) {
-        expect(profile(name, language).sessionAwareness, `${name}.${language}`).toBe(false)
+  it('没有任何内置 md 还带着退役的 shuvix-session-awareness（三语全集）', () => {
+    // 这个键随会话内切换档案一并退役：子会话的 agent_profile 只看「不是基座」，解析器把它当
+    // 未知键忽略。内置 md 是用户「创建覆盖副本」的样板，样板里留一行死键等于教用户去写它
+    for (const spec of BUILTIN_PROFILE_SPECS) {
+      for (const [language, source] of Object.entries(spec.sources)) {
+        expect(source, `${spec.name}.${language}`).not.toContain('shuvix-session-awareness')
       }
     }
   })
@@ -414,17 +411,6 @@ describe('基座名单钉板', () => {
     // 正控制组：新名字在
     expect(exported).toContain('WORK_PROFILE_NAME')
     expect(exported).toContain('WORK_SPEC')
-  })
-
-  it('可作子会话档案的内置全集恰为 browser / coding / explore / visualization / widget / wiki（三语一致）', () => {
-    // 内置翻一个这个标志，就改变了 agent_profile 的可用集 —— 与派发面无关，只管子会话
-    const EXPECTED = ['browser', 'coding', 'explore', 'visualization', 'widget', 'wiki']
-    for (const language of LANGS) {
-      const aware = BUILTIN_PROFILE_SPECS.filter(
-        (spec) => buildBuiltinProfile(spec, { ...ALL_PARAMS, language })!.sessionAwareness
-      ).map((spec) => spec.name)
-      expect(aware.sort(), language).toEqual(EXPECTED)
-    }
   })
 })
 
@@ -475,11 +461,10 @@ describe('coding 档案钉板(从 work 拆出的工程人格)', () => {
     expect(built.tools).toEqual(profile(CHAT_PROFILE_NAME).tools)
   })
 
-  it('可作 agent_profile（声明会话感知），且不是基座档案', () => {
+  it('不是基座档案 —— 可作 agent_profile 的唯一判据', () => {
     // coding 是子会话的档案（work 开 `coding` 子会话把活交过去），不是用户切换的目标：
-    // 它必须过 pinAgentProfile 的两道门 —— 不是基座名、声明了会话感知
+    // 它只需过 pinAgentProfile 的那一道门 —— 不是基座名
     expect(BASE_PROFILE_NAMES.has('coding')).toBe(false)
-    expect(profile('coding').sessionAwareness).toBe(true)
   })
 
   it('三语 description 都指向 work 与子会话、不再提 /coding 切换', () => {
@@ -530,8 +515,7 @@ describe('titler 档案钉板（auto-title 的执行侧）', () => {
     expect(profile('titler').tools).toEqual(['session'])
   })
 
-  it('不声明会话感知：只可派发、不可作子会话档案，也不是基座档案', () => {
-    expect(profile('titler').sessionAwareness).toBe(false)
+  it('不是基座档案', () => {
     expect(BASE_PROFILE_NAMES.has('titler')).toBe(false)
   })
 

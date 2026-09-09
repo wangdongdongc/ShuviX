@@ -142,7 +142,7 @@ beforeAll(async () => {
   seedSkill(app, SKILL_PARENT)
   seedSkill(app, SKILL_PROFILE)
   writeAgentMd(app, 'e2e-sub-prof', {
-    description: '声明模型与 skill 的会话感知档案',
+    description: '声明模型与 skill 的档案',
     tools: `read, skill:${SKILL_PROFILE}`,
     model: `openai/${MODEL_A}`,
     body: 'SUB PROF BODY.'
@@ -152,12 +152,6 @@ beforeAll(async () => {
     tools: 'read',
     model: 'openai/nope-not-there',
     body: 'BAD MODEL BODY.'
-  })
-  writeAgentMd(app, 'e2e-dispatch-only', {
-    description: '只可派发',
-    tools: 'read',
-    sessionAwareness: false,
-    body: 'DISPATCH ONLY BODY.'
   })
 
   const projDir = join(app.home, 'proj-sub-profile')
@@ -237,18 +231,21 @@ describe('create-sub-session 的 agent_profile 钉档案', () => {
     }
   )
 
-  it.each(['e2e-dispatch-only', 'nope-not-there'])(
-    'SP-5 点名只可派发的档案 / 未知名 %s：同 SP-4（不落戳、基座 body、创建成功）',
-    async (name) => {
-      const sub = await createSub(`rejected-${name}`, { agent_profile: name })
-      expect(sub.isError).toBe(false)
-      expect(sub.result).toContain(sub.id)
-      expect('agentProfile' in (await settingsOf(sub.id))).toBe(false)
-      const info = await runtimeInfo(sub.id)
-      expect(info.systemPrompt).toContain(WORK_ANCHOR)
-      expect(info.systemPrompt.startsWith('DISPATCH ONLY BODY.')).toBe(false)
-    }
-  )
+  it('SP-5 点名未知名：同 SP-4（不落戳、基座 body、创建成功）', async () => {
+    const sub = await createSub('rejected-unknown', { agent_profile: 'nope-not-there' })
+    expect(sub.isError).toBe(false)
+    expect(sub.result).toContain(sub.id)
+    expect('agentProfile' in (await settingsOf(sub.id))).toBe(false)
+    expect((await runtimeInfo(sub.id)).systemPrompt).toContain(WORK_ANCHOR)
+  })
+
+  it('SP-5b 曾经只可派发的内置 wiki-writer 现在也钉得上 —— 会话感知这道门已退役', async () => {
+    // 准入只剩「不是基座」：内置执行体、用户档案一视同仁。戳落下、body 换成它的、不再是父形态基座
+    const sub = await createSub('writer', { agent_profile: 'wiki-writer' })
+    expect(sub.isError).toBe(false)
+    expect((await settingsOf(sub.id)).agentProfile).toBe('wiki-writer')
+    expect((await runtimeInfo(sub.id)).systemPrompt).not.toContain(WORK_ANCHOR)
+  })
 
   it('SP-6 不点名：不落戳、基座 body、工具勾选等于父会话的', async () => {
     const sub = await createSub('plain', {})

@@ -106,7 +106,7 @@ function defaultWorld(): void {
     thinkingLevel: 'medium',
     enabledTools: []
   })
-  // 点名的档案缺省钉得上（普通会话感知档案，没声明模型也没声明 mcp:/skill:）
+  // 点名的档案缺省钉得上（普通具名档案，没声明模型也没声明 mcp:/skill:）
   mocks.pinAgentProfile.mockResolvedValue({ success: true, applied: { tools: [] } })
   mocks.create.mockReturnValue({ id: CHILD, title: 'Child' })
 }
@@ -255,18 +255,17 @@ describe('create —— 继承与上限', () => {
     parentConfig()
     mocks.pinAgentProfile.mockResolvedValue({
       success: false,
-      error: '"wiki-writer" is not session-aware and cannot run a session of its own'
+      error:
+        '"work" is a base profile; omit agent_profile to run the sub-session on this session\'s own base'
     })
-    const res = await runner.create(PARENT, { agentProfile: 'wiki-writer' })
+    const res = await runner.create(PARENT, { agentProfile: 'work' })
     expect(res).toEqual({ id: CHILD, title: 'Child' })
     // 拒绝 = 档案没有意见：继承照旧
     expect(mocks.appendModelChange).toHaveBeenCalledWith(CHILD, 'p', 'opus')
     expect(mocks.appendActiveToolsChange).toHaveBeenCalledWith(CHILD, ['skill:p'])
     // 日志是「点名没生效」唯一可查的线索：带上点的名字与拒绝理由
     const warned = mocks.warn.mock.calls.map((c) => String(c[0]))
-    expect(warned.some((m) => m.includes('wiki-writer') && m.includes('not session-aware'))).toBe(
-      true
-    )
+    expect(warned.some((m) => m.includes('work') && m.includes('base profile'))).toBe(true)
   })
 
   it('SR-6 空白点名视同不点名：pinAgentProfile 不被调用', async () => {

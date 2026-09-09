@@ -27,7 +27,6 @@ interface AgentRow {
   description: string
   instructionFiles: string[]
   projectAwareness: boolean
-  sessionAwareness: boolean
   overridden?: boolean
 }
 
@@ -63,19 +62,8 @@ describe('内置档案', () => {
       // 指令文件清单顺序即优先级 —— 内置沿用改制前的 AGENTS.md 优先、CLAUDE.md 次之
       expect(a.instructionFiles, a.name).toEqual(instructionsOn ? ['AGENTS.md', 'CLAUDE.md'] : [])
       expect(a.projectAwareness, a.name).toBe(awarenessOn)
-      // 会话感知 = 父级能否用 agent_profile 点名它作子会话的档案。两类不声明：
-      //  - 三个基座（work / chat / notebook）由会话形态推导、从不被点名，故不声明；
-      //  - 派发专用的执行体（titler / bot-intent，外加 wiki-writer —— 写入政策的有效性
-      //    依赖每次派发都是新鲜上下文）
-      const sessionAware = ![
-        'work',
-        'chat',
-        'notebook',
-        'titler',
-        'bot-intent',
-        'wiki-writer'
-      ].includes(a.name)
-      expect(a.sessionAwareness, a.name).toBe(sessionAware)
+      // 会话感知这个键已退役（子会话的 agent_profile 只看「不是基座」）：IPC 行上不再有它
+      expect('sessionAwareness' in a, a.name).toBe(false)
       expect(a.description.length, a.name).toBeGreaterThan(0)
       expect('isEnabled' in a, a.name).toBe(false)
     }
