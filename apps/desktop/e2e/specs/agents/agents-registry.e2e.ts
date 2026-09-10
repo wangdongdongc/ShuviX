@@ -33,7 +33,7 @@ interface AgentRow {
 const listAgents = (): Promise<AgentRow[]> => app.main.eval('window.api.subAgent.list()')
 
 describe('内置档案', () => {
-  it('十二个内置齐全，上下文注入默认全开（notebook 只开项目感知、派发专用档案全关），描述非空；无启用开关字段', async () => {
+  it('十三个内置齐全，上下文注入默认全开（notebook 只开项目感知、派发专用档案全关），描述非空；无启用开关字段', async () => {
     const builtins = (await listAgents()).filter((a) => a.source === 'builtin')
     // bot-notes 随「笔记」这个概念一并退场（v3）：bot 自己维护自己的正文，
     // 由任务段槽位里那份普通 agent 用文件工具就地改，没有专职的笔记段了
@@ -43,6 +43,7 @@ describe('内置档案', () => {
       'chat',
       'coding',
       'explore',
+      'knowledge-writer',
       'notebook',
       'titler',
       'visualization',
