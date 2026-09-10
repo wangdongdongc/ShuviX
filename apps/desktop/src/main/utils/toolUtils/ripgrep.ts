@@ -30,7 +30,7 @@ export async function* rgFiles(input: {
 }): AsyncGenerator<string> {
   input.signal?.throwIfAborted()
 
-  const args = ['--files', '--glob=!.git/*']
+  const args = ['--files']
   if (input.hidden !== false) args.push('--hidden')
   if (input.maxDepth !== undefined) args.push(`--max-depth=${input.maxDepth}`)
   if (input.glob) {
@@ -38,6 +38,9 @@ export async function* rgFiles(input: {
       args.push(`--glob=${g}`)
     }
   }
+  // .git 排除必须排在调用方 glob 之后：rg 的 glob 是后者优先（gitignore 语义），
+  // 放在前面时 `*.md` 之类的白名单会把 .git/ 下的匹配文件重新捞回来
+  args.push('--glob=!.git/*')
 
   yield* spawnRgLines(args, input.cwd, input.signal)
 }
