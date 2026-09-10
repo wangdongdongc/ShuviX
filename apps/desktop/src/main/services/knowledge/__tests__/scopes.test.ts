@@ -157,13 +157,12 @@ describe('ensureProjectScope', () => {
 })
 
 describe('resolveSessionScopeTarget', () => {
-  it('DS-3 create:false：尚无目录的项目 / 会话摘要 / 主题 → 可读 error；无项目要 project 指路 global；非 bot 会话要 bot 报错；wiki 无主题 / raw / global 直接给目录；不建根目录', async () => {
+  it('DS-3 create:false：尚无目录的项目 / 会话摘要 → 可读 error；无项目要 project 指路 global；非 bot 会话要 bot 报错；global 直接给目录；不建根目录', async () => {
     const read = (
       session: string,
-      scope: Parameters<typeof resolveSessionScopeTarget>[1],
-      topic?: string
+      scope: Parameters<typeof resolveSessionScopeTarget>[1]
     ): ReturnType<typeof resolveSessionScopeTarget> =>
-      resolveSessionScopeTarget(session, scope, { topic, create: false })
+      resolveSessionScopeTarget(session, scope, { create: false })
 
     expect(await read('s-p', 'project')).toEqual({
       error: 'Project "Acme Corp" has no knowledge entries yet.'
@@ -173,22 +172,16 @@ describe('resolveSessionScopeTarget', () => {
     expect(noProject.error).toContain('use scope "global"')
     const noBot = (await read('s-0', 'bot')) as { error: string }
     expect(noBot.error).toContain('not bound to a bot')
-    expect(await read('s-0', 'wiki')).toEqual({ dir: 'wiki', label: 'wiki' })
-    expect(await read('s-0', 'wiki', 'auth')).toEqual({
-      error: 'Wiki topic "auth" does not exist yet.'
-    })
-    expect(await read('s-0', 'raw')).toEqual({ dir: 'raw', label: 'raw sources' })
     expect(await read('s-0', 'global')).toEqual({ dir: 'global', label: 'global' })
     expect(existsSync(root)).toBe(false)
   })
 
-  it('DS-4 create:true：项目 / 会话摘要（项目下或顶层，带 sessionResource）/ bot（建 bot.md）/ wiki 主题（建目录）；wiki 缺 topic 报错；根目录顺带种下', async () => {
+  it('DS-4 create:true：项目 / 会话摘要（项目下或顶层，带 sessionResource）/ bot（建 bot.md）；根目录顺带建出', async () => {
     const create = (
       session: string,
-      scope: Parameters<typeof resolveSessionScopeTarget>[1],
-      topic?: string
+      scope: Parameters<typeof resolveSessionScopeTarget>[1]
     ): ReturnType<typeof resolveSessionScopeTarget> =>
-      resolveSessionScopeTarget(session, scope, { topic, create: true })
+      resolveSessionScopeTarget(session, scope, { create: true })
 
     expect(await create('s-p', 'project')).toEqual({
       dir: 'projects/acme-corp',
@@ -221,15 +214,5 @@ describe('resolveSessionScopeTarget', () => {
     // 再解析同一 bot：目录已在，不重复建
     expect(await create('s-b', 'bot')).toEqual({ dir: 'bots/alice', label: 'bot "alice"' })
     expect(dirsOf('bots')).toEqual(['alice'])
-
-    expect(await create('s-0', 'wiki', 'Auth Flow')).toEqual({
-      dir: 'wiki/auth-flow',
-      label: 'wiki topic "Auth Flow"'
-    })
-    expect(existsSync(join(root, 'wiki', 'auth-flow'))).toBe(true)
-    const noTopic = (await create('s-0', 'wiki')) as { error: string }
-    expect(noTopic.error).toContain('needs `topic`')
-    expect(await create('s-0', 'raw')).toEqual({ dir: 'raw', label: 'raw sources' })
-    expect(existsSync(join(root, 'raw'))).toBe(true)
   })
 })

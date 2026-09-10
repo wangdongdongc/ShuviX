@@ -26,10 +26,7 @@ describe('scopeDir ↔ scopeOfPath ↔ scopeLabel', () => {
       'sessions of project acme'
     ],
     [{ kind: 'session' }, 'sessions', 'sessions'],
-    [{ kind: 'bot', botName: 'alice' }, 'bots/alice', 'bot alice'],
-    [{ kind: 'wiki', topic: 'auth' }, 'wiki/auth', 'wiki topic auth'],
-    [{ kind: 'wiki' }, 'wiki', 'wiki'],
-    [{ kind: 'raw' }, 'raw', 'raw sources']
+    [{ kind: 'bot', botName: 'alice' }, 'bots/alice', 'bot alice']
   ]
 
   it('SC-1 每种作用域的目录与人读标签', () => {
@@ -39,7 +36,7 @@ describe('scopeDir ↔ scopeOfPath ↔ scopeLabel', () => {
     }
   })
 
-  it('SC-1 路径 → 作用域：根文件 / 目录本身 / 未知顶层为 null；会话目录路径本身算项目；前导斜杠与反斜杠容忍', () => {
+  it('SC-1 路径 → 作用域：根文件 / 目录本身 / 用户自建顶层为 null；会话目录路径本身算项目；前导斜杠与反斜杠容忍', () => {
     const table: [string, KnowledgeScope | null][] = [
       ['global/x.md', { kind: 'global' }],
       ['global', null],
@@ -51,21 +48,21 @@ describe('scopeDir ↔ scopeOfPath ↔ scopeLabel', () => {
       ['sessions/x.md', { kind: 'session' }],
       ['bots/alice/bot.md', { kind: 'bot', botName: 'alice' }],
       ['bots/alice', null],
-      ['wiki/auth/x.md', { kind: 'wiki', topic: 'auth' }],
-      ['wiki/index.md', { kind: 'wiki' }],
-      ['raw/2026-x/source.md', { kind: 'raw' }],
       ['index.md', null],
       ['NOTES.md', null],
+      // 用户自建的顶层目录不是保留作用域（`wiki` / `raw` 曾经是，已撤销 —— 它们现在
+      // 和任何别的自建目录一样：照常扫描 / 索引 / 检索，只是宿主不认识它绑着谁）
       ['misc/x.md', null],
+      ['wiki/auth/x.md', null],
+      ['raw/2026-x/source.md', null],
       ['/global/x.md', { kind: 'global' }],
       ['global\\x.md', { kind: 'global' }]
     ]
     for (const [path, expected] of table) {
       expect(scopeOfPath(path), path).toEqual(expected)
     }
-    // 无 slug 的会话作用域与无 topic 的 wiki 不带多余键
+    // 无 slug 的会话作用域不带多余键
     expect(scopeOfPath('sessions/x.md')).not.toHaveProperty('projectSlug')
-    expect(scopeOfPath('wiki/index.md')).not.toHaveProperty('topic')
   })
 
   it('SC-1 isSessionScopePath 只对会话摘要目录下的文件为真', () => {

@@ -61,9 +61,7 @@ const SCOPE_LABEL_KEY: Record<KnowledgeScopeDir, string> = {
   global: 'knowledge.scopeGlobal',
   projects: 'knowledge.scopeProjects',
   sessions: 'knowledge.scopeSessions',
-  bots: 'knowledge.scopeBots',
-  wiki: 'knowledge.scopeWiki',
-  raw: 'knowledge.scopeRaw'
+  bots: 'knowledge.scopeBots'
 }
 
 /** 行缩进：基准同 SessionItem 的 pl-2.5（10px），每层再进 12px（与 WikiGroup 一致） */

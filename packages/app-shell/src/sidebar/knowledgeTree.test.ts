@@ -92,7 +92,12 @@ describe('buildKnowledgeTree — 根与顶层', () => {
     expect(root.dirs).toEqual([])
   })
 
-  it('KT-4 顶层固定序：全局 → 项目 → 会话 → Bots → Wiki → 来源，未知目录殿后按名排；六个作用域目录带 scopeDir、未知的为 null', () => {
+  /**
+   * 保留作用域只剩四个，其余顶层目录都是用户自建的：排在它们之后、按名排、`scopeDir` 为 null
+   * （UI 因此按目录名显示而不是取 i18n 固定文案）。`wiki` / `raw` 曾经是保留名字，如今与
+   * 任何自建目录同等 —— 这里顺带钉住它们不再享受任何特殊排序。
+   */
+  it('KT-4 顶层固定序：全局 → 项目 → 会话 → Bots，自建目录殿后按名排；四个保留作用域带 scopeDir、自建的为 null', () => {
     const root = buildKnowledgeTree([
       entry('raw/r.md'),
       entry('wiki/t/w.md'),
@@ -108,9 +113,9 @@ describe('buildKnowledgeTree — 根与顶层', () => {
       'projects',
       'sessions',
       'bots',
-      'wiki',
-      'raw',
       'archive',
+      'raw',
+      'wiki',
       'zeta'
     ])
     expect(root.dirs.map((d) => d.scopeDir)).toEqual([
@@ -118,8 +123,8 @@ describe('buildKnowledgeTree — 根与顶层', () => {
       'projects',
       'sessions',
       'bots',
-      'wiki',
-      'raw',
+      null,
+      null,
       null,
       null
     ])

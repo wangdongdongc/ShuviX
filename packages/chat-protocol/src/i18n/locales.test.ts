@@ -136,8 +136,6 @@ describe('i18n 语言包', () => {
       'knowledge.scopeProjects',
       'knowledge.scopeSessions',
       'knowledge.scopeBots',
-      'knowledge.scopeWiki',
-      'knowledge.scopeRaw',
       'knowledge.badgeDraft',
       'knowledge.badgeVerified',
       'knowledge.badgeVerifiedOutdated',

@@ -59,11 +59,8 @@ export const KnowledgeParamsSchema = Type.Object({
       type: 'string',
       enum: [...KNOWLEDGE_SCOPE_KINDS],
       description:
-        'Where the entry lives / which scope to list: "global" (every session reads it), "project" (this session\'s project), "session" (this session\'s summary), "bot" (this session\'s bot), "wiki" (curated topics — also pass `topic`), "raw" (immutable sources). Required for "write" when creating; optional for "list" / "search".'
+        'Where the entry lives / which scope to list: "global" (every session reads it), "project" (this session\'s project), "session" (this session\'s summary), "bot" (this session\'s bot). Required for "write" when creating; optional for "list" / "search".'
     })
-  ),
-  topic: Type.Optional(
-    Type.String({ description: 'For scope "wiki": the topic directory (created when missing).' })
   ),
   path: Type.Optional(
     Type.String({
@@ -133,7 +130,6 @@ export interface KnowledgeToolParams {
   action: KnowledgeAction
   query?: string
   scope?: KnowledgeScopeKind
-  topic?: string
   path?: string
   type?: string
   title?: string
@@ -147,13 +143,13 @@ export interface KnowledgeToolParams {
   limit?: number
 }
 
-export const KNOWLEDGE_DESCRIPTION = `Search, read and write the knowledge base — an OKF bundle of markdown entries shared across sessions: global memory, this project's memory, session summaries, this bot's memory, and curated wiki topics.
+export const KNOWLEDGE_DESCRIPTION = `Search, read and write the knowledge base — an OKF bundle of markdown entries shared across sessions: global memory, this project's memory, session summaries and this bot's memory.
 
 Actions:
 - "search": find entries by free text (\`query\`, optional \`scope\`, \`limit\`).
 - "list": list the entries of a \`scope\` (or the whole bundle).
 - "read": return one entry by \`path\`.
-- "write": create an entry (\`scope\`, \`type\`, \`title\`, \`description\`, \`body\`, optional \`tags\` / \`sources\` / \`stale_after\` / \`topic\`) or update one (\`path\` plus the fields to change). New entries are drafts; the user reviews them in the knowledge page. Scope "session" keeps ONE summary per session — writing it again updates it.
+- "write": create an entry (\`scope\`, \`type\`, \`title\`, \`description\`, \`body\`, optional \`tags\` / \`sources\` / \`stale_after\`) or update one (\`path\` plus the fields to change). New entries are drafts; the user reviews them in the knowledge page. Scope "session" keeps ONE summary per session — writing it again updates it.
 - "set-status": mark an entry "deprecated" (optionally naming a \`successor\`) or back to "draft". You cannot mark entries stable — only the user can.
 
 Write entries worth carrying into later sessions: decisions, pitfalls, preferences, facts that took effort to establish. Search before writing and update an existing entry rather than adding a near-duplicate. Do not record what the repository already states, or what only matters to this conversation. The host stamps provenance (\`generated\`) — never claim verification yourself.`
@@ -188,7 +184,7 @@ export interface KnowledgeToolDeps {
    */
   resolveScope: (
     scope: KnowledgeScopeKind,
-    opts: { topic?: string; create: boolean }
+    opts: { create: boolean }
   ) => Promise<KnowledgeScopeTarget | { error: string }>
   /** 检索（缺省：标题 / 描述 / 标签 / 正文子串匹配） */
   search?: (query: string, opts: { limit: number; dir?: string }) => Promise<KnowledgeSearchHit[]>
@@ -330,7 +326,7 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
     create: boolean
   ): Promise<KnowledgeScopeTarget | null> {
     if (!params.scope) return null
-    const target = await this.deps.resolveScope(params.scope, { topic: params.topic, create })
+    const target = await this.deps.resolveScope(params.scope, { create })
     if ('error' in target) throw new Error(target.error)
     return target
   }
@@ -344,10 +340,7 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
     // 作用域解析不到（项目还没条目 / 不是 bot 会话）对检索是软条件：回文字不抛错，与 list 同口径
     let dir: string | undefined
     if (params.scope) {
-      const resolved = await this.deps.resolveScope(params.scope, {
-        topic: params.topic,
-        create: false
-      })
+      const resolved = await this.deps.resolveScope(params.scope, { create: false })
       if ('error' in resolved) return text([resolved.error], { action: 'search' })
       dir = resolved.dir
     }
@@ -389,10 +382,7 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
     const limit = params.limit ?? DEFAULT_LIMIT * 5
     let target: KnowledgeScopeTarget | null = null
     if (params.scope) {
-      const resolved = await this.deps.resolveScope(params.scope, {
-        topic: params.topic,
-        create: false
-      })
+      const resolved = await this.deps.resolveScope(params.scope, { create: false })
       if ('error' in resolved) return text([resolved.error], { action: 'list' })
       target = resolved
     }

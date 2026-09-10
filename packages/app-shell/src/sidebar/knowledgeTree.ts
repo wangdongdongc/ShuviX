@@ -1,10 +1,11 @@
 /**
  * 知识库分组的树形派生 —— `KnowledgeEntry[]`（bundle 相对路径清单）→ 目录树。
  *
- * 纯函数、无 React，判定都在这里：顶层作用域目录与项目下的 `sessions` 用固定文案（UI 按
- * `scopeDir` 取 i18n），`projects/<slug>` / `bots/<name>` 用绑定概念（project.md / bot.md）的
- * title 当目录名（目录名只是 slug），绑定概念（project.md、bot.md）置于所在目录首位；
- * 顶层按作用域固定序（全局 → 项目 → 会话 → Bots → Wiki → 来源），其余按显示名排。
+ * 纯函数、无 React，判定都在这里：**保留**作用域目录（global / projects / sessions / bots）与
+ * 项目下的 `sessions` 用固定文案（UI 按 `scopeDir` 取 i18n），用户自建的顶层目录按目录名显示；
+ * `projects/<slug>` / `bots/<name>` 用绑定概念（project.md / bot.md）的 title 当目录名
+ * （目录名只是 slug），绑定概念置于所在目录首位；顶层按保留作用域固定序（全局 → 项目 →
+ * 会话 → Bots）、其余按显示名排在它们之后。
  * 只画存在的目录 —— 空作用域不占行（与 WikiGroup 同口径：清单来自文件，空文件夹只是噪声）。
  *
  * 绑定概念的 title 给了目录之后，它自己那一行显示文件名 stem（`project` / `bot`）—— 目录行正下方
@@ -50,9 +51,7 @@ const TOP_ORDER: readonly string[] = [
   KNOWLEDGE_DIRS.global,
   KNOWLEDGE_DIRS.projects,
   KNOWLEDGE_DIRS.sessions,
-  KNOWLEDGE_DIRS.bots,
-  KNOWLEDGE_DIRS.wiki,
-  KNOWLEDGE_DIRS.raw
+  KNOWLEDGE_DIRS.bots
 ]
 
 const SCOPE_DIR_BY_NAME = new Map<string, KnowledgeScopeDir>(

@@ -11,8 +11,6 @@ export type KnowledgeScope =
   /** 有项目：`projects/<slug>/sessions/`；无项目：顶层 `sessions/` */
   | { kind: 'session'; projectSlug?: string }
   | { kind: 'bot'; botName: string }
-  | { kind: 'wiki'; topic?: string }
-  | { kind: 'raw' }
 
 /** 作用域目录（bundle 相对，无前导/尾随 `/`） */
 export function scopeDir(scope: KnowledgeScope): string {
@@ -27,10 +25,6 @@ export function scopeDir(scope: KnowledgeScope): string {
         : KNOWLEDGE_DIRS.sessions
     case 'bot':
       return `${KNOWLEDGE_DIRS.bots}/${scope.botName}`
-    case 'wiki':
-      return scope.topic ? `${KNOWLEDGE_DIRS.wiki}/${scope.topic}` : KNOWLEDGE_DIRS.wiki
-    case 'raw':
-      return KNOWLEDGE_DIRS.raw
   }
 }
 
@@ -51,7 +45,7 @@ export function escapesBundle(path: string): boolean {
     .some((seg) => seg === '..')
 }
 
-/** 某条 bundle 路径所属的作用域；不在任何作用域目录下（根文件等）返回 null */
+/** 某条 bundle 路径所属的**保留**作用域；根级文件与用户自建目录返回 null */
 export function scopeOfPath(path: string): KnowledgeScope | null {
   const segs = normalizeBundlePath(path).split('/')
   if (segs.length < 2) return null
@@ -69,10 +63,7 @@ export function scopeOfPath(path: string): KnowledgeScope | null {
       return { kind: 'session' }
     case KNOWLEDGE_DIRS.bots:
       return segs.length >= 3 ? { kind: 'bot', botName: second } : null
-    case KNOWLEDGE_DIRS.wiki:
-      return segs.length >= 3 ? { kind: 'wiki', topic: second } : { kind: 'wiki' }
-    case KNOWLEDGE_DIRS.raw:
-      return { kind: 'raw' }
+    // 用户自建的顶层目录不是保留作用域：宿主照常扫描 / 索引 / 检索，只是不认识它绑着谁
     default:
       return null
   }
@@ -131,9 +122,5 @@ export function scopeLabel(scope: KnowledgeScope): string {
       return scope.projectSlug ? `sessions of project ${scope.projectSlug}` : 'sessions'
     case 'bot':
       return `bot ${scope.botName}`
-    case 'wiki':
-      return scope.topic ? `wiki topic ${scope.topic}` : 'wiki'
-    case 'raw':
-      return 'raw sources'
   }
 }

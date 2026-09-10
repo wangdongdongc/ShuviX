@@ -3,8 +3,8 @@
  *
  * 全量而非增量：库只有几百个文件，渲染是纯函数，逐份比对内容只写有变化的 ——
  * 这样永远一致、没有"忘了更新某个目录的 index"的路径，git 历史也不会被无意义的重写刷满。
- * 空的作用域目录（种子建出的 global/、刚建的 projects/<slug>/）也要有 index：从磁盘目录
- * 补进 extraDirs。
+ * 空的作用域目录（初始化建出的 global/、刚建的 projects/<slug>/）也要有 index：从磁盘目录
+ * 补进 extraDirs。用户自建的顶层目录不在这里 —— 它们有概念才存在，扫描自然带出来。
  */
 import { existsSync, readdirSync } from 'fs'
 import { mkdir, readFile, writeFile } from 'fs/promises'
@@ -38,11 +38,7 @@ function existingScopeDirs(): string[] {
   for (const dir of Object.values(KNOWLEDGE_DIRS)) {
     if (!existsSync(fromBundlePath(dir))) continue
     out.push(dir)
-    if (
-      dir === KNOWLEDGE_DIRS.projects ||
-      dir === KNOWLEDGE_DIRS.bots ||
-      dir === KNOWLEDGE_DIRS.wiki
-    ) {
+    if (dir === KNOWLEDGE_DIRS.projects || dir === KNOWLEDGE_DIRS.bots) {
       out.push(...subdirsOf(dir))
     }
   }

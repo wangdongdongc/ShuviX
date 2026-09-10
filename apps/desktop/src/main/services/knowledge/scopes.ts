@@ -133,7 +133,7 @@ export async function ensureBotScope(botName: string): Promise<string> {
 export async function resolveSessionScopeTarget(
   rootSessionId: string,
   scope: KnowledgeScopeKind,
-  opts: { topic?: string; create: boolean }
+  opts: { create: boolean }
 ): Promise<KnowledgeScopeTarget | { error: string }> {
   if (opts.create) await ensureKnowledgeRoot()
   const ctx = await sessionKnowledgeContext(rootSessionId)
@@ -163,21 +163,5 @@ export async function resolveSessionScopeTarget(
       if (!dir) return { error: `Bot "${ctx.bot}" has no knowledge entries yet.` }
       return { dir, label: `bot "${ctx.bot}"` }
     }
-    case 'wiki': {
-      const topic = opts.topic?.trim()
-      if (!topic) {
-        if (opts.create)
-          return { error: 'Writing to scope "wiki" needs `topic` (the topic directory).' }
-        return { dir: KNOWLEDGE_DIRS.wiki, label: 'wiki' }
-      }
-      const dir = `${KNOWLEDGE_DIRS.wiki}/${slugify(topic, 'topic')}`
-      if (opts.create) await mkdir(fromBundlePath(dir), { recursive: true })
-      else if (!existsSync(fromBundlePath(dir)))
-        return { error: `Wiki topic "${topic}" does not exist yet.` }
-      return { dir, label: `wiki topic "${topic}"` }
-    }
-    case 'raw':
-      if (opts.create) await mkdir(fromBundlePath(KNOWLEDGE_DIRS.raw), { recursive: true })
-      return { dir: KNOWLEDGE_DIRS.raw, label: 'raw sources' }
   }
 }

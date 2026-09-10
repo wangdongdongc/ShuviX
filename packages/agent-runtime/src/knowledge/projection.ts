@@ -50,14 +50,12 @@ function baseOf(path: string): string {
   return i === -1 ? path : path.slice(i + 1)
 }
 
-/** 根 index 的分节顺序与标题（作用域目录）；根级概念（SCHEMA.md 等）落到 Bundle 节 */
+/** 根 index 里保留作用域的分节顺序与标题；根级概念落到 Bundle 节 */
 const ROOT_SECTIONS: readonly { dir: string; heading: string }[] = [
   { dir: KNOWLEDGE_DIRS.global, heading: 'Global memory' },
   { dir: KNOWLEDGE_DIRS.projects, heading: 'Projects' },
   { dir: KNOWLEDGE_DIRS.sessions, heading: 'Sessions' },
-  { dir: KNOWLEDGE_DIRS.bots, heading: 'Bots' },
-  { dir: KNOWLEDGE_DIRS.wiki, heading: 'Wiki' },
-  { dir: KNOWLEDGE_DIRS.raw, heading: 'Raw sources' }
+  { dir: KNOWLEDGE_DIRS.bots, heading: 'Bots' }
 ]
 
 export interface RenderIndexesInput {
@@ -119,8 +117,7 @@ export function renderAllIndexes(input: RenderIndexesInput): Map<string, string>
     const subs = childDirs(dir)
     if (dir === '') {
       const sections: OkfIndexSection[] = []
-      for (const { dir: scopeDir, heading } of ROOT_SECTIONS) {
-        if (!dirs.has(scopeDir)) continue
+      const rootSection = (scopeDir: string, heading: string): void => {
         const scopeOwn = byDir.get(scopeDir) ?? []
         const scopeSubs = childDirs(scopeDir)
         const entries = [
@@ -130,6 +127,15 @@ export function renderAllIndexes(input: RenderIndexesInput): Map<string, string>
         // 作用域目录自身也有 index，从根进入它是渐进披露的第一跳
         entries.unshift({ path: `${scopeDir}/${OKF_INDEX_FILE}`, title: heading })
         sections.push({ heading, entries })
+      }
+      const reserved = new Set(ROOT_SECTIONS.map((s) => s.dir))
+      for (const { dir: scopeDir, heading } of ROOT_SECTIONS) {
+        if (dirs.has(scopeDir)) rootSection(scopeDir, heading)
+      }
+      // 用户自建的顶层目录：同一副形状排在保留作用域之后，标题取目录名 —— 不列出来的话，
+      // 从根 index 走进 bundle 的读者（含任何 OKF 消费者）永远看不见它们
+      for (const sub of subs) {
+        if (!reserved.has(sub)) rootSection(sub, dirTitle(sub))
       }
       if (own.length > 0) {
         sections.push({ heading: 'Bundle', entries: own.map((c) => entryOf(c, '')) })

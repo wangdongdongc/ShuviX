@@ -306,21 +306,18 @@ describe('knowledge-writer 档案钉板（OKF 知识库的派发执行侧）', (
    * 编辑规范内联在提示词里 —— 它曾经住在用户目录的 SCHEMA.md 里，那份文件已撤销。
    * 三语都得带上作用域表与类型词汇表，否则 agent 既不知道往哪写，也拼不出合法的 `type`。
    */
-  it('RG-3 三语正文自带编辑规范：六个作用域目录 + 全部类型词汇', () => {
+  it('RG-3 三语正文自带编辑规范：四个保留作用域目录 + 全部类型词汇；不再提退役的 wiki / raw', () => {
     for (const language of LANGS) {
       const body = buildBuiltinProfile(KNOWLEDGE_WRITER_SPEC, {
         knowledgeRoot: '/kb',
         language
       })!.systemPrompt
-      for (const dir of [
-        'global/',
-        'projects/<slug>/',
-        'sessions/',
-        'bots/<name>/',
-        'wiki/<topic>/',
-        'raw/<id>/'
-      ]) {
+      for (const dir of ['global/', 'projects/<slug>/', 'sessions/', 'bots/<name>/']) {
         expect(body, `${language} 需含作用域 ${dir}`).toContain(dir)
+      }
+      // 保留作用域只剩四个：提示词里再教 wiki / raw，agent 就会往两个宿主不认识的目录写
+      for (const gone of ['wiki/', 'raw/']) {
+        expect(body, `${language} 不得再提退役作用域 ${gone}`).not.toContain(gone)
       }
       for (const type of KNOWLEDGE_TYPES) {
         expect(body, `${language} 需含类型 ${type}`).toContain(`\`${type}\``)

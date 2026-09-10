@@ -80,9 +80,47 @@ describe('renderAllIndexes — 确定性', () => {
         ''
       ].join('\n')
     )
-    for (const absent of ['## Sessions', '## Bots', '## Wiki', '## Raw sources']) {
+    for (const absent of ['## Sessions', '## Bots']) {
       expect(root).not.toContain(absent)
     }
+  })
+
+  /**
+   * 用户自建的顶层目录也要从根 index 进得去。保留作用域只剩四个，策展知识这类东西如今就住在
+   * 自建目录里 —— 根 index 不列它们的话，从根走进 bundle 的读者（含任何 OKF 消费者）永远
+   * 看不见它们，只有侧栏能看见。排在保留作用域之后、按目录名分节。
+   */
+  it('PJ-2 用户自建顶层目录同样成节：排在保留作用域之后、按目录名，形状与作用域节一致', () => {
+    const root = render([
+      concept('zeta/z.md', 'Z', 'dz'),
+      concept('global/a.md', 'A', 'da'),
+      concept('research/okf/notes.md', 'N', 'dn'),
+      concept('research/r.md', 'R', 'dr')
+    ]).get('')!
+    expect(root).toBe(
+      [
+        '---',
+        'okf_version: "0.2"',
+        '---',
+        '',
+        '## Global memory',
+        '',
+        '* [Global memory](global/index.md)',
+        '* [A](global/a.md) - da',
+        '',
+        '## research',
+        '',
+        '* [research](research/index.md)',
+        '* [R](research/r.md) - dr',
+        '* [okf](research/okf/index.md)',
+        '',
+        '## zeta',
+        '',
+        '* [zeta](zeta/index.md)',
+        '* [Z](zeta/z.md) - dz',
+        ''
+      ].join('\n')
+    )
   })
 
   it('PJ-3 子目录 index：Entries（目录相对路径）再 Sections；绑定概念的 title 命名目录；非根 index 不带 frontmatter', () => {

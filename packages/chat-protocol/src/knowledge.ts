@@ -31,25 +31,28 @@ export const KNOWLEDGE_MARKER_TYPE = 'okf'
 export const KNOWLEDGE_MARKER = `${KNOWLEDGE_MARKER_TYPE} v${OKF_VERSION}`
 
 /**
- * 作用域 = 顶层目录：回答「谁读它」。`type` 才回答「它是什么」。
- *   global   全局记忆，每个会话都读
- *   project  `projects/<slug>/`，项目记忆
- *   session  `projects/<slug>/sessions/` 或顶层 `sessions/`，会话摘要（情景层）
- *   bot      `bots/<name>/`，bot 记忆
- *   wiki     `wiki/<topic>/`，策展知识（旧 wiki 的后继）
- *   raw      `raw/`，不可变来源
+ * **保留**作用域 = 宿主绑到某个运行时实体上的顶层目录：
+ *   global   全局，每个会话都读（绑到「全部」）
+ *   project  `projects/<slug>/`，按 `resource: shuvix://project/<id>` 绑到项目
+ *   session  `projects/<slug>/sessions/` 或顶层 `sessions/`，按 `shuvix://session/<id>` 绑到会话
+ *   bot      `bots/<name>/`，按 `shuvix://bot/<name>` 绑到 bot
+ *
+ * **只保留有绑定的**。没有绑定的目录不该占一个保留名字 —— 它只是一个目录，用户自己建、
+ * 自己命名（`research/`、`recipes/` 都行），宿主照常扫描、索引、渲染、检索，只是不认识
+ * 它绑着谁。曾经保留过 `wiki/` 与 `raw/`：新知识库本身就是旧 wiki 的后继，在它里面再套一层
+ * `wiki/` 是把 wiki 包了两遍；`raw/` 则是给一套尚未存在的策展流程占位。两者都已撤销。
+ *
+ * 作用域回答「谁读它」，`type` 回答「它是什么」。
  */
-export const KNOWLEDGE_SCOPE_KINDS = ['global', 'project', 'session', 'bot', 'wiki', 'raw'] as const
+export const KNOWLEDGE_SCOPE_KINDS = ['global', 'project', 'session', 'bot'] as const
 export type KnowledgeScopeKind = (typeof KNOWLEDGE_SCOPE_KINDS)[number]
 
-/** 顶层目录名（作用域 → 目录）；`project` / `session` / `bot` / `wiki` 下还有一层 */
+/** 保留的顶层目录名（作用域 → 目录）；`project` / `session` / `bot` 下还有一层 */
 export const KNOWLEDGE_DIRS = {
   global: 'global',
   projects: 'projects',
   sessions: 'sessions',
-  bots: 'bots',
-  wiki: 'wiki',
-  raw: 'raw'
+  bots: 'bots'
 } as const
 
 /**

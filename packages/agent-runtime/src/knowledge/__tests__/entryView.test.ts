@@ -78,7 +78,7 @@ describe('toKnowledgeEntry — 形状', () => {
 })
 
 describe('toKnowledgeEntry — 派生字段', () => {
-  it('EV-3 scope 按 path 派生：六个作用域目录各归其类，bundle 根文件与未知顶层目录为 null', () => {
+  it('EV-3 scope 按 path 派生：四个保留作用域各归其类，bundle 根文件与用户自建目录为 null', () => {
     const table: Array<[string, KnowledgeEntry['scope']]> = [
       ['NOTES.md', null],
       ['global/a.md', 'global'],
@@ -86,9 +86,10 @@ describe('toKnowledgeEntry — 派生字段', () => {
       ['projects/acme/sessions/2026-09-01-x.md', 'session'],
       ['sessions/x.md', 'session'],
       ['bots/helper/bot.md', 'bot'],
-      ['wiki/topic/x.md', 'wiki'],
-      ['raw/x.md', 'raw'],
-      ['misc/x.md', null]
+      ['misc/x.md', null],
+      // 已撤销的两个保留名字，如今与任何自建目录同等
+      ['wiki/topic/x.md', null],
+      ['raw/x.md', null]
     ]
     for (const [path, scope] of table) {
       expect({ path, scope: toKnowledgeEntry(concept({ path }), NOW).scope }).toEqual({

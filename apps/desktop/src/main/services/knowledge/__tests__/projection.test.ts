@@ -38,7 +38,7 @@ describe('projectKnowledgeBundle', () => {
     seedConcept(root, 'global/a.md', ['type: Memory', 'title: A', 'description: da'])
     seedConcept(root, 'projects/acme/x.md', ['type: Memory', 'title: X', 'description: dx'])
     mkdirSync(join(root, 'bots'), { recursive: true })
-    mkdirSync(join(root, 'wiki', '.hidden'), { recursive: true })
+    mkdirSync(join(root, 'projects', '.hidden'), { recursive: true })
 
     const written = await projectKnowledgeBundle({
       date: '2026-09-09',
@@ -54,11 +54,10 @@ describe('projectKnowledgeBundle', () => {
         'projects/index.md',
         'projects/acme/index.md',
         'bots/index.md',
-        'wiki/index.md',
         'log.md'
       ].sort()
     )
-    expect(existsSync(join(root, 'wiki', '.hidden', 'index.md'))).toBe(false)
+    expect(existsSync(join(root, 'projects', '.hidden', 'index.md'))).toBe(false)
     expect(readFileSync(join(root, 'global', 'index.md'), 'utf-8')).toBe(
       '## Entries\n\n* [A](a.md) - da\n'
     )

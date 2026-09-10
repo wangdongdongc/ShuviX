@@ -17,14 +17,14 @@ You write entries into ShuviX's knowledge base — an OKF bundle at `{{knowledge
 
 **Directories are scopes.** A scope answers "who reads this"; `type` answers "what it is".
 
-| Directory                                | Who reads it                                          | What goes there                                                                  |
-| ---------------------------------------- | ----------------------------------------------------- | -------------------------------------------------------------------------------- |
-| `global/`                                | every session                                         | facts about the user, the machine, standing preferences                          |
-| `projects/<slug>/`                       | sessions of that project                              | project memory; `project.md` binds the directory to the project                  |
-| `projects/<slug>/sessions/`, `sessions/` | later sessions of the same project (or of no project) | one rolling summary per session                                                  |
-| `bots/<name>/`                           | that bot's pipeline                                   | what the bot has learned; `bot.md` binds the directory                           |
-| `wiki/<topic>/`                          | anyone who asks                                       | curated knowledge compiled from sources                                          |
-| `raw/<id>/`                              | curation                                              | immutable sources: `source.md` holds the extracted text, originals sit beside it |
+| Directory                                | Who reads it                                          | What goes there                                                 |
+| ---------------------------------------- | ----------------------------------------------------- | --------------------------------------------------------------- |
+| `global/`                                | every session                                         | facts about the user, the machine, standing preferences         |
+| `projects/<slug>/`                       | sessions of that project                              | project memory; `project.md` binds the directory to the project |
+| `projects/<slug>/sessions/`, `sessions/` | later sessions of the same project (or of no project) | one rolling summary per session                                 |
+| `bots/<name>/`                           | that bot's pipeline                                   | what the bot has learned; `bot.md` binds the directory          |
+
+These four are the **reserved** scopes — the ones the host binds to something it knows (a project, a session, a bot). Any other top-level directory in the bundle was made by the user; read from it and link to it freely, but you can only _create_ entries in the four above.
 
 **Entry types** (`type`): `Memory` (observation, preference, lesson), `Session Summary`, `Project`, `Bot`, `Concept`, `Entity`, `Decision`, `Guide`, `Source`. Other values are allowed and readers tolerate them, but reach for a listed one first.
 
@@ -41,7 +41,7 @@ Search first. An existing entry on the subject is updated in place — a near-du
 - **One idea per entry.** If it needs a second heading, it is two entries: split them and link with bundle-absolute markdown links (`[title](/global/x.md)`).
 - **`description` is the recall condition**, one line saying when the entry is worth opening — not a summary. It is all that later sessions see in their index.
 - **The body is the knowledge**, written to be read cold by someone who was not in the conversation: what is true, why it holds, what to watch for.
-- **Scope is who reads it**: `global` for facts about the user and the machine, `project` for things that only hold in that project, `wiki` (with a `topic`) for curated knowledge, `session` for this session's rolling summary. When the request names no scope, choose the narrowest one that fits and say which you chose.
+- **Scope is who reads it**: `global` for facts about the user and the machine, `project` for things that only hold in that project, `session` for this session's rolling summary, `bot` for what this bot has learned. When the request names no scope, choose the narrowest one that fits and say which you chose.
 - Record what took effort to establish. Do not record what the repository already states, git history, or what only matters to one conversation.
 
 ## 4. Provenance
