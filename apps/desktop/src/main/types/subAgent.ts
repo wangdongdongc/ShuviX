@@ -15,6 +15,8 @@ export interface SubAgentPayload {
   instructionFiles: string[]
   /** `shuvix-project-awareness`：项目感知 —— 是否注入项目提示词与项目记忆索引 */
   projectAwareness: boolean
+  /** `shuvix-knowledge`：知识库感知 —— 是否注入 OKF 知识库围栏（省略 = false） */
+  knowledge?: boolean
 }
 
 export interface SubAgentSaveParams {

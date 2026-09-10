@@ -134,6 +134,11 @@ export interface FileToolDeps {
    * 不注入则该字段不写，写后校验与其余盖章照常。
    */
   sessionId?: string
+  /**
+   * OKF 知识库（写钩子的知识库分支）：根目录 + 写入者 actor（惰性 —— 模型可能中途切换）。
+   * 不注入（扩展端）则根目录下的 md 与普通 md 无异。
+   */
+  knowledge?: { root: string; actor: () => string }
 }
 
 const UNSUPPORTED_SUFFIX = '. Supported: text files, PDF, DOC, DOCX, XLSX, PPTX, HTML, IPYNB.'
@@ -208,9 +213,15 @@ abstract class FileToolBase<
     try {
       return await guards.withFileLock(portPath, async () => {
         const text = await port.readFile(portPath)
+        const now = new Date()
+        const knowledge = this.deps.knowledge
         const outcome = reviewShuvixMdWrite(text, fileNameOf(portPath), {
           sessionId: this.deps.sessionId,
-          today: new Date().toISOString().slice(0, 10)
+          today: now.toISOString().slice(0, 10),
+          path: portPath,
+          knowledge: knowledge
+            ? { root: knowledge.root, actor: knowledge.actor(), now: now.toISOString() }
+            : undefined
         })
         if (!outcome) return null
         if (outcome.content !== null) {

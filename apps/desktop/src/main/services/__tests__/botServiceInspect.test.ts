@@ -73,7 +73,8 @@ vi.mock('../../utils/paths', () => ({
   // 真 agentService 的模块作用域构造器 + builtinAgents() 的宿主参数都从这里来
   getDefaultAgentsDir: () => dirs.agents,
   getWidgetsDir: () => `${dirs.base}/widgets`,
-  getDefaultWikisDir: () => `${dirs.base}/wikis`
+  getDefaultWikisDir: () => `${dirs.base}/wikis`,
+  getKnowledgeRootDir: () => `${dirs.base}/knowledge`
 }))
 vi.mock('../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: mocks.warn, error: () => {} })

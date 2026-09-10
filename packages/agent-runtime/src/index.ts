@@ -423,6 +423,8 @@ export {
   type ParsedMemoryFile
 } from './memory/memoryFile'
 export { renderMemoryIndex } from './memory/memoryIndex'
+// 知识库 v2（OKF）：编解码 / 概念文件 / 作用域 / 投影 / 校验 / 围栏 / knowledge 工具 / 种子
+export * from './knowledge'
 export {
   createAgentFactory,
   type AgentFactory,

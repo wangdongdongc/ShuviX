@@ -810,6 +810,8 @@
     "previewHint": "Open a file preview in the session Files panel — same view as clicking the file in the panel",
     "sessionLabel": "Session",
     "sessionHint": "Read or change the session this task belongs to — rename it, and create and drive sub-sessions",
+    "knowledgeLabel": "Knowledge Base",
+    "knowledgeHint": "Search, read and write entries in the OKF knowledge base — global, project, session and bot memory in one bundle",
     "agentLabel": "Dispatch Sub-Agent",
     "agentHint": "Hand a self-contained task to a sub-agent that runs with its own system prompt and tools, and report back only its result",
     "subAgentTab": "Sub-Agent",

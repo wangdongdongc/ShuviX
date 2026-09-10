@@ -35,12 +35,12 @@ const byName = (name: string): ParsedPolicyFile => {
 }
 
 describe('buildBuiltinPolicies', () => {
-  it('BP-1 不 throw；恰 13 份；名字与 SPECS 一致且互异', () => {
+  it('BP-1 不 throw；恰 14 份；名字与 SPECS 一致且互异', () => {
     expect(() => buildBuiltinPolicies()).not.toThrow()
     const policies = buildBuiltinPolicies()
-    expect(policies).toHaveLength(13)
+    expect(policies).toHaveLength(14)
     expect(policies.map((p) => p.name)).toEqual(BUILTIN_POLICY_SPECS.map((s) => s.name))
-    expect(new Set(policies.map((p) => p.name)).size).toBe(13)
+    expect(new Set(policies.map((p) => p.name)).size).toBe(14)
   })
 
   it('BP-1b 每份语言文件都声明 shuvix-builtin: true（新增内置策略漏写即红）', () => {
@@ -281,6 +281,25 @@ describe('buildBuiltinPolicies', () => {
     expect(rule.match).toContain("tool.operation == 'create-sub-session'")
   })
 
+  it('BP-3k review-knowledge-writes：force-ask × write × path × 根目录内且会话摘要目录外，desktop 限定，无 lets', () => {
+    // 与 review-memory-writes 同形：force-ask 压过免询问；差别是范围来自 vars.knowledgeRoot，
+    // 且 vars.knowledgeSessionDirs 里的目录豁免（会话摘要由工作流滚动写，逐次询问就不是「自动」了）
+    const policy = byName('review-knowledge-writes')
+    expect(policy.rules).toHaveLength(1)
+    const rule = policy.rules[0]
+    expect(rule.effect).toBe('force-ask')
+    expect(policy.scope).toEqual({
+      'subject.kind': ['agent'],
+      'object.type': ['path'],
+      'env.host': ['desktop']
+    })
+    expect(rule.conditions).toEqual({ action: ['write'] })
+    expect(rule.match).toContain('inDir(object.path, [vars.knowledgeRoot])')
+    expect(rule.match).toContain('!inDir(object.path, vars.knowledgeSessionDirs)')
+    expect(policy.lets ?? {}).toEqual({})
+    expect(rule.prompt).toBeTruthy()
+  })
+
   it('BP-4 同语言两次调用返回同一引用（按语言缓存）；不同语言各自缓存', () => {
     expect(buildBuiltinPolicies()).toBe(buildBuiltinPolicies())
     expect(buildBuiltinPolicies('zh')).toBe(buildBuiltinPolicies('zh'))
@@ -445,6 +464,8 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
     toolResultsBase: '/tool-results',
     skillsDirs: ['/skills/a', '/skills/b'],
     memoryDirs: ['/memory'],
+    knowledgeRoot: '/kb',
+    knowledgeSessionDirs: [],
     home: '/Users/u',
     botsDir: '/Users/u/.shuvix/bots',
     systemDirs: []
@@ -574,6 +595,8 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
         toolResultsBase: '',
         skillsDirs: [],
         memoryDirs: [],
+        knowledgeRoot: '/kb',
+        knowledgeSessionDirs: [],
         home: '',
         botsDir: '',
         systemDirs: []
@@ -801,6 +824,8 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
         toolResultsBase: '',
         skillsDirs: [],
         memoryDirs: [],
+        knowledgeRoot: '/kb',
+        knowledgeSessionDirs: [],
         home: '',
         systemDirs: []
       }),
@@ -902,6 +927,8 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
         toolResultsBase: '',
         skillsDirs: [],
         memoryDirs: [],
+        knowledgeRoot: '/kb',
+        knowledgeSessionDirs: [],
         home: '',
         systemDirs: []
       })
@@ -966,5 +993,154 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
       rules: ['protect-bot-files#0'],
       policies: [displayNameOf('protect-bot-files')]
     })
+  })
+
+  // ── review-knowledge-writes：知识库根目录写入的 force-ask 内置门（会话摘要目录除外）──
+  //
+  // 与 protect-bot-files 同构（force-ask 压过免询问与「允许并记住」），差别在两处：范围是
+  // vars.knowledgeRoot —— agent 经 knowledge 工具或直写文件都落在同一个 path 客体上；
+  // 且 vars.knowledgeSessionDirs 里的目录豁免 —— 会话摘要由工作流滚动写，逐次询问就不是「自动」了。
+
+  const kbFile = (path = '/kb/global/x.md'): SecurityObject => ({ type: 'path', path })
+  const kbProvider = (
+    opts: { autoAllow?: boolean; allowList?: string[]; sessionDirs?: string[] } = {}
+  ): SecurityHostProvider =>
+    makeProvider({
+      getVars: () => ({ ...DESKTOP_VARS, knowledgeSessionDirs: opts.sessionDirs ?? [] }),
+      getSessionGrants: () => ({ autoAllow: !!opts.autoAllow, allowList: opts.allowList ?? [] })
+    })
+
+  it('BP-K1 根目录内写 → ask，归因 review-knowledge-writes#0；免询问与「允许并记住」都压不过；不给 rememberEntry', () => {
+    const providers = [
+      makeProvider(),
+      kbProvider({ autoAllow: true }),
+      kbProvider({ allowList: ['Write(/kb)'] })
+    ]
+    for (const provider of providers) {
+      const decision = decide('write', kbFile(), { provider })
+      expect(decision.effect).toBe('ask')
+      expect(decision.winning).toBe('review-knowledge-writes#0')
+      // ask-on-write 同样命中（任意写都问）—— 归因取 force 层
+      expect(decision.matched).toContain('ask-on-write#0')
+      expect(decision.ask?.command).toBe('Write(/kb/global/x.md)')
+      // 「记住」的授权落在 force-allow 层、压不过这道门，不给一个点了不生效的按钮
+      expect(decision.ask?.rememberEntry).toBeUndefined()
+    }
+  })
+
+  it('BP-K2 会话摘要目录豁免：knowledgeSessionDirs 内的写落回 ask-on-write（免询问能免掉）；其余照问；清单为空时根下全问', () => {
+    const sessionDirs = ['/kb/sessions', '/kb/projects/acme/sessions']
+    for (const path of ['/kb/sessions/2026-09-09-x.md', '/kb/projects/acme/sessions/x.md']) {
+      const plain = decide('write', kbFile(path), { provider: kbProvider({ sessionDirs }) })
+      expect({ path, effect: plain.effect, winning: plain.winning }).toEqual({
+        path,
+        effect: 'ask',
+        winning: 'ask-on-write#0'
+      })
+      const auto = decide('write', kbFile(path), {
+        provider: kbProvider({ sessionDirs, autoAllow: true })
+      })
+      expect({ path, effect: auto.effect }).toEqual({ path, effect: 'allow' })
+    }
+    for (const path of ['/kb/projects/acme/x.md', '/kb/global/x.md']) {
+      const auto = decide('write', kbFile(path), {
+        provider: kbProvider({ sessionDirs, autoAllow: true })
+      })
+      expect({ path, effect: auto.effect, winning: auto.winning }).toEqual({
+        path,
+        effect: 'ask',
+        winning: 'review-knowledge-writes#0'
+      })
+    }
+    // 豁免清单为空（根目录还没有任何 sessions/）：根下全部照问，连会话摘要路径也不例外
+    for (const path of [
+      '/kb/sessions/x.md',
+      '/kb/projects/acme/sessions/x.md',
+      '/kb/global/x.md'
+    ]) {
+      const decision = decide('write', kbFile(path), {
+        provider: kbProvider({ sessionDirs: [], autoAllow: true })
+      })
+      expect({ path, winning: decision.winning }).toEqual({
+        path,
+        winning: 'review-knowledge-writes#0'
+      })
+    }
+  })
+
+  it('BP-K3 前缀边界：根目录本身与任意深度命中，同前缀兄弟目录与别的根不命中', () => {
+    const table: Array<[string, boolean]> = [
+      ['/kb', true],
+      ['/kb/x.md', true],
+      ['/kb/wiki/auth/x.md', true],
+      ['/kb-evil/x.md', false],
+      ['/kbx.md', false],
+      ['/Users/u/.shuvix/knowledge2/x.md', false]
+    ]
+    for (const [path, guarded] of table) {
+      const decision = decide('write', kbFile(path))
+      expect({ path, winning: decision.winning === 'review-knowledge-writes#0' }).toEqual({
+        path,
+        winning: guarded
+      })
+    }
+  })
+
+  it('BP-K4 主体与端守卫：user 主体放行且零命中；扩展端（空 vars）放行、不命中、零告警', () => {
+    const asUser = decide('write', kbFile(), { subjectKind: 'user' })
+    expect(asUser.effect).toBe('allow')
+    expect(asUser.matched).toEqual([])
+
+    const warn = vi.fn()
+    const provider = makeProvider({
+      host: 'extension',
+      getVars: () => ({
+        workspace: '',
+        toolResultsBase: '',
+        skillsDirs: [],
+        memoryDirs: [],
+        knowledgeRoot: '/kb',
+        knowledgeSessionDirs: [],
+        home: '',
+        botsDir: '',
+        systemDirs: []
+      }),
+      logger: { info: vi.fn(), warn, error: vi.fn() }
+    })
+    const ext = decide('write', kbFile(), { provider, host: 'extension', warn })
+    expect(ext.effect).toBe('allow')
+    expect(ext.matched).not.toContain('review-knowledge-writes#0')
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('BP-K5 读不归它管（ask-on-read 兜、免询问能免）；询问文案取自 md，zh/ja 只换 prompt', () => {
+    const read = decide('read', kbFile())
+    expect(read.effect).toBe('ask')
+    expect(read.winning).toBe('ask-on-read#0')
+    expect(read.matched).not.toContain('review-knowledge-writes#0')
+    expect(decide('read', kbFile(), { provider: kbProvider({ autoAllow: true }) }).effect).toBe(
+      'allow'
+    )
+
+    const write = decide('write', kbFile())
+    expect(write.prompt).toEqual({
+      text: promptOf('review-knowledge-writes', 0),
+      rules: ['review-knowledge-writes#0'],
+      policies: [displayNameOf('review-knowledge-writes')]
+    })
+    for (const language of ['zh', 'ja']) {
+      const localized = decide('write', kbFile(), {
+        provider: makeProvider({ getLanguage: () => language })
+      })
+      expect(localized.effect, language).toBe(write.effect)
+      expect(localized.winning, language).toBe(write.winning)
+      expect(localized.matched, language).toEqual(write.matched)
+      expect(localized.prompt, language).toEqual({
+        text: promptOf('review-knowledge-writes', 0, language),
+        rules: ['review-knowledge-writes#0'],
+        policies: [displayNameOf('review-knowledge-writes', language)]
+      })
+      expect(localized.prompt!.text, language).not.toBe(write.prompt!.text)
+    }
   })
 })

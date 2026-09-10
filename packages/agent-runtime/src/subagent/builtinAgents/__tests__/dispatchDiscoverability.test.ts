@@ -35,7 +35,12 @@ import type { AgentProfile } from '../../types'
 
 const LANGS = ['en', 'zh', 'ja'] as const
 const build = (spec: BuiltinProfileSpec, language: string): AgentProfile =>
-  buildBuiltinProfile(spec, { language, widgetsRoot: '/w', wikiRoot: '/k' }) as AgentProfile
+  buildBuiltinProfile(spec, {
+    language,
+    widgetsRoot: '/w',
+    wikiRoot: '/k',
+    knowledgeRoot: '/kb'
+  }) as AgentProfile
 
 describe('派发清单点名了哪些 agent', () => {
   it.each(LANGS)('%s：coding 点名 browser / explore / visualization', (language) => {

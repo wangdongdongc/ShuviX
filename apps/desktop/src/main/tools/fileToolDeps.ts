@@ -17,11 +17,19 @@ import {
 import {
   resolveProjectConfig,
   getDesktopSecurityContext,
+  agentActorOf,
   TOOL_ABORTED,
   type ToolContext
 } from '../services/toolContext'
 import { appEventBus } from '../utils/appEventBus'
+import { getKnowledgeRootDir } from '../utils/paths'
 import { t } from '../i18n'
+
+/** 路径是否落在知识库根目录下（廉价前缀判定；根目录不存在时恒 false） */
+function isUnderKnowledgeRoot(portPath: string): boolean {
+  const root = getKnowledgeRootDir().replace(/\\/g, '/').replace(/\/+$/, '')
+  return !!root && portPath.replace(/\\/g, '/').startsWith(`${root}/`)
+}
 
 export const READ_DESCRIPTION =
   'Read file, directory, or web page contents. For URLs (http/https), fetches the page and converts to Markdown. For text files, returns content with line numbers (supports pagination via offset/limit). For directories, returns a sorted list of entries. Supports PDF, Word, Excel, PowerPoint, HTML, and Jupyter Notebook formats (auto-converted to Markdown). Supports PNG, JPEG, GIF, WebP, BMP images (returned as inline image content for multimodal viewing; images larger than ~1MB are auto-downscaled and re-encoded as JPEG).'
@@ -53,6 +61,8 @@ export function makeDesktopFileToolDeps(ctx: ToolContext, decoders?: ReadDecoder
     security: getDesktopSecurityContext(ctx, () => resolveProjectConfig(sid)),
     // 契约 md 写后盖章的溯源字段用它（派生 agent 的 ctx.sessionId 即根会话 id）
     sessionId: sid,
+    // OKF 知识库分支：根目录下的 md 落盘后校验 + 盖 `generated`（actor 惰性取，模型可中途切换）
+    knowledge: { root: getKnowledgeRootDir(), actor: () => agentActorOf(ctx) },
     decoders,
     abortError: TOOL_ABORTED,
     labels: { read: t('tool.readLabel'), write: t('tool.writeLabel'), edit: t('tool.editLabel') },
@@ -62,6 +72,17 @@ export function makeDesktopFileToolDeps(ctx: ToolContext, decoders?: ReadDecoder
     onFileChange: ({ portPath, kind }) => {
       const root = resolveProjectConfig(sid).workingDirectory
       if (root) appEventBus.publish({ type: 'files.changed', root, paths: [portPath], kind })
+      // 落在知识库根目录下的写入进变更管线（投影 index/log + git 提交 + knowledge.changed）。
+      // 模块按需加载：它带着扫描 / git / 检索 / dao 依赖，普通写入不该为它付加载成本，
+      // 文件工具的单测也不该因此被拖进数据库初始化
+      if (isUnderKnowledgeRoot(portPath)) {
+        const actor = agentActorOf(ctx)
+        void import('../services/knowledge')
+          .then((m) => m.notifyKnowledgeFileChanged(portPath, { kind, actor }))
+          .catch(() => {
+            /* 变更管线是增益能力：加载失败不影响已完成的写入 */
+          })
+      }
     }
   }
 }

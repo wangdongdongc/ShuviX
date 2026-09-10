@@ -77,6 +77,7 @@ interface HostBundle {
   resolveInstruction: ReturnType<typeof vi.fn>
   resolveProjectPrompt: ReturnType<typeof vi.fn>
   resolveProjectMemory: ReturnType<typeof vi.fn>
+  resolveKnowledge: ReturnType<typeof vi.fn>
   resolveProfileModel: ReturnType<typeof vi.fn>
   logger: {
     info: ReturnType<typeof vi.fn>
@@ -95,6 +96,8 @@ function makeHost(): HostBundle {
   const resolveInstruction = vi.fn().mockResolvedValue({ filename: 'CLAUDE.md', content: 'INS' })
   const resolveProjectPrompt = vi.fn().mockResolvedValue('PROJ-PROMPT')
   const resolveProjectMemory = vi.fn().mockResolvedValue('PROJ-MEMORY')
+  // 知识库围栏 seam：只有档案 shuvix-knowledge 为真时才被调用（缺省档案不开，既有用例零影响）
+  const resolveKnowledge = vi.fn().mockResolvedValue('KB-FENCE')
   // 缺省不解析（返回 null = 档案模型当前不可用）；声明模型的用例各自 mockResolvedValue
   const resolveProfileModel = vi.fn().mockResolvedValue(null)
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
@@ -116,7 +119,8 @@ function makeHost(): HostBundle {
     logger,
     resolveInstruction,
     resolveProjectPrompt,
-    resolveProjectMemory
+    resolveProjectMemory,
+    resolveKnowledge
   }
   return {
     host,
@@ -127,6 +131,7 @@ function makeHost(): HostBundle {
     resolveInstruction,
     resolveProjectPrompt,
     resolveProjectMemory,
+    resolveKnowledge,
     resolveProfileModel,
     logger,
     fakeEnv,
@@ -624,5 +629,113 @@ describe('createAgentFactory —— systemContext（调用方追加的上下文�
     })
     expect(created.systemPrompt).toBe(`BASE PERSONA\n\n${BLOCK_A}`)
     expect(constructed[0].deps.systemPrompt).toBe(`BASE PERSONA\n\n${BLOCK_A}`)
+  })
+})
+
+/**
+ * `shuvix-knowledge` × `resolveKnowledge` seam（设计 D3）：开关为真**且**宿主实现了 seam 才算
+ * 「知识库在位」—— 此时 `<knowledge>` 围栏**替代** `<project_memory>`（两段「往这里写记忆」的
+ * 指令必然写乱），位置在项目提示词之后、systemContext 之前；与项目感知开关彼此独立。
+ */
+describe('createAgentFactory —— 知识库围栏（shuvix-knowledge × resolveKnowledge seam）', () => {
+  const KB_FENCE = '<knowledge>\nKB-FENCE\n</knowledge>'
+  const INS = '<project_instructions file="CLAUDE.md">\nINS\n</project_instructions>'
+  const PROMPT = '<project_prompt>\nPROJ-PROMPT\n</project_prompt>'
+  const MEMORY = '<project_memory>\nPROJ-MEMORY\n</project_memory>'
+  /** 今天的形状（「上下文注入:spawned 全开」钉过的那条）—— 开关关着时必须逐字节不变 */
+  const LEGACY = `BASE PERSONA\n\n${INS}\n\n${PROMPT}\n\n${MEMORY}`
+  const BLOCK = '<bot_profile name="scout" file="/b/scout.md">\nP\n</bot_profile>'
+
+  function spawnWith(
+    b: HostBundle,
+    profile: InProcessAgentType,
+    systemContext?: readonly string[]
+  ): Promise<Awaited<ReturnType<AgentFactory['createAgent']>>> {
+    return createAgentFactory(b.host).createAgent({
+      kind: 'spawned',
+      sessionId: 'sub-9',
+      profile,
+      model: MODEL_CFG,
+      thinkingLevel: 'off',
+      cwd: '',
+      spawn: SPAWN,
+      spawnHelpers: { requestUserInput: vi.fn() },
+      systemContext
+    })
+  }
+
+  function createRoot(
+    b: HostBundle,
+    profile: InProcessAgentType
+  ): Promise<Awaited<ReturnType<AgentFactory['createAgent']>>> {
+    return createAgentFactory(b.host).createAgent({
+      kind: 'root',
+      sessionId: 's1',
+      profile,
+      model: MODEL_CFG,
+      cwd: '/w'
+    })
+  }
+
+  it('CA-1 D3：开关为真 → 按根会话 id + 档案工具名单调 seam 恰一次，项目记忆 seam 不调；围栏排在项目提示词之后、systemContext 之前', async () => {
+    const b = makeHost()
+    const created = await spawnWith(b, { ...PROFILE, projectAwareness: true, knowledge: true }, [
+      BLOCK
+    ])
+    expect(b.resolveKnowledge).toHaveBeenCalledTimes(1)
+    expect(b.resolveKnowledge).toHaveBeenCalledWith('root-s', { tools: PROFILE.tools })
+    expect(b.resolveProjectMemory).not.toHaveBeenCalled()
+    expect(b.resolveProjectPrompt).toHaveBeenCalledWith('root-s')
+    const expected = `BASE PERSONA\n\n${INS}\n\n${PROMPT}\n\n${KB_FENCE}\n\n${BLOCK}`
+    expect(created.systemPrompt).toBe(expected)
+    expect(created.systemPrompt).not.toContain('<project_memory>')
+    expect(constructed[constructed.length - 1].deps.systemPrompt).toBe(expected)
+  })
+
+  it('CA-2 宿主未注入 seam（可选注入）→ 开关无效：项目记忆照旧注入、无 <knowledge>、不抛', async () => {
+    const b = makeHost()
+    delete (b.host as { resolveKnowledge?: unknown }).resolveKnowledge
+    const created = await spawnWith(b, { ...PROFILE, projectAwareness: true, knowledge: true })
+    expect(created.systemPrompt).toBe(LEGACY)
+    expect(created.systemPrompt).not.toContain('<knowledge>')
+    expect(b.resolveProjectMemory).toHaveBeenCalledWith('root-s')
+  })
+
+  it('CA-3 开关为 false / 缺省 → seam 零调用，系统提示词逐字节等于今天的形状', async () => {
+    for (const knowledge of [false, undefined]) {
+      const b = makeHost()
+      const created = await spawnWith(b, { ...PROFILE, projectAwareness: true, knowledge })
+      expect(b.resolveKnowledge, String(knowledge)).not.toHaveBeenCalled()
+      expect(created.systemPrompt, String(knowledge)).toBe(LEGACY)
+    }
+  })
+
+  it('CA-4 与项目感知独立；空围栏不留痕；root 列同样调用且工具名单原样透传', async () => {
+    // (a) 项目感知关、知识库开：围栏照样追加，项目两个 seam 一个都不碰
+    const a = makeHost()
+    const noAwareness = await createRoot(a, {
+      ...PROFILE,
+      instructionFiles: [],
+      projectAwareness: false,
+      knowledge: true
+    })
+    expect(noAwareness.systemPrompt).toBe(`BASE PERSONA\n\n${KB_FENCE}`)
+    expect(a.resolveProjectPrompt).not.toHaveBeenCalled()
+    expect(a.resolveProjectMemory).not.toHaveBeenCalled()
+
+    // (b) seam 解析不出 / 只有空白 → 不留空围栏（空围栏比不注入更糟）
+    for (const empty of [null, '  ']) {
+      const b = makeHost()
+      b.resolveKnowledge.mockResolvedValue(empty)
+      const created = await createRoot(b, { ...PROFILE, instructionFiles: [], knowledge: true })
+      expect(created.systemPrompt, JSON.stringify(empty)).toBe('BASE PERSONA')
+    }
+
+    // (c) root 列：(sessionId, {tools}) —— 档案清单原样，围栏据此选写入段口吻（有无 knowledge 工具）
+    const c = makeHost()
+    const tools = ['read', 'knowledge', 'mcp:ctx', 'skill:pdf']
+    await createRoot(c, { ...PROFILE, instructionFiles: [], tools, knowledge: true })
+    expect(c.resolveKnowledge).toHaveBeenCalledTimes(1)
+    expect(c.resolveKnowledge).toHaveBeenCalledWith('s1', { tools })
   })
 })

@@ -43,6 +43,8 @@ import { projectDao } from '../dao/projectDao'
 import { ensureSessionTree } from '../services/sessionStorage'
 import { resolveInstructionContent } from '../services/instruction'
 import { resolveProjectMemoryIndex } from '../services/memory'
+import { resolveKnowledgeFence } from '../services/knowledge'
+import { getKnowledgeRootDir } from '../utils/paths'
 import { httpLogService } from '../services/httpLogService'
 import { chatFrontendRegistry } from '../frontend/core'
 import {
@@ -89,7 +91,9 @@ function resolveDesktopTools(req: ToolResolveRequest): AnyAgentTool[] {
     sessionId: req.rootSessionId,
     requestUserInput: req.requestUserInput,
     emitChatEvent: (event) =>
-      chatFrontendRegistry.broadcast({ ...event, sessionId: req.rootSessionId } as ChatEvent)
+      chatFrontendRegistry.broadcast({ ...event, sessionId: req.rootSessionId } as ChatEvent),
+    // agent 元数据线程化：档案名 + root/spawned + 惰性模型（知识库溯源章 `generated.by` 用）
+    agent: { profileName: req.profile.name, kind: req.kind, getModelConfig: req.getModelConfig }
   }
   // L1 全工具门的评估门面（每次 evaluate 现读，实例可复用）；MCP/skill/dispatch 等
   // 无专属客体的工具由它统一获得"可设门"能力
@@ -200,6 +204,8 @@ function desktopPromptVars(ctx: PromptVarsCtx): PromptVars {
     language: formatLanguageDisplay(i18next.language),
     appVersion,
     projectName: project?.name ?? '',
+    // OKF 知识库根目录（常量；内置 knowledge-writer 走构建期 {{knowledgeRoot}}，用户档案可用此变量）
+    knowledgeRoot: getKnowledgeRootDir(),
     // 根会话供给 {{shuvix:notebookPath}}（笔记本会话的根 Agent 走 notebook 基座档案）：
     // 非笔记本会话为空串 → 占位块收敛消失。派生 ctx.sessionId 是 agentId，无从解析 —— 不供给，
     // 占位符原样保留并 warn（派生档案本就不该引用它）
@@ -270,7 +276,9 @@ const desktopAgentHost: AgentHostAdapter = {
     return sessionProject(sessionId)?.systemPrompt?.trim() || null
   },
   // 无项目会话返回 null（不注入）—— 与项目提示词同一种降级
-  resolveProjectMemory: (sessionId) => resolveProjectMemoryIndex(sessionId)
+  resolveProjectMemory: (sessionId) => resolveProjectMemoryIndex(sessionId),
+  // 知识库围栏（profile.knowledge 门控；为真时替代项目记忆索引 —— 设计 D3）
+  resolveKnowledge: (sessionId, ctx) => resolveKnowledgeFence(sessionId, ctx)
 }
 
 /** 桌面唯一 agent 工厂：根会话（AgentSession）与派生（AgentManager）共用 */

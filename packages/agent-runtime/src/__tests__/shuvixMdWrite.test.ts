@@ -6,6 +6,7 @@
  * 这里钉住：unknown 类型的 frontmatter 语法错必须随工具 result 回执。
  */
 import { describe, it, expect } from 'vitest'
+import { parseOkfText } from '../knowledge/okfCodec'
 import { reviewShuvixMdWrite } from '../shuvixMdWrite'
 
 const CTX = { today: '2026-08-28' }
@@ -77,5 +78,144 @@ describe('reviewShuvixMdWrite — 展示型契约的 YAML 语法兜底', () => {
     const agent = ['---', 'shuvix: agent v1', 'name: [unclosed', '---', 'body'].join('\n')
     const out = reviewShuvixMdWrite(agent, 'agent.md', CTX)
     expect(out?.note).toContain('INVALID and will be ignored')
+  })
+})
+
+/**
+ * OKF 知识库分支（reviewKnowledgeWrite）—— 没有 shuvix 标记、但落在知识库根目录下的 md：
+ * 一致性校验作为回执带回；合规的概念**行级** upsert `generated`（注释 / 键序 / 未知键 / 正文 /
+ * 行尾 / BOM 全部原样），`verified` 从不碰；保留文件只回执规则、不盖章。
+ */
+describe('reviewShuvixMdWrite — OKF 知识库分支', () => {
+  const KB = { root: '/kb', actor: 'shuvix-work/gpt-5', now: '2026-09-09T08:12:03.000Z' }
+  const STAMP = 'generated: { by: "shuvix-work/gpt-5", at: "2026-09-09T08:12:03.000Z" }'
+  const STAMP_NOTE =
+    '[OKF] Stamped generated: { by: shuvix-work/gpt-5, at: 2026-09-09T08:12:03.000Z } — never write generated or verified yourself; the user reviews drafts in the knowledge page.'
+  const ERROR_HEAD =
+    '[OKF] The file was written into the knowledge base, but it is NOT a valid entry and will be ignored until fixed:'
+  const DESCRIPTION_WARNING = "- 'description' (one line) is recommended — it is what indexes show"
+
+  const concept = (lines: string[], body = 'body'): string =>
+    ['---', ...lines, '---', '', body, ''].join('\n')
+  const VALID = ['type: Memory', 'title: T', 'description: d', 'status: draft']
+  const review = (text: string, path: string | undefined): ReturnType<typeof reviewShuvixMdWrite> =>
+    reviewShuvixMdWrite(text, 'x', { today: '2026-09-09', path, knowledge: KB })
+
+  it('MW-1 分支选择表：无 knowledge / 无 path / 根目录外 / 同前缀兄弟目录 → null；带 shuvix 标记走旧记忆分支', () => {
+    expect(
+      reviewShuvixMdWrite(concept(VALID), 'x', { today: '2026-09-09', path: '/kb/global/x.md' })
+    ).toBeNull()
+    expect(review(concept(VALID), undefined)).toBeNull()
+    expect(review(concept(VALID), '/elsewhere/x.md')).toBeNull()
+    expect(review(concept(VALID), '/kb-other/x.md')).toBeNull()
+
+    // 有 shuvix 标记的文件不是 OKF 概念 —— 即便落在根目录下也走各自契约的旧分支
+    const memory =
+      '---\nshuvix: memory v1\nname: x\ndescription: d\nshuvix-memory-recall: r\n---\nbody\n'
+    const out = review(memory, '/kb/global/x.md')!
+    expect(out.note).toContain('[shuvix memory v1] Filled in')
+    expect(out.note).not.toContain('[OKF]')
+    expect(out.content).toContain('shuvix-memory-updated')
+    expect(out.content).not.toContain('generated')
+  })
+
+  it('MW-2 error 回执：文件已写但不是合法条目 —— 无 frontmatter / 缺 type 各一条 bullet，不动文件', () => {
+    const none = review('# plain\n\nbody\n', '/kb/global/x.md')!
+    expect(none.note).toBe(
+      `${ERROR_HEAD}\n- no YAML frontmatter block (an OKF concept starts with \`---\`)`
+    )
+    expect(none.content).toBeNull()
+
+    const noType = review(concept(['title: T', 'description: d']), '/kb/global/x.md')!
+    expect(noType.note).toBe(`${ERROR_HEAD}\n- 'type' is required and must be a non-empty string`)
+    expect(noType.content).toBeNull()
+  })
+
+  it('MW-3 保留文件：子目录 index.md 带 frontmatter 只回执规则；根 index.md 与 log.md 一律 null，永不盖章', () => {
+    const fm = '---\nokf_version: "0.2"\n---\n\n## Entries\n'
+    const sub = review(fm, '/kb/global/index.md')!
+    expect(sub.note).toBe(
+      `${ERROR_HEAD}\n- index.md below the bundle root must not carry frontmatter`
+    )
+    expect(sub.content).toBeNull()
+    expect(review(fm, '/kb/index.md')).toBeNull()
+    expect(review('## 2026-09-09\n\n- x\n', '/kb/log.md')).toBeNull()
+    expect(review('---\ntype: Memory\n---\n\n- x\n', '/kb/log.md')).toBeNull()
+  })
+
+  it('MW-4 首次盖章：注释 / 键序 / 未知键 / 正文 / CRLF / BOM 逐字节原样，只在闭合线前插一行', () => {
+    const text =
+      '﻿---\r\n# note\r\ntype: Memory\r\ntitle: T\r\ndescription: d\r\nstatus: draft\r\ncustom: kept\r\n---\r\n\r\nbody\r\n'
+    const out = review(text, '/kb/global/x.md')!
+    expect(out.content).toBe(text.replace('custom: kept\r\n---', `custom: kept\r\n${STAMP}\r\n---`))
+    expect(out.note).toBe(STAMP_NOTE)
+    expect(parseOkfText(out.content!)!.fields.generated).toEqual({
+      by: 'shuvix-work/gpt-5',
+      at: '2026-09-09T08:12:03.000Z'
+    })
+  })
+
+  it('MW-5 既有 generated：流式写法原位改写（恰一行）；块式写法连续行一起换成一行，紧随其后的 verified 块不受波及', () => {
+    const flow = review(
+      concept([
+        'type: Memory',
+        'title: T',
+        'description: d',
+        'status: draft',
+        'generated: { by: "old", at: "2020-01-01T00:00:00Z" }',
+        'custom: kept'
+      ]),
+      '/kb/global/x.md'
+    )!
+    const flowLines = flow.content!.split('\n')
+    expect(flowLines[5]).toBe(STAMP)
+    expect(flowLines[6]).toBe('custom: kept')
+    expect(flowLines.filter((l) => l.startsWith('generated:'))).toHaveLength(1)
+    expect(flow.content).not.toContain('old')
+
+    const block = review(
+      concept([
+        'type: Memory',
+        'title: T',
+        'description: d',
+        'status: draft',
+        'generated:',
+        '  by: old',
+        '  at: 2020-01-01T00:00:00Z',
+        'verified:',
+        '  by: human:me',
+        '  at: 2026-09-01T00:00:00Z'
+      ]),
+      '/kb/global/x.md'
+    )!
+    expect(block.content).toBe(
+      `---\ntype: Memory\ntitle: T\ndescription: d\nstatus: draft\n${STAMP}\nverified:\n  by: human:me\n  at: 2026-09-01T00:00:00Z\n---\n\nbody\n`
+    )
+    const fields = parseOkfText(block.content!)!.fields
+    expect(fields.generated).toEqual({ by: 'shuvix-work/gpt-5', at: '2026-09-09T08:12:03.000Z' })
+    expect(fields.verified).toEqual({ by: 'human:me', at: '2026-09-01T00:00:00Z' })
+  })
+
+  it('MW-6 无事可做 → null；只有告警 → 回执不改文件；告警 + 盖章 → 两段回执以空行相隔、content 回写', () => {
+    expect(review(concept([...VALID, STAMP]), '/kb/global/x.md')).toBeNull()
+
+    const warned = review(
+      concept(['type: Memory', 'title: T', 'status: draft', STAMP]),
+      '/kb/global/x.md'
+    )!
+    expect(warned.note).toBe(`[OKF] Written with warnings:\n${DESCRIPTION_WARNING}`)
+    expect(warned.content).toBeNull()
+
+    const both = review(
+      concept([
+        'type: Memory',
+        'title: T',
+        'status: draft',
+        'generated: { by: "old", at: "2020-01-01T00:00:00Z" }'
+      ]),
+      '/kb/global/x.md'
+    )!
+    expect(both.note).toBe(`[OKF] Written with warnings:\n${DESCRIPTION_WARNING}\n\n${STAMP_NOTE}`)
+    expect(both.content).toContain(STAMP)
   })
 })

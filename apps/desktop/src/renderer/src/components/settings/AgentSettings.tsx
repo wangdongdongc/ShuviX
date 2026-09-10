@@ -277,6 +277,7 @@ const CREATE_PLACEHOLDER: SubAgentInfo = {
   tools: [],
   instructionFiles: ['AGENTS.md', 'CLAUDE.md'],
   projectAwareness: true,
+  knowledge: false,
   source: 'user',
   basePath: ''
 }

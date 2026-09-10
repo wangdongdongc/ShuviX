@@ -53,6 +53,9 @@ import askOnReadJa from './md/ask-on-read.ja.md?raw'
 import reviewMemoryWritesEn from './md/review-memory-writes.md?raw'
 import reviewMemoryWritesZh from './md/review-memory-writes.zh.md?raw'
 import reviewMemoryWritesJa from './md/review-memory-writes.ja.md?raw'
+import reviewKnowledgeWritesEn from './md/review-knowledge-writes.md?raw'
+import reviewKnowledgeWritesZh from './md/review-knowledge-writes.zh.md?raw'
+import reviewKnowledgeWritesJa from './md/review-knowledge-writes.ja.md?raw'
 import askOnWriteEn from './md/ask-on-write.md?raw'
 import protectBotFilesEn from './md/protect-bot-files.md?raw'
 import protectBotFilesZh from './md/protect-bot-files.zh.md?raw'
@@ -128,6 +131,14 @@ export const BUILTIN_POLICY_SPECS: readonly BuiltinPolicySpec[] = [
   {
     name: 'review-memory-writes',
     sources: { en: reviewMemoryWritesEn, zh: reviewMemoryWritesZh, ja: reviewMemoryWritesJa }
+  },
+  {
+    name: 'review-knowledge-writes',
+    sources: {
+      en: reviewKnowledgeWritesEn,
+      zh: reviewKnowledgeWritesZh,
+      ja: reviewKnowledgeWritesJa
+    }
   },
   {
     name: 'ask-on-command',

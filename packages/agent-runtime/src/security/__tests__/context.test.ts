@@ -53,6 +53,8 @@ function makeProvider(
       toolResultsBase: '/tool-results',
       skillsDirs: ['/skills'],
       memoryDirs: [],
+      knowledgeRoot: '/kb',
+      knowledgeSessionDirs: [],
       home: '/home/u',
       botsDir: '/home/u/.shuvix/bots',
       systemDirs: []
@@ -642,6 +644,8 @@ describe('createSecurityContext — PEP 属性齐全性与 lets 禁缓存', () =
       toolResultsBase: '/tool-results',
       skillsDirs: ['/skills'],
       memoryDirs: [],
+      knowledgeRoot: '/kb',
+      knowledgeSessionDirs: [],
       home: '/home/u',
       botsDir: '/home/u/.shuvix/bots',
       systemDirs: [],
@@ -1001,6 +1005,8 @@ describe('createSecurityContext — 授权快照一次性（回归守护）', ()
       toolResultsBase: '/tool-results',
       skillsDirs: ['/skills'],
       memoryDirs: [],
+      knowledgeRoot: '/kb',
+      knowledgeSessionDirs: [],
       home: '/home/u',
       botsDir: '/home/u/.shuvix/bots',
       systemDirs: [] as string[]

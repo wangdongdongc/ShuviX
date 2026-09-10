@@ -24,6 +24,8 @@ const BUILTIN_VARS: Record<string, string | string[]> = {
   toolResultsBase: '/tool-results',
   skillsDirs: ['/skills/a', '/skills/b'],
   memoryDirs: [],
+  knowledgeRoot: '/kb',
+  knowledgeSessionDirs: [],
   home: '/home/u',
   botsDir: '/home/u/.shuvix/bots',
   systemDirs: []

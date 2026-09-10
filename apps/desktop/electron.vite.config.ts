@@ -29,7 +29,15 @@ export default defineConfig({
       // 必须内联打包，否则 Electron CJS require 会报 ERR_PACKAGE_PATH_NOT_EXPORTED。
       // @shuvix/agent-runtime 经别名解析为源码内联，无需在此列出。
       externalizeDeps: {
-        exclude: ['@earendil-works/pi-ai', '@earendil-works/pi-agent-core', '@marcbachmann/cel-js']
+        exclude: [
+          '@earendil-works/pi-ai',
+          '@earendil-works/pi-agent-core',
+          '@marcbachmann/cel-js',
+          // 知识库（OKF）依赖：okf-minisearch 纯 ESM 必须内联；core-okf 是 agent-runtime 的依赖
+          // （工作区 devDependency 的依赖不会被 electron-builder 收进 asar），同样内联
+          '@equationalapplications/core-okf',
+          'okf-minisearch'
+        ]
       },
       rollupOptions: {
         input: {

@@ -467,6 +467,8 @@ declare global {
     instructionFiles: string[]
     /** 项目感知：是否注入项目提示词与项目记忆索引（shuvix-project-awareness） */
     projectAwareness: boolean
+    /** 知识库感知：是否注入 OKF 知识库围栏（shuvix-knowledge；省略 = false） */
+    knowledge?: boolean
     source: 'builtin' | 'user'
     basePath: string
   }

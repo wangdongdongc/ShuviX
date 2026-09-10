@@ -33,6 +33,8 @@ const DESKTOP_VARS: Record<string, string | string[]> = {
   toolResultsBase: '/tool-results',
   skillsDirs: ['/skills/a', '/skills/b'],
   memoryDirs: [],
+  knowledgeRoot: '/kb',
+  knowledgeSessionDirs: [],
   home: '/Users/u',
   systemDirs: []
 }
@@ -577,6 +579,8 @@ describe('block-catastrophic-commands — tier 结算与通道', () => {
         toolResultsBase: '',
         skillsDirs: [],
         memoryDirs: [],
+        knowledgeRoot: '/kb',
+        knowledgeSessionDirs: [],
         home: '',
         systemDirs: []
       })

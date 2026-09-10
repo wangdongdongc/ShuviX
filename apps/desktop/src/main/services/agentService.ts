@@ -14,7 +14,12 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, unlink
 import { basename, isAbsolute, join, resolve, sep } from 'path'
 import { shell } from 'electron'
 import i18next from 'i18next'
-import { getDefaultAgentsDir, getDefaultWikisDir, getWidgetsDir } from '../utils/paths'
+import {
+  getDefaultAgentsDir,
+  getDefaultWikisDir,
+  getKnowledgeRootDir,
+  getWidgetsDir
+} from '../utils/paths'
 import {
   buildBuiltinProfiles,
   parseAgentDefinitionFile,
@@ -112,7 +117,8 @@ class AgentService implements AgentProfileRegistry {
     return buildBuiltinProfiles({
       language: i18next.language,
       widgetsRoot: getWidgetsDir(),
-      wikiRoot: getDefaultWikisDir()
+      wikiRoot: getDefaultWikisDir(),
+      knowledgeRoot: getKnowledgeRootDir()
     })
   }
 

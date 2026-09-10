@@ -15,7 +15,9 @@ import {
   getDefaultSkillsDir,
   getDefaultBotsDir,
   getMemoryRootDir,
-  getBuiltinSkillsDir
+  getBuiltinSkillsDir,
+  getKnowledgeRootDir,
+  listKnowledgeSessionDirs
 } from '../utils/paths'
 import { skillService } from './skillService'
 import { shellParser } from './shellParserService'
@@ -23,7 +25,8 @@ import { policyService } from './policyService'
 import {
   createSecurityContext,
   type SecurityContext,
-  type SecurityHostProvider
+  type SecurityHostProvider,
+  type SubAgentModelConfig
 } from '@shuvix/agent-runtime'
 import type { ProjectEnvVar } from '../types'
 import type { ChatEvent } from '@shuvix/chat-protocol/events'
@@ -77,6 +80,37 @@ export interface ToolContext {
   requestUserInput?: (request: InputRequest) => Promise<InputResponse>
   /** 工具运行时单向通知（容器、SSH 连接、预览面板等生命周期事件） */
   emitChatEvent?: (event: ChatEventPayload) => void
+  /**
+   * 本工具实例所属 agent 的元数据（宿主在 resolveTools 时线程化）：档案名、root/spawned、
+   * 惰性模型配置（会话中途换模型也跟得上）。目前只有知识库的溯源章（`generated.by`）读它；
+   * 缺省 = 未知（主体维度的策略匹配是扩展位，见 getDesktopSecurityContext 的注）。
+   */
+  agent?: {
+    profileName: string
+    kind: 'root' | 'spawned'
+    getModelConfig?: () => SubAgentModelConfig
+  }
+}
+
+function actorToken(value: string | undefined, fallback: string): string {
+  const cleaned = (value ?? '').trim().replace(/\s+/g, '-')
+  return cleaned || fallback
+}
+
+/**
+ * 本工具实例所属 agent 的 actor 字符串（OKF §5.2 约定 `<producer>/<version>`）：
+ * `shuvix-<profile>/<model>`。模型惰性取 —— 会话中途换模型也跟得上；元数据缺失时回落
+ * `shuvix-agent/unknown`：章要盖，但不能编。知识库的 `generated.by` 与提交 trailer 用它。
+ */
+export function agentActorOf(ctx: Pick<ToolContext, 'agent'>): string {
+  const profile = actorToken(ctx.agent?.profileName, 'agent')
+  let model: string | undefined
+  try {
+    model = ctx.agent?.getModelConfig?.().model
+  } catch {
+    model = undefined
+  }
+  return `shuvix-${profile}/${actorToken(model, 'unknown')}`
 }
 
 /** 检查路径是否在工作目录内（路径越界检查） */
@@ -206,6 +240,9 @@ export function makeDesktopSecurityProvider(
       ],
       memoryDirs: [getMemoryRootDir()],
       botsDir: getDefaultBotsDir(),
+      // OKF 知识库：根目录（review-knowledge-writes 的 force-ask 范围）+ 会话摘要目录（免询问例外）
+      knowledgeRoot: getKnowledgeRootDir(),
+      knowledgeSessionDirs: listKnowledgeSessionDirs(),
       home: homedir(),
       systemDirs: windowsSystemDirs()
     }),

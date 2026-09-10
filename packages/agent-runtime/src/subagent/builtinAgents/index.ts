@@ -48,6 +48,9 @@ import titlerJa from './md/titler.ja.md?raw'
 import botIntentEn from './md/bot-intent.md?raw'
 import botIntentZh from './md/bot-intent.zh.md?raw'
 import botIntentJa from './md/bot-intent.ja.md?raw'
+import knowledgeWriterEn from './md/knowledge-writer.md?raw'
+import knowledgeWriterZh from './md/knowledge-writer.zh.md?raw'
+import knowledgeWriterJa from './md/knowledge-writer.ja.md?raw'
 
 export {
   buildBuiltinProfile,
@@ -195,6 +198,18 @@ export const BOT_INTENT_SPEC: BuiltinProfileSpec = {
 }
 
 /**
+ * 知识库写入侧（OKF，设计 docs/okf-knowledge-design.md §6.3）—— 派发执行：读 SCHEMA.md，
+ * 经 `knowledge` 工具写条目。没有 git、没有提交协议、没有反链复查：簿记归宿主（P3），
+ * 同意归策略 review-knowledge-writes，反链靠 lint。与旧 wiki-writer 并存，互不相干。
+ * 依赖宿主的知识库根目录参数 —— 扩展端没有，自动跳过。
+ */
+export const KNOWLEDGE_WRITER_SPEC: BuiltinProfileSpec = {
+  name: 'knowledge-writer',
+  sources: { en: knowledgeWriterEn, zh: knowledgeWriterZh, ja: knowledgeWriterJa },
+  requiredParams: ['knowledgeRoot']
+}
+
+/**
  * 内置 spec 全集（三个基座档案 work / chat / notebook 居首，其后为可派发的具名 agent；
  * widget/wiki 依赖宿主根目录参数，缺参自动跳过）
  */
@@ -210,7 +225,8 @@ export const BUILTIN_PROFILE_SPECS: readonly BuiltinProfileSpec[] = [
   WIKI_SPEC,
   WIKI_WRITER_SPEC,
   TITLER_SPEC,
-  BOT_INTENT_SPEC
+  BOT_INTENT_SPEC,
+  KNOWLEDGE_WRITER_SPEC
 ]
 
 /**

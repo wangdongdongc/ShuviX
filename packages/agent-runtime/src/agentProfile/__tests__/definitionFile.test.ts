@@ -246,11 +246,13 @@ describe('serializeAgentDefinitionFile', () => {
       systemPrompt: 'You are a reviewer.\n\n- be thorough\n- cite lines',
       tools: ['read', 'grep', 'mcp:Context7', 'skill:pdf', 'agent'],
       instructionFiles: ['AGENTS.md', 'docs/house-rules.md'],
-      projectAwareness: true
+      projectAwareness: true,
+      knowledge: true
     }
     const md = serializeAgentDefinitionFile(def)
     expect(md).toContain('shuvix-instruction-files: AGENTS.md, docs/house-rules.md')
     expect(md).toContain('shuvix-project-awareness: true')
+    expect(md).toContain('shuvix-knowledge: true')
     expect(parseAgentDefinitionFile(md, 'other-name')).toEqual(def)
   })
 
@@ -803,5 +805,55 @@ describe('WB —— 属性卡描述符与解析器的键集对齐', () => {
     const parsed = parseAgentDefinitionFile('---\nname: x\nshuvix-builtin: true\n---\nbody', 'x')!
     expect(agentDescriptor.fields.some((f) => f.key === 'shuvix-builtin')).toBe(false)
     expect(Object.values(parsed)).not.toContain('shuvix-builtin')
+  })
+})
+
+/**
+ * `shuvix-knowledge` —— 知识库感知开关（设计 §6.4）。布尔键，与 `shuvix-project-awareness`
+ * 同一套类型纪律；解析器只在为真时写出该属性（省略等同 false，既有档案字面量与往返断言零改动）。
+ */
+describe('shuvix-knowledge —— 知识库感知开关', () => {
+  it('DF-1 true → knowledge: true；false / 省略 → 属性缺席；非布尔 → 整份非法并点名该键', () => {
+    expect(
+      parseAgentDefinitionFile('---\nname: k\nshuvix-knowledge: true\n---\nbody', 'k')!.knowledge
+    ).toBe(true)
+    expect(
+      parseAgentDefinitionFile('---\nname: k\nshuvix-knowledge: false\n---\nbody', 'k')
+    ).not.toHaveProperty('knowledge')
+    expect(parseAgentDefinitionFile('---\nname: k\n---\nbody', 'k')).not.toHaveProperty('knowledge')
+
+    // YAML 1.2 里 `yes` 只是个字符串 —— 正是「以为在写布尔」的真实误写
+    const warnings: string[] = []
+    expect(
+      parseAgentDefinitionFile('---\nname: k\nshuvix-knowledge: yes\n---\nbody', 'k', (m) =>
+        warnings.push(m)
+      )
+    ).toBeNull()
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0]).toContain("'shuvix-knowledge' must be a boolean (true / false)")
+    expect(warnings[0]).toMatch(/; the whole file is rejected$/)
+    expect(parseAgentDefinitionFile('---\nshuvix-knowledge: [a]\n---\nbody', 'k')).toBeNull()
+  })
+
+  it('DF-2 序列化：true 才写 key、紧随 shuvix-project-awareness 之后；false 不写；往返保真', () => {
+    const base = {
+      name: 'k',
+      displayName: 'k',
+      description: '',
+      systemPrompt: 'body',
+      tools: ['knowledge'],
+      instructionFiles: [],
+      projectAwareness: true
+    }
+    const on = serializeAgentDefinitionFile({ ...base, knowledge: true })
+    const lines = on.split('\n')
+    expect(lines.indexOf('shuvix-knowledge: true')).toBe(
+      lines.indexOf('shuvix-project-awareness: true') + 1
+    )
+    expect(parseAgentDefinitionFile(on, 'x')).toEqual({ ...base, knowledge: true })
+
+    const off = serializeAgentDefinitionFile({ ...base, knowledge: false })
+    expect(off).not.toContain('shuvix-knowledge')
+    expect(parseAgentDefinitionFile(off, 'x')).toEqual(base)
   })
 })

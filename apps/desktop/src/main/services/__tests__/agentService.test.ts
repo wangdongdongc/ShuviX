@@ -35,7 +35,8 @@ vi.mock('electron', () => ({ shell: { openPath: vi.fn() } }))
 vi.mock('../../utils/paths', () => ({
   getDefaultAgentsDir: () => state.dir,
   getDefaultWikisDir: () => state.wikis,
-  getWidgetsDir: () => state.widgets
+  getWidgetsDir: () => state.widgets,
+  getKnowledgeRootDir: () => '/tmp/shuvix-knowledge'
 }))
 vi.mock('../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {} })

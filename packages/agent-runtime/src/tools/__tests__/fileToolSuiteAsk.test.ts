@@ -31,6 +31,10 @@ interface SuiteOptions {
   /** 不传 = 无询问通道（模拟无前端） */
   respond?: (req: InputRequest) => InputResponse | Promise<InputResponse>
   abortError?: string
+  /** 知识库里的会话摘要目录（内置 review-knowledge-writes 的豁免清单；默认空） */
+  knowledgeSessionDirs?: string[]
+  /** OKF 写钩子的知识库注入（不传 = 扩展端口径：根目录下的 md 与普通 md 无异） */
+  knowledge?: FileToolDeps['knowledge']
 }
 
 interface SuiteHarness {
@@ -103,6 +107,8 @@ function makeSuite(opts: SuiteOptions = {}): SuiteHarness {
       toolResultsBase: '/nonexistent/tool_results',
       skillsDirs: [],
       memoryDirs: [],
+      knowledgeRoot: '/kb',
+      knowledgeSessionDirs: opts.knowledgeSessionDirs ?? [],
       home: '/fake-home',
       systemDirs: []
     }),
@@ -128,7 +134,8 @@ function makeSuite(opts: SuiteOptions = {}): SuiteHarness {
     abortError: opts.abortError,
     labels: { read: 'Read', write: 'Write', edit: 'Edit' },
     descriptions: { read: 'read', write: 'write', edit: 'edit' },
-    onFileChange
+    onFileChange,
+    knowledge: opts.knowledge
   }
 
   return {
@@ -375,5 +382,58 @@ describe('文件工具套件 — 文件变更回调', () => {
       cancelled.suite.write.execute('c4', { path: INSIDE, content: 'x\n' })
     ).rejects.toThrow('Aborted')
     expect(cancelled.onFileChange).not.toHaveBeenCalled()
+  })
+})
+
+// ─── 组 6：OKF 知识库写钩子（deps.knowledge） ────────────────────────────────
+
+describe('文件工具套件 — OKF 知识库写钩子（deps.knowledge）', () => {
+  const DRAFT = [
+    '---',
+    'type: Memory',
+    'title: T',
+    'description: d',
+    'status: draft',
+    '---',
+    '',
+    'body',
+    ''
+  ].join('\n')
+  const textOf = (res: { content: unknown[] }): string => (res.content[0] as { text: string }).text
+
+  it('FS-1 根目录下的合法概念落盘后盖 generated（actor 惰性、每次写现取）、回执 [OKF] Stamped，onFileChange 恰一次；根目录外无回执', async () => {
+    const actor = vi.fn(() => 'shuvix-work/m1')
+    // 会话摘要目录：免询问下无需通道即可写（内置 review-knowledge-writes 豁免它）
+    const h = makeSuite({
+      autoAllow: true,
+      knowledgeSessionDirs: ['/kb/sessions'],
+      knowledge: { root: '/kb', actor }
+    })
+
+    const res = await h.suite.write.execute('k1', { path: '/kb/sessions/x.md', content: DRAFT })
+    expect(h.files.get('/kb/sessions/x.md')).toContain('generated: { by: "shuvix-work/m1", at: "')
+    expect(textOf(res)).toContain('[OKF] Stamped generated')
+    expect(actor).toHaveBeenCalledTimes(1)
+    // 广播在盖章回写之后、且只有一次 —— 面板刷新读到的是最终内容
+    expect(h.onFileChange).toHaveBeenCalledTimes(1)
+    expect(h.onFileChange).toHaveBeenCalledWith({ portPath: '/kb/sessions/x.md', kind: 'write' })
+
+    // 模型中途切换：actor 每次写现取
+    actor.mockReturnValue('shuvix-work/m2')
+    await h.suite.write.execute('k2', { path: '/kb/sessions/y.md', content: DRAFT })
+    expect(actor).toHaveBeenCalledTimes(2)
+    expect(h.files.get('/kb/sessions/y.md')).toContain('generated: { by: "shuvix-work/m2", at: "')
+
+    const outside = await h.suite.write.execute('k3', { path: '/ws/notes.md', content: DRAFT })
+    expect(textOf(outside)).not.toContain('[OKF]')
+    expect(h.files.get('/ws/notes.md')).toBe(DRAFT)
+  })
+
+  it('FS-2 不注入 deps.knowledge：同一文件只是普通 markdown（不盖章、无回执）', async () => {
+    const h = makeSuite({ autoAllow: true, knowledgeSessionDirs: ['/kb/sessions'] })
+    const res = await h.suite.write.execute('k1', { path: '/kb/sessions/x.md', content: DRAFT })
+    expect(h.files.get('/kb/sessions/x.md')).toBe(DRAFT)
+    expect(textOf(res)).not.toContain('[OKF]')
+    expect(h.onFileChange).toHaveBeenCalledTimes(1)
   })
 })

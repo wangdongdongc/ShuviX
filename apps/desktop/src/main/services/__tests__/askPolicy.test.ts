@@ -18,6 +18,7 @@ const BUILTIN_SKILLS = join(tmpdir(), 'shuvix-policy-builtin-skills')
 const MEMORY_ROOT = join(tmpdir(), 'shuvix-policy-memory')
 const EXTERNAL_SKILLS = join(tmpdir(), 'shuvix-policy-external-skills')
 const OUTSIDE = join(tmpdir(), 'shuvix-policy-elsewhere')
+const KNOWLEDGE_ROOT = join(tmpdir(), 'shuvix-policy-knowledge')
 
 const state = vi.hoisted(() => ({
   settings: undefined as { autoAllow?: boolean; allowList?: string[] } | undefined,
@@ -43,7 +44,9 @@ vi.mock('../../utils/paths', () => ({
   getDefaultSkillsDir: () => DEFAULT_SKILLS,
   getBuiltinSkillsDir: () => BUILTIN_SKILLS,
   getMemoryRootDir: () => MEMORY_ROOT,
-  getDefaultBotsDir: () => '/tmp/shuvix-bots'
+  getDefaultBotsDir: () => '/tmp/shuvix-bots',
+  getKnowledgeRootDir: () => KNOWLEDGE_ROOT,
+  listKnowledgeSessionDirs: () => [join(KNOWLEDGE_ROOT, 'sessions')]
 }))
 vi.mock('../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {} })
@@ -181,6 +184,21 @@ describe('桌面安全 provider — 不缓存 settings 快照', () => {
     // 条目被撤掉后同样立刻失效
     state.settings = { allowList: [] }
     expect(effectOf(ctx, 'write', target)).toBe('ask')
+  })
+})
+
+describe('桌面安全 provider — 知识库变量（review-knowledge-writes 的 force-ask 门）', () => {
+  it('TC-2: 免询问开着，根目录写仍 ask（归因 review-knowledge-writes）；会话摘要目录写 allow；读 allow', () => {
+    state.settings = { autoAllow: true }
+    const ctx = context()
+    const entry = join(KNOWLEDGE_ROOT, 'global', 'x.md')
+    expect(effectOf(ctx, 'write', entry)).toBe('ask')
+    expect(ctx.evaluate('write', { type: 'path', path: entry }).winning).toBe(
+      'review-knowledge-writes#0'
+    )
+    // vars.knowledgeSessionDirs 每次现读（listKnowledgeSessionDirs），会话摘要目录免询问
+    expect(effectOf(ctx, 'write', join(KNOWLEDGE_ROOT, 'sessions', 'x.md'))).toBe('allow')
+    expect(effectOf(ctx, 'read', entry)).toBe('allow')
   })
 })
 

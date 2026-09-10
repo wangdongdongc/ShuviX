@@ -13,6 +13,7 @@ import {
   buildBuiltinProfile,
   buildBuiltinProfiles,
   CHAT_PROFILE_NAME,
+  KNOWLEDGE_WRITER_SPEC,
   NOTEBOOK_PROFILE_NAME,
   WIDGET_SPEC,
   WIKI_SPEC,
@@ -40,7 +41,7 @@ import {
 import { parse as parseYaml } from 'yaml'
 import type { AgentProfile } from '../../subagent/types'
 
-const ALL_PARAMS = { widgetsRoot: '/w', wikiRoot: '/k' }
+const ALL_PARAMS = { widgetsRoot: '/w', wikiRoot: '/k', knowledgeRoot: '/kb' }
 const LANGS = ['en', 'zh', 'ja'] as const
 const profile = (name: string, language?: string): AgentProfile =>
   buildBuiltinProfiles({ ...ALL_PARAMS, language }).find((a) => a.name === name)!
@@ -174,7 +175,7 @@ describe('语言解析 — 精确 → 基础 → en，按文件整体回退', ()
 })
 
 describe('buildBuiltinProfiles — 全集现算', () => {
-  it('全参数 → 十二个内置,三个基座档案居首;缺 widget/wiki 根 → 自动跳过', () => {
+  it('全参数 → 十三个内置,三个基座档案居首;缺 widget/wiki/knowledge 根 → 自动跳过', () => {
     // bot-notes 已退役（bot 自己维护自己的正文，没有单独的笔记段）—— 名单里不该再有它
     expect(buildBuiltinProfiles(ALL_PARAMS).map((a) => a.name)).toEqual([
       'work',
@@ -188,7 +189,8 @@ describe('buildBuiltinProfiles — 全集现算', () => {
       'wiki',
       'wiki-writer',
       'titler',
-      'bot-intent'
+      'bot-intent',
+      'knowledge-writer'
     ])
     // titler 与 bot 门控段档案无宿主参数依赖：缺 widget/wiki 根也在
     //（模型走 shuvix-model 通用链路，内置不声明）
@@ -244,8 +246,64 @@ describe('buildBuiltinProfiles — 全集现算', () => {
         expect(loc.tools, `${spec.name}.${language} tools`).toEqual(en.tools)
         expect(loc.instructionFiles, `${spec.name}.${language}`).toEqual(en.instructionFiles)
         expect(loc.projectAwareness, `${spec.name}.${language}`).toBe(en.projectAwareness)
+        expect(loc.knowledge, `${spec.name}.${language} knowledge`).toBe(en.knowledge)
       }
     }
+  })
+})
+
+/**
+ * knowledge-writer 档案钉板 —— OKF 知识库的派发执行侧（设计 §6.3）：读 SCHEMA.md、经
+ * `knowledge` 工具写条目；没有 git、没有提交协议、没有反链复查 —— 簿记归宿主，同意归策略。
+ * 依赖宿主的知识库根目录参数（扩展端没有 → 自动跳过）。
+ */
+describe('knowledge-writer 档案钉板（OKF 知识库的派发执行侧）', () => {
+  it('RG-1 三语结构钉板：工具面恰为 knowledge/read/grep/glob/ls/ask，知识库与项目感知开、指令文件默认、不声明模型、不是基座、缺 knowledgeRoot 即跳过', () => {
+    expect(KNOWLEDGE_WRITER_SPEC.name).toBe('knowledge-writer')
+    expect(KNOWLEDGE_WRITER_SPEC.requiredParams).toEqual(['knowledgeRoot'])
+    expect(buildBuiltinProfile(KNOWLEDGE_WRITER_SPEC, {})).toBeNull()
+    expect(BASE_PROFILE_NAMES.has('knowledge-writer')).toBe(false)
+    for (const language of LANGS) {
+      const built = buildBuiltinProfile(KNOWLEDGE_WRITER_SPEC, { knowledgeRoot: '/kb', language })
+      expect(built, language).not.toBeNull()
+      // 写入只走 knowledge 工具：没有 write/edit（直写文件绕开结构检查）、没有 git（簿记归宿主）
+      expect(built!.tools, language).toEqual(['knowledge', 'read', 'grep', 'glob', 'ls', 'ask'])
+      expect(built!.knowledge, language).toBe(true)
+      expect(built!.projectAwareness, language).toBe(true)
+      expect(built!.instructionFiles, language).toEqual(['AGENTS.md', 'CLAUDE.md'])
+      expect(built!.model, language).toBeUndefined()
+    }
+  })
+
+  it('RG-2 三语正文接线：根目录就地替换（无残留占位符）、点名 SCHEMA.md 与工具的动作、两个宿主章、会话资源 URI', () => {
+    for (const language of LANGS) {
+      const body = buildBuiltinProfile(KNOWLEDGE_WRITER_SPEC, {
+        knowledgeRoot: '/kb',
+        language
+      })!.systemPrompt
+      expect(body, `${language} 根目录`).toContain('/kb/SCHEMA.md')
+      expect(body, `${language} 占位符`).not.toContain('{{knowledgeRoot}}')
+      for (const anchor of [
+        'SCHEMA.md',
+        '`knowledge`',
+        '`search`',
+        '`write`',
+        '`set-status`',
+        '`generated`',
+        '`verified`',
+        'shuvix://session/'
+      ]) {
+        expect(body, `${language} 需含 ${anchor}`).toContain(anchor)
+      }
+    }
+  })
+
+  it('RG-3 一期名单：内置里只有 knowledge-writer 开了 shuvix-knowledge', () => {
+    expect(
+      buildBuiltinProfiles(ALL_PARAMS)
+        .filter((p) => p.knowledge)
+        .map((p) => p.name)
+    ).toEqual(['knowledge-writer'])
   })
 })
 

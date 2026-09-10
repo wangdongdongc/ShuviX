@@ -84,6 +84,15 @@ export const BUILTIN_TOOL_PRESENTATIONS: Record<string, BuiltinToolPresentationD
       return [action, detail, dir && `(${dir})`].filter(Boolean).join(' ')
     }
   },
+  knowledge: {
+    labelKey: 'tool.knowledgeLabel',
+    presentation: { icon: 'BookOpen', iconColor: '#10b981' },
+    // action + 该 action 最有信息量的参数（write → 标题；read/set-status → 路径；search → 查询词）
+    buildSummary: (args) =>
+      [asStr(args.action), asStr(args.title) ?? asStr(args.path) ?? asStr(args.query)]
+        .filter(Boolean)
+        .join(' · ') || undefined
+  },
   agent: {
     labelKey: 'tool.agentLabel',
     presentation: { icon: 'Bot' },

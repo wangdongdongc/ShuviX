@@ -63,6 +63,8 @@ vi.mock('../../services/toolContext', async () => {
             toolResultsBase: join(tmpdir(), '.nonexistent-tool-results'),
             skillsDirs: [],
             memoryDirs: [],
+            knowledgeRoot: '/kb',
+            knowledgeSessionDirs: [],
             home: join(tmpdir(), '.nonexistent-home'),
             systemDirs: []
           }),

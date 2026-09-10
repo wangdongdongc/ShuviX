@@ -80,6 +80,12 @@ export interface ParsedAgentFile {
    * （两者同一开关，都按根会话的项目解析）；缺省 false。
    */
   projectAwareness: boolean
+  /**
+   * `shuvix-knowledge`：知识库感知 —— 是否注入 OKF 知识库围栏（`<knowledge>`：全局 / 项目 /
+   * 会话 / bot 作用域的索引与常驻条目）。为真时旧的项目记忆索引不再注入（设计 D3）；缺省 false。
+   * 类型上可选，解析器只在为真时写出：省略等同 false，既有的档案字面量与往返断言零改动。
+   */
+  knowledge?: boolean
 }
 
 /**
@@ -141,6 +147,7 @@ export interface AgentSharedFields {
   model?: string
   instructionFiles: string[]
   projectAwareness: boolean
+  knowledge?: boolean
 }
 
 export function parseAgentSharedFields(
@@ -161,6 +168,10 @@ export function parseAgentSharedFields(
   const projectAwarenessRaw = fields['shuvix-project-awareness'] ?? null
   if (projectAwarenessRaw !== null && typeof projectAwarenessRaw !== 'boolean') {
     return { error: "'shuvix-project-awareness' must be a boolean (true / false)" }
+  }
+  const knowledgeRaw = fields['shuvix-knowledge'] ?? null
+  if (knowledgeRaw !== null && typeof knowledgeRaw !== 'boolean') {
+    return { error: "'shuvix-knowledge' must be a boolean (true / false)" }
   }
   const instructionRaw = fields['shuvix-instruction-files'] ?? null
   if (instructionRaw !== null && typeof instructionRaw !== 'string') {
@@ -196,7 +207,9 @@ export function parseAgentSharedFields(
       tools,
       model: stringField(fields, 'shuvix-model'),
       instructionFiles,
-      projectAwareness: projectAwarenessRaw ?? false
+      projectAwareness: projectAwarenessRaw ?? false,
+      // 只在为真时写出：类型上可选、省略等同 false（既有的档案字面量与往返断言零改动）
+      ...(knowledgeRaw ? { knowledge: true } : {})
     }
   }
 }
@@ -270,6 +283,7 @@ export function serializeAgentDefinitionFile(data: ParsedAgentFile): string {
     fields['shuvix-instruction-files'] = data.instructionFiles.join(', ')
   }
   if (data.projectAwareness) fields['shuvix-project-awareness'] = true
+  if (data.knowledge) fields['shuvix-knowledge'] = true
 
   const frontmatter = stringifyYaml(fields, { lineWidth: 0 }).trimEnd()
   const body = data.systemPrompt.trim()
