@@ -59,15 +59,14 @@ describe('listKnowledgeEntries', () => {
       tags: ['schema'],
       trustTier: 'unverified',
       verifiedCurrent: false,
-      stale: false,
-      pinned: false
+      stale: false
     })
     expect(schema.description.length).toBeGreaterThan(0)
     expect(schema).not.toHaveProperty('generatedAt')
     expect(schema).not.toHaveProperty('generatedBy')
   })
 
-  it('EN-2 种好的 bundle 经真实扫描投影：作用域 / 信任档 / 核实时序 / 过期 / 常驻 / generated 章逐条到位；无 type 与带 shuvix 标记的文件不出现；路径为 forward-slash 相对路径', async () => {
+  it('EN-2 种好的 bundle 经真实扫描投影：作用域 / 信任档 / 核实时序 / 过期 / generated 章逐条到位；已退役的 shuvix_pinned 只当未知键；无 type 与带 shuvix 标记的文件不出现；路径为 forward-slash 相对路径', async () => {
     seedConcept(root, 'global/a.md', [
       'type: Memory',
       'title: A',
@@ -113,7 +112,9 @@ describe('listKnowledgeEntries', () => {
       generatedAt: '2026-09-05T00:00:00Z',
       generatedBy: 'agent:coding/gpt-5'
     })
-    expect(byPath['projects/acme/project.md']).toMatchObject({ scope: 'project', pinned: true })
+    // shuvix_pinned 已退役：带着它的旧文件照常解析，视图里不再有对应的字段
+    expect(byPath['projects/acme/project.md']).toMatchObject({ scope: 'project' })
+    expect(byPath['projects/acme/project.md']).not.toHaveProperty('pinned')
     expect(byPath['projects/acme/sessions/2026-09-01-s.md']).toMatchObject({
       scope: 'session',
       stale: false

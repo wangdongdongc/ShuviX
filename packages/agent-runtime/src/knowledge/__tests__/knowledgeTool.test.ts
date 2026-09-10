@@ -381,7 +381,7 @@ describe('KT-6 read', () => {
 })
 
 describe('KT-7 write —— 新建', () => {
-  it('KT-7 作用域按 create:true 解析；文件形状（type 归一、draft、宿主章、pinned 扩展键、来源流式）；先过 write PEP 再落盘；afterWrite 无 status 键；回执', async () => {
+  it('KT-7 作用域按 create:true 解析；文件形状（type 归一、draft、宿主章、来源流式）；先过 write PEP 再落盘；afterWrite 无 status 键；回执', async () => {
     const h = makeTool()
     const res = await h.run('c1', {
       action: 'write',
@@ -392,8 +392,7 @@ describe('KT-7 write —— 新建', () => {
       body: '\n\nbody\n',
       tags: ['auth'],
       sources: [{ resource: '/abs/p.ts', id: 's1' }],
-      stale_after: '2026-12-31',
-      pinned: true
+      stale_after: '2026-12-31'
     })
     expect(h.resolveScope).toHaveBeenCalledWith('global', { topic: undefined, create: true })
 
@@ -410,7 +409,6 @@ describe('KT-7 write —— 新建', () => {
         'stale_after: 2026-12-31',
         'sources: [ { id: s1, resource: "/abs/p.ts" } ]',
         STAMP,
-        'shuvix_pinned: true',
         '---',
         '',
         'body',

@@ -3,9 +3,10 @@
  *
  * 两层结构与旧记忆索引同源（memoryIndex.ts），措辞沿用那里实测过的两条：
  * 条目标识用**路径**而不是标题（模型拿不到路径就拼不出 read 参数），表头写明
- * 「动手前先对一遍索引」。预算规则：pinned 正文全量；索引行按宿主给的顺序截到上限，
- * 截断时指向目录 index；wiki 只给主题清单（渐进披露：读主题 index 再读条目）。
- * deprecated 不进围栏 —— 宿主在挑选时就滤掉。
+ * 「动手前先对一遍索引」。预算规则：索引行按宿主给的顺序截到上限，截断时指向目录 index；
+ * wiki 只给主题清单（渐进披露：读主题 index 再读条目）。deprecated 不进围栏 —— 宿主在挑选时
+ * 就滤掉。**围栏只给索引，不注入任何条目正文**：常驻正文（原 `shuvix_pinned`）已撤销，
+ * 知识库到底怎么进系统提示词是留待重新设计的问题。
  *
  * 英文：模型面文本，与内置策略 / 记忆索引的 en 基准同源；用户可见的文案不走这里。
  */
@@ -35,8 +36,6 @@ export interface KnowledgeFenceInput {
   /** 根目录绝对路径（表头引用一次；条目只给 bundle 路径） */
   root: string
   scopes: readonly KnowledgeFenceScope[]
-  /** 常驻条目（正文全量注入） */
-  pinned: readonly KnowledgeConcept[]
   /** 索引条目（宿主已按作用域挑选、按重要性排序；本函数只截断） */
   index: readonly KnowledgeConcept[]
   wikiTopics?: readonly KnowledgeWikiTopic[]
@@ -112,13 +111,6 @@ ${root}<path>. Entries record what was true when written; verify code details ag
 current code. Entries marked (stale) are past their review date; (draft) ones have not been
 reviewed by the user.`
   )
-
-  if (input.pinned.length > 0) {
-    const blocks = input.pinned.map(
-      (c) => `### /${normalizeBundlePath(c.path)}${markers(c, input.now)}\n${c.body.trim()}`
-    )
-    sections.push(`## Always applies\n\n${blocks.join('\n\n')}`)
-  }
 
   const max = input.maxIndexLines ?? DEFAULT_MAX_INDEX_LINES
   const indexLines = input.index.slice(0, max).map((c) => indexLine(c, input.now))

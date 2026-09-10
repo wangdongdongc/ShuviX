@@ -33,7 +33,6 @@ const entry = (path: string, over: Partial<KnowledgeEntry> = {}): KnowledgeEntry
   trustTier: 'unverified',
   verifiedCurrent: false,
   stale: false,
-  pinned: false,
   ...over
 })
 

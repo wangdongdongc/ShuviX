@@ -41,7 +41,6 @@ sources:
     title: 2026-09-09 session "fix login"
 generated: { by: shuvix-work/gpt-5, at: 2026-09-09T08:12:03Z } # stamped by the host
 verified: { by: human:alice, at: 2026-09-10T02:00:00Z } # stamped by the app when a human verifies
-shuvix_pinned: false # true = body lives in every session's system prompt
 ---
 ```
 

@@ -1,7 +1,7 @@
 /**
  * KnowledgeGroup —— 侧栏置顶的「知识库」分组（知识库 v2：OKF bundle，`~/.shuvix/knowledge/`），
  * 排在 Bots 之下、旧知识库（WikiGroup）之上。树 = 目录即作用域（全局 / 项目 / 会话 / Bots /
- * Wiki / 来源），行 = 概念（frontmatter title），行尾徽标：草稿 / 已核实 / 过期 / 已过时 / 常驻。
+ * Wiki / 来源），行 = 概念（frontmatter title），行尾徽标：草稿 / 已核实 / 过期 / 已过时。
  * 点行经宿主打开 / 复用该文件的笔记本会话（隐藏项目 `__knowledge__`，同 WikiGroup 的做法）。
  *
  * prop 驱动、不触宿主 API（同 WikiGroup / BotGroup）：清单 / 打开 / 打开目录 / 在文件夹中显示
@@ -24,7 +24,6 @@ import {
   FileText,
   FolderClosed,
   FolderOpen,
-  Pin,
   ScrollText
 } from 'lucide-react'
 import { useAppEvent, useChatStore } from '@shuvix/chat-ui'
@@ -186,8 +185,6 @@ export function KnowledgeGroup({ adapter }: KnowledgeGroupProps): React.JSX.Elem
         )}
       {e.stale &&
         badge(t('knowledge.badgeStale'), <ClockAlert size={9} className="text-amber-500/70" />)}
-      {e.pinned &&
-        badge(t('knowledge.badgePinned'), <Pin size={9} className="text-text-tertiary/50" />)}
     </>
   )
 

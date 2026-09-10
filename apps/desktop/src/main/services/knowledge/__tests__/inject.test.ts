@@ -1,7 +1,7 @@
 /**
  * inject —— `<knowledge>` 围栏的桌面接线（createAgent 的 resolveKnowledge seam）：
- * pinned = 本会话作用域里 shuvix_pinned 的非 deprecated 条目；索引 = 项目 → 全局 → bot →
- * 最近 5 条会话摘要（不含 deprecated 与绑定概念）；wiki 只给主题计数；旧项目记忆只读列出（D3）。
+ * 索引 = 项目 → 全局 → bot → 最近 5 条会话摘要（不含 deprecated 与绑定概念）；wiki 只给主题
+ * 计数；旧项目记忆只读列出（D3）。围栏只给索引 —— 常驻正文随 shuvix_pinned 一并撤销。
  * 根目录不存在也返回围栏（零条目时表头 + 写入段仍在）。
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -142,19 +142,21 @@ function seedBundle(): void {
 }
 
 describe('resolveKnowledgeFence', () => {
-  it('IJ-1 挑选规则：pinned 只取本会话作用域里的非 deprecated；索引 项目 → 全局 → bot → 最近 5 条摘要；绑定概念与 deprecated 不进；wiki 只给主题计数；表头列出作用域目录', async () => {
+  it('IJ-1 挑选规则：索引 项目 → 全局 → bot → 最近 5 条摘要；绑定概念与 deprecated 不进；带已退役 shuvix_pinned 的条目只是普通索引项、正文不进围栏；wiki 只给主题计数；表头列出作用域目录', async () => {
     seedBundle()
     const fence = (await resolveKnowledgeFence('s1', { tools: ['knowledge'] }))!
     expect(fence).toContain(
       'Scopes in this session: global (/global), project "Acme Corp" (/projects/acme), bot "alice" (/bots/alice), session summaries (/projects/acme/sessions).'
     )
 
-    const always = section(fence, '## Always applies')
-    expect(always.split('\n').filter((l) => l.startsWith('### '))).toEqual(['### /global/g-pin.md'])
-    expect(always).toContain('Always two spaces.')
+    // g-pin.md 的 frontmatter 还带着已退役的 shuvix_pinned：它只是个未知键，条目照常进索引，
+    // 正文一个字都不该出现在围栏里
+    expect(fence).not.toContain('## Always applies')
+    expect(fence).not.toContain('Always two spaces.')
 
     expect(indexPaths(fence)).toEqual([
       '/projects/acme/p1.md',
+      '/global/g-pin.md',
       '/global/g1.md',
       '/bots/alice/b1.md',
       '/projects/acme/sessions/s7.md',
@@ -212,6 +214,5 @@ describe('resolveKnowledgeFence', () => {
       'Scopes in this session: global (/global), session summaries (/sessions).'
     )
     expect(fence).toContain('No entries recorded yet.')
-    expect(fence).not.toContain('## Always applies')
   })
 })

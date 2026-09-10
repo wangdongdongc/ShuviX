@@ -12,7 +12,6 @@
 import {
   KNOWLEDGE_TYPES,
   OKF_STATUSES,
-  SHUVIX_PINNED_KEY,
   type OkfStatus,
   type OkfTrustTier
 } from '@shuvix/chat-protocol/knowledge'
@@ -45,8 +44,6 @@ export interface KnowledgeConcept {
   sources: KnowledgeSource[]
   generated?: KnowledgeStamp
   verified: KnowledgeStamp[]
-  /** `shuvix_pinned: true` */
-  pinned: boolean
   resource?: string
   /** 原始 frontmatter（含未知键）—— 更新时原样保留 */
   fields: Record<string, unknown>
@@ -192,7 +189,6 @@ export function parseConceptText(
     sources: normalizeSources(fields.sources, warn),
     generated: generated ?? undefined,
     verified: normalizeVerified(fields.verified, warn),
-    pinned: fields[SHUVIX_PINNED_KEY] === true,
     resource: str(fields.resource),
     fields,
     // 去掉 frontmatter 与正文之间的空行（core-okf 的构建器恒插一行；splitFrontmatter 把它算进
@@ -243,7 +239,6 @@ export interface ConceptBuildInput {
   sources?: readonly KnowledgeSource[]
   generated?: KnowledgeStamp
   verified?: readonly KnowledgeStamp[]
-  pinned?: boolean
   /** 更新时原样保留的既有 frontmatter（未知键）；已知键以本输入为准 */
   extra?: Record<string, unknown>
 }
@@ -258,12 +253,11 @@ const KNOWN_KEYS = new Set([
   'stale_after',
   'sources',
   'generated',
-  'verified',
-  SHUVIX_PINNED_KEY
+  'verified'
 ])
 
 /**
- * 组装一份概念文本（frontmatter 键序固定：规范字段在前、扩展键与未知键殿后）。
+ * 组装一份概念文本（frontmatter 键序固定：规范字段在前、未知键殿后）。
  * 空 / 未声明的可选字段不写；`status` 恒写出 —— OKF 缺省 stable，agent 写的草稿必须显式。
  */
 export function buildConceptText(input: ConceptBuildInput, body: string): string {
@@ -290,7 +284,6 @@ export function buildConceptText(input: ConceptBuildInput, body: string): string
   }
   if (input.generated) fields.generated = { by: input.generated.by, at: input.generated.at }
   if (input.verified?.length) fields.verified = input.verified.map((v) => ({ by: v.by, at: v.at }))
-  if (input.pinned) fields[SHUVIX_PINNED_KEY] = true
   for (const [k, v] of Object.entries(input.extra ?? {})) {
     if (KNOWN_KEYS.has(k) || k === 'shuvix') continue
     fields[k] = v

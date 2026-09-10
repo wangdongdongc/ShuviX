@@ -143,7 +143,6 @@ describe('i18n 语言包', () => {
       'knowledge.badgeVerifiedOutdated',
       'knowledge.badgeStale',
       'knowledge.badgeDeprecated',
-      'knowledge.badgePinned',
       'knowledge.openFolder',
       'knowledge.revealFile',
       'knowledge.copyPath'

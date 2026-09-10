@@ -18,8 +18,7 @@ export function toKnowledgeEntry(concept: KnowledgeConcept, now: Date): Knowledg
     tags: [...concept.tags],
     trustTier: trustTierOf(concept),
     verifiedCurrent: isVerificationCurrent(concept),
-    stale: isStale(concept, now),
-    pinned: concept.pinned
+    stale: isStale(concept, now)
   }
   if (concept.generated) {
     entry.generatedAt = concept.generated.at

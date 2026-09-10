@@ -1,8 +1,7 @@
 /**
  * `<knowledge>` 围栏（桌面接线）—— createAgent 的 resolveKnowledge seam 实现（设计 §7）。
  *
- * 挑选规则：pinned = 本会话作用域（global / 项目 / bot）里 `shuvix_pinned` 的非 deprecated 条目；
- * 索引 = 项目条目 → 全局条目 → bot 条目 → 最近 5 条会话摘要，都不含 deprecated 与绑定概念
+ * 挑选规则：索引 = 项目条目 → 全局条目 → bot 条目 → 最近 5 条会话摘要，都不含 deprecated 与绑定概念
  * （project.md / bot.md 只是目录的名片）；wiki 只给主题计数。旧项目记忆只读列出（D3）。
  * 根目录不存在也返回围栏：零条目时表头 + 写入段仍在，否则库永远无法从空启动。
  */
@@ -62,9 +61,7 @@ export async function resolveKnowledgeFence(
     .sort((a, b) => generatedMs(b) - generatedMs(a))
     .slice(0, RECENT_SESSIONS)
 
-  const scoped = [...projectEntries, ...globalEntries, ...botEntries]
-  const pinned = scoped.filter((c) => c.pinned)
-  const index = [...scoped.filter((c) => !c.pinned), ...sessionEntries]
+  const index = [...projectEntries, ...globalEntries, ...botEntries, ...sessionEntries]
 
   const topicCounts = new Map<string, number>()
   for (const c of live) {
@@ -89,7 +86,6 @@ export async function resolveKnowledgeFence(
   return renderKnowledgeFence({
     root: getKnowledgeRoot(),
     scopes,
-    pinned,
     index,
     wikiTopics,
     legacy,

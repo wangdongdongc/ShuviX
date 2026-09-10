@@ -53,7 +53,6 @@ describe('parseConceptText / isOkfConceptText — 「不是概念」的判定表
       status: 'stable',
       verified: [],
       sources: [],
-      pinned: false,
       // frontmatter 与正文之间的空行是构建器恒插的分隔，不算正文：parse(build(x)).body === x.body
       body: 'body \n\n'
     })
@@ -154,7 +153,6 @@ describe('buildConceptText — 键序固定、可选字段不写、值归一', (
         ],
         generated: { by: 'g', at: '2026-09-09T08:12:03.000Z' },
         verified: [{ by: 'human:v', at: '2026-09-10T00:00:00Z' }],
-        pinned: false,
         extra: { custom: 'kept', type: 'X', shuvix: 'agent v1', verified: 'nope' }
       },
       '\n\n  text  \n\n'
@@ -179,7 +177,6 @@ describe('buildConceptText — 键序固定、可选字段不写、值归一', (
     expect(out).toContain('\ntags:\n  - a\n  - b\n')
     // status 恒写出：OKF 缺省 stable，靠省略表达 stable 会让「草稿必须显式」失去对照
     expect(out).toContain('\nstatus: stable\n')
-    expect(out).not.toContain('shuvix_pinned')
     expect(out).not.toContain('shuvix:')
     expect(fields.verified).toEqual([{ by: 'human:v', at: '2026-09-10T00:00:00Z' }])
     expect(fields.custom).toBe('kept')
@@ -204,8 +201,8 @@ describe('buildConceptText — 键序固定、可选字段不写、值归一', (
         { by: 'human:agent', at: '2026-09-10T02:00:00Z' },
         { by: 'agent:x', at: '2026-09-11T02:00:00Z' }
       ],
-      pinned: true,
-      extra: { meta: { k: 1 } }
+      // 已退役的扩展键：不再有专门的字段，但落在磁盘上的旧文件必须原样带过（OKF 容忍未知键）
+      extra: { meta: { k: 1 }, shuvix_pinned: true }
     }
     const text = buildConceptText(input, 'body')
     const back = parseConceptText(text, 'global/x.md')!
@@ -220,8 +217,8 @@ describe('buildConceptText — 键序固定、可选字段不写、值归一', (
     expect(back.generated).toEqual(input.generated)
     expect(back.verified).toHaveLength(2)
     expect(back.verified).toEqual(input.verified)
-    expect(back.pinned).toBe(true)
     expect((back.fields.meta as { k: number }).k).toBe(1)
+    expect(back.fields.shuvix_pinned).toBe(true)
     expect(back.body).toBe('body\n')
   })
 })

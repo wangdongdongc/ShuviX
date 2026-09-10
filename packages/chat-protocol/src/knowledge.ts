@@ -4,7 +4,7 @@
  * 知识库是一个 Open Knowledge Format v0.2 bundle（桌面 `~/.shuvix/knowledge/`）：
  * 目录即作用域（全局 / 项目 / 会话 / bot / wiki / 来源），每个 `.md` 是一个 concept，
  * frontmatter 只有 `type` 必填，正文即知识。这里只放两端都要引用的**纯数据**：
- * 作用域与类型词汇表、扩展键名、资源 URI 约定、侧栏/管理页要用的条目视图形状。
+ * 作用域与类型词汇表、资源 URI 约定、侧栏/管理页要用的条目视图形状。
  * 解析器留在 agent-runtime（`knowledge/`），与 memory / wiki 契约同一分层先例。
  *
  * 与旧 wiki（`shuvix: wiki-entry v1`）/ 旧记忆（`shuvix: memory v1`）无关：那两套整体搁置，
@@ -64,12 +64,6 @@ export type OkfStatus = (typeof OKF_STATUSES)[number]
 /** 从 `verified` 推导的信任档（OKF §5.2）：未验证 / 机器确认 / 人工审阅 */
 export type OkfTrustTier = 'unverified' | 'machine-confirmed' | 'human-reviewed'
 
-/**
- * 唯一的 ShuviX 扩展键：正文常驻系统提示词（旧记忆 `shuvix-memory-pinned` 的对应物）。
- * OKF 允许未知键；snake_case 对齐规范自己的键（`stale_after` / `okf_version`）。
- */
-export const SHUVIX_PINNED_KEY = 'shuvix_pinned'
-
 /** 绑定概念的资源 URI 约定：`resource: shuvix://project/<id>` 等 */
 export const KNOWLEDGE_RESOURCE_SCHEME = 'shuvix://'
 export const projectResource = (projectId: string): string => `shuvix://project/${projectId}`
@@ -104,7 +98,6 @@ export interface KnowledgeEntry {
   verifiedCurrent: boolean
   /** `stale_after` 已过（按宿主当日判定） */
   stale: boolean
-  pinned: boolean
   /** `generated.at`（ISO 8601，可缺） */
   generatedAt?: string
   generatedBy?: string

@@ -110,12 +110,6 @@ export const KnowledgeParamsSchema = Type.Object({
       description: 'For "write": ISO date (YYYY-MM-DD) after which the entry needs re-verification.'
     })
   ),
-  pinned: Type.Optional(
-    Type.Boolean({
-      description:
-        'For "write": keep the whole body in every session\'s system prompt (only for rules that must always apply; costs context every turn).'
-    })
-  ),
   status: Type.Optional(
     Type.Unsafe<(typeof AGENT_STATUSES)[number]>({
       type: 'string',
@@ -148,7 +142,6 @@ export interface KnowledgeToolParams {
   tags?: string[]
   sources?: { resource: string; title?: string; id?: string }[]
   stale_after?: string
-  pinned?: boolean
   status?: (typeof AGENT_STATUSES)[number]
   successor?: string
   limit?: number
@@ -160,7 +153,7 @@ Actions:
 - "search": find entries by free text (\`query\`, optional \`scope\`, \`limit\`).
 - "list": list the entries of a \`scope\` (or the whole bundle).
 - "read": return one entry by \`path\`.
-- "write": create an entry (\`scope\`, \`type\`, \`title\`, \`description\`, \`body\`, optional \`tags\` / \`sources\` / \`stale_after\` / \`pinned\` / \`topic\`) or update one (\`path\` plus the fields to change). New entries are drafts; the user reviews them in the knowledge page. Scope "session" keeps ONE summary per session — writing it again updates it.
+- "write": create an entry (\`scope\`, \`type\`, \`title\`, \`description\`, \`body\`, optional \`tags\` / \`sources\` / \`stale_after\` / \`topic\`) or update one (\`path\` plus the fields to change). New entries are drafts; the user reviews them in the knowledge page. Scope "session" keeps ONE summary per session — writing it again updates it.
 - "set-status": mark an entry "deprecated" (optionally naming a \`successor\`) or back to "draft". You cannot mark entries stable — only the user can.
 
 Write entries worth carrying into later sessions: decisions, pitfalls, preferences, facts that took effort to establish. Search before writing and update an existing entry rather than adding a near-duplicate. Do not record what the repository already states, or what only matters to this conversation. The host stamps provenance (\`generated\`) — never claim verification yourself.`
@@ -510,7 +503,6 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
         sources,
         generated,
         verified: existing?.verified,
-        pinned: params.pinned ?? existing?.pinned,
         extra: existing?.fields
       },
       body
@@ -567,7 +559,6 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
         sources: existing.sources,
         generated: { by: this.deps.actor(), at: now.toISOString() },
         verified: existing.verified,
-        pinned: existing.pinned,
         extra: existing.fields
       },
       body

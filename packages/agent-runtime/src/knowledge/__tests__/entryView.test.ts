@@ -23,7 +23,6 @@ const concept = (overrides: Partial<KnowledgeConcept> = {}): KnowledgeConcept =>
   status: 'stable',
   sources: [],
   verified: [],
-  pinned: false,
   fields: {},
   body: 'body',
   ...overrides
@@ -45,7 +44,6 @@ describe('toKnowledgeEntry — 形状', () => {
     expect(Object.keys(entry).sort()).toEqual([
       'description',
       'path',
-      'pinned',
       'scope',
       'stale',
       'status',
@@ -63,8 +61,7 @@ describe('toKnowledgeEntry — 形状', () => {
       type: 'Memory',
       title: 'A',
       description: 'da',
-      status: 'stable',
-      pinned: false
+      status: 'stable'
     })
     expect(entry.tags).toEqual(['x'])
     expect(entry.tags).not.toBe(c.tags)

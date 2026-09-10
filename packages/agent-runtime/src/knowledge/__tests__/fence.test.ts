@@ -3,8 +3,9 @@
  *
  * 这份围栏每个会话必付，而它的成败全在几处措辞上 —— 都是散文，改坏了不会有任何编译
  * 或运行期报错。沿用旧记忆索引实测过的两条：条目标识用**路径**（模型拿不到路径就拼不出
- * read 参数），表头写明「动手前先对一遍索引」。预算规则（pinned 全量 / 索引截断 / wiki 只给
- * 主题）与三种写入段口吻也在这里钉死。
+ * read 参数），表头写明「动手前先对一遍索引」。预算规则（索引截断 / wiki 只给主题）与三种
+ * 写入段口吻也在这里钉死。围栏**只给索引、不注入任何条目正文** —— 常驻正文那一节已随
+ * `shuvix_pinned` 一并撤销，知识库怎么进系统提示词留待重新设计。
  */
 import { describe, it, expect } from 'vitest'
 import type { KnowledgeConcept } from '../conceptFile'
@@ -23,7 +24,6 @@ function concept(path: string, overrides: Partial<KnowledgeConcept> = {}): Knowl
     status: 'stable',
     sources: [],
     verified: [],
-    pinned: false,
     fields: {},
     body: 'body',
     ...overrides
@@ -34,7 +34,6 @@ function render(overrides: Partial<KnowledgeFenceInput> = {}): string {
   return renderKnowledgeFence({
     root: ROOT,
     scopes: [{ label: 'global', dir: 'global' }],
-    pinned: [],
     index: [],
     now: NOW,
     writing: 'none',
@@ -77,23 +76,19 @@ describe('表头', () => {
   })
 })
 
-describe('## Always applies', () => {
-  it('FE-2 常驻条目正文全量注入，以路径 + 标注为题，块间空行；无 pinned 则无此节', () => {
+describe('围栏只给索引', () => {
+  it('FE-2 条目正文一律不进围栏 —— 常驻正文（原 shuvix_pinned）已撤销，别再长回来', () => {
     const out = render({
-      pinned: [
-        concept('global/coding-style.md', {
-          status: 'draft',
-          verified: [{ by: 'human:me', at: '2026-09-02T00:00:00Z' }],
-          generated: { by: 'shuvix-work/gpt-5', at: '2026-09-01T00:00:00Z' },
-          body: '\nAlways two spaces.\n\n'
-        }),
+      index: [
+        concept('global/coding-style.md', { body: 'Always two spaces.' }),
         concept('global/other.md', { body: 'Other rule.' })
       ]
     })
-    expect(out).toContain(
-      '## Always applies\n\n### /global/coding-style.md (draft, verified, 2026-09-01)\nAlways two spaces.\n\n### /global/other.md\nOther rule.'
-    )
-    expect(render()).not.toContain('## Always applies')
+    // 索引给的是路径 + 描述这一行，正文只有 agent 自己 read 才读得到
+    expect(out).toContain('- /global/coding-style.md — desc')
+    expect(out).not.toContain('Always two spaces.')
+    expect(out).not.toContain('Other rule.')
+    expect(out).not.toContain('## Always applies')
   })
 })
 
@@ -210,7 +205,6 @@ describe('## Legacy project memories (read-only)', () => {
 describe('## Writing 与分节顺序', () => {
   const full = (writing: KnowledgeFenceInput['writing']): string =>
     render({
-      pinned: [concept('global/pin.md', { pinned: true })],
       index: [concept('global/a.md')],
       legacy: [{ path: '/m/a.md', recall: 'r' }],
       writing
@@ -235,15 +229,9 @@ describe('## Writing 与分节顺序', () => {
     expect(full('none')).not.toContain('## Writing')
   })
 
-  it('FE-7 分节顺序：表头 → Always applies → Index → Legacy → Writing，以空行相隔', () => {
+  it('FE-7 分节顺序：表头 → Index → Legacy → Writing，以空行相隔', () => {
     const out = full('tool')
-    const order = [
-      'Knowledge base root:',
-      '## Always applies',
-      '## Index',
-      '## Legacy',
-      '## Writing'
-    ]
+    const order = ['Knowledge base root:', '## Index', '## Legacy', '## Writing']
     const positions = order.map((h) => out.indexOf(h))
     expect(positions.every((p) => p >= 0)).toBe(true)
     expect([...positions].sort((a, b) => a - b)).toEqual(positions)

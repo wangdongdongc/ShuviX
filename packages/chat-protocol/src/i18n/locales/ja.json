@@ -159,7 +159,6 @@
     "badgeVerifiedOutdated": "確認後に編集あり",
     "badgeStale": "stale_after の期限切れ",
     "badgeDeprecated": "非推奨",
-    "badgePinned": "常時適用（毎セッションに注入）",
     "openFolder": "ナレッジフォルダを開く",
     "revealFile": "フォルダで表示",
     "copyPath": "パスをコピー"

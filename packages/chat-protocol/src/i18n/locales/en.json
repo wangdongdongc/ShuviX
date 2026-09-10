@@ -159,7 +159,6 @@
     "badgeVerifiedOutdated": "Edited after verification",
     "badgeStale": "Past its stale_after date",
     "badgeDeprecated": "Deprecated",
-    "badgePinned": "Always applies (injected into every session)",
     "openFolder": "Open knowledge folder",
     "revealFile": "Show in folder",
     "copyPath": "Copy path"

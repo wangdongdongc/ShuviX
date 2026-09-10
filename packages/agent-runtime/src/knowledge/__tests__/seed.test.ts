@@ -1,6 +1,6 @@
 /**
  * SCHEMA.md 种子 —— 宿主首次初始化根目录时写出的编辑规范。它自己必须是一份干净的概念
- * （否则第一次投影就带着诊断），且要把词汇表 / 目录布局 / 扩展键 / 保留文件都讲到 ——
+ * （否则第一次投影就带着诊断），且要把词汇表 / 目录布局 / 保留文件都讲到 ——
  * agent 只从这里学规则。
  */
 import { describe, it, expect } from 'vitest'
@@ -10,8 +10,7 @@ import {
   KNOWLEDGE_DIRS,
   KNOWLEDGE_TYPES,
   OKF_INDEX_FILE,
-  OKF_LOG_FILE,
-  SHUVIX_PINNED_KEY
+  OKF_LOG_FILE
 } from '@shuvix/chat-protocol/knowledge'
 import { KNOWLEDGE_SCHEMA_SEED } from '../seed'
 import { parseConceptText } from '../conceptFile'
@@ -28,11 +27,12 @@ describe('KNOWLEDGE_SCHEMA_SEED', () => {
     expect(concept.verified).toEqual([])
   })
 
-  it('SD-1 正文讲到每个 type、每个作用域目录、扩展键与两个保留文件', () => {
+  it('SD-1 正文讲到每个 type、每个作用域目录与两个保留文件；不提已退役的 shuvix_pinned', () => {
     const body = parseConceptText(KNOWLEDGE_SCHEMA_SEED, 'SCHEMA.md')!.body
     for (const type of KNOWLEDGE_TYPES) expect(body, type).toContain(`\`${type}\``)
     for (const dir of Object.values(KNOWLEDGE_DIRS)) expect(body, dir).toContain(`${dir}/`)
-    expect(body).toContain(SHUVIX_PINNED_KEY)
+    // 常驻正文那套已撤销：种子里再教这个键，agent 就会照着写一个谁也不读的字段
+    expect(body).not.toContain('shuvix_pinned')
     expect(body).toContain(`\`${OKF_INDEX_FILE}\``)
     expect(body).toContain(`\`${OKF_LOG_FILE}\``)
   })

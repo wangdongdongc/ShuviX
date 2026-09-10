@@ -159,7 +159,6 @@
     "badgeVerifiedOutdated": "核实后又被修改",
     "badgeStale": "已过 stale_after 日期",
     "badgeDeprecated": "已过时",
-    "badgePinned": "常驻（每个会话都注入）",
     "openFolder": "打开知识库目录",
     "revealFile": "在文件夹中显示",
     "copyPath": "复制路径"
