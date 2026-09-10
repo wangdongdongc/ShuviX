@@ -102,4 +102,53 @@ describe('i18n 语言包', () => {
     // 正控制组：邻居键还在
     expect(keys.en).toContain('tool.subAgentProjectAwareness')
   })
+
+  /**
+   * L-3：侧栏同时有两个知识库分组 —— 新的 OKF 知识库（`sidebar.knowledgeGroup`）与整体搁置的
+   * 旧 wiki（`sidebar.wikiGroup`）。两条文案必须分得开，且旧的那条自带「旧 / legacy」标记，
+   * 否则用户看到两个同名分组只能靠猜哪个是哪个。
+   */
+  it('L-3 sidebar.knowledgeGroup 与 sidebar.wikiGroup 三语都非空且互不相同；wikiGroup 带旧标记', () => {
+    for (const [lang, bundle] of Object.entries({ en, zh, ja })) {
+      const knowledge = leaf(bundle, 'sidebar.knowledgeGroup')
+      const wiki = leaf(bundle, 'sidebar.wikiGroup')
+      expect(knowledge, lang).toBeTruthy()
+      expect(wiki, lang).toBeTruthy()
+      expect(knowledge, lang).not.toBe(wiki)
+    }
+    expect(leaf(en, 'sidebar.knowledgeGroup')).toBe('Knowledge Base')
+    expect(leaf(en, 'sidebar.wikiGroup')).toMatch(/legacy/i)
+    expect(leaf(zh, 'sidebar.wikiGroup')).toMatch(/^旧/)
+    expect(leaf(ja, 'sidebar.wikiGroup')).toMatch(/^旧/)
+  })
+
+  /**
+   * L-4：KnowledgeGroup 组件读的每个键在 en 里都是非空字符串（zh / ja 由齐平断言跟随）。
+   * 缺键的表现是侧栏直接露出 `knowledge.badgeStale` 这样的原始键名 —— 组件不报错，只有肉眼
+   * 能发现。清单与组件里的 t() 调用逐一对应，改组件时同步这里。
+   */
+  it('L-4 KnowledgeGroup 用到的键在 en 里齐全且非空', () => {
+    const KNOWLEDGE_GROUP_KEYS = [
+      'sidebar.knowledgeGroup',
+      'sidebar.knowledgeEmpty',
+      'panel.filesRefresh',
+      'knowledge.scopeGlobal',
+      'knowledge.scopeProjects',
+      'knowledge.scopeSessions',
+      'knowledge.scopeBots',
+      'knowledge.scopeWiki',
+      'knowledge.scopeRaw',
+      'knowledge.badgeDraft',
+      'knowledge.badgeVerified',
+      'knowledge.badgeVerifiedOutdated',
+      'knowledge.badgeStale',
+      'knowledge.badgeDeprecated',
+      'knowledge.badgePinned',
+      'knowledge.openFolder',
+      'knowledge.revealFile',
+      'knowledge.copyPath'
+    ]
+    const missingOrEmpty = KNOWLEDGE_GROUP_KEYS.filter((k) => !leaf(en, k)?.trim())
+    expect(missingOrEmpty).toEqual([])
+  })
 })

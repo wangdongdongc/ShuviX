@@ -2,6 +2,7 @@ import { ElectronAPI } from '@electron-toolkit/preload'
 import type { LucideIconName, ThemeColor } from '@shuvix/chat-protocol/theme'
 import type { ShuvixMdValidation } from '@shuvix/chat-protocol/shuvixMdContract'
 import type { BotPipelineOptions } from '@shuvix/chat-protocol/botPipeline'
+import type { KnowledgeEntry } from '@shuvix/chat-protocol/knowledge'
 import type { BgTaskInfo, BgTaskLogChunk } from '@shuvix/chat-protocol/types/bgTask'
 import type {
   AgentInitParams,
@@ -1095,6 +1096,16 @@ declare global {
         ok: boolean
         error?: string
       }) => Promise<{ accepted: boolean }>
+    }
+    knowledge: {
+      /** 全部条目（视图形状，不含正文）+ 根目录绝对路径；首次调用懒建根目录（种子 / 投影 / git） */
+      list: () => Promise<{ entries: KnowledgeEntry[]; root: string }>
+      /** 打开条目笔记：一文件至多一笔记本会话，已存在则复用返回；title 为条目显示名 */
+      openNote: (params: { path: string; title?: string }) => Promise<Session>
+      /** 打开知识库根目录（OS 文件管理器） */
+      openFolder: () => Promise<{ success: boolean }>
+      /** 在文件夹中显示条目文件（bundle 相对路径；越出 bundle 的路径忽略） */
+      revealFile: (params: { path: string }) => Promise<{ success: boolean }>
     }
     wiki: {
       /** 扫描 wiki 根目录下全部 markdown 文件（相对路径，遵循 .gitignore），含条目显示名 */

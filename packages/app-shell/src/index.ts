@@ -61,6 +61,14 @@ export { ViewSwitchButton } from './sidebar/ViewSwitchButton'
 export type { ViewSwitchButtonProps, SidebarViewMode } from './sidebar/ViewSwitchButton'
 export { WikiGroup } from './sidebar/WikiGroup'
 export type { WikiGroupProps, WikiFileInfo } from './sidebar/WikiGroup'
+export { KnowledgeGroup } from './sidebar/KnowledgeGroup'
+export type { KnowledgeGroupProps, KnowledgeGroupAdapter } from './sidebar/KnowledgeGroup'
+export { buildKnowledgeTree } from './sidebar/knowledgeTree'
+export type {
+  KnowledgeTreeDir,
+  KnowledgeTreeFile,
+  KnowledgeScopeDir
+} from './sidebar/knowledgeTree'
 export { BotGroup } from './sidebar/BotGroup'
 export type { BotGroupProps, BotGroupAdapter, BotGroupInvalidFile } from './sidebar/BotGroup'
 export { useProjects } from './sidebar/useProjects'

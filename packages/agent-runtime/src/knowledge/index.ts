@@ -86,4 +86,5 @@ export {
   type KnowledgeScopeTarget,
   type KnowledgeSearchHit
 } from './knowledgeTool'
+export { toKnowledgeEntry } from './entryView'
 export { KNOWLEDGE_SCHEMA_SEED } from './seed'

@@ -534,7 +534,7 @@ export function atPopoverPane(main: CdpClient): AtPopoverPane {
  * 与 Bots 组的标签是本地化文案，四者都只剩这个属性可认。Bots 组的行与页另有自己的 page
  * object（`botsPane`），这里的 target 只用于组头层面的菜单 / 按钮断言。
  */
-export type GroupTarget = { project: string } | 'temp' | 'wiki' | 'bots' | 'section'
+export type GroupTarget = { project: string } | 'temp' | 'knowledge' | 'wiki' | 'bots' | 'section'
 
 /**
  * 菜单项原样快照（对齐 `ContextMenuItem`；侧栏不用 role/submenu，故只留这四个键）。

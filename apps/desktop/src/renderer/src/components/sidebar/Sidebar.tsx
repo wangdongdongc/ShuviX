@@ -6,6 +6,8 @@ import {
   Sidebar as SharedSidebar,
   BotGroup,
   type BotGroupAdapter,
+  KnowledgeGroup,
+  type KnowledgeGroupAdapter,
   WikiGroup,
   useProjects,
   useSessionDelete,
@@ -23,7 +25,8 @@ import { ConfirmDialog } from '../common/ConfirmDialog'
  *   - 会话/分组右键菜单由共享组件统一渲染（桌面经 ContextMenuProvider 注入原生渲染器）
  *   - 会话配置弹窗、项目编辑弹窗
  *   - Bots 置顶分组（BotGroup 经 groupsPrepend 注入，接 window.api.bot.*；点行开 bot 档案页，
- *     删除的确认框在这里）+ 知识库置顶分组（WikiGroup，同一插槽，排在 Bots 之下）
+ *     删除的确认框在这里）+ 知识库置顶分组（KnowledgeGroup，接 window.api.knowledge.*，点行开 /
+ *     复用条目的笔记本会话）+ 旧知识库置顶分组（WikiGroup，同一插槽，排在最下）
  *   - 底部更新提示。侧栏只有项目视图 —— 日历已迁至右面板 Calendar tab（CalendarPanel）
  *   - 归档项目的恢复 / 删除已移至「设置 → Projects → 已归档」
  */
@@ -139,7 +142,25 @@ export function Sidebar(): React.JSX.Element {
     [setActiveSessionId]
   )
 
-  /** 打开 wiki 笔记：一文件至多一笔记本会话（main 侧去重），刷新列表并选中 */
+  /**
+   * 知识库分组能力注入 —— 清单 + 根目录读盘（首次展开懒建根），打开一条即打开 / 复用绑定它的
+   * 笔记本会话（main 侧去重），刷新列表并选中。引用必须稳定（useMemo）：分组以 adapter 为扫描依赖。
+   */
+  const knowledgeAdapter = useMemo<KnowledgeGroupAdapter>(
+    () => ({
+      list: () => window.api.knowledge.list(),
+      open: async (path, title) => {
+        const session = await window.api.knowledge.openNote({ path, title })
+        useChatStore.getState().setSessions(await getChatApi().session.list())
+        setActiveSessionId(session.id)
+      },
+      openFolder: () => window.api.knowledge.openFolder(),
+      revealFile: (path) => window.api.knowledge.revealFile({ path })
+    }),
+    [setActiveSessionId]
+  )
+
+  /** 打开旧 wiki 笔记：一文件至多一笔记本会话（main 侧去重），刷新列表并选中 */
   const handleOpenWikiNote = useCallback(
     async (relPath: string): Promise<void> => {
       const session = await window.api.wiki.openNote({ path: relPath })
@@ -180,6 +201,7 @@ export function Sidebar(): React.JSX.Element {
       groupsPrepend={
         <>
           <BotGroup adapter={botGroupAdapter} />
+          <KnowledgeGroup adapter={knowledgeAdapter} />
           <WikiGroup listFiles={listWikiFiles} onSelectFile={handleOpenWikiNote} />
         </>
       }

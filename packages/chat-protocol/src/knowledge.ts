@@ -92,13 +92,16 @@ export const KNOWLEDGE_SCHEMA_FILE = 'SCHEMA.md'
  */
 export interface KnowledgeEntry {
   path: string
-  scope: KnowledgeScopeKind
+  /** 所属作用域；bundle 根目录下的概念（如 SCHEMA.md）为 null */
+  scope: KnowledgeScopeKind | null
   type: string
   title: string
   description: string
   status: OkfStatus
   tags: string[]
   trustTier: OkfTrustTier
+  /** 最近一次 `verified` 仍为当前内容背书（不早于 `generated.at`）；未核实恒为 false */
+  verifiedCurrent: boolean
   /** `stale_after` 已过（按宿主当日判定） */
   stale: boolean
   pinned: boolean

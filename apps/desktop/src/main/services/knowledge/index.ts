@@ -33,3 +33,4 @@ export {
   type KnowledgeChange
 } from './changes'
 export { resolveKnowledgeFence } from './inject'
+export { listKnowledgeEntries } from './entries'

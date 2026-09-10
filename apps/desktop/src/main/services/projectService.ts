@@ -1,5 +1,6 @@
 import { v7 as uuidv7 } from 'uuid'
 import { WIKI_PROJECT_ID } from '@shuvix/chat-protocol/wiki'
+import { KNOWLEDGE_PROJECT_ID } from '@shuvix/chat-protocol/knowledge'
 import { projectDao } from '../dao/projectDao'
 import { appEventBus } from '../utils/appEventBus'
 import type { Project, ProjectSettings } from '../types'
@@ -43,15 +44,19 @@ export function getProjectFieldDescriptions(): string {
 /**
  * 项目服务 — 编排项目相关的业务逻辑
  */
+/** 隐藏项目：只承载笔记本会话、不进项目列表（旧 wiki 与知识库 v2） */
+const isHiddenProjectId = (id: string): boolean =>
+  id === WIKI_PROJECT_ID || id === KNOWLEDGE_PROJECT_ID
+
 export class ProjectService {
-  /** 获取未归档项目(不含隐藏的 wiki 项目;getById 不过滤,保证其会话正常解析) */
+  /** 获取未归档项目(不含隐藏的 wiki / 知识库项目;getById 不过滤,保证其会话正常解析) */
   list(): Project[] {
-    return projectDao.findAllActive().filter((p) => p.id !== WIKI_PROJECT_ID)
+    return projectDao.findAllActive().filter((p) => !isHiddenProjectId(p.id))
   }
 
-  /** 获取已归档项目(不含隐藏的 wiki 项目) */
+  /** 获取已归档项目(不含隐藏的 wiki / 知识库项目) */
   listArchived(): Project[] {
-    return projectDao.findAllArchived().filter((p) => p.id !== WIKI_PROJECT_ID)
+    return projectDao.findAllArchived().filter((p) => !isHiddenProjectId(p.id))
   }
 
   /** 获取单个项目 */
