@@ -55,7 +55,7 @@ describe('scopeDir ↔ scopeOfPath ↔ scopeLabel', () => {
       ['wiki/index.md', { kind: 'wiki' }],
       ['raw/2026-x/source.md', { kind: 'raw' }],
       ['index.md', null],
-      ['SCHEMA.md', null],
+      ['NOTES.md', null],
       ['misc/x.md', null],
       ['/global/x.md', { kind: 'global' }],
       ['global\\x.md', { kind: 'global' }]

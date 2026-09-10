@@ -54,7 +54,8 @@ export const KNOWLEDGE_DIRS = {
 
 /**
  * ShuviX 的 `type` 词汇表（开放：OKF 消费者必须容忍未知 type，宿主对未知值只展示不拒绝）。
- * 词汇表同时写在 SCHEMA.md 种子里，给 agent 看。
+ * 同一份词汇表写在内置 `knowledge-writer` 的提示词里，那是 agent 侧的唯一事实源 ——
+ * 本库不再往用户的 bundle 里写一份可编辑的规范文件（拆职责：规则归提示词，bundle 只放条目）。
  */
 export const KNOWLEDGE_TYPES = [
   'Memory',
@@ -65,8 +66,7 @@ export const KNOWLEDGE_TYPES = [
   'Entity',
   'Decision',
   'Guide',
-  'Source',
-  'Schema'
+  'Source'
 ] as const
 export type KnowledgeType = (typeof KNOWLEDGE_TYPES)[number]
 
@@ -98,8 +98,6 @@ export const BOT_CONCEPT_FILE = 'bot.md'
 /** 保留文件（OKF §3）：不是 concept，宿主投影生成 */
 export const OKF_INDEX_FILE = 'index.md'
 export const OKF_LOG_FILE = 'log.md'
-/** 本库的编辑规范文件（type: Schema），种子由宿主写出、用户可改 */
-export const KNOWLEDGE_SCHEMA_FILE = 'SCHEMA.md'
 
 /**
  * 条目的前端视图形状 —— 侧栏 / 管理页一行所需，不含正文（正文由笔记本会话按需读）。

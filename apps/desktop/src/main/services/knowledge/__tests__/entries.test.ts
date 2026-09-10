@@ -38,32 +38,20 @@ afterEach(() => {
 })
 
 describe('listKnowledgeEntries', () => {
-  it('EN-1 全新根目录：先种根（SCHEMA.md / index.md / log.md / global/index.md / .git），清单恰好一条 SCHEMA.md 条目；保留文件不是条目', async () => {
+  it('EN-1 全新根目录：先建根（index.md / global/index.md / .git），清单为空 —— 宿主不再种任何规范文件', async () => {
     expect(isKnowledgeRootInitialized()).toBe(false)
 
     const { root: reported, entries } = await listKnowledgeEntries()
 
     expect(reported).toBe(root)
-    for (const rel of ['SCHEMA.md', 'index.md', 'log.md', 'global/index.md', '.git']) {
+    for (const rel of ['index.md', 'global/index.md', '.git']) {
       expect(existsSync(join(root, ...rel.split('/'))), rel).toBe(true)
     }
+    // 编辑规范住在 agent 提示词里，不再往用户目录里放一份可编辑副本
+    expect(existsSync(join(root, 'SCHEMA.md'))).toBe(false)
 
-    expect(entries.map((e) => e.path)).toEqual(['SCHEMA.md'])
-    const [schema] = entries
-    expect(schema).toMatchObject({
-      path: 'SCHEMA.md',
-      scope: null,
-      type: 'Schema',
-      title: 'Knowledge base schema',
-      status: 'stable',
-      tags: ['schema'],
-      trustTier: 'unverified',
-      verifiedCurrent: false,
-      stale: false
-    })
-    expect(schema.description.length).toBeGreaterThan(0)
-    expect(schema).not.toHaveProperty('generatedAt')
-    expect(schema).not.toHaveProperty('generatedBy')
+    // 保留文件（index.md）不是条目 —— 空库的清单就是空的
+    expect(entries).toEqual([])
   })
 
   it('EN-2 种好的 bundle 经真实扫描投影：作用域 / 信任档 / 核实时序 / 过期 / generated 章逐条到位；已退役的 shuvix_pinned 只当未知键；无 type 与带 shuvix 标记的文件不出现；路径为 forward-slash 相对路径', async () => {
@@ -98,7 +86,6 @@ describe('listKnowledgeEntries', () => {
     const byPath = Object.fromEntries(entries.map((e) => [e.path, e]))
 
     expect(Object.keys(byPath).sort()).toEqual([
-      'SCHEMA.md',
       'bots/helper/bot.md',
       'global/a.md',
       'projects/acme/project.md',

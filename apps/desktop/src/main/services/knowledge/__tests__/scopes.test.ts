@@ -36,12 +36,7 @@ vi.mock('../../../dao/sessionDao', () => ({
 import { flushKnowledgeChanges } from '../changes'
 import { isKnowledgeRootInitialized } from '../root'
 import { invalidateKnowledgeScan } from '../scan'
-import {
-  ensureProjectScope,
-  resolveSessionScopeTarget,
-  sessionFenceScopes,
-  sessionKnowledgeContext
-} from '../scopes'
+import { ensureProjectScope, resolveSessionScopeTarget, sessionKnowledgeContext } from '../scopes'
 import { makeTempRoot, seedConcept } from './fixture'
 
 const acme: Project = {
@@ -83,8 +78,8 @@ const dirsOf = (rel: string): string[] =>
     .map((d) => d.name)
     .sort()
 
-describe('sessionKnowledgeContext / sessionFenceScopes（只读）', () => {
-  it('DS-1 项目会话（尚无目录）/ bot 会话 / 都没有 → 上下文；围栏作用域清单的顺序与目录；不建根目录', async () => {
+describe('sessionKnowledgeContext（只读）', () => {
+  it('DS-1 项目会话（尚无目录）/ bot 会话 / 都没有 → 上下文；目录按 resource 绑定解析；不建根目录', async () => {
     expect(await sessionKnowledgeContext('s-p')).toEqual({
       project: acme,
       projectDir: null,
@@ -103,20 +98,6 @@ describe('sessionKnowledgeContext / sessionFenceScopes（只读）', () => {
       bot: null,
       botDir: null
     })
-    expect(await sessionFenceScopes('s-p')).toEqual([
-      { label: 'global', dir: 'global' },
-      { label: 'project "Acme Corp"', dir: null },
-      { label: 'session summaries', dir: 'sessions' }
-    ])
-    expect(await sessionFenceScopes('s-b')).toEqual([
-      { label: 'global', dir: 'global' },
-      { label: 'bot "alice"', dir: null },
-      { label: 'session summaries', dir: 'sessions' }
-    ])
-    expect(await sessionFenceScopes('s-0')).toEqual([
-      { label: 'global', dir: 'global' },
-      { label: 'session summaries', dir: 'sessions' }
-    ])
     expect(existsSync(root)).toBe(false)
 
     // 项目目录在场（按 resource 绑定，目录名只是 slug）：会话摘要住到项目下
@@ -127,11 +108,6 @@ describe('sessionKnowledgeContext / sessionFenceScopes（只读）', () => {
     ])
     invalidateKnowledgeScan()
     expect((await sessionKnowledgeContext('s-p')).projectDir).toBe('projects/acme')
-    expect(await sessionFenceScopes('s-p')).toEqual([
-      { label: 'global', dir: 'global' },
-      { label: 'project "Acme Corp"', dir: 'projects/acme' },
-      { label: 'session summaries', dir: 'projects/acme/sessions' }
-    ])
   })
 })
 

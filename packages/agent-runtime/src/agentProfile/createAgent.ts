@@ -147,19 +147,6 @@ export interface AgentHostAdapter {
    * 与 resolveProjectPrompt 同源，而非像指令文件那样按 cwd 扫盘。
    */
   resolveProjectMemory?: (rootSessionId: string) => string | null | Promise<string | null>
-  /**
-   * 知识库围栏解析（profile.knowledge 时调用）：返回**渲染好的围栏正文**或 null，
-   * 围栏由本模块的 fenceKnowledge 统一加。`tools` 是本次创建的工具名单 —— 围栏据此选择
-   * 写入段的口吻（有 `knowledge` 工具教用工具，没有教直接写文件）。
-   *
-   * 与项目记忆是**替代**而非并列：为真的 agent 不再收到 `<project_memory>`（两段「往这里写
-   * 记忆」的指令必然写乱），旧记忆改由围栏里一节只读清单列出 —— 设计 D3。宿主未实现
-   * 本 seam 时开关无效，项目记忆照旧注入。
-   */
-  resolveKnowledge?: (
-    rootSessionId: string,
-    ctx: { tools: readonly string[] }
-  ) => string | null | Promise<string | null>
 }
 
 export interface CreateAgentParams {
@@ -239,7 +226,6 @@ const fenceInstructionFile = (filename: string, content: string): string =>
 const fenceProjectPrompt = (text: string): string => `<project_prompt>\n${text}\n</project_prompt>`
 
 const fenceProjectMemory = (text: string): string => `<project_memory>\n${text}\n</project_memory>`
-const fenceKnowledge = (text: string): string => `<knowledge>\n${text}\n</knowledge>`
 
 /** 会话级工具（用户能在工具选择器里勾选的那两类）；其余为内置工具名 + 'agent' */
 const isSessionScopedTool = (name: string): boolean =>
@@ -325,21 +311,15 @@ export function createAgentFactory(host: AgentHostAdapter): AgentFactory {
     }
     // 项目感知一个开关带两段注入：数据源与围栏各自独立，但「要不要知道自己在哪个项目里」
     // 只是一个决定；宿主未实现某个 seam（扩展端无项目记忆）时那一段自然缺席。
-    // 知识库围栏替代项目记忆索引（D3）：开关为真且宿主实现了 seam 才算「知识库在位」
-    const knowledgeOn = !!profile.knowledge && !!host.resolveKnowledge
     if (profile.projectAwareness) {
       if (host.resolveProjectPrompt) {
         const text = (await host.resolveProjectPrompt(rootSessionId))?.trim()
         if (text) systemPrompt += `\n\n${fenceProjectPrompt(text)}`
       }
-      if (host.resolveProjectMemory && !knowledgeOn) {
+      if (host.resolveProjectMemory) {
         const text = (await host.resolveProjectMemory(rootSessionId))?.trim()
         if (text) systemPrompt += `\n\n${fenceProjectMemory(text)}`
       }
-    }
-    if (knowledgeOn) {
-      const text = (await host.resolveKnowledge!(rootSessionId, { tools: profile.tools }))?.trim()
-      if (text) systemPrompt += `\n\n${fenceKnowledge(text)}`
     }
     // 调用方给的上下文块（已围栏）：排在项目注入之后，同样住在系统提示词里、免重注入
     for (const block of params.systemContext ?? []) {

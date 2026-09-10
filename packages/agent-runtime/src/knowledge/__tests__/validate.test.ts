@@ -16,11 +16,11 @@ const doc = (frontmatter: string[], body = 'body'): string =>
   ['---', ...frontmatter, '---', '', body].join('\n')
 
 describe('isReservedFile + 保留文件规则', () => {
-  it('VA-1 index.md / log.md（任何目录）保留；SCHEMA.md 与 index.markdown 不是', () => {
+  it('VA-1 index.md / log.md（任何目录）保留；根级普通文件与 index.markdown 不是', () => {
     expect(isReservedFile('index.md')).toBe(true)
     expect(isReservedFile('global/index.md')).toBe(true)
     expect(isReservedFile('log.md')).toBe(true)
-    expect(isReservedFile('SCHEMA.md')).toBe(false)
+    expect(isReservedFile('NOTES.md')).toBe(false)
     expect(isReservedFile('index.markdown')).toBe(false)
   })
 
@@ -140,9 +140,9 @@ describe('resolveLinkTarget', () => {
     }
   })
 
-  it('VA-5 从根文件 SCHEMA.md 出发：相对即根下，上级越界', () => {
-    expect(resolveLinkTarget('SCHEMA.md', 'global/x.md')).toBe('global/x.md')
-    expect(resolveLinkTarget('SCHEMA.md', '../x.md')).toBeNull()
+  it('VA-5 从根级文件出发：相对即根下，上级越界', () => {
+    expect(resolveLinkTarget('NOTES.md', 'global/x.md')).toBe('global/x.md')
+    expect(resolveLinkTarget('NOTES.md', '../x.md')).toBeNull()
   })
 })
 

@@ -54,7 +54,7 @@ describe('renderAllIndexes — 确定性', () => {
   it('PJ-2 根 index：okf_version frontmatter，按固定序只列在场的作用域节，每节首行是作用域自己的 index，根级概念落 Bundle 节', () => {
     const root = render([
       concept('projects/acme/x.md', 'X', 'dx'),
-      concept('SCHEMA.md', 'Schema', 'ds'),
+      concept('NOTES.md', 'Guide', 'ds'),
       concept('global/a.md', 'A', 'da')
     ]).get('')!
     expect(root.startsWith('---\nokf_version: "0.2"\n---\n\n')).toBe(true)
@@ -76,7 +76,7 @@ describe('renderAllIndexes — 确定性', () => {
         '',
         '## Bundle',
         '',
-        '* [Schema](SCHEMA.md) - ds',
+        '* [Guide](NOTES.md) - ds',
         ''
       ].join('\n')
     )

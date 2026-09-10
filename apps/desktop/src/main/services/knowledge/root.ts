@@ -1,23 +1,21 @@
 /**
- * 根目录懒初始化 —— 首次写入（knowledge 工具的 create 作用域）才建：mkdir、写种子
- * （SCHEMA.md、global/）、投影 index/log、git init + 基线提交。幂等且串行；失败只记日志，
- * 调用方照常继续（写入本身不依赖仓库存在）。
+ * 根目录懒初始化 —— 首次写入（knowledge 工具的 create 作用域）才建：mkdir `global/`、
+ * 投影 index/log、git init + 基线提交。幂等且串行；失败只记日志，调用方照常继续
+ * （写入本身不依赖仓库存在）。
  *
  * 不在启动时建：目录的出现应当是用户意图的结果（同 wikiService「懒建根」的判断）。
+ *
+ * **不写任何规范文件**：编辑规范（布局、类型词汇表、写作规则）住在内置 `knowledge-writer`
+ * 的提示词里，随版本走；往用户目录里放一份可编辑的副本只会带来一个没人维护的更新问题 ——
+ * 它一旦落盘，后续版本就再也改不动它，而 agent 又被要求遵循它。bundle 里只放条目。
  */
 import { existsSync } from 'fs'
-import { mkdir, writeFile } from 'fs/promises'
-import {
-  KNOWLEDGE_DIRS,
-  KNOWLEDGE_SCHEMA_FILE,
-  OKF_INDEX_FILE
-} from '@shuvix/chat-protocol/knowledge'
-import { KNOWLEDGE_SCHEMA_SEED } from '@shuvix/agent-runtime'
+import { mkdir } from 'fs/promises'
+import { KNOWLEDGE_DIRS, OKF_INDEX_FILE } from '@shuvix/chat-protocol/knowledge'
 import { createLogger } from '../../logger'
 import { fromBundlePath, getKnowledgeRoot } from './knowledgePaths'
 import { projectKnowledgeBundle } from './projection'
 import { ensureKnowledgeRepo } from './repo'
-import { invalidateKnowledgeScan } from './scan'
 
 const log = createLogger('Knowledge')
 
@@ -32,31 +30,15 @@ export function isKnowledgeRootInitialized(): boolean {
 
 async function initialize(): Promise<string> {
   const root = getKnowledgeRoot()
+  const fresh = !isKnowledgeRootInitialized()
   await mkdir(fromBundlePath(KNOWLEDGE_DIRS.global), { recursive: true })
-  let seeded = false
-  const schemaPath = fromBundlePath(KNOWLEDGE_SCHEMA_FILE)
-  if (!existsSync(schemaPath)) {
-    await writeFile(schemaPath, KNOWLEDGE_SCHEMA_SEED, 'utf-8')
-    invalidateKnowledgeScan(KNOWLEDGE_SCHEMA_FILE)
-    seeded = true
-  }
-  await projectKnowledgeBundle(
-    seeded
-      ? {
-          date: new Date().toISOString().slice(0, 10),
-          op: 'Creation',
-          path: KNOWLEDGE_SCHEMA_FILE,
-          title: 'Knowledge base schema',
-          actor: HOST_ACTOR
-        }
-      : undefined
-  )
+  await projectKnowledgeBundle()
   await ensureKnowledgeRepo()
-  if (seeded) log.info(`initialized knowledge base at ${root}`)
+  if (fresh) log.info(`initialized knowledge base at ${root}`)
   return root
 }
 
-/** 确保根目录可用（种子 + 投影 + 仓库），返回绝对路径 */
+/** 确保根目录可用（目录 + 投影 + 仓库），返回绝对路径 */
 export async function ensureKnowledgeRoot(): Promise<string> {
   if (!ensuring) {
     ensuring = initialize()

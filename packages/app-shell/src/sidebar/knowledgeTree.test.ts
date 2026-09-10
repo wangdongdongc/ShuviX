@@ -2,7 +2,7 @@
  * 知识库分组的树形派生 —— `KnowledgeEntry[]` → 目录树（buildKnowledgeTree）。
  *
  * 判定全在这个纯函数里，UI 只是照树画：顶层作用域目录固定序、只画有文件的目录、章程 /
- * 绑定概念（SCHEMA.md / project.md / bot.md）置首且按位置识别、绑定概念的 title 给目录命名
+ * 绑定概念（project.md / bot.md）置首且按位置识别、绑定概念的 title 给目录命名
  * 而自己那行退回文件名 stem、目录与文件各按显示名排、路径归一 + 去重。这里逐条钉住，
  * 组件层不再单测这些判定。
  */
@@ -70,21 +70,25 @@ describe('buildKnowledgeTree — 根与顶层', () => {
     })
   })
 
-  it('KT-2 根 SCHEMA.md：章程行落在根、label 是它的 title、不给根命名、不造目录', () => {
-    const schema = entry('SCHEMA.md', { type: 'Schema', title: 'Knowledge base schema' })
-    const root = buildKnowledgeTree([schema])
-    expect(root.files).toEqual([{ entry: schema, charter: true, label: 'Knowledge base schema' }])
+  /**
+   * 根级文件（用户自己放的、或外部工具写的）落在根、不造目录、也不是章程 ——
+   * 宿主不再往库里种任何根级规范文件，章程只剩两种绑定概念（project.md / bot.md）。
+   */
+  it('KT-2 根级文件：行落在根、label 是它的 title、不是章程、不给根命名、不造目录', () => {
+    const note = entry('NOTES.md', { type: 'Guide', title: 'House rules' })
+    const root = buildKnowledgeTree([note])
+    expect(root.files).toEqual([{ entry: note, charter: false, label: 'House rules' }])
     expect(root.title).toBeNull()
     expect(root.dirs).toEqual([])
   })
 
-  it('KT-3 根下非章程文件与 SCHEMA.md 并列：章程在前，notes.md 不是章程，仍不造目录', () => {
+  it('KT-3 多个根级文件：一个都不是章程，按显示名排，仍不造目录', () => {
     const root = buildKnowledgeTree([
       entry('notes.md', { title: 'Notes' }),
-      entry('SCHEMA.md', { type: 'Schema', title: 'Knowledge base schema' })
+      entry('house.md', { title: 'Anchors' })
     ])
-    expect(paths(root)).toEqual(['SCHEMA.md', 'notes.md'])
-    expect(root.files.map((f) => f.charter)).toEqual([true, false])
+    expect(paths(root)).toEqual(['house.md', 'notes.md'])
+    expect(root.files.map((f) => f.charter)).toEqual([false, false])
     expect(root.dirs).toEqual([])
   })
 
@@ -183,14 +187,14 @@ describe('buildKnowledgeTree — 章程 / 绑定概念', () => {
     expect(labels(helper)).toEqual(['bot', 'Memo'])
   })
 
-  it('KT-7 章程识别按位置：只有根 SCHEMA.md、projects/<slug>/project.md、bots/<name>/bot.md 算，同名文件放错层级 / 错目录一律不算、也不给目录命名', () => {
+  it('KT-7 章程识别按位置：只有 projects/<slug>/project.md 与 bots/<name>/bot.md 算，同名文件放错层级 / 错目录一律不算、也不给目录命名', () => {
     const root = buildKnowledgeTree([
       entry('projects/project.md', { title: 'P0' }),
       entry('projects/acme/sub/project.md', { title: 'P1' }),
       entry('wiki/topic/project.md', { title: 'P2' }),
       entry('bots/helper/project.md', { title: 'P3' }),
       entry('projects/acme/bot.md', { title: 'B' }),
-      entry('global/SCHEMA.md', { title: 'S' })
+      entry('project.md', { title: 'P4' })
     ])
     const files = allFiles(root)
     expect(files).toHaveLength(6)

@@ -38,6 +38,7 @@ import {
   WIKI_TOPIC_MARKER,
   WIKI_UPDATED_KEY
 } from '@shuvix/chat-protocol/wikiFileContract'
+import { KNOWLEDGE_TYPES } from '@shuvix/chat-protocol/knowledge'
 import { parse as parseYaml } from 'yaml'
 import type { AgentProfile } from '../../subagent/types'
 
@@ -246,19 +247,22 @@ describe('buildBuiltinProfiles — 全集现算', () => {
         expect(loc.tools, `${spec.name}.${language} tools`).toEqual(en.tools)
         expect(loc.instructionFiles, `${spec.name}.${language}`).toEqual(en.instructionFiles)
         expect(loc.projectAwareness, `${spec.name}.${language}`).toBe(en.projectAwareness)
-        expect(loc.knowledge, `${spec.name}.${language} knowledge`).toBe(en.knowledge)
       }
     }
   })
 })
 
 /**
- * knowledge-writer 档案钉板 —— OKF 知识库的派发执行侧（设计 §6.3）：读 SCHEMA.md、经
- * `knowledge` 工具写条目；没有 git、没有提交协议、没有反链复查 —— 簿记归宿主，同意归策略。
- * 依赖宿主的知识库根目录参数（扩展端没有 → 自动跳过）。
+ * knowledge-writer 档案钉板 —— OKF 知识库的派发执行侧（设计 §6.3）：经 `knowledge` 工具写条目；
+ * 没有 git、没有提交协议、没有反链复查 —— 簿记归宿主，同意归策略。依赖宿主的知识库根目录参数
+ * （扩展端没有 → 自动跳过）。
+ *
+ * 编辑规范（布局表、类型词汇表、写作规则）**住在这份提示词里**：库里不再放一份用户可编辑的
+ * SCHEMA.md，因为那样它一落盘就再也更新不了，而 agent 又被要求遵循它。RG-2 因此逐条钉住
+ * 提示词里必须在场的那几段。
  */
 describe('knowledge-writer 档案钉板（OKF 知识库的派发执行侧）', () => {
-  it('RG-1 三语结构钉板：工具面恰为 knowledge/read/grep/glob/ls/ask，知识库与项目感知开、指令文件默认、不声明模型、不是基座、缺 knowledgeRoot 即跳过', () => {
+  it('RG-1 三语结构钉板：工具面恰为 knowledge/read/grep/glob/ls/ask，项目感知开、指令文件默认、不声明模型、不是基座、缺 knowledgeRoot 即跳过', () => {
     expect(KNOWLEDGE_WRITER_SPEC.name).toBe('knowledge-writer')
     expect(KNOWLEDGE_WRITER_SPEC.requiredParams).toEqual(['knowledgeRoot'])
     expect(buildBuiltinProfile(KNOWLEDGE_WRITER_SPEC, {})).toBeNull()
@@ -268,23 +272,21 @@ describe('knowledge-writer 档案钉板（OKF 知识库的派发执行侧）', (
       expect(built, language).not.toBeNull()
       // 写入只走 knowledge 工具：没有 write/edit（直写文件绕开结构检查）、没有 git（簿记归宿主）
       expect(built!.tools, language).toEqual(['knowledge', 'read', 'grep', 'glob', 'ls', 'ask'])
-      expect(built!.knowledge, language).toBe(true)
       expect(built!.projectAwareness, language).toBe(true)
       expect(built!.instructionFiles, language).toEqual(['AGENTS.md', 'CLAUDE.md'])
       expect(built!.model, language).toBeUndefined()
     }
   })
 
-  it('RG-2 三语正文接线：根目录就地替换（无残留占位符）、点名 SCHEMA.md 与工具的动作、两个宿主章、会话资源 URI', () => {
+  it('RG-2 三语正文接线：根目录就地替换（无残留占位符）、点名工具的动作、两个宿主章、会话资源 URI', () => {
     for (const language of LANGS) {
       const body = buildBuiltinProfile(KNOWLEDGE_WRITER_SPEC, {
         knowledgeRoot: '/kb',
         language
       })!.systemPrompt
-      expect(body, `${language} 根目录`).toContain('/kb/SCHEMA.md')
+      expect(body, `${language} 根目录`).toContain('/kb')
       expect(body, `${language} 占位符`).not.toContain('{{knowledgeRoot}}')
       for (const anchor of [
-        'SCHEMA.md',
         '`knowledge`',
         '`search`',
         '`write`',
@@ -295,15 +297,35 @@ describe('knowledge-writer 档案钉板（OKF 知识库的派发执行侧）', (
       ]) {
         expect(body, `${language} 需含 ${anchor}`).toContain(anchor)
       }
+      // 库里不再放 SCHEMA.md：提示词也不该再指着它（指了就是指向一个不存在的文件）
+      expect(body, `${language} 不得再点名 SCHEMA.md`).not.toContain('SCHEMA.md')
     }
   })
 
-  it('RG-3 一期名单：内置里只有 knowledge-writer 开了 shuvix-knowledge', () => {
-    expect(
-      buildBuiltinProfiles(ALL_PARAMS)
-        .filter((p) => p.knowledge)
-        .map((p) => p.name)
-    ).toEqual(['knowledge-writer'])
+  /**
+   * 编辑规范内联在提示词里 —— 它曾经住在用户目录的 SCHEMA.md 里，那份文件已撤销。
+   * 三语都得带上作用域表与类型词汇表，否则 agent 既不知道往哪写，也拼不出合法的 `type`。
+   */
+  it('RG-3 三语正文自带编辑规范：六个作用域目录 + 全部类型词汇', () => {
+    for (const language of LANGS) {
+      const body = buildBuiltinProfile(KNOWLEDGE_WRITER_SPEC, {
+        knowledgeRoot: '/kb',
+        language
+      })!.systemPrompt
+      for (const dir of [
+        'global/',
+        'projects/<slug>/',
+        'sessions/',
+        'bots/<name>/',
+        'wiki/<topic>/',
+        'raw/<id>/'
+      ]) {
+        expect(body, `${language} 需含作用域 ${dir}`).toContain(dir)
+      }
+      for (const type of KNOWLEDGE_TYPES) {
+        expect(body, `${language} 需含类型 ${type}`).toContain(`\`${type}\``)
+      }
+    }
   })
 })
 

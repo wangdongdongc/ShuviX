@@ -19,12 +19,7 @@ import {
   sessionResource,
   type KnowledgeScopeKind
 } from '@shuvix/chat-protocol/knowledge'
-import {
-  buildConceptText,
-  slugify,
-  type KnowledgeFenceScope,
-  type KnowledgeScopeTarget
-} from '@shuvix/agent-runtime'
+import { buildConceptText, slugify, type KnowledgeScopeTarget } from '@shuvix/agent-runtime'
 import { projectDao } from '../../dao/projectDao'
 import { sessionDao } from '../../dao/sessionDao'
 import type { Project } from '../../dao/types/project'
@@ -185,17 +180,4 @@ export async function resolveSessionScopeTarget(
       if (opts.create) await mkdir(fromBundlePath(KNOWLEDGE_DIRS.raw), { recursive: true })
       return { dir: KNOWLEDGE_DIRS.raw, label: 'raw sources' }
   }
-}
-
-/** 围栏表头的作用域清单（只读） */
-export async function sessionFenceScopes(rootSessionId: string): Promise<KnowledgeFenceScope[]> {
-  const ctx = await sessionKnowledgeContext(rootSessionId)
-  const scopes: KnowledgeFenceScope[] = [{ label: 'global', dir: KNOWLEDGE_DIRS.global }]
-  if (ctx.project) scopes.push({ label: `project "${ctx.project.name}"`, dir: ctx.projectDir })
-  if (ctx.bot) scopes.push({ label: `bot "${ctx.bot}"`, dir: ctx.botDir })
-  scopes.push({
-    label: 'session summaries',
-    dir: ctx.projectDir ? `${ctx.projectDir}/${KNOWLEDGE_DIRS.sessions}` : KNOWLEDGE_DIRS.sessions
-  })
-  return scopes
 }

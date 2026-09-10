@@ -53,7 +53,14 @@ afterEach(async () => {
   rmSync(root, { recursive: true, force: true })
 })
 
-const readLog = (): string => readFileSync(join(root, 'log.md'), 'utf-8')
+/** 变更日志。空库没有它 —— 初始化本身不是一次变更，第一条变更才把它写出来 */
+const readLog = (): string => {
+  try {
+    return readFileSync(join(root, 'log.md'), 'utf-8')
+  } catch {
+    return ''
+  }
+}
 
 describe('recordKnowledgeChange', () => {
   it('CH-1 一条变更 → 去抖后：index 重投影、log 追加带 actor 的一行、一次提交、恰一个 knowledge.changed；窗口内两条 → 一个事件、两行日志、一条 batch 提交', async () => {

@@ -38,12 +38,6 @@ export interface AgentProfile {
    * 项目提示词（项目设置的纯文本）与项目记忆索引一并注入（派生按根会话的项目解析）。
    */
   projectAwareness: boolean
-  /**
-   * `shuvix-knowledge`：知识库感知 —— 是否注入 OKF 知识库围栏（全局 / 项目 / 会话 / bot
-   * 作用域的索引与常驻条目）。为真时旧的项目记忆索引不再注入（设计 D3）。缺省 false；
-   * 类型上可选（解析器恒写出），省略等同 false。
-   */
-  knowledge?: boolean
   /** 来源（决定 UI 能否编辑/删除） */
   source: 'builtin' | 'user'
   /** 配置所在路径（桌面=agent md 文件路径；扩展可为空） */

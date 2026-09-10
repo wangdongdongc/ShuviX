@@ -43,7 +43,6 @@ import { projectDao } from '../dao/projectDao'
 import { ensureSessionTree } from '../services/sessionStorage'
 import { resolveInstructionContent } from '../services/instruction'
 import { resolveProjectMemoryIndex } from '../services/memory'
-import { resolveKnowledgeFence } from '../services/knowledge'
 import { getKnowledgeRootDir } from '../utils/paths'
 import { httpLogService } from '../services/httpLogService'
 import { chatFrontendRegistry } from '../frontend/core'
@@ -276,9 +275,8 @@ const desktopAgentHost: AgentHostAdapter = {
     return sessionProject(sessionId)?.systemPrompt?.trim() || null
   },
   // 无项目会话返回 null（不注入）—— 与项目提示词同一种降级
-  resolveProjectMemory: (sessionId) => resolveProjectMemoryIndex(sessionId),
+  resolveProjectMemory: (sessionId) => resolveProjectMemoryIndex(sessionId)
   // 知识库围栏（profile.knowledge 门控；为真时替代项目记忆索引 —— 设计 D3）
-  resolveKnowledge: (sessionId, ctx) => resolveKnowledgeFence(sessionId, ctx)
 }
 
 /** 桌面唯一 agent 工厂：根会话（AgentSession）与派生（AgentManager）共用 */

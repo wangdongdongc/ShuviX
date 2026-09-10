@@ -3,8 +3,8 @@
  *
  * 纯函数、无 React，判定都在这里：顶层作用域目录与项目下的 `sessions` 用固定文案（UI 按
  * `scopeDir` 取 i18n），`projects/<slug>` / `bots/<name>` 用绑定概念（project.md / bot.md）的
- * title 当目录名（目录名只是 slug），章程 / 绑定概念（SCHEMA.md、project.md、bot.md）置于所在
- * 目录首位；顶层按作用域固定序（全局 → 项目 → 会话 → Bots → Wiki → 来源），其余按显示名排。
+ * title 当目录名（目录名只是 slug），绑定概念（project.md、bot.md）置于所在目录首位；
+ * 顶层按作用域固定序（全局 → 项目 → 会话 → Bots → Wiki → 来源），其余按显示名排。
  * 只画存在的目录 —— 空作用域不占行（与 WikiGroup 同口径：清单来自文件，空文件夹只是噪声）。
  *
  * 绑定概念的 title 给了目录之后，它自己那一行显示文件名 stem（`project` / `bot`）—— 目录行正下方
@@ -18,7 +18,6 @@
 import {
   BOT_CONCEPT_FILE,
   KNOWLEDGE_DIRS,
-  KNOWLEDGE_SCHEMA_FILE,
   PROJECT_CONCEPT_FILE,
   type KnowledgeEntry
 } from '@shuvix/chat-protocol/knowledge'
@@ -28,7 +27,7 @@ export type KnowledgeScopeDir = keyof typeof KNOWLEDGE_DIRS
 
 export interface KnowledgeTreeFile {
   entry: KnowledgeEntry
-  /** 章程 / 绑定概念（SCHEMA.md、project.md、bot.md）：置于所在目录首位、换图标 */
+  /** 绑定概念（project.md、bot.md）：置于所在目录首位、换图标 */
   charter: boolean
   /** 行显示名：一般为 title；命名了所在目录的绑定概念显示文件名 stem（见文件头） */
   label: string
@@ -74,10 +73,9 @@ function scopeDirOf(dirPath: string): KnowledgeScopeDir | null {
   return null
 }
 
-/** 章程 / 绑定概念：根 SCHEMA.md、`projects/<slug>/project.md`、`bots/<name>/bot.md` */
+/** 绑定概念：`projects/<slug>/project.md`、`bots/<name>/bot.md` */
 function isCharter(path: string): boolean {
   const segs = path.split('/')
-  if (segs.length === 1) return segs[0] === KNOWLEDGE_SCHEMA_FILE
   if (segs.length !== 3) return false
   return (
     (segs[0] === KNOWLEDGE_DIRS.projects && segs[2] === PROJECT_CONCEPT_FILE) ||
@@ -147,9 +145,9 @@ export function buildKnowledgeTree(entries: readonly KnowledgeEntry[]): Knowledg
     const charter = isCharter(path)
     const title = entry.title.trim()
     const stem = stemOf(path)
-    // 绑定概念的 title 是目录的显示名（目录名只是 slug）；根 SCHEMA.md 没有目录可命名；
-    // title 等于 stem 的是解析器缺省出来的，不算命名
-    const namesDir = charter && dir.path !== '' && !!title && title !== stem
+    // 绑定概念的 title 是目录的显示名（目录名只是 slug）；title 等于 stem 的是解析器
+    // 缺省出来的，不算命名
+    const namesDir = charter && !!title && title !== stem
     if (namesDir) dir.title = title
     dir.files.push({
       entry: { ...entry, path },

@@ -80,7 +80,7 @@ describe('toKnowledgeEntry — 形状', () => {
 describe('toKnowledgeEntry — 派生字段', () => {
   it('EV-3 scope 按 path 派生：六个作用域目录各归其类，bundle 根文件与未知顶层目录为 null', () => {
     const table: Array<[string, KnowledgeEntry['scope']]> = [
-      ['SCHEMA.md', null],
+      ['NOTES.md', null],
       ['global/a.md', 'global'],
       ['projects/acme/project.md', 'project'],
       ['projects/acme/sessions/2026-09-01-x.md', 'session'],
