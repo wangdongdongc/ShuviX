@@ -10,12 +10,27 @@
  * `verified` 只由 UI 动作追加 —— 本模块不写它们，只读。
  */
 import {
+  KNOWLEDGE_MARKER,
+  KNOWLEDGE_MARKER_TYPE,
   KNOWLEDGE_TYPES,
   OKF_STATUSES,
   type OkfStatus,
   type OkfTrustTier
 } from '@shuvix/chat-protocol/knowledge'
+import { readShuvixMarker } from '@shuvix/chat-protocol/shuvixMdContract'
 import { buildOkfConceptDocument, deriveTrustTier, isStaleAfter, parseOkfText } from './okfCodec'
+
+/**
+ * 标记闸门：没有 `shuvix` 键（外部工具 / 用户手写的条目）或标记类型是 `okf` 都算概念；
+ * 带别的标记的是本仓其它契约文件（agent / policy / 旧记忆 / 旧 wiki），不是概念。
+ * 判别只看类型段，不看版本 —— 将来 OKF 升版，老条目仍要读得出来。
+ */
+function markerAllows(fields: Record<string, unknown>): boolean {
+  const raw = fields.shuvix
+  if (raw === undefined) return true
+  if (typeof raw !== 'string') return false
+  return readShuvixMarker(`shuvix: ${raw}`)?.type === KNOWLEDGE_MARKER_TYPE
+}
 
 export interface KnowledgeSource {
   id?: string
@@ -141,12 +156,12 @@ export function isOkfStatus(value: unknown): value is OkfStatus {
 
 /**
  * 文本是否是一份 OKF 概念：有可解析的 frontmatter 映射、`type` 为非空字符串、
- * 且不带 `shuvix` 类型标记（那是本仓其它契约文件 —— agent / policy / 旧记忆 / 旧 wiki）。
+ * 且没有别家的 `shuvix` 类型标记（见 markerAllows）。
  */
 export function isOkfConceptText(text: string): boolean {
   const split = parseOkfText(text)
   if (!split) return false
-  if ('shuvix' in split.fields) return false
+  if (!markerAllows(split.fields)) return false
   const type = split.fields.type
   return typeof type === 'string' && type.trim() !== ''
 }
@@ -161,7 +176,7 @@ export function parseConceptText(
   warn?: (msg: string) => void
 ): KnowledgeConcept | null {
   const split = parseOkfText(text)
-  if (!split || 'shuvix' in split.fields) return null
+  if (!split || !markerAllows(split.fields)) return null
   const fields = split.fields
   // `type` 只认非空字符串（与 validate / isOkfConceptText 同一判定）：`type: 5` 不是概念
   const type = typeof fields.type === 'string' ? fields.type.trim() : ''
@@ -262,6 +277,8 @@ const KNOWN_KEYS = new Set([
  */
 export function buildConceptText(input: ConceptBuildInput, body: string): string {
   const fields: Record<string, unknown> = {
+    // 自述行排在最前：一眼看出这是一份 OKF 知识库条目、遵循哪一版规范
+    shuvix: KNOWLEDGE_MARKER,
     type: normalizeKnowledgeType(input.type),
     title: input.title.trim()
   }

@@ -1,4 +1,5 @@
 ---
+shuvix: okf v0.2
 type: Schema
 title: Knowledge base schema
 description: How this knowledge base is organized and how entries are written — read before adding or changing anything.
@@ -29,6 +30,7 @@ A scope answers "who gets this"; `type` answers "what it is".
 
 ```yaml
 ---
+shuvix: okf v0.2 # this file is an OKF knowledge base entry, conforming to OKF v0.2
 type: Memory # required — the only required field
 title: Token refresh pitfalls
 description: Read before touching src/auth/ — two refresh-token traps # ONE line: when to open this
@@ -44,6 +46,7 @@ verified: { by: human:alice, at: 2026-09-10T02:00:00Z } # stamped by the app whe
 ---
 ```
 
+- `shuvix` is ShuviX's own self-description, not part of OKF — an entry without it still parses, and an entry with it is still a valid OKF concept for any other reader. Write it on entries you create; leave whatever an outside tool wrote alone.
 - `description` is what indexes show and how later sessions decide whether to read the entry: write it as the condition for opening it, not as a summary.
 - Only the host writes `generated`; only the app writes `verified`. Never claim either.
 - New entries start as `draft`. Agents may set `deprecated` (name the successor) or `draft`; only a human sets `stable`.

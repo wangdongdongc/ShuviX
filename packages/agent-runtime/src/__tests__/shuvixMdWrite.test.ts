@@ -119,6 +119,22 @@ describe('reviewShuvixMdWrite — OKF 知识库分支', () => {
     expect(out.content).not.toContain('generated')
   })
 
+  /**
+   * 知识库条目自己也带标记（`shuvix: okf v0.2`）—— 分支选择不能再靠「没有标记」，否则我们
+   * 自己写出去的每一份条目都会掉进契约分支、既不盖章也不回执。判别只看类型段不看版本。
+   */
+  it('MW-1 带 okf 自述行的条目走 OKF 分支（照常盖章 / 回执），落在根目录外仍不管', () => {
+    const marked = concept(['shuvix: okf v0.2', ...VALID])
+    const out = review(marked, '/kb/global/x.md')!
+    expect(out.note).toBe(STAMP_NOTE)
+    expect(out.content).toContain('generated:')
+    // 自述行原样留着（行级 upsert 不重排 frontmatter）
+    expect(out.content).toContain('shuvix: okf v0.2')
+
+    expect(review(concept(['shuvix: okf v1', ...VALID]), '/kb/global/x.md')!.note).toBe(STAMP_NOTE)
+    expect(review(marked, '/elsewhere/x.md')).toBeNull()
+  })
+
   it('MW-2 error 回执：文件已写但不是合法条目 —— 无 frontmatter / 缺 type 各一条 bullet，不动文件', () => {
     const none = review('# plain\n\nbody\n', '/kb/global/x.md')!
     expect(none.note).toBe(

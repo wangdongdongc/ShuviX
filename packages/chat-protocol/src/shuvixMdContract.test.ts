@@ -58,44 +58,56 @@ describe('frontmatterOf', () => {
 
 describe('readShuvixMarker', () => {
   it('解析标准标记行', () => {
-    expect(readShuvixMarker('shuvix: agent v1')).toEqual({ type: 'agent', version: 1 })
+    expect(readShuvixMarker('shuvix: agent v1')).toEqual({ type: 'agent', version: '1' })
   })
 
   it('容忍缩进 / 引号 / 冒号后无空格；版本缺省为 null', () => {
-    expect(readShuvixMarker('  shuvix: chart v1')).toEqual({ type: 'chart', version: 1 })
-    expect(readShuvixMarker('shuvix:chart v1')).toEqual({ type: 'chart', version: 1 })
-    expect(readShuvixMarker("shuvix: 'wiki-entry v1'")).toEqual({ type: 'wiki-entry', version: 1 })
-    expect(readShuvixMarker('shuvix: "chart v1"')).toEqual({ type: 'chart', version: 1 })
+    expect(readShuvixMarker('  shuvix: chart v1')).toEqual({ type: 'chart', version: '1' })
+    expect(readShuvixMarker('shuvix:chart v1')).toEqual({ type: 'chart', version: '1' })
+    expect(readShuvixMarker("shuvix: 'wiki-entry v1'")).toEqual({
+      type: 'wiki-entry',
+      version: '1'
+    })
+    expect(readShuvixMarker('shuvix: "chart v1"')).toEqual({ type: 'chart', version: '1' })
     expect(readShuvixMarker('shuvix: agent')).toEqual({ type: 'agent', version: null })
     expect(readShuvixMarker("shuvix: 'agent'")).toEqual({ type: 'agent', version: null })
   })
 
-  it('多位版本号解析为数字', () => {
+  it('多位版本号原样保留', () => {
     const marker = readShuvixMarker('shuvix: agent v12')
-    expect(marker).toEqual({ type: 'agent', version: 12 })
-    expect(marker?.version).toBe(12)
+    expect(marker).toEqual({ type: 'agent', version: '12' })
+    expect(marker?.version).toBe('12')
+  })
+
+  /**
+   * 版本号是原样文本而不是数字：知识库条目的版本是它遵循的 OKF 规范版本（v0.2），带小数位。
+   * 当成数字读会把 `v0.2` 截成 0 —— 那既不是 0.2，也和「无版本」分不开。
+   */
+  it('带小数位的版本号完整保留（知识库条目的 okf v0.2）', () => {
+    expect(readShuvixMarker('shuvix: okf v0.2')).toEqual({ type: 'okf', version: '0.2' })
+    expect(readShuvixMarker('shuvix: okf v1.10.3')).toEqual({ type: 'okf', version: '1.10.3' })
   })
 
   it('标记不必是首行', () => {
     expect(readShuvixMarker('name: x\ndescription: d\nshuvix: wiki-topic v1')).toEqual({
       type: 'wiki-topic',
-      version: 1
+      version: '1'
     })
   })
 
   it('多个 shuvix 键以首行为准', () => {
     expect(readShuvixMarker('shuvix: chart v1\nshuvix: agent v2')).toEqual({
       type: 'chart',
-      version: 1
+      version: '1'
     })
   })
 
   it('带连字符的类型完整捕获', () => {
-    expect(readShuvixMarker('shuvix: wiki-entry v1')).toEqual({ type: 'wiki-entry', version: 1 })
+    expect(readShuvixMarker('shuvix: wiki-entry v1')).toEqual({ type: 'wiki-entry', version: '1' })
   })
 
   it('完整 token 捕获：charter 不截成 chart（消费方全等比较不误认）', () => {
-    expect(readShuvixMarker('shuvix: charter v1')).toEqual({ type: 'charter', version: 1 })
+    expect(readShuvixMarker('shuvix: charter v1')).toEqual({ type: 'charter', version: '1' })
   })
 
   it('键的词法边界：shuvix- 前缀键与 xshuvix 不误认', () => {
@@ -103,7 +115,7 @@ describe('readShuvixMarker', () => {
     expect(readShuvixMarker('xshuvix: agent v1')).toBeNull()
     expect(readShuvixMarker('shuvix-instruction-files: true\nshuvix: agent v1')).toEqual({
       type: 'agent',
-      version: 1
+      version: '1'
     })
   })
 
@@ -116,8 +128,8 @@ describe('readShuvixMarker', () => {
   })
 
   it('容忍冒号前空白', () => {
-    expect(readShuvixMarker('shuvix : chart v1')).toEqual({ type: 'chart', version: 1 })
-    expect(readShuvixMarker('shuvix\t: chart v1')).toEqual({ type: 'chart', version: 1 })
+    expect(readShuvixMarker('shuvix : chart v1')).toEqual({ type: 'chart', version: '1' })
+    expect(readShuvixMarker('shuvix\t: chart v1')).toEqual({ type: 'chart', version: '1' })
   })
 
   it('注释行不误认', () => {
@@ -132,18 +144,21 @@ describe('detectShuvixMarker', () => {
     // 写出的字面值（'shuvix: agent v1' / 'shuvix: policy v1'），本侧钉「该字面值可解析」。
     expect(detectShuvixMarker(fmFile(`${CHART_FILE_MARKER_KEY}: ${CHART_FILE_MARKER}`))).toEqual({
       type: 'chart',
-      version: 1
+      version: '1'
     })
     expect(detectShuvixMarker(fmFile(`${WIKI_FILE_MARKER_KEY}: ${WIKI_ENTRY_MARKER}`))).toEqual({
       type: 'wiki-entry',
-      version: 1
+      version: '1'
     })
     expect(detectShuvixMarker(fmFile(`${WIKI_FILE_MARKER_KEY}: ${WIKI_TOPIC_MARKER}`))).toEqual({
       type: 'wiki-topic',
-      version: 1
+      version: '1'
     })
-    expect(detectShuvixMarker(fmFile('shuvix: agent v1'))).toEqual({ type: 'agent', version: 1 })
-    expect(detectShuvixMarker(fmFile('shuvix: policy v1'))).toEqual({ type: 'policy', version: 1 })
+    expect(detectShuvixMarker(fmFile('shuvix: agent v1'))).toEqual({ type: 'agent', version: '1' })
+    expect(detectShuvixMarker(fmFile('shuvix: policy v1'))).toEqual({
+      type: 'policy',
+      version: '1'
+    })
   })
 
   it('真实 agent md 全链路（含正文中的 --- 分隔线）', () => {
@@ -166,7 +181,7 @@ describe('detectShuvixMarker', () => {
       '正文分隔线之后的第二段。',
       ''
     ].join('\n')
-    expect(detectShuvixMarker(agentMd)).toEqual({ type: 'agent', version: 1 })
+    expect(detectShuvixMarker(agentMd)).toEqual({ type: 'agent', version: '1' })
   })
 
   it('非契约文件组合降级为 null', () => {

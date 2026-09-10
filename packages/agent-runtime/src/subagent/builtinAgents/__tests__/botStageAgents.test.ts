@@ -84,7 +84,7 @@ describe('bot 门控段 agent —— 结构钉板', () => {
     for (const [language, raw] of Object.entries(BOT_INTENT_SPEC.sources)) {
       expect(detectShuvixMarker(raw), `bot-intent.${language}`).toEqual({
         type: 'agent',
-        version: 1
+        version: '1'
       })
     }
   })

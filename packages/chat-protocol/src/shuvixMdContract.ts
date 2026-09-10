@@ -2,9 +2,13 @@
  * ShuviX 文件类型标记（`shuvix: <type> v<n>`）—— 全部 `shuvix: xxx` 契约共用的判别层。
  *
  * 词汇表：frontmatter 里的 `shuvix` key 声明这份 markdown 的文件类型，值为 `<type> v<n>`
- * （现有取值：agent v1 / policy v1 / chart v1 / wiki-entry v1 / wiki-topic v1，常量分别
- * 定义在各自契约模块）。此前 chart / wiki 契约各抄一份判别正则，本模块把「frontmatter
- * 提取 + 标记读取」收敛为单一实现：
+ * （现有取值：agent v1 / policy v1 / chart v1 / wiki-entry v1 / wiki-topic v1 / okf v0.2，
+ * 常量分别定义在各自契约模块）。版本号是**原样文本**而不是数字：多数契约的版本是 ShuviX
+ * 自己给该 md 格式排的序号（v1、v2），而知识库条目的版本是它遵循的 OKF 规范版本（v0.2），
+ * 带小数位 —— 判别本就与版本无关，把它当字符串留着即可，不必替调用方解释它的含义。
+ *
+ * 此前 chart / wiki 契约各抄一份判别正则，本模块把「frontmatter 提取 + 标记读取」收敛为
+ * 单一实现：
  *   - 判别只做正则、不引 YAML 解析器 —— chat-protocol 是零依赖叶子包（同 chart 契约的取舍）；
  *   - frontmatter 只认（剥 BOM 与前导空白后的）文件开头（`^` 不带 m 标志）：正文中段的
  *     `---` 块不会被误认；
@@ -21,18 +25,19 @@
 /** 文件类型标记的 frontmatter key —— 各契约的 *_MARKER_KEY 常量同值 */
 export const SHUVIX_MARKER_KEY = 'shuvix'
 
-/** 解析出的类型标记：`shuvix: wiki-entry v1` → { type: 'wiki-entry', version: 1 } */
+/** 解析出的类型标记：`shuvix: wiki-entry v1` → { type: 'wiki-entry', version: '1' } */
 export interface ShuvixMarker {
   type: string
-  /** `v<n>` 缺省时为 null（判别版本无关，写入侧恒带版本） */
-  version: number | null
+  /** `v<n>` 的原样文本（`'1'` / `'0.2'`）；缺省为 null（判别版本无关，写入侧恒带版本） */
+  version: string | null
 }
 
 /** 文件开头的 frontmatter 块（不带 m 标志：`^` 即字符串起始；拒绝空 frontmatter，见文件头） */
 const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/
 
 /** frontmatter 内的类型标记行（容忍缩进、引号、`shuvix:` 后无空格与版本号缺省） */
-const MARKER_LINE_RE = /^[ \t]*shuvix[ \t]*:[ \t]*['"]?([A-Za-z][A-Za-z0-9_-]*)(?:[ \t]+v(\d+))?/m
+const MARKER_LINE_RE =
+  /^[ \t]*shuvix[ \t]*:[ \t]*['"]?([A-Za-z][A-Za-z0-9_-]*)(?:[ \t]+v(\d+(?:\.\d+)*))?/m
 
 /** 剥 BOM 与前导空白（JS 正则的 `\s` 含 U+FEFF）—— frontmatter 必须落在剥离后的文件开头 */
 function head(text: string): string {
@@ -49,7 +54,7 @@ export function frontmatterOf(text: string): string | null {
 export function readShuvixMarker(yaml: string): ShuvixMarker | null {
   const m = MARKER_LINE_RE.exec(yaml)
   if (!m) return null
-  return { type: m[1], version: m[2] ? Number(m[2]) : null }
+  return { type: m[1], version: m[2] ?? null }
 }
 
 /** 整份文本的类型标记（frontmatter 提取 + 标记读取）；非 shuvix 契约文件返回 null */

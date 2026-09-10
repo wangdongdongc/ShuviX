@@ -39,6 +39,30 @@ describe('parseConceptText / isOkfConceptText — 「不是概念」的判定表
     expect(isOkfConceptText(doc(['type: Memory']))).toBe(true)
   })
 
+  /**
+   * 自述行是**自述**不是准入：带 `shuvix: okf v…` 的照常是概念（我们自己写的就带它），
+   * 不带任何标记的也照常是概念（Obsidian / 社区工具 / 用户手写的条目不该因为少一行而消失）。
+   * 判别只看类型段不看版本 —— 将来 OKF 升版，老条目仍要读得出来。
+   */
+  it('CF-1 okf 自述行不影响判定：带 v0.2 / 带别的版本 / 不带标记都是概念；别家标记仍不是', () => {
+    const concepts = [
+      doc(['shuvix: okf v0.2', 'type: Memory']),
+      doc(['shuvix: okf v1', 'type: Memory']),
+      doc(['shuvix: okf', 'type: Memory']),
+      doc(["shuvix: 'okf v0.2'", 'type: Memory']),
+      doc(['type: Memory'])
+    ]
+    for (const text of concepts) {
+      expect(parseConceptText(text, 'global/x.md'), text).not.toBeNull()
+      expect(isOkfConceptText(text), text).toBe(true)
+    }
+    // 类型段必须**全等** okf：okf- 前缀的别家标记不搭便车
+    for (const text of [doc(['shuvix: okf-legacy v1', 'type: Memory']), doc(['shuvix: 5'])]) {
+      expect(parseConceptText(text, 'global/x.md'), text).toBeNull()
+      expect(isOkfConceptText(text), text).toBe(false)
+    }
+  })
+
   it('CF-2 只有 type：其余全部缺省（title = 文件名 stem，status = stable），路径归一，正文只剥 frontmatter 后的空行、其余不 trim', () => {
     const concept = parseConceptText(
       '---\ntype: Memory\n---\n\n\nbody \n\n',
@@ -159,6 +183,8 @@ describe('buildConceptText — 键序固定、可选字段不写、值归一', (
     )
     const { fields, body } = parseOkfText(out)!
     expect(Object.keys(fields)).toEqual([
+      // 自述行恒在最前，且由构建器自己写 —— extra 里的 `shuvix` 注入不作数
+      'shuvix',
       'type',
       'title',
       'description',
@@ -171,13 +197,15 @@ describe('buildConceptText — 键序固定、可选字段不写、值归一', (
       'verified',
       'custom'
     ])
-    expect(out).toContain('\ntype: Memory\n')
+    expect(out.startsWith('---\nshuvix: okf v0.2\ntype: Memory\n')).toBe(true)
+    expect(fields.shuvix).toBe('okf v0.2')
     expect(out).toContain('\ntitle: Title\n')
     expect(fields.tags).toEqual(['a', 'b'])
     expect(out).toContain('\ntags:\n  - a\n  - b\n')
     // status 恒写出：OKF 缺省 stable，靠省略表达 stable 会让「草稿必须显式」失去对照
     expect(out).toContain('\nstatus: stable\n')
-    expect(out).not.toContain('shuvix:')
+    // extra 里的 `shuvix: agent v1` 不作数：自述行只由构建器写，且恒是知识库自己的那一个
+    expect(out).not.toContain('agent v1')
     expect(fields.verified).toEqual([{ by: 'human:v', at: '2026-09-10T00:00:00Z' }])
     expect(fields.custom).toBe('kept')
     // parseOkfText 是原样拆分（分隔空行归正文）；概念解析才把那一行剥掉

@@ -18,6 +18,19 @@ export const KNOWLEDGE_PROJECT_ID = '__knowledge__'
 export const OKF_VERSION = '0.2'
 
 /**
+ * 知识库条目的 ShuviX 类型标记（`shuvix: okf v0.2`）—— 类型段声明「这是一份 OKF 知识库条目」，
+ * 版本段就是它遵循的 OKF 规范版本。
+ *
+ * 只是**自述**，不是准入：`shuvix` 是 OKF 允许的未知键，带着它的文件对任何 OKF 消费者
+ * （Obsidian、社区校验器）仍是一份合规概念；反过来，bundle 里**没有**标记的 `.md` 照样按概念
+ * 解析 —— 外部工具与用户手写的条目不该因为少一行而消失。它买到的是判别力：写钩子据此把条目
+ * 送进 OKF 分支、属性卡据此认出这是知识库条目，而带**别的**标记的文件（agent / policy /
+ * 旧记忆 / 旧 wiki）明确不是概念。
+ */
+export const KNOWLEDGE_MARKER_TYPE = 'okf'
+export const KNOWLEDGE_MARKER = `${KNOWLEDGE_MARKER_TYPE} v${OKF_VERSION}`
+
+/**
  * 作用域 = 顶层目录：回答「谁读它」。`type` 才回答「它是什么」。
  *   global   全局记忆，每个会话都读
  *   project  `projects/<slug>/`，项目记忆

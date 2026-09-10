@@ -228,7 +228,19 @@ const BOT_DESCRIPTOR: ShuvixMdTypeDescriptor = {
   ]
 }
 
+/**
+ * OKF 知识库条目（`shuvix: okf v0.2`）—— 字段表暂空：条目的 frontmatter 是 OKF 规范自己的字段，
+ * typed 卡（type / status 下拉、只读的 generated / verified 徽章）属设计 §8.3，尚未做。
+ * 先给一条描述符，卡片至少认得出它是什么（否则徽章会写成「ShuviX okf」）；字段落通用行。
+ */
+const OKF_DESCRIPTOR: ShuvixMdTypeDescriptor = {
+  type: 'okf',
+  badge: 'OKF entry',
+  fields: []
+}
+
 export const SHUVIX_MD_DESCRIPTORS: readonly ShuvixMdTypeDescriptor[] = [
+  OKF_DESCRIPTOR,
   AGENT_DESCRIPTOR,
   POLICY_DESCRIPTOR,
   WORKFLOW_DESCRIPTOR,

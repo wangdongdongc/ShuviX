@@ -381,7 +381,7 @@ describe('KT-6 read', () => {
 })
 
 describe('KT-7 write —— 新建', () => {
-  it('KT-7 作用域按 create:true 解析；文件形状（type 归一、draft、宿主章、来源流式）；先过 write PEP 再落盘；afterWrite 无 status 键；回执', async () => {
+  it('KT-7 作用域按 create:true 解析；文件形状（okf 自述行、type 归一、draft、宿主章、来源流式）；先过 write PEP 再落盘；afterWrite 无 status 键；回执', async () => {
     const h = makeTool()
     const res = await h.run('c1', {
       action: 'write',
@@ -400,6 +400,7 @@ describe('KT-7 write —— 新建', () => {
     expect(h.files.get(abs)).toBe(
       [
         '---',
+        'shuvix: okf v0.2',
         'type: Memory',
         'title: "Token Refresh: Pitfalls"',
         'description: when touching auth',

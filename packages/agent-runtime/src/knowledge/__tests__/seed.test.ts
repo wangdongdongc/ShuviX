@@ -8,19 +8,25 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import {
   KNOWLEDGE_DIRS,
+  KNOWLEDGE_MARKER,
   KNOWLEDGE_TYPES,
   OKF_INDEX_FILE,
-  OKF_LOG_FILE
+  OKF_LOG_FILE,
+  OKF_VERSION
 } from '@shuvix/chat-protocol/knowledge'
+import { detectShuvixMarker } from '@shuvix/chat-protocol/shuvixMdContract'
 import { KNOWLEDGE_SCHEMA_SEED } from '../seed'
 import { parseConceptText } from '../conceptFile'
 import { validateConceptText } from '../validate'
 
 describe('KNOWLEDGE_SCHEMA_SEED', () => {
-  it('SD-1 种子本身是零诊断的 stable Schema 概念，不带宿主章', () => {
+  it('SD-1 种子本身是零诊断的 stable Schema 概念，带 okf 自述行、不带宿主章', () => {
     expect(validateConceptText(KNOWLEDGE_SCHEMA_SEED, 'SCHEMA.md')).toEqual([])
     const concept = parseConceptText(KNOWLEDGE_SCHEMA_SEED, 'SCHEMA.md')!
     expect(concept).not.toBeNull()
+    // 种子是库里第一份条目，也得照自己教的规矩来
+    expect(detectShuvixMarker(KNOWLEDGE_SCHEMA_SEED)).toEqual({ type: 'okf', version: OKF_VERSION })
+    expect(concept.fields.shuvix).toBe(KNOWLEDGE_MARKER)
     expect(concept.type).toBe('Schema')
     expect(concept.status).toBe('stable')
     expect(concept.generated).toBeUndefined()

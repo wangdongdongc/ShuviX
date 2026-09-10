@@ -14,6 +14,7 @@
  * 原样留着（同属性卡的编辑模型）。
  */
 import { parse as parseYaml } from 'yaml'
+import { KNOWLEDGE_MARKER_TYPE } from '@shuvix/chat-protocol/knowledge'
 import { detectShuvixMarker, type ShuvixMarker } from '@shuvix/chat-protocol/shuvixMdContract'
 import { WIKI_UPDATED_KEY } from '@shuvix/chat-protocol/wikiFileContract'
 import { isReservedFile, validateConceptText } from './knowledge/validate'
@@ -239,7 +240,9 @@ export function reviewShuvixMdWrite(
   ctx: ShuvixMdWriteContext
 ): ShuvixMdWriteOutcome | null {
   const marker = detectShuvixMarker(text)
-  if (!marker) return reviewKnowledgeWrite(text, ctx)
+  // 知识库条目走 OKF 分支：带 `shuvix: okf v…` 自述的，以及根目录下没有任何标记的
+  // （外部工具 / 用户手写）。别家标记的文件照旧走各自契约的校验。
+  if (!marker || marker.type === KNOWLEDGE_MARKER_TYPE) return reviewKnowledgeWrite(text, ctx)
   const label = markerLabel(marker)
 
   const validation = validateShuvixMdText(marker.type, text, fileName)
