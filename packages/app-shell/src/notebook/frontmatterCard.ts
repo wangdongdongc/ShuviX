@@ -83,6 +83,8 @@ export interface FrontmatterCardConfig {
 export interface FrontmatterFieldMount {
   key: string
   kind: ShuvixMdFieldKind
+  /** 本文件的 `shuvix: <type>` 类型段 —— 候选项按「哪种文件的哪个键」分派，键名可能重名 */
+  markerType: string
   /** 当前行的原始值（csv 为逗号串，select 为单值）；键不存在时为空串。botPipeline 恒为空串 */
   value: string
   /** botPipeline：该键解析出的映射值（缺键 / 标量 / 流式解析失败 → null）—— 控件据此渲染工作流与槽位 */
@@ -369,14 +371,21 @@ function conditionsText(value: Record<string, unknown>): string {
     .join('  ·  ')
 }
 
-/** csv 值 → 条目数组（保序去空） */
+/**
+ * csv 值 → 条目数组（保序去空）。**逗号串与 YAML 列表都收**：ShuviX 自己的 csv 键写成逗号串
+ * （`shuvix-tools: bash, read`），而 OKF 的 `tags` 惯例是块序列 —— 同一个「一串标量」的字段，
+ * 两种写法都该显示成 chips，否则块序列会被 scalarText 折成一句 `[2]`。
+ * 可编辑挂载仍只认逗号串（见下方 mountable 分支）：块序列走一次逗号串控件就会被重写成
+ * 单行，用户的排版不该因为点开一张卡而变。
+ */
 function csvEntries(value: unknown): string[] {
-  return typeof value === 'string'
-    ? value
-        .split(',')
-        .map((s) => s.trim())
-        .filter(Boolean)
-    : []
+  const parts =
+    typeof value === 'string'
+      ? value.split(',')
+      : Array.isArray(value)
+        ? value.map((v) => (typeof v === 'string' ? v : scalarText(v)))
+        : []
+  return parts.map((s) => s.trim()).filter(Boolean)
 }
 
 /** 只读结构摘要（prose / list / conditions / exprMap / policyRules）；形状不符返回 null → 退回标量渲染 */
@@ -399,6 +408,46 @@ function buildStructuredValue(kind: ShuvixMdFieldKind, value: unknown): HTMLElem
     )
     for (const item of value) {
       box.appendChild(el('div', 'cm-shuvix-fmcard-list-item break-all', scalarText(item)))
+    }
+    return box
+  }
+  // OKF 来源清单：`{id, resource, title}` 映射或裸定位符字符串，逐条一行
+  // （id 是正文脚注 `[^id]` 的锚点，故排在最前、单独一格）
+  if (kind === 'sources') {
+    if (!Array.isArray(value)) return null
+    const box = el(
+      'div',
+      'cm-shuvix-fmcard-value font-mono text-[11px] text-text-secondary space-y-0.5'
+    )
+    for (const item of value) {
+      const line = el('div', 'cm-shuvix-fmcard-source break-all')
+      if (isPlainObject(item)) {
+        const id = scalarText(item.id ?? '')
+        if (id) line.appendChild(el('span', 'text-text-tertiary/70 mr-1', `[${id}]`))
+        line.appendChild(el('span', '', scalarText(item.resource ?? '')))
+        const title = scalarText(item.title ?? '')
+        if (title) line.appendChild(el('span', 'text-text-tertiary/70 ml-1', `— ${title}`))
+      } else {
+        line.textContent = scalarText(item)
+      }
+      box.appendChild(line)
+    }
+    return box
+  }
+  // 宿主章（generated / verified）：`{by, at}` 单值或列表 —— 恒只读，见描述符注释
+  if (kind === 'stamp') {
+    const items = Array.isArray(value) ? value : [value]
+    if (!items.every(isPlainObject)) return null
+    const box = el(
+      'div',
+      'cm-shuvix-fmcard-value font-mono text-[11px] text-text-secondary space-y-0.5'
+    )
+    for (const item of items as Record<string, unknown>[]) {
+      const line = el('div', 'cm-shuvix-fmcard-stamp break-all')
+      line.appendChild(el('span', 'text-text-primary/80', scalarText(item.by ?? '')))
+      const at = scalarText(item.at ?? '')
+      if (at) line.appendChild(el('span', 'text-text-tertiary/70 ml-1.5', at))
+      box.appendChild(line)
     }
     return box
   }
@@ -590,6 +639,7 @@ function buildTextEditor(
 function buildFieldRow(
   view: EditorView,
   config: FrontmatterCardConfig,
+  markerType: string,
   spec: ShuvixMdFieldSpec,
   value: unknown,
   readOnly: boolean,
@@ -648,6 +698,7 @@ function buildFieldRow(
       const cleanup = config.mountField(slot, {
         key: spec.key,
         kind: spec.kind,
+        markerType,
         value: '',
         mapping: isPlainObject(value) ? value : null,
         onChange: (next) => setScalarKey(view, spec.key, next),
@@ -686,6 +737,7 @@ function buildFieldRow(
     const cleanup = config.mountField?.(slot, {
       key: spec.key,
       kind: spec.kind,
+      markerType,
       value: typeof value === 'string' ? value : '',
       onChange: (next) => setScalarKey(view, spec.key, next),
       readOnly
@@ -729,7 +781,7 @@ function buildFieldRow(
   const valueEl = el('div', `cm-shuvix-fmcard-value ${VALUE}${mono}`)
   if (value === undefined || value === null || value === '') {
     valueEl.appendChild(unsetSpan(t))
-  } else if (spec.kind === 'csv' && typeof value === 'string') {
+  } else if (spec.kind === 'csv' && (typeof value === 'string' || Array.isArray(value))) {
     // 只读 chips：淡底无描边，16px 高 + 上下 4px 正好填满 24px 的行
     const chips = el('div', 'cm-shuvix-fmcard-chips flex flex-wrap gap-1 py-1')
     for (const entry of csvEntries(value)) {
@@ -964,7 +1016,17 @@ class FrontmatterCardWidget extends WidgetType {
       for (const f of known) {
         // hidden：已知但不渲染（wiki 的横幅 description）—— 留在 seen 里防落通用行
         if (f.kind === 'hidden') continue
-        box.appendChild(buildFieldRow(view, this.config, f, fields[f.key], readOnly, this.cleanups))
+        box.appendChild(
+          buildFieldRow(
+            view,
+            this.config,
+            this.marker.type,
+            f,
+            fields[f.key],
+            readOnly,
+            this.cleanups
+          )
+        )
       }
       for (const [key, value] of Object.entries(fields)) {
         if (seen.has(key)) continue

@@ -15,6 +15,7 @@ import {
   WIKI_STATUS_KEY,
   WIKI_UPDATED_KEY
 } from './wikiFileContract'
+import { OKF_STATUS_KEY, OKF_TYPE_KEY } from './knowledge'
 import en from './i18n/locales/en.json'
 
 describe('wiki 描述符 ↔ wikiFileContract 键集', () => {
@@ -37,6 +38,46 @@ describe('wiki 描述符 ↔ wikiFileContract 键集', () => {
     const byKey = Object.fromEntries(d.fields.map((f) => [f.key, f.kind]))
     expect(byKey[WIKI_ALLOWED_TYPES_KEY]).toBeTruthy()
     expect(byKey['description']).toBe('hidden')
+  })
+})
+
+describe('okf 描述符 ↔ 知识库契约', () => {
+  const byKey = (): Record<string, string> => {
+    const d = descriptorForType('okf')!
+    expect(d).toBeTruthy()
+    return Object.fromEntries(d.fields.map((f) => [f.key, f.kind]))
+  }
+
+  it('人写的一半可编辑：两个开放枚举走下拉（键名引契约常量），标量各就各位', () => {
+    const k = byKey()
+    expect(k[OKF_TYPE_KEY]).toBe('select')
+    expect(k[OKF_STATUS_KEY]).toBe('select')
+    // description 是**一行**召回条件（设计 D6，索引里显示的就是它）——
+    // 给 prose 会排成段落，诱人把它写成摘要
+    expect(k['description']).toBe('text')
+    expect(k['title']).toBe('text')
+    expect(k['tags']).toBe('csv')
+    expect(k['stale_after']).toBe('mono')
+  })
+
+  /**
+   * 机器写的一半恒只读 —— 这不是排版偏好而是设计 P4：`generated` 由写钩子盖、`verified`
+   * 只由 UI 的核实动作盖。卡上但凡给个输入框，用户（和读得到这张卡的 agent）就能自称已核实。
+   */
+  it('机器写的一半不可编辑：sources / generated / verified 都不是可编辑 kind', () => {
+    const k = byKey()
+    const EDITABLE = ['text', 'mono', 'boolean', 'csv', 'select', 'botPipeline']
+    expect(k['sources']).toBe('sources')
+    expect(k['generated']).toBe('stamp')
+    expect(k['verified']).toBe('stamp')
+    for (const key of ['sources', 'generated', 'verified']) {
+      expect(EDITABLE, `${key} 变成了可编辑字段`).not.toContain(k[key])
+    }
+  })
+
+  /** 自述行由徽章渲染，不该再占一行；未列出的键落通用行（OKF 允许未知键） */
+  it('shuvix 自述行不在字段表里', () => {
+    expect(byKey()['shuvix']).toBeUndefined()
   })
 })
 

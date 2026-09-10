@@ -74,6 +74,14 @@ export type KnowledgeType = (typeof KNOWLEDGE_TYPES)[number]
 export const OKF_STATUSES = ['draft', 'stable', 'deprecated'] as const
 export type OkfStatus = (typeof OKF_STATUSES)[number]
 
+/**
+ * 属性卡两个下拉字段的键名。键本身就叫 `type` / `status`（OKF 的字段名，不是 ShuviX 前缀键），
+ * 而选择器按**键**分派候选项 —— 定成常量是为了描述符与选择器共用一个真源，将来若有第二种
+ * 契约也用上裸 `type`，冲突会在这里一眼看见（届时把分派改成按标记类型 + 键）。
+ */
+export const OKF_TYPE_KEY = 'type'
+export const OKF_STATUS_KEY = 'status'
+
 /** 从 `verified` 推导的信任档（OKF §5.2）：未验证 / 机器确认 / 人工审阅 */
 export type OkfTrustTier = 'unverified' | 'machine-confirmed' | 'human-reviewed'
 

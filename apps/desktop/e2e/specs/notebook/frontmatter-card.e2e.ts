@@ -83,6 +83,37 @@ const WIKI_MD = [
   ''
 ].join('\n')
 
+/**
+ * OKF 知识库条目（`shuvix: okf v0.2`）—— 键名是 OKF 规范自己的字段，不带 ShuviX 前缀。
+ * 刻意放在**普通项目目录**里而不是知识库根下：卡片认的是标记，不是文件住哪。
+ * `tags` 写成 YAML 块序列（我们自己的构建器就这么写），`sources` 是映射数组，
+ * `generated` / `verified` 是宿主与 UI 动作盖的章 —— 三者都不该在卡上可编辑。
+ */
+const OKF_MD = [
+  '---',
+  'shuvix: okf v0.2',
+  'type: Memory',
+  'title: Token refresh pitfalls',
+  'description: Read before touching src/auth/',
+  'tags:',
+  '  - auth',
+  '  - pitfall',
+  'status: draft',
+  'stale_after: 2026-12-31',
+  'sources:',
+  '  - id: s1',
+  '    resource: shuvix://session/0192abc',
+  '    title: fix login',
+  'generated: { by: shuvix-work/gpt-5, at: 2026-09-09T08:12:03Z }',
+  'verified:',
+  '  - { by: human:agent, at: 2026-09-10T02:00:00Z }',
+  'okf_custom: kept',
+  '---',
+  '',
+  'OKF entry body.',
+  ''
+].join('\n')
+
 // 非法 agent：shuvix-tools 为列表（仅接受逗号分隔字符串）；YAML 本身合法，字段行照常渲染
 const BAD_AGENT_MD = [
   '---',
@@ -176,6 +207,7 @@ beforeAll(async () => {
   writeFileSync(join(projDir, 'warn-policy.md'), WARN_POLICY_MD)
   writeFileSync(join(projDir, 'wiki-note.md'), WIKI_MD)
   writeFileSync(join(projDir, 'bad-agent.md'), BAD_AGENT_MD)
+  writeFileSync(join(projDir, 'okf-note.md'), OKF_MD)
   const project = await createProject(app.main, { name: 'FmCardProj', path: projDir })
   // 每个文件一个笔记本会话（标题默认取 basename，供侧栏点击定位）。
   // 无卡片的 plain-note 保持最后创建：若宿主自动打开最近会话，初始视图无卡片，
@@ -186,6 +218,7 @@ beforeAll(async () => {
     'warn-policy.md',
     'wiki-note.md',
     'bad-agent.md',
+    'okf-note.md',
     'plain-note.md'
   ]) {
     await app.main.eval(
@@ -290,6 +323,71 @@ describe('frontmatter 属性卡', () => {
         app.main.eval<boolean>(`document.querySelector('.cm-shuvix-fmcard-status.is-ok') !== null`),
       'revalidated status chip (is-ok) after toggle'
     )
+  })
+
+  /**
+   * OKF 条目卡（设计 §8.3）。这份卡与别家有两处不同，都在这里钉住：
+   *   1. 键名是 OKF 的通用词（`type` / `status`），候选项按「标记类型 + 键」分派 ——
+   *      给的必须是知识库词汇表与 OKF 状态，不是 wiki 那两套同名枚举；
+   *   2. 机器写的三行（sources / generated / verified）恒只读 —— 卡上但凡给个输入框，
+   *      用户和读得到这张卡的 agent 就能自称已核实，那正是设计 P4 要防的事。
+   */
+  it('OKF 条目：typed 行 + 词汇表下拉 + 块序列 tags 成 chips + 宿主章只读', async () => {
+    await openNotebook('okf-note', 'OKF entry body.')
+    await card.waitReady()
+
+    expect(
+      await app.main.eval<string>(
+        `document.querySelector('.cm-shuvix-fmcard-badge')?.textContent ?? ''`
+      )
+    ).toBe('OKF entry · v0.2')
+
+    // 两个下拉的候选项来自知识库契约（KNOWLEDGE_TYPES / OKF_STATUSES），不是 wiki 的同名枚举
+    const selects = await app.main.eval<Array<{ key: string; value: string; options: string[] }>>(
+      `[...document.querySelectorAll('.cm-shuvix-fmcard-row')]
+        .map((r) => ({ row: r, sel: r.querySelector('.cm-shuvix-fmcard-enum select') }))
+        .filter((x) => x.sel)
+        .map((x) => ({
+          key: x.row.dataset.key ?? '',
+          value: x.sel.value,
+          options: [...x.sel.options].map((o) => o.value).filter(Boolean)
+        }))`
+    )
+    expect(selects.map((s) => s.key)).toEqual(['type', 'status'])
+    expect(selects[0]).toMatchObject({ value: 'Memory' })
+    expect(selects[0].options).toContain('Session Summary')
+    expect(selects[0].options).not.toContain('concept') // wiki 的条目类型枚举
+    expect(selects[1]).toMatchObject({ value: 'draft', options: ['draft', 'stable', 'deprecated'] })
+
+    // tags 是 YAML 块序列（不是逗号串）—— 照样渲染成 chips，而不是折成 `[2]`
+    const tagChips = await app.main.eval<string[]>(
+      `[...document.querySelectorAll('.cm-shuvix-fmcard-row[data-key="tags"] .cm-shuvix-fmcard-chip')]
+        .map((n) => n.textContent)`
+    )
+    expect(tagChips).toEqual(['auth', 'pitfall'])
+
+    // 机器写的三行：有内容、无任何可交互控件
+    const machine = await app.main.eval<Array<{ key: string; text: string; controls: number }>>(
+      `['sources', 'generated', 'verified'].map((key) => {
+        const r = document.querySelector('.cm-shuvix-fmcard-row[data-key=' + JSON.stringify(key) + ']')
+        return {
+          key,
+          text: (r?.textContent ?? '').trim(),
+          controls: r?.querySelectorAll('input, textarea, select, button').length ?? 0
+        }
+      })`
+    )
+    expect(machine.map((m) => m.controls)).toEqual([0, 0, 0])
+    expect(machine[0].text).toContain('shuvix://session/0192abc')
+    expect(machine[1].text).toContain('shuvix-work/gpt-5')
+    expect(machine[2].text).toContain('human:agent')
+
+    // 未知键落通用行（OKF 要求容忍）；自述行由徽章承载，不占一行
+    const labels = await app.main.eval<string[]>(
+      `[...document.querySelectorAll('.cm-shuvix-fmcard-label')].map((n) => n.textContent)`
+    )
+    expect(labels).toContain('okf_custom')
+    expect(labels).not.toContain('shuvix')
   })
 
   it('普通 frontmatter（无 shuvix 标记）不渲染卡片，原文照常显示', async () => {

@@ -38,6 +38,13 @@ import {
   WORKFLOW_CONCURRENCY_KEY,
   WORKFLOW_CONCURRENCY_MODES
 } from '@shuvix/chat-protocol/shuvixMdDescriptors'
+import {
+  KNOWLEDGE_MARKER_TYPE,
+  KNOWLEDGE_TYPES,
+  OKF_STATUSES,
+  OKF_STATUS_KEY,
+  OKF_TYPE_KEY
+} from '@shuvix/chat-protocol/knowledge'
 import type { BotPipelineOptions } from '@shuvix/chat-protocol/botPipeline'
 import type { FrontmatterPathEdit } from '@shuvix/chat-protocol/utils/frontmatterPatch'
 import { ToolSelectList, type ToolItem } from '../common/ToolSelectList'
@@ -45,6 +52,9 @@ import { ToolSelectList, type ToolItem } from '../common/ToolSelectList'
 export interface FrontmatterFieldPickerProps {
   /** frontmatter 键名 —— csv 的控件按它分派（见文件头注释） */
   fieldKey: string
+  /** 本文件的 `shuvix: <type>` 类型段 —— OKF 条目的键名是通用词（`type` / `status`），
+   *  只按键分派会和将来别家契约的同名键撞上，故分派看「类型 + 键」 */
+  markerType: string
   kind: 'csv' | 'select' | 'botPipeline'
   /** 当前行的原始值（csv 逗号串 / 模型 ref）；botPipeline 恒为空串 */
   value: string
@@ -58,8 +68,8 @@ export interface FrontmatterFieldPickerProps {
   readOnly?: boolean
 }
 
-/** 单个控件的入参（分派由外层做完，控件本身不看 key / kind） */
-type FieldControlProps = Omit<FrontmatterFieldPickerProps, 'kind' | 'fieldKey'>
+/** 单个控件的入参（分派由外层做完，控件本身不看文件类型 / key / kind） */
+type FieldControlProps = Omit<FrontmatterFieldPickerProps, 'kind' | 'fieldKey' | 'markerType'>
 
 /**
  * 卡上控件的共同外观（与 frontmatterCard.ts 的 CONTROL 同一套话）：静止时不描边不填底，
@@ -293,6 +303,17 @@ const STATUS_DOT: Record<string, string> = {
   draft: 'bg-text-tertiary/50',
   reviewed: 'bg-amber-400',
   stable: 'bg-green-500'
+}
+
+/**
+ * OKF 条目状态的圆点。与 wiki 的三色刻意不同：OKF 的 `draft` 是「还没人审」（琥珀，同侧栏
+ * 那枚草稿徽标），`deprecated` 才是灰的退场态 —— 两套枚举同名不同义，共用一张表会把
+ * 「等审阅」画成「已作废」。
+ */
+const OKF_STATUS_DOT: Record<string, string> = {
+  draft: 'bg-amber-400',
+  stable: 'bg-green-500',
+  deprecated: 'bg-text-tertiary/50'
 }
 
 /**
@@ -577,6 +598,7 @@ function BotPipelineField({
 
 export function FrontmatterFieldPicker({
   fieldKey,
+  markerType,
   kind,
   value,
   mapping,
@@ -594,8 +616,15 @@ export function FrontmatterFieldPicker({
     if (fieldKey === AGENT_MODEL_KEY) {
       return <ModelField value={value} onChange={onChange} readOnly={readOnly} />
     }
-    const options =
-      fieldKey === WIKI_STATUS_KEY
+    // OKF 条目的键名是通用词，先按标记类型收窄再按键分派
+    const okf = markerType === KNOWLEDGE_MARKER_TYPE
+    const options = okf
+      ? fieldKey === OKF_TYPE_KEY
+        ? KNOWLEDGE_TYPES
+        : fieldKey === OKF_STATUS_KEY
+          ? OKF_STATUSES
+          : []
+      : fieldKey === WIKI_STATUS_KEY
         ? WIKI_ENTRY_STATUSES
         : fieldKey === WIKI_ENTRY_TYPE_KEY
           ? WIKI_ENTRY_TYPES
@@ -605,7 +634,15 @@ export function FrontmatterFieldPicker({
     return (
       <EnumField
         options={options}
-        dotByValue={fieldKey === WIKI_STATUS_KEY ? STATUS_DOT : undefined}
+        dotByValue={
+          okf
+            ? fieldKey === OKF_STATUS_KEY
+              ? OKF_STATUS_DOT
+              : undefined
+            : fieldKey === WIKI_STATUS_KEY
+              ? STATUS_DOT
+              : undefined
+        }
         value={value}
         onChange={onChange}
         readOnly={readOnly}

@@ -13,6 +13,7 @@
  * 等专属 summarize 能力时再扩展本类型。
  */
 
+import { OKF_STATUS_KEY, OKF_TYPE_KEY } from './knowledge'
 import {
   WIKI_ALLOWED_TYPES_KEY,
   WIKI_CONTENT_KEY,
@@ -26,13 +27,16 @@ import {
  * 字段渲染方式。前五种是可编辑/可点选的标量面：
  *   text 普通文本 / mono 等宽（标识符）/ boolean 开关 /
  *   csv 逗号分隔列表（chips，宿主给候选项时可增删）/ select 单选（宿主给候选项时可换）。
- * 后六种是**只读展示**（点击跳源码编辑）—— 嵌套/长文按设计不做表单：
+ * 后八种是**只读展示**（点击跳源码编辑）—— 嵌套/长文按设计不做表单：
  *   prose 长文段落（wiki 条目正文：标签在上、整宽左对齐阅读排版）
  *   list 标量数组（wiki 来源：逐行等宽展示）
  *   conditions 条件映射（键即 CEL 路径，值为字符串或字符串列表）
  *   exprMap 具名表达式映射（policy 的 lets）
  *   policyRules 规则数组（effect 徽章 + 条件/match 摘要）
  *   workflowBindings 触发绑定数组（埋点 id 徽章 + CEL when/参数摘要）
+ *   sources OKF 来源数组（`{id, resource, title}` 映射或裸定位符字符串，逐条一行）
+ *   stamp OKF 的宿主章（`generated` / `verified`：`{by, at}` 单值或列表）—— 只读**不是**排版
+ *     偏好而是契约：`generated` 由写钩子盖、`verified` 只由 UI 动作盖，谁都不该在卡上手改
  * `botPipeline` 是唯一的**可编辑嵌套映射**：bot md 的管线绑定 `{ workflow, agents, input }`。
  *   工作流下拉与「按所选工作流联动列出的槽位下拉」由宿主选择器挂进块行（候选项是运行时
  *   注册表事实，与工具/模型同理），每一次改动都是文档里一行的 scoped edit（见 frontmatterPatch）。
@@ -53,6 +57,8 @@ export type ShuvixMdFieldKind =
   | 'exprMap'
   | 'policyRules'
   | 'workflowBindings'
+  | 'sources'
+  | 'stamp'
   | 'hidden'
 
 /**
@@ -229,14 +235,36 @@ const BOT_DESCRIPTOR: ShuvixMdTypeDescriptor = {
 }
 
 /**
- * OKF 知识库条目（`shuvix: okf v0.2`）—— 字段表暂空：条目的 frontmatter 是 OKF 规范自己的字段，
- * typed 卡（type / status 下拉、只读的 generated / verified 徽章）属设计 §8.3，尚未做。
- * 先给一条描述符，卡片至少认得出它是什么（否则徽章会写成「ShuviX okf」）；字段落通用行。
+ * OKF 知识库条目（`shuvix: okf v0.2`）—— 设计 docs/okf-knowledge-design.md §8.3。
+ *
+ * 字段名是 **OKF 规范自己的**，不带 ShuviX 前缀：这份卡描述的是一份对任何 OKF 消费者都合规的
+ * 文件，不是 ShuviX 的私有格式。所以它与别家描述符有一处不同 —— 键名（`type` / `status` /
+ * `title`…）是通用词，选择器按键分派候选项时得当心重名（见 knowledge.ts 的键常量注释）。
+ *
+ * 可编辑的是人写的那一半：`type` 与 `status` 是开放枚举（下拉列词汇表，手改成表外的值照样
+ * 保留 —— OKF 要求消费者容忍未知 type），`title` / `description` / `tags` / `stale_after` 是标量。
+ * `description` 给 text 而不是 prose：它按设计 D6 是**一行**召回条件（索引里显示的就是它），
+ * 排成段落会诱人写成摘要。
+ *
+ * 只读的是机器写的那一半：`sources` 是溯源清单（agent 写、人不该在卡上编），`generated` 与
+ * `verified` 是宿主与 UI 动作盖的章 —— 卡上可改就等于可以自称已核实，那正是设计 P4 要防的事。
+ * `resource` 是绑定 URI（`shuvix://project/<id>`）：改它等于换绑，给 mono 展示、要改就去源码。
  */
 const OKF_DESCRIPTOR: ShuvixMdTypeDescriptor = {
   type: 'okf',
   badge: 'OKF entry',
-  fields: []
+  fields: [
+    { key: OKF_TYPE_KEY, labelKey: 'notebook.frontmatter.okfType', kind: 'select' },
+    { key: 'title', labelKey: 'notebook.frontmatter.okfTitle', kind: 'text' },
+    { key: 'description', labelKey: 'notebook.frontmatter.okfDescription', kind: 'text' },
+    { key: 'tags', labelKey: 'notebook.frontmatter.okfTags', kind: 'csv' },
+    { key: OKF_STATUS_KEY, labelKey: 'notebook.frontmatter.okfStatus', kind: 'select' },
+    { key: 'stale_after', labelKey: 'notebook.frontmatter.okfStaleAfter', kind: 'mono' },
+    { key: 'resource', labelKey: 'notebook.frontmatter.okfResource', kind: 'mono' },
+    { key: 'sources', labelKey: 'notebook.frontmatter.okfSources', kind: 'sources' },
+    { key: 'generated', labelKey: 'notebook.frontmatter.okfGenerated', kind: 'stamp' },
+    { key: 'verified', labelKey: 'notebook.frontmatter.okfVerified', kind: 'stamp' }
+  ]
 }
 
 export const SHUVIX_MD_DESCRIPTORS: readonly ShuvixMdTypeDescriptor[] = [
