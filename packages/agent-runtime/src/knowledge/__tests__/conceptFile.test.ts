@@ -274,7 +274,6 @@ describe('isVerificationCurrent / normalizeKnowledgeType', () => {
   })
 
   it('CF-7 type 归一：词汇表内大小写不敏感归为规范写法，未知值 trim 后原样', () => {
-    expect(normalizeKnowledgeType('session summary')).toBe('Session Summary')
     expect(normalizeKnowledgeType('DECISION')).toBe('Decision')
     expect(normalizeKnowledgeType(' Memory ')).toBe('Memory')
     expect(normalizeKnowledgeType('Runbook')).toBe('Runbook')

@@ -28,6 +28,8 @@ const concept = (overrides: Partial<KnowledgeConcept> = {}): KnowledgeConcept =>
   ...overrides
 })
 
+const BUNDLE = 'projects/acme'
+
 const stamp = (by: string, at: string): { by: string; at: string } => ({ by, at })
 
 describe('toKnowledgeEntry — 形状', () => {
@@ -39,12 +41,12 @@ describe('toKnowledgeEntry — 形状', () => {
       resource: 'shuvix://project/p1',
       staleAfter: '2999-12-31'
     })
-    const entry = toKnowledgeEntry(c, NOW)
+    const entry = toKnowledgeEntry(c, { bundle: BUNDLE, now: NOW })
 
     expect(Object.keys(entry).sort()).toEqual([
+      'bundle',
       'description',
       'path',
-      'scope',
       'stale',
       'status',
       'tags',
@@ -57,7 +59,8 @@ describe('toKnowledgeEntry — 形状', () => {
     expect('generatedBy' in entry).toBe(false)
 
     expect(entry).toMatchObject({
-      path: 'global/a.md',
+      path: `${BUNDLE}/global/a.md`,
+      bundle: BUNDLE,
       type: 'Memory',
       title: 'A',
       description: 'da',
@@ -70,7 +73,7 @@ describe('toKnowledgeEntry — 形状', () => {
   it('EV-2 有 generated 章 → generatedAt / generatedBy 逐字复制', () => {
     const entry = toKnowledgeEntry(
       concept({ generated: stamp('agent:coding/gpt-5', '2026-09-01T00:00:00Z') }),
-      NOW
+      { bundle: BUNDLE, now: NOW }
     )
     expect(entry.generatedAt).toBe('2026-09-01T00:00:00Z')
     expect(entry.generatedBy).toBe('agent:coding/gpt-5')
@@ -78,31 +81,32 @@ describe('toKnowledgeEntry — 形状', () => {
 })
 
 describe('toKnowledgeEntry — 派生字段', () => {
-  it('EV-3 scope 按 path 派生：四个保留作用域各归其类，bundle 根文件与用户自建目录为 null', () => {
-    const table: Array<[string, KnowledgeEntry['scope']]> = [
-      ['NOTES.md', null],
-      ['global/a.md', 'global'],
-      ['projects/acme/project.md', 'project'],
-      ['projects/acme/sessions/2026-09-01-x.md', 'session'],
-      ['sessions/x.md', 'session'],
-      ['bots/helper/bot.md', 'bot'],
-      ['misc/x.md', null],
-      // 已撤销的两个保留名字，如今与任何自建目录同等
-      ['wiki/topic/x.md', null],
-      ['raw/x.md', null]
-    ]
-    for (const [path, scope] of table) {
-      expect({ path, scope: toKnowledgeEntry(concept({ path }), NOW).scope }).toEqual({
-        path,
-        scope
-      })
-    }
+  /**
+   * 概念自己的 path 是 bundle 相对的（OKF 的口径），而视图要在全部 bundle 之间唯一 ——
+   * 所以出参的 path 拼上 bundle 前缀，bundle 单独成一列。作用域这个概念已经没有了：
+   * 一个 bundle 就是一个绑定实体，「谁读它」由 bundle 自己回答。
+   */
+  it('EV-3 path 拼上 bundle 前缀、bundle 单独成列；两者都归一（反斜杠 / 前导斜杠）', () => {
+    const e = toKnowledgeEntry(concept({ path: 'token-refresh.md' }), {
+      bundle: 'projects/acme',
+      now: NOW
+    })
+    expect(e).toMatchObject({ path: 'projects/acme/token-refresh.md', bundle: 'projects/acme' })
+
+    const nested = toKnowledgeEntry(concept({ path: 'auth\\session.md' }), {
+      bundle: '/projects/acme/',
+      now: NOW
+    })
+    expect(nested).toMatchObject({
+      path: 'projects/acme/auth/session.md',
+      bundle: 'projects/acme'
+    })
   })
 
   it('EV-4 trustTier：verified 空 → unverified；只有 agent 章 → machine-confirmed；含 human: 章 → human-reviewed', () => {
     const at = '2026-09-01T00:00:00Z'
     const tier = (verified: KnowledgeConcept['verified']): KnowledgeEntry['trustTier'] =>
-      toKnowledgeEntry(concept({ verified }), NOW).trustTier
+      toKnowledgeEntry(concept({ verified }), { bundle: BUNDLE, now: NOW }).trustTier
 
     expect(tier([])).toBe('unverified')
     expect(tier([stamp('agent:x', at)])).toBe('machine-confirmed')
@@ -113,7 +117,7 @@ describe('toKnowledgeEntry — 派生字段', () => {
     const g = (at: string): KnowledgeConcept['generated'] => stamp('agent:g', at)
     const v = (at: string): KnowledgeConcept['verified'][number] => stamp('human:alice', at)
     const current = (o: Partial<KnowledgeConcept>): boolean =>
-      toKnowledgeEntry(concept(o), NOW).verifiedCurrent
+      toKnowledgeEntry(concept(o), { bundle: BUNDLE, now: NOW }).verifiedCurrent
 
     // (a) 未核实
     expect(current({ verified: [] })).toBe(false)
@@ -142,7 +146,7 @@ describe('toKnowledgeEntry — 派生字段', () => {
 
   it('EV-6 stale 对注入的 now 判：stale_after 当日 UTC 零点起算过期；缺省与畸形日期恒不过期', () => {
     const stale = (staleAfter: string | undefined, now: Date): boolean =>
-      toKnowledgeEntry(concept({ staleAfter }), now).stale
+      toKnowledgeEntry(concept({ staleAfter }), { bundle: BUNDLE, now }).stale
 
     expect(stale('2026-09-10', new Date('2026-09-09T23:59:59Z'))).toBe(false)
     expect(stale('2026-09-10', new Date('2026-09-10T00:00:00Z'))).toBe(true)

@@ -19,8 +19,7 @@ vi.mock('../../utils/paths', () => ({
   getBuiltinSkillsDir: () => '/tmp/shuvix-actor-builtin-skills',
   getMemoryRootDir: () => '/tmp/shuvix-actor-memory',
   getDefaultBotsDir: () => '/tmp/shuvix-bots',
-  getKnowledgeRootDir: () => '/tmp/shuvix-knowledge',
-  listKnowledgeSessionDirs: () => []
+  getShuvixKnowledgeRootDir: () => '/tmp/shuvix-knowledge-shuvix'
 }))
 vi.mock('../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {} })

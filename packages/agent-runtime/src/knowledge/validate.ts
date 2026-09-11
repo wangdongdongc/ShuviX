@@ -13,7 +13,7 @@ import { OKF_INDEX_FILE, OKF_LOG_FILE } from '@shuvix/chat-protocol/knowledge'
 import { splitFrontmatter } from '../markdownFrontmatter'
 import { parseConceptText, type KnowledgeConcept } from './conceptFile'
 import { extractConceptLinks, parseOkfText } from './okfCodec'
-import { normalizeBundlePath } from './scopes'
+import { normalizeBundlePath } from './bundlePaths'
 
 export interface KnowledgeDiagnostic {
   path: string

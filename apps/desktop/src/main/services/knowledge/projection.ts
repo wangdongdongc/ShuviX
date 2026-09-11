@@ -1,53 +1,22 @@
 /**
- * 保留文件投影（桌面接线）—— 每次变更后重生成**全库**的 index.md、追加 log.md。
+ * 保留文件投影（桌面接线）—— **按 bundle** 重生成该 bundle 的 index.md、追加它的 log.md。
  *
- * 全量而非增量：库只有几百个文件，渲染是纯函数，逐份比对内容只写有变化的 ——
- * 这样永远一致、没有"忘了更新某个目录的 index"的路径，git 历史也不会被无意义的重写刷满。
- * 空的作用域目录（初始化建出的 global/、刚建的 projects/<slug>/）也要有 index：从磁盘目录
- * 补进 extraDirs。用户自建的顶层目录不在这里 —— 它们有概念才存在，扫描自然带出来。
+ * 一个 bundle 内全量而非增量：一个项目的库只有几十到几百个文件，渲染是纯函数，逐份比对
+ * 内容只写有变化的 —— 这样永远一致、没有「忘了更新某个目录的 index」的路径，git 历史也
+ * 不会被无意义的重写刷满。跨 bundle 一概不碰：一次写入只重投影它自己那一个 bundle。
  */
-import { existsSync, readdirSync } from 'fs'
-import { mkdir, readFile, writeFile } from 'fs/promises'
+import { readFile, writeFile, mkdir } from 'fs/promises'
 import { dirname } from 'path'
-import {
-  KNOWLEDGE_DIRS,
-  OKF_INDEX_FILE,
-  OKF_LOG_FILE,
-  OKF_VERSION
-} from '@shuvix/chat-protocol/knowledge'
+import { OKF_INDEX_FILE, OKF_LOG_FILE, OKF_VERSION } from '@shuvix/chat-protocol/knowledge'
 import { appendLogEntry, renderAllIndexes, type KnowledgeLogEvent } from '@shuvix/agent-runtime'
 import { createLogger } from '../../logger'
-import { fromBundlePath, getKnowledgeRoot } from './knowledgePaths'
-import { invalidateKnowledgeScan, scanKnowledge } from './scan'
+import { bundleFilePath } from './knowledgePaths'
+import { invalidateKnowledgeScan, scanBundle } from './scan'
 
 const log = createLogger('Knowledge')
 
-/** 磁盘上存在的作用域目录（含二级：projects/* / bots/* / wiki/*），供无概念时也生成 index */
-function existingScopeDirs(): string[] {
-  const root = getKnowledgeRoot()
-  const out: string[] = []
-  const subdirsOf = (rel: string): string[] => {
-    try {
-      return readdirSync(fromBundlePath(rel), { withFileTypes: true })
-        .filter((d) => d.isDirectory() && !d.name.startsWith('.'))
-        .map((d) => `${rel}/${d.name}`)
-    } catch {
-      return []
-    }
-  }
-  for (const dir of Object.values(KNOWLEDGE_DIRS)) {
-    if (!existsSync(fromBundlePath(dir))) continue
-    out.push(dir)
-    if (dir === KNOWLEDGE_DIRS.projects || dir === KNOWLEDGE_DIRS.bots) {
-      out.push(...subdirsOf(dir))
-    }
-  }
-  void root
-  return out
-}
-
-async function writeIfChanged(rel: string, content: string): Promise<boolean> {
-  const abs = fromBundlePath(rel)
+async function writeIfChanged(bundle: string, rel: string, content: string): Promise<boolean> {
+  const abs = bundleFilePath(bundle, rel)
   try {
     const current = await readFile(abs, 'utf-8')
     if (current === content) return false
@@ -56,39 +25,35 @@ async function writeIfChanged(rel: string, content: string): Promise<boolean> {
   }
   await mkdir(dirname(abs), { recursive: true })
   await writeFile(abs, content, 'utf-8')
-  invalidateKnowledgeScan(rel)
+  invalidateKnowledgeScan(bundle, rel)
   return true
 }
 
 /**
- * 重投影全库 index，并（给了事件时）追加一条日志。返回实际写入的 bundle 相对路径 ——
- * 调用方把它们连同变更的概念一起交给 git。
+ * 重投影一个 bundle 的 index，并（给了事件时）往它的 log 追加一条。返回实际写入的
+ * bundle 相对路径 —— 调用方把它们连同变更的概念一起交给该 bundle 的 git。
  */
-export async function projectKnowledgeBundle(event?: KnowledgeLogEvent): Promise<string[]> {
+export async function projectBundle(bundle: string, event?: KnowledgeLogEvent): Promise<string[]> {
   const written: string[] = []
   try {
-    const { concepts } = await scanKnowledge()
-    const indexes = renderAllIndexes({
-      concepts,
-      extraDirs: existingScopeDirs(),
-      okfVersion: OKF_VERSION
-    })
+    const { concepts } = await scanBundle(bundle)
+    const indexes = renderAllIndexes({ concepts, extraDirs: [''], okfVersion: OKF_VERSION })
     for (const [dir, content] of indexes) {
       const rel = dir ? `${dir}/${OKF_INDEX_FILE}` : OKF_INDEX_FILE
-      if (await writeIfChanged(rel, content)) written.push(rel)
+      if (await writeIfChanged(bundle, rel, content)) written.push(rel)
     }
     if (event) {
       let existing: string | null = null
       try {
-        existing = await readFile(fromBundlePath(OKF_LOG_FILE), 'utf-8')
+        existing = await readFile(bundleFilePath(bundle, OKF_LOG_FILE), 'utf-8')
       } catch {
         existing = null
       }
-      if (await writeIfChanged(OKF_LOG_FILE, appendLogEntry(existing, event)))
+      if (await writeIfChanged(bundle, OKF_LOG_FILE, appendLogEntry(existing, event)))
         written.push(OKF_LOG_FILE)
     }
   } catch (err) {
-    log.warn(`knowledge projection failed: ${(err as Error).message}`)
+    log.warn(`knowledge projection failed for ${bundle}: ${(err as Error).message}`)
   }
   return written
 }

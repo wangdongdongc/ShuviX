@@ -43,7 +43,6 @@ import { projectDao } from '../dao/projectDao'
 import { ensureSessionTree } from '../services/sessionStorage'
 import { resolveInstructionContent } from '../services/instruction'
 import { resolveProjectMemoryIndex } from '../services/memory'
-import { getKnowledgeRootDir } from '../utils/paths'
 import { httpLogService } from '../services/httpLogService'
 import { chatFrontendRegistry } from '../frontend/core'
 import {
@@ -203,8 +202,6 @@ function desktopPromptVars(ctx: PromptVarsCtx): PromptVars {
     language: formatLanguageDisplay(i18next.language),
     appVersion,
     projectName: project?.name ?? '',
-    // OKF 知识库根目录（常量；内置 knowledge-writer 走构建期 {{knowledgeRoot}}，用户档案可用此变量）
-    knowledgeRoot: getKnowledgeRootDir(),
     // 根会话供给 {{shuvix:notebookPath}}（笔记本会话的根 Agent 走 notebook 基座档案）：
     // 非笔记本会话为空串 → 占位块收敛消失。派生 ctx.sessionId 是 agentId，无从解析 —— 不供给，
     // 占位符原样保留并 warn（派生档案本就不该引用它）

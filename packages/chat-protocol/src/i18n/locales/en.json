@@ -158,10 +158,7 @@
     "session": "Recorded in session"
   },
   "knowledge": {
-    "scopeGlobal": "Global",
     "scopeProjects": "Projects",
-    "scopeSessions": "Sessions",
-    "scopeBots": "Bots",
     "badgeDraft": "Draft — not reviewed yet",
     "badgeVerified": "Verified",
     "badgeVerifiedOutdated": "Edited after verification",

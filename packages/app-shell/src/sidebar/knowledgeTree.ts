@@ -1,11 +1,9 @@
 /**
  * 知识库分组的树形派生 —— `KnowledgeEntry[]`（bundle 相对路径清单）→ 目录树。
  *
- * 纯函数、无 React，判定都在这里：**保留**作用域目录（global / projects / sessions / bots）与
- * 项目下的 `sessions` 用固定文案（UI 按 `scopeDir` 取 i18n），用户自建的顶层目录按目录名显示；
- * `projects/<slug>` / `bots/<name>` 用绑定概念（project.md / bot.md）的 title 当目录名
- * （目录名只是 slug），绑定概念置于所在目录首位；顶层按保留作用域固定序（全局 → 项目 →
- * 会话 → Bots）、其余按显示名排在它们之后。
+ * 纯函数、无 React，判定都在这里：顶层的项目容器 `projects/` 用固定文案（UI 按 `scopeDir`
+ * 取 i18n），每个项目 bundle（`projects/<slug>`）用绑定概念 `project.md` 的 title 当目录名
+ * （目录名只是 slug），绑定概念置于所在 bundle 首位。
  * 只画存在的目录 —— 空作用域不占行（与 WikiGroup 同口径：清单来自文件，空文件夹只是噪声）。
  *
  * 绑定概念的 title 给了目录之后，它自己那一行显示文件名 stem（`project` / `bot`）—— 目录行正下方
@@ -17,14 +15,13 @@
  * 前导 `./` 与 `/`、去尾随 `/`）；同一路径出现两次只取第一条（行 key 是路径）。
  */
 import {
-  BOT_CONCEPT_FILE,
-  KNOWLEDGE_DIRS,
+  KNOWLEDGE_PROJECTS_DIR,
   PROJECT_CONCEPT_FILE,
   type KnowledgeEntry
 } from '@shuvix/chat-protocol/knowledge'
 
-/** 固定文案的目录：顶层六个作用域目录，以及项目下的 `sessions` */
-export type KnowledgeScopeDir = keyof typeof KNOWLEDGE_DIRS
+/** 固定文案的目录（本期只有一个：项目 bundle 的容器） */
+export type KnowledgeScopeDir = 'projects'
 
 export interface KnowledgeTreeFile {
   entry: KnowledgeEntry
@@ -47,39 +44,17 @@ export interface KnowledgeTreeDir {
   files: KnowledgeTreeFile[]
 }
 
-const TOP_ORDER: readonly string[] = [
-  KNOWLEDGE_DIRS.global,
-  KNOWLEDGE_DIRS.projects,
-  KNOWLEDGE_DIRS.sessions,
-  KNOWLEDGE_DIRS.bots
-]
+const TOP_ORDER: readonly string[] = [KNOWLEDGE_PROJECTS_DIR]
 
-const SCOPE_DIR_BY_NAME = new Map<string, KnowledgeScopeDir>(
-  (Object.entries(KNOWLEDGE_DIRS) as Array<[KnowledgeScopeDir, string]>).map(([k, v]) => [v, k])
-)
-
-/** 目录的固定文案键：顶层作用域目录，或项目目录下的 `sessions` */
+/** 目录的固定文案键：目前只有顶层的项目容器 */
 function scopeDirOf(dirPath: string): KnowledgeScopeDir | null {
-  const segs = dirPath.split('/')
-  if (segs.length === 1) return SCOPE_DIR_BY_NAME.get(segs[0]) ?? null
-  if (
-    segs.length === 3 &&
-    segs[0] === KNOWLEDGE_DIRS.projects &&
-    segs[2] === KNOWLEDGE_DIRS.sessions
-  ) {
-    return 'sessions'
-  }
-  return null
+  return dirPath === KNOWLEDGE_PROJECTS_DIR ? 'projects' : null
 }
 
-/** 绑定概念：`projects/<slug>/project.md`、`bots/<name>/bot.md` */
+/** 绑定概念：`projects/<slug>/project.md` —— 它给所在 bundle 命名 */
 function isCharter(path: string): boolean {
   const segs = path.split('/')
-  if (segs.length !== 3) return false
-  return (
-    (segs[0] === KNOWLEDGE_DIRS.projects && segs[2] === PROJECT_CONCEPT_FILE) ||
-    (segs[0] === KNOWLEDGE_DIRS.bots && segs[2] === BOT_CONCEPT_FILE)
-  )
+  return segs.length === 3 && segs[0] === KNOWLEDGE_PROJECTS_DIR && segs[2] === PROJECT_CONCEPT_FILE
 }
 
 const compareLabel = (a: string, b: string): number =>

@@ -158,10 +158,7 @@
     "session": "記録したセッション"
   },
   "knowledge": {
-    "scopeGlobal": "グローバル",
     "scopeProjects": "プロジェクト",
-    "scopeSessions": "セッション",
-    "scopeBots": "Bots",
     "badgeDraft": "下書き — 未確認",
     "badgeVerified": "確認済み",
     "badgeVerifiedOutdated": "確認後に編集あり",

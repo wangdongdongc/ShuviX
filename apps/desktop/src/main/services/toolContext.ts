@@ -15,9 +15,7 @@ import {
   getDefaultSkillsDir,
   getDefaultBotsDir,
   getMemoryRootDir,
-  getBuiltinSkillsDir,
-  getKnowledgeRootDir,
-  listKnowledgeSessionDirs
+  getBuiltinSkillsDir
 } from '../utils/paths'
 import { skillService } from './skillService'
 import { shellParser } from './shellParserService'
@@ -240,9 +238,6 @@ export function makeDesktopSecurityProvider(
       ],
       memoryDirs: [getMemoryRootDir()],
       botsDir: getDefaultBotsDir(),
-      // OKF 知识库：根目录（review-knowledge-writes 的 force-ask 范围）+ 会话摘要目录（免询问例外）
-      knowledgeRoot: getKnowledgeRootDir(),
-      knowledgeSessionDirs: listKnowledgeSessionDirs(),
       home: homedir(),
       systemDirs: windowsSystemDirs()
     }),

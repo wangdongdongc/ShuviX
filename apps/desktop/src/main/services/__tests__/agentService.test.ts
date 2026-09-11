@@ -36,7 +36,7 @@ vi.mock('../../utils/paths', () => ({
   getDefaultAgentsDir: () => state.dir,
   getDefaultWikisDir: () => state.wikis,
   getWidgetsDir: () => state.widgets,
-  getKnowledgeRootDir: () => '/tmp/shuvix-knowledge'
+  getShuvixKnowledgeRootDir: () => '/tmp/shuvix-knowledge-shuvix'
 }))
 vi.mock('../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {} })

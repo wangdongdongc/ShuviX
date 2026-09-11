@@ -42,7 +42,7 @@ import { KNOWLEDGE_TYPES } from '@shuvix/chat-protocol/knowledge'
 import { parse as parseYaml } from 'yaml'
 import type { AgentProfile } from '../../subagent/types'
 
-const ALL_PARAMS = { widgetsRoot: '/w', wikiRoot: '/k', knowledgeRoot: '/kb' }
+const ALL_PARAMS = { widgetsRoot: '/w', wikiRoot: '/k' }
 const LANGS = ['en', 'zh', 'ja'] as const
 const profile = (name: string, language?: string): AgentProfile =>
   buildBuiltinProfiles({ ...ALL_PARAMS, language }).find((a) => a.name === name)!
@@ -176,7 +176,7 @@ describe('语言解析 — 精确 → 基础 → en，按文件整体回退', ()
 })
 
 describe('buildBuiltinProfiles — 全集现算', () => {
-  it('全参数 → 十三个内置,三个基座档案居首;缺 widget/wiki/knowledge 根 → 自动跳过', () => {
+  it('全参数 → 十三个内置,三个基座档案居首;缺 widget/wiki 根 → 自动跳过', () => {
     // bot-notes 已退役（bot 自己维护自己的正文，没有单独的笔记段）—— 名单里不该再有它
     expect(buildBuiltinProfiles(ALL_PARAMS).map((a) => a.name)).toEqual([
       'work',
@@ -193,8 +193,8 @@ describe('buildBuiltinProfiles — 全集现算', () => {
       'bot-intent',
       'knowledge-writer'
     ])
-    // titler 与 bot 门控段档案无宿主参数依赖：缺 widget/wiki 根也在
-    //（模型走 shuvix-model 通用链路，内置不声明）
+    // titler / bot 门控段 / knowledge-writer 无宿主参数依赖：缺 widget/wiki 根也在
+    //（模型走 shuvix-model 通用链路，内置不声明；知识库目标由工具按会话解析，不吃参数）
     expect(buildBuiltinProfiles({}).map((a) => a.name)).toEqual([
       'work',
       'chat',
@@ -204,7 +204,8 @@ describe('buildBuiltinProfiles — 全集现算', () => {
       'explore',
       'visualization',
       'titler',
-      'bot-intent'
+      'bot-intent',
+      'knowledge-writer'
     ])
   })
 
@@ -262,13 +263,14 @@ describe('buildBuiltinProfiles — 全集现算', () => {
  * 提示词里必须在场的那几段。
  */
 describe('knowledge-writer 档案钉板（OKF 知识库的派发执行侧）', () => {
-  it('RG-1 三语结构钉板：工具面恰为 knowledge/read/grep/glob/ls/ask，项目感知开、指令文件默认、不声明模型、不是基座、缺 knowledgeRoot 即跳过', () => {
+  it('RG-1 三语结构钉板：工具面恰为 knowledge/read/grep/glob/ls/ask，项目感知开、指令文件默认、不声明模型、不是基座、不依赖任何宿主参数', () => {
     expect(KNOWLEDGE_WRITER_SPEC.name).toBe('knowledge-writer')
-    expect(KNOWLEDGE_WRITER_SPEC.requiredParams).toEqual(['knowledgeRoot'])
-    expect(buildBuiltinProfile(KNOWLEDGE_WRITER_SPEC, {})).toBeNull()
+    // 它从不点名文件系统路径 —— 目标 bundle 由 knowledge 工具按会话解析，所以零参数也建得出来
+    expect(KNOWLEDGE_WRITER_SPEC.requiredParams).toBeUndefined()
+    expect(buildBuiltinProfile(KNOWLEDGE_WRITER_SPEC, {})).not.toBeNull()
     expect(BASE_PROFILE_NAMES.has('knowledge-writer')).toBe(false)
     for (const language of LANGS) {
-      const built = buildBuiltinProfile(KNOWLEDGE_WRITER_SPEC, { knowledgeRoot: '/kb', language })
+      const built = buildBuiltinProfile(KNOWLEDGE_WRITER_SPEC, { language })
       expect(built, language).not.toBeNull()
       // 写入只走 knowledge 工具：没有 write/edit（直写文件绕开结构检查）、没有 git（簿记归宿主）
       expect(built!.tools, language).toEqual(['knowledge', 'read', 'grep', 'glob', 'ls', 'ask'])
@@ -278,13 +280,10 @@ describe('knowledge-writer 档案钉板（OKF 知识库的派发执行侧）', (
     }
   })
 
-  it('RG-2 三语正文接线：根目录就地替换（无残留占位符）、点名工具的动作、两个宿主章、会话资源 URI', () => {
+  it('RG-2 三语正文接线：不点名任何文件系统路径、点名工具的动作、两个宿主章、会话资源 URI', () => {
     for (const language of LANGS) {
-      const body = buildBuiltinProfile(KNOWLEDGE_WRITER_SPEC, {
-        knowledgeRoot: '/kb',
-        language
-      })!.systemPrompt
-      expect(body, `${language} 根目录`).toContain('/kb')
+      const body = buildBuiltinProfile(KNOWLEDGE_WRITER_SPEC, { language })!.systemPrompt
+      // 一个项目一个 bundle，路径由工具按会话解析 —— 提示词里不该再有根目录占位符
       expect(body, `${language} 占位符`).not.toContain('{{knowledgeRoot}}')
       for (const anchor of [
         '`knowledge`',
@@ -304,23 +303,19 @@ describe('knowledge-writer 档案钉板（OKF 知识库的派发执行侧）', (
 
   /**
    * 编辑规范内联在提示词里 —— 它曾经住在用户目录的 SCHEMA.md 里，那份文件已撤销。
-   * 三语都得带上作用域表与类型词汇表，否则 agent 既不知道往哪写，也拼不出合法的 `type`。
+   * 三语都得带上类型词汇表（拼不出合法 `type` 就写不成条目）与跨 bundle 的引用规矩。
    */
-  it('RG-3 三语正文自带编辑规范：四个保留作用域目录 + 全部类型词汇；不再提退役的 wiki / raw', () => {
+  it('RG-3 三语正文自带编辑规范：类型词汇齐全、跨 bundle 用 shuvix:// URI；不再提退役的目录作用域', () => {
     for (const language of LANGS) {
-      const body = buildBuiltinProfile(KNOWLEDGE_WRITER_SPEC, {
-        knowledgeRoot: '/kb',
-        language
-      })!.systemPrompt
-      for (const dir of ['global/', 'projects/<slug>/', 'sessions/', 'bots/<name>/']) {
-        expect(body, `${language} 需含作用域 ${dir}`).toContain(dir)
-      }
-      // 保留作用域只剩四个：提示词里再教 wiki / raw，agent 就会往两个宿主不认识的目录写
-      for (const gone of ['wiki/', 'raw/']) {
-        expect(body, `${language} 不得再提退役作用域 ${gone}`).not.toContain(gone)
-      }
+      const body = buildBuiltinProfile(KNOWLEDGE_WRITER_SPEC, { language })!.systemPrompt
       for (const type of KNOWLEDGE_TYPES) {
         expect(body, `${language} 需含类型 ${type}`).toContain(`\`${type}\``)
+      }
+      // 路径只在自己 bundle 内成立，跨库要用 URI —— 这条不说清楚，agent 会写出解析不了的链接
+      expect(body, `${language} 需讲跨 bundle 引用`).toContain('shuvix://')
+      // 目录作用域已退役：提示词里再教 global/ 之类，agent 就会往宿主不认识的目录写
+      for (const gone of ['global/', 'bots/', 'wiki/', 'raw/']) {
+        expect(body, `${language} 不得再提退役作用域 ${gone}`).not.toContain(gone)
       }
     }
   })

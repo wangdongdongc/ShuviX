@@ -1,27 +1,39 @@
 /**
- * projectKnowledgeBundle —— 每次变更后全库重投影 index.md、追加 log.md，逐份比对只写有变化的。
- * 空的作用域目录（磁盘上有、没概念）也要有 index；隐藏子目录不算；再投影无变化时返回空数组。
+ * projectBundle —— 每次变更后重投影**该 bundle** 的 index.md、追加它的 log.md，逐份比对只写
+ * 有变化的。一个 bundle 根恒有一份带 okf_version 的 index（它是「这是一个 OKF bundle」的自述），
+ * 子目录的 index 不带 frontmatter；磁盘上空的子目录不投影。跨 bundle 一概不碰。
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
-import { join } from 'node:path'
 
 const state = vi.hoisted(() => ({ root: '' }))
 
 vi.mock('../../../utils/paths', () => ({
-  getKnowledgeRootDir: () => state.root,
-  getProjectMemoryDir: (id: string) => `${state.root}-memory/${id}`,
-  listKnowledgeSessionDirs: () => []
+  getShuvixKnowledgeRootDir: () => state.root,
+  getUserKnowledgeRootDir: () => `${state.root}-user`
 }))
 vi.mock('../../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {} })
 }))
 
-import { projectKnowledgeBundle } from '../projection'
-import { invalidateKnowledgeScan, scanKnowledge } from '../scan'
-import { makeTempRoot, seedConcept, seedFile } from './fixture'
+import { projectBundle } from '../projection'
+import { invalidateKnowledgeScan, scanBundle } from '../scan'
+import {
+  BUNDLE,
+  OTHER_BUNDLE,
+  bundleAt,
+  fileAt,
+  makeTempRoot,
+  seedConcept,
+  seedFile
+} from './fixture'
+
+const OKF_FRONTMATTER = '---\nokf_version: "0.2"\n---\n'
 
 let root: string
+
+const read = (bundle: string, rel: string): string =>
+  readFileSync(fileAt(root, bundle, rel), 'utf-8')
 
 beforeEach(() => {
   root = makeTempRoot()
@@ -33,66 +45,64 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true })
 })
 
-describe('projectKnowledgeBundle', () => {
-  it('DP-1 概念目录、祖先目录与磁盘上空的作用域目录都得到 index（隐藏子目录除外）；带事件时追加 log；再投影无变化 → 空数组、log 不追加', async () => {
-    seedConcept(root, 'global/a.md', ['type: Memory', 'title: A', 'description: da'])
-    seedConcept(root, 'projects/acme/x.md', ['type: Memory', 'title: X', 'description: dx'])
-    mkdirSync(join(root, 'bots'), { recursive: true })
-    mkdirSync(join(root, 'projects', '.hidden'), { recursive: true })
+describe('projectBundle', () => {
+  it('DP-1 概念目录与其祖先各得一份 index（bundle 根带 okf_version，子目录不带；磁盘上空的子目录不投影）；带事件时追加 log；别的 bundle 不受影响；再投影无变化 → 空数组、log 不追加', async () => {
+    seedConcept(root, `${BUNDLE}/a.md`, ['type: Memory', 'title: A', 'description: da'])
+    seedConcept(root, `${BUNDLE}/sub/x.md`, ['type: Memory', 'title: X', 'description: dx'])
+    mkdirSync(bundleAt(root, `${BUNDLE}/empty`), { recursive: true })
+    seedConcept(root, `${OTHER_BUNDLE}/b.md`, ['type: Memory', 'title: B', 'description: db'])
 
-    const written = await projectKnowledgeBundle({
+    const written = await projectBundle(BUNDLE, {
       date: '2026-09-09',
       op: 'Creation',
-      path: 'global/a.md',
+      path: 'a.md',
       title: 'A',
       actor: 'shuvix-work/gpt-5'
     })
-    expect([...written].sort()).toEqual(
-      [
-        'index.md',
-        'global/index.md',
-        'projects/index.md',
-        'projects/acme/index.md',
-        'bots/index.md',
-        'log.md'
-      ].sort()
-    )
-    expect(existsSync(join(root, 'projects', '.hidden', 'index.md'))).toBe(false)
-    expect(readFileSync(join(root, 'global', 'index.md'), 'utf-8')).toBe(
-      '## Entries\n\n* [A](a.md) - da\n'
-    )
-    // 空作用域目录的 index 是一份空文件，不是「无文件」
-    expect(readFileSync(join(root, 'bots', 'index.md'), 'utf-8')).toBe('')
-    const rootIndex = readFileSync(join(root, 'index.md'), 'utf-8')
-    expect(rootIndex.startsWith('---\nokf_version: "0.2"\n---\n\n')).toBe(true)
-    expect(rootIndex).toContain('## Global memory')
-    expect(rootIndex).toContain('* [acme](projects/acme/index.md)')
-    const log = readFileSync(join(root, 'log.md'), 'utf-8')
-    expect(log).toBe('## 2026-09-09\n\n- **Creation** /global/a.md — A · by shuvix-work/gpt-5\n')
+    expect([...written].sort()).toEqual(['index.md', 'log.md', 'sub/index.md'])
+    expect(existsSync(fileAt(root, BUNDLE, 'empty/index.md'))).toBe(false)
 
-    expect(await projectKnowledgeBundle()).toEqual([])
-    expect(readFileSync(join(root, 'log.md'), 'utf-8')).toBe(log)
+    const rootIndex = read(BUNDLE, 'index.md')
+    expect(rootIndex.startsWith(OKF_FRONTMATTER)).toBe(true)
+    expect(rootIndex).toContain('* [A](a.md) - da')
+    expect(rootIndex).toContain('* [sub](sub/index.md)')
+    // 子目录 index 是纯清单：带 frontmatter 的非根 index 是 OKF 的 error
+    expect(read(BUNDLE, 'sub/index.md')).toBe('## Entries\n\n* [X](x.md) - dx\n')
+    expect(read(BUNDLE, 'log.md')).toBe(
+      '## 2026-09-09\n\n- **Creation** /a.md — A · by shuvix-work/gpt-5\n'
+    )
+
+    // 投影只写自己那一个 bundle
+    expect(existsSync(fileAt(root, OTHER_BUNDLE, 'index.md'))).toBe(false)
+    expect(existsSync(fileAt(root, OTHER_BUNDLE, 'log.md'))).toBe(false)
+
+    expect(await projectBundle(BUNDLE)).toEqual([])
+    expect(read(BUNDLE, 'log.md')).toBe(
+      '## 2026-09-09\n\n- **Creation** /a.md — A · by shuvix-work/gpt-5\n'
+    )
   })
 
-  it('DP-2 Update 事件带 title 与 actor 进 log；投影写出的 index 在下一次扫描里已是新内容（精确失效）', async () => {
-    seedConcept(root, 'global/a.md', ['type: Memory', 'title: A', 'description: da'])
-    seedFile(root, 'global/index.md', 'stale')
-    await scanKnowledge()
+  it('DP-2 Update 事件带 title 与 actor 进 log；投影写出的 index 在下一次扫描里已是新内容（精确失效）；没有概念的 bundle 根照样得到一份 index', async () => {
+    seedConcept(root, `${BUNDLE}/a.md`, ['type: Memory', 'title: A', 'description: da'])
+    seedFile(root, `${BUNDLE}/index.md`, 'stale')
+    await scanBundle(BUNDLE)
 
-    const written = await projectKnowledgeBundle({
+    const written = await projectBundle(BUNDLE, {
       date: '2026-09-09',
       op: 'Update',
-      path: 'global/a.md',
+      path: 'a.md',
       title: 'A',
       actor: 'shuvix-work/gpt-5'
     })
-    expect(written).toContain('global/index.md')
-    expect(readFileSync(join(root, 'log.md'), 'utf-8')).toContain(
-      '- **Update** /global/a.md — A · by shuvix-work/gpt-5'
-    )
-    const { files } = await scanKnowledge()
-    expect(files.find((f) => f.path === 'global/index.md')!.text).toBe(
-      '## Entries\n\n* [A](a.md) - da\n'
-    )
+    expect(written).toContain('index.md')
+    expect(read(BUNDLE, 'log.md')).toContain('- **Update** /a.md — A · by shuvix-work/gpt-5')
+    const { files } = await scanBundle(BUNDLE)
+    expect(files.find((f) => f.path === 'index.md')!.text).toContain('* [A](a.md) - da')
+
+    mkdirSync(bundleAt(root, OTHER_BUNDLE), { recursive: true })
+    expect(await projectBundle(OTHER_BUNDLE)).toEqual(['index.md'])
+    expect(read(OTHER_BUNDLE, 'index.md').startsWith(OKF_FRONTMATTER)).toBe(true)
+    // 空 bundle 没有 log：初始化本身不是一次变更
+    expect(existsSync(fileAt(root, OTHER_BUNDLE, 'log.md'))).toBe(false)
   })
 })

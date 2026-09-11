@@ -1,14 +1,15 @@
 /**
- * KnowledgeGroup —— 侧栏置顶的「知识库」分组（知识库 v2：OKF bundle，`~/.shuvix/knowledge/`），
- * 排在 Bots 之下、旧知识库（WikiGroup）之上。树 = 目录即作用域（全局 / 项目 / 会话 / Bots /
- * Wiki / 来源），行 = 概念（frontmatter title），行尾徽标：草稿 / 已核实 / 过期 / 已过时。
+ * KnowledgeGroup —— 侧栏置顶的「知识库」分组（知识库 v2，`~/.shuvix/knowledge-shuvix/`），
+ * 排在 Bots 之下、旧知识库（WikiGroup）之上。**一个项目一个 OKF bundle**：树 = 项目容器 →
+ * 每个项目 bundle（显示 `project.md` 的 title）→ 条目，行 = 概念（frontmatter title），
+ * 行尾徽标：草稿 / 已核实 / 过期 / 已过时。
  * 点行经宿主打开 / 复用该文件的笔记本会话（隐藏项目 `__knowledge__`，同 WikiGroup 的做法）。
  *
  * prop 驱动、不触宿主 API（同 WikiGroup / BotGroup）：清单 / 打开 / 打开目录 / 在文件夹中显示
  * 由宿主注入。树形派生在 knowledgeTree.ts（纯函数，可单测）。扫描是懒的：**首次展开才扫**
  * （宿主借此懒建根目录 —— 展开即用户意图），之后每次展开 + 窗口聚焦 + `knowledge.changed`
- * 事件（宿主观察到的 agent 写入）重扫，stale-guard 防乱序回包。顶层作用域目录默认展开、
- * 更深一层默认折叠 —— 用户要看的是条目，不是六个文件夹。
+ * 事件（宿主观察到的 agent 写入）重扫，stale-guard 防乱序回包。顶层（项目容器）默认展开、
+ * 每个项目 bundle 默认折叠 —— 用户要看的是条目，不是一列项目名。
  *
  * 动作全部收在菜单里（右键 / ⋮ 同一份）：组头 = 打开目录 / 刷新；行 = 在文件夹中显示 /
  * 复制路径。核实 / 标为过时等管理动作属管理页（未建），这里只让库**可见**。
@@ -58,10 +59,7 @@ export interface KnowledgeGroupProps {
 }
 
 const SCOPE_LABEL_KEY: Record<KnowledgeScopeDir, string> = {
-  global: 'knowledge.scopeGlobal',
-  projects: 'knowledge.scopeProjects',
-  sessions: 'knowledge.scopeSessions',
-  bots: 'knowledge.scopeBots'
+  projects: 'knowledge.scopeProjects'
 }
 
 /** 行缩进：基准同 SessionItem 的 pl-2.5（10px），每层再进 12px（与 WikiGroup 一致） */

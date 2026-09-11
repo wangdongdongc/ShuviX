@@ -158,10 +158,7 @@
     "session": "来源会话"
   },
   "knowledge": {
-    "scopeGlobal": "全局",
     "scopeProjects": "项目",
-    "scopeSessions": "会话",
-    "scopeBots": "Bots",
     "badgeDraft": "草稿 —— 尚未核实",
     "badgeVerified": "已核实",
     "badgeVerifiedOutdated": "核实后又被修改",

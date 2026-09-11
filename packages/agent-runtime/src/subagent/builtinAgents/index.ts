@@ -198,15 +198,17 @@ export const BOT_INTENT_SPEC: BuiltinProfileSpec = {
 }
 
 /**
- * 知识库写入侧（OKF，设计 docs/okf-knowledge-design.md §6.3）—— 派发执行：读 SCHEMA.md，
- * 经 `knowledge` 工具写条目。没有 git、没有提交协议、没有反链复查：簿记归宿主（P3），
- * 同意归策略 review-knowledge-writes，反链靠 lint。与旧 wiki-writer 并存，互不相干。
- * 依赖宿主的知识库根目录参数 —— 扩展端没有，自动跳过。
+ * 知识库写入侧（OKF，设计 docs/okf-knowledge-design.md §6.3）—— 派发执行：经 `knowledge` 工具
+ * 往**本会话所属项目的那个 bundle** 写条目。没有 git、没有提交协议、没有反链复查：簿记归宿主
+ * （P3）。与旧 wiki-writer 并存，互不相干。
+ *
+ * 不依赖任何宿主参数：它从不点名文件系统路径，目标由工具按会话解析。编辑规范（布局、类型
+ * 词汇表、写作规则）内联在这份提示词里 —— 库里不放用户可编辑的规范文件，那种文件一落盘就
+ * 再也更新不了，而 agent 又被要求遵循它。
  */
 export const KNOWLEDGE_WRITER_SPEC: BuiltinProfileSpec = {
   name: 'knowledge-writer',
-  sources: { en: knowledgeWriterEn, zh: knowledgeWriterZh, ja: knowledgeWriterJa },
-  requiredParams: ['knowledgeRoot']
+  sources: { en: knowledgeWriterEn, zh: knowledgeWriterZh, ja: knowledgeWriterJa }
 }
 
 /**

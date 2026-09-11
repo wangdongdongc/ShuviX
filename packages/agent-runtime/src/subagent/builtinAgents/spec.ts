@@ -26,7 +26,7 @@ export interface BuiltinProfileSpec {
   /** 各语言 md 原文（`?raw` 内联） */
   sources: BuiltinProfileSources
   /** md 正文/描述里的宿主参数名；deps 缺参时跳过本 agent */
-  requiredParams?: readonly ('widgetsRoot' | 'wikiRoot' | 'knowledgeRoot')[]
+  requiredParams?: readonly ('widgetsRoot' | 'wikiRoot')[]
 }
 
 export interface BuiltinProfileDeps {
@@ -37,7 +37,6 @@ export interface BuiltinProfileDeps {
   /** wiki 根目录；缺省时跳过 wiki agent */
   wikiRoot?: string
   /** OKF 知识库根目录（桌面 ~/.shuvix/knowledge）；缺省时跳过 knowledge-writer */
-  knowledgeRoot?: string
 }
 
 /**

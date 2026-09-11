@@ -22,12 +22,12 @@ import {
   type ToolContext
 } from '../services/toolContext'
 import { appEventBus } from '../utils/appEventBus'
-import { getKnowledgeRootDir } from '../utils/paths'
+import { getShuvixKnowledgeRootDir } from '../utils/paths'
 import { t } from '../i18n'
 
 /** 路径是否落在知识库根目录下（廉价前缀判定；根目录不存在时恒 false） */
 function isUnderKnowledgeRoot(portPath: string): boolean {
-  const root = getKnowledgeRootDir().replace(/\\/g, '/').replace(/\/+$/, '')
+  const root = getShuvixKnowledgeRootDir().replace(/\\/g, '/').replace(/\/+$/, '')
   return !!root && portPath.replace(/\\/g, '/').startsWith(`${root}/`)
 }
 
@@ -62,7 +62,7 @@ export function makeDesktopFileToolDeps(ctx: ToolContext, decoders?: ReadDecoder
     // 契约 md 写后盖章的溯源字段用它（派生 agent 的 ctx.sessionId 即根会话 id）
     sessionId: sid,
     // OKF 知识库分支：根目录下的 md 落盘后校验 + 盖 `generated`（actor 惰性取，模型可中途切换）
-    knowledge: { root: getKnowledgeRootDir(), actor: () => agentActorOf(ctx) },
+    knowledge: { root: getShuvixKnowledgeRootDir(), actor: () => agentActorOf(ctx) },
     decoders,
     abortError: TOOL_ABORTED,
     labels: { read: t('tool.readLabel'), write: t('tool.writeLabel'), edit: t('tool.editLabel') },

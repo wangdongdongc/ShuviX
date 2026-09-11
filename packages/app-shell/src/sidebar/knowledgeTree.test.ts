@@ -22,9 +22,10 @@ const stemOf = (path: string): string =>
     .slice(path.replace(/\\/g, '/').lastIndexOf('/') + 1)
     .replace(/\.(md|markdown|mdx)$/i, '')
 
+/** bundle 只影响条目的归属列，不影响树形派生 —— 树只看 path */
 const entry = (path: string, over: Partial<KnowledgeEntry> = {}): KnowledgeEntry => ({
   path,
-  scope: null,
+  bundle: path.split('/').slice(0, 2).join('/'),
   type: 'Memory',
   title: stemOf(path),
   description: '',
@@ -93,50 +94,29 @@ describe('buildKnowledgeTree — 根与顶层', () => {
   })
 
   /**
-   * 保留作用域只剩四个，其余顶层目录都是用户自建的：排在它们之后、按名排、`scopeDir` 为 null
-   * （UI 因此按目录名显示而不是取 i18n 固定文案）。`wiki` / `raw` 曾经是保留名字，如今与
-   * 任何自建目录同等 —— 这里顺带钉住它们不再享受任何特殊排序。
+   * 顶层只有一个固定文案的目录：项目 bundle 的容器 `projects/`（UI 按 scopeDir 取 i18n）。
+   * 别的顶层目录一律按目录名显示、排在它之后 —— 曾经的 global / sessions / bots / wiki / raw
+   * 五个保留名字都已退役，这里顺带钉住它们不再享受任何特殊待遇。
    */
-  it('KT-4 顶层固定序：全局 → 项目 → 会话 → Bots，自建目录殿后按名排；四个保留作用域带 scopeDir、自建的为 null', () => {
+  it('KT-4 顶层：projects 居首带 scopeDir，其余按名排、scopeDir 为 null', () => {
     const root = buildKnowledgeTree([
       entry('raw/r.md'),
       entry('wiki/t/w.md'),
       entry('bots/b/x.md'),
-      entry('sessions/s.md'),
       entry('projects/p/x.md'),
       entry('global/g.md'),
-      entry('zeta/z.md'),
       entry('archive/a.md')
     ])
-    expect(names(root)).toEqual([
-      'global',
-      'projects',
-      'sessions',
-      'bots',
-      'archive',
-      'raw',
-      'wiki',
-      'zeta'
-    ])
-    expect(root.dirs.map((d) => d.scopeDir)).toEqual([
-      'global',
-      'projects',
-      'sessions',
-      'bots',
-      null,
-      null,
-      null,
-      null
-    ])
+    expect(names(root)).toEqual(['projects', 'archive', 'bots', 'global', 'raw', 'wiki'])
+    expect(root.dirs.map((d) => d.scopeDir)).toEqual(['projects', null, null, null, null, null])
   })
 
-  it('KT-5 只画有文件的目录，中间链路物化：projects → acme（空文件、无标题、无固定文案）→ sessions（固定文案）；bots 下的 sessions 不是固定文案', () => {
-    expect(names(buildKnowledgeTree([entry('global/a.md')]))).toEqual(['global'])
-
-    const root = buildKnowledgeTree([entry('projects/acme/sessions/2026-09-01-s.md')])
+  it('KT-5 只画有文件的目录，中间链路物化：projects → acme（空文件、无标题）→ 子目录', () => {
+    const root = buildKnowledgeTree([entry('projects/acme/auth/session.md')])
     expect(names(root)).toEqual(['projects'])
     const projects = root.dirs[0]
     expect(projects.files).toEqual([])
+    expect(projects.scopeDir).toBe('projects')
     expect(names(projects)).toEqual(['acme'])
     const acme = projects.dirs[0]
     expect(acme).toMatchObject({
@@ -146,32 +126,16 @@ describe('buildKnowledgeTree — 根与顶层', () => {
       title: null,
       files: []
     })
-    expect(names(acme)).toEqual(['sessions'])
-    const sessions = acme.dirs[0]
-    expect(sessions).toMatchObject({
-      path: 'projects/acme/sessions',
-      name: 'sessions',
-      scopeDir: 'sessions',
-      title: null,
-      dirs: []
-    })
-    expect(paths(sessions)).toEqual(['projects/acme/sessions/2026-09-01-s.md'])
-
-    const botSessions = dirAt(
-      buildKnowledgeTree([entry('bots/helper/sessions/x.md')]),
-      'bots/helper/sessions'
-    )
-    expect(botSessions).toMatchObject({ path: 'bots/helper/sessions', scopeDir: null })
+    expect(names(acme)).toEqual(['auth'])
+    expect(acme.dirs[0].scopeDir).toBeNull()
   })
-})
 
-describe('buildKnowledgeTree — 章程 / 绑定概念', () => {
   it('KT-6 绑定概念给目录命名、置首、自己那行显示文件名 stem；其余行 label 即 title', () => {
     const root = buildKnowledgeTree([
       entry('projects/acme/notes.md', { title: 'Notes' }),
       entry('projects/acme/project.md', { type: 'Project', title: 'ACME Corp' }),
       entry('projects/acme/api.md', { title: 'API' }),
-      entry('bots/helper/bot.md', { type: 'Bot', title: 'Helper Bot' }),
+      entry('bots/helper/bot.md', { title: 'Helper Bot' }),
       entry('bots/helper/memo.md', { title: 'Memo' })
     ])
 
@@ -185,11 +149,11 @@ describe('buildKnowledgeTree — 章程 / 绑定概念', () => {
     expect(acme.files.map((f) => f.charter)).toEqual([true, false, false])
     expect(labels(acme)).toEqual(['project', 'API', 'Notes'])
 
+    // bots/ 已退役：`bot.md` 只是个普通条目，既不是章程也不给目录命名
     const helper = dirAt(root, 'bots/helper')
-    expect(helper.title).toBe('Helper Bot')
-    expect(paths(helper)).toEqual(['bots/helper/bot.md', 'bots/helper/memo.md'])
-    expect(helper.files.map((f) => f.charter)).toEqual([true, false])
-    expect(labels(helper)).toEqual(['bot', 'Memo'])
+    expect(helper.title).toBeNull()
+    expect(helper.files.map((f) => f.charter)).toEqual([false, false])
+    expect(labels(helper)).toEqual(['Helper Bot', 'Memo'])
   })
 
   it('KT-7 章程识别按位置：只有 projects/<slug>/project.md 与 bots/<name>/bot.md 算，同名文件放错层级 / 错目录一律不算、也不给目录命名', () => {

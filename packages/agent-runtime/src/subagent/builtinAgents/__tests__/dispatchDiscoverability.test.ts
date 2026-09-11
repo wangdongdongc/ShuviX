@@ -38,8 +38,7 @@ const build = (spec: BuiltinProfileSpec, language: string): AgentProfile =>
   buildBuiltinProfile(spec, {
     language,
     widgetsRoot: '/w',
-    wikiRoot: '/k',
-    knowledgeRoot: '/kb'
+    wikiRoot: '/k'
   }) as AgentProfile
 
 describe('派发清单点名了哪些 agent', () => {

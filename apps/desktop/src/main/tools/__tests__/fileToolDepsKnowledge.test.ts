@@ -1,8 +1,11 @@
 /**
  * 桌面文件工具 deps 的知识库接线（fileToolDeps.ts）—— 真实临时文件 + 真实 fileTime + 真实安全模块
- * （同 writeAskWiring.test 的 provider 桩），只把知识库根目录指到临时目录、把变更管线换成 spy：
- * 根目录下的 md 落盘后盖 `generated`（actor = agentActorOf(ctx)）并进 notifyKnowledgeFileChanged
- * （模块按需加载）；根目录外一切照旧。
+ * （同 writeAskWiring.test 的 provider 桩），只把 ShuviX 知识库根指到临时目录、把变更管线换成 spy：
+ * 该根下的 md 落盘后盖 `generated`（actor = agentActorOf(ctx)）并进 notifyKnowledgeFileChanged
+ * （模块按需加载）；根外一切照旧。
+ *
+ * 库上**没有任何内置策略**（等整体定型再设计），所以这里免询问开着就不该再弹卡 ——
+ * 盖章与变更管线跟安全模块是两件事，这条得分开钉住。
  */
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
@@ -34,12 +37,10 @@ vi.mock('../../services/toolContext', async () => {
           toolResultsBase: joinPath(state.dir, '.nonexistent-tool-results'),
           skillsDirs: [],
           memoryDirs: [],
-          knowledgeRoot: state.kb,
-          knowledgeSessionDirs: [],
           home: joinPath(state.dir, '.nonexistent-home'),
           systemDirs: []
         }),
-        // 免询问开着：普通写不问，知识库写仍被 review-knowledge-writes 拦下问一次
+        // 免询问开着：库上没有策略，所以知识库写也不问
         getSessionGrants: () => ({ autoAllow: true, allowList: [] }),
         isDirectory: () => false,
         persistGrant: () => {},
@@ -64,7 +65,7 @@ vi.mock('../../i18n', () => ({ t: (k: string) => k }))
 vi.mock('../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {} })
 }))
-vi.mock('../../utils/paths', () => ({ getKnowledgeRootDir: () => state.kb }))
+vi.mock('../../utils/paths', () => ({ getShuvixKnowledgeRootDir: () => state.kb }))
 vi.mock('../../services/knowledge', () => ({ notifyKnowledgeFileChanged: state.notify }))
 
 import { makeWriteTool } from '../write'
@@ -96,7 +97,7 @@ const textOf = (res: { content: unknown[] }): string => (res.content[0] as { tex
 beforeAll(() => {
   state.dir = mkdtempSync(join(tmpdir(), 'shuvix-filetool-kb-'))
   state.kb = join(state.dir, 'kb')
-  mkdirSync(join(state.kb, 'global'), { recursive: true })
+  mkdirSync(join(state.kb, 'projects', 'acme'), { recursive: true })
 })
 afterAll(() => rmSync(state.dir, { recursive: true, force: true }))
 beforeEach(() => {
@@ -107,14 +108,12 @@ beforeEach(() => {
 })
 
 describe('桌面文件工具 — 知识库根目录下的写入', () => {
-  it('FD-1 write：过一张 force-ask 卡后落盘并盖 generated（actor 取自 ctx.agent）、回执 [OKF] Stamped、变更管线收到 write；edit 收到 edit', async () => {
-    const p = join(state.kb, 'global', 'x.md')
+  it('FD-1 write：落盘并盖 generated（actor 取自 ctx.agent）、回执 [OKF] Stamped、变更管线收到 write；edit 收到 edit；库上无策略故不弹卡', async () => {
+    const p = join(state.kb, 'projects', 'acme', 'x.md')
     const res = await makeWriteTool(ctx).execute('w1', { path: p, content: DRAFT })
 
-    expect(state.requests).toHaveLength(1)
-    const req = state.requests[0]
-    if (req.kind !== 'ask') throw new Error('expected an ask request')
-    expect(req.command).toBe(`Write(${p})`)
+    // 库上没有内置策略：免询问开着，知识库写与普通写一样不问
+    expect(state.requests).toEqual([])
 
     expect(readFileSync(p, 'utf-8')).toContain('generated: { by: "shuvix-work/gpt-5", at: "')
     expect(textOf(res)).toContain('[OKF] Stamped')
@@ -129,7 +128,7 @@ describe('桌面文件工具 — 知识库根目录下的写入', () => {
     expect(readFileSync(p, 'utf-8')).toContain('generated: { by: "shuvix-work/gpt-5", at: "')
   })
 
-  it('FD-2 根目录外的 md：不盖章、无回执、变更管线不收', async () => {
+  it('FD-2 根外的 md：不盖章、无回执、变更管线不收', async () => {
     const p = join(state.dir, 'plain.md')
     const res = await makeWriteTool(ctx).execute('w2', { path: p, content: DRAFT })
     expect(state.requests).toEqual([])

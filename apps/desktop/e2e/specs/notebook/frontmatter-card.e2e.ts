@@ -355,7 +355,7 @@ describe('frontmatter 属性卡', () => {
     )
     expect(selects.map((s) => s.key)).toEqual(['type', 'status'])
     expect(selects[0]).toMatchObject({ value: 'Memory' })
-    expect(selects[0].options).toContain('Session Summary')
+    expect(selects[0].options).toContain('Decision')
     expect(selects[0].options).not.toContain('concept') // wiki 的条目类型枚举
     expect(selects[1]).toMatchObject({ value: 'draft', options: ['draft', 'stable', 'deprecated'] })
 

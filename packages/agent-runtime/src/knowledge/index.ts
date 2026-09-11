@@ -1,6 +1,9 @@
 /**
- * 知识库 v2（OKF）—— 宿主无关的核心：编解码、概念文件、作用域路径算术、保留文件投影、
+ * 知识库 v2（OKF）—— 宿主无关的核心：编解码、概念文件、bundle 内路径算术、保留文件投影、
  * 一致性校验、`knowledge` 工具。设计见 docs/okf-knowledge-design.md。
+ *
+ * **一个绑定实体一个 bundle**：本模块里凡是「路径」都是 **bundle 相对**的，谁是哪个 bundle
+ * 由宿主回答。跨 bundle 的引用走 `shuvix://` URI，不走路径。
  *
  * **没有注入面**：把条目自动喂进系统提示词的机制（原 `<knowledge>` 围栏与 agent md 键
  * `shuvix-knowledge`）已整体撤除 —— 怎么注入还没想清楚，留待重新设计。今天 agent 只能
@@ -39,19 +42,7 @@ export {
   type KnowledgeStamp,
   type ConceptBuildInput
 } from './conceptFile'
-export {
-  scopeDir,
-  scopeOfPath,
-  scopeKindOfPath,
-  isSessionScopePath,
-  normalizeBundlePath,
-  escapesBundle,
-  slugify,
-  sessionSummaryFileName,
-  dedupeFileName,
-  scopeLabel,
-  type KnowledgeScope
-} from './scopes'
+export { normalizeBundlePath, escapesBundle, slugify, dedupeFileName } from './bundlePaths'
 export {
   renderAllIndexes,
   appendLogEntry,
@@ -80,7 +71,7 @@ export {
   type KnowledgeAction,
   type KnowledgeToolParams,
   type KnowledgeToolDeps,
-  type KnowledgeScopeTarget,
+  type KnowledgeBundleTarget,
   type KnowledgeSearchHit
 } from './knowledgeTool'
 export { toKnowledgeEntry } from './entryView'

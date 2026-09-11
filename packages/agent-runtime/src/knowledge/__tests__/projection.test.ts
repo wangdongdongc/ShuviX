@@ -51,76 +51,38 @@ describe('renderAllIndexes — 确定性', () => {
     expect(globalIndex.indexOf('[Z](Z.md)')).toBeLessThan(globalIndex.indexOf('[A](a.md)'))
   })
 
-  it('PJ-2 根 index：okf_version frontmatter，按固定序只列在场的作用域节，每节首行是作用域自己的 index，根级概念落 Bundle 节', () => {
+  /**
+   * 一个 bundle 的根 index 与子目录 index 同构（Entries 再 Sections），只多一份 `okf_version`
+   * frontmatter —— 它是「这是一个 OKF bundle」的声明。跨 bundle 的事投影一概不知道，
+   * 那正是 bundle 边界的意思。
+   */
+  it('PJ-2 bundle 根 index：okf_version frontmatter + Entries 再 Sections，与子目录同构', () => {
     const root = render([
-      concept('projects/acme/x.md', 'X', 'dx'),
-      concept('NOTES.md', 'Guide', 'ds'),
-      concept('global/a.md', 'A', 'da')
+      concept('project.md', 'Acme Corp', 'binds'),
+      concept('token-refresh.md', 'Token refresh', 'dt'),
+      concept('auth/session.md', 'Session', 'ds')
     ]).get('')!
-    expect(root.startsWith('---\nokf_version: "0.2"\n---\n\n')).toBe(true)
     expect(root).toBe(
       [
         '---',
         'okf_version: "0.2"',
         '---',
         '',
-        '## Global memory',
+        '## Entries',
         '',
-        '* [Global memory](global/index.md)',
-        '* [A](global/a.md) - da',
+        '* [Acme Corp](project.md) - binds',
+        '* [Token refresh](token-refresh.md) - dt',
         '',
-        '## Projects',
+        '## Sections',
         '',
-        '* [Projects](projects/index.md)',
-        '* [acme](projects/acme/index.md)',
-        '',
-        '## Bundle',
-        '',
-        '* [Guide](NOTES.md) - ds',
+        '* [auth](auth/index.md)',
         ''
       ].join('\n')
     )
-    for (const absent of ['## Sessions', '## Bots']) {
+    // 作用域分节随目录作用域一起退役：一个 bundle 只有它自己的条目与子目录
+    for (const absent of ['## Global memory', '## Projects', '## Bundle']) {
       expect(root).not.toContain(absent)
     }
-  })
-
-  /**
-   * 用户自建的顶层目录也要从根 index 进得去。保留作用域只剩四个，策展知识这类东西如今就住在
-   * 自建目录里 —— 根 index 不列它们的话，从根走进 bundle 的读者（含任何 OKF 消费者）永远
-   * 看不见它们，只有侧栏能看见。排在保留作用域之后、按目录名分节。
-   */
-  it('PJ-2 用户自建顶层目录同样成节：排在保留作用域之后、按目录名，形状与作用域节一致', () => {
-    const root = render([
-      concept('zeta/z.md', 'Z', 'dz'),
-      concept('global/a.md', 'A', 'da'),
-      concept('research/okf/notes.md', 'N', 'dn'),
-      concept('research/r.md', 'R', 'dr')
-    ]).get('')!
-    expect(root).toBe(
-      [
-        '---',
-        'okf_version: "0.2"',
-        '---',
-        '',
-        '## Global memory',
-        '',
-        '* [Global memory](global/index.md)',
-        '* [A](global/a.md) - da',
-        '',
-        '## research',
-        '',
-        '* [research](research/index.md)',
-        '* [R](research/r.md) - dr',
-        '* [okf](research/okf/index.md)',
-        '',
-        '## zeta',
-        '',
-        '* [zeta](zeta/index.md)',
-        '* [Z](zeta/z.md) - dz',
-        ''
-      ].join('\n')
-    )
   })
 
   it('PJ-3 子目录 index：Entries（目录相对路径）再 Sections；绑定概念的 title 命名目录；非根 index 不带 frontmatter', () => {
@@ -134,14 +96,15 @@ describe('renderAllIndexes — 确定性', () => {
     )
     expect(map.get('projects')).toBe('## Sections\n\n* [Acme Corp](acme/index.md)\n')
     expect(map.get('projects/acme/sessions')).toBe('## Entries\n\n* [S](s.md) - ds\n')
-    expect(map.get('')).toContain(
-      '## Projects\n\n* [Projects](projects/index.md)\n* [Acme Corp](projects/acme/index.md)\n'
+    // bundle 根同样是 Entries / Sections —— 只多 frontmatter
+    expect(map.get('')).toBe(
+      '---\nokf_version: "0.2"\n---\n\n## Sections\n\n* [projects](projects/index.md)\n'
     )
     for (const [dir, text] of map) {
       if (dir !== '') expect(text.startsWith('---'), dir).toBe(false)
     }
     // 没有绑定概念的目录用目录名
-    expect(render([concept('bots/alice/b.md', 'B')]).get('bots')).toBe(
+    expect(render([concept('auth/alice/b.md', 'B')]).get('auth')).toBe(
       '## Sections\n\n* [alice](alice/index.md)\n'
     )
   })

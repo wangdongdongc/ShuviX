@@ -4,7 +4,7 @@
 
 import { join, resolve, dirname, delimiter } from 'path'
 import { homedir } from 'os'
-import { mkdirSync, existsSync, readdirSync } from 'fs'
+import { mkdirSync, existsSync } from 'fs'
 import { app } from 'electron'
 
 /** 确保目录存在并返回路径 */
@@ -97,30 +97,18 @@ export function getDefaultWikisDir(): string {
 }
 
 /**
- * 知识库 v2（OKF bundle）根目录：~/.shuvix/knowledge（不自动创建 —— 首次写入或首次打开入口
- * 才由 services/knowledge 懒建；与旧 wiki 根目录并存、互不相干）。
+ * 知识库 v2 的两个根（都不自动创建 —— 首次写入或首次打开入口才由 services/knowledge 懒建；
+ * 与旧 wiki 根目录并存、互不相干）。
+ *
+ * ShuviX 维护的那个根（容器）：一个绑定实体一个 bundle，全套簿记归宿主。
  */
-export function getKnowledgeRootDir(): string {
-  return join(homedir(), '.shuvix', 'knowledge')
+export function getShuvixKnowledgeRootDir(): string {
+  return join(homedir(), '.shuvix', 'knowledge-shuvix')
 }
 
-/**
- * 知识库里的会话摘要目录（策略变量 `vars.knowledgeSessionDirs`：这些目录下的写入免询问，
- * 由工作流滚动维护）：顶层 `sessions/` + 每个 `projects/<slug>/sessions/`。
- * 每次评估现读（策略变量表禁缓存）；根目录不存在返回空数组。
- */
-export function listKnowledgeSessionDirs(): string[] {
-  const root = getKnowledgeRootDir()
-  const dirs = [join(root, 'sessions')]
-  const projectsDir = join(root, 'projects')
-  try {
-    for (const entry of readdirSync(projectsDir, { withFileTypes: true })) {
-      if (entry.isDirectory()) dirs.push(join(projectsDir, entry.name, 'sessions'))
-    }
-  } catch {
-    /* 没有 projects/ 目录：只有顶层 sessions/ */
-  }
-  return dirs
+/** 用户自己的知识库根（容器）：每个子目录是一个独立 bundle，宿主只读只搜 */
+export function getUserKnowledgeRootDir(): string {
+  return join(homedir(), '.shuvix', 'knowledge')
 }
 
 /**
