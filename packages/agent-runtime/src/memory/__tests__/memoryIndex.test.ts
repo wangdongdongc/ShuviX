@@ -102,23 +102,28 @@ describe('表头的召回指令', () => {
 })
 
 describe('退化输入', () => {
-  it('零条记忆时仍输出写入段 —— 否则记忆库永远无法从空启动', () => {
-    const out = renderMemoryIndex([], ROOT)
-    expect(out).toContain('## Writing')
-    expect(out).toContain(ROOT)
-    expect(out).not.toContain('## Index')
+  it('零条记忆时整段为空 —— 库只读之后，空库既无可召回也无可引导', () => {
+    expect(renderMemoryIndex([], ROOT)).toBe('')
   })
 
   it('没有召回条件时给出占位而不是空尾巴', () => {
     const out = renderMemoryIndex([mem('a', 'A')], ROOT)
     // 只看索引段：表头本身有一行以破折号收尾，别把它算进来
-    const index = out.slice(out.indexOf('## Index'), out.indexOf('## Writing'))
+    const index = out.slice(out.indexOf('## Index'))
     expect(index).toContain('`a.md`')
     expect(index).not.toMatch(/—\s*$/m)
     expect(index).toContain('(no recall condition recorded)')
   })
+})
 
-  it('写入段点明文件名就是后续的寻址方式', () => {
-    expect(renderMemoryIndex([], ROOT)).toMatch(/file name IS how the\s*\n?memory is addressed/)
+describe('只读声明（写入面已交给新知识库）', () => {
+  it('表头声明只读并指向知识库；不再有任何写入段', () => {
+    const out = renderMemoryIndex([mem('a', 'A', { recall: 'r' })], ROOT)
+    expect(out).toMatch(/read-only/)
+    expect(out).toContain('knowledge base')
+    expect(out).not.toContain('## Writing')
+    // 旧写入段的两处特征文案：一处都不该剩下（剩下就是在教一个已经关掉的写入路）
+    expect(out).not.toContain('shuvix: memory v1')
+    expect(out).not.toMatch(/file name IS how the/)
   })
 })

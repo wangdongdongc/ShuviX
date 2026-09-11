@@ -79,3 +79,4 @@ export {
   type KnowledgeSearchHit
 } from './knowledgeTool'
 export { toKnowledgeEntry } from './entryView'
+export { renderKnowledgeGuide } from './knowledgeGuide'

@@ -9,11 +9,12 @@
  * 索引是**注入时现扫现渲染**的，不落地成文件：物理索引文件会与正文漂移（改了正文忘改
  * 索引是常态），现扫就没有第二份真相、没有第二次写入、没有索引维护。
  *
- * 写入段落放在围栏内而不是 agent md 正文里：它必须跟着 `shuvix-project-awareness` 开关
- * 一起来一起走，否则关掉开关后写入指令还在，会指向一个不注入的目录。**零条记忆时也要
- * 输出这一段** —— 否则记忆库永远无法从空启动。
+ * **只读（2026-09-11）**：新的知识库接手了「值得带到以后会话」这件事，这个库不再写入 ——
+ * 写入段落整段删除，表头改为声明只读并指向知识库。于是**零条记忆时整段不输出**：没有可召回的
+ * 东西，也没有要引导的写入，再印一句「还没有记忆」只是每会话白付的字。
+ * 已有的条目继续注入：它们是真的知识，重写一遍没有收益；改正与延伸去知识库里做。
  *
- * 两条措辞是实测定下来的，别当成随手写的散文（Kimi API，N=20，任务明显该召回时看
+ * 留下的两条措辞是实测定下来的，别当成随手写的散文（Kimi API，N=20，任务明显该召回时看
  * 模型是否 read 记忆、路径对不对）：
  *
  *   条目标识用 frontmatter 的 name（旧）   召回 65%   路径正确  0%
@@ -26,24 +27,10 @@
  * 路径正确率 0% 不是概率问题：旧实现只把 name 交给模型，而 name 取自 frontmatter、
  * 与文件名会漂（模型写记忆时很自然填一句人话），它于是无从知道 slug。
  *
- * 文案刻意压到最短：它每个会话必付。写入格式用一行键名列举而非缩进模板 —— 解析器只硬性
- * 要求 frontmatter 存在，键写漏了只会得到空字段而非整份判废，不值得为它铺八行样例。
+ * 文案刻意压到最短：它每个会话必付。
  * 英文：模型面文本，与内置策略的 en 基准同源；用户可见的中日文案不走这里。
  */
 import type { ParsedMemoryFile } from './memoryFile'
-
-const WRITING = `## Writing
-
-Worth carrying into later sessions? Write <root>/<slug>.md — the file name IS how the
-memory is addressed later, so make it a short kebab-case slug. YAML frontmatter with
-\`shuvix: memory v1\`, \`name\`, \`description\`, and \`shuvix-memory-recall\` (one line: when
-this is worth opening), then the memory itself and why it holds.
-
-Edit an existing memory rather than adding a near-duplicate; delete one that turns out
-to be wrong. Do not record what the repository already states (code structure, bugs you
-fixed, git history, the instruction file), or what only matters to this conversation —
-when asked to remember those, record only the part that was not obvious. Every write
-asks the user first.`
 
 /** 日期戳；无 updated 时不带括号 */
 function stamp(m: ParsedMemoryFile): string {
@@ -52,22 +39,21 @@ function stamp(m: ParsedMemoryFile): string {
 
 /**
  * 渲染围栏正文。`memoryDir` 为该项目的记忆目录绝对路径（表头引用一次）。
- * 恒返回非空字符串 —— 零条记忆时只有一句说明与写入段。
+ * 零条记忆返回空串 —— 调用方据此整段不注入。
  */
 export function renderMemoryIndex(
   memories: readonly ParsedMemoryFile[],
   memoryDir: string
 ): string {
+  if (memories.length === 0) return ''
+
   const root = memoryDir.replace(/[/\\]+$/, '')
   const pinned = memories.filter((m) => m.pinned)
   const indexed = memories.filter((m) => !m.pinned)
-
   const sections: string[] = []
 
   sections.push(
-    memories.length > 0
-      ? `Things learned earlier on this project. Each records what was true when written —\nverify any code detail against the current code before relying on it. The index gives\nthe file name and when it is worth opening. Before you start work, check whether any\nentry matches what you are about to touch — an entry you skipped is a mistake you are\nabout to repeat. Read one with \`read\` at ${root}/<file>.`
-      : `No memories recorded for this project yet. Root: ${root}`
+    `Things learned earlier on this project, kept in a retired store — **read-only**: never\nwrite or edit here, put a correction or anything new in the knowledge base instead. Each\nentry records what was true when written; verify any code detail against the current code\nbefore relying on it. Before you start work, check whether any entry matches what you are\nabout to touch — an entry you skipped is a mistake you are about to repeat. Read one with\n\`read\` at ${root}/<file>.`
   )
 
   if (pinned.length > 0) {
@@ -87,8 +73,6 @@ export function renderMemoryIndex(
     )
     sections.push(`## Index\n\n${lines.join('\n')}`)
   }
-
-  sections.push(WRITING.replace('<root>/<slug>.md', `${root}/<slug>.md`))
 
   return sections.join('\n\n')
 }

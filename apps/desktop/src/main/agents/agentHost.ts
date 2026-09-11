@@ -16,6 +16,7 @@ import type { TSchema } from 'typebox'
 import {
   createAgentFactory,
   DISPATCH_TOOL_NAME,
+  renderKnowledgeGuide,
   type AgentHostAdapter,
   type AnyAgentTool,
   type PromptVars,
@@ -272,8 +273,12 @@ const desktopAgentHost: AgentHostAdapter = {
     return sessionProject(sessionId)?.systemPrompt?.trim() || null
   },
   // 无项目会话返回 null（不注入）—— 与项目提示词同一种降级
-  resolveProjectMemory: (sessionId) => resolveProjectMemoryIndex(sessionId)
-  // 知识库围栏（profile.knowledge 门控；为真时替代项目记忆索引 —— 设计 D3）
+  resolveProjectMemory: (sessionId) => resolveProjectMemoryIndex(sessionId),
+  // 知识库引导：文案是静态的（不扫库、不数条目、不给路径 —— 路径只由 knowledge 工具的
+  // locate 发放），这里只判「本会话属不属于某个项目」。档案带不带 knowledge 工具那道门
+  // 在 createAgent 里
+  resolveProjectKnowledge: (sessionId) =>
+    sessionProject(sessionId) ? renderKnowledgeGuide() : null
 }
 
 /** 桌面唯一 agent 工厂：根会话（AgentSession）与派生（AgentManager）共用 */

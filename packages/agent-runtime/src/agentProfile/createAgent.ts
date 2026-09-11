@@ -24,6 +24,7 @@ import type { AgentTool, ExecutionEnv } from '@earendil-works/pi-agent-core'
 import type { Api, Model } from '@earendil-works/pi-ai'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import type { ThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
+import { KNOWLEDGE_TOOL_NAME } from '../knowledge/knowledgeTool'
 import { HarnessSession } from '../harness/harnessSession'
 import { agentRuntimeRegistry } from '../runtimeRegistry'
 import { createModelsAdapter } from '../harness/modelsAdapter'
@@ -147,6 +148,17 @@ export interface AgentHostAdapter {
    * 与 resolveProjectPrompt 同源，而非像指令文件那样按 cwd 扫盘。
    */
   resolveProjectMemory?: (rootSessionId: string) => string | null | Promise<string | null>
+  /**
+   * 项目知识库引导解析（`profile.projectAwareness` **且**档案带 `knowledge` 工具时调用）：
+   * 返回围栏正文或 null，围栏由 fenceProjectKnowledge 统一加。
+   *
+   * 比另两段多一道工具清单的门：这段文案通篇在教 `knowledge` 工具怎么用，档案不带这个工具时
+   * 注入它就是在教一个够不着的东西 —— 同「关掉项目感知后写入指令还指着不注入的目录」那类错误。
+   *
+   * 只收 rootSessionId：库按项目绑定（无项目会话解析为 null），与另两段同源。
+   * **不含任何条目** —— 条目怎么进系统提示词是尚未决定的设计，这里只讲库的存在与入口。
+   */
+  resolveProjectKnowledge?: (rootSessionId: string) => string | null | Promise<string | null>
 }
 
 export interface CreateAgentParams {
@@ -227,6 +239,9 @@ const fenceProjectPrompt = (text: string): string => `<project_prompt>\n${text}\
 
 const fenceProjectMemory = (text: string): string => `<project_memory>\n${text}\n</project_memory>`
 
+const fenceProjectKnowledge = (text: string): string =>
+  `<project_knowledge>\n${text}\n</project_knowledge>`
+
 /** 会话级工具（用户能在工具选择器里勾选的那两类）；其余为内置工具名 + 'agent' */
 const isSessionScopedTool = (name: string): boolean =>
   name.startsWith('mcp:') || name.startsWith('skill:')
@@ -300,7 +315,8 @@ export function createAgentFactory(host: AgentHostAdapter): AgentFactory {
       await host.promptVars({ sessionId, kind, cwd }),
       host.logger
     )
-    // 上下文注入：直接 append 到系统提示词（指令文件 → 项目提示词 → 项目记忆），不落独立消息。
+    // 上下文注入：直接 append 到系统提示词（指令文件 → 项目提示词 → 项目知识库 → 项目记忆），
+    // 不落独立消息。
     // 顺序不声明优先级（同 fence 注释）—— 只是固定的拼接次序。
     // 系统提示词不参与滚动压缩，天然免重注入；root/spawned 同管线，派生按根会话解析。
     if (profile.instructionFiles?.length && host.resolveInstruction) {
@@ -309,12 +325,17 @@ export function createAgentFactory(host: AgentHostAdapter): AgentFactory {
         systemPrompt += `\n\n${fenceInstructionFile(resolved.filename, resolved.content)}`
       }
     }
-    // 项目感知一个开关带两段注入：数据源与围栏各自独立，但「要不要知道自己在哪个项目里」
-    // 只是一个决定；宿主未实现某个 seam（扩展端无项目记忆）时那一段自然缺席。
+    // 项目感知一个开关带三段注入：数据源与围栏各自独立，但「要不要知道自己在哪个项目里」
+    // 只是一个决定；宿主未实现某个 seam（扩展端无项目记忆、无知识库）时那一段自然缺席。
     if (profile.projectAwareness) {
       if (host.resolveProjectPrompt) {
         const text = (await host.resolveProjectPrompt(rootSessionId))?.trim()
         if (text) systemPrompt += `\n\n${fenceProjectPrompt(text)}`
+      }
+      // 知识库在前、项目记忆在后：前者是在用的库，后者是只读的旧档 —— 旧档的表头指回前者
+      if (host.resolveProjectKnowledge && profile.tools?.includes(KNOWLEDGE_TOOL_NAME)) {
+        const text = (await host.resolveProjectKnowledge(rootSessionId))?.trim()
+        if (text) systemPrompt += `\n\n${fenceProjectKnowledge(text)}`
       }
       if (host.resolveProjectMemory) {
         const text = (await host.resolveProjectMemory(rootSessionId))?.trim()
