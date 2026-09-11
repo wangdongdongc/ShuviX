@@ -1,13 +1,13 @@
 /**
- * knowledge 工具 —— 知识库的结构化读写面（设计 §6.1，决策 D4）。
+ * knowledge 工具 —— 知识库的**读侧**面（设计 §6.1，决策 D4）。
  *
- * 宿主无关：文件经内存 port，bundle 解析 / 扫描 / 检索 / 写后处理全部由用例注入。钉四件事：
- * agent 面的枚举（尤其是 set-status 不能标 stable —— schema 与运行时各守一遍）、路径守卫表、
- * 各 action 的回执文本与 details，以及 write / set-status 以目标**绝对路径**过与文件写入
- * 同一道 PEP（将来给知识库写策略时，工具与直写文件因此同时被盖住）。
+ * 它不写文件：条目由 agent 用普通 write/edit 写出来。本文件因此钉的是读侧那几件 ——
+ * agent 面的枚举、路径守卫表、各 action 的回执文本与 details，以及 read / validate 以目标
+ * **绝对路径**过与文件读取同一道 PEP（将来给知识库写策略时两侧同时被盖住）。
  *
  * **作用域就是一个 bundle**：本会话所属项目的那一个，由宿主的 `resolveBundle` 给出，
- * 所以工具没有 scope 参数，路径一律 bundle 相对。
+ * 所以工具没有 scope 参数，路径一律 bundle 相对；回执表头点名 bundle 的绝对目录，
+ * 因为 agent 要拿它拼出 write/edit 用的路径。
  */
 import { describe, it, expect, vi, type Mock } from 'vitest'
 import type { AgentToolResult } from '@earendil-works/pi-agent-core'
@@ -23,14 +23,10 @@ import {
   type KnowledgeSearchHit,
   type KnowledgeToolParams
 } from '../knowledgeTool'
-import { isReservedFile } from '../validate'
+import { isReservedFile, type BundleFile } from '../validate'
 
 /** 本会话的那一个 bundle（项目 bundle 的绝对目录） */
 const ROOT = '/kb/projects/acme'
-const NOW = new Date('2026-09-09T08:12:03.000Z')
-const ACTOR = 'shuvix-work/gpt-5'
-const STAMP = 'generated: { by: "shuvix-work/gpt-5", at: "2026-09-09T08:12:03.000Z" }'
-
 /** 一份概念文本：frontmatter 行 + 正文（尾随换行，同 conceptFile.test 的 doc 惯例） */
 const doc = (frontmatter: string[], body = 'body'): string =>
   ['---', ...frontmatter, '---', '', body, ''].join('\n')
@@ -58,8 +54,7 @@ interface Harness {
   files: Map<string, string>
   enforcePath: Mock
   resolveBundle: Mock
-  afterWrite: Mock
-  /** 调用顺序流水：`enforce:<mode>:<abs>` / `write:<abs>` —— 钉「先过门再落盘」 */
+  /** 调用顺序流水：`enforce:<mode>:<abs>` / `write:<abs>` */
   calls: string[]
   run: (id: string, params: KnowledgeToolParams, signal?: AbortSignal) => Promise<Result>
 }
@@ -95,17 +90,22 @@ function memoryPort(files: Map<string, string>, calls: string[]): FileSystemPort
   }
 }
 
-/** 宿主扫描的替身：把 port 里根目录下的概念解析出来（保留文件与非概念不算） */
-function conceptsOf(files: Map<string, string>): KnowledgeConcept[] {
-  const out: KnowledgeConcept[] = []
+/** 宿主扫描的替身：bundle 下的全部 md 原文 + 解析得出的概念（保留文件与非概念不算概念） */
+function scanOf(files: Map<string, string>): {
+  files: BundleFile[]
+  concepts: KnowledgeConcept[]
+} {
+  const all: BundleFile[] = []
+  const concepts: KnowledgeConcept[] = []
   for (const [abs, text] of files) {
     if (!abs.startsWith(`${ROOT}/`)) continue
     const rel = abs.slice(ROOT.length + 1)
+    all.push({ path: rel, text })
     if (isReservedFile(rel)) continue
     const concept = parseConceptText(text, rel)
-    if (concept) out.push(concept)
+    if (concept) concepts.push(concept)
   }
-  return out
+  return { files: all, concepts }
 }
 
 function makeTool(opts: ToolOptions = {}): Harness {
@@ -116,16 +116,12 @@ function makeTool(opts: ToolOptions = {}): Harness {
   })
   const security = opts.security ?? ({ enforcePath } as unknown as SecurityContext)
   const resolveBundle = vi.fn(async () => opts.bundle ?? BUNDLE)
-  const afterWrite = vi.fn()
   const tool = createKnowledgeTool({
     port: memoryPort(files, calls),
     security,
-    listConcepts: async () => conceptsOf(files),
+    scan: async () => scanOf(files),
     resolveBundle,
     search: opts.search,
-    actor: () => ACTOR,
-    now: () => NOW,
-    afterWrite,
     abortError: opts.abortError,
     label: 'Knowledge'
   })
@@ -134,7 +130,6 @@ function makeTool(opts: ToolOptions = {}): Harness {
     files,
     enforcePath,
     resolveBundle,
-    afterWrite,
     calls,
     run: (id, params, signal) => tool.execute(id, params, signal)
   }
@@ -146,20 +141,24 @@ describe('KT-1 schema 枚举与运行时守卫', () => {
     { enum?: string[]; description?: string }
   >
 
-  it('KT-1 action / status 两个枚举钉死、没有 scope 参数；type 的描述列出全部词汇表；工具名与标签', () => {
+  it('KT-1 action 枚举钉死（只读五个，没有 write / set-status）、没有 scope 参数；工具名与标签', () => {
     expect(KNOWLEDGE_TOOL_NAME).toBe('knowledge')
     const { tool } = makeTool()
     expect(tool.name).toBe('knowledge')
     expect(tool.label).toBe('Knowledge')
-    expect(props.action.enum).toEqual(['search', 'read', 'write', 'set-status', 'list'])
+    expect(props.action.enum).toEqual(['search', 'list', 'read', 'validate', 'locate'])
     // 作用域就是本会话的那一个 bundle，没有可选项 —— 参数因此不存在
     expect(props.scope).toBeUndefined()
-    // agent 只能标 draft / deprecated —— stable 只有用户能设
-    expect(props.status.enum).toEqual(['draft', 'deprecated'])
-    for (const type of KNOWLEDGE_TYPES) expect(props.type.description, type).toContain(type)
+    // 写入面整体不在这里：条目用普通 write/edit 写
+    for (const gone of ['type', 'title', 'description', 'body', 'tags', 'sources', 'status']) {
+      if (gone === 'title') continue // locate 借用同名参数表达「我要建这个标题的条目」
+      expect(props[gone], gone).toBeUndefined()
+    }
+    // 但词汇表仍要到得了模型面 —— frontmatter 现在是它自己写的
+    for (const type of KNOWLEDGE_TYPES) expect(tool.description, type).toContain(type)
   })
 
-  it('KT-1 preExecute / securityCheck 不碰 PEP（逐 action 在内部按算出的路径过）；越过 schema 传 stable 也被运行时拒绝、不写文件', async () => {
+  it('KT-1 preExecute / securityCheck 不碰 PEP（逐 action 在内部按算出的路径过），且任何 action 都不写文件', async () => {
     const h = makeTool({
       files: {
         '/kb/projects/acme/a.md': doc([
@@ -175,37 +174,37 @@ describe('KT-1 schema 枚举与运行时守卫', () => {
     expect(h.enforcePath).not.toHaveBeenCalled()
 
     const before = h.files.get('/kb/projects/acme/a.md')
-    await expect(
-      h.run('c2', {
-        action: 'set-status',
-        path: '/a.md',
-        status: 'stable' as unknown as 'draft'
-      })
-    ).rejects.toThrow('only the user can make an entry stable')
+    for (const params of [
+      { action: 'read' as const, path: '/a.md' },
+      { action: 'validate' as const, path: '/a.md' },
+      { action: 'validate' as const },
+      { action: 'locate' as const, title: 'A' }
+    ]) {
+      await h.run('c2', params)
+    }
     expect(h.files.get('/kb/projects/acme/a.md')).toBe(before)
-    expect(h.calls).toEqual([])
-    expect(h.afterWrite).not.toHaveBeenCalled()
+    expect(h.calls.filter((c) => c.startsWith('write:'))).toEqual([])
   })
 })
 
 describe('KT-2 路径守卫表', () => {
-  const RESERVED = 'reserved file maintained by the host'
   const table: [string, KnowledgeToolParams, string][] = [
     ['read /', { action: 'read', path: '/' }, 'not inside the knowledge base'],
     ['read ../etc/x.md', { action: 'read', path: '../etc/x.md' }, 'not inside the knowledge base'],
-    ['read /global/x.txt', { action: 'read', path: '/global/x.txt' }, 'not a markdown entry (.md)'],
-    ['write /log.md', { action: 'write', path: '/log.md', body: 'b' }, RESERVED],
-    ['write /index.md', { action: 'write', path: '/index.md', body: 'b' }, RESERVED],
-    ['set-status /index.md', { action: 'set-status', path: '/index.md', status: 'draft' }, RESERVED]
+    ['read /sub/x.txt', { action: 'read', path: '/sub/x.txt' }, 'not a markdown entry (.md)'],
+    [
+      'validate ../etc/x.md',
+      { action: 'validate', path: '../etc/x.md' },
+      'not inside the knowledge base'
+    ]
   ]
 
-  it.each(table)('KT-2 %s → 拒绝，且不过 PEP、不写文件', async (_label, params, message) => {
+  it.each(table)('KT-2 %s → 拒绝，且不过 PEP', async (_label, params, message) => {
     const h = makeTool({
       files: { '/kb/projects/acme/log.md': '## 2026-09-09\n', '/kb/projects/acme/index.md': '' }
     })
     await expect(h.run('c1', params)).rejects.toThrow(message)
     expect(h.calls).toEqual([])
-    expect(h.afterWrite).not.toHaveBeenCalled()
   })
 
   it('KT-2 读保留文件允许（index.md 正是给 agent 看的）；已中止的 signal → 抛注入的 abortError', async () => {
@@ -214,7 +213,7 @@ describe('KT-2 路径守卫表', () => {
       abortError: 'TOOL_ABORTED'
     })
     const res = await h.run('c1', { action: 'read', path: '/index.md' })
-    expect(textOf(res)).toBe('/index.md:\n\n## Entries\n\n* [A](a.md)')
+    expect(textOf(res)).toBe('/kb/projects/acme/index.md:\n\n## Entries\n\n* [A](a.md)')
 
     const ac = new AbortController()
     ac.abort()
@@ -232,7 +231,9 @@ describe('KT-3 search —— 注入的检索（宿主 okf-minisearch）', () => 
     const res = await h.run('c1', { action: 'search', query: 'q' })
     expect(h.resolveBundle).toHaveBeenCalledWith({ create: false })
     expect(search).toHaveBeenCalledWith('q', { limit: 20, bundleDir: ROOT })
-    expect(textOf(res)).toBe('2 result(s) for "q":\n- /a.md (draft) — d\n  s\n- /b.md — B')
+    expect(textOf(res)).toBe(
+      `2 result(s) for "q" in project "Acme" — ${ROOT}:\n- /a.md (draft) — d\n  s\n- /b.md — B`
+    )
     expect(res.details).toEqual({ action: 'search' })
     expect(h.enforcePath).not.toHaveBeenCalled()
   })
@@ -285,7 +286,7 @@ describe('KT-4 search —— 缺省子串检索（无 search 注入）', () => {
     const all = await h.run('c1', { action: 'search', query: 'token' })
     expect(textOf(all)).toBe(
       [
-        '4 result(s) for "token":',
+        `4 result(s) for "token" in project "Acme" — ${ROOT}:`,
         '- /a.md (draft, 2026-09-09) — da',
         '- /b.md — db',
         '- /c.md — dc',
@@ -293,7 +294,9 @@ describe('KT-4 search —— 缺省子串检索（无 search 注入）', () => {
       ].join('\n')
     )
     const capped = await h.run('c2', { action: 'search', query: 'Token', limit: 1 })
-    expect(textOf(capped)).toBe('4 result(s) for "Token":\n- /a.md (draft, 2026-09-09) — da')
+    expect(textOf(capped)).toBe(
+      `4 result(s) for "Token" in project "Acme" — ${ROOT}:\n- /a.md (draft, 2026-09-09) — da`
+    )
     expect(textOf(await h.run('c3', { action: 'search', query: 'zzz' }))).toBe(
       'No entries match "zzz".'
     )
@@ -317,16 +320,19 @@ describe('KT-5 list', () => {
       const h = makeTool({ files: FILES })
       expect(textOf(await h.run('c1', { action: 'list' }))).toBe(
         [
-          '3 entries in project "Acme":',
+          `3 entries in project "Acme" — ${ROOT}:`,
           '- /a.md (draft) — da',
           '- /b.md — db',
           '- /d.md (deprecated) — dd'
         ].join('\n')
       )
       expect(textOf(await h.run('c2', { action: 'list', limit: 2 }))).toBe(
-        ['3 entries in project "Acme":', '- /a.md (draft) — da', '- /b.md — db', '- … 1 more'].join(
-          '\n'
-        )
+        [
+          `3 entries in project "Acme" — ${ROOT}:`,
+          '- /a.md (draft) — da',
+          '- /b.md — db',
+          '- … 1 more'
+        ].join('\n')
       )
     })())
 
@@ -338,7 +344,7 @@ describe('KT-5 list', () => {
     expect(noProject.resolveBundle).toHaveBeenCalledWith({ create: false })
 
     expect(textOf(await makeTool().run('c2', { action: 'list' }))).toBe(
-      'No entries in project "Acme" yet.'
+      `No entries in project "Acme" — ${ROOT} yet.`
     )
   })
 })
@@ -356,7 +362,7 @@ describe('KT-6 read', () => {
       operation: 'read',
       abortError: 'Aborted'
     })
-    expect(textOf(res)).toBe(`/a.md:\n\n${raw.trimEnd()}`)
+    expect(textOf(res)).toBe(`${ROOT}/a.md:\n\n${raw.trimEnd()}`)
     expect(res.details).toEqual({ action: 'read', path: 'a.md' })
   })
 
@@ -366,216 +372,5 @@ describe('KT-6 read', () => {
       'No entry at /x.md'
     )
     await expect(h.run('c2', { action: 'read' })).rejects.toThrow('"read" needs `path`')
-  })
-})
-
-describe('KT-7 write —— 新建', () => {
-  it('KT-7 bundle 按 create:true 解析；文件形状（okf 自述行、type 归一、draft、宿主章、来源流式）；先过 write PEP 再落盘；afterWrite 无 status 键；回执', async () => {
-    const h = makeTool()
-    const res = await h.run('c1', {
-      action: 'write',
-      type: 'memory',
-      title: 'Token Refresh: Pitfalls',
-      description: 'when touching auth',
-      body: '\n\nbody\n',
-      tags: ['auth'],
-      sources: [{ resource: '/abs/p.ts', id: 's1' }],
-      stale_after: '2026-12-31'
-    })
-    expect(h.resolveBundle).toHaveBeenCalledWith({ create: true })
-
-    const abs = '/kb/projects/acme/token-refresh-pitfalls.md'
-    expect(h.files.get(abs)).toBe(
-      [
-        '---',
-        'shuvix: okf v0.2',
-        'type: Memory',
-        'title: "Token Refresh: Pitfalls"',
-        'description: when touching auth',
-        'tags:',
-        '  - auth',
-        'status: draft',
-        'stale_after: 2026-12-31',
-        'sources: [ { id: s1, resource: "/abs/p.ts" } ]',
-        STAMP,
-        '---',
-        '',
-        'body',
-        ''
-      ].join('\n')
-    )
-    expect(h.files.get(abs)).not.toContain('verified')
-    // 先过门再落盘 —— 与文件写入同一道 PEP（将来给知识库写策略时两边同时被盖住）
-    expect(h.calls).toEqual([`enforce:write:${abs}`, `write:${abs}`])
-    expect(h.enforcePath).toHaveBeenCalledWith('write', abs, {
-      toolCallId: 'c1',
-      toolName: 'knowledge',
-      displayPath: '/token-refresh-pitfalls.md',
-      operation: 'write',
-      abortError: 'Aborted'
-    })
-    expect(h.afterWrite).toHaveBeenCalledTimes(1)
-    const event = h.afterWrite.mock.calls[0][0] as Record<string, unknown>
-    expect(event).toEqual({
-      bundleDir: ROOT,
-      path: 'token-refresh-pitfalls.md',
-      op: 'create',
-      title: 'Token Refresh: Pitfalls'
-    })
-    expect(event).not.toHaveProperty('status')
-    expect(textOf(res)).toBe('Created /token-refresh-pitfalls.md (draft).')
-    expect(res.details).toEqual({ action: 'write', path: 'token-refresh-pitfalls.md' })
-  })
-})
-
-describe('KT-8 write —— 新建守卫与告警回执', () => {
-  it('KT-8 缺 type+body / 更新时空正文 / bundle 解析失败：都抛错、不落盘、不回调', async () => {
-    const FILES = {
-      '/kb/projects/acme/a.md': doc([
-        'type: Memory',
-        'title: A',
-        'description: da',
-        'status: draft'
-      ])
-    }
-    const h = makeTool({ files: FILES })
-    await expect(h.run('c1', { action: 'write', title: 'T', description: 'd' })).rejects.toThrow(
-      'Creating an entry needs: type, body'
-    )
-    await expect(h.run('c2', { action: 'write', path: '/a.md', body: '  ' })).rejects.toThrow(
-      'The entry body must not be empty'
-    )
-    expect(h.calls).toEqual([])
-    expect(h.afterWrite).not.toHaveBeenCalled()
-    expect(h.files.size).toBe(1)
-
-    // 会话不属于任何项目：新建时抛（写入不是软条件 —— 落不了盘就得说清楚）
-    const noProject = makeTool({ files: FILES, bundle: { error: 'no project here' } })
-    await expect(
-      noProject.run('c3', {
-        action: 'write',
-        type: 'Memory',
-        title: 'T',
-        description: 'd',
-        body: 'b'
-      })
-    ).rejects.toThrow('no project here')
-    expect(noProject.calls).toEqual([])
-    expect(noProject.afterWrite).not.toHaveBeenCalled()
-  })
-
-  it('KT-8 软告警随回执带回（文件照样写）：stale_after 不是日期', async () => {
-    const h = makeTool()
-    const res = await h.run('c1', {
-      action: 'write',
-      type: 'Memory',
-      title: 'T',
-      description: 'd',
-      body: 'b',
-      stale_after: 'soon'
-    })
-    expect(textOf(res)).toBe(
-      "Created /t.md (draft).\nNotes:\n- 'stale_after' should be an ISO 8601 date (YYYY-MM-DD)"
-    )
-    expect(h.files.get('/kb/projects/acme/t.md')).toContain('stale_after: soon')
-    expect(h.afterWrite).toHaveBeenCalledTimes(1)
-  })
-})
-
-describe('KT-9 新建文件名去重', () => {
-  it('KT-9 与已扫描概念同 slug → -2；磁盘上已有但未入扫描的同名文件不被覆盖（后缀不钉死）', async () => {
-    const h = makeTool({
-      files: {
-        '/kb/projects/acme/a.md': doc(['type: Memory', 'title: A', 'description: da']),
-        '/kb/projects/acme/b.md': '# not a concept\n'
-      }
-    })
-    const created = await h.run('c1', {
-      action: 'write',
-      type: 'Memory',
-      title: 'A',
-      description: 'd',
-      body: 'b'
-    })
-    expect(textOf(created)).toBe('Created /a-2.md (draft).')
-    expect(h.files.get('/kb/projects/acme/a.md')).toContain('description: da')
-
-    const second = await h.run('c2', {
-      action: 'write',
-      type: 'Memory',
-      title: 'B',
-      description: 'd',
-      body: 'b'
-    })
-    const path = (second.details as { path: string }).path
-    expect(path).not.toBe('global/b.md')
-    expect(path).toMatch(/^b-[^/]+\.md$/)
-    expect(h.files.get('/kb/projects/acme/b.md')).toBe('# not a concept\n')
-  })
-})
-
-describe('KT-10 write —— 按 path 更新', () => {
-  const A = doc(
-    [
-      'type: Memory',
-      'title: A',
-      'description: da',
-      'resource: x',
-      'tags: [old]',
-      'status: stable',
-      'stale_after: 2026-12-31',
-      'verified: [{ by: "human:me", at: "2026-09-01T00:00:00Z" }]',
-      'custom: kept'
-    ],
-    'old body'
-  )
-
-  it('KT-10 只给 body：状态 / verified / 未知键 / resource / 标题描述类型 / 标签 / stale_after 全部沿用，generated 刷新；回执提醒需重新核实', async () => {
-    const h = makeTool({ files: { '/kb/projects/acme/a.md': A } })
-    const res = await h.run('c1', { action: 'write', path: '/a.md', body: 'new' })
-    const c = parseConceptText(h.files.get('/kb/projects/acme/a.md')!, 'global/a.md')!
-    expect(c).toMatchObject({
-      type: 'Memory',
-      title: 'A',
-      description: 'da',
-      resource: 'x',
-      tags: ['old'],
-      // agent 不能把东西标成 stable —— 但既有的 stable 也不因它改写而降级，那是用户的判断
-      status: 'stable',
-      staleAfter: '2026-12-31',
-      verified: [{ by: 'human:me', at: '2026-09-01T00:00:00Z' }],
-      generated: { by: ACTOR, at: NOW.toISOString() },
-      body: 'new\n'
-    })
-    expect(c.fields.custom).toBe('kept')
-    expect(h.afterWrite).toHaveBeenCalledWith({
-      bundleDir: ROOT,
-      path: 'a.md',
-      op: 'update',
-      title: 'A'
-    })
-    expect(textOf(res)).toBe(
-      'Updated /a.md (stable, verified earlier — the user will need to re-verify).'
-    )
-    expect(res.details).toEqual({ action: 'write', path: 'a.md' })
-    expect(h.calls).toEqual([`enforce:write:${ROOT}/a.md`, `write:${ROOT}/a.md`])
-  })
-
-  it('KT-10 给了 tags 才替换；description 给空串即清空（设计如此，回执带告警）；不存在的 path 指路新建', async () => {
-    const h = makeTool({ files: { '/kb/projects/acme/a.md': A } })
-    await h.run('c1', { action: 'write', path: '/a.md', tags: ['n'] })
-    expect(parseConceptText(h.files.get('/kb/projects/acme/a.md')!, 'global/a.md')!.tags).toEqual([
-      'n'
-    ])
-
-    const cleared = await h.run('c2', { action: 'write', path: '/a.md', description: '' })
-    const c = parseConceptText(h.files.get('/kb/projects/acme/a.md')!, 'global/a.md')!
-    expect(c.description).toBe('')
-    expect(c.body).toBe('old body\n')
-    expect(textOf(cleared)).toContain("Notes:\n- 'description' (one line) is recommended")
-
-    await expect(h.run('c3', { action: 'write', path: '/x.md', body: 'b' })).rejects.toThrow(
-      'No entry at /x.md — omit `path` to create a new one'
-    )
   })
 })

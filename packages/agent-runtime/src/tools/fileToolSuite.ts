@@ -135,10 +135,14 @@ export interface FileToolDeps {
    */
   sessionId?: string
   /**
-   * OKF 知识库（写钩子的知识库分支）：根目录 + 写入者 actor（惰性 —— 模型可能中途切换）。
-   * 不注入（扩展端）则根目录下的 md 与普通 md 无异。
+   * OKF 知识库（写钩子的知识库分支）：绝对路径 → 它所属 bundle 内的相对路径（不在任何
+   * bundle 内返回 null，宿主答），加写入者 actor（惰性 —— 模型可能中途切换）。
+   *
+   * 给的是 **bundle 相对**而不是某个根相对：诊断规则按 bundle 判（`index.md` 是不是根 index），
+   * 容器相对的路径会让每个 bundle 的根 index 都被误判成子目录 index。不注入（扩展端）则
+   * 知识库目录下的 md 与普通 md 无异。
    */
-  knowledge?: { root: string; actor: () => string }
+  knowledge?: { locate: (portPath: string) => string | null; actor: () => string }
 }
 
 const UNSUPPORTED_SUFFIX = '. Supported: text files, PDF, DOC, DOCX, XLSX, PPTX, HTML, IPYNB.'
@@ -215,13 +219,14 @@ abstract class FileToolBase<
         const text = await port.readFile(portPath)
         const now = new Date()
         const knowledge = this.deps.knowledge
+        const rel = knowledge?.locate(portPath) ?? null
         const outcome = reviewShuvixMdWrite(text, fileNameOf(portPath), {
           sessionId: this.deps.sessionId,
           today: now.toISOString().slice(0, 10),
-          path: portPath,
-          knowledge: knowledge
-            ? { root: knowledge.root, actor: knowledge.actor(), now: now.toISOString() }
-            : undefined
+          knowledge:
+            knowledge && rel !== null
+              ? { rel, actor: knowledge.actor(), now: now.toISOString() }
+              : undefined
         })
         if (!outcome) return null
         if (outcome.content !== null) {

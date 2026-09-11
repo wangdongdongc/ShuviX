@@ -401,13 +401,14 @@ describe('文件工具套件 — OKF 知识库写钩子（deps.knowledge）', ()
   ].join('\n')
   const textOf = (res: { content: unknown[] }): string => (res.content[0] as { text: string }).text
 
-  it('FS-1 根目录下的合法概念落盘后盖 generated（actor 惰性、每次写现取）、回执 [OKF] Stamped，onFileChange 恰一次；根目录外无回执', async () => {
+  it('FS-1 bundle 内的合法概念落盘后盖 generated（actor 惰性、每次写现取）、回执 [OKF] Stamped，onFileChange 恰一次；bundle 外无回执', async () => {
     const actor = vi.fn(() => 'shuvix-work/m1')
     // 免询问下无需通道即可写（知识库上已无任何内置策略）
     const h = makeSuite({
       autoAllow: true,
       knowledgeSessionDirs: ['/kb/sessions'],
-      knowledge: { root: '/kb', actor }
+      // 宿主答「这份文件属于哪个 bundle、在它里面是什么相对路径」；bundle 外返回 null
+      knowledge: { locate: (p) => (p.startsWith('/kb/') ? p.slice('/kb/'.length) : null), actor }
     })
 
     const res = await h.suite.write.execute('k1', { path: '/kb/sessions/x.md', content: DRAFT })

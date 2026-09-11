@@ -26,14 +26,13 @@ export interface ShuvixMdWriteContext {
   sessionId?: string
   /** 今天（YYYY-MM-DD） */
   today: string
-  /** 刚落盘文件的 port 路径（桌面绝对路径）；知识库分支据此判断是否在根目录下 */
-  path?: string
   /**
-   * OKF 知识库（设计 docs/okf-knowledge-design.md §5 stamp.ts）：根目录 + 写入者 actor
-   * （`shuvix-<profile>/<model>`）+ 此刻（ISO 8601）。宿主没有知识库（扩展端）就不给，
-   * 根目录下的文件与普通 md 无异。
+   * OKF 知识库（设计 docs/okf-knowledge-design.md §5 stamp.ts）：刚落盘文件在**它所属
+   * bundle 内**的相对路径 + 写入者 actor（`shuvix-<profile>/<model>`）+ 此刻（ISO 8601）。
+   * 谁属于哪个 bundle 由宿主回答；不在任何 bundle 内、或宿主没有知识库（扩展端）就不给，
+   * 那样这份文件与普通 md 无异。
    */
-  knowledge?: { root: string; actor: string; now: string }
+  knowledge?: { rel: string; actor: string; now: string }
 }
 
 export interface ShuvixMdWriteOutcome {
@@ -161,28 +160,21 @@ function upsertMapping(b: Bounds, key: string, flowValue: string): boolean {
   return true
 }
 
-/** port 路径 → 知识库相对路径（forward-slash）；不在根目录下返回 null */
-function knowledgeRelativePath(path: string, root: string): string | null {
-  const p = path.replace(/\\/g, '/')
-  const r = root.replace(/\\/g, '/').replace(/\/+$/, '')
-  if (!r || !p.startsWith(`${r}/`)) return null
-  return p.slice(r.length + 1)
-}
-
 /**
- * OKF 知识库分支 —— 没有 `shuvix` 标记、但落在知识库根目录下的 md：
+ * OKF 知识库分支 —— 没有 `shuvix` 标记、但落在某个 bundle 里的 md：
  * 一致性校验（三条规则 + 软告警）作为回执带回，合规的概念补 `generated` 章
  * （每次写都刷新：它记的是「谁最后改的、何时」）。`verified` 只由 UI 动作写，这里不碰。
  * 保留文件（index.md / log.md）由宿主投影维护，agent 直写只回执规则、不盖章。
+ *
+ * 这是 agent 写条目的**唯一**一条路（`knowledge` 工具只读），所以回执要够用：写废了当场知道。
  */
 function reviewKnowledgeWrite(
   text: string,
   ctx: ShuvixMdWriteContext
 ): ShuvixMdWriteOutcome | null {
   const k = ctx.knowledge
-  if (!k || !ctx.path) return null
-  const rel = knowledgeRelativePath(ctx.path, k.root)
-  if (rel === null) return null
+  if (!k) return null
+  const rel = k.rel
 
   const diagnostics = validateConceptText(text, rel)
   const errors = diagnostics.filter((d) => d.level === 'error').map((d) => `- ${d.message}`)

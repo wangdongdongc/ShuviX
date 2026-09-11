@@ -272,30 +272,46 @@ describe('knowledge-writer 档案钉板（OKF 知识库的派发执行侧）', (
     for (const language of LANGS) {
       const built = buildBuiltinProfile(KNOWLEDGE_WRITER_SPEC, { language })
       expect(built, language).not.toBeNull()
-      // 写入只走 knowledge 工具：没有 write/edit（直写文件绕开结构检查）、没有 git（簿记归宿主）
-      expect(built!.tools, language).toEqual(['knowledge', 'read', 'grep', 'glob', 'ls', 'ask'])
+      // 条目用普通 write/edit 写（knowledge 工具只读）；没有 git —— 簿记归宿主
+      expect(built!.tools, language).toEqual([
+        'knowledge',
+        'read',
+        'write',
+        'edit',
+        'grep',
+        'glob',
+        'ls',
+        'ask'
+      ])
       expect(built!.projectAwareness, language).toBe(true)
       expect(built!.instructionFiles, language).toEqual(['AGENTS.md', 'CLAUDE.md'])
       expect(built!.model, language).toBeUndefined()
     }
   })
 
-  it('RG-2 三语正文接线：不点名任何文件系统路径、点名工具的动作、两个宿主章、会话资源 URI', () => {
+  it('RG-2 三语正文接线：不点名任何文件系统路径、点名四步流程的动作、两个宿主章、会话资源 URI', () => {
     for (const language of LANGS) {
       const body = buildBuiltinProfile(KNOWLEDGE_WRITER_SPEC, { language })!.systemPrompt
       // 一个项目一个 bundle，路径由工具按会话解析 —— 提示词里不该再有根目录占位符
       expect(body, `${language} 占位符`).not.toContain('{{knowledgeRoot}}')
+      // search → locate → write/edit → validate：四步缺一步，agent 就写不出能被收录的条目
       for (const anchor of [
         '`knowledge`',
         '`search`',
+        '`locate`',
         '`write`',
-        '`set-status`',
+        '`edit`',
+        '`validate`',
         '`generated`',
         '`verified`',
+        '`draft`',
+        '`deprecated`',
         'shuvix://session/'
       ]) {
         expect(body, `${language} 需含 ${anchor}`).toContain(anchor)
       }
+      // 写入面已从工具移走：再教 set-status 就是教一个不存在的 action
+      expect(body, `${language} 不得再点名退役的 set-status`).not.toContain('set-status')
       // 库里不再放 SCHEMA.md：提示词也不该再指着它（指了就是指向一个不存在的文件）
       expect(body, `${language} 不得再点名 SCHEMA.md`).not.toContain('SCHEMA.md')
     }
