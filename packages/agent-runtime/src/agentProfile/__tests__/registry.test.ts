@@ -573,11 +573,14 @@ describe('coding 档案钉板(从 work 拆出的工程人格)', () => {
       for (const gone of ['widget', 'wiki-writer']) {
         expect(coding, `coding.${language} 不应点名 ${gone}`).not.toContain(gone)
       }
-      // work：通用场景要作图/小工具/知识库，广域调研留给 coding 子会话
-      for (const named of ['visualization', 'widget', 'wiki-writer']) {
+      // work：通用场景要作图/小工具，广域调研留给 coding 子会话
+      for (const named of ['visualization', 'widget']) {
         expect(work, `work.${language} 需点名 ${named}`).toContain(named)
       }
-      expect(work, `work.${language} 不应点名 explore`).not.toContain('explore')
+      // 旧 wiki 已搁置：派发清单不再提它，免得模型把新知识库的活派给旧库的执行体
+      for (const gone of ['explore', 'wiki-writer']) {
+        expect(work, `work.${language} 不应点名 ${gone}`).not.toContain(gone)
+      }
     }
   })
 })
