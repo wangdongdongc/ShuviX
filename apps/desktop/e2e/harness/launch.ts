@@ -16,6 +16,7 @@
  */
 import { spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
@@ -169,7 +170,12 @@ export async function launchApp(): Promise<E2EApp> {
   // 该变量会让 electron 二进制退化为纯 node（不起窗口）—— 必须剔除
   delete env.ELECTRON_RUN_AS_NODE
 
-  const electronBin = resolve(DESKTOP_ROOT, '../../node_modules/.bin/electron')
+  // 工作区依赖装在检出根；**git worktree 里那一层没有 node_modules**（npm 只在主检出装过），
+  // 于是退回 Node 自己的解析 —— electron 包的入口导出的就是二进制的绝对路径。
+  const localBin = resolve(DESKTOP_ROOT, '../../node_modules/.bin/electron')
+  const electronBin = existsSync(localBin)
+    ? localBin
+    : (createRequire(import.meta.url)('electron') as string)
   const child: ChildProcess = spawn(
     electronBin,
     [
