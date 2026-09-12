@@ -3,15 +3,8 @@
  * 从 pi-coding-agent 移植，支持输出截断、超时控制、abort
  */
 
-import { spawn } from 'child_process'
 import { Type } from 'typebox'
-import {
-  getShellConfig,
-  sanitizeBinaryOutput,
-  killProcessTree,
-  collapseProgressOutput
-} from '../utils/toolUtils/shell'
-import { buildSpawnEnv } from '../utils/paths'
+import { collapseProgressOutput } from '../utils/toolUtils/shell'
 import { BaseTool } from '@shuvix/agent-runtime'
 import {
   getDesktopSecurityContext,
@@ -20,7 +13,7 @@ import {
   type ToolContext
 } from '../services/toolContext'
 import {
-  startBgTask,
+  runCommand,
   listBgTasks,
   runningCount,
   stopCommandFor,
@@ -31,9 +24,6 @@ import {
 import type { AgentToolResult } from '@earendil-works/pi-agent-core'
 import type { BashToolDetails } from '@shuvix/chat-protocol/types/chatMessage'
 import { t } from '../i18n'
-import { createLogger } from '../logger'
-const log = createLogger('Tool:bash')
-
 /** 默认超时时间（秒） */
 const DEFAULT_TIMEOUT = 120
 
@@ -73,86 +63,6 @@ const BashParamsSchema = Type.Object({
     })
   )
 })
-
-/** 在本地 shell 中执行命令 */
-function defaultSpawn(
-  command: string,
-  cwd: string,
-  timeout: number,
-  signal?: AbortSignal,
-  extraEnv?: Record<string, string>
-): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-  return new Promise((resolve, reject) => {
-    if (signal?.aborted) {
-      reject(new Error(TOOL_ABORTED))
-      return
-    }
-
-    const { shell, args } = getShellConfig()
-    log.info(`(${cwd}): ${shell} ${args.join(' ')} ${command.slice(0, 50)}`)
-
-    const child = spawn(shell, [...args, command], {
-      cwd,
-      env: buildSpawnEnv(extraEnv),
-      stdio: ['ignore', 'pipe', 'pipe'],
-      detached: process.platform !== 'win32'
-    })
-
-    let stdout = ''
-    let stderr = ''
-    let killed = false
-
-    // 收集输出
-    child.stdout?.on('data', (data: Buffer) => {
-      stdout += sanitizeBinaryOutput(data.toString('utf-8'))
-    })
-    child.stderr?.on('data', (data: Buffer) => {
-      stderr += sanitizeBinaryOutput(data.toString('utf-8'))
-    })
-
-    // 超时处理：timeout <= 0 表示不限时（不设定时器）。
-    // 0 曾是事故现场 —— setTimeout(kill, 0) 会在 spawn 下一 tick 就杀进程树，
-    // Windows 上还可能把 MSYS CREATE_SUSPENDED 途中的孙进程漏杀成永久挂起的孤儿
-    const timer =
-      timeout > 0
-        ? setTimeout(() => {
-            killed = true
-            if (child.pid) killProcessTree(child.pid)
-          }, timeout * 1000)
-        : undefined
-
-    // abort 处理
-    const onAbort = (): void => {
-      killed = true
-      if (child.pid) killProcessTree(child.pid)
-    }
-    if (signal) {
-      signal.addEventListener('abort', onAbort, { once: true })
-    }
-
-    child.on('close', (code) => {
-      clearTimeout(timer)
-      if (signal) signal.removeEventListener('abort', onAbort)
-
-      if (killed && signal?.aborted) {
-        reject(new Error(TOOL_ABORTED))
-        return
-      }
-
-      resolve({
-        stdout,
-        stderr,
-        exitCode: killed ? 124 : (code ?? 1)
-      })
-    })
-
-    child.on('error', (err) => {
-      clearTimeout(timer)
-      if (signal) signal.removeEventListener('abort', onAbort)
-      reject(err)
-    })
-  })
-}
 
 const BASH_DESCRIPTION =
   'Execute a bash command in the working directory. The command runs in a bash shell with pipe and redirect support. Use this for running scripts, installing packages, git operations, builds, etc. Prefer built-in tools over shell commands where one fits: `ls` instead of `find`/`ls`, `grep` instead of `grep`/`rg`, `glob` instead of `find -name`, `read` instead of `cat`/`head`/`tail`, `write` instead of `echo >`, `edit` instead of `sed`/`awk`. Use bash when no built-in tool can accomplish the task.'
@@ -228,38 +138,36 @@ export class BashTool extends BaseTool<typeof BashParamsSchema> {
       return this.runInBackground(toolCallId, params, config.workingDirectory, extraEnv)
     }
 
-    try {
-      const result = await defaultSpawn(
-        params.command,
-        config.workingDirectory,
-        timeout,
-        signal,
-        extraEnv
-      )
-      const raw = [result.stdout, result.stderr].filter(Boolean).join('\n')
-      // 折叠进度输出（仅匹配进度类命令时生效）
-      let text = collapseProgressOutput(raw, params.command)
+    // 同步形态 —— 与后台形态**同一条 spawn 路径**，只是等待策略不同（见 bgTaskService.runCommand）。
+    // 跑够阈值它也会进后台任务面板：能看实时输出，也能被用户从那里停掉。
+    const run = await runCommand({
+      sessionId: this.ctx.sessionId,
+      toolCallId,
+      command: params.command,
+      description: params.description,
+      cwd: config.workingDirectory,
+      extraEnv,
+      background: false,
+      timeoutMs: timeout > 0 ? timeout * 1000 : 0,
+      signal
+    })
+    // 同步形态不会转后台（onTimeout 是 kill），这里恒为 settled
+    if (run.kind !== 'settled') throw new Error('Command unexpectedly detached')
+    if (run.reason === 'abort') throw new Error(TOOL_ABORTED)
 
-      if (result.exitCode === 124) {
-        text += `\n\n[Command timed out (${timeout}s)]`
-      } else if (result.exitCode !== 0) {
-        text += `\n\n[Exit code: ${result.exitCode}]`
-      }
+    // 折叠进度输出（仅匹配进度类命令时生效）
+    let text = collapseProgressOutput(run.output, params.command)
+    const exitCode = run.reason === 'timeout' ? 124 : (run.info.exitCode ?? 1)
+    if (run.reason === 'timeout') {
+      text += `\n\n[Command timed out (${timeout}s)]`
+    } else if (exitCode !== 0) {
+      text += `\n\n[Exit code: ${exitCode}]`
+    }
 
-      // 输出长度的截断/落盘统一由 wrapToolOutput 在构建工具时处理
-      return {
-        content: [{ type: 'text' as const, text }],
-        details: {
-          type: 'bash',
-          exitCode: result.exitCode,
-          truncated: false,
-          cwd: config.workingDirectory
-        }
-      }
-    } catch (err: unknown) {
-      const errMsg = err instanceof Error ? err.message : String(err)
-      if (errMsg === TOOL_ABORTED) throw err
-      throw new Error(`Command failed: ${errMsg}`)
+    // 输出长度的截断/落盘统一由 wrapToolOutput 在构建工具时处理
+    return {
+      content: [{ type: 'text' as const, text }],
+      details: { type: 'bash', exitCode, truncated: false, cwd: config.workingDirectory }
     }
   }
 
@@ -290,13 +198,14 @@ export class BashTool extends BaseTool<typeof BashParamsSchema> {
       }
     }
 
-    const started = await startBgTask({
+    const started = await runCommand({
       sessionId,
       toolCallId,
       command: params.command,
       description: params.description,
       cwd,
-      extraEnv
+      extraEnv,
+      background: true
     })
 
     // 预热窗口内就退出了（打错命令 / 缺依赖）→ 按前台形态回话，不留后台条目

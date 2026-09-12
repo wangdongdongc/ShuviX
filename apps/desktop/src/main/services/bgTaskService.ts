@@ -40,7 +40,15 @@
  */
 
 import { spawn, type ChildProcess } from 'child_process'
-import { openSync, closeSync, readSync, statSync, existsSync, rmSync } from 'node:fs'
+import {
+  openSync,
+  closeSync,
+  readSync,
+  statSync,
+  existsSync,
+  rmSync,
+  appendFileSync
+} from 'node:fs'
 import { join } from 'node:path'
 import type { TaskInfo } from '@shuvix/agent-runtime'
 import { getShellConfig, killProcessTree, sanitizeBinaryOutput } from '../utils/toolUtils/shell'
@@ -55,8 +63,16 @@ const log = createLogger('BgTask')
 
 // ─── 常量 ────────────────────────────────────────────
 
-/** 预热窗口：启动后等这么久，期间退出的命令按前台形态返回（打错命令 / 缺依赖即刻可见） */
+/** 预热窗口：异步形态启动后等这么久，期间退出的命令当场回话（打错命令 / 缺依赖即刻可见） */
 const WARMUP_MS = 2000
+/**
+ * 同步形态跑够这么久才进面板。
+ *
+ * 一条 `ls` 不该在面板里留下痕迹，而一条跑了半分钟的 `npm test` 该让人看得见、
+ * 看得到实时输出、也停得掉。阈值取得和预热窗口一样，纯属两件事恰好都是「2 秒还没完
+ * 就不是一次性的小命令了」。
+ */
+const ANNOUNCE_SYNC_MS = 2000
 /** 每会话同时运行的后台任务上限 —— 防止在循环里起 dev server 的智能体把机器打挂 */
 export const MAX_RUNNING_PER_SESSION = 8
 /** 停止时 SIGINT 到 SIGKILL 的升级等待 */
@@ -80,6 +96,8 @@ const NOTIFY_TAIL_LINES = 20
  */
 interface BgProc {
   sessionId: string
+  /** 异步形态（调用方会放手）—— 后台并发上限只卡这一类 */
+  background: boolean
   child: ChildProcess
   logPath: string
   /** 已请求停止 —— 退出时据此把状态记为 killed 而非 exited */
@@ -93,12 +111,24 @@ const procs = new Map<string, BgProc>()
 
 let fstatTimer: NodeJS.Timeout | null = null
 
-/** 启动结果：预热窗口内退出 → 前台形态；否则转入后台 */
-export type BgTaskStartResult =
-  | { kind: 'settled'; info: BgTaskInfo; output: string }
+/**
+ * 一次命令的结局。
+ *
+ * `settled` = 这次调用等到了结果（含被超时/中止杀掉的），`output` 是日志全文；
+ * `background` = 它还活着，本次调用不再等。两者是**同一条路径的两种等待策略**，
+ * 不是两种命令。
+ */
+export type CommandOutcome =
+  | {
+      kind: 'settled'
+      info: BgTaskInfo
+      output: string
+      /** 'finished' 自己跑完的；'timeout' 到点被杀；'abort' 用户点了停止生成 */
+      reason: 'finished' | 'timeout' | 'abort'
+    }
   | { kind: 'background'; info: BgTaskInfo; logBytes: number }
 
-export interface StartBgTaskParams {
+export interface RunCommandParams {
   sessionId: string
   toolCallId: string
   command: string
@@ -106,6 +136,15 @@ export interface StartBgTaskParams {
   cwd: string
   /** 注入子进程的额外环境变量（项目 env + SHUVIX_SESSION_ID） */
   extraEnv?: Record<string, string>
+  /**
+   * 异步形态：预热窗口内没落定就转后台、脱离本次调用。
+   * 同步形态（false）等到命令结束，到点按 `timeoutMs` 杀。
+   */
+  background: boolean
+  /** 同步形态的上限（毫秒）；省略或 <=0 = 不限时。异步形态忽略它（恒用预热窗口） */
+  timeoutMs?: number
+  /** 同步形态的中止信号。异步形态刻意不接 —— 那正是后台的意义（见文件头第 5 点） */
+  signal?: AbortSignal
 }
 
 /** 退出通知实现的注入口 —— 保留旧名，转接到枢纽（调用方是 sessionService） */
@@ -116,9 +155,19 @@ export function setBgTaskNotifier(fn: BgTaskNotifier): void {
 
 // ─── 查询 ────────────────────────────────────────────
 
-/** 当前会话正在运行的任务数 */
+/**
+ * 当前会话**脱离了调用方**的运行中任务数（后台形态的并发上限按它卡）。
+ *
+ * 同步形态的命令不算：它占着一次工具调用，并发度早被模型自己的调用数卡死了，
+ * 而把它算进来会让「同时跑两条 npm test」莫名其妙地撞上后台任务的上限。
+ */
 export function runningCount(sessionId: string): number {
-  return taskRegistry.runningCount(sessionId, 'bash')
+  let n = 0
+  for (const [toolCallId, proc] of procs) {
+    if (!proc.background || proc.sessionId !== sessionId) continue
+    if (taskRegistry.get(toolCallId)?.endedAt === null) n++
+  }
+  return n
 }
 
 /** 会话的全部任务（含已结束的，按启动时间正序） */
@@ -252,15 +301,23 @@ function formatExitNotice(task: TaskInfo, tail: string): string {
 // ─── 启动 ────────────────────────────────────────────
 
 /**
- * 起一个后台任务。**调用方须已通过安全模块的命令门**（enforceCommand）——
+ * 跑一条命令。**调用方须已通过安全模块的命令门**（enforceCommand）——
  * 本服务不做准入判断，只负责执行与簿记。
  *
- * 预热窗口内（2s）若进程已退出，任务不进面板、日志文件删除，返回 `settled` 让调用方
- * 按前台形态回话 —— 打错的命令即刻可见，面板也不会被一堆秒退的僵尸条目污染。
- * 这一段就是 `join(maxWait: WARMUP_MS, onTimeout: 'detach')`，不是另一套机制。
+ * **同步与异步是同一条路径的两组等待参数**（见文件头第 4 点），spawn / 日志 / 杀进程
+ * 三件事只有一份实现：
+ *
+ *   同步：`join(maxWait: timeoutMs, onTimeout: 'kill', signal, onAbort: 'kill')`
+ *         —— 到点或被中止就下死手（调用方正等着结果，先温和再升级只是让它多等几秒）；
+ *         跑够 `ANNOUNCE_SYNC_MS` 才进面板，于是能看实时输出、也能从面板停掉。
+ *   异步：`join(maxWait: WARMUP_MS, onTimeout: 'detach')`
+ *         —— 窗口内退出的当场把全文回话（打错的命令即刻可见，面板不留秒退的僵尸条目）。
+ *
+ * 两种形态都把 stdout+stderr 合并写进同一个日志文件：输出不经 Node，**交错顺序是真的**
+ * （旧的同步形态分别收集两条管道再拼，交错从那时就丢了）。
  */
-export async function startBgTask(params: StartBgTaskParams): Promise<BgTaskStartResult> {
-  const { sessionId, toolCallId, command, description, cwd, extraEnv } = params
+export async function runCommand(params: RunCommandParams): Promise<CommandOutcome> {
+  const { sessionId, toolCallId, command, description, cwd, extraEnv, background } = params
   const logPath = join(getToolResultsDir(sessionId), `${toolCallId}.log`)
   const { shell, args } = getShellConfig()
 
@@ -275,7 +332,7 @@ export async function startBgTask(params: StartBgTaskParams): Promise<BgTaskStar
     child = spawn(shell, [...args, command], {
       cwd,
       env: buildSpawnEnv(extraEnv),
-      // stdin 关成 /dev/null，与前台形态一致（见文件头第 6 点）；stdout/stderr 同一个 fd
+      // stdin 恒为 /dev/null（见文件头第 6 点）；stdout/stderr 同一个 fd
       stdio: ['ignore', fd, fd],
       detached: process.platform !== 'win32'
     })
@@ -290,6 +347,7 @@ export async function startBgTask(params: StartBgTaskParams): Promise<BgTaskStar
 
   const proc: BgProc = {
     sessionId,
+    background,
     child,
     logPath,
     stopRequested: false,
@@ -313,45 +371,69 @@ export async function startBgTask(params: StartBgTaskParams): Promise<BgTaskStar
       signal: null,
       logCapped: false
     },
-    // 预热窗口内退出的任务不该进面板 —— 它的完整输出已按前台形态交回。
-    // 转异步（join 放手）时枢纽会无条件宣告，故这里恒为「除非脱离等待者否则不宣告」
-    announceAfter: Number.POSITIVE_INFINITY,
+    // 异步形态：预热窗口内退出的不该进面板（完整输出已当场回话），而转异步那一刻
+    // 枢纽会无条件宣告，所以这里不设阈值；同步形态：跑够阈值才值得占一行
+    announceAfter: background ? Number.POSITIVE_INFINITY : ANNOUNCE_SYNC_MS,
     formatNotice: (task) => formatExitNotice(task, readTail(logPath, NOTIFY_TAIL_BYTES)),
     stop: (force) => killProc(toolCallId, force)
   })
-  log.info(`start ${toolCallId} pid=${child.pid} session=${sessionId}: ${command.slice(0, 80)}`)
+  log.info(
+    `start ${toolCallId} pid=${child.pid} session=${sessionId} ` +
+      `${background ? 'background' : 'sync'}: ${command.slice(0, 80)}`
+  )
 
   child.once('exit', (code, signal) => finishTask(toolCallId, code, signal))
   child.once('error', (err) => {
     log.error(`spawn failed ${toolCallId}: ${err.message}`)
+    // 失败原因写进日志：同步形态的结果就是日志全文，不写的话模型只拿到一个空输出 + exit -1
+    try {
+      appendFileSync(logPath, `[spawn failed] ${err.message}\n`)
+    } catch {
+      /* 忽略 */
+    }
     finishTask(toolCallId, -1, null)
   })
 
   ensureFstatTimer()
 
-  // ── 预热窗口：同步等一小会儿 ──
-  const outcome = await taskRegistry.join(toolCallId, {
-    maxWait: WARMUP_MS,
-    onTimeout: 'detach'
-  })
+  const timeoutMs = params.timeoutMs
+  const outcome = await taskRegistry.join(
+    toolCallId,
+    background
+      ? { maxWait: WARMUP_MS, onTimeout: 'detach' }
+      : {
+          maxWait: timeoutMs && timeoutMs > 0 ? timeoutMs : undefined,
+          onTimeout: 'kill',
+          killForce: true,
+          signal: params.signal,
+          onAbort: 'kill'
+        }
+  )
   const info = outcome && toBgTaskInfo(outcome.task)
-  if (!info) throw new Error(`Background task ${toolCallId} vanished while starting`)
+  if (!info) throw new Error(`Command task ${toolCallId} vanished while starting`)
 
-  if (outcome.kind === 'settled') {
-    const output = readWhole(logPath)
-    // 连登记簿一起销掉：这条任务从没进过面板，留着只会在枢纽里当僵尸
-    dismissBgTask(toolCallId)
-    log.info(`settled-in-warmup ${toolCallId} exit=${info.exitCode}`)
-    return { kind: 'settled', info, output }
+  if (outcome.kind === 'detached') {
+    let logBytes = 0
+    try {
+      logBytes = statSync(logPath).size
+    } catch {
+      /* 忽略 */
+    }
+    return { kind: 'background', info, logBytes }
   }
 
-  let logBytes = 0
-  try {
-    logBytes = statSync(logPath).size
-  } catch {
-    /* 忽略 */
-  }
-  return { kind: 'background', info, logBytes }
+  const output = readWhole(logPath)
+  // 没进过面板的任务连日志一起销掉 —— 它在界面上从不存在，留着只是垃圾；
+  // 进过面板的留着，那一行还要能展开看输出（用户点「移除」或「清空」时才收）
+  if (!isAnnounced(toolCallId)) dismissBgTask(toolCallId)
+  log.info(`settled ${toolCallId} reason=${outcome.reason} exit=${info.exitCode}`)
+  return { kind: 'settled', info, output, reason: outcome.reason }
+}
+
+/** 这条任务进没进过面板（枢纽的 list 只给宣告过的） */
+function isAnnounced(toolCallId: string): boolean {
+  const task = taskRegistry.get(toolCallId)
+  return !!task && taskRegistry.list(task.sessionId).some((t) => t.taskId === toolCallId)
 }
 
 /** 进程退出：把结果交回枢纽（解挂等待者，没人等的话由枢纽发通知） */

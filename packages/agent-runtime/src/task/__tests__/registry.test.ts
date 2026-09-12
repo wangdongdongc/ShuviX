@@ -85,9 +85,10 @@ describe('taskRegistry — 等待策略', () => {
   it('超时杀：等待者留在原地，等 settle 回来，结果带 timeout', async () => {
     const { registry, delivered, stop, create } = setup()
     const id = create()
-    const joined = registry.join(id, { maxWait: 10, onTimeout: 'kill' })
+    const joined = registry.join(id, { maxWait: 10, onTimeout: 'kill', killForce: true })
     await sleep(20)
-    expect(stop).toHaveBeenCalledTimes(1)
+    // 调用方正等着这次结果 —— 超时不该再走「先温和再升级」那条慢路
+    expect(stop).toHaveBeenCalledWith(true)
 
     registry.settle(id, { status: 'killed' })
     const outcome = await joined

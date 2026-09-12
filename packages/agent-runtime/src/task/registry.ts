@@ -66,6 +66,14 @@ export interface JoinPolicy {
   signal?: AbortSignal
   /** 被中止时怎么办：杀掉（默认）还是放手让它继续跑 */
   onAbort?: 'kill' | 'detach'
+  /**
+   * 杀的时候直接下死手（透传给拥有者的停止实现）。
+   *
+   * 给「超时」与「用户点停止生成」用：这两种情形下进程多半已经不响应温和信号了，
+   * 而调用方正等着这次工具调用返回 —— 先 SIGINT 再等升级只是让它多等几秒。
+   * 用户从面板按的那枚停止键不走这里（那是 `stop`，默认给进程清理的机会）。
+   */
+  killForce?: boolean
 }
 
 export interface JoinOutcome {
@@ -245,7 +253,7 @@ export function createTaskRegistry(deps: TaskRegistryDeps): TaskRegistry {
         })
       }
 
-      const { maxWait, onTimeout = 'detach', signal, onAbort = 'kill' } = policy
+      const { maxWait, onTimeout = 'detach', signal, onAbort = 'kill', killForce = false } = policy
       // 重新 join 一条已脱离的任务（`task.wait`）—— 它重新有人等了
       entry.info.detached = false
 
@@ -275,7 +283,7 @@ export function createTaskRegistry(deps: TaskRegistryDeps): TaskRegistry {
           if (waiter.done) return
           waiter.reason = reason
           entry.stoppedBy = 'agent'
-          void entry.stop?.(false)
+          void entry.stop?.(killForce)
         }
 
         // 声明式函数：finish / letGo / onAbortEvent 互相引用，靠提升解环

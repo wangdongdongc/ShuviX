@@ -64,7 +64,7 @@ vi.mock('../../services/toolContext', () => ({
 vi.mock('../../services/toolRegistry', () => ({ registerBuiltinTool: () => {} }))
 vi.mock('../../i18n', () => ({ t: (key: string) => key }))
 
-import { startBgTask, killAllBgTasks, type BgTaskStartResult } from '../../services/bgTaskService'
+import { runCommand, killAllBgTasks, type CommandOutcome } from '../../services/bgTaskService'
 import { getShellConfig } from '../../utils/toolUtils/shell'
 import { getShuvixCliEnv } from '../../utils/paths'
 import { BashTool } from '../bash'
@@ -93,14 +93,15 @@ function setupRcEnv(): void {
 let bgCall = 0
 
 /** 起一个后台任务（每次换 toolCallId，日志文件互不覆盖） */
-function runBackground(command: string): Promise<BgTaskStartResult> {
-  return startBgTask({
+function runBackground(command: string): Promise<CommandOutcome> {
+  return runCommand({
     sessionId: SESSION_ID,
     toolCallId: `bg-${++bgCall}`,
     command,
     description: 'rc leak test',
     cwd: WORK_DIR,
-    extraEnv: { ...projectConfig.envVars, SHUVIX_SESSION_ID: SESSION_ID }
+    extraEnv: { ...projectConfig.envVars, SHUVIX_SESSION_ID: SESSION_ID },
+    background: true
   })
 }
 

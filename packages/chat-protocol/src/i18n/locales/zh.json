@@ -988,7 +988,7 @@
     "tasksStop": "停止任务",
     "tasksDismiss": "从列表移除",
     "tasksStatusRunning": "运行中",
-    "tasksStdinClosed": "后台任务不接受输入。需要你亲自交互的命令，请复制上面的命令到终端里执行。",
+    "tasksStdinClosed": "命令不接受输入。需要你亲自交互的，把上面的命令复制到自己的终端里执行。",
     "tasksLogMissing": "日志文件已不存在",
     "tasksLogCapped": "日志超过 50 MB —— 只显示尾部",
     "tasksNoOutput": "暂无输出",

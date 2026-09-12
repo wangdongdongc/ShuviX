@@ -988,7 +988,7 @@
     "tasksStop": "タスクを停止",
     "tasksDismiss": "一覧から削除",
     "tasksStatusRunning": "実行中",
-    "tasksStdinClosed": "バックグラウンドタスクは入力を受け付けません。対話が必要なコマンドは、上のコマンドをコピーしてご自身のターミナルで実行してください。",
+    "tasksStdinClosed": "コマンドは入力を受け付けません。対話が必要な場合は、上のコマンドをコピーしてご自身のターミナルで実行してください。",
     "tasksLogMissing": "ログファイルがありません",
     "tasksLogCapped": "ログが 50 MB を超えています — 末尾のみ表示",
     "tasksNoOutput": "まだ出力はありません",
