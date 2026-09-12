@@ -56,7 +56,14 @@ export const KNOWLEDGE_TYPES = [
 ] as const
 export type KnowledgeType = (typeof KNOWLEDGE_TYPES)[number]
 
-/** OKF v0.2 `status`；缺省 **stable**（规范如此 —— agent 写的东西必须显式 draft） */
+/**
+ * OKF v0.2 `status` —— **生命周期**，缺省 stable（规范：absent ⇒ stable）。
+ * 规范的语义：draft = 尚未定稿、可能不完整；stable = 可供消费；deprecated = 只为链接与历史留着。
+ *
+ * 它与「谁核实过」是**两根互不相干的轴**（规范明说两者各自变动：deprecated 的条目照样可以带
+ * 人工核实，draft 也可以是 machine-confirmed）。核实那一轴归 `verified` / trust tier ——
+ * 别再让 status 兼职表达审阅状态。
+ */
 export const OKF_STATUSES = ['draft', 'stable', 'deprecated'] as const
 export type OkfStatus = (typeof OKF_STATUSES)[number]
 

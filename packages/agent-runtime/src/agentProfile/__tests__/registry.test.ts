@@ -294,24 +294,27 @@ describe('knowledge-writer 档案钉板（OKF 知识库的派发执行侧）', (
       const body = buildBuiltinProfile(KNOWLEDGE_WRITER_SPEC, { language })!.systemPrompt
       // 一个项目一个 bundle，路径由工具按会话解析 —— 提示词里不该再有根目录占位符
       expect(body, `${language} 占位符`).not.toContain('{{knowledgeRoot}}')
-      // search → locate → write/edit → validate：四步缺一步，agent 就写不出能被收录的条目
+      // search → create → edit → validate：四步缺一步，agent 就写不出能被收录的条目
       for (const anchor of [
         '`knowledge`',
         '`search`',
-        '`locate`',
-        '`write`',
+        '`create`',
         '`edit`',
         '`validate`',
         '`generated`',
         '`verified`',
-        '`draft`',
-        '`deprecated`',
         'shuvix://session/'
       ]) {
         expect(body, `${language} 需含 ${anchor}`).toContain(anchor)
       }
-      // 写入面已从工具移走：再教 set-status 就是教一个不存在的 action
-      expect(body, `${language} 不得再点名退役的 set-status`).not.toContain('set-status')
+      // 两个状态词只查裸词：提示词里它们以 `status: deprecated` 这类整句出现，钉反引号形态太脆
+      for (const word of ['draft', 'deprecated', 'stable']) {
+        expect(body, `${language} 需讲状态 ${word}`).toContain(word)
+      }
+      // 已退役的 action：教它们就是教不存在的东西
+      for (const gone of ['set-status', '`locate`']) {
+        expect(body, `${language} 不得再点名退役的 ${gone}`).not.toContain(gone)
+      }
       // 库里不再放 SCHEMA.md：提示词也不该再指着它（指了就是指向一个不存在的文件）
       expect(body, `${language} 不得再点名 SCHEMA.md`).not.toContain('SCHEMA.md')
     }

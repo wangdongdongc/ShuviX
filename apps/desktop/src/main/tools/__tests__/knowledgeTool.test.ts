@@ -4,20 +4,20 @@
  * 目标 bundle 按**会话**解析（工具没有 scope 参数了，只有 locate 允许宿主建库），
  * 拿到的 bundle 目录再反查回 bundle id 交给扫描 / 检索。
  *
- * 写入不经这个工具（条目由普通 write/edit 写），所以这里没有任何记账断言 ——
- * 变更管线的接线钉在文件工具那侧。
+ * 只有 `create` 会写盘并自己记一笔账；改动条目走普通 `edit`，那条路的记账钉在文件工具那侧。
  *
  * services/knowledge 只替到接口那一层：locateBundle 用**真的**（目录 → bundle id 这条往返
  * 正是适配层的实质），扫描 / 检索是替身。
  */
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 const state = vi.hoisted(() => ({
   root: '',
   registered: [] as Array<Record<string, unknown>>,
+  record: vi.fn(),
   resolveBundle: vi.fn(),
   search: vi.fn(),
   scan: vi.fn(),
@@ -34,6 +34,7 @@ vi.mock('../../services/knowledge', async () => {
   )
   return {
     locateBundle: real.locateBundle,
+    recordKnowledgeChange: state.record,
     sessionBundle: state.resolveBundle,
     scanBundle: state.scan,
     searchBundle: state.search
@@ -45,6 +46,10 @@ vi.mock('../../services/toolRegistry', () => ({
   }
 }))
 vi.mock('../../services/toolContext', () => ({
+  agentActorOf: (ctx: {
+    agent?: { profileName?: string; getModelConfig?: () => { model?: string } }
+  }): string =>
+    `shuvix-${ctx.agent?.profileName ?? 'agent'}/${ctx.agent?.getModelConfig?.().model ?? 'unknown'}`,
   getDesktopSecurityContext: () => ({ enforcePath: vi.fn() }),
   TOOL_ABORTED: 'Aborted'
 }))
@@ -79,6 +84,7 @@ beforeAll(() => {
 afterAll(() => rmSync(state.root, { recursive: true, force: true }))
 
 beforeEach(() => {
+  state.record.mockClear()
   state.resolveBundle.mockReset().mockResolvedValue(target())
   state.scan.mockReset().mockResolvedValue({ files: [], concepts: state.concepts })
   state.search.mockReset().mockResolvedValue([])
@@ -97,17 +103,34 @@ describe('knowledge 工具（桌面注册）', () => {
     expect((meta.getLabel as () => string)()).toBe('tool.knowledgeLabel')
   })
 
-  it('TK-2 locate 是唯一允许宿主建库的 action（create: true），其余一律 create: false', async () => {
+  it('TK-2 create 是唯一允许宿主建库的 action（create: true）并把变更记成 Creation（actor = agentActorOf）；读侧一律 create: false 且不记账', async () => {
     const tool = makeKnowledgeTool(ctx)
     expect(tool.label).toBe('tool.knowledgeLabel')
 
-    await tool.execute('c1', { action: 'locate' })
+    await tool.execute('c1', {
+      action: 'create',
+      type: 'Memory',
+      title: 'T',
+      description: 'd',
+      body: 'b'
+    })
     expect(state.resolveBundle).toHaveBeenLastCalledWith('s1', { create: true })
+    const written = join(state.root, 'projects', 'acme', 't.md')
+    expect(existsSync(written)).toBe(true)
+    expect(readFileSync(written, 'utf-8')).toContain('shuvix: okf v0.2')
+    expect(state.record).toHaveBeenLastCalledWith({
+      bundle: BUNDLE,
+      path: 't.md',
+      op: 'Creation',
+      title: 'T',
+      actor: 'shuvix-work/gpt-5'
+    })
 
     for (const action of ['list', 'search', 'validate'] as const) {
       await tool.execute('c2', { action, query: 'q' })
       expect(state.resolveBundle, action).toHaveBeenLastCalledWith('s1', { create: false })
     }
+    expect(state.record).toHaveBeenCalledTimes(1)
   })
 
   it('TK-3 读路径：list / search / validate 都把 bundle 目录反查成 bundle id 再交给扫描 / 检索；解析不出 bundle 的目录 → 空清单、空结果', async () => {

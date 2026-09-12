@@ -1,22 +1,21 @@
 /**
- * `knowledge` 工具 —— 知识库的**读侧**面：检索、盘点、取原文、校验、寻址。
+ * `knowledge` 工具 —— 知识库的检索、盘点、取原文、校验，以及**新建条目**。
  *
- * 它不写文件。条目由 agent 用普通 `write` / `edit` 写出来，走的是和社区 skill、人工编辑
- * 完全相同的那条路：写钩子（shuvixMdWrite 的 OKF 分支）回执诊断并盖 `generated`，
- * 变更管线投影 index/log、提交、广播。**一条写入路而不是两条** —— 两条并存时不变量只写在
- * 强的那条里，而 agent 手上恰好有弱的那条，等于没写。
+ * 写入面**只有新建**，改动一律走普通 `edit`。这是两轮取舍之后的折中：
+ *   - 新建交给宿主，是为了**担保元数据的形状** —— 自述行 `shuvix: okf v0.2`（属性卡的识别
+ *     依据，少了它笔记本渲染不出卡）、固定键序、`type` 与 `status` 归一、`generated` 由宿主盖、
+ *     `sources` 归一。让模型自己拼 frontmatter 就得把这张表塞进每会话
+ *     必付的提示词，而且少一个键就少一份卡。
+ *   - 改动交给 `edit`，是因为工具做不了局部编辑：给一条长条目补一段话，`edit` 三行 diff 够了，
+ *     而工具那套只能整篇正文重发。改动路径与社区 skill、人工编辑同一条 —— 写钩子回执诊断并
+ *     刷新 `generated`，变更管线投影 index/log、提交、广播。
  *
- * 于是本工具只保留文件工具做不到的四件事：
- *   - `search` / `list`：宿主的检索索引与带缓存的扫描（agent 不知道库在哪，grep 不出来）；
- *   - `read`：按 bundle 相对路径取原文；
- *   - `validate`：写完之后当场知道自己写废了没有（不写盘）；
- *   - `locate`：**寻址** —— 库的绝对目录，以及给定标题时一个没被占用的新条目路径。
- *     库还不存在时由宿主建出（目录 + 绑定概念 + git init），避免 agent 直写出一个没有
- *     `project.md` 的半拉 bundle，让下一次解析又建一个 `-2`。
+ * 新建还顺带解决两件寻址问题：库是懒建的（agent 直写一个不存在的目录会造出没有 `project.md`
+ * 的半拉 bundle，下一次解析又建一个 `-2`），以及文件名去重（模型挑中已有名字时 `write` 会
+ * 静默覆盖）。两件都由宿主在 `create` 里做掉，agent 从不需要知道库在哪。
  *
- * 安全：`read` / `validate` 以目标绝对路径走 `enforcePath('read')`。`locate` 自己不过 PEP ——
- * 它不写条目，真正的写入由 write/edit 那道门管；宿主建 bundle 是宿主动作（actor
- * `process:shuvix`），与改动前 write 先解析后过门的次序一致。
+ * 安全：`create` 以目标绝对路径走 `enforcePath('write')`、`read` / `validate` 走
+ * `enforcePath('read')` —— 与文件工具同一道门，将来给知识库写策略时两侧一起被盖住。
  *
  * **作用域就是一个 bundle**：本会话所属项目的那一个。工具因此没有 `scope` 参数 —— 目标由
  * 宿主按会话解析（`resolveBundle`），路径一律是该 bundle 内的相对路径。跨 bundle 的引用不走
@@ -26,11 +25,17 @@
  */
 import { Type } from 'typebox'
 import type { AgentToolResult } from '@earendil-works/pi-agent-core'
-import { KNOWLEDGE_TYPES } from '@shuvix/chat-protocol/knowledge'
+import { KNOWLEDGE_TYPES, OKF_STATUSES, type OkfStatus } from '@shuvix/chat-protocol/knowledge'
 import type { FileSystemPort } from '../fileTools/port'
 import type { SecurityContext } from '../security/types'
 import { BaseTool } from '../tools/baseTool'
-import { isVerificationCurrent, type KnowledgeConcept } from './conceptFile'
+import {
+  buildConceptText,
+  isVerificationCurrent,
+  normalizeSources,
+  type KnowledgeConcept,
+  type KnowledgeSource
+} from './conceptFile'
 import { dedupeFileName, escapesBundle, normalizeBundlePath, slugify } from './bundlePaths'
 import {
   isReservedFile,
@@ -41,7 +46,7 @@ import {
 
 export const KNOWLEDGE_TOOL_NAME = 'knowledge'
 
-const ACTIONS = ['search', 'list', 'read', 'validate', 'locate'] as const
+const ACTIONS = ['search', 'list', 'read', 'create', 'validate'] as const
 export type KnowledgeAction = (typeof ACTIONS)[number]
 
 export const KnowledgeParamsSchema = Type.Object({
@@ -57,10 +62,52 @@ export const KnowledgeParamsSchema = Type.Object({
         'Bundle-relative path of an existing entry, e.g. "/token-refresh.md". Required for "read"; for "validate" it narrows the check to one entry.'
     })
   ),
+  type: Type.Optional(
+    Type.String({
+      description: `For "create": the entry type — one of ${KNOWLEDGE_TYPES.join(' / ')} (other values are allowed). Required.`
+    })
+  ),
   title: Type.Optional(
+    Type.String({ description: 'For "create": display title; the file name is derived from it.' })
+  ),
+  description: Type.Optional(
     Type.String({
       description:
-        'For "locate": the title of the entry you are about to create — the answer is an unused file path derived from it. Nothing is written.'
+        'For "create": ONE line saying when this entry is worth opening — it is what the index shows and how later sessions decide to read it.'
+    })
+  ),
+  body: Type.Optional(
+    Type.String({
+      description:
+        'For "create": the entry itself in markdown (the knowledge, not the metadata). Link other entries with bundle-absolute markdown links like [title](/auth/session.md).'
+    })
+  ),
+  tags: Type.Optional(Type.Array(Type.String(), { description: 'For "create": tags.' })),
+  sources: Type.Optional(
+    Type.Array(
+      Type.Object({
+        resource: Type.String({
+          description:
+            'Self-contained locator: absolute path (optionally with #symbol), full URL, <remote-url>@<commit>:<path>, or shuvix://session/<id>.'
+        }),
+        title: Type.Optional(Type.String()),
+        id: Type.Optional(Type.String({ description: 'Short id for footnote citations [^id].' }))
+      }),
+      { description: 'For "create": where the entry\'s claims come from.' }
+    )
+  ),
+  stale_after: Type.Optional(
+    Type.String({
+      description:
+        'For "create": ISO date (YYYY-MM-DD) after which the entry needs re-verification.'
+    })
+  ),
+  status: Type.Optional(
+    Type.Unsafe<OkfStatus>({
+      type: 'string',
+      enum: [...OKF_STATUSES],
+      description:
+        'For "create": the entry lifecycle — "stable" (the default) once it is ready to be relied on, "draft" while it is still incomplete, "deprecated" for something kept only for its links and history.'
     })
   ),
   limit: Type.Optional(
@@ -72,24 +119,33 @@ export interface KnowledgeToolParams {
   action: KnowledgeAction
   query?: string
   path?: string
+  type?: string
   title?: string
+  description?: string
+  body?: string
+  tags?: string[]
+  sources?: { resource: string; title?: string; id?: string }[]
+  stale_after?: string
+  status?: OkfStatus
   limit?: number
 }
 
-export const KNOWLEDGE_DESCRIPTION = `Search, read and check this project's knowledge base — an OKF bundle of markdown entries that later sessions of the same project will read.
+export const KNOWLEDGE_DESCRIPTION = `Search, read, check and add to this project's knowledge base — an OKF bundle of markdown entries that later sessions of the same project will read.
 
 Actions:
 - "search": find entries by free text (\`query\`, optional \`limit\`).
 - "list": list the entries of the base.
 - "read": return one entry by \`path\`.
-- "validate": report problems in one entry (\`path\`) or in the whole base (no \`path\`). Run it after writing an entry.
-- "locate": return the base's directory — with \`title\`, an unused file path for a new entry. Creates the base if this project has none yet; writes nothing.
+- "create": add a new entry — \`type\`, \`title\`, \`description\`, \`body\`, optional \`tags\` / \`sources\` / \`stale_after\`. The host assembles the metadata, names the file after the title, creates the base the first time, and answers with the absolute path it wrote.
+- "validate": report problems in one entry (\`path\`) or in the whole base (no \`path\`). Run it after editing an entry.
 
-**Entries are written with the \`write\` and \`edit\` tools, not with this one**: "locate" for the path, write the file, "validate" it. An entry is YAML frontmatter (\`type\` required — one of ${KNOWLEDGE_TYPES.join(' / ')}; plus \`title\`, \`description\`, \`tags\`, \`sources\`, \`status\`, \`stale_after\`) followed by a markdown body. New entries are \`draft\`; only the user makes an entry \`stable\`. Never write \`generated\` or \`verified\` — the host stamps \`generated\` for you, and verification is the user's claim to make. \`index.md\` and \`log.md\` are maintained by the host: read them, never write them.
+**Create entries here, change them with \`edit\`.** Only "create" writes through this tool; to revise an existing entry, \`edit\` the file at the absolute path that "search" / "list" / "read" / "create" gave you — a surgical diff beats re-sending the whole body. Never create an entry with \`write\`: the metadata would be yours to get right, and an entry missing the host's self-description line does not render as an entry in ShuviX.
 
-Paths in this tool are relative to the base, e.g. "/token-refresh.md"; every listing names the base's absolute directory so you can build the path \`write\` / \`edit\` needs. To point at something in another base, use a \`shuvix://\` URI instead of a path.
+The metadata the host owns in every entry it writes: the \`shuvix\` self-description and \`generated\`. \`status\` is the entry's lifecycle and yours to judge — \`stable\` (the default) once it is ready to be relied on, \`draft\` while it is still incomplete, \`deprecated\` when it is superseded or wrong. \`verified\` is a different axis: the user's record of having checked the entry — **never write it**. \`index.md\` and \`log.md\` are host projections: read them, never write them.
 
-Write entries worth carrying into later sessions: decisions, pitfalls, preferences, facts that took effort to establish. Search before writing and update an existing entry rather than adding a near-duplicate. Do not record what the repository already states, or what only matters to this conversation.`
+Paths in this tool are relative to the base, e.g. "/token-refresh.md"; every listing names the base's absolute directory, which is what \`edit\` needs. To point at something in another base, use a \`shuvix://\` URI instead of a path.
+
+Record what will be looked up again: decisions and why they went that way, pitfalls, conventions the code does not state, facts that took effort to establish. Search before creating and revise the entry that already covers the subject rather than adding a near-duplicate. Do not record what the repository already states, or what only matters to this conversation.`
 
 /** 宿主解析出的目标 bundle */
 export interface KnowledgeBundleTarget {
@@ -128,6 +184,14 @@ export interface KnowledgeToolDeps {
     query: string,
     opts: { limit: number; bundleDir: string }
   ) => Promise<KnowledgeSearchHit[]>
+  /** 写入者 actor 字符串（OKF §5.2：`shuvix-<profile>/<model>`）—— create 盖 `generated` 用 */
+  actor: () => string
+  now: () => Date
+  /**
+   * 新建之后（投影 / 提交 / 事件由宿主完成）；`path` 是 `bundleDir` 内的相对路径。
+   * 只有 create 这一条路要它 —— `edit` 走文件工具，那边自有 onFileChange 接同一条管线。
+   */
+  afterWrite?: (e: { bundleDir: string; path: string; title: string }) => void | Promise<void>
   abortError?: string
   label: string
 }
@@ -201,10 +265,10 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
         return this.list(params)
       case 'read':
         return this.read(toolCallId, params)
+      case 'create':
+        return this.create(toolCallId, params)
       case 'validate':
         return this.validate(toolCallId, params)
-      case 'locate':
-        return this.locate(params)
       default:
         throw new Error(`Unknown action "${String(params.action)}". Valid: ${ACTIONS.join(', ')}`)
     }
@@ -379,41 +443,72 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
   }
 
   /**
-   * 寻址 —— 库的绝对目录；给了 `title` 再给一个没被占用的新条目绝对路径。
-   * 本期新条目一律落在 bundle 根（没有 agent 可选的子目录层级）。
+   * 新建一条 —— 宿主拼 frontmatter（自述行 / 键序 / 归一 / `status: draft` / `generated`）、
+   * 按标题派生文件名并去重、库不存在时建出来。回执给**绝对路径**：同一轮里紧接着要 `edit`
+   * 它，或者下一轮从 search 的表头再拼一次。
+   *
+   * 本期新条目一律落在 bundle 根 —— 没有 agent 可选的子目录层级。
    */
-  private async locate(params: KnowledgeToolParams): Promise<Result> {
+  private async create(toolCallId: string, params: KnowledgeToolParams): Promise<Result> {
+    const type = params.type?.trim()
     const title = params.title?.trim()
-    const target = await this.bundle(true)
-    if (!title) {
-      return text(
-        [
-          `${whereLine(target)}`,
-          'Write entries into this directory with the `write` tool, then "validate" them.'
-        ],
-        { action: 'locate' }
-      )
-    }
+    const description = params.description?.trim()
+    const body = params.body
+    const missing = [
+      !type && 'type',
+      !title && 'title',
+      !description && 'description',
+      !body?.trim() && 'body'
+    ].filter(Boolean)
+    if (missing.length) throw new Error(`Creating an entry needs: ${missing.join(', ')}`)
 
+    const target = await this.bundle(true)
     const { concepts, files } = await this.deps.scan(target.dir)
+    // 保留文件名同样算占用：slugify('Index') 正好撞上宿主投影的 index.md
     const taken = new Set<string>([
       ...concepts.filter((c) => dirOf(c.path) === '').map((c) => c.path),
       ...files.filter((f) => dirOf(f.path) === '').map((f) => f.path)
     ])
-    // 保留文件名同样算占用：slugify('Index') 正好撞上宿主投影的 index.md
-    const rel = dedupeFileName(
-      `${slugify(title)}.md`,
-      (name) => taken.has(name) || isReservedFile(name)
+    const isTaken = (name: string): boolean => taken.has(name) || isReservedFile(name)
+    let rel = dedupeFileName(`${slugify(title!)}.md`, isTaken)
+    // 扫描可能没见过磁盘上的某个文件（缓存未刷新）—— 再确认一次，绝不覆盖既有条目
+    if (await this.exists(target.dir, rel)) {
+      rel = dedupeFileName(`${slugify(title!)}.md`, (name) => isTaken(name) || name === rel)
+      if (await this.exists(target.dir, rel)) {
+        throw new Error(`Could not find an unused file name for "${title}" — pick another title`)
+      }
+    }
+
+    await this.enforce('write', target.dir, rel, toolCallId, params.action)
+
+    const sources: KnowledgeSource[] = params.sources ? normalizeSources(params.sources) : []
+    const content = buildConceptText(
+      {
+        type: type!,
+        title: title!,
+        description,
+        tags: params.tags,
+        // 生命周期由写的人判断，缺省即 OKF 的缺省（absent ⇒ stable）；
+        // 「谁核实过」是另一根轴，由 `verified` 承担 —— 规范明说两者各自变动
+        status: params.status ?? 'stable',
+        staleAfter: params.stale_after,
+        sources,
+        generated: { by: this.deps.actor(), at: this.deps.now().toISOString() }
+      },
+      body!
     )
-    const fresh = !(await this.exists(target.dir, rel))
+    await this.deps.port.writeFile(joinRoot(target.dir, rel), content)
+    await this.deps.afterWrite?.({ bundleDir: target.dir, path: rel, title: title! })
+
+    const warnings = validateConceptText(content, rel)
+      .filter((d) => d.level === 'warning')
+      .map((d) => `- ${d.message}`)
     return text(
       [
-        `${joinRoot(target.dir, rel)}`,
-        fresh
-          ? 'Nothing was written — create the entry there with the `write` tool, then "validate" it.'
-          : 'A file already exists at that path; pick another title or update the existing entry.'
+        `Created ${joinRoot(target.dir, rel)} (${params.status ?? 'stable'}). Revise it with \`edit\` at that path.`,
+        ...(warnings.length ? ['Notes:', ...warnings] : [])
       ],
-      { action: 'locate', path: rel }
+      { action: 'create', path: rel }
     )
   }
 }

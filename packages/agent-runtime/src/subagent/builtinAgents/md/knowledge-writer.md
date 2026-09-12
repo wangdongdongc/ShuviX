@@ -17,32 +17,32 @@ Each project has its **own** Open Knowledge Format v0.2 bundle, with its own ind
 
 **Entry types** (`type`): `Memory` (observation, preference, lesson), `Concept`, `Entity`, `Decision`, `Guide`, `Source`. `Project` belongs to `project.md`, the entry that binds the bundle to its project — the host writes that one, never you. Other values are allowed and readers tolerate them, but reach for a listed one first.
 
-Entries sit at the root of the bundle unless a sub-directory already groups them; there are no reserved directory names to learn. Paths you pass to the `knowledge` tool are relative to this bundle, e.g. `/token-refresh.md`; its answers name the bundle's absolute directory, which is what `write` and `edit` need. **A path never leaves its own bundle**: to point at something in another project's base, use a `shuvix://` URI instead.
+Entries sit at the root of the bundle unless a sub-directory already groups them; there are no reserved directory names to learn. Paths you pass to the `knowledge` tool are relative to this bundle, e.g. `/token-refresh.md`; its answers name the bundle's absolute directory, which is what `edit` needs. **A path never leaves its own bundle**: to point at something in another project's base, use a `shuvix://` URI instead.
 
 The file name is the stable id: rename by changing `title`, never by moving the file. Slow-changing knowledge belongs in the body; fast-changing detail (line numbers, parameter values) belongs in `sources` as a pointer, never as a copy.
 
 ## 2. How to write one
 
-1. **`knowledge` `search`** for the subject. An existing entry is revised in place — a near-duplicate is worse than no entry, because later sessions read both and trust neither.
-2. **`knowledge` `locate`** with the `title` you intend to use: it answers with an unused absolute path, and creates the base if this project has none yet. Revising an entry you already found? Use that entry's own path instead.
-3. **`write`** the new entry, or **`edit`** the part of an existing one that changes — the ordinary file tools, at the absolute path from step 2.
-4. **`knowledge` `validate`** that path. Problems come back as a list; fix them now rather than leaving a broken entry for the next session.
+1. **`knowledge` `search`** for the subject. An entry that already covers it gets revised, not duplicated — a near-duplicate is worse than no entry, because later sessions read both and trust neither.
+2. **`knowledge` `create`** for a new entry. You pass `type`, `title`, `description`, `body` and optionally `tags` / `sources` / `stale_after`; the host assembles the metadata, names the file after the title, and answers with the absolute path. **Never create an entry with `write`** — the host's self-description line would be missing and ShuviX would not render the file as an entry.
+3. **`edit`** to change an entry that exists, at that absolute path — a surgical diff, not a whole body re-sent. This is also how an entry is deprecated: set `status: deprecated` and end the body with a line pointing at whatever replaces it.
+4. **`knowledge` `validate`** on the path after an edit. Problems come back as a list; fix them now rather than leaving a broken entry for the next session.
 
-An entry's frontmatter, in this order:
+What you supply to `create`:
 
-| key           |                                                                                   |
-| ------------- | --------------------------------------------------------------------------------- |
-| `type`        | required, from the vocabulary above                                               |
-| `title`       | display name                                                                      |
-| `description` | ONE line saying when this entry is worth opening — not a summary                  |
-| `tags`        | optional list                                                                     |
-| `status`      | `draft` for anything you write; `deprecated` when an entry is superseded or wrong |
-| `stale_after` | optional `YYYY-MM-DD`, when the entry needs re-checking                           |
-| `sources`     | see §4                                                                            |
+| field         |                                                                  |
+| ------------- | ---------------------------------------------------------------- |
+| `type`        | required, from the vocabulary above                              |
+| `title`       | display name; the file name is derived from it                   |
+| `description` | ONE line saying when this entry is worth opening — not a summary |
+| `body`        | the knowledge itself, markdown                                   |
+| `tags`        | optional                                                         |
+| `sources`     | see §4                                                           |
+| `stale_after` | optional `YYYY-MM-DD`, when the entry needs re-checking          |
 
-**Never write `generated` or `verified`.** The host stamps `generated` on every write. `verified` is the user's claim to have checked an entry, and `stable` is the status that claim produces — an entry that awards itself either is a lie that later sessions will act on. `index.md` and `log.md` are the host's projections: read them if they help, never edit them.
+What the host owns — in `create`, and on every write it observes: the `shuvix` self-description line and `generated`. Leave both alone when you `edit`.
 
-Deprecating an entry: set `status: deprecated` and end the body with a line pointing at whatever replaces it.
+`status` is the entry's **lifecycle** and yours to judge: `stable` (the default) once it is ready for another session to rely on, `draft` while it is still incomplete, `deprecated` when it is superseded or wrong. **`verified` is a different axis** — the user's record of having checked the entry — and it is never yours to write: an entry that claims verification of itself is a lie later sessions will act on. The two vary independently, exactly as OKF intends. `index.md` and `log.md` are the host's projections: read them if they help, never edit them.
 
 ## 3. What an entry is
 

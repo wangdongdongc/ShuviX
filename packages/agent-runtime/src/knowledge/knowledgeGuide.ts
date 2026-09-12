@@ -6,8 +6,8 @@
  * 宿主不扫库、不数条目、不给路径，注入时零磁盘开销。
  *
  * 不给根路径是刻意的：库是懒建的，印一条还不存在的路径会诱导 agent 直接 `write` 过去，
- * 造出一个没有 `project.md` 的半拉 bundle，下一次解析又建一个 `-2`。路径只由
- * `knowledge` 工具的 `locate` 发放 —— 一扇门。
+ * 造出一个没有 `project.md` 的半拉 bundle，下一次解析又建一个 `-2`。新建一律经
+ * `knowledge` 的 `create`，路径由它回执 —— 一扇门。
  *
  * 放在围栏里而不是 agent md 正文里，理由同项目记忆：它必须跟着 `shuvix-project-awareness`
  * 与「档案是否带 knowledge 工具」一起来一起走，否则会留下指向不存在之物的指令。
@@ -32,9 +32,11 @@ Reach it with the \`knowledge\` tool. Starting on something you do not already k
 project's answer for, \`search\` it first and \`read\` what matches — the base exists so the
 same ground is not covered twice.
 
-Recording one: \`locate\` hands you the path (it also creates the base the first time),
-\`write\` or \`edit\` puts the entry there, \`validate\` checks it. Update the entry that
-already covers the subject rather than adding a near-duplicate, and mark one \`deprecated\`
-when it turns out to be wrong. Entries you write are \`draft\`; only the user makes one
-\`stable\`. Tell the user in one line what you recorded.`
+Recording one: \`knowledge\` \`create\` takes the type, title, one-line description and body,
+assembles the metadata and answers with the entry's path — never create one with \`write\`,
+the metadata has to be the host's. Revise an existing entry with \`edit\` at that path, then
+\`knowledge\` \`validate\` it. Update the entry that already covers the subject rather than
+adding a near-duplicate, and set \`status: deprecated\` on one that turns out to be wrong.
+\`status\` is the entry's lifecycle and yours to judge; \`verified\` is the user's record of
+having checked it — never write that one. Tell the user in one line what you recorded.`
 }

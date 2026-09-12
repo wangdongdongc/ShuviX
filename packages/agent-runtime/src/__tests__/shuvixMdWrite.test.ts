@@ -102,6 +102,7 @@ describe('reviewShuvixMdWrite — OKF 知识库分支', () => {
   const concept = (lines: string[], body = 'body'): string =>
     ['---', ...lines, '---', '', body, ''].join('\n')
   const VALID = ['type: Memory', 'title: T', 'description: d', 'status: draft']
+  const MARKER = 'shuvix: okf v0.2'
   /** `rel` = 宿主解析出的 bundle 相对路径；null = 不在任何 bundle 内（宿主不给 ctx） */
   const review = (text: string, rel: string | null): ReturnType<typeof reviewShuvixMdWrite> =>
     reviewShuvixMdWrite(text, 'x', {
@@ -165,7 +166,7 @@ describe('reviewShuvixMdWrite — OKF 知识库分支', () => {
 
   it('MW-4 首次盖章：注释 / 键序 / 未知键 / 正文 / CRLF / BOM 逐字节原样，只在闭合线前插一行', () => {
     const text =
-      '﻿---\r\n# note\r\ntype: Memory\r\ntitle: T\r\ndescription: d\r\nstatus: draft\r\ncustom: kept\r\n---\r\n\r\nbody\r\n'
+      '﻿---\r\n# note\r\nshuvix: okf v0.2\r\ntype: Memory\r\ntitle: T\r\ndescription: d\r\nstatus: draft\r\ncustom: kept\r\n---\r\n\r\nbody\r\n'
     const out = review(text, 'global/x.md')!
     expect(out.content).toBe(text.replace('custom: kept\r\n---', `custom: kept\r\n${STAMP}\r\n---`))
     expect(out.note).toBe(STAMP_NOTE)
@@ -217,10 +218,10 @@ describe('reviewShuvixMdWrite — OKF 知识库分支', () => {
   })
 
   it('MW-6 无事可做 → null；只有告警 → 回执不改文件；告警 + 盖章 → 两段回执以空行相隔、content 回写', () => {
-    expect(review(concept([...VALID, STAMP]), 'global/x.md')).toBeNull()
+    expect(review(concept([MARKER, ...VALID, STAMP]), 'global/x.md')).toBeNull()
 
     const warned = review(
-      concept(['type: Memory', 'title: T', 'status: draft', STAMP]),
+      concept([MARKER, 'type: Memory', 'title: T', 'status: draft', STAMP]),
       'global/x.md'
     )!
     expect(warned.note).toBe(`[OKF] Written with warnings:\n${DESCRIPTION_WARNING}`)
@@ -228,6 +229,7 @@ describe('reviewShuvixMdWrite — OKF 知识库分支', () => {
 
     const both = review(
       concept([
+        MARKER,
         'type: Memory',
         'title: T',
         'status: draft',
@@ -237,5 +239,22 @@ describe('reviewShuvixMdWrite — OKF 知识库分支', () => {
     )!
     expect(both.note).toBe(`[OKF] Written with warnings:\n${DESCRIPTION_WARNING}\n\n${STAMP_NOTE}`)
     expect(both.content).toContain(STAMP)
+  })
+
+  /**
+   * 自述行是属性卡的**识别依据**（`readShuvixMarker` 读不到就不渲染卡）。`knowledge` 的
+   * `create` 恒写它；手写 / 外部工具写的那份则不会有，于是回执要点名这件事 —— 上一轮
+   * 把新建改成「模型自己拼 frontmatter」，卡片就是这样静默消失的。
+   */
+  it('MW-7 无自述行：照常盖章与索引，但回执点明属性卡渲染不出来、并指路 create', () => {
+    const out = review(concept(VALID), 'global/x.md')!
+    expect(out.note).toContain('has no `shuvix: okf v0.2` line')
+    expect(out.note).toContain('It is still indexed')
+    expect(out.note).toContain('"create"')
+    // 只回执、不代填：宿主不偷偷往别人的文件里加键
+    expect(out.content).not.toContain('shuvix: okf')
+    // 盖章照做（两段回执以空行相隔）
+    expect(out.note).toContain(STAMP_NOTE)
+    expect(out.content).toContain(STAMP)
   })
 })

@@ -1,9 +1,10 @@
 /**
- * knowledge 工具 —— 知识库的**读侧**面（设计 §6.1，决策 D4）。
+ * knowledge 工具 —— 检索 / 盘点 / 取原文 / 校验 + **新建**（设计 §6.1，决策 D4）。
  *
- * 它不写文件：条目由 agent 用普通 write/edit 写出来。本文件因此钉的是读侧那几件 ——
- * agent 面的枚举、路径守卫表、各 action 的回执文本与 details，以及 read / validate 以目标
- * **绝对路径**过与文件读取同一道 PEP（将来给知识库写策略时两侧同时被盖住）。
+ * 写入面只有 `create`：改动走普通 `edit`（工具做不了局部编辑），而新建留在宿主手里是为了
+ * 担保元数据的形状 —— 自述行、键序、`status: draft`、宿主章。本文件因此钉：agent 面的枚举、
+ * 路径守卫表、各 action 的回执文本与 details、create 的文件形状与去重，以及各 action 以目标
+ * **绝对路径**过与文件工具同一道 PEP（将来给知识库写策略时两侧同时被盖住）。
  *
  * **作用域就是一个 bundle**：本会话所属项目的那一个，由宿主的 `resolveBundle` 给出，
  * 所以工具没有 scope 参数，路径一律 bundle 相对；回执表头点名 bundle 的绝对目录，
@@ -27,6 +28,8 @@ import { isReservedFile, type BundleFile } from '../validate'
 
 /** 本会话的那一个 bundle（项目 bundle 的绝对目录） */
 const ROOT = '/kb/projects/acme'
+const NOW = new Date('2026-09-09T08:12:03.000Z')
+const ACTOR = 'shuvix-work/gpt-5'
 /** 一份概念文本：frontmatter 行 + 正文（尾随换行，同 conceptFile.test 的 doc 惯例） */
 const doc = (frontmatter: string[], body = 'body'): string =>
   ['---', ...frontmatter, '---', '', body, ''].join('\n')
@@ -54,6 +57,7 @@ interface Harness {
   files: Map<string, string>
   enforcePath: Mock
   resolveBundle: Mock
+  afterWrite: Mock
   /** 调用顺序流水：`enforce:<mode>:<abs>` / `write:<abs>` */
   calls: string[]
   run: (id: string, params: KnowledgeToolParams, signal?: AbortSignal) => Promise<Result>
@@ -116,12 +120,16 @@ function makeTool(opts: ToolOptions = {}): Harness {
   })
   const security = opts.security ?? ({ enforcePath } as unknown as SecurityContext)
   const resolveBundle = vi.fn(async () => opts.bundle ?? BUNDLE)
+  const afterWrite = vi.fn()
   const tool = createKnowledgeTool({
     port: memoryPort(files, calls),
     security,
     scan: async () => scanOf(files),
     resolveBundle,
     search: opts.search,
+    actor: () => ACTOR,
+    now: () => NOW,
+    afterWrite,
     abortError: opts.abortError,
     label: 'Knowledge'
   })
@@ -130,6 +138,7 @@ function makeTool(opts: ToolOptions = {}): Harness {
     files,
     enforcePath,
     resolveBundle,
+    afterWrite,
     calls,
     run: (id, params, signal) => tool.execute(id, params, signal)
   }
@@ -141,21 +150,18 @@ describe('KT-1 schema 枚举与运行时守卫', () => {
     { enum?: string[]; description?: string }
   >
 
-  it('KT-1 action 枚举钉死（只读五个，没有 write / set-status）、没有 scope 参数；工具名与标签', () => {
+  it('KT-1 action 枚举钉死（新建在内、改动不在）、没有 scope 参数；type / status 的描述列出全部词汇表', () => {
     expect(KNOWLEDGE_TOOL_NAME).toBe('knowledge')
     const { tool } = makeTool()
     expect(tool.name).toBe('knowledge')
     expect(tool.label).toBe('Knowledge')
-    expect(props.action.enum).toEqual(['search', 'list', 'read', 'validate', 'locate'])
+    expect(props.action.enum).toEqual(['search', 'list', 'read', 'create', 'validate'])
     // 作用域就是本会话的那一个 bundle，没有可选项 —— 参数因此不存在
     expect(props.scope).toBeUndefined()
-    // 写入面整体不在这里：条目用普通 write/edit 写
-    for (const gone of ['type', 'title', 'description', 'body', 'tags', 'sources', 'status']) {
-      if (gone === 'title') continue // locate 借用同名参数表达「我要建这个标题的条目」
-      expect(props[gone], gone).toBeUndefined()
-    }
-    // 但词汇表仍要到得了模型面 —— frontmatter 现在是它自己写的
-    for (const type of KNOWLEDGE_TYPES) expect(tool.description, type).toContain(type)
+    // 改动走 `edit`：没有 update / set-status 的入口
+    for (const type of KNOWLEDGE_TYPES) expect(props.type.description, type).toContain(type)
+    // status 是 OKF 的生命周期轴（三值全开），不是 ShuviX 的审阅开关 —— 审阅归 `verified`
+    expect(props.status.enum).toEqual(['draft', 'stable', 'deprecated'])
   })
 
   it('KT-1 preExecute / securityCheck 不碰 PEP（逐 action 在内部按算出的路径过），且任何 action 都不写文件', async () => {
@@ -173,17 +179,18 @@ describe('KT-1 schema 枚举与运行时守卫', () => {
     await h.run('c1', { action: 'list' })
     expect(h.enforcePath).not.toHaveBeenCalled()
 
+    // 读侧三个 action 一个都不写盘（create 另有专门用例）
     const before = h.files.get('/kb/projects/acme/a.md')
     for (const params of [
       { action: 'read' as const, path: '/a.md' },
       { action: 'validate' as const, path: '/a.md' },
-      { action: 'validate' as const },
-      { action: 'locate' as const, title: 'A' }
+      { action: 'validate' as const }
     ]) {
       await h.run('c2', params)
     }
     expect(h.files.get('/kb/projects/acme/a.md')).toBe(before)
     expect(h.calls.filter((c) => c.startsWith('write:'))).toEqual([])
+    expect(h.afterWrite).not.toHaveBeenCalled()
   })
 })
 
@@ -372,5 +379,82 @@ describe('KT-6 read', () => {
       'No entry at /x.md'
     )
     await expect(h.run('c2', { action: 'read' })).rejects.toThrow('"read" needs `path`')
+  })
+})
+
+/**
+ * create 是这个工具唯一的写入面，存在的理由就是**担保元数据的形状** —— 自述行
+ * `shuvix: okf v0.2` 是属性卡的识别依据（少了它笔记本渲染不出卡），`generated` 是宿主的章。
+ * 第一条用例就是那次回归的看门狗。
+ *
+ * `status` 按 OKF 办：三值全开、缺省 stable（规范 absent ⇒ stable），由写的人判断生命周期；
+ * 「谁核实过」是 `verified` 那根轴，两者各自变动。
+ */
+describe('KT-7 create —— 元数据形状与去重', () => {
+  it('KT-7 自述行在最前、缺省 status 为 stable（OKF 缺省）、宿主盖 generated；bundle 按 create:true 解析；先过 write PEP 再落盘；afterWrite 带 bundle 相对路径与标题', async () => {
+    const h = makeTool()
+    const res = await h.run('c1', {
+      action: 'create',
+      type: 'memory',
+      title: 'Token refresh',
+      description: 'when touching auth',
+      body: 'body',
+      tags: ['auth'],
+      sources: [{ resource: '/abs/p.ts' }]
+    })
+    expect(h.resolveBundle).toHaveBeenCalledWith({ create: true })
+    const abs = '/kb/projects/acme/token-refresh.md'
+    // 先过门再落盘
+    expect(h.calls).toEqual([`enforce:write:${abs}`, `write:${abs}`])
+    const written = h.files.get(abs)!
+    expect(written.startsWith('---\nshuvix: okf v0.2\ntype: Memory\n')).toBe(true)
+    expect(written).toContain('\nstatus: stable\n')
+    expect(written).toContain(`\ngenerated: { by: ${JSON.stringify(ACTOR)}, at:`)
+    expect(h.afterWrite).toHaveBeenCalledWith({
+      bundleDir: ROOT,
+      path: 'token-refresh.md',
+      title: 'Token refresh'
+    })
+    // 回执给绝对路径 —— 同一轮里紧接着要 edit 它
+    expect(textOf(res)).toContain(abs)
+    expect(res.details).toEqual({ action: 'create', path: 'token-refresh.md' })
+  })
+
+  it('KT-7 缺必填字段一次点全、不落盘；同 slug 撞车退 -2；slugify 撞上保留文件名也让开', async () => {
+    const h = makeTool({ files: { '/kb/projects/acme/index.md': '' } })
+    await expect(h.run('c1', { action: 'create', title: 'T' })).rejects.toThrow(
+      'Creating an entry needs: type, description, body'
+    )
+    expect(h.calls).toEqual([])
+
+    await h.run('c2', { action: 'create', type: 'Memory', title: 'T', description: 'd', body: 'b' })
+    await h.run('c3', { action: 'create', type: 'Memory', title: 'T', description: 'd', body: 'b' })
+    expect([...h.files.keys()]).toContain('/kb/projects/acme/t.md')
+    expect([...h.files.keys()]).toContain('/kb/projects/acme/t-2.md')
+
+    // `Index` 的 slug 正是宿主投影维护的 index.md —— 不许占它
+    await h.run('c4', {
+      action: 'create',
+      type: 'Memory',
+      title: 'Index',
+      description: 'd',
+      body: 'b'
+    })
+    expect(h.files.get('/kb/projects/acme/index.md')).toBe('')
+    expect([...h.files.keys()]).toContain('/kb/projects/acme/index-2.md')
+  })
+
+  it('KT-7 显式 status 原样透传（三值全开），回执点名它', async () => {
+    const h = makeTool()
+    const res = await h.run('c1', {
+      action: 'create',
+      type: 'Memory',
+      title: 'Half done',
+      description: 'd',
+      body: 'b',
+      status: 'draft'
+    })
+    expect(h.files.get('/kb/projects/acme/half-done.md')).toContain('\nstatus: draft\n')
+    expect(textOf(res)).toContain('(draft)')
   })
 })

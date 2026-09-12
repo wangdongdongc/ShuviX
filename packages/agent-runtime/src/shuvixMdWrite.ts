@@ -14,7 +14,7 @@
  * 原样留着（同属性卡的编辑模型）。
  */
 import { parse as parseYaml } from 'yaml'
-import { KNOWLEDGE_MARKER_TYPE } from '@shuvix/chat-protocol/knowledge'
+import { KNOWLEDGE_MARKER, KNOWLEDGE_MARKER_TYPE } from '@shuvix/chat-protocol/knowledge'
 import { detectShuvixMarker, type ShuvixMarker } from '@shuvix/chat-protocol/shuvixMdContract'
 import { WIKI_UPDATED_KEY } from '@shuvix/chat-protocol/wikiFileContract'
 import { isReservedFile, validateConceptText } from './knowledge/validate'
@@ -166,11 +166,12 @@ function upsertMapping(b: Bounds, key: string, flowValue: string): boolean {
  * （每次写都刷新：它记的是「谁最后改的、何时」）。`verified` 只由 UI 动作写，这里不碰。
  * 保留文件（index.md / log.md）由宿主投影维护，agent 直写只回执规则、不盖章。
  *
- * 这是 agent 写条目的**唯一**一条路（`knowledge` 工具只读），所以回执要够用：写废了当场知道。
+ * `knowledge` 工具的 `create` 之外，条目的一切改动都从这里过，所以回执要够用：写废了当场知道。
  */
 function reviewKnowledgeWrite(
   text: string,
-  ctx: ShuvixMdWriteContext
+  ctx: ShuvixMdWriteContext,
+  hasMarker: boolean
 ): ShuvixMdWriteOutcome | null {
   const k = ctx.knowledge
   if (!k) return null
@@ -189,6 +190,13 @@ function reviewKnowledgeWrite(
   const notes: string[] = []
   const warnings = diagnostics.filter((d) => d.level === 'warning').map((d) => `- ${d.message}`)
   if (warnings.length > 0) notes.push(`[OKF] Written with warnings:\n${warnings.join('\n')}`)
+  // 自述行缺失只回执、不代填：它是属性卡的识别依据，而卡片的识别不该由「宿主偷偷补一行」
+  // 来维持 —— 新建走 `knowledge` 的 `create` 就恒有这一行，手写的那份得自己知道少了什么
+  if (!hasMarker) {
+    notes.push(
+      `[OKF] This file has no \`shuvix: ${KNOWLEDGE_MARKER}\` line, so ShuviX will not render it as a knowledge entry (no property card). It is still indexed. Create entries with the \`knowledge\` tool's "create" action, which writes that line for you.`
+    )
+  }
 
   const b = bounds(text)
   const stamped =
@@ -234,7 +242,8 @@ export function reviewShuvixMdWrite(
   const marker = detectShuvixMarker(text)
   // 知识库条目走 OKF 分支：带 `shuvix: okf v…` 自述的，以及根目录下没有任何标记的
   // （外部工具 / 用户手写）。别家标记的文件照旧走各自契约的校验。
-  if (!marker || marker.type === KNOWLEDGE_MARKER_TYPE) return reviewKnowledgeWrite(text, ctx)
+  if (!marker || marker.type === KNOWLEDGE_MARKER_TYPE)
+    return reviewKnowledgeWrite(text, ctx, marker !== null)
   const label = markerLabel(marker)
 
   const validation = validateShuvixMdText(marker.type, text, fileName)

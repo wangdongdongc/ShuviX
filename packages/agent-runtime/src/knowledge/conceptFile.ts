@@ -273,7 +273,7 @@ const KNOWN_KEYS = new Set([
 
 /**
  * 组装一份概念文本（frontmatter 键序固定：规范字段在前、未知键殿后）。
- * 空 / 未声明的可选字段不写；`status` 恒写出 —— OKF 缺省 stable，agent 写的草稿必须显式。
+ * 空 / 未声明的可选字段不写；`status` 恒写出 —— 缺省等于 stable，写出来才分得清「有意如此」与「忘了写」。
  */
 export function buildConceptText(input: ConceptBuildInput, body: string): string {
   const fields: Record<string, unknown> = {
