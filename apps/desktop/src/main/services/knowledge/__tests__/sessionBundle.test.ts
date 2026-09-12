@@ -77,22 +77,22 @@ describe('sessionBundle', () => {
     expect(sessionDao.pick).toHaveBeenCalledWith('s1', ['projectId'])
     expect(projectDao.findById).toHaveBeenCalledWith('p1')
     expect(target).toEqual({
-      bundle: 'projects/acme-corp',
-      dir: bundleAt(root, 'projects/acme-corp'),
+      bundle: 'projects/p1',
+      dir: bundleAt(root, 'projects/p1'),
       label: 'project "Acme Corp"'
     })
-    expect(existsSync(fileAt(root, 'projects/acme-corp', 'project.md'))).toBe(true)
-    expect(existsSync(fileAt(root, 'projects/acme-corp', 'index.md'))).toBe(true)
+    expect(existsSync(fileAt(root, 'projects/p1', 'project.md'))).toBe(true)
+    expect(existsSync(fileAt(root, 'projects/p1', 'index.md'))).toBe(true)
   })
 
   it('SB-2 bundle 已存在时 create:false 也解析得到同一个；不重复建、不加提交', async () => {
     inProject()
     const created = await sessionBundle('s1', { create: true })
-    const dir = bundleAt(root, 'projects/acme-corp')
+    const dir = bundleAt(root, 'projects/p1')
     const commits = gitCommitCount(dir)
 
     expect(await sessionBundle('s1', { create: false })).toEqual(created)
-    expect(readdirSync(join(root, PROJECTS))).toEqual(['acme-corp'])
+    expect(readdirSync(join(root, PROJECTS))).toEqual(['p1'])
     expect(gitCommitCount(dir)).toBe(commits)
   })
 

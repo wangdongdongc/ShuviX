@@ -8,7 +8,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { existsSync, readdirSync, rmSync } from 'node:fs'
 
-const state = vi.hoisted(() => ({ root: '' }))
+const state = vi.hoisted(() => ({
+  root: '',
+  projects: {} as Record<string, { name: string } | undefined>
+}))
 
 vi.mock('../../../utils/paths', () => ({
   getShuvixKnowledgeRootDir: () => state.root,
@@ -16,6 +19,10 @@ vi.mock('../../../utils/paths', () => ({
 }))
 vi.mock('../../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {} })
+}))
+// 绑定概念的显示名取项目**当前**的名字 —— 目录名是 id，文件里的 title 是建库那一刻记下的
+vi.mock('../../../dao/projectDao', () => ({
+  projectDao: { findById: (id: string) => state.projects[id] }
 }))
 
 import { listKnowledgeEntries } from '../entries'
@@ -27,6 +34,7 @@ let root: string
 beforeEach(() => {
   root = makeTempRoot()
   state.root = root
+  state.projects = {}
   invalidateKnowledgeScan()
 })
 
@@ -109,5 +117,33 @@ describe('listKnowledgeEntries', () => {
       stale: false
     })
     for (const e of entries) expect(e.path, e.path).not.toMatch(/\\|^\//)
+  })
+
+  /**
+   * 目录名是项目 id，而 project.md 里的 title 是**建库那一刻**记下的名字 —— 项目改名之后它就旧了。
+   * 侧栏该显示用户此刻认得的那个名字，所以绑定概念的 title 在视图层换成项目的当前名字；
+   * 文件本身不回写（每次改名塞一条提交，只为一行显示，不划算）。
+   */
+  it('EN-5 绑定概念的 title 取项目当前名字；项目已删 / 非绑定概念一概原样', async () => {
+    seedConcept(root, `${BUNDLE}/project.md`, [
+      'type: Project',
+      'title: Old Name',
+      'resource: shuvix://project/p1'
+    ])
+    seedConcept(root, `${BUNDLE}/a.md`, ['type: Memory', 'title: A'])
+    seedConcept(root, `${OTHER_BUNDLE}/project.md`, [
+      'type: Project',
+      'title: Gone',
+      'resource: shuvix://project/p-deleted'
+    ])
+    state.projects = { p1: { name: 'New Name' } }
+
+    const byPath = new Map(
+      (await listKnowledgeEntries()).entries.map((e) => [e.path, e.title] as const)
+    )
+    expect(byPath.get(`${BUNDLE}/project.md`)).toBe('New Name')
+    // 普通条目不碰；项目查不到（已删）时保留文件里的 title，不留空
+    expect(byPath.get(`${BUNDLE}/a.md`)).toBe('A')
+    expect(byPath.get(`${OTHER_BUNDLE}/project.md`)).toBe('Gone')
   })
 })

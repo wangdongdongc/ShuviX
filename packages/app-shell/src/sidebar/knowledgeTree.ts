@@ -2,14 +2,16 @@
  * 知识库分组的树形派生 —— `KnowledgeEntry[]`（bundle 相对路径清单）→ 目录树。
  *
  * 纯函数、无 React，判定都在这里：顶层的项目容器 `projects/` 用固定文案（UI 按 `scopeDir`
- * 取 i18n），每个项目 bundle（`projects/<slug>`）用绑定概念 `project.md` 的 title 当目录名
- * （目录名只是 slug），绑定概念置于所在 bundle 首位。
+ * 取 i18n），每个项目 bundle（`projects/<projectId>`）用绑定概念 `project.md` 的 title 当目录名
+ * —— 目录名本身是 id，不给人看。
  * 只画存在的目录 —— 空作用域不占行（与 WikiGroup 同口径：清单来自文件，空文件夹只是噪声）。
  *
- * 绑定概念的 title 给了目录之后，它自己那一行显示文件名 stem（`project` / `bot`）—— 目录行正下方
- * 再重复一遍同一个名字毫无信息量（同 WikiGroup 的 WIKI.md 章程行）。解析器把缺省 title 落成
- * 文件名 stem，所以 title 等于 stem 的绑定概念视同**没有**命名目录：目录回退显示 slug，而不是
- * 把每个没写 title 的项目都标成「project」。
+ * **绑定概念本身不占行**：它的 title 已经是上面那个目录行的名字，在目录正下方再画一行
+ * `project` 毫无信息量，还白吃一级缩进。它仍然在磁盘上、仍然可经「打开文件夹」触达，只是
+ * 不进侧栏清单。
+ *
+ * 层级是 组 → 容器 → 项目库 → 条目。缩进由 UI 侧给：**最外层容器不缩进**、每层 12px，
+ * 所以条目落在 24px（改动前是 34px —— 那时还多一行绑定概念、且每行带 10px 基准）。
  *
  * 路径归一与 agent-runtime 的 normalizeBundlePath 同规则（反斜杠 → `/`、压缩重复分隔符、去
  * 前导 `./` 与 `/`、去尾随 `/`）；同一路径出现两次只取第一条（行 key 是路径）。
@@ -25,9 +27,7 @@ export type KnowledgeScopeDir = 'projects'
 
 export interface KnowledgeTreeFile {
   entry: KnowledgeEntry
-  /** 绑定概念（project.md、bot.md）：置于所在目录首位、换图标 */
-  charter: boolean
-  /** 行显示名：一般为 title；命名了所在目录的绑定概念显示文件名 stem（见文件头） */
+  /** 行显示名：title，缺省回落文件名 stem */
   label: string
 }
 
@@ -38,7 +38,7 @@ export interface KnowledgeTreeDir {
   name: string
   /** 固定文案的目录；null = 按 title（绑定概念）/ name 显示 */
   scopeDir: KnowledgeScopeDir | null
-  /** 绑定概念的 title（`projects/<slug>/project.md`、`bots/<name>/bot.md`）；无则 null */
+  /** 绑定概念的 title（`projects/<id>/project.md`）；无则 null */
   title: string | null
   dirs: KnowledgeTreeDir[]
   files: KnowledgeTreeFile[]
@@ -51,7 +51,7 @@ function scopeDirOf(dirPath: string): KnowledgeScopeDir | null {
   return dirPath === KNOWLEDGE_PROJECTS_DIR ? 'projects' : null
 }
 
-/** 绑定概念：`projects/<slug>/project.md` —— 它给所在 bundle 命名 */
+/** 绑定概念：`projects/<id>/project.md` —— 它给所在 bundle 命名，自己不占行 */
 function isCharter(path: string): boolean {
   const segs = path.split('/')
   return segs.length === 3 && segs[0] === KNOWLEDGE_PROJECTS_DIR && segs[2] === PROJECT_CONCEPT_FILE
@@ -116,27 +116,18 @@ export function buildKnowledgeTree(entries: readonly KnowledgeEntry[]): Knowledg
     seen.add(path)
     const cut = path.lastIndexOf('/')
     const dir = ensureDir(cut === -1 ? '' : path.slice(0, cut))
-    const charter = isCharter(path)
     const title = entry.title.trim()
-    const stem = stemOf(path)
-    // 绑定概念的 title 是目录的显示名（目录名只是 slug）；title 等于 stem 的是解析器
-    // 缺省出来的，不算命名
-    const namesDir = charter && !!title && title !== stem
-    if (namesDir) dir.title = title
-    dir.files.push({
-      entry: { ...entry, path },
-      charter,
-      label: namesDir ? stem : title || stem
-    })
+    // 绑定概念只给目录命名，自己不进清单
+    if (isCharter(path)) {
+      if (title) dir.title = title
+      continue
+    }
+    dir.files.push({ entry: { ...entry, path }, label: title || stemOf(path) })
   }
 
   const sortDir = (node: KnowledgeTreeDir, depth: number): void => {
-    node.files.sort((a, b) =>
-      a.charter !== b.charter
-        ? a.charter
-          ? -1
-          : 1
-        : compareLabel(a.label, b.label) || compareLabel(a.entry.path, b.entry.path)
+    node.files.sort(
+      (a, b) => compareLabel(a.label, b.label) || compareLabel(a.entry.path, b.entry.path)
     )
     node.dirs.sort((a, b) => {
       if (depth === 0) {

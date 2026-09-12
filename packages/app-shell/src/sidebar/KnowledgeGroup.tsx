@@ -24,8 +24,7 @@ import {
   ClockAlert,
   FileText,
   FolderClosed,
-  FolderOpen,
-  ScrollText
+  FolderOpen
 } from 'lucide-react'
 import { useAppEvent, useChatStore } from '@shuvix/chat-ui'
 import { KNOWLEDGE_PROJECT_ID, type KnowledgeEntry } from '@shuvix/chat-protocol/knowledge'
@@ -62,8 +61,12 @@ const SCOPE_LABEL_KEY: Record<KnowledgeScopeDir, string> = {
   projects: 'knowledge.scopeProjects'
 }
 
-/** 行缩进：基准同 SessionItem 的 pl-2.5（10px），每层再进 12px（与 WikiGroup 一致） */
-const indent = (depth: number): number => 10 + depth * 12
+/**
+ * 行缩进：每层 12px，**最外层不缩进**（容器 `项目` 贴着组标题的左边）。
+ * 别处的侧栏行有 10px 基准（SessionItem 的 pl-2.5），这里刻意不要 —— 知识库比会话列表多两层
+ * （容器 → 项目库 → 条目），基准那 10px 会让最深的条目一路推到 34px。
+ */
+const indent = (depth: number): number => depth * 12
 
 export function KnowledgeGroup({ adapter }: KnowledgeGroupProps): React.JSX.Element {
   const { t } = useTranslation()
@@ -80,7 +83,7 @@ export function KnowledgeGroup({ adapter }: KnowledgeGroupProps): React.JSX.Elem
 
   const [collapsed, setCollapsed] = useState(true)
   const [scanned, setScanned] = useState<{ entries: KnowledgeEntry[]; root: string } | null>(null)
-  // 翻转集而非展开集：顶层作用域目录默认展开、更深层默认折叠，翻转一次即取反；重扫新增的
+  // 翻转集而非展开集：顶层目录默认展开、更深层默认折叠，翻转一次即取反；重扫新增的
   // 目录天然落在各自的默认态，无需与扫描结果对账
   const [toggled, setToggled] = useState<Set<string>>(() => new Set())
   // 是否扫过（聚焦 / 事件重扫只在首次展开后生效，未展开不建根目录）
@@ -126,7 +129,9 @@ export function KnowledgeGroup({ adapter }: KnowledgeGroupProps): React.JSX.Elem
       else next.add(path)
       return next
     })
-  const isDirOpen = (path: string, depth: number): boolean => (depth === 0) !== toggled.has(path)
+  // 默认态按**结构**层级判（顶层目录展开、更深层折叠），不按渲染缩进 —— 容器不步进之后
+  // 项目库的 depth 也是 0，拿缩进判会把所有项目库都默认展开
+  const isDirOpen = (path: string): boolean => !path.includes('/') !== toggled.has(path)
 
   const tree = useMemo(() => buildKnowledgeTree(scanned?.entries ?? []), [scanned])
 
@@ -187,7 +192,7 @@ export function KnowledgeGroup({ adapter }: KnowledgeGroupProps): React.JSX.Elem
   const renderFile = (f: KnowledgeTreeFile, depth: number): React.ReactNode => {
     const e = f.entry
     const active = activeNotePath === e.path
-    const Icon = f.charter ? ScrollText : FileText
+    const Icon = FileText
     const deprecated = e.status === 'deprecated'
     return (
       <div
@@ -231,7 +236,8 @@ export function KnowledgeGroup({ adapter }: KnowledgeGroupProps): React.JSX.Elem
   }
 
   const renderDir = (node: KnowledgeTreeDir, depth: number): React.ReactNode => {
-    const open = isDirOpen(node.path, depth)
+    const open = isDirOpen(node.path)
+
     const label = node.scopeDir ? t(SCOPE_LABEL_KEY[node.scopeDir]) : (node.title ?? node.name)
     return (
       <div key={node.path}>

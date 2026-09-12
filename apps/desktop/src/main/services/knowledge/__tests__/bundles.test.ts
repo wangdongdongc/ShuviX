@@ -1,8 +1,8 @@
 /**
- * bundles —— 一个绑定实体一个 bundle（本期只有 `projects/<slug>/`）。这里钉两件事：
+ * bundles —— 一个绑定实体一个 bundle（本期只有 `projects/<projectId>/`）。这里钉两件事：
  * 建一个 bundle 是「目录 + project.md + index 投影 + git init 基线提交」四件事一次做完；
- * **绑定的真源是 project.md 的 `resource`，目录名只是给人看的 slug** —— 所以同一个项目永远
- * 解析到同一个目录（同名项目各自 -2 去重），项目改名也不搬家。
+ * **目录名就是项目 id** —— 不会撞、不随改名变，所以不需要去重；而绑定的真源仍是 project.md 的
+ * `resource`，改名前用 slug 建出来的旧目录照样被认出来（这条兜底也钉在下面）。
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { existsSync, readFileSync, readdirSync, rmSync } from 'node:fs'
@@ -70,11 +70,12 @@ afterEach(async () => {
 })
 
 describe('ensureProjectBundle', () => {
-  it('BD-1 建一个项目 bundle：目录（slug 取项目名）+ project.md（宿主 actor + shuvix://project/<id> 绑定 + okf 标记）+ 自己的 index / log 投影 + git init 一条基线提交', async () => {
-    expect(isBundleInitialized('projects/acme-corp')).toBe(false)
+  it('BD-1 建一个项目 bundle：目录名取项目 id + project.md（宿主 actor + shuvix://project/<id> 绑定 + okf 标记）+ 自己的 index / log 投影 + git init 一条基线提交', async () => {
+    expect(isBundleInitialized('projects/p1')).toBe(false)
 
     const bundle = await ensureProjectBundle(project())
-    expect(bundle).toBe('projects/acme-corp')
+    // 目录名是 id 而不是项目名的 slug：项目可以改名，id 不会
+    expect(bundle).toBe('projects/p1')
     expect(isBundleInitialized(bundle)).toBe(true)
 
     const conceptMd = read(bundle, 'project.md')
@@ -113,12 +114,12 @@ describe('ensureProjectBundle', () => {
 
     expect(await ensureProjectBundle(project())).toBe(bundle)
     expect(await findProjectBundle('p1')).toBe(bundle)
-    expect(containerDirs()).toEqual(['acme-corp'])
+    expect(containerDirs()).toEqual(['p1'])
     expect(read(bundle, 'project.md')).toBe(before)
     expect(gitCommitCount(bundleAt(root, bundle))).toBe(commits)
 
     expect(await findProjectBundle('nope')).toBeNull()
-    // bundle 边界是 `projects/<slug>`：容器里的散文件不是 bundle，bundle 内子目录也不是根
+    // bundle 边界是 `projects/<id>`：容器里的散文件不是 bundle，bundle 内子目录也不是根
     seedConcept(root, `${PROJECTS}/project.md`, [
       'type: Project',
       'title: Stray',
@@ -133,27 +134,47 @@ describe('ensureProjectBundle', () => {
     expect(await findProjectBundle('p9')).toBeNull()
   })
 
-  it('BD-3 slug 只是目录名：同名的第二个项目拿 `-2`，各自绑各自的 id；名字 slug 化为空时回落 project', async () => {
+  it('BD-3 目录名不再需要去重：同名的两个项目各拿各的 id 目录；名字里有什么字符都不影响目录名', async () => {
     const first = await ensureProjectBundle(project())
     const second = await ensureProjectBundle(project({ id: 'p2' }))
-    expect(first).toBe('projects/acme-corp')
-    expect(second).toBe('projects/acme-corp-2')
+    expect(first).toBe('projects/p1')
+    expect(second).toBe('projects/p2')
     expect(await findProjectBundle('p1')).toBe(first)
     expect(await findProjectBundle('p2')).toBe(second)
 
-    expect(await ensureProjectBundle(project({ id: 'p3', name: '###' }))).toBe('projects/project')
-    expect(containerDirs()).toEqual(['acme-corp', 'acme-corp-2', 'project'])
+    // 名字 slug 化为空、含空格大小写 —— 目录名一概只看 id
+    expect(await ensureProjectBundle(project({ id: 'p3', name: '###' }))).toBe('projects/p3')
+    expect(containerDirs()).toEqual(['p1', 'p2', 'p3'])
   })
 
-  it('BD-4 项目改名不搬家：绑定按 resource 查，改名后同一个 id 仍解析到原目录，不建新目录、不加提交', async () => {
+  /**
+   * 目录名只是快路径。改名那一版（v0.1.45 及更早）用项目名的 slug 当目录名，那些 bundle
+   * 已经在用户盘上了 —— 按 id 直取落空之后必须还能按 resource 找回来，否则会给同一个项目
+   * 再建一个空库。
+   */
+  it('BD-3b 目录名对不上时按 resource 兜底：旧 slug 目录仍解析得到，且不会再建一个 id 目录', async () => {
+    seedConcept(root, `${PROJECTS}/acme-corp/project.md`, [
+      'type: Project',
+      'title: Acme Corp',
+      'resource: shuvix://project/p1'
+    ])
+    seedConcept(root, `${PROJECTS}/acme-corp/index.md`, [])
+    invalidateKnowledgeScan()
+
+    expect(await findProjectBundle('p1')).toBe('projects/acme-corp')
+    expect(await ensureProjectBundle(project())).toBe('projects/acme-corp')
+    expect(containerDirs()).toEqual(['acme-corp'])
+  })
+
+  it('BD-4 项目改名不搬家：目录名是 id，改名后同一个 id 仍解析到原目录，不建新目录、不加提交', async () => {
     const bundle = await ensureProjectBundle(project())
     const commits = gitCommitCount(bundleAt(root, bundle))
 
     const renamed = project({ name: 'Globex' })
     expect(await ensureProjectBundle(renamed)).toBe(bundle)
     expect(await findProjectBundle('p1')).toBe(bundle)
-    expect(containerDirs()).toEqual(['acme-corp'])
-    // 目录名与 title 都是旧的：改名同步 title 是别处的事，这里只保证不新建
+    expect(containerDirs()).toEqual(['p1'])
+    // 文件里的 title 是建库那一刻的名字，改名不回写：侧栏显示的当前名字由 entries 视图给
     expect(read(bundle, 'project.md')).toContain('title: Acme Corp')
     expect(gitCommitCount(bundleAt(root, bundle))).toBe(commits)
   })
