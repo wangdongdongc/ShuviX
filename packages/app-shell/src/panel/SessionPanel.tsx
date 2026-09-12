@@ -62,6 +62,15 @@ export function useSessionPanelReveal(enabled = true, previewInPanel = false): v
     const sid = useChatStore.getState().activeSessionId
     if (sid) useSessionPanelStore.getState().show(sid, 'preview')
   }, [filePreviewRequest, enabled, previewInPanel])
+
+  // 任务揭示：对话流里那张工具卡的行尾状态被点了 —— 派生 agent 的转写在面板里，
+  // 这是从卡片回到转写的唯一一条路，所以这一条**主动揭示**（与 Sub-agent 旧 tab 不同）
+  const taskRevealRequest = useChatStore((s) => s.taskRevealRequest)
+  useEffect(() => {
+    if (!enabled || !taskRevealRequest) return
+    const sid = useChatStore.getState().activeSessionId
+    if (sid) useSessionPanelStore.getState().show(sid, 'tasks')
+  }, [taskRevealRequest, enabled])
 }
 
 interface SessionPanelToolItem {

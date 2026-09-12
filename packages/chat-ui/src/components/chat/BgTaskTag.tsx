@@ -9,6 +9,7 @@ import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { TaskInfo } from '@shuvix/chat-protocol/types/task'
 import { isTaskFinished, useBgTaskByToolCall } from '../../stores/bgTaskStore'
+import { useChatStore } from '../../stores/chatStore'
 
 function formatDuration(ms: number): string {
   const total = Math.max(0, Math.round(ms / 1000))
@@ -71,7 +72,19 @@ export function BgTaskRowState({ toolCallId }: { toolCallId: string }): React.JS
   const task = useBgTaskByToolCall(toolCallId)
   const now = useNowTicker(!!task && !isTaskFinished(task))
   if (!task) return null
-  return <BgTaskStateText task={task} now={now} />
+  // 点它跳到面板里的那一条 —— 派生 agent 的转写搬进面板之后，这是从卡片回到转写的路。
+  // stopPropagation：这一行本身是卡片的展开开关，点状态不该顺手把卡片展开
+  return (
+    <button
+      onClick={(e) => {
+        e.stopPropagation()
+        useChatStore.getState().revealTask(task.taskId)
+      }}
+      className="flex-shrink-0 hover:text-text-secondary transition-colors"
+    >
+      <BgTaskStateText task={task} now={now} />
+    </button>
+  )
 }
 
 function BgTaskStateText({ task, now }: { task: TaskInfo; now: number }): React.JSX.Element {

@@ -999,7 +999,7 @@
     "tasksKindSubSession": "子会话",
     "tasksOpenSession": "打开会话",
     "tasksAgentGone": "转写只在应用本次运行期间保留",
-    "tasksBlockedOn": "正在等你回答：",
+    "tasksBlockedOn": "等你回答",
     "calendar": "日历"
   },
   "browser": {

@@ -999,7 +999,7 @@
     "tasksKindSubSession": "サブセッション",
     "tasksOpenSession": "セッションを開く",
     "tasksAgentGone": "トランスクリプトはアプリの実行中のみ保持されます",
-    "tasksBlockedOn": "回答をお待ちしています:",
+    "tasksBlockedOn": "回答待ち",
     "calendar": "カレンダー"
   },
   "browser": {

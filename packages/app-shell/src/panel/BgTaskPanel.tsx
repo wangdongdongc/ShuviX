@@ -40,6 +40,18 @@ const POLL_MS = 1000
 /** 首帧取日志尾部窗口 */
 const TAIL_WINDOW_BYTES = 200 * 1024
 
+/**
+ * 这条子会话此刻是不是卡在等用户批准。
+ *
+ * 问渲染端自己：待答询问按会话 id 记在 chatStore 里（会话列表上那个标记同一个源）。
+ * 这是**面板存在的一个主要理由** —— 一个卡在询问上的后台活不会自己好起来，
+ * 而在此之前它只在那条子会话自己的界面里才看得见。
+ */
+function useBlockedOnUser(task: TaskInfo): boolean {
+  const childId = task.subject.kind === 'sub-session' ? task.subject.childSessionId : ''
+  return useChatStore((s) => (childId ? (s.sessionPendingInputs[childId]?.length ?? 0) > 0 : false))
+}
+
 /** 类别文案 —— 行尾那句「Bash · 运行中 · 4m02s」的第一段 */
 function useKindLabel(kind: TaskInfo['kind']): string {
   const { t } = useTranslation()
@@ -211,15 +223,14 @@ function AgentDetail({ task }: { task: TaskInfo }): React.JSX.Element {
  */
 function SubSessionDetail({ task }: { task: TaskInfo }): React.JSX.Element | null {
   const { t } = useTranslation()
+  const blocked = useBlockedOnUser(task)
   if (task.subject.kind !== 'sub-session') return null
-  const { childSessionId, blockedOn } = task.subject
+  const { childSessionId } = task.subject
   return (
     <div className="px-2 pb-2 space-y-1.5">
-      {task.status === 'waiting-input' && blockedOn?.length ? (
-        <div className="text-[10px] text-warning leading-relaxed">
-          {t('panel.tasksBlockedOn')} {blockedOn.join(' | ')}
-        </div>
-      ) : null}
+      {blocked && (
+        <div className="text-[10px] text-warning leading-relaxed">{t('panel.tasksBlockedOn')}</div>
+      )}
       <button
         onClick={() => useChatStore.getState().setActiveSessionId(childSessionId)}
         className="text-[10px] text-accent hover:underline"
@@ -312,8 +323,11 @@ function TaskRow({
   divided: boolean
   onToggle: () => void
 }): React.JSX.Element {
+  const { t } = useTranslation()
   const { state, duration } = useBgTaskStatus(task, now)
   const kindLabel = useKindLabel(task.kind)
+  // 卡在等人回答的那条要一眼看得出来 —— 它不会自己好起来，是这张表里唯一需要用户动手的状态
+  const blocked = useBlockedOnUser(task)
 
   const handleStop = useCallback(
     (e: React.MouseEvent) => {
@@ -355,8 +369,8 @@ function TaskRow({
           <div className="truncate text-xs text-text-primary" title={task.title}>
             {task.title}
           </div>
-          <div className="mt-0.5 text-[10px] text-text-tertiary">
-            {kindLabel} · {state} · {duration}
+          <div className={`mt-0.5 text-[10px] ${blocked ? 'text-warning' : 'text-text-tertiary'}`}>
+            {kindLabel} · {blocked ? t('panel.tasksBlockedOn') : state} · {duration}
           </div>
         </div>
         <TaskAction task={task} onStop={handleStop} onDismiss={handleDismiss} />
@@ -392,6 +406,18 @@ export function BgTaskPanel({ sessionId }: { sessionId: string | null }): React.
   // 展开互斥：点已展开的收起，否则独占展开
   const toggleExpand = useCallback(
     (taskId: string) => setExpandedId((prev) => (prev === taskId ? null : taskId)),
+    []
+  )
+
+  // 对话流里那张工具卡的行尾状态被点了 → 独占展开对应那条（面板的展开/切页由宿主负责）。
+  // 订阅而不是 useEffect 读取：这是「外部状态变了就 setState」，effect 体里同步 setState
+  // 会引发级联渲染（react-hooks 规则直接拦）
+  useEffect(
+    () =>
+      useChatStore.subscribe((next, prev) => {
+        const req = next.taskRevealRequest
+        if (req && req !== prev.taskRevealRequest) setExpandedId(req.taskId)
+      }),
     []
   )
 

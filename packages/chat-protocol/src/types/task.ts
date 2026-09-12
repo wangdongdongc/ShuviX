@@ -52,12 +52,16 @@ export interface AgentTaskSubject {
   parentToolCallId?: string
 }
 
-/** 子会话轮次的专属面 —— 一次 prompt 是一个任务，子会话本身是长期实体 */
+/**
+ * 子会话轮次的专属面 —— 一次 prompt 是一个任务，子会话本身是长期实体。
+ *
+ * 刻意**不带**「它卡在什么问题上」：那件事渲染端自己就知道（待答询问按会话 id 记在
+ * chatStore.sessionPendingInputs 里，和会话列表上那个标记同一个源），从主进程再传一份
+ * 只会多一个会过期的副本。
+ */
 export interface SubSessionTaskSubject {
   kind: 'sub-session'
   childSessionId: string
-  /** `waiting-input` 时它到底卡在什么问题上（待答询问的人读摘要） */
-  blockedOn?: string[]
 }
 
 export type TaskSubject = BashTaskSubject | AgentTaskSubject | SubSessionTaskSubject

@@ -999,7 +999,7 @@
     "tasksKindSubSession": "Sub-session",
     "tasksOpenSession": "Open session",
     "tasksAgentGone": "The transcript is only kept while the app is running",
-    "tasksBlockedOn": "Waiting for your answer:",
+    "tasksBlockedOn": "Waiting for you",
     "calendar": "Calendar"
   },
   "browser": {

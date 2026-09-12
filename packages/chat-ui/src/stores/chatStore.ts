@@ -208,6 +208,14 @@ interface ChatState {
    */
   filePreviewRequest: { absPath: string; nonce: number; openedBy: 'agent' | 'user' } | null
   /**
+   * 请求在后台任务面板里亮出某条任务的信号（对话流里那张工具卡的行尾状态被点了）。
+   *
+   * 派生 agent 的转写搬进面板之后，工具卡上不再有内容可展开 —— 这个信号就是从卡片
+   * 回到那份转写的路。消费方：宿主的 useSessionPanelReveal 展开面板并切到任务页，
+   * 面板据 taskId 独占展开那一条。含 nonce 以便重复点同一条也能触发。
+   */
+  taskRevealRequest: { taskId: string; nonce: number } | null
+  /**
    * 请求把一条历史用户消息重建为输入框草稿的信号（消息回退触发）。
    * content 含 {{shuvixInlineToken}} 标记、inlineTokens 为其元数据；由 InputArea 消费：
    * 重建可编辑明文并重新登记粘贴芯片/@ 引用，避免裸标记落入输入框导致 token 失效丢信息。
@@ -304,6 +312,8 @@ interface ChatState {
   /** 请求打开某文件预览（绝对路径）；preview 工具事件 / 笔记本 [[wiki-link]] / Files 面板点击触发。
    *  openedBy 缺省 'user'：只有智能体事件那条路显式传 'agent'（预览面板据此亮出来源横幅）。 */
   requestFilePreview: (absPath: string, openedBy?: 'agent' | 'user') => void
+  /** 请求在后台任务面板里亮出某条任务（工具卡行尾状态点击触发） */
+  revealTask: (taskId: string) => void
   /** 请求把历史用户消息重建为输入框草稿（消息回退触发）；由 InputArea 消费后 clear */
   requestDraftRestore: (content: string, inlineTokens?: Record<string, InlineToken>) => void
   clearDraftRestore: () => void
@@ -591,6 +601,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   sessions: [],
   ...deriveActive(null),
   filePreviewRequest: null,
+  taskRevealRequest: null,
   draftRestoreRequest: null,
   messages: [],
   sessionStreams: {},
@@ -649,6 +660,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
   requestFilePreview: (absPath, openedBy = 'user') =>
     set((state) => ({
       filePreviewRequest: { absPath, nonce: (state.filePreviewRequest?.nonce ?? 0) + 1, openedBy }
+    })),
+  revealTask: (taskId) =>
+    set((state) => ({
+      taskRevealRequest: { taskId, nonce: (state.taskRevealRequest?.nonce ?? 0) + 1 }
     })),
   requestDraftRestore: (content, inlineTokens) =>
     set((state) => ({
