@@ -18,6 +18,7 @@ import { requestUserInputFor } from '../services/userInputBroker'
 import { t } from '../i18n'
 import { createLogger } from '../logger'
 import { agentFactory } from './agentHost'
+import { taskRegistry } from '../services/taskRegistry'
 
 export type { InProcessAgentType }
 
@@ -30,5 +31,7 @@ export const agentManager = createSubAgentManager({
   requestUserInput: (rootSessionId, req) => requestUserInputFor(rootSessionId, req),
   broadcast: (event: ChatEvent) => electronEventSink.broadcast(event),
   logger: { info: (m) => log.info(m), warn: (m) => log.warn(m), error: (m) => log.error(m) },
-  getAbortedNote: () => t('agent.toolAborted') || 'Aborted by user.'
+  getAbortedNote: () => t('agent.toolAborted') || 'Aborted by user.',
+  // 每次派生在后台任务枢纽登记一条任务（taskId = agentId），面板因此与 bash、子会话同列一张表
+  tasks: taskRegistry
 })

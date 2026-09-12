@@ -108,6 +108,11 @@ export interface TaskRegistry {
   settle: (taskId: string, patch: SettlePatch) => void
   /** 运行中的状态 / 专属面更新（`waiting-input`、日志超阈值…） */
   update: (taskId: string, patch: { status?: TaskStatus; subject?: Partial<TaskSubject> }) => void
+  /**
+   * 已落定的任务又跑起来了 —— 用户在面板里追问一个跑完的派生 agent。
+   * 那条面板行代表的是**那个 agent**，不是它的某一轮，所以复用同一条任务而不是另起一条。
+   */
+  reopen: (taskId: string) => boolean
   stop: (taskId: string, opts?: { by?: 'agent' | 'user'; force?: boolean }) => boolean
   setNotify: (taskId: string, enabled: boolean) => boolean
   get: (taskId: string) => TaskInfo | undefined
@@ -332,6 +337,16 @@ export function createTaskRegistry(deps: TaskRegistryDeps): TaskRegistry {
         entry.info.subject = { ...entry.info.subject, ...patch.subject } as TaskSubject
       }
       touch(entry)
+    },
+
+    reopen(taskId) {
+      const entry = tasks.get(taskId)
+      if (!entry || entry.info.endedAt === null) return false
+      entry.info.status = 'running'
+      entry.info.endedAt = null
+      entry.stoppedBy = null
+      touch(entry)
+      return true
     },
 
     stop(taskId, opts = {}) {

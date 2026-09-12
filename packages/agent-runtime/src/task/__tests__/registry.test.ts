@@ -132,6 +132,20 @@ describe('taskRegistry — 等待策略', () => {
     expect(delivered).toHaveLength(0)
   })
 
+  it('reopen 之后可以重新 join —— 跑完的派生 agent 被追问时又活了过来', async () => {
+    const { registry, create } = setup()
+    const id = create()
+    registry.settle(id, { status: 'done' })
+    expect(registry.reopen(id)).toBe(true)
+    expect(registry.get(id)).toMatchObject({ status: 'running', endedAt: null })
+
+    const rejoined = registry.join(id)
+    registry.settle(id, { status: 'done' })
+    expect(await rejoined).toMatchObject({ kind: 'settled' })
+    // 还没落定过的任务没有「重开」可言
+    expect(registry.reopen(create())).toBe(false)
+  })
+
   it('join 一条已落定的任务立刻返回', async () => {
     const { registry, create } = setup()
     const id = create()

@@ -45,6 +45,11 @@ export interface AgentTaskSubject {
   profileName: string
   /** 派生层级（根会话 = 0，直接派生 = 1） */
   depth: number
+  /**
+   * 派发它的那次 tool_call id（工作流 run 起的没有）。
+   * 对话流里那张工具卡据此找到自己的任务，把实时状态挂在摘要行尾。
+   */
+  parentToolCallId?: string
 }
 
 /** 子会话轮次的专属面 —— 一次 prompt 是一个任务，子会话本身是长期实体 */

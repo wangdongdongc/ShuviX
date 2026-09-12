@@ -27,6 +27,7 @@ vi.mock('@shuvix/agent-runtime', () => ({
 }))
 // 协调器接线之外的依赖：都只在真跑一轮时才用得上
 vi.mock('../agentHost', () => ({ agentFactory: { createAgent: vi.fn() } }))
+vi.mock('../../services/taskRegistry', () => ({ taskRegistry: {} }))
 vi.mock('../../services/userInputBroker', () => ({ requestUserInputFor: vi.fn() }))
 // electronEventSink 的两个下游出口 —— 断言就下在这里
 vi.mock('../../frontend/core', () => ({

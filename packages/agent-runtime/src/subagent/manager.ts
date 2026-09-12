@@ -23,6 +23,7 @@ import type { HarnessSession } from '../harness/harnessSession'
 import type { AgentFactory } from '../agentProfile/createAgent'
 import type { InProcessAgentType, SubAgentModelConfig } from './types'
 import type { RuntimeLogger } from '../types'
+import type { TaskRegistry } from '../task/registry'
 import {
   NextTool,
   NEXT_NUDGE_TEXT,
@@ -111,6 +112,12 @@ export interface SubAgentManagerDeps {
   getAbortedNote?: () => string
   /** 派生层级上限（缺省 DEFAULT_MAX_AGENT_DEPTH） */
   maxAgentDepth?: number
+  /**
+   * 后台任务枢纽（可选）。注入后每次派生都在那里登记一条任务 —— 面板因此能与 bash、
+   * 子会话同列一张表。**taskId 就是 agentId**（它已经是事件频道），不另发明一套。
+   * 不注入时本协调器行为不变（扩展端暂未接入）。
+   */
+  tasks?: TaskRegistry
 }
 
 export interface RunTaskParams {
@@ -245,6 +252,7 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
 
   async function createSession(params: {
     parentSessionId: string
+    parentToolCallId?: string
     agentType: InProcessAgentType
     description: string
     modelConfig: SubAgentModelConfig
@@ -254,6 +262,7 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
   }): Promise<SpawnedAgent> {
     const {
       parentSessionId,
+      parentToolCallId,
       agentType,
       description,
       modelConfig,
@@ -329,6 +338,19 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
       description
     })
 
+    deps.tasks?.create({
+      taskId: agentId,
+      kind: 'agent',
+      // 归属**可见**会话：嵌套派生不落在中间那层身上
+      sessionId: rootSessionId,
+      title: agentType.displayName,
+      subject: { kind: 'agent', profileName: agentType.name, depth, parentToolCallId },
+      // 停 = 软停止（保留已产出的部分结果、按「已完成」收尾），与面板上那枚中断按钮同义
+      stop: () => interrupt(agentId)
+      // 刻意不给 formatNotice：派生 agent 目前恒为同步等待，结果由那次调用交回。
+      // 异步挂起形态（S3）连同通知文案一起加。
+    })
+
     deps.logger?.info(
       `Spawned agent=${agentId} profile=${agentType.name} parent=${parentSessionId} depth=${depth} root=${rootSessionId}`
     )
@@ -352,6 +374,7 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
     // 契约捕获：结果以捕获值为准 —— 捕获后紧跟软停止，树尾部（部分消息/中止痕迹）不代表结果
     if (captured?.hit) {
       const result = JSON.stringify(captured.value, null, 2)
+      deps.tasks?.settle(session.agentId, { status: 'done' })
       deps.broadcast({
         type: 'sub_session_end',
         sessionId: session.agentId,
@@ -371,6 +394,10 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
         : extractResult(messages, execError)
     const isError = session.interrupted ? false : !!execError || session.aborted
 
+    deps.tasks?.settle(session.agentId, {
+      // 中止是失败态，软停止不是（保留部分结果、按「已完成」收尾）
+      status: session.aborted ? 'killed' : isError ? 'error' : 'done'
+    })
     deps.broadcast({
       type: 'sub_session_end',
       sessionId: session.agentId,
@@ -405,6 +432,10 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
     s.dispose()
     sessions.delete(subSessionId)
     registry.unregister(subSessionId)
+    // 任务条目随之消失（用户从面板关掉了这条）。先落定再销：还在跑的那次
+    // runTask 正挂在这条任务上等着，条目一删它就再也等不到了
+    deps.tasks?.settle(subSessionId, { status: 'killed' })
+    deps.tasks?.dismiss(subSessionId)
   }
 
   return {
@@ -456,6 +487,7 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
       // 不限制并发数量：可同时堆叠任意多个（面板纵向手风琴展示）；层级由深度校验约束
       const session = await createSession({
         parentSessionId,
+        parentToolCallId,
         agentType,
         description,
         modelConfig,
@@ -482,6 +514,11 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
       })
 
       capturedAgentId = session.agentId
+
+      // 同步等待形态：把等待者挂在任务上 —— 落定时「还有人在等」，枢纽因此不发完成通知
+      // （结果由本次调用交回）。outcome 本身用不上：派生 agent 的结果是转写抽取出来的，
+      // 不在任务快照里。异步挂起形态（S3）改的就是这里的等待策略。
+      const joined = deps.tasks?.join(session.agentId)
 
       if (parentAbortSignal) {
         if (parentAbortSignal.aborted) {
@@ -521,7 +558,9 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
         }
       }
 
-      return await finishTurn(session, parentSessionId, execError, captured)
+      const outcome = await finishTurn(session, parentSessionId, execError, captured)
+      await joined
+      return outcome
     },
 
     async continueTask(params: {
@@ -535,6 +574,8 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
       if (session.aborted) throw new Error(`Sub-session already aborted: ${subSessionId}`)
       // 新一轮追问：清除上一轮的「用户中断」标记
       session.interrupted = false
+      // 面板里那条任务行代表的是**这个 agent**（不是它的某一轮），追问让它回到运行态
+      deps.tasks?.reopen(subSessionId)
       const parentSessionId = registry.get(subSessionId)?.parentAgentId ?? ''
 
       // 内联 Token（slash 命令等）：前端已展开，后端解析为发给 Agent 的真实文本；
