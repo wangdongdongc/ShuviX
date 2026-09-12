@@ -68,6 +68,7 @@ vi.mock('../../logger', () => ({
 type Mod = typeof import('../subSessionRunner')
 let mod: Mod
 let runner: Mod['subSessionRunner']
+let registry: typeof import('../taskRegistry')
 
 const PARENT = 'parent-1'
 const CHILD = 'child-1'
@@ -114,10 +115,18 @@ function defaultWorld(): void {
 beforeAll(async () => {
   mod = await import('../subSessionRunner')
   runner = mod.subSessionRunner
+  // 完成通知归后台任务枢纽，投递实现由 sessionService 在生产启动时注入（避免与它成环）。
+  // 这里把那一根线照原样接上 —— 断了它，测的就不是通知规则而是"没人接线"。
+  registry = await import('../taskRegistry')
+  registry.setTaskNotifier((sessionId, text) => {
+    void mocks.getAgentSession(sessionId)?.notify(text)
+  })
 })
 
 beforeEach(() => {
   vi.useRealTimers()
+  // 枢纽是进程内单例，上一条用例的残留任务不该漏进下一条
+  registry.taskRegistry.killAll()
   for (const fn of Object.values(mocks)) fn.mockReset()
   defaultWorld()
 })

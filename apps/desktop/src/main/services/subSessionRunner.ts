@@ -8,8 +8,9 @@
  *     越权在这里落空，工具层只负责把拒绝理由翻译给模型。
  *  2. **等待与降级**：前台 await 整轮拿最终答复；超时**不杀**，降级成后台
  *     （bash 超时杀的是一个进程，这里杀的是一段用户看得见、可能已经改了半个仓库的对话）。
- *  3. **后台记账与回报**：跑完经 `AgentSession.notify` 告诉父会话 —— 与后台任务
- *     （bgTaskService → setBgTaskNotifier）同一条线，语义完全相同，不新发明通道。
+ *  3. **记账与回报交给后台任务枢纽**：一次 `prompt` 就是一个任务（`services/taskRegistry`），
+ *     与 bash 后台任务同一份登记簿、同一条通知规则 —— 「落定时还有人在等就不通知」。
+ *     「前台 / 后台」在这里退化成同一个 `join` 的两组参数（等整轮 / 只等确认发出去了）。
  *  4. **上限**：并发 4 / 总数 20，防的是无人值守的循环，不是正常使用。
  *
  * **发送必须走 `chatGateway.prompt`**（IPC `agent:prompt` 的同一个函数）。懒创建运行时、
@@ -18,6 +19,7 @@
  */
 import { chatGateway } from '../frontend/core'
 import { sessionService } from './sessionService'
+import { taskRegistry } from './taskRegistry'
 import { messageService } from './messageService'
 import {
   appendModelChange,
@@ -43,6 +45,9 @@ const SEND_CONFIRM_MS = 50
 
 /** 前台等待的缺省上限（秒）。到点降级成后台，不中止 */
 export const DEFAULT_PROMPT_TIMEOUT_SEC = 300
+
+/** 无 tool call 时的任务 id 序号 */
+let runSeq = 0
 
 export type SubSessionStatus = 'idle' | 'running' | 'waiting-input'
 
@@ -94,16 +99,14 @@ export interface PromptOutcome {
 /** 本进程正在驱动的一次子会话运行 */
 interface DrivenRun {
   parentId: string
+  /** 本次驱动在后台任务枢纽里的任务 id（= 派活那次 tool_call 的 id） */
+  taskId: string
   /**
    * 整轮结束的 promise（永不 reject）。落定值带 `error` = **消息没发出去**
    * （最典型：子会话正忙，pi 拒 busy）—— 与「发出去了但没回话」必须分得开，
    * 后者才是「还在跑」。混为一谈会让调用方以为消息排上了队。
    */
   done: Promise<{ error?: string }>
-  /** 已降级为后台（前台超时）或本就是后台形态 */
-  background: boolean
-  /** 被 stop-sub-session / 父级级联中止过 —— 完成通知据此不说「跑完了」 */
-  stopped?: boolean
 }
 
 class SubSessionRunner {
@@ -332,6 +335,8 @@ class SubSessionRunner {
     background: boolean
     timeoutSeconds: number
     signal?: AbortSignal
+    /** 派活那次 tool_call 的 id —— 直接当任务 id 用，不另发明一套 */
+    toolCallId?: string
   }): Promise<{ error: string } | PromptOutcome> {
     const { parentId, message, background, timeoutSeconds, signal } = params
     const rejected = this.rejectIfNotNormal(parentId)
@@ -382,9 +387,23 @@ class SubSessionRunner {
       }
     }
 
+    // 没有 tool call 的调用方（未来的面板派活）也要有唯一 id —— 枢纽只要求唯一，不要求可读
+    const taskId = params.toolCallId || `sub-session:${childId}:${++runSeq}`
+    taskRegistry.create({
+      taskId,
+      kind: 'sub-session',
+      sessionId: parentId,
+      title: child.title,
+      subject: { kind: 'sub-session', childSessionId: childId },
+      // 文案在落定那一刻才生成：抑制判定（有人在 wait / 卡在询问上）只有那时才算得准
+      formatNotice: () => this.completionNotice(childId),
+      stop: () => {
+        void this.abortChild(childId)
+      }
+    })
     const run: DrivenRun = {
       parentId,
-      background,
+      taskId,
       // 永不 reject，但**保留 error**：发送失败与「跑完了没说话」是两件事
       done: chatGateway.prompt(childId, message).catch((err) => {
         log.warn(`子会话 ${childId} 发送失败: ${err}`)
@@ -392,38 +411,38 @@ class SubSessionRunner {
       })
     }
     this.runs.set(childId, run)
-    void run.done.then(() => this.settle(childId, run))
+    void run.done.then((sent) => this.settle(childId, run, sent))
 
-    if (background) {
-      // 后台形态也要确认「发出去了」：竞态窗口收窄之后仍可能失败（压缩相位等），
-      // 而一张假回执会让父级去等一个根本没开始的活
-      const sendError = await Promise.race([
-        run.done,
-        new Promise<{ error?: string }>((r) => setTimeout(() => r({}), SEND_CONFIRM_MS))
-      ])
-      if (sendError.error) return { error: this.sendFailedError(child.title, sendError.error) }
-      log.info(`prompt sub-session ${childId} (background)`)
-      return { kind: 'started', id: childId }
-    }
+    // 同步等待 —— 两种形态的差别全在这组参数里：
+    //   后台只等「确认发出去了」（发送失败是同步落定的，正常那一路要跑到轮结束）；
+    //   前台等整轮，到点**不杀**、转异步（杀掉的会是一段用户看得见、可能已改了半个仓库的对话）。
+    // 前台才接中止信号：父会话被停 ⇒ 级联停子会话当前 run；后台形态不级联，那正是后台的意义。
+    const outcome = await taskRegistry.join(taskId, {
+      maxWait: background ? SEND_CONFIRM_MS : Math.max(1, timeoutSeconds) * 1000,
+      onTimeout: 'detach',
+      ...(background ? {} : { signal, onAbort: 'kill' as const })
+    })
 
-    const raced = await this.waitForeground(run, timeoutSeconds, signal)
-    if (raced === 'timeout') {
+    if (outcome?.kind === 'detached') {
+      if (background) {
+        log.info(`prompt sub-session ${childId} (background)`)
+        return { kind: 'started', id: childId }
+      }
       // 卡在询问上的不是「还在跑」——它不会自己好起来，说成还在跑等于让父级白等第二轮
       if (this.statusOf(childId) === 'waiting-input') {
-        run.background = true
         return { error: this.blockedError(child.title, childId) }
       }
-      // 降级：本次调用不再等，运行继续，跑完照后台形态回报
-      run.background = true
       log.info(`子会话 ${childId} 前台等待超时 ${timeoutSeconds}s，降级为后台`)
       return { kind: 'timeout', id: childId }
     }
-    if (raced === 'aborted') {
-      await this.stopRun(childId)
-      await run.done
-    }
+
+    // 落定（含被中止后收尾）：run.done 此刻必然已 resolve
     const sent = await run.done
     if (sent.error) return { error: this.sendFailedError(child.title, sent.error) }
+    if (background) {
+      log.info(`prompt sub-session ${childId} (background)`)
+      return { kind: 'started', id: childId }
+    }
     const [answer, info] = await Promise.all([
       this.lastAnswer(childId),
       this.infoOf(parentId, childId)
@@ -535,52 +554,32 @@ class SubSessionRunner {
     )
   }
 
-  /** 前台等待：整轮结束 / 超时 / 父会话被中止，三者先到者胜 */
-  private waitForeground(
-    run: DrivenRun,
-    timeoutSeconds: number,
-    signal?: AbortSignal
-  ): Promise<'done' | 'timeout' | 'aborted'> {
-    return new Promise((resolve) => {
-      let settled = false
-      const finish = (r: 'done' | 'timeout' | 'aborted'): void => {
-        if (settled) return
-        settled = true
-        clearTimeout(timer)
-        signal?.removeEventListener('abort', onAbort)
-        resolve(r)
-      }
-      const onAbort = (): void => finish('aborted')
-      const timer = setTimeout(() => finish('timeout'), Math.max(1, timeoutSeconds) * 1000)
-      if (signal?.aborted) return finish('aborted')
-      signal?.addEventListener('abort', onAbort, { once: true })
-      void run.done.then(() => finish('done'))
-    })
+  /** 一次驱动结束：销账，把结果交回枢纽（解挂等待者；没人等时才由枢纽发通知） */
+  private settle(childId: string, run: DrivenRun, sent: { error?: string }): void {
+    if (this.runs.get(childId) === run) this.runs.delete(childId)
+    taskRegistry.settle(run.taskId, { status: sent?.error ? 'error' : 'done' })
   }
 
   /**
-   * 一次驱动结束：销账；后台形态（含降级来的）向父会话回报。
+   * 后台形态跑完时给父会话的回报（枢纽在「没人等」时调用；返回 null = 这条不通知）。
    *
    * 回执**不带内容**（照抄 bash 后台形态）：内容会永久留在父会话上下文里并被每一步重发，
    * 要结果就去 read。文案是模型面向的英文而非 i18n —— 与 bgTaskService.formatExitNotice
    * 同一条纪律：进模型上下文的字符串不随界面语言变。
+   *
+   * 「被自己停掉的不通知」不在这里判 —— 那条规则归枢纽（stoppedBy='agent'）：
+   * 停它的就是父级自己（stop-sub-session / 前台级联），它早就知道。实测里这条通知
+   * 反而把父级叫醒去「收」一个它刚亲手停掉的东西。
    */
-  private settle(childId: string, run: DrivenRun): void {
-    if (this.runs.get(childId) === run) this.runs.delete(childId)
-    if (!run.background) return
+  private completionNotice(childId: string): string | null {
     // 已经有人在 wait 它 —— 结果会在**同一轮里**交回去，再补一条通知只会让父级
     // 把刚拿到的东西再读一遍（实测里就白烧了一轮）
-    if (this.waiters.has(childId)) return
-    // 被停掉的那次不用通知：停它的就是父级自己（stop-sub-session / 前台级联），
-    // 它早就知道。实测里这条通知反而把父级叫醒去「收」一个它刚亲手停掉的东西
-    if (run.stopped) return
-    const parent = sessionService.getAgentSession(run.parentId)
-    if (!parent) return
+    if (this.waiters.has(childId)) return null
     const title = sessionDao.pick(childId, ['title'])?.title ?? childId
     // 状态词用与别处一致的那套；卡在等批准时明说，别让父级以为它跑完了
     const status = this.statusOf(childId)
     const asked = this.blockedOn(childId)
-    const notice = [
+    return [
       `<sub-session id="${childId}" title="${title}" status="${status}">`,
       status === 'waiting-input'
         ? 'It stopped to ask the user for approval and cannot continue until the user answers in that session.'
@@ -593,9 +592,6 @@ class SubSessionRunner {
     ]
       .filter(Boolean)
       .join('\n')
-    void parent
-      .notify(notice)
-      .catch((err) => log.warn(`子会话完成通知失败 parent=${run.parentId}: ${err}`))
   }
 
   /** 中止子会话当前的 run（等价用户点「停止生成」） */
@@ -611,8 +607,15 @@ class SubSessionRunner {
   }
 
   private async stopRun(childId: string): Promise<boolean> {
+    // 经枢纽停 —— 它据此把这次落定记成「智能体自己停的」，不再发完成通知
     const run = this.runs.get(childId)
-    if (run) run.stopped = true
+    if (run && taskRegistry.stop(run.taskId, { by: 'agent' })) return true
+    // 用户自己在子会话里发起的那一轮没有任务条目，直接停运行时
+    return this.abortChild(childId)
+  }
+
+  /** 停掉子会话当前的生成（等价用户点「停止生成」） */
+  private async abortChild(childId: string): Promise<boolean> {
     const agent = sessionService.getAgentSession(childId)
     if (!agent) return false
     await agent.abort()

@@ -481,3 +481,18 @@ export {
   type NotifierPort,
   type NotificationTranslate
 } from './notification/notificationCenter'
+// 后台任务枢纽：bash / 派生 agent / 子会话轮次共用的登记簿、等待器与通知中枢。
+// 「前台 / 后台」在这里退化成 `join` 的两组参数（见 task/registry.ts 文件头）
+export {
+  createTaskRegistry,
+  type TaskInfo,
+  type TaskKind,
+  type TaskStatus,
+  type TaskSubject,
+  type TaskRegistry,
+  type TaskRegistryDeps,
+  type CreateTaskParams,
+  type JoinPolicy,
+  type JoinOutcome,
+  type SettlePatch
+} from './task/registry'

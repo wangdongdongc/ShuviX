@@ -1,7 +1,12 @@
 /**
  * 后台任务服务 —— `bash({ run_in_background: true })` 起的长驻进程
  *
- * 设计要点（详见 docs/background-tasks-design.md）：
+ * **簿记不在这里**：任务的身份、状态、等待者与完成通知归后台任务枢纽
+ * （`services/taskRegistry` → `@shuvix/agent-runtime` 的 task/registry），bash、派生 agent
+ * 与子会话三条线共用同一份。本文件只剩进程这一半：起进程、持句柄、定期 fstat、
+ * 退出时把结果交回枢纽。设计见 docs/background-task-hub-design.md。
+ *
+ * 保留在这里的设计要点：
  *
  *  1. **输出不经 Node**。子进程的 stdout/stderr 直接重定向到一个已打开的文件描述符
  *     （`tool_results/<sessionId>/<toolCallId>.log`），由操作系统写盘，主进程一个字节都不碰。
@@ -13,12 +18,16 @@
  *     早已熟悉的约定（任何超长工具输出都落在这里、以 toolCallId 命名）。用 `.log` 而非
  *     `.txt` 从根上排除与 processToolOutput 截断落盘的撞名。
  *
- *  3. **任务身份就是 toolCallId**，不另发明 id。
+ *  3. **任务身份就是 toolCallId**，不另发明 id —— 枢纽接受调用方传入的 id，正为此。
  *
- *  4. **不接工具的 AbortSignal**。用户点「停止生成」不该杀后台任务 —— 那正是后台的意义。
+ *  4. **预热窗口就是一次同步等待**。`join(maxWait: 2s, onTimeout: 'detach')`：窗口内退出的
+ *     命令按前台形态把完整输出回话（打错的命令即刻可见），到点还活着就转异步、进面板。
+ *     「前台 / 后台」因此不是两套机制，只是这次 join 的两组参数。
+ *
+ *  5. **不接工具的 AbortSignal**。用户点「停止生成」不该杀后台任务 —— 那正是后台的意义。
  *     只有删除会话（sessionService.delete）与应用退出（before-quit）才级联杀。
  *
- *  5. **没有 stdin**。子进程的 fd 0 是 /dev/null，与前台形态完全一致 —— 读 stdin 立刻拿到 EOF。
+ *  6. **没有 stdin**。子进程的 fd 0 是 /dev/null，与前台形态完全一致 —— 读 stdin 立刻拿到 EOF。
  *     这里曾留一个管道供用户在面板上向任务输入，撤销了，两个理由：
  *       (a) 没人能可靠判断一个任务是不是正卡在等输入 —— 提示符常常不带换行，「在等输入」
  *           和「跑得慢」在日志里长得一模一样。那个输入框因此实际上没人用得上，
@@ -28,17 +37,16 @@
  *           BASH_ARGS 注释）。那条路已由 `--norc` 独立堵死，此处改成 /dev/null 是把触发条件
  *           本身也一并移除 —— 前台之所以从来不受影响，正是因为它的 stdin 是 /dev/null。
  *     需要真人参与的命令就不该跑在这里：把命令交给用户，让他在自己的终端里执行。
- *
- * 本服务只管四件事：起进程、持句柄、定期 fstat、进程退出时记录状态。数据完全不经手。
  */
 
 import { spawn, type ChildProcess } from 'child_process'
 import { openSync, closeSync, readSync, statSync, existsSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
+import type { TaskInfo } from '@shuvix/agent-runtime'
 import { getShellConfig, killProcessTree, sanitizeBinaryOutput } from '../utils/toolUtils/shell'
 import { buildSpawnEnv, getToolResultsDir } from '../utils/paths'
 import { createLogger } from '../logger'
-import { chatFrontendRegistry } from '../frontend/core/ChatFrontendRegistry'
+import { taskRegistry, toBgTaskInfo, setTaskNotifier, type TaskNotifier } from './taskRegistry'
 import type { BgTaskInfo, BgTaskLogChunk, BgTaskStatus } from '@shuvix/chat-protocol/types/bgTask'
 
 export type { BgTaskInfo, BgTaskLogChunk, BgTaskStatus }
@@ -61,25 +69,29 @@ const LOG_WARN_BYTES = 50 * 1024 * 1024
 const LOG_KILL_BYTES = 1024 * 1024 * 1024
 /** 退出通知里回显的日志尾部读取窗口（从中再取最后 NOTIFY_TAIL_LINES 行） */
 const NOTIFY_TAIL_BYTES = 4096
+/** 退出通知里回显的日志行数上限 —— 通知会打断智能体当前思路，必须短 */
+const NOTIFY_TAIL_LINES = 20
 
-// ─── 类型 ────────────────────────────────────────────
+// ─── 进程簿记 ────────────────────────────────────────
 
-interface BgTask extends BgTaskInfo {
+/**
+ * 本服务只持有枢纽表达不了的那一半：子进程句柄、日志路径、升级定时器。
+ * 状态、通知开关、等待者全在枢纽里，**不在这里留第二份**。
+ */
+interface BgProc {
+  sessionId: string
   child: ChildProcess
-  /**
-   * 已向前端宣告过 started。
-   *
-   * started 事件在**预热窗口结束后**才发（窗口内退出的命令按前台形态回话，不该进面板）。
-   * 但子进程的 exit 回调可能先于竞态 resolve 跑完 —— 若那时无条件广播 exited，前端就会
-   * 收到一条自己从没见过 started 的任务，把它加进面板；紧接着主进程把任务与日志一起清掉，
-   * 该条目就永远卡在「日志文件已不存在」。所以：没宣告过的任务，退出时也不广播。
-   */
-  announced: boolean
-  /** 已请求停止 —— 退出时据此把 status 记为 killed 而非 exited */
+  logPath: string
+  /** 已请求停止 —— 退出时据此把状态记为 killed 而非 exited */
   stopRequested: boolean
   /** SIGINT → SIGKILL 的升级定时器 */
   escalateTimer: NodeJS.Timeout | null
 }
+
+/** toolCallId → 进程簿记 */
+const procs = new Map<string, BgProc>()
+
+let fstatTimer: NodeJS.Timeout | null = null
 
 /** 启动结果：预热窗口内退出 → 前台形态；否则转入后台 */
 export type BgTaskStartResult =
@@ -96,93 +108,30 @@ export interface StartBgTaskParams {
   extraEnv?: Record<string, string>
 }
 
-// ─── 退出通知钩子 ────────────────────────────────────
-
-/** 任务结束时把结果告知智能体；由 sessionService 在启动时注入 */
-export type BgTaskNotifier = (sessionId: string, text: string) => void
-
-let notifier: BgTaskNotifier | null = null
-
-/**
- * 注入退出通知实现。
- *
- * 用注入而不是直接 import sessionService：后者已经 import 本模块（删会话时级联杀任务），
- * 直连会成环。
- */
+/** 退出通知实现的注入口 —— 保留旧名，转接到枢纽（调用方是 sessionService） */
+export type BgTaskNotifier = TaskNotifier
 export function setBgTaskNotifier(fn: BgTaskNotifier): void {
-  notifier = fn
+  setTaskNotifier(fn)
 }
 
-/** 退出通知里回显的日志行数上限 —— 通知会打断智能体当前思路，必须短 */
-const NOTIFY_TAIL_LINES = 20
-
-/**
- * 退出通知文案。带上日志绝对路径而不只是尾部若干行：智能体要看全的话
- * read 那个文件是免询问的，比让它去猜路径便宜得多。
- */
-function formatExitNotice(task: BgTask, tail: string): string {
-  const status =
-    task.status === 'killed'
-      ? 'stopped by the user'
-      : task.signal
-        ? `killed by ${task.signal}`
-        : `exited with code ${task.exitCode}`
-  const seconds = Math.round(((task.endedAt ?? Date.now()) - task.startedAt) / 1000)
-  const lines = [
-    `<background-task pid="${task.pid}" status="${status}" duration="${seconds}s">`,
-    task.command
-  ]
-  const trimmed = tail.trimEnd()
-  if (trimmed) {
-    lines.push('Last output:')
-    lines.push(...trimmed.split('\n').slice(-NOTIFY_TAIL_LINES))
-  }
-  lines.push(`Full log: ${task.logPath}`, '</background-task>')
-  return lines.join('\n')
-}
-
-// ─── 注册表 ──────────────────────────────────────────
-
-/** toolCallId → BgTask */
-const tasks = new Map<string, BgTask>()
-
-let fstatTimer: NodeJS.Timeout | null = null
-
-function toInfo(task: BgTask): BgTaskInfo {
-  const { child: _child, stopRequested: _s, escalateTimer: _e, ...info } = task
-  return { ...info }
-}
-
-/** 状态变更广播 —— 低频（每任务 2 次），输出增量不走这条路 */
-function broadcast(task: BgTask): void {
-  task.announced = true
-  chatFrontendRegistry.broadcast({
-    type: 'bg_task',
-    sessionId: task.sessionId,
-    task: toInfo(task)
-  })
-}
+// ─── 查询 ────────────────────────────────────────────
 
 /** 当前会话正在运行的任务数 */
 export function runningCount(sessionId: string): number {
-  let n = 0
-  for (const task of tasks.values()) {
-    if (task.sessionId === sessionId && task.status === 'running') n++
-  }
-  return n
+  return taskRegistry.runningCount(sessionId, 'bash')
 }
 
 /** 会话的全部任务（含已结束的，按启动时间正序） */
 export function listBgTasks(sessionId: string): BgTaskInfo[] {
-  return [...tasks.values()]
-    .filter((t) => t.sessionId === sessionId)
-    .sort((a, b) => a.startedAt - b.startedAt)
-    .map(toInfo)
+  return taskRegistry
+    .list(sessionId)
+    .map(toBgTaskInfo)
+    .filter((info): info is BgTaskInfo => info !== null)
 }
 
 export function getBgTask(toolCallId: string): BgTaskInfo | undefined {
-  const task = tasks.get(toolCallId)
-  return task ? toInfo(task) : undefined
+  const task = taskRegistry.get(toolCallId)
+  return task ? (toBgTaskInfo(task) ?? undefined) : undefined
 }
 
 // ─── 日志读取 ────────────────────────────────────────
@@ -196,8 +145,7 @@ export function readBgTaskLog(params: {
   fromByte?: number
   maxBytes?: number
 }): BgTaskLogChunk {
-  const task = tasks.get(params.toolCallId)
-  const logPath = task?.logPath
+  const logPath = procs.get(params.toolCallId)?.logPath
   if (!logPath || !existsSync(logPath)) {
     return { exists: false, text: '', fromByte: 0, nextByte: 0, size: 0 }
   }
@@ -272,15 +220,44 @@ function readWhole(logPath: string): string {
   }
 }
 
+// ─── 退出通知文案 ────────────────────────────────────
+
+/**
+ * 退出通知文案。带上日志绝对路径而不只是尾部若干行：智能体要看全的话
+ * read 那个文件是免询问的，比让它去猜路径便宜得多。
+ */
+function formatExitNotice(task: TaskInfo, tail: string): string {
+  if (task.subject.kind !== 'bash') return ''
+  const { pid, command, logPath, signal, exitCode } = task.subject
+  const status =
+    task.status === 'killed'
+      ? 'stopped by the user'
+      : signal
+        ? `killed by ${signal}`
+        : `exited with code ${exitCode}`
+  const seconds = Math.round(((task.endedAt ?? Date.now()) - task.startedAt) / 1000)
+  const lines = [
+    `<background-task pid="${pid}" status="${status}" duration="${seconds}s">`,
+    command
+  ]
+  const trimmed = tail.trimEnd()
+  if (trimmed) {
+    lines.push('Last output:')
+    lines.push(...trimmed.split('\n').slice(-NOTIFY_TAIL_LINES))
+  }
+  lines.push(`Full log: ${logPath}`, '</background-task>')
+  return lines.join('\n')
+}
+
 // ─── 启动 ────────────────────────────────────────────
 
 /**
  * 起一个后台任务。**调用方须已通过安全模块的命令门**（enforceCommand）——
  * 本服务不做准入判断，只负责执行与簿记。
  *
- * 预热窗口内（2s）若进程已退出，任务不进注册表、日志文件删除，
- * 返回 `settled` 让调用方按前台形态回话 —— 打错的命令即刻可见，
- * 面板也不会被一堆秒退的僵尸条目污染。
+ * 预热窗口内（2s）若进程已退出，任务不进面板、日志文件删除，返回 `settled` 让调用方
+ * 按前台形态回话 —— 打错的命令即刻可见，面板也不会被一堆秒退的僵尸条目污染。
+ * 这一段就是 `join(maxWait: WARMUP_MS, onTimeout: 'detach')`，不是另一套机制。
  */
 export async function startBgTask(params: StartBgTaskParams): Promise<BgTaskStartResult> {
   const { sessionId, toolCallId, command, description, cwd, extraEnv } = params
@@ -298,7 +275,7 @@ export async function startBgTask(params: StartBgTaskParams): Promise<BgTaskStar
     child = spawn(shell, [...args, command], {
       cwd,
       env: buildSpawnEnv(extraEnv),
-      // stdin 关成 /dev/null，与前台形态一致（见文件头第 5 点）；stdout/stderr 同一个 fd
+      // stdin 关成 /dev/null，与前台形态一致（见文件头第 6 点）；stdout/stderr 同一个 fd
       stdio: ['ignore', fd, fd],
       detached: process.platform !== 'win32'
     })
@@ -311,158 +288,160 @@ export async function startBgTask(params: StartBgTaskParams): Promise<BgTaskStar
     }
   }
 
-  const task: BgTask = {
-    toolCallId,
+  const proc: BgProc = {
     sessionId,
-    command,
-    description,
-    cwd,
-    pid: child.pid ?? -1,
-    logPath,
-    status: 'running',
-    exitCode: null,
-    signal: null,
-    startedAt: Date.now(),
-    endedAt: null,
-    logCapped: false,
-    notifyAgent: true,
     child,
-    announced: false,
+    logPath,
     stopRequested: false,
     escalateTimer: null
   }
-  tasks.set(toolCallId, task)
-  log.info(`start ${toolCallId} pid=${task.pid} session=${sessionId}: ${command.slice(0, 80)}`)
+  procs.set(toolCallId, proc)
 
-  const settled = new Promise<void>((resolve) => {
-    child.once('exit', (code, signal) => {
-      finishTask(task, code, signal)
-      resolve()
-    })
-    child.once('error', (err) => {
-      log.error(`spawn failed ${toolCallId}: ${err.message}`)
-      finishTask(task, -1, null)
-      resolve()
-    })
+  taskRegistry.create({
+    taskId: toolCallId,
+    kind: 'bash',
+    sessionId,
+    // 面板行的标题用 description 而非命令：命令太长、前缀又常常雷同
+    title: description,
+    subject: {
+      kind: 'bash',
+      command,
+      cwd,
+      pid: child.pid ?? -1,
+      logPath,
+      exitCode: null,
+      signal: null,
+      logCapped: false
+    },
+    // 预热窗口内退出的任务不该进面板 —— 它的完整输出已按前台形态交回。
+    // 转异步（join 放手）时枢纽会无条件宣告，故这里恒为「除非脱离等待者否则不宣告」
+    announceAfter: Number.POSITIVE_INFINITY,
+    formatNotice: (task) => formatExitNotice(task, readTail(logPath, NOTIFY_TAIL_BYTES)),
+    stop: (force) => killProc(toolCallId, force)
+  })
+  log.info(`start ${toolCallId} pid=${child.pid} session=${sessionId}: ${command.slice(0, 80)}`)
+
+  child.once('exit', (code, signal) => finishTask(toolCallId, code, signal))
+  child.once('error', (err) => {
+    log.error(`spawn failed ${toolCallId}: ${err.message}`)
+    finishTask(toolCallId, -1, null)
   })
 
   ensureFstatTimer()
 
-  // ── 预热窗口 ──
-  const exitedEarly = await Promise.race([
-    settled.then(() => true),
-    new Promise<false>((r) => setTimeout(() => r(false), WARMUP_MS))
-  ])
+  // ── 预热窗口：同步等一小会儿 ──
+  const outcome = await taskRegistry.join(toolCallId, {
+    maxWait: WARMUP_MS,
+    onTimeout: 'detach'
+  })
+  const info = outcome && toBgTaskInfo(outcome.task)
+  if (!info) throw new Error(`Background task ${toolCallId} vanished while starting`)
 
-  if (exitedEarly) {
+  if (outcome.kind === 'settled') {
     const output = readWhole(logPath)
-    tasks.delete(toolCallId)
-    try {
-      rmSync(logPath, { force: true })
-    } catch {
-      /* 忽略 */
-    }
-    log.info(`settled-in-warmup ${toolCallId} exit=${task.exitCode}`)
-    return { kind: 'settled', info: toInfo(task), output }
+    // 连登记簿一起销掉：这条任务从没进过面板，留着只会在枢纽里当僵尸
+    dismissBgTask(toolCallId)
+    log.info(`settled-in-warmup ${toolCallId} exit=${info.exitCode}`)
+    return { kind: 'settled', info, output }
   }
 
-  broadcast(task)
   let logBytes = 0
   try {
     logBytes = statSync(logPath).size
   } catch {
     /* 忽略 */
   }
-  return { kind: 'background', info: toInfo(task), logBytes }
+  return { kind: 'background', info, logBytes }
 }
 
-function finishTask(task: BgTask, code: number | null, signal: NodeJS.Signals | null): void {
-  if (task.status !== 'running') return
-  if (task.escalateTimer) {
-    clearTimeout(task.escalateTimer)
-    task.escalateTimer = null
+/** 进程退出：把结果交回枢纽（解挂等待者，没人等的话由枢纽发通知） */
+function finishTask(toolCallId: string, code: number | null, signal: NodeJS.Signals | null): void {
+  const proc = procs.get(toolCallId)
+  if (!proc) return
+  if (proc.escalateTimer) {
+    clearTimeout(proc.escalateTimer)
+    proc.escalateTimer = null
   }
-  task.status = task.stopRequested ? 'killed' : 'exited'
-  task.exitCode = code
-  task.signal = signal
-  task.endedAt = Date.now()
-  log.info(`exit ${task.toolCallId} status=${task.status} code=${code} signal=${signal}`)
-  // 从没宣告过 started 的任务（预热窗口内就退出）不广播 exited —— 否则前端会凭空多出
-  // 一条随即被主进程清掉的幽灵条目。见 BgTask.announced 的说明。
-  if (task.announced && tasks.get(task.toolCallId) === task) {
-    broadcast(task)
-    // 只对宣告过的任务通知 —— 预热窗口内退出的已经按前台形态把完整输出交给模型了，
-    // 再通知一次纯属重复
-    if (task.notifyAgent) {
-      notifier?.(task.sessionId, formatExitNotice(task, readTail(task.logPath, NOTIFY_TAIL_BYTES)))
-    }
-  }
+  const status = proc.stopRequested ? 'killed' : code === 0 ? 'done' : 'error'
+  log.info(`exit ${toolCallId} status=${status} code=${code} signal=${signal}`)
+  taskRegistry.settle(toolCallId, { status, subject: { exitCode: code, signal } })
   maybeStopFstatTimer()
 }
 
 // ─── 控制 ────────────────────────────────────────────
 
 /**
- * 停止任务。默认先 SIGINT 给进程清理机会，3 秒未退再 killProcessTree。
+ * 停止实现（注入给枢纽）。默认先 SIGINT 给进程清理机会，3 秒未退再 killProcessTree。
  * Windows 无进程组信号，直接走 taskkill /T /F。
  */
-export function stopBgTask(toolCallId: string, force = false): boolean {
-  const task = tasks.get(toolCallId)
-  if (!task || task.status !== 'running') return false
-  task.stopRequested = true
+function killProc(toolCallId: string, force: boolean): void {
+  const proc = procs.get(toolCallId)
+  if (!proc) return
+  proc.stopRequested = true
 
   if (force || process.platform === 'win32') {
-    killProcessTree(task.pid)
-    return true
+    killProcessTree(proc.child.pid ?? -1)
+    return
   }
 
+  const pid = proc.child.pid ?? -1
   try {
     // 负 pid = 整个进程组（spawn 时 detached，pid 即 pgid）
-    process.kill(-task.pid, 'SIGINT')
+    process.kill(-pid, 'SIGINT')
   } catch {
     try {
-      process.kill(task.pid, 'SIGINT')
+      process.kill(pid, 'SIGINT')
     } catch {
       /* 已退出 */
     }
   }
-  task.escalateTimer = setTimeout(() => {
-    if (task.status === 'running') {
+  proc.escalateTimer = setTimeout(() => {
+    if (taskRegistry.get(toolCallId)?.endedAt === null) {
       log.warn(`escalate to SIGKILL ${toolCallId}`)
-      killProcessTree(task.pid)
+      killProcessTree(pid)
     }
   }, KILL_ESCALATE_MS)
-  task.escalateTimer.unref?.()
-  return true
+  proc.escalateTimer.unref?.()
+}
+
+/** 用户从面板停止任务（停完仍会通知智能体 —— 停它的不是它自己） */
+export function stopBgTask(toolCallId: string, force = false): boolean {
+  return taskRegistry.stop(toolCallId, { by: 'user', force })
 }
 
 /** 设置「完成时通知 AI」开关 */
 export function setBgTaskNotify(toolCallId: string, enabled: boolean): boolean {
-  const task = tasks.get(toolCallId)
-  if (!task) return false
-  task.notifyAgent = enabled
-  return true
+  return taskRegistry.setNotify(toolCallId, enabled)
+}
+
+/** 丢掉本地簿记（可选连日志文件一起删） */
+function forget(toolCallId: string, opts: { removeLog?: boolean } = {}): void {
+  const proc = procs.get(toolCallId)
+  if (!proc) return
+  if (proc.escalateTimer) clearTimeout(proc.escalateTimer)
+  procs.delete(toolCallId)
+  if (opts.removeLog) {
+    try {
+      rmSync(proc.logPath, { force: true })
+    } catch {
+      /* 忽略 */
+    }
+  }
 }
 
 /** 移除一条已结束的任务（连同日志文件）。运行中的任务不移除 */
 export function dismissBgTask(toolCallId: string): boolean {
-  const task = tasks.get(toolCallId)
-  if (!task || task.status === 'running') return false
-  tasks.delete(toolCallId)
-  try {
-    rmSync(task.logPath, { force: true })
-  } catch {
-    /* 忽略 */
-  }
+  if (!taskRegistry.dismiss(toolCallId)) return false
+  forget(toolCallId, { removeLog: true })
   return true
 }
 
 /** 清空会话内所有已结束的任务 */
 export function clearFinishedBgTasks(sessionId: string): number {
   let n = 0
-  for (const task of [...tasks.values()]) {
-    if (task.sessionId === sessionId && task.status !== 'running' && dismissBgTask(task.toolCallId))
-      n++
+  for (const [toolCallId, proc] of [...procs.entries()]) {
+    if (proc.sessionId !== sessionId) continue
+    if (dismissBgTask(toolCallId)) n++
   }
   return n
 }
@@ -470,32 +449,22 @@ export function clearFinishedBgTasks(sessionId: string): number {
 // ─── 级联清理 ────────────────────────────────────────
 
 /**
- * 杀掉会话的全部任务并清空注册表（删除会话时调用）。
+ * 杀掉会话的全部任务并清空簿记（删除会话时调用）。
  * 日志文件不在此删除 —— sessionService.delete 会整目录 rm 掉 tool_results/<sid>。
  */
 export function killBySession(sessionId: string): void {
-  for (const task of [...tasks.values()]) {
-    if (task.sessionId !== sessionId) continue
-    if (task.status === 'running') {
-      task.stopRequested = true
-      killProcessTree(task.pid)
-    }
-    if (task.escalateTimer) clearTimeout(task.escalateTimer)
-    tasks.delete(task.toolCallId)
+  // 枢纽会对每条运行中的任务回调 killProc(force=true)，本地不再重复杀
+  taskRegistry.killBySession(sessionId)
+  for (const [toolCallId, proc] of [...procs.entries()]) {
+    if (proc.sessionId === sessionId) forget(toolCallId)
   }
   maybeStopFstatTimer()
 }
 
 /** 应用退出：杀掉全部后台任务 */
 export function killAllBgTasks(): void {
-  for (const task of tasks.values()) {
-    if (task.status === 'running') {
-      task.stopRequested = true
-      killProcessTree(task.pid)
-    }
-    if (task.escalateTimer) clearTimeout(task.escalateTimer)
-  }
-  tasks.clear()
+  taskRegistry.killAll()
+  for (const toolCallId of [...procs.keys()]) forget(toolCallId)
   maybeStopFstatTimer()
 }
 
@@ -506,21 +475,23 @@ export function killAllBgTasks(): void {
  * 超告警阈值标记 logCapped（面板提示 + 计入退出通知），超硬上限直接停止。
  */
 function checkLogSizes(): void {
-  for (const task of tasks.values()) {
-    if (task.status !== 'running') continue
+  for (const [toolCallId, proc] of procs.entries()) {
+    const task = taskRegistry.get(toolCallId)
+    if (!task || task.endedAt !== null || task.subject.kind !== 'bash') continue
     let size = 0
     try {
-      size = statSync(task.logPath).size
+      size = statSync(proc.logPath).size
     } catch {
       continue
     }
-    if (!task.logCapped && size >= LOG_WARN_BYTES) {
-      task.logCapped = true
-      log.warn(`log exceeds warn threshold ${task.toolCallId} size=${size}`)
+    if (!task.subject.logCapped && size >= LOG_WARN_BYTES) {
+      taskRegistry.update(toolCallId, { subject: { logCapped: true } })
+      log.warn(`log exceeds warn threshold ${toolCallId} size=${size}`)
     }
     if (size >= LOG_KILL_BYTES) {
-      log.error(`log exceeds hard cap, stopping ${task.toolCallId} size=${size}`)
-      stopBgTask(task.toolCallId, true)
+      log.error(`log exceeds hard cap, stopping ${toolCallId} size=${size}`)
+      // 按「用户停的」记 —— 智能体没停过它，这条结束必须通知到它
+      stopBgTask(toolCallId, true)
     }
   }
 }
@@ -534,7 +505,9 @@ function ensureFstatTimer(): void {
 
 function maybeStopFstatTimer(): void {
   if (!fstatTimer) return
-  for (const task of tasks.values()) if (task.status === 'running') return
+  for (const toolCallId of procs.keys()) {
+    if (taskRegistry.get(toolCallId)?.endedAt === null) return
+  }
   clearInterval(fstatTimer)
   fstatTimer = null
 }

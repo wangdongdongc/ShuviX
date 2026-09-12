@@ -244,7 +244,7 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
   }
 
   protected async executeInternal(
-    _toolCallId: string,
+    toolCallId: string,
     params: SessionToolParams,
     signal?: AbortSignal
   ): Promise<AgentToolResult<SessionToolDetails | undefined>> {
@@ -254,7 +254,7 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
       case 'create-sub-session':
         return this.createSubSession(params)
       case 'prompt-sub-session':
-        return this.promptSubSession(params, signal)
+        return this.promptSubSession(params, toolCallId, signal)
       case 'wait-for-sub-sessions':
         return this.waitForSubSessions(params, signal)
       case 'list-sub-sessions':
@@ -302,6 +302,7 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
 
   private async promptSubSession(
     params: SessionToolParams,
+    toolCallId: string,
     signal?: AbortSignal
   ): Promise<AgentToolResult<SessionToolDetails | undefined>> {
     const res = await subSessionRunner.prompt({
@@ -310,7 +311,9 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
       message: params.message ?? '',
       background: params.run_in_background === true,
       timeoutSeconds: params.timeout_seconds ?? DEFAULT_PROMPT_TIMEOUT_SEC,
-      signal
+      signal,
+      // 任务身份就是这次 tool_call 的 id —— 与 bash 后台任务同一条纪律
+      toolCallId
     })
     if ('error' in res) throw new Error(res.error)
 
