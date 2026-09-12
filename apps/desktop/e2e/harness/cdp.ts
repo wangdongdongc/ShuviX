@@ -89,22 +89,65 @@ export function connect(wsUrl: string): Promise<CdpClient> {
 
 export const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
-/** 轮询直到 fn 返回真值；超时抛错（带 what 说明） */
+/**
+ * 超时现场取证 —— `launchApp` 注册，`until` 超时时调一次，产物拼进错误消息。
+ *
+ * 为什么做成全局注册而不是给 until 加参数：调用点有上百处，逐处传 dump 函数是纯噪声，
+ * 而想知道的东西（页面态 / 消息行 / 页内报错）每处都一样。注册失败或 dump 自己出错一律
+ * 静默降级 —— 取证是附赠品，不能把一次失败变成另一种失败。
+ */
+type TimeoutDiagnostic = () => string | Promise<string>
+let diagnostic: TimeoutDiagnostic | null = null
+
+export function setTimeoutDiagnostic(fn: TimeoutDiagnostic | null): void {
+  diagnostic = fn
+}
+
+async function forensics(): Promise<string> {
+  if (!diagnostic) return ''
+  try {
+    const text = await Promise.race([
+      Promise.resolve(diagnostic()),
+      sleep(3000).then(() => '(diagnostic timed out)')
+    ])
+    return text ? `\n--- page at timeout ---\n${text}` : ''
+  } catch (e) {
+    return `\n--- page at timeout: dump failed: ${(e as Error).message} ---`
+  }
+}
+
+/**
+ * 轮询直到 fn 返回真值；超时抛错（带 what 说明 + 现场取证）。
+ *
+ * 错误消息里带 **polls / 每轮耗时**：这一个数就把两类失败分开了 —— 轮询次数接近
+ * `timeoutMs / 400`（本例 ~62）说明每次 eval 都很快、渲染进程活着，是**状态压根没到**；
+ * 次数远小于它说明每次往返都在等，是**机器或渲染进程被拖住**。没有这个数的时候，两种
+ * 失败在日志里长得一模一样，只能靠反复重跑对照去猜（那正是它一直难查的原因）。
+ */
 export async function until<T>(
   fn: () => T | Promise<T>,
   what: string,
   timeoutMs = 25_000
 ): Promise<NonNullable<T>> {
   const t0 = Date.now()
+  let polls = 0
+  let slowest = 0
   for (;;) {
     let value: T | undefined
+    const p0 = Date.now()
     try {
       value = await fn()
     } catch {
       /* 轮询期错误视为未就绪 */
     }
+    polls++
+    slowest = Math.max(slowest, Date.now() - p0)
     if (value) return value as NonNullable<T>
-    if (Date.now() - t0 > timeoutMs) throw new Error(`timeout waiting: ${what}`)
+    const elapsed = Date.now() - t0
+    if (elapsed > timeoutMs) {
+      const stats = `after ${(elapsed / 1000).toFixed(1)}s, ${polls} polls, slowest poll ${slowest}ms`
+      throw new Error(`timeout waiting: ${what} (${stats})${await forensics()}`)
+    }
     await sleep(400)
   }
 }

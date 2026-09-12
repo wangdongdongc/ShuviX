@@ -23,6 +23,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import {
   connect,
   isMainPage,
+  setTimeoutDiagnostic,
   listTargets,
   sleep,
   until,
@@ -89,6 +90,56 @@ function track(child: ChildProcess): void {
   })
 }
 
+/**
+ * 页内取证：装一个错误收集器 + 注册 until 的超时 dump。
+ *
+ * 收集器用页内监听而不是 CDP 的 Runtime/Log 域 —— 本仓的 CDP 客户端只处理
+ * `Runtime.evaluate` 的应答、丢弃所有事件帧，为取证去补事件订阅不划算。
+ * 装得晚（renderer 就绪之后）会漏掉启动期的报错，但这里要查的超时都发生在用例中途。
+ */
+async function installForensics(main: CdpClient): Promise<void> {
+  try {
+    await main.eval(`(() => {
+      if (window.__e2e) return
+      const buf = []
+      window.__e2e = buf
+      const push = (kind, text) => { buf.push(kind + ': ' + String(text).slice(0, 300)); if (buf.length > 20) buf.shift() }
+      window.addEventListener('error', (e) => push('error', e.message))
+      window.addEventListener('unhandledrejection', (e) => push('rejection', e.reason && e.reason.message ? e.reason.message : e.reason))
+      const orig = console.error
+      console.error = (...a) => { push('console.error', a.map(String).join(' ')); orig.apply(console, a) }
+    })()`)
+  } catch {
+    /* 取证装不上不影响用例 */
+  }
+  setTimeoutDiagnostic(() =>
+    main.eval<string>(`(() => {
+      const els = [...document.querySelectorAll('[data-msg-id]')]
+      const rows = els.map(
+        (e) => (e.dataset.msgId || '?') + '[' + (e.dataset.msgRole || '') + '/' + (e.dataset.msgType || '') + ']'
+      )
+      const lines = [
+        'readyState=' + document.readyState + ' visible=' + !document.hidden,
+        'msg rows (' + els.length + '): ' + (rows.join(', ') || '(none)'),
+        'streaming-live: ' + (els.some((e) => e.dataset.msgId === 'streaming-live') ? 'present' : 'absent'),
+        'composer: ' + (document.querySelector('textarea') ? 'present' : 'absent'),
+        'page errors: ' + ((window.__e2e || []).slice(-5).join(' | ') || '(none)')
+      ]
+      // rAF 判别器：隐藏 / 被遮挡的窗口里 requestAnimationFrame 不触发，而 chat-ui 的流式
+      // delta 合并正挂在它上面（useAgentEvents 的 scheduleFlush）。这一行把「页面不可见」
+      // 与「渲染真的停摆」分开
+      return new Promise((resolve) => {
+        let fired = false
+        requestAnimationFrame(() => { fired = true })
+        setTimeout(() => {
+          lines.push('raf within 250ms: ' + (fired ? 'fires' : 'STALLED'))
+          resolve(lines.join('\\n'))
+        }, 250)
+      })
+    })()`)
+  )
+}
+
 export async function launchApp(): Promise<E2EApp> {
   const pinned = process.env.SHUVIX_E2E_PORT
   const port = pinned ? Number(pinned) : await freePort()
@@ -121,7 +172,17 @@ export async function launchApp(): Promise<E2EApp> {
   const electronBin = resolve(DESKTOP_ROOT, '../../node_modules/.bin/electron')
   const child: ChildProcess = spawn(
     electronBin,
-    [join(DESKTOP_ROOT, 'e2e/harness/bootstrap.cjs'), `--remote-debugging-port=${port}`],
+    [
+      join(DESKTOP_ROOT, 'e2e/harness/bootstrap.cjs'),
+      `--remote-debugging-port=${port}`,
+      // 被别的窗口盖住时 Chromium 会把页面判成不可见并**停掉 requestAnimationFrame**，
+      // 而 chat-ui 的流式 delta 合并正挂在 rAF 上（useAgentEvents 的 scheduleFlush）——
+      // 于是对话一行都不渲染，所有等 DOM 的 until 一起超时（现场：visible=false + msg rows (0)，
+      // 而轮询 63 次、每次几毫秒，渲染进程其实活得好好的）。
+      // 这两个开关让实例不理会遮挡与后台化，e2e 结果于是与「屏幕上还有什么窗口」无关。
+      '--disable-backgrounding-occluded-windows',
+      '--disable-renderer-backgrounding'
+    ],
     { cwd: DESKTOP_ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] }
   )
   track(child)
@@ -165,8 +226,10 @@ export async function launchApp(): Promise<E2EApp> {
     }
     const main = await connect(target.webSocketDebuggerUrl)
     await until(() => main.eval<boolean>('!!window.api'), 'window.api ready')
+    await installForensics(main)
 
     const stop = async (): Promise<void> => {
+      setTimeoutDiagnostic(null)
       main.close()
       if (!exited) {
         child.kill('SIGTERM')
