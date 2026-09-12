@@ -1,8 +1,14 @@
+import { resolve as resolvePath } from 'node:path'
 import { defineConfig } from 'vitest/config'
 
 export default defineConfig({
   resolve: {
     alias: {
+      // 共享包按**路径**解析，与 electron.vite.config.ts 的 main 配置一致。
+      // 不这么做时 Node 会沿 node_modules 往上找到工作区符号链接 —— 在 git worktree 里
+      // 那条链接指向主检出，于是测试跑的是另一个检出的包源码（本地改动全看不见）。
+      '@shuvix/chat-protocol': resolvePath(__dirname, '../../packages/chat-protocol/src'),
+      '@shuvix/agent-runtime': resolvePath(__dirname, '../../packages/agent-runtime/src/index.ts'),
       // Electron 提供 node:original-fs（未被 ASAR 补丁的原始 fs），
       // 在 Vitest 的 Node.js 环境中不存在，映射到标准 node:fs
       'node:original-fs': 'node:fs'
