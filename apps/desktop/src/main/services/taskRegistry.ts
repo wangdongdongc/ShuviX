@@ -46,8 +46,7 @@ export function toBgTaskInfo(task: TaskInfo): BgTaskInfo | null {
     signal,
     startedAt: task.startedAt,
     endedAt: task.endedAt,
-    logCapped,
-    notifyAgent: task.notifyAgent
+    logCapped
   }
 }
 

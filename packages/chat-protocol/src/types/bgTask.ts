@@ -30,8 +30,6 @@ export interface BgTaskInfo {
   endedAt: number | null
   /** 日志超过告警阈值（输出不经主进程，只能定期 fstat 近似发现） */
   logCapped: boolean
-  /** 退出时是否告知 AI */
-  notifyAgent: boolean
 }
 
 /** 按字节范围读日志的结果 */

@@ -989,7 +989,6 @@
     "tasksDismiss": "从列表移除",
     "tasksStatusRunning": "运行中",
     "tasksStdinClosed": "后台任务不接受输入。需要你亲自交互的命令，请复制上面的命令到终端里执行。",
-    "tasksNotify": "完成时通知 AI",
     "tasksLogMissing": "日志文件已不存在",
     "tasksLogCapped": "日志超过 50 MB —— 只显示尾部",
     "tasksNoOutput": "暂无输出",
@@ -997,7 +996,7 @@
     "tasksKindBash": "Bash",
     "tasksKindAgent": "子代理",
     "tasksKindSubSession": "子会话",
-    "tasksOpenSession": "打开会话",
+    "tasksOpen": "打开",
     "tasksAgentGone": "转写只在应用本次运行期间保留",
     "tasksBlockedOn": "等你回答",
     "calendar": "日历"

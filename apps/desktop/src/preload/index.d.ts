@@ -893,7 +893,6 @@ declare global {
       stop: (params: { toolCallId: string; force?: boolean }) => Promise<{ success: boolean }>
       dismiss: (params: { toolCallId: string }) => Promise<{ success: boolean }>
       clearDone: (params: { sessionId: string }) => Promise<{ cleared: number }>
-      setNotify: (params: { toolCallId: string; enabled: boolean }) => Promise<{ success: boolean }>
     }
     terminal: {
       create: (params: {

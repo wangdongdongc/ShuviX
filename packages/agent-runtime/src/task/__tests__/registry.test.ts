@@ -187,15 +187,6 @@ describe('taskRegistry — 通知中枢', () => {
     await sleep(20)
     expect(delivered).toHaveLength(1)
   })
-
-  it('面板关掉通知开关后不通知', async () => {
-    const { registry, delivered, create } = setup()
-    const id = create()
-    registry.setNotify(id, false)
-    registry.settle(id, { status: 'done' })
-    await sleep(20)
-    expect(delivered).toHaveLength(0)
-  })
 })
 
 describe('taskRegistry — 宣告', () => {

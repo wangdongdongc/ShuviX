@@ -4,8 +4,7 @@ import {
   readBgTaskLog,
   stopBgTask,
   dismissBgTask,
-  clearFinishedBgTasks,
-  setBgTaskNotify
+  clearFinishedBgTasks
 } from '../services/bgTaskService'
 
 /**
@@ -43,11 +42,4 @@ export function registerBgTaskHandlers(): void {
   ipcMain.handle('bgTask:clearDone', (_event, params: { sessionId: string }) => ({
     cleared: clearFinishedBgTasks(params.sessionId)
   }))
-
-  ipcMain.handle(
-    'bgTask:setNotify',
-    (_event, params: { toolCallId: string; enabled: boolean }) => ({
-      success: setBgTaskNotify(params.toolCallId, params.enabled)
-    })
-  )
 }

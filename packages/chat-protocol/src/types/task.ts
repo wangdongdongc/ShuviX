@@ -78,8 +78,6 @@ export interface TaskInfo {
   status: TaskStatus
   /** 发起它的那次调用已不在等（超时降级 / 本就异步挂起） */
   detached: boolean
-  /** 结束时是否告知 AI（面板开关） */
-  notifyAgent: boolean
   startedAt: number
   endedAt: number | null
   subject: TaskSubject

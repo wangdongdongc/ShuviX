@@ -728,8 +728,6 @@ export interface HostApi {
     dismiss: (params: { toolCallId: string }) => Promise<{ success: boolean }>
     /** 清空会话内所有已结束的任务 */
     clearDone: (params: { sessionId: string }) => Promise<{ cleared: number }>
-    /** 「完成时通知 AI」开关 */
-    setNotify: (params: { toolCallId: string; enabled: boolean }) => Promise<{ success: boolean }>
   }
   /** 文件回写（属管理类，渠道端无权） */
   files: {

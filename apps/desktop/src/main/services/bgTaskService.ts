@@ -409,11 +409,6 @@ export function stopBgTask(toolCallId: string, force = false): boolean {
   return taskRegistry.stop(toolCallId, { by: 'user', force })
 }
 
-/** 设置「完成时通知 AI」开关 */
-export function setBgTaskNotify(toolCallId: string, enabled: boolean): boolean {
-  return taskRegistry.setNotify(toolCallId, enabled)
-}
-
 /** 丢掉本地簿记（可选连日志文件一起删） */
 function forget(toolCallId: string, opts: { removeLog?: boolean } = {}): void {
   const proc = procs.get(toolCallId)

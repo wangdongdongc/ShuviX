@@ -99,34 +99,6 @@ function TaskAction({
   )
 }
 
-/** 「完成时通知 AI」开关 —— 只有会回报的那两类有意义（派生 agent 恒为同步等待） */
-function NotifyToggle({ task }: { task: TaskInfo }): React.JSX.Element {
-  const { t } = useTranslation()
-  const toggle = useCallback(() => {
-    const next = !task.notifyAgent
-    useBgTaskStore.getState().upsert({ ...task, notifyAgent: next })
-    void getHostApi()
-      ?.bgTask.setNotify({ toolCallId: task.taskId, enabled: next })
-      .catch(() => {})
-  }, [task])
-
-  return (
-    <button
-      onClick={toggle}
-      className="flex items-center gap-1.5 text-[10px] text-text-tertiary hover:text-text-secondary transition-colors"
-    >
-      <span
-        className={`w-3 h-3 rounded-sm border flex items-center justify-center ${
-          task.notifyAgent ? 'bg-accent border-accent' : 'border-border-secondary'
-        }`}
-      >
-        {task.notifyAgent && <span className="w-1.5 h-1.5 rounded-[1px] bg-bg-primary" />}
-      </span>
-      {t('panel.tasksNotify')}
-    </button>
-  )
-}
-
 /** bash 详情：命令 + 实时输出（后台任务没有输入通道，见 bgTaskService 文件头） */
 function BashDetail({ task }: { task: TaskInfo }): React.JSX.Element | null {
   const { t } = useTranslation()
@@ -192,8 +164,6 @@ function BashDetail({ task }: { task: TaskInfo }): React.JSX.Element | null {
           {t('panel.tasksStdinClosed')}
         </div>
       )}
-
-      <NotifyToggle task={task} />
     </div>
   )
 }
@@ -216,35 +186,16 @@ function AgentDetail({ task }: { task: TaskInfo }): React.JSX.Element {
 }
 
 /**
- * 子会话详情：状态 + 入口。
+ * 展开详情。
  *
- * **刻意不画转写** —— 子会话是一条真正的会话，它的转写在会话界面里（侧边栏也挂着它）。
+ * **子会话没有详情** —— 它是一条真正的会话，转写在会话界面里（侧边栏也挂着它），
  * 在这里再画一份既重复又永远差一截（那边能发消息、能改模型、能看历史）。
+ * 它需要的只是一个入口，而入口长在标题行上（见 TaskRow 的「打开」），
+ * 所以这类行干脆不可展开 —— 点开一个空抽屉比没有抽屉更糟。
  */
-function SubSessionDetail({ task }: { task: TaskInfo }): React.JSX.Element | null {
-  const { t } = useTranslation()
-  const blocked = useBlockedOnUser(task)
-  if (task.subject.kind !== 'sub-session') return null
-  const { childSessionId } = task.subject
-  return (
-    <div className="px-2 pb-2 space-y-1.5">
-      {blocked && (
-        <div className="text-[10px] text-warning leading-relaxed">{t('panel.tasksBlockedOn')}</div>
-      )}
-      <button
-        onClick={() => useChatStore.getState().setActiveSessionId(childSessionId)}
-        className="text-[10px] text-accent hover:underline"
-      >
-        {t('panel.tasksOpenSession')}
-      </button>
-      <NotifyToggle task={task} />
-    </div>
-  )
-}
-
 function TaskDetail({ task }: { task: TaskInfo }): React.JSX.Element | null {
   if (task.kind === 'agent') return <AgentDetail task={task} />
-  if (task.kind === 'sub-session') return <SubSessionDetail task={task} />
+  if (task.kind === 'sub-session') return null
   return <BashDetail task={task} />
 }
 
@@ -328,6 +279,8 @@ function TaskRow({
   const kindLabel = useKindLabel(task.kind)
   // 卡在等人回答的那条要一眼看得出来 —— 它不会自己好起来，是这张表里唯一需要用户动手的状态
   const blocked = useBlockedOnUser(task)
+  // 子会话没有可展开的详情（转写在它自己的会话里），标题行上给一个「打开」直接过去
+  const openTarget = task.subject.kind === 'sub-session' ? task.subject.childSessionId : null
 
   const handleStop = useCallback(
     (e: React.MouseEvent) => {
@@ -362,8 +315,10 @@ function TaskRow({
   return (
     <div className={divided ? 'border-t border-border-secondary/30' : ''} {...agentAnchor}>
       <div
-        onClick={onToggle}
-        className="flex items-start gap-1.5 px-2 py-1.5 cursor-pointer hover:bg-bg-hover/30 transition-colors"
+        onClick={openTarget ? undefined : onToggle}
+        className={`flex items-start gap-1.5 px-2 py-1.5 transition-colors ${
+          openTarget ? '' : 'cursor-pointer hover:bg-bg-hover/30'
+        }`}
       >
         <div className="min-w-0 flex-1">
           <div className="truncate text-xs text-text-primary" title={task.title}>
@@ -373,6 +328,17 @@ function TaskRow({
             {kindLabel} · {blocked ? t('panel.tasksBlockedOn') : state} · {duration}
           </div>
         </div>
+        {openTarget && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              useChatStore.getState().setActiveSessionId(openTarget)
+            }}
+            className="flex-shrink-0 px-1 py-0.5 rounded text-[10px] text-accent hover:bg-bg-hover/60 transition-colors"
+          >
+            {t('panel.tasksOpen')}
+          </button>
+        )}
         <TaskAction task={task} onStop={handleStop} onDismiss={handleDismiss} />
       </div>
       {expanded && <TaskDetail task={task} />}

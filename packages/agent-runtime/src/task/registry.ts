@@ -46,8 +46,6 @@ export interface CreateTaskParams {
   sessionId: string
   title: string
   subject: TaskSubject
-  /** 默认 true */
-  notifyAgent?: boolean
   /**
    * 仍在跑超过这么久才进面板（毫秒）。默认 0 = 立刻；`Infinity` = 除非脱离等待者否则永不进。
    * 同步 bash 用后者 —— 一条 `ls` 不该在面板里留下痕迹。
@@ -114,7 +112,6 @@ export interface TaskRegistry {
    */
   reopen: (taskId: string) => boolean
   stop: (taskId: string, opts?: { by?: 'agent' | 'user'; force?: boolean }) => boolean
-  setNotify: (taskId: string, enabled: boolean) => boolean
   get: (taskId: string) => TaskInfo | undefined
   list: (sessionId: string) => TaskInfo[]
   runningCount: (sessionId: string, kind?: TaskKind) => number
@@ -206,7 +203,6 @@ export function createTaskRegistry(deps: TaskRegistryDeps): TaskRegistry {
         title: params.title,
         status: 'running',
         detached: false,
-        notifyAgent: params.notifyAgent ?? true,
         startedAt: now(),
         endedAt: null,
         subject: params.subject
@@ -322,7 +318,6 @@ export function createTaskRegistry(deps: TaskRegistryDeps): TaskRegistry {
 
       // 唯一一条通知规则：落定时还有人在等 → 结果由那次调用交回，不通知
       if (had > 0) return
-      if (!entry.info.notifyAgent) return
       // 智能体自己停的不必再通知它；用户从面板停的要通知
       if (entry.stoppedBy === 'agent') return
       const text = entry.formatNotice?.(snapshot(entry))
@@ -354,14 +349,6 @@ export function createTaskRegistry(deps: TaskRegistryDeps): TaskRegistry {
       if (!entry || entry.info.endedAt !== null || !entry.stop) return false
       entry.stoppedBy = opts.by ?? 'user'
       void entry.stop(opts.force ?? false)
-      return true
-    },
-
-    setNotify(taskId, enabled) {
-      const entry = tasks.get(taskId)
-      if (!entry) return false
-      entry.info.notifyAgent = enabled
-      touch(entry)
       return true
     },
 

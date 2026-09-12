@@ -21,6 +21,10 @@
     "paths": {
       "@renderer/*": ["src/renderer/src/*"],
       "@shuvix/chat-protocol/*": ["../../packages/chat-protocol/src/*"],
+      // src/shared/node/truncate.ts 从这里再导出；不映射的话它会沿 node_modules 走到
+      // 工作区符号链接 —— 在 git worktree 里那条链接指向**主检出**，于是这一半类型
+      // 查的是另一个检出的源码（本地改动看不见，还会凭空报出对不上的错）
+      "@shuvix/agent-runtime": ["../../packages/agent-runtime/src/index.ts"],
       "@shuvix/chat-ui": ["../../packages/chat-ui/src/index.ts"],
       "@shuvix/chat-ui/*": ["../../packages/chat-ui/src/*"],
       "@shuvix/app-shell": ["../../packages/app-shell/src/index.ts"],
