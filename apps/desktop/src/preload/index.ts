@@ -47,7 +47,8 @@ import type {
 } from '../main/types'
 import type { ChatEvent } from '@shuvix/chat-protocol/events'
 import type { KnowledgeEntry } from '@shuvix/chat-protocol/knowledge'
-import type { BgTaskInfo, BgTaskLogChunk } from '@shuvix/chat-protocol/types/bgTask'
+import type { BgTaskLogChunk } from '@shuvix/chat-protocol/types/bgTask'
+import type { TaskInfo } from '@shuvix/chat-protocol/types/task'
 import type {
   ConfigSharePayload,
   ExportOptions,
@@ -566,7 +567,7 @@ const api = {
   // 只有只读面 + 管理动作，没有输出流通道 —— 输出在日志文件里，用 readLog 按字节范围轮询。
   bgTask: {
     list: (params: { sessionId: string }) =>
-      ipcRenderer.invoke('bgTask:list', params) as Promise<BgTaskInfo[]>,
+      ipcRenderer.invoke('bgTask:list', params) as Promise<TaskInfo[]>,
     readLog: (params: { toolCallId: string; fromByte?: number; maxBytes?: number }) =>
       ipcRenderer.invoke('bgTask:readLog', params) as Promise<BgTaskLogChunk>,
     stop: (params: { toolCallId: string; force?: boolean }) =>

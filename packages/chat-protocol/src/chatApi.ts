@@ -15,7 +15,8 @@ import type { ShuvixMdValidation } from './shuvixMdContract'
 import type { BotPipelineOptions } from './botPipeline'
 import type { FileReadResult } from './types/filePreview'
 import type { ChatMessage } from './types/chatMessage'
-import type { BgTaskInfo, BgTaskLogChunk } from './types/bgTask'
+import type { BgTaskLogChunk } from './types/bgTask'
+import type { TaskInfo } from './types/task'
 import type {
   ProviderInfo,
   ProviderModelInfo,
@@ -524,13 +525,13 @@ export interface SessionChannelApi {
     statuses: (sessionId: string) => Promise<Record<string, RuntimeStatus>>
   }
   /**
-   * 后台任务（bash run_in_background）只读面。输出**不经事件总线** —— 子进程的
-   * stdout/stderr 由 OS 直接写日志文件，前端要实时输出就按字节范围轮询 readLog；
-   * 任务状态变更走 `bg_task` ChatEvent。见 docs/background-tasks-design.md。
+   * 后台任务只读面（bash 命令 / 派生 agent / 子会话轮次三类共用）。输出**不经事件总线**
+   * —— bash 子进程的 stdout/stderr 由 OS 直接写日志文件，前端要实时输出就按字节范围轮询
+   * readLog；任务状态变更走 `bg_task` ChatEvent。见 docs/background-task-hub-design.md。
    */
   bgTask: {
     /** 会话内全部任务（含已结束）—— 挂载 / 切会话时补快照，之后靠事件增量维护 */
-    list: (params: { sessionId: string }) => Promise<BgTaskInfo[]>
+    list: (params: { sessionId: string }) => Promise<TaskInfo[]>
     /** 按字节范围读日志；fromByte 省略 = 取尾部窗口 */
     readLog: (params: {
       toolCallId: string

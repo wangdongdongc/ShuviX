@@ -1,6 +1,6 @@
 import { ipcMain } from 'electron'
+import { taskRegistry } from '../services/taskRegistry'
 import {
-  listBgTasks,
   readBgTaskLog,
   stopBgTask,
   dismissBgTask,
@@ -19,8 +19,9 @@ import {
 export function registerBgTaskHandlers(): void {
   // ─── 只读（SessionChannelApi 面）──────────────
 
+  // 三类任务混排一张表 —— 面板按 kind 选渲染器（bash 终端 / 派生 agent 转写 / 子会话跳转）
   ipcMain.handle('bgTask:list', (_event, params: { sessionId: string }) =>
-    listBgTasks(params.sessionId)
+    taskRegistry.list(params.sessionId)
   )
 
   ipcMain.handle(

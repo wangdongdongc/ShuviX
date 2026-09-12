@@ -2,13 +2,13 @@
  * 后台任务的状态文案与标签 —— 对话内工具卡与右侧任务面板**共用同一份**。
  *
  * 同一个任务会在两处露面（对话里起它的那张工具卡、面板里的条目），状态说法不该有两版，
- * 所以措辞收敛到这里而不是各写各的。见 docs/background-tasks-design.md §5.3。
+ * 所以措辞收敛到这里而不是各写各的。见 docs/background-task-hub-design.md。
  */
 
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import type { BgTaskInfo } from '@shuvix/chat-protocol/types/bgTask'
-import { useBgTask } from '../../stores/bgTaskStore'
+import type { TaskInfo } from '@shuvix/chat-protocol/types/task'
+import { isTaskFinished, useBgTaskByToolCall } from '../../stores/bgTaskStore'
 
 function formatDuration(ms: number): string {
   const total = Math.max(0, Math.round(ms / 1000))
@@ -41,12 +41,9 @@ export function useNowTicker(active: boolean): number {
  * duration 单独返回，由调用方决定要不要显示 —— 对话行不显示（那里只要状态），
  * 面板显示（那是专门看任务的地方）。措辞两处同源，密度按场合给。
  */
-export function useBgTaskStatus(
-  task: BgTaskInfo,
-  now: number
-): { state: string; duration: string } {
+export function useBgTaskStatus(task: TaskInfo, now: number): { state: string; duration: string } {
   const { t } = useTranslation()
-  const running = task.status === 'running'
+  const running = !isTaskFinished(task)
   return {
     state: running ? t('panel.tasksStatusRunning') : t('panel.tasksStatusEnded'),
     duration: formatDuration((running ? now : (task.endedAt ?? task.startedAt)) - task.startedAt)
@@ -66,18 +63,18 @@ export function BackgroundBadge(): React.JSX.Element {
 /**
  * 工具卡摘要行尾的后台任务状态（标签在行首，见 StepRow 的 badge 槽）。
  *
- * 工具卡的 details 是消息树里的静态数据、不会自更新，所以实时态按 toolCallId 从
- * bgTaskStore 取 —— 与子智能体卡片走同一套路子。重启应用或用户从面板清掉后取不到，
+ * 工具卡的 details 是消息树里的静态数据、不会自更新，所以实时态按 tool_call id 从
+ * 任务 store 取（bash 与派生 agent 同一条路子）。重启应用或用户从面板清掉后取不到，
  * 此时整块不渲染（行首的标签仍在，它来自消息树）。
  */
 export function BgTaskRowState({ toolCallId }: { toolCallId: string }): React.JSX.Element | null {
-  const task = useBgTask(toolCallId)
-  const now = useNowTicker(task?.status === 'running')
+  const task = useBgTaskByToolCall(toolCallId)
+  const now = useNowTicker(!!task && !isTaskFinished(task))
   if (!task) return null
   return <BgTaskStateText task={task} now={now} />
 }
 
-function BgTaskStateText({ task, now }: { task: BgTaskInfo; now: number }): React.JSX.Element {
+function BgTaskStateText({ task, now }: { task: TaskInfo; now: number }): React.JSX.Element {
   const { state } = useBgTaskStatus(task, now)
   return <span className="flex-shrink-0 text-text-tertiary">{state}</span>
 }

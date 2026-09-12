@@ -1,15 +1,20 @@
-import { memo, useEffect, useMemo, useRef, useState } from 'react'
+/**
+ * 派生 agent 的转写视图 —— 它在界面上唯一的家。
+ *
+ * 曾经有两份几乎一样的实现：对话流里那张工具卡内联一份（SubAgentInlineView），右侧
+ * 子代理面板一份。现在只剩这一份，装在后台任务面板的派生 agent 详情里 —— 对话流里的
+ * 工具卡退化成普通形态（参数 + 结果文本），实时状态挂在摘要行尾。
+ * 见 docs/background-task-hub-design.md §6。
+ */
+import { memo, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import ReactMarkdown from 'react-markdown'
-import { Bot, Check, ChevronDown, ChevronRight, Send, Settings, Square, X } from 'lucide-react'
+import { ChevronDown, ChevronRight, Send, Settings } from 'lucide-react'
 import {
-  useSubSessionStore,
-  selectSubSessionList,
   getSessionChannelApi,
   TokenBadge,
   InvalidTokenBadge,
-  type SubSessionState,
-  type SubSessionStatus
+  type SubSessionState
 } from '@shuvix/chat-ui'
 import { useChatStore, type ChatMessage } from '@shuvix/chat-ui'
 import { isImeComposing } from '@shuvix/chat-ui'
@@ -19,50 +24,6 @@ import { ThinkingBlock } from '@shuvix/chat-ui'
 import { segmentContent, parseSlashCommandInput } from '@shuvix/chat-protocol/utils/inlineTokens'
 import { hasThinkingContent } from '@shuvix/chat-protocol/utils/thinking'
 import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
-import { useFocusDim } from '../sidebar/useFocusDim'
-import { usePanelCloseInset } from '../panel/panelCloseInset'
-
-/**
- * 折叠头右侧的单一状态/动作按钮 —— 合并原「状态图标 + 关闭按钮」为一个状态唯一的按钮：
- *   进行中：主 agent 输入框同款的小号中断按钮（实心方块，error 红），点击软停止生成；
- *   已完成/出错：静止显示状态图标（✓ 绿 / ✕ 红），hover 切换为删除 ✕，点击移除该子会话。
- */
-function HeaderAction({
-  status,
-  onInterrupt,
-  onDelete
-}: {
-  status: SubSessionStatus
-  onInterrupt: (e: React.MouseEvent) => void
-  onDelete: (e: React.MouseEvent) => void
-}): React.JSX.Element {
-  const { t } = useTranslation()
-  if (status === 'running') {
-    return (
-      <button
-        onClick={onInterrupt}
-        className="ml-0.5 p-0.5 rounded bg-error/20 text-error hover:bg-error/30 transition-colors"
-        title={t('panel.subAgentInterrupt')}
-      >
-        <Square size={10} fill="currentColor" />
-      </button>
-    )
-  }
-  return (
-    <button
-      onClick={onDelete}
-      className="group/del ml-0.5 p-0.5 rounded hover:bg-bg-hover transition-colors"
-      title={t('panel.subAgentClose')}
-    >
-      {status === 'done' ? (
-        <Check size={11} className="text-success group-hover/del:hidden" />
-      ) : (
-        <X size={11} className="text-error group-hover/del:hidden" />
-      )}
-      <X size={11} className="hidden text-text-secondary group-hover/del:block" />
-    </button>
-  )
-}
 
 /**
  * 提示元信息行 — 展示子智能体的 system / user 指令。设计为「安静的元信息」而非醒目横幅：
@@ -208,7 +169,7 @@ function SubMessageBubble({ msg }: { msg: ChatMessage }): React.JSX.Element | nu
 }
 
 /** 子会话流式内容视图（消息列表 + 当前流式 text/thinking/tool 调用） */
-const SubSessionStream = memo(function SubSessionStream({
+export const SubSessionStream = memo(function SubSessionStream({
   sub,
   focusLast
 }: {
@@ -385,116 +346,6 @@ function SubAgentReplyInput({ subSessionId }: { subSessionId: string }): React.J
       >
         <Send size={12} />
       </button>
-    </div>
-  )
-}
-
-/** 子 Tab 栏 + 当前活跃子会话内容 */
-export function SubAgentPanel(): React.JSX.Element {
-  const closeInset = usePanelCloseInset()
-  const allList = useSubSessionStore(selectSubSessionList)
-  const closeSub = useSubSessionStore((s) => s.close)
-  const activeSessionId = useChatStore((s) => s.activeSessionId)
-  // 专注模式：淡化未展开（非聚焦）的子智能体块，聚焦于当前展开的那个；hover 临时点亮
-  const { dim } = useFocusDim()
-
-  // 只显示当前主会话下「用户主动触发」的子会话；Agent 经派发工具自行触发的（有 parentToolCallId）
-  // 内联在对话流的 ToolCallBlock 卡片中展示，不进右侧面板
-  const list = useMemo(
-    () =>
-      activeSessionId
-        ? allList.filter((s) => s.parentSessionId === activeSessionId && !s.parentToolCallId)
-        : [],
-    [allList, activeSessionId]
-  )
-
-  // 纵向手风琴：每个子会话一节，独立展开/折叠，**一律默认折叠** —— 面板打开先给一份能一眼
-  // 数清的运行清单，转写由用户点开；可同时堆叠任意多个子会话（不受横向 tab 数量限制）。
-  //
-  // 这里曾有「新出现即独占展开」（新会话展开、同时折叠其余）。撤销的理由是它把「哪个展开」
-  // 从用户手里拿走了：多个子会话并发时每来一个就收走你正在读的那个，而 bot 管线的意图段 run
-  // 更是每条消息一轮、几秒即逝，为此还专门养了一张不参与自动展开的 agent 名单。默认折叠之后
-  // 这类例外整类消失（设计 §5.4「面板对聊天会话默认折叠意图段 run」自然满足），开合状态此后
-  // 只由用户的点击改变。
-  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
-
-  const toggle = (id: string): void =>
-    setExpandedIds((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
-
-  const handleClose = (e: React.MouseEvent, subSessionId: string): void => {
-    e.stopPropagation()
-    // 经共享 ChatApi 通知后端销毁（基础能力，各端必实现），再从本地 store 移除
-    void getSessionChannelApi()
-      .agent.subSessionDestroy(subSessionId)
-      .catch(() => {})
-    closeSub(subSessionId)
-  }
-
-  const handleInterrupt = (e: React.MouseEvent, subSessionId: string): void => {
-    e.stopPropagation()
-    // 经共享 ChatApi 软停止；状态翻转交由后续 sub_session_end 事件驱动（store.markEnded）
-    void getSessionChannelApi()
-      .agent.subSessionInterrupt(subSessionId)
-      .catch(() => {})
-  }
-
-  if (list.length === 0) {
-    return (
-      <div className="h-full flex items-center justify-center bg-bg-secondary">
-        <Bot size={48} strokeWidth={1.5} className="text-text-tertiary/30" />
-      </div>
-    )
-  }
-
-  return (
-    // 外层留白：整组与面板四周留一点间隔；内层卡片：圆角描边浅底，多个智能体块在卡内平铺、
-    // 彼此用分隔线相连不留间隔（overflow-hidden 让首尾块继承卡片圆角）
-    <div className="h-full overflow-y-auto no-scrollbar p-1.5 bg-bg-secondary">
-      <div className="rounded-lg border border-border-secondary/40 bg-bg-primary overflow-hidden">
-        {list.map((sub, idx) => {
-          const expanded = expandedIds.has(sub.subSessionId)
-          return (
-            <div
-              key={sub.subSessionId}
-              data-subagent-run={sub.subAgentName}
-              data-subagent-expanded={expanded ? 'true' : 'false'}
-              className={`transition-opacity duration-200 ${idx > 0 ? 'border-t border-border-secondary/30' : ''} ${
-                dim && !expanded ? 'opacity-40 hover:opacity-100' : ''
-              }`}
-            >
-              {/* 折叠头：展开箭头 + 名称 + 状态 + 关闭。首块还要给会话面板悬在卡片右上角的
-                  收起按钮让位（内层卡片已内缩 7px，再让 24px 即够） */}
-              <div
-                onClick={() => toggle(sub.subSessionId)}
-                className={`flex items-center gap-1.5 px-2 h-7 cursor-pointer select-none text-[11px] text-text-secondary hover:bg-bg-secondary/30 transition-colors${
-                  closeInset && idx === 0 ? ' pr-6' : ''
-                }`}
-              >
-                {expanded ? (
-                  <ChevronDown size={13} className="flex-shrink-0 text-text-tertiary" />
-                ) : (
-                  <ChevronRight size={13} className="flex-shrink-0 text-text-tertiary" />
-                )}
-                <Bot size={12} className="flex-shrink-0 text-text-tertiary" />
-                <span className="flex-1 truncate">{sub.displayName}</span>
-                <HeaderAction
-                  status={sub.status}
-                  onInterrupt={(e) => handleInterrupt(e, sub.subSessionId)}
-                  onDelete={(e) => handleClose(e, sub.subSessionId)}
-                />
-              </div>
-
-              {/* 展开内容：该子会话的转写（含末尾追问输入框，随内容滚动） */}
-              {expanded && <SubSessionStream sub={sub} focusLast={dim} />}
-            </div>
-          )
-        })}
-      </div>
     </div>
   )
 }

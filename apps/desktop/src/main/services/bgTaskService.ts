@@ -436,14 +436,16 @@ export function dismissBgTask(toolCallId: string): boolean {
   return true
 }
 
-/** 清空会话内所有已结束的任务 */
+/**
+ * 清空会话内所有已结束的任务 —— **三类都清**（面板的「清空」按钮是整张表的）。
+ * bash 那些顺带把日志文件删掉，其余的枢纽自己销账即可。
+ */
 export function clearFinishedBgTasks(sessionId: string): number {
-  let n = 0
   for (const [toolCallId, proc] of [...procs.entries()]) {
     if (proc.sessionId !== sessionId) continue
-    if (dismissBgTask(toolCallId)) n++
+    if (taskRegistry.get(toolCallId)?.endedAt !== null) forget(toolCallId, { removeLog: true })
   }
-  return n
+  return taskRegistry.clearFinished(sessionId)
 }
 
 // ─── 级联清理 ────────────────────────────────────────

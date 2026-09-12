@@ -994,6 +994,12 @@
     "tasksLogCapped": "ログが 50 MB を超えています — 末尾のみ表示",
     "tasksNoOutput": "まだ出力はありません",
     "tasksStatusEnded": "終了",
+    "tasksKindBash": "Bash",
+    "tasksKindAgent": "サブエージェント",
+    "tasksKindSubSession": "サブセッション",
+    "tasksOpenSession": "セッションを開く",
+    "tasksAgentGone": "トランスクリプトはアプリの実行中のみ保持されます",
+    "tasksBlockedOn": "回答をお待ちしています:",
     "calendar": "カレンダー"
   },
   "browser": {

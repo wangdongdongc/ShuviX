@@ -154,7 +154,7 @@ export type {
   SaveStatus
 } from './notebook/LivePreviewEditor'
 
-export { SubAgentPanel } from './subagent/SubAgentPanel'
+export { SubSessionStream } from './subagent/SubAgentStream'
 
 // 右键菜单（共享配置 + 注入式渲染器：桌面原生 / 扩展 DOM）
 export {

@@ -43,8 +43,6 @@ import { buildToolSummary } from '@shuvix/chat-protocol/toolSummaries'
 import { isBackgroundCall, toolResultImage } from '@shuvix/chat-protocol/types/chatMessage'
 import { ToolImageThumb } from './ToolImageThumb'
 import { CodeView } from '../code/CodeView'
-import { useSubSessionStore } from '../../stores/subSessionStore'
-import { SubAgentInlineView } from './SubAgentInlineView'
 import { copyToClipboard } from '../../utils/clipboard'
 import { CODE_MAX_H, DETAIL_PRE_CLASS, STREAM_PRE_CLASS } from './detailViewport'
 import { BackgroundBadge, BgTaskRowState } from './BgTaskTag'
@@ -174,13 +172,6 @@ export function ToolCallBlock({
   const status = liveExec?.status || propStatus
   const details = liveExec?.details || propDetails
 
-  // Agent 派发工具触发的子会话（按父 tool_call id 匹配）：展开卡片内联其转写。
-  // 仅本次运行的内存态；刷新后子会话消失，回退为普通 result 文本展示。
-  const subSession = useSubSessionStore((s) => {
-    if (!toolCallId) return null
-    return Object.values(s.subSessions).find((ss) => ss.parentToolCallId === toolCallId) ?? null
-  })
-
   // 模型收到的那张图（read 到图片时）——details 走的是磁盘路径，不是 base64
   const modelImage = toolResultImage(details)
 
@@ -218,14 +209,7 @@ export function ToolCallBlock({
     statusConfig[status]
   )
 
-  const canExpand = !!(
-    args ||
-    result ||
-    hasEditDiff ||
-    streamingArgsText ||
-    subSession ||
-    modelImage
-  )
+  const canExpand = !!(args || result || hasEditDiff || streamingArgsText || modelImage)
   // 终端形态：presentation 声明 + 确有命令可渲染，否则降级回通用表单形态
   const isTerminalView =
     presentation?.detailView === 'terminal' && typeof args?.command === 'string'
@@ -234,9 +218,14 @@ export function ToolCallBlock({
   // （那是这次调用的性质，该和工具名挨在一起）。对用户而言两者是同一件事 ——
   // 「这次调用没有等结果，活还在跑」，所以共用同一枚标签，判别收在 isBackgroundCall。
   const isBackground = isBackgroundCall(details)
-  // 行尾的实时状态只有 bash 有：那份实时态住在 bgTaskStore 里，按 toolCallId 取。
-  // 子会话的实时状态在会话列表上（那一行会流式脉冲），不重复搬到这里
-  const hasLiveState = details?.type === 'bash'
+  // 行尾的实时状态：**凡是这次调用起了后台任务就显示**，不按工具名分类 —— 后台任务枢纽
+  // 才是那份实时态的事实源（bash 命令、派生 agent 都在里面），取不到就整块不渲染
+  // （同步 bash 不进面板、重启后内存态也没了）。子会话的实时状态在会话列表上
+  // （那一行会流式脉冲），不重复搬到这里。
+  //
+  // 派生 agent 的卡**不再内联转写**：那份转写在后台任务面板里（它在界面上唯一的家），
+  // 这里退化成普通工具卡 —— 参数 + 结果文本，结果就是派生 agent 的最终答复。
+  // 退化本身不损失什么：内联转写一直是内存态，刷新一次就已经是这个形态了。
 
   // 摘要行内容：图标槽为状态（无状态时落回工具图标），其后名称 + 摘要
   const rowProps = {
@@ -245,10 +234,7 @@ export function ToolCallBlock({
     label: presentation?.label || toolName,
     detail: detail ? <span className="font-mono">{detail}</span> : undefined,
     badge: isBackground ? <BackgroundBadge /> : undefined,
-    trailing:
-      isBackground && hasLiveState && toolCallId ? (
-        <BgTaskRowState toolCallId={toolCallId} />
-      ) : undefined
+    trailing: toolCallId ? <BgTaskRowState toolCallId={toolCallId} /> : undefined
   }
 
   // `data-tool-name` / `data-tool-status`：工具行在 DOM 上唯一的语义锚点
@@ -273,64 +259,57 @@ export function ToolCallBlock({
       {/* 展开态 — 摘要行原位不动，详情从下方长出（与思考 / 分组同一形态，避免展开时跳版） */}
       <StepRow {...rowProps} expandable onClick={() => setExpanded(false)} />
       <div className="mt-0.5 mb-1 ml-3 pl-2 border-l border-border-secondary/50">
-        {subSession ? (
-          /* Agent 派发的子会话：内联其转写（自带限高滚动容器） */
-          <SubAgentInlineView sub={subSession} />
-        ) : (
-          /* 外层不限高：diff / 代码 / 裸文本各自是自己那块的唯一滚动主（见 detailViewport.ts） */
-          <div className="py-1 space-y-1.5">
-            {/* 流式生成中的参数文本 */}
-            {streamingArgsText && <pre className={STREAM_PRE_CLASS}>{streamingArgsText}</pre>}
+        {/* 外层不限高：diff / 代码 / 裸文本各自是自己那块的唯一滚动主（见 detailViewport.ts） */}
+        <div className="py-1 space-y-1.5">
+          {/* 流式生成中的参数文本 */}
+          {streamingArgsText && <pre className={STREAM_PRE_CLASS}>{streamingArgsText}</pre>}
 
-            {/* 写入/编辑成功时展示 DiffViewer */}
-            {editDiff && <DiffViewer diff={editDiff} />}
+          {/* 写入/编辑成功时展示 DiffViewer */}
+          {editDiff && <DiffViewer diff={editDiff} />}
 
-            {/* 展开详情 */}
-            {!hasEditDiff &&
-              !hasPendingInput &&
-              (isTerminalView ? (
-                /* shell 类工具：命令 + 输出融成一段终端会话，不拆「参数 / 结果」两块 */
-                <TerminalView
-                  command={String(args?.command ?? '')}
-                  output={result}
-                  cwd={details?.type === 'bash' ? details.cwd : undefined}
-                  host={details?.type === 'ssh' ? details.host : undefined}
-                  exitCode={
-                    details?.type === 'bash' || details?.type === 'ssh'
-                      ? details.exitCode
-                      : undefined
-                  }
-                  running={status === 'running'}
-                />
-              ) : presentation && args ? (
-                <ToolFormDetail presentation={presentation} args={args} result={result} />
-              ) : (
-                <>
-                  {args && Object.keys(args).length > 0 && (
-                    <div>
-                      <div className="text-[10px] text-text-tertiary mb-0.5">
-                        {t('toolCall.params')}
-                      </div>
-                      <pre className={DETAIL_PRE_CLASS}>
-                        {typeof args === 'string' ? args : JSON.stringify(args, null, 2)}
-                      </pre>
+          {/* 展开详情 */}
+          {!hasEditDiff &&
+            !hasPendingInput &&
+            (isTerminalView ? (
+              /* shell 类工具：命令 + 输出融成一段终端会话，不拆「参数 / 结果」两块 */
+              <TerminalView
+                command={String(args?.command ?? '')}
+                output={result}
+                cwd={details?.type === 'bash' ? details.cwd : undefined}
+                host={details?.type === 'ssh' ? details.host : undefined}
+                exitCode={
+                  details?.type === 'bash' || details?.type === 'ssh' ? details.exitCode : undefined
+                }
+                running={status === 'running'}
+              />
+            ) : presentation && args ? (
+              <ToolFormDetail presentation={presentation} args={args} result={result} />
+            ) : (
+              <>
+                {args && Object.keys(args).length > 0 && (
+                  <div>
+                    <div className="text-[10px] text-text-tertiary mb-0.5">
+                      {t('toolCall.params')}
                     </div>
-                  )}
-                  {result && (
-                    <div>
-                      <div className="text-[10px] text-text-tertiary mb-0.5">
-                        {t('toolCall.result')}
-                      </div>
-                      <pre className={DETAIL_PRE_CLASS}>{result}</pre>
+                    <pre className={DETAIL_PRE_CLASS}>
+                      {typeof args === 'string' ? args : JSON.stringify(args, null, 2)}
+                    </pre>
+                  </div>
+                )}
+                {result && (
+                  <div>
+                    <div className="text-[10px] text-text-tertiary mb-0.5">
+                      {t('toolCall.result')}
                     </div>
-                  )}
-                </>
-              ))}
+                    <pre className={DETAIL_PRE_CLASS}>{result}</pre>
+                  </div>
+                )}
+              </>
+            ))}
 
-            {/* 模型收到的那张图：跟在结果之后。只在展开态挂载 —— 见 ToolImageThumb 注释 */}
-            {modelImage && <ToolImageThumb image={modelImage} />}
-          </div>
-        )}
+          {/* 模型收到的那张图：跟在结果之后。只在展开态挂载 —— 见 ToolImageThumb 注释 */}
+          {modelImage && <ToolImageThumb image={modelImage} />}
+        </div>
       </div>
     </div>
   )

@@ -3,7 +3,8 @@ import type { LucideIconName, ThemeColor } from '@shuvix/chat-protocol/theme'
 import type { ShuvixMdValidation } from '@shuvix/chat-protocol/shuvixMdContract'
 import type { BotPipelineOptions } from '@shuvix/chat-protocol/botPipeline'
 import type { KnowledgeEntry } from '@shuvix/chat-protocol/knowledge'
-import type { BgTaskInfo, BgTaskLogChunk } from '@shuvix/chat-protocol/types/bgTask'
+import type { BgTaskLogChunk } from '@shuvix/chat-protocol/types/bgTask'
+import type { TaskInfo } from '@shuvix/chat-protocol/types/task'
 import type {
   AgentInitParams,
   AgentInitResult,
@@ -883,7 +884,7 @@ declare global {
       cancel: (taskId: string) => Promise<{ success: boolean }>
     }
     bgTask: {
-      list: (params: { sessionId: string }) => Promise<BgTaskInfo[]>
+      list: (params: { sessionId: string }) => Promise<TaskInfo[]>
       readLog: (params: {
         toolCallId: string
         fromByte?: number

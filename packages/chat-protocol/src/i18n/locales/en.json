@@ -994,6 +994,12 @@
     "tasksLogCapped": "Log exceeds 50 MB — only the tail is shown",
     "tasksNoOutput": "No output yet",
     "tasksStatusEnded": "Finished",
+    "tasksKindBash": "Bash",
+    "tasksKindAgent": "Sub-agent",
+    "tasksKindSubSession": "Sub-session",
+    "tasksOpenSession": "Open session",
+    "tasksAgentGone": "The transcript is only kept while the app is running",
+    "tasksBlockedOn": "Waiting for your answer:",
     "calendar": "Calendar"
   },
   "browser": {

@@ -7,7 +7,7 @@ import { create } from 'zustand'
  * 在 store 之外接（扩展 chrome.storage；桌面 panelLayout + 原生窗口；WebUI 不持久化）。activeTab 用
  * string 以容纳各端不同的 tab 集合（桌面 browser/terminal/widget 专属；扩展 / WebUI 仅 files/subagent）。
  *
- * 这样「右侧面板的视图状态管理」随面板组件（PanelTabBar / FilesPanel / SubAgentPanel）一起作为共享代码，
+ * 这样「右侧面板的视图状态管理」随面板组件（PanelTabBar / FilesPanel / BgTaskPanel）一起作为共享代码，
  * 三端行为天然一致；面板的自动揭示也能据此收敛（见 usePanelReveal）。
  */
 export interface PanelStoreState {

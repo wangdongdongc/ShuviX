@@ -1,13 +1,7 @@
 import { useCallback, useEffect, useRef, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Bot, Eye, FolderTree, ListTodo, X } from 'lucide-react'
-import {
-  useChatStore,
-  useSubAgentCount,
-  useBgTaskCount,
-  useBgTaskRunningCount
-} from '@shuvix/chat-ui'
-import { SubAgentPanel } from '../subagent/SubAgentPanel'
+import { Eye, FolderTree, ListTodo, X } from 'lucide-react'
+import { useChatStore, useBgTaskCount, useBgTaskRunningCount } from '@shuvix/chat-ui'
 import { usePreviewPanelStore } from '../preview/previewPanelStore'
 import { BgTaskPanel } from './BgTaskPanel'
 import { useSessionPanelStore, type SessionPanelTool } from './sessionPanelStore'
@@ -37,21 +31,20 @@ import { PanelCloseInsetContext } from './panelCloseInset'
  */
 
 /**
- * 展示工具（含兜底）：面板停在 Sub-agent 但子会话已清空（Bot 按钮随之隐藏）→ 回落到 Files；
- * 停在 Preview 但预览目标已关闭（Eye 按钮随之隐藏）→ 同样回落到 Files；
+ * 展示工具（含兜底）：面板停在 Preview 但预览目标已关闭（Eye 按钮随之隐藏）→ 回落到 Files；
  * 停在后台任务但任务已清空（ListTodo 按钮随之隐藏）→ 同样回落到 Files。
+ * 'subagent' 是已并入 tasks 的旧值（按会话记忆的 store 里可能还留着）→ 一并接到 tasks。
  */
 export function useSessionPanelTool(sessionId: string | null): SessionPanelTool | null {
   const openTool = useSessionPanelStore((s) =>
     sessionId ? (s.openBySession[sessionId] ?? null) : null
   )
-  const subAgentCount = useSubAgentCount(sessionId)
   const hasPreviewTarget = usePreviewPanelStore((s) => s.target !== null)
   const taskCount = useBgTaskCount(sessionId)
-  if (openTool === 'subagent' && subAgentCount === 0) return 'files'
-  if (openTool === 'preview' && !hasPreviewTarget) return 'files'
-  if (openTool === 'tasks' && taskCount === 0) return 'files'
-  return openTool
+  const tool = openTool === 'subagent' ? 'tasks' : openTool
+  if (tool === 'preview' && !hasPreviewTarget) return 'files'
+  if (tool === 'tasks' && taskCount === 0) return 'files'
+  return tool
 }
 
 /**
@@ -80,14 +73,16 @@ interface SessionPanelToolItem {
 
 /**
  * 面板工具入口列表（工具栏胶囊与面板头部 tabs 共用同一来源）：Files 常驻；
- * Preview 仅宿主注入且存在预览目标时出现；Sub-agent 仅有子会话时出现（含数量徽标）。
+ * Preview 仅宿主注入且存在预览目标时出现；任务仅在本会话有任务时出现（含运行中数量徽标）。
+ *
+ * 原先并列的 Sub-agent 入口已并入任务 —— 派生 agent 是后台任务的一类，
+ * 与 bash、子会话同列一张表（见 BgTaskPanel）。
  */
 function useSessionPanelToolItems(
   sessionId: string | null,
   includePreview: boolean
 ): SessionPanelToolItem[] {
   const { t } = useTranslation()
-  const subAgentCount = useSubAgentCount(sessionId)
   const hasPreviewTarget = usePreviewPanelStore((s) => s.target !== null)
   const taskCount = useBgTaskCount(sessionId)
   const runningTaskCount = useBgTaskRunningCount(sessionId)
@@ -96,10 +91,7 @@ function useSessionPanelToolItems(
     ...(includePreview && hasPreviewTarget
       ? [{ tool: 'preview' as const, Icon: Eye, label: t('panel.previewTab') }]
       : []),
-    ...(subAgentCount > 0
-      ? [{ tool: 'subagent' as const, Icon: Bot, label: t('panel.subAgent'), badge: subAgentCount }]
-      : []),
-    // 用 ListTodo：Terminal 已被 ssh 的运行时指示器占用，Bot 是 Sub-agent 的，同栏必须一眼分得开。
+    // 用 ListTodo：Terminal 已被 ssh 的运行时指示器占用，同栏必须一眼分得开。
     // 徽标取「运行中」数而非总数 —— 全跑完之后 tab 仍在（用户还要看日志），但不该继续挂个数字
     ...(taskCount > 0
       ? [
@@ -269,14 +261,6 @@ export function SessionPanel({
                 {previewContent}
               </div>
             )}
-            <div
-              className="absolute inset-0"
-              style={
-                tool === 'subagent' ? undefined : { visibility: 'hidden', pointerEvents: 'none' }
-              }
-            >
-              <SubAgentPanel />
-            </div>
             <div
               className="absolute inset-0"
               style={tool === 'tasks' ? undefined : { visibility: 'hidden', pointerEvents: 'none' }}

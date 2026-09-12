@@ -2098,10 +2098,9 @@ export function botFlowPane(main: CdpClient): BotFlowPane {
       ),
 
     openSubAgentPanel: async () => {
+      // 派生 agent 已并入后台任务面板（原 Sub-agent tab 没了），入口就是任务 tab 那枚按钮
       const hit = await main.eval<boolean>(`(() => {
-        const btn = [...document.querySelectorAll('button')].find(
-          (b) => b.querySelector('.lucide-bot') && b.querySelector('span.tabular-nums')
-        )
+        const btn = document.querySelector('[data-session-tool="tasks"]')
         if (!btn) return false
         btn.click()
         return true

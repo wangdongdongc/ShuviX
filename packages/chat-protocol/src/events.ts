@@ -6,7 +6,7 @@
  */
 
 import type { ToolResultDetails, InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
-import type { BgTaskInfo } from '@shuvix/chat-protocol/types/bgTask'
+import type { TaskInfo } from '@shuvix/chat-protocol/types/task'
 import type { LucideIconName, ThemeColor } from '@shuvix/chat-protocol/theme'
 
 // ─── 基础 ──────────────────────────────────────────────
@@ -232,16 +232,17 @@ export interface ChatSubSessionEndEvent extends ChatEventBase {
 // ─── 后台任务 ──────────────────────────────────────────
 
 /**
- * 后台任务（bash run_in_background）生命周期变更 —— 低频，每任务 2 次（started / exited|killed）。
+ * 后台任务生命周期变更 —— bash 命令、派生 agent、子会话轮次三类共用一条事件。
+ * 低频：每任务至多 2 次（宣告 / 落定）。
  *
- * 刻意**不**下发输出增量：子进程的 stdout/stderr 由 OS 直接写 `task.logPath`，
- * 前端要实时输出时按字节范围轮询 `bgTask.readLog`，模型则直接 read 那个文件。
- * 详见 docs/background-tasks-design.md。
+ * 刻意**不**下发输出增量：bash 的 stdout/stderr 由 OS 直接写日志文件（前端按字节范围
+ * 轮询 `bgTask.readLog`，模型直接 read 那个文件），派生 agent 的转写走它自己的事件频道，
+ * 子会话的转写在它自己的会话里。详见 docs/background-task-hub-design.md。
  */
 export interface ChatBgTaskEvent extends ChatEventBase {
   type: 'bg_task'
-  /** 完整快照，前端按 task.toolCallId upsert */
-  task: BgTaskInfo
+  /** 完整快照，前端按 task.taskId upsert */
+  task: TaskInfo
 }
 
 // ─── 消息列表重载 ────────────────────────────────────────

@@ -57,7 +57,6 @@ const EMPTY_COMPLETED: Array<{ toolName: string; args?: Record<string, unknown> 
 
 interface SubSessionStore {
   subSessions: Record<string, SubSessionState>
-  activeSubSessionId: string | null
 
   // ─── 生命周期 ──
   register(params: {
@@ -77,7 +76,6 @@ interface SubSessionStore {
   appendUserMessage(subSessionId: string, message: ChatMessage): void
   /** 用户显式关闭：移除 store 条目（同时应触发 IPC subSession:destroy） */
   close(subSessionId: string): void
-  setActive(subSessionId: string | null): void
 
   // ─── 事件处理（镜像主会话事件语义） ──
   handleAgentStart(subSessionId: string): void
@@ -138,18 +136,13 @@ function createEmpty(params: {
 
 export const useSubSessionStore = create<SubSessionStore>((set) => ({
   subSessions: {},
-  activeSubSessionId: null,
 
   register: (params) =>
     set((state) => {
       // 已存在则不覆盖（但理论上每个 subSessionId 只 register 一次）
       if (state.subSessions[params.subSessionId]) return {}
       const entry = createEmpty(params)
-      return {
-        subSessions: { ...state.subSessions, [params.subSessionId]: entry },
-        // 新注册的子会话默认设为活跃（SubAgentPanel useEffect 会在切换主会话时纠正）
-        activeSubSessionId: params.subSessionId
-      }
+      return { subSessions: { ...state.subSessions, [params.subSessionId]: entry } }
     }),
 
   markEnded: ({ subSessionId, result, isError }) =>
@@ -193,14 +186,8 @@ export const useSubSessionStore = create<SubSessionStore>((set) => ({
     set((state) => {
       if (!state.subSessions[subSessionId]) return {}
       const { [subSessionId]: _, ...rest } = state.subSessions
-      const nextActive =
-        state.activeSubSessionId === subSessionId
-          ? (Object.keys(rest)[0] ?? null)
-          : state.activeSubSessionId
-      return { subSessions: rest, activeSubSessionId: nextActive }
+      return { subSessions: rest }
     }),
-
-  setActive: (subSessionId) => set({ activeSubSessionId: subSessionId }),
 
   handleAgentStart: (subSessionId) =>
     set((state) => {
@@ -369,29 +356,6 @@ export const useSubSessionStore = create<SubSessionStore>((set) => ({
 /** 判断 sessionId 是否为已注册的子会话 */
 export function isSubSession(sessionId: string): boolean {
   return sessionId in useSubSessionStore.getState().subSessions
-}
-
-/** 当前活跃子会话；没有子会话时返回 null */
-export const selectActiveSubSession = (s: SubSessionStore): SubSessionState | null =>
-  s.activeSubSessionId ? (s.subSessions[s.activeSubSessionId] ?? null) : null
-
-/**
- * 所有子会话列表（按 startedAt 升序）。
- *
- * ⚠️ zustand + useSyncExternalStore 要求 selector 在数据未变时返回稳定引用,
- * 否则触发 "getSnapshot should be cached" 错误并进入无限重渲染循环。
- * 用 module-scope cache 按 subSessions 引用缓存排序结果。
- */
-const EMPTY_SUB_LIST: SubSessionState[] = []
-let _lastSubListInput: SubSessionStore['subSessions'] | null = null
-let _lastSubListOutput: SubSessionState[] = EMPTY_SUB_LIST
-export const selectSubSessionList = (s: SubSessionStore): SubSessionState[] => {
-  if (s.subSessions === _lastSubListInput) return _lastSubListOutput
-  _lastSubListInput = s.subSessions
-  const arr = Object.values(s.subSessions)
-  _lastSubListOutput =
-    arr.length === 0 ? EMPTY_SUB_LIST : arr.sort((a, b) => a.startedAt - b.startedAt)
-  return _lastSubListOutput
 }
 
 /** 子会话数量 */

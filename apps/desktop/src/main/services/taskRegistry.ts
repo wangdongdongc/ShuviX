@@ -24,10 +24,10 @@ export function setTaskNotifier(fn: TaskNotifier): void {
 }
 
 /**
- * **过渡期投影**：把统一快照压回旧的 `BgTaskInfo` 形状，非 bash 任务返回 null。
+ * 把统一快照压回 `BgTaskInfo` 形状，非 bash 任务返回 null。
  *
- * 前端这一侧还认 `bg_task` 事件与 `BgTaskInfo`（面板只会画 bash 那一种）。S2 把面板改成
- * 按 kind 选渲染器之后，这里连同 `bg_task` 事件一起换成直接下发 `TaskInfo`，本函数删除。
+ * 事件与面板早已改吃 `TaskInfo`，这里只剩 bash 自己那一面还用得上：启动回执、
+ * 「同时跑太多」的错误列表、以及 bash 工具面向模型的那几段文案都按 pid / 日志路径说话。
  */
 export function toBgTaskInfo(task: TaskInfo): BgTaskInfo | null {
   if (task.subject.kind !== 'bash') return null
@@ -52,11 +52,8 @@ export function toBgTaskInfo(task: TaskInfo): BgTaskInfo | null {
 }
 
 export const taskRegistry = createTaskRegistry({
-  broadcast: (task) => {
-    const info = toBgTaskInfo(task)
-    if (!info) return
-    chatFrontendRegistry.broadcast({ type: 'bg_task', sessionId: task.sessionId, task: info })
-  },
+  broadcast: (task) =>
+    chatFrontendRegistry.broadcast({ type: 'bg_task', sessionId: task.sessionId, task }),
   deliver: (sessionId, text) => notifier?.(sessionId, text),
   logger: log
 })

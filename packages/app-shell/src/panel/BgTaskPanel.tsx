@@ -4,29 +4,35 @@ import { ChevronDown, ChevronRight, Square, X } from 'lucide-react'
 import {
   useBgTasks,
   useBgTaskStore,
+  isTaskFinished,
   getSessionChannelApi,
   getHostApi,
   TerminalView,
-  useBgTaskStatus
+  useBgTaskStatus,
+  useChatStore,
+  useSubSessionStore
 } from '@shuvix/chat-ui'
-import type { BgTaskInfo } from '@shuvix/chat-protocol/types/bgTask'
+import type { TaskInfo } from '@shuvix/chat-protocol/types/task'
+import { SubSessionStream } from '../subagent/SubAgentStream'
 import { usePanelCloseInset } from './panelCloseInset'
 
 /**
- * 后台任务面板 —— SessionPanel 的 tasks 页
+ * 后台任务面板 —— SessionPanel 的 tasks 页，三类运行共用一张表：
+ * bash 命令、派生 agent、子会话轮次。
  *
- * 形态刻意贴近同类问题已经验证过的 SubAgentPanel（一组并发的、有状态的、可中断的运行）：
- * 手风琴列表、单条动作按钮状态唯一。差别在三处，都有理由：
+ * 它们此前各有各的位置（tasks 页 / 子代理页 / 只在侧边栏），但对用户而言是同一个问题：
+ * **这个会话此刻在后台干什么、哪一件卡住了**。所以列表混排、行的形态一致，
+ * 差别只落在展开后的详情渲染器上，因为三者的"内容"本就住在三个地方：
  *
- *  - **标题用 description 而不是命令**。命令太长、前缀又常常雷同（一排
- *    `cd /Volumes/… && npm run …` 完全分不出谁是谁）；`description` 本来就是 bash 的必填参数。
- *  - **状态是纯文本 `Bash · 已完成 · 4m02s`，不是彩色状态点**。列表里五条各挂一个绿点红点，
- *    噪音大过信息量。只有失败破例染红。
- *  - **展开互斥**。多条同时展开会让定高输出块彼此挤压；这也是下面敢用轮询取日志的前提
- *    （同时只有一条在拉）。
+ *  - **bash**：输出由 OS 直接写日志文件，这里按字节范围轮询自取（面板收起即停）；
+ *  - **派生 agent**：转写是内存态事件流，住在 subSessionStore 里 —— 那份转写在界面上
+ *    只此一处（对话流里的工具卡已退化为普通形态）；
+ *  - **子会话**：它是一条真正的会话，转写在它自己的会话界面里，这里只给状态与入口，
+ *    不再画第二份。
  *
- * 输出不在 store 里 —— 子进程的 stdout/stderr 由 OS 直接写日志文件，这里按字节范围轮询
- * `bgTask.readLog` 自取，面板收起即停。见 docs/background-tasks-design.md。
+ * 形态沿用原 tasks 页：手风琴列表、单条动作按钮状态唯一、展开互斥（多条同时展开会让
+ * 定高输出块彼此挤压；这也是敢用轮询取日志的前提 —— 同时只有一条在拉）。
+ * 见 docs/background-task-hub-design.md §6。
  */
 
 /** 日志轮询间隔；同时只有一条任务展开，所以峰值就是 1 次/秒 */
@@ -34,26 +40,32 @@ const POLL_MS = 1000
 /** 首帧取日志尾部窗口 */
 const TAIL_WINDOW_BYTES = 200 * 1024
 
-/** 已结束（含失败与被停止）—— 分组与「清空」都按这个判定 */
-function isFinished(task: BgTaskInfo): boolean {
-  return task.status !== 'running'
+/** 类别文案 —— 行尾那句「Bash · 运行中 · 4m02s」的第一段 */
+function useKindLabel(kind: TaskInfo['kind']): string {
+  const { t } = useTranslation()
+  if (kind === 'agent') return t('panel.tasksKindAgent')
+  if (kind === 'sub-session') return t('panel.tasksKindSubSession')
+  return t('panel.tasksKindBash')
 }
 
 /**
- * 单条动作按钮 —— 照搬 SubAgentPanel 的 HeaderAction：同一位置状态唯一，不叠按钮。
+ * 单条动作按钮 —— 同一位置状态唯一，不叠按钮。
  * 运行中是中断方块；结束后静态显示，hover 变删除 ✕。
+ *
+ * 停止对三类都成立：枢纽持有每类各自的停止实现（杀进程组 / 软停止派生 agent /
+ * 中止子会话当前轮），面板不需要知道是哪一种。
  */
 function TaskAction({
   task,
   onStop,
   onDismiss
 }: {
-  task: BgTaskInfo
+  task: TaskInfo
   onStop: (e: React.MouseEvent) => void
   onDismiss: (e: React.MouseEvent) => void
 }): React.JSX.Element {
   const { t } = useTranslation()
-  if (task.status === 'running') {
+  if (!isTaskFinished(task)) {
     return (
       <button
         onClick={onStop}
@@ -75,13 +87,42 @@ function TaskAction({
   )
 }
 
-/** 展开态内容：命令 + 实时输出 + 通知开关（后台任务没有输入通道，见 bgTaskService 文件头第 5 点） */
-function TaskDetail({ task }: { task: BgTaskInfo }): React.JSX.Element {
+/** 「完成时通知 AI」开关 —— 只有会回报的那两类有意义（派生 agent 恒为同步等待） */
+function NotifyToggle({ task }: { task: TaskInfo }): React.JSX.Element {
+  const { t } = useTranslation()
+  const toggle = useCallback(() => {
+    const next = !task.notifyAgent
+    useBgTaskStore.getState().upsert({ ...task, notifyAgent: next })
+    void getHostApi()
+      ?.bgTask.setNotify({ toolCallId: task.taskId, enabled: next })
+      .catch(() => {})
+  }, [task])
+
+  return (
+    <button
+      onClick={toggle}
+      className="flex items-center gap-1.5 text-[10px] text-text-tertiary hover:text-text-secondary transition-colors"
+    >
+      <span
+        className={`w-3 h-3 rounded-sm border flex items-center justify-center ${
+          task.notifyAgent ? 'bg-accent border-accent' : 'border-border-secondary'
+        }`}
+      >
+        {task.notifyAgent && <span className="w-1.5 h-1.5 rounded-[1px] bg-bg-primary" />}
+      </span>
+      {t('panel.tasksNotify')}
+    </button>
+  )
+}
+
+/** bash 详情：命令 + 实时输出（后台任务没有输入通道，见 bgTaskService 文件头） */
+function BashDetail({ task }: { task: TaskInfo }): React.JSX.Element | null {
   const { t } = useTranslation()
   const [log, setLog] = useState('')
   const [missing, setMissing] = useState(false)
   // 续读游标：日志只增不减，拿到 nextByte 后每次只取新字节
   const cursorRef = useRef<number | null>(null)
+  const running = !isTaskFinished(task)
 
   // 轮询日志 —— 只在本条展开期间跑（组件卸载即停），任务结束后再补一次收尾
   useEffect(() => {
@@ -91,7 +132,7 @@ function TaskDetail({ task }: { task: BgTaskInfo }): React.JSX.Element {
     const pull = async (): Promise<void> => {
       try {
         const chunk = await getSessionChannelApi().bgTask.readLog({
-          toolCallId: task.toolCallId,
+          toolCallId: task.taskId,
           fromByte: cursorRef.current ?? undefined,
           maxBytes: TAIL_WINDOW_BYTES
         })
@@ -104,7 +145,7 @@ function TaskDetail({ task }: { task: BgTaskInfo }): React.JSX.Element {
       } catch {
         /* 读失败不打断轮询 —— 下一拍再试 */
       }
-      if (alive && task.status === 'running') timer = setTimeout(pull, POLL_MS)
+      if (alive && running) timer = setTimeout(pull, POLL_MS)
     }
 
     void pull()
@@ -112,56 +153,88 @@ function TaskDetail({ task }: { task: BgTaskInfo }): React.JSX.Element {
       alive = false
       if (timer) clearTimeout(timer)
     }
-  }, [task.toolCallId, task.status])
+  }, [task.taskId, running])
 
-  const toggleNotify = useCallback(() => {
-    const next = !task.notifyAgent
-    useBgTaskStore.getState().upsert({ ...task, notifyAgent: next })
-    void getHostApi()
-      ?.bgTask.setNotify({ toolCallId: task.toolCallId, enabled: next })
-      .catch(() => {})
-  }, [task])
+  if (task.subject.kind !== 'bash') return null
+  const { command, cwd, exitCode, logCapped } = task.subject
 
   return (
     <div className="px-2 pb-2 space-y-1.5">
-      {task.logCapped && (
-        <div className="text-[10px] text-warning">{t('panel.tasksLogCapped')}</div>
-      )}
+      {logCapped && <div className="text-[10px] text-warning">{t('panel.tasksLogCapped')}</div>}
       <TerminalView
-        command={task.command}
-        cwd={task.cwd}
+        command={command}
+        cwd={cwd}
         output={
           missing
             ? t('panel.tasksLogMissing')
-            : log || (task.status === 'running' ? undefined : t('panel.tasksNoOutput'))
+            : log || (running ? undefined : t('panel.tasksNoOutput'))
         }
-        running={task.status === 'running'}
-        exitCode={task.status === 'running' ? undefined : (task.exitCode ?? undefined)}
+        running={running}
+        exitCode={running ? undefined : (exitCode ?? undefined)}
         stickToBottom
         outputMaxHClass="max-h-56"
       />
 
-      {task.status === 'running' && (
+      {running && (
         <div className="text-[10px] text-text-tertiary leading-relaxed">
           {t('panel.tasksStdinClosed')}
         </div>
       )}
 
-      <button
-        onClick={toggleNotify}
-        className="flex items-center gap-1.5 text-[10px] text-text-tertiary hover:text-text-secondary transition-colors"
-      >
-        <span
-          className={`w-3 h-3 rounded-sm border flex items-center justify-center ${
-            task.notifyAgent ? 'bg-accent border-accent' : 'border-border-secondary'
-          }`}
-        >
-          {task.notifyAgent && <span className="w-1.5 h-1.5 rounded-[1px] bg-bg-primary" />}
-        </span>
-        {t('panel.tasksNotify')}
-      </button>
+      <NotifyToggle task={task} />
     </div>
   )
+}
+
+/**
+ * 派生 agent 详情：它的转写。
+ *
+ * 转写是内存态（事件流累积在 subSessionStore 里），重启应用或用户关掉这条就没了 ——
+ * 与面板整体「只记录本次运行期间」的口径一致。取不到时说清楚，不装作还在。
+ */
+function AgentDetail({ task }: { task: TaskInfo }): React.JSX.Element {
+  const { t } = useTranslation()
+  const sub = useSubSessionStore((s) => s.subSessions[task.taskId])
+  if (!sub) {
+    return (
+      <div className="px-3 pb-2 text-[10px] text-text-tertiary">{t('panel.tasksAgentGone')}</div>
+    )
+  }
+  return <SubSessionStream sub={sub} focusLast={false} />
+}
+
+/**
+ * 子会话详情：状态 + 入口。
+ *
+ * **刻意不画转写** —— 子会话是一条真正的会话，它的转写在会话界面里（侧边栏也挂着它）。
+ * 在这里再画一份既重复又永远差一截（那边能发消息、能改模型、能看历史）。
+ */
+function SubSessionDetail({ task }: { task: TaskInfo }): React.JSX.Element | null {
+  const { t } = useTranslation()
+  if (task.subject.kind !== 'sub-session') return null
+  const { childSessionId, blockedOn } = task.subject
+  return (
+    <div className="px-2 pb-2 space-y-1.5">
+      {task.status === 'waiting-input' && blockedOn?.length ? (
+        <div className="text-[10px] text-warning leading-relaxed">
+          {t('panel.tasksBlockedOn')} {blockedOn.join(' | ')}
+        </div>
+      ) : null}
+      <button
+        onClick={() => useChatStore.getState().setActiveSessionId(childSessionId)}
+        className="text-[10px] text-accent hover:underline"
+      >
+        {t('panel.tasksOpenSession')}
+      </button>
+      <NotifyToggle task={task} />
+    </div>
+  )
+}
+
+function TaskDetail({ task }: { task: TaskInfo }): React.JSX.Element | null {
+  if (task.kind === 'agent') return <AgentDetail task={task} />
+  if (task.kind === 'sub-session') return <SubSessionDetail task={task} />
+  return <BashDetail task={task} />
 }
 
 /** 一个状态分组（运行中 / 已完成），组头可折叠 */
@@ -175,10 +248,10 @@ function TaskGroup({
   reserveTopRight = false
 }: {
   label: string
-  tasks: BgTaskInfo[]
+  tasks: TaskInfo[]
   now: number
   expandedId: string | null
-  onToggleExpand: (toolCallId: string) => void
+  onToggleExpand: (taskId: string) => void
   onClear?: () => void
   /** 本组是面板首个可见分组：组头右侧给会话面板悬在卡片右上角的收起按钮让位 */
   reserveTopRight?: boolean
@@ -212,12 +285,12 @@ function TaskGroup({
         <div className="rounded-lg border border-border-secondary/40 bg-bg-primary overflow-hidden">
           {tasks.map((task, idx) => (
             <TaskRow
-              key={task.toolCallId}
+              key={task.taskId}
               task={task}
               now={now}
-              expanded={expandedId === task.toolCallId}
+              expanded={expandedId === task.taskId}
               divided={idx > 0}
-              onToggle={() => onToggleExpand(task.toolCallId)}
+              onToggle={() => onToggleExpand(task.taskId)}
             />
           ))}
         </div>
@@ -233,47 +306,57 @@ function TaskRow({
   divided,
   onToggle
 }: {
-  task: BgTaskInfo
+  task: TaskInfo
   now: number
   expanded: boolean
   divided: boolean
   onToggle: () => void
 }): React.JSX.Element {
   const { state, duration } = useBgTaskStatus(task, now)
+  const kindLabel = useKindLabel(task.kind)
 
   const handleStop = useCallback(
     (e: React.MouseEvent) => {
       e.stopPropagation()
       void getHostApi()
-        ?.bgTask.stop({ toolCallId: task.toolCallId })
+        ?.bgTask.stop({ toolCallId: task.taskId })
         .catch(() => {})
     },
-    [task.toolCallId]
+    [task.taskId]
   )
 
   const handleDismiss = useCallback(
     (e: React.MouseEvent) => {
       e.stopPropagation()
-      useBgTaskStore.getState().remove(task.toolCallId)
+      useBgTaskStore.getState().remove(task.taskId)
       void getHostApi()
-        ?.bgTask.dismiss({ toolCallId: task.toolCallId })
+        ?.bgTask.dismiss({ toolCallId: task.taskId })
         .catch(() => {})
     },
-    [task.toolCallId]
+    [task.taskId]
   )
 
+  // 派生 agent 的行保留原子代理面板的 DOM 锚点（e2e 按它认行，换名字只会让断言失明）
+  const agentAnchor =
+    task.subject.kind === 'agent'
+      ? {
+          'data-subagent-run': task.subject.profileName,
+          'data-subagent-expanded': expanded ? 'true' : 'false'
+        }
+      : {}
+
   return (
-    <div className={divided ? 'border-t border-border-secondary/30' : ''}>
+    <div className={divided ? 'border-t border-border-secondary/30' : ''} {...agentAnchor}>
       <div
         onClick={onToggle}
         className="flex items-start gap-1.5 px-2 py-1.5 cursor-pointer hover:bg-bg-hover/30 transition-colors"
       >
         <div className="min-w-0 flex-1">
-          <div className="truncate text-xs text-text-primary" title={task.description}>
-            {task.description}
+          <div className="truncate text-xs text-text-primary" title={task.title}>
+            {task.title}
           </div>
           <div className="mt-0.5 text-[10px] text-text-tertiary">
-            Bash · {state} · {duration}
+            {kindLabel} · {state} · {duration}
           </div>
         </div>
         <TaskAction task={task} onStop={handleStop} onDismiss={handleDismiss} />
@@ -291,7 +374,7 @@ export function BgTaskPanel({ sessionId }: { sessionId: string | null }): React.
 
   // 运行中任务的时长要走字 —— 每秒一拍重渲染（面板收起时组件卸载，不空转）
   const [now, setNow] = useState(() => Date.now())
-  const hasRunning = tasks.some((task) => task.status === 'running')
+  const hasRunning = tasks.some((task) => !isTaskFinished(task))
   useEffect(() => {
     if (!hasRunning) return
     const id = setInterval(() => setNow(Date.now()), 1000)
@@ -300,21 +383,21 @@ export function BgTaskPanel({ sessionId }: { sessionId: string | null }): React.
 
   const { running, finished } = useMemo(
     () => ({
-      running: tasks.filter((task) => !isFinished(task)),
-      finished: tasks.filter(isFinished)
+      running: tasks.filter((task) => !isTaskFinished(task)),
+      finished: tasks.filter(isTaskFinished)
     }),
     [tasks]
   )
 
   // 展开互斥：点已展开的收起，否则独占展开
   const toggleExpand = useCallback(
-    (toolCallId: string) => setExpandedId((prev) => (prev === toolCallId ? null : toolCallId)),
+    (taskId: string) => setExpandedId((prev) => (prev === taskId ? null : taskId)),
     []
   )
 
   const clearFinished = useCallback(() => {
     if (!sessionId) return
-    if (expandedId && finished.some((task) => task.toolCallId === expandedId)) setExpandedId(null)
+    if (expandedId && finished.some((task) => task.taskId === expandedId)) setExpandedId(null)
     useBgTaskStore.getState().removeFinished(sessionId)
     void getHostApi()
       ?.bgTask.clearDone({ sessionId })
