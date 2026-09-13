@@ -11,8 +11,10 @@
  * 子会话（`isSub` / `subCount`）借的是**知识库那套文件夹/文件语汇**：缩进用行内
  * paddingLeft（同 WikiGroup 的 `indent(depth)`，不是每行一条竖线），折叠钮就是行首那枚
  * 图标（同 WikiGroup 的 FolderClosed/FolderOpen 整行可点、ProjectMemoryFolder 的计数排版），
- * 数量是标题后一个暗淡的小数字而不是一枚药丸。有子会话的行图标换成 MessagesSquare
- * （两片叠起来的对话框 = 这里不止一场对话）。
+ * 数量是标题后一个暗淡的小数字而不是一枚药丸。有子会话的行，行首图标外面包一层折叠钮：
+ * 普通会话的图标换成 MessagesSquare（两片叠起来的对话框 = 这里不止一场对话），bot / 悬浮
+ * 会话保留自己的身份图标 —— 身份图标若顶掉折叠钮，它们的子会话在侧栏里就够不着了（bot 恰恰
+ * 把活全交给子会话）。
  */
 import { Bot, MessageSquare, MessagesSquare, FileText, PictureInPicture2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -33,7 +35,7 @@ export interface SessionItemProps {
   autoAllow?: boolean
   /** 子会话行：缩进一级（行内 paddingLeft，同知识库的文件行）。其余与顶层行完全一致 */
   isSub?: boolean
-  /** 拥有的子会话数（>0 时行首图标变成 MessagesSquare 且可点折叠，标题后跟一个计数） */
+  /** 拥有的子会话数（>0 时行首图标可点折叠 —— 普通会话换成 MessagesSquare；标题后跟一个计数） */
   subCount?: number
   /** 子会话折叠态（仅 subCount>0 时有意义） */
   subCollapsed?: boolean
@@ -69,6 +71,27 @@ export function SessionItem({
    * accent（选中/流式）而不是被盖掉；流式的 animate-pulse 照旧，仍看得出这条在跑。
    */
   const tone = (base: string): string => (autoAllow ? 'text-amber-500' : base)
+  const pulse = isStreaming ? 'animate-pulse ' : ''
+  const lit = tone(isStreaming || active ? 'text-accent' : 'text-text-tertiary/40')
+  // 行首图标说的是「这是哪种会话」；有子会话时它外面再包一层折叠钮（见下）
+  const icon = isBot ? (
+    <Bot size={11} className={`flex-shrink-0 ${pulse}${lit}`} />
+  ) : isNotebook ? (
+    <FileText
+      size={11}
+      className={`flex-shrink-0 ${tone(active ? 'text-accent' : 'text-text-tertiary/40')}`}
+    />
+  ) : isPinned ? (
+    <PictureInPicture2 size={11} className={`flex-shrink-0 ${pulse}${tone('text-accent')}`} />
+  ) : subCount > 0 ? (
+    <MessagesSquare size={11} className={`flex-shrink-0 ${pulse}${lit}`} />
+  ) : (
+    <MessageSquare
+      size={11}
+      fill={active || isStreaming ? 'currentColor' : 'none'}
+      className={`flex-shrink-0 ${pulse}${lit}`}
+    />
+  )
   return (
     <div
       onClick={() => onSelect(session.id)}
@@ -91,27 +114,11 @@ export function SessionItem({
             }`
       }`}
     >
-      {isBot ? (
-        <Bot
-          size={11}
-          className={`flex-shrink-0 ${isStreaming ? 'animate-pulse ' : ''}${tone(
-            isStreaming || active ? 'text-accent' : 'text-text-tertiary/40'
-          )}`}
-        />
-      ) : isNotebook ? (
-        <FileText
-          size={11}
-          className={`flex-shrink-0 ${tone(active ? 'text-accent' : 'text-text-tertiary/40')}`}
-        />
-      ) : isPinned ? (
-        <PictureInPicture2
-          size={11}
-          className={`flex-shrink-0 ${isStreaming ? 'animate-pulse ' : ''}${tone('text-accent')}`}
-        />
-      ) : subCount > 0 ? (
-        // 有子会话：两片叠起来的对话框 = 这里不止一场对话。图标本身就是折叠钮
-        // （同知识库目录行点图标展开），点行的其余部分照常打开这条会话
+      {subCount > 0 ? (
+        // 有子会话：图标本身就是折叠钮（同知识库目录行点图标展开），点行的其余部分照常
+        // 打开这条会话。`data-subs-toggle` 是 e2e 认它的锚点 —— 钮里的图标随会话身份变
         <button
+          data-subs-toggle=""
           onClick={(e) => {
             e.stopPropagation()
             onToggleSubs?.(session.id)
@@ -119,21 +126,10 @@ export function SessionItem({
           title={t('sidebar.subSessions', { count: subCount })}
           className="flex-shrink-0 -m-0.5 p-0.5 rounded hover:bg-bg-active"
         >
-          <MessagesSquare
-            size={11}
-            className={`${isStreaming ? 'animate-pulse ' : ''}${tone(
-              isStreaming || active ? 'text-accent' : 'text-text-tertiary/40'
-            )}`}
-          />
+          {icon}
         </button>
       ) : (
-        <MessageSquare
-          size={11}
-          fill={active || isStreaming ? 'currentColor' : 'none'}
-          className={`flex-shrink-0 ${isStreaming ? 'animate-pulse ' : ''}${tone(
-            isStreaming || active ? 'text-accent' : 'text-text-tertiary/40'
-          )}`}
-        />
+        icon
       )}
       <div className="flex-1 min-w-0 flex items-center gap-1.5 text-[13px] group-hover:pr-6">
         <span className="truncate">{session.title}</span>

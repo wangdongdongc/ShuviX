@@ -151,7 +151,7 @@ export function ChatView({ pinnedMode }: ChatViewProps = {}): React.JSX.Element 
       </>
     ) : (
       <>
-        {/* 聊天会话：绑定的 bot 胶囊 / 未绑定时的「选择 bot」（自空,非 bot 会话不渲染） */}
+        {/* bot 会话的身份胶囊（非 bot 会话自己渲染为空） */}
         {!isWeb && pinnedMode !== 'placeholder' && activeSessionId && (
           <BotBindingChip sessionId={activeSessionId} />
         )}

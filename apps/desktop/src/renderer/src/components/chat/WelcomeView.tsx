@@ -1,29 +1,33 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Sliders } from 'lucide-react'
-import { BotAvatar, getHostApi, useChatStore } from '@shuvix/chat-ui'
+import { BotAvatar, getHostApi, useAppEvent, useChatStore } from '@shuvix/chat-ui'
 import { SessionConfigPanel } from '@shuvix/app-shell'
 import { boundBotOf } from '@shuvix/chat-protocol/botSession'
 
 // WelcomeView 与 SessionConfigPanel 均已移至 @shuvix/app-shell（桌面/扩展共用）。
 // 此文件仅保留桌面专属的 EmptySessionHint 包装（注入桌面能力开关）。
 
-/** bot 会话的空态：绑定的 bot 自我介绍（名字 + 一句话描述） */
+/** bot 会话的空态：绑定的 bot 自我介绍（名字 + 一句话描述）。注册表一变（bot.changed）就重查 */
 function BotEmptyState({ bot }: { bot: string }): React.JSX.Element {
   const { t } = useTranslation()
-  // undefined = 加载中；null = md 已删（不自我介绍，只留提示行）
-  const [info, setInfo] = useState<BotInfo | null | undefined>(undefined)
+  // 结果连同它是替哪个 bot 查的一起存：从一条 bot 会话切到另一条时，上一个 bot 的自我介绍不能串过来
+  const [result, setResult] = useState<{ bot: string; info: BotInfo | null } | null>(null)
+  const [revision, setRevision] = useState(0)
+  useAppEvent('bot.changed', () => setRevision((r) => r + 1))
 
   useEffect(() => {
     let alive = true
     void window.api.bot.list().then(({ bots }) => {
-      if (alive) setInfo(bots.find((b) => b.name === bot) ?? null)
+      if (alive) setResult({ bot, info: bots.find((b) => b.name === bot) ?? null })
     })
     return () => {
       alive = false
     }
-  }, [bot])
+  }, [bot, revision])
 
+  // undefined = 加载中；null = md 已删（不自我介绍，只留提示行）
+  const info = result?.bot === bot ? result.info : undefined
   const displayName = info?.displayName ?? bot
   return (
     <div className="mb-6" data-bot-empty>
