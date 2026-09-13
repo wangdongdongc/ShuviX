@@ -29,7 +29,12 @@ import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { launchApp, type E2EApp } from '../../harness/launch'
 import { sleep, until } from '../../harness/cdp'
-import { createProject, seedCustomProvider } from '../../harness/seed'
+import {
+  createProject,
+  expectFileUnchanged,
+  seedCustomProvider,
+  waitFileWritten
+} from '../../harness/seed'
 import { agentsPane, fmCardPane, type FmCardPane } from '../../harness/pages'
 
 let app: E2EApp
@@ -344,27 +349,13 @@ const byFile = (file: string): NotebookSeed => NOTEBOOKS.find((n) => n.file === 
 const count = (selector: string): Promise<number> =>
   app.main.eval<number>(`document.querySelectorAll(${JSON.stringify(selector)}).length`)
 
-/**
- * 落盘防抖 200ms → 先等文件落定，再由调用方对全文做 toBe 全等（失败时给得出 diff）。
- * 落定 = 与旧值不同 + 非空 + **连续两次轮询读到一致**：files.write 是「先截断再写」，
- * 不加稳定性判据会偶发读到写到一半的空文件（实测过一次）。
- */
-async function waitWritten(file: string, before: string): Promise<string> {
-  let last = ''
-  await until(() => {
-    const now = read(file)
-    const settled = now !== before && now !== '' && now === last
-    last = now
-    return settled
-  }, `file rewritten: ${file}`)
-  return last
-}
+/** 落盘防抖 200ms → 先等文件落定再由调用方全等比较（判据见 seed.ts waitFileWritten） */
+const waitWritten = (file: string, before: string): Promise<string> =>
+  waitFileWritten(filePath(file), before, `file rewritten: ${file}`)
 
 /** 「不该写盘」的探针：跨过防抖窗口后仍逐字节相同 */
-async function expectUnchanged(file: string, expected: string, waitMs = 500): Promise<void> {
-  await sleep(waitMs)
-  expect(read(file)).toBe(expected)
-}
+const expectUnchanged = (file: string, expected: string, waitMs?: number): Promise<void> =>
+  expectFileUnchanged(filePath(file), expected, waitMs)
 
 /** 弹层里 mcp:/skill: 条目显示的是短名（ToolSelectList 的展示规则） */
 const shortToolName = (name: string): string =>
@@ -863,6 +854,8 @@ describe('E 组 · 宿主差异', () => {
     const settings = await app.openSettings('agents')
     const pane = await agentsPane(settings)
     await pane.selectRow('ac23-body-fm')
+    // 自定义档案的详情就是这份文件的笔记本（按文件名认）
+    expect(await pane.noteFile()).toBe('ac23-body-fm.md')
 
     await until(
       () =>

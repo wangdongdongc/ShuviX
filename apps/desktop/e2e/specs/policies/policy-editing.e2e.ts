@@ -1,24 +1,40 @@
 /**
- * 安全策略的**编辑链路**（policy IPC 的写路径 + 设置页编辑器 UI）。
+ * 安全策略的**编辑链路**（policy IPC 的写路径 + 设置页 UI）。
  * 列表/详情的只读面在 policies.e2e.ts，这里不重复。
  *
  * 关注点是「文件即事实」这条契约在读写两侧都成立：
  *   - getSource 逐字节回吐用户文件（注释/键序/空行原样）——原文编辑模型的前提；
  *     内置策略无文件，回写出的等价 md 必须自身合法（否则「创建覆盖副本」一开局就是坏文件）；
- *   - create/save **非法一律拒绝写盘**且旧内容零损伤 —— 一份存在但非法的策略会被
- *     扫描静默跳过（不生效也不遮蔽内置），正是编辑器要消灭的失败模式；
- *   - 改名以 frontmatter `name` 为准、文件路径不变；撞用户重名拒绝、撞内置名放行（覆盖是有意设计）；
+ *   - create（新建与覆盖副本的入口）**非法一律拒绝写盘**；
+ *   - 已有文件的编辑就是它的**笔记本会话**（policy.openNote → 自动保存，与 files.write 同一个
+ *     writeSessionFile）：**没有写前校验** —— 写到一半解析不过的版本照样落盘，它不生效、不遮蔽
+ *     内置，列进「无法解析」分组，解析器的判定由属性卡的横幅给出；
+ *   - 改名以 frontmatter `name` 为准、文件路径不变；撞内置名即覆盖（有意设计）；撞另一份用户策略
+ *     的名字时两份都照写、注册表只收一份（收哪份取决于 readdir 顺序 —— 刻意不断言）；
  *   - 落盘即生效（每次评估现扫目录，无缓存/无失效通知）。
  *
  * 断言优先走 IPC（window.api.policy.*）+ fs 直读；DOM 只在验证呈现时用且一律经 pages.ts。
+ * 写入只走两条路：`noteWrite`（写路径 IPC）或属性卡 `commitField` —— 绝不往 CodeMirror 里打字。
  */
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { sleep, until } from '../../harness/cdp'
 import { launchApp, type E2EApp } from '../../harness/launch'
-import { policiesPane, type PoliciesPane } from '../../harness/pages'
-import { createProject } from '../../harness/seed'
+import {
+  policiesPane,
+  registryNotePane,
+  type PoliciesPane,
+  type RegistryNotePane
+} from '../../harness/pages'
+import {
+  REGISTRY_NOTE_PROJECT_IDS,
+  createProject,
+  expectFileUnchanged,
+  noteWrite,
+  openRegistryNote,
+  waitFileWritten
+} from '../../harness/seed'
 
 let app: E2EApp
 
@@ -95,26 +111,31 @@ const dirFiles = (): string[] =>
 const readPolicyFile = (fileName: string): string =>
   readFileSync(join(policiesDir(), fileName), 'utf-8')
 const hasPolicyFile = (fileName: string): boolean => existsSync(join(policiesDir(), fileName))
-/** 绕过 IPC 直接把文件丢进目录（构造非法/非常规文件名的素材） */
+/** 绕过 IPC 直接把文件丢进目录（构造非法/非常规文件名的素材，或扮演外部编辑器） */
 const writePolicyFile = (fileName: string, text: string): void => {
   mkdirSync(policiesDir(), { recursive: true })
   writeFileSync(join(policiesDir(), fileName), text, 'utf-8')
 }
 
 const listPolicies = (): Promise<PolicyItem[]> => app.main.eval('window.api.policy.list()')
+const listInvalid = (): Promise<Array<{ fileName: string; error: string }>> =>
+  app.main.eval('window.api.policy.listInvalid()')
 const getSource = (name: string, source: 'builtin' | 'user'): Promise<SourceResult> =>
   app.main.eval(`window.api.policy.getSource(${JSON.stringify({ name, source })})`)
 const createPolicy = (text: string): Promise<WriteResult> =>
   app.main.eval(`window.api.policy.create(${JSON.stringify({ text })})`)
-const savePolicy = (originalName: string, text: string): Promise<WriteResult> =>
-  app.main.eval(`window.api.policy.save(${JSON.stringify({ originalName, text })})`)
 const deletePolicy = (name: string): Promise<WriteResult> =>
   app.main.eval(`window.api.policy.delete(${JSON.stringify({ name })})`)
+/** 经这份文件的笔记本会话写入（已有策略的编辑路径） */
+const policyNoteWrite = (
+  fileName: string,
+  text: string
+): Promise<{ ok: boolean; error?: string }> => noteWrite(app.main, 'policy', fileName, text)
 
 const rowsFor = async (name: string): Promise<PolicyItem[]> =>
   (await listPolicies()).filter((p) => p.name === name)
 
-describe('policy 编辑 IPC —— 取原文 / 新建 / 覆写 / 删除', () => {
+describe('policy 编辑 IPC —— 取原文 / 新建 / 经笔记本编辑 / 删除', () => {
   it('PE-B5 首次 create 懒创建策略目录（此前 ~/.shuvix/policies 不存在）', async () => {
     // 本用例必须跑在任何策略文件写入之前 —— 目录是 create 第一次才建的
     expect(existsSync(policiesDir())).toBe(false)
@@ -126,7 +147,7 @@ describe('policy 编辑 IPC —— 取原文 / 新建 / 覆写 / 删除', () => 
     expect(dirFiles()).toEqual(['b5-lazy-dir.md'])
   })
 
-  // ── A 组：getSource（编辑器的数据源）
+  // ── A 组：getSource（只读查看与覆盖副本的数据源）
   const RAW_FIDELITY = mdText(
     '---',
     'shuvix: policy v1',
@@ -341,42 +362,50 @@ describe('policy 编辑 IPC —— 取原文 / 新建 / 覆写 / 删除', () => 
     expect(dirFiles()).toEqual(before)
   })
 
-  // ── C 组：save
+  // ── N 组：经笔记本写（已有文件的编辑路径）
   const C1_V1 = simplePolicy({ name: 'c1-saved', description: 'v1', effect: 'ask' })
   const C1_V2 = simplePolicy({ name: 'c1-saved', description: 'v2', effect: 'deny', body: 'V2.' })
 
-  it('PE-C1 覆写成功：磁盘逐字节等于新 text，list 反映新规则', async () => {
+  it('PE-N1 经笔记覆写：磁盘逐字节等于新 text、list 反映新规则；反复 openNote 复用同一条隐藏会话', async () => {
     expect(await createPolicy(C1_V1)).toEqual({ success: true, name: 'c1-saved' })
-    expect(await savePolicy('c1-saved', C1_V2)).toEqual({ success: true })
+    expect(await policyNoteWrite('c1-saved.md', C1_V2)).toEqual({ ok: true })
     expect(readPolicyFile('c1-saved.md')).toBe(C1_V2)
 
     const row = (await rowsFor('c1-saved'))[0]
     expect(row.description).toBe('v2')
     expect(row.rules.map((r) => r.effect)).toEqual(['deny'])
     expect(row.body).toBe('V2.')
+
+    const first = await openRegistryNote(app.main, 'policy', 'c1-saved.md')
+    expect(first).toMatchObject({
+      ok: true,
+      projectId: REGISTRY_NOTE_PROJECT_IDS.policy,
+      notebookPath: 'c1-saved.md',
+      workingDirectory: policiesDir()
+    })
+    // 一份文件至多一条会话：再开还是它（noteWrite 开过的那一条也是它）
+    expect(await openRegistryNote(app.main, 'policy', 'c1-saved.md')).toEqual(first)
   })
 
-  it('PE-C2 非法覆写被拒且旧内容零损伤（磁盘逐字节不变、list 仍是旧规则）', async () => {
-    const before = readPolicyFile('c1-saved.md')
-    const result = await savePolicy('c1-saved', invalidPolicy('c1-saved'))
-    expect(result.success).toBe(false)
-    // 拒绝原因是解析器原文 —— 它就是「这份文件为何不生效」的答案
-    expect(result.error).toContain('unknown rule key')
-    expect(result.error).toContain('rejected')
+  it('PE-N2 经笔记写进非法内容：不拒绝、照原样落盘 —— 进 listInvalid（带解析器原因），list 里没有它', async () => {
+    const invalid = invalidPolicy('c1-saved')
+    expect(await policyNoteWrite('c1-saved.md', invalid)).toEqual({ ok: true })
+    expect(readPolicyFile('c1-saved.md')).toBe(invalid)
 
-    expect(readPolicyFile('c1-saved.md')).toBe(before)
-    const row = (await rowsFor('c1-saved'))[0]
-    expect(row.description).toBe('v2')
-    expect(row.rules.map((r) => r.effect)).toEqual(['deny'])
+    const entry = (await listInvalid()).find((f) => f.fileName === 'c1-saved.md')
+    // 拒绝原因是解析器原文 —— 它就是「这份文件为何不生效」的答案
+    expect(entry?.error).toContain('unknown rule key')
+    expect(entry?.error).toContain('rejected')
+    expect((await listPolicies()).some((p) => p.name === 'c1-saved')).toBe(false)
   })
 
   const RENAME_V1 = simplePolicy({ name: 'rename-src', description: 'before rename' })
   const RENAME_V2 = simplePolicy({ name: 'rename-dst', description: 'after rename' })
 
-  it('PE-C3 改名以 frontmatter name 为准：文件路径不变，旧名查不到、新名回吐新原文', async () => {
+  it('PE-N3 改名以 frontmatter name 为准：文件路径不变，旧名查不到、新名回吐新原文', async () => {
     // 文件名与 name 刻意不一致，改名后文件名也不会跟着变
     writePolicyFile('rename-me.md', RENAME_V1)
-    expect(await savePolicy('rename-src', RENAME_V2)).toEqual({ success: true })
+    expect(await policyNoteWrite('rename-me.md', RENAME_V2)).toEqual({ ok: true })
 
     expect(hasPolicyFile('rename-me.md')).toBe(true)
     expect(hasPolicyFile('rename-dst.md')).toBe(false)
@@ -393,22 +422,24 @@ describe('policy 编辑 IPC —— 取原文 / 新建 / 覆写 / 删除', () => 
     expect(await getSource('rename-dst', 'user')).toEqual({ text: RENAME_V2 })
   })
 
-  it('PE-C4 改名撞另一份用户策略 → 拒绝，磁盘逐字节不变', async () => {
-    const before = readPolicyFile('rename-me.md')
-    const result = await savePolicy(
-      'rename-dst',
-      simplePolicy({ name: 'b1-created', description: 'collide' })
-    )
-    expect(result.success).toBe(false)
-    expect(result.error).toContain('already exists')
-    expect(readPolicyFile('rename-me.md')).toBe(before)
-    // 被撞的那一份也没被动过
+  it('PE-N4 改名撞另一份用户策略：照写不拒绝，被撞的文件不动；该名字注册表只收一份，两份都不算非法', async () => {
+    const collide = simplePolicy({ name: 'b1-created', description: 'collide' })
+    expect(await policyNoteWrite('rename-me.md', collide)).toEqual({ ok: true })
+    expect(readPolicyFile('rename-me.md')).toBe(collide)
+    // 被撞的那一份没被动过
     expect(readPolicyFile('b1-created.md')).toBe(B1_TEXT)
+    // 同名用户文件只收一份（收哪份取决于 readdir 顺序 —— 刻意不断言），也不进「无法解析」
+    expect((await rowsFor('b1-created')).filter((p) => p.source === 'user')).toHaveLength(1)
+    expect((await listInvalid()).map((f) => f.fileName)).not.toContain('rename-me.md')
+
+    // 还原成 rename-dst，后续用例从这里接着改
+    expect(await policyNoteWrite('rename-me.md', RENAME_V2)).toEqual({ ok: true })
+    expect((await rowsFor('rename-dst'))[0]?.basePath).toBe(join(policiesDir(), 'rename-me.md'))
   })
 
-  it('PE-C5 改名撞内置名 → 放行（覆盖是有意设计），该内置转 overridden', async () => {
+  it('PE-N5 改名撞内置名 → 覆盖（有意设计）：用户行指向 rename-me.md，该内置转 overridden', async () => {
     const text = simplePolicy({ name: 'git-safety', description: 'e2e renamed onto builtin' })
-    expect(await savePolicy('rename-dst', text)).toEqual({ success: true })
+    expect(await policyNoteWrite('rename-me.md', text)).toEqual({ ok: true })
     expect(readPolicyFile('rename-me.md')).toBe(text)
 
     const rows = await rowsFor('git-safety')
@@ -418,18 +449,16 @@ describe('policy 编辑 IPC —— 取原文 / 新建 / 覆写 / 删除', () => 
     expect(rows.find((p) => p.source === 'builtin')!.overridden).toBe(true)
   })
 
-  it('PE-C6 originalName 不存在 → not found；对内置名直接 save（未先建覆盖副本）同样 not found', async () => {
-    expect(await savePolicy('ghost-policy', simplePolicy({ name: 'ghost-policy' }))).toEqual({
-      success: false,
-      error: 'Policy "ghost-policy" not found'
+  it('PE-N6 把这份覆盖写坏：它立即失去遮蔽效力，内置 git-safety 恢复生效（安全语义），文件进 listInvalid', async () => {
+    expect(await policyNoteWrite('rename-me.md', invalidPolicy('git-safety'))).toEqual({
+      ok: true
     })
-    // 内置策略无文件：必须先「创建覆盖副本」（create），save 无从定位
-    expect(await savePolicy('ask-on-read', simplePolicy({ name: 'ask-on-read' }))).toEqual({
-      success: false,
-      error: 'Policy "ask-on-read" not found'
-    })
-    expect(hasPolicyFile('ask-on-read.md')).toBe(false)
-    expect(await rowsFor('ask-on-read')).toHaveLength(1)
+    const rows = await rowsFor('git-safety')
+    expect(rows).toHaveLength(1)
+    expect(rows[0].source).toBe('builtin')
+    expect(rows[0].overridden).toBeFalsy()
+    // 本组到此把 rename-me.md 留成非法文件 —— 后面数「无法解析」行时算上它
+    expect((await listInvalid()).map((f) => f.fileName)).toContain('rename-me.md')
   })
 
   // ── D 组：覆盖副本全链路 / 删除 / 非法不遮蔽
@@ -497,7 +526,7 @@ describe('policy 编辑 IPC —— 取原文 / 新建 / 覆写 / 删除', () => 
     expect(rows[0].source).toBe('builtin')
     expect(rows[0].overridden).toBeFalsy()
 
-    // 编辑链路下的「修复」动作：新建一份同 name 的合法策略
+    // 修复的另一种走法：新建一份同 name 的合法策略
     const good = simplePolicy({ name: 'ask-on-command', description: 'e2e repaired override' })
     expect(await createPolicy(good)).toEqual({ success: true, name: 'ask-on-command' })
     expect(readPolicyFile('ask-on-command.md')).toBe(bad)
@@ -555,16 +584,19 @@ describe('policy 编辑 IPC —— 取原文 / 新建 / 覆写 / 删除', () => 
 describe('policy 编辑 UI —— 设置页「安全策略」tab', () => {
   /** 设置窗口只开一次（openSettings 对已存在的窗口只聚焦，不会切 tab） */
   let sharedPane: PoliciesPane | undefined
+  let note: RegistryNotePane
   const getPane = async (): Promise<PoliciesPane> => {
     if (!sharedPane) {
-      sharedPane = await policiesPane(await app.openSettings('policies'))
+      const settings = await app.openSettings('policies')
+      sharedPane = await policiesPane(settings)
+      note = registryNotePane(settings)
       // 列表只在挂载时加载一次：上面 IPC 组写入的策略文件需重扫才可见
       await sharedPane.refresh()
     }
     return sharedPane
   }
 
-  it('PE-F1 详情即编辑器，按来源分化：用户可编辑（保存+删除）、未覆盖内置只读（覆盖副本）、被遮蔽内置只读无操作', async () => {
+  it('PE-U1 详情按来源分化：用户策略就是它的笔记（可编辑、头部只有删除）；未覆盖内置只读给覆盖副本；被遮蔽内置只读、无动作', async () => {
     const pane = await getPane()
     const list = await listPolicies()
     const askOnRead = list.find((p) => p.name === 'ask-on-read' && p.source === 'builtin')!
@@ -572,116 +604,190 @@ describe('policy 编辑 UI —— 设置页「安全策略」tab', () => {
     expect(shadowedDb.overridden).toBe(true)
 
     // 用户策略（覆盖副本未写 displayName → 行标题即 name，与内置的本地化显示名可区分）
-    await pane.selectRow('ask-on-database')
-    const user = await pane.detail()
-    // 详情就是可编辑的 LivePreview：文本字段是输入框且可用，操作 = 保存 + 删除（无「编辑」二次入口）
-    expect(user.inputs).toBeGreaterThan(0)
-    expect(user.inputsDisabled).toBe(false)
-    expect(user.actionButtons).toBe(2)
-    const userActions = await pane.detailActionTexts()
-    expect(userActions.some((x) => /^(Save|保存)$/.test(x))).toBe(true)
-    expect(userActions.some((x) => /^(Edit|编辑|編集)$/.test(x))).toBe(false)
+    await pane.selectRow('ask-on-database', 'user')
+    expect(await pane.noteFile()).toBe('ask-on-database.md')
+    const user = await pane.inputs()
+    expect(user.count).toBeGreaterThan(0)
+    expect(user.disabled).toBe(false)
+    expect(await pane.headerIcons()).toEqual({ trash: true, save: false, copy: false })
 
-    // 未被覆盖的内置：随包发布不可直接改，只给覆盖副本入口
-    await pane.selectRow(askOnRead.displayName)
-    const builtin = await pane.detail()
-    // 只读不再靠「没有控件」体现，而是控件被禁用（形态与可编辑态一致）
-    expect(builtin.inputs).toBeGreaterThan(0)
-    expect(builtin.inputsDisabled).toBe(true)
-    expect(builtin.actionButtons).toBe(1)
-    expect(
-      (await pane.detailActionTexts()).some((x) =>
-        /^(Create override copy|创建覆盖副本|上書きコピーを作成)$/.test(x)
-      )
-    ).toBe(true)
+    // 未被覆盖的内置：随包发布不可直接改（控件照常渲染、全部禁用），只给覆盖副本入口
+    await pane.selectRow(askOnRead.displayName, 'builtin')
+    expect(await pane.noteFile()).toBe('')
+    const builtin = await pane.inputs()
+    expect(builtin.count).toBeGreaterThan(0)
+    expect(builtin.disabled).toBe(true)
+    expect(await pane.headerIcons()).toEqual({ trash: false, save: false, copy: true })
 
-    // 被遮蔽的内置：不生效也不可编辑（改它没有意义 —— 生效的是同名用户文件）
-    await pane.selectRow(shadowedDb.displayName)
-    const shadowed = await pane.detail()
-    expect(shadowed.inputsDisabled).toBe(true)
-    expect(shadowed.actionButtons).toBe(0)
+    // 被遮蔽的内置：不生效也不可编辑（生效的是同名用户文件），连覆盖入口都没有
+    await pane.selectRow(shadowedDb.displayName, 'builtin')
+    expect(await pane.noteFile()).toBe('')
+    expect((await pane.inputs()).disabled).toBe(true)
+    expect(await pane.headerIcons()).toEqual({ trash: false, save: false, copy: false })
   })
 
-  it('PE-F2 「新建」→ 编辑器上屏（policy 属性卡 + 校验通过）→ 保存落盘并选中新行', async () => {
+  it('PE-U2 「新建」→ my-policy.md 落盘成为用户策略，选中并打开它的笔记（policy 属性卡、校验通过）', async () => {
     const pane = await getPane()
-    await pane.clickNew()
-
-    const opened = await pane.editor()
-    expect(opened.open).toBe(true)
-    expect(opened.text).toContain('my-policy')
-    // frontmatter 由属性卡接管：类型徽章 + 规则摘要行
-    expect(opened.cardBadge).toBe('ShuviX policy · v1')
-    expect(opened.cardRules).toBe(1)
-    // 解析器级校验异步回传（合法模板 → is-ok，不带告警）
-    await until(async () => (await pane.editor()).cardStatus === 'ok', 'policy card validated')
-
-    await pane.save()
-    expect((await pane.editor()).open).toBe(false)
+    expect(await pane.clickNew()).toBe('my-policy.md')
     expect(hasPolicyFile('my-policy.md')).toBe(true)
     expect((await rowsFor('my-policy'))[0].source).toBe('user')
-
-    const row = (await pane.rows()).find((r) => r.name === 'my-policy')
-    expect(row?.selected).toBe(true)
+    await until(
+      async () => (await pane.rows()).some((r) => r.name === 'my-policy' && r.selected),
+      'new policy row selected'
+    )
+    expect(await pane.noteFile()).toBe('my-policy.md')
+    expect(await note.cardBadge()).toBe('ShuviX policy · v1')
+    // 解析器级校验异步回传（合法模板 → is-ok，不带告警）
+    await note.waitStatus('ok')
   })
 
-  it('PE-F3 保存失败 → 红色横幅显示原因，编辑器保持打开、列表不新增', async () => {
+  it('PE-U3 再「新建」一次 → 名字自动避让成 my-policy-2（不撞重名），选中，没有错误框', async () => {
     const pane = await getPane()
-    expect(hasPolicyFile('my-policy.md'), 'PE-F2 应已落盘 my-policy').toBe(true)
-    const before = (await pane.rows()).length
-
-    // 模板的 name 恒为 my-policy → 第二次直接保存必然撞重名
-    await pane.clickNew()
-    await pane.save()
-
-    const state = await pane.editor()
-    expect(state.open).toBe(true)
-    expect(state.error).toContain('already exists')
-    expect((await pane.rows()).length).toBe(before)
-
-    await pane.cancelEdit()
+    expect(await pane.clickNew()).toBe('my-policy-2.md')
+    expect(readPolicyFile('my-policy-2.md')).toContain('name: my-policy-2\n')
+    await until(
+      async () => (await pane.rows()).some((r) => r.name === 'my-policy-2' && r.selected),
+      'second new policy row selected'
+    )
+    expect(await pane.reasonText()).toBe('')
   })
 
   it('PE-F4 删除确认：弹窗描述含策略名；删覆盖副本后同名内置恢复且被选中', async () => {
     const pane = await getPane()
 
-    // ① 普通用户策略：确认后行消失
+    // ① 普通用户策略：确认后行消失、文件没了、详情离开它的笔记（不会被自动保存写回来）
     await pane.selectRow('my-policy')
-    await pane.clickDetailAction('delete')
-    const dialog = await until(async () => {
-      const d = await pane.confirmDialog()
-      return d.open ? d : undefined
-    }, 'delete confirm dialog')
+    await pane.clickDelete()
+    const dialog = await pane.confirmDialog()
+    expect(dialog.open).toBe(true)
     expect(dialog.description).toContain('my-policy')
     await pane.confirmDialogConfirm()
-    expect((await pane.rows()).some((r) => r.name === 'my-policy')).toBe(false)
+    await until(
+      async () => !(await pane.rows()).some((r) => r.name === 'my-policy'),
+      'my-policy row gone'
+    )
+    expect(hasPolicyFile('my-policy.md')).toBe(false)
+    await until(async () => (await pane.noteFile()) === '', 'note left after delete')
+    await sleep(700)
     expect(hasPolicyFile('my-policy.md')).toBe(false)
 
     // ② 覆盖副本：删掉后同名内置恢复生效并被选中（不该把选中态甩回首项）
     const shadowedDb = (await listPolicies()).find(
       (p) => p.name === 'ask-on-database' && p.source === 'builtin'
     )!
-    await pane.selectRow('ask-on-database')
-    await pane.clickDetailAction('delete')
-    await until(async () => (await pane.confirmDialog()).open, 'override delete confirm dialog')
+    await pane.selectRow('ask-on-database', 'user')
+    await pane.clickDelete()
     await pane.confirmDialogConfirm()
 
-    const rows = await pane.rows()
-    expect(rows.some((r) => r.name === 'ask-on-database')).toBe(false)
-    const restored = rows.filter((r) => r.name === shadowedDb.displayName)
-    expect(restored).toHaveLength(1)
+    await until(async () => {
+      const rows = await pane.rows()
+      const restored = rows.filter((r) => r.name === shadowedDb.displayName)
+      return (
+        !rows.some((r) => r.name === 'ask-on-database') &&
+        restored.length === 1 &&
+        restored[0].selected
+      )
+    }, 'restored builtin selected')
+    const restored = (await pane.rows()).filter((r) => r.name === shadowedDb.displayName)
     expect(restored[0].overriddenBadge).toBe(false)
-    expect(restored[0].selected).toBe(true)
+    expect(await pane.noteFile()).toBe('')
   })
 
-  it('PE-F5 详情即编辑器：只打开不改动 → 零写盘（无隐式重序列化）', async () => {
+  it('PE-F5 详情即笔记：只打开不改动 → 零写盘（无隐式重序列化）', async () => {
     const pane = await getPane()
     const before = readPolicyFile('b1-created.md')
 
     await pane.selectRow('b1-created')
-    await until(async () => (await pane.detail()).inputs > 0, 'editable detail')
-    await sleep(1000)
+    expect(await pane.noteFile()).toBe('b1-created.md')
+    await note.waitCard()
+    // 跨过自动保存的防抖窗口仍逐字节不变
+    await expectFileUnchanged(join(policiesDir(), 'b1-created.md'), before, 1000)
+  })
 
-    // 统一后详情常态没有「取消」可言（同智能体页）：不点保存就不写盘
-    expect(readPolicyFile('b1-created.md')).toBe(before)
+  it('PE-U4 内置「创建覆盖副本」→ 同名用户文件逐字节等于内置等价 md、选中它的笔记；内置行划线带覆盖徽标（收尾删掉）', async () => {
+    const pane = await getPane()
+    const builtin = (await rowsFor('protect-credentials')).find((p) => p.source === 'builtin')!
+    const source = (await getSource('protect-credentials', 'builtin')) as { text: string }
+
+    await pane.selectRow(builtin.displayName, 'builtin')
+    expect(await pane.clickCreateOverride()).toBe('protect-credentials.md')
+    expect(readPolicyFile('protect-credentials.md')).toBe(source.text)
+
+    const overrideLabel = (await rowsFor('protect-credentials')).find(
+      (p) => p.source === 'user'
+    )!.displayName
+    await until(async () => {
+      const rows = await pane.rows()
+      return (
+        rows.some((r) => r.name === overrideLabel && !r.builtin && r.selected) &&
+        rows.some(
+          (r) => r.name === builtin.displayName && r.builtin && r.struck && r.overriddenBadge
+        )
+      )
+    }, 'override row selected, builtin row struck')
+    expect(await pane.noteFile()).toBe('protect-credentials.md')
+
+    // 收尾：删掉覆盖副本，内置恢复
+    await pane.clickDelete()
+    await pane.confirmDialogConfirm()
+    await until(() => !hasPolicyFile('protect-credentials.md'), 'override copy deleted')
+    await until(async () => (await rowsFor('protect-credentials')).length === 1, 'builtin restored')
+  })
+
+  it('PE-U5 在卡上改描述、再改名：每次只动那一行落盘；改名后列表换名、选中项不跳、开着的仍是同一份笔记', async () => {
+    const pane = await getPane()
+    await pane.selectRow('b1-created')
+    await note.mark()
+    const path = join(policiesDir(), 'b1-created.md')
+
+    let before = readPolicyFile('b1-created.md')
+    await note.commitField('description', 'edited in settings')
+    expect(await waitFileWritten(path, before)).toBe(
+      before.replace('description: created via ipc\n', 'description: edited in settings\n')
+    )
+
+    before = readPolicyFile('b1-created.md')
+    await note.commitField('name', 'b1-renamed')
+    expect(await waitFileWritten(path, before)).toBe(
+      before.replace('name: b1-created\n', 'name: b1-renamed\n')
+    )
+    await until(async () => {
+      const rows = await pane.rows()
+      return (
+        rows.some((r) => r.name === 'b1-renamed' && r.selected) &&
+        !rows.some((r) => r.name === 'b1-created')
+      )
+    }, 'row renamed and still selected')
+    expect(await note.isMarked()).toBe(true)
+    expect(await pane.noteFile()).toBe('b1-created.md')
+  })
+
+  it('PE-U6 外部把它写坏 → 选中项翻成琥珀的「无法解析」行、正文重载、卡片横幅给原因，笔记不重开；写回合法版翻回来', async () => {
+    const pane = await getPane()
+    const valid = readPolicyFile('b1-created.md')
+    writePolicyFile('b1-created.md', invalidPolicy('b1-renamed'))
+
+    await until(
+      async () => (await pane.selectedInvalid()) === 'b1-created.md',
+      'invalid row selected'
+    )
+    expect(await pane.invalidRows()).toContain('b1-created.md')
+    expect(await pane.headerTitle()).toBe('b1-created.md')
+    await note.waitBody('Invalid body.')
+    // 原因在笔记里属性卡的横幅上 —— 这个 tab 不另起原因框
+    await until(
+      async () => (await note.bannerText()).includes('unknown rule key'),
+      'card banner shows the parser verdict'
+    )
+    expect(await pane.reasonText()).toBe('')
+    expect(await note.isMarked()).toBe(true)
+
+    writePolicyFile('b1-created.md', valid)
+    await until(
+      async () => (await pane.rows()).some((r) => r.name === 'b1-renamed' && r.selected),
+      'normal row selected again'
+    )
+    expect(await pane.selectedInvalid()).toBe('')
+    expect(await note.isMarked()).toBe(true)
   })
 })

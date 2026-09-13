@@ -1068,79 +1068,6 @@ export function projectEditPane(main: CdpClient): ProjectEditPane {
   }
 }
 
-export interface AgentsPaneRow {
-  displayName: string
-  struck: boolean
-  overriddenBadge: boolean
-}
-
-export interface AgentsPane {
-  rows(): Promise<AgentsPaneRow[]>
-  selectRow(displayName: string): Promise<void>
-  /**
-   * 详情面板 —— 智能体页已改为 **md 原文编辑**（frontmatter 由属性卡渲染），
-   * 故这里读的是卡片而非表单：
-   *   fieldKeys  卡片各行的 frontmatter 键（`data-key`，locale-free，优先用它断言）
-   *   cardBadge  类型徽章文案（'ShuviX agent · v1'）
-   *   toggles / togglesDisabled  布尔字段开关数与是否全部只读（内置档案只读）
-   *   slots      选择器槽位数（model / tools 可编辑时各一个）
-   *   hasDeleteButton / hasSaveButton  头部操作
-   */
-  detail(): Promise<{
-    fieldKeys: string[]
-    cardBadge: string
-    toggles: number
-    togglesDisabled: boolean
-    slots: number
-    hasDeleteButton: boolean
-    hasSaveButton: boolean
-  }>
-  /**
-   * 打开新建对话框并等它**几何落定**：
-   *   'add'       列表底栏的「添加」（预填新建模板，正文很短）
-   *   'override'  内置详情头部的「创建覆盖副本」（预填整份内置 md，几千字，
-   *               长文档才照得出对话框的溢出问题）
-   *
-   * 就绪判据不是「元素出现」——`animate-scale-in` 期间卡片带着 transform，
-   * 这时候读 rect 得到的是动画中间态，几何断言会随机红。故还要求编辑器已填充
-   * 且卡片 rect 连续两次读数一致。
-   */
-  openCreateDialog(via: 'add' | 'override'): Promise<void>
-  /**
-   * 新建对话框的几何快照 —— 「长档案能不能在对话框里滚」这件事的全部证据。
-   * 卡片 = 对话框根的 firstElementChild（固定 85vh 的那层）；
-   * 滚动体 = 卡片内第一个 `.overflow-y-auto`（SubAgentEditor 的根）。
-   */
-  createDialogMetrics(): Promise<AgentsCreateDialogMetrics>
-  /** 把滚动体拉到底，返回落定后的 scrollTop */
-  scrollCreateDialogToBottom(): Promise<number>
-  /** 把滚动体复位到顶，返回落定后的 scrollTop */
-  scrollCreateDialogToTop(): Promise<number>
-  /** Esc 关闭并等对话框真的卸载（关闭动画结束） */
-  closeCreateDialog(): Promise<void>
-  /**
-   * 点保存并等对话框**自行**关闭 —— 那是保存成功的唯一信号（失败会留在原地并
-   * 就地显示原因）。故这里不许用 Esc 兜底：那会把失败伪装成成功。
-   * 超时抛错，消息里带上就地显示的失败原因。
-   */
-  saveCreateDialog(): Promise<void>
-}
-
-/** 新建对话框的几何快照（单位 px；bottom 取自 getBoundingClientRect） */
-export interface AgentsCreateDialogMetrics {
-  cardClientHeight: number
-  cardScrollHeight: number
-  cardBottom: number
-  scrollerClientHeight: number
-  scrollerScrollHeight: number
-  scrollerBottom: number
-  scrollerScrollTop: number
-  /** 计算后的 overflow-y —— 'visible' 说明那两个自滚类没生效 */
-  scrollerOverflowY: string
-  /** 对话框里的编辑器确实在滚动体内（认对话框内的 .cm-content，页面上还有详情那一个） */
-  scrollerHasEditor: boolean
-}
-
 export interface HttpLogPane {
   /** 记录开关当前是否打开（读 Toggle 的 on 态背景类） */
   recordOn(): Promise<boolean>
@@ -1202,52 +1129,328 @@ export async function settingsTabsPane(settings: CdpClient): Promise<SettingsTab
   }
 }
 
-/** 设置窗口「智能体」tab（openSettings('agents') 后调用；等编辑器就绪） */
+// ─────────────────────────────────────────────────────────────────────────
+// 设置页三个注册表 tab（智能体 / 安全策略 / 工作流）—— 同一副两栏布局，共用一个工厂。
+//
+// 左列（按宽度类认，`.pop()` 取最后一个）：合法行 = 带 `.font-medium` 标签的按钮（内置行另带锁
+// `.lucide-lock`，选中态 `bg-accent/10`）；解析不过的文件行没有 `.font-medium`、文件名在
+// `.font-mono` 里（选中态琥珀 `bg-amber-500/10`）；底栏 新建 `.lucide-plus` / 重扫描
+// `.lucide-refresh-cw`。右栏 = 列表列的下一个兄弟，自上而下：页级错误框（新建 / 删除失败才有）→
+// 头部（标题 `span.text-sm.font-semibold` + 动作图标，那条 `.border-b`）→ 工作流才有的拒绝原因
+// 红框 → 详情。**用户文件的详情就是它的笔记本会话**（`[data-registry-note=<fileName>]`，openNote
+// 回来之前渲染 null）；内置是等价 md 的只读查看，没有 data-registry-note。
+//
+// 就绪判据一律是「挂载到位」而不是睡一觉：内置 = 头部标题对上 + 面板里有 .cm-content + 没有笔记；
+// 用户 = 头部标题对上 + 笔记里的属性卡上屏。头部动作一律按图标认（位置会随功能增减漂）。
+
+/** 行的来源（同名覆盖时内置行与用户行并存、标签相同，靠锁图标分开） */
+export type RegistryRowSource = 'builtin' | 'user'
+
+/** 详情头部的动作图标 */
+export interface RegistryHeaderIcons {
+  trash: boolean
+  save: boolean
+  copy: boolean
+}
+
+export interface RegistryConfirmSnapshot {
+  open: boolean
+  title: string
+  description: string
+}
+
+/** 三个注册表 tab 共有的面 */
+export interface RegistryTabPane {
+  /** 点底栏「重扫描」并等列表落定（列表只在挂载时加载，外部写入的新文件要重扫才可见） */
+  refresh(): Promise<void>
+  /** 「无法解析」分组里的文件名 */
+  invalidRows(): Promise<string[]>
+  /** 点一行解析不过的文件并等它的笔记挂上 */
+  selectInvalidRow(fileName: string): Promise<void>
+  /** 当前选中的非法文件行（琥珀态）；没有为空串 */
+  selectedInvalid(): Promise<string>
+  /** 点底栏「新建」并等**新**笔记（属性卡）上屏，回它的文件名；失败时抛出页级错误框原文 */
+  clickNew(): Promise<string>
+  /** 点内置详情头部的「创建覆盖副本」并等新笔记上屏，回文件名；失败同上 */
+  clickCreateOverride(): Promise<string>
+  /** 点详情头部的垃圾桶并等确认框弹出 */
+  clickDelete(): Promise<void>
+  confirmDialog(): Promise<RegistryConfirmSnapshot>
+  /** 点确认框的「删除」（页脚第二个按钮）并等确认框关闭 */
+  confirmDialogConfirm(): Promise<void>
+  /** 详情里开着的笔记绑定的文件名（`data-registry-note`）；内置 / 无选中为空串 */
+  noteFile(): Promise<string>
+  /** 详情头部标题（合法条目 = 显示名；解析不过的文件 = 文件名） */
+  headerTitle(): Promise<string>
+  /** 详情区里笔记之外的红框文本（页级错误框 + 工作流的拒绝原因框），多个以换行连接 */
+  reasonText(): Promise<string>
+  headerIcons(): Promise<RegistryHeaderIcons>
+  /** 详情里属性卡输入框的个数，以及是否全部禁用（内置只读 = 控件照常渲染、全部禁用） */
+  inputs(): Promise<{ count: number; disabled: boolean }>
+}
+
+/** 列表行原始快照（各 tab 再映射成自己的形状） */
+interface RegistryRowShot {
+  label: string
+  /** 行内第二行的 mono 小字（工作流的触发器副标题；其余 tab 为空串） */
+  subtitle: string
+  struck: boolean
+  overriddenBadge: boolean
+  selected: boolean
+  builtin: boolean
+}
+
+interface RegistryTabInternals extends RegistryTabPane {
+  rawRows(): Promise<RegistryRowShot[]>
+  selectRow(label: string, which?: RegistryRowSource): Promise<void>
+}
+
+/**
+ * 注册表 tab 的公共实现。`columnWidth` 是左列的宽度类（智能体 / 策略 220px，工作流 240px）——
+ * 两栏布局里只有它能不靠文案认出左列。
+ */
+function registryTabPane(settings: CdpClient, columnWidth: string): RegistryTabInternals {
+  const COLUMN = `[...document.querySelectorAll('.w-\\\\[${columnWidth}\\\\]')].pop()`
+  const PANEL = `(${COLUMN}?.nextElementSibling ?? null)`
+  const COLUMN_BUTTONS = `[...(${COLUMN}?.querySelectorAll('button') ?? [])]`
+  const ROWS = `${COLUMN_BUTTONS}.filter((b) => b.querySelector('.font-medium'))`
+  const INVALID_ROWS = `${COLUMN_BUTTONS}.filter((b) => !b.querySelector('.font-medium') && b.querySelector('.font-mono'))`
+  const COLUMN_BTN = (icon: string): string =>
+    `${COLUMN_BUTTONS}.find((b) => b.querySelector('${icon}'))`
+  /** 头部 = 标题 span 所在的那条 border-b（笔记在它之后，querySelector 先命中头部） */
+  const HEADER = `(${PANEL}?.querySelector('span.text-sm.font-semibold')?.closest('.border-b') ?? null)`
+  const HEADER_BTN = (icon: string): string =>
+    `[...(${HEADER}?.querySelectorAll('button') ?? [])].find((b) => b.querySelector('${icon}'))`
+  const NOTE = `(${PANEL}?.querySelector('[data-registry-note]') ?? null)`
+  const DIALOG = `document.querySelector('.dialog-panel')`
+  const ROW = (label: string, which?: RegistryRowSource): string =>
+    `${ROWS}.find((r) =>
+      (r.querySelector('.font-medium')?.textContent ?? '').trim() === ${JSON.stringify(label)} &&
+      (${JSON.stringify(which ?? '')} === '' || (${JSON.stringify(which ?? '')} === 'builtin') === !!r.querySelector('.lucide-lock')))`
+
+  const noteFile = (): Promise<string> =>
+    settings.eval<string>(`${NOTE}?.getAttribute('data-registry-note') ?? ''`)
+
+  /**
+   * 等一份**新**笔记挂上（文件名与 before 不同 + 属性卡上屏）。新建 / 覆盖副本失败时详情区顶部
+   * 出页级错误框（右栏第一个子节点）—— until 会吞掉轮询期异常，故失败经返回值传出来再抛。
+   */
+  const waitNewNote = async (before: string, what: string): Promise<string> => {
+    const outcome = await until<{ file: string } | { rejected: string } | null>(async () => {
+      const state = await settings.eval<{ file: string; card: boolean; error: string }>(`(() => {
+        const note = ${NOTE}
+        const first = ${PANEL}?.firstElementChild ?? null
+        const isError = !!first && first.className.includes('bg-red-500/10')
+        return {
+          file: note?.getAttribute('data-registry-note') ?? '',
+          card: !!note?.querySelector('.cm-shuvix-fmcard'),
+          error: isError ? (first.textContent ?? '').trim() : ''
+        }
+      })()`)
+      if (state.file && state.file !== before && state.card) return { file: state.file }
+      if (state.error) return { rejected: state.error }
+      return null
+    }, what)
+    if ('rejected' in outcome) throw new Error(`${what} rejected: ${outcome.rejected}`)
+    return outcome.file
+  }
+
+  return {
+    rawRows: () =>
+      settings.eval<RegistryRowShot[]>(`${ROWS}.map((r) => ({
+        label: (r.querySelector('.font-medium')?.textContent ?? '').trim(),
+        subtitle: (r.querySelector('.font-mono')?.textContent ?? '').trim(),
+        struck: !!r.querySelector('.line-through'),
+        overriddenBadge: [...r.querySelectorAll('span')].some((s) => /覆盖|Overridden|上書き/.test(s.textContent ?? '')),
+        selected: r.className.includes('bg-accent/10'),
+        builtin: !!r.querySelector('.lucide-lock')
+      }))`),
+
+    selectRow: async (label, which) => {
+      const row = ROW(label, which)
+      await until(() => settings.eval<boolean>(`!!(${row})`), `registry row "${label}"`)
+      const builtin = await settings.eval<boolean>(`(() => {
+        const r = ${row}
+        r.click()
+        return !!r.querySelector('.lucide-lock')
+      })()`)
+      await until(
+        () =>
+          settings.eval<boolean>(`(() => {
+            const r = ${row}
+            if (!r || !r.className.includes('bg-accent/10')) return false
+            const panel = ${PANEL}
+            const title = (panel?.querySelector('span.text-sm.font-semibold')?.textContent ?? '').trim()
+            if (title !== ${JSON.stringify(label)}) return false
+            const note = panel.querySelector('[data-registry-note]')
+            // 注册表 md 恒以 frontmatter 开头：两种详情都等属性卡上屏（槽位 / 开关的读数挂在卡上）
+            return ${builtin}
+              ? !note && !!panel.querySelector('.cm-shuvix-fmcard')
+              : !!note?.querySelector('.cm-shuvix-fmcard')
+          })()`),
+        `registry detail mounted for "${label}"`
+      )
+    },
+
+    refresh: async () => {
+      await settings.eval(`${COLUMN_BTN('.lucide-refresh-cw')}.click()`)
+      // 重扫期间按钮置灰（refreshing），恢复可点 = 这一轮 list + listInvalid 已回来并落进 state
+      await until(
+        () => settings.eval<boolean>(`${COLUMN_BTN('.lucide-refresh-cw')}?.disabled === false`),
+        'registry list rescanned'
+      )
+      await sleep(150)
+    },
+
+    invalidRows: () =>
+      settings.eval<string[]>(`${INVALID_ROWS}.map((b) => (b.textContent ?? '').trim())`),
+
+    selectInvalidRow: async (fileName) => {
+      const row = `${INVALID_ROWS}.find((b) => (b.textContent ?? '').trim() === ${JSON.stringify(fileName)})`
+      await until(() => settings.eval<boolean>(`!!(${row})`), `invalid row "${fileName}"`)
+      await settings.eval(`${row}.click()`)
+      await until(
+        () =>
+          settings.eval<boolean>(`(() => {
+            const note = ${NOTE}
+            return note?.getAttribute('data-registry-note') === ${JSON.stringify(fileName)} &&
+              !!note.querySelector('.cm-content')
+          })()`),
+        `note mounted for invalid file "${fileName}"`
+      )
+    },
+
+    selectedInvalid: () =>
+      settings.eval<string>(
+        `(${INVALID_ROWS}.find((b) => b.className.includes('bg-amber-500/10'))?.textContent ?? '').trim()`
+      ),
+
+    clickNew: async () => {
+      const before = await noteFile()
+      await settings.eval(`${COLUMN_BTN('.lucide-plus')}.click()`)
+      return waitNewNote(before, 'new registry file')
+    },
+
+    clickCreateOverride: async () => {
+      await until(
+        () => settings.eval<boolean>(`!!${HEADER_BTN('.lucide-copy')}`),
+        'create-override action'
+      )
+      const before = await noteFile()
+      await settings.eval(`${HEADER_BTN('.lucide-copy')}.click()`)
+      return waitNewNote(before, 'override copy')
+    },
+
+    clickDelete: async () => {
+      await until(
+        () => settings.eval<boolean>(`!!${HEADER_BTN('.lucide-trash-2')}`),
+        'delete action'
+      )
+      await settings.eval(`${HEADER_BTN('.lucide-trash-2')}.click()`)
+      await until(() => settings.eval<boolean>(`${DIALOG} !== null`), 'delete confirm dialog')
+    },
+
+    confirmDialog: () =>
+      settings.eval<RegistryConfirmSnapshot>(`(() => {
+        const panel = ${DIALOG}
+        if (!panel) return { open: false, title: '', description: '' }
+        return {
+          open: true,
+          title: (panel.querySelector('h3')?.textContent ?? '').trim(),
+          description: (panel.querySelector('h3 + div')?.textContent ?? '').trim()
+        }
+      })()`),
+
+    confirmDialogConfirm: async () => {
+      await settings.eval(`[...${DIALOG}.querySelectorAll('button')][1].click()`)
+      await until(() => settings.eval<boolean>(`${DIALOG} === null`), 'confirm dialog closed')
+      // 确认框先关、删除与重扫随后异步落定 —— 断言方仍应 until，这里只让出一拍
+      await sleep(300)
+    },
+
+    noteFile,
+
+    headerTitle: () =>
+      settings.eval<string>(
+        `(${HEADER}?.querySelector('span.text-sm.font-semibold')?.textContent ?? '').trim()`
+      ),
+
+    reasonText: () =>
+      settings.eval<string>(
+        `[...(${PANEL}?.querySelectorAll('div') ?? [])]
+          .filter((d) => d.className.includes('bg-red-500/10') && !d.closest('[data-registry-note]') && !d.closest('.cm-editor'))
+          .map((d) => (d.textContent ?? '').trim())
+          .join('\\n')`
+      ),
+
+    headerIcons: () =>
+      settings.eval<RegistryHeaderIcons>(`(() => {
+        const btns = [...(${HEADER}?.querySelectorAll('button') ?? [])]
+        const has = (icon) => btns.some((b) => b.querySelector(icon))
+        return { trash: has('.lucide-trash-2'), save: has('.lucide-save'), copy: has('.lucide-copy') }
+      })()`),
+
+    inputs: () =>
+      settings.eval<{ count: number; disabled: boolean }>(`(() => {
+        const els = [...(${PANEL}?.querySelectorAll('.cm-shuvix-fmcard-input') ?? [])]
+        return { count: els.length, disabled: els.length > 0 && els.every((i) => i.disabled) }
+      })()`)
+  }
+}
+
+export interface AgentsPaneRow {
+  displayName: string
+  struck: boolean
+  overriddenBadge: boolean
+  selected: boolean
+  builtin: boolean
+}
+
+export interface AgentsPane extends RegistryTabPane {
+  rows(): Promise<AgentsPaneRow[]>
+  /** 点一行并等详情挂好（见本节开头的就绪判据）；`which` 在覆盖后两行同名时点名来源 */
+  selectRow(displayName: string, which?: RegistryRowSource): Promise<void>
+  /**
+   * 详情面板 —— 内置是等价 md 的只读查看、自定义档案是它的笔记本，两者都是「md 原文 + 属性卡」，
+   * 故这里读的是卡片：
+   *   fieldKeys  卡片各行的 frontmatter 键（`data-key`，locale-free，优先用它断言）
+   *   cardBadge  类型徽章文案（'ShuviX agent · v1'）
+   *   toggles / togglesDisabled  布尔字段开关数与是否全部只读（内置档案只读）
+   *   slots      选择器槽位数（model / tools / instruction-files 可编辑时各一个）
+   *   hasDeleteButton / hasSaveButton  面板里的删除 / 保存图标（笔记本自动保存，恒无保存）
+   */
+  detail(): Promise<{
+    fieldKeys: string[]
+    cardBadge: string
+    toggles: number
+    togglesDisabled: boolean
+    slots: number
+    hasDeleteButton: boolean
+    hasSaveButton: boolean
+  }>
+}
+
+/** 设置窗口「智能体」tab（openSettings('agents') 后调用；等首屏详情就绪） */
 export async function agentsPane(settings: CdpClient): Promise<AgentsPane> {
   await until(
     () => settings.eval<boolean>(`document.querySelector('.cm-content') !== null`),
     'agents tab ready'
   )
-
-  const ROWS = `(() => {
-    const col = [...document.querySelectorAll('.w-\\\\[220px\\\\]')].pop()
-    return [...col.querySelectorAll('button')].filter((b) => b.querySelector('.lucide-bot'))
-  })()`
-
-  // 新建对话框：唯一的全屏遮罩层（未打开时为 null）
-  const DIALOG = `document.querySelector('.fixed.inset-0.z-50')`
-  const CARD = `${DIALOG}?.firstElementChild`
-  const SCROLLER = `${CARD}?.querySelector('.overflow-y-auto')`
-  const CARD_RECT = `(() => {
-    const r = ${CARD}?.getBoundingClientRect()
-    return r ? [r.top, r.left, r.width, r.height].join(',') : ''
-  })()`
-
-  /** 滚动体挪到指定位置，返回浏览器实际落定的 scrollTop（挪不动时就是 0） */
-  const scrollTo = (top: string): Promise<number> =>
-    settings.eval<number>(`(() => {
-      const s = ${SCROLLER}
-      s.scrollTop = ${top}
-      return s.scrollTop
-    })()`)
+  const { rawRows, ...common } = registryTabPane(settings, '220px')
 
   return {
-    rows: () =>
-      settings.eval(`${ROWS}.map((r) => ({
-        displayName: r.querySelector('.font-medium')?.textContent.trim() ?? '',
-        struck: !!r.querySelector('.line-through'),
-        overriddenBadge: [...r.querySelectorAll('span')].some((s) => /已覆盖|Overridden|上書き/.test(s.textContent))
-      }))`),
-    selectRow: async (displayName) => {
-      await settings.eval(
-        `${ROWS}.find((r) => r.querySelector('.font-medium')?.textContent.trim() === ${JSON.stringify(displayName)}).click()`
-      )
-      await new Promise((r) => setTimeout(r, 500))
-    },
+    ...common,
+    rows: async () =>
+      (await rawRows()).map((r) => ({
+        displayName: r.label,
+        struck: r.struck,
+        overriddenBadge: r.overriddenBadge,
+        selected: r.selected,
+        builtin: r.builtin
+      })),
     detail: () =>
       settings.eval(`(() => {
-        // 右面板恒是列表列的下一个兄弟（两栏布局）—— 编辑态下 .flex-1.min-w-0 会命中
-        // 头部标题 div 与 LivePreviewEditor 根，认不准（同 policiesPane 的教训）
+        // 右面板恒是列表列的下一个兄弟（两栏布局）
         const col = [...document.querySelectorAll('.w-\\\\[220px\\\\]')].pop()
         const pane = col?.nextElementSibling
         const toggles = [...pane.querySelectorAll('.cm-shuvix-fmcard-toggle')]
@@ -1260,103 +1463,7 @@ export async function agentsPane(settings: CdpClient): Promise<AgentsPane> {
           hasDeleteButton: [...pane.querySelectorAll('button')].some((b) => b.querySelector('.lucide-trash-2')),
           hasSaveButton: [...pane.querySelectorAll('button')].some((b) => b.querySelector('.lucide-save'))
         }
-      })()`),
-
-    openCreateDialog: async (via) => {
-      // 已经开着一个就早失败：再点入口只换预填文本，而 CM6 不会因此重置文档，
-      // 于是对话框里还是上一份 md —— 后面的断言会围着「看起来对但内容是别人的」打转
-      if (await settings.eval<boolean>(`${DIALOG} !== null`)) {
-        throw new Error('create dialog already open (leaked by a previous case?)')
-      }
-      const icon = via === 'add' ? '.lucide-plus' : '.lucide-copy'
-      await settings.eval(
-        `(() => {
-          const col = [...document.querySelectorAll('.w-\\\\[220px\\\\]')].pop()
-          // 「添加」在列表列底栏，「创建覆盖副本」在右侧详情头部（= 列表列的兄弟）
-          const scope = ${JSON.stringify(via)} === 'add' ? col : col.nextElementSibling
-          const btn = [...scope.querySelectorAll('button')].find((b) => b.querySelector(${JSON.stringify(icon)}))
-          if (!btn) throw new Error('create dialog entry not found: ' + ${JSON.stringify(icon)})
-          btn.click()
-          return true
-        })()`
-      )
-      // 覆盖副本预填整份内置 md（几千字）；新建模板只有十来行，故只对前者要求长度
-      const minChars = via === 'override' ? 500 : 0
-      await until(
-        () =>
-          settings.eval<boolean>(`(() => {
-            const editor = ${DIALOG}?.querySelector('.cm-content')
-            return !!editor && (editor.textContent ?? '').length > ${minChars}
-          })()`),
-        `create dialog (${via}) editor filled`
-      )
-      // animate-scale-in 期间卡片带 transform，此时读 rect 拿到的是动画中间态
-      await until(async () => {
-        const first = await settings.eval<string>(CARD_RECT)
-        await sleep(120)
-        const second = await settings.eval<string>(CARD_RECT)
-        return first && first === second ? first : null
-      }, 'create dialog geometry settled')
-    },
-
-    createDialogMetrics: () =>
-      settings.eval(`(() => {
-        const dialog = ${DIALOG}
-        const card = dialog.firstElementChild
-        const scroller = card.querySelector('.overflow-y-auto')
-        return {
-          cardClientHeight: card.clientHeight,
-          cardScrollHeight: card.scrollHeight,
-          cardBottom: card.getBoundingClientRect().bottom,
-          scrollerClientHeight: scroller.clientHeight,
-          scrollerScrollHeight: scroller.scrollHeight,
-          scrollerBottom: scroller.getBoundingClientRect().bottom,
-          scrollerScrollTop: scroller.scrollTop,
-          scrollerOverflowY: getComputedStyle(scroller).overflowY,
-          // 页面上还有详情面板那一个 .cm-content —— 必须在对话框内取，否则恒 false
-          scrollerHasEditor: scroller.contains(dialog.querySelector('.cm-content'))
-        }
-      })()`),
-
-    scrollCreateDialogToBottom: () => scrollTo(`${SCROLLER}.scrollHeight`),
-    scrollCreateDialogToTop: () => scrollTo('0'),
-
-    closeCreateDialog: async () => {
-      // 对话框自己在 window 上听 keydown（不是聚焦元素），故直接派发到 window
-      await settings.eval(
-        `(() => {
-          window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
-          return true
-        })()`
-      )
-      await until(() => settings.eval<boolean>(`${DIALOG} === null`), 'create dialog closed')
-    },
-
-    saveCreateDialog: async () => {
-      await settings.eval(
-        `(() => {
-          const btn = [...${DIALOG}.querySelectorAll('button')].find((b) => b.querySelector('.lucide-save'))
-          if (!btn) throw new Error('create dialog save button not found')
-          btn.click()
-          return true
-        })()`
-      )
-      // 成功 = 对话框自己卸载；失败会留在原地并就地显示原因。
-      // until 把轮询期异常当「未就绪」吞掉，故失败用返回值传出去再抛
-      let reason = ''
-      const outcome = await until<boolean | 'rejected'>(
-        async () => {
-          if (await settings.eval<boolean>(`${DIALOG} === null`)) return true
-          reason = await settings.eval<string>(
-            `(${DIALOG}.querySelector('.text-red-500')?.textContent ?? '').trim()`
-          )
-          return reason ? 'rejected' : false
-        },
-        'create dialog saved & closed',
-        10_000
-      )
-      if (outcome !== true) throw new Error(`create dialog save rejected: ${reason}`)
-    }
+      })()`)
   }
 }
 
@@ -1366,36 +1473,16 @@ export interface PoliciesPaneRow {
   overriddenBadge: boolean
   /** 当前选中行（选中态是 accent 配色，不是 aria 属性） */
   selected: boolean
+  builtin: boolean
 }
 
-/**
- * md 原文编辑态的快照 —— 编辑器与详情共用右面板，但**锚点不同**：
- * 详情用「最后一个 .flex-1.min-w-0」，编辑态下那个选择器会命中 PolicyEditor 的
- * 头部标题 div（它同样带 flex-1 min-w-0），故这里一律以「含 .cm-content 的面板」为锚。
- */
-export interface PoliciesPaneEditor {
-  /** 编辑器是否上屏 */
-  open: boolean
-  /** 屏幕上的文本：CM6 文档文本 + 属性卡各输入框的当前值（后者不进 textContent） */
-  text: string
-  /** 属性卡类型徽章（policy md 应为 'ShuviX policy · v1'） */
-  cardBadge: string
-  /** 属性卡里的规则摘要行数（policyRules 结构摘要） */
-  cardRules: number
-  /** 属性卡校验徽章的语义类：'ok' | 'warn' | 'err' | ''（未上屏） */
-  cardStatus: string
-  /** 保存失败横幅文案（解析器/服务层原文；无横幅为空串） */
-  error: string
-}
-
-export interface PoliciesPane {
+export interface PoliciesPane extends RegistryTabPane {
   rows(): Promise<PoliciesPaneRow[]>
-  /** 点击底部「重扫描」—— 列表只在挂载时加载一次，运行中写入的策略文件需手动重扫 */
-  refresh(): Promise<void>
-  selectRow(name: string): Promise<void>
+  /** 点一行并等详情挂好（见本节开头的就绪判据）；`which` 在覆盖后两行同名时点名来源 */
+  selectRow(name: string, which?: RegistryRowSource): Promise<void>
   /**
-   * 详情 —— 策略页已与智能体页统一：详情就是 md 原文的 LivePreview（属性卡 + 正文），
-   * 内置只读、用户可编辑，没有单独的结构化详情视图了。故这里读的是卡片：
+   * 详情 —— 内置是等价 md 的只读查看、用户策略是它的笔记本，两者都是「md 原文 + 属性卡」，
+   * 故这里读的是卡片：
    *   sourceBadge      来源徽标（内置 / 自定义）
    *   cardBadge        类型徽章（'ShuviX policy · v1'）
    *   fieldKeys        卡片各行的 frontmatter 键（data-key，locale-free）
@@ -1403,11 +1490,10 @@ export interface PoliciesPane {
    *                    （卡片按 md 原文展示 deny/ask/force-allow，不做本地化 —— 所见即引擎所评估）
    *   hasScope         策略级 scope 行有值（非「未设置」）
    *   conditionLines   各规则行的条件/match 摘要文本
-   *   rulePrompts      各规则的人读提示语行（prompt 不混进 mono 的条件串，单独散排一行；
-   *                    没写 prompt 的规则不产生这一行，故长度可小于规则数）
+   *   rulePrompts      各规则的人读提示语行（没写 prompt 的规则不产生这一行，故长度可小于规则数）
    *   hasRationale     正文（Rationale）已渲染进 CM6
-   *   actionButtons    头部操作数（内置未覆盖=1 覆盖副本；被遮蔽内置=0；用户=2 保存+删除）
-   *   inputs/slots     可编辑控件数（内置只读时均为 0）
+   *   actionButtons    面板里 CM6 之外的按钮数（头部动作；断言优先用 headerIcons 按图标认）
+   *   inputs/slots     可编辑控件数（内置只读时照常渲染、全部禁用）
    */
   detail(): Promise<{
     sourceBadge: string
@@ -1425,110 +1511,31 @@ export interface PoliciesPane {
     inputsDisabled: boolean
     slots: number
   }>
-  /**
-   * 左栏「无法解析」分组里的文件名。这些文件不生效也不遮蔽内置，但必须可见 ——
-   * 它们的行不含 .font-medium（rows() 因此天然排除它们），以 font-mono 标识。
-   */
-  invalidRows(): Promise<string[]>
-  /** 详情操作条各按钮的文案（本地化；断言用三语兜底正则） */
-  detailActionTexts(): Promise<string[]>
-  /**
-   * 点详情操作条上的某个动作 —— **按图标认，不按位置**：操作条会随功能增减
-   * （如新增的「渲染/源码」视图切换），按 index 认会全线错位。
-   * 这些按钮的图标是语义固定的，与列表行图标（随 object.type 变）不同。
-   */
-  clickDetailAction(action: 'edit' | 'delete' | 'createOverride' | 'toggleView'): Promise<void>
-  /** 点左栏底部「新建」并等编辑器上屏 */
-  clickNew(): Promise<void>
-  /** 编辑态快照（未进入编辑态时 open=false，其余字段为空） */
-  editor(): Promise<PoliciesPaneEditor>
-  /** 点编辑器「保存」，等到编辑器关闭或错误横幅上屏 */
-  save(): Promise<void>
-  /** 点编辑器「取消」，等编辑器落下 */
-  cancelEdit(): Promise<void>
-  /** ConfirmDialog 当前态（标题 / 描述；未弹出时 open=false） */
-  confirmDialog(): Promise<{ open: boolean; title: string; description: string }>
-  /** 点 ConfirmDialog 的确认按钮（页脚第二个按钮） */
-  confirmDialogConfirm(): Promise<void>
 }
 
-/** 设置窗口「安全策略」tab（openSettings('policies') 后调用；只读查看） */
+/** 设置窗口「安全策略」tab（openSettings('policies') 后调用；等列表就绪） */
 export async function policiesPane(settings: CdpClient): Promise<PoliciesPane> {
-  const COLUMN = `[...document.querySelectorAll('.w-\\\\[220px\\\\]')].pop()`
   // 按「含策略名的 .font-medium」认行，**不要**按图标认：列表图标随 object.type 变
   // （path→FileText / command→Terminal / gitTool→GitBranch / database→Database，
   // 未声明 object.type 的策略才回退 Shield），按图标筛会只剩零星几行。
-  // 底栏的「打开目录」「重扫描」两个按钮不含 .font-medium，天然被排除。
-  const ROWS = `(() => {
-    const col = ${COLUMN}
-    return [...col.querySelectorAll('button')].filter((b) => b.querySelector('.font-medium'))
-  })()`
-  const REFRESH = `[...${COLUMN}.querySelectorAll('button')].find((b) => b.querySelector('.lucide-refresh-cw'))`
-  const NEW = `[...${COLUMN}.querySelectorAll('button')].find((b) => b.querySelector('.lucide-plus'))`
-  // 编辑态**不能**用 .flex-1.min-w-0 认面板：PolicyEditor 的头部标题 div 与
-  // LivePreviewEditor 的根都带这两个类，pop()/find() 会分别落在错误的一层。
-  // 右面板恒是列表列的下一个兄弟（PolicySettings 的两栏布局），详情/编辑两态通用。
-  const PANEL = `${COLUMN}.nextElementSibling`
-  // 编辑器自身的操作按钮 = 面板内、不属于 CM6 的按钮（排除属性卡的开关/跳源码按钮）
-  // 顺序即 DOM 顺序：0 = 取消，1 = 保存
-  // 头部动作一律按图标认（位置会随功能增减而漂）：取消=x、保存=save/check
-  const HEAD_BTN = (icon: string): string =>
-    `[...${PANEL}.querySelectorAll('button')].filter((b) => !b.closest('.cm-editor')).find((b) => b.querySelector('${icon}'))`
-  const DIALOG = `document.querySelector('.dialog-panel')`
-  await until(() => settings.eval<boolean>(`${ROWS}.length > 0`), 'policies tab ready')
-
-  const editorSnapshot = (): Promise<PoliciesPaneEditor> =>
-    settings.eval(`(() => {
-      const panel = ${PANEL}
-      // 统一后「详情就是编辑器」，故 .cm-content 恒存在 —— open 特指 create/fix 这类
-      // 临时编辑态，它们才有「取消」（lucide-x）。选中项的常态编辑不算 open。
-      const cancelBtn = [...(panel?.querySelectorAll('button') ?? [])].find(
-        (b) => !b.closest('.cm-editor') && b.querySelector('.lucide-x')
-      )
-      if (!panel?.querySelector('.cm-content') || !cancelBtn) {
-        return { open: false, text: '', cardBadge: '', cardRules: 0, cardStatus: '', error: '' }
-      }
-      const status = panel.querySelector('.cm-shuvix-fmcard-status')
-      const cls = status ? status.className : ''
-      // 保存失败横幅是 PolicyEditor 自己的（红色 tailwind 类）——属性卡的校验横幅在 CM6 内
-      const banner = [...panel.querySelectorAll('div')].find(
-        (d) => !d.closest('.cm-editor') && d.className.includes('text-red-500')
-      )
-      return {
-        open: true,
-        // 卡片把 name/displayName/description 渲染成 <input>，其值不进 textContent —— 
-        // 「屏幕上看得见的文本」要把输入框的 value 一并算上，否则断言会漏掉这几个字段
-        text:
-          (panel.querySelector('.cm-content')?.textContent ?? '') +
-          [...panel.querySelectorAll('.cm-shuvix-fmcard-input')].map((i) => ' ' + i.value).join(''),
-        cardBadge: panel.querySelector('.cm-shuvix-fmcard-badge')?.textContent.trim() ?? '',
-        cardRules: panel.querySelectorAll('.cm-shuvix-fmcard-rule').length,
-        cardStatus: /is-(ok|warn|err)/.exec(cls)?.[1] ?? '',
-        error: banner ? banner.textContent.trim() : ''
-      }
-    })()`)
+  const { rawRows, ...common } = registryTabPane(settings, '220px')
+  await until(async () => (await rawRows()).length > 0, 'policies tab ready')
 
   return {
-    refresh: async () => {
-      await settings.eval(`${REFRESH}.click()`)
-      await new Promise((r) => setTimeout(r, 400))
-    },
-    rows: () =>
-      settings.eval(`${ROWS}.map((r) => ({
-        name: r.querySelector('.font-medium')?.textContent.trim() ?? '',
-        struck: !!r.querySelector('.line-through'),
-        overriddenBadge: [...r.querySelectorAll('span')].some((s) => /已覆盖|Overridden|上書き/.test(s.textContent)),
-        selected: r.className.includes('bg-accent/10')
-      }))`),
-    selectRow: async (name) => {
-      await settings.eval(
-        `${ROWS}.find((r) => r.querySelector('.font-medium')?.textContent.trim() === ${JSON.stringify(name)}).click()`
-      )
-      await new Promise((r) => setTimeout(r, 300))
-    },
+    ...common,
+    rows: async () =>
+      (await rawRows()).map((r) => ({
+        name: r.label,
+        struck: r.struck,
+        overriddenBadge: r.overriddenBadge,
+        selected: r.selected,
+        builtin: r.builtin
+      })),
     detail: () =>
       settings.eval(`(() => {
-        const pane = ${PANEL}
+        // 右面板恒是列表列的下一个兄弟（PolicySettings 的两栏布局）
+        const col = [...document.querySelectorAll('.w-\\\\[220px\\\\]')].pop()
+        const pane = col.nextElementSibling
         const effects = [...pane.querySelectorAll('.cm-shuvix-fmcard-effect')]
         const scopeRow = pane.querySelector('[data-key="shuvix-policy-scope"]')
         return {
@@ -1554,66 +1561,155 @@ export async function policiesPane(settings: CdpClient): Promise<PoliciesPane> {
           ),
           slots: pane.querySelectorAll('.cm-shuvix-fmcard-slot').length
         }
-      })()`),
-    invalidRows: () =>
-      settings.eval(`[...${COLUMN}.querySelectorAll('button')]
-        .filter((b) => !b.querySelector('.font-medium') && b.querySelector('.font-mono'))
-        .map((b) => b.textContent.trim())`),
-    // 头部动作一律以右面板（PANEL）为锚：DETAIL 的 .flex-1.min-w-0 在编辑态会命中
-    // 头部标题 div（详情已统一为编辑器，这个坑对策略页现在是常态）
-    detailActionTexts: () =>
-      settings.eval(
-        `[...${PANEL}.querySelectorAll('button')]
-          .filter((b) => !b.closest('.cm-editor'))
-          .map((b) => b.textContent.trim())`
-      ),
-    clickDetailAction: async (action) => {
-      const ICON = {
-        edit: 'lucide-pencil',
-        delete: 'lucide-trash-2',
-        createOverride: 'lucide-copy',
-        // 视图切换按钮的图标随当前视图变（渲染态显示 code，源码态显示 eye）
-        toggleView: 'lucide-code, .lucide-eye'
-      }[action]
-      await settings.eval(
-        `[...${PANEL}.querySelectorAll('button')]
-          .filter((b) => !b.closest('.cm-editor'))
-          .find((b) => b.querySelector('.${ICON}'))
-          ?.click()`
+      })()`)
+  }
+}
+
+export interface WorkflowsPaneRow {
+  name: string
+  /** 行内副标题：触发器 id 以 `, ` 连接（没有绑定时是本地化的「无触发器」文案） */
+  trigger: string
+  struck: boolean
+  overriddenBadge: boolean
+  selected: boolean
+  builtin: boolean
+}
+
+export interface WorkflowsPane extends RegistryTabPane {
+  rows(): Promise<WorkflowsPaneRow[]>
+  /** 点一行并等详情挂好（见本节开头的就绪判据）；`which` 在覆盖后两行同名时点名来源 */
+  selectRow(name: string, which?: RegistryRowSource): Promise<void>
+}
+
+/**
+ * 设置窗口「工作流」tab（openSettings('workflows') 后调用；等列表就绪）。
+ * 与另外两个 tab 的差别只在左列宽 240px、行多一行触发器副标题、以及选中非法文件时
+ * 头部与笔记之间多一个拒绝原因红框（脚本语法错到不了属性卡，只能挂在这里 —— reasonText）。
+ */
+export async function workflowsPane(settings: CdpClient): Promise<WorkflowsPane> {
+  const { rawRows, ...common } = registryTabPane(settings, '240px')
+  await until(async () => (await rawRows()).length > 0, 'workflows tab ready')
+
+  return {
+    ...common,
+    rows: async () =>
+      (await rawRows()).map((r) => ({
+        name: r.label,
+        trigger: r.subtitle,
+        struck: r.struck,
+        overriddenBadge: r.overriddenBadge,
+        selected: r.selected,
+        builtin: r.builtin
+      }))
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 注册表笔记（bot / agent / 策略 / 工作流 md 的笔记本会话）的正文与属性卡 —— 两个窗口共用。
+//
+// 作用域：主窗里点 Bots 分组的一行，主区就是那份文件的笔记本（同一时刻只有它一个 .cm-content），
+// 作用域是整个 document；设置窗里是详情区的 `[data-registry-note]`（RegistryNoteView 根）——
+// 收在它里面，免得读到内置条目的只读预览，没有开着的笔记时一切读数为空。
+//
+// 写入只走两条路，**绝不往 CodeMirror 里打字**：属性卡字段 `commitField`（真实编辑路径：失焦
+// 提交 → 行级 scoped edit → 200ms 防抖自动保存落盘），或 seed.ts 的 `noteWrite`（写路径 IPC）。
+//
+// `mark()` / `isMarked()` 是挂在 `[data-registry-note]` 元素上的 JS 属性（刻意不是 data-*）：
+// 重挂载会造出一个新元素、标记随之消失 —— 「改名 / 合法性翻面时笔记没被卸载重开」的判据。
+
+/** 属性卡校验徽章的语义类（'' = 未上屏，或该类型没有校验器） */
+export type FmCardStatus = 'ok' | 'warn' | 'err' | ''
+
+export interface RegistryNotePane {
+  /** 等正文（.cm-content）里出现特征串 */
+  waitBody(marker: string): Promise<void>
+  /** 正文文本（没有笔记为空串） */
+  bodyText(): Promise<string>
+  /** 等属性卡上屏（只等卡片本身；校验态是异步回来的，要等它用 waitStatus） */
+  waitCard(): Promise<void>
+  cardBadge(): Promise<string>
+  cardStatus(): Promise<FmCardStatus>
+  /** 等校验徽章落到指定语义类 */
+  waitStatus(status: Exclude<FmCardStatus, ''>): Promise<void>
+  /** 校验横幅文本（解析器原文，逐行以换行连接）；横幅隐藏时为空串 */
+  bannerText(): Promise<string>
+  /** 卡片文本字段（textarea）的当前值；字段不在返回 null */
+  fieldValue(key: string): Promise<string | null>
+  /** 改一个文本字段：写 value + 派发 blur（卡片失焦即提交）；字段不存在或只读则抛 */
+  commitField(key: string, value: string): Promise<void>
+  mark(): Promise<void>
+  isMarked(): Promise<boolean>
+}
+
+export function registryNotePane(client: CdpClient): RegistryNotePane {
+  const ROOT = `(location.hash.startsWith('#settings') ? document.querySelector('[data-registry-note]') : document)`
+  const FIELD = (key: string): string =>
+    `${ROOT}?.querySelector('.cm-shuvix-fmcard-input[data-key=${JSON.stringify(key)}]')`
+  const NOTE_EL = `document.querySelector('[data-registry-note]')`
+  const MARK = '__e2eRegistryNoteMark'
+
+  const bodyText = (): Promise<string> =>
+    client.eval<string>(`${ROOT}?.querySelector('.cm-content')?.textContent ?? ''`)
+  const cardStatus = (): Promise<FmCardStatus> =>
+    client.eval<FmCardStatus>(`(() => {
+      const cls = ${ROOT}?.querySelector('.cm-shuvix-fmcard-status')?.className ?? ''
+      return /is-(ok|warn|err)/.exec(cls)?.[1] ?? ''
+    })()`)
+
+  return {
+    waitBody: async (marker) => {
+      await until(
+        async () => (await bodyText()).includes(marker),
+        `note body shows ${JSON.stringify(marker)}`
       )
-      await new Promise((r) => setTimeout(r, 300))
     },
-    clickNew: async () => {
-      await settings.eval(`${NEW}.click()`)
-      await until(async () => (await editorSnapshot()).open, 'policy editor mounted')
+    bodyText,
+    waitCard: async () => {
+      await until(
+        () => client.eval<boolean>(`!!${ROOT}?.querySelector('.cm-shuvix-fmcard')`),
+        'frontmatter card mounted'
+      )
     },
-    editor: editorSnapshot,
-    save: async () => {
-      await settings.eval(`(${HEAD_BTN('.lucide-save')} ?? ${HEAD_BTN('.lucide-check')})?.click()`)
-      // 成功 → 编辑器落下并回详情；失败 → 编辑器留在原位并显示解析器原因
-      await until(async () => {
-        const state = await editorSnapshot()
-        return !state.open || state.error !== ''
-      }, 'policy editor save settled')
+    cardBadge: () =>
+      client.eval<string>(
+        `(${ROOT}?.querySelector('.cm-shuvix-fmcard-badge')?.textContent ?? '').trim()`
+      ),
+    cardStatus,
+    waitStatus: async (status) => {
+      await until(async () => (await cardStatus()) === status, `card status is-${status}`)
     },
-    cancelEdit: async () => {
-      await settings.eval(`${HEAD_BTN('.lucide-x')}?.click()`)
-      await until(async () => !(await editorSnapshot()).open, 'policy editor closed')
-    },
-    confirmDialog: () =>
-      settings.eval(`(() => {
-        const panel = ${DIALOG}
-        if (!panel) return { open: false, title: '', description: '' }
-        return {
-          open: true,
-          title: panel.querySelector('h3')?.textContent.trim() ?? '',
-          description: panel.querySelector('h3 + div')?.textContent.trim() ?? ''
-        }
+    bannerText: () =>
+      client.eval<string>(`(() => {
+        const banner = ${ROOT}?.querySelector('.cm-shuvix-fmcard-banner')
+        if (!banner || banner.hidden) return ''
+        return [...banner.querySelectorAll('.cm-shuvix-fmcard-banner-line')]
+          .map((n) => n.textContent ?? '')
+          .join('\\n')
       })()`),
-    confirmDialogConfirm: async () => {
-      await settings.eval(`[...${DIALOG}.querySelectorAll('button')][1].click()`)
-      await new Promise((r) => setTimeout(r, 500))
-    }
+    fieldValue: (key) => client.eval<string | null>(`${FIELD(key)}?.value ?? null`),
+    commitField: async (key, value) => {
+      await until(() => client.eval<boolean>(`!!${FIELD(key)}`), `card field "${key}"`)
+      const outcome = await client.eval<string>(`(() => {
+        const input = ${FIELD(key)}
+        if (!input) return 'missing'
+        if (input.disabled) return 'read-only'
+        input.value = ${JSON.stringify(value)}
+        // 卡片在 blur 上提交（行级 scoped edit），不经 React —— 直接派发即走真实提交路径
+        input.dispatchEvent(new Event('blur'))
+        return 'ok'
+      })()`)
+      if (outcome !== 'ok') throw new Error(`card field "${key}" is ${outcome}`)
+    },
+    mark: async () => {
+      const marked = await client.eval<boolean>(`(() => {
+        const note = ${NOTE_EL}
+        if (!note) return false
+        note.${MARK} = true
+        return true
+      })()`)
+      if (!marked) throw new Error('no [data-registry-note] element to mark')
+    },
+    isMarked: () => client.eval<boolean>(`${NOTE_EL}?.${MARK} === true`)
   }
 }
 
@@ -1818,13 +1914,21 @@ export function fmCardPane(main: CdpClient): FmCardPane {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// 主窗侧栏「Bots」分组（BotGroup）+ 主区 bot 档案页（BotPage）—— 刻意只做最小面。
+// 主窗侧栏「Bots」分组（BotGroup）—— 刻意只做最小面。
 //
 // 锚点：分组头按 `data-group="bots"`（SessionGroup 的 group/header 层）认，合法行按
-// `data-bot-row=<name>`、解析不过的琥珀行按 `data-bot-invalid-row=<fileName>`；页面按
-// `data-bot-page="edit|fix|create"` 认。分组是**懒扫**的：首次展开才扫，之后展开 / 窗口聚焦 /
-// 组头菜单「刷新」/ `bot.changed` 事件（botService 每次落盘后广播）重扫 —— 磁盘外写入不广播，
+// `data-bot-row=<name>`、解析不过的琥珀行按 `data-bot-invalid-row=<fileName>`。点任一行打开的是
+// 那份文件的**笔记本会话**（隐藏项目 `__bots__`）—— 主区就是普通笔记本，没有专门的档案页；
+// 正文与属性卡经 `registryNotePane` 读写。活动行 = 活动会话正是这份文件的笔记本（rowClass 的
+// active 分支 `bg-bg-active/80`）。分组是**懒扫**的：首次展开才扫，之后展开 / 窗口聚焦 / 组头
+// 菜单「刷新」/ `bot.changed` 事件（笔记本写入 / 新建 / 删除）重扫 —— 磁盘外写入不广播，
 // 种完 md 要 refresh。菜单走与会话行同一套桩（pickFromMenu）。
+
+/** 分组里的活动行：合法行给 name，解析不过的琥珀行给文件名 */
+export interface BotsActiveRow {
+  row?: string
+  invalidRow?: string
+}
 
 export interface BotsPane {
   /** 组头显示的分组标签 */
@@ -1837,10 +1941,18 @@ export interface BotsPane {
   rows(): Promise<string[]>
   /** 非法文件行（琥珀）的文件名 */
   invalidRows(): Promise<string[]>
-  /** 点一行并等 bot 档案页（edit 态）挂好 */
+  /** 点一行并等它成为活动行（= 这份文件的笔记本成了活动会话） */
   selectRow(name: string): Promise<void>
-  /** 档案页当下的目标类型（'' = 不在屏） */
-  pageKind(): Promise<string>
+  /** 点一行解析不过的文件并等它成为活动行 */
+  selectInvalidRow(fileName: string): Promise<void>
+  /** 当前活动行；活动会话不是任何 bot 文件的笔记本时为 null */
+  activeRow(): Promise<BotsActiveRow | null>
+  /** 开 bot 行的 ⋮ 并选中一项（自带「该项真的在菜单里」的核对） */
+  pickRowMenu(name: string, actionId: 'new-bot-chat' | 'delete-bot'): Promise<void>
+  /** 开非法文件行的 ⋮ 并选中一项（同上） */
+  pickInvalidRowMenu(fileName: string, actionId: 'delete-bot-file'): Promise<void>
+  /** 组头菜单「新建 bot」—— 只触发；新文件落盘与笔记打开由调用方 until */
+  newBot(): Promise<void>
   /** 组头菜单「刷新」—— 磁盘外改动不广播 bot.changed，需手动重扫 */
   refresh(): Promise<void>
 }
@@ -1852,9 +1964,23 @@ export function botsPane(main: CdpClient): BotsPane {
   const COLLAPSE = `${HEADER}?.nextElementSibling`
   const BODY = `${COLLAPSE}?.firstElementChild?.firstElementChild`
   const ROWS = `[...document.querySelectorAll('[data-bot-row]')]`
+  const INVALID_ROWS = `[...document.querySelectorAll('[data-bot-invalid-row]')]`
   const ROW = (name: string): string =>
     `document.querySelector('[data-bot-row=${JSON.stringify(name)}]')`
-  const PAGE = `document.querySelector('[data-bot-page]')`
+  const INVALID_ROW = (fileName: string): string =>
+    `document.querySelector('[data-bot-invalid-row=${JSON.stringify(fileName)}]')`
+  const ACTIVE = (list: string): string =>
+    `${list}.find((r) => r.className.includes('bg-bg-active'))`
+
+  /** 点一行并等它成为活动行（打开笔记是异步的：openNote → 重拉会话列表 → 选中） */
+  const clickUntilActive = async (scope: string, what: string): Promise<void> => {
+    await until(() => main.eval<boolean>(`${scope} !== null`), what)
+    await main.eval(`${scope}.click()`)
+    await until(
+      () => main.eval<boolean>(`(${scope}?.className ?? '').includes('bg-bg-active')`),
+      `${what} active`
+    )
+  }
 
   return {
     label: () =>
@@ -1876,20 +2002,36 @@ export function botsPane(main: CdpClient): BotsPane {
     rows: () => main.eval<string[]>(`${ROWS}.map((r) => r.getAttribute('data-bot-row'))`),
 
     invalidRows: () =>
-      main.eval<string[]>(
-        `[...document.querySelectorAll('[data-bot-invalid-row]')].map((r) => r.getAttribute('data-bot-invalid-row'))`
-      ),
+      main.eval<string[]>(`${INVALID_ROWS}.map((r) => r.getAttribute('data-bot-invalid-row'))`),
 
-    selectRow: async (name) => {
+    selectRow: (name) => clickUntilActive(ROW(name), `bot row "${name}"`),
+
+    selectInvalidRow: (fileName) =>
+      clickUntilActive(INVALID_ROW(fileName), `invalid bot row "${fileName}"`),
+
+    activeRow: () =>
+      main.eval<BotsActiveRow | null>(`(() => {
+        const row = ${ACTIVE(ROWS)}
+        if (row) return { row: row.getAttribute('data-bot-row') }
+        const invalid = ${ACTIVE(INVALID_ROWS)}
+        if (invalid) return { invalidRow: invalid.getAttribute('data-bot-invalid-row') }
+        return null
+      })()`),
+
+    pickRowMenu: async (name, actionId) => {
       await until(() => main.eval<boolean>(`${ROW(name)} !== null`), `bot row "${name}"`)
-      await main.eval(`${ROW(name)}.click()`)
-      await until(
-        () => main.eval<boolean>(`${PAGE}?.getAttribute('data-bot-page') === 'edit'`),
-        `bot page for "${name}"`
-      )
+      await pickFromMenu(main, ROW(name), actionId, `bot row "${name}"`)
     },
 
-    pageKind: () => main.eval<string>(`${PAGE}?.getAttribute('data-bot-page') ?? ''`),
+    pickInvalidRowMenu: async (fileName, actionId) => {
+      await until(
+        () => main.eval<boolean>(`${INVALID_ROW(fileName)} !== null`),
+        `invalid bot row "${fileName}"`
+      )
+      await pickFromMenu(main, INVALID_ROW(fileName), actionId, `invalid bot row "${fileName}"`)
+    },
+
+    newBot: () => pickFromMenu(main, HEADER, 'new-bot', 'bots group header'),
 
     refresh: async () => {
       await pickFromMenu(main, HEADER, 'refresh', 'bots group header')

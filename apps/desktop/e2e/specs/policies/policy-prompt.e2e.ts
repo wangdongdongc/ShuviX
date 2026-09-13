@@ -20,6 +20,7 @@ import { startFakeProvider, type FakeProvider } from '../../harness/fakeProvider
 import {
   createProject,
   eventRecorder,
+  noteWrite,
   seedFakeProvider,
   waitRendererReady,
   type EventRecorder,
@@ -109,11 +110,6 @@ const builtinRow = async (name: string): Promise<PolicyRow> =>
 
 const createPolicy = (text: string): Promise<{ success: boolean; error?: string }> =>
   app.main.eval(`window.api.policy.create(${JSON.stringify({ text })})`)
-const savePolicy = (
-  originalName: string,
-  text: string
-): Promise<{ success: boolean; error?: string }> =>
-  app.main.eval(`window.api.policy.save(${JSON.stringify({ originalName, text })})`)
 const deletePolicy = (name: string): Promise<{ success: boolean; error?: string }> =>
   app.main.eval(`window.api.policy.delete(${JSON.stringify({ name })})`)
 
@@ -294,10 +290,14 @@ describe('policy prompt —— 删光 prompt 的覆盖副本', () => {
     await respondToInput(askSid, event.request.id, { kind: 'ask', allowed: true })
     await events.waitFor('agent_end', { sessionId: askSid })
 
-    // ② deny 覆盖：错误文案就是光秃秃的归因，没有多余的空行或分隔
-    expect(await savePolicy('ask-on-write', writeGateOverride('deny'))).toMatchObject({
-      success: true
-    })
+    // ② 把覆盖改成 deny —— 已有策略的编辑是它的笔记本会话（与自动保存同一条写路径）。
+    //    错误文案就是光秃秃的归因，没有多余的空行或分隔
+    expect(
+      await noteWrite(app.main, 'policy', 'ask-on-write.md', writeGateOverride('deny'))
+    ).toEqual({ ok: true })
+    expect(
+      (await listPolicies()).find((p) => p.name === 'ask-on-write' && p.source === 'user')!.rules
+    ).toEqual([{ effect: 'deny', prompt: null }])
     const denySid = await newSession('P4-deny')
     await events.clear()
     scriptWrite('call_p4b', join(projDir, 'p4b.txt'))

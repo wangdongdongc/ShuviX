@@ -357,9 +357,11 @@ describe('policy IPC（列表与详情渲染）', () => {
     expect(detail.conditionLines[0]).toContain('action: write')
     expect(detail.conditionLines[0]).toContain("inDir(object.path, '/tmp/e2e-scoped')")
     expect(detail.conditionLines[1]).toBe('action: read, write')
-    // 用户策略：详情即可编辑（保存 + 删除两个操作），文本字段是输入框
-    expect(detail.actionButtons).toBe(2)
+    // 用户策略：详情就是这份文件的笔记（自动保存，没有保存按钮），头部只有删除；文本字段可编辑
+    expect(await pane.noteFile()).toBe('scoped-extra.md')
+    expect(await pane.headerIcons()).toMatchObject({ trash: true, save: false })
     expect(detail.inputs).toBeGreaterThan(0)
+    expect(detail.inputsDisabled).toBe(false)
 
     // 内置策略同样渲染 scope 段（书写约定一致）
     const gitSafety = (await listPolicies()).find(

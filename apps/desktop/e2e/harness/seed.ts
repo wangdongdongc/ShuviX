@@ -8,9 +8,14 @@
  *     prompt 前的系统提示词组装 / 消息树写入已经发生，断言只看这些副作用。
  */
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { deflateSync } from 'node:zlib'
+import { expect } from 'vitest'
+import {
+  REGISTRY_NOTE_PROJECT_IDS,
+  type RegistryNoteKind
+} from '@shuvix/chat-protocol/registryNotes'
 import type { CdpClient } from './cdp'
 import { sleep, until } from './cdp'
 import type { E2EApp } from './launch'
@@ -651,4 +656,163 @@ export async function promptAndListMessages(
   )
   await sleep(1500)
   return main.eval(`window.api.message.list(${JSON.stringify(sid)})`)
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 注册表笔记（bot / agent / 安全策略 / 工作流 md 的笔记本会话）
+//
+// 四类注册表 md 的打开 / 编辑路径是「一份文件 = 一条笔记本会话」：会话挂在该注册表目录的
+// **隐藏项目**下（id 见 chat-protocol 的 REGISTRY_NOTE_PROJECT_IDS，path = 目录本身），
+// notebookPath 就是文件名。这些会话照样出现在 `session.list()` / `listSessionIds` /
+// `newSessionsAfter` 里 —— 计数时按 projectId 过滤。
+
+export { REGISTRY_NOTE_PROJECT_IDS, type RegistryNoteKind }
+
+/** kind → window.api 上的命名空间（agent 的 IPC 历史上叫 subAgent） */
+const REGISTRY_API: Record<RegistryNoteKind, string> = {
+  bot: 'bot',
+  agent: 'subAgent',
+  policy: 'policy',
+  workflow: 'workflow'
+}
+
+export interface RegistryNoteSession {
+  id: string
+  notebookPath: string
+  title: string
+}
+
+/** 某个注册表隐藏项目下的全部笔记本会话（`session.list` 的顺序） */
+export function registryNoteSessions(
+  main: CdpClient,
+  projectId: string
+): Promise<RegistryNoteSession[]> {
+  return main.eval<RegistryNoteSession[]>(
+    `window.api.session.list().then((ss) => ss
+      .filter((s) => s.projectId === ${JSON.stringify(projectId)})
+      .map((s) => ({ id: s.id, notebookPath: (s.settings && s.settings.notebookPath) || '', title: s.title })))`
+  )
+}
+
+/** `<ns>.openNote` 的结果：成功带会话要素，失败带 IPC 拒绝消息（不抛，便于断言原因） */
+export type OpenNoteOutcome =
+  | {
+      ok: true
+      id: string
+      projectId: string | null
+      notebookPath: string
+      title: string
+      workingDirectory: string
+    }
+  | { ok: false; error: string }
+
+/** 打开 / 复用一份注册表文件的笔记本会话（IPC 直调，不经 UI） */
+export function openRegistryNote(
+  main: CdpClient,
+  kind: RegistryNoteKind,
+  fileName: string
+): Promise<OpenNoteOutcome> {
+  return main.eval<OpenNoteOutcome>(
+    `window.api.${REGISTRY_API[kind]}.openNote(${JSON.stringify({ fileName })}).then(
+      (s) => ({
+        ok: true,
+        id: s.id,
+        projectId: s.projectId,
+        notebookPath: (s.settings && s.settings.notebookPath) || '',
+        title: s.title,
+        workingDirectory: s.workingDirectory || ''
+      }),
+      (e) => ({ ok: false, error: String(e && e.message ? e.message : e) })
+    )`
+  )
+}
+
+/**
+ * 写路径 IPC：`<ns>.openNote({ fileName })` 打开 / 复用这份文件的笔记本会话，再经 `files.write`
+ * 落盘 —— 与笔记本自动保存同一个 writeSessionFile（原子写 + bot 文件的写入回执）。用它代替
+ * 「往 CodeMirror 里打字」。同一文件的连续写入要**串行**：writeSessionFile 的临时文件名按
+ * 「文件 + 进程」固定，并发写会互相踩。
+ */
+export function noteWrite(
+  main: CdpClient,
+  kind: RegistryNoteKind,
+  fileName: string,
+  content: string
+): Promise<{ ok: boolean; error?: string }> {
+  return main.eval<{ ok: boolean; error?: string }>(
+    `(async () => {
+      const session = await window.api.${REGISTRY_API[kind]}.openNote(${JSON.stringify({ fileName })})
+      return window.api.files.write({
+        sessionId: session.id,
+        path: ${JSON.stringify(fileName)},
+        content: ${JSON.stringify(content)}
+      })
+    })()`
+  )
+}
+
+/**
+ * 页内 AppEvent 收集器（`window.api.events.subscribe` 旁挂，与应用自身的 useAppEvent 并行接收）。
+ * 与 ChatEvent 的 eventRecorder 分开：AppEvent 走的是另一条 IPC（`app:event`），载荷也不分会话。
+ * 收集器是全局的；每段断言前 `clear()` 一次。
+ */
+export interface AppEventRecorder {
+  install(): Promise<void>
+  clear(): Promise<void>
+  count(type: string): Promise<number>
+  types(): Promise<string[]>
+}
+
+const APP_EVENTS_KEY = '__shuvixE2eAppEvents'
+
+export function appEventRecorder(main: CdpClient): AppEventRecorder {
+  const BUFFER = `(window.${APP_EVENTS_KEY} ?? [])`
+  return {
+    install: async () => {
+      await main.eval(
+        `(() => {
+          if (window.${APP_EVENTS_KEY}) return true
+          window.${APP_EVENTS_KEY} = []
+          window.api.events.subscribe((e) => window.${APP_EVENTS_KEY}.push(e))
+          return true
+        })()`
+      )
+    },
+    clear: async () => {
+      await main.eval(`${BUFFER}.length = 0`)
+    },
+    count: (type) =>
+      main.eval<number>(`${BUFFER}.filter((e) => e.type === ${JSON.stringify(type)}).length`),
+    types: () => main.eval<string[]>(`${BUFFER}.map((e) => e.type)`)
+  }
+}
+
+/**
+ * 等一份文件被重写并落定，回落定后的全文（调用方再对它做 toBe 全等，失败时给得出 diff）。
+ * 落定 = 与旧值不同 + 非空 + **连续两次轮询读到一致**：自动保存是 200ms 防抖，外部写入方
+ * 「先截断再写」时还可能读到半截（实测撞到过一次）。
+ */
+export async function waitFileWritten(
+  filePath: string,
+  before: string,
+  what = `file rewritten: ${filePath}`
+): Promise<string> {
+  let last = ''
+  await until(() => {
+    const now = readFileSync(filePath, 'utf8')
+    const settled = now !== before && now !== '' && now === last
+    last = now
+    return settled
+  }, what)
+  return last
+}
+
+/** 「不该写盘」的探针：跨过防抖窗口后仍逐字节相同 */
+export async function expectFileUnchanged(
+  filePath: string,
+  expected: string,
+  waitMs = 500
+): Promise<void> {
+  await sleep(waitMs)
+  expect(readFileSync(filePath, 'utf8')).toBe(expected)
 }
