@@ -134,7 +134,11 @@ export function SettingsPanel(): React.JSX.Element {
       id: 'mcp',
       label: t('settings.tabMcp'),
       icon: <Puzzle size={14} />,
-      content: <McpSettings />
+      content: (
+        <Scroll>
+          <McpSettings />
+        </Scroll>
+      )
     },
     {
       id: 'skills',
