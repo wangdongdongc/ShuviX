@@ -8,7 +8,9 @@
  *     （不生效也不遮蔽内置），正是编辑器要消灭的失败模式；
  *   - 文件名由 name 净化派生 —— 净化不到位会写出扫描恰好跳过的文件（点开头/路径分隔符），
  *     即「创建成功但列表里没有」这种最难排查的失败；
- *   - 工具名归一是**读时投影**，磁盘原文不因此被改写（原文编辑器不该背着用户重排文件）。
+ *   - 工具名归一是**读时投影**，磁盘原文不因此被改写（原文编辑器不该背着用户重排文件）；
+ *   - 解析不过的档案**列得出来、删得掉**（listInvalid / deleteByFile）：编辑就是笔记本在自动
+ *     保存，写到一半的档案不该从设置页消失，更不能进注册表或遮蔽同名内置。
  *
  * mock 面照 policyService.test.ts：electron 只需 shell、paths 指向临时目录、logger 静音。
  * 与 policyService 的一处实现差异：AgentService 在**构造期**就把 userDir 捕获进实例
@@ -388,6 +390,130 @@ describe('agentService.isSessionProfile —— 可作子会话档案的判据表
     expect(judge('plain')).toBe(true)
     expect(judge('legacy-off')).toBe(true)
     expect(agentService.getProfile('legacy-off')).not.toHaveProperty('sessionAwareness')
+  })
+})
+
+/**
+ * 设置页「无法解析」分组的数据源与它的删除通道。编辑一份档案就是它的笔记本在自动保存，写到
+ * 一半解析不过是常态：这份文件不能从列表里消失（用户正对着它改），也绝不能进注册表、遮蔽同名
+ * 内置。它解析不出 name，于是删除按文件名寻址 —— 而文件名来自渲染进程。
+ */
+describe('agentService.listInvalid / deleteByFile —— 解析不过的档案', () => {
+  /** 第二种坏法（没有 frontmatter）：理由与 INVALID_MD 互不相同，AS-26 靠它看理由串没串 */
+  const NO_FRONTMATTER_MD = 'Just a paragraph of prose, no frontmatter at all.\n'
+
+  it('AS-24 非法文件带解析器理由列出、合法文件照常进注册表；目录不存在 → []，且不懒创建目录', () => {
+    writeAgentFile('broken.md', INVALID_MD)
+    writeAgentFile('ok.md', agentMd('ok'))
+
+    const invalid = agentService.listInvalid()
+    expect(invalid).toEqual([{ fileName: 'broken.md', error: expect.any(String) }])
+    // 理由就是属性卡横幅上的那句话：丢了它，用户只看到一个不生效的文件名
+    expect(invalid[0].error).toContain("'shuvix-project-awareness' must be a boolean")
+    expect(invalid[0].error).toContain('the whole file is rejected')
+
+    const names = agentService.listAll().map((a) => a.name)
+    expect(names).toContain('ok')
+    expect(names).not.toContain('broken')
+
+    // 首次启动没有这个目录：列一次「无法解析」不该往 ~/.shuvix 里撒一个空目录
+    rmSync(state.dir, { recursive: true, force: true })
+    expect(agentService.listInvalid()).toEqual([])
+    expect(existsSync(state.dir)).toBe(false)
+  })
+
+  it('AS-25 扫描口径与注册表同一套：点文件 / 非 .md / 叫 dir.md 的目录一律不列；后缀大小写不敏感（LOUD.MD 照列、文件名原样）', () => {
+    // 点文件（macOS 的 `._x.md` 之类）与目录要是被列进来，「无法解析」分组里就多出几行
+    // 用户既打不开也修不好的东西；文件名原样，是因为它就是打开与删除的寻址键
+    writeAgentFile('.hidden.md', INVALID_MD)
+    writeAgentFile('notes.txt', INVALID_MD)
+    mkdirSync(join(state.dir, 'dir.md'), { recursive: true })
+    writeAgentFile('LOUD.MD', INVALID_MD)
+
+    expect(agentService.listInvalid().map((f) => f.fileName)).toEqual(['LOUD.MD'])
+  })
+
+  it('AS-26 理由不串：两份各坏各的，各自只带自己的理由', () => {
+    // 理由按文件收集；收集器要是被几份文件共用，第二份坏文件的横幅上会叠着第一份的理由
+    writeAgentFile('bad-flag.md', INVALID_MD)
+    writeAgentFile('no-frontmatter.md', NO_FRONTMATTER_MD)
+
+    const errorOf = Object.fromEntries(agentService.listInvalid().map((f) => [f.fileName, f.error]))
+    expect(Object.keys(errorOf).sort()).toEqual(['bad-flag.md', 'no-frontmatter.md'])
+    expect(errorOf['bad-flag.md']).toContain('must be a boolean')
+    expect(errorOf['bad-flag.md']).not.toContain('no YAML frontmatter block')
+    expect(errorOf['no-frontmatter.md']).toContain('no YAML frontmatter block')
+    expect(errorOf['no-frontmatter.md']).not.toContain('must be a boolean')
+  })
+
+  it('AS-27 写坏的覆盖不遮蔽内置：explore.md 列进无法解析；设置页只有一行未被覆盖的内置 explore；getProfile 拿到的是内置', () => {
+    // 覆盖副本写到一半是最常见的坏文件。它若遮蔽了内置，explore 就在用户打字的这几秒里整个消失
+    writeAgentFile('explore.md', INVALID_MD.replace('name: broken', 'name: explore'))
+
+    expect(agentService.listInvalid().map((f) => f.fileName)).toEqual(['explore.md'])
+    const rows = agentService.listForSettings().filter((a) => a.name === 'explore')
+    expect(rows).toHaveLength(1)
+    expect(rows[0].source).toBe('builtin')
+    expect(rows[0].overridden).toBeFalsy()
+    expect(agentService.getProfile('explore')?.source).toBe('builtin')
+  })
+
+  it('AS-28 [钉现状] 同名两份合法文件：后到的静默跳过 —— 不进无法解析，设置页只有一行用户档案（不断言哪份胜出）', () => {
+    // 与 botService PSv-4 同一个缺口：第二份既不生效也不出现在任何分组里，只在日志里留一句。
+    // 胜者取决于 readdir 的顺序，钉住它只会把平台差异焊进测试
+    writeAgentFile('twin-a.md', agentMd('twin'))
+    writeAgentFile('twin-b.md', agentMd('twin'))
+
+    expect(agentService.listInvalid()).toEqual([])
+    const rows = agentService.listForSettings().filter((a) => a.name === 'twin')
+    expect(rows.map((r) => r.source)).toEqual(['user'])
+  })
+
+  it('AS-29 deleteByFile：越界 / 子路径 / 点文件 / 非 .md / 无后缀 / 不存在一律 not found 且一个文件都不动；目录里的坏文件与好文件都按文件名删得掉', () => {
+    // 这条通道会**删**它指到的文件，而文件名来自渲染进程。能放真文件的都放上：
+    // 拒绝得是白名单拒的，而不是恰好不存在
+    const outside = join(state.dir, '..', 'x.md')
+    writeAgentFile('.hidden.md', agentMd('hidden'))
+    writeAgentFile('x.txt', agentMd('txt'))
+    writeAgentFile('x', agentMd('bare'))
+    mkdirSync(join(state.dir, 'sub'), { recursive: true })
+    writeFileSync(join(state.dir, 'sub', 'x.md'), agentMd('nested'))
+    writeFileSync(outside, agentMd('outside'))
+
+    for (const fileName of [
+      '../x.md',
+      '..\\x.md',
+      'sub/x.md',
+      '.hidden.md',
+      'x.txt',
+      'x',
+      'nope.md'
+    ]) {
+      expect(agentService.deleteByFile(fileName), fileName).toEqual({
+        success: false,
+        error: `Agent file "${fileName}" not found`
+      })
+    }
+    expect(readFileSync(outside, 'utf-8')).toBe(agentMd('outside'))
+    expect(readAgentFile(join('sub', 'x.md'))).toBe(agentMd('nested'))
+    for (const fileName of ['.hidden.md', 'x.txt', 'x']) {
+      expect(existsSync(join(state.dir, fileName)), fileName).toBe(true)
+    }
+
+    // 解析不过的文件没有 name，走不了 deleteAgent —— 这是它唯一的删除入口
+    writeAgentFile('broken.md', INVALID_MD)
+    expect(agentService.deleteByFile('broken.md')).toEqual({ success: true })
+    expect(existsSync(join(state.dir, 'broken.md'))).toBe(false)
+    expect(agentService.listInvalid()).toEqual([])
+
+    // 合法文件按文件名同样删得掉（文件名与 name 刻意不同），删完即从注册表消失
+    writeAgentFile('valid-file.md', agentMd('deletable'))
+    expect(agentService.listAll().some((a) => a.name === 'deletable')).toBe(true)
+    expect(agentService.deleteByFile('valid-file.md')).toEqual({ success: true })
+    expect(existsSync(join(state.dir, 'valid-file.md'))).toBe(false)
+    expect(agentService.listAll().some((a) => a.name === 'deletable')).toBe(false)
+
+    rmSync(outside, { force: true })
   })
 })
 

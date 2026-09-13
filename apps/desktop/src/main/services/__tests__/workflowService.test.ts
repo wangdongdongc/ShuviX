@@ -18,6 +18,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   utimesSync,
   writeFileSync
@@ -324,7 +325,7 @@ describe('workflowService — 模型来源', () => {
 
 describe('workflowService — 目录扫描缓存', () => {
   /**
-   * 缓存指纹是「每份文件的 名字:mtimeMs:size」。为了让「同 mtime 同 size 的覆写」
+   * 缓存指纹是「每份文件的 名字:inode:mtimeMs:size」。为了让「同 mtime 同 size 的覆写」
    * 这一类断言**确定性**成立，两次写盘后都把时间戳钉到同一个整毫秒值上 ——
    * 不这么做就得依赖文件系统的时间精度，写出一条随机器抽风的断言。
    */
@@ -424,6 +425,26 @@ describe('workflowService — 目录扫描缓存', () => {
     firePrompt()
     await waitForEnds('stale', 2)
     expect(outputsOf('stale')).toEqual(['AAA', 'AAA'])
+  })
+
+  it('WF-FP-1 笔记本式原子写（同目录临时文件 + rename）换了 inode → 同 mtime 同 size 也立即生效（上一条的对照）', async () => {
+    // 编辑工作流就是它的笔记本在自动保存，走 writeSessionFile 的「临时文件 + rename」——
+    // 每一笔换一个 inode，指纹里的 ino 就是为它加的。**两次 fire 之间只 rename 一次**：
+    // 临时文件与旧目标同时存在过，inode 必然不同；多来几轮，ext4 可能把刚释放的 inode 再发回来
+    workflowService.init()
+    const path = join(state.dir, 'atomic.md')
+    writeFileSync(path, echoWf('atomic', 'AAA'))
+    pin('atomic.md')
+    firePrompt()
+    await waitForEnds('atomic', 1)
+
+    const tmpPath = join(state.dir, `.atomic.md.${process.pid}.tmp`)
+    writeFileSync(tmpPath, echoWf('atomic', 'BBB'))
+    renameSync(tmpPath, path)
+    pin('atomic.md')
+    firePrompt()
+    await waitForEnds('atomic', 2)
+    expect(outputsOf('atomic').sort()).toEqual(['AAA', 'BBB'])
   })
 
   it('缓存不影响设置页视图：非法文件立刻出现在 listInvalid，修好后立刻消失', async () => {

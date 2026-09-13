@@ -7,19 +7,34 @@
  *
  *   PSv-1…8   **扫描与解析**：目录里有什么、坏文件去哪、一条会话绑的是谁；
  *   PSv-19    **原子写**：新建落盘不给扫描读到半份文件的机会；
- *   PSv-20…26 **增删与按文件名寻址**：新建的文件名派生、删除的边界、文件名白名单、广播。
+ *   PSv-20…26 **增删与按文件名寻址**：新建的文件名派生、删除的边界、文件名白名单、广播；
+ *   PSv-27…40 **改名观察**：笔记本写入的回执（noteWriting / noteWritten）与每一次扫描怎样把
+ *              会话绑定从旧名跟到新名、哪些情况必须不迁，以及 `bot.changed` 的合并窗口。
  *
  * **fs 是真的** —— 扫描扫的是真目录，换成假 fs 一条也测不到。
  * `readFileSync` / `existsSync` 只是套了一层可数的壳（同
- * instruction/__tests__/instructionInjector.test.ts 的手法）：前者给 PSv-6 造一次读失败，
- * 后者给 PSv-24 证明「白名单排在任何 fs 调用之前」。
+ * instruction/__tests__/instructionInjector.test.ts 的手法）：前者给 PSv-6 造一次读失败、
+ * 给 PSv-36 数「这一笔前有没有重扫」，后者给 PSv-24 证明「白名单排在任何 fs 调用之前」。
  *
  * mock 面：sessionDao / 广播 / logger / electron。`appEventBus` 保持**真实** ——
- * PSv-26 数的就是真事件。
+ * PSv-26 与 PSv-39/40 数的就是真事件。
+ *
+ * 改名记录（namesByPath）是进程内状态，**不随目录重建而清空** —— 只有扫描发现目录不存在才清。
+ * 所以全局 beforeEach 先删目录、扫一次（等于「重启」）、再建目录：否则上一个用例记下的名字
+ * 会被下一个用例当成改名的起点。
  */
-import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest'
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach, vi } from 'vitest'
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync
+} from 'fs'
 import { join } from 'path'
+import type { AppEvent } from '@shuvix/chat-protocol/appEvents'
 
 const dirs = vi.hoisted(() => {
   const tmp = (process.env.TMPDIR || process.env.TEMP || '/tmp').replace(/[\\/]+$/, '')
@@ -64,6 +79,7 @@ vi.mock('fs', async (importOriginal) => {
 })
 
 import { botService } from '../botService'
+import { appEventBus } from '../../utils/appEventBus'
 
 /** 一份最小可解析的 bot md */
 function md(
@@ -135,6 +151,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   rmSync(dirs.base, { recursive: true, force: true })
+  botService.listAll() // scanning a missing dir clears namesByPath ("restart")
   mkdirSync(dirs.bots, { recursive: true })
   failReadPath = null
   for (const m of Object.values(mocks)) m.mockClear()
@@ -438,5 +455,328 @@ describe('PSv-26 —— bot.changed 广播', () => {
         expect(botService.deleteByFile('../x.md').success).toBe(false)
       })
     ).toBe(0)
+  })
+})
+
+// ────────────────────── PSv-27…40：改名观察 ──────────────────────
+
+/**
+ * 编辑一份 bot 就是它的笔记本在自动保存：没有「点保存」那一刻可以拿新旧两份文本对照，把 `name`
+ * 从 ranger 改成 hunter，盘上依次出现的是 h、hu、hun……所以迁移挂在**扫描**上，一步一步跟过去。
+ * 这一组钉的是这条跟随的边界：什么时候迁、迁到哪、什么时候必须不迁。
+ *
+ * `notebookWrite` 复刻 registryNotes.observeRegistryWrite 包住的那一笔：noteWriting → 落盘 →
+ * noteWritten。假时钟只为 `bot.changed` 的 300ms 合并窗口（PSv-39/40）；每个用例结束时把挂着的
+ * 定时器跑掉再换回真时钟，不让一个窗口漏进别的用例。
+ */
+describe('PSv-27…40 —— 改名观察：会话绑定跟着文件里的名字走', () => {
+  /** 真 appEventBus 上观察到的全部事件 */
+  let events: AppEvent[] = []
+  let unsubscribe: () => void = () => {}
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    events = []
+    unsubscribe = appEventBus.subscribe((e) => {
+      events.push(e)
+    })
+  })
+
+  afterEach(() => {
+    vi.runOnlyPendingTimers()
+    vi.useRealTimers()
+    unsubscribe()
+  })
+
+  const scoutPath = join(dirs.bots, 'scout.md')
+  const UNPARSABLE = '---\n[unclosed\n---\nbody'
+
+  /** 笔记本的一笔写入 —— registryNotes.observeRegistryWrite 包住的就是这三步 */
+  function notebookWrite(fileBase: string, text: string): void {
+    const filePath = join(dirs.bots, `${fileBase}.md`)
+    botService.noteWriting(filePath)
+    writeFileSync(filePath, text)
+    botService.noteWritten()
+  }
+
+  /** 用例中途「重启」：与全局 beforeEach 同一个做法，清掉进程内的改名记录 */
+  function restart(): void {
+    rmSync(dirs.base, { recursive: true, force: true })
+    botService.listAll()
+    mkdirSync(dirs.bots, { recursive: true })
+  }
+
+  /** updateSettings 收到过的 [会话 id, 补丁]（按调用序） */
+  const rewrites = (): unknown[][] => mocks.updateSettings.mock.calls
+  /** broadcast 收到过的会话 id（按调用序） */
+  const broadcasted = (): string[] => mocks.broadcast.mock.calls.map((c) => String(c[0]))
+
+  /** a.md = ranger、b.md = scout，各绑一条会话；记下基线后把 a 改成 scout —— 两份文件同名 */
+  function collide(): void {
+    put('a', md('ranger'))
+    put('b', md('scout'))
+    seedSessions([
+      { id: 's1', bot: 'ranger' },
+      { id: 's2', bot: 'scout' }
+    ])
+    botService.listAll()
+    notebookWrite('a', md('scout'))
+  }
+
+  /** a.md = ranger（绑着 s1）记下基线后复制出 a-copy.md —— 同名两份 —— 再扫一遍 */
+  function copyThenScan(): void {
+    put('a', md('ranger'))
+    seedSessions([{ id: 's1', bot: 'ranger' }])
+    botService.listAll()
+    copyFileSync(join(dirs.bots, 'a.md'), join(dirs.bots, 'a-copy.md'))
+    botService.listAll()
+  }
+
+  it('PSv-27 任何一次扫描都在观察改名：文件里的名字变了 → 只迁绑着旧名的会话，每条迁过的会话广播一次配置变更', () => {
+    // 迁移挂在扫描上，而不只挂在笔记本回执上：外部编辑器、bot 自己的 `edit`、侧栏聚焦重扫，
+    // 谁先扫到谁迁。s2 绑的 `scout` 恰好是文件名 —— 身份是 frontmatter name，文件名从来不是
+    put('scout', md('ranger'))
+    seedSessions([{ id: 's1', bot: 'ranger' }, { id: 's2', bot: 'scout' }, { id: 's3' }])
+
+    botService.listAll() // 进程内第一次见到这份文件：只记基线
+    expect(mocks.updateSettings).not.toHaveBeenCalled()
+
+    put('scout', md('hunter'))
+    botService.listAll()
+    expect(rewrites()).toEqual([['s1', { bot: 'hunter' }]])
+    expect(broadcasted()).toEqual(['s1'])
+    expect(boundBotOfSession('s1')).toBe('hunter')
+    expect(boundBotOfSession('s2')).toBe('scout')
+    expect(boundBotOfSession('s3')).toBeUndefined()
+  })
+
+  it('PSv-28 打字途中的连环改名：h → hu → hun → hunter 每一步都跟过去，最后停在 hunter，没有会话留在中间名上', () => {
+    // 「等名字稳定下来再迁」做不到（没有那一刻）；而漏掉任何一步，会话就留在一个已经没有文件
+    // 在用的名字上 —— 记录往前走了，之后的改名只迁记录里的旧名，再也迁不回来
+    put('scout', md('ranger'))
+    seedSessions([{ id: 's1', bot: 'ranger' }])
+    botService.listAll()
+
+    for (const name of ['h', 'hu', 'hun', 'hunter']) notebookWrite('scout', md(name))
+
+    expect(rewrites()).toEqual([
+      ['s1', { bot: 'h' }],
+      ['s1', { bot: 'hu' }],
+      ['s1', { bot: 'hun' }],
+      ['s1', { bot: 'hunter' }]
+    ])
+    expect(sessionRows.map((r) => r.settings.bot)).toEqual(['hunter'])
+    expect(botService.get('hunter')?.basePath).toBe(scoutPath)
+  })
+
+  it('PSv-29 中途写出一版解析不过的：不迁、记录不丢；修好之后从最后一个合法名字一次迁到位', () => {
+    // 删掉 `name:` 重打、YAML 写到一半，都会让某一笔解析不过。把它当成「文件没了」清掉记录，
+    // 修好的那一笔就成了第一次见到 —— 迁移随之漏掉
+    put('scout', md('ranger'))
+    seedSessions([{ id: 's1', bot: 'ranger' }])
+    botService.listAll()
+
+    notebookWrite('scout', UNPARSABLE)
+    expect(botService.listWithInvalid().invalid.map((f) => f.fileName)).toContain('scout.md')
+    expect(boundBotOfSession('s1')).toBe('ranger')
+    expect(mocks.updateSettings).not.toHaveBeenCalled()
+
+    notebookWrite('scout', md('hunter'))
+    expect(rewrites()).toEqual([['s1', { bot: 'hunter' }]])
+  })
+
+  it('PSv-30 进程内第一次见到时就解析不过：没有「上一个名字」可比，修好后的名字只记作基线、不迁', () => {
+    // 从没见过它合法的样子：把绑着别的名字的会话迁给第一个合法名字，就是在猜
+    put('scout', UNPARSABLE)
+    seedSessions([{ id: 's1', bot: 'ranger' }])
+
+    notebookWrite('scout', md('hunter'))
+    expect(mocks.updateSettings).not.toHaveBeenCalled()
+    expect(boundBotOfSession('s1')).toBe('ranger')
+  })
+
+  it('PSv-31 改成另一份文件正在用的名字：不迁（记录停在旧名）；再改成独占的名字才一次迁过去', () => {
+    // 迁过去等于把 s1 交给一个说不清是谁的名字：同名两份，扫描只认先到的那一份（PSv-4），
+    // 而先到取决于 readdir 的顺序 —— 所以这里不断言哪份文件胜出
+    collide()
+    expect(mocks.updateSettings).not.toHaveBeenCalled()
+    expect(botService.listAll().map((e) => e.file.name)).toEqual(['scout'])
+    expect(boundBotOfSession('s1')).toBe('ranger')
+    expect(boundBotOfSession('s2')).toBe('scout')
+
+    notebookWrite('a', md('scout2'))
+    expect(rewrites()).toEqual([['s1', { bot: 'scout2' }]])
+    expect(boundBotOfSession('s2')).toBe('scout')
+  })
+
+  it('PSv-32 撞名解开（另一份被删）：停在旧名上的记录补迁到那个此刻独占的名字', () => {
+    collide()
+    rmSync(join(dirs.bots, 'b.md'))
+    botService.listAll()
+
+    expect(rewrites()).toEqual([['s1', { bot: 'scout' }]])
+    expect(boundBotOfSession('s1')).toBe('scout')
+    expect(boundBotOfSession('s2')).toBe('scout')
+  })
+
+  it('PSv-33 复制出一份再改副本的名字：旧名还有原件在用 → 会话留给原件，不迁', () => {
+    // 「复制一份改改看」是做新 bot 最顺手的办法；迁过去等于让原件的会话全部改投副本
+    copyThenScan()
+
+    notebookWrite('a-copy', md('hunter'))
+    expect(mocks.updateSettings).not.toHaveBeenCalled()
+    expect(boundBotOfSession('s1')).toBe('ranger')
+    expect(botService.get('ranger')?.basePath).toBe(join(dirs.bots, 'a.md'))
+  })
+
+  it('PSv-34 复制出一份再改原件的名字：旧名由副本接着用 → 同样不迁，ranger 此后指向副本', () => {
+    // 判据是「旧名此刻还有没有文件在用」，不是「改的是哪一份」—— 两个方向同一个答案
+    copyThenScan()
+
+    notebookWrite('a', md('hunter'))
+    expect(mocks.updateSettings).not.toHaveBeenCalled()
+    expect(boundBotOfSession('s1')).toBe('ranger')
+    expect(botService.get('ranger')?.basePath).toBe(join(dirs.bots, 'a-copy.md'))
+  })
+
+  it('PSv-35 重启后的第一笔写：noteWriting 先把写入前的名字记成基线，改名照迁；跳过 noteWriting 的同一笔迁不了（对照组）', () => {
+    // 改名记录只在进程内。重启后打开 bot 就改名，第一次扫描看到的已经是新名字 —— 写入之前
+    // 补的这一次扫描，是「旧名」唯一的来源
+    put('scout', md('ranger'))
+    seedSessions([{ id: 's1', bot: 'ranger' }])
+
+    botService.noteWriting(scoutPath)
+    put('scout', md('hunter'))
+    botService.noteWritten()
+    expect(rewrites()).toEqual([['s1', { bot: 'hunter' }]])
+    expect(boundBotOfSession('s1')).toBe('hunter')
+
+    // 对照组：再「重启」一次，同样的盘面、同样的一笔，只是没有 noteWriting
+    restart()
+    mocks.updateSettings.mockClear()
+    put('scout', md('ranger'))
+    seedSessions([{ id: 's1', bot: 'ranger' }])
+    put('scout', md('hunter'))
+    botService.noteWritten()
+    expect(mocks.updateSettings).not.toHaveBeenCalled()
+    expect(boundBotOfSession('s1')).toBe('ranger')
+  })
+
+  it('PSv-36 noteWriting 只为没见过的文件扫描：见过的零读盘；没见过的扫一遍、不抛、不迁', () => {
+    // 自动保存每 200ms 一笔：每笔之前都把整个目录重读一遍是白花的 IO —— 基线只在缺的时候补
+    put('scout', md('ranger'))
+    seedSessions([{ id: 's1', bot: 'ranger' }])
+    botService.listAll()
+
+    vi.mocked(readFileSync).mockClear()
+    botService.noteWriting(scoutPath)
+    expect(readFileSync).not.toHaveBeenCalled()
+
+    expect(() => botService.noteWriting(join(dirs.bots, 'unknown.md'))).not.toThrow()
+    expect(readFileSync).toHaveBeenCalled()
+    expect(mocks.updateSettings).not.toHaveBeenCalled()
+  })
+
+  it('PSv-37 文件删了记录就丢：同一路径再建一份（换个名字）是一个新 bot，不是改名 —— rm 后扫描 / delete / deleteByFile 三种删法都一样', () => {
+    // 记录要是留着，新建的 scout.md 会被当成「ranger 改名了」，ranger 的会话全部交给一个毫不
+    // 相干的新 bot。delete / deleteByFile 删完**不经扫描**就重建：证明是删除自己清的记录
+    const removals: Array<[string, () => void, string]> = [
+      [
+        'rm + listAll',
+        () => {
+          rmSync(scoutPath)
+          botService.listAll()
+        },
+        'hunter'
+      ],
+      ['delete', () => expect(botService.delete('ranger')).toEqual({ success: true }), 'seeker'],
+      [
+        'deleteByFile',
+        () => expect(botService.deleteByFile('scout.md')).toEqual({ success: true }),
+        'tracker'
+      ]
+    ]
+    for (const [how, remove, nextName] of removals) {
+      restart()
+      put('scout', md('ranger'))
+      seedSessions([{ id: 's1', bot: 'ranger' }])
+      botService.listAll()
+
+      remove()
+      put('scout', md(nextName))
+      botService.listAll()
+      expect(mocks.updateSettings, how).not.toHaveBeenCalled()
+      expect(boundBotOfSession('s1'), how).toBe('ranger')
+    }
+  })
+
+  it('PSv-38 迁移逐会话隔离：一条写失败不拖累其余；会话表整个读不出来，扫描照样返回新名字、不抛', () => {
+    // 共用一个 try 的话，s2 一失败 s3 就留在旧名上 —— 而留在旧名上的后果是这个 bot 从那条
+    // 会话里消失（forSession → null）。扫描是侧栏与建根 Agent 的必经之路，更不能因为迁移而抛
+    put('scout', md('ranger'))
+    seedSessions([
+      { id: 's1', bot: 'ranger' },
+      { id: 's2', bot: 'ranger' },
+      { id: 's3', bot: 'ranger' }
+    ])
+    mocks.updateSettings.mockImplementation((id: string, patch: { bot: string }) => {
+      if (id === 's2') throw new Error('SQLITE_BUSY: database is locked')
+      const row = sessionRows.find((r) => r.id === id)
+      if (row) row.settings.bot = patch.bot
+    })
+    botService.listAll()
+
+    notebookWrite('scout', md('hunter'))
+    expect(boundBotOfSession('s1')).toBe('hunter')
+    expect(boundBotOfSession('s2')).toBe('ranger')
+    expect(boundBotOfSession('s3')).toBe('hunter')
+    expect(broadcasted()).toEqual(['s1', 's3'])
+
+    // 会话表整个读不出来：迁移放弃，扫描本身不受影响
+    restart()
+    put('scout', md('ranger'))
+    botService.listAll()
+    mocks.findAll.mockImplementation(() => {
+      throw new Error('SQLITE_CORRUPT: database disk image is malformed')
+    })
+    put('scout', md('hunter'))
+    let names: string[] = []
+    expect(() => {
+      names = botService.listAll().map((e) => e.file.name)
+    }).not.toThrow()
+    expect(mocks.findAll).toHaveBeenCalled()
+    expect(names).toEqual(['hunter'])
+  })
+
+  it('PSv-39 bot.changed 合并窗口：迁移同步发生；广播在最后一笔之后满 300ms 才发、只发一次；窗口过后再写一笔再发一次', () => {
+    // 自动保存每 200ms 落一次盘：每笔都广播，侧栏分组与每条 bot 会话的身份胶囊就跟着一直重查。
+    // 迁移却不能跟着等 —— 开着的那条会话要立刻看到新名字
+    put('scout', md('ranger'))
+    seedSessions([{ id: 's1', bot: 'ranger' }])
+    botService.listAll()
+
+    notebookWrite('scout', md('hunter'))
+    expect(boundBotOfSession('s1')).toBe('hunter')
+    vi.advanceTimersByTime(100)
+    notebookWrite('scout', md('hunter', { body: '第二笔。' }))
+    vi.advanceTimersByTime(100)
+    notebookWrite('scout', md('hunter', { body: '第三笔。' }))
+
+    vi.advanceTimersByTime(299)
+    expect(events).toEqual([])
+    vi.advanceTimersByTime(1)
+    expect(events).toEqual([{ type: 'bot.changed' }])
+
+    botService.noteWritten()
+    vi.advanceTimersByTime(300)
+    expect(events).toEqual([{ type: 'bot.changed' }, { type: 'bot.changed' }])
+  })
+
+  it('PSv-40 只有 noteWriting（写还没落盘）不广播', () => {
+    // 广播说的是「注册表变了」；写之前补的那次基线扫描什么都没改
+    put('scout', md('ranger'))
+    botService.noteWriting(scoutPath)
+    vi.advanceTimersByTime(1000)
+    expect(events).toEqual([])
   })
 })
