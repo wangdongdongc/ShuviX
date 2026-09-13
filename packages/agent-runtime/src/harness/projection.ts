@@ -62,8 +62,7 @@ export interface InlineTokensSidecar {
  * 回退/清空要**逐条跨越**它们才能落在真正的消息上：停在一条孤儿侧车上，它就会被
  * 下一条到达的消息当成自己的侧车消费掉（见 messageService.resolveRollbackTarget）。
  *
- * v2 起只剩内联 token 一种：bot 的署名侧车随「群聊转写迁进 chat_messages 表」一并
- * 退场 —— 「谁说的」在那里是一列，不再需要靠「紧邻配对」把它绑到一条 assistant entry 上。
+ * v2 起只剩内联 token 一种：旧 Bots 的署名侧车已随那套群聊转写一并退场。
  */
 /**
  * 系统通知侧车：自动续跑（后台任务/子会话跑完）起的那一轮，紧随其后的 user entry

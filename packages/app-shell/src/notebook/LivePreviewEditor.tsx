@@ -576,11 +576,9 @@ export function LivePreviewEditor({
       <FrontmatterFieldPicker
         fieldKey={ctx.key}
         markerType={ctx.markerType}
-        kind={ctx.kind === 'csv' ? 'csv' : ctx.kind === 'botPipeline' ? 'botPipeline' : 'select'}
+        kind={ctx.kind === 'csv' ? 'csv' : 'select'}
         value={ctx.value}
-        mapping={ctx.mapping ?? null}
         onChange={ctx.onChange}
-        onPatch={ctx.onPatch}
         readOnly={ctx.readOnly}
       />
     )

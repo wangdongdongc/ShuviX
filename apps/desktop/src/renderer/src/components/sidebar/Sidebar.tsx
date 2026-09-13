@@ -70,10 +70,10 @@ export function Sidebar(): React.JSX.Element {
 
   const listWikiFiles = useCallback(() => window.api.wiki.listFiles(), [])
 
-  /** bots 能力注入（窄投影）—— 注入即点亮分组里的「新建 Bot 会话」入口与 bot 单选 */
+  /** bots 能力注入（窄投影）—— 注入即点亮项目分组菜单里的「新建 Bot 会话」入口与 bot 单选 */
   const botsAdapter = useMemo(
     () => ({
-      list: () => window.api.bot.list(),
+      list: async () => (await window.api.bot.list()).bots,
       openFolder: () => window.api.bot.openFolder()
     }),
     []
@@ -81,18 +81,13 @@ export function Sidebar(): React.JSX.Element {
 
   /**
    * Bots 分组能力注入 —— 清单 = 合法 bot + 无法解析的文件；新建会话与删除在这里落地
-   * （删除先弹确认框，见 overlays；真删掉后 bot.changed 事件让分组重扫）。
+   * （删除先弹确认框，见 overlays；真删掉后 bot.changed 事件让分组重扫）。新建的是一条
+   * **普通有根会话**（`settings.bot`，根档案由形态推导成基座 `bot`）。
    * 引用必须稳定（useMemo）：分组以 adapter 为扫描依赖。
    */
   const botGroupAdapter = useMemo<BotGroupAdapter>(
     () => ({
-      list: async () => {
-        const [bots, invalid] = await Promise.all([
-          window.api.bot.list(),
-          window.api.bot.listInvalid()
-        ])
-        return { bots, invalid }
-      },
+      list: () => window.api.bot.list(),
       openFolder: () => window.api.bot.openFolder(),
       newSession: async (name) => {
         const session = await getChatApi().session.create({ projectId: null, bot: name })

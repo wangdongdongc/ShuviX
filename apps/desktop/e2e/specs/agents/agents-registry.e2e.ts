@@ -33,12 +33,12 @@ interface AgentRow {
 const listAgents = (): Promise<AgentRow[]> => app.main.eval('window.api.subAgent.list()')
 
 describe('内置档案', () => {
-  it('十三个内置齐全，上下文注入默认全开（notebook 只开项目感知、派发专用档案全关），描述非空；无启用开关字段', async () => {
+  it('十三个内置齐全，上下文注入默认全开（notebook/bot 只开项目感知、派发专用档案全关），描述非空；无启用开关字段', async () => {
     const builtins = (await listAgents()).filter((a) => a.source === 'builtin')
-    // bot-notes 随「笔记」这个概念一并退场（v3）：bot 自己维护自己的正文，
-    // 由任务段槽位里那份普通 agent 用文件工具就地改，没有专职的笔记段了
+    // bot 是 bot 会话根 Agent 的基座（bot 用 edit 自己维护自己那份 md，没有专职的笔记 agent）；
+    // 旧 Bots 的意图门控 bot-intent 随管线一并拆除
     expect(builtins.map((a) => a.name).sort()).toEqual([
-      'bot-intent',
+      'bot',
       'browser',
       'chat',
       'coding',
@@ -53,12 +53,14 @@ describe('内置档案', () => {
       'work'
     ])
     // 派发专用的窄档案两样都不要：AGENTS.md/CLAUDE.md 是写代码的工程约定，
-    // 而给一条聊天消息定意图（bot-intent）、拟一个标题（titler）都不是工程活，
-    // 项目上下文对它们只是噪声
-    const narrow = ['titler', 'bot-intent']
+    // 而拟一个标题（titler）不是工程活，项目上下文对它只是噪声
+    const narrow = ['titler']
     for (const a of builtins) {
-      // notebook 是笔记本会话根 Agent 的基座：开项目感知（笔记就写在项目里），但不吃指令文件
-      const instructionsOn = a.name !== 'notebook' && !narrow.includes(a.name)
+      // notebook 是笔记本会话根 Agent 的基座：开项目感知（笔记就写在项目里），但不吃指令文件。
+      // bot（bot 会话的基座）同一取舍：AGENTS.md/CLAUDE.md 是写代码的工程约定，而真正
+      // 写代码的是它派出去的子会话 —— 那条会话自己会吃这份文件
+      const noInstructions = ['notebook', 'bot']
+      const instructionsOn = !noInstructions.includes(a.name) && !narrow.includes(a.name)
       const awarenessOn = !narrow.includes(a.name)
       // 指令文件清单顺序即优先级 —— 内置沿用改制前的 AGENTS.md 优先、CLAUDE.md 次之
       expect(a.instructionFiles, a.name).toEqual(instructionsOn ? ['AGENTS.md', 'CLAUDE.md'] : [])

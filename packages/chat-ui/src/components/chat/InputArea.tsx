@@ -1,4 +1,3 @@
-import { isChatSessionSettings } from '@shuvix/chat-protocol/chatSession'
 import { getSessionChannelApi, getHostApi, useChatHost } from '@shuvix/chat-ui'
 import { useRef, useEffect, useLayoutEffect, useState, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -90,11 +89,6 @@ export function InputArea({
    * 彻底停下才出生 —— 这期间任何发送都无处可去，直接拦在输入框。
    */
   const isAgentClosing = useChatStore(selectIsAgentClosing)
-  // 聊天会话（绑定了 bot）：无根 Agent —— 档案切换器与上下文用量环都是关于根 Agent 的
-  // UI，一并隐藏（A0）。会话形态创建时定死，此值对同一会话恒定
-  const isBotSession = useChatStore((s) =>
-    isChatSessionSettings(s.sessions.find((x) => x.id === s.activeSessionId)?.settings)
-  )
   // 待处理输入请求（步进器选中的那条）——非空时输入框改投「其它」反馈，并按 kind 换描边色
   const activePendingInput = useChatStore(selectActivePendingInput)
   const pendingTone: 'warning' | 'accent' | null = !activePendingInput
@@ -344,15 +338,8 @@ export function InputArea({
   ): Promise<void> => {
     resetComposer()
     const store = useChatStore.getState()
-    // 聊天会话（绑定了 bot）**不置流式态**：它没有根 Agent，永远不会发 agent_end / error /
-    // agent_closing，乐观置位之后就再也没人来清 —— 第一条消息之后输入框永久锁死，
-    // 回车会被当成「排队」而网关对聊天会话安静早退，用户按下去毫无反应。
-    // 设计明写「永不锁输入」；bot 的忙碌状态由 bot_activity 单独呈现（A2）
-    const isBotSession = isChatSessionSettings(store.sessions.find((x) => x.id === sid)?.settings)
-    if (!isBotSession) {
-      store.setIsStreaming(sid, true)
-      store.clearStreamingContent(sid)
-    }
+    store.setIsStreaming(sid, true)
+    store.clearStreamingContent(sid)
     // 后端直接使用附带的图片 + 内联 Token，不再重复查询
     await getSessionChannelApi().agent.prompt({
       sessionId: sid,
@@ -594,10 +581,7 @@ export function InputArea({
   const pickers = (
     <div className="flex-shrink-0 flex items-center gap-1.5">
       <ModelPicker readonly={!canEdit} />
-      {/* 工具选择器对聊天会话隐藏：任务段的 agent 就是 bot 自己，工具来自它 md 里的
-          shuvix-tools —— 一个会话级的工具勾选在这里不表达任何东西
-          （后端对应守卫在 DefaultChatGateway.setEnabledTools） */}
-      {canEdit && !isBotSession && <ToolPicker />}
+      {canEdit && <ToolPicker />}
     </div>
   )
 
@@ -819,9 +803,8 @@ export function InputArea({
             <span className="flex-1" />
 
             {/* 上下文用量环：填充 = 已用占比（≥75% 警示、≥90% 告警）；hover 出精确数字。
-                纯只读指示器 —— 运行时 Agent 快照归设置页的「监视器 → 智能体」，这里不再是入口。
-                聊天会话隐藏：没有单一 LLM 吃整棵树，「上下文用量」对它没有定义（A0） */}
-            {!isBotSession && (maxContextTokens > 0 || usedContextTokens !== null) && (
+                纯只读指示器 —— 运行时 Agent 快照归设置页的「监视器 → 智能体」，这里不再是入口。 */}
+            {(maxContextTokens > 0 || usedContextTokens !== null) && (
               <span
                 aria-label={ctxTooltip}
                 className="relative group/token p-1 rounded flex items-center"

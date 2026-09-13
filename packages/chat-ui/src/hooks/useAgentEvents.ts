@@ -1,5 +1,4 @@
-import { isChatSessionSettings } from '@shuvix/chat-protocol/chatSession'
-import { getChatApi, getHostApi, getSessionChannelApi, useChatHost } from '@shuvix/chat-ui'
+import { getChatApi, getSessionChannelApi, useChatHost } from '@shuvix/chat-ui'
 import { useEffect, useCallback, useRef } from 'react'
 import type { ChatEvent } from '@shuvix/chat-protocol/events'
 import type { ErrorEventMessage } from '@shuvix/chat-protocol/types/chatMessage'
@@ -265,15 +264,6 @@ export function useAgentEvents(): void {
         // 一次 LLM 调用落盘：清除流式内容 + 按 id upsert 这张卡（单次 set，避免中间帧闪空）
         const card = sid === store.activeSessionId ? JSON.parse(event.message) : null
         store.handleAssistantMessage(sid, card)
-        // 聊天会话正被看着：bot 回复即到即读（服务端幂等，已 0 不空转广播）。
-        // 只有 bot 会话在维护未读，有根会话不发这趟 IPC
-        if (
-          card &&
-          isChatSessionSettings(store.sessions.find((x) => x.id === sid)?.settings) &&
-          getHostApi()?.session.markRead
-        ) {
-          void getHostApi()?.session.markRead?.(sid)
-        }
         break
       }
 
@@ -295,17 +285,6 @@ export function useAgentEvents(): void {
           followUp: event.followUp,
           nextTurn: event.nextTurn
         })
-        break
-
-      case 'bot_activity':
-        // 聊天会话：bot 在飞活动（「正在输入」行的数据源）。与 queue_update 同理不做
-        // 活跃会话门 —— 面板按会话读，切回来时要能看到还在跑的东西
-        store.handleBotActivity(sid, event)
-        break
-
-      case 'bot_mailbox':
-        // 聊天会话：mailbox 整份快照（用户消息下方排队回执的数据源）
-        store.setBotMailbox(sid, { active: event.active, queued: event.queued })
         break
 
       case 'input_request':
@@ -403,9 +382,6 @@ export function useAgentEvents(): void {
 
       // ─── 消息列表重载（后端整体改写，如 session 工具压缩归档后） ───
       case 'messages_reloaded':
-        // 回退/清空把消息整体改写了 —— 聊天会话一切在飞展示（正在输入 / 排队回执）随之作废。
-        // 不做活跃门：后台会话的 stale 展示等到切回来才清就晚了
-        store.clearBotLiveState(sid)
         if (sid === store.activeSessionId) {
           const msgs = await getSessionChannelApi().message.list(sid)
           store.setMessages(msgs)

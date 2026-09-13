@@ -1,14 +1,9 @@
 /**
- * BotSessionDialog —— 选一个 bot（单选，点行即选定），两个场合共用：
+ * BotSessionDialog —— 选一个 bot 新建会话（单选，点行即建）。
  *
- *  - **create**：新建聊天会话。bot 必须在创建那一刻选定（会话形态由 settings.bot 定死，
- *    建好后不能转），所以这里是唯一的选择时机；项目归属跟随发起的分组，不在框内再选。
- *  - **bind**：给一个还没绑定 bot 的聊天会话选 bot —— 群聊时代遗留的会话没有做迁移，
- *    靠这里重新选一个（`session.setBot`）。不展示项目区（会话归属早已定死）。
- *
- * 会话是一对一的，所以没有多选、没有成员管理、没有幽灵行：一个会话就一个 bot。
- * bot 列表由宿主注入的 bots 能力提供（桌面 window.api.bot.list；扩展 v1 无 bot，
- * 不注入即整条入口不渲染）。
+ * bot 必须在创建那一刻选定（会话形态由 settings.bot 定死，建好后不能换绑），所以这里是唯一的
+ * 选择时机；项目归属跟随发起的分组，不在框内再选。bot 列表由宿主注入的 bots 能力提供
+ * （桌面 window.api.bot.list；扩展没有 bot，不注入即整条入口不渲染）。
  */
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -30,9 +25,7 @@ export interface SidebarBotsAdapter {
 }
 
 export interface BotSessionDialogProps {
-  /** create = 新建聊天会话（默认）；bind = 给既有会话绑定 bot */
-  mode?: 'create' | 'bind'
-  /** 发起分组的项目（临时组为 null —— 此时提示 bot 的文件操作落在主目录）。bind 模式不展示 */
+  /** 发起分组的项目（临时组为 null —— 此时提示活会在临时工作区里干） */
   projectId: string | null
   /** 项目显示名（projectId 非空时由宿主查好传入） */
   projectName?: string
@@ -45,7 +38,6 @@ export interface BotSessionDialogProps {
 }
 
 export function BotSessionDialog({
-  mode = 'create',
   projectId,
   projectName,
   bots,
@@ -115,16 +107,12 @@ export function BotSessionDialog({
       <div
         className="w-[420px] max-w-[90vw] bg-bg-primary border border-border-secondary rounded-xl shadow-xl max-h-[80vh] flex flex-col dialog-panel"
         onClick={(e) => e.stopPropagation()}
-        data-bot-dialog={mode}
+        data-bot-dialog="create"
       >
         <div className="flex items-start justify-between px-4 pt-3 pb-2">
           <div className="min-w-0">
-            <h3 className="text-sm font-semibold text-text-primary">
-              {t(mode === 'bind' ? 'bot.bindTitle' : 'bot.dialogTitle')}
-            </h3>
-            <p className="text-xs text-text-tertiary mt-0.5">
-              {t(mode === 'bind' ? 'bot.bindSubtitle' : 'bot.dialogSubtitle')}
-            </p>
+            <h3 className="text-sm font-semibold text-text-primary">{t('bot.dialogTitle')}</h3>
+            <p className="text-xs text-text-tertiary mt-0.5">{t('bot.dialogSubtitle')}</p>
           </div>
           <button
             onClick={handleClose}
@@ -173,18 +161,16 @@ export function BotSessionDialog({
           )}
         </div>
 
-        {/* 项目归属 + 无项目提示（仅新建：bind 场合会话归属早已定死） */}
-        {mode === 'create' && (
-          <div className="px-4 py-2 border-t border-border-secondary/50 text-xs text-text-tertiary">
-            {t('bot.dialogProject')}:{' '}
-            <span className="text-text-secondary">{projectName ?? t('bot.dialogNoProject')}</span>
-            {projectId === null && (
-              <p className="mt-1.5 px-2.5 py-1.5 rounded-md bg-warning/10 text-warning text-[11px] leading-relaxed">
-                {t('bot.dialogNoProjectHint')}
-              </p>
-            )}
-          </div>
-        )}
+        {/* 项目归属 + 无项目提示 */}
+        <div className="px-4 py-2 border-t border-border-secondary/50 text-xs text-text-tertiary">
+          {t('bot.dialogProject')}:{' '}
+          <span className="text-text-secondary">{projectName ?? t('bot.dialogNoProject')}</span>
+          {projectId === null && (
+            <p className="mt-1.5 px-2.5 py-1.5 rounded-md bg-warning/10 text-warning text-[11px] leading-relaxed">
+              {t('bot.dialogNoProjectHint')}
+            </p>
+          )}
+        </div>
 
         {error && (
           <div className="mx-4 my-2 px-3 py-2 rounded-lg bg-red-500/10 text-red-500 text-[11px] whitespace-pre-wrap break-words">

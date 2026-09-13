@@ -11,14 +11,9 @@
  *     当成真相。派生 agent 的询问带根会话 id 进来、答复只带 requestId 出去，两个方向
  *     本来就不必落在同一把钥匙上。
  *
- * 还顺带钉住 M7′ 的互斥前提：**聊天会话恒无根 Agent**。守在 `SessionManager.create` 那一处，
- * `agents` 表里就永远不会有它的条目，于是这份参与方对聊天会话恒不认领 —— botService 那份
- * 才接得住。这个不变量一破，两份参与方会同时认领同一条会话，先注册的赢，而「先注册」
- * 取决于模块加载顺序。
- *
  * mock 面沿用 sessionServiceBotSession，但**删掉了 `vi.mock('../userInputBroker')`** ——
  * 要让 sessionService 模块加载时的注册真的落进注册表，否则测的只是一个空壳。
- * botService 在这里是假件（从未加载），所以注册表里干干净净只有 session 一个。
+ * 今天注册表里本来就只有 session 这一个参与方。
  * 也**不调** `resetUserInputParticipantsForTests()`：那会把被测对象自己摘掉。
  */
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest'
@@ -69,14 +64,6 @@ vi.mock('../toolAggregator', () => ({
   filterAvailableTools: vi.fn((tools: string[]) => tools)
 }))
 vi.mock('../../utils/toolUtils/allowList', () => ({ buildAllowEntry: vi.fn() }))
-vi.mock('../botService', () => ({
-  botService: {
-    abortSession: vi.fn(async () => {}),
-    forgetNotesSession: vi.fn(),
-    seedGreetings: vi.fn(async () => {}),
-    isActive: vi.fn(() => false)
-  }
-}))
 vi.mock('../agentService', () => ({ agentService: { getProfile: mocks.getProfile } }))
 vi.mock('../agentSession', () => ({ AgentSession: { create: mocks.agentCreate } }))
 vi.mock('../bgTaskService', () => ({ killBySession: vi.fn(), setBgTaskNotifier: vi.fn() }))
@@ -96,7 +83,6 @@ vi.mock('../../logger', () => ({
 import { requestUserInputFor, respondToUserInput } from '../userInputBroker'
 
 let sessionService: (typeof import('../sessionService'))['sessionService']
-let realGetAgentSession: (sessionId: string) => AgentSession | undefined
 let getAgentSpy: ReturnType<typeof vi.spyOn>
 let liveSpy: ReturnType<typeof vi.spyOn>
 
@@ -139,8 +125,6 @@ function bound(agent: Fake | undefined): void {
 
 beforeAll(async () => {
   ;({ sessionService } = await import('../sessionService'))
-  // 先留一份真身：C-2 要用它验「聊天会话根本没被登记进 agents」，而其余用例都靠打桩
-  realGetAgentSession = sessionService.getAgentSession.bind(sessionService)
   getAgentSpy = vi.spyOn(sessionService, 'getAgentSession')
   liveSpy = vi.spyOn(sessionService, 'liveAgentSessions')
 })
@@ -172,33 +156,6 @@ describe('claims —— 认领的是运行时，不是会话记录', () => {
     bound(agent)
     await expect(requestUserInputFor(SID, REQ)).resolves.toEqual(ANSWER)
     expect(agent.requestUserInput).toHaveBeenCalledTimes(1)
-  })
-
-  it('聊天会话恒无根 Agent —— ensure 不建，也不留条目在 agents 表里', async () => {
-    getAgentSpy.mockImplementation(realGetAgentSession)
-    const chat = `${SID}-chat`
-    const rooted = `${SID}-rooted`
-    const agent = fakeAgent('rooted')
-    mocks.agentCreate.mockResolvedValue(agent)
-
-    // 聊天会话：resolveAgentProfileName 返回 null，create 早退。形态来自 `pick` 那一行
-    // （projectId / parentId / settings）—— 只改 pickSettings 对新实现无效
-    mocks.daoPick.mockReturnValue({ projectId: null, parentId: null, settings: { bot: 'scout' } })
-    mocks.daoPickSettings.mockReturnValue({ bot: 'scout' })
-    expect(await sessionService.ensureAgentSession(chat)).toBeUndefined()
-    expect(sessionService.getAgentSession(chat)).toBeUndefined()
-    expect(mocks.agentCreate).not.toHaveBeenCalled()
-
-    // 对照组：同一套上下文解析，普通会话建得出来也登记得进去 —— 上面那条早退
-    // 因此是「因为它是聊天会话」，不是「因为上下文解析失败」
-    mocks.daoPick.mockReturnValue({ projectId: null, parentId: null, settings: {} })
-    mocks.daoPickSettings.mockReturnValue({})
-    expect(await sessionService.ensureAgentSession(rooted)).toBe(agent)
-    expect(sessionService.getAgentSession(rooted)).toBe(agent)
-
-    // 这才是 M7′ 的互斥前提：agents 表里没有聊天会话的条目 ⇒ 这份参与方对它恒不认领，
-    // botService 那份才接得住。两份同时认领的话，谁赢取决于模块加载顺序
-    await expect(requestUserInputFor(chat, REQ)).rejects.toThrow(`Session ${chat} is not active`)
   })
 
   it('claims 与 request 之间运行时被失效 → reject，不往空处投递', async () => {

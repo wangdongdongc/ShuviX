@@ -6,36 +6,34 @@ import { BotAvatar, getChatApi, useChatStore, type BotPageTarget } from '@shuvix
 import { useSettingsStore } from '../../stores/settingsStore'
 
 /**
- * Bot 档案页 —— 主窗口正文里的 bot md 编辑页（原设置页「Bots」tab 的右半边，随列表一起
- * 搬进了侧栏「Bots」分组：点一行，主区就是这一页，同知识库条目 → 笔记本页）。
+ * Bot 档案页 —— 主窗口正文里的 bot md 编辑页：侧栏「Bots」分组（BotGroup）点一行，主区就是这一页，
+ * 与知识库条目 → 笔记本页同构。
  *
- * 一页 = 头部（头像 + 显示名 + 文件路径 + 动作）+ 整份 md 的 live-preview 编辑器
- * （frontmatter 由属性卡的 bot 描述符渲染 —— 管线绑定块在卡上是工作流下拉 + 联动的槽位
- * 下拉，管线 / 槽位 / agent 的存在性提示走卡片的校验横幅；正文 = 这个 bot 的人设与记忆，
- * 由 bot 自己维护）。排版走笔记本的那套（layout=notebook：700px 限宽居中 + minimap），
- * 头部按同一列宽对齐。原来页面上那条运行时读数条（管线 / 槽位下拉 / 门控模型 / 正文字数）
- * 已并进卡片或删掉：门控模型是全局设置，去 Agents 设置页改 bot-intent 档案。
+ * 一页 = 头部（头像 + 显示名 + 文件路径 + 动作）+ 整份 md 的 live-preview 编辑器（frontmatter 由属性卡
+ * 的 bot 描述符渲染：身份三项）。排版走笔记本的那套（layout=notebook：700px 限宽居中 + minimap），
+ * 头部按同一列宽对齐。一个 bot 没有管线、没有槽位、没有工具与模型 —— 那些由基座档案 `bot` 统一规定，
+ * 所以页面上除了文档本身什么都没有。
  *
- * 与笔记本页**刻意不同的一点：显式保存，不自动落盘**。这份文件有第二个写者 —— bot 在答话
- * 途中会改自己的正文；自动保存意味着编辑器缓冲静默后写胜。保存带 getSource 那一刻的
- * revision 指纹，冲突时把磁盘版本交回来让用户选（加载 / 覆盖），绝不静默后写胜（设计 §8.5）。
+ * 与笔记本页**刻意不同的一点：显式保存，不自动落盘**。这份文件有第二个写者 —— bot 在答话途中会用
+ * `edit` 改自己的正文（记忆）；自动保存意味着编辑器缓冲静默后写胜。保存带 getSource 那一刻的
+ * revision 指纹，冲突时把磁盘版本交回来让用户选（加载 / 覆盖），绝不静默后写胜。
  *
- * 三个目标（chatStore.BotPageTarget）：edit（已注册的 bot）/ fix（解析不过的文件，按文件名
- * 认，头部挂解析器的拒绝理由）/ create（模板新建）。fix 修好、create 落盘后都切成 edit
- * 目标（page 按目标 key 重挂）；删除不在这一页 —— 它在侧栏行的菜单里，与会话一致。
+ * 三个目标（chatStore.BotPageTarget）：edit（已注册的 bot）/ fix（解析不过的文件，按文件名认，头部挂
+ * 解析器的拒绝理由）/ create（模板新建）。fix 修好、create 落盘后都切成 edit 目标（page 按目标 key
+ * 重挂）；删除不在这一页 —— 它在侧栏行的菜单里，与会话一致。
  */
 
 type LoadedTarget =
   | { kind: 'edit'; bot: BotInfo; text: string; revision: string }
   // 修复目标的解析器拒绝理由叫 reason 而非 error：加载结果按「有没有 error 键」分流，撞名会把它误判成加载失败
-  | { kind: 'fix'; fileName: string; reason: string; text: string }
+  | { kind: 'fix'; fileName: string; reason: string; path: string; text: string }
   | { kind: 'create'; text: string }
 
 export function BotPage({ target }: { target: BotPageTarget }): React.JSX.Element {
   const { t } = useTranslation()
   const [loaded, setLoaded] = useState<LoadedTarget | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
-  // 重拉原文的递增标记（槽位下拉改了 md 之后编辑器要拿新文本重挂）
+  // 重拉原文的递增标记（冲突后选「加载磁盘版本」时用新文本重挂编辑器）
   const [reloadNonce, setReloadNonce] = useState(0)
 
   // 磁盘外删除 / 改名不广播 bot.changed（侧栏靠聚焦重扫兜底），这一页也在同一时机自查：
@@ -45,11 +43,12 @@ export function BotPage({ target }: { target: BotPageTarget }): React.JSX.Elemen
     if (target.kind === 'create') return undefined
     let alive = true
     const onFocus = (): void => {
-      const exists =
-        target.kind === 'edit'
-          ? window.api.bot.list().then((l) => l.some((b) => b.name === target.name))
-          : window.api.bot.listInvalid().then((l) => l.some((f) => f.fileName === target.fileName))
-      void exists.then((ok) => {
+      // 合法与非法两拨在同一个回包里，按目标形状挑一拨对
+      void window.api.bot.list().then(({ bots, invalid }) => {
+        const ok =
+          target.kind === 'edit'
+            ? bots.some((p) => p.name === target.name)
+            : invalid.some((f) => f.fileName === target.fileName)
         if (alive && !ok) setLoadError(t('settings.botPageGone'))
       })
     }
@@ -64,23 +63,23 @@ export function BotPage({ target }: { target: BotPageTarget }): React.JSX.Elemen
     let alive = true
     const load = async (): Promise<LoadedTarget | { error: string }> => {
       if (target.kind === 'edit') {
-        const [list, src] = await Promise.all([
+        const [{ bots }, src] = await Promise.all([
           window.api.bot.list(),
           window.api.bot.getSource({ name: target.name })
         ])
-        const bot = list.find((b) => b.name === target.name)
-        if (!bot) return { error: `Bot "${target.name}" not found` }
-        if ('error' in src) return { error: src.error }
+        const bot = bots.find((p) => p.name === target.name)
+        // 注册表里没有、或原文读不到（null），都只有一个成因：文件在应用之外被改名或删除了
+        if (!bot || !src) return { error: t('settings.botPageGone') }
         return { kind: 'edit', bot, text: src.text, revision: src.revision }
       }
       if (target.kind === 'fix') {
-        const [invalid, src] = await Promise.all([
-          window.api.bot.listInvalid(),
+        const [{ invalid }, src] = await Promise.all([
+          window.api.bot.list(),
           window.api.bot.getSourceByFile({ fileName: target.fileName })
         ])
-        if ('error' in src) return { error: src.error }
+        if (!src) return { error: t('settings.botPageGone') }
         const reason = invalid.find((f) => f.fileName === target.fileName)?.error ?? ''
-        return { kind: 'fix', fileName: target.fileName, reason, text: src.text }
+        return { kind: 'fix', fileName: target.fileName, reason, path: src.path, text: src.text }
       }
       const { text } = await window.api.bot.template({ name: 'my-bot' })
       return { kind: 'create', text }
@@ -99,7 +98,7 @@ export function BotPage({ target }: { target: BotPageTarget }): React.JSX.Elemen
     return () => {
       alive = false
     }
-  }, [target, reloadNonce])
+  }, [target, reloadNonce, t])
 
   return (
     <div
@@ -145,7 +144,7 @@ export function BotPage({ target }: { target: BotPageTarget }): React.JSX.Elemen
 
 /**
  * md 原文编辑器（frontmatter 属性卡 + live-preview 正文）+ 头部 + 保存守卫。
- * 非受控编辑器，保存时经 handleRef 直取全文（对齐 WorkflowEditor / SubAgentEditor）。
+ * 非受控编辑器，保存时经 handleRef 直取全文（对齐 BotPage / WorkflowEditor / SubAgentEditor）。
  */
 function BotEditor({
   target,
@@ -171,23 +170,15 @@ function BotEditor({
   const [revision, setRevision] = useState(target.kind === 'edit' ? target.revision : '')
 
   const bot = target.kind === 'edit' ? target.bot : null
-
-  /** 落盘后定位到那一份：改名 / 修好 / 新建之后名字都可能变，按文件路径反查再切目标 */
-  const activate = async (fileNameOrPath: string): Promise<void> => {
-    const list = await window.api.bot.list()
-    const hit = list.find(
-      (b) => b.basePath === fileNameOrPath || b.basePath.endsWith(fileNameOrPath)
-    )
-    if (hit) useChatStore.getState().setActiveBot({ kind: 'edit', name: hit.name })
-    else onReload()
-  }
+  /** 文件路径：edit 来自注册表，fix 来自按文件名那次读取（非法文件不进注册表，也该报出路径） */
+  const filePath = bot?.basePath ?? (target.kind === 'fix' ? target.path : null)
 
   const doSave = async (withRevision: boolean): Promise<void> => {
     const text = editorRef.current?.getMarkdown() ?? mirror.current
     setSaving(true)
     setError(null)
     try {
-      // 三条通道分开写：返回形状各不相同（save 带 conflict、create 带 name），
+      // 三条通道分开写：返回形状各不相同（save 带 conflict、create/saveByFile 带 name），
       // 并成联合再窄化只会跟类型系统打架
       if (target.kind === 'edit') {
         const r = await window.api.bot.save({
@@ -205,10 +196,10 @@ function BotEditor({
         }
         setSaved(true)
         if (r.revision) setRevision(r.revision)
-        // 改了 name 的话文件名不变、身份变了：按路径反查新名字并切过去（page 重挂）；
-        // 名字没变就只把最新的 BotInfo 交回去（显示名 / warnings 可能变了）
-        const list = await window.api.bot.list()
-        const hit = list.find((b) => b.basePath === target.bot.basePath)
+        // 改了 name 的话文件名不变、身份变了（服务端顺手迁走会话绑定）：按路径反查新名字并切
+        // 过去（page 重挂）；名字没变就只把最新的 BotInfo 交回去（显示名 / 描述可能变了）
+        const { bots } = await window.api.bot.list()
+        const hit = bots.find((p) => p.basePath === target.bot.basePath)
         if (hit && hit.name !== target.bot.name) {
           useChatStore.getState().setActiveBot({ kind: 'edit', name: hit.name })
         } else if (hit) {
@@ -221,8 +212,10 @@ function BotEditor({
           return
         }
         setSaved(true)
-        // 修好即是一个合法 bot：切成 edit 目标（列表由 bot.changed 事件同步）
-        await activate(target.fileName)
+        // 修好即是一个合法 bot：写通道回了解析出来的 name，直接切成 edit 目标
+        // （列表由 bot.changed 事件同步）；回不出名字才退回重拉
+        if (r.name) useChatStore.getState().setActiveBot({ kind: 'edit', name: r.name })
+        else onReload()
       } else {
         const r = await window.api.bot.create({ text })
         if (!r.success) {
@@ -237,7 +230,11 @@ function BotEditor({
     }
   }
 
-  /** 和这个 bot 开一个聊天会话，并切过去（离开档案页 —— 用户要的就是去聊） */
+  /**
+   * 和这个 bot 开一条会话，并切过去（离开档案页 —— 用户要的就是去聊）。
+   * bot 会话是**普通有根会话**（根档案是基座 `bot`，人设与
+   * 记忆经 systemContext 注入），与旧 bot 会话那条无根 + 管线的路子没有关系。
+   */
   const handleNewSession = async (): Promise<void> => {
     if (!bot) return
     const session = await getChatApi().session.create({ projectId: null, bot: bot.name })
@@ -268,9 +265,9 @@ function BotEditor({
                     : t('sidebar.newBot')}
               </span>
             </div>
-            {bot?.basePath && (
+            {filePath && (
               <div className="font-mono text-[10px] text-text-tertiary truncate mt-0.5">
-                {bot.basePath}
+                {filePath}
               </div>
             )}
           </div>

@@ -12,7 +12,6 @@
 import type { LucideIconName, ThemeColor } from './theme'
 import type { AppEvent } from './appEvents'
 import type { ShuvixMdValidation } from './shuvixMdContract'
-import type { BotPipelineOptions } from './botPipeline'
 import type { FileReadResult } from './types/filePreview'
 import type { ChatMessage } from './types/chatMessage'
 import type { BgTaskLogChunk } from './types/bgTask'
@@ -54,22 +53,16 @@ export interface SessionSettings {
   autoAllow?: boolean
   allowList?: string[]
   /**
-   * 聊天会话绑定的 bot（`~/.shuvix/bots/<name>.md`）。**有值即为聊天会话**：一对一，
-   * 没有根 Agent —— 用户消息由这个 bot 的管线应答，`resolveAgentProfileName` 因此返回 null。
-   * 创建那一刻定死，不可转回普通会话。判定一律经 `chatSession.ts` 的
-   * `isChatSessionSettings` / `boundBotOf`。
+   * 这条会话绑定的 bot（`~/.shuvix/bots/<name>.md`）。有值即为 bot 会话 —— 一条**普通有根会话**：
+   * 根 Agent 的档案是基座 `bot`，那份 md 的正文（人设与记忆）经 systemContext 注入它的系统提示词。
+   * 创建那一刻定死，不可换绑。判定一律经 `botSession.ts` 的 `isBotSessionSettings` / `boundBotOf`。
    */
   bot?: string
-  /**
-   * 遗留键：群聊时代的成员名单。**只读、不再写入**（没有迁移）：带着它的老会话仍被认作
-   * 聊天会话，但视为**未绑定 bot**，由用户在会话头部重新选一个写进 `bot`。
-   */
-  bots?: string[]
 
   /**
    * 子会话被父级钉下的档案名（session 工具 `create-sub-session` 的 `agent_profile`，如 coding）。
    * 根会话不读它：根 Agent 的档案由会话形态推导 —— 项目会话 `work`、无项目会话 `chat`、
-   * 笔记本会话 `notebook` —— 没有设置项，也没有会话内切换；旧切换时代写下的戳只是遗留数据。
+   * 笔记本会话 `notebook`、bot 会话 `bot` —— 没有设置项，也没有会话内切换；旧切换时代写下的戳只是遗留数据。
    */
   agentProfile?: string
   /** 笔记本会话绑定的 md 文件（相对项目根，forward-slash；项目记忆为绝对路径）；非空即为笔记本会话（根 Agent 钉死 notebook 基座档案，对话经输入卡片的抽屉呈现） */
@@ -82,22 +75,6 @@ export interface SessionSettings {
   memorySlug?: string
   /** 标题最近一次由谁写入：'user' = UI 重命名，'auto' = 自动化（session 工具）。缺省视同 'user' */
   titleOrigin?: 'user' | 'auto'
-  /**
-   * 聊天会话的未读 bot 回复数（A4）。bot 落树 +1（settings 写顺带 touch updatedAt，
-   * 列表按它排序 —— 上浮与未读同一笔账）；`session.markRead` 清零。仅聊天会话在维护，
-   * 有根会话恒缺省。
-   */
-  unreadCount?: number
-  /**
-   * **聊天会话专属**的运行配置（v2）：它没有根 Agent，也没有会话树，所以模型/思考深度
-   * 存在这里，而不是像有根会话那样表达为树上的 model_change entry。两种形态互斥不相交。
-   * 不含 enabledTools —— 工具来自 bot 各槽位里那份 agent md，会话层没有可勾的东西。
-   */
-  chatRunConfig?: {
-    provider: string
-    model: string
-    thinkingLevel?: string
-  }
 }
 
 /**
@@ -362,9 +339,9 @@ export interface SessionCreateParams {
   parentId?: string
   /** 绑定的 md 文件（相对项目根）；提供则创建笔记本会话 */
   notebookPath?: string
-  /** 会话标题；缺省时聊天会话用默认标题、笔记本会话用文件 basename */
+  /** 会话标题；缺省时普通会话用默认标题、笔记本会话用文件 basename */
   title?: string
-  /** 绑定的 bot 名；提供则创建聊天会话（无根的一对一会话，见 SessionSettings.bot） */
+  /** 绑定的 bot 名；提供则创建 bot 会话（普通有根会话，见 SessionSettings.bot） */
   bot?: string
 }
 
@@ -502,11 +479,6 @@ export interface SessionChannelApi {
     /** 排队到下一次 prompt 之前（pi nextTurn 队列；不被 abort 清空） */
     nextTurn: (params: AgentNextTurnParams) => Promise<{ success: boolean }>
     abort: (sessionId: string) => Promise<{ success: boolean }>
-    /**
-     * 停止 bot 对**某条消息**的应答（聊天会话）：为其它消息排着的队不受影响。
-     * 可选 —— 渠道端缺省即不渲染停止钮。
-     */
-    abortBot?: (params: { sessionId: string; messageId: string }) => Promise<{ aborted: boolean }>
     respondToInput: (params: {
       sessionId: string
       requestId: string
@@ -577,11 +549,6 @@ export interface SessionChannelApi {
   /** shuvix 契约 md 的解析器级校验（frontmatter 属性卡消费；两端实现共用 agent-runtime） */
   shuvixMd: {
     validate: (params: { type: string; text: string; name?: string }) => Promise<ShuvixMdValidation>
-    /**
-     * bot md 管线字段的候选项（工作流及其声明的槽位、agent 名）—— 属性卡联动控件用。
-     * 可选：没有 bot 面的宿主不实现，控件退化为只读。
-     */
-    botPipelineOptions?: () => Promise<BotPipelineOptions>
   }
   /** 通用内部事件订阅（后端发布的会话级/全局状态事件）。见 docs/internal-events.md */
   events: {
@@ -665,19 +632,6 @@ export interface HostApi {
     /** 移除允许列表条目（仅路径条目：命令类工具无允许列表，逐条询问） */
     removeAllowListEntry: (params: SessionAllowListRemoveParams) => Promise<{ success: boolean }>
     delete: (id: string) => Promise<{ success: boolean }>
-    /**
-     * 给聊天会话绑定 bot。
-     *
-     * **只对聊天会话生效**（含群聊时代遗留的、尚未绑定 bot 的会话 —— 这个接口正是它们
-     * 重新选 bot 的口）；名字不得为空。名字**不校验是否存在**（与 create 同口径）：
-     * bot md 是纯 md 驱动的，用户随时可能删掉一个，缺失在会话里可见地失败。
-     */
-    setBot: (params: { id: string; bot: string }) => Promise<{ success: boolean; error?: string }>
-    /**
-     * 清零聊天会话的未读计数（A4）。可选 —— 渠道端缺省即不维护未读。
-     * 幂等：已为 0 时不写库不广播。
-     */
-    markRead?: (id: string) => Promise<{ success: boolean }>
     // 注：updateModelConfig / updateThinkingLevel / updateEnabledTools 已移除 ——
     // 运行配置的唯一事实源是会话树，改动统一走 agent.setModel / setThinkingLevel /
     // setEnabledTools（Agent 未创建时后端直接往树上追加对应 entry）。

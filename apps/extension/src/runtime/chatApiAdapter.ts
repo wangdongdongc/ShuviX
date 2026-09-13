@@ -268,13 +268,8 @@ export const chatApiAdapter: ChatApi = {
       appEventBus.publish({ type: 'session.listChanged' })
       return ok
     },
-    getById: async (id) => sessionStore.getById(id),
+    getById: async (id) => sessionStore.getById(id)
     // 扩展端没有聊天会话（桌面端形态，设计 §12 明确把扩展端列为非目标）。
-    // 契约成员必须在，但不假装支持 —— 静默成功会让调用方以为绑定改了
-    setBot: async () => ({
-      success: false,
-      error: 'Chat sessions are not available in the extension'
-    })
 
     // 配置变更订阅已并入 events.subscribe（扩展暂不发布 session.configChanged）
   },

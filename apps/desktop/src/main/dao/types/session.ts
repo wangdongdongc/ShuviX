@@ -19,17 +19,12 @@ export interface SessionSettings {
   /** 路径允许列表，格式 Read(path) / Write(path)（历史 Bash/SSH 条目不再识别，等同失效） */
   allowList?: string[]
   /**
-   * 聊天会话绑定的 bot（`~/.shuvix/bots/<name>.md`）。**有值即为聊天会话**：一对一，
-   * 没有根 Agent —— 用户消息由这个 bot 的管线应答，`resolveAgentProfileName` 因此返回 null。
-   * 创建那一刻定死，不可转回普通会话。判定一律经 chat-protocol `chatSession.ts` 的
-   * `isChatSessionSettings` / `boundBotOf`（sessionService.isBotSession / boundBot 包了它们）。
+   * 这条会话绑定的 bot（`~/.shuvix/bots/<name>.md`）。有值即为 bot 会话 —— 一条**普通有根会话**：
+   * 根 Agent 的档案是基座 `bot`，那份 md 的正文（人设与记忆）经 systemContext 追加到它的系统提示词
+   * 末尾。创建那一刻定死，不可换绑（换个 bot 就是另开一条会话 —— 这条会话的历史全是那个 bot 说的话）。
+   * 判定一律经 chat-protocol `botSession.ts` 的 `isBotSessionSettings` / `boundBotOf`。
    */
   bot?: string
-  /**
-   * 遗留键：群聊时代的成员名单。**只读、不再写入**（没有迁移）：带着它的老会话仍被认作
-   * 聊天会话，但视为**未绑定 bot**，由用户在会话头部重新选一个写进 `bot`（`setBot`）。
-   */
-  bots?: string[]
   /**
    * 子会话被父级钉下的档案名（session 工具 `create-sub-session` 的 `agent_profile`，如 coding；
    * 唯一写入口 sessionService.pinAgentProfile）。根会话不读它：根 Agent 的档案由会话形态推导
@@ -50,30 +45,6 @@ export interface SessionSettings {
    * 自动标题据此不覆盖用户手动改过的名字。
    */
   titleOrigin?: 'user' | 'auto'
-  /**
-   * 聊天会话的未读 bot 回复数（A4）。bot 落树 +1（settings 写顺带 touch updatedAt ——
-   * 列表按它排序，上浮与未读同一笔账）；`session:markRead` 清零。仅聊天会话在维护。
-   */
-  unreadCount?: number
-  /**
-   * **聊天会话专属**的运行配置（v2）。
-   *
-   * 迁移 v15 把 provider/model 从本表删掉，理由是「运行配置的唯一事实源是会话树的
-   * model_change entry」—— 那对**有根会话**成立。聊天会话没有根 Agent，v2 之后连会话树
-   * 都没有（转写在 chat_messages 表里），所以它的配置需要另一个家，就是这里。
-   *
-   * 这不违反 v15 的单一事实源：两种会话形态的运行时根本不同，事实源各一份且互斥不相交
-   * （一个会话在创建那一刻就定死是哪一种）。`chat` 前缀是为了让读代码的人一眼看出
-   * 这条只对无根会话有意义。
-   *
-   * 刻意**不含 enabledTools**：工具来自 bot 各槽位里那份 agent md 的 `shuvix-tools`，
-   * 一个会话级的工具勾选在这里不表达任何东西（对应 UI 上隐藏 ToolPicker）。
-   */
-  chatRunConfig?: {
-    provider: string
-    model: string
-    thinkingLevel?: string
-  }
 }
 
 /** 会话数据结构（对应 DB 表 sessions） */

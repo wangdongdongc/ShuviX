@@ -1,14 +1,12 @@
 /**
- * BotGroup —— 侧栏置顶的「Bots」特殊分组（原设置页 Bots tab 的列表侧），排在知识库之上。
- * 列 `~/.shuvix/bots/` 里的 bot 档案：合法的一行一个（头像 + 显示名），解析不过的文件缀在
- * 末尾以琥珀行呈现（文件名 + 三角）；点任一行把主区切到 **bot 档案页**
- * （`chatStore.setActiveBot` —— 与会话互斥的主区目标，正文由宿主经 ChatBody 的
- * contentOverride 渲染，桌面是 BotPage）。**没有内置 bot**，故列表里也没有内置/用户之分。
+ * BotGroup —— 侧栏置顶的「Bots」分组（`~/.shuvix/bots/`）。列目录里的 bot：合法的一行一个
+ * （头像 + 显示名），解析不过的文件缀在末尾以琥珀行呈现（文件名 + 三角）；点任一行把主区切到
+ * **bot 档案页**（`chatStore.setActiveBot`）。**没有内置 bot**，故列表里也没有内置/用户之分。
  *
- * prop 驱动、不触宿主 API（同 WikiGroup）：清单 / 打开目录 / 新建会话 / 删除由宿主注入。
- * 行样式对齐 WikiGroup（13px / truncate / bg-bg-active 选中态），组头经 SessionGroup 的
- * bots 形态渲染。扫描是懒的：**首次展开才扫**，之后每次展开 + 窗口聚焦 + `bot.changed`
- * 事件（保存 / 新建 / 删除 / 修好非法文件）重扫，stale-guard 防乱序回包。
+ * prop 驱动、不触宿主 API（同 WikiGroup / KnowledgeGroup）：清单 / 打开目录 / 新建会话 / 删除由
+ * 宿主注入。扫描是懒的：**首次展开才扫**，之后每次展开 + 窗口聚焦 + `bot.changed` 事件（保存 /
+ * 新建 / 删除 / 修好非法文件）重扫，stale-guard 防乱序回包。bot 自己在答话途中用 `edit` 改 md
+ * 不广播，由聚焦重扫兜底。
  *
  * 动作全部收在菜单里（右键 / ⋮ 同一份，与会话行一致）：组头 = 新建 bot / 打开目录 / 刷新；
  * bot 行 = 新建 Bot 会话 / 删除；非法行 = 删除。删除的确认对话框归宿主 —— 真删掉后
@@ -39,7 +37,7 @@ export interface BotGroupAdapter {
   list: () => Promise<{ bots: BotPickItem[]; invalid: BotGroupInvalidFile[] }>
   /** 打开 bots 目录（OS 文件管理器） */
   openFolder: () => void | Promise<unknown>
-  /** 和该 bot 新建一个聊天会话（宿主负责建会话、刷新列表并选中） */
+  /** 和该 bot 新建一条会话（宿主负责建会话、刷新列表并选中） */
   newSession: (name: string) => void | Promise<void>
   /** 删除 bot（宿主自带确认对话框；删掉后经 `bot.changed` 事件重扫） */
   delete: (name: string) => void

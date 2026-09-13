@@ -57,7 +57,7 @@ interface RuntimeInfo {
   tools: { name: string }[]
 }
 
-/** 运行时快照（getInfo ensure=true 走懒创建，不请求 LLM）；聊天会话为 null */
+/** 运行时快照（getInfo ensure=true 走懒创建，不请求 LLM） */
 const runtimeInfo = (sid: string): Promise<RuntimeInfo | null> =>
   app.main.eval(`window.api.agent.getInfo(${JSON.stringify(sid)}, { ensure: true })`)
 
@@ -212,7 +212,7 @@ describe('面与设置项', () => {
     expect(keys).not.toContain('listAgentProfiles')
     expect(keys).not.toContain('updateAgentProfile')
     // 面本身还在（不是因为 window.api.session 整个没了才「不含」）
-    for (const kept of ['create', 'setBot', 'markRead']) expect(keys).toContain(kept)
+    for (const kept of ['create', 'getById', 'list']) expect(keys).toContain(kept)
 
     // 旧设置项（改制前「新会话默认档案」）：写进去什么也不发生
     await setSetting('general.defaultChatAgent', PINNED)
@@ -270,9 +270,11 @@ describe('FD-9 tools.list 的 defaultEnabled 随推导档案', () => {
     expect(flag(rows, 'ask')).toBe(true)
   })
 
-  it('聊天会话（无根）与不传 sid 都回落 work：ssh 勾选', async () => {
+  it('bot 会话落在 bot 基座：ssh 不勾选、read 勾选；不传 sid 回落 work：ssh 勾选', async () => {
     const sid = await createBotSession(app.main, { bot: 'fd-bot' })
-    expect(flag(await toolsOf(sid), 'ssh')).toBe(true)
+    const rows = await toolsOf(sid)
+    expect(flag(rows, 'ssh')).toBe(false)
+    expect(flag(rows, 'read')).toBe(true)
     expect(flag(await toolsOf(), 'ssh')).toBe(true)
   })
 

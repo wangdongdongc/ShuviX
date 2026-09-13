@@ -32,14 +32,11 @@ export function validateShuvixMdText(
     return { status: parsed ? 'valid' : 'invalid', messages }
   }
   if (type === 'bot') {
-    // 与 memory/workflow 同一处理：属性卡只送 frontmatter 片段，而「正文即任务段系统提示词」
-    // 是正文的规则 —— 原样送进去，每一份合法 bot 都会亮红。仅在没有正文时补一行占位正文，
-    // 把判定限定在 frontmatter 上；送整份文件的调用方（写后校验）照旧按真实正文判定。
+    // bot 的正文没有任何形状要求（空正文是新建出来的常态，由 bot 自己往里写），所以不需要
+    // workflow / memory 那套占位正文的补丁 —— 原样解析即可。v1 残留的管线块是软提示：
+    // 状态仍是 valid，messages 带着那句话，卡片据此亮琥珀
     const messages: string[] = []
-    const hasBody = (splitFrontmatter(text)?.body ?? '').trim() !== ''
-    const parsed = parseBotDefinitionFile(hasBody ? text : `${text}\n<body>\n`, name, (msg) =>
-      messages.push(msg)
-    )
+    const parsed = parseBotDefinitionFile(text, name, (msg) => messages.push(msg))
     return { status: parsed ? 'valid' : 'invalid', messages }
   }
   if (type === 'workflow') {

@@ -3,12 +3,10 @@ import type { RuntimeStatus } from '@shuvix/chat-protocol/events'
 import type { AgentInitResult, AgentRuntimeInfo, ThinkingLevel } from '../../types'
 import type { InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import { sessionService } from '../../services/sessionService'
-import { botService } from '../../services/botService'
 import type { AgentSession } from '../../services/agentSession'
 import '../../tools/allTools'
 import { getBuiltinToolEntries } from '../../services/toolRegistry'
 import { messageService } from '../../services/messageService'
-import { electronEventSink } from '../../services/agentRuntimeAdapters'
 import {
   appendActiveToolsChange,
   appendModelChange,
@@ -43,13 +41,6 @@ export class DefaultChatGateway implements ChatGateway {
     images?: Array<{ type: 'image'; data: string; mimeType: string }>,
     inlineTokens?: Record<string, InlineToken>
   ): Promise<{ error?: string }> {
-    // 聊天会话没有根 Agent：消息交给绑定的 bot 的管线。分流必须在 ensureAgentSession
-    // **之前**，也必须是 early-return 式互斥 —— 前端的 user_message 走 addMessage
-    // （同 id 已存在则整体 no-op，不是 upsert），两边都跑一点会出双气泡且不被去重
-    if (sessionService.isBotSession(sessionId)) {
-      await botService.handleUserMessage({ sessionId, text, images, inlineTokens })
-      return {}
-    }
     // 首次发送消息时才创建 Agent（打开会话/笔记本不创建）
     const session = await sessionService.ensureAgentSession(sessionId)
     if (!session) {
@@ -69,8 +60,7 @@ export class DefaultChatGateway implements ChatGateway {
     // 所以"发送第一条消息前调整配置"的语义保持不变）。
 
     // 有根会话的用户消息不由网关落库：harness 在 message_end 把它作为 entry 追加，
-    // 并经 HarnessSession 的事件翻译广播 user_message。聊天会话没有那个运行时，
-    // 由上面分流出去的 botService 走同一顺序自己落（先 append 取 id 再广播）。
+    // 并经 HarnessSession 的事件翻译广播 user_message。
     // 发送结果原样上交：子会话的驱动方靠它区分「没发出去」与「发出去了没回话」
     return await session.prompt(promptText, images, display)
   }
@@ -94,9 +84,6 @@ export class DefaultChatGateway implements ChatGateway {
    * 落盘与广播都在 message_end 事件里发生，网关不碰。
    */
   private enqueue(sessionId: string, push: (session: AgentSession) => Promise<void>): void {
-    // 聊天会话恒无根 Agent —— 引导/追加/下一轮对它没有意义，安静退出。
-    // 报「Agent 未初始化」是把一个正常形态说成故障（这三个按钮的隐藏归 A2）
-    if (sessionService.isBotSession(sessionId)) return
     const session = sessionService.getAgentSession(sessionId)
     if (!session) {
       chatFrontendRegistry.broadcast({ type: 'error', sessionId, error: 'Agent 未初始化' })
@@ -115,14 +102,13 @@ export class DefaultChatGateway implements ChatGateway {
     // harness 会把带 stopReason='aborted' 的部分消息正常落成 entry，
     // 不再需要网关回传「抢救出来的半条消息」。
     await sessionService.getAgentSession(sessionId)?.abort()
-    if (sessionService.isBotSession(sessionId)) await botService.abortSession(sessionId)
     return { success: true }
   }
 
   // ─── 交互响应 ─────────────────────────────────
 
   respondToInput(sessionId: string, requestId: string, response: InputResponse): void {
-    // broker 按 requestId 找归属（有根会话 / 聊天会话各自认领）。**不拿 sessionId 去选
+    // broker 按 requestId 找归属（各参与方各自认领）。**不拿 sessionId 去选
     // 参与方** —— 那等于把前端以为的归属当成真相；它在这里只有一个用途：无人认领时
     // 把那张卡片从界面上收走。
     //
@@ -149,30 +135,18 @@ export class DefaultChatGateway implements ChatGateway {
     baseUrl?: string,
     apiProtocol?: string
   ): Promise<void> {
-    // 聊天会话没有根 Agent、也没有会话树：配置落 settings.chatRunConfig（v2）
-    if (sessionService.isBotSession(sessionId)) {
-      sessionService.updateChatRunConfig(sessionId, { provider, model })
-      return
-    }
     const agent = sessionService.getAgentSession(sessionId)
     if (agent) await agent.setModel(provider, model, baseUrl, apiProtocol)
     else await appendModelChange(sessionId, provider, model)
   }
 
   async setThinkingLevel(sessionId: string, level: ThinkingLevel): Promise<void> {
-    if (sessionService.isBotSession(sessionId)) {
-      sessionService.updateChatRunConfig(sessionId, { thinkingLevel: level })
-      return
-    }
     const agent = sessionService.getAgentSession(sessionId)
     if (agent) await agent.setThinkingLevel(level)
     else await appendThinkingLevelChange(sessionId, level)
   }
 
   async setEnabledTools(sessionId: string, tools: string[]): Promise<void> {
-    // 聊天会话不表达会话级工具勾选：工具来自 bot 各槽位里那份 agent md 的 shuvix-tools。
-    // UI 上 ToolPicker 对聊天会话隐藏，这里是对应的后端守卫
-    if (sessionService.isBotSession(sessionId)) return
     const agent = sessionService.getAgentSession(sessionId)
     if (agent) await agent.setEnabledTools(tools)
     else await appendActiveToolsChange(sessionId, tools)
@@ -199,13 +173,9 @@ export class DefaultChatGateway implements ChatGateway {
   }
 
   async clearMessages(sessionId: string): Promise<void> {
-    // 先关停写者再删文件：还在跑的 run 会往刚删掉的会话树里接着写。
-    // 两条写者路径并列停：有根会话是 AgentSession，聊天会话是 botService 的树写锁
-    // （对另一形态各自是 no-op，无脑并列安全）
+    // 先关停写者再删文件：还在跑的 run 会往刚删掉的会话树里接着写
     await sessionService.invalidateAgent(sessionId)
-    await botService.abortSession(sessionId)
     messageService.clear(sessionId)
-    this.notifyBotSessionReloaded(sessionId)
   }
 
   /**
@@ -220,20 +190,7 @@ export class DefaultChatGateway implements ChatGateway {
     const target = await messageService.resolveRollbackTarget(sessionId, messageId)
     if (!target) return
     await sessionService.invalidateAgent(sessionId)
-    await botService.abortSession(sessionId)
     await messageService.applyRollback(sessionId, target.targetId)
-    this.notifyBotSessionReloaded(sessionId)
-  }
-
-  /**
-   * 聊天会话的回退/清空广播 `messages_reloaded` —— A2 消费端（清 bot live 态 + 活跃会话
-   * 重拉列表）在此才有生产者：仅有的两个既有发射点在 harness/压缩路径上，无根会话永远
-   * 走不到；而有根会话的这两条路径由调用方自刷 + agent_closing 收口，不需要它。
-   * 只对聊天会话发 —— 给有根会话多播一发会与 useChatActions 的自刷竞态。
-   */
-  private notifyBotSessionReloaded(sessionId: string): void {
-    if (!sessionService.isBotSession(sessionId)) return
-    electronEventSink.broadcast({ type: 'messages_reloaded', sessionId })
   }
 
   // ─── 运行时资源 ──────────────────────────────────
@@ -307,10 +264,11 @@ export class DefaultChatGateway implements ChatGateway {
       projectPath = project?.path
     }
     // 默认勾选 = 这条会话根 Agent 档案的白名单：档案由会话形态推导（项目 work / 无项目 chat /
-    // 笔记本 notebook，子会话可能被父级钉成 coding），含用户 ~/.shuvix/agents/<name>.md 覆盖 ——
-    // 覆盖后会话真的按它创建，UI 的默认勾选就该跟着走。没有会话 / 聊天会话（无根）回落 work
-    const profileName =
-      (sessionId ? sessionService.resolveAgentProfileName(sessionId) : null) ?? WORK_PROFILE_NAME
+    // 笔记本 notebook / bot 会话 bot，子会话可能被父级钉成 coding），含用户 ~/.shuvix/agents/<name>.md
+    // 覆盖 —— 覆盖后会话真的按它创建，UI 的默认勾选就该跟着走。没有会话回落 work
+    const profileName = sessionId
+      ? sessionService.resolveAgentProfileName(sessionId)
+      : WORK_PROFILE_NAME
     const defaultProfileTools = agentService.getProfile(profileName)?.tools ?? []
     /** 内置工具（从注册表读取，system 分组不在 UI 中展示） */
     const builtinTools = getBuiltinToolEntries()

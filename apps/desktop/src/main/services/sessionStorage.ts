@@ -20,8 +20,8 @@
  *     JsonlSessionStorage 的地方），外部手改文件不在支持范围内。
  *   - 逐出：删除会话时显式逐出；无 Agent 的旁观会话按 LRU 限量（图片以 base64 内联
  *     在 entry 里，重图会话一棵树几十 MB，不能无界攒）。有 Agent 的会话被钉住，
- *     判定经 `addSessionTreePin` 注册（可叠加：有根会话看 agents.tracked，聊天会话看
- *     botService.isActive）。
+ *     判定经 `addSessionTreePin` 注册（可叠加：有根会话看 agents.tracked，写锁持有期间
+ *     自钉住）。
  *
  * 分工：`sessions` 表存业务字段（title / projectId / settings…），
  * JSONL 文件存对话树。leafId 由文件自身推导，不需要在表里冗余。
@@ -79,8 +79,8 @@ const registry = createSessionTreeRegistry({
 /**
  * 注册一条钉住判定 —— **可叠加**，任一为真即钉住。
  *
- * 刻意不是覆盖式 setter：钉住的来源不止一处（有根会话看 `agents.tracked`，聊天会话看
- * `botService.isActive`），而 registry 只收一个谓词。若让两边各调一次覆盖式 setter，
+ * 刻意不是覆盖式 setter：钉住的来源不止一处（有根会话看 `agents.tracked`，写锁看自己的
+ * 持有表），而 registry 只收一个谓词。若让两边各调一次覆盖式 setter，
  * 后注册的会**静默吃掉**前一个，症状是「有些会话偶尔丢消息」——因为被逐出的 Session
  * 实例并不销毁，它还能继续往同一个 jsonl 追加，于是两个内存快照各写各的、消息静默分叉。
  *
@@ -176,9 +176,8 @@ export async function readSessionRunConfig(sessionId: string): Promise<SessionRu
  * 独占叶子 —— 先写的那条在 UI 与模型上下文里同时消失（文件里还躺着）。所以临界区必须
  * 整体包住「取叶子 + 追加」，只锁住 append 调用本身是不够的。
  *
- * 在此之前顺序是靠「一个会话一个运行时 + pi 的 phase 闸门」偶然成立的。聊天会话把两者
- * 都拆了：它没有根运行时，而配置 setter（`appendModelChange` 等）在无根会话下恒走这里
- * 的直接追加分支 —— 用户在 bot 回复的同时切一下模型就是两个写者。
+ * 不能指望「一个会话一个运行时 + pi 的 phase 闸门」替你排好顺序：配置 setter
+ * （`appendModelChange` 等）直接往树上追加，从不经过运行时的 phase 闸门。
  *
  * 树由锁体内取好、以形参交给回调：从签名上禁止调用方跨锁缓存 `Session` 引用
  * （LRU 逐出只删缓存槽、不销毁对象，缓存过的实例还能往已被 unlink 的 inode 里写）。
@@ -189,7 +188,7 @@ export async function readSessionRunConfig(sessionId: string): Promise<SessionRu
 const treeLocks = new Map<string, Promise<void>>()
 
 // 持锁期间自钉住：写锁的存在本身就是「这个会话正在被写」。补上宿主计数覆盖不到的空档
-// （bot 连续落多条 greeting 的间隙、以及压根没有计数的配置 setter）。
+// （压根没有计数的配置 setter）。
 // 注意这是**纵深防御不是正确性来源** —— 不分叉的真正原因是「树在锁体内取」：
 // 上一个写者释放锁时磁盘已经写完，下一个写者哪怕拿到重开的新实例，读到的叶子也是对的。
 addSessionTreePin((sessionId) => treeLocks.has(sessionId))
@@ -220,10 +219,9 @@ export async function withSessionTreeLock<T>(
  * 等这把锁排空 —— 把**此刻队列里**的写入跑完再返回。
  *
  * 措辞要精确：它不是禁写闸。drain 返回之后新来的写者照样能拿到锁，这一点弱于
- * `invalidateAgent`（那是解绑运行时 —— 没有实例就没有写者）。今天够用，是因为聊天会话
- * 的写者只有「正在处理的这条消息」；**M4′ 落地管线派发、出现长命写者之后，这个保证会在
- * 一个字都不改的情况下悄悄失效**，而它的三个调用点（clear / rollback / delete）都拿它
- * 当「动树之前的安全前提」。到那时需要的是一个真正的禁写位，不是这个函数。
+ * `invalidateAgent`（那是解绑运行时 —— 没有实例就没有写者）。今天够用，是因为走这把锁的
+ * 写者只有一次性的配置追加；**一旦出现长命写者，这个保证会在一个字都不改的情况下悄悄失效**。
+ * 到那时需要的是一个真正的禁写位，不是这个函数。
  *
  * 与 `moveTo` / `deleteSessionFile` 同一条禁令：**不要从锁体内部调用它** —— 自己等自己。
  */

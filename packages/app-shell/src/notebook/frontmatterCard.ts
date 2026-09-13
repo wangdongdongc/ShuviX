@@ -48,10 +48,6 @@ import {
   type ShuvixMdFieldKind,
   type ShuvixMdFieldSpec
 } from '@shuvix/chat-protocol/shuvixMdDescriptors'
-import {
-  patchFrontmatterPaths,
-  type FrontmatterPathEdit
-} from '@shuvix/chat-protocol/utils/frontmatterPatch'
 
 export interface FrontmatterCardConfig {
   /** i18n 解析（注入 i18n.t —— extensions 在 mount 时一次性捕获，实例稳定、按当前语言取值） */
@@ -85,18 +81,10 @@ export interface FrontmatterFieldMount {
   kind: ShuvixMdFieldKind
   /** 本文件的 `shuvix: <type>` 类型段 —— 候选项按「哪种文件的哪个键」分派，键名可能重名 */
   markerType: string
-  /** 当前行的原始值（csv 为逗号串，select 为单值）；键不存在时为空串。botPipeline 恒为空串 */
+  /** 当前行的原始值（csv 为逗号串，select 为单值）；键不存在时为空串 */
   value: string
-  /** botPipeline：该键解析出的映射值（缺键 / 标量 / 流式解析失败 → null）—— 控件据此渲染工作流与槽位 */
-  mapping?: Record<string, unknown> | null
   /** 写回（null = 整行删除）—— 与布尔开关同一条行级 scoped edit 路径 */
   onChange: (next: string | null) => void
-  /**
-   * botPipeline：按路径改嵌套映射（路径**相对本键**，如 `['agents', 'intent']`；value 为 null 删除）。
-   * 一批改写落成**一次**文档变更 —— 换工作流 = 改 workflow + 删掉旧槽位，若逐条派发，
-   * 每条都会让 YAML 变化 → widget 重建 → 控件卸载，中间态还会闪出一份「新工作流带旧槽位」的卡。
-   */
-  onPatch?: (edits: FrontmatterPathEdit[]) => void
   /** 只读（内置档案 / 只读预览）：控件照常挂，但禁用 —— 形态一致，只读靠禁用体现 */
   readOnly: boolean
 }
@@ -277,25 +265,6 @@ function setScalarKey(view: EditorView, key: string, value: string | null): void
 /** 布尔开关：光标不动 → 卡片保持渲染态，开关原地翻转 */
 function setBooleanKey(view: EditorView, key: string, next: boolean): void {
   setScalarKey(view, key, String(next))
-}
-
-/**
- * 嵌套映射的路径改写（bot 的管线绑定块）：把 frontmatter 那一段文本交给 chat-protocol 的
- * 行级补丁（沿路径定位、缺层就建、删空就收），再把整段替换回文档 —— 补丁只动目标行，
- * 其余行逐字节回来，所以这次 replace 在文档上等价于几条行级 scoped edit，只是合成一笔
- * （一次 undo、一次 widget 重建）。
- */
-function setNestedPaths(view: EditorView, key: string, edits: FrontmatterPathEdit[]): void {
-  const state = view.state
-  const fm = findFrontmatter(state)
-  if (!fm || edits.length === 0) return
-  const before = state.doc.sliceString(fm.from, fm.to)
-  const after = patchFrontmatterPaths(
-    before,
-    edits.map((e) => ({ path: [key, ...e.path], value: e.value }))
-  )
-  if (after === before) return
-  view.dispatch({ changes: { from: fm.from, to: fm.to, insert: after } })
 }
 
 // ---------------------------------------------------------------------
@@ -682,36 +651,6 @@ function buildFieldRow(
     right.appendChild(toggle)
     if (state === 'unset') right.appendChild(unsetSpan(t))
     row.appendChild(right)
-    return row
-  }
-
-  // bot 的管线绑定块（嵌套映射）：块行 + 宿主的联动控件（工作流下拉 → 槽位下拉）。
-  // 它不走 isSimpleScalarLine 那道门 —— 值本来就是多行块，改写走 setNestedPaths 的路径补丁。
-  // 宿主没有 mountField 时退回只读形状摘要（同其它嵌套结构）。
-  if (spec.kind === 'botPipeline') {
-    const row = el('div', `cm-shuvix-fmcard-row is-block ${ROW_BLOCK}`)
-    row.dataset.key = spec.key
-    row.appendChild(el('div', `cm-shuvix-fmcard-label ${BLOCK_LABEL}`, t(spec.labelKey)))
-    if (config.mountField) {
-      const slot = el('div', 'cm-shuvix-fmcard-slot')
-      row.appendChild(slot)
-      const cleanup = config.mountField(slot, {
-        key: spec.key,
-        kind: spec.kind,
-        markerType,
-        value: '',
-        mapping: isPlainObject(value) ? value : null,
-        onChange: (next) => setScalarKey(view, spec.key, next),
-        onPatch: (edits) => setNestedPaths(view, spec.key, edits),
-        readOnly
-      })
-      if (cleanup) cleanups.push(cleanup)
-    } else {
-      const summary = el('div', `cm-shuvix-fmcard-value font-mono text-[11px] text-text-secondary`)
-      if (value === undefined || value === null) summary.appendChild(unsetSpan(t))
-      else summary.textContent = isPlainObject(value) ? conditionsText(value) : scalarText(value)
-      row.appendChild(summary)
-    }
     return row
   }
 

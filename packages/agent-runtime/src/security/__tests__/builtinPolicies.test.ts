@@ -825,12 +825,12 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
   // ── protect-bot-files：bots 目录写入的 force-ask 内置门 ────────────────────────
   //
   // 它守的是 `~/.shuvix/bots/` —— agent 唯一会去改**关于它自己**的那份文件：bot 自己维护
-  // 自己的正文（任务段 agent 在回答半途就地 edit，没人看着）。策略明确接受「每次自我
+  // 自己的正文（bot 会话的根 Agent 在答话途中就地 edit，没人看着）。策略明确接受「每次自我
   // 编辑都撞一张卡」这个代价，所以这一组钉的全是那个代价的形状：谁撞、谁不撞、
   // 免询问开着还撞不撞、以及撞的时候到底几张卡。
   //
   // 放在本文件而不是某个 bot 测试里，是因为它是一份**内置策略**：它的判定完全由
-  // md + 引擎决定，与 botService 怎样派发任务段无关。
+  // md + 引擎决定，与 botService 怎样保存、agentSession 怎样注入无关。
 
   const botFile = (path = '/Users/u/.shuvix/bots/scout.md'): SecurityObject => ({
     type: 'path',
@@ -848,7 +848,7 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
   })
 
   it('BP-B2 免询问开着照样 ask —— force-ask 压过 session-auto-allow 的 force-allow', () => {
-    // 这是这份策略存在的**全部理由**：任务段 agent 在回答你的半途就地改这份文件、没人
+    // 这是这份策略存在的**全部理由**：bot 会话的根 Agent 在回答你的半途就地改这份文件、没人
     // 看着，而一次整份重写既可能悄悄丢掉半份记忆，也可能改写人设本身。对照组是同一开关下的普通写
     const provider = autoAllowProvider()
     expect(decide('write', botFile(), { provider }).effect).toBe('ask')

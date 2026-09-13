@@ -5,15 +5,13 @@
  * AgentManager → sessionService → agentSession → agentToolBuilder → AgentTool → AgentManager。
  * 参与方在模块初始化时把自己注册进来，AgentManager（子代理工具装配）消费。
  *
- * 第二个理由是**会话不止一种**。派生 agent 自身没有输入面板（`hasUserInputCapability`
- * 恒 false），它的询问一律带着**根会话 id** 走到这里；而根会话可能是一个有根 agent 的
- * 普通会话，也可能是一个无根的聊天会话（成员是 bot，询问由 botService 自己管）。
- * 单槽 resolver 写死了前者，于是 bot 会话里的每一次询问都以「Session … is not active」
- * 收场 —— 工具拿到的是一条错误，用户那边什么都没发生。
+ * 第二个理由是**请求与答复要落在同一处**。派生 agent 自身没有输入面板（`hasUserInputCapability`
+ * 恒 false），它的询问一律带着**根会话 id** 走到这里，由认领该会话的参与方送达。今天只有
+ * 一个参与方（sessionService：有根 agent 的会话）；注册表的形状留给将来别的会话形态。
  *
  * **两个方向都在这里**：请求按 sessionId 找归属，答复按 requestId 找归属。它们是同一件
  * 事的两半，此前一半在这里、另一半在 sessionService 里遍历 AgentSession —— 那让网关
- * 不得不知道「答复要去问 sessionService」，也让第二种会话无处插手。
+ * 不得不知道「答复要去问 sessionService」，也让别的参与方无处插手。
  */
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import { createLogger } from '../logger'
@@ -36,7 +34,7 @@ const participants: UserInputParticipant[] = []
 /**
  * 注册一个参与方。
  *
- * 各参与方的 `claims` 应当**互斥**（一个会话要么有根 agent、要么是 bot 会话），先注册的
+ * 各参与方的 `claims` 应当**互斥**，先注册的
  * 先匹配只是一条兜底规则，不是可以依赖的优先级 —— 真要靠顺序来消歧，说明 claims 写错了。
  */
 export function registerUserInputParticipant(p: UserInputParticipant): void {

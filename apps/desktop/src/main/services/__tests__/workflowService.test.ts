@@ -39,9 +39,6 @@ const counters = vi.hoisted(() => ({ compile: 0 }))
 vi.mock('../../utils/paths', () => ({ getDefaultWorkflowsDir: () => state.dir }))
 vi.mock('../../agents/AgentManager', () => ({ agentManager: { runTask: mocks.runTask } }))
 vi.mock('../agentService', () => ({ agentService: { getProfile: mocks.getProfile } }))
-// 引擎的 resolveAgentProfile 现在也认 `bot:<name>`，于是 botService 成了传递依赖。
-// 它是模块级单例、构造期就读路径，桩掉比给 paths 补一堆无关导出干净
-vi.mock('../botService', () => ({ botService: { getBot: mocks.getBot } }))
 vi.mock('../sessionService', () => ({
   sessionService: { resolveRunModelConfig: mocks.resolveRunModelConfig }
 }))

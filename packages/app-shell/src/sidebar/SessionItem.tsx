@@ -27,10 +27,8 @@ export interface SessionItemProps {
   dim?: boolean
   /** 笔记本会话（绑定 md 文件）—— 显示笔记本图标，选中后中间区为 live-preview */
   isNotebook?: boolean
-  /** 聊天会话（绑定了 bot）—— 显示 bot 图标；与 isNotebook 互斥（创建时定死） */
+  /** bot 会话（绑定了 bot）—— 显示 bot 图标；与 isNotebook 互斥（创建时定死） */
   isBot?: boolean
-  /** 聊天会话的未读 bot 回复数（A4）：>0 时标题加粗 + accent 计数徽标 */
-  unreadCount?: number
   /** 会话开着「免询问」（settings.autoAllow）—— 行首图标染琥珀 */
   autoAllow?: boolean
   /** 子会话行：缩进一级（行内 paddingLeft，同知识库的文件行）。其余与顶层行完全一致 */
@@ -55,7 +53,6 @@ export function SessionItem({
   dim = false,
   isNotebook = false,
   isBot = false,
-  unreadCount = 0,
   autoAllow = false,
   isSub = false,
   subCount = 0,
@@ -76,7 +73,7 @@ export function SessionItem({
     <div
       onClick={() => onSelect(session.id)}
       onContextMenu={onMenu ? (e) => onMenu(session.id, e) : undefined}
-      // 父子关系的稳定锚点（同 data-unread 的做法）：缩进与折叠态靠 class / 内联样式表达，
+      // 父子关系的稳定锚点：缩进与折叠态靠 class / 内联样式表达，
       // 它们会随样式调整变化 —— e2e 认这三个属性。折叠态另给一个是因为折叠只是把
       // AnimatedCollapse 的高度收成 0，子行仍在 DOM 里，光看有没有行判不出来
       data-sub={isSub ? '' : undefined}
@@ -139,9 +136,7 @@ export function SessionItem({
         />
       )}
       <div className="flex-1 min-w-0 flex items-center gap-1.5 text-[13px] group-hover:pr-6">
-        <span className={`truncate${unreadCount > 0 ? ' font-semibold text-text-primary' : ''}`}>
-          {session.title}
-        </span>
+        <span className="truncate">{session.title}</span>
         {subCount > 0 && (
           <span
             className={`shrink-0 text-[10px] tabular-nums ${
@@ -149,14 +144,6 @@ export function SessionItem({
             }`}
           >
             {subCount}
-          </span>
-        )}
-        {unreadCount > 0 && (
-          <span
-            className="ml-auto shrink-0 min-w-[17px] h-[17px] px-1 rounded-full bg-accent text-white text-[10px] font-semibold tabular-nums flex items-center justify-center"
-            data-unread={unreadCount}
-          >
-            {unreadCount > 99 ? '99+' : unreadCount}
           </span>
         )}
         {pendingCount > 0 && (

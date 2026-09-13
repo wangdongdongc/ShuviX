@@ -64,10 +64,8 @@ export interface SessionModelMetadata {
 export interface SessionSettings {
   autoAllow?: boolean
   allowList?: string[]
-  /** 绑定的 bot；有值即为聊天会话（无根的一对一会话）。判定经 chat-protocol 的 isChatSessionSettings */
+  /** 绑定的 bot；有值即为 bot 会话（普通有根会话，根档案 bot）。判定经 chat-protocol 的 isBotSessionSettings */
   bot?: string
-  /** 遗留：群聊时代的成员名单，只读 —— 带着它的老会话仍是聊天会话，但视为未绑定 bot */
-  bots?: string[]
   /** 子会话被父级钉下的档案名（session 工具 agent_profile）；根会话的档案由形态推导，不读它 */
   agentProfile?: string
   /** 笔记本会话绑定的 md 文件（相对项目根，forward-slash；项目记忆为绝对路径）；非空即为笔记本会话（根 Agent 钉死 notebook 基座档案，对话经输入卡片的抽屉呈现） */
@@ -78,8 +76,6 @@ export interface SessionSettings {
    * （同一条记忆在同一处出现两次，比少一处入口更糟）。
    */
   memorySlug?: string
-  /** 聊天会话的未读 bot 回复数（A4）；bot 落树 +1、markRead 清零。有根会话恒缺省 */
-  unreadCount?: number
 }
 
 /** 会话类型（持久化字段，不含运行时计算属性） */
@@ -295,14 +291,6 @@ interface ChatState {
    * 缺键 = 折叠；活动（流式/审批）的上升沿由 ThreadDrawer 自动置 true，手动折叠置 false。
    */
   sessionThreadOpen: Record<string, boolean>
-  /**
-   * 聊天会话：各 session 里 bot 的在飞活动（bot_activity 事件镜像；一对一，一个会话一条）。
-   * ended 相位即删键 —— 这里只保留「正在发生」的相位，驱动对话尾部的「正在输入」行。
-   * bot 会话没有 agent_end / finishStreaming，生命周期由事件自身 + messages_reloaded 收口。
-   */
-  sessionBotActivities: Record<string, BotActivitySnapshot>
-  /** 聊天会话：各 session 的 mailbox 快照（bot_mailbox 整份镜像；空快照即删键） */
-  sessionBotMailbox: Record<string, BotMailboxSnapshot>
 
   // Actions
   setSessions: (sessions: Session[]) => void
@@ -388,15 +376,6 @@ interface ChatState {
   setSessionQueue: (sessionId: string, queue: SessionQueueSnapshot) => void
   /** 设置某会话对话抽屉的展开/折叠态 */
   setThreadOpen: (sessionId: string, open: boolean) => void
-  /** bot_activity 事件唯一写入点：live 相位 upsert，ended 删键 */
-  handleBotActivity: (
-    sessionId: string,
-    ev: { botName: string; displayName: string; phase: string; messageId?: string }
-  ) => void
-  /** bot_mailbox 事件唯一写入点：整份替换；空快照即删键 */
-  setBotMailbox: (sessionId: string, snapshot: BotMailboxSnapshot) => void
-  /** 清某会话全部 bot live 态（messages_reloaded：回退/清空后一切在飞展示作废） */
-  clearBotLiveState: (sessionId: string) => void
   /** Batch-apply buffered streaming deltas in a single set() (rAF optimization) */
   flushStreamingDeltas: (buffers: Map<string, StreamingDeltaBuffer>) => void
   /**
@@ -517,34 +496,6 @@ export const selectSessionQueueCount = (s: ChatState): number => {
   return q.steer.length + q.followUp.length + q.nextTurn.length
 }
 
-/**
- * 聊天会话：bot 的在飞活动（bot_activity 的 live 相位镜像）。
- * started = 意图段判断中；queued = 在 mailbox 排队；working = 独占段执行中。
- */
-export interface BotActivitySnapshot {
-  botName: string
-  displayName: string
-  phase: 'started' | 'queued' | 'working'
-  /** 本轮用户消息的 entry id（占位卡定位/停止钮参数） */
-  messageId?: string
-  /** 该相位事件到达时刻（本地钟，仅供展示） */
-  at: number
-}
-
-/** 聊天会话：一个成员的 mailbox 快照（形状与 ChatBotMailboxEvent 同源） */
-export interface BotMailboxSnapshot {
-  active: { messageSeq: number; messageId: string } | null
-  queued: Array<{ messageSeq: number; messageId: string; queuedAt: number }>
-}
-
-/** 当前会话里 bot 的在飞活动（无活动为 null —— 稳定引用） */
-export const selectBotActivity = (s: ChatState): BotActivitySnapshot | null =>
-  (s.activeSessionId ? s.sessionBotActivities[s.activeSessionId] : undefined) ?? null
-
-/** 当前会话的 mailbox 快照（无排队为 null —— 稳定引用） */
-export const selectBotMailbox = (s: ChatState): BotMailboxSnapshot | null =>
-  (s.activeSessionId ? s.sessionBotMailbox[s.activeSessionId] : undefined) ?? null
-
 /** 当前会话的所有 pending 输入请求(按时间序) */
 const EMPTY_INPUT_REQUESTS: InputRequest[] = []
 export const selectPendingInputs = (s: ChatState): InputRequest[] =>
@@ -612,8 +563,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
   sessionActiveInputId: {},
   sessionQueues: {},
   sessionThreadOpen: {},
-  sessionBotActivities: {},
-  sessionBotMailbox: {},
   modelSupportsReasoning: false,
   thinkingLevel: DEFAULT_THINKING_LEVEL,
   modelSupportsVision: false,
@@ -1002,64 +951,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
         ? {}
         : { sessionThreadOpen: { ...state.sessionThreadOpen, [sessionId]: open } }
     ),
-
-  handleBotActivity: (sessionId, ev) =>
-    set((state) => {
-      const live = ev.phase === 'started' || ev.phase === 'queued' || ev.phase === 'working'
-      if (live) {
-        return {
-          sessionBotActivities: {
-            ...state.sessionBotActivities,
-            [sessionId]: {
-              botName: ev.botName,
-              displayName: ev.displayName,
-              phase: ev.phase as BotActivitySnapshot['phase'],
-              messageId: ev.messageId,
-              at: Date.now()
-            }
-          }
-        }
-      }
-      // ended（以及未来未知相位）：在飞展示收摊。删键而不是存空值 —— 选择器靠「键不在」回落 null
-      const cur = state.sessionBotActivities[sessionId]
-      if (!cur) return {}
-      // **只收摊它自己那条消息的行**：连发两条时，前一条的 ended 晚于后一条的 working 到达
-      // （say 在 turn 释放独占段之后才发生，而释放当场就把后一条授予了），无条件删键会把
-      // 一条**还在跑**的应答从屏幕上抹掉 —— 连同它那颗停止钮，直到它自己结束都不再回来。
-      // 快照没有 messageId（防御性）时按旧口径无条件删
-      if (ev.messageId && cur.messageId && ev.messageId !== cur.messageId) return {}
-      const next = { ...state.sessionBotActivities }
-      delete next[sessionId]
-      return { sessionBotActivities: next }
-    }),
-
-  setBotMailbox: (sessionId, snapshot) =>
-    set((state) => {
-      const empty = !snapshot.active && snapshot.queued.length === 0
-      if (empty) {
-        if (!state.sessionBotMailbox[sessionId]) return {}
-        const next = { ...state.sessionBotMailbox }
-        delete next[sessionId]
-        return { sessionBotMailbox: next }
-      }
-      return { sessionBotMailbox: { ...state.sessionBotMailbox, [sessionId]: snapshot } }
-    }),
-
-  clearBotLiveState: (sessionId) =>
-    set((state) => {
-      const patch: Partial<ChatState> = {}
-      if (state.sessionBotActivities[sessionId]) {
-        const next = { ...state.sessionBotActivities }
-        delete next[sessionId]
-        patch.sessionBotActivities = next
-      }
-      if (state.sessionBotMailbox[sessionId]) {
-        const next = { ...state.sessionBotMailbox }
-        delete next[sessionId]
-        patch.sessionBotMailbox = next
-      }
-      return patch
-    }),
 
   flushStreamingDeltas: (buffers) =>
     set((state) => {

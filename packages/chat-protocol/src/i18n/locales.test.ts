@@ -53,15 +53,15 @@ describe('i18n 语言包', () => {
   })
 
   /**
-   * L：`bot.*` 是宿主往会话里说的通告（失败句 / 回落提示 / 排队回执），插值就是它们的全部
-   * 信息量 —— 一门语言漏了 `{{agent}}`，运行期不报错，只是那句话里少了它本该点名的东西
+   * L：`bot.*` 里的插值就是那句话点名的对象（空态里 bot 的名字）—— 一门语言漏了 `{{name}}`，
+   * 运行期不报错，只是那句话里少了它本该点名的东西
    * （i18next 对缺参的插值露出原始占位符）。键集合齐平那条断言看不见这种漏译。
    */
   it('L-1 bot.* 每个键的 {{x}} 占位符集合三语一致', () => {
     const botKeys = keys.en.filter((k) => k.startsWith('bot.'))
-    expect(botKeys).toContain('bot.stepNoAgent')
-    // 抽一句钉住「确实在比较插值」：stepNoAgent 三语都点名 agent 与 name
-    expect(placeholders(leaf(en, 'bot.stepNoAgent')!)).toEqual(['agent', 'name'])
+    expect(botKeys).toContain('bot.emptyHint')
+    // 抽一句钉住「确实在比较插值」：emptyHint 三语都点名 bot 的名字
+    expect(placeholders(leaf(en, 'bot.emptyHint')!)).toEqual(['name'])
 
     const drift = Object.fromEntries(
       botKeys

@@ -316,38 +316,6 @@ export interface ChatQueueUpdateEvent extends ChatEventBase {
 
 // ─── 联合类型 ──────────────────────────────────────────
 
-// ─── 聊天会话（bot） ────────────────────────────────────
-
-/**
- * bot 在一条用户消息上的状态跃迁。
- *
- * **只在跃迁时发，不做进度心跳**：`useAgentEvents` 对每条非 delta 事件先 flushNow()，
- * 心跳会让同会话里正在流式输出的正文掉帧。
- *
- * `sessionId` 恒为**聊天会话 id**，绝不是段 agent 的子会话 id —— 否则前端的事件分发
- * 会把它当成不认识的会话丢掉，e2e 的 waitFor 也筛不到。相对地，段 agent 自己的
- * text_delta / token_usage 一律保持子会话身份：流式缓冲是 per-session 单份的，
- * 改挂主会话 id 会把 N 个 bot 的正文拼成一锅粥。
- */
-export interface ChatBotActivityEvent extends ChatEventBase {
-  type: 'bot_activity'
-  botName: string
-  displayName: string
-  /** started=管线起跑（意图判定中） | queued=在 mailbox 里等 | working=进独占段 | ended=收尾 */
-  phase: 'started' | 'queued' | 'working' | 'ended'
-  /** ended / silent 时的结局，取值与决策记录的 kind 同源 */
-  outcome?: string
-  /** 本轮用户消息的 entry id（占位卡定位用） */
-  messageId?: string
-}
-
-/** 会话的 mailbox 快照（一个会话一个 bot、一条 lane）—— 整份替换，空快照即清 */
-export interface ChatBotMailboxEvent extends ChatEventBase {
-  type: 'bot_mailbox'
-  active: { messageSeq: number; messageId: string } | null
-  queued: Array<{ messageSeq: number; messageId: string; queuedAt: number }>
-}
-
 export type ChatEvent =
   | ChatAgentStartEvent
   | ChatTextDeltaEvent
@@ -373,8 +341,6 @@ export type ChatEvent =
   | ChatErrorEvent
   | ChatUserMessageEvent
   | ChatQueueUpdateEvent
-  | ChatBotActivityEvent
-  | ChatBotMailboxEvent
 
 // ─── 辅助类型 ──────────────────────────────────────────
 

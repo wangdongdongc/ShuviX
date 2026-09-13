@@ -1,6 +1,8 @@
 import {
   WORK_PROFILE_NAME,
+  BOT_PROFILE_NAME,
   clearSessionDecisions,
+  renderBotContext,
   resolveInitialThinkingLevel,
   toInProcessAgentType,
   type CreatedAgent,
@@ -10,10 +12,11 @@ import {
 import { providerDao } from '../dao/providerDao'
 import { sessionDao } from '../dao/sessionDao'
 import { agentService } from './agentService'
+import { botService } from './botService'
 import { agentFactory } from '../agents/agentHost'
 import { workflowTriggers } from './workflowService'
 import { buildTurnCompletedFacts, isDefaultTitle } from './sessionTriggerFacts'
-import { clearSession as clearFileTimeSession } from '../utils/toolUtils/fileTime'
+import { clearSession as clearFileTimeSession, recordRead } from '../utils/toolUtils/fileTime'
 import { sshManager } from './sshManager'
 import type { ModelCapabilities, ThinkingLevel, AgentRuntimeInfo } from '../types'
 import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
@@ -108,10 +111,35 @@ export class AgentSession {
     // eslint-disable-next-line prefer-const
     let session: AgentSession
 
+    // bot 会话：把绑定的那份 bot md 的正文围栏后交给根 Agent。
+    //
+    // **只有 root 拿得到这段。** 子会话按自己的档案生成系统提示词、派发出去的子代理同理 ——
+    // 「人格决定怎么说话，不决定怎么干活」因此是结构保证而不是一句提示词纪律。
+    // 绑定的 md 被删则注入缺席，会话照常跑在基座 `bot` 上（见 botService.forSession）。
+    // 判据是**解析出来的根档案**而不是「settings 里有没有这个键」：形态推导是唯一的决定点
+    // （见 sessionService.resolveAgentProfileName 的次序）。按键判会让 `notebookPath + bot` 这种
+    // 畸形组合跑出「notebook 基座 + 人设围栏」的第三种东西 —— 那不是一种形态，只是没人裁决过的组合。
+    const bot = profileName === BOT_PROFILE_NAME ? botService.forSession(sessionId) : null
+    const systemContext = bot
+      ? [
+          renderBotContext({
+            name: bot.file.name,
+            displayName: bot.file.displayName,
+            file: bot.basePath,
+            body: bot.file.body
+          })
+        ]
+      : undefined
+    // 正文就在系统提示词里 = 视同「已读」：bot 用 `edit` 改自己这份文件时不必先 `read`
+    // （读后被改的检测仍然有效 —— 注入之后被别人改过，edit 照样拒绝）。派生 agent 的
+    // fileTime 归根会话，所以这里按 sessionId 记。
+    if (bot) recordRead(sessionId, bot.basePath)
+
     const created = await agentFactory.createAgent({
       kind: 'root',
       sessionId,
       profile,
+      systemContext,
       model: { provider, model, capabilities },
       thinkingLevel: resolveInitialThinkingLevel({
         persisted: modelMetadata?.thinkingLevel,

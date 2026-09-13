@@ -8,16 +8,14 @@ import { ConfirmDialog } from '../common/ConfirmDialog'
 import { MessageRenderer, type VisibleItem } from './MessageRenderer'
 import { buildVisibleItems, isAssistantMessage } from './conversationItems'
 import { StreamingFooter } from './StreamingFooter'
-import { BotTypingIndicator } from './BotTypingIndicator'
 import { PendingInputsPanel } from './PendingInputsPanel'
 import { InputArea } from './InputArea'
 
-/** Virtuoso Footer：流式指示器 / bot 在飞占位卡 + 底部留白（高度 = 悬浮输入卡片实高，经 --chat-input-h 变量传递） */
+/** Virtuoso Footer：流式指示器 + 底部留白（高度 = 悬浮输入卡片实高，经 --chat-input-h 变量传递） */
 function ConversationFooter(): React.JSX.Element {
   return (
     <>
       <StreamingFooter />
-      <BotTypingIndicator />
       <div aria-hidden style={{ height: 'var(--chat-input-h, 0px)' }} />
     </>
   )

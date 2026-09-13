@@ -49,58 +49,33 @@ export function writeAgentMd(app: E2EApp, name: string, seed: AgentMdSeed = {}):
 }
 
 export interface BotMdSeed {
-  /** description 是 bot md 的必填项 —— 缺省给一句，测「缺 description」时显式传空串 */
+  /** 一句话介绍（可选；侧栏行的 title 提示） */
   description?: string
   displayName?: string
-  /** `shuvix-bot-pipeline.workflow` —— 指向哪份管线 workflow（缺省 bot-chat；解析器没有缺省，种子必须写） */
-  pipeline?: string
-  /** `shuvix-bot-pipeline.input` —— 铺进管线 input 的用户键 */
-  botInput?: Record<string, string | number | boolean>
-  /**
-   * `shuvix-bot-pipeline.agents` —— 槽位表。**缺省填满内置管线的两个必填槽位**
-   * （intent: bot-intent / task: work），传 `{}` 得到一份没填槽位的 bot
-   */
-  agents?: Record<string, string>
-  /** 整个省略 `shuvix-bot-pipeline` 块（测「缺管线即非法」时用） */
-  omitPipeline?: boolean
-  /** 正文 = 人设与记忆（围栏后追加到每个参与 agent 的系统提示词） */
+  /** 正文 = 人设与记忆（围栏后追加到**根** Agent 的系统提示词） */
   body?: string
-  /** 追加的原始 frontmatter 行（测未知键/类型错时用） */
+  /** 追加的原始 frontmatter 行（测未知键 / 类型错时用） */
   rawLines?: string[]
   /** 省略文件类型标记（bot md 与 agent md 同口径：读取可选） */
   omitMarker?: boolean
+  /** 写一个别的类型标记（测「agent md 掉进 bots 目录要被拒」） */
+  marker?: string
 }
-
-/** 内置管线的两个必填槽位，用内置门控 + 主会话基座档案填满 —— 一个能跑的最小 bot */
-export const DEFAULT_BOT_AGENTS: Record<string, string> = { intent: 'bot-intent', task: 'work' }
 
 /**
  * 写一个 bot 定义文件到隔离实例的 ~/.shuvix/bots/<name>.md。
  *
- * bot 与 agent/policy/workflow 同为纯 md 驱动：文件落盘即被 `bot:list` 现扫看见，
- * 没有启用开关也没有旁路配置要一并种。
+ * 一个 bot 只声明身份，正文是它的人设与记忆 —— 没有管线、没有槽位。与 agent/policy/workflow
+ * 同为纯 md 驱动：文件落盘即被 `bot:list` 现扫看见，没有启用开关也没有旁路配置要一并种。
  */
 export function writeBotMd(app: E2EApp, name: string, seed: BotMdSeed = {}): string {
   mkdirSync(app.botsDir, { recursive: true })
   const lines = ['---']
-  if (!seed.omitMarker) lines.push('shuvix: bot v1')
+  if (!seed.omitMarker) lines.push(`shuvix: ${seed.marker ?? 'bot v2'}`)
   lines.push(`name: ${name}`)
-  lines.push(`description: ${seed.description ?? `e2e seeded bot ${name}`}`)
+  if (seed.description !== '')
+    lines.push(`description: ${seed.description ?? `e2e seeded bot ${name}`}`)
   if (seed.displayName) lines.push(`shuvix-displayName: ${seed.displayName}`)
-  // 管线绑定是一个嵌套块：workflow 必填、agents / input 可选（解析器没有缺省管线）
-  if (!seed.omitPipeline) {
-    lines.push('shuvix-bot-pipeline:')
-    lines.push(`  workflow: ${seed.pipeline ?? 'bot-chat'}`)
-    const agents = seed.agents ?? DEFAULT_BOT_AGENTS
-    if (Object.keys(agents).length) {
-      lines.push('  agents:')
-      for (const [k, v] of Object.entries(agents)) lines.push(`    ${k}: ${v}`)
-    }
-    if (seed.botInput) {
-      lines.push('  input:')
-      for (const [k, v] of Object.entries(seed.botInput)) lines.push(`    ${k}: ${String(v)}`)
-    }
-  }
   if (seed.rawLines) lines.push(...seed.rawLines)
   lines.push('---', '', seed.body ?? 'BOT BODY.')
   const filePath = join(app.botsDir, `${name}.md`)
@@ -537,14 +512,21 @@ export async function createProject(main: CdpClient, seed: ProjectSeed): Promise
  */
 export async function createAgentSession(
   main: CdpClient,
-  opts: { projectId?: string; title?: string; notebookPath?: string } = {}
+  opts: {
+    projectId?: string
+    title?: string
+    notebookPath?: string
+    /** 绑定一个 bot ⇒ 建出来的是 bot 会话：有根，根档案为基座 bot */
+    bot?: string
+  } = {}
 ): Promise<{ sid: string; systemPrompt: string }> {
   return main.eval(
     `(async () => {
       const s = await window.api.session.create(${JSON.stringify({
         title: opts.title ?? 'e2e',
         ...(opts.projectId ? { projectId: opts.projectId } : {}),
-        ...(opts.notebookPath ? { notebookPath: opts.notebookPath } : {})
+        ...(opts.notebookPath ? { notebookPath: opts.notebookPath } : {}),
+        ...(opts.bot ? { bot: opts.bot } : {})
       })})
       const sid = s.id
       const info = await window.api.agent.getInfo(sid, { ensure: true })
@@ -554,14 +536,11 @@ export async function createAgentSession(
 }
 
 /**
- * 创建一个聊天会话（`settings.bot` 有值 = 绑定了一个 bot 的无根会话），返回 sid。
+ * 创建一条 bot 会话（`settings.bot` 有值 = 绑定了一个 bot 的**有根**会话），返回 sid。
  *
- * 与 `createAgentSession` 的关键差别是**只 create、不 getInfo**：聊天会话没有根 Agent，
- * `agent.getInfo(sid, { ensure: true })` 恒为 null，读它的 `.systemPrompt` 直接抛。
- *
- * 一对一：一个会话恰绑一个 bot，形态在创建那一刻定死。没有开场白：resolve 时会话里
- * **零条消息**。要一条零 LLM 的 bot 消息，让 bot 指向一份只 `say` 一句的探针管线
- * （各 spec 自带）再 `promptBotSession`。
+ * 与 `createAgentSession({ bot })` 的差别是**只 create、不 getInfo**：根 Agent 是懒创建的，
+ * 这里不替调用方决定何时建它 —— 「先建会话、再动 md、再让运行时起来」这类用例要的正是这个空档。
+ * 形态在创建那一刻定死（不可换绑）。
  */
 export async function createBotSession(
   main: CdpClient,
@@ -577,60 +556,11 @@ export async function createBotSession(
 }
 
 /**
- * 造一条**群聊时代遗留形态**的聊天会话（`settings.bots` 名单、没有 `bot` 键），返回 sid。
- *
- * 遗留会话没有做迁移：带着 `bots` 的行仍被认作聊天会话（否则它的 chat_messages 历史在普通
- * 会话的渲染路径下没有来源），但视为**未绑定 bot**，等用户在头部重新选一个。今天没有任何
- * IPC 会再写出这个形态（`session.create` 只认 `bot`），所以先正常建一条（绑 `bots[0]`），
- * 再绕过 API 用 sqlite3 CLI 把那一行改写成老样子：`$.bots` 写名单、`$.bot` 删掉。
+ * 绕过 API 直接往会话行的 settings 里写 `agentProfile`（系统 sqlite3 CLI 直写）。
  *
  * 用系统 sqlite3 而不是 better-sqlite3（先例：`e2e/live/probe.ts`）：后者是为 Electron
- * 编译的，普通 node 里加载会报 NODE_MODULE_VERSION 不符。CLI 没有参数绑定，SQL 由
- * `JSON.stringify`（名单）与单引号转义（id）现拼；`.timeout` 挡住与主进程写锁的偶发相撞。
- *
- * 主进程不缓存会话行（`sessionDao` 每次现查），改完即生效；渲染端的会话表却是一份快照 ——
- * 借 `session.updateProject`（写回它自己的 projectId）广播一次 `session.listChanged`，
- * 侧栏与头部才会重拉。resolve 前已验证 `getById` 读回的正是遗留形态。
- */
-export async function createLegacyBotSession(
-  app: E2EApp,
-  opts: { bots: string[]; title?: string; projectId?: string }
-): Promise<string> {
-  if (opts.bots.length === 0) throw new Error('a legacy roster needs at least one name')
-  const sid = await createBotSession(app.main, {
-    bot: opts.bots[0],
-    title: opts.title,
-    projectId: opts.projectId
-  })
-  const dbPath = join(app.home, 'userdata', 'data', 'shuvix.db')
-  const roster = JSON.stringify(opts.bots).replace(/'/g, "''")
-  const idLit = sid.replace(/'/g, "''")
-  execFileSync('sqlite3', [
-    '-cmd',
-    '.timeout 3000',
-    dbPath,
-    `UPDATE sessions SET settings = json_remove(json_set(settings, '$.bots', json('${roster}')), '$.bot') WHERE id = '${idLit}'`
-  ])
-  const settings = await app.main.eval<Record<string, unknown> | undefined>(
-    `(async () => {
-      const id = ${JSON.stringify(sid)}
-      const s = await window.api.session.getById(id)
-      await window.api.session.updateProject({ id, projectId: s?.projectId ?? null })
-      return (await window.api.session.getById(id))?.settings
-    })()`
-  )
-  if (
-    !settings ||
-    'bot' in settings ||
-    JSON.stringify(settings.bots) !== JSON.stringify(opts.bots)
-  ) {
-    throw new Error(`legacy rewrite did not land: settings=${JSON.stringify(settings)}`)
-  }
-  return sid
-}
-
-/**
- * 绕过 API 直接往会话行的 settings 里写 `agentProfile`（sqlite3 直写，手法同 createLegacyBotSession）。
+ * 编译的，普通 node 里加载会报 NODE_MODULE_VERSION 不符。CLI 没有参数绑定，SQL 由单引号
+ * 转义现拼；`.timeout` 挡住与主进程写锁的偶发相撞。
  *
  * 今天唯一会写这个键的入口是 session 工具 `create-sub-session` 的 `agent_profile`（经
  * sessionService.pinAgentProfile），它没有 IPC 面；「根会话残留的戳被忽略」「子会话的戳生效」
@@ -678,29 +608,6 @@ export async function createPinnedChildSession(
   )
   await stampAgentProfile(app, sid, opts.agentProfile)
   return sid
-}
-
-/**
- * 给聊天会话发一条消息并返回消息列表。
- *
- * 与 `promptAndListMessages` 的关键差别是**不需要 `.catch()`**：聊天会话的 prompt
- * 根本不碰 LLM（botService 只落盘 + 广播），它若 reject 就是真 bug。
- *
- * resolve 时机 = `dispatch` 收尾：绑定的 bot 的管线跑完（探针管线的回复此刻已在库里），
- * 或派发前的两个分支之一已经落了它那条说明 —— 会话没绑定 bot（system 行）、
- * 绑定的 md 已被删（署名的错误气泡）。
- */
-export async function promptBotSession(
-  main: CdpClient,
-  sid: string,
-  text: string
-): Promise<
-  Array<{ id: string; role?: string; content?: unknown; metadata?: Record<string, unknown> }>
-> {
-  await main.eval(
-    `window.api.agent.prompt({ sessionId: ${JSON.stringify(sid)}, text: ${JSON.stringify(text)} })`
-  )
-  return main.eval(`window.api.message.list(${JSON.stringify(sid)})`)
 }
 
 /** 发送 prompt 并容忍 LLM 失败（无 API key），等事件落定后返回消息列表 */

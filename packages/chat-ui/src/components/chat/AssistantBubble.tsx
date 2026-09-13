@@ -55,9 +55,7 @@ export const AssistantBubble = memo(function AssistantBubble({
   const [copied, setCopied] = useState(false)
   const [showRaw, setShowRaw] = useState(false)
   const anchor = msgs[msgs.length - 1]
-  // 这里**不再处理 bot 署名/结构化回复/失败通告/压缩摘要**：带 `metadata.sender` 的消息由
-  // MessageRenderer 分流给 BotBubble（群聊气泡），压缩摘要分流给 CompactionNoticeRow，
-  // 都走不到这张卡。留着那些分支只会让人以为两处都要跟着改
+  // 压缩摘要由 MessageRenderer 分流给 CompactionNoticeRow，走不到这张卡
   const { isPlaying, isLoading, playingMessageId, speak, stop } = useTtsPlayback()
   const isThisPlaying = isPlaying && playingMessageId === anchor.id
   const isThisLoading = isLoading && playingMessageId === anchor.id

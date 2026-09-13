@@ -90,14 +90,5 @@ export function buildVisibleItems(messages: ChatMessage[], isStreaming: boolean)
     flush()
   }
 
-  // 连续同一个 bot 的消息合并头部（IM 惯例）。放在这里而不是渲染时回看上一条：
-  // 列表是虚拟滚动的，MessageRenderer 只拿得到自己那一项。
-  const senderOf = (m: ChatMessage): string | undefined =>
-    isAssistantMessage(m) ? m.metadata?.sender?.name : undefined
-  for (let i = 1; i < items.length; i++) {
-    const prev = senderOf(items[i - 1].msg)
-    if (prev && senderOf(items[i].msg) === prev) items[i].mergeHeader = true
-  }
-
   return items
 }

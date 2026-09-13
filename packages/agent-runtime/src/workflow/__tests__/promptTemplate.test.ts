@@ -288,7 +288,7 @@ describe('块引用 {{>name}}', () => {
     )
   })
 
-  it('PT-12 bot-chat 式布局的收尾：引用行消失后 3+ 空行收敛成一个空行；数组值在引用块内按行铺开', () => {
+  it('PT-12 分块布局的收尾：引用行消失后 3+ 空行收敛成一个空行；数组值在引用块内按行铺开', () => {
     const blocks = {
       others: '## Others\n{{others}}',
       window: '## Recent conversation\n\n{{window}}'

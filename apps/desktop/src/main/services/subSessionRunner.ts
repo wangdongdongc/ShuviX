@@ -27,7 +27,6 @@ import {
   appendActiveToolsChange
 } from './sessionStorage'
 import { sessionDao } from '../dao/sessionDao'
-import { isChatSessionSettings } from '@shuvix/chat-protocol/chatSession'
 import type { SubAgentModelConfig } from '@shuvix/agent-runtime'
 import { createLogger } from '../logger'
 
@@ -117,14 +116,13 @@ class SubSessionRunner {
   // ─── 准入 ──────────────────────────────────────
 
   /**
-   * 调用方会话必须是**普通会话**：聊天会话没有根 agent，笔记本会话的人格钉死在
-   * notebook 基座上、产物是那份笔记 —— 两者开子会话都不表达任何东西。
+   * 调用方会话不能是**笔记本会话**：它的人格钉死在 notebook 基座上、产物是那份笔记，开子会话
+   * 不表达任何东西。bot 会话可以 —— 把活交给子会话正是它的工作方式。
    * 返回错误文案（null = 通过）。
    */
   private rejectIfNotNormal(sessionId: string): string | null {
     const s = sessionDao.pick(sessionId, ['settings', 'parentId'])
     if (!s) return 'This task is not attached to a session — sub-sessions are unavailable here.'
-    if (isChatSessionSettings(s.settings)) return 'Chat sessions cannot have sub-sessions.'
     if (s.settings?.notebookPath) return 'Notebook sessions cannot have sub-sessions.'
     if (s.parentId) {
       return 'This is already a sub-session — nesting is limited to one level. Ask the parent session instead.'

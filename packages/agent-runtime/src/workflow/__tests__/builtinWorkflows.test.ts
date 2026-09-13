@@ -8,7 +8,6 @@
  * 透传与 journal 落点全部走真代码，只有 manager 与档案解析是 fake。
  */
 import { describe, expect, it, vi } from 'vitest'
-import { botReplyToMarkdown, type BotReply } from '@shuvix/chat-protocol/botReply'
 import {
   AUTO_TITLE_WORKFLOW_SPEC,
   BUILTIN_WORKFLOW_SPECS,
@@ -18,20 +17,18 @@ import {
 } from '../builtinWorkflows'
 import { createWorkflowEngine, type WorkflowScriptEngine } from '../engine'
 import type { WorkflowRegistryEntry } from '../engine'
-import { agentSlotsOf } from '../agentSlots'
 import type { TriggerPayloadMap } from '../triggerPoints'
 import type { RunTaskParams, SubAgentManager } from '../../subagent/manager'
 import type { InProcessAgentType } from '../../subagent/types'
-import type { ParsedWorkflowFile } from '../workflowFile'
 
 const autoTitle = (): NonNullable<ReturnType<typeof buildBuiltinWorkflow>> =>
   buildBuiltinWorkflow(AUTO_TITLE_WORKFLOW_SPEC, {})!
 
 describe('auto-title — 结构钉板', () => {
-  it('buildBuiltinWorkflows({}) 的内置清单是钉板：auto-title + bot-chat，都解析非 null', () => {
+  it('buildBuiltinWorkflows({}) 的内置清单是钉板：只有 auto-title，且解析非 null', () => {
     // 保持 toEqual 的严格性 —— 内置清单多一条少一条都该在这里现形
     const all = buildBuiltinWorkflows({})
-    expect(all.map((w) => w.name)).toEqual(['auto-title', 'bot-chat'])
+    expect(all.map((w) => w.name)).toEqual(['auto-title'])
     expect(autoTitle()).not.toBeNull()
   })
 
@@ -249,292 +246,6 @@ describe('auto-title — 分道（M2′ 顺带修掉的既有缺陷）', () => {
     expect(metas()).toHaveLength(1)
     gates[0]()
     await waitEnd()
-  })
-})
-
-describe('bot-chat — 骨架管线的结构钉板', () => {
-  const botChat = (): ParsedWorkflowFile =>
-    buildBuiltinWorkflows({}).find((w) => w.name === 'bot-chat')!
-
-  it('没有任何埋点绑定 —— 它只由会话按名 invoke', () => {
-    expect(botChat().bindings).toEqual([])
-  })
-
-  it('concurrency 为 parallel：引擎重入彻底让位，独占由宿主的 turn() 提供', () => {
-    // 这两件事是**两个粒度**：引擎重入管「要不要起 run」，mailbox 管「已在跑的 run
-    // 何时进独占段」。声明 parallel 才不会让两者打架
-    expect(botChat().concurrency).toBe('parallel')
-  })
-
-  it('三个契约块齐全且都是 type:object（M5′/M8′ 直接消费，此刻已是最终形态）', () => {
-    const schemas = botChat().schemas
-    expect(Object.keys(schemas).sort()).toEqual(['intent', 'recheck', 'reply'])
-    for (const [name, schema] of Object.entries(schemas)) {
-      expect((schema as { type?: string }).type, name).toBe('object')
-    }
-  })
-
-  it('intent 没有 ignore —— 一对一会话里每条消息都是说给这个 bot 的，沉默不在契约上', () => {
-    const enumOf = (n: string): string[] =>
-      (botChat().schemas[n] as Record<string, Record<string, Record<string, string[]>>>).properties
-        .decision.enum ?? []
-    expect(enumOf('intent')).toEqual(['reply', 'task', 'clarify'])
-    // 群聊时代的第二份契约（点名版）随 directed 一起退役
-    expect(botChat().schemas.intentDirected).toBeUndefined()
-    // task 一旦给出必带 objective：脚本以 `intent.task || { objective: intent.reason }` 回落，
-    // 一个没有 objective 的空 task 对象会让任务段拿到一个没有目标的活
-    const task = (
-      botChat().schemas.intent as { properties: Record<string, { required?: string[] }> }
-    ).properties.task
-    expect(task.required).toEqual(['objective'])
-  })
-
-  it('脚本一律读 input.* —— 脚本作用域不平铺 input（裸名是 ReferenceError）', () => {
-    const script = botChat().script
-    // 平铺只发生在提示词块的渲染作用域；脚本 global 只有基础 API + 调用方装配的那几个
-    for (const field of [
-      'window',
-      'agents.intent',
-      'agents.task',
-      'agents.recheck',
-      'message.attachments'
-    ]) {
-      expect(script, field).toContain(`input.${field}`)
-    }
-    // 群聊时代的成员语义一个都不再读：directed（点名）/ members / others（其它成员）
-    for (const gone of ['session.directed', 'session.members', 'session.others']) {
-      expect(script, gone).not.toContain(gone)
-    }
-    // 退役的入参一个都不再读：occasion（场合分流）/ notes / since（笔记材料）——
-    // 笔记场合没了，bot 的档案经 systemContext 进系统提示词，脚本连碰都不碰
-    for (const gone of ['occasion', 'notes', 'since']) {
-      expect(script, gone).not.toContain(`input.${gone}`)
-    }
-    // 反过来：新消息的正文脚本一次都不碰 —— 它经模板的 {{message.text}} 进提示词，
-    // 那里的作用域才是平铺的。脚本只挑材料，不拼文案
-    expect(script).not.toContain('input.message.text')
-    expect(botChat().prompts.gate).toContain('{{message.text}}')
-    // 两个装配进来的函数都用上了 —— 它们正是「这份 md 是 bot 管线」的全部含义。
-    // v2 取消仲裁后 claim 一并消失：没有竞争就没有「这条归谁」要裁
-    for (const api of ['turn(', 'say(']) expect(script).toContain(api)
-    expect(script).not.toContain('claim(')
-  })
-
-  it('脚本不接住任何错误：没有 try/catch、没有错误码分支、不替失败出声', () => {
-    // 失败原样上抛：引擎把 errorCode / errorStep 交回宿主，文案（i18n）与门控健康记账
-    // 都在 botService。脚本里若重新长出 catch 分支，就是把「宿主替它说」又搬回了脚本
-    const script = botChat().script
-    expect(script).not.toMatch(/\btry\s*\{/)
-    expect(script).not.toMatch(/\bcatch\s*\(e\)/)
-    for (const code of ['step_aborted', 'next_not_called', 'step_timeout', 'unknown_agent']) {
-      expect(script, code).not.toContain(code)
-    }
-    expect(script).not.toContain('error: true')
-    // 唯一的一处吞错是复核：它只可能省掉一次重复，失败即照常干活
-    expect(script.match(/\.catch\(\(\) => null\)/g)).toHaveLength(1)
-    // 也不再自报 gate：门控健康由宿主从失败归类推
-    expect(script).not.toMatch(/gate:\s*'/)
-  })
-
-  it('脚本里每个 prompt(…) 用到的块名都真有对应的块（改名漏一处 = 运行时抛）', () => {
-    const wf = botChat()
-    // 收集实参表达式里的全部字符串字面量（第一个实参若是表达式也能一并收进来）
-    const used = [...wf.script.matchAll(/prompt\(([^,)]+)/g)].flatMap((m) =>
-      [...m[1].matchAll(/'([A-Za-z][\w-]*)'/g)].map((n) => n[1])
-    )
-    expect(new Set(used)).toEqual(new Set(['gate', 'recheck', 'recheckSkipped', 'task']))
-    for (const name of new Set(used)) {
-      expect(Object.keys(wf.prompts), name).toContain(name)
-    }
-  })
-
-  it('可选上下文是被引用的块（{{>name}}），标题住在块里，脚本不再预拼 xxxBlock', () => {
-    // 被引用的块占位符全空即整块消失（promptTemplate）——「有内容才出现的一段」直接住在 md 里
-    const wf = botChat()
-    expect(wf.prompts.gate).toContain('{{>window}}')
-    expect(wf.prompts.task).toContain('{{>window}}')
-    expect(wf.prompts.task).toContain('{{>since}}')
-    expect(wf.prompts.task).toContain('{{>boundaries}}')
-    expect(wf.prompts.recheck).toContain('{{>since}}')
-    // 群聊时代的两个块（点名说明 / 其它成员）退役：一对一没有「别人」，也没有「点名」
-    expect(wf.prompts.gateDirected).toBeUndefined()
-    expect(wf.prompts.others).toBeUndefined()
-    for (const titled of ['window', 'since', 'boundaries']) {
-      expect(wf.prompts[titled], titled).toContain('##')
-    }
-    for (const gone of [
-      'othersBlock',
-      'windowBlock',
-      'sinceBlock',
-      'boundariesBlock',
-      'addressed'
-    ]) {
-      expect(wf.script, gone).not.toContain(gone)
-    }
-    // notes 块随笔记场合退役 —— bot 的档案经 systemContext 进系统提示词，不再是可选上下文
-    expect(Object.keys(wf.prompts)).not.toContain('notes')
-    expect(wf.script).not.toContain("prompt('notes'")
-  })
-})
-
-/**
- * 任务段（M8′）落地之后 bot-chat 的结构面。行为面在 botChatTask.test.ts 真跑，这里只钉
- * **md 上肉眼可查、改了就该有人知道**的那几处：默认值、契约形状、以及两条刻意的「不写」
- * （任务段不给 tools、提示词不宣告附件）——「刻意不写」是最容易在下一次编辑里被好心补上的。
- */
-describe('bot-chat —— 任务段与 BotReply 的结构钉板', () => {
-  const botChat = (): ParsedWorkflowFile =>
-    buildBuiltinWorkflows({}).find((w) => w.name === 'bot-chat')!
-
-  it('BC-1 vars 数值钉板：两个窗口、两个墙钟与出队复核开关（notes* 三项随笔记场合退役）', () => {
-    // 数值本身没有神圣性，但它们是 e2e 与单测里一堆断言的依据（切片条数、超时秒数），
-    // 改一个就该在这里显形一次
-    expect(botChat().vars).toEqual({
-      gateWindow: 8,
-      taskWindow: 20,
-      gateTimeoutSec: 60,
-      taskTimeoutSec: 1800,
-      recheckStale: true
-    })
-  })
-
-  it('BC-2 limits：agent 上限 4、墙钟 2400s —— 必须宽于最长的单步（taskTimeoutSec）', () => {
-    const wf = botChat()
-    expect(wf.limits).toEqual({ maxAgents: 4, maxDurationSec: 2400 })
-    // run 级墙钟若短于单步墙钟，任务段永远等不到自己的超时，出声的就成了笼统的 run 失败
-    expect(wf.limits.maxDurationSec!).toBeGreaterThan(wf.vars.taskTimeoutSec as number)
-  })
-
-  it('BC-3 reply 契约恰六键，required 只有 headline（结论先行是唯一的硬要求）', () => {
-    const reply = botChat().schemas.reply as {
-      required?: string[]
-      properties?: Record<string, unknown>
-    }
-    expect(reply.required).toEqual(['headline'])
-    expect(Object.keys(reply.properties!).sort()).toEqual([
-      'body',
-      'followups',
-      'headline',
-      'points',
-      'status',
-      'table'
-    ])
-  })
-
-  it('BC-4 【契约↔投影闭环】reply 契约里的每个键都能在 markdown 投影里留下痕迹', () => {
-    // 契约多出一个投影不认识的键，模型就会去填一个既不进 content 也不上屏的字段 ——
-    // 让它填等于骗它。这条把 md 那份 JSON Schema 与 chat-protocol 的投影拴在一起，
-    // 两边任何一侧单方面加键都在这里现形
-    const sample: Record<string, unknown> = {
-      headline: '结论一句',
-      body: '一段解释',
-      points: ['要点甲'],
-      table: { columns: ['列甲'], rows: [['格甲']] },
-      status: 'warn',
-      followups: ['接着问什么']
-    }
-    const traces: Record<string, string> = {
-      headline: '结论一句',
-      body: '一段解释',
-      points: '要点甲',
-      table: '列甲',
-      status: 'Status: warn',
-      followups: '接着问什么'
-    }
-    const reply = botChat().schemas.reply as { properties: Record<string, unknown> }
-    for (const key of Object.keys(reply.properties)) {
-      expect(Object.keys(sample), key).toContain(key)
-      const single = { headline: '结论一句', [key]: sample[key] } as BotReply
-      expect(botReplyToMarkdown(single), key).toContain(traces[key])
-    }
-    // table 的行列都得声明出来，否则模型会交回半张表而投影只能整段丢掉它
-    const table = reply.properties.table as { required?: string[] }
-    expect(table.required).toEqual(['columns', 'rows'])
-  })
-
-  it('BC-5 【刻意不写】任务段的 run 没有 tools 选项 —— 门控与复核才有', () => {
-    // 收窄任务段的工具等于推翻 bot md 关于它自己的说法（它的正文就是按那份清单写的）；
-    // 门控是共享内置件，锁成零工具才防得住用户覆盖它之后长出工具
-    const script = botChat().script
-    const at = (marker: string): number => {
-      const i = script.indexOf(marker)
-      expect(i, marker).toBeGreaterThanOrEqual(0)
-      return i
-    }
-    const gateCall = script.slice(at('1 ── Intent'), at('2 ── Answerable in one line'))
-    const taskCall = script.slice(at('4 ── The task agent'))
-    expect(gateCall).toContain('tools: []')
-    expect(taskCall).not.toContain('tools:')
-    expect(taskCall).toContain('schema: schemas.reply')
-    // 散文兜底只给任务段：有人在等答案。门控与复核要的是裁决，散文对它们没有意义
-    expect(taskCall).toContain("fallback: 'prose'")
-    expect(gateCall).not.toContain('fallback')
-  })
-
-  it('BC-6 【刻意不写】没有 attached 提示词块，也没有任何一句宣告附件张数', () => {
-    // 取不到附件时那句话就是在诱导幻觉，而图片本来就以 user 消息的形式在上下文里
-    const wf = botChat()
-    expect(Object.keys(wf.prompts)).not.toContain('attached')
-    for (const [name, body] of Object.entries(wf.prompts)) {
-      expect(body, name).not.toMatch(/attach|image/i)
-    }
-    // 转交本身仍在：句柄经 run 的 attach 选项走，不经提示词
-    expect(wf.script).toContain('attach: input.message.attachments')
-  })
-
-  it('BC-7 【刻意不写】没有任何提示词带 notesBlock —— bot 的档案不在 prompt 里，它经 systemContext 走', () => {
-    // 门控段曾被单独喂一份截断过的笔记；现在人设与记忆整篇追加在每一段的系统提示词末尾
-    // （renderBotContext），提示词里再拼一份等于让模型看到同一批事实两次、还是截断过的那份
-    const wf = botChat()
-    expect(wf.script).not.toContain('notesBlock')
-    expect(wf.script).not.toContain('trimNotes')
-    for (const [name, body] of Object.entries(wf.prompts)) {
-      expect(body, name).not.toContain('notesBlock')
-      expect(body, name).not.toMatch(/remembers/i)
-    }
-    // 提示词里给门控的只有身份两项：显示名 + 描述（判相关性的材料），档案本身不在
-    expect(wf.prompts.gate).toContain('{{bot.displayName}} — {{bot.description}}')
-  })
-
-  it('BC-8 失败文案不在 md 里：五个失败块已退役，文案归宿主 i18n（bot.gateBroken 等）', () => {
-    // 「配置错」「超时」「跑挂了」对用户的意味仍然不同 —— 区分的责任在 botService.failureCopy
-    // （按引擎交回的 errorCode / errorStep 选句），不在脚本。md 里再长出这些块就是两处各说一套
-    for (const name of ['taskNoAgent', 'taskTimeout', 'taskFailed', 'gateBroken', 'gateTimeout']) {
-      expect(Object.keys(botChat().prompts), name).not.toContain(name)
-    }
-  })
-
-  it('BC-9 入参 schema 钉板：四个 required 键，agents 声明 intent/task 必填、recheck 可选', () => {
-    // 这是宿主（botService 的 invoke input）与管线之间的接线契约；引擎按它做 required 校验
-    // （含沿 properties 递归的嵌套 required —— 漏填必填槽位在起跑前就被拦下并按路径点名）
-    type Prop = { type?: string; required?: string[]; properties?: Record<string, unknown> }
-    const schema = botChat().inputSchema as { required: string[]; properties: Record<string, Prop> }
-    expect(schema.required).toEqual(['bot', 'agents', 'session', 'message'])
-    expect(schema.properties.bot.required).toEqual(['name', 'displayName', 'description', 'file'])
-    expect(schema.properties.agents.type).toBe('object')
-    expect(schema.properties.agents.required).toEqual(['intent', 'task'])
-    expect(Object.keys(schema.properties.agents.properties!)).toEqual(['intent', 'task', 'recheck'])
-    expect(schema.properties.session.required).toEqual(['id'])
-    expect(schema.properties.message.required).toEqual(['id', 'text'])
-    expect(schema.properties.window.type).toBe('array')
-    // 退役入参不在 schema 里
-    for (const gone of ['occasion', 'notes', 'since']) {
-      expect(Object.keys(schema.properties), gone).not.toContain(gone)
-    }
-  })
-
-  it('BC-10 槽位表（agentSlotsOf）：intent / task 必填、recheck 可选，各带一句提示语', () => {
-    // 设置页的槽位下拉与宿主的 resolvePipeline 都读这一张表 —— 没有宿主侧的缺省表，
-    // 哪些槽位存在、哪些必填，管线文件说了算
-    const slots = agentSlotsOf(botChat())
-    expect(slots.map((s) => [s.role, s.required])).toEqual([
-      ['intent', true],
-      ['task', true],
-      ['recheck', false]
-    ])
-    for (const slot of slots) expect(slot.description, slot.role).toBeTruthy()
-    // recheck 的提示语要说明缺省回落 intent（脚本里 `input.agents.recheck || input.agents.intent`）
-    expect(slots.find((s) => s.role === 'recheck')!.description).toMatch(/defaults to intent/)
   })
 })
 

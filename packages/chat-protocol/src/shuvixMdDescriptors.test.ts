@@ -66,7 +66,7 @@ describe('okf 描述符 ↔ 知识库契约', () => {
    */
   it('机器写的一半不可编辑：sources / generated / verified 都不是可编辑 kind', () => {
     const k = byKey()
-    const EDITABLE = ['text', 'mono', 'boolean', 'csv', 'select', 'botPipeline']
+    const EDITABLE = ['text', 'mono', 'boolean', 'csv', 'select']
     expect(k['sources']).toBe('sources')
     expect(k['generated']).toBe('stamp')
     expect(k['verified']).toBe('stamp')

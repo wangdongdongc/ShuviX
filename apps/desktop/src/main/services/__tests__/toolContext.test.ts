@@ -25,7 +25,7 @@ vi.mock('../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {} })
 }))
 
-import { agentActorOf } from '../toolContext'
+import { agentActorOf, makeDesktopSecurityProvider } from '../toolContext'
 
 describe('agentActorOf', () => {
   it('TC-1 `shuvix-<profile>/<model>`：模型惰性取；缺元数据回落 shuvix-agent/unknown；取模型抛错或空白 → unknown；档案名空白归一为 -', () => {
@@ -76,5 +76,28 @@ describe('agentActorOf', () => {
     expect(agentActorOf(ctx)).toBe('shuvix-coding/m1')
     model = 'm2'
     expect(agentActorOf(ctx)).toBe('shuvix-coding/m2')
+  })
+})
+
+/**
+ * 桌面变量表 —— 内置策略 match 里的 `vars.*` 就是从这里拿值的。
+ *
+ * 一条指向**未设变量**的策略在 strict 语义下不是「拦不住」而是更糟：match 报错走 fail-safe，
+ * force-allow 视为不命中、force-ask 那一族则每次评估刷一条告警 —— 无论哪种，用户都看不出
+ * 这道门其实没在工作。所以每加一份引用新变量的内置策略，这张表都得跟着长一项。
+ */
+describe('makeDesktopSecurityProvider —— 变量表', () => {
+  const vars = (): Record<string, string | string[]> =>
+    makeDesktopSecurityProvider(
+      { sessionId: 's1', requestUserInput: undefined },
+      () => ({ workingDirectory: '/ws' }) as never
+    ).getVars() as Record<string, string | string[]>
+
+  it('SEC-6 botsDir 由 getDefaultBotsDir() 填 —— protect-bot-files 指的就是它', () => {
+    // 漏填 botsDir 的后果是那份策略静默失效，而它守的是「bot 改写自己那份文件」这条会话中途、
+    // 没人看着的写入
+    expect(vars().botsDir).toBe('/tmp/shuvix-bots')
+    // 工作区来自 getConfig()（每次评估现读），不是构造时的快照
+    expect(vars().workspace).toBe('/ws')
   })
 })

@@ -1,7 +1,6 @@
 import { ElectronAPI } from '@electron-toolkit/preload'
 import type { LucideIconName, ThemeColor } from '@shuvix/chat-protocol/theme'
 import type { ShuvixMdValidation } from '@shuvix/chat-protocol/shuvixMdContract'
-import type { BotPipelineOptions } from '@shuvix/chat-protocol/botPipeline'
 import type { KnowledgeEntry } from '@shuvix/chat-protocol/knowledge'
 import type { BgTaskLogChunk } from '@shuvix/chat-protocol/types/bgTask'
 import type { TaskInfo } from '@shuvix/chat-protocol/types/task'
@@ -410,48 +409,23 @@ declare global {
     error: string
   }
 
-  /** Bot 列表项（设计见 docs/bot-design.md §4；正文不外传，编辑走 bot.getSource） */
+  /**
+   * Bot 列表项（`~/.shuvix/bots/<name>.md`）。只有身份三项 —— 没有管线、没有槽位、没有工具与模型
+   * （那些由基座档案 `bot` 统一规定）；正文不外传，编辑走 bot.getSource。
+   */
   interface BotInfo {
     name: string
     displayName: string
     description: string
-    /** 管线框架（workflow 名） */
-    pipeline: string
-    /** 槽位 → agent 名（bot md 的 shuvix-bot-pipeline.agents 原样） */
-    agents: Record<string, string>
-    /** 正文（人设与记忆）字符数 */
-    bodyChars: number
     /** 文件路径 */
     basePath: string
-    /** 解析器接受但有话说的提示（不影响可用性） */
-    warnings: string[]
   }
 
-  /** 无法解析的用户 bot 文件，读写走 bot.*ByFile */
+  /** 无法解析的 bot 文件，读写走 bot.*ByFile */
   interface InvalidBotFile {
     fileName: string
     /** 人读原因：解析器的拒绝理由 */
     error: string
-  }
-
-  /** bot 详情的运行时读数（bot.inspect；frontmatter 本身归属性卡） */
-  interface BotInspect {
-    pipeline: { name: string; exists: boolean; concurrency?: string }
-    /**
-     * 管线声明的每个槽位（顺序即声明序）+ bot 填的 agent 名；bot 额外填了管线没声明的槽位
-     * 也列出（required=false）。ref 缺省 = 没填；missing = 填了但那个 agent 不存在。
-     */
-    slots: Array<{
-      role: string
-      required: boolean
-      description?: string
-      ref?: string
-      missing: boolean
-    }>
-    /** 门控段已 sticky 回落内置的原因；未降级则缺省 */
-    gateDegraded?: string
-    /** 正文（人设与记忆）的用量 —— 它进每个参与 agent 的系统提示词 */
-    body: { chars: number }
   }
 
   /** Sub-agent 元信息（文件系统驱动；与主进程 AgentProfile 对齐） */
@@ -504,8 +478,6 @@ declare global {
       followUp: (params: AgentFollowUpParams) => Promise<{ success: boolean }>
       nextTurn: (params: AgentNextTurnParams) => Promise<{ success: boolean }>
       abort: (sessionId: string) => Promise<{ success: boolean }>
-      /** 停止 bot 对某条消息的应答（聊天会话；bot:abort 的会话通道别名） */
-      abortBot: (params: { sessionId: string; messageId: string }) => Promise<{ aborted: boolean }>
       setModel: (params: AgentSetModelParams) => Promise<{ success: boolean }>
       setThinkingLevel: (params: AgentSetThinkingLevelParams) => Promise<{ success: boolean }>
       /** 读取运行时 Agent 对象的实时信息（systemPrompt/工具/模型）；Agent 未创建返回 null，
@@ -588,10 +560,6 @@ declare global {
       delete: (id: string) => Promise<{ success: boolean }>
       /** 获取单个会话（含计算属性） */
       getById: (id: string) => Promise<SessionInfo | null>
-      /** 清零聊天会话未读（A4）；幂等 */
-      markRead: (id: string) => Promise<{ success: boolean }>
-      /** 给聊天会话绑定 bot（只对聊天会话生效；遗留的未绑定会话靠它重新选） */
-      setBot: (params: { id: string; bot: string }) => Promise<{ success: boolean; error?: string }>
     }
     message: {
       list: (sessionId: string) => Promise<ChatMessage[]>
@@ -678,20 +646,21 @@ declare global {
       openFolder: () => Promise<{ success: boolean }>
     }
     bot: {
-      list: () => Promise<BotInfo[]>
-      /** revision 是这一刻的内容指纹，save 时回传即可发现「打开之后被笔记段改过」 */
+      /** 合法 + 非法两拨一次取齐（侧栏一次扫描就够） */
+      list: () => Promise<{ bots: BotInfo[]; invalid: InvalidBotFile[] }>
+      /** revision 是这一刻的内容指纹，save 时回传即可发现「打开之后被 bot 自己改过」 */
       getSource: (params: {
         name: string
-      }) => Promise<{ text: string; revision: string } | { error: string }>
+      }) => Promise<{ text: string; revision: string; path: string } | null>
       template: (params: {
         name: string
         description?: string
-        persona?: string
+        body?: string
       }) => Promise<{ text: string }>
       save: (params: {
         originalName: string
         text: string
-        /** getSource 那一刻的指纹;对不上即冲突,回传 conflict.current 供 UI 解决 */
+        /** getSource 那一刻的指纹；对不上即冲突，回传 conflict.current 供 UI 解决 */
         revision?: string
       }) => Promise<{
         success: boolean
@@ -704,18 +673,15 @@ declare global {
         text: string
       }) => Promise<{ success: boolean; name?: string; error?: string }>
       delete: (params: { name: string }) => Promise<{ success: boolean; error?: string }>
-      listInvalid: () => Promise<InvalidBotFile[]>
       getSourceByFile: (params: {
         fileName: string
-      }) => Promise<{ text: string } | { error: string }>
+      }) => Promise<{ text: string; revision: string; path: string } | null>
       saveByFile: (params: {
         fileName: string
         text: string
-      }) => Promise<{ success: boolean; error?: string }>
+      }) => Promise<{ success: boolean; error?: string; name?: string; revision?: string }>
       deleteByFile: (params: { fileName: string }) => Promise<{ success: boolean; error?: string }>
       openFolder: () => Promise<{ success: boolean }>
-      /** 设置页详情的运行时读数：管线/阶段解析结果 + 门控 sticky 降级 + 笔记调度状态 */
-      inspect: (params: { name: string }) => Promise<BotInspect | { error: string }>
     }
     workflow: {
       list: () => Promise<WorkflowInfo[]>
@@ -748,8 +714,6 @@ declare global {
         text: string
         name?: string
       }) => Promise<ShuvixMdValidation>
-      /** bot 管线字段的候选项（属性卡联动控件用）：生效的工作流及其槽位 + agent 名 */
-      botPipelineOptions: () => Promise<BotPipelineOptions>
     }
     tools: {
       list: (sessionId?: string) => Promise<

@@ -157,8 +157,6 @@ const api = {
 
     /** 中止指定 session 的生成 */
     abort: (sessionId: string) => ipcRenderer.invoke('agent:abort', sessionId),
-    abortBot: (params: { sessionId: string; messageId: string }) =>
-      ipcRenderer.invoke('bot:abort', params),
 
     /** 切换模型 */
     setModel: (params: AgentSetModelParams) => ipcRenderer.invoke('agent:setModel', params),
@@ -281,10 +279,7 @@ const api = {
       ipcRenderer.invoke('session:removeAllowListEntry', params),
     delete: (id: string) => ipcRenderer.invoke('session:delete', id),
     /** 获取单个会话（含 workingDirectory） */
-    getById: (id: string) => ipcRenderer.invoke('session:getById', id),
-    /** 切换会话根 Agent 的档案（`/<agentName>` 斜杠命令） */
-    setBot: (params: { id: string; bot: string }) => ipcRenderer.invoke('session:setBot', params),
-    markRead: (id: string) => ipcRenderer.invoke('session:markRead', id)
+    getById: (id: string) => ipcRenderer.invoke('session:getById', id)
     // 配置变更订阅已并入 events.subscribe（AppEvent 'session.configChanged'）
   },
 
@@ -397,27 +392,24 @@ const api = {
   bot: {
     list: () => ipcRenderer.invoke('bot:list'),
     getSource: (params: { name: string }) => ipcRenderer.invoke('bot:getSource', params),
-    template: (params: { name: string; description?: string; persona?: string }) =>
+    template: (params: { name: string; description?: string; body?: string }) =>
       ipcRenderer.invoke('bot:template', params),
     save: (params: { originalName: string; text: string; revision?: string }) =>
       ipcRenderer.invoke('bot:save', params),
     create: (params: { text: string }) => ipcRenderer.invoke('bot:create', params),
     delete: (params: { name: string }) => ipcRenderer.invoke('bot:delete', params),
-    listInvalid: () => ipcRenderer.invoke('bot:listInvalid'),
     getSourceByFile: (params: { fileName: string }) =>
       ipcRenderer.invoke('bot:getSourceByFile', params),
     saveByFile: (params: { fileName: string; text: string }) =>
       ipcRenderer.invoke('bot:saveByFile', params),
     deleteByFile: (params: { fileName: string }) => ipcRenderer.invoke('bot:deleteByFile', params),
-    openFolder: () => ipcRenderer.invoke('bot:openFolder'),
-    inspect: (params: { name: string }) => ipcRenderer.invoke('bot:inspect', params)
+    openFolder: () => ipcRenderer.invoke('bot:openFolder')
   },
 
   // ============ shuvix 契约 md 校验（frontmatter 属性卡） ============
   shuvixMd: {
     validate: (params: { type: string; text: string; name?: string }) =>
-      ipcRenderer.invoke('shuvixMd:validate', params),
-    botPipelineOptions: () => ipcRenderer.invoke('shuvixMd:botPipelineOptions')
+      ipcRenderer.invoke('shuvixMd:validate', params)
   },
 
   // ============ 工具 ============

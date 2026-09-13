@@ -308,7 +308,6 @@ export {
   type WorkflowLimits,
   type WorkflowConcurrency
 } from './workflow/workflowFile'
-export { agentSlotsOf, type PipelineAgentSlot } from './workflow/agentSlots'
 export {
   TRIGGER_POINTS,
   getTriggerPoint,
@@ -338,19 +337,15 @@ export {
   type BuiltinWorkflowDeps,
   type BuiltinWorkflowSpec
 } from './workflow/builtinWorkflows'
-// Bot：md 格式解析 + 正文围栏（设计见 docs/bot-design.md）
-// **不内置任何 bot** —— 内置的只有管线 workflow（bot-chat）与门控段 agent（bot-intent）；
-// 「新建 bot」由 UI 用这些内置件填一份模板，用户取个名字即可。
+// Bot：md 格式解析 + 正文围栏。一个 bot = 身份 + 正文（人设与记忆），绑在一条有根会话上；
+// **不内置任何 bot**（bot 会话的基座档案 `bot` 在下面的内置档案里）。
 export {
   parseBotDefinitionFile,
   serializeBotDefinitionFile,
   BOT_FILE_MARKER,
   BOT_FILE_MARKER_KEY,
-  BOT_PIPELINE_KEY,
-  BOT_PIPELINE_WORKFLOW_KEY,
-  BOT_PIPELINE_AGENTS_KEY,
-  BOT_PIPELINE_INPUT_KEY,
-  TEMPLATE_BOT_PIPELINE,
+  BOT_FILE_MARKER_TYPE,
+  BOT_RETIRED_PIPELINE_KEY,
   type ParsedBotFile
 } from './bot/botFile'
 export { renderBotContext, BOT_CONTEXT_TAG, type BotContextInput } from './bot/botContext'
@@ -367,6 +362,8 @@ export {
   CHAT_SPEC,
   NOTEBOOK_PROFILE_NAME,
   NOTEBOOK_SPEC,
+  BOT_PROFILE_NAME,
+  BOT_SPEC,
   CODING_SPEC,
   EXPLORE_SPEC,
   VISUALIZATION_SPEC,
@@ -374,7 +371,6 @@ export {
   WIKI_SPEC,
   WIKI_WRITER_SPEC,
   TITLER_SPEC,
-  BOT_INTENT_SPEC,
   WIKI_ENTRY_BANNER,
   WIKI_TOPIC_BANNER,
   type BuiltinProfileDeps,

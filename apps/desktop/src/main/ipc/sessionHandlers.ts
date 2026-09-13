@@ -58,14 +58,6 @@ export function registerSessionHandlers(): void {
     return sessionService.getById(id) || null
   })
 
-  /** 给聊天会话绑定 bot（含群聊时代遗留的、尚未绑定的会话） */
-  ipcMain.handle('session:setBot', (_event, params: { id: string; bot: string }) =>
-    sessionService.setBot(params.id, params.bot)
-  )
-
-  /** 清零聊天会话未读（A4）；幂等 */
-  ipcMain.handle('session:markRead', (_event, id: string) => sessionService.markRead(id))
-
   /** 删除会话（同时清理 Agent 内存实例、消息、HTTP 日志和临时工作目录） */
   ipcMain.handle('session:delete', async (_event, id: string) => {
     // 若被删的会话正处于悬浮态，先关闭对应悬浮窗

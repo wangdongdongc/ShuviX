@@ -443,7 +443,7 @@ describe('agentService.isSessionProfile —— 可作子会话档案的判据表
     expect(judge('work')).toBe(false)
   })
 
-  it('AS-23b 其余内置全部为 true —— 含曾经只可派发的 wiki-writer / titler / bot-intent', () => {
+  it('AS-23b 其余内置全部为 true —— 含曾经只可派发的 wiki-writer / titler', () => {
     for (const name of [
       'coding',
       'browser',
@@ -452,8 +452,7 @@ describe('agentService.isSessionProfile —— 可作子会话档案的判据表
       'widget',
       'wiki',
       'wiki-writer',
-      'titler',
-      'bot-intent'
+      'titler'
     ]) {
       expect(judge(name), name).toBe(true)
     }

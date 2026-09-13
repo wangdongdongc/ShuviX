@@ -1,8 +1,8 @@
 import { memo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Copy, Check, CornerDownRight, RotateCcw, ChevronDown, ChevronUp } from 'lucide-react'
+import { Copy, Check, RotateCcw, ChevronDown, ChevronUp } from 'lucide-react'
 import { copyToClipboard } from '../../utils/clipboard'
-import { useChatStore, type UserTextMessage } from '../../stores/chatStore'
+import type { UserTextMessage } from '../../stores/chatStore'
 import { segmentContent, resolveTokensForCopy } from '@shuvix/chat-protocol/utils/inlineTokens'
 import { imageSrc } from '@shuvix/chat-protocol/utils/imageSrc'
 import { TokenBadge, InvalidTokenBadge } from './InlineTokenBadge'
@@ -57,13 +57,6 @@ export const UserBubble = memo(function UserBubble({
   const fadeMask = `linear-gradient(to bottom, #000 calc(100% - ${COLLAPSE_FADE_HEIGHT}px), transparent)`
 
   const source = msg.metadata?.source
-
-  // mailbox 回执（聊天会话，A2）：这条消息还在 bot 的队列里排着。
-  // 订阅本会话的 mailbox 快照，按消息 id 判定（布尔值，引用稳定）；
-  // active（正被处理）不出回执 —— 那由对话尾部的「正在输入」行呈现
-  const queued = useChatStore(
-    (s) => !!s.sessionBotMailbox[msg.sessionId]?.queued.some((q) => q.messageId === msg.id)
-  )
 
   return (
     <div className="group flex flex-col items-end gap-1 px-4 py-2">
@@ -150,14 +143,6 @@ export const UserBubble = memo(function UserBubble({
           </button>
         )}
       </div>
-
-      {/* mailbox 回执（聊天会话）：这条还在排队 */}
-      {queued && (
-        <div className="flex items-center gap-1 text-[11px] text-text-tertiary" data-bot-receipt>
-          <CornerDownRight size={10} />
-          {t('bot.receiptQueued')}
-        </div>
-      )}
     </div>
   )
 })

@@ -211,7 +211,7 @@ describe('会话级选取项已下线', () => {
     expect(keys).not.toContain('updateAgentProfile')
     expect(keys).not.toContain('listAgentProfiles')
     // 面本身还在（不是因为 window.api.session 整个没了才「不含」）
-    expect(keys).toContain('setBot')
+    expect(keys).toContain('create')
   })
 })
 

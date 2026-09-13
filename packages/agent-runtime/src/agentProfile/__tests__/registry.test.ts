@@ -15,6 +15,7 @@ import {
   CHAT_PROFILE_NAME,
   KNOWLEDGE_WRITER_SPEC,
   NOTEBOOK_PROFILE_NAME,
+  BOT_PROFILE_NAME,
   WIDGET_SPEC,
   WIKI_SPEC,
   WIKI_WRITER_SPEC,
@@ -39,6 +40,7 @@ import {
   WIKI_UPDATED_KEY
 } from '@shuvix/chat-protocol/wikiFileContract'
 import { KNOWLEDGE_TYPES } from '@shuvix/chat-protocol/knowledge'
+import { BOT_CONTEXT_TAG } from '../../bot/botContext'
 import { parse as parseYaml } from 'yaml'
 import type { AgentProfile } from '../../subagent/types'
 
@@ -176,12 +178,13 @@ describe('语言解析 — 精确 → 基础 → en，按文件整体回退', ()
 })
 
 describe('buildBuiltinProfiles — 全集现算', () => {
-  it('全参数 → 十三个内置,三个基座档案居首;缺 widget/wiki 根 → 自动跳过', () => {
+  it('全参数 → 十三个内置,四个基座档案居首;缺 widget/wiki 根 → 自动跳过', () => {
     // bot-notes 已退役（bot 自己维护自己的正文，没有单独的笔记段）—— 名单里不该再有它
     expect(buildBuiltinProfiles(ALL_PARAMS).map((a) => a.name)).toEqual([
       'work',
       'chat',
       'notebook',
+      'bot',
       'coding',
       'browser',
       'explore',
@@ -190,21 +193,20 @@ describe('buildBuiltinProfiles — 全集现算', () => {
       'wiki',
       'wiki-writer',
       'titler',
-      'bot-intent',
       'knowledge-writer'
     ])
-    // titler / bot 门控段 / knowledge-writer 无宿主参数依赖：缺 widget/wiki 根也在
+    // titler / knowledge-writer 无宿主参数依赖：缺 widget/wiki 根也在
     //（模型走 shuvix-model 通用链路，内置不声明；知识库目标由工具按会话解析，不吃参数）
     expect(buildBuiltinProfiles({}).map((a) => a.name)).toEqual([
       'work',
       'chat',
       'notebook',
+      'bot',
       'coding',
       'browser',
       'explore',
       'visualization',
       'titler',
-      'bot-intent',
       'knowledge-writer'
     ])
   })
@@ -387,18 +389,21 @@ describe('work 档案钉板(项目会话基座：工具集/环境段的唯一事
     }
   })
 
-  it('内置档案默认认 AGENTS.md → CLAUDE.md（notebook/titler/bot 门控段除外）、项目感知默认开（同上除外）', () => {
+  it('内置档案默认认 AGENTS.md → CLAUDE.md（notebook / bot / titler 除外）、项目感知默认开（titler 除外）', () => {
     /** 两样注入都不要的执行型档案（上下文无关的一次性任务，注入整份项目文档纯属浪费 token 且稀释指令） */
-    const NO_INJECTION = ['titler', 'bot-intent']
+    const NO_INJECTION = ['titler']
     for (const spec of BUILTIN_PROFILE_SPECS) {
       const built = buildBuiltinProfile(spec, ALL_PARAMS)!
       // 两项注入的开关面不同：
       //  - 指令文件：notebook 不吃 —— AGENTS.md/CLAUDE.md 是写代码的工程约定，改一篇笔记用不上；
       //  - 项目感知：notebook 照常开 —— 笔记就写在项目里，项目提示词与项目记忆正是它的上下文；
-      //  - titler 两样都不要；bot-intent 同一取舍：门控段跑在每条消息的首字节路径上，
-      //    不该背项目提示词与记忆索引（bot 自己的档案另经 systemContext 追加）。
+      //  - titler 两样都不要：拟一个标题用不上项目文档，注入只是噪声。
+      // bot 与 notebook 同一取舍：bot 是对话人格，AGENTS.md/CLAUDE.md 是写代码的工程
+      // 约定 —— 真正写代码的是它派出去的子会话，那条会话自己会吃这份文件。
       const instructionsOn =
-        spec.name !== NOTEBOOK_PROFILE_NAME && !NO_INJECTION.includes(spec.name)
+        spec.name !== NOTEBOOK_PROFILE_NAME &&
+        spec.name !== BOT_PROFILE_NAME &&
+        !NO_INJECTION.includes(spec.name)
       const awarenessOn = !NO_INJECTION.includes(spec.name)
       // 清单顺序即优先级：两份都在时取 AGENTS.md（正是改制前那条内置默认优先级）
       expect(built.instructionFiles, spec.name).toEqual(
@@ -473,16 +478,18 @@ describe('chat 档案钉板(不归属项目的会话的创建基座)', () => {
 
 /**
  * 基座名单钉板 —— 会话根 Agent 的档案**由形态推导**（项目 work / 无项目 chat / 笔记本
- * notebook），三者都不可被点名：不进派发名单，也不可作子会话的 `agent_profile`。
+ * notebook / bot 会话 bot），四者都不可被点名：不进派发名单，也不可作子会话的 `agent_profile`。
  * 曾经存在的「可切换基座名单」（SWITCHABLE_BASE_PROFILE_NAMES）与旧基座名 `default`
  * 已随会话内切换一并下线，这里钉住导出面，防它们悄悄复活。
  */
 describe('基座名单钉板', () => {
-  it('恰为 chat / notebook / work 三个名字', () => {
-    expect([...BASE_PROFILE_NAMES].sort()).toEqual(['chat', 'notebook', 'work'])
+  it('恰为 bot / chat / notebook / work 四个名字', () => {
+    expect([...BASE_PROFILE_NAMES].sort()).toEqual(['bot', 'chat', 'notebook', 'work'])
     expect(BASE_PROFILE_NAMES.has(WORK_PROFILE_NAME)).toBe(true)
     expect(BASE_PROFILE_NAMES.has(CHAT_PROFILE_NAME)).toBe(true)
     expect(BASE_PROFILE_NAMES.has(NOTEBOOK_PROFILE_NAME)).toBe(true)
+    // bot 是 bot 会话的基座：同样由形态推导、同样不可被点名
+    expect(BASE_PROFILE_NAMES.has(BOT_PROFILE_NAME)).toBe(true)
   })
 
   it('没有任何内置 md 还带着退役的 shuvix-session-awareness（三语全集）', () => {
@@ -650,6 +657,74 @@ describe('notebook 档案钉板(笔记本会话根 Agent 的基座)', () => {
   it('是基座档案,不进派发名单、不可作 agent_profile', () => {
     expect(BASE_PROFILE_NAMES.has(NOTEBOOK_PROFILE_NAME)).toBe(true)
     expect(BASE_PROFILE_NAMES.has(WORK_PROFILE_NAME)).toBe(true)
+  })
+})
+
+/**
+ * bot 档案钉板（bot 会话的基座）——「看得见、动不了」的那半个保证住在这里。
+ *
+ * 一条 bot 会话是普通有根会话，根 Agent 跑的就是这份档案；**它是谁**由会话绑定的那份
+ * bot md 经 systemContext 追加（渲染见 bot/botContext.ts）。三条钉板对应
+ * 这份设计的三个支点：窄工具清单（RPer-1）、交接流程活在散文里（RPer-2）、围栏标签名
+ * 两处一致（RPer-3）。
+ */
+describe('bot 档案钉板（bot 会话的基座）', () => {
+  it('RPer-1 三语工具清单恰为九件、不含 bash/write/ssh/database/browser、不声明模型', () => {
+    // 这份窄清单**就是**「看得见、动不了」那半个保证：它能读能查能问、能改自己那份
+    // bot md（edit），但没有 shell、没有创建文件的路 —— 真要干活只能开子会话，
+    // 而子会话按自己的档案生成提示词、拿不到人设围栏。谁想「顺手给它一个 bash」，
+    // 那条结构保证当场作废（work/chat/coding 三份清单相同的那条惯例在这里刻意不适用）
+    for (const language of LANGS) {
+      const built = profile(BOT_PROFILE_NAME, language)
+      expect(built.tools, `bot.${language}`).toEqual([
+        'read',
+        'ls',
+        'grep',
+        'glob',
+        'ask',
+        'edit',
+        'session',
+        'agent',
+        'knowledge'
+      ])
+      for (const forbidden of ['bash', 'write', 'ssh', 'database', 'browser', 'git', 'preview']) {
+        expect(built.tools, `bot.${language} 不得持有 ${forbidden}`).not.toContain(forbidden)
+      }
+      // 不声明 shuvix-model：模型是**会话**的事（用户在模型选择器里选），不是档案的事
+      expect(built.model, `bot.${language}`).toBeUndefined()
+    }
+    // 是基座档案：由形态推导、不可被点名（不进派发名单，也不能当子会话的 agent_profile）
+    expect(BASE_PROFILE_NAMES.has(BOT_PROFILE_NAME)).toBe(true)
+  })
+
+  it('RPer-2 三语正文都点名三个子会话动作与 coding —— 整套交接设计活在散文里', () => {
+    // 工具清单只说「它有 session 工具」，说不出「把活整包交出去、验收完再用自己的口吻汇报」。
+    // 那套流程没有任何机制承载，全部由这段正文表达 —— 翻译漏一个词就等于在那门语言里
+    // 静默关掉它（对照 work 档案的同名钉板）
+    for (const language of LANGS) {
+      const body = profile(BOT_PROFILE_NAME, language).systemPrompt
+      for (const anchor of [
+        'create-sub-session',
+        'prompt-sub-session',
+        'wait-for-sub-sessions',
+        'agent_profile',
+        'run_in_background',
+        '`coding`'
+      ]) {
+        expect(body, `bot.${language} 需点名 ${anchor}`).toContain(anchor)
+      }
+    }
+  })
+
+  it('RPer-3 三语正文都点名 <bot_profile> 标签，且该字符串等于 BOT_CONTEXT_TAG', () => {
+    // 正文里写着「你是谁在末尾的 <bot_profile> 块里」，而那个块由 renderBotContext 生成。
+    // 两处对不上，模型就会去找一个不存在的块 —— 而缺块时的正文分支恰恰教它「别编角色」，
+    // 于是每条 bot 会话都以「我的 bot 文件没了」开场
+    for (const language of LANGS) {
+      const body = profile(BOT_PROFILE_NAME, language).systemPrompt
+      expect(body, `bot.${language}`).toContain(`\`<${BOT_CONTEXT_TAG}>\``)
+    }
+    expect(BOT_CONTEXT_TAG).toBe('bot_profile')
   })
 })
 

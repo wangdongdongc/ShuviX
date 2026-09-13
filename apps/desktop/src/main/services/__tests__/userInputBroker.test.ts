@@ -13,10 +13,9 @@
  *   - **`request` 的失败要原样往上抛**。broker 不是异常边界 —— 吞成 `{kind:'cancel'}`
  *     会让工具以为「用户取消了」，而真相是路由本身坏了。
  *
- * ⚠️ `resetUserInputParticipantsForTests()` **只有本文件能调**。botService /
- * sessionService 的参与方是模块加载的副作用，一个进程里只注册一次；在
- * botServiceUserInput / sessionServiceUserInput 里清空注册表等于把被测对象自己从路由表上
- * 摘掉，那两个文件之后的每一条都只会撞上「User input channel is not available」。
+ * ⚠️ `resetUserInputParticipantsForTests()` **只有本文件能调**。sessionService 的参与方是
+ * 模块加载的副作用，一个进程里只注册一次；在 sessionServiceUserInput 里清空注册表等于把被测对象自己从路由表上
+ * 摘掉，那个文件之后的每一条都只会撞上「User input channel is not available」。
  */
 import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'

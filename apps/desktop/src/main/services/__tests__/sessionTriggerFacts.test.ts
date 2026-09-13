@@ -1,8 +1,8 @@
 /**
  * 会话域埋点的**事实构造器** —— `session.turn-completed` 的 payload 从哪来。
  *
- * 为什么它值得一份自己的单测：这份 payload 是一条**契约**，两个 emit 侧共用
- * （有根会话由 AgentSession 触发，聊天会话由 botService 触发），而订阅方的 CEL `when`
+ * 为什么它值得一份自己的单测：这份 payload 是一条**契约**（由 AgentSession 触发），
+ * 而订阅方的 CEL `when`
  * 是照着这份形状写的 —— 内置的 auto-title 就靠 `turnCount == 2 && textMessageCount >= 3`
  * 决定要不要精修标题。数字算错一格，表现出来是「某类会话的工作流莫名其妙不触发」，
  * 而那种故障没有报错、没有日志，只有一个永远不改的标题。

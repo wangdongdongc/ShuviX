@@ -21,6 +21,9 @@ import chatJa from './md/chat.ja.md?raw'
 import codingEn from './md/coding.md?raw'
 import codingZh from './md/coding.zh.md?raw'
 import codingJa from './md/coding.ja.md?raw'
+import botEn from './md/bot.md?raw'
+import botZh from './md/bot.zh.md?raw'
+import botJa from './md/bot.ja.md?raw'
 import notebookEn from './md/notebook.md?raw'
 import notebookZh from './md/notebook.zh.md?raw'
 import notebookJa from './md/notebook.ja.md?raw'
@@ -45,9 +48,6 @@ import wikiWriterJa from './md/wiki-writer.ja.md?raw'
 import titlerEn from './md/titler.md?raw'
 import titlerZh from './md/titler.zh.md?raw'
 import titlerJa from './md/titler.ja.md?raw'
-import botIntentEn from './md/bot-intent.md?raw'
-import botIntentZh from './md/bot-intent.zh.md?raw'
-import botIntentJa from './md/bot-intent.ja.md?raw'
 import knowledgeWriterEn from './md/knowledge-writer.md?raw'
 import knowledgeWriterZh from './md/knowledge-writer.zh.md?raw'
 import knowledgeWriterJa from './md/knowledge-writer.ja.md?raw'
@@ -72,6 +72,11 @@ export {
 export const WORK_PROFILE_NAME = 'work'
 export const CHAT_PROFILE_NAME = 'chat'
 export const NOTEBOOK_PROFILE_NAME = 'notebook'
+/**
+ * Bot 会话的基座。形态判据是 `settings.bot` —— 它绑定了哪一份 `~/.shuvix/bots/<name>.md`，
+ * 那份文件的正文经 `renderBotContext` 围栏后追加到本会话**根** Agent 的系统提示词末尾。
+ */
+export const BOT_PROFILE_NAME = 'bot'
 
 /**
  * wiki 条目/章程的管理横幅 —— 写在契约文件 frontmatter 的 `description` 字段，
@@ -99,6 +104,22 @@ export const WORK_SPEC: BuiltinProfileSpec = {
 export const CHAT_SPEC: BuiltinProfileSpec = {
   name: CHAT_PROFILE_NAME,
   sources: { en: chatEn, zh: chatZh, ja: chatJa }
+}
+
+/**
+ * Bot 档案 —— **bot 会话的基座**。与 work / chat 的分工不同，它的分界是「说话」与「干活」：
+ * 正文规定它以消息而非文档的形状答复、把一切真正的活交给子会话，而**它是谁**由会话绑定的
+ * 那份 bot md 经 systemContext 注入。
+ *
+ * 工具面**刻意收窄**（没有 bash / write / ssh / database / browser）：这是「执行任务不受人设
+ * 干扰」的结构落点 —— 人格够得到的地方只能看不能动，要动就得开一条子会话，而子会话按自己的
+ * 档案生成系统提示词、拿不到那段围栏。靠提示词纪律表达这条分工是不够的：一个握着 bash 的
+ * 人格会顺手把活干了，那正是要避免的事。`edit` 留着是为了让 bot 维护自己那份 md（写入经出厂
+ * 策略 `protect-bot-files` 恒询问）。
+ */
+export const BOT_SPEC: BuiltinProfileSpec = {
+  name: BOT_PROFILE_NAME,
+  sources: { en: botEn, zh: botZh, ja: botJa }
 }
 
 export const NOTEBOOK_SPEC: BuiltinProfileSpec = {
@@ -181,23 +202,6 @@ export const TITLER_SPEC: BuiltinProfileSpec = {
 }
 
 /**
- * 聊天会话（bot）管线的门控段档案 —— 设计见 docs/bot-design.md §6.1。它是内置 bot-chat
- * 管线 `intent` 槽位（与 `recheck` 槽位）的缺省人选；`task` 槽位没有内置专属档案，bot md
- * 自己指定任意一份 agent md（新建模板预填 `work`）。
- *
- * **不声明 `shuvix-model`**：它跑在每条消息的首字节路径上，跟随会话模型是最差默认 ——
- * 门控模型是一等配置，由设置页的「门控模型」选择器写进 `~/.shuvix/agents/bot-intent.md`
- * 覆盖文件（GUI 写覆盖文件，模型链本身零改动）。
- *
- * `shuvix-tools` **刻意留空**：它经 next 契约把结果交回管线脚本，由脚本调注入的能力落地
- * （`say`），自己不持有任何工具 —— 见 docs/bot-design.md §3.3。
- */
-export const BOT_INTENT_SPEC: BuiltinProfileSpec = {
-  name: 'bot-intent',
-  sources: { en: botIntentEn, zh: botIntentZh, ja: botIntentJa }
-}
-
-/**
  * 知识库写入侧（OKF，设计 docs/okf-knowledge-design.md §6.3）—— 派发执行：经 `knowledge` 工具
  * 往**本会话所属项目的那个 bundle** 写条目。没有 git、没有提交协议、没有反链复查：簿记归宿主
  * （P3）。与旧 wiki-writer 并存，互不相干。
@@ -212,13 +216,14 @@ export const KNOWLEDGE_WRITER_SPEC: BuiltinProfileSpec = {
 }
 
 /**
- * 内置 spec 全集（三个基座档案 work / chat / notebook 居首，其后为可派发的具名 agent；
+ * 内置 spec 全集（四个基座档案 work / chat / notebook / bot 居首，其后为可派发的具名 agent；
  * widget/wiki 依赖宿主根目录参数，缺参自动跳过）
  */
 export const BUILTIN_PROFILE_SPECS: readonly BuiltinProfileSpec[] = [
   WORK_SPEC,
   CHAT_SPEC,
   NOTEBOOK_SPEC,
+  BOT_SPEC,
   CODING_SPEC,
   BROWSER_SPEC,
   EXPLORE_SPEC,
@@ -227,13 +232,12 @@ export const BUILTIN_PROFILE_SPECS: readonly BuiltinProfileSpec[] = [
   WIKI_SPEC,
   WIKI_WRITER_SPEC,
   TITLER_SPEC,
-  BOT_INTENT_SPEC,
   KNOWLEDGE_WRITER_SPEC
 ]
 
 /**
  * 「基座档案」——某种会话形态的根 Agent 人格，由形态推导、按名钉死，而非可派发的具名 agent：
- * `work` 是项目会话，`chat` 是不归属项目的会话，`notebook` 是笔记本会话。
+ * `work` 是项目会话，`chat` 是不归属项目的会话，`notebook` 是笔记本会话，`bot` 是 bot 会话。
  *
  * 三者都可被同名用户档案覆盖（这正是自定义人格的入口），但都不该被点名：不进派发工具
  * 的可用名单（会诱导 LLM 拿基座档案当一次性任务 agent 使 —— 它们是某种会话形态的人格，
@@ -243,7 +247,8 @@ export const BUILTIN_PROFILE_SPECS: readonly BuiltinProfileSpec[] = [
 export const BASE_PROFILE_NAMES: ReadonlySet<string> = new Set([
   WORK_PROFILE_NAME,
   CHAT_PROFILE_NAME,
-  NOTEBOOK_PROFILE_NAME
+  NOTEBOOK_PROFILE_NAME,
+  BOT_PROFILE_NAME
 ])
 
 /** 按宿主 deps 现算全部可用内置档案（文案按当前语言解析） */

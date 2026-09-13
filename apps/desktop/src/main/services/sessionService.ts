@@ -32,14 +32,14 @@ import { DEFAULT_THINKING_LEVEL } from '@shuvix/chat-protocol/types/thinking'
 import {
   CHAT_PROFILE_NAME,
   NOTEBOOK_PROFILE_NAME,
+  BOT_PROFILE_NAME,
   SessionManager,
   WORK_PROFILE_NAME
 } from '@shuvix/agent-runtime'
 import type { SubAgentModelConfig } from '@shuvix/agent-runtime'
-import { isChatSessionSettings } from '@shuvix/chat-protocol/chatSession'
+import { isBotSessionSettings } from '@shuvix/chat-protocol/botSession'
 import { agentService } from './agentService'
 // 仅在方法体内调用：两个模块的构造期都不互相触碰，ESM 活绑定下无初始化环
-import { botService } from './botService'
 import { AgentSession } from './agentSession'
 import { killBySession, setBgTaskNotifier } from './bgTaskService'
 import { resolveProfileModelSpec } from '../agents/agentHost'
@@ -75,9 +75,6 @@ export class SessionService {
         return undefined
       }
       const profileName = this.resolveAgentProfileName(sessionId)
-      // 聊天会话恒无根 Agent。守在这一处，`tracked()` 便恒为 false，
-      // `ensureAgentSession` 与 `getAgentInfo({ensure})` 两个消费方一行都不用改
-      if (profileName === null) return undefined
       log.info(`创建 Agent model=${ctx.model} profile=${profileName} session=${sessionId}`)
       return AgentSession.create({
         sessionId,
@@ -171,7 +168,7 @@ export class SessionService {
     const parent = parentId ? sessionDao.pick(parentId, ['projectId', 'settings']) : undefined
     const pid = parent ? parent.projectId : (params?.projectId ?? null)
 
-    // 聊天会话：绑定一个 bot，无根。空串 / 空白视同没给
+    // bot 会话：绑定一个 bot，**有根**（根档案 bot，形态推导见 resolveAgentProfileName）。空串 / 空白视同没给
     const bot = params?.bot?.trim() || undefined
     const session: Session = {
       id,
@@ -191,7 +188,7 @@ export class SessionService {
         // 路径授权（allowList）刻意**不**继承：那是一条会长大的记账，快照过去只会漂移。
         ...(parent?.settings?.autoAllow ? { autoAllow: true } : {})
         // 档案**不在这里写**：根 Agent 的档案由会话形态推导（项目会话 work / 无项目 chat /
-        // 笔记本 notebook，见 resolveAgentProfileName），没有可选的东西。只有子会话在父级
+        // 笔记本 notebook / bot 会话 bot，见 resolveAgentProfileName），没有可选的东西。只有子会话在父级
         // 点名档案时由 subSessionRunner 经 pinAgentProfile 钉一个显式值。
       },
       createdAt: now,
@@ -205,100 +202,17 @@ export class SessionService {
     return session
   }
 
-  /**
-   * 给聊天会话绑定 bot。
-   *
-   * 两条纪律：
-   *  - **只对聊天会话生效**。「有没有 bot」决定的是会话形态（无根 / 有根）：给普通会话
-   *    绑一个 bot 等于中途换一种会话，这里不做。反过来，群聊时代遗留的会话（只有 `bots`
-   *    名单、没有 `bot`）正是这个口的主要客户 —— 它们没有做迁移，靠用户在这里重新选一个。
-   *  - **不校验名字是否存在**（与 create 同口径）：bot md 是纯 md 驱动的，用户随时可能
-   *    删掉一个；缺失在会话里可见地失败（`bot.botGone`），历史消息靠消息行自带的
-   *    displayName 永不裂。
-   */
-  setBot(id: string, bot: string): { success: boolean; error?: string } {
-    if (!this.isBotSession(id)) return { success: false, error: 'Not a chat session' }
-    const name = bot.trim()
-    if (!name) return { success: false, error: 'A chat session needs a bot' }
-    sessionDao.updateSettings(id, { bot: name })
-    broadcastSessionConfigChanged(id)
-    log.info(`setBot session=${id} → ${name}`)
-    return { success: true }
-  }
-
-  /**
-   * 改聊天会话的运行配置（v2）—— 部分更新，未给的键保持原值。
-   *
-   * 只对聊天会话有意义（有根会话的配置在会话树上）。不广播列表变更：模型切换不改变
-   * 会话在列表里的呈现，而 `updateSettings` 顺带 touch 的 updatedAt 会让它无端上浮 ——
-   * 那是「有新消息」才该有的信号。
-   */
-  updateChatRunConfig(
-    id: string,
-    patch: { provider?: string; model?: string; thinkingLevel?: string }
-  ): void {
-    if (!this.isBotSession(id)) return
-    const cur = sessionDao.pickSettings(id, ['chatRunConfig'])?.chatRunConfig
-    sessionDao.updateSettings(id, {
-      chatRunConfig: {
-        provider: patch.provider ?? cur?.provider ?? '',
-        model: patch.model ?? cur?.model ?? '',
-        ...((patch.thinkingLevel ?? cur?.thinkingLevel)
-          ? { thinkingLevel: patch.thinkingLevel ?? cur?.thinkingLevel }
-          : {})
-      }
-    })
-  }
-
-  /**
-   * bot 回复落树后的会话侧账（A4 未读）：未读 +1。`updateSettings` 顺带 touch
-   * updatedAt —— 列表按它排序，**上浮与未读是同一笔账**；随后广播列表变更
-   * （渲染端 seq-guarded 重拉）。只有聊天会话的落树路径会调它，有根会话恒缺省。
-   */
-  noteUnreadBotReply(id: string): void {
-    const cur = sessionDao.pickSettings(id, ['unreadCount'])?.unreadCount ?? 0
-    sessionDao.updateSettings(id, { unreadCount: cur + 1 })
-    broadcastSessionListChanged()
-  }
-
-  /**
-   * 清零未读（A4）。幂等：已为 0 不写库不广播 —— 正在看的会话每来一条回复都会
-   * 「+1 → 清零」跑一轮，这个短路让第二次清零不再空转一圈广播。
-   */
-  markRead(id: string): { success: boolean } {
-    const cur = sessionDao.pickSettings(id, ['unreadCount'])?.unreadCount ?? 0
-    if (cur === 0) return { success: true }
-    sessionDao.updateSettings(id, { unreadCount: 0 })
-    broadcastSessionListChanged()
-    return { success: true }
-  }
-
-  /**
-   * 改名迁移专用的绑定改写。
-   *
-   * 与 `setBot` 刻意分开：那个是**用户操作**（校验形态、拒绝空名），而这里是一次跟着
-   * bot 改名走的机械替换 —— 绑定没有变化，只是同一个 bot 换了个名字。
-   */
-  rewriteBot(id: string, bot: string): void {
-    if (!bot) return
-    sessionDao.updateSettings(id, { bot })
-    broadcastSessionConfigChanged(id)
-  }
-
-  /**
-   * 聊天会话判定 —— 绑定了 bot，或带着群聊时代的遗留成员名单（未绑定，等用户重新选）。
-   * 口径在 chat-protocol 的 `isChatSessionSettings`：两个宿主与三层 UI 共用一份。
-   */
+  /** bot 会话判定 —— 绑定了一个 bot。口径在 chat-protocol 的 botSession（两个宿主与三层 UI 共用一份） */
   isBotSession(sessionId: string): boolean {
-    return isChatSessionSettings(sessionDao.pickSettings(sessionId, ['bot', 'bots']))
+    return isBotSessionSettings(sessionDao.pickSettings(sessionId, ['bot']))
   }
 
   /**
    * 解析会话根 Agent 的档案名 —— **由会话形态推导**，不是用户选的：
    *
-   *  - 聊天会话（见 isBotSession）返回 **null**：它没有根 Agent；
    *  - 笔记本会话（settings.notebookPath 非空）恒为 `notebook`
    *    （用户覆盖 `~/.shuvix/agents/notebook.md` 经 getProfile 按名合并自动生效）；
+   *  - bot 会话（settings.bot 非空）恒为 `bot`：人设与记忆经 systemContext 注入（见 agentSession）；
    *  - 子会话可以带一个父级点名、`pinAgentProfile` 钉下的 `settings.agentProfile`
    *    （如 `coding`）：档案还在就用它。档案是纯 md 驱动的，用户随时可能删掉某个
    *    `~/.shuvix/agents/<name>.md`，钉着一个已不存在的名字时回落形态基座而不是卡死；
@@ -308,13 +222,13 @@ export class SessionService {
    * `default`），改制刻意不做迁移 —— 项目会话就是 work、无项目会话就是 chat，没有设置项、
    * 没有切换命令、没有选择器，键留在 settings 里只是遗留数据。
    */
-  resolveAgentProfileName(sessionId: string): string | null {
+  resolveAgentProfileName(sessionId: string): string {
     const session = sessionDao.pick(sessionId, ['projectId', 'parentId', 'settings'])
     const settings = session?.settings
-    // 聊天会话没有根 Agent：消息由绑定的 bot 的管线应答。返回类型因此是可空的 ——
-    // 把「这个会话没有档案」变成编译期事实，胜过再造一个与它并行、迟早漂移的谓词
-    if (isChatSessionSettings(settings)) return null
     if (settings?.notebookPath) return NOTEBOOK_PROFILE_NAME
+    // bot 会话：根 Agent 恒为基座 `bot`，人设与记忆经 systemContext 注入（见 agentSession.create）。
+    // 与笔记本一样按形态推导，没有设置项
+    if (isBotSessionSettings(settings)) return BOT_PROFILE_NAME
     const pinned = session?.parentId ? settings?.agentProfile : undefined
     if (pinned) {
       if (agentService.getProfile(pinned)) return pinned
@@ -456,8 +370,6 @@ export class SessionService {
     // 再清理运行时 AgentSession（dispose 触发 destroy）。等它彻底停下才继续删数据 ——
     // 否则一个还在跑的 run 会往刚被删掉的会话文件/结果目录里继续写
     await this.agents.remove(id, 'destroy')
-    // 聊天会话的写者不是 AgentSession 而是 botService 的树写锁，并列排空
-    await botService.abortSession(id)
     // 再清理持久化数据
     messageService.clear(id)
     httpLogDao.deleteBySessionId(id)
@@ -504,20 +416,11 @@ export class SessionService {
     const session = sessionDao.pick(sessionId, ['projectId'])
     if (!session) return null
 
-    // 运行配置的事实源**按会话形态**分流（v2）：
-    //   有根会话 → 会话树的 model_change / thinking_level_change / active_tools_change entry
-    //   聊天会话 → settings.chatRunConfig（它没有根 Agent，v2 之后也没有会话树）
-    // 判据是形态（聊天会话）而不是「chatRunConfig 在不在」—— 刚建的聊天会话还没有那个键，
-    // 按存在性分流会让它掉回去读一棵根本不存在的树。两种形态互斥，创建那一刻就定死。
-    const cfg = sessionDao.pickSettings(sessionId, ['bot', 'bots', 'chatRunConfig'])
-    const isChat = isChatSessionSettings(cfg)
-    const chat = isChat ? cfg?.chatRunConfig : undefined
-    const tree = isChat
-      ? { provider: undefined, model: undefined, thinkingLevel: undefined, enabledTools: undefined }
-      : await readSessionRunConfig(sessionId)
-    const provider = chat?.provider ?? tree.provider ?? this.getDefaultProvider()
-    const model = chat?.model ?? tree.model ?? this.getDefaultModel()
-    const thinkingLevel = chat?.thinkingLevel ?? tree.thinkingLevel ?? DEFAULT_THINKING_LEVEL
+    // 运行配置的唯一事实源是会话树：model_change / thinking_level_change / active_tools_change entry
+    const tree = await readSessionRunConfig(sessionId)
+    const provider = tree.provider ?? this.getDefaultProvider()
+    const model = tree.model ?? this.getDefaultModel()
+    const thinkingLevel = tree.thinkingLevel ?? DEFAULT_THINKING_LEVEL
 
     const modelRow = providerDao.findModelsByProvider(provider).find((m) => m.modelId === model)
     const capabilities: ModelCapabilities = modelRow?.capabilities
@@ -638,8 +541,7 @@ export class SessionService {
   /**
    * 此刻活着的 AgentSession —— 供 broker 的参与方按 requestId 找归属。
    *
-   * 响应入口本身已经上移到 `userInputBroker`：那里同时握着请求与答复两个方向，
-   * 而聊天会话（无根）的询问归 botService 管，留在这里就永远轮不到它。
+   * 响应入口本身在 `userInputBroker`：那里同时握着请求与答复两个方向。
    */
   liveAgentSessions(): Iterable<AgentSession> {
     return this.agents.values()
@@ -682,7 +584,6 @@ export const sessionService = new SessionService()
  *
  * `claims` 问的是「此刻有没有活着的运行时」而不是「这条会话记录存不存在」—— 询问要送到
  * 的是内存里那个 AgentSession 的 pendingInputs，运行时不在就没有可送达的地方。
- * 无根的聊天会话在这里恒不认领，它由 botService 自己那份参与方接管。
  */
 registerUserInputParticipant({
   name: 'session',

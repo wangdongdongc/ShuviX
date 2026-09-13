@@ -2,8 +2,8 @@
  * sessionService —— 会话根 Agent 档案的**形态推导**（`resolveAgentProfileName`）与「创建不落戳」。
  *
  * 契约（改制后）：档案不是用户选的，由会话形态推导 ——
- *   - 聊天会话（`bot` 有值 / 遗留 `bots` 非空）→ **null**（无根），判定先于一切；
- *   - 笔记本会话（`notebookPath` 非空）→ `notebook`；
+ *   - 笔记本会话（`notebookPath` 非空）→ `notebook`，判定先于一切；
+ *   - bot 会话（`bot` 非空白）→ `bot`；
  *   - 其余按形态：有项目 `work`、无项目 `chat`；
  *   - **只有子会话**（`parentId` 非空）读 `settings.agentProfile`，且档案 md 还在才用；
  *   - 根会话上残留的戳（含旧基座名 `default`）**被忽略、不迁移、不清洗**；
@@ -77,12 +77,6 @@ vi.mock('../toolAggregator', () => ({
   filterAvailableTools: vi.fn((tools: string[]) => tools)
 }))
 vi.mock('../../utils/toolUtils/allowList', () => ({ buildAllowEntry: vi.fn() }))
-vi.mock('../botService', () => ({
-  botService: {
-    abortSession: vi.fn(async () => {}),
-    isActive: vi.fn(() => false)
-  }
-}))
 vi.mock('../agentService', () => ({ agentService: { getProfile: mocks.getProfile } }))
 vi.mock('../agentSession', () => ({ AgentSession: { create: mocks.agentCreate } }))
 vi.mock('../bgTaskService', () => ({ killBySession: vi.fn(), setBgTaskNotifier: vi.fn() }))
@@ -146,22 +140,7 @@ const existing = (name: string): Partial<AgentProfile> => ({
   tools: []
 })
 
-const resolve = (): string | null => sessionService.resolveAgentProfileName(SID)
-
-describe('RP-1 聊天会话恒 null —— 无根判定先于一切', () => {
-  it.each([
-    ['bot 有值', { bot: 'scout' }],
-    ['遗留 bots 非空', { bots: ['a'] }],
-    ['bot 与 notebookPath 同在', { bot: 'scout', notebookPath: 'notes/a.md' }],
-    ['bot 与子会话戳同在', { bot: 'scout', agentProfile: 'coding' }]
-  ])('%s → 严格 null，且 getProfile 零调用', (_label, settings) => {
-    // 返回类型是可空的：把「这个会话没有档案」变成编译期事实。有人改成回落 work
-    // 就把聊天会话变成了有根会话 —— botService 那份参与方与 session 这份会同时认领它
-    world({ projectId: 'p1', parentId: 'P', settings })
-    expect(resolve()).toBeNull()
-    expect(mocks.getProfile).not.toHaveBeenCalled()
-  })
-})
+const resolve = (): string => sessionService.resolveAgentProfileName(SID)
 
 describe('RP-2 笔记本会话恒 notebook', () => {
   it.each([
@@ -257,24 +236,26 @@ describe('RP-5 / RP-6 / RP-7 子会话（parentId 非空）才读戳', () => {
 
 describe('RP-8 / RP-9 边界', () => {
   it("RP-8 会话不存在（pick 为 undefined）：不抛，返回 'chat'（钉现状）", () => {
-    // 现状：无行 = 无项目 = chat。日后若改成 null，DefaultChatGateway.listTools 那句
-    // `?? WORK_PROFILE_NAME` 只兜 null，要一起改
+    // 现状：无行 = 无项目 = chat（返回类型不可空：每条会话恒有一份根档案）
     mocks.daoPick.mockReturnValue(undefined)
     expect(() => resolve()).not.toThrow()
     expect(resolve()).toBe('chat')
   })
 
-  it('RP-9 bots 为空数组不劫持：根会话按形态；子会话才读戳', () => {
-    // settings 的 JSON patch 没有删键路径，群聊时代「移除全部成员」只能写 `[]`，而 `[]` 是 truthy
-    world({ projectId: 'p1', parentId: null, settings: { bots: [] } })
-    expect(resolve()).toBe('work')
+  it('RP-9 遗留的 bots 名单不劫持任何形态：根会话按形态；子会话才读戳', () => {
+    // 群聊时代的 `settings.bots` 已没有读者（v19 删掉了名单非空的旧聊天会话，空数组的那些
+    // 本来就是普通会话）。它留在库里的任何形状都不该再被当成一种形态
+    for (const bots of [[], ['a']]) {
+      world({ projectId: 'p1', parentId: null, settings: { bots } })
+      expect(resolve(), JSON.stringify(bots)).toBe('work')
+    }
 
-    world({ projectId: null, parentId: null, settings: { bots: [], agentProfile: 'coding' } })
+    world({ projectId: null, parentId: null, settings: { bots: ['a'], agentProfile: 'coding' } })
     mocks.getProfile.mockReturnValue(existing('coding'))
     expect(resolve()).toBe('chat')
     expect(mocks.getProfile).not.toHaveBeenCalled()
 
-    world({ projectId: null, parentId: 'P', settings: { bots: [], agentProfile: 'coding' } })
+    world({ projectId: null, parentId: 'P', settings: { bots: ['a'], agentProfile: 'coding' } })
     expect(resolve()).toBe('coding')
   })
 })
@@ -304,13 +285,89 @@ describe('RP-10 推导结果真的送进了运行时（resolveAgentProfileName �
     await sessionService.ensureAgentSession(SID)
     expect(mocks.agentCreate.mock.calls[0][0]).toMatchObject({ profileName: 'coding' })
   })
+})
 
-  it('聊天会话：create 不被调用，ensure 返回 undefined（无根）', async () => {
-    world({ projectId: null, parentId: null, settings: { bot: 'scout' } })
-    mocks.agentCreate.mockResolvedValue(fakeAgent)
+/**
+ * RP-12 … RP-16：bot 会话 —— `settings.bot` 非空白 → 基座 `bot`。
+ *
+ * 它与上面三条基座同一性质：**由形态推导**，没有设置项、没有选择器、没有切换命令。
+ * 分支次序是 笔记本(notebookPath) → bot 会话(bot) → 子会话戳 → 项目/无项目。
+ */
+describe('RP-12 bot 会话恒 bot —— 项目分支压不过它', () => {
+  it.each([
+    ['有项目', 'p1'],
+    ['无项目', null]
+  ])('%s：bot 非空 → bot；不查档案、不读设置项', (_label, projectId) => {
+    // 一条 bot 会话可以归属项目（它的子会话就在那个项目里干活），但它的人格不是 work ——
+    // 谁把 bot 那条判定挪到项目分支之后，项目里的 bot 会集体变回普通工作会话
+    world({ projectId, parentId: null, settings: { bot: 'scout' } })
+    expect(resolve()).toBe('bot')
+    expect(mocks.getProfile).not.toHaveBeenCalled()
+    expect(mocks.findByKey).not.toHaveBeenCalled()
+  })
+})
 
-    expect(await sessionService.ensureAgentSession(SID)).toBeUndefined()
-    expect(mocks.agentCreate).not.toHaveBeenCalled()
+describe('RP-13 分支次序钉板：畸形组合归进一种既有形态，不生出第三种', () => {
+  it('notebookPath + bot → notebook（笔记本判定先于 bot）', () => {
+    // 正常路径下这种组合不可能出现（两个创建入口各写各的键）。它是数据损坏，而损坏时
+    // 唯一安全的做法是**落进一种已经裁决过的形态**，不是发明第三种。
+    //
+    // 注入侧据此对齐：agentSession 按**解析出来的档案名**判断要不要注入人设围栏，而不是
+    // 按「settings 里有没有 bot 这个键」。所以这条会话拿不到人设围栏 —— 它跑在 notebook
+    // 基座上、是一条笔记本会话
+    world({
+      projectId: 'p1',
+      parentId: null,
+      settings: { notebookPath: 'notes/a.md', bot: 'scout' }
+    })
+    expect(resolve()).toBe('notebook')
+    expect(mocks.getProfile).not.toHaveBeenCalled()
+  })
+})
+
+describe('RP-14 / RP-15 边角', () => {
+  it.each([
+    ['空串', '', 'p1', 'work'],
+    ['纯空白', '   \t', 'p1', 'work'],
+    ['纯空白、无项目', '  ', null, 'chat']
+  ])('RP-14 bot 是 %s → 落回形态基座（%s）', (_label, bot, projectId, expected) => {
+    // 与 notebookPath 的空串同一口径：一个被写空的键不是一种形态。判定走
+    // boundBotOf 的 trim，别处手写 `!!bot` 会在这里分叉
+    world({ projectId, parentId: null, settings: { bot } })
+    expect(resolve()).toBe(expected)
+  })
+
+  it('RP-15 bot 会话上遗留的根 settings.agentProfile 仍被忽略', () => {
+    // 根会话不读戳这条承诺对 bot 会话同样成立，而且它排在戳之前：即便戳指着一份真存在的
+    // 档案，bot 会话的根 Agent 也恒是基座 bot
+    world({
+      projectId: 'p1',
+      parentId: null,
+      settings: { bot: 'scout', agentProfile: 'coding' }
+    })
+    mocks.getProfile.mockImplementation((name) => existing(name))
+    expect(resolve()).toBe('bot')
+    expect(mocks.getProfile).not.toHaveBeenCalled()
+    expect(mocks.daoUpdateSettings).not.toHaveBeenCalled()
+    expect(mocks.warn).not.toHaveBeenCalled()
+  })
+})
+
+describe('RP-16 形态推导确实被消费：AgentSession.create 收到 bot', () => {
+  it("bot 会话：profileName 是 'bot'（不是 work，哪怕它归属项目）", async () => {
+    // 与 RP-10 同一条链路（resolveAgentProfileName → SessionManager → AgentSession.create）。
+    // 断言它到底送进去了：注入侧的判据就是这个 profileName（见 agentSessionBot.test.ts）
+    world({ projectId: 'p1', parentId: null, settings: { bot: 'scout' } })
+    mocks.projectPick.mockReturnValue({ path: '/proj', settings: {} })
+    mocks.agentCreate.mockResolvedValue({ name: 'fake' })
+
+    await sessionService.ensureAgentSession(SID)
+    expect(mocks.agentCreate).toHaveBeenCalledTimes(1)
+    expect(mocks.agentCreate.mock.calls[0][0]).toMatchObject({
+      sessionId: SID,
+      profileName: 'bot',
+      workingDirectory: '/proj'
+    })
   })
 })
 
@@ -330,7 +387,7 @@ describe('RP-11 create 不再落戳', () => {
       }
     ],
     ['笔记本', () => sessionService.create({ notebookPath: 'notes/a.md' })],
-    ['聊天会话', () => sessionService.create({ bot: 'scout' })]
+    ['bot 会话', () => sessionService.create({ bot: 'scout' })]
   ])('%s：落库 settings 里没有 agentProfile 键；不读设置项、不查档案', (_label, create) => {
     create()
     expect(mocks.daoInsert).toHaveBeenCalledTimes(1)

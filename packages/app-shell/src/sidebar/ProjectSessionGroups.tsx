@@ -1,4 +1,4 @@
-import { isChatSessionSettings } from '@shuvix/chat-protocol/chatSession'
+import { isBotSessionSettings } from '@shuvix/chat-protocol/botSession'
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useChatStore, selectAllPendingCounts, type Session } from '@shuvix/chat-ui'
@@ -25,7 +25,7 @@ export interface ProjectSessionGroupsProps {
   onToggleGroup: (key: string) => void
   /** 在某组下新建会话（临时组传 null） */
   onNewChat: (projectId: string | null) => void
-  /** 在某组下新建 Bot 会话（打开成员多选）；宿主未注入 bots 能力时缺省，入口整体不渲染 */
+  /** 在某组下新建 Bot 会话（打开 bot 单选）；宿主未注入 bots 能力时缺省，入口整体不渲染 */
   onNewBotChat?: (projectId: string | null) => void
   /** 选中会话（缺省用 chatStore.setActiveSessionId） */
   onSelect?: (id: string) => void
@@ -289,8 +289,7 @@ export function ProjectSessionGroups({
               pendingCount={pendingCounts[item.id]}
               dim={dim && activeGroupKey === groupKey && activeSessionId !== item.id}
               isNotebook={!!item.settings.notebookPath}
-              isBot={isChatSessionSettings(item.settings)}
-              unreadCount={item.settings.unreadCount}
+              isBot={isBotSessionSettings(item.settings)}
               autoAllow={item.settings.autoAllow === true}
               isPinned={caps.pin ? pinnedSessionIds?.has(item.id) : undefined}
               isSub={isSub}

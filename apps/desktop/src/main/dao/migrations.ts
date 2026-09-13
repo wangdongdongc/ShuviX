@@ -513,6 +513,31 @@ export const migrations: Migration[] = [
       // 后台刷新与用户在设置里保存 headers 会互相踩。
       db.exec(`ALTER TABLE providers ADD COLUMN oauth TEXT NOT NULL DEFAULT ''`)
     }
+  },
+  {
+    version: 19,
+    description:
+      '拆除旧 Bots：删除 chat_messages 表与既有聊天会话（无根 + 管线形态，不做数据迁移）',
+    up: (db) => {
+      // 旧 Bots（workflow 管线 + 无根聊天会话）整体拆除。bot 会话如今是一条普通有根会话
+      // （settings.bot + 根档案 bot），转写在会话树里 —— chat_messages 没有读者了。
+      //
+      // **删除既有聊天会话**（与 v16 同一条产品裁决，不做数据迁移）：它们的转写只在这张表里，
+      // 表一删，留下的就是侧栏里点开即空白的会话，比删掉更糟。两种遗留形态都算：一对一时代的
+      // `$.bot`（无根）与群聊时代的 `$.bots` 名单。v19 之前不存在有根的 bot 会话，所以此刻
+      // `$.bot` 有值只可能是旧形态。
+      //
+      // bot md 本身不受影响：`~/.shuvix/bots/` 里的文件照常解析（正文本来就是人设与记忆），
+      // 用户从侧栏开一条新会话即可接着聊。孤儿文件与 v16 同样处置 ——
+      // `<userData>/data/chat-attachments/<id>/` 留在盘上，不做启动扫描清理。
+      db.exec(`
+        DELETE FROM sessions
+        WHERE (json_type(settings, '$.bot') = 'text' AND trim(json_extract(settings, '$.bot')) != '')
+           OR json_array_length(json_extract(settings, '$.bots')) > 0
+      `)
+      db.exec(`DROP INDEX IF EXISTS idx_chat_messages_session_seq`)
+      db.exec(`DROP TABLE IF EXISTS chat_messages`)
+    }
   }
 ]
 

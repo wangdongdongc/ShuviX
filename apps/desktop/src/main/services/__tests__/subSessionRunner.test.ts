@@ -134,16 +134,25 @@ beforeEach(() => {
 const err = (r: unknown): string => (r as { error: string }).error
 
 describe('准入 —— 谁能开子会话', () => {
-  it('聊天会话拒绝（它没有根 agent，开子会话不表达任何东西）', async () => {
-    mocks.pick.mockReturnValue({ settings: { bot: 'a' }, parentId: null })
-    expect(err(await runner.create(PARENT, {}))).toMatch(/Chat sessions/)
-    expect(err(runner.list(PARENT))).toMatch(/Chat sessions/)
-    expect(mocks.create).not.toHaveBeenCalled()
-  })
-
   it('笔记本会话拒绝（人格钉死在 notebook 基座，产物是那份笔记）', async () => {
     mocks.pick.mockReturnValue({ settings: { notebookPath: 'n.md' }, parentId: null })
     expect(err(await runner.create(PARENT, {}))).toMatch(/Notebook sessions/)
+  })
+
+  it('bot 会话（settings.bot）**通过** —— 它开子会话正是干活的唯一方式', async () => {
+    // 这条是整个 bot 特性的结构前提，也是最容易被顺手做掉的一条：准入这三道门
+    // 长得都像「特殊形态一律拒绝」，而 bot 会话恰恰是一条**普通有根会话** ——
+    // 它的工具面里没有 bash、没有 write，真要干活只能开子会话（人设不跟着过去，因此
+    // 「人设影响怎么说话、不影响怎么干活」才成立）。谁把它加进上面那条拒绝里，
+    // 特性当场死透而别的用例一条都不会红
+    mocks.pick.mockImplementation((id: string) => {
+      if (id === PARENT) return { settings: { bot: 'scout' }, parentId: null, title: 'Bot' }
+      if (id === CHILD) return { settings: {}, parentId: PARENT, title: 'Child', updatedAt: 2 }
+      return undefined
+    })
+    expect(await runner.create(PARENT, {})).not.toHaveProperty('error')
+    expect(mocks.create).toHaveBeenCalledWith({ parentId: PARENT })
+    expect(runner.list(PARENT)).not.toHaveProperty('error')
   })
 
   it('子会话自己不能再开子会话（嵌套只允许一层）', async () => {
