@@ -28,6 +28,16 @@ import { createLogger } from '../logger'
 
 const log = createLogger('AgentService')
 
+/**
+ * 无法解析的用户档案文件（设置页「无法解析」分组）。身份是文件名 —— 它解析不出 name，
+ * 删除走 deleteByFile。
+ */
+export interface InvalidAgentFile {
+  fileName: string
+  /** 读取失败或解析器给出的人读原因（多条以换行连接） */
+  error: string
+}
+
 class AgentService implements AgentProfileRegistry {
   private readonly userDir: string
 
@@ -42,21 +52,29 @@ class AgentService implements AgentProfileRegistry {
     }
   }
 
-  /** 从一个 .md 文件加载 agent 定义 */
+  /**
+   * 从一个 .md 文件加载 agent 定义。`onReject` 收读取失败 / 解析器的人读原因（解析器的 warn
+   * 通道也会带软告警，调用方只在返回 null 时才把它们当作拒绝原因用）。
+   */
   private loadAgentFromFile(
     filePath: string,
     defaultName: string,
-    source: 'builtin' | 'user'
+    source: 'builtin' | 'user',
+    onReject?: (reason: string) => void
   ): AgentProfile | null {
     let raw: string
     try {
       raw = readFileSync(filePath, 'utf-8')
     } catch (e) {
       log.warn(`加载 agent "${defaultName}" 失败:`, e)
+      onReject?.(e instanceof Error ? e.message : String(e))
       return null
     }
 
-    const parsed = parseAgentDefinitionFile(raw, defaultName, (msg) => log.warn(msg))
+    const parsed = parseAgentDefinitionFile(raw, defaultName, (msg) => {
+      log.warn(msg)
+      onReject?.(msg)
+    })
     if (!parsed) {
       log.warn(`agent "${defaultName}": 无法解析 frontmatter`)
       return null
@@ -71,7 +89,18 @@ class AgentService implements AgentProfileRegistry {
 
   /** 扫描指定目录下的所有 *.md 文件作为 agents */
   private scanDir(dir: string, source: 'builtin' | 'user'): AgentProfile[] {
-    if (!existsSync(dir)) return []
+    return this.scanDirWithInvalid(dir, source).valid
+  }
+
+  /**
+   * 目录扫描，分出可解析与不可解析两拨（同 policyService.scanDir 口径）。非法文件不进注册表，
+   * 但设置页要看得见 —— 笔记本自动保存时一份写到一半的档案就是这样一个文件，它不该从列表里消失。
+   */
+  private scanDirWithInvalid(
+    dir: string,
+    source: 'builtin' | 'user'
+  ): { valid: AgentProfile[]; invalid: InvalidAgentFile[] } {
+    if (!existsSync(dir)) return { valid: [], invalid: [] }
 
     let entries: { name: string; isFile: boolean }[]
     try {
@@ -81,10 +110,11 @@ class AgentService implements AgentProfileRegistry {
       }))
     } catch (e) {
       log.warn(`扫描目录 ${dir} 失败:`, e)
-      return []
+      return { valid: [], invalid: [] }
     }
 
-    const result: AgentProfile[] = []
+    const valid: AgentProfile[] = []
+    const invalid: InvalidAgentFile[] = []
     const seen = new Set<string>()
     for (const entry of entries) {
       if (!entry.isFile) continue
@@ -93,8 +123,14 @@ class AgentService implements AgentProfileRegistry {
       // 兼容用户用 README.md 之类作为说明文档放在同目录的场景
       const basename = entry.name.slice(0, -3)
       if (!basename) continue
-      const def = this.loadAgentFromFile(join(dir, entry.name), basename, source)
-      if (!def) continue
+      const reasons: string[] = []
+      const def = this.loadAgentFromFile(join(dir, entry.name), basename, source, (reason) =>
+        reasons.push(reason)
+      )
+      if (!def) {
+        invalid.push({ fileName: entry.name, error: reasons.join('\n') || 'Invalid agent file' })
+        continue
+      }
       // 同名文件互相遮蔽语义不明（frontmatter `name` 才是标识，文件名可以不同）：
       // 保留先扫到的一份，其余告警跳过 —— 对齐 policyService.scanDir
       if (seen.has(def.name)) {
@@ -102,9 +138,9 @@ class AgentService implements AgentProfileRegistry {
         continue
       }
       seen.add(def.name)
-      result.push(def)
+      valid.push(def)
     }
-    return result
+    return { valid, invalid }
   }
 
   /** 内置 agent 列表（统一 spec 构建器；每次现算以反映当前语言与 wiki / widget 根等宿主参数） */
@@ -244,32 +280,6 @@ class AgentService implements AgentProfileRegistry {
   }
 
   /**
-   * 按原文覆写用户 agent 文件（md 原文编辑器的保存路径）。`originalName` 定位现有文件
-   * （文件路径不随改名变，frontmatter `name` 为准）；内置档案无文件，须先创建覆盖副本。
-   */
-  saveAgentSource(originalName: string, text: string): { success: boolean; error?: string } {
-    const users = this.scanDir(this.userDir, 'user')
-    const target = users.find((a) => a.name === originalName)
-    if (!target?.basePath) return { success: false, error: `Agent "${originalName}" not found` }
-
-    const result = this.parseSourceForWrite(text, originalName)
-    if ('error' in result) return { success: false, error: result.error }
-    const name = result.parsed.name
-    // 与其他用户 agent 重名 → 拒绝（同名互相遮蔽语义不明）；覆盖内置为有意设计，放行
-    if (name !== originalName && users.some((a) => a.name === name)) {
-      return { success: false, error: `Agent "${name}" already exists` }
-    }
-
-    try {
-      writeFileSync(target.basePath, text, 'utf-8')
-    } catch (e) {
-      log.warn(`保存 agent 原文 "${originalName}" 失败:`, e)
-      return { success: false, error: e instanceof Error ? e.message : String(e) }
-    }
-    return { success: true }
-  }
-
-  /**
    * 按原文新建用户 agent 文件（「新建」与「创建覆盖副本」共用）。文件名由 frontmatter
    * `name` 净化派生（冲突追加数字后缀）；与既有用户 agent 重名拒绝，覆盖内置放行。
    */
@@ -384,6 +394,30 @@ class AgentService implements AgentProfileRegistry {
       return { success: false, error: e instanceof Error ? e.message : String(e) }
     }
     log.info(`已删除 agent "${name}" (${target.basePath})`)
+    return { success: true }
+  }
+
+  /** 目录里无法解析的档案文件（设置页「无法解析」分组 —— 写到一半的档案不该从列表里消失） */
+  listInvalid(): InvalidAgentFile[] {
+    return this.scanDirWithInvalid(this.userDir, 'user').invalid
+  }
+
+  /**
+   * 按文件名删除 —— 解析不过的档案没有 name，走不了 deleteAgent。文件名白名单：只接受 agents
+   * 目录下的单个 .md（fileName 来自渲染进程，按不可信入参处理，杜绝路径穿越）。
+   */
+  deleteByFile(fileName: string): { success: boolean; error?: string } {
+    const filePath = join(this.userDir, fileName)
+    if (!/^[^/\\]+\.md$/i.test(fileName) || fileName.startsWith('.') || !existsSync(filePath)) {
+      return { success: false, error: `Agent file "${fileName}" not found` }
+    }
+    try {
+      unlinkSync(filePath)
+    } catch (e) {
+      log.warn(`删除 agent 文件 "${fileName}" 失败:`, e)
+      return { success: false, error: e instanceof Error ? e.message : String(e) }
+    }
+    log.info(`已删除 agent 文件 "${fileName}"`)
     return { success: true }
   }
 

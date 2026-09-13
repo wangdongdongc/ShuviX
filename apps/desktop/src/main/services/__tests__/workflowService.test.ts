@@ -384,30 +384,6 @@ describe('workflowService — 目录扫描缓存', () => {
     expect(runFilesOf('late')).toHaveLength(1)
   })
 
-  it.each(['save', 'saveByFile'] as const)(
-    '本进程覆写路径 %s 显式失效：同 mtime 同 size 的覆写照样立刻生效',
-    async (how) => {
-      workflowService.init()
-      writeFileSync(join(state.dir, 'rewritten.md'), echoWf('rewritten', 'AAA'))
-      pin('rewritten.md')
-      // 先把缓存喂上旧内容
-      expect(workflowService.listForSettings().some((w) => w.name === 'rewritten')).toBe(true)
-
-      const next = echoWf('rewritten', 'BBB')
-      const res =
-        how === 'save'
-          ? workflowService.save('rewritten', next)
-          : workflowService.saveByFile('rewritten.md', next)
-      expect(res).toEqual({ success: true })
-      // 秒级精度的文件系统上，同一秒内同样大小的覆写骗得过指纹 —— 这里把它做成必然
-      pin('rewritten.md')
-
-      firePrompt()
-      await waitForEnds('rewritten', 1)
-      expect(outputsOf('rewritten')).toEqual(['BBB'])
-    }
-  )
-
   it.each(['create', 'delete', 'deleteByFile'] as const)(
     '本进程增删路径 %s 显式失效：写盘后紧接着 fire 即生效',
     async (how) => {
@@ -455,7 +431,7 @@ describe('workflowService — 目录扫描缓存', () => {
     writeFileSync(join(state.dir, 'broken.md'), userWf('broken', { script: 'return ((( oops' }))
     expect(workflowService.listInvalid().map((f) => f.fileName)).toEqual(['broken.md'])
 
-    expect(workflowService.saveByFile('broken.md', userWf('broken'))).toEqual({ success: true })
+    writeFileSync(join(state.dir, 'broken.md'), userWf('broken'))
     expect(workflowService.listInvalid()).toEqual([])
   })
 

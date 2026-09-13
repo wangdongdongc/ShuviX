@@ -9,11 +9,15 @@
  * `CreateAgentParams.systemContext`，只给根 Agent）。bot 会话是一条普通有根会话，所以这里没有
  * 派发、没有 mailbox、没有管线 —— 那些由会话与子会话机制原样承担。
  *
- * 写盘一律**原子写**（`writeFileAtomic`）：bot 会在答话途中用 `edit` 改自己的文件，而 `scanDir`
- * 随时可能在读；半份文件会让它从列表里消失一瞬。
+ * **编辑不经过本服务**：打开一份 bot 就是打开它的笔记本会话（registryNotes），自动保存经
+ * writeSessionFile 落盘 —— 与知识库条目、任何项目里的 md 同一条路。本服务只在写入前后被告知
+ * 一声（noteWriting / noteWritten），据此补上这份文件特有的两件事：改名迁移会话绑定、广播
+ * `bot.changed`。
+ *
+ * 新建写盘走**原子写**（`writeFileAtomic`）：`scanDir` 随时可能在读，半份文件会让它从列表里
+ * 消失一瞬。
  */
 import { existsSync, readdirSync, readFileSync, mkdirSync, unlinkSync } from 'fs'
-import { createHash } from 'crypto'
 import { basename, join } from 'path'
 import { shell } from 'electron'
 import {
@@ -31,6 +35,12 @@ import { broadcastSessionConfigChanged } from '../utils/sessionConfigBroadcast'
 
 const log = createLogger('BotService')
 
+/**
+ * 笔记本写入后 `bot.changed` 的合并窗口：自动保存每 200ms 落一次盘，连续打字不该让侧栏分组
+ * 与各 bot 会话的身份胶囊跟着一直重查。
+ */
+const CHANGED_DEBOUNCE_MS = 300
+
 /** 目录里无法解析的文件（身份是文件名 —— 它解析不出 name） */
 export interface InvalidBotFile {
   fileName: string
@@ -45,21 +55,29 @@ export interface BotEntry {
   basePath: string
 }
 
-/** 内容指纹 —— 「我打开之后它被改过吗」的判据（bot 自己会改这份文件） */
-function revisionOf(text: string): string {
-  return createHash('sha1').update(text).digest('hex')
-}
-
 class BotService {
+  /**
+   * 每份文件上一次解析出的名字（绝对路径 → frontmatter `name`）—— 改名迁移的依据，见
+   * observeRenames。只在进程内。
+   */
+  private readonly namesByPath = new Map<string, string>()
+  private changedTimer: ReturnType<typeof setTimeout> | null = null
+
   private get userDir(): string {
     return getDefaultBotsDir()
   }
 
   // ─── 注册表 ──────────────────────────────────
 
-  /** 目录扫描，分出可解析与不可解析两拨（同 botService / workflowService.scanDir 口径） */
+  /**
+   * 目录扫描，分出可解析与不可解析两拨（同 policyService / workflowService.scanDir 口径）。
+   * 每次扫描顺带做改名观察（observeRenames）。
+   */
   private scanDir(): { valid: BotEntry[]; invalid: InvalidBotFile[] } {
-    if (!existsSync(this.userDir)) return { valid: [], invalid: [] }
+    if (!existsSync(this.userDir)) {
+      this.namesByPath.clear()
+      return { valid: [], invalid: [] }
+    }
     let names: string[]
     try {
       names = readdirSync(this.userDir, { withFileTypes: true })
@@ -75,6 +93,8 @@ class BotService {
     const valid: BotEntry[] = []
     const invalid: InvalidBotFile[] = []
     const seen = new Set<string>()
+    // 解析得过的每一份（含被同名跳过的）—— 改名观察要看得到一个名字的全部持有者
+    const parsedFiles: Array<{ filePath: string; name: string }> = []
     for (const fileName of names) {
       const filePath = join(this.userDir, fileName)
       let raw: string
@@ -94,6 +114,7 @@ class BotService {
         invalid.push({ fileName, error: messages.join('\n') || 'Invalid bot file' })
         continue
       }
+      parsedFiles.push({ filePath, name: parsed.name })
       if (seen.has(parsed.name)) {
         log.warn(`bot "${parsed.name}": 同名文件重复（${fileName}），已跳过`)
         continue
@@ -101,7 +122,44 @@ class BotService {
       seen.add(parsed.name)
       valid.push({ file: parsed, basePath: filePath })
     }
+    this.observeRenames(
+      names.map((n) => join(this.userDir, n)),
+      parsedFiles
+    )
     return { valid, invalid }
+  }
+
+  /**
+   * 改名观察：同一份文件这次解析出的名字与上次记下的不同，就把会话绑定从旧名迁到新名。
+   *
+   * 编辑是笔记本的自动保存，没有「点保存」那一刻可以拿新旧两份文本对照 —— 把 `name` 从
+   * ranger 改成 hunter，磁盘上依次出现的是 h、hu、hun……中途还可能有一版解析不过。所以迁移
+   * 挂在扫描上，一步一步跟过去：解析不过的文件不动记录（修好后从最后一个合法名字一次迁到位），
+   * 文件没了才删记录。两种情况**不迁**：
+   *  - 新名字此刻不止一份文件在用 —— 迁过去等于把会话交给一个说不清是谁的名字；记录停在旧名，
+   *    等它改成独占的名字再迁；
+   *  - 旧名字此刻还有别的文件在用（复制出一份再改名）—— 那些会话属于留下来的那份。
+   *
+   * 进程内第一次见到一份文件只记基线（写入前的基线由 noteWriting 保证）；应用关着时发生的
+   * 改名（外部编辑器）不迁。
+   */
+  private observeRenames(
+    present: string[],
+    parsedFiles: Array<{ filePath: string; name: string }>
+  ): void {
+    const holders = new Map<string, number>()
+    for (const { name } of parsedFiles) holders.set(name, (holders.get(name) ?? 0) + 1)
+    for (const { filePath, name } of parsedFiles) {
+      const prev = this.namesByPath.get(filePath)
+      if (prev === name) continue
+      if (prev !== undefined && (holders.get(name) ?? 0) > 1) continue
+      this.namesByPath.set(filePath, name)
+      if (prev !== undefined && !holders.has(prev)) this.migrateRename(prev, name)
+    }
+    const alive = new Set(present)
+    for (const filePath of [...this.namesByPath.keys()]) {
+      if (!alive.has(filePath)) this.namesByPath.delete(filePath)
+    }
   }
 
   /** 全部合法 bot */
@@ -134,94 +192,25 @@ class BotService {
     return entry
   }
 
-  // ─── 读写 ──────────────────────────────────
-
-  /** 取 md 原文 + 指纹（档案页打开时用；指纹在保存时回传做冲突检测） */
-  getSource(name: string): { text: string; revision: string; path: string } | null {
-    const entry = this.get(name)
-    if (!entry) return null
-    try {
-      const text = readFileSync(entry.basePath, 'utf-8')
-      return { text, revision: revisionOf(text), path: entry.basePath }
-    } catch (e) {
-      log.warn(`读取 bot "${name}" 失败:`, e)
-      return null
-    }
-  }
-
-  /** 解析一段将要落盘的文本；非法则回一句人读的理由 */
-  private parseForWrite(
-    text: string,
-    fallbackName: string
-  ): { file: ParsedBotFile } | { error: string } {
-    const messages: string[] = []
-    const parsed = parseBotDefinitionFile(text, fallbackName, (m) => messages.push(m))
-    if (!parsed) return { error: messages.join('\n') || 'Invalid bot file' }
-    return { file: parsed }
-  }
+  // ─── 笔记本写入的回执 ──────────────────────────────────
 
   /**
-   * 保存（档案页的显式保存）。
-   *
-   * **带指纹的冲突检测**：这份文件有两个写者 —— 用户在档案页改，bot 在答话途中用 `edit`
-   * 改自己。用户打开编辑器时拿到的 revision 与此刻磁盘上的不一致，就说明中间有人写过，
-   * 直接覆盖等于把 bot 刚记下的东西抹掉。
+   * 笔记本即将写一份 bot 文件（registryNotes.observeRegistryWrite）：进程内还没见过这份文件
+   * 就先扫一遍，把它写入前的名字记成基线 —— 否则「重启后打开就改名」的第一笔写会被当成
+   * 第一次见到，迁移随之漏掉。
    */
-  save(
-    originalName: string,
-    text: string,
-    revision?: string
-  ): {
-    success: boolean
-    error?: string
-    revision?: string
-    conflict?: { current: string }
-  } {
-    const target = this.get(originalName)
-    if (!target) return { success: false, error: `Bot "${originalName}" not found` }
+  noteWriting(filePath: string): void {
+    if (!this.namesByPath.has(filePath)) this.scanDir()
+  }
 
-    // `!== undefined` 而不是真值判断：**空串同样算「给了一个对不上的指纹」**，不是「没给」。
-    // 真值判断会让 `revision: ''` 静默跳过整道丢更新守卫，把 bot 刚记下的东西覆盖掉 ——
-    // 而「没给指纹」是修非法文件那条通道的语义（它没有可对账的基准），两者必须分得开。
-    if (revision !== undefined) {
-      let onDisk: string
-      try {
-        onDisk = readFileSync(target.basePath, 'utf-8')
-      } catch (e) {
-        return { success: false, error: e instanceof Error ? e.message : String(e) }
-      }
-      if (revisionOf(onDisk) !== revision) {
-        return {
-          success: false,
-          error:
-            'This bot changed on disk since you opened it — most likely the bot itself, updating its own memory.',
-          conflict: { current: onDisk }
-        }
-      }
-    }
-
-    const parsed = this.parseForWrite(text, originalName)
-    if ('error' in parsed) return { success: false, error: parsed.error }
-    const name = parsed.file.name
-    if (name !== originalName && this.listAll().some((p) => p.file.name === name)) {
-      return { success: false, error: `Bot "${name}" already exists` }
-    }
-    try {
-      writeFileAtomic(target.basePath, text)
-    } catch (e) {
-      log.warn(`保存 bot "${originalName}" 失败:`, e)
-      return { success: false, error: e instanceof Error ? e.message : String(e) }
-    }
-    if (name !== originalName) this.migrateRename(originalName, name)
-    // 半途崩溃的补做（同 botService）：文件名不随改名变，所以「文件叫 scout.md、里面写着
-    // ranger」正是一次没走完的迁移。幂等，正常保存时这一步什么都不做
-    const stale = basename(target.basePath).replace(/\.md$/i, '')
-    if (stale !== name && !this.listAll().some((p) => p.file.name === stale)) {
-      this.migrateRename(stale, name)
-    }
-    appEventBus.publish({ type: 'bot.changed' })
-    // 成功回新指纹：UI 不必为了「再保存一次」而重新 getSource，否则第二次必然误报冲突
-    return { success: true, revision: revisionOf(text) }
+  /** 笔记本写完一份 bot 文件：重扫（名字变了就迁移），并合并窗口内广播一次 `bot.changed` */
+  noteWritten(): void {
+    this.scanDir()
+    if (this.changedTimer) clearTimeout(this.changedTimer)
+    this.changedTimer = setTimeout(() => {
+      this.changedTimer = null
+      appEventBus.publish({ type: 'bot.changed' })
+    }, CHANGED_DEBOUNCE_MS)
   }
 
   /**
@@ -255,8 +244,21 @@ class BotService {
     }
   }
 
-  /** 新建；文件名由 name 净化派生 */
-  create(text: string): { success: boolean; name?: string; error?: string } {
+  // ─── 新建与删除 ──────────────────────────────────
+
+  /** 解析一段将要落盘的文本；非法则回一句人读的理由 */
+  private parseForWrite(
+    text: string,
+    fallbackName: string
+  ): { file: ParsedBotFile } | { error: string } {
+    const messages: string[] = []
+    const parsed = parseBotDefinitionFile(text, fallbackName, (m) => messages.push(m))
+    if (!parsed) return { error: messages.join('\n') || 'Invalid bot file' }
+    return { file: parsed }
+  }
+
+  /** 新建；文件名由 name 净化派生。回名字与落盘的文件名（打开它的笔记本要用） */
+  create(text: string): { success: boolean; name?: string; fileName?: string; error?: string } {
     const parsed = this.parseForWrite(text, 'bot')
     if ('error' in parsed) return { success: false, error: parsed.error }
     const name = parsed.file.name
@@ -277,7 +279,18 @@ class BotService {
       return { success: false, error: e instanceof Error ? e.message : String(e) }
     }
     appEventBus.publish({ type: 'bot.changed' })
-    return { success: true, name }
+    return { success: true, name, fileName: basename(filePath) }
+  }
+
+  /**
+   * 侧栏「新建 Bot」：按模板落一份新文件，名字取 `my-bot`、`my-bot-2`……里第一个没被占用的。
+   * 落盘之后怎么改就是打开它的笔记本会话去改，与任何 bot 一样。
+   */
+  createNew(): { success: boolean; name?: string; fileName?: string; error?: string } {
+    const taken = new Set(this.listAll().map((p) => p.file.name))
+    let name = 'my-bot'
+    for (let i = 2; taken.has(name); i++) name = `my-bot-${i}`
+    return this.create(this.newBotTemplate({ name }))
   }
 
   /**
@@ -317,12 +330,11 @@ class BotService {
       log.warn(`删除 bot "${name}" 失败:`, e)
       return { success: false, error: e instanceof Error ? e.message : String(e) }
     }
+    this.namesByPath.delete(target.basePath)
     log.info(`已删除 bot "${name}" (${target.basePath})`)
     appEventBus.publish({ type: 'bot.changed' })
     return { success: true }
   }
-
-  // ─── 非法文件（按文件名寻址） ──────────────────────────────────
 
   /**
    * 文件名白名单：仅接受 bots 目录下的单个 .md 文件名，杜绝路径穿越
@@ -334,38 +346,7 @@ class BotService {
     return existsSync(filePath) ? filePath : null
   }
 
-  /** 取非法文件的原文（档案页的「修一下」入口） */
-  getSourceByFile(fileName: string): { text: string; revision: string; path: string } | null {
-    const filePath = this.resolveUserFile(fileName)
-    if (!filePath) return null
-    try {
-      const text = readFileSync(filePath, 'utf-8')
-      return { text, revision: revisionOf(text), path: filePath }
-    } catch (e) {
-      log.warn(`读取文件 "${fileName}" 失败:`, e)
-      return null
-    }
-  }
-
-  /** 按文件名保存（修非法文件；修好之后它就有 name 了，后续走 save） */
-  saveByFile(
-    fileName: string,
-    text: string
-  ): { success: boolean; error?: string; name?: string; revision?: string } {
-    const filePath = this.resolveUserFile(fileName)
-    if (!filePath) return { success: false, error: `File "${fileName}" not found` }
-    const parsed = this.parseForWrite(text, fileName.slice(0, -3))
-    if ('error' in parsed) return { success: false, error: parsed.error }
-    try {
-      writeFileAtomic(filePath, text)
-    } catch (e) {
-      return { success: false, error: e instanceof Error ? e.message : String(e) }
-    }
-    appEventBus.publish({ type: 'bot.changed' })
-    return { success: true, name: parsed.file.name, revision: revisionOf(text) }
-  }
-
-  /** 按文件名删除（清掉一个修不好的文件） */
+  /** 按文件名删除（清掉一个解析不过的文件 —— 它没有 name，走不了 delete） */
   deleteByFile(fileName: string): { success: boolean; error?: string } {
     const filePath = this.resolveUserFile(fileName)
     if (!filePath) return { success: false, error: `File "${fileName}" not found` }
@@ -374,6 +355,7 @@ class BotService {
     } catch (e) {
       return { success: false, error: e instanceof Error ? e.message : String(e) }
     }
+    this.namesByPath.delete(filePath)
     appEventBus.publish({ type: 'bot.changed' })
     return { success: true }
   }
@@ -389,7 +371,7 @@ class BotService {
     }
   }
 
-  /** 目录绝对路径（档案页头部显示） */
+  /** 目录绝对路径 */
   get dir(): string {
     return this.userDir
   }

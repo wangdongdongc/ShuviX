@@ -2,6 +2,7 @@ import { useCallback, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ArrowUpCircle } from 'lucide-react'
 import { getChatApi, useChatStore } from '@shuvix/chat-ui'
+import { REGISTRY_NOTE_PROJECT_IDS } from '@shuvix/chat-protocol/registryNotes'
 import {
   Sidebar as SharedSidebar,
   BotGroup,
@@ -24,9 +25,9 @@ import { ConfirmDialog } from '../common/ConfirmDialog'
  *   - 打开文件夹走 Electron 目录对话框；置顶会话选中时聚焦悬浮窗
  *   - 会话/分组右键菜单由共享组件统一渲染（桌面经 ContextMenuProvider 注入原生渲染器）
  *   - 会话配置弹窗、项目编辑弹窗
- *   - Bots 置顶分组（BotGroup 经 groupsPrepend 注入，接 window.api.bot.*；点行开 bot 档案页，
- *     删除的确认框在这里）+ 知识库置顶分组（KnowledgeGroup，接 window.api.knowledge.*，点行开 /
- *     复用条目的笔记本会话）+ 旧知识库置顶分组（WikiGroup，同一插槽，排在最下）
+ *   - Bots 置顶分组（BotGroup 经 groupsPrepend 注入，接 window.api.bot.*；点行开 / 复用该文件的
+ *     笔记本会话，删除的确认框在这里）+ 知识库置顶分组（KnowledgeGroup，接 window.api.knowledge.*，
+ *     点行开 / 复用条目的笔记本会话）+ 旧知识库置顶分组（WikiGroup，同一插槽，排在最下）
  *   - 底部更新提示。侧栏只有项目视图 —— 日历已迁至右面板 Calendar tab（CalendarPanel）
  *   - 归档项目的恢复 / 删除已移至「设置 → Projects → 已归档」
  */
@@ -41,9 +42,9 @@ export function Sidebar(): React.JSX.Element {
 
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null)
   const [configuringSessionId, setConfiguringSessionId] = useState<string | null>(null)
-  /** 待确认删除的 bot（按名）或无法解析的 bot 文件（按文件名） */
+  /** 待确认删除的 bot（按名删，文件名用来认出开着的笔记本）或无法解析的 bot 文件（按文件名） */
   const [confirmingBotDelete, setConfirmingBotDelete] = useState<
-    { name: string } | { fileName: string } | null
+    { name: string; fileName: string } | { fileName: string } | null
   >(null)
 
   // 在指定项目下新建会话（文件夹流程用）
@@ -80,29 +81,46 @@ export function Sidebar(): React.JSX.Element {
   )
 
   /**
-   * Bots 分组能力注入 —— 清单 = 合法 bot + 无法解析的文件；新建会话与删除在这里落地
-   * （删除先弹确认框，见 overlays；真删掉后 bot.changed 事件让分组重扫）。新建的是一条
-   * **普通有根会话**（`settings.bot`，根档案由形态推导成基座 `bot`）。
-   * 引用必须稳定（useMemo）：分组以 adapter 为扫描依赖。
+   * Bots 分组能力注入 —— 清单 = 合法 bot + 无法解析的文件。点一行 / 新建一份都是打开那份文件的
+   * **笔记本会话**（main 侧去重，隐藏项目 `__bots__`）；「新建 Bot 会话」建的是一条**普通有根会话**
+   * （`settings.bot`，根档案由形态推导成基座 `bot`）；删除先弹确认框（见 overlays），真删掉后
+   * bot.changed 事件让分组重扫。引用必须稳定（useMemo）：分组以 adapter 为扫描依赖。
    */
-  const botGroupAdapter = useMemo<BotGroupAdapter>(
-    () => ({
+  const botGroupAdapter = useMemo<BotGroupAdapter>(() => {
+    const openNote = async (fileName: string, title?: string): Promise<void> => {
+      let session: { id: string }
+      try {
+        session = await window.api.bot.openNote({ fileName, title })
+      } catch {
+        return // 文件已不在（清单过期）—— bot.changed / 聚焦重扫会把这一行拿掉
+      }
+      useChatStore.getState().setSessions(await getChatApi().session.list())
+      setActiveSessionId(session.id)
+    }
+    return {
       list: () => window.api.bot.list(),
+      open: openNote,
+      create: async () => {
+        const r = await window.api.bot.createNew()
+        if (r.success && r.fileName) await openNote(r.fileName, r.name)
+      },
       openFolder: () => window.api.bot.openFolder(),
       newSession: async (name) => {
         const session = await getChatApi().session.create({ projectId: null, bot: name })
         useChatStore.getState().setSessions(await getChatApi().session.list())
         setActiveSessionId(session.id)
       },
-      delete: (name) => setConfirmingBotDelete({ name }),
+      delete: (bot) => setConfirmingBotDelete({ name: bot.name, fileName: bot.fileName }),
       deleteFile: (fileName) => setConfirmingBotDelete({ fileName })
-    }),
-    [setActiveSessionId]
-  )
+    }
+  }, [setActiveSessionId])
 
-  /** 确认删除：删掉的正是主区打开的那一页时顺手离开它（页面留着只会报「不存在」） */
+  /**
+   * 确认删除：删掉的正是主区开着的那份文件的笔记本时顺手离开它 —— 留着接着打字，自动保存会把
+   * 刚删掉的文件写回来。
+   */
   const handleBotDelete = async (
-    target: { name: string } | { fileName: string }
+    target: { name: string; fileName: string } | { fileName: string }
   ): Promise<void> => {
     setConfirmingBotDelete(null)
     const r =
@@ -110,14 +128,14 @@ export function Sidebar(): React.JSX.Element {
         ? await window.api.bot.delete({ name: target.name })
         : await window.api.bot.deleteByFile({ fileName: target.fileName })
     if (!r.success) return
-    const active = useChatStore.getState().active
-    const onPage =
-      active?.type === 'bot' &&
-      (('name' in target && active.target.kind === 'edit' && active.target.name === target.name) ||
-        ('fileName' in target &&
-          active.target.kind === 'fix' &&
-          active.target.fileName === target.fileName))
-    if (onPage) setActiveSessionId(null)
+    const { sessions, activeSessionId } = useChatStore.getState()
+    const active = sessions.find((s) => s.id === activeSessionId)
+    if (
+      active?.projectId === REGISTRY_NOTE_PROJECT_IDS.bot &&
+      active.settings.notebookPath === target.fileName
+    ) {
+      setActiveSessionId(null)
+    }
   }
 
   /**

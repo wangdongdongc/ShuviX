@@ -375,8 +375,8 @@ declare global {
   }
 
   /**
-   * 无法解析的用户策略文件（设置页显示为可点开修复的告警项）。
-   * 身份是文件名 —— 它解析不出 name，读写走 policy.*ByFile 一组接口。
+   * 无法解析的用户策略文件（设置页「无法解析」分组，点开就是它的笔记本）。
+   * 身份是文件名 —— 它解析不出 name，删除走 policy.deleteByFile。
    */
   interface InvalidPolicyFile {
     fileName: string
@@ -402,7 +402,7 @@ declare global {
     overridden?: boolean
   }
 
-  /** 无法解析的用户工作流文件（结构非法或脚本语法错），读写走 workflow.*ByFile */
+  /** 无法解析的用户工作流文件（结构非法或脚本语法错），删除走 workflow.deleteByFile */
   interface InvalidWorkflowFile {
     fileName: string
     /** 人读原因：解析器拒绝原因，或脚本引擎的语法错 */
@@ -411,7 +411,7 @@ declare global {
 
   /**
    * Bot 列表项（`~/.shuvix/bots/<name>.md`）。只有身份三项 —— 没有管线、没有槽位、没有工具与模型
-   * （那些由基座档案 `bot` 统一规定）；正文不外传，编辑走 bot.getSource。
+   * （那些由基座档案 `bot` 统一规定）；正文不外传，编辑就是打开它的笔记本会话（bot.openNote）。
    */
   interface BotInfo {
     name: string
@@ -419,12 +419,21 @@ declare global {
     description: string
     /** 文件路径 */
     basePath: string
+    /** bots 目录下的文件名 —— 笔记本会话按它认（名字随编辑在变，文件名不变） */
+    fileName: string
   }
 
-  /** 无法解析的 bot 文件，读写走 bot.*ByFile */
+  /** 无法解析的 bot 文件，按文件名打开（bot.openNote）/ 删除（bot.deleteByFile） */
   interface InvalidBotFile {
     fileName: string
     /** 人读原因：解析器的拒绝理由 */
+    error: string
+  }
+
+  /** 无法解析的用户 agent 档案文件（设置页「无法解析」分组），删除走 subAgent.deleteByFile */
+  interface InvalidAgentFile {
+    fileName: string
+    /** 人读原因：读取失败或解析器的拒绝理由 */
     error: string
   }
 
@@ -607,105 +616,69 @@ declare global {
         params: SubAgentCreateParams
       ) => Promise<{ success: boolean; name?: string; error?: string }>
       delete: (params: { name: string }) => Promise<{ success: boolean; error?: string }>
+      /** 目录里无法解析的档案文件（身份是文件名） */
+      listInvalid: () => Promise<InvalidAgentFile[]>
+      deleteByFile: (params: { fileName: string }) => Promise<{ success: boolean; error?: string }>
+      /** md 原文（用户读文件；内置回写等价 md —— 只读查看与覆盖副本初值） */
       getSource: (params: {
         name: string
         source: 'builtin' | 'user'
       }) => Promise<{ text: string } | { error: string }>
-      saveSource: (params: {
-        originalName: string
-        text: string
-      }) => Promise<{ success: boolean; error?: string }>
       createSource: (params: {
         text: string
       }) => Promise<{ success: boolean; name?: string; error?: string }>
+      /** 打开 / 复用一份档案文件的笔记本会话（一文件至多一会话）；回带工作目录 */
+      openNote: (params: { fileName: string; title?: string }) => Promise<SessionInfo>
       openFolder: () => Promise<{ success: boolean }>
     }
     policy: {
       list: () => Promise<PolicyInfo[]>
+      /** md 原文（用户读文件；内置回写等价 md —— 只读查看与覆盖副本初值） */
       getSource: (params: {
         name: string
         source: 'builtin' | 'user'
       }) => Promise<{ text: string } | { error: string }>
-      save: (params: {
-        originalName: string
-        text: string
-      }) => Promise<{ success: boolean; error?: string }>
       create: (params: {
         text: string
       }) => Promise<{ success: boolean; name?: string; error?: string }>
       delete: (params: { name: string }) => Promise<{ success: boolean; error?: string }>
-      listInvalid: () => Promise<Array<{ fileName: string; error: string }>>
-      getSourceByFile: (params: {
-        fileName: string
-      }) => Promise<{ text: string } | { error: string }>
-      saveByFile: (params: {
-        fileName: string
-        text: string
-      }) => Promise<{ success: boolean; error?: string }>
+      listInvalid: () => Promise<InvalidPolicyFile[]>
       deleteByFile: (params: { fileName: string }) => Promise<{ success: boolean; error?: string }>
+      /** 打开 / 复用一份策略文件的笔记本会话（一文件至多一会话）；回带工作目录 */
+      openNote: (params: { fileName: string; title?: string }) => Promise<SessionInfo>
       openFolder: () => Promise<{ success: boolean }>
     }
     bot: {
       /** 合法 + 非法两拨一次取齐（侧栏一次扫描就够） */
       list: () => Promise<{ bots: BotInfo[]; invalid: InvalidBotFile[] }>
-      /** revision 是这一刻的内容指纹，save 时回传即可发现「打开之后被 bot 自己改过」 */
-      getSource: (params: {
-        name: string
-      }) => Promise<{ text: string; revision: string; path: string } | null>
-      template: (params: {
-        name: string
-        description?: string
-        body?: string
-      }) => Promise<{ text: string }>
-      save: (params: {
-        originalName: string
-        text: string
-        /** getSource 那一刻的指纹；对不上即冲突，回传 conflict.current 供 UI 解决 */
-        revision?: string
-      }) => Promise<{
+      /** 打开 / 复用一份 bot 文件（合法或解析不过都行）的笔记本会话 */
+      openNote: (params: { fileName: string; title?: string }) => Promise<SessionInfo>
+      /** 按模板新建一份 bot 文件（名字取第一个没被占用的 my-bot / my-bot-2 ……） */
+      createNew: () => Promise<{
         success: boolean
+        name?: string
+        fileName?: string
         error?: string
-        /** 成功时回新指纹 —— 连续保存两次不该被误判成冲突 */
-        revision?: string
-        conflict?: { current: string }
       }>
-      create: (params: {
-        text: string
-      }) => Promise<{ success: boolean; name?: string; error?: string }>
       delete: (params: { name: string }) => Promise<{ success: boolean; error?: string }>
-      getSourceByFile: (params: {
-        fileName: string
-      }) => Promise<{ text: string; revision: string; path: string } | null>
-      saveByFile: (params: {
-        fileName: string
-        text: string
-      }) => Promise<{ success: boolean; error?: string; name?: string; revision?: string }>
       deleteByFile: (params: { fileName: string }) => Promise<{ success: boolean; error?: string }>
       openFolder: () => Promise<{ success: boolean }>
     }
     workflow: {
       list: () => Promise<WorkflowInfo[]>
+      /** md 原文（用户读文件；内置回 bundle 原文 —— 只读查看与覆盖副本初值） */
       getSource: (params: {
         name: string
         source: 'builtin' | 'user'
       }) => Promise<{ text: string } | { error: string }>
-      save: (params: {
-        originalName: string
-        text: string
-      }) => Promise<{ success: boolean; error?: string }>
       create: (params: {
         text: string
       }) => Promise<{ success: boolean; name?: string; error?: string }>
       delete: (params: { name: string }) => Promise<{ success: boolean; error?: string }>
       listInvalid: () => Promise<InvalidWorkflowFile[]>
-      getSourceByFile: (params: {
-        fileName: string
-      }) => Promise<{ text: string } | { error: string }>
-      saveByFile: (params: {
-        fileName: string
-        text: string
-      }) => Promise<{ success: boolean; error?: string }>
       deleteByFile: (params: { fileName: string }) => Promise<{ success: boolean; error?: string }>
+      /** 打开 / 复用一份工作流文件的笔记本会话（一文件至多一会话）；回带工作目录 */
+      openNote: (params: { fileName: string; title?: string }) => Promise<SessionInfo>
       openFolder: () => Promise<{ success: boolean }>
     }
     shuvixMd: {

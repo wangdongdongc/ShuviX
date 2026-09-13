@@ -70,7 +70,12 @@ export type {
   KnowledgeScopeDir
 } from './sidebar/knowledgeTree'
 export { BotGroup } from './sidebar/BotGroup'
-export type { BotGroupProps, BotGroupAdapter, BotGroupInvalidFile } from './sidebar/BotGroup'
+export type {
+  BotGroupProps,
+  BotGroupAdapter,
+  BotGroupItem,
+  BotGroupInvalidFile
+} from './sidebar/BotGroup'
 export { useProjects } from './sidebar/useProjects'
 export type { UseProjectsReturn, ProjectRef } from './sidebar/useProjects'
 export { useSessionDelete } from './sidebar/useSessionDelete'

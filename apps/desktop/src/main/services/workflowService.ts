@@ -227,13 +227,19 @@ class WorkflowService {
     return result
   }
 
-  /** 目录指纹：文件名 + mtimeMs + size。stat 失败的条目记为 `?`，天然不命中缓存 */
+  /**
+   * 目录指纹：文件名 + inode + mtimeMs + size。stat 失败的条目记为 `?`，天然不命中缓存。
+   *
+   * inode 那一段是给笔记本的：编辑工作流就是它的笔记本会话在自动保存，走的是「临时文件 +
+   * rename」的原子写 —— 每一笔都换一个 inode，所以秒级精度的文件系统上同一秒内的等长改写
+   * 也骗不过指纹（原地覆写的外部编辑器保留 inode，那个缺口照旧，见单测里钉的现状）。
+   */
   private fingerprint(names: string[]): string {
     return names
       .map((name) => {
         try {
           const st = statSync(join(this.userDir, name))
-          return `${name}:${st.mtimeMs}:${st.size}`
+          return `${name}:${st.ino}:${st.mtimeMs}:${st.size}`
         } catch {
           return `${name}:?`
         }
@@ -339,28 +345,6 @@ class WorkflowService {
     const compiled = nodeVmScriptEngine.compile(file.script)
     if (!compiled.ok) return { error: `script syntax error — ${compiled.error}` }
     return { file }
-  }
-
-  /** 覆写用户工作流文件（`originalName` 定位文件；frontmatter name 为准，可改名） */
-  save(originalName: string, text: string): { success: boolean; error?: string } {
-    const users = this.scanUserFiles()
-    const target = users.find((u) => u.file.name === originalName)
-    if (!target) return { success: false, error: `Workflow "${originalName}" not found` }
-
-    const parsed = this.parseForWrite(text, originalName)
-    if ('error' in parsed) return { success: false, error: parsed.error }
-    const name = parsed.file.name
-    if (name !== originalName && users.some((u) => u.file.name === name)) {
-      return { success: false, error: `Workflow "${name}" already exists` }
-    }
-    try {
-      writeFileSync(target.basePath, text, 'utf-8')
-      this.invalidateScan()
-    } catch (e) {
-      log.warn(`保存 workflow "${originalName}" 失败:`, e)
-      return { success: false, error: e instanceof Error ? e.message : String(e) }
-    }
-    return { success: true }
   }
 
   /** 新建用户工作流（「新建」与「创建覆盖副本」共用）；文件名由 name 净化派生 */

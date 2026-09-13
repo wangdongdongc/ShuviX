@@ -44,7 +44,8 @@ function skillShortName(fullName: string): string {
 
 /**
  * 通用工具选择列表 — 支持内置工具、MCP 工具分组和 Skills 分组
- * 当前被 SubAgentEditor 使用，用于定义自定义 SubAgent 的工具白名单。
+ * 当前被 frontmatter 属性卡的 `shuvix-tools` 字段槽位（FrontmatterFieldPicker）使用，
+ * 用于编辑 agent md 的工具白名单。
  */
 export function ToolSelectList({
   tools,

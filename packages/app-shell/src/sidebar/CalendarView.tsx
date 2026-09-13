@@ -4,8 +4,7 @@ import { DayPicker, useDayPicker } from 'react-day-picker'
 import { zhCN, enUS } from 'react-day-picker/locale'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { useChatStore, groupSessionsByDay, type Session } from '@shuvix/chat-ui'
-import { WIKI_PROJECT_ID } from '@shuvix/chat-protocol/wiki'
-import { KNOWLEDGE_PROJECT_ID } from '@shuvix/chat-protocol/knowledge'
+import { isHiddenProjectId } from '@shuvix/chat-protocol/hiddenProjects'
 import './calendar.css'
 
 export interface CalendarViewProps {
@@ -51,14 +50,9 @@ export function CalendarView({
   const placeholderHeight = Math.round(dayCellSize * 6 + chromeHeightRef.current)
 
   // 派生：YYYY-MM-DD -> Session[]；只在 sessions 引用变化时重算
-  // 隐藏项目（旧 wiki / 知识库）的会话不计入（其项目不在列表中,日列表本就渲染不出 → 连圆点一起排除）
+  // 隐藏项目（旧 wiki / 知识库 / 注册表目录）的会话不计入（其项目不在列表中,日列表本就渲染不出 → 连圆点一起排除）
   const sessionsByDay = useMemo(
-    () =>
-      groupSessionsByDay(
-        sessions.filter(
-          (s) => s.projectId !== WIKI_PROJECT_ID && s.projectId !== KNOWLEDGE_PROJECT_ID
-        )
-      ),
+    () => groupSessionsByDay(sessions.filter((s) => !isHiddenProjectId(s.projectId))),
     [sessions]
   )
 

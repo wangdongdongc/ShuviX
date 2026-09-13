@@ -462,8 +462,8 @@ describe('PS —— 序列化（与解析互逆）', () => {
 
   it('PS-3 调用点白名单：序列化器只服务「新建 bot」', () => {
     // 它从固定键白名单重建 frontmatter，会丢注释、键序与未知键 —— **已存在的文件永远
-    // 不该经过它**：日常维护由 bot 自己用 `edit` 就地改，用户的保存由 save 原样落盘。
-    // 这条守卫在有人图省事用 serialize 实现 save 时先响
+    // 不该经过它**：日常维护由 bot 自己用 `edit` 就地改，用户的编辑由笔记本自动保存原样落盘。
+    // 这条守卫在有人图省事用 serialize 改写已有文件时先响
     const repoRoot = fileURLToPath(new URL('../../../../../', import.meta.url))
     const sources: Array<{ path: string; text: string }> = []
     const walk = (dir: string): void => {
@@ -499,8 +499,9 @@ describe('PS —— 序列化（与解析互逆）', () => {
     const service = sources.find((s) => s.path.endsWith('services/botService.ts'))!.text
     // 唯一调用点在「新建 bot」的模板生成里
     expect(service).toMatch(/newBotTemplate\([\s\S]*?serializeBotDefinitionFile\(/)
-    // 而 save 落的是调用方给的原文，不是 re-serialize 的产物
-    expect(service).toContain('writeFileAtomic(target.basePath, text)')
+    // 而本服务从不改写已有文件：唯一一处写盘是 create 落在新派生路径上的那份原文
+    expect(service.match(/writeFileAtomic\(/g)).toHaveLength(1)
+    expect(service).toContain('writeFileAtomic(filePath, text)')
   })
 })
 

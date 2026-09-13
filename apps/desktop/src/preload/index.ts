@@ -336,72 +336,60 @@ const api = {
       ipcRenderer.invoke('dbCredential:testConnection', params)
   },
 
-  // ============ 子智能体（文件系统驱动） ============
+  // ============ 子智能体（文件系统驱动；用户档案的编辑是它的笔记本会话） ============
   subAgent: {
     list: () => ipcRenderer.invoke('subAgent:list'),
     save: (params: SubAgentSaveParams) => ipcRenderer.invoke('subAgent:save', params),
     create: (params: SubAgentCreateParams) => ipcRenderer.invoke('subAgent:create', params),
     delete: (params: { name: string }) => ipcRenderer.invoke('subAgent:delete', params),
+    listInvalid: () => ipcRenderer.invoke('subAgent:listInvalid'),
+    deleteByFile: (params: { fileName: string }) =>
+      ipcRenderer.invoke('subAgent:deleteByFile', params),
     getSource: (params: { name: string; source: 'builtin' | 'user' }) =>
       ipcRenderer.invoke('subAgent:getSource', params),
-    saveSource: (params: { originalName: string; text: string }) =>
-      ipcRenderer.invoke('subAgent:saveSource', params),
     createSource: (params: { text: string }) => ipcRenderer.invoke('subAgent:createSource', params),
+    openNote: (params: { fileName: string; title?: string }) =>
+      ipcRenderer.invoke('subAgent:openNote', params),
     openFolder: () => ipcRenderer.invoke('subAgent:openFolder')
   },
 
-  // ============ 安全策略（文件系统驱动，md 原文编辑） ============
+  // ============ 安全策略（文件系统驱动；用户策略的编辑是它的笔记本会话） ============
   policy: {
     list: () => ipcRenderer.invoke('policy:list'),
     getSource: (params: { name: string; source: 'builtin' | 'user' }) =>
       ipcRenderer.invoke('policy:getSource', params),
-    save: (params: { originalName: string; text: string }) =>
-      ipcRenderer.invoke('policy:save', params),
     create: (params: { text: string }) => ipcRenderer.invoke('policy:create', params),
     delete: (params: { name: string }) => ipcRenderer.invoke('policy:delete', params),
     listInvalid: () => ipcRenderer.invoke('policy:listInvalid'),
-    getSourceByFile: (params: { fileName: string }) =>
-      ipcRenderer.invoke('policy:getSourceByFile', params),
-    saveByFile: (params: { fileName: string; text: string }) =>
-      ipcRenderer.invoke('policy:saveByFile', params),
     deleteByFile: (params: { fileName: string }) =>
       ipcRenderer.invoke('policy:deleteByFile', params),
+    openNote: (params: { fileName: string; title?: string }) =>
+      ipcRenderer.invoke('policy:openNote', params),
     openFolder: () => ipcRenderer.invoke('policy:openFolder')
   },
 
-  // ============ 工作流（文件系统驱动，md 原文编辑；纯 md 驱动，无启用开关） ============
+  // ============ 工作流（文件系统驱动；用户工作流的编辑是它的笔记本会话；无启用开关） ============
   workflow: {
     list: () => ipcRenderer.invoke('workflow:list'),
     getSource: (params: { name: string; source: 'builtin' | 'user' }) =>
       ipcRenderer.invoke('workflow:getSource', params),
-    save: (params: { originalName: string; text: string }) =>
-      ipcRenderer.invoke('workflow:save', params),
     create: (params: { text: string }) => ipcRenderer.invoke('workflow:create', params),
     delete: (params: { name: string }) => ipcRenderer.invoke('workflow:delete', params),
     listInvalid: () => ipcRenderer.invoke('workflow:listInvalid'),
-    getSourceByFile: (params: { fileName: string }) =>
-      ipcRenderer.invoke('workflow:getSourceByFile', params),
-    saveByFile: (params: { fileName: string; text: string }) =>
-      ipcRenderer.invoke('workflow:saveByFile', params),
     deleteByFile: (params: { fileName: string }) =>
       ipcRenderer.invoke('workflow:deleteByFile', params),
+    openNote: (params: { fileName: string; title?: string }) =>
+      ipcRenderer.invoke('workflow:openNote', params),
     openFolder: () => ipcRenderer.invoke('workflow:openFolder')
   },
 
-  // ============ Bots（文件系统驱动，md 原文编辑；纯 md 驱动，无启用开关） ============
+  // ============ Bots（文件系统驱动；打开一份 bot 就是打开它的笔记本会话；无启用开关） ============
   bot: {
     list: () => ipcRenderer.invoke('bot:list'),
-    getSource: (params: { name: string }) => ipcRenderer.invoke('bot:getSource', params),
-    template: (params: { name: string; description?: string; body?: string }) =>
-      ipcRenderer.invoke('bot:template', params),
-    save: (params: { originalName: string; text: string; revision?: string }) =>
-      ipcRenderer.invoke('bot:save', params),
-    create: (params: { text: string }) => ipcRenderer.invoke('bot:create', params),
+    openNote: (params: { fileName: string; title?: string }) =>
+      ipcRenderer.invoke('bot:openNote', params),
+    createNew: () => ipcRenderer.invoke('bot:createNew'),
     delete: (params: { name: string }) => ipcRenderer.invoke('bot:delete', params),
-    getSourceByFile: (params: { fileName: string }) =>
-      ipcRenderer.invoke('bot:getSourceByFile', params),
-    saveByFile: (params: { fileName: string; text: string }) =>
-      ipcRenderer.invoke('bot:saveByFile', params),
     deleteByFile: (params: { fileName: string }) => ipcRenderer.invoke('bot:deleteByFile', params),
     openFolder: () => ipcRenderer.invoke('bot:openFolder')
   },

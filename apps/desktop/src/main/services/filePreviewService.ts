@@ -15,6 +15,7 @@ import { basename, dirname, extname, join } from 'path'
 import { BrowserWindow, dialog } from 'electron'
 import { previewFile } from '@shuvix/agent-runtime'
 import { sessionService } from './sessionService'
+import { observeRegistryWrite } from './registryNotes'
 import { isPathWriteAllowed, resolveProjectConfig } from './toolContext'
 import { resolveReadPath } from '../utils/toolUtils/pathUtils'
 import { nodeFileSystemPort } from '../utils/toolUtils/nodeFileSystemPort'
@@ -71,20 +72,26 @@ export async function writeSessionFile(
   // （跨设备 rename 不是原子的），watcher 监听父目录按 basename 过滤，本就为原子保存
   // 而设计（见 filesWatcherService 头注释）。
   const tmpPath = join(dirname(absolutePath), `.${basename(absolutePath)}.${process.pid}.tmp`)
-  try {
-    await writeFile(tmpPath, content, 'utf8')
-    // 保住原文件权限（rename 会把 tmp 的默认权限一并带过去）
-    const mode = await stat(absolutePath).then(
-      (st) => st.mode,
-      () => null
-    )
-    if (mode !== null) await chmod(tmpPath, mode)
-    await rename(tmpPath, absolutePath)
-    return { ok: true }
-  } catch (err) {
-    await unlink(tmpPath).catch(() => undefined)
-    return { ok: false, error: err instanceof Error ? err.message : String(err) }
-  }
+  // 注册表 md（bot 文件）写入前后告知它的注册表：改名迁移会话绑定 + bot.changed
+  return observeRegistryWrite(
+    absolutePath,
+    async (): Promise<{ ok: true } | { ok: false; error: string }> => {
+      try {
+        await writeFile(tmpPath, content, 'utf8')
+        // 保住原文件权限（rename 会把 tmp 的默认权限一并带过去）
+        const mode = await stat(absolutePath).then(
+          (st) => st.mode,
+          () => null
+        )
+        if (mode !== null) await chmod(tmpPath, mode)
+        await rename(tmpPath, absolutePath)
+        return { ok: true }
+      } catch (err) {
+        await unlink(tmpPath).catch(() => undefined)
+        return { ok: false, error: err instanceof Error ? err.message : String(err) }
+      }
+    }
+  )
 }
 
 /**

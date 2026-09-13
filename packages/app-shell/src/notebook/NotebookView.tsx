@@ -20,6 +20,8 @@ export interface NotebookViewProps {
   caps?: NotebookCaps
   /** 外部编辑器句柄（父组件持有，供下方输入条 getMarkdown 取实时内容）；不传则内部自建 */
   editorHandleRef?: React.RefObject<LivePreviewEditorHandle | null>
+  /** 排版模式（见 LivePreviewEditor.layout）：缺省笔记本写作页；设置页这类自带边距的宿主传 fill */
+  layout?: 'notebook' | 'fill'
 }
 
 /**
@@ -27,14 +29,16 @@ export interface NotebookViewProps {
  * 复用 LivePreviewEditor：读经 getSessionChannelApi().files，写经 getHostApi().files（渠道端只读）。
  *
  * **不含顶栏** —— 顶栏复用对话框的 ChatHeader（由宿主在本组件之上渲染，显示会话标题/工作目录），
- * 与聊天视图一致。保存状态以右上角浮层提示（仅保存中/失败时出现）。
+ * 与聊天视图一致。保存状态以右上角浮层提示（仅保存中/失败时出现）。设置页编辑 agent / 策略 /
+ * 工作流 md 时直接嵌本组件（绑定该文件的笔记本会话，不带输入卡片）—— 与笔记本同一条读写路径。
  * 宿主无关：文件 IO 经 ChatApi、图片内嵌经注入的 mediaUrl seam、主题/外链/右键经 caps。
  */
 export function NotebookView({
   path,
   sessionId,
   caps,
-  editorHandleRef
+  editorHandleRef,
+  layout
 }: NotebookViewProps): React.JSX.Element {
   const { t } = useTranslation()
 
@@ -167,6 +171,7 @@ export function NotebookView({
         handleRef={editorRef}
         fileContext={fileContext}
         caps={caps}
+        layout={layout}
       />
     </div>
   )

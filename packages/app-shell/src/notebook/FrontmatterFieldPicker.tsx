@@ -102,7 +102,7 @@ function ToolsField({ value, onChange, readOnly = false }: FieldControlProps): R
       .then((list) => {
         if (!alive) return
         // 派发工具 agent 不在 tools.list 里（那份清单服务于聊天工具选择器，它是 hidden），
-        // 但它是 shuvix-tools 的合法条目 —— 合成注入，同 SubAgentEditor
+        // 但它是 shuvix-tools 的合法条目 —— 合成注入
         setTools([
           ...list,
           { name: 'agent', label: t('tool.subAgentDispatchLabel'), group: 'agent' }

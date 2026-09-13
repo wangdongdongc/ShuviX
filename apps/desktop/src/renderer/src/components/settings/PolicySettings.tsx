@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   Lock,
@@ -11,40 +11,35 @@ import {
   GitBranch,
   Database,
   Wrench,
-  Pencil,
   Plus,
   Copy,
-  Save,
-  Check,
   Trash2,
-  X,
   AlertTriangle,
   type LucideIcon
 } from 'lucide-react'
-import {
-  LivePreviewEditor,
-  POLICY_EFFECT_CLASS,
-  type LivePreviewEditorHandle
-} from '@shuvix/app-shell'
+import { POLICY_EFFECT_CLASS } from '@shuvix/app-shell'
 import { ConfirmDialog } from '../common/ConfirmDialog'
+import { BuiltinSourceView, RegistryNoteView } from './RegistryNoteView'
+import { fileNameOf, uniqueName } from './registryFiles'
 
 /**
  * 设置页顶层「安全策略」tab —— 与智能体 tab 同形：左侧每个策略一个子项（内置与
- * 用户合并为同一列表、内置置顶），右侧为详情（描述 + 规则可读渲染 + Rationale）。
+ * 用户合并为同一列表、内置置顶），右侧为详情。
  *
  * 策略是纯 md 驱动（内置随包发布只读；用户策略放 ~/.shuvix/policies/<name>.md 即生效，
- * 同名覆盖内置）。编辑走 **md 原文**而非逐字段表单：rules/lets/scope 是嵌套结构，
- * 做成表单成本远高于收益，而解析器对非法文件本就给人读原因 —— 原文编辑 +
- * frontmatter 属性卡（结构化摘要 + 实时校验徽章）更贴合。保存前一律解析校验，
- * 非法拒绝写盘并回传原因：一份存在但非法的策略会被静默跳过，正是要消灭的失败模式。
+ * 同名覆盖内置）。**用户策略的详情就是它的笔记本会话**（RegistryNoteView —— 与笔记本、知识库
+ * 条目同一条路：live-preview、自动保存、外部改动重载）：rules/lets/scope 是嵌套结构，做成表单
+ * 成本远高于收益，frontmatter 属性卡本就给结构化摘要 + 解析器实时校验徽章。写到一半的非法文件
+ * 与外部编辑器写坏的一样对待：不生效、不遮蔽内置，列进「无法解析」分组，点开照样接着改 ——
+ * 一份存在但非法的策略被静默跳过，正是这一页要让人看得见的失败模式。
  */
 
 /** 新建策略的初值（YAML 注释原样保留 —— 原文编辑模型的直接体现） */
-function newPolicyTemplate(t: (key: string) => string): string {
+function newPolicyTemplate(t: (key: string) => string, name: string): string {
   return [
     '---',
     'shuvix: policy v1',
-    'name: my-policy',
+    `name: ${name}`,
     `description: ${t('settings.policyTemplateDesc')}`,
     `# ${t('settings.policyTemplateHint')}`,
     'shuvix-policy-rules:',
@@ -92,23 +87,18 @@ function policyIcon(policy: PolicyInfo): { Icon: LucideIcon; objectType: string 
   return { Icon: (only && OBJECT_TYPE_ICON[only]) || Shield, objectType: only }
 }
 
-function keyOf(p: PolicyInfo): string {
-  return `${p.source}:${p.name}${p.overridden ? ':overridden' : ''}`
-}
-
-/** 无法解析的文件在列表里的选中键（与 keyOf 同名空间隔离） */
-function invalidKeyOf(fileName: string): string {
-  return `invalid:${fileName}`
+/** 用户文件的选中键（合法与解析不过的共用一个键空间，见 keyOf） */
+function fileKey(fileName: string): string {
+  return `file:${fileName}`
 }
 
 /**
- * 编辑目标：新建（含内置的覆盖副本，都走 create）/ 覆写既有用户策略（按 name 定位）/
- * 修复无法解析的文件（按文件名定位 —— 它解析不出 name）。
+ * 列表选中键。内置按名（它没有文件）；用户策略按**文件名** —— 自动保存下名字随时在变、
+ * 合法性随时在翻，文件名不变，选中项与开着的笔记本才不会跟着跳。
  */
-type EditTarget =
-  | { kind: 'create'; text: string }
-  | { kind: 'edit'; name: string; text: string }
-  | { kind: 'fix'; fileName: string; text: string }
+function keyOf(p: PolicyInfo): string {
+  return p.source === 'builtin' ? `builtin:${p.name}` : fileKey(fileNameOf(p.basePath))
+}
 
 /** 展示顺序：内置置顶（含被遮蔽的），组内保持后端的字母序 */
 function orderPolicies(list: PolicyInfo[]): PolicyInfo[] {
@@ -123,17 +113,19 @@ export function PolicySettings(): React.JSX.Element {
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
-  const [editing, setEditing] = useState<EditTarget | null>(null)
-  /** 读取原文失败（文件被外部删除/改坏）—— 不再静默吞掉，显示在详情区 */
-  const [loadError, setLoadError] = useState<string | null>(null)
-  /** 选中项的 md 原文（用户策略读文件；内置回写等价 md）—— 详情即编辑器，与智能体页同形 */
-  const [source, setSource] = useState<{ key: string; text: string } | null>(null)
-  /** 删除确认：策略名（用户策略）或 {fileName}（无法解析的文件） */
-  const [confirmingDelete, setConfirmingDelete] = useState<string | { fileName: string } | null>(
-    null
-  )
+  /** 新建 / 覆盖副本 / 删除 / 读原文失败的原因 —— 不静默吞掉，显示在详情区顶部 */
+  const [error, setError] = useState<string | null>(null)
+  /** 选中内置策略的等价 md（只读查看 + 覆盖副本初值）；用户策略的详情是笔记本，自己读盘 */
+  const [source, setSource] = useState<{ name: string; text: string } | null>(null)
+  /** 删除确认：合法用户策略（按名）或无法解析的文件（按文件名） */
+  const [confirmingDelete, setConfirmingDelete] = useState<
+    { name: string } | { fileName: string } | null
+  >(null)
 
-  const load = useCallback(async (): Promise<PolicyInfo[]> => {
+  const load = useCallback(async (): Promise<{
+    list: PolicyInfo[]
+    bad: InvalidPolicyFile[]
+  }> => {
     const [list, bad] = await Promise.all([
       window.api.policy.list(),
       window.api.policy.listInvalid()
@@ -141,22 +133,29 @@ export function PolicySettings(): React.JSX.Element {
     setPolicies(list)
     setInvalid(bad)
     setLoading(false)
-    return list
+    return { list, bad }
   }, [])
 
   useEffect(() => {
-    load().then((list) => {
+    load().then(({ list }) => {
       const first = orderPolicies(list)[0]
       setSelectedKey((cur) => cur ?? (first ? keyOf(first) : null))
     })
   }, [load])
 
+  const select = (key: string): void => {
+    setError(null)
+    setSelectedKey(key)
+  }
+
   const handleRefresh = async (): Promise<void> => {
     setRefreshing(true)
     try {
-      const list = await load()
+      const { list, bad } = await load()
       setSelectedKey((cur) => {
-        if (list.some((p) => keyOf(p) === cur)) return cur
+        if (list.some((p) => keyOf(p) === cur) || bad.some((f) => fileKey(f.fileName) === cur)) {
+          return cur
+        }
         const first = orderPolicies(list)[0]
         return first ? keyOf(first) : null
       })
@@ -166,69 +165,62 @@ export function PolicySettings(): React.JSX.Element {
   }
 
   const selected = policies.find((p) => keyOf(p) === selectedKey) ?? null
-  const selectedInvalid = invalid.find((f) => selectedKey === invalidKeyOf(f.fileName)) ?? null
+  // 用户文件的选中与它此刻合不合法无关：翻面的一瞬（或两次列表请求之间）两边都查不到，
+  // 开着的笔记本也不该因此卸载
+  const selectedFile = selectedKey?.startsWith('file:') ? selectedKey.slice('file:'.length) : null
 
-  // 选中项变化 → 拉 md 原文（详情就是它的只读/可编辑呈现）
+  // 选中内置 → 拉等价 md
+  const builtinName = selected?.source === 'builtin' ? selected.name : null
   useEffect(() => {
-    if (!selected) {
+    if (!builtinName) {
       setSource(null)
       return undefined
     }
-    const key = keyOf(selected)
     let alive = true
-    setLoadError(null)
-    void window.api.policy.getSource({ name: selected.name, source: selected.source }).then((r) => {
+    void window.api.policy.getSource({ name: builtinName, source: 'builtin' }).then((r) => {
       if (!alive) return
       if ('error' in r) {
         setSource(null)
-        setLoadError(r.error)
+        setError(r.error)
         return
       }
-      setSource({ key, text: r.text })
+      setSource({ name: builtinName, text: r.text })
     })
     return () => {
       alive = false
     }
-  }, [selected])
+  }, [builtinName])
 
-  /** 打开无法解析的文件去修（身份是文件名 —— 它解析不出 name） */
-  const openInvalidEditor = async (fileName: string): Promise<void> => {
-    const r = await window.api.policy.getSourceByFile({ fileName })
-    if ('error' in r) {
-      setLoadError(r.error)
+  /** 新建与覆盖副本共用：落一份新文件，重扫并选中它 —— 它的详情就是刚建好的笔记本 */
+  const createAndSelect = async (text: string): Promise<void> => {
+    setError(null)
+    const r = await window.api.policy.create({ text })
+    if (!r.success) {
+      setError(r.error || t('settings.policySaveFailed'))
       return
     }
-    setEditing({ kind: 'fix', fileName, text: r.text })
-  }
-
-  /**
-   * 保存成功：重扫列表并选中落盘的那一份（改名/新建/修好后仍定位得到）。
-   * 修复态按文件路径定位 —— 它保存前没有 name，且选中键指向的 invalid 条目
-   * 在文件变合法后就消失了，不改选会留下一个空白详情面板。
-   */
-  const afterSaved = async (name: string, fileName?: string): Promise<void> => {
-    setEditing(null)
-    const list = await load()
-    const hit = fileName
-      ? list.find((p) => p.source === 'user' && p.basePath.endsWith(fileName))
-      : list.find((p) => p.source === 'user' && p.name === name)
+    const { list } = await load()
+    const hit = list.find((p) => p.source === 'user' && p.name === r.name)
     if (hit) setSelectedKey(keyOf(hit))
   }
 
-  const handleDelete = async (target: string | { fileName: string }): Promise<void> => {
+  const handleDelete = async (target: { name: string } | { fileName: string }): Promise<void> => {
     setConfirmingDelete(null)
     const r =
-      typeof target === 'string'
-        ? await window.api.policy.delete({ name: target })
+      'name' in target
+        ? await window.api.policy.delete({ name: target.name })
         : await window.api.policy.deleteByFile({ fileName: target.fileName })
-    if (!r.success) return
-    const list = await load()
-    if (typeof target !== 'string') {
-      setSelectedKey(orderPolicies(list)[0] ? keyOf(orderPolicies(list)[0]) : null)
+    if (!r.success) {
+      setError(r.error ?? 'Delete failed')
       return
     }
+    const { list } = await load()
     // 删除覆盖副本后同名内置恢复生效 —— 优先选中它，否则退回首项
-    const next = list.find((p) => p.name === target && !p.overridden) ?? orderPolicies(list)[0]
+    const restored =
+      'name' in target
+        ? list.find((p) => p.source === 'builtin' && p.name === target.name)
+        : undefined
+    const next = restored ?? orderPolicies(list)[0]
     setSelectedKey(next ? keyOf(next) : null)
   }
 
@@ -249,7 +241,7 @@ export function PolicySettings(): React.JSX.Element {
                   key={keyOf(policy)}
                   policy={policy}
                   selected={selectedKey === keyOf(policy)}
-                  onSelect={() => setSelectedKey(keyOf(policy))}
+                  onSelect={() => select(keyOf(policy))}
                 />
               ))}
               {/* 无法解析的文件：不生效也不遮蔽内置，但必须可见 —— 否则用户无从发现更无从修复 */}
@@ -261,9 +253,10 @@ export function PolicySettings(): React.JSX.Element {
                   {invalid.map((f) => (
                     <button
                       key={f.fileName}
-                      onClick={() => setSelectedKey(invalidKeyOf(f.fileName))}
+                      onClick={() => select(fileKey(f.fileName))}
+                      title={f.error}
                       className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-left transition-colors ${
-                        selectedKey === invalidKeyOf(f.fileName)
+                        selectedKey === fileKey(f.fileName)
                           ? 'bg-amber-500/10 text-amber-500'
                           : 'text-text-secondary hover:bg-bg-hover hover:text-text-primary'
                       }`}
@@ -285,7 +278,17 @@ export function PolicySettings(): React.JSX.Element {
         {/* 底部操作：新建 / 打开用户策略目录 / 重扫描 */}
         <div className="border-t border-border-secondary p-2 flex items-center gap-1.5">
           <button
-            onClick={() => setEditing({ kind: 'create', text: newPolicyTemplate(t) })}
+            onClick={() =>
+              void createAndSelect(
+                newPolicyTemplate(
+                  t,
+                  uniqueName(
+                    'my-policy',
+                    policies.map((p) => p.name)
+                  )
+                )
+              )
+            }
             title={t('settings.policyNew')}
             className="flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-lg border border-dashed border-border-secondary text-[11px] text-text-secondary hover:text-text-primary hover:border-accent/40 hover:bg-accent/5 transition-colors"
           >
@@ -311,55 +314,49 @@ export function PolicySettings(): React.JSX.Element {
         </div>
       </div>
 
-      {/* 右侧：详情（含操作）或 md 原文编辑器 */}
+      {/* 右侧：详情 —— 内置是等价 md 的只读查看，用户文件是它的笔记本 */}
       <div className="flex-1 min-w-0 flex flex-col min-h-0 overflow-y-auto">
-        {editing ? (
-          <PolicyEditor
-            key={
-              editing.kind === 'edit'
-                ? editing.name
-                : editing.kind === 'fix'
-                  ? editing.fileName
-                  : '__new__'
-            }
-            target={editing}
-            onCancel={() => setEditing(null)}
-            onSaved={afterSaved}
-          />
-        ) : selectedInvalid ? (
-          <InvalidPolicyDetail
-            key={selectedInvalid.fileName}
-            file={selectedInvalid}
-            onFix={() => void openInvalidEditor(selectedInvalid.fileName)}
-            onDelete={() => setConfirmingDelete({ fileName: selectedInvalid.fileName })}
-          />
+        {error && (
+          <div className="mx-4 mt-4 px-3 py-2 rounded-lg bg-red-500/10 text-red-500 text-[11px] whitespace-pre-wrap break-words">
+            {error}
+          </div>
+        )}
+        {selected?.source === 'builtin' ? (
+          <>
+            <PolicyHeader
+              policy={selected}
+              onCreateOverride={
+                !selected.overridden && source?.name === selected.name
+                  ? () => void createAndSelect(source.text)
+                  : undefined
+              }
+            />
+            {source?.name === selected.name && (
+              <BuiltinSourceView
+                key={selected.name}
+                documentId={`${selected.name}.md`}
+                text={source.text}
+              />
+            )}
+          </>
         ) : (
-          selected && (
+          selectedFile && (
             <>
-              {loadError && (
-                <div className="mx-4 mt-4 px-3 py-2 rounded-lg bg-red-500/10 text-red-500 text-[11px] whitespace-pre-wrap break-words">
-                  {loadError}
-                </div>
-              )}
-              {source?.key === keyOf(selected) && (
-                <PolicyEditor
-                  key={source.key}
-                  target={{ kind: 'edit', name: selected.name, text: source.text }}
-                  policy={selected}
-                  readOnly={selected.source === 'builtin'}
-                  onSaved={afterSaved}
-                  onCreateOverride={
-                    selected.source === 'builtin' && !selected.overridden
-                      ? () => setEditing({ kind: 'create', text: source.text })
-                      : undefined
-                  }
-                  onDelete={
-                    selected.source === 'user'
-                      ? () => setConfirmingDelete(selected.name)
-                      : undefined
-                  }
-                />
-              )}
+              <PolicyHeader
+                policy={selected}
+                fileName={selectedFile}
+                onDelete={() =>
+                  setConfirmingDelete(
+                    selected ? { name: selected.name } : { fileName: selectedFile }
+                  )
+                }
+              />
+              <RegistryNoteView
+                key={selectedFile}
+                kind="policy"
+                fileName={selectedFile}
+                onFileChanged={load}
+              />
             </>
           )
         )}
@@ -369,8 +366,8 @@ export function PolicySettings(): React.JSX.Element {
         <ConfirmDialog
           title={t('settings.policyDeleteConfirmTitle')}
           description={
-            typeof confirmingDelete === 'string'
-              ? t('settings.policyDeleteConfirmDesc', { name: confirmingDelete })
+            'name' in confirmingDelete
+              ? t('settings.policyDeleteConfirmDesc', { name: confirmingDelete.name })
               : t('settings.policyDeleteFileConfirmDesc', { name: confirmingDelete.fileName })
           }
           confirmText={t('common.delete')}
@@ -384,176 +381,88 @@ export function PolicySettings(): React.JSX.Element {
 }
 
 /**
- * md 原文编辑器。frontmatter 由属性卡渲染（结构化摘要 + 解析器实时校验徽章），
- * 正文即 Rationale 的 live-preview。非受控编辑器，保存时经 handleRef 直取全文
- * （对齐 SubAgentEditor）。保存失败把解析器原因原样显示 —— 它就是文件为何不生效的答案。
+ * 详情头部：名称 + 来源徽标 + 路径 / 提示 + 动作。`policy` 为 null 表示选中的用户文件此刻
+ * 解析不过 —— 标题退回文件名，提示它被跳过的后果。
  */
-function PolicyEditor({
-  target,
+function PolicyHeader({
   policy,
-  readOnly = false,
-  onCancel,
-  onSaved,
+  fileName,
   onCreateOverride,
   onDelete
 }: {
-  target: EditTarget
-  /** 选中项元信息（头部徽标 / 路径 / 覆盖提示）；create、fix 态没有 */
-  policy?: PolicyInfo
-  /** 内置策略随包发布不可改 */
-  readOnly?: boolean
-  /** 仅 create / fix 态给取消（选中即详情的常态没有「取消」可言，同智能体页） */
-  onCancel?: () => void
-  onSaved: (name: string, fileName?: string) => Promise<void>
+  policy: PolicyInfo | null
+  fileName?: string
   onCreateOverride?: () => void
   onDelete?: () => void
 }): React.JSX.Element {
   const { t } = useTranslation()
-  const initialText = target.text
-  const editorRef = useRef<LivePreviewEditorHandle | null>(null)
-  const mirror = useRef(initialText)
-  const [saving, setSaving] = useState(false)
-  const [saved, setSaved] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
-  const handleSave = async (): Promise<void> => {
-    const text = editorRef.current?.getMarkdown() ?? mirror.current
-    setSaving(true)
-    setError(null)
-    try {
-      const r =
-        target.kind === 'edit'
-          ? await window.api.policy.save({ originalName: target.name, text })
-          : target.kind === 'fix'
-            ? await window.api.policy.saveByFile({ fileName: target.fileName, text })
-            : await window.api.policy.create({ text })
-      if (!r.success) {
-        setError(r.error || t('settings.policySaveFailed'))
-        return
-      }
-      setSaved(true)
-      // 新建返回落盘后的 name（frontmatter 为准）；覆写沿用原名；修复态由重扫定位
-      const savedName =
-        'name' in r && typeof r.name === 'string'
-          ? r.name
-          : target.kind === 'edit'
-            ? target.name
-            : ''
-      await onSaved(savedName, target.kind === 'fix' ? target.fileName : undefined)
-    } finally {
-      setSaving(false)
-    }
-  }
-
+  const builtin = policy?.source === 'builtin'
   return (
-    <div className="flex flex-col min-h-0">
-      <div className="flex items-center gap-2 px-4 py-3 border-b border-border-secondary">
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-sm font-semibold text-text-primary truncate">
-              {target.kind === 'edit'
-                ? (policy?.displayName ?? target.name)
-                : target.kind === 'fix'
-                  ? target.fileName
-                  : t('settings.policyNew')}
-            </span>
-            {policy && (
+    <div className="flex items-center gap-2 px-4 py-3 border-b border-border-secondary">
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2 flex-wrap">
+          {policy ? (
+            <>
+              <span className="text-sm font-semibold text-text-primary truncate">
+                {policy.displayName}
+              </span>
               <span
                 className={`shrink-0 flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[9px] ${
-                  readOnly ? 'bg-bg-secondary text-text-tertiary' : 'bg-accent/10 text-accent'
+                  builtin ? 'bg-bg-secondary text-text-tertiary' : 'bg-accent/10 text-accent'
                 }`}
               >
-                {readOnly && <Lock size={9} />}
-                {policy.source === 'builtin'
-                  ? t('settings.policySourceBuiltin')
-                  : t('settings.policySourceUser')}
+                {builtin && <Lock size={9} />}
+                {builtin ? t('settings.policySourceBuiltin') : t('settings.policySourceUser')}
               </span>
-            )}
-            {policy?.overridden && (
-              <span className="px-1.5 py-0.5 rounded-md text-[9px] shrink-0 bg-orange-500/10 text-orange-500">
-                {t('settings.policyOverridden')}
-              </span>
-            )}
-          </div>
-          {policy?.basePath ? (
-            <div className="font-mono text-[10px] text-text-tertiary truncate mt-0.5">
-              {policy.basePath}
-            </div>
+              {policy.overridden && (
+                <span className="px-1.5 py-0.5 rounded-md text-[9px] shrink-0 bg-orange-500/10 text-orange-500">
+                  {t('settings.policyOverridden')}
+                </span>
+              )}
+            </>
           ) : (
-            <div className="text-[10px] text-text-tertiary mt-0.5">
-              {readOnly
-                ? policy?.overridden
-                  ? t('settings.policyOverriddenHint')
-                  : t('settings.policyFsHint')
-                : t('settings.policyEditHint')}
-            </div>
+            <>
+              <AlertTriangle size={14} className="shrink-0 text-amber-500" />
+              <span className="text-sm font-semibold text-text-primary font-mono truncate">
+                {fileName}
+              </span>
+            </>
           )}
         </div>
-        {readOnly && !policy?.overridden && onCreateOverride && (
-          <button
-            onClick={onCreateOverride}
-            className="flex items-center gap-1 px-2 py-1 rounded text-[10px] border border-dashed border-border-secondary text-text-secondary hover:text-text-primary hover:border-accent/40 hover:bg-accent/5 transition-colors"
+        {policy?.basePath ? (
+          <div className="font-mono text-[10px] text-text-tertiary truncate mt-0.5">
+            {policy.basePath}
+          </div>
+        ) : (
+          <div
+            className={`text-[10px] mt-0.5 ${policy ? 'text-text-tertiary' : 'text-amber-500/90'}`}
           >
-            <Copy size={10} />
-            {t('tool.subAgentCreateOverride')}
-          </button>
-        )}
-        {onCancel && (
-          <button
-            onClick={onCancel}
-            className="flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors"
-          >
-            <X size={13} />
-            {t('common.cancel')}
-          </button>
-        )}
-        {!readOnly && (
-          <button
-            onClick={() => void handleSave()}
-            disabled={saving || saved}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors disabled:opacity-60 ${
-              saved ? 'bg-success/20 text-success' : 'bg-accent text-white hover:bg-accent-hover'
-            }`}
-          >
-            {saved ? <Check size={13} /> : <Save size={13} />}
-            {saved ? t('settings.saved') : t('common.save')}
-          </button>
-        )}
-        {onDelete && (
-          <button
-            onClick={onDelete}
-            title={t('settings.policyDeleteConfirmTitle')}
-            className="p-1.5 rounded-lg text-text-tertiary hover:text-red-500 hover:bg-red-500/10 transition-colors"
-          >
-            <Trash2 size={14} />
-          </button>
+            {!policy
+              ? t('settings.policyInvalidHint')
+              : policy.overridden
+                ? t('settings.policyOverriddenHint')
+                : t('settings.policyFsHint')}
+          </div>
         )}
       </div>
-
-      {error && (
-        <div className="mx-4 mt-3 px-3 py-2 rounded-lg bg-red-500/10 text-red-500 text-[11px] whitespace-pre-wrap break-words">
-          {error}
-        </div>
+      {onCreateOverride && (
+        <button
+          onClick={onCreateOverride}
+          className="flex items-center gap-1 px-2 py-1 rounded text-[10px] border border-dashed border-border-secondary text-text-secondary hover:text-text-primary hover:border-accent/40 hover:bg-accent/5 transition-colors"
+        >
+          <Copy size={10} />
+          {t('tool.subAgentCreateOverride')}
+        </button>
       )}
-
-      {/* 不限高：CM6 随文档自然增长、无内部滚动，整页统一滚动（同 SubAgentEditor） */}
-      <div className="min-h-[320px] p-2">
-        <LivePreviewEditor
-          layout="fill"
-          documentId={
-            target.kind === 'fix'
-              ? target.fileName
-              : `${target.kind === 'edit' ? target.name : 'new-policy'}.md`
-          }
-          initialContent={initialText}
-          readOnly={readOnly}
-          onSave={(md) => {
-            mirror.current = md
-            setSaved(false)
-          }}
-          handleRef={editorRef}
-        />
-      </div>
+      {onDelete && (
+        <button
+          onClick={onDelete}
+          title={t('settings.policyDeleteConfirmTitle')}
+          className="p-1.5 rounded-lg text-text-tertiary hover:text-red-500 hover:bg-red-500/10 transition-colors"
+        >
+          <Trash2 size={14} />
+        </button>
+      )}
     </div>
   )
 }
@@ -628,49 +537,5 @@ function PolicyRow({
         </span>
       )}
     </button>
-  )
-}
-/**
- * 无法解析的策略文件详情：解析器原因 + 去修 / 删掉两条出路。
- * 它不生效也不遮蔽内置（安全语义），但让用户看得见、改得动，才是「不再静默失效」的完整形态。
- */
-function InvalidPolicyDetail({
-  file,
-  onFix,
-  onDelete
-}: {
-  file: InvalidPolicyFile
-  onFix: () => void
-  onDelete: () => void
-}): React.JSX.Element {
-  const { t } = useTranslation()
-  return (
-    <div className="p-4 space-y-4">
-      <div className="flex items-center justify-end gap-2">
-        <button
-          onClick={onFix}
-          className="flex items-center gap-1 px-2 py-1 rounded text-[10px] border border-dashed border-border-secondary text-text-secondary hover:text-text-primary hover:border-accent/40 hover:bg-accent/5 transition-colors"
-        >
-          <Pencil size={10} />
-          {t('settings.policyFix')}
-        </button>
-        <button
-          onClick={onDelete}
-          className="flex items-center gap-1 px-2 py-1 rounded text-[10px] border border-dashed border-border-secondary text-text-secondary hover:text-red-500 hover:border-red-500/40 hover:bg-red-500/5 transition-colors"
-        >
-          <Trash2 size={10} />
-          {t('common.delete')}
-        </button>
-      </div>
-
-      <div className="flex items-center gap-2">
-        <AlertTriangle size={15} className="shrink-0 text-amber-500" />
-        <span className="text-sm font-semibold text-text-primary font-mono">{file.fileName}</span>
-      </div>
-      <div className="text-[11px] text-amber-500/90">{t('settings.policyInvalidHint')}</div>
-      <div className="px-3 py-2 rounded-lg bg-red-500/10 text-red-500 text-[11px] whitespace-pre-wrap break-words leading-relaxed">
-        {file.error}
-      </div>
-    </div>
   )
 }

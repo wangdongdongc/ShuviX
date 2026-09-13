@@ -146,11 +146,7 @@ describe('policyService — 拒绝原因与错误文案', () => {
     expect(files()).toEqual([])
   })
 
-  it('PU-5 错误文案矩阵：save / delete / getSource(user) 报 Policy "X" not found；getSource(builtin) 报 Builtin', () => {
-    expect(policyService.savePolicy('ghost', policyMd('ghost'))).toEqual({
-      success: false,
-      error: 'Policy "ghost" not found'
-    })
+  it('PU-5 错误文案矩阵：delete / getSource(user) 报 Policy "X" not found；getSource(builtin) 报 Builtin', () => {
     expect(policyService.deletePolicy('ghost')).toEqual({
       success: false,
       error: 'Policy "ghost" not found'

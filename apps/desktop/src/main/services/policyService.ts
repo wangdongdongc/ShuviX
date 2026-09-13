@@ -185,32 +185,6 @@ class PolicyService {
   }
 
   /**
-   * 覆写用户策略文件（设置页编辑器的保存路径）。`originalName` 定位现有文件
-   * （文件路径不随改名变，frontmatter `name` 为准）；内置策略无文件，须先创建覆盖副本。
-   */
-  savePolicy(originalName: string, text: string): { success: boolean; error?: string } {
-    const users = this.scanUserFiles()
-    const target = users.find((u) => u.policy.name === originalName)
-    if (!target) return { success: false, error: `Policy "${originalName}" not found` }
-
-    const parsed = this.parseForWrite(text, originalName)
-    if ('error' in parsed) return { success: false, error: parsed.error }
-    const name = parsed.policy.name
-    // 与其他用户策略重名 → 拒绝（同名用户文件互相遮蔽，语义不明）；覆盖内置为有意设计，放行
-    if (name !== originalName && users.some((u) => u.policy.name === name)) {
-      return { success: false, error: `Policy "${name}" already exists` }
-    }
-
-    try {
-      writeFileSync(target.basePath, text, 'utf-8')
-    } catch (e) {
-      log.warn(`保存策略 "${originalName}" 失败:`, e)
-      return { success: false, error: e instanceof Error ? e.message : String(e) }
-    }
-    return { success: true }
-  }
-
-  /**
    * 新建用户策略文件（设置页「新建」与「创建覆盖副本」共用）。文件名由 frontmatter
    * `name` 净化派生（冲突追加数字后缀）；与既有用户策略重名拒绝，覆盖内置放行。
    */
@@ -249,36 +223,6 @@ class PolicyService {
     if (!/^[^/\\]+\.md$/i.test(fileName) || fileName.startsWith('.')) return null
     const filePath = join(getDefaultPoliciesDir(), fileName)
     return existsSync(filePath) ? filePath : null
-  }
-
-  /** 按文件名取原文 —— 修复非法文件的读路径（它解析不出 name，走不了 getSource） */
-  getSourceByFile(fileName: string): { text: string } | { error: string } {
-    const filePath = this.resolveUserFile(fileName)
-    if (!filePath) return { error: `Policy file "${fileName}" not found` }
-    try {
-      return { text: readFileSync(filePath, 'utf-8') }
-    } catch (e) {
-      return { error: e instanceof Error ? e.message : String(e) }
-    }
-  }
-
-  /**
-   * 按文件名覆写 —— 修复非法文件的写路径。同样校验后才写（修坏了不许落盘），
-   * 但**不做重名检查**：文件已在磁盘上，改好后它的 name 若与其他策略冲突，
-   * 走的是既有的「同名用户文件重复保留先扫到者」语义，与外部编辑器写入等价。
-   */
-  saveByFile(fileName: string, text: string): { success: boolean; error?: string } {
-    const filePath = this.resolveUserFile(fileName)
-    if (!filePath) return { success: false, error: `Policy file "${fileName}" not found` }
-    const parsed = this.parseForWrite(text, fileName.slice(0, -3))
-    if ('error' in parsed) return { success: false, error: parsed.error }
-    try {
-      writeFileSync(filePath, text, 'utf-8')
-    } catch (e) {
-      log.warn(`保存策略文件 "${fileName}" 失败:`, e)
-      return { success: false, error: e instanceof Error ? e.message : String(e) }
-    }
-    return { success: true }
   }
 
   /** 按文件名删除 —— 非法文件修不好时的出路（它没有 name，走不了 deletePolicy） */
