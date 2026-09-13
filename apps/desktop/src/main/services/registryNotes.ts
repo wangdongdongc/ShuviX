@@ -7,7 +7,7 @@
  * 身份是**文件名**而不是 frontmatter `name`：名字随编辑随时在变（改名、写到一半解析不过），文件名
  * 不变，所以同一份文件改名、写坏、修好，打开的始终是同一条会话。
  */
-import { existsSync } from 'fs'
+import { statSync } from 'fs'
 import { basename, dirname, join, resolve } from 'path'
 import {
   REGISTRY_NOTE_PROJECT_IDS,
@@ -31,6 +31,15 @@ const REGISTRIES: Record<RegistryNoteKind, { name: string; dir: () => string }> 
   agent: { name: 'Agents', dir: getDefaultAgentsDir },
   policy: { name: 'Policies', dir: getDefaultPoliciesDir },
   workflow: { name: 'Workflows', dir: getDefaultWorkflowsDir }
+}
+
+/** 存在且是普通文件 —— 一个恰好叫 `x.md` 的目录不算（笔记本读不了它） */
+function isRegularFile(path: string): boolean {
+  try {
+    return statSync(path).isFile()
+  } catch {
+    return false
+  }
 }
 
 /** 确保该注册表的隐藏项目存在并返回（目录由新建文件时懒建）。不发 project.changed —— 列表不可见 */
@@ -79,7 +88,7 @@ export function openRegistryNote(
   const valid =
     /^[^/\\]+\.md$/i.test(fileName) &&
     !fileName.startsWith('.') &&
-    existsSync(join(REGISTRIES[kind].dir(), fileName))
+    isRegularFile(join(REGISTRIES[kind].dir(), fileName))
   if (!valid) throw new Error(`Invalid ${kind} file: ${fileName}`)
   const project = ensureRegistryNoteProject(kind)
   const session =
