@@ -370,8 +370,10 @@ declare global {
     source: 'builtin' | 'user'
     /** 用户策略文件路径（内置为空串） */
     basePath: string
-    /** 该内置已被同名用户策略遮蔽（仅展示，不生效） */
+    /** 被同名遮蔽、当前不生效（被用户策略压过的内置，或同名用户文件里没胜出的那几份；仅展示） */
     overridden?: boolean
+    /** 压过它的那份用户文件的文件名 */
+    overriddenBy?: string
   }
 
   /**
@@ -398,8 +400,10 @@ declare global {
     source: 'builtin' | 'user'
     /** 用户文件路径（内置为空串） */
     basePath: string
-    /** 该内置已被同名用户工作流遮蔽（仅展示，不生效） */
+    /** 被同名遮蔽、当前不生效（被用户工作流压过的内置，或同名用户文件里没胜出的那几份；仅展示） */
     overridden?: boolean
+    /** 压过它的那份用户文件的文件名 */
+    overriddenBy?: string
   }
 
   /** 无法解析的用户工作流文件（结构非法或脚本语法错），删除走 workflow.deleteByFile */
@@ -421,6 +425,12 @@ declare global {
     basePath: string
     /** bots 目录下的文件名 —— 笔记本会话按它认（名字随编辑在变，文件名不变） */
     fileName: string
+  }
+
+  /** 同名的另一份压过了它、当前不生效的 bot 文件（侧栏照常列出，换一种样子；按文件名删除） */
+  interface ShadowedBotInfo extends BotInfo {
+    /** 压过它的那份文件的文件名 */
+    shadowedBy: string
   }
 
   /** 无法解析的 bot 文件，按文件名打开（bot.openNote）/ 删除（bot.deleteByFile） */
@@ -446,8 +456,10 @@ declare global {
     tools: string[]
     /** 指定模型（`shuvix-model`）：`<modelId>` 或 `<provider>/<modelId>`；省略 = 跟随会话 */
     model?: string
-    /** 该内置已被同名自定义档案遮蔽（仅设置页展示,不生效） */
+    /** 被同名遮蔽、当前不生效（被自定义档案压过的内置，或同名自定义文件里没胜出的那几份；仅设置页展示） */
     overridden?: boolean
+    /** 压过它的那份自定义文件的文件名 */
+    overriddenBy?: string
     /** 项目指令文件清单（shuvix-instruction-files），顺序即优先级；空 = 不注入 */
     instructionFiles: string[]
     /** 项目感知：是否注入项目提示词与项目记忆索引（shuvix-project-awareness） */
@@ -650,7 +662,13 @@ declare global {
     }
     bot: {
       /** 合法 + 非法两拨一次取齐（侧栏一次扫描就够） */
-      list: () => Promise<{ bots: BotInfo[]; invalid: InvalidBotFile[] }>
+      list: () => Promise<{
+        /** 生效的 bot（同名裁决的胜出者）—— 绑定会话、新建会话、身份胶囊都只认这一拨 */
+        bots: BotInfo[]
+        /** 被同名压过、当前不生效的那几份（只给侧栏分组列出来） */
+        shadowed: ShadowedBotInfo[]
+        invalid: InvalidBotFile[]
+      }>
       /** 打开 / 复用一份 bot 文件（合法或解析不过都行）的笔记本会话 */
       openNote: (params: { fileName: string; title?: string }) => Promise<SessionInfo>
       /** 按模板新建一份 bot 文件（名字取第一个没被占用的 my-bot / my-bot-2 ……） */

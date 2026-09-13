@@ -35,7 +35,7 @@ export {
   BUILTIN_POLICY_SPECS,
   type BuiltinPolicySpec
 } from './builtinPolicies'
-export { assembleRules, mergePolicyFiles } from './assemble'
+export { assembleRules, mergePolicyFiles, resolvePolicyFiles } from './assemble'
 export { evaluate, buildMatchContext, type EvaluateOpts } from './evaluate'
 export { compileMatch, evaluateMatch, evaluateLet } from './celMatch'
 export { executeDecision } from './enforce'

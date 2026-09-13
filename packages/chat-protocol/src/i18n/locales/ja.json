@@ -62,6 +62,7 @@
     "today": "今日",
     "noSessionsOnDay": "この日のセッションはありません",
     "newBotChat": "新しい Bot 会話",
+    "botOverridden": "上書き済み",
     "moreActions": "その他の操作"
   },
   "transcript": {
@@ -531,6 +532,7 @@
     "policySourceUser": "カスタム",
     "policyOverridden": "上書き済み",
     "policyOverriddenHint": "この組み込みポリシーは同名のカスタムポリシーに上書きされており、現在は無効です。",
+    "shadowedByFileHint": "{{file}} と同名で、そちらが優先されます —— このファイルは現在無効です。名前を変えるか、どちらかを削除してください。",
     "policyRules": "ルール",
     "policyNoRules": "ルールなし（同名の空ポリシーで組み込みを無効化できます）。",
     "policyRationale": "説明",

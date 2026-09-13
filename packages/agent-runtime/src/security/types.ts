@@ -288,6 +288,13 @@ export interface ParsedPolicyFile {
 }
 
 /**
+ * 宿主交出来的一份用户策略：解析结果 + 它的文件名。文件名只用来裁决同名的几份谁生效
+ * （resolvePolicyFiles → resolveShadowing）；没有文件身份的宿主（测试、扩展）省略。
+ * **同名的几份都要交出来** —— 谁生效由装配时的裁决决定，设置页列表走的是同一个裁决。
+ */
+export type UserPolicyFile = ParsedPolicyFile & { fileName?: string }
+
+/**
  * 宿主注入 seam。全部成员按「每次评估现取」设计：桌面的 getSessionGrants 直连 SQLite、
  * getUserPolicies 现扫策略目录 —— 刻意不缓存（会话中途开「免询问」或「允许并记住」
  * 落库后，复用的 context 必须立即看到新值，否则反复弹询问）。
@@ -312,8 +319,8 @@ export interface SecurityHostProvider {
    * 与语言无关）。省略 = en。
    */
   getLanguage?(): string
-  /** 用户策略 md（同名覆盖内置）；无文件系统的宿主省略 */
-  getUserPolicies?(): ParsedPolicyFile[]
+  /** 用户策略 md，全部可解析的份数（含同名的几份，谁生效见 resolvePolicyFiles）；无文件系统的宿主省略 */
+  getUserPolicies?(): UserPolicyFile[]
   /** 宿主代码级派生规则 —— 仅限无法 md 化的特例（原生谓词） */
   derivedRules?(): SecurityRule[]
   /** 是否目录（read 询问的 UX 区分；可异步）。省略 = 恒 false */

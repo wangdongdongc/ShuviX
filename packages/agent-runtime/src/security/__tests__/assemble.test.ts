@@ -6,7 +6,7 @@
  * 宿主没供给的目录变量（deny / ask 两档绑定为 null、按 logger 去重告警）见文末 AS-D 一节。
  */
 import { describe, it, expect, vi } from 'vitest'
-import { assembleRules, mergePolicyFiles } from '../assemble'
+import { assembleRules, mergePolicyFiles, resolvePolicyFiles } from '../assemble'
 import { parsePolicyDefinitionFile } from '../policyFile'
 import { evaluate } from '../evaluate'
 import { buildPolicyVars } from '../policyVars'
@@ -19,7 +19,8 @@ import type {
   SecurityHostProvider,
   SecurityObject,
   SecurityRequest,
-  SecurityRule
+  SecurityRule,
+  UserPolicyFile
 } from '../types'
 
 /** 内置策略引用的完整变量表 —— 全供给以免内置 lets 求值告警干扰断言 */
@@ -825,6 +826,138 @@ describe('mergePolicyFiles', () => {
       { policy: u1, sourceKind: 'user' },
       { policy: u2, sourceKind: 'user' }
     ])
+  })
+})
+
+/**
+ * 同名裁决的策略层投影（AP-SH*）：resolvePolicyFiles 是设置页全量列表与装配（mergePolicyFiles →
+ * assembleRules）共用的那一次裁决。规则本身的表在 registryShadowing.test.ts；这里钉顺序、注解、
+ * 对象身份，以及「输掉的那份一条规则都进不了评估」。
+ */
+describe('resolvePolicyFiles —— 同名裁决的策略层投影', () => {
+  const withFile = (policy: ParsedPolicyFile, fileName: string): UserPolicyFile => ({
+    ...policy,
+    fileName
+  })
+
+  // 内置 a / b；用户 b 两份（b.md 是名字本身，a.md 更短也更靠前）+ c
+  const a = userPolicy('a', [])
+  const bBuiltin = userPolicy('b', [{ effect: 'ask' }])
+  const bAtA = withFile(userPolicy('b', [{ effect: 'deny' }]), 'a.md')
+  const bAtB = withFile(userPolicy('b', [{ effect: 'allow' }]), 'b.md')
+  const c = withFile(userPolicy('c', []), 'c.md')
+
+  /** 「没被遮蔽的那些」按 mergePolicyFiles 的形状投影 */
+  const activeOf = (
+    builtins: readonly ParsedPolicyFile[],
+    users: readonly UserPolicyFile[]
+  ): Array<{ policy: ParsedPolicyFile; sourceKind: 'builtin' | 'user' }> =>
+    resolvePolicyFiles(builtins, users)
+      .filter((entry) => !entry.shadowedBy)
+      .map(({ policy, sourceKind }) => ({ policy, sourceKind }))
+
+  it('AP-SH1 内置在前、用户在后逐份返回；输的带 shadowedBy 指向胜者、用户份带 fileName；policy 是传进来的原对象', () => {
+    const out = resolvePolicyFiles([a, bBuiltin], [bAtA, bAtB, c])
+    expect(out).toStrictEqual([
+      { policy: a, sourceKind: 'builtin' },
+      {
+        policy: bBuiltin,
+        sourceKind: 'builtin',
+        shadowedBy: { source: 'user', fileName: 'b.md' }
+      },
+      {
+        policy: bAtA,
+        sourceKind: 'user',
+        fileName: 'a.md',
+        shadowedBy: { source: 'user', fileName: 'b.md' }
+      },
+      { policy: bAtB, sourceKind: 'user', fileName: 'b.md' },
+      { policy: c, sourceKind: 'user', fileName: 'c.md' }
+    ])
+    const passedIn = [a, bBuiltin, bAtA, bAtB, c]
+    out.forEach((entry, i) => expect(entry.policy, `#${i}`).toBe(passedIn[i]))
+  })
+
+  it('AP-SH2 mergePolicyFiles 就是 resolvePolicyFiles 里没被遮蔽的那些，只留 policy / sourceKind 两个键；用户份倒序输入，胜者不变、顺序跟着输入', () => {
+    const merged = mergePolicyFiles([a, bBuiltin], [bAtA, bAtB, c])
+    expect(merged).toStrictEqual([
+      { policy: a, sourceKind: 'builtin' },
+      { policy: bAtB, sourceKind: 'user' },
+      { policy: c, sourceKind: 'user' }
+    ])
+    expect(merged).toStrictEqual(activeOf([a, bBuiltin], [bAtA, bAtB, c]))
+    for (const entry of merged) expect(Object.keys(entry).sort()).toEqual(['policy', 'sourceKind'])
+    expect(merged[1].policy).toBe(bAtB)
+
+    const reversed = mergePolicyFiles([a, bBuiltin], [c, bAtB, bAtA])
+    expect(reversed).toStrictEqual([
+      { policy: a, sourceKind: 'builtin' },
+      { policy: c, sourceKind: 'user' },
+      { policy: bAtB, sourceKind: 'user' }
+    ])
+    expect(reversed).toStrictEqual(activeOf([a, bBuiltin], [c, bAtB, bAtA]))
+  })
+
+  it('AP-SH3 assembleRules 只编译胜出的那份：p.md 的 deny 生效，a.md 的两条 ask 一条都进不了评估（两种扫描顺序一样）；规则 id 不重复', () => {
+    const canon = withFile(
+      userPolicy('p', [{ effect: 'deny', match: "inDir(object.path, '/canon')" }]),
+      'p.md'
+    )
+    const copy = withFile(
+      userPolicy('p', [
+        { effect: 'ask', match: "inDir(object.path, '/copy')" },
+        { effect: 'ask', match: "inDir(object.path, '/copy')" }
+      ]),
+      'a.md'
+    )
+
+    for (const users of [
+      [canon, copy],
+      [copy, canon]
+    ]) {
+      const label = users.map((p) => p.fileName).join(',')
+      const rules = assembleRules(makeProvider({ getUserPolicies: () => users }))
+      const own = rules.filter((r) => r.source.policy === 'p')
+      expect(
+        own.map((r) => r.id),
+        label
+      ).toEqual(['p#0'])
+      expect(own[0].effect, label).toBe('deny')
+      expect(own[0].matchExpr, label).toContain('/canon')
+      const ids = rules.map((r) => r.id)
+      expect(new Set(ids).size, label).toBe(ids.length)
+      // 输掉的 a.md 那两条 ask 要是漏进来，/copy 就落不到 default
+      expect(evaluate(own, pathRequest('/copy/x')).winning, label).toBe('default:path')
+      expect(evaluate(own, pathRequest('/canon/x')).winning, label).toBe('p#0')
+    }
+  })
+
+  it('AP-SH4 文件名即名字的那份哪怕是清空规则的「停用」覆盖也照样胜出：同名另一份的 force-allow 漏不进评估（对照：只有那一份时它确实生效）', () => {
+    const disable = withFile(userPolicy('ask-on-write', []), 'ask-on-write.md')
+    const loosen = withFile(
+      userPolicy('ask-on-write', [{ effect: 'force-allow', match: "inDir(object.path, '/data')" }]),
+      'a.md'
+    )
+
+    for (const users of [
+      [disable, loosen],
+      [loosen, disable]
+    ]) {
+      const rules = assembleRules(makeProvider({ getUserPolicies: () => users }))
+      expect(
+        rules.filter((r) => r.source.policy === 'ask-on-write'),
+        users.map((p) => p.fileName).join(',')
+      ).toEqual([])
+    }
+
+    const control = assembleRules(makeProvider({ getUserPolicies: () => [loosen] })).filter(
+      (r) => r.source.policy === 'ask-on-write'
+    )
+    expect(control).toHaveLength(1)
+    expect(control[0]).toMatchObject({
+      tier: 'force-allow',
+      source: { kind: 'user', policy: 'ask-on-write' }
+    })
   })
 })
 

@@ -66,9 +66,12 @@ export function AgentSettings(): React.JSX.Element {
   const [error, setError] = useState<string | null>(null)
   /** 选中内置档案的等价 md（只读查看 + 覆盖副本初值）；自定义档案的详情是笔记本，自己读盘 */
   const [source, setSource] = useState<{ name: string; text: string } | null>(null)
-  /** 删除确认：合法自定义档案（按名）或无法解析的文件（按文件名） */
+  /**
+   * 删除确认：生效的自定义档案按名删；无法解析的、或同名里被遮蔽的按文件名删（按名删会删到生效的
+   * 那份）。被遮蔽的顺带记下胜出的那份（then），删完停在它上面
+   */
   const [confirmingDelete, setConfirmingDelete] = useState<
-    { name: string; displayName: string } | { fileName: string } | null
+    { name: string; displayName: string } | { fileName: string; then?: string } | null
   >(null)
 
   const load = useCallback(async (): Promise<{
@@ -155,7 +158,9 @@ export function AgentSettings(): React.JSX.Element {
     if (hit) setSelectedKey(keyOf(hit))
   }
 
-  const handleDelete = async (target: { name: string } | { fileName: string }): Promise<void> => {
+  const handleDelete = async (
+    target: { name: string } | { fileName: string; then?: string }
+  ): Promise<void> => {
     setConfirmingDelete(null)
     const r =
       'name' in target
@@ -166,11 +171,14 @@ export function AgentSettings(): React.JSX.Element {
       return
     }
     const { list } = await load()
-    // 优先落到同名内置（删除覆盖档案的场景），否则列表首位
+    // 按名删的是生效的那份：落到同名里接着生效的那份（另一份自定义文件，或恢复生效的内置）；
+    // 删掉被遮蔽的那份，胜出的那份还在、停在它上面；都没有就退回列表首位
     const restored =
       'name' in target
-        ? list.find((a) => a.source === 'builtin' && a.name === target.name)
-        : undefined
+        ? list.find((a) => a.name === target.name && !a.overridden)
+        : target.then
+          ? list.find((a) => a.source === 'user' && fileNameOf(a.basePath) === target.then)
+          : undefined
     const next = restored ?? orderAgents(list)[0]
     setSelectedKey(next ? keyOf(next) : null)
   }
@@ -288,9 +296,9 @@ export function AgentSettings(): React.JSX.Element {
                 fileName={selectedFile}
                 onDelete={() =>
                   setConfirmingDelete(
-                    selected
+                    selected && !selected.overridden
                       ? { name: selected.name, displayName: selected.displayName || selected.name }
-                      : { fileName: selectedFile }
+                      : { fileName: selectedFile, then: selected?.overriddenBy }
                   )
                 }
               />
@@ -383,6 +391,12 @@ function AgentHeader({
               : agent.overridden
                 ? t('tool.subAgentOverriddenHint')
                 : t('tool.subAgentReadOnly')}
+          </p>
+        )}
+        {agent?.source === 'user' && agent.overridden && (
+          // 同名的几份里没胜出：路径照常给，再说清是谁压过了它
+          <p className="text-[10px] mt-0.5 text-amber-500/90">
+            {t('settings.shadowedByFileHint', { file: agent.overriddenBy })}
           </p>
         )}
       </div>

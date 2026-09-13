@@ -1,7 +1,16 @@
 import { basename } from 'path'
 import { ipcMain } from 'electron'
-import { botService } from '../services/botService'
+import { botService, type BotEntry } from '../services/botService'
 import { openRegistryNote } from '../services/registryNotes'
+
+/** 侧栏一行 bot 的投影（渲染侧类型见 preload 的 BotInfo） */
+interface BotListRow {
+  name: string
+  displayName: string
+  description: string
+  basePath: string
+  fileName: string
+}
 
 /**
  * Bot IPC 处理器 —— 主窗口侧栏「Bots」分组。
@@ -12,17 +21,22 @@ import { openRegistryNote } from '../services/registryNotes'
  * 新建走 `bot:createNew`（按模板落一份新文件）。
  */
 export function registerBotHandlers(): void {
-  /** 列出全部 bot（合法 + 非法两拨一次取齐 —— 侧栏一次扫描就够） */
+  /**
+   * 列出全部 bot：生效的 + 被同名遮蔽的 + 解析不过的，一次取齐（侧栏一次扫描就够）。生效与遮蔽出自
+   * 同一次同名裁决（botService.scanDir）—— 绑定会话、身份胶囊只认 `bots`，侧栏把三拨都列出来
+   */
   ipcMain.handle('bot:list', () => {
-    const { valid, invalid } = botService.listWithInvalid()
+    const { valid, shadowed, invalid } = botService.listWithInvalid()
+    const info = (b: BotEntry): BotListRow => ({
+      name: b.file.name,
+      displayName: b.file.displayName,
+      description: b.file.description,
+      basePath: b.basePath,
+      fileName: basename(b.basePath)
+    })
     return {
-      bots: valid.map((b) => ({
-        name: b.file.name,
-        displayName: b.file.displayName,
-        description: b.file.description,
-        basePath: b.basePath,
-        fileName: basename(b.basePath)
-      })),
+      bots: valid.map(info),
+      shadowed: shadowed.map((b) => ({ ...info(b), shadowedBy: b.shadowedBy })),
       invalid
     }
   })

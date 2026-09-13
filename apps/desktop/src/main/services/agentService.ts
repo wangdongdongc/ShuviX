@@ -7,7 +7,8 @@
  *   文件名去掉 .md 即默认 agent name，frontmatter `name:` 可覆盖）。
  *
  * 纯 md 驱动：文件存在即可用，无启用开关/旁路配置。
- * 命名冲突：用户优先级 > 内置（同名时用户覆盖内置，可用于个性化内置政策）。
+ * 命名冲突：同名的几份谁生效由 agent-runtime 的 resolveShadowing 裁决（用户压过内置，可用于个性化
+ * 内置政策；同为用户文件按文件名定先后）—— 注册表（listAll / getProfile）与设置页列表共用这一次裁决。
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, unlinkSync } from 'fs'
@@ -18,11 +19,14 @@ import { getDefaultAgentsDir, getDefaultWikisDir, getWidgetsDir } from '../utils
 import {
   buildBuiltinProfiles,
   parseAgentDefinitionFile,
+  registryFileBase,
+  resolveShadowing,
   serializeAgentDefinitionFile,
   BASE_PROFILE_NAMES,
   type AgentProfile,
   type AgentProfileRegistry,
-  type ParsedAgentFile
+  type ParsedAgentFile,
+  type ShadowResolved
 } from '@shuvix/agent-runtime'
 import { createLogger } from '../logger'
 
@@ -36,6 +40,18 @@ export interface InvalidAgentFile {
   fileName: string
   /** 读取失败或解析器给出的人读原因（多条以换行连接） */
   error: string
+}
+
+/** 设置页列表项：被同名遮蔽的带 overridden（不生效）与 overriddenBy（压过它的文件名） */
+type AgentListItem = AgentProfile & { overridden?: boolean; overriddenBy?: string }
+
+/** 设置页排序：按名字；同名里生效的在前、再按文件路径 —— 被遮蔽的几份紧跟在胜出的那份后面 */
+function compareRows(a: AgentListItem, b: AgentListItem): number {
+  return (
+    a.name.localeCompare(b.name) ||
+    Number(!!a.overridden) - Number(!!b.overridden) ||
+    a.basePath.localeCompare(b.basePath)
+  )
 }
 
 class AgentService implements AgentProfileRegistry {
@@ -115,7 +131,6 @@ class AgentService implements AgentProfileRegistry {
 
     const valid: AgentProfile[] = []
     const invalid: InvalidAgentFile[] = []
-    const seen = new Set<string>()
     for (const entry of entries) {
       if (!entry.isFile) continue
       if (entry.name.startsWith('.')) continue
@@ -131,13 +146,7 @@ class AgentService implements AgentProfileRegistry {
         invalid.push({ fileName: entry.name, error: reasons.join('\n') || 'Invalid agent file' })
         continue
       }
-      // 同名文件互相遮蔽语义不明（frontmatter `name` 才是标识，文件名可以不同）：
-      // 保留先扫到的一份，其余告警跳过 —— 对齐 policyService.scanDir
-      if (seen.has(def.name)) {
-        log.warn(`agent "${def.name}": 同名文件重复（${entry.name}），已跳过`)
-        continue
-      }
-      seen.add(def.name)
+      // 同名的几份都收下 —— 谁生效由 resolveProfiles 统一裁决（被遮蔽的照常列进设置页）
       valid.push(def)
     }
     return { valid, invalid }
@@ -152,31 +161,59 @@ class AgentService implements AgentProfileRegistry {
     })
   }
 
-  /** 列出所有 agent（用户优先级 > 内置覆盖同名） */
-  listAll(): AgentProfile[] {
-    const builtins = this.builtinAgents()
-    const users = this.scanDir(this.userDir, 'user')
+  /**
+   * 内置 + 全部可解析的用户文件过一遍同名裁决（agent-runtime resolveShadowing）。
+   * **注册表（listAll / getProfile / 派发）与设置页列表都从这里取**：同一次裁决的两种投影，
+   * 列表上标着生效的就是真正在用的那份。
+   */
+  private resolveProfiles(): ShadowResolved<AgentProfile>[] {
+    return resolveShadowing<AgentProfile>([
+      ...this.builtinAgents().map((profile) => ({
+        name: profile.name,
+        source: 'builtin' as const,
+        value: profile
+      })),
+      ...this.scanDir(this.userDir, 'user').map((profile) => ({
+        name: profile.name,
+        source: 'user' as const,
+        fileName: basename(profile.basePath),
+        value: profile
+      }))
+    ])
+  }
 
-    // 用户覆盖内置同名
-    const userNames = new Set(users.map((a) => a.name))
-    const merged = [...builtins.filter((a) => !userNames.has(a.name)), ...users]
-    return merged.sort((a, b) => a.name.localeCompare(b.name))
+  /** 生效的用户档案（同名的几份里胜出的那些）—— 按名寻址的读 / 写 / 删用 */
+  private activeUserProfiles(): AgentProfile[] {
+    return this.resolveProfiles()
+      .filter((entry) => entry.source === 'user' && !entry.shadowedBy)
+      .map((entry) => entry.value)
+  }
+
+  /** 列出所有生效的 agent（同名裁决之后的结果） */
+  listAll(): AgentProfile[] {
+    return this.resolveProfiles()
+      .filter((entry) => !entry.shadowedBy)
+      .map((entry) => entry.value)
+      .sort((a, b) => a.name.localeCompare(b.name))
   }
 
   /**
-   * 设置页列表：合并结果 + 被同名用户档案遮蔽的内置（`overridden: true` 标记）。
-   * 遮蔽的内置仅作展示（提示"已被覆盖，不生效"），不进任何运行时路径 ——
-   * listAll/getProfile 仍以合并语义为准。
+   * 设置页列表：同一次同名裁决的全部份数 —— 被遮蔽的（被用户档案压过的内置，或同名用户文件里
+   * 没胜出的那几份）带 `overridden: true` 与 `overriddenBy`，只作展示，不进任何运行时路径。
    */
-  listForSettings(): (AgentProfile & { overridden?: boolean })[] {
-    const builtins = this.builtinAgents()
-    const users = this.scanDir(this.userDir, 'user')
-    const userNames = new Set(users.map((a) => a.name))
-    const merged = [...builtins.filter((a) => !userNames.has(a.name)), ...users]
-    const shadowed = builtins
-      .filter((a) => userNames.has(a.name))
-      .map((a) => ({ ...a, overridden: true }))
-    return [...merged, ...shadowed].sort((a, b) => a.name.localeCompare(b.name))
+  listForSettings(): AgentListItem[] {
+    return this.resolveProfiles()
+      .map(
+        (entry): AgentListItem =>
+          entry.shadowedBy
+            ? {
+                ...entry.value,
+                overridden: true,
+                ...(entry.shadowedBy.fileName ? { overriddenBy: entry.shadowedBy.fileName } : {})
+              }
+            : entry.value
+      )
+      .sort(compareRows)
   }
 
   /**
@@ -196,7 +233,7 @@ class AgentService implements AgentProfileRegistry {
    * 按名取档案。
    *
    * 这里**不需要**给内置档案再兜一层底：一份解析不了的用户 md 会被 scanDir 静默跳过，
-   * 因而不进 userNames、也就遮蔽不了同名内置 —— `listAll()` 里那份内置原样还在。
+   * 因而不进同名裁决的候选、也就遮蔽不了同名内置 —— `listAll()` 里那份内置原样还在。
    * 「一份写坏的 `chat.md` / `work.md` 不会让对应形态的会话建不出根 Agent」这条
    * 性质由那条跳过守住（回归钉在 agentService.test.ts 的 AS-20），不是由这里守住；
    * 之前那个 `if (found) return found` + 按名重取内置的分支恒不可达，已删。
@@ -244,7 +281,7 @@ class AgentService implements AgentProfileRegistry {
    */
   getSource(name: string, source: 'builtin' | 'user'): { text: string } | { error: string } {
     if (source === 'user') {
-      const target = this.scanDir(this.userDir, 'user').find((a) => a.name === name)
+      const target = this.activeUserProfiles().find((a) => a.name === name)
       if (!target?.basePath) return { error: `Agent "${name}" not found` }
       try {
         return { text: readFileSync(target.basePath, 'utf-8') }
@@ -292,7 +329,7 @@ class AgentService implements AgentProfileRegistry {
       return { success: false, error: `Agent "${name}" already exists` }
     }
 
-    const safeBase = name.replace(/[\\/:*?"<>|]/g, '-').replace(/^\.+/, '') || 'agent'
+    const safeBase = registryFileBase(name) || 'agent'
     this.ensureUserDir()
     let filePath = join(this.userDir, `${safeBase}.md`)
     for (let i = 1; existsSync(filePath); i++) {
@@ -315,7 +352,7 @@ class AgentService implements AgentProfileRegistry {
    */
   saveAgent(originalName: string, input: ParsedAgentFile): { success: boolean; error?: string } {
     const users = this.scanDir(this.userDir, 'user')
-    const target = users.find((a) => a.name === originalName)
+    const target = this.activeUserProfiles().find((a) => a.name === originalName)
     if (!target) return { success: false, error: `Agent "${originalName}" not found` }
 
     const name = input.name.trim()
@@ -361,8 +398,8 @@ class AgentService implements AgentProfileRegistry {
       return { success: false, error: 'Internal error: serialized agent file failed to parse' }
     }
 
-    // 文件名净化：路径分隔/非法字符替换为 '-'，前导点去除；frontmatter name 才是标识
-    const safeBase = name.replace(/[\\/:*?"<>|]/g, '-').replace(/^\.+/, '') || 'agent'
+    // 文件名净化（与同名裁决认「文件名就是这个名字」同一套规则）；frontmatter name 才是标识
+    const safeBase = registryFileBase(name) || 'agent'
     this.ensureUserDir()
     let filePath = join(this.userDir, `${safeBase}.md`)
     for (let i = 1; existsSync(filePath); i++) {
@@ -379,12 +416,11 @@ class AgentService implements AgentProfileRegistry {
   }
 
   /**
-   * 删除用户 agent 定义文件（设置页删除按钮）。仅用户档案可删（内置无文件）；
-   * 删除覆盖档案后同名内置自动恢复生效（合并语义）。
+   * 删除生效的那份用户 agent 定义文件（设置页删除按钮）。仅用户档案可删（内置无文件）；
+   * 删除覆盖档案后同名内置自动恢复生效（合并语义）。同名里被遮蔽的那几份按文件名删（deleteByFile）。
    */
   deleteAgent(name: string): { success: boolean; error?: string } {
-    const users = this.scanDir(this.userDir, 'user')
-    const target = users.find((a) => a.name === name)
+    const target = this.activeUserProfiles().find((a) => a.name === name)
     if (!target) return { success: false, error: `Agent "${name}" not found` }
 
     try {
@@ -403,7 +439,8 @@ class AgentService implements AgentProfileRegistry {
   }
 
   /**
-   * 按文件名删除 —— 解析不过的档案没有 name，走不了 deleteAgent。文件名白名单：只接受 agents
+   * 按文件名删除 —— 解析不过的档案没有 name，走不了 deleteAgent；同名里被遮蔽的那几份按名删会删到
+   * 生效的那份。文件名白名单：只接受 agents
    * 目录下的单个 .md（fileName 来自渲染进程，按不可信入参处理，杜绝路径穿越）。
    */
   deleteByFile(fileName: string): { success: boolean; error?: string } {

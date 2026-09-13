@@ -117,9 +117,12 @@ export function PolicySettings(): React.JSX.Element {
   const [error, setError] = useState<string | null>(null)
   /** 选中内置策略的等价 md（只读查看 + 覆盖副本初值）；用户策略的详情是笔记本，自己读盘 */
   const [source, setSource] = useState<{ name: string; text: string } | null>(null)
-  /** 删除确认：合法用户策略（按名）或无法解析的文件（按文件名） */
+  /**
+   * 删除确认：生效的用户文件按名删；无法解析的、或同名里被遮蔽的按文件名删（按名删会删到生效的那份）。
+   * 被遮蔽的顺带记下胜出的那份（then），删完停在它上面
+   */
   const [confirmingDelete, setConfirmingDelete] = useState<
-    { name: string } | { fileName: string } | null
+    { name: string } | { fileName: string; then?: string } | null
   >(null)
 
   const load = useCallback(async (): Promise<{
@@ -204,7 +207,9 @@ export function PolicySettings(): React.JSX.Element {
     if (hit) setSelectedKey(keyOf(hit))
   }
 
-  const handleDelete = async (target: { name: string } | { fileName: string }): Promise<void> => {
+  const handleDelete = async (
+    target: { name: string } | { fileName: string; then?: string }
+  ): Promise<void> => {
     setConfirmingDelete(null)
     const r =
       'name' in target
@@ -215,11 +220,14 @@ export function PolicySettings(): React.JSX.Element {
       return
     }
     const { list } = await load()
-    // 删除覆盖副本后同名内置恢复生效 —— 优先选中它，否则退回首项
+    // 按名删的是生效的那份：落到同名里接着生效的那份（另一份用户文件，或恢复生效的内置）；
+    // 删掉被遮蔽的那份，胜出的那份还在、停在它上面；都没有就退回首项
     const restored =
       'name' in target
-        ? list.find((p) => p.source === 'builtin' && p.name === target.name)
-        : undefined
+        ? list.find((p) => p.name === target.name && !p.overridden)
+        : target.then
+          ? list.find((p) => p.source === 'user' && fileNameOf(p.basePath) === target.then)
+          : undefined
     const next = restored ?? orderPolicies(list)[0]
     setSelectedKey(next ? keyOf(next) : null)
   }
@@ -347,7 +355,9 @@ export function PolicySettings(): React.JSX.Element {
                 fileName={selectedFile}
                 onDelete={() =>
                   setConfirmingDelete(
-                    selected ? { name: selected.name } : { fileName: selectedFile }
+                    selected && !selected.overridden
+                      ? { name: selected.name }
+                      : { fileName: selectedFile, then: selected?.overriddenBy }
                   )
                 }
               />
@@ -442,6 +452,12 @@ function PolicyHeader({
               : policy.overridden
                 ? t('settings.policyOverriddenHint')
                 : t('settings.policyFsHint')}
+          </div>
+        )}
+        {policy?.source === 'user' && policy.overridden && (
+          // 同名的几份里没胜出：路径照常给，再说清是谁压过了它
+          <div className="text-[10px] mt-0.5 text-orange-500/90">
+            {t('settings.shadowedByFileHint', { file: policy.overriddenBy })}
           </div>
         )}
       </div>

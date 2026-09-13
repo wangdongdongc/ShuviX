@@ -4,10 +4,13 @@
  * 内置策略：硬编码进 @shuvix/agent-runtime（security/builtinPolicies，各端共享）。
  * 用户策略：~/.shuvix/policies/<name>.md（文件存在即生效，无启用开关/旁路配置；
  *   文件名去掉 .md 即默认 name，frontmatter `name:` 可覆盖）。
- * 命名冲突：用户同名覆盖内置（合并在 agent-runtime 的 assembleRules / mergePolicyFiles）。
+ * 命名冲突：同名的几份谁生效由 agent-runtime 的 resolvePolicyFiles 裁决（用户压过内置，同为用户
+ *   文件按文件名定先后）。**评估侧装配（assembleRules → mergePolicyFiles）与设置页列表调的是同一个
+ *   函数、喂的是同一份候选**（当前界面语言的内置 + getUserPolicies 交出的全部用户文件）—— 列表上
+ *   标着生效的，就是真正在评估的那份。
  *
  * 安全语义与 agentService 的关键差异：**非法用户文件不遮蔽内置同名策略** ——
- * parsePolicyDefinitionFile 返回 null 的文件直接跳过（记警告），写坏一份 md
+ * parsePolicyDefinitionFile 返回 null 的文件不进候选（记警告），写坏一份 md
  * 不应意外关掉 workspace-boundary 这类内置保护。
  */
 import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from 'fs'
@@ -15,10 +18,12 @@ import { join } from 'path'
 import { shell } from 'electron'
 import {
   buildBuiltinPolicies,
-  mergePolicyFiles,
   parsePolicyDefinitionFile,
+  registryFileBase,
+  resolvePolicyFiles,
   serializePolicyDefinitionFile,
-  type ParsedPolicyFile
+  type ParsedPolicyFile,
+  type UserPolicyFile
 } from '@shuvix/agent-runtime'
 import i18next from 'i18next'
 import { getDefaultPoliciesDir } from '../utils/paths'
@@ -30,14 +35,19 @@ export interface PolicyListItem extends ParsedPolicyFile {
   source: 'builtin' | 'user'
   /** 用户文件路径（内置为空串） */
   basePath: string
-  /** 被同名用户策略遮蔽的内置（仅设置页展示用） */
+  /**
+   * 被同名遮蔽、当前不生效：被用户策略压过的内置，或同名用户文件里没胜出的那几份
+   * （仅设置页展示，不进任何运行时路径）
+   */
   overridden?: boolean
+  /** 压过它的那份用户文件的文件名 */
+  overriddenBy?: string
 }
 
 /**
  * 无法解析的用户策略文件。刻意**不复用 PolicyListItem**：把它伪装成一份
  * 「零规则的合法策略」会与「同名空策略用于停用内置」这一真实语义混淆。
- * 身份是文件名（解析不出 name），故其读写走 *ByFile 一组接口。
+ * 身份是文件名（解析不出 name），删除走 deleteByFile。
  */
 export interface InvalidPolicyFile {
   fileName: string
@@ -45,28 +55,35 @@ export interface InvalidPolicyFile {
   error: string
 }
 
+/** 设置页排序：按名字；同名里生效的在前、再按文件路径 —— 被遮蔽的几份紧跟在胜出的那份后面 */
+function compareRows(a: PolicyListItem, b: PolicyListItem): number {
+  return (
+    a.name.localeCompare(b.name) ||
+    Number(!!a.overridden) - Number(!!b.overridden) ||
+    a.basePath.localeCompare(b.basePath)
+  )
+}
+
 class PolicyService {
   /**
-   * 现扫用户策略目录（每次调用重扫，无缓存 —— 决策新鲜度优先；目录小，readdir 微秒级）。
-   * 非法文件跳过并警告，不进入合并（即不遮蔽内置）。
+   * 评估侧的用户策略来源（SecurityHostProvider.getUserPolicies）：**全部**可解析的用户文件，带文件名、
+   * 含同名的几份 —— 谁生效由装配时的 resolvePolicyFiles 裁决，与设置页列表同一个函数。
+   * 现扫、无缓存（决策新鲜度优先；目录小，readdir 微秒级）。非法文件不在其中（不遮蔽内置）。
    */
-  getUserPolicies(): ParsedPolicyFile[] {
-    return this.scanUserFiles().map(({ policy }) => policy)
-  }
-
-  private scanUserFiles(): Array<{ policy: ParsedPolicyFile; basePath: string }> {
-    return this.scanDir().valid
+  getUserPolicies(): UserPolicyFile[] {
+    return this.scanDir().valid.map(({ policy, fileName }) => ({ ...policy, fileName }))
   }
 
   /**
-   * 扫描用户策略目录，分出可解析与不可解析两拨。
+   * 扫描用户策略目录，分出可解析与不可解析两拨。同名的几份都收下（谁生效交给同名裁决）；
+   * 文件名排序，让每次扫描的顺序一致。
    *
    * 非法文件**不进运行时**（跳过、不遮蔽内置，安全语义见文件头），但必须被设置页看见：
    * 用外部编辑器写坏一份策略后，它既不生效也不出现在任何界面里 —— 用户无从发现、
    * 更无从修复。invalid 一路带着解析器给出的人读原因回到 UI。
    */
   private scanDir(): {
-    valid: Array<{ policy: ParsedPolicyFile; basePath: string }>
+    valid: Array<{ policy: ParsedPolicyFile; fileName: string }>
     invalid: InvalidPolicyFile[]
   } {
     const dir = getDefaultPoliciesDir()
@@ -77,14 +94,14 @@ class PolicyService {
       names = readdirSync(dir, { withFileTypes: true })
         .filter((e) => e.isFile())
         .map((e) => e.name)
+        .sort()
     } catch (e) {
       log.warn(`扫描策略目录 ${dir} 失败:`, e)
       return { valid: [], invalid: [] }
     }
 
-    const valid: Array<{ policy: ParsedPolicyFile; basePath: string }> = []
+    const valid: Array<{ policy: ParsedPolicyFile; fileName: string }> = []
     const invalid: InvalidPolicyFile[] = []
-    const seen = new Set<string>()
     for (const fileName of names) {
       if (fileName.startsWith('.')) continue
       if (!fileName.toLowerCase().endsWith('.md')) continue
@@ -110,15 +127,30 @@ class PolicyService {
         invalid.push({ fileName, error: reasons.join('\n') || 'Invalid policy file' })
         continue
       }
-      // 同名用户文件互相遮蔽语义不明：保留先扫到的一份，其余警告跳过
-      if (seen.has(policy.name)) {
-        log.warn(`策略 "${policy.name}": 同名用户文件重复（${fileName}），已跳过`)
-        continue
-      }
-      seen.add(policy.name)
-      valid.push({ policy, basePath: filePath })
+      valid.push({ policy, fileName })
     }
     return { valid, invalid }
+  }
+
+  /**
+   * 同名裁决的全部份数：当前界面语言的内置 + 全部用户文件，过 resolvePolicyFiles ——
+   * 与 assembleRules 装配时是同一个函数、同一份候选（provider 的 getLanguage 即 i18next.language）。
+   */
+  private resolve(): Array<ReturnType<typeof resolvePolicyFiles>[number] & { basePath: string }> {
+    const dir = getDefaultPoliciesDir()
+    return resolvePolicyFiles(buildBuiltinPolicies(i18next.language), this.getUserPolicies()).map(
+      (entry) => ({
+        ...entry,
+        basePath: entry.sourceKind === 'user' && entry.fileName ? join(dir, entry.fileName) : ''
+      })
+    )
+  }
+
+  /** 生效的用户策略里叫这个名字的那份（按名寻址的读 / 删用；被遮蔽的几份只能按文件名删） */
+  private activeUserFile(name: string): { basePath: string } | undefined {
+    return this.resolve().find(
+      (entry) => entry.sourceKind === 'user' && !entry.shadowedBy && entry.policy.name === name
+    )
   }
 
   /** 目录里无法解析的策略文件（设置页据此显示可点开修复的告警项） */
@@ -127,36 +159,38 @@ class PolicyService {
   }
 
   /**
-   * 设置页列表（未来策略检视 Tab 的数据源；本期无 UI，仅备好 API）：
-   * 合并结果 + 被遮蔽的内置（overridden 标记，仅展示不进运行时）。
+   * 设置页列表：同一次同名裁决的全部份数 —— 被遮蔽的（被用户策略压过的内置，或同名用户文件里
+   * 没胜出的那几份）带 `overridden` 与 `overriddenBy`，只作展示、不进运行时。
    */
   listForSettings(): PolicyListItem[] {
-    const users = this.scanUserFiles()
-    // 每次现算以反映当前界面语言（description/body 人读面；规则恒取 en）
-    const builtins = buildBuiltinPolicies(i18next.language)
-    const merged = mergePolicyFiles(
-      builtins,
-      users.map((u) => u.policy)
-    ).map(({ policy, sourceKind }) => ({
-      ...policy,
-      source: sourceKind,
-      basePath: users.find((u) => u.policy.name === policy.name)?.basePath ?? ''
-    }))
-    const userNames = new Set(users.map((u) => u.policy.name))
-    const shadowed = builtins
-      .filter((p) => userNames.has(p.name))
-      .map((p) => ({ ...p, source: 'builtin' as const, basePath: '', overridden: true }))
-    return [...merged, ...shadowed].sort((a, b) => a.name.localeCompare(b.name))
+    return this.resolve()
+      .map(({ policy, sourceKind, basePath, shadowedBy }): PolicyListItem => {
+        // 用户策略对象上挂着 getUserPolicies 附带的 fileName（给同名裁决用）—— 列表项的文件身份是
+        // basePath，这个契约外的字段不带过 IPC
+        const { fileName: _fileName, ...fields } = policy as UserPolicyFile
+        return {
+          ...fields,
+          source: sourceKind,
+          basePath,
+          ...(shadowedBy
+            ? {
+                overridden: true,
+                ...(shadowedBy.fileName ? { overriddenBy: shadowedBy.fileName } : {})
+              }
+            : {})
+        }
+      })
+      .sort(compareRows)
   }
 
   /**
-   * 取策略的 md 原文（设置页编辑器的数据源）。用户策略读文件原文（注释、键序原样）；
+   * 取策略的 md 原文。用户策略读生效那份文件的原文（注释、键序原样）；
    * 内置策略无文件，用 serializePolicyDefinitionFile 回写出等价 md —— 这就是
    * 「创建覆盖副本」的初值（对齐 agent 设置页的 create override copy）。
    */
   getSource(name: string, source: 'builtin' | 'user'): { text: string } | { error: string } {
     if (source === 'user') {
-      const target = this.scanUserFiles().find((u) => u.policy.name === name)
+      const target = this.activeUserFile(name)
       if (!target) return { error: `Policy "${name}" not found` }
       try {
         return { text: readFileSync(target.basePath, 'utf-8') }
@@ -170,9 +204,8 @@ class PolicyService {
   }
 
   /**
-   * 解析并校验一份待写入的策略原文。**非法一律拒绝写盘**：一份存在但非法的策略
-   * 会被扫描静默跳过（不生效也不遮蔽内置），正是本次要消灭的失败模式 —— 与其
-   * 让它躺在磁盘上假装生效，不如把解析器的拒绝原因原样交回 UI。
+   * 解析并校验一份待写入的策略原文（新建用）。**非法一律拒绝写盘**：新建出一份存在但非法的
+   * 策略没有意义 —— 与其让它躺在磁盘上假装生效，不如把解析器的拒绝原因原样交回 UI。
    */
   private parseForWrite(
     text: string,
@@ -193,12 +226,12 @@ class PolicyService {
     if ('error' in parsed) return { success: false, error: parsed.error }
     const name = parsed.policy.name
 
-    if (this.scanUserFiles().some((u) => u.policy.name === name)) {
+    if (this.scanDir().valid.some((u) => u.policy.name === name)) {
       return { success: false, error: `Policy "${name}" already exists` }
     }
 
-    // 文件名净化：路径分隔/非法字符替换为 '-'，前导点去除；frontmatter name 才是标识
-    const safeBase = name.replace(/[\\/:*?"<>|]/g, '-').replace(/^\.+/, '') || 'policy'
+    // 文件名净化（与同名裁决认「文件名就是这个名字」同一套规则）；frontmatter name 才是标识
+    const safeBase = registryFileBase(name) || 'policy'
     const dir = getDefaultPoliciesDir()
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
     let filePath = join(dir, `${safeBase}.md`)
@@ -217,7 +250,7 @@ class PolicyService {
 
   /**
    * 文件名白名单：仅接受策略目录下的单个 .md 文件名，杜绝路径穿越
-   * （fileName 来自渲染进程，虽只由 listInvalid 的返回值填充，仍按不可信入参处理）。
+   * （fileName 来自渲染进程，按不可信入参处理）。
    */
   private resolveUserFile(fileName: string): string | null {
     if (!/^[^/\\]+\.md$/i.test(fileName) || fileName.startsWith('.')) return null
@@ -225,7 +258,7 @@ class PolicyService {
     return existsSync(filePath) ? filePath : null
   }
 
-  /** 按文件名删除 —— 非法文件修不好时的出路（它没有 name，走不了 deletePolicy） */
+  /** 按文件名删除 —— 非法文件、或同名里被遮蔽的那几份（按名删会删到生效的那份） */
   deleteByFile(fileName: string): { success: boolean; error?: string } {
     const filePath = this.resolveUserFile(fileName)
     if (!filePath) return { success: false, error: `Policy file "${fileName}" not found` }
@@ -239,9 +272,9 @@ class PolicyService {
     return { success: true }
   }
 
-  /** 删除用户策略文件；删除覆盖副本后同名内置自动恢复生效（合并语义） */
+  /** 删除生效的那份用户策略文件；删除覆盖副本后同名内置自动恢复生效（合并语义） */
   deletePolicy(name: string): { success: boolean; error?: string } {
-    const target = this.scanUserFiles().find((u) => u.policy.name === name)
+    const target = this.activeUserFile(name)
     if (!target) return { success: false, error: `Policy "${name}" not found` }
     try {
       unlinkSync(target.basePath)

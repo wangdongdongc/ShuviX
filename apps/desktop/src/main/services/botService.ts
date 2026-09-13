@@ -22,6 +22,8 @@ import { basename, join } from 'path'
 import { shell } from 'electron'
 import {
   parseBotDefinitionFile,
+  registryFileBase,
+  resolveShadowing,
   serializeBotDefinitionFile,
   type ParsedBotFile
 } from '@shuvix/agent-runtime'
@@ -55,6 +57,12 @@ export interface BotEntry {
   basePath: string
 }
 
+/** 同名的另一份压过了它、当前不生效的一份（侧栏照常列出，换一种样子） */
+export interface ShadowedBotEntry extends BotEntry {
+  /** 压过它的那份文件的文件名 */
+  shadowedBy: string
+}
+
 class BotService {
   /**
    * 每份文件上一次解析出的名字（绝对路径 → frontmatter `name`）—— 改名迁移的依据，见
@@ -70,13 +78,18 @@ class BotService {
   // ─── 注册表 ──────────────────────────────────
 
   /**
-   * 目录扫描，分出可解析与不可解析两拨（同 policyService / workflowService.scanDir 口径）。
-   * 每次扫描顺带做改名观察（observeRenames）。
+   * 目录扫描，分出生效 / 被同名遮蔽 / 不可解析三拨（同 policyService / workflowService.scanDir 口径）。
+   * 同名的几份谁生效交给 agent-runtime 的 resolveShadowing：**按名取（get / forSession）与侧栏列出
+   * 全部份数用的是这同一次裁决**。每次扫描顺带做改名观察（observeRenames）。
    */
-  private scanDir(): { valid: BotEntry[]; invalid: InvalidBotFile[] } {
+  private scanDir(): {
+    valid: BotEntry[]
+    shadowed: ShadowedBotEntry[]
+    invalid: InvalidBotFile[]
+  } {
     if (!existsSync(this.userDir)) {
       this.namesByPath.clear()
-      return { valid: [], invalid: [] }
+      return { valid: [], shadowed: [], invalid: [] }
     }
     let names: string[]
     try {
@@ -85,16 +98,15 @@ class BotService {
           (e) => e.isFile() && !e.name.startsWith('.') && e.name.toLowerCase().endsWith('.md')
         )
         .map((e) => e.name)
+        .sort()
     } catch (e) {
       log.warn(`扫描目录 ${this.userDir} 失败:`, e)
-      return { valid: [], invalid: [] }
+      return { valid: [], shadowed: [], invalid: [] }
     }
 
-    const valid: BotEntry[] = []
     const invalid: InvalidBotFile[] = []
-    const seen = new Set<string>()
-    // 解析得过的每一份（含被同名跳过的）—— 改名观察要看得到一个名字的全部持有者
-    const parsedFiles: Array<{ filePath: string; name: string }> = []
+    // 解析得过的每一份（含同名的几份）—— 改名观察要看得到一个名字的全部持有者，同名裁决也在这一拨上做
+    const parsedFiles: Array<{ filePath: string; name: string; entry: BotEntry }> = []
     for (const fileName of names) {
       const filePath = join(this.userDir, fileName)
       let raw: string
@@ -114,19 +126,28 @@ class BotService {
         invalid.push({ fileName, error: messages.join('\n') || 'Invalid bot file' })
         continue
       }
-      parsedFiles.push({ filePath, name: parsed.name })
-      if (seen.has(parsed.name)) {
-        log.warn(`bot "${parsed.name}": 同名文件重复（${fileName}），已跳过`)
-        continue
-      }
-      seen.add(parsed.name)
-      valid.push({ file: parsed, basePath: filePath })
+      parsedFiles.push({ filePath, name: parsed.name, entry: { file: parsed, basePath: filePath } })
     }
     this.observeRenames(
       names.map((n) => join(this.userDir, n)),
       parsedFiles
     )
-    return { valid, invalid }
+    const valid: BotEntry[] = []
+    const shadowed: ShadowedBotEntry[] = []
+    const resolved = resolveShadowing(
+      parsedFiles.map((p) => ({
+        name: p.name,
+        source: 'user' as const,
+        fileName: basename(p.filePath),
+        value: p.entry
+      }))
+    )
+    for (const entry of resolved) {
+      if (entry.shadowedBy)
+        shadowed.push({ ...entry.value, shadowedBy: entry.shadowedBy.fileName ?? '' })
+      else valid.push(entry.value)
+    }
+    return { valid, shadowed, invalid }
   }
 
   /**
@@ -167,8 +188,12 @@ class BotService {
     return this.scanDir().valid
   }
 
-  /** 合法 + 非法两拨（侧栏分组一次取齐） */
-  listWithInvalid(): { valid: BotEntry[]; invalid: InvalidBotFile[] } {
+  /** 生效 + 被同名遮蔽 + 非法三拨（侧栏分组一次取齐） */
+  listWithInvalid(): {
+    valid: BotEntry[]
+    shadowed: ShadowedBotEntry[]
+    invalid: InvalidBotFile[]
+  } {
     return this.scanDir()
   }
 
@@ -266,7 +291,7 @@ class BotService {
       return { success: false, error: `Bot "${name}" already exists` }
     }
 
-    const safeBase = name.replace(/[\\/:*?"<>|]/g, '-').replace(/^\.+/, '') || 'bot'
+    const safeBase = registryFileBase(name) || 'bot'
     if (!existsSync(this.userDir)) mkdirSync(this.userDir, { recursive: true })
     let filePath = join(this.userDir, `${safeBase}.md`)
     for (let i = 1; existsSync(filePath); i++) {

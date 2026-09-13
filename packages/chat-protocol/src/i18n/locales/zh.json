@@ -62,6 +62,7 @@
     "today": "今天",
     "noSessionsOnDay": "当日无会话",
     "newBotChat": "新建 Bot 会话",
+    "botOverridden": "已被覆盖",
     "moreActions": "更多操作"
   },
   "transcript": {
@@ -531,6 +532,7 @@
     "policySourceUser": "自定义",
     "policyOverridden": "已覆盖",
     "policyOverriddenHint": "该内置策略已被同名自定义策略覆盖，当前不生效。",
+    "shadowedByFileHint": "与 {{file}} 同名，那一份优先生效 —— 这份当前不生效。改个名字，或删掉其中一份。",
     "policyRules": "规则",
     "policyNoRules": "无规则（同名空策略可用于停用内置策略）。",
     "policyRationale": "说明",

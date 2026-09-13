@@ -62,6 +62,7 @@
     "today": "Today",
     "noSessionsOnDay": "No sessions on this day",
     "newBotChat": "New bot chat",
+    "botOverridden": "Overridden",
     "moreActions": "More actions"
   },
   "transcript": {
@@ -531,6 +532,7 @@
     "policySourceUser": "Custom",
     "policyOverridden": "Overridden",
     "policyOverriddenHint": "This built-in policy is shadowed by a same-named custom policy and is not in effect.",
+    "shadowedByFileHint": "Same name as {{file}}, which takes precedence — this file is not in effect. Rename it or delete one of them.",
     "policyRules": "Rules",
     "policyNoRules": "No rules (a same-named empty policy disables the built-in one).",
     "policyRationale": "Rationale",

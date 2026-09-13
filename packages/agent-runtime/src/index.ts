@@ -177,6 +177,7 @@ export {
   evaluate as evaluateSecurity,
   assembleRules,
   mergePolicyFiles,
+  resolvePolicyFiles,
   executeDecision,
   parsePolicyDefinitionFile,
   serializePolicyDefinitionFile,
@@ -211,6 +212,7 @@ export {
   type SecurityDecision,
   type PolicyRuleSpec,
   type ParsedPolicyFile,
+  type UserPolicyFile,
   type SecurityHostProvider,
   type EnforceOpts,
   type EnforceOutcome,
@@ -402,6 +404,14 @@ export {
   type PromptVarsCtx
 } from './agentProfile/promptVars'
 export { type AgentProfileRegistry } from './agentProfile/registry'
+// 注册表 md 的同名裁决（agent / 策略 / 工作流 / bot 共用；运行时与设置页列表走同一个函数）
+export {
+  registryFileBase,
+  resolveShadowing,
+  type ShadowCandidate,
+  type ShadowResolved,
+  type ShadowedBy
+} from './registryShadowing'
 // agent 定义文件（<name>.md）的格式解析/序列化 —— 内置档案与用户档案共用同一套格式
 export {
   parseAgentDefinitionFile,

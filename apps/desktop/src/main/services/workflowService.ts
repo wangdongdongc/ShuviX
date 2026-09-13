@@ -24,7 +24,7 @@ import {
   writeFileSync,
   unlinkSync
 } from 'fs'
-import { join } from 'path'
+import { basename, join } from 'path'
 import { shell } from 'electron'
 import i18next from 'i18next'
 import {
@@ -32,8 +32,11 @@ import {
   createWorkflowEngine,
   getBuiltinWorkflowSource,
   parseWorkflowDefinitionFile,
+  registryFileBase,
+  resolveShadowing,
   toInProcessAgentType,
   type ParsedWorkflowFile,
+  type ShadowResolved,
   type TriggerId,
   type TriggerPayloadMap,
   type WorkflowEngine,
@@ -68,8 +71,12 @@ export interface WorkflowListItem {
   source: 'builtin' | 'user'
   /** 用户文件路径（内置为空串） */
   basePath: string
-  /** 该内置已被同名用户文件遮蔽（仅展示，不生效） */
+  /**
+   * 被同名遮蔽、当前不生效：被用户文件压过的内置，或同名用户文件里没胜出的那几份（仅展示）
+   */
   overridden?: boolean
+  /** 压过它的那份用户文件的文件名 */
+  overriddenBy?: string
 }
 
 /**
@@ -176,6 +183,7 @@ class WorkflowService {
           (e) => e.isFile() && !e.name.startsWith('.') && e.name.toLowerCase().endsWith('.md')
         )
         .map((e) => e.name)
+        .sort()
     } catch (e) {
       log.warn(`扫描目录 ${this.userDir} 失败:`, e)
       return { valid: [], invalid: [] }
@@ -187,7 +195,6 @@ class WorkflowService {
 
     const valid: Array<{ file: ParsedWorkflowFile; basePath: string }> = []
     const invalid: InvalidWorkflowFile[] = []
-    const seen = new Set<string>()
     for (const fileName of names) {
       const filePath = join(this.userDir, fileName)
       let raw: string
@@ -215,11 +222,7 @@ class WorkflowService {
         invalid.push({ fileName, error })
         continue
       }
-      if (seen.has(parsed.name)) {
-        log.warn(`workflow "${parsed.name}": 同名文件重复（${fileName}），已跳过`)
-        continue
-      }
-      seen.add(parsed.name)
+      // 同名的几份都收下 —— 谁生效由 resolveWorkflows 统一裁决（被遮蔽的照常列进设置页）
       valid.push({ file: parsed, basePath: filePath })
     }
     const result: ScanResult = { valid, invalid }
@@ -247,47 +250,66 @@ class WorkflowService {
       .join('|')
   }
 
-  /** 合法用户工作流（引擎装配用；非法的既不触发也不遮蔽内置） */
-  private scanUserFiles(): Array<{ file: ParsedWorkflowFile; basePath: string }> {
-    return this.scanDir().valid
-  }
-
-  /** 合并列表（用户覆盖内置同名）；引擎每次 fire 现算，文件改动即时生效 */
-  private listForEngine(): WorkflowRegistryEntry[] {
-    const users = this.scanUserFiles().map((u) => u.file)
-    const userNames = new Set(users.map((w) => w.name))
-    const builtins = buildBuiltinWorkflows({ language: i18next.language }).filter(
-      (w) => !userNames.has(w.name)
-    )
-
-    return [
-      ...builtins.map((file) => ({ file, source: 'builtin' as const })),
-      ...users.map((file) => ({ file, source: 'user' as const }))
-    ]
-  }
-
-  // ─── 设置页 API（对标 policyService：合并列表 / md 原文读写 / 非法文件修复） ───
-
-  /** 设置页列表：合并结果 + 被同名用户文件遮蔽的内置（`overridden` 标记，仅展示） */
-  listForSettings(): WorkflowListItem[] {
-    const users = this.scanUserFiles()
-    const userNames = new Set(users.map((u) => u.file.name))
-    const builtins = buildBuiltinWorkflows({ language: i18next.language })
-
-    const merged: WorkflowListItem[] = [
-      ...builtins
-        .filter((w) => !userNames.has(w.name))
-        .map((file) => ({ file, source: 'builtin' as const, basePath: '' })),
-      ...users.map((u) => ({ file: u.file, source: 'user' as const, basePath: u.basePath }))
-    ].map(({ file, source, basePath }) => this.toListItem(file, source, basePath))
-
-    const shadowed = builtins
-      .filter((w) => userNames.has(w.name))
-      .map((file) => ({
-        ...this.toListItem(file, 'builtin', ''),
-        overridden: true
+  /**
+   * 内置（当前界面语言）+ 全部合法用户文件过一遍同名裁决（agent-runtime resolveShadowing）。
+   * **引擎的注册表（listForEngine）与设置页列表都从这里取** —— 同一次裁决的两种投影，列表上标着
+   * 生效的就是 fire / invoke 时真正会跑的那份。
+   */
+  private resolveWorkflows(): ShadowResolved<{ file: ParsedWorkflowFile; basePath: string }>[] {
+    return resolveShadowing([
+      ...buildBuiltinWorkflows({ language: i18next.language }).map((file) => ({
+        name: file.name,
+        source: 'builtin' as const,
+        value: { file, basePath: '' }
+      })),
+      ...this.scanDir().valid.map((user) => ({
+        name: user.file.name,
+        source: 'user' as const,
+        fileName: basename(user.basePath),
+        value: user
       }))
-    return [...merged, ...shadowed].sort((a, b) => a.name.localeCompare(b.name))
+    ])
+  }
+
+  /** 生效的用户工作流里叫这个名字的那份（按名寻址的读 / 删用；被遮蔽的几份只能按文件名删） */
+  private activeUserFile(name: string): { file: ParsedWorkflowFile; basePath: string } | undefined {
+    return this.resolveWorkflows().find(
+      (entry) => entry.source === 'user' && !entry.shadowedBy && entry.name === name
+    )?.value
+  }
+
+  /** 生效集（同名裁决之后，内置在前、用户在后）；引擎每次 fire 现算，文件改动即时生效 */
+  private listForEngine(): WorkflowRegistryEntry[] {
+    return this.resolveWorkflows()
+      .filter((entry) => !entry.shadowedBy)
+      .map((entry) => ({ file: entry.value.file, source: entry.source }))
+  }
+
+  // ─── 设置页 API（对标 policyService：全量列表 / md 原文 / 非法文件） ───
+
+  /**
+   * 设置页列表：同一次同名裁决的全部份数 —— 被遮蔽的（被用户文件压过的内置，或同名用户文件里没胜出
+   * 的那几份）带 `overridden` 与 `overriddenBy`，只作展示。按名字排，同名里生效的在前。
+   */
+  listForSettings(): WorkflowListItem[] {
+    return this.resolveWorkflows()
+      .map(
+        (entry): WorkflowListItem => ({
+          ...this.toListItem(entry.value.file, entry.source, entry.value.basePath),
+          ...(entry.shadowedBy
+            ? {
+                overridden: true,
+                ...(entry.shadowedBy.fileName ? { overriddenBy: entry.shadowedBy.fileName } : {})
+              }
+            : {})
+        })
+      )
+      .sort(
+        (a, b) =>
+          a.name.localeCompare(b.name) ||
+          Number(!!a.overridden) - Number(!!b.overridden) ||
+          a.basePath.localeCompare(b.basePath)
+      )
   }
 
   /** ParsedWorkflowFile → 前端列表项（脚本/schema 原文不外传：列表不需要，编辑走 getSource） */
@@ -319,7 +341,7 @@ class WorkflowService {
    */
   getSource(name: string, source: 'builtin' | 'user'): { text: string } | { error: string } {
     if (source === 'user') {
-      const target = this.scanUserFiles().find((u) => u.file.name === name)
+      const target = this.activeUserFile(name)
       if (!target) return { error: `Workflow "${name}" not found` }
       try {
         return { text: readFileSync(target.basePath, 'utf-8') }
@@ -352,11 +374,12 @@ class WorkflowService {
     const parsed = this.parseForWrite(text, 'workflow')
     if ('error' in parsed) return { success: false, error: parsed.error }
     const name = parsed.file.name
-    if (this.scanUserFiles().some((u) => u.file.name === name)) {
+    if (this.scanDir().valid.some((u) => u.file.name === name)) {
       return { success: false, error: `Workflow "${name}" already exists` }
     }
 
-    const safeBase = name.replace(/[\\/:*?"<>|]/g, '-').replace(/^\.+/, '') || 'workflow'
+    // 文件名净化（与同名裁决认「文件名就是这个名字」同一套规则）；frontmatter name 才是标识
+    const safeBase = registryFileBase(name) || 'workflow'
     if (!existsSync(this.userDir)) mkdirSync(this.userDir, { recursive: true })
     let filePath = join(this.userDir, `${safeBase}.md`)
     for (let i = 1; existsSync(filePath); i++) {
@@ -372,9 +395,9 @@ class WorkflowService {
     return { success: true, name }
   }
 
-  /** 删除用户工作流（删掉覆盖副本后同名内置自动恢复） */
+  /** 删除生效的那份用户工作流（删掉覆盖副本后同名内置自动恢复；被遮蔽的几份按文件名删） */
   delete(name: string): { success: boolean; error?: string } {
-    const target = this.scanUserFiles().find((u) => u.file.name === name)
+    const target = this.activeUserFile(name)
     if (!target) return { success: false, error: `Workflow "${name}" not found` }
     try {
       unlinkSync(target.basePath)
@@ -397,32 +420,7 @@ class WorkflowService {
     return existsSync(filePath) ? filePath : null
   }
 
-  /** 非法文件的读/写/删（身份是文件名 —— 它解析不出 name） */
-  getSourceByFile(fileName: string): { text: string } | { error: string } {
-    const filePath = this.resolveUserFile(fileName)
-    if (!filePath) return { error: `Workflow file "${fileName}" not found` }
-    try {
-      return { text: readFileSync(filePath, 'utf-8') }
-    } catch (e) {
-      return { error: e instanceof Error ? e.message : String(e) }
-    }
-  }
-
-  saveByFile(fileName: string, text: string): { success: boolean; error?: string } {
-    const filePath = this.resolveUserFile(fileName)
-    if (!filePath) return { success: false, error: `Workflow file "${fileName}" not found` }
-    const parsed = this.parseForWrite(text, fileName.slice(0, -3))
-    if ('error' in parsed) return { success: false, error: parsed.error }
-    try {
-      writeFileSync(filePath, text, 'utf-8')
-      this.invalidateScan()
-    } catch (e) {
-      log.warn(`保存 workflow 文件 "${fileName}" 失败:`, e)
-      return { success: false, error: e instanceof Error ? e.message : String(e) }
-    }
-    return { success: true }
-  }
-
+  /** 按文件名删除 —— 非法文件（它解析不出 name）、或同名里被遮蔽的那几份（按名删会删到生效的那份） */
   deleteByFile(fileName: string): { success: boolean; error?: string } {
     const filePath = this.resolveUserFile(fileName)
     if (!filePath) return { success: false, error: `Workflow file "${fileName}" not found` }

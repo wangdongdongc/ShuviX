@@ -6,6 +6,7 @@
  * 它的笔记本会话，改名迁移挂在笔记本写入的回执上），于是本文件按剩下的职责分组：
  *
  *   PSv-1…8   **扫描与解析**：目录里有什么、坏文件去哪、一条会话绑的是谁；
+ *   PSv-SH1/2 **同名的几份**：侧栏列出的三拨与按名取（get / forSession）出自同一次同名裁决；
  *   PSv-19    **原子写**：新建落盘不给扫描读到半份文件的机会；
  *   PSv-20…26 **增删与按文件名寻址**：新建的文件名派生、删除的边界、文件名白名单、广播；
  *   PSv-27…40 **改名观察**：笔记本写入的回执（noteWriting / noteWritten）与每一次扫描怎样把
@@ -33,7 +34,7 @@ import {
   rmSync,
   writeFileSync
 } from 'fs'
-import { join } from 'path'
+import { basename, join } from 'path'
 import type { AppEvent } from '@shuvix/chat-protocol/appEvents'
 
 const dirs = vi.hoisted(() => {
@@ -217,21 +218,23 @@ describe('PSv-1…8 —— 扫描、解析与「这条会话绑的是谁」', ()
     expect(invalid[0].error).toContain('is not a bot file')
   })
 
-  it('PSv-4 同名两份文件：先到者胜，后者静默跳过且不报 invalid', () => {
+  it('PSv-4 同名两份文件：两份都列出 —— 胜者进 valid、另一份进 shadowed 并指向胜者，都不报 invalid；运行时认的是同一份', () => {
     // 身份是 frontmatter 的 `name`，而文件名可以任意 —— 两份文件写同一个名字是做得到的。
-    // 现状是**静默丢弃**：第二份既不在 valid 里、也不在 invalid 里，侧栏上完全看不见它，
-    // 只有日志里有一句。钉住它，是因为这是唯一能发现这个行为的地方
-    put('a-scout', md('scout', { body: '第一份' }))
+    // 输的那份不生效，但侧栏得把它列出来、说清被谁压过：看不见的文件，用户既不知道它存在，
+    // 也不知道它为什么不生效。两个文件名都不是名字本身、长度也一样，于是落到码点序 ——
+    // 与 readdir 的枚举序无关（故意倒着建）
     put('z-scout', md('scout', { body: '第二份' }))
+    put('a-scout', md('scout', { body: '第一份' }))
 
-    const { valid, invalid } = botService.listWithInvalid()
-    expect(valid).toHaveLength(1)
+    const { valid, shadowed, invalid } = botService.listWithInvalid()
     expect(invalid).toEqual([])
-    // 胜者是目录枚举序里靠前的那个（服务与本用例看到的是同一次枚举）
-    const first = readdirSync(dirs.bots).filter((n) => n.endsWith('.md'))[0]
-    expect(valid[0].basePath).toBe(join(dirs.bots, first))
-    // 丢弃只在日志里留痕
-    expect(mocks.warn.mock.calls.flat().join(' ')).toContain('重复')
+    expect(valid.map((b) => b.basePath)).toEqual([join(dirs.bots, 'a-scout.md')])
+    expect(shadowed.map((b) => [b.basePath, b.shadowedBy])).toEqual([
+      [join(dirs.bots, 'z-scout.md'), 'a-scout.md']
+    ])
+    // 会话绑定 / 身份胶囊走的 get、listAll 与侧栏出自同一次裁决
+    expect(botService.get('scout')?.basePath).toBe(join(dirs.bots, 'a-scout.md'))
+    expect(botService.listAll().map((b) => b.basePath)).toEqual([join(dirs.bots, 'a-scout.md')])
   })
 
   it('PSv-5 目录不存在 → 空清单、不抛，且不创建目录', () => {
@@ -239,7 +242,7 @@ describe('PSv-1…8 —— 扫描、解析与「这条会话绑的是谁」', ()
     // 里撒一个空目录 —— 纯 md 驱动的纪律是「用户建了才有」
     rmSync(dirs.bots, { recursive: true, force: true })
     expect(() => botService.listWithInvalid()).not.toThrow()
-    expect(botService.listWithInvalid()).toEqual({ valid: [], invalid: [] })
+    expect(botService.listWithInvalid()).toEqual({ valid: [], shadowed: [], invalid: [] })
     expect(botService.listAll()).toEqual([])
     expect(existsSync(dirs.bots)).toBe(false)
   })
@@ -290,6 +293,82 @@ describe('PSv-1…8 —— 扫描、解析与「这条会话绑的是谁」', ()
   })
 })
 
+// ────────────────────── PSv-SH：同名的几份 ──────────────────────
+
+/**
+ * 同名的几份文件：侧栏列出的三拨（listWithInvalid）与按名取（get / listAll / forSession）出自同一次
+ * resolveShadowing。夹具让规则的每一级都有人较劲：
+ *   scout.md（Scout Canon）  —— 文件名就是名字，胜出
+ *   a.md（Scout Short）      —— 更短、码点序更前，输
+ *   zz-scout.md              —— 既不短也不靠前，输
+ *   ranger copy.md           —— ranger 唯一的一份：不是名字本身也照样生效
+ *   broken.md                —— 解析不过
+ * 会话 s1 绑着 scout；pick 读的是同一张可变的会话表，删文件之后「绑定没被迁」也看得见。
+ */
+describe('PSv-SH —— 同名的几份：侧栏列出的与按名取到的是同一次裁决', () => {
+  const fileOf = (entry: { basePath: string }): string => basename(entry.basePath)
+
+  function seedShadowFixture(): void {
+    put('scout', md('scout', { displayName: 'Scout Canon' }))
+    put('a', md('scout', { displayName: 'Scout Short' }))
+    put('zz-scout', md('scout'))
+    put('ranger copy', md('ranger'))
+    put('broken', '不是 md')
+    seedSessions([{ id: 's1', bot: 'scout' }])
+    mocks.pick.mockImplementation((id: string) => {
+      const row = sessionRows.find((r) => r.id === id)
+      return row ? { settings: row.settings } : undefined
+    })
+  }
+
+  it('PSv-SH1 侧栏的三拨与按名取一致：文件名即名字的 scout.md 生效，a.md / zz-scout.md 依次指向它；ranger 唯一的一份照常生效；绑着 scout 的会话拿到的是 scout.md', () => {
+    seedShadowFixture()
+
+    const { valid, shadowed, invalid } = botService.listWithInvalid()
+    expect(valid.map(fileOf)).toEqual(['ranger copy.md', 'scout.md'])
+    expect(shadowed.map((s) => [fileOf(s), s.shadowedBy])).toEqual([
+      ['a.md', 'scout.md'],
+      ['zz-scout.md', 'scout.md']
+    ])
+    expect(invalid.map((f) => f.fileName)).toEqual(['broken.md'])
+    expect(botService.listAll()).toEqual(valid)
+    // 每一份输掉的都恰好对应一份同名的胜者，就是它 shadowedBy 指的那个文件
+    for (const s of shadowed) {
+      expect(valid.filter((v) => v.file.name === s.file.name).map(fileOf), fileOf(s)).toEqual([
+        s.shadowedBy
+      ])
+    }
+
+    const scout = botService.get('scout')
+    expect(scout?.basePath).toBe(join(dirs.bots, 'scout.md'))
+    expect(scout?.file.displayName).toBe('Scout Canon')
+    expect(botService.get('ranger')?.basePath).toBe(join(dirs.bots, 'ranger copy.md'))
+    expect(botService.forSession('s1')?.basePath).toBe(join(dirs.bots, 'scout.md'))
+    expect(mocks.updateSettings).not.toHaveBeenCalled()
+  })
+
+  it('PSv-SH2 按文件名删输的那份不动胜者；按名删删的是生效的 scout.md —— a.md 接班，会话跟着拿到它，绑定不迁', () => {
+    seedShadowFixture()
+
+    expect(botService.deleteByFile('zz-scout.md')).toEqual({ success: true })
+    expect(botService.get('scout')?.basePath).toBe(join(dirs.bots, 'scout.md'))
+    expect(botService.listWithInvalid().shadowed.map((s) => [fileOf(s), s.shadowedBy])).toEqual([
+      ['a.md', 'scout.md']
+    ])
+
+    expect(botService.delete('scout')).toEqual({ success: true })
+    expect(readdirSync(dirs.bots).sort()).toEqual(['a.md', 'broken.md', 'ranger copy.md'])
+    const next = botService.get('scout')
+    expect(next?.basePath).toBe(join(dirs.bots, 'a.md'))
+    expect(next?.file.displayName).toBe('Scout Short')
+    expect(botService.forSession('s1')?.basePath).toBe(join(dirs.bots, 'a.md'))
+    expect(botService.listWithInvalid().shadowed).toEqual([])
+    // 名字没变，只是换了一份文件在用 —— 不是改名，没有迁移
+    expect(mocks.updateSettings).not.toHaveBeenCalled()
+    expect(boundBotOfSession('s1')).toBe('scout')
+  })
+})
+
 // ────────────────────── PSv-19：原子写 ──────────────────────
 
 describe('PSv-19 —— 新建落盘经 writeFileAtomic', () => {
@@ -330,8 +409,8 @@ describe('PSv-20…23 —— 新建与删除', () => {
   })
 
   it('PSv-21 create 拒绝重复的 frontmatter 名字，哪怕文件名没被占用', () => {
-    // 身份是名字。放行会得到两份同名文件，而扫描只认先到的那一份（PSv-4）——
-    // 用户会看到「新建成功」然后列表里什么都没多
+    // 身份是名字。放行会得到两份同名文件，而同名的几份只有一份生效（PSv-4）—— 新建出来的
+    // scout.md 文件名就是名字，会悄无声息地压过用户原有的 some-file.md
     put('some-file', md('scout'))
     const res = botService.create(md('scout'))
     expect(res.success).toBe(false)
@@ -596,11 +675,12 @@ describe('PSv-27…40 —— 改名观察：会话绑定跟着文件里的名字
   })
 
   it('PSv-31 改成另一份文件正在用的名字：不迁（记录停在旧名）；再改成独占的名字才一次迁过去', () => {
-    // 迁过去等于把 s1 交给一个说不清是谁的名字：同名两份，扫描只认先到的那一份（PSv-4），
-    // 而先到取决于 readdir 的顺序 —— 所以这里不断言哪份文件胜出
+    // 迁过去等于把 s1 交给一个说不清是谁的名字：同名两份只有一份生效（PSv-4）。a.md 与 b.md 都不是
+    // 名字本身、长度也一样，按码点序 a.md 胜出 —— 胜者是确定的，可「s1 该跟哪份文件」仍然说不清，所以不迁
     collide()
     expect(mocks.updateSettings).not.toHaveBeenCalled()
     expect(botService.listAll().map((e) => e.file.name)).toEqual(['scout'])
+    expect(botService.get('scout')?.basePath).toBe(join(dirs.bots, 'a.md'))
     expect(boundBotOfSession('s1')).toBe('ranger')
     expect(boundBotOfSession('s2')).toBe('scout')
 

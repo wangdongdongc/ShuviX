@@ -1,6 +1,8 @@
 /**
  * BotGroup —— 侧栏置顶的「Bots」分组（`~/.shuvix/bots/`）。列目录里的 bot：合法的一行一个
- * （头像 + 显示名），解析不过的文件缀在末尾以琥珀行呈现（文件名 + 三角）；点任一行打开 / 复用这份
+ * （头像 + 显示名），同名里没胜出的几份紧跟在胜出那行之后、划线变淡（与设置页被覆盖的行同一种
+ * 样子，谁胜出由宿主那次同名裁决说了算，这里不另判），解析不过的文件缀在末尾以琥珀行呈现（文件名 +
+ * 三角）；点任一行打开 / 复用这份
  * 文件的**笔记本会话**（隐藏项目 `__bots__`）—— 与知识库条目同一条路：live-preview、自动保存、
  * 外部改动自动重载，解析器的判定由属性卡实时显示。**没有内置 bot**，故列表里也没有内置/用户之分。
  *
@@ -10,11 +12,12 @@
  * 重扫兜底。
  *
  * 动作全部收在菜单里（右键 / ⋮ 同一份，与会话行一致）：组头 = 新建 bot / 打开目录 / 刷新；
- * bot 行 = 新建 Bot 会话 / 删除；非法行 = 删除。删除的确认对话框归宿主 —— 真删掉后
+ * bot 行 = 新建 Bot 会话 / 删除；被遮蔽行与非法行 = 删除（按文件名 —— 按名删会删到生效的那份）。
+ * 删除的确认对话框归宿主 —— 真删掉后
  * `bot.changed` 会让本组重扫，这里不猜结果。
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { AlertTriangle } from 'lucide-react'
 import { BotAvatar, useAppEvent, useChatStore } from '@shuvix/chat-ui'
@@ -32,6 +35,12 @@ export interface BotGroupItem extends BotPickItem {
   fileName: string
 }
 
+/** 同名的另一份压过了它、当前不生效的 bot 文件 */
+export interface BotGroupShadowedItem extends BotGroupItem {
+  /** 压过它的那份文件的文件名 */
+  shadowedBy: string
+}
+
 /** 目录里无法解析的文件（身份是文件名 —— 它解析不出 name） */
 export interface BotGroupInvalidFile {
   fileName: string
@@ -41,8 +50,12 @@ export interface BotGroupInvalidFile {
 
 /** 宿主注入的 bots 注册表能力（桌面：window.api.bot 的窄投影） */
 export interface BotGroupAdapter {
-  /** 拉取注册表：合法 bot + 无法解析的文件（须为稳定引用，避免重复扫描） */
-  list: () => Promise<{ bots: BotGroupItem[]; invalid: BotGroupInvalidFile[] }>
+  /** 拉取注册表：生效的 bot + 被同名遮蔽的 + 无法解析的文件（须为稳定引用，避免重复扫描） */
+  list: () => Promise<{
+    bots: BotGroupItem[]
+    shadowed: BotGroupShadowedItem[]
+    invalid: BotGroupInvalidFile[]
+  }>
   /** 打开 / 复用这份文件的笔记本会话（宿主负责建会话、刷新列表并选中）；title 只在新建会话时用 */
   open: (fileName: string, title?: string) => void | Promise<void>
   /** 按模板新建一份 bot 文件并打开它的笔记本 */
@@ -76,6 +89,7 @@ export function BotGroup({ adapter }: BotGroupProps): React.JSX.Element {
   const [collapsed, setCollapsed] = useState(true)
   const [scanned, setScanned] = useState<{
     bots: BotGroupItem[]
+    shadowed: BotGroupShadowedItem[]
     invalid: BotGroupInvalidFile[]
   } | null>(null)
   // 是否扫过（聚焦 / 事件重扫只在首次展开后生效）
@@ -90,7 +104,7 @@ export function BotGroup({ adapter }: BotGroupProps): React.JSX.Element {
       const r = await adapter.list()
       if (seq === scanSeq.current) setScanned(r)
     } catch {
-      if (seq === scanSeq.current) setScanned({ bots: [], invalid: [] })
+      if (seq === scanSeq.current) setScanned({ bots: [], shadowed: [], invalid: [] })
     }
   }, [adapter])
 
@@ -145,6 +159,7 @@ export function BotGroup({ adapter }: BotGroupProps): React.JSX.Element {
     })
   }
 
+  /** 非法行与被遮蔽行共用：它们都只能按文件名删 */
   const openInvalidMenu = (fileName: string, e: React.MouseEvent): void => {
     void showContextMenu(e, [{ id: 'delete-bot-file', label: t('common.delete') }], (action) => {
       if (action === 'delete-bot-file') adapter.deleteFile(fileName)
@@ -178,23 +193,51 @@ export function BotGroup({ adapter }: BotGroupProps): React.JSX.Element {
         ) : (
           <>
             {scanned.bots.map((b) => (
-              <div
-                key={b.fileName}
-                data-bot-row={b.name}
-                onClick={() => openFile(b.fileName, b.displayName)}
-                onContextMenu={(e) => openRowMenu(b, e)}
-                title={b.description}
-                className={rowClass(activeFileName === b.fileName)}
-              >
-                <BotAvatar name={b.name} displayName={b.displayName} size={12} />
-                <span className="flex-1 min-w-0 text-[13px] truncate group-hover:pr-5">
-                  {b.displayName}
-                </span>
-                <RowMenuButton
-                  className="absolute right-1.5 opacity-0 group-hover:opacity-100"
-                  onOpen={(e) => openRowMenu(b, e)}
-                />
-              </div>
+              <Fragment key={b.fileName}>
+                <div
+                  data-bot-row={b.name}
+                  onClick={() => openFile(b.fileName, b.displayName)}
+                  onContextMenu={(e) => openRowMenu(b, e)}
+                  title={b.description}
+                  className={rowClass(activeFileName === b.fileName)}
+                >
+                  <BotAvatar name={b.name} displayName={b.displayName} size={12} />
+                  <span className="flex-1 min-w-0 text-[13px] truncate group-hover:pr-5">
+                    {b.displayName}
+                  </span>
+                  <RowMenuButton
+                    className="absolute right-1.5 opacity-0 group-hover:opacity-100"
+                    onOpen={(e) => openRowMenu(b, e)}
+                  />
+                </div>
+                {/* 同名里没胜出的几份：紧跟胜出那行、划线变淡；点开照样是它自己的笔记，菜单只有按文件名删除 */}
+                {scanned.shadowed
+                  .filter((s) => s.name === b.name)
+                  .map((s) => (
+                    <div
+                      key={s.fileName}
+                      data-bot-shadowed-row={s.fileName}
+                      onClick={() => openFile(s.fileName, s.displayName)}
+                      onContextMenu={(e) => openInvalidMenu(s.fileName, e)}
+                      title={t('settings.shadowedByFileHint', { file: s.shadowedBy })}
+                      className={rowClass(activeFileName === s.fileName)}
+                    >
+                      <span className="flex-shrink-0 opacity-50">
+                        <BotAvatar name={s.name} displayName={s.displayName} size={12} />
+                      </span>
+                      <span className="flex-1 min-w-0 text-[13px] truncate line-through opacity-60 group-hover:pr-5">
+                        {s.displayName}
+                      </span>
+                      <span className="flex-shrink-0 px-1 rounded text-[9px] bg-bg-secondary text-text-tertiary group-hover:invisible">
+                        {t('sidebar.botOverridden')}
+                      </span>
+                      <RowMenuButton
+                        className="absolute right-1.5 opacity-0 group-hover:opacity-100"
+                        onOpen={(e) => openInvalidMenu(s.fileName, e)}
+                      />
+                    </div>
+                  ))}
+              </Fragment>
             ))}
             {scanned.invalid.map((f) => (
               <div

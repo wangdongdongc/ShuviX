@@ -27,9 +27,9 @@ import {
   rmSync,
   writeFileSync
 } from 'node:fs'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { tmpdir } from 'node:os'
-import type { ParsedAgentFile } from '@shuvix/agent-runtime'
+import type { AgentProfile, ParsedAgentFile } from '@shuvix/agent-runtime'
 
 const state = vi.hoisted(() => ({ dir: '', wikis: '', widgets: '' }))
 
@@ -458,15 +458,21 @@ describe('agentService.listInvalid / deleteByFile —— 解析不过的档案',
     expect(agentService.getProfile('explore')?.source).toBe('builtin')
   })
 
-  it('AS-28 [钉现状] 同名两份合法文件：后到的静默跳过 —— 不进无法解析，设置页只有一行用户档案（不断言哪份胜出）', () => {
-    // 与 botService PSv-4 同一个缺口：第二份既不生效也不出现在任何分组里，只在日志里留一句。
-    // 胜者取决于 readdir 的顺序，钉住它只会把平台差异焊进测试
-    writeAgentFile('twin-a.md', agentMd('twin'))
-    writeAgentFile('twin-b.md', agentMd('twin'))
+  it('AS-28 同名两份合法文件：设置页两份都列出 —— 文件名就是名字的那份生效（哪怕另一份更短、排序更前），另一份标被覆盖并指向它；注册表认的是同一份', () => {
+    // 输的那份以前被扫描静默跳过：既不生效，也不出现在任何分组里。现在它照常列出、换一种样子，
+    // 而「谁生效」与注册表出自同一次裁决。`a.md` 比 `twin.md` 短、码点序也靠前，
+    // 只有「文件名即名字」这一条能让 twin.md 胜出
+    writeAgentFile('a.md', agentMd('twin'))
+    writeAgentFile('twin.md', agentMd('twin'))
 
     expect(agentService.listInvalid()).toEqual([])
     const rows = agentService.listForSettings().filter((a) => a.name === 'twin')
-    expect(rows.map((r) => r.source)).toEqual(['user'])
+    expect(rows.map((r) => [r.basePath, r.source, !!r.overridden, r.overriddenBy])).toEqual([
+      [join(state.dir, 'twin.md'), 'user', false, undefined],
+      [join(state.dir, 'a.md'), 'user', true, 'twin.md']
+    ])
+    expect(agentService.getProfile('twin')?.basePath).toBe(join(state.dir, 'twin.md'))
+    expect(agentService.listAll().filter((a) => a.name === 'twin')).toHaveLength(1)
   })
 
   it('AS-29 deleteByFile：越界 / 子路径 / 点文件 / 非 .md / 无后缀 / 不存在一律 not found 且一个文件都不动；目录里的坏文件与好文件都按文件名删得掉', () => {
@@ -560,5 +566,144 @@ describe('agentService —— 结构化写路径（属性卡/表单的 saveAgent
     expect(agentService.listAll().find((a) => a.name === 'gui-subpath')!.instructionFiles).toEqual([
       'docs/house.md'
     ])
+  })
+})
+
+/**
+ * 同名的几份（AGT-SH*）：注册表（listAll / getProfile / 按名读写删）与设置页全量列表出自同一次
+ * resolveShadowing。夹具用真文件名 ——「文件名就是名字」只在真文件名上成立；大小写那一半在
+ * agent-runtime 的 registryShadowing.test.ts（macOS 默认文件系统不分大小写，真目录里放不下两份）。
+ *
+ *   explore.md（EXPLORE CANON）+ explore copy.md  —— 覆盖内置 explore 的两份
+ *   twin.md + aa.md + zz.md                       —— 纯用户同名三份；aa.md 更短、码点序也更前
+ *   broken.md                                      —— 解析不过、写着 name: explore（遮蔽不了任何东西）
+ */
+describe('agentService —— 同名的几份：注册表与设置页是同一次裁决的两种投影', () => {
+  const EXPLORE_CANON = agentMd('explore').replace('Body of explore.', 'EXPLORE CANON')
+
+  function seedShadowFixture(): void {
+    writeAgentFile('explore.md', EXPLORE_CANON)
+    writeAgentFile('explore copy.md', agentMd('explore'))
+    writeAgentFile('twin.md', agentMd('twin'))
+    writeAgentFile('aa.md', agentMd('twin'))
+    writeAgentFile('zz.md', agentMd('twin'))
+    writeAgentFile('broken.md', INVALID_MD.replace('name: broken', 'name: explore'))
+  }
+
+  /** 行的文件身份：内置没有文件，记空串 */
+  const fileOf = (row: { source: string; basePath: string }): string =>
+    row.source === 'builtin' ? '' : basename(row.basePath)
+
+  /** 码点序（不随 locale 漂） */
+  const cmp = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0)
+  const byIdentity = (a: AgentProfile, b: AgentProfile): number =>
+    cmp(a.name, b.name) || cmp(a.source, b.source) || cmp(a.basePath, b.basePath)
+
+  /** 核心等式：运行时生效集 == 设置页里没被覆盖的那些行；生效集里名字不重复 */
+  function expectRegistryMatchesSettings(): void {
+    const registry = [...agentService.listAll()].sort(byIdentity)
+    const active = agentService
+      .listForSettings()
+      .filter((row) => !row.overridden)
+      .sort(byIdentity)
+    expect(registry).toStrictEqual(active)
+    const names = registry.map((a) => a.name)
+    expect(new Set(names).size).toBe(names.length)
+  }
+
+  it('AGT-SH1 运行时生效集 == 设置页未被覆盖的行；文件名即名字的那份生效（哪怕另一份更短）；输的几份指向胜者，排在它后面；非法文件哪边都不出现', () => {
+    seedShadowFixture()
+    expectRegistryMatchesSettings()
+
+    const explore = agentService.getProfile('explore')!
+    expect(explore.basePath).toBe(join(state.dir, 'explore.md'))
+    expect(explore.systemPrompt).toContain('EXPLORE CANON')
+    // twin.md 胜过更短、码点序也更前的 aa.md
+    expect(agentService.getProfile('twin')?.basePath).toBe(join(state.dir, 'twin.md'))
+
+    const rows = agentService.listForSettings()
+    expect(
+      rows.filter((r) => r.overridden).map((r) => [r.source, fileOf(r), r.overriddenBy])
+    ).toEqual([
+      ['builtin', '', 'explore.md'],
+      ['user', 'explore copy.md', 'explore.md'],
+      ['user', 'aa.md', 'twin.md'],
+      ['user', 'zz.md', 'twin.md']
+    ])
+    // 同名里生效的在前，输的按路径跟在后面
+    expect(rows.filter((r) => r.name === 'twin').map(fileOf)).toEqual(['twin.md', 'aa.md', 'zz.md'])
+
+    expect(agentService.listInvalid().map((f) => f.fileName)).toEqual(['broken.md'])
+    const brokenPath = join(state.dir, 'broken.md')
+    expect(agentService.listAll().some((a) => a.basePath === brokenPath)).toBe(false)
+    expect(rows.some((r) => r.basePath === brokenPath)).toBe(false)
+  })
+
+  it('AGT-SH2 按名寻址的读 / 写 / 删只碰生效的那份：getSource / saveAgent 落在 twin.md，另两份逐字节不动；deleteAgent 删掉它之后 aa.md 按码点序接班', () => {
+    seedShadowFixture()
+    expect(agentService.getSource('twin', 'user')).toEqual({ text: readAgentFile('twin.md') })
+
+    const twinBefore = readAgentFile('twin.md')
+    const aaBefore = readAgentFile('aa.md')
+    const zzBefore = readAgentFile('zz.md')
+    expect(
+      agentService.saveAgent('twin', {
+        name: 'twin',
+        displayName: 'twin',
+        description: 'saved through the registry',
+        systemPrompt: 'TWIN SAVED',
+        tools: ['read'],
+        instructionFiles: [],
+        projectAwareness: false
+      })
+    ).toEqual({ success: true })
+    expect(readAgentFile('twin.md')).not.toBe(twinBefore)
+    expect(readAgentFile('twin.md')).toContain('TWIN SAVED')
+    expect(readAgentFile('aa.md')).toBe(aaBefore)
+    expect(readAgentFile('zz.md')).toBe(zzBefore)
+    expect(agentService.getProfile('twin')?.systemPrompt).toContain('TWIN SAVED')
+
+    expect(agentService.deleteAgent('twin')).toEqual({ success: true })
+    expect(files()).toEqual(['aa.md', 'broken.md', 'explore copy.md', 'explore.md', 'zz.md'])
+    // aa.md 与 zz.md 都不是名字本身、长度相同 —— 码点序定胜负
+    expect(agentService.getProfile('twin')?.basePath).toBe(join(state.dir, 'aa.md'))
+    expect(
+      agentService
+        .listForSettings()
+        .filter((r) => r.name === 'twin')
+        .map((r) => [fileOf(r), !!r.overridden, r.overriddenBy])
+    ).toEqual([
+      ['aa.md', false, undefined],
+      ['zz.md', true, 'aa.md']
+    ])
+    expectRegistryMatchesSettings()
+  })
+
+  it('AGT-SH3 按文件名删输的那份不动胜者；再按名删掉覆盖，内置 explore 恢复生效 —— 写着 explore 的 broken.md 始终遮蔽不了它', () => {
+    seedShadowFixture()
+
+    expect(agentService.deleteByFile('explore copy.md')).toEqual({ success: true })
+    expect(files()).toEqual(['aa.md', 'broken.md', 'explore.md', 'twin.md', 'zz.md'])
+    expect(agentService.getProfile('explore')?.basePath).toBe(join(state.dir, 'explore.md'))
+    expect(
+      agentService
+        .listForSettings()
+        .filter((r) => r.name === 'explore')
+        .map((r) => [r.source, fileOf(r), !!r.overridden, r.overriddenBy])
+    ).toEqual([
+      ['user', 'explore.md', false, undefined],
+      ['builtin', '', true, 'explore.md']
+    ])
+
+    expect(agentService.deleteAgent('explore')).toEqual({ success: true })
+    expect(agentService.getProfile('explore')?.source).toBe('builtin')
+    expect(
+      agentService
+        .listForSettings()
+        .filter((r) => r.name === 'explore')
+        .map((r) => [r.source, !!r.overridden])
+    ).toEqual([['builtin', false]])
+    expect(agentService.listInvalid().map((f) => f.fileName)).toEqual(['broken.md'])
+    expectRegistryMatchesSettings()
   })
 })

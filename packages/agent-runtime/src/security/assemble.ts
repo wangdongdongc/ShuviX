@@ -2,7 +2,7 @@
  * 规则装配 —— 把三层来源汇成一份扁平规则集（评估的直接输入）。
  *
  *   builtin md（模块级缓存的解析产物）
- *     ⊕ 用户 md（provider.getUserPolicies 现扫；同名覆盖内置）
+ *     ⊕ 用户 md（provider.getUserPolicies 现扫；同名裁决见 resolvePolicyFiles）
  *     ⊕ 宿主派生（provider.derivedRules；仅限无法 md 化的特例）
  *
  * 会话授权曾是独立的第四层（allowList / autoAllow 在这里编译成 force-allow 原生谓词），
@@ -35,6 +35,7 @@
  * 数据绑定进入求值上下文，md 里的表达式始终是固定文本。
  */
 import { buildBuiltinPolicies } from './builtinPolicies'
+import { resolveShadowing, type ShadowedBy } from '../registryShadowing'
 import { evaluateLet, evaluateMatch, inDirOnlyVarNames } from './celMatch'
 import { compileConditions, mergeConditions } from './conditions'
 import { buildPolicyVars } from './policyVars'
@@ -46,7 +47,8 @@ import type {
   PolicyVarValue,
   RuleTier,
   SecurityHostProvider,
-  SecurityRule
+  SecurityRule,
+  UserPolicyFile
 } from './types'
 
 /**
@@ -96,18 +98,45 @@ function bindMissingDirVars(
   return bound ?? vars
 }
 
-/** 合并策略文件：用户同名覆盖内置（provider 已过滤非法用户文件 —— 非法不遮蔽内置） */
+/**
+ * 策略文件的同名裁决（内置 + 用户，含同名的几份）：按「内置在前、用户在后」的输入顺序逐份返回，
+ * 被压过的带 `shadowedBy`（规则见 resolveShadowing：用户压过内置，同为用户文件按文件名定先后）。
+ * **装配（mergePolicyFiles）与宿主设置页的全量列表都经这一个函数** —— 列表上标着生效的就是真正
+ * 在评估的那份。provider 已滤掉非法用户文件（非法不进候选、不遮蔽内置）。
+ */
+export function resolvePolicyFiles(
+  builtins: readonly ParsedPolicyFile[],
+  users: readonly UserPolicyFile[]
+): Array<{
+  policy: ParsedPolicyFile
+  sourceKind: 'builtin' | 'user'
+  fileName?: string
+  shadowedBy?: ShadowedBy
+}> {
+  return resolveShadowing<ParsedPolicyFile>([
+    ...builtins.map((policy) => ({ name: policy.name, source: 'builtin' as const, value: policy })),
+    ...users.map((policy) => ({
+      name: policy.name,
+      source: 'user' as const,
+      ...(policy.fileName ? { fileName: policy.fileName } : {}),
+      value: policy
+    }))
+  ]).map(({ value, source, fileName, shadowedBy }) => ({
+    policy: value,
+    sourceKind: source,
+    ...(fileName ? { fileName } : {}),
+    ...(shadowedBy ? { shadowedBy } : {})
+  }))
+}
+
+/** 装配用的生效集：resolvePolicyFiles 里没被遮蔽的那些（内置在前、用户在后） */
 export function mergePolicyFiles(
-  builtins: ParsedPolicyFile[],
-  users: ParsedPolicyFile[]
+  builtins: readonly ParsedPolicyFile[],
+  users: readonly UserPolicyFile[]
 ): Array<{ policy: ParsedPolicyFile; sourceKind: 'builtin' | 'user' }> {
-  const userNames = new Set(users.map((p) => p.name))
-  return [
-    ...builtins
-      .filter((p) => !userNames.has(p.name))
-      .map((policy) => ({ policy, sourceKind: 'builtin' as const })),
-    ...users.map((policy) => ({ policy, sourceKind: 'user' as const }))
-  ]
+  return resolvePolicyFiles(builtins, users)
+    .filter((entry) => !entry.shadowedBy)
+    .map(({ policy, sourceKind }) => ({ policy, sourceKind }))
 }
 
 /**

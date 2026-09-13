@@ -23,7 +23,7 @@ import {
   utimesSync,
   writeFileSync
 } from 'node:fs'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { TriggerPayloadMap } from '@shuvix/agent-runtime'
 
@@ -266,13 +266,19 @@ describe('workflowService — 用户工作流（纯 md 驱动）', () => {
     expect(existsSync(runsDirOf('txt-wf'))).toBe(false)
   })
 
-  it('同名用户文件重复 → 每次 fire 恰一个 run（保留先扫到的）', async () => {
+  it('WF-SH-1 同名用户文件两份 → 每次 fire 恰一个 run，跑的是文件名即名字的那份（哪怕另一份更短、排序更前）', async () => {
+    // 两份脚本返回值不同，才看得出跑的是哪一份；a.md 更短、码点序也更前，只有「文件名即名字」能让它输
     workflowService.init()
-    writeFileSync(join(state.dir, 'dup1.md'), userWf('dup-wf'))
-    writeFileSync(join(state.dir, 'dup2.md'), userWf('dup-wf'))
+    writeFileSync(join(state.dir, 'dup-wf.md'), userWf('dup-wf', { script: "return 'CANON'" }))
+    writeFileSync(join(state.dir, 'a.md'), userWf('dup-wf', { script: "return 'SHORT'" }))
     firePrompt()
     expect(runFilesOf('dup-wf')).toHaveLength(1)
     await waitForEnd('dup-wf')
+    expect(
+      readRecords('dup-wf')
+        .filter((r) => r.type === 'end')
+        .map((r) => r.output)
+    ).toEqual(['CANON'])
   })
 })
 
@@ -507,6 +513,107 @@ describe('workflowService — run journal 保留策略', () => {
     firePrompt()
     await waitForEnds('small', 2)
     expect(runFilesOf('small')).toHaveLength(2)
+  })
+})
+
+/**
+ * 同名的几份（WF-SH-2/3）：引擎注册表（fire / invoke 时现算的 listForEngine）与设置页全量列表经同一次
+ * resolveShadowing。夹具让三种同名同时在场：覆盖内置 auto-title 的 auto-title.md（文件名就是名字）、
+ * 同名但更短的 at.md，以及写着同一个名字、脚本却有语法错的 broken.md。
+ *
+ * 观测面照本文件惯例是 run journal：meta 同步落盘，end 用 vi.waitFor 等。几个阶段共用
+ * `.runs/auto-title/`，阶段之间先等上一阶段的 end 落定再清（迟到的 end 会把目录重新建出来）。
+ * 目录扫描缓存按文件指纹失效，所以阶段之间只增删文件、不原地改写。
+ */
+describe('workflowService — 同名的几份：引擎注册表与设置页是同一次裁决', () => {
+  const CANON = userWf('auto-title', { when: 'event.isDefaultTitle', script: "return 'CANON'" })
+  const SHORT = userWf('auto-title', { when: 'event.isDefaultTitle', script: "return 'SHORT'" })
+  const BROKEN = userWf('auto-title', { when: 'event.isDefaultTitle', script: 'return ((( oops' })
+
+  function seedShadowFixture(): void {
+    workflowService.init()
+    writeFileSync(join(state.dir, 'auto-title.md'), CANON)
+    writeFileSync(join(state.dir, 'at.md'), SHORT)
+    writeFileSync(join(state.dir, 'broken.md'), BROKEN)
+  }
+
+  const clearRuns = (name: string): void => {
+    rmSync(runsDirOf(name), { recursive: true, force: true })
+  }
+  const metaSources = (name: string): unknown[] =>
+    readRecords(name)
+      .filter((r) => r.type === 'meta')
+      .map((r) => r.source)
+  const endOutputs = (name: string): unknown[] =>
+    readRecords(name)
+      .filter((r) => r.type === 'end')
+      .map((r) => r.output)
+  /** 设置页里这个名字的行：[来源, 文件名（内置为空串）, 是否被覆盖, 被谁覆盖] */
+  const rowsNamed = (name: string): unknown[][] =>
+    workflowService
+      .listForSettings()
+      .filter((w) => w.name === name)
+      .map((w) => [w.source, basename(w.basePath), !!w.overridden, w.overriddenBy])
+  const mdFiles = (): string[] =>
+    readdirSync(state.dir)
+      .filter((f) => f.endsWith('.md'))
+      .sort()
+
+  it('WF-SH-2 内置覆盖 + 同名重复 + 同名非法同时在场：fire 与 invoke 都恰起一个 run、跑的是 auto-title.md；设置页三行、胜者在前，输的两行都指向它', async () => {
+    seedShadowFixture()
+
+    firePrompt({ isDefaultTitle: true })
+    expect(runFilesOf('auto-title')).toHaveLength(1)
+    await waitForEnd('auto-title')
+    expect(metaSources('auto-title')).toEqual(['user'])
+    expect(endOutputs('auto-title')).toEqual(['CANON'])
+
+    // 排序口径：名字 → 生效在前 → basePath（内置的空串排在输掉的用户文件前）
+    expect(rowsNamed('auto-title')).toEqual([
+      ['user', 'auto-title.md', false, undefined],
+      ['builtin', '', true, 'auto-title.md'],
+      ['user', 'at.md', true, 'auto-title.md']
+    ])
+    expect(workflowService.listInvalid().map((f) => f.fileName)).toContain('broken.md')
+    expect(workflowService.hasWorkflow('auto-title')).toBe(true)
+    expect(workflowService.getSource('auto-title', 'user')).toEqual({ text: CANON })
+
+    // 定向调用走的是同一份注册表：跑的还是 auto-title.md（invoke 在 run 收尾之后才返回）
+    clearRuns('auto-title')
+    const result = await workflowService.invoke({ workflow: 'auto-title', sessionId: 's1' })
+    expect(result).toMatchObject({ started: true, ok: true, output: 'CANON' })
+    expect(runFilesOf('auto-title')).toHaveLength(1)
+    await waitForEnd('auto-title')
+    expect(metaSources('auto-title')).toEqual(['user'])
+    expect(endOutputs('auto-title')).toEqual(['CANON'])
+  })
+
+  it('WF-SH-3 按名删删的是生效的 auto-title.md（at.md 接班）；再按文件名删掉 at.md，内置 auto-title 恢复生效', async () => {
+    seedShadowFixture()
+
+    expect(workflowService.delete('auto-title')).toEqual({ success: true })
+    expect(mdFiles()).toEqual(['at.md', 'broken.md'])
+    clearRuns('auto-title')
+    firePrompt({ isDefaultTitle: true })
+    expect(runFilesOf('auto-title')).toHaveLength(1)
+    await waitForEnd('auto-title')
+    expect(metaSources('auto-title')).toEqual(['user'])
+    expect(endOutputs('auto-title')).toEqual(['SHORT'])
+    expect(rowsNamed('auto-title')).toEqual([
+      ['user', 'at.md', false, undefined],
+      ['builtin', '', true, 'at.md']
+    ])
+
+    expect(workflowService.deleteByFile('at.md')).toEqual({ success: true })
+    expect(mdFiles()).toEqual(['broken.md'])
+    clearRuns('auto-title')
+    firePrompt({ isDefaultTitle: true })
+    expect(runFilesOf('auto-title')).toHaveLength(1)
+    await waitForEnd('auto-title')
+    expect(metaSources('auto-title')).toEqual(['builtin'])
+    expect(rowsNamed('auto-title')).toEqual([['builtin', '', false, undefined]])
+    // 写着同一个名字的 broken.md 始终只在「无法解析」里，遮蔽不了内置
+    expect(workflowService.listInvalid().map((f) => f.fileName)).toEqual(['broken.md'])
   })
 })
 

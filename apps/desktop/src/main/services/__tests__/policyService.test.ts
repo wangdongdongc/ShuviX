@@ -12,8 +12,10 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
+import i18next from 'i18next'
+import { assembleRules, type SecurityHostProvider } from '@shuvix/agent-runtime'
 
 const state = vi.hoisted(() => ({ dir: '' }))
 
@@ -23,7 +25,7 @@ vi.mock('../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {} })
 }))
 
-import { policyService } from '../policyService'
+import { policyService, type PolicyListItem } from '../policyService'
 
 /** YAML 单引号标量（内部单引号成对转义）—— name 里带 `:`/`"`/emoji 时照样是一个标量 */
 const yamlStr = (value: string): string => `'${value.replace(/'/g, "''")}'`
@@ -161,5 +163,184 @@ describe('policyService — 拒绝原因与错误文案', () => {
     expect(policyService.getSource('ask-on-write', 'user')).toEqual({
       error: 'Policy "ask-on-write" not found'
     })
+  })
+})
+
+/**
+ * 同名的几份（PU-SH*）：设置页全量列表（listForSettings）与评估侧装配（assembleRules →
+ * mergePolicyFiles）经同一个 resolvePolicyFiles、喂同一份候选 —— 列表上标着生效的，就是真正在评估的
+ * 那份。provider 照 toolContext.makeDesktopSecurityProvider 的形状搭（getUserPolicies 直连
+ * policyService、getLanguage 取 i18next）；只比判定字段（source.kind / effect / matchExpr），
+ * 它们与界面语言无关。
+ *
+ *   ask-on-write.md  deny  /canon       —— 覆盖内置 ask-on-write，文件名就是名字
+ *   a.md             ask   /copy        —— 同名第二份，更短、码点序也更前
+ *   gate.md          deny  /gate-canon  —— 纯用户同名两份
+ *   g.md             ask   /gate-copy
+ *   broken.md        解析不过、写着 name: ask-on-write（不进候选，遮蔽不了任何东西）
+ */
+describe('policyService —— 同名的几份：设置页列表与评估是同一次裁决', () => {
+  /** 一条 path 写入规则的策略：scope 限定 agent + path，规则只看 match */
+  const pathPolicy = (name: string, effect: 'ask' | 'deny', dir: string): string =>
+    [
+      '---',
+      'shuvix: policy v1',
+      `name: ${yamlStr(name)}`,
+      'shuvix-policy-scope:',
+      '  subject.kind: [agent]',
+      '  object.type: [path]',
+      'shuvix-policy-rules:',
+      `  - effect: ${effect}`,
+      '    action: [write]',
+      `    match: "inDir(object.path, '${dir}')"`,
+      '---',
+      '',
+      `Rationale of ${name} (${dir}).`,
+      ''
+    ].join('\n')
+
+  const CANON = pathPolicy('ask-on-write', 'deny', '/canon')
+  const COPY = pathPolicy('ask-on-write', 'ask', '/copy')
+
+  function seedShadowFixture(): void {
+    const put = (fileName: string, text: string): void =>
+      writeFileSync(join(state.dir, fileName), text, 'utf-8')
+    put('ask-on-write.md', CANON)
+    put('a.md', COPY)
+    put('gate.md', pathPolicy('gate', 'deny', '/gate-canon'))
+    put('g.md', pathPolicy('gate', 'ask', '/gate-copy'))
+    put('broken.md', INVALID_MD.replace('name: foo', 'name: ask-on-write'))
+  }
+
+  /** 桌面 provider 的最小同形（变量表给全，免得内置 lets 求值告警） */
+  const provider = (): SecurityHostProvider => ({
+    host: 'desktop',
+    pathSep: '/',
+    getVars: () => ({
+      workspace: '/ws',
+      toolResultsBase: '/tool-results',
+      skillsDirs: [],
+      memoryDirs: [],
+      knowledgeRoot: '/kb',
+      knowledgeSessionDirs: [],
+      home: '/home/u',
+      botsDir: '/home/u/.shuvix/bots',
+      systemDirs: []
+    }),
+    getSessionGrants: () => ({ autoAllow: false, allowList: [] }),
+    getLanguage: () => i18next.language,
+    getUserPolicies: () => policyService.getUserPolicies()
+  })
+
+  type Decision = [kind: string, effect: string, matchExpr: string | undefined]
+
+  /** 评估侧：这个名字装配出来的规则的判定字段 */
+  const assembledFor = (name: string): Decision[] =>
+    assembleRules(provider())
+      .filter((rule) => rule.source.policy === name)
+      .map((rule): Decision => [rule.source.kind, rule.effect, rule.matchExpr])
+
+  /** md 的 force-* 在装配产物里归一为三态 effect（强度另记在 tier）—— 列表侧照同一口径投影 */
+  const DECIDED: Record<string, string> = { 'force-ask': 'ask', 'force-allow': 'allow' }
+
+  /** 列表侧：这个名字唯一生效的那一行的规则，投成同一形状 */
+  const winningRowFor = (rows: PolicyListItem[], name: string): Decision[] => {
+    const active = rows.filter((row) => row.name === name && !row.overridden)
+    expect(active, name).toHaveLength(1)
+    return active[0].rules.map(
+      (rule): Decision => [active[0].source, DECIDED[rule.effect] ?? rule.effect, rule.match]
+    )
+  }
+
+  /** 设置页里这个名字的行：[来源, 文件名（内置为空串）, 是否被覆盖, 被谁覆盖] */
+  const rowsNamed = (name: string): Array<[string, string, boolean, string | undefined]> =>
+    policyService
+      .listForSettings()
+      .filter((row) => row.name === name)
+      .map((row) => [
+        row.source,
+        row.basePath ? basename(row.basePath) : '',
+        !!row.overridden,
+        row.overriddenBy
+      ])
+
+  it('PU-SH1 getUserPolicies 交出同名的全部几份（带文件名）；每个名字恰一行生效 —— 文件名即名字的那份；评估里的规则正是生效那一行的规则；列表行不外带 fileName', () => {
+    seedShadowFixture()
+
+    expect(
+      policyService
+        .getUserPolicies()
+        .map((p) => [p.name, p.fileName])
+        .sort()
+    ).toEqual([
+      ['ask-on-write', 'a.md'],
+      ['ask-on-write', 'ask-on-write.md'],
+      ['gate', 'g.md'],
+      ['gate', 'gate.md']
+    ])
+    expect(policyService.listInvalid().map((f) => f.fileName)).toEqual(['broken.md'])
+
+    const rows = policyService.listForSettings()
+    const names = [...new Set(rows.map((row) => row.name))]
+    for (const name of names) {
+      expect(
+        rows.filter((row) => row.name === name && !row.overridden),
+        name
+      ).toHaveLength(1)
+    }
+    // 排序口径（compareRows）：名字 → 生效在前 → basePath；内置的 basePath 是空串，排在输掉的用户文件前
+    expect(rowsNamed('ask-on-write')).toEqual([
+      ['user', 'ask-on-write.md', false, undefined],
+      ['builtin', '', true, 'ask-on-write.md'],
+      ['user', 'a.md', true, 'ask-on-write.md']
+    ])
+    expect(rowsNamed('gate')).toEqual([
+      ['user', 'gate.md', false, undefined],
+      ['user', 'g.md', true, 'gate.md']
+    ])
+
+    // 每个名字（没被碰过的内置也算）：评估里的规则 == 列表上生效那一行的规则
+    for (const name of names) {
+      expect(assembledFor(name), name).toEqual(winningRowFor(rows, name))
+    }
+    expect(assembledFor('ask-on-write')).toEqual([['user', 'deny', "inDir(object.path, '/canon')"]])
+    expect(assembledFor('gate')).toEqual([['user', 'deny', "inDir(object.path, '/gate-canon')"]])
+
+    // getUserPolicies 附带的 fileName 只给同名裁决用，不过 IPC（列表项的文件身份是 basePath）
+    expect(rows.filter((row) => Object.prototype.hasOwnProperty.call(row, 'fileName'))).toEqual([])
+  })
+
+  it('PU-SH2 按名读 / 删只碰生效的那份（另一份接班）；按文件名删输的那份不动胜者；删到只剩内置，内置恢复生效', () => {
+    seedShadowFixture()
+    expect(policyService.getSource('ask-on-write', 'user')).toEqual({ text: CANON })
+
+    // 按名删：删的是 ask-on-write.md —— a.md 接班，评估跟着换成它的规则，内置转而被 a.md 压着
+    expect(policyService.deletePolicy('ask-on-write')).toEqual({ success: true })
+    expect(files()).toEqual(['a.md', 'broken.md', 'g.md', 'gate.md'])
+    expect(assembledFor('ask-on-write')).toEqual([['user', 'ask', "inDir(object.path, '/copy')"]])
+    expect(rowsNamed('ask-on-write')).toEqual([
+      ['user', 'a.md', false, undefined],
+      ['builtin', '', true, 'a.md']
+    ])
+    expect(policyService.getSource('ask-on-write', 'user')).toEqual({ text: COPY })
+
+    // 按文件名删输掉的 g.md：gate 的胜者与规则原样
+    const gateBefore = assembledFor('gate')
+    expect(policyService.deleteByFile('g.md')).toEqual({ success: true })
+    expect(files()).toEqual(['a.md', 'broken.md', 'gate.md'])
+    expect(assembledFor('gate')).toEqual(gateBefore)
+    expect(rowsNamed('gate')).toEqual([['user', 'gate.md', false, undefined]])
+
+    // 最后一份同名用户文件也删掉：只剩内置、不再被覆盖，评估里是内置的规则，user 源查不到
+    expect(policyService.deleteByFile('a.md')).toEqual({ success: true })
+    expect(rowsNamed('ask-on-write')).toEqual([['builtin', '', false, undefined]])
+    const restored = assembledFor('ask-on-write')
+    expect(restored.length).toBeGreaterThan(0)
+    expect(restored.every(([kind]) => kind === 'builtin')).toBe(true)
+    expect(policyService.getSource('ask-on-write', 'user')).toEqual({
+      error: 'Policy "ask-on-write" not found'
+    })
+    // 写着同一个名字的 broken.md 从头到尾没进过候选
+    expect(policyService.listInvalid().map((f) => f.fileName)).toEqual(['broken.md'])
   })
 })

@@ -74,6 +74,7 @@ export type {
   BotGroupProps,
   BotGroupAdapter,
   BotGroupItem,
+  BotGroupShadowedItem,
   BotGroupInvalidFile
 } from './sidebar/BotGroup'
 export { useProjects } from './sidebar/useProjects'
