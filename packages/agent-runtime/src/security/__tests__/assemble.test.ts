@@ -3,6 +3,7 @@
  * 会话授权已不在这里编译（下沉为 buildPolicyVars + 内置 session-* 两份策略 md），
  * 相应用例迁到本文件的「会话授权（下沉为 vars + 策略 md）」一节与端到端断言。
  * （lets 求值与 strict fail-safe 的专项用例见 test-designer 清单落地部分）
+ * 宿主没供给的目录变量（deny / ask 两档绑定为 null、按 logger 去重告警）见文末 AS-D 一节。
  */
 import { describe, it, expect, vi } from 'vitest'
 import { assembleRules, mergePolicyFiles } from '../assemble'
@@ -12,8 +13,11 @@ import { buildPolicyVars } from '../policyVars'
 import type {
   MatchContext,
   ParsedPolicyFile,
+  PolicyEffect,
   PolicyRuleSpec,
+  PolicyVarValue,
   SecurityHostProvider,
+  SecurityObject,
   SecurityRequest,
   SecurityRule
 } from '../types'
@@ -945,5 +949,338 @@ describe('assembleRules — 规则 prompt 透传', () => {
     expect(rules.filter((r) => r.source.policy === 'dead')).toEqual([])
     expect(rules.some((r) => r.prompt === 'never shown')).toBe(false)
     expect(warn).toHaveBeenCalledTimes(1)
+  })
+})
+
+/**
+ * 宿主没供给的目录变量 —— 只作 inDir 目录参数出现的 `vars.x`（celMatch.inDirOnlyVarNames）缺键
+ * 或值为 undefined 时，deny / force-ask / ask 规则在求值前把它绑定为 null：inDir 当「没有这个目录」，
+ * 正向用法命中不了、`!inDir(...)` 为真；并经 provider.logger 按「logger × 策略 × 变量」告警一次。
+ * allow / force-allow 不绑（报错本就按不命中处置）；别处的用法照 CEL 原语义（缺键报错走 fail-safe）。
+ *
+ * 两个告警出口别混：「not provided」走 provider.logger.warn，fail-safe 走 evaluate 的 opts.warn。
+ * 去重记忆是模块级 WeakMap、按 logger 对象键控 —— 所以每个用例（循环里是每一轮）都现造 logger。
+ */
+describe('assembleRules — 宿主没供给的目录变量', () => {
+  const NOT_PROVIDED = 'is not provided by the host'
+
+  /** 契约给定的告警原文 */
+  const notProvided = (policy: string, name: string): string =>
+    `security policy '${policy}': vars.${name} is not provided by the host; inDir treats it as no directory`
+
+  const newLogger = (): {
+    warn: ReturnType<typeof vi.fn>
+    logger: NonNullable<SecurityHostProvider['logger']>
+  } => {
+    const warn = vi.fn()
+    return { warn, logger: { info: vi.fn(), warn, error: vi.fn() } }
+  }
+
+  const linesOf = (spy: ReturnType<typeof vi.fn>): string[] =>
+    spy.mock.calls.map((c) => String(c[0]))
+
+  /** 条件限定 agent × path 的一条规则：条件不命中的请求因此跑不到 match */
+  const pathRule = (effect: PolicyEffect, match: string): PolicyRuleSpec => ({
+    effect,
+    conditions: { 'subject.kind': ['agent'], 'object.type': ['path'] },
+    match
+  })
+
+  const at = (path: string): { type: string; path: string } => ({ type: 'path', path })
+
+  /** 值为 undefined 的缺失形态 —— PolicyVarValue 不收 undefined，只能强转 */
+  const withUndefined = (name: string): Record<string, PolicyVarValue> =>
+    ({ ...BUILTIN_VARS, [name]: undefined }) as unknown as Record<string, PolicyVarValue>
+
+  /** 用户策略 p 只含这一条规则（其余全是内置） */
+  const providerWithRule = (
+    rule: PolicyRuleSpec,
+    vars: Record<string, PolicyVarValue>,
+    logger?: NonNullable<SecurityHostProvider['logger']>
+  ): SecurityHostProvider =>
+    makeProvider({
+      getVars: () => vars,
+      getUserPolicies: () => [userPolicy('p', [rule])],
+      ...(logger ? { logger } : {})
+    })
+
+  const ruleP0 = (provider: SecurityHostProvider): SecurityRule =>
+    assembleRules(provider, buildPolicyVars(provider)).find((r) => r.id === 'p#0')!
+
+  /**
+   * 生产同款判定：vars 一次现取（buildPolicyVars），装配与求值共用同一份。
+   * 给出 policy 时只留该策略的规则 —— 内置门不掺进 matched / winning。
+   */
+  function decideWith(
+    provider: SecurityHostProvider,
+    action: string,
+    object: SecurityObject,
+    warn: (msg: string) => void,
+    policy?: string
+  ): ReturnType<typeof evaluate> {
+    const vars = buildPolicyVars(provider)
+    const rules = assembleRules(provider, vars)
+    return evaluate(
+      policy ? rules.filter((r) => r.source.policy === policy) : rules,
+      {
+        subject: { kind: 'agent', sessionId: 's1', agentKind: 'root' },
+        action,
+        object,
+        environment: { host: 'desktop', platform: 'darwin' }
+      },
+      { vars, warn }
+    )
+  }
+
+  it('AS-D1 deny / force-ask / ask × 缺键或 undefined × vars.x 或 [vars.x] → 不命中、不 throw、不走 fail-safe', () => {
+    const missingForms: Array<[string, Record<string, PolicyVarValue>]> = [
+      ['缺键', { ...BUILTIN_VARS }],
+      ['undefined', withUndefined('extraDir')]
+    ]
+    for (const effect of ['deny', 'force-ask', 'ask'] as const) {
+      for (const dirArg of ['vars.extraDir', '[vars.extraDir]']) {
+        const rule = pathRule(effect, `inDir(object.path, ${dirArg})`)
+
+        for (const [form, vars] of missingForms) {
+          const label = `${effect} × ${dirArg} × ${form}`
+          const log = newLogger()
+          const provider = providerWithRule(rule, vars, log.logger)
+
+          const ctx = makeCtx({ vars, object: at('/extra/x') })
+          const matches = ruleP0(provider).matches!
+          expect(() => matches(ctx), label).not.toThrow()
+          expect(matches(ctx), label).toBe(false)
+
+          const evalWarn = vi.fn()
+          const decision = decideWith(provider, 'write', at('/extra/x'), evalWarn, 'p')
+          expect(decision.matched, label).toEqual([])
+          expect(decision.winning, label).toBe('default:path')
+          expect(evalWarn, label).not.toHaveBeenCalled()
+          // 告警换了出口：不是 fail-safe，而是 logger 上的一行（同一 logger 反复求值也只一行）
+          expect(linesOf(log.warn), label).toEqual([notProvided('p', 'extraDir')])
+        }
+
+        // 对照：变量在，同一条规则照常生效 —— 上面测到的确实是「没有目录」，不是规则本身写坏了
+        const label = `${effect} × ${dirArg} × 对照`
+        const log = newLogger()
+        const provider = providerWithRule(rule, { ...BUILTIN_VARS, extraDir: '/extra' }, log.logger)
+        const evalWarn = vi.fn()
+        const hit = decideWith(provider, 'write', at('/extra/x'), evalWarn, 'p')
+        expect(hit.winning, label).toBe('p#0')
+        expect(hit.effect, label).toBe(effect === 'deny' ? 'deny' : 'ask')
+        const sibling = decideWith(provider, 'write', at('/extraneous/x'), evalWarn, 'p')
+        expect(sibling.matched, label).toEqual([])
+        expect(sibling.winning, label).toBe('default:path')
+        expect(evalWarn, label).not.toHaveBeenCalled()
+        expect(log.warn, label).not.toHaveBeenCalled()
+      }
+    }
+  })
+
+  it('AS-D2 [vars.gone, vars.extraDir]：有效的那一格照常命中；缺失 + 空串恒不命中', () => {
+    const rule = pathRule('deny', 'inDir(object.path, [vars.gone, vars.extraDir])')
+    const table: Array<[string, string, Array<[string, boolean]>]> = [
+      [
+        "A extraDir='/extra'",
+        '/extra',
+        [
+          ['/extra/x', true],
+          ['/extra', true],
+          ['/elsewhere/x', false],
+          ['/extraneous', false]
+        ]
+      ],
+      [
+        "B extraDir=''",
+        '',
+        [
+          ['/extra/x', false],
+          ['/x', false],
+          ['/', false]
+        ]
+      ]
+    ]
+
+    for (const [label, extraDir, paths] of table) {
+      const log = newLogger()
+      const provider = providerWithRule(rule, { ...BUILTIN_VARS, extraDir }, log.logger)
+      const evalWarn = vi.fn()
+      for (const [path, denied] of paths) {
+        const decision = decideWith(provider, 'write', at(path), evalWarn, 'p')
+        expect({ label, path, effect: decision.effect, winning: decision.winning }).toEqual({
+          label,
+          path,
+          effect: denied ? 'deny' : 'allow',
+          winning: denied ? 'p#0' : 'default:path'
+        })
+      }
+      expect(evalWarn, label).not.toHaveBeenCalled()
+      const lines = linesOf(log.warn)
+      expect(
+        lines.filter((m) => m.includes('vars.gone')),
+        label
+      ).toEqual([notProvided('p', 'gone')])
+      expect(
+        lines.filter((m) => m.includes('extraDir')),
+        label
+      ).toEqual([])
+    }
+  })
+
+  it('AS-D3a 同一变量别处也用到（比较）→ 不绑：缺键 throw，deny 走 fail-safe 命中，告警在 evaluate 而不在 logger', () => {
+    const log = newLogger()
+    const provider = providerWithRule(
+      pathRule('deny', "inDir(object.path, vars.gone) || vars.gone == '/x'"),
+      { ...BUILTIN_VARS },
+      log.logger
+    )
+
+    expect(() => ruleP0(provider).matches!(makeCtx({ object: at('/g/x') }))).toThrow(
+      /No such key: gone/
+    )
+
+    const evalWarn = vi.fn()
+    const decision = decideWith(provider, 'write', at('/g/x'), evalWarn, 'p')
+    expect(decision.effect).toBe('deny')
+    expect(decision.matched).toEqual(['p#0'])
+    expect(evalWarn).toHaveBeenCalledTimes(1)
+    expect(evalWarn.mock.calls[0][0]).toContain("'p#0'")
+    expect(evalWarn.mock.calls[0][0]).toContain('treating as matched (fail-safe)')
+    expect(linesOf(log.warn).filter((m) => m.includes(NOT_PROVIDED))).toEqual([])
+  })
+
+  it('AS-D3b 绑不绑按变量逐个定：只作目录参数的 gone 绑，同一条 match 里作比较的 flag 不绑', () => {
+    const rule = pathRule('deny', "inDir(object.path, vars.gone) || vars.flag == 'on'")
+
+    // flag 在（'off'）：gone 绑成 null → 整条 false，不 throw；logger 恰一行（gone）
+    const offVars = { ...BUILTIN_VARS, flag: 'off' }
+    const offLog = newLogger()
+    const offRule = ruleP0(providerWithRule(rule, offVars, offLog.logger))
+    const offCtx = makeCtx({ vars: offVars, object: at('/g/x') })
+    expect(() => offRule.matches!(offCtx)).not.toThrow()
+    expect(offRule.matches!(offCtx)).toBe(false)
+    expect(linesOf(offLog.warn)).toEqual([notProvided('p', 'gone')])
+
+    // flag 缺键：gone 照绑（仍恰一行），flag 不绑 → No such key: flag → deny 走 fail-safe
+    const absentLog = newLogger()
+    const absent = providerWithRule(rule, { ...BUILTIN_VARS }, absentLog.logger)
+    expect(() => ruleP0(absent).matches!(makeCtx({ object: at('/g/x') }))).toThrow(
+      /No such key: flag/
+    )
+    const evalWarn = vi.fn()
+    const decision = decideWith(absent, 'write', at('/g/x'), evalWarn, 'p')
+    expect(decision.effect).toBe('deny')
+    expect(decision.matched).toEqual(['p#0'])
+    expect(evalWarn).toHaveBeenCalledTimes(1)
+    expect(evalWarn.mock.calls[0][0]).toContain("'p#0'")
+    expect(evalWarn.mock.calls[0][0]).toContain('treating as matched (fail-safe)')
+    const lines = linesOf(absentLog.warn)
+    expect(lines.filter((m) => m.includes(NOT_PROVIDED))).toEqual([notProvided('p', 'gone')])
+    expect(lines.filter((m) => m.includes('vars.flag'))).toEqual([])
+  })
+
+  it('AS-D3c has(vars.gone) 让 gone 不再只是目录参数：缺键时 has 为 false、整条为真，不绑也不告警', () => {
+    const rule = pathRule('deny', '!has(vars.gone) || inDir(object.path, vars.gone)')
+
+    const log = newLogger()
+    const absent = ruleP0(providerWithRule(rule, { ...BUILTIN_VARS }, log.logger))
+    const ctx = makeCtx({ object: at('/g/x') })
+    expect(() => absent.matches!(ctx)).not.toThrow()
+    expect(absent.matches!(ctx)).toBe(true)
+    expect(log.warn).not.toHaveBeenCalled()
+
+    // 对照：gone 在 → has 为真，退化为普通的 inDir
+    const vars = { ...BUILTIN_VARS, gone: '/g' }
+    const present = ruleP0(providerWithRule(rule, vars))
+    expect(present.matches!(makeCtx({ vars, object: at('/g/x') }))).toBe(true)
+    expect(present.matches!(makeCtx({ vars, object: at('/h/x') }))).toBe(false)
+  })
+
+  it('AS-D4 allow / force-allow 不绑：缺变量照旧 strict + fail-safe 不命中，每次评估都告警，从不记「not provided」', () => {
+    // 绑了会怎样：p 的 `!inDir(…, null)` 为真 —— 一条缺变量的 force-allow 就放行了一切写
+    const log = newLogger()
+    const provider = makeProvider({
+      logger: log.logger,
+      getUserPolicies: () => [
+        userPolicy('p', [pathRule('force-allow', '!inDir(object.path, vars.gone)')]),
+        userPolicy('q', [pathRule('allow', 'inDir(object.path, vars.gone)')])
+      ]
+    })
+
+    const evalWarn = vi.fn()
+    for (let i = 0; i < 2; i++) {
+      const decision = decideWith(provider, 'write', at('/ws/f.txt'), evalWarn)
+      expect(decision.effect).toBe('ask')
+      expect(decision.winning).toBe('ask-on-write#0')
+      expect(decision.matched).not.toContain('p#0')
+      expect(decision.matched).not.toContain('q#0')
+    }
+
+    const notMatched = linesOf(evalWarn).filter((m) => m.includes('treating as not matched'))
+    expect(notMatched.filter((m) => m.includes("'p#0'"))).toHaveLength(2)
+    expect(notMatched.filter((m) => m.includes("'q#0'"))).toHaveLength(2)
+    expect(linesOf(log.warn).filter((m) => m.includes(NOT_PROVIDED))).toEqual([])
+  })
+
+  it('AS-D5 「not provided」按 logger × 策略 × 变量只记一次，只在 match 真正求值时记，在的变量从不记', () => {
+    const policies = (): ParsedPolicyFile[] => [
+      userPolicy('p', [
+        pathRule('deny', 'inDir(object.path, vars.gone)'),
+        pathRule('force-ask', 'inDir(object.path, [vars.gone, vars.gone2])')
+      ]),
+      userPolicy('q', [pathRule('ask', 'inDir(object.path, vars.gone)')]),
+      userPolicy('r', [pathRule('deny', 'inDir(object.path, vars.workspace)')])
+    ]
+    const EXPECTED = [
+      notProvided('p', 'gone'),
+      notProvided('p', 'gone2'),
+      notProvided('q', 'gone')
+    ].sort()
+    const WRITES = ['/ws/f.txt', '/elsewhere/f.txt', '/ws/g.txt']
+    const evalWarn = vi.fn()
+    /** 三次路径写，每次现装配（decideWith 内部 assembleRules） */
+    const writeAll = (provider: SecurityHostProvider): Array<ReturnType<typeof evaluate>> =>
+      WRITES.map((path) => decideWith(provider, 'write', at(path), evalWarn))
+
+    const L = newLogger()
+    const providerA = makeProvider({ logger: L.logger, getUserPolicies: policies })
+
+    // ① 只装配：谓词一条没跑，一行都没有
+    assembleRules(providerA)
+    expect(L.warn).not.toHaveBeenCalled()
+
+    // ② command 客体：条件不命中，match 不跑，同样没有
+    decideWith(
+      providerA,
+      'execute',
+      { type: 'command', command: 'ls', channel: 'bash', parsed: false, commands: [], writes: [] },
+      evalWarn
+    )
+    expect(L.warn).not.toHaveBeenCalled()
+
+    // ③ 三次路径写 → 恰 3 行：p×gone、p×gone2、q×gone（p#1 里的 gone 与 p#0 同策略同变量，不重复）
+    const decisionsA = writeAll(providerA)
+    const lines = linesOf(L.warn)
+    expect([...lines].sort()).toEqual(EXPECTED)
+    for (const line of lines) {
+      expect(line).toContain(NOT_PROVIDED)
+      expect(line).not.toContain("'r'")
+      expect(line).not.toContain('workspace')
+    }
+
+    // ④ 桌面形态：每次工具调用新建 provider，logger 是同一个 → 不再记
+    writeAll(makeProvider({ logger: L.logger, getUserPolicies: policies }))
+    expect(L.warn).toHaveBeenCalledTimes(3)
+
+    // ⑤ 另一个 logger 有自己的一份记忆
+    const M = newLogger()
+    writeAll(makeProvider({ logger: M.logger, getUserPolicies: policies }))
+    expect(linesOf(M.warn).sort()).toEqual(EXPECTED)
+    expect(L.warn).toHaveBeenCalledTimes(3)
+
+    // ⑥ 无 logger：决策一模一样，不 throw
+    expect(writeAll(makeProvider({ getUserPolicies: policies }))).toEqual(decisionsA)
+    // 全程没有一条走到 fail-safe
+    expect(evalWarn).not.toHaveBeenCalled()
   })
 })

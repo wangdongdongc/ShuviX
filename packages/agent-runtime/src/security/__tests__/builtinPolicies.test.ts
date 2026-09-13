@@ -17,6 +17,7 @@ import { buildPolicyVars } from '../policyVars'
 import type {
   ParsedPolicyFile,
   PolicyRuleSpec,
+  PolicyVarValue,
   SecurityDecision,
   SecurityHostProvider,
   SecurityObject
@@ -892,9 +893,12 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
   })
 
   it('BP-B6 扩展端不命中：同一请求在 extension 下放行且零告警', () => {
-    // scope 里的 `env.host: [desktop]` 是native 条件，排在 CEL 之前 —— 所以扩展端连
-    // `vars.botsDir` 都不会去读（它在扩展端根本不存在，读了就是一次 strict 报错 + 告警）
+    // scope 里的 `env.host: [desktop]` 是 native 条件，排在 CEL 之前 —— 扩展端这条规则根本不跑，
+    // 连 `vars.botsDir` 都不会去读（这里的 getVars 刻意不给它）。守卫若被放宽，缺的 botsDir
+    // 如今会被 assemble 绑成 null、以一行 provider.logger 告警露出来，而不再是 strict 报错 +
+    // fail-safe —— 所以 evaluate 的 warn 与 logger 两个出口都钉成零调用
     const warn = vi.fn()
+    const logWarn = vi.fn()
     const provider = makeProvider({
       host: 'extension',
       getVars: () => ({
@@ -904,12 +908,14 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
         memoryDirs: [],
         home: '',
         systemDirs: []
-      })
+      }),
+      logger: { info: vi.fn(), warn: logWarn, error: vi.fn() }
     })
     const decision = decide('write', botFile(), { provider, host: 'extension', warn })
     expect(decision.effect).toBe('allow')
     expect(decision.matched).not.toContain('protect-bot-files#0')
     expect(warn).not.toHaveBeenCalled()
+    expect(logWarn).not.toHaveBeenCalled()
   })
 
   it('BP-B7 前缀边界：目录内与子目录内命中，同前缀的兄弟目录不命中', () => {
@@ -966,5 +972,125 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
       rules: ['protect-bot-files#0'],
       policies: [displayNameOf('protect-bot-files')]
     })
+  })
+
+  // ── 宿主没供给门引用的目录变量 ────────────────────────────────────────────────
+  //
+  // assemble 把 deny / ask 两档里只作 inDir 目录参数、宿主又没给（缺键或 undefined）的变量绑成
+  // null：inDir 当「没有这个目录」。不绑的话缺键报错被 fail-safe 当成命中 —— 一条只守一个目录的
+  // force-ask 就成了对每一次写的 force-ask，免询问也免不掉。绑了之后，正向的门没有目录可守（失效），
+  // 取反的豁免没了（多问）：两个方向都是契约接受的代价，下面两条把代价的形状钉住。
+  // 告警走 provider.logger（按 logger × 策略 × 变量只记一次）；evaluate 的 warn 是 fail-safe 出口，
+  // 一次都不该响。
+
+  it('BP-B11 桌面宿主没供给 botsDir（缺键 / undefined / 空串）：门失效，而不是变成「每次写都 force-ask」', () => {
+    const { botsDir: _botsDir, ...withoutBotsDir } = DESKTOP_VARS
+    const variants: Array<[string, Record<string, PolicyVarValue>, number]> = [
+      ['缺键', withoutBotsDir, 1],
+      [
+        'undefined',
+        { ...withoutBotsDir, botsDir: undefined } as unknown as Record<string, PolicyVarValue>,
+        1
+      ],
+      // 空串是宿主明说「没有这个目录」（扩展端就这么供给）：inDir 恒不命中，无须绑定也无须告警
+      ['空串', { ...withoutBotsDir, botsDir: '' }, 0]
+    ]
+
+    for (const [label, vars, expectedLines] of variants) {
+      // 一个变体一个 logger，贯穿开 / 关两个 provider 的全部判定（去重按 logger 键控）
+      const logWarn = vi.fn()
+      const evalWarn = vi.fn()
+      const logger = { info: vi.fn(), warn: logWarn, error: vi.fn() }
+      const off = makeProvider({ getVars: () => vars, logger })
+      const on = makeProvider({
+        getVars: () => vars,
+        logger,
+        getSessionGrants: () => ({ autoAllow: true, allowList: [] })
+      })
+      const ordinaryWrite: SecurityObject = { type: 'path', path: '/ws/f.txt' }
+
+      // 免询问关着：普通写落回 ask-on-write，且照给「允许并记住」（force-ask 没有胜出）
+      const asked = decide('write', ordinaryWrite, { provider: off, warn: evalWarn })
+      expect(asked.effect, label).toBe('ask')
+      expect(asked.winning, label).toBe('ask-on-write#0')
+      expect(asked.matched, label).not.toContain('protect-bot-files#0')
+      expect(asked.ask?.rememberEntry, label).toBeTruthy()
+
+      // 免询问开着：普通写放行 —— 不绑的话这里会是一张免不掉的 force-ask
+      const autoAllowed = decide('write', ordinaryWrite, { provider: on, warn: evalWarn })
+      expect(autoAllowed.effect, label).toBe('allow')
+      expect(autoAllowed.winning, label).toBe('session-auto-allow#0')
+
+      // 接受的代价：门没有目录可守，bot 文件本身的写也跟着放行
+      expect(decide('write', botFile(), { provider: on, warn: evalWarn }).effect, label).toBe(
+        'allow'
+      )
+
+      expect(evalWarn, label).not.toHaveBeenCalled()
+      const lines = logWarn.mock.calls.map((c) => String(c[0]))
+      expect(lines, label).toHaveLength(expectedLines)
+      for (const line of lines) {
+        expect(line, label).toContain("'protect-bot-files'")
+        expect(line, label).toContain('vars.botsDir')
+      }
+    }
+  })
+
+  it('BP-N12 其他把变量交给 inDir 的内置门缺了那个变量：正向的门失效、取反的豁免失效（多问），各记一行', () => {
+    // memoryDirs 被两份内置引用：review-memory-writes（force-ask，正向）与 ask-on-read（ask，取反豁免）
+    const { memoryDirs: _memoryDirs, ...withoutMemoryDirs } = DESKTOP_VARS
+    const memoryLogWarn = vi.fn()
+    const memoryEvalWarn = vi.fn()
+    const memoryLogger = { info: vi.fn(), warn: memoryLogWarn, error: vi.fn() }
+    const memoryOn = makeProvider({
+      getVars: () => withoutMemoryDirs,
+      logger: memoryLogger,
+      getSessionGrants: () => ({ autoAllow: true, allowList: [] })
+    })
+    const memoryOff = makeProvider({ getVars: () => withoutMemoryDirs, logger: memoryLogger })
+    const memoryFile: SecurityObject = { type: 'path', path: '/memory/m.md' }
+
+    // 正向：记忆写的 force-ask 没有目录可守 → 免询问开着即放行
+    expect(decide('write', memoryFile, { provider: memoryOn, warn: memoryEvalWarn }).effect).toBe(
+      'allow'
+    )
+    // 取反：读记忆的豁免没了 → 当作区外读照问
+    const memoryRead = decide('read', memoryFile, { provider: memoryOff, warn: memoryEvalWarn })
+    expect(memoryRead.effect).toBe('ask')
+    expect(memoryRead.winning).toBe('ask-on-read#0')
+
+    expect(memoryEvalWarn).not.toHaveBeenCalled()
+    const memoryLines = memoryLogWarn.mock.calls.map((c) => String(c[0]))
+    expect(memoryLines).toHaveLength(2)
+    for (const policy of ['review-memory-writes', 'ask-on-read']) {
+      expect(
+        memoryLines.filter((m) => m.includes(`'${policy}'`) && m.includes('vars.memoryDirs')),
+        policy
+      ).toHaveLength(1)
+    }
+
+    // workspace 只被 ask-on-read 引用（取反）→ 工作区内的读也问；其余豁免照常
+    const { workspace: _workspace, ...withoutWorkspace } = DESKTOP_VARS
+    const workspaceLogWarn = vi.fn()
+    const workspaceEvalWarn = vi.fn()
+    const workspaceOpts: DecideOpts = {
+      provider: makeProvider({
+        getVars: () => withoutWorkspace,
+        logger: { info: vi.fn(), warn: workspaceLogWarn, error: vi.fn() }
+      }),
+      warn: workspaceEvalWarn
+    }
+
+    const inWorkspace = decide('read', { type: 'path', path: '/ws/f.txt' }, workspaceOpts)
+    expect(inWorkspace.effect).toBe('ask')
+    expect(inWorkspace.winning).toBe('ask-on-read#0')
+    const inSkills = decide('read', { type: 'path', path: '/skills/a/SKILL.md' }, workspaceOpts)
+    expect(inSkills.winning).toBe('default:path')
+
+    expect(workspaceEvalWarn).not.toHaveBeenCalled()
+    const workspaceLines = workspaceLogWarn.mock.calls.map((c) => String(c[0]))
+    expect(workspaceLines).toHaveLength(1)
+    expect(workspaceLines[0]).toContain("'ask-on-read'")
+    expect(workspaceLines[0]).toContain('vars.workspace')
   })
 })

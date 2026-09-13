@@ -1,10 +1,10 @@
 /**
  * celMatch —— CEL 匹配层直测：compileMatch 只校验语法（未知面推迟到求值期）、
  * evaluateMatch 的 strict 语义与错误吸收、inDir 段边界/空串防御、sep 绑定环境、
- * evaluateLet 的 {vars} 上下文。
+ * evaluateLet 的 {vars} 上下文、inDirOnlyVarNames 的目录变量识别。
  */
 import { describe, it, expect } from 'vitest'
-import { compileMatch, evaluateMatch, evaluateLet } from '../celMatch'
+import { compileMatch, evaluateMatch, evaluateLet, inDirOnlyVarNames } from '../celMatch'
 
 /** 典型请求文档（evaluate.buildMatchContext 的产物形态） */
 function makeDoc(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -139,6 +139,53 @@ describe('evaluateMatch — inDir', () => {
     expect(evalBool("inDir('/anything', vars.empty)", doc)).toBe(false)
   })
 
+  it('CM-12c 数组值变量里的坏条目（undefined / null / 数字 / 布尔 / 空串）逐个跳过，旁边的有效条目照常命中', () => {
+    const expression = 'inDir(object.path, vars.dirs)'
+    const docAt = (path: string, dirs: unknown[]): Record<string, unknown> =>
+      makeDoc({ object: { type: 'path', path }, vars: { dirs } })
+
+    const mixed = [undefined, null, 1, true, '', '/bots']
+    expect(evalBool(expression, docAt('/bots/x', mixed))).toBe(true)
+    expect(evalBool(expression, docAt('/elsewhere/x', mixed))).toBe(false)
+
+    // 一个有效目录都没有：谁都不命中，连根路径也不（'' + sep 的前缀陷阱照样挡住）
+    const onlyBad = [undefined, null, '']
+    expect(evalBool(expression, docAt('/bots/x', onlyBad))).toBe(false)
+    expect(evalBool(expression, docAt('/', onlyBad))).toBe(false)
+  })
+
+  it('CM-12d 两变量列表 [vars.a, vars.b]：一格为 null / 空串不耽误另一格；两格都无效则恒不命中', () => {
+    const expression = 'inDir(object.path, [vars.a, vars.b])'
+    const docAt = (path: string, vars: Record<string, unknown>): Record<string, unknown> =>
+      makeDoc({ object: { type: 'path', path }, vars })
+
+    for (const a of [null, '']) {
+      const label = `a=${JSON.stringify(a)}`
+      expect(evalBool(expression, docAt('/bots/x', { a, b: '/bots' })), label).toBe(true)
+      expect(evalBool(expression, docAt('/elsewhere/x', { a, b: '/bots' })), label).toBe(false)
+    }
+    expect(evalBool(expression, docAt('/bots/x', { a: null, b: '' }))).toBe(false)
+    expect(evalBool(expression, docAt('/x', { a: null, b: '' }))).toBe(false)
+
+    // 为什么守两个目录要写成两个变量：变量与字面量混排的列表字面量是类型错误（cel-js 列表强类型，
+    // dyn 与 string 不同型）—— 哪怕 vars.a 本身是合法字符串
+    expect(() =>
+      evalBool("inDir(object.path, [vars.a, '/lit'])", docAt('/lit/x', { a: '/bots' }))
+    ).toThrow(/List elements must have the same type/)
+  })
+
+  it('CM-12e CEL 层不宽恕缺失变量：inDir 目录参数里的缺键（含值为 undefined）照样 throw —— 宽恕只在 assemble', () => {
+    for (const expression of [
+      'inDir(object.path, vars.missing)',
+      'inDir(object.path, [vars.missing, vars.workspace])'
+    ]) {
+      for (const vars of [{ workspace: '/ws' }, { workspace: '/ws', missing: undefined }]) {
+        const label = `${expression} × ${'missing' in vars ? 'undefined' : '缺键'}`
+        expect(() => evalBool(expression, makeDoc({ vars })), label).toThrow(/No such key: missing/)
+      }
+    }
+  })
+
   it('CM-13 sep 绑定环境隔离；编译缓存不粘连（同表达式随文档/sep 变化）', () => {
     const expression = 'inDir(object.path, vars.workspace)'
     const winDoc = (path: string): Record<string, unknown> =>
@@ -162,6 +209,69 @@ describe('evaluateMatch — inDir', () => {
     })
     expect(evaluateMatch(expression, custom, '/')).toBe(true)
     expect(evaluateMatch(expression, posixDoc('/other/f'), '/')).toBe(false)
+  })
+})
+
+/**
+ * 内置 ask-on-read 的 match 原文（md 里 `>-` 折叠后的单行形态）—— 刻意抄录而非从 md 读：
+ * 这里钉的是「这种写法」被识别，md 日后改写不该让本用例跟着悄悄改义。
+ */
+const ASK_ON_READ_MATCH =
+  '!inDir(object.path, vars.workspace)' +
+  ' && !inDir(object.path, vars.toolResultsBase)' +
+  ' && !inDir(object.path, vars.skillsDirs)' +
+  ' && !inDir(object.path, vars.memoryDirs)'
+
+describe('inDirOnlyVarNames — 只作 inDir 目录参数的 vars 名', () => {
+  it('CM-D1 收集目录参数位置的变量（点号 / 字面量下标 / 列表元素，排序去重）；路径参数与别处的其他变量不牵连它', () => {
+    const cases: Array<[string, string[]]> = [
+      ['inDir(object.path, [vars.botsDir])', ['botsDir']],
+      ['inDir(object.path, vars.memoryDirs)', ['memoryDirs']],
+      ["inDir(object.path, vars['botsDir'])", ['botsDir']],
+      [ASK_ON_READ_MATCH, ['memoryDirs', 'skillsDirs', 'toolResultsBase', 'workspace']],
+      // 同一变量多处都只作目录参数：去重；结果排序，与书写顺序无关
+      ['inDir(object.path, [vars.b, vars.a]) || inDir(object.path, vars.b)', ['a', 'b']],
+      // 路径参数位置的 vars.a 算「别处」—— 只排除 a，不牵连目录参数 b
+      ['inDir(vars.a, vars.b)', ['b']],
+      // 另一个变量用在比较里：排除的只是那个变量
+      ["inDir(object.path, vars.a) || vars.flag == 'on'", ['a']],
+      // 宏体里的 inDir 一样认
+      ["['/x'].exists(d, inDir(object.path, [vars.a]))", ['a']]
+    ]
+    for (const [expression, names] of cases) {
+      expect({ expression, names: inDirOnlyVarNames(expression) }).toEqual({ expression, names })
+    }
+  })
+
+  it('CM-D2 同一表达式别处也用到、或目录参数不是裸 vars.x 的变量一律排除；语法错返回空且不 throw', () => {
+    for (const expression of [
+      // 别处也用到：拼接 / 比较 / has / 作宏的接收者 / 作路径参数
+      "inDir(object.path, vars.a) || vars.a + '/x' == object.path",
+      "inDir(object.path, vars.a) && vars.a != ''",
+      '!has(vars.a) || inDir(object.path, vars.a)',
+      'vars.a.exists(d, inDir(object.path, d))',
+      "inDir(object.path, [vars.a]) || inDir(vars.a, '/x')",
+      // 目录参数不是裸 vars.x：拼接 / 嵌套列表 / 三元 / 取子字段 / 非字面量下标
+      'inDir(object.path, vars.a + vars.b)',
+      'inDir(object.path, [[vars.a]])',
+      'inDir(object.path, true ? vars.a : vars.b)',
+      'inDir(object.path, vars.a.b)',
+      'inDir(object.path, vars[object.type])',
+      // 根本不是 vars：lets 注入的顶层名 / 表达式里没有 inDir
+      'inDir(object.path, credentialDirs)',
+      'vars.autoAllow'
+    ]) {
+      // 先确认表达式本身合法 —— 否则空结果可能只是语法错分支给的，而不是被规则排除的
+      expect(compileMatch(expression), expression).toBeNull()
+      expect({ expression, names: inDirOnlyVarNames(expression) }).toEqual({
+        expression,
+        names: []
+      })
+    }
+
+    // 语法错：不 throw、返回空（这种表达式进不了装配 —— policyFile 已判整份非法）
+    expect(() => inDirOnlyVarNames('object.type ==')).not.toThrow()
+    expect(inDirOnlyVarNames('object.type ==')).toEqual([])
   })
 })
 

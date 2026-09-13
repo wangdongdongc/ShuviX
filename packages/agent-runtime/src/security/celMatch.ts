@@ -20,7 +20,8 @@
  *   inDir(p, dirs)  路径段边界的目录包含判定（dirs 接受字符串或字符串列表；
  *                   语义与 allowList 前缀匹配一致，/foo 不命中 /foobar，绑定平台 sep；
  *                   Windows 下两侧分隔符先归一为 '/'，见 matchesPathEntry；
- *                   空串目录恒不命中 —— '' + sep 会前缀命中一切绝对路径，必须挡掉）
+ *                   空串目录恒不命中 —— '' + sep 会前缀命中一切绝对路径，必须挡掉；
+ *                   非字符串条目（含 null）一律忽略）
  *
  * **strict 语义**：object 是开放属性文档，访问缺失属性（如对 command 客体取
  * `object.path`）按 CEL 语义报错，由 evaluate 按规则 effect fail-safe 处置
@@ -29,6 +30,12 @@
  * 另一侧已定值时的错误，守卫写在哪个位置都有效，但写在前面最可读）。
  * PEP 侧的对偶约定：构造某 type 的属性文档时，该 type 的全部已知属性都要给值
  * （布尔缺省 false、字符串缺省空串）—— strict 只用于跨 type 的误引用。
+ *
+ * **唯一的例外是「宿主没供给的目录变量」**：只以 inDir 目录参数身份出现的 `vars.x`
+ * （`inDirOnlyVarNames`）缺失时，由 assemble 替 deny / ask 规则绑定为 null —— inDir 把它当
+ * 「没有这个目录」：正向用法因此命中不了，`!inDir(...)` 这种取反用法照常为真（多问而不是少问）。
+ * 否则缺键报错会被 fail-safe 当成命中，一条只守一个目录的 force-ask 就成了对每一次写的
+ * force-ask。其余位置（拼接、比较、has、lets）不绑定，照 CEL 原语义求值。
  *
  * 时机与错误处置：
  *   - 语法校验在策略文件解析时（compileMatch）：语法错 → 整份文件非法（严格哲学）；
@@ -79,6 +86,87 @@ function environmentFor(sep: string): SepEnvironment {
     environments.set(sep, entry)
   }
   return entry
+}
+
+/** cel-js 的 AST 节点（`parse(expr).ast`）：args 可能是单个节点、节点数组或原始值 */
+interface CelNode {
+  op: string
+  args: unknown
+}
+
+const isCelNode = (value: unknown): value is CelNode =>
+  typeof value === 'object' && value !== null && typeof (value as { op?: unknown }).op === 'string'
+
+/** 直接子节点（call 节点的实参是 args 里的一个嵌套数组，一并摊平） */
+function childNodes(node: CelNode): CelNode[] {
+  const out: CelNode[] = []
+  const collect = (value: unknown): void => {
+    if (isCelNode(value)) out.push(value)
+    else if (Array.isArray(value)) value.forEach(collect)
+  }
+  collect(node.args)
+  return out
+}
+
+/** `vars.<name>` / `vars['<name>']` 选择节点 → name；其余节点（含非字面量下标）→ null */
+function varsFieldOf(node: CelNode): string | null {
+  if ((node.op !== '.' && node.op !== '[]') || !Array.isArray(node.args)) return null
+  const [target, key] = node.args as unknown[]
+  if (!isCelNode(target) || target.op !== 'id' || target.args !== 'vars') return null
+  if (node.op === '.') return typeof key === 'string' ? key : null
+  return isCelNode(key) && key.op === 'value' && typeof key.args === 'string' ? key.args : null
+}
+
+const dirVarNamesCache = new Map<string, readonly string[]>()
+
+/**
+ * 表达式里**只**以 inDir 目录参数身份出现的 `vars.<name>`（排序去重）：`inDir(p, vars.x)`、
+ * `inDir(p, vars['x'])` 与 `inDir(p, [vars.x, vars.y])` 里的 x / y。同一表达式别处也引用了它
+ * （拼接、比较、has…）就不算 —— 那些位置对 null 的语义与 inDir 不同（拼接换一种报错、比较变
+ * false、has 由 false 变 true），必须保持 CEL 原语义。
+ * 语法错的表达式返回空：它进不了装配（policyFile 已判整份非法）。
+ */
+export function inDirOnlyVarNames(expression: string): readonly string[] {
+  const cached = dirVarNamesCache.get(expression)
+  if (cached) return cached
+  let ast: unknown
+  try {
+    ast = (environmentFor('/').env.parse(expression) as unknown as { ast?: unknown }).ast
+  } catch {
+    ast = undefined
+  }
+  const dirUses = new Set<string>()
+  const otherUses = new Set<string>()
+  const visit = (node: CelNode): void => {
+    const field = varsFieldOf(node)
+    if (field !== null) {
+      otherUses.add(field)
+      return
+    }
+    const args = node.args
+    if (
+      node.op === 'call' &&
+      Array.isArray(args) &&
+      args[0] === 'inDir' &&
+      Array.isArray(args[1])
+    ) {
+      const [pathArg, dirsArg] = args[1] as unknown[]
+      if (isCelNode(pathArg)) visit(pathArg)
+      if (isCelNode(dirsArg)) {
+        for (const entry of dirsArg.op === 'list' ? childNodes(dirsArg) : [dirsArg]) {
+          const dirField = varsFieldOf(entry)
+          if (dirField !== null) dirUses.add(dirField)
+          else visit(entry)
+        }
+      }
+      return
+    }
+    childNodes(node).forEach(visit)
+  }
+  if (isCelNode(ast)) visit(ast)
+  const names = [...dirUses].filter((name) => !otherUses.has(name)).sort()
+  dirVarNamesCache.set(expression, names)
+  return names
 }
 
 /**

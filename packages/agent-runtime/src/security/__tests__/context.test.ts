@@ -1070,6 +1070,38 @@ describe('createSecurityContext — fail-safe 无 logger', () => {
   })
 })
 
+describe('createSecurityContext — 宿主没供给的目录变量', () => {
+  it('CT-W4 缺 botsDir 的桌面宿主经门面反复评估：只记一行「not provided」、零 fail-safe，普通写照常落回 ask-on-write', () => {
+    // 缺的 botsDir 由 assemble 替 protect-bot-files（force-ask）绑成 null。不绑的话每次写都缺键
+    // 报错、fail-safe 成命中：普通写全变成免不掉的 force-ask，logger 每次评估刷一行 fail-safe。
+    // 门面把两个出口（「not provided」与 evaluate 的 fail-safe）都接到 provider.logger，所以在这里一起数
+    const warn = vi.fn()
+    const logger = { info: vi.fn(), warn, error: vi.fn() }
+    const grants = { autoAllow: false, allowList: [] as string[] }
+    const { botsDir: _botsDir, ...varsWithoutBotsDir } = makeProvider(grants).getVars()
+    const ctx = createSecurityContext(
+      SUBJECT,
+      ENVIRONMENT,
+      makeProvider(grants, { getVars: () => varsWithoutBotsDir, logger })
+    )
+
+    for (let i = 0; i < 3; i++) {
+      expect(ctx.evaluate('write', { type: 'path', path: '/ws/f.txt' })).toMatchObject({
+        effect: 'ask',
+        winning: 'ask-on-write#0'
+      })
+    }
+    expect(ctx.evaluateReadOnly('write', { type: 'path', path: '/ws/f.txt' })).toBe(false)
+
+    const lines = warn.mock.calls.map((c) => String(c[0]))
+    const notProvided = lines.filter((m) => m.includes('is not provided by the host'))
+    expect(notProvided).toHaveLength(1)
+    expect(notProvided[0]).toContain("'protect-bot-files'")
+    expect(notProvided[0]).toContain('vars.botsDir')
+    expect(lines.filter((m) => m.includes('match evaluation failed'))).toHaveLength(0)
+  })
+})
+
 /**
  * 命令客体的结构属性（惰性 + 记忆化 + 非枚举）—— 只能走 enforceCommand 观察。
  *

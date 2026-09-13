@@ -23,13 +23,22 @@
  * 把凭据目录清单之类的 map 宏跑一遍。let 求值失败：记警告后该名字缺失 —— 引用它的
  * 规则求值报错，由 evaluate 按规则 effect fail-safe 处置（deny/ask 多拦、allow 不放）。
  *
+ * 宿主没供给的**目录变量**（只作为 inDir 目录参数出现的 `vars.x`，见 celMatch.inDirOnlyVarNames）
+ * 在 deny / ask 两档规则里求值前绑定为 null，并按「logger × 策略 × 变量」告警一次：inDir 把它
+ * 当「没有这个目录」。不绑的话缺键报错被 fail-safe 当成命中 —— protect-bot-files 这种只守一个
+ * 目录的 force-ask 就成了对每一次写的 force-ask。去重按 logger 而不是按 provider：桌面每次工具
+ * 调用都新建一个 provider，logger 才是长命的那一个。allow 两档不绑：它们的 fail-safe 本来就是
+ * 「报错即不命中」，缺变量放大不了什么，保持 strict 反而让授权 vars 的接线错误照旧每次告警
+ * （assemble.test CV 系列）。其余位置（拼接、比较、has、lets）不绑定，照 CEL 原语义求值。
+ *
  * 运行时数据（用户路径等）**绝不拼进 CEL 源码**（转义/注入隐患）—— 一律经 vars 以
  * 数据绑定进入求值上下文，md 里的表达式始终是固定文本。
  */
 import { buildBuiltinPolicies } from './builtinPolicies'
-import { evaluateLet, evaluateMatch } from './celMatch'
+import { evaluateLet, evaluateMatch, inDirOnlyVarNames } from './celMatch'
 import { compileConditions, mergeConditions } from './conditions'
 import { buildPolicyVars } from './policyVars'
+import type { RuntimeLogger } from '../types'
 import type {
   MatchContext,
   ParsedPolicyFile,
@@ -62,6 +71,31 @@ const NORMALIZED_EFFECT: Record<PolicyEffect, SecurityRule['effect']> = {
   allow: 'allow'
 }
 
+/**
+ * 已告警过的缺失目录变量，按 logger 记：装配是每次评估现做的，不去重就是每一次写都刷一行；
+ * 按 provider 记也不够 —— 桌面每次工具调用都新建 provider，logger 才是长命的那一个。
+ */
+const reportedMissingDirVars = new WeakMap<RuntimeLogger, Set<string>>()
+
+/**
+ * 把 names 里宿主没供给（缺键或 undefined）的变量绑定为 null —— inDir 忽略非字符串条目。
+ * 都在就原样返回同一个对象（热路径上不复制）。
+ */
+function bindMissingDirVars(
+  vars: Record<string, PolicyVarValue>,
+  names: readonly string[],
+  onMissing: (name: string) => void
+): Record<string, unknown> {
+  let bound: Record<string, unknown> | undefined
+  for (const name of names) {
+    if (Object.prototype.hasOwnProperty.call(vars, name) && vars[name] !== undefined) continue
+    bound ??= { ...vars }
+    bound[name] = null
+    onMissing(name)
+  }
+  return bound ?? vars
+}
+
 /** 合并策略文件：用户同名覆盖内置（provider 已过滤非法用户文件 —— 非法不遮蔽内置） */
 export function mergePolicyFiles(
   builtins: ParsedPolicyFile[],
@@ -88,6 +122,21 @@ export function assembleRules(
   vars: Record<string, PolicyVarValue> = buildPolicyVars(provider)
 ): SecurityRule[] {
   const warn = (msg: string): void => provider.logger?.warn(msg)
+  const reportMissingDirVar = (policyName: string, name: string): void => {
+    const logger = provider.logger
+    if (!logger) return
+    let reported = reportedMissingDirVars.get(logger)
+    if (!reported) {
+      reported = new Set<string>()
+      reportedMissingDirVars.set(logger, reported)
+    }
+    const key = `${policyName}\u0000${name}`
+    if (reported.has(key)) return
+    reported.add(key)
+    logger.warn(
+      `security policy '${policyName}': vars.${name} is not provided by the host; inDir treats it as no directory`
+    )
+  }
   const sep = provider.pathSep
   const rules: SecurityRule[] = []
 
@@ -128,8 +177,22 @@ export function assembleRules(
         return
       }
       const condPred = compileConditions(conditions)
+      // 只替 deny / ask 两档绑（理由见文件头）：allow 两档的报错本来就按不命中处置
+      const dirVars =
+        matchExpr && NORMALIZED_EFFECT[spec.effect] !== 'allow' ? inDirOnlyVarNames(matchExpr) : []
       const celPred = matchExpr
-        ? (ctx: MatchContext): boolean => evaluateMatch(matchExpr, { ...ctx, ...getLets() }, sep)
+        ? (ctx: MatchContext): boolean =>
+            evaluateMatch(
+              matchExpr,
+              {
+                ...ctx,
+                vars: bindMissingDirVars(ctx.vars, dirVars, (name) =>
+                  reportMissingDirVar(policy.name, name)
+                ),
+                ...getLets()
+              },
+              sep
+            )
         : undefined
 
       // 条件在前、CEL 在后：短路使不相关的请求既不跑 CEL 也不触发 lets

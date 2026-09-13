@@ -299,7 +299,9 @@ export interface SecurityHostProvider {
   /**
    * 策略变量表（match/lets 里的 `vars.*`）：workspace / toolResultsBase / skillsDirs / memoryDirs /
    * home / systemDirs…。每次装配现取。宿主应为内置策略引用的变量恒供给取值
-   * （无该概念时给空串/空数组 —— inDir 对空串恒不命中；缺失的键按 strict 报错走 fail-safe）。
+   * （无该概念时给空串/空数组 —— inDir 对空串恒不命中）。缺失的键：deny / ask 规则里只作为 inDir
+   * 目录参数出现的，按「没有这个目录」处理，并按 logger × 策略 × 变量告警一次（见 assemble.ts）；
+   * 其余情形照 CEL 原语义（缺键报错走 fail-safe）。
    */
   getVars(): Record<string, PolicyVarValue>
   /** 会话授权（force-allow 层来源）。每次评估现读，禁缓存。 */

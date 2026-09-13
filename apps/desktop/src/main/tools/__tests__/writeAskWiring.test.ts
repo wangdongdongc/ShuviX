@@ -36,7 +36,6 @@ vi.mock('../../services/toolContext', async () => {
         pathSep,
         getVars: () => ({
           workspace: TEST_DIR,
-          botsDir: '/tmp/shuvix-bots',
           toolResultsBase: join(TEST_DIR, '.nonexistent-tool-results'),
           skillsDirs: [],
           memoryDirs: [],
