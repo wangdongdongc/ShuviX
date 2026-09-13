@@ -65,10 +65,12 @@ export interface BotMdSeed {
   omitMarker?: boolean
   /** 写一个别的类型标记（测「agent md 掉进 bots 目录要被拒」） */
   marker?: string
+  /** 落盘的文件名（缺省 `<name>.md`）—— 同名的几份文件只能靠文件名分开 */
+  fileName?: string
 }
 
 /**
- * 写一个 bot 定义文件到隔离实例的 ~/.shuvix/bots/<name>.md。
+ * 写一个 bot 定义文件到隔离实例的 ~/.shuvix/bots/<name>.md（`seed.fileName` 可换文件名）。
  *
  * 一个 bot 只声明身份，正文是它的人设与记忆 —— 没有管线、没有槽位。与 agent/policy/workflow
  * 同为纯 md 驱动：文件落盘即被 `bot:list` 现扫看见，没有启用开关也没有旁路配置要一并种。
@@ -83,7 +85,7 @@ export function writeBotMd(app: E2EApp, name: string, seed: BotMdSeed = {}): str
   if (seed.displayName) lines.push(`shuvix-displayName: ${seed.displayName}`)
   if (seed.rawLines) lines.push(...seed.rawLines)
   lines.push('---', '', seed.body ?? 'BOT BODY.')
-  const filePath = join(app.botsDir, `${name}.md`)
+  const filePath = join(app.botsDir, seed.fileName ?? `${name}.md`)
   writeFileSync(filePath, lines.join('\n'))
   return filePath
 }

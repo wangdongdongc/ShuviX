@@ -38,8 +38,19 @@ import {
 
 const BOTS_PROJECT = REGISTRY_NOTE_PROJECT_IDS.bot
 
+/** `bot.list` 的一行（IPC 投影，见 preload 的 BotInfo） */
+interface BotRow {
+  name: string
+  displayName: string
+  description: string
+  basePath: string
+  fileName: string
+}
+
 interface BotListing {
-  bots: Array<{ name: string; displayName: string; fileName: string }>
+  bots: BotRow[]
+  /** 同名里输掉的几份（侧栏列在胜出行之后）；shadowedBy = 胜出那份的文件名 */
+  shadowed: Array<BotRow & { shadowedBy: string }>
   invalid: Array<{ fileName: string; error: string }>
 }
 
@@ -121,7 +132,7 @@ describe('属性卡改名 → 自动保存 + 会话绑定迁移', () => {
     )
   })
 
-  it('BN-2 中途撞上另一份文件的名字（scout）：不迁移、清单里 scout 只一份；改成独占的 scout-2 才一步迁过去', async () => {
+  it('BN-2 中途撞上另一份文件的名字（scout）：不迁移；两份都列出 —— 文件名即名字的 scout.md 生效，ranger.md 跟在它后面划线带徽标、仍是活动行；改成独占的 scout-2 才一步迁过去，遮蔽随之解开', async () => {
     let before = readBot('ranger.md')
     await events.clear()
     await note.commitField('name', 'scout')
@@ -132,10 +143,39 @@ describe('属性卡改名 → 自动保存 + 会话绑定迁移', () => {
     await until(async () => (await events.count('bot.changed')) >= 1, 'bot.changed after collision')
     expect(await boundTo('hunter')).toEqual([rangerSid])
     expect(await boundTo('scout')).toEqual([scoutSid])
-    // 两份文件同名：注册表只收一份（收哪一份取决于 readdir 顺序，这里刻意不断言）
+    // 两份文件同名：两份都列出 —— scout.md 的文件名就是名字，它生效；ranger.md 进 shadowed 并指向它
     const collided = await listBots()
-    expect(collided.bots.filter((b) => b.name === 'scout')).toHaveLength(1)
+    expect(collided.bots.filter((b) => b.name === 'scout')).toEqual([
+      expect.objectContaining({ fileName: 'scout.md', displayName: 'Scout' })
+    ])
+    expect(collided.shadowed).toEqual([
+      {
+        name: 'scout',
+        displayName: 'Ranger',
+        description: 'e2e ranger bot',
+        basePath: botPath('ranger.md'),
+        fileName: 'ranger.md',
+        shadowedBy: 'scout.md'
+      }
+    ])
     expect(collided.invalid).toEqual([])
+
+    // 侧栏（bot.changed 让分组自己重扫）：输掉的那份紧跟胜出行、划线带徽标；正开着的就是它自己的
+    // 笔记，活动行不丢
+    await until(
+      async () => (await bots.shadowedRows()).some((r) => r.fileName === 'ranger.md'),
+      'shadowed row listed'
+    )
+    expect(await bots.rows()).toEqual(['scout'])
+    expect(
+      (await bots.shadowedRows()).map(({ fileName, after, struck, badge }) => ({
+        fileName,
+        after,
+        struck,
+        badge
+      }))
+    ).toEqual([{ fileName: 'ranger.md', after: 'row:scout', struck: true, badge: true }])
+    expect(await bots.activeRow()).toEqual({ shadowedRow: 'ranger.md' })
 
     before = readBot('ranger.md')
     await note.commitField('name', 'scout-2')
@@ -146,6 +186,15 @@ describe('属性卡改名 → 自动保存 + 会话绑定迁移', () => {
     expect(await boundTo('scout-2')).toEqual([rangerSid])
     expect(await boundTo('hunter')).toEqual([])
     expect(await boundTo('scout')).toEqual([scoutSid])
+
+    // 撞名解开：谁也不再被遮蔽，两行各自生效，活动行回到普通行
+    expect((await listBots()).shadowed).toEqual([])
+    await until(async () => {
+      const rows = await bots.rows()
+      return rows.includes('scout-2') && (await bots.shadowedRows()).length === 0
+    }, 'sidebar rescanned after the collision resolved')
+    expect((await bots.rows()).sort()).toEqual(['scout', 'scout-2'])
+    expect(await bots.activeRow()).toEqual({ row: 'scout-2' })
   })
 
   it('BN-3 写到一半解析不过的版本照原样落盘：进琥珀行（仍是活动行、正文照常），绑定不动；写成合法的 hunter-final 一步迁到位', async () => {

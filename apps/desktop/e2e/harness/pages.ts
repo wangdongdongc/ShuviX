@@ -1182,11 +1182,24 @@ export interface RegistryTabPane {
   noteFile(): Promise<string>
   /** 详情头部标题（合法条目 = 显示名；解析不过的文件 = 文件名） */
   headerTitle(): Promise<string>
+  /**
+   * 详情头部左栏逐行的文本（标题 span 的祖父节点的每个子节点，各自 trim）：[0] 标题行（名字 + 来源 /
+   * 覆盖徽标），[1] 文件路径或提示；同名里输掉的用户文件多出 [2]「与 X 同名、那一份优先」。三个 tab 同构
+   */
+  headerLines(): Promise<string[]>
   /** 详情区里笔记之外的红框文本（页级错误框 + 工作流的拒绝原因框），多个以换行连接 */
   reasonText(): Promise<string>
   headerIcons(): Promise<RegistryHeaderIcons>
   /** 详情里属性卡输入框的个数，以及是否全部禁用（内置只读 = 控件照常渲染、全部禁用） */
   inputs(): Promise<{ count: number; disabled: boolean }>
+}
+
+/**
+ * 行的附加筛选。同名的几份都列出来时（覆盖内置 + 同名用户文件），标签 + 来源分不开两份用户文件：
+ * `overridden` 按划线认 —— true 只挑被遮蔽的那行，false 只挑生效的那行，省略不限。
+ */
+export interface RegistryRowFilter {
+  overridden?: boolean
 }
 
 /** 列表行原始快照（各 tab 再映射成自己的形状） */
@@ -1202,7 +1215,7 @@ interface RegistryRowShot {
 
 interface RegistryTabInternals extends RegistryTabPane {
   rawRows(): Promise<RegistryRowShot[]>
-  selectRow(label: string, which?: RegistryRowSource): Promise<void>
+  selectRow(label: string, which?: RegistryRowSource, opts?: RegistryRowFilter): Promise<void>
 }
 
 /**
@@ -1223,10 +1236,12 @@ function registryTabPane(settings: CdpClient, columnWidth: string): RegistryTabI
     `[...(${HEADER}?.querySelectorAll('button') ?? [])].find((b) => b.querySelector('${icon}'))`
   const NOTE = `(${PANEL}?.querySelector('[data-registry-note]') ?? null)`
   const DIALOG = `document.querySelector('.dialog-panel')`
-  const ROW = (label: string, which?: RegistryRowSource): string =>
+  // 标签 + 来源（锁图标）+ 可选的「是否被遮蔽」（划线）—— 同名的几份都列出来时靠后两者分开
+  const ROW = (label: string, which?: RegistryRowSource, filter: RegistryRowFilter = {}): string =>
     `${ROWS}.find((r) =>
       (r.querySelector('.font-medium')?.textContent ?? '').trim() === ${JSON.stringify(label)} &&
-      (${JSON.stringify(which ?? '')} === '' || (${JSON.stringify(which ?? '')} === 'builtin') === !!r.querySelector('.lucide-lock')))`
+      (${JSON.stringify(which ?? '')} === '' || (${JSON.stringify(which ?? '')} === 'builtin') === !!r.querySelector('.lucide-lock')) &&
+      (${JSON.stringify(filter.overridden ?? null)} === null || ${JSON.stringify(filter.overridden ?? null)} === !!r.querySelector('.line-through')))`
 
   const noteFile = (): Promise<string> =>
     settings.eval<string>(`${NOTE}?.getAttribute('data-registry-note') ?? ''`)
@@ -1266,8 +1281,9 @@ function registryTabPane(settings: CdpClient, columnWidth: string): RegistryTabI
         builtin: !!r.querySelector('.lucide-lock')
       }))`),
 
-    selectRow: async (label, which) => {
-      const row = ROW(label, which)
+    selectRow: async (label, which, opts) => {
+      // 找行与「等详情挂好」用的是同一个带筛选的定位 —— 同名两行里点了哪行，就等哪行选中
+      const row = ROW(label, which, opts)
       await until(() => settings.eval<boolean>(`!!(${row})`), `registry row "${label}"`)
       const builtin = await settings.eval<boolean>(`(() => {
         const r = ${row}
@@ -1375,6 +1391,13 @@ function registryTabPane(settings: CdpClient, columnWidth: string): RegistryTabI
         `(${HEADER}?.querySelector('span.text-sm.font-semibold')?.textContent ?? '').trim()`
       ),
 
+    headerLines: () =>
+      settings.eval<string[]>(`(() => {
+        // 头部左栏 = 标题 span 的祖父节点：标题行 → 路径 / 提示 →（同名里输掉时）谁压过了它
+        const column = ${HEADER}?.querySelector('span.text-sm.font-semibold')?.parentElement?.parentElement
+        return column ? [...column.children].map((c) => (c.textContent ?? '').trim()) : []
+      })()`),
+
     reasonText: () =>
       settings.eval<string>(
         `[...(${PANEL}?.querySelectorAll('div') ?? [])]
@@ -1408,8 +1431,11 @@ export interface AgentsPaneRow {
 
 export interface AgentsPane extends RegistryTabPane {
   rows(): Promise<AgentsPaneRow[]>
-  /** 点一行并等详情挂好（见本节开头的就绪判据）；`which` 在覆盖后两行同名时点名来源 */
-  selectRow(displayName: string, which?: RegistryRowSource): Promise<void>
+  /**
+   * 点一行并等详情挂好（见本节开头的就绪判据）；`which` 在覆盖后两行同名时点名来源，
+   * `opts.overridden` 再分开同名的几份用户文件（划线的那几行是输掉的）
+   */
+  selectRow(displayName: string, which?: RegistryRowSource, opts?: RegistryRowFilter): Promise<void>
   /**
    * 详情面板 —— 内置是等价 md 的只读查看、自定义档案是它的笔记本，两者都是「md 原文 + 属性卡」，
    * 故这里读的是卡片：
@@ -1478,8 +1504,11 @@ export interface PoliciesPaneRow {
 
 export interface PoliciesPane extends RegistryTabPane {
   rows(): Promise<PoliciesPaneRow[]>
-  /** 点一行并等详情挂好（见本节开头的就绪判据）；`which` 在覆盖后两行同名时点名来源 */
-  selectRow(name: string, which?: RegistryRowSource): Promise<void>
+  /**
+   * 点一行并等详情挂好（见本节开头的就绪判据）；`which` 在覆盖后两行同名时点名来源，
+   * `opts.overridden` 再分开同名的几份用户文件（划线的那几行是输掉的）
+   */
+  selectRow(name: string, which?: RegistryRowSource, opts?: RegistryRowFilter): Promise<void>
   /**
    * 详情 —— 内置是等价 md 的只读查看、用户策略是它的笔记本，两者都是「md 原文 + 属性卡」，
    * 故这里读的是卡片：
@@ -1577,8 +1606,11 @@ export interface WorkflowsPaneRow {
 
 export interface WorkflowsPane extends RegistryTabPane {
   rows(): Promise<WorkflowsPaneRow[]>
-  /** 点一行并等详情挂好（见本节开头的就绪判据）；`which` 在覆盖后两行同名时点名来源 */
-  selectRow(name: string, which?: RegistryRowSource): Promise<void>
+  /**
+   * 点一行并等详情挂好（见本节开头的就绪判据）；`which` 在覆盖后两行同名时点名来源，
+   * `opts.overridden` 再分开同名的几份用户文件（划线的那几行是输掉的）
+   */
+  selectRow(name: string, which?: RegistryRowSource, opts?: RegistryRowFilter): Promise<void>
 }
 
 /**
@@ -1917,17 +1949,35 @@ export function fmCardPane(main: CdpClient): FmCardPane {
 // 主窗侧栏「Bots」分组（BotGroup）—— 刻意只做最小面。
 //
 // 锚点：分组头按 `data-group="bots"`（SessionGroup 的 group/header 层）认，合法行按
-// `data-bot-row=<name>`、解析不过的琥珀行按 `data-bot-invalid-row=<fileName>`。点任一行打开的是
+// `data-bot-row=<name>`、同名里输掉的行按 `data-bot-shadowed-row=<fileName>`（紧跟胜出行，划线 +
+// 覆盖徽标）、解析不过的琥珀行按 `data-bot-invalid-row=<fileName>`。点任一行打开的是
 // 那份文件的**笔记本会话**（隐藏项目 `__bots__`）—— 主区就是普通笔记本，没有专门的档案页；
 // 正文与属性卡经 `registryNotePane` 读写。活动行 = 活动会话正是这份文件的笔记本（rowClass 的
 // active 分支 `bg-bg-active/80`）。分组是**懒扫**的：首次展开才扫，之后展开 / 窗口聚焦 / 组头
 // 菜单「刷新」/ `bot.changed` 事件（笔记本写入 / 新建 / 删除）重扫 —— 磁盘外写入不广播，
-// 种完 md 要 refresh。菜单走与会话行同一套桩（pickFromMenu）。
+// 种完 md 要 refresh。菜单走与会话行同一套桩（pickFromMenu / openMenu）。
 
-/** 分组里的活动行：合法行给 name，解析不过的琥珀行给文件名 */
+/** 分组里的活动行：合法行给 name，同名里输掉的行与解析不过的琥珀行给文件名 */
 export interface BotsActiveRow {
   row?: string
+  shadowedRow?: string
   invalidRow?: string
+}
+
+/** 同名里输掉的一行（`data-bot-shadowed-row`） */
+export interface BotsShadowedRow {
+  fileName: string
+  /** 显示名划线 */
+  struck: boolean
+  /** 「已被覆盖」徽标（按三语认，同设置页的 overriddenBadge） */
+  badge: boolean
+  /** 行的 title 提示（说清被哪份文件压过） */
+  title: string
+  /**
+   * 紧挨着的上一行：`row:<name>`（胜出行）/ `shadowed:<fileName>`（另一份输掉的）/
+   * `invalid:<fileName>`；认不出为 `other`，没有为空串 ——「输掉的行紧跟胜出行」的判据
+   */
+  after: string
 }
 
 export interface BotsPane {
@@ -1939,6 +1989,8 @@ export interface BotsPane {
   expand(): Promise<void>
   /** 合法行的 name（DOM 序） */
   rows(): Promise<string[]>
+  /** 同名里输掉的行（DOM 序） */
+  shadowedRows(): Promise<BotsShadowedRow[]>
   /** 非法文件行（琥珀）的文件名 */
   invalidRows(): Promise<string[]>
   /** 点一行并等它成为活动行（= 这份文件的笔记本成了活动会话） */
@@ -1949,8 +2001,14 @@ export interface BotsPane {
   activeRow(): Promise<BotsActiveRow | null>
   /** 开 bot 行的 ⋮ 并选中一项（自带「该项真的在菜单里」的核对） */
   pickRowMenu(name: string, actionId: 'new-bot-chat' | 'delete-bot'): Promise<void>
+  /** 开同名里输掉那一行的 ⋮ 并选中一项（同上；它只能按文件名删） */
+  pickShadowedRowMenu(fileName: string, actionId: 'delete-bot-file'): Promise<void>
   /** 开非法文件行的 ⋮ 并选中一项（同上） */
   pickInvalidRowMenu(fileName: string, actionId: 'delete-bot-file'): Promise<void>
+  /** bot 行菜单里的动作 id（开一次 ⋮、不选任何项，分隔符滤掉）；⋮ 不在返回 null */
+  rowMenuIds(name: string): Promise<string[] | null>
+  /** 同名里输掉那一行的菜单动作 id（同上） */
+  shadowedRowMenuIds(fileName: string): Promise<string[] | null>
   /** 组头菜单「新建 bot」—— 只触发；新文件落盘与笔记打开由调用方 until */
   newBot(): Promise<void>
   /** 组头菜单「刷新」—— 磁盘外改动不广播 bot.changed，需手动重扫 */
@@ -1964,9 +2022,12 @@ export function botsPane(main: CdpClient): BotsPane {
   const COLLAPSE = `${HEADER}?.nextElementSibling`
   const BODY = `${COLLAPSE}?.firstElementChild?.firstElementChild`
   const ROWS = `[...document.querySelectorAll('[data-bot-row]')]`
+  const SHADOWED_ROWS = `[...document.querySelectorAll('[data-bot-shadowed-row]')]`
   const INVALID_ROWS = `[...document.querySelectorAll('[data-bot-invalid-row]')]`
   const ROW = (name: string): string =>
     `document.querySelector('[data-bot-row=${JSON.stringify(name)}]')`
+  const SHADOWED_ROW = (fileName: string): string =>
+    `document.querySelector('[data-bot-shadowed-row=${JSON.stringify(fileName)}]')`
   const INVALID_ROW = (fileName: string): string =>
     `document.querySelector('[data-bot-invalid-row=${JSON.stringify(fileName)}]')`
   const ACTIVE = (list: string): string =>
@@ -1980,6 +2041,13 @@ export function botsPane(main: CdpClient): BotsPane {
       () => main.eval<boolean>(`(${scope}?.className ?? '').includes('bg-bg-active')`),
       `${what} active`
     )
+  }
+
+  /** 开某一行的 ⋮（不选任何项 = 取消）并回菜单里的动作 id */
+  const menuIds = async (scope: string, what: string): Promise<string[] | null> => {
+    await until(() => main.eval<boolean>(`${scope} !== null`), what)
+    const items = await openMenu(main, scope, 'menu-button')
+    return items ? items.filter((it) => it.id).map((it) => it.id as string) : null
   }
 
   return {
@@ -2001,6 +2069,27 @@ export function botsPane(main: CdpClient): BotsPane {
 
     rows: () => main.eval<string[]>(`${ROWS}.map((r) => r.getAttribute('data-bot-row'))`),
 
+    shadowedRows: () =>
+      main.eval<BotsShadowedRow[]>(`${SHADOWED_ROWS}.map((r) => {
+        const prev = r.previousElementSibling
+        const after = !prev
+          ? ''
+          : prev.hasAttribute('data-bot-row')
+            ? 'row:' + prev.getAttribute('data-bot-row')
+            : prev.hasAttribute('data-bot-shadowed-row')
+              ? 'shadowed:' + prev.getAttribute('data-bot-shadowed-row')
+              : prev.hasAttribute('data-bot-invalid-row')
+                ? 'invalid:' + prev.getAttribute('data-bot-invalid-row')
+                : 'other'
+        return {
+          fileName: r.getAttribute('data-bot-shadowed-row') ?? '',
+          struck: !!r.querySelector('.line-through'),
+          badge: [...r.querySelectorAll('span')].some((s) => /覆盖|Overridden|上書き/.test(s.textContent ?? '')),
+          title: r.getAttribute('title') ?? '',
+          after
+        }
+      })`),
+
     invalidRows: () =>
       main.eval<string[]>(`${INVALID_ROWS}.map((r) => r.getAttribute('data-bot-invalid-row'))`),
 
@@ -2013,6 +2102,8 @@ export function botsPane(main: CdpClient): BotsPane {
       main.eval<BotsActiveRow | null>(`(() => {
         const row = ${ACTIVE(ROWS)}
         if (row) return { row: row.getAttribute('data-bot-row') }
+        const shadowed = ${ACTIVE(SHADOWED_ROWS)}
+        if (shadowed) return { shadowedRow: shadowed.getAttribute('data-bot-shadowed-row') }
         const invalid = ${ACTIVE(INVALID_ROWS)}
         if (invalid) return { invalidRow: invalid.getAttribute('data-bot-invalid-row') }
         return null
@@ -2023,6 +2114,14 @@ export function botsPane(main: CdpClient): BotsPane {
       await pickFromMenu(main, ROW(name), actionId, `bot row "${name}"`)
     },
 
+    pickShadowedRowMenu: async (fileName, actionId) => {
+      await until(
+        () => main.eval<boolean>(`${SHADOWED_ROW(fileName)} !== null`),
+        `shadowed bot row "${fileName}"`
+      )
+      await pickFromMenu(main, SHADOWED_ROW(fileName), actionId, `shadowed bot row "${fileName}"`)
+    },
+
     pickInvalidRowMenu: async (fileName, actionId) => {
       await until(
         () => main.eval<boolean>(`${INVALID_ROW(fileName)} !== null`),
@@ -2030,6 +2129,11 @@ export function botsPane(main: CdpClient): BotsPane {
       )
       await pickFromMenu(main, INVALID_ROW(fileName), actionId, `invalid bot row "${fileName}"`)
     },
+
+    rowMenuIds: (name) => menuIds(ROW(name), `bot row "${name}"`),
+
+    shadowedRowMenuIds: (fileName) =>
+      menuIds(SHADOWED_ROW(fileName), `shadowed bot row "${fileName}"`),
 
     newBot: () => pickFromMenu(main, HEADER, 'new-bot', 'bots group header'),
 

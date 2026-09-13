@@ -10,14 +10,22 @@
  *     writeSessionFile）：**没有写前校验** —— 写到一半解析不过的版本照样落盘，它不生效、不遮蔽
  *     内置，列进「无法解析」分组，解析器的判定由属性卡的横幅给出；
  *   - 改名以 frontmatter `name` 为准、文件路径不变；撞内置名即覆盖（有意设计）；撞另一份用户策略
- *     的名字时两份都照写、注册表只收一份（收哪份取决于 readdir 顺序 —— 刻意不断言）；
+ *     的名字时两份都照写、两份都列出 —— 文件名就是名字的那份生效，另一份标被覆盖并指向它，评估跟着
+ *     列表走（同名裁决与设置页列表是同一个函数：PE-N4 / PE-E2 / PE-U7 / PE-U8）；
  *   - 落盘即生效（每次评估现扫目录，无缓存/无失效通知）。
  *
  * 断言优先走 IPC（window.api.policy.*）+ fs 直读；DOM 只在验证呈现时用且一律经 pages.ts。
  * 写入只走两条路：`noteWrite`（写路径 IPC）或属性卡 `commitField` —— 绝不往 CodeMirror 里打字。
  */
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync
+} from 'node:fs'
+import { basename, join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { sleep, until } from '../../harness/cdp'
 import { launchApp, type E2EApp } from '../../harness/launch'
@@ -58,6 +66,8 @@ interface PolicyItem {
   source: 'builtin' | 'user'
   basePath: string
   overridden?: boolean
+  /** 被遮蔽的行：压过它的那份用户文件的文件名 */
+  overriddenBy?: string
 }
 
 type SourceResult = { text: string } | { error: string }
@@ -126,6 +136,9 @@ const createPolicy = (text: string): Promise<WriteResult> =>
   app.main.eval(`window.api.policy.create(${JSON.stringify({ text })})`)
 const deletePolicy = (name: string): Promise<WriteResult> =>
   app.main.eval(`window.api.policy.delete(${JSON.stringify({ name })})`)
+/** 按文件名删（同名里输掉的那几份、或解析不过的文件） */
+const deletePolicyFile = (fileName: string): Promise<WriteResult> =>
+  app.main.eval(`window.api.policy.deleteByFile(${JSON.stringify({ fileName })})`)
 /** 经这份文件的笔记本会话写入（已有策略的编辑路径） */
 const policyNoteWrite = (
   fileName: string,
@@ -422,19 +435,35 @@ describe('policy 编辑 IPC —— 取原文 / 新建 / 经笔记本编辑 / 删
     expect(await getSource('rename-dst', 'user')).toEqual({ text: RENAME_V2 })
   })
 
-  it('PE-N4 改名撞另一份用户策略：照写不拒绝，被撞的文件不动；该名字注册表只收一份，两份都不算非法', async () => {
+  it('PE-N4 改名撞另一份用户策略：照写不拒绝，被撞的文件不动；两份都列出 —— 文件名即名字的 b1-created.md 生效，rename-me.md 标被覆盖并指向它；两份都不算非法', async () => {
     const collide = simplePolicy({ name: 'b1-created', description: 'collide' })
     expect(await policyNoteWrite('rename-me.md', collide)).toEqual({ ok: true })
     expect(readPolicyFile('rename-me.md')).toBe(collide)
     // 被撞的那一份没被动过
     expect(readPolicyFile('b1-created.md')).toBe(B1_TEXT)
-    // 同名用户文件只收一份（收哪份取决于 readdir 顺序 —— 刻意不断言），也不进「无法解析」
-    expect((await rowsFor('b1-created')).filter((p) => p.source === 'user')).toHaveLength(1)
+    // 两份都列出、生效的在前。rename-me.md 更短，光比长度它会赢；但这一步分不出「文件名即名字」与
+    // 「码点序靠前」（b1-created.md 两条都占）—— 前者由 PE-E2 单独钉
+    expect(
+      (await rowsFor('b1-created')).map((p) => [
+        p.source,
+        p.basePath,
+        !!p.overridden,
+        p.overriddenBy
+      ])
+    ).toEqual([
+      ['user', join(policiesDir(), 'b1-created.md'), false, undefined],
+      ['user', join(policiesDir(), 'rename-me.md'), true, 'b1-created.md']
+    ])
+    // 按名取原文取到的是生效的那份；输掉的那份也不进「无法解析」
+    expect(await getSource('b1-created', 'user')).toEqual({ text: B1_TEXT })
     expect((await listInvalid()).map((f) => f.fileName)).not.toContain('rename-me.md')
 
-    // 还原成 rename-dst，后续用例从这里接着改
+    // 还原成 rename-dst，后续用例从这里接着改；撞名解开，b1-created 回到一行、不被覆盖
     expect(await policyNoteWrite('rename-me.md', RENAME_V2)).toEqual({ ok: true })
     expect((await rowsFor('rename-dst'))[0]?.basePath).toBe(join(policiesDir(), 'rename-me.md'))
+    expect(
+      (await rowsFor('b1-created')).map((p) => [p.source, p.basePath, !!p.overridden])
+    ).toEqual([['user', join(policiesDir(), 'b1-created.md'), false]])
   })
 
   it('PE-N5 改名撞内置名 → 覆盖（有意设计）：用户行指向 rename-me.md，该内置转 overridden', async () => {
@@ -578,6 +607,68 @@ describe('policy 编辑 IPC —— 取原文 / 新建 / 经笔记本编辑 / 删
 
     expect(await deletePolicy('e2e-ui-write-guard')).toEqual({ success: true })
     expect(await write()).toEqual({ ok: true })
+  })
+
+  it('PE-E2 同名两份策略时评估跟着列表走：生效的是文件名即名字的 e2e-dup-guard.md（哪怕 aaa.md 更短、排序更前）；按名删掉它 aaa.md 接班，再按文件名删掉 aaa.md，两道都放行', async () => {
+    const projDir = join(app.home, 'proj-policy-dup')
+    mkdirSync(projDir, { recursive: true })
+    const project = await createProject(app.main, { name: 'PolicyDup', path: projDir })
+    const sid = await app.main.eval<string>(
+      `window.api.session.create(${JSON.stringify({ title: 'policy-dup', projectId: project.id })}).then((s) => s.id)`
+    )
+    const write = (fileName: string): Promise<{ ok: boolean; error?: string }> =>
+      app.main.eval(
+        `window.api.files.write(${JSON.stringify({ sessionId: sid, path: join(projDir, fileName), content: 'hello' })})`
+      )
+    // 同名两份，各拦一个文件 —— 哪份在评估，看哪个文件写不进去就知道
+    const dupGuard = (suffix: string): string =>
+      mdText(
+        '---',
+        'shuvix: policy v1',
+        'name: e2e-dup-guard',
+        `description: deny UI writes to ${suffix}`,
+        'shuvix-policy-scope:',
+        '  subject.kind: [user]',
+        '  object.type: [path]',
+        'shuvix-policy-rules:',
+        '  - effect: deny',
+        '    action: [write]',
+        `    match: "object.path.endsWith('${suffix}')"`,
+        '---',
+        '',
+        'Duplicate guard.',
+        ''
+      )
+    writePolicyFile('e2e-dup-guard.md', dupGuard('dup-a.md'))
+    writePolicyFile('aaa.md', dupGuard('dup-b.md'))
+    const dupRows = async (): Promise<unknown[][]> =>
+      (await rowsFor('e2e-dup-guard')).map((p) => [
+        basename(p.basePath),
+        !!p.overridden,
+        p.overriddenBy
+      ])
+
+    expect(await dupRows()).toEqual([
+      ['e2e-dup-guard.md', false, undefined],
+      ['aaa.md', true, 'e2e-dup-guard.md']
+    ])
+    expect((await write('dup-a.md')).ok).toBe(false)
+    expect(await write('dup-b.md')).toEqual({ ok: true })
+
+    // 按名删删的是生效的那份：aaa.md 接班 —— 被拦的文件跟着换
+    expect(await deletePolicy('e2e-dup-guard')).toEqual({ success: true })
+    expect(hasPolicyFile('e2e-dup-guard.md')).toBe(false)
+    expect(hasPolicyFile('aaa.md')).toBe(true)
+    expect(await dupRows()).toEqual([['aaa.md', false, undefined]])
+    expect(await write('dup-a.md')).toEqual({ ok: true })
+    expect((await write('dup-b.md')).ok).toBe(false)
+
+    // 最后一份按文件名删掉（也是本用例的收尾：后面的行数与目录断言不该看见它）
+    expect(await deletePolicyFile('aaa.md')).toEqual({ success: true })
+    expect(hasPolicyFile('aaa.md')).toBe(false)
+    expect(await rowsFor('e2e-dup-guard')).toEqual([])
+    expect(await write('dup-a.md')).toEqual({ ok: true })
+    expect(await write('dup-b.md')).toEqual({ ok: true })
   })
 })
 
@@ -789,5 +880,148 @@ describe('policy 编辑 UI —— 设置页「安全策略」tab', () => {
     )
     expect(await pane.selectedInvalid()).toBe('')
     expect(await note.isMarked()).toBe(true)
+  })
+
+  it('PE-U7 同名两份用户策略：两行都列出，输的那行划线带覆盖徽标、头部多一行点名压过它的文件；删它按文件名删，删完停回胜出的那份', async () => {
+    const pane = await getPane()
+    const DUP = simplePolicy({ name: 'dup-ui' })
+    writePolicyFile('dup-ui.md', DUP)
+    writePolicyFile('other.md', DUP)
+    await pane.refresh()
+
+    expect(
+      (await pane.rows())
+        .filter((r) => r.name === 'dup-ui')
+        .map(({ builtin, struck, overriddenBadge }) => ({ builtin, struck, overriddenBadge }))
+    ).toEqual([
+      { builtin: false, struck: false, overriddenBadge: false },
+      { builtin: false, struck: true, overriddenBadge: true }
+    ])
+
+    // 生效的那份：头部两行（标题行 + 路径）
+    await pane.selectRow('dup-ui', 'user', { overridden: false })
+    expect(await pane.noteFile()).toBe('dup-ui.md')
+    expect(await pane.headerLines()).toHaveLength(2)
+
+    // 输掉的那份：照样打开它自己的笔记；头部第三行点名压过它的文件；动作只有删除
+    await pane.selectRow('dup-ui', 'user', { overridden: true })
+    expect(await pane.noteFile()).toBe('other.md')
+    const lines = await pane.headerLines()
+    expect(lines).toHaveLength(3)
+    expect(lines[1].endsWith('/other.md')).toBe(true)
+    expect(lines[2]).toContain('dup-ui.md')
+    expect(await pane.headerIcons()).toEqual({ trash: true, save: false, copy: false })
+
+    // 按文件名删（按名删会删到生效的那份）—— 确认框点名的是这个文件
+    await pane.clickDelete()
+    expect((await pane.confirmDialog()).description).toContain('other.md')
+    await pane.confirmDialogConfirm()
+    await until(async () => {
+      if (hasPolicyFile('other.md')) return false
+      const rows = (await pane.rows()).filter((r) => r.name === 'dup-ui')
+      return (
+        rows.length === 1 &&
+        rows[0].selected &&
+        !rows[0].struck &&
+        (await pane.noteFile()) === 'dup-ui.md'
+      )
+    }, 'loser deleted, the winner selected')
+    expect(readPolicyFile('dup-ui.md')).toBe(DUP)
+    // 删掉的那份不被自动保存写回来
+    await sleep(700)
+    expect(hasPolicyFile('other.md')).toBe(false)
+    expect((await rowsFor('dup-ui')).map((p) => [p.source, !!p.overridden])).toEqual([
+      ['user', false]
+    ])
+
+    // 收尾：生效的那份也删掉（头部垃圾桶按名删）
+    await pane.clickDelete()
+    await pane.confirmDialogConfirm()
+    await until(() => !hasPolicyFile('dup-ui.md'), 'dup-ui.md cleaned up')
+  })
+
+  it('PE-U8 内置 + 两份同名用户文件时删掉生效的那份：选中项落到接班的另一份用户文件，而不是仍被覆盖的内置', async () => {
+    const pane = await getPane()
+    // 本文件别处没碰过的内置：覆盖一下、收尾删掉，不影响任何其它用例
+    const NAME = 'ask-on-sub-session'
+    const COPY = `${NAME} copy.md`
+    const builtin = (await rowsFor(NAME)).find((p) => p.source === 'builtin')!
+    expect(builtin.overridden).toBeFalsy()
+    const label = builtin.displayName
+
+    await pane.selectRow(label, 'builtin')
+    expect(await pane.clickCreateOverride()).toBe(`${NAME}.md`)
+    // 外部复制出第二份：同名、文件名不是名字本身
+    copyFileSync(join(policiesDir(), `${NAME}.md`), join(policiesDir(), COPY))
+    await pane.refresh()
+
+    // 覆盖副本带着内置的显示名 —— 三行同一个标签，只能靠来源（锁）与划线分开
+    expect(
+      (await rowsFor(NAME)).map((p) => [
+        p.source,
+        p.basePath ? basename(p.basePath) : '',
+        !!p.overridden,
+        p.overriddenBy,
+        p.displayName
+      ])
+    ).toEqual([
+      ['user', `${NAME}.md`, false, undefined, label],
+      ['builtin', '', true, `${NAME}.md`, label],
+      ['user', COPY, true, `${NAME}.md`, label]
+    ])
+    expect(
+      (await pane.rows())
+        .filter((r) => r.name === label)
+        .map(({ builtin, struck }) => ({ builtin, struck }))
+    ).toEqual([
+      { builtin: true, struck: true },
+      { builtin: false, struck: false },
+      { builtin: false, struck: true }
+    ])
+
+    // 删生效的那份（它没划线 → 头部垃圾桶按名删）
+    await pane.selectRow(label, 'user', { overridden: false })
+    expect(await pane.noteFile()).toBe(`${NAME}.md`)
+    await pane.clickDelete()
+    expect((await pane.confirmDialog()).description).toContain(NAME)
+    await pane.confirmDialogConfirm()
+    await until(() => !hasPolicyFile(`${NAME}.md`), 'active override deleted')
+
+    // 接班的是副本：选中项落到它（不划线、开着它的笔记），内置仍被压着
+    await until(async () => {
+      const selected = (await pane.rows()).find((r) => r.name === label && r.selected)
+      return !!selected && !selected.builtin && !selected.struck && (await pane.noteFile()) === COPY
+    }, 'selection moved to the copy that took over')
+    expect(
+      (await pane.rows())
+        .filter((r) => r.name === label)
+        .map(({ builtin, struck, selected }) => ({ builtin, struck, selected }))
+    ).toEqual([
+      { builtin: true, struck: true, selected: false },
+      { builtin: false, struck: false, selected: true }
+    ])
+    expect(
+      (await rowsFor(NAME)).map((p) => [
+        p.source,
+        p.basePath ? basename(p.basePath) : '',
+        !!p.overridden,
+        p.overriddenBy
+      ])
+    ).toEqual([
+      ['user', COPY, false, undefined],
+      ['builtin', '', true, COPY]
+    ])
+
+    // 收尾：接班的副本也删掉（它此刻生效，垃圾桶按名删的就是它）→ 内置恢复生效、不再划线
+    await pane.clickDelete()
+    await pane.confirmDialogConfirm()
+    await until(() => !hasPolicyFile(COPY), 'copy deleted')
+    await until(async () => {
+      const rows = (await pane.rows()).filter((r) => r.name === label)
+      return rows.length === 1 && rows[0].builtin && !rows[0].struck
+    }, 'builtin active again')
+    expect((await rowsFor(NAME)).map((p) => [p.source, !!p.overridden])).toEqual([
+      ['builtin', false]
+    ])
   })
 })
