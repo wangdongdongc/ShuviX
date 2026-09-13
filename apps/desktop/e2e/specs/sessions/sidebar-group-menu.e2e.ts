@@ -20,7 +20,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { WIKI_PROJECT_ID } from '@shuvix/chat-protocol/wiki'
 import { until } from '../../harness/cdp'
 import { launchApp, type E2EApp } from '../../harness/launch'
-import { createProject, waitRendererReady } from '../../harness/seed'
+import { createProject, newSessionsAfter, waitRendererReady } from '../../harness/seed'
 import {
   projectEditPane,
   sidebarPane,
@@ -38,9 +38,6 @@ let sidebar: SidebarPane
 let projectEdit: ProjectEditPane
 let projectId = ''
 
-const listSessionIds = (): Promise<string[]> =>
-  app.main.eval<string[]>(`window.api.session.list().then((ss) => ss.map((s) => s.id))`)
-
 const projectIdOf = (sid: string): Promise<string | null> =>
   app.main.eval<string | null>(
     `window.api.session.getById(${JSON.stringify(sid)}).then((s) => s.projectId)`
@@ -54,17 +51,6 @@ const wikiProjectExists = (): Promise<boolean> =>
 
 /** items → 便于逐项比对的序列（分隔符记成 'sep'；分组菜单目前没有分隔符） */
 const idsOf = (items: MenuItemShot[] | null): string[] => (items ?? []).map((it) => it.id ?? 'sep')
-
-/** 记录当前会话 id 集，执行 act 后等到列表真的长出新条目，返回新增的那些 id */
-async function newSessionsAfter(act: () => Promise<void>): Promise<string[]> {
-  const before = await listSessionIds()
-  await act()
-  const after = await until(async () => {
-    const ids = await listSessionIds()
-    return ids.length > before.length ? ids : null
-  }, 'a new session created')
-  return after.filter((id) => !before.includes(id))
-}
 
 beforeAll(async () => {
   app = await launchApp()
@@ -116,13 +102,13 @@ describe('三种组头各给什么菜单', () => {
 describe('菜单动作落在「它属于的那个组」', () => {
   // GM-04
   it('新建对话的项目归属随组：项目组下带 projectId，临时组下为 null', async () => {
-    const inProject = await newSessionsAfter(() =>
+    const inProject = await newSessionsAfter(app.main, () =>
       sidebar.pickGroupMenu({ project: PROJECT_NAME }, 'new-chat')
     )
     expect(inProject).toHaveLength(1)
     expect(await projectIdOf(inProject[0])).toBe(projectId)
 
-    const inTemp = await newSessionsAfter(() => sidebar.pickGroupMenu('temp', 'new-chat'))
+    const inTemp = await newSessionsAfter(app.main, () => sidebar.pickGroupMenu('temp', 'new-chat'))
     expect(inTemp).toHaveLength(1)
     expect(await projectIdOf(inTemp[0])).toBeNull()
   })

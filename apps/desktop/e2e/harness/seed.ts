@@ -555,6 +555,36 @@ export async function createBotSession(
   )
 }
 
+/** 当前全部会话的 id（`session.list` 的顺序） */
+export function listSessionIds(main: CdpClient): Promise<string[]> {
+  return main.eval<string[]>(`window.api.session.list().then((ss) => ss.map((s) => s.id))`)
+}
+
+/**
+ * 记录当前会话 id 集，执行 act 后等到列表里真的冒出新 id，返回新增的那些。
+ *
+ * **一冒出来就返回**：要断「恰好只建了一条」（如防重入），调用方须自己再留一个落定窗口，
+ * 之后用 `listSessionIds` 重列 —— 迟到的第二条这里等不到。
+ */
+export function newSessionsAfter(main: CdpClient, act: () => Promise<void>): Promise<string[]> {
+  return (async () => {
+    const before = await listSessionIds(main)
+    await act()
+    return until(async () => {
+      const added = (await listSessionIds(main)).filter((id) => !before.includes(id))
+      return added.length > 0 ? added : null
+    }, 'a new session created')
+  })()
+}
+
+/** 绑定了某个 bot 的会话 id（`settings.bot` 精确等于 name）——「只有这一条绑它」的 IPC 判据 */
+export function sessionsBoundTo(main: CdpClient, bot: string): Promise<string[]> {
+  return main.eval<string[]>(
+    `window.api.session.list().then((ss) =>
+      ss.filter((s) => s.settings && s.settings.bot === ${JSON.stringify(bot)}).map((s) => s.id))`
+  )
+}
+
 /**
  * 绕过 API 直接往会话行的 settings 里写 `agentProfile`（系统 sqlite3 CLI 直写）。
  *

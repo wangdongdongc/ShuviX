@@ -512,7 +512,7 @@ export interface RowAffordances {
   /**
    * 该行（组头）内每个 `<button>` 的可读标识，DOM 序：
    *   'menu'         行尾那颗 ⋮（RowMenuButton）
-   *   'subs-toggle'  有子会话的父行行首那枚折叠钮（MessagesSquare）
+   *   'subs-toggle'  有子会话的父行行首那枚折叠钮（`data-subs-toggle`；钮里包着行的身份图标）
    *   'toggle'       分组头的折叠钮（含分组标签 span.truncate 的那颗）
    *   'other'        其余（出现即说明有人往行里塞了新按钮 —— 正是要断死的东西）
    */
@@ -521,6 +521,18 @@ export interface RowAffordances {
   menuOpacity: string
   /** 行内命中的「旧的一排小图标」类名（收进 ⋮ 之后应当一个不剩） */
   legacyActionIcons: string[]
+}
+
+/** 会话行行首身份图标的可读标识（见 SidebarPane.rowIcon） */
+export type SessionRowIcon = 'bot' | 'notebook' | 'pinned' | 'multi' | 'chat' | 'other'
+
+/** 分组正文里的一行会话 */
+export interface GroupRowShot {
+  title: string
+  /** 活动行（SessionItem 的 active 分支给行本身加的 bg-bg-active） */
+  active: boolean
+  /** 行首身份图标（同 rowIcon） */
+  icon: SessionRowIcon | ''
 }
 
 export interface SidebarPane {
@@ -537,8 +549,21 @@ export interface SidebarPane {
    * 折叠只是把 AnimatedCollapse 的高度收成 0，行仍然在。
    */
   subsStateOf(title: string): Promise<string>
-  /** 点父行行首那枚图标（折叠钮）；行不存在返回 false */
+  /**
+   * 点父行行首的子会话折叠钮（`data-subs-toggle`）。行不存在、或该行没有子会话（行首只是
+   * 一枚图标，没有折叠钮）返回 false —— 绝不退而去点行里别的按钮。
+   */
   toggleSubs(title: string): Promise<boolean>
+  /**
+   * 行首那枚身份图标说的「这是哪种会话」，不论它外面有没有包一层子会话折叠钮：
+   *   'bot'      bot 会话（md 删了也是 —— 形态由 settings.bot 定）
+   *   'notebook' 笔记本会话        'pinned' 悬浮会话
+   *   'multi'    有子会话的普通会话（MessagesSquare）
+   *   'chat'     普通会话（MessageSquare）
+   *   'other'    认不出的图标；行不存在返回空串
+   * 只在行内找：`.lucide-bot` 在别处也有（组头菜单、设置窗口……），裸查 document 必然误命中。
+   */
+  rowIcon(title: string): Promise<SessionRowIcon | ''>
   /**
    * 点侧栏某个会话（按标题）并**等它真的成为活动会话**；行都找不到返回 false。
    *
@@ -582,6 +607,22 @@ export interface SidebarPane {
   rowAffordances(title: string): Promise<RowAffordances | null>
   /** 分组头的按钮集合与 ⋮ 静止态；组头不存在返回 null */
   groupAffordances(target: GroupTarget): Promise<RowAffordances | null>
+  /**
+   * 分组正文是否展开 —— 读组头下一个兄弟（AnimatedCollapse 的 grid 层）的内联
+   * `gridTemplateRows`（折叠只收高度，行都还在 DOM 里，数行判不出来）。摊开的纯分节
+   * （temp / section）没有折叠容器，恒为 true；组头不存在返回 false。
+   */
+  groupExpanded(target: GroupTarget): Promise<boolean>
+  /**
+   * 把分组设成指定展开态并等它落定（幂等）。折叠钮 = 组头里包着标签 span.truncate 的那颗；
+   * 纯分节没有折叠钮，要它变态时抛错。
+   */
+  setGroupExpanded(target: GroupTarget, open: boolean): Promise<void>
+  /**
+   * 某组正文里的会话行（DOM 序，含子会话行）。经 picker 新建的会话共用本地化的默认标题 ——
+   * 按标题全局定位会串到别的组，故「新会话落在哪组、是不是活动行」按组取。组头不存在返回 []。
+   */
+  groupRows(target: GroupTarget): Promise<GroupRowShot[]>
   /** 当前活动会话行（bg-bg-active）的标题；没有活动行返回空串 */
   activeTitle(): Promise<string>
 }
@@ -724,7 +765,8 @@ export function sidebarPane(main: CdpClient): SidebarPane {
     const btns = [...el.querySelectorAll('button')]
     const kind = (b) => {
       if (b.querySelector('.lucide-ellipsis-vertical')) return 'menu'
-      if (b.querySelector('.lucide-messages-square')) return 'subs-toggle'
+      // 折叠钮里包的是行的身份图标（bot / 悬浮 / MessagesSquare 随会话变），故只认锚点
+      if (b.hasAttribute('data-subs-toggle')) return 'subs-toggle'
       // 分组头的折叠钮 = 包着分组标签的那颗（按结构认，免得跟 wiki/project 的图标差异纠缠）
       if (b.querySelector('span.truncate')) return 'toggle'
       return 'other'
@@ -736,6 +778,33 @@ export function sidebarPane(main: CdpClient): SidebarPane {
       legacyActionIcons: ${JSON.stringify(LEGACY_ICONS)}.filter((c) => el.querySelector('.' + c))
     }
   })()`
+
+  /**
+   * 行首身份图标（页内函数的源码，调用处接一个行元素）：有子会话的行，图标包在
+   * `button[data-subs-toggle]` 里；否则它就是行的第一个子节点。lucide 图标都带 `lucide-<name>` 类。
+   */
+  const ROW_ICON_OF = `((row) => {
+    const first = row ? row.firstElementChild : null
+    const svg = first && first.matches('button[data-subs-toggle]') ? first.querySelector('svg') : first
+    if (!svg || svg.tagName.toLowerCase() !== 'svg') return ''
+    const has = (c) => svg.classList.contains(c)
+    if (has('lucide-bot')) return 'bot'
+    if (has('lucide-file-text')) return 'notebook'
+    if (has('lucide-picture-in-picture-2')) return 'pinned'
+    if (has('lucide-messages-square')) return 'multi'
+    if (has('lucide-message-square')) return 'chat'
+    return 'other'
+  })`
+  /** 分组正文容器 = 组头的下一个兄弟（项目组是 AnimatedCollapse 的 grid 层，纯分节是一层普通 div） */
+  const GROUP_BODY = (target: GroupTarget): string => `${HEADER(target)}?.nextElementSibling`
+  const groupExpanded = (target: GroupTarget): Promise<boolean> =>
+    main.eval<boolean>(`(() => {
+      const body = ${GROUP_BODY(target)}
+      if (!body) return false
+      // 纯分节（temp / section）没有折叠容器，也就没有这条内联样式：恒展开
+      const rows = body.style.gridTemplateRows
+      return rows ? rows === '1fr' : true
+    })()`)
 
   const pickGroupMenu = async (target: GroupTarget, actionId: string): Promise<void> => {
     await until(() => main.eval<boolean>(`${HEADER(target)} !== undefined`), 'group header')
@@ -762,7 +831,8 @@ export function sidebarPane(main: CdpClient): SidebarPane {
     toggleSubs: async (title) => {
       const clicked = await main.eval<boolean>(
         `(() => {
-          const btn = ${ROW(title)}?.querySelector(':scope > button')
+          // 只认折叠钮锚点：没有子会话的行里，:scope > button 只剩行尾那颗 ⋮
+          const btn = ${ROW(title)}?.querySelector(':scope > button[data-subs-toggle]')
           if (!btn) return false
           btn.click()
           return true
@@ -772,6 +842,7 @@ export function sidebarPane(main: CdpClient): SidebarPane {
       if (clicked) await new Promise((r) => setTimeout(r, 250))
       return clicked
     },
+    rowIcon: (title) => main.eval<SessionRowIcon | ''>(`${ROW_ICON_OF}(${ROW(title)})`),
     openSession: async (title) => {
       const clicked = await main.eval<boolean>(
         `(() => {
@@ -817,6 +888,41 @@ export function sidebarPane(main: CdpClient): SidebarPane {
 
     rowAffordances: (title) => main.eval<RowAffordances | null>(AFFORDANCES(ROW(title))),
     groupAffordances: (target) => main.eval<RowAffordances | null>(AFFORDANCES(HEADER(target))),
+    groupExpanded,
+    setGroupExpanded: async (target, open) => {
+      await until(() => main.eval<boolean>(`${HEADER(target)} !== undefined`), 'group header')
+      if ((await groupExpanded(target)) === open) return
+      const clicked = await main.eval<boolean>(`(() => {
+        const btn = [...(${HEADER(target)}?.querySelectorAll(':scope > button') ?? [])].find(
+          (b) => b.querySelector('span.truncate')
+        )
+        if (!btn) return false
+        btn.click()
+        return true
+      })()`)
+      if (!clicked) {
+        throw new Error(`group ${JSON.stringify(target)} has no fold toggle (a flat section?)`)
+      }
+      await until(
+        async () => (await groupExpanded(target)) === open,
+        `group ${JSON.stringify(target)} ${open ? 'expanded' : 'collapsed'}`
+      )
+      // 内联样式已落定，高度过渡（150ms）还在走 —— 等它走完再往下
+      await sleep(200)
+    },
+    groupRows: (target) =>
+      main.eval<GroupRowShot[]>(`(() => {
+        const body = ${GROUP_BODY(target)}
+        if (!body) return []
+        const iconOf = ${ROW_ICON_OF}
+        return [...body.querySelectorAll('div[class*="cursor-pointer"]')]
+          .filter((d) => d.querySelector(':scope > div > span.truncate'))
+          .map((d) => ({
+            title: (d.querySelector(':scope > div > span.truncate')?.textContent ?? '').trim(),
+            active: d.className.includes('bg-bg-active'),
+            icon: iconOf(d)
+          }))
+      })()`),
     activeTitle: () =>
       main.eval<string>(
         `(${ACTIVE_ROW}?.querySelector(':scope > div > span.truncate')?.textContent ?? '').trim()`
@@ -1789,5 +1895,157 @@ export function botsPane(main: CdpClient): BotsPane {
       await pickFromMenu(main, HEADER, 'refresh', 'bots group header')
       await sleep(200)
     }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 「新建 Bot 会话」单选框（BotSessionDialog）+ bot 会话头部身份胶囊（BotBindingChip）+
+// 空 bot 会话的自我介绍（WelcomeView 的 BotEmptyState）
+//
+// 锚点：单选框面板 `data-bot-dialog="create"`、候选行 `data-bot-pick=<name>`；胶囊外层
+// `data-bot-binding=<bot>`、胶囊本体 `data-bot-bound=<bot>` + `data-bot-bound-missing="true"`
+// （不缺失时属性不存在）；空态根 `data-bot-empty`、自我介绍卡 `data-bot-empty-member=<bot>`。
+// 其余（加载占位、空态容器、「打开 Bots 文件夹」按钮、胶囊上的名字、卡片里的名字 / 描述）没有
+// 锚点，按结构认。
+//
+// 「加载中」与「查无结果」在这三处渲染得一模一样：单选框都是零行、胶囊都顶身份键且不标缺失、
+// 空态都只留提示行不出卡片 —— 否定断言必须先等到一个已落定的信号（见各方法说明）。
+
+export interface BotPickerPane {
+  /** 等单选框上屏 */
+  waitOpen(): Promise<void>
+  /** 等它真的卸载（Escape / 取消走 120ms 关闭动画，选中一行后则直接卸载） */
+  waitClosed(): Promise<void>
+  isOpen(): Promise<boolean>
+  /** 候选行的 bot 名（DOM 序）。加载中与空列表都是 [] —— 先等行出现或 emptyStateShown */
+  rows(): Promise<string[]>
+  /** 点一行（行不存在返回 false） */
+  pick(name: string): Promise<boolean>
+  /**
+   * 在**同一次** eval 里连点两下同一行。分两次 eval 的话 React 已在其间把按钮置成 disabled，
+   * 第二下浏览器根本不派发 —— 防重入断言就会在没有守卫时也通过。
+   *
+   * `found`：行在不在。`secondClickLive`：第二下点出去那一刻按钮还没置灰 —— 这是防重入用例
+   * 的**前提**，它为 false 时挡住第二下的是 disabled，测到的就不是守卫了。
+   */
+  pickTwiceSync(name: string): Promise<{ found: boolean; secondClickLive: boolean }>
+  /**
+   * 空态已落定：「打开 Bots 文件夹」按钮在屏。只做存在性判断，**绝不点**（它开的是 OS 文件
+   * 管理器，e2e 关不掉）。加载占位同样零行，故「零行」只能在这个信号之后断。
+   */
+  emptyStateShown(): Promise<boolean>
+  /** 面板整段文本 —— 归属行里的项目名是种子数据可以断，其余文案是本地化的，别断 */
+  text(): Promise<string>
+  /** Escape（单选框在 window 上听 keydown）；只派发不等待，关没关由 waitClosed 等 */
+  pressEscape(): Promise<void>
+}
+
+/** 「新建 Bot 会话」单选框（组头菜单 new-bot-chat 拉起） */
+export function botPickerPane(main: CdpClient): BotPickerPane {
+  const PANEL = `document.querySelector('[data-bot-dialog="create"]')`
+  const ROW = (name: string): string =>
+    `${PANEL}?.querySelector('[data-bot-pick=${JSON.stringify(name)}]')`
+  const isOpen = (): Promise<boolean> => main.eval<boolean>(`${PANEL} !== null`)
+
+  return {
+    waitOpen: async () => {
+      await until(isOpen, 'bot picker open')
+    },
+    waitClosed: async () => {
+      await until(async () => !(await isOpen()), 'bot picker closed')
+    },
+    isOpen,
+    rows: () =>
+      main.eval<string[]>(
+        `[...(${PANEL}?.querySelectorAll('[data-bot-pick]') ?? [])].map((b) => b.getAttribute('data-bot-pick'))`
+      ),
+    pick: (name) =>
+      main.eval<boolean>(`(() => {
+        const btn = ${ROW(name)}
+        if (!btn) return false
+        btn.click()
+        return true
+      })()`),
+    pickTwiceSync: (name) =>
+      main.eval<{ found: boolean; secondClickLive: boolean }>(`(() => {
+        const btn = ${ROW(name)}
+        if (!btn) return { found: false, secondClickLive: false }
+        btn.click()
+        // 第二下点出去之前读一次：还没置灰 = 第二下真的派发到了按钮上
+        const secondClickLive = !btn.disabled
+        btn.click()
+        return { found: true, secondClickLive }
+      })()`),
+    emptyStateShown: () =>
+      main.eval<boolean>(`!!${PANEL}?.querySelector('svg.lucide-folder-open')?.closest('button')`),
+    text: () => main.eval<string>(`(${PANEL}?.textContent ?? '').trim()`),
+    pressEscape: async () => {
+      await main.eval(`(() => {
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+        return true
+      })()`)
+    }
+  }
+}
+
+export interface BotChipSnapshot {
+  /** `[data-bot-binding]` 的个数（头部只该有一枚；普通会话为 0） */
+  count: number
+  /** 胶囊绑定的 bot（`data-bot-bound`）；没有胶囊为空串 */
+  bot: string
+  /** md 已删的标注（`data-bot-bound-missing="true"`）。查询回来之前同样是 false */
+  missing: boolean
+  /** 胶囊上的名字：查到了是 displayName；查询回来之前与 md 已删时是身份键 */
+  name: string
+}
+
+export interface BotChipPane {
+  snapshot(): Promise<BotChipSnapshot>
+}
+
+/** bot 会话头部的身份胶囊（BotBindingChip） */
+export function botChip(main: CdpClient): BotChipPane {
+  return {
+    snapshot: () =>
+      main.eval<BotChipSnapshot>(`(() => {
+        const all = [...document.querySelectorAll('[data-bot-binding]')]
+        const pill = all[0]?.querySelector('[data-bot-bound]') ?? null
+        return {
+          count: all.length,
+          bot: pill?.getAttribute('data-bot-bound') ?? '',
+          missing: pill?.getAttribute('data-bot-bound-missing') === 'true',
+          // 名字是胶囊本体的直接子 span（头像组件排在它前面，别让它的内部结构掺进来）
+          name: (pill?.querySelector(':scope > span.truncate')?.textContent ?? '').trim()
+        }
+      })()`)
+  }
+}
+
+export interface BotIntroSnapshot {
+  /** bot 会话空态根（`data-bot-empty`）在屏 —— 只要是空的 bot 会话就在，与 md 在不在无关 */
+  present: boolean
+  /** 自我介绍卡绑定的 bot（`data-bot-empty-member`）；加载中与 md 已删时没有卡片，为空串 */
+  member: string
+  /** 卡片的整段文本（名字 + 描述）；不含卡片外那行本地化提示，没有卡片为空串 */
+  text: string
+}
+
+export interface BotIntroPane {
+  snapshot(): Promise<BotIntroSnapshot>
+}
+
+/** 空 bot 会话里 bot 的自我介绍（桌面 WelcomeView 的 BotEmptyState） */
+export function botIntro(main: CdpClient): BotIntroPane {
+  return {
+    snapshot: () =>
+      main.eval<BotIntroSnapshot>(`(() => {
+        const root = document.querySelector('[data-bot-empty]')
+        const card = root?.querySelector('[data-bot-empty-member]') ?? null
+        return {
+          present: root !== null,
+          member: card?.getAttribute('data-bot-empty-member') ?? '',
+          text: (card?.textContent ?? '').trim()
+        }
+      })()`)
   }
 }
