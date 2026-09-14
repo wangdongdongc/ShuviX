@@ -105,7 +105,8 @@ export const OKF_LOG_FILE = 'log.md'
 /**
  * 条目的前端视图形状 —— 侧栏 / 管理页一行所需，不含正文（正文由笔记本会话按需读）。
  * `path` 与 `bundle` 用两个根共用的 id 名字空间，forward-slash、无前导 `/`；`path` 同时是条目的
- * 稳定 id。不合规的 md（没有 frontmatter / 没有 `type` / 别家标记）也有一行，字段取缺省值。
+ * 稳定 id。不合规的 md（没有 frontmatter / 没有 `type` / 别家标记）也有一行：读得出的 title / description /
+ * tags / status 照带，其余取缺省值。
  */
 export interface KnowledgeEntry {
   /**

@@ -62,7 +62,7 @@ describe('软告警表', () => {
 
     const explicit = validateConceptText(doc(['type: Memory', 'title: x']), 'global/x.md')
     expect(explicit.map((d) => d.message)).toEqual([
-      "'description' (one line) is recommended — it is what indexes show"
+      "'description' (one line) is recommended — it is what list and search show"
     ])
   })
 

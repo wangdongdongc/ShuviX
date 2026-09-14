@@ -57,7 +57,7 @@ export function makeDesktopFileToolDeps(ctx: ToolContext, decoders?: ReadDecoder
     // 契约 md 写后盖章的溯源字段用它（派生 agent 的 ctx.sessionId 即根会话 id）
     sessionId: sid,
     // OKF 知识库分支：落在某个 bundle 里的 md 落盘后校验 + 盖 `generated`（actor 惰性取，
-    // 模型可中途切换）。给的是 bundle 相对路径 —— 诊断规则按 bundle 判，容器相对会误判根 index
+    // 模型可中途切换）。给的是 bundle 相对路径 —— 诊断与条目路径都按 bundle 内的位置说话
     knowledge: { locate: (p) => locateBundle(p)?.rel ?? null, actor: () => agentActorOf(ctx) },
     decoders,
     abortError: TOOL_ABORTED,
@@ -68,7 +68,7 @@ export function makeDesktopFileToolDeps(ctx: ToolContext, decoders?: ReadDecoder
     onFileChange: ({ portPath, kind }) => {
       const root = resolveProjectConfig(sid).workingDirectory
       if (root) appEventBus.publish({ type: 'files.changed', root, paths: [portPath], kind })
-      // 落在某个 bundle 里的写入进变更管线（投影 index/log + git 提交 + knowledge.changed）。
+      // 落在某个 bundle 里的写入进变更管线（git 提交 + knowledge.changed）。
       // 模块按需加载：它带着扫描 / git / 检索 / dao 依赖，普通写入不该为它付加载成本，
       // 文件工具的单测也不该因此被拖进数据库初始化
       if (locateBundle(portPath)) {

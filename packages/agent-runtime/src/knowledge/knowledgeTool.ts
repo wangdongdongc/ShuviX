@@ -87,7 +87,7 @@ export const KnowledgeParamsSchema = Type.Object({
   description: Type.Optional(
     Type.String({
       description:
-        'For "create": ONE line saying when this entry is worth opening — it is what the index shows and how later sessions decide to read it.'
+        'For "create": ONE line saying when this entry is worth opening — it is what list and search show, and how later sessions decide to read it.'
     })
   ),
   body: Type.Optional(

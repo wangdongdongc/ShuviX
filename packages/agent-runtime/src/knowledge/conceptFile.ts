@@ -213,22 +213,30 @@ export function parseConceptText(
   }
 }
 
-/** 围栏代码块的开 / 闭行（``` 或 ~~~，最多三格缩进） */
-const FENCE_RE = /^ {0,3}(`{3,}|~{3,})/
+/** 围栏代码块的开栏行（``` 或 ~~~，最多三格缩进，其后可跟 info string） */
+const FENCE_OPEN_RE = /^ {0,3}(`{3,}|~{3,})(.*)$/
+/** 围栏的闭栏行：只有围栏字符与空白 */
+const FENCE_CLOSE_RE = /^ {0,3}(`{3,}|~{3,})[ \t]*$/
 /** 一级 ATX 标题：`# 标题`（可带收尾的 #） */
 const H1_RE = /^ {0,3}#[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$/
 
-/** 正文里第一个一级标题（跳过围栏代码块）；没有返回 undefined */
+/**
+ * 正文里第一个一级标题（跳过围栏代码块）；没有返回 undefined。围栏按 CommonMark 闭合：同一种字符、
+ * 不短于开栏、闭栏行不带 info string；info string 里带反引号的那一行不是开栏（那是行内代码）
+ */
 export function firstHeading(body: string): string | undefined {
-  let fence: string | null = null
+  let fence: { char: string; length: number } | null = null
   for (const line of body.split(/\r?\n/)) {
-    const f = FENCE_RE.exec(line)
-    if (f) {
-      if (fence === null) fence = f[1][0]
-      else if (f[1][0] === fence) fence = null
+    if (fence) {
+      const close = FENCE_CLOSE_RE.exec(line)
+      if (close && close[1][0] === fence.char && close[1].length >= fence.length) fence = null
       continue
     }
-    if (fence !== null) continue
+    const open = FENCE_OPEN_RE.exec(line)
+    if (open && !(open[1][0] === '`' && open[2].includes('`'))) {
+      fence = { char: open[1][0], length: open[1].length }
+      continue
+    }
     const h = H1_RE.exec(line)
     if (h && h[1].trim()) return h[1].trim()
   }

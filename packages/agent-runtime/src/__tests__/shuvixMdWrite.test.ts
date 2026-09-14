@@ -94,10 +94,11 @@ describe('reviewShuvixMdWrite — OKF 知识库分支', () => {
   const ACTOR = { actor: 'shuvix-work/gpt-5', now: '2026-09-09T08:12:03.000Z' }
   const STAMP = 'generated: { by: "shuvix-work/gpt-5", at: "2026-09-09T08:12:03.000Z" }'
   const STAMP_NOTE =
-    '[OKF] Stamped generated: { by: shuvix-work/gpt-5, at: 2026-09-09T08:12:03.000Z } — never write generated or verified yourself; the user reviews drafts in the knowledge page.'
+    '[OKF] Stamped generated: { by: shuvix-work/gpt-5, at: 2026-09-09T08:12:03.000Z } — never write generated or verified yourself.'
   const ERROR_HEAD =
     '[OKF] The file was written, but it breaks the knowledge base format and will not be read as intended until fixed:'
-  const DESCRIPTION_WARNING = "- 'description' (one line) is recommended — it is what indexes show"
+  const DESCRIPTION_WARNING =
+    "- 'description' (one line) is recommended — it is what list and search show"
 
   const concept = (lines: string[], body = 'body'): string =>
     ['---', ...lines, '---', '', body, ''].join('\n')

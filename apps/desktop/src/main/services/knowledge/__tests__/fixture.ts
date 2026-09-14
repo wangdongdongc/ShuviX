@@ -1,8 +1,8 @@
 /**
  * services/knowledge 单测的公共夹具 —— 临时 shuvix 根、bundle 内种文件、git CLI 读回。
  *
- * 根是**容器**不是 bundle：库的形状是 `<root>/projects/<slug>/`，每个 bundle 自带自己的
- * index / log / .git。所以路径助手都要「bundle id + bundle 内相对路径」两段，git 助手的 cwd
+ * 根是**容器**不是 bundle：库的形状是 `<root>/projects/<id>/`，每个 bundle 自带自己的
+ * .git。所以路径助手都要「bundle id + bundle 内相对路径」两段，git 助手的 cwd
  * 也是某个 bundle 目录而不是根。纯辅助（无 vi.mock：mock 必须写在各测试文件顶部才会被提升）。
  */
 import { execFileSync } from 'node:child_process'

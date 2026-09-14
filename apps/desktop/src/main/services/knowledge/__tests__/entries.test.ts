@@ -74,7 +74,7 @@ describe('listKnowledgeEntries', () => {
     state.root = root
   })
 
-  it('EN-2 多个 bundle 经真实扫描投影：path 带 bundle 前缀（子目录里的条目 bundle 仍是 bundle 根）；保留文件不进清单，无 type 与带外家 shuvix 标记的文件按文件名照常列出（不合规也不藏）；容器散文件与非容器目录不进清单；信任档 / 核实时序 / 过期 / generated 章逐条到位', async () => {
+  it('EN-2 多个 bundle 经真实扫描投影：path 带 bundle 前缀（子目录里的条目 bundle 仍是 bundle 根）；早先生成形状的 index / log 不进清单，无 type 与带外家 shuvix 标记的文件按文件名照常列出（不合规也不藏）；容器散文件与非容器目录不进清单；信任档 / 核实时序 / 过期 / generated 章逐条到位', async () => {
     seedConcept(root, `${BUNDLE}/project.md`, [
       'type: Project',
       'title: ACME',
@@ -93,7 +93,7 @@ describe('listKnowledgeEntries', () => {
     ])
     seedConcept(root, `${BUNDLE}/sub/s.md`, ['type: Memory', 'title: S', 'stale_after: 2999-12-31'])
     seedFile(root, `${BUNDLE}/index.md`, '---\nokf_version: "0.2"\n---\n')
-    seedFile(root, `${BUNDLE}/log.md`, '## 2026-09-09\n\n- x\n')
+    seedFile(root, `${BUNDLE}/log.md`, '## 2026-09-09\n\n- **Creation** /a.md — A\n')
     seedFile(root, `${BUNDLE}/plain.md`, '---\ntitle: plain\n---\n\nno type\n')
     seedFile(root, `${BUNDLE}/old.md`, '---\nshuvix: memory v1\ntype: Memory\n---\n\nold\n')
     seedConcept(root, `${OTHER_BUNDLE}/b.md`, ['type: Memory', 'title: B', 'description: db'])

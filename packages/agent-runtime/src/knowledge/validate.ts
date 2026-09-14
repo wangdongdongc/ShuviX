@@ -48,35 +48,44 @@ export function isReservedFile(path: string): boolean {
   return base === OKF_INDEX_FILE || base === OKF_LOG_FILE
 }
 
-/** 宿主渲染的 index.md 只有这几种行：`## 节`、`* [标题](路径)`（可带 ` - 描述`）与空行 */
+/**
+ * 宿主渲染的 index.md 只有这几种行：`## 节`、`* [标题](路径)`（可带 ` - 描述`）与空行。路径是原样写出的，
+ * 可能带一层括号（`x (1).md`）
+ */
 const INDEX_SECTION_LINE = /^##\s+\S/
-const INDEX_ENTRY_LINE = /^\*\s+\[(?:\\.|[^\]])*\]\([^)]*\)(?:\s+-\s+.*)?$/
+const INDEX_ENTRY_LINE = /^\*\s+\[(?:\\.|[^\]])*\]\((?:[^()]|\([^()]*\))*\)(?:\s+-\s+.*)?$/
 /** 根 index 的 frontmatter 里宿主会写的键 */
 const INDEX_FRONTMATTER_KEYS = new Set(['okf_version', 'profile'])
-/** 宿主渲染的 log.md 只有 `## YYYY-MM-DD`、`- 条目` 与空行 */
+/** 宿主渲染的 log.md 只有 `## YYYY-MM-DD`、`- **Op** /路径 …`（每一版投影都是这个形状）与空行 */
 const LOG_DATE_LINE = /^##\s+\d{4}-\d{2}-\d{2}\s*$/
-const LOG_ITEM_LINE = /^-\s+\S/
+const LOG_ITEM_LINE = /^-\s+\*\*[A-Za-z]+\*\*\s+\//
 
-function onlyLines(text: string, allowed: readonly RegExp[]): boolean {
-  return text.split(/\r?\n/).every((line) => !line.trim() || allowed.some((re) => re.test(line)))
+/** 每个非空行都合某种形状；`nonEmpty` 时还得至少有一行 */
+function onlyLines(text: string, allowed: readonly RegExp[], nonEmpty = false): boolean {
+  const lines = text.split(/\r?\n/).filter((line) => line.trim())
+  if (nonEmpty && lines.length === 0) return false
+  return lines.every((line) => allowed.some((re) => re.test(line)))
 }
 
 /**
  * 保留名文件的内容是不是 ShuviX 早先生成的 index / log 的形状 —— 现在不再维护它们，但留在原地的旧文件
- * 不该冒充笔记出现在侧栏与检索里。空文件也算。判定刻意保守：认错成「用户的」，代价只是多出一行；
- * 认错成「生成的」，用户的笔记就看不见了。非保留名恒为 false。
+ * 不该冒充笔记出现在侧栏与检索里。判定尽量保守：认错成「用户的」，代价只是多出一行；认错成「生成的」，
+ * 用户的笔记就看不见了。所以空文件不算（宿主从没写出过空的 index / log —— 空库的根 index 也有
+ * frontmatter），log 的条目行要合宿主一贯的 `- **Op** /路径` 形状。index 的节标题历代都变过，只能按行
+ * 形状认：用 `* [标题](路径)` 手写的目录会被当成生成的，这是已知的代价。非保留名恒为 false。
  */
 export function isProjectionText(path: string, text: string): boolean {
   const base = baseOf(normalizeBundlePath(path))
   const clean = text.replace(/^\uFEFF/, '')
   if (base === OKF_INDEX_FILE) {
     const split = splitFrontmatter(clean)
-    if (!split) return onlyLines(clean, [INDEX_SECTION_LINE, INDEX_ENTRY_LINE])
+    if (!split) return onlyLines(clean, [INDEX_SECTION_LINE, INDEX_ENTRY_LINE], true)
     const fields = parseOkfText(clean)?.fields
     if (!fields || Object.keys(fields).some((key) => !INDEX_FRONTMATTER_KEYS.has(key))) return false
+    // 空库的根 index 只有 frontmatter
     return onlyLines(split.body, [INDEX_SECTION_LINE, INDEX_ENTRY_LINE])
   }
-  if (base === OKF_LOG_FILE) return onlyLines(clean, [LOG_DATE_LINE, LOG_ITEM_LINE])
+  if (base === OKF_LOG_FILE) return onlyLines(clean, [LOG_DATE_LINE, LOG_ITEM_LINE], true)
   return false
 }
 
@@ -97,7 +106,12 @@ export function validateConceptText(text: string, path: string): KnowledgeDiagno
   if (isReservedFile(rel)) return out
 
   if (!splitFrontmatter(text)) {
-    push('error', 'no YAML frontmatter block (an OKF concept starts with `---`)')
+    push(
+      'error',
+      unclosedFrontmatter(text) === null
+        ? 'no YAML frontmatter block (an OKF concept starts with `---`)'
+        : 'the frontmatter block is never closed — end it with a `---` line'
+    )
     return out
   }
   const split = parseOkfText(text)
@@ -117,7 +131,7 @@ export function validateConceptText(text: string, path: string): KnowledgeDiagno
     if (typeof split.fields.title !== 'string') push('warning', "'title' is recommended")
   }
   if (!concept.description)
-    push('warning', "'description' (one line) is recommended — it is what indexes show")
+    push('warning', "'description' (one line) is recommended — it is what list and search show")
   if (concept.staleAfter && !ISO_DATE_RE.test(concept.staleAfter)) {
     push('warning', "'stale_after' should be an ISO 8601 date (YYYY-MM-DD)")
   }
@@ -127,10 +141,21 @@ export function validateConceptText(text: string, path: string): KnowledgeDiagno
   return out
 }
 
-/** 带 ShuviX 的 `shuvix: okf` 自述行（按原文行读 —— YAML 写坏了也认得出这是 ShuviX 的条目） */
+/** 开了 `---` 却没有闭合的 frontmatter：开栏线之后的全文；没开栏（或已闭合）返回 null */
+function unclosedFrontmatter(text: string): string | null {
+  if (splitFrontmatter(text)) return null
+  const clean = text.replace(/^\uFEFF/, '').replace(/^\s+/, '')
+  const open = /^---[ \t]*\r?\n/.exec(clean)
+  return open ? clean.slice(open[0].length) : null
+}
+
+/**
+ * 带 ShuviX 的 `shuvix: okf` 自述行（按原文行读 —— YAML 写坏了、甚至闭合的 `---` 被删掉了，也认得出这是
+ * ShuviX 的条目，写坏的那一下当场回 error，而不是悄悄降成普通笔记）
+ */
 function carriesKnowledgeMarker(text: string): boolean {
-  const split = splitFrontmatter(text)
-  return !!split && readShuvixMarker(split.yaml)?.type === KNOWLEDGE_MARKER_TYPE
+  const head = splitFrontmatter(text)?.yaml ?? unclosedFrontmatter(text)
+  return head !== null && readShuvixMarker(head)?.type === KNOWLEDGE_MARKER_TYPE
 }
 
 /** 普通笔记只查一件事：有 frontmatter 却不是可解析的 YAML 映射 */

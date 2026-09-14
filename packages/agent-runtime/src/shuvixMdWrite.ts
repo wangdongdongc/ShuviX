@@ -207,7 +207,7 @@ function reviewKnowledgeWrite(
     )
   if (stamped) {
     notes.push(
-      `[OKF] Stamped generated: { by: ${k.actor}, at: ${k.now} } — never write generated or verified yourself; the user reviews drafts in the knowledge page.`
+      `[OKF] Stamped generated: { by: ${k.actor}, at: ${k.now} } — never write generated or verified yourself.`
     )
   }
   if (notes.length === 0) return null

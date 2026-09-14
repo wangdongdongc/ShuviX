@@ -1,9 +1,9 @@
 /**
  * knowledge 工具（桌面注册）—— 复用 agent-runtime 的共享**读侧**内核，桌面只注入端适配。
  * 钉：注册元数据（name / group / presentation / describe）；以及适配那一层的两件事 ——
- * 目标库按**会话 + base** 解析（`project` 是根会话所属项目的库，其余名字是用户库；只有 create 允许
- * 宿主建库），拿到的 bundle 目录再反查回 bundle id（`projects/<id>` / `knowledge/<库名>`）交给扫描 /
- * 检索；`bases` 直接走宿主的 listBases，不解析任何 base。
+ * 目标库按**会话 + base** 解析（`project` 是根会话所属项目的库，其余名字是用户库），拿到的 bundle
+ * 目录再反查回 bundle id（`projects/<id>` / `knowledge/<库名>`）交给扫描 / 检索；`bases` 直接走宿主的
+ * listBases，不解析任何 base。
  *
  * 只有 `create` 会写盘并自己记一笔账；改动条目走普通 `edit`，那条路的记账钉在文件工具那侧。
  *
