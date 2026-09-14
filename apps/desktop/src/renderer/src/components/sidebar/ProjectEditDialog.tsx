@@ -2,12 +2,7 @@ import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { type ToolItem } from '../common/ToolSelectList'
 import { ProjectConfigDialog, ProjectInfoForm, type ProjectConfigTab } from '@shuvix/app-shell'
-import {
-  ProjectExtensionsSection,
-  ProjectSystemPromptGroup,
-  ProjectEnvVarsSection,
-  type EnvVar
-} from './ProjectFormSections'
+import { ProjectExtensionsSection, ProjectEnvVarsSection, type EnvVar } from './ProjectFormSections'
 
 interface ProjectEditDialogProps {
   projectId: string
@@ -18,8 +13,8 @@ interface ProjectEditDialogProps {
 const SKILLS_GROUP = '__skills__'
 
 /**
- * 项目编辑弹窗 —— 复用共享 ProjectConfigDialog 外壳 + ProjectInfoForm（名称 + 文件夹），
- * 桌面专属的扩展能力/提示词/环境变量作为 children 并进同一个「配置」tab（单 tab，外壳自动隐藏切换条）。
+ * 项目编辑弹窗 —— 复用共享 ProjectConfigDialog 外壳 + ProjectInfoForm（名称 + 文件夹 + 项目提示词），
+ * 桌面专属的扩展能力/环境变量作为 children 并进同一个「配置」tab（单 tab，外壳自动隐藏切换条）。
  */
 export function ProjectEditDialog({
   projectId,
@@ -128,6 +123,8 @@ export function ProjectEditDialog({
           onNameChange={setName}
           path={path}
           onSelectFolder={handleSelectFolder}
+          systemPrompt={systemPrompt}
+          onSystemPromptChange={setSystemPrompt}
         >
           <ProjectExtensionsSection
             mcpTools={mcpTools}
@@ -135,7 +132,6 @@ export function ProjectEditDialog({
             enabledTools={enabledTools}
             onToggle={toggleExtTool}
           />
-          <ProjectSystemPromptGroup value={systemPrompt} onChange={setSystemPrompt} />
           <ProjectEnvVarsSection envVars={envVars} onChange={setEnvVars} />
         </ProjectInfoForm>
       )

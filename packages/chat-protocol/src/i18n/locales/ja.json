@@ -338,6 +338,7 @@
     "archiveConfirmDesc": "このプロジェクトは「アーカイブ済みプロジェクト」に移動され、後で復元できます。",
     "archiveConfirmAction": "アーカイブ",
     "wizardStepExtensions": "拡張機能",
+    "skillsGroup": "スキル",
     "configTab": "設定",
     "wizardNext": "次へ",
     "wizardPrev": "戻る",

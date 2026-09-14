@@ -338,6 +338,7 @@
     "archiveConfirmDesc": "该项目将被移动到“已归档项目”中，你可以稍后在侧边栏恢复。",
     "archiveConfirmAction": "确认归档",
     "wizardStepExtensions": "扩展能力",
+    "skillsGroup": "技能",
     "configTab": "配置",
     "wizardNext": "下一步",
     "wizardPrev": "上一步",

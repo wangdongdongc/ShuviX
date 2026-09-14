@@ -4,116 +4,101 @@ import { Plus, Trash2, Puzzle, BookOpen, WifiOff, Eye, EyeOff } from 'lucide-rea
 import type { ToolItem } from '../common/ToolSelectList'
 import { SettingsSection } from '../settings/SettingsPrimitives'
 
-// ─── 项目提示词（纯文本；经 shuvix-project-awareness 开关注入会话上下文） ───
-
-interface ProjectSystemPromptGroupProps {
-  value: string
-  onChange: (value: string) => void
-}
-
-export function ProjectSystemPromptGroup({
-  value,
-  onChange
-}: ProjectSystemPromptGroupProps): React.JSX.Element {
-  const { t } = useTranslation()
-  return (
-    <SettingsSection title={t('projectForm.systemPrompt')}>
-      {/* 外框由 SettingsSection 卡片承担 —— textarea 自身透明无边框,只留内边距 */}
-      <textarea
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={t('projectForm.systemPromptPlaceholder')}
-        rows={4}
-        spellCheck={false}
-        className="block w-full px-3.5 py-3 text-xs bg-transparent text-text-primary placeholder:text-text-tertiary focus:outline-none leading-relaxed resize-none [field-sizing:content] min-h-[88px]"
-      />
-    </SettingsSection>
-  )
-}
-
-// ─── 扩展能力：MCP / Skills 各一张卡 ───────────────────────
+// ─── 扩展能力：MCP / Skills 合在一张卡里，每组一行，条目是会换行的勾选标签 ───
 
 interface ExtItem {
   /** 勾选用的工具名（mcp:xxx / skill:xxx） */
   key: string
-  /** 行内展示名（已去掉前缀） */
+  /** 标签上的展示名（已去掉前缀） */
   display: string
-  /** 右侧灰色描述 */
+  /** 悬停提示（skill 的描述） */
   desc?: string
   builtin?: boolean
   offline?: boolean
 }
 
-interface ExtCardProps {
+/** 组配色（MCP 紫 / Skills 绿）—— 写成完整类名，Tailwind 才扫得到 */
+const EXT_TONES = {
+  purple: { title: 'text-purple-400', checked: 'border-purple-400/40 bg-purple-400/10' },
+  emerald: { title: 'text-emerald-400', checked: 'border-emerald-400/40 bg-emerald-400/10' }
+} as const
+
+interface ExtGroupRowProps {
   title: string
   icon: React.ReactNode
-  /** 卡片标题色（MCP 紫 / Skills 绿） */
-  colorClass: string
+  tone: keyof typeof EXT_TONES
   items: ExtItem[]
   enabledTools: string[]
   onToggle: (toolName: string) => void
 }
 
-function ExtCard({
+function ExtGroupRow({
   title,
   icon,
-  colorClass,
+  tone,
   items,
   enabledTools,
   onToggle
-}: ExtCardProps): React.JSX.Element {
+}: ExtGroupRowProps): React.JSX.Element {
   const { t } = useTranslation()
   return (
-    <SettingsSection
-      title={
-        <span className={`inline-flex items-center gap-1.5 ${colorClass}`}>
-          {icon}
-          {title}
-        </span>
-      }
-    >
-      {items.length === 0 ? (
-        <div className="px-4 py-4 text-center text-[11px] text-text-tertiary">—</div>
-      ) : (
-        items.map((it) => (
-          <label
-            key={it.key}
-            className="flex items-center gap-2 px-4 py-2.5 cursor-pointer hover:bg-bg-hover/40 transition-colors"
-          >
-            <input
-              type="checkbox"
-              checked={enabledTools.includes(it.key)}
-              onChange={() => onToggle(it.key)}
-              className="rounded border-border-primary accent-accent w-3.5 h-3.5 shrink-0"
-            />
-            {it.builtin && (
-              <span className="px-1.5 py-0.5 rounded-md text-[9px] font-normal text-amber-500 bg-amber-500/10 whitespace-nowrap shrink-0">
-                {t('input.skillBuiltinBadge')}
-              </span>
-            )}
-            <span
-              className={`text-[12px] font-mono whitespace-nowrap shrink-0 ${
-                it.offline ? 'text-error' : 'text-text-primary'
-              }`}
-            >
-              {it.display}
-            </span>
-            {it.offline && (
-              <WifiOff
-                size={10}
-                className="text-error shrink-0"
-                aria-label={t('settings.mcpStatusDisconnected')}
-              />
-            )}
-            {it.desc && (
-              <span className="text-[11px] text-text-tertiary truncate flex-1 min-w-0">
-                {it.desc}
-              </span>
-            )}
-          </label>
-        ))
+    <div className="flex items-start gap-3 px-3.5 py-2.5">
+      {/* 组名；最小宽度让两组标签的左缘对齐（最长的「スキル」也放得下），h-6 与标签同高 */}
+      <div
+        className={`flex items-center gap-1.5 min-w-16 h-6 shrink-0 whitespace-nowrap text-[12px] font-medium ${EXT_TONES[tone].title}`}
+      >
+        {icon}
+        {title}
+      </div>
+      {items.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 flex-1 min-w-0">
+          {items.map((it) => {
+            const checked = enabledTools.includes(it.key)
+            return (
+              <label
+                key={it.key}
+                title={it.offline ? t('settings.mcpStatusDisconnected') : it.desc}
+                className={`inline-flex items-center gap-1.5 h-6 max-w-full px-2 rounded-md border cursor-pointer transition-colors ${
+                  checked
+                    ? EXT_TONES[tone].checked
+                    : 'border-border-secondary/60 hover:bg-bg-hover/60'
+                }`}
+              >
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={() => onToggle(it.key)}
+                  className="rounded border-border-primary accent-accent w-3 h-3 shrink-0"
+                />
+                {it.builtin && (
+                  <span className="px-1 rounded text-[9px] text-amber-500 bg-amber-500/10 whitespace-nowrap shrink-0">
+                    {t('input.skillBuiltinBadge')}
+                  </span>
+                )}
+                <span
+                  className={`text-[11px] font-mono truncate ${
+                    it.offline
+                      ? 'text-error'
+                      : checked
+                        ? 'text-text-primary'
+                        : 'text-text-secondary'
+                  }`}
+                >
+                  {it.display}
+                </span>
+                {it.offline && (
+                  <WifiOff
+                    size={10}
+                    className="text-error shrink-0"
+                    aria-label={t('settings.mcpStatusDisconnected')}
+                  />
+                )}
+              </label>
+            )
+          })}
+        </div>
       )}
-    </SettingsSection>
+    </div>
   )
 }
 
@@ -130,10 +115,11 @@ export function ProjectExtensionsSection({
   enabledTools,
   onToggle
 }: ProjectExtensionsSectionProps): React.JSX.Element {
+  const { t } = useTranslation()
+  // MCP 的 label 就是 server 名，和展示名重复，不当描述用
   const mcpItems: ExtItem[] = mcpTools.map((tool) => ({
     key: tool.name,
     display: tool.name.startsWith('mcp:') ? tool.name.slice(4) : tool.name,
-    desc: tool.label,
     builtin: tool.isBuiltin,
     offline: tool.serverStatus !== 'connected'
   }))
@@ -149,24 +135,24 @@ export function ProjectExtensionsSection({
   })
 
   return (
-    <>
-      <ExtCard
+    <SettingsSection title={t('projectForm.wizardStepExtensions')}>
+      <ExtGroupRow
         title="MCP"
         icon={<Puzzle size={12} />}
-        colorClass="text-purple-400"
+        tone="purple"
         items={mcpItems}
         enabledTools={enabledTools}
         onToggle={onToggle}
       />
-      <ExtCard
-        title="Skills"
+      <ExtGroupRow
+        title={t('projectForm.skillsGroup')}
         icon={<BookOpen size={12} />}
-        colorClass="text-emerald-400"
+        tone="emerald"
         items={skillItems}
         enabledTools={enabledTools}
         onToggle={onToggle}
       />
-    </>
+    </SettingsSection>
   )
 }
 

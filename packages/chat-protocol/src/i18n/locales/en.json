@@ -338,6 +338,7 @@
     "archiveConfirmDesc": "This project will be moved to Archived Projects and can be restored later.",
     "archiveConfirmAction": "Archive",
     "wizardStepExtensions": "Extensions",
+    "skillsGroup": "Skills",
     "configTab": "Config",
     "wizardNext": "Next",
     "wizardPrev": "Back",
