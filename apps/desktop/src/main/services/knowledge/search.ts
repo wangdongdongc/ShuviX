@@ -5,6 +5,17 @@
  *
  * 索引在内存里按需建、变更后整体失效重建 —— 单个库的规模不值得增量维护。
  * 保留文件不进索引，deprecated 不出现在结果里。
+ *
+ * **中文要先分词。** MiniSearch 默认只按空白与标点切词，中文句子里没有空格，于是两个标点之间
+ * 的一整段成了**一个词**：「令牌」「刷新」这类段中间的词永远搜不到，双字词连在段首也够不着
+ * okf-minisearch 的前缀门槛（≥ 3 字）。而 okf-minisearch 在内部自己 `new MiniSearch`、不暴露
+ * `tokenize`，所以这里在**交给索引之前**预分词：用 `Intl.Segmenter`（Electron 自带 ICU，零依赖）
+ * 在相邻的中日文词之间插一个 U+200A（hair space）。它属于 `\p{Zs}`，默认分词器本来就按它切 ——
+ * 索引端与查询端做同一个变换，两边的词才对得上；片段出去时剥掉它，文件本身不受影响。
+ *
+ * 为什么不 patch okf-minisearch：仓库没有 patch-package，根 `postinstall` 在 CI 里是跳过的，
+ * 而 okf-minisearch 是内联进主进程产物的 —— 补丁得在 CI 里生效，还会在下次升级时静默失效。
+ * U+200A 不加换行，所以分节的起止行号不变。
  */
 import { createOkfSearch, type OkfSearch } from 'okf-minisearch'
 import {
@@ -16,6 +27,28 @@ import { createLogger } from '../../logger'
 import { scanBundle } from './scan'
 
 const log = createLogger('Knowledge')
+
+/** 词界标记：`\p{Zs}`，默认分词器会按它切；真实文本里几乎不出现，剥掉是无损的 */
+const WORD_BREAK = '\u200A'
+const WORD_BREAK_RE = /\u200A/g
+const CJK_RE = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u
+const segmenter = new Intl.Segmenter('zh', { granularity: 'word' })
+
+/** 在相邻的两个词之间插词界标记 —— 仅当其中至少一个是中日文；其余文本原样透传 */
+function segmentCjk(text: string): string {
+  if (!CJK_RE.test(text)) return text
+  let out = ''
+  let prevWord = false
+  let prevCjk = false
+  for (const s of segmenter.segment(text)) {
+    const cjk = CJK_RE.test(s.segment)
+    if (s.isWordLike && prevWord && (cjk || prevCjk)) out += WORD_BREAK
+    out += s.segment
+    prevWord = s.isWordLike === true
+    prevCjk = cjk
+  }
+  return out
+}
 
 interface Built {
   index: OkfSearch
@@ -37,7 +70,7 @@ async function getIndex(bundle: string): Promise<Built> {
   const index = createOkfSearch(
     files
       .filter((f) => !isReservedFile(f.path) && map.has(f.path))
-      .map((f) => ({ path: f.path, markdown: f.text }))
+      .map((f) => ({ path: f.path, markdown: segmentCjk(f.text) }))
   )
   const degraded = index.listDegradedDocuments()
   if (degraded.length > 0) {
@@ -55,7 +88,7 @@ export async function searchBundle(
   opts: { limit: number }
 ): Promise<KnowledgeSearchHit[]> {
   const { index, concepts } = await getIndex(bundle)
-  const hits = index.search(query, {
+  const hits = index.search(segmentCjk(query), {
     limit: Math.max(opts.limit * 4, 40),
     where: { statuses: ['draft', 'stable'] },
     fuzzy: 0.2
@@ -73,7 +106,7 @@ export async function searchBundle(
       title: concept.title,
       description: concept.description,
       status: concept.status,
-      snippet: hit.snippet
+      snippet: hit.snippet?.replace(WORD_BREAK_RE, '')
     })
     if (out.length >= opts.limit) break
   }
