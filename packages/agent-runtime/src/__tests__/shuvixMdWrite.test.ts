@@ -252,4 +252,51 @@ describe('reviewShuvixMdWrite — OKF 知识库分支', () => {
     expect(out.content).toContain(STAMP)
     expect(out.content).not.toContain('shuvix: okf')
   })
+
+  /**
+   * 读宽写严（设计附录 L）：写钩子按文件**自称**什么分档。带自述行的是 ShuviX 建出来的条目 —— 自述行按
+   * 原文行读，YAML 写坏了、闭合的 `---` 被删掉了也认得出，当场回 error、不盖章；普通笔记最多一条语法
+   * 提醒，宿主一个字节都不改；保留名从来不是条目。
+   */
+  it('MW-8 带自述行但 YAML 写坏：按原文行认出是条目，回 error 而不是普通笔记的 warning，不盖章', () => {
+    for (const marker of [MARKER, 'shuvix: "okf v0.2"']) {
+      expect(review(concept([marker, 'type: [x', 'title: T']), 'global/x.md'), marker).toEqual({
+        note: `${ERROR_HEAD}\n- frontmatter is not parseable YAML, or is not a key/value mapping`,
+        content: null
+      })
+    }
+    // 对照：同样的内容去掉自述行，就是一篇 frontmatter 写坏的普通笔记
+    expect(review(concept(['type: [x', 'title: T']), 'global/x.md')).toEqual({
+      note: '[OKF] Written with warnings:\n- frontmatter is not parseable YAML, or is not a key/value mapping — ShuviX shows a syntax error instead of its fields until it is fixed',
+      content: null
+    })
+  })
+
+  it('MW-9 保留名从不盖章，带自述行、字段合规也一样', () => {
+    for (const rel of ['index.md', 'sub/log.md']) {
+      expect(review(concept([MARKER, ...VALID]), rel), rel).toBeNull()
+    }
+  })
+
+  it('MW-10 不是条目就不盖章、不改字节', () => {
+    const notEntries = [
+      // 读不出的标记
+      ['shuvix: 123', ...VALID],
+      // type 不是字符串
+      ['type: 5', 'title: T'],
+      // 没有 type：手写了 generated 也不替它刷新
+      ['title: T', 'generated: { by: me, at: x }']
+    ]
+    for (const lines of notEntries) {
+      expect(review(concept(lines), 'global/x.md'), lines.join(' | ')).toBeNull()
+    }
+  })
+
+  it('MW-11 自称条目却删掉了闭合的 `---`：当场回 error，不盖章；没有自述行的同形文本不回执', () => {
+    expect(review('---\nshuvix: okf v0.2\ntype: Memory\ntitle: T\nbody\n', 'global/x.md')).toEqual({
+      note: `${ERROR_HEAD}\n- the frontmatter block is never closed — end it with a \`---\` line`,
+      content: null
+    })
+    expect(review('---\ntitle: T\nbody\n', 'global/x.md')).toBeNull()
+  })
 })

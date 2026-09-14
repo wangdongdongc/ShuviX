@@ -9,7 +9,7 @@
  * 先 init + 基线（收下原貌，不含本批新写的文件），自带 .git 的原样沿用、只提交宿主碰过的路径。
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 const state = vi.hoisted(() => ({ root: '' }))
@@ -365,5 +365,38 @@ describe('用户库的簿记', () => {
       'kb(update): /b.md\n\nKnowledge-Op: update\nKnowledge-Actor: shuvix-work/gpt-5'
     )
     expect(events).toHaveLength(2)
+  })
+})
+
+/**
+ * 「项目库是否已建好」这层逻辑已撤掉（设计附录 L）：项目库就是 `projects/<项目 id>/` 这个目录，随第一次
+ * `create` 写入出现（port 的 writeFile 自带 mkdir -p），git 仓库在第一次观察到写入时 init —— 没有章程文件、
+ * 没有 index / log。
+ */
+describe('项目库的簿记', () => {
+  it('CH-8 项目库没有建库步骤：目录此前不存在，首次观察到写入后目录里只有这条与 .git，变更以自己的提交落地，不生成 index / log / project.md', async () => {
+    const bundle = `${PROJECTS}/p1`
+    const p1 = bundleAt(root, bundle)
+    expect(existsSync(p1)).toBe(false)
+
+    // create 写出的形状：自述行 + type + title + status
+    seedConcept(root, `${bundle}/t.md`, [
+      'shuvix: okf v0.2',
+      'type: Memory',
+      'title: T',
+      'status: stable'
+    ])
+    recordKnowledgeChange({ bundle, path: 't.md', op: 'Creation', actor: ACTOR })
+    await flushKnowledgeChanges()
+
+    expect(readdirSync(p1).sort()).toEqual(['.git', 't.md'])
+    // 基线不收本批刚写下的文件，于是空基线不产生 kb(init) 提交
+    expect(gitCommitCount(p1)).toBe(1)
+    expect(gitHeadMessage(p1)).toBe(
+      'kb(creation): /t.md\n\nKnowledge-Op: creation\nKnowledge-Actor: shuvix-work/gpt-5'
+    )
+    expect(gitHeadFiles(p1)).toEqual(['t.md'])
+    expect(gitStatus(p1)).toBe('')
+    expect(events).toEqual([{ type: 'knowledge.changed' }])
   })
 })

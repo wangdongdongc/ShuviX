@@ -4,16 +4,22 @@
  * 唯一会返回 null 的情况是「这不是一份 OKF 概念」（没有 frontmatter 映射 / type 缺失或非空串 /
  * 带 shuvix 标记）；其余字段形状不符一律取缺省并经 warn 报告 —— 用户要在 Obsidian 里改的文件，
  * 解析失败不能让它从视图里消失。组装侧钉键序与归一化：写出去的每一份都长一样。
+ *
+ * 笔记读法（readKnowledgeNote，读宽）：库里任何 md 都读得出一条笔记、永不返回 null —— 标题依次取
+ * frontmatter title → 正文第一个 `#` 一级标题（跳过代码围栏）→ 文件名；合规的才另挂 concept，
+ * 不合规的只带读得出的字段，也不为它发 warn。
  */
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import {
   buildConceptText,
+  firstHeading,
   isOkfConceptText,
   isVerificationCurrent,
   normalizeKnowledgeType,
   normalizeSources,
   normalizeVerified,
-  parseConceptText
+  parseConceptText,
+  readKnowledgeNote
 } from '../conceptFile'
 import { parseOkfText } from '../okfCodec'
 
@@ -278,5 +284,131 @@ describe('isVerificationCurrent / normalizeKnowledgeType', () => {
     expect(normalizeKnowledgeType(' Memory ')).toBe('Memory')
     expect(normalizeKnowledgeType('Runbook')).toBe('Runbook')
     expect(normalizeKnowledgeType('  Custom Thing ')).toBe('Custom Thing')
+  })
+})
+
+describe('readKnowledgeNote / firstHeading — 任何 md 都是一条笔记', () => {
+  /** 缺省路径：回落到文件名时标题是 `Foo Bar` */
+  const NOTE_PATH = 'notes/Foo Bar.md'
+  const titleOf = (text: string): string => readKnowledgeNote(text, NOTE_PATH).title
+
+  it('CF-8 readKnowledgeNote 的标题取法：frontmatter title → 正文第一个 `#` 一级标题 → 文件名', () => {
+    const table: [string, string][] = [
+      ['# Heading\n\nbody\n', 'Heading'],
+      ['---\ntitle: FM\n---\n# Heading\n', 'FM'],
+      // 空 title 算没给
+      ["---\ntitle: ''\n---\n# Heading\n", 'Heading'],
+      // 非标量不算
+      ['---\ntitle: [a, b]\n---\n# Heading\n', 'Heading'],
+      // YAML 坏了照样在 frontmatter 之后找
+      ['---\ntitle: [unclosed\n---\n# Heading\n', 'Heading'],
+      ['## Sub\n# Real\n', 'Real'],
+      // 只认 ATX：`#` 后要有空白、最多三格缩进，setext 不算
+      ['#Title\n', 'Foo Bar'],
+      ['    # Code\n', 'Foo Bar'],
+      ['Title\n=====\n', 'Foo Bar'],
+      // 收尾的 `#` 剥掉，词里的 `#` 留着；光秃秃的 `#` 不是标题
+      ['# Title ##\n', 'Title'],
+      ['# C#\n', 'C#'],
+      ['#\n# Real\n', 'Real'],
+      ['intro\r\n# Real\r\n', 'Real'],
+      [`${String.fromCharCode(0xfeff)}---\ntitle: Bom\n---\nbody\n`, 'Bom']
+    ]
+    for (const [text, title] of table) {
+      expect(titleOf(text), JSON.stringify(text)).toBe(title)
+    }
+
+    // frontmatter 里的 YAML 注释不是标题；读得出的 description 照带
+    const commented = readKnowledgeNote(
+      '---\n# not a heading\ndescription: d\n---\nbody\n',
+      NOTE_PATH
+    )
+    expect(commented.title).toBe('Foo Bar')
+    expect(commented.description).toBe('d')
+
+    // 路径归一（反斜杠、前导分隔符），文件名回落用归一后的路径
+    const backslashed = readKnowledgeNote('just text\n', '\\notes\\a.md')
+    expect(backslashed.title).toBe('a')
+    expect(backslashed.path).toBe('notes/a.md')
+  })
+
+  it('CF-9 找标题时跳过围栏代码块，按 CommonMark 闭合', () => {
+    const table: [string, string][] = [
+      ['```\n# Inner\n```\n# Real\n', 'Real'],
+      // 闭栏必须是同一种字符
+      ['~~~\n```\n# Inner\n~~~\n# Real\n', 'Real'],
+      // 闭栏可以比开栏长
+      ['```\n# Inner\n````\n# Real\n', 'Real'],
+      // 没闭合：直到文末都是代码
+      ['```\n# Inner\n', 'Foo Bar'],
+      // 闭栏不能比开栏短
+      ['````md\n```\n# Inner\n```\n````\n# Real\n', 'Real'],
+      // 带 info string 的那一行不是闭栏
+      ['```\n```js\n# Inner\n```\n# Real\n', 'Real']
+    ]
+    for (const [text, title] of table) {
+      expect(titleOf(text), JSON.stringify(text)).toBe(title)
+    }
+    // info string 里带反引号的那一行是行内代码，不是开栏
+    expect(firstHeading('```code```\n# Real\n')).toBe('Real')
+  })
+
+  it('CF-10 不合规的笔记：读得出的 description / tags / status 照带，其余取缺省，concept 为 null，且不对它发 warn', () => {
+    expect(
+      readKnowledgeNote('---\ndescription: d\ntags: a, b\nstatus: draft\n---\nbody\n', NOTE_PATH)
+    ).toMatchObject({
+      type: '',
+      concept: null,
+      description: 'd',
+      tags: ['a', 'b'],
+      status: 'draft'
+    })
+
+    const odd = readKnowledgeNote('---\ntags: [x, "", y]\nstatus: reviewed\n---\n', NOTE_PATH)
+    expect(odd.tags).toEqual(['x', 'y'])
+    expect(odd.status).toBe('stable')
+
+    // 别家标记的文件带 type 也不是条目
+    expect(
+      readKnowledgeNote(
+        '---\nshuvix: agent v1\nname: a\ndescription: an agent\ntype: Memory\n---\n# Agent\n',
+        NOTE_PATH
+      )
+    ).toMatchObject({ concept: null, type: '', description: 'an agent', title: 'Agent' })
+
+    const warn = vi.fn()
+    readKnowledgeNote('---\ntags: {a: 1}\nstatus: wip\n---\n', NOTE_PATH, { warn })
+    expect(warn).toHaveBeenCalledTimes(0)
+    // 对照：合规条目上同一个非法 status 照常报
+    readKnowledgeNote('---\ntype: Memory\nstatus: wip\n---\n', NOTE_PATH, { warn })
+    expect(warn).toHaveBeenCalledTimes(1)
+  })
+
+  it('CF-11 读不出的标记（`shuvix: 123`）即便带 type 也不是概念', () => {
+    const text = '---\nshuvix: 123\ntype: Memory\n---\nbody\n'
+    expect(parseConceptText(text, 'x.md')).toBeNull()
+    expect(isOkfConceptText(text)).toBe(false)
+    expect(readKnowledgeNote(text, 'x.md').concept).toBeNull()
+  })
+
+  it('CF-12 合规条目的标题与 `entry: false` 开关', () => {
+    const note = readKnowledgeNote('---\ntype: Memory\n---\n# Heading\n', 'a.md')
+    expect(note.concept).not.toBeNull()
+    const concept = note.concept!
+    // 笔记标题按笔记的取法；概念自己的标题仍回落文件名
+    expect(note.title).toBe('Heading')
+    expect(concept.title).toBe('a')
+    expect({ description: note.description, tags: note.tags, status: note.status }).toEqual({
+      description: concept.description,
+      tags: concept.tags,
+      status: concept.status
+    })
+
+    // 保留名下用户自己的笔记：只读字段、不当 OKF 条目
+    expect(
+      readKnowledgeNote('---\ntype: Memory\ntitle: Home\nstatus: draft\n---\n# x\n', 'index.md', {
+        entry: false
+      })
+    ).toMatchObject({ concept: null, type: '', title: 'Home', status: 'draft' })
   })
 })

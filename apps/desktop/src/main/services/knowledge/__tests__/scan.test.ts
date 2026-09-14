@@ -325,3 +325,40 @@ describe('用户库：listUserLibraries / listBundles / scanAllBundles', () => {
     expect((await scanAllBundles()).map((s) => s.bundle)).toEqual(['projects/p1'])
   })
 })
+
+/**
+ * 读宽（设计附录 L）：files 是全部 md 原文，notes 是除 ShuviX 早先生成的 index / log 之外的每个 md，
+ * concepts 只收合规的 OKF 条目 —— 保留名下用户自己的笔记是笔记，但永远不是条目。
+ */
+describe('scanBundle — 笔记清单', () => {
+  it('SN-7 笔记清单：生成形状的保留文件只留在 files；手写保留名文件进 notes，但带 type 也不当概念；普通笔记按笔记取标题', async () => {
+    seedConcept(root, `${BUNDLE}/a.md`, ['type: Memory', 'title: A', 'description: da'])
+    seedFile(
+      root,
+      `${BUNDLE}/index.md`,
+      '---\ntype: Memory\ntitle: Home\nstatus: draft\n---\n\n# Welcome\n'
+    )
+    seedFile(root, `${BUNDLE}/log.md`, '## 2026-09-09\n\n- **Creation** /a.md — A\n')
+    seedFile(root, `${BUNDLE}/sub/index.md`, '## Entries\n\n* [X](x.md)\n')
+    seedFile(root, `${BUNDLE}/plain.md`, '# Plain heading\n\nbody\n')
+
+    const scan = await scanBundle(BUNDLE)
+    expect(scan.files.map((f) => f.path)).toEqual([
+      'a.md',
+      'index.md',
+      'log.md',
+      'plain.md',
+      'sub/index.md'
+    ])
+    expect(scan.concepts.map((c) => c.path)).toEqual(['a.md'])
+    expect(scan.notes.map((n) => n.path)).toEqual(['a.md', 'index.md', 'plain.md'])
+    const byPath = Object.fromEntries(scan.notes.map((n) => [n.path, n]))
+    expect(byPath['index.md']).toMatchObject({
+      title: 'Home',
+      type: '',
+      status: 'draft',
+      concept: null
+    })
+    expect(byPath['plain.md'].title).toBe('Plain heading')
+  })
+})

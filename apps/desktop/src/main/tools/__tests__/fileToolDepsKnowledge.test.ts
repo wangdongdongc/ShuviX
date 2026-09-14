@@ -175,4 +175,58 @@ describe('桌面文件工具 — 知识库根目录下的写入', () => {
     expect(state.notify).not.toHaveBeenCalled()
     expect(state.requests).toEqual([])
   })
+
+  /**
+   * 读宽写严（设计附录 L）：只有自称条目的 md 才盖 `generated`。普通笔记（包括保留名下手写的、以及
+   * frontmatter 写坏的）宿主一个字节都不改，但它照样是库里的一篇笔记 —— 变更管线照常收到。
+   */
+  it('FD-5 普通笔记经真实 write / edit：宿主一个字节不改、不回盖章回执，变更管线照常收到', async () => {
+    // 没有 frontmatter 的普通笔记
+    const plain = join(state.kb, 'projects', 'acme', 'plain.md')
+    const written = await makeWriteTool(ctx).execute('w5', {
+      path: plain,
+      content: '# Plain\n\nbody\n'
+    })
+    expect(readFileSync(plain, 'utf-8')).toBe('# Plain\n\nbody\n')
+    expect(textOf(written)).not.toContain('[OKF]')
+    await vi.waitFor(() => expect(state.notify).toHaveBeenCalledTimes(1))
+    expect(state.notify).toHaveBeenLastCalledWith(plain, {
+      kind: 'write',
+      actor: 'shuvix-work/gpt-5'
+    })
+
+    const edited = await makeEditTool(ctx).execute('e5', {
+      path: plain,
+      oldText: 'body',
+      newText: 'body two'
+    })
+    expect(readFileSync(plain, 'utf-8')).toBe('# Plain\n\nbody two\n')
+    expect(textOf(edited)).not.toContain('[OKF]')
+    await vi.waitFor(() => expect(state.notify).toHaveBeenCalledTimes(2))
+    expect(state.notify).toHaveBeenLastCalledWith(plain, {
+      kind: 'edit',
+      actor: 'shuvix-work/gpt-5'
+    })
+
+    // 用户库里手写的 index.md：保留名从不盖章，带 type 也一样
+    const index = join(`${state.kb}-user`, 'notes', 'index.md')
+    const home = '---\ntype: Memory\ntitle: Home\n---\n\n# Home\n'
+    const indexRes = await makeWriteTool(ctx).execute('w6', { path: index, content: home })
+    expect(readFileSync(index, 'utf-8')).toBe(home)
+    expect(textOf(indexRes)).not.toContain('[OKF] Stamped')
+    await vi.waitFor(() => expect(state.notify).toHaveBeenCalledTimes(3))
+    expect(state.notify).toHaveBeenLastCalledWith(index, {
+      kind: 'write',
+      actor: 'shuvix-work/gpt-5'
+    })
+
+    // frontmatter 写坏的普通笔记：只回语法提醒，文件原样
+    const broken = join(state.kb, 'projects', 'acme', 'broken.md')
+    const brokenText = '---\ntitle: [x\n---\nbody\n'
+    const brokenRes = await makeWriteTool(ctx).execute('w7', { path: broken, content: brokenText })
+    expect(textOf(brokenRes)).toContain('[OKF] Written with warnings')
+    expect(textOf(brokenRes)).not.toContain('[OKF] Stamped')
+    expect(readFileSync(broken, 'utf-8')).toBe(brokenText)
+    await vi.waitFor(() => expect(state.notify).toHaveBeenCalledTimes(4))
+  })
 })

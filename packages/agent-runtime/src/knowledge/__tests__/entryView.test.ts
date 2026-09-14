@@ -6,11 +6,14 @@
  * now 判。这里钉的是形状（不多不少 —— 多出来的键会顺着 IPC 流到渲染端）与四个派生字段接进
  * 视图后的判定表；scopeKindOfPath / isVerificationCurrent / isStaleAfter 各自的边角在它们自己的
  * 测试里，这里只验它们确实被接上、且对的是视图里的那个字段。
+ *
+ * 读宽之后清单按**笔记**投影（toKnowledgeEntryFromNote）：普通笔记没有核实 / 过期可言，数值取缺省；
+ * 合规条目走同一个 toKnowledgeEntry，只把标题换成笔记的取法。
  */
 import { describe, it, expect } from 'vitest'
 import type { KnowledgeEntry } from '@shuvix/chat-protocol/knowledge'
-import type { KnowledgeConcept } from '../conceptFile'
-import { toKnowledgeEntry } from '../entryView'
+import { readKnowledgeNote, type KnowledgeConcept } from '../conceptFile'
+import { toKnowledgeEntry, toKnowledgeEntryFromNote } from '../entryView'
 
 const NOW = new Date('2026-09-10T12:00:00Z')
 
@@ -156,5 +159,57 @@ describe('toKnowledgeEntry — 派生字段', () => {
     expect(stale('2026/09/10', NOW)).toBe(false)
     expect(stale('2026-02-30', NOW)).toBe(false)
     expect(stale('2026-09-01T00:00:00Z', NOW)).toBe(false)
+  })
+})
+
+describe('toKnowledgeEntryFromNote — 笔记 → 条目视图', () => {
+  it('EV-7 toKnowledgeEntryFromNote（普通笔记）：形状不多不少，数值取缺省，字段取自笔记', () => {
+    const note = readKnowledgeNote(
+      '---\ndescription: d\ntags: [x]\nstatus: draft\n---\n# Plain\n',
+      'sub\\a.md'
+    )
+    const entry = toKnowledgeEntryFromNote(note, { bundle: '/knowledge/notes/', now: NOW })
+
+    expect(entry).toStrictEqual({
+      path: 'knowledge/notes/sub/a.md',
+      bundle: 'knowledge/notes',
+      type: '',
+      title: 'Plain',
+      description: 'd',
+      status: 'draft',
+      tags: ['x'],
+      trustTier: 'unverified',
+      verifiedCurrent: false,
+      stale: false
+    })
+    for (const key of ['generatedAt', 'generatedBy', 'concept']) {
+      expect(key in entry, key).toBe(false)
+    }
+    expect(entry.tags).not.toBe(note.tags)
+  })
+
+  it('EV-8 合规条目：除 title 取笔记的标题外，与 toKnowledgeEntry 逐字段相同', () => {
+    const note = readKnowledgeNote(
+      [
+        '---',
+        'type: Memory',
+        'description: da',
+        'generated: { by: "agent:coding/gpt-5", at: "2026-09-01T00:00:00Z" }',
+        'verified: { by: "human:alice", at: "2026-09-02T00:00:00Z" }',
+        '---',
+        '# Heading',
+        ''
+      ].join('\n'),
+      'a.md'
+    )
+    expect(note.concept).not.toBeNull()
+    const ctx = { bundle: BUNDLE, now: NOW }
+    const entry = toKnowledgeEntryFromNote(note, ctx)
+
+    expect(entry).toStrictEqual({ ...toKnowledgeEntry(note.concept!, ctx), title: 'Heading' })
+    // frontmatter 没有 title：概念自己的标题回落文件名，视图用的是笔记从正文取的那个
+    expect(note.concept!.title).toBe('a')
+    expect(entry.trustTier).toBe('human-reviewed')
+    expect(entry.verifiedCurrent).toBe(true)
   })
 })

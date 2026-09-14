@@ -2,9 +2,14 @@
  * search —— 一个 bundle 的检索（okf-minisearch）。钉的是中文分词那次修复：MiniSearch 默认只按
  * 空白与标点切词，中文两个标点之间的一整段曾是一个词，段中间的词（「令牌」）一条都搜不到。
  * 这里走「扫描 → 建索引 → 检索」的真实链路，不碰内部的分词函数。
+ *
+ * 读宽（设计附录 L）：库里每条笔记都要搜得到 —— 没有 frontmatter / 没有 type / 别家标记 / YAML 写坏的
+ * 普通笔记、用户手写的 index.md / log.md，以及 okf-minisearch 拒收原文的合规条目；ShuviX 早先生成的
+ * index / log 与 deprecated 条目不进结果。
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { rmSync } from 'node:fs'
+import { buildRootIndexMd } from '@equationalapplications/core-okf'
 
 const state = vi.hoisted(() => ({ root: '' }))
 
@@ -18,7 +23,7 @@ vi.mock('../../../logger', () => ({
 
 import { invalidateKnowledgeScan } from '../scan'
 import { invalidateKnowledgeSearch, searchBundle } from '../search'
-import { BUNDLE, makeTempRoot, seedConcept } from './fixture'
+import { BUNDLE, makeTempRoot, seedConcept, seedFile } from './fixture'
 
 let root: string
 
@@ -81,5 +86,117 @@ describe('searchBundle', () => {
     expect(hit.snippet).toBeDefined()
     expect(hit.snippet).not.toMatch(/\u200A/)
     expect(hit.snippet).toContain('访问令牌过期后')
+  })
+})
+
+/** 检索结果压成 `[path, title]`：一眼对照「恰好命中哪个文件、标题是什么」 */
+const hitsOf = async (q: string): Promise<[string, string][]> =>
+  (await searchBundle(BUNDLE, q, { limit: 10 })).map((h) => [h.path, h.title])
+
+const pathsOf = async (q: string): Promise<string[]> =>
+  (await searchBundle(BUNDLE, q, { limit: 10 })).map((h) => h.path)
+
+const BOM = String.fromCharCode(0xfeff)
+
+describe('searchBundle — 读宽：每条笔记都进索引', () => {
+  it('SR-4 库里的普通笔记与用户手写的 index.md / log.md 都能检索到，检索不抛错', async () => {
+    seedConcept(
+      root,
+      `${BUNDLE}/a.md`,
+      ['type: Memory', 'title: A', 'description: da', 'status: stable'],
+      'zebra'
+    )
+    seedFile(root, `${BUNDLE}/plain.md`, '# Plain note\n\nquokka lives here\n')
+    seedFile(
+      root,
+      `${BUNDLE}/untyped.md`,
+      '---\ntitle: Untyped\ndescription: du\n---\n\nplatypus\n'
+    )
+    seedFile(root, `${BUNDLE}/foreign.md`, '---\nshuvix: agent v1\nname: a\n---\n\nmeerkat\n')
+    seedFile(root, `${BUNDLE}/broken.md`, '---\ntitle: [x\n---\n\nnarwhal\n')
+    seedFile(root, `${BUNDLE}/index.md`, '# Home\n\nwombat\n')
+    seedFile(root, `${BUNDLE}/sub/log.md`, '# Diary\n\nkoala\n')
+
+    // 保留名下的笔记以隐藏别名入索引，结果里必须换回真实路径
+    const table: [string, string, string][] = [
+      ['quokka', 'plain.md', 'Plain note'],
+      ['platypus', 'untyped.md', 'Untyped'],
+      ['meerkat', 'foreign.md', 'foreign'],
+      ['narwhal', 'broken.md', 'broken'],
+      ['wombat', 'index.md', 'Home'],
+      ['koala', 'sub/log.md', 'Diary']
+    ]
+    for (const [q, path, title] of table) {
+      expect(await hitsOf(q), q).toEqual([[path, title]])
+    }
+    const [untyped] = await searchBundle(BUNDLE, 'platypus', { limit: 10 })
+    expect(untyped.description).toBe('du')
+    // 合规条目不受连累
+    expect(await pathsOf('zebra')).toEqual(['a.md'])
+  })
+
+  it('SR-5 生成形状的 index.md / log.md 不进结果；deprecated 条目照旧滤掉，没有 status 的普通笔记不被一并刷掉', async () => {
+    seedConcept(root, `${BUNDLE}/a.md`, [
+      'type: Memory',
+      'title: Token refresh',
+      'description: da',
+      'status: stable'
+    ])
+    // 与当年投影同一个构建器
+    seedFile(
+      root,
+      `${BUNDLE}/index.md`,
+      buildRootIndexMd('0.2', [
+        {
+          heading: 'Entries',
+          entries: [{ path: 'a.md', title: 'Token refresh', description: 'kiwi' }]
+        }
+      ])
+    )
+    seedFile(
+      root,
+      `${BUNDLE}/log.md`,
+      '## 2026-09-09\n\n- **Creation** /a.md — Token refresh · by shuvix-work/gpt-5\n'
+    )
+    seedConcept(
+      root,
+      `${BUNDLE}/old.md`,
+      ['type: Memory', 'title: Old', 'description: dold', 'status: deprecated'],
+      'kiwi'
+    )
+    seedFile(root, `${BUNDLE}/note.md`, 'a kiwi on the windowsill\n')
+
+    expect(await pathsOf('kiwi')).toEqual(['note.md'])
+    // `Creation` 只出现在生成的 log.md 里
+    expect(await pathsOf('Creation')).not.toContain('log.md')
+    expect(await pathsOf('Creation')).toEqual([])
+  })
+
+  it('SR-6 okf-minisearch 拒收原文的合规条目照样搜得到，也不连累别的笔记', async () => {
+    // 开头多一个 BOM
+    seedFile(root, `${BUNDLE}/bom.md`, `${BOM}---\ntype: Memory\ntitle: Bom\n---\n\nalpaca\n`)
+    // frontmatter 之前有空行
+    seedFile(root, `${BUNDLE}/lead.md`, '\n\n---\ntype: Memory\ntitle: Lead\n---\n\nbison\n')
+    // 闭合线带一个尾随空格
+    seedFile(root, `${BUNDLE}/ts.md`, '---\ntype: Memory\ntitle: TS\n--- \n\ncoyote\n')
+    seedFile(root, `${BUNDLE}/plain.md`, '# P\n\ndingo\n')
+
+    const table: [string, string, string][] = [
+      ['alpaca', 'bom.md', 'Bom'],
+      ['bison', 'lead.md', 'Lead'],
+      ['coyote', 'ts.md', 'TS'],
+      ['dingo', 'plain.md', 'P']
+    ]
+    for (const [q, path, title] of table) {
+      expect(await hitsOf(q), q).toEqual([[path, title]])
+    }
+  })
+
+  it('SR-7 普通笔记入索引时不带可检索的 type：搜 type 名只命中真有这个 type 的条目', async () => {
+    seedConcept(root, `${BUNDLE}/a.md`, ['type: Memory', 'title: Alpha'], 'zebra')
+    seedFile(root, `${BUNDLE}/plain.md`, '# Plain\n\nquokka\n')
+
+    expect(await pathsOf('memory')).toEqual(['a.md'])
+    expect(await pathsOf('note')).toEqual([])
   })
 })

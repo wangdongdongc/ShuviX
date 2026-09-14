@@ -752,3 +752,89 @@ describe('KT-12 给 agent 的文案', () => {
     }
   })
 })
+
+/**
+ * 读宽（设计附录 L）：库里每个 md 都是一条笔记 —— list / search / validate 都算它，只是按文件自称什么分档。
+ * ShuviX 早先生成的 index.md / log.md 不再维护、按形状藏起来；用户手写的同名文件是普通笔记。
+ */
+/** 按此顺序种进替身扫描（Map 保序 = 清单顺序） */
+const NOTE_FILES = {
+  '/kb/projects/acme/a.md': doc(['type: Memory', 'title: A', 'description: da', 'status: draft']),
+  // 生成形状的 index：不是笔记
+  '/kb/projects/acme/index.md': '## Entries\n\n* [A](a.md)\n',
+  // 手写的 log：是笔记
+  '/kb/projects/acme/log.md': '# My log\n',
+  '/kb/projects/acme/notes/plain.md': '# Plain heading\n\nbody\n',
+  '/kb/projects/acme/u.md': '---\ndescription: du\nstatus: draft\n---\n\nbody\n'
+}
+const SYNTAX_WARNING =
+  'frontmatter is not parseable YAML, or is not a key/value mapping — ShuviX shows a syntax error instead of its fields until it is fixed'
+const TYPE_REQUIRED = "'type' is required and must be a non-empty string"
+
+describe('KT-13 list 读宽', () => {
+  it('KT-13 list 读宽：普通笔记与条目一起列出；行尾取 description，否则取笔记标题；普通笔记的 status 照标；生成形状的 index 不列，手写 log 照列', async () => {
+    const h = makeTool({ files: NOTE_FILES })
+    expect(textOf(await h.run('c1', { action: 'list', base: 'project' }))).toBe(
+      [
+        `4 entries in project "Acme" — ${ROOT}:`,
+        '- /a.md (draft) — da',
+        '- /log.md — My log',
+        '- /notes/plain.md — Plain heading',
+        '- /u.md (draft) — du'
+      ].join('\n')
+    )
+  })
+})
+
+describe('KT-14 validate 按分档', () => {
+  const FILES = {
+    ...NOTE_FILES,
+    '/kb/projects/acme/b.md': '---\ntitle: [x\n---\nbody\n',
+    '/kb/projects/acme/m.md': '---\nshuvix: okf v0.2\ntitle: T\n---\n'
+  }
+
+  it('KT-14 validate 按分档（单条）：普通笔记与手写 log 无事；frontmatter 写坏的普通笔记一条 warning；带自述行缺 type 是 error', async () => {
+    const h = makeTool({ files: FILES })
+    const check = async (path: string): Promise<string> =>
+      textOf(await h.run('c1', { action: 'validate', base: 'project', path }))
+    expect(await check('/notes/plain.md')).toBe('/notes/plain.md: no issues.')
+    expect(await check('/b.md')).toBe(`1 issue(s) in /b.md:\n- [warning] ${SYNTAX_WARNING}`)
+    expect(await check('/m.md')).toBe(`1 issue(s) in /m.md:\n- [error] ${TYPE_REQUIRED}`)
+    expect(await check('/log.md')).toBe('/log.md: no issues.')
+  })
+
+  it('KT-14 validate 按分档（整库）：普通笔记里指向库内不存在的链接不报', async () => {
+    const h = makeTool({
+      files: {
+        ...FILES,
+        '/kb/projects/acme/notes/plain.md': '# Plain heading\n\n[gone](/missing.md)\n'
+      }
+    })
+    const out = textOf(await h.run('c1', { action: 'validate', base: 'project' }))
+    expect(out).not.toContain('/notes/plain.md')
+    expect(out).toBe(
+      [
+        `2 issue(s) across 2 file(s) in project "Acme" — ${ROOT}:`,
+        '- /b.md',
+        `  - [warning] ${SYNTAX_WARNING}`,
+        '- /m.md',
+        `  - [error] ${TYPE_REQUIRED}`
+      ].join('\n')
+    )
+  })
+})
+
+describe('KT-15 缺省子串检索（无 search 注入）', () => {
+  it('KT-15 不注入 search 时的子串检索覆盖普通笔记', async () => {
+    const h = makeTool({ files: NOTE_FILES })
+    expect(
+      textOf(await h.run('c1', { action: 'search', base: 'project', query: 'plain heading' }))
+    ).toBe(
+      `1 result(s) for "plain heading" in project "Acme" — ${ROOT}:\n- /notes/plain.md — Plain heading`
+    )
+    // `Entries` 只出现在生成的 index.md 里，而它不是笔记
+    expect(textOf(await h.run('c2', { action: 'search', base: 'project', query: 'Entries' }))).toBe(
+      'No entries match "Entries".'
+    )
+  })
+})

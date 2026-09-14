@@ -265,4 +265,26 @@ describe('listKnowledgeEntries', () => {
     expect(readdirSync(notes).sort()).toEqual(notesBefore)
     expect(readdirSync(join(userRoot, 'empty'))).toEqual([])
   })
+
+  /**
+   * project.md 已撤销（设计附录 L）：显示名只看 projectDao 里项目当前的名字，库里残留的旧章程不再参与命名，
+   * 它就是一篇普通的笔记，照常自己占一行。
+   */
+  it('EN-7 残留的旧 project.md 不再给库命名：bundleNames 恒取项目当前名字，project.md 自己是一行', async () => {
+    seedConcept(root, 'projects/p1/project.md', [
+      'type: Project',
+      'title: Old Charter',
+      'resource: shuvix://project/p1'
+    ])
+    state.projects = { p1: { name: 'New Name' } }
+
+    const listed = await listKnowledgeEntries()
+    expect(listed.bundleNames).toEqual({ 'projects/p1': 'New Name' })
+    expect(listed.entries.map((e) => e.path)).toEqual(['projects/p1/project.md'])
+    expect(listed.entries[0]).toMatchObject({
+      bundle: 'projects/p1',
+      title: 'Old Charter',
+      type: 'Project'
+    })
+  })
 })
