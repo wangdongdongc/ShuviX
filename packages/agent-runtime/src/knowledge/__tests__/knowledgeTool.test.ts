@@ -2,13 +2,13 @@
  * knowledge 工具 —— 检索 / 盘点 / 取原文 / 校验 + **新建**（设计 §6.1，决策 D4）。
  *
  * 写入面只有 `create`：改动走普通 `edit`（工具做不了局部编辑），而新建留在宿主手里是为了
- * 担保元数据的形状 —— 自述行、键序、`status: draft`、宿主章。本文件因此钉：agent 面的枚举、
+ * 担保元数据的形状 —— 自述行、键序、`status`、宿主章。本文件因此钉：agent 面的枚举、
  * 路径守卫表、各 action 的回执文本与 details、create 的文件形状与去重，以及各 action 以目标
  * **绝对路径**过与文件工具同一道 PEP（将来给知识库写策略时两侧同时被盖住）。
  *
- * **作用域就是一个 bundle**：本会话所属项目的那一个，由宿主的 `resolveBundle` 给出，
- * 所以工具没有 scope 参数，路径一律 bundle 相对；回执表头点名 bundle 的绝对目录，
- * 因为 agent 要拿它拼出 write/edit 用的路径。
+ * **每次调用点名一个 base**，由宿主的 `resolveBase` 解析成一个 bundle，所以工具没有 scope
+ * 参数，路径一律 bundle 相对；回执表头点名 bundle 的绝对目录，因为 agent 要拿它拼出
+ * write/edit 用的路径。本文件的用例都在 `project` 库里跑。
  */
 import { describe, it, expect, vi, type Mock } from 'vitest'
 import type { AgentToolResult } from '@earendil-works/pi-agent-core'
@@ -56,7 +56,7 @@ interface Harness {
   tool: ReturnType<typeof createKnowledgeTool>
   files: Map<string, string>
   enforcePath: Mock
-  resolveBundle: Mock
+  resolveBase: Mock
   afterWrite: Mock
   /** 调用顺序流水：`enforce:<mode>:<abs>` / `write:<abs>` */
   calls: string[]
@@ -119,13 +119,14 @@ function makeTool(opts: ToolOptions = {}): Harness {
     calls.push(`enforce:${mode}:${abs}`)
   })
   const security = opts.security ?? ({ enforcePath } as unknown as SecurityContext)
-  const resolveBundle = vi.fn(async () => opts.bundle ?? BUNDLE)
+  const resolveBase = vi.fn(async () => opts.bundle ?? BUNDLE)
   const afterWrite = vi.fn()
   const tool = createKnowledgeTool({
     port: memoryPort(files, calls),
     security,
     scan: async () => scanOf(files),
-    resolveBundle,
+    resolveBase,
+    listBases: async () => [],
     search: opts.search,
     actor: () => ACTOR,
     now: () => NOW,
@@ -137,7 +138,7 @@ function makeTool(opts: ToolOptions = {}): Harness {
     tool,
     files,
     enforcePath,
-    resolveBundle,
+    resolveBase,
     afterWrite,
     calls,
     run: (id, params, signal) => tool.execute(id, params, signal)
@@ -155,8 +156,9 @@ describe('KT-1 schema 枚举与运行时守卫', () => {
     const { tool } = makeTool()
     expect(tool.name).toBe('knowledge')
     expect(tool.label).toBe('Knowledge')
-    expect(props.action.enum).toEqual(['search', 'list', 'read', 'create', 'validate'])
-    // 作用域就是本会话的那一个 bundle，没有可选项 —— 参数因此不存在
+    expect(props.action.enum).toEqual(['bases', 'search', 'list', 'read', 'create', 'validate'])
+    // 目标库由 base 点名（除 bases 外必填，运行时守卫），不另设 scope 参数
+    expect(props.base).toBeDefined()
     expect(props.scope).toBeUndefined()
     // 改动走 `edit`：没有 update / set-status 的入口
     for (const type of KNOWLEDGE_TYPES) expect(props.type.description, type).toContain(type)
@@ -176,15 +178,15 @@ describe('KT-1 schema 枚举与运行时守卫', () => {
       }
     })
     await h.tool.preExecute()
-    await h.run('c1', { action: 'list' })
+    await h.run('c1', { action: 'list', base: 'project' })
     expect(h.enforcePath).not.toHaveBeenCalled()
 
     // 读侧三个 action 一个都不写盘（create 另有专门用例）
     const before = h.files.get('/kb/projects/acme/a.md')
     for (const params of [
-      { action: 'read' as const, path: '/a.md' },
-      { action: 'validate' as const, path: '/a.md' },
-      { action: 'validate' as const }
+      { action: 'read' as const, base: 'project', path: '/a.md' },
+      { action: 'validate' as const, base: 'project', path: '/a.md' },
+      { action: 'validate' as const, base: 'project' }
     ]) {
       await h.run('c2', params)
     }
@@ -196,12 +198,20 @@ describe('KT-1 schema 枚举与运行时守卫', () => {
 
 describe('KT-2 路径守卫表', () => {
   const table: [string, KnowledgeToolParams, string][] = [
-    ['read /', { action: 'read', path: '/' }, 'not inside the knowledge base'],
-    ['read ../etc/x.md', { action: 'read', path: '../etc/x.md' }, 'not inside the knowledge base'],
-    ['read /sub/x.txt', { action: 'read', path: '/sub/x.txt' }, 'not a markdown entry (.md)'],
+    ['read /', { action: 'read', base: 'project', path: '/' }, 'not inside the knowledge base'],
+    [
+      'read ../etc/x.md',
+      { action: 'read', base: 'project', path: '../etc/x.md' },
+      'not inside the knowledge base'
+    ],
+    [
+      'read /sub/x.txt',
+      { action: 'read', base: 'project', path: '/sub/x.txt' },
+      'not a markdown entry (.md)'
+    ],
     [
       'validate ../etc/x.md',
-      { action: 'validate', path: '../etc/x.md' },
+      { action: 'validate', base: 'project', path: '../etc/x.md' },
       'not inside the knowledge base'
     ]
   ]
@@ -219,12 +229,14 @@ describe('KT-2 路径守卫表', () => {
       files: { '/kb/projects/acme/index.md': '## Entries\n\n* [A](a.md)\n' },
       abortError: 'TOOL_ABORTED'
     })
-    const res = await h.run('c1', { action: 'read', path: '/index.md' })
+    const res = await h.run('c1', { action: 'read', base: 'project', path: '/index.md' })
     expect(textOf(res)).toBe('/kb/projects/acme/index.md:\n\n## Entries\n\n* [A](a.md)')
 
     const ac = new AbortController()
     ac.abort()
-    await expect(h.run('c2', { action: 'list' }, ac.signal)).rejects.toThrow('TOOL_ABORTED')
+    await expect(h.run('c2', { action: 'list', base: 'project' }, ac.signal)).rejects.toThrow(
+      'TOOL_ABORTED'
+    )
   })
 })
 
@@ -235,8 +247,8 @@ describe('KT-3 search —— 注入的检索（宿主 okf-minisearch）', () => 
       { path: 'b.md', title: 'B', status: 'stable' }
     ])
     const h = makeTool({ search })
-    const res = await h.run('c1', { action: 'search', query: 'q' })
-    expect(h.resolveBundle).toHaveBeenCalledWith({ create: false })
+    const res = await h.run('c1', { action: 'search', base: 'project', query: 'q' })
+    expect(h.resolveBase).toHaveBeenCalledWith('project', { create: false })
     expect(search).toHaveBeenCalledWith('q', { limit: 20, bundleDir: ROOT })
     expect(textOf(res)).toBe(
       `2 result(s) for "q" in project "Acme" — ${ROOT}:\n- /a.md (draft) — d\n  s\n- /b.md — B`
@@ -248,16 +260,16 @@ describe('KT-3 search —— 注入的检索（宿主 okf-minisearch）', () => 
   it('KT-3 零命中回一句话；缺 query 抛错；bundle 解析失败按 list 同口径回文字（不抛）', async () => {
     const search = vi.fn(async () => [])
     const h = makeTool({ search })
-    expect(textOf(await h.run('c1', { action: 'search', query: 'q', limit: 5 }))).toBe(
-      'No entries match "q".'
-    )
+    expect(
+      textOf(await h.run('c1', { action: 'search', base: 'project', query: 'q', limit: 5 }))
+    ).toBe('No entries match "q".')
     expect(search).toHaveBeenCalledWith('q', { limit: 5, bundleDir: ROOT })
-    await expect(h.run('c2', { action: 'search', query: '  ' })).rejects.toThrow(
+    await expect(h.run('c2', { action: 'search', base: 'project', query: '  ' })).rejects.toThrow(
       '"search" needs `query`'
     )
     // 会话不属于任何项目：检索是软条件，回一句话而不是抛
     const noProject = makeTool({ search, bundle: { error: 'no project here' } })
-    const res = await noProject.run('c3', { action: 'search', query: 'q' })
+    const res = await noProject.run('c3', { action: 'search', base: 'project', query: 'q' })
     expect(textOf(res)).toBe('no project here')
     expect(res.details).toEqual({ action: 'search' })
     expect(search).toHaveBeenCalledTimes(1)
@@ -290,7 +302,7 @@ describe('KT-4 search —— 缺省子串检索（无 search 注入）', () => {
 
   it('KT-4 标题 / 正文（大小写不敏感）/ 标签都算命中，deprecated 排除；作用域按目录前缀过滤；计数看全部命中、行数按 limit 截', async () => {
     const h = makeTool({ files: FILES })
-    const all = await h.run('c1', { action: 'search', query: 'token' })
+    const all = await h.run('c1', { action: 'search', base: 'project', query: 'token' })
     expect(textOf(all)).toBe(
       [
         `4 result(s) for "token" in project "Acme" — ${ROOT}:`,
@@ -300,11 +312,16 @@ describe('KT-4 search —— 缺省子串检索（无 search 注入）', () => {
         '- /sub/e.md — de'
       ].join('\n')
     )
-    const capped = await h.run('c2', { action: 'search', query: 'Token', limit: 1 })
+    const capped = await h.run('c2', {
+      action: 'search',
+      base: 'project',
+      query: 'Token',
+      limit: 1
+    })
     expect(textOf(capped)).toBe(
       `4 result(s) for "Token" in project "Acme" — ${ROOT}:\n- /a.md (draft, 2026-09-09) — da`
     )
-    expect(textOf(await h.run('c3', { action: 'search', query: 'zzz' }))).toBe(
+    expect(textOf(await h.run('c3', { action: 'search', base: 'project', query: 'zzz' }))).toBe(
       'No entries match "zzz".'
     )
   })
@@ -325,7 +342,7 @@ describe('KT-5 list', () => {
   it('KT-5 列出本 bundle 全部条目（含 deprecated，带标注）、表头点名标签；limit 之外折成一行计数', () =>
     (async () => {
       const h = makeTool({ files: FILES })
-      expect(textOf(await h.run('c1', { action: 'list' }))).toBe(
+      expect(textOf(await h.run('c1', { action: 'list', base: 'project' }))).toBe(
         [
           `3 entries in project "Acme" — ${ROOT}:`,
           '- /a.md (draft) — da',
@@ -333,7 +350,7 @@ describe('KT-5 list', () => {
           '- /d.md (deprecated) — dd'
         ].join('\n')
       )
-      expect(textOf(await h.run('c2', { action: 'list', limit: 2 }))).toBe(
+      expect(textOf(await h.run('c2', { action: 'list', base: 'project', limit: 2 }))).toBe(
         [
           `3 entries in project "Acme" — ${ROOT}:`,
           '- /a.md (draft) — da',
@@ -345,12 +362,12 @@ describe('KT-5 list', () => {
 
   it('KT-5 bundle 解析失败回文字（不抛）；bundle 在但还没有条目也有一句话', async () => {
     const noProject = makeTool({ files: FILES, bundle: { error: 'no project here' } })
-    const failed = await noProject.run('c1', { action: 'list' })
+    const failed = await noProject.run('c1', { action: 'list', base: 'project' })
     expect(textOf(failed)).toBe('no project here')
     expect(failed.details).toEqual({ action: 'list' })
-    expect(noProject.resolveBundle).toHaveBeenCalledWith({ create: false })
+    expect(noProject.resolveBase).toHaveBeenCalledWith('project', { create: false })
 
-    expect(textOf(await makeTool().run('c2', { action: 'list' }))).toBe(
+    expect(textOf(await makeTool().run('c2', { action: 'list', base: 'project' }))).toBe(
       `No entries in project "Acme" — ${ROOT} yet.`
     )
   })
@@ -360,7 +377,7 @@ describe('KT-6 read', () => {
   it('KT-6 过 read PEP（绝对路径 + 展示路径 + operation），回 `/path:` + 原文 trimEnd，details 带相对路径', async () => {
     const raw = `${doc(['type: Memory', 'title: A', 'description: da', 'status: draft'])}\n\n`
     const h = makeTool({ files: { '/kb/projects/acme/a.md': raw } })
-    const res = await h.run('c1', { action: 'read', path: '/a.md' })
+    const res = await h.run('c1', { action: 'read', base: 'project', path: '/a.md' })
     expect(h.enforcePath).toHaveBeenCalledTimes(1)
     expect(h.enforcePath).toHaveBeenCalledWith('read', '/kb/projects/acme/a.md', {
       toolCallId: 'c1',
@@ -375,10 +392,12 @@ describe('KT-6 read', () => {
 
   it('KT-6 条目不存在 / 缺 path', async () => {
     const h = makeTool()
-    await expect(h.run('c1', { action: 'read', path: '/x.md' })).rejects.toThrow(
+    await expect(h.run('c1', { action: 'read', base: 'project', path: '/x.md' })).rejects.toThrow(
       'No entry at /x.md'
     )
-    await expect(h.run('c2', { action: 'read' })).rejects.toThrow('"read" needs `path`')
+    await expect(h.run('c2', { action: 'read', base: 'project' })).rejects.toThrow(
+      '"read" needs `path`'
+    )
   })
 })
 
@@ -395,6 +414,7 @@ describe('KT-7 create —— 元数据形状与去重', () => {
     const h = makeTool()
     const res = await h.run('c1', {
       action: 'create',
+      base: 'project',
       type: 'memory',
       title: 'Token refresh',
       description: 'when touching auth',
@@ -402,7 +422,7 @@ describe('KT-7 create —— 元数据形状与去重', () => {
       tags: ['auth'],
       sources: [{ resource: '/abs/p.ts' }]
     })
-    expect(h.resolveBundle).toHaveBeenCalledWith({ create: true })
+    expect(h.resolveBase).toHaveBeenCalledWith('project', { create: true })
     const abs = '/kb/projects/acme/token-refresh.md'
     // 先过门再落盘
     expect(h.calls).toEqual([`enforce:write:${abs}`, `write:${abs}`])
@@ -422,19 +442,34 @@ describe('KT-7 create —— 元数据形状与去重', () => {
 
   it('KT-7 缺必填字段一次点全、不落盘；同 slug 撞车退 -2；slugify 撞上保留文件名也让开', async () => {
     const h = makeTool({ files: { '/kb/projects/acme/index.md': '' } })
-    await expect(h.run('c1', { action: 'create', title: 'T' })).rejects.toThrow(
+    await expect(h.run('c1', { action: 'create', base: 'project', title: 'T' })).rejects.toThrow(
       'Creating an entry needs: type, description, body'
     )
     expect(h.calls).toEqual([])
 
-    await h.run('c2', { action: 'create', type: 'Memory', title: 'T', description: 'd', body: 'b' })
-    await h.run('c3', { action: 'create', type: 'Memory', title: 'T', description: 'd', body: 'b' })
+    await h.run('c2', {
+      action: 'create',
+      base: 'project',
+      type: 'Memory',
+      title: 'T',
+      description: 'd',
+      body: 'b'
+    })
+    await h.run('c3', {
+      action: 'create',
+      base: 'project',
+      type: 'Memory',
+      title: 'T',
+      description: 'd',
+      body: 'b'
+    })
     expect([...h.files.keys()]).toContain('/kb/projects/acme/t.md')
     expect([...h.files.keys()]).toContain('/kb/projects/acme/t-2.md')
 
     // `Index` 的 slug 正是宿主投影维护的 index.md —— 不许占它
     await h.run('c4', {
       action: 'create',
+      base: 'project',
       type: 'Memory',
       title: 'Index',
       description: 'd',
@@ -448,6 +483,7 @@ describe('KT-7 create —— 元数据形状与去重', () => {
     const h = makeTool()
     const res = await h.run('c1', {
       action: 'create',
+      base: 'project',
       type: 'Memory',
       title: 'Half done',
       description: 'd',

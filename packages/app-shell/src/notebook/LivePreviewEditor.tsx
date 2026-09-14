@@ -187,6 +187,8 @@ export interface LivePreviewEditorProps {
   fileContext?: { sessionId: string }
   /** 宿主能力注入（主题 / 外链 / 原生右键菜单） */
   caps?: NotebookCaps
+  /** 无 `shuvix:` 自述行的文件按哪个契约渲染属性卡（见 FrontmatterCardConfig.fallbackMarkerType） */
+  frontmatterFallbackType?: string
 }
 
 /**
@@ -203,6 +205,7 @@ export function LivePreviewEditor({
   onScrolledChange,
   onSaveStatusChange,
   handleRef,
+  frontmatterFallbackType,
   fileContext,
   caps,
   readOnly = false,
@@ -598,7 +601,8 @@ export function LivePreviewEditor({
       validate: (params) => getChatApi().shuvixMd.validate(params),
       // 诊断文案的 who + 校验缓存 key 的一部分（卡片内拼接）
       name: documentId.split(/[\\/]/).pop(),
-      mountField
+      mountField,
+      fallbackMarkerType: frontmatterFallbackType
     })
     if (!sessionId) return [markdownKeymap, tableMenu, imageLoadRemeasure, fmCard]
     return [
@@ -624,6 +628,7 @@ export function LivePreviewEditor({
       wikiImageEmbeds({ resolveSrc: resolveEmbedSrc })
     ]
   }, [
+    frontmatterFallbackType,
     sessionId,
     renderTableMenu,
     resolveWikiLink,

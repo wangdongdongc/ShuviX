@@ -23,6 +23,8 @@ The file name is the stable id: rename by changing `title`, never by moving the 
 
 ## 2. How to write one
 
+Every `knowledge` call names its knowledge base with `base`: `"project"` for the project this session belongs to, or the name of one of the user's own knowledge bases (`bases` lists them). The dispatch prompt says which one to work in; when it does not, use `"project"` for knowledge about the project and ask when the subject clearly belongs to one of the user's bases.
+
 1. **`knowledge` `search`** for the subject. An entry that already covers it gets revised, not duplicated — a near-duplicate is worse than no entry, because later sessions read both and trust neither.
 2. **`knowledge` `create`** for a new entry. You pass `type`, `title`, `description`, `body` and optionally `tags` / `sources` / `stale_after`; the host assembles the metadata, names the file after the title, and answers with the absolute path. **Never create an entry with `write`** — the host's self-description line would be missing and ShuviX would not render the file as an entry.
 3. **`edit`** to change an entry that exists, at that absolute path — a surgical diff, not a whole body re-sent. This is also how an entry is deprecated: set `status: deprecated` and end the body with a line pointing at whatever replaces it.

@@ -74,6 +74,7 @@ export {
   type KnowledgeAction,
   type KnowledgeToolParams,
   type KnowledgeToolDeps,
+  type KnowledgeBaseInfo,
   type KnowledgeBundleTarget,
   type KnowledgeBundleScan,
   type KnowledgeSearchHit

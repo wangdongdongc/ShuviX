@@ -11,7 +11,7 @@ import { appEventBus } from '../../utils/appEventBus'
 import { createLogger } from '../../logger'
 import { locateBundle } from './knowledgePaths'
 import { projectBundle } from './projection'
-import { flushKnowledgeCommits, queueKnowledgeCommit } from './repo'
+import { ensureBundleRepo, flushKnowledgeCommits, queueKnowledgeCommit } from './repo'
 import { invalidateKnowledgeScan, knownKnowledgePaths } from './scan'
 import { invalidateKnowledgeSearch } from './search'
 
@@ -57,6 +57,9 @@ async function process(batch: KnowledgeChange[]): Promise<void> {
       })
       for (const w of written) touch(change.bundle, w)
     }
+    // 用户库是拷贝进来的文件夹：可能自带 .git（原样复用），也可能没有（此刻 init + 基线提交）。
+    // 项目库在建出时就 init 过，这一步对它是一次 existsSync
+    for (const bundle of new Set(batch.map((c) => c.bundle))) await ensureBundleRepo(bundle)
     for (const change of batch) {
       queueKnowledgeCommit(change.bundle, [...(touched.get(change.bundle) ?? [])], {
         op: change.op,

@@ -1,15 +1,17 @@
 /**
- * KnowledgeGroup —— 侧栏置顶的「知识库」分组（知识库 v2，`~/.shuvix/knowledge-shuvix/`），
- * 排在 Bots 之下、旧知识库（WikiGroup）之上。**一个项目一个 OKF bundle**：树 = 项目容器 →
- * 每个项目 bundle（显示 `project.md` 的 title）→ 条目，行 = 概念（frontmatter title），
- * 行尾徽标：草稿 / 已核实 / 过期 / 已过时。
- * 点行经宿主打开 / 复用该文件的笔记本会话（隐藏项目 `__knowledge__`，同 WikiGroup 的做法）。
+ * KnowledgeGroup —— 侧栏置顶的「知识库」分组（知识库 v2：`~/.shuvix/knowledge-shuvix/` 的项目库 +
+ * `~/.shuvix/knowledge/` 下每个子目录一个的用户库，用户库与 Projects 容器平级、Projects 置顶），
+ * 排在 Bots 之下、旧知识库（WikiGroup）之上。**一个库一个 OKF bundle**：树 = 项目容器 →
+ * 每个项目 bundle（显示 `project.md` 的 title）→ 条目，外加与容器平级的每个用户库 → 条目；
+ * 行 = 一个 md（合规条目取 frontmatter title，不合规的取文件名），行尾徽标：草稿 / 已核实 / 过期 / 已过时。
+ * 点行经宿主打开 / 复用该文件的笔记本会话（隐藏承载项目：项目库 `__knowledge__`、用户库
+ * `__knowledge_user__`，同 WikiGroup 的做法）。
  *
  * prop 驱动、不触宿主 API（同 WikiGroup / BotGroup）：清单 / 打开 / 打开目录 / 在文件夹中显示
  * 由宿主注入。树形派生在 knowledgeTree.ts（纯函数，可单测）。扫描是懒的：**首次展开才扫**
  * （宿主借此懒建根目录 —— 展开即用户意图），之后每次展开 + 窗口聚焦 + `knowledge.changed`
- * 事件（宿主观察到的 agent 写入）重扫，stale-guard 防乱序回包。顶层（项目容器）默认展开、
- * 每个项目 bundle 默认折叠 —— 用户要看的是条目，不是一列项目名。
+ * 事件（宿主观察到的 agent 写入）重扫，stale-guard 防乱序回包。项目容器默认展开，项目库与
+ * 用户库默认折叠 —— 用户要看的是条目，不是一列库名。
  *
  * 动作全部收在菜单里（右键 / ⋮ 同一份）：组头 = 打开目录 / 刷新；行 = 在文件夹中显示 /
  * 复制路径。核实 / 标为过时等管理动作属管理页（未建），这里只让库**可见**。
@@ -27,7 +29,12 @@ import {
   FolderOpen
 } from 'lucide-react'
 import { useAppEvent, useChatStore } from '@shuvix/chat-ui'
-import { KNOWLEDGE_PROJECT_ID, type KnowledgeEntry } from '@shuvix/chat-protocol/knowledge'
+import {
+  KNOWLEDGE_PROJECT_ID,
+  KNOWLEDGE_USER_PROJECT_ID,
+  KNOWLEDGE_USER_ROOT_DIR,
+  type KnowledgeEntry
+} from '@shuvix/chat-protocol/knowledge'
 import type { ContextMenuItem } from '@shuvix/chat-protocol/types/contextMenu'
 import { AnimatedCollapse } from '../common/AnimatedCollapse'
 import { SessionGroup } from './SessionGroup'
@@ -41,13 +48,23 @@ import {
   type KnowledgeTreeFile
 } from './knowledgeTree'
 
+/** 条目清单回包 */
+export interface KnowledgeListing {
+  /** 全部条目（视图形状，不含正文） */
+  entries: KnowledgeEntry[]
+  /** knowledge-shuvix 根的绝对路径（项目库条目 `projects/…` 相对它） */
+  root: string
+  /** 用户根的绝对路径（用户库条目 `knowledge/<库名>/…` 去掉首段后相对它） */
+  userRoot: string
+}
+
 /** 宿主注入的知识库能力（桌面：window.api.knowledge 的窄投影） */
 export interface KnowledgeGroupAdapter {
-  /** 拉取全部条目（视图形状，不含正文）+ 根目录绝对路径（须为稳定引用，避免重复扫描） */
-  list: () => Promise<{ entries: KnowledgeEntry[]; root: string }>
+  /** 拉取条目清单（须为稳定引用，避免重复扫描） */
+  list: () => Promise<KnowledgeListing>
   /** 打开一条（bundle 相对路径 + 显示名）：宿主负责打开 / 复用笔记本会话并选中 */
   open: (path: string, title: string) => void | Promise<void>
-  /** 打开知识库根目录（OS 文件管理器） */
+  /** 打开用户知识库根目录（OS 文件管理器）—— 建库、拷库都在这里 */
   openFolder: () => void | Promise<unknown>
   /** 在 OS 文件管理器里显示该条目文件；没有文件管理器的宿主不注入，菜单项随之不出现 */
   revealFile?: (path: string) => void | Promise<unknown>
@@ -76,13 +93,20 @@ export function KnowledgeGroup({ adapter }: KnowledgeGroupProps): React.JSX.Elem
   // 活动会话是否为知识库笔记本（分组头高亮 + 命中行选中态）
   const activeNotePath = useChatStore((s) => {
     const active = s.sessions.find((x) => x.id === s.activeSessionId)
-    if (active?.projectId !== KNOWLEDGE_PROJECT_ID) return null
-    return active.settings.notebookPath?.replace(/\\/g, '/') ?? null
+    const notebookPath = active?.settings.notebookPath?.replace(/\\/g, '/')
+    if (!notebookPath) return null
+    // 笔记本路径 → 条目 id：项目库的承载项目根在 knowledge-shuvix，路径即 id；
+    // 用户库的承载项目根在用户根，id 要补回首段 `knowledge/`
+    if (active?.projectId === KNOWLEDGE_PROJECT_ID) return notebookPath
+    if (active?.projectId === KNOWLEDGE_USER_PROJECT_ID) {
+      return `${KNOWLEDGE_USER_ROOT_DIR}/${notebookPath}`
+    }
+    return null
   })
   const isActive = activeNotePath !== null
 
   const [collapsed, setCollapsed] = useState(true)
-  const [scanned, setScanned] = useState<{ entries: KnowledgeEntry[]; root: string } | null>(null)
+  const [scanned, setScanned] = useState<KnowledgeListing | null>(null)
   // 翻转集而非展开集：顶层目录默认展开、更深层默认折叠，翻转一次即取反；重扫新增的
   // 目录天然落在各自的默认态，无需与扫描结果对账
   const [toggled, setToggled] = useState<Set<string>>(() => new Set())
@@ -98,7 +122,7 @@ export function KnowledgeGroup({ adapter }: KnowledgeGroupProps): React.JSX.Elem
       const r = await adapter.list()
       if (seq === scanSeq.current) setScanned(r)
     } catch {
-      if (seq === scanSeq.current) setScanned({ entries: [], root: '' })
+      if (seq === scanSeq.current) setScanned({ entries: [], root: '', userRoot: '' })
     }
   }, [adapter])
 
@@ -147,6 +171,15 @@ export function KnowledgeGroup({ adapter }: KnowledgeGroupProps): React.JSX.Elem
     })
   }
 
+  /** 条目 id → 绝对路径：`knowledge/<库名>/…` 相对用户根，其余相对 knowledge-shuvix 根 */
+  const absolutePathOf = (path: string): string => {
+    const userPrefix = `${KNOWLEDGE_USER_ROOT_DIR}/`
+    if (path.startsWith(userPrefix)) {
+      return scanned?.userRoot ? `${scanned.userRoot}/${path.slice(userPrefix.length)}` : path
+    }
+    return scanned?.root ? `${scanned.root}/${path}` : path
+  }
+
   const openRowMenu = (entry: KnowledgeEntry, e: React.MouseEvent): void => {
     const items: ContextMenuItem[] = [
       ...(adapter.revealFile ? [{ id: 'reveal', label: t('knowledge.revealFile') }] : []),
@@ -154,10 +187,7 @@ export function KnowledgeGroup({ adapter }: KnowledgeGroupProps): React.JSX.Elem
     ]
     void showContextMenu(e, items, (action) => {
       if (action === 'reveal') void adapter.revealFile?.(entry.path)
-      if (action === 'copy-path') {
-        const root = scanned?.root ?? ''
-        void navigator.clipboard.writeText(root ? `${root}/${entry.path}` : entry.path)
-      }
+      if (action === 'copy-path') void navigator.clipboard.writeText(absolutePathOf(entry.path))
     })
   }
 

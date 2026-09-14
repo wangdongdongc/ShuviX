@@ -4,7 +4,7 @@
  * 复用；**落不进任何 bundle 的路径在碰任何东西之前就被拒绝** —— 根下的散文件、容器里的散文件、
  * bundle 目录本身、越界路径与空路径都不是条目。
  *
- * dao / sessionService 是替身；services/knowledge 只替到接口那一层：三个导出转发**真的**
+ * dao / sessionService 是替身；services/knowledge 只替到接口那一层：路径相关的导出转发**真的**
  * knowledgePaths（它只依赖 utils/paths，不会拖进扫描 / git / okf-minisearch），
  * 好让「什么路径算数」「按什么键查重」这两条语义真的被验证。
  */
@@ -38,8 +38,11 @@ vi.mock('../knowledge', async () => {
   )
   return {
     getShuvixKnowledgeRoot: real.getShuvixKnowledgeRoot,
-    bundleFilePath: real.bundleFilePath,
-    locateBundle: real.locateBundle
+    getUserKnowledgeRoot: real.getUserKnowledgeRoot,
+    entryFilePath: real.entryFilePath,
+    isUserBundle: real.isUserBundle,
+    locateBundle: real.locateBundle,
+    USER_CONTAINER: real.USER_CONTAINER
   }
 })
 

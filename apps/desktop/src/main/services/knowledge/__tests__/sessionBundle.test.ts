@@ -1,5 +1,5 @@
 /**
- * sessionBundle —— 会话 → 目标 bundle。本期只有一条规则：**根会话所属项目的那一个**。
+ * sessionBundle —— 工具里的 `project` 库：**根会话所属项目的那一个** bundle（用户库按目录名解析，不经这里）。
  * 钉：`create` 为真时懒建（真的建出目录 + 绑定概念 + 仓库）、为假时只解析；两条「没有目标」
  * 的软失败各回一句可读的话而不是抛错 —— 工具把它当软条件，文案会原样出现在 agent 面前。
  *
@@ -31,7 +31,7 @@ import { invalidateKnowledgeScan } from '../scan'
 import { PROJECTS, bundleAt, fileAt, gitCommitCount, makeTempRoot } from './fixture'
 
 const NO_PROJECT =
-  'This session does not belong to a project, and the knowledge base is per project — open the session inside a project first.'
+  'This session does not belong to a project, so it has no "project" knowledge base — name one of the user\'s knowledge bases instead (call "bases" to list them).'
 
 const PROJECT: Project = {
   id: 'p1',

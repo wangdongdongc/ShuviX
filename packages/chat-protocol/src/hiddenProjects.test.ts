@@ -1,7 +1,7 @@
 /**
  * 隐藏项目的判定 —— `isHiddenProjectId` 与它的注册表那一半 `isRegistryNoteProjectId`。
  *
- * 隐藏项目只承载笔记本会话：旧 wiki、知识库 v2，以及 bot / agent / 安全策略 / 工作流四个注册表
+ * 隐藏项目只承载笔记本会话：旧 wiki、知识库 v2 的两个承载项目（项目库 / 用户库），以及 bot / agent / 安全策略 / 工作流四个注册表
  * 目录。宿主的项目列表过滤（projectService）与 UI 的日历圆点（CalendarView）共用这一份判定 ——
  * 日历那一侧**只有这里**有覆盖。漏认一个 id，打开一份 bot md 就会让一个没人认得的项目冒进
  * 项目列表、在日历上点出一个圆点。
@@ -11,7 +11,7 @@
 import { describe, expect, it } from 'vitest'
 import { isHiddenProjectId } from './hiddenProjects'
 import { isRegistryNoteProjectId, REGISTRY_NOTE_PROJECT_IDS } from './registryNotes'
-import { KNOWLEDGE_PROJECT_ID } from './knowledge'
+import { KNOWLEDGE_PROJECT_ID, KNOWLEDGE_USER_PROJECT_ID } from './knowledge'
 import { WIKI_PROJECT_ID } from './wiki'
 
 type MaybeId = string | null | undefined
@@ -48,20 +48,31 @@ describe('隐藏项目 id —— REGISTRY_NOTE_PROJECT_IDS / isRegistryNoteProje
     for (const id of REGISTRY_IDS) {
       expect(id).not.toBe(WIKI_PROJECT_ID)
       expect(id).not.toBe(KNOWLEDGE_PROJECT_ID)
+      expect(id).not.toBe(KNOWLEDGE_USER_PROJECT_ID)
     }
   })
 
   it('HP-2 isRegistryNoteProjectId：四个注册表 id 为真；wiki / 知识库 id 与形似输入一律为假', () => {
     // wiki 与知识库也是隐藏项目，但不是注册表目录 —— 两个谓词各答各的问题
     for (const id of REGISTRY_IDS) expect(isRegistryNoteProjectId(id), label(id)).toBe(true)
-    for (const id of [WIKI_PROJECT_ID, KNOWLEDGE_PROJECT_ID, ...LOOKALIKES]) {
+    for (const id of [
+      WIKI_PROJECT_ID,
+      KNOWLEDGE_PROJECT_ID,
+      KNOWLEDGE_USER_PROJECT_ID,
+      ...LOOKALIKES
+    ]) {
       expect(isRegistryNoteProjectId(id), label(id)).toBe(false)
     }
   })
 
   it('HP-3 isHiddenProjectId：wiki、知识库与每个注册表 id 为真；形似输入为假（日历圆点唯一的覆盖）', () => {
     // 遍历表里的值而不是再抄一遍字面量：往表里加第五个注册表时，这条自动把它算进来
-    for (const id of [WIKI_PROJECT_ID, KNOWLEDGE_PROJECT_ID, ...REGISTRY_IDS]) {
+    for (const id of [
+      WIKI_PROJECT_ID,
+      KNOWLEDGE_PROJECT_ID,
+      KNOWLEDGE_USER_PROJECT_ID,
+      ...REGISTRY_IDS
+    ]) {
       expect(isHiddenProjectId(id), label(id)).toBe(true)
     }
     for (const id of LOOKALIKES) expect(isHiddenProjectId(id), label(id)).toBe(false)

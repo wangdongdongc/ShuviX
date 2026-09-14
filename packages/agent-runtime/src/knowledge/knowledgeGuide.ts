@@ -28,9 +28,11 @@ fact about the environment or a service that took work to establish. Not what th
 repository already says, not what git history shows, not what matters only to this
 conversation.
 
-Reach it with the \`knowledge\` tool. Starting on something you do not already know this
-project's answer for, \`search\` it first and \`read\` what matches — the base exists so the
-same ground is not covered twice.
+Reach it with the \`knowledge\` tool and name the base on every call — \`base: "project"\` is
+this project's. The user also keeps knowledge bases of their own; \`bases\` lists them, and when
+a subject belongs in one of those, search and record there instead. Starting on something you
+do not already know the answer for, \`search\` first and \`read\` what matches — the bases exist
+so the same ground is not covered twice.
 
 Recording one: \`knowledge\` \`create\` takes the type, title, one-line description and body,
 assembles the metadata and answers with the entry's path — never create one with \`write\`,

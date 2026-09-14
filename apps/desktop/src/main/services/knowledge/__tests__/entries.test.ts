@@ -43,22 +43,27 @@ afterEach(() => {
 })
 
 describe('listKnowledgeEntries', () => {
-  it('EN-1 还没有任何 bundle：清单为空，报的是 shuvix 根 —— 清单只读，不建根、不建容器、不种任何规范文件', async () => {
+  it('EN-1 还没有任何 bundle：清单为空，报的是两个根 —— 清单只读，不建根、不建容器、不种任何规范文件', async () => {
     const { root: reported, entries } = await listKnowledgeEntries()
 
     expect(reported).toBe(root)
     expect(entries).toEqual([])
     expect(readdirSync(root)).toEqual([])
+    expect(existsSync(`${root}-user`)).toBe(false)
 
     // 根目录整个不存在时同样是空清单，而不是把它建出来
     state.root = `${root}-missing`
     invalidateKnowledgeScan()
-    expect(await listKnowledgeEntries()).toEqual({ root: `${root}-missing`, entries: [] })
+    expect(await listKnowledgeEntries()).toEqual({
+      root: `${root}-missing`,
+      userRoot: `${root}-missing-user`,
+      entries: []
+    })
     expect(existsSync(`${root}-missing`)).toBe(false)
     state.root = root
   })
 
-  it('EN-2 多个 bundle 经真实扫描投影：path 带 bundle 前缀（子目录里的条目 bundle 仍是 bundle 根）；保留文件、无 type 与带外家 shuvix 标记的文件不是条目；容器散文件与非容器目录不进清单；信任档 / 核实时序 / 过期 / generated 章逐条到位', async () => {
+  it('EN-2 多个 bundle 经真实扫描投影：path 带 bundle 前缀（子目录里的条目 bundle 仍是 bundle 根）；保留文件不进清单，无 type 与带外家 shuvix 标记的文件按文件名照常列出（不合规也不藏）；容器散文件与非容器目录不进清单；信任档 / 核实时序 / 过期 / generated 章逐条到位', async () => {
     seedConcept(root, `${BUNDLE}/project.md`, [
       'type: Project',
       'title: ACME',
@@ -89,10 +94,30 @@ describe('listKnowledgeEntries', () => {
 
     expect(Object.keys(byPath).sort()).toEqual([
       `${BUNDLE}/a.md`,
+      `${BUNDLE}/old.md`,
+      `${BUNDLE}/plain.md`,
       `${BUNDLE}/project.md`,
       `${BUNDLE}/sub/s.md`,
       `${OTHER_BUNDLE}/b.md`
     ])
+    // 不合规的 md（无 type / 外家标记）照常一行：文件名当标题，其余取合规条目的缺省值
+    for (const [path, title] of [
+      [`${BUNDLE}/plain.md`, 'plain'],
+      [`${BUNDLE}/old.md`, 'old']
+    ]) {
+      expect(byPath[path], path).toEqual({
+        path,
+        bundle: BUNDLE,
+        type: '',
+        title,
+        description: '',
+        status: 'stable',
+        tags: [],
+        trustTier: 'unverified',
+        verifiedCurrent: false,
+        stale: false
+      })
+    }
     expect(byPath[`${BUNDLE}/a.md`]).toMatchObject({
       bundle: BUNDLE,
       type: 'Memory',

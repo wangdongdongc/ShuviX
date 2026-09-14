@@ -17,15 +17,21 @@
  * 安全：`create` 以目标绝对路径走 `enforcePath('write')`、`read` / `validate` 走
  * `enforcePath('read')` —— 与文件工具同一道门，将来给知识库写策略时两侧一起被盖住。
  *
- * **作用域就是一个 bundle**：本会话所属项目的那一个。工具因此没有 `scope` 参数 —— 目标由
- * 宿主按会话解析（`resolveBundle`），路径一律是该 bundle 内的相对路径。跨 bundle 的引用不走
- * 路径而走 `shuvix://` URI。
+ * **除 `bases` 外每个动作都必须点名一个 base**：`project` 是本会话所属项目的库，其余名字是用户
+ * 自己的知识库（所有会话都看得见）。用户库是后面主推的形态，所以刻意**不给默认值** —— 一旦缺省
+ * 落到项目库，agent 就永远想不起用户库。目标由宿主解析（`resolveBase`），路径一律是该 bundle 内
+ * 的相对路径；跨 bundle 的引用不走路径而走 `shuvix://` URI。
  *
- * 宿主无关：文件经 FileSystemPort，bundle 解析 / 扫描 / 检索全部注入。
+ * 宿主无关：文件经 FileSystemPort，库的解析 / 列举 / 扫描 / 检索全部注入。
  */
 import { Type } from 'typebox'
 import type { AgentToolResult } from '@earendil-works/pi-agent-core'
-import { KNOWLEDGE_TYPES, OKF_STATUSES, type OkfStatus } from '@shuvix/chat-protocol/knowledge'
+import {
+  KNOWLEDGE_PROJECT_BASE,
+  KNOWLEDGE_TYPES,
+  OKF_STATUSES,
+  type OkfStatus
+} from '@shuvix/chat-protocol/knowledge'
 import type { FileSystemPort } from '../fileTools/port'
 import type { SecurityContext } from '../security/types'
 import { BaseTool } from '../tools/baseTool'
@@ -46,7 +52,7 @@ import {
 
 export const KNOWLEDGE_TOOL_NAME = 'knowledge'
 
-const ACTIONS = ['search', 'list', 'read', 'create', 'validate'] as const
+const ACTIONS = ['bases', 'search', 'list', 'read', 'create', 'validate'] as const
 export type KnowledgeAction = (typeof ACTIONS)[number]
 
 export const KnowledgeParamsSchema = Type.Object({
@@ -55,6 +61,12 @@ export const KnowledgeParamsSchema = Type.Object({
     enum: [...ACTIONS],
     description: 'What to do. See the tool description for what each action does.'
   }),
+  base: Type.Optional(
+    Type.String({
+      description:
+        'Which knowledge base: "project" for the knowledge base of the project this session belongs to, or the name of one of the user\'s own knowledge bases (call "bases" to list them). Required for every action except "bases".'
+    })
+  ),
   query: Type.Optional(Type.String({ description: 'For "search": free-text query.' })),
   path: Type.Optional(
     Type.String({
@@ -117,6 +129,7 @@ export const KnowledgeParamsSchema = Type.Object({
 
 export interface KnowledgeToolParams {
   action: KnowledgeAction
+  base?: string
   query?: string
   path?: string
   type?: string
@@ -130,13 +143,18 @@ export interface KnowledgeToolParams {
   limit?: number
 }
 
-export const KNOWLEDGE_DESCRIPTION = `Search, read, check and add to this project's knowledge base — an OKF bundle of markdown entries that later sessions of the same project will read.
+export const KNOWLEDGE_DESCRIPTION = `Search, read, check and add to knowledge bases — OKF bundles of markdown entries that later sessions read.
+
+Every action except "bases" names its knowledge base with \`base\`:
+- \`"project"\` — the knowledge base of the project this session belongs to.
+- any other name — one of the user's own knowledge bases. The user builds these on purpose and expects them to be used: when a subject belongs in one of them, search and record there rather than in the project's. Call "bases" to see which exist.
 
 Actions:
+- "bases": list the knowledge bases you can name (no other parameters).
 - "search": find entries by free text (\`query\`, optional \`limit\`).
 - "list": list the entries of the base.
 - "read": return one entry by \`path\`.
-- "create": add a new entry — \`type\`, \`title\`, \`description\`, \`body\`, optional \`tags\` / \`sources\` / \`stale_after\`. The host assembles the metadata, names the file after the title, creates the base the first time, and answers with the absolute path it wrote.
+- "create": add a new entry — \`type\`, \`title\`, \`description\`, \`body\`, optional \`tags\` / \`sources\` / \`stale_after\` / \`status\`. The host assembles the metadata, names the file after the title, and answers with the absolute path it wrote.
 - "validate": report problems in one entry (\`path\`) or in the whole base (no \`path\`). Run it after editing an entry.
 
 **Create entries here, change them with \`edit\`.** Only "create" writes through this tool; to revise an existing entry, \`edit\` the file at the absolute path that "search" / "list" / "read" / "create" gave you — a surgical diff beats re-sending the whole body. Never create an entry with \`write\`: the metadata would be yours to get right, and an entry missing the host's self-description line does not render as an entry in ShuviX.
@@ -169,14 +187,31 @@ export interface KnowledgeBundleScan {
   concepts: readonly KnowledgeConcept[]
 }
 
+/** `bases` 的一行：一个可以点名的库 */
+export interface KnowledgeBaseInfo {
+  /** 传给 `base` 的名字 */
+  base: string
+  /** 人读标签，如 `project "Acme"` / `knowledge base "读书笔记"` */
+  label: string
+  /** bundle 根的绝对路径；库暂不可用（会话不属于项目 / 项目库还没建）时缺省 */
+  dir?: string
+  /** 给 agent 的一句补充说明 */
+  note?: string
+}
+
 export interface KnowledgeToolDeps {
   port: FileSystemPort
   security: SecurityContext
   /**
-   * 本会话的目标 bundle。`create` 为真时尚不存在的 bundle 由宿主建出（目录 + 绑定概念 +
-   * git init）；为假时不存在返回 error（如会话不属于任何项目）。
+   * 解析一个 base。`project` 在 `create` 为真时尚不存在由宿主建出（目录 + 绑定概念 + git init）；
+   * 用户库从不由宿主建出。解析不出（会话不属于项目 / 没有这个库）返回一句可读的 error。
    */
-  resolveBundle: (opts: { create: boolean }) => Promise<KnowledgeBundleTarget | { error: string }>
+  resolveBase: (
+    base: string,
+    opts: { create: boolean }
+  ) => Promise<KnowledgeBundleTarget | { error: string }>
+  /** 本会话可以点名的全部库（`project` 在前） */
+  listBases: () => Promise<readonly KnowledgeBaseInfo[]>
   /** 该 bundle 的扫描结果（宿主缓存；路径 bundle 相对） */
   scan: (bundleDir: string) => Promise<KnowledgeBundleScan>
   /** 该 bundle 内的检索 */
@@ -259,6 +294,8 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
   ): Promise<Result> {
     if (signal?.aborted) throw new Error(this.deps.abortError ?? 'Aborted')
     switch (params.action) {
+      case 'bases':
+        return this.bases()
       case 'search':
         return this.search(params)
       case 'list':
@@ -305,21 +342,51 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
     return (await this.deps.port.stat(joinRoot(bundleDir, rel))) !== null
   }
 
-  /** 目标 bundle；解析不出（会话不属于任何项目）抛可读错误 */
-  private async bundle(create: boolean): Promise<KnowledgeBundleTarget> {
-    const target = await this.deps.resolveBundle({ create })
+  /** 参数里的 base：除 `bases` 外每个动作都必须带 */
+  private requireBase(params: KnowledgeToolParams): string {
+    const base = params.base?.trim()
+    if (!base) {
+      throw new Error(
+        `"${params.action}" needs \`base\` — "${KNOWLEDGE_PROJECT_BASE}" for this project's knowledge base, or the name of one of the user's (call "bases" to list them)`
+      )
+    }
+    return base
+  }
+
+  /** 目标 bundle；解析不出（会话不属于项目 / 没有这个库）抛可读错误 */
+  private async bundle(
+    params: KnowledgeToolParams,
+    create: boolean
+  ): Promise<KnowledgeBundleTarget> {
+    const target = await this.deps.resolveBase(this.requireBase(params), { create })
     if ('error' in target) throw new Error(target.error)
     return target
   }
 
   // ─── actions ───────────────────────────────────────────────
 
+  private async bases(): Promise<Result> {
+    const bases = await this.deps.listBases()
+    const lines = bases.map(
+      (b) => `- ${b.base} — ${b.label}${b.dir ? ` — ${b.dir}` : ''}${b.note ? ` (${b.note})` : ''}`
+    )
+    const userCount = bases.filter((b) => b.base !== KNOWLEDGE_PROJECT_BASE).length
+    return text(
+      [
+        'Knowledge bases (pass the name as `base`):',
+        ...lines,
+        ...(userCount === 0 ? ['The user has no knowledge bases of their own yet.'] : [])
+      ],
+      { action: 'bases' }
+    )
+  }
+
   private async search(params: KnowledgeToolParams): Promise<Result> {
     const query = params.query?.trim()
     if (!query) throw new Error('"search" needs `query`')
     const limit = params.limit ?? DEFAULT_LIMIT
-    // bundle 解析不出（会话不属于任何项目）对检索是软条件：回文字不抛错，与 list 同口径
-    const resolved = await this.deps.resolveBundle({ create: false })
+    // base 解析不出（会话不属于任何项目 / 没有这个库）对检索是软条件：回文字不抛错，与 list 同口径
+    const resolved = await this.deps.resolveBase(this.requireBase(params), { create: false })
     if ('error' in resolved) return text([resolved.error], { action: 'search' })
     const bundleDir = resolved.dir
     if (this.deps.search) {
@@ -356,7 +423,7 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
 
   private async list(params: KnowledgeToolParams): Promise<Result> {
     const limit = params.limit ?? DEFAULT_LIMIT * 5
-    const resolved = await this.deps.resolveBundle({ create: false })
+    const resolved = await this.deps.resolveBase(this.requireBase(params), { create: false })
     if ('error' in resolved) return text([resolved.error], { action: 'list' })
     const { concepts } = await this.deps.scan(resolved.dir)
     if (concepts.length === 0) {
@@ -376,7 +443,7 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
   private async read(toolCallId: string, params: KnowledgeToolParams): Promise<Result> {
     if (!params.path) throw new Error('"read" needs `path`')
     const rel = this.bundlePath(params.path)
-    const target = await this.bundle(false)
+    const target = await this.bundle(params, false)
     await this.enforce('read', target.dir, rel, toolCallId, params.action)
     if (!(await this.exists(target.dir, rel))) throw new Error(`No entry at /${rel}`)
     const raw = await this.deps.port.readFile(joinRoot(target.dir, rel))
@@ -391,7 +458,7 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
    * 正文里的条目链接是否解析得到。
    */
   private async validate(toolCallId: string, params: KnowledgeToolParams): Promise<Result> {
-    const target = await this.bundle(false)
+    const target = await this.bundle(params, false)
     if (params.path) {
       const rel = this.bundlePath(params.path)
       await this.enforce('read', target.dir, rel, toolCallId, params.action)
@@ -443,8 +510,8 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
   }
 
   /**
-   * 新建一条 —— 宿主拼 frontmatter（自述行 / 键序 / 归一 / `status: draft` / `generated`）、
-   * 按标题派生文件名并去重、库不存在时建出来。回执给**绝对路径**：同一轮里紧接着要 `edit`
+   * 新建一条 —— 宿主拼 frontmatter（自述行 / 键序 / 归一 / `status` / `generated`）、按标题派生
+   * 文件名并去重；`project` 库不存在时由宿主建出来（用户库从不建）。回执给**绝对路径**：同一轮里紧接着要 `edit`
    * 它，或者下一轮从 search 的表头再拼一次。
    *
    * 本期新条目一律落在 bundle 根 —— 没有 agent 可选的子目录层级。
@@ -455,6 +522,7 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
     const description = params.description?.trim()
     const body = params.body
     const missing = [
+      !params.base?.trim() && 'base',
       !type && 'type',
       !title && 'title',
       !description && 'description',
@@ -462,7 +530,7 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
     ].filter(Boolean)
     if (missing.length) throw new Error(`Creating an entry needs: ${missing.join(', ')}`)
 
-    const target = await this.bundle(true)
+    const target = await this.bundle(params, true)
     const { concepts, files } = await this.deps.scan(target.dir)
     // 保留文件名同样算占用：slugify('Index') 正好撞上宿主投影的 index.md
     const taken = new Set<string>([

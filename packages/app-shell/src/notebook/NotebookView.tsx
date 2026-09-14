@@ -22,6 +22,8 @@ export interface NotebookViewProps {
   editorHandleRef?: React.RefObject<LivePreviewEditorHandle | null>
   /** 排版模式（见 LivePreviewEditor.layout）：缺省笔记本写作页；设置页这类自带边距的宿主传 fill */
   layout?: 'notebook' | 'fill'
+  /** 无 `shuvix:` 自述行的文件按哪个契约渲染属性卡（知识库笔记本传 `okf`） */
+  frontmatterFallbackType?: string
 }
 
 /**
@@ -38,7 +40,8 @@ export function NotebookView({
   sessionId,
   caps,
   editorHandleRef,
-  layout
+  layout,
+  frontmatterFallbackType
 }: NotebookViewProps): React.JSX.Element {
   const { t } = useTranslation()
 
@@ -172,6 +175,7 @@ export function NotebookView({
         fileContext={fileContext}
         caps={caps}
         layout={layout}
+        frontmatterFallbackType={frontmatterFallbackType}
       />
     </div>
   )

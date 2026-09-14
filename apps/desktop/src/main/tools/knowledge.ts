@@ -4,14 +4,9 @@
  * 检索、盘点、取原文、校验，加**新建条目**（担保元数据形状）。改动条目不经它 —— 走普通
  * `edit`，由写钩子刷新 `generated`、由 fileToolDeps 的 onFileChange 接同一条变更管线。
  *
- * 桌面只注入端适配：Node fs port、会话 → bundle 解析、该 bundle 的扫描与检索
- * （services/knowledge）、桌面 SecurityContext（与文件工具同一道门）、写入者 actor、
- * 新建后的变更管线（投影 + 提交 + 事件）。
- *
- * 作用域就是一个 bundle —— 本会话所属项目的那一个，所以工具没有 `scope` 参数。
- *
- * 不在内置基座档案的工具清单里（应用层未上线前不改变任何会话的行为）；
- * 内置 knowledge-writer 与用户档案按名解析使用。
+ * 桌面只注入端适配：Node fs port、base 的解析与列举（`project` = 根会话所属项目的库，其余名字 =
+ * `~/.shuvix/knowledge/` 下的用户库，所有会话都看得见）、bundle 的扫描与检索（services/knowledge）、
+ * 桌面 SecurityContext（与文件工具同一道门）、写入者 actor、新建后的变更管线（投影 + 提交 + 事件）。
  */
 import {
   createKnowledgeTool,
@@ -28,16 +23,17 @@ import {
 } from '../services/toolContext'
 import { registerBuiltinTool } from '../services/toolRegistry'
 import {
+  listBases,
   locateBundle,
   recordKnowledgeChange,
+  resolveBase,
   scanBundle,
-  searchBundle,
-  sessionBundle
+  searchBundle
 } from '../services/knowledge'
 import { nodeFileSystemPort } from '../utils/toolUtils/nodeFileSystemPort'
 import { t } from '../i18n'
 
-/** 工具只认 bundle 的绝对路径；宿主这边按它反查 bundle id（`projects/<slug>`） */
+/** 工具只认 bundle 的绝对路径；宿主这边按它反查 bundle id（`projects/<id>` / `knowledge/<库名>`） */
 function bundleIdOf(dir: string): string | null {
   return locateBundle(`${dir.replace(/[/\\]+$/, '')}/index.md`)?.bundle ?? null
 }
@@ -46,7 +42,9 @@ export const makeKnowledgeTool = (ctx: ToolContext): ReturnType<typeof createKno
   createKnowledgeTool({
     port: nodeFileSystemPort,
     security: getDesktopSecurityContext(ctx),
-    resolveBundle: (opts) => sessionBundle(ctx.sessionId, opts),
+    // ctx.sessionId 恒为根会话 id（派生 agent 按根会话解析）
+    resolveBase: (base, opts) => resolveBase(ctx.sessionId, base, opts),
+    listBases: () => listBases(ctx.sessionId),
     scan: async (dir) => {
       const located = bundleIdOf(dir)
       if (!located) return { files: [], concepts: [] }

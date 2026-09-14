@@ -21,7 +21,7 @@ import { createLogger } from '../../logger'
 import { PROJECTS_CONTAINER, bundleDir, bundleFilePath } from './knowledgePaths'
 import { projectBundle } from './projection'
 import { ensureBundleRepo } from './repo'
-import { invalidateKnowledgeScan, listBundles, scanBundle } from './scan'
+import { invalidateKnowledgeScan, listProjectBundles, scanBundle } from './scan'
 
 const log = createLogger('Knowledge')
 
@@ -42,7 +42,7 @@ export async function findProjectBundle(projectId: string): Promise<string | nul
   if (isBundleInitialized(byId)) return byId
 
   const resource = projectResource(projectId)
-  for (const bundle of listBundles()) {
+  for (const bundle of listProjectBundles()) {
     const { concepts } = await scanBundle(bundle)
     const hit = concepts.find((c) => c.path === PROJECT_CONCEPT_FILE && c.resource === resource)
     if (hit) return bundle

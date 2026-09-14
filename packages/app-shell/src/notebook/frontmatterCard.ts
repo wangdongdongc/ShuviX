@@ -64,6 +64,12 @@ export interface FrontmatterCardConfig {
    */
   name?: string
   /**
+   * 文件没有 `shuvix:` 自述行时按哪个契约类型渲染（缺省：不渲染卡片）。知识库笔记本传 `okf` ——
+   * OKF 按**位置**认条目（bundle 里除 index/log 外的每个 md，只要求 `type`），规范里没有任何可以
+   * 标识条目的字段，而「这份文件在知识库里」只有宿主知道。带别家 `shuvix:` 标记的文件照旧以标记为准。
+   */
+  fallbackMarkerType?: string
+  /**
    * 把**宿主的成熟选择器**挂进卡片的字段槽位（csv → ToolSelectList，select → ModelSelect）。
    * 卡片自身保持纯 DOM：它只负责开槽、告知当前值、接收写回，React 组件的生命周期
    * 由宿主在返回的 cleanup 里收尾（widget.destroy 时调用）。
@@ -989,7 +995,9 @@ function selectionTouches(state: EditorState, from: number, to: number): boolean
 function buildDecos(state: EditorState, config: FrontmatterCardConfig): DecorationSet {
   const fm = findFrontmatter(state)
   if (!fm) return Decoration.none
-  const marker = readShuvixMarker(fm.yaml)
+  const marker =
+    readShuvixMarker(fm.yaml) ??
+    (config.fallbackMarkerType ? { type: config.fallbackMarkerType, version: null } : null)
   if (!marker) return Decoration.none
 
   // 揭示态：不替换，只给源码行淡淡的背景 tint（标出「这段是元数据」的边界）

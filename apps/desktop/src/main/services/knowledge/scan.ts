@@ -1,5 +1,5 @@
 /**
- * 知识库扫描 —— **按 bundle** 扫：每个 bundle 下的全部 `.md`（ripgrep，遵循 .gitignore、
+ * 知识库扫描 —— **按 bundle** 扫（项目库与用户库一视同仁）：每个 bundle 下的全部 `.md`（ripgrep，遵循 .gitignore、
  * 跳过 .git）→ 该 bundle 的概念清单，路径 bundle 相对。
  *
  * 按 (mtime, size) 缓存解析结果：清单每次都要全量，而库通常几百个文件，全量 stat 便宜、
@@ -21,7 +21,9 @@ import {
   PROJECTS_CONTAINER,
   bundleDir,
   bundleFilePath,
-  getShuvixKnowledgeRoot
+  getUserKnowledgeRoot,
+  isValidLibraryName,
+  userBundleId
 } from './knowledgePaths'
 
 const log = createLogger('Knowledge')
@@ -46,17 +48,31 @@ export interface BundleScan {
   concepts: KnowledgeConcept[]
 }
 
-/** 磁盘上现存的 bundle id（本期恒为 `projects/<slug>`，字典序） */
-export function listBundles(): string[] {
-  const container = bundleDir(PROJECTS_CONTAINER)
+/** 子目录名（不含隐藏目录，字典序）；目录不存在为空 */
+function subdirectories(dir: string): string[] {
   try {
-    return readdirSync(container, { withFileTypes: true })
+    return readdirSync(dir, { withFileTypes: true })
       .filter((d) => d.isDirectory() && !d.name.startsWith('.'))
-      .map((d) => `${PROJECTS_CONTAINER}/${d.name}`)
+      .map((d) => d.name)
       .sort()
   } catch {
     return []
   }
+}
+
+/** 磁盘上现存的项目库 bundle id（`projects/<projectId>`，字典序） */
+export function listProjectBundles(): string[] {
+  return subdirectories(bundleDir(PROJECTS_CONTAINER)).map((d) => `${PROJECTS_CONTAINER}/${d}`)
+}
+
+/** 用户知识库的名字：`~/.shuvix/knowledge/` 下**每个**非隐藏子目录都算一个，不要求任何标记 */
+export function listUserLibraries(): string[] {
+  return subdirectories(getUserKnowledgeRoot()).filter(isValidLibraryName)
+}
+
+/** 磁盘上现存的全部 bundle id：项目库在前，用户库（`knowledge/<库名>`）在后 */
+export function listBundles(): string[] {
+  return [...listProjectBundles(), ...listUserLibraries().map(userBundleId)]
 }
 
 /** 一个 bundle 下全部 md 的 bundle 相对路径（字典序）；目录不存在为空 */
@@ -112,7 +128,7 @@ export async function scanBundle(bundle: string): Promise<BundleScan> {
 
 /** 扫全部 bundle */
 export async function scanAllBundles(): Promise<BundleScan[]> {
-  if (!existsSync(getShuvixKnowledgeRoot())) return []
+  // 两个根各自可能不存在：listBundles 对缺失目录返回空，不必再按根判
   return Promise.all(listBundles().map((b) => scanBundle(b)))
 }
 

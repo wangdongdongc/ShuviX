@@ -18,6 +18,7 @@
  */
 import {
   KNOWLEDGE_PROJECTS_DIR,
+  KNOWLEDGE_USER_ROOT_DIR,
   PROJECT_CONCEPT_FILE,
   type KnowledgeEntry
 } from '@shuvix/chat-protocol/knowledge'
@@ -131,8 +132,8 @@ export function buildKnowledgeTree(entries: readonly KnowledgeEntry[]): Knowledg
     )
     node.dirs.sort((a, b) => {
       if (depth === 0) {
-        const ia = TOP_ORDER.indexOf(a.name)
-        const ib = TOP_ORDER.indexOf(b.name)
+        const ia = TOP_ORDER.indexOf(a.path)
+        const ib = TOP_ORDER.indexOf(b.path)
         if (ia !== ib) {
           if (ia === -1) return 1
           if (ib === -1) return -1
@@ -142,6 +143,14 @@ export function buildKnowledgeTree(entries: readonly KnowledgeEntry[]): Knowledg
       return compareLabel(dirDisplayName(a), dirDisplayName(b)) || compareLabel(a.name, b.name)
     })
     for (const d of node.dirs) sortDir(d, depth + 1)
+  }
+  // 用户库（条目 id `knowledge/<库名>/…`）**不包一层**：它们与 Projects 容器平级。树按条目 id 建，
+  // 于是先长出一个 `knowledge` 节点 —— 把它的子目录提到根上、自己拿掉。置顶判据用 path 而不是
+  // name：一个恰好叫 `projects` 的用户库（path `knowledge/projects`）不该被当成项目容器
+  const userIdx = root.dirs.findIndex((d) => d.path === KNOWLEDGE_USER_ROOT_DIR)
+  if (userIdx !== -1) {
+    const [container] = root.dirs.splice(userIdx, 1)
+    root.dirs.push(...container.dirs)
   }
   sortDir(root, 0)
   return root

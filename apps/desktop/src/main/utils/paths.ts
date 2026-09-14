@@ -96,7 +96,10 @@ export function getShuvixKnowledgeRootDir(): string {
   return join(homedir(), '.shuvix', 'knowledge-shuvix')
 }
 
-/** 用户自己的知识库根（容器）：每个子目录是一个独立 bundle，宿主只读只搜 */
+/**
+ * 用户自己的知识库根（容器）：每个非隐藏子目录都是一个用户知识库，不要求任何标记；
+ * 簿记（index/log 投影、git 提交）与 ShuviX 维护的库一视同仁
+ */
 export function getUserKnowledgeRootDir(): string {
   return join(homedir(), '.shuvix', 'knowledge')
 }

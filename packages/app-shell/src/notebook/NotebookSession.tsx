@@ -7,6 +7,7 @@ import {
   useChatStore,
   selectPendingInputs
 } from '@shuvix/chat-ui'
+import { KNOWLEDGE_MARKER_TYPE, isKnowledgeProjectId } from '@shuvix/chat-protocol/knowledge'
 import { NotebookView, type NotebookViewProps } from './NotebookView'
 import { useFocusDim } from '../sidebar/useFocusDim'
 
@@ -31,6 +32,11 @@ export function NotebookSession({
   const { dim: focusDim } = useFocusDim()
   const hasPendingInputs = useChatStore((s) => selectPendingInputs(s).length > 0)
   const dim = focusDim && !hasPendingInputs
+  // 知识库笔记本：没有 `shuvix:` 自述行的条目也按 OKF 渲染属性卡 —— OKF 按位置认条目，
+  // 规范里没有标识字段；从别处拷进用户库的 bundle 通常不带我们的自述行
+  const inKnowledgeBase = useChatStore((s) =>
+    isKnowledgeProjectId(s.sessions.find((x) => x.id === sessionId)?.projectId)
+  )
   const { handleInputResponse } = useChatActions(sessionId)
   // 悬浮输入卡片实高 → 根容器 CSS 变量：编辑器滚动区据此给文末让位（.cm-scroller 的
   // padding-bottom，见 atomic-panel.css）。直接写 DOM 变量而非 state —— 高度随抽屉
@@ -41,7 +47,12 @@ export function NotebookSession({
   }, [])
   return (
     <div ref={rootRef} className="relative flex-1 min-h-0 flex flex-col">
-      <NotebookView path={path} sessionId={sessionId} caps={caps} />
+      <NotebookView
+        path={path}
+        sessionId={sessionId}
+        caps={caps}
+        frontmatterFallbackType={inKnowledgeBase ? KNOWLEDGE_MARKER_TYPE : undefined}
+      />
       {/* 悬浮输入框：绝对贴底、背景透明不挡正文；对话抽屉与审批卡并入同一张卡片。
           relative z-20：输入卡片要盖住编辑器的浮动件（NotebookMinimap 是 z-10；
           零高度定位壳不改变 absolute 贴底的视觉落点） */}

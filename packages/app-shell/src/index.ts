@@ -62,7 +62,11 @@ export type { ViewSwitchButtonProps, SidebarViewMode } from './sidebar/ViewSwitc
 export { WikiGroup } from './sidebar/WikiGroup'
 export type { WikiGroupProps, WikiFileInfo } from './sidebar/WikiGroup'
 export { KnowledgeGroup } from './sidebar/KnowledgeGroup'
-export type { KnowledgeGroupProps, KnowledgeGroupAdapter } from './sidebar/KnowledgeGroup'
+export type {
+  KnowledgeGroupProps,
+  KnowledgeGroupAdapter,
+  KnowledgeListing
+} from './sidebar/KnowledgeGroup'
 export { buildKnowledgeTree } from './sidebar/knowledgeTree'
 export type {
   KnowledgeTreeDir,

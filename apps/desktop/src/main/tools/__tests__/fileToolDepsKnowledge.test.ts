@@ -64,7 +64,10 @@ vi.mock('../../i18n', () => ({ t: (k: string) => k }))
 vi.mock('../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {} })
 }))
-vi.mock('../../utils/paths', () => ({ getShuvixKnowledgeRootDir: () => state.kb }))
+vi.mock('../../utils/paths', () => ({
+  getShuvixKnowledgeRootDir: () => state.kb,
+  getUserKnowledgeRootDir: () => `${state.kb}-user`
+}))
 vi.mock('../../services/knowledge', () => ({ notifyKnowledgeFileChanged: state.notify }))
 
 import { makeWriteTool } from '../write'

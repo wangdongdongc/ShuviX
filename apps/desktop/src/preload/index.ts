@@ -897,20 +897,21 @@ const api = {
       ipcRenderer.invoke('preview:reportRender', params) as Promise<{ accepted: boolean }>
   },
 
-  // ============ 知识库 v2（OKF bundle：侧栏「知识库」分组，隐藏项目 __knowledge__） ============
+  // ============ 知识库 v2（OKF bundle：侧栏「知识库」分组，隐藏承载项目 __knowledge__ / __knowledge_user__） ============
   knowledge: {
-    /** 全部条目（视图形状，不含正文）+ 根目录绝对路径；首次调用懒建根目录（种子 / 投影 / git） */
+    /** 全部条目（视图形状，不含正文）+ 两个根的绝对路径（root = knowledge-shuvix，userRoot = 用户根）；只读，不建任何东西 */
     list: () =>
       ipcRenderer.invoke('knowledge:list') as Promise<{
         entries: KnowledgeEntry[]
         root: string
+        userRoot: string
       }>,
     /** 打开条目笔记：一文件至多一笔记本会话，已存在则复用返回；title 为条目显示名 */
     openNote: (params: { path: string; title?: string }) =>
       ipcRenderer.invoke('knowledge:openNote', params),
-    /** 打开知识库根目录（OS 文件管理器） */
+    /** 打开用户知识库根目录（OS 文件管理器；不存在先建） */
     openFolder: () => ipcRenderer.invoke('knowledge:openFolder'),
-    /** 在文件夹中显示条目文件（bundle 相对路径） */
+    /** 在文件夹中显示条目文件（条目 id：`projects/<id>/…` / `knowledge/<库名>/…`） */
     revealFile: (params: { path: string }) => ipcRenderer.invoke('knowledge:revealFile', params)
   },
 

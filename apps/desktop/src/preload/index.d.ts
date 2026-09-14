@@ -1051,13 +1051,13 @@ declare global {
       }) => Promise<{ accepted: boolean }>
     }
     knowledge: {
-      /** 全部条目（视图形状，不含正文）+ 根目录绝对路径；首次调用懒建根目录（种子 / 投影 / git） */
-      list: () => Promise<{ entries: KnowledgeEntry[]; root: string }>
+      /** 全部条目（视图形状，不含正文）+ 两个根的绝对路径（root = knowledge-shuvix，userRoot = 用户根）；只读 */
+      list: () => Promise<{ entries: KnowledgeEntry[]; root: string; userRoot: string }>
       /** 打开条目笔记：一文件至多一笔记本会话，已存在则复用返回；title 为条目显示名 */
       openNote: (params: { path: string; title?: string }) => Promise<Session>
-      /** 打开知识库根目录（OS 文件管理器） */
+      /** 打开用户知识库根目录（OS 文件管理器；不存在先建） */
       openFolder: () => Promise<{ success: boolean }>
-      /** 在文件夹中显示条目文件（bundle 相对路径；越出 bundle 的路径忽略） */
+      /** 在文件夹中显示条目文件（条目 id；落不进任何 bundle 的路径忽略） */
       revealFile: (params: { path: string }) => Promise<{ success: boolean }>
     }
     wiki: {

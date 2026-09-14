@@ -18,6 +18,16 @@
 /** 承载知识库笔记本会话的隐藏项目 id（同 `__wiki__` 的做法；项目列表不可见） */
 export const KNOWLEDGE_PROJECT_ID = '__knowledge__'
 
+/**
+ * 用户知识库（`~/.shuvix/knowledge/<库名>/`）笔记本会话的隐藏承载项目。与项目库的承载项目分开：
+ * 承载项目的 path 决定 notebookPath 相对哪个根解析，两个根共用一个承载项目就得改存量会话的路径。
+ */
+export const KNOWLEDGE_USER_PROJECT_ID = '__knowledge_user__'
+
+/** 两个知识库承载项目之一（隐藏项目过滤、侧栏选中态、笔记本属性卡兜底共用） */
+export const isKnowledgeProjectId = (id: string | null | undefined): boolean =>
+  id === KNOWLEDGE_PROJECT_ID || id === KNOWLEDGE_USER_PROJECT_ID
+
 /** 本库产出的 bundle 声明的 OKF 版本（每个 bundle 的根 index.md 的 `okf_version`） */
 export const OKF_VERSION = '0.2'
 
@@ -40,6 +50,12 @@ export const KNOWLEDGE_SHUVIX_ROOT_DIR = 'knowledge-shuvix'
 
 /** `knowledge-shuvix/` 下的容器目录名（本期只有 projects） */
 export const KNOWLEDGE_PROJECTS_DIR = 'projects'
+
+/**
+ * `knowledge` 工具里「本会话所属项目的库」的名字。用户库按目录名点名，保留名优先 ——
+ * 目录恰好叫 `project` 的用户库因此够不着工具，这是一条已知的代价。
+ */
+export const KNOWLEDGE_PROJECT_BASE = 'project'
 
 /**
  * ShuviX 的 `type` 词汇表（开放：OKF 消费者必须容忍未知 type，宿主对未知值只展示不拒绝）。
@@ -95,7 +111,12 @@ export const OKF_LOG_FILE = 'log.md'
  * `path` 同时是条目的稳定 id，`bundle` 是它所属 bundle 的目录（如 `projects/acme`）。
  */
 export interface KnowledgeEntry {
+  /**
+   * 条目 id，两个根共用一个名字空间：项目库 `projects/<projectId>/x.md`（相对 knowledge-shuvix 根），
+   * 用户库 `knowledge/<库名>/x.md`（首段就是用户根的目录名）
+   */
   path: string
+  /** bundle id，同上口径：`projects/<projectId>` / `knowledge/<库名>` */
   bundle: string
   type: string
   title: string

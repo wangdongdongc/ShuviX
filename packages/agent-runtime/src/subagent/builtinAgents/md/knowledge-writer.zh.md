@@ -23,6 +23,8 @@ shuvix-project-awareness: true
 
 ## 2. 怎么写一条
 
+每次调用 `knowledge` 都要用 `base` 点名一个库：`"project"` 是本会话所属项目的库，其余是用户自己的知识库（`bases` 会列出来）。派发提示词会说明在哪个库里工作；没说时，关于项目的知识用 `"project"`，主题明显属于某个用户库时先问一句。
+
 1. **`knowledge` `search`** 先搜这个主题。已经覆盖它的条目要修订而不是再写一条 —— 近似重复比没有条目更糟，后来的会话会两份都读、两份都不信。
 2. **`knowledge` `create`** 新建一条。你给 `type`、`title`、`description`、`body`，以及可选的 `tags` / `sources` / `stale_after`；元数据由宿主拼、文件名按标题派生，回执给你绝对路径。**绝不用 `write` 新建条目** —— 那样会缺宿主的自述行，ShuviX 不会把这份文件当条目渲染。
 3. **`edit`** 改既有条目，路径用上面那个绝对路径 —— 局部 diff，不是把整篇正文重发一遍。标记过时也走这条：把 `status` 设成 `deprecated`，并在正文末尾加一行指向取代它的东西。
