@@ -21,6 +21,14 @@ export function makeTempRoot(prefix = 'shuvix-kb-'): string {
   return mkdtempSync(join(tmpdir(), prefix))
 }
 
+/**
+ * 用户根替身：knowledge 相关测试把 getUserKnowledgeRootDir 替成 shuvix 根的兄弟目录 `<root>-user`。
+ * 它不在 root 之下 —— 往用户根写东西的用例得自己在 afterEach 里把它也删掉。
+ */
+export function userRootOf(root: string): string {
+  return `${root}-user`
+}
+
 /** bundle 根的绝对路径（root 是 shuvix 根，bundle 是根相对 id 如 `projects/acme`） */
 export function bundleAt(root: string, bundle: string): string {
   return join(root, ...bundle.split('/'))
@@ -55,6 +63,34 @@ export function seedConcept(
 
 function git(cwd: string, args: string[]): string {
   return execFileSync('git', args, { cwd, encoding: 'utf8' })
+}
+
+/** 任意 git CLI 读回（原样输出，不裁剪）；cwd 是 bundle 目录 */
+export function gitOutput(cwd: string, args: string[]): string {
+  return git(cwd, args)
+}
+
+/**
+ * 以用户本人（Alice）的身份跑 git CLI —— 造「用户自带的仓库」用。分支名、身份、签名开关都写在
+ * 命令行上，不依赖本机的全局 git 配置。
+ */
+export function gitAsUser(cwd: string, args: string[]): string {
+  return git(cwd, [
+    '-c',
+    'init.defaultBranch=main',
+    '-c',
+    'user.name=Alice',
+    '-c',
+    'user.email=alice@example.com',
+    '-c',
+    'commit.gpgsign=false',
+    ...args
+  ])
+}
+
+/** 某个提交触及的路径（字典序）；根提交即它收下的全部文件 */
+export function gitCommitFiles(cwd: string, rev: string): string[] {
+  return git(cwd, ['show', '--name-only', '--format=', rev]).split('\n').filter(Boolean).sort()
 }
 
 /** `git log --format=<fmt>` 的各条（新 → 旧；单行格式用）；cwd 是 bundle 目录 */

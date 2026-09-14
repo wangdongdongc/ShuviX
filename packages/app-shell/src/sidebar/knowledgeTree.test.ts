@@ -3,7 +3,8 @@
  *
  * 判定全在这个纯函数里，UI 只是照树画：顶层作用域目录固定序、只画有文件的目录、章程 /
  * 绑定概念（project.md / bot.md）置首且按位置识别、绑定概念的 title 给目录命名
- * 而自己那行退回文件名 stem、目录与文件各按显示名排、路径归一 + 去重。这里逐条钉住，
+ * 而自己那行退回文件名 stem、目录与文件各按显示名排、路径归一 + 去重、用户库
+ * （`knowledge/<库名>`）不包一层而是提到根上与项目容器平级。这里逐条钉住，
  * 组件层不再单测这些判定。
  */
 import { describe, it, expect } from 'vitest'
@@ -278,5 +279,95 @@ describe('buildKnowledgeTree — 路径归一、去重、纯度', () => {
     expect(files.find((f) => f.entry.path === 'global/a.md')?.entry.title).toBe('A first')
 
     expect(dirAt(root, 'projects/acme').files).toEqual([])
+  })
+})
+
+/**
+ * 用户库（条目 id `knowledge/<库名>/…`）与 Projects 容器**平级平铺**，不包「我的知识库」一层
+ * （设计附录 U）。提上来的节点保留完整 path（行 key、复制路径都靠它），name 才是库名 —— 所以
+ * 这里按 name 下钻的 `dirAt` 用末段名（`notes`），不是 `knowledge/notes`。
+ */
+describe('buildKnowledgeTree — 用户库', () => {
+  it('KT-13 用户库提到根上、与 projects 容器平级：projects 置顶、库按名排；任何层级都没有 knowledge 节点；文件保留完整 id', () => {
+    const root = buildKnowledgeTree([
+      entry('knowledge/zeta/z.md'),
+      entry('projects/p1/project.md', { type: 'Project', title: 'Acme' }),
+      entry('projects/p1/a.md'),
+      entry('knowledge/notes/b.md'),
+      entry('knowledge/notes/sub/c.md'),
+      entry('knowledge/读书笔记/d.md'),
+      entry('knowledge/Alpha/e.md')
+    ])
+
+    expect(root.dirs[0]).toMatchObject({ path: 'projects', scopeDir: 'projects' })
+    expect(dirAt(root, 'projects/p1').title).toBe('Acme')
+    const userPaths = root.dirs.slice(1).map((d) => d.path)
+    expect([...userPaths].sort()).toEqual(
+      ['knowledge/Alpha', 'knowledge/notes', 'knowledge/zeta', 'knowledge/读书笔记'].sort()
+    )
+    // 只钉拉丁字母之间的相对序；汉字排在哪由 zh-CN 排序规则定，不在这里钉
+    const before = (a: string, b: string): void =>
+      expect(userPaths.indexOf(a), `${a} before ${b}`).toBeLessThan(userPaths.indexOf(b))
+    before('knowledge/Alpha', 'knowledge/notes')
+    before('knowledge/notes', 'knowledge/zeta')
+
+    // 容器节点提完就拿掉：哪一层都不剩 `knowledge`
+    expect(allDirs(root).map((d) => d.path)).not.toContain('knowledge')
+
+    for (const name of ['zeta', 'notes', '读书笔记', 'Alpha']) {
+      expect(dirAt(root, name)).toMatchObject({
+        path: `knowledge/${name}`,
+        name,
+        scopeDir: null,
+        title: null
+      })
+    }
+    const notes = dirAt(root, 'notes')
+    expect(paths(notes)).toEqual(['knowledge/notes/b.md'])
+    expect(notes.dirs.map((d) => d.path)).toEqual(['knowledge/notes/sub'])
+    expect(paths(dirAt(root, 'notes/sub'))).toEqual(['knowledge/notes/sub/c.md'])
+
+    // 清单里只有用户库：根上恰好是这些库，没有根级文件
+    const userOnly = buildKnowledgeTree([
+      entry('knowledge/notes/b.md'),
+      entry('knowledge/Alpha/e.md')
+    ])
+    expect(userOnly.dirs.map((d) => d.path)).toEqual(['knowledge/Alpha', 'knowledge/notes'])
+    expect(userOnly.files).toEqual([])
+  })
+
+  it('KT-14 撞名守卫：库名 projects 不被当成项目容器；库名 knowledge 照常提上来；库里的 project.md 不是绑定概念', () => {
+    // 置顶与 scopeDir 都按 path 判、不按 name：`knowledge/projects` 只是一个恰好叫 projects 的库
+    const clash = buildKnowledgeTree([
+      entry('knowledge/projects/x.md'),
+      entry('knowledge/aaa/y.md'),
+      entry('projects/p1/a.md')
+    ])
+    expect(clash.dirs[0]).toMatchObject({ path: 'projects', scopeDir: 'projects' })
+    expect(clash.dirs.map((d) => d.path)).toEqual([
+      'projects',
+      'knowledge/aaa',
+      'knowledge/projects'
+    ])
+    const userProjects = clash.dirs[2]
+    expect(userProjects).toMatchObject({ name: 'projects', scopeDir: null, title: null })
+    // 两个同名目录各管各的文件，不合并
+    expect(paths(userProjects)).toEqual(['knowledge/projects/x.md'])
+    expect(allFiles(clash.dirs[0]).map((f) => f.entry.path)).toEqual(['projects/p1/a.md'])
+
+    // 库名恰好是容器名 knowledge：提上来的是这个库本身，文件还在
+    const nested = buildKnowledgeTree([entry('knowledge/knowledge/x.md')])
+    expect(nested.dirs.map((d) => d.path)).toEqual(['knowledge/knowledge'])
+    expect(nested.dirs[0]).toMatchObject({ name: 'knowledge', scopeDir: null, title: null })
+    expect(paths(nested.dirs[0])).toEqual(['knowledge/knowledge/x.md'])
+
+    // 绑定概念只认 projects/<id>/project.md：用户库里的 project.md 不给库命名，照常占一行
+    const notes = dirAt(
+      buildKnowledgeTree([entry('knowledge/notes/project.md', { title: 'P' })]),
+      'notes'
+    )
+    expect(notes.title).toBeNull()
+    expect(paths(notes)).toEqual(['knowledge/notes/project.md'])
+    expect(labels(notes)).toEqual(['P'])
   })
 })

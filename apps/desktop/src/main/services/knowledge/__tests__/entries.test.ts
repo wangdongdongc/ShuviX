@@ -1,12 +1,13 @@
 /**
- * entries —— 侧栏 / 管理页的条目清单：扫描**全部 bundle** + toKnowledgeEntry 投影。
+ * entries —— 侧栏 / 管理页的条目清单：扫描**全部 bundle**（项目库 + 用户库）+ toKnowledgeEntry 投影。
  * 钉两件事：清单是只读的（没有 bundle 就是空清单，不顺手建任何东西）；每条的 `path` 与
- * `bundle` 都相对 shuvix 根，所以跨 bundle 唯一，而信任档 / 核实时序 / 过期 / generated 章
- * 经真实扫描逐条投影到位。投影本身的判定表在 agent-runtime 的 entryView 测试里，
- * 这里验的是「扫描 → 投影」这条真实链路。
+ * `bundle` 用两个根共用的 id 名字空间（`projects/<id>/…` / `knowledge/<库名>/…`），所以跨 bundle、
+ * 跨根都唯一，而信任档 / 核实时序 / 过期 / generated 章经真实扫描逐条投影到位。投影本身的判定表在
+ * agent-runtime 的 entryView 测试里，这里验的是「扫描 → 投影」这条真实链路。
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { existsSync, readdirSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs'
+import { join } from 'node:path'
 
 const state = vi.hoisted(() => ({
   root: '',
@@ -27,7 +28,15 @@ vi.mock('../../../dao/projectDao', () => ({
 
 import { listKnowledgeEntries } from '../entries'
 import { invalidateKnowledgeScan } from '../scan'
-import { BUNDLE, OTHER_BUNDLE, PROJECTS, makeTempRoot, seedConcept, seedFile } from './fixture'
+import {
+  BUNDLE,
+  OTHER_BUNDLE,
+  PROJECTS,
+  makeTempRoot,
+  seedConcept,
+  seedFile,
+  userRootOf
+} from './fixture'
 
 let root: string
 
@@ -40,6 +49,7 @@ beforeEach(() => {
 
 afterEach(() => {
   rmSync(root, { recursive: true, force: true })
+  rmSync(userRootOf(root), { recursive: true, force: true })
 })
 
 describe('listKnowledgeEntries', () => {
@@ -170,5 +180,84 @@ describe('listKnowledgeEntries', () => {
     // 普通条目不碰；项目查不到（已删）时保留文件里的 title，不留空
     expect(byPath.get(`${BUNDLE}/a.md`)).toBe('A')
     expect(byPath.get(`${OTHER_BUNDLE}/project.md`)).toBe('Gone')
+  })
+
+  it('EN-6 用户库进清单：path / bundle 用 `knowledge/<库名>` 名字空间；没有 frontmatter / 没有 type / 别家标记的 md 照常一行；任何层级的保留文件、隐藏目录、非 md、用户根散文件、没有 md 的库都不出现；项目名覆盖只作用于项目库；清单只读', async () => {
+    const userRoot = userRootOf(root)
+    const notes = join(userRoot, 'notes')
+    seedConcept(userRoot, 'notes/a.md', ['type: Memory', 'title: A', 'status: draft'])
+    seedConcept(userRoot, 'notes/sub/b.md', ['type: Memory', 'title: B'])
+    seedFile(userRoot, 'notes/plain.md', '# plain\n\nno frontmatter\n')
+    seedFile(userRoot, 'notes/untyped.md', '---\ntitle: x\n---\n\nno type\n')
+    seedFile(userRoot, 'notes/foreign.md', '---\nshuvix: agent v1\ntype: Memory\n---\n\nforeign\n')
+    seedFile(userRoot, 'notes/index.md', '# my index\n')
+    seedFile(userRoot, 'notes/log.md', '# my log\n')
+    seedFile(userRoot, 'notes/sub/index.md', '# sub index\n')
+    seedConcept(userRoot, 'notes/.trash/y.md', ['type: Memory', 'title: Y'])
+    // 拷进用户库的 project.md 是用户自己的文件：resource 恰好指向一个现存项目也不换标题
+    seedConcept(userRoot, 'notes/project.md', [
+      'type: Project',
+      'title: Mine',
+      'resource: shuvix://project/p1'
+    ])
+    state.projects = { p1: { name: 'Live Name' } }
+    mkdirSync(join(userRoot, 'empty'))
+    seedFile(userRoot, 'imgs/pic.png', 'png')
+    seedConcept(userRoot, '.trash/x.md', ['type: Memory', 'title: X'])
+    seedFile(userRoot, 'readme.md', '# readme\n')
+    seedConcept(root, 'projects/p1/a.md', ['type: Memory', 'title: PA'])
+    const notesBefore = readdirSync(notes).sort()
+
+    const listed = await listKnowledgeEntries()
+    expect(listed.root).toBe(root)
+    expect(listed.userRoot).toBe(`${root}-user`)
+    // 恰好这些：empty / imgs 没有 md、.trash 与 readme 不在任何库里、index / log 在哪一层都不列
+    expect(listed.entries.map((e) => e.path).sort()).toEqual([
+      'knowledge/notes/a.md',
+      'knowledge/notes/foreign.md',
+      'knowledge/notes/plain.md',
+      'knowledge/notes/project.md',
+      'knowledge/notes/sub/b.md',
+      'knowledge/notes/untyped.md',
+      'projects/p1/a.md'
+    ])
+    const byPath = Object.fromEntries(listed.entries.map((e) => [e.path, e]))
+
+    expect(byPath['knowledge/notes/a.md']).toMatchObject({
+      bundle: 'knowledge/notes',
+      type: 'Memory',
+      title: 'A',
+      status: 'draft'
+    })
+    // 子目录里的条目仍属于库根
+    expect(byPath['knowledge/notes/sub/b.md']).toMatchObject({ bundle: 'knowledge/notes' })
+    for (const [path, title] of [
+      ['knowledge/notes/plain.md', 'plain'],
+      ['knowledge/notes/untyped.md', 'untyped'],
+      ['knowledge/notes/foreign.md', 'foreign']
+    ]) {
+      expect(byPath[path], path).toStrictEqual({
+        path,
+        bundle: 'knowledge/notes',
+        type: '',
+        title,
+        description: '',
+        status: 'stable',
+        tags: [],
+        trustTier: 'unverified',
+        verifiedCurrent: false,
+        stale: false
+      })
+    }
+    expect(byPath['knowledge/notes/project.md']).toMatchObject({
+      bundle: 'knowledge/notes',
+      type: 'Project',
+      title: 'Mine'
+    })
+    expect(byPath['projects/p1/a.md']).toMatchObject({ bundle: 'projects/p1', title: 'PA' })
+
+    // 只读：用户的文件夹原样
+    expect(readdirSync(notes).sort()).toEqual(notesBefore)
+    expect(readdirSync(join(userRoot, 'empty'))).toEqual([])
   })
 })

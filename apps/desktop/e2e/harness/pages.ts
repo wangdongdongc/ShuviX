@@ -741,7 +741,7 @@ export function sidebarPane(main: CdpClient): SidebarPane {
         )`
   /**
    * 第一个「能建会话」的组头 —— 按 data-group **正向**点名（项目组 / 临时组）：知识库组的
-   * 菜单里只有刷新，而「项目」分节标题（`section`）压根没有菜单，两者都不是这里要的。
+   * 菜单里只有打开目录 / 刷新，而「项目」分节标题（`section`）压根没有菜单，两者都不是这里要的。
    */
   const ACTION_HEADER = `${HEADERS}.find((h) =>
     ['project', 'temp'].includes(h.getAttribute('data-group'))
@@ -2291,6 +2291,215 @@ export function botIntro(main: CdpClient): BotIntroPane {
           present: root !== null,
           member: card?.getAttribute('data-bot-empty-member') ?? '',
           text: (card?.textContent ?? '').trim()
+        }
+      })()`)
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 主窗侧栏「知识库」分组（KnowledgeGroup）+ 从它打开的知识库笔记本
+//
+// 锚点：组头 `data-group="knowledge"`（SessionGroup 的 group/header 层）；目录行
+// `data-knowledge-dir=<目录 id>`、条目行 `data-knowledge-row=<条目 id>`。id 与清单同一个名字空间
+// （`projects/<projectId>/…` 相对 knowledge-shuvix 根，`knowledge/<库名>/…` 相对用户根）；行名是行内
+// 唯一的 span.truncate。
+//
+// 层级只能从行的内联 `padding-left` 读（最外层 0px —— Projects 容器与每个用户库平级 —— 每深一层 +12px）。
+// 目录行与它的正文（AnimatedCollapse 根）是兄弟节点，折叠只收高度、行都还在 DOM 里：展开态读正文的内联
+// `gridTemplateRows`，不数行。路径可能含中文：定位一律 getAttribute 逐个比对，不拼属性选择器。
+//
+// 清单是懒扫的：首次展开分组才拉，之后展开 / 窗口聚焦 / `knowledge.changed` / 组头菜单「刷新」重扫 ——
+// 磁盘外写入不广播，种子要在首次展开之前写好，事后写的要 `refresh()`。点行打开的是那份文件的笔记本会话
+// （隐藏承载项目），主区就是普通笔记本：同一时刻只有它一个 `.cm-content` / 属性卡，作用域取整个 document。
+//
+// ⚠️ 组头菜单的 `open-folder` 与行菜单的 `reveal` **只许读，绝不选**：隔离实例没有替换 `shell`，
+// 选中会在运行 e2e 的真实桌面上弹出文件管理器 —— pickRowMenu 遇到它们直接抛错。
+
+/** 知识库分组里的一行目录 */
+export interface KnowledgeDirShot {
+  /** `data-knowledge-dir`：`projects` / `projects/<projectId>` / `knowledge/<库名>` / 更深的子目录 */
+  path: string
+  /** 行上的名字（Projects 容器是本地化文案，项目库是项目当前名字，其余是目录名） */
+  label: string
+  /** 行的内联 padding-left（'0px' = 顶层，每深一层 +12px） */
+  indent: string
+}
+
+/** 知识库分组里的一行条目 */
+export interface KnowledgeRowShot {
+  /** `data-knowledge-row`：条目 id */
+  path: string
+  /** 行上的名字（合规条目取 title，其余取文件名 stem） */
+  label: string
+}
+
+/** 知识库笔记本里属性卡的读数 */
+export interface KnowledgeCardShot {
+  /** 类型徽章（兜底出的卡没有版本段：'OKF entry'；带自述行的是 'OKF entry · v0.2' 之类） */
+  badge: string
+  /** 卡上的下拉字段（行的 data-key + 当前值），卡片行序 */
+  selects: Array<{ key: string; value: string }>
+  /** 校验徽章节点（没有校验器的类型恒隐藏、无 is-* 类）；节点不在为 null */
+  status: { hidden: boolean; className: string } | null
+}
+
+export interface KnowledgePane {
+  /** 展开分组并等首次清单落定（正文里出现行或空态文案） */
+  expand(): Promise<void>
+  /** 全部目录行（任意层级），DOM 序 */
+  dirs(): Promise<KnowledgeDirShot[]>
+  /** 顶层目录行（缩进 0px：Projects 容器与每个用户库），DOM 序 */
+  topDirs(): Promise<KnowledgeDirShot[]>
+  /** 目录是否展开；目录行不存在返回 false */
+  dirOpen(path: string): Promise<boolean>
+  /** 把目录设成指定展开态并等它落定（幂等） */
+  setDirOpen(path: string, open: boolean): Promise<void>
+  /** 全部条目行（含折叠目录里的 —— 折叠只收高度），DOM 序 */
+  rows(): Promise<KnowledgeRowShot[]>
+  /**
+   * 点一行并等它成为活动行（行的 bg-bg-active）= 这份文件的笔记本成了活动会话
+   * （openNote → 重拉会话列表 → 选中，全是异步的）。**不等正文**：切换后先 waitBody。
+   */
+  openRow(path: string): Promise<void>
+  /** 活动行的条目 id；没有为空串 */
+  activeRow(): Promise<string>
+  /** 组头菜单的动作 id（开一次 ⋮、不选任何项，分隔符滤掉）；组头或 ⋮ 不在返回 null */
+  groupMenuIds(): Promise<string[] | null>
+  /** 组头菜单「刷新」—— 只触发；重扫的结果由调用方 until */
+  refresh(): Promise<void>
+  /** 条目行菜单的原始 items（开一次 ⋮、不选任何项）；⋮ 不在返回 null */
+  rowMenuShots(path: string): Promise<MenuItemShot[] | null>
+  /** 开条目行的 ⋮ 并选中一项（自带「该项真的在菜单里」的核对；`reveal` 拒绝，见本节开头） */
+  pickRowMenu(path: string, actionId: string): Promise<void>
+  /** 笔记本正文（.cm-content）文本；没有笔记为空串 */
+  bodyText(): Promise<string>
+  /** 等正文里出现特征串 —— 切换笔记之后先过这一关，免得读到上一份笔记的 DOM */
+  waitBody(marker: string): Promise<void>
+  /** 属性卡读数；当前笔记没有卡片为 null（槽位类字段要读先 fmCardPane.waitReady） */
+  card(): Promise<KnowledgeCardShot | null>
+}
+
+/** 这两个动作开的是 OS 文件管理器（隔离实例没有替换 shell）—— e2e 只读不选 */
+const KNOWLEDGE_NEVER_PICK: readonly string[] = ['open-folder', 'reveal']
+
+export function knowledgePane(main: CdpClient): KnowledgePane {
+  const sidebar = sidebarPane(main)
+  const HEADER = `document.querySelector('div[class*="group/header"][data-group="knowledge"]')`
+  // 分组正文 = 组头的下一个兄弟（AnimatedCollapse 的 grid 层）→ overflow 层 → SessionGroup 的内缩层
+  const BODY = `${HEADER}?.nextElementSibling?.firstElementChild?.firstElementChild`
+  const DIRS = `[...document.querySelectorAll('[data-knowledge-dir]')]`
+  const ROWS = `[...document.querySelectorAll('[data-knowledge-row]')]`
+  const DIR = (path: string): string =>
+    `${DIRS}.find((el) => el.getAttribute('data-knowledge-dir') === ${JSON.stringify(path)})`
+  const ROW = (path: string): string =>
+    `${ROWS}.find((el) => el.getAttribute('data-knowledge-row') === ${JSON.stringify(path)})`
+  const LABEL_OF = `((el) => (el.querySelector('span.truncate')?.textContent ?? '').trim())`
+
+  const dirs = (): Promise<KnowledgeDirShot[]> =>
+    main.eval<KnowledgeDirShot[]>(`${DIRS}.map((el) => ({
+      path: el.getAttribute('data-knowledge-dir') ?? '',
+      label: ${LABEL_OF}(el),
+      indent: el.style.paddingLeft
+    }))`)
+
+  const dirOpen = (path: string): Promise<boolean> =>
+    main.eval<boolean>(`(() => {
+      const row = ${DIR(path)}
+      // 目录行的下一个兄弟就是它的正文（AnimatedCollapse 根），展开态在那层的内联样式上
+      return !!row && row.nextElementSibling?.style.gridTemplateRows === '1fr'
+    })()`)
+
+  const bodyText = (): Promise<string> =>
+    main.eval<string>(`document.querySelector('.cm-content')?.textContent ?? ''`)
+
+  const waitRow = async (path: string): Promise<void> => {
+    await until(() => main.eval<boolean>(`!!${ROW(path)}`), `knowledge row "${path}"`)
+  }
+
+  return {
+    expand: async () => {
+      await sidebar.setGroupExpanded('knowledge', true)
+      // 清单是展开才拉的：正文有内容（行或空态文案）才算落定
+      await until(
+        () => main.eval<boolean>(`(${BODY}?.childElementCount ?? 0) > 0`),
+        'knowledge group listed'
+      )
+    },
+
+    dirs,
+    topDirs: async () => (await dirs()).filter((d) => d.indent === '0px'),
+    dirOpen,
+
+    setDirOpen: async (path, open) => {
+      await until(() => main.eval<boolean>(`!!${DIR(path)}`), `knowledge dir "${path}"`)
+      if ((await dirOpen(path)) === open) return
+      await main.eval(`${DIR(path)}.click()`)
+      await until(
+        async () => (await dirOpen(path)) === open,
+        `knowledge dir "${path}" ${open ? 'expanded' : 'collapsed'}`
+      )
+      // 内联样式已落定，高度过渡（150ms）还在走 —— 等它走完再往下
+      await sleep(200)
+    },
+
+    rows: () =>
+      main.eval<KnowledgeRowShot[]>(`${ROWS}.map((el) => ({
+        path: el.getAttribute('data-knowledge-row') ?? '',
+        label: ${LABEL_OF}(el)
+      }))`),
+
+    openRow: async (path) => {
+      await waitRow(path)
+      await main.eval(`${ROW(path)}.click()`)
+      await until(
+        () => main.eval<boolean>(`(${ROW(path)}?.className ?? '').includes('bg-bg-active')`),
+        `knowledge row "${path}" active`
+      )
+    },
+
+    activeRow: () =>
+      main.eval<string>(
+        `${ROWS}.find((el) => el.className.includes('bg-bg-active'))?.getAttribute('data-knowledge-row') ?? ''`
+      ),
+
+    groupMenuIds: () => sidebar.groupMenuItems('knowledge'),
+    refresh: () => sidebar.pickGroupMenu('knowledge', 'refresh'),
+
+    rowMenuShots: async (path) => {
+      await waitRow(path)
+      return openMenu(main, ROW(path), 'menu-button')
+    },
+
+    pickRowMenu: async (path, actionId) => {
+      if (KNOWLEDGE_NEVER_PICK.includes(actionId)) {
+        throw new Error(
+          `refusing to pick "${actionId}" on knowledge row "${path}": it opens the real OS file manager`
+        )
+      }
+      await waitRow(path)
+      await pickFromMenu(main, ROW(path), actionId, `knowledge row "${path}"`)
+    },
+
+    bodyText,
+    waitBody: async (marker) => {
+      await until(
+        async () => (await bodyText()).includes(marker),
+        `knowledge note body shows ${JSON.stringify(marker)}`
+      )
+    },
+
+    card: () =>
+      main.eval<KnowledgeCardShot | null>(`(() => {
+        const card = document.querySelector('.cm-shuvix-fmcard')
+        if (!card) return null
+        const status = card.querySelector('.cm-shuvix-fmcard-status')
+        return {
+          badge: (card.querySelector('.cm-shuvix-fmcard-badge')?.textContent ?? '').trim(),
+          selects: [...card.querySelectorAll('.cm-shuvix-fmcard-row')]
+            .map((r) => ({ key: r.dataset.key ?? '', sel: r.querySelector('.cm-shuvix-fmcard-enum select') }))
+            .filter((x) => x.sel)
+            .map((x) => ({ key: x.key, value: x.sel.value })),
+          status: status ? { hidden: status.hidden, className: status.className } : null
         }
       })()`)
   }

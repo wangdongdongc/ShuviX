@@ -1,8 +1,8 @@
 /**
  * 桌面文件工具 deps 的知识库接线（fileToolDeps.ts）—— 真实临时文件 + 真实 fileTime + 真实安全模块
- * （同 writeAskWiring.test 的 provider 桩），只把 ShuviX 知识库根指到临时目录、把变更管线换成 spy：
- * 该根下的 md 落盘后盖 `generated`（actor = agentActorOf(ctx)）并进 notifyKnowledgeFileChanged
- * （模块按需加载）；根外一切照旧。
+ * （同 writeAskWiring.test 的 provider 桩），只把两个知识库根指到临时目录、把变更管线换成 spy：
+ * 落在某个库里（项目库或用户库）的 md 落盘后盖 `generated`（actor = agentActorOf(ctx)）并进
+ * notifyKnowledgeFileChanged（模块按需加载）；不属于任何库的路径（根外、用户根散文件、隐藏目录）一切照旧。
  *
  * 库上**没有任何内置策略**（等整体定型再设计），所以这里免询问开着就不该再弹卡 ——
  * 盖章与变更管线跟安全模块是两件事，这条得分开钉住。
@@ -100,6 +100,7 @@ beforeAll(() => {
   state.dir = mkdtempSync(join(tmpdir(), 'shuvix-filetool-kb-'))
   state.kb = join(state.dir, 'kb')
   mkdirSync(join(state.kb, 'projects', 'acme'), { recursive: true })
+  mkdirSync(join(`${state.kb}-user`, 'notes'), { recursive: true })
 })
 afterAll(() => rmSync(state.dir, { recursive: true, force: true }))
 beforeEach(() => {
@@ -138,5 +139,40 @@ describe('桌面文件工具 — 知识库根目录下的写入', () => {
     expect(textOf(res)).not.toContain('[OKF]')
     await new Promise((resolve) => setTimeout(resolve, 30))
     expect(state.notify).not.toHaveBeenCalled()
+  })
+
+  it('FD-3 用户库里的 write / edit 与项目库一样：盖 generated、回执 [OKF] Stamped、变更管线收到 write / edit；不弹卡', async () => {
+    const p = join(`${state.kb}-user`, 'notes', 'x.md')
+    const res = await makeWriteTool(ctx).execute('w3', { path: p, content: DRAFT })
+
+    expect(state.requests).toEqual([])
+    expect(readFileSync(p, 'utf-8')).toContain('generated: { by: "shuvix-work/gpt-5", at: "')
+    expect(textOf(res)).toContain('[OKF] Stamped')
+    await vi.waitFor(() => expect(state.notify).toHaveBeenCalledTimes(1))
+    expect(state.notify).toHaveBeenCalledWith(p, { kind: 'write', actor: 'shuvix-work/gpt-5' })
+
+    await makeEditTool(ctx).execute('e3', { path: p, oldText: 'body', newText: 'body two' })
+    await vi.waitFor(() => expect(state.notify).toHaveBeenCalledTimes(2))
+    expect(state.notify).toHaveBeenLastCalledWith(p, { kind: 'edit', actor: 'shuvix-work/gpt-5' })
+    const after = readFileSync(p, 'utf-8')
+    expect(after).toContain('body two')
+    expect(after).toContain('generated: { by: "shuvix-work/gpt-5", at: "')
+    expect(state.requests).toEqual([])
+  })
+
+  it('FD-4 在用户根下但不属于任何库（用户根散文件 / 根下与库内的隐藏目录）：不盖章、无回执、变更管线不收、不弹卡', async () => {
+    const userRoot = `${state.kb}-user`
+    for (const p of [
+      join(userRoot, 'x.md'),
+      join(userRoot, '.trash', 'x.md'),
+      join(userRoot, 'notes', '.trash', 'x.md')
+    ]) {
+      const res = await makeWriteTool(ctx).execute('w4', { path: p, content: DRAFT })
+      expect(readFileSync(p, 'utf-8'), p).toBe(DRAFT)
+      expect(textOf(res), p).not.toContain('[OKF]')
+    }
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(state.notify).not.toHaveBeenCalled()
+    expect(state.requests).toEqual([])
   })
 })

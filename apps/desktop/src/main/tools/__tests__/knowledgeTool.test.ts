@@ -1,8 +1,9 @@
 /**
  * knowledge 工具（桌面注册）—— 复用 agent-runtime 的共享**读侧**内核，桌面只注入端适配。
  * 钉：注册元数据（name / group / presentation / describe）；以及适配那一层的两件事 ——
- * 目标库按**会话 + base** 解析（`project` 是根会话所属项目的库，只有 create 允许宿主建库），
- * 拿到的 bundle 目录再反查回 bundle id 交给扫描 / 检索。
+ * 目标库按**会话 + base** 解析（`project` 是根会话所属项目的库，其余名字是用户库；只有 create 允许
+ * 宿主建库），拿到的 bundle 目录再反查回 bundle id（`projects/<id>` / `knowledge/<库名>`）交给扫描 /
+ * 检索；`bases` 直接走宿主的 listBases，不解析任何 base。
  *
  * 只有 `create` 会写盘并自己记一笔账；改动条目走普通 `edit`，那条路的记账钉在文件工具那侧。
  *
@@ -10,7 +11,7 @@
  * 正是适配层的实质），扫描 / 检索是替身。
  */
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest'
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -83,7 +84,10 @@ const target = (): { bundle: string; dir: string; label: string } => ({
 beforeAll(() => {
   state.root = mkdtempSync(join(tmpdir(), 'shuvix-knowledge-tool-'))
 })
-afterAll(() => rmSync(state.root, { recursive: true, force: true }))
+afterAll(() => {
+  rmSync(state.root, { recursive: true, force: true })
+  rmSync(`${state.root}-user`, { recursive: true, force: true })
+})
 
 beforeEach(() => {
   state.record.mockClear()
@@ -164,5 +168,63 @@ describe('knowledge 工具（桌面注册）', () => {
     } finally {
       rmSync(stray, { recursive: true, force: true })
     }
+  })
+
+  it('TK-4 [白盒·适配层] 用户库：解析出的用户根下目录经 locateBundle 反查回 `knowledge/<库名>`，list / search / validate / create 都拿这个 id 交给扫描 / 检索 / 变更管线；create 落在用户库目录里', async () => {
+    const userRoot = `${state.root}-user`
+    mkdirSync(join(userRoot, 'notes'), { recursive: true })
+    state.resolveBase.mockResolvedValue({
+      bundle: 'knowledge/notes',
+      dir: join(userRoot, 'notes'),
+      label: 'knowledge base "notes"'
+    })
+    const tool = makeKnowledgeTool(ctx)
+
+    await tool.execute('u1', { action: 'list', base: 'notes' })
+    expect(state.resolveBase).toHaveBeenLastCalledWith('s1', 'notes', { create: false })
+    expect(state.scan).toHaveBeenLastCalledWith('knowledge/notes')
+
+    await tool.execute('u2', { action: 'search', base: 'notes', query: 'q', limit: 3 })
+    expect(state.search).toHaveBeenLastCalledWith('knowledge/notes', 'q', { limit: 3 })
+
+    state.scan.mockClear()
+    await tool.execute('u3', { action: 'validate', base: 'notes' })
+    expect(state.scan).toHaveBeenLastCalledWith('knowledge/notes')
+
+    await tool.execute('u4', {
+      action: 'create',
+      base: 'notes',
+      type: 'Memory',
+      title: 'T',
+      description: 'd',
+      body: 'b'
+    })
+    expect(state.resolveBase).toHaveBeenLastCalledWith('s1', 'notes', { create: true })
+    const written = join(userRoot, 'notes', 't.md')
+    expect(existsSync(written)).toBe(true)
+    expect(readFileSync(written, 'utf-8')).toContain('shuvix: okf v0.2')
+    expect(state.record).toHaveBeenLastCalledWith({
+      bundle: 'knowledge/notes',
+      path: 't.md',
+      op: 'Creation',
+      title: 'T',
+      actor: 'shuvix-work/gpt-5'
+    })
+  })
+
+  it('TK-5 `bases` 直接走宿主的 listBases（传根会话 id），不解析任何 base；每个库一行带标签与目录', async () => {
+    state.listBases.mockResolvedValue([
+      { base: 'project', label: 'this project', note: 'this session does not belong to a project' },
+      { base: 'notes', label: 'knowledge base "notes"', dir: '/u/notes' }
+    ])
+
+    const res = await makeKnowledgeTool(ctx).execute('b1', { action: 'bases' })
+
+    expect(state.listBases).toHaveBeenCalledTimes(1)
+    expect(state.listBases).toHaveBeenCalledWith('s1')
+    expect(state.resolveBase).not.toHaveBeenCalled()
+    expect((res.content[0] as { text: string }).text).toContain(
+      '- notes — knowledge base "notes" — /u/notes'
+    )
   })
 })

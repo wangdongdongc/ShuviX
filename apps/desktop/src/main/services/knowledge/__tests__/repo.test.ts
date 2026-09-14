@@ -3,6 +3,7 @@
  * 的变更提交一次（300ms 去抖合批），署名 ShuviX Knowledge、内容出自谁写在 trailer。
  * 去抖窗口跨 bundle 合批，但提交各进各的仓库 —— 没有任何跨仓库操作。一切失败只记日志：
  * 目录不存在 / 不是仓库都静默跳过。提交经真实 isomorphic-git 落盘、用 git CLI 读回。
+ * 用户库同样一库一仓库：.git 建在用户根下的库目录里；已经是用户自己的仓库就原样沿用，一个提交都不加。
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { existsSync, mkdirSync, rmSync } from 'node:fs'
@@ -24,14 +25,17 @@ import {
   OTHER_BUNDLE,
   PROJECTS,
   bundleAt,
+  gitAsUser,
   gitCommitCount,
   gitHeadFiles,
   gitHeadMessage,
   gitLog,
+  gitOutput,
   gitStatus,
   makeTempRoot,
   seedConcept,
-  seedFile
+  seedFile,
+  userRootOf
 } from './fixture'
 
 const PROJECT_MD = '---\ntype: Project\ntitle: Acme\nresource: shuvix://project/p1\n---\n\nacme\n'
@@ -48,6 +52,7 @@ beforeEach(() => {
 afterEach(async () => {
   await flushKnowledgeCommits()
   rmSync(root, { recursive: true, force: true })
+  rmSync(userRootOf(root), { recursive: true, force: true })
 })
 
 describe('ensureBundleRepo', () => {
@@ -139,5 +144,46 @@ describe('queueKnowledgeCommit / flushKnowledgeCommits', () => {
     queueKnowledgeCommit(bare, ['a.md'], { op: 'Creation', path: 'a.md' })
     await expect(flushKnowledgeCommits()).resolves.toBeUndefined()
     expect(existsSync(join(bundleAt(root, bare), '.git'))).toBe(false)
+  })
+})
+
+describe('ensureBundleRepo —— 用户库', () => {
+  it('RP-4 .git 建在用户根下的库目录里，基线收下全部现有文件（嵌套目录与非 md 照收）；已经是用户自己的仓库时一个提交都不加、HEAD 不变；exclude 的文件不进基线，其余照收', async () => {
+    const userRoot = userRootOf(root)
+    const notes = join(userRoot, 'notes')
+    seedConcept(userRoot, 'notes/a.md', ['type: Memory', 'title: A'])
+    seedFile(userRoot, 'notes/sub/deep/b.md', '# b\n')
+    seedFile(userRoot, 'notes/assets/pic.png', 'png')
+
+    await ensureBundleRepo('knowledge/notes')
+    expect(existsSync(join(notes, '.git'))).toBe(true)
+    // 不是建在 shuvix 根下同形的路径里
+    expect(existsSync(join(root, 'knowledge'))).toBe(false)
+    expect(gitLog(notes, '%s')).toEqual(['kb(init): knowledge base'])
+    expect(gitHeadFiles(notes)).toEqual(['a.md', 'assets/pic.png', 'sub/deep/b.md'])
+    expect(gitStatus(notes)).toBe('')
+
+    // 用户自己的仓库：原样沿用，连后来冒出来的未跟踪文件也不替用户提交
+    const vault = join(userRoot, 'vault')
+    seedFile(userRoot, 'vault/note.md', '# note\n')
+    gitAsUser(vault, ['init'])
+    gitAsUser(vault, ['add', '.'])
+    gitAsUser(vault, ['commit', '-m', 'My notes'])
+    const head = gitOutput(vault, ['rev-parse', 'HEAD']).trim()
+    seedFile(userRoot, 'vault/later.md', '# later\n')
+    await ensureBundleRepo('knowledge/vault')
+    expect(gitCommitCount(vault)).toBe(1)
+    expect(gitOutput(vault, ['rev-parse', 'HEAD']).trim()).toBe(head)
+    expect(gitStatus(vault)).toBe('?? later.md')
+
+    // exclude：本批刚写下的文件不进基线，其余照收
+    const fresh = join(userRoot, 'fresh')
+    seedFile(userRoot, 'fresh/old.md', '# old\n')
+    seedFile(userRoot, 'fresh/img/x.png', 'png')
+    seedFile(userRoot, 'fresh/new.md', '# new\n')
+    await ensureBundleRepo('knowledge/fresh', { exclude: ['new.md'] })
+    expect(gitLog(fresh, '%s')).toEqual(['kb(init): knowledge base'])
+    expect(gitHeadFiles(fresh)).toEqual(['img/x.png', 'old.md'])
+    expect(gitStatus(fresh)).toBe('?? new.md')
   })
 })

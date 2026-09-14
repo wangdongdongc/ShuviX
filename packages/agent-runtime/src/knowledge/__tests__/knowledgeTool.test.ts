@@ -8,7 +8,9 @@
  *
  * **每次调用点名一个 base**，由宿主的 `resolveBase` 解析成一个 bundle，所以工具没有 scope
  * 参数，路径一律 bundle 相对；回执表头点名 bundle 的绝对目录，因为 agent 要拿它拼出
- * write/edit 用的路径。本文件的用例都在 `project` 库里跑。
+ * write/edit 用的路径。KT-1..KT-7 都在 `project` 库里跑；KT-8 起钉 base 本身（设计附录 U）——
+ * `bases` 只列库、缺 base 是硬错误（刻意没有缺省）、库名去空白后原样交给宿主、解析失败时
+ * 读 / 校验 / 新建硬错而检索 / 盘点软失败。
  */
 import { describe, it, expect, vi, type Mock } from 'vitest'
 import type { AgentToolResult } from '@earendil-works/pi-agent-core'
@@ -18,8 +20,10 @@ import type { SecurityContext } from '../../security/types'
 import { parseConceptText, type KnowledgeConcept } from '../conceptFile'
 import {
   createKnowledgeTool,
+  KNOWLEDGE_DESCRIPTION,
   KNOWLEDGE_TOOL_NAME,
   KnowledgeParamsSchema,
+  type KnowledgeBaseInfo,
   type KnowledgeBundleTarget,
   type KnowledgeSearchHit,
   type KnowledgeToolParams
@@ -39,13 +43,15 @@ const BUNDLE: KnowledgeBundleTarget = { dir: ROOT, label: 'project "Acme"' }
 interface ToolOptions {
   /** 内存 port 的初始文件（绝对路径 → 内容） */
   files?: Record<string, string>
-  /** bundle 解析结果（缺省即 BUNDLE）；给 `{error}` 模拟「会话不属于任何项目」 */
+  /** bundle 解析结果（缺省即 BUNDLE）；给 `{error}` 模拟解析失败（会话不属于任何项目 / 没有这个库） */
   bundle?: KnowledgeBundleTarget | { error: string }
+  /** `bases` 列举的库（缺省空表） */
+  bases?: readonly KnowledgeBaseInfo[]
   search?: (
     query: string,
     opts: { limit: number; bundleDir: string }
   ) => Promise<KnowledgeSearchHit[]>
-  /** 不传 = 只记录调用的 enforcePath 桩；KT-12 换成真实 SecurityContext */
+  /** 不传 = 只记录调用的 enforcePath 桩 */
   security?: SecurityContext
   abortError?: string
 }
@@ -57,6 +63,7 @@ interface Harness {
   files: Map<string, string>
   enforcePath: Mock
   resolveBase: Mock
+  listBases: Mock
   afterWrite: Mock
   /** 调用顺序流水：`enforce:<mode>:<abs>` / `write:<abs>` */
   calls: string[]
@@ -64,6 +71,15 @@ interface Harness {
 }
 
 const textOf = (res: Result): string => (res.content[0] as { text: string }).text
+
+/** 这次调用 reject 的消息（没 reject 即判失败）—— 要逐字比对时用：`toThrow(string)` 只比子串 */
+const rejectionOf = (p: Promise<unknown>): Promise<string> =>
+  p.then(
+    () => {
+      throw new Error('expected the call to reject')
+    },
+    (e: unknown) => (e instanceof Error ? e.message : String(e))
+  )
 
 function memoryPort(files: Map<string, string>, calls: string[]): FileSystemPort {
   return {
@@ -94,16 +110,19 @@ function memoryPort(files: Map<string, string>, calls: string[]): FileSystemPort
   }
 }
 
-/** 宿主扫描的替身：bundle 下的全部 md 原文 + 解析得出的概念（保留文件与非概念不算概念） */
-function scanOf(files: Map<string, string>): {
+/** 宿主扫描的替身：`bundleDir` 下的全部 md 原文 + 解析得出的概念（保留文件与非概念不算概念） */
+function scanOf(
+  files: Map<string, string>,
+  bundleDir: string
+): {
   files: BundleFile[]
   concepts: KnowledgeConcept[]
 } {
   const all: BundleFile[] = []
   const concepts: KnowledgeConcept[] = []
   for (const [abs, text] of files) {
-    if (!abs.startsWith(`${ROOT}/`)) continue
-    const rel = abs.slice(ROOT.length + 1)
+    if (!abs.startsWith(`${bundleDir}/`)) continue
+    const rel = abs.slice(bundleDir.length + 1)
     all.push({ path: rel, text })
     if (isReservedFile(rel)) continue
     const concept = parseConceptText(text, rel)
@@ -120,13 +139,15 @@ function makeTool(opts: ToolOptions = {}): Harness {
   })
   const security = opts.security ?? ({ enforcePath } as unknown as SecurityContext)
   const resolveBase = vi.fn(async () => opts.bundle ?? BUNDLE)
+  const listBases = vi.fn(async () => opts.bases ?? [])
   const afterWrite = vi.fn()
   const tool = createKnowledgeTool({
     port: memoryPort(files, calls),
     security,
-    scan: async () => scanOf(files),
+    // 扫描跟着宿主解析出的目录走：resolveBase 给的是别的库时，清单也得是那个库的
+    scan: async (bundleDir) => scanOf(files, bundleDir),
     resolveBase,
-    listBases: async () => [],
+    listBases,
     search: opts.search,
     actor: () => ACTOR,
     now: () => NOW,
@@ -139,6 +160,7 @@ function makeTool(opts: ToolOptions = {}): Harness {
     files,
     enforcePath,
     resolveBase,
+    listBases,
     afterWrite,
     calls,
     run: (id, params, signal) => tool.execute(id, params, signal)
@@ -492,5 +514,239 @@ describe('KT-7 create —— 元数据形状与去重', () => {
     })
     expect(h.files.get('/kb/projects/acme/half-done.md')).toContain('\nstatus: draft\n')
     expect(textOf(res)).toContain('(draft)')
+  })
+})
+
+/**
+ * 以下钉 base 本身（设计附录 U）。**刻意不给缺省**：缺省一旦落到项目库，agent 就永远想不起用户库
+ * —— 所以缺 base 必须抛错，既不能悄悄落进 `project`，也不能回一句话让 agent 当成「没有结果」。
+ * 工具也不区分库的种类：名字去空白后交给宿主，标签与目录全用宿主给的。
+ */
+describe('KT-8 bases —— 只列库', () => {
+  it('KT-8 表头 + 逐行 `- <base> — <label> — <dir>`；不解析 base、不过 PEP、不写盘；多带的 base / path 一概不看', async () => {
+    const h = makeTool({
+      bases: [
+        { base: 'project', label: 'project "Acme"', dir: '/kb/projects/acme' },
+        { base: 'notes', label: 'knowledge base "notes"', dir: '/u/notes' }
+      ]
+    })
+    const expected = [
+      'Knowledge bases (pass the name as `base`):',
+      '- project — project "Acme" — /kb/projects/acme',
+      '- notes — knowledge base "notes" — /u/notes'
+    ].join('\n')
+
+    const res = await h.run('c1', { action: 'bases' })
+    expect(textOf(res)).toBe(expected)
+    expect(res.details).toEqual({ action: 'bases' })
+    expect(h.listBases).toHaveBeenCalledTimes(1)
+
+    // bases 答的是「有哪些库可以点名」，与哪个库无关：带上 base / path 也不去解析
+    const again = await h.run('c2', { action: 'bases', base: 'notes', path: '/x.md' })
+    expect(textOf(again)).toBe(expected)
+    expect(again.details).toEqual({ action: 'bases' })
+    expect(h.listBases).toHaveBeenCalledTimes(2)
+
+    expect(h.resolveBase).not.toHaveBeenCalled()
+    expect(h.enforcePath).not.toHaveBeenCalled()
+    expect(h.calls).toEqual([])
+    expect(h.afterWrite).not.toHaveBeenCalled()
+  })
+
+  it('KT-8 库暂不可用时不带目录、括注宿主的说明；用户自己一个库都没有时末尾多一句', async () => {
+    const h = makeTool({
+      bases: [
+        {
+          base: 'project',
+          label: 'this project',
+          note: 'this session does not belong to a project'
+        }
+      ]
+    })
+    expect(textOf(await h.run('c1', { action: 'bases' }))).toBe(
+      [
+        'Knowledge bases (pass the name as `base`):',
+        '- project — this project (this session does not belong to a project)',
+        'The user has no knowledge bases of their own yet.'
+      ].join('\n')
+    )
+  })
+})
+
+describe('KT-9 缺 base 是硬错误', () => {
+  /** 读侧五种调用：除 base 外参数都齐 */
+  const READS: KnowledgeToolParams[] = [
+    { action: 'search', query: 'q' },
+    { action: 'list' },
+    { action: 'read', path: '/a.md' },
+    { action: 'validate' },
+    { action: 'validate', path: '/a.md' }
+  ]
+  /** 不传 / 空串 / 全空白 */
+  const MISSING: (string | undefined)[] = [undefined, '', '   ']
+  const table = READS.flatMap((params) =>
+    MISSING.map((base): [string, string, KnowledgeToolParams] => [
+      params.path ? `${params.action} ${params.path}` : params.action,
+      base === undefined ? '不传' : JSON.stringify(base),
+      base === undefined ? params : { ...params, base }
+    ])
+  )
+
+  it.each(table)(
+    'KT-9 %s，base %s → 抛错点名 `base`（并提到 "project" 与 "bases"）；不解析、不过 PEP、不检索、不写盘',
+    async (_label, _base, params) => {
+      const search = vi.fn(async () => [])
+      // 条目真实存在：少了这道守卫，read / validate 会成功，而不是碰巧因为别的原因失败
+      const h = makeTool({
+        search,
+        files: { '/kb/projects/acme/a.md': doc(['type: Memory', 'title: A', 'description: da']) }
+      })
+      const message = await rejectionOf(h.run('c1', params))
+      expect(message).toContain(`"${params.action}" needs \`base\``)
+      expect(message).toContain('"project"')
+      expect(message).toContain('"bases"')
+      expect(h.resolveBase).not.toHaveBeenCalled()
+      expect(h.enforcePath).not.toHaveBeenCalled()
+      expect(search).not.toHaveBeenCalled()
+      expect(h.calls).toEqual([])
+    }
+  )
+
+  it('KT-9 create：只缺 base → 只点名 base；缺好几样一次点全、base 排第一；都不解析、不写盘、不调 afterWrite', async () => {
+    const h = makeTool()
+    const complete = {
+      action: 'create' as const,
+      type: 'Memory',
+      title: 'T',
+      description: 'd',
+      body: 'b'
+    }
+    for (const base of MISSING) {
+      const params = base === undefined ? complete : { ...complete, base }
+      expect(await rejectionOf(h.run('c1', params)), JSON.stringify(base)).toBe(
+        'Creating an entry needs: base'
+      )
+    }
+    expect(await rejectionOf(h.run('c2', { action: 'create', title: 'T' }))).toBe(
+      'Creating an entry needs: base, type, description, body'
+    )
+    expect(h.resolveBase).not.toHaveBeenCalled()
+    expect(h.calls).toEqual([])
+    expect(h.afterWrite).not.toHaveBeenCalled()
+  })
+})
+
+describe('KT-10 工具不关心 base 是哪种库', () => {
+  const DIR = '/u/读书笔记'
+  const USER_BASE: KnowledgeBundleTarget = { dir: DIR, label: 'knowledge base "读书笔记"' }
+  /** 带首尾空白的库名：工具只去空白，其余原样交给宿主 */
+  const RAW = '  读书笔记 '
+
+  it('KT-10 读侧四个动作都按 (去空白的名字, create:false) 解析；表头、回执、检索与 PEP 都用宿主给的标签与目录', async () => {
+    const search = vi.fn(async () => [])
+    const h = makeTool({
+      bundle: USER_BASE,
+      search,
+      files: {
+        [`${DIR}/a.md`]: doc(['type: Memory', 'title: A', 'description: da']),
+        [`${DIR}/b.md`]: doc(['type: Memory', 'title: B', 'description: db']),
+        // 别的库里的条目：清单只含宿主解析出的那个目录
+        '/kb/projects/acme/x.md': doc(['type: Memory', 'title: X', 'description: dx'])
+      }
+    })
+
+    expect(textOf(await h.run('c1', { action: 'list', base: RAW }))).toBe(
+      [`2 entries in knowledge base "读书笔记" — ${DIR}:`, '- /a.md — da', '- /b.md — db'].join(
+        '\n'
+      )
+    )
+    await h.run('c2', { action: 'search', base: RAW, query: 'q' })
+    expect(search).toHaveBeenCalledWith('q', { limit: 20, bundleDir: DIR })
+    const read = await h.run('c3', { action: 'read', base: RAW, path: '/a.md' })
+    expect(textOf(read).startsWith(`${DIR}/a.md:\n`)).toBe(true)
+    await h.run('c4', { action: 'validate', base: RAW, path: '/a.md' })
+    expect(textOf(await h.run('c5', { action: 'validate', base: RAW }))).toContain(
+      `in knowledge base "读书笔记" — ${DIR}`
+    )
+
+    expect(h.resolveBase.mock.calls).toEqual(
+      Array.from({ length: 5 }, () => ['读书笔记', { create: false }])
+    )
+    expect(h.calls).toEqual([
+      `enforce:read:${DIR}/a.md`,
+      `enforce:read:${DIR}/a.md`,
+      `enforce:read:${DIR}`
+    ])
+  })
+
+  it('KT-10 create 按 (去空白的名字, create:true) 解析；落在宿主给的目录，回执、PEP、afterWrite 都指向它', async () => {
+    const h = makeTool({ bundle: USER_BASE })
+    const res = await h.run('c1', {
+      action: 'create',
+      base: RAW,
+      type: 'Memory',
+      title: 'Reading list',
+      description: 'd',
+      body: 'b'
+    })
+    const abs = `${DIR}/reading-list.md`
+    expect(h.resolveBase.mock.calls).toEqual([['读书笔记', { create: true }]])
+    expect(h.calls).toEqual([`enforce:write:${abs}`, `write:${abs}`])
+    expect(textOf(res)).toContain(abs)
+    expect(h.afterWrite).toHaveBeenCalledWith({
+      bundleDir: DIR,
+      path: 'reading-list.md',
+      title: 'Reading list'
+    })
+  })
+})
+
+describe('KT-11 base 解析失败', () => {
+  const ERR = 'No knowledge base named "nope". Available: "project", "notes".'
+
+  it('KT-11 read / validate（带不带 path）/ create 以宿主原文抛错；不过 PEP、不写盘、不调 afterWrite', async () => {
+    const h = makeTool({ bundle: { error: ERR } })
+    const cases: KnowledgeToolParams[] = [
+      { action: 'read', base: 'nope', path: '/a.md' },
+      { action: 'validate', base: 'nope', path: '/a.md' },
+      { action: 'validate', base: 'nope' },
+      { action: 'create', base: 'nope', type: 'Memory', title: 'T', description: 'd', body: 'b' }
+    ]
+    for (const params of cases) {
+      const label = params.path ? `${params.action} ${params.path}` : params.action
+      expect(await rejectionOf(h.run('c1', params)), label).toBe(ERR)
+    }
+    expect(h.resolveBase).toHaveBeenCalledTimes(cases.length)
+    expect(h.enforcePath).not.toHaveBeenCalled()
+    expect(h.calls).toEqual([])
+    expect(h.afterWrite).not.toHaveBeenCalled()
+  })
+
+  it('KT-11 对照：同一个解析器下 list / search 回这句原文、不抛（盘点与检索是软条件）', async () => {
+    const search = vi.fn(async () => [])
+    const h = makeTool({ bundle: { error: ERR }, search })
+    const listed = await h.run('c1', { action: 'list', base: 'nope' })
+    expect(textOf(listed)).toBe(ERR)
+    expect(listed.details).toEqual({ action: 'list' })
+    const searched = await h.run('c2', { action: 'search', base: 'nope', query: 'q' })
+    expect(textOf(searched)).toBe(ERR)
+    expect(searched.details).toEqual({ action: 'search' })
+    expect(search).not.toHaveBeenCalled()
+  })
+})
+
+describe('KT-12 给 agent 的文案', () => {
+  it('KT-12 base 参数描述与工具描述都点名 "project" 与 "bases"', () => {
+    const props = KnowledgeParamsSchema.properties as unknown as Record<
+      string,
+      { description?: string }
+    >
+    for (const [where, copy] of [
+      ['base.description', props.base.description],
+      ['KNOWLEDGE_DESCRIPTION', KNOWLEDGE_DESCRIPTION]
+    ] as const) {
+      expect(copy, where).toContain('"project"')
+      expect(copy, where).toContain('"bases"')
+    }
   })
 })
