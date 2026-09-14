@@ -198,7 +198,8 @@ describe('scanBundle', () => {
     expect(await scanBundle(`${PROJECTS}/missing`)).toEqual({
       bundle: `${PROJECTS}/missing`,
       files: [],
-      concepts: []
+      concepts: [],
+      notes: []
     })
   })
 
@@ -297,7 +298,7 @@ describe('用户库：listUserLibraries / listBundles / scanAllBundles', () => {
       'knowledge/alpha',
       'knowledge/notes'
     ])
-    expect(scans[1]).toEqual({ bundle: 'knowledge/alpha', files: [], concepts: [] })
+    expect(scans[1]).toEqual({ bundle: 'knowledge/alpha', files: [], concepts: [], notes: [] })
     // 隐藏目录（.git / .trash / .obsidian）下的一概不扫
     expect(scans[2].files.map((f) => f.path)).toEqual(['a.md', 'plain.md', 'sub/b.md'])
     // 不需要自述标记：有 type 就是概念

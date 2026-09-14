@@ -14,10 +14,11 @@
  * 原样留着（同属性卡的编辑模型）。
  */
 import { parse as parseYaml } from 'yaml'
-import { KNOWLEDGE_MARKER, KNOWLEDGE_MARKER_TYPE } from '@shuvix/chat-protocol/knowledge'
+import { KNOWLEDGE_MARKER_TYPE } from '@shuvix/chat-protocol/knowledge'
 import { detectShuvixMarker, type ShuvixMarker } from '@shuvix/chat-protocol/shuvixMdContract'
 import { WIKI_UPDATED_KEY } from '@shuvix/chat-protocol/wikiFileContract'
-import { isReservedFile, validateConceptText } from './knowledge/validate'
+import { isOkfConceptText } from './knowledge/conceptFile'
+import { isProjectionFile, isReservedFile, validateKnowledgeText } from './knowledge/validate'
 import { validateShuvixMdText } from './shuvixMdValidate'
 
 /** 写入方上下文（宿主注入的事实：谁写的、今天几号） */
@@ -161,10 +162,11 @@ function upsertMapping(b: Bounds, key: string, flowValue: string): boolean {
 }
 
 /**
- * OKF 知识库分支 —— 没有 `shuvix` 标记、但落在某个 bundle 里的 md：
- * 一致性校验（三条规则 + 软告警）作为回执带回，合规的概念补 `generated` 章
- * （每次写都刷新：它记的是「谁最后改的、何时」）。`verified` 只由 UI 动作写，这里不碰。
- * 保留文件（index.md / log.md）由宿主投影维护，agent 直写只回执规则、不盖章。
+ * OKF 知识库分支 —— 带 `shuvix: okf` 自述行、或没有任何 `shuvix` 标记，且落在某个 bundle 里的 md。
+ * 读宽写严：带自述行的条目（ShuviX 建出来的）严格校验，外来的 OKF 条目只可能出警告，用户的普通笔记
+ * 只在 frontmatter 的 YAML 写坏时提醒。只有 OKF 条目补 `generated` 章（每次写都刷新：它记的是
+ * 「谁最后改的、何时」），普通笔记宿主一个字节都不改。`verified` 只由 UI 动作写，这里不碰。
+ * ShuviX 早先生成的 index.md / log.md 不再维护：agent 直写不回执、不盖章；用户自己写的同名笔记按普通笔记办。
  *
  * `knowledge` 工具的 `create` 之外，条目的一切改动都从这里过，所以回执要够用：写废了当场知道。
  */
@@ -177,28 +179,25 @@ function reviewKnowledgeWrite(
   if (!k) return null
   const rel = k.rel
 
-  const diagnostics = validateConceptText(text, rel)
+  // 读宽写严：带自述行的条目严格查；用户的普通笔记只查 frontmatter 的 YAML 有没有写坏
+  const diagnostics = validateKnowledgeText(text, rel)
   const errors = diagnostics.filter((d) => d.level === 'error').map((d) => `- ${d.message}`)
   if (errors.length > 0) {
     return {
-      note: `[OKF] The file was written into the knowledge base, but it is NOT a valid entry and will be ignored until fixed:\n${errors.join('\n')}`,
+      note: `[OKF] The file was written, but it breaks the knowledge base format and will not be read as intended until fixed:\n${errors.join('\n')}`,
       content: null
     }
   }
-  if (isReservedFile(rel)) return null
+  // ShuviX 早先生成的 index / log：不再维护，没有什么可盖、可说的
+  if (isProjectionFile(rel, text)) return null
 
   const notes: string[] = []
   const warnings = diagnostics.filter((d) => d.level === 'warning').map((d) => `- ${d.message}`)
   if (warnings.length > 0) notes.push(`[OKF] Written with warnings:\n${warnings.join('\n')}`)
-  // 自述行缺失只回执、不代填：宿主不往别人的文件里偷偷补键 —— 新建走 `knowledge` 的 `create`
-  // 就恒有这一行，手写的那份得自己知道少了什么（知识库笔记本里没有这一行照样出属性卡）
-  if (!hasMarker) {
-    notes.push(
-      `[OKF] This file has no \`shuvix: ${KNOWLEDGE_MARKER}\` line. ShuviX still reads it as an entry, but entries it writes always carry that line. Create new entries with the \`knowledge\` tool's "create" action, which writes that line for you.`
-    )
-  }
 
-  const b = bounds(text)
+  // `generated` 只盖在 OKF 条目上（带自述行的，或有 `type` 的外来条目）—— 用户的普通笔记宿主一个
+  // 字节都不改，也不催它补自述行：那一行只保证 ShuviX 自己建出来的条目带着。保留名从来不是条目
+  const b = !isReservedFile(rel) && (hasMarker || isOkfConceptText(text)) ? bounds(text) : null
   const stamped =
     !!b &&
     upsertMapping(

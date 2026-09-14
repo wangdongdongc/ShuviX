@@ -35,6 +35,11 @@ export const PROJECTS_CONTAINER = KNOWLEDGE_PROJECTS_DIR
 /** 用户库 bundle id 的首段 */
 export const USER_CONTAINER = KNOWLEDGE_USER_ROOT_DIR
 
+/** 项目 id → 项目库 bundle id（`projects/<projectId>`）；目录名就是项目 id，不改名、不撞车 */
+export function projectBundleId(projectId: string): string {
+  return `${PROJECTS_CONTAINER}/${projectId}`
+}
+
 /** 用户库名 → bundle id（`knowledge/<库名>`） */
 export function userBundleId(name: string): string {
   return `${USER_CONTAINER}/${name}`

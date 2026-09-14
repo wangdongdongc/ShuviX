@@ -17,7 +17,7 @@ import type { AgentToolResult } from '@earendil-works/pi-agent-core'
 import { KNOWLEDGE_TYPES } from '@shuvix/chat-protocol/knowledge'
 import type { FileSystemPort } from '../../fileTools/port'
 import type { SecurityContext } from '../../security/types'
-import { parseConceptText, type KnowledgeConcept } from '../conceptFile'
+import { readKnowledgeNote, type KnowledgeConcept, type KnowledgeNote } from '../conceptFile'
 import {
   createKnowledgeTool,
   KNOWLEDGE_DESCRIPTION,
@@ -28,7 +28,7 @@ import {
   type KnowledgeSearchHit,
   type KnowledgeToolParams
 } from '../knowledgeTool'
-import { isReservedFile, type BundleFile } from '../validate'
+import { isProjectionFile, isReservedFile, type BundleFile } from '../validate'
 
 /** 本会话的那一个 bundle（项目 bundle 的绝对目录） */
 const ROOT = '/kb/projects/acme'
@@ -117,18 +117,22 @@ function scanOf(
 ): {
   files: BundleFile[]
   concepts: KnowledgeConcept[]
+  notes: KnowledgeNote[]
 } {
   const all: BundleFile[] = []
   const concepts: KnowledgeConcept[] = []
+  const notes: KnowledgeNote[] = []
   for (const [abs, text] of files) {
     if (!abs.startsWith(`${bundleDir}/`)) continue
     const rel = abs.slice(bundleDir.length + 1)
     all.push({ path: rel, text })
-    if (isReservedFile(rel)) continue
-    const concept = parseConceptText(text, rel)
-    if (concept) concepts.push(concept)
+    // 宿主投影的 index / log 不是笔记；其余每个 md 都是（读宽），合规的另带 OKF 条目
+    if (isProjectionFile(rel, text)) continue
+    const note = readKnowledgeNote(text, rel, { entry: !isReservedFile(rel) })
+    notes.push(note)
+    if (note.concept) concepts.push(note.concept)
   }
-  return { files: all, concepts }
+  return { files: all, concepts, notes }
 }
 
 function makeTool(opts: ToolOptions = {}): Harness {
@@ -263,14 +267,14 @@ describe('KT-2 路径守卫表', () => {
 })
 
 describe('KT-3 search —— 注入的检索（宿主 okf-minisearch）', () => {
-  it('KT-3 命中：query 与 {limit, bundleDir} 原样转发；逐行 `- /path (status) — description|title` + 缩进 snippet；bundle 按 create:false 解析', async () => {
+  it('KT-3 命中：query 与 {limit, bundleDir} 原样转发；逐行 `- /path (status) — description|title` + 缩进 snippet；bundle 按名字解析', async () => {
     const search = vi.fn(async () => [
       { path: '/a.md', title: 'A', description: 'd', status: 'draft', snippet: 's' },
       { path: 'b.md', title: 'B', status: 'stable' }
     ])
     const h = makeTool({ search })
     const res = await h.run('c1', { action: 'search', base: 'project', query: 'q' })
-    expect(h.resolveBase).toHaveBeenCalledWith('project', { create: false })
+    expect(h.resolveBase).toHaveBeenCalledWith('project')
     expect(search).toHaveBeenCalledWith('q', { limit: 20, bundleDir: ROOT })
     expect(textOf(res)).toBe(
       `2 result(s) for "q" in project "Acme" — ${ROOT}:\n- /a.md (draft) — d\n  s\n- /b.md — B`
@@ -387,7 +391,7 @@ describe('KT-5 list', () => {
     const failed = await noProject.run('c1', { action: 'list', base: 'project' })
     expect(textOf(failed)).toBe('no project here')
     expect(failed.details).toEqual({ action: 'list' })
-    expect(noProject.resolveBase).toHaveBeenCalledWith('project', { create: false })
+    expect(noProject.resolveBase).toHaveBeenCalledWith('project')
 
     expect(textOf(await makeTool().run('c2', { action: 'list', base: 'project' }))).toBe(
       `No entries in project "Acme" — ${ROOT} yet.`
@@ -432,7 +436,7 @@ describe('KT-6 read', () => {
  * 「谁核实过」是 `verified` 那根轴，两者各自变动。
  */
 describe('KT-7 create —— 元数据形状与去重', () => {
-  it('KT-7 自述行在最前、缺省 status 为 stable（OKF 缺省）、宿主盖 generated；bundle 按 create:true 解析；先过 write PEP 再落盘；afterWrite 带 bundle 相对路径与标题', async () => {
+  it('KT-7 自述行在最前、缺省 status 为 stable（OKF 缺省）、宿主盖 generated；bundle 按名字解析；先过 write PEP 再落盘；afterWrite 带 bundle 相对路径与标题', async () => {
     const h = makeTool()
     const res = await h.run('c1', {
       action: 'create',
@@ -444,7 +448,7 @@ describe('KT-7 create —— 元数据形状与去重', () => {
       tags: ['auth'],
       sources: [{ resource: '/abs/p.ts' }]
     })
-    expect(h.resolveBase).toHaveBeenCalledWith('project', { create: true })
+    expect(h.resolveBase).toHaveBeenCalledWith('project')
     const abs = '/kb/projects/acme/token-refresh.md'
     // 先过门再落盘
     expect(h.calls).toEqual([`enforce:write:${abs}`, `write:${abs}`])
@@ -642,7 +646,7 @@ describe('KT-10 工具不关心 base 是哪种库', () => {
   /** 带首尾空白的库名：工具只去空白，其余原样交给宿主 */
   const RAW = '  读书笔记 '
 
-  it('KT-10 读侧四个动作都按 (去空白的名字, create:false) 解析；表头、回执、检索与 PEP 都用宿主给的标签与目录', async () => {
+  it('KT-10 读侧四个动作都按 去空白的名字解析；表头、回执、检索与 PEP 都用宿主给的标签与目录', async () => {
     const search = vi.fn(async () => [])
     const h = makeTool({
       bundle: USER_BASE,
@@ -669,9 +673,7 @@ describe('KT-10 工具不关心 base 是哪种库', () => {
       `in knowledge base "读书笔记" — ${DIR}`
     )
 
-    expect(h.resolveBase.mock.calls).toEqual(
-      Array.from({ length: 5 }, () => ['读书笔记', { create: false }])
-    )
+    expect(h.resolveBase.mock.calls).toEqual(Array.from({ length: 5 }, () => ['读书笔记']))
     expect(h.calls).toEqual([
       `enforce:read:${DIR}/a.md`,
       `enforce:read:${DIR}/a.md`,
@@ -679,7 +681,7 @@ describe('KT-10 工具不关心 base 是哪种库', () => {
     ])
   })
 
-  it('KT-10 create 按 (去空白的名字, create:true) 解析；落在宿主给的目录，回执、PEP、afterWrite 都指向它', async () => {
+  it('KT-10 create 按 去空白的名字解析；落在宿主给的目录，回执、PEP、afterWrite 都指向它', async () => {
     const h = makeTool({ bundle: USER_BASE })
     const res = await h.run('c1', {
       action: 'create',
@@ -690,7 +692,7 @@ describe('KT-10 工具不关心 base 是哪种库', () => {
       body: 'b'
     })
     const abs = `${DIR}/reading-list.md`
-    expect(h.resolveBase.mock.calls).toEqual([['读书笔记', { create: true }]])
+    expect(h.resolveBase.mock.calls).toEqual([['读书笔记']])
     expect(h.calls).toEqual([`enforce:write:${abs}`, `write:${abs}`])
     expect(textOf(res)).toContain(abs)
     expect(h.afterWrite).toHaveBeenCalledWith({

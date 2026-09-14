@@ -8,11 +8,10 @@
  *     必付的提示词，而且少一个键就少一份卡。
  *   - 改动交给 `edit`，是因为工具做不了局部编辑：给一条长条目补一段话，`edit` 三行 diff 够了，
  *     而工具那套只能整篇正文重发。改动路径与社区 skill、人工编辑同一条 —— 写钩子回执诊断并
- *     刷新 `generated`，变更管线投影 index/log、提交、广播。
+ *     刷新 `generated`，变更管线提交、广播。
  *
- * 新建还顺带解决两件寻址问题：库是懒建的（agent 直写一个不存在的目录会造出没有 `project.md`
- * 的半拉 bundle，下一次解析又建一个 `-2`），以及文件名去重（模型挑中已有名字时 `write` 会
- * 静默覆盖）。两件都由宿主在 `create` 里做掉，agent 从不需要知道库在哪。
+ * 新建还顺带做掉文件名去重（模型挑中已有名字时 `write` 会静默覆盖）：文件名由宿主按标题派生，
+ * agent 从不需要自己挑。
  *
  * 安全：`create` 以目标绝对路径走 `enforcePath('write')`、`read` / `validate` 走
  * `enforcePath('read')` —— 与文件工具同一道门，将来给知识库写策略时两侧一起被盖住。
@@ -33,6 +32,7 @@ import {
   type OkfStatus
 } from '@shuvix/chat-protocol/knowledge'
 import type { FileSystemPort } from '../fileTools/port'
+import { splitFrontmatter } from '../markdownFrontmatter'
 import type { SecurityContext } from '../security/types'
 import { BaseTool } from '../tools/baseTool'
 import {
@@ -40,6 +40,7 @@ import {
   isVerificationCurrent,
   normalizeSources,
   type KnowledgeConcept,
+  type KnowledgeNote,
   type KnowledgeSource
 } from './conceptFile'
 import { dedupeFileName, escapesBundle, normalizeBundlePath, slugify } from './bundlePaths'
@@ -47,6 +48,7 @@ import {
   isReservedFile,
   validateBundleFiles,
   validateConceptText,
+  validateKnowledgeText,
   type BundleFile
 } from './validate'
 
@@ -152,14 +154,16 @@ Every action except "bases" names its knowledge base with \`base\`:
 Actions:
 - "bases": list the knowledge bases you can name (no other parameters).
 - "search": find entries by free text (\`query\`, optional \`limit\`).
-- "list": list the entries of the base.
+- "list": list the notes of the base — entries ShuviX created and the user's own notes alike.
 - "read": return one entry by \`path\`.
 - "create": add a new entry — \`type\`, \`title\`, \`description\`, \`body\`, optional \`tags\` / \`sources\` / \`stale_after\` / \`status\`. The host assembles the metadata, names the file after the title, and answers with the absolute path it wrote.
-- "validate": report problems in one entry (\`path\`) or in the whole base (no \`path\`). Run it after editing an entry.
+- "validate": report problems in one note (\`path\`) or in the whole base (no \`path\`). Entries that carry ShuviX's self-description line are held to OKF; the user's own notes are only checked for broken frontmatter. Run it after editing an entry.
+
+**A base can hold the user's own notes with no metadata at all.** They are part of the base: search, read and edit them as they are, and never add or "fix" metadata on a user's note unless the user asks. Only entries created through "create" are guaranteed to carry OKF metadata.
 
 **Create entries here, change them with \`edit\`.** Only "create" writes through this tool; to revise an existing entry, \`edit\` the file at the absolute path that "search" / "list" / "read" / "create" gave you — a surgical diff beats re-sending the whole body. Never create an entry with \`write\`: the metadata (the self-description line, the key order, \`generated\`) would be yours to get right.
 
-The metadata the host owns in every entry it writes: the \`shuvix\` self-description and \`generated\`. \`status\` is the entry's lifecycle and yours to judge — \`stable\` (the default) once it is ready to be relied on, \`draft\` while it is still incomplete, \`deprecated\` when it is superseded or wrong. \`verified\` is a different axis: the user's record of having checked the entry — **never write it**. \`index.md\` and \`log.md\` are host projections: read them, never write them.
+The metadata the host owns in every entry it writes: the \`shuvix\` self-description and \`generated\`. \`status\` is the entry's lifecycle and yours to judge — \`stable\` (the default) once it is ready to be relied on, \`draft\` while it is still incomplete, \`deprecated\` when it is superseded or wrong. \`verified\` is a different axis: the user's record of having checked the entry — **never write it**.
 
 Paths in this tool are relative to the base, e.g. "/token-refresh.md"; every listing names the base's absolute directory, which is what \`edit\` needs. To point at something in another base, use a \`shuvix://\` URI instead of a path.
 
@@ -181,10 +185,12 @@ export interface KnowledgeSearchHit {
   snippet?: string
 }
 
-/** 宿主的一次 bundle 扫描（带缓存）：全部 md 原文 + 解析成功的概念 */
+/** 宿主的一次 bundle 扫描（带缓存）：全部 md 原文 + 解析成功的 OKF 条目 + 全部笔记 */
 export interface KnowledgeBundleScan {
   files: readonly BundleFile[]
   concepts: readonly KnowledgeConcept[]
+  /** 除 ShuviX 早先生成的 index.md / log.md 外的每个 md —— 合规条目与用户的普通笔记一视同仁 */
+  notes: readonly KnowledgeNote[]
 }
 
 /** `bases` 的一行：一个可以点名的库 */
@@ -203,13 +209,10 @@ export interface KnowledgeToolDeps {
   port: FileSystemPort
   security: SecurityContext
   /**
-   * 解析一个 base。`project` 在 `create` 为真时尚不存在由宿主建出（目录 + 绑定概念 + git init）；
-   * 用户库从不由宿主建出。解析不出（会话不属于项目 / 没有这个库）返回一句可读的 error。
+   * 解析一个 base。库目录可能还不存在（项目库在第一次写入时才出现），读起来就是空的；宿主从不「建库」。
+   * 解析不出（会话不属于项目 / 没有这个库）返回一句可读的 error。
    */
-  resolveBase: (
-    base: string,
-    opts: { create: boolean }
-  ) => Promise<KnowledgeBundleTarget | { error: string }>
+  resolveBase: (base: string) => Promise<KnowledgeBundleTarget | { error: string }>
   /** 本会话可以点名的全部库（`project` 在前） */
   listBases: () => Promise<readonly KnowledgeBaseInfo[]>
   /** 该 bundle 的扫描结果（宿主缓存；路径 bundle 相对） */
@@ -223,7 +226,7 @@ export interface KnowledgeToolDeps {
   actor: () => string
   now: () => Date
   /**
-   * 新建之后（投影 / 提交 / 事件由宿主完成）；`path` 是 `bundleDir` 内的相对路径。
+   * 新建之后（提交 / 事件由宿主完成）；`path` 是 `bundleDir` 内的相对路径。
    * 只有 create 这一条路要它 —— `edit` 走文件工具，那边自有 onFileChange 接同一条管线。
    */
   afterWrite?: (e: { bundleDir: string; path: string; title: string }) => void | Promise<void>
@@ -253,14 +256,20 @@ function dirOf(path: string): string {
   return i === -1 ? '' : path.slice(0, i)
 }
 
-function summaryLine(c: KnowledgeConcept): string {
+function summaryLine(n: KnowledgeNote): string {
   const marks: string[] = []
-  if (c.status !== 'stable') marks.push(c.status)
-  if (c.verified.length > 0 && isVerificationCurrent(c)) marks.push('verified')
-  const date = c.generated?.at?.slice(0, 10)
+  if (n.status !== 'stable') marks.push(n.status)
+  const c = n.concept
+  if (c && c.verified.length > 0 && isVerificationCurrent(c)) marks.push('verified')
+  const date = c?.generated?.at?.slice(0, 10)
   if (date) marks.push(date)
   const mark = marks.length ? ` (${marks.join(', ')})` : ''
-  return `- /${c.path}${mark} — ${c.description || c.title}`
+  return `- /${n.path}${mark} — ${n.description || n.title}`
+}
+
+/** 正文（去掉 frontmatter；没有 frontmatter 就是全文） */
+function bodyOf(text: string): string {
+  return splitFrontmatter(text)?.body ?? text
 }
 
 /** 表头恒点名 bundle 的绝对目录 —— agent 要拿它拼出 write/edit 用的绝对路径 */
@@ -354,11 +363,8 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
   }
 
   /** 目标 bundle；解析不出（会话不属于项目 / 没有这个库）抛可读错误 */
-  private async bundle(
-    params: KnowledgeToolParams,
-    create: boolean
-  ): Promise<KnowledgeBundleTarget> {
-    const target = await this.deps.resolveBase(this.requireBase(params), { create })
+  private async bundle(params: KnowledgeToolParams): Promise<KnowledgeBundleTarget> {
+    const target = await this.deps.resolveBase(this.requireBase(params))
     if ('error' in target) throw new Error(target.error)
     return target
   }
@@ -386,7 +392,7 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
     if (!query) throw new Error('"search" needs `query`')
     const limit = params.limit ?? DEFAULT_LIMIT
     // base 解析不出（会话不属于任何项目 / 没有这个库）对检索是软条件：回文字不抛错，与 list 同口径
-    const resolved = await this.deps.resolveBase(this.requireBase(params), { create: false })
+    const resolved = await this.deps.resolveBase(this.requireBase(params))
     if ('error' in resolved) return text([resolved.error], { action: 'search' })
     const bundleDir = resolved.dir
     if (this.deps.search) {
@@ -404,18 +410,20 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
       )
     }
     const needle = query.toLowerCase()
-    const concepts = (await this.deps.scan(bundleDir)).concepts.filter(
-      (c) =>
-        c.status !== 'deprecated' &&
-        [c.title, c.description, c.tags.join(' '), c.body].some((s) =>
+    const { files, notes } = await this.deps.scan(bundleDir)
+    const textOf = new Map(files.map((f) => [f.path, f.text]))
+    const matches = notes.filter(
+      (n) =>
+        n.status !== 'deprecated' &&
+        [n.title, n.description, n.tags.join(' '), bodyOf(textOf.get(n.path) ?? '')].some((s) =>
           s.toLowerCase().includes(needle)
         )
     )
-    if (concepts.length === 0) return text([`No entries match "${query}".`], { action: 'search' })
+    if (matches.length === 0) return text([`No entries match "${query}".`], { action: 'search' })
     return text(
       [
-        `${concepts.length} result(s) for "${query}" in ${whereLine(resolved)}:`,
-        ...concepts.slice(0, limit).map(summaryLine)
+        `${matches.length} result(s) for "${query}" in ${whereLine(resolved)}:`,
+        ...matches.slice(0, limit).map(summaryLine)
       ],
       { action: 'search' }
     )
@@ -423,17 +431,17 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
 
   private async list(params: KnowledgeToolParams): Promise<Result> {
     const limit = params.limit ?? DEFAULT_LIMIT * 5
-    const resolved = await this.deps.resolveBase(this.requireBase(params), { create: false })
+    const resolved = await this.deps.resolveBase(this.requireBase(params))
     if ('error' in resolved) return text([resolved.error], { action: 'list' })
-    const { concepts } = await this.deps.scan(resolved.dir)
-    if (concepts.length === 0) {
+    const { notes } = await this.deps.scan(resolved.dir)
+    if (notes.length === 0) {
       return text([`No entries in ${whereLine(resolved)} yet.`], { action: 'list' })
     }
-    const lines = concepts.slice(0, limit).map(summaryLine)
-    if (concepts.length > limit) lines.push(`- … ${concepts.length - limit} more`)
+    const lines = notes.slice(0, limit).map(summaryLine)
+    if (notes.length > limit) lines.push(`- … ${notes.length - limit} more`)
     return text(
       [
-        `${concepts.length} entr${concepts.length === 1 ? 'y' : 'ies'} in ${whereLine(resolved)}:`,
+        `${notes.length} entr${notes.length === 1 ? 'y' : 'ies'} in ${whereLine(resolved)}:`,
         ...lines
       ],
       { action: 'list' }
@@ -443,7 +451,7 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
   private async read(toolCallId: string, params: KnowledgeToolParams): Promise<Result> {
     if (!params.path) throw new Error('"read" needs `path`')
     const rel = this.bundlePath(params.path)
-    const target = await this.bundle(params, false)
+    const target = await this.bundle(params)
     await this.enforce('read', target.dir, rel, toolCallId, params.action)
     if (!(await this.exists(target.dir, rel))) throw new Error(`No entry at /${rel}`)
     const raw = await this.deps.port.readFile(joinRoot(target.dir, rel))
@@ -458,13 +466,13 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
    * 正文里的条目链接是否解析得到。
    */
   private async validate(toolCallId: string, params: KnowledgeToolParams): Promise<Result> {
-    const target = await this.bundle(params, false)
+    const target = await this.bundle(params)
     if (params.path) {
       const rel = this.bundlePath(params.path)
       await this.enforce('read', target.dir, rel, toolCallId, params.action)
       if (!(await this.exists(target.dir, rel))) throw new Error(`No entry at /${rel}`)
       const raw = await this.deps.port.readFile(joinRoot(target.dir, rel))
-      const diagnostics = validateConceptText(raw, rel)
+      const diagnostics = validateKnowledgeText(raw, rel)
       if (diagnostics.length === 0)
         return text([`/${rel}: no issues.`], { action: 'validate', path: rel })
       return text(
@@ -511,7 +519,7 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
 
   /**
    * 新建一条 —— 宿主拼 frontmatter（自述行 / 键序 / 归一 / `status` / `generated`）、按标题派生
-   * 文件名并去重；`project` 库不存在时由宿主建出来（用户库从不建）。回执给**绝对路径**：同一轮里紧接着要 `edit`
+   * 文件名并去重；库目录还不存在就随这次写入出现。回执给**绝对路径**：同一轮里紧接着要 `edit`
    * 它，或者下一轮从 search 的表头再拼一次。
    *
    * 本期新条目一律落在 bundle 根 —— 没有 agent 可选的子目录层级。
@@ -530,9 +538,9 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
     ].filter(Boolean)
     if (missing.length) throw new Error(`Creating an entry needs: ${missing.join(', ')}`)
 
-    const target = await this.bundle(params, true)
+    const target = await this.bundle(params)
     const { concepts, files } = await this.deps.scan(target.dir)
-    // 保留文件名同样算占用：slugify('Index') 正好撞上宿主投影的 index.md
+    // 保留文件名同样算占用：slugify('Index') 正好撞上 OKF 保留的 index.md
     const taken = new Set<string>([
       ...concepts.filter((c) => dirOf(c.path) === '').map((c) => c.path),
       ...files.filter((f) => dirOf(f.path) === '').map((f) => f.path)

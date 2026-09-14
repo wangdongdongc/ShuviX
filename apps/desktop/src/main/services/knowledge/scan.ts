@@ -1,6 +1,7 @@
 /**
  * 知识库扫描 —— **按 bundle** 扫（项目库与用户库一视同仁）：每个 bundle 下的全部 `.md`（ripgrep，遵循 .gitignore、
- * 跳过隐藏文件与目录）→ 该 bundle 的概念清单，路径 bundle 相对。
+ * 跳过隐藏文件与目录）→ 该 bundle 的笔记清单（每个 md 一条，合规的另带 OKF 条目；ShuviX 早先生成的
+ * index / log 不算笔记），路径 bundle 相对。
  *
  * 按 (mtime, size) 缓存解析结果：清单每次都要全量，而库通常几百个文件，全量 stat 便宜、
  * 全量读盘不便宜。缓存是内存的（P6：无数据库表），键是 `<bundle>/<rel>`；宿主自己的写入经
@@ -9,11 +10,13 @@
 import { existsSync, readdirSync } from 'fs'
 import { readFile, stat } from 'fs/promises'
 import {
+  isProjectionFile,
   isReservedFile,
   normalizeBundlePath,
-  parseConceptText,
+  readKnowledgeNote,
   type BundleFile,
-  type KnowledgeConcept
+  type KnowledgeConcept,
+  type KnowledgeNote
 } from '@shuvix/agent-runtime'
 import { rgFilesList } from '../../utils/toolUtils/ripgrep'
 import { createLogger } from '../../logger'
@@ -34,6 +37,8 @@ interface CacheEntry {
   size: number
   text: string
   concept: KnowledgeConcept | null
+  /** 除 ShuviX 早先生成的 index / log 外每个 md 都有 */
+  note: KnowledgeNote | null
 }
 
 /** 键：`<bundle>/<bundle 内相对路径>` */
@@ -44,8 +49,10 @@ export interface BundleScan {
   bundle: string
   /** 全部 md（含保留文件），bundle 相对路径 + 原文 */
   files: BundleFile[]
-  /** 解析成功的概念（保留文件与非概念文件不在其中） */
+  /** 解析成功的 OKF 条目（保留名文件与普通笔记不在其中） */
   concepts: KnowledgeConcept[]
+  /** 除 ShuviX 早先生成的 index.md / log.md 外的每个 md —— 读宽：普通笔记与合规条目一视同仁 */
+  notes: KnowledgeNote[]
 }
 
 /** 子目录名（不含隐藏目录，字典序）；目录不存在为空 */
@@ -100,6 +107,7 @@ export async function scanBundle(bundle: string): Promise<BundleScan> {
 
   const files: BundleFile[] = []
   const concepts: KnowledgeConcept[] = []
+  const notes: KnowledgeNote[] = []
   for (const rel of rels) {
     const key = `${bundle}/${rel}`
     const abs = bundleFilePath(bundle, rel)
@@ -120,16 +128,21 @@ export async function scanBundle(bundle: string): Promise<BundleScan> {
         log.warn(`failed to read ${key}: ${(e as Error).message}`)
         continue
       }
-      const concept = isReservedFile(rel)
+      // ShuviX 早先生成的 index / log 不是笔记；保留名下用户自己的笔记是笔记，但不当 OKF 条目
+      const note = isProjectionFile(rel, text)
         ? null
-        : parseConceptText(text, rel, (msg) => log.warn(`${key}: ${msg}`))
-      entry = { mtimeMs: st.mtimeMs, size: st.size, text, concept }
+        : readKnowledgeNote(text, rel, {
+            entry: !isReservedFile(rel),
+            warn: (msg) => log.warn(`${key}: ${msg}`)
+          })
+      entry = { mtimeMs: st.mtimeMs, size: st.size, text, concept: note?.concept ?? null, note }
       cache.set(key, entry)
     }
     files.push({ path: rel, text: entry.text })
     if (entry.concept) concepts.push(entry.concept)
+    if (entry.note) notes.push(entry.note)
   }
-  return { bundle, files, concepts }
+  return { bundle, files, concepts, notes }
 }
 
 /** 扫全部 bundle */

@@ -1,15 +1,14 @@
 /**
- * sessionBundle —— 工具里的 `project` 库：**根会话所属项目的那一个** bundle。
- * 钉：`create` 为真时懒建（真的建出目录 + 绑定概念 + 仓库）、为假时只解析；两条「没有目标」
- * 的软失败各回一句可读的话而不是抛错 —— 工具把它当软条件，文案会原样出现在 agent 面前。
+ * sessionBundle —— 工具里的 `project` 库：**根会话所属项目的那一个**，就是 `projects/<项目 id>/` 这个目录。
+ * 钉：不判断目录建没建过（读宽）—— 没写过的库照样解析、不建任何东西；「没有项目」这条软失败回一句可读的话
+ * 而不是抛错 —— 工具把它当软条件，文案会原样出现在 agent 面前。
  *
  * resolveBase / listBases —— 工具参数里的 `base`：`project` 转给 sessionBundle，其余名字按**目录清单**
  * 精确匹配用户根下的库（所有会话都看得见；从不建库、只读）。点名不存在 / 不合法的名字一律报错并列出
  * 可用库（隐藏目录、散文件、符号链接都不算库，也绝不越出用户根）；保留名 `project` 优先，同名的用户
  * 目录够不着，也不出现在 `bases` 与报错的候选里。
  *
- * dao 是替身（这里不验 SQL），bundles / 投影 / git 用真的：会话这一侧要证明的正是
- * 「解析出来的 bundle 就是宿主真会建出来的那一个」。
+ * dao 是替身（这里不验 SQL），路径与目录清单用真的。
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { existsSync, mkdirSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
@@ -31,17 +30,8 @@ vi.mock('../../../dao/sessionDao', () => ({ sessionDao: { pick: vi.fn() } }))
 import { projectDao } from '../../../dao/projectDao'
 import { sessionDao } from '../../../dao/sessionDao'
 import { listBases, resolveBase, sessionBundle } from '../sessionBundle'
-import { flushKnowledgeCommits } from '../repo'
 import { invalidateKnowledgeScan } from '../scan'
-import {
-  PROJECTS,
-  bundleAt,
-  fileAt,
-  gitCommitCount,
-  makeTempRoot,
-  seedConcept,
-  userRootOf
-} from './fixture'
+import { PROJECTS, bundleAt, makeTempRoot, seedConcept, userRootOf } from './fixture'
 
 const NO_PROJECT =
   'This session does not belong to a project, so it has no "project" knowledge base — name one of the user\'s knowledge bases instead (call "bases" to list them).'
@@ -76,50 +66,44 @@ beforeEach(() => {
   invalidateKnowledgeScan()
 })
 
-afterEach(async () => {
-  await flushKnowledgeCommits()
+afterEach(() => {
   rmSync(root, { recursive: true, force: true })
   rmSync(userRootOf(root), { recursive: true, force: true })
 })
 
 describe('sessionBundle', () => {
-  it('SB-1 会话在项目里 + create → 懒建那个 bundle 并返回 id / 绝对目录 / 人读标签；按根会话的 projectId 查', async () => {
+  it('SB-1 会话在项目里 → 以项目 id 命名的目录（id / 绝对目录 / 人读标签）；按根会话的 projectId 查；目录还不存在也照样解析，且不建任何东西', () => {
     inProject()
 
-    const target = await sessionBundle('s1', { create: true })
-
-    expect(sessionDao.pick).toHaveBeenCalledWith('s1', ['projectId'])
-    expect(projectDao.findById).toHaveBeenCalledWith('p1')
-    expect(target).toEqual({
+    expect(sessionBundle('s1')).toEqual({
       bundle: 'projects/p1',
       dir: bundleAt(root, 'projects/p1'),
       label: 'project "Acme Corp"'
     })
-    expect(existsSync(fileAt(root, 'projects/p1', 'project.md'))).toBe(true)
-    expect(existsSync(fileAt(root, 'projects/p1', 'index.md'))).toBe(true)
-  })
-
-  it('SB-2 bundle 已存在时 create:false 也解析得到同一个；不重复建、不加提交', async () => {
-    inProject()
-    const created = await sessionBundle('s1', { create: true })
-    const dir = bundleAt(root, 'projects/p1')
-    const commits = gitCommitCount(dir)
-
-    expect(await sessionBundle('s1', { create: false })).toEqual(created)
-    expect(readdirSync(join(root, PROJECTS))).toEqual(['p1'])
-    expect(gitCommitCount(dir)).toBe(commits)
-  })
-
-  it('SB-3 create:false 且还没有 bundle → 一句可读的话（不抛错），磁盘上什么都不建', async () => {
-    inProject()
-
-    expect(await sessionBundle('s1', { create: false })).toEqual({
-      error: 'Project "Acme Corp" has no knowledge entries yet.'
-    })
+    expect(sessionDao.pick).toHaveBeenCalledWith('s1', ['projectId'])
+    expect(projectDao.findById).toHaveBeenCalledWith('p1')
     expect(existsSync(join(root, PROJECTS))).toBe(false)
   })
 
-  it('SB-4 没有项目就没有目标：会话不属于项目 / 会话行不存在 / projectId 指向已删除的项目行，三者都回同一句可读的话；不碰磁盘', async () => {
+  it('SB-2 目录里已经有东西：解析结果一样，目录原样', () => {
+    inProject()
+    seedConcept(root, 'projects/p1/a.md', ['type: Memory', 'title: A'])
+    const before = readdirSync(bundleAt(root, 'projects/p1'))
+
+    expect(sessionBundle('s1')).toEqual({
+      bundle: 'projects/p1',
+      dir: bundleAt(root, 'projects/p1'),
+      label: 'project "Acme Corp"'
+    })
+    expect(readdirSync(bundleAt(root, 'projects/p1'))).toEqual(before)
+  })
+
+  it('SB-3 resolveBase 的 `project`（去首尾空白）与 sessionBundle 是同一个结果', async () => {
+    inProject()
+    expect(await resolveBase('s1', ' project ')).toEqual(sessionBundle('s1'))
+  })
+
+  it('SB-4 没有项目就没有这个库：会话不属于项目 / 会话行不存在 / projectId 指向已删除的项目行，三者都回同一句可读的话；不碰磁盘', () => {
     const cases: Array<[string, () => void]> = [
       [
         'no project',
@@ -143,15 +127,14 @@ describe('sessionBundle', () => {
     ]
     for (const [name, arrange] of cases) {
       arrange()
-      expect(await sessionBundle('s1', { create: true }), name).toEqual({ error: NO_PROJECT })
-      expect(await sessionBundle('s1', { create: false }), name).toEqual({ error: NO_PROJECT })
+      expect(sessionBundle('s1'), name).toEqual({ error: NO_PROJECT })
     }
     expect(existsSync(join(root, PROJECTS))).toBe(false)
   })
 })
 
 describe('resolveBase / listBases —— 用户库', () => {
-  it('SB-5 用户库对所有会话可见：在不在项目里、create 真假都解析到同一个（名字去首尾空白，空文件夹也算库）；从不建库、只读', async () => {
+  it('SB-5 用户库对所有会话可见：在不在项目里都解析到同一个（名字去首尾空白，空文件夹也算库）；从不建库、只读', async () => {
     const userRoot = userRootOf(root)
     seedConcept(userRoot, 'notes/a.md', ['type: Memory', 'title: A'])
     mkdirSync(join(userRoot, '读书笔记'))
@@ -172,18 +155,17 @@ describe('resolveBase / listBases —— 用户库', () => {
     ]
     for (const [name, arrange] of sessions) {
       arrange()
-      expect(await resolveBase('s1', 'notes', { create: false }), name).toEqual(notes)
-      expect(await resolveBase('s1', 'notes', { create: true }), name).toEqual(notes)
-      expect(await resolveBase('s1', '  读书笔记 ', { create: true }), name).toEqual(reading)
+      expect(await resolveBase('s1', 'notes'), name).toEqual(notes)
+      expect(await resolveBase('s1', '  读书笔记 '), name).toEqual(reading)
     }
 
-    // 只读：库里没长出 index.md / log.md / .git，shuvix 根下也没有项目容器
+    // 只读：库里什么都没长出来，shuvix 根下也没有项目容器
     expect(readdirSync(join(userRoot, 'notes'))).toEqual(['a.md'])
     expect(readdirSync(join(userRoot, '读书笔记'))).toEqual([])
     expect(existsSync(join(root, PROJECTS))).toBe(false)
   })
 
-  it('SB-6 不存在或不合法的库名：报错并列出可用库（字母序；隐藏目录、散文件、符号链接不算），create 真假一样；绝不建库、绝不越出用户根；用户根整个不存在时候选只剩 "project"', async () => {
+  it('SB-6 不存在或不合法的库名：报错并列出可用库（字母序；隐藏目录、散文件、符号链接不算）；绝不建库、绝不越出用户根；用户根整个不存在时候选只剩 "project"', async () => {
     const userRoot = userRootOf(root)
     mkdirSync(join(userRoot, 'notes', 'sub'), { recursive: true })
     mkdirSync(join(userRoot, 'alpha'))
@@ -209,8 +191,7 @@ describe('resolveBase / listBases —— 用户库', () => {
       'link'
     ]) {
       const error = `No knowledge base named "${raw.trim()}". Available: "project", "alpha", "notes".`
-      expect(await resolveBase('s1', raw, { create: false }), raw).toEqual({ error })
-      expect(await resolveBase('s1', raw, { create: true }), raw).toEqual({ error })
+      expect(await resolveBase('s1', raw), raw).toEqual({ error })
     }
     expect(readdirSync(userRoot).sort()).toEqual(before)
     expect(readdirSync(join(userRoot, 'notes'))).toEqual(['sub'])
@@ -218,18 +199,16 @@ describe('resolveBase / listBases —— 用户库', () => {
     expect(existsSync(join(root, PROJECTS))).toBe(false)
 
     rmSync(userRoot, { recursive: true, force: true })
-    for (const create of [false, true]) {
-      expect(await resolveBase('s1', 'notes', { create }), String(create)).toEqual({
-        error: 'No knowledge base named "notes". Available: "project".'
-      })
-    }
+    expect(await resolveBase('s1', 'notes')).toEqual({
+      error: 'No knowledge base named "notes". Available: "project".'
+    })
     expect(existsSync(userRoot)).toBe(false)
   })
 
   it('SB-6b NFD 目录名按磁盘拼写解析：NFC / NFD 两种写法都命中，bundle id 与标签用磁盘上的那个拼写', async () => {
     const userRoot = userRootOf(root)
-    const nfd = 'cafe\u0301'
-    const nfc = 'caf\u00e9'
+    const nfd = 'café'
+    const nfc = 'café'
     mkdirSync(join(userRoot, nfd), { recursive: true })
     // 前提：文件系统保留建目录时的拼写（APFS / ext4 都保留）
     expect(readdirSync(userRoot)).toEqual([nfd])
@@ -240,8 +219,8 @@ describe('resolveBase / listBases —— 用户库', () => {
       dir: join(userRoot, nfd),
       label: `knowledge base "${nfd}"`
     }
-    expect(await resolveBase('s1', nfc, { create: false })).toEqual(onDisk)
-    expect(await resolveBase('s1', nfd, { create: false })).toEqual(onDisk)
+    expect(await resolveBase('s1', nfc)).toEqual(onDisk)
+    expect(await resolveBase('s1', nfd)).toEqual(onDisk)
   })
 
   it('SB-7 `project` 是保留名：同名用户目录够不着 —— 不在项目里回 NO_PROJECT、在项目里就是项目库，用户目录不受影响；它也不出现在 bases 与报错候选里', async () => {
@@ -249,17 +228,17 @@ describe('resolveBase / listBases —— 用户库', () => {
     seedConcept(userRoot, 'project/a.md', ['type: Memory', 'title: A'])
 
     mockPick({ projectId: null })
-    expect(await resolveBase('s1', ' project ', { create: true })).toEqual({ error: NO_PROJECT })
+    expect(await resolveBase('s1', ' project ')).toEqual({ error: NO_PROJECT })
     expect(await listBases('s1')).toStrictEqual([
       { base: 'project', label: 'this project', note: 'this session does not belong to a project' }
     ])
     // 候选里 "project" 恰好一次：只有保留名那一个，同名目录不重复出现
-    expect(await resolveBase('s1', 'nope', { create: false })).toEqual({
+    expect(await resolveBase('s1', 'nope')).toEqual({
       error: 'No knowledge base named "nope". Available: "project".'
     })
 
     inProject()
-    expect(await resolveBase('s1', ' project ', { create: true })).toEqual({
+    expect(await resolveBase('s1', ' project ')).toEqual({
       bundle: 'projects/p1',
       dir: bundleAt(root, 'projects/p1'),
       label: 'project "Acme Corp"'
@@ -268,7 +247,7 @@ describe('resolveBase / listBases —— 用户库', () => {
     expect(readdirSync(join(userRoot, 'project'))).toEqual(['a.md'])
   })
 
-  it('SB-8 listBases：`project` 恒在首项（不在项目里 / 项目库还没建 / 已建三种说法），其后每个用户库（字母序，隐藏目录与散文件不算）；列举本身不建库', async () => {
+  it('SB-8 listBases：`project` 恒在首项（不在项目里只有一句说明；在项目里带目录 —— 目录还不存在也一样），其后每个用户库（字母序，隐藏目录与散文件不算）；列举本身不建任何东西', async () => {
     const userRoot = userRootOf(root)
     mkdirSync(join(userRoot, 'notes'), { recursive: true })
     mkdirSync(join(userRoot, 'alpha'))
@@ -279,36 +258,25 @@ describe('resolveBase / listBases —— 用户库', () => {
       { base: 'notes', label: 'knowledge base "notes"', dir: join(userRoot, 'notes') }
     ]
 
-    // (a) 不在项目里：project 项只有一句说明，没有 dir 键
+    // 不在项目里：project 项只有一句说明，没有 dir 键
     mockPick({ projectId: null })
     expect(await listBases('s1')).toStrictEqual([
       { base: 'project', label: 'this project', note: 'this session does not belong to a project' },
       ...userBases
     ])
 
-    // (b) 在项目里、项目库还没建：说明第一次 create 会建出来 —— 列举本身不建
+    // 在项目里：带项目库的绝对目录（还没写过也一样 —— 第一次 create 写进去目录就有了）
     inProject()
-    expect(await listBases('s1')).toStrictEqual([
-      {
-        base: 'project',
-        label: 'project "Acme Corp"',
-        note: 'empty — the first "create" makes it'
-      },
-      ...userBases
-    ])
-    expect(existsSync(join(root, PROJECTS))).toBe(false)
-
-    // (c) 建出来之后：带绝对目录，不再有说明
-    await sessionBundle('s1', { create: true })
-    const built = {
+    const project = {
       base: 'project',
       label: 'project "Acme Corp"',
       dir: bundleAt(root, 'projects/p1')
     }
-    expect(await listBases('s1')).toStrictEqual([built, ...userBases])
+    expect(await listBases('s1')).toStrictEqual([project, ...userBases])
+    expect(existsSync(join(root, PROJECTS))).toBe(false)
 
-    // (d) 用户根不存在：只剩 project
+    // 用户根不存在：只剩 project
     rmSync(userRoot, { recursive: true, force: true })
-    expect(await listBases('s1')).toStrictEqual([built])
+    expect(await listBases('s1')).toStrictEqual([project])
   })
 })

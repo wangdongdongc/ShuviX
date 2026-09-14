@@ -5,10 +5,8 @@
  *   - **解析用仓库自己的 `yaml`**：core-okf 的 `parseConcept` 是零依赖的 YAML 子集解析器，
  *     块序列会解错 —— `sources:\n  - id: s1\n    resource: …` 被读成 `["id: s1"]`，
  *     `resource` 漏到顶层；`verified` 的块序列整个变成字符串。真实 YAML 一律走 `yaml`。
- *   - **构建用 core-okf**：`serializeFrontmatter` / `buildIndexMd` / `buildRootIndexMd` /
- *     `buildLogMd` / `parseLogMd` 的输出与 OKF v0.2 规范的范例逐字同形（`* [Title](url) - desc`、
- *     `## YYYY-MM-DD` 分组、根 index 的 `okf_version` frontmatter、`generated: { by, at }`
- *     流式映射），这是引社区包的全部价值：格式约定不再由本仓维护。
+ *   - **构建用 core-okf**：`serializeFrontmatter` / `buildConceptDocument` 的输出与 OKF v0.2 规范的
+ *     范例逐字同形（`generated: { by, at }` 流式映射等），这是引社区包的价值：格式约定不再由本仓维护。
  *   - 信任分档 / 过期判断 / 链接提取也走它（纯函数，语义即规范）。
  *
  * 换库只动本文件：其余模块只认这里导出的名字。
@@ -17,20 +15,12 @@ import { parse as parseYaml } from 'yaml'
 import {
   serializeFrontmatter as okfSerializeFrontmatter,
   buildConceptDocument as okfBuildConceptDocument,
-  buildIndexMd as okfBuildIndexMd,
-  buildRootIndexMd as okfBuildRootIndexMd,
-  buildLogMd as okfBuildLogMd,
-  parseLogMd as okfParseLogMd,
   extractMarkdownLinks as okfExtractMarkdownLinks,
   deriveTrustTier as okfDeriveTrustTier,
   isStaleAfter as okfIsStaleAfter,
-  type OkfFrontmatter,
-  type OkfIndexSection,
-  type OkfLogEntry
+  type OkfFrontmatter
 } from '@equationalapplications/core-okf'
 import { splitFrontmatter } from '../markdownFrontmatter'
-
-export type { OkfIndexSection, OkfLogEntry }
 
 /** 一份 OKF 文本拆开：frontmatter 映射（含未知键，原样）+ 正文 */
 export interface OkfSplit {
@@ -75,11 +65,6 @@ export function serializeOkfFrontmatter(fields: Record<string, unknown>): string
 export function buildOkfConceptDocument(fields: Record<string, unknown>, body: string): string {
   return okfBuildConceptDocument(compact(fields), body)
 }
-
-export const buildIndexMd = okfBuildIndexMd
-export const buildRootIndexMd = okfBuildRootIndexMd
-export const buildLogMd = okfBuildLogMd
-export const parseLogMd = okfParseLogMd
 
 export interface ConceptLink {
   text: string

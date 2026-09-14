@@ -24,17 +24,11 @@ describe('isReservedFile + 保留文件规则', () => {
     expect(isReservedFile('index.markdown')).toBe(false)
   })
 
-  it('VA-1 根 index 可带 frontmatter；子目录 index 带 frontmatter 是 error；log.md 不校验', () => {
+  it('VA-1 保留名不是条目：validateConceptText 对 index.md / log.md 一律不出诊断（index / log 不再维护，没有规则可查）', () => {
     expect(validateConceptText('---\nokf_version: "0.2"\n---\n\n## X\n', 'index.md')).toEqual([])
     expect(
       validateConceptText('---\nokf_version: "0.2"\n---\n\n## X\n', 'global/index.md')
-    ).toEqual([
-      {
-        path: 'global/index.md',
-        level: 'error',
-        message: 'index.md below the bundle root must not carry frontmatter'
-      }
-    ])
+    ).toEqual([])
     expect(validateConceptText('## Entries\n\n* [A](a.md)\n', 'global/index.md')).toEqual([])
     expect(validateConceptText('---\nanything: 1\n---\nwhatever', 'log.md')).toEqual([])
     expect(validateConceptText('## 2026-09-09\n\n- x\n', 'log.md')).toEqual([])
@@ -147,7 +141,7 @@ describe('resolveLinkTarget', () => {
 })
 
 describe('validateBundleFiles — 链接可解析 + 概念集合', () => {
-  it('VA-6 只有指向 bundle 内却不存在的链接告警；保留文件与 error 文件不进概念集；路径归一后匹配', () => {
+  it('VA-6 只有 OKF 条目里指向 bundle 内却不存在的链接告警；普通笔记（没有 type）不报 error、不进概念集、链接也不查；保留名不进概念集；路径归一后匹配', () => {
     const files = [
       {
         path: 'global/a.md',
@@ -172,9 +166,7 @@ describe('validateBundleFiles — 链接可解析 + 概念集合', () => {
         message: "link to '/global/zzz.md' does not resolve inside the bundle"
       }
     ])
-    expect(diagnostics.filter((d) => d.level === 'error').map((d) => d.path)).toEqual([
-      'global/bad.md'
-    ])
+    expect(diagnostics.filter((d) => d.level === 'error')).toEqual([])
     expect(concepts.map((c) => c.path)).toEqual(['global/a.md', 'global/b.md', 'wiki/auth/c.md'])
   })
 })

@@ -4,7 +4,9 @@
  * 跨 bundle 的检索不是同一件事（那是「在哪个库里找」，本期没有这个入口）。
  *
  * 索引在内存里按需建、变更后整体失效重建 —— 单个库的规模不值得增量维护。
- * 保留文件不进索引，deprecated 不出现在结果里。
+ * **读宽**：每条笔记都进索引，没有 frontmatter 的用户笔记走 okf-minisearch 的 degraded 模式；ShuviX 早先生成的
+ * index / log 不进。deprecated 在结果侧过滤 —— okf-minisearch 的 status 过滤器会把没有 status 的
+ * 普通笔记一并刷掉，所以不用它。
  *
  * **中文要先分词。** MiniSearch 默认只按空白与标点切词，中文句子里没有空格，于是两个标点之间
  * 的一整段成了**一个词**：「令牌」「刷新」这类段中间的词永远搜不到，双字词连在段首也够不着
@@ -18,11 +20,7 @@
  * U+200A 不加换行，所以分节的起止行号不变。
  */
 import { createOkfSearch, type OkfSearch } from 'okf-minisearch'
-import {
-  isReservedFile,
-  type KnowledgeConcept,
-  type KnowledgeSearchHit
-} from '@shuvix/agent-runtime'
+import type { KnowledgeNote, KnowledgeSearchHit } from '@shuvix/agent-runtime'
 import { createLogger } from '../../logger'
 import { scanBundle } from './scan'
 
@@ -52,7 +50,7 @@ function segmentCjk(text: string): string {
 
 interface Built {
   index: OkfSearch
-  concepts: Map<string, KnowledgeConcept>
+  notes: Map<string, KnowledgeNote>
 }
 
 const built = new Map<string, Built>()
@@ -65,18 +63,20 @@ export function invalidateKnowledgeSearch(bundle?: string): void {
 async function getIndex(bundle: string): Promise<Built> {
   const hit = built.get(bundle)
   if (hit) return hit
-  const { files, concepts } = await scanBundle(bundle)
-  const map = new Map(concepts.map((c) => [c.path, c]))
+  const { files, notes } = await scanBundle(bundle)
+  const map = new Map(notes.map((n) => [n.path, n]))
   const index = createOkfSearch(
     files
-      .filter((f) => !isReservedFile(f.path) && map.has(f.path))
+      .filter((f) => map.has(f.path))
       .map((f) => ({ path: f.path, markdown: segmentCjk(f.text) }))
   )
   const degraded = index.listDegradedDocuments()
   if (degraded.length > 0) {
-    log.warn(`knowledge search: ${degraded.length} document(s) indexed in degraded mode`)
+    log.info(
+      `knowledge search: ${degraded.length} note(s) without OKF metadata indexed in degraded mode`
+    )
   }
-  const entry = { index, concepts: map }
+  const entry = { index, notes: map }
   built.set(bundle, entry)
   return entry
 }
@@ -87,10 +87,9 @@ export async function searchBundle(
   query: string,
   opts: { limit: number }
 ): Promise<KnowledgeSearchHit[]> {
-  const { index, concepts } = await getIndex(bundle)
+  const { index, notes } = await getIndex(bundle)
   const hits = index.search(segmentCjk(query), {
     limit: Math.max(opts.limit * 4, 40),
-    where: { statuses: ['draft', 'stable'] },
     fuzzy: 0.2
   })
   const seen = new Set<string>()
@@ -98,14 +97,14 @@ export async function searchBundle(
   for (const hit of hits) {
     const path = hit.path.replace(/^\/+/, '')
     if (seen.has(path)) continue
-    const concept = concepts.get(path)
-    if (!concept || concept.status === 'deprecated') continue
+    const note = notes.get(path)
+    if (!note || note.status === 'deprecated') continue
     seen.add(path)
     out.push({
       path,
-      title: concept.title,
-      description: concept.description,
-      status: concept.status,
+      title: note.title,
+      description: note.description,
+      status: note.status,
       snippet: hit.snippet?.replace(WORD_BREAK_RE, '')
     })
     if (out.length >= opts.limit) break

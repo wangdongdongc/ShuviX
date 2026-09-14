@@ -6,7 +6,7 @@
  *
  * 桌面只注入端适配：Node fs port、base 的解析与列举（`project` = 根会话所属项目的库，其余名字 =
  * `~/.shuvix/knowledge/` 下的用户库，所有会话都看得见）、bundle 的扫描与检索（services/knowledge）、
- * 桌面 SecurityContext（与文件工具同一道门）、写入者 actor、新建后的变更管线（投影 + 提交 + 事件）。
+ * 桌面 SecurityContext（与文件工具同一道门）、写入者 actor、新建后的变更管线（提交 + 事件）。
  */
 import {
   createKnowledgeTool,
@@ -33,9 +33,12 @@ import {
 import { nodeFileSystemPort } from '../utils/toolUtils/nodeFileSystemPort'
 import { t } from '../i18n'
 
-/** 工具只认 bundle 的绝对路径；宿主这边按它反查 bundle id（`projects/<id>` / `knowledge/<库名>`） */
+/**
+ * 工具只认 bundle 的绝对路径；宿主这边按它反查 bundle id（`projects/<id>` / `knowledge/<库名>`）。
+ * locateBundle 收的是文件路径，拼上去的文件名只是个探针
+ */
 function bundleIdOf(dir: string): string | null {
-  return locateBundle(`${dir.replace(/[/\\]+$/, '')}/index.md`)?.bundle ?? null
+  return locateBundle(`${dir.replace(/[/\\]+$/, '')}/probe.md`)?.bundle ?? null
 }
 
 export const makeKnowledgeTool = (ctx: ToolContext): ReturnType<typeof createKnowledgeTool> =>
@@ -43,13 +46,13 @@ export const makeKnowledgeTool = (ctx: ToolContext): ReturnType<typeof createKno
     port: nodeFileSystemPort,
     security: getDesktopSecurityContext(ctx),
     // ctx.sessionId 恒为根会话 id（派生 agent 按根会话解析）
-    resolveBase: (base, opts) => resolveBase(ctx.sessionId, base, opts),
+    resolveBase: (base) => resolveBase(ctx.sessionId, base),
     listBases: () => listBases(ctx.sessionId),
     scan: async (dir) => {
       const located = bundleIdOf(dir)
-      if (!located) return { files: [], concepts: [] }
-      const { files, concepts } = await scanBundle(located)
-      return { files, concepts }
+      if (!located) return { files: [], concepts: [], notes: [] }
+      const { files, concepts, notes } = await scanBundle(located)
+      return { files, concepts, notes }
     },
     search: (query, opts) => {
       const located = bundleIdOf(opts.bundleDir)
@@ -65,7 +68,6 @@ export const makeKnowledgeTool = (ctx: ToolContext): ReturnType<typeof createKno
         bundle: located,
         path: e.path,
         op: 'Creation',
-        title: e.title,
         actor: agentActorOf(ctx)
       })
     },

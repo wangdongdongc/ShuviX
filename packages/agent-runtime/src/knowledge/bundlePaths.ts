@@ -1,9 +1,9 @@
 /**
  * bundle 内的路径算术（docs/okf-knowledge-design.md §3）。纯函数：不查会话、不查项目、
- * 不碰磁盘 —— 「这条绝对路径属于哪个 bundle」由宿主回答（桌面 services/knowledge/bundles.ts），
+ * 不碰磁盘 —— 「这条绝对路径属于哪个 bundle」由宿主回答（桌面 services/knowledge/knowledgePaths.ts），
  * 这里只处理**一个 bundle 之内**的相对路径。
  *
- * 一个 bundle = 一份 `index.md` 管得着的范围，边界之外的引用不用 bundle 绝对路径而用
+ * 一个 bundle = 一个库目录，边界之外的引用不用 bundle 绝对路径而用
  * `shuvix://` URI（见 chat-protocol/knowledge.ts）。
  */
 

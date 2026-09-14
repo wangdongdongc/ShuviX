@@ -121,7 +121,7 @@ describe('queueKnowledgeCommit / flushKnowledgeCommits', () => {
       actor: 'shuvix-work/gpt-5'
     })
     queueKnowledgeCommit(BUNDLE, ['b.md'], {
-      op: 'Deprecation',
+      op: 'Update',
       path: 'b.md',
       actor: 'shuvix-work/gpt-5'
     })
@@ -130,7 +130,7 @@ describe('queueKnowledgeCommit / flushKnowledgeCommits', () => {
 
     expect(gitCommitCount(dir)).toBe(2)
     expect(gitHeadMessage(dir)).toBe(
-      'kb(batch): 2 changes\n\n- creation /a.md\n- deprecation /b.md\n\nKnowledge-Op: batch\nKnowledge-Actor: shuvix-work/gpt-5'
+      'kb(batch): 2 changes\n\n- creation /a.md\n- update /b.md\n\nKnowledge-Op: batch\nKnowledge-Actor: shuvix-work/gpt-5'
     )
     expect(gitHeadFiles(dir)).toEqual(['a.md', 'b.md'])
     // 另一个 bundle 只收到属于它的那一条

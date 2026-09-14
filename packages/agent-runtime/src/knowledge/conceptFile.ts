@@ -19,6 +19,7 @@ import {
 } from '@shuvix/chat-protocol/knowledge'
 import { readShuvixMarker } from '@shuvix/chat-protocol/shuvixMdContract'
 import { buildOkfConceptDocument, deriveTrustTier, isStaleAfter, parseOkfText } from './okfCodec'
+import { splitFrontmatter } from '../markdownFrontmatter'
 
 /**
  * 标记闸门：没有 `shuvix` 键（外部工具 / 用户手写的条目）或标记类型是 `okf` 都算概念；
@@ -209,6 +210,86 @@ export function parseConceptText(
     // 去掉 frontmatter 与正文之间的空行（core-okf 的构建器恒插一行；splitFrontmatter 把它算进
     // 正文）：正文以内容起头，parse(build(x)).body 才与 x.body 相等
     body: split.body.replace(/^(?:[ \t]*\r?\n)+/, '')
+  }
+}
+
+/** 围栏代码块的开 / 闭行（``` 或 ~~~，最多三格缩进） */
+const FENCE_RE = /^ {0,3}(`{3,}|~{3,})/
+/** 一级 ATX 标题：`# 标题`（可带收尾的 #） */
+const H1_RE = /^ {0,3}#[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$/
+
+/** 正文里第一个一级标题（跳过围栏代码块）；没有返回 undefined */
+export function firstHeading(body: string): string | undefined {
+  let fence: string | null = null
+  for (const line of body.split(/\r?\n/)) {
+    const f = FENCE_RE.exec(line)
+    if (f) {
+      if (fence === null) fence = f[1][0]
+      else if (f[1][0] === fence) fence = null
+      continue
+    }
+    if (fence !== null) continue
+    const h = H1_RE.exec(line)
+    if (h && h[1].trim()) return h[1].trim()
+  }
+  return undefined
+}
+
+/**
+ * 一条笔记 —— 库里**任何** md 的宽松读法（读宽写严）。合规的 OKF 条目照常解析进 `concept`
+ * （信任 / 核实 / 过期 / `generated` 都从那里读）；没有 frontmatter、没有 `type`、别家标记、
+ * YAML 写坏的文件同样是一条笔记：frontmatter 里读得出的字段照用，读不出就取缺省，绝不因为缺
+ * 元数据把它藏起来。
+ */
+export interface KnowledgeNote {
+  /** bundle 相对路径（forward-slash，无前导 `/`） */
+  path: string
+  /** frontmatter `title` → 正文第一个 `#` 标题 → 文件名 */
+  title: string
+  description: string
+  tags: string[]
+  /** frontmatter 里合法的 status，缺省 stable */
+  status: OkfStatus
+  /** 合规条目的 type；普通笔记为 '' */
+  type: string
+  /** 合规的 OKF 条目才有；普通笔记为 null */
+  concept: KnowledgeConcept | null
+}
+
+/**
+ * 读一条笔记，**永不返回 null**。`entry: false`（保留名下用户自己的笔记）只读字段、不当 OKF 条目。
+ * `warn` 同 parseConceptText，只对合规条目的字段形状发声 —— 普通笔记没有什么可抱怨的。
+ */
+export function readKnowledgeNote(
+  text: string,
+  path: string,
+  opts: { entry?: boolean; warn?: (msg: string) => void } = {}
+): KnowledgeNote {
+  const rel = path.replace(/\\/g, '/').replace(/^\/+/, '')
+  const concept = opts.entry === false ? null : parseConceptText(text, rel, opts.warn)
+  const parsed = parseOkfText(text)
+  const fields = parsed?.fields ?? {}
+  const body = parsed?.body ?? splitFrontmatter(text)?.body ?? text
+  const title = str(fields.title) ?? firstHeading(body) ?? titleFromPath(rel)
+  if (concept) {
+    return {
+      path: rel,
+      title,
+      description: concept.description,
+      tags: concept.tags,
+      status: concept.status,
+      type: concept.type,
+      concept
+    }
+  }
+  return {
+    path: rel,
+    title,
+    description: str(fields.description) ?? '',
+    tags: normalizeTags(fields.tags),
+    status: isOkfStatus(fields.status) ? fields.status : 'stable',
+    type: '',
+    concept: null
   }
 }
 

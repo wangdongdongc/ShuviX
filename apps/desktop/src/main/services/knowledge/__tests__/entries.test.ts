@@ -67,7 +67,8 @@ describe('listKnowledgeEntries', () => {
     expect(await listKnowledgeEntries()).toEqual({
       root: `${root}-missing`,
       userRoot: `${root}-missing-user`,
-      entries: []
+      entries: [],
+      bundleNames: {}
     })
     expect(existsSync(`${root}-missing`)).toBe(false)
     state.root = root
@@ -155,34 +156,24 @@ describe('listKnowledgeEntries', () => {
   })
 
   /**
-   * 目录名是项目 id，而 project.md 里的 title 是**建库那一刻**记下的名字 —— 项目改名之后它就旧了。
-   * 侧栏该显示用户此刻认得的那个名字，所以绑定概念的 title 在视图层换成项目的当前名字；
-   * 文件本身不回写（每次改名塞一条提交，只为一行显示，不划算）。
+   * 项目库的目录名是项目 id —— 不给人看。显示名随清单下发（bundleNames），按 id 查项目**当前**的名字：
+   * 改名即时生效，不靠任何写在库里的文件；查不到（项目已删）就不给，侧栏回落目录名；用户库不在其中。
    */
-  it('EN-5 绑定概念的 title 取项目当前名字；项目已删 / 非绑定概念一概原样', async () => {
-    seedConcept(root, `${BUNDLE}/project.md`, [
-      'type: Project',
-      'title: Old Name',
-      'resource: shuvix://project/p1'
-    ])
-    seedConcept(root, `${BUNDLE}/a.md`, ['type: Memory', 'title: A'])
-    seedConcept(root, `${OTHER_BUNDLE}/project.md`, [
-      'type: Project',
-      'title: Gone',
-      'resource: shuvix://project/p-deleted'
-    ])
+  it('EN-5 bundleNames：项目库按 id 取项目当前名字；项目已删不给；用户库不给；条目自己的标题不受影响', async () => {
+    seedConcept(root, 'projects/p1/a.md', ['type: Memory', 'title: A'])
+    seedConcept(root, 'projects/p-deleted/b.md', ['type: Memory', 'title: B'])
+    seedConcept(userRootOf(root), 'notes/c.md', ['type: Memory', 'title: C'])
     state.projects = { p1: { name: 'New Name' } }
 
-    const byPath = new Map(
-      (await listKnowledgeEntries()).entries.map((e) => [e.path, e.title] as const)
-    )
-    expect(byPath.get(`${BUNDLE}/project.md`)).toBe('New Name')
-    // 普通条目不碰；项目查不到（已删）时保留文件里的 title，不留空
-    expect(byPath.get(`${BUNDLE}/a.md`)).toBe('A')
-    expect(byPath.get(`${OTHER_BUNDLE}/project.md`)).toBe('Gone')
+    const listed = await listKnowledgeEntries()
+    expect(listed.bundleNames).toEqual({ 'projects/p1': 'New Name' })
+    const titles = new Map(listed.entries.map((e) => [e.path, e.title] as const))
+    expect(titles.get('projects/p1/a.md')).toBe('A')
+    expect(titles.get('projects/p-deleted/b.md')).toBe('B')
+    expect(titles.get('knowledge/notes/c.md')).toBe('C')
   })
 
-  it('EN-6 用户库进清单：path / bundle 用 `knowledge/<库名>` 名字空间；没有 frontmatter / 没有 type / 别家标记的 md 照常一行；任何层级的保留文件、隐藏目录、非 md、用户根散文件、没有 md 的库都不出现；项目名覆盖只作用于项目库；清单只读', async () => {
+  it('EN-6 用户库进清单：path / bundle 用 `knowledge/<库名>` 名字空间；没有 frontmatter / 没有 type / 别家标记的 md 照常一行；ShuviX 早先生成形状的 log、隐藏目录、非 md、用户根散文件、没有 md 的库都不出现，用户手写的 index / log 照常一行（标题取第一个 # 标题）；拷进来的 project.md 就是普通条目；清单只读', async () => {
     const userRoot = userRootOf(root)
     const notes = join(userRoot, 'notes')
     seedConcept(userRoot, 'notes/a.md', ['type: Memory', 'title: A', 'status: draft'])
@@ -193,6 +184,8 @@ describe('listKnowledgeEntries', () => {
     seedFile(userRoot, 'notes/index.md', '# my index\n')
     seedFile(userRoot, 'notes/log.md', '# my log\n')
     seedFile(userRoot, 'notes/sub/index.md', '# sub index\n')
+    // ShuviX 早先生成的 log（只有日期标题与列表行）：不再维护、也不当笔记
+    seedFile(userRoot, 'notes/sub/log.md', '## 2026-09-09\n\n- **Creation** /b.md\n')
     seedConcept(userRoot, 'notes/.trash/y.md', ['type: Memory', 'title: Y'])
     // 拷进用户库的 project.md 是用户自己的文件：resource 恰好指向一个现存项目也不换标题
     seedConcept(userRoot, 'notes/project.md', [
@@ -211,16 +204,20 @@ describe('listKnowledgeEntries', () => {
     const listed = await listKnowledgeEntries()
     expect(listed.root).toBe(root)
     expect(listed.userRoot).toBe(`${root}-user`)
-    // 恰好这些：empty / imgs 没有 md、.trash 与 readme 不在任何库里、index / log 在哪一层都不列
+    // 恰好这些：empty / imgs 没有 md、.trash 与 readme 不在任何库里；生成形状的 log 不列，手写的 index / log 是笔记
     expect(listed.entries.map((e) => e.path).sort()).toEqual([
       'knowledge/notes/a.md',
       'knowledge/notes/foreign.md',
+      'knowledge/notes/index.md',
+      'knowledge/notes/log.md',
       'knowledge/notes/plain.md',
       'knowledge/notes/project.md',
       'knowledge/notes/sub/b.md',
+      'knowledge/notes/sub/index.md',
       'knowledge/notes/untyped.md',
       'projects/p1/a.md'
     ])
+    expect(listed.bundleNames).toEqual({ 'projects/p1': 'Live Name' })
     const byPath = Object.fromEntries(listed.entries.map((e) => [e.path, e]))
 
     expect(byPath['knowledge/notes/a.md']).toMatchObject({
@@ -233,7 +230,8 @@ describe('listKnowledgeEntries', () => {
     expect(byPath['knowledge/notes/sub/b.md']).toMatchObject({ bundle: 'knowledge/notes' })
     for (const [path, title] of [
       ['knowledge/notes/plain.md', 'plain'],
-      ['knowledge/notes/untyped.md', 'untyped'],
+      // frontmatter 里有 title 就用它（没有 type 也一样）
+      ['knowledge/notes/untyped.md', 'x'],
       ['knowledge/notes/foreign.md', 'foreign']
     ]) {
       expect(byPath[path], path).toStrictEqual({
@@ -248,6 +246,13 @@ describe('listKnowledgeEntries', () => {
         verifiedCurrent: false,
         stale: false
       })
+    }
+    for (const [path, title] of [
+      ['knowledge/notes/index.md', 'my index'],
+      ['knowledge/notes/log.md', 'my log'],
+      ['knowledge/notes/sub/index.md', 'sub index']
+    ]) {
+      expect(byPath[path], path).toMatchObject({ bundle: 'knowledge/notes', type: '', title })
     }
     expect(byPath['knowledge/notes/project.md']).toMatchObject({
       bundle: 'knowledge/notes',

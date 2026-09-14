@@ -1,12 +1,12 @@
 /**
- * changes —— 宿主观察到的每一次知识库写入都经这条管线：失效缓存 → 重投影**该 bundle** 的
- * index/log → 排队该 bundle 的 git 提交 → 广播 knowledge.changed。300ms 去抖合批：一批一个
- * 事件、逐条一行日志、每个 bundle 一条提交。`notifyKnowledgeFileChanged` 是文件工具那一侧的
- * 入口：先按 locateBundle 判「这条路径属于哪个 bundle」（落不进任何 bundle 的一概不算知识库
- * 变更），再按「扫描是否见过」区分新建 / 更新，保留文件只失效缓存。
+ * changes —— 宿主观察到的每一次知识库写入都经这条管线：失效缓存 →（还不是 git 仓库的库先 init + 基线）→
+ * 排队该 bundle 的 git 提交 → 广播 knowledge.changed。300ms 去抖合批：一批一个事件、每个 bundle 一条提交。
+ * index.md / log.md 不再维护 —— 管线从不写它们，谁在什么时候改了哪条都记在提交里。
+ * `notifyKnowledgeFileChanged` 是文件工具那一侧的入口：先按 locateBundle 判「这条路径属于哪个 bundle」
+ * （落不进任何 bundle 的一概不算知识库变更），再按「扫描是否见过」区分新建 / 更新。
  *
- * 用户库（`knowledge/<库名>`）的簿记与项目库一视同仁：拷进来的文件夹在第一次观察到写入之前原封不动；
- * 没有 .git 的先 init + 基线（收下原貌，不含本批新写的文件），自带 .git 的原样沿用、只提交宿主碰过的路径。
+ * 用户库（`knowledge/<库名>`）与项目库一视同仁：拷进来的文件夹在第一次观察到写入之前原封不动；没有 .git 的
+ * 先 init + 基线（收下原貌，不含本批新写的文件），自带 .git 的原样沿用、只提交宿主碰过的路径。
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -30,7 +30,7 @@ import {
   recordKnowledgeChange
 } from '../changes'
 import { ensureBundleRepo } from '../repo'
-import { invalidateKnowledgeScan, knownKnowledgePaths, scanBundle } from '../scan'
+import { invalidateKnowledgeScan, scanBundle } from '../scan'
 import {
   BUNDLE,
   OTHER_BUNDLE,
@@ -53,26 +53,23 @@ import {
 } from './fixture'
 
 const ACTOR = 'shuvix-work/gpt-5'
-const PROJECT_MD = '---\ntype: Project\ntitle: Acme\nresource: shuvix://project/p1\n---\n\nacme\n'
+const HOST_AUTHOR = 'ShuviX Knowledge <knowledge@shuvix.local>'
 
 let root: string
 let dir: string
 let events: unknown[]
 let unsubscribe: () => void
 
-/** 某个 bundle 的变更日志。空 bundle 没有它 —— 建库本身不是一次变更，第一条变更才把它写出来 */
-const readLog = (bundle = BUNDLE): string => {
-  try {
-    return readFileSync(fileAt(root, bundle, 'log.md'), 'utf-8')
-  } catch {
-    return ''
-  }
+/** 一个已是 git 仓库、带一份初始笔记的 bundle */
+const makeBundle = async (bundle: string): Promise<void> => {
+  seedFile(root, `${bundle}/seed.md`, '# seed\n')
+  await ensureBundleRepo(bundle)
 }
 
-/** 一个建好、已是 git 仓库的 bundle */
-const makeBundle = async (bundle: string): Promise<void> => {
-  seedFile(root, `${bundle}/project.md`, PROJECT_MD)
-  await ensureBundleRepo(bundle)
+/** 管线从不写 index.md / log.md */
+const expectNoBookkeeping = (bundleDir: string): void => {
+  expect(existsSync(join(bundleDir, 'index.md')), 'index.md').toBe(false)
+  expect(existsSync(join(bundleDir, 'log.md')), 'log.md').toBe(false)
 }
 
 beforeEach(() => {
@@ -95,7 +92,7 @@ afterEach(async () => {
 })
 
 describe('recordKnowledgeChange', () => {
-  it('CH-1 一条变更 → 去抖后：index 重投影、log 追加带 actor 的一行、一次提交、恰一个 knowledge.changed；窗口内两条 → 一个事件、两行日志、一条 batch 提交', async () => {
+  it('CH-1 一条变更 → 去抖后：一次提交（只含变更的文件）、恰一个 knowledge.changed，不写 index / log；窗口内两条 → 一个事件、一条 batch 提交', async () => {
     await makeBundle(BUNDLE)
     seedConcept(root, `${BUNDLE}/a.md`, [
       'type: Memory',
@@ -104,22 +101,16 @@ describe('recordKnowledgeChange', () => {
       'status: draft'
     ])
 
-    recordKnowledgeChange({
-      bundle: BUNDLE,
-      path: 'a.md',
-      op: 'Creation',
-      title: 'A',
-      actor: ACTOR
-    })
+    recordKnowledgeChange({ bundle: BUNDLE, path: 'a.md', op: 'Creation', actor: ACTOR })
     // 返回即在后台跑：事件在去抖之后
     expect(events).toEqual([])
     await flushKnowledgeChanges()
-    expect(readFileSync(fileAt(root, BUNDLE, 'index.md'), 'utf-8')).toContain('* [A](a.md) - da')
-    expect(readLog()).toContain('- **Creation** /a.md — A · by shuvix-work/gpt-5')
     expect(gitHeadMessage(dir)).toBe(
       'kb(creation): /a.md\n\nKnowledge-Op: creation\nKnowledge-Actor: shuvix-work/gpt-5'
     )
+    expect(gitHeadFiles(dir)).toEqual(['a.md'])
     expect(events).toEqual([{ type: 'knowledge.changed' }])
+    expectNoBookkeeping(dir)
     const commits = gitCommitCount(dir)
 
     seedConcept(root, `${BUNDLE}/b.md`, [
@@ -132,26 +123,17 @@ describe('recordKnowledgeChange', () => {
       fileAt(root, BUNDLE, 'a.md'),
       conceptText(['type: Memory', 'title: A2', 'description: da2', 'status: draft'])
     )
-    recordKnowledgeChange({
-      bundle: BUNDLE,
-      path: 'b.md',
-      op: 'Creation',
-      title: 'B',
-      actor: ACTOR
-    })
-    recordKnowledgeChange({ bundle: BUNDLE, path: 'a.md', op: 'Update', title: 'A2', actor: ACTOR })
+    recordKnowledgeChange({ bundle: BUNDLE, path: 'b.md', op: 'Creation', actor: ACTOR })
+    recordKnowledgeChange({ bundle: BUNDLE, path: 'a.md', op: 'Update', actor: ACTOR })
     await flushKnowledgeChanges()
     expect(events).toHaveLength(2)
-    expect(readLog()).toContain('- **Creation** /b.md — B · by shuvix-work/gpt-5')
-    expect(readLog()).toContain('- **Update** /a.md — A2 · by shuvix-work/gpt-5')
     expect(gitCommitCount(dir)).toBe(commits + 1)
     expect(gitHeadMessage(dir)).toContain('kb(batch): 2 changes')
-    const index = readFileSync(fileAt(root, BUNDLE, 'index.md'), 'utf-8')
-    expect(index).toContain('* [A2](a.md) - da2')
-    expect(index).toContain('* [B](b.md) - db')
+    expect(gitHeadFiles(dir)).toEqual(['a.md', 'b.md'])
+    expectNoBookkeeping(dir)
   })
 
-  it('CH-2 一批里跨两个 bundle：各自投影、各自提交到各自的仓库，事件仍只发一个', async () => {
+  it('CH-2 一批里跨两个 bundle：各自提交到各自的仓库，事件仍只发一个', async () => {
     await makeBundle(BUNDLE)
     await makeBundle(OTHER_BUNDLE)
     seedConcept(root, `${BUNDLE}/a.md`, ['type: Memory', 'title: A', 'description: da'])
@@ -159,42 +141,28 @@ describe('recordKnowledgeChange', () => {
     const otherDir = bundleAt(root, OTHER_BUNDLE)
     const [before, otherBefore] = [gitCommitCount(dir), gitCommitCount(otherDir)]
 
-    recordKnowledgeChange({
-      bundle: BUNDLE,
-      path: 'a.md',
-      op: 'Creation',
-      title: 'A',
-      actor: ACTOR
-    })
-    recordKnowledgeChange({
-      bundle: OTHER_BUNDLE,
-      path: 'b.md',
-      op: 'Creation',
-      title: 'B',
-      actor: ACTOR
-    })
+    recordKnowledgeChange({ bundle: BUNDLE, path: 'a.md', op: 'Creation', actor: ACTOR })
+    recordKnowledgeChange({ bundle: OTHER_BUNDLE, path: 'b.md', op: 'Creation', actor: ACTOR })
     await flushKnowledgeChanges()
 
     expect(events).toHaveLength(1)
-    expect(readLog(BUNDLE)).toContain('- **Creation** /a.md — A')
-    expect(readLog(BUNDLE)).not.toContain('/b.md')
-    expect(readLog(OTHER_BUNDLE)).toContain('- **Creation** /b.md — B')
     expect(gitCommitCount(dir)).toBe(before + 1)
     expect(gitCommitCount(otherDir)).toBe(otherBefore + 1)
     expect(gitHeadMessage(dir)).toContain('kb(creation): /a.md')
     expect(gitHeadMessage(otherDir)).toContain('kb(creation): /b.md')
+    expect(gitHeadFiles(dir)).toEqual(['a.md'])
+    expect(gitHeadFiles(otherDir)).toEqual(['b.md'])
   })
 })
 
 describe('notifyKnowledgeFileChanged', () => {
-  it('CH-3 判定表：根外 / 根下但不属于任何 bundle / 非 md → 无事；保留文件 → 只失效缓存；新路径 write → Creation；已知路径 write → Update；未知路径 edit → Update；actor 进日志与 trailer', async () => {
+  it('CH-3 判定表：根外 / 根下但不属于任何 bundle / 非 md → 无事；新路径 write → Creation；已知路径 write → Update；未知路径 edit → Update；actor 进 trailer；index.md 也只是一个 md', async () => {
     await makeBundle(BUNDLE)
     const baseline = gitCommitCount(dir)
-    const logBefore = readLog()
 
     for (const abs of [
       '/elsewhere/x.md',
-      // 根下、容器下都还不是 bundle：bundle 边界恰是 projects/<slug>
+      // 根下、容器下都还不是 bundle：bundle 边界恰是 projects/<id>
       join(root, 'x.md'),
       join(root, PROJECTS, 'x.md'),
       fileAt(root, BUNDLE, 'x.txt')
@@ -204,18 +172,6 @@ describe('notifyKnowledgeFileChanged', () => {
     await flushKnowledgeChanges()
     expect(events).toEqual([])
     expect(gitCommitCount(dir)).toBe(baseline)
-    expect(readLog()).toBe(logBefore)
-
-    // 保留文件：宿主投影维护，agent 直写只失效缓存 —— 不记日志、不提交、不发事件
-    seedFile(root, `${BUNDLE}/index.md`, '')
-    await scanBundle(BUNDLE)
-    expect(knownKnowledgePaths().has(`${BUNDLE}/index.md`)).toBe(true)
-    notifyKnowledgeFileChanged(fileAt(root, BUNDLE, 'index.md'), { kind: 'write' })
-    expect(knownKnowledgePaths().has(`${BUNDLE}/index.md`)).toBe(false)
-    await flushKnowledgeChanges()
-    expect(events).toEqual([])
-    expect(gitCommitCount(dir)).toBe(baseline)
-    expect(readLog()).toBe(logBefore)
 
     // 扫描没见过的路径 + write → Creation
     const n = seedConcept(root, `${BUNDLE}/n.md`, [
@@ -226,7 +182,6 @@ describe('notifyKnowledgeFileChanged', () => {
     ])
     notifyKnowledgeFileChanged(n, { kind: 'write', actor: ACTOR })
     await flushKnowledgeChanges()
-    expect(readLog()).toContain('- **Creation** /n.md · by shuvix-work/gpt-5')
     expect(gitHeadMessage(dir)).toBe(
       'kb(creation): /n.md\n\nKnowledge-Op: creation\nKnowledge-Actor: shuvix-work/gpt-5'
     )
@@ -237,7 +192,6 @@ describe('notifyKnowledgeFileChanged', () => {
     writeFileSync(n, conceptText(['type: Memory', 'title: N2', 'description: dn', 'status: draft']))
     notifyKnowledgeFileChanged(n, { kind: 'write', actor: ACTOR })
     await flushKnowledgeChanges()
-    expect(readLog()).toContain('- **Update** /n.md · by shuvix-work/gpt-5')
     expect(gitHeadMessage(dir)).toContain('kb(update): /n.md')
 
     // 没见过的路径 + edit → 仍是 Update（edit 只可能发生在已有文件上）
@@ -249,21 +203,28 @@ describe('notifyKnowledgeFileChanged', () => {
     ])
     notifyKnowledgeFileChanged(m, { kind: 'edit', actor: ACTOR })
     await flushKnowledgeChanges()
-    expect(readLog()).toContain('- **Update** /sub/m.md · by shuvix-work/gpt-5')
     expect(gitHeadMessage(dir)).toBe(
       'kb(update): /sub/m.md\n\nKnowledge-Op: update\nKnowledge-Actor: shuvix-work/gpt-5'
     )
-    expect(events).toHaveLength(3)
+
+    // index.md 不再归宿主：写它就是一次普通的变更
+    const index = seedFile(root, `${BUNDLE}/index.md`, '# Home\n')
+    notifyKnowledgeFileChanged(index, { kind: 'write', actor: ACTOR })
+    await flushKnowledgeChanges()
+    expect(gitHeadMessage(dir)).toContain('kb(creation): /index.md')
+    expect(events).toHaveLength(4)
   })
 })
 
 describe('管线容错', () => {
-  it('CH-4 投影抛错：flushKnowledgeChanges 仍 resolve、事件照发、记一条 warn', async () => {
+  it('CH-4 提交前一步抛错：flushKnowledgeChanges 仍 resolve、事件照发、记一条 warn', async () => {
     vi.resetModules()
-    vi.doMock('../projection', () => ({
-      projectBundle: vi.fn(async () => {
+    vi.doMock('../repo', () => ({
+      ensureBundleRepo: vi.fn(async () => {
         throw new Error('boom')
-      })
+      }),
+      flushKnowledgeCommits: vi.fn(async () => {}),
+      queueKnowledgeCommit: vi.fn()
     }))
     try {
       const changes = await import('../changes')
@@ -283,16 +244,14 @@ describe('管线容错', () => {
         stop()
       }
     } finally {
-      vi.doUnmock('../projection')
+      vi.doUnmock('../repo')
       vi.resetModules()
     }
   })
 })
 
 describe('用户库的簿记', () => {
-  const HOST_AUTHOR = 'ShuviX Knowledge <knowledge@shuvix.local>'
-
-  it('CH-5 没有 .git 的拷入库：观察到第一次写入之前原封不动；之后先 init + 基线（收下原貌、不含本批新文件，手写 index 留在历史里），变更再以自己的 kb(<op>) 提交落地；每一层 index 重投影、log 开始记录', async () => {
+  it('CH-5 没有 .git 的拷入库：观察到第一次写入之前原封不动；之后先 init + 基线（收下原貌、不含本批新文件），变更再以自己的 kb(<op>) 提交落地；宿主不生成 index / log，手写的 index.md 一个字节不动', async () => {
     const userRoot = userRootOf(root)
     const notes = join(userRoot, 'notes')
     const handIndex = '# my index\n'
@@ -304,8 +263,6 @@ describe('用户库的簿记', () => {
     // 读（扫描）不算观察到写入：一切原样
     await scanBundle('knowledge/notes')
     expect(existsSync(join(notes, '.git'))).toBe(false)
-    expect(existsSync(join(notes, 'log.md'))).toBe(false)
-    expect(readFileSync(join(notes, 'index.md'), 'utf-8')).toBe(handIndex)
 
     const abs = seedConcept(userRoot, 'notes/new.md', [
       'type: Memory',
@@ -315,35 +272,21 @@ describe('用户库的簿记', () => {
     notifyKnowledgeFileChanged(abs, { kind: 'write', actor: ACTOR })
     await flushKnowledgeChanges()
 
-    // index：每一层重投影，手写的根 index 被覆盖
-    const index = readFileSync(join(notes, 'index.md'), 'utf-8')
-    expect(index.startsWith('---\nokf_version: "0.2"\n---\n')).toBe(true)
-    expect(index).toContain('* [New](new.md) - dn')
-    expect(index).not.toContain('# my index')
-    expect(existsSync(join(notes, 'sub', 'index.md'))).toBe(true)
-    // log：从这一次开始记
-    expect(readFileSync(join(notes, 'log.md'), 'utf-8')).toContain(
-      '- **Creation** /new.md · by shuvix-work/gpt-5'
-    )
+    // 簿记只剩 git：不生成 index / log，手写的 index.md 原样
+    expect(readFileSync(join(notes, 'index.md'), 'utf-8')).toBe(handIndex)
+    expect(existsSync(join(notes, 'log.md'))).toBe(false)
+    expect(existsSync(join(notes, 'sub', 'index.md'))).toBe(false)
 
     // git：仓库建在文件夹自己里，工作区干净，全部由 ShuviX Knowledge 署名，事件恰一个
     expect(existsSync(join(notes, '.git'))).toBe(true)
     expect(gitStatus(notes)).toBe('')
     expect(
       gitOutput(notes, ['ls-tree', '-r', '--name-only', 'HEAD']).split('\n').filter(Boolean).sort()
-    ).toEqual([
-      'assets/pic.png',
-      'index.md',
-      'log.md',
-      'new.md',
-      'old.md',
-      'sub/deep.md',
-      'sub/index.md'
-    ])
+    ).toEqual(['assets/pic.png', 'index.md', 'new.md', 'old.md', 'sub/deep.md'])
     expect(gitLog(notes, '%an <%ae>')).toEqual([HOST_AUTHOR, HOST_AUTHOR])
     expect(events).toEqual([{ type: 'knowledge.changed' }])
 
-    // 提交结构：基线是拷进来时的原貌（手写 index 找得回来），这次写入是它自己的一条
+    // 提交结构：基线是拷进来时的原貌，这次写入是它自己的一条
     expect(gitLog(notes, '%s')).toEqual(['kb(creation): /new.md', 'kb(init): knowledge base'])
     expect(gitCommitFiles(notes, 'HEAD~1')).toEqual([
       'assets/pic.png',
@@ -351,8 +294,7 @@ describe('用户库的簿记', () => {
       'old.md',
       'sub/deep.md'
     ])
-    expect(gitOutput(notes, ['show', 'HEAD~1:index.md'])).toBe(handIndex)
-    expect(gitCommitFiles(notes, 'HEAD')).toEqual(['index.md', 'log.md', 'new.md', 'sub/index.md'])
+    expect(gitCommitFiles(notes, 'HEAD')).toEqual(['new.md'])
 
     // 第二次写入：仓库已在，只多一条自己的提交
     const commits = gitCommitCount(notes)
@@ -382,15 +324,13 @@ describe('用户库的簿记', () => {
 
     expect(gitLog(vault, '%s')).toEqual(['kb(creation): /x.md', 'My notes'])
     expect(gitLog(vault, '%an')).toEqual(['ShuviX Knowledge', 'Alice'])
-    expect(gitHeadFiles(vault)).toEqual(['index.md', 'log.md', 'x.md'])
+    expect(gitHeadFiles(vault)).toEqual(['x.md'])
     expect(gitStatus(vault).split('\n').sort()).toEqual([' M scratch.txt', '?? todo.md'])
-    const index = readFileSync(join(vault, 'index.md'), 'utf-8')
-    expect(index).toContain('* [Note](note.md) - dnote')
-    expect(index).toContain('* [X](x.md) - dx')
+    expectNoBookkeeping(vault)
     expect(events).toEqual([{ type: 'knowledge.changed' }])
   })
 
-  it('CH-7 用户根一侧的判定表：用户根散文件 / 隐藏目录（根下与库内）/ 非 md / shuvix 根下的 knowledge 目录 → 无事；保留文件只失效缓存、不因此建出仓库；没扫过的路径 → Creation、扫过之后 → Update', async () => {
+  it('CH-7 用户根一侧的判定表：用户根散文件 / 隐藏目录（根下与库内）/ 非 md / shuvix 根下的 knowledge 目录 → 无事、不建仓库；没扫过的路径 → Creation、扫过之后 → Update', async () => {
     const userRoot = userRootOf(root)
     const notes = join(userRoot, 'notes')
     const draft = conceptText(['type: Memory', 'title: X', 'description: dx'])
@@ -408,33 +348,21 @@ describe('用户库的簿记', () => {
     }
     await flushKnowledgeChanges()
     expect(events).toEqual([])
-    for (const name of ['log.md', 'index.md', '.git']) {
-      expect(existsSync(join(notes, name)), name).toBe(false)
-    }
-
-    // 保留文件：只失效缓存 —— 不记日志、不发事件，也不因此把仓库建出来
-    const index = seedFile(userRoot, 'notes/index.md', '# my index\n')
-    await scanBundle('knowledge/notes')
-    expect(knownKnowledgePaths().has('knowledge/notes/index.md')).toBe(true)
-    notifyKnowledgeFileChanged(index, { kind: 'write', actor: ACTOR })
-    expect(knownKnowledgePaths().has('knowledge/notes/index.md')).toBe(false)
-    await flushKnowledgeChanges()
-    expect(events).toEqual([])
-    expect(existsSync(join(notes, 'log.md'))).toBe(false)
     expect(existsSync(join(notes, '.git'))).toBe(false)
 
     // 扫描没见过的路径 → Creation；扫过之后再写 → Update
     const b = seedConcept(userRoot, 'notes/b.md', ['type: Memory', 'title: B', 'description: db'])
     notifyKnowledgeFileChanged(b, { kind: 'write', actor: ACTOR })
     await flushKnowledgeChanges()
-    expect(readFileSync(join(notes, 'log.md'), 'utf-8')).toContain(
-      '- **Creation** /b.md · by shuvix-work/gpt-5'
+    expect(gitHeadMessage(notes)).toBe(
+      'kb(creation): /b.md\n\nKnowledge-Op: creation\nKnowledge-Actor: shuvix-work/gpt-5'
     )
     await scanBundle('knowledge/notes')
+    writeFileSync(b, conceptText(['type: Memory', 'title: B', 'description: db2']))
     notifyKnowledgeFileChanged(b, { kind: 'write', actor: ACTOR })
     await flushKnowledgeChanges()
-    expect(readFileSync(join(notes, 'log.md'), 'utf-8')).toContain(
-      '- **Update** /b.md · by shuvix-work/gpt-5'
+    expect(gitHeadMessage(notes)).toBe(
+      'kb(update): /b.md\n\nKnowledge-Op: update\nKnowledge-Actor: shuvix-work/gpt-5'
     )
     expect(events).toHaveLength(2)
   })

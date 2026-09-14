@@ -4,9 +4,9 @@
  * 与 widgetRepo 同一模式：驱动 agent-runtime 的 initOp/addOp/commitOp（复用已测试的竞态
  * status 修正与「无暂存变更」判定），一切失败只记日志 —— 版本控制是增益能力，绝不能让写入
  * 因它而失败。与 widget 的差别：这里 agent 从不自己提交，宿主把每批观察到的变更提交一次
- * （300ms 去抖：一次任务里连写几个文件、加上投影出来的 index/log，合成一条提交）。
+ * （300ms 去抖：一次任务里连写几个文件，合成一条提交）。
  *
- * 没有任何跨仓库的操作：`git init` 在一个 bundle 首次建出来时发生一次，每条变更只提交它
+ * 没有任何跨仓库的操作：`git init` 在一个 bundle 第一次被观察到写入时发生一次，每条变更只提交它
  * 自己那一个仓库。仓库数随项目增长，但没有一处会把它们全遍历一遍。
  *
  * 提交署名固定为 ShuviX Knowledge：作者记的是「谁提交的」；内容出自谁写在 trailer
@@ -23,11 +23,13 @@ import {
   type GitCache,
   type GitEnv,
   type GitFsClient,
-  type GitOpOutput,
-  type KnowledgeLogOp
+  type GitOpOutput
 } from '@shuvix/agent-runtime'
 import { createLogger } from '../../logger'
 import { bundleDir } from './knowledgePaths'
+
+/** 提交信息里的变更类型（`kb(<op>)`） */
+export type KnowledgeChangeOp = 'Creation' | 'Update'
 
 const log = createLogger('KnowledgeRepo')
 
@@ -109,7 +111,7 @@ export async function ensureBundleRepo(
 }
 
 export interface KnowledgeCommitEvent {
-  op: KnowledgeLogOp
+  op: KnowledgeChangeOp
   /** bundle 相对路径 */
   path: string
   actor?: string
@@ -151,7 +153,7 @@ async function flush(bundle: string, batch: PendingBatch): Promise<void> {
 }
 
 /**
- * 排队一次提交：paths 是本次要 add 的 bundle 相对路径（变更的概念 + 投影出来的 index / log），
+ * 排队一次提交：paths 是本次要 add 的 bundle 相对路径（本批变更的文件），
  * event 记入提交信息。去抖窗口内对同一 bundle 的多次调用合成一条提交。
  */
 export function queueKnowledgeCommit(

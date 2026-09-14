@@ -96,7 +96,7 @@ describe('reviewShuvixMdWrite — OKF 知识库分支', () => {
   const STAMP_NOTE =
     '[OKF] Stamped generated: { by: shuvix-work/gpt-5, at: 2026-09-09T08:12:03.000Z } — never write generated or verified yourself; the user reviews drafts in the knowledge page.'
   const ERROR_HEAD =
-    '[OKF] The file was written into the knowledge base, but it is NOT a valid entry and will be ignored until fixed:'
+    '[OKF] The file was written, but it breaks the knowledge base format and will not be read as intended until fixed:'
   const DESCRIPTION_WARNING = "- 'description' (one line) is recommended — it is what indexes show"
 
   const concept = (lines: string[], body = 'body'): string =>
@@ -140,26 +140,25 @@ describe('reviewShuvixMdWrite — OKF 知识库分支', () => {
     expect(review(marked, null)).toBeNull()
   })
 
-  it('MW-2 error 回执：文件已写但不是合法条目 —— 无 frontmatter / 缺 type 各一条 bullet，不动文件', () => {
-    const none = review('# plain\n\nbody\n', 'global/x.md')!
-    expect(none.note).toBe(
-      `${ERROR_HEAD}\n- no YAML frontmatter block (an OKF concept starts with \`---\`)`
-    )
-    expect(none.content).toBeNull()
+  it('MW-2 读宽写严：用户的普通笔记（没有 frontmatter / 没有 type）不回执、不盖章、不动文件；frontmatter 写坏只提醒；带自述行却缺 type 的才是 error', () => {
+    expect(review('# plain\n\nbody\n', 'global/x.md')).toBeNull()
+    expect(review(concept(['title: T', 'description: d']), 'global/x.md')).toBeNull()
 
-    const noType = review(concept(['title: T', 'description: d']), 'global/x.md')!
-    expect(noType.note).toBe(`${ERROR_HEAD}\n- 'type' is required and must be a non-empty string`)
-    expect(noType.content).toBeNull()
+    const broken = review('---\ntitle: [unclosed\n---\n\nbody\n', 'global/x.md')!
+    expect(broken.note).toContain('[OKF] Written with warnings:')
+    expect(broken.note).toContain('frontmatter is not parseable YAML')
+    expect(broken.content).toBeNull()
+
+    const marked = review(concept([MARKER, 'title: T', 'description: d']), 'global/x.md')!
+    expect(marked.note).toBe(`${ERROR_HEAD}\n- 'type' is required and must be a non-empty string`)
+    expect(marked.content).toBeNull()
   })
 
-  it('MW-3 保留文件：子目录 index.md 带 frontmatter 只回执规则；**bundle 根** index.md 与 log.md 一律 null，永不盖章', () => {
+  it('MW-3 index.md / log.md 不再维护：生成形状的与用户手写的一律 null —— 不回执、不盖章（保留名从来不是条目）', () => {
     const fm = '---\nokf_version: "0.2"\n---\n\n## Entries\n'
-    const sub = review(fm, 'global/index.md')!
-    expect(sub.note).toBe(
-      `${ERROR_HEAD}\n- index.md below the bundle root must not carry frontmatter`
-    )
-    expect(sub.content).toBeNull()
+    expect(review(fm, 'global/index.md')).toBeNull()
     expect(review(fm, 'index.md')).toBeNull()
+    expect(review('# Home\n\nwelcome\n', 'index.md')).toBeNull()
     expect(review('## 2026-09-09\n\n- x\n', 'log.md')).toBeNull()
     expect(review('---\ntype: Memory\n---\n\n- x\n', 'log.md')).toBeNull()
   })
@@ -246,15 +245,10 @@ describe('reviewShuvixMdWrite — OKF 知识库分支', () => {
    * `create` 恒写它；手写 / 外部工具写的那份则不会有，于是回执要点名这件事 —— 上一轮
    * 把新建改成「模型自己拼 frontmatter」，卡片就是这样静默消失的。
    */
-  it('MW-7 无自述行：照常盖章与索引，回执说明它照样算条目、并指路 create（create 恒写这一行）', () => {
+  it('MW-7 没有自述行的 OKF 条目（有 type）：照常盖 generated；不催补自述行，也不代填', () => {
     const out = review(concept(VALID), 'global/x.md')!
-    expect(out.note).toContain('has no `shuvix: okf v0.2` line')
-    expect(out.note).toContain('ShuviX still reads it as an entry')
-    expect(out.note).toContain('"create"')
-    // 只回执、不代填：宿主不偷偷往别人的文件里加键
-    expect(out.content).not.toContain('shuvix: okf')
-    // 盖章照做（两段回执以空行相隔）
-    expect(out.note).toContain(STAMP_NOTE)
+    expect(out.note).toBe(STAMP_NOTE)
     expect(out.content).toContain(STAMP)
+    expect(out.content).not.toContain('shuvix: okf')
   })
 })

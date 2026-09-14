@@ -1,8 +1,10 @@
 /**
  * 会话 → 知识库。`knowledge` 工具除 `bases` 外的每个动作都点名一个 base：
  *
- *   - `project`（KNOWLEDGE_PROJECT_BASE）—— **根会话**所属项目的那一个 bundle。会话不属于任何项目
- *     就没有这个库，回一句可读的话（工具把检索 / 盘点当软条件）；
+ *   - `project`（KNOWLEDGE_PROJECT_BASE）—— **根会话**所属项目的库，就是
+ *     `knowledge-shuvix/projects/<项目 id>/` 这个目录。不判断它建没建过（读宽）：没写过的库读起来是空的，
+ *     第一次 create 写进去目录就有了，git 仓库由变更管线在第一次提交前建出。会话不属于任何项目就没有
+ *     这个库，回一句可读的话（工具把检索 / 盘点当软条件）；
  *   - 其余字符串 —— `~/.shuvix/knowledge/` 下的同名子目录，即一个用户知识库。**所有会话都看得见
  *     所有用户库**。用户库从不由宿主建出来：建库交给文件系统；点名一个不存在的库直接报错并列出
  *     有哪些 —— 手滑打错的名字不能凭空长出一个库。
@@ -18,14 +20,13 @@ import type { KnowledgeBaseInfo } from '@shuvix/agent-runtime'
 import { projectDao } from '../../dao/projectDao'
 import { sessionDao } from '../../dao/sessionDao'
 import type { Project } from '../../dao/types/project'
-import { ensureProjectBundle, findProjectBundle } from './bundles'
-import { bundleDir, userBundleId } from './knowledgePaths'
+import { bundleDir, projectBundleId, userBundleId } from './knowledgePaths'
 import { listUserLibraries } from './scan'
 
 export interface SessionBundleTarget {
   /** bundle id（`projects/<projectId>` / `knowledge/<库名>`） */
   bundle: string
-  /** bundle 根的绝对路径 */
+  /** bundle 根的绝对路径（项目库的目录可能还不存在） */
   dir: string
   /** 人读标签 */
   label: string
@@ -39,18 +40,11 @@ function rootProject(rootSessionId: string): Project | undefined {
   return picked?.projectId ? projectDao.findById(picked.projectId) : undefined
 }
 
-/** 本会话所属项目的库；`create` 为真时尚不存在的 bundle 由宿主建出 */
-export async function sessionBundle(
-  rootSessionId: string,
-  opts: { create: boolean }
-): Promise<SessionBundleTarget | { error: string }> {
+/** 本会话所属项目的库（目录可能还不存在 —— 那就是一个空库） */
+export function sessionBundle(rootSessionId: string): SessionBundleTarget | { error: string } {
   const project = rootProject(rootSessionId)
   if (!project) return { error: NO_PROJECT }
-
-  const bundle = opts.create
-    ? await ensureProjectBundle(project)
-    : await findProjectBundle(project.id)
-  if (!bundle) return { error: `Project "${project.name}" has no knowledge entries yet.` }
+  const bundle = projectBundleId(project.id)
   return { bundle, dir: bundleDir(bundle), label: `project "${project.name}"` }
 }
 
@@ -62,11 +56,10 @@ function userBaseNames(): string[] {
 /** 解析工具参数里的 base */
 export async function resolveBase(
   rootSessionId: string,
-  base: string,
-  opts: { create: boolean }
+  base: string
 ): Promise<SessionBundleTarget | { error: string }> {
   const name = base.trim()
-  if (name === KNOWLEDGE_PROJECT_BASE) return sessionBundle(rootSessionId, opts)
+  if (name === KNOWLEDGE_PROJECT_BASE) return sessionBundle(rootSessionId)
   const names = userBaseNames()
   const wanted = name.normalize('NFC')
   const match = names.find((n) => n.normalize('NFC') === wanted)
@@ -81,22 +74,19 @@ export async function resolveBase(
 /** 本会话可点名的全部库：`project` 在前，其后每个用户库 */
 export async function listBases(rootSessionId: string): Promise<KnowledgeBaseInfo[]> {
   const project = rootProject(rootSessionId)
-  const out: KnowledgeBaseInfo[] = []
-  if (!project) {
-    out.push({
-      base: KNOWLEDGE_PROJECT_BASE,
-      label: 'this project',
-      note: 'this session does not belong to a project'
-    })
-  } else {
-    const bundle = await findProjectBundle(project.id)
-    const label = `project "${project.name}"`
-    out.push(
-      bundle
-        ? { base: KNOWLEDGE_PROJECT_BASE, label, dir: bundleDir(bundle) }
-        : { base: KNOWLEDGE_PROJECT_BASE, label, note: 'empty — the first "create" makes it' }
-    )
-  }
+  const out: KnowledgeBaseInfo[] = [
+    project
+      ? {
+          base: KNOWLEDGE_PROJECT_BASE,
+          label: `project "${project.name}"`,
+          dir: bundleDir(projectBundleId(project.id))
+        }
+      : {
+          base: KNOWLEDGE_PROJECT_BASE,
+          label: 'this project',
+          note: 'this session does not belong to a project'
+        }
+  ]
   for (const name of userBaseNames()) {
     out.push({ base: name, label: `knowledge base "${name}"`, dir: bundleDir(userBundleId(name)) })
   }

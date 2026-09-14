@@ -2,8 +2,8 @@
  * KnowledgeGroup —— 侧栏置顶的「知识库」分组（知识库 v2：`~/.shuvix/knowledge-shuvix/` 的项目库 +
  * `~/.shuvix/knowledge/` 下每个子目录一个的用户库，用户库与 Projects 容器平级、Projects 置顶），
  * 排在 Bots 之下、旧知识库（WikiGroup）之上。**一个库一个 OKF bundle**：树 = 项目容器 →
- * 每个项目 bundle（显示 `project.md` 的 title）→ 条目，外加与容器平级的每个用户库 → 条目；
- * 行 = 一个 md（合规条目取 frontmatter title，不合规的取文件名），行尾徽标：草稿 / 已核实 / 过期 / 已过时。
+ * 每个项目库（显示项目当前的名字）→ 条目，外加与容器平级的每个用户库 → 条目；
+ * 行 = 一个 md（标题依次取 frontmatter title、正文第一个 # 标题、文件名），行尾徽标：草稿 / 已核实 / 过期 / 已过时。
  * 点行经宿主打开 / 复用该文件的笔记本会话（隐藏承载项目：项目库 `__knowledge__`、用户库
  * `__knowledge_user__`，同 WikiGroup 的做法）。
  *
@@ -56,6 +56,8 @@ export interface KnowledgeListing {
   root: string
   /** 用户根的绝对路径（用户库条目 `knowledge/<库名>/…` 去掉首段后相对它） */
   userRoot: string
+  /** bundle id → 显示名（项目库：项目当前的名字 —— 目录名是项目 id，不给人看） */
+  bundleNames: Record<string, string>
 }
 
 /** 宿主注入的知识库能力（桌面：window.api.knowledge 的窄投影） */
@@ -122,7 +124,8 @@ export function KnowledgeGroup({ adapter }: KnowledgeGroupProps): React.JSX.Elem
       const r = await adapter.list()
       if (seq === scanSeq.current) setScanned(r)
     } catch {
-      if (seq === scanSeq.current) setScanned({ entries: [], root: '', userRoot: '' })
+      if (seq === scanSeq.current)
+        setScanned({ entries: [], root: '', userRoot: '', bundleNames: {} })
     }
   }, [adapter])
 
@@ -157,7 +160,10 @@ export function KnowledgeGroup({ adapter }: KnowledgeGroupProps): React.JSX.Elem
   // 项目库的 depth 也是 0，拿缩进判会把所有项目库都默认展开
   const isDirOpen = (path: string): boolean => !path.includes('/') !== toggled.has(path)
 
-  const tree = useMemo(() => buildKnowledgeTree(scanned?.entries ?? []), [scanned])
+  const tree = useMemo(
+    () => buildKnowledgeTree(scanned?.entries ?? [], scanned?.bundleNames),
+    [scanned]
+  )
 
   const openGroupMenu = (e: React.MouseEvent): void => {
     const items: ContextMenuItem[] = [

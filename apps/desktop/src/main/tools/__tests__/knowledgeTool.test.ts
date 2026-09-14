@@ -93,7 +93,7 @@ beforeEach(() => {
   state.record.mockClear()
   state.resolveBase.mockReset().mockResolvedValue(target())
   state.listBases.mockReset().mockResolvedValue([])
-  state.scan.mockReset().mockResolvedValue({ files: [], concepts: state.concepts })
+  state.scan.mockReset().mockResolvedValue({ files: [], concepts: state.concepts, notes: [] })
   state.search.mockReset().mockResolvedValue([])
 })
 
@@ -110,7 +110,7 @@ describe('knowledge 工具（桌面注册）', () => {
     expect((meta.getLabel as () => string)()).toBe('tool.knowledgeLabel')
   })
 
-  it('TK-2 create 是唯一允许宿主建库的 action（create: true）并把变更记成 Creation（actor = agentActorOf）；读侧一律 create: false 且不记账', async () => {
+  it('TK-2 create 把变更记成 Creation（actor = agentActorOf）；读侧不记账；base 原样交给宿主解析', async () => {
     const tool = makeKnowledgeTool(ctx)
     expect(tool.label).toBe('tool.knowledgeLabel')
 
@@ -122,7 +122,7 @@ describe('knowledge 工具（桌面注册）', () => {
       description: 'd',
       body: 'b'
     })
-    expect(state.resolveBase).toHaveBeenLastCalledWith('s1', 'project', { create: true })
+    expect(state.resolveBase).toHaveBeenLastCalledWith('s1', 'project')
     const written = join(state.root, 'projects', 'acme', 't.md')
     expect(existsSync(written)).toBe(true)
     expect(readFileSync(written, 'utf-8')).toContain('shuvix: okf v0.2')
@@ -130,13 +130,12 @@ describe('knowledge 工具（桌面注册）', () => {
       bundle: BUNDLE,
       path: 't.md',
       op: 'Creation',
-      title: 'T',
       actor: 'shuvix-work/gpt-5'
     })
 
     for (const action of ['list', 'search', 'validate'] as const) {
       await tool.execute('c2', { action, base: 'project', query: 'q' })
-      expect(state.resolveBase, action).toHaveBeenLastCalledWith('s1', 'project', { create: false })
+      expect(state.resolveBase, action).toHaveBeenLastCalledWith('s1', 'project')
     }
     expect(state.record).toHaveBeenCalledTimes(1)
   })
@@ -181,7 +180,7 @@ describe('knowledge 工具（桌面注册）', () => {
     const tool = makeKnowledgeTool(ctx)
 
     await tool.execute('u1', { action: 'list', base: 'notes' })
-    expect(state.resolveBase).toHaveBeenLastCalledWith('s1', 'notes', { create: false })
+    expect(state.resolveBase).toHaveBeenLastCalledWith('s1', 'notes')
     expect(state.scan).toHaveBeenLastCalledWith('knowledge/notes')
 
     await tool.execute('u2', { action: 'search', base: 'notes', query: 'q', limit: 3 })
@@ -199,7 +198,7 @@ describe('knowledge 工具（桌面注册）', () => {
       description: 'd',
       body: 'b'
     })
-    expect(state.resolveBase).toHaveBeenLastCalledWith('s1', 'notes', { create: true })
+    expect(state.resolveBase).toHaveBeenLastCalledWith('s1', 'notes')
     const written = join(userRoot, 'notes', 't.md')
     expect(existsSync(written)).toBe(true)
     expect(readFileSync(written, 'utf-8')).toContain('shuvix: okf v0.2')
@@ -207,7 +206,6 @@ describe('knowledge 工具（桌面注册）', () => {
       bundle: 'knowledge/notes',
       path: 't.md',
       op: 'Creation',
-      title: 'T',
       actor: 'shuvix-work/gpt-5'
     })
   })

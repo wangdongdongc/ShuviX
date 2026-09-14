@@ -1,11 +1,11 @@
 /**
  * 侧栏「知识库」分组（KnowledgeGroup）× 用户知识库 —— 契约见 CLAUDE.md「Knowledge base v2 (OKF)」与
- * docs/okf-knowledge-design.md 附录 U（含「补充」）。
+ * docs/okf-knowledge-design.md 附录 U（含「补充」）、附录 L（读宽写严）。
  *
  *   KE-1 树形态：Projects 容器置顶，`~/.shuvix/knowledge/` 下每个子目录一个库、与容器平级平铺（没有
- *        「knowledge」那一层）；空文件夹、隐藏路径、用户根下的散文件、保留文件（index/log）、项目库的
- *        绑定概念都不占行；不合规的 md 照常列出（名字回落文件名）；项目库显示项目**当前**名字。
- *        默认折叠：容器展开，项目库与用户库折叠。
+ *        「knowledge」那一层）；空文件夹、隐藏路径、用户根下的散文件、ShuviX 早先生成形状的 index/log
+ *        都不占行；不合规的 md 与手写的 index/log 照常列出（名字依次取 title、第一个 # 标题、文件名）；
+ *        项目库显示项目**当前**名字。默认折叠：容器展开，项目库与用户库折叠。
  *   KE-2 点行打开：用户库挂 `__knowledge_user__`（notebookPath = 条目 id 去掉首段 `knowledge/`），项目库挂
  *        `__knowledge__`（notebookPath = 条目 id）；再点复用同一会话；两个承载项目不进项目列表。
  *   KE-3 属性卡兜底只在知识库笔记本里：完全没有 `shuvix:` 行的文件出 OKF 卡（无版本段、无校验态），带别家
@@ -41,23 +41,6 @@ let sidebar: SidebarPane
 let projectId: string
 /** 用户根 `~/.shuvix/knowledge` */
 let userRoot: string
-
-/**
- * 项目库的绑定概念：`resource` 是绑定真源；title 是「建库那一刻」的旧名字 —— 侧栏该显示项目当前的名字，
- * 所以刻意与项目名不同
- */
-const charterMd = (id: string): string =>
-  [
-    '---',
-    'shuvix: okf v0.2',
-    'type: Project',
-    'title: Old Name',
-    `resource: shuvix://project/${id}`,
-    '---',
-    '',
-    'CHARTER BODY',
-    ''
-  ].join('\n')
 
 const PROJ_ENTRY_MD = [
   '---',
@@ -149,19 +132,21 @@ beforeAll(async () => {
 
   // 清单只在分组首次展开时拉 —— 以下种子必须全部写在第一次 expand 之前
   const bundle = join(app.home, '.shuvix', 'knowledge-shuvix', 'projects', projectId)
-  put(join(bundle, 'project.md'), charterMd(projectId))
   put(join(bundle, 'a.md'), PROJ_ENTRY_MD)
 
   userRoot = join(app.home, '.shuvix', 'knowledge')
   put(join(userRoot, 'notes', 'no-marker.md'), NO_MARKER_MD)
   put(join(userRoot, 'notes', 'plain.md'), PLAIN_MD)
   put(join(userRoot, 'notes', 'foreign.md'), FOREIGN_MD)
+  // 用户手写的 index.md / log.md 不是生成的形状：是普通笔记，照常一行
   put(join(userRoot, 'notes', 'index.md'), '# Hand-written index\n')
   put(join(userRoot, 'notes', 'log.md'), '# Hand-written log\n')
   put(join(userRoot, 'notes', 'sub', 'deep.md'), 'DEEP BODY\n')
   // 库内的隐藏目录（Obsidian 的回收站）不是库的内容
   put(join(userRoot, 'notes', '.trash', 't2.md'), 'TRASH INSIDE A BASE\n')
   put(join(userRoot, '读书笔记', 'r.md'), 'READING BODY\n')
+  // ShuviX 早先生成的形状的 index（只有节标题与链接行）不是笔记，不占行
+  put(join(userRoot, '读书笔记', 'index.md'), '## Entries\n\n* [r](r.md)\n')
   // 空文件夹是一个库，但没有 md 就没有行（KE-5 再往里写）
   mkdirSync(join(userRoot, 'empty'), { recursive: true })
   // 隐藏目录不算库；用户根下的散文件不属于任何库
@@ -208,26 +193,28 @@ describe('知识库分组 × 用户知识库', () => {
     expect(await kb.dirOpen('knowledge/notes')).toBe(false)
     expect(await kb.dirOpen('knowledge/读书笔记')).toBe(false)
 
-    // 项目库的目录名是项目 id；行上显示项目的当前名字，不是 project.md 里的旧 title，也不是 id
+    // 项目库的目录名是项目 id；行上显示项目当前的名字（宿主按 id 查），不是 id
     const projectDir = (await kb.dirs()).find((d) => d.path === `projects/${projectId}`)
     expect(projectDir?.label).toBe('KbProj')
 
-    // 无自述行但有 type 的是合规条目（名字取 title）；无 frontmatter、带别家标记的不合规，照常一行、按文件名显示
+    // 读宽：有 type 的是合规条目（名字取 title）；没有 frontmatter、带别家标记的照常一行 —— 标题依次取
+    // frontmatter title、正文第一个 # 标题、文件名；用户手写的 index.md / log.md 是普通笔记，同样一行
     const rows = await kb.rows()
     expect(rows).toEqual(
       expect.arrayContaining([
         { path: 'knowledge/notes/no-marker.md', label: 'No Marker' },
-        { path: 'knowledge/notes/plain.md', label: 'plain' },
+        { path: 'knowledge/notes/plain.md', label: 'Plain note' },
         { path: 'knowledge/notes/foreign.md', label: 'foreign' },
-        { path: 'knowledge/notes/sub/deep.md', label: 'deep' }
+        { path: 'knowledge/notes/sub/deep.md', label: 'deep' },
+        { path: 'knowledge/notes/index.md', label: 'Hand-written index' },
+        { path: 'knowledge/notes/log.md', label: 'Hand-written log' }
       ])
     )
     const rowPaths = rows.map((r) => r.path)
     for (const hidden of [
-      'knowledge/notes/index.md',
-      'knowledge/notes/log.md',
-      'knowledge/notes/.trash/t2.md',
-      `projects/${projectId}/project.md`
+      // ShuviX 早先生成的形状的 index 不是笔记
+      'knowledge/读书笔记/index.md',
+      'knowledge/notes/.trash/t2.md'
     ]) {
       expect(rowPaths).not.toContain(hidden)
     }

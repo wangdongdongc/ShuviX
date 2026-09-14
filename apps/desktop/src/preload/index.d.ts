@@ -1052,7 +1052,13 @@ declare global {
     }
     knowledge: {
       /** 全部条目（视图形状，不含正文）+ 两个根的绝对路径（root = knowledge-shuvix，userRoot = 用户根）；只读 */
-      list: () => Promise<{ entries: KnowledgeEntry[]; root: string; userRoot: string }>
+      list: () => Promise<{
+        entries: KnowledgeEntry[]
+        root: string
+        userRoot: string
+        /** bundle id → 显示名（项目库：项目当前的名字） */
+        bundleNames: Record<string, string>
+      }>
       /** 打开条目笔记：一文件至多一笔记本会话，已存在则复用返回；title 为条目显示名 */
       openNote: (params: { path: string; title?: string }) => Promise<Session>
       /** 打开用户知识库根目录（OS 文件管理器；不存在先建） */

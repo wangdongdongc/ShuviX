@@ -1,17 +1,24 @@
 /**
- * 变更管线 —— 宿主观察到的每一次知识库写入都经这里：失效缓存 →（还不是仓库的库先 init + 基线）→
- * 重投影**该 bundle** 的 index/log → 排队该 bundle 的 git 提交 → 广播 knowledge.changed。
+ * 变更管线 —— 宿主观察到的每一次知识库写入都经这里：失效缓存 →（还不是 git 仓库的库先 init + 基线）→
+ * 排队该 bundle 的 git 提交 → 广播 knowledge.changed。
+ *
+ * index.md / log.md 不再维护：谁在什么时候改了哪条，git 提交里都有（`kb(<op>): /path` 与
+ * `Knowledge-Actor` trailer）。也没有「建库」这一步 —— 目录随第一次写入出现，仓库在第一次提交前按需建出。
  *
  * 去抖 300ms 而不是立刻做：文件工具的写入先落盘、再由写钩子补 `generated` 章回写一次，
- * 事件在两次之间到达时立刻投影会把没盖章的版本提交进历史；等一拍，最后落盘的才是提交的。
- * 一批里的事件按到达顺序各记一条日志，每个 bundle 只重投影一次。管线串行，绝不并发投影。
+ * 事件在两次之间到达时立刻提交会把没盖章的版本提交进历史；等一拍，最后落盘的才是提交的。
+ * 管线串行，绝不并发。
  */
-import { isReservedFile, normalizeBundlePath, type KnowledgeLogOp } from '@shuvix/agent-runtime'
+import { normalizeBundlePath } from '@shuvix/agent-runtime'
 import { appEventBus } from '../../utils/appEventBus'
 import { createLogger } from '../../logger'
 import { locateBundle } from './knowledgePaths'
-import { projectBundle } from './projection'
-import { ensureBundleRepo, flushKnowledgeCommits, queueKnowledgeCommit } from './repo'
+import {
+  ensureBundleRepo,
+  flushKnowledgeCommits,
+  queueKnowledgeCommit,
+  type KnowledgeChangeOp
+} from './repo'
 import { invalidateKnowledgeScan, knownKnowledgePaths } from './scan'
 import { invalidateKnowledgeSearch } from './search'
 
@@ -23,8 +30,7 @@ export interface KnowledgeChange {
   bundle: string
   /** bundle 相对路径 */
   path: string
-  op: KnowledgeLogOp
-  title?: string
+  op: KnowledgeChangeOp
   actor?: string
 }
 
@@ -33,34 +39,18 @@ let timer: ReturnType<typeof setTimeout> | null = null
 let chain: Promise<void> = Promise.resolve()
 
 async function process(batch: KnowledgeChange[]): Promise<void> {
-  const date = new Date().toISOString().slice(0, 10)
   const touched = new Map<string, Set<string>>()
-  const touch = (bundle: string, rel: string): void => {
-    const set = touched.get(bundle) ?? new Set<string>()
-    set.add(rel)
-    touched.set(bundle, set)
-  }
   for (const change of batch) {
     invalidateKnowledgeScan(change.bundle, change.path)
-    touch(change.bundle, change.path)
+    const set = touched.get(change.bundle) ?? new Set<string>()
+    set.add(change.path)
+    touched.set(change.bundle, set)
   }
   invalidateKnowledgeSearch()
   try {
-    // 用户库是拷进来的文件夹：自带 .git 就原样沿用；没有就在**投影之前** init —— 基线收下文件夹的
-    // 原貌（本批刚写下的文件除外），这批变更再以自己的提交落地，被投影覆盖的手写 index.md 也留在
-    // 基线里找得回来。项目库在建出时就 init 过，这一步对它只是一次 existsSync
+    // 拷进来的文件夹、第一次被写入的项目库都可能还不是 git 仓库：自带 .git 就原样沿用；没有就此刻
+    // init —— 基线收下文件夹的原貌（本批刚写下的文件除外），这批变更再以自己的提交落地
     for (const [bundle, paths] of touched) await ensureBundleRepo(bundle, { exclude: [...paths] })
-    // 每条变更各记一条日志；index 在最后一次投影时已是全量结果
-    for (const change of batch) {
-      const written = await projectBundle(change.bundle, {
-        date,
-        op: change.op,
-        path: change.path,
-        title: change.title,
-        actor: change.actor
-      })
-      for (const w of written) touch(change.bundle, w)
-    }
     for (const change of batch) {
       queueKnowledgeCommit(change.bundle, [...(touched.get(change.bundle) ?? [])], {
         op: change.op,
@@ -100,8 +90,8 @@ export async function flushKnowledgeChanges(): Promise<void> {
 }
 
 /**
- * 文件工具写入回调：落在某个 bundle 里的 md 才是知识库变更。保留文件由宿主投影维护，
- * agent 直写只失效缓存不记日志；概念按「扫描是否见过」区分新建 / 更新。
+ * 文件工具写入回调：落在某个 bundle 里的 md 才是知识库变更（读宽：普通笔记与条目一视同仁）。
+ * 按「扫描是否见过」区分新建 / 更新。
  */
 export function notifyKnowledgeFileChanged(
   absPath: string,
@@ -110,11 +100,6 @@ export function notifyKnowledgeFileChanged(
   const located = locateBundle(absPath)
   if (!located || !/\.md$/i.test(located.rel)) return
   const { bundle, rel } = located
-  if (isReservedFile(rel)) {
-    invalidateKnowledgeScan(bundle, rel)
-    invalidateKnowledgeSearch()
-    return
-  }
   const existed = knownKnowledgePaths().has(`${bundle}/${rel}`)
   recordKnowledgeChange({
     bundle,

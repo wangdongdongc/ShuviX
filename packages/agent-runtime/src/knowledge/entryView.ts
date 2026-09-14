@@ -8,7 +8,13 @@
  * `knowledge/<库名>/…`）。
  */
 import type { KnowledgeEntry } from '@shuvix/chat-protocol/knowledge'
-import { isStale, isVerificationCurrent, trustTierOf, type KnowledgeConcept } from './conceptFile'
+import {
+  isStale,
+  isVerificationCurrent,
+  trustTierOf,
+  type KnowledgeConcept,
+  type KnowledgeNote
+} from './conceptFile'
 import { normalizeBundlePath } from './bundlePaths'
 
 export function toKnowledgeEntry(
@@ -34,4 +40,29 @@ export function toKnowledgeEntry(
     entry.generatedBy = concept.generated.by
   }
   return entry
+}
+
+/**
+ * 笔记 → 条目视图。合规条目走 toKnowledgeEntry（标题按笔记的取法：frontmatter title → 第一个 # 标题 →
+ * 文件名）；普通笔记没有核实 / 过期可言，按缺省值填充，type 为空。
+ */
+export function toKnowledgeEntryFromNote(
+  note: KnowledgeNote,
+  ctx: { bundle: string; now: Date }
+): KnowledgeEntry {
+  if (note.concept) return { ...toKnowledgeEntry(note.concept, ctx), title: note.title }
+  const bundle = normalizeBundlePath(ctx.bundle)
+  const rel = normalizeBundlePath(note.path)
+  return {
+    path: bundle ? `${bundle}/${rel}` : rel,
+    bundle,
+    type: note.type,
+    title: note.title,
+    description: note.description,
+    status: note.status,
+    tags: [...note.tags],
+    trustTier: 'unverified',
+    verifiedCurrent: false,
+    stale: false
+  }
 }

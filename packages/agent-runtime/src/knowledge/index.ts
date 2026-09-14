@@ -1,13 +1,13 @@
 /**
- * 知识库 v2（OKF）—— 宿主无关的核心：编解码、概念文件、bundle 内路径算术、保留文件投影、
+ * 知识库 v2（OKF）—— 宿主无关的核心：编解码、概念文件与笔记读法、bundle 内路径算术、
  * 一致性校验、`knowledge` 工具。设计见 docs/okf-knowledge-design.md。
  *
  * **一个绑定实体一个 bundle**：本模块里凡是「路径」都是 **bundle 相对**的，谁是哪个 bundle
  * 由宿主回答。跨 bundle 的引用走 `shuvix://` URI，不走路径。
  *
- * **只有一条写入路**：条目由普通 `write` / `edit` 写出来（写钩子回执诊断并盖 `generated`，
- * 变更管线投影 index/log 并提交），社区 skill 与人工编辑因此天然同权。`knowledge` 工具只做
- * 读侧：search / list / read / validate / locate。
+ * **读宽写严**：库里任何 md 都是一条笔记（readKnowledgeNote），缺元数据的用户笔记照常列出、检索；
+ * 只有 `knowledge` 的 `create` 建出来的条目保证 OKF 合规。改动条目走普通 `edit`（写钩子
+ * 回执诊断、给 OKF 条目盖 `generated`，变更管线按 bundle 提交 git），社区 skill 与人工编辑同权。
  *
  * **没有注入面**：把条目自动喂进系统提示词的机制（原 `<knowledge>` 围栏与 agent md 键
  * `shuvix-knowledge`）已整体撤除 —— 怎么注入还没想清楚，留待重新设计。
@@ -17,10 +17,6 @@ export {
   parseOkfText,
   serializeOkfFrontmatter,
   buildOkfConceptDocument,
-  buildIndexMd,
-  buildRootIndexMd,
-  buildLogMd,
-  parseLogMd,
   extractConceptLinks,
   deriveTrustTier,
   isStaleAfter,
@@ -40,6 +36,9 @@ export {
   isVerificationCurrent,
   isStale,
   titleFromPath,
+  readKnowledgeNote,
+  firstHeading,
+  type KnowledgeNote,
   type KnowledgeConcept,
   type KnowledgeSource,
   type KnowledgeStamp,
@@ -47,18 +46,11 @@ export {
 } from './conceptFile'
 export { normalizeBundlePath, escapesBundle, slugify, dedupeFileName } from './bundlePaths'
 export {
-  renderAllIndexes,
-  appendLogEntry,
-  formatLogText,
-  comparePaths,
-  type ProjectionConcept,
-  type RenderIndexesInput,
-  type KnowledgeLogOp,
-  type KnowledgeLogEvent
-} from './projection'
-export {
   validateConceptText,
+  validateKnowledgeText,
   validateBundleFiles,
+  isProjectionText,
+  isProjectionFile,
   resolveLinkTarget,
   isReservedFile,
   type KnowledgeDiagnostic,
@@ -79,5 +71,5 @@ export {
   type KnowledgeBundleScan,
   type KnowledgeSearchHit
 } from './knowledgeTool'
-export { toKnowledgeEntry } from './entryView'
+export { toKnowledgeEntry, toKnowledgeEntryFromNote } from './entryView'
 export { renderKnowledgeGuide } from './knowledgeGuide'

@@ -5,8 +5,8 @@
  * 这里只回答「这个项目有一个知识库、它装什么、怎么进去」三件事。因此文案是**静态**的 ——
  * 宿主不扫库、不数条目、不给路径，注入时零磁盘开销。
  *
- * 不给根路径是刻意的：库是懒建的，印一条还不存在的路径会诱导 agent 直接 `write` 过去，
- * 造出一个没有 `project.md` 的半拉 bundle，下一次解析又建一个 `-2`。新建一律经
+ * 不给根路径是刻意的：库目录要到第一次 `create` 才有，而印出一条路径会诱导 agent 直接 `write`
+ * 过去 —— 绕开只有 `create` 才担保的元数据形状（自述行、键序、`generated`）。新建一律经
  * `knowledge` 的 `create`，路径由它回执 —— 一扇门。
  *
  * 放在围栏里而不是 agent md 正文里，理由同项目记忆：它必须跟着 `shuvix-project-awareness`
@@ -32,7 +32,9 @@ Reach it with the \`knowledge\` tool and name the base on every call — \`base:
 this project's. The user also keeps knowledge bases of their own; \`bases\` lists them, and when
 a subject belongs in one of those, search and record there instead. Starting on something you
 do not already know the answer for, \`search\` first and \`read\` what matches — the bases exist
-so the same ground is not covered twice.
+so the same ground is not covered twice. A base can also hold the user's own notes with no
+metadata at all; they count — read and edit them as they are, and never add metadata to a user's
+note unless asked.
 
 Recording one: \`knowledge\` \`create\` takes the type, title, one-line description and body,
 assembles the metadata and answers with the entry's path — never create one with \`write\`,

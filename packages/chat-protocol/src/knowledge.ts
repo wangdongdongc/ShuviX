@@ -3,15 +3,15 @@
  *
  * **两个根，一个库一个 bundle**：
  *   `~/.shuvix/knowledge/`         用户的库（容器，不是 bundle）—— 每个非隐藏子目录都是一个用户
- *                                  知识库，不要求任何标记；簿记（index/log 投影、git 提交）与
- *                                  ShuviX 维护的库一视同仁。建库 / 删库交给文件系统。
+ *                                  知识库，不要求任何标记；簿记（git 提交）与 ShuviX 维护的库
+ *                                  一视同仁。建库 / 删库交给文件系统。
  *   `~/.shuvix/knowledge-shuvix/`  ShuviX 维护的（容器，不是 bundle）—— 每个绑定实体一个
  *                                  bundle，本期只有 `projects/<projectId>/`。
  *
  * 条目 id 与 bundle id 两个根共用一个名字空间：`projects/<projectId>/…` / `knowledge/<库名>/…`。
  *
- * 一个 bundle 的边界就是「一份 `index.md` 管得着的范围」。跨 bundle 引用**不用 bundle 绝对
- * 路径**（那只在自己 bundle 内成立），用 `shuvix://` URI —— 链接校验对带 scheme 的目标天然跳过。
+ * 一个库就是一个目录。跨 bundle 引用**不用 bundle 绝对路径**（那只在自己 bundle 内成立），
+ * 用 `shuvix://` URI —— 链接校验对带 scheme 的目标天然跳过。
  */
 
 /** 承载知识库笔记本会话的隐藏项目 id（同 `__wiki__` 的做法；项目列表不可见） */
@@ -27,7 +27,7 @@ export const KNOWLEDGE_USER_PROJECT_ID = '__knowledge_user__'
 export const isKnowledgeProjectId = (id: string | null | undefined): boolean =>
   id === KNOWLEDGE_PROJECT_ID || id === KNOWLEDGE_USER_PROJECT_ID
 
-/** 本库产出的 bundle 声明的 OKF 版本（每个 bundle 的根 index.md 的 `okf_version`） */
+/** 本库遵循的 OKF 版本（自述行 `shuvix: okf v…` 的版本段） */
 export const OKF_VERSION = '0.2'
 
 /**
@@ -66,8 +66,7 @@ export const KNOWLEDGE_TYPES = [
   'Entity',
   'Decision',
   'Guide',
-  'Source',
-  'Project'
+  'Source'
 ] as const
 export type KnowledgeType = (typeof KNOWLEDGE_TYPES)[number]
 
@@ -90,17 +89,16 @@ export const OKF_STATUS_KEY = 'status'
 export type OkfTrustTier = 'unverified' | 'machine-confirmed' | 'human-reviewed'
 
 /**
- * 资源 URI 约定。两用：绑定概念的 `resource`（`project.md` 绑项目），以及**跨 bundle 的引用**
+ * 资源 URI 约定：**跨 bundle 的引用**
  * —— bundle 绝对路径只在自己 bundle 内成立，指向别的 bundle 要用这个。
  */
 export const KNOWLEDGE_RESOURCE_SCHEME = 'shuvix://'
-export const projectResource = (projectId: string): string => `shuvix://project/${projectId}`
 export const sessionResource = (sessionId: string): string => `shuvix://session/${sessionId}`
 
-/** 项目 bundle 的绑定概念文件名（`resource` 是绑定真源；目录名是项目 id，v0.1.45 及更早是名字 slug） */
-export const PROJECT_CONCEPT_FILE = 'project.md'
-
-/** 保留文件（OKF §3）：不是 concept，宿主按 bundle 投影生成 */
+/**
+ * OKF 保留的文件名（§3）：不是 concept。ShuviX 不再生成它们 —— 早先生成的留在原地、不当笔记，
+ * 用户自己写的同名文件照常是笔记
+ */
 export const OKF_INDEX_FILE = 'index.md'
 export const OKF_LOG_FILE = 'log.md'
 
