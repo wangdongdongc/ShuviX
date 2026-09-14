@@ -7,16 +7,19 @@
  *     所有用户库**。用户库从不由宿主建出来：建库交给文件系统；点名一个不存在的库直接报错并列出
  *     有哪些 —— 手滑打错的名字不能凭空长出一个库。
  *
- * 保留名优先：目录恰好叫 `project` 的用户库够不着工具，这是一条已知的代价。
+ * 库名按**目录清单**精确匹配（与侧栏、扫描同一份清单），不拿拼出来的路径去 stat：大小写不敏感的
+ * 文件系统上 `Notes` 能 stat 到 `notes/`，id 却成了 `knowledge/Notes`，缓存键与侧栏就此分叉；
+ * 指向目录的符号链接同理 —— 清单不认，这里也不认。比较前两边都归一成 NFC。
+ *
+ * 保留名优先：目录恰好叫 `project` 的用户库够不着工具，也不出现在 `bases` 与报错的候选里。
  */
-import { statSync } from 'fs'
 import { KNOWLEDGE_PROJECT_BASE } from '@shuvix/chat-protocol/knowledge'
 import type { KnowledgeBaseInfo } from '@shuvix/agent-runtime'
 import { projectDao } from '../../dao/projectDao'
 import { sessionDao } from '../../dao/sessionDao'
 import type { Project } from '../../dao/types/project'
 import { ensureProjectBundle, findProjectBundle } from './bundles'
-import { bundleDir, isValidLibraryName, userBundleId } from './knowledgePaths'
+import { bundleDir, userBundleId } from './knowledgePaths'
 import { listUserLibraries } from './scan'
 
 export interface SessionBundleTarget {
@@ -51,12 +54,9 @@ export async function sessionBundle(
   return { bundle, dir: bundleDir(bundle), label: `project "${project.name}"` }
 }
 
-function isDirectory(path: string): boolean {
-  try {
-    return statSync(path).isDirectory()
-  } catch {
-    return false
-  }
+/** 工具可点名的用户库名（保留名 `project` 的同名目录除外） */
+function userBaseNames(): string[] {
+  return listUserLibraries().filter((name) => name !== KNOWLEDGE_PROJECT_BASE)
 }
 
 /** 解析工具参数里的 base */
@@ -67,12 +67,14 @@ export async function resolveBase(
 ): Promise<SessionBundleTarget | { error: string }> {
   const name = base.trim()
   if (name === KNOWLEDGE_PROJECT_BASE) return sessionBundle(rootSessionId, opts)
-  if (isValidLibraryName(name)) {
-    const bundle = userBundleId(name)
-    const dir = bundleDir(bundle)
-    if (isDirectory(dir)) return { bundle, dir, label: `knowledge base "${name}"` }
+  const names = userBaseNames()
+  const wanted = name.normalize('NFC')
+  const match = names.find((n) => n.normalize('NFC') === wanted)
+  if (match) {
+    const bundle = userBundleId(match)
+    return { bundle, dir: bundleDir(bundle), label: `knowledge base "${match}"` }
   }
-  const known = [KNOWLEDGE_PROJECT_BASE, ...listUserLibraries()].map((n) => `"${n}"`).join(', ')
+  const known = [KNOWLEDGE_PROJECT_BASE, ...names].map((n) => `"${n}"`).join(', ')
   return { error: `No knowledge base named "${name}". Available: ${known}.` }
 }
 
@@ -88,21 +90,14 @@ export async function listBases(rootSessionId: string): Promise<KnowledgeBaseInf
     })
   } else {
     const bundle = await findProjectBundle(project.id)
+    const label = `project "${project.name}"`
     out.push(
       bundle
-        ? {
-            base: KNOWLEDGE_PROJECT_BASE,
-            label: `project "${project.name}"`,
-            dir: bundleDir(bundle)
-          }
-        : {
-            base: KNOWLEDGE_PROJECT_BASE,
-            label: `project "${project.name}"`,
-            note: 'empty — the first "create" makes it'
-          }
+        ? { base: KNOWLEDGE_PROJECT_BASE, label, dir: bundleDir(bundle) }
+        : { base: KNOWLEDGE_PROJECT_BASE, label, note: 'empty — the first "create" makes it' }
     )
   }
-  for (const name of listUserLibraries()) {
+  for (const name of userBaseNames()) {
     out.push({ base: name, label: `knowledge base "${name}"`, dir: bundleDir(userBundleId(name)) })
   }
   return out

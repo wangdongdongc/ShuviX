@@ -156,7 +156,7 @@ export function Sidebar(): React.JSX.Element {
   )
 
   /**
-   * 知识库分组能力注入 —— 清单 + 根目录读盘（首次展开懒建根），打开一条即打开 / 复用绑定它的
+   * 知识库分组能力注入 —— 清单（只读，不建目录），打开一条即打开 / 复用绑定它的
    * 笔记本会话（main 侧去重），刷新列表并选中。引用必须稳定（useMemo）：分组以 adapter 为扫描依赖。
    */
   const knowledgeAdapter = useMemo<KnowledgeGroupAdapter>(

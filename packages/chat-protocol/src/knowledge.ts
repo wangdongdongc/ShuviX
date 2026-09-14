@@ -1,15 +1,14 @@
 /**
  * 知识库 v2（OKF）的跨端常量与视图形状 —— 设计见 docs/okf-knowledge-design.md。
  *
- * **两个根，一个绑定实体一个 bundle**：
- *   `~/.shuvix/knowledge/`         用户的库（容器，不是 bundle）—— 每个子目录是一个自带
- *                                  index/log/git 的独立 bundle，可以直接 clone 进来；
- *                                  宿主对它们只读只搜，不投影、不盖章、不提交。
+ * **两个根，一个库一个 bundle**：
+ *   `~/.shuvix/knowledge/`         用户的库（容器，不是 bundle）—— 每个非隐藏子目录都是一个用户
+ *                                  知识库，不要求任何标记；簿记（index/log 投影、git 提交）与
+ *                                  ShuviX 维护的库一视同仁。建库 / 删库交给文件系统。
  *   `~/.shuvix/knowledge-shuvix/`  ShuviX 维护的（容器，不是 bundle）—— 每个绑定实体一个
- *                                  bundle，全套簿记归宿主。
+ *                                  bundle，本期只有 `projects/<projectId>/`。
  *
- * 本期只做 `knowledge-shuvix/projects/<slug>/`（对标旧项目记忆，旧机制搁置不动）。
- * 全局 / 会话 / bot 三个维度与用户侧的导入流程都留到后面，`knowledge/` 根先占住名字。
+ * 条目 id 与 bundle id 两个根共用一个名字空间：`projects/<projectId>/…` / `knowledge/<库名>/…`。
  *
  * 一个 bundle 的边界就是「一份 `index.md` 管得着的范围」。跨 bundle 引用**不用 bundle 绝对
  * 路径**（那只在自己 bundle 内成立），用 `shuvix://` URI —— 链接校验对带 scheme 的目标天然跳过。
@@ -98,7 +97,7 @@ export const KNOWLEDGE_RESOURCE_SCHEME = 'shuvix://'
 export const projectResource = (projectId: string): string => `shuvix://project/${projectId}`
 export const sessionResource = (sessionId: string): string => `shuvix://session/${sessionId}`
 
-/** 项目 bundle 的绑定概念文件名（`resource` 是绑定真源，目录名只是给人看的 slug） */
+/** 项目 bundle 的绑定概念文件名（`resource` 是绑定真源；目录名是项目 id，v0.1.45 及更早是名字 slug） */
 export const PROJECT_CONCEPT_FILE = 'project.md'
 
 /** 保留文件（OKF §3）：不是 concept，宿主按 bundle 投影生成 */
@@ -107,8 +106,8 @@ export const OKF_LOG_FILE = 'log.md'
 
 /**
  * 条目的前端视图形状 —— 侧栏 / 管理页一行所需，不含正文（正文由笔记本会话按需读）。
- * `path` 与 `bundle` 都相对 `knowledge-shuvix/` 根，forward-slash、无前导 `/`；
- * `path` 同时是条目的稳定 id，`bundle` 是它所属 bundle 的目录（如 `projects/acme`）。
+ * `path` 与 `bundle` 用两个根共用的 id 名字空间，forward-slash、无前导 `/`；`path` 同时是条目的
+ * 稳定 id。不合规的 md（没有 frontmatter / 没有 `type` / 别家标记）也有一行，字段取缺省值。
  */
 export interface KnowledgeEntry {
   /**

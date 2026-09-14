@@ -1,6 +1,6 @@
 /**
  * 知识库扫描 —— **按 bundle** 扫（项目库与用户库一视同仁）：每个 bundle 下的全部 `.md`（ripgrep，遵循 .gitignore、
- * 跳过 .git）→ 该 bundle 的概念清单，路径 bundle 相对。
+ * 跳过隐藏文件与目录）→ 该 bundle 的概念清单，路径 bundle 相对。
  *
  * 按 (mtime, size) 缓存解析结果：清单每次都要全量，而库通常几百个文件，全量 stat 便宜、
  * 全量读盘不便宜。缓存是内存的（P6：无数据库表），键是 `<bundle>/<rel>`；宿主自己的写入经
@@ -40,7 +40,7 @@ interface CacheEntry {
 const cache = new Map<string, CacheEntry>()
 
 export interface BundleScan {
-  /** bundle id（shuvix 根相对，如 `projects/acme`） */
+  /** bundle id（`projects/<projectId>` / `knowledge/<库名>`） */
   bundle: string
   /** 全部 md（含保留文件），bundle 相对路径 + 原文 */
   files: BundleFile[]
@@ -79,7 +79,13 @@ export function listBundles(): string[] {
 async function listBundleFiles(bundle: string): Promise<string[]> {
   const dir = bundleDir(bundle)
   if (!existsSync(dir)) return []
-  const { files, truncated } = await rgFilesList({ cwd: dir, glob: ['*.md'], limit: SCAN_LIMIT })
+  const { files, truncated } = await rgFilesList({
+    cwd: dir,
+    glob: ['*.md'],
+    // 隐藏目录（.obsidian / .trash / .git …）不是库的内容：拷进来的 Obsidian 库回收站不该进侧栏与索引
+    hidden: false,
+    limit: SCAN_LIMIT
+  })
   if (truncated) log.warn(`knowledge scan truncated at ${SCAN_LIMIT} files in ${bundle}`)
   return files.map(normalizeBundlePath).sort()
 }

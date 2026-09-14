@@ -19,6 +19,7 @@ import {
   addOp,
   commitOp,
   initOp,
+  unstageOp,
   type GitCache,
   type GitEnv,
   type GitFsClient,
@@ -46,13 +47,21 @@ async function stageAndCommit(
   env: GitEnv,
   cache: GitCache,
   message: string,
-  paths: string[]
+  paths: string[],
+  exclude: readonly string[] = []
 ): Promise<boolean> {
   const added = await addOp(env, cache, { paths })
   const addError = failureOf(added)
   if (addError) {
     log.warn(`git add failed in ${env.dir}: ${addError}`)
     return false
+  }
+  if (exclude.length > 0) {
+    const unstageError = failureOf(await unstageOp(env, cache, { paths: [...exclude] }))
+    if (unstageError) {
+      log.warn(`git reset failed in ${env.dir}: ${unstageError}`)
+      return false
+    }
   }
   const committed = await commitOp(env, cache, { message, ...HOST_AUTHOR })
   const commitError = failureOf(committed)
@@ -63,8 +72,15 @@ async function stageAndCommit(
   return true
 }
 
-/** bundle 目录不是仓库就 init 并把当前全部文件作为基线提交（幂等） */
-export async function ensureBundleRepo(bundle: string): Promise<void> {
+/**
+ * bundle 目录不是仓库就 init 并把当前文件作为基线提交（幂等）。`exclude`（bundle 相对路径）不进基线：
+ * 变更管线传入本批刚写下的文件，基线于是就是宿主动手之前的原貌，这批变更随后以自己的
+ * `kb(<op>)` 提交落地。
+ */
+export async function ensureBundleRepo(
+  bundle: string,
+  opts: { exclude?: readonly string[] } = {}
+): Promise<void> {
   const dir = bundleDir(bundle)
   try {
     if (!existsSync(dir) || existsSync(join(dir, '.git'))) return
@@ -75,7 +91,13 @@ export async function ensureBundleRepo(bundle: string): Promise<void> {
       log.warn(`git init failed in ${dir}: ${initError}`)
       return
     }
-    const committed = await stageAndCommit(env, cache, 'kb(init): knowledge base', ['.'])
+    const committed = await stageAndCommit(
+      env,
+      cache,
+      'kb(init): knowledge base',
+      ['.'],
+      opts.exclude
+    )
     log.info(
       committed
         ? `initialized knowledge repo at ${dir}`

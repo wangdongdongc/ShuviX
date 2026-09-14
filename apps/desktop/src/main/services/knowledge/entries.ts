@@ -17,7 +17,7 @@ import type { KnowledgeEntry } from '@shuvix/chat-protocol/knowledge'
 import { PROJECT_CONCEPT_FILE, projectResource } from '@shuvix/chat-protocol/knowledge'
 import { isReservedFile, titleFromPath, toKnowledgeEntry } from '@shuvix/agent-runtime'
 import { projectDao } from '../../dao/projectDao'
-import { getShuvixKnowledgeRoot, getUserKnowledgeRoot } from './knowledgePaths'
+import { getShuvixKnowledgeRoot, getUserKnowledgeRoot, isUserBundle } from './knowledgePaths'
 import { scanAllBundles } from './scan'
 
 /** `shuvix://project/<id>` → 项目当前名字；解析不出 / 项目已删返回 null */
@@ -57,7 +57,8 @@ export async function listKnowledgeEntries(): Promise<{
     const conceptPaths = new Set(scan.concepts.map((c) => c.path))
     const fromConcepts = scan.concepts.map((c) => {
       const entry = toKnowledgeEntry(c, { bundle: scan.bundle, now })
-      if (c.path !== PROJECT_CONCEPT_FILE) return entry
+      // 名字覆盖只属于项目库：拷进用户库的 project.md 是用户自己的文件，标题照原样
+      if (c.path !== PROJECT_CONCEPT_FILE || isUserBundle(scan.bundle)) return entry
       const live = boundProjectName(c.resource)
       return live ? { ...entry, title: live } : entry
     })

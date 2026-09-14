@@ -9,7 +9,7 @@
  *
  * prop 驱动、不触宿主 API（同 WikiGroup / BotGroup）：清单 / 打开 / 打开目录 / 在文件夹中显示
  * 由宿主注入。树形派生在 knowledgeTree.ts（纯函数，可单测）。扫描是懒的：**首次展开才扫**
- * （宿主借此懒建根目录 —— 展开即用户意图），之后每次展开 + 窗口聚焦 + `knowledge.changed`
+ * （清单只读，不建任何目录），之后每次展开 + 窗口聚焦 + `knowledge.changed`
  * 事件（宿主观察到的 agent 写入）重扫，stale-guard 防乱序回包。项目容器默认展开，项目库与
  * 用户库默认折叠 —— 用户要看的是条目，不是一列库名。
  *
@@ -110,7 +110,7 @@ export function KnowledgeGroup({ adapter }: KnowledgeGroupProps): React.JSX.Elem
   // 翻转集而非展开集：顶层目录默认展开、更深层默认折叠，翻转一次即取反；重扫新增的
   // 目录天然落在各自的默认态，无需与扫描结果对账
   const [toggled, setToggled] = useState<Set<string>>(() => new Set())
-  // 是否扫过（聚焦 / 事件重扫只在首次展开后生效，未展开不建根目录）
+  // 是否扫过（聚焦 / 事件重扫只在首次展开后生效）
   const scannedOnce = useRef(false)
   // 递增序号丢弃过期回包（聚焦 / 事件 / 手动刷新并发时只认最后一次）
   const scanSeq = useRef(0)

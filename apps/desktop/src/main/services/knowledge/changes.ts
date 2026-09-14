@@ -1,6 +1,6 @@
 /**
- * 变更管线 —— 宿主观察到的每一次知识库写入都经这里：失效缓存 → 重投影**该 bundle** 的
- * index/log → 排队该 bundle 的 git 提交 → 广播 knowledge.changed。
+ * 变更管线 —— 宿主观察到的每一次知识库写入都经这里：失效缓存 →（还不是仓库的库先 init + 基线）→
+ * 重投影**该 bundle** 的 index/log → 排队该 bundle 的 git 提交 → 广播 knowledge.changed。
  *
  * 去抖 300ms 而不是立刻做：文件工具的写入先落盘、再由写钩子补 `generated` 章回写一次，
  * 事件在两次之间到达时立刻投影会把没盖章的版本提交进历史；等一拍，最后落盘的才是提交的。
@@ -19,7 +19,7 @@ const log = createLogger('Knowledge')
 const CHANGE_DEBOUNCE_MS = 300
 
 export interface KnowledgeChange {
-  /** bundle id（shuvix 根相对） */
+  /** bundle id（`projects/<projectId>` / `knowledge/<库名>`） */
   bundle: string
   /** bundle 相对路径 */
   path: string
@@ -46,6 +46,10 @@ async function process(batch: KnowledgeChange[]): Promise<void> {
   }
   invalidateKnowledgeSearch()
   try {
+    // 用户库是拷进来的文件夹：自带 .git 就原样沿用；没有就在**投影之前** init —— 基线收下文件夹的
+    // 原貌（本批刚写下的文件除外），这批变更再以自己的提交落地，被投影覆盖的手写 index.md 也留在
+    // 基线里找得回来。项目库在建出时就 init 过，这一步对它只是一次 existsSync
+    for (const [bundle, paths] of touched) await ensureBundleRepo(bundle, { exclude: [...paths] })
     // 每条变更各记一条日志；index 在最后一次投影时已是全量结果
     for (const change of batch) {
       const written = await projectBundle(change.bundle, {
@@ -57,9 +61,6 @@ async function process(batch: KnowledgeChange[]): Promise<void> {
       })
       for (const w of written) touch(change.bundle, w)
     }
-    // 用户库是拷贝进来的文件夹：可能自带 .git（原样复用），也可能没有（此刻 init + 基线提交）。
-    // 项目库在建出时就 init 过，这一步对它是一次 existsSync
-    for (const bundle of new Set(batch.map((c) => c.bundle))) await ensureBundleRepo(bundle)
     for (const change of batch) {
       queueKnowledgeCommit(change.bundle, [...(touched.get(change.bundle) ?? [])], {
         op: change.op,

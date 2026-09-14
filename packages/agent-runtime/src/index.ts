@@ -161,7 +161,7 @@ export { buildGitHelp, GIT_HELP_TOPICS, type GitHelpTopic } from './git/help'
 export { resolveAuthor, AUTHOR_MISSING_MESSAGE } from './git/author'
 // 单 op 直用入口 —— 宿主自身的自动提交（如 widget 目录自举）复用同一套实现，不经工具壳，
 // 因而也不经路径询问：调用方必须自己确保目标目录是它有权写的
-export { initOp, addOp, commitOp, statusOp } from './git/gitOps'
+export { initOp, addOp, commitOp, statusOp, unstageOp } from './git/gitOps'
 // 工具输出后处理共享内核（截断 + 经注入 SpillSink 落盘）
 export {
   processToolOutput,

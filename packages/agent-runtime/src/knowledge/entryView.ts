@@ -4,7 +4,8 @@
  * `stale_after` 对当日判。
  *
  * 概念自己的 `path` 是 **bundle 相对**（OKF 的口径），而视图要在全部 bundle 之间唯一，
- * 所以出参的 `path` 拼上 bundle 前缀 —— 两者都相对 `knowledge-shuvix/` 根。
+ * 所以出参的 `path` 拼上 bundle 前缀 —— 用两个根共用的 id 名字空间（`projects/<id>/…` /
+ * `knowledge/<库名>/…`）。
  */
 import type { KnowledgeEntry } from '@shuvix/chat-protocol/knowledge'
 import { isStale, isVerificationCurrent, trustTierOf, type KnowledgeConcept } from './conceptFile'

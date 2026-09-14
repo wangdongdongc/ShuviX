@@ -96,18 +96,24 @@ export function toUserRelative(absPath: string): string | null {
  * 绝对路径 → 它所属的 bundle id 与 bundle 内相对路径；不在任何 bundle 内返回 null。
  * 项目库的边界是 `projects/<projectId>`（容器目录本身与更浅的层级都不是 bundle）；
  * 用户库的边界是用户根下的第一层子目录（用户根下的散文件不属于任何库）。
+ * 任一段以 `.` 开头（`.git` / `.obsidian` / `.trash` …）的路径也不属于任何 bundle —— 与扫描口径一致。
  */
+/** 隐藏段：不是库的内容 */
+const hasHiddenSegment = (segs: readonly string[]): boolean => segs.some((s) => s.startsWith('.'))
+
 export function locateBundle(absPath: string): { bundle: string; rel: string } | null {
   const shuvixRel = toShuvixRelative(absPath)
   if (shuvixRel !== null) {
     const segs = normalizeBundlePath(shuvixRel).split('/')
-    if (segs.length < 3 || segs[0] !== PROJECTS_CONTAINER) return null
+    if (segs.length < 3 || segs[0] !== PROJECTS_CONTAINER || hasHiddenSegment(segs.slice(1))) {
+      return null
+    }
     return { bundle: `${segs[0]}/${segs[1]}`, rel: segs.slice(2).join('/') }
   }
   const userRel = toUserRelative(absPath)
   if (userRel !== null) {
     const segs = normalizeBundlePath(userRel).split('/')
-    if (segs.length < 2 || !isValidLibraryName(segs[0])) return null
+    if (segs.length < 2 || !isValidLibraryName(segs[0]) || hasHiddenSegment(segs)) return null
     return { bundle: userBundleId(segs[0]), rel: segs.slice(1).join('/') }
   }
   return null

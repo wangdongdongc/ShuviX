@@ -992,12 +992,25 @@ function selectionTouches(state: EditorState, from: number, to: number): boolean
   return state.selection.ranges.some((r) => r.from <= to && r.to >= from)
 }
 
+/** 顶层 `shuvix:` 键，读不读得出都算 —— 有这个键就以它为准，兜底只给完全没有标记的文件 */
+const SHUVIX_KEY_LINE_RE = new RegExp(`^${SHUVIX_MARKER_KEY}[ \\t]*:`, 'm')
+
+/**
+ * 这段 frontmatter 按哪个契约出卡：自述行优先；**完全没有** `shuvix:` 键时才用宿主给的兜底类型。
+ * 读不出的标记（`shuvix: 123`）不兜底 —— 扫描那侧把它当别家契约、不算条目，卡片与之同口径。
+ * 出卡与方向键（cardCollapsed）共用这一个判定，兜底出来的卡同样接得住 ↑。
+ */
+function markerOf(yaml: string, config: FrontmatterCardConfig): ShuvixMarker | null {
+  const marker = readShuvixMarker(yaml)
+  if (marker) return marker
+  if (!config.fallbackMarkerType || SHUVIX_KEY_LINE_RE.test(yaml)) return null
+  return { type: config.fallbackMarkerType, version: null }
+}
+
 function buildDecos(state: EditorState, config: FrontmatterCardConfig): DecorationSet {
   const fm = findFrontmatter(state)
   if (!fm) return Decoration.none
-  const marker =
-    readShuvixMarker(fm.yaml) ??
-    (config.fallbackMarkerType ? { type: config.fallbackMarkerType, version: null } : null)
+  const marker = markerOf(fm.yaml, config)
   if (!marker) return Decoration.none
 
   // 揭示态：不替换，只给源码行淡淡的背景 tint（标出「这段是元数据」的边界）
@@ -1019,9 +1032,9 @@ function buildDecos(state: EditorState, config: FrontmatterCardConfig): Decorati
 }
 
 /** 当前是否处于「卡片折叠」态（有卡可撞）——揭示态下卡片不存在，方向键该走默认逐行 */
-function cardCollapsed(state: EditorState): FmRange | null {
+function cardCollapsed(state: EditorState, config: FrontmatterCardConfig): FmRange | null {
   const fm = findFrontmatter(state)
-  if (!fm || !readShuvixMarker(fm.yaml)) return null
+  if (!fm || !markerOf(fm.yaml, config)) return null
   if (state.field(fmFocusedField) && selectionTouches(state, fm.from, fm.to)) return null
   return fm
 }
@@ -1037,18 +1050,20 @@ function cardCollapsed(state: EditorState): FmRange | null {
  * 一律 return false 交还默认键位；选区（Shift-Up）不接管 —— 那是另一种意图，替用户
  * 缩短选区比跳一下更糟。
  */
-const cardArrowUp: Command = (view) => {
-  const fm = cardCollapsed(view.state)
-  if (!fm) return false
-  const sel = view.state.selection.main
-  if (!sel.empty || sel.head <= fm.to) return false
-  if (view.moveVertically(sel, false).head > fm.to) return false // 默认落点不进卡片
-  view.dispatch({
-    selection: EditorSelection.cursor(fm.to),
-    scrollIntoView: true,
-    userEvent: 'select'
-  })
-  return true
+function cardArrowUp(config: FrontmatterCardConfig): Command {
+  return (view) => {
+    const fm = cardCollapsed(view.state, config)
+    if (!fm) return false
+    const sel = view.state.selection.main
+    if (!sel.empty || sel.head <= fm.to) return false
+    if (view.moveVertically(sel, false).head > fm.to) return false // 默认落点不进卡片
+    view.dispatch({
+      selection: EditorSelection.cursor(fm.to),
+      scrollIntoView: true,
+      userEvent: 'select'
+    })
+    return true
+  }
 }
 
 /**
@@ -1075,6 +1090,6 @@ export function frontmatterCard(config: FrontmatterCardConfig): Extension {
     fmFocusedField,
     cardField,
     fmFocusWatcher,
-    Prec.high(keymap.of([{ key: 'ArrowUp', run: cardArrowUp }]))
+    Prec.high(keymap.of([{ key: 'ArrowUp', run: cardArrowUp(config) }]))
   ]
 }

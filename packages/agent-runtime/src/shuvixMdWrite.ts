@@ -190,11 +190,11 @@ function reviewKnowledgeWrite(
   const notes: string[] = []
   const warnings = diagnostics.filter((d) => d.level === 'warning').map((d) => `- ${d.message}`)
   if (warnings.length > 0) notes.push(`[OKF] Written with warnings:\n${warnings.join('\n')}`)
-  // 自述行缺失只回执、不代填：它是属性卡的识别依据，而卡片的识别不该由「宿主偷偷补一行」
-  // 来维持 —— 新建走 `knowledge` 的 `create` 就恒有这一行，手写的那份得自己知道少了什么
+  // 自述行缺失只回执、不代填：宿主不往别人的文件里偷偷补键 —— 新建走 `knowledge` 的 `create`
+  // 就恒有这一行，手写的那份得自己知道少了什么（知识库笔记本里没有这一行照样出属性卡）
   if (!hasMarker) {
     notes.push(
-      `[OKF] This file has no \`shuvix: ${KNOWLEDGE_MARKER}\` line, so ShuviX will not render it as a knowledge entry (no property card). It is still indexed. Create entries with the \`knowledge\` tool's "create" action, which writes that line for you.`
+      `[OKF] This file has no \`shuvix: ${KNOWLEDGE_MARKER}\` line. ShuviX still reads it as an entry, but entries it writes always carry that line. Create new entries with the \`knowledge\` tool's "create" action, which writes that line for you.`
     )
   }
 

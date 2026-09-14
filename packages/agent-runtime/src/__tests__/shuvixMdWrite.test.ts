@@ -246,10 +246,10 @@ describe('reviewShuvixMdWrite — OKF 知识库分支', () => {
    * `create` 恒写它；手写 / 外部工具写的那份则不会有，于是回执要点名这件事 —— 上一轮
    * 把新建改成「模型自己拼 frontmatter」，卡片就是这样静默消失的。
    */
-  it('MW-7 无自述行：照常盖章与索引，但回执点明属性卡渲染不出来、并指路 create', () => {
+  it('MW-7 无自述行：照常盖章与索引，回执说明它照样算条目、并指路 create（create 恒写这一行）', () => {
     const out = review(concept(VALID), 'global/x.md')!
     expect(out.note).toContain('has no `shuvix: okf v0.2` line')
-    expect(out.note).toContain('It is still indexed')
+    expect(out.note).toContain('ShuviX still reads it as an entry')
     expect(out.note).toContain('"create"')
     // 只回执、不代填：宿主不偷偷往别人的文件里加键
     expect(out.content).not.toContain('shuvix: okf')
