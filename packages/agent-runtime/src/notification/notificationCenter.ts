@@ -24,9 +24,9 @@
  * 3. **子会话的结束一律不弹**：`sub_session_end` 只用来销血缘。这里一度按「无
  *    `parentToolCallId` = 用户触发」补过一条完成/失败通知 —— 那时笔记本发送整轮跑在子会话里，
  *    没有根 agent 的 `agent_end` 兜底。笔记本改回真正的根 agent 之后，唯一还这么派发的是
- *    workflow 引擎的 `run()`，而它起的都是机械动作（auto-title 一条、bot 管线每个 bot 每条
- *    消息两三条）：补通知的结果是用户刚发完消息就先收到一条「已完成」，而他等的那轮还在跑。
- *    真要给某类 workflow 运行发通知，得由发起方说自己是一次用户在等的运行，而不是从
+ *    hook runner，而它起的都是机械动作（auto-title 每个会话一两次）：补通知的结果是用户刚
+ *    发完消息就先收到一条「已完成」，而他等的那轮还在跑。
+ *    真要给某类 hook 运行发通知，得由发起方说自己是一次用户在等的运行，而不是从
  *    「有没有 toolCallId」反推。
  */
 import type { InputRequest } from '@shuvix/chat-protocol/types/inputRequest'

@@ -1,12 +1,12 @@
 /**
  * 触发绑定的 CEL `when` 过滤 —— 与 security 模块同一 CEL 引擎（@marcbachmann/cel-js）、
  * 同一 strict 语义，但独立的求值环境：这里没有 inDir/hasShortFlags 之类的策略函数，
- * 上下文是 `{event, vars, env}`（触发信封 / 工作流常量表 / 宿主环境）。
+ * 上下文是 `{event, env}`（触发信封 / 宿主环境）。
  *
  * 时机与错误处置对齐 celMatch：
- *  - 语法校验在工作流文件解析时（compileWhen）：语法错 → 整份文件非法；
+ *  - 语法校验在 hook 文件解析时（compileWhen）：语法错 → 整份文件非法；
  *  - 求值在 fire 匹配时（evaluateWhen）：求值错误（含访问 payload 缺失属性）与非布尔结果
- *    throw，由引擎 fail-safe 处置为「不命中 + 告警」—— 触发宁可漏掉一次，绝不误发一个 run。
+ *    throw，由 runner fail-safe 处置为「不命中 + 告警」—— 触发宁可漏掉一次，绝不误发一个 run。
  */
 import { Environment } from '@marcbachmann/cel-js'
 
@@ -32,24 +32,11 @@ export function compileWhen(expression: string): string | null {
   }
 }
 
-/** 求值 `when`。要求严格布尔；错误/非布尔向上抛，由引擎按「不命中 + 告警」兜底 */
+/** 求值 `when`。要求严格布尔；错误/非布尔向上抛，由 runner 按「不命中 + 告警」兜底 */
 export function evaluateWhen(expression: string, context: Record<string, unknown>): boolean {
   const result = program(expression)(context)
   if (typeof result !== 'boolean') {
     throw new Error(`when expression must evaluate to a boolean, got ${typeof result}`)
   }
   return result
-}
-
-/**
- * 求值绑定的分道 `key`。要求 string / number（number 转字符串）—— 键是身份，
- * 布尔或对象当键只会把不相干的 run 挤成一条道。错误/类型不符向上抛，
- * 由引擎 fail-safe 处置为「回落缺省键 + 告警」：键算错时宁可**更强的互斥**，
- * 也不给一个来路不明的触发发一张并发许可。
- */
-export function evaluateLaneKey(expression: string, context: Record<string, unknown>): string {
-  const result = program(expression)(context)
-  if (typeof result === 'string') return result
-  if (typeof result === 'number' && Number.isFinite(result)) return String(result)
-  throw new Error(`key expression must evaluate to a string or number, got ${typeof result}`)
 }

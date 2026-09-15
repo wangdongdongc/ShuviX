@@ -46,7 +46,7 @@ export interface AgentTaskSubject {
   /** 派生层级（根会话 = 0，直接派生 = 1） */
   depth: number
   /**
-   * 派发它的那次 tool_call id（工作流 run 起的没有）。
+   * 派发它的那次 tool_call id（hook run 起的没有）。
    * 对话流里那张工具卡据此找到自己的任务，把实时状态挂在摘要行尾。
    */
   parentToolCallId?: string
@@ -68,7 +68,7 @@ export type TaskSubject = BashTaskSubject | AgentTaskSubject | SubSessionTaskSub
 
 /** 任务快照 —— 事件载荷与 `task.list` 共用同一形状 */
 export interface TaskInfo {
-  /** 发起它的 tool_call id；无 tool call（工作流 run / 用户从面板发起）时由管理器发 uuid */
+  /** 发起它的 tool_call id；无 tool call（hook run / 用户从面板发起）时由管理器发 uuid */
   taskId: string
   kind: TaskKind
   /** 归属的**可见**会话（派生 agent 取 rootSessionId，嵌套派生不落在中间那层身上） */

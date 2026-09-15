@@ -15,7 +15,7 @@
  * 前置条件：`electron-vite build` 产物已存在（test:e2e 脚本会先构建）。
  */
 import { spawn, type ChildProcess } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -44,8 +44,20 @@ export interface E2EApp {
   agentsDir: string
   /** ~/.shuvix/bots（惰性创建） */
   botsDir: string
+  /** ~/.shuvix/hooks（惰性创建） */
+  hooksDir: string
   /** 主窗口页面的 CDP 客户端（window.api 已就绪） */
   main: CdpClient
+  /**
+   * 主进程日志文件（electron-log file transport）此刻的全文；第一次写入之前为空串。
+   * 只进主进程日志的事实（如 hook run 的起止与 skip 原因）靠它断言。
+   *
+   * 文件落在 fake HOME 里、实例之间不串味（macOS 实测 `~/Library/Logs/Electron/main.log`：脚本路径
+   * 启动时 app.name 是 default_app 的 'Electron'；其余平台按 Electron 缺省在 userData/logs 下）。
+   * 不读子进程 stdout：console transport 把 info 打到 stdout、warn/error 打到 stderr，两条管道之间
+   * 没有先后保证，「栅栏行之后没有某行」只在文件这一条有序流上成立。
+   */
+  mainLog(): string
   /** 打开设置窗口并连接其页面（tab 缺省 'agents'） */
   openSettings(tab?: string): Promise<CdpClient>
   /** 结束实例并清理 fake HOME（afterAll 必须调用） */
@@ -165,6 +177,16 @@ export async function launchApp(): Promise<E2EApp> {
   mkdirSync(userData, { recursive: true })
   const agentsDir = join(home, '.shuvix', 'agents')
   const botsDir = join(home, '.shuvix', 'bots')
+  const hooksDir = join(home, '.shuvix', 'hooks')
+  // 主进程日志文件的候选位置（见 E2EApp.mainLog）：macOS 走 ~/Library/Logs/<app.name>，其余平台 userData/logs
+  const logFiles = [
+    join(home, 'Library', 'Logs', 'Electron', 'main.log'),
+    join(userData, 'logs', 'main.log')
+  ]
+  const mainLog = (): string => {
+    const file = logFiles.find((f) => existsSync(f))
+    return file ? readFileSync(file, 'utf8') : ''
+  }
 
   const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, SHUVIX_VERIFY_USERDATA: userData }
   // 该变量会让 electron 二进制退化为纯 node（不起窗口）—— 必须剔除
@@ -254,7 +276,9 @@ export async function launchApp(): Promise<E2EApp> {
       home,
       agentsDir,
       botsDir,
+      hooksDir,
       main,
+      mainLog,
       async openSettings(tab = 'agents') {
         await main.eval(`window.api.app.openSettings(${JSON.stringify(tab)})`)
         const st = await until(

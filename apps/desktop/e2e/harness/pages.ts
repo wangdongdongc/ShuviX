@@ -1130,13 +1130,13 @@ export async function settingsTabsPane(settings: CdpClient): Promise<SettingsTab
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// 设置页三个注册表 tab（智能体 / 安全策略 / 工作流）—— 同一副两栏布局，共用一个工厂。
+// 设置页三个注册表 tab（智能体 / 安全策略 / Hooks）—— 同一副两栏布局，共用一个工厂。
 //
 // 左列（按宽度类认，`.pop()` 取最后一个）：合法行 = 带 `.font-medium` 标签的按钮（内置行另带锁
 // `.lucide-lock`，选中态 `bg-accent/10`）；解析不过的文件行没有 `.font-medium`、文件名在
 // `.font-mono` 里（选中态琥珀 `bg-amber-500/10`）；底栏 新建 `.lucide-plus` / 重扫描
 // `.lucide-refresh-cw`。右栏 = 列表列的下一个兄弟，自上而下：页级错误框（新建 / 删除失败才有）→
-// 头部（标题 `span.text-sm.font-semibold` + 动作图标，那条 `.border-b`）→ 工作流才有的拒绝原因
+// 头部（标题 `span.text-sm.font-semibold` + 动作图标，那条 `.border-b`）→ Hooks 才有的拒绝原因
 // 红框 → 详情。**用户文件的详情就是它的笔记本会话**（`[data-registry-note=<fileName>]`，openNote
 // 回来之前渲染 null）；内置是等价 md 的只读查看，没有 data-registry-note。
 //
@@ -1187,7 +1187,7 @@ export interface RegistryTabPane {
    * 覆盖徽标），[1] 文件路径或提示；同名里输掉的用户文件多出 [2]「与 X 同名、那一份优先」。三个 tab 同构
    */
   headerLines(): Promise<string[]>
-  /** 详情区里笔记之外的红框文本（页级错误框 + 工作流的拒绝原因框），多个以换行连接 */
+  /** 详情区里笔记之外的红框文本（页级错误框 + Hooks 的拒绝原因框），多个以换行连接 */
   reasonText(): Promise<string>
   headerIcons(): Promise<RegistryHeaderIcons>
   /** 详情里属性卡输入框的个数，以及是否全部禁用（内置只读 = 控件照常渲染、全部禁用） */
@@ -1205,7 +1205,7 @@ export interface RegistryRowFilter {
 /** 列表行原始快照（各 tab 再映射成自己的形状） */
 interface RegistryRowShot {
   label: string
-  /** 行内第二行的 mono 小字（工作流的触发器副标题；其余 tab 为空串） */
+  /** 行内第二行的 mono 小字（Hooks 行的 `agent · 触发器` 副标题；其余 tab 为空串） */
   subtitle: string
   struck: boolean
   overriddenBadge: boolean
@@ -1219,7 +1219,7 @@ interface RegistryTabInternals extends RegistryTabPane {
 }
 
 /**
- * 注册表 tab 的公共实现。`columnWidth` 是左列的宽度类（智能体 / 策略 220px，工作流 240px）——
+ * 注册表 tab 的公共实现。`columnWidth` 是左列的宽度类（智能体 / 策略 220px，Hooks 240px）——
  * 两栏布局里只有它能不靠文案认出左列。
  */
 function registryTabPane(settings: CdpClient, columnWidth: string): RegistryTabInternals {
@@ -1594,18 +1594,18 @@ export async function policiesPane(settings: CdpClient): Promise<PoliciesPane> {
   }
 }
 
-export interface WorkflowsPaneRow {
+export interface HooksPaneRow {
   name: string
-  /** 行内副标题：触发器 id 以 `, ` 连接（没有绑定时是本地化的「无触发器」文案） */
-  trigger: string
+  /** 行内副标题 `<agent> · <trigger>, <trigger>`（HookRow 的 hint：派谁 · 什么时候会跑） */
+  hint: string
   struck: boolean
   overriddenBadge: boolean
   selected: boolean
   builtin: boolean
 }
 
-export interface WorkflowsPane extends RegistryTabPane {
-  rows(): Promise<WorkflowsPaneRow[]>
+export interface HooksPane extends RegistryTabPane {
+  rows(): Promise<HooksPaneRow[]>
   /**
    * 点一行并等详情挂好（见本节开头的就绪判据）；`which` 在覆盖后两行同名时点名来源，
    * `opts.overridden` 再分开同名的几份用户文件（划线的那几行是输掉的）
@@ -1614,20 +1614,21 @@ export interface WorkflowsPane extends RegistryTabPane {
 }
 
 /**
- * 设置窗口「工作流」tab（openSettings('workflows') 后调用；等列表就绪）。
- * 与另外两个 tab 的差别只在左列宽 240px、行多一行触发器副标题、以及选中非法文件时
- * 头部与笔记之间多一个拒绝原因红框（脚本语法错到不了属性卡，只能挂在这里 —— reasonText）。
+ * 设置窗口「Hooks」tab（openSettings('hooks') 后调用；等列表就绪）。
+ * 与另外两个 tab 的差别只在左列宽 240px、行多一行 `agent · 触发器` 副标题（hint）、以及选中
+ * 解析不过的文件时头部与笔记之间多一个拒绝原因红框（解析器原文，与属性卡横幅同源 —— reasonText）。
+ * 内置 hook 没有 detail()：它的只读详情用公共面的 inputs() / headerIcons() 断言。
  */
-export async function workflowsPane(settings: CdpClient): Promise<WorkflowsPane> {
+export async function hooksPane(settings: CdpClient): Promise<HooksPane> {
   const { rawRows, ...common } = registryTabPane(settings, '240px')
-  await until(async () => (await rawRows()).length > 0, 'workflows tab ready')
+  await until(async () => (await rawRows()).length > 0, 'hooks tab ready')
 
   return {
     ...common,
     rows: async () =>
       (await rawRows()).map((r) => ({
         name: r.label,
-        trigger: r.subtitle,
+        hint: r.subtitle,
         struck: r.struck,
         overriddenBadge: r.overriddenBadge,
         selected: r.selected,
@@ -1637,7 +1638,7 @@ export async function workflowsPane(settings: CdpClient): Promise<WorkflowsPane>
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// 注册表笔记（bot / agent / 策略 / 工作流 md 的笔记本会话）的正文与属性卡 —— 两个窗口共用。
+// 注册表笔记（bot / agent / 策略 / hook md 的笔记本会话）的正文与属性卡 —— 两个窗口共用。
 //
 // 作用域：主窗里点 Bots 分组的一行，主区就是那份文件的笔记本（同一时刻只有它一个 .cm-content），
 // 作用域是整个 document；设置窗里是详情区的 `[data-registry-note]`（RegistryNoteView 根）——

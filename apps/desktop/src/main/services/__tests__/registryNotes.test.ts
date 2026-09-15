@@ -1,5 +1,5 @@
 /**
- * registryNotes —— 四个注册表目录（bot / agent / 安全策略 / 工作流）的 md「怎么打开」与
+ * registryNotes —— 四个注册表目录（bot / agent / 安全策略 / hook）的 md「怎么打开」与
  * 「写完告诉谁」。
  *
  * 打开与 knowledgeNotes 同一套做法，测法也照它：每个目录一个隐藏承载项目（固定 id、path =
@@ -24,7 +24,7 @@ import type { Project, Session } from '../../types'
 /** 临时根 + 四个注册表目录。paths 替身与用例共用这一份，两边拼出的路径逐字相同 */
 const tmp = vi.hoisted(() => {
   const state = { base: '' }
-  const subdir = { bot: 'bots', agent: 'agents', policy: 'policies', workflow: 'workflows' }
+  const subdir = { bot: 'bots', agent: 'agents', policy: 'policies', hook: 'hooks' }
   return {
     state,
     dirOf: (kind: keyof typeof subdir): string => `${state.base}/${subdir[kind]}`
@@ -35,7 +35,7 @@ vi.mock('../../utils/paths', () => ({
   getDefaultBotsDir: () => tmp.dirOf('bot'),
   getDefaultAgentsDir: () => tmp.dirOf('agent'),
   getDefaultPoliciesDir: () => tmp.dirOf('policy'),
-  getDefaultWorkflowsDir: () => tmp.dirOf('workflow')
+  getDefaultHooksDir: () => tmp.dirOf('hook')
 }))
 vi.mock('../../dao/projectDao', () => ({
   projectDao: { findById: vi.fn(), insert: vi.fn(), update: vi.fn() }
@@ -61,7 +61,7 @@ import { ensureRegistryNoteProject, observeRegistryWrite, openRegistryNote } fro
 
 const publish = vi.spyOn(appEventBus, 'publish')
 
-const KINDS = ['bot', 'agent', 'policy', 'workflow'] as const
+const KINDS = ['bot', 'agent', 'policy', 'hook'] as const
 const { dirOf } = tmp
 
 /** 各注册表隐藏项目的名字（项目列表里看不见，只在日志与调试里认得出是谁） */
@@ -69,7 +69,7 @@ const NAMES: Record<RegistryNoteKind, string> = {
   bot: 'Bots',
   agent: 'Agents',
   policy: 'Policies',
-  workflow: 'Workflows'
+  hook: 'Hooks'
 }
 
 /** 一行与当前目录一致的隐藏项目（over 用来制造漂移） */
@@ -389,7 +389,7 @@ describe('observeRegistryWrite', () => {
   })
 
   it('RN-12 bots 目录之外一律不回执：非 .md、bots 的子目录、另外三个注册表目录、名字以 bots 开头的兄弟目录、相对路径 —— 写照常只调一次、值照常透传', async () => {
-    // agent / policy / workflow 每次用到都现扫目录，不需要通知；`bots-evil` 是给前缀匹配
+    // agent / policy / hook 每次用到都现扫目录，不需要通知；`bots-evil` 是给前缀匹配
     // （startsWith(botsDir)）准备的陷阱
     const bots = dirOf('bot')
     const targets = [
@@ -397,7 +397,7 @@ describe('observeRegistryWrite', () => {
       join(bots, 'sub', 'x.md'),
       join(dirOf('agent'), 'x.md'),
       join(dirOf('policy'), 'x.md'),
-      join(dirOf('workflow'), 'x.md'),
+      join(dirOf('hook'), 'x.md'),
       join(tmp.state.base, 'bots-evil', 'x.md'),
       'scout.md'
     ]

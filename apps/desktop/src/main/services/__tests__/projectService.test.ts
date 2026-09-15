@@ -1,6 +1,6 @@
 /**
  * projectService —— 隐藏项目的过滤口径。只承载笔记本会话的隐藏项目有六个：旧 wiki（`__wiki__`）、
- * 知识库 v2（`__knowledge__`），以及 bot / agent / 安全策略 / 工作流四个注册表目录
+ * 知识库 v2（`__knowledge__`），以及 bot / agent / 安全策略 / hook 四个注册表目录
  * （`REGISTRY_NOTE_PROJECT_IDS` —— 打开一份注册表 md，就是打开挂在它下面的笔记本会话）。
  * list / listArchived 不能把它们露到项目列表里，但 getById 不过滤 —— 它们的会话要能正常解析出
  * 所属项目。只 mock projectDao；id 取契约常量而非字面量，常量改了这里跟着改，字面量会让测试在
@@ -46,7 +46,7 @@ describe('projectService — 隐藏项目', () => {
     const bots = project(REGISTRY_NOTE_PROJECT_IDS.bot)
     const agents = project(REGISTRY_NOTE_PROJECT_IDS.agent)
     const policies = project(REGISTRY_NOTE_PROJECT_IDS.policy, { archivedAt: 5 })
-    const workflows = project(REGISTRY_NOTE_PROJECT_IDS.workflow)
+    const hooks = project(REGISTRY_NOTE_PROJECT_IDS.hook)
     vi.mocked(projectDao.findAllActive).mockReturnValue([
       bots,
       p1,
@@ -55,11 +55,11 @@ describe('projectService — 隐藏项目', () => {
       p2,
       policies,
       knowledge,
-      workflows
+      hooks
     ])
     vi.mocked(projectDao.findAllArchived).mockReturnValue([
       knowledge,
-      workflows,
+      hooks,
       p3,
       bots,
       policies,

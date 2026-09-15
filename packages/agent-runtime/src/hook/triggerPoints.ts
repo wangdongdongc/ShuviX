@@ -1,20 +1,20 @@
 /**
  * 业务埋点的统一注册表 —— 全部触发点的「业务位置 + 该位置能提供的上下文信息」的类型声明。
  *
- * 架构约定（docs/workflow-md-design.md §3）：
- *  - **埋点是通用的，不和任何工作流绑定**：emit 侧只调 `fire(id, payload)`，声明自己
+ * 架构约定（docs/hook-design.md）：
+ *  - **埋点是通用的，不和任何 hook 绑定**：emit 侧只调 `fire(id, payload)`，声明自己
  *    所处的业务位置与当下上下文里的事实，无视有没有人订阅；
- *  - **工作流声明自己在哪触发**（md 的 `shuvix-workflow-on`）—— 两者只以字符串 id 耦合；
+ *  - **hook 声明自己在哪触发**（md 的 `shuvix-hook-on`）—— 两者只以字符串 id 耦合；
  *  - 本表是双方唯一的契约点：`TriggerPayloadMap` 给 emit 侧编译期类型安全
  *    （fire 的 payload 形状按 id 收窄），`TRIGGER_POINTS` 给解析器/文档/UI 一份可枚举目录。
- *    **加一个埋点 = 此表加一行 + 在业务位置补一个 fire 调用**，格式与引擎零改动。
+ *    **加一个埋点 = 此表加一行 + 在业务位置补一个 fire 调用**，格式与 runner 零改动。
  *
  * payload 纪律：只放该业务位置**天然持有的事实**（会话状态、本轮统计、对话尾部文本…），
- * 不放为某个工作流特制的字段 —— 判断标准是「换一个完全不同的工作流订阅这里，这些字段
- * 是否仍然自然有用」。`manual` 不是埋点：手动运行恒可用，走引擎的另一条入口。
+ * 不放为某个 hook 特制的字段 —— 判断标准是「换一个完全不同的 hook 订阅这里，这些字段
+ * 是否仍然自然有用」。payload 整体会以 YAML 附在派发给 agent 的任务末尾（hookPrompt.ts），
+ * 所以每个字段同时也是 agent 读到的事实。
  *
- * 保留键：信封在 payload 之上附加 `trigger`（埋点 id）与 `chain`（触发链，防自触发风暴，
- * 现阶段恒空数组）—— payload 不得使用这两个键名。
+ * 保留键：CEL `when` 看到的 event 在 payload 之上附加 `trigger`（埋点 id）—— payload 不得使用这个键名。
  */
 
 /** 会话域埋点的公共上下文（emit 侧从会话状态现取） */
@@ -31,7 +31,7 @@ interface SessionTriggerBase {
 
 /**
  * 埋点 id → payload 形状的类型目录。emit 侧 `fire('session.turn-completed', {...})`
- * 由此获得编译期校验；工作流 md 的 CEL `when` 与脚本 `event` 读的就是这份数据。
+ * 由此获得编译期校验；hook md 的 CEL `when` 与派发给 agent 的事件围栏读的就是这份数据。
  */
 export interface TriggerPayloadMap {
   /** 用户 prompt 通过校验、正式派发给根 Agent 之前（本轮 LLM 尚未开始） */
@@ -66,25 +66,22 @@ export interface TriggerPointDef {
   /**
    * 'session'：payload.sessionId 同时是 run 的归属会话 —— 派发的 agent 以它为
    * parentSessionId（工具绑定/询问路由/LLM 日志归属/面板可见都随之落到该会话）。
-   * 省略：run 自成归属（parentSessionId = runId）。
+   * v1 的 hook 只在会话域埋点上运行：没有归属会话的 run 会让授权为空、询问被拒，
+   * 那是静默降级，宁可不跑。
    */
   scope?: 'session'
-  /** 绑定条目允许的额外参数键（如未来 file.changed 的 debounce）；键外参数判整份文件非法 */
-  bindingParamKeys: readonly string[]
 }
 
 export const TRIGGER_POINTS: Record<TriggerId, TriggerPointDef> = {
   'session.prompt-accepted': {
     id: 'session.prompt-accepted',
     description: 'A user prompt was accepted and is about to be dispatched to the session agent',
-    scope: 'session',
-    bindingParamKeys: []
+    scope: 'session'
   },
   'session.turn-completed': {
     id: 'session.turn-completed',
     description: 'A full prompt turn (including tool calls) finished in a chat session',
-    scope: 'session',
-    bindingParamKeys: []
+    scope: 'session'
   }
 }
 

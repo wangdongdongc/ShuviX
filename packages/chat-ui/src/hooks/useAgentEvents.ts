@@ -165,7 +165,7 @@ export function useAgentEvents(): void {
         contextNote: event.contextNote
       })
       // 刻意不自动打开右侧 Sub-agent 面板：工具派发的（有 parentToolCallId）内联在对话流的
-      // ToolCallBlock 卡片中；非工具派发的（如 workflow run() 起的 agent）经工具栏胶囊的
+      // ToolCallBlock 卡片中；非工具派发的（如 hook 派发的 agent）经工具栏胶囊的
       // 数量徽标可见，用户自己决定看不看 —— 自动弹面板打断当前阅读。
       return
     }

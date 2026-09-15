@@ -1,9 +1,9 @@
 /**
  * session 工具 —— 让 agent 读改**自己所属会话**的会话级能力。
  *
- * 目标会话恒取 ToolContext.sessionId（root=自身；spawned/workflow=归属会话）——
+ * 目标会话恒取 ToolContext.sessionId（root=自身；spawned/hook=归属会话）——
  * 刻意不收 sessionId 参数：一是 LLM 抄 uuid 会抄错，二是「只能动自己所属的会话」
- * 是比参数校验更硬的边界。会话域 workflow run 的 agent（如内置 titler）因此天然
+ * 是比参数校验更硬的边界。hook 派发的 agent（如内置 titler）因此天然
  * 落在触发它的那个会话上。
  *
  * 单一 action 枚举而非「每能力一个工具」：会话相关的处理能力会持续增加，工具面越少
@@ -419,7 +419,7 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
     const sessionId = this.ctx.sessionId
     const session = sessionDao.pick(sessionId, ['title', 'settings'])
     if (!session) {
-      // workflow 的无会话上下文 run（rootSessionId=runId）等场景：没有可操作的会话
+      // 无会话上下文的派发（rootSessionId 不是会话）等场景：没有可操作的会话
       throw new Error('This task is not attached to a session — there is nothing to rename.')
     }
     if (session.settings?.notebookPath) {

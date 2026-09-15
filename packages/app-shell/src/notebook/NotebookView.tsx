@@ -32,7 +32,7 @@ export interface NotebookViewProps {
  *
  * **不含顶栏** —— 顶栏复用对话框的 ChatHeader（由宿主在本组件之上渲染，显示会话标题/工作目录），
  * 与聊天视图一致。保存状态以右上角浮层提示（仅保存中/失败时出现）。设置页编辑 agent / 策略 /
- * 工作流 md 时直接嵌本组件（绑定该文件的笔记本会话，不带输入卡片）—— 与笔记本同一条读写路径。
+ * hook md 时直接嵌本组件（绑定该文件的笔记本会话，不带输入卡片）—— 与笔记本同一条读写路径。
  * 宿主无关：文件 IO 经 ChatApi、图片内嵌经注入的 mediaUrl seam、主题/外链/右键经 caps。
  */
 export function NotebookView({

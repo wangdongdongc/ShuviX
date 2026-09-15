@@ -289,9 +289,10 @@ export {
   type SubAgentToolHelpers,
   type SpawnContext,
   type RunTaskParams,
+  type RunTaskOutcome,
   type AnyAgentTool
 } from './subagent/manager'
-// 派发结果契约：schema 收口的 next 工具（workflow run() 的结构化结果通道）
+// 派发结果契约：schema 收口的 next 工具（运行时原语；目前没有生产调用方）
 export {
   NextTool,
   NEXT_TOOL_NAME,
@@ -300,45 +301,42 @@ export {
   validateContractSchema,
   type ResultContract
 } from './subagent/nextTool'
-// Workflow：md 格式解析 / 类型化埋点注册表 / 引擎（设计见 docs/workflow-md-design.md）
+// Hook：md 格式解析 / 类型化埋点注册表 / runner（设计见 docs/hook-design.md）
 export {
-  parseWorkflowDefinitionFile,
-  WORKFLOW_FILE_MARKER,
-  WORKFLOW_FILE_MARKER_KEY,
-  type ParsedWorkflowFile,
-  type WorkflowTriggerBinding,
-  type WorkflowLimits,
-  type WorkflowConcurrency
-} from './workflow/workflowFile'
+  parseHookDefinitionFile,
+  HOOK_FILE_MARKER,
+  HOOK_FILE_MARKER_KEY,
+  HOOK_ON_KEY,
+  HOOK_AGENT_KEY,
+  type ParsedHookFile,
+  type HookBinding
+} from './hook/hookFile'
 export {
   TRIGGER_POINTS,
   getTriggerPoint,
   type TriggerId,
   type TriggerPayloadMap,
   type TriggerPointDef
-} from './workflow/triggerPoints'
+} from './hook/triggerPoints'
+export { renderHookPrompt, HOOK_EVENT_TAG } from './hook/hookPrompt'
 export {
-  createWorkflowEngine,
-  DEFAULT_WORKFLOW_LIMITS,
-  type WorkflowEngine,
-  type WorkflowEngineDeps,
-  type WorkflowRegistryEntry,
-  type WorkflowScriptEngine,
-  type WorkflowInvokeRequest,
-  type WorkflowInvokeResult,
-  type WorkflowErrorStep,
-  type WorkflowReentry,
-  type WorkflowRunSnapshot
-} from './workflow/engine'
-export { renderPromptTemplate, promptIncludes } from './workflow/promptTemplate'
+  createHookRunner,
+  DEFAULT_HOOK_TIMEOUT_MS,
+  type HookRunner,
+  type HookRunnerDeps,
+  type HookRegistryEntry,
+  type HookRunInfo,
+  type HookRunEvent,
+  type HookSkipReason
+} from './hook/hookRunner'
 export {
-  buildBuiltinWorkflows,
-  getBuiltinWorkflowSource,
-  BUILTIN_WORKFLOW_SPECS,
-  AUTO_TITLE_WORKFLOW_SPEC,
-  type BuiltinWorkflowDeps,
-  type BuiltinWorkflowSpec
-} from './workflow/builtinWorkflows'
+  buildBuiltinHooks,
+  getBuiltinHookSource,
+  BUILTIN_HOOK_SPECS,
+  AUTO_TITLE_HOOK_SPEC,
+  type BuiltinHookDeps,
+  type BuiltinHookSpec
+} from './hook/builtinHooks'
 // Bot：md 格式解析 + 正文围栏。一个 bot = 身份 + 正文（人设与记忆），绑在一条有根会话上；
 // **不内置任何 bot**（bot 会话的基座档案 `bot` 在下面的内置档案里）。
 export {
@@ -404,7 +402,7 @@ export {
   type PromptVarsCtx
 } from './agentProfile/promptVars'
 export { type AgentProfileRegistry } from './agentProfile/registry'
-// 注册表 md 的同名裁决（agent / 策略 / 工作流 / bot 共用；运行时与设置页列表走同一个函数）
+// 注册表 md 的同名裁决（agent / 策略 / hook / bot 共用；运行时与设置页列表走同一个函数）
 export {
   registryFileBase,
   resolveShadowing,

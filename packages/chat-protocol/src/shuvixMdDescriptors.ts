@@ -33,7 +33,7 @@ import {
  *   conditions 条件映射（键即 CEL 路径，值为字符串或字符串列表）
  *   exprMap 具名表达式映射（policy 的 lets）
  *   policyRules 规则数组（effect 徽章 + 条件/match 摘要）
- *   workflowBindings 触发绑定数组（埋点 id 徽章 + CEL when/参数摘要）
+ *   hookBindings 触发绑定数组（埋点 id 徽章 + CEL when 摘要）
  *   sources OKF 来源数组（`{id, resource, title}` 映射或裸定位符字符串，逐条一行）
  *   stamp OKF 的宿主章（`generated` / `verified`：`{by, at}` 单值或列表）—— 只读**不是**排版
  *     偏好而是契约：`generated` 由写钩子盖、`verified` 只由 UI 动作盖，谁都不该在卡上手改
@@ -52,7 +52,7 @@ export type ShuvixMdFieldKind =
   | 'conditions'
   | 'exprMap'
   | 'policyRules'
-  | 'workflowBindings'
+  | 'hookBindings'
   | 'sources'
   | 'stamp'
   | 'hidden'
@@ -170,33 +170,24 @@ const WIKI_TOPIC_DESCRIPTOR: ShuvixMdTypeDescriptor = {
   ]
 }
 
-/** 工作流的重入策略枚举 —— 解析器与属性卡下拉共用的单一真源（同 wiki 契约常量的分层） */
-export const WORKFLOW_CONCURRENCY_MODES = ['skip', 'queue', 'parallel'] as const
-
-/** 重入策略字段的 frontmatter 键（属性卡按它分派下拉候选项） */
-export const WORKFLOW_CONCURRENCY_KEY = 'shuvix-workflow-concurrency'
-
 /**
- * 工作流文件（agent-runtime workflow/workflowFile.ts 的键集）。
- *
- * `shuvix-workflow-on` 是这份文件最要紧的一行——「什么时候会跑」——故给它专属摘要
- * （埋点 id + when 表达式），同 policy 的 rules。其余嵌套键（input schema / vars /
- * limits）只落通用行：它们的形状是任意 JSON，做表单成本远高于收益，而正文里的脚本块
- * 本来就要在源码视图里读。
+ * hook 文件（agent-runtime hook/hookFile.ts 的键集）：「在哪些埋点、满足什么条件时，把哪个 agent
+ * 叫起来」—— 这就是全部键。`shuvix-hook-on` 是最要紧的一行（什么时候会跑），给它专属摘要
+ * （埋点 id + when 表达式），同 policy 的 rules；`shuvix-hook-agent` 是派发的 agent 名。
+ * 正文是交给 agent 的任务文本，不是 frontmatter 字段，卡上没有它。
  *
  * **刻意没有模型字段**：派发用哪个模型是被派发 agent 的属性（agent md 的 `shuvix-model`，
- * 不声明则跟随会话当前模型），工作流不再另开一个覆盖入口 —— 两处都能定模型时，
- * 「这次到底用了谁」就要靠读优先级表才能回答。
+ * 不声明则跟随会话当前模型），hook 不另开覆盖入口。
  */
-const WORKFLOW_DESCRIPTOR: ShuvixMdTypeDescriptor = {
-  type: 'workflow',
-  badge: 'ShuviX workflow',
+const HOOK_DESCRIPTOR: ShuvixMdTypeDescriptor = {
+  type: 'hook',
+  badge: 'ShuviX hook',
   fields: [
     { key: 'name', labelKey: 'tool.subAgentName', kind: 'mono' },
     { key: 'shuvix-displayName', labelKey: 'tool.subAgentDisplayName', kind: 'text' },
     { key: 'description', labelKey: 'tool.subAgentDescription', kind: 'text' },
-    { key: 'shuvix-workflow-on', labelKey: 'settings.workflowOn', kind: 'workflowBindings' },
-    { key: WORKFLOW_CONCURRENCY_KEY, labelKey: 'settings.workflowConcurrency', kind: 'select' }
+    { key: 'shuvix-hook-agent', labelKey: 'settings.hookAgent', kind: 'mono' },
+    { key: 'shuvix-hook-on', labelKey: 'settings.hookOn', kind: 'hookBindings' }
   ]
 }
 
@@ -255,7 +246,7 @@ export const SHUVIX_MD_DESCRIPTORS: readonly ShuvixMdTypeDescriptor[] = [
   OKF_DESCRIPTOR,
   AGENT_DESCRIPTOR,
   POLICY_DESCRIPTOR,
-  WORKFLOW_DESCRIPTOR,
+  HOOK_DESCRIPTOR,
   BOT_DESCRIPTOR,
   MEMORY_DESCRIPTOR,
   WIKI_ENTRY_DESCRIPTOR,

@@ -154,12 +154,26 @@ export interface RunTaskParams {
   systemContext?: readonly string[]
 }
 
+/** 一次派发（runTask）的结果 */
+export interface RunTaskOutcome {
+  /** 恒为文本：无契约 = 转写抽取（带 stopReason / error 注记）；有契约且捕获 = 捕获对象的 JSON 文本 */
+  result: string
+  /** 仅在结果契约捕获成功时存在 */
+  structured?: unknown
+  /**
+   * 这一轮以失败收尾时的机器可读原因：被中止（`'aborted'`）、执行抛错（execError 原话）、或模型调用
+   * 报错（最后一条 assistant 的 stopReason 为 error，取其 errorMessage）。软停止（interrupt）不算失败。
+   * `result` 文本里照样有这些信息 —— 这个字段给不读散文的调用方（hook runner）判成败。
+   */
+  error?: string
+}
+
 export interface SubAgentManager {
   /**
    * 跑一个一次性派发任务。`result` 恒为文本（无契约 = 转写抽取；有契约且捕获 =
    * 捕获对象的 JSON 文本）；`structured` 仅在结果契约捕获成功时存在。
    */
-  runTask: (params: RunTaskParams) => Promise<{ result: string; structured?: unknown }>
+  runTask: (params: RunTaskParams) => Promise<RunTaskOutcome>
   /**
    * 继续与一个已存在派生 agent 对话：复用其 Agent（保留历史）追加一轮 user prompt（fire-and-forget）。
    * 面板先收到 user_message（后续用户消息内联到转写），随后流式事件如常，末了再发 sub_session_end。
@@ -202,6 +216,28 @@ interface SpawnedAgent {
   aborted: boolean
   /** 用户主动中断（软停止）：保留部分结果、按「已完成」收尾，区别于 aborted 的失败态 */
   interrupted: boolean
+}
+
+/**
+ * 一轮收尾的机器可读失败原因（`RunTaskOutcome.error`）。软停止（interrupt）不算失败；中止、执行抛错、
+ * 模型调用报错都算 —— 最后一种 pi 落成一条 stopReason 为 error 的 assistant 消息，`prompt()` 并不返回
+ * error，所以只能从会话树尾部认。
+ */
+function turnError(
+  session: Pick<SpawnedAgent, 'aborted' | 'interrupted'>,
+  messages: AgentMessage[],
+  execError: string | undefined
+): string | undefined {
+  if (session.interrupted) return undefined
+  if (session.aborted) return 'aborted'
+  if (execError) return execError
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i]
+    if (!isAssistantMessage(msg)) continue
+    if (msg.stopReason !== 'error') return undefined
+    return msg.errorMessage || 'model call failed (stopReason=error)'
+  }
+  return undefined
 }
 
 /** 创建一个派生 agent 协调器（注入端适配依赖） */
@@ -370,7 +406,7 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
     parentSessionId: string,
     execError: string | undefined,
     captured?: { hit: boolean; value?: unknown }
-  ): Promise<{ result: string; structured?: unknown }> {
+  ): Promise<RunTaskOutcome> {
     // 契约捕获：结果以捕获值为准 —— 捕获后紧跟软停止，树尾部（部分消息/中止痕迹）不代表结果
     if (captured?.hit) {
       const result = JSON.stringify(captured.value, null, 2)
@@ -393,6 +429,7 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
         ? abortedNote()
         : extractResult(messages, execError)
     const isError = session.interrupted ? false : !!execError || session.aborted
+    const error = turnError(session, messages, execError)
 
     deps.tasks?.settle(session.agentId, {
       // 中止是失败态，软停止不是（保留部分结果、按「已完成」收尾）
@@ -405,7 +442,7 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
       result,
       isError
     })
-    return { result }
+    return error ? { result, error } : { result }
   }
 
   function interrupt(subSessionId: string): void {
@@ -441,7 +478,7 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
   return {
     registry,
 
-    async runTask(params: RunTaskParams): Promise<{ result: string; structured?: unknown }> {
+    async runTask(params: RunTaskParams): Promise<RunTaskOutcome> {
       const {
         parentSessionId,
         parentToolCallId,

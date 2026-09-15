@@ -37,7 +37,10 @@ vi.mock('../../dao/sessionDao', () => ({ sessionDao: {} }))
 vi.mock('../agentService', () => ({ agentService: { getProfile: mocks.getProfile } }))
 vi.mock('../botService', () => ({ botService: { forSession: mocks.forSession } }))
 vi.mock('../../agents/agentHost', () => ({ agentFactory: { createAgent: mocks.createAgent } }))
-vi.mock('../workflowService', () => ({ workflowTriggers: { fire: vi.fn() } }))
+vi.mock('../hookService', () => ({
+  hookTriggers: { fire: vi.fn() },
+  hookService: { abortSessionRuns: vi.fn() }
+}))
 vi.mock('../sessionTriggerFacts', () => ({
   buildTurnCompletedFacts: vi.fn(),
   isDefaultTitle: vi.fn()

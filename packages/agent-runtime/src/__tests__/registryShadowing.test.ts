@@ -1,8 +1,8 @@
 /**
  * resolveShadowing / registryFileBase —— 注册表 md 同名裁决的纯函数表。
  *
- * 四个注册表（agent / 策略 / 工作流 / bot）的运行时生效集与设置页 / 侧栏的全量列表，都是这一次
- * 裁决的两种投影。宿主那一层（agentService / policyService / workflowService / botService 的单测）
+ * 四个注册表（agent / 策略 / hook / bot）的运行时生效集与设置页 / 侧栏的全量列表，都是这一次
+ * 裁决的两种投影。宿主那一层（agentService / policyService / hookService / botService 的单测）
  * 用真文件名验证「两边投影一致」；这里只钉规则本身：用户压过内置 → 文件名就是名字的那份 → 文件名
  * 短的 → 码点序，且与输入顺序无关。
  *

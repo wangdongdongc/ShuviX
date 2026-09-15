@@ -627,10 +627,10 @@ describe('titler 档案钉板（auto-title 的执行侧）', () => {
     expect(profile('titler').model).toBeUndefined()
   })
 
-  it('三语 body 都含 session / next / set-title 与 60（工具协议与长度上限不因翻译走样）', () => {
+  it('三语 body 都含 session / set-title 与 60（工具协议与长度上限不因翻译走样）', () => {
     for (const language of LANGS) {
       const body = profile('titler', language).systemPrompt
-      for (const anchor of ['`session`', 'next', 'set-title', '60']) {
+      for (const anchor of ['`session`', 'set-title', '60']) {
         expect(body, `titler.${language} 需含 ${anchor}`).toContain(anchor)
       }
     }

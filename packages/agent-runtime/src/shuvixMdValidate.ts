@@ -14,7 +14,7 @@ import { parseBotDefinitionFile } from './bot/botFile'
 import { splitFrontmatter } from './markdownFrontmatter'
 import { parseMemoryFile } from './memory/memoryFile'
 import { parsePolicyDefinitionFile } from './security/policyFile'
-import { parseWorkflowDefinitionFile } from './workflow/workflowFile'
+import { parseHookDefinitionFile } from './hook/hookFile'
 
 export function validateShuvixMdText(
   type: string,
@@ -33,28 +33,18 @@ export function validateShuvixMdText(
   }
   if (type === 'bot') {
     // bot 的正文没有任何形状要求（空正文是新建出来的常态，由 bot 自己往里写），所以不需要
-    // workflow / memory 那套占位正文的补丁 —— 原样解析即可。v1 残留的管线块是软提示：
+    // memory 那套占位正文的补丁 —— 原样解析即可。v1 残留的管线块是软提示：
     // 状态仍是 valid，messages 带着那句话，卡片据此亮琥珀
     const messages: string[] = []
     const parsed = parseBotDefinitionFile(text, name, (msg) => messages.push(msg))
     return { status: parsed ? 'valid' : 'invalid', messages }
   }
-  if (type === 'workflow') {
-    // 结构级校验（frontmatter/绑定/CEL/块布局）；脚本**语法**由宿主的脚本引擎在扫描侧
-    // 另行 compile —— 本函数保持两端可用（无脚本引擎依赖）。
-    //
-    // 与 memory 同一处理（理由见下）：属性卡只送 frontmatter 片段，而「恰一个 js workflow
-    // 脚本块」是正文的规则 —— 原样送进去，每一份合法工作流都会亮红。仅在没有正文时补一个
-    // 占位脚本块，把判定限定在 frontmatter 上；送整份文件的调用方（写后校验）照旧按真实
-    // 正文判定，缺脚本块的工作流仍判非法 —— 那种文件扫描侧本来就会跳过。
+  if (type === 'hook') {
+    // hook 的合法性全在 frontmatter（标记 / agent / 绑定 / CEL），正文是派发给 agent 的任务文本、
+    // 可以为空 —— 所以属性卡送来的 frontmatter 片段原样判定即可，不需要占位正文。
+    // 未知埋点是软提示（绑定惰性化）：状态仍是 valid，messages 带着那句话，卡片据此亮琥珀
     const messages: string[] = []
-    const hasBody = (splitFrontmatter(text)?.body ?? '').trim() !== ''
-    // 占位块的内容必须非空 —— 纯空白脚本按「缺脚本块」拒绝（见 workflowFile 的块提取）
-    const parsed = parseWorkflowDefinitionFile(
-      hasBody ? text : `${text}\n\`\`\`js workflow\nreturn null\n\`\`\`\n`,
-      name,
-      (msg) => messages.push(msg)
-    )
+    const parsed = parseHookDefinitionFile(text, name, (msg) => messages.push(msg))
     return { status: parsed ? 'valid' : 'invalid', messages }
   }
   if (type === 'memory') {

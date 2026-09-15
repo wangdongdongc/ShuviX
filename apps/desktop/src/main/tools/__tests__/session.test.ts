@@ -102,7 +102,7 @@ describe('SessionTool — 参数面与目标会话边界', () => {
     expect(mocks.updateTitle).not.toHaveBeenCalled()
   })
 
-  it('会话行不存在（workflow 无会话上下文 run 等场景）→ not attached to a session', async () => {
+  it('会话行不存在（无会话上下文的派发等场景）→ not attached to a session', async () => {
     mocks.pick.mockReturnValue(undefined)
     await expect(setTitle('T')).rejects.toThrow(/not attached to a session/)
     expect(mocks.updateTitle).not.toHaveBeenCalled()

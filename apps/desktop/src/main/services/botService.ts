@@ -2,7 +2,7 @@
  * BotService —— bot 注册表（宿主层）。
  *
  * 一个 bot 是 `~/.shuvix/bots/<name>.md`（`shuvix: bot`）：身份三项 + 一篇正文（人设与记忆）。
- * **纯 md 驱动**，与 agent / workflow / policy 同一条纪律 —— 文件存在且解析得过就是活的，没有
+ * **纯 md 驱动**，与 agent / hook / policy 同一条纪律 —— 文件存在且解析得过就是活的，没有
  * 启用开关、没有旁路配置、没有数据库表，也**不内置任何 bot**。
  *
  * 本服务**只管文件**：怎么把正文喂给会话是 agentSession 那一侧的事（`renderBotContext` →
@@ -78,7 +78,7 @@ class BotService {
   // ─── 注册表 ──────────────────────────────────
 
   /**
-   * 目录扫描，分出生效 / 被同名遮蔽 / 不可解析三拨（同 policyService / workflowService.scanDir 口径）。
+   * 目录扫描，分出生效 / 被同名遮蔽 / 不可解析三拨（同 policyService / hookService.scanDir 口径）。
    * 同名的几份谁生效交给 agent-runtime 的 resolveShadowing：**按名取（get / forSession）与侧栏列出
    * 全部份数用的是这同一次裁决**。每次扫描顺带做改名观察（observeRenames）。
    */

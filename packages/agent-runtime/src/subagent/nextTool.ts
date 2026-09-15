@@ -1,8 +1,8 @@
 /**
  * NextTool —— 派发结果契约（resultContract）的收口工具。
  *
- * 调用方（workflow 引擎的 `run(agent, prompt, {schema})`；未来 dispatch 工具亦可复用）
- * 声明一份 JSON Schema，协调器据此给派生 agent 临时附加一个名为 `next` 的工具：
+ * 运行时原语，目前没有生产调用方（workflow 引擎曾是；hook 不读派发结果）。调用方
+ * （未来的 dispatch 工具等）声明一份 JSON Schema，协调器据此给派生 agent 临时附加一个名为 `next` 的工具：
  *   - `parameters` 即该 schema 原样（Type.Unsafe 透传，先例 mcpManager 的 MCP schema）；
  *   - LLM 的调用参数**就是结果**：校验通过 → 交给捕获通道并软停止本 agent
  *     （manager.interrupt 语义），step 结果取捕获值而非转写抽取；

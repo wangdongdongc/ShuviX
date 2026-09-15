@@ -125,65 +125,61 @@ describe('validateShuvixMdText — policy', () => {
   })
 })
 
-describe('validateShuvixMdText — workflow', () => {
-  const workflowMd = (fm: string[], script = 'return 1'): string =>
-    md('---', ...fm, '---', '', '```js workflow', script, '```', '')
+describe('validateShuvixMdText — hook', () => {
+  const hookMd = (fm: string[], body = 'Do the thing.'): string =>
+    md('---', ...fm, '---', '', body, '')
+  const VALID_FM = [
+    'shuvix: hook v1',
+    'name: ok-hook',
+    'shuvix-hook-agent: titler',
+    'shuvix-hook-on:',
+    '  - trigger: session.turn-completed',
+    '    when: event.turnCount == 2'
+  ]
 
-  it('U11 合法 workflow md → valid 且 messages 为空', () => {
-    expect(
-      validateShuvixMdText('workflow', workflowMd(['shuvix: workflow v1', 'name: ok-wf']))
-    ).toEqual({ status: 'valid', messages: [] })
-  })
-
-  it('U12 非法 workflow md（裸 on）→ invalid + 人读原因原样回传', () => {
-    const result = validateShuvixMdText(
-      'workflow',
-      workflowMd(['shuvix: workflow v1', 'name: bad-wf', 'on: []'])
-    )
-    expect(result.status).toBe('invalid')
-    expect(result.messages).toHaveLength(1)
-    expect(result.messages[0]).toContain("workflow 'bad-wf'")
-    expect(result.messages[0]).toContain("bare 'on' key is not read")
-    expect(result.messages[0]).toContain('the whole file is rejected')
-  })
-
-  it('U13 分工钉板：脚本体 JS 语法错但结构合法 → 此处仍 valid（脚本语法归宿主扫描侧）', () => {
-    expect(
-      validateShuvixMdText(
-        'workflow',
-        workflowMd(['shuvix: workflow v1', 'name: syntax-err'], 'return ((( oops')
-      )
-    ).toEqual({ status: 'valid', messages: [] })
-  })
-
-  it('U14 属性卡重组形状（无正文）→ valid：脚本块是正文的规则，不该让每份合法工作流亮红', () => {
-    // 设置页的属性卡只把 frontmatter 片段送来校验（同 memory）。原样判定必然报
-    // 「缺 js workflow 脚本块」—— 实际打开内置 auto-title 就会看到一条假红。
-    const yaml = md(
-      'shuvix: workflow v1',
-      'name: ok-wf',
-      'shuvix-workflow-on:',
-      '  - trigger: session.turn-completed',
-      '    when: event.turnCount == 2'
-    )
-    expect(validateShuvixMdText('workflow', recompose(yaml))).toEqual({
+  it('U11 合法 hook md → valid 且 messages 为空', () => {
+    expect(validateShuvixMdText('hook', hookMd(VALID_FM))).toEqual({
       status: 'valid',
       messages: []
     })
   })
 
-  it('U15 送整份文件时缺脚本块仍判非法（占位只在无正文时补，不放宽真实文件的判定）', () => {
-    const withBodyNoScript = md(
-      '---',
-      'shuvix: workflow v1',
-      'name: no-script',
-      '---',
-      '',
-      '说明文字'
+  it('U12 非法 hook md（裸 on）→ invalid + 人读原因原样回传', () => {
+    const result = validateShuvixMdText(
+      'hook',
+      hookMd(['shuvix: hook v1', 'name: bad-hook', 'shuvix-hook-agent: titler', 'on: []'])
     )
-    const result = validateShuvixMdText('workflow', withBodyNoScript)
     expect(result.status).toBe('invalid')
-    expect(result.messages[0]).toContain('js workflow')
+    expect(result.messages).toHaveLength(1)
+    expect(result.messages[0]).toContain("hook 'bad-hook'")
+    expect(result.messages[0]).toContain("bare 'on' key is not read")
+    expect(result.messages[0]).toContain('the whole file is rejected')
+  })
+
+  it('U13 点名基座档案（work）→ invalid：基座是会话人格，不可派发', () => {
+    const result = validateShuvixMdText(
+      'hook',
+      hookMd(VALID_FM.map((l) => l.replace('shuvix-hook-agent: titler', 'shuvix-hook-agent: work')))
+    )
+    expect(result.status).toBe('invalid')
+    expect(result.messages[0]).toContain('session base profile')
+  })
+
+  it('U14 属性卡重组形状（无正文）→ valid：正文是任务文本、可以为空，不需要占位补丁', () => {
+    expect(validateShuvixMdText('hook', recompose(VALID_FM.join('\n')))).toEqual({
+      status: 'valid',
+      messages: []
+    })
+  })
+
+  it('U15 未知埋点 id → 仍 valid，但带一条「绑定惰性」软提示（卡片亮琥珀）', () => {
+    const result = validateShuvixMdText(
+      'hook',
+      hookMd(VALID_FM.map((l) => l.replace('session.turn-completed', 'file.changed')))
+    )
+    expect(result.status).toBe('valid')
+    expect(result.messages).toHaveLength(1)
+    expect(result.messages[0]).toContain("trigger 'file.changed' is not known")
   })
 })
 
@@ -195,7 +191,7 @@ describe('validateShuvixMdText — bot', () => {
   })
 
   it('BV-2 属性卡重组形状（无正文）→ valid：bot 的正文没有形状要求，不需要占位补丁', () => {
-    // 空正文是新建出来的常态（由 bot 自己往里写），所以不像 workflow / memory 那样要替属性卡
+    // 空正文是新建出来的常态（由 bot 自己往里写），所以不像 memory 那样要替属性卡
     // 补一行占位正文 —— 原样解析就是对的
     expect(validateShuvixMdText('bot', recompose('shuvix: bot v2\nname: scout'))).toEqual({
       status: 'valid',

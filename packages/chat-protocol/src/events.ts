@@ -196,7 +196,7 @@ export interface ChatSubSessionRegisterEvent extends ChatEventBase {
   parentSessionId: string
   /**
    * 父 Agent 派发本子会话的 tool_call id。有值 = Agent 自行触发（对话内 ToolCallBlock 内联展示）；
-   * 无值 = 非工具派发（如 workflow 引擎 run() 起的 agent），进右侧 Sub-agent 面板。
+   * 无值 = 非工具派发（如 hook 派发的 agent），进右侧 Sub-agent 面板。
    */
   parentToolCallId?: string
   /** 子智能体类型名（如 'explore'） */

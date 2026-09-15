@@ -259,3 +259,72 @@ describe('结果契约 — spawn 血缘与中止', () => {
     expect(h.promptTexts).toHaveLength(1)
   })
 })
+
+describe('runTask 结果 — outcome.error（给不读散文的调用方判成败）', () => {
+  it('模型调用报错（最后一条 assistant 的 stopReason 为 error）→ error 取 errorMessage；result 文本照旧带注记', async () => {
+    const { manager } = makeHarness({
+      messages: [
+        {
+          role: 'assistant',
+          content: 'half an answer',
+          stopReason: 'error',
+          errorMessage: '500 Internal Server Error'
+        }
+      ]
+    })
+    const outcome = await manager.runTask(task())
+    expect(outcome.error).toBe('500 Internal Server Error')
+    expect(outcome.result).toContain('stopReason=error')
+  })
+
+  it('报错消息没带 errorMessage → 通用原因', async () => {
+    const { manager } = makeHarness({
+      messages: [{ role: 'assistant', content: [], stopReason: 'error' }]
+    })
+    expect((await manager.runTask(task())).error).toBe('model call failed (stopReason=error)')
+  })
+
+  it('执行抛错（prompt 交回 error）→ error 为原话', async () => {
+    const { manager } = makeHarness({ onPrompt: async () => ({ error: 'busy' }) })
+    expect((await manager.runTask(task())).error).toBe('busy')
+  })
+
+  it('父级已中止 → error 为 aborted', async () => {
+    const controller = new AbortController()
+    controller.abort()
+    const { manager } = makeHarness()
+    const outcome = await manager.runTask(task({ parentAbortSignal: controller.signal }))
+    expect(outcome.error).toBe('aborted')
+  })
+
+  it('正常收尾（stopReason stop）→ 没有 error 键', async () => {
+    const { manager } = makeHarness({
+      messages: [{ role: 'assistant', content: 'FINAL PROSE', stopReason: 'stop' }]
+    })
+    const outcome = await manager.runTask(task())
+    expect(outcome.result).toBe('FINAL PROSE')
+    expect('error' in outcome).toBe(false)
+  })
+
+  it('只看会话树尾部那条 assistant：之前报过错、最后一条正常收尾 → 不算失败', async () => {
+    const { manager } = makeHarness({
+      messages: [
+        { role: 'assistant', content: 'first', stopReason: 'error', errorMessage: 'transient' },
+        { role: 'assistant', content: 'recovered', stopReason: 'stop' }
+      ]
+    })
+    expect('error' in (await manager.runTask(task()))).toBe(false)
+  })
+
+  it('契约捕获 → 没有 error 键（结果以捕获值为准）', async () => {
+    const { manager } = makeHarness({
+      onPrompt: async (_t, _r, hh) => {
+        await hh.next({ title: 'X' })
+        return {}
+      }
+    })
+    const outcome = await manager.runTask(task({ resultContract: CONTRACT }))
+    expect(outcome.structured).toEqual({ title: 'X' })
+    expect('error' in outcome).toBe(false)
+  })
+})

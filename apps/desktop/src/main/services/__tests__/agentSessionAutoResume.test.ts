@@ -26,7 +26,10 @@ vi.mock('../../dao/providerDao', () => ({ providerDao: {} }))
 vi.mock('../../dao/sessionDao', () => ({ sessionDao: {} }))
 vi.mock('../agentService', () => ({ agentService: {} }))
 vi.mock('../../agents/agentHost', () => ({ agentFactory: {} }))
-vi.mock('../workflowService', () => ({ workflowTriggers: { fire: vi.fn() } }))
+vi.mock('../hookService', () => ({
+  hookTriggers: { fire: vi.fn() },
+  hookService: { abortSessionRuns: vi.fn() }
+}))
 vi.mock('../sessionTriggerFacts', () => ({
   buildTurnCompletedFacts: vi.fn(),
   isDefaultTitle: vi.fn()

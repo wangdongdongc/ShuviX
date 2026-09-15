@@ -538,6 +538,18 @@ export const migrations: Migration[] = [
       db.exec(`DROP INDEX IF EXISTS idx_chat_messages_session_seq`)
       db.exec(`DROP TABLE IF EXISTS chat_messages`)
     }
+  },
+  {
+    version: 20,
+    description: '工作流换成 hook：删除旧 __workflows__ 载体项目及其笔记本会话（不做数据迁移）',
+    up: (db) => {
+      // workflow md 注册表整体退役（换成 ~/.shuvix/hooks 的 hook md）。它的隐藏载体项目
+      // `__workflows__` 不再被 isHiddenProjectId 认得，留着会以「Workflows」之名出现在项目
+      // 列表里 —— 删掉项目行与挂在它下面的笔记本会话。同 v19 的裁决：不做数据迁移，磁盘上的
+      // ~/.shuvix/workflows/ 与那几条会话的 jsonl 原样留下，不做启动扫描清理。
+      db.exec(`DELETE FROM sessions WHERE projectId = '__workflows__'`)
+      db.exec(`DELETE FROM projects WHERE id = '__workflows__'`)
+    }
   }
 ]
 

@@ -5,7 +5,7 @@
  * 同时选提供商 + 模型；宿主只提供「持久化某个值」的 set 函数（桌面写 settingsStore + DB，
  * 扩展写 chrome.storage）。
  *
- * 注：原「标题生成模型」一行已废弃 —— 自动标题走内置 auto-title 工作流的 titler agent，
+ * 注：原「标题生成模型」一行已废弃 —— 自动标题走内置 auto-title hook 的 titler agent，
  * 模型按 agent md `shuvix-model` 通用链路解析（内置不声明 = 跟随会话当前模型；
  * 要钉模型就覆盖 ~/.shuvix/agents/titler.md），不再有专项设置。
  */

@@ -368,19 +368,18 @@ const api = {
     openFolder: () => ipcRenderer.invoke('policy:openFolder')
   },
 
-  // ============ 工作流（文件系统驱动；用户工作流的编辑是它的笔记本会话；无启用开关） ============
-  workflow: {
-    list: () => ipcRenderer.invoke('workflow:list'),
+  // ============ Hooks（文件系统驱动；用户 hook 的编辑是它的笔记本会话；无启用开关） ============
+  hook: {
+    list: () => ipcRenderer.invoke('hook:list'),
     getSource: (params: { name: string; source: 'builtin' | 'user' }) =>
-      ipcRenderer.invoke('workflow:getSource', params),
-    create: (params: { text: string }) => ipcRenderer.invoke('workflow:create', params),
-    delete: (params: { name: string }) => ipcRenderer.invoke('workflow:delete', params),
-    listInvalid: () => ipcRenderer.invoke('workflow:listInvalid'),
-    deleteByFile: (params: { fileName: string }) =>
-      ipcRenderer.invoke('workflow:deleteByFile', params),
+      ipcRenderer.invoke('hook:getSource', params),
+    create: (params: { text: string }) => ipcRenderer.invoke('hook:create', params),
+    delete: (params: { name: string }) => ipcRenderer.invoke('hook:delete', params),
+    listInvalid: () => ipcRenderer.invoke('hook:listInvalid'),
+    deleteByFile: (params: { fileName: string }) => ipcRenderer.invoke('hook:deleteByFile', params),
     openNote: (params: { fileName: string; title?: string }) =>
-      ipcRenderer.invoke('workflow:openNote', params),
-    openFolder: () => ipcRenderer.invoke('workflow:openFolder')
+      ipcRenderer.invoke('hook:openNote', params),
+    openFolder: () => ipcRenderer.invoke('hook:openFolder')
   },
 
   // ============ Bots（文件系统驱动；打开一份 bot 就是打开它的笔记本会话；无启用开关） ============

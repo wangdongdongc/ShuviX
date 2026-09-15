@@ -160,7 +160,7 @@ describe('准入 —— 谁能开子会话', () => {
     expect(err(await runner.create(CHILD, {}))).toMatch(/nesting is limited to one level/)
   })
 
-  it('没有会话行（workflow 的无会话上下文 run）→ 说清这里没有可用的子会话能力', async () => {
+  it('没有会话行（无会话上下文的派发）→ 说清这里没有可用的子会话能力', async () => {
     mocks.pick.mockReturnValue(undefined)
     expect(err(await runner.create('nowhere', {}))).toMatch(/not attached to a session/)
   })

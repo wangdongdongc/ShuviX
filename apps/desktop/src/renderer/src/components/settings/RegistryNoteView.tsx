@@ -9,7 +9,7 @@ import { useAppEvent } from '@shuvix/chat-ui'
 import { useSettingsStore } from '../../stores/settingsStore'
 
 /**
- * 设置页三个注册表 tab（智能体 / 安全策略 / 工作流）共用的详情区。
+ * 设置页三个注册表 tab（智能体 / 安全策略 / Hooks）共用的详情区。
  *
  * 用户文件的详情**就是这份文件的笔记本会话**：经 `<kind>.openNote` 打开 / 复用它（隐藏项目，
  * 与侧栏 Bots、知识库条目同一条路），正文嵌笔记本同一个 NotebookView —— live-preview、防抖自动
@@ -18,7 +18,7 @@ import { useSettingsStore } from '../../stores/settingsStore'
  * 查看（BuiltinSourceView）。
  */
 
-export type SettingsRegistryKind = 'agent' | 'policy' | 'workflow'
+export type SettingsRegistryKind = 'agent' | 'policy' | 'hook'
 
 const OPEN_NOTE: Record<
   SettingsRegistryKind,
@@ -26,7 +26,7 @@ const OPEN_NOTE: Record<
 > = {
   agent: (params) => window.api.subAgent.openNote(params),
   policy: (params) => window.api.policy.openNote(params),
-  workflow: (params) => window.api.workflow.openNote(params)
+  hook: (params) => window.api.hook.openNote(params)
 }
 
 /** 文件变更 → 父组件重扫列表的合并窗口（自动保存每 200ms 落一次盘，连续打字只重扫一次） */

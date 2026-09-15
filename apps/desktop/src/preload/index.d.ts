@@ -386,30 +386,30 @@ declare global {
     error: string
   }
 
-  /** 工作流元信息（文件系统驱动；与主进程 WorkflowListItem 对齐） */
-  interface WorkflowInfo {
+  /** Hook 元信息（文件系统驱动；与主进程 HookListItem 对齐） */
+  interface HookInfo {
     name: string
     /** 显示名（shuvix-displayName；缺省 = name） */
     displayName: string
     /** 一句话摘要 */
     description: string
-    /** 绑定的埋点 id 列表（空 = 没有自动触发绑定） */
+    /** 派发的 agent 名（shuvix-hook-agent） */
+    agent: string
+    /** 绑定的埋点 id 列表（至少一条） */
     triggers: string[]
-    /** 重入策略 skip | queue | parallel */
-    concurrency: string
     source: 'builtin' | 'user'
     /** 用户文件路径（内置为空串） */
     basePath: string
-    /** 被同名遮蔽、当前不生效（被用户工作流压过的内置，或同名用户文件里没胜出的那几份；仅展示） */
+    /** 被同名遮蔽、当前不生效（被用户 hook 压过的内置，或同名用户文件里没胜出的那几份；仅展示） */
     overridden?: boolean
     /** 压过它的那份用户文件的文件名 */
     overriddenBy?: string
   }
 
-  /** 无法解析的用户工作流文件（结构非法或脚本语法错），删除走 workflow.deleteByFile */
-  interface InvalidWorkflowFile {
+  /** 无法解析的用户 hook 文件（结构非法），删除走 hook.deleteByFile */
+  interface InvalidHookFile {
     fileName: string
-    /** 人读原因：解析器拒绝原因，或脚本引擎的语法错 */
+    /** 人读原因：解析器拒绝原因 */
     error: string
   }
 
@@ -682,8 +682,8 @@ declare global {
       deleteByFile: (params: { fileName: string }) => Promise<{ success: boolean; error?: string }>
       openFolder: () => Promise<{ success: boolean }>
     }
-    workflow: {
-      list: () => Promise<WorkflowInfo[]>
+    hook: {
+      list: () => Promise<HookInfo[]>
       /** md 原文（用户读文件；内置回 bundle 原文 —— 只读查看与覆盖副本初值） */
       getSource: (params: {
         name: string
@@ -693,9 +693,9 @@ declare global {
         text: string
       }) => Promise<{ success: boolean; name?: string; error?: string }>
       delete: (params: { name: string }) => Promise<{ success: boolean; error?: string }>
-      listInvalid: () => Promise<InvalidWorkflowFile[]>
+      listInvalid: () => Promise<InvalidHookFile[]>
       deleteByFile: (params: { fileName: string }) => Promise<{ success: boolean; error?: string }>
-      /** 打开 / 复用一份工作流文件的笔记本会话（一文件至多一会话）；回带工作目录 */
+      /** 打开 / 复用一份 hook 文件的笔记本会话（一文件至多一会话）；回带工作目录 */
       openNote: (params: { fileName: string; title?: string }) => Promise<SessionInfo>
       openFolder: () => Promise<{ success: boolean }>
     }

@@ -2,7 +2,7 @@
  * 隐藏项目的判定 —— `isHiddenProjectId`，以及它合并的两个谓词：注册表的 `isRegistryNoteProjectId`、
  * 知识库的 `isKnowledgeProjectId`。
  *
- * 隐藏项目只承载笔记本会话：旧 wiki、知识库 v2 的两个承载项目（项目库 / 用户库），以及 bot / agent / 安全策略 / 工作流四个注册表
+ * 隐藏项目只承载笔记本会话：旧 wiki、知识库 v2 的两个承载项目（项目库 / 用户库），以及 bot / agent / 安全策略 / hook 四个注册表
  * 目录。宿主的项目列表过滤（projectService）与 UI 的日历圆点（CalendarView）共用这一份判定 ——
  * 日历那一侧**只有这里**有覆盖。漏认一个 id，打开一份 bot md 就会让一个没人认得的项目冒进
  * 项目列表、在日历上点出一个圆点。
@@ -43,7 +43,7 @@ describe('隐藏项目 id —— REGISTRY_NOTE_PROJECT_IDS / isRegistryNoteProje
       bot: '__bots__',
       agent: '__agents__',
       policy: '__policies__',
-      workflow: '__workflows__'
+      hook: '__hooks__'
     })
     expect(new Set(REGISTRY_IDS).size).toBe(4)
     for (const id of REGISTRY_IDS) {
@@ -83,7 +83,7 @@ describe('隐藏项目 id —— REGISTRY_NOTE_PROJECT_IDS / isRegistryNoteProje
 describe('知识库承载项目 id —— isKnowledgeProjectId', () => {
   it('HP-4 只认两个知识库承载项目（id 按字面钉死）；wiki、每个注册表 id 与形似输入一律为假', () => {
     // 这个谓词不只喂隐藏项目过滤，笔记本属性卡的 okf 兜底也靠它。兜底那头最怕放宽 —— 认进 `__bots__`
-    // 这类 id，bot / agent / 策略 / 工作流笔记本里暂时没有自述行的 md 就会被套上一张知识库条目卡
+    // 这类 id，bot / agent / 策略 / hook 笔记本里暂时没有自述行的 md 就会被套上一张知识库条目卡
     for (const id of ['__knowledge__', '__knowledge_user__']) {
       expect(isKnowledgeProjectId(id), label(id)).toBe(true)
     }

@@ -73,7 +73,7 @@ export function registerSessionHandlers(): void {
     return { success: true }
   })
 
-  // 注：session:generateTitle 已删除 —— 自动标题改由内置 auto-title 工作流驱动
+  // 注：session:generateTitle 已删除 —— 自动标题改由内置 auto-title hook 驱动
   // （session.prompt-accepted / session.turn-completed 埋点 + titler agent），
   // 该 IPC 本就没有任何渲染端调用方。
 

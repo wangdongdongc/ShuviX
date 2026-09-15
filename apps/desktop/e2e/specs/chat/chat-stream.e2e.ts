@@ -281,9 +281,10 @@ describe('自动标题', () => {
     provider.reset()
     await events.clear()
 
-    // 自动标题现在是 **auto-title 工作流派发 titler agent**，不再是那条带 TITLE_MARKER 的
-    // 专用请求 —— 所以它是一次普通对话请求，会正常消费脚本队列。用 `when` 按内容认领：
-    // 判据取「有没有 bash」——titler 的工具集只有 session（加契约段的 next），主对话有 bash。
+    // 自动标题现在是 **内置 auto-title hook 派发 titler agent**（`session.prompt-accepted` 且标题
+    // 仍是默认值时），不再是那条带 TITLE_MARKER 的专用请求 —— 所以它是一次普通对话请求，会正常
+    // 消费脚本队列。用 `when` 按内容认领：判据取「有没有 bash」——titler 的工具集只有 session，
+    // 主对话有 bash。
     // 曾经用「有没有 session」认领，子会话落地后 default 也拿到了 session 工具，那个判据
     // 就会把主对话也认成 titler（两边都命中 = 队列被前一条脚本吃掉）。
     // （fakeProvider 里那条「标题请求不消费队列」的分支因此已是死代码，见 TITLE_MARKER。）
@@ -302,11 +303,8 @@ describe('自动标题', () => {
         ],
         when: isTitler
       },
-      // ……再以结果契约收尾
-      {
-        toolCalls: [{ id: 'call_next', name: 'next', args: JSON.stringify({ title: 'E2E 标题' }) }],
-        when: isTitler
-      }
+      // ……再以标题正文作答收尾（hook 不读返回值，旧的 next 结果契约已退役）
+      { text: 'E2E 标题', when: isTitler }
     )
 
     expect(await sidebar.openSession(defaultTitle)).toBe(true)
@@ -320,7 +318,7 @@ describe('自动标题', () => {
     )
     await until(async () => (await sidebar.titles()).includes('E2E 标题'), 'sidebar title synced')
 
-    // 主对话一次 + titler 两次（工具调用一次、契约收尾一次）
+    // 主对话一次 + titler 两次（工具调用一次、正文作答一次）
     expect(provider.chatRequests().filter((r) => !isTitler(r))).toHaveLength(1)
   })
 })

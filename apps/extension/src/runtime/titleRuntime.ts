@@ -3,7 +3,7 @@
  * 模型调用走 generateSessionTitle，两阶段触发策略走 SessionTitler。
  *
  * 模型恒随**会话当前模型**（resolveSessionMeta：会话树 → 默认选择），与桌面的
- * workflow 化 titler 同一口径 —— 旧的「标题模型」专项设置（general.titleProvider/
+ * hook 化 titler 同一口径 —— 旧的「标题模型」专项设置（general.titleProvider/
  * titleModel）已整体废弃。无可用模型 / 无 API Key 返回 null（触发层据此跳过，
  * 不浪费调用、不覆盖默认标题）。
  */

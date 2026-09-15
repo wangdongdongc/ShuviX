@@ -1,5 +1,5 @@
 /**
- * 注册表笔记 —— bot / agent / 安全策略 / 工作流 md 的打开路径，与知识库条目（knowledgeNotes）同一套
+ * 注册表笔记 —— bot / agent / 安全策略 / hook md 的打开路径，与知识库条目（knowledgeNotes）同一套
  * 做法：每个注册表目录一个隐藏项目（固定 id 见 chat-protocol `registryNotes`，path = 该目录），一份
  * 文件至多一个笔记本会话，重复打开复用。编辑、自动保存、外部改动重载全归笔记本会话 —— 这里只回答
  * 「这份文件是哪条会话」，外加把经笔记本落盘的写入交还给需要知道的注册表。
@@ -21,7 +21,7 @@ import {
   getDefaultAgentsDir,
   getDefaultBotsDir,
   getDefaultPoliciesDir,
-  getDefaultWorkflowsDir
+  getDefaultHooksDir
 } from '../utils/paths'
 import type { Project, SessionInfo } from '../types'
 
@@ -30,7 +30,7 @@ const REGISTRIES: Record<RegistryNoteKind, { name: string; dir: () => string }> 
   bot: { name: 'Bots', dir: getDefaultBotsDir },
   agent: { name: 'Agents', dir: getDefaultAgentsDir },
   policy: { name: 'Policies', dir: getDefaultPoliciesDir },
-  workflow: { name: 'Workflows', dir: getDefaultWorkflowsDir }
+  hook: { name: 'Hooks', dir: getDefaultHooksDir }
 }
 
 /** 存在且是普通文件 —— 一个恰好叫 `x.md` 的目录不算（笔记本读不了它） */
@@ -105,7 +105,7 @@ export function openRegistryNote(
  * 包住一次经笔记本（writeSessionFile）的落盘，让它所属的注册表看见这次写入。
  *
  * 只有 bot 注册表需要：改名要迁会话绑定，侧栏与身份胶囊要重查（见 botService.noteWriting /
- * noteWritten）。agent / policy / workflow 每次用到都现扫目录，写完即生效，不需要通知。
+ * noteWritten）。agent / policy / hook 每次用到都现扫目录，写完即生效，不需要通知。
  */
 export async function observeRegistryWrite<T>(
   absPath: string,

@@ -64,7 +64,7 @@ interface SettingsState {
     | 'projects'
     | 'providers'
     | 'agents'
-    | 'workflows'
+    | 'hooks'
     | 'policies'
     | 'tools'
     | 'mcp'

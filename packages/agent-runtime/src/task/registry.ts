@@ -40,7 +40,7 @@ export interface TaskRegistryDeps {
 }
 
 export interface CreateTaskParams {
-  /** 发起它的 tool_call id；省略则发 uuid（工作流 run / 用户从面板发起） */
+  /** 发起它的 tool_call id；省略则发 uuid（hook run / 用户从面板发起） */
   taskId?: string
   kind: TaskKind
   sessionId: string

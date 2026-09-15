@@ -14,7 +14,7 @@ import { sessionDao } from '../dao/sessionDao'
 import { agentService } from './agentService'
 import { botService } from './botService'
 import { agentFactory } from '../agents/agentHost'
-import { workflowTriggers } from './workflowService'
+import { hookService, hookTriggers } from './hookService'
 import { buildTurnCompletedFacts, isDefaultTitle } from './sessionTriggerFacts'
 import { clearSession as clearFileTimeSession, recordRead } from '../utils/toolUtils/fileTime'
 import { sshManager } from './sshManager'
@@ -64,10 +64,10 @@ export interface AgentSessionCreateParams {
  *
  * 创建/装配（systemPrompt 组装、工具解析、指令注入）已收敛到统一创建管线
  * （agents/agentHost 的 agentFactory + 会话档案）；本类保留桌面特有的
- * 生命周期编排：workflow 埋点、setModel 的能力查询、ssh / fileTime 清理。
+ * 生命周期编排：hook 埋点、setModel 的能力查询、ssh / fileTime 清理。
  *
  * 自动标题不再是这里的业务：本类只在 prompt 受理与轮结束处 fire 两个**通用埋点**
- * （payload = 会话此刻的事实），标题逻辑整体在内置 auto-title 工作流 + titler agent md。
+ * （payload = 会话此刻的事实），标题逻辑整体在内置 auto-title hook + titler agent md。
  *
  * 通过 AgentSession.create() 工厂方法创建。
  */
@@ -314,12 +314,12 @@ export class AgentSession {
     return this.runtime.pendingInputSummaries
   }
 
-  // ─── 业务埋点（workflow 触发；payload = 会话此刻的事实，与任何具体工作流无关） ───
+  // ─── 业务埋点（hook 触发；payload = 会话此刻的事实，与任何具体 hook 无关） ───
 
   /** prompt 受理埋点：派发前同步取会话事实，fire 后立即返回（fire 绝不抛出） */
   private firePromptAccepted(promptText: string): void {
     const title = sessionDao.pick(this.sessionId, ['title'])?.title ?? ''
-    workflowTriggers.fire('session.prompt-accepted', {
+    hookTriggers.fire('session.prompt-accepted', {
       sessionId: this.sessionId,
       profileName: this.created.profile.name,
       title,
@@ -332,7 +332,7 @@ export class AgentSession {
   private async fireTurnCompleted(): Promise<void> {
     const facts = await buildTurnCompletedFacts(this.sessionId)
     if (!facts) return
-    workflowTriggers.fire('session.turn-completed', {
+    hookTriggers.fire('session.turn-completed', {
       sessionId: this.sessionId,
       profileName: this.created.profile.name,
       ...facts
@@ -373,6 +373,9 @@ export class AgentSession {
 
   /** 完全销毁（删除会话时调用）。不 cascade 到子智能体。 */
   async destroy(): Promise<void> {
+    // hook 派发的 agent 是会话资源（parentSessionId 就是本会话）：随会话销毁一并中止，
+    // 免得一个 titler 之类还在往刚被删掉的会话上写标题
+    hookService.abortSessionRuns(this.sessionId)
     await this.abortQuietly()
     this.created.dispose()
     clearFileTimeSession(this.sessionId)

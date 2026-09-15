@@ -72,7 +72,7 @@ export interface BotMdSeed {
 /**
  * 写一个 bot 定义文件到隔离实例的 ~/.shuvix/bots/<name>.md（`seed.fileName` 可换文件名）。
  *
- * 一个 bot 只声明身份，正文是它的人设与记忆 —— 没有管线、没有槽位。与 agent/policy/workflow
+ * 一个 bot 只声明身份，正文是它的人设与记忆 —— 没有管线、没有槽位。与 agent/policy/hook
  * 同为纯 md 驱动：文件落盘即被 `bot:list` 现扫看见，没有启用开关也没有旁路配置要一并种。
  */
 export function writeBotMd(app: E2EApp, name: string, seed: BotMdSeed = {}): string {
@@ -661,7 +661,7 @@ export async function promptAndListMessages(
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// 注册表笔记（bot / agent / 安全策略 / 工作流 md 的笔记本会话）
+// 注册表笔记（bot / agent / 安全策略 / hook md 的笔记本会话）
 //
 // 四类注册表 md 的打开 / 编辑路径是「一份文件 = 一条笔记本会话」：会话挂在该注册表目录的
 // **隐藏项目**下（id 见 chat-protocol 的 REGISTRY_NOTE_PROJECT_IDS，path = 目录本身），
@@ -675,7 +675,7 @@ const REGISTRY_API: Record<RegistryNoteKind, string> = {
   bot: 'bot',
   agent: 'subAgent',
   policy: 'policy',
-  workflow: 'workflow'
+  hook: 'hook'
 }
 
 export interface RegistryNoteSession {

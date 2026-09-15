@@ -2,7 +2,7 @@
  * 属性卡字段槽位里的选择器 —— **直接复用仓库既有的成熟组件**，不另造轮子：
  *   - `shuvix-tools`（csv）→ ToolSelectList（分组勾选、MCP 连接态、skill 启停）
  *   - `shuvix-model`（select）→ ModelSelect（提供商图标、能力标记、搜索、清除）
- *   - wiki 的 status / entry-type、workflow 的重入策略（select）→ EnumField（契约封闭
+ *   - wiki 的 status / entry-type（select）→ EnumField（契约封闭
  *     枚举的原生下拉；wiki 状态带生命周期圆点）。候选项直接引契约常量 —— 它们是静态
  *     契约，不像工具/模型那样依赖运行时目录。
  *   - 其余 csv 键（如 `shuvix-instruction-files` 的指令文件清单）→ 纯文本逗号串输入。
@@ -27,11 +27,7 @@ import {
   WIKI_ENTRY_TYPE_KEY,
   WIKI_STATUS_KEY
 } from '@shuvix/chat-protocol/wikiFileContract'
-import {
-  AGENT_MODEL_KEY,
-  WORKFLOW_CONCURRENCY_KEY,
-  WORKFLOW_CONCURRENCY_MODES
-} from '@shuvix/chat-protocol/shuvixMdDescriptors'
+import { AGENT_MODEL_KEY } from '@shuvix/chat-protocol/shuvixMdDescriptors'
 import {
   KNOWLEDGE_MARKER_TYPE,
   KNOWLEDGE_TYPES,
@@ -363,7 +359,7 @@ export function FrontmatterFieldPicker({
 }: FrontmatterFieldPickerProps): React.JSX.Element {
   if (kind === 'select') {
     // **按键显式分派**：模型选择器只认模型键。曾经它是 select 的兜底，于是任何新加的
-    // select 字段（如工作流的重入策略）都会静默变成一个写着「选择模型」的模型下拉 ——
+    // select 字段（如已退役的工作流重入策略）都会静默变成一个写着「选择模型」的模型下拉 ——
     // 属性卡不认识某个键时，退回自由文本下拉才是诚实的降级。
     if (fieldKey === AGENT_MODEL_KEY) {
       return <ModelField value={value} onChange={onChange} readOnly={readOnly} />
@@ -380,9 +376,7 @@ export function FrontmatterFieldPicker({
         ? WIKI_ENTRY_STATUSES
         : fieldKey === WIKI_ENTRY_TYPE_KEY
           ? WIKI_ENTRY_TYPES
-          : fieldKey === WORKFLOW_CONCURRENCY_KEY
-            ? WORKFLOW_CONCURRENCY_MODES
-            : []
+          : []
     return (
       <EnumField
         options={options}

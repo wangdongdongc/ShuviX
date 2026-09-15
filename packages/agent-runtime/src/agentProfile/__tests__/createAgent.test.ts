@@ -560,7 +560,7 @@ describe('createAgentFactory —— 指令文件注入的接缝口径', () => {
 /**
  * `systemContext` —— 调用方随本次创建给的上下文块（已围栏）。与项目注入同一机制、不同来源：
  * 项目注入按会话解析，这些块由调用方给（bot 会话把绑定的 bot md 正文交给根 Agent，见
- * renderBotContext；workflow 的 invoke 也可经 WorkflowInvokeRequest.systemContext → manager.runTask 带到这里）。
+ * renderBotContext；派发路径经 RunTaskParams.systemContext → manager.runTask 带到这里）。
  * createAgent 只做一件事：逐块以空行分隔追加在**项目注入之后**，空白块跳过。
  */
 describe('createAgentFactory —— systemContext（调用方追加的上下文块）', () => {

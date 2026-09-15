@@ -17,7 +17,7 @@
  * 人设读进系统提示词；判别只看类型段，版本号升级不让旧文件消失。其余未知键忽略。
  *
  * `warn` 承载两类话：返回 null 时它们是拒绝理由；返回对象时它们是软提示（管线残留）。调用方
- * 据返回值区分 —— 与 agent / workflow 解析器的通道同形。
+ * 据返回值区分 —— 与 agent / hook 解析器的通道同形。
  */
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
 import { readShuvixMarker } from '@shuvix/chat-protocol/shuvixMdContract'
@@ -54,7 +54,7 @@ function isMapping(v: unknown): v is Record<string, unknown> {
 
 /**
  * 解析 bot 定义 markdown。结构非法返回 null，原因经 `warn` 回报
- * （与 agent / workflow / policy 解析器同形同策：整份拒绝，不静默降级）。
+ * （与 agent / hook / policy 解析器同形同策：整份拒绝，不静默降级）。
  */
 export function parseBotDefinitionFile(
   raw: string,

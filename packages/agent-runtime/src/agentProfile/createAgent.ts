@@ -184,9 +184,8 @@ export interface CreateAgentParams {
    * 调用方追加到系统提示词末尾的上下文块（已围栏的文本，逐块以空行分隔，排在项目注入之后）。
    *
    * 与项目上下文同一机制、不同来源：项目注入按会话解析，这些块由**调用方**随本次创建给 ——
-   * bot 会话把绑定的那份 bot md 的正文（`renderBotContext`）交给它的**根** Agent；workflow
-   * 的 `invoke` 也可以经 `WorkflowInvokeRequest.systemContext` 带给 run 里的每一步。
-   * 引擎与 manager 只透传，不解释内容。
+   * bot 会话把绑定的那份 bot md 的正文（`renderBotContext`）交给它的**根** Agent；派发路径
+   * 经 `RunTaskParams.systemContext` 透传。manager 只透传，不解释内容。
    */
   systemContext?: readonly string[]
   /** 仅 root：UserPromptSubmit 通过后的首轮快速标题钩子 */

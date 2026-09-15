@@ -71,9 +71,9 @@ export function getDefaultPoliciesDir(): string {
   return join(homedir(), '.shuvix', 'policies')
 }
 
-/** 全局工作流目录：~/.shuvix/workflows/（不自动创建，由 workflowService 管理；内置工作流硬编码进 @shuvix/agent-runtime） */
-export function getDefaultWorkflowsDir(): string {
-  return join(homedir(), '.shuvix', 'workflows')
+/** 全局 hook 目录：~/.shuvix/hooks/（不自动创建，由 hookService 管理；内置 hook 硬编码进 @shuvix/agent-runtime） */
+export function getDefaultHooksDir(): string {
+  return join(homedir(), '.shuvix', 'hooks')
 }
 
 /** 全局 Bots 目录：~/.shuvix/bots/（不自动创建，由 botService 管理；不内置任何 bot） */

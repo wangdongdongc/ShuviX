@@ -22,4 +22,4 @@ Bad (vague): "Code changes", "对话记录" · Bad (too long): a full sentence d
 ## Steps
 
 1. Call `session` with action `set-title` and your title — this renames the session this task belongs to.
-2. Finish. When a `next` tool is available, end by calling it with `{"title": "<the title you set>"}`; otherwise reply with the title text only.
+2. Finish by replying with the title text only.

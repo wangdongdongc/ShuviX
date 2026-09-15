@@ -16,7 +16,7 @@ import { registerDownloadHandlers } from './downloadHandlers'
 import { registerUpdateHandlers } from './updateHandlers'
 import { registerSubAgentHandlers } from './subAgentHandlers'
 import { registerPolicyHandlers } from './policyHandlers'
-import { registerWorkflowHandlers } from './workflowHandlers'
+import { registerHookHandlers } from './hookHandlers'
 import { registerBotHandlers } from './botHandlers'
 import { registerShuvixMdHandlers } from './shuvixMdHandlers'
 import { registerTerminalHandlers } from './terminalHandlers'
@@ -56,7 +56,7 @@ export function registerIpcHandlers(): void {
   registerUpdateHandlers()
   registerSubAgentHandlers()
   registerPolicyHandlers()
-  registerWorkflowHandlers()
+  registerHookHandlers()
   registerBotHandlers()
   registerShuvixMdHandlers()
   registerTerminalHandlers()

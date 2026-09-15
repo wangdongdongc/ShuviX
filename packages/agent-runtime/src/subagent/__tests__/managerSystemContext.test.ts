@@ -1,7 +1,7 @@
 /**
  * SubAgentManager 的 systemContext 透传（RunTaskParams.systemContext → CreateAgentParams.systemContext）。
  *
- * manager 不解释内容：它只把调用方（工作流引擎 / bot 管线）给的上下文块**原样**交给统一
+ * manager 不解释内容：它只把调用方给的上下文块**原样**交给统一
  * 创建管线，由 createAgent 追加到系统提示词末尾（契约在 agentProfile/__tests__/createAgent.test.ts）。
  * 这一层要钉的只有「原样、不多不少」：块不进 prompt、不进 contextMessages、不与结果契约的
  * extraTools 互相干扰。fake 注入风格对齐 managerResultContract.test.ts。

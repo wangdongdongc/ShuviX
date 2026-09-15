@@ -520,7 +520,7 @@ export class SessionService {
   }
 
   /**
-   * 会话当前模型配置（workflow 引擎会话域 run 的模型回落源）。
+   * 会话当前模型配置（hook 派发的模型回落源）。
    * 会话不存在或没有可用模型返回 null —— 调用方（run()）报「无可用模型」。
    */
   async resolveRunModelConfig(sessionId: string): Promise<SubAgentModelConfig | null> {

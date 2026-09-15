@@ -491,9 +491,9 @@ function buildStructuredValue(kind: ShuvixMdFieldKind, value: unknown): HTMLElem
     }
     return box
   }
-  // 触发绑定（workflow 的 shuvix-workflow-on）：埋点 id 徽章 + when/参数摘要。
+  // 触发绑定（hook 的 shuvix-hook-on）：埋点 id 徽章 + when/参数摘要。
   // 「什么时候会跑」是这份文件最要紧的一行，与 policyRules 同等待遇。
-  if (kind === 'workflowBindings') {
+  if (kind === 'hookBindings') {
     if (!Array.isArray(value)) return null
     const box = el('div', 'cm-shuvix-fmcard-value space-y-1')
     for (const item of value) {

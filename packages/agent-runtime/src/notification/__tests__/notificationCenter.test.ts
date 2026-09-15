@@ -47,7 +47,7 @@ function askRequest(id = 'req-1', command = 'rm -rf build'): InputRequest {
   return { id, kind: 'ask', toolName: 'bash', createdAt: 0, command }
 }
 
-/** 子会话登记：parentToolCallId 有值 = agent 经派发工具起的；无值 = workflow 引擎 run() 起的 */
+/** 子会话登记：parentToolCallId 有值 = agent 经派发工具起的；无值 = hook 派发起的 */
 function register(sessionId: string, parent: string, parentToolCallId?: string): ChatEvent {
   return {
     type: 'sub_session_register',
@@ -226,7 +226,7 @@ describe('通知决策器 — 派生 agent', () => {
       parentSessionId: ROOT,
       result: '找完了'
     })
-    // 非工具派发（workflow 引擎 run()：auto-title / bot 管线），成功与失败都不弹 ——
+    // 非工具派发（hook runner：auto-title），成功与失败都不弹 ——
     // 用户等的是根会话那轮，机械动作跑完先弹一条「已完成」只会误导
     h.center.handleEvent(register('sub-wf', ROOT))
     h.center.handleEvent({ type: 'agent_end', sessionId: 'sub-wf', reason: 'ok' })
