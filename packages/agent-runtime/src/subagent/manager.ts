@@ -162,8 +162,10 @@ export interface RunTaskOutcome {
   structured?: unknown
   /**
    * 这一轮以失败收尾时的机器可读原因：被中止（`'aborted'`）、执行抛错（execError 原话）、或模型调用
-   * 报错（最后一条 assistant 的 stopReason 为 error，取其 errorMessage）。软停止（interrupt）不算失败。
-   * `result` 文本里照样有这些信息 —— 这个字段给不读散文的调用方（hook runner）判成败。
+   * 报错（最后一条 assistant 的 stopReason 为 error，取其 errorMessage）。软停止（interrupt）不算失败，
+   * 但同一轮又被中止时按中止算；结果契约捕获恒为成功。
+   * `result` 文本里照样有这些信息 —— 这个字段给不读散文的调用方（hook runner）判成败；
+   * 与 `sub_session_end.isError`、任务落定态 `error` 是同一个判定（turnError）。
    */
   error?: string
 }
@@ -219,17 +221,21 @@ interface SpawnedAgent {
 }
 
 /**
- * 一轮收尾的机器可读失败原因（`RunTaskOutcome.error`）。软停止（interrupt）不算失败；中止、执行抛错、
+ * 一轮收尾的成败判定，全模块只此一处：`sub_session_end.isError`、任务落定态与 `RunTaskOutcome.error`
+ * 都读它的返回值（失败原因；undefined = 成功）。软停止（interrupt）不算失败；中止、执行抛错、
  * 模型调用报错都算 —— 最后一种 pi 落成一条 stopReason 为 error 的 assistant 消息，`prompt()` 并不返回
- * error，所以只能从会话树尾部认。
+ * error，所以只能从会话树尾部认。契约补救（nudge）也读它：出错的一轮不追问。结果契约捕获在
+ * finishTurn 里先行返回、恒为成功，不经这里。
  */
 function turnError(
   session: Pick<SpawnedAgent, 'aborted' | 'interrupted'>,
   messages: AgentMessage[],
   execError: string | undefined
 ): string | undefined {
-  if (session.interrupted) return undefined
+  // 中止优先于软停止：同一轮里既被软停止又被中止（面板先停、父级再中止），按中止算 ——
+  // 否则任务落定为 killed 而 isError 为 false，三处结论对不上。结果文本仍按软停止抽取
   if (session.aborted) return 'aborted'
+  if (session.interrupted) return undefined
   if (execError) return execError
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i]
@@ -428,8 +434,10 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
       : session.aborted
         ? abortedNote()
         : extractResult(messages, execError)
-    const isError = session.interrupted ? false : !!execError || session.aborted
+    // 成败只判一处（turnError）：面板的 isError、任务落定态、runTask 的 error 读同一个结论。
+    // 模型调用报错（provider 500 之类）也算失败 —— 它不经 prompt() 返回，只落在会话树尾部
     const error = turnError(session, messages, execError)
+    const isError = error !== undefined
 
     deps.tasks?.settle(session.agentId, {
       // 中止是失败态，软停止不是（保留部分结果、按「已完成」收尾）
@@ -576,6 +584,9 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
           i < nudges && !captured.hit && !session.aborted && !session.interrupted && !execError;
           i++
         ) {
+          // 模型调用报错也是「出错」：它不经 prompt() 返回，只落在会话树尾部（与 finishTurn 同一个判定）
+          const tail = (await session.piSession.buildContext()).messages
+          if (turnError(session, tail, execError)) break
           // 面板转写连贯：与 continueTask 同形广播这条追问（用户可见自动化的补救动作）
           deps.broadcast({
             type: 'user_message',

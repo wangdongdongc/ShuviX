@@ -225,7 +225,10 @@ export interface ChatSubSessionEndEvent extends ChatEventBase {
   parentSessionId: string
   /** 子会话最终 result 文本（父的 tool_result） */
   result: string
-  /** 是否以异常结束 */
+  /**
+   * 是否以失败结束：被中止、执行抛错、或模型调用报错（最后一条 assistant 的 stopReason 为 error）。
+   * 软停止（用户中断）不算失败，但同一轮又被中止时算；结果契约捕获恒为成功。result 文本不因此改变。
+   */
   isError?: boolean
 }
 

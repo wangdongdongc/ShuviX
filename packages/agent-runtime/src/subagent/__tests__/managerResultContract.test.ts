@@ -328,3 +328,50 @@ describe('runTask 结果 — outcome.error（给不读散文的调用方判成�
     expect('error' in outcome).toBe(false)
   })
 })
+
+// ── 没有任务枢纽时，面板那一处（sub_session_end.isError）读的也是同一个判定 ──
+
+const E500 = '500 Internal Server Error'
+const ERR_TEXT = {
+  role: 'assistant',
+  content: 'half an answer',
+  stopReason: 'error',
+  errorMessage: E500
+}
+
+describe('无任务枢纽 — 模型调用报错同样判失败（sub_session_end.isError）', () => {
+  it('ME-24 首轮树尾报错 → isError:true、result 与 outcome 同文、outcome.error 取 errorMessage', async () => {
+    const { manager, h } = makeHarness({ messages: [ERR_TEXT] })
+    const outcome = await manager.runTask(task())
+
+    expect(endEvent(h).isError).toBe(true)
+    expect(endEvent(h).result).toBe(outcome.result)
+    expect(outcome.error).toBe(E500)
+  })
+
+  it('ME-24 追问那轮模型报错 → continueTask 照常 resolve，第二条 sub_session_end isError:true', async () => {
+    const messages: unknown[] = [{ role: 'assistant', content: 'a', stopReason: 'stop' }]
+    const { manager, h } = makeHarness({ messages })
+    await manager.runTask(task())
+
+    messages.push(
+      { role: 'user', content: 'again' },
+      {
+        role: 'assistant',
+        content: [{ type: 'text', text: '' }],
+        stopReason: 'error',
+        errorMessage: '503 Service Unavailable'
+      }
+    )
+    await expect(
+      manager.continueTask({ subSessionId: h.createCalls[0].sessionId, text: 'again' })
+    ).resolves.toBeUndefined()
+
+    const ends = h.events.filter((e) => e.type === 'sub_session_end') as Array<
+      Extract<ChatEvent, { type: 'sub_session_end' }>
+    >
+    expect(ends).toHaveLength(2)
+    expect(ends[0].isError).toBe(false)
+    expect(ends[1].isError).toBe(true)
+  })
+})
