@@ -46,12 +46,21 @@ import type {
 
 export interface SessionModelMetadata {
   thinkingLevel?: string
-  enabledTools?: string[]
 }
 
 export interface SessionSettings {
   autoAllow?: boolean
   allowList?: string[]
+  /**
+   * 这条会话的扩展能力勾选（`mcp:<server>` / `skill:<name>`，只收这两类）。
+   *
+   * 新建会话时定下来：项目会话继承项目保存过的扩展能力（项目没保存过就是空，与无项目的会话
+   * 一致）、子会话抄父会话。
+   * **只在创建 Agent 那一刻读一次** —— 运行时存在期间只读（写入口 `session.updateEnabledTools`
+   * 会拒绝），前端据 `agent_created` / `agent_closing` 切换只读态。缺这个键的是改制前的旧会话，
+   * 首次解析时按同一条继承规则补上。
+   */
+  enabledTools?: string[]
   /**
    * 这条会话绑定的 bot（`~/.shuvix/bots/<name>.md`）。有值即为 bot 会话 —— 一条**普通有根会话**：
    * 根 Agent 的档案是基座 `bot`，那份 md 的正文（人设与记忆）经 systemContext 注入它的系统提示词。
@@ -80,10 +89,11 @@ export interface SessionSettings {
 /**
  * 会话业务记录。
  *
- * 刻意**不含** provider / model / thinkingLevel / enabledTools / systemPrompt ——
+ * 刻意**不含** provider / model / thinkingLevel / systemPrompt ——
  * 这些是「运行配置」，唯一事实源是会话树（JSONL 的 model_change /
- * thinking_level_change / active_tools_change entry）。想读当前值走 `agent.init`，
- * 想改走 `agent.setModel` / `setThinkingLevel` / `setEnabledTools`。
+ * thinking_level_change entry）。想读当前值走 `agent.init`，
+ * 想改走 `agent.setModel` / `setThinkingLevel`。
+ * 扩展能力勾选不属此列：它在 `settings.enabledTools`（见 SessionSettings）。
  */
 export interface Session {
   id: string
@@ -101,7 +111,6 @@ export interface Session {
 
 export interface SessionInfo extends Session {
   workingDirectory?: string | null
-  enabledTools?: string[]
 }
 
 export interface ProjectEnvVar {
@@ -171,12 +180,20 @@ export interface AgentInitParams {
 
 export interface AgentInitResult {
   success: boolean
+  /**
+   * 此刻有 Agent 运行时（含正在创建 / 正在关停；init 本身不创建）—— 与 `session.updateEnabledTools`
+   * 的拒绝条件同一口径，为真时扩展能力勾选只读
+   */
   created: boolean
   provider: string
   model: string
   capabilities: ModelCapabilities
   modelMetadata: SessionModelMetadata
   workingDirectory: string
+  /**
+   * 扩展能力勾选原值（`settings.enabledTools`；改制前的旧会话在这次解析里补上）。含此刻不可用的项
+   * （未连接的 MCP 等）—— 创建 Agent 时才按可用性过滤，UI 据原值展示与整份替换写入
+   */
   enabledTools: string[]
 }
 
@@ -358,6 +375,12 @@ export interface SessionUpdateProjectParams {
 export interface SessionUpdateAutoAllowParams {
   id: string
   autoAllow: boolean
+}
+
+export interface SessionUpdateEnabledToolsParams {
+  id: string
+  /** 完整勾选（整份替换，不是增量）；只收 mcp:/skill: 条目，其余被丢弃 */
+  enabledTools: string[]
 }
 
 export interface SessionAllowListRemoveParams {
@@ -583,9 +606,6 @@ export interface HostApi {
   agent: {
     setModel: (params: AgentSetModelParams) => Promise<{ success: boolean }>
     setThinkingLevel: (params: AgentSetThinkingLevelParams) => Promise<{ success: boolean }>
-    setEnabledTools: (params: { sessionId: string; tools: string[] }) => Promise<{
-      success: boolean
-    }>
     /**
      * 读取运行时 Agent 对象的实时信息（systemPrompt/工具/模型）；Agent 未创建返回 null。
      * `ensure: true` 时先按会话配置懒创建 Agent 再取快照 —— 给「没发过消息也要看到 Agent
@@ -631,10 +651,16 @@ export interface HostApi {
     updateAutoAllow: (params: SessionUpdateAutoAllowParams) => Promise<{ success: boolean }>
     /** 移除允许列表条目（仅路径条目：命令类工具无允许列表，逐条询问） */
     removeAllowListEntry: (params: SessionAllowListRemoveParams) => Promise<{ success: boolean }>
+    /**
+     * 改扩展能力勾选（`settings.enabledTools`）。只在这条会话**没有** Agent 运行时的时候生效：
+     * 运行时已存在 / 正在创建 / 正在关停都返回 `success: false`、什么也不写 —— 勾选只在
+     * 创建那一刻读一次，运行期改了也不会生效，不如明确拒绝。
+     */
+    updateEnabledTools: (params: SessionUpdateEnabledToolsParams) => Promise<{ success: boolean }>
     delete: (id: string) => Promise<{ success: boolean }>
-    // 注：updateModelConfig / updateThinkingLevel / updateEnabledTools 已移除 ——
-    // 运行配置的唯一事实源是会话树，改动统一走 agent.setModel / setThinkingLevel /
-    // setEnabledTools（Agent 未创建时后端直接往树上追加对应 entry）。
+    // 注：updateModelConfig / updateThinkingLevel 已移除 —— 这两项运行配置的唯一事实源是
+    // 会话树，改动统一走 agent.setModel / setThinkingLevel（Agent 未创建时后端直接往树上
+    // 追加对应 entry）。
   }
   /**
    * 消息写入口已全部移除（AgentHarness 迁移）：消息只能由 harness 在运行中产生并

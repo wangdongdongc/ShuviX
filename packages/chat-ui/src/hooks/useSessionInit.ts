@@ -4,6 +4,7 @@ import { useEffect } from 'react'
 import { useBgTaskStore } from '../stores/bgTaskStore'
 import { useChatStore, type AssistantMessage } from '../stores/chatStore'
 import { useModelCatalogStore } from '../stores/modelCatalogStore'
+import { applySessionToolState } from './useSessionTools'
 
 /** 根据 URL hash 判断当前是否是独立设置窗口 */
 const isSettingsWindow = window.location.hash.startsWith('#settings')
@@ -44,9 +45,9 @@ export function useSessionInit(activeSessionId: string | null): void {
       store.setModelSupportsVision(!!caps.vision)
       store.setMaxContextTokens(caps.maxInputTokens || 0)
 
-      // 4. 同步会话元信息（projectPath、enabledTools、指令文件状态）
+      // 4. 同步会话元信息（projectPath、扩展能力勾选与运行时是否已存在）
       store.setProjectPath(result.workingDirectory || null)
-      store.setEnabledTools(result.enabledTools || [])
+      applySessionToolState(activeSessionId, result)
 
       // 5. 从最后一条 assistant 消息的 metadata 恢复已占用上下文 token 数
       // 最后一次调用的用量就是当时的上下文占用（一条消息 = 一次调用）

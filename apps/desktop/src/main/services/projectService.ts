@@ -27,7 +27,7 @@ export const KNOWN_PROJECT_FIELDS: Record<string, ProjectFieldMeta> = {
   },
   enabledTools: {
     labelKey: 'projectForm.wizardStepExtensions',
-    desc: 'List of enabled MCP/Skill identifiers — entries must be prefixed with mcp: or skill: (string[])'
+    desc: 'List of enabled MCP/Skill identifiers, inherited by sessions created in this project afterwards — entries must be prefixed with mcp: or skill: (string[])'
   }
 }
 

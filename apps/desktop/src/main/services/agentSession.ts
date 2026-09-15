@@ -49,6 +49,7 @@ export interface AgentSessionCreateParams {
   model: string
   capabilities: ModelCapabilities
   workingDirectory: string
+  /** 扩展能力勾选（mcp:/skill:）—— 只在这里读一次，运行时没有换工具的入口 */
   enabledTools: string[]
   modelMetadata?: SessionModelMetadata
   /**
@@ -146,7 +147,7 @@ export class AgentSession {
         reasoning: capabilities.reasoning
       }),
       cwd: workingDirectory,
-      // 会话勾选（mcp:/skill:）作为 overlay 叠加在档案工具白名单上
+      // 扩展能力勾选（mcp:/skill:）作为 overlay 叠加在档案工具白名单上；运行期不再变
       toolOverlay: enabledTools,
       // UserPromptSubmit 通过、正式派发前的业务埋点（auto-title 的 quick 阶段订阅在此）
       onPromptAccepted: (text) => session.firePromptAccepted(text)
@@ -281,12 +282,6 @@ export class AgentSession {
   /** 设置思考深度 */
   async setThinkingLevel(level: ThinkingLevel): Promise<void> {
     await this.runtime.setThinkingLevel(level)
-  }
-
-  /** 动态更新会话工具 overlay（档案基座 + 新勾选重解析 → applyTools） */
-  async setEnabledTools(enabledTools: string[]): Promise<void> {
-    await this.created.applyToolOverlay(enabledTools)
-    log.info(`setEnabledTools session=${this.sessionId} tools=[${enabledTools.join(',')}]`)
   }
 
   /** 当前上下文对应的 UI 消息列表 */

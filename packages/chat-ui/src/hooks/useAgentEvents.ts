@@ -372,9 +372,16 @@ export function useAgentEvents(): void {
         break
       }
 
+      // ─── 运行时出生：扩展能力勾选从此只读，直到它关停完毕 ───
+      case 'agent_created':
+        store.setAgentCreated(sid, true)
+        break
+
       // ─── 运行时关停（回退/切档案/清空：旧运行时停稳前不许有新的） ───
       case 'agent_closing':
         store.setAgentClosing(sid, event.closing)
+        // 关停完毕 = 这条会话又没有运行时了：扩展能力勾选重新可改（下一个运行时创建时读）
+        if (!event.closing) store.setAgentCreated(sid, false)
         // 关停会把当前 run abort 掉，流式态不会再有后续事件 —— 就地收掉，
         // 免得输入框停留在「运行中」的形态上
         if (event.closing) store.finishStreaming(sid)

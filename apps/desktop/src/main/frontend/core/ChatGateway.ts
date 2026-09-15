@@ -62,8 +62,8 @@ export interface ChatGateway {
   /** 设置思考深度（同上，落 thinking_level_change entry） */
   setThinkingLevel(sessionId: string, level: ThinkingLevel): Promise<void>
 
-  /** 动态更新启用工具集（同上，落 active_tools_change entry） */
-  setEnabledTools(sessionId: string, tools: string[]): Promise<void>
+  // 注：没有 setEnabledTools —— 扩展能力勾选是会话设置，只在 Agent 未创建时可改
+  // （sessionService.updateEnabledTools），运行时没有换工具的入口。
 
   /** 读取运行时 Agent 对象的实时信息（systemPrompt/工具/模型）；Agent 未创建返回 null，
    *  传 { ensure: true } 则先懒创建（不请求 LLM）再取快照 */

@@ -57,13 +57,14 @@ import type { InputRequest } from '@shuvix/chat-protocol/types/inputRequest'
 /** 模型相关元数据 */
 export interface SessionModelMetadata {
   thinkingLevel?: string
-  enabledTools?: string[]
 }
 
 /** 会话级配置 */
 export interface SessionSettings {
   autoAllow?: boolean
   allowList?: string[]
+  /** 扩展能力勾选（mcp:/skill:）；只在创建 Agent 时读一次，运行时存在期间只读（见 useSessionTools） */
+  enabledTools?: string[]
   /** 绑定的 bot；有值即为 bot 会话（普通有根会话，根档案 bot）。判定经 chat-protocol 的 isBotSessionSettings */
   bot?: string
   /** 子会话被父级钉下的档案名（session 工具 agent_profile）；根会话的档案由形态推导，不读它 */
@@ -82,9 +83,9 @@ export interface SessionSettings {
 /**
  * 会话业务记录（与 chat-protocol 的 Session 同构）。
  *
- * 不含 provider / model / thinkingLevel / enabledTools —— 运行配置的唯一事实源是
+ * 不含 provider / model / thinkingLevel —— 运行配置的唯一事实源是
  * 会话树，前端从 `agent.init` 拿当前值并存在本 store 的顶层字段里
- * （activeProvider / activeModel / thinkingLevel / enabledTools）。
+ * （activeProvider / activeModel / thinkingLevel）。扩展能力勾选在 `settings.enabledTools`。
  */
 export interface Session {
   id: string
@@ -220,6 +221,12 @@ interface ChatState {
    * 通常一瞬间；工具卡住不返回时会明显可见 —— 这正是要显式呈现它的原因。
    */
   sessionClosing: Record<string, boolean>
+  /**
+   * 各 session 此刻是否有 Agent 运行时（`agent.init` 的 created 打底，`agent_created` /
+   * `agent_closing{false}` 事件维护）。扩展能力勾选只在创建运行时那一刻读一次 —— 有运行时
+   * 期间，工具选择器与会话设置里的扩展能力都是只读的。
+   */
+  sessionAgentCreated: Record<string, boolean>
   /** 各 session 的工具执行实时状态（按 sessionId 隔离） */
   sessionToolExecutions: Record<string, ToolExecution[]>
   /** 当前模型是否支持深度思考 */
@@ -236,8 +243,6 @@ interface ChatState {
   pendingImages: PendingImage[]
   /** 输入框内容 */
   inputText: string
-  /** 当前会话启用的工具列表 */
-  enabledTools: string[]
   /** 插件工具的渲染配置（toolName → presentation，启动时加载一次） */
   toolPresentations: Record<string, ToolPresentation>
   /** 当前会话的项目工作目录 */
@@ -300,6 +305,8 @@ interface ChatState {
   setIsStreaming: (sessionId: string, streaming: boolean) => void
   /** 标记某会话的运行时正在关停 / 关停完毕（后端 agent_closing 事件驱动） */
   setAgentClosing: (sessionId: string, closing: boolean) => void
+  /** 标记某会话此刻有 / 没有 Agent 运行时（agent.init 与 agent_created / agent_closing 驱动） */
+  setAgentCreated: (sessionId: string, created: boolean) => void
   getSessionStreamContent: (sessionId: string) => string
   getSessionStreamThinking: (sessionId: string) => string
   setStreamingToolCall: (
@@ -329,7 +336,6 @@ interface ChatState {
   updateSessionProject: (id: string, projectId: string | null) => void
   updateSessionSettings: (id: string, patch: Partial<SessionSettings>) => void
   removeSession: (id: string) => void
-  setEnabledTools: (tools: string[]) => void
   setToolPresentations: (presentations: Record<string, ToolPresentation>) => void
   setProjectPath: (path: string | null) => void
   setSlashCommands: (
@@ -537,6 +543,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   messages: [],
   sessionStreams: {},
   sessionClosing: {},
+  sessionAgentCreated: {},
   sessionToolExecutions: {},
   sessionPendingInputs: {},
   sessionInputDrafts: {},
@@ -550,7 +557,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
   usedContextTokens: null,
   pendingImages: [],
   inputText: '',
-  enabledTools: [],
   toolPresentations: {},
   projectPath: null,
   slashCommands: [],
@@ -679,6 +685,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
       return { sessionClosing: next }
     }),
 
+  setAgentCreated: (sessionId, created) =>
+    set((state) => {
+      if (!!state.sessionAgentCreated[sessionId] === created) return {}
+      const next = { ...state.sessionAgentCreated }
+      if (created) next[sessionId] = true
+      else delete next[sessionId]
+      return { sessionAgentCreated: next }
+    }),
+
   getSessionStreamContent: (sessionId) => {
     return get().sessionStreams[sessionId]?.content || ''
   },
@@ -793,7 +808,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
       // 删除的是当前激活会话才清空 active
       ...(state.active?.type === 'session' && state.active.id === id ? deriveActive(null) : {})
     })),
-  setEnabledTools: (tools) => set({ enabledTools: tools }),
   setToolPresentations: (presentations) => set({ toolPresentations: presentations }),
   setProjectPath: (path) => set({ projectPath: path }),
   setSlashCommands: (commands) => set({ slashCommands: commands }),

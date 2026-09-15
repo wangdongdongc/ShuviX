@@ -21,11 +21,7 @@ import { chatGateway } from '../frontend/core'
 import { sessionService } from './sessionService'
 import { taskRegistry } from './taskRegistry'
 import { messageService } from './messageService'
-import {
-  appendModelChange,
-  appendThinkingLevelChange,
-  appendActiveToolsChange
-} from './sessionStorage'
+import { appendModelChange, appendThinkingLevelChange } from './sessionStorage'
 import { sessionDao } from '../dao/sessionDao'
 import type { SubAgentModelConfig } from '@shuvix/agent-runtime'
 import { createLogger } from '../logger'
@@ -232,9 +228,9 @@ class SubSessionRunner {
    * 建一条子会话。
    *
    * **子会话继承父会话此刻的整套设置**：projectId（工作目录是会话的地基）、模型、
-   * 思考档位、mcp:/skill: 勾选，以及免询问开关（后者在 `sessionService.create`，
-   * 它是 settings 一列；其余三项是会话树上的 change entry，在这里种）。不继承就会
-   * 回落全局默认 ——「我用 opus 开着这套 MCP 干活、我开的子会话掉回默认模型、
+   * 思考档位、mcp:/skill: 勾选，以及免询问开关（勾选与免询问在 `sessionService.create`，
+   * 它们是 settings 的键；模型与思考档位是会话树上的 change entry，在这里种）。不继承就会
+   * 回落默认 ——「我用 opus 开着这套 MCP 干活、我开的子会话掉回默认模型、
    * 一个 skill 都没有」是纯粹的意外，而它跟父级在同一个目录里干同一件事。
    *
    * 唯一压过继承的是**档案自己的声明**（更具体的意图）：`shuvix-model` 定了模型就用它，
@@ -268,8 +264,8 @@ class SubSessionRunner {
 
     // 档案：父级点名才钉（准入见 sessionService.pinAgentProfile —— 基座被拒），
     // 不点名就什么也不写：子会话与父会话同一形态（projectId 恒随父），
-    // resolveAgentProfileName 推导出的基座天然一致。钉了的那次会把 mcp:/skill: 勾选替换成
-    // 档案声明的那套，紧接着的 seedRunConfig 负责在档案没声明时把父会话那套补回去
+    // resolveAgentProfileName 推导出的基座天然一致。钉了的那次在档案声明了 mcp:/skill: 时
+    // 把勾选替换成档案那套，没声明就留着 create 从父会话抄来的
     const requested = params.agentProfile?.trim()
     let declared: { model?: SubAgentModelConfig; tools: string[] } | undefined
     if (requested) {
@@ -285,22 +281,18 @@ class SubSessionRunner {
   }
 
   /**
-   * 把父会话此刻的运行配置作为种子写进子会话树：模型 / 思考档位 / mcp:/skill: 勾选。
+   * 把父会话此刻的模型与思考档位作为种子写进子会话树（扩展能力勾选已在
+   * `sessionService.create` 里随 settings 抄过去，档案的工具声明由 `pinAgentProfile` 处理）。
    *
    * 抄的是**解析后**的值（`resolveRunConfig`）而不是「树上显式改过的那些」：父会话大多数
-   * 键根本没显式改过，只抄显式值等于什么也没继承 —— 而「回落默认」在子会话身上并不等价，
-   * 钉档案那一步（`pinAgentProfile`）已经把工具勾选显式写成了档案声明的那套。
+   * 键根本没显式改过，只抄显式值等于什么也没继承。
    *
    * `declared` 是档案声明的那部分（档案切换生效时才有），它压过继承 —— 更具体的意图。
-   * 但**空的工具声明不算意见**：内置 coding / explore 之流的 `shuvix-tools` 只列内置工具，
-   * 按「完整声明」解读就等于把项目的 MCP 与 skill 从每一条子会话上摘掉，而那从来不是
-   * 档案作者在那一行里表达的东西（钉档案那一步按「完整声明」替换，是为了让真声明了
-   * mcp:/skill: 的档案说了算；这里则是给一条空会话铺开父级的工作环境）。
    */
   private async seedRunConfig(
     parentId: string,
     childId: string,
-    declared?: { model?: SubAgentModelConfig; tools: string[] }
+    declared?: { model?: SubAgentModelConfig }
   ): Promise<void> {
     const parent = await sessionService.resolveRunConfig(parentId)
     if (!parent) return
@@ -309,9 +301,6 @@ class SubSessionRunner {
     }
     // 思考档位没有档案声明这一路，恒随父会话
     await appendThinkingLevelChange(childId, parent.thinkingLevel)
-    if (!declared?.tools.length && parent.enabledTools.length) {
-      await appendActiveToolsChange(childId, parent.enabledTools)
-    }
   }
 
   // ─── 驱动 ──────────────────────────────────────

@@ -80,7 +80,7 @@ export function registerAgentHandlers(): void {
   /**
    * 切换指定 session 的模型。
    *
-   * 三个 set* 必须 await 网关：运行配置的落点是会话树（有 Agent 走 harness、没有则直接
+   * 两个 set* 必须 await 网关：运行配置的落点是会话树（有 Agent 走 harness、没有则直接
    * 追加 entry），不等待就返回的话，调用方 `await` 完再读 `agent.init` 可能还是旧值，
    * 网关抛的错也会变成主进程里的 unhandled rejection、前端恒收到 success。
    */
@@ -125,17 +125,6 @@ export function registerAgentHandlers(): void {
     operationContext.run(createElectronContext(sessionId), () =>
       chatGateway.getAgentInfo(sessionId, options)
     )
-  )
-
-  /** 动态更新指定 session 的启用工具集 */
-  ipcMain.handle(
-    'agent:setEnabledTools',
-    (_event, params: { sessionId: string; tools: string[] }) =>
-      operationContext.run(createElectronContext(params.sessionId), async () => {
-        // 同 setModel：必须 await，否则 await 返回时 active_tools_change 未必已落树
-        await chatGateway.setEnabledTools(params.sessionId, params.tools)
-        return { success: true }
-      })
   )
 
   /** 获取所有可用工具列表（名称 + 标签 + 可选分组，传 sessionId 时包含项目级 skills） */

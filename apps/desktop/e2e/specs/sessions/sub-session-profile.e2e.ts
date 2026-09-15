@@ -164,10 +164,11 @@ beforeAll(async () => {
   )
   // 内置 ask-on-sub-session 对「开子会话」要问一句 —— 扮演那个点「允许一次」的用户
   await installAutoAllow(app.main)
-  // 父会话勾选一个 skill：子会话「继承」与「替换」的对照物
-  await app.main.eval(
-    `window.api.agent.setEnabledTools({ sessionId: ${JSON.stringify(parentSid)}, tools: [${JSON.stringify(`skill:${SKILL_PARENT}`)}] })`
+  // 父会话勾选一个 skill：子会话「继承」与「替换」的对照物（父会话还没有运行时，勾选可改）
+  const picked = await app.main.eval<{ success: boolean }>(
+    `window.api.session.updateEnabledTools({ id: ${JSON.stringify(parentSid)}, enabledTools: [${JSON.stringify(`skill:${SKILL_PARENT}`)}] })`
   )
+  expect(picked.success).toBe(true)
   parentCfg = await init(parentSid)
   // 前置条件自检：父会话跑在假提供商上、勾着那一个 skill
   expect(parentCfg.model).toBe(MODEL)
@@ -207,7 +208,7 @@ describe('create-sub-session 的 agent_profile 钉档案', () => {
   })
 
   it('SP-3 点名 coding（只列内置工具、不声明模型）：父级的 skill 勾选补回来，模型等于父模型', async () => {
-    // 空的工具声明不算意见：pin 那一步把勾选清成 []，seedRunConfig 把父级那套铺回来 ——
+    // 空的工具声明不算意见：pin 那一步不碰勾选，留着 create 从父会话抄来的那套 ——
     // 否则每条 coding 子会话都被摘掉项目的 MCP 与 skill
     const sub = await createSub('coding2', { agent_profile: 'coding' })
     const cfg = await init(sub.id)

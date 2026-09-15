@@ -524,9 +524,7 @@ export class HarnessSession {
     await this.harness.setThinkingLevel(level)
   }
 
-  async applyTools(tools: AgentTool[]): Promise<void> {
-    await this.harness.setTools(tools)
-  }
+  // 没有 applyTools：工具集在创建时定型，运行期不换（见 createAgent 的 toolOverlay）
 
   setSystemPrompt(prompt: string): void {
     this.systemPrompt = prompt
@@ -539,7 +537,7 @@ export class HarnessSession {
    *
    * 给运行时注册中心（`runtimeRegistry.ts`）用 —— 监控数据一律从 pi 自己的读取面与
    * 事件流取，本类不再为监控增设手工快照字段。命名点出"这是 pi 的对象"，提醒调用方
-   * 它是**可变**的：读可以，改运行时配置请走本类的 applyModel/applyTools 等入口，
+   * 它是**可变**的：读可以，改运行时配置请走本类的 applyModel / setThinkingLevel 等入口，
    * 否则绕过日志与事件翻译。
    */
   get piHarness(): AgentHarness {

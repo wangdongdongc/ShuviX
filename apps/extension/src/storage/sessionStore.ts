@@ -51,8 +51,8 @@ export const sessionStore = {
       projectId: defaults.projectId ?? null,
       // 子会话是桌面端形态（agent 经 session 工具自建）—— 扩展端不产生，恒为顶层
       parentId: null,
-      // 不预写运行配置：provider / model / thinkingLevel / enabledTools 的唯一事实源是
-      // 会话树（model_change / thinking_level_change / active_tools_change entry）
+      // 不预写运行配置：provider / model / thinkingLevel 的唯一事实源是
+      // 会话树（model_change / thinking_level_change entry）
       // 指令文件不预写配置：留空即「未显式配置」，装配系统提示时按 AGENTS.md → CLAUDE.md 优先级自动选
       // 档案也不写：根 Agent 的档案由会话形态推导（agentRuntime.buildRuntimeSession）
       settings: {
@@ -75,8 +75,8 @@ export const sessionStore = {
     await ensureLoaded()
     const s = cache.get(id)
     if (!s) return null
-    // 浏览器无项目工作目录概念；enabledTools 由扩展固定（ask + 已连接 MCP 工具）
-    return { ...s, workingDirectory: null, enabledTools: [] }
+    // 浏览器无项目工作目录概念
+    return { ...s, workingDirectory: null }
   },
 
   async updateTitle(id: string, title: string): Promise<void> {

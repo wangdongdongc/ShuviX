@@ -309,7 +309,10 @@
     "autoAllow": "免询问",
     "autoAllowDesc": "AI 执行操作时不再逐条询问（具有一定风险）",
     "allowListTitle": "已允许的路径",
-    "commandGroup": "操作询问"
+    "commandGroup": "操作询问",
+    "extensionsGroup": "扩展能力",
+    "extensionsDesc": "在智能体创建时读取（首次发送消息时创建）；智能体存在期间只读",
+    "extensionsLocked": "智能体已创建，扩展能力只读"
   },
   "projectForm": {
     "createTitle": "新建项目",
@@ -338,6 +341,7 @@
     "archiveConfirmDesc": "该项目将被移动到“已归档项目”中，你可以稍后在侧边栏恢复。",
     "archiveConfirmAction": "确认归档",
     "wizardStepExtensions": "扩展能力",
+    "extensionsDesc": "新建的会话会继承这里的勾选，已有会话不受影响",
     "skillsGroup": "技能",
     "configTab": "配置",
     "wizardNext": "下一步",

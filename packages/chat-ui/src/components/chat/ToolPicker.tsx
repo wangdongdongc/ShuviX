@@ -1,9 +1,10 @@
-import { getSessionChannelApi, getHostApi } from '@shuvix/chat-ui'
+import { getSessionChannelApi } from '@shuvix/chat-ui'
 import { useRef, useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Server, BookOpen, WifiOff } from 'lucide-react'
+import { Server, BookOpen, WifiOff, Lock } from 'lucide-react'
 import { useChatStore } from '../../stores/chatStore'
 import { useClickOutside } from '../../hooks/useClickOutside'
+import { useSessionTools } from '../../hooks/useSessionTools'
 import type { ToolItem } from '../common/ToolSelectList'
 
 const SKILLS_GROUP = '__skills__'
@@ -28,13 +29,16 @@ function parseSkillDisplay(name: string): { label: string; builtin: boolean } {
 }
 
 /**
- * 工具选择器 — 动态切换会话启用的 MCP / Skill 集
+ * 工具选择器 — 会话的扩展能力勾选（MCP / Skill），与会话设置里的扩展能力是同一份数据。
  *
- * 内置工具与 SubAgent 始终启用，不在此处控制。
+ * 内置工具与 SubAgent 始终启用，不在此处控制。勾选只在创建 Agent 时读一次：会话已有运行时
+ * 就只读（面板照常能打开看，勾选框禁用并说明原因）。还没有会话（欢迎页）时不显示 ——
+ * 没有可写的地方，而直接发送新建出来的聊天会话本就一个都不勾。
  */
 export function ToolPicker(): React.JSX.Element | null {
   const { t } = useTranslation()
-  const { activeSessionId, enabledTools, setEnabledTools } = useChatStore()
+  const activeSessionId = useChatStore((s) => s.activeSessionId)
+  const { enabledTools, locked, setEnabledTools } = useSessionTools(activeSessionId)
 
   const toolsRef = useRef<HTMLDivElement>(null)
   const [open, setOpen] = useState(false)
@@ -45,24 +49,18 @@ export function ToolPicker(): React.JSX.Element | null {
 
   const fetchTools = useCallback(() => {
     const sid = useChatStore.getState().activeSessionId
-    getSessionChannelApi()
-      .tools.list(sid ?? undefined)
-      .then((tools) => {
-        setAllTools(tools)
-        const validNames = new Set(tools.map((t) => t.name))
-        const currentEnabled = useChatStore.getState().enabledTools
-        const cleaned = currentEnabled.filter((n) => validNames.has(n))
-        if (cleaned.length !== currentEnabled.length) {
-          void handleChange(cleaned)
-        }
-      })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    if (!sid) return
+    void getSessionChannelApi()
+      .tools.list(sid)
+      .then((tools) => setAllTools(tools))
   }, [])
 
+  // 可选项随会话变（项目级 skills 跟着工作目录走）
   useEffect(() => {
     fetchTools()
-  }, [fetchTools])
+  }, [fetchTools, activeSessionId])
 
+  // 打开面板时再拉一次：MCP 的连接状态可能刚变
   useEffect(() => {
     if (open) fetchTools()
   }, [open, fetchTools])
@@ -70,30 +68,31 @@ export function ToolPicker(): React.JSX.Element | null {
   const mcpTools = allTools.filter((t) => t.group?.startsWith('mcp:'))
   const skillTools = allTools.filter((t) => t.group === SKILLS_GROUP)
 
-  if (mcpTools.length === 0 && skillTools.length === 0) return null
+  if (!activeSessionId || (mcpTools.length === 0 && skillTools.length === 0)) return null
 
   const enabledMcpTools = mcpTools.filter((t) => enabledTools.includes(t.name))
   const enabledSkillTools = skillTools.filter((t) => enabledTools.includes(t.name))
 
-  const handleChange = async (newTools: string[]): Promise<void> => {
-    const host = getHostApi()
-    if (!host) return // 渠道端无权改工具集（UI 已隐藏，双保险）
-    setEnabledTools(newTools)
-    if (activeSessionId) {
-      // 单一写入口：落 active_tools_change entry（Agent 未创建时后端直接写树）
-      await host.agent.setEnabledTools({ sessionId: activeSessionId, tools: newTools })
-    }
-  }
-
   const toggle = (name: string): void => {
+    if (locked) return
     const next = enabledTools.includes(name)
       ? enabledTools.filter((n) => n !== name)
       : [...enabledTools, name]
-    void handleChange(next)
+    void setEnabledTools(next)
   }
 
+  // 只读时行不响应悬停：面板只用来看这条会话的 Agent 带着哪些扩展能力
+  const rowCls = `flex items-center gap-1.5 w-full px-2 py-0.5 transition-colors ${
+    locked ? 'cursor-default' : 'hover:bg-bg-hover cursor-pointer'
+  }`
+
   return (
-    <div ref={toolsRef} className="relative flex items-center group">
+    <div
+      ref={toolsRef}
+      data-tool-picker
+      data-locked={locked || undefined}
+      className="relative flex items-center group"
+    >
       <button
         onClick={() => setOpen(!open)}
         className="inline-flex items-center gap-1.5 text-[11px] text-text-tertiary hover:text-text-secondary transition-colors border border-transparent hover:border-border-secondary rounded px-1.5 py-0.5"
@@ -139,6 +138,15 @@ export function ToolPicker(): React.JSX.Element | null {
 
       {open && (
         <div className="picker-panel absolute left-0 bottom-8 z-30 w-[240px] rounded-lg border border-border-primary bg-bg-secondary shadow-2xl overflow-hidden">
+          {locked && (
+            <div
+              data-tool-lock-hint
+              className="flex items-start gap-1.5 px-2 py-1.5 border-b border-border-secondary text-[10px] leading-snug text-text-tertiary whitespace-normal"
+            >
+              <Lock size={10} className="mt-px flex-shrink-0" />
+              <span>{t('sessionConfig.extensionsLocked')}</span>
+            </div>
+          )}
           <div className="py-1 max-h-[60vh] overflow-y-auto">
             {mcpTools.length > 0 && (
               <div className="py-0.5">
@@ -148,11 +156,13 @@ export function ToolPicker(): React.JSX.Element | null {
                   return (
                     <label
                       key={tool.name}
-                      className={`flex items-center gap-1.5 w-full px-2 py-0.5 hover:bg-bg-hover transition-colors cursor-pointer ${!isOnline ? 'opacity-50' : ''}`}
+                      data-tool-item={tool.name}
+                      className={`${rowCls} ${!isOnline ? 'opacity-50' : ''}`}
                     >
                       <input
                         type="checkbox"
                         checked={enabledTools.includes(tool.name)}
+                        disabled={locked}
                         onChange={() => toggle(tool.name)}
                         className="rounded border-border-primary accent-accent w-3.5 h-3.5 flex-shrink-0"
                       />
@@ -191,13 +201,11 @@ export function ToolPicker(): React.JSX.Element | null {
                 {skillTools.map((tool) => {
                   const { label, builtin } = parseSkillDisplay(tool.name)
                   return (
-                    <label
-                      key={tool.name}
-                      className="flex items-center gap-1.5 w-full px-2 py-0.5 hover:bg-bg-hover transition-colors cursor-pointer"
-                    >
+                    <label key={tool.name} data-tool-item={tool.name} className={rowCls}>
                       <input
                         type="checkbox"
                         checked={enabledTools.includes(tool.name)}
+                        disabled={locked}
                         onChange={() => toggle(tool.name)}
                         className="rounded border-border-primary accent-accent w-3.5 h-3.5 flex-shrink-0"
                       />

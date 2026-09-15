@@ -20,6 +20,7 @@ import {
 import { useImageUpload } from '../../hooks/useImageUpload'
 import { ModelPicker } from './ModelPicker'
 import { ToolPicker } from './ToolPicker'
+import { useSessionTools } from '../../hooks/useSessionTools'
 import { SlashCommandPopover } from './SlashCommandPopover'
 import { useSlashCommands } from '../../hooks/useSlashCommands'
 import { AtMentionPopover } from './AtMentionPopover'
@@ -241,21 +242,21 @@ export function InputArea({
     }
   }, [onHeightChange])
 
-  /** 自动启用命令依赖的工具（fire-and-forget） */
+  /**
+   * 自动勾上命令依赖的扩展能力（fire-and-forget）。与工具选择器同一个写入口：会话已有 Agent
+   * 运行时（勾选只读）/ 渠道端 / 没有会话时，setEnabledTools 自己什么也不做。
+   */
+  const { enabledTools: sessionTools, setEnabledTools: setSessionTools } =
+    useSessionTools(activeSessionId)
   const autoEnableRequiredTools = useCallback(
     (requiredTools: string[] | undefined): void => {
-      if (!requiredTools?.length || !activeSessionId) return
-      const store = useChatStore.getState()
-      const current = new Set(store.enabledTools)
+      if (!requiredTools?.length) return
+      const current = new Set(sessionTools)
       const missing = requiredTools.filter((name) => !current.has(name))
       if (missing.length === 0) return
-      const host = getHostApi()
-      if (!host) return // 渠道端无权改工具集；会话工具由宿主侧已配置
-      const newTools = [...store.enabledTools, ...missing]
-      store.setEnabledTools(newTools)
-      void host.agent.setEnabledTools({ sessionId: activeSessionId, tools: newTools })
+      void setSessionTools([...sessionTools, ...missing])
     },
-    [activeSessionId]
+    [sessionTools, setSessionTools]
   )
 
   /**

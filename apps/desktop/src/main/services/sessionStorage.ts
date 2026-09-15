@@ -125,17 +125,20 @@ export function clearSessionTreeCacheForTests(): void {
 
 // ─── 运行配置：会话树是唯一事实源 ─────────────────────────────────
 //
-// provider / model / thinkingLevel / enabledTools 都不再有数据库列（v15 删除）。
+// provider / model / thinkingLevel 都不再有数据库列（v15 删除）。
 // 读：沿当前分支取最后一条对应 change entry。写：直接往树上追加一条。
 //
 // 之所以在这里做而不是全走 harness：会话是**懒创建**的 —— 用户可以在从未发送过消息、
 // Agent 尚未存在的会话上切模型。那时没有 harness 可用，但仍要能落下这次选择。
+//
+// 扩展能力勾选（mcp:/skill:）不在树上：它是 `settings.enabledTools`，只在创建 Agent 时读一次
+// （见 sessionService）。树上旧的 active_tools_change entry 一律不读 —— 其中不少是 pi 的
+// `setTools` 顺手写下的运行时工具名，本来就不是勾选。
 
 export interface SessionRunConfig {
   provider: string | null
   model: string | null
   thinkingLevel: string | null
-  enabledTools: string[] | null
 }
 
 /**
@@ -149,8 +152,7 @@ export async function readSessionRunConfig(sessionId: string): Promise<SessionRu
   const config: SessionRunConfig = {
     provider: null,
     model: null,
-    thinkingLevel: null,
-    enabledTools: null
+    thinkingLevel: null
   }
   const session = await getSessionTree(sessionId)
   if (!session) return config
@@ -160,8 +162,6 @@ export async function readSessionRunConfig(sessionId: string): Promise<SessionRu
       config.model = entry.modelId
     } else if (entry.type === 'thinking_level_change') {
       config.thinkingLevel = entry.thinkingLevel
-    } else if (entry.type === 'active_tools_change') {
-      config.enabledTools = entry.activeToolNames
     }
   }
   return config
@@ -249,14 +249,6 @@ export async function appendThinkingLevelChange(
   thinkingLevel: string
 ): Promise<void> {
   await withSessionTreeLock(sessionId, (tree) => tree.appendThinkingLevelChange(thinkingLevel))
-}
-
-/** 往会话树追加一条 active_tools_change */
-export async function appendActiveToolsChange(
-  sessionId: string,
-  activeToolNames: string[]
-): Promise<void> {
-  await withSessionTreeLock(sessionId, (tree) => tree.appendActiveToolsChange(activeToolNames))
 }
 
 /** 删除某会话的转写文件（幂等），并逐出共享缓存 */

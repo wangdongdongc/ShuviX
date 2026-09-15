@@ -309,7 +309,10 @@
     "autoAllow": "自動許可",
     "autoAllowDesc": "確認せずにツール呼び出しを実行（注意して使用）",
     "allowListTitle": "許可済みのパス",
-    "commandGroup": "操作確認"
+    "commandGroup": "操作確認",
+    "extensionsGroup": "拡張機能",
+    "extensionsDesc": "エージェント作成時（最初の送信時）に読み込まれ、エージェントが存在する間は読み取り専用です",
+    "extensionsLocked": "エージェント作成済みのため読み取り専用です"
   },
   "projectForm": {
     "createTitle": "新規プロジェクト",
@@ -338,6 +341,7 @@
     "archiveConfirmDesc": "このプロジェクトは「アーカイブ済みプロジェクト」に移動され、後で復元できます。",
     "archiveConfirmAction": "アーカイブ",
     "wizardStepExtensions": "拡張機能",
+    "extensionsDesc": "このプロジェクトで新しく作るセッションはここでの選択を引き継ぎます。既存のセッションには影響しません",
     "skillsGroup": "スキル",
     "configTab": "設定",
     "wizardNext": "次へ",

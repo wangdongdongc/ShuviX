@@ -275,13 +275,14 @@ declare global {
   /** 模型相关元数据 */
   interface SessionModelMetadata {
     thinkingLevel?: string
-    enabledTools?: string[]
   }
 
   /** 会话级配置 */
   interface SessionSettings {
     autoAllow?: boolean
     allowList?: string[]
+    /** 扩展能力勾选（mcp:/skill:）；只在创建 Agent 时读一次，运行时存在期间只读 */
+    enabledTools?: string[]
     /** 子会话被父级钉下的档案名（session 工具 agent_profile）；根会话的档案由形态推导，不读它 */
     agentProfile?: string
   }
@@ -308,8 +309,6 @@ declare global {
   interface SessionInfo extends Session {
     /** 项目工作目录（由后端填充） */
     workingDirectory?: string | null
-    /** 当前生效的工具列表（由后端解析：session > project > all） */
-    enabledTools?: string[]
   }
 
   // ---- 消息相关类型（从 shared 统一引用，消除重复定义） ----
@@ -522,11 +521,6 @@ declare global {
         requestId: string
         response: import('@shuvix/chat-protocol/types/inputRequest').InputResponse
       }) => Promise<{ success: boolean }>
-      /** 动态更新启用工具集 */
-      setEnabledTools: (params: {
-        sessionId: string
-        tools: string[]
-      }) => Promise<{ success: boolean }>
       onEvent: (callback: (event: ChatEvent) => void) => () => void
     }
     provider: {
@@ -575,6 +569,7 @@ declare global {
       updateThinkingLevel: (
         params: SessionUpdateThinkingLevelParams
       ) => Promise<{ success: boolean }>
+      /** 改扩展能力勾选；会话已有 Agent 运行时则拒绝（success: false） */
       updateEnabledTools: (params: SessionUpdateEnabledToolsParams) => Promise<{ success: boolean }>
       updateAutoAllow: (params: SessionUpdateAutoAllowParams) => Promise<{ success: boolean }>
       removeAllowListEntry: (params: SessionAllowListRemoveParams) => Promise<{ success: boolean }>

@@ -128,7 +128,7 @@ export function seedCustomProvider(
  *
  * 全局 skill 缺省即启用（`.config.json` 的 disabled 列表里没有就是启用）。种它是为了让
  * `skill:<name>` 成为**真实可用**的工具名 —— 会话工具集在读取时会经 filterAvailableTools
- * 剔除不存在的条目，光往会话树里写一个查无此人的名字是断言不到的。
+ * 剔除不存在的条目，光往会话设置里写一个查无此人的名字是断言不到的。
  */
 export function seedSkill(app: E2EApp, name: string, description = 'e2e seeded skill'): string {
   const dir = join(app.home, '.shuvix', 'skills', name)

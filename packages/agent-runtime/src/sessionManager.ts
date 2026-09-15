@@ -47,6 +47,14 @@ export interface SessionManagerDeps<T> {
   dispose?: (sessionId: string, instance: T, reason: SessionDisposeReason) => void | Promise<void>
   /** 关停开始 / 结束回调（宿主用来广播「正在停止」）；可选 */
   onClosingChange?: (sessionId: string, closing: boolean) => void
+  /**
+   * 运行时实例刚绑上会话（`create` 成功、`ensure` 交出它之前）；可选。
+   *
+   * 与 `onClosingChange(…, false)` 成对：两者之间就是「这条会话有运行时」的区间。宿主据此
+   * 广播 `agent_created` —— 只在创建那一刻读一次的会话配置（扩展能力勾选）在区间内只读，
+   * 前端要知道区间从哪开始。抛错只当通知失败，不影响实例本身。
+   */
+  onCreated?: (sessionId: string, instance: T) => void
 }
 
 export class SessionManager<T> {
@@ -112,7 +120,14 @@ export class SessionManager<T> {
         inflight = (async () => {
           try {
             const created = await this.deps.create(sessionId)
-            if (created !== undefined) this.sessions.set(sessionId, created)
+            if (created !== undefined) {
+              this.sessions.set(sessionId, created)
+              try {
+                this.deps.onCreated?.(sessionId, created)
+              } catch {
+                /* 通知失败不影响已绑上的实例（宿主自己记日志） */
+              }
+            }
             return created
           } finally {
             this.pending.delete(sessionId)

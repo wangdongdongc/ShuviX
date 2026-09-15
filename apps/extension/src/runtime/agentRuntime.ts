@@ -53,7 +53,8 @@ const manager = new SessionManager<CreatedAgent>({
     clearSessionTools(sessionId)
   },
   onClosingChange: (sessionId, closing) =>
-    eventBus.emit({ type: 'agent_closing', sessionId, closing })
+    eventBus.emit({ type: 'agent_closing', sessionId, closing }),
+  onCreated: (sessionId) => eventBus.emit({ type: 'agent_created', sessionId })
 })
 
 // 会话树共享缓存的逐出保护：有运行时（或创建中）的会话，树实例与 harness 共享，LRU 不得回收
@@ -79,10 +80,7 @@ export async function resolveSessionMeta(sessionId: string): Promise<{
     provider,
     model,
     caps: capsFor(model),
-    modelMetadata: {
-      ...(tree.thinkingLevel ? { thinkingLevel: tree.thinkingLevel } : {}),
-      ...(tree.enabledTools ? { enabledTools: tree.enabledTools } : {})
-    }
+    modelMetadata: tree.thinkingLevel ? { thinkingLevel: tree.thinkingLevel } : {}
   }
 }
 

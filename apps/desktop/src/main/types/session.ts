@@ -5,8 +5,6 @@ import type { Session } from '../dao/types'
 export interface SessionInfo extends Session {
   /** 项目工作目录（由 service 层填充） */
   workingDirectory?: string | null
-  /** 当前生效的工具列表（由 service 层解析：session > project > all） */
-  enabledTools?: string[]
 }
 
 /** IPC: 创建会话参数（notebookPath 非空则创建笔记本会话；parentId 非空则创建子会话） */
@@ -50,7 +48,7 @@ export interface SessionUpdateThinkingLevelParams {
   thinkingLevel: string
 }
 
-/** IPC: 更新会话启用工具列表参数 */
+/** IPC: 修改扩展能力勾选参数（整份替换；会话已有 Agent 运行时则被拒绝） */
 export interface SessionUpdateEnabledToolsParams {
   id: string
   enabledTools: string[]

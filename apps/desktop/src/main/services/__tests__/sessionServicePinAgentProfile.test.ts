@@ -11,8 +11,8 @@
  *     只会得到说不清的组合；
  *   - **成功链顺序**：落库 → invalidateAgent → 种子（模型 / mcp:/skill: 工具）→ 广播。
  *     落库在 invalidate 前、种子在 invalidate 后：钉档案与重建之间不能有一个还在写树的旧运行时；
- *   - **工具种子是替换不是叠加**：没声明 mcp:/skill: 就写一个空数组（清空，不是跳过）——
- *     那是紧接着的 subSessionRunner.seedRunConfig「档案没意见就补回父级那套」的前提；
+ *   - **工具种子**：声明了 mcp:/skill: 就整份替换扩展能力勾选（`settings.enabledTools`）；
+ *     没声明就不写 —— 勾选已在 create 时从父会话抄好，空声明不算意见；
  *   - 模型三态：可解析 → 写种子 + `applied.model`；不可解析 → 不写、`modelUnavailable` 回传原值、
  *     其余照常；未声明 → 不去解析。
  *
@@ -31,7 +31,6 @@ const mocks = vi.hoisted(() => ({
   getProfile: vi.fn<(name: string) => unknown>(),
   resolveProfileModelSpec: vi.fn(),
   appendModelChange: vi.fn(),
-  appendActiveToolsChange: vi.fn(),
   broadcastSessionConfigChanged: vi.fn()
 }))
 
@@ -46,13 +45,11 @@ vi.mock('../messageService', () => ({ messageService: {} }))
 vi.mock('../sessionStorage', () => ({
   readSessionRunConfig: vi.fn(),
   addSessionTreePin: vi.fn(),
-  appendModelChange: mocks.appendModelChange,
-  appendActiveToolsChange: mocks.appendActiveToolsChange
+  appendModelChange: mocks.appendModelChange
 }))
 vi.mock('../../i18n', () => ({ t: (key: string) => key }))
 vi.mock('../../utils/paths', () => ({ getTempWorkspace: vi.fn(), getToolResultsBase: vi.fn() }))
 vi.mock('../toolAggregator', () => ({
-  getDefaultEnabledTools: vi.fn(() => []),
   filterAvailableTools: vi.fn((tools: string[]) => tools)
 }))
 vi.mock('../../utils/toolUtils/allowList', () => ({ buildAllowEntry: vi.fn() }))
@@ -116,7 +113,6 @@ function expectNoSideEffects(): void {
   expect(mocks.daoUpdateSettings).not.toHaveBeenCalled()
   expect(invalidateSpy).not.toHaveBeenCalled()
   expect(mocks.appendModelChange).not.toHaveBeenCalled()
-  expect(mocks.appendActiveToolsChange).not.toHaveBeenCalled()
   expect(mocks.broadcastSessionConfigChanged).not.toHaveBeenCalled()
   expect(mocks.resolveProfileModelSpec).not.toHaveBeenCalled()
 }
@@ -178,21 +174,25 @@ describe('成功链', () => {
       applied: { model: undefined, tools: ['skill:x', 'mcp:y'] },
       modelUnavailable: undefined
     })
-    expect(mocks.daoUpdateSettings).toHaveBeenCalledWith(SID, { agentProfile: 'myprof' })
+    // 两次落库：先钉档案；工具种子是扩展能力勾选（settings.enabledTools）的整份替换
+    expect(mocks.daoUpdateSettings.mock.calls).toEqual([
+      [SID, { agentProfile: 'myprof' }],
+      [SID, { enabledTools: ['skill:x', 'mcp:y'] }]
+    ])
     expect(invalidateSpy).toHaveBeenCalledWith(SID)
-    expect(mocks.appendActiveToolsChange).toHaveBeenCalledWith(SID, ['skill:x', 'mcp:y'])
     expect(mocks.broadcastSessionConfigChanged).toHaveBeenCalledWith(SID)
     // 未声明模型：压根不去解析
     expect(mocks.resolveProfileModelSpec).not.toHaveBeenCalled()
 
-    // 顺序：落库在 invalidate 之前（解绑必须发生在关停之后，之后往树上追加种子才不会和
-    // 旧运行时抢叶子），种子在 invalidate 之后，广播殿后
+    // 顺序：钉档案在 invalidate 之前（解绑必须发生在关停之后，之后写种子才不会和旧运行时
+    // 抢着写），种子在 invalidate 之后，广播殿后
+    const [profileWrite, toolsWrite] = mocks.daoUpdateSettings.mock.invocationCallOrder
     const order = [
-      mocks.daoUpdateSettings,
-      invalidateSpy,
-      mocks.appendActiveToolsChange,
-      mocks.broadcastSessionConfigChanged
-    ].map((m) => m.mock.invocationCallOrder[0])
+      profileWrite,
+      invalidateSpy.mock.invocationCallOrder[0],
+      toolsWrite,
+      mocks.broadcastSessionConfigChanged.mock.invocationCallOrder[0]
+    ]
     expect(order).toEqual([...order].sort((a, b) => a - b))
   })
 
@@ -220,29 +220,30 @@ describe('成功链', () => {
     expect(res.applied?.model).toBeUndefined()
     expect(res.modelUnavailable).toBe('openai/nope')
     expect(mocks.appendModelChange).not.toHaveBeenCalled()
-    expect(mocks.appendActiveToolsChange).toHaveBeenCalledWith(SID, ['skill:x'])
+    expect(mocks.daoUpdateSettings).toHaveBeenCalledWith(SID, { enabledTools: ['skill:x'] })
     expect(mocks.broadcastSessionConfigChanged).toHaveBeenCalledWith(SID)
     // 档案本身照常生效（落库 + 失效重建）—— 模型不可用不阻断钉档案
     expect(mocks.daoUpdateSettings).toHaveBeenCalledWith(SID, { agentProfile: 'badmodel' })
     expect(invalidateSpy).toHaveBeenCalledTimes(1)
   })
 
-  it('PIN-7 工具种子是替换不是叠加：没声明 mcp:/skill: 也写一个空数组（清空，不是跳过）', async () => {
-    // 这是 subSessionRunner.seedRunConfig「空工具声明 ⇒ 补回父级那套」的前提：
-    // 跳过的话，子会话树上残留的东西与「档案说了什么」再也对不上
+  it('PIN-7 工具种子：声明了才整份替换勾选；没声明 mcp:/skill: 就不写（空声明不算意见）', async () => {
+    // 内置 coding / explore 之流只列内置工具：按「完整声明」清空的话，每条子会话都会被摘掉
+    // 项目的 MCP 与 skill。勾选已在 create 时从父会话抄好，档案没意见就不该碰它
     mocks.getProfile.mockReturnValue(profile('builtin-only', { tools: ['read', 'bash'] }))
     const res = await pin('builtin-only')
-    expect(mocks.appendActiveToolsChange).toHaveBeenCalledTimes(1)
-    expect(mocks.appendActiveToolsChange).toHaveBeenCalledWith(SID, [])
+    expect(mocks.daoUpdateSettings.mock.calls).toEqual([[SID, { agentProfile: 'builtin-only' }]])
     expect(res.applied?.tools).toEqual([])
 
     // 只留小写 mcp:/skill: 前缀的（归一在解析侧，这里不再归一）
-    mocks.appendActiveToolsChange.mockClear()
+    mocks.daoUpdateSettings.mockClear()
     mocks.getProfile.mockReturnValue(
       profile('mixed', { tools: ['MCP:Ctx7', 'skill:a', 'mcp:b', 'read'] })
     )
     const mixed = await pin('mixed')
-    expect(mocks.appendActiveToolsChange).toHaveBeenCalledWith(SID, ['skill:a', 'mcp:b'])
+    expect(mocks.daoUpdateSettings).toHaveBeenCalledWith(SID, {
+      enabledTools: ['skill:a', 'mcp:b']
+    })
     expect(mixed.applied?.tools).toEqual(['skill:a', 'mcp:b'])
   })
 })

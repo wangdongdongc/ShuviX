@@ -274,6 +274,17 @@ export interface ChatAgentClosingEvent extends ChatEventBase {
   closing: boolean
 }
 
+/**
+ * 会话的 Agent 运行时已创建（懒创建：首次发消息或其它需要运行时的操作时才出生）。
+ *
+ * 与 `agent_closing{closing:false}` 成对，两者之间就是「这条会话有运行时」的区间。
+ * 只在创建那一刻读一次的会话配置 —— 扩展能力勾选（`settings.enabledTools`）—— 在区间内只读，
+ * 前端据此把输入框的工具选择器与会话设置里的扩展能力切成只读。
+ */
+export interface ChatAgentCreatedEvent extends ChatEventBase {
+  type: 'agent_created'
+}
+
 // ─── 错误 ──────────────────────────────────────────────
 
 /** 错误事件 */
@@ -340,6 +351,7 @@ export type ChatEvent =
   | ChatSubSessionEndEvent
   | ChatBgTaskEvent
   | ChatMessagesReloadedEvent
+  | ChatAgentCreatedEvent
   | ChatAgentClosingEvent
   | ChatErrorEvent
   | ChatUserMessageEvent

@@ -309,7 +309,10 @@
     "autoAllow": "Auto-Allow",
     "autoAllowDesc": "Tool calls run without asking you first (use with caution)",
     "allowListTitle": "Allowed paths",
-    "commandGroup": "Ask on Operations"
+    "commandGroup": "Ask on Operations",
+    "extensionsGroup": "Extensions",
+    "extensionsDesc": "Read when the agent is created (on the first message); read-only while it exists",
+    "extensionsLocked": "Read-only: the agent has already been created"
   },
   "projectForm": {
     "createTitle": "New Project",
@@ -338,6 +341,7 @@
     "archiveConfirmDesc": "This project will be moved to Archived Projects and can be restored later.",
     "archiveConfirmAction": "Archive",
     "wizardStepExtensions": "Extensions",
+    "extensionsDesc": "New sessions in this project start with these extensions; existing sessions are unaffected",
     "skillsGroup": "Skills",
     "configTab": "Config",
     "wizardNext": "Next",

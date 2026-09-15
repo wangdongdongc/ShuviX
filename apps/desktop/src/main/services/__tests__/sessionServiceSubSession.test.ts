@@ -37,15 +37,15 @@ vi.mock('../../dao/sessionDao', () => ({
 }))
 vi.mock('../../dao/httpLogDao', () => ({ httpLogDao: { deleteBySessionId: vi.fn() } }))
 vi.mock('../../dao/providerDao', () => ({ providerDao: {} }))
-vi.mock('../../dao/projectDao', () => ({ projectDao: {} }))
+// create 为项目会话读项目的扩展能力（继承进 settings.enabledTools）
+vi.mock('../../dao/projectDao', () => ({ projectDao: { pick: vi.fn() } }))
 // 「默认项目/聊天智能体」设置项已删：create 不再读任何设置（末条用例钉着零调用）
 vi.mock('../../dao/settingsDao', () => ({ settingsDao: { findByKey: mocks.findByKey } }))
 vi.mock('../messageService', () => ({ messageService: { clear: mocks.messageClear } }))
 vi.mock('../sessionStorage', () => ({
   readSessionRunConfig: vi.fn(),
   addSessionTreePin: vi.fn(),
-  appendModelChange: vi.fn(),
-  appendActiveToolsChange: vi.fn()
+  appendModelChange: vi.fn()
 }))
 vi.mock('../../i18n', () => ({ t: (key: string) => key }))
 vi.mock('../../utils/paths', () => ({
@@ -53,7 +53,6 @@ vi.mock('../../utils/paths', () => ({
   getToolResultsBase: vi.fn(() => '/nonexistent/e2e-results')
 }))
 vi.mock('../toolAggregator', () => ({
-  getDefaultEnabledTools: vi.fn(() => []),
   filterAvailableTools: vi.fn((tools: string[]) => tools)
 }))
 vi.mock('../../utils/toolUtils/allowList', () => ({ buildAllowEntry: vi.fn() }))

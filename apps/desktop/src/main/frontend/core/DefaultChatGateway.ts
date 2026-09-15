@@ -7,11 +7,7 @@ import type { AgentSession } from '../../services/agentSession'
 import '../../tools/allTools'
 import { getBuiltinToolEntries } from '../../services/toolRegistry'
 import { messageService } from '../../services/messageService'
-import {
-  appendActiveToolsChange,
-  appendModelChange,
-  appendThinkingLevelChange
-} from '../../services/sessionStorage'
+import { appendModelChange, appendThinkingLevelChange } from '../../services/sessionStorage'
 import { respondToUserInput } from '../../services/userInputBroker'
 import { sshManager } from '../../services/sshManager'
 import { dbManager } from '../../services/dbManager'
@@ -122,7 +118,7 @@ export class DefaultChatGateway implements ChatGateway {
   // ─── 运行时调整 ────────────────────────────────
 
   /**
-   * 以下三个 setter 是运行配置的**唯一写入口**（数据库已无对应列）。
+   * 以下两个 setter 是模型类运行配置的**唯一写入口**（数据库已无对应列）。
    *
    * Agent 已创建 → 交给 harness，它自己往会话树追加 change entry；
    * Agent 未创建（会话是懒创建的，用户可以在没发过消息的会话上先切模型）→
@@ -144,12 +140,6 @@ export class DefaultChatGateway implements ChatGateway {
     const agent = sessionService.getAgentSession(sessionId)
     if (agent) await agent.setThinkingLevel(level)
     else await appendThinkingLevelChange(sessionId, level)
-  }
-
-  async setEnabledTools(sessionId: string, tools: string[]): Promise<void> {
-    const agent = sessionService.getAgentSession(sessionId)
-    if (agent) await agent.setEnabledTools(tools)
-    else await appendActiveToolsChange(sessionId, tools)
   }
 
   /**

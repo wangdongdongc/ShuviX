@@ -20,7 +20,6 @@ const constructed: FakeHarness[] = []
 class FakeHarness {
   deps: Record<string, unknown>
   session: unknown
-  applyTools = vi.fn()
   applyModel = vi.fn()
   requestUserInput = vi.fn().mockResolvedValue({ kind: 'ok' })
   getThinkingLevel = vi.fn().mockReturnValue('high')
@@ -181,7 +180,7 @@ describe('createAgentFactory — root 决策列', () => {
     })
   })
 
-  it('resolveTools 请求:归一名单保序去重、root 身份、requestUserInput 达自身运行时', async () => {
+  it('resolveTools 请求:归一名单保序去重、root overlay 只收 mcp:/skill:、root 身份、requestUserInput 达自身运行时', async () => {
     const b = makeHost()
     await createAgentFactory(b.host).createAgent({
       kind: 'root',
@@ -189,7 +188,8 @@ describe('createAgentFactory — root 决策列', () => {
       profile: PROFILE,
       model: MODEL_CFG,
       cwd: '/w',
-      toolOverlay: ['mcp:ctx', 'read', 'skill:pdf']
+      // bash 不在档案白名单里：勾选里混进的内置名不能借 overlay 越过档案
+      toolOverlay: ['mcp:ctx', 'bash', 'skill:pdf', 'mcp:ctx']
     })
     const req = b.resolveTools.mock.calls[0][0] as ToolResolveRequest
     expect(req.kind).toBe('root')
@@ -427,23 +427,6 @@ describe('CreatedAgent 运行期操作', () => {
     })
   })
 
-  it('applyToolOverlay:按新 overlay 重解析并 applyTools', async () => {
-    const b = makeHost()
-    const created = await createAgentFactory(b.host).createAgent({
-      kind: 'root',
-      sessionId: 's1',
-      profile: PROFILE,
-      model: MODEL_CFG,
-      cwd: '/w',
-      toolOverlay: ['mcp:a']
-    })
-    b.resolveTools.mockResolvedValueOnce([{ name: 't2' }])
-    await created.applyToolOverlay(['mcp:b'])
-    const req = b.resolveTools.mock.calls[1][0] as ToolResolveRequest
-    expect(req.names).toEqual(['read', 'grep', 'agent', 'mcp:b'])
-    expect(constructed[0].applyTools).toHaveBeenCalledWith([{ name: 't2' }])
-  })
-
   it('上下文注入:清单为空/开关关闭 → 不解析、系统提示词纯基座', async () => {
     const b = makeHost()
     const created = await createAgentFactory(b.host).createAgent({
@@ -625,5 +608,62 @@ describe('createAgentFactory —— systemContext（调用方追加的上下文�
     })
     expect(created.systemPrompt).toBe(`BASE PERSONA\n\n${BLOCK_A}`)
     expect(constructed[0].deps.systemPrompt).toBe(`BASE PERSONA\n\n${BLOCK_A}`)
+  })
+})
+
+/**
+ * 扩展能力（mcp:/skill:）的 overlay —— 会话设置里的勾选，**只在创建这一刻读一次**。
+ *
+ * root：档案里声明的 mcp:/skill: 不直接生效（它们是子会话钉档案时的种子，最终以勾选为准），
+ * 勾选里只有 mcp:/skill: 进得来；spawned 没有勾选，档案即全部。产物上不再有换工具的入口 ——
+ * 宿主在运行时存在期间把勾选锁成只读，靠的正是「运行期换不了」这条。
+ */
+describe('createAgentFactory —— 扩展能力 overlay（EXT-U-5）', () => {
+  const EXT_PROFILE: InProcessAgentType = {
+    ...PROFILE,
+    tools: ['read', 'mcp:prof', 'skill:prof', 'agent']
+  }
+  /** 首次 resolveTools 请求里的归一名单 */
+  const namesOf = (b: HostBundle): readonly string[] =>
+    (b.resolveTools.mock.calls[0][0] as ToolResolveRequest).names
+
+  it('EXT-U-5 root 以勾选为准（档案的 mcp:/skill: 让位）、不带勾选只剩内置名；spawned 取档案全量；产物没有 applyToolOverlay', async () => {
+    const withOverlay = makeHost()
+    const created = await createAgentFactory(withOverlay.host).createAgent({
+      kind: 'root',
+      sessionId: 's1',
+      profile: EXT_PROFILE,
+      model: MODEL_CFG,
+      cwd: '/w',
+      toolOverlay: ['skill:sel']
+    })
+    expect(namesOf(withOverlay)).toEqual(['read', 'agent', 'skill:sel'])
+
+    // 没有勾选 = 一个扩展能力都不带：档案里的 mcp:prof / skill:prof 不会借白名单溜回来
+    const bare = makeHost()
+    await createAgentFactory(bare.host).createAgent({
+      kind: 'root',
+      sessionId: 's2',
+      profile: EXT_PROFILE,
+      model: MODEL_CFG,
+      cwd: '/w'
+    })
+    expect(namesOf(bare)).toEqual(['read', 'agent'])
+
+    const spawned = makeHost()
+    await createAgentFactory(spawned.host).createAgent({
+      kind: 'spawned',
+      sessionId: 'sub-1',
+      profile: EXT_PROFILE,
+      model: MODEL_CFG,
+      thinkingLevel: 'off',
+      cwd: '',
+      spawn: SPAWN,
+      spawnHelpers: { requestUserInput: vi.fn() }
+    })
+    expect(namesOf(spawned)).toEqual(['read', 'mcp:prof', 'skill:prof', 'agent'])
+
+    // 运行期换工具的入口已删：谁把它加回来，「运行时存在期间勾选只读」就不再成立
+    expect('applyToolOverlay' in created).toBe(false)
   })
 })

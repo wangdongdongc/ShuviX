@@ -36,14 +36,14 @@ vi.mock('../../dao/sessionDao', () => ({
 }))
 vi.mock('../../dao/httpLogDao', () => ({ httpLogDao: { deleteBySessionId: vi.fn() } }))
 vi.mock('../../dao/providerDao', () => ({ providerDao: {} }))
-vi.mock('../../dao/projectDao', () => ({ projectDao: {} }))
+// create 为项目会话读项目的扩展能力（继承进 settings.enabledTools）
+vi.mock('../../dao/projectDao', () => ({ projectDao: { pick: vi.fn() } }))
 vi.mock('../../dao/settingsDao', () => ({ settingsDao: { findByKey: vi.fn() } }))
 vi.mock('../messageService', () => ({ messageService: { clear: vi.fn() } }))
 vi.mock('../sessionStorage', () => ({
   readSessionRunConfig: vi.fn(),
   addSessionTreePin: vi.fn(),
-  appendModelChange: vi.fn(),
-  appendActiveToolsChange: vi.fn()
+  appendModelChange: vi.fn()
 }))
 vi.mock('../../i18n', () => ({ t: (key: string) => key }))
 vi.mock('../../utils/paths', () => ({
@@ -51,7 +51,6 @@ vi.mock('../../utils/paths', () => ({
   getToolResultsBase: () => '/nonexistent/shuvix-unit/tool-results'
 }))
 vi.mock('../toolAggregator', () => ({
-  getDefaultEnabledTools: vi.fn(() => []),
   filterAvailableTools: vi.fn((tools: string[]) => tools)
 }))
 vi.mock('../../utils/toolUtils/allowList', () => ({ buildAllowEntry: vi.fn() }))
@@ -123,7 +122,7 @@ describe('BSess-1 / 2 / 3 —— create 写了什么', () => {
 
   it('BSess-Sub 子会话不继承 bot —— 干活的那条会话不带人设', () => {
     // 这是「人设影响怎么说话、不影响怎么干活」在创建侧的一半：父会话 settings 里只有
-    // autoAllow 被抄过去。bot 若跟着传，子会话的根 Agent 会按 bot 基座起来，
+    // autoAllow（与扩展能力勾选）被抄过去。bot 若跟着传，子会话的根 Agent 会按 bot 基座起来，
     // 而那条会话恰恰是用来干活的（另一半守卫在 agentSessionBot.test.ts 的 AG-5）
     mocks.daoPick.mockReturnValue({
       projectId: 'p1',

@@ -50,7 +50,7 @@ export interface ToolResolveRequest {
   profile: InProcessAgentType
   /** 组装后的完整系统提示（基座 + sections）——扩展的默认子代理继承它 */
   systemPrompt: string
-  /** 归一后的工具名单：dedupe([...profile.tools, ...overlay])，保序 */
+  /** 归一后的工具名单（保序去重）：root = 档案内置名 + overlay 里的 mcp:/skill:；spawned = 档案全量 */
   names: readonly string[]
   /**
    * 派发工具的模型配置（惰性）：跟随会话当前模型与思考档位 ——
@@ -173,12 +173,19 @@ export interface CreateAgentParams {
   thinkingLevel?: ThinkingLevel
   /** 工作目录（root 必给；spawned 传 '' —— 工具自带执行环境） */
   cwd: string
-  /** 会话级工具 overlay（用户勾选 mcp:/skill:）；spawned 缺省 [] */
+  /**
+   * 会话级工具 overlay（mcp:/skill: 勾选）；spawned 缺省 []。
+   *
+   * root 传的是会话设置里的扩展能力勾选，**只在创建这一刻读一次**：产物上没有换工具的入口，
+   * 想换就等下一个运行时（宿主在运行时存在期间把勾选锁成只读）。运行期热换刻意不做 ——
+   * pi 的 `setTools(tools)` 不带激活名单时沿用旧名单：新加的工具不会被激活，去掉的工具
+   * 直接抛 `Unknown tool(s)`。
+   */
   toolOverlay?: readonly string[]
   /** kind='spawned' 必传 */
   spawn?: SpawnContext
   spawnHelpers?: SubAgentToolHelpers
-  /** 已实例化的附加工具（透传 ToolResolveRequest.extraTools；overlay 重解析时保留） */
+  /** 已实例化的附加工具（透传 ToolResolveRequest.extraTools） */
   extraTools?: readonly AnyAgentTool[]
   /**
    * 调用方追加到系统提示词末尾的上下文块（已围栏的文本，逐块以空行分隔，排在项目注入之后）。
@@ -198,8 +205,6 @@ export interface CreatedAgent {
   readonly profile: InProcessAgentType
   /** 创建时组装的完整系统提示（调试/信息面板用） */
   readonly systemPrompt: string
-  /** 会话勾选变化：档案基座 + 新 overlay 重解析 → applyTools */
-  applyToolOverlay(overlay: readonly string[]): Promise<void>
   /** 统一切模型：host.buildModel → runtime.applyModel（保留当前思考档位），并更新派发用配置 */
   applyModel(
     config: SubAgentModelConfig,
@@ -251,17 +256,24 @@ const isSessionScopedTool = (name: string): boolean =>
  *
  * 档案的 `shuvix-tools` 对内置 / mcp / skill 三类是**一并声明**的，但两类的生效路径不同：
  *  - 内置工具名恒由档案决定（选择器里本就看不到它们）；
- *  - mcp: / skill: 在 **root** 会话是「切档案时写进会话勾选的种子」，最终以勾选为准 ——
- *    否则用户在工具选择器里取消勾选会被档案白名单并集加回来，「可再调整」就是假的。
- *  - spawned 没有选择器也没有会话树，档案即全部（overlay 恒为空）。
+ *  - mcp: / skill: 在 **root** 会话以会话勾选为准（子会话钉档案时，档案声明的那截作为种子
+ *    写进勾选）—— 否则用户取消的勾选会被档案白名单并集加回来，勾选就是假的。
+ *    反过来 root 的 overlay 也**只收** mcp: / skill:：勾选里混进一个内置名（手改的设置、
+ *    被新会话继承的项目配置）不能借 overlay 越过档案 —— bot 基座的窄名单因此是结构保证。
+ *  - spawned 没有选择器也没有会话设置，档案即全部（overlay 恒为空）。
  */
 function normalizeToolNames(
   kind: AgentKind,
   profileTools: readonly string[],
   overlay: readonly string[] | undefined
 ): string[] {
-  const base = kind === 'root' ? profileTools.filter((n) => !isSessionScopedTool(n)) : profileTools
-  return [...new Set([...base, ...(overlay ?? [])])]
+  if (kind !== 'root') return [...new Set([...profileTools, ...(overlay ?? [])])]
+  return [
+    ...new Set([
+      ...profileTools.filter((n) => !isSessionScopedTool(n)),
+      ...(overlay ?? []).filter(isSessionScopedTool)
+    ])
+  ]
 }
 
 export function createAgentFactory(host: AgentHostAdapter): AgentFactory {
@@ -348,20 +360,18 @@ export function createAgentFactory(host: AgentHostAdapter): AgentFactory {
       if (text) systemPrompt += `\n\n${text}`
     }
 
-    const buildResolveRequest = (overlay: readonly string[] | undefined): ToolResolveRequest => ({
+    const tools = await host.resolveTools({
       kind,
       rootSessionId,
       selfSessionId: sessionId,
       profile,
       systemPrompt,
-      names: normalizeToolNames(kind, profile.tools, overlay),
+      names: normalizeToolNames(kind, profile.tools, params.toolOverlay),
       getModelConfig,
       spawn,
       requestUserInput,
       extraTools: params.extraTools
     })
-
-    const tools = await host.resolveTools(buildResolveRequest(params.toolOverlay))
     const model = host.buildModel(initialModel)
     const session =
       kind === 'root'
@@ -434,11 +444,6 @@ export function createAgentFactory(host: AgentHostAdapter): AgentFactory {
       profile,
       systemPrompt,
       dispose: unregister,
-
-      async applyToolOverlay(overlay: readonly string[]): Promise<void> {
-        const next = await host.resolveTools(buildResolveRequest(overlay))
-        await rt.applyTools(next as AgentTool[])
-      },
 
       async applyModel(config, extra): Promise<void> {
         const resolved = host.buildModel(config, extra)

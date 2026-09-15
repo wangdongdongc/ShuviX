@@ -57,6 +57,8 @@ export * from './stores/bgTaskStore'
 
 // ── 对话域 hooks ──
 export { useSessionInit } from './hooks/useSessionInit'
+export { useSessionTools, refreshSessionTools } from './hooks/useSessionTools'
+export type { SessionToolsState } from './hooks/useSessionTools'
 export { useAgentEvents } from './hooks/useAgentEvents'
 export { useAppEvent } from './hooks/useAppEvents'
 export { useModelCatalogSync } from './hooks/useModelCatalog'

@@ -3,19 +3,14 @@ import { join, basename } from 'path'
 import { rmSync, existsSync } from 'fs'
 import { sessionDao } from '../dao/sessionDao'
 import { messageService } from './messageService'
-import {
-  readSessionRunConfig,
-  addSessionTreePin,
-  appendModelChange,
-  appendActiveToolsChange
-} from './sessionStorage'
+import { readSessionRunConfig, addSessionTreePin, appendModelChange } from './sessionStorage'
 import { httpLogDao } from '../dao/httpLogDao'
 import { providerDao } from '../dao/providerDao'
 import { projectDao } from '../dao/projectDao'
 import { settingsDao } from '../dao/settingsDao'
 import { t } from '../i18n'
 import { getTempWorkspace, getToolResultsBase } from '../utils/paths'
-import { getDefaultEnabledTools, filterAvailableTools } from './toolAggregator'
+import { filterAvailableTools } from './toolAggregator'
 import { buildAllowEntry } from '../utils/toolUtils/allowList'
 import type { AllowToolType } from '../utils/toolUtils/allowList'
 import type {
@@ -59,6 +54,16 @@ function broadcastAgentClosing(sessionId: string, closing: boolean): void {
   chatFrontendRegistry.broadcast({ type: 'agent_closing', sessionId, closing })
 }
 
+/** 广播「运行时已创建」——前端据此把扩展能力勾选切成只读（到 agent_closing{false} 为止） */
+function broadcastAgentCreated(sessionId: string): void {
+  chatFrontendRegistry.broadcast({ type: 'agent_created', sessionId })
+}
+
+/** 只留会话级工具名（mcp:/skill:）并去重保序 —— 扩展能力勾选里不该有别的东西 */
+function sessionScopedTools(names: readonly string[]): string[] {
+  return [...new Set(names.filter((n) => n.startsWith('mcp:') || n.startsWith('skill:')))]
+}
+
 /**
  * 会话服务 — 管理会话 CRUD 与 AgentSession 运行时生命周期
  */
@@ -95,7 +100,8 @@ export class SessionService {
       log.info(`移除 AgentSession session=${sessionId} reason=${reason}`)
     },
     // 关停可能很久（工具卡住不返回时会一直等），期间会话呈现「正在停止」并拦住发送
-    onClosingChange: (sessionId, closing) => broadcastAgentClosing(sessionId, closing)
+    onClosingChange: (sessionId, closing) => broadcastAgentClosing(sessionId, closing),
+    onCreated: (sessionId) => broadcastAgentCreated(sessionId)
   })
 
   constructor() {
@@ -124,9 +130,8 @@ export class SessionService {
   /**
    * 获取单个会话（含计算属性 workingDirectory）。
    *
-   * 刻意**不返回 enabledTools** —— 它属于运行配置，事实源在会话树里，读取需要异步 IO，
-   * 而本方法被工具执行链（toolContext / filesWatcher / filePreview）同步调用。
-   * 需要工具集的地方走 `agent.init`（AgentInitResult.enabledTools）。
+   * 扩展能力勾选原样在 `settings.enabledTools` 里；要「创建 Agent 时会用的那份」（滤掉不再
+   * 可用的项、旧会话补上继承值）走 `agent.init`（AgentInitResult.enabledTools）。
    */
   getById(id: string): SessionInfo | undefined {
     const session = sessionDao.findById(id)
@@ -137,28 +142,75 @@ export class SessionService {
     return { ...session, workingDirectory: project?.path || getTempWorkspace(id) }
   }
 
-  /** 会话没有显式工具配置时的默认启用集（项目声明优先，其次全局默认） */
-  private defaultEnabledTools(project: Pick<Project, 'path' | 'settings'> | undefined): string[] {
-    return project?.settings?.enabledTools
-      ? filterAvailableTools(project.settings.enabledTools, project.path)
-      : getDefaultEnabledTools(project?.path)
+  /**
+   * 新会话从项目继承的扩展能力勾选（mcp:/skill:）：
+   *  - 项目在编辑页保存过扩展能力 → 那一份（只做 mcp:/skill: 净化与去重）；
+   *  - 项目从没保存过、不属于任何项目（或项目已删）→ 空。
+   * 没有「默认全开」：不管在不在项目里，没人勾过就一个都不勾，要用什么由用户自己勾。
+   *
+   * **继承时不按「此刻可用」过滤**：MCP 的可用 = 此刻已连接，刚启动还没连上的服务器会被当成
+   * 不存在，而这里的结果要落库 —— 过滤一次就永久丢掉。可用性只在创建 Agent 那一刻过滤
+   * （resolveSessionAgentContext），设置里的原值不动。
+   */
+  private inheritedEnabledTools(projectId: string | null): string[] {
+    const saved = projectId
+      ? projectDao.pick(projectId, ['settings'])?.settings?.enabledTools
+      : undefined
+    return Array.isArray(saved) ? sessionScopedTools(saved) : []
+  }
+
+  /**
+   * 一条会话「照规矩」该有的勾选：子会话抄父会话（父会话也是没有这个键的旧会话时，按父会话
+   * 自己的项目算 —— 与父会话下次解析出来的是同一份，且不替父会话落库）；其余按项目继承。
+   * 新建会话（create）与旧会话补键（sessionEnabledTools）共用这一条。
+   */
+  private inheritedSelection(parentId: string | null, projectId: string | null): string[] {
+    const parent = parentId ? sessionDao.pick(parentId, ['projectId', 'settings']) : undefined
+    if (!parent) return this.inheritedEnabledTools(projectId)
+    const parentTools = parent.settings?.enabledTools
+    return Array.isArray(parentTools)
+      ? sessionScopedTools(parentTools)
+      : this.inheritedEnabledTools(parent.projectId)
+  }
+
+  /**
+   * 会话的扩展能力勾选（`settings.enabledTools`）原值。
+   *
+   * 缺这个键的只有改制前建的旧会话：按新建会话同一条规则（inheritedSelection —— 子会话抄父会话，
+   * 其余按项目继承）算一次**并落库** —— 之后它和新会话一样是一份快照，不跟着项目配置的后续修改
+   * 漂移。会话不存在返回 []。
+   */
+  private sessionEnabledTools(sessionId: string): string[] {
+    const row = sessionDao.pick(sessionId, ['projectId', 'parentId', 'settings'])
+    if (!row) return []
+    const stored = row.settings?.enabledTools
+    if (Array.isArray(stored)) return stored
+    const inherited = this.inheritedSelection(row.parentId, row.projectId)
+    sessionDao.updateSettings(sessionId, { enabledTools: inherited })
+    log.info(`补齐旧会话的扩展能力勾选 session=${sessionId} tools=[${inherited.join(',')}]`)
+    return inherited
   }
 
   /**
    * 创建新会话。
    *
-   * **不预写任何运行配置** —— provider / model / thinkingLevel / enabledTools 的唯一事实源是
-   * 会话树，而新会话还没有树。首次 resolveSessionAgentContext 时按「树上没有 → 回落默认」
+   * **不预写模型类运行配置** —— provider / model / thinkingLevel 的唯一事实源是会话树，
+   * 而新会话还没有树。首次 resolveSessionAgentContext 时按「树上没有 → 回落默认」
    * 解析；用户第一次显式切换才在树上留下 change entry。
+   *
+   * 扩展能力勾选（`settings.enabledTools`）则在这里定下来，**恒写键**（空数组也写 —— 缺键
+   * 专指改制前的旧会话）：项目会话继承项目保存过的扩展能力（项目没保存过就是空，见
+   * inheritedEnabledTools），无项目的会话为空，子会话抄父会话的勾选。之后只在 Agent 还没
+   * 创建时可改（updateEnabledTools）。
    *
    * params.notebookPath 非空时创建「笔记本会话」：绑定项目内的一个 md 文件、标题默认取 basename
    * （去后缀的标题由共享的 useCreateNotebook 显式传入 params.title）。
    *
    * params.parentId 非空时创建**子会话**：形态仍是普通会话，只是多一个父指针。
    * projectId 恒随父会话（工作目录是会话的地基，跨项目的子会话没有可用语义）——
-   * 调用方传的 projectId 在这种情况下被忽略；免询问开关（autoAllow）同样跟着抄一份，
-   * 它是 settings 一列所以在这里，而模型 / 思考档位 / 工具勾选那三项是会话树上的
-   * change entry，由 `subSessionRunner.seedRunConfig` 在建完之后种（见那里的说明）。
+   * 调用方传的 projectId 在这种情况下被忽略；免询问开关（autoAllow）与扩展能力勾选同样跟着
+   * 抄一份，它们是 settings 的键所以在这里，而模型 / 思考档位是会话树上的 change entry，
+   * 由 `subSessionRunner.seedRunConfig` 在建完之后种（见那里的说明）。
    */
   create(params?: SessionCreateParams): Session {
     const id = uuidv7()
@@ -167,6 +219,8 @@ export class SessionService {
     const parentId = params?.parentId ?? null
     const parent = parentId ? sessionDao.pick(parentId, ['projectId', 'settings']) : undefined
     const pid = parent ? parent.projectId : (params?.projectId ?? null)
+    // 子会话抄父会话的勾选，其余按项目继承（与旧会话补键同一条规则，见 inheritedSelection）
+    const enabledTools = this.inheritedSelection(parentId, pid)
 
     // bot 会话：绑定一个 bot，**有根**（根档案 bot，形态推导见 resolveAgentProfileName）。空串 / 空白视同没给
     const bot = params?.bot?.trim() || undefined
@@ -181,12 +235,14 @@ export class SessionService {
         ...(params?.memorySlug ? { memorySlug: params.memorySlug } : {}),
         // 只在有值时写键：缺省即无键
         ...(bot ? { bot } : {}),
-        // 子会话继承父会话的免询问开关（其余运行配置的种子在 subSessionRunner.create）。
+        // 子会话继承父会话的免询问开关（模型 / 思考档位的种子在 subSessionRunner.create）。
         // 与「按会话存的授权不可继承」那条原始设计相反，是一次显式裁决：子会话是父级
         // 派活的地方、同一个工作目录、开它本身还要过一次 ask-on-sub-session ——
         // 用户为这条对话关掉的询问，不该在它每开一条子会话时原样回来。
         // 路径授权（allowList）刻意**不**继承：那是一条会长大的记账，快照过去只会漂移。
-        ...(parent?.settings?.autoAllow ? { autoAllow: true } : {})
+        ...(parent?.settings?.autoAllow ? { autoAllow: true } : {}),
+        // 扩展能力勾选恒写键（见方法注释）
+        enabledTools
         // 档案**不在这里写**：根 Agent 的档案由会话形态推导（项目会话 work / 无项目 chat /
         // 笔记本 notebook / bot 会话 bot，见 resolveAgentProfileName），没有可选的东西。只有子会话在父级
         // 点名档案时由 subSessionRunner 经 pinAgentProfile 钉一个显式值。
@@ -247,15 +303,16 @@ export class SessionService {
    * 不接受 —— 子会话不点名就自然落到自己形态的基座上，点名一个基座只会得到说不清的组合
    * （无项目的父级开一条 `work` 子会话？）；其余任何档案都可以。
    *
-   * 钉下的同时把档案声明的运行配置作为**种子**写进会话树（与用户手动改模型/工具同一条
-   * 路径）：会话的事实源始终是会话树，档案只在这一刻参与一次，之后用户改什么就是什么
-   * —— 若让 createAgent 每次重建都按档案覆盖，用户手选的会被默默还原。
-   *  - 模型（`shuvix-model`）：解析成功才写；不可用则保持当前模型，把原始值经
+   * 钉下的同时把档案声明的运行配置作为**种子**写进会话（与用户手动改模型 / 勾选同一个落点）：
+   * 档案只在这一刻参与一次，之后用户改什么就是什么 —— 若让 createAgent 每次重建都按档案
+   * 覆盖，用户手选的会被默默还原。
+   *  - 模型（`shuvix-model`）：解析成功才往会话树写；不可用则保持当前模型，把原始值经
    *    `modelUnavailable` 回传（后端日志之外调用方也该看得见）。
-   *  - 工具（`shuvix-tools` 里的 mcp:/skill:）：**替换**会话勾选，没声明就是清空 ——
-   *    档案对三类工具是完整声明；内置工具不进勾选（它们恒由档案白名单决定）。紧接着的
-   *    subSessionRunner.seedRunConfig 会在档案没声明时把父会话那套补回去。
-   * 种子结果随 `applied` 回传。
+   *  - 工具（`shuvix-tools` 里的 mcp:/skill:）：声明了就**替换**扩展能力勾选
+   *    （`settings.enabledTools`）；**没声明不算意见**，保留 create 时从父会话抄来的那份 ——
+   *    内置 coding / explore 之流只列内置工具，按「完整声明」读就会把项目的 MCP 与 skill 从每条
+   *    子会话上摘掉。内置工具不进勾选（它们恒由档案白名单决定）。
+   * 种子结果随 `applied` 回传（`tools` 是档案声明的那截，可能为空）。
    */
   async pinAgentProfile(
     sessionId: string,
@@ -286,7 +343,7 @@ export class SessionService {
     // 一个还在写树的旧运行时（await：解绑必须发生在关停之后，之后往树上追加种子才不会和它抢叶子）
     await this.invalidateAgent(sessionId)
 
-    // 种子：运行时已在上一行失效，故直接往树上追加（没有活跃 Agent 需要同步）
+    // 种子：运行时已在上一行失效，故直接写（没有活跃 Agent 需要同步）
     let model: SubAgentModelConfig | undefined
     let modelUnavailable: string | undefined
     if (profile.model) {
@@ -301,9 +358,9 @@ export class SessionService {
       }
     }
 
-    // 工具种子：档案声明的 mcp:/skill: 替换会话勾选（未声明 = 清空）
-    const tools = profile.tools.filter((n) => n.startsWith('mcp:') || n.startsWith('skill:'))
-    await appendActiveToolsChange(sessionId, tools)
+    // 工具种子：档案声明的 mcp:/skill: 替换扩展能力勾选；没声明就留着继承来的那份
+    const tools = sessionScopedTools(profile.tools)
+    if (tools.length) sessionDao.updateSettings(sessionId, { enabledTools: tools })
 
     broadcastSessionConfigChanged(sessionId)
     return { success: true, applied: { model, tools }, modelUnavailable }
@@ -330,6 +387,26 @@ export class SessionService {
   /** 更新命令免询问（bash + ssh 统一开关） */
   updateAutoAllow(id: string, autoAllow: boolean): void {
     sessionDao.updateSettings(id, { autoAllow })
+  }
+
+  /**
+   * 改扩展能力勾选（`settings.enabledTools`，整份替换）—— 输入框的工具选择器与会话设置里的
+   * 扩展能力共用的唯一写入口。
+   *
+   * **只在这条会话没有运行时的时候接受**：勾选只在创建 Agent 那一刻读一次，运行时已存在、
+   * 正在创建或正在关停时改了都不会作用到那个运行时，所以一律拒绝、什么也不写，让前端回拉
+   * 真实状态。判据用 `tracked` 而不是 `has`：`ensure` 同步登记创建在途，之后到来的写入都落在
+   * 这个窗口里被拒 —— 不会出现「勾选落库了、运行时却是按旧勾选建的」。
+   */
+  updateEnabledTools(id: string, enabledTools: readonly string[]): boolean {
+    if (!sessionDao.pick(id, ['id'])) return false
+    if (this.agents.tracked(id)) {
+      log.info(`拒绝修改扩展能力：会话已有运行时 session=${id}`)
+      return false
+    }
+    sessionDao.updateSettings(id, { enabledTools: sessionScopedTools(enabledTools) })
+    broadcastSessionConfigChanged(id)
+    return true
   }
 
   /** 批量添加路径到统一允许列表（按 toolType 自动加 `Read(...)`/`Write(...)` 前缀）
@@ -409,14 +486,19 @@ export class SessionService {
     model: string
     capabilities: ModelCapabilities
     workingDirectory: string
+    /** 会话设置里的扩展能力勾选原值（旧会话在这里补键）—— 前端展示与整份替换写入的基准 */
+    selectedTools: string[]
+    /** 创建 Agent 用的勾选：原值滤掉此刻不可用的 MCP / skill */
     enabledTools: string[]
     project: Pick<Project, 'path' | 'settings'> | undefined
     modelMetadata: SessionModelMetadata
   } | null> {
     const session = sessionDao.pick(sessionId, ['projectId'])
     if (!session) return null
+    // 扩展能力勾选在会话设置里（创建会话时定下，创建 Agent 时读这一次）
+    const selectedTools = this.sessionEnabledTools(sessionId)
 
-    // 运行配置的唯一事实源是会话树：model_change / thinking_level_change / active_tools_change entry
+    // 模型类运行配置的唯一事实源是会话树：model_change / thinking_level_change entry
     const tree = await readSessionRunConfig(sessionId)
     const provider = tree.provider ?? this.getDefaultProvider()
     const model = tree.model ?? this.getDefaultModel()
@@ -430,18 +512,18 @@ export class SessionService {
       ? projectDao.pick(session.projectId, ['path', 'settings'])
       : undefined
     const workingDirectory = project?.path || getTempWorkspace(sessionId)
-    const enabledTools = filterAvailableTools(
-      tree.enabledTools ?? this.defaultEnabledTools(project),
-      project?.path
-    )
+    // 滤掉此刻不可用的 MCP（未连接）与 skill（已删 / 已停用）；设置里的原值不动 ——
+    // 离线的服务器下次连上、重建运行时就又回来了
+    const enabledTools = filterAvailableTools(selectedTools, project?.path)
     return {
       provider,
       model,
       capabilities,
       workingDirectory,
+      selectedTools,
       enabledTools,
       project,
-      modelMetadata: { thinkingLevel, enabledTools }
+      modelMetadata: { thinkingLevel }
     }
   }
 
@@ -467,14 +549,18 @@ export class SessionService {
     }
     return {
       success: true,
-      // created 现仅表示「Agent 此刻是否已存在」（已不在 init 时创建）
-      created: this.agents.has(sessionId),
+      // created = 此刻有运行时（含正在创建 / 正在关停；init 本身不创建）—— 与扩展能力写入口
+      // updateEnabledTools 的拒绝条件（tracked）同一口径，前端的只读态据此打底：窗口刷新时
+      // 一个卡在关停里的运行时，相关事件早已错过，只能靠这一位
+      created: this.agents.tracked(sessionId),
       provider: ctx.provider,
       model: ctx.model,
       capabilities: ctx.capabilities,
       modelMetadata: ctx.modelMetadata,
       workingDirectory: ctx.workingDirectory,
-      enabledTools: ctx.enabledTools
+      // 前端要的是勾选原值（离线的 MCP 也显示为已勾，整份替换写入时不会被抹掉）；
+      // 过滤后的那份只给创建 Agent 用
+      enabledTools: ctx.selectedTools
     }
   }
 
@@ -495,17 +581,17 @@ export class SessionService {
   }
 
   /**
-   * 会话**此刻实际在用**的整套运行配置 —— 与运行时创建同一口径
+   * 会话**此刻实际在用**的模型类运行配置 —— 与运行时创建同一口径
    * （resolveSessionAgentContext：树上没有 → 回落默认），会话不存在返回 null。
    *
    * 给的是**解析后**的值而不是「树上显式写过的那些」：子会话种子（subSessionRunner.create）
    * 要复制的是父会话跑起来是什么样，而父会话大多数键根本没显式改过 —— 只抄显式值，
-   * 一条从没动过工具勾选的父会话就会把「继承」变成「什么也没继承」。
+   * 一条从没切过模型的父会话就会把「继承」变成「什么也没继承」。
+   * 扩展能力勾选不在这里：它是 settings 的键，子会话在 create 里直接抄父会话的。
    */
   async resolveRunConfig(sessionId: string): Promise<{
     model: SubAgentModelConfig | null
     thinkingLevel: string
-    enabledTools: string[]
   } | null> {
     const ctx = await this.resolveSessionAgentContext(sessionId)
     if (!ctx) return null
@@ -514,8 +600,7 @@ export class SessionService {
         ctx.provider && ctx.model
           ? { provider: ctx.provider, model: ctx.model, capabilities: ctx.capabilities }
           : null,
-      thinkingLevel: ctx.modelMetadata.thinkingLevel ?? DEFAULT_THINKING_LEVEL,
-      enabledTools: ctx.enabledTools
+      thinkingLevel: ctx.modelMetadata.thinkingLevel ?? DEFAULT_THINKING_LEVEL
     }
   }
 

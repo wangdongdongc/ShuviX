@@ -197,10 +197,6 @@ const api = {
       response: import('@shuvix/chat-protocol/types/inputRequest').InputResponse
     }) => ipcRenderer.invoke('agent:respondToInput', params),
 
-    /** 动态更新启用工具集 */
-    setEnabledTools: (params: { sessionId: string; tools: string[] }) =>
-      ipcRenderer.invoke('agent:setEnabledTools', params),
-
     /** 监听 Agent 事件流 */
     onEvent: (callback: (event: ChatEvent) => void) => {
       const handler = (_: Electron.IpcRendererEvent, event: ChatEvent): void => callback(event)
@@ -271,6 +267,7 @@ const api = {
       ipcRenderer.invoke('session:updateProject', params),
     updateThinkingLevel: (params: SessionUpdateThinkingLevelParams) =>
       ipcRenderer.invoke('session:updateThinkingLevel', params),
+    /** 改扩展能力勾选；会话已有 Agent 运行时则拒绝（success: false） */
     updateEnabledTools: (params: SessionUpdateEnabledToolsParams) =>
       ipcRenderer.invoke('session:updateEnabledTools', params),
     updateAutoAllow: (params: SessionUpdateAutoAllowParams) =>

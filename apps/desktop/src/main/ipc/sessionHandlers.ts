@@ -6,6 +6,7 @@ import { isPinned, unpin as unpinPinnedChat } from '../services/pinnedChatServic
 import type {
   SessionUpdateProjectParams,
   SessionUpdateAutoAllowParams,
+  SessionUpdateEnabledToolsParams,
   SessionAllowListRemoveParams,
   SessionUpdateTitleParams,
   SessionCreateParams
@@ -39,8 +40,17 @@ export function registerSessionHandlers(): void {
     return { success: true }
   })
 
-  /** 更新思考深度 */
-  /** 更新会话启用工具列表 */
+  /**
+   * 改扩展能力勾选（mcp:/skill:）。会话已有 Agent 运行时（含创建中 / 关停中）时拒绝、
+   * 什么也不写 —— 勾选只在创建 Agent 那一刻读一次。
+   */
+  ipcMain.handle(
+    'session:updateEnabledTools',
+    (_event, params: SessionUpdateEnabledToolsParams) => ({
+      success: sessionService.updateEnabledTools(params.id, params.enabledTools)
+    })
+  )
+
   /** 更新命令免询问（统一开关） */
   ipcMain.handle('session:updateAutoAllow', (_event, params: SessionUpdateAutoAllowParams) => {
     sessionService.updateAutoAllow(params.id, params.autoAllow)

@@ -32,7 +32,6 @@ const mocks = vi.hoisted(() => ({
   gatewayPrompt: vi.fn(),
   appendModelChange: vi.fn(),
   appendThinkingLevelChange: vi.fn(),
-  appendActiveToolsChange: vi.fn(),
   findLastBySession: vi.fn(),
   warn: vi.fn()
 }))
@@ -58,8 +57,7 @@ vi.mock('../../services/messageService', () => ({
 }))
 vi.mock('../../services/sessionStorage', () => ({
   appendModelChange: mocks.appendModelChange,
-  appendThinkingLevelChange: mocks.appendThinkingLevelChange,
-  appendActiveToolsChange: mocks.appendActiveToolsChange
+  appendThinkingLevelChange: mocks.appendThinkingLevelChange
 }))
 vi.mock('../../logger', () => ({
   createLogger: () => ({ info: vi.fn(), warn: mocks.warn, error: vi.fn(), debug: vi.fn() })
@@ -102,11 +100,7 @@ function defaultWorld(): void {
   // 发送成功 = 落定为 {}；带 error 才是「没发出去」
   mocks.gatewayPrompt.mockResolvedValue({})
   mocks.findLastBySession.mockResolvedValue(undefined)
-  mocks.resolveRunConfig.mockResolvedValue({
-    model: null,
-    thinkingLevel: 'medium',
-    enabledTools: []
-  })
+  mocks.resolveRunConfig.mockResolvedValue({ model: null, thinkingLevel: 'medium' })
   // 点名的档案缺省钉得上（普通具名档案，没声明模型也没声明 mcp:/skill:）
   mocks.pinAgentProfile.mockResolvedValue({ success: true, applied: { tools: [] } })
   mocks.create.mockReturnValue({ id: CHILD, title: 'Child' })
@@ -206,31 +200,29 @@ describe('create —— 继承与上限', () => {
   it('模型种子取父会话当前模型 —— 不种就会回落全局默认（用 opus 干活、子会话掉默认）', async () => {
     mocks.resolveRunConfig.mockResolvedValue({
       model: { provider: 'p', model: 'opus', capabilities: {} },
-      thinkingLevel: 'medium',
-      enabledTools: []
+      thinkingLevel: 'medium'
     })
     await runner.create(PARENT, {})
     expect(mocks.appendModelChange).toHaveBeenCalledWith(CHILD, 'p', 'opus')
   })
 
-  /** 父会话此刻的整套运行配置（模型 / 思考档位 / 一个 skill 勾选）—— 种子的来源 */
+  /** 父会话此刻的模型类运行配置（模型 / 思考档位）—— 种子的来源 */
   const parentConfig = (): void => {
     mocks.resolveRunConfig.mockResolvedValue({
       model: { provider: 'p', model: 'opus', capabilities: {} },
-      thinkingLevel: 'medium',
-      enabledTools: ['skill:p']
+      thinkingLevel: 'medium'
     })
   }
 
-  it('SR-1 不点名 ⇒ 零档案动作：pinAgentProfile 不被调用，父级的模型 / 思考档位 / 工具照常种', async () => {
+  it('SR-1 不点名 ⇒ 零档案动作：pinAgentProfile 不被调用，父级的模型 / 思考档位照常种', async () => {
     // 不点名就什么也不写：projectId 恒随父，父子推导出同一个基座。曾经这里会「读子会话的戳
-    // 与父会话档案比对、不同就切一次」—— 那条路已经不存在，回来就是回归
+    // 与父会话档案比对、不同就切一次」—— 那条路已经不存在，回来就是回归。
+    // 扩展能力勾选不归 runner 种：它是 settings 的键，sessionService.create 已从父会话抄过去
     parentConfig()
     await runner.create(PARENT, {})
     expect(mocks.pinAgentProfile).not.toHaveBeenCalled()
     expect(mocks.appendModelChange).toHaveBeenCalledWith(CHILD, 'p', 'opus')
     expect(mocks.appendThinkingLevelChange).toHaveBeenCalledWith(CHILD, 'medium')
-    expect(mocks.appendActiveToolsChange).toHaveBeenCalledWith(CHILD, ['skill:p'])
   })
 
   it('SR-2 点名即钉且 trim：恰一次，顺序在 create 之后、resolveRunConfig 之前', async () => {
@@ -245,7 +237,7 @@ describe('create —— 继承与上限', () => {
     expect(order).toEqual([...order].sort((a, b) => a - b))
   })
 
-  it('SR-3 档案声明压过继承：声明了模型与 skill ⇒ 不再种父级的模型与工具，思考档位仍随父', async () => {
+  it('SR-3 档案声明压过继承：声明了模型 ⇒ 不再种父级的模型，思考档位仍随父', async () => {
     parentConfig()
     mocks.pinAgentProfile.mockResolvedValue({
       success: true,
@@ -253,23 +245,19 @@ describe('create —— 继承与上限', () => {
     })
     await runner.create(PARENT, { agentProfile: 'declared-prof' })
     expect(mocks.appendModelChange).not.toHaveBeenCalled()
-    expect(mocks.appendActiveToolsChange).not.toHaveBeenCalled()
     // 思考档位没有档案声明这一路，恒随父会话
     expect(mocks.appendThinkingLevelChange).toHaveBeenCalledWith(CHILD, 'medium')
   })
 
-  it('SR-4 空的工具声明不算意见：档案没列 mcp:/skill: ⇒ 把父级那套补回去', async () => {
-    // 内置 coding / explore 之流的 shuvix-tools 只列内置工具；pin 那一步按「完整声明」把勾选
-    // 清成 []，这里必须把父级的 MCP / skill 铺回来 —— 否则每条子会话都被摘掉项目的工作环境
+  it('SR-4 档案没声明模型 ⇒ 模型与思考档位随父（工具的「空声明不算意见」归 pinAgentProfile，见 PIN-7）', async () => {
     parentConfig()
     mocks.pinAgentProfile.mockResolvedValue({ success: true, applied: { tools: [] } })
     await runner.create(PARENT, { agentProfile: 'coding' })
-    expect(mocks.appendActiveToolsChange).toHaveBeenCalledWith(CHILD, ['skill:p'])
-    // 没声明模型 ⇒ 模型同样随父
     expect(mocks.appendModelChange).toHaveBeenCalledWith(CHILD, 'p', 'opus')
+    expect(mocks.appendThinkingLevelChange).toHaveBeenCalledWith(CHILD, 'medium')
   })
 
-  it('SR-5 被拒不失败：会话已建好且可用（落在自己形态的基座上），照常返回 id，模型与工具按父级种，并留一行 warn', async () => {
+  it('SR-5 被拒不失败：会话已建好且可用（落在自己形态的基座上），照常返回 id，模型按父级种，并留一行 warn', async () => {
     parentConfig()
     mocks.pinAgentProfile.mockResolvedValue({
       success: false,
@@ -280,7 +268,6 @@ describe('create —— 继承与上限', () => {
     expect(res).toEqual({ id: CHILD, title: 'Child' })
     // 拒绝 = 档案没有意见：继承照旧
     expect(mocks.appendModelChange).toHaveBeenCalledWith(CHILD, 'p', 'opus')
-    expect(mocks.appendActiveToolsChange).toHaveBeenCalledWith(CHILD, ['skill:p'])
     // 日志是「点名没生效」唯一可查的线索：带上点的名字与拒绝理由
     const warned = mocks.warn.mock.calls.map((c) => String(c[0]))
     expect(warned.some((m) => m.includes('work') && m.includes('base profile'))).toBe(true)

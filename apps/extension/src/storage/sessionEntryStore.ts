@@ -73,7 +73,6 @@ export interface SessionRunConfig {
   provider: string | null
   model: string | null
   thinkingLevel: string | null
-  enabledTools: string[] | null
 }
 
 /**
@@ -84,8 +83,7 @@ export async function readSessionRunConfig(sessionId: string): Promise<SessionRu
   const config: SessionRunConfig = {
     provider: null,
     model: null,
-    thinkingLevel: null,
-    enabledTools: null
+    thinkingLevel: null
   }
   const session = await getSessionTree(sessionId)
   if (!session) return config
@@ -95,8 +93,6 @@ export async function readSessionRunConfig(sessionId: string): Promise<SessionRu
       config.model = entry.modelId
     } else if (entry.type === 'thinking_level_change') {
       config.thinkingLevel = entry.thinkingLevel
-    } else if (entry.type === 'active_tools_change') {
-      config.enabledTools = entry.activeToolNames
     }
   }
   return config
@@ -117,12 +113,4 @@ export async function appendThinkingLevelChange(
   thinkingLevel: string
 ): Promise<void> {
   await (await ensureSessionTree(sessionId)).appendThinkingLevelChange(thinkingLevel)
-}
-
-/** 往会话树追加一条 active_tools_change */
-export async function appendActiveToolsChange(
-  sessionId: string,
-  activeToolNames: string[]
-): Promise<void> {
-  await (await ensureSessionTree(sessionId)).appendActiveToolsChange(activeToolNames)
 }

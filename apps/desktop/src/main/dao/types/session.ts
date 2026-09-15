@@ -2,14 +2,11 @@
  * 模型相关元数据。
  *
  * 已不再落库（v15 删掉了 sessions.modelMetadata）——唯一事实源是会话树上的
- * thinking_level_change / active_tools_change entry。这个类型保留是因为它仍是
- * `agent.init` 返回给前端的形状。
+ * thinking_level_change entry。这个类型保留是因为它仍是 `agent.init` 返回给前端的形状。
  */
 export interface SessionModelMetadata {
   /** 思考深度 */
   thinkingLevel?: string
-  /** 会话级启用的工具列表 */
-  enabledTools?: string[]
 }
 
 /** 会话级配置（DB 中以 JSON 字符串存储，DAO 层负责序列化/反序列化） */
@@ -18,6 +15,15 @@ export interface SessionSettings {
   autoAllow?: boolean
   /** 路径允许列表，格式 Read(path) / Write(path)（历史 Bash/SSH 条目不再识别，等同失效） */
   allowList?: string[]
+  /**
+   * 扩展能力勾选（`mcp:<server>` / `skill:<name>`，只收这两类）。
+   *
+   * 创建会话时定下（sessionService.create：项目会话继承项目保存过的勾选 —— 项目没保存过、
+   * 或不属于任何项目都为空；子会话抄父会话），
+   * **只在创建 Agent 那一刻读一次**；运行时存在期间只读（写入口 updateEnabledTools 拒绝）。
+   * 缺这个键的是改制前的旧会话，首次解析时按同一条继承规则补上并落库。
+   */
+  enabledTools?: string[]
   /**
    * 这条会话绑定的 bot（`~/.shuvix/bots/<name>.md`）。有值即为 bot 会话 —— 一条**普通有根会话**：
    * 根 Agent 的档案是基座 `bot`，那份 md 的正文（人设与记忆）经 systemContext 追加到它的系统提示词

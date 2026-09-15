@@ -1,8 +1,13 @@
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { type ToolItem } from '../common/ToolSelectList'
-import { ProjectConfigDialog, ProjectInfoForm, type ProjectConfigTab } from '@shuvix/app-shell'
-import { ProjectExtensionsSection, ProjectEnvVarsSection, type EnvVar } from './ProjectFormSections'
+import {
+  ExtensionsSection,
+  ProjectConfigDialog,
+  ProjectInfoForm,
+  type ProjectConfigTab
+} from '@shuvix/app-shell'
+import { ProjectEnvVarsSection, type EnvVar } from './ProjectFormSections'
 
 interface ProjectEditDialogProps {
   projectId: string
@@ -37,28 +42,16 @@ export function ProjectEditDialog({
     Promise.all([window.api.project.getById(projectId), window.api.tools.list()]).then(
       ([project, tools]) => {
         setAllTools(tools)
-        const defaultExtensions = (): string[] => {
-          const connectedMcp = tools
-            .filter((t) => t.group?.startsWith('mcp:') && t.serverStatus === 'connected')
-            .map((t) => t.name)
-          const enabledSkills = tools.filter((t) => t.group === SKILLS_GROUP).map((t) => t.name)
-          return [...new Set([...connectedMcp, ...enabledSkills])]
-        }
         if (project) {
           setName(project.name)
           setPath(project.path)
           setSystemPrompt(project.systemPrompt ?? '')
           const settings = project.settings || {}
-          if (Array.isArray(settings.enabledTools)) {
-            setEnabledTools(settings.enabledTools)
-          } else {
-            setEnabledTools(defaultExtensions())
-          }
+          // 没保存过扩展能力 = 一个都不勾：新会话照此继承，与无项目的聊天会话一致
+          setEnabledTools(Array.isArray(settings.enabledTools) ? settings.enabledTools : [])
           if (Array.isArray(settings.tool?.envVars)) {
             setEnvVars(settings.tool.envVars)
           }
-        } else {
-          setEnabledTools(defaultExtensions())
         }
         setLoading(false)
       }
@@ -126,7 +119,9 @@ export function ProjectEditDialog({
           systemPrompt={systemPrompt}
           onSystemPromptChange={setSystemPrompt}
         >
-          <ProjectExtensionsSection
+          <ExtensionsSection
+            title={t('projectForm.wizardStepExtensions')}
+            footer={t('projectForm.extensionsDesc')}
             mcpTools={mcpTools}
             skillTools={skillTools}
             enabledTools={enabledTools}

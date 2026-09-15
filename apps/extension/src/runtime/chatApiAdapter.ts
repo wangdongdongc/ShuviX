@@ -71,7 +71,8 @@ export const chatApiAdapter: ChatApi = {
         modelMetadata,
         // 工作目录名(=项目根句柄名)，供 chatStore.projectPath / Files 面板新鲜度校验。无项目则空串。
         workingDirectory: await workingDirNameForSession(sessionId),
-        enabledTools: ['ask']
+        // 扩展没有会话级扩展能力勾选（工具集固定：ask + 已连接 MCP 工具）
+        enabledTools: []
       }
     },
     prompt: async ({ sessionId, text, images, inlineTokens }) => {
@@ -153,7 +154,6 @@ export const chatApiAdapter: ChatApi = {
       getRuntimeSession(sessionId)?.runtime.respondToInput(requestId, response)
       return ok
     },
-    setEnabledTools: async () => ok, // 扩展工具集固定（ask + 已连接 MCP 工具）
     onEvent: (callback) => eventBus.subscribe(callback)
   },
 
@@ -249,8 +249,10 @@ export const chatApiAdapter: ChatApi = {
       return ok
     },
     updateProject: async () => ok,
-    // 注：updateModelConfig / updateThinkingLevel / updateEnabledTools 已移除 ——
-    // 运行配置只写会话树，入口是 agent.setModel / setThinkingLevel / setEnabledTools。
+    // 注：updateModelConfig / updateThinkingLevel 已移除 —— 这两项运行配置只写会话树，
+    // 入口是 agent.setModel / setThinkingLevel。
+    // 扩展没有会话级扩展能力勾选（工具集固定：ask + 已连接 MCP 工具），改勾选一律不生效
+    updateEnabledTools: async () => ({ success: false }),
     // autoAllow 仅落库（browser 询问门控已移除，扩展端暂无运行时消费者）
     updateAutoAllow: async ({ id, autoAllow }) => {
       await sessionStore.updateSettings(id, { autoAllow })

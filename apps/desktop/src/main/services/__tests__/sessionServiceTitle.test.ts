@@ -28,13 +28,11 @@ vi.mock('../messageService', () => ({ messageService: {} }))
 vi.mock('../sessionStorage', () => ({
   readSessionRunConfig: vi.fn(),
   addSessionTreePin: vi.fn(),
-  appendModelChange: vi.fn(),
-  appendActiveToolsChange: vi.fn()
+  appendModelChange: vi.fn()
 }))
 vi.mock('../../i18n', () => ({ t: (key: string) => key }))
 vi.mock('../../utils/paths', () => ({ getTempWorkspace: vi.fn(), getToolResultsBase: vi.fn() }))
 vi.mock('../toolAggregator', () => ({
-  getDefaultEnabledTools: vi.fn(() => []),
   filterAvailableTools: vi.fn((tools: string[]) => tools)
 }))
 vi.mock('../../utils/toolUtils/allowList', () => ({ buildAllowEntry: vi.fn() }))
