@@ -1,7 +1,7 @@
 /**
  * CdpController —— CDP 自动化的可移植内核（宿主无关，注入 CdpTransport）。
  *
- * 持有 A11y UID 映射，提供 snapshot / 坐标解析 / focus / 在元素上求值 等原语；
+ * 持有 A11y UID 映射，提供 snapshot / 元素句柄 / 坐标解析 / 在元素上求值 等原语；
  * 上层 click/type/key/navigate 由各宿主用这些原语 + transport.sendCommand 组合。
  * 从桌面 browserCdpService 的可移植部分逐字搬出（网络/控制台采集、面板生命周期仍留桌面）。
  */
@@ -18,6 +18,30 @@ export interface AXNode {
   childIds?: string[]
   ignored?: boolean
 }
+
+/** uid 指向的元素此刻的可操作句柄（objectId 是页面侧引用，用完要 release） */
+export interface ElementHandle {
+  uid: string
+  backendNodeId: number
+  objectId: string
+  /** 快照里的那个节点已被页面替换，这是按内容键重新找到的新节点 */
+  relocated: boolean
+}
+
+/** uid 对应的节点已不在页面上，又无法无歧义地重新定位 */
+export function staleUidError(uid: string): Error {
+  return new Error(
+    `Element uid="${uid}" is no longer on the page — it was re-rendered or removed since the snapshot. Take a new snapshot.`
+  )
+}
+
+interface LayoutMetrics {
+  cssLayoutViewport?: { clientWidth: number; clientHeight: number }
+  layoutViewport?: { clientWidth: number; clientHeight: number }
+}
+
+/** 内容键各段之间的分隔符（名字里不会出现） */
+const KEY_SEP = String.fromCharCode(0)
 
 /**
  * 纯排版构造 —— **任何情况下都不打印**，连同它们的名字。
@@ -116,6 +140,10 @@ export class CdpController {
   private uidMap = new Map<string, number>() // uid → backendDOMNodeId（每快照重建）
   private keyToUid = new Map<string, number>() // 内容键 → uid 编号（跨快照沿用）
   private nodeMap = new Map<string, AXNode>() // uid → AXNode（每快照重建）
+  /** uid → 内容键（每快照重建）；节点被重渲染替换后据此重新定位 */
+  private uidKey = new Map<string, string>()
+  /** 「角色 + 名字」在最近一次快照里出现的次数；重新定位只认快照时就唯一的 */
+  private baseCounts = new Map<string, number>()
   /** 上一次快照的正文行，用于差异回传；reset / 全量请求后作废 */
   private lastBody: string[] | null = null
 
@@ -125,12 +153,14 @@ export class CdpController {
     return this.transport.sendCommand<T>(method, params)
   }
 
-  /** 清空 UID 状态（detach / 重新接管时调用） */
+  /** 清空 UID 状态（detach / 重新接管 / 导航后调用） */
   reset(): void {
     this.uidCounter = 0
     this.uidMap.clear()
     this.keyToUid.clear()
     this.nodeMap.clear()
+    this.uidKey.clear()
+    this.baseCounts.clear()
     this.lastBody = null
   }
 
@@ -165,12 +195,7 @@ export class CdpController {
   ): Promise<{ text: string; elementCount: number; diffed?: boolean }> {
     const result = await this.send<{ nodes: AXNode[] }>('Accessibility.getFullAXTree')
     const nodes = result.nodes
-
-    const nodeById = new Map<string, AXNode>()
-    for (const node of nodes) nodeById.set(node.nodeId, node)
-
-    const root = nodes[0]
-    if (!root) {
+    if (!nodes[0]) {
       this.lastBody = null
       return { text: '(empty page)', elementCount: 0 }
     }
@@ -179,9 +204,69 @@ export class CdpController {
     // 而增量清理会让无 backendId 的条目永不回收（实测 wikipedia 每拍 +2499，真泄漏）。
     this.uidMap.clear()
     this.nodeMap.clear()
+    this.uidKey.clear()
     // keyToUid 跨快照沿用（这正是 uid 稳定性的来源），但要收敛到本次出现过的键，
     // 否则长会话里逛过的每个页面都会在表里留下残渣。
     const seenKeys = new Set<string>()
+
+    const { lines, baseCounts } = this.walk(nodes, (key, node) => {
+      seenKeys.add(key)
+      // 编号来自内容键（跨快照稳定），前缀来自**本次快照**的可解析性：
+      //   e = 有 backendDOMNodeId，click/fill/$uid 宏都能用
+      //   t = 没有（AX 树里的纯文本构造），只能用来指代，不能操作
+      // 两者分开是为了别向模型广告一个用了会抛错的 uid。编号全局唯一，所以
+      // 'e3' 与 't3' 不会同时存在。
+      let seq = this.keyToUid.get(key)
+      if (seq == null) {
+        seq = this.uidCounter++
+        this.keyToUid.set(key, seq)
+      }
+      const backendId = node.backendDOMNodeId
+      const uid = (backendId != null ? 'e' : 't') + seq.toString(36)
+      if (backendId != null) this.uidMap.set(uid, backendId)
+      this.nodeMap.set(uid, node)
+      this.uidKey.set(uid, key)
+      return uid
+    })
+    this.baseCounts = baseCounts
+    const elementCount = lines.length
+
+    // 收敛 keyToUid 到本次出现过的键
+    if (this.keyToUid.size > seenKeys.size) {
+      for (const k of this.keyToUid.keys()) if (!seenKeys.has(k)) this.keyToUid.delete(k)
+    }
+
+    // 差异回传：调用方说可以、且手上有上一份时才试；不值得回差异时 diffSnapshotBody
+    // 返回 null，自然退回全量（见该模块对判定条件与安全边界的说明）。
+    const prev = this.lastBody
+    this.lastBody = lines
+    if (!opts.full && prev) {
+      const d = diffSnapshotBody(prev, lines)
+      if (d)
+        return {
+          text: diffHeader(pageUrl, elementCount, d) + '\n' + d.body,
+          elementCount,
+          diffed: true
+        }
+    }
+
+    const header = `[snapshot] Page: ${pageUrl} — ${elementCount} elements\n`
+    return { text: header + lines.join('\n'), elementCount }
+  }
+
+  /**
+   * 按快照编码规则遍历一棵 AX 树（nodes[0] 为根），返回正文行与「角色 + 名字」的出现次数。
+   *
+   * 每打印一行调用一次 `assignUid(内容键, 节点)` 取该行的 uid：真快照在回调里分配 / 沿用 uid
+   * 并重建映射；重新定位时的试算只记下内容键，不动任何映射（见 relocate）。
+   */
+  private walk(
+    nodes: AXNode[],
+    assignUid: (key: string, node: AXNode) => string
+  ): { lines: string[]; baseCounts: Map<string, number> } {
+    const nodeById = new Map<string, AXNode>()
+    for (const node of nodes) nodeById.set(node.nodeId, node)
+    const root = nodes[0]
 
     // ── 自底向上聚合（一次遍历，供 R4 O(1) 判定）
     /** 子孙文字，相邻重复已折叠 */
@@ -208,10 +293,9 @@ export class CdpController {
     }
     aggregate(root)
 
-    let elementCount = 0
     const lines: string[] = []
     /** 内容键的出现计数：同一个 (role, name) 出现第几次 */
-    const keySeq = new Map<string, number>()
+    const baseCounts = new Map<string, number>()
 
     const format = (node: AXNode, depth: number, parentName: string): void => {
       const role = node.role?.value || ''
@@ -250,27 +334,10 @@ export class CdpController {
       // 一个元素不该让后面所有元素改名。同名同角色的重复项按出现序区分，其中一个
       // 被插到中间时只有它之后的同类会漂，代价可接受。
       const kind = role || (name ? 'text' : 'node')
-      const base = `${kind}\u0000${name}`
-      const nth = (keySeq.get(base) ?? 0) + 1
-      keySeq.set(base, nth)
-      const key = `${base}\u0000${nth}`
-      seenKeys.add(key)
-
-      // 编号来自内容键（跨快照稳定），前缀来自**本次快照**的可解析性：
-      //   e = 有 backendDOMNodeId，click/fill/$uid 宏都能用
-      //   t = 没有（AX 树里的纯文本构造），只能用来指代，不能操作
-      // 两者分开是为了别向模型广告一个用了会抛错的 uid。编号全局唯一，所以
-      // 'e3' 与 't3' 不会同时存在。
-      let seq = this.keyToUid.get(key)
-      if (seq == null) {
-        seq = this.uidCounter++
-        this.keyToUid.set(key, seq)
-      }
-      const backendId = node.backendDOMNodeId
-      const uid = (backendId != null ? 'e' : 't') + seq.toString(36)
-      if (backendId != null) this.uidMap.set(uid, backendId)
-      this.nodeMap.set(uid, node)
-      elementCount++
+      const base = `${kind}${KEY_SEP}${name}`
+      const nth = (baseCounts.get(base) ?? 0) + 1
+      baseCounts.set(base, nth)
+      const uid = assignUid(`${base}${KEY_SEP}${nth}`, node)
 
       const parts: string[] = [`uid=${uid}`]
       // R3：StaticText 的 role 名是废话 —— 引号里的文字已经说明一切
@@ -301,85 +368,183 @@ export class CdpController {
     }
 
     format(root, 0, '')
-
-    // 收敛 keyToUid 到本次出现过的键
-    if (this.keyToUid.size > seenKeys.size) {
-      for (const k of this.keyToUid.keys()) if (!seenKeys.has(k)) this.keyToUid.delete(k)
-    }
-
-    // 差异回传：调用方说可以、且手上有上一份时才试；不值得回差异时 diffSnapshotBody
-    // 返回 null，自然退回全量（见该模块对判定条件与安全边界的说明）。
-    const prev = this.lastBody
-    this.lastBody = lines
-    if (!opts.full && prev) {
-      const d = diffSnapshotBody(prev, lines)
-      if (d)
-        return {
-          text: diffHeader(pageUrl, elementCount, d) + '\n' + d.body,
-          elementCount,
-          diffed: true
-        }
-    }
-
-    const header = `[snapshot] Page: ${pageUrl} — ${elementCount} elements\n`
-    return { text: header + lines.join('\n'), elementCount }
+    return { lines, baseCounts }
   }
 
-  /** 将 UID 解析为页面中的 (x, y) 中心坐标 */
-  async resolveCoordinates(uid: string): Promise<{ x: number; y: number }> {
-    const backendId = this.uidMap.get(uid)
-    if (backendId == null) {
+  // ====== 元素句柄 ======
+
+  /**
+   * uid → 此刻可操作的元素句柄。
+   *
+   * uid 按内容键跨快照稳定，它背后的 DOM 节点却不是：SPA 重渲染会把节点整个换掉，而旧的
+   * backendNodeId 仍能解析到那个已脱离文档的节点。旧实现不查这一点 —— 脱离文档的节点
+   * getBoundingClientRect 全是 0，click 就点在页面左上角 (0,0) 还回报成功（实测点中了左上角的
+   * 另一个链接）；fill 则抛出让人摸不着头脑的 "Element is not focusable"。
+   *
+   * 所以先确认节点还挂在文档上；不在了就在当前页面上按内容键找回同一个元素（relocate），
+   * 找不回或有歧义就抛错，让 agent 重新快照。
+   */
+  async resolveElement(uid: string): Promise<ElementHandle> {
+    const backendNodeId = this.uidMap.get(uid)
+    if (backendNodeId == null) {
       throw new Error(`Element uid="${uid}" not found. Take a new snapshot.`)
     }
-
-    // 解析 backendNodeId → objectId
-    const { object } = await this.send<{ object: { objectId: string } }>('DOM.resolveNode', {
-      backendNodeId: backendId
-    })
-
-    // 获取元素的 bounding rect 中心点
-    const { result } = await this.send<{
-      result: { value: { x: number; y: number } }
-    }>('Runtime.callFunctionOn', {
-      objectId: object.objectId,
-      functionDeclaration:
-        'function(){ const r = this.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; }',
-      returnByValue: true
-    })
-
-    // 释放 object
-    await this.send('Runtime.releaseObject', { objectId: object.objectId }).catch(() => {})
-
-    return result.value
+    const objectId = await this.liveObject(backendNodeId)
+    if (objectId) return { uid, backendNodeId, objectId, relocated: false }
+    const moved = await this.relocate(uid)
+    if (moved) return moved
+    throw staleUidError(uid)
   }
 
-  /** Focus 元素（用于 fill/type） */
+  /**
+   * 按内容键在当前页面上重新找 uid 指向的元素。
+   *
+   * 要过两道唯一性：快照时「同角色同名」的就只有它一个，当前页面上也只剩一个。只看当前页面不够 ——
+   * 删掉列表第一行后，原来的第二个「删除」会顶替第一个的内容键，e1 就悄悄指到了另一行。
+   * 试算不动任何映射、只替这一个 uid 换句柄：其余 uid 的含义仍是 agent 看到的那份快照。
+   */
+  private async relocate(uid: string): Promise<ElementHandle | null> {
+    const key = this.uidKey.get(uid)
+    if (!key) return null
+    const base = key.slice(0, key.lastIndexOf(KEY_SEP))
+    if (this.baseCounts.get(base) !== 1) return null
+
+    const tree = await this.send<{ nodes: AXNode[] }>('Accessibility.getFullAXTree').catch(
+      () => null
+    )
+    if (!tree?.nodes?.[0]) return null
+    const hit: { node?: AXNode } = {}
+    const { baseCounts } = this.walk(tree.nodes, (k, node) => {
+      if (k === key) hit.node = node
+      return ''
+    })
+    const backendNodeId = hit.node?.backendDOMNodeId
+    if (baseCounts.get(base) !== 1 || !hit.node || backendNodeId == null) return null
+
+    const objectId = await this.liveObject(backendNodeId)
+    if (!objectId) return null
+    this.uidMap.set(uid, backendNodeId)
+    this.nodeMap.set(uid, hit.node)
+    return { uid, backendNodeId, objectId, relocated: true }
+  }
+
+  /** backendNodeId → 仍挂在文档上的节点的 objectId；节点已被回收或已脱离文档返回 null */
+  private async liveObject(backendNodeId: number): Promise<string | null> {
+    const resolved = await this.send<{ object?: { objectId?: string } }>('DOM.resolveNode', {
+      backendNodeId
+    }).catch(() => null)
+    const objectId = resolved?.object?.objectId
+    if (!objectId) return null
+    const connected = await this.send<{ result?: { value?: unknown } }>('Runtime.callFunctionOn', {
+      objectId,
+      functionDeclaration: 'function(){ return this.isConnected }',
+      returnByValue: true
+    }).then(
+      (r) => r.result?.value === true,
+      () => false
+    )
+    if (connected) return objectId
+    await this.send('Runtime.releaseObject', { objectId }).catch(() => {})
+    return null
+  }
+
+  /** 释放句柄的页面侧引用 */
+  async release(el: ElementHandle): Promise<void> {
+    await this.send('Runtime.releaseObject', { objectId: el.objectId }).catch(() => {})
+  }
+
+  /** 在句柄上执行 JS 函数（this 绑定到该节点），返回值经 returnByValue 序列化；页面里抛错转成 Error */
+  async callOn<T>(el: ElementHandle, fn: string, args?: unknown[]): Promise<T> {
+    const { result, exceptionDetails } = await this.send<{
+      result?: { value?: T }
+      exceptionDetails?: { text: string; exception?: { description?: string } }
+    }>('Runtime.callFunctionOn', {
+      objectId: el.objectId,
+      functionDeclaration: fn,
+      ...(args ? { arguments: args.map((value) => ({ value })) } : {}),
+      returnByValue: true
+    })
+    if (exceptionDetails) {
+      throw new Error(exceptionDetails.exception?.description ?? exceptionDetails.text)
+    }
+    return result?.value as T
+  }
+
+  /** 按 uid 在元素上执行 JS 函数（解析句柄 → 执行 → 释放） */
+  async callOnElement<T>(uid: string, fn: string, args?: unknown[]): Promise<T> {
+    const el = await this.resolveElement(uid)
+    try {
+      return await this.callOn<T>(el, fn, args)
+    } finally {
+      await this.release(el)
+    }
+  }
+
+  /**
+   * 元素露在视口里那部分的中心点（主框架视口的 CSS px，即 Input.dispatchMouseEvent 的坐标系）。
+   *
+   * 先滚进视口：快照里是整页的元素，视口外元素按 getBoundingClientRect 算出的坐标落在视口外，
+   * 鼠标事件打过去什么也点不到（实测落在 <html> 上，还回报成功）。坐标取 DOM.getContentQuads
+   * 而不是 getBoundingClientRect：它考虑了 transform、折行拆成多段的行内元素，文本节点也有。
+   * 没有盒子（display:none、折叠、尚未渲染）返回 null。
+   */
+  async pointOf(el: ElementHandle): Promise<{ x: number; y: number } | null> {
+    await this.send('DOM.scrollIntoViewIfNeeded', { backendNodeId: el.backendNodeId }).catch(
+      () => {}
+    )
+    const [quads, metrics] = await Promise.all([
+      this.send<{ quads?: number[][] }>('DOM.getContentQuads', {
+        backendNodeId: el.backendNodeId
+      }).then(
+        (r) => r.quads ?? [],
+        () => [] as number[][]
+      ),
+      this.send<LayoutMetrics>('Page.getLayoutMetrics').catch(() => null)
+    ])
+    const viewport = metrics?.cssLayoutViewport ?? metrics?.layoutViewport
+    const width = viewport?.clientWidth ?? Infinity
+    const height = viewport?.clientHeight ?? Infinity
+
+    let best: { x: number; y: number } | null = null
+    let bestArea = 0
+    for (const q of quads) {
+      if (q.length < 8) continue
+      const xs = [q[0], q[2], q[4], q[6]]
+      const ys = [q[1], q[3], q[5], q[7]]
+      const left = Math.max(0, Math.min(...xs))
+      const right = Math.min(width, Math.max(...xs))
+      const top = Math.max(0, Math.min(...ys))
+      const bottom = Math.min(height, Math.max(...ys))
+      if (right - left < 1 || bottom - top < 1) continue
+      const area = (right - left) * (bottom - top)
+      if (area > bestArea) {
+        bestArea = area
+        best = { x: (left + right) / 2, y: (top + bottom) / 2 }
+      }
+    }
+    return best
+  }
+
+  /** 将 UID 解析为元素可见部分的中心坐标（先滚进视口）；元素不可见时抛错 */
+  async resolveCoordinates(uid: string): Promise<{ x: number; y: number }> {
+    const el = await this.resolveElement(uid)
+    try {
+      const point = await this.pointOf(el)
+      if (!point) {
+        throw new Error(`Element uid="${uid}" is not visible — it has no size on the page.`)
+      }
+      return point
+    } finally {
+      await this.release(el)
+    }
+  }
+
+  /** Focus 元素（DOM.focus，不做存活检查 —— 交互操作走 resolveElement） */
   async focusElement(uid: string): Promise<void> {
     const backendId = this.uidMap.get(uid)
     if (backendId == null) {
       throw new Error(`Element uid="${uid}" not found. Take a new snapshot.`)
     }
     await this.send('DOM.focus', { backendNodeId: backendId })
-  }
-
-  /** 在元素上执行 JS 函数（this 绑定到该元素），返回值经 returnByValue 序列化 */
-  async callOnElement<T>(uid: string, fn: string): Promise<T> {
-    const backendId = this.uidMap.get(uid)
-    if (backendId == null) {
-      throw new Error(`Element uid="${uid}" not found. Take a new snapshot.`)
-    }
-
-    const { object } = await this.send<{ object: { objectId: string } }>('DOM.resolveNode', {
-      backendNodeId: backendId
-    })
-
-    const { result } = await this.send<{ result: { value: T } }>('Runtime.callFunctionOn', {
-      objectId: object.objectId,
-      functionDeclaration: fn,
-      returnByValue: true
-    })
-
-    await this.send('Runtime.releaseObject', { objectId: object.objectId }).catch(() => {})
-    return result.value
   }
 }

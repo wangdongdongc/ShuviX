@@ -148,6 +148,11 @@ export class TabCdpSession {
     return { entries, nextSeq: this.eventSeq }
   }
 
+  /** 当前事件序号：动作前记下它，之后用 getEvents({ sinceSeq }) 只看此后发生的事件 */
+  eventCursor(): number {
+    return this.eventSeq
+  }
+
   /** 确保对话框事件监听已开（attach 后由 backend 调一次；alert/confirm 弹出即自动处理） */
   async enableDialogHandling(): Promise<void> {
     if (this.dialogEnabled) return

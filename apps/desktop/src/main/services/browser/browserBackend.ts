@@ -122,9 +122,18 @@ class DesktopBrowserBackend implements BrowserBackend {
     const short = shortIdFor(uuid)
     // 通知 renderer 露出右侧浏览器面板（tab 已由主进程建好，经 browser-view:tab-* 镜像）
     this.broadcast('open')
+    // 等加载完再回：agent 紧接着就会 snapshot，拍到空白页或加载一半的页面，拿到的 uid
+    // 随后会被水合 / 首屏渲染整个换掉
+    const { session } = await this.session(uuid)
+    const load = await browserCdpOps.waitForLoad(session, { allowBlank: p.url === 'about:blank' })
+    if (load.state === 'failed') {
+      const error = `${p.url} failed to load — tab ${short} shows the browser's error page.`
+      return { text: `Error: ${error}`, details: { url: p.url, error } }
+    }
+    const url = load.url ?? p.url
     return {
-      text: `Opened ${p.url} in new tab ${short}. Use snapshot/read_page with this tab id.`,
-      details: { url: p.url }
+      text: `Opened ${url} in new tab ${short}${browserCdpOps.loadNote(load.state)}. Use snapshot/read_page with this tab id.`,
+      details: { url }
     }
   }
 

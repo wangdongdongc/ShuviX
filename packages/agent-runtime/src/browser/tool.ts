@@ -212,10 +212,12 @@ function usageError(action: string, message: string, usage?: string): Result {
   }
 }
 
-/** 校验必选参数（空字符串视为缺失） */
+/** 校验必选参数（空字符串视为缺失，spec.allowEmpty 里的除外 —— 如 fill 用 "" 清空字段） */
 function missingParams(spec: BrowserOpSpec, params: BrowserParams): BrowserParamKey[] {
   const record = params as unknown as Record<string, unknown>
-  return spec.required.filter((k) => record[k] == null || record[k] === '')
+  return spec.required.filter(
+    (k) => record[k] == null || (record[k] === '' && !spec.allowEmpty?.includes(k))
+  )
 }
 
 /**

@@ -37,6 +37,16 @@ const factory: CdpTabTransportFactory = {
       }
     }
 
+    // agent 接管的 tab 不做后台节流。面板收起、切到别的页签、平铺墙里没完整露出的卡片，view 都是
+    // 隐藏的；默认节流下隐藏页面的计时器被压到约 1 次/秒、requestAnimationFrame 直接停摆
+    // （实测 setTimeout(50) 要 650~990ms，点击后 50ms 的界面更新拖到近 1 秒）—— SPA 对操作的响应
+    // 慢到 agent 下一拍快照还看不到，于是「点了没反应」再点一次。只对被接管的 tab 关：
+    // 用户自己开着、没让 agent 碰的页面照常节流。
+    wc.setBackgroundThrottling(false)
+    const restoreThrottling = (): void => {
+      if (!wc.isDestroyed()) wc.setBackgroundThrottling(true)
+    }
+
     const listeners = new Set<(method: string, params: Record<string, unknown>) => void>()
     const onMessage = (_event: unknown, method: string, params: Record<string, unknown>): void => {
       for (const fn of listeners) fn(method, params)
@@ -46,6 +56,7 @@ const factory: CdpTabTransportFactory = {
     // 页面崩溃 / 手动 detach 等外部断开 → 清理本地状态
     const onDetach = (): void => {
       log.info(`CDP debugger detached externally (tab ${tabId})`)
+      restoreThrottling()
       browserCdpManager.handleExternalDetach(tabId)
     }
     wc.debugger.once('detach', onDetach)
@@ -70,6 +81,7 @@ const factory: CdpTabTransportFactory = {
         } catch {
           // 可能已 detach，忽略
         }
+        restoreThrottling()
         log.info(`CDP debugger detached (tab ${tabId})`)
       }
     }

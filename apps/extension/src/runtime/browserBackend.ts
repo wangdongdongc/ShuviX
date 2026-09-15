@@ -88,10 +88,39 @@ class ExtensionBrowserBackend implements BrowserBackend {
 
   async openTab(p: { url: string }): Promise<BrowserOpOutput> {
     const tab = await chrome.tabs.create({ url: p.url, active: true })
+    // 等加载完再回：agent 紧接着就会 snapshot，拍到加载一半的页面，拿到的 uid 随后会被重渲染换掉。
+    // 用 tabs 事件而不是 CDP 等：不必为了等加载提前 attach、挂出调试横幅
+    const loaded = tab.id != null && (await this.waitForTabComplete(tab.id))
     return {
-      text: `Opened ${p.url} in new tab ${tab.id}. Use read_page/snapshot with this tab id.`,
+      text: `Opened ${p.url} in new tab ${tab.id}${loaded ? '' : ' (still loading)'}. Use read_page/snapshot with this tab id.`,
       details: { url: p.url }
     }
+  }
+
+  /** 等标签页加载完成（status=complete）；超时返回 false */
+  private waitForTabComplete(tabId: number, timeoutMs = 10_000): Promise<boolean> {
+    return new Promise((resolve) => {
+      let settled = false
+      const finish = (ok: boolean): void => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        chrome.tabs.onUpdated.removeListener(onUpdated)
+        resolve(ok)
+      }
+      const onUpdated = (id: number, info: chrome.tabs.TabChangeInfo): void => {
+        if (id === tabId && info.status === 'complete') finish(true)
+      }
+      const timer = setTimeout(() => finish(false), timeoutMs)
+      chrome.tabs.onUpdated.addListener(onUpdated)
+      // 注册监听之前可能已经加载完
+      chrome.tabs.get(tabId).then(
+        (t) => {
+          if (t.status === 'complete' && !t.pendingUrl) finish(true)
+        },
+        () => finish(false)
+      )
+    })
   }
 
   async closeTab(p: { tabId: string }): Promise<BrowserOpOutput> {

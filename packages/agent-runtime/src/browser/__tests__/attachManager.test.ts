@@ -188,6 +188,23 @@ describe('通用事件缓冲（events action 支撑）', () => {
     expect(inc.entries.map((e) => e.seq)).toEqual([3])
   })
 
+  it('A1 eventCursor 是最新一条事件的 seq；拿它当 sinceSeq 只看得到之后的事件', async () => {
+    const ft = fakeTransport()
+    const manager = new CdpAttachManager({ attach: async () => ft.transport })
+    const session = await manager.session('t1')
+    expect(session.eventCursor()).toBe(0)
+
+    ft.emit('Page.lifecycleEvent', { frameId: 'F', name: 'init' })
+    ft.emit('Page.lifecycleEvent', { frameId: 'F', name: 'load' })
+    expect(session.eventCursor()).toBe(2)
+
+    ft.emit('Page.frameStartedLoading', { frameId: 'F' })
+    expect(session.getEvents({ sinceSeq: 2 }).entries.map((e) => [e.seq, e.method])).toEqual([
+      [3, 'Page.frameStartedLoading']
+    ])
+    expect(session.getEvents({ sinceSeq: 3 }).entries).toEqual([])
+  })
+
   it('超大事件参数被截断并标注原始长度', async () => {
     const ft = fakeTransport()
     const manager = new CdpAttachManager({ attach: async () => ft.transport })

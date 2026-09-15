@@ -63,6 +63,8 @@ export interface BrowserOpSpec {
   description: string
   required: readonly BrowserParamKey[]
   optional: readonly BrowserParamKey[]
+  /** 必选参数里允许传空字符串的（缺省：空字符串视为缺失） */
+  allowEmpty?: readonly BrowserParamKey[]
   /** 依赖的端能力；undefined = 核心操作恒可用 */
   cap?: keyof BrowserCaps
   /** 参数错误时回显的 usage 行 */
@@ -87,7 +89,7 @@ export const BROWSER_OPS: readonly BrowserOpSpec[] = [
   {
     name: 'open_tab',
     description:
-      'Open a URL in a NEW tab and return its tabId. Do NOT use navigate to open a fresh page.',
+      'Open a URL in a NEW tab, wait for it to load, and return its tabId. Do NOT use navigate to open a fresh page.',
     required: ['url'],
     optional: [],
     usage: 'open_tab(url)'
@@ -102,7 +104,7 @@ export const BROWSER_OPS: readonly BrowserOpSpec[] = [
   {
     name: 'navigate',
     description:
-      'Navigate a tab: goto a url (default), or back/forward/reload. Invalidates uids — snapshot again.',
+      'Navigate a tab: goto a url (default), or back/forward/reload; waits for the page to load. Invalidates uids — snapshot again.',
     required: ['tabId'],
     optional: ['nav', 'url'],
     usage: 'navigate(tabId, url) or navigate(tabId, nav: back|forward|reload)'
@@ -138,17 +140,21 @@ export const BROWSER_OPS: readonly BrowserOpSpec[] = [
   },
   {
     name: 'click',
-    description: 'Click an element by its uid from the latest snapshot (trusted mouse event).',
+    description:
+      'Click an element by its uid from the latest snapshot (trusted mouse event; scrolls it into view, errors if it is hidden or covered).',
     required: ['tabId', 'uid'],
     optional: [],
     usage: 'click(tabId, uid) — uid comes from the latest snapshot'
   },
   {
     name: 'fill',
-    description: 'Replace the value of an input/textarea by uid, then fire input/change events.',
+    description:
+      'Replace the value of an input/textarea/contenteditable by uid, or pick a <select> option by label/value; reports what the field then shows.',
     required: ['tabId', 'uid', 'text'],
     optional: [],
-    usage: 'fill(tabId, uid, text)'
+    allowEmpty: ['text'],
+    usage:
+      'fill(tabId, uid, text) — text fields, textareas, contenteditable editors, <select> (option label or value); "" clears'
   },
   {
     name: 'type',
@@ -163,7 +169,8 @@ export const BROWSER_OPS: readonly BrowserOpSpec[] = [
     description: 'Press a key or combo on the focused element, e.g. "Enter", "Control+A".',
     required: ['tabId', 'key'],
     optional: [],
-    usage: 'press_key(tabId, key) — e.g. "Enter", "Tab", "Control+A", "Meta+Shift+R"'
+    usage:
+      'press_key(tabId, key) — e.g. "Enter", "Tab", "Backspace", "ArrowDown", "Shift+Tab", "Control+A"'
   },
   {
     name: 'scroll',

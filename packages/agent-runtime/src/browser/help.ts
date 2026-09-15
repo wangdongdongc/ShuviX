@@ -61,20 +61,21 @@ function interactionSection(): string {
   return `## Interaction
 
 - snapshot(tabId) — accessibility tree; each interactive element gets a uid. Re-run whenever the page changes; old uids go stale.
-- click(tabId, uid) — trusted mouse click at the element center.
-- fill(tabId, uid, text) — REPLACES the current value of an input/textarea (clears first, fires input/change). Use for form fields.
-- type(tabId, text[, uid][, submitKey]) — types into the focused element without clearing; pass uid to focus first, submitKey (e.g. "Enter") to submit after. Use for editors/search boxes where fill's clearing is wrong.
-- press_key(tabId, key) — single key or combo. Named keys: ${keys}. Combos join with "+": "Control+A", "Meta+Shift+R". Single characters allowed ("a").
+- click(tabId, uid) — trusted mouse click at the element center. Scrolls the element into view first; when the element is hidden or covered by something else (a dialog, banner, overlay) it reports that instead of clicking.
+- fill(tabId, uid, text) — REPLACES the value of an input/textarea/contenteditable editor (selects the old content and types over it as one real edit, so frameworks like React see it); on a <select> it picks the option whose label or value is text; "" clears. Waits briefly for disabled/read-only fields, then reports what the field actually shows — including when the page reformatted the value or moved focus elsewhere.
+- type(tabId, text[, uid][, submitKey]) — types at the caret without clearing; with uid it focuses that element first (caret at the end); submitKey (e.g. "Enter") is pressed after. Use for editors/search boxes where fill's replacing is wrong.
+- press_key(tabId, key) — single key or combo. Named keys: ${keys}. Combos join with "+": "Shift+Tab", "Control+A", "Meta+Shift+R". Single characters type themselves ("a"). On macOS, Control+A/C/V/X/Z/Y are sent as the Cmd shortcuts.
 - scroll(tabId[, direction][, amount][, uid]) — scrolls the window, or the element when uid is given. Default down 500px.
-- <select> dropdowns: click/fill/type do NOT work on them — set the value directly and fire change (see the "Select a dropdown option" recipe under help(topic:"devtools")).`
+- If the page re-rendered an element since your snapshot, click/fill/type find it again by role and name when that is unambiguous; otherwise they ask you to take a new snapshot.
+- When a click or key press navigates, the action waits for the new page and says so in its result — snapshot again before interacting.`
 }
 
 function navigationSection(): string {
   return `## Navigation & tabs
 
 - list_tabs() — tabIds with title/URL. Start here when working with existing pages.
-- open_tab(url) — open a NEW tab, returns its tabId. The right way to open a page.
-- navigate(tabId, url) — replace the content of an EXISTING tab (or nav:"back"|"forward"|"reload"). All uids become invalid.
+- open_tab(url) — open a NEW tab, wait for it to load (up to ~10s), return its tabId. The right way to open a page.
+- navigate(tabId, url) — replace the content of an EXISTING tab (or nav:"back"|"forward"|"reload"). Waits for the page to load and reports load failures (e.g. DNS errors). All uids become invalid.
 - close_tab(tabId) — close a tab when done with it.
 - open_tab/navigate accept any URL, including file:// — do NOT open a file:// path the user has not asked for.`
 }
@@ -129,7 +130,7 @@ The semantic actions above cover common flows. For anything else, drive the raw 
 
 Conventions (this tool adds these on top of raw CDP):
 - **Safety**: methods in known domains run directly; out-of-scope domains and methods (Browser/Target/Tracing/Page.close/Security.setIgnoreCertificateErrors) are blocked. Careful with Fetch.enable — interception pauses all matching requests until you explicitly continue them.
-- **uid macros**: anywhere in params you may write {"$uid":"e7"} → the element's backendNodeId, {"$uidX":"e7"}/{"$uidY":"e7"} → its center x/y. uids come from snapshot. This bridges snapshot to raw CDP (CSS/DOM/Input by element).
+- **uid macros**: anywhere in params you may write {"$uid":"e7"} → the element's backendNodeId, {"$uidX":"e7"}/{"$uidY":"e7"} → its center x/y (scrolled into view first). uids come from snapshot. This bridges snapshot to raw CDP (CSS/DOM/Input by element).
 - **Events are pull-based**: after cdp(Domain.enable), that domain's events are buffered with a monotonic seq. Pull with events(); pass sinceSeq=<last nextSeq> to get only-new. Buffer holds ~1000 entries.
 - **Large results auto-spill**: results over ~16KB (trace, big response bodies, heap snapshots) are written to a file; the path is returned — read/grep it. Network.getResponseBody base64 bodies are auto-decoded.
 - **Dialogs**: alert/confirm/prompt are auto-dismissed so they can't wedge automation; take over with cdp(Page.handleJavaScriptDialog, {accept:true[, promptText]}).
@@ -138,7 +139,6 @@ High-value recipes:
 - **Inspect a request/response body**: cdp(Network.enable) → reproduce → network(tabId) for the list (each line starts with {requestId}) → cdp(Network.getResponseBody, {requestId:"<id>"}). Headers: cdp(Network.getRequestPostData / read the response event via events(event:"Network.responseReceived")).
 - **Responsive layout**: cdp(Emulation.setDeviceMetricsOverride, {width:390,height:844,deviceScaleFactor:3,mobile:true}) → screenshot → cdp(Emulation.clearDeviceMetricsOverride) when done.
 - **Hover (menus/tooltips)**: cdp(Input.dispatchMouseEvent, {type:"mouseMoved", x:{"$uidX":"e7"}, y:{"$uidY":"e7"}}) → snapshot to see what appeared.
-- **Select a dropdown option**: cdp(DOM.resolveNode, {backendNodeId:{"$uid":"e7"}}) → objectId, then cdp(Runtime.callFunctionOn, {objectId, functionDeclaration:"function(){this.value='OPTION_VALUE';this.dispatchEvent(new Event('change',{bubbles:true}))}"}). Read the option values from snapshot/read_page first.
 - **Upload a file**: cdp(DOM.setFileInputFiles, {files:["/abs/path/file.png"], backendNodeId:{"$uid":"e7"}}) — uid must be the <input type="file"> element.
 - **Why is a style not applied**: snapshot → cdp(CSS.enable) → cdp(CSS.getMatchedStylesForNode, {nodeId:...}) — resolve the node via cdp(DOM.getDocument)+DOM.querySelector or push a backendNodeId with {"$uid"}.
 - **Core Web Vitals / LCP**: cdp(PerformanceTimeline.enable, {eventTypes:["largest-contentful-paint","layout-shift"]}) → reload → events(event:"PerformanceTimeline.timelineEventAdded").

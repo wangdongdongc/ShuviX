@@ -170,6 +170,34 @@ describe('createBrowserTool 参数校验', () => {
   })
 })
 
+describe('必选参数的空字符串', () => {
+  it('V1 fill 的 text 可以是 ""（清空字段）→ 照常分发给 backend', async () => {
+    const backend = fakeBackend()
+    const t = createBrowserTool({ backend })
+    const result = await t.execute('tc', { action: 'fill', tabId: 't1', uid: 'e1', text: '' })
+    expect(backend.fill).toHaveBeenCalledWith({ tabId: 't1', uid: 'e1', text: '' })
+    expect((result.content[0] as { text: string }).text).not.toContain('Missing required parameter')
+  })
+
+  it.each<[string, Record<string, unknown>, string]>([
+    ['fill 缺 text', { action: 'fill', tabId: 't1', uid: 'e1' }, '"text"'],
+    ['fill 的 uid 是空串', { action: 'fill', tabId: 't1', uid: '', text: 'x' }, '"uid"'],
+    ['type 的 text 是空串', { action: 'type', tabId: 't1', text: '' }, '"text"'],
+    ['press_key 的 key 是空串', { action: 'press_key', tabId: 't1', key: '' }, '"key"']
+  ])('V2 %s → usage 错误，不调 backend', async (_label, params, missing) => {
+    const backend = fakeBackend()
+    const t = createBrowserTool({ backend })
+    const result = await t.execute('tc', params)
+    const text = (result.content[0] as { text: string }).text
+    expect(text).toContain(`Missing required parameter ${missing}`)
+    // fill 的 usage 要告诉 agent 空串的正确用法
+    if (params.action === 'fill') expect(text).toContain('"" clears')
+    expect(backend.fill).not.toHaveBeenCalled()
+    expect(backend.type).not.toHaveBeenCalled()
+    expect(backend.pressKey).not.toHaveBeenCalled()
+  })
+})
+
 describe('cdp 边界拦截', () => {
   it('blocked 方法 → 直接拒绝，不执行 backend', async () => {
     const backend = fakeBackend()

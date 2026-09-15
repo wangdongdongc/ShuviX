@@ -18,7 +18,7 @@
  *   - 7 个属性各自的渲染映射（A7 已整体兜住）、表头文案措辞（但 elementCount 的数值要测）
  *   - 「每条规则至少贡献 N% 体量」这类分摊断言 —— R1 几乎被 R4 完全吸收
  *     （`StaticText "X"` 本身就满足 R4），R1 在体量上零信号，只能靠 B1/B2 的结构断言钉
- *   - `resolveCoordinates` 的 CDP 往返细节（已由 `browser/__tests__/cdpOps.test.ts` 覆盖）
+ *   - `resolveCoordinates` 的 CDP 往返细节（已由同目录的 `elementHandle.test.ts` 覆盖）
  *
  * B13 曾经红过：R4 原本用单个空格拼接子孙文字，而 Chromium 对行内元素算 accessible
  * name 时不插空格，`link "图标带子元素的链接"` > [`"图标"`, `"带子元素的链接"`] 拼出来是
