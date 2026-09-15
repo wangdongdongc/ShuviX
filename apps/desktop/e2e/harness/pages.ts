@@ -940,6 +940,46 @@ export function sidebarPane(main: CdpClient): SidebarPane {
 //   - 会话配置与项目编辑都「有 input」，但产品上不可能同时在屏（分别由行菜单与组头菜单
 //     拉起）—— 两个 pane 因此共用同一个形状锚点，用例各自负责别把它们混在一屏里。
 
+/** 扩展能力卡（ExtensionsSection：会话设置与项目编辑弹窗共用）里的一个条目 */
+export interface ExtItemShot {
+  /** 勾选用的工具名（`mcp:<server>` / `skill:<name>`），即 `data-ext-item` */
+  key: string
+  checked: boolean
+  /** 勾选框被禁用 = 只读（会话已有 Agent 运行时） */
+  disabled: boolean
+}
+
+/** scope 内扩展能力条目的快照（页内表达式；scope 为空时回 []） */
+const EXT_ITEMS = (scope: string): string =>
+  `[...(${scope}?.querySelectorAll('label[data-ext-item]') ?? [])].map((label) => {
+    const box = label.querySelector('input[type="checkbox"]')
+    return {
+      key: label.getAttribute('data-ext-item') ?? '',
+      checked: !!box?.checked,
+      disabled: !!box?.disabled
+    }
+  })`
+
+/**
+ * 等 scope 内某个扩展能力条目上屏（条目随 `tools.list` 异步到），再点它的勾选框。
+ * 按属性值比对而不是拼属性选择器 —— key 里带冒号。只读时勾选框是 disabled 的，点了什么也不会发生。
+ */
+async function toggleExtIn(
+  main: CdpClient,
+  scope: string,
+  key: string,
+  what: string
+): Promise<void> {
+  const box = `[...(${scope}?.querySelectorAll('label[data-ext-item]') ?? [])]
+    .find((label) => label.getAttribute('data-ext-item') === ${JSON.stringify(key)})
+    ?.querySelector('input[type="checkbox"]')`
+  await until(() => main.eval<boolean>(`!!(${box})`), `${what}: extension item "${key}"`)
+  await main.eval(`(() => {
+    ${box}.click()
+    return true
+  })()`)
+}
+
 export interface SessionConfigPane {
   /** 等弹窗上屏 */
   waitOpen(): Promise<void>
@@ -950,6 +990,14 @@ export interface SessionConfigPane {
   titleValue(): Promise<string>
   /** Escape 关闭并等卸载（弹窗在 window 上听 keydown） */
   close(): Promise<void>
+  /**
+   * 弹窗里扩展能力卡的条目（DOM 序）。**只在弹窗面板内找**：空会话的聊天区（EmptySessionHint）
+   * 会内联渲染同一个会话设置面板，裸查 document 会读到那一张。条目随 `tools.list` 异步上屏，
+   * 刚打开时可能为空 —— 断言方自己 `until`。
+   */
+  extItems(): Promise<ExtItemShot[]>
+  /** 点弹窗里某个扩展能力条目的勾选框（等条目上屏再点；同样只在弹窗面板内找） */
+  toggleExt(key: string): Promise<void>
 }
 
 /** 会话配置弹窗（SessionConfigDialog；由行菜单的 session-config 拉起） */
@@ -964,7 +1012,7 @@ export function sessionConfigPane(main: CdpClient): SessionConfigPane {
     waitClosed: async () => {
       await until(async () => !(await isOpen()), 'session config dialog closed')
     },
-    // 标题输入框是这个弹窗里唯一的 input（配置面板只有开关，没有输入框）
+    // 标题输入框是这个弹窗里的第一个 input（配置面板排在它下面：开关，以及有 MCP / skill 时的扩展能力勾选框）
     titleValue: () => main.eval<string>(`${PANEL}?.querySelector('input')?.value ?? ''`),
     close: async () => {
       await main.eval(
@@ -974,7 +1022,9 @@ export function sessionConfigPane(main: CdpClient): SessionConfigPane {
         })()`
       )
       await until(async () => !(await isOpen()), 'session config dialog closed')
-    }
+    },
+    extItems: () => main.eval<ExtItemShot[]>(EXT_ITEMS(PANEL)),
+    toggleExt: (key) => toggleExtIn(main, PANEL, key, 'session config dialog')
   }
 }
 
@@ -1035,6 +1085,12 @@ export interface ProjectEditPane {
   /** 名称字段的当前值（ProjectInfoForm 的第一个 InlineInput） */
   nameValue(): Promise<string>
   close(): Promise<void>
+  /** 扩展能力卡的条目（DOM 序；与会话设置同一个 ExtensionsSection，口径同 sessionConfigPane.extItems） */
+  extItems(): Promise<ExtItemShot[]>
+  /** 点某个扩展能力条目的勾选框 —— 只改弹窗里的草稿，保存才落库 */
+  toggleExt(key: string): Promise<void>
+  /** 点页脚的「保存」并等弹窗卸载（保存成功后弹窗自己关） */
+  save(): Promise<void>
 }
 
 /**
@@ -1064,7 +1120,113 @@ export function projectEditPane(main: CdpClient): ProjectEditPane {
         })()`
       )
       await until(async () => !(await isOpen()), 'project edit dialog closed')
+    },
+    extItems: () => main.eval<ExtItemShot[]>(EXT_ITEMS(PANEL)),
+    toggleExt: (key) => toggleExtIn(main, PANEL, key, 'project edit dialog'),
+    save: async () => {
+      // 面板的子节点依次是头部 / 内容 / 页脚；页脚里左边是归档，右边「取消 · 保存」—— 保存是最后一颗
+      const clicked = await main.eval<boolean>(`(() => {
+        const buttons = [...(${PANEL}?.lastElementChild?.querySelectorAll('button') ?? [])]
+        const save = buttons[buttons.length - 1]
+        if (!save) return false
+        save.click()
+        return true
+      })()`)
+      if (!clicked) throw new Error('project edit dialog: footer save button not found')
+      await until(async () => !(await isOpen()), 'project edit dialog closed after save')
     }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 输入框的工具选择器（ToolPicker）—— 会话的扩展能力勾选，与会话设置里的扩展能力卡同一份数据
+
+/** 工具选择器面板里的一行 */
+export interface ToolPickerItem {
+  /** 工具名（`mcp:<server>` / `skill:<name>`），即 `data-tool-item` */
+  name: string
+  checked: boolean
+  /** 勾选框被禁用 = 只读 */
+  disabled: boolean
+}
+
+export interface ToolPickerPane {
+  /** 选择器在不在（欢迎页没有活动会话、或一个 MCP / skill 条目都没有时不渲染） */
+  present(): Promise<boolean>
+  /** 只读态（根上的 `data-locked`）：会话此刻有 Agent 运行时（含创建中 / 关停中） */
+  locked(): Promise<boolean>
+  /** 面板是否展开（按条目在不在 DOM 里判 —— 选择器只在有条目时才渲染，展开必有条目） */
+  isOpen(): Promise<boolean>
+  /** 展开面板并等条目上屏（幂等） */
+  open(): Promise<void>
+  /** 收起面板并等条目离开 DOM（幂等） */
+  close(): Promise<void>
+  /** 面板里的条目（DOM 序）；面板没展开时为空 */
+  items(): Promise<ToolPickerItem[]>
+  /**
+   * 点某条目的勾选框（先展开面板）；条目不在返回 false。
+   *
+   * `force`：先摘掉 disabled、点完再装回 —— 模拟「绕过禁用态」。禁用的勾选框浏览器根本不派发
+   * click，不 force 的话「只读时点了没用」什么也证明不了；force 之后点击真的进了 React 的
+   * onChange，钉的是组件与写入口自己的只读判断。
+   */
+  toggle(name: string, opts?: { force?: boolean }): Promise<boolean>
+  /** 只读提示行在不在（面板展开且只读时才渲染） */
+  lockHintVisible(): Promise<boolean>
+}
+
+/** 输入框卡片里的工具选择器（`[data-tool-picker]`；主窗里只有当前会话那一个输入区） */
+export function toolPickerPane(main: CdpClient): ToolPickerPane {
+  const ROOT = `document.querySelector('[data-tool-picker]')`
+  const ROWS = `[...(${ROOT}?.querySelectorAll('label[data-tool-item]') ?? [])]`
+  const isOpen = (): Promise<boolean> => main.eval<boolean>(`${ROWS}.length > 0`)
+  /** 根下第一颗按钮 = 开合面板的触发钮 */
+  const clickTrigger = (): Promise<unknown> =>
+    main.eval(`(() => {
+      ${ROOT}.querySelector('button').click()
+      return true
+    })()`)
+  const open = async (): Promise<void> => {
+    await until(() => main.eval<boolean>(`!!${ROOT}`), 'tool picker present')
+    if (!(await isOpen())) await clickTrigger()
+    await until(isOpen, 'tool picker panel open')
+  }
+  return {
+    present: () => main.eval<boolean>(`!!${ROOT}`),
+    locked: () => main.eval<boolean>(`!!${ROOT}?.hasAttribute('data-locked')`),
+    isOpen,
+    open,
+    close: async () => {
+      if (!(await isOpen())) return
+      await clickTrigger()
+      await until(async () => !(await isOpen()), 'tool picker panel closed')
+    },
+    items: () =>
+      main.eval<ToolPickerItem[]>(`${ROWS}.map((label) => {
+        const box = label.querySelector('input[type="checkbox"]')
+        return {
+          name: label.getAttribute('data-tool-item') ?? '',
+          checked: !!box?.checked,
+          disabled: !!box?.disabled
+        }
+      })`),
+    toggle: async (name, opts = {}) => {
+      await open()
+      const force = opts.force === true
+      return main.eval<boolean>(`(() => {
+        const box = ${ROWS}
+          .find((label) => label.getAttribute('data-tool-item') === ${JSON.stringify(name)})
+          ?.querySelector('input[type="checkbox"]')
+        if (!box) return false
+        const wasDisabled = box.disabled
+        if (${force}) box.disabled = false
+        box.click()
+        // 装回原样：React 只在 prop 变化时才碰 disabled，不装回的话之后读到的禁用态就是假的
+        if (${force}) box.disabled = wasDisabled
+        return true
+      })()`)
+    },
+    lockHintVisible: () => main.eval<boolean>(`!!${ROOT}?.querySelector('[data-tool-lock-hint]')`)
   }
 }
 

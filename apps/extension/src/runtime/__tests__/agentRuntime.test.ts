@@ -19,7 +19,9 @@ const mocks = vi.hoisted(() => ({
   getById: vi.fn(),
   getHandle: vi.fn(),
   getProfile: vi.fn(),
-  createAgent: vi.fn()
+  createAgent: vi.fn(),
+  // 事件总线的出口：运行时区间事件（agent_created / agent_closing）经它送到 chat-ui
+  emit: vi.fn()
 }))
 
 vi.mock('../../storage/sessionStore', () => ({
@@ -41,7 +43,7 @@ vi.mock('../../storage/sessionEntryStore', () => ({
 }))
 vi.mock('../resolveSessionModel', () => ({ capsFor: () => ({}) }))
 vi.mock('../titleRuntime', () => ({ titlerFor: () => ({ quick: () => {} }) }))
-vi.mock('../eventBus', () => ({ eventBus: { emit: vi.fn() } }))
+vi.mock('../eventBus', () => ({ eventBus: { emit: mocks.emit } }))
 vi.mock('../agentHost', () => ({ extensionAgentFactory: { createAgent: mocks.createAgent } }))
 vi.mock('../subAgent', () => ({
   clearSessionTools: vi.fn(),
@@ -49,7 +51,7 @@ vi.mock('../subAgent', () => ({
   subAgentManager: { destroyAll: vi.fn() }
 }))
 
-import { ensureRuntimeSession } from '../agentRuntime'
+import { ensureRuntimeSession, removeRuntimeSession } from '../agentRuntime'
 
 /** 注册表按名回一份最小档案（只有名字有信息量：断言看的是 createAgent 收到的 profile.name） */
 const minimalProfile = (name: string): AgentProfile => ({
@@ -173,5 +175,29 @@ describe('buildRuntimeSession —— 档案由会话形态推导', () => {
     const params = createdWith()
     expect(params.kind).toBe('root')
     expect(params.sessionId).toBe(SID)
+  })
+})
+
+describe('运行时区间事件（与桌面同一对事件，chat-ui 的扩展能力只读态据此切换）', () => {
+  /** eventBus 收到的本会话运行时生命周期事件（按到达顺序） */
+  const lifecycle = (): Array<{ type: string; sessionId: string; closing?: boolean }> =>
+    mocks.emit.mock.calls
+      .map((c) => c[0] as { type: string; sessionId: string; closing?: boolean })
+      .filter(
+        (e) => e.sessionId === SID && (e.type === 'agent_created' || e.type === 'agent_closing')
+      )
+
+  it('EXT-U-17 ensure → remove：依次发 agent_created（恰一次）、agent_closing true、agent_closing false', async () => {
+    // 扩展端自己没有会话级扩展能力，但只读态机制在 chat-ui 里两端共用：这一端漏发
+    // agent_created，同一份前端代码就会一直以为「没有运行时」
+    session({ projectId: 'proj-1', folder: 'Folder' })
+    await ensureRuntimeSession(SID)
+    await ensureRuntimeSession(SID)
+    await removeRuntimeSession(SID)
+    expect(lifecycle()).toEqual([
+      { type: 'agent_created', sessionId: SID },
+      { type: 'agent_closing', sessionId: SID, closing: true },
+      { type: 'agent_closing', sessionId: SID, closing: false }
+    ])
   })
 })
