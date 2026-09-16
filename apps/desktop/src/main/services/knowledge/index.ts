@@ -33,6 +33,7 @@ export {
   resolveBase,
   listBases,
   selectedBaseNames,
+  enabledBaseChoices,
   knowledgeBaseOptions,
   type SessionBundleTarget,
   type KnowledgeBaseOption

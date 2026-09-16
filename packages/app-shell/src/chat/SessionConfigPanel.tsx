@@ -2,10 +2,11 @@ import {
   getChatApi,
   getSessionChannelApi,
   refreshSessionTools,
+  useAppEvent,
   useChatStore,
   useSessionTools
 } from '@shuvix/chat-ui'
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { TriangleAlert, X } from 'lucide-react'
 import type { KnowledgeBaseOptionsResult } from '@shuvix/chat-protocol/chatApi'
@@ -84,17 +85,15 @@ function SessionKnowledgeBasesSection({
   const { t } = useTranslation()
   const [state, setState] = useState<KnowledgeBaseOptionsResult | null>(null)
 
-  useEffect(() => {
-    let alive = true
+  const load = useCallback((): void => {
     void getChatApi()
       .knowledge?.baseOptions({ sessionId })
-      .then((r) => {
-        if (alive) setState(r)
-      })
-    return () => {
-      alive = false
-    }
+      .then(setState)
   }, [sessionId])
+
+  useEffect(load, [load])
+  // 面板开着的时候就地建了一个库（侧栏的「新建知识库」）—— 候选项跟着长出来，不用关掉再开
+  useAppEvent('knowledge.changed', load)
 
   if (!state || state.options.length === 0) return null
 

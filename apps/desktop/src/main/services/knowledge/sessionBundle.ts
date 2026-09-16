@@ -83,8 +83,9 @@ export function selectedBaseNames(rootSessionId: string): string[] {
   const fromProject = projectSelection(row?.projectId ?? parent?.projectId ?? null)
   if (fromProject) return fromProject
 
-  const hasProject = !!(row?.projectId ?? parent?.projectId)
-  return [...userBaseNames(), ...(hasProject ? [KNOWLEDGE_PROJECT_BASE] : [])]
+  // `project` 只跟着**会话自己**的项目：sessionBundle 也只看这一列，两处必须同口径，
+  // 否则缺省里会出现一个解析不出来的名字
+  return [...userBaseNames(), ...(row?.projectId ? [KNOWLEDGE_PROJECT_BASE] : [])]
 }
 
 /** 本会话所属项目的库（目录可能还不存在 —— 那就是一个空库） */
@@ -139,6 +140,18 @@ export async function resolveBase(
   }
 }
 
+/**
+ * 围栏要列的库：启用且此刻真在的那些。名字用磁盘上的拼写（NFC 归一在 enabledTargets 里做掉了
+ * —— 与工具解析同一份结果，不再各过滤一遍），项目库带上项目当前的名字。
+ */
+export function enabledBaseChoices(rootSessionId: string): KnowledgeBaseOption[] {
+  const projectName = rootProject(rootSessionId)?.name ?? ''
+  return enabledTargets(rootSessionId).map(({ name }) => ({
+    name,
+    label: name === KNOWLEDGE_PROJECT_BASE ? projectName : ''
+  }))
+}
+
 /** 本会话启用且此刻真的在的库（工具 `bases` 的回包） */
 export async function listBases(rootSessionId: string): Promise<KnowledgeBaseInfo[]> {
   return enabledTargets(rootSessionId).map(({ name, target }) => ({
@@ -164,8 +177,12 @@ export function knowledgeBaseOptions(rootSessionId?: string): {
   const options = [...userBaseNames().map((name) => ({ name, label: name })), ...projectOption]
   if (!rootSessionId) return { options, selected: [], explicit: false }
 
-  const row = sessionDao.pick(rootSessionId, ['projectId', 'settings'])
+  // 「有人明确设过」要走完整条回落链 —— 漏掉父会话那一级，子会话就会显示成「还没选过」
+  const row = sessionDao.pick(rootSessionId, ['projectId', 'parentId', 'settings'])
+  const parent = row?.parentId ? sessionDao.pick(row.parentId, ['projectId', 'settings']) : undefined
   const explicit =
-    Array.isArray(row?.settings?.knowledgeBases) || !!projectSelection(row?.projectId ?? null)
+    Array.isArray(row?.settings?.knowledgeBases) ||
+    Array.isArray(parent?.settings?.knowledgeBases) ||
+    !!projectSelection(row?.projectId ?? parent?.projectId ?? null)
   return { options, selected: selectedBaseNames(rootSessionId), explicit }
 }
