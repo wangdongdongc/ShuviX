@@ -54,6 +54,12 @@ export interface SessionUpdateEnabledToolsParams {
   enabledTools: string[]
 }
 
+/** IPC: 改这条会话启用的知识库（整份替换；不看有没有运行时 —— 改完下一次工具调用就生效） */
+export interface SessionUpdateKnowledgeBasesParams {
+  id: string
+  knowledgeBases: string[]
+}
+
 /** IPC: 更新命令免询问参数 */
 export interface SessionUpdateAutoAllowParams {
   id: string

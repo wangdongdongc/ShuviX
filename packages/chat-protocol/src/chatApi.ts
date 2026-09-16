@@ -62,6 +62,15 @@ export interface SessionSettings {
    */
   enabledTools?: string[]
   /**
+   * 这条会话启用了哪几个知识库（用户库的目录名，或保留名 `project` = 本会话所属项目的库）。
+   *
+   * 与 `enabledTools` 不同，这一份**不落快照、不在创建 Agent 时读死**：知识库是 `resolveBase`
+   * 每次调用现查的，所以走一条活的回落链 —— 会话设过用会话的，否则项目设过用项目的，
+   * 都没设过就是「全部用户库 +（属于项目时）项目库」。改完立刻生效，运行时存在期间照样可改。
+   * 空数组是明确表态「这条会话不接知识库」，与缺键（没设过）不是一回事。
+   */
+  knowledgeBases?: string[]
+  /**
    * 这条会话绑定的 bot（`~/.shuvix/bots/<name>.md`）。有值即为 bot 会话 —— 一条**普通有根会话**：
    * 根 Agent 的档案是基座 `bot`，那份 md 的正文（人设与记忆）经 systemContext 注入它的系统提示词。
    * 创建那一刻定死，不可换绑。判定一律经 `botSession.ts` 的 `isBotSessionSettings` / `boundBotOf`。
@@ -125,6 +134,8 @@ export interface ToolSettings {
 
 export interface ProjectSettings {
   enabledTools?: string[]
+  /** 这个项目里新会话缺省启用哪几个知识库（用户库名 / 保留名 `project`）；没设过 = 全部用户库 + 项目库 */
+  knowledgeBases?: string[]
   tool?: ToolSettings
 }
 
@@ -328,6 +339,7 @@ export interface ProjectCreateParams {
   path: string
   systemPrompt?: string
   enabledTools?: string[]
+  knowledgeBases?: string[]
   tool?: ToolSettings
   archived?: boolean
 }
@@ -338,6 +350,7 @@ export interface ProjectUpdateParams {
   path?: string
   systemPrompt?: string
   enabledTools?: string[]
+  knowledgeBases?: string[]
   tool?: ToolSettings
   archived?: boolean
 }
@@ -381,6 +394,21 @@ export interface SessionUpdateEnabledToolsParams {
   id: string
   /** 完整勾选（整份替换，不是增量）；只收 mcp:/skill: 条目，其余被丢弃 */
   enabledTools: string[]
+}
+
+/** 配置界面用的候选知识库与此刻生效的选择 */
+export interface KnowledgeBaseOptionsResult {
+  options: { name: string; label: string }[]
+  /** 此刻生效的选择：没设过时是回落出来的缺省（全部用户库 +（有项目时）项目库） */
+  selected: string[]
+  /** 这条会话或它的项目有没有明确设过 */
+  explicit: boolean
+}
+
+export interface SessionUpdateKnowledgeBasesParams {
+  id: string
+  /** 完整勾选（整份替换，不是增量）：用户库的目录名，或保留名 `project` */
+  knowledgeBases: string[]
 }
 
 export interface SessionAllowListRemoveParams {
@@ -643,6 +671,13 @@ export interface HostApi {
     delete: (params: ProjectDeleteParams) => Promise<{ success: boolean }>
     getKnownFields: () => Promise<Record<string, ConfigMeta>>
   }
+  /**
+   * 知识库（**桌面独有**）。扩展端不实现 —— 配置界面拿不到候选项，那一节自动不显示，
+   * 与它把 `tools.list` 收窄成一项来关掉扩展能力是同一个手法。
+   */
+  knowledge?: {
+    baseOptions: (params: { sessionId?: string }) => Promise<KnowledgeBaseOptionsResult>
+  }
   session: {
     list: () => Promise<Session[]>
     create: (params?: SessionCreateParams) => Promise<Session>
@@ -657,6 +692,13 @@ export interface HostApi {
      * 创建那一刻读一次，运行期改了也不会生效，不如明确拒绝。
      */
     updateEnabledTools: (params: SessionUpdateEnabledToolsParams) => Promise<{ success: boolean }>
+    /**
+     * 改这条会话启用的知识库（`settings.knowledgeBases`，整份替换）。与扩展能力不同：**运行时
+     * 存在期间照样可改、立刻生效** —— 知识库是工具每次调用现查的，不烤进 Agent 的工具表。
+     */
+    updateKnowledgeBases: (
+      params: SessionUpdateKnowledgeBasesParams
+    ) => Promise<{ success: boolean }>
     delete: (id: string) => Promise<{ success: boolean }>
     // 注：updateModelConfig / updateThinkingLevel 已移除 —— 这两项运行配置的唯一事实源是
     // 会话树，改动统一走 agent.setModel / setThinkingLevel（Agent 未创建时后端直接往树上

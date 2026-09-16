@@ -26,6 +26,7 @@ import type {
   SessionUpdateModelConfigParams,
   SessionUpdateThinkingLevelParams,
   SessionUpdateEnabledToolsParams,
+  SessionUpdateKnowledgeBasesParams,
   SessionUpdateProjectParams,
   SessionUpdateAutoAllowParams,
   SessionAllowListRemoveParams,
@@ -278,6 +279,9 @@ const api = {
     /** 改扩展能力勾选；会话已有 Agent 运行时则拒绝（success: false） */
     updateEnabledTools: (params: SessionUpdateEnabledToolsParams) =>
       ipcRenderer.invoke('session:updateEnabledTools', params),
+    /** 改这条会话启用的知识库（整份替换）；不锁 —— 改完下一次工具调用就生效 */
+    updateKnowledgeBases: (params: SessionUpdateKnowledgeBasesParams) =>
+      ipcRenderer.invoke('session:updateKnowledgeBases', params),
     updateAutoAllow: (params: SessionUpdateAutoAllowParams) =>
       ipcRenderer.invoke('session:updateAutoAllow', params),
     removeAllowListEntry: (params: SessionAllowListRemoveParams) =>
@@ -919,6 +923,13 @@ const api = {
     openFolder: () => ipcRenderer.invoke('knowledge:openFolder'),
     /** 在文件夹中显示条目文件（条目 id：`projects/<id>/…` / `knowledge/<库名>/…`） */
     revealFile: (params: { path: string }) => ipcRenderer.invoke('knowledge:revealFile', params),
+    /** 配置界面用：候选知识库 + 这条会话此刻生效的选择（不给 sessionId 只回候选项） */
+    baseOptions: (params?: { sessionId?: string }) =>
+      ipcRenderer.invoke('knowledge:baseOptions', params ?? {}) as Promise<{
+        options: { name: string; label: string }[]
+        selected: string[]
+        explicit: boolean
+      }>,
     /** 新建用户知识库（用户根下一个目录） */
     createBase: (params: { name: string }) =>
       ipcRenderer.invoke('knowledge:createBase', params) as Promise<KnowledgeCreateReply>,

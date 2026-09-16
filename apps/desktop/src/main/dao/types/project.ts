@@ -17,6 +17,8 @@ export interface ToolSettings {
 /** 项目扩展配置 */
 export interface ProjectSettings {
   enabledTools?: string[]
+  /** 这个项目里新会话缺省启用哪几个知识库（用户库名 / 保留名 `project`）；没设过 = 全部用户库 + 项目库 */
+  knowledgeBases?: string[]
   /** 工具扩展配置 */
   tool?: ToolSettings
 }

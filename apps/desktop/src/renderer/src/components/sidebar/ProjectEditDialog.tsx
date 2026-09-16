@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { type ToolItem } from '../common/ToolSelectList'
 import {
   ExtensionsSection,
+  KnowledgeBasesSection,
   ProjectConfigDialog,
   ProjectInfoForm,
   type ProjectConfigTab
@@ -35,27 +36,40 @@ export function ProjectEditDialog({
   const [loading, setLoading] = useState(true)
   const [allTools, setAllTools] = useState<ToolItem[]>([])
   const [enabledTools, setEnabledTools] = useState<string[]>([])
+  // 知识库：候选项来自宿主，勾选来自项目设置；没设过就把缺省（全部候选）勾上但不写回，
+  // 用户动过才存 —— 否则一次「打开看看就关掉」会把缺省冻成快照，以后新建的库进不来
+  const [kbOptions, setKbOptions] = useState<{ name: string; label: string }[]>([])
+  const [knowledgeBases, setKnowledgeBases] = useState<string[]>([])
+  const [kbTouched, setKbTouched] = useState(false)
   const [envVars, setEnvVars] = useState<EnvVar[]>([])
 
   // 加载项目数据 + 工具列表
   useEffect(() => {
-    Promise.all([window.api.project.getById(projectId), window.api.tools.list()]).then(
-      ([project, tools]) => {
-        setAllTools(tools)
-        if (project) {
-          setName(project.name)
-          setPath(project.path)
-          setSystemPrompt(project.systemPrompt ?? '')
-          const settings = project.settings || {}
-          // 没保存过扩展能力 = 一个都不勾：新会话照此继承，与无项目的聊天会话一致
-          setEnabledTools(Array.isArray(settings.enabledTools) ? settings.enabledTools : [])
-          if (Array.isArray(settings.tool?.envVars)) {
-            setEnvVars(settings.tool.envVars)
-          }
+    Promise.all([
+      window.api.project.getById(projectId),
+      window.api.tools.list(),
+      window.api.knowledge.baseOptions()
+    ]).then(([project, tools, kb]) => {
+      setAllTools(tools)
+      setKbOptions(kb.options)
+      if (project) {
+        setName(project.name)
+        setPath(project.path)
+        setSystemPrompt(project.systemPrompt ?? '')
+        const settings = project.settings || {}
+        // 没保存过扩展能力 = 一个都不勾：新会话照此继承，与无项目的聊天会话一致
+        setEnabledTools(Array.isArray(settings.enabledTools) ? settings.enabledTools : [])
+        setKnowledgeBases(
+          Array.isArray(settings.knowledgeBases)
+            ? settings.knowledgeBases
+            : kb.options.map((o) => o.name)
+        )
+        if (Array.isArray(settings.tool?.envVars)) {
+          setEnvVars(settings.tool.envVars)
         }
-        setLoading(false)
       }
-    )
+      setLoading(false)
+    })
   }, [projectId])
 
   // MCP / Skills 工具
@@ -70,6 +84,13 @@ export function ProjectEditDialog({
   const toggleExtTool = (toolName: string): void => {
     setEnabledTools((prev) =>
       prev.includes(toolName) ? prev.filter((n) => n !== toolName) : [...prev, toolName]
+    )
+  }
+
+  const toggleKnowledgeBase = (name: string): void => {
+    setKbTouched(true)
+    setKnowledgeBases((prev) =>
+      prev.includes(name) ? prev.filter((n) => n !== name) : [...prev, name]
     )
   }
 
@@ -92,6 +113,8 @@ export function ProjectEditDialog({
         path: path || undefined,
         systemPrompt,
         enabledTools,
+        // 没动过就不写：让这个项目继续跟着缺省走
+        ...(kbTouched ? { knowledgeBases } : {}),
         tool: {
           envVars: envVars.filter((v) => v.key.trim()).length
             ? envVars.filter((v) => v.key.trim())
@@ -126,6 +149,13 @@ export function ProjectEditDialog({
             skillTools={skillTools}
             enabledTools={enabledTools}
             onToggle={toggleExtTool}
+          />
+          <KnowledgeBasesSection
+            title={t('projectForm.knowledgeBases')}
+            footer={t('projectForm.knowledgeBasesDesc')}
+            options={kbOptions}
+            selected={knowledgeBases}
+            onToggle={toggleKnowledgeBase}
           />
           <ProjectEnvVarsSection envVars={envVars} onChange={setEnvVars} />
         </ProjectInfoForm>

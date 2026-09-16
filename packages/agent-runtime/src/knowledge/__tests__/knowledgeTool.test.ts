@@ -535,7 +535,7 @@ describe('KT-8 bases —— 只列库', () => {
       ]
     })
     const expected = [
-      'Knowledge bases (pass the name as `base`):',
+      'Knowledge bases in this session (pass the name as `base`):',
       '- project — project "Acme" — /kb/projects/acme',
       '- notes — knowledge base "notes" — /u/notes'
     ].join('\n')
@@ -557,30 +557,31 @@ describe('KT-8 bases —— 只列库', () => {
     expect(h.afterWrite).not.toHaveBeenCalled()
   })
 
-  it('KT-8 库暂不可用时不带目录、括注宿主的说明；用户自己一个库都没有时末尾多一句', async () => {
-    const h = makeTool({
-      bases: [
-        {
-          base: 'project',
-          label: 'this project',
-          note: 'this session does not belong to a project'
-        }
-      ]
+  it('KT-8 宿主给了说明就括注出来；一个库都没启用时只说一句「是用户在设置里选的」', async () => {
+    const withNote = makeTool({
+      bases: [{ base: 'notes', label: 'knowledge base "notes"', note: 'not on disk right now' }]
     })
-    expect(textOf(await h.run('c1', { action: 'bases' }))).toBe(
+    expect(textOf(await withNote.run('c1', { action: 'bases' }))).toBe(
       [
-        'Knowledge bases (pass the name as `base`):',
-        '- project — this project (this session does not belong to a project)',
-        'The user has no knowledge bases of their own yet.'
+        'Knowledge bases in this session (pass the name as `base`):',
+        '- notes — knowledge base "notes" (not on disk right now)'
       ].join('\n')
     )
+
+    // 选择是用户的事：一个都没启用时别让 agent 以为是自己参数写错了
+    const none = makeTool({ bases: [] })
+    const text = textOf(await none.run('c1', { action: 'bases' }))
+    expect(text).toContain('no knowledge bases')
+    expect(text).toContain('the user picks')
   })
 })
 
 describe('KT-9 缺 base 是硬错误', () => {
-  /** 读侧五种调用：除 base 外参数都齐 */
+  /**
+   * 读侧四种调用：除 base 外参数都齐。
+   * **`search` 不在其中** —— 省略 base 是它的正常用法（在本会话启用的全部库里搜）。
+   */
   const READS: KnowledgeToolParams[] = [
-    { action: 'search', query: 'q' },
     { action: 'list' },
     { action: 'read', path: '/a.md' },
     { action: 'validate' },
@@ -597,7 +598,7 @@ describe('KT-9 缺 base 是硬错误', () => {
   )
 
   it.each(table)(
-    'KT-9 %s，base %s → 抛错点名 `base`（并提到 "project" 与 "bases"）；不解析、不过 PEP、不检索、不写盘',
+    'KT-9 %s，base %s → 抛错点名 `base`（并指向 "bases"）；不解析、不过 PEP、不检索、不写盘',
     async (_label, _base, params) => {
       const search = vi.fn(async () => [])
       // 条目真实存在：少了这道守卫，read / validate 会成功，而不是碰巧因为别的原因失败
@@ -607,8 +608,9 @@ describe('KT-9 缺 base 是硬错误', () => {
       })
       const message = await rejectionOf(h.run('c1', params))
       expect(message).toContain(`"${params.action}" needs \`base\``)
-      expect(message).toContain('"project"')
+      // 文案不再把 `project` 摆在第一位：库是用户按会话选的，名字一律问 "bases"
       expect(message).toContain('"bases"')
+      expect(message).not.toContain('"project"')
       expect(h.resolveBase).not.toHaveBeenCalled()
       expect(h.enforcePath).not.toHaveBeenCalled()
       expect(search).not.toHaveBeenCalled()
@@ -738,7 +740,7 @@ describe('KT-11 base 解析失败', () => {
 })
 
 describe('KT-12 给 agent 的文案', () => {
-  it('KT-12 base 参数描述与工具描述都点名 "project" 与 "bases"', () => {
+  it('KT-12 两处文案都指向 "bases"（这条会话有哪几个库），不再把 "project" 摆在第一位', () => {
     const props = KnowledgeParamsSchema.properties as unknown as Record<
       string,
       { description?: string }
@@ -747,9 +749,13 @@ describe('KT-12 给 agent 的文案', () => {
       ['base.description', props.base.description],
       ['KNOWLEDGE_DESCRIPTION', KNOWLEDGE_DESCRIPTION]
     ] as const) {
-      expect(copy, where).toContain('"project"')
       expect(copy, where).toContain('"bases"')
+      // 淡化项目库：两处都不再点名它 —— 它只是 `bases` 里可能有的一个名字
+      expect(copy, where).not.toContain('"project"')
     }
+    // 选择是用户的事、检索可以不点名 base：这两句是本轮的重点，掉了就等于没改
+    expect(KNOWLEDGE_DESCRIPTION).toContain('user picks which bases')
+    expect(KNOWLEDGE_DESCRIPTION).toContain('Leave `base` out')
   })
 })
 

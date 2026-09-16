@@ -34,6 +34,7 @@ import type {
   SessionUpdateModelConfigParams,
   SessionUpdateThinkingLevelParams,
   SessionUpdateEnabledToolsParams,
+  SessionUpdateKnowledgeBasesParams,
   SessionUpdateProjectParams,
   SessionUpdateAutoAllowParams,
   SessionAllowListRemoveParams,
@@ -264,6 +265,8 @@ declare global {
   /** 项目扩展配置 */
   interface ProjectSettings {
     enabledTools?: string[]
+    /** 这个项目里新会话缺省启用哪几个知识库（用户库名 / 保留名 `project`）；没设过 = 全部用户库 + 项目库 */
+    knowledgeBases?: string[]
     tool?: ToolSettings
   }
 
@@ -579,6 +582,10 @@ declare global {
       ) => Promise<{ success: boolean }>
       /** 改扩展能力勾选；会话已有 Agent 运行时则拒绝（success: false） */
       updateEnabledTools: (params: SessionUpdateEnabledToolsParams) => Promise<{ success: boolean }>
+      /** 改这条会话启用的知识库（整份替换）；不锁 —— 改完下一次工具调用就生效 */
+      updateKnowledgeBases: (
+        params: SessionUpdateKnowledgeBasesParams
+      ) => Promise<{ success: boolean }>
       updateAutoAllow: (params: SessionUpdateAutoAllowParams) => Promise<{ success: boolean }>
       removeAllowListEntry: (params: SessionAllowListRemoveParams) => Promise<{ success: boolean }>
       delete: (id: string) => Promise<{ success: boolean }>
@@ -1070,6 +1077,12 @@ declare global {
       openFolder: () => Promise<{ success: boolean }>
       /** 在文件夹中显示条目文件（条目 id；落不进任何 bundle 的路径忽略） */
       revealFile: (params: { path: string }) => Promise<{ success: boolean }>
+      /** 配置界面用：候选知识库 + 这条会话此刻生效的选择（不给 sessionId 只回候选项） */
+      baseOptions: (params?: { sessionId?: string }) => Promise<{
+        options: { name: string; label: string }[]
+        selected: string[]
+        explicit: boolean
+      }>
       /** 新建用户知识库（用户根下一个目录）；失败回已本地化的 error */
       createBase: (params: { name: string }) => Promise<KnowledgeCreateReply>
       /** 在某个目录（库本身或库里的一层）下新建文件夹 */

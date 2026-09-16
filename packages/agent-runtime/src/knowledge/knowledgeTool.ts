@@ -25,12 +25,7 @@
  */
 import { Type } from 'typebox'
 import type { AgentToolResult } from '@earendil-works/pi-agent-core'
-import {
-  KNOWLEDGE_PROJECT_BASE,
-  KNOWLEDGE_TYPES,
-  OKF_STATUSES,
-  type OkfStatus
-} from '@shuvix/chat-protocol/knowledge'
+import { KNOWLEDGE_TYPES, OKF_STATUSES, type OkfStatus } from '@shuvix/chat-protocol/knowledge'
 import type { FileSystemPort } from '../fileTools/port'
 import { splitFrontmatter } from '../markdownFrontmatter'
 import type { SecurityContext } from '../security/types'
@@ -66,7 +61,7 @@ export const KnowledgeParamsSchema = Type.Object({
   base: Type.Optional(
     Type.String({
       description:
-        'Which knowledge base: "project" for the knowledge base of the project this session belongs to, or the name of one of the user\'s own knowledge bases (call "bases" to list them). Required for every action except "bases".'
+        'Which knowledge base to work in — one of the names "bases" lists for this session. Required for every action except "bases" and "search"; omitting it on "search" covers every base this session has.'
     })
   ),
   query: Type.Optional(Type.String({ description: 'For "search": free-text query.' })),
@@ -145,16 +140,14 @@ export interface KnowledgeToolParams {
   limit?: number
 }
 
-export const KNOWLEDGE_DESCRIPTION = `Search, read, check and add to knowledge bases — OKF bundles of markdown entries that later sessions read.
+export const KNOWLEDGE_DESCRIPTION = `Search, read, check and add to this session's knowledge bases — OKF bundles of markdown entries that later sessions read.
 
-Every action except "bases" names its knowledge base with \`base\`:
-- \`"project"\` — the knowledge base of the project this session belongs to.
-- any other name — one of the user's own knowledge bases. The user builds these on purpose and expects them to be used: when a subject belongs in one of them, search and record there rather than in the project's. Call "bases" to see which exist.
+**The user picks which bases a session works with**, and they are mostly the user's own: subject-shaped collections built on purpose and meant to be used. "bases" lists the ones in play here and \`base\` names one of them; a name that is not in that list is refused rather than guessed at.
 
 Actions:
-- "bases": list the knowledge bases you can name (no other parameters).
-- "search": find entries by free text (\`query\`, optional \`limit\`).
-- "list": list the notes of the base — entries ShuviX created and the user's own notes alike.
+- "bases": list this session's knowledge bases (no other parameters).
+- "search": find entries by free text (\`query\`, optional \`base\` / \`limit\`). **Leave \`base\` out to search every base this session has** — the user's selection is already the scope; name one only to stay inside it.
+- "list": list the notes of one base — entries ShuviX created and the user's own notes alike.
 - "read": return one entry by \`path\`.
 - "create": add a new entry — \`type\`, \`title\`, \`description\`, \`body\`, optional \`tags\` / \`sources\` / \`stale_after\` / \`status\`. The host assembles the metadata, names the file after the title, and answers with the absolute path it wrote.
 - "validate": report problems in one note (\`path\`) or in the whole base (no \`path\`). Entries that carry ShuviX's self-description line are held to OKF; the user's own notes are only checked for broken frontmatter. Run it after editing an entry.
@@ -167,7 +160,11 @@ The metadata the host owns in every entry it writes: the \`shuvix\` self-descrip
 
 Paths in this tool are relative to the base, e.g. "/token-refresh.md"; every listing names the base's absolute directory, which is what \`edit\` needs. To point at something in another base, use a \`shuvix://\` URI instead of a path.
 
-Record what will be looked up again: decisions and why they went that way, pitfalls, conventions the code does not state, facts that took effort to establish. Search before creating and revise the entry that already covers the subject rather than adding a near-duplicate. Do not record what the repository already states, or what only matters to this conversation.`
+Record what will be looked up again: decisions and why they went that way, pitfalls, conventions the code does not state, facts that took effort to establish. Put it in the base the subject belongs to — that is what the bases are cut by. Search before creating and revise the entry that already covers the subject rather than adding a near-duplicate. Do not record what the repository already states, or what only matters to this conversation.`
+
+/** 一个库都没启用时对 agent 说的话 —— 别让它以为是自己参数写错了 */
+const NO_BASES =
+  'This session has no knowledge bases — the user picks which ones a session works with in its settings.'
 
 /** 宿主解析出的目标 bundle */
 export interface KnowledgeBundleTarget {
@@ -356,7 +353,7 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
     const base = params.base?.trim()
     if (!base) {
       throw new Error(
-        `"${params.action}" needs \`base\` — "${KNOWLEDGE_PROJECT_BASE}" for this project's knowledge base, or the name of one of the user's (call "bases" to list them)`
+        `"${params.action}" needs \`base\` — one of the names "bases" lists for this session`
       )
     }
     return base
@@ -373,44 +370,42 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
 
   private async bases(): Promise<Result> {
     const bases = await this.deps.listBases()
-    const lines = bases.map(
-      (b) => `- ${b.base} — ${b.label}${b.dir ? ` — ${b.dir}` : ''}${b.note ? ` (${b.note})` : ''}`
-    )
-    const userCount = bases.filter((b) => b.base !== KNOWLEDGE_PROJECT_BASE).length
+    if (bases.length === 0) {
+      return text([NO_BASES], { action: 'bases' })
+    }
     return text(
       [
-        'Knowledge bases (pass the name as `base`):',
-        ...lines,
-        ...(userCount === 0 ? ['The user has no knowledge bases of their own yet.'] : [])
+        'Knowledge bases in this session (pass the name as `base`):',
+        ...bases.map(
+          (b) =>
+            `- ${b.base} — ${b.label}${b.dir ? ` — ${b.dir}` : ''}${b.note ? ` (${b.note})` : ''}`
+        )
       ],
       { action: 'bases' }
     )
   }
 
-  private async search(params: KnowledgeToolParams): Promise<Result> {
-    const query = params.query?.trim()
-    if (!query) throw new Error('"search" needs `query`')
-    const limit = params.limit ?? DEFAULT_LIMIT
-    // base 解析不出（会话不属于任何项目 / 没有这个库）对检索是软条件：回文字不抛错，与 list 同口径
-    const resolved = await this.deps.resolveBase(this.requireBase(params))
-    if ('error' in resolved) return text([resolved.error], { action: 'search' })
-    const bundleDir = resolved.dir
+  /**
+   * 一个库里的命中。`total` 是**全部**命中数、`lines` 按 limit 截 —— 表头报总数、正文只印前几条，
+   * 「还有更多」才一眼看得出来（注入了检索时后端已按 limit 截，两者相等）。
+   */
+  private async searchOne(
+    target: KnowledgeBundleTarget,
+    query: string,
+    limit: number
+  ): Promise<{ total: number; lines: string[] }> {
     if (this.deps.search) {
-      const hits = await this.deps.search(query, { limit, bundleDir })
-      if (hits.length === 0) return text([`No entries match "${query}".`], { action: 'search' })
-      return text(
-        [
-          `${hits.length} result(s) for "${query}" in ${whereLine(resolved)}:`,
-          ...hits.map(
-            (h) =>
-              `- /${normalizeBundlePath(h.path)}${h.status && h.status !== 'stable' ? ` (${h.status})` : ''} — ${h.description || h.title}${h.snippet ? `\n  ${h.snippet}` : ''}`
-          )
-        ],
-        { action: 'search' }
-      )
+      const hits = await this.deps.search(query, { limit, bundleDir: target.dir })
+      return {
+        total: hits.length,
+        lines: hits.map(
+          (h) =>
+            `- /${normalizeBundlePath(h.path)}${h.status && h.status !== 'stable' ? ` (${h.status})` : ''} — ${h.description || h.title}${h.snippet ? `\n  ${h.snippet}` : ''}`
+        )
+      }
     }
     const needle = query.toLowerCase()
-    const { files, notes } = await this.deps.scan(bundleDir)
+    const { files, notes } = await this.deps.scan(target.dir)
     const textOf = new Map(files.map((f) => [f.path, f.text]))
     const matches = notes.filter(
       (n) =>
@@ -419,14 +414,50 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
           s.toLowerCase().includes(needle)
         )
     )
-    if (matches.length === 0) return text([`No entries match "${query}".`], { action: 'search' })
-    return text(
-      [
-        `${matches.length} result(s) for "${query}" in ${whereLine(resolved)}:`,
-        ...matches.slice(0, limit).map(summaryLine)
-      ],
-      { action: 'search' }
-    )
+    return { total: matches.length, lines: matches.slice(0, limit).map(summaryLine) }
+  }
+
+  /**
+   * 检索。点名 `base` 就只搜那一个；**省略 `base` 就搜这条会话启用的全部库**，按库分组 ——
+   * 范围是用户自己圈定的，圈定之后一起搜才有意义。不做跨库分数归一：每个库一套 BM25 索引，
+   * 分数不可比，硬排会骗人。
+   */
+  private async search(params: KnowledgeToolParams): Promise<Result> {
+    const query = params.query?.trim()
+    if (!query) throw new Error('"search" needs `query`')
+    const limit = params.limit ?? DEFAULT_LIMIT
+    const named = params.base?.trim()
+
+    if (named) {
+      // base 解析不出（没启用 / 没有这个库）对检索是软条件：回文字不抛错，与 list 同口径
+      const resolved = await this.deps.resolveBase(named)
+      if ('error' in resolved) return text([resolved.error], { action: 'search' })
+      const { total, lines } = await this.searchOne(resolved, query, limit)
+      if (total === 0) return text([`No entries match "${query}".`], { action: 'search' })
+      return text([`${total} result(s) for "${query}" in ${whereLine(resolved)}:`, ...lines], {
+        action: 'search'
+      })
+    }
+
+    const bases = await this.deps.listBases()
+    const usable = bases.filter((b) => b.dir)
+    if (usable.length === 0) return text([NO_BASES], { action: 'search' })
+    const blocks: string[] = []
+    let total = 0
+    for (const b of usable) {
+      const hit = await this.searchOne({ dir: b.dir!, label: b.label }, query, limit)
+      if (hit.total === 0) continue
+      total += hit.total
+      blocks.push(`base "${b.base}" — ${b.dir}:`, ...hit.lines)
+    }
+    if (total === 0) {
+      return text([`No entries match "${query}" in any of this session's knowledge bases.`], {
+        action: 'search'
+      })
+    }
+    return text([`${total} result(s) for "${query}" across ${usable.length} base(s):`, ...blocks], {
+      action: 'search'
+    })
   }
 
   private async list(params: KnowledgeToolParams): Promise<Result> {

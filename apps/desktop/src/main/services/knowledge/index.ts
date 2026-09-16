@@ -28,7 +28,15 @@ export {
   PROJECTS_CONTAINER,
   USER_CONTAINER
 } from './knowledgePaths'
-export { sessionBundle, resolveBase, listBases, type SessionBundleTarget } from './sessionBundle'
+export {
+  sessionBundle,
+  resolveBase,
+  listBases,
+  selectedBaseNames,
+  knowledgeBaseOptions,
+  type SessionBundleTarget,
+  type KnowledgeBaseOption
+} from './sessionBundle'
 export {
   scanBundle,
   scanAllBundles,

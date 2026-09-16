@@ -28,6 +28,10 @@ export const KNOWN_PROJECT_FIELDS: Record<string, ProjectFieldMeta> = {
   enabledTools: {
     labelKey: 'projectForm.wizardStepExtensions',
     desc: 'List of enabled MCP/Skill identifiers, inherited by sessions created in this project afterwards — entries must be prefixed with mcp: or skill: (string[])'
+  },
+  knowledgeBases: {
+    labelKey: 'projectForm.knowledgeBases',
+    desc: 'Which knowledge bases sessions of this project use by default — names of the user\'s own bases, or "project" for this project\'s own base (string[])'
   }
 }
 
@@ -70,6 +74,7 @@ export class ProjectService {
     path: string
     systemPrompt?: string
     enabledTools?: string[]
+    knowledgeBases?: string[]
     tool?: import('../dao/types').ToolSettings
     archived?: boolean
   }): Project {
@@ -77,6 +82,7 @@ export class ProjectService {
     const id = uuidv7()
     const settings: ProjectSettings = {}
     if (params.enabledTools) settings.enabledTools = params.enabledTools
+    if (params.knowledgeBases) settings.knowledgeBases = params.knowledgeBases
     if (params.tool) settings.tool = params.tool
     const project: Project = {
       id,
@@ -101,16 +107,22 @@ export class ProjectService {
       path?: string
       systemPrompt?: string
       enabledTools?: string[]
+      knowledgeBases?: string[]
       tool?: import('../dao/types').ToolSettings
       archived?: boolean
     }
   ): void {
     // 处理 settings 字段（合并而非覆盖）
     let settingsUpdate: ProjectSettings | undefined
-    if (params.enabledTools !== undefined || params.tool !== undefined) {
+    if (
+      params.enabledTools !== undefined ||
+      params.knowledgeBases !== undefined ||
+      params.tool !== undefined
+    ) {
       const existing = projectDao.pick(id, ['settings'])
       const current: ProjectSettings = { ...(existing?.settings || {}) }
       if (params.enabledTools !== undefined) current.enabledTools = params.enabledTools
+      if (params.knowledgeBases !== undefined) current.knowledgeBases = params.knowledgeBases
       if (params.tool !== undefined) current.tool = { ...(current.tool || {}), ...params.tool }
       settingsUpdate = current
     }

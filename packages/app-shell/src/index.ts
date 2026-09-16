@@ -61,6 +61,11 @@ export { ViewSwitchButton } from './sidebar/ViewSwitchButton'
 export type { ViewSwitchButtonProps, SidebarViewMode } from './sidebar/ViewSwitchButton'
 export { WikiGroup } from './sidebar/WikiGroup'
 export type { WikiGroupProps, WikiFileInfo } from './sidebar/WikiGroup'
+export { KnowledgeBasesSection } from './settings/KnowledgeBasesSection'
+export type {
+  KnowledgeBaseChoice,
+  KnowledgeBasesSectionProps
+} from './settings/KnowledgeBasesSection'
 export { KnowledgeGroup } from './sidebar/KnowledgeGroup'
 export type {
   KnowledgeGroupProps,

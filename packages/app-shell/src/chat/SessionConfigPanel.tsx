@@ -8,8 +8,10 @@ import {
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { TriangleAlert, X } from 'lucide-react'
+import type { KnowledgeBaseOptionsResult } from '@shuvix/chat-protocol/chatApi'
 import type { ToolItem } from '../common/ToolSelectList'
 import { ExtensionsSection } from '../settings/ExtensionsSection'
+import { KnowledgeBasesSection } from '../settings/KnowledgeBasesSection'
 import { SettingsSection, SettingsRow, Toggle } from '../settings/SettingsPrimitives'
 
 /** Skills 分组标识（tools.list 的 group） */
@@ -68,6 +70,57 @@ function SessionExtensionsSection({ sessionId }: { sessionId: string }): React.J
 }
 
 /**
+ * 这条会话用哪几个知识库 —— 与扩展能力并排，但**不随 Agent 上锁**：知识库不进工具表，是
+ * `knowledge` 工具每次调用时现查的，改完下一次调用就作数。
+ *
+ * 没设过时勾的是回落出来的缺省（全部用户库 +（属于项目时）项目库），动一下就固定成这条会话自己的。
+ * 宿主没有知识库（扩展端）或一个候选都没有时整节不显示。
+ */
+function SessionKnowledgeBasesSection({
+  sessionId
+}: {
+  sessionId: string
+}): React.JSX.Element | null {
+  const { t } = useTranslation()
+  const [state, setState] = useState<KnowledgeBaseOptionsResult | null>(null)
+
+  useEffect(() => {
+    let alive = true
+    void getChatApi()
+      .knowledge?.baseOptions({ sessionId })
+      .then((r) => {
+        if (alive) setState(r)
+      })
+    return () => {
+      alive = false
+    }
+  }, [sessionId])
+
+  if (!state || state.options.length === 0) return null
+
+  const toggle = (name: string): void => {
+    const next = state.selected.includes(name)
+      ? state.selected.filter((n) => n !== name)
+      : [...state.selected, name]
+    // 乐观更新：这条写入没有锁，不会被拒；失败也只是下次打开时回到真实值
+    setState({ ...state, selected: next, explicit: true })
+    void getChatApi().session.updateKnowledgeBases({ id: sessionId, knowledgeBases: next })
+  }
+
+  return (
+    <KnowledgeBasesSection
+      title={t('sessionConfig.knowledgeGroup')}
+      footer={
+        state.explicit ? t('sessionConfig.knowledgeDesc') : t('sessionConfig.knowledgeDefault')
+      }
+      options={state.options}
+      selected={state.selected}
+      onToggle={toggle}
+    />
+  )
+}
+
+/**
  * 会话配置面板（除会话标题外的所有配置）。
  *
  * 两节：扩展能力（这条会话的 MCP / Skill 勾选，Agent 创建之前可改）与命令询问。项目指令文件的
@@ -105,6 +158,9 @@ export function SessionConfigPanel({ sessionId }: SessionConfigPanelProps): Reac
     <div className="space-y-5">
       {/* 扩展能力 */}
       <SessionExtensionsSection sessionId={sessionId} />
+
+      {/* 知识库（不随 Agent 上锁） */}
+      <SessionKnowledgeBasesSection sessionId={sessionId} />
 
       {/* 命令询问 */}
       <SettingsSection title={t('sessionConfig.commandGroup')}>

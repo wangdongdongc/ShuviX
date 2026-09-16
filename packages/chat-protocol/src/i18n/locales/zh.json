@@ -325,7 +325,11 @@
     "commandGroup": "操作询问",
     "extensionsGroup": "扩展能力",
     "extensionsDesc": "在智能体创建时读取（首次发送消息时创建）；智能体存在期间只读",
-    "extensionsLocked": "智能体已创建，扩展能力只读"
+    "extensionsLocked": "智能体已创建，扩展能力只读",
+    "knowledgeGroup": "知识库",
+    "knowledgeDesc": "这条会话能搜、能写哪几个库。改完立刻生效，不用新开会话。",
+    "knowledgeDefault": "还没选过 —— 这是缺省（你全部的知识库，以及本项目的库）。动一下就固定成这条会话自己的。",
+    "knowledgeProjectBase": "本项目"
   },
   "projectForm": {
     "createTitle": "新建项目",
@@ -360,7 +364,9 @@
     "wizardNext": "下一步",
     "wizardPrev": "上一步",
     "systemPrompt": "项目提示词",
-    "systemPromptPlaceholder": "注入到本项目每个会话的纯文本提示词(留空则不注入)"
+    "systemPromptPlaceholder": "注入到本项目每个会话的纯文本提示词(留空则不注入)",
+    "knowledgeBases": "知识库",
+    "knowledgeBasesDesc": "这个项目的新会话缺省用哪几个库；每条会话之后都能自己改。"
   },
   "settings": {
     "title": "设置",

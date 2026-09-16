@@ -409,6 +409,20 @@ export class SessionService {
     return true
   }
 
+  /**
+   * 改这条会话启用的知识库（`settings.knowledgeBases`，整份替换）。
+   *
+   * **不像扩展能力那样上锁**：知识库不进 Agent 的工具表，是 `knowledge` 工具每次调用时由宿主
+   * 现查的，所以运行时存在期间照样可改、改完下一次调用就生效。会话不存在返回 false。
+   */
+  updateKnowledgeBases(id: string, knowledgeBases: readonly string[]): boolean {
+    if (!sessionDao.pick(id, ['id'])) return false
+    const names = [...new Set(knowledgeBases.map((n) => n.trim()).filter(Boolean))]
+    sessionDao.updateSettings(id, { knowledgeBases: names })
+    broadcastSessionConfigChanged(id)
+    return true
+  }
+
   /** 批量添加路径到统一允许列表（按 toolType 自动加 `Read(...)`/`Write(...)` 前缀）
    *
    *  仅路径类:命令类工具(bash/ssh)不再有允许列表,逐条询问。

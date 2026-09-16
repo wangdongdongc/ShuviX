@@ -72,4 +72,4 @@ export {
   type KnowledgeSearchHit
 } from './knowledgeTool'
 export { toKnowledgeEntry, toKnowledgeEntryFromNote } from './entryView'
-export { renderKnowledgeGuide } from './knowledgeGuide'
+export { renderKnowledgeGuide, type KnowledgeGuideBase } from './knowledgeGuide'

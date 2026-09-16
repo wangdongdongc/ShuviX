@@ -325,7 +325,11 @@
     "commandGroup": "操作確認",
     "extensionsGroup": "拡張機能",
     "extensionsDesc": "エージェント作成時（最初の送信時）に読み込まれ、エージェントが存在する間は読み取り専用です",
-    "extensionsLocked": "エージェント作成済みのため読み取り専用です"
+    "extensionsLocked": "エージェント作成済みのため読み取り専用です",
+    "knowledgeGroup": "ナレッジベース",
+    "knowledgeDesc": "このセッションが検索・追記できるベース。変更はすぐに効きます。",
+    "knowledgeDefault": "まだ選んでいません —— これは既定（あなたのすべてのベースと、このプロジェクトのベース）です。触ると、このセッション自身の設定になります。",
+    "knowledgeProjectBase": "このプロジェクト"
   },
   "projectForm": {
     "createTitle": "新規プロジェクト",
@@ -360,7 +364,9 @@
     "wizardNext": "次へ",
     "wizardPrev": "戻る",
     "systemPrompt": "プロジェクトプロンプト",
-    "systemPromptPlaceholder": "このプロジェクトの各セッションに注入されるプレーンテキスト(空欄で無効)"
+    "systemPromptPlaceholder": "このプロジェクトの各セッションに注入されるプレーンテキスト(空欄で無効)",
+    "knowledgeBases": "ナレッジベース",
+    "knowledgeBasesDesc": "このプロジェクトの新しいセッションが既定で使うベース。各セッションで後から変更できます。"
   },
   "settings": {
     "title": "設定",

@@ -325,7 +325,11 @@
     "commandGroup": "Ask on Operations",
     "extensionsGroup": "Extensions",
     "extensionsDesc": "Read when the agent is created (on the first message); read-only while it exists",
-    "extensionsLocked": "Read-only: the agent has already been created"
+    "extensionsLocked": "Read-only: the agent has already been created",
+    "knowledgeGroup": "Knowledge bases",
+    "knowledgeDesc": "Which bases this session can search and write to. Changes take effect right away.",
+    "knowledgeDefault": "Not picked yet — this is the default (all of your knowledge bases, plus this project's). Touch it and it becomes this session's own.",
+    "knowledgeProjectBase": "This project"
   },
   "projectForm": {
     "createTitle": "New Project",
@@ -360,7 +364,9 @@
     "wizardNext": "Next",
     "wizardPrev": "Back",
     "systemPrompt": "Project prompt",
-    "systemPromptPlaceholder": "Plain-text prompt injected into every session of this project (leave empty for none)"
+    "systemPromptPlaceholder": "Plain-text prompt injected into every session of this project (leave empty for none)",
+    "knowledgeBases": "Knowledge bases",
+    "knowledgeBasesDesc": "Which bases new sessions of this project start with; each session can change its own afterwards."
   },
   "settings": {
     "title": "Settings",

@@ -65,6 +65,7 @@ import {
 import type { Project } from '../types'
 import { NodeExecutionEnv } from '@earendil-works/pi-agent-core/node'
 import { createAgentTool } from './AgentTool'
+import { knowledgeBaseOptions } from '../services/knowledge'
 
 /** 会话所属项目（变量表/注入解析与 SkillTool 的同源查询；无项目会话返回 undefined） */
 function sessionProject(
@@ -295,11 +296,13 @@ const desktopAgentHost: AgentHostAdapter = {
   },
   // 无项目会话返回 null（不注入）—— 与项目提示词同一种降级
   resolveProjectMemory: (sessionId) => resolveProjectMemoryIndex(sessionId),
-  // 知识库引导：文案是静态的（不扫库、不数条目、不给路径 —— 路径只由 knowledge 工具的
-  // locate 发放），这里只判「本会话属不属于某个项目」。档案带不带 knowledge 工具那道门
-  // 在 createAgent 里
-  resolveProjectKnowledge: (sessionId) =>
-    sessionProject(sessionId) ? renderKnowledgeGuide() : null
+  // 知识库引导：只列这条会话启用了哪几个库（不扫库、不数条目、不给路径 —— 路径只由 knowledge
+  // 工具发放），一个都没启用就回 null、整段不注入。档案带不带 knowledge 工具那道门在 createAgent 里
+  resolveKnowledgeBases: (sessionId) => {
+    const { options, selected } = knowledgeBaseOptions(sessionId)
+    const enabled = options.filter((o) => selected.includes(o.name))
+    return renderKnowledgeGuide(enabled)
+  }
 }
 
 /** 桌面唯一 agent 工厂：根会话（AgentSession）与派生（AgentManager）共用 */

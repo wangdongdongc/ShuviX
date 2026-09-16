@@ -6,6 +6,7 @@ import {
   createKnowledgeFolder,
   entryFilePath,
   getUserKnowledgeRoot,
+  knowledgeBaseOptions,
   listKnowledgeEntries,
   locateBundle
 } from '../services/knowledge'
@@ -39,6 +40,13 @@ export function registerKnowledgeHandlers(): void {
     shell.showItemInFolder(abs)
     return { success: true }
   })
+  /**
+   * 配置界面用的候选库与此刻生效的选择：给会话 id 就回这条会话的（含回落出来的缺省），
+   * 不给（项目配置对话框）只回候选项。
+   */
+  ipcMain.handle('knowledge:baseOptions', (_event, params?: { sessionId?: string }) =>
+    knowledgeBaseOptions(params?.sessionId)
+  )
   /** 新建：名字不合法 / 重名 / 目录已不在都回 { success:false, error }，侧栏把原因显示在输入行下面 */
   ipcMain.handle('knowledge:createBase', (_event, params: { name: string }) =>
     createKnowledgeBase(params.name)

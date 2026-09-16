@@ -7,6 +7,7 @@ import type {
   SessionUpdateProjectParams,
   SessionUpdateAutoAllowParams,
   SessionUpdateEnabledToolsParams,
+  SessionUpdateKnowledgeBasesParams,
   SessionAllowListRemoveParams,
   SessionUpdateTitleParams,
   SessionCreateParams
@@ -48,6 +49,17 @@ export function registerSessionHandlers(): void {
     'session:updateEnabledTools',
     (_event, params: SessionUpdateEnabledToolsParams) => ({
       success: sessionService.updateEnabledTools(params.id, params.enabledTools)
+    })
+  )
+
+  /**
+   * 改这条会话启用的知识库。与扩展能力不同：**不看有没有运行时** —— 知识库是工具每次调用
+   * 现查的，改完下一次调用就生效。
+   */
+  ipcMain.handle(
+    'session:updateKnowledgeBases',
+    (_event, params: SessionUpdateKnowledgeBasesParams) => ({
+      success: sessionService.updateKnowledgeBases(params.id, params.knowledgeBases)
     })
   )
 

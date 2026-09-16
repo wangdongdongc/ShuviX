@@ -149,16 +149,17 @@ export interface AgentHostAdapter {
    */
   resolveProjectMemory?: (rootSessionId: string) => string | null | Promise<string | null>
   /**
-   * 项目知识库引导解析（`profile.projectAwareness` **且**档案带 `knowledge` 工具时调用）：
-   * 返回围栏正文或 null，围栏由 fenceProjectKnowledge 统一加。
+   * 知识库引导解析（档案带 `knowledge` 工具时调用）：返回围栏正文或 null，围栏由
+   * fenceKnowledgeBases 统一加。
    *
-   * 比另两段多一道工具清单的门：这段文案通篇在教 `knowledge` 工具怎么用，档案不带这个工具时
-   * 注入它就是在教一个够不着的东西 —— 同「关掉项目感知后写入指令还指着不注入的目录」那类错误。
+   * **不跟项目感知走**：库是用户按会话选的，与「知不知道自己在哪个项目里」无关 —— 不属于任何
+   * 项目的会话照样有用户自己的库。门只剩一道工具清单：这段文案通篇是 `knowledge` 工具的用法，
+   * 档案不带这个工具时注入它就是在教一个够不着的东西。
    *
-   * 只收 rootSessionId：库按项目绑定（无项目会话解析为 null），与另两段同源。
-   * **不含任何条目** —— 条目怎么进系统提示词是尚未决定的设计，这里只讲库的存在与入口。
+   * 只收 rootSessionId（派生按根会话解析）。**不含任何条目** —— 条目怎么进系统提示词是尚未
+   * 决定的设计，这里只列出手头有哪几个库。
    */
-  resolveProjectKnowledge?: (rootSessionId: string) => string | null | Promise<string | null>
+  resolveKnowledgeBases?: (rootSessionId: string) => string | null | Promise<string | null>
 }
 
 export interface CreateAgentParams {
@@ -244,8 +245,8 @@ const fenceProjectPrompt = (text: string): string => `<project_prompt>\n${text}\
 
 const fenceProjectMemory = (text: string): string => `<project_memory>\n${text}\n</project_memory>`
 
-const fenceProjectKnowledge = (text: string): string =>
-  `<project_knowledge>\n${text}\n</project_knowledge>`
+const fenceKnowledgeBases = (text: string): string =>
+  `<knowledge_bases>\n${text}\n</knowledge_bases>`
 
 /** 会话级工具（用户能在工具选择器里勾选的那两类）；其余为内置工具名 + 'agent' */
 const isSessionScopedTool = (name: string): boolean =>
@@ -337,22 +338,21 @@ export function createAgentFactory(host: AgentHostAdapter): AgentFactory {
         systemPrompt += `\n\n${fenceInstructionFile(resolved.filename, resolved.content)}`
       }
     }
-    // 项目感知一个开关带三段注入：数据源与围栏各自独立，但「要不要知道自己在哪个项目里」
-    // 只是一个决定；宿主未实现某个 seam（扩展端无项目记忆、无知识库）时那一段自然缺席。
-    if (profile.projectAwareness) {
-      if (host.resolveProjectPrompt) {
-        const text = (await host.resolveProjectPrompt(rootSessionId))?.trim()
-        if (text) systemPrompt += `\n\n${fenceProjectPrompt(text)}`
-      }
-      // 知识库在前、项目记忆在后：前者是在用的库，后者是只读的旧档 —— 旧档的表头指回前者
-      if (host.resolveProjectKnowledge && profile.tools?.includes(KNOWLEDGE_TOOL_NAME)) {
-        const text = (await host.resolveProjectKnowledge(rootSessionId))?.trim()
-        if (text) systemPrompt += `\n\n${fenceProjectKnowledge(text)}`
-      }
-      if (host.resolveProjectMemory) {
-        const text = (await host.resolveProjectMemory(rootSessionId))?.trim()
-        if (text) systemPrompt += `\n\n${fenceProjectMemory(text)}`
-      }
+    // 项目感知一个开关带两段注入（项目提示词、只读的旧项目记忆）：数据源与围栏各自独立，但
+    // 「要不要知道自己在哪个项目里」只是一个决定；宿主未实现某个 seam 时那一段自然缺席。
+    if (profile.projectAwareness && host.resolveProjectPrompt) {
+      const text = (await host.resolveProjectPrompt(rootSessionId))?.trim()
+      if (text) systemPrompt += `\n\n${fenceProjectPrompt(text)}`
+    }
+    // 知识库在前、项目记忆在后：前者是在用的库，后者是只读的旧档 —— 旧档的表头指回前者。
+    // 这一段**不跟项目感知走**：库是按会话选的，无项目的会话照样有用户自己的库
+    if (host.resolveKnowledgeBases && profile.tools?.includes(KNOWLEDGE_TOOL_NAME)) {
+      const text = (await host.resolveKnowledgeBases(rootSessionId))?.trim()
+      if (text) systemPrompt += `\n\n${fenceKnowledgeBases(text)}`
+    }
+    if (profile.projectAwareness && host.resolveProjectMemory) {
+      const text = (await host.resolveProjectMemory(rootSessionId))?.trim()
+      if (text) systemPrompt += `\n\n${fenceProjectMemory(text)}`
     }
     // 调用方给的上下文块（已围栏）：排在项目注入之后，同样住在系统提示词里、免重注入
     for (const block of params.systemContext ?? []) {
