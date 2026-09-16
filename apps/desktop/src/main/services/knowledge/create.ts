@@ -20,15 +20,17 @@ import {
   normalizeBundlePath,
   slugify
 } from '@shuvix/agent-runtime'
-import {
-  KNOWLEDGE_BUILTIN_BASE,
-  KNOWLEDGE_PROJECT_BASE,
-  isBuiltinKnowledgeId
-} from '@shuvix/chat-protocol/knowledge'
+import { KNOWLEDGE_BUILTIN_BASE, KNOWLEDGE_PROJECT_BASE } from '@shuvix/chat-protocol/knowledge'
 import { appEventBus } from '../../utils/appEventBus'
 import { t } from '../../i18n'
 import { recordKnowledgeChange } from './changes'
-import { bundleDir, getUserKnowledgeRoot, isValidLibraryName, userBundleId } from './knowledgePaths'
+import {
+  bundleDir,
+  getUserKnowledgeRoot,
+  isBuiltinBundle,
+  isValidLibraryName,
+  userBundleId
+} from './knowledgePaths'
 import { invalidateKnowledgeScan, listBundles } from './scan'
 
 /** 手工新建的署名：与 agent 的 `shuvix-<档案>/<模型>` 一眼分得开 */
@@ -157,8 +159,9 @@ export function createKnowledgeFolder(dirId: string, rawName: string): Knowledge
   const name = rawName.trim()
   const bad = nameError(name)
   if (bad) return { success: false, error: bad }
-  // 内置库只读（文件在应用包里）：侧栏不给它新建菜单，这里再守一道
-  if (isBuiltinKnowledgeId(dirId)) return { success: false, error: t('knowledge.errReadOnly') }
+  // 内置库只读（文件在应用包里）：侧栏不给它新建菜单，这里再守一道。判据必须与 resolveDir 同一套
+  // 归一（`isBuiltinBundle` 走 normalizeBundlePath，`./builtin/…` 也剥）—— 两套归一就有一条绕过去的路
+  if (isBuiltinBundle(dirId)) return { success: false, error: t('knowledge.errReadOnly') }
   const target = resolveDir(dirId)
   if (!target) return { success: false, error: t('knowledge.errNoSuchDir') }
   if (takenIn(target.abs, name)) {
@@ -184,7 +187,7 @@ export function createKnowledgeFolder(dirId: string, rawName: string): Knowledge
 export function createKnowledgeEntry(dirId: string, rawTitle: string): KnowledgeCreateResult {
   const title = rawTitle.trim()
   if (!title) return { success: false, error: t('knowledge.errEmptyTitle') }
-  if (isBuiltinKnowledgeId(dirId)) return { success: false, error: t('knowledge.errReadOnly') }
+  if (isBuiltinBundle(dirId)) return { success: false, error: t('knowledge.errReadOnly') }
   const target = resolveDir(dirId)
   if (!target) return { success: false, error: t('knowledge.errNoSuchDir') }
 

@@ -101,9 +101,16 @@ export function listBundleDirs(bundle: string, limit = DIR_LIMIT): string[] {
 /**
  * 随应用发布的内置库 bundle id（`builtin/<库名>`）：内置根下每个非隐藏子目录一个。根不在（开发期没拷、
  * 打包漏了）就一个都没有 —— 内置库是增益，缺席不该让别的库跟着出错。
+ *
+ * 判据要**深到语言那一层**（`bundleDir` 现算的那一版）：某个库只发了别的语言、又没有 en 兜底时，
+ * 它在 `bases` / 缺省选择 / 围栏里都不存在（sessionBundle 的 `builtinTarget` 按语言目录判），
+ * 这里若只看库目录在不在，侧栏就会多出一行永远空的只读库 —— 同一件东西两个答案。
  */
 export function listBuiltinBundles(): string[] {
-  return subdirectories(getBuiltinKnowledgeRoot()).filter(isValidLibraryName).map(builtinBundleId)
+  return subdirectories(getBuiltinKnowledgeRoot())
+    .filter(isValidLibraryName)
+    .map(builtinBundleId)
+    .filter((bundle) => existsSync(bundleDir(bundle)))
 }
 
 /** 磁盘上现存的全部 bundle id：项目库在前，用户库（`knowledge/<库名>`）居中，内置库（`builtin/<库名>`）在后 */

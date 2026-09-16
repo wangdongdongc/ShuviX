@@ -80,7 +80,7 @@ concept".
 ## The body
 
 Markdown. Link other entries of the **same base** with bundle-absolute markdown links —
-`[Token refresh](/auth/token-refresh.md)` — the root being the base's directory; validation
+`[Agent definition file](/agent-md.md)` — the root being the base's directory; validation
 warns on links that resolve nowhere inside the base. To point at something in **another** base,
 or at a session, use a `shuvix://` URI instead of a path (link checks skip anything with a
 scheme). Headings, code fences and footnotes are ordinary markdown; a `# Heading` at the top

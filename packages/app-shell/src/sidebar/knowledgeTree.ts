@@ -41,7 +41,7 @@ export interface KnowledgeTreeDir {
   scopeDir: KnowledgeScopeDir | null
   /** 宿主给的显示名（项目库：项目当前的名字）；无则 null，按目录名显示 */
   title: string | null
-  /** 只读（随应用发布的内置库及其每一层）：没有新建菜单，排在最后 */
+  /** 只读（随应用发布的内置库及其每一层）：没有新建菜单，根上那一行置顶且有自己的图标 */
   readonly: boolean
   dirs: KnowledgeTreeDir[]
   files: KnowledgeTreeFile[]
@@ -112,7 +112,7 @@ export function buildKnowledgeTree(
       name: cut === -1 ? dirPath : dirPath.slice(cut + 1),
       scopeDir: scopeDirOf(dirPath),
       title: hostName(names, dirPath),
-      // 内置容器下的每一层都只读 —— 按 id 首段判，与宿主 isBuiltinKnowledgeId 同口径
+      // 内置容器下的每一层都只读 —— 按 id 首段判，与宿主 isBuiltinBundle 同口径
       readonly:
         dirPath === KNOWLEDGE_BUILTIN_DIR || dirPath.startsWith(`${KNOWLEDGE_BUILTIN_DIR}/`),
       dirs: [],
@@ -163,7 +163,7 @@ export function buildKnowledgeTree(
   // 用户库（条目 id `knowledge/<库名>/…`）**不包一层**：它们与 Projects 容器平级。树按条目 id 建，
   // 于是先长出一个 `knowledge` 节点 —— 把它的子目录提到根上、自己拿掉。置顶判据用 path 而不是
   // name：一个恰好叫 `projects` 的用户库（path `knowledge/projects`）不该被当成项目容器
-  // 内置库（`builtin/<库名>/…`）同样不包一层：一个内置库就是根上的一行（只读、排最后）
+  // 内置库（`builtin/<库名>/…`）同样不包一层：一个内置库就是根上的一行（只读、置顶）
   for (const container of [KNOWLEDGE_USER_ROOT_DIR, KNOWLEDGE_BUILTIN_DIR]) {
     const idx = root.dirs.findIndex((d) => d.path === container)
     if (idx === -1) continue

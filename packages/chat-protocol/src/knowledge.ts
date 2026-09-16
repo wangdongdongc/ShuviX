@@ -78,10 +78,9 @@ export const KNOWLEDGE_BUILTIN_BASE = 'shuvix'
  * **目录下按语言再分一层**（`<库名>/<lang>/…`），生效的只有界面语言那一版。
  */
 export const KNOWLEDGE_BUILTIN_DIR = 'builtin'
-
-/** bundle id / 条目 id 是否指向内置库 */
-export const isBuiltinKnowledgeId = (id: string): boolean =>
-  id.replace(/\\/g, '/').replace(/^\/+/, '').split('/')[0] === KNOWLEDGE_BUILTIN_DIR
+// 「这个 id 是不是内置库」刻意**不**在这里出判定函数：宿主那一侧的 `isBuiltinBundle` 走
+// normalizeBundlePath（连 `./` 一起剥），这里若再写一个只剥前导 `/` 的版本，两套归一之间就有一条
+// 绕过只读闸的路（`./builtin/…` 一个说不是、另一个说是）。渲染端按首段自己比即可。
 
 /**
  * ShuviX 的 `type` 词汇表（开放：OKF 消费者必须容忍未知 type，宿主对未知值只展示不拒绝）。

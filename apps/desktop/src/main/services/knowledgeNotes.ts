@@ -20,12 +20,14 @@ import {
   KNOWLEDGE_USER_PROJECT_ID
 } from '@shuvix/chat-protocol/knowledge'
 import { normalizeBundlePath, titleFromPath } from '@shuvix/agent-runtime'
+import { createLogger } from '../logger'
 import { projectDao } from '../dao/projectDao'
 import { sessionDao } from '../dao/sessionDao'
 import { sessionService } from './sessionService'
 import {
   bundleDir,
   entryFilePath,
+  listBuiltinBundles,
   getShuvixKnowledgeRoot,
   getUserKnowledgeRoot,
   isBuiltinBundle,
@@ -34,6 +36,8 @@ import {
   USER_CONTAINER
 } from './knowledge'
 import type { Project, Session } from '../types'
+
+const log = createLogger('KnowledgeNotes')
 
 /** 面向用户的功能名（隐藏项目的 name；同旧 wiki 项目的「知识库」，靠 id 区分） */
 const KNOWLEDGE_PROJECT_NAME = '知识库'
@@ -94,9 +98,22 @@ function ensureKnowledgeBuiltinProject(bundle: string): Project {
 /**
  * 界面语言切换后把内置库承载项目的 path 指向新语言那一版 —— 只在它已经存在时（从没打开过内置条目就
  * 没有这个项目，不必凭空建）。开着的笔记本会话下一次读文件就落到新目录：notebookPath 在各语言里同名。
+ *
+ * **一个承载项目只服务一个内置库**：它的 id 是常量，path 只能指向一个目录。今天内置库恰好一个；真出现
+ * 第二个时，按名字重指会让先开的那些会话解析到别人的目录里（而且两边文件名多半不同，表现是「打开即空」
+ * 而不是报错）—— 那一步得连承载项目 id 一起带上库名。所以这里遇到不止一个就什么都不做并记一笔，
+ * 而不是让「最后一个赢」悄悄发生。
  */
-export function syncKnowledgeBuiltinProject(bundle: string): void {
-  if (projectDao.findById(KNOWLEDGE_BUILTIN_PROJECT_ID)) ensureKnowledgeBuiltinProject(bundle)
+export function syncKnowledgeBuiltinProject(): void {
+  if (!projectDao.findById(KNOWLEDGE_BUILTIN_PROJECT_ID)) return
+  const bundles = listBuiltinBundles()
+  if (bundles.length !== 1) {
+    log.warn(
+      `builtin knowledge carrier left as is: expected exactly one builtin base, found ${bundles.length}`
+    )
+    return
+  }
+  ensureKnowledgeBuiltinProject(bundles[0])
 }
 
 /**

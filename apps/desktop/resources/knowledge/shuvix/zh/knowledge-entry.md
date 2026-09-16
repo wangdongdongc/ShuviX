@@ -73,7 +73,7 @@ Format（OKF）v0.2，外加一个小小的自有 profile：frontmatter 是元�
 ## 正文
 
 Markdown。链接**同一个库**里的其他条目用 bundle 绝对的 markdown 链接 ——
-`[Token refresh](/auth/token-refresh.md)`，根是库目录；校验会对库内解析不到的链接发警告。要指向
+`[Agent 定义文件](/agent-md.md)`，根是库目录；校验会对库内解析不到的链接发警告。要指向
 **另一个库**里的东西或某条会话，用 `shuvix://` URI 而不是路径（链接检查跳过任何带 scheme 的目标）。
 标题、代码围栏、脚注都是普通 markdown；开头的 `# 标题` 对没有 frontmatter 的笔记兼作标题。
 
