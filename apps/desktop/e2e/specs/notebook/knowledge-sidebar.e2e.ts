@@ -189,12 +189,13 @@ describe('知识库分组 × 用户知识库', () => {
   it('KE-1 树形态：Projects 容器置顶、用户库与之平级；不该有的目录与文件不占行；默认折叠态', async () => {
     await kb.expand()
 
-    // 顶层 = Projects 容器（置顶）+ 每个有 md 的用户库，全部零缩进 —— 没有包一层「knowledge」
+    // 顶层 = 内置库（置顶）→ Projects 容器 → 每个有 md 的用户库，全部零缩进 ——
+    // 没有包一层「knowledge」，也没有包一层「builtin」
     const top = await kb.topDirs()
-    expect(top[0]?.path).toBe('projects')
+    expect(top.slice(0, 2).map((d) => d.path)).toEqual(['builtin/shuvix', 'projects'])
     expect(
       top
-        .slice(1)
+        .slice(2)
         .map((d) => d.path)
         .sort()
     ).toEqual(['knowledge/empty', 'knowledge/notes', 'knowledge/读书笔记'].sort())
@@ -202,6 +203,7 @@ describe('知识库分组 × 用户知识库', () => {
     // 被提掉的用户根容器与隐藏目录：任何层级都不该有目录行。空库有行 —— 那是新建条目的落点
     const dirPaths = (await kb.dirs()).map((d) => d.path)
     expect(dirPaths).not.toContain('knowledge')
+    expect(dirPaths).not.toContain('builtin')
     expect(dirPaths).not.toContain('knowledge/.trash')
     expect(dirPaths).toContain('knowledge/empty')
 

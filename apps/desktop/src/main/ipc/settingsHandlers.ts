@@ -1,6 +1,8 @@
 import { ipcMain, BrowserWindow, nativeTheme } from 'electron'
 import { settingsService, KNOWN_SETTINGS } from '../services/settingsService'
 import { changeLanguage } from '../i18n'
+import { listBuiltinBundles, refreshBuiltinKnowledge } from '../services/knowledge'
+import { syncKnowledgeBuiltinProject } from '../services/knowledgeNotes'
 import type { SettingsSetParams } from '../types'
 
 /**
@@ -42,6 +44,9 @@ export function registerSettingsHandlers(): void {
     // 语言变更时同步更新主进程 i18n
     if (params.key === 'general.language') {
       changeLanguage(params.value)
+      // 内置知识库按界面语言选目录：失效它的扫描 / 检索缓存、把承载项目指向新语言那一版、让侧栏重扫
+      refreshBuiltinKnowledge()
+      for (const bundle of listBuiltinBundles()) syncKnowledgeBuiltinProject(bundle)
     }
     // 主题变更时同步 nativeTheme（让 widget 等 webContents 的 prefers-color-scheme 跟随）
     if (params.key === 'general.theme') {

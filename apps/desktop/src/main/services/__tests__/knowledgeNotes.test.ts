@@ -20,7 +20,9 @@ const state = vi.hoisted(() => ({ root: '' }))
 
 vi.mock('../../utils/paths', () => ({
   getShuvixKnowledgeRootDir: () => state.root,
-  getUserKnowledgeRootDir: () => `${state.root}-user`
+  getUserKnowledgeRootDir: () => `${state.root}-user`,
+  // 内置库根替身：不存在的兄弟目录 —— 这些用例里没有内置库
+  getBuiltinKnowledgeDir: () => `${state.root}-builtin`
 }))
 vi.mock('../../dao/projectDao', () => ({
   projectDao: { findById: vi.fn(), insert: vi.fn(), update: vi.fn() }
@@ -42,6 +44,8 @@ vi.mock('../knowledge', async () => {
     getUserKnowledgeRoot: real.getUserKnowledgeRoot,
     entryFilePath: real.entryFilePath,
     isUserBundle: real.isUserBundle,
+    isBuiltinBundle: real.isBuiltinBundle,
+    bundleDir: real.bundleDir,
     locateBundle: real.locateBundle,
     USER_CONTAINER: real.USER_CONTAINER
   }

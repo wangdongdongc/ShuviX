@@ -23,8 +23,10 @@ import { rgFilesList } from '../../utils/toolUtils/ripgrep'
 import { createLogger } from '../../logger'
 import {
   PROJECTS_CONTAINER,
+  builtinBundleId,
   bundleDir,
   bundleFilePath,
+  getBuiltinKnowledgeRoot,
   getUserKnowledgeRoot,
   isValidLibraryName,
   userBundleId
@@ -96,9 +98,21 @@ export function listBundleDirs(bundle: string, limit = DIR_LIMIT): string[] {
   return out
 }
 
-/** 磁盘上现存的全部 bundle id：项目库在前，用户库（`knowledge/<库名>`）在后 */
+/**
+ * 随应用发布的内置库 bundle id（`builtin/<库名>`）：内置根下每个非隐藏子目录一个。根不在（开发期没拷、
+ * 打包漏了）就一个都没有 —— 内置库是增益，缺席不该让别的库跟着出错。
+ */
+export function listBuiltinBundles(): string[] {
+  return subdirectories(getBuiltinKnowledgeRoot()).filter(isValidLibraryName).map(builtinBundleId)
+}
+
+/** 磁盘上现存的全部 bundle id：项目库在前，用户库（`knowledge/<库名>`）居中，内置库（`builtin/<库名>`）在后 */
 export function listBundles(): string[] {
-  return [...listProjectBundles(), ...listUserLibraries().map(userBundleId)]
+  return [
+    ...listProjectBundles(),
+    ...listUserLibraries().map(userBundleId),
+    ...listBuiltinBundles()
+  ]
 }
 
 /** 一个 bundle 下全部 md 的 bundle 相对路径（字典序）；目录不存在为空 */

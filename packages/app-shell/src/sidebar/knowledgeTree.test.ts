@@ -67,6 +67,7 @@ describe('buildKnowledgeTree — 根与顶层', () => {
       name: '',
       scopeDir: null,
       title: null,
+      readonly: false,
       dirs: [],
       files: []
     })
@@ -380,6 +381,7 @@ describe('buildKnowledgeTree — dirs 物化空目录', () => {
     name: path.slice(path.lastIndexOf('/') + 1),
     scopeDir: null,
     title: null,
+    readonly: false,
     dirs: [],
     files: [],
     ...over
@@ -408,6 +410,7 @@ describe('buildKnowledgeTree — dirs 物化空目录', () => {
       name: '',
       scopeDir: null,
       title: null,
+      readonly: false,
       files: [],
       dirs: [
         // 容器置顶；`knowledge/…` 的三个库被提上来与它平级、按名排

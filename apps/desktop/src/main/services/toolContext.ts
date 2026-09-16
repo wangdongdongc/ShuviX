@@ -15,7 +15,8 @@ import {
   getDefaultSkillsDir,
   getDefaultBotsDir,
   getMemoryRootDir,
-  getBuiltinSkillsDir
+  getBuiltinSkillsDir,
+  getBuiltinKnowledgeDir
 } from '../utils/paths'
 import { skillService } from './skillService'
 import { shellParser } from './shellParserService'
@@ -238,6 +239,8 @@ export function makeDesktopSecurityProvider(
       ],
       memoryDirs: [getMemoryRootDir()],
       botsDir: getDefaultBotsDir(),
+      // protect-builtin-knowledge：随应用发布的内置知识库目录，agent 永远不能写
+      builtinKnowledgeDir: getBuiltinKnowledgeDir(),
       home: homedir(),
       systemDirs: windowsSystemDirs()
     }),

@@ -1068,8 +1068,10 @@ declare global {
         userRoot: string
         /** 库与库内目录的 id（空目录也在其中） */
         dirs: string[]
-        /** bundle id → 显示名（项目库：项目当前的名字） */
+        /** bundle id → 显示名（项目库：项目当前的名字；内置库：ShuviX） */
         bundleNames: Record<string, string>
+        /** bundle id → 绝对目录，只给两个根拼不出来的那些（内置库） */
+        bundleDirs: Record<string, string>
       }>
       /** 打开条目笔记：一文件至多一笔记本会话，已存在则复用返回；title 为条目显示名 */
       openNote: (params: { path: string; title?: string }) => Promise<Session>

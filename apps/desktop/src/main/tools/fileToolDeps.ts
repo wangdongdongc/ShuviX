@@ -23,7 +23,7 @@ import {
 } from '../services/toolContext'
 import { appEventBus } from '../utils/appEventBus'
 // 纯路径算术，不带扫描 / git / 检索依赖 —— 故直接引子模块而非 services/knowledge 入口
-import { locateBundle } from '../services/knowledge/knowledgePaths'
+import { isBuiltinBundle, locateBundle } from '../services/knowledge/knowledgePaths'
 import { t } from '../i18n'
 
 export const READ_DESCRIPTION =
@@ -43,6 +43,12 @@ function desktopGuards(sessionId: string): FileGuards {
   }
 }
 
+/** 落在某个**可写** bundle 里的路径 → bundle 相对路径；内置库（只读）与 bundle 之外一律 null */
+function bundleRelOf(absPath: string): string | null {
+  const located = locateBundle(absPath)
+  return located && !isBuiltinBundle(located.bundle) ? located.rel : null
+}
+
 export function makeDesktopFileToolDeps(ctx: ToolContext, decoders?: ReadDecoders): FileToolDeps {
   const sid = ctx.sessionId
   return {
@@ -58,7 +64,8 @@ export function makeDesktopFileToolDeps(ctx: ToolContext, decoders?: ReadDecoder
     sessionId: sid,
     // OKF 知识库分支：落在某个 bundle 里的 md 落盘后校验 + 盖 `generated`（actor 惰性取，
     // 模型可中途切换）。给的是 bundle 相对路径 —— 诊断与条目路径都按 bundle 内的位置说话
-    knowledge: { locate: (p) => locateBundle(p)?.rel ?? null, actor: () => agentActorOf(ctx) },
+    // 内置库（应用包里的只读说明书）不当 bundle 看：不盖章、不回执 —— 写入本身由策略拒
+    knowledge: { locate: (p) => bundleRelOf(p), actor: () => agentActorOf(ctx) },
     decoders,
     abortError: TOOL_ABORTED,
     labels: { read: t('tool.readLabel'), write: t('tool.writeLabel'), edit: t('tool.editLabel') },
@@ -71,7 +78,7 @@ export function makeDesktopFileToolDeps(ctx: ToolContext, decoders?: ReadDecoder
       // 落在某个 bundle 里的写入进变更管线（git 提交 + knowledge.changed）。
       // 模块按需加载：它带着扫描 / git / 检索 / dao 依赖，普通写入不该为它付加载成本，
       // 文件工具的单测也不该因此被拖进数据库初始化
-      if (locateBundle(portPath)) {
+      if (bundleRelOf(portPath) !== null) {
         const actor = agentActorOf(ctx)
         void import('../services/knowledge')
           .then((m) => m.notifyKnowledgeFileChanged(portPath, { kind, actor }))

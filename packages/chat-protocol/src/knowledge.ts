@@ -23,9 +23,18 @@ export const KNOWLEDGE_PROJECT_ID = '__knowledge__'
  */
 export const KNOWLEDGE_USER_PROJECT_ID = '__knowledge_user__'
 
-/** 两个知识库承载项目之一（隐藏项目过滤、侧栏选中态、笔记本属性卡兜底共用） */
+/**
+ * 内置库（`builtin/<库名>/…`）笔记本会话的隐藏承载项目：path 是内置库**当前语言那一版**的目录，
+ * notebookPath 是库内相对路径 —— 各语言版本同名同路径，切换语言后同一条会话读到的就是新语言的那份。
+ * 这些笔记本是**只读**的（文件在应用包里，改了会随下次更新消失，macOS 上还会破坏签名）。
+ */
+export const KNOWLEDGE_BUILTIN_PROJECT_ID = '__knowledge_builtin__'
+
+/** 三个知识库承载项目之一（隐藏项目过滤、侧栏选中态、笔记本属性卡兜底共用） */
 export const isKnowledgeProjectId = (id: string | null | undefined): boolean =>
-  id === KNOWLEDGE_PROJECT_ID || id === KNOWLEDGE_USER_PROJECT_ID
+  id === KNOWLEDGE_PROJECT_ID ||
+  id === KNOWLEDGE_USER_PROJECT_ID ||
+  id === KNOWLEDGE_BUILTIN_PROJECT_ID
 
 /** 本库遵循的 OKF 版本（自述行 `shuvix: okf v…` 的版本段） */
 export const OKF_VERSION = '0.2'
@@ -55,6 +64,24 @@ export const KNOWLEDGE_PROJECTS_DIR = 'projects'
  * 目录恰好叫 `project` 的用户库因此够不着工具，这是一条已知的代价。
  */
 export const KNOWLEDGE_PROJECT_BASE = 'project'
+
+/**
+ * ShuviX 自带的知识库（随应用发布、只读）在工具里的保留名 —— 与 `project` 同一条规则：保留名优先，
+ * 目录恰好叫 `shuvix` 的用户库够不着工具。它装的是 ShuviX 自己的说明书（各种 md 文件的规范等），
+ * 给用户的 agent 查；不是用户的内容，所以只读，随每个版本一起更新。
+ */
+export const KNOWLEDGE_BUILTIN_BASE = 'shuvix'
+
+/**
+ * 内置库 bundle id 的首段：`builtin/<库名>` —— 与 `projects/<id>` / `knowledge/<库名>` 平行的第三个
+ * 名字空间。目录不在 `~/.shuvix` 下而在应用包里（桌面 `getBuiltinKnowledgeDir()`），一库一目录、
+ * **目录下按语言再分一层**（`<库名>/<lang>/…`），生效的只有界面语言那一版。
+ */
+export const KNOWLEDGE_BUILTIN_DIR = 'builtin'
+
+/** bundle id / 条目 id 是否指向内置库 */
+export const isBuiltinKnowledgeId = (id: string): boolean =>
+  id.replace(/\\/g, '/').replace(/^\/+/, '').split('/')[0] === KNOWLEDGE_BUILTIN_DIR
 
 /**
  * ShuviX 的 `type` 词汇表（开放：OKF 消费者必须容忍未知 type，宿主对未知值只展示不拒绝）。

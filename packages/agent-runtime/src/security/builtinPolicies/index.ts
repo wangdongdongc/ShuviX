@@ -7,7 +7,8 @@
  * 原 pathSafety hook 的策略化替身）/ block-catastrophic-commands（毁灭整机的
  * 少数命令写法直接 deny，原 bash-audit 内置 hook 的策略化替身）/ ask-on-read（工作区外读取门）/
  * ask-on-write（写入询问门）/ review-memory-writes（记忆写入 force-ask —— 免询问也照问）/
- * ask-on-command（命令询问门）/ git-safety
+ * ask-on-command（命令询问门）/ protect-builtin-knowledge（随应用发布的内置知识库写 deny ——
+ * 它在应用包里，写了会随更新消失、在 macOS 上还会破坏签名）/ git-safety
  * （git 危险操作门，含 checkout&&force / branch&&delete 的参数级细化）/
  * ask-on-database（可写数据库连接的逐条查询询问）/ ask-on-sub-session（开子会话前询问 ——
  * 唯一一条走 L1 全工具门的内置策略：客体是 {type:'invocation'}，判据落在工具维度
@@ -55,6 +56,9 @@ import reviewMemoryWritesZh from './md/review-memory-writes.zh.md?raw'
 import reviewMemoryWritesJa from './md/review-memory-writes.ja.md?raw'
 import askOnWriteEn from './md/ask-on-write.md?raw'
 import protectBotFilesEn from './md/protect-bot-files.md?raw'
+import protectBuiltinKnowledgeEn from './md/protect-builtin-knowledge.md?raw'
+import protectBuiltinKnowledgeZh from './md/protect-builtin-knowledge.zh.md?raw'
+import protectBuiltinKnowledgeJa from './md/protect-builtin-knowledge.ja.md?raw'
 import protectBotFilesZh from './md/protect-bot-files.zh.md?raw'
 import protectBotFilesJa from './md/protect-bot-files.ja.md?raw'
 import askOnWriteZh from './md/ask-on-write.zh.md?raw'
@@ -116,6 +120,14 @@ export const BUILTIN_POLICY_SPECS: readonly BuiltinPolicySpec[] = [
   {
     name: 'protect-bot-files',
     sources: { en: protectBotFilesEn, zh: protectBotFilesZh, ja: protectBotFilesJa }
+  },
+  {
+    name: 'protect-builtin-knowledge',
+    sources: {
+      en: protectBuiltinKnowledgeEn,
+      zh: protectBuiltinKnowledgeZh,
+      ja: protectBuiltinKnowledgeJa
+    }
   },
   {
     name: 'ask-on-read',

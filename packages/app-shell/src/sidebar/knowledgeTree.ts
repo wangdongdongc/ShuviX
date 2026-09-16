@@ -10,10 +10,14 @@
  * 层级是 组 → 容器 → 项目库 → 条目。缩进由 UI 侧给：**最外层容器不缩进**、每层 12px，
  * 所以条目落在 24px（改动前是 34px —— 那时每行还带 10px 基准）。
  *
+ * 内置库（`builtin/<库名>/…`，随应用发布、只读）与用户库一样提到根上，但**置顶**、整棵子树标 `readonly`
+ * —— 目录行据此不给新建菜单，UI 另给它一个身份图标。
+ *
  * 路径归一与 agent-runtime 的 normalizeBundlePath 同规则（反斜杠 → `/`、压缩重复分隔符、去
  * 前导 `./` 与 `/`、去尾随 `/`）；同一路径出现两次只取第一条（行 key 是路径）。
  */
 import {
+  KNOWLEDGE_BUILTIN_DIR,
   KNOWLEDGE_PROJECTS_DIR,
   KNOWLEDGE_USER_ROOT_DIR,
   type KnowledgeEntry
@@ -37,6 +41,8 @@ export interface KnowledgeTreeDir {
   scopeDir: KnowledgeScopeDir | null
   /** 宿主给的显示名（项目库：项目当前的名字）；无则 null，按目录名显示 */
   title: string | null
+  /** 只读（随应用发布的内置库及其每一层）：没有新建菜单，排在最后 */
+  readonly: boolean
   dirs: KnowledgeTreeDir[]
   files: KnowledgeTreeFile[]
 }
@@ -91,6 +97,7 @@ export function buildKnowledgeTree(
     name: '',
     scopeDir: null,
     title: null,
+    readonly: false,
     dirs: [],
     files: []
   }
@@ -105,6 +112,9 @@ export function buildKnowledgeTree(
       name: cut === -1 ? dirPath : dirPath.slice(cut + 1),
       scopeDir: scopeDirOf(dirPath),
       title: hostName(names, dirPath),
+      // 内置容器下的每一层都只读 —— 按 id 首段判，与宿主 isBuiltinKnowledgeId 同口径
+      readonly:
+        dirPath === KNOWLEDGE_BUILTIN_DIR || dirPath.startsWith(`${KNOWLEDGE_BUILTIN_DIR}/`),
       dirs: [],
       files: []
     }
@@ -136,6 +146,8 @@ export function buildKnowledgeTree(
     )
     node.dirs.sort((a, b) => {
       if (depth === 0) {
+        // 内置库置顶：ShuviX 自己的说明书是「不知道就先来这里查」的那一份，排在项目容器与用户库之前
+        if (a.readonly !== b.readonly) return a.readonly ? -1 : 1
         const ia = TOP_ORDER.indexOf(a.path)
         const ib = TOP_ORDER.indexOf(b.path)
         if (ia !== ib) {
@@ -151,10 +163,12 @@ export function buildKnowledgeTree(
   // 用户库（条目 id `knowledge/<库名>/…`）**不包一层**：它们与 Projects 容器平级。树按条目 id 建，
   // 于是先长出一个 `knowledge` 节点 —— 把它的子目录提到根上、自己拿掉。置顶判据用 path 而不是
   // name：一个恰好叫 `projects` 的用户库（path `knowledge/projects`）不该被当成项目容器
-  const userIdx = root.dirs.findIndex((d) => d.path === KNOWLEDGE_USER_ROOT_DIR)
-  if (userIdx !== -1) {
-    const [container] = root.dirs.splice(userIdx, 1)
-    root.dirs.push(...container.dirs)
+  // 内置库（`builtin/<库名>/…`）同样不包一层：一个内置库就是根上的一行（只读、排最后）
+  for (const container of [KNOWLEDGE_USER_ROOT_DIR, KNOWLEDGE_BUILTIN_DIR]) {
+    const idx = root.dirs.findIndex((d) => d.path === container)
+    if (idx === -1) continue
+    const [node] = root.dirs.splice(idx, 1)
+    root.dirs.push(...node.dirs)
   }
   sortDir(root, 0)
   return root

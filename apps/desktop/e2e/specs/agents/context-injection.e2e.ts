@@ -313,16 +313,27 @@ describe('知识库围栏', () => {
     const { systemPrompt: sp } = await createAgentSession(app.main, { title: 'e2e-kbf-2' })
     expect(sp).toContain(OPEN)
     expect(fenceBodyOf(sp)).toContain(`- ${USER_BASE}`)
+    // 随应用发布的内置库垫底，带一句它是什么、且只读 —— 那句话本身不含路径与计数
+    expect(fenceBodyOf(sp)).toMatch(/\n- shuvix — .*read-only/)
     expectNoContent(fenceBodyOf(sp))
     // 项目感知那两段与围栏无关：没有项目就是没有，围栏照旧
     expect(sp).not.toContain('<project_prompt>')
     expect(sp).not.toContain('<project_memory>')
   })
 
-  it('KBF-E-3 一个库都没有 → 整段不注入，也不因此多出空行', async () => {
+  it('KBF-E-3 一个库都没有（明确设成空）→ 整段不注入，也不因此多出空行', async () => {
     rmSync(userBaseDir(), { recursive: true, force: true })
 
-    const { systemPrompt: sp } = await createAgentSession(app.main, { title: 'e2e-kbf-3' })
+    // 随应用发布的内置库 `shuvix` 总在缺省里，所以「一个库都没有」只能是明确设成空：
+    // 先建会话、把选择写成 []，再让根 Agent 起来（它是懒创建的，围栏在这一刻定型）
+    const sp = await app.main.eval<string>(
+      `(async () => {
+        const s = await window.api.session.create(${JSON.stringify({ title: 'e2e-kbf-3' })})
+        await window.api.session.updateKnowledgeBases({ id: s.id, knowledgeBases: [] })
+        const info = await window.api.agent.getInfo(s.id, { ensure: true })
+        return info.systemPrompt
+      })()`
+    )
     expect(sp).not.toContain(OPEN)
     expect(sp).not.toContain(CLOSE)
     // 无项目会话里知识库是**最后**一段：注入一个空围栏、或只追加了那个空行分隔符，

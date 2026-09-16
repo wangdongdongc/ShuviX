@@ -10,11 +10,11 @@
  */
 import { useTranslation } from 'react-i18next'
 import { Library } from 'lucide-react'
-import { KNOWLEDGE_PROJECT_BASE } from '@shuvix/chat-protocol/knowledge'
+import { KNOWLEDGE_BUILTIN_BASE, KNOWLEDGE_PROJECT_BASE } from '@shuvix/chat-protocol/knowledge'
 import { SettingsSection } from './SettingsPrimitives'
 
 export interface KnowledgeBaseChoice {
-  /** 选择里存的名字：用户库的目录名，或保留名 `project` */
+  /** 选择里存的名字：用户库的目录名，或保留名 `project` / `shuvix` */
   name: string
   /** 补充说明（项目库给项目当前的名字）；没有就只显示名字 */
   label?: string
@@ -53,7 +53,12 @@ export function KnowledgeBasesSection({
           {options.map((option) => {
             const checked = selected.includes(option.name)
             const isProject = option.name === KNOWLEDGE_PROJECT_BASE
-            const display = isProject ? t('sessionConfig.knowledgeProjectBase') : option.name
+            const isBuiltin = option.name === KNOWLEDGE_BUILTIN_BASE
+            const display = isProject
+              ? t('sessionConfig.knowledgeProjectBase')
+              : isBuiltin
+                ? t('knowledge.builtinBaseName')
+                : option.name
             // 只读时没有悬停底色，未勾选的再压暗一档 —— 一眼看出哪些是真在用的
             const stateCls = checked
               ? 'border-sky-400/40 bg-sky-400/10'

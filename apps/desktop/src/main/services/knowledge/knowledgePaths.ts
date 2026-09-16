@@ -6,18 +6,33 @@
  *                                  改名、删库全交给文件系统；簿记与项目库一视同仁。
  *   `~/.shuvix/knowledge-shuvix/`  ShuviX 维护的（容器）—— 一个绑定实体一个 bundle，本期只有
  *                                  `projects/<projectId>/`。
+ *   `<应用包>/knowledge/`          随应用发布的**内置库**（容器，只读）—— 一库一目录，目录下再按语言
+ *                                  分一层（`shuvix/en/…` / `shuvix/zh/…`），生效的只有界面语言那一版：
+ *                                  bundle 目录就是那一层，别的语言版本不属于任何 bundle。
  *
- * 「bundle id」同时是条目 id 的前缀，两个根共用一个名字空间：
+ * 「bundle id」同时是条目 id 的前缀，三个根共用一个名字空间：
  *   - 项目库 `projects/<projectId>`（相对 knowledge-shuvix 根，沿用至今 —— 存量会话与测试都不动）
  *   - 用户库 `knowledge/<库名>`（首段就是用户根的目录名）
- * 首段不同，两者天然不撞。代价是一条保留：knowledge-shuvix 根下永远不能出现名为 `knowledge` 的容器。
+ *   - 内置库 `builtin/<库名>`（首段是保留的容器名，不对应磁盘上的任何目录）
+ * 首段不同，三者天然不撞。代价是两条保留：knowledge-shuvix 根下永远不能出现名为 `knowledge` 或
+ * `builtin` 的容器。
  *
  * bundle 内部的路径一律 bundle 相对（OKF 的口径）。
  */
+import { existsSync } from 'fs'
 import { join } from 'path'
-import { KNOWLEDGE_PROJECTS_DIR, KNOWLEDGE_USER_ROOT_DIR } from '@shuvix/chat-protocol/knowledge'
+import i18next from 'i18next'
+import {
+  KNOWLEDGE_BUILTIN_DIR,
+  KNOWLEDGE_PROJECTS_DIR,
+  KNOWLEDGE_USER_ROOT_DIR
+} from '@shuvix/chat-protocol/knowledge'
 import { normalizeBundlePath } from '@shuvix/agent-runtime'
-import { getShuvixKnowledgeRootDir, getUserKnowledgeRootDir } from '../../utils/paths'
+import {
+  getBuiltinKnowledgeDir,
+  getShuvixKnowledgeRootDir,
+  getUserKnowledgeRootDir
+} from '../../utils/paths'
 
 /** ShuviX 维护的那个根（容器，不是 bundle） */
 export function getShuvixKnowledgeRoot(): string {
@@ -27,6 +42,11 @@ export function getShuvixKnowledgeRoot(): string {
 /** 用户的库根（容器，不是 bundle）：每个子目录是一个用户知识库 */
 export function getUserKnowledgeRoot(): string {
   return getUserKnowledgeRootDir()
+}
+
+/** 随应用发布的内置库根（容器，不是 bundle；只读）：每个子目录是一个内置库，目录下按语言分层 */
+export function getBuiltinKnowledgeRoot(): string {
+  return getBuiltinKnowledgeDir()
 }
 
 /** 项目 bundle 的容器目录（knowledge-shuvix 根相对） */
@@ -50,15 +70,52 @@ export function isUserBundle(id: string): boolean {
   return normalizeBundlePath(id).split('/')[0] === USER_CONTAINER
 }
 
+/** 内置库 bundle id 的首段 */
+export const BUILTIN_CONTAINER = KNOWLEDGE_BUILTIN_DIR
+
+/** 内置库名 → bundle id（`builtin/<库名>`） */
+export function builtinBundleId(name: string): string {
+  return `${BUILTIN_CONTAINER}/${name}`
+}
+
+/** bundle id / 条目 id 是否指向内置库（只读：变更管线、写钩子、侧栏新建都要绕开它） */
+export function isBuiltinBundle(id: string): boolean {
+  return normalizeBundlePath(id).split('/')[0] === BUILTIN_CONTAINER
+}
+
+const BUILTIN_FALLBACK_LANGUAGE = 'en'
+
+/**
+ * 内置库在界面上的名字。侧栏那一行（随清单下发的 `bundleNames`）与两张配置卡的 chip 读**同一个**
+ * i18n 键 —— 用户看到的是同一个名字，改名只改一处。
+ */
+export function builtinBaseDisplayName(): string {
+  return i18next.t('knowledge.builtinBaseName')
+}
+
+/**
+ * 内置库此刻生效的语言目录名：界面语言的基础段（`zh-CN` → `zh`），没有那一版就回落 `en`。
+ * 每次现算不缓存 —— 切换语言后下一次解析就该指向新的一版；目录存在与否是一次 stat，便宜。
+ */
+export function builtinLanguageDir(name: string): string {
+  const lang = (i18next.language || BUILTIN_FALLBACK_LANGUAGE).split('-')[0].toLowerCase()
+  return existsSync(join(getBuiltinKnowledgeRoot(), name, lang)) ? lang : BUILTIN_FALLBACK_LANGUAGE
+}
+
 /** 能当用户库名的目录名：非空、单段、不以点开头（隐藏目录不算库） */
 export function isValidLibraryName(name: string): boolean {
   return !!name && !/[/\\]/.test(name) && !name.startsWith('.') && name !== '..'
 }
 
-/** 两个根共用名字空间里的 id（bundle 或条目）→ 绝对路径 */
+/** 三个根共用名字空间里的 id（bundle 或条目）→ 绝对路径 */
 function resolveId(id: string): string {
   const segs = normalizeBundlePath(id).split('/')
   if (segs[0] === USER_CONTAINER) return join(getUserKnowledgeRoot(), ...segs.slice(1))
+  if (segs[0] === BUILTIN_CONTAINER) {
+    // `builtin/<库名>/<rel>` → `<内置根>/<库名>/<当前语言>/<rel>`：语言那一层不进 id，切换语言即换目录
+    const [, name = '', ...rest] = segs
+    return join(getBuiltinKnowledgeRoot(), name, name ? builtinLanguageDir(name) : '', ...rest)
+  }
   return join(getShuvixKnowledgeRoot(), ...segs)
 }
 
@@ -97,10 +154,17 @@ export function toUserRelative(absPath: string): string | null {
   return relativeTo(getUserKnowledgeRoot(), absPath)
 }
 
+/** 绝对路径 → 内置根相对；不在该根下返回 null */
+export function toBuiltinRelative(absPath: string): string | null {
+  return relativeTo(getBuiltinKnowledgeRoot(), absPath)
+}
+
 /**
  * 绝对路径 → 它所属的 bundle id 与 bundle 内相对路径；不在任何 bundle 内返回 null。
  * 项目库的边界是 `projects/<projectId>`（容器目录本身与更浅的层级都不是 bundle）；
- * 用户库的边界是用户根下的第一层子目录（用户根下的散文件不属于任何库）。
+ * 用户库的边界是用户根下的第一层子目录（用户根下的散文件不属于任何库）；
+ * 内置库的边界是 `<库名>/<语言>`，且只认**此刻生效**的那个语言目录 —— 另一种语言的同名文件不属于任何
+ * bundle（写钩子与变更管线据此绕开它们，笔记本也只打开生效的一版）。
  * 任一段以 `.` 开头（`.git` / `.obsidian` / `.trash` …）的路径也不属于任何 bundle —— 与扫描口径一致。
  */
 /** 隐藏段：不是库的内容 */
@@ -120,6 +184,19 @@ export function locateBundle(absPath: string): { bundle: string; rel: string } |
     const segs = normalizeBundlePath(userRel).split('/')
     if (segs.length < 2 || !isValidLibraryName(segs[0]) || hasHiddenSegment(segs)) return null
     return { bundle: userBundleId(segs[0]), rel: segs.slice(1).join('/') }
+  }
+  const builtinRel = toBuiltinRelative(absPath)
+  if (builtinRel !== null) {
+    const segs = normalizeBundlePath(builtinRel).split('/')
+    if (
+      segs.length < 3 ||
+      !isValidLibraryName(segs[0]) ||
+      hasHiddenSegment(segs) ||
+      segs[1] !== builtinLanguageDir(segs[0])
+    ) {
+      return null
+    }
+    return { bundle: builtinBundleId(segs[0]), rel: segs.slice(2).join('/') }
   }
   return null
 }

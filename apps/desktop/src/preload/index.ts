@@ -915,6 +915,7 @@ const api = {
         userRoot: string
         dirs: string[]
         bundleNames: Record<string, string>
+        bundleDirs: Record<string, string>
       }>,
     /** 打开条目笔记：一文件至多一笔记本会话，已存在则复用返回；title 为条目显示名 */
     openNote: (params: { path: string; title?: string }) =>

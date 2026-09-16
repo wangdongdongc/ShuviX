@@ -20,7 +20,11 @@ import {
   normalizeBundlePath,
   slugify
 } from '@shuvix/agent-runtime'
-import { KNOWLEDGE_PROJECT_BASE } from '@shuvix/chat-protocol/knowledge'
+import {
+  KNOWLEDGE_BUILTIN_BASE,
+  KNOWLEDGE_PROJECT_BASE,
+  isBuiltinKnowledgeId
+} from '@shuvix/chat-protocol/knowledge'
 import { appEventBus } from '../../utils/appEventBus'
 import { t } from '../../i18n'
 import { recordKnowledgeChange } from './changes'
@@ -127,8 +131,11 @@ export function createKnowledgeBase(rawName: string): KnowledgeCreateResult {
   const name = rawName.trim()
   const bad = nameError(name) ?? (isValidLibraryName(name) ? null : t('knowledge.errInvalidName'))
   if (bad) return { success: false, error: bad }
-  // `project` 是工具里项目库的保留名：叫这个名字的用户库工具够不着，别让人建出一个点不着的库
-  if (name === KNOWLEDGE_PROJECT_BASE) return { success: false, error: t('knowledge.errReserved') }
+  // `project` / `shuvix` 是工具里的保留名（项目库 / 内置库）：叫这个名字的用户库工具够不着，
+  // 别让人建出一个点不着的库
+  if (name === KNOWLEDGE_PROJECT_BASE || name === KNOWLEDGE_BUILTIN_BASE) {
+    return { success: false, error: t('knowledge.errReserved', { name }) }
+  }
 
   const root = getUserKnowledgeRoot()
   mkdirSync(root, { recursive: true })
@@ -150,6 +157,8 @@ export function createKnowledgeFolder(dirId: string, rawName: string): Knowledge
   const name = rawName.trim()
   const bad = nameError(name)
   if (bad) return { success: false, error: bad }
+  // 内置库只读（文件在应用包里）：侧栏不给它新建菜单，这里再守一道
+  if (isBuiltinKnowledgeId(dirId)) return { success: false, error: t('knowledge.errReadOnly') }
   const target = resolveDir(dirId)
   if (!target) return { success: false, error: t('knowledge.errNoSuchDir') }
   if (takenIn(target.abs, name)) {
@@ -175,6 +184,7 @@ export function createKnowledgeFolder(dirId: string, rawName: string): Knowledge
 export function createKnowledgeEntry(dirId: string, rawTitle: string): KnowledgeCreateResult {
   const title = rawTitle.trim()
   if (!title) return { success: false, error: t('knowledge.errEmptyTitle') }
+  if (isBuiltinKnowledgeId(dirId)) return { success: false, error: t('knowledge.errReadOnly') }
   const target = resolveDir(dirId)
   if (!target) return { success: false, error: t('knowledge.errNoSuchDir') }
 

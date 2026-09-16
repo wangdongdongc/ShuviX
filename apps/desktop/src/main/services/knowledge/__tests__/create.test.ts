@@ -24,7 +24,9 @@ const recordChange = vi.hoisted(() => vi.fn())
 
 vi.mock('../../../utils/paths', () => ({
   getShuvixKnowledgeRootDir: () => state.root,
-  getUserKnowledgeRootDir: () => `${state.root}-user`
+  getUserKnowledgeRootDir: () => `${state.root}-user`,
+  // 内置库根替身：不存在的兄弟目录 —— 这些用例里没有内置库
+  getBuiltinKnowledgeDir: () => `${state.root}-builtin`
 }))
 vi.mock('../../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {} })
@@ -43,7 +45,8 @@ import { makeTempRoot, seedFile, treeOf, userRootOf } from './fixture'
 
 const INVALID = 'knowledge.errInvalidName'
 const NO_SUCH_DIR = 'knowledge.errNoSuchDir'
-const RESERVED = 'knowledge.errReserved'
+// 保留名的原因带着名字（`project` / `shuvix` 共用一条文案）—— 替身把参数缀在 key 后面
+const RESERVED = 'knowledge.errReserved:project'
 const EMPTY_TITLE = 'knowledge.errEmptyTitle'
 const taken = (name: string): string => `knowledge.errNameTaken:${name}`
 

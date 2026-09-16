@@ -7,7 +7,11 @@ import {
   useChatStore,
   selectPendingInputs
 } from '@shuvix/chat-ui'
-import { KNOWLEDGE_MARKER_TYPE, isKnowledgeProjectId } from '@shuvix/chat-protocol/knowledge'
+import {
+  KNOWLEDGE_BUILTIN_PROJECT_ID,
+  KNOWLEDGE_MARKER_TYPE,
+  isKnowledgeProjectId
+} from '@shuvix/chat-protocol/knowledge'
 import { NotebookView, type NotebookViewProps } from './NotebookView'
 import { useFocusDim } from '../sidebar/useFocusDim'
 
@@ -34,9 +38,10 @@ export function NotebookSession({
   const dim = focusDim && !hasPendingInputs
   // 知识库笔记本：没有 `shuvix:` 自述行的条目也按 OKF 渲染属性卡 —— OKF 按位置认条目，
   // 规范里没有标识字段；从别处拷进用户库的 bundle 通常不带我们的自述行
-  const inKnowledgeBase = useChatStore((s) =>
-    isKnowledgeProjectId(s.sessions.find((x) => x.id === sessionId)?.projectId)
-  )
+  const projectId = useChatStore((s) => s.sessions.find((x) => x.id === sessionId)?.projectId)
+  const inKnowledgeBase = isKnowledgeProjectId(projectId)
+  // 内置知识库（随应用发布的说明书）：只读 —— 编辑器只渲染，也不给输入框（notebook agent 能 edit 文件）
+  const readOnly = projectId === KNOWLEDGE_BUILTIN_PROJECT_ID
   const { handleInputResponse } = useChatActions(sessionId)
   // 悬浮输入卡片实高 → 根容器 CSS 变量：编辑器滚动区据此给文末让位（.cm-scroller 的
   // padding-bottom，见 atomic-panel.css）。直接写 DOM 变量而非 state —— 高度随抽屉
@@ -52,21 +57,24 @@ export function NotebookSession({
         sessionId={sessionId}
         caps={caps}
         frontmatterFallbackType={inKnowledgeBase ? KNOWLEDGE_MARKER_TYPE : undefined}
+        readOnly={readOnly}
       />
       {/* 悬浮输入框：绝对贴底、背景透明不挡正文；对话抽屉与审批卡并入同一张卡片。
           relative z-20：输入卡片要盖住编辑器的浮动件（NotebookMinimap 是 z-10；
-          零高度定位壳不改变 absolute 贴底的视觉落点） */}
-      <div
-        className={`relative z-20 transition-opacity duration-200 ${
-          dim ? 'opacity-30 hover:opacity-100 focus-within:opacity-100' : ''
-        }`}
-      >
-        <InputArea
-          thread={<ThreadDrawer sessionId={sessionId} />}
-          accessory={<PendingInputsDrawer onResponse={handleInputResponse} />}
-          onHeightChange={handleInputHeightChange}
-        />
-      </div>
+          零高度定位壳不改变 absolute 贴底的视觉落点）。只读笔记本没有它。 */}
+      {!readOnly && (
+        <div
+          className={`relative z-20 transition-opacity duration-200 ${
+            dim ? 'opacity-30 hover:opacity-100 focus-within:opacity-100' : ''
+          }`}
+        >
+          <InputArea
+            thread={<ThreadDrawer sessionId={sessionId} />}
+            accessory={<PendingInputsDrawer onResponse={handleInputResponse} />}
+            onHeightChange={handleInputHeightChange}
+          />
+        </div>
+      )}
     </div>
   )
 }

@@ -24,6 +24,8 @@ export interface NotebookViewProps {
   layout?: 'notebook' | 'fill'
   /** 无 `shuvix:` 自述行的文件按哪个契约渲染属性卡（知识库笔记本传 `okf`） */
   frontmatterFallbackType?: string
+  /** 只读：只渲染不编辑、不自动保存（随应用发布的内置知识库 —— 文件在应用包里，改了会随更新消失） */
+  readOnly?: boolean
 }
 
 /**
@@ -41,7 +43,8 @@ export function NotebookView({
   caps,
   editorHandleRef,
   layout,
-  frontmatterFallbackType
+  frontmatterFallbackType,
+  readOnly = false
 }: NotebookViewProps): React.JSX.Element {
   const { t } = useTranslation()
 
@@ -169,7 +172,8 @@ export function NotebookView({
         key={reloadNonce}
         documentId={path}
         initialContent={content}
-        onSave={onSave}
+        onSave={readOnly ? undefined : onSave}
+        readOnly={readOnly}
         onSaveStatusChange={setSaveStatus}
         handleRef={editorRef}
         fileContext={fileContext}

@@ -61,6 +61,19 @@ export function getBuiltinSkillsDir(): string {
     : resolve(__dirname, '../../resources/skills')
 }
 
+/**
+ * 内置知识库资源目录 —— 随应用版本包发布，只读（`knowledge` 工具里的保留名 `shuvix`）。
+ * 打包后位于 Resources/knowledge/，开发时位于 resources/knowledge/；里面一库一目录、目录下按语言分层
+ * （`shuvix/en/…` / `shuvix/zh/…` / `shuvix/ja/…`），生效的只有界面语言那一版（services/knowledge）。
+ */
+export function getBuiltinKnowledgeDir(): string {
+  // `locateBundle` 走到这里 —— 文件工具的每次写入都会经过它，而它们的单测只桩了半个 electron
+  // （没有 app）：没有 app 就按未打包算，落到开发期的资源目录
+  return app?.isPackaged
+    ? join(process.resourcesPath, 'knowledge')
+    : resolve(__dirname, '../../resources/knowledge')
+}
+
 /** 全局 Agents 目录：~/.shuvix/agents/（不自动创建，由 agentService 管理；内置 agent 已硬编码进 @shuvix/agent-runtime） */
 export function getDefaultAgentsDir(): string {
   return join(homedir(), '.shuvix', 'agents')

@@ -17,7 +17,9 @@ const logSpy = vi.hoisted(() => ({ warn: vi.fn() }))
 
 vi.mock('../../../utils/paths', () => ({
   getShuvixKnowledgeRootDir: () => state.root,
-  getUserKnowledgeRootDir: () => `${state.root}-user`
+  getUserKnowledgeRootDir: () => `${state.root}-user`,
+  // 内置库根替身：不存在的兄弟目录 —— 这些用例里没有内置库
+  getBuiltinKnowledgeDir: () => `${state.root}-builtin`
 }))
 vi.mock('../../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: logSpy.warn, error: () => {} })

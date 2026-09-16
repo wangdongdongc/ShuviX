@@ -49,6 +49,9 @@ const P2_NAME = 'KB-项目二'
 const FOOTER_DEFAULT = [en, zh, ja].map((l) => l.sessionConfig.knowledgeDefault)
 const FOOTER_EXPLICIT = [en, zh, ja].map((l) => l.sessionConfig.knowledgeDesc)
 
+/** 内置库的人读名（同上，三语全收）—— 侧栏行与配置卡 chip 读的是同一个键 */
+const BUILTIN_NAMES = [en, zh, ja].map((l) => l.knowledge.builtinBaseName)
+
 interface InitResult {
   success: boolean
   created: boolean
@@ -171,21 +174,24 @@ describe('恒不写键、缺省全勾（IPC）', () => {
       expect(await storedBases(sid), label).toBeUndefined()
     }
 
-    // 不属于项目的会话：候选与选择里都没有 `project`（那是一个它解析不出来的名字）
+    // 不属于项目的会话：候选与选择里都没有 `project`（那是一个它解析不出来的名字）；
+    // 随应用发布的内置库 `shuvix` 垫底 —— 它总在（开发期就是仓库里的 resources/knowledge）
     const [, noProject] = cases[0]
-    expect(await baseOptions(noProject)).toEqual({
-      options: [
-        { name: BASE_A, label: BASE_A },
-        { name: BASE_B, label: BASE_B }
-      ],
-      selected: [BASE_A, BASE_B],
-      explicit: false
-    })
+    const opts0 = await baseOptions(noProject)
+    expect(opts0.options.map((o) => o.name)).toEqual([BASE_A, BASE_B, 'shuvix'])
+    expect(opts0.options.slice(0, 2)).toEqual([
+      { name: BASE_A, label: BASE_A },
+      { name: BASE_B, label: BASE_B }
+    ])
+    // 内置库的人读名按界面语言取（隔离实例跟系统语言走），名字本身在三语里各一份
+    expect(BUILTIN_NAMES).toContain(opts0.options[2].label)
+    expect(opts0.selected).toEqual([BASE_A, BASE_B, 'shuvix'])
+    expect(opts0.explicit).toBe(false)
 
-    // 项目会话与子会话：缺省 = 全部用户库 + 项目库（项目库排在后面）
+    // 项目会话与子会话：缺省 = 全部用户库 + 项目库 + 内置库（项目库排在用户库后面，内置库垫底）
     for (const [label, sid] of cases.slice(1)) {
       const opts = await baseOptions(sid)
-      expect(opts.selected, label).toEqual([BASE_A, BASE_B, 'project'])
+      expect(opts.selected, label).toEqual([BASE_A, BASE_B, 'project', 'shuvix'])
       expect(opts.explicit, label).toBe(false)
       expect(opts.options.find((o) => o.name === 'project')?.label, label).toBe(P1_NAME)
     }

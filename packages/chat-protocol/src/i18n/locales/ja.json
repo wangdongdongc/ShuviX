@@ -166,10 +166,13 @@
     "newEntryPlaceholder": "項目のタイトル",
     "errInvalidName": "名前に / \\ : * ? \" < > | は使えません。先頭のドット、末尾のドットや空白も使えません",
     "errNameTaken": "「{{name}}」はすでにあります",
-    "errReserved": "「project」は予約名です。別の名前にしてください",
+    "errReserved": "\"{{name}}\" は予約名です —— 別の名前にしてください",
     "errNoSuchDir": "そのフォルダはもうありません — 再読み込みしてください",
     "errEmptyTitle": "タイトルを入力してください",
-    "errCreateFailed": "作成できませんでした: {{error}}"
+    "errCreateFailed": "作成できませんでした: {{error}}",
+    "builtinBase": "ShuviX 自身のガイド — 読み取り専用。agent / bot / policy / hook ファイル、ナレッジエントリ、skill の書き方。",
+    "errReadOnly": "ShuviX の組み込みナレッジベースは読み取り専用です",
+    "builtinBaseName": "ShuviX システムガイド"
   },
   "chat": {
     "mcpConnectFailed": "[MCP] {{name}} への接続に失敗しました: {{error}}",
@@ -328,7 +331,7 @@
     "extensionsLocked": "エージェント作成済みのため読み取り専用です",
     "knowledgeGroup": "ナレッジベース",
     "knowledgeDesc": "このセッションが検索・追記できるベース。変更はすぐに効きます。",
-    "knowledgeDefault": "まだ選んでいません —— これは既定（あなたのすべてのベースと、このプロジェクトのベース）です。触ると、このセッション自身の設定になります。",
+    "knowledgeDefault": "まだ選んでいません —— これは既定（あなたのすべてのベース、このプロジェクトのベース、そして ShuviX 組み込みのリファレンス）です。触ると、このセッション自身の設定になります。",
     "knowledgeProjectBase": "このプロジェクト"
   },
   "projectForm": {

@@ -1,11 +1,13 @@
 /**
  * KnowledgeGroup —— 侧栏置顶的「知识库」分组（知识库 v2：`~/.shuvix/knowledge-shuvix/` 的项目库 +
  * `~/.shuvix/knowledge/` 下每个子目录一个的用户库，用户库与 Projects 容器平级、Projects 置顶），
- * 排在 Bots 之下、旧知识库（WikiGroup）之上。**一个库一个 OKF bundle**：树 = 项目容器 →
+ * 排在 Bots 之下、旧知识库（WikiGroup）之上。置顶的是随应用发布的**内置库**（ShuviX 自己的说明书，
+ * 只读，带书签图标），其后是项目容器（带看板图标）与用户自己的库。**一个库一个 OKF bundle**：树 = 项目容器 →
  * 每个项目库（显示项目当前的名字）→ 条目，外加与容器平级的每个用户库 → 条目；
  * 行 = 一个 md（标题依次取 frontmatter title、正文第一个 # 标题、文件名），行尾徽标：草稿 / 已核实 / 过期 / 已过时。
  * 点行经宿主打开 / 复用该文件的笔记本会话（隐藏承载项目：项目库 `__knowledge__`、用户库
- * `__knowledge_user__`，同 WikiGroup 的做法）。
+ * `__knowledge_user__`、内置库 `__knowledge_builtin__`，同 WikiGroup 的做法）。随应用发布的
+ * **内置库**是根上置顶的一行：自己的图标 + 一把锁、没有新建菜单，点开是只读笔记本。
  *
  * prop 驱动、不触宿主 API（同 WikiGroup / BotGroup）：清单 / 打开 / 打开目录 / 在文件夹中显示
  * 由宿主注入。树形派生在 knowledgeTree.ts（纯函数，可单测）。扫描是懒的：**首次展开才扫**
@@ -25,14 +27,20 @@ import { useTranslation } from 'react-i18next'
 import {
   Archive,
   BadgeCheck,
+  BookMarked,
   CircleDashed,
   ClockAlert,
   FileText,
   FolderClosed,
-  FolderOpen
+  FolderKanban,
+  FolderOpen,
+  Lock
 } from 'lucide-react'
 import { useAppEvent, useChatStore } from '@shuvix/chat-ui'
 import {
+  KNOWLEDGE_BUILTIN_BASE,
+  KNOWLEDGE_BUILTIN_DIR,
+  KNOWLEDGE_BUILTIN_PROJECT_ID,
   KNOWLEDGE_PROJECT_ID,
   KNOWLEDGE_USER_PROJECT_ID,
   KNOWLEDGE_USER_ROOT_DIR,
@@ -61,8 +69,10 @@ export interface KnowledgeListing {
   userRoot: string
   /** 库与库内目录的 id（空目录也在其中 —— 新建出来的库 / 文件夹第一时间就是空的） */
   dirs: string[]
-  /** bundle id → 显示名（项目库：项目当前的名字 —— 目录名是项目 id，不给人看） */
+  /** bundle id → 显示名（项目库：项目当前的名字 —— 目录名是项目 id，不给人看；内置库：ShuviX） */
   bundleNames: Record<string, string>
+  /** bundle id → 绝对目录，只给两个根拼不出来的那些（内置库在应用包里、路径里夹着语言层）；旧宿主不给 */
+  bundleDirs?: Record<string, string>
 }
 
 /** 新建的回包：失败时 error 是宿主给的、已本地化的人读原因 */
@@ -131,6 +141,10 @@ export function KnowledgeGroup({ adapter }: KnowledgeGroupProps): React.JSX.Elem
     if (active?.projectId === KNOWLEDGE_USER_PROJECT_ID) {
       return `${KNOWLEDGE_USER_ROOT_DIR}/${notebookPath}`
     }
+    // 内置库的承载项目根是库目录本身（语言层在宿主那边解析），id 要补回容器与库名
+    if (active?.projectId === KNOWLEDGE_BUILTIN_PROJECT_ID) {
+      return `${KNOWLEDGE_BUILTIN_DIR}/${KNOWLEDGE_BUILTIN_BASE}/${notebookPath}`
+    }
     return null
   })
   const isActive = activeNotePath !== null
@@ -157,7 +171,14 @@ export function KnowledgeGroup({ adapter }: KnowledgeGroupProps): React.JSX.Elem
       if (seq === scanSeq.current) setScanned(r)
     } catch {
       if (seq === scanSeq.current)
-        setScanned({ entries: [], root: '', userRoot: '', dirs: [], bundleNames: {} })
+        setScanned({
+          entries: [],
+          root: '',
+          userRoot: '',
+          dirs: [],
+          bundleNames: {},
+          bundleDirs: {}
+        })
     }
   }, [adapter])
 
@@ -276,9 +297,9 @@ export function KnowledgeGroup({ adapter }: KnowledgeGroupProps): React.JSX.Elem
     })
   }
 
-  /** 目录行的菜单：库本身与库里的每一层都能往里新建；固定文案的容器（`项目`）不是落点 */
+  /** 目录行的菜单：库本身与库里的每一层都能往里新建；固定文案的容器（`项目`）与只读的内置库不是落点 */
   const dirMenuItems = (node: KnowledgeTreeDir): ContextMenuItem[] => {
-    if (node.scopeDir !== null) return []
+    if (node.scopeDir !== null || node.readonly) return []
     return [
       ...(adapter.createEntry ? [{ id: 'new-entry', label: t('knowledge.newEntry') }] : []),
       ...(adapter.createFolder ? [{ id: 'new-folder', label: t('knowledge.newFolder') }] : [])
@@ -294,8 +315,16 @@ export function KnowledgeGroup({ adapter }: KnowledgeGroupProps): React.JSX.Elem
     })
   }
 
-  /** 条目 id → 绝对路径：`knowledge/<库名>/…` 相对用户根，其余相对 knowledge-shuvix 根 */
-  const absolutePathOf = (path: string): string => {
+  /**
+   * 条目 → 绝对路径：宿主给了 bundle 目录的（内置库）直接拼；`knowledge/<库名>/…` 相对用户根，
+   * 其余相对 knowledge-shuvix 根
+   */
+  const absolutePathOf = (entry: KnowledgeEntry): string => {
+    const { path, bundle } = entry
+    const bundleDir = scanned?.bundleDirs?.[bundle]
+    if (bundleDir && path.startsWith(`${bundle}/`)) {
+      return `${bundleDir}/${path.slice(bundle.length + 1)}`
+    }
     const userPrefix = `${KNOWLEDGE_USER_ROOT_DIR}/`
     if (path.startsWith(userPrefix)) {
       return scanned?.userRoot ? `${scanned.userRoot}/${path.slice(userPrefix.length)}` : path
@@ -310,7 +339,7 @@ export function KnowledgeGroup({ adapter }: KnowledgeGroupProps): React.JSX.Elem
     ]
     void showContextMenu(e, items, (action) => {
       if (action === 'reveal') void adapter.revealFile?.(entry.path)
-      if (action === 'copy-path') void navigator.clipboard.writeText(absolutePathOf(entry.path))
+      if (action === 'copy-path') void navigator.clipboard.writeText(absolutePathOf(entry))
     })
   }
 
@@ -388,6 +417,21 @@ export function KnowledgeGroup({ adapter }: KnowledgeGroupProps): React.JSX.Elem
     )
   }
 
+  /**
+   * 目录行的图标。两类**身份**行有自己的图标、且不随展开状态变化 —— 置顶的内置库（ShuviX 自己的
+   * 说明书）与项目容器；其余是普通目录，照旧一只开合的文件夹。内置库里面的层级是普通目录。
+   */
+  const dirIcon = (node: KnowledgeTreeDir, depth: number, open: boolean): React.ReactNode => {
+    if (node.scopeDir === 'projects') {
+      return <FolderKanban size={11} className="flex-shrink-0 text-text-tertiary/50" />
+    }
+    if (node.readonly && depth === 0) {
+      return <BookMarked size={11} className="flex-shrink-0 text-sky-400/70" />
+    }
+    const Icon = open ? FolderOpen : FolderClosed
+    return <Icon size={11} className="flex-shrink-0 text-text-tertiary/40" />
+  }
+
   const renderDir = (node: KnowledgeTreeDir, depth: number): React.ReactNode => {
     const open = isDirOpen(node.path)
 
@@ -396,6 +440,7 @@ export function KnowledgeGroup({ adapter }: KnowledgeGroupProps): React.JSX.Elem
       <div key={node.path}>
         <div
           data-knowledge-dir={node.path}
+          data-knowledge-readonly={node.readonly || undefined}
           onClick={() => toggleDir(node.path)}
           onContextMenu={(ev) => openDirMenu(node, ev)}
           title={node.path}
@@ -404,12 +449,18 @@ export function KnowledgeGroup({ adapter }: KnowledgeGroupProps): React.JSX.Elem
             dim && isActive ? 'opacity-30 hover:opacity-100' : ''
           }`}
         >
-          {open ? (
-            <FolderOpen size={11} className="flex-shrink-0 text-text-tertiary/40" />
-          ) : (
-            <FolderClosed size={11} className="flex-shrink-0 text-text-tertiary/40" />
-          )}
+          {dirIcon(node, depth, open)}
           <span className="flex-1 min-w-0 text-[13px] truncate">{label}</span>
+          {/* 只读的内置库：库那一行挂一把锁（里面的层级不重复挂） */}
+          {node.readonly && depth === 0 && (
+            <span
+              title={t('knowledge.builtinBase')}
+              aria-label={t('knowledge.builtinBase')}
+              className="flex shrink-0 pr-1"
+            >
+              <Lock size={9} className="text-text-tertiary/50" />
+            </span>
+          )}
           {dirMenuItems(node).length > 0 && (
             <RowMenuButton
               className="absolute right-1.5 opacity-0 group-hover:opacity-100"

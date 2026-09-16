@@ -12,14 +12,14 @@
 import { normalizeBundlePath } from '@shuvix/agent-runtime'
 import { appEventBus } from '../../utils/appEventBus'
 import { createLogger } from '../../logger'
-import { locateBundle } from './knowledgePaths'
+import { isBuiltinBundle, locateBundle } from './knowledgePaths'
 import {
   ensureBundleRepo,
   flushKnowledgeCommits,
   queueKnowledgeCommit,
   type KnowledgeChangeOp
 } from './repo'
-import { invalidateKnowledgeScan, knownKnowledgePaths } from './scan'
+import { invalidateKnowledgeScan, knownKnowledgePaths, listBuiltinBundles } from './scan'
 import { invalidateKnowledgeSearch } from './search'
 
 const log = createLogger('Knowledge')
@@ -64,8 +64,12 @@ async function process(batch: KnowledgeChange[]): Promise<void> {
   appEventBus.publish({ type: 'knowledge.changed' })
 }
 
-/** 记录一次变更（去抖合批；返回后管线在后台跑） */
+/** 记录一次变更（去抖合批；返回后管线在后台跑）。内置库只读：不该有写入，有也不提交、不广播 */
 export function recordKnowledgeChange(change: KnowledgeChange): void {
+  if (isBuiltinBundle(change.bundle)) {
+    log.warn(`ignored a write into the read-only builtin base: ${change.bundle}/${change.path}`)
+    return
+  }
   pending.push({ ...change, path: normalizeBundlePath(change.path) })
   if (timer) clearTimeout(timer)
   timer = setTimeout(() => {
@@ -100,6 +104,8 @@ export function notifyKnowledgeFileChanged(
   const located = locateBundle(absPath)
   if (!located || !/\.md$/i.test(located.rel)) return
   const { bundle, rel } = located
+  // 内置库在应用包里：不 git init、不提交、不广播 —— 写入本身由 protect-builtin-knowledge 策略拒
+  if (isBuiltinBundle(bundle)) return
   const existed = knownKnowledgePaths().has(`${bundle}/${rel}`)
   recordKnowledgeChange({
     bundle,
@@ -107,4 +113,16 @@ export function notifyKnowledgeFileChanged(
     op: meta.kind === 'edit' || existed ? 'Update' : 'Creation',
     actor: meta.actor
   })
+}
+
+/**
+ * 界面语言切换后：内置库解析到的是另一个目录（`<库名>/<lang>/`），扫描缓存按 mtime 自然失效，
+ * 检索索引却按 bundle id 缓存 —— 整体失效一次，再广播让侧栏与配置卡重扫。
+ */
+export function refreshBuiltinKnowledge(): void {
+  for (const bundle of listBuiltinBundles()) {
+    invalidateKnowledgeScan(bundle)
+    invalidateKnowledgeSearch(bundle)
+  }
+  appEventBus.publish({ type: 'knowledge.changed' })
 }

@@ -31,6 +31,7 @@ vi.mock('electron', () => ({
 }))
 vi.mock('../../utils/paths', () => ({
   getShuvixKnowledgeRootDir: () => state.root,
+  getBuiltinKnowledgeDir: () => '/tmp/shuvix-builtin-knowledge',
   getUserKnowledgeRootDir: () => `${state.root}-user`
 }))
 vi.mock('../../services/knowledge', async () => {

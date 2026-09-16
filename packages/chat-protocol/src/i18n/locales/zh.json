@@ -166,10 +166,13 @@
     "newEntryPlaceholder": "条目标题",
     "errInvalidName": "名字里不能有 / \\ : * ? \" < > |，也不能以点开头或以点、空格结尾",
     "errNameTaken": "「{{name}}」已经存在",
-    "errReserved": "project 是保留名，换一个",
+    "errReserved": "\"{{name}}\" 是保留名 —— 换一个",
     "errNoSuchDir": "这个位置已经不在了 —— 刷新看看",
     "errEmptyTitle": "标题不能为空",
-    "errCreateFailed": "创建失败：{{error}}"
+    "errCreateFailed": "创建失败：{{error}}",
+    "builtinBase": "ShuviX 自己的说明书，只读 —— agent / bot / policy / hook 文件、知识库条目与 skill 怎么写。",
+    "errReadOnly": "ShuviX 内置知识库是只读的",
+    "builtinBaseName": "ShuviX 系统说明"
   },
   "chat": {
     "mcpConnectFailed": "[MCP] {{name}} 连接失败：{{error}}",
@@ -328,7 +331,7 @@
     "extensionsLocked": "智能体已创建，扩展能力只读",
     "knowledgeGroup": "知识库",
     "knowledgeDesc": "这条会话能搜、能写哪几个库。改完立刻生效，不用新开会话。",
-    "knowledgeDefault": "还没选过 —— 这是缺省（你全部的知识库，以及本项目的库）。动一下就固定成这条会话自己的。",
+    "knowledgeDefault": "还没选过 —— 这是缺省（你全部的知识库、本项目的库，以及 ShuviX 内置的说明书）。动一下就固定成这条会话自己的。",
     "knowledgeProjectBase": "本项目"
   },
   "projectForm": {

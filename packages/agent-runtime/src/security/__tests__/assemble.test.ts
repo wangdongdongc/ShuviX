@@ -33,6 +33,7 @@ const BUILTIN_VARS: Record<string, string | string[]> = {
   knowledgeSessionDirs: [],
   home: '/home/u',
   botsDir: '/home/u/.shuvix/bots',
+  builtinKnowledgeDir: '/opt/shuvix/Resources/knowledge',
   systemDirs: []
 }
 

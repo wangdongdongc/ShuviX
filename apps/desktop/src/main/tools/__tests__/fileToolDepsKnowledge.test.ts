@@ -66,7 +66,9 @@ vi.mock('../../logger', () => ({
 }))
 vi.mock('../../utils/paths', () => ({
   getShuvixKnowledgeRootDir: () => state.kb,
-  getUserKnowledgeRootDir: () => `${state.kb}-user`
+  getUserKnowledgeRootDir: () => `${state.kb}-user`,
+  // 内置库根替身：不存在的兄弟目录 —— 这些用例里没有内置库
+  getBuiltinKnowledgeDir: () => `${state.kb}-builtin`
 }))
 vi.mock('../../services/knowledge', () => ({ notifyKnowledgeFileChanged: state.notify }))
 

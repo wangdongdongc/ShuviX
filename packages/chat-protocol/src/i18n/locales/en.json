@@ -166,10 +166,13 @@
     "newEntryPlaceholder": "Entry title",
     "errInvalidName": "A name cannot contain / \\ : * ? \" < > |, start with a dot, or end with a dot or a space",
     "errNameTaken": "\"{{name}}\" already exists",
-    "errReserved": "\"project\" is a reserved name — pick another one",
+    "errReserved": "\"{{name}}\" is a reserved name — pick another one",
     "errNoSuchDir": "That folder is gone — refresh the list",
     "errEmptyTitle": "A title is required",
-    "errCreateFailed": "Could not create it: {{error}}"
+    "errCreateFailed": "Could not create it: {{error}}",
+    "builtinBase": "ShuviX's own guide — read-only. How its agent, bot, policy and hook files, knowledge entries and skills are written.",
+    "errReadOnly": "ShuviX's built-in knowledge base is read-only",
+    "builtinBaseName": "ShuviX System Guide"
   },
   "chat": {
     "mcpConnectFailed": "[MCP] {{name}} failed to connect: {{error}}",
@@ -328,7 +331,7 @@
     "extensionsLocked": "Read-only: the agent has already been created",
     "knowledgeGroup": "Knowledge bases",
     "knowledgeDesc": "Which bases this session can search and write to. Changes take effect right away.",
-    "knowledgeDefault": "Not picked yet — this is the default (all of your knowledge bases, plus this project's). Touch it and it becomes this session's own.",
+    "knowledgeDefault": "Not picked yet — this is the default (all of your knowledge bases, this project's, and ShuviX's built-in reference). Touch it and it becomes this session's own.",
     "knowledgeProjectBase": "This project"
   },
   "projectForm": {

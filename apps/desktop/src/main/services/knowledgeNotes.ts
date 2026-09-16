@@ -1,23 +1,34 @@
 /**
- * 知识库笔记 —— 侧栏「知识库」分组点行的后端。两个隐藏承载项目，各自的 path 就是 notebookPath
+ * 知识库笔记 —— 侧栏「知识库」分组点行的后端。三个隐藏承载项目，各自的 path 就是 notebookPath
  * 解析的根，都不出现在项目列表（isHiddenProjectId 过滤）：
  *
- *   - KNOWLEDGE_PROJECT_ID      = knowledge-shuvix 根，承载项目库；notebookPath 即条目 id
- *                                 （`projects/<id>/x.md`）—— 与引入用户库之前逐字一致，存量会话照常
- *   - KNOWLEDGE_USER_PROJECT_ID = 用户根，承载用户库；notebookPath 是条目 id 去掉首段 `knowledge/`
+ *   - KNOWLEDGE_PROJECT_ID         = knowledge-shuvix 根，承载项目库；notebookPath 即条目 id
+ *                                    （`projects/<id>/x.md`）—— 与引入用户库之前逐字一致，存量会话照常
+ *   - KNOWLEDGE_USER_PROJECT_ID    = 用户根，承载用户库；notebookPath 是条目 id 去掉首段 `knowledge/`
+ *   - KNOWLEDGE_BUILTIN_PROJECT_ID = 内置库**当前语言那一版**的目录（`<应用包>/knowledge/shuvix/<lang>`），
+ *                                    notebookPath 是库内相对路径。各语言版本同名同路径，所以切换语言后
+ *                                    同一条会话读到的就是新语言的那份 —— 承载项目的 path 在下一次打开、
+ *                                    或语言切换时（syncKnowledgeBuiltinProject）重新指向。只读：渲染端按
+ *                                    承载项目 id 认出来，不给输入框、编辑器只读。
  *
  * 为什么不合成一个承载项目：它的 path 一变，存量会话的 notebookPath 就全部解析到错的地方。
  * 每个条目文件至多一个笔记本会话，重复打开复用已有会话。与 wikiService 同一套做法。
  */
-import { KNOWLEDGE_PROJECT_ID, KNOWLEDGE_USER_PROJECT_ID } from '@shuvix/chat-protocol/knowledge'
+import {
+  KNOWLEDGE_BUILTIN_PROJECT_ID,
+  KNOWLEDGE_PROJECT_ID,
+  KNOWLEDGE_USER_PROJECT_ID
+} from '@shuvix/chat-protocol/knowledge'
 import { normalizeBundlePath, titleFromPath } from '@shuvix/agent-runtime'
 import { projectDao } from '../dao/projectDao'
 import { sessionDao } from '../dao/sessionDao'
 import { sessionService } from './sessionService'
 import {
+  bundleDir,
   entryFilePath,
   getShuvixKnowledgeRoot,
   getUserKnowledgeRoot,
+  isBuiltinBundle,
   isUserBundle,
   locateBundle,
   USER_CONTAINER
@@ -27,6 +38,7 @@ import type { Project, Session } from '../types'
 /** 面向用户的功能名（隐藏项目的 name；同旧 wiki 项目的「知识库」，靠 id 区分） */
 const KNOWLEDGE_PROJECT_NAME = '知识库'
 const KNOWLEDGE_USER_PROJECT_NAME = '用户知识库'
+const KNOWLEDGE_BUILTIN_PROJECT_NAME = 'ShuviX 系统说明'
 
 /** 确保一个隐藏承载项目存在并返回（目录不在这里建）；历史行的 path / name 漂移自愈 */
 function ensureCarrier(id: string, name: string, root: string): Project {
@@ -70,6 +82,23 @@ export function ensureKnowledgeUserProject(): Project {
   )
 }
 
+/** 内置库的承载项目：path 是该库当前语言那一版的目录（一个内置库一个承载项目；本期只有 `builtin/shuvix`） */
+function ensureKnowledgeBuiltinProject(bundle: string): Project {
+  return ensureCarrier(
+    KNOWLEDGE_BUILTIN_PROJECT_ID,
+    KNOWLEDGE_BUILTIN_PROJECT_NAME,
+    bundleDir(bundle)
+  )
+}
+
+/**
+ * 界面语言切换后把内置库承载项目的 path 指向新语言那一版 —— 只在它已经存在时（从没打开过内置条目就
+ * 没有这个项目，不必凭空建）。开着的笔记本会话下一次读文件就落到新目录：notebookPath 在各语言里同名。
+ */
+export function syncKnowledgeBuiltinProject(bundle: string): void {
+  if (projectDao.findById(KNOWLEDGE_BUILTIN_PROJECT_ID)) ensureKnowledgeBuiltinProject(bundle)
+}
+
 /**
  * 打开知识库条目的笔记本：同文件已有笔记本会话则复用，否则创建（main 单线程 + 同步 SQLite，
  * 查建原子）。`relPath` 是条目 id（`projects/<id>/x.md` / `knowledge/<库名>/x.md`），`title` 是
@@ -84,8 +113,17 @@ export async function openKnowledgeNote(relPath: string, title?: string): Promis
 
   const entryId = `${located.bundle}/${located.rel}`
   const user = isUserBundle(located.bundle)
-  const project = user ? ensureKnowledgeUserProject() : ensureKnowledgeProject()
-  const notebookPath = user ? entryId.slice(USER_CONTAINER.length + 1) : entryId
+  const builtin = isBuiltinBundle(located.bundle)
+  const project = builtin
+    ? ensureKnowledgeBuiltinProject(located.bundle)
+    : user
+      ? ensureKnowledgeUserProject()
+      : ensureKnowledgeProject()
+  const notebookPath = builtin
+    ? located.rel
+    : user
+      ? entryId.slice(USER_CONTAINER.length + 1)
+      : entryId
   const existing = sessionDao.findByProjectAndNotebookPath(project.id, notebookPath)
   if (existing) return existing
   return sessionService.create({

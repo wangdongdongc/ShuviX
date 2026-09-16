@@ -152,6 +152,8 @@ Actions:
 - "create": add a new entry — \`type\`, \`title\`, \`description\`, \`body\`, optional \`tags\` / \`sources\` / \`stale_after\` / \`status\`. The host assembles the metadata, names the file after the title, and answers with the absolute path it wrote.
 - "validate": report problems in one note (\`path\`) or in the whole base (no \`path\`). Entries that carry ShuviX's self-description line are held to OKF; the user's own notes are only checked for broken frontmatter. Run it after editing an entry.
 
+**A base marked read-only in "bases"** is ShuviX's own reference, shipped with the app: search and read it for how ShuviX's files and features work, but never create or edit anything there — record what you learn in one of the user's bases.
+
 **A base can hold the user's own notes with no metadata at all.** They are part of the base: search, read and edit them as they are, and never add or "fix" metadata on a user's note unless the user asks. Only entries created through "create" are guaranteed to carry OKF metadata.
 
 **Create entries here, change them with \`edit\`.** Only "create" writes through this tool; to revise an existing entry, \`edit\` the file at the absolute path that "search" / "list" / "read" / "create" gave you — a surgical diff beats re-sending the whole body. Never create an entry with \`write\`: the metadata (the self-description line, the key order, \`generated\`) would be yours to get right.
@@ -172,6 +174,8 @@ export interface KnowledgeBundleTarget {
   dir: string
   /** 人读标签，如 `project "Acme Corp"` */
   label: string
+  /** 只读（宿主随应用发布的内置库）：`create` 拒绝，其余动作照常 */
+  readonly?: boolean
 }
 
 export interface KnowledgeSearchHit {
@@ -570,6 +574,13 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
     if (missing.length) throw new Error(`Creating an entry needs: ${missing.join(', ')}`)
 
     const target = await this.bundle(params)
+    // 只读的库（宿主随应用发布的说明书）：在这里拒，而不是留给安全策略 —— 策略拒的是路径，
+    // 回给模型的话说不清「该记到哪里去」
+    if (target.readonly) {
+      throw new Error(
+        `"${params.base!.trim()}" is read-only — it is ShuviX's own reference, shipped with the app. Record the entry in one of the user's knowledge bases instead ("bases" lists them).`
+      )
+    }
     const { concepts, files } = await this.deps.scan(target.dir)
     // 保留文件名同样算占用：slugify('Index') 正好撞上 OKF 保留的 index.md
     const taken = new Set<string>([
