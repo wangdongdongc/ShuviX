@@ -353,18 +353,15 @@ export const chatApiAdapter: ChatApi = {
           toolCount
         }
       }),
+    // 增改都不连 —— 惰性启动，等创建 Agent 装配工具时再连
     add: async (params) => {
-      const s = mcpStore.add(params)
-      if (s.isEnabled) await mcpManager.connect(s.id)
+      mcpStore.add(params)
       return ok
     },
     update: async (params) => {
       const s = mcpStore.update(params)
-      if (s) {
-        // 配置/启停变化 → 启用则（重）连，否则断开
-        if (s.isEnabled) await mcpManager.connect(s.id)
-        else await mcpManager.disconnect(s.id)
-      }
+      // 配置/启停变化 → 断开旧连接（按旧配置建的），新配置下次用到时自然连上
+      if (s) await mcpManager.disconnect(s.id)
       return ok
     },
     delete: async (id) => {

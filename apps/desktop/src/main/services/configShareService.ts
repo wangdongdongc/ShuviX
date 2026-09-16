@@ -276,12 +276,12 @@ class ConfigShareService {
       for (const [k, v] of Object.entries(incomingEnv)) {
         if (typeof v === 'string' && v.trim().length > 0) merged[k] = v
       }
+      // 断开旧连接即可：新配置等哪条会话用到它时自然连上（惰性启动）
       await mcpService.disconnect(existing.id)
       mcpDao.update(existing.id, {
         env: JSON.stringify(merged),
         isEnabled: 1
       })
-      await mcpService.connect(existing.id)
       return
     }
 
@@ -319,8 +319,6 @@ class ConfigShareService {
     } else {
       mcpDao.insert(record)
     }
-
-    await mcpService.connect(record.id)
   }
 }
 

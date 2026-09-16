@@ -69,7 +69,7 @@ function ExtGroupRow({
               <label
                 key={it.key}
                 data-ext-item={it.key}
-                title={it.offline ? t('settings.mcpStatusDisconnected') : it.desc}
+                title={it.offline ? t('settings.mcpStatusError') : it.desc}
                 className={`inline-flex items-center gap-1.5 h-6 max-w-full px-2 rounded-md border transition-colors ${
                   readonly ? 'cursor-default' : 'cursor-pointer'
                 } ${stateCls}`}
@@ -141,7 +141,8 @@ export function ExtensionsSection({
     key: tool.name,
     display: tool.name.startsWith('mcp:') ? tool.name.slice(4) : tool.name,
     builtin: tool.isBuiltin,
-    offline: tool.serverStatus !== 'connected'
+    // 惰性启动下「没连上」是常态（用到才连），只有连接失败才标成离线
+    offline: tool.serverStatus === 'error'
   }))
   const skillItems: ExtItem[] = skillTools.map((tool) => {
     const short = tool.name.startsWith('skill:') ? tool.name.slice(6) : tool.name

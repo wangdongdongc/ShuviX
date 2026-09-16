@@ -160,6 +160,7 @@
     "copyPath": "复制路径"
   },
   "chat": {
+    "mcpConnectFailed": "[MCP] {{name}} 连接失败：{{error}}",
     "welcomePrompt": "我们今天聊点什么？",
     "welcomeCreateProject": "创建项目",
     "welcomeConfigureProviders": "配置模型提供商",
@@ -652,7 +653,7 @@
     "mcpHeaders": "请求头",
     "mcpHeadersPlaceholder": "Key: Value 格式，每行一个",
     "mcpStatusConnected": "已连接",
-    "mcpStatusDisconnected": "未连接",
+    "mcpStatusDisconnected": "未启动",
     "mcpStatusConnecting": "连接中",
     "mcpStatusError": "连接失败",
     "mcpTools": "工具",

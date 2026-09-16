@@ -6,6 +6,12 @@
  *  - store：server 配置读取 + cachedTools 持久化（桌面 mcpDao / 扩展 chrome.storage）
  *  - createTransport：按 server.type 造 transport（桌面 stdio+http / 扩展仅 http）
  *
+ * **惰性启动**：没有「开机连全部」这回事 —— 连接只发生在装配工具那一刻（宿主创建 Agent 时按名
+ * `ensureServerByName` / `ensureEnabled`），以及用户在设置页手动点连接。失败也不进后台重试队列：
+ * 下次用到它时原地再连一次（`ensureConnected` 对 error/disconnected 一律重开）。惰性路径带超时
+ * （`LAZY_CONNECT_TIMEOUT_MS`）—— 一台挂掉的服务器不能把整次 Agent 创建拖住；手动连接不带超时，
+ * 用户就在旁边看着，首次 npx 冷启动慢是可以等的。
+ *
  * 注意：stdio transport 依赖 Node child_process，故其 import 只留在桌面宿主的 createTransport 里，
  * 不进本模块——保证浏览器（扩展）也能打包本模块。
  */
@@ -58,6 +64,23 @@ interface McpConnection {
   error?: string
 }
 
+/**
+ * 一次连接尝试的结果。
+ *
+ * `ok:false` 且没有 `error` = 这台服务器压根不该连（名字不存在 / 已停用）—— 不是失败，
+ * 调用方静默跳过；带 `error` 才是真连不上，宿主据此向会话报一条提示。
+ */
+export interface McpConnectResult {
+  ok: boolean
+  error?: string
+}
+
+/**
+ * 惰性连接的超时（毫秒）。用到才连意味着这段等待直接压在用户发出的那条消息上，
+ * 所以宁可短：连不上就先把 Agent 建起来（少这台的工具），而不是让人干等。
+ */
+export const LAZY_CONNECT_TIMEOUT_MS = 5000
+
 const noopLog = { info: () => {}, warn: () => {}, error: () => {} }
 
 /** JSON Schema → TypeBox（Type.Unsafe 原样透传给 LLM） */
@@ -98,6 +121,8 @@ function parseJsonObject(json: string): Record<string, string> {
  */
 export class McpManager {
   private connections = new Map<string, McpConnection>()
+  /** 进行中的连接（按 serverId）—— 同一台服务器的并发请求合流，不重复拉起进程 */
+  private pending = new Map<string, Promise<McpConnectResult>>()
   private store: McpStore
   private createTransport: (server: McpServer) => Transport
   private log: NonNullable<McpManagerOptions['logger']>
@@ -112,14 +137,76 @@ export class McpManager {
 
   // ─── 连接管理 ───
 
-  /** 连接单个 MCP Server */
-  async connect(serverId: string): Promise<void> {
+  /**
+   * 显式连接单个 MCP Server（设置页手动连 / 重连、配置变更后）。已连上的先断开再重连。
+   *
+   * 并发合流：同一台服务器已有尝试在跑时，晚到者等那一次的结果 —— 惰性路径上「两条会话
+   * 同时创建 Agent」是常态，重复拉起 stdio 子进程既慢又会留残。搭车的一方沿用**先发起那次**
+   * 的超时：手动连接撞上在途的惰性连接时也会在 5 秒后失败，再点一次才是全新的、不设限的尝试。
+   */
+  async connect(serverId: string, opts?: { timeoutMs?: number }): Promise<McpConnectResult> {
+    const inflight = this.pending.get(serverId)
+    if (inflight) return inflight
+    const task = this.openConnection(serverId, opts?.timeoutMs).finally(() => {
+      this.pending.delete(serverId)
+    })
+    this.pending.set(serverId, task)
+    return task
+  }
+
+  /**
+   * 用到才连：已连上直接用，连接中就等它，**其余（没连过 / 上次失败）一律重开**。
+   * 「自动重试」就是这一行 —— 重试发生在下一次用到它的时候，没有后台重试队列。
+   */
+  async ensureConnected(
+    serverId: string,
+    opts?: { timeoutMs?: number }
+  ): Promise<McpConnectResult> {
+    if (this.connections.get(serverId)?.status === 'connected') return { ok: true }
+    return this.connect(serverId, opts)
+  }
+
+  /**
+   * 按名惰性连接（宿主装配 `mcp:<name>` 工具时调用）。
+   * 名字不在已启用列表里 → `ok:false` 且不带 error：没这台，不是连不上。
+   */
+  async ensureServerByName(
+    serverName: string,
+    opts?: { timeoutMs?: number }
+  ): Promise<McpConnectResult> {
+    const server = this.store.findEnabled().find((s) => s.name === serverName)
+    if (!server) return { ok: false }
+    return this.ensureConnected(server.id, opts)
+  }
+
+  /** 连上全部已启用 server（扩展宿主：会话没有逐台勾选，装配时要全量工具），并发进行 */
+  async ensureEnabled(opts?: {
+    timeoutMs?: number
+  }): Promise<Array<{ name: string; result: McpConnectResult }>> {
+    return Promise.all(
+      this.store
+        .findEnabled()
+        .map(async (s) => ({ name: s.name, result: await this.ensureConnected(s.id, opts) }))
+    )
+  }
+
+  /** 断开单个 MCP Server */
+  async disconnect(serverId: string): Promise<void> {
+    const conn = this.connections.get(serverId)
+    if (!conn) return
+    await this.closeConnection(conn, serverId)
+    this.connections.delete(serverId)
+    this.log.info(`disconnected: ${serverId}`)
+  }
+
+  /** 真正的连接过程（握手 + tools/list + 写 cachedTools）；失败把 error 留在状态里给设置页显示 */
+  private async openConnection(serverId: string, timeoutMs?: number): Promise<McpConnectResult> {
     if (this.connections.has(serverId)) await this.disconnect(serverId)
 
     const server = this.store.findById(serverId)
     if (!server) {
       this.log.warn(`connect: server ${serverId} 不存在`)
-      return
+      return { ok: false }
     }
 
     const conn: McpConnection = {
@@ -130,16 +217,20 @@ export class McpManager {
     }
     this.connections.set(serverId, conn)
 
-    try {
-      // url/headers 的 {{ENV_VAR}} 模板替换（内置 + 自定义）；引用的 env 为空则跳过连接
-      const { resolved, missingKey } = this.resolveTemplates(server)
-      if (missingKey) {
-        conn.status = 'error'
-        conn.error = `Missing required env variable: ${missingKey}`
-        this.log.warn(`skip ${server.name}: env variable ${missingKey} is not set`)
-        return
-      }
+    const fail = (message: string): McpConnectResult => {
+      conn.status = 'error'
+      conn.error = message
+      return { ok: false, error: message }
+    }
 
+    // url/headers 的 {{ENV_VAR}} 模板替换（内置 + 自定义）；引用的 env 为空则跳过连接
+    const { resolved, missingKey } = this.resolveTemplates(server)
+    if (missingKey) {
+      this.log.warn(`skip ${server.name}: env variable ${missingKey} is not set`)
+      return fail(`Missing required env variable: ${missingKey}`)
+    }
+
+    try {
       conn.transport = this.createTransport(resolved)
       conn.transport.onclose = () => {
         this.log.info(`transport closed: ${server.name}`)
@@ -152,10 +243,22 @@ export class McpManager {
         conn.error = err.message
       }
 
-      await conn.client.connect(conn.transport)
+      // 握手 + 工具发现合起来才算「连上」，超时按整段算
+      const handshake = (async () => {
+        await conn.client.connect(conn.transport)
+        const result = await conn.client.listTools()
+        conn.tools = result.tools as McpDiscoveredTool[]
+      })()
+      await this.withTimeout(handshake, timeoutMs)
 
-      const result = await conn.client.listTools()
-      conn.tools = result.tools as McpDiscoveredTool[]
+      // 这期间可能有人把这台停用/删掉了（disconnect 摘掉条目时，本次连接可能还没造出 transport，
+      // 那一下根本关不到它）。此刻自己收尾，否则 stdio 会留下一个谁也管不到的子进程。
+      if (this.connections.get(serverId) !== conn) {
+        await this.closeConnection(conn, server.name)
+        this.log.info(`connect aborted: ${server.name} 已在连接期间被断开`)
+        return { ok: false }
+      }
+
       conn.status = 'connected'
       conn.error = undefined
       this.store.updateCachedTools(
@@ -169,35 +272,54 @@ export class McpManager {
         )
       )
       this.log.info(`connected: ${server.name} (${conn.tools.length} tools)`)
+      return { ok: true }
     } catch (err: unknown) {
-      conn.status = 'error'
-      conn.error = err instanceof Error ? err.message : String(err)
-      this.log.error(`connect failed: ${server.name} ${conn.error}`)
+      const message = err instanceof Error ? err.message : String(err)
+      // 超时时握手可能还在跑：必须收掉 transport，否则 stdio 会留下一个没人管的子进程
+      await this.closeConnection(conn, server.name)
+      this.log.error(`connect failed: ${server.name} ${message}`)
+      return fail(message)
     }
   }
 
-  /** 断开单个 MCP Server */
-  async disconnect(serverId: string): Promise<void> {
-    const conn = this.connections.get(serverId)
-    if (!conn) return
+  /**
+   * 收掉 transport/client。先摘回调再关：onclose 会把状态改回 disconnected，
+   * 顺序反了失败原因就被它抹掉了。
+   */
+  private async closeConnection(conn: McpConnection, label: string): Promise<void> {
+    if (conn.transport) {
+      conn.transport.onclose = undefined
+      conn.transport.onerror = undefined
+    }
     try {
       await conn.transport?.close()
       await conn.client?.close()
     } catch (err: unknown) {
       this.log.warn(
-        `disconnect error: ${serverId} ${err instanceof Error ? err.message : String(err)}`
+        `disconnect error: ${label} ${err instanceof Error ? err.message : String(err)}`
       )
     }
-    this.connections.delete(serverId)
-    this.log.info(`disconnected: ${serverId}`)
   }
 
-  /** 启动所有已启用的 MCP Server */
-  async connectAll(): Promise<void> {
-    const servers = this.store.findEnabled()
-    if (servers.length === 0) return
-    this.log.info(`connectAll: ${servers.length} server(s)`)
-    await Promise.allSettled(servers.map((s) => this.connect(s.id)))
+  /** 超时包装（不传时长即不设限：手动连接等得起）。原任务的收尾在调用方的 catch 里 */
+  private async withTimeout<T>(task: Promise<T>, timeoutMs?: number): Promise<T> {
+    if (!timeoutMs) return task
+    // 超时返回之后原任务可能才失败 —— 先标记已处理，免得冒成未捕获拒绝
+    task.catch(() => {})
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      return await Promise.race([
+        task,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error(`connect timed out after ${timeoutMs}ms`)),
+            timeoutMs
+          )
+        })
+      ])
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
   }
 
   /** 关闭所有连接 */
@@ -215,10 +337,6 @@ export class McpManager {
 
   getError(serverId: string): string | undefined {
     return this.connections.get(serverId)?.error
-  }
-
-  getServerTools(serverId: string): McpDiscoveredTool[] {
-    return this.connections.get(serverId)?.tools ?? []
   }
 
   /** 某个 server 的工具信息（从 DB cachedTools 读 + 附加运行时状态） */
@@ -354,24 +472,14 @@ export class McpManager {
     return [...this.connections.keys()].flatMap((id) => this.serverToAgentTools(id))
   }
 
-  /** 所有已连接 Server 名（mcp:<name> 格式） */
-  getAllToolNames(): string[] {
-    const names: string[] = []
-    for (const [serverId, conn] of this.connections) {
-      if (conn.status !== 'connected') continue
-      const server = this.store.findById(serverId)
-      if (server) names.push(`mcp:${server.name}`)
-    }
-    return names
-  }
-
-  /** 按名称判断是否已连接（供子智能体依赖预检查） */
-  isConnectedByName(serverName: string): boolean {
-    for (const [serverId, conn] of this.connections) {
-      if (conn.status !== 'connected') continue
-      if (this.store.findById(serverId)?.name === serverName) return true
-    }
-    return false
+  /**
+   * 已启用 Server 名（`mcp:<name>`）—— 可用性看配置，不看连接状态。
+   *
+   * 惰性启动下「还没连」是常态而不是不可用：按连接状态过滤会把用户勾好的服务器在创建
+   * Agent 的前一刻抹掉，而它恰恰要在下一步才被连起来。
+   */
+  getEnabledToolNames(): string[] {
+    return this.store.findEnabled().map((s) => `mcp:${s.name}`)
   }
 
   /** 按服务器名获取所有 AgentTool（agentToolBuilder 按服务器级注入） */

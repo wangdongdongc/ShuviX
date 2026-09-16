@@ -152,12 +152,13 @@ export function ToolPicker(): React.JSX.Element | null {
               <div className="py-0.5">
                 <div className="px-2 py-1 text-[10px] font-medium text-text-tertiary">MCP</div>
                 {mcpTools.map((tool) => {
-                  const isOnline = tool.serverStatus === 'connected'
+                  // 惰性启动下「没连上」是常态（用到才连），只有连接失败才值得标红
+                  const failed = tool.serverStatus === 'error'
                   return (
                     <label
                       key={tool.name}
                       data-tool-item={tool.name}
-                      className={`${rowCls} ${!isOnline ? 'opacity-50' : ''}`}
+                      className={`${rowCls} ${failed ? 'opacity-50' : ''}`}
                     >
                       <input
                         type="checkbox"
@@ -172,14 +173,14 @@ export function ToolPicker(): React.JSX.Element | null {
                         </span>
                       )}
                       <span
-                        className={`text-[11px] font-mono whitespace-nowrap flex-shrink-0 ${isOnline ? 'text-purple-300' : 'text-red-300/60'}`}
+                        className={`text-[11px] font-mono whitespace-nowrap flex-shrink-0 ${failed ? 'text-red-300/60' : 'text-purple-300'}`}
                       >
                         {mcpShortName(tool.name)}
                       </span>
-                      {!isOnline && (
+                      {failed && (
                         <span
                           className="flex items-center gap-0.5 text-[10px] text-red-400"
-                          title={t('settings.mcpStatusDisconnected')}
+                          title={t('settings.mcpStatusError')}
                         >
                           <WifiOff size={10} />
                         </span>

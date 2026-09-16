@@ -10,7 +10,6 @@ import { chatApiAdapter } from '../runtime/chatApiAdapter'
 import { settingsStore } from '../storage/settingsStore'
 import { mcpStore } from '../storage/mcpStore'
 import { projectStore } from '../storage/projectStore'
-import { mcpManager } from '../runtime/mcpRuntime'
 import { initAppearance } from './appearanceStore'
 import { initSidebar } from './sidebarStore'
 import { initPanel } from './panelStore'
@@ -40,6 +39,5 @@ void Promise.all([
       </StrictMode>
     )
   }
-  // 后台连接已启用的 MCP server（不阻塞首屏；工具在连接完成后对新会话可用）
-  void mcpManager.connectAll()
 })
+// 注：MCP server 不在启动时连 —— 惰性启动，创建 Agent 装配工具那一刻才连（见 runtime/agentHost）

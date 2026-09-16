@@ -160,6 +160,7 @@
     "copyPath": "Copy path"
   },
   "chat": {
+    "mcpConnectFailed": "[MCP] {{name}} failed to connect: {{error}}",
     "welcomePrompt": "What should we work on today?",
     "welcomeCreateProject": "Create Project",
     "welcomeConfigureProviders": "Configure Providers",
@@ -652,7 +653,7 @@
     "mcpHeaders": "Headers",
     "mcpHeadersPlaceholder": "Key: Value format, one per line",
     "mcpStatusConnected": "Connected",
-    "mcpStatusDisconnected": "Disconnected",
+    "mcpStatusDisconnected": "Not started",
     "mcpStatusConnecting": "Connecting",
     "mcpStatusError": "Error",
     "mcpTools": "Tools",

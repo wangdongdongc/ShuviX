@@ -11,16 +11,26 @@ export function registerMcpHandlers(): void {
   /** 列出所有 MCP Server（含运行时状态） */
   ipcMain.handle('mcp:list', (): McpServerInfo[] => {
     const servers = mcpDao.findAll()
-    return servers.map((s) => ({
-      ...s,
-      status: mcpService.getStatus(s.id),
-      error: mcpService.getError(s.id),
-      toolCount: mcpService.getServerTools(s.id).length
-    }))
+    return servers.map((s) => {
+      // 工具数取 cachedTools（上次连上时发现的）：惰性启动下多数服务器此刻并没有连接，
+      // 按活连接数算会让设置页上的每台都显示 0 个工具
+      let toolCount = 0
+      try {
+        toolCount = JSON.parse(s.cachedTools || '[]').length
+      } catch {
+        /* 缓存坏了就当没有 */
+      }
+      return {
+        ...s,
+        status: mcpService.getStatus(s.id),
+        error: mcpService.getError(s.id),
+        toolCount
+      }
+    })
   })
 
-  /** 添加 MCP Server */
-  ipcMain.handle('mcp:add', async (_event, params: McpServerAddParams) => {
+  /** 添加 MCP Server（不连接 —— 惰性启动，等哪条会话用到它再连） */
+  ipcMain.handle('mcp:add', (_event, params: McpServerAddParams) => {
     const now = Date.now()
     const server = {
       id: uuidv7(),
@@ -39,9 +49,6 @@ export function registerMcpHandlers(): void {
       updatedAt: now
     }
     mcpDao.insert(server)
-
-    // 自动连接
-    await mcpService.connect(server.id)
 
     return { success: true, id: server.id }
   })
@@ -66,14 +73,8 @@ export function registerMcpHandlers(): void {
 
     mcpDao.update(params.id, fields)
 
-    // 配置变更后重连
-    const server = mcpDao.pick(params.id, ['isEnabled'])
-    if (server && server.isEnabled) {
-      await mcpService.disconnect(params.id)
-      await mcpService.connect(params.id)
-    } else {
-      await mcpService.disconnect(params.id)
-    }
+    // 配置变更只断开：旧连接按旧配置建的，留着就错了；新配置等下次用到时自然连上
+    await mcpService.disconnect(params.id)
 
     return { success: true }
   })
@@ -89,10 +90,10 @@ export function registerMcpHandlers(): void {
     return { success: true }
   })
 
-  /** 手动连接 */
+  /** 手动连接（设置页的连接/重连按钮）—— 不设超时：用户在旁边等着，首次冷启动慢是可以等的 */
   ipcMain.handle('mcp:connect', async (_event, id: string) => {
-    await mcpService.connect(id)
-    return { success: true }
+    const { ok, error } = await mcpService.connect(id)
+    return { success: ok, error }
   })
 
   /** 手动断开 */

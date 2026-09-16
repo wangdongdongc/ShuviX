@@ -644,10 +644,7 @@ app.whenReady().then(async () => {
     })
     .catch(() => {})
 
-  // 启动所有已启用的 MCP Client
-  measureAsync('mcpService.connectAll', () => mcpService.connectAll()).catch((err) => {
-    log.error(`connectAll failed: ${err}`)
-  })
+  // MCP Client 惰性启动：不在这里连 —— 哪条会话用到哪台，创建 Agent 装配工具时才连（见 agents/agentHost）
 
   // MCP Server 出于安全考虑不自动启动，需用户在设置中手动开启
 

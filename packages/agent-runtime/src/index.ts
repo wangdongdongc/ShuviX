@@ -47,9 +47,11 @@ export { resolveInitialThinkingLevel } from './thinkingLevel'
 export { isAssistantMessage, isUserMessage, isToolResultMessage } from './messageGuards'
 export {
   McpManager,
+  LAZY_CONNECT_TIMEOUT_MS,
   type McpStore,
   type McpManagerOptions,
-  type McpDiscoveredTool
+  type McpDiscoveredTool,
+  type McpConnectResult
 } from './mcpManager'
 export {
   createAskTool,

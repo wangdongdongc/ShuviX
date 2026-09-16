@@ -761,7 +761,7 @@ declare global {
       add: (params: McpServerAddParams) => Promise<{ success: boolean; id: string }>
       update: (params: McpServerUpdateParams) => Promise<{ success: boolean }>
       delete: (id: string) => Promise<{ success: boolean }>
-      connect: (id: string) => Promise<{ success: boolean }>
+      connect: (id: string) => Promise<{ success: boolean; error?: string }>
       disconnect: (id: string) => Promise<{ success: boolean }>
       getTools: (id: string) => Promise<McpToolInfo[]>
     }

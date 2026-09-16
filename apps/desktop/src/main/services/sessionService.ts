@@ -512,8 +512,8 @@ export class SessionService {
       ? projectDao.pick(session.projectId, ['path', 'settings'])
       : undefined
     const workingDirectory = project?.path || getTempWorkspace(sessionId)
-    // 滤掉此刻不可用的 MCP（未连接）与 skill（已删 / 已停用）；设置里的原值不动 ——
-    // 离线的服务器下次连上、重建运行时就又回来了
+    // 滤掉已不可用的 MCP（配置里已停用 / 已删）与 skill（已删 / 已停用）；设置里的原值不动。
+    // 可用性**不看连接状态** —— MCP 惰性启动，没连上的那台正要在下一步（装配工具）被连起来
     const enabledTools = filterAvailableTools(selectedTools, project?.path)
     return {
       provider,

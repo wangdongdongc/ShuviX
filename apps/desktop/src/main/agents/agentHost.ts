@@ -16,6 +16,7 @@ import type { TSchema } from 'typebox'
 import {
   createAgentFactory,
   DISPATCH_TOOL_NAME,
+  LAZY_CONNECT_TIMEOUT_MS,
   renderKnowledgeGuide,
   type AgentHostAdapter,
   type AnyAgentTool,
@@ -84,7 +85,7 @@ function pickOverrides(tool: object): ProcessToolOutputOverrides | undefined {
 
 // ─── 工具解析（root/spawned 统一按名解析） ──────────────────────
 
-function resolveDesktopTools(req: ToolResolveRequest): AnyAgentTool[] {
+async function resolveDesktopTools(req: ToolResolveRequest): Promise<AnyAgentTool[]> {
   const ctx: ToolContext = {
     // 询问/项目配置/fileTime/输出落盘归属：root=自身，spawned=根会话（与旧两路一致）
     sessionId: req.rootSessionId,
@@ -149,7 +150,27 @@ function resolveDesktopTools(req: ToolResolveRequest): AnyAgentTool[] {
     tools.push(wrap(new SkillTool(skillNames, projectPath)))
   }
 
-  for (const server of mcpServers) {
+  // MCP 惰性启动：勾选的服务器到这一刻才连（并发；上次失败的在这里自动再试一次）。
+  // 连不上就少这台的工具，Agent 照常创建 —— 但失败要让人看见：往会话里落一条错误提示，
+  // 用户刚发出的那条消息就在眼前，不至于以为工具凭空消失了。
+  const attempts = await Promise.all(
+    mcpServers.map(async (server) => ({
+      server,
+      result: await mcpService.ensureServerByName(server, { timeoutMs: LAZY_CONNECT_TIMEOUT_MS })
+    }))
+  )
+  for (const { server, result } of attempts) {
+    if (!result.ok) {
+      // 没 error = 这台已不在启用列表里（勾选早被 filterAvailableTools 滤掉，属边角情况），静默跳过
+      if (result.error) {
+        chatFrontendRegistry.broadcast({
+          type: 'error',
+          sessionId: req.rootSessionId,
+          error: i18next.t('chat.mcpConnectFailed', { name: server, error: result.error })
+        })
+      }
+      continue
+    }
     for (const mcpTool of mcpService.getAgentToolsByServerName(server)) {
       tools.push(wrap(mcpTool))
     }

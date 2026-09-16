@@ -2,8 +2,8 @@
  * 扩展 AgentHostAdapter —— 统一创建管线（createAgentFactory）的浏览器端适配。
  *
  * root（根会话）：按会话基座档案（work / chat / notebook）的名单装配工具（ask/browser/read/write/edit；
- * bash/ls/grep/glob/ssh/database 等宿主缺失名自动跳过）+ 全部已连接 MCP（宿主策略，
- * 等价旧「全量注入不过滤」）；工具池登记进 sessionTools 供派生复用；systemPrompt 经
+ * bash/ls/grep/glob/ssh/database 等宿主缺失名自动跳过）+ 全部已启用 MCP（宿主策略，
+ * 等价旧「全量注入不过滤」；服务器惰性启动 —— 就在这一刻连）；工具池登记进 sessionTools 供派生复用；systemPrompt 经
  * persona/workspace 两个具名段组装（'project' 段扩展不注册 → 引用时跳过）；
  * instruction 与桌面统一走 entry 懒注入（不再拼进 systemPrompt）。
  *
@@ -18,6 +18,7 @@ import {
   createAgentFactory,
   formatLanguageDisplay,
   DISPATCH_TOOL_NAME,
+  LAZY_CONNECT_TIMEOUT_MS,
   createAskTool,
   createBrowserTool,
   createStubExecutionEnv,
@@ -147,7 +148,20 @@ async function resolveRootTools(req: ToolResolveRequest): Promise<AnyAgentTool[]
     if (fileTool) built.push(fileTool)
     // 其余（bash/ls/grep/glob/ssh/database…）宿主缺失 → 静默跳过
   }
-  // MCP：全部已连接工具（宿主策略；扩展无会话级勾选，等价旧「全量注入」）
+  // MCP 惰性启动：装配工具这一刻才连全部已启用 server（扩展没有会话级勾选，全量注入），
+  // 上次失败的在这里自动再试一次。连不上就少这台的工具，并往会话里落一条错误提示 ——
+  // 用户刚发出的那条消息就在眼前，不至于以为工具凭空消失了
+  for (const { name, result } of await mcpManager.ensureEnabled({
+    timeoutMs: LAZY_CONNECT_TIMEOUT_MS
+  })) {
+    if (result.error) {
+      eventBus.emit({
+        type: 'error',
+        sessionId,
+        error: i18next.t('chat.mcpConnectFailed', { name, error: result.error })
+      })
+    }
+  }
   built.push(...(mcpManager.getAllAgentTools() as AgentTool[]))
 
   // L1 全工具门（安全模块）：MCP 等无专属客体的工具由它统一获得"可设门"能力

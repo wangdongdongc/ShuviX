@@ -260,14 +260,15 @@ export function ToolSelectList({
             )}
             <div className={compact ? 'py-0.5' : 'space-y-0.5'}>
               {mcpTools.map((tool) => {
-                const isOnline = tool.serverStatus === 'connected'
+                // 惰性启动下「没连上」是常态（用到才连），只有连接失败才值得标红
+                const failed = tool.serverStatus === 'error'
                 return (
                   <label
                     key={tool.name}
                     className={
                       compact
-                        ? `flex items-center gap-1.5 w-full px-2 py-0.5 hover:bg-bg-hover transition-colors cursor-pointer ${!isOnline ? 'opacity-50' : ''}`
-                        : `flex items-center gap-1.5 cursor-pointer select-none py-0.5 ${!isOnline ? 'opacity-50' : ''}`
+                        ? `flex items-center gap-1.5 w-full px-2 py-0.5 hover:bg-bg-hover transition-colors cursor-pointer ${failed ? 'opacity-50' : ''}`
+                        : `flex items-center gap-1.5 cursor-pointer select-none py-0.5 ${failed ? 'opacity-50' : ''}`
                     }
                   >
                     <input
@@ -277,14 +278,14 @@ export function ToolSelectList({
                       className="rounded border-border-primary accent-accent w-3.5 h-3.5 flex-shrink-0"
                     />
                     <span
-                      className={`text-[11px] font-mono whitespace-nowrap flex-shrink-0 ${isOnline ? 'text-purple-300' : 'text-red-300/60'}`}
+                      className={`text-[11px] font-mono whitespace-nowrap flex-shrink-0 ${failed ? 'text-red-300/60' : 'text-purple-300'}`}
                     >
                       {mcpServerName(tool.name)}
                     </span>
-                    {!isOnline && (
+                    {failed && (
                       <span
                         className="flex items-center gap-0.5 text-[10px] text-red-400"
-                        title={t('settings.mcpStatusDisconnected')}
+                        title={t('settings.mcpStatusError')}
                       >
                         <WifiOff size={10} />
                       </span>

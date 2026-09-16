@@ -101,11 +101,10 @@ async function applyMcpServer(exported: ExportedMcpServer): Promise<void> {
   }
   if (existing) {
     mcpStore.update({ id: existing.id, ...fields, isEnabled: true })
+    // 只断开旧连接（按旧配置建的）：新配置等哪条会话用到它时自然连上（惰性启动）
     await mcpManager.disconnect(existing.id)
-    await mcpManager.connect(existing.id)
   } else {
-    const created = mcpStore.add({ type: 'http', ...fields })
-    await mcpManager.connect(created.id)
+    mcpStore.add({ type: 'http', ...fields })
   }
 }
 

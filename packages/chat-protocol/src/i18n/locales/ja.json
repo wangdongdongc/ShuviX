@@ -160,6 +160,7 @@
     "copyPath": "パスをコピー"
   },
   "chat": {
+    "mcpConnectFailed": "[MCP] {{name}} への接続に失敗しました: {{error}}",
     "welcomePrompt": "今日は何をしましょうか？",
     "welcomeCreateProject": "プロジェクト作成",
     "welcomeConfigureProviders": "プロバイダー設定",
@@ -652,7 +653,7 @@
     "mcpHeaders": "ヘッダー",
     "mcpHeadersPlaceholder": "Key: Value 形式、1行に1つ",
     "mcpStatusConnected": "接続済み",
-    "mcpStatusDisconnected": "未接続",
+    "mcpStatusDisconnected": "未起動",
     "mcpStatusConnecting": "接続中",
     "mcpStatusError": "エラー",
     "mcpTools": "ツール",
