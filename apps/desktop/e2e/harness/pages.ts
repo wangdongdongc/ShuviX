@@ -1148,6 +1148,14 @@ export interface ToolPickerItem {
   checked: boolean
   /** 勾选框被禁用 = 只读 */
   disabled: boolean
+  /**
+   * 这一行是不是被画成了「离线」：降透明度（`opacity-50`）或挂着 WifiOff 徽标。
+   *
+   * 惰性启动之后只有**连接失败**（serverStatus === 'error'）才该这么画 —— 「还没连」是常态。
+   * 两个视觉信号由同一个判断驱动，这里取「任一成立」：少画一个也算没画成离线，
+   * 于是 `offline === false` 这条否定断言最严。
+   */
+  offline: boolean
 }
 
 export interface ToolPickerPane {
@@ -1207,7 +1215,10 @@ export function toolPickerPane(main: CdpClient): ToolPickerPane {
         return {
           name: label.getAttribute('data-tool-item') ?? '',
           checked: !!box?.checked,
-          disabled: !!box?.disabled
+          disabled: !!box?.disabled,
+          offline:
+            label.className.includes('opacity-50') ||
+            !!label.querySelector('span.text-red-400 svg')
         }
       })`),
     toggle: async (name, opts = {}) => {
