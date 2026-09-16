@@ -40,6 +40,7 @@ import { widgetServer } from './services/widget'
 import { cliServer } from './services/cliServer'
 import { closeAllWatchers } from './services/filesWatcherService'
 import { hookService } from './services/hookService'
+import { installLlmNetwork } from './services/llmNetwork'
 import {
   registerCustomProtocolHandlers,
   registerCustomProtocolSchemes
@@ -581,6 +582,10 @@ if (!gotTheLock) {
 
 // 自定义协议 scheme 注册必须早于 app.whenReady
 registerCustomProtocolSchemes()
+
+// 全局 fetch 包装：只作用于 LLM 请求（作用域外原样透传），放宽 undici 默认的
+// 300s 传输超时并记录 fetch 失败的成因链。必须早于任何 agent 跑起来。
+installLlmNetwork()
 
 app.whenReady().then(async () => {
   mark('app.whenReady')

@@ -29,7 +29,7 @@ import { HarnessSession } from '../harness/harnessSession'
 import { agentRuntimeRegistry } from '../runtimeRegistry'
 import { createModelsAdapter } from '../harness/modelsAdapter'
 import { createStubExecutionEnv } from '../harness/stubEnv'
-import type { RuntimeEventSink, RuntimeLogger, ToolResultTransform } from '../types'
+import type { RuntimeEventSink, RuntimeLogger, RuntimeNetwork, ToolResultTransform } from '../types'
 import type { InProcessAgentType, SubAgentModelConfig } from '../subagent/types'
 import type { AnyAgentTool, SpawnContext, SubAgentToolHelpers } from '../subagent/manager'
 import {
@@ -88,6 +88,11 @@ export interface AgentHostAdapter {
     spec: string
   ) => SubAgentModelConfig | null | Promise<SubAgentModelConfig | null>
   getApiKey: (provider: string) => string | undefined | Promise<string | undefined>
+  /**
+   * LLM 请求的网络侧钩子（可选）：换 dispatcher + 回贴 fetch 失败成因。
+   * 浏览器宿主不实现 —— 那边既没有 undici 也拿不到 AsyncLocalStorage。
+   */
+  network?: RuntimeNetwork
   /** 仅 root：打开持久化会话树（桌面 JSONL / 扩展 OPFS）；spawned 由 factory 内建内存树 */
   openSessionTree: (sessionId: string, cwd: string) => Promise<Session>
   /** 仅 root（桌面 NodeExecutionEnv）；缺省与 spawned 恒为 stub（工具自带执行环境） */
@@ -391,7 +396,7 @@ export function createAgentFactory(host: AgentHostAdapter): AgentFactory {
         kind === 'root'
           ? (host.createExecutionEnv?.(cwd) ?? createStubExecutionEnv(cwd))
           : createStubExecutionEnv(),
-      models: createModelsAdapter({ getApiKey: (p) => host.getApiKey(p) }),
+      models: createModelsAdapter({ getApiKey: (p) => host.getApiKey(p), network: host.network }),
       model,
       thinkingLevel: params.thinkingLevel,
       systemPrompt,

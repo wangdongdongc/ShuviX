@@ -46,6 +46,7 @@ import { ensureSessionTree } from '../services/sessionStorage'
 import { resolveInstructionContent } from '../services/instruction'
 import { resolveProjectMemoryIndex } from '../services/memory'
 import { httpLogService } from '../services/httpLogService'
+import { llmNetwork } from '../services/llmNetwork'
 import { chatFrontendRegistry } from '../frontend/core'
 import {
   wrapToolOutput,
@@ -280,6 +281,7 @@ const desktopAgentHost: AgentHostAdapter = {
   openSessionTree: (sessionId, cwd) => ensureSessionTree(sessionId, cwd),
   createExecutionEnv: (cwd) => new NodeExecutionEnv({ cwd }),
   eventSink: electronEventSink,
+  network: llmNetwork,
   transformToolResult: electronToolResultTransform,
   httpLog: {
     logRequest: (params) => httpLogService.logRequest(params),

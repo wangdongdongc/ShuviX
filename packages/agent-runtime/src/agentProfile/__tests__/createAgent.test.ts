@@ -13,6 +13,7 @@ import {
 } from '../createAgent'
 import type { InProcessAgentType, SubAgentModelConfig } from '../../subagent/types'
 import type { SpawnContext } from '../../subagent/manager'
+import type { RuntimeNetwork } from '../../types'
 
 // ── mock HarnessSession:捕获 deps + 暴露 CreatedAgent 用到的最小方法面 ──
 const constructed: FakeHarness[] = []
@@ -46,6 +47,22 @@ vi.mock('../../harness/harnessSession', () => ({
   HarnessSession: vi.fn().mockImplementation(function (deps: Record<string, unknown>) {
     return new FakeHarness(deps)
   })
+}))
+
+/**
+ * mock modelsAdapter —— 捕获它收到的 deps。
+ * 网络侧 seam(RuntimeNetwork)是宿主可选注入的,桌面接 llmNetwork、扩展不接;
+ * desktopAgentHost 本身没导出,所以这条接线只能在 createAgent 这一层验。
+ */
+const modelsAdapterMock = vi.hoisted(() => ({
+  calls: [] as Array<Record<string, unknown>>,
+  models: { marker: 'models' }
+}))
+vi.mock('../../harness/modelsAdapter', () => ({
+  createModelsAdapter: (deps: Record<string, unknown>) => {
+    modelsAdapterMock.calls.push(deps)
+    return modelsAdapterMock.models
+  }
 }))
 
 // ── fakes ──
@@ -141,6 +158,7 @@ function makeHost(): HostBundle {
 
 beforeEach(() => {
   constructed.length = 0
+  modelsAdapterMock.calls.length = 0
 })
 
 describe('createAgentFactory — root 决策列', () => {
@@ -781,5 +799,50 @@ describe('createAgentFactory —— 扩展能力 overlay（EXT-U-5）', () => {
 
     // 运行期换工具的入口已删：谁把它加回来，「运行时存在期间勾选只读」就不再成立
     expect('applyToolOverlay' in created).toBe(false)
+  })
+})
+
+/**
+ * 网络侧 seam(RuntimeNetwork)的接线 —— 桌面把 llmNetwork 挂在 host.network 上,
+ * 扩展宿主整个字段都没有(浏览器里既没有 undici 也拿不到 AsyncLocalStorage)。
+ *
+ * 这条缝的价值全在「可选」二字:少了它 modelsAdapter 必须逐字节维持原状,
+ * 所以「不注入时传下去的就是 undefined」和「注入时原对象直达」一样要钉。
+ */
+describe('createAgentFactory —— RuntimeNetwork seam 的传递', () => {
+  const network: RuntimeNetwork = {
+    runInRequestScope: (fn) => fn(),
+    describeLastFailure: () => 'UND_ERR_HEADERS_TIMEOUT'
+  }
+
+  it('宿主带 network → 原对象直达 createModelsAdapter(不包一层、不复制)', async () => {
+    const b = makeHost()
+    await createAgentFactory({ ...b.host, network }).createAgent({
+      kind: 'root',
+      sessionId: 's1',
+      profile: PROFILE,
+      model: MODEL_CFG,
+      cwd: '/w'
+    })
+
+    expect(modelsAdapterMock.calls).toHaveLength(1)
+    expect(modelsAdapterMock.calls[0].network).toBe(network)
+  })
+
+  it('宿主不带 network(扩展那副形状)→ 传下去的是 undefined,agent 照常建出来', async () => {
+    const b = makeHost()
+    expect(b.host.network).toBeUndefined()
+
+    await createAgentFactory(b.host).createAgent({
+      kind: 'root',
+      sessionId: 's1',
+      profile: PROFILE,
+      model: MODEL_CFG,
+      cwd: '/w'
+    })
+
+    expect(modelsAdapterMock.calls[0].network).toBeUndefined()
+    // 少了 seam 不等于少了 models —— 运行时照样拿到适配器
+    expect(constructed[0].deps.models).toBe(modelsAdapterMock.models)
   })
 })
