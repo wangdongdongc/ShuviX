@@ -127,7 +127,7 @@ describe('流式发送与重开一致性', () => {
   let liveUser: ListedMessage | null = null
   let liveAssistant: ListedMessage | null = null
 
-  it('输入框发送：用户气泡 + 助手卡片，事件序列 agent_start → text_delta* → text_end → agent_end', async () => {
+  it('输入框发送：用户气泡 + 助手卡片，事件序列 agent_created → agent_start → text_delta* → text_end → agent_end', async () => {
     provider.reset()
     await events.clear()
     provider.script({
@@ -148,7 +148,11 @@ describe('流式发送与重开一致性', () => {
 
     const all = await sessionEvents(sids.stream)
     const types = all.map((e) => e.type)
-    expect(types.indexOf('agent_start')).toBe(0)
+    // 运行时是懒建的：本会话的首次发送才把它建出来。agent_created（SessionManager 的 onCreated，
+    // 见 sessionService 的 broadcastAgentCreated）标的是「这条会话有运行时」区间的起点 ——
+    // ensure() 交出实例之前就发了，所以必然排在本轮 agent_start 之前，不属于本轮流式事件。
+    expect(types[0]).toBe('agent_created')
+    expect(types.indexOf('agent_start')).toBe(1)
     expect(types.filter((t) => t === 'text_delta').length).toBe(3)
     expect(types.indexOf('text_end')).toBeGreaterThan(types.lastIndexOf('text_delta'))
     expect(types.at(-1)).toBe('agent_end')
