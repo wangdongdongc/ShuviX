@@ -65,7 +65,8 @@ export { KnowledgeGroup } from './sidebar/KnowledgeGroup'
 export type {
   KnowledgeGroupProps,
   KnowledgeGroupAdapter,
-  KnowledgeListing
+  KnowledgeListing,
+  KnowledgeCreateResult
 } from './sidebar/KnowledgeGroup'
 export { buildKnowledgeTree } from './sidebar/knowledgeTree'
 export type {

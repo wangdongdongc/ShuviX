@@ -3,15 +3,16 @@
  * docs/okf-knowledge-design.md 附录 U（含「补充」）、附录 L（读宽写严）。
  *
  *   KE-1 树形态：Projects 容器置顶，`~/.shuvix/knowledge/` 下每个子目录一个库、与容器平级平铺（没有
- *        「knowledge」那一层）；空文件夹、隐藏路径、用户根下的散文件、ShuviX 早先生成形状的 index/log
- *        都不占行；不合规的 md 与手写的 index/log 照常列出（名字依次取 title、第一个 # 标题、文件名）；
- *        项目库显示项目**当前**名字。默认折叠：容器展开，项目库与用户库折叠。
+ *        「knowledge」那一层）；隐藏路径、用户根下的散文件、ShuviX 早先生成形状的 index/log 都不占行，
+ *        **空目录照常占行**（手动新建的库 / 文件夹第一时间就是空的，它们是新建条目的落点）；不合规的
+ *        md 与手写的 index/log 照常列出（名字依次取 title、第一个 # 标题、文件名）；项目库显示项目
+ *        **当前**名字。默认折叠：容器展开，项目库与用户库折叠。
  *   KE-2 点行打开：用户库挂 `__knowledge_user__`（notebookPath = 条目 id 去掉首段 `knowledge/`），项目库挂
  *        `__knowledge__`（notebookPath = 条目 id）；再点复用同一会话；两个承载项目不进项目列表。
  *   KE-3 属性卡兜底只在知识库笔记本里：完全没有 `shuvix:` 行的文件出 OKF 卡（无版本段、无校验态），带别家
  *        标记的以标记为准；普通项目里的同一份文件照旧不出卡。
- *   KE-4 菜单：组头「打开目录 / 刷新」，行「在文件夹中显示 / 复制路径」；复制路径按条目 id 的首段分派到两个根。
- *   KE-5 空库里出现第一个 md 之后，刷新即长出目录行（默认折叠）。
+ *   KE-4 菜单：组头「新建知识库 / 打开目录 / 刷新」，行「在文件夹中显示 / 复制路径」；复制路径按条目 id 的首段分派到两个根。
+ *   KE-5 空库一开始就有目录行；里面出现第一个 md 之后，刷新即长出条目行。
  *
  * 会话归属先走 IPC（`session.list` / `project.list`）；树形与卡片是纯渲染产物，经 pages.ts 的 knowledgePane 读。
  * ⚠️ 组头 `open-folder` 与行 `reveal` 只读不选：隔离实例没有替换 shell，选中会在真实桌面上弹出文件管理器。
@@ -147,7 +148,7 @@ beforeAll(async () => {
   put(join(userRoot, '读书笔记', 'r.md'), 'READING BODY\n')
   // ShuviX 早先生成的形状的 index（只有节标题与链接行）不是笔记，不占行
   put(join(userRoot, '读书笔记', 'index.md'), '## Entries\n\n* [r](r.md)\n')
-  // 空文件夹是一个库，但没有 md 就没有行（KE-5 再往里写）
+  // 空文件夹也是一个库：没有 md 也有目录行（KE-5 再往里写第一个 md）
   mkdirSync(join(userRoot, 'empty'), { recursive: true })
   // 隐藏目录不算库；用户根下的散文件不属于任何库
   put(join(userRoot, '.trash', 't.md'), 'TRASH AT ROOT\n')
@@ -179,13 +180,13 @@ describe('知识库分组 × 用户知识库', () => {
         .slice(1)
         .map((d) => d.path)
         .sort()
-    ).toEqual(['knowledge/notes', 'knowledge/读书笔记'].sort())
+    ).toEqual(['knowledge/empty', 'knowledge/notes', 'knowledge/读书笔记'].sort())
 
-    // 被提掉的用户根容器、空文件夹、隐藏目录：任何层级都不该有目录行
+    // 被提掉的用户根容器与隐藏目录：任何层级都不该有目录行。空库有行 —— 那是新建条目的落点
     const dirPaths = (await kb.dirs()).map((d) => d.path)
     expect(dirPaths).not.toContain('knowledge')
-    expect(dirPaths).not.toContain('knowledge/empty')
     expect(dirPaths).not.toContain('knowledge/.trash')
+    expect(dirPaths).toContain('knowledge/empty')
 
     // 默认态：容器展开，项目库与用户库折叠
     expect(await kb.dirOpen('projects')).toBe(true)
@@ -303,10 +304,10 @@ describe('知识库分组 × 用户知识库', () => {
     expect(text).toContain('NO MARKER BODY')
   })
 
-  it('KE-4 菜单：组头「打开目录 / 刷新」、行「在文件夹中显示 / 复制路径」；复制路径覆盖两个根', async () => {
+  it('KE-4 菜单：组头「新建知识库 / 打开目录 / 刷新」、行「在文件夹中显示 / 复制路径」；复制路径覆盖两个根', async () => {
     await kb.expand()
     // 只读菜单内容：open-folder / reveal 一律不选（见文件头）
-    expect(await kb.groupMenuIds()).toEqual(['open-folder', 'refresh'])
+    expect(await kb.groupMenuIds()).toEqual(['new-base', 'open-folder', 'refresh'])
     const rowIds = ((await kb.rowMenuShots('knowledge/notes/plain.md')) ?? [])
       .filter((it) => it.id)
       .map((it) => it.id)
@@ -324,18 +325,19 @@ describe('知识库分组 × 用户知识库', () => {
     )
   })
 
-  it('KE-5 空库里出现第一个 md：刷新后长出目录行，默认折叠', async () => {
+  it('KE-5 空库一开始就有目录行（默认折叠）；里面出现第一个 md 之后刷新长出条目行', async () => {
     await kb.expand()
-    expect((await kb.dirs()).map((d) => d.path)).not.toContain('knowledge/empty')
+    expect((await kb.topDirs()).map((d) => d.path)).toContain('knowledge/empty')
+    expect(await kb.dirOpen('knowledge/empty')).toBe(false)
+    expect((await kb.rows()).map((r) => r.path)).not.toContain('knowledge/empty/first.md')
 
     // 磁盘外写入不广播 knowledge.changed —— 走组头菜单的「刷新」
     writeFileSync(join(userRoot, 'empty', 'first.md'), 'FIRST BODY\n')
     await kb.refresh()
     await until(
-      async () => (await kb.topDirs()).some((d) => d.path === 'knowledge/empty'),
-      'knowledge/empty listed after refresh'
+      async () => (await kb.rows()).some((r) => r.path === 'knowledge/empty/first.md'),
+      'knowledge/empty/first.md listed after refresh'
     )
     expect(await kb.dirOpen('knowledge/empty')).toBe(false)
-    expect((await kb.rows()).map((r) => r.path)).toContain('knowledge/empty/first.md')
   })
 })

@@ -157,7 +157,19 @@
     "badgeDeprecated": "Deprecated",
     "openFolder": "Open knowledge folder",
     "revealFile": "Show in folder",
-    "copyPath": "Copy path"
+    "copyPath": "Copy path",
+    "newBase": "New knowledge base",
+    "newFolder": "New folder",
+    "newEntry": "New entry",
+    "newBasePlaceholder": "Knowledge base name",
+    "newFolderPlaceholder": "Folder name",
+    "newEntryPlaceholder": "Entry title",
+    "errInvalidName": "A name cannot contain / \\ : * ? \" < > |, start with a dot, or end with a dot or a space",
+    "errNameTaken": "\"{{name}}\" already exists",
+    "errReserved": "\"project\" is a reserved name — pick another one",
+    "errNoSuchDir": "That folder is gone — refresh the list",
+    "errEmptyTitle": "A title is required",
+    "errCreateFailed": "Could not create it: {{error}}"
   },
   "chat": {
     "mcpConnectFailed": "[MCP] {{name}} failed to connect: {{error}}",

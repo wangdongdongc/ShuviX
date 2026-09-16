@@ -13,8 +13,11 @@
  * 事件（宿主观察到的 agent 写入）重扫，stale-guard 防乱序回包。项目容器默认展开，项目库与
  * 用户库默认折叠 —— 用户要看的是条目，不是一列库名。
  *
- * 动作全部收在菜单里（右键 / ⋮ 同一份）：组头 = 打开目录 / 刷新；行 = 在文件夹中显示 /
- * 复制路径。核实 / 标为过时等管理动作属管理页（未建），这里只让库**可见**。
+ * 动作全部收在菜单里（右键 / ⋮ 同一份）：组头 = 新建知识库 / 打开目录 / 刷新；目录行 = 新建条目 /
+ * 新建文件夹；条目行 = 在文件夹中显示 / 复制路径。核实 / 标为过时等管理动作属管理页（未建）。
+ *
+ * **新建就地输名字**：菜单点完在树里长出一行输入框（Enter 建、Esc 或失焦取消），名字交给宿主校验 ——
+ * 不合法 / 重名的原因显示在输入行下面，改一下再回车。改名与删除仍然交给文件系统（「打开知识库目录」）。
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -56,8 +59,18 @@ export interface KnowledgeListing {
   root: string
   /** 用户根的绝对路径（用户库条目 `knowledge/<库名>/…` 去掉首段后相对它） */
   userRoot: string
+  /** 库与库内目录的 id（空目录也在其中 —— 新建出来的库 / 文件夹第一时间就是空的） */
+  dirs: string[]
   /** bundle id → 显示名（项目库：项目当前的名字 —— 目录名是项目 id，不给人看） */
   bundleNames: Record<string, string>
+}
+
+/** 新建的回包：失败时 error 是宿主给的、已本地化的人读原因 */
+export interface KnowledgeCreateResult {
+  success: boolean
+  /** 新建出来的 id：知识库 / 文件夹是目录 id，条目是条目 id */
+  id?: string
+  error?: string
 }
 
 /** 宿主注入的知识库能力（桌面：window.api.knowledge 的窄投影） */
@@ -70,6 +83,21 @@ export interface KnowledgeGroupAdapter {
   openFolder: () => void | Promise<unknown>
   /** 在 OS 文件管理器里显示该条目文件；没有文件管理器的宿主不注入，菜单项随之不出现 */
   revealFile?: (path: string) => void | Promise<unknown>
+  /** 新建用户知识库（用户根下一个目录）；不注入则菜单里没有这一项 */
+  createBase?: (name: string) => Promise<KnowledgeCreateResult>
+  /** 在某个目录（库本身或库里的一层）下新建文件夹 */
+  createFolder?: (dir: string, name: string) => Promise<KnowledgeCreateResult>
+  /** 在某个目录下新建条目：`title` 是标题，文件名由宿主按标题派生 */
+  createEntry?: (dir: string, title: string) => Promise<KnowledgeCreateResult>
+}
+
+/** 内联新建行的三种落点 */
+type DraftKind = 'base' | 'folder' | 'entry'
+
+const DRAFT_PLACEHOLDER: Record<DraftKind, string> = {
+  base: 'knowledge.newBasePlaceholder',
+  folder: 'knowledge.newFolderPlaceholder',
+  entry: 'knowledge.newEntryPlaceholder'
 }
 
 export interface KnowledgeGroupProps {
@@ -116,6 +144,10 @@ export function KnowledgeGroup({ adapter }: KnowledgeGroupProps): React.JSX.Elem
   const scannedOnce = useRef(false)
   // 递增序号丢弃过期回包（聚焦 / 事件 / 手动刷新并发时只认最后一次）
   const scanSeq = useRef(0)
+  // 正在输名字的那一行（parent 是落点目录 id，建库时为空）
+  const [draft, setDraft] = useState<{ kind: DraftKind; parent: string } | null>(null)
+  const [draftError, setDraftError] = useState<string | null>(null)
+  const [creating, setCreating] = useState(false)
 
   const scan = useCallback(async (): Promise<void> => {
     scannedOnce.current = true
@@ -125,7 +157,7 @@ export function KnowledgeGroup({ adapter }: KnowledgeGroupProps): React.JSX.Elem
       if (seq === scanSeq.current) setScanned(r)
     } catch {
       if (seq === scanSeq.current)
-        setScanned({ entries: [], root: '', userRoot: '', bundleNames: {} })
+        setScanned({ entries: [], root: '', userRoot: '', dirs: [], bundleNames: {} })
     }
   }, [adapter])
 
@@ -161,19 +193,104 @@ export function KnowledgeGroup({ adapter }: KnowledgeGroupProps): React.JSX.Elem
   const isDirOpen = (path: string): boolean => !path.includes('/') !== toggled.has(path)
 
   const tree = useMemo(
-    () => buildKnowledgeTree(scanned?.entries ?? [], scanned?.bundleNames),
+    () => buildKnowledgeTree(scanned?.entries ?? [], scanned?.bundleNames, scanned?.dirs),
     [scanned]
   )
 
+  const closeDraft = (): void => {
+    setDraft(null)
+    setDraftError(null)
+  }
+
+  /** 起一行内联输入：组先展开、落点目录先展开 —— 输入框长在收着的地方没人看得见 */
+  const startDraft = (kind: DraftKind, parent: string): void => {
+    if (collapsed) {
+      setCollapsed(false)
+      void scan()
+    }
+    if (parent && !isDirOpen(parent)) toggleDir(parent)
+    setDraft({ kind, parent })
+    setDraftError(null)
+  }
+
+  /** Enter 落地：宿主建，失败把原因留在行里（名字还在框里，改一下再回车） */
+  const commitDraft = async (value: string): Promise<void> => {
+    if (!draft || creating) return
+    const name = value.trim()
+    if (!name) {
+      closeDraft()
+      return
+    }
+    const run =
+      draft.kind === 'base'
+        ? adapter.createBase?.(name)
+        : draft.kind === 'folder'
+          ? adapter.createFolder?.(draft.parent, name)
+          : adapter.createEntry?.(draft.parent, name)
+    if (!run) {
+      closeDraft()
+      return
+    }
+    setCreating(true)
+    try {
+      const r = await run
+      if (!r.success) {
+        setDraftError(r.error ?? '')
+        return
+      }
+      const { kind } = draft
+      closeDraft()
+      await scan()
+      // 新条目建完就打开它的笔记本：正文在那里写，type / 状态 / 描述在属性卡里改
+      if (kind === 'entry' && r.id) await adapter.open(r.id, name)
+    } finally {
+      setCreating(false)
+    }
+  }
+
+  const renderDraft = (depth: number): React.ReactNode =>
+    draft && (
+      <KnowledgeDraftRow
+        kind={draft.kind}
+        depth={depth}
+        busy={creating}
+        error={draftError}
+        onCommit={(v) => void commitDraft(v)}
+        onCancel={closeDraft}
+      />
+    )
+
   const openGroupMenu = (e: React.MouseEvent): void => {
     const items: ContextMenuItem[] = [
+      ...(adapter.createBase
+        ? [{ id: 'new-base', label: t('knowledge.newBase') }, { type: 'separator' as const }]
+        : []),
       { id: 'open-folder', label: t('knowledge.openFolder') },
       { type: 'separator' },
       { id: 'refresh', label: t('panel.filesRefresh') }
     ]
     void showContextMenu(e, items, (action) => {
+      if (action === 'new-base') startDraft('base', '')
       if (action === 'open-folder') void adapter.openFolder()
       if (action === 'refresh') void scan()
+    })
+  }
+
+  /** 目录行的菜单：库本身与库里的每一层都能往里新建；固定文案的容器（`项目`）不是落点 */
+  const dirMenuItems = (node: KnowledgeTreeDir): ContextMenuItem[] => {
+    if (node.scopeDir !== null) return []
+    return [
+      ...(adapter.createEntry ? [{ id: 'new-entry', label: t('knowledge.newEntry') }] : []),
+      ...(adapter.createFolder ? [{ id: 'new-folder', label: t('knowledge.newFolder') }] : [])
+    ]
+  }
+
+  const openDirMenu = (node: KnowledgeTreeDir, e: React.MouseEvent): void => {
+    const items = dirMenuItems(node)
+    if (items.length === 0) return
+    void showContextMenu(e, items, (action) => {
+      if (action === 'new-entry') startDraft('entry', node.path)
+      if (action === 'new-folder') startDraft('folder', node.path)
     })
   }
 
@@ -280,9 +397,10 @@ export function KnowledgeGroup({ adapter }: KnowledgeGroupProps): React.JSX.Elem
         <div
           data-knowledge-dir={node.path}
           onClick={() => toggleDir(node.path)}
+          onContextMenu={(ev) => openDirMenu(node, ev)}
           title={node.path}
           style={{ paddingLeft: indent(depth) }}
-          className={`flex items-center gap-1.5 pr-1.5 py-0.5 cursor-pointer text-text-secondary hover:bg-bg-hover/50 hover:text-text-primary transition-opacity duration-200 ${
+          className={`group relative flex items-center gap-1.5 pr-1.5 py-0.5 cursor-pointer text-text-secondary hover:bg-bg-hover/50 hover:text-text-primary transition-opacity duration-200 ${
             dim && isActive ? 'opacity-30 hover:opacity-100' : ''
           }`}
         >
@@ -292,8 +410,15 @@ export function KnowledgeGroup({ adapter }: KnowledgeGroupProps): React.JSX.Elem
             <FolderClosed size={11} className="flex-shrink-0 text-text-tertiary/40" />
           )}
           <span className="flex-1 min-w-0 text-[13px] truncate">{label}</span>
+          {dirMenuItems(node).length > 0 && (
+            <RowMenuButton
+              className="absolute right-1.5 opacity-0 group-hover:opacity-100"
+              onOpen={(ev) => openDirMenu(node, ev)}
+            />
+          )}
         </div>
         <AnimatedCollapse open={open}>
+          {draft?.parent === node.path && renderDraft(depth + 1)}
           {node.files.map((f) => renderFile(f, depth + 1))}
           {node.dirs.map((d) => renderDir(d, depth + 1))}
         </AnimatedCollapse>
@@ -311,15 +436,79 @@ export function KnowledgeGroup({ adapter }: KnowledgeGroupProps): React.JSX.Elem
       dim={dim && !isActive}
       onMenu={openGroupMenu}
     >
-      {scanned !== null &&
-        (scanned.entries.length === 0 ? (
-          <div className="px-3 py-2 text-xs text-text-tertiary">{t('sidebar.knowledgeEmpty')}</div>
-        ) : (
-          <>
-            {tree.files.map((f) => renderFile(f, 0))}
-            {tree.dirs.map((d) => renderDir(d, 0))}
-          </>
-        ))}
+      {scanned !== null && (
+        <>
+          {tree.files.map((f) => renderFile(f, 0))}
+          {tree.dirs.map((d) => renderDir(d, 0))}
+          {draft?.kind === 'base' && renderDraft(0)}
+          {tree.files.length === 0 && tree.dirs.length === 0 && !draft && (
+            <div className="px-3 py-2 text-xs text-text-tertiary">
+              {t('sidebar.knowledgeEmpty')}
+            </div>
+          )}
+        </>
+      )}
     </SessionGroup>
+  )
+}
+
+/**
+ * 内联新建行 —— 在树里就地输名字。Enter 建、Esc 取消、**失焦也取消**：点走一下不该凭空多出一个库。
+ * 建的时候输入框禁用（此时的失焦不算取消），失败则这一行留着、原因显示在下面。
+ */
+function KnowledgeDraftRow({
+  kind,
+  depth,
+  busy,
+  error,
+  onCommit,
+  onCancel
+}: {
+  kind: DraftKind
+  depth: number
+  busy: boolean
+  error: string | null
+  onCommit: (value: string) => void
+  onCancel: () => void
+}): React.JSX.Element {
+  const { t } = useTranslation()
+  const [value, setValue] = useState('')
+  const Icon = kind === 'entry' ? FileText : FolderClosed
+  return (
+    <div data-knowledge-draft={kind}>
+      <div
+        style={{ paddingLeft: indent(depth) }}
+        className="flex items-center gap-1.5 pr-1.5 py-0.5"
+      >
+        <Icon size={11} className="flex-shrink-0 text-text-tertiary/40" />
+        <input
+          autoFocus
+          value={value}
+          disabled={busy}
+          placeholder={t(DRAFT_PLACEHOLDER[kind])}
+          onChange={(e) => setValue(e.target.value)}
+          onBlur={() => {
+            if (!busy) onCancel()
+          }}
+          // 侧栏的快捷键（上下切会话等）不该收到这里的按键
+          onKeyDown={(e) => {
+            e.stopPropagation()
+            if (e.key === 'Enter') onCommit(value)
+            if (e.key === 'Escape') onCancel()
+          }}
+          className={`flex-1 min-w-0 px-1 py-0 rounded border bg-bg-primary text-[13px] text-text-primary outline-none ${
+            error === null ? 'border-border-primary' : 'border-red-500/60'
+          }`}
+        />
+      </div>
+      {error && (
+        <div
+          style={{ paddingLeft: indent(depth) + 17 }}
+          className="pr-1.5 pb-1 text-[11px] text-red-400"
+        >
+          {error}
+        </div>
+      )}
+    </div>
   )
 }

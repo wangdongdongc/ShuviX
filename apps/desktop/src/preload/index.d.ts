@@ -71,6 +71,14 @@ import type {
   ImportSelection
 } from '@shuvix/chat-protocol/types/configShare'
 
+/** 知识库「新建」的回包：失败时 error 是已本地化的人读原因 */
+interface KnowledgeCreateReply {
+  success: boolean
+  /** 新建出来的 id：知识库 / 文件夹是目录 id，条目是条目 id */
+  id?: string
+  error?: string
+}
+
 declare global {
   /** ChatEvent 判别联合 — 后端 → 前端通信协议 */
   interface ChatEventBase {
@@ -1051,6 +1059,8 @@ declare global {
         entries: KnowledgeEntry[]
         root: string
         userRoot: string
+        /** 库与库内目录的 id（空目录也在其中） */
+        dirs: string[]
         /** bundle id → 显示名（项目库：项目当前的名字） */
         bundleNames: Record<string, string>
       }>
@@ -1060,6 +1070,12 @@ declare global {
       openFolder: () => Promise<{ success: boolean }>
       /** 在文件夹中显示条目文件（条目 id；落不进任何 bundle 的路径忽略） */
       revealFile: (params: { path: string }) => Promise<{ success: boolean }>
+      /** 新建用户知识库（用户根下一个目录）；失败回已本地化的 error */
+      createBase: (params: { name: string }) => Promise<KnowledgeCreateReply>
+      /** 在某个目录（库本身或库里的一层）下新建文件夹 */
+      createFolder: (params: { dir: string; name: string }) => Promise<KnowledgeCreateReply>
+      /** 在某个目录下新建条目：元数据由宿主拼，文件名按标题派生 */
+      createEntry: (params: { dir: string; title: string }) => Promise<KnowledgeCreateReply>
     }
     wiki: {
       /** 扫描 wiki 根目录下全部 markdown 文件（相对路径，遵循 .gitignore），含条目显示名 */

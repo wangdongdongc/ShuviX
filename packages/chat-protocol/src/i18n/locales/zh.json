@@ -157,7 +157,19 @@
     "badgeDeprecated": "已过时",
     "openFolder": "打开知识库目录",
     "revealFile": "在文件夹中显示",
-    "copyPath": "复制路径"
+    "copyPath": "复制路径",
+    "newBase": "新建知识库",
+    "newFolder": "新建文件夹",
+    "newEntry": "新建条目",
+    "newBasePlaceholder": "知识库名字",
+    "newFolderPlaceholder": "文件夹名字",
+    "newEntryPlaceholder": "条目标题",
+    "errInvalidName": "名字里不能有 / \\ : * ? \" < > |，也不能以点开头或以点、空格结尾",
+    "errNameTaken": "「{{name}}」已经存在",
+    "errReserved": "project 是保留名，换一个",
+    "errNoSuchDir": "这个位置已经不在了 —— 刷新看看",
+    "errEmptyTitle": "标题不能为空",
+    "errCreateFailed": "创建失败：{{error}}"
   },
   "chat": {
     "mcpConnectFailed": "[MCP] {{name}} 连接失败：{{error}}",

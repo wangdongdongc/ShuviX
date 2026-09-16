@@ -68,6 +68,7 @@ describe('listKnowledgeEntries', () => {
       root: `${root}-missing`,
       userRoot: `${root}-missing-user`,
       entries: [],
+      dirs: [],
       bundleNames: {}
     })
     expect(existsSync(`${root}-missing`)).toBe(false)

@@ -157,7 +157,19 @@
     "badgeDeprecated": "非推奨",
     "openFolder": "ナレッジフォルダを開く",
     "revealFile": "フォルダで表示",
-    "copyPath": "パスをコピー"
+    "copyPath": "パスをコピー",
+    "newBase": "ナレッジベースを新規作成",
+    "newFolder": "フォルダを新規作成",
+    "newEntry": "項目を新規作成",
+    "newBasePlaceholder": "ナレッジベース名",
+    "newFolderPlaceholder": "フォルダ名",
+    "newEntryPlaceholder": "項目のタイトル",
+    "errInvalidName": "名前に / \\ : * ? \" < > | は使えません。先頭のドット、末尾のドットや空白も使えません",
+    "errNameTaken": "「{{name}}」はすでにあります",
+    "errReserved": "「project」は予約名です。別の名前にしてください",
+    "errNoSuchDir": "そのフォルダはもうありません — 再読み込みしてください",
+    "errEmptyTitle": "タイトルを入力してください",
+    "errCreateFailed": "作成できませんでした: {{error}}"
   },
   "chat": {
     "mcpConnectFailed": "[MCP] {{name}} への接続に失敗しました: {{error}}",

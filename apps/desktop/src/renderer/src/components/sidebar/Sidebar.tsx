@@ -156,8 +156,9 @@ export function Sidebar(): React.JSX.Element {
   )
 
   /**
-   * 知识库分组能力注入 —— 清单（只读，不建目录），打开一条即打开 / 复用绑定它的
-   * 笔记本会话（main 侧去重），刷新列表并选中。引用必须稳定（useMemo）：分组以 adapter 为扫描依赖。
+   * 知识库分组能力注入 —— 清单（只读），打开一条即打开 / 复用绑定它的笔记本会话（main 侧去重），
+   * 刷新列表并选中；三个「新建」交给 main（建目录 / 按标题派生文件名写条目）。
+   * 引用必须稳定（useMemo）：分组以 adapter 为扫描依赖。
    */
   const knowledgeAdapter = useMemo<KnowledgeGroupAdapter>(
     () => ({
@@ -168,7 +169,11 @@ export function Sidebar(): React.JSX.Element {
         setActiveSessionId(session.id)
       },
       openFolder: () => window.api.knowledge.openFolder(),
-      revealFile: (path) => window.api.knowledge.revealFile({ path })
+      revealFile: (path) => window.api.knowledge.revealFile({ path }),
+      // 手动新建：宿主建目录 / 写条目并广播 knowledge.changed，分组自己重扫
+      createBase: (name) => window.api.knowledge.createBase({ name }),
+      createFolder: (dir, name) => window.api.knowledge.createFolder({ dir, name }),
+      createEntry: (dir, title) => window.api.knowledge.createEntry({ dir, title })
     }),
     [setActiveSessionId]
   )

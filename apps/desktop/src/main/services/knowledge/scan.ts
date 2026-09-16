@@ -9,6 +9,7 @@
  */
 import { existsSync, readdirSync } from 'fs'
 import { readFile, stat } from 'fs/promises'
+import { join } from 'path'
 import {
   isProjectionFile,
   isReservedFile,
@@ -31,6 +32,9 @@ import {
 
 const log = createLogger('Knowledge')
 const SCAN_LIMIT = 20000
+
+/** 一个库里最多列多少层目录 —— 侧栏画不下的规模，扫下去也只是白花时间 */
+const DIR_LIMIT = 500
 
 interface CacheEntry {
   mtimeMs: number
@@ -75,6 +79,21 @@ export function listProjectBundles(): string[] {
 /** 用户知识库的名字：`~/.shuvix/knowledge/` 下**每个**非隐藏子目录都算一个，不要求任何标记 */
 export function listUserLibraries(): string[] {
   return subdirectories(getUserKnowledgeRoot()).filter(isValidLibraryName)
+}
+
+/** 一个 bundle 里的全部非隐藏子目录（bundle 相对，深度优先，字典序）；目录不存在为空 */
+export function listBundleDirs(bundle: string, limit = DIR_LIMIT): string[] {
+  const out: string[] = []
+  const walk = (abs: string, prefix: string): void => {
+    for (const name of subdirectories(abs)) {
+      if (out.length >= limit) return
+      const rel = prefix ? `${prefix}/${name}` : name
+      out.push(rel)
+      walk(join(abs, name), rel)
+    }
+  }
+  walk(bundleDir(bundle), '')
+  return out
 }
 
 /** 磁盘上现存的全部 bundle id：项目库在前，用户库（`knowledge/<库名>`）在后 */

@@ -4,7 +4,8 @@
  * 纯函数、无 React，判定都在这里：顶层的项目容器 `projects/` 用固定文案（UI 按 `scopeDir`
  * 取 i18n），每个项目库（`projects/<projectId>`）用宿主给的显示名（项目当前的名字）当目录名
  * —— 目录名本身是 id，不给人看；查不到名字（项目已删）才回落目录名。
- * 只画存在的目录 —— 空作用域不占行（与 WikiGroup 同口径：清单来自文件，空文件夹只是噪声）。
+ * 画哪些目录由清单说了算：有条目的目录自然长出来，**空目录靠宿主随清单下发的 `dirs`** 物化 ——
+ * 手动新建的知识库与文件夹第一时间就是空的，不物化就什么都看不到。
  *
  * 层级是 组 → 容器 → 项目库 → 条目。缩进由 UI 侧给：**最外层容器不缩进**、每层 12px，
  * 所以条目落在 24px（改动前是 34px —— 那时每行还带 10px 基准）。
@@ -76,10 +77,14 @@ function hostName(names: Readonly<Record<string, string>>, dirPath: string): str
   return Object.hasOwn(names, dirPath) ? names[dirPath].trim() || null : null
 }
 
-/** `names`：bundle id → 显示名（宿主随清单下发；项目库的目录名是 id，靠它显示项目名） */
+/**
+ * `names`：bundle id → 显示名（宿主随清单下发；项目库的目录名是 id，靠它显示项目名）。
+ * `dirs`：库与库内目录的 id —— 空目录只能从这里知道。
+ */
 export function buildKnowledgeTree(
   entries: readonly KnowledgeEntry[],
-  names: Readonly<Record<string, string>> = {}
+  names: Readonly<Record<string, string>> = {},
+  dirs: readonly string[] = []
 ): KnowledgeTreeDir {
   const root: KnowledgeTreeDir = {
     path: '',
@@ -117,6 +122,12 @@ export function buildKnowledgeTree(
     const dir = ensureDir(cut === -1 ? '' : path.slice(0, cut))
     const title = entry.title.trim()
     dir.files.push({ entry: { ...entry, path }, label: title || stemOf(path) })
+  }
+
+  // 空目录（新建出来的库 / 文件夹）在这里物化：它们没有任何条目，只在 dirs 里
+  for (const dir of dirs) {
+    const path = normalizePath(dir)
+    if (path) ensureDir(path)
   }
 
   const sortDir = (node: KnowledgeTreeDir, depth: number): void => {

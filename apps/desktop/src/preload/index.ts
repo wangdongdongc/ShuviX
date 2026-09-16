@@ -96,6 +96,14 @@ function onBrowserViewEvent<T>(channel: string, callback: (payload: T) => void):
 }
 
 /** 暴露给 Renderer 的 API */
+/** 知识库「新建」的回包：失败时 error 是已本地化的人读原因 */
+interface KnowledgeCreateReply {
+  success: boolean
+  /** 新建出来的 id：知识库 / 文件夹是目录 id，条目是条目 id */
+  id?: string
+  error?: string
+}
+
 const api = {
   // ============ 应用事件 ============
   app: {
@@ -901,6 +909,7 @@ const api = {
         entries: KnowledgeEntry[]
         root: string
         userRoot: string
+        dirs: string[]
         bundleNames: Record<string, string>
       }>,
     /** 打开条目笔记：一文件至多一笔记本会话，已存在则复用返回；title 为条目显示名 */
@@ -909,7 +918,16 @@ const api = {
     /** 打开用户知识库根目录（OS 文件管理器；不存在先建） */
     openFolder: () => ipcRenderer.invoke('knowledge:openFolder'),
     /** 在文件夹中显示条目文件（条目 id：`projects/<id>/…` / `knowledge/<库名>/…`） */
-    revealFile: (params: { path: string }) => ipcRenderer.invoke('knowledge:revealFile', params)
+    revealFile: (params: { path: string }) => ipcRenderer.invoke('knowledge:revealFile', params),
+    /** 新建用户知识库（用户根下一个目录） */
+    createBase: (params: { name: string }) =>
+      ipcRenderer.invoke('knowledge:createBase', params) as Promise<KnowledgeCreateReply>,
+    /** 在某个目录（库本身或库里的一层）下新建文件夹 */
+    createFolder: (params: { dir: string; name: string }) =>
+      ipcRenderer.invoke('knowledge:createFolder', params) as Promise<KnowledgeCreateReply>,
+    /** 在某个目录下新建条目：元数据由宿主拼，文件名按标题派生 */
+    createEntry: (params: { dir: string; title: string }) =>
+      ipcRenderer.invoke('knowledge:createEntry', params) as Promise<KnowledgeCreateReply>
   },
 
   // ============ Wiki (侧栏旧知识库分组：隐藏 wiki 项目) ============
