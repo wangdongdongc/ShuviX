@@ -179,7 +179,9 @@ export function knowledgeBaseOptions(rootSessionId?: string): {
 
   // 「有人明确设过」要走完整条回落链 —— 漏掉父会话那一级，子会话就会显示成「还没选过」
   const row = sessionDao.pick(rootSessionId, ['projectId', 'parentId', 'settings'])
-  const parent = row?.parentId ? sessionDao.pick(row.parentId, ['projectId', 'settings']) : undefined
+  const parent = row?.parentId
+    ? sessionDao.pick(row.parentId, ['projectId', 'settings'])
+    : undefined
   const explicit =
     Array.isArray(row?.settings?.knowledgeBases) ||
     Array.isArray(parent?.settings?.knowledgeBases) ||

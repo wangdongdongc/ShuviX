@@ -25,11 +25,20 @@ vi.mock('../../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {} })
 }))
 vi.mock('../../../dao/projectDao', () => ({ projectDao: { findById: vi.fn(), pick: vi.fn() } }))
-vi.mock('../../../dao/sessionDao', () => ({ sessionDao: { pick: vi.fn() } }))
+// updateSettings 只为「活的、不落快照」那条留着断言面 —— 生产代码在这里一次都不该写库
+vi.mock('../../../dao/sessionDao', () => ({
+  sessionDao: { pick: vi.fn(), updateSettings: vi.fn() }
+}))
 
 import { projectDao } from '../../../dao/projectDao'
 import { sessionDao } from '../../../dao/sessionDao'
-import { knowledgeBaseOptions, listBases, resolveBase, sessionBundle } from '../sessionBundle'
+import {
+  enabledBaseChoices,
+  knowledgeBaseOptions,
+  listBases,
+  resolveBase,
+  sessionBundle
+} from '../sessionBundle'
 import { invalidateKnowledgeScan } from '../scan'
 import { PROJECTS, bundleAt, makeTempRoot, seedConcept, userRootOf } from './fixture'
 
@@ -340,5 +349,137 @@ describe('resolveBase / listBases —— 选择', () => {
     // 会话自己设过 → explicit
     mockPick({ projectId: 'p1', settings: { knowledgeBases: ['notes'] } })
     expect(knowledgeBaseOptions('s1')).toMatchObject({ selected: ['notes'], explicit: true })
+  })
+})
+
+/**
+ * 回落链的边角（SB-11..18）。三条主线：
+ *   - 「设过」的判据只有一个 —— **是不是数组**。`[]` 是一个明确的「一个库都不要」，不能往缺省落；
+ *     字符串 / null / 对象这类坏值则压根不算设过，继续往下一级找。
+ *   - 选择是**活的**：不落快照、不写库，两次解析之间磁盘或设置变了，下一次就作数。
+ *   - 围栏列的清单与工具解析的是**同一份结果**（同一次 enabledTargets），NFC 归一只做一次。
+ */
+describe('SB-11..18 回落链与围栏清单', () => {
+  /** 建若干用户库目录，返回用户根 */
+  const seedBases = (...names: string[]): string => {
+    const userRoot = userRootOf(root)
+    for (const name of names) mkdirSync(join(userRoot, name), { recursive: true })
+    return userRoot
+  }
+  const baseNames = async (): Promise<string[]> => (await listBases('s1')).map((b) => b.base)
+
+  it('SB-11 「设过」只看是不是数组：项目设成 [] → 这个项目的会话一个库都不启用，不往缺省落', async () => {
+    seedBases('alpha', 'notes')
+    inProject()
+    // 空数组是一个明确的选择（「这个项目的会话不用知识库」），不是「没意见」
+    mockProjectBases('p1', [])
+
+    expect(await listBases('s1')).toEqual([])
+    expect(await resolveBase('s1', 'notes')).toEqual({ error: NO_BASES })
+    expect(await resolveBase('s1', 'project')).toEqual({ error: NO_BASES })
+  })
+
+  it('SB-12 非数组不算设过，逐级下落到缺省', async () => {
+    seedBases('alpha', 'notes')
+    vi.mocked(projectDao.findById).mockReturnValue(PROJECT)
+    // 三级都是坏值：手改过的 settings / 旧行 / 半截写入都可能长这样
+    mockPick({ projectId: 'p1', parentId: 'parent', settings: { knowledgeBases: 'notes' } })
+    mockSessionRow('parent', { projectId: 'p1', settings: { knowledgeBases: null } })
+    projects.set('p1', { settings: { knowledgeBases: {} } })
+
+    // 缺省全量：两个用户库 + 项目库（顺序即缺省的拼接顺序）
+    expect(await baseNames()).toEqual(['alpha', 'notes', 'project'])
+  })
+
+  it('SB-13 sanitize 每一级都生效：去首尾空白、去空、去重保序', async () => {
+    seedBases('alpha', 'notes')
+    mockPick({
+      projectId: null,
+      settings: { knowledgeBases: ['  notes ', 'notes', '', '   ', 'alpha'] }
+    })
+
+    expect(await baseNames()).toEqual(['notes', 'alpha'])
+  })
+
+  it('SB-14 explicit 走完整条回落链：项目设过、以及父会话设过，都算「有人明确设过」', async () => {
+    seedBases('alpha', 'notes')
+    vi.mocked(projectDao.findById).mockReturnValue(PROJECT)
+
+    // (a) 项目设过、会话自己没设 → 界面上勾的就是项目那份，不该显示成「还没选过」
+    mockPick({ projectId: 'p1' })
+    mockProjectBases('p1', ['alpha'])
+    expect(knowledgeBaseOptions('s1')).toMatchObject({ selected: ['alpha'], explicit: true })
+
+    // (b) 父会话设过、会话与项目都没设 —— 漏掉这一级，子会话会显示成「还没选过」
+    projects.clear()
+    mockPick({ projectId: 'p1', parentId: 'parent' })
+    mockSessionRow('parent', { projectId: 'p1', settings: { knowledgeBases: ['notes'] } })
+    expect(knowledgeBaseOptions('s1')).toMatchObject({ selected: ['notes'], explicit: true })
+  })
+
+  it('SB-15 不属于任何项目的会话 → 候选里没有 `project`', async () => {
+    seedBases('alpha', 'notes')
+    mockPick({ projectId: null })
+
+    // 缺省里的 project 只跟着**会话自己**的 projectId：候选里放一个解析不出来的名字就是给用户挖坑
+    expect(knowledgeBaseOptions('s1')).toEqual({
+      options: [
+        { name: 'alpha', label: 'alpha' },
+        { name: 'notes', label: 'notes' }
+      ],
+      selected: ['alpha', 'notes'],
+      explicit: false
+    })
+  })
+
+  it('SB-16 活的、不落快照：新建的库立刻可见，改一次选择立刻收窄；全程零写库', async () => {
+    const userRoot = seedBases('notes')
+    mockPick({ projectId: null })
+    expect(await baseNames()).toEqual(['notes'])
+
+    // 与扩展能力勾选的快照语义刻意不同：知识库是每次调用现查的
+    mkdirSync(join(userRoot, 'alpha'))
+    expect(await baseNames()).toEqual(['alpha', 'notes'])
+
+    mockPick({ projectId: null, settings: { knowledgeBases: ['alpha'] } })
+    expect(await baseNames()).toEqual(['alpha'])
+
+    // 解析这条路只读：缺省从不被「补键」落库（补了就再也长不进新建的库）
+    expect(sessionDao.updateSettings).not.toHaveBeenCalled()
+  })
+
+  it('SB-17 会话行不存在时 knowledgeBaseOptions 不抛', () => {
+    seedBases('notes')
+    mockPick(undefined)
+
+    expect(knowledgeBaseOptions('s1')).toEqual({
+      options: [{ name: 'notes', label: 'notes' }],
+      selected: ['notes'],
+      explicit: false
+    })
+  })
+
+  it('SB-18 围栏用的清单与工具解析同源：NFD 目录名 + NFC 选择两边同一份结果；项目库带项目当前的名字', async () => {
+    const userRoot = userRootOf(root)
+    const nfd = 'café'
+    const nfc = 'café'
+    mkdirSync(join(userRoot, nfd), { recursive: true })
+    expect(readdirSync(userRoot)).toEqual([nfd])
+    inProject()
+    // 选择里存的是 NFC 写法（用户在界面上输入 / 别的机器上写下的）
+    mockPick({ projectId: 'p1', settings: { knowledgeBases: [nfc, 'project'] } })
+
+    // 围栏列的名字是**磁盘上的拼写**：归一只在 enabledTargets 里做一次，两侧不各过滤一遍
+    expect(enabledBaseChoices('s1')).toEqual([
+      { name: nfd, label: '' },
+      { name: 'project', label: 'Acme Corp' }
+    ])
+    // 同一份结果：围栏列得出来的，工具就解析得到
+    expect(await resolveBase('s1', nfc)).toEqual({
+      bundle: `knowledge/${nfd}`,
+      dir: join(userRoot, nfd),
+      label: `knowledge base "${nfd}"`
+    })
+    expect((await listBases('s1')).map((b) => b.base)).toEqual([nfd, 'project'])
   })
 })

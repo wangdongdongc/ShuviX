@@ -844,3 +844,134 @@ describe('KT-15 缺省子串检索（无 search 注入）', () => {
     )
   })
 })
+
+/**
+ * 省略 `base` 的**跨库检索**（设计附录 N）：范围是用户自己圈定的那几个库，圈定之后一起搜才有
+ * 意义。跨库这条路刻意**不解析 base** —— 它问的是 `listBases`（本会话启用且此刻真在的库），
+ * 所以「点名一个没启用的名字」那套错误话术在这里根本用不上。
+ *
+ * 不做跨库分数归一：每个库一套索引，分数不可比 —— 所以是**按库分组**、逐库成块，而不是一张
+ * 拉平的排行榜；`limit` 同理逐库生效（总额截断会让某个库整个消失）。
+ */
+describe('KT-16..20 跨库检索（省略 base）', () => {
+  /** 用户库的目录 —— 与 ROOT 互不为前缀（scanOf 按目录前缀分派） */
+  const NOTES = '/kb/user/notes'
+  const ALPHA = '/kb/user/alpha'
+  const NOTES_BASE: KnowledgeBaseInfo = {
+    base: 'notes',
+    label: 'knowledge base "notes"',
+    dir: NOTES
+  }
+  const PROJECT_BASE: KnowledgeBaseInfo = { base: 'project', label: 'project "Acme"', dir: ROOT }
+  /** 两个库各一条会命中 `token` 的条目 */
+  const HIT_FILES = {
+    [`${NOTES}/n1.md`]: doc(['type: Memory', 'title: Token notes', 'description: dn1']),
+    [`${ROOT}/a.md`]: doc(['type: Memory', 'title: Token in acme', 'description: da'])
+  }
+
+  it('KT-16 省略 base：按库分组、逐库成块，表头报总命中数与参与的库数；只问 listBases，不解析 base', async () => {
+    const h = makeTool({ files: HIT_FILES, bases: [NOTES_BASE, PROJECT_BASE] })
+    const res = await h.run('c1', { action: 'search', query: 'token' })
+
+    // 块序 = listBases 序（宿主给的启用顺序），不按分数、不按名字重排
+    expect(textOf(res)).toBe(
+      [
+        '2 result(s) for "token" across 2 base(s):',
+        `base "notes" — ${NOTES}:`,
+        '- /n1.md — dn1',
+        `base "project" — ${ROOT}:`,
+        '- /a.md — da'
+      ].join('\n')
+    )
+    expect(res.details).toEqual({ action: 'search' })
+    // 范围来自 listBases 一次问全；解析 base 是「点名」那条路的事
+    expect(h.resolveBase).not.toHaveBeenCalled()
+    expect(h.listBases).toHaveBeenCalledTimes(1)
+    expect(h.enforcePath).not.toHaveBeenCalled()
+    expect(h.calls.filter((c) => c.startsWith('write:'))).toEqual([])
+  })
+
+  it('KT-17 零命中的库不占块，但库数仍按圈定的范围算；全部零命中时另说一句', async () => {
+    const h = makeTool({
+      files: {
+        [`${NOTES}/n1.md`]: doc(['type: Memory', 'title: Token notes', 'description: dn1']),
+        // 同在范围里但一条都不命中 —— 它不该留下一个空块
+        [`${ROOT}/b.md`]: doc(['type: Memory', 'title: B', 'description: db'])
+      },
+      bases: [NOTES_BASE, PROJECT_BASE]
+    })
+
+    const one = textOf(await h.run('c1', { action: 'search', query: 'token' }))
+    expect(one).toBe(
+      [
+        '1 result(s) for "token" across 2 base(s):',
+        `base "notes" — ${NOTES}:`,
+        '- /n1.md — dn1'
+      ].join('\n')
+    )
+    // 库数报的是搜过的范围，不是有命中的库数 —— 否则「另一个库根本没被搜」与「搜了没命中」看不出差别
+    expect(one).not.toContain(`base "project"`)
+
+    const none = await h.run('c2', { action: 'search', query: 'zzz' })
+    expect(textOf(none)).toBe(`No entries match "zzz" in any of this session's knowledge bases.`)
+    expect(none.details).toEqual({ action: 'search' })
+  })
+
+  it('KT-18 跨库时 limit 逐库生效、不是总额；宿主说「此刻不在」（无 dir）的库整条跳过', async () => {
+    const search = vi.fn(async (_q: string, opts: { limit: number; bundleDir: string }) => [
+      { path: '/h.md', title: `hit in ${opts.bundleDir}`, description: 'd' }
+    ])
+    const h = makeTool({
+      search,
+      bases: [
+        NOTES_BASE,
+        // 选择里留着、磁盘上已经不在（改名 / 删了）：宿主不给 dir，搜不了也不报错
+        { base: 'gone', label: 'knowledge base "gone"' },
+        { base: 'alpha', label: 'knowledge base "alpha"', dir: ALPHA }
+      ]
+    })
+
+    const res = await h.run('c1', { action: 'search', query: 'q', limit: 3 })
+    // 逐库各拿 limit 条：总额截断会让排在后面的库整个消失
+    expect(search.mock.calls).toEqual([
+      ['q', { limit: 3, bundleDir: NOTES }],
+      ['q', { limit: 3, bundleDir: ALPHA }]
+    ])
+    expect(textOf(res).split('\n')[0]).toBe('2 result(s) for "q" across 2 base(s):')
+    expect(textOf(res)).not.toContain('gone')
+  })
+
+  it('KT-19 一个库都没启用时，省略 base 的检索与 bases 说同一句话', async () => {
+    const h = makeTool({ bases: [] })
+    const res = await h.run('c1', { action: 'search', query: 'token' })
+    const text = textOf(res)
+    // 别让 agent 以为是自己参数写错了：选择是用户在设置里做的
+    expect(text).toContain('no knowledge bases')
+    expect(text).toContain('the user picks')
+    expect(text).toBe(textOf(await h.run('c2', { action: 'bases' })))
+    expect(res.details).toEqual({ action: 'search' })
+    expect(h.resolveBase).not.toHaveBeenCalled()
+  })
+
+  it('KT-20 点名 base 就不跨库：单库表头、不分组，走 resolveBase 而不是 listBases', async () => {
+    const h = makeTool({
+      files: HIT_FILES,
+      bases: [NOTES_BASE, PROJECT_BASE],
+      bundle: { dir: NOTES, label: 'knowledge base "notes"' }
+    })
+    const res = await h.run('c1', { action: 'search', base: 'notes', query: 'token' })
+
+    expect(textOf(res)).toBe(
+      `1 result(s) for "token" in knowledge base "notes" — ${NOTES}:\n- /n1.md — dn1`
+    )
+    // 分组行只在跨库时才有（`knowledge base "notes"` 里也有 `base "`，故按整行判）
+    expect(
+      textOf(res)
+        .split('\n')
+        .filter((line) => line.startsWith('base "'))
+    ).toEqual([])
+    expect(h.listBases).not.toHaveBeenCalled()
+    expect(h.resolveBase).toHaveBeenCalledTimes(1)
+    expect(h.resolveBase).toHaveBeenCalledWith('notes')
+  })
+})

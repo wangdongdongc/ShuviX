@@ -340,6 +340,24 @@ describe('knowledge-writer 档案钉板（OKF 知识库的派发执行侧）', (
       }
     }
   })
+
+  /**
+   * 库由用户按会话选定，多数是用户自己按主题切开的库 —— 项目库只是 `bases` 里可能有的一个名字。
+   * 提示词要是仍以「这个项目的库」开篇（或在任何地方点名 `"project"`），agent 就会把用户库当成
+   * 边角料，而那正是本轮要主推的形态。工具描述侧有 KT-12 钉同一件事，这里钉执行侧的正文。
+   */
+  it('RG-4 三语正文都不再把项目库摆在第一位：指向 `bases`，不点名 "project"', () => {
+    for (const language of LANGS) {
+      const body = buildBuiltinProfile(KNOWLEDGE_WRITER_SPEC, { language })!.systemPrompt
+      // 「有哪几个库」只能从 `bases` 得知 —— 不教这一条，agent 只能瞎猜一个名字
+      expect(body, `${language} 需指向 \`bases\``).toContain('`bases`')
+      expect(body, `${language} 不得点名 "project"`).not.toContain('"project"')
+    }
+    // 旧开篇（静态围栏的框架句）不得从执行侧提示词里借尸还魂
+    expect(
+      buildBuiltinProfile(KNOWLEDGE_WRITER_SPEC, { language: 'en' })!.systemPrompt
+    ).not.toContain('Each project has')
+  })
 })
 
 describe('work 档案钉板(项目会话基座：工具集/环境段的唯一事实源)', () => {

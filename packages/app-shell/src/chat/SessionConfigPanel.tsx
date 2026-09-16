@@ -86,9 +86,7 @@ function SessionKnowledgeBasesSection({
   const [state, setState] = useState<KnowledgeBaseOptionsResult | null>(null)
 
   const load = useCallback((): void => {
-    void getChatApi()
-      .knowledge?.baseOptions({ sessionId })
-      .then(setState)
+    void getChatApi().knowledge?.baseOptions({ sessionId }).then(setState)
   }, [sessionId])
 
   useEffect(load, [load])

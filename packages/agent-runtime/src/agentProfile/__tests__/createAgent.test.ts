@@ -76,6 +76,7 @@ interface HostBundle {
   resolveInstruction: ReturnType<typeof vi.fn>
   resolveProjectPrompt: ReturnType<typeof vi.fn>
   resolveProjectMemory: ReturnType<typeof vi.fn>
+  resolveKnowledgeBases: ReturnType<typeof vi.fn>
   resolveProfileModel: ReturnType<typeof vi.fn>
   logger: {
     info: ReturnType<typeof vi.fn>
@@ -94,7 +95,9 @@ function makeHost(): HostBundle {
   const resolveInstruction = vi.fn().mockResolvedValue({ filename: 'CLAUDE.md', content: 'INS' })
   const resolveProjectPrompt = vi.fn().mockResolvedValue('PROJ-PROMPT')
   const resolveProjectMemory = vi.fn().mockResolvedValue('PROJ-MEMORY')
-  // 知识库围栏 seam：只有档案 shuvix-knowledge 为真时才被调用（缺省档案不开，既有用例零影响）
+  // 知识库围栏 seam：只有档案的工具清单里有 `knowledge` 时才被调用
+  //（PROFILE 不带这个工具 —— 既有用例零影响）
+  const resolveKnowledgeBases = vi.fn().mockResolvedValue('KB-GUIDE')
   // 缺省不解析（返回 null = 档案模型当前不可用）；声明模型的用例各自 mockResolvedValue
   const resolveProfileModel = vi.fn().mockResolvedValue(null)
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
@@ -116,7 +119,8 @@ function makeHost(): HostBundle {
     logger,
     resolveInstruction,
     resolveProjectPrompt,
-    resolveProjectMemory
+    resolveProjectMemory,
+    resolveKnowledgeBases
   }
   return {
     host,
@@ -127,6 +131,7 @@ function makeHost(): HostBundle {
     resolveInstruction,
     resolveProjectPrompt,
     resolveProjectMemory,
+    resolveKnowledgeBases,
     resolveProfileModel,
     logger,
     fakeEnv,
@@ -536,6 +541,117 @@ describe('createAgentFactory —— 指令文件注入的接缝口径', () => {
     const created = await createRoot(b, { ...PROFILE, instructionFiles: undefined })
 
     expect(b.resolveInstruction).not.toHaveBeenCalled()
+    expect(created.systemPrompt).toBe('BASE PERSONA')
+  })
+})
+
+/**
+ * 知识库围栏 `<knowledge_bases>` —— 这条会话手头有哪几个库。
+ *
+ * 它**不跟项目感知走**（那是「知不知道自己在哪个项目里」，与库无关：不属于任何项目的会话照样有
+ * 用户自己的库）。唯一的门是**档案的工具清单里有没有 `knowledge`** —— 这段文案通篇是那个工具的
+ * 用法，档案不带它时注入就是在教一个够不着的东西。位置钉在项目提示词之后、项目记忆之前：前者
+ * 是在用的库，后者是只读的旧档，旧档的表头指回前者。
+ */
+describe('createAgentFactory —— 知识库围栏（KB-U）', () => {
+  const KB_FENCE = '<knowledge_bases>\nKB-GUIDE\n</knowledge_bases>'
+  /** 带 knowledge 工具的档案；注入开关由各用例覆盖 */
+  const KB_PROFILE: InProcessAgentType = {
+    ...PROFILE,
+    tools: [...PROFILE.tools, 'knowledge'],
+    instructionFiles: []
+  }
+
+  function createRoot(
+    b: HostBundle,
+    profile: InProcessAgentType
+  ): Promise<Awaited<ReturnType<AgentFactory['createAgent']>>> {
+    return createAgentFactory(b.host).createAgent({
+      kind: 'root',
+      sessionId: 's1',
+      profile,
+      model: MODEL_CFG,
+      cwd: '/w'
+    })
+  }
+
+  it('KB-U-1 围栏不跟项目感知走：项目感知关着、档案带 knowledge → 照样注入', async () => {
+    const b = makeHost()
+    const created = await createRoot(b, { ...KB_PROFILE, projectAwareness: false })
+
+    expect(b.resolveKnowledgeBases).toHaveBeenCalledTimes(1)
+    expect(b.resolveKnowledgeBases).toHaveBeenCalledWith('s1')
+    expect(created.systemPrompt).toBe(`BASE PERSONA\n\n${KB_FENCE}`)
+    // 项目感知那两段确实没被顺带打开
+    expect(b.resolveProjectPrompt).not.toHaveBeenCalled()
+    expect(b.resolveProjectMemory).not.toHaveBeenCalled()
+  })
+
+  it('KB-U-2 唯一的门是工具清单：档案不带 knowledge（项目感知全开）→ seam 零调用、无围栏', async () => {
+    const b = makeHost()
+    const created = await createRoot(b, {
+      ...PROFILE,
+      instructionFiles: [],
+      projectAwareness: true
+    })
+
+    expect(b.resolveKnowledgeBases).not.toHaveBeenCalled()
+    expect(created.systemPrompt).not.toContain('knowledge_bases')
+    // 对照：同一次创建里项目提示词 / 记忆照常 —— 少的只有围栏这一段
+    expect(created.systemPrompt).toBe(
+      'BASE PERSONA\n\n' +
+        '<project_prompt>\nPROJ-PROMPT\n</project_prompt>\n\n' +
+        '<project_memory>\nPROJ-MEMORY\n</project_memory>'
+    )
+  })
+
+  it('KB-U-3 四段注入顺序钉板：指令文件 → 项目提示词 → 知识库 → 项目记忆；派生按根会话 id 解析', async () => {
+    const b = makeHost()
+    const created = await createAgentFactory(b.host).createAgent({
+      kind: 'spawned',
+      sessionId: 'sub-9',
+      profile: {
+        ...PROFILE,
+        tools: [...PROFILE.tools, 'knowledge'],
+        projectAwareness: true
+      },
+      model: MODEL_CFG,
+      thinkingLevel: 'off',
+      cwd: '',
+      spawn: SPAWN,
+      spawnHelpers: { requestUserInput: vi.fn() }
+    })
+
+    const expected =
+      'BASE PERSONA\n\n' +
+      '<project_instructions file="CLAUDE.md">\nINS\n</project_instructions>\n\n' +
+      '<project_prompt>\nPROJ-PROMPT\n</project_prompt>\n\n' +
+      `${KB_FENCE}\n\n` +
+      '<project_memory>\nPROJ-MEMORY\n</project_memory>'
+    expect(created.systemPrompt).toBe(expected)
+    expect(constructed[constructed.length - 1].deps.systemPrompt).toBe(expected)
+    // 派生 agent 既无会话也无项目：库按**根会话**解析（与其余三段同口径）
+    expect(b.resolveKnowledgeBases).toHaveBeenCalledTimes(1)
+    expect(b.resolveKnowledgeBases).toHaveBeenCalledWith('root-s')
+  })
+
+  it('KB-U-4 解析出 null / 纯空白 → 不加空围栏', async () => {
+    for (const value of [null, '   \n\t']) {
+      const b = makeHost()
+      b.resolveKnowledgeBases.mockResolvedValue(value)
+      const created = await createRoot(b, { ...KB_PROFILE, projectAwareness: false })
+      // 空围栏比不注入更糟：模型会当成「这条会话一个库都没有，但好像应该有」
+      expect(created.systemPrompt, JSON.stringify(value)).toBe('BASE PERSONA')
+      expect(constructed[constructed.length - 1].deps.systemPrompt).toBe('BASE PERSONA')
+    }
+  })
+
+  it('KB-U-5 宿主没实现这个可选 seam → 不抛、纯基座（即便档案带 knowledge）', async () => {
+    const b = makeHost()
+    delete (b.host as { resolveKnowledgeBases?: unknown }).resolveKnowledgeBases
+
+    const created = await createRoot(b, { ...KB_PROFILE, projectAwareness: false })
+    expect(created.runtime).toBeDefined()
     expect(created.systemPrompt).toBe('BASE PERSONA')
   })
 })

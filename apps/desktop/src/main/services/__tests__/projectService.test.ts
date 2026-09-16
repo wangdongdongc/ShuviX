@@ -13,7 +13,14 @@ import { REGISTRY_NOTE_PROJECT_IDS } from '@shuvix/chat-protocol/registryNotes'
 import type { Project } from '../../types'
 
 vi.mock('../../dao/projectDao', () => ({
-  projectDao: { findAllActive: vi.fn(), findAllArchived: vi.fn(), findById: vi.fn() }
+  projectDao: {
+    findAllActive: vi.fn(),
+    findAllArchived: vi.fn(),
+    findById: vi.fn(),
+    pick: vi.fn(),
+    insert: vi.fn(),
+    update: vi.fn()
+  }
 }))
 
 import { projectDao } from '../../dao/projectDao'
@@ -84,5 +91,54 @@ describe('projectService — 隐藏项目', () => {
     for (const row of hidden) expect(projectService.getById(row.id), row.id).toBe(row)
     expect(projectService.getById('nope')).toBeUndefined()
     expect(projectDao.findById).toHaveBeenCalledWith('nope')
+  })
+})
+
+/**
+ * `settings` 里的三样东西（扩展能力 / 知识库 / 工具设置）由**不同界面分别保存**：项目编辑弹窗
+ * 只在用户动过知识库时才把它带上（`kbTouched`），环境变量那半截又只写 `tool`。所以 `update`
+ * 必须是**按键合并**而不是整份覆盖 —— 覆盖的话，一次「只改知识库」的保存会把项目的扩展能力与
+ * 环境变量一并抹掉。`create` 那侧则要区分「给了空数组」（明确选了一个库都不要）与「没给」
+ * （这个项目还没选过，会话跟着缺省走）。
+ */
+describe('projectService — settings 合并（PS-3 / PS-4）', () => {
+  /** projectDao.update 收到的 patch */
+  const patch = (): Record<string, unknown> =>
+    vi.mocked(projectDao.update).mock.calls.at(-1)![1] as unknown as Record<string, unknown>
+
+  it('PS-3 update 的 settings 是合并不是覆盖：只传知识库，扩展能力与工具设置原样留着', () => {
+    const existing = {
+      enabledTools: ['skill:a'],
+      tool: { envVars: [{ key: 'K', value: 'v' }] }
+    }
+    vi.mocked(projectDao.pick).mockReturnValue({ settings: existing } as never)
+
+    projectService.update('p1', { knowledgeBases: ['notes'] })
+    expect(patch().settings).toEqual({ ...existing, knowledgeBases: ['notes'] })
+
+    // 不传就不动：这个项目继续跟着缺省走（弹窗没动过知识库时就是这一条）
+    projectService.update('p1', { enabledTools: ['skill:b'] })
+    expect(patch().settings).toEqual({ ...existing, enabledTools: ['skill:b'] })
+    expect('knowledgeBases' in (patch().settings as object)).toBe(false)
+
+    // 传空数组照写（明确选了「一个库都不用」，不是「没意见」）
+    projectService.update('p1', { knowledgeBases: [] })
+    expect((patch().settings as { knowledgeBases: string[] }).knowledgeBases).toEqual([])
+  })
+
+  it('PS-4 create 带 knowledgeBases（含空数组）落进 settings；不带则该键不存在', () => {
+    const inserted = (): Record<string, unknown> =>
+      (vi.mocked(projectDao.insert).mock.calls.at(-1)![0] as unknown as { settings: object })
+        .settings as Record<string, unknown>
+
+    projectService.create({ path: '/tmp/shuvix-unit/p-a', knowledgeBases: ['notes', 'project'] })
+    expect(inserted().knowledgeBases).toEqual(['notes', 'project'])
+
+    projectService.create({ path: '/tmp/shuvix-unit/p-b', knowledgeBases: [] })
+    expect('knowledgeBases' in inserted()).toBe(true)
+    expect(inserted().knowledgeBases).toEqual([])
+
+    projectService.create({ path: '/tmp/shuvix-unit/p-c' })
+    expect('knowledgeBases' in inserted()).toBe(false)
   })
 })

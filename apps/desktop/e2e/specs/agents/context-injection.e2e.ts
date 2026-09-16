@@ -10,6 +10,7 @@
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { until } from '../../harness/cdp'
 import { launchApp, type E2EApp } from '../../harness/launch'
 import {
   createAgentSession,
@@ -244,5 +245,113 @@ describe('覆盖 work 的清单省略语义', () => {
     const restored = await createAgentSession(app.main, { projectId, title: 'e2e-reinject' })
     expect(restored.systemPrompt).toContain('<project_instructions file="AGENTS.md">')
     expect(restored.systemPrompt).toContain('AGENT RULES CONTENT.')
+  })
+})
+
+/**
+ * 知识库围栏 `<knowledge_bases>` —— 上下文注入的第三段，位置在项目提示词之后、项目记忆之前。
+ *
+ * 它**不跟项目感知走**：库是用户按会话选的，与「知不知道自己在哪个项目里」无关，所以不属于任何
+ * 项目的会话照样有围栏（只要它有库）。唯一的门是档案的工具清单里有没有 `knowledge`。
+ *
+ * 围栏里**只有清单、没有内容**：不列条目文件名、不报条目数、不印知识库根的绝对路径 —— 印了路径
+ * 就等于邀请 agent 直接 `write` 过去，绕开只有 `create` 才担保的元数据形状。
+ *
+ * 选择改了之后围栏**不会当场跟上**（系统提示词在创建 Agent 那一刻定型，改选择刻意不失效运行时）：
+ * KBF-E-4 走的是「清空 → 下一个运行时」这条既有手法，钉的正是这个已接受的边界。
+ */
+describe('知识库围栏', () => {
+  const OPEN = '<knowledge_bases>'
+  const CLOSE = '</knowledge_bases>'
+  /** 用户库就是 ~/.shuvix/knowledge 下的一个目录（名字不带数字 —— 围栏里断「没有计数」时要干净） */
+  const USER_BASE = 'kbf-user-base'
+  const userBaseDir = (): string => join(app.home, '.shuvix', 'knowledge', USER_BASE)
+
+  /**
+   * 围栏**里面**那段正文（不含两个标签 —— 闭合标签自带一个斜杠，会把「不含路径」那条断废）。
+   * 没有围栏回空串。整份提示词里 `.md` 到处都是（指令文件的围栏就带一个），只能就这一段断。
+   */
+  const fenceBodyOf = (sp: string): string => {
+    const start = sp.indexOf(OPEN)
+    const end = sp.indexOf(CLOSE)
+    return start === -1 || end === -1 ? '' : sp.slice(start + OPEN.length, end)
+  }
+
+  /** 围栏只给入口不给内容 */
+  const expectNoContent = (body: string): void => {
+    expect(body, 'the fence is there at all').not.toBe('')
+    expect(body, 'no entry file names').not.toContain('.md')
+    // 计数与路径都不该出现：数字与斜杠是它们最省事的判据（库名与项目名都不含）
+    expect(/\d/.test(body), `no counts in: ${body}`).toBe(false)
+    expect(body, 'no paths').not.toContain('/')
+  }
+
+  const systemPromptOf = (sid: string): Promise<string> =>
+    app.main.eval<string>(
+      `window.api.agent
+        .getInfo(${JSON.stringify(sid)}, { ensure: true })
+        .then((info) => info.systemPrompt)`
+    )
+
+  it('KBF-E-1 项目会话：围栏排在项目提示词之后，列出 `- project — <项目名>`，不带任何条目/路径/计数', async () => {
+    const { systemPrompt: sp } = await createAgentSession(app.main, {
+      projectId,
+      title: 'e2e-kbf-1'
+    })
+
+    expect(sp.indexOf(OPEN)).toBeGreaterThan(sp.indexOf('</project_prompt>'))
+    const fence = fenceBodyOf(sp)
+    // 项目库的标签是项目**当前**的名字（目录名是 uuid，永远不该出现在提示词里）
+    expect(fence).toContain('- project — InjProj')
+    expectNoContent(fence)
+    expect(fence).not.toContain(app.home)
+  })
+
+  it('KBF-E-2 不属于任何项目的会话照样有围栏（列出用户自己的库），且没有项目那两段', async () => {
+    mkdirSync(userBaseDir(), { recursive: true })
+
+    const { systemPrompt: sp } = await createAgentSession(app.main, { title: 'e2e-kbf-2' })
+    expect(sp).toContain(OPEN)
+    expect(fenceBodyOf(sp)).toContain(`- ${USER_BASE}`)
+    expectNoContent(fenceBodyOf(sp))
+    // 项目感知那两段与围栏无关：没有项目就是没有，围栏照旧
+    expect(sp).not.toContain('<project_prompt>')
+    expect(sp).not.toContain('<project_memory>')
+  })
+
+  it('KBF-E-3 一个库都没有 → 整段不注入，也不因此多出空行', async () => {
+    rmSync(userBaseDir(), { recursive: true, force: true })
+
+    const { systemPrompt: sp } = await createAgentSession(app.main, { title: 'e2e-kbf-3' })
+    expect(sp).not.toContain(OPEN)
+    expect(sp).not.toContain(CLOSE)
+    // 无项目会话里知识库是**最后**一段：注入一个空围栏、或只追加了那个空行分隔符，
+    // 都会在末尾留下一个空行 —— 这是「整段不注入」与「注入了一段空东西」的分界
+    expect(sp, 'no dangling blank line from an empty append').not.toMatch(/\n[ \t]*\n[ \t]*$/)
+  })
+
+  it('KBF-E-4 改选择不动已有的运行时；下一个运行时的围栏才跟上（这里：整段消失）', async () => {
+    const sid = (await createAgentSession(app.main, { projectId, title: 'e2e-kbf-4' })).sid
+    expect(await systemPromptOf(sid)).toContain(OPEN)
+
+    const res = await app.main.eval<{ success: boolean }>(
+      `window.api.session.updateKnowledgeBases(${JSON.stringify({ id: sid, knowledgeBases: [] })})`
+    )
+    expect(res.success).toBe(true)
+    // 已存在的运行时里那一段不变 —— 已接受的边界（工具面改完立刻生效，围栏要等重建）
+    expect(await systemPromptOf(sid)).toContain(OPEN)
+
+    // 清空 = 关停运行时（本区既有手法）：下一个运行时按新选择重新组装
+    await app.main.eval(`window.api.message.clear(${JSON.stringify(sid)})`)
+    await until(
+      async () =>
+        !(
+          await app.main.eval<{ created: boolean }>(
+            `window.api.agent.init({ sessionId: ${JSON.stringify(sid)} })`
+          )
+        ).created,
+      'runtime closed after clear'
+    )
+    expect(await systemPromptOf(sid)).not.toContain(OPEN)
   })
 })

@@ -980,6 +980,63 @@ async function toggleExtIn(
   })()`)
 }
 
+/**
+ * 知识库卡（KnowledgeBasesSection：会话设置与项目编辑弹窗共用）里的一个候选库。
+ *
+ * 与扩展能力条目**同形但语义相反**：知识库不进 Agent 的工具表，所以这张卡没有「已锁定」
+ * 这回事 —— `disabled` 照样读出来，正是为了断「有运行时时它仍然可点」。
+ */
+export interface KnowledgeItemShot {
+  /** 选择里存的名字（用户库的目录名 / 保留名 `project`），即 `data-knowledge-base` */
+  name: string
+  checked: boolean
+  disabled: boolean
+}
+
+/** scope 内知识库候选项的快照（页内表达式；scope 为空时回 []） */
+const KNOWLEDGE_ITEMS = (scope: string): string =>
+  `[...(${scope}?.querySelectorAll('label[data-knowledge-base]') ?? [])].map((label) => {
+    const box = label.querySelector('input[type="checkbox"]')
+    return {
+      name: label.getAttribute('data-knowledge-base') ?? '',
+      checked: !!box?.checked,
+      disabled: !!box?.disabled
+    }
+  })`
+
+/** 等 scope 内某个知识库候选项上屏（候选随 `knowledge.baseOptions` 异步到），再点它的勾选框 */
+async function toggleKnowledgeIn(
+  main: CdpClient,
+  scope: string,
+  name: string,
+  what: string
+): Promise<void> {
+  const box = `[...(${scope}?.querySelectorAll('label[data-knowledge-base]') ?? [])]
+    .find((label) => label.getAttribute('data-knowledge-base') === ${JSON.stringify(name)})
+    ?.querySelector('input[type="checkbox"]')`
+  await until(() => main.eval<boolean>(`!!(${box})`), `${what}: knowledge base "${name}"`)
+  await main.eval(`(() => {
+    ${box}.click()
+    return true
+  })()`)
+}
+
+/**
+ * scope 内知识库卡的脚注文案（SettingsSection 的 footer）。没有这张卡、或这张卡没有脚注时回空串。
+ *
+ * 「还没选过（勾的是缺省）」与「这条会话自己选过」正是靠它区分的 —— 断言方比对的是文案本身
+ * （三语取自 chat-protocol 的语言包），不是这里的结构。
+ */
+const KNOWLEDGE_FOOTER = (scope: string): string =>
+  `(() => {
+    const label = ${scope}?.querySelector('label[data-knowledge-base]')
+    const section = label?.closest('section')
+    const last = section?.lastElementChild
+    // 脚注是分节的最后一个子节点，且必然不含条目（含条目的那个是卡片本身 = 没有脚注）
+    if (!last || last.contains(label)) return ''
+    return (last.textContent ?? '').trim()
+  })()`
+
 export interface SessionConfigPane {
   /** 等弹窗上屏 */
   waitOpen(): Promise<void>
@@ -998,6 +1055,12 @@ export interface SessionConfigPane {
   extItems(): Promise<ExtItemShot[]>
   /** 点弹窗里某个扩展能力条目的勾选框（等条目上屏再点；同样只在弹窗面板内找） */
   toggleExt(key: string): Promise<void>
+  /** 弹窗里知识库卡的候选项（DOM 序；同样只在弹窗面板内找，口径同 extItems） */
+  knowledgeItems(): Promise<KnowledgeItemShot[]>
+  /** 点弹窗里某个知识库候选项的勾选框（这张卡不随 Agent 上锁，任何时候都点得动） */
+  toggleKnowledgeBase(name: string): Promise<void>
+  /** 知识库卡的脚注文案（「还没选过」与「已明确设过」两句的判据） */
+  knowledgeFooter(): Promise<string>
 }
 
 /** 会话配置弹窗（SessionConfigDialog；由行菜单的 session-config 拉起） */
@@ -1024,7 +1087,10 @@ export function sessionConfigPane(main: CdpClient): SessionConfigPane {
       await until(async () => !(await isOpen()), 'session config dialog closed')
     },
     extItems: () => main.eval<ExtItemShot[]>(EXT_ITEMS(PANEL)),
-    toggleExt: (key) => toggleExtIn(main, PANEL, key, 'session config dialog')
+    toggleExt: (key) => toggleExtIn(main, PANEL, key, 'session config dialog'),
+    knowledgeItems: () => main.eval<KnowledgeItemShot[]>(KNOWLEDGE_ITEMS(PANEL)),
+    toggleKnowledgeBase: (name) => toggleKnowledgeIn(main, PANEL, name, 'session config dialog'),
+    knowledgeFooter: () => main.eval<string>(KNOWLEDGE_FOOTER(PANEL))
   }
 }
 
@@ -1089,6 +1155,10 @@ export interface ProjectEditPane {
   extItems(): Promise<ExtItemShot[]>
   /** 点某个扩展能力条目的勾选框 —— 只改弹窗里的草稿，保存才落库 */
   toggleExt(key: string): Promise<void>
+  /** 知识库卡的候选项（与会话设置同一个 KnowledgeBasesSection） */
+  knowledgeItems(): Promise<KnowledgeItemShot[]>
+  /** 点某个知识库候选项 —— 同样只改草稿；「动过没有」决定保存时写不写这个键 */
+  toggleKnowledgeBase(name: string): Promise<void>
   /** 点页脚的「保存」并等弹窗卸载（保存成功后弹窗自己关） */
   save(): Promise<void>
 }
@@ -1123,6 +1193,8 @@ export function projectEditPane(main: CdpClient): ProjectEditPane {
     },
     extItems: () => main.eval<ExtItemShot[]>(EXT_ITEMS(PANEL)),
     toggleExt: (key) => toggleExtIn(main, PANEL, key, 'project edit dialog'),
+    knowledgeItems: () => main.eval<KnowledgeItemShot[]>(KNOWLEDGE_ITEMS(PANEL)),
+    toggleKnowledgeBase: (name) => toggleKnowledgeIn(main, PANEL, name, 'project edit dialog'),
     save: async () => {
       // 面板的子节点依次是头部 / 内容 / 页脚；页脚里左边是归档，右边「取消 · 保存」—— 保存是最后一颗
       const clicked = await main.eval<boolean>(`(() => {
