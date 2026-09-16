@@ -28,6 +28,7 @@ export {
   POLICY_FILE_MARKER_KEY,
   POLICY_RULES_KEY,
   POLICY_LETS_KEY,
+  POLICY_SCOPE_KEY,
   POLICY_PROMPT_MAX
 } from './policyFile'
 export {

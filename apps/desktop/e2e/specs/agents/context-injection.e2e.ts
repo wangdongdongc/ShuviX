@@ -365,4 +365,65 @@ describe('知识库围栏', () => {
     )
     expect(await systemPromptOf(sid)).not.toContain(OPEN)
   })
+
+  it('KBF-E-5 项目会话的围栏次序：用户库 → `project` → `shuvix`（垫底），整段仍然无条目/路径/计数', async () => {
+    // KBF-E-3 把它删了；这一条要的正是「用户库 + 项目库 + 内置库」三种都在的那一屏
+    mkdirSync(userBaseDir(), { recursive: true })
+
+    const { systemPrompt: sp } = await createAgentSession(app.main, {
+      projectId,
+      title: 'e2e-kbf-5'
+    })
+    const fence = fenceBodyOf(sp)
+
+    const at = (line: string): number => {
+      const i = fence.indexOf(line)
+      expect(i, `fence lists ${JSON.stringify(line)}: ${fence}`).toBeGreaterThanOrEqual(0)
+      return i
+    }
+    // 用户自己的库在前；项目库其次（它还在，但不再是主角）；内置库垫底 —— 它是说明书，不是用户的内容
+    expect(at(`- ${USER_BASE}`)).toBeLessThan(at('- project — InjProj'))
+    expect(at('- project — InjProj')).toBeLessThan(at('- shuvix — '))
+    // 内置那一行自带一句「是什么 + 只读」，好让模型知道什么问题该来这里查、又别把笔记记进来
+    expect(fence).toMatch(/\n- shuvix — .*read-only/)
+
+    // 多了一种库，「只给入口不给内容」的承诺一字不改（那句说明里既没有路径也没有版本号）
+    expectNoContent(fence)
+    expect(fence).not.toContain(app.home)
+  })
+
+  it('KBF-E-6 取消勾选 `shuvix` 后新建的会话围栏里没有那一行；已有运行时的系统提示词逐字节不变', async () => {
+    mkdirSync(userBaseDir(), { recursive: true })
+
+    // (a) 先有一个按缺省起来的运行时 —— 它的围栏里有内置库那一行
+    const live = (await createAgentSession(app.main, { projectId, title: 'e2e-kbf-6-live' })).sid
+    const before = await systemPromptOf(live)
+    expect(fenceBodyOf(before)).toContain('- shuvix — ')
+
+    // (b) 另一条会话：**先**把选择写成不含 shuvix 的一份，**再**让根 Agent 起来
+    //（根 Agent 是懒创建的，围栏在那一刻定型）
+    const sp = await app.main.eval<string>(
+      `(async () => {
+        const s = await window.api.session.create(${JSON.stringify({
+          projectId,
+          title: 'e2e-kbf-6-new'
+        })})
+        await window.api.session.updateKnowledgeBases({
+          id: s.id,
+          knowledgeBases: ${JSON.stringify([USER_BASE, 'project'])}
+        })
+        const info = await window.api.agent.getInfo(s.id, { ensure: true })
+        return info.systemPrompt
+      })()`
+    )
+    const fence = fenceBodyOf(sp)
+    expect(fence).toContain(`- ${USER_BASE}`)
+    expect(fence).toContain('- project — InjProj')
+    // 取消勾选 = 它不再是这条会话的库：围栏里连那一行都没有
+    expect(fence).not.toContain('- shuvix')
+    expectNoContent(fence)
+
+    // (c) 已有的那个运行时不受任何影响 —— 系统提示词逐字节不变
+    expect(await systemPromptOf(live)).toBe(before)
+  })
 })

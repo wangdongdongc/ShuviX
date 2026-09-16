@@ -10,7 +10,8 @@
  * 参数，路径一律 bundle 相对；回执表头点名 bundle 的绝对目录，因为 agent 要拿它拼出
  * write/edit 用的路径。KT-1..KT-7 都在 `project` 库里跑；KT-8 起钉 base 本身（设计附录 U）——
  * `bases` 只列库、缺 base 是硬错误（刻意没有缺省）、库名去空白后原样交给宿主、解析失败时
- * 读 / 校验 / 新建硬错而检索 / 盘点软失败。
+ * 读 / 校验 / 新建硬错而检索 / 盘点软失败。KT-21 起钉只读库（宿主随应用发布的内置库）：
+ * `create` 在动手之前就被拒，读侧一概照常。
  */
 import { describe, it, expect, vi, type Mock } from 'vitest'
 import type { AgentToolResult } from '@earendil-works/pi-agent-core'
@@ -64,6 +65,7 @@ interface Harness {
   enforcePath: Mock
   resolveBase: Mock
   listBases: Mock
+  scan: Mock
   afterWrite: Mock
   /** 调用顺序流水：`enforce:<mode>:<abs>` / `write:<abs>` */
   calls: string[]
@@ -144,12 +146,13 @@ function makeTool(opts: ToolOptions = {}): Harness {
   const security = opts.security ?? ({ enforcePath } as unknown as SecurityContext)
   const resolveBase = vi.fn(async () => opts.bundle ?? BUNDLE)
   const listBases = vi.fn(async () => opts.bases ?? [])
+  // 扫描跟着宿主解析出的目录走：resolveBase 给的是别的库时，清单也得是那个库的
+  const scan = vi.fn((bundleDir: string) => Promise.resolve(scanOf(files, bundleDir)))
   const afterWrite = vi.fn()
   const tool = createKnowledgeTool({
     port: memoryPort(files, calls),
     security,
-    // 扫描跟着宿主解析出的目录走：resolveBase 给的是别的库时，清单也得是那个库的
-    scan: async (bundleDir) => scanOf(files, bundleDir),
+    scan,
     resolveBase,
     listBases,
     search: opts.search,
@@ -165,6 +168,7 @@ function makeTool(opts: ToolOptions = {}): Harness {
     enforcePath,
     resolveBase,
     listBases,
+    scan,
     afterWrite,
     calls,
     run: (id, params, signal) => tool.execute(id, params, signal)
@@ -973,5 +977,130 @@ describe('KT-16..20 跨库检索（省略 base）', () => {
     expect(h.listBases).not.toHaveBeenCalled()
     expect(h.resolveBase).toHaveBeenCalledTimes(1)
     expect(h.resolveBase).toHaveBeenCalledWith('notes')
+  })
+})
+
+/**
+ * 只读库 —— 宿主随应用发布的那一个内置库：`resolveBase` 回的 target 带 `readonly: true`。
+ * 它存在的意义就是被读，所以这里钉的是一道**单向**的门：`create` 在解析出目标之后、动任何东西
+ * 之前就停下（不扫库、不过 PEP、不落盘、不回调），而 list / read / search / validate 一概照常。
+ *
+ * 为什么拒在工具里而不是留给安全策略：策略拒的是一条路径，回给模型的话说不清「那该记到哪里去」
+ * —— 所以这句错误必须点名这个库，并把它指回 "bases"（用户自己的库在那张表里）。
+ * 缺参校验仍排在只读判定前面：参数都不全的时候连解析都不该发生，报的自然是缺了什么。
+ */
+describe('KT-21..24 只读库（随应用发布的内置库）', () => {
+  const DIR = '/kb/builtin/shuvix/en'
+  const BUILTIN: KnowledgeBundleTarget = {
+    dir: DIR,
+    label: 'ShuviX reference (read-only)',
+    readonly: true
+  }
+  /** 宿主给只读库的那句说明 —— `bases` 原样括注它 */
+  const READONLY_NOTE = 'read-only: search and read it, never create or edit here'
+  const GUIDE = `${DIR}/agent-md.md`
+  const FILES = {
+    [GUIDE]: doc(
+      ['type: Reference', 'title: Agent md', 'description: how an agent md file is written'],
+      'frontmatter keys, then the body'
+    )
+  }
+  /** 一次参数齐全的新建 */
+  const CREATE = {
+    action: 'create' as const,
+    base: 'shuvix',
+    type: 'Memory',
+    title: 'What I learned',
+    description: 'd',
+    body: 'b'
+  }
+
+  it('KT-21 create 打到只读库 → 抛可读的错（点名库、指回 "bases"）；停在动手之前：不扫库、不过 PEP、不落盘、不回调', async () => {
+    const h = makeTool({ bundle: BUILTIN, files: FILES })
+    // 去空白后的名字既用来解析，也是错误话术里点名的那一个
+    const message = await rejectionOf(h.run('c1', { ...CREATE, base: '  shuvix ' }))
+    expect(message).toContain('"shuvix" is read-only')
+    // 拒在工具里而不是留给策略，为的就是这半句「那该记到哪里去」
+    expect(message).toContain("user's knowledge bases")
+    expect(message).toContain('"bases"')
+    expect(h.resolveBase.mock.calls).toEqual([['shuvix']])
+
+    // 这一步本该更早停下：扫描、PEP、落盘、回调一个都不该发生
+    expect(h.scan).not.toHaveBeenCalled()
+    expect(h.enforcePath).not.toHaveBeenCalled()
+    expect(h.calls).toEqual([])
+    expect(h.afterWrite).not.toHaveBeenCalled()
+    expect([...h.files.keys()]).toEqual([GUIDE])
+  })
+
+  it('KT-22 只读库照常被读：list / read / search / validate 全都照常（读侧仍过 read PEP），且一个字都不写', async () => {
+    const h = makeTool({ bundle: BUILTIN, files: FILES })
+
+    expect(textOf(await h.run('c1', { action: 'list', base: 'shuvix' }))).toBe(
+      [
+        `1 entry in ShuviX reference (read-only) — ${DIR}:`,
+        '- /agent-md.md — how an agent md file is written'
+      ].join('\n')
+    )
+    expect(textOf(await h.run('c2', { action: 'search', base: 'shuvix', query: 'agent md' }))).toBe(
+      [
+        `1 result(s) for "agent md" in ShuviX reference (read-only) — ${DIR}:`,
+        '- /agent-md.md — how an agent md file is written'
+      ].join('\n')
+    )
+    expect(
+      textOf(await h.run('c3', { action: 'read', base: 'shuvix', path: '/agent-md.md' }))
+    ).toBe(`${GUIDE}:\n\n${FILES[GUIDE].trimEnd()}`)
+    expect(
+      textOf(await h.run('c4', { action: 'validate', base: 'shuvix', path: '/agent-md.md' }))
+    ).toBe('/agent-md.md: no issues.')
+    expect(textOf(await h.run('c5', { action: 'validate', base: 'shuvix' }))).toBe(
+      `1 file(s) in ShuviX reference (read-only) — ${DIR}: no issues.`
+    )
+
+    // 只读只拦写：读侧照旧过与文件工具同一道 PEP，而写的那一侧一次都没发生
+    expect(h.calls).toEqual([
+      `enforce:read:${GUIDE}`,
+      `enforce:read:${GUIDE}`,
+      `enforce:read:${DIR}`
+    ])
+    expect(h.afterWrite).not.toHaveBeenCalled()
+    expect(h.files.get(GUIDE)).toBe(FILES[GUIDE])
+    // 顺带证明 KT-21 / KT-24 的「没扫过库」不是空断言：扫描确实走这个替身
+    expect(h.scan).toHaveBeenCalledWith(DIR)
+  })
+
+  it('KT-23 bases：带 note 的行原样括注（括在最后），没有 note 的行不多出一对空括号', async () => {
+    const h = makeTool({
+      bases: [
+        { base: 'notes', label: 'knowledge base "notes"', dir: '/u/notes' },
+        // 空串与缺省同义：`()` 是纯噪声
+        { base: 'alpha', label: 'knowledge base "alpha"', dir: '/u/alpha', note: '' },
+        { base: 'shuvix', label: BUILTIN.label, dir: DIR, note: READONLY_NOTE }
+      ]
+    })
+    const lines = textOf(await h.run('c1', { action: 'bases' })).split('\n')
+    expect(lines).toEqual([
+      'Knowledge bases in this session (pass the name as `base`):',
+      '- notes — knowledge base "notes" — /u/notes',
+      '- alpha — knowledge base "alpha" — /u/alpha',
+      // 宿主说什么就印什么：note 原样，位置在目录之后
+      `- shuvix — ShuviX reference (read-only) — ${DIR} (${READONLY_NOTE})`
+    ])
+    // 普通库那两行连一个括号都不该有
+    for (const line of [lines[1], lines[2]]) expect(line).not.toContain('(')
+  })
+
+  it('KT-24 缺参校验排在只读判定前面：对只读库缺 title → 报的是缺参，连 base 都还没解析', async () => {
+    const h = makeTool({ bundle: BUILTIN, files: FILES })
+    for (const title of [undefined, '   ']) {
+      const message = await rejectionOf(h.run('c1', { ...CREATE, title }))
+      expect(message, JSON.stringify(title)).toBe('Creating an entry needs: title')
+      expect(message, JSON.stringify(title)).not.toContain('read-only')
+    }
+    expect(h.resolveBase).not.toHaveBeenCalled()
+    expect(h.scan).not.toHaveBeenCalled()
+    expect(h.calls).toEqual([])
+    expect(h.afterWrite).not.toHaveBeenCalled()
   })
 })

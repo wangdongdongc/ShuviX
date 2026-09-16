@@ -19,7 +19,7 @@ import {
   queueKnowledgeCommit,
   type KnowledgeChangeOp
 } from './repo'
-import { invalidateKnowledgeScan, knownKnowledgePaths, listBuiltinBundles } from './scan'
+import { invalidateKnowledgeScan, knownKnowledgePaths, listAllBuiltinBundleIds } from './scan'
 import { invalidateKnowledgeSearch } from './search'
 
 const log = createLogger('Knowledge')
@@ -120,7 +120,7 @@ export function notifyKnowledgeFileChanged(
  * 检索索引却按 bundle id 缓存 —— 整体失效一次，再广播让侧栏与配置卡重扫。
  */
 export function refreshBuiltinKnowledge(): void {
-  for (const bundle of listBuiltinBundles()) {
+  for (const bundle of listAllBuiltinBundleIds()) {
     invalidateKnowledgeScan(bundle)
     invalidateKnowledgeSearch(bundle)
   }

@@ -2,17 +2,18 @@
  * sessionBundle —— 「这条会话有哪几个知识库」以及工具参数里的 `base` 解析到哪个 bundle。
  *
  * 选择是一条**活的回落链**（不落库、不快照）：会话设过 → 父会话设过 → 项目设过 → 缺省「全部用户库 +
- * （属于项目时）项目库」。与扩展能力勾选的快照语义刻意不同 —— 知识库是每次调用现查的。
+ * （属于项目时）项目库 + 随应用发布的内置库」。与扩展能力勾选的快照语义刻意不同 —— 知识库是每次调用现查的。
  *
  * 选择是**硬边界**：`bases` 只列启用且此刻真在的库，点名没启用的名字报错并列出启用了哪些。
- * 库名按目录清单精确匹配（NFC 归一、大小写敏感）；保留名 `project` 是项目库，同名的用户目录够不着。
+ * 库名按目录清单精确匹配（NFC 归一、大小写敏感）；保留名有两个 —— `project` 是项目库、`shuvix` 是只读的
+ * 内置库（SB-19..27），同名的用户目录都够不着。
  * `sessionBundle` 本身仍然只回答「本会话所属项目的库是哪一个」，不判断目录建没建过（读宽）。
  *
  * dao 是替身（这里不验 SQL），路径与目录清单用真的。
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { existsSync, mkdirSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
-import { basename, join } from 'node:path'
+import { basename, isAbsolute, join } from 'node:path'
 import type { Project } from '../../../dao/types/project'
 
 const state = vi.hoisted(() => ({ root: '' }))
@@ -25,6 +26,17 @@ vi.mock('../../../utils/paths', () => ({
 }))
 vi.mock('../../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {} })
+}))
+// i18next 是单例：内置库的语言目录与人读名都从它现读。真身在单测里没 init（`t` 回 key 原文 /
+// undefined），所以换成替身 —— `language` 决定语言那一层，`t` 回一个认得出的标记串
+const i18n = vi.hoisted(() => ({ language: 'en' }))
+vi.mock('i18next', () => ({
+  default: {
+    get language() {
+      return i18n.language
+    },
+    t: (key: string) => `i18n(${key})`
+  }
 }))
 vi.mock('../../../dao/projectDao', () => ({ projectDao: { findById: vi.fn(), pick: vi.fn() } }))
 // updateSettings 只为「活的、不落快照」那条留着断言面 —— 生产代码在这里一次都不该写库
@@ -42,7 +54,17 @@ import {
   sessionBundle
 } from '../sessionBundle'
 import { invalidateKnowledgeScan } from '../scan'
-import { PROJECTS, bundleAt, makeTempRoot, seedConcept, userRootOf } from './fixture'
+import {
+  PROJECTS,
+  builtinLangAt,
+  builtinRootOf,
+  bundleAt,
+  makeTempRoot,
+  seedBuiltinConcept,
+  seedConcept,
+  treeOf,
+  userRootOf
+} from './fixture'
 
 const NO_PROJECT =
   'This session does not belong to a project, so it has no "project" knowledge base.'
@@ -105,6 +127,8 @@ beforeEach(() => {
 afterEach(() => {
   rmSync(root, { recursive: true, force: true })
   rmSync(userRootOf(root), { recursive: true, force: true })
+  // 内置根同样是 root 的兄弟目录：种过内置库的用例（SB-19..27）得自己收
+  rmSync(builtinRootOf(root), { recursive: true, force: true })
 })
 
 describe('sessionBundle', () => {
@@ -483,5 +507,214 @@ describe('SB-11..18 回落链与围栏清单', () => {
       label: `knowledge base "${nfd}"`
     })
     expect((await listBases('s1')).map((b) => b.base)).toEqual([nfd, 'project'])
+  })
+})
+
+/**
+ * 随应用发布的内置库（SB-19..27）。第三个 bundle 名字空间 `builtin/<库名>`，磁盘形状
+ * `<内置根>/<库名>/<语言>/…` —— 语言那一层由界面语言现算，不进 bundle id。
+ *
+ * 三条主线：
+ *   - 它是**第二个保留名**：与 `project` 同一条规则（保留名优先于同名用户目录），但大小写敏感。
+ *   - 它**垫底**：缺省选择与配置卡候选里都排在用户库与项目库之后 —— 说明书不是用户的内容。
+ *   - 它**只读**，而且**缺席是正常态**：开发期没拷资源、打包漏了，都只该让它自己消失，不能带累别的库。
+ */
+describe('SB-19..27 内置库（只读、保留名、垫底）', () => {
+  /** builtinTarget 的回包（`bundleDir` 现算到语言那一层） */
+  const BUILTIN_LABEL = 'ShuviX reference (read-only)'
+  /** listBases 只给它这一行加的只读提示 */
+  const BUILTIN_NOTE = 'read-only: search and read it, never create or edit here'
+  /** 配置卡的人读名：走 i18n 单例（替身把 key 原样包成标记串） */
+  const BUILTIN_DISPLAY_NAME = 'i18n(knowledge.builtinBaseName)'
+
+  /** 建若干用户库目录，返回用户根 */
+  const seedBases = (...names: string[]): string => {
+    const userRoot = userRootOf(root)
+    for (const name of names) mkdirSync(join(userRoot, name), { recursive: true })
+    return userRoot
+  }
+  /** 内置库的语言目录（bundle 目录就是这一层） */
+  const builtinDir = (lang = 'en'): string => builtinLangAt(root, 'shuvix', lang)
+  /** 种出内置库：builtinTarget 只判语言目录在不在，空目录就够 */
+  const seedBuiltinBase = (lang = 'en'): string => {
+    mkdirSync(builtinDir(lang), { recursive: true })
+    return builtinDir(lang)
+  }
+  const builtinTarget = (lang = 'en'): Record<string, unknown> => ({
+    bundle: 'builtin/shuvix',
+    dir: builtinDir(lang),
+    label: BUILTIN_LABEL,
+    readonly: true
+  })
+  const baseNames = async (): Promise<string[]> => (await listBases('s1')).map((b) => b.base)
+
+  it('SB-19 缺省清单垫底多出内置库：属于项目的会话是「用户库 + project + shuvix」，不属于项目的是「用户库 + shuvix」', async () => {
+    seedBases('alpha', 'notes')
+    seedBuiltinBase()
+
+    // 垫底：它是说明书，不是用户的内容，也不是「这个项目」的内容
+    inProject()
+    expect(knowledgeBaseOptions('s1').selected).toEqual(['alpha', 'notes', 'project', 'shuvix'])
+    expect(await baseNames()).toEqual(['alpha', 'notes', 'project', 'shuvix'])
+
+    // 不在项目里：project 那一项没了，内置库照样在，仍然垫底
+    mockPick({ projectId: null })
+    expect(knowledgeBaseOptions('s1').selected).toEqual(['alpha', 'notes', 'shuvix'])
+    expect(await baseNames()).toEqual(['alpha', 'notes', 'shuvix'])
+  })
+
+  it('SB-20 `shuvix` 是第二个保留名：目录恰好叫 shuvix 的用户库进不了候选，点名 shuvix 解析到内置库', async () => {
+    const userRoot = seedBases('notes')
+    // 同名的用户库：真有内容，但保留名优先 —— 这是与 `project` 一样的一条已知代价
+    seedConcept(userRoot, 'shuvix/a.md', ['type: Memory', 'title: A'])
+    seedBuiltinBase()
+    mockPick({ projectId: null })
+
+    // 候选里那一行 shuvix 是内置库（人读名是产品名），不是用户那个目录（那样 label 会是目录名）
+    expect(knowledgeBaseOptions('s1').options).toEqual([
+      { name: 'notes', label: 'notes' },
+      { name: 'shuvix', label: BUILTIN_DISPLAY_NAME }
+    ])
+    expect(await resolveBase('s1', 'shuvix')).toEqual(builtinTarget())
+    // 用户那一份原样躺着 —— 够不着工具不等于被动过
+    expect(readdirSync(join(userRoot, 'shuvix'))).toEqual(['a.md'])
+  })
+
+  it('SB-21 resolveBase(`shuvix`) 回只读的内置 bundle（去首尾空白同结果）；保留名大小写敏感，`Shuvix` 不命中', async () => {
+    seedBases('notes')
+    seedBuiltinBase()
+    mockPick({ projectId: null })
+
+    expect(await resolveBase('s1', 'shuvix')).toEqual(builtinTarget())
+    expect(await resolveBase('s1', '  shuvix  ')).toEqual(builtinTarget())
+    // 保留名与库名一样按 NFC 精确匹配（只归一、不折大小写）：差一个大小写就按「没启用」报错
+    expect(await resolveBase('s1', 'Shuvix')).toEqual({
+      error: `"Shuvix" is not one of this session's knowledge bases. Enabled: "notes", "shuvix".`
+    })
+  })
+
+  it('SB-22 内置库不在（开发期没拷 / 打包漏了）：缺省与候选里都没有它、点名报错、别的库照常工作，全程不建任何目录', async () => {
+    const userRoot = seedBases('notes')
+    inProject()
+
+    // (a) 内置根整个不存在
+    expect(knowledgeBaseOptions('s1')).toEqual({
+      options: [
+        { name: 'notes', label: 'notes' },
+        { name: 'project', label: 'Acme Corp' }
+      ],
+      selected: ['notes', 'project'],
+      explicit: false
+    })
+    expect(await baseNames()).toEqual(['notes', 'project'])
+    expect(await resolveBase('s1', 'shuvix')).toEqual({
+      error: `"shuvix" is not one of this session's knowledge bases. Enabled: "notes", "project".`
+    })
+    // 缺席是增益的缺席：别的库该怎么用还怎么用
+    expect(await resolveBase('s1', 'notes')).toEqual({
+      bundle: 'knowledge/notes',
+      dir: join(userRoot, 'notes'),
+      label: 'knowledge base "notes"'
+    })
+    // 探到不存在的根不该把它捎带建出来（建出来就永远是一个空的只读库）
+    expect(existsSync(builtinRootOf(root))).toBe(false)
+
+    // (b) 库目录在、但没有生效语言那一版（只发了别的语言、又没 en 兜底）：同样当没有这个库
+    mkdirSync(join(builtinRootOf(root), 'shuvix'), { recursive: true })
+    expect(knowledgeBaseOptions('s1').options.map((o) => o.name)).toEqual(['notes', 'project'])
+    expect(await baseNames()).toEqual(['notes', 'project'])
+    expect(await resolveBase('s1', 'shuvix')).toEqual({
+      error: `"shuvix" is not one of this session's knowledge bases. Enabled: "notes", "project".`
+    })
+    expect(treeOf(builtinRootOf(root))).toEqual(['shuvix/'])
+  })
+
+  it('SB-23 内置库可以取消勾选：选择里不写 shuvix 就没有它，只写 shuvix 就只剩它', async () => {
+    seedBases('notes')
+    seedBuiltinBase()
+
+    // 它只是缺省里多出来的一项，不是强制项
+    mockPick({ projectId: null, settings: { knowledgeBases: ['notes'] } })
+    expect(await baseNames()).toEqual(['notes'])
+    expect(await resolveBase('s1', 'shuvix')).toEqual({
+      error: `"shuvix" is not one of this session's knowledge bases. Enabled: "notes".`
+    })
+
+    mockPick({ projectId: null, settings: { knowledgeBases: ['shuvix'] } })
+    expect(await baseNames()).toEqual(['shuvix'])
+    expect(await resolveBase('s1', 'shuvix')).toEqual(builtinTarget())
+  })
+
+  it('SB-24 listBases 只给内置那一行 note（只读提示）与绝对目录，用户库 / 项目库那两行不带 note', async () => {
+    const userRoot = seedBases('notes')
+    seedBuiltinConcept(root, 'shuvix/en/agent-md.md', ['type: Guide', 'title: Agent md'])
+    inProject()
+
+    // toStrictEqual：多一个键少一个键都算错 —— 「只有内置那一行有 note」正是这条要钉的
+    const bases = await listBases('s1')
+    expect(bases).toStrictEqual([
+      { base: 'notes', label: 'knowledge base "notes"', dir: join(userRoot, 'notes') },
+      { base: 'project', label: 'project "Acme Corp"', dir: bundleAt(root, 'projects/p1') },
+      {
+        base: 'shuvix',
+        label: BUILTIN_LABEL,
+        dir: builtinDir(),
+        note: BUILTIN_NOTE
+      }
+    ])
+    // dir 是绝对路径（工具拿它直接读盘），而且指到语言那一层，不是库目录
+    // （`dir` 在契约里是可选的，所以「有值」与「是绝对路径」一起断）
+    expect(bases.every((b) => !!b.dir && isAbsolute(b.dir))).toBe(true)
+  })
+
+  it('SB-25 配置卡里的内置项：name 恒为 shuvix、label 走 i18n 的 knowledge.builtinBaseName；不传会话的项目对话框口径同样有它、同样垫底', () => {
+    seedBases('notes')
+    seedBuiltinBase()
+    const builtinOption = { name: 'shuvix', label: BUILTIN_DISPLAY_NAME }
+
+    // 项目配置对话框（不传 sessionId）配的是「这个项目的新会话缺省用哪些」—— 内置库也该能勾
+    expect(knowledgeBaseOptions()).toEqual({
+      options: [{ name: 'notes', label: 'notes' }, { name: 'project', label: '' }, builtinOption],
+      selected: [],
+      explicit: false
+    })
+
+    // 会话配置卡：同一项、同样垫底；人读名与语言一起变，不是磁盘上的目录名
+    inProject()
+    expect(knowledgeBaseOptions('s1').options).toEqual([
+      { name: 'notes', label: 'notes' },
+      { name: 'project', label: 'Acme Corp' },
+      builtinOption
+    ])
+  })
+
+  it('SB-26 围栏给模型的内置库 label 是那句英文说明，与配置卡的人读名刻意不是一回事', () => {
+    seedBases('notes')
+    seedBuiltinBase()
+    mockPick({ projectId: null })
+
+    // 围栏是提示词：要说清里面是什么、以及只读（免得模型把笔记往这里记）
+    const choices = enabledBaseChoices('s1')
+    expect(choices).toEqual([
+      { name: 'notes', label: '' },
+      { name: 'shuvix', label: expect.stringContaining('read-only') }
+    ])
+
+    // 两张面：模型读的是说明，用户读的是产品名 —— 哪天有人把它们并成一个键，这条会红
+    const guide = choices.find((c) => c.name === 'shuvix')?.label
+    const shown = knowledgeBaseOptions('s1').options.find((o) => o.name === 'shuvix')?.label
+    expect(shown).toBe(BUILTIN_DISPLAY_NAME)
+    expect(guide).not.toBe(shown)
+  })
+
+  it('SB-27 围栏里那句说明不带路径也不带计数：不含 `/` 与任何数字', () => {
+    seedBuiltinBase()
+    mockPick({ projectId: null })
+
+    // `<knowledge_bases>` 围栏承诺「无路径无计数」，e2e 正是拿这两类字符判的 —— 那句话一旦加上版本号
+    // 或路径，本地全绿、CI 才炸。BUILTIN_GUIDE_LABEL 没有导出，所以隔着 enabledBaseChoices 这层公开面钉
+    const label = enabledBaseChoices('s1').find((c) => c.name === 'shuvix')?.label ?? ''
+    expect(label).not.toBe('')
+    expect(label).not.toMatch(/[/\d]/)
   })
 })

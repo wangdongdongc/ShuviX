@@ -29,6 +29,38 @@ export function userRootOf(root: string): string {
   return `${root}-user`
 }
 
+/**
+ * 内置库根替身：getBuiltinKnowledgeDir 替成 shuvix 根的又一个兄弟目录 `<root>-builtin`
+ * （既有用例里它**不存在**，所以「没有内置库」是缺省）。真要有内置库就 `seedBuiltin` 往里种 ——
+ * 它同样不在 root 之下，与 `userRootOf` 一个坑：种过的用例得自己在 afterEach 里把它删掉。
+ */
+export function builtinRootOf(root: string): string {
+  return `${root}-builtin`
+}
+
+/** 内置库某个语言那一版的绝对目录（`<内置根>/<库名>/<语言>`）—— bundle 目录就是这一层 */
+export function builtinLangAt(root: string, name: string, lang: string): string {
+  return join(builtinRootOf(root), name, lang)
+}
+
+/**
+ * 往内置库种一份文件：`rel` 是**内置根相对**的 `<库名>/<语言>/<库内相对路径>`
+ * （语言那一层不进 bundle id，但在磁盘上实打实存在）。
+ */
+export function seedBuiltin(root: string, rel: string, text: string): string {
+  return seedFile(builtinRootOf(root), rel, text)
+}
+
+/** 同上，内容是一份概念文本 */
+export function seedBuiltinConcept(
+  root: string,
+  rel: string,
+  frontmatter: string[],
+  body?: string
+): string {
+  return seedBuiltin(root, rel, conceptText(frontmatter, body))
+}
+
 /** bundle 根的绝对路径（root 是 shuvix 根，bundle 是根相对 id 如 `projects/acme`） */
 export function bundleAt(root: string, bundle: string): string {
   return join(root, ...bundle.split('/'))

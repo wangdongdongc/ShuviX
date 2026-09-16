@@ -4,8 +4,8 @@
  * 判定全在这个纯函数里，UI 只是照树画：顶层作用域目录固定序、只画有文件的目录、目录显示名只来自
  * 宿主随清单下发的 `names`（bundle id → 名字：项目库的目录名是项目 id，靠它显示项目当前的名字）
  * 而库里没有哪个文件享受特殊待遇（project.md 也只是一行）、目录与文件各按显示名排、路径归一 +
- * 去重、用户库（`knowledge/<库名>`）不包一层而是提到根上与项目容器平级。这里逐条钉住，
- * 组件层不再单测这些判定。
+ * 去重、用户库（`knowledge/<库名>`）不包一层而是提到根上与项目容器平级、内置库
+ * （`builtin/<库名>`）同样提到根上但置顶且整棵子树只读。这里逐条钉住，组件层不再单测这些判定。
  */
 import { describe, it, expect } from 'vitest'
 import type { KnowledgeEntry } from '@shuvix/chat-protocol/knowledge'
@@ -457,5 +457,202 @@ describe('buildKnowledgeTree — dirs 物化空目录', () => {
     expect(paths(beta)).toEqual(['knowledge/beta/x.md'])
     expect(beta.dirs.map((d) => d.path)).toEqual(['knowledge/beta/aaa'])
     expect(beta.dirs[0].files).toEqual([])
+  })
+})
+
+/**
+ * 内置库（条目 id `builtin/<库名>/…`，随应用发布、只读）走的是用户库那条路 —— **不包 `builtin`
+ * 一层**、库本身就是根上的一行 —— 只多两条判定：根上**置顶**（ShuviX 自己的说明书是「不知道就
+ * 先来这里查」的那一份，排在项目容器与全部用户库之前），以及整棵子树标 `readonly`。
+ *
+ * `readonly` 是**目录**的字段：UI 拿它关掉新建菜单（每一层都关，不止库那一行），条目行没有自己的
+ * 只读字段 —— 一行条目只读与否，看它落在哪个目录里。所以这里的「每一层」连条目所在的目录一起钉。
+ *
+ * 判定按 id **首段**走（`builtin/`），不是「名字里有 builtin」：一个恰好叫 builtin 的用户库
+ * （`knowledge/builtin`）既不置顶也不只读 —— 与 KT-14 那条撞名守卫同一个理由。
+ */
+describe('buildKnowledgeTree — 内置库', () => {
+  /** 每一行（目录行 + 条目行）的只读：条目没有自己的字段，跟着所在目录走 */
+  const rowReadonly = (node: KnowledgeTreeDir): Record<string, boolean> =>
+    Object.fromEntries([
+      ...node.files.map((f) => [f.entry.path, node.readonly] as const),
+      ...node.dirs.flatMap((d) => [
+        [d.path, d.readonly] as const,
+        ...Object.entries(rowReadonly(d))
+      ])
+    ])
+
+  it('KT-17 内置库提到根上：根上直接是库那一行，任何层级都没有 builtin 容器节点；库内层级照常长出来、文件保留完整 id', () => {
+    const root = buildKnowledgeTree([
+      entry('builtin/shuvix/formats/agent-md.md', { title: 'Agent md' }),
+      entry('builtin/shuvix/readme.md', { title: 'Readme' })
+    ])
+
+    expect(root.dirs.map((d) => d.path)).toEqual(['builtin/shuvix'])
+    // 容器节点提完就拿掉：哪一层都不剩 `builtin`
+    expect(allDirs(root).map((d) => d.path)).not.toContain('builtin')
+    expect(root.files).toEqual([])
+
+    const shuvix = root.dirs[0]
+    expect(shuvix).toMatchObject({
+      path: 'builtin/shuvix',
+      name: 'shuvix',
+      scopeDir: null,
+      title: null
+    })
+    expect(paths(shuvix)).toEqual(['builtin/shuvix/readme.md'])
+    expect(shuvix.dirs.map((d) => d.path)).toEqual(['builtin/shuvix/formats'])
+    expect(paths(dirAt(root, 'shuvix/formats'))).toEqual(['builtin/shuvix/formats/agent-md.md'])
+  })
+
+  it('KT-18 内置库置顶：排在项目容器与全部用户库之前；两个内置库之间按显示名排（不是目录名），名字再靠前的用户库也插不进去', () => {
+    const root = buildKnowledgeTree(
+      [
+        entry('knowledge/aaa/x.md'),
+        entry('projects/p1/a.md'),
+        entry('builtin/zeta/z.md'),
+        entry('builtin/alpha/a.md'),
+        entry('knowledge/zzz/y.md')
+      ],
+      { 'projects/p1': 'Acme' }
+    )
+    expect(root.dirs.map((d) => d.path)).toEqual([
+      'builtin/alpha',
+      'builtin/zeta',
+      'projects',
+      'knowledge/aaa',
+      'knowledge/zzz'
+    ])
+
+    // 显示名决定内置库之间的次序：names 把两个库的名字调了个个儿，行序跟着反过来
+    const named = buildKnowledgeTree(
+      [entry('builtin/zeta/z.md'), entry('builtin/alpha/a.md'), entry('knowledge/aaa/x.md')],
+      { 'builtin/zeta': 'A Handbook', 'builtin/alpha': 'Z Handbook' }
+    )
+    expect(named.dirs.map((d) => d.path)).toEqual([
+      'builtin/zeta',
+      'builtin/alpha',
+      'knowledge/aaa'
+    ])
+  })
+
+  it('KT-19 readonly 覆盖内置容器下的每一层：库那一行、库内子目录、连同条目所在的目录；项目库 / 用户库及其子目录与根恒 false', () => {
+    const root = buildKnowledgeTree(
+      [
+        entry('builtin/shuvix/readme.md'),
+        entry('builtin/shuvix/formats/deep/agent-md.md'),
+        entry('projects/p1/notes/c.md'),
+        entry('knowledge/mine/sub/d.md')
+      ],
+      { 'projects/p1': 'Acme' }
+    )
+
+    expect(root.readonly).toBe(false)
+    expect(rowReadonly(root)).toEqual({
+      'builtin/shuvix': true,
+      'builtin/shuvix/readme.md': true,
+      'builtin/shuvix/formats': true,
+      'builtin/shuvix/formats/deep': true,
+      'builtin/shuvix/formats/deep/agent-md.md': true,
+      projects: false,
+      'projects/p1': false,
+      'projects/p1/notes': false,
+      'projects/p1/notes/c.md': false,
+      'knowledge/mine': false,
+      'knowledge/mine/sub': false,
+      'knowledge/mine/sub/d.md': false
+    })
+  })
+
+  it('KT-20 撞名守卫：恰好叫 builtin 的用户库不是内置容器 —— 首段判定是 `builtin/`，不是「名字里有 builtin」：不置顶、不只读、也不与真正的内置库合并', () => {
+    const clash = buildKnowledgeTree([
+      entry('knowledge/builtin/x.md'),
+      entry('knowledge/builtin/sub/y.md'),
+      entry('builtin/shuvix/z.md'),
+      entry('projects/p1/a.md')
+    ])
+    expect(clash.dirs.map((d) => d.path)).toEqual([
+      'builtin/shuvix',
+      'projects',
+      'knowledge/builtin'
+    ])
+
+    const fake = clash.dirs[2]
+    expect(fake).toMatchObject({
+      path: 'knowledge/builtin',
+      name: 'builtin',
+      scopeDir: null,
+      title: null,
+      readonly: false
+    })
+    expect(fake.dirs.map((d) => [d.path, d.readonly])).toEqual([['knowledge/builtin/sub', false]])
+    // 两个库各管各的文件，不合并
+    expect(paths(fake)).toEqual(['knowledge/builtin/x.md'])
+    expect(allFiles(clash.dirs[0]).map((f) => f.entry.path)).toEqual(['builtin/shuvix/z.md'])
+
+    // 没有真正的内置库时也一样：它只是个按名排的普通用户库，排在项目容器之后
+    const lone = buildKnowledgeTree([
+      entry('knowledge/builtin/x.md'),
+      entry('knowledge/aaa/y.md'),
+      entry('projects/p1/a.md')
+    ])
+    expect(lone.dirs.map((d) => d.path)).toEqual(['projects', 'knowledge/aaa', 'knowledge/builtin'])
+    expect(lone.dirs.every((d) => !d.readonly)).toBe(true)
+  })
+
+  it('KT-21 空的内置库靠 dirs 物化：一样只读、一样置顶（条目写进来之前库那一行就该在）', () => {
+    const root = buildKnowledgeTree([entry('knowledge/mine/a.md'), entry('projects/p1/b.md')], {}, [
+      'builtin/shuvix',
+      'builtin/shuvix/formats'
+    ])
+
+    expect(root.dirs.map((d) => d.path)).toEqual(['builtin/shuvix', 'projects', 'knowledge/mine'])
+    expect(allDirs(root).map((d) => d.path)).not.toContain('builtin')
+
+    const shuvix = root.dirs[0]
+    expect(shuvix).toMatchObject({
+      path: 'builtin/shuvix',
+      name: 'shuvix',
+      scopeDir: null,
+      title: null,
+      readonly: true,
+      files: []
+    })
+    expect(shuvix.dirs.map((d) => [d.path, d.readonly])).toEqual([['builtin/shuvix/formats', true]])
+
+    // 中间层也只由 dirs 物化时同样只读（库自己都没点名，只点了里面一层）
+    const deepOnly = buildKnowledgeTree([], {}, ['builtin/shuvix/formats/deep'])
+    expect(allDirs(deepOnly).map((d) => [d.path, d.readonly])).toEqual([
+      ['builtin/shuvix', true],
+      ['builtin/shuvix/formats', true],
+      ['builtin/shuvix/formats/deep', true]
+    ])
+  })
+
+  it('KT-22 names 也给内置库命名：dirDisplayName 取宿主给的显示名而不是目录名（与项目库用项目当前名字同一条规则）；名字只落在 key 那一层，没给就回落目录名', () => {
+    const bundleNames = { 'builtin/shuvix': 'ShuviX Handbook', 'projects/p1': 'Acme' }
+    const root = buildKnowledgeTree(
+      [entry('builtin/shuvix/formats/a.md'), entry('projects/p1/b.md')],
+      bundleNames
+    )
+
+    const shuvix = root.dirs[0]
+    expect(shuvix).toMatchObject({
+      path: 'builtin/shuvix',
+      name: 'shuvix',
+      title: 'ShuviX Handbook',
+      readonly: true
+    })
+    expect(dirDisplayName(shuvix)).toBe('ShuviX Handbook')
+
+    // 名字只落在 key 那一层：库里的子目录不沾
+    const formats = dirAt(root, 'shuvix/formats')
+    expect(formats.title).toBeNull()
+    expect(dirDisplayName(formats)).toBe('formats')
+
+    // names 里没有它的内置库回落目录名（与项目已删的项目库同一条回落）
+    const orphan = buildKnowledgeTree([entry('builtin/other/x.md')])
+    expect(orphan.dirs[0]).toMatchObject({ path: 'builtin/other', title: null })
+    expect(dirDisplayName(orphan.dirs[0])).toBe('other')
   })
 })

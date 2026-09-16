@@ -987,8 +987,13 @@ async function toggleExtIn(
  * 这回事 —— `disabled` 照样读出来，正是为了断「有运行时时它仍然可点」。
  */
 export interface KnowledgeItemShot {
-  /** 选择里存的名字（用户库的目录名 / 保留名 `project`），即 `data-knowledge-base` */
+  /** 选择里存的名字（用户库的目录名 / 保留名 `project` / `shuvix`），即 `data-knowledge-base` */
   name: string
+  /**
+   * chip 上那行字。用户库就是目录名；两个保留名另取文案（`project` 是「项目」+ 项目当前名字，
+   * `shuvix` 是 `knowledge.builtinBaseName` —— 与侧栏那一行读同一个 i18n 键）。
+   */
+  label: string
   checked: boolean
   disabled: boolean
 }
@@ -999,6 +1004,7 @@ const KNOWLEDGE_ITEMS = (scope: string): string =>
     const box = label.querySelector('input[type="checkbox"]')
     return {
       name: label.getAttribute('data-knowledge-base') ?? '',
+      label: (label.querySelector('span')?.textContent ?? '').trim(),
       checked: !!box?.checked,
       disabled: !!box?.disabled
     }
@@ -2573,6 +2579,15 @@ export interface KnowledgeDirShot {
   label: string
   /** 行的内联 padding-left（'0px' = 顶层，每深一层 +12px） */
   indent: string
+  /** `data-knowledge-readonly`（随应用发布的内置库及其每一层）；普通目录该属性不在 → false */
+  readonly: boolean
+  /**
+   * 行首那枚图标的 class 串（lucide 的组件名落在类名里）。**只比不解**：图标名会随
+   * 设计改，用例断的是「这两行的图标不一样」「身份行的图标不随展开变」，不是某个具体名字。
+   */
+  icon: string
+  /** 行尾那把锁（只读的内置库、只挂在库那一行；`span[aria-label]` 里的图标） */
+  lock: boolean
 }
 
 /** 知识库分组里的一行条目 */
@@ -2594,6 +2609,19 @@ export interface KnowledgeCardShot {
   selects: Array<{ key: string; value: string }>
   /** 校验徽章节点（没有校验器的类型恒隐藏、无 is-* 类）；节点不在为 null */
   status: { hidden: boolean; className: string } | null
+}
+
+/**
+ * 属性卡的**可编辑性**读数 —— 只读笔记本（内置知识库）里下拉与文本字段一律 disabled。
+ * 与 `KnowledgeCardShot.selects` 分开两个读数：那一份被既有用例整体 `toEqual` 比对，
+ * 往里加字段会把它们全弄红。
+ */
+export interface KnowledgeCardFieldsShot {
+  /** 每个下拉字段的 data-key 与 disabled，卡片行序 */
+  selects: Array<{ key: string; disabled: boolean }>
+  /** 卡上文本类输入框的总数 / 其中 disabled 的个数（只读时两者相等且 > 0） */
+  inputs: number
+  inputsDisabled: number
 }
 
 export interface KnowledgePane {
@@ -2650,6 +2678,24 @@ export interface KnowledgePane {
   waitBody(marker: string): Promise<void>
   /** 属性卡读数；当前笔记没有卡片为 null（槽位类字段要读先 fmCardPane.waitReady） */
   card(): Promise<KnowledgeCardShot | null>
+  /** 属性卡的可编辑性读数；当前笔记没有卡片为 null */
+  cardFields(): Promise<KnowledgeCardFieldsShot | null>
+  /**
+   * 笔记本编辑器可编辑吗 —— 读 `.cm-content` 的 `contenteditable`（只读时 CodeMirror 置成
+   * `'false'`，此后**浏览器自己**就不把按键送进来了）。编辑器不在返回 null。
+   *
+   * ⚠️ 这里刻意不提供「模拟敲键」：本仓的 CDP 客户端只有 Runtime.evaluate（没有 Input 域），
+   * 而 CodeMirror 6 不认合成的 `beforeinput` / `keydown`（实测两者都不会改文档，可写的笔记本
+   * 也一样），所以那种助手只会造出一条两边都绿的假通道。要断「改不动」，断的是这个开关本身
+   * ——**同一个读数在可写笔记本上必须回 true**（用例自带对照组），外加落盘字节不变。
+   */
+  editorEditable(): Promise<boolean | null>
+  /**
+   * 当前笔记本有没有那张悬浮输入卡（只读笔记本没有）。判据是**编辑器之外**的 textarea ——
+   * 属性卡的文本字段也是 textarea，而它是 CodeMirror 的 widget，住在 `.cm-editor` 里面，
+   * 裸查 `document.querySelector('textarea')` 必然误命中。
+   */
+  hasInputCard(): Promise<boolean>
 }
 
 /** 这两个动作开的是 OS 文件管理器（隔离实例没有替换 shell）—— e2e 只读不选 */
@@ -2675,7 +2721,11 @@ export function knowledgePane(main: CdpClient): KnowledgePane {
     main.eval<KnowledgeDirShot[]>(`${DIRS}.map((el) => ({
       path: el.getAttribute('data-knowledge-dir') ?? '',
       label: ${LABEL_OF}(el),
-      indent: el.style.paddingLeft
+      indent: el.style.paddingLeft,
+      readonly: el.hasAttribute('data-knowledge-readonly'),
+      // 行首图标 = 行里第一枚 svg（名字落在 class 上）；行尾的锁在 span[aria-label] 里，不算它
+      icon: (el.querySelector('svg')?.getAttribute('class') ?? '').trim(),
+      lock: !!el.querySelector('span[aria-label] svg')
     }))`)
 
   const dirOpen = (path: string): Promise<boolean> =>
@@ -2846,6 +2896,34 @@ export function knowledgePane(main: CdpClient): KnowledgePane {
             .map((x) => ({ key: x.key, value: x.sel.value })),
           status: status ? { hidden: status.hidden, className: status.className } : null
         }
-      })()`)
+      })()`),
+
+    cardFields: () =>
+      main.eval<KnowledgeCardFieldsShot | null>(`(() => {
+        const card = document.querySelector('.cm-shuvix-fmcard')
+        if (!card) return null
+        // 文本字段是 textarea（描述这类长文本在单行框里会被裁掉），槽位类字段是 input ——
+        // 两者共用 .cm-shuvix-fmcard-input 这个类，也都有 .disabled
+        const inputs = [...card.querySelectorAll('.cm-shuvix-fmcard-input')]
+        return {
+          selects: [...card.querySelectorAll('.cm-shuvix-fmcard-row')]
+            .map((r) => ({ key: r.dataset.key ?? '', sel: r.querySelector('.cm-shuvix-fmcard-enum select') }))
+            .filter((x) => x.sel)
+            .map((x) => ({ key: x.key, disabled: x.sel.disabled })),
+          inputs: inputs.length,
+          inputsDisabled: inputs.filter((i) => i.disabled).length
+        }
+      })()`),
+
+    editorEditable: () =>
+      main.eval<boolean | null>(`(() => {
+        const el = document.querySelector('.cm-content')
+        return el ? el.getAttribute('contenteditable') !== 'false' : null
+      })()`),
+
+    hasInputCard: () =>
+      main.eval<boolean>(
+        `[...document.querySelectorAll('textarea')].some((t) => !t.closest('.cm-editor'))`
+      )
   }
 }

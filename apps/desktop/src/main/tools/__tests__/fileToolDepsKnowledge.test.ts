@@ -4,8 +4,13 @@
  * 落在某个库里（项目库或用户库）的 md 落盘后盖 `generated`（actor = agentActorOf(ctx)）并进
  * notifyKnowledgeFileChanged（模块按需加载）；不属于任何库的路径（根外、用户根散文件、隐藏目录）一切照旧。
  *
- * 库上**没有任何内置策略**（等整体定型再设计），所以这里免询问开着就不该再弹卡 ——
+ * 用户库与项目库上**没有任何内置策略**（等整体定型再设计），所以这里免询问开着就不该再弹卡 ——
  * 盖章与变更管线跟安全模块是两件事，这条得分开钉住。
+ *
+ * 第三个根是随应用发布的**内置库**（`<内置根>/<库名>/<语言>/…`，只读）：`knowledge.locate` 对它回 null，
+ * 所以不盖章、不回执、不进管线（FD-6..FD-8）。**它的「写不进去」是安全策略那一道**
+ * （protect-builtin-knowledge，按 `vars.builtinKnowledgeDir` 判），这里的 getVars 刻意不供给那个变量 ——
+ * 写确实落盘，才看得见「盖章与管线绕开它」这半件事本身，两件事照样分开钉。
  */
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
@@ -67,14 +72,20 @@ vi.mock('../../logger', () => ({
 vi.mock('../../utils/paths', () => ({
   getShuvixKnowledgeRootDir: () => state.kb,
   getUserKnowledgeRootDir: () => `${state.kb}-user`,
-  // 内置库根替身：不存在的兄弟目录 —— 这些用例里没有内置库
+  // 内置库根替身：kb 的兄弟目录（同在临时目录树下，afterAll 一并收）
   getBuiltinKnowledgeDir: () => `${state.kb}-builtin`
 }))
+// i18next 是单例：内置库的语言目录从它现读（真身在单测里没 init，`language` 是 undefined）——
+// 替身把「当前界面语言」写死成 en，磁盘上那一层就是 `<内置根>/<库名>/en/`
+vi.mock('i18next', () => ({ default: { language: 'en', t: (key: string) => `i18n(${key})` } }))
 vi.mock('../../services/knowledge', () => ({ notifyKnowledgeFileChanged: state.notify }))
 
 import { makeWriteTool } from '../write'
 import { makeEditTool } from '../edit'
 import { _resetAll } from '../../utils/toolUtils/fileTime'
+// 真的路径算术（fileToolDeps 走的也是这个子模块，不是被替身挡住的 services/knowledge 入口）：
+// FD-6 拿它证明那条路径**确实落在内置库里**，而不是「不属于任何库」—— 否则与 FD-2 就没区别了
+import { locateBundle } from '../../services/knowledge/knowledgePaths'
 import type { ToolContext } from '../../services/toolContext'
 
 const DRAFT = [
@@ -98,11 +109,16 @@ const ctx: ToolContext = {
 }
 const textOf = (res: { content: unknown[] }): string => (res.content[0] as { text: string }).text
 
+/** 内置库的 bundle 目录 —— 语言那一层（`<内置根>/shuvix/en/`），FD-6..FD-8 用 */
+let builtinDir: string
+
 beforeAll(() => {
   state.dir = mkdtempSync(join(tmpdir(), 'shuvix-filetool-kb-'))
   state.kb = join(state.dir, 'kb')
   mkdirSync(join(state.kb, 'projects', 'acme'), { recursive: true })
   mkdirSync(join(`${state.kb}-user`, 'notes'), { recursive: true })
+  builtinDir = join(`${state.kb}-builtin`, 'shuvix', 'en')
+  mkdirSync(builtinDir, { recursive: true })
 })
 afterAll(() => rmSync(state.dir, { recursive: true, force: true }))
 beforeEach(() => {
@@ -230,5 +246,60 @@ describe('桌面文件工具 — 知识库根目录下的写入', () => {
     expect(textOf(brokenRes)).not.toContain('[OKF] Stamped')
     expect(readFileSync(broken, 'utf-8')).toBe(brokenText)
     await vi.waitFor(() => expect(state.notify).toHaveBeenCalledTimes(4))
+  })
+
+  /**
+   * 内置库（应用包里的只读说明书，FD-6..FD-8）：`bundleRelOf` 对它回 null，所以文件工具这一侧
+   * 两件事一起绕开 —— 写钩子不盖章 / 不回执，onFileChange 不进变更管线。判据深到**语言那一层**：
+   * bundle 目录是 `<内置根>/<库名>/<语言>/`。
+   */
+  it('FD-6 内置库里的条目：locate 回 null —— 不盖 generated、不回 OKF 回执，write / edit 都是一个字节不改', async () => {
+    const p = join(builtinDir, 'x.md')
+    // 前提：这条路径落在内置 bundle 里（语言那一层就是 bundle 根），不是「不属于任何库」
+    expect(locateBundle(p)).toEqual({ bundle: 'builtin/shuvix', rel: 'x.md' })
+
+    const res = await makeWriteTool(ctx).execute('w8', { path: p, content: DRAFT })
+
+    // 写确实落盘了（这里没有 protect-builtin-knowledge 那一道：见文件头）—— 不是「没写成」所以没盖章
+    expect(readFileSync(p, 'utf-8')).toBe(DRAFT)
+    expect(textOf(res)).not.toContain('[OKF]')
+    expect(state.requests).toEqual([])
+
+    const edited = await makeEditTool(ctx).execute('e8', {
+      path: p,
+      oldText: 'body',
+      newText: 'body two'
+    })
+    expect(readFileSync(p, 'utf-8')).toBe(DRAFT.replace('body', 'body two'))
+    expect(textOf(edited)).not.toContain('[OKF]')
+  })
+
+  it('FD-7 同一次写入不进变更管线：notifyKnowledgeFileChanged 零调用（应用包里的目录没有 git 提交，也没有 knowledge.changed）', async () => {
+    const p = join(builtinDir, 'y.md')
+    await makeWriteTool(ctx).execute('w9', { path: p, content: DRAFT })
+    await makeEditTool(ctx).execute('e9', { path: p, oldText: 'body', newText: 'body two' })
+
+    // 管线模块是动态 import 的：等一拍再判「一次都没来」（与 FD-2 / FD-4 同口径）
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(state.notify).not.toHaveBeenCalled()
+  })
+
+  it('FD-8 对照：同一批里打到用户库的那一次照常盖章、照常进管线 —— 绕开的只有内置库那一份', async () => {
+    const builtin = join(builtinDir, 'z.md')
+    const user = join(`${state.kb}-user`, 'notes', 'z.md')
+
+    await makeWriteTool(ctx).execute('w10', { path: builtin, content: DRAFT })
+    const res = await makeWriteTool(ctx).execute('w11', { path: user, content: DRAFT })
+
+    expect(readFileSync(builtin, 'utf-8')).toBe(DRAFT)
+    expect(readFileSync(user, 'utf-8')).toContain('generated: { by: "shuvix-work/gpt-5", at: "')
+    expect(textOf(res)).toContain('[OKF] Stamped')
+
+    await vi.waitFor(() => expect(state.notify).toHaveBeenCalledTimes(1))
+    expect(state.notify).toHaveBeenCalledWith(user, { kind: 'write', actor: 'shuvix-work/gpt-5' })
+    // 再等一拍：内置库那一次自始至终没来，不是「晚到一步」
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(state.notify).toHaveBeenCalledTimes(1)
+    expect(state.requests).toEqual([])
   })
 })

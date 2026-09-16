@@ -7,19 +7,36 @@
  *
  * 用户库（`knowledge/<库名>`）与项目库一视同仁：拷进来的文件夹在第一次观察到写入之前原封不动；没有 .git 的
  * 先 init + 基线（收下原貌，不含本批新写的文件），自带 .git 的原样沿用、只提交宿主碰过的路径。
+ *
+ * 随应用发布的内置库（`builtin/<库名>`）是第三种，**只读**：管线两个入口都得把它挡下来（写钩子直接
+ * return，recordKnowledgeChange 记一条 warn 后丢弃），磁盘上因此永远不会长出 `.git`。它在磁盘上多一层
+ * 语言目录（`<库名>/<语言>/`），那一层不进 bundle id —— 只有界面语言那一版属于 bundle，切语言由
+ * `refreshBuiltinKnowledge()` 失效缓存与索引。
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 const state = vi.hoisted(() => ({ root: '' }))
 const logSpy = vi.hoisted(() => ({ warn: vi.fn() }))
+/** 界面语言：内置库解析到哪个语言目录只由它决定（见下面的 i18next 桩） */
+const i18n = vi.hoisted(() => ({ language: 'en' }))
 
 vi.mock('../../../utils/paths', () => ({
   getShuvixKnowledgeRootDir: () => state.root,
   getUserKnowledgeRootDir: () => `${state.root}-user`,
-  // 内置库根替身：不存在的兄弟目录 —— 这些用例里没有内置库
+  // 内置库根替身：缺省不存在（于是「没有内置库」是缺省）；要有内置库的用例自己 seedBuiltin 往里种
   getBuiltinKnowledgeDir: () => `${state.root}-builtin`
+}))
+// builtinLanguageDir 直接读 i18next 单例：不桩的话 `i18next.language` 是 undefined、恒走 'en' 回落，
+// 切语言那几条就假绿（怎么切都还在 en 那一版上）
+vi.mock('i18next', () => ({
+  default: {
+    get language() {
+      return i18n.language
+    },
+    t: (key: string) => key
+  }
 }))
 vi.mock('../../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: logSpy.warn, error: () => {} })
@@ -29,14 +46,18 @@ import { appEventBus } from '../../../utils/appEventBus'
 import {
   flushKnowledgeChanges,
   notifyKnowledgeFileChanged,
-  recordKnowledgeChange
+  recordKnowledgeChange,
+  refreshBuiltinKnowledge
 } from '../changes'
 import { ensureBundleRepo } from '../repo'
-import { invalidateKnowledgeScan, scanBundle } from '../scan'
+import { invalidateKnowledgeScan, knownKnowledgePaths, scanAllBundles, scanBundle } from '../scan'
+import { invalidateKnowledgeSearch, searchBundle } from '../search'
 import {
   BUNDLE,
   OTHER_BUNDLE,
   PROJECTS,
+  builtinLangAt,
+  builtinRootOf,
   bundleAt,
   conceptText,
   fileAt,
@@ -49,13 +70,19 @@ import {
   gitOutput,
   gitStatus,
   makeTempRoot,
+  seedBuiltin,
+  seedBuiltinConcept,
   seedConcept,
   seedFile,
+  treeOf,
   userRootOf
 } from './fixture'
 
 const ACTOR = 'shuvix-work/gpt-5'
 const HOST_AUTHOR = 'ShuviX Knowledge <knowledge@shuvix.local>'
+/** 内置库：库名 `shuvix`，bundle id 里没有语言那一层 */
+const BUILTIN_BASE = 'shuvix'
+const BUILTIN = `builtin/${BUILTIN_BASE}`
 
 let root: string
 let dir: string
@@ -78,6 +105,7 @@ beforeEach(() => {
   root = makeTempRoot()
   state.root = root
   dir = bundleAt(root, BUNDLE)
+  i18n.language = 'en'
   invalidateKnowledgeScan()
   logSpy.warn.mockClear()
   events = []
@@ -91,6 +119,7 @@ afterEach(async () => {
   await flushKnowledgeChanges()
   rmSync(root, { recursive: true, force: true })
   rmSync(userRootOf(root), { recursive: true, force: true })
+  rmSync(builtinRootOf(root), { recursive: true, force: true })
 })
 
 describe('recordKnowledgeChange', () => {
@@ -400,5 +429,201 @@ describe('项目库的簿记', () => {
     expect(gitHeadFiles(p1)).toEqual(['t.md'])
     expect(gitStatus(p1)).toBe('')
     expect(events).toEqual([{ type: 'knowledge.changed' }])
+  })
+})
+
+/**
+ * 内置库随应用包发布，**只读**：管线两个入口各挡一次（写钩子 locateBundle 之后直接 return，
+ * recordKnowledgeChange 记 warn 后丢弃），所以内置根里永远不会长出 `.git`，也不会有 knowledge.changed。
+ * 「不 init」比「不提交」更要紧：应用包里多一个仓库，下次升级覆盖时就是一地冲突。
+ */
+describe('内置库（只读）', () => {
+  /** 内置根的目录快照 —— 「一个字节都没多出来」（尤其是没有 .git）一律比它 */
+  const builtinTree = (): string[] => treeOf(builtinRootOf(root))
+
+  /** 固定 mtime（秒）：改写后写回同一个值，(mtime, size) 缓存必命中 —— 于是「读到陈旧值」= 缓存没被清 */
+  const FROZEN_MTIME = 1_600_000_000
+  const freeze = (abs: string): void => utimesSync(abs, FROZEN_MTIME, FROZEN_MTIME)
+
+  const pathsIn = async (bundle: string, q: string): Promise<string[]> =>
+    (await searchBundle(bundle, q, { limit: 10 })).map((h) => h.path)
+
+  it('CH-9 写钩子看见内置库里的 md：不 git init、不提交、不广播', async () => {
+    const guide = seedBuiltinConcept(root, `${BUILTIN_BASE}/en/guide.md`, [
+      'type: Guide',
+      'title: File formats',
+      'status: stable'
+    ])
+    const before = builtinTree()
+    expect(before).toEqual([
+      `${BUILTIN_BASE}/`,
+      `${BUILTIN_BASE}/en/`,
+      `${BUILTIN_BASE}/en/guide.md`
+    ])
+
+    // 这条路径确实落在生效的那一版里（`<库名>/en/`），挡下它的是「只读」而不是「不在库里」
+    for (const kind of ['write', 'edit'] as const) {
+      notifyKnowledgeFileChanged(guide, { kind, actor: ACTOR })
+    }
+    await flushKnowledgeChanges()
+
+    expect(events).toEqual([])
+    expect(builtinTree()).toEqual(before)
+    expect(existsSync(join(builtinLangAt(root, BUILTIN_BASE, 'en'), '.git'))).toBe(false)
+    // 写钩子这一侧是「本来就不该到这儿」：静默 return，连 warn 都不记（记 warn 的是下一条）
+    expect(logSpy.warn).not.toHaveBeenCalled()
+  })
+
+  it('CH-10 recordKnowledgeChange 收到内置库：记一条 warn 后丢弃；同一批里的用户库照常提交与广播', async () => {
+    const userRoot = userRootOf(root)
+    const notes = join(userRoot, 'notes')
+    seedBuiltinConcept(root, `${BUILTIN_BASE}/en/guide.md`, ['type: Guide', 'title: G'])
+    seedConcept(userRoot, 'notes/a.md', ['type: Memory', 'title: A', 'description: da'])
+    const before = builtinTree()
+
+    recordKnowledgeChange({ bundle: BUILTIN, path: 'guide.md', op: 'Update', actor: ACTOR })
+    recordKnowledgeChange({ bundle: 'knowledge/notes', path: 'a.md', op: 'Creation', actor: ACTOR })
+    await flushKnowledgeChanges()
+
+    expect(logSpy.warn).toHaveBeenCalledWith(expect.stringContaining(`${BUILTIN}/guide.md`))
+    // 丢弃 = 内置根原封不动：没有仓库、没有提交
+    expect(builtinTree()).toEqual(before)
+    // 对照组同批：不是整批被吞，用户库那条照常落地，事件仍只有一个
+    expect(gitHeadMessage(notes)).toBe(
+      'kb(creation): /a.md\n\nKnowledge-Op: creation\nKnowledge-Actor: shuvix-work/gpt-5'
+    )
+    expect(gitHeadFiles(notes)).toEqual(['a.md'])
+    expect(events).toEqual([{ type: 'knowledge.changed' }])
+  })
+
+  it('CH-11 另一语言那一版的写入：不属于任何 bundle → 同样无事', async () => {
+    // 界面语言是 zh（`zh-CN` 取基础段）：生效的是 `<库名>/zh/`，`<库名>/en/` 谁都不属于
+    i18n.language = 'zh-CN'
+    const en = seedBuiltin(root, `${BUILTIN_BASE}/en/guide.md`, '# Guide\n\nenglish\n')
+    seedBuiltin(root, `${BUILTIN_BASE}/zh/guide.md`, '# 指南\n\n中文\n')
+    const before = builtinTree()
+
+    notifyKnowledgeFileChanged(en, { kind: 'write', actor: ACTOR })
+    await flushKnowledgeChanges()
+
+    expect(events).toEqual([])
+    expect(builtinTree()).toEqual(before)
+    expect(existsSync(join(builtinLangAt(root, BUILTIN_BASE, 'en'), '.git'))).toBe(false)
+    // 连「丢弃一条内置库变更」都谈不上：locateBundle 就返回 null 了
+    expect(logSpy.warn).not.toHaveBeenCalled()
+
+    // 「落不进任何 bundle」不止是没动静：生效的 bundle 里根本没有 en 那一版
+    const scan = await scanBundle(BUILTIN)
+    expect(scan.files.map((f) => f.path)).toEqual(['guide.md'])
+    expect(scan.files[0].text).toContain('中文')
+    expect(scan.files[0].text).not.toContain('english')
+  })
+
+  it('CH-12 refreshBuiltinKnowledge：失效内置 bundle 的扫描缓存与检索索引、恰广播一次，不碰另两种库', async () => {
+    // 检索索引按 bundle id 缓存、跨用例活着（beforeEach 只清扫描缓存）：这条自己先清干净
+    invalidateKnowledgeSearch()
+    const fm = ['type: Memory', 'title: T', 'status: stable']
+    // 三种库各一条，正文是同长度的独有词：改写后 size 不变，再写回同一个 mtime ——
+    // 缓存与索引不失效就只能读到旧词，于是「读到新词」= 真清了，「仍读到旧词」= 真没清
+    const seeds = [
+      {
+        bundle: BUILTIN,
+        abs: seedBuiltin(root, `${BUILTIN_BASE}/en/guide.md`, conceptText(fm, 'banana')),
+        rel: 'guide.md',
+        words: ['banana', 'walrus']
+      },
+      {
+        bundle: BUNDLE,
+        abs: seedFile(root, `${BUNDLE}/p.md`, conceptText(fm, 'cherry')),
+        rel: 'p.md',
+        words: ['cherry', 'ocelot']
+      },
+      {
+        bundle: 'knowledge/notes',
+        abs: seedFile(userRootOf(root), 'notes/u.md', conceptText(fm, 'iguana')),
+        rel: 'u.md',
+        words: ['iguana', 'muskox']
+      }
+    ]
+    for (const { abs } of seeds) freeze(abs)
+
+    // 建好三边的扫描缓存与检索索引
+    for (const { bundle, rel, words } of seeds) {
+      expect(await pathsIn(bundle, words[0]), bundle).toEqual([rel])
+    }
+    const keys = (): string[] => [...knownKnowledgePaths()]
+    expect(keys()).toEqual(
+      expect.arrayContaining(seeds.map(({ bundle, rel }) => `${bundle}/${rel}`))
+    )
+
+    for (const { abs, words } of seeds) {
+      writeFileSync(abs, conceptText(fm, words[1]))
+      freeze(abs)
+    }
+    const seen = events.length
+
+    refreshBuiltinKnowledge()
+
+    expect(events.length - seen).toBe(1)
+    expect(events.at(-1)).toEqual({ type: 'knowledge.changed' })
+
+    // 内置库：扫描缓存与索引都清了 → 同一条 id 读到的是新正文
+    expect(keys()).not.toContain(`${BUILTIN}/guide.md`)
+    expect(await pathsIn(BUILTIN, 'walrus')).toEqual(['guide.md'])
+    expect(await pathsIn(BUILTIN, 'banana')).toEqual([])
+
+    // 项目库与用户库没被一起清：读到的还是陈旧缓存里的那一版
+    for (const { bundle, rel, words } of seeds.slice(1)) {
+      expect(await pathsIn(bundle, words[0]), `${bundle} ${words[0]}`).toEqual([rel])
+      expect(await pathsIn(bundle, words[1]), `${bundle} ${words[1]}`).toEqual([])
+      expect(keys(), bundle).toContain(`${bundle}/${rel}`)
+    }
+    expect((await scanBundle(BUNDLE)).files[0].text).toContain('cherry')
+  })
+
+  // 这条钉的是「换了哪一版」这件事本身：两版的 (mtime, size) 本来就不同、扫描缓存自然失效，
+  // 「refresh 确实清了缓存与索引」由上一条（冻住 mtime、同长度改写）钉死
+  it('CH-13 切语言 + refreshBuiltinKnowledge：同一条 id 读到的是新语言的正文', async () => {
+    seedBuiltin(root, `${BUILTIN_BASE}/en/guide.md`, '# Guide\n\nenglish body\n')
+    seedBuiltin(root, `${BUILTIN_BASE}/zh/guide.md`, '# 指南\n\n中文正文\n')
+
+    const en = await scanBundle(BUILTIN)
+    expect(en.files.map((f) => f.path)).toEqual(['guide.md'])
+    expect(en.files[0].text).toContain('english body')
+    expect(en.notes.map((n) => n.title)).toEqual(['Guide'])
+
+    i18n.language = 'zh-CN'
+    refreshBuiltinKnowledge()
+
+    const zh = await scanBundle(BUILTIN)
+    // 语言那一层不进 id：路径与 bundle 都没变，变的只是正文
+    expect(zh.bundle).toBe(BUILTIN)
+    expect(zh.files.map((f) => f.path)).toEqual(['guide.md'])
+    expect(zh.files[0].text).toContain('中文正文')
+    expect(zh.files[0].text).not.toContain('english body')
+    expect(zh.notes.map((n) => n.title)).toEqual(['指南'])
+  })
+
+  it('CH-14 三语齐全也不三倍重复：内置库的条目数就是单语目录里的 md 数', async () => {
+    for (const lang of ['en', 'zh', 'ja']) {
+      seedBuiltinConcept(root, `${BUILTIN_BASE}/${lang}/a.md`, [
+        'type: Guide',
+        `title: A-${lang}`,
+        'status: stable'
+      ])
+      seedBuiltinConcept(root, `${BUILTIN_BASE}/${lang}/sub/b.md`, [
+        'type: Guide',
+        `title: B-${lang}`,
+        'status: stable'
+      ])
+    }
+
+    const scans = await scanAllBundles()
+    // 一个库一个 bundle，不是一个语言一个
+    expect(scans.map((s) => s.bundle).filter((b) => b.startsWith('builtin/'))).toEqual([BUILTIN])
+    const [builtin] = scans.filter((s) => s.bundle === BUILTIN)
+    expect(builtin.files.map((f) => f.path)).toEqual(['a.md', 'sub/b.md'])
+    expect(builtin.notes.map((n) => n.title)).toEqual(['A-en', 'B-en'])
+    expect(builtin.concepts).toHaveLength(2)
   })
 })

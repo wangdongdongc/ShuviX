@@ -168,7 +168,7 @@ YAML 语法错 / 不是映射；裸的 `rules` / `lets` / `scope` 键；`shuvix-
 | `block-catastrophic-commands`   | 拒绝一小撮毁灭整机的命令，按解析结构判（`rm -rf /`、`mkfs`、`dd` 到设备……）                                    |
 | `protect-bot-files`             | `~/.shuvix/bots` 下任何写入 **force-ask**                                                                     |
 | `protect-builtin-knowledge`     | 拒绝写入 ShuviX 的内置知识库                                                                                  |
-| `ask-on-read`                   | 在工作区、工具结果与 skill 目录之外的读取询问                                                                 |
+| `ask-on-read`                   | 在工作区、工具结果、skill 目录与本说明书之外的读取询问                                                        |
 | `ask-on-write`                  | 每次文件写入询问，带 diff 预览                                                                                |
 | `review-memory-writes`          | 写旧记忆存储 force-ask                                                                                        |
 | `ask-on-command`                | 每条 `bash` / `ssh` 命令询问                                                                                  |

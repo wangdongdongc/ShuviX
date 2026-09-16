@@ -215,6 +215,10 @@ export {
   type PolicyRuleSpec,
   type ParsedPolicyFile,
   type UserPolicyFile,
+  // 策略 md 的三个结构键（与 hook md 的 HOOK_ON_KEY 同理：契约常量，文档与守护用例按它断）
+  POLICY_RULES_KEY,
+  POLICY_LETS_KEY,
+  POLICY_SCOPE_KEY,
   type SecurityHostProvider,
   type EnforceOpts,
   type EnforceOutcome,

@@ -107,10 +107,15 @@ export function listBundleDirs(bundle: string, limit = DIR_LIMIT): string[] {
  * 这里若只看库目录在不在，侧栏就会多出一行永远空的只读库 —— 同一件东西两个答案。
  */
 export function listBuiltinBundles(): string[] {
-  return subdirectories(getBuiltinKnowledgeRoot())
-    .filter(isValidLibraryName)
-    .map(builtinBundleId)
-    .filter((bundle) => existsSync(bundleDir(bundle)))
+  return listAllBuiltinBundleIds().filter((bundle) => existsSync(bundleDir(bundle)))
+}
+
+/**
+ * 内置根下的全部库 id，**不按语言过滤**。只有一处用它：切语言后失效缓存 —— 那一刻要清的恰恰包括
+ * 「刚刚变得不可用的那一个」（只发了旧语言的库），按可用清单算会把它的索引留在内存里。
+ */
+export function listAllBuiltinBundleIds(): string[] {
+  return subdirectories(getBuiltinKnowledgeRoot()).filter(isValidLibraryName).map(builtinBundleId)
 }
 
 /** 磁盘上现存的全部 bundle id：项目库在前，用户库（`knowledge/<库名>`）居中，内置库（`builtin/<库名>`）在后 */

@@ -107,9 +107,11 @@ function ensureKnowledgeBuiltinProject(bundle: string): Project {
 export function syncKnowledgeBuiltinProject(): void {
   if (!projectDao.findById(KNOWLEDGE_BUILTIN_PROJECT_ID)) return
   const bundles = listBuiltinBundles()
-  if (bundles.length !== 1) {
+  // 一个都没有：没什么可指的（资源没发到位 / 这个库只发了别的语言），承载项目留在原处，不必说什么
+  if (bundles.length === 0) return
+  if (bundles.length > 1) {
     log.warn(
-      `builtin knowledge carrier left as is: expected exactly one builtin base, found ${bundles.length}`
+      `builtin knowledge carrier left as is: one carrier serves one base, found ${bundles.length}`
     )
     return
   }

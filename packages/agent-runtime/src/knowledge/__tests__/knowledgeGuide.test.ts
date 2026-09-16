@@ -7,12 +7,14 @@
  *   - 一个库都没有 → **返回 null**（整段不注入，零成本），不是空串也不是只剩表头的一段；
  *   - 列表逐库一行，顺序原样（选择的顺序就是宿主给的顺序），不排序不去重；
  *   - 正文**不含条目、不含路径、不含计数** —— 条目怎么进系统提示词是尚未决定的设计，而印出
- *     一条根路径会诱导 agent 直接 `write` 过去，绕开只有 `create` 才担保的元数据形状。
+ *     一条根路径会诱导 agent 直接 `write` 过去，绕开只有 `create` 才担保的元数据形状；
+ *   - label 原样印出，渲染器**不认识任何一种库** —— 「只读的内置库」是宿主那一侧的概念，
+ *     到这里只剩一个名字加一句 label，所以这里没有、也不该有按名字特判的分支。
  */
 import { describe, it, expect } from 'vitest'
 import { renderKnowledgeGuide } from '../knowledgeGuide'
 
-describe('KG-1..3 知识库围栏正文', () => {
+describe('KG-1..4 知识库围栏正文', () => {
   it('KG-1 一个库都没有 → null（不是空串、不是只有表头的一段）', () => {
     // 空串会被 createAgent 的 trim 判空而同样不注入，但 null 是契约里那一个 —— 「整段不存在」
     expect(renderKnowledgeGuide([])).toBeNull()
@@ -52,5 +54,29 @@ describe('KG-1..3 知识库围栏正文', () => {
     // 不再以项目库开篇 —— 它只是清单里可能有的一个名字
     expect(text).not.toContain('Each project has')
     expect(text.startsWith('Knowledge bases this session works with')).toBe(true)
+  })
+
+  it('KG-4 label 原样印在 `- <名> — <label>` 里，顺序原样；渲染器不认识「内置」这回事 —— 宿主给什么印什么', () => {
+    // 一句完全普通的 label：它恰好在说「这个库是只读的说明书」，但对渲染器而言就是一串字
+    const LABEL = 'read-only reference: how ShuviX files are written and where they live'
+    const lines = (bases: Parameters<typeof renderKnowledgeGuide>[0]): string[] =>
+      renderKnowledgeGuide(bases)!
+        .split('\n')
+        .filter((line) => line.startsWith('- '))
+
+    // 带 label 的排在最前、没有 label 的夹在中间：字母序、「有 label 的靠后」之类的重排都会露馅
+    expect(
+      lines([
+        { name: 'handbook', label: LABEL },
+        { name: '读书笔记' },
+        { name: 'project', label: 'Acme Corp' }
+      ])
+    ).toEqual([`- handbook — ${LABEL}`, '- 读书笔记', '- project — Acme Corp'])
+
+    // 同一句 label 换个名字，行只差名字那一段 —— 没有按名字走的分支
+    expect(lines([{ name: 'shuvix', label: LABEL }])).toEqual([`- shuvix — ${LABEL}`])
+    // 反过来也一样：名字叫 shuvix 而宿主没给 label，就只有一个光名字，不自己补一句「内置 / 只读」
+    expect(lines([{ name: 'shuvix' }])).toEqual(['- shuvix'])
+    expect(renderKnowledgeGuide([{ name: 'shuvix' }])).not.toContain('read-only')
   })
 })

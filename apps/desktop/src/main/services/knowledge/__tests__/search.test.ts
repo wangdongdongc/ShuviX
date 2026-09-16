@@ -6,38 +6,64 @@
  * 读宽（设计附录 L）：库里每条笔记都要搜得到 —— 没有 frontmatter / 没有 type / 别家标记 / YAML 写坏的
  * 普通笔记、用户手写的 index.md / log.md，以及 okf-minisearch 拒收原文的合规条目；ShuviX 早先生成的
  * index / log 与 deprecated 条目不进结果。
+ *
+ * 内置库（`builtin/<库名>`）与另两种库共用这条链路，只是磁盘上多一层语言目录：检索面是**当前界面语言**
+ * 那一版，别的语言不属于这个 bundle。索引按 bundle id 缓存，切语言不改 id —— 所以换的是
+ * `refreshBuiltinKnowledge()`，不是让索引自己发现。
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { rmSync } from 'node:fs'
 import { buildRootIndexMd } from '@equationalapplications/core-okf'
 
 const state = vi.hoisted(() => ({ root: '' }))
+/** 界面语言：内置库解析到哪个语言目录只由它决定（见下面的 i18next 桩） */
+const i18n = vi.hoisted(() => ({ language: 'en' }))
 
 vi.mock('../../../utils/paths', () => ({
   getShuvixKnowledgeRootDir: () => state.root,
   getUserKnowledgeRootDir: () => `${state.root}-user`,
-  // 内置库根替身：不存在的兄弟目录 —— 这些用例里没有内置库
+  // 内置库根替身：缺省不存在（于是「没有内置库」是缺省）；要有内置库的用例自己 seedBuiltin 往里种
   getBuiltinKnowledgeDir: () => `${state.root}-builtin`
+}))
+// builtinLanguageDir 直接读 i18next 单例：不桩的话 `i18next.language` 是 undefined、恒走 'en' 回落，
+// 切语言那条就假绿（怎么切都还在 en 那一版上）
+vi.mock('i18next', () => ({
+  default: {
+    get language() {
+      return i18n.language
+    },
+    t: (key: string) => key
+  }
 }))
 vi.mock('../../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {} })
 }))
 
+import { refreshBuiltinKnowledge } from '../changes'
 import { invalidateKnowledgeScan } from '../scan'
 import { invalidateKnowledgeSearch, searchBundle } from '../search'
-import { BUNDLE, makeTempRoot, seedConcept, seedFile } from './fixture'
+import {
+  BUNDLE,
+  builtinRootOf,
+  makeTempRoot,
+  seedBuiltinConcept,
+  seedConcept,
+  seedFile
+} from './fixture'
 
 let root: string
 
 beforeEach(() => {
   root = makeTempRoot()
   state.root = root
+  i18n.language = 'en'
   invalidateKnowledgeScan()
   invalidateKnowledgeSearch()
 })
 
 afterEach(() => {
   rmSync(root, { recursive: true, force: true })
+  rmSync(builtinRootOf(root), { recursive: true, force: true })
 })
 
 const seed = (): void => {
@@ -200,5 +226,58 @@ describe('searchBundle — 读宽：每条笔记都进索引', () => {
 
     expect(await pathsOf('memory')).toEqual(['a.md'])
     expect(await pathsOf('note')).toEqual([])
+  })
+})
+
+/**
+ * 内置库：检索面恰是当前界面语言那一版。同一条 id（`builtin/<库名>/<路径>`）在不同语言下指向不同的文件，
+ * 而索引是按 bundle id 缓存的 —— 语言变了 id 没变，只能由 `refreshBuiltinKnowledge()` 来换。
+ */
+describe('searchBundle — 内置库按界面语言取那一版', () => {
+  const BUILTIN_BASE = 'shuvix'
+  const BUILTIN = `builtin/${BUILTIN_BASE}`
+
+  /** 同一条 id 的两版：各带一个另一版没有的独有词 */
+  const seedBothLanguages = (): void => {
+    seedBuiltinConcept(
+      root,
+      `${BUILTIN_BASE}/en/guide.md`,
+      ['type: Guide', 'title: File formats', 'description: how ShuviX writes files'],
+      'The platypus section explains frontmatter.'
+    )
+    seedBuiltinConcept(
+      root,
+      `${BUILTIN_BASE}/zh/guide.md`,
+      ['type: Guide', 'title: 文件格式', 'description: ShuviX 怎么写文件'],
+      '这一节讲 axolotl 与 frontmatter。'
+    )
+  }
+
+  const builtinHits = async (q: string): Promise<[string, string][]> =>
+    (await searchBundle(BUILTIN, q, { limit: 10 })).map((h) => [h.path, h.title])
+
+  it('SR-8 内置库能检索，只命中当前语言那一版：另一版独有的词搜不到', async () => {
+    seedBothLanguages()
+
+    expect(await builtinHits('platypus')).toEqual([['guide.md', 'File formats']])
+    // zh 那一版不属于这个 bundle：它独有的词一条都搜不出来
+    expect(await builtinHits('axolotl')).toEqual([])
+    // 两版共有的词也只命中一条（不是同一条 id 的两份）
+    expect(await builtinHits('frontmatter')).toEqual([['guide.md', 'File formats']])
+  })
+
+  it('SR-9 切语言 + refreshBuiltinKnowledge：同一个查询换成新语言那一版的命中', async () => {
+    seedBothLanguages()
+    expect(await builtinHits('platypus')).toEqual([['guide.md', 'File formats']])
+
+    // 索引按 bundle id 缓存，而语言不进 id：只切语言不 refresh，命中的还是建索引时那一版
+    i18n.language = 'zh-CN'
+    expect(await builtinHits('axolotl')).toEqual([])
+    expect(await builtinHits('platypus')).toEqual([['guide.md', 'File formats']])
+
+    refreshBuiltinKnowledge()
+
+    expect(await builtinHits('axolotl')).toEqual([['guide.md', '文件格式']])
+    expect(await builtinHits('platypus')).toEqual([])
   })
 })

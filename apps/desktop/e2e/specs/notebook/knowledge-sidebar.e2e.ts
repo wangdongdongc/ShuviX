@@ -17,6 +17,11 @@
  *   KE-7 新建知识库：组头菜单 → 树里就地输名字，Esc 与失焦都取消；Enter 建完宿主自己重扫，不用刷新。
  *   KE-8 失败原因回到那一行里：名字还在框里、草稿还开着，改一下再回车即可。
  *   KE-9 新建条目：元数据由宿主担保（自述行 / type / status），正文留空，建完立刻打开它的笔记本。
+ *  KE-10 内置库那一行：锁 + 自己的身份图标 + `data-knowledge-readonly`；普通目录仍随展开切开/合文件夹。
+ *  KE-11 那一行显示本地化的人读名，不是目录名 `shuvix`。
+ *  KE-12 只读那一支没有目录行菜单；用户库那一行照旧「新建条目 / 新建文件夹」。
+ *  KE-13 条目行的读动作照旧；「复制路径」走清单下发的 `bundleDirs`（内置根 + 语言层），不是两个根拼的。
+ *  KE-14 组头「新建知识库」输入保留名 `shuvix` → 失败原因回到草稿行里，草稿仍开着。
  *
  * 会话归属先走 IPC（`session.list` / `project.list`）；树形与卡片是纯渲染产物，经 pages.ts 的 knowledgePane 读。
  * ⚠️ 组头 `open-folder` 与行 `reveal` 只读不选：隔离实例没有替换 shell，选中会在真实桌面上弹出文件管理器。
@@ -27,6 +32,9 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { KNOWLEDGE_PROJECT_ID, KNOWLEDGE_USER_PROJECT_ID } from '@shuvix/chat-protocol/knowledge'
+import en from '@shuvix/chat-protocol/i18n/locales/en.json'
+import ja from '@shuvix/chat-protocol/i18n/locales/ja.json'
+import zh from '@shuvix/chat-protocol/i18n/locales/zh.json'
 import { launchApp, type E2EApp } from '../../harness/launch'
 import { sleep, until } from '../../harness/cdp'
 import { createProject, registryNoteSessions } from '../../harness/seed'
@@ -35,10 +43,21 @@ import {
   knowledgePane,
   sidebarPane,
   type FmCardPane,
+  type KnowledgeDirShot,
   type KnowledgeDraftKind,
   type KnowledgePane,
   type SidebarPane
 } from '../../harness/pages'
+
+/**
+ * 随应用发布的内置库 —— 它**不在 fake HOME 里**：隔离实例只换了 HOME，内置根仍是本仓的
+ * `apps/desktop/resources/knowledge`。所以 KE-10~KE-13 一律**只读**它，绝不往里写、也绝不
+ * 断言「写进去被拒」—— 那种用例一旦闸门回归就会改掉仓库自己的资源。
+ */
+const BUILTIN_BASE = 'builtin/shuvix'
+
+/** 内置库的人读名（三语全收）—— 隔离实例跟系统语言走，断的是「是哪一句」而不是哪门语言 */
+const BUILTIN_NAMES = [en, zh, ja].map((l) => l.knowledge.builtinBaseName)
 
 let app: E2EApp
 let kb: KnowledgePane
@@ -485,5 +504,118 @@ describe('知识库分组 × 用户知识库', () => {
 
     // (4) 草稿行收场
     expect(await kb.draftKind()).toBeNull()
+  })
+
+  it('KE-10 内置库那一行：锁 + 自己的图标 + data-knowledge-readonly；项目容器是另一个图标；普通目录仍随展开切开/合文件夹', async () => {
+    await kb.expand()
+
+    const byPath = async (path: string): Promise<KnowledgeDirShot> => {
+      const hit = (await kb.dirs()).find((d) => d.path === path)
+      if (!hit) throw new Error(`no knowledge dir row "${path}"`)
+      return hit
+    }
+
+    // 普通目录的图标随展开状态变，而前面的用例把 notes 留在展开态 —— 先收回去，
+    // 「合上的样子」才是一个确定的基准
+    await kb.setDirOpen('knowledge/notes', false)
+
+    const builtin = await byPath(BUILTIN_BASE)
+    const projects = await byPath('projects')
+    const plain = await byPath('knowledge/notes')
+
+    // 只读标记只挂在内置库这一支上；锁只挂库那一行（里面的层级不重复挂，这里内置库是顶层行）
+    expect(builtin.readonly).toBe(true)
+    expect(builtin.lock).toBe(true)
+    expect([projects.readonly, plain.readonly]).toEqual([false, false])
+    expect([projects.lock, plain.lock]).toEqual([false, false])
+
+    // 三种**身份**各一个图标：内置库 / 项目容器 / 普通目录两两不同（比的是「不一样」，不是具体名字）
+    expect(builtin.icon).not.toBe(projects.icon)
+    expect(builtin.icon).not.toBe(plain.icon)
+    expect(projects.icon).not.toBe(plain.icon)
+    expect(builtin.icon).not.toBe('')
+
+    // 身份行的图标不随展开变；普通目录照旧一只开合的文件夹
+    await kb.setDirOpen(BUILTIN_BASE, true)
+    expect((await byPath(BUILTIN_BASE)).icon).toBe(builtin.icon)
+    expect((await byPath('projects')).icon).toBe(projects.icon)
+    await kb.setDirOpen('knowledge/notes', true)
+    const openPlain = (await byPath('knowledge/notes')).icon
+    expect(openPlain).not.toBe(plain.icon)
+    await kb.setDirOpen('knowledge/notes', false)
+    expect((await byPath('knowledge/notes')).icon).toBe(plain.icon)
+  })
+
+  it('KE-11 内置库那一行显示本地化的人读名，不是目录名 `shuvix`', async () => {
+    await kb.expand()
+    const row = (await kb.dirs()).find((d) => d.path === BUILTIN_BASE)
+    // 隔离实例跟系统语言走：断的是「是三语里的哪一句」，不钉具体哪门语言
+    expect(BUILTIN_NAMES).toContain(row?.label)
+    expect(row?.label).not.toBe('shuvix')
+  })
+
+  it('KE-12 只读那一支没有目录行菜单（库本身与它里面的每一层都没有 ⋮）；用户库那一行照旧「新建条目 / 新建文件夹」', async () => {
+    await kb.expand()
+    await kb.setDirOpen(BUILTIN_BASE, true)
+
+    // 泛化成「凡是只读的目录行都没有 ⋮」—— 今天内置库里只有文件没有子目录，
+    // 日后长出子目录时这条不用改就仍然成立
+    const readonlyDirs = (await kb.dirs()).filter((d) => d.readonly)
+    expect(readonlyDirs.map((d) => d.path)).toContain(BUILTIN_BASE)
+    for (const dir of readonlyDirs) {
+      expect(await kb.dirMenuShots(dir.path), dir.path).toBeNull()
+    }
+    // 对照组：用户库那一行有
+    expect(await dirMenuIds('knowledge/notes')).toEqual(['new-entry', 'new-folder'])
+  })
+
+  it('KE-13 内置库的条目行菜单仍有「在文件夹中显示 / 复制路径」；复制的绝对路径走清单的 bundleDirs（内置根 + 语言层），不是两个根拼的', async () => {
+    await kb.expand()
+    await kb.setDirOpen(BUILTIN_BASE, true)
+
+    const row = await until(
+      async () => (await kb.rows()).find((r) => r.path.startsWith(`${BUILTIN_BASE}/`)) ?? null,
+      'a builtin knowledge entry row'
+    )
+    const ids = ((await kb.rowMenuShots(row.path)) ?? []).filter((it) => it.id).map((it) => it.id)
+    // 只读只挡「写」：读这一侧的两个动作照旧（reveal 只读不选，见文件头）
+    expect(ids).toContain('reveal')
+    expect(ids).toContain('copy-path')
+
+    // 宿主随清单下发的绝对目录 —— 它在应用包里、路径里还夹着语言那一层，侧栏靠两个根拼不出来
+    const dir = await app.main.eval<string>(
+      `window.api.knowledge.list().then((r) => r.bundleDirs?.[${JSON.stringify(BUILTIN_BASE)}] ?? '')`
+    )
+    expect(dir).not.toBe('')
+
+    await captureClipboard()
+    await kb.pickRowMenu(row.path, 'copy-path')
+    const copied = await takeCopied()
+    expect(copied).toBe(join(dir, row.path.slice(BUILTIN_BASE.length + 1)))
+    // 两个用户根都拼不出它：内置库住在应用包里，不在 fake HOME 之下
+    expect(copied.startsWith(join(app.home, '.shuvix'))).toBe(false)
+  })
+
+  it('KE-14 组头「新建知识库」输入保留名 `shuvix` → 草稿行里显示保留名的失败原因、草稿仍开着', async () => {
+    await kb.expand()
+    await kb.newBase()
+    await waitDraft('base')
+    await kb.typeDraft('shuvix')
+    await kb.submitDraft()
+
+    // 与 KE-8 的 `project` 同一条文案（三语都是 `{{name}}` 插值）：断得出是哪个名字被保留了
+    const err = await until(
+      async () => (await kb.draftError()) || null,
+      'reserved-name error for "shuvix" inside the draft row'
+    )
+    expect(err).toContain('shuvix')
+    expect(await kb.draftKind()).toBe('base')
+    expect(await kb.draftValue()).toBe('shuvix')
+    // 没有凭空建出一个用户库
+    expect((await kb.topDirs()).map((d) => d.path)).not.toContain('knowledge/shuvix')
+
+    // 收场：草稿行不留给后来的用例（本文件里它是最后一条，仍按惯例收干净）
+    await kb.cancelDraft()
+    await until(async () => (await kb.draftKind()) === null, 'draft row closed by Escape')
   })
 })

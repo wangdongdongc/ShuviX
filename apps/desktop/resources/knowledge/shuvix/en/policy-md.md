@@ -180,7 +180,7 @@ English file**, translations only change the text people read):
 | `block-catastrophic-commands`   | deny a short list of machine-destroying commands, judged on parsed structure (`rm -rf /`, `mkfs`, `dd` to a device…)  |
 | `protect-bot-files`             | **force-ask** on any write under `~/.shuvix/bots`                                                                      |
 | `protect-builtin-knowledge`     | deny writes into ShuviX's built-in knowledge base                                                                      |
-| `ask-on-read`                   | ask on reads outside the workspace, tool results and skill directories                                                 |
+| `ask-on-read`                   | ask on reads outside the workspace, tool results, skill directories and this reference base                            |
 | `ask-on-write`                  | ask on every file write, with a diff preview                                                                           |
 | `review-memory-writes`          | force-ask on writes to the legacy memory store                                                                         |
 | `ask-on-command`                | ask on every `bash` / `ssh` command                                                                                    |

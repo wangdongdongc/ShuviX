@@ -243,6 +243,27 @@ describe('buildBuiltinPolicies', () => {
     expect(rule.match).not.toContain('sql')
   })
 
+  it('BP-3e protect-builtin-knowledge：deny × write × path × 内置库目录，desktop 限定（恰一条规则）', () => {
+    const policy = byName('protect-builtin-knowledge')
+    expect(policy.rules).toHaveLength(1)
+    expect(policy.scope).toEqual({
+      'subject.kind': ['agent'],
+      'object.type': ['path'],
+      'env.host': ['desktop']
+    })
+    // 整条规则逐字段钉死。deny 而不是 protect-bot-files 那样的 force-ask：内置库在应用包里、
+    // 随更新整体替换，写进去的东西下个版本就没了 —— 没有「用户点一下就该放行」的分支可给。
+    // 目录本身绝不拼进 CEL 源码，恒经宿主的 vars.builtinKnowledgeDir 以数据绑定进来
+    expect(withoutPrompt(policy.rules[0])).toEqual({
+      effect: 'deny',
+      conditions: { action: ['write'] },
+      match: 'inDir(object.path, [vars.builtinKnowledgeDir])'
+    })
+    expect(policy.rules[0].prompt).toBeTruthy()
+    // 无 lets：只守一个目录，清单化只会多一层（对照 protect-system 的 systemDirs）
+    expect(policy.lets).toBeUndefined()
+  })
+
   it('BP-T1 出厂的调用门只有一道，且必须按工具名收窄（别的工具照走 L1 非事件快路）', () => {
     // 原先这条是「出厂一道调用门都没有」。ask-on-sub-session 是刻意加的第一道：
     // 开一条子会话开出去的是**一整场会自己跑的对话**，值得一次询问，而它没有路径/命令
@@ -467,6 +488,8 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
     host?: 'desktop' | 'extension'
     provider?: SecurityHostProvider
     warn?: (msg: string) => void
+    /** 经由的工具（省略 = 非工具路径）：只有点名 tool.name 的规则才看它 */
+    tool?: { name: string; operation?: string }
   }
 
   /**
@@ -484,6 +507,7 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
       {
         subject: { kind: opts.subjectKind ?? 'agent', sessionId: 's1', agentKind: 'root' },
         action,
+        ...(opts.tool ? { tool: opts.tool } : {}),
         object,
         environment: { host: opts.host ?? 'desktop', platform: 'darwin' }
       },
@@ -976,6 +1000,143 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
     })
   })
 
+  // ── protect-builtin-knowledge：随应用发布的内置知识库的只读门 ──────────────────
+  //
+  // 它守的是**应用包里的那份参考**（桌面 getBuiltinKnowledgeDir()）：ShuviX 自己的
+  // agent / bot / policy / hook 文件、知识条目与 skill 怎么写。与 protect-bot-files 同形
+  // （deny×write×path，目录经一个 vars 供给），但档位不同 —— 那道是 force-ask（写 bot 文件
+  // 是正当需求，只是不该没人看着），这道是 deny：写进应用包的东西下个版本随整包替换消失，
+  // 在 macOS 上还会让签名对不上，没有「用户点一下就该放行」的分支可给。
+  // knowledge 工具已经拒绝在那里 create，这一组钉的是剩下那条路 —— 拿工具印出来的绝对路径
+  // 直接 write / edit —— 被堵死的形状：谁撞、谁不撞、免询问与「允许并记住」能不能盖过。
+
+  const builtinKnowledgeDir = DESKTOP_VARS.builtinKnowledgeDir as string
+  const builtinKnowledgeFile = (
+    path = `${builtinKnowledgeDir}/shuvix-formats/agent-md.md`
+  ): SecurityObject => ({ type: 'path', path })
+
+  it('BP-K1 agent 写内置知识库 → deny，归因 protect-builtin-knowledge#0', () => {
+    const decision = decide('write', builtinKnowledgeFile())
+    expect(decision.effect).toBe('deny')
+    expect(decision.winning).toBe('protect-builtin-knowledge#0')
+    // ask-on-write 同样命中（任意写都问），但 deny 档在它之上 —— 归因与文案都只认这一条
+    expect(decision.matched).toEqual(['protect-builtin-knowledge#0', 'ask-on-write#0'])
+    // 拒绝文案取自 md：deny 的 prompt 是拼进抛出错误、给模型读的那段（enforce.ts），
+    // 它得讲清楚「这是内置库、去写用户自己的库」，而不是泛泛一句「有人要写文件」
+    expect(decision.prompt).toEqual({
+      text: promptOf('protect-builtin-knowledge', 0),
+      rules: ['protect-builtin-knowledge#0'],
+      policies: [displayNameOf('protect-builtin-knowledge')]
+    })
+  })
+
+  it('BP-K2 免询问开着照样 deny —— deny 压过 session-auto-allow 的 force-allow', () => {
+    const provider = autoAllowProvider()
+    const guarded = decide('write', builtinKnowledgeFile(), { provider })
+    expect(guarded.effect).toBe('deny')
+    expect(guarded.winning).toBe('protect-builtin-knowledge#0')
+    // 对照：同一开关下工作区里的普通写是放行的 —— 免询问本身没坏，只是盖不住这一道
+    const ordinary = decide('write', { type: 'path', path: '/ws/f.txt' }, { provider })
+    expect(ordinary.effect).toBe('allow')
+    expect(ordinary.winning).toBe('session-auto-allow#0')
+  })
+
+  it('BP-K3 「允许并记住」也压不过：授权整个内置库目录仍然 deny，且决策里没有可记住的选项', () => {
+    const provider = makeProvider({
+      getSessionGrants: () => ({
+        autoAllow: false,
+        allowList: [`Write(${builtinKnowledgeDir})`]
+      })
+    })
+    const decision = decide('write', builtinKnowledgeFile(), { provider })
+    expect(decision.effect).toBe('deny')
+    expect(decision.winning).toBe('protect-builtin-knowledge#0')
+    // 比 protect-bot-files 的 BP-B4 更进一步：force-ask 只是不给 rememberEntry，deny 连询问
+    // 材料都没有（buildAskMaterials 只在 effect==='ask' 时构建）—— 压根没有那张卡可点
+    expect(decision.ask).toBeUndefined()
+    expect(decision.ask?.rememberEntry).toBeUndefined()
+    // 对照：同一份授权下别处的普通写照样是 ask，且照给「允许并记住」
+    const ordinary = decide('write', { type: 'path', path: '/Users/u/doc.txt' }, { provider })
+    expect(ordinary.effect).toBe('ask')
+    expect(ordinary.ask?.rememberEntry).toBeTruthy()
+  })
+
+  it('BP-K4 edit 与 write 同待遇（判定不看工具名）；read 不归它管', () => {
+    // 文件工具的安全动作只有 AccessMode 的 read / write —— edit 工具的 PEP 同样是
+    // enforcePath('write', …)（fileToolSuite 的 securityCheck / makeAsk）。所以「edit 同待遇」
+    // 在这一层的形状是「同一个 write 动作、换哪个工具名都 deny」，规则不点名 tool.name；
+    // 不存在另一个叫 'edit' 的动作需要策略再兜一条
+    for (const name of ['write', 'edit']) {
+      const decision = decide('write', builtinKnowledgeFile(), { tool: { name } })
+      expect({ name, effect: decision.effect }).toEqual({ name, effect: 'deny' })
+      expect(decision.winning, name).toBe('protect-builtin-knowledge#0')
+    }
+
+    // 读一个字都不管 —— 读这个库正是它存在的意义，所以两道门都不拦：protect-builtin-knowledge 只管写，
+    // ask-on-read 把它连同 skills / 工具结果一起豁免（同一类东西：随应用发布的只读参考资料）。
+    // 查一次说明书就弹一张卡片的话，agent 就会学会不查
+    const read = decide('read', builtinKnowledgeFile())
+    expect(read.effect).toBe('allow')
+    expect(read.matched).toEqual([])
+    // 对照：同样在工作区外、但不在豁免清单里的路径照样 ask —— 豁免的是这个目录，不是「读」这件事
+    const outside = decide('read', { type: 'path', path: '/elsewhere/notes.md' })
+    expect(outside.effect).toBe('ask')
+    expect(outside.winning).toBe('ask-on-read#0')
+  })
+
+  it('BP-K5 前缀边界：库内与任意深子目录命中，同前缀的兄弟目录不命中', () => {
+    // `inDir` 就是 allowList 那个 matchesPathEntry（按路径段而不是按字符串前缀），
+    // 所以 `knowledge-extra` 不是 `knowledge` 的里面 —— 这条守的是那个 `+ sep`
+    const table: Array<[string, boolean]> = [
+      [`${builtinKnowledgeDir}/shuvix-formats/agent-md.md`, true],
+      [`${builtinKnowledgeDir}/a/b/c/deep.md`, true],
+      // 目录本身（不带尾斜杠）也算在内 —— matchesPathEntry 的等值分支
+      [builtinKnowledgeDir, true],
+      [`${builtinKnowledgeDir}-extra/x.md`, false],
+      [`${builtinKnowledgeDir}.bak/x.md`, false],
+      // 末段同名但根不同：用户自己的库照 ask-on-write 走，不被这道门牵连
+      ['/ws/knowledge/x.md', false]
+    ]
+    for (const [path, guarded] of table) {
+      const decision = decide('write', builtinKnowledgeFile(path))
+      expect({ path, denied: decision.winning === 'protect-builtin-knowledge#0' }).toEqual({
+        path,
+        denied: guarded
+      })
+    }
+  })
+
+  it('BP-K6 user 主体不受约束；扩展端不命中且零告警', () => {
+    // 主体分界（BP-2b 的行为面）：用户亲手动这些文件走 user 主体，内置防护一条都不作用于它
+    const asUser = decide('write', builtinKnowledgeFile(), { subjectKind: 'user' })
+    expect(asUser.effect).toBe('allow')
+    expect(asUser.matched).toEqual([])
+
+    // scope 里的 `env.host: [desktop]` 是原生条件、排在 CEL 之前：扩展端这条规则根本不跑，
+    // 连 vars.builtinKnowledgeDir 都不会去读（这里的 getVars 刻意不给它）。于是它既不该命中，
+    // 也不该因为「宿主没供给这个变量」记一行 assemble 告警 —— 两个告警出口都钉成零调用
+    const warn = vi.fn()
+    const logWarn = vi.fn()
+    const provider = makeProvider({
+      host: 'extension',
+      getVars: () => ({
+        workspace: '',
+        toolResultsBase: '',
+        skillsDirs: [],
+        memoryDirs: [],
+        home: '',
+        systemDirs: []
+      }),
+      logger: { info: vi.fn(), warn: logWarn, error: vi.fn() }
+    })
+    const decision = decide('write', builtinKnowledgeFile(), { provider, host: 'extension', warn })
+    expect(decision.effect).toBe('allow')
+    expect(decision.winning).toBe('default:path')
+    expect(decision.matched).not.toContain('protect-builtin-knowledge#0')
+    expect(warn).not.toHaveBeenCalled()
+    expect(logWarn).not.toHaveBeenCalled()
+  })
+
   // ── 宿主没供给门引用的目录变量 ────────────────────────────────────────────────
   //
   // assemble 把 deny / ask 两档里只作 inDir 目录参数、宿主又没给（缺键或 undefined）的变量绑成
@@ -1034,6 +1195,66 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
       for (const line of lines) {
         expect(line, label).toContain("'protect-bot-files'")
         expect(line, label).toContain('vars.botsDir')
+      }
+    }
+  })
+
+  it('BP-K7 桌面宿主没供给 builtinKnowledgeDir（缺键 / undefined / 空串）：门失效，而不是变成「每次写都 deny」', () => {
+    // 同 BP-B11 的三变体表，档位换成 deny —— 代价的方向更要紧：缺键报错被 fail-safe 当成命中，
+    // 一条只守一个目录的 deny 就成了对**每一次**写的 deny，而 deny 是谁都盖不过的那一档
+    const { builtinKnowledgeDir: _builtinKnowledgeDir, ...withoutBuiltinDir } = DESKTOP_VARS
+    const variants: Array<[string, Record<string, PolicyVarValue>, number]> = [
+      ['缺键', withoutBuiltinDir, 1],
+      [
+        'undefined',
+        {
+          ...withoutBuiltinDir,
+          builtinKnowledgeDir: undefined
+        } as unknown as Record<string, PolicyVarValue>,
+        1
+      ],
+      // 空串是宿主明说「没有这个目录」（扩展端就这么供给）：inDir 恒不命中，无须绑定也无须告警
+      ['空串', { ...withoutBuiltinDir, builtinKnowledgeDir: '' }, 0]
+    ]
+
+    for (const [label, vars, expectedLines] of variants) {
+      // 一个变体一个 logger，贯穿开 / 关两个 provider 的全部判定（去重按 logger 键控）
+      const logWarn = vi.fn()
+      const evalWarn = vi.fn()
+      const logger = { info: vi.fn(), warn: logWarn, error: vi.fn() }
+      const off = makeProvider({ getVars: () => vars, logger })
+      const on = makeProvider({
+        getVars: () => vars,
+        logger,
+        getSessionGrants: () => ({ autoAllow: true, allowList: [] })
+      })
+      const ordinaryWrite: SecurityObject = { type: 'path', path: '/ws/f.txt' }
+
+      // 普通写照旧：免询问关着落回 ask-on-write，开着放行 —— 不绑的话这里会是一条免不掉的 deny
+      const asked = decide('write', ordinaryWrite, { provider: off, warn: evalWarn })
+      expect(asked.effect, label).toBe('ask')
+      expect(asked.winning, label).toBe('ask-on-write#0')
+      expect(asked.matched, label).not.toContain('protect-builtin-knowledge#0')
+
+      const autoAllowed = decide('write', ordinaryWrite, { provider: on, warn: evalWarn })
+      expect(autoAllowed.effect, label).toBe('allow')
+      expect(autoAllowed.winning, label).toBe('session-auto-allow#0')
+
+      // 接受的代价：门没有目录可守，内置库自己的写也跟着落回普通写的待遇
+      const guarded = decide('write', builtinKnowledgeFile(), { provider: off, warn: evalWarn })
+      expect(guarded.effect, label).toBe('ask')
+      expect(guarded.winning, label).toBe('ask-on-write#0')
+      expect(
+        decide('write', builtinKnowledgeFile(), { provider: on, warn: evalWarn }).effect,
+        label
+      ).toBe('allow')
+
+      expect(evalWarn, label).not.toHaveBeenCalled()
+      const lines = logWarn.mock.calls.map((c) => String(c[0]))
+      expect(lines, label).toHaveLength(expectedLines)
+      for (const line of lines) {
+        expect(line, label).toContain("'protect-builtin-knowledge'")
+        expect(line, label).toContain('vars.builtinKnowledgeDir')
       }
     }
   })

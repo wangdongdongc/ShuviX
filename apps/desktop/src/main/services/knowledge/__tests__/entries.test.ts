@@ -11,6 +11,8 @@ import { join } from 'node:path'
 
 const state = vi.hoisted(() => ({
   root: '',
+  /** 界面语言：内置库生效的是哪一版按它现算（EN-11 靠改它切语言） */
+  language: 'en',
   projects: {} as Record<string, { name: string } | undefined>
 }))
 
@@ -27,25 +29,45 @@ vi.mock('../../../logger', () => ({
 vi.mock('../../../dao/projectDao', () => ({
   projectDao: { findById: (id: string) => state.projects[id] }
 }))
+// 内置库的显示名（`t`）与生效语言（`language`）都读 i18next **单例**：桩掉才看得见「名字取的是哪个
+// i18n 键」，也不必指望跑测时全局 i18n 正好初始化过、正好是哪种语言。桌面主进程那个 `../../../i18n`
+// 是另一个模块，这里没人用它。
+vi.mock('i18next', () => ({
+  default: {
+    t: (key: string) => `i18n:${key}`,
+    get language(): string {
+      return state.language
+    }
+  }
+}))
 
 import { listKnowledgeEntries } from '../entries'
+import { builtinBaseDisplayName } from '../knowledgePaths'
 import { invalidateKnowledgeScan } from '../scan'
 import {
   BUNDLE,
   OTHER_BUNDLE,
   PROJECTS,
+  builtinLangAt,
+  builtinRootOf,
   makeTempRoot,
+  seedBuiltin,
+  seedBuiltinConcept,
   seedConcept,
   seedFile,
   treeOf,
   userRootOf
 } from './fixture'
 
+/** 本期唯一的内置库（保留名 `shuvix`）—— bundle id 的首段是保留容器名 `builtin` */
+const BUILTIN = 'builtin/shuvix'
+
 let root: string
 
 beforeEach(() => {
   root = makeTempRoot()
   state.root = root
+  state.language = 'en'
   state.projects = {}
   invalidateKnowledgeScan()
 })
@@ -53,6 +75,8 @@ beforeEach(() => {
 afterEach(() => {
   rmSync(root, { recursive: true, force: true })
   rmSync(userRootOf(root), { recursive: true, force: true })
+  // 内置根也是 root 的兄弟目录：种过内置库的用例得自己收拾
+  rmSync(builtinRootOf(root), { recursive: true, force: true })
 })
 
 describe('listKnowledgeEntries', () => {
@@ -333,5 +357,190 @@ describe('listKnowledgeEntries', () => {
 
     // 只读：下发目录不等于建目录
     expect({ shuvix: treeOf(root), user: treeOf(userRoot) }).toEqual(before)
+  })
+
+  /**
+   * 随应用发布的内置库是第三个名字空间（`builtin/<库名>`）：目录不在两个根之下，而且库名底下还夹着
+   * **语言那一层**。语言不进 id —— 生效的只有界面语言那一版，别的语言版本不属于任何 bundle，
+   * 所以切换语言时同一个 id 读到的就是新语言的那份。
+   */
+  it('EN-9 内置库进清单：path / bundle 用 builtin/<库名> 名字空间，与项目库 / 用户库的同名文件互不串台；只有当前语言那一版进清单，语言段不进 id；清单仍然只读', async () => {
+    seedConcept(root, 'projects/p1/guide.md', ['type: Memory', 'title: Project Guide'])
+    seedConcept(userRootOf(root), 'notes/guide.md', ['type: Memory', 'title: User Guide'])
+    seedBuiltinConcept(root, 'shuvix/en/guide.md', ['type: Memory', 'title: Guide EN'])
+    seedBuiltinConcept(root, 'shuvix/en/sub/nested.md', ['type: Memory', 'title: Nested EN'])
+    seedBuiltinConcept(root, 'shuvix/zh/guide.md', ['type: Memory', 'title: Guide ZH'])
+    seedBuiltinConcept(root, 'shuvix/zh/only-zh.md', ['type: Memory', 'title: Only ZH'])
+    const builtinBefore = treeOf(builtinRootOf(root))
+
+    const listed = await listKnowledgeEntries()
+    const byPath = Object.fromEntries(listed.entries.map((e) => [e.path, e]))
+
+    // 三个根各自的 guide.md 各占一行：首段不同，天然不撞
+    expect(Object.keys(byPath).sort()).toEqual([
+      `${BUILTIN}/guide.md`,
+      `${BUILTIN}/sub/nested.md`,
+      'knowledge/notes/guide.md',
+      'projects/p1/guide.md'
+    ])
+    expect(byPath[`${BUILTIN}/guide.md`]).toMatchObject({ bundle: BUILTIN, title: 'Guide EN' })
+    // 子目录里的条目仍属于库根
+    expect(byPath[`${BUILTIN}/sub/nested.md`]).toMatchObject({ bundle: BUILTIN })
+    expect(byPath['knowledge/notes/guide.md']).toMatchObject({ bundle: 'knowledge/notes' })
+    expect(byPath['projects/p1/guide.md']).toMatchObject({ bundle: 'projects/p1' })
+
+    // 另一种语言那一版不属于任何 bundle：既不另占一行，也顶不掉生效的那一版
+    const titles = listed.entries.map((e) => e.title)
+    expect(titles).not.toContain('Guide ZH')
+    expect(titles).not.toContain('Only ZH')
+    // 语言那一层不进 id
+    for (const e of listed.entries) {
+      expect(e.path, e.path).not.toMatch(/(^|\/)(en|zh)\//)
+      expect(e.path, e.path).not.toMatch(/\\|^\//)
+    }
+
+    // 清单只读 —— 应用包里的目录原样（改了会随下次更新消失，macOS 上还会破坏签名）
+    expect(treeOf(builtinRootOf(root))).toEqual(builtinBefore)
+  })
+
+  it('EN-10 bundleNames 给内置库一个人读的名字：取 builtinBaseDisplayName()（与配置卡 chip 同一个 i18n 键），不是目录名 shuvix；项目库照旧取项目当前名字，用户库仍然不给', async () => {
+    seedBuiltinConcept(root, 'shuvix/en/a.md', ['type: Memory', 'title: A'])
+    seedConcept(root, 'projects/p1/b.md', ['type: Memory', 'title: B'])
+    seedConcept(userRootOf(root), 'notes/c.md', ['type: Memory', 'title: C'])
+    state.projects = { p1: { name: 'Live Name' } }
+
+    const { bundleNames } = await listKnowledgeEntries()
+
+    // 恰好这两个：用户库的名字就是目录名，不必随清单下发
+    expect(bundleNames).toEqual({
+      [BUILTIN]: 'i18n:knowledge.builtinBaseName',
+      'projects/p1': 'Live Name'
+    })
+    // 侧栏那一行与两张配置卡读的是同一个键：改名只改一处
+    expect(bundleNames[BUILTIN]).toBe(builtinBaseDisplayName())
+    // 目录名（shuvix）不是显示名
+    expect(bundleNames[BUILTIN]).not.toBe('shuvix')
+  })
+
+  /**
+   * 内置库的目录在应用包里、路径里还夹着语言那一层 —— 侧栏靠 `root` / `userRoot` 两个根拼不出来，
+   * 「复制路径」得用随清单下发的 `bundleDirs`。另两个根拼得出来，所以不给。
+   */
+  it('EN-11 bundleDirs 只给内置库：值是**当前语言**那一版的绝对目录，项目库 / 用户库不在其中；切语言后值跟着换，没有那一版回落 en', async () => {
+    seedBuiltinConcept(root, 'shuvix/en/a.md', ['type: Memory', 'title: A'])
+    seedBuiltinConcept(root, 'shuvix/zh/a.md', ['type: Memory', 'title: 甲'])
+    seedConcept(root, 'projects/p1/b.md', ['type: Memory', 'title: B'])
+    seedConcept(userRootOf(root), 'notes/c.md', ['type: Memory', 'title: C'])
+
+    expect((await listKnowledgeEntries()).bundleDirs).toEqual({
+      [BUILTIN]: builtinLangAt(root, 'shuvix', 'en')
+    })
+
+    // 界面语言换成 zh-CN：基础段 zh 那一版在，指向它（现算不缓存，下一次解析就换）。
+    // 扫描缓存的键是 `<bundle>/<rel>`、不含语言段，同一个键换了语言就指向另一份文件 ——
+    // 生产里由 `refreshBuiltinKnowledge()` 在 settings:set 改语言时失效掉，这里照着做
+    state.language = 'zh-CN'
+    invalidateKnowledgeScan()
+    expect((await listKnowledgeEntries()).bundleDirs).toEqual({
+      [BUILTIN]: builtinLangAt(root, 'shuvix', 'zh')
+    })
+
+    // 没有那一版就回落 en
+    state.language = 'fr'
+    invalidateKnowledgeScan()
+    expect((await listKnowledgeEntries()).bundleDirs).toEqual({
+      [BUILTIN]: builtinLangAt(root, 'shuvix', 'en')
+    })
+  })
+
+  it('EN-12 内置库的 dirs：库本身 + 语言层**之内**的子目录（空的也给）；容器 builtin 自己不占行，语言段也不占行，别的语言那一层下面的子目录同样不给', async () => {
+    const userRoot = userRootOf(root)
+    mkdirSync(join(root, PROJECTS, 'p1', 'sub'), { recursive: true })
+    mkdirSync(join(userRoot, 'notes'), { recursive: true })
+    seedBuiltinConcept(root, 'shuvix/en/sub/a.md', ['type: Memory', 'title: A'])
+    mkdirSync(join(builtinLangAt(root, 'shuvix', 'en'), 'empty'), { recursive: true })
+    mkdirSync(join(builtinLangAt(root, 'shuvix', 'zh'), 'zh-only'), { recursive: true })
+
+    const { dirs } = await listKnowledgeEntries()
+
+    // 项目库 → 用户库 → 内置库（与 listBundles 同序），每个库后面紧跟它自己的子目录
+    expect(dirs).toEqual([
+      'projects/p1',
+      'projects/p1/sub',
+      'knowledge/notes',
+      BUILTIN,
+      `${BUILTIN}/empty`,
+      `${BUILTIN}/sub`
+    ])
+    // 容器不是库：它自己不占行（`builtin` 在磁盘上根本没有对应目录）
+    expect(dirs).not.toContain('builtin')
+    // 语言那一层不进 id —— 它既不是目录行，也不是任何行里的一段
+    expect(dirs.filter((d) => /(^|\/)(en|zh)(\/|$)/.test(d))).toEqual([])
+    // 别的语言版本不属于任何 bundle：它下面的子目录同样不给
+    expect(dirs).not.toContain(`${BUILTIN}/zh-only`)
+  })
+
+  it('EN-13 内置库里的不合规 md 照样一行：没有 frontmatter / 没有 type / 带别家 shuvix 标记的都列出，与用户库一视同仁（读宽）；早先生成形状的 log 仍然不列', async () => {
+    seedBuiltin(root, 'shuvix/en/plain.md', '# plain\n\nno frontmatter\n')
+    seedBuiltin(root, 'shuvix/en/untyped.md', '---\ntitle: x\n---\n\nno type\n')
+    seedBuiltin(
+      root,
+      'shuvix/en/foreign.md',
+      '---\nshuvix: agent v1\ntype: Memory\n---\n\nforeign\n'
+    )
+    seedBuiltinConcept(root, 'shuvix/en/ok.md', ['type: Memory', 'title: OK'])
+    seedBuiltin(root, 'shuvix/en/log.md', '## 2026-09-09\n\n- **Creation** /ok.md\n')
+
+    const listed = await listKnowledgeEntries()
+    const byPath = Object.fromEntries(listed.entries.map((e) => [e.path, e]))
+
+    expect(Object.keys(byPath).sort()).toEqual([
+      `${BUILTIN}/foreign.md`,
+      `${BUILTIN}/ok.md`,
+      `${BUILTIN}/plain.md`,
+      `${BUILTIN}/untyped.md`
+    ])
+    // 与用户库那一组（EN-6）逐字段同形：不合规也不藏，文件名 / frontmatter title 当标题
+    for (const [path, title] of [
+      [`${BUILTIN}/plain.md`, 'plain'],
+      [`${BUILTIN}/untyped.md`, 'x'],
+      [`${BUILTIN}/foreign.md`, 'foreign']
+    ]) {
+      expect(byPath[path], path).toStrictEqual({
+        path,
+        bundle: BUILTIN,
+        type: '',
+        title,
+        description: '',
+        status: 'stable',
+        tags: [],
+        trustTier: 'unverified',
+        verifiedCurrent: false,
+        stale: false
+      })
+    }
+    expect(byPath[`${BUILTIN}/ok.md`]).toMatchObject({
+      bundle: BUILTIN,
+      type: 'Memory',
+      title: 'OK'
+    })
+  })
+
+  it('EN-14 内置根不存在（开发期没拷 / 打包漏了）：回包结构不变 —— bundleDirs 是空对象，另两个根照常；内置库是增益，缺席不建根也不连累别人', async () => {
+    expect(existsSync(builtinRootOf(root))).toBe(false)
+    seedConcept(root, 'projects/p1/a.md', ['type: Memory', 'title: A'])
+    seedConcept(userRootOf(root), 'notes/b.md', ['type: Memory', 'title: B'])
+    state.projects = { p1: { name: 'Live Name' } }
+
+    const listed = await listKnowledgeEntries()
+
+    expect(listed.bundleDirs).toEqual({})
+    expect(listed.entries.map((e) => e.path).sort()).toEqual([
+      'knowledge/notes/b.md',
+      'projects/p1/a.md'
+    ])
+    expect(listed.dirs).toEqual(['projects/p1', 'knowledge/notes'])
+    expect(listed.bundleNames).toEqual({ 'projects/p1': 'Live Name' })
+    expect(existsSync(builtinRootOf(root))).toBe(false)
   })
 })

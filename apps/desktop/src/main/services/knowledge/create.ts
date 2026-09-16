@@ -120,6 +120,9 @@ function resolveDir(dirId: string): { bundle: string; rel: string; abs: string }
   if (segs.length < 2 || segs.some((s) => !s || s.startsWith('.'))) return null
   const bundle = `${segs[0]}/${segs[1]}`
   if (!listBundles().includes(bundle)) return null
+  // 只读的内置库在这里就解析不出落点 —— 两个调用方各自先回一句可读的原因（见下），这一道是结构上的
+  // 兜底：将来再加一个「新建」忘了那句判断，也拿不到应用包里的路径
+  if (isBuiltinBundle(bundle)) return null
   let abs = bundleDir(bundle)
   for (const seg of segs.slice(2)) {
     if (!hasSubdirectory(abs, seg)) return null

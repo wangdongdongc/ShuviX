@@ -177,7 +177,7 @@ scope と交差して空になる規則；不正な `lets`（不正な名前、�
 | `block-catastrophic-commands`   | マシンを破壊する少数のコマンドを、解析された構造で判断して拒否（`rm -rf /`、`mkfs`、デバイスへの `dd`……）     |
 | `protect-bot-files`             | `~/.shuvix/bots` 配下のあらゆる書き込みを **force-ask**                                                       |
 | `protect-builtin-knowledge`     | ShuviX の組み込みナレッジベースへの書き込みを拒否                                                             |
-| `ask-on-read`                   | ワークスペース、ツール結果、skill ディレクトリの外の読み取りを確認                                            |
+| `ask-on-read`                   | ワークスペース、ツール結果、skill ディレクトリ、本リファレンスの外の読み取りを確認                            |
 | `ask-on-write`                  | すべてのファイル書き込みを diff プレビュー付きで確認                                                          |
 | `review-memory-writes`          | 旧記憶ストアへの書き込みを force-ask                                                                          |
 | `ask-on-command`                | すべての `bash` / `ssh` コマンドを確認                                                                        |

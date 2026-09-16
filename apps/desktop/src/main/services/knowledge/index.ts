@@ -54,6 +54,7 @@ export {
   scanAllBundles,
   listBundles,
   listBuiltinBundles,
+  listAllBuiltinBundleIds,
   listBundleDirs,
   listProjectBundles,
   listUserLibraries,

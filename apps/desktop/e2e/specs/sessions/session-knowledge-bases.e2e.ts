@@ -41,6 +41,8 @@ const BASE_B = 'kb-beta'
 /** 项目组头按名字认（pages.ts 的 GroupTarget），名字须全局唯一 */
 const P1_NAME = 'KB-项目一'
 const P2_NAME = 'KB-项目二'
+/** 留给 KB-E-9 的「从没保存过知识库」的项目 —— P1 / P2 被 KB-E-5 / KB-E-6 写过了 */
+const P3_NAME = 'KB-项目三'
 
 /**
  * 卡片脚注的两句话（三语全收）—— 隔离实例跟系统语言走，断言比的是「是哪一句」而不是哪门语言。
@@ -69,6 +71,7 @@ let sessionConfig: SessionConfigPane
 let projectEdit: ProjectEditPane
 let p1 = ''
 let p2 = ''
+let p3 = ''
 
 // ─── IPC 助手 ───
 
@@ -151,9 +154,11 @@ beforeAll(async () => {
 
   p1 = (await createProject(app.main, { name: P1_NAME, path: projectDir('kb-p1') })).id
   p2 = (await createProject(app.main, { name: P2_NAME, path: projectDir('kb-p2') })).id
-  // 前置自检：两个项目都从没保存过知识库
+  p3 = (await createProject(app.main, { name: P3_NAME, path: projectDir('kb-p3') })).id
+  // 前置自检：三个项目都从没保存过知识库
   expect(await projectBases(p1)).toBeUndefined()
   expect(await projectBases(p2)).toBeUndefined()
+  expect(await projectBases(p3)).toBeUndefined()
 }, 120_000)
 
 afterAll(async () => {
@@ -353,5 +358,100 @@ describe('会话设置卡与项目对话框（DOM）', () => {
     // 项目设过 = 有人明确设过：界面上不该再说「还没选过」
     expect(FOOTER_EXPLICIT).toContain(await sessionConfig.knowledgeFooter())
     await sessionConfig.close()
+  })
+
+  it('KB-E-7 内置库的 chip 显示人读名、data-knowledge-base 仍是 `shuvix`；有运行时也点得动', async () => {
+    const title = 'KB-E7-内置'
+    const sid = await createSession({ title, projectId: p1 })
+    // 先把运行时建出来 —— 这张卡刻意不随运行时上锁，内置库这一项也不例外
+    await ensureRuntime(sid)
+    expect((await init(sid)).created).toBe(true)
+
+    await waitRow(title)
+    expect(await sidebar.openSession(title)).toBe(true)
+    await sidebar.pickRowMenu(title, 'session-config')
+    await sessionConfig.waitOpen()
+
+    const items = await until(async () => {
+      const shot = await sessionConfig.knowledgeItems()
+      return kbItem(shot, 'shuvix') ? shot : null
+    }, 'the builtin base chip is listed')
+    const builtin = kbItem(items, 'shuvix')!
+
+    // 存的名字仍是保留名（写回去的就是它）；给人看的是本地化的产品名 —— 与侧栏那一行同一个 i18n 键
+    expect(builtin.name).toBe('shuvix')
+    expect(BUILTIN_NAMES).toContain(builtin.label)
+    // 可点：只读的是**库的内容**，不是「这条会话用不用它」
+    expect(builtin).toMatchObject({ disabled: false })
+    // 垫底：它是说明书，不是用户的内容
+    expect(items[items.length - 1].name).toBe('shuvix')
+    await sessionConfig.close()
+  })
+
+  it('KB-E-8 取消勾选 `shuvix` 并落库；重新勾上恢复', async () => {
+    const title = 'KB-E8-取消内置'
+    const sid = await createSession({ title, projectId: p1 })
+    expect(await storedBases(sid)).toBeUndefined()
+
+    await waitRow(title)
+    expect(await sidebar.openSession(title)).toBe(true)
+    await sidebar.pickRowMenu(title, 'session-config')
+    await sessionConfig.waitOpen()
+
+    const items = await until(async () => {
+      const shot = await sessionConfig.knowledgeItems()
+      return kbItem(shot, 'shuvix') ? shot : null
+    }, 'the builtin base chip is listed')
+    expect(kbItem(items, 'shuvix')).toMatchObject({ checked: true })
+
+    // 期望值从**此刻生效的选择**推，不从 chip 的 DOM 顺序推：卡片写的是「selected 去掉/追加一个」，
+    // 而 selected 未必等于候选项全集（这条会话所在的项目被前面的用例保存过一份）
+    const before = (await baseOptions(sid)).selected
+    expect(before).toContain('shuvix')
+    const without = before.filter((n) => n !== 'shuvix')
+
+    await sessionConfig.toggleKnowledgeBase('shuvix')
+    await until(
+      async () => sameList(await storedBases(sid), without),
+      `the card wrote ${JSON.stringify(without)}`
+    )
+    // 工具面跟着收窄：不再是这条会话的库
+    expect((await baseOptions(sid)).selected).not.toContain('shuvix')
+
+    // 再勾回去：恢复（勾选是往末尾追加，所以内置库仍然垫底）
+    const restored = [...without, 'shuvix']
+    await sessionConfig.toggleKnowledgeBase('shuvix')
+    await until(
+      async () => sameList(await storedBases(sid), restored),
+      `the card restored ${JSON.stringify(restored)}`
+    )
+    expect((await baseOptions(sid)).selected).toContain('shuvix')
+    await sessionConfig.close()
+  })
+
+  it('KB-E-9 项目对话框：从没保存过时 `shuvix` 也在候选里、勾着且垫底；取消它再保存，写下的整份里没有它', async () => {
+    // 前置自检：P3 是唯一一个从没保存过知识库的项目（P1 / P2 被 KB-E-5 / KB-E-6 写过了）
+    expect(await projectBases(p3)).toBeUndefined()
+
+    await sidebar.pickGroupMenu({ project: P3_NAME }, 'edit-project')
+    await projectEdit.waitOpen()
+    expect(await projectEdit.nameValue()).toBe(P3_NAME)
+
+    const items = await until(async () => {
+      const shot = await projectEdit.knowledgeItems()
+      return kbItem(shot, 'shuvix') ? shot : null
+    }, 'project dialog: the builtin base chip is listed')
+
+    // 项目对话框配的是「这个项目的新会话缺省用哪些」—— 缺省里内置库在，且垫底
+    expect(kbItem(items, 'shuvix')).toMatchObject({ checked: true, disabled: false })
+    expect(items[items.length - 1].name).toBe('shuvix')
+
+    // 取消它再保存：写下的是动过之后的**整份**（不是只写差集）
+    await projectEdit.toggleKnowledgeBase('shuvix')
+    await projectEdit.save()
+    await until(async () => Array.isArray(await projectBases(p3)), 'P3 saved its knowledge bases')
+    const saved = items.filter((it) => it.name !== 'shuvix').map((it) => it.name)
+    expect(await projectBases(p3)).toEqual(saved)
+    expect(await projectBases(p3)).not.toContain('shuvix')
   })
 })

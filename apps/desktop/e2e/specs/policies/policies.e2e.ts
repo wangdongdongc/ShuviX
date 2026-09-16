@@ -76,7 +76,7 @@ describe('policy IPC（列表与详情渲染）', () => {
   it('内置 14 份策略齐全，规则与人读面就绪；openFolder 通道存在', async () => {
     const list = await listPolicies()
     const builtins = list.filter((p) => p.source === 'builtin')
-    // 字母序（断言前已 sort）—— 十一道防护 + 两份 force-allow 层的会话授权
+    // 字母序（断言前已 sort）—— 十二道防护 + 两份 force-allow 层的会话授权
     expect(builtins.map((p) => p.name).sort()).toEqual([
       'ask-on-command',
       'ask-on-database',
@@ -86,6 +86,7 @@ describe('policy IPC（列表与详情渲染）', () => {
       'block-catastrophic-commands',
       'git-safety',
       'protect-bot-files',
+      'protect-builtin-knowledge',
       'protect-credentials',
       'protect-system',
       'review-memory-writes',
@@ -181,6 +182,7 @@ describe('policy IPC（列表与详情渲染）', () => {
       'block-catastrophic-commands',
       'git-safety',
       'protect-bot-files',
+      'protect-builtin-knowledge',
       'protect-credentials',
       'protect-system',
       'review-memory-writes',
