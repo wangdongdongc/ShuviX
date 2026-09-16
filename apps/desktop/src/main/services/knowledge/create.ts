@@ -11,12 +11,11 @@
  * 在 macOS 上建出来的库不该在 Windows 上打不开。重名按大小写不敏感 + NFC 比 —— 大小写不敏感的
  * 文件系统上 `Notes` 会落进 `notes/`，这与 base 解析按目录清单精确匹配的口径是同一件事。
  */
-import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'fs'
+import { mkdirSync, readdirSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import {
   buildConceptText,
   dedupeFileName,
-  escapesBundle,
   isReservedFile,
   normalizeBundlePath,
   slugify
@@ -25,15 +24,8 @@ import { KNOWLEDGE_PROJECT_BASE } from '@shuvix/chat-protocol/knowledge'
 import { appEventBus } from '../../utils/appEventBus'
 import { t } from '../../i18n'
 import { recordKnowledgeChange } from './changes'
-import {
-  PROJECTS_CONTAINER,
-  USER_CONTAINER,
-  bundleDir,
-  getUserKnowledgeRoot,
-  isValidLibraryName,
-  userBundleId
-} from './knowledgePaths'
-import { invalidateKnowledgeScan } from './scan'
+import { bundleDir, getUserKnowledgeRoot, isValidLibraryName, userBundleId } from './knowledgePaths'
+import { invalidateKnowledgeScan, listBundles } from './scan'
 
 /** 手工新建的署名：与 agent 的 `shuvix-<档案>/<模型>` 一眼分得开 */
 const HUMAN_ACTOR = 'human'
@@ -65,7 +57,6 @@ function nameError(name: string): string | null {
     name === '..' ||
     name.startsWith('.') ||
     name.endsWith('.') ||
-    name.endsWith(' ') ||
     BAD_NAME_CHARS.test(name) ||
     hasControlChar(name)
   return bad ? t('knowledge.errInvalidName') : null
@@ -81,6 +72,27 @@ function takenIn(dir: string, name: string): boolean {
   }
 }
 
+/** 这一层里有没有正好叫这个名字的**子目录**（NFC 归一、大小写敏感 —— 与 base 解析同口径） */
+function hasSubdirectory(parent: string, name: string): boolean {
+  const wanted = name.normalize('NFC')
+  try {
+    return readdirSync(parent, { withFileTypes: true }).some(
+      (e) => e.isDirectory() && e.name.normalize('NFC') === wanted
+    )
+  } catch {
+    return false
+  }
+}
+
+/** 目录里的名字；读不出（竞态下目录已不在）当空 */
+function namesIn(dir: string): string[] {
+  try {
+    return readdirSync(dir)
+  } catch {
+    return []
+  }
+}
+
 /** 目录变了：没有文件可提交，广播一次让侧栏重扫 */
 function announce(): void {
   invalidateKnowledgeScan()
@@ -89,22 +101,25 @@ function announce(): void {
 
 /**
  * 目录 id（bundle id 或它下面的一层）→ 落点。两个名字空间的 bundle id 都是两段
- * （`projects/<projectId>` / `knowledge/<库名>`）。目录必须**已经在磁盘上** —— 渲染端只会传清单里
- * 的目录，这一道守的是「别凭空造出一个库」。
+ * （`projects/<projectId>` / `knowledge/<库名>`），所以库那一段直接对磁盘上现存的库清单，深一层的
+ * **逐段按目录清单精确匹配**（NFC 归一）而不是拼好路径去 stat —— 大小写不敏感的文件系统上
+ * `knowledge/Notes` 会 stat 到 `notes/`，东西落在一处、回给界面的 id 却是另一个写法（`resolveBase`
+ * 当初正是为此从 stat 改成清单匹配）。每一段都必须是**目录**：条目文件的路径不是落点。
+ *
+ * 渲染端只会传清单里的目录，这一道守的是「别凭空造出一个库」。
  */
 function resolveDir(dirId: string): { bundle: string; rel: string; abs: string } | null {
   const id = normalizeBundlePath(dirId)
   const segs = id ? id.split('/') : []
   if (segs.length < 2 || segs.some((s) => !s || s.startsWith('.'))) return null
-  const container = segs[0]
-  const known =
-    container === USER_CONTAINER ? isValidLibraryName(segs[1]) : container === PROJECTS_CONTAINER
-  if (!known) return null
   const bundle = `${segs[0]}/${segs[1]}`
-  const rel = segs.slice(2).join('/')
-  if (escapesBundle(rel)) return null
-  const abs = rel ? join(bundleDir(bundle), ...rel.split('/')) : bundleDir(bundle)
-  return existsSync(abs) ? { bundle, rel, abs } : null
+  if (!listBundles().includes(bundle)) return null
+  let abs = bundleDir(bundle)
+  for (const seg of segs.slice(2)) {
+    if (!hasSubdirectory(abs, seg)) return null
+    abs = join(abs, seg)
+  }
+  return { bundle, rel: segs.slice(2).join('/'), abs }
 }
 
 /** 新建一个用户知识库：用户根下的一个目录，没有别的 —— 库就是目录 */
@@ -163,7 +178,7 @@ export function createKnowledgeEntry(dirId: string, rawTitle: string): Knowledge
   const target = resolveDir(dirId)
   if (!target) return { success: false, error: t('knowledge.errNoSuchDir') }
 
-  const existing = new Set(readdirSync(target.abs).map((e) => e.normalize('NFC').toLowerCase()))
+  const existing = new Set(namesIn(target.abs).map((e) => e.normalize('NFC').toLowerCase()))
   // 保留文件名同样算占用：slugify('Index') 正好撞上 OKF 保留的 index.md
   const isTaken = (file: string): boolean =>
     existing.has(file.normalize('NFC').toLowerCase()) || isReservedFile(file)
