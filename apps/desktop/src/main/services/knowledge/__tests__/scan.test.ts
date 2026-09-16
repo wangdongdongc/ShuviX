@@ -37,6 +37,7 @@ import {
 import {
   invalidateKnowledgeScan,
   knownKnowledgePaths,
+  listBundleDirs,
   listBundles,
   listUserLibraries,
   scanAllBundles,
@@ -360,5 +361,24 @@ describe('scanBundle — 笔记清单', () => {
       concept: null
     })
     expect(byPath['plain.md'].title).toBe('Plain heading')
+  })
+})
+
+/**
+ * 目录清单是**空目录唯一的来源**：手动新建的知识库与文件夹第一时间就是空的，条目扫描（ripgrep 找 md）
+ * 根本看不见它们。它是普通目录遍历，隐藏目录连同整棵子树一概不算库的内容 —— 与条目扫描同口径。
+ */
+describe('listBundleDirs', () => {
+  it('SN-8 一个 bundle 下全部非隐藏子目录：bundle 相对、深度优先、字典序；隐藏目录连同整棵子树都不出现；bundle 不存在 → 空且不抛；limit 是硬上限（先序截断）', () => {
+    const dir = bundleAt(root, BUNDLE)
+    for (const rel of ['a/x', 'b', '.git/objects', '.obsidian']) {
+      mkdirSync(join(dir, ...rel.split('/')), { recursive: true })
+    }
+
+    // .git / .obsidian 自己不出现，`.git/objects` 这样的子树也一并不出现
+    expect(listBundleDirs(BUNDLE)).toEqual(['a', 'a/x', 'b'])
+    expect(listBundleDirs(OTHER_BUNDLE)).toEqual([])
+    // 上限按先序截断：先把 a 整棵走完，再轮到 b
+    expect(listBundleDirs(BUNDLE, 2)).toEqual(['a', 'a/x'])
   })
 })

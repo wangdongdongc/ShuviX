@@ -2488,6 +2488,10 @@ export function botIntro(main: CdpClient): BotIntroPane {
 //
 // ⚠️ 组头菜单的 `open-folder` 与行菜单的 `reveal` **只许读，绝不选**：隔离实例没有替换 `shell`，
 // 选中会在运行 e2e 的真实桌面上弹出文件管理器 —— pickRowMenu 遇到它们直接抛错。
+//
+// ⚠️ 内联新建行（`data-knowledge-draft`）**失焦即取消**：草稿开着的时候任何 `click()` 都会顺手把它
+// 杀掉，所以读断言一律走 main.eval（draftKind / draftValue / draftError），别点任何东西。输入走
+// native value setter（React 受控输入不认直接赋值），Enter / Escape 是派发到输入框上的冒泡 keydown。
 
 /** 知识库分组里的一行目录 */
 export interface KnowledgeDirShot {
@@ -2506,6 +2510,9 @@ export interface KnowledgeRowShot {
   /** 行上的名字（合规条目取 title，其余取文件名 stem） */
   label: string
 }
+
+/** 内联新建行的三种落点（`data-knowledge-draft` 的属性值） */
+export type KnowledgeDraftKind = 'base' | 'folder' | 'entry'
 
 /** 知识库笔记本里属性卡的读数 */
 export interface KnowledgeCardShot {
@@ -2541,10 +2548,30 @@ export interface KnowledgePane {
   groupMenuIds(): Promise<string[] | null>
   /** 组头菜单「刷新」—— 只触发；重扫的结果由调用方 until */
   refresh(): Promise<void>
+  /** 组头菜单「新建知识库」—— 只触发；草稿行由调用方 until draftKind() */
+  newBase(): Promise<void>
   /** 条目行菜单的原始 items（开一次 ⋮、不选任何项）；⋮ 不在返回 null */
   rowMenuShots(path: string): Promise<MenuItemShot[] | null>
   /** 开条目行的 ⋮ 并选中一项（自带「该项真的在菜单里」的核对；`reveal` 拒绝，见本节开头） */
   pickRowMenu(path: string, actionId: string): Promise<void>
+  /** 目录行菜单的原始 items（开一次 ⋮、不选任何项）；固定文案的容器没有 ⋮ → null */
+  dirMenuShots(path: string): Promise<MenuItemShot[] | null>
+  /** 开目录行的 ⋮ 并选中一项（自带「该项真的在菜单里」的核对） */
+  pickDirMenu(path: string, actionId: string): Promise<void>
+  /** 当前那行内联新建行的落点类型；没有草稿行返回 null */
+  draftKind(): Promise<KnowledgeDraftKind | null>
+  /** 草稿输入框里的值；没有草稿行返回 null */
+  draftValue(): Promise<string | null>
+  /** 往草稿输入框里输入（native setter + input 事件 —— React 受控输入只认这一条路） */
+  typeDraft(text: string): Promise<void>
+  /** 草稿行 Enter（落地）；结果由调用方 until */
+  submitDraft(): Promise<void>
+  /** 草稿行 Escape（取消） */
+  cancelDraft(): Promise<void>
+  /** 草稿行失焦（同样取消）—— 见本节开头的「失焦即取消」 */
+  blurDraft(): Promise<void>
+  /** 草稿行里那条失败原因（宿主给的、已本地化）；没有草稿行或没出错返回 null */
+  draftError(): Promise<string | null>
   /** 笔记本正文（.cm-content）文本；没有笔记为空串 */
   bodyText(): Promise<string>
   /** 等正文里出现特征串 —— 切换笔记之后先过这一关，免得读到上一份笔记的 DOM */
@@ -2568,6 +2595,9 @@ export function knowledgePane(main: CdpClient): KnowledgePane {
   const ROW = (path: string): string =>
     `${ROWS}.find((el) => el.getAttribute('data-knowledge-row') === ${JSON.stringify(path)})`
   const LABEL_OF = `((el) => (el.querySelector('span.truncate')?.textContent ?? '').trim())`
+  /** 同一时刻至多一行内联新建行 */
+  const DRAFT = `document.querySelector('[data-knowledge-draft]')`
+  const DRAFT_INPUT = `${DRAFT}?.querySelector('input')`
 
   const dirs = (): Promise<KnowledgeDirShot[]> =>
     main.eval<KnowledgeDirShot[]>(`${DIRS}.map((el) => ({
@@ -2590,6 +2620,24 @@ export function knowledgePane(main: CdpClient): KnowledgePane {
     await until(() => main.eval<boolean>(`!!${ROW(path)}`), `knowledge row "${path}"`)
   }
 
+  const waitDir = async (path: string): Promise<void> => {
+    await until(() => main.eval<boolean>(`!!${DIR(path)}`), `knowledge dir "${path}"`)
+  }
+
+  /** 往草稿输入框上做点什么（草稿行不在就抛 —— 失焦即取消，失败点离真因近一点） */
+  const onDraftInput = (body: string): Promise<unknown> =>
+    main.eval(`(() => {
+      const el = ${DRAFT_INPUT}
+      if (!el) throw new Error('no knowledge draft row')
+      ${body}
+      return true
+    })()`)
+
+  const pressDraft = (key: string): Promise<unknown> =>
+    onDraftInput(
+      `el.dispatchEvent(new KeyboardEvent('keydown', { key: ${JSON.stringify(key)}, bubbles: true }))`
+    )
+
   return {
     expand: async () => {
       await sidebar.setGroupExpanded('knowledge', true)
@@ -2605,7 +2653,7 @@ export function knowledgePane(main: CdpClient): KnowledgePane {
     dirOpen,
 
     setDirOpen: async (path, open) => {
-      await until(() => main.eval<boolean>(`!!${DIR(path)}`), `knowledge dir "${path}"`)
+      await waitDir(path)
       if ((await dirOpen(path)) === open) return
       await main.eval(`${DIR(path)}.click()`)
       await until(
@@ -2638,6 +2686,7 @@ export function knowledgePane(main: CdpClient): KnowledgePane {
 
     groupMenuIds: () => sidebar.groupMenuItems('knowledge'),
     refresh: () => sidebar.pickGroupMenu('knowledge', 'refresh'),
+    newBase: () => sidebar.pickGroupMenu('knowledge', 'new-base'),
 
     rowMenuShots: async (path) => {
       await waitRow(path)
@@ -2653,6 +2702,56 @@ export function knowledgePane(main: CdpClient): KnowledgePane {
       await waitRow(path)
       await pickFromMenu(main, ROW(path), actionId, `knowledge row "${path}"`)
     },
+
+    dirMenuShots: async (path) => {
+      await waitDir(path)
+      return openMenu(main, DIR(path), 'menu-button')
+    },
+
+    pickDirMenu: async (path, actionId) => {
+      await waitDir(path)
+      await pickFromMenu(main, DIR(path), actionId, `knowledge dir "${path}"`)
+    },
+
+    draftKind: () =>
+      main.eval<KnowledgeDraftKind | null>(
+        `${DRAFT}?.getAttribute('data-knowledge-draft') ?? null`
+      ),
+
+    draftValue: () => main.eval<string | null>(`${DRAFT_INPUT}?.value ?? null`),
+
+    typeDraft: async (text) => {
+      // React 受控输入：直接赋 value 不会触发 onChange，得走原型上的 setter 再补一个 input 事件
+      await onDraftInput(`
+        const setter = Object.getOwnPropertyDescriptor(
+          window.HTMLInputElement.prototype, 'value'
+        ).set
+        setter.call(el, ${JSON.stringify(text)})
+        el.dispatchEvent(new Event('input', { bubbles: true }))`)
+    },
+
+    submitDraft: async () => {
+      await pressDraft('Enter')
+    },
+    cancelDraft: async () => {
+      await pressDraft('Escape')
+    },
+    blurDraft: async () => {
+      // 真失焦一下；但窗口没有 OS 焦点时 blur() 可能什么都不派发（元素并非 document.activeElement），
+      // 而 React 19 的 onBlur 听的是根容器上的 focusout —— 补一个冒泡的，保证「点走一下」是确定性的
+      await onDraftInput(`
+        el.blur()
+        el.dispatchEvent(new FocusEvent('focusout', { bubbles: true }))`)
+    },
+
+    draftError: () =>
+      main.eval<string | null>(`(() => {
+        const draft = ${DRAFT}
+        if (!draft) return null
+        // 草稿行 = 输入那层 +（失败时）下面那条红字；红字那层里没有 input
+        const err = [...draft.children].find((c) => !c.querySelector('input'))
+        return err ? (err.textContent ?? '').trim() : null
+      })()`),
 
     bodyText,
     waitBody: async (marker) => {

@@ -366,3 +366,93 @@ describe('buildKnowledgeTree — 用户库', () => {
     expect(labels(inner)).toEqual(['P'])
   })
 })
+
+/**
+ * 空目录（手动新建出来的库 / 文件夹）只能从宿主随清单下发的 `dirs` 知道 —— 条目扫描找的是 md，
+ * 看不见没有条目的目录，而新建出来的第一时间就是空的（它们正是新建条目的落点）。
+ * 物化出来的目录与「有条目才长出来」的目录是同一种节点：同一把尺子排序、同一个归一与去重口径、
+ * 同样参与用户库容器的提升。
+ */
+describe('buildKnowledgeTree — dirs 物化空目录', () => {
+  /** 一个空目录节点（`over` 覆盖标题 / 作用域 / 子节点） */
+  const dirNode = (path: string, over: Partial<KnowledgeTreeDir> = {}): KnowledgeTreeDir => ({
+    path,
+    name: path.slice(path.lastIndexOf('/') + 1),
+    scopeDir: null,
+    title: null,
+    dirs: [],
+    files: [],
+    ...over
+  })
+
+  it('KT-15 dirs 物化空目录：库本身与库里任意一层都能凭空长出来，容器照常提掉 / 置顶；空路径与 "/" 跳过、反斜杠与尾随 / 归一；每个 path 只有一个节点；不改输入', () => {
+    const entries = [entry('knowledge/notes/a.md')]
+    const names = { 'projects/p1': 'Acme' }
+    const dirs = [
+      'knowledge/empty',
+      // 已经有条目的库：物化不该再造一个同 path 的节点
+      'knowledge/notes',
+      'knowledge/notes/sub',
+      'projects/p1',
+      'projects/p1/deep',
+      '',
+      '/',
+      'knowledge\\win\\sub/'
+    ]
+    const snapshot = structuredClone({ entries, names, dirs })
+
+    const root = buildKnowledgeTree(entries, names, dirs)
+
+    expect(root).toEqual({
+      path: '',
+      name: '',
+      scopeDir: null,
+      title: null,
+      files: [],
+      dirs: [
+        // 容器置顶；`knowledge/…` 的三个库被提上来与它平级、按名排
+        dirNode('projects', {
+          scopeDir: 'projects',
+          dirs: [dirNode('projects/p1', { title: 'Acme', dirs: [dirNode('projects/p1/deep')] })]
+        }),
+        dirNode('knowledge/empty'),
+        dirNode('knowledge/notes', {
+          files: [{ entry: entries[0], label: 'a' }],
+          dirs: [dirNode('knowledge/notes/sub')]
+        }),
+        // 归一之后是 knowledge/win/sub：中间那层 win 跟着物化出来
+        dirNode('knowledge/win', { dirs: [dirNode('knowledge/win/sub')] })
+      ]
+    })
+
+    const all = allDirs(root)
+    const dirPaths = all.map((d) => d.path)
+    // 提掉的用户根容器一层都不该剩；空路径 / "/" 不造空名或 "." 目录
+    expect(dirPaths).not.toContain('knowledge')
+    expect(all.map((d) => d.name)).not.toContain('')
+    expect(all.map((d) => d.name)).not.toContain('.')
+    // 同一个 path 只有一个节点（行 key 是 path）
+    expect([...new Set(dirPaths)]).toEqual(dirPaths)
+
+    expect({ entries, names, dirs }).toEqual(snapshot)
+  })
+
+  it('KT-16 物化出来的空目录与有条目的目录同一把尺子排序：按显示名与有条目的库交错，不一律沉到末尾', () => {
+    const root = buildKnowledgeTree([entry('knowledge/beta/x.md')], {}, [
+      'knowledge/alpha',
+      'knowledge/zeta',
+      'knowledge/beta/aaa'
+    ])
+
+    // alpha / zeta 只在 dirs 里、beta 是条目长出来的：三者一起按名排，而不是「空的排最后」
+    expect(root.dirs.map((d) => d.path)).toEqual([
+      'knowledge/alpha',
+      'knowledge/beta',
+      'knowledge/zeta'
+    ])
+    const beta = dirAt(root, 'beta')
+    expect(paths(beta)).toEqual(['knowledge/beta/x.md'])
+    expect(beta.dirs.map((d) => d.path)).toEqual(['knowledge/beta/aaa'])
+    expect(beta.dirs[0].files).toEqual([])
+  })
+})

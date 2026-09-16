@@ -6,7 +6,7 @@
  * 也是某个 bundle 目录而不是根。纯辅助（无 vi.mock：mock 必须写在各测试文件顶部才会被提升）。
  */
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readdirSync, writeFileSync, type Dirent } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 
@@ -45,6 +45,35 @@ export function seedFile(root: string, rel: string, text: string): string {
   mkdirSync(dirname(abs), { recursive: true })
   writeFileSync(abs, text, 'utf-8')
   return abs
+}
+
+/**
+ * 目录下的全部条目（递归，`/` 分隔、目录带尾随 `/`、含隐藏项，字典序）；目录不在返回 `[]`。
+ *
+ * 「调用前后磁盘没有多出东西」一律比它：只比名字不比内容，新长出来的目录（空的也算）、
+ * 多写的文件、被删掉的东西都看得见 —— 单看 `readdirSync` 只能看见最外一层。
+ */
+export function treeOf(dir: string): string[] {
+  const out: string[] = []
+  const walk = (abs: string, prefix: string): void => {
+    let items: Dirent[]
+    try {
+      items = readdirSync(abs, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const item of items) {
+      const rel = prefix ? `${prefix}/${item.name}` : item.name
+      if (item.isDirectory()) {
+        out.push(`${rel}/`)
+        walk(join(abs, item.name), rel)
+      } else {
+        out.push(rel)
+      }
+    }
+  }
+  walk(dir, '')
+  return out.sort()
 }
 
 /** 一份概念文本：frontmatter 行 + 正文（尾随换行） */

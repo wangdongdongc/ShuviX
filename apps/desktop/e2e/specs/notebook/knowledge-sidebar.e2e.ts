@@ -13,12 +13,17 @@
  *        标记的以标记为准；普通项目里的同一份文件照旧不出卡。
  *   KE-4 菜单：组头「新建知识库 / 打开目录 / 刷新」，行「在文件夹中显示 / 复制路径」；复制路径按条目 id 的首段分派到两个根。
  *   KE-5 空库一开始就有目录行；里面出现第一个 md 之后，刷新即长出条目行。
+ *   KE-6 目录行菜单 = 新建条目 / 新建文件夹；固定文案的 `项目` 容器不是落点，它连 ⋮ 都没有。
+ *   KE-7 新建知识库：组头菜单 → 树里就地输名字，Esc 与失焦都取消；Enter 建完宿主自己重扫，不用刷新。
+ *   KE-8 失败原因回到那一行里：名字还在框里、草稿还开着，改一下再回车即可。
+ *   KE-9 新建条目：元数据由宿主担保（自述行 / type / status），正文留空，建完立刻打开它的笔记本。
  *
  * 会话归属先走 IPC（`session.list` / `project.list`）；树形与卡片是纯渲染产物，经 pages.ts 的 knowledgePane 读。
  * ⚠️ 组头 `open-folder` 与行 `reveal` 只读不选：隔离实例没有替换 shell，选中会在真实桌面上弹出文件管理器。
- * ⚠️ 用例共用一个实例、按顺序依赖前面的状态（KE-5 往库里写文件，排最后）。
+ * ⚠️ 用例共用一个实例、按顺序依赖前面的状态（KE-5 往库里写文件；KE-7～KE-9 真的建库 / 建条目，排在最后）。
+ * ⚠️ 内联新建行**失焦即取消**：草稿开着的时候一律不点任何东西，读断言全走 knowledgePane 的 draft* 系列。
  */
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { KNOWLEDGE_PROJECT_ID, KNOWLEDGE_USER_PROJECT_ID } from '@shuvix/chat-protocol/knowledge'
@@ -30,6 +35,7 @@ import {
   knowledgePane,
   sidebarPane,
   type FmCardPane,
+  type KnowledgeDraftKind,
   type KnowledgePane,
   type SidebarPane
 } from '../../harness/pages'
@@ -92,6 +98,17 @@ async function notesAt(carrier: string, notebookPath: string): Promise<string[]>
   return (await registryNoteSessions(app.main, carrier))
     .filter((s) => s.notebookPath === notebookPath)
     .map((s) => s.id)
+}
+
+/** 目录行菜单里的动作 id（分隔符滤掉）；该行没有 ⋮ 时返回 null */
+async function dirMenuIds(path: string): Promise<string[] | null> {
+  const shots = await kb.dirMenuShots(path)
+  return shots === null ? null : shots.filter((it) => it.id).map((it) => it.id as string)
+}
+
+/** 等内联新建行长出来 —— 菜单回调 → setState → 渲染，中间隔着几拍 */
+async function waitDraft(kind: KnowledgeDraftKind): Promise<void> {
+  await until(async () => (await kb.draftKind()) === kind, `knowledge ${kind} draft row`)
 }
 
 /**
@@ -339,5 +356,132 @@ describe('知识库分组 × 用户知识库', () => {
       'knowledge/empty/first.md listed after refresh'
     )
     expect(await kb.dirOpen('knowledge/empty')).toBe(false)
+  })
+
+  it('KE-6 目录行菜单：库本身与库里的目录都能往里新建；固定文案的容器不是落点，连 ⋮ 都没有', async () => {
+    await kb.expand()
+
+    // 用户库与项目库一视同仁：两处都是「新建条目 / 新建文件夹」
+    expect(await dirMenuIds('knowledge/notes')).toEqual(['new-entry', 'new-folder'])
+    expect(await dirMenuIds(`projects/${projectId}`)).toEqual(['new-entry', 'new-folder'])
+    // `项目` 是固定文案的容器而不是一个库：它没有 ⋮，openMenu 找不到按钮 → null
+    expect(await kb.dirMenuShots('projects')).toBeNull()
+  })
+
+  it('KE-7 新建知识库：组头菜单 → 就地输名字；Esc 与失焦都取消；Enter 建完宿主自己重扫，不用刷新', async () => {
+    await kb.expand()
+    const before = (await kb.topDirs()).map((d) => d.path)
+
+    // Esc 取消：什么都不该留下
+    await kb.newBase()
+    await waitDraft('base')
+    await kb.typeDraft('Ghost Base')
+    await kb.cancelDraft()
+    await until(async () => (await kb.draftKind()) === null, 'draft row closed by Escape')
+    expect((await kb.topDirs()).map((d) => d.path)).toEqual(before)
+
+    // 失焦同样取消：点走一下不该凭空多出一个库
+    await kb.newBase()
+    await waitDraft('base')
+    await kb.typeDraft('Ghost Base')
+    await kb.blurDraft()
+    await until(async () => (await kb.draftKind()) === null, 'draft row closed by blur')
+    expect((await kb.topDirs()).map((d) => d.path)).toEqual(before)
+
+    // 正常建一个：Enter 落地，**不调用 kb.refresh()** —— 建完宿主自己重扫
+    await kb.newBase()
+    await waitDraft('base')
+    await kb.typeDraft('Manual Base')
+    await kb.submitDraft()
+    await until(
+      async () => (await kb.topDirs()).some((d) => d.path === 'knowledge/Manual Base'),
+      'knowledge/Manual Base listed without a manual refresh'
+    )
+    expect(await kb.draftKind()).toBeNull()
+    // 新库与别的用户库同一个默认态：折叠
+    expect(await kb.dirOpen('knowledge/Manual Base')).toBe(false)
+  })
+
+  it('KE-8 失败原因回到行里：重名 / 保留名都留住这一行与框里的名字，改一下再回车即可', async () => {
+    await kb.expand()
+    await kb.newBase()
+    await waitDraft('base')
+    await kb.typeDraft('Manual Base')
+    await kb.submitDraft()
+
+    // 三种语言的这条文案都是 `{{name}}` 插值 —— 断「原因里点得出是哪个名字重了」，不钉本地化原文
+    const taken = await until(
+      async () => (await kb.draftError()) || null,
+      'name-taken error inside the draft row'
+    )
+    expect(taken).toContain('Manual Base')
+    expect(await kb.draftKind()).toBe('base')
+    // 名字还在框里：改一下再回车，不用重开一行
+    expect(await kb.draftValue()).toBe('Manual Base')
+
+    // 另一条文案：保留名（三种语言都点名 `project`）
+    await kb.typeDraft('project')
+    await kb.submitDraft()
+    const reserved = await until(async () => {
+      const err = await kb.draftError()
+      return err && err !== taken ? err : null
+    }, 'reserved-name error inside the draft row')
+    expect(reserved).toContain('project')
+    expect(await kb.draftKind()).toBe('base')
+
+    // 改成能用的名字 → Enter → 建出、草稿行与错误一起消失
+    await kb.typeDraft('Manual Base 2')
+    await kb.submitDraft()
+    await until(
+      async () => (await kb.topDirs()).some((d) => d.path === 'knowledge/Manual Base 2'),
+      'knowledge/Manual Base 2 listed'
+    )
+    expect(await kb.draftKind()).toBeNull()
+    expect(await kb.draftError()).toBeNull()
+  })
+
+  it('KE-9 新建条目：行菜单 → 输标题 → Enter；元数据由宿主担保、正文留空，建完立刻打开它的笔记本', async () => {
+    await kb.expand()
+    await kb.pickDirMenu('knowledge/empty', 'new-entry')
+    await waitDraft('entry')
+    await kb.typeDraft('Manual Note')
+    await kb.submitDraft()
+
+    // (1) 不用手动刷新：文件名按标题 slug 派生，行名是标题
+    await until(
+      async () => (await kb.rows()).some((r) => r.path === 'knowledge/empty/manual-note.md'),
+      'knowledge/empty/manual-note.md listed without a manual refresh'
+    )
+    expect(await kb.rows()).toEqual(
+      expect.arrayContaining([{ path: 'knowledge/empty/manual-note.md', label: 'Manual Note' }])
+    )
+
+    // (2) 建完立刻打开它的笔记本：用户库挂 __knowledge_user__，一份文件至多一个会话
+    await until(
+      async () => (await notesAt(KNOWLEDGE_USER_PROJECT_ID, 'empty/manual-note.md')).length > 0,
+      'manual-note.md note session under __knowledge_user__'
+    )
+    expect(await notesAt(KNOWLEDGE_USER_PROJECT_ID, 'empty/manual-note.md')).toHaveLength(1)
+    await until(
+      async () => (await kb.activeRow()) === 'knowledge/empty/manual-note.md',
+      'manual-note.md row active'
+    )
+
+    // (3) 元数据与 knowledge 工具的 create 同一套（自述行在最前、固定键序），正文留空 —— 接着在笔记本里写。
+    // 正文经属性卡替换之后不在 .cm-content 里原样可读，故落盘的字节直接比
+    expect(readFileSync(join(userRoot, 'empty', 'manual-note.md'), 'utf-8')).toBe(
+      '---\nshuvix: okf v0.2\ntype: Memory\ntitle: Manual Note\nstatus: draft\n---\n\n'
+    )
+    await card.waitReady()
+    const shot = await kb.card()
+    // 自述行在 → 徽章带版本段（KE-3 里兜底出来的那张没有）
+    expect(shot?.badge).toBe('OKF entry · v0.2')
+    expect(shot?.selects).toEqual([
+      { key: 'type', value: 'Memory' },
+      { key: 'status', value: 'draft' }
+    ])
+
+    // (4) 草稿行收场
+    expect(await kb.draftKind()).toBeNull()
   })
 })

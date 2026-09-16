@@ -35,6 +35,7 @@ import {
   makeTempRoot,
   seedConcept,
   seedFile,
+  treeOf,
   userRootOf
 } from './fixture'
 
@@ -287,5 +288,47 @@ describe('listKnowledgeEntries', () => {
       title: 'Old Charter',
       type: 'Project'
     })
+  })
+
+  /**
+   * 目录跟着条目一起下发（`dirs`）：库本身 + 库里每一层非隐藏子目录，**空的也给** —— 手动新建的
+   * 知识库与文件夹第一时间就是空的，条目扫描（ripgrep 找 md）根本看不见它们，清单里不给，
+   * 侧栏就什么都画不出来，新建条目也就没有落点。容器（`projects` / `knowledge`）自己不是库。
+   */
+  it('EN-8 清单下发 dirs：每个库本身 + 库里每一层非隐藏子目录，空的也给；项目容器自己不在其中；没有 md 的库照样给；清单仍然只读', async () => {
+    const userRoot = userRootOf(root)
+    // 一个没有任何 md 的项目库（连子目录也空着）
+    mkdirSync(join(root, PROJECTS, 'p1', 'sub'), { recursive: true })
+    // 一个全空的用户库
+    mkdirSync(join(userRoot, 'empty'), { recursive: true })
+    seedConcept(userRoot, 'notes/a.md', ['type: Memory', 'title: A'])
+    seedConcept(userRoot, 'notes/sub/b.md', ['type: Memory', 'title: B'])
+    seedConcept(userRoot, 'notes/.trash/t.md', ['type: Memory', 'title: T'])
+    const before = { shuvix: treeOf(root), user: treeOf(userRoot) }
+
+    const listed = await listKnowledgeEntries()
+
+    // 项目库在前、用户库在后（与 listBundles 同序），每个库后面紧跟它自己的子目录
+    expect(listed.dirs).toEqual([
+      'projects/p1',
+      'projects/p1/sub',
+      'knowledge/empty',
+      'knowledge/notes',
+      'knowledge/notes/sub'
+    ])
+    // 容器不是库：它们自己不占行
+    expect(listed.dirs).not.toContain(PROJECTS)
+    expect(listed.dirs).not.toContain('knowledge')
+    // 隐藏段不是库的内容 —— 与条目扫描同口径
+    expect(listed.dirs.filter((d) => d.split('/').some((seg) => seg.startsWith('.')))).toEqual([])
+
+    // 空目录只有目录行，不凭空带来条目；隐藏目录里的 md 照旧不进清单
+    expect(listed.entries.map((e) => e.path)).toEqual([
+      'knowledge/notes/a.md',
+      'knowledge/notes/sub/b.md'
+    ])
+
+    // 只读：下发目录不等于建目录
+    expect({ shuvix: treeOf(root), user: treeOf(userRoot) }).toEqual(before)
   })
 })
