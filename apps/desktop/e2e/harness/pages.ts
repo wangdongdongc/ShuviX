@@ -1281,6 +1281,8 @@ export interface SessionConfigPane {
   toggleKnowledgeBase(name: string): Promise<void>
   /** 知识库卡的说明文案（「还没选过」与「已明确设过」两句的判据） */
   knowledgeHint(): Promise<string>
+  /** 弹窗遮罩的 z-index —— 说明气泡（portal 到 body）必须压在它上面才看得见 */
+  overlayZ(): Promise<number>
 }
 
 /** 会话配置弹窗（SessionConfigDialog；由行菜单的 session-config 拉起） */
@@ -1313,7 +1315,13 @@ export function sessionConfigPane(main: CdpClient): SessionConfigPane {
     hintText: () => main.eval<string>(EXT_HINT(PANEL)),
     knowledgeItems: () => main.eval<KnowledgeItemShot[]>(KNOWLEDGE_ITEMS(PANEL)),
     toggleKnowledgeBase: (name) => toggleKnowledgeIn(main, PANEL, name, 'session config dialog'),
-    knowledgeHint: () => main.eval<string>(KNOWLEDGE_HINT(PANEL))
+    knowledgeHint: () => main.eval<string>(KNOWLEDGE_HINT(PANEL)),
+
+    overlayZ: () =>
+      main.eval<number>(`(() => {
+        const overlay = document.querySelector('.dialog-overlay')
+        return overlay ? Number(getComputedStyle(overlay).zIndex) || 0 : -1
+      })()`)
   }
 }
 
@@ -3157,5 +3165,319 @@ export function knowledgePane(main: CdpClient): KnowledgePane {
       main.eval<boolean>(
         `[...document.querySelectorAll('textarea')].some((t) => !t.closest('.cm-editor'))`
       )
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 说明气泡（InfoHint）与设置窗的 tab 导航
+//
+// 2026-09-17 起设置页的说明不再铺成正文，而是标题旁一个问号 + 悬浮/聚焦才展开的气泡
+// （SettingsPrimitives 的 `InfoHint`）。屏幕上的判据因此从「这段字在不在」变成三件事：
+// 收起时它**不在 DOM 里**、展开后它挂在 `document.body` 上（portal，逃出卡片的
+// `overflow-hidden`）、按 `aria-describedby` 认得出它属于哪个问号。
+//
+// 定位一律从**标题文本**出发：SettingsSection 的 `<h3>` 与 SettingsRow 的标题行都把标题写成
+// 直接文本子节点，认它比认 class 稳（那些 class 是 Tailwind 原子类，改个内边距就变）。标题
+// 本身是本地化的，所以调用方传三语候选，命中任一即可。
+
+/** 展开态下一个说明气泡的快照 */
+export interface InfoHintShot {
+  /** 气泡里的文字 */
+  text: string
+  /** 气泡挂在哪个元素下 —— portal 的判据（'BODY' = 直接挂在 document.body 上） */
+  parentTag: string
+  /** 视口坐标下的矩形 */
+  rect: { top: number; left: number; right: number; bottom: number; width: number; height: number }
+  /** 计算样式的 visibility：锚点整个滚出视野时实现把它置 hidden，元素本身仍挂着 */
+  visibility: string
+  /** 计算样式的 z-index —— 「有没有掉到弹窗遮罩之下」的判据（气泡是 pointer-events-none，遮挡看不出来） */
+  zIndex: number
+  /** 触发钮的 `aria-describedby` 是不是正好指向这个气泡 */
+  describedBy: boolean
+}
+
+/** 触发钮的无障碍接线（只读属性，不触发任何事件） */
+export interface InfoHintA11y {
+  /** 读屏念出来的名字 —— 空串或裸键（`common.info`）都算坏了 */
+  ariaLabel: string
+  /** 收起时该没有这个属性（读作 ''）；展开时是气泡的 id */
+  describedBy: string
+  /** tooltip 不是展开/收起某块内容的控件，不该有这个属性 */
+  hasAriaExpanded: boolean
+  /** 焦点此刻在不在这个按钮上 */
+  focused: boolean
+}
+
+/** 所在滚动容器的滚动余量 */
+export interface HintScrollRoom {
+  scrollTop: number
+  /** 还能往下滚多少（0 = 已经到底或根本滚不动） */
+  down: number
+  /** 还能往上滚多少 */
+  up: number
+}
+
+export interface InfoHintPane {
+  /** 窗口里此刻**看得见**的文字（`innerText`）—— 「说明有没有铺在页面上」的判据 */
+  visibleText(): Promise<string>
+  /** 整个文档里展开着的气泡个数（收起的气泡不在 DOM 里，所以 0 = 一个都没展开） */
+  openTips(): Promise<number>
+  /** 这一行 / 这一节标题里问号的个数（0 = 这里没有说明）；找不到这个标题时抛 */
+  count(titles: string[]): Promise<number>
+  /** 等这个标题上屏（设置窗刚开出来时 React 还没挂完） */
+  waitRow(titles: string[]): Promise<void>
+  /**
+   * 这一行 `subtitle` 的文字（没有就是 ''）—— 与 `count` 正好是一对：
+   * 「这一行自己的内容」照旧铺在标题下方，「这一行是干嘛的」才收进问号。
+   */
+  subtitleOf(titles: string[]): Promise<string>
+  /** 悬浮展开并等气泡上屏 —— **不**收起（后续还要读几何） */
+  hoverOpen(titles: string[]): Promise<InfoHintShot>
+  /** 移开鼠标（收起悬浮打开的那一个） */
+  hoverOut(titles: string[]): Promise<void>
+  /** 真 `focus()` 展开并等气泡上屏；一直没上屏时回 null */
+  focus(titles: string[]): Promise<InfoHintShot | null>
+  /** `blur()` 触发钮 */
+  blur(titles: string[]): Promise<void>
+  /** 此刻的快照，不触发任何事件；气泡不在 DOM 里时 null */
+  peek(titles: string[]): Promise<InfoHintShot | null>
+  /** 等这个问号的气泡从 DOM 里消失 */
+  waitClosed(titles: string[]): Promise<void>
+  a11y(titles: string[]): Promise<InfoHintA11y>
+  /** 往触发钮上派一个真 keydown（冒泡到 document —— Escape 的监听挂在那儿） */
+  pressKey(titles: string[], key: string): Promise<void>
+  /** 触发钮（= 气泡的锚点）此刻的视口矩形 —— 位移与「贴不贴着锚点」的判据 */
+  anchorRect(
+    titles: string[]
+  ): Promise<{ top: number; bottom: number; left: number; width: number }>
+  /** 触发钮所在滚动容器的余量 —— 「这条用例在这个窗口里跑不跑得动」的前置判据 */
+  scrollRoom(titles: string[]): Promise<HintScrollRoom>
+  /** 滚动触发钮所在的滚动容器，回**实际**滚动的量（滚不动就是 0） */
+  scrollBy(titles: string[], dy: number): Promise<number>
+  /** 视口尺寸（气泡守不守得住 8px 边距要拿它比） */
+  viewport(): Promise<{ width: number; height: number }>
+}
+
+/**
+ * 说明气泡读取器。`scope` 是一个求值为 Element / Document 的**页内表达式**，用来把查找
+ * 限制在某个容器里 —— 会话设置面板同时存在两份（弹窗里一份、空会话聊天区内联一份），
+ * 裸查 document 会读到先出现的那一张。
+ */
+export function infoHintPane(client: CdpClient, scope = 'document'): InfoHintPane {
+  /**
+   * 标题命中的那一行（找不到为 null）：SettingsSection 的标题写在 `<h3>` 里、问号是它的**兄弟**，
+   * 所以那一支往上取一层；SettingsRow / SettingsBlock 的标题行自己就装着问号。
+   */
+  const titleLine = (titles: string[]): string => `(() => {
+    const want = ${JSON.stringify(titles)}
+    const root = ${scope}
+    const host = root && [...root.querySelectorAll('h3, div')].find((el) =>
+      [...el.childNodes].some((n) => n.nodeType === 3 && want.includes((n.textContent ?? '').trim()))
+    )
+    if (!host) return null
+    return host.tagName === 'H3' ? host.parentElement : host
+  })()`
+
+  /** 这一行里的那个问号（找不到行、或这一行没有说明时为 null） */
+  const btn = (titles: string[]): string => `(() => {
+    const line = ${titleLine(titles)}
+    return line ? line.querySelector('[data-info-hint]') : null
+  })()`
+
+  /** 该问号此刻的气泡快照（按 aria-describedby 精确取，不认 document 里的第一个） */
+  const shotOf = (titles: string[]): string => `(() => {
+    const b = ${btn(titles)}
+    if (!b) return null
+    const id = b.getAttribute('aria-describedby')
+    const tip = id ? document.getElementById(id) : null
+    if (!tip) return null
+    const r = tip.getBoundingClientRect()
+    return {
+      text: (tip.textContent ?? '').trim(),
+      parentTag: tip.parentElement ? tip.parentElement.tagName : '',
+      rect: { top: r.top, left: r.left, right: r.right, bottom: r.bottom, width: r.width, height: r.height },
+      visibility: getComputedStyle(tip).visibility,
+      zIndex: Number(getComputedStyle(tip).zIndex) || 0,
+      describedBy: true
+    }
+  })()`
+
+  /** 问号所在的滚动容器（往上找第一个真能滚的祖先） */
+  const scroller = (titles: string[]): string => `(() => {
+    const b = ${btn(titles)}
+    for (let p = b && b.parentElement; p; p = p.parentElement) {
+      const oy = getComputedStyle(p).overflowY
+      if ((oy === 'auto' || oy === 'scroll') && p.scrollHeight > p.clientHeight) return p
+    }
+    return null
+  })()`
+
+  const peek = (titles: string[]): Promise<InfoHintShot | null> =>
+    client.eval<InfoHintShot | null>(shotOf(titles))
+
+  /** 反复触发 open 直到气泡上屏（事件 → setState → 重渲染 → useLayoutEffect 定位，都是异步的） */
+  const openWith = async (
+    titles: string[],
+    fire: string,
+    what: string
+  ): Promise<InfoHintShot | null> =>
+    client.eval<InfoHintShot | null>(`(async () => {
+      const b = ${btn(titles)}
+      if (!b) throw new Error('info hint not found: ' + ${JSON.stringify(what)})
+      let shot = null
+      for (let attempt = 0; attempt < 5 && !shot; attempt++) {
+        ${fire}
+        for (let i = 0; i < 20 && !shot; i++) {
+          shot = ${shotOf(titles)}
+          if (!shot) await new Promise((r) => setTimeout(r, 10))
+        }
+      }
+      return shot
+    })()`)
+
+  // React 的 onMouseEnter / onMouseLeave 是从 mouseover / mouseout 合成的（relatedTarget 在
+  // 子树外才算进出），所以派 mouseover / mouseout —— mouseenter React 根本不监听
+  const MOUSE = (type: string): string =>
+    `b.dispatchEvent(new MouseEvent(${JSON.stringify(type)}, { bubbles: true, cancelable: true, relatedTarget: document.body }))`
+
+  const count = (titles: string[]): Promise<number> =>
+    client.eval<number>(`(() => {
+      const line = ${titleLine(titles)}
+      if (!line) throw new Error('settings title not on screen: ' + ${JSON.stringify(titles.join(' / '))})
+      return line.querySelectorAll('[data-info-hint]').length
+    })()`)
+
+  return {
+    visibleText: () => client.eval<string>('document.body.innerText'),
+    openTips: () => client.eval<number>(`document.querySelectorAll('[data-info-tip]').length`),
+
+    count,
+    waitRow: async (titles) => {
+      await until(
+        async () => {
+          await count(titles)
+          return true
+        },
+        `settings title on screen: ${titles.join(' / ')}`
+      )
+    },
+
+    // 标题行的下一个兄弟就是 subtitle 那一层（SettingsRow / SettingsBlock 同一形状；
+    // 分节标题没有 subtitle 这回事，也就不会有人拿 `<h3>` 的标题来问）
+    subtitleOf: (titles) =>
+      client.eval<string>(`(() => {
+        const line = ${titleLine(titles)}
+        const sub = line && line.nextElementSibling
+        return sub ? (sub.textContent ?? '').trim() : ''
+      })()`),
+
+    hoverOpen: async (titles) => {
+      const shot = await openWith(titles, MOUSE('mouseover'), titles.join(' / '))
+      if (!shot) throw new Error(`info hint never opened on hover: ${titles.join(' / ')}`)
+      return shot
+    },
+    hoverOut: async (titles) => {
+      await client.eval(`(() => {
+        const b = ${btn(titles)}
+        if (b) ${MOUSE('mouseout')}
+        return true
+      })()`)
+    },
+
+    focus: (titles) => openWith(titles, 'b.focus()', titles.join(' / ')),
+    blur: async (titles) => {
+      await client.eval(`(() => {
+        const b = ${btn(titles)}
+        if (b) b.blur()
+        return true
+      })()`)
+    },
+
+    peek,
+    waitClosed: async (titles) => {
+      await until(
+        async () => ((await peek(titles)) === null ? true : null),
+        `info hint closed: ${titles.join(' / ')}`
+      )
+    },
+
+    a11y: (titles) =>
+      client.eval<InfoHintA11y>(`(() => {
+        const b = ${btn(titles)}
+        if (!b) throw new Error('info hint not found')
+        return {
+          ariaLabel: b.getAttribute('aria-label') ?? '',
+          describedBy: b.getAttribute('aria-describedby') ?? '',
+          hasAriaExpanded: b.hasAttribute('aria-expanded'),
+          focused: document.activeElement === b
+        }
+      })()`),
+
+    pressKey: async (titles, key) => {
+      await client.eval(`(() => {
+        const b = ${btn(titles)}
+        if (!b) throw new Error('info hint not found')
+        b.dispatchEvent(new KeyboardEvent('keydown', { key: ${JSON.stringify(key)}, bubbles: true, cancelable: true }))
+        return true
+      })()`)
+    },
+
+    anchorRect: (titles) =>
+      client.eval<{ top: number; bottom: number; left: number; width: number }>(`(() => {
+        const b = ${btn(titles)}
+        if (!b) throw new Error('info hint not found')
+        const r = b.getBoundingClientRect()
+        return { top: r.top, bottom: r.bottom, left: r.left, width: r.width }
+      })()`),
+
+    scrollRoom: (titles) =>
+      client.eval<HintScrollRoom>(`(() => {
+        const s = ${scroller(titles)}
+        if (!s) return { scrollTop: 0, down: 0, up: 0 }
+        return {
+          scrollTop: s.scrollTop,
+          down: s.scrollHeight - s.clientHeight - s.scrollTop,
+          up: s.scrollTop
+        }
+      })()`),
+
+    scrollBy: (titles, dy) =>
+      client.eval<number>(`(() => {
+        const s = ${scroller(titles)}
+        if (!s) return 0
+        const before = s.scrollTop
+        s.scrollTop = before + ${dy}
+        return s.scrollTop - before
+      })()`),
+
+    viewport: () =>
+      client.eval<{ width: number; height: number }>(
+        '({ width: window.innerWidth, height: window.innerHeight })'
+      )
+  }
+}
+
+/** 设置窗口的导航（左侧 tab 栏 + 「LLM 工具」页自己的工具子页栏） */
+export interface SettingsNavPane {
+  /** 切到某个 tab（按本地化标签认，三语候选命中任一） */
+  selectTab(labels: string[]): Promise<void>
+  /** 切到「LLM 工具」页左侧的某个工具子页（标签取自 `tools.definitions()` 的 label/name） */
+  selectToolSubTab(label: string): Promise<void>
+}
+
+/**
+ * `openSettings(tab)` 对**已存在**的窗口只聚焦、不切 tab，所以同一个实例里换 tab 只能点。
+ * 按标签文本认按钮：tab 的 id 在 DOM 上没有留痕，而 class 全是 Tailwind 原子类。
+ */
+export function settingsNavPane(settings: CdpClient): SettingsNavPane {
+  const clickButton = async (labels: string[], what: string): Promise<void> => {
+    const expr = `[...document.querySelectorAll('button')].find((b) =>
+      ${JSON.stringify(labels)}.includes((b.textContent ?? '').trim()))`
+    await until(() => settings.eval<boolean>(`!!(${expr})`), `${what} button`)
+    await settings.eval(`(() => { ${expr}.click(); return true })()`)
+  }
+  return {
+    selectTab: (labels) => clickButton(labels, `settings tab ${labels.join(' / ')}`),
+    selectToolSubTab: (label) => clickButton([label], `tool sub-tab ${label}`)
   }
 }
