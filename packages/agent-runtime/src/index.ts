@@ -54,6 +54,11 @@ export {
   type McpConnectResult
 } from './mcpManager'
 export {
+  BuiltinMcpRegistry,
+  type BuiltinMcpScope,
+  type BuiltinMcpFactory
+} from './builtinMcpRegistry'
+export {
   createAskTool,
   AskParamsSchema,
   ASK_DESCRIPTION,

@@ -21,6 +21,7 @@ import { Type, type TSchema } from 'typebox'
 import type { AgentTool, AgentToolResult } from '@earendil-works/pi-agent-core'
 import type { McpServer, McpServerStatus, McpToolInfo } from '@shuvix/chat-protocol/types/mcp'
 import type { McpToolDetails } from '@shuvix/chat-protocol/types/chatMessage'
+import type { BuiltinMcpScope } from './builtinMcpRegistry'
 
 /** MCP tools/list 返回的单个工具结构 */
 export interface McpDiscoveredTool {
@@ -44,8 +45,14 @@ export interface McpStore {
 
 export interface McpManagerOptions {
   store: McpStore
-  /** 按 server 造 transport（桌面 stdio+http；扩展仅 http，遇 stdio 抛错） */
-  createTransport: (server: McpServer) => Transport
+  /**
+   * 按 server 造 transport（桌面 stdio+http+inproc；扩展仅 http，遇 stdio 抛错）。
+   *
+   * `scope` 只在 `type: 'inproc'` 的内置能力服务器上有值 —— 它们按会话实例化，工厂据此把
+   * server side 接到这条会话自己的实例上（见 builtinMcpRegistry）。返回值允许是 Promise：
+   * 内置服务器要 await `server.connect(transport)` 才算接好。
+   */
+  createTransport: (server: McpServer, scope?: BuiltinMcpScope) => Transport | Promise<Transport>
   logger?: { info: (m: string) => void; warn: (m: string) => void; error: (m: string) => void }
   /**
    * 透传给 SDK Client 的构造选项（第二参）。
@@ -62,6 +69,20 @@ interface McpConnection {
   tools: McpDiscoveredTool[]
   status: McpServerStatus
   error?: string
+  /** 配置行 id —— 连接键可能带会话后缀，所以身份记在连接上，不靠解析键 */
+  serverId: string
+  /** 配置行名（工具名前缀 `mcp__<name>__*` 取它） */
+  serverName: string
+  /** 仅 `inproc`：这份实例归哪条会话 */
+  sessionId?: string
+}
+
+/**
+ * 连接键 —— 全局服务器（stdio/http）就是 serverId；`inproc` 内置能力服务器按会话分身，
+ * 键是 `serverId#sessionId`。「一个会话一份 server 实例」落到记账上就是这一行。
+ */
+function connKeyOf(server: McpServer, sessionId?: string): string {
+  return server.type === 'inproc' ? `${server.id}#${sessionId ?? ''}` : server.id
 }
 
 /**
@@ -120,11 +141,15 @@ function parseJsonObject(json: string): Record<string, string> {
  * MCP 管理器 —— 管理所有 MCP Server 的连接、工具发现和调用。应用级单例，不绑定会话。
  */
 export class McpManager {
+  /** 连接键（见 connKeyOf）→ 连接。`inproc` 服务器每条会话一个条目 */
   private connections = new Map<string, McpConnection>()
-  /** 进行中的连接（按 serverId）—— 同一台服务器的并发请求合流，不重复拉起进程 */
+  /** 进行中的连接（按连接键）—— 同一条连接的并发请求合流，不重复拉起进程 */
   private pending = new Map<string, Promise<McpConnectResult>>()
   private store: McpStore
-  private createTransport: (server: McpServer) => Transport
+  private createTransport: (
+    server: McpServer,
+    scope?: BuiltinMcpScope
+  ) => Transport | Promise<Transport>
   private log: NonNullable<McpManagerOptions['logger']>
   private clientOptions?: ConstructorParameters<typeof Client>[1]
 
@@ -144,13 +169,27 @@ export class McpManager {
    * 同时创建 Agent」是常态，重复拉起 stdio 子进程既慢又会留残。搭车的一方沿用**先发起那次**
    * 的超时：手动连接撞上在途的惰性连接时也会在 5 秒后失败，再点一次才是全新的、不设限的尝试。
    */
-  async connect(serverId: string, opts?: { timeoutMs?: number }): Promise<McpConnectResult> {
-    const inflight = this.pending.get(serverId)
+  async connect(
+    serverId: string,
+    opts?: { timeoutMs?: number; sessionId?: string }
+  ): Promise<McpConnectResult> {
+    const server = this.store.findById(serverId)
+    if (!server) {
+      this.log.warn(`connect: server ${serverId} 不存在`)
+      return { ok: false }
+    }
+    // inproc 是按会话实例化的：没有会话就没有可用的实例，属于调用方用错了 API 而非连不上
+    if (server.type === 'inproc' && !opts?.sessionId) {
+      this.log.warn(`connect: 内置能力服务器 ${server.name} 需要 sessionId`)
+      return { ok: false }
+    }
+    const key = connKeyOf(server, opts?.sessionId)
+    const inflight = this.pending.get(key)
     if (inflight) return inflight
-    const task = this.openConnection(serverId, opts?.timeoutMs).finally(() => {
-      this.pending.delete(serverId)
+    const task = this.openConnection(server, key, opts?.sessionId, opts?.timeoutMs).finally(() => {
+      this.pending.delete(key)
     })
-    this.pending.set(serverId, task)
+    this.pending.set(key, task)
     return task
   }
 
@@ -160,9 +199,12 @@ export class McpManager {
    */
   async ensureConnected(
     serverId: string,
-    opts?: { timeoutMs?: number }
+    opts?: { timeoutMs?: number; sessionId?: string }
   ): Promise<McpConnectResult> {
-    if (this.connections.get(serverId)?.status === 'connected') return { ok: true }
+    const server = this.store.findById(serverId)
+    if (!server) return { ok: false }
+    const key = connKeyOf(server, opts?.sessionId)
+    if (this.connections.get(key)?.status === 'connected') return { ok: true }
     return this.connect(serverId, opts)
   }
 
@@ -172,7 +214,7 @@ export class McpManager {
    */
   async ensureServerByName(
     serverName: string,
-    opts?: { timeoutMs?: number }
+    opts?: { timeoutMs?: number; sessionId?: string }
   ): Promise<McpConnectResult> {
     const server = this.store.findEnabled().find((s) => s.name === serverName)
     if (!server) return { ok: false }
@@ -182,40 +224,76 @@ export class McpManager {
   /** 连上全部已启用 server（扩展宿主：会话没有逐台勾选，装配时要全量工具），并发进行 */
   async ensureEnabled(opts?: {
     timeoutMs?: number
+    sessionId?: string
   }): Promise<Array<{ name: string; result: McpConnectResult }>> {
     return Promise.all(
       this.store
         .findEnabled()
+        // inproc 要会话上下文；全量装配（扩展宿主）没有逐会话概念，跳过而不是报错
+        .filter((s) => s.type !== 'inproc' || !!opts?.sessionId)
         .map(async (s) => ({ name: s.name, result: await this.ensureConnected(s.id, opts) }))
     )
   }
 
-  /** 断开单个 MCP Server */
-  async disconnect(serverId: string): Promise<void> {
-    const conn = this.connections.get(serverId)
-    if (!conn) return
-    await this.closeConnection(conn, serverId)
-    this.connections.delete(serverId)
-    this.log.info(`disconnected: ${serverId}`)
+  /**
+   * 断开单个 MCP Server。
+   *
+   * 不带 sessionId 时断的是全局连接；`inproc` 服务器的实例挂在会话上，此时**断开它的全部会话
+   * 实例** —— 设置页停用/改配置是对这台服务器整体下的判断，不该只清掉其中一条会话的分身。
+   */
+  async disconnect(serverId: string, sessionId?: string): Promise<void> {
+    const keys =
+      sessionId === undefined
+        ? [...this.connections].filter(([, c]) => c.serverId === serverId).map(([k]) => k)
+        : [`${serverId}#${sessionId}`]
+    for (const key of keys) {
+      const conn = this.connections.get(key)
+      if (!conn) continue
+      await this.closeConnection(conn, key)
+      this.connections.delete(key)
+      this.log.info(`disconnected: ${key}`)
+    }
+  }
+
+  /**
+   * 关掉某条会话名下的全部内置能力服务器实例（会话删除 / 运行时销毁时调用）。
+   *
+   * **只关 inproc**：全局服务器是跨会话共享的，一条会话结束不该影响别人。
+   */
+  async closeSession(sessionId: string): Promise<void> {
+    const keys = [...this.connections].filter(([, c]) => c.sessionId === sessionId).map(([k]) => k)
+    if (keys.length === 0) return
+    await Promise.allSettled(
+      keys.map(async (key) => {
+        const conn = this.connections.get(key)
+        if (!conn) return
+        await this.closeConnection(conn, key)
+        this.connections.delete(key)
+      })
+    )
+    this.log.info(`closeSession ${sessionId}: ${keys.length} builtin server(s) closed`)
   }
 
   /** 真正的连接过程（握手 + tools/list + 写 cachedTools）；失败把 error 留在状态里给设置页显示 */
-  private async openConnection(serverId: string, timeoutMs?: number): Promise<McpConnectResult> {
-    if (this.connections.has(serverId)) await this.disconnect(serverId)
-
-    const server = this.store.findById(serverId)
-    if (!server) {
-      this.log.warn(`connect: server ${serverId} 不存在`)
-      return { ok: false }
-    }
+  private async openConnection(
+    server: McpServer,
+    key: string,
+    sessionId: string | undefined,
+    timeoutMs?: number
+  ): Promise<McpConnectResult> {
+    const serverId = server.id
+    if (this.connections.has(key)) await this.disconnect(serverId, sessionId)
 
     const conn: McpConnection = {
       client: new Client({ name: 'shuvix', version: '1.0.0' }, this.clientOptions),
       transport: null as unknown as Transport,
       tools: [],
-      status: 'connecting'
+      status: 'connecting',
+      serverId,
+      serverName: server.name,
+      sessionId: server.type === 'inproc' ? sessionId : undefined
     }
-    this.connections.set(serverId, conn)
+    this.connections.set(key, conn)
 
     const fail = (message: string): McpConnectResult => {
       conn.status = 'error'
@@ -231,7 +309,10 @@ export class McpManager {
     }
 
     try {
-      conn.transport = this.createTransport(resolved)
+      conn.transport = await this.createTransport(
+        resolved,
+        server.type === 'inproc' && sessionId ? { sessionId } : undefined
+      )
       conn.transport.onclose = () => {
         this.log.info(`transport closed: ${server.name}`)
         conn.status = 'disconnected'
@@ -253,7 +334,7 @@ export class McpManager {
 
       // 这期间可能有人把这台停用/删掉了（disconnect 摘掉条目时，本次连接可能还没造出 transport，
       // 那一下根本关不到它）。此刻自己收尾，否则 stdio 会留下一个谁也管不到的子进程。
-      if (this.connections.get(serverId) !== conn) {
+      if (this.connections.get(key) !== conn) {
         await this.closeConnection(conn, server.name)
         this.log.info(`connect aborted: ${server.name} 已在连接期间被断开`)
         return { ok: false }
@@ -331,25 +412,47 @@ export class McpManager {
 
   // ─── 状态查询 ───
 
-  getStatus(serverId: string): McpServerStatus {
-    return this.connections.get(serverId)?.status ?? 'disconnected'
+  /**
+   * 某台服务器的连接状态。`inproc` 不带 sessionId 时给**聚合值**：任一会话连着就算 connected ——
+   * 设置页问的是「这台能力在用吗」，而不是某条会话的分身。
+   */
+  getStatus(serverId: string, sessionId?: string): McpServerStatus {
+    if (sessionId !== undefined) {
+      return this.connections.get(`${serverId}#${sessionId}`)?.status ?? 'disconnected'
+    }
+    const direct = this.connections.get(serverId)
+    if (direct) return direct.status
+    let fallback: McpServerStatus = 'disconnected'
+    for (const conn of this.connections.values()) {
+      if (conn.serverId !== serverId) continue
+      if (conn.status === 'connected') return 'connected'
+      if (conn.status === 'connecting') fallback = 'connecting'
+      else if (conn.status === 'error' && fallback !== 'connecting') fallback = 'error'
+    }
+    return fallback
   }
 
-  getError(serverId: string): string | undefined {
-    return this.connections.get(serverId)?.error
+  getError(serverId: string, sessionId?: string): string | undefined {
+    if (sessionId !== undefined) return this.connections.get(`${serverId}#${sessionId}`)?.error
+    const direct = this.connections.get(serverId)
+    if (direct) return direct.error
+    for (const conn of this.connections.values()) {
+      if (conn.serverId === serverId && conn.error) return conn.error
+    }
+    return undefined
   }
 
   /** 按 server 名读连接状态（名字不存在也算 disconnected）—— 宿主据此决定要不要报「正在连接」 */
-  statusByName(serverName: string): McpServerStatus {
+  statusByName(serverName: string, sessionId?: string): McpServerStatus {
     const server = this.store.findAll().find((s) => s.name === serverName)
-    return server ? this.getStatus(server.id) : 'disconnected'
+    return server ? this.getStatus(server.id, sessionId) : 'disconnected'
   }
 
   /** 某个 server 的工具信息（从 DB cachedTools 读 + 附加运行时状态） */
   getServerToolInfos(serverId: string): McpToolInfo[] {
     const server = this.store.findById(serverId)
     if (!server) return []
-    const status = this.connections.get(serverId)?.status ?? 'disconnected'
+    const status = this.getStatus(serverId)
     let tools: McpDiscoveredTool[]
     try {
       tools = JSON.parse(server.cachedTools || '[]') as McpDiscoveredTool[]
@@ -369,7 +472,7 @@ export class McpManager {
   /** 所有 Server 的服务器级信息（每个 server 一条，含离线/禁用） */
   getAllToolInfos(): McpToolInfo[] {
     return this.store.findAll().map((s) => {
-      const status = this.connections.get(s.id)?.status ?? 'disconnected'
+      const status = this.getStatus(s.id)
       let toolCount = 0
       try {
         toolCount = JSON.parse(s.cachedTools || '[]').length
@@ -398,14 +501,14 @@ export class McpManager {
    * `waitForIdle()` 等工具 promise 落定，于是「中止」按钮要卡到 5～10 分钟后才生效。
    */
   async callTool(
-    serverId: string,
+    connKey: string,
     toolName: string,
     args: Record<string, unknown>,
     signal?: AbortSignal
   ): Promise<{ content: unknown[]; isError?: boolean }> {
-    const conn = this.connections.get(serverId)
+    const conn = this.connections.get(connKey)
     if (!conn || conn.status !== 'connected') {
-      throw new Error(`MCP server ${serverId} is not connected`)
+      throw new Error(`MCP server ${connKey} is not connected`)
     }
     // SDK 默认 60s 太短；抬到 5 分钟 + progress 刷新计时 + 10 分钟总上限
     const result = await conn.client.callTool({ name: toolName, arguments: args }, undefined, {
@@ -421,7 +524,7 @@ export class McpManager {
   // ─── 桥接层：MCP → AgentTool ───
 
   private mcpToolToAgentTool(
-    serverId: string,
+    connKey: string,
     serverName: string,
     mcpTool: McpDiscoveredTool
   ): AgentTool<TSchema, McpToolDetails> {
@@ -433,7 +536,7 @@ export class McpManager {
       execute: async (_toolCallId, params, signal): Promise<AgentToolResult<McpToolDetails>> => {
         try {
           const result = await this.callTool(
-            serverId,
+            connKey,
             mcpTool.name,
             params as Record<string, unknown>,
             signal
@@ -464,18 +567,16 @@ export class McpManager {
     }
   }
 
-  /** 某个 Server 的所有工具转 AgentTool[] */
-  serverToAgentTools(serverId: string): AgentTool<TSchema, McpToolDetails>[] {
-    const conn = this.connections.get(serverId)
+  /** 某条连接（连接键）的所有工具转 AgentTool[] */
+  serverToAgentTools(connKey: string): AgentTool<TSchema, McpToolDetails>[] {
+    const conn = this.connections.get(connKey)
     if (!conn || conn.status !== 'connected') return []
-    const server = this.store.findById(serverId)
-    if (!server) return []
-    return conn.tools.map((t) => this.mcpToolToAgentTool(serverId, server.name, t))
+    return conn.tools.map((t) => this.mcpToolToAgentTool(connKey, conn.serverName, t))
   }
 
   /** 所有已连接 Server 的全部 AgentTool（flat） */
   getAllAgentTools(): AgentTool<TSchema, McpToolDetails>[] {
-    return [...this.connections.keys()].flatMap((id) => this.serverToAgentTools(id))
+    return [...this.connections.keys()].flatMap((key) => this.serverToAgentTools(key))
   }
 
   /**
@@ -488,13 +589,21 @@ export class McpManager {
     return this.store.findEnabled().map((s) => `mcp:${s.name}`)
   }
 
-  /** 按服务器名获取所有 AgentTool（agentToolBuilder 按服务器级注入） */
-  getAgentToolsByServerName(serverName: string): AgentTool<TSchema, McpToolDetails>[] {
-    for (const [serverId, conn] of this.connections) {
+  /**
+   * 按服务器名获取所有 AgentTool（宿主按服务器级注入）。
+   *
+   * `inproc` 的实例按会话分身，所以必须连 sessionId 一起匹配 —— 否则 A 会话会拿到
+   * B 会话那份实例的工具闭包，跨会话操作彼此的资源。
+   */
+  getAgentToolsByServerName(
+    serverName: string,
+    sessionId?: string
+  ): AgentTool<TSchema, McpToolDetails>[] {
+    for (const [key, conn] of this.connections) {
       if (conn.status !== 'connected') continue
-      if (this.store.findById(serverId)?.name === serverName) {
-        return this.serverToAgentTools(serverId)
-      }
+      if (conn.serverName !== serverName) continue
+      if (conn.sessionId !== undefined && conn.sessionId !== sessionId) continue
+      return this.serverToAgentTools(key)
     }
     return []
   }

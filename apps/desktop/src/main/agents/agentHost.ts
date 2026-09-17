@@ -166,13 +166,16 @@ async function resolveDesktopTools(req: ToolResolveRequest): Promise<AnyAgentToo
           server,
           connecting
         })
-      const announce = mcpService.statusByName(server) !== 'connected'
+      const announce = mcpService.statusByName(server, req.rootSessionId) !== 'connected'
       if (announce) notify(true)
       try {
         return {
           server,
           result: await mcpService.ensureServerByName(server, {
-            timeoutMs: LAZY_CONNECT_TIMEOUT_MS
+            timeoutMs: LAZY_CONNECT_TIMEOUT_MS,
+            // 内置能力服务器按会话实例化；根会话 id 与 ToolContext.sessionId 同源，
+            // 于是派生 agent 与根 agent 共用同一份实例（ssh 连接、CDP tab 都该是会话级的）
+            sessionId: req.rootSessionId
           })
         }
       } finally {
@@ -192,7 +195,7 @@ async function resolveDesktopTools(req: ToolResolveRequest): Promise<AnyAgentToo
       }
       continue
     }
-    for (const mcpTool of mcpService.getAgentToolsByServerName(server)) {
+    for (const mcpTool of mcpService.getAgentToolsByServerName(server, req.rootSessionId)) {
       tools.push(wrap(mcpTool))
     }
   }

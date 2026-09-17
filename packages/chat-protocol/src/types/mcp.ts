@@ -5,8 +5,14 @@
  * 连接/发现/调用等运行时行为由 @shuvix/agent-runtime 的 McpManager 承载（宿主无关）。
  */
 
-/** 传输类型：stdio = 本地子进程（仅桌面）；http = 远程（Streamable HTTP / SSE，桌面+浏览器） */
-export type McpTransportType = 'stdio' | 'http'
+/**
+ * 传输类型：
+ * - `stdio` 本地子进程（仅桌面）
+ * - `http` 远程（Streamable HTTP / SSE，桌面+浏览器）
+ * - `inproc` **内置能力服务器**：随产品发布、跑在进程内、**按会话实例化**，不起进程也不走网络
+ *   （见 agent-runtime 的 builtinMcpRegistry）。默认不启用，由用户在会话里逐条勾选。
+ */
+export type McpTransportType = 'stdio' | 'http' | 'inproc'
 
 /** MCP Server 配置（桌面对应 mcp_servers 表行；扩展存 chrome.storage） */
 export interface McpServer {

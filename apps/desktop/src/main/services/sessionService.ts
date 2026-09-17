@@ -11,6 +11,7 @@ import { settingsDao } from '../dao/settingsDao'
 import { t } from '../i18n'
 import { getTempWorkspace, getToolResultsBase } from '../utils/paths'
 import { filterAvailableTools } from './toolAggregator'
+import { mcpService } from './mcpService'
 import { buildAllowEntry } from '../utils/toolUtils/allowList'
 import type { AllowToolType } from '../utils/toolUtils/allowList'
 import type {
@@ -97,6 +98,10 @@ export class SessionService {
       // **await**：解绑必须发生在关停之后 —— 见 SessionManager 顶部注释
       if (reason === 'invalidate') await agent.invalidate()
       else await agent.destroy()
+      // 内置能力服务器（inproc MCP）的寿命绑**会话**，不绑运行时实例：回退重建时留着，
+      // 这样 ssh 的 control socket / browser 的 tab 不会被一次重建白白掐断；
+      // 只有会话真的没了才释放。
+      if (reason !== 'invalidate') await mcpService.closeSession(sessionId)
       log.info(`移除 AgentSession session=${sessionId} reason=${reason}`)
     },
     // 关停可能很久（工具卡住不返回时会一直等），期间会话呈现「正在停止」并拦住发送

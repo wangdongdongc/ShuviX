@@ -49,6 +49,7 @@ vi.mock('../sessionStorage', () => ({
 }))
 vi.mock('../../i18n', () => ({ t: (key: string) => key }))
 vi.mock('../../utils/paths', () => ({ getTempWorkspace: vi.fn(), getToolResultsBase: vi.fn() }))
+vi.mock('../mcpService', () => ({ mcpService: { closeSession: vi.fn() } }))
 vi.mock('../toolAggregator', () => ({
   filterAvailableTools: vi.fn((tools: string[]) => tools)
 }))

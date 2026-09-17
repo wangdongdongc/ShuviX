@@ -58,6 +58,7 @@ vi.mock('../../utils/paths', () => ({
   getTempWorkspace: (sid: string) => `/tmp/${sid}`,
   getToolResultsBase: vi.fn()
 }))
+vi.mock('../mcpService', () => ({ mcpService: { closeSession: vi.fn() } }))
 vi.mock('../toolAggregator', () => ({
   filterAvailableTools: vi.fn((tools: string[]) => tools)
 }))

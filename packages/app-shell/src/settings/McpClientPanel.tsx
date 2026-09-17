@@ -175,6 +175,8 @@ export function McpClientPanel({ api, caps = {} }: McpClientPanelProps): React.J
   }
 
   const openEditDialog = (s: McpServerInfo): void => {
+    // 内置能力服务器（inproc）没有可编辑的配置：不起进程、不连网络，没有 command/url/env 可填
+    if (s.type === 'inproc') return
     setDialogInitial({
       id: s.id,
       name: s.name,
@@ -319,13 +321,15 @@ export function McpClientPanel({ api, caps = {} }: McpClientPanelProps): React.J
                     >
                       {s.isEnabled ? <Power size={12} /> : <PowerOff size={12} />}
                     </button>
-                    <button
-                      onClick={() => openEditDialog(s)}
-                      className="p-1 text-text-tertiary hover:text-text-primary transition-colors"
-                      title={t('common.edit') || 'Edit'}
-                    >
-                      <Pencil size={12} />
-                    </button>
+                    {s.type !== 'inproc' && (
+                      <button
+                        onClick={() => openEditDialog(s)}
+                        className="p-1 text-text-tertiary hover:text-text-primary transition-colors"
+                        title={t('common.edit') || 'Edit'}
+                      >
+                        <Pencil size={12} />
+                      </button>
+                    )}
                     <button
                       onClick={() => setDeletingServer(s)}
                       disabled={s.isBuiltin === 1}

@@ -50,6 +50,7 @@ vi.mock('../../utils/paths', () => ({
   getTempWorkspace: (id: string) => `/nonexistent/shuvix-unit/tmp/${id}`,
   getToolResultsBase: () => '/nonexistent/shuvix-unit/tool-results'
 }))
+vi.mock('../mcpService', () => ({ mcpService: { closeSession: vi.fn() } }))
 vi.mock('../toolAggregator', () => ({
   filterAvailableTools: vi.fn((tools: string[]) => tools)
 }))

@@ -51,6 +51,7 @@ vi.mock('../../utils/paths', () => ({
   getTempWorkspace: vi.fn(() => '/nonexistent/e2e-tmp'),
   getToolResultsBase: vi.fn(() => '/nonexistent/e2e-results')
 }))
+vi.mock('../mcpService', () => ({ mcpService: { closeSession: vi.fn() } }))
 vi.mock('../toolAggregator', () => ({
   filterAvailableTools: vi.fn((tools: string[]) => tools)
 }))
