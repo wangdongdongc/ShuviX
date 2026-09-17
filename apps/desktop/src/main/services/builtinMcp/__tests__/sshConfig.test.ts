@@ -12,7 +12,9 @@
  *   58…75  `Include`：按 ~/.ssh 解析相对路径、通配、符号链接、坏目标、环、深度上限，
  *          以及「被包含文件不夺走父文件的当前块」；
  *   76…79  先到先得按**键**算，端口的取值范围；
- *   80…84  边界：配置不存在 / 读不动 / 没有任何 Host / CRLF / 顺序。
+ *   80…84  边界：配置不存在 / 读不动 / 没有任何 Host / CRLF / 顺序；
+ *   85…89  `-` 开头的记号一律不是别名 —— 别名原样进 `ssh` 的 argv，而 `Host -oProxyCommand=…`
+ *          是一份配置可以合法写出的东西，放它出去等于本地任意命令执行。
  *
  * fs 是真的 —— 通配、符号链接、EISDIR 这些换成假 fs 一条也测不到；`readFileSync` 只套了一层
  * 可数的透传壳（同 instruction/__tests__/instructionInjector.test.ts 的手法），因为「环里每个
@@ -495,5 +497,57 @@ ServerAliveInterval 60
 Compression yes
 `)
     ).toEqual([])
+  })
+})
+
+// ─── `-` 开头的记号不是别名 ──────────────────────────────────────────────
+//
+// 这一组测的不是解析的准确性，而是**这份清单会被原样交给 `ssh` 的 argv**。
+// `Host -oProxyCommand=…` 是 OpenSSH 允许写出的东西（它在自己那边只是个永远匹配不上的
+// 主机名），可一旦它成了我们清单里的一个「别名」，`ssh -oProxyCommand=touch X -- <cmd>`
+// 就会在**本地**执行那条命令，而安全门看到的是 `<cmd>` —— 卡片上写着一条无害的命令，
+// 跑的却是别的。所以判据是记号的形状，不是它像不像一台机器。
+
+describe('listSshHosts 的 argv 防线', () => {
+  it('SSHC-U-85: `Host -oProxyCommand=…` 不是别名，同块里的兄弟照常产出', () => {
+    expect(
+      aliases(`Host -oProxyCommand=id good
+  HostName 1.2.3.4
+`)
+    ).toEqual(['good'])
+  })
+
+  it('SSHC-U-86: 带引号因而含空格 / 管道的 `-` 记号同样不是别名', () => {
+    // 引号让一个记号可以装下一整条 shell 命令；判据仍然只看首字符
+    expect(
+      aliases(`Host "-oProxyCommand=sh -c 'touch /tmp/pwned | id'" good
+  HostName 1.2.3.4
+`)
+    ).toEqual(['good'])
+  })
+
+  it('SSHC-U-87: 裸 `--` 不是别名 —— 它在 argv 里是选项终止符', () => {
+    expect(
+      aliases(`Host -- good
+  HostName 1.2.3.4
+`)
+    ).toEqual(['good'])
+  })
+
+  it('SSHC-U-88: 单个 `-` 也不是别名', () => {
+    expect(
+      aliases(`Host - good
+  HostName 1.2.3.4
+`)
+    ).toEqual(['good'])
+  })
+
+  it('SSHC-U-89: 非行首的 `-` 照常 —— 拦的是位置，不是这个字符', () => {
+    // 连字符是别名里最常见的写法，把它整个拉黑会让多数人的配置凭空少掉一半机器
+    expect(
+      aliases(`Host my-box a-b-c
+  HostName 1.2.3.4
+`)
+    ).toEqual(['my-box', 'a-b-c'])
   })
 })

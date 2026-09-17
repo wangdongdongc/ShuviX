@@ -417,6 +417,319 @@ describe('createSecurityContext — enforceInvocation（L1 全工具门）', () 
   })
 })
 
+// ─── L1 门上的 MCP 事实 ──────────────────────────────────────────────────
+//
+// 事实并进 `invocation` 客体而不另开 `{type:'mcp'}`：L1 是所有工具共用的一道门，一条写着
+// `object.type == 'invocation'` 的「什么都问一遍」策略若因为换了类型而不再覆盖 MCP 工具，
+// 恰好漏掉的是**最不可信的那批**。所以类型不变，只是多了几条属性 —— 而这几条属性的取值
+// 规则是「可信才给值」，于是策略只能写成 fail-safe 的形态。
+
+/** 一次 MCP 工具调用的事实（内置 ssh 的 exec，四个 hint 齐全） */
+const SSH_EXEC_FACTS = {
+  server: 'ssh',
+  tool: 'exec',
+  trusted: true,
+  readOnly: false,
+  destructive: true,
+  idempotent: false,
+  openWorld: true
+}
+
+/** 同形态的第三方调用：四个 hint 一条都没落下来（不可信 server 的 annotations 不收） */
+const THIRD_PARTY_FACTS = { server: 'evil', tool: 'read-file', trusted: false }
+
+/** 规范推荐的守卫形态：除非被可信 server 证明是只读，否则就问 */
+const GUARDED = 'has(object.mcpServer) && !(object.mcpTrusted && object.readOnly)'
+
+describe('createSecurityContext — enforceInvocation × MCP 事实', () => {
+  it('CT-T8 事实全部落到 invocation 客体上，type 不变，泛 invocation 规则照旧命中', async () => {
+    // 这条 match 把七个属性逐一核对了一遍：命中即等于「都落对了」
+    const { provider, requestUserInput } = invocationProvider([
+      {
+        effect: 'ask',
+        match:
+          "object.type == 'invocation' && object.mcpServer == 'ssh' && object.mcpTool == 'exec' " +
+          '&& object.mcpTrusted && !object.readOnly && object.destructive ' +
+          '&& !object.idempotent && object.openWorld'
+      }
+    ])
+    const ctx = createSecurityContext(SUBJECT, ENVIRONMENT, provider)
+
+    await expect(
+      ctx.enforceInvocation({
+        toolCallId: 'tc-m1',
+        toolName: 'mcp__ssh__exec',
+        mcp: SSH_EXEC_FACTS
+      })
+    ).resolves.toEqual({ status: 'allowed' })
+    expect(requestUserInput).toHaveBeenCalledTimes(1)
+
+    // type 仍是 invocation：一条只写 type 的「什么都问一遍」策略不能因此漏掉 MCP 工具
+    const plain = invocationProvider([{ effect: 'ask', match: "object.type == 'invocation'" }])
+    const ctx2 = createSecurityContext(SUBJECT, ENVIRONMENT, plain.provider)
+    await ctx2.enforceInvocation({
+      toolCallId: 'tc-m2',
+      toolName: 'mcp__ssh__exec',
+      mcp: SSH_EXEC_FACTS
+    })
+    expect(plain.requestUserInput).toHaveBeenCalledTimes(1)
+  })
+
+  it('CT-T9 守卫形态：可信且只读 → 静默放行；不可信 → 问', async () => {
+    const { provider, requestUserInput } = invocationProvider([{ effect: 'ask', match: GUARDED }])
+    const ctx = createSecurityContext(SUBJECT, ENVIRONMENT, provider)
+
+    await ctx.enforceInvocation({
+      toolCallId: 'tc-ro',
+      toolName: 'mcp__ssh__list-hosts',
+      mcp: { server: 'ssh', tool: 'list-hosts', trusted: true, readOnly: true }
+    })
+    expect(requestUserInput).not.toHaveBeenCalled()
+    expect(getSessionDecisions(SID)).toEqual([]) // allow 即非事件
+
+    await ctx.enforceInvocation({
+      toolCallId: 'tc-3p',
+      toolName: 'mcp__evil__read-file',
+      mcp: THIRD_PARTY_FACTS
+    })
+    expect(requestUserInput).toHaveBeenCalledTimes(1)
+  })
+
+  it('CT-T10 第三方买不到这份安静 —— 自称 readOnlyHint 也拿不到 readOnly 属性', async () => {
+    const { provider, requestUserInput } = invocationProvider([{ effect: 'ask', match: GUARDED }])
+    const ctx = createSecurityContext(SUBJECT, ENVIRONMENT, provider)
+
+    // 桥接层对不可信 server 的四个 hint **一条都不落**（见 mcpManager 的 MCPB-U-37），
+    // 所以这里到达门上的事实里根本没有 readOnly 可言 —— 哪怕它在 tools/list 里写了 true
+    await ctx.enforceInvocation({
+      toolCallId: 'tc-liar',
+      toolName: 'mcp__evil__read-file',
+      mcp: { ...THIRD_PARTY_FACTS, readOnly: undefined }
+    })
+    expect(requestUserInput).toHaveBeenCalledTimes(1)
+  })
+
+  it('CT-T11 `has(object.readOnly)`：不可信为假，可信且声明过为真', async () => {
+    const { provider, requestUserInput } = invocationProvider([
+      { effect: 'ask', match: "object.type == 'invocation' && !has(object.readOnly)" }
+    ])
+    const ctx = createSecurityContext(SUBJECT, ENVIRONMENT, provider)
+
+    // undefined 的键根本不进求值文档（buildMatchContext 只搬非 undefined 的值），
+    // 于是「没说」与「说了 false」在策略里是两件可分辨的事
+    await ctx.enforceInvocation({
+      toolCallId: 'tc-h1',
+      toolName: 'mcp__evil__x',
+      mcp: THIRD_PARTY_FACTS
+    })
+    expect(requestUserInput).toHaveBeenCalledTimes(1)
+
+    await ctx.enforceInvocation({
+      toolCallId: 'tc-h2',
+      toolName: 'mcp__ssh__exec',
+      mcp: SSH_EXEC_FACTS // readOnly: false —— 说了，只是说的是 false
+    })
+    expect(requestUserInput).toHaveBeenCalledTimes(1)
+  })
+
+  it('CT-T12 守卫**不能省**：裸表达式在普通内置工具上 fail-safe 成命中', async () => {
+    const warn = vi.fn()
+    const naked = invocationProvider([
+      { effect: 'ask', match: '!(object.mcpTrusted && object.readOnly)' }
+    ])
+    const ctxNaked = createSecurityContext(
+      SUBJECT,
+      ENVIRONMENT,
+      Object.assign(naked.provider, { logger: { info: vi.fn(), warn, error: vi.fn() } })
+    )
+
+    // 非 MCP 工具的客体上压根没有这些键 → strict 语义报错 → deny/ask 按 fail-safe 算命中，
+    // 于是每一次 read / ls / bash 都弹一张卡。这就是文档里那句「守卫不能省」的代价
+    await ctxNaked.enforceInvocation({ toolCallId: 'tc-n', toolName: 'read' })
+    expect(naked.requestUserInput).toHaveBeenCalledTimes(1)
+    expect(warn.mock.calls.map((c) => String(c[0])).join('\n')).toContain(
+      'treating as matched (fail-safe)'
+    )
+
+    // 同一次调用，加了 has() 守卫就是非事件
+    const guarded = invocationProvider([{ effect: 'ask', match: GUARDED }])
+    const ctxGuarded = createSecurityContext(SUBJECT, ENVIRONMENT, guarded.provider)
+    await expect(
+      ctxGuarded.enforceInvocation({ toolCallId: 'tc-g', toolName: 'read' })
+    ).resolves.toEqual({ status: 'allowed' })
+    expect(guarded.requestUserInput).not.toHaveBeenCalled()
+  })
+
+  it('CT-T13 按 server 名点名：只有那一台被拦，别的 MCP 工具照旧', async () => {
+    const { provider, requestUserInput } = invocationProvider([
+      { effect: 'deny', match: "has(object.mcpServer) && object.mcpServer == 'evil'" }
+    ])
+    const ctx = createSecurityContext(SUBJECT, ENVIRONMENT, provider)
+
+    await expect(
+      ctx.enforceInvocation({
+        toolCallId: 'tc-e',
+        toolName: 'mcp__evil__read-file',
+        mcp: THIRD_PARTY_FACTS
+      })
+    ).rejects.toThrow(/Denied by security policy rule/)
+
+    await expect(
+      ctx.enforceInvocation({
+        toolCallId: 'tc-ok',
+        toolName: 'mcp__ssh__exec',
+        mcp: SSH_EXEC_FACTS
+      })
+    ).resolves.toEqual({ status: 'allowed' })
+    // 非 MCP 工具也不受连坐（has() 守住了）
+    await expect(
+      ctx.enforceInvocation({ toolCallId: 'tc-read', toolName: 'read' })
+    ).resolves.toEqual({ status: 'allowed' })
+    expect(requestUserInput).not.toHaveBeenCalled()
+  })
+
+  it('CT-T14 询问卡片今天只写工具名 —— server / tool / 行为提示都没上卡', async () => {
+    const { provider, requestUserInput } = invocationProvider([
+      { effect: 'ask', match: "object.type == 'invocation'" }
+    ])
+    const ctx = createSecurityContext(SUBJECT, ENVIRONMENT, provider)
+
+    await ctx.enforceInvocation({
+      toolCallId: 'tc-card',
+      toolName: 'mcp__ssh__exec',
+      description: 'run uptime on prod',
+      mcp: SSH_EXEC_FACTS
+    })
+
+    // 钉的是**今天**的形态：材料的回退链走到「工具名」就停了（invocation 客体上既没有
+    // command 也没有 sql）。哪天要把目标写上卡，改的是 buildAskMaterials，这条会红
+    expect(requestUserInput).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'tc-card',
+        kind: 'ask',
+        toolName: 'mcp__ssh__exec',
+        command: 'mcp__ssh__exec',
+        description: 'run uptime on prod'
+      })
+    )
+  })
+
+  it('CT-T15 决策日志：客体种类仍是 invocation，摘要是工具名，事实不入库', async () => {
+    const { provider } = invocationProvider([
+      { effect: 'ask', match: "object.type == 'invocation'" }
+    ])
+    const ctx = createSecurityContext(SUBJECT, ENVIRONMENT, provider)
+
+    await ctx.enforceInvocation({
+      toolCallId: 'tc-log',
+      toolName: 'mcp__ssh__exec',
+      operation: 'exec',
+      mcp: SSH_EXEC_FACTS
+    })
+
+    const logs = getSessionDecisions(SID)
+    expect(logs).toHaveLength(1)
+    expect(logs[0]).toMatchObject({
+      effect: 'ask',
+      objectKind: 'invocation',
+      objectSummary: 'mcp__ssh__exec: exec',
+      toolName: 'mcp__ssh__exec',
+      tool: { name: 'mcp__ssh__exec', operation: 'exec' },
+      userResponse: 'allowed',
+      // J10：主体今天恒报 root agent（档案维度还没接线）
+      subject: { kind: 'agent', agentKind: 'root' }
+    })
+    // 日志里没有 MCP 事实这一栏 —— 要按 server 回查，今天只能靠 toolName 的前缀
+    expect(JSON.stringify(logs[0])).not.toContain('mcpTrusted')
+  })
+})
+
+// ─── ssh 命令客体上的 host ───────────────────────────────────────────────
+//
+// 有它策略才写得出「生产要问、测试放行」，用户也才能在卡片上看出这条 `rm -rf` 要跑在哪台
+// 机器上 —— 否则卡片上只有命令，目标只能靠模型自己写的 description，而那段文字在提示注入
+// 的场景里正是攻击者控制的。bash 刻意不写这个键，于是 `has(object.host)` 就是「远端还是本地」。
+
+describe('createSecurityContext — enforceCommand 的 host', () => {
+  /** 记录询问材料、一律放行的 provider */
+  function commandProvider(rules: PolicyRuleSpec[]): {
+    provider: SecurityHostProvider
+    requestUserInput: Mock<(req: InputRequest) => Promise<InputResponse>>
+    warn: Mock
+  } {
+    const requestUserInput = vi.fn(
+      async (_req: InputRequest): Promise<InputResponse> => ({ kind: 'ask', allowed: true })
+    )
+    const warn = vi.fn()
+    return {
+      provider: makeProvider(
+        { autoAllow: false, allowList: [] },
+        {
+          requestUserInput,
+          logger: { info: vi.fn(), warn, error: vi.fn() },
+          getUserPolicies: () => [userPolicy('host-gate', rules)]
+        }
+      ),
+      requestUserInput,
+      warn
+    }
+  }
+
+  it('CT-T16 `has(object.host)` 区分远端与本地：prod 被拦，staging 与 bash 不受连坐', async () => {
+    const { provider, warn } = commandProvider([
+      {
+        effect: 'deny',
+        match: "object.type == 'command' && has(object.host) && object.host == 'prod'"
+      }
+    ])
+    const ctx = createSecurityContext(SUBJECT, ENVIRONMENT, provider)
+    const opts = { toolCallId: 'tc-h', toolName: 'mcp__ssh__exec' }
+
+    await expect(
+      ctx.enforceCommand({ channel: 'ssh', command: 'rm -rf /srv/app', host: 'prod' }, opts)
+    ).rejects.toThrow(/Denied by security policy rule/)
+
+    await expect(
+      ctx.enforceCommand({ channel: 'ssh', command: 'rm -rf /srv/app', host: 'staging' }, opts)
+    ).resolves.toEqual({ status: 'allowed' })
+
+    // bash 的客体上根本没有 host 这个键，has() 于是为假 —— 不是靠「等于空串」蒙对的
+    await expect(
+      ctx.enforceCommand(
+        { channel: 'bash', command: 'rm -rf /srv/app' },
+        {
+          toolCallId: 'tc-b',
+          toolName: 'bash'
+        }
+      )
+    ).resolves.toEqual({ status: 'allowed' })
+    // 而且不是 fail-safe 蒙中的放行：缺键若报错，deny 会当成命中
+    expect(warn.mock.calls.map((c) => String(c[0])).join('\n')).not.toContain('fail-safe')
+  })
+
+  it('CT-T17 卡片上写 `ssh <alias>: <command>`；本地命令一字不改', async () => {
+    const { provider, requestUserInput } = commandProvider([])
+    const ctx = createSecurityContext(SUBJECT, ENVIRONMENT, provider)
+
+    // 内置 ask-on-command 会把两条都拦到卡片上，正好看材料
+    await ctx.enforceCommand(
+      { channel: 'ssh', command: 'systemctl restart app', host: 'prod' },
+      { toolCallId: 'tc-c1', toolName: 'mcp__ssh__exec' }
+    )
+    await ctx.enforceCommand(
+      { channel: 'bash', command: 'ls -la' },
+      { toolCallId: 'tc-c2', toolName: 'bash' }
+    )
+
+    // 远端那条把目标机器写进卡片 —— 否则卡片上只有命令，跑在哪台只能靠模型自己写的
+    // description，而那段文字在提示注入的场景里正是攻击者控制的
+    const cards = requestUserInput.mock.calls.map(([req]) =>
+      req.kind === 'ask' ? req.command : `(not an ask: ${req.kind})`
+    )
+    expect(cards).toEqual(['ssh prod: systemctl restart app', 'ls -la'])
+  })
+})
+
 describe('createSecurityContext — enforceDatabase（数据库查询守卫）', () => {
   const DB_OPTS = { toolCallId: 'tc-db', toolName: 'database', abortError: 'TOOL_ABORTED' }
 

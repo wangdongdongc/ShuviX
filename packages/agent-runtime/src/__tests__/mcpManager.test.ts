@@ -19,7 +19,12 @@ import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 import type { JSONRPCMessage, JSONRPCRequest } from '@modelcontextprotocol/sdk/types.js'
 import type { McpServer } from '@shuvix/chat-protocol/types/mcp'
 import type { BuiltinMcpScope } from '../builtinMcpRegistry'
-import { McpManager, type McpDiscoveredTool, type McpStore } from '../mcpManager'
+import {
+  McpManager,
+  type McpAgentToolMeta,
+  type McpDiscoveredTool,
+  type McpStore
+} from '../mcpManager'
 
 // ─── 假件 ────────────────────────────────────────────────────────────────
 
@@ -44,6 +49,13 @@ class FakeTransport implements Transport {
   closeCalls = 0
   /** 收到的 tools/call —— 「这次调用落在哪份实例上」只能从这里看出来 */
   toolCalls: Array<{ name: string; args: Record<string, unknown> }> = []
+  /**
+   * 每次 tools/call 的 `_meta`（与 toolCalls 同序）。
+   *
+   * 单独一个数组而不是并进 toolCalls：那边的 `toEqual` 断言写在别处，多一个键会连坐。
+   * 内置能力服务器的询问卡片按 toolCallId 定位，而它只能经这条路进去。
+   */
+  toolCallMetas: Array<Record<string, unknown> | undefined> = []
   private held: JSONRPCRequest[] = []
   private holding: boolean
 
@@ -98,11 +110,16 @@ class FakeTransport implements Transport {
 
   private answer(message: JSONRPCRequest): void {
     if (message.method === 'tools/call') {
-      const params = (message.params ?? {}) as { name?: string; arguments?: unknown }
+      const params = (message.params ?? {}) as {
+        name?: string
+        arguments?: unknown
+        _meta?: Record<string, unknown>
+      }
       this.toolCalls.push({
         name: params.name ?? '',
         args: (params.arguments ?? {}) as Record<string, unknown>
       })
+      this.toolCallMetas.push(params._meta)
     }
     const result =
       message.method === 'initialize'
@@ -146,6 +163,12 @@ const tool = (name: string, description?: string): McpDiscoveredTool => ({
   ...(description === undefined ? {} : { description }),
   inputSchema: { type: 'object', properties: { q: { type: 'string' } } }
 })
+
+/** 带行为提示的工具声明（annotations 的可信规则那一组用） */
+const annotated = (
+  name: string,
+  annotations: NonNullable<McpDiscoveredTool['annotations']>
+): McpDiscoveredTool => ({ ...tool(name), annotations })
 
 interface TestStore extends McpStore {
   /** 内存表，用例直接改行来模拟「设置页改了配置」 */
@@ -1052,5 +1075,185 @@ describe('McpManager 内置服务器的可用性与批量装配', () => {
     const info = h.mgr.getAllToolInfos().find((i) => i.name === 'mcp:ssh')
     // isBuiltin 是前端把它渲染成「内置能力」而不是一台可编辑服务器的依据
     expect(info).toMatchObject({ isBuiltin: true, serverStatus: 'disconnected' })
+  })
+})
+
+// ─── annotations 的可信规则 ──────────────────────────────────────────────
+//
+// MCP 规范要求客户端把**不可信 server** 的 annotations 当作不可信，而这里的做法是
+// 「可信才给值」：第三方的四个 hint 一条都不落到客体上。判据是 **`type === 'inproc'`
+// 且 isBuiltin** —— 光看 isBuiltin 不行，那一位的含义历来是「用户不可编辑/不可删除的
+// 预置行」，v10 种下的 tavily 就是一个 isBuiltin=1 的**远程 HTTP endpoint**。把一串
+// 从网上收到的 `readOnlyHint` 当成保证，正好在最不可信的那批上开了口子。
+
+const FULL_HINTS = {
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: false
+} as const
+
+/** 某条连接上某个工具的 mcpMeta */
+const metaOf = (
+  tools: ReturnType<McpManager['serverToAgentTools']>,
+  i = 0
+): McpAgentToolMeta['mcpMeta'] => (tools[i] as unknown as McpAgentToolMeta).mcpMeta
+
+describe('McpManager 的 annotations 可信规则', () => {
+  it('MCPB-U-36: 可信 server 的四个 hint 原样落到工具事实上', async () => {
+    const h = setup([sshRow()])
+    h.plan.set('ssh', { tools: [annotated('list-hosts', FULL_HINTS)] })
+    await h.mgr.ensureServerByName('ssh', { sessionId: 's1' })
+
+    expect(metaOf(h.mgr.serverToAgentTools('ssh-id#s1'))).toEqual({
+      server: 'ssh',
+      tool: 'list-hosts',
+      trusted: true,
+      readOnly: true,
+      destructive: false,
+      idempotent: true,
+      openWorld: false
+    })
+  })
+
+  it('MCPB-U-37: 第三方 server 声明了四个 hint 也一条不落 —— 包括 readOnlyHint:false', async () => {
+    const h = setup([row({ id: 'a-id', name: 'a' })])
+    h.plan.set('a', { tools: [annotated('search', { ...FULL_HINTS, readOnlyHint: false })] })
+    await h.mgr.ensureServerByName('a')
+
+    // 连「它自称不是只读」都不收：策略于是只能写成 fail-safe 的
+    // `has(object.mcpServer) && !(object.mcpTrusted && object.readOnly)`，
+    // 而不会因为第三方少写/写反一个字段就改变判定
+    expect(metaOf(h.mgr.serverToAgentTools('a-id'))).toEqual({
+      server: 'a',
+      tool: 'search',
+      trusted: false,
+      readOnly: undefined,
+      destructive: undefined,
+      idempotent: undefined,
+      openWorld: undefined
+    })
+  })
+
+  it('MCPB-U-38: 可信但没声明 annotations → 四位都是 undefined，trusted 仍为真', async () => {
+    const h = setup([sshRow()])
+    h.plan.set('ssh', { tools: [tool('list-hosts')] })
+    await h.mgr.ensureServerByName('ssh', { sessionId: 's1' })
+
+    const meta = metaOf(h.mgr.serverToAgentTools('ssh-id#s1'))
+    // 「没说」不等于 false：把缺省当成「不是只读」会让 fail-safe 策略对内置工具也弹卡
+    expect(meta).toEqual({
+      server: 'ssh',
+      tool: 'list-hosts',
+      trusted: true,
+      readOnly: undefined,
+      destructive: undefined,
+      idempotent: undefined,
+      openWorld: undefined
+    })
+  })
+
+  it('MCPB-U-39: 可信 server 只声明了一部分 —— 给了的落，没给的仍是 undefined', async () => {
+    const h = setup([sshRow()])
+    h.plan.set('ssh', { tools: [annotated('exec', { readOnlyHint: false, openWorldHint: true })] })
+    await h.mgr.ensureServerByName('ssh', { sessionId: 's1' })
+
+    expect(metaOf(h.mgr.serverToAgentTools('ssh-id#s1'))).toEqual({
+      server: 'ssh',
+      tool: 'exec',
+      trusted: true,
+      readOnly: false,
+      destructive: undefined,
+      idempotent: undefined,
+      openWorld: true
+    })
+  })
+
+  it('MCPB-U-40: 信任是**按连接**记的 —— 同一批工具里两台 server 各算各的', async () => {
+    const h = setup([sshRow(), row({ id: 'a-id', name: 'a' })])
+    h.plan.set('ssh', { tools: [annotated('list-hosts', FULL_HINTS)] })
+    h.plan.set('a', { tools: [annotated('search', FULL_HINTS)] })
+    await h.mgr.ensureServerByName('ssh', { sessionId: 's1' })
+    await h.mgr.ensureServerByName('a')
+
+    const byName = new Map(
+      h.mgr
+        .getAllAgentTools()
+        .map((t) => [
+          (t as unknown as McpAgentToolMeta).mcpMeta.server,
+          (t as unknown as McpAgentToolMeta).mcpMeta
+        ])
+    )
+    expect(byName.get('ssh')).toMatchObject({ trusted: true, readOnly: true })
+    expect(byName.get('a')).toMatchObject({ trusted: false, readOnly: undefined })
+  })
+
+  it('MCPB-U-41: isBuiltin=1 的**远程** endpoint（v10 种下的 tavily 形态）不可信', async () => {
+    // 那一位的含义是「用户不可编辑」，不是「代码随产品发布」；两者混同一次，
+    // 一台远程 server 就能用自述的 readOnlyHint 换来静默放行
+    const h = setup([row({ id: 'builtin-mcp-tavily', name: 'tavily', type: 'http', isBuiltin: 1 })])
+    h.plan.set('tavily', { tools: [annotated('search', FULL_HINTS)] })
+    await h.mgr.ensureServerByName('tavily')
+
+    expect(metaOf(h.mgr.serverToAgentTools('builtin-mcp-tavily'))).toMatchObject({
+      server: 'tavily',
+      trusted: false,
+      readOnly: undefined
+    })
+  })
+})
+
+// ─── 工具桥接的其余契约 ──────────────────────────────────────────────────
+
+describe('McpManager 的 MCP → AgentTool 桥接', () => {
+  it('MCPB-U-42: pi 那边的 toolCallId 经 `_meta` 带给 server', async () => {
+    const h = setup([sshRow()])
+    h.plan.set('ssh', { tools: [tool('exec')] })
+    await h.mgr.ensureServerByName('ssh', { sessionId: 's1' })
+
+    const [t] = h.mgr.serverToAgentTools('ssh-id#s1')
+    await t.execute('pi-call-42', { q: 'x' }, new AbortController().signal)
+
+    // 询问卡片的路由键按约定就是 toolCallId —— 少了它，内置服务器的 ask 就对不上这次调用
+    expect(h.lastFor('ssh', 's1').toolCallMetas).toEqual([
+      { 'shuvix.dev/toolCallId': 'pi-call-42' }
+    ])
+  })
+
+  it('MCPB-U-43: 没有 toolCallId 时 `_meta` 整个缺席，而不是一个空对象', async () => {
+    const h = setup([sshRow()])
+    h.plan.set('ssh', { tools: [tool('exec')] })
+    await h.mgr.ensureServerByName('ssh', { sessionId: 's1' })
+
+    // 直接走 callTool（AgentTool 那条路恒有 toolCallId）
+    await h.mgr.callTool('ssh-id#s1', 'exec', { q: 'x' })
+
+    // 空对象是个**存在的** `_meta`：规范要求其中的键带前缀，凭空一个 `{}` 只会让
+    // 严格的 server 多一次校验分支
+    expect(h.lastFor('ssh', 's1').toolCallMetas).toEqual([undefined])
+  })
+
+  it('MCPB-U-44: server 名里带 `__` 时，工具名拼接不影响事实里的那两个字段', async () => {
+    const h = setup([row({ id: 'ab-id', name: 'a__b' })])
+    h.plan.set('a__b', { tools: [tool('t')] })
+    await h.mgr.ensureServerByName('a__b')
+
+    const [t] = h.mgr.serverToAgentTools('ab-id')
+    // 前缀是给 LLM 看的名字，切不回来也没关系：策略读的是 mcpMeta，不是拆名字
+    expect(t.name).toBe('mcp__a__b__t')
+    expect(metaOf(h.mgr.serverToAgentTools('ab-id'))).toMatchObject({ server: 'a__b', tool: 't' })
+  })
+
+  it('MCPB-U-45: mcpMeta 经原型链也读得到 —— wrapToolOutput 就是这么读的', async () => {
+    const h = setup([sshRow()])
+    h.plan.set('ssh', { tools: [annotated('list-hosts', FULL_HINTS)] })
+    await h.mgr.ensureServerByName('ssh', { sessionId: 's1' })
+
+    const [t] = h.mgr.serverToAgentTools('ssh-id#s1')
+    // 包装器用 Object.create(tool) 保原型链（`{...tool}` 会把 class getter 静默丢掉），
+    // 所以 mcpMeta 必须是能沿原型链查到的东西，而不是只在自身属性上
+    const wrapped = Object.create(Object.create(t)) as McpAgentToolMeta
+    expect(wrapped.mcpMeta).toBe((t as unknown as McpAgentToolMeta).mcpMeta)
+    expect(wrapped.mcpMeta).toMatchObject({ server: 'ssh', trusted: true, readOnly: true })
   })
 })

@@ -5,7 +5,7 @@
  */
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import type { AgentTool } from '@earendil-works/pi-agent-core'
-import type { EnforceOutcome, SecurityContext } from '@shuvix/agent-runtime'
+import type { EnforceOutcome, McpAgentToolMeta, SecurityContext } from '@shuvix/agent-runtime'
 import {
   createSecurityContext,
   clearSessionDecisions,
@@ -39,6 +39,33 @@ function makeTool(name = 'ssh'): { tool: AgentTool; execute: ReturnType<typeof v
   const tool = { name, label: name, description: 'test tool', parameters: {}, execute }
   return { tool: tool as unknown as AgentTool, execute }
 }
+
+/** 事实的类型走生产那条缝自己的声明，免得测试跟着它的导出面漂 */
+type McpFacts = McpAgentToolMeta['mcpMeta']
+
+/** 一份 MCP 工具事实（内置 ssh 的 exec，四个 hint 齐全） */
+const SSH_EXEC_META: McpFacts = {
+  server: 'ssh',
+  tool: 'exec',
+  trusted: true,
+  readOnly: false,
+  destructive: true,
+  idempotent: false,
+  openWorld: true
+}
+
+/** 带 mcpMeta 的工具（桥接层产出的那种形态） */
+function makeMcpTool(meta: McpFacts = SSH_EXEC_META): {
+  tool: AgentTool & { mcpMeta: McpFacts }
+  execute: ReturnType<typeof vi.fn>
+} {
+  const { tool, execute } = makeTool('mcp__ssh__exec')
+  return { tool: Object.assign(tool, { mcpMeta: meta }), execute }
+}
+
+/** 这次调用交给 L1 门的 mcp 事实 */
+const mcpOf = (enforceInvocation: ReturnType<typeof vi.fn>, i = 0): unknown =>
+  (enforceInvocation.mock.calls[i][0] as { mcp?: unknown }).mcp
 
 /** 手写 security stub —— 只有 enforceInvocation 会被 wrapToolOutput 触碰 */
 function makeSecurity(impl?: () => Promise<EnforceOutcome>): {
@@ -152,6 +179,68 @@ describe('wrapToolOutput — L1 全工具门', () => {
     for (const [opts] of enforceInvocation.mock.calls) {
       expect((opts as { operation?: string }).operation).toBeUndefined()
     }
+  })
+
+  // ── MCP 事实的透传 ──
+  //
+  // 包装器是 L1 门唯一的挂载点，而门对第三方 MCP 工具能说的话全部来自这一次透传：
+  // 少传一次，那台 server 就退回到「有人要调工具」这一句，按 server / 按只读写的策略
+  // 全部失效 —— 而失效的方式是**静默放行**，UI 上一点痕迹都没有。
+
+  it('W-10 MCP 工具的 mcpMeta 原样成为 opts.mcp（同一个对象，不复制不改写）', async () => {
+    const { tool } = makeMcpTool()
+    const { security, enforceInvocation } = makeSecurity()
+    const wrapped = wrapToolOutput(tool, SID, 'middle', undefined, security)
+
+    await exec(wrapped, 'tc-10', { q: 'x' })
+
+    // toBe 而不是 toEqual：中间只要有人「顺手」重建一遍对象，
+    // 以后新增一个 hint 就会在这里被静默丢掉
+    expect(mcpOf(enforceInvocation)).toBe(tool.mcpMeta)
+    expect(mcpOf(enforceInvocation)).toEqual(SSH_EXEC_META)
+  })
+
+  it('W-11 原型链上的 mcpMeta 也读得到 —— 包装器自己就是一层 Object.create', async () => {
+    const { tool } = makeMcpTool()
+    // 桥接层的工具可能已经被包过一层（子代理工具表就是这么装的），于是 mcpMeta
+    // 不在自身属性上；`{...tool}` 式的读法在这里会读到 undefined
+    const layered = Object.create(Object.create(tool)) as AgentTool
+    const { security, enforceInvocation } = makeSecurity()
+    const wrapped = wrapToolOutput(layered, SID, 'middle', undefined, security)
+
+    await exec(wrapped, 'tc-11', {})
+    expect(mcpOf(enforceInvocation)).toBe(tool.mcpMeta)
+  })
+
+  it('W-12 每次调用现读，不是包装那一刻抄一份', async () => {
+    const { tool } = makeMcpTool()
+    const { security, enforceInvocation } = makeSecurity()
+    const wrapped = wrapToolOutput(tool, SID, 'middle', undefined, security)
+
+    await exec(wrapped, 'tc-12a', {})
+    // tools/list 重新发现之后事实会换（server 改了 annotations、或换成另一台）
+    tool.mcpMeta = { server: 'evil', tool: 'read-file', trusted: false }
+    await exec(wrapped, 'tc-12b', {})
+
+    expect(mcpOf(enforceInvocation, 0)).toEqual(SSH_EXEC_META)
+    expect(mcpOf(enforceInvocation, 1)).toEqual({
+      server: 'evil',
+      tool: 'read-file',
+      trusted: false
+    })
+  })
+
+  it('W-13 门拦下时事实也已经上报过了 —— 原 execute 一次没跑', async () => {
+    const { tool, execute } = makeMcpTool()
+    const { security, enforceInvocation } = makeSecurity(async () => {
+      throw new Error("Denied by security policy rule 'no-evil#0'")
+    })
+    const wrapped = wrapToolOutput(tool, SID, 'middle', undefined, security)
+
+    await expect(exec(wrapped, 'tc-13', {})).rejects.toThrow(/Denied by security policy rule/)
+    // 「按 server 拒绝」要成立，事实必须在判定**之前**就到了门上
+    expect(mcpOf(enforceInvocation)).toEqual(SSH_EXEC_META)
+    expect(execute).not.toHaveBeenCalled()
   })
 
   it('W-9 端到端：真 createSecurityContext + ask×invocation + other 反馈 → feedback 文本结果 + 日志 1 条', async () => {
