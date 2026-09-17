@@ -18,6 +18,7 @@ import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vite
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 import type { JSONRPCMessage, JSONRPCRequest } from '@modelcontextprotocol/sdk/types.js'
 import type { McpServer } from '@shuvix/chat-protocol/types/mcp'
+import type { BuiltinMcpScope } from '../builtinMcpRegistry'
 import { McpManager, type McpDiscoveredTool, type McpStore } from '../mcpManager'
 
 // ─── 假件 ────────────────────────────────────────────────────────────────
@@ -31,20 +32,26 @@ interface FakeOpts {
   hold?: boolean
   /** close() 时同步回调 onclose：真 transport 就是这么干的，用来钉「失败原因不被它抹掉」 */
   notifyOnClose?: boolean
+  /** close() 直接抛 —— 钉「一条实例释放失败不拖累同批的其余实例」 */
+  throwOnClose?: boolean
 }
 
-/** 手写 JSON-RPC 应答器：只认 initialize / tools/list，其余一律空 result */
+/** 手写 JSON-RPC 应答器：只认 initialize / tools/list / tools/call，其余一律空 result */
 class FakeTransport implements Transport {
   onclose?: () => void
   onerror?: (error: Error) => void
   onmessage?: (message: JSONRPCMessage) => void
   closeCalls = 0
+  /** 收到的 tools/call —— 「这次调用落在哪份实例上」只能从这里看出来 */
+  toolCalls: Array<{ name: string; args: Record<string, unknown> }> = []
   private held: JSONRPCRequest[] = []
   private holding: boolean
 
   constructor(
     readonly server: McpServer,
-    private readonly opts: FakeOpts = {}
+    private readonly opts: FakeOpts = {},
+    /** 仅 inproc：造它时宿主传进来的会话上下文（外部服务器为 undefined） */
+    readonly scope?: BuiltinMcpScope
   ) {
     this.holding = opts.hold === true
   }
@@ -67,6 +74,7 @@ class FakeTransport implements Transport {
 
   async close(): Promise<void> {
     this.closeCalls++
+    if (this.opts.throwOnClose) throw new Error('close failed')
     if (this.opts.notifyOnClose) this.onclose?.()
   }
 
@@ -89,6 +97,13 @@ class FakeTransport implements Transport {
   }
 
   private answer(message: JSONRPCRequest): void {
+    if (message.method === 'tools/call') {
+      const params = (message.params ?? {}) as { name?: string; arguments?: unknown }
+      this.toolCalls.push({
+        name: params.name ?? '',
+        args: (params.arguments ?? {}) as Record<string, unknown>
+      })
+    }
     const result =
       message.method === 'initialize'
         ? {
@@ -98,7 +113,12 @@ class FakeTransport implements Transport {
           }
         : message.method === 'tools/list'
           ? { tools: this.opts.tools ?? [] }
-          : {}
+          : message.method === 'tools/call'
+            ? // 回执带上自己的身份：跨会话串台时断言看到的是**另一条会话**的名字
+              {
+                content: [{ type: 'text', text: `handled by ${this.scope?.sessionId ?? 'global'}` }]
+              }
+            : {}
     queueMicrotask(() => this.onmessage?.({ jsonrpc: '2.0', id: message.id, result }))
   }
 }
@@ -136,11 +156,18 @@ interface TestStore extends McpStore {
 interface Harness {
   mgr: McpManager
   store: TestStore
-  createTransport: Mock<(server: McpServer) => Transport>
+  createTransport: Mock<(server: McpServer, scope?: BuiltinMcpScope) => Transport>
   /** 按 server 名（造出来的顺序）取假 transport */
   made(name: string): FakeTransport[]
   last(name: string): FakeTransport
-  /** 下一次为该 server 名造 transport 时的行为；Error = createTransport 直接抛 */
+  /** 某台 inproc server 在某条会话名下造出来的实例（按会话分身，所以要连会话一起查） */
+  madeFor(name: string, sessionId: string): FakeTransport[]
+  lastFor(name: string, sessionId: string): FakeTransport
+  /**
+   * 下一次为该 server 名造 transport 时的行为；Error = createTransport 直接抛。
+   * 键可以是 `name`，也可以是 `name#sessionId`（后者优先）—— inproc 用例要让
+   * 两条会话的实例回不同的工具，才谈得上「会话之间互相看不见」。
+   */
   plan: Map<string, FakeOpts | Error>
 }
 
@@ -159,25 +186,32 @@ function setup(rows: McpServer[]): Harness {
   }
   const plan = new Map<string, FakeOpts | Error>()
   const all: FakeTransport[] = []
-  const createTransport = vi.fn((server: McpServer): Transport => {
-    const p = plan.get(server.name) ?? {}
+  const createTransport = vi.fn((server: McpServer, scope?: BuiltinMcpScope): Transport => {
+    const p =
+      (scope ? plan.get(`${server.name}#${scope.sessionId}`) : undefined) ??
+      plan.get(server.name) ??
+      {}
     if (p instanceof Error) throw p
-    const t = new FakeTransport(server, p)
+    const t = new FakeTransport(server, p, scope)
     all.push(t)
     return t
   })
   const made = (name: string): FakeTransport[] => all.filter((t) => t.server.name === name)
+  const madeFor = (name: string, sessionId: string): FakeTransport[] =>
+    all.filter((t) => t.server.name === name && t.scope?.sessionId === sessionId)
+  const pickLast = (list: FakeTransport[], label: string): FakeTransport => {
+    const t = list[list.length - 1]
+    if (!t) throw new Error(`no transport was created for "${label}"`)
+    return t
+  }
   return {
     mgr: new McpManager({ store, createTransport }),
     store,
     createTransport,
     made,
-    last: (name) => {
-      const list = made(name)
-      const t = list[list.length - 1]
-      if (!t) throw new Error(`no transport was created for "${name}"`)
-      return t
-    },
+    last: (name) => pickLast(made(name), name),
+    madeFor,
+    lastFor: (name, sessionId) => pickLast(madeFor(name, sessionId), `${name}#${sessionId}`),
     plan
   }
 }
@@ -186,6 +220,15 @@ function setup(rows: McpServer[]): Harness {
 const settle = async (ms = 0): Promise<void> => {
   await vi.advanceTimersByTimeAsync(ms)
 }
+
+/**
+ * 「这份实例被释放过吗」。
+ *
+ * 一次释放在假件上不止一次 `close()`：closeConnection 先关 transport，随后 `client.close()`
+ * 又会关一次自己的 transport。所以数次数没有意义，能钉的是**关过 / 没关过**，
+ * 以及一批释放里某一份的次数**有没有再涨**（幂等）。
+ */
+const released = (t: FakeTransport): boolean => t.closeCalls > 0
 
 const rejections: unknown[] = []
 const onUnhandled = (reason: unknown): void => {
@@ -573,5 +616,441 @@ describe('McpManager 连接中途的意外', () => {
       // 「已经被断开的那次连接」不该把它发现的工具写回缓存
       expect(h.store.updateCachedTools, outcome).not.toHaveBeenCalled()
     }
+  })
+})
+
+// ─── 内置能力服务器（inproc） ─────────────────────────────────────────────
+//
+// 记账上的全部差别只有一条：`inproc` 的连接键是 `serverId#sessionId`，外部（stdio/http）
+// 还是裸 serverId。「一个会话一份 server 实例」落到实处就是这一行，于是下面每一条用例问的
+// 都是同一个问题的不同侧面 —— **这份实例归谁**：没有会话就没有实例（拒连），两条会话就是
+// 两份互不可见的实例，释放按会话走而不按运行时走，状态既能逐会话问也能整体问。
+//
+// 串台的代价不是「多一次连接」而是「A 会话的工具闭包操作了 B 会话的资源」（ssh 的 control
+// socket、browser 的 tab），这在 UI 上完全看不出来，所以闸门只能钉在这一层。
+
+/** 一台内置能力服务器的配置行（没有 command / url 可配，只有启用位） */
+const sshRow = (patch: Partial<McpServer> = {}): McpServer =>
+  row({ id: 'ssh-id', name: 'ssh', type: 'inproc', url: '', isBuiltin: 1, ...patch })
+
+describe('McpManager 内置能力服务器：没有会话就没有实例', () => {
+  it('MCPB-U-1: inproc 无 sessionId = 静默拒连（ok:false 且无 error），不造实例', async () => {
+    const h = setup([sshRow()])
+
+    // 「用错了 API」而不是「连不上」：宿主据「有没有 error」决定报不报红，这里不该报
+    const result = await h.mgr.connect('ssh-id')
+    expect(result).toEqual({ ok: false })
+    expect(result.error).toBeUndefined()
+
+    expect(h.createTransport).not.toHaveBeenCalled()
+    expect(h.mgr.getStatus('ssh-id')).toBe('disconnected')
+    expect(h.mgr.getAllAgentTools()).toEqual([])
+    // 连接表里什么都没有 —— 也就不存在一份「谁都能捡走」的无主实例
+    expect(h.mgr.getAgentToolsByServerName('ssh', 's1')).toEqual([])
+  })
+
+  it('MCPB-U-2: 外部服务器无会话照连，键仍是裸 serverId', async () => {
+    const h = setup([row({ id: 'a-id', name: 'a' })])
+    h.plan.set('a', { tools: [tool('search')] })
+
+    expect(await h.mgr.ensureServerByName('a')).toEqual({ ok: true })
+    // 键就是 serverId：能按裸 id 取到工具，说明没有被加上会话后缀
+    expect(h.mgr.serverToAgentTools('a-id').map((t) => t.name)).toEqual(['mcp__a__search'])
+    expect(h.mgr.getStatus('a-id')).toBe('connected')
+  })
+
+  it('MCPB-U-3: ensureServerByName 不传会话时继承同一条拒绝', async () => {
+    const h = setup([sshRow()])
+    expect(await h.mgr.ensureServerByName('ssh')).toEqual({ ok: false })
+    expect(h.createTransport).not.toHaveBeenCalled()
+  })
+
+  it('MCPB-U-35: sessionId 为空串不算会话 —— 同样拒连', async () => {
+    const h = setup([sshRow()])
+    // `''` 是「宿主以为自己有会话、其实没有」的典型形态：放行就会造出一份键为 `ssh-id#`
+    // 的实例，谁的会话结束都关不到它
+    expect(await h.mgr.connect('ssh-id', { sessionId: '' })).toEqual({ ok: false })
+    expect(await h.mgr.ensureServerByName('ssh', { sessionId: '' })).toEqual({ ok: false })
+    expect(h.createTransport).not.toHaveBeenCalled()
+  })
+})
+
+describe('McpManager 内置能力服务器：一个会话一份实例', () => {
+  it('MCPB-U-4: 两条会话 = 两份实例，键 `id#s1`/`id#s2`，工厂各拿到自己的会话', async () => {
+    const h = setup([sshRow()])
+    h.plan.set('ssh', { tools: [tool('list-hosts')] })
+
+    expect(await h.mgr.ensureServerByName('ssh', { sessionId: 's1' })).toEqual({ ok: true })
+    expect(await h.mgr.ensureServerByName('ssh', { sessionId: 's2' })).toEqual({ ok: true })
+
+    expect(h.createTransport).toHaveBeenCalledTimes(2)
+    expect(h.createTransport.mock.calls.map((c) => c[1]?.sessionId)).toEqual(['s1', 's2'])
+    // 键带会话后缀：两条都能按键取到工具，而裸 id 取不到
+    expect(h.mgr.serverToAgentTools('ssh-id#s1')).toHaveLength(1)
+    expect(h.mgr.serverToAgentTools('ssh-id#s2')).toHaveLength(1)
+    expect(h.mgr.serverToAgentTools('ssh-id')).toEqual([])
+  })
+
+  it('MCPB-U-5: 会话之间看不见彼此的工具', async () => {
+    const h = setup([sshRow()])
+    h.plan.set('ssh#s1', { tools: [tool('list-hosts')] })
+    h.plan.set('ssh#s2', { tools: [tool('s2-only')] })
+
+    await h.mgr.ensureServerByName('ssh', { sessionId: 's1' })
+    await h.mgr.ensureServerByName('ssh', { sessionId: 's2' })
+
+    expect(h.mgr.getAgentToolsByServerName('ssh', 's1').map((t) => t.name)).toEqual([
+      'mcp__ssh__list-hosts'
+    ])
+    expect(h.mgr.getAgentToolsByServerName('ssh', 's2').map((t) => t.name)).toEqual([
+      'mcp__ssh__s2-only'
+    ])
+  })
+
+  it('MCPB-U-6: 工具闭包调的是自己那份实例', async () => {
+    const h = setup([sshRow()])
+    h.plan.set('ssh', { tools: [tool('list-hosts')] })
+    await h.mgr.ensureServerByName('ssh', { sessionId: 's1' })
+    await h.mgr.ensureServerByName('ssh', { sessionId: 's2' })
+
+    const [t1] = h.mgr.getAgentToolsByServerName('ssh', 's1')
+    const result = await t1.execute('call-1', { q: 'x' }, new AbortController().signal)
+
+    // 闭包里记的是**连接键**，所以这一发只可能落在 s1 那份实例上
+    expect(h.lastFor('ssh', 's1').toolCalls).toEqual([{ name: 'list-hosts', args: { q: 'x' } }])
+    expect(h.lastFor('ssh', 's2').toolCalls).toEqual([])
+    expect(JSON.stringify(result.content)).toContain('handled by s1')
+  })
+
+  it('MCPB-U-7: getAgentToolsByServerName 不传会话时回空 —— 绝不回落到别人的实例', async () => {
+    const h = setup([sshRow()])
+    h.plan.set('ssh', { tools: [tool('list-hosts')] })
+    await h.mgr.ensureServerByName('ssh', { sessionId: 's1' })
+
+    // 回落 = 把 s1 的 ssh 实例交给一个说不清自己是谁的调用方，比「少一个工具」严重得多
+    expect(h.mgr.getAgentToolsByServerName('ssh')).toEqual([])
+    expect(h.mgr.getAgentToolsByServerName('ssh', 's9')).toEqual([])
+    expect(h.mgr.getAgentToolsByServerName('ssh', 's1')).toHaveLength(1)
+  })
+
+  it('MCPB-U-8: 外部服务器的工具与会话无关（同一份，谁问都一样）', async () => {
+    const h = setup([row({ id: 'a-id', name: 'a' })])
+    h.plan.set('a', { tools: [tool('search')] })
+    await h.mgr.ensureServerByName('a')
+
+    const names = ['s1', 's2', undefined].map((sid) =>
+      h.mgr.getAgentToolsByServerName('a', sid).map((t) => t.name)
+    )
+    expect(names).toEqual([['mcp__a__search'], ['mcp__a__search'], ['mcp__a__search']])
+  })
+
+  it('MCPB-U-9: 同一条（服务器, 会话）复用同一份实例', async () => {
+    const h = setup([sshRow()])
+    expect(await h.mgr.ensureServerByName('ssh', { sessionId: 's1' })).toEqual({ ok: true })
+    expect(await h.mgr.ensureServerByName('ssh', { sessionId: 's1' })).toEqual({ ok: true })
+    expect(await h.mgr.ensureConnected('ssh-id', { sessionId: 's1' })).toEqual({ ok: true })
+    expect(h.madeFor('ssh', 's1')).toHaveLength(1)
+  })
+
+  it('MCPB-U-10 / 11: 并发按**连接键**合流 —— 同会话合一次，跨会话各造各的', async () => {
+    const h = setup([sshRow()])
+    h.plan.set('ssh', { hold: true })
+
+    const a = h.mgr.ensureServerByName('ssh', { sessionId: 's1' })
+    const b = h.mgr.ensureServerByName('ssh', { sessionId: 's1' })
+    const c = h.mgr.ensureServerByName('ssh', { sessionId: 's2' })
+    await settle()
+
+    // 同一条会话的两次请求搭同一班车；另一条会话不能搭 —— 它要的是自己那份实例
+    expect(h.madeFor('ssh', 's1')).toHaveLength(1)
+    expect(h.madeFor('ssh', 's2')).toHaveLength(1)
+
+    h.lastFor('ssh', 's1').release()
+    h.lastFor('ssh', 's2').release()
+    const [r1, r2, r3] = await Promise.all([a, b, c])
+    expect(r1).toEqual({ ok: true })
+    expect(r2).toEqual(r1)
+    expect(r3).toEqual({ ok: true })
+    expect(h.made('ssh')).toHaveLength(2)
+  })
+
+  it('MCPB-U-34: cachedTools 按**配置行 id** 写（会话分身不该写出两份不同的缓存）', async () => {
+    const h = setup([sshRow()])
+    h.plan.set('ssh', { tools: [tool('list-hosts')] })
+    await h.mgr.ensureServerByName('ssh', { sessionId: 's1' })
+    await h.mgr.ensureServerByName('ssh', { sessionId: 's2' })
+
+    expect(h.store.updateCachedTools).toHaveBeenCalledTimes(2)
+    expect(h.store.updateCachedTools.mock.calls.map((c) => c[0])).toEqual(['ssh-id', 'ssh-id'])
+  })
+})
+
+describe('McpManager 内置实例的释放', () => {
+  /** 两条会话各连上一份 ssh，外加一台外部服务器 */
+  async function twoSessions(): Promise<Harness> {
+    const h = setup([sshRow(), row({ id: 'a-id', name: 'a' })])
+    h.plan.set('ssh', { tools: [tool('list-hosts')] })
+    h.plan.set('a', { tools: [tool('search')] })
+    await h.mgr.ensureServerByName('ssh', { sessionId: 's1' })
+    await h.mgr.ensureServerByName('ssh', { sessionId: 's2' })
+    await h.mgr.ensureServerByName('a')
+    return h
+  }
+
+  it('MCPB-U-12: closeSession 只关这条会话名下的实例', async () => {
+    const h = await twoSessions()
+
+    await h.mgr.closeSession('s1')
+
+    expect(released(h.lastFor('ssh', 's1'))).toBe(true)
+    expect(released(h.lastFor('ssh', 's2'))).toBe(false)
+    expect(h.mgr.getAgentToolsByServerName('ssh', 's1')).toEqual([])
+    expect(h.mgr.getAgentToolsByServerName('ssh', 's2')).toHaveLength(1)
+    expect(h.mgr.getStatus('ssh-id', 's1')).toBe('disconnected')
+    expect(h.mgr.getStatus('ssh-id', 's2')).toBe('connected')
+  })
+
+  it('MCPB-U-13: closeSession 不碰外部（stdio/http）服务器 —— 它们是跨会话共享的', async () => {
+    const h = await twoSessions()
+
+    await h.mgr.closeSession('s1')
+    await h.mgr.closeSession('s2')
+
+    // 一条会话结束就把别人的 MCP 服务器一起关掉，是这套记账最容易犯的错
+    expect(released(h.last('a'))).toBe(false)
+    expect(h.mgr.getStatus('a-id')).toBe('connected')
+    expect(h.mgr.serverToAgentTools('a-id')).toHaveLength(1)
+  })
+
+  it('MCPB-U-14 / 15: 未知会话是空操作，重复调用幂等', async () => {
+    const h = await twoSessions()
+
+    await h.mgr.closeSession('nobody')
+    expect(released(h.lastFor('ssh', 's1'))).toBe(false)
+    expect(released(h.lastFor('ssh', 's2'))).toBe(false)
+
+    await h.mgr.closeSession('s1')
+    const afterFirst = h.lastFor('ssh', 's1').closeCalls
+    expect(afterFirst).toBeGreaterThan(0)
+    await h.mgr.closeSession('s1')
+    // 第二次没有条目可关 —— 不重复 close，也不抛
+    expect(h.lastFor('ssh', 's1').closeCalls).toBe(afterFirst)
+  })
+
+  it('MCPB-U-16: 连接在途时 closeSession —— 不留条目、收掉实例、不冒未捕获拒绝', async () => {
+    const h = setup([sshRow()])
+    h.plan.set('ssh', { hold: true })
+
+    const p = h.mgr.ensureServerByName('ssh', { sessionId: 's1' })
+    await settle()
+    expect(h.mgr.getStatus('ssh-id', 's1')).toBe('connecting')
+
+    await h.mgr.closeSession('s1')
+    const t = h.lastFor('ssh', 's1')
+    // 实例当场被收掉，条目当场摘掉 —— 不是「等握手落定再说」
+    const closedByRelease = t.closeCalls
+    expect(closedByRelease).toBeGreaterThan(0)
+    expect(h.mgr.getStatus('ssh-id', 's1')).toBe('disconnected')
+    expect(h.mgr.getAgentToolsByServerName('ssh', 's1')).toEqual([])
+
+    // 握手随后才落定：它自己再收一次尾（见 MCPL-U-14），但绝不能悄悄变回 connected
+    t.release()
+    expect((await p).ok).toBe(false)
+    expect(t.closeCalls).toBeGreaterThan(closedByRelease)
+    await settle()
+    expect(h.mgr.getStatus('ssh-id', 's1')).toBe('disconnected')
+    expect(rejections).toEqual([])
+  })
+
+  it('MCPB-U-17: 一份实例关不掉不拖累另一条会话的释放', async () => {
+    const h = setup([sshRow()])
+    h.plan.set('ssh#s1', { throwOnClose: true })
+    h.plan.set('ssh#s2', {})
+    await h.mgr.ensureServerByName('ssh', { sessionId: 's1' })
+    await h.mgr.ensureServerByName('ssh', { sessionId: 's2' })
+
+    await expect(
+      Promise.all([h.mgr.closeSession('s1'), h.mgr.closeSession('s2')])
+    ).resolves.toBeDefined()
+
+    expect(h.mgr.getStatus('ssh-id', 's1')).toBe('disconnected')
+    expect(h.mgr.getStatus('ssh-id', 's2')).toBe('disconnected')
+    expect(released(h.lastFor('ssh', 's2'))).toBe(true)
+  })
+
+  it('MCPB-U-18: disconnectAll 走连接键 —— 外部与每条会话的内置实例一个不剩', async () => {
+    const h = await twoSessions()
+
+    await h.mgr.disconnectAll()
+
+    // 曾经的洞：disconnectAll 按 serverId 走，`ssh-id#s1` 谁也匹配不上，于是内置实例全留了下来
+    expect(released(h.lastFor('ssh', 's1'))).toBe(true)
+    expect(released(h.lastFor('ssh', 's2'))).toBe(true)
+    expect(released(h.last('a'))).toBe(true)
+    expect(h.mgr.getAllAgentTools()).toEqual([])
+    expect(h.mgr.getStatus('ssh-id')).toBe('disconnected')
+    expect(h.mgr.getStatus('a-id')).toBe('disconnected')
+  })
+
+  it('MCPB-U-19: disconnect(serverId) 不带会话 = 这台的全部会话分身一起关', async () => {
+    const h = await twoSessions()
+
+    // 设置页停用 / 改配置是对**这台服务器整体**下的判断，不该只清掉其中一条会话的分身
+    await h.mgr.disconnect('ssh-id')
+
+    expect(released(h.lastFor('ssh', 's1'))).toBe(true)
+    expect(released(h.lastFor('ssh', 's2'))).toBe(true)
+    expect(h.mgr.getStatus('ssh-id')).toBe('disconnected')
+    expect(h.mgr.getStatus('a-id')).toBe('connected')
+  })
+
+  it('MCPB-U-20: disconnect(serverId, sessionId) 只关那一条', async () => {
+    const h = await twoSessions()
+    await h.mgr.disconnect('ssh-id', 's2')
+
+    expect(released(h.lastFor('ssh', 's1'))).toBe(false)
+    expect(released(h.lastFor('ssh', 's2'))).toBe(true)
+    expect(h.mgr.getStatus('ssh-id', 's1')).toBe('connected')
+    expect(h.mgr.getStatus('ssh-id', 's2')).toBe('disconnected')
+  })
+
+  it('MCPB-U-21: 给外部服务器传 sessionId 是无意义的调用 —— 静默不动', async () => {
+    const h = await twoSessions()
+
+    // 外部服务器的键是裸 serverId，`a-id#s1` 根本不存在；这是「记账口径」而非「找不到就报错」
+    await h.mgr.disconnect('a-id', 's1')
+
+    expect(released(h.last('a'))).toBe(false)
+    expect(h.mgr.getStatus('a-id')).toBe('connected')
+  })
+
+  it('MCPB-U-22: 重连一条会话只换它自己那份实例', async () => {
+    const h = await twoSessions()
+    const s2Before = h.lastFor('ssh', 's2')
+
+    expect(await h.mgr.connect('ssh-id', { sessionId: 's1' })).toEqual({ ok: true })
+
+    expect(h.madeFor('ssh', 's1')).toHaveLength(2)
+    expect(h.madeFor('ssh', 's2')).toHaveLength(1)
+    expect(released(s2Before)).toBe(false)
+    expect(h.mgr.getStatus('ssh-id', 's1')).toBe('connected')
+    expect(h.mgr.getStatus('ssh-id', 's2')).toBe('connected')
+  })
+
+  it('MCPB-U-33: 释放之后，会话手里的旧闭包只会报「没连上」，不会串到别人那份实例', async () => {
+    const h = await twoSessions()
+    const [stale] = h.mgr.getAgentToolsByServerName('ssh', 's1')
+
+    await h.mgr.closeSession('s1')
+
+    const result = await stale.execute('call-1', {}, new AbortController().signal)
+    expect(result.details).toMatchObject({ type: 'mcp', server: 'ssh', isError: true })
+    expect(JSON.stringify(result.content)).toContain('is not connected')
+    // 闭包记的是 `ssh-id#s1`，s2 那份实例没有理由收到任何东西
+    expect(h.lastFor('ssh', 's2').toolCalls).toEqual([])
+  })
+})
+
+describe('McpManager 内置服务器的状态查询', () => {
+  it('MCPB-U-23: 外部服务器的状态与 sessionId 参数无关', async () => {
+    const h = setup([sshRow(), row({ id: 'a-id', name: 'a' })])
+    await h.mgr.ensureServerByName('a')
+    await h.mgr.ensureServerByName('ssh', { sessionId: 's1' })
+    await h.mgr.closeSession('s1')
+
+    // 宿主对所有服务器一律传 sessionId（它不知道哪台是 inproc）—— 裸键优先这一分支就是为它写的
+    for (const sid of [undefined, 's1', 's9']) {
+      expect(h.mgr.getStatus('a-id', sid)).toBe('connected')
+    }
+  })
+
+  it('MCPB-U-24: 一条会话都没连的内置服务器 = disconnected', async () => {
+    const h = setup([sshRow()])
+    expect(h.mgr.getStatus('ssh-id')).toBe('disconnected')
+    expect(h.mgr.getStatus('ssh-id', 's1')).toBe('disconnected')
+    expect(h.mgr.getError('ssh-id')).toBeUndefined()
+  })
+
+  it('MCPB-U-25 / 26 / 27: 不带会话时给聚合值（connected > connecting > error）', async () => {
+    // 设置页问的是「这台能力在用吗」，不是某条会话的分身现在怎样
+    const connected = setup([sshRow()])
+    connected.plan.set('ssh#s2', new Error('boom'))
+    await connected.mgr.ensureServerByName('ssh', { sessionId: 's1' })
+    await connected.mgr.ensureServerByName('ssh', { sessionId: 's2' })
+    expect(connected.mgr.getStatus('ssh-id')).toBe('connected')
+
+    // connecting 压过 error，且与两条会话的**先后无关**
+    for (const errorFirst of [false, true]) {
+      const h = setup([sshRow()])
+      h.plan.set('ssh#s1', { hold: true })
+      h.plan.set('ssh#s2', new Error('boom'))
+      if (errorFirst) await h.mgr.ensureServerByName('ssh', { sessionId: 's2' })
+      void h.mgr.ensureServerByName('ssh', { sessionId: 's1' })
+      await settle()
+      if (!errorFirst) await h.mgr.ensureServerByName('ssh', { sessionId: 's2' })
+      expect(h.mgr.getStatus('ssh-id'), String(errorFirst)).toBe('connecting')
+    }
+
+    const failed = setup([sshRow()])
+    failed.plan.set('ssh', new Error('builtin exploded'))
+    await failed.mgr.ensureServerByName('ssh', { sessionId: 's1' })
+    expect(failed.mgr.getStatus('ssh-id')).toBe('error')
+    expect(failed.mgr.getError('ssh-id')).toBe('builtin exploded')
+  })
+
+  it('MCPB-U-28: 带会话时逐条如实回报', async () => {
+    const h = setup([sshRow()])
+    h.plan.set('ssh#s2', { hold: true })
+    h.plan.set('ssh#s3', new Error('boom'))
+
+    await h.mgr.ensureServerByName('ssh', { sessionId: 's1' })
+    void h.mgr.ensureServerByName('ssh', { sessionId: 's2' })
+    await settle()
+    await h.mgr.ensureServerByName('ssh', { sessionId: 's3' })
+
+    expect(h.mgr.getStatus('ssh-id', 's1')).toBe('connected')
+    expect(h.mgr.getStatus('ssh-id', 's2')).toBe('connecting')
+    expect(h.mgr.getStatus('ssh-id', 's3')).toBe('error')
+    expect(h.mgr.getStatus('ssh-id', 's4')).toBe('disconnected')
+    expect(h.mgr.getError('ssh-id', 's3')).toBe('boom')
+  })
+
+  it('MCPB-U-29: statusByName 带会话问外部服务器时也读得到（裸键优先）', async () => {
+    const h = setup([sshRow(), row({ id: 'a-id', name: 'a' })])
+    await h.mgr.ensureServerByName('a')
+    await h.mgr.ensureServerByName('ssh', { sessionId: 's1' })
+
+    // 宿主装配工具时只有名字，且对所有服务器一律带上当前会话 —— 少了裸键那一步，
+    // 一台连着的 stdio 会被报成「正在连接」，聊天里凭空多出一行提示
+    expect(h.mgr.statusByName('a', 's1')).toBe('connected')
+    expect(h.mgr.statusByName('a')).toBe('connected')
+    expect(h.mgr.statusByName('ssh', 's1')).toBe('connected')
+    expect(h.mgr.statusByName('ssh', 's2')).toBe('disconnected')
+  })
+})
+
+describe('McpManager 内置服务器的可用性与批量装配', () => {
+  it('MCPB-U-30 / 31: ensureEnabled 没有会话就跳过 inproc，有会话才带上', async () => {
+    const h = setup([sshRow(), row({ id: 'a-id', name: 'a' })])
+
+    // 扩展宿主全量装配，没有逐会话概念：跳过而不是报错
+    const without = await h.mgr.ensureEnabled()
+    expect(without.map((r) => r.name)).toEqual(['a'])
+    expect(h.made('ssh')).toHaveLength(0)
+
+    const withSession = await h.mgr.ensureEnabled({ sessionId: 's1' })
+    expect(withSession.map((r) => r.name).sort()).toEqual(['a', 'ssh'])
+    expect(withSession.every((r) => r.result.ok)).toBe(true)
+    expect(h.madeFor('ssh', 's1')).toHaveLength(1)
+  })
+
+  it('MCPB-U-32: 可用性看配置不看连接 —— 一条会话都没连也照样在勾选列表里', async () => {
+    const h = setup([sshRow(), row({ id: 'a-id', name: 'a' })])
+
+    expect(h.mgr.getEnabledToolNames()).toEqual(['mcp:ssh', 'mcp:a'])
+
+    const info = h.mgr.getAllToolInfos().find((i) => i.name === 'mcp:ssh')
+    // isBuiltin 是前端把它渲染成「内置能力」而不是一台可编辑服务器的依据
+    expect(info).toMatchObject({ isBuiltin: true, serverStatus: 'disconnected' })
   })
 })
