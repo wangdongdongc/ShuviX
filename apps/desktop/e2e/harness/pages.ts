@@ -1150,11 +1150,19 @@ const SECTION_HINT = (anchor: string): string =>
       btn.dispatchEvent(
         new MouseEvent(type, { bubbles: true, cancelable: true, relatedTarget: document.body })
       )
+    // 认**这个按钮**的那一个气泡（aria-describedby → id），不认 document 里的第一个：
+    // 两个气泡可以同时开着（鼠标停在 A 上、键盘 Tab 到 B），那时 querySelector 会悄悄
+    // 读到另一节的文案 —— 失败起来极难懂，而按 id 取是精确的
+    const tipText = () => {
+      const id = btn.getAttribute('aria-describedby')
+      const tip = id ? document.getElementById(id) : null
+      return (tip?.textContent ?? '').trim()
+    }
     let text = ''
     for (let attempt = 0; attempt < 5 && !text; attempt++) {
       fire('mouseover')
       for (let i = 0; i < 20 && !text; i++) {
-        text = (document.querySelector('[data-info-tip]')?.textContent ?? '').trim()
+        text = tipText()
         if (!text) await new Promise((r) => setTimeout(r, 10))
       }
     }

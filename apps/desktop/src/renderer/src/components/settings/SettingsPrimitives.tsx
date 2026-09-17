@@ -3,6 +3,7 @@ export {
   SettingsSection,
   SettingsRow,
   SettingsBlock,
+  InfoHint,
   Toggle,
   InlineSelect,
   InlineInput,

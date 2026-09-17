@@ -29,6 +29,40 @@ const HINT_GAP = 6
 /** 气泡到视口边缘的最小距离（px） */
 const HINT_MARGIN = 8
 
+/** 一个矩形的左上角与尺寸（`DOMRect` 的子集 —— 这里只用得到这几个数） */
+export interface HintBox {
+  top: number
+  bottom: number
+  left: number
+  width: number
+}
+
+/**
+ * 气泡该放在哪（视口坐标，配 `position: fixed`）。`null` = 锚点整个滚出视野，该藏起来。
+ *
+ * 单独拎出来是因为**五个分支里有四个在真实设置页永远走不到** —— 那里的问号清一色贴着左上角，
+ * 翻转、贴边、出视口都碰不到，e2e 再多也覆盖不了，只能靠单测把它们钉住。
+ * 纯算术、无副作用：读 rect 与写 style 都留在 `place()` 里。
+ */
+export function hintPosition(
+  anchor: HintBox,
+  tip: { width: number; height: number },
+  viewport: { width: number; height: number }
+): { top: number; left: number } | null {
+  // 锚点整个滚出视野：留在原地会变成一段飘在无关内容上的说明，藏起来更诚实
+  if (anchor.bottom < 0 || anchor.top > viewport.height) return null
+  const left = Math.min(
+    Math.max(HINT_MARGIN, anchor.left + anchor.width / 2 - tip.width / 2),
+    Math.max(HINT_MARGIN, viewport.width - tip.width - HINT_MARGIN)
+  )
+  const below = anchor.bottom + HINT_GAP
+  if (below + tip.height <= viewport.height - HINT_MARGIN) return { top: below, left }
+  // 下方放不下就翻到上方；**上方也放不下时钉在上边距** —— 那会盖住锚点，是刻意选的：
+  // 气泡是 pointer-events-none 的 fixed 层，既不在任何滚动容器里、也没有 max-height，
+  // 掉到视口下沿之外就彻底够不着。说明比整个视口还高才会走到这一支，今天最长的也就几行。
+  return { top: Math.max(HINT_MARGIN, anchor.top - HINT_GAP - tip.height), left }
+}
+
 /**
  * 说明气泡：一个小问号，悬浮（或键盘聚焦）才展开说明。
  *
@@ -61,22 +95,17 @@ export function InfoHint({ hint }: { hint: ReactNode }): React.JSX.Element {
     const tip = tipRef.current
     if (!trigger || !tip) return
     const anchor = trigger.getBoundingClientRect()
-    // 锚点整个滚出视野：留在原地会变成一段飘在无关内容上的说明，藏起来更诚实
-    if (anchor.bottom < 0 || anchor.top > window.innerHeight) {
+    const box = tip.getBoundingClientRect()
+    const at = hintPosition(anchor, box, {
+      width: window.innerWidth,
+      height: window.innerHeight
+    })
+    if (!at) {
       tip.style.visibility = 'hidden'
       return
     }
-    const box = tip.getBoundingClientRect()
-    const left = Math.min(
-      Math.max(HINT_MARGIN, anchor.left + anchor.width / 2 - box.width / 2),
-      Math.max(HINT_MARGIN, window.innerWidth - box.width - HINT_MARGIN)
-    )
-    const below = anchor.bottom + HINT_GAP
-    // 下方放不下就翻到上方；两边都放不下时仍取下方，让它自己滚
-    const fits = below + box.height <= window.innerHeight - HINT_MARGIN
-    const top = fits ? below : Math.max(HINT_MARGIN, anchor.top - HINT_GAP - box.height)
-    tip.style.top = `${top}px`
-    tip.style.left = `${left}px`
+    tip.style.top = `${at.top}px`
+    tip.style.left = `${at.left}px`
     tip.style.visibility = 'visible'
   }, [])
 
@@ -111,11 +140,16 @@ export function InfoHint({ hint }: { hint: ReactNode }): React.JSX.Element {
         // 一块内容的控件才有的语义，会让读屏把它念成一个可操作的开关
         aria-describedby={open ? id : undefined}
         onMouseEnter={() => setOpen(true)}
-        onMouseLeave={close}
+        // 键盘打开的那一个，不该被路过的鼠标关掉：Tab 过来展开之后鼠标碰巧扫过再移开，
+        // 焦点明明没动，说明却没了，而键盘上除了「失焦再聚焦」没有重开的路
+        onMouseLeave={() => {
+          if (document.activeElement !== triggerRef.current) close()
+        }}
         onFocus={() => setOpen(true)}
         onBlur={close}
-        // 说明不是操作：点问号什么都不发生，免得它在可点的行里被当成按钮
-        onClick={(e) => e.preventDefault()}
+        // 说明不是操作：点问号不该惊动这一行。要挡住的是**冒泡**（问号可能坐在可点的行里），
+        // 而 type="button" 本来就没有默认行为可取消 —— preventDefault 在这儿是个空操作
+        onClick={(e) => e.stopPropagation()}
         className="inline-flex shrink-0 items-center rounded text-text-tertiary/70 hover:text-text-secondary transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60"
       >
         <CircleHelp size={12} />
@@ -224,7 +258,11 @@ export function SettingsBlock({
   children
 }: {
   label?: ReactNode
-  /** 这一块是干嘛的 —— 收进标签旁的问号气泡（没有标签时问号自己占一行） */
+  /**
+   * 这一块是干嘛的 —— 收进标签旁的问号气泡。
+   * 不给 `label` 只给它，渲染出来是一个**没有解释对象的孤零零问号**；今天没有调用点这么用，
+   * 也不该这么用（要么给标签，要么这段话本就该是 `subtitle`）。
+   */
   description?: ReactNode
   /** 这一块**自己的内容** —— 照旧铺成标签下的一行字 */
   subtitle?: ReactNode
