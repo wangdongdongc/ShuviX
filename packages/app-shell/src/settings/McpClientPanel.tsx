@@ -301,15 +301,18 @@ export function McpClientPanel({ api, caps = {} }: McpClientPanelProps): React.J
                     </div>
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
-                    {(s.status === 'error' || s.status === 'disconnected') && (
-                      <button
-                        onClick={() => handleReconnect(s.id)}
-                        className="p-1 text-text-tertiary hover:text-accent transition-colors"
-                        title={t('settings.mcpReconnect')}
-                      >
-                        <RefreshCw size={12} />
-                      </button>
-                    )}
+                    {/* inproc 没有「从设置页连一下」这回事：它由用到它的会话实例化，
+                        这里点下去只会得到一个没有原因的失败 */}
+                    {s.type !== 'inproc' &&
+                      (s.status === 'error' || s.status === 'disconnected') && (
+                        <button
+                          onClick={() => handleReconnect(s.id)}
+                          className="p-1 text-text-tertiary hover:text-accent transition-colors"
+                          title={t('settings.mcpReconnect')}
+                        >
+                          <RefreshCw size={12} />
+                        </button>
+                      )}
                     <button
                       onClick={() => handleToggle(s)}
                       className={`p-1 transition-colors ${

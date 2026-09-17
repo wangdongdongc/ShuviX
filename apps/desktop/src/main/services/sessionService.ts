@@ -98,10 +98,6 @@ export class SessionService {
       // **await**：解绑必须发生在关停之后 —— 见 SessionManager 顶部注释
       if (reason === 'invalidate') await agent.invalidate()
       else await agent.destroy()
-      // 内置能力服务器（inproc MCP）的寿命绑**会话**，不绑运行时实例：回退重建时留着，
-      // 这样 ssh 的 control socket / browser 的 tab 不会被一次重建白白掐断；
-      // 只有会话真的没了才释放。
-      if (reason !== 'invalidate') await mcpService.closeSession(sessionId)
       log.info(`移除 AgentSession session=${sessionId} reason=${reason}`)
     },
     // 关停可能很久（工具卡住不返回时会一直等），期间会话呈现「正在停止」并拦住发送
@@ -466,6 +462,12 @@ export class SessionService {
     // 再清理运行时 AgentSession（dispose 触发 destroy）。等它彻底停下才继续删数据 ——
     // 否则一个还在跑的 run 会往刚被删掉的会话文件/结果目录里继续写
     await this.agents.remove(id, 'destroy')
+    // 内置能力服务器（inproc MCP）的寿命绑**会话**，不绑运行时实例 —— 回退重建（invalidate）
+    // 时故意留着，ssh 的 control socket / browser 的 tab 不该被一次重建白白掐断。所以释放写在
+    // 这里而不是 agent 的 dispose 钩子上：那个钩子在「运行时已先被 invalidate 掉」时根本不跑
+    // （SessionManager.remove 没有实例就提前返回），连接会变成谁也关不掉的孤儿。
+    // 放在 agents.remove 之后：还在跑的 run 可能正调着它的工具。
+    await mcpService.closeSession(id)
     // 再清理持久化数据
     messageService.clear(id)
     httpLogDao.deleteBySessionId(id)

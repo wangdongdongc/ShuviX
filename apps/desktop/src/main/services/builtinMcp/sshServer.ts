@@ -14,7 +14,7 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
-import type { BuiltinMcpScope } from '@shuvix/agent-runtime'
+import type { BuiltinMcpScope, BuiltinMcpFactory } from '@shuvix/agent-runtime'
 import { listSshHosts, defaultSshConfigPath } from './sshConfig'
 import { createLogger } from '../../logger'
 
@@ -34,6 +34,11 @@ const LIST_HOSTS_TOOL = {
     type: 'object' as const,
     properties: {
       configPath: { type: 'string', description: 'Path of the ssh config that was read' },
+      total: {
+        type: 'integer',
+        description: 'How many aliases the config defines, before the listing cap'
+      },
+      truncated: { type: 'boolean', description: 'True when `hosts` is shorter than `total`' },
       hosts: {
         type: 'array',
         items: {
@@ -48,7 +53,7 @@ const LIST_HOSTS_TOOL = {
         }
       }
     },
-    required: ['configPath', 'hosts']
+    required: ['configPath', 'total', 'truncated', 'hosts']
   },
   annotations: {
     title: 'List SSH hosts',
@@ -74,9 +79,15 @@ function formatHost(h: { alias: string; hostname?: string; user?: string; port?:
  * 于是「会话结束 → McpManager 关连接 → 这里释放」只有一条路径。本轮没有要释放的东西，
  * 钩子先立好 —— exec 的 control socket 就挂在这里。
  */
+export function createSshMcpServerFactory(opts?: { configPath?: string }): BuiltinMcpFactory {
+  return (scope, transport) => createSshMcpServer(scope, transport, opts?.configPath)
+}
+
 export async function createSshMcpServer(
   scope: BuiltinMcpScope,
-  transport: Transport
+  transport: Transport,
+  /** 配置路径覆写（仅测试 / 未来的 fixture 用）；缺省是用户真正的 ~/.ssh/config */
+  configPathOverride?: string
 ): Promise<void> {
   const server = new Server(
     { name: 'shuvix-ssh', version: '1.0.0' },
@@ -93,10 +104,16 @@ export async function createSshMcpServer(
       }
     }
 
-    const configPath = defaultSshConfigPath()
+    // 每次调用现读：用户可能刚刚改过 ~/.ssh/config，缓存在实例上只会让人困惑
+    const configPath = configPathOverride ?? defaultSshConfigPath()
     const all = listSshHosts(configPath)
     const hosts = all.slice(0, MAX_LISTED_HOSTS)
-    const structuredContent = { configPath, hosts }
+    const structuredContent = {
+      configPath,
+      total: all.length,
+      truncated: all.length > hosts.length,
+      hosts
+    }
 
     const text =
       hosts.length === 0

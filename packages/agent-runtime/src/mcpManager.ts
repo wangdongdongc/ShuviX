@@ -245,14 +245,18 @@ export class McpManager {
     const keys =
       sessionId === undefined
         ? [...this.connections].filter(([, c]) => c.serverId === serverId).map(([k]) => k)
-        : [`${serverId}#${sessionId}`]
-    for (const key of keys) {
-      const conn = this.connections.get(key)
-      if (!conn) continue
-      await this.closeConnection(conn, key)
-      this.connections.delete(key)
-      this.log.info(`disconnected: ${key}`)
-    }
+        : // 外部服务器的键就是 serverId（带 sessionId 调用它是无意义的，静默不动）
+          [`${serverId}#${sessionId}`]
+    for (const key of keys) await this.closeByKey(key)
+  }
+
+  /** 按**连接键**关闭并摘牌 —— disconnect / closeSession / disconnectAll 的唯一出口 */
+  private async closeByKey(key: string): Promise<void> {
+    const conn = this.connections.get(key)
+    if (!conn) return
+    await this.closeConnection(conn, key)
+    this.connections.delete(key)
+    this.log.info(`disconnected: ${key}`)
   }
 
   /**
@@ -263,14 +267,7 @@ export class McpManager {
   async closeSession(sessionId: string): Promise<void> {
     const keys = [...this.connections].filter(([, c]) => c.sessionId === sessionId).map(([k]) => k)
     if (keys.length === 0) return
-    await Promise.allSettled(
-      keys.map(async (key) => {
-        const conn = this.connections.get(key)
-        if (!conn) return
-        await this.closeConnection(conn, key)
-        this.connections.delete(key)
-      })
-    )
+    await Promise.allSettled(keys.map((key) => this.closeByKey(key)))
     this.log.info(`closeSession ${sessionId}: ${keys.length} builtin server(s) closed`)
   }
 
@@ -405,9 +402,10 @@ export class McpManager {
 
   /** 关闭所有连接 */
   async disconnectAll(): Promise<void> {
-    const ids = [...this.connections.keys()]
-    await Promise.allSettled(ids.map((id) => this.disconnect(id)))
-    this.log.info(`disconnectAll: ${ids.length} server(s) closed`)
+    // 走**连接键**，不是 serverId：inproc 的键带会话后缀，交给 disconnect(serverId) 谁也匹配不上
+    const keys = [...this.connections.keys()]
+    await Promise.allSettled(keys.map((key) => this.closeByKey(key)))
+    this.log.info(`disconnectAll: ${keys.length} connection(s) closed`)
   }
 
   // ─── 状态查询 ───
@@ -417,11 +415,13 @@ export class McpManager {
    * 设置页问的是「这台能力在用吗」，而不是某条会话的分身。
    */
   getStatus(serverId: string, sessionId?: string): McpServerStatus {
+    // 裸键优先：外部服务器（stdio/http）的连接键就是 serverId，跟会话无关。
+    // 调用方（agentHost）对所有服务器一律传 sessionId，这里必须自己认出这一点。
+    const direct = this.connections.get(serverId)
+    if (direct) return direct.status
     if (sessionId !== undefined) {
       return this.connections.get(`${serverId}#${sessionId}`)?.status ?? 'disconnected'
     }
-    const direct = this.connections.get(serverId)
-    if (direct) return direct.status
     let fallback: McpServerStatus = 'disconnected'
     for (const conn of this.connections.values()) {
       if (conn.serverId !== serverId) continue
@@ -433,9 +433,9 @@ export class McpManager {
   }
 
   getError(serverId: string, sessionId?: string): string | undefined {
-    if (sessionId !== undefined) return this.connections.get(`${serverId}#${sessionId}`)?.error
     const direct = this.connections.get(serverId)
     if (direct) return direct.error
+    if (sessionId !== undefined) return this.connections.get(`${serverId}#${sessionId}`)?.error
     for (const conn of this.connections.values()) {
       if (conn.serverId === serverId && conn.error) return conn.error
     }

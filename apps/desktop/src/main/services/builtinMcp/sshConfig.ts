@@ -57,12 +57,22 @@ function unquote(v: string): string {
   return t
 }
 
-/** `Host a b "c d"` 的实参切分（按空白，支持引号） */
+/**
+ * `Host a b "c d"` 的实参切分（按空白，支持引号）。
+ *
+ * 遇到独立的 `#` 记号就截断：OpenSSH 只认行首注释，`Host web # my box` 在它眼里真的定义了
+ * `#` / `my` / `box` 三个别名。这里刻意不忠实 —— 这份清单是给模型挑机器用的，那三个不是机器。
+ */
 function splitArgs(rest: string): string[] {
   const out: string[] = []
   const re = /"([^"]*)"|'([^']*)'|(\S+)/g
   let m: RegExpExecArray | null
-  while ((m = re.exec(rest)) !== null) out.push(m[1] ?? m[2] ?? m[3])
+  while ((m = re.exec(rest)) !== null) {
+    const token = m[1] ?? m[2] ?? m[3]
+    // 带引号的 "#" 是真值，不是注释；只有裸记号才截断
+    if (m[3] !== undefined && m[3].startsWith('#')) break
+    out.push(token)
+  }
   return out
 }
 
@@ -91,10 +101,14 @@ function expandInclude(arg: string, sshDir: string): string[] {
       '$'
   )
   try {
-    return readdirSync(dir, { withFileTypes: true })
-      .filter((e) => e.isFile() && re.test(e.name))
-      .map((e) => join(dir, e.name))
-      .sort()
+    return (
+      readdirSync(dir, { withFileTypes: true })
+        // isFile() 对符号链接是 false（lstat 语义）；不带通配的分支走 existsSync 会跟随链接，
+        // 两边必须一致，否则 stow / chezmoi 管理的配置会静默消失
+        .filter((e) => (e.isFile() || e.isSymbolicLink()) && re.test(e.name))
+        .map((e) => join(dir, e.name))
+        .sort()
+    )
   } catch {
     return []
   }
@@ -103,8 +117,8 @@ function expandInclude(arg: string, sshDir: string): string[] {
 /**
  * 扫一份配置（含 Include），把别名按**首次出现顺序**收集起来。
  *
- * 同名别名多次出现只留第一次（OpenSSH 的参数也是先到先得），所以后续块里的
- * HostName/User/Port 不会覆盖先前已记下的值。
+ * 先到先得是**按键**算的（与 OpenSSH 一致）：后出现的同名 Host 块不会覆盖已记下的值，
+ * 但可以补上前一个块没写的那些键。
  */
 function scanFile(
   path: string,
@@ -145,6 +159,9 @@ function scanFile(
           scanFile(file, sshDir, depth + 1, visited, out)
         }
       }
+      // `current` 是本帧的局部量，所以 Include 返回后仍然指向**本文件**上一个 Host 块。
+      // OpenSSH 是纯文本展开的，被包含文件末尾的 Host 会漏进父文件；这里刻意不跟随 ——
+      // 一份配置的归属被另一份的结尾改写，读起来没有任何道理。
       continue
     }
 
@@ -158,12 +175,15 @@ function scanFile(
     for (const alias of current) {
       const entry = out.get(alias)
       if (!entry) continue
+      // 单实参指令只取第一个实参（OpenSSH 如此），否则行尾注释会被当成值的一部分
+      const first = splitArgs(d.rest)[0]
+      if (first === undefined) continue
       if (d.keyword === 'hostname' && entry.hostname === undefined) {
-        entry.hostname = unquote(d.rest)
+        entry.hostname = unquote(first)
       } else if (d.keyword === 'user' && entry.user === undefined) {
-        entry.user = unquote(d.rest)
+        entry.user = unquote(first)
       } else if (d.keyword === 'port' && entry.port === undefined) {
-        const n = Number.parseInt(unquote(d.rest), 10)
+        const n = Number.parseInt(unquote(first), 10)
         if (Number.isInteger(n) && n > 0 && n < 65536) entry.port = n
       }
     }

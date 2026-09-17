@@ -7,11 +7,11 @@
  * 新增一台内置能力服务器 = 这里加一行 + 一条种子迁移。
  */
 import type { BuiltinMcpFactory } from '@shuvix/agent-runtime'
-import { createSshMcpServer } from './sshServer'
+import { createSshMcpServerFactory } from './sshServer'
 
 /** 键就是 `mcp_servers.name`，也是工具名前缀（`mcp__ssh__list-hosts`） */
 export const BUILTIN_MCP_FACTORIES: Record<string, BuiltinMcpFactory> = {
-  ssh: createSshMcpServer
+  ssh: createSshMcpServerFactory()
 }
 
 export { listSshHosts, defaultSshConfigPath, type SshHostEntry } from './sshConfig'
