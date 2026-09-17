@@ -883,16 +883,12 @@ describe('真 scp ←→ 进程内 SFTP 服务端', () => {
     await sshDisconnect(sid, 'testbox', CONFIG)
   }, 60000)
 
-  it('SSHCTL-U-25: 传输挂住 → 超时记 124；中止则真的把 scp 杀掉（**限于没有 master 时**）', async () => {
+  it('SSHCTL-U-25: 传输挂住 → 超时记 124；中止则真的把 scp 杀掉（没有 master 时）', async () => {
     hangRead = true
     const src = fixture('hang.bin')
 
-    // **前提必须写明，而且要断言出来**：这两条会话都没有 master（单独一次传输不新建，
-    // 见 SSHCTL-U-21）。实测这不是细节 —— master 活着时对挂住的 scp 发 SIGTERM，
-    // scp 自己会退（exit 1），但那个 `[mux]` master 还攥着它继承来的 stderr fd，
-    // 于是 `'close'` 永不触发，而 runProcess 恰恰是在 `'close'` 上落定的：
-    // 超时与中止两条路在**复用了连接的会话里**都回不来。
-    // 这条用例钉的是没有 master 的那一支；另一支是实现的缺口，不在这里假装绿。
+    // 前提写明并断言出来：这两条会话都没有 master（单独一次传输不新建，见 SSHCTL-U-21）。
+    // 有 master 的那一支单独一条（SSHCTL-U-27）—— 它曾经是实现的缺口。
     expect(sshConnectedAliases('scp-timeout', ['testbox'])).toEqual([])
     expect(sshConnectedAliases('scp-abort', ['testbox'])).toEqual([])
 
@@ -922,6 +918,40 @@ describe('真 scp ←→ 进程内 SFTP 服务端', () => {
     const child = spawns.children[0]
     expect(child.killed).toBe(true)
     await until(() => child.exitCode !== null || child.signalCode !== null)
+  }, 60000)
+
+  it('SSHCTL-U-27: 会话里已有 master 时，挂住的传输照样能超时落定', async () => {
+    // 复用了连接的会话是另一种形态：ControlPersist 留下的后台 `[mux]` master 继承着
+    // 同一个 stderr 管道，理论上它不松手 `close` 就不来，而 runProcess 若只挂在 `close`
+    // 上，超时与中止就双双永久挂住（「中止」按钮正是靠这条路）。
+    //
+    // **诚实记录**：这条在本机（macOS + OpenSSH 10.2）把落定条件改回只听 `close` 也一样绿 ——
+    // 也就是说那个挂住在这里复现不出来。留着它是因为「会话已有 master 时挂住的传输能不能
+    // 落定」本身值得覆盖；`runProcess` 里那层 `exit` 宽限窗口则按防御写明，不冒充修复。
+    const sid = 'scp-master-timeout'
+    // 先跑一条 exec 把 master 建起来 —— 这正是「复用连接」的会话形态
+    const warm = await sshExec({
+      sessionId: sid,
+      alias: 'testbox',
+      command: 'uptime',
+      timeoutSec: 30,
+      configPath: CONFIG
+    })
+    expect(warm.exitCode).toBe(0)
+    expect(sshConnectedAliases(sid, ['testbox'])).toEqual(['testbox'])
+
+    hangRead = true
+    const src = fixture('hang-master.bin')
+    const t = await copy({
+      sessionId: sid,
+      direction: 'down',
+      localPath: join(XFER, 'hang-master-landed.bin'),
+      remotePath: src.path,
+      timeoutSec: 1
+    })
+    expect(t).toMatchObject({ timedOut: true, exitCode: 124 })
+
+    await sshDisconnect(sid, 'testbox', CONFIG)
   }, 60000)
 
   it('SSHCTL-U-26: 上传到一个已存在的远端**目录** → 落在 `<dir>/<basename>`', async () => {

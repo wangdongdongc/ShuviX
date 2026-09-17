@@ -27,6 +27,8 @@ const log = createLogger('ssh:control')
 const CONTROL_PERSIST = '10m'
 /** 建连超时（秒） */
 const CONNECT_TIMEOUT_SEC = 15
+/** 进程退出后再等多久收尾巴输出（毫秒）—— `close` 没来也要落定，见 runProcess */
+const EXIT_DRAIN_MS = 300
 
 const isWindows = process.platform === 'win32'
 
@@ -133,11 +135,14 @@ function runProcess(
     let timedOut = false
     let settled = false
 
+    let exited = false
     const kill = (): void => {
       child.kill('SIGTERM')
-      // 远端还在跑时 SIGTERM 未必收得住本地进程，给一小段宽限后强杀
+      // 宽限后强杀。判据必须是「进程真的退了吗」，**不能**用 `child.killed` ——
+      // 那个字段的含义是「发过信号」，SIGTERM 调用之后它就已经是 true，
+      // 于是这行升级永远不会执行（曾经就是一段死代码）。
       setTimeout(() => {
-        if (!child.killed) child.kill('SIGKILL')
+        if (!exited) child.kill('SIGKILL')
       }, 2000).unref()
     }
 
@@ -177,9 +182,27 @@ function runProcess(
         )
       )
     })
-    child.on('close', (code) => {
+    /**
+     * 同时听 `exit` 和 `close`，是一层**防御**，不是在修一个观察到的故障。
+     *
+     * `close` 要等所有 stdio 都关掉才发，而 ControlPersist 留下的后台 `[mux]` master
+     * 继承着同一个 stderr 管道 —— 只要它活着，管道就还有写端。理论上被 kill 掉的
+     * scp/ssh 早已退出而 `close` 迟迟不来，那会让**超时与中止永久挂住**，
+     * 而「中止」按钮正是靠这条路生效的。
+     *
+     * 实测在 macOS + OpenSSH 10.2 上复现不出来（`close` 照常触发，见 SSHCTL-U-27），
+     * 所以这里不写成「修复」。但只挂在 `close` 上就是把「能不能中止」交给孙进程什么时候
+     * 松手，这个赌注不值得下：`close` 仍是首选（那时输出一定收全），`exit` 之后给一小段
+     * 宽限窗口收尾巴，窗口到了就拿现有输出落定。
+     */
+    const settle = (code: number | null): void =>
       done(() => resolve({ stdout, stderr, exitCode: timedOut ? 124 : (code ?? 1), timedOut }))
+
+    child.on('exit', (code) => {
+      exited = true
+      setTimeout(() => settle(code), EXIT_DRAIN_MS).unref()
     })
+    child.on('close', (code) => settle(code))
   })
 }
 
