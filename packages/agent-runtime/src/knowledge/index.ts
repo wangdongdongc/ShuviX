@@ -38,6 +38,8 @@ export {
   titleFromPath,
   readKnowledgeNote,
   firstHeading,
+  headingsOf,
+  type BodyHeading,
   type KnowledgeNote,
   type KnowledgeConcept,
   type KnowledgeSource,

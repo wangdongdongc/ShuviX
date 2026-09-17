@@ -109,6 +109,14 @@ of the base; folders are for the user's own organisation and the sidebar's "new 
   sidebar's **new entry** writes the same metadata as `create` (with `type: Memory`,
   `status: draft`) minus `generated`, under the actor `human`.
 
+**Finding an entry is two steps.** `search` indexes each entry's *face* only — title, description,
+tags, type and the **headings** inside it, never the prose — so a result list says which entries
+are plausibly about the subject, not what they say: read the titles and descriptions, pick the
+ones that fit, and `read` those. (Whole bodies used to be indexed; one ordinary word then pulled
+back half the base with a paragraph of context per hit, burying the entry actually wanted.) For a
+literal string inside bodies — an error message, a symbol, a URL — use `grep` over the base's
+directory, which every listing prints.
+
 The `knowledge` tool's other actions: `bases` (what this session may name), `search` (free text;
 without `base` it covers every enabled base, grouped per base — separate BM25 indexes, scores
 not comparable across bases; Chinese and Japanese text is word-segmented before indexing),

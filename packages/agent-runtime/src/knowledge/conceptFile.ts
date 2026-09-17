@@ -217,14 +217,26 @@ export function parseConceptText(
 const FENCE_OPEN_RE = /^ {0,3}(`{3,}|~{3,})(.*)$/
 /** 围栏的闭栏行：只有围栏字符与空白 */
 const FENCE_CLOSE_RE = /^ {0,3}(`{3,}|~{3,})[ \t]*$/
-/** 一级 ATX 标题：`# 标题`（可带收尾的 #） */
-const H1_RE = /^ {0,3}#[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$/
+/** ATX 标题：`# 标题` … `###### 标题`（可带收尾的 #） */
+const HEADING_RE = /^ {0,3}(#{1,6})[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$/
+
+/** 正文里的一个标题 */
+export interface BodyHeading {
+  /** `#` 的个数（1–6） */
+  level: number
+  /** 标题文字（去掉收尾的 # 与首尾空白） */
+  text: string
+}
 
 /**
- * 正文里第一个一级标题（跳过围栏代码块）；没有返回 undefined。围栏按 CommonMark 闭合：同一种字符、
- * 不短于开栏、闭栏行不带 info string；info string 里带反引号的那一行不是开栏（那是行内代码）
+ * 正文里的全部 ATX 标题，按出现顺序（跳过围栏代码块）。围栏按 CommonMark 闭合：同一种字符、
+ * 不短于开栏、闭栏行不带 info string；info string 里带反引号的那一行不是开栏（那是行内代码）。
+ *
+ * 两个消费方：笔记的标题回落（第一个一级标题），以及**检索索引的正文面** —— 索引只收标题行、
+ * 不收散文，所以这里要连级别一起给，让调用方决定收到第几级。
  */
-export function firstHeading(body: string): string | undefined {
+export function headingsOf(body: string): BodyHeading[] {
+  const out: BodyHeading[] = []
   let fence: { char: string; length: number } | null = null
   for (const line of body.split(/\r?\n/)) {
     if (fence) {
@@ -237,10 +249,15 @@ export function firstHeading(body: string): string | undefined {
       fence = { char: open[1][0], length: open[1].length }
       continue
     }
-    const h = H1_RE.exec(line)
-    if (h && h[1].trim()) return h[1].trim()
+    const h = HEADING_RE.exec(line)
+    if (h && h[2].trim()) out.push({ level: h[1].length, text: h[2].trim() })
   }
-  return undefined
+  return out
+}
+
+/** 正文里第一个一级标题（跳过围栏代码块）；没有返回 undefined */
+export function firstHeading(body: string): string | undefined {
+  return headingsOf(body).find((h) => h.level === 1)?.text
 }
 
 /**

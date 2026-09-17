@@ -32,6 +32,7 @@ import type { SecurityContext } from '../security/types'
 import { BaseTool } from '../tools/baseTool'
 import {
   buildConceptText,
+  headingsOf,
   isVerificationCurrent,
   normalizeSources,
   type KnowledgeConcept,
@@ -146,13 +147,15 @@ export const KNOWLEDGE_DESCRIPTION = `Search, read, check and add to this sessio
 
 Actions:
 - "bases": list this session's knowledge bases (no other parameters).
-- "search": find entries by free text (\`query\`, optional \`base\` / \`limit\`). **Leave \`base\` out to search every base this session has** — the user's selection is already the scope; name one only to stay inside it.
+- "search": find candidate entries by free text (\`query\`, optional \`base\` / \`limit\`). **Leave \`base\` out to search every base this session has** — the user's selection is already the scope; name one only to stay inside it.
 - "list": list the notes of one base — entries ShuviX created and the user's own notes alike.
 - "read": return one entry by \`path\`.
 - "create": add a new entry — \`type\`, \`title\`, \`description\`, \`body\`, optional \`tags\` / \`sources\` / \`stale_after\` / \`status\`. The host assembles the metadata, names the file after the title, and answers with the absolute path it wrote.
 - "validate": report problems in one note (\`path\`) or in the whole base (no \`path\`). Entries that carry ShuviX's self-description line are held to OKF; the user's own notes are only checked for broken frontmatter. Run it after editing an entry.
 
 **A base marked read-only in "bases"** is ShuviX's own reference, shipped with the app: search and read it for how ShuviX's files and features work, but never create or edit anything there — record what you learn in one of the user's bases.
+
+**Search then read — two steps, on purpose.** The index holds each entry's *face* only: title, description, tags, type and the headings inside it — **not the prose**. A result list therefore tells you which entries are plausibly about your subject, never what they say: pick the ones whose title and description fit, then \`read\` those. (Indexing whole bodies was tried and reverted: one ordinary word pulled back half the base, every hit dragging a paragraph along, and the entry actually wanted was buried in the noise.) To find a literal string inside bodies — an error message, a symbol, a URL — use \`grep\` over the base's directory, which every listing prints: more precise than any index, and it returns far less.
 
 **A base can hold the user's own notes with no metadata at all.** They are part of the base: search, read and edit them as they are, and never add or "fix" metadata on a user's note unless the user asks. Only entries created through "create" are guaranteed to carry OKF metadata.
 
@@ -178,12 +181,15 @@ export interface KnowledgeBundleTarget {
   readonly?: boolean
 }
 
+/**
+ * 一条检索命中 —— **只有门面，没有正文片段**：检索回答的是「哪几条可能相关」，正文由 `read` 取。
+ * 每条命中都拖一段正文，是全文入索引时最占上下文的那一半（见 knowledgeTool 描述里的两步走）。
+ */
 export interface KnowledgeSearchHit {
   path: string
   title: string
   description?: string
   status?: string
-  snippet?: string
 }
 
 /** 宿主的一次 bundle 扫描（带缓存）：全部 md 原文 + 解析成功的 OKF 条目 + 全部笔记 */
@@ -404,20 +410,24 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
         total: hits.length,
         lines: hits.map(
           (h) =>
-            `- /${normalizeBundlePath(h.path)}${h.status && h.status !== 'stable' ? ` (${h.status})` : ''} — ${h.description || h.title}${h.snippet ? `\n  ${h.snippet}` : ''}`
+            `- /${normalizeBundlePath(h.path)}${h.status && h.status !== 'stable' ? ` (${h.status})` : ''} — ${h.description || h.title}`
         )
       }
     }
+    // 宿主没注入检索（扩展端）时的兜底。**面与宿主索引一致：门面 + 正文标题行，不看散文** ——
+    // 两端对同一个查询的召回口径不该差一整个数量级
     const needle = query.toLowerCase()
     const { files, notes } = await this.deps.scan(target.dir)
     const textOf = new Map(files.map((f) => [f.path, f.text]))
-    const matches = notes.filter(
-      (n) =>
-        n.status !== 'deprecated' &&
-        [n.title, n.description, n.tags.join(' '), bodyOf(textOf.get(n.path) ?? '')].some((s) =>
-          s.toLowerCase().includes(needle)
-        )
-    )
+    const matches = notes.filter((n) => {
+      if (n.status === 'deprecated') return false
+      const headings = headingsOf(bodyOf(textOf.get(n.path) ?? ''))
+        .map((h) => h.text)
+        .join(' ')
+      return [n.title, n.description, n.tags.join(' '), headings].some((s) =>
+        s.toLowerCase().includes(needle)
+      )
+    })
     return { total: matches.length, lines: matches.slice(0, limit).map(summaryLine) }
   }
 

@@ -71,7 +71,7 @@ const seed = (): void => {
     root,
     `${BUNDLE}/token.md`,
     ['type: Memory', 'title: 鉴权与令牌刷新', 'description: 改动登录时看', 'status: stable'],
-    '访问令牌过期后，用刷新令牌换一个新的访问令牌。'
+    '## 刷新流程\n\n访问令牌过期后，用长效凭证换一个新的访问令牌。'
   )
   seedConcept(
     root,
@@ -108,12 +108,30 @@ describe('searchBundle', () => {
     expect(paths).not.toContain('old.md')
   })
 
-  it('SR-3 片段里不残留分词用的词界标记，回来的是原文', async () => {
+  it('SR-3 正文标题能命中；回包只有门面（无正文片段，也不残留分词用的词界标记）', async () => {
     seed()
-    const [hit] = await searchBundle(BUNDLE, '令牌', { limit: 1 })
-    expect(hit.snippet).toBeDefined()
-    expect(hit.snippet).not.toMatch(/\u200A/)
-    expect(hit.snippet).toContain('访问令牌过期后')
+    const [hit] = await searchBundle(BUNDLE, '刷新流程', { limit: 1 })
+    // 命中的每个字段都取自笔记本身，不是索引 —— 所以既没有正文片段，也没有词界标记
+    expect(hit).toEqual({
+      path: 'token.md',
+      title: '鉴权与令牌刷新',
+      description: '改动登录时看',
+      status: 'stable'
+    })
+    expect(JSON.stringify(hit)).not.toMatch(/\u200A/)
+  })
+
+  /**
+   * 本轮（2026-09-17）的裁决：全文入索引误差太大 —— 一句常见的话就能把半个库拉回来，每条命中还拖一段
+   * 正文。索引改成只收门面（title / description / tags / type）+ 正文标题行；正文里的散文靠 grep 找。
+   */
+  it('SR-3b 正文散文不进索引：只在散文里出现的词一条都搜不到，标题行照常命中', async () => {
+    seed()
+    expect(await pathsOf('长效凭证')).toEqual([])
+    expect(await pathsOf('end-to-end')).toEqual([])
+    expect(await pathsOf('刷新流程')).toEqual(['token.md'])
+    // 门面照常：标题 / 描述 / 标签
+    expect(await pathsOf('改动登录时看')).toEqual(['token.md'])
   })
 })
 
@@ -132,18 +150,19 @@ describe('searchBundle — 读宽：每条笔记都进索引', () => {
       root,
       `${BUNDLE}/a.md`,
       ['type: Memory', 'title: A', 'description: da', 'status: stable'],
-      'zebra'
+      '## zebra\n'
     )
-    seedFile(root, `${BUNDLE}/plain.md`, '# Plain note\n\nquokka lives here\n')
+    // 标记词一律落在**标题行**上（索引的正文面只有标题）；散文照写，用来顺带钉住它不可搜
+    seedFile(root, `${BUNDLE}/plain.md`, '# Plain note\n\n## quokka\n\nlives here\n')
     seedFile(
       root,
       `${BUNDLE}/untyped.md`,
-      '---\ntitle: Untyped\ndescription: du\n---\n\nplatypus\n'
+      '---\ntitle: Untyped\ndescription: du\n---\n\n## platypus\n'
     )
-    seedFile(root, `${BUNDLE}/foreign.md`, '---\nshuvix: agent v1\nname: a\n---\n\nmeerkat\n')
-    seedFile(root, `${BUNDLE}/broken.md`, '---\ntitle: [x\n---\n\nnarwhal\n')
-    seedFile(root, `${BUNDLE}/index.md`, '# Home\n\nwombat\n')
-    seedFile(root, `${BUNDLE}/sub/log.md`, '# Diary\n\nkoala\n')
+    seedFile(root, `${BUNDLE}/foreign.md`, '---\nshuvix: agent v1\nname: a\n---\n\n## meerkat\n')
+    seedFile(root, `${BUNDLE}/broken.md`, '---\ntitle: [x\n---\n\n## narwhal\n')
+    seedFile(root, `${BUNDLE}/index.md`, '# Home\n\n## wombat\n')
+    seedFile(root, `${BUNDLE}/sub/log.md`, '# Diary\n\n## koala\n')
 
     // 保留名下的笔记以隐藏别名入索引，结果里必须换回真实路径
     const table: [string, string, string][] = [
@@ -161,6 +180,8 @@ describe('searchBundle — 读宽：每条笔记都进索引', () => {
     expect(untyped.description).toBe('du')
     // 合规条目不受连累
     expect(await pathsOf('zebra')).toEqual(['a.md'])
+    // 散文（`lives here`）不在索引里
+    expect(await pathsOf('lives')).toEqual([])
   })
 
   it('SR-5 生成形状的 index.md / log.md 不进结果；deprecated 条目照旧滤掉，没有 status 的普通笔记不被一并刷掉', async () => {
@@ -190,9 +211,9 @@ describe('searchBundle — 读宽：每条笔记都进索引', () => {
       root,
       `${BUNDLE}/old.md`,
       ['type: Memory', 'title: Old', 'description: dold', 'status: deprecated'],
-      'kiwi'
+      '## kiwi\n'
     )
-    seedFile(root, `${BUNDLE}/note.md`, 'a kiwi on the windowsill\n')
+    seedFile(root, `${BUNDLE}/note.md`, '## kiwi\n\non the windowsill\n')
 
     expect(await pathsOf('kiwi')).toEqual(['note.md'])
     // `Creation` 只出现在生成的 log.md 里
@@ -202,12 +223,12 @@ describe('searchBundle — 读宽：每条笔记都进索引', () => {
 
   it('SR-6 okf-minisearch 拒收原文的合规条目照样搜得到，也不连累别的笔记', async () => {
     // 开头多一个 BOM
-    seedFile(root, `${BUNDLE}/bom.md`, `${BOM}---\ntype: Memory\ntitle: Bom\n---\n\nalpaca\n`)
+    seedFile(root, `${BUNDLE}/bom.md`, `${BOM}---\ntype: Memory\ntitle: Bom\n---\n\n## alpaca\n`)
     // frontmatter 之前有空行
-    seedFile(root, `${BUNDLE}/lead.md`, '\n\n---\ntype: Memory\ntitle: Lead\n---\n\nbison\n')
+    seedFile(root, `${BUNDLE}/lead.md`, '\n\n---\ntype: Memory\ntitle: Lead\n---\n\n## bison\n')
     // 闭合线带一个尾随空格
-    seedFile(root, `${BUNDLE}/ts.md`, '---\ntype: Memory\ntitle: TS\n--- \n\ncoyote\n')
-    seedFile(root, `${BUNDLE}/plain.md`, '# P\n\ndingo\n')
+    seedFile(root, `${BUNDLE}/ts.md`, '---\ntype: Memory\ntitle: TS\n--- \n\n## coyote\n')
+    seedFile(root, `${BUNDLE}/plain.md`, '# P\n\n## dingo\n')
 
     const table: [string, string, string][] = [
       ['alpaca', 'bom.md', 'Bom'],
@@ -221,8 +242,8 @@ describe('searchBundle — 读宽：每条笔记都进索引', () => {
   })
 
   it('SR-7 普通笔记入索引时不带可检索的 type：搜 type 名只命中真有这个 type 的条目', async () => {
-    seedConcept(root, `${BUNDLE}/a.md`, ['type: Memory', 'title: Alpha'], 'zebra')
-    seedFile(root, `${BUNDLE}/plain.md`, '# Plain\n\nquokka\n')
+    seedConcept(root, `${BUNDLE}/a.md`, ['type: Memory', 'title: Alpha'], '## zebra\n')
+    seedFile(root, `${BUNDLE}/plain.md`, '# Plain\n\n## quokka\n')
 
     expect(await pathsOf('memory')).toEqual(['a.md'])
     expect(await pathsOf('note')).toEqual([])
@@ -243,13 +264,13 @@ describe('searchBundle — 内置库按界面语言取那一版', () => {
       root,
       `${BUILTIN_BASE}/en/guide.md`,
       ['type: Guide', 'title: File formats', 'description: how ShuviX writes files'],
-      'The platypus section explains frontmatter.'
+      '## The platypus section\n\nIt explains frontmatter.'
     )
     seedBuiltinConcept(
       root,
       `${BUILTIN_BASE}/zh/guide.md`,
       ['type: Guide', 'title: 文件格式', 'description: ShuviX 怎么写文件'],
-      '这一节讲 axolotl 与 frontmatter。'
+      '## axolotl 这一节\n\n讲 frontmatter。'
     )
   }
 
@@ -262,8 +283,8 @@ describe('searchBundle — 内置库按界面语言取那一版', () => {
     expect(await builtinHits('platypus')).toEqual([['guide.md', 'File formats']])
     // zh 那一版不属于这个 bundle：它独有的词一条都搜不出来
     expect(await builtinHits('axolotl')).toEqual([])
-    // 两版共有的词也只命中一条（不是同一条 id 的两份）
-    expect(await builtinHits('frontmatter')).toEqual([['guide.md', 'File formats']])
+    // 两版共有的词（这里在描述里）也只命中一条（不是同一条 id 的两份）
+    expect(await builtinHits('ShuviX')).toEqual([['guide.md', 'File formats']])
   })
 
   it('SR-9 切语言 + refreshBuiltinKnowledge：同一个查询换成新语言那一版的命中', async () => {

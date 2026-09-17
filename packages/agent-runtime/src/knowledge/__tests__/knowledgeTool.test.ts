@@ -271,9 +271,10 @@ describe('KT-2 路径守卫表', () => {
 })
 
 describe('KT-3 search —— 注入的检索（宿主 okf-minisearch）', () => {
-  it('KT-3 命中：query 与 {limit, bundleDir} 原样转发；逐行 `- /path (status) — description|title` + 缩进 snippet；bundle 按名字解析', async () => {
+  it('KT-3 命中：query 与 {limit, bundleDir} 原样转发；**每条恰一行** `- /path (status) — description|title`；bundle 按名字解析', async () => {
+    // 一条命中一行，没有正文片段那一行 —— 检索给的是候选清单，正文由 `read` 取（2026-09-17 裁决）
     const search = vi.fn(async () => [
-      { path: '/a.md', title: 'A', description: 'd', status: 'draft', snippet: 's' },
+      { path: '/a.md', title: 'A', description: 'd', status: 'draft' },
       { path: 'b.md', title: 'B', status: 'stable' }
     ])
     const h = makeTool({ search })
@@ -281,7 +282,7 @@ describe('KT-3 search —— 注入的检索（宿主 okf-minisearch）', () => 
     expect(h.resolveBase).toHaveBeenCalledWith('project')
     expect(search).toHaveBeenCalledWith('q', { limit: 20, bundleDir: ROOT })
     expect(textOf(res)).toBe(
-      `2 result(s) for "q" in project "Acme" — ${ROOT}:\n- /a.md (draft) — d\n  s\n- /b.md — B`
+      `2 result(s) for "q" in project "Acme" — ${ROOT}:\n- /a.md (draft) — d\n- /b.md — B`
     )
     expect(res.details).toEqual({ action: 'search' })
     expect(h.enforcePath).not.toHaveBeenCalled()
@@ -315,9 +316,10 @@ describe('KT-4 search —— 缺省子串检索（无 search 注入）', () => {
       'status: draft',
       'generated: { by: g, at: "2026-09-09T08:12:03.000Z" }'
     ]),
+    // 正文里的**标题行**算命中（索引的正文面只有标题）；散文不算 —— 下面 g.md 钉这一半
     '/kb/projects/acme/b.md': doc(
       ['type: Memory', 'title: B', 'description: db'],
-      'the TOKEN expires'
+      '## the TOKEN section\n\nit expires'
     ),
     '/kb/projects/acme/c.md': doc(['type: Memory', 'title: C', 'description: dc', 'tags: [token]']),
     '/kb/projects/acme/d.md': doc([
@@ -327,10 +329,15 @@ describe('KT-4 search —— 缺省子串检索（无 search 注入）', () => {
       'status: deprecated'
     ]),
     '/kb/projects/acme/sub/e.md': doc(['type: Memory', 'title: Token in acme', 'description: de']),
-    '/kb/projects/acme/f.md': doc(['type: Memory', 'title: F', 'description: df'])
+    '/kb/projects/acme/f.md': doc(['type: Memory', 'title: F', 'description: df']),
+    // 只有散文提到 token：不该命中（2026-09-17 起正文散文不进检索面，那种命中误差太大）
+    '/kb/projects/acme/g.md': doc(
+      ['type: Memory', 'title: G', 'description: dg'],
+      'a paragraph about the token, in prose only'
+    )
   }
 
-  it('KT-4 标题 / 正文（大小写不敏感）/ 标签都算命中，deprecated 排除；作用域按目录前缀过滤；计数看全部命中、行数按 limit 截', async () => {
+  it('KT-4 标题 / 描述 / 标签 / 正文标题行（大小写不敏感）算命中，散文不算，deprecated 排除；计数看全部命中、行数按 limit 截', async () => {
     const h = makeTool({ files: FILES })
     const all = await h.run('c1', { action: 'search', base: 'project', query: 'token' })
     expect(textOf(all)).toBe(

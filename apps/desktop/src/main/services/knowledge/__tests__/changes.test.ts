@@ -523,24 +523,25 @@ describe('内置库（只读）', () => {
     // 检索索引按 bundle id 缓存、跨用例活着（beforeEach 只清扫描缓存）：这条自己先清干净
     invalidateKnowledgeSearch()
     const fm = ['type: Memory', 'title: T', 'status: stable']
-    // 三种库各一条，正文是同长度的独有词：改写后 size 不变，再写回同一个 mtime ——
+    // 三种库各一条，正文是同长度独有词的**标题行**（检索面只有门面 + 标题）：改写后 size 不变，
+    // 再写回同一个 mtime ——
     // 缓存与索引不失效就只能读到旧词，于是「读到新词」= 真清了，「仍读到旧词」= 真没清
     const seeds = [
       {
         bundle: BUILTIN,
-        abs: seedBuiltin(root, `${BUILTIN_BASE}/en/guide.md`, conceptText(fm, 'banana')),
+        abs: seedBuiltin(root, `${BUILTIN_BASE}/en/guide.md`, conceptText(fm, '## banana')),
         rel: 'guide.md',
         words: ['banana', 'walrus']
       },
       {
         bundle: BUNDLE,
-        abs: seedFile(root, `${BUNDLE}/p.md`, conceptText(fm, 'cherry')),
+        abs: seedFile(root, `${BUNDLE}/p.md`, conceptText(fm, '## cherry')),
         rel: 'p.md',
         words: ['cherry', 'ocelot']
       },
       {
         bundle: 'knowledge/notes',
-        abs: seedFile(userRootOf(root), 'notes/u.md', conceptText(fm, 'iguana')),
+        abs: seedFile(userRootOf(root), 'notes/u.md', conceptText(fm, '## iguana')),
         rel: 'u.md',
         words: ['iguana', 'muskox']
       }
@@ -557,7 +558,7 @@ describe('内置库（只读）', () => {
     )
 
     for (const { abs, words } of seeds) {
-      writeFileSync(abs, conceptText(fm, words[1]))
+      writeFileSync(abs, conceptText(fm, `## ${words[1]}`))
       freeze(abs)
     }
     const seen = events.length
