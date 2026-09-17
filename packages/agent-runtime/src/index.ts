@@ -59,6 +59,7 @@ export {
   type BuiltinMcpScope,
   type BuiltinMcpFactory
 } from './builtinMcpRegistry'
+export type { McpInvocationFacts } from './security/types'
 export {
   createAskTool,
   AskParamsSchema,

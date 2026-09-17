@@ -244,12 +244,13 @@ export async function createSshMcpServer(
     if (typeof alias === 'string') return err(alias)
     const command = typeof args.command === 'string' ? args.command : ''
     if (!command.trim()) return err('A `command` is required.')
-    // 上限不是洁癖：setTimeout 的毫秒数超过 2^31-1 会被 Node 截成 1ms，
-    // 于是「我要等很久」反而变成「立刻超时」—— 与模型的意图正好相反。
+    // 两头都要夹住，而且是同一类错误：上限是因为 setTimeout 的毫秒数超过 2^31-1 会被
+    // Node 截成 1ms（「我要等很久」变成「立刻超时」）；下限是因为 floor 会把 0.5 变成 0
+    // （`setTimeout(0)` 同样立刻就烧）。两端都让模型拿到与它意图相反的结果。
     const rawTimeout = args.timeout
     const timeoutSec =
       typeof rawTimeout === 'number' && Number.isFinite(rawTimeout) && rawTimeout > 0
-        ? Math.min(Math.floor(rawTimeout), MAX_TIMEOUT_SEC)
+        ? Math.min(Math.max(Math.floor(rawTimeout), 1), MAX_TIMEOUT_SEC)
         : DEFAULT_TIMEOUT_SEC
 
     // 命令级安全门。**这是内置服务器相对第三方 server 的实质特权**：它拿得到会话的
@@ -281,6 +282,9 @@ export async function createSshMcpServer(
         ]
       }
     }
+    // 询问可能挂了很久，这期间 run 可能已被中止。**真正重要的是不要再去跑那条命令** ——
+    // 返回的这句话其实到不了模型那边（SDK 对已取消的请求直接丢弃响应），
+    // 但「用户点开卡片时早已中止，approve 后却还是连上去跑了」必须不发生。
     if (signal?.aborted) return err('Aborted')
 
     const result = await sshExec({
