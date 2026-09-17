@@ -24,6 +24,19 @@ export interface ChatItem {
   text: string
 }
 
+/**
+ * 乐观占位气泡（还没落库的那条用户消息）的快照。
+ *
+ * id 固定是 `pending-prompt`（chat-ui 的 `PENDING_PROMPT_ID`）—— 它**不是** entry id，
+ * 树上还没有这条消息，所以气泡上不给回退，且压淡一档（`data-msg-pending`）。
+ */
+export interface PendingPromptShot extends ChatItem {
+  /** 压淡标记（UserBubble 的 `data-msg-pending`）：还没落库的可见信号 */
+  pendingLook: boolean
+  /** 气泡里有没有回退按钮 —— 占位不该有：回退的目标 entry 还不存在 */
+  rollback: boolean
+}
+
 /** 工具行快照（ToolCallBlock 的 data-tool-*） */
 /** 步骤合并行（StepGroup）的快照 */
 export interface ChatStepGroup {
@@ -91,8 +104,25 @@ export interface ChatPane {
   loadingDots(): Promise<boolean>
 
   items(): Promise<ChatItem[]>
-  /** 落定条目（剔除流式合成占位项，便于与 message.list 对齐） */
+  /**
+   * 落定条目（剔除两个合成占位项，便于与 message.list 对齐）：流式占位卡
+   * `streaming-live`，以及还没落库的乐观占位 `pending-prompt`。
+   */
   settledItems(): Promise<ChatItem[]>
+  /** 乐观占位气泡（不在屏时为 null）—— 「发出去了但还没落库」的唯一判据 */
+  pendingItem(): Promise<PendingPromptShot | null>
+  /**
+   * 屏幕上压淡（`data-msg-pending`）的用户气泡个数。
+   * 与 `pendingItem` 是两条独立判据：id 换成真实 entry 之后，这个标记也必须一起消失。
+   */
+  pendingLookCount(): Promise<number>
+  /** 某条消息的气泡里有没有回退按钮（占位没有；落库之后有） */
+  rollbackVisible(msgId: string): Promise<boolean>
+  /**
+   * 对话区里的「正在连接 MCP」那一行（AssistantBubble 的 `data-mcp-connecting`）的文本；
+   * 不在屏时为 null。**只在对话区内找** —— 工具选择器触发钮上另有一个同名锚点。
+   */
+  mcpConnectingRow(): Promise<string | null>
   /** 用户气泡内的内联 Token 胶囊文本（TokenChip 的 span[role=button]） */
   tokenBadges(msgId: string): Promise<string[]>
   /** 用户气泡内的附图解码状态 */
@@ -163,6 +193,12 @@ export function hexToRgb(hex: string): string {
 
 /** 空闲确认间隔：取实测起流延迟（6~33ms）的十倍量级，满载也留得住余量 */
 const IDLE_CONFIRM_MS = 300
+
+/**
+ * 乐观占位气泡的固定 id（chat-ui 的 `PENDING_PROMPT_ID`）。
+ * e2e 不引渲染包，与 `streaming-live` 同样按**值**钉在这里：它是跨进程的呈现契约。
+ */
+const PENDING_PROMPT_ID = 'pending-prompt'
 
 /** 主窗对话区（会话已选中后调用） */
 export function chatPane(main: CdpClient): ChatPane {
@@ -301,7 +337,33 @@ export function chatPane(main: CdpClient): ChatPane {
 
     items: () => main.eval<ChatItem[]>(ITEM_SNAPSHOT),
     settledItems: () =>
-      main.eval<ChatItem[]>(`${ITEM_SNAPSHOT}.filter((i) => i.id !== 'streaming-live')`),
+      main.eval<ChatItem[]>(
+        `${ITEM_SNAPSHOT}.filter((i) => i.id !== 'streaming-live' && i.id !== '${PENDING_PROMPT_ID}')`
+      ),
+    pendingItem: () =>
+      main.eval<PendingPromptShot | null>(`(() => {
+        const el = ${MSG(PENDING_PROMPT_ID)}
+        if (!el) return null
+        return {
+          id: el.dataset.msgId ?? '',
+          role: el.dataset.msgRole ?? '',
+          type: el.dataset.msgType ?? '',
+          text: (el.querySelector('.whitespace-pre-wrap')?.textContent ?? '').trim(),
+          pendingLook: !!el.querySelector('[data-msg-pending]'),
+          rollback: !!el.querySelector('.lucide-rotate-ccw')
+        }
+      })()`),
+    pendingLookCount: () =>
+      main.eval<number>(`document.querySelectorAll('[data-msg-pending]').length`),
+    rollbackVisible: (msgId) =>
+      main.eval<boolean>(`!!${MSG(msgId)}?.querySelector('.lucide-rotate-ccw')`),
+    mcpConnectingRow: () =>
+      main.eval<string | null>(
+        `(() => {
+          const row = ${SCROLLER}?.querySelector('[data-mcp-connecting]')
+          return row ? (row.textContent ?? '').trim() : null
+        })()`
+      ),
     tokenBadges: (msgId) =>
       main.eval<string[]>(
         `[...(${MSG(msgId)}?.querySelectorAll('span[role="button"]') ?? [])]
@@ -424,6 +486,97 @@ export function chatPane(main: CdpClient): ChatPane {
     confirmAccept: async () => {
       await main.eval(`[...${DIALOG}.querySelectorAll('button')][1].click()`)
       await new Promise((r) => setTimeout(r, 400))
+    }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// A2 · 用户气泡观察器（乐观占位 → 真实 entry 的换手过程）
+//
+// 「发出去的那句话一次都没有从屏幕上消失过」是**时段**断言，轮询证不了：CDP 一个来回
+// 几毫秒到几十毫秒，而占位撤下与真实气泡上屏之间若真有空窗，也就是几十毫秒 —— 采样
+// 正好落进去纯属运气。于是把观察装在页内：MutationObserver 每次对话区变动就记一帧，
+// 连续相同的帧合并。空窗只要出现过一次，就必然留下一帧 `total: 0`。
+
+/** 某一刻屏幕上「文本等于原文」的用户气泡构成 */
+export interface BubbleFrame {
+  /** 占位（id 为 `pending-prompt`）几个 */
+  pending: number
+  /** 真实 entry（其它 id）几个 */
+  real: number
+  /** 合计 —— 这一帧屏幕上那句话在不在（0 = 空窗） */
+  total: number
+  /** 这一帧对话列表在不在（`messages` 为空且不在流式态时，整列换成空态） */
+  scroller: boolean
+  /** 这一帧流式占位卡在不在 */
+  live: boolean
+  /**
+   * 这一帧的时刻（`Date.now()`）。断言不看它，排查时靠它读出每两帧之间隔了多久 ——
+   * 「首次挂载那段空档」与「真的把消息撤了」在帧序列上长得一样，只有时刻分得开。
+   */
+  t: number
+}
+
+export interface BubbleWatch {
+  /** 开始观察「正文等于 text」的用户气泡（幂等：重复调用重新开始） */
+  start(text: string): Promise<void>
+  /** 迄今记录到的帧（首帧是 start 那一刻的快照） */
+  frames(): Promise<BubbleFrame[]>
+  /** 停止观察（不清空已记录的帧） */
+  stop(): Promise<void>
+}
+
+/** 对话区用户气泡的变动观察器（DOM 锚点同 chatPane：`data-msg-*` + `.whitespace-pre-wrap`） */
+export function bubbleWatch(main: CdpClient): BubbleWatch {
+  const KEY = '__e2eBubbleWatch'
+  return {
+    start: async (text) => {
+      await main.eval(`(() => {
+        const prev = window.${KEY}
+        if (prev && prev.obs) prev.obs.disconnect()
+        const want = ${JSON.stringify(text)}
+        const state = { frames: [], obs: null }
+        const snap = () => {
+          const bubbles = [...document.querySelectorAll('[data-msg-role="user"][data-msg-id]')]
+            .filter(
+              (el) => (el.querySelector('.whitespace-pre-wrap')?.textContent ?? '').trim() === want
+            )
+          const pending = bubbles.filter(
+            (el) => el.dataset.msgId === ${JSON.stringify(PENDING_PROMPT_ID)}
+          ).length
+          const frame = {
+            pending,
+            real: bubbles.length - pending,
+            total: bubbles.length,
+            scroller: !!document.querySelector('.conversation-scroller'),
+            live: !!document.querySelector('[data-msg-id="streaming-live"]'),
+            t: Date.now()
+          }
+          const last = state.frames[state.frames.length - 1]
+          // 连续相同的帧合并：流式正文每来一片就是一次 mutation，不合并的话几千帧全是重复
+          if (
+            last &&
+            last.pending === frame.pending &&
+            last.real === frame.real &&
+            last.scroller === frame.scroller &&
+            last.live === frame.live
+          )
+            return
+          state.frames.push(frame)
+        }
+        snap()
+        state.obs = new MutationObserver(snap)
+        state.obs.observe(document.body, { childList: true, subtree: true, characterData: true })
+        window.${KEY} = state
+        return true
+      })()`)
+    },
+    frames: () => main.eval<BubbleFrame[]>(`(window.${KEY}?.frames ?? []).map((f) => f)`),
+    stop: async () => {
+      await main.eval(`(() => {
+        if (window.${KEY}?.obs) window.${KEY}.obs.disconnect()
+        return true
+      })()`)
     }
   }
 }
@@ -949,6 +1102,13 @@ export interface ExtItemShot {
   disabled: boolean
   /** 这一条是不是被画成了禁用态（`aria-disabled`）：只读时整排压暗，卡片下方不再写只读原因 */
   lockedLook: boolean
+  /**
+   * 这一条是不是被画成了「离线」（`data-offline`）—— 只有**连接失败**才该这么画。
+   * 只读态同样压暗，所以两种压暗不能按透明度分辨：离线只认这个标记。
+   */
+  offline: boolean
+  /** 悬停提示（`title`）：可改时是条目自己的说明，只读时换成「为什么改不了」 */
+  title: string
 }
 
 /** scope 内扩展能力条目的快照（页内表达式；scope 为空时回 []） */
@@ -959,9 +1119,25 @@ const EXT_ITEMS = (scope: string): string =>
       key: label.getAttribute('data-ext-item') ?? '',
       checked: !!box?.checked,
       disabled: !!box?.disabled,
-      lockedLook: label.getAttribute('aria-disabled') === 'true'
+      lockedLook: label.getAttribute('aria-disabled') === 'true',
+      offline: label.hasAttribute('data-offline'),
+      title: label.getAttribute('title') ?? ''
     }
   })`
+
+/**
+ * scope 内扩展能力卡的脚注文案（SettingsSection 的 footer）。没有这张卡、或没有脚注时回空串。
+ *
+ * 判据与知识库卡同款：脚注是分节的最后一个子节点，且必然不含条目。
+ */
+const EXT_FOOTER = (scope: string): string =>
+  `(() => {
+    const label = ${scope}?.querySelector('label[data-ext-item]')
+    const section = label?.closest('section')
+    const last = section?.lastElementChild
+    if (!last || last.contains(label)) return ''
+    return (last.textContent ?? '').trim()
+  })()`
 
 /**
  * 等 scope 内某个扩展能力条目上屏（条目随 `tools.list` 异步到），再点它的勾选框。
@@ -1064,6 +1240,13 @@ export interface SessionConfigPane {
   extItems(): Promise<ExtItemShot[]>
   /** 点弹窗里某个扩展能力条目的勾选框（等条目上屏再点；同样只在弹窗面板内找） */
   toggleExt(key: string): Promise<void>
+  /**
+   * 扩展能力卡里组名旁那把锁（`data-ext-lock`）的个数 —— 只读时每组一把（MCP / Skills 各一），
+   * 可改时一把都没有。
+   */
+  lockIndicatorCount(): Promise<number>
+  /** 扩展能力卡下方的说明文字：它是**恒定**的一句（只读原因不再挤进这里，改走悬停提示） */
+  footerText(): Promise<string>
   /** 弹窗里知识库卡的候选项（DOM 序；同样只在弹窗面板内找，口径同 extItems） */
   knowledgeItems(): Promise<KnowledgeItemShot[]>
   /** 点弹窗里某个知识库候选项的勾选框（这张卡不随 Agent 上锁，任何时候都点得动） */
@@ -1097,6 +1280,9 @@ export function sessionConfigPane(main: CdpClient): SessionConfigPane {
     },
     extItems: () => main.eval<ExtItemShot[]>(EXT_ITEMS(PANEL)),
     toggleExt: (key) => toggleExtIn(main, PANEL, key, 'session config dialog'),
+    lockIndicatorCount: () =>
+      main.eval<number>(`${PANEL}?.querySelectorAll('[data-ext-lock]').length ?? 0`),
+    footerText: () => main.eval<string>(EXT_FOOTER(PANEL)),
     knowledgeItems: () => main.eval<KnowledgeItemShot[]>(KNOWLEDGE_ITEMS(PANEL)),
     toggleKnowledgeBase: (name) => toggleKnowledgeIn(main, PANEL, name, 'session config dialog'),
     knowledgeFooter: () => main.eval<string>(KNOWLEDGE_FOOTER(PANEL))
@@ -1242,6 +1428,8 @@ export interface ToolPickerItem {
    * 于是 `offline === false` 这条否定断言最严。（只读态也压暗，所以不再按透明度类名判）
    */
   offline: boolean
+  /** 悬停提示（`title`）：只读时是「为什么改不了」，可改时没有 */
+  title: string
 }
 
 export interface ToolPickerPane {
@@ -1267,6 +1455,11 @@ export interface ToolPickerPane {
   toggle(name: string, opts?: { force?: boolean }): Promise<boolean>
   /** 触发钮上的锁（`data-tool-lock`）在不在 —— 只读时不用展开面板就看得见 */
   lockIndicatorVisible(): Promise<boolean>
+  /**
+   * 触发钮上的「正在连接 MCP」转圈（`data-mcp-connecting`）在不在。
+   * 只在选择器内找 —— 助手占位卡上另有一个同名锚点（见 chatPane.mcpConnectingRow）。
+   */
+  connectingVisible(): Promise<boolean>
 }
 
 /** 输入框卡片里的工具选择器（`[data-tool-picker]`；主窗里只有当前会话那一个输入区） */
@@ -1305,7 +1498,8 @@ export function toolPickerPane(main: CdpClient): ToolPickerPane {
           lockedLook: label.getAttribute('aria-disabled') === 'true',
           offline:
             label.hasAttribute('data-offline') ||
-            !!label.querySelector('span.text-red-400 svg')
+            !!label.querySelector('span.text-red-400 svg'),
+          title: label.getAttribute('title') ?? ''
         }
       })`),
     toggle: async (name, opts = {}) => {
@@ -1324,7 +1518,8 @@ export function toolPickerPane(main: CdpClient): ToolPickerPane {
         return true
       })()`)
     },
-    lockIndicatorVisible: () => main.eval<boolean>(`!!${ROOT}?.querySelector('[data-tool-lock]')`)
+    lockIndicatorVisible: () => main.eval<boolean>(`!!${ROOT}?.querySelector('[data-tool-lock]')`),
+    connectingVisible: () => main.eval<boolean>(`!!${ROOT}?.querySelector('[data-mcp-connecting]')`)
   }
 }
 

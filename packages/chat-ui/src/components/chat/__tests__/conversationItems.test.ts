@@ -15,6 +15,7 @@ import type {
 } from '@shuvix/chat-protocol/types/chatMessage'
 import { buildVisibleItems } from '../conversationItems'
 import { STREAMING_PLACEHOLDER_ID } from '../MessageRenderer'
+import { PENDING_PROMPT_ID, pendingPromptMessage } from '../../../stores/chatStore'
 
 const SID = 'sess-1'
 
@@ -208,5 +209,72 @@ describe('buildVisibleItems —— 压缩摘要自成一项', () => {
       expect(items[0]).toMatchObject({ key: 'm1', msgs: [m1, m2] })
       expect(items[0].msg.id).toBe('m2')
     }
+  })
+})
+
+/**
+ * 乐观占位（`pending`）—— 正在发送、后端还没落库的那条用户消息。
+ *
+ * 它在列表里的位置是一条呈现契约：**末尾、流式占位卡之前**，且**不并进上一张没收口的
+ * 助手卡**。并进去的话，新一轮的那句话会画在上一轮的过程区里；排在流式卡之后则会
+ * 变成「答完了才显示问题」。
+ */
+describe('buildVisibleItems —— 乐观占位', () => {
+  it('UIF-U-1 排在末尾、流式卡之前，且不并入上一张没收口的助手卡', () => {
+    const a1 = agentMsg('a1', { tools: 1 })
+    const pending = pendingPromptMessage(SID, '新的一句')
+    const items = buildVisibleItems([userMsg('u1'), a1], true, pending)
+
+    expect(items.map((i) => i.key)).toEqual([
+      'u1',
+      'a1',
+      PENDING_PROMPT_ID,
+      STREAMING_PLACEHOLDER_ID
+    ])
+    // a1 那张卡在占位之前就收口了：它是上一轮的，既不是流式卡也不该把占位卷进去
+    expect(items[1].isStreamingPlaceholder).toBeUndefined()
+    expect(items[1].msgs?.map((m) => m.id)).toEqual(['a1'])
+    // 占位自成一项，msg 就是它本身
+    expect(items[2].msg).toBe(pending)
+    expect(items[2].msgs).toBeUndefined()
+    // 流式卡另起一组，只有它自己
+    expect(items[3].isStreamingPlaceholder).toBe(true)
+    expect(items[3].msgs).toHaveLength(1)
+    expect(items[3].msgs?.[0].id).toBe(STREAMING_PLACEHOLDER_ID)
+  })
+
+  it('UIF-U-2 不传 pending 时逐项与改前一致（null / undefined / 不传三者等价）', () => {
+    // 回归：第三个参数是后加的，「没有占位」这条主路径上一个字节都不该变
+    const msgs: ChatMessage[] = [
+      userMsg('u1'),
+      agentMsg('m1', { tools: 1 }),
+      agentMsg('m2'),
+      compactionMsg('c'),
+      errMsg('e1')
+    ]
+    const bare = buildVisibleItems(msgs, false)
+    expect(buildVisibleItems(msgs, false, null)).toEqual(bare)
+    expect(buildVisibleItems(msgs, false, undefined)).toEqual(bare)
+
+    expect(bare.map((i) => i.key)).toEqual(['u1', 'm1', 'c', 'e1'])
+    expect(bare.map((i) => i.msg.id)).toEqual(['u1', 'm2', 'c', 'e1'])
+  })
+
+  it('UIF-U-3 非流式时占位就是最后一项，不凭空造出流式卡', () => {
+    const items = buildVisibleItems(
+      [userMsg('u1'), agentMsg('m1')],
+      false,
+      pendingPromptMessage(SID, '刚发出去')
+    )
+    expect(items.at(-1)?.key).toBe(PENDING_PROMPT_ID)
+    expect(items.map((i) => i.msg.id)).not.toContain(STREAMING_PLACEHOLDER_ID)
+  })
+
+  it('UIF-U-4 消息列表为空时，流式占位卡的 sessionId 取自 pending', () => {
+    // 空列表 + 流式：sessionId 只剩 pending 这一个来源（G-5 里没有它时回落空串），
+    // 而 AssistantBubble 要靠它读本会话的流式状态
+    const items = buildVisibleItems([], true, pendingPromptMessage(SID, '会话里的第一句'))
+    expect(items.map((i) => i.key)).toEqual([PENDING_PROMPT_ID, STREAMING_PLACEHOLDER_ID])
+    expect(items[1].msg.sessionId).toBe(SID)
   })
 })

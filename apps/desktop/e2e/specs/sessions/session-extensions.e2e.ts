@@ -45,6 +45,8 @@ import {
 
 const SKILL_A = 'e2e-ext-a'
 const SKILL_B = 'e2e-ext-b'
+/** A 的说明文案 —— 条目悬停提示的判据（只读时它要被「为什么改不了」顶掉） */
+const SKILL_A_DESC = 'ext-a seeded skill description'
 const A = `skill:${SKILL_A}`
 const B = `skill:${SKILL_B}`
 /** 内置、离线（隔离实例没有它的 API key）的 MCP —— 恒在工具列表里 */
@@ -157,7 +159,7 @@ beforeAll(async () => {
   projectEdit = projectEditPane(app.main)
 
   // 真实可用的 skill：勾一个查无此人的名字，skill 工具的描述里是断不到的
-  seedSkill(app, SKILL_A)
+  seedSkill(app, SKILL_A, SKILL_A_DESC)
   seedSkill(app, SKILL_B)
 
   p1 = (await createProject(app.main, { name: P1_NAME, path: projectDir('ext-p1') })).id
@@ -431,5 +433,124 @@ describe('离线的 MCP 不被抹掉（DOM + IPC）', () => {
     const info = await ensureRuntime(s)
     expect(info).not.toBeNull()
     expect(await storedTools(s)).toEqual([TAVILY, A, B])
+  })
+})
+
+describe('只读态的外观（DOM）', () => {
+  it('UIF-E-1 会话设置扩展能力卡：整排禁用态 + 组名旁挂锁；只读原因只在悬停提示里，说明文字不变', async () => {
+    const title = 'UIF-E1-只读外观'
+    const s = await createSession({ title, projectId: p1 })
+    expect((await writeTools(s, [A])).success).toBe(true)
+    await waitRow(title)
+
+    /** 等条目上屏（随 tools.list 异步到）并回整排快照 */
+    const openAndRead = async (what: string): Promise<ExtItemShot[]> => {
+      await sidebar.pickRowMenu(title, 'session-config')
+      await sessionConfig.waitOpen()
+      expect(await sessionConfig.titleValue()).toBe(title)
+      return until(async () => {
+        const items = await sessionConfig.extItems()
+        return extItem(items, A) && extItem(items, B) ? items : null
+      }, what)
+    }
+
+    // ① 没有运行时：整排可改，组名旁一把锁都没有，悬停提示是 skill 自己的说明
+    await openAndRead('extensions listed before the runtime exists')
+    const editable = await until(async () => {
+      const items = await sessionConfig.extItems()
+      return extItem(items, A)?.disabled === false ? items : null
+    }, 'extension items editable before the runtime exists')
+    expect(extItem(editable, A)).toMatchObject({
+      checked: true,
+      disabled: false,
+      lockedLook: false,
+      title: SKILL_A_DESC
+    })
+    expect(await sessionConfig.lockIndicatorCount()).toBe(0)
+    // 说明文字比对的是**两态下的同一句**（读两次比字符串），不钉具体本地化文案
+    const footer = await sessionConfig.footerText()
+    expect(footer).not.toBe('')
+    await sessionConfig.close()
+
+    // ② 运行时建出来：整排按禁用态画，MCP / Skills 两个组名旁各挂一把锁
+    // （弹窗挂载时自己向后端拉一次「有没有运行时」，所以开出来就是只读的）
+    await ensureRuntime(s)
+    await openAndRead('extensions listed once the runtime exists')
+    const locked = await until(async () => {
+      const items = await sessionConfig.extItems()
+      return items.length > 0 && items.every((it) => it.disabled && it.lockedLook) ? items : null
+    }, 'every extension item painted read-only')
+    expect(await sessionConfig.lockIndicatorCount()).toBe(2)
+    // 只读的原因改走悬停提示：不再是 skill 的说明，也不是空
+    const lockedHint = extItem(locked, A)?.title ?? ''
+    expect(lockedHint).not.toBe(SKILL_A_DESC)
+    expect(lockedHint).not.toBe('')
+    // 卡片下方那句话两态完全相同 —— 只读原因从这里搬走了，它不该再随状态变
+    expect(await sessionConfig.footerText()).toBe(footer)
+    await sessionConfig.close()
+
+    // ③ 清空（关停运行时）：锁消失，整排重新可改
+    await clearAndWaitClosed(s)
+    await openAndRead('extensions listed after the runtime closed')
+    const unlocked = await until(async () => {
+      const items = await sessionConfig.extItems()
+      return items.length > 0 && items.every((it) => !it.disabled && !it.lockedLook) ? items : null
+    }, 'extension items editable again after the runtime closed')
+    expect(await sessionConfig.lockIndicatorCount()).toBe(0)
+    expect(extItem(unlocked, A)).toMatchObject({ title: SKILL_A_DESC })
+    await sessionConfig.close()
+  })
+
+  it('UIF-E-2 只读压暗与「离线」压暗互不掩盖：失败过的 MCP 两个标记同时在', async () => {
+    // 只读态把 `opacity-50` 从失败行拿掉了（整排统一压暗），离线的判据因此改成 `data-offline`
+    // —— 两种压暗若共用同一个判据，「锁住了」会把「这台连不上」整个盖掉
+    expect(
+      await app.main.eval(
+        `window.api.mcp.update(${JSON.stringify({ id: 'builtin-mcp-tavily', isEnabled: true })})`
+      )
+    ).toEqual({ success: true })
+
+    const title = 'UIF-E2-离线且只读'
+    const s = await createSession({ title, projectId: p1 })
+    expect((await writeTools(s, [TAVILY, A])).success).toBe(true)
+    await waitRow(title)
+    expect(await sidebar.openSession(title)).toBe(true)
+
+    // 走一次必定失败的创建（缺 env，造 transport 之前就断）：tavily 落到 error 状态
+    const since = await recorder.mark()
+    await ensureRuntime(s)
+    await recorder.waitFor<RecordedEvent>('error', { sessionId: s, since })
+
+    await until(() => picker.locked(), 'tool picker locked once the runtime exists')
+    await picker.open()
+    await until(
+      async () => (await pickerItem(TAVILY))?.offline === true,
+      'the failed server is still painted offline while read-only'
+    )
+    expect(await pickerItem(TAVILY)).toMatchObject({
+      checked: true,
+      disabled: true,
+      lockedLook: true,
+      offline: true
+    })
+    // 同一面板里没失败过的那条：只读但不离线
+    expect(await pickerItem(A)).toMatchObject({ lockedLook: true, offline: false })
+    await picker.close()
+
+    // 会话设置卡里的同一条：两个标记同样并存
+    await sidebar.pickRowMenu(title, 'session-config')
+    await sessionConfig.waitOpen()
+    const items = await until(async () => {
+      const shot = await sessionConfig.extItems()
+      return extItem(shot, TAVILY)?.disabled ? shot : null
+    }, 'config dialog read-only')
+    expect(extItem(items, TAVILY)).toMatchObject({
+      checked: true,
+      disabled: true,
+      lockedLook: true,
+      offline: true
+    })
+    expect(extItem(items, A)).toMatchObject({ lockedLook: true, offline: false })
+    await sessionConfig.close()
   })
 })

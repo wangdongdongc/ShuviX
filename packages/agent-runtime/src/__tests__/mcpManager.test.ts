@@ -498,6 +498,26 @@ describe('McpManager 可用性与批量装配', () => {
     expect(all.find((i) => i.name === 'mcp:z')?.serverStatus).toBe('disconnected')
     expect(all.find((i) => i.name === 'mcp:a')?.serverStatus).toBe('error')
   })
+
+  it('UIF-U-7: statusByName 按名字读状态 —— 宿主据它决定报不报「正在连接」', async () => {
+    // 装配工具时宿主只有 `mcp:<name>` 里的**名字**，没有 id；已连上的那台不报连接态
+    // （它瞬间落定，报了只会闪一下），所以这个判断错一档，UI 上要么闪、要么整段不显示
+    const h = setup([row({ id: 'a-id', name: 'a' }), row({ id: 'b-id', name: 'b' })])
+    h.plan.set('b', new Error('Missing required env variable: TOKEN'))
+
+    // 名字不存在也算 disconnected（不抛）—— 勾选里留着一台已被删掉的服务器是常态
+    expect(h.mgr.statusByName('nope')).toBe('disconnected')
+    expect(h.mgr.statusByName('a')).toBe('disconnected')
+
+    expect(await h.mgr.ensureServerByName('a')).toEqual({ ok: true })
+    expect(h.mgr.statusByName('a')).toBe('connected')
+
+    await h.mgr.disconnect('a-id')
+    expect(h.mgr.statusByName('a')).toBe('disconnected')
+
+    expect((await h.mgr.ensureServerByName('b')).ok).toBe(false)
+    expect(h.mgr.statusByName('b')).toBe('error')
+  })
 })
 
 describe('McpManager 连接中途的意外', () => {
