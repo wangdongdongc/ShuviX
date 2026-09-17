@@ -29,6 +29,7 @@ import {
   sshCloseSession,
   classifySshFailure,
   rsyncAvailable,
+  unsafeRemotePathReason,
   type TransferDirection
 } from './sshControl'
 import { getDesktopSecurityContext, resolveProjectConfig, TOOL_ABORTED } from '../toolContext'
@@ -440,7 +441,10 @@ export async function createSshMcpServer(
     if (!remotePath) return { error: 'A `remotePath` is required.' }
 
     const cwd = resolveProjectConfig(scope.sessionId).workingDirectory
-    const localAbs = isAbsolute(localPath) ? localPath : resolvePath(cwd, localPath)
+    // **绝对路径也要 resolve**：路径策略的匹配是按段前缀比的，不做归一化，于是
+    // `/ws/../../Users/me/.ssh/id_rsa` 会被当成「在工作目录内」—— ask-on-read 不响、
+    // protect-credentials 不响，私钥就这么送出去了。`..` 必须在进策略之前折掉。
+    const localAbs = resolvePath(isAbsolute(localPath) ? localPath : resolvePath(cwd, localPath))
 
     const security = getDesktopSecurityContext({
       sessionId: scope.sessionId,
@@ -452,6 +456,11 @@ export async function createSshMcpServer(
         toolCallId,
         toolName,
         displayPath: localPath,
+        // 不写这句，卡片就和一次本地读文件长得一模一样 —— 用户看不出这个文件正要离开本机
+        description:
+          direction === 'up'
+            ? `Send to "${alias.alias}": ${remotePath}`
+            : `Receive from "${alias.alias}": ${remotePath}`,
         abortError: TOOL_ABORTED,
         missingChannel: 'deny'
       })
@@ -478,7 +487,10 @@ export async function createSshMcpServer(
         `${what} failed (exit ${result.exitCode}): ${result.stderr.trim() || '(no output)'}`
       )
     }
-    announceConnected(alias)
+    // 只有真的有 control socket 才点亮：scp 会在 argv 更靠前的位置塞 `-oControlMaster=no`，
+    // 而 OpenSSH 是**先到先得** —— 所以一次独立的传输会复用已有 master，却从不新建。
+    // 这里若无条件点亮，同一个会话里 list-hosts 会给出相反的答案。
+    if (sshConnectedAliases(scope.sessionId, [alias]).length > 0) announceConnected(alias)
     const detail = [result.stdout, result.stderr]
       .filter((t) => t.trim())
       .join('\n')
@@ -506,6 +518,43 @@ export async function createSshMcpServer(
     }
     const prepared = await prepareTransfer(args, direction, `mcp__ssh__${kind}`, toolCallId)
     if ('error' in prepared) return err(prepared.error)
+
+    if (kind === 'sync') {
+      // rsync 把远端路径拼进一条交给远端**登录 shell** 的命令行，所以这里有两道：
+      // 白名单先挡住任何能改变那条命令语义的字符；
+      const unsafe = unsafeRemotePathReason(prepared.remotePath)
+      if (unsafe) return err(unsafe)
+      // 再让它过**命令门** —— 一次 sync 会遍历整棵目录树，而 enforcePath 只看得到根。
+      // 上传可能把 ~/.ssh 整个送出去，下载可能往里写 authorized_keys，而这两件事
+      // 路径策略一次也没被问到。这条命令是远端真的会执行的那一条，原样交给策略与卡片。
+      const remoteCmd = `rsync --server ${direction === 'up' ? '' : '--sender '}-logDtpre.iLsfxCIvu . ${prepared.remotePath}`
+      const security = getDesktopSecurityContext({
+        sessionId: scope.sessionId,
+        requestUserInput: scope.requestUserInput
+      })
+      const outcome = await security.enforceCommand(
+        { channel: 'ssh', command: remoteCmd, host: prepared.alias },
+        {
+          toolCallId,
+          toolName: 'mcp__ssh__sync',
+          description: `Sync ${direction === 'up' ? 'to' : 'from'} "${prepared.alias}": ${prepared.localAbs} <-> ${prepared.remotePath}`,
+          abortError: TOOL_ABORTED,
+          onOther: 'return',
+          missingChannel: 'deny'
+        }
+      )
+      if (outcome.status === 'feedback') {
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: `Sync was not performed. User responded with feedback instead:\n${outcome.text}`
+            }
+          ]
+        }
+      }
+    }
+
     if (signal?.aborted) return err('Aborted')
 
     const run = kind === 'sync' ? sshSync : sshCopy

