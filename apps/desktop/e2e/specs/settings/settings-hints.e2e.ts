@@ -67,7 +67,7 @@ const HINT_MARGIN = 8
 /** 种一条数据库凭据：名字是「它是谁」，`user@host:port/db` 是「它连的是哪台机器」 */
 const DB_CRED = {
   name: 'hints-box',
-  dbType: 'postgres',
+  dbType: 'postgresql',
   host: '10.0.0.7',
   port: 5432,
   username: 'e2e',
@@ -111,7 +111,11 @@ beforeAll(async () => {
   await waitRendererReady(app.main)
   // IH-E-6 的弹窗要有扩展能力卡才渲染；隔离实例恒有内置的 mcp:tavily，再种一个 skill 让两组都不空
   seedSkill(app, 'e2e-hint-skill')
-  await app.main.eval(`window.api.dbCredential.add(${JSON.stringify(DB_CRED)})`)
+  // 多种几条：IH-E-5 要把锚点整个滚出视口，页面得够长
+  for (let i = 0; i < 16; i++) {
+    const cred = { ...DB_CRED, name: i === 0 ? DB_CRED.name : `${DB_CRED.name}-${i}` }
+    await app.main.eval(`window.api.dbCredential.add(${JSON.stringify(cred)})`)
+  }
   settings = await app.openSettings('general')
   hints = infoHintPane(settings)
   nav = settingsNavPane(settings)
@@ -228,20 +232,25 @@ describe('说明收进问号（通用 tab）', () => {
 describe('锚点滚出视野（LLM 工具 · 数据库子页）', () => {
   it('IH-E-5 锚点整个滚出视口：气泡仍挂在 DOM 上，但被置成 visibility:hidden', async () => {
     await openDbToolPage()
-    const room = await hints.scrollRoom(DB_TITLE)
-    // 这一节在这个窗口里天然落在首屏之下，滚到底才看得见 —— 先滚下去把气泡开出来
-    expect(room.down).toBeGreaterThan(0)
-    await hints.scrollBy(DB_TITLE, room.down)
+    // 这一节天然落在首屏之下，先把它滚进视野（留 100px 余地）再开气泡
+    const start = await hints.anchorRect(DB_TITLE)
+    await hints.scrollBy(DB_TITLE, start.top - 100)
+
     const inView = await hints.hoverOpen(DB_TITLE)
     expect(DB_DESC).toContain(inView.text)
     expect(inView.visibility).toBe('visible')
 
-    // 再滚回顶：锚点整个落到视口下沿之外
-    const back = await hints.scrollBy(DB_TITLE, -room.down)
-    expect(back).toBe(-room.down)
+    // 余量在气泡开出来**之后**才测得准：hoverOpen 自己会把锚点滚进视野，先测就废了
+    const room = await hints.scrollRoom(DB_TITLE)
+    // 前置自检：下方要够长，才能把锚点整个推出视口上沿
+    expect(room.down).toBeGreaterThan(200)
+
+    // 再滚到底：锚点整个落到视口**上沿**之外（数据库子页标题上方的内容比旧的 SSH 子页少，
+    // 滚到顶时它还差几十像素没出下沿；换个方向考的是同一件事，且只依赖下方有滚动空间）
+    const moved = await hints.scrollBy(DB_TITLE, room.down)
+    expect(moved).toBe(room.down)
     const anchor = await hints.anchorRect(DB_TITLE)
-    const vp = await hints.viewport()
-    expect(anchor.top).toBeGreaterThan(vp.height) // 前置自检：真的整个出去了
+    expect(anchor.bottom).toBeLessThan(0) // 前置自检：真的整个出去了
 
     // 先断「没被卸掉」：悬浮态一刻没断过，气泡该一直挂着，只是看不见
     expect(await hints.peek(DB_TITLE)).not.toBeNull()
