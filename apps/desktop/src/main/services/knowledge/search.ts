@@ -94,13 +94,18 @@ function indexTextOf(note: KnowledgeNote, text: string): string {
   const headings = headingsOf(body)
     .map((h) => `${'#'.repeat(h.level)} ${h.text}`)
     .join('\n\n')
+  const concept = note.concept
   return buildOkfConceptDocument(
     {
       type: note.type || PLAIN_NOTE_TYPE,
       title: note.title,
       description: note.description || undefined,
       tags: note.tags.length > 0 ? note.tags : undefined,
-      status: note.status
+      status: note.status,
+      // 定位符也是门面（okf-minisearch 给 resource 的权重是全部字段里最高的）：
+      // 「哪一篇引了 conceptFile.ts」得搜得到 —— 它们是元数据，不是本轮要赶出去的散文
+      resource: concept?.resource,
+      sources: concept && concept.sources.length > 0 ? concept.sources : undefined
     },
     headings
   )
@@ -144,23 +149,23 @@ async function getIndex(bundle: string): Promise<Built> {
   return entry
 }
 
-/** 在一个 bundle 里检索。同一文件多个分节命中只保留最高分那条。 */
+/** 在一个 bundle 里检索 —— 一条笔记至多一条命中（库按文档去重），deprecated 在这里滤掉。 */
 export async function searchBundle(
   bundle: string,
   query: string,
   opts: { limit: number }
 ): Promise<KnowledgeSearchHit[]> {
   const { index, notes } = await getIndex(bundle)
+  // 多取一些再过滤：okf-minisearch 自己已按文档去重（去重发生在它应用 limit 之前，所以一条笔记至多
+  // 一条命中），但 deprecated 与索引里认不出的路径是**这里**才滤掉的 —— 不留余量就会少给
   const hits = index.search(segmentCjk(query), {
     limit: Math.max(opts.limit * 4, 40),
     fuzzy: 0.2
   })
-  const seen = new Set<string>()
   const out: KnowledgeSearchHit[] = []
   for (const hit of hits) {
     const note = notes.get(hit.path.replace(/^\/+/, ''))
-    if (!note || note.status === 'deprecated' || seen.has(note.path)) continue
-    seen.add(note.path)
+    if (!note || note.status === 'deprecated') continue
     out.push({
       path: note.path,
       title: note.title,

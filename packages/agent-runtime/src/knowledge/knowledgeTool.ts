@@ -245,6 +245,15 @@ type Result = AgentToolResult<{ action: KnowledgeAction; path?: string } | undef
 
 const DEFAULT_LIMIT = 20
 
+/**
+ * `limit` 收下限：模型给 0 / 负数 / 小数时不能静默变成「悄悄少给几条」——
+ * 表头报的是全部命中数，行数按它截，两者对不上最难查。
+ */
+function positiveLimit(raw: number | undefined, fallback: number): number {
+  const n = Math.trunc(raw ?? fallback)
+  return Number.isFinite(n) && n > 0 ? n : fallback
+}
+
 function text(lines: string[], details?: { action: KnowledgeAction; path?: string }): Result {
   // 不过滤空串：read 用一行空行隔开表头与原文（过滤会把那一行吃掉）
   return {
@@ -424,7 +433,7 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
       const headings = headingsOf(bodyOf(textOf.get(n.path) ?? ''))
         .map((h) => h.text)
         .join(' ')
-      return [n.title, n.description, n.tags.join(' '), headings].some((s) =>
+      return [n.title, n.description, n.type, n.tags.join(' '), headings].some((s) =>
         s.toLowerCase().includes(needle)
       )
     })
@@ -439,7 +448,7 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
   private async search(params: KnowledgeToolParams): Promise<Result> {
     const query = params.query?.trim()
     if (!query) throw new Error('"search" needs `query`')
-    const limit = params.limit ?? DEFAULT_LIMIT
+    const limit = positiveLimit(params.limit, DEFAULT_LIMIT)
     const named = params.base?.trim()
 
     if (named) {
@@ -475,7 +484,7 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
   }
 
   private async list(params: KnowledgeToolParams): Promise<Result> {
-    const limit = params.limit ?? DEFAULT_LIMIT * 5
+    const limit = positiveLimit(params.limit, DEFAULT_LIMIT * 5)
     const resolved = await this.deps.resolveBase(this.requireBase(params))
     if ('error' in resolved) return text([resolved.error], { action: 'list' })
     const { notes } = await this.deps.scan(resolved.dir)
