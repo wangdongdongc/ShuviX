@@ -50,6 +50,7 @@ export {
   LAZY_CONNECT_TIMEOUT_MS,
   type McpStore,
   type McpManagerOptions,
+  type McpAgentToolMeta,
   type McpDiscoveredTool,
   type McpConnectResult
 } from './mcpManager'

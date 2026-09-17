@@ -10,7 +10,7 @@
 
 import type { TSchema } from 'typebox'
 import type { AgentTool } from '@earendil-works/pi-agent-core'
-import type { SecurityContext } from '@shuvix/agent-runtime'
+import type { SecurityContext, McpAgentToolMeta } from '@shuvix/agent-runtime'
 import { processToolOutput, type TruncateStrategy } from '../utils/toolUtils/processToolOutput'
 import { TOOL_ABORTED } from './toolContext'
 
@@ -72,6 +72,9 @@ export function wrapToolOutput<P extends TSchema, D>(
         toolCallId,
         toolName,
         operation: typeof rawAction === 'string' ? rawAction : undefined,
+        // MCP 工具随身带着 server/tool 与（仅内置 server 才可信的）行为提示，
+        // 让这道门对它们不再只有「有人要调工具」这一句话可说
+        mcp: (tool as Partial<McpAgentToolMeta>).mcpMeta,
         abortError: TOOL_ABORTED,
         onOther: 'return'
       })

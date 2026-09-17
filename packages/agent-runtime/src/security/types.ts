@@ -372,6 +372,34 @@ export interface EnforceOpts {
    * 'allow' 仅供确知无需询问的调用方显式声明。
    */
   missingChannel?: 'deny' | 'allow'
+  /** MCP 工具调用的事实 —— 由 L1 门并进 invocation 客体（见 McpInvocationFacts） */
+  mcp?: McpInvocationFacts
+}
+
+/**
+ * 一次 MCP 工具调用的可判定事实。
+ *
+ * **为什么并进 `invocation` 客体而不另开 `{type:'mcp'}`**：L1 门是所有工具共用的一道门，
+ * 一条写着 `object.type == 'invocation'` 的「什么都问一遍」策略若因为换了类型而不再覆盖
+ * MCP 工具，恰好漏掉的是**最不可信的那批**。所以类型不变，只是多了几条属性。
+ *
+ * **annotations 的信任规则**（MCP 规范的要求）：客户端必须把**不可信 server** 的 annotations
+ * 当作不可信。这里的做法是「可信才给值」—— 第三方 server 的四个 hint 一律不落到客体上，
+ * 于是策略只能写成 fail-safe 的形态：`!(object.mcpTrusted && object.readOnly)` 意为
+ * 「除非被可信 server 证明是只读，否则就问」。内置能力服务器随产品发布，是可信的那一类。
+ */
+export interface McpInvocationFacts {
+  /** server 名（工具名前缀 `mcp__<server>__*`） */
+  server: string
+  /** server 内的工具名（不带前缀） */
+  tool: string
+  /** 这台 server 的 annotations 可不可信 —— 即它是不是内置能力服务器 */
+  trusted: boolean
+  /** 以下四条仅在 trusted 时有值，取自 tools/list 的 annotations */
+  readOnly?: boolean
+  destructive?: boolean
+  idempotent?: boolean
+  openWorld?: boolean
 }
 
 export type EnforceOutcome = { status: 'allowed' } | { status: 'feedback'; text: string }

@@ -147,7 +147,20 @@ export function createSecurityContext(
     // 跳过 executeDecision（不弹窗不记日志）。此门每次工具调用都过，若 allow 也记录，
     // 免询问会话会以每调用一条的速度刷爆 ring buffer；L1 的日志只留 ask/deny 的真实拦截信号
     async enforceInvocation(opts): Promise<EnforceOutcome> {
-      const object = { type: 'invocation' } as const
+      // MCP 工具带着可判定的事实来（server/tool + 可信 server 的 annotations）；
+      // 其余工具在这一刻确实只有「有人要调工具」这一件事可说。
+      const object: SecurityObject = opts.mcp
+        ? {
+            type: 'invocation',
+            mcpServer: opts.mcp.server,
+            mcpTool: opts.mcp.tool,
+            mcpTrusted: opts.mcp.trusted,
+            readOnly: opts.mcp.readOnly,
+            destructive: opts.mcp.destructive,
+            idempotent: opts.mcp.idempotent,
+            openWorld: opts.mcp.openWorld
+          }
+        : { type: 'invocation' }
       const probe = evaluateInternal('execute', object, true, {
         name: opts.toolName,
         operation: opts.operation

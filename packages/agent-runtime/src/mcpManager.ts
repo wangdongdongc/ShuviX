@@ -22,11 +22,19 @@ import type { AgentTool, AgentToolResult } from '@earendil-works/pi-agent-core'
 import type { McpServer, McpServerStatus, McpToolInfo } from '@shuvix/chat-protocol/types/mcp'
 import type { McpToolDetails } from '@shuvix/chat-protocol/types/chatMessage'
 import type { BuiltinMcpScope } from './builtinMcpRegistry'
+import type { McpInvocationFacts } from './security/types'
 
 /** MCP tools/list 返回的单个工具结构 */
 export interface McpDiscoveredTool {
   name: string
   description?: string
+  /** 行为提示（规范的 tool annotations）—— 只有内置 server 的才可信，见 McpInvocationFacts */
+  annotations?: {
+    readOnlyHint?: boolean
+    destructiveHint?: boolean
+    idempotentHint?: boolean
+    openWorldHint?: boolean
+  }
   inputSchema: {
     type: 'object'
     properties?: Record<string, object>
@@ -75,6 +83,16 @@ interface McpConnection {
   serverName: string
   /** 仅 `inproc`：这份实例归哪条会话 */
   sessionId?: string
+  /** 内置 server（随产品发布）—— 唯一可信 annotations 的那一类 */
+  isBuiltin: boolean
+}
+
+/**
+ * 挂在 MCP AgentTool 上的元数据，供宿主的 L1 安全门构造客体。
+ * 用普通属性而不是 Symbol：`wrapToolOutput` 以 `Object.create(tool)` 包装，原型链取得到。
+ */
+export interface McpAgentToolMeta {
+  mcpMeta: McpInvocationFacts
 }
 
 /**
@@ -288,7 +306,8 @@ export class McpManager {
       status: 'connecting',
       serverId,
       serverName: server.name,
-      sessionId: server.type === 'inproc' ? sessionId : undefined
+      sessionId: server.type === 'inproc' ? sessionId : undefined,
+      isBuiltin: server.isBuiltin === 1
     }
     this.connections.set(key, conn)
 
@@ -526,9 +545,22 @@ export class McpManager {
   private mcpToolToAgentTool(
     connKey: string,
     serverName: string,
-    mcpTool: McpDiscoveredTool
-  ): AgentTool<TSchema, McpToolDetails> {
+    mcpTool: McpDiscoveredTool,
+    trusted: boolean
+  ): AgentTool<TSchema, McpToolDetails> & McpAgentToolMeta {
+    const a = mcpTool.annotations
     return {
+      // 不可信 server 的 annotations **一条都不落**：策略于是只能写成 fail-safe 的
+      // `!(object.mcpTrusted && object.readOnly)`，而不会把第三方的自述当成保证
+      mcpMeta: {
+        server: serverName,
+        tool: mcpTool.name,
+        trusted,
+        readOnly: trusted ? a?.readOnlyHint : undefined,
+        destructive: trusted ? a?.destructiveHint : undefined,
+        idempotent: trusted ? a?.idempotentHint : undefined,
+        openWorld: trusted ? a?.openWorldHint : undefined
+      },
       name: `mcp__${serverName}__${mcpTool.name}`,
       label: mcpTool.description || mcpTool.name,
       description: mcpTool.description ?? '',
@@ -571,7 +603,9 @@ export class McpManager {
   serverToAgentTools(connKey: string): AgentTool<TSchema, McpToolDetails>[] {
     const conn = this.connections.get(connKey)
     if (!conn || conn.status !== 'connected') return []
-    return conn.tools.map((t) => this.mcpToolToAgentTool(connKey, conn.serverName, t))
+    return conn.tools.map((t) =>
+      this.mcpToolToAgentTool(connKey, conn.serverName, t, conn.isBuiltin)
+    )
   }
 
   /** 所有已连接 Server 的全部 AgentTool（flat） */

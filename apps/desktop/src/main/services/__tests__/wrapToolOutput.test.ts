@@ -68,7 +68,7 @@ describe('wrapToolOutput — L1 全工具门', () => {
     expect(result.content).toEqual([{ type: 'text', text: 'ran' }])
   })
 
-  it('W-2 调用形态：opts 恰为 {toolCallId, toolName, operation, abortError, onOther}（无 missingChannel）', async () => {
+  it('W-2 调用形态：opts 恰为 {toolCallId, toolName, operation, mcp, abortError, onOther}（无 missingChannel）', async () => {
     const { tool } = makeTool('ssh')
     const { security, enforceInvocation } = makeSecurity()
     const wrapped = wrapToolOutput(tool, SID, 'middle', undefined, security)
@@ -80,6 +80,8 @@ describe('wrapToolOutput — L1 全工具门', () => {
       toolCallId: 'tc-2',
       toolName: 'ssh',
       operation: 'connect',
+      // 内置工具没有 MCP 事实可报 —— 这个键在也是 undefined
+      mcp: undefined,
       abortError: 'Aborted',
       onOther: 'return'
     })
