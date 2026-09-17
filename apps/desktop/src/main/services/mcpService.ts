@@ -8,6 +8,9 @@
  * 连接/发现/调用/AgentTool 转换/内置模板替换等全部在共享 McpManager 内（与扩展同一套）。
  */
 import { McpManager, BuiltinMcpRegistry, type BuiltinMcpScope } from '@shuvix/agent-runtime'
+import { requestUserInputFor } from './userInputBroker'
+import { chatFrontendRegistry } from '../frontend/core/ChatFrontendRegistry'
+import type { DesktopBuiltinMcpScope } from './builtinMcp/types'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js'
@@ -42,7 +45,7 @@ function parseJsonObject(json: string): Record<string, string> {
  * 内置能力服务器注册表（ssh / 后续 database、browser）。
  * 在 `registerBuiltinMcpServers()` 里填充 —— 放在独立模块，避免本文件反向依赖上层服务。
  */
-export const builtinMcpRegistry = new BuiltinMcpRegistry()
+export const builtinMcpRegistry = new BuiltinMcpRegistry<DesktopBuiltinMcpScope>()
 for (const [name, factory] of Object.entries(BUILTIN_MCP_FACTORIES)) {
   builtinMcpRegistry.register(name, factory)
 }
@@ -54,7 +57,14 @@ function createTransport(
 ): Transport | Promise<Transport> {
   if (server.type === 'inproc') {
     if (!scope) throw new Error(`内置能力服务器 ${server.name} 需要会话上下文`)
-    return builtinMcpRegistry.createClientTransport(server.name, scope)
+    const { sessionId } = scope
+    // 两条通道都是**按 sessionId 找归属**的，所以补齐它们只需要会话 id；
+    // 之所以在这一层补而不是让内置模块自己取，是边界规则（见 builtinMcp/types.ts）
+    return builtinMcpRegistry.createClientTransport(server.name, {
+      sessionId,
+      requestUserInput: (request) => requestUserInputFor(sessionId, request),
+      emitChatEvent: (event) => chatFrontendRegistry.broadcast({ ...event, sessionId })
+    })
   }
   if (server.type === 'stdio') {
     return new StdioClientTransport({

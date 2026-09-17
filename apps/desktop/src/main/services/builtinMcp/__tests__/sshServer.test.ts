@@ -28,6 +28,15 @@ import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 
 // mock 路径按**测试文件**解析：被测模块在 services/builtinMcp/，测试在其 __tests__/ 下
 const logged = vi.hoisted(() => ({ lines: [] as string[] }))
+// toolContext / paths 会拉起 Electron app 与整个 service 图 —— 照 tools/__tests__ 与
+// wrapToolOutput.test.ts 的惯例在测试里挡掉（生产代码直连真安全模块，见 sshServer 的注）
+vi.mock('../../toolContext', () => ({
+  TOOL_ABORTED: 'Aborted',
+  getDesktopSecurityContext: () => ({
+    enforceCommand: async () => ({ status: 'allowed' })
+  })
+}))
+vi.mock('../../../utils/paths', () => ({ buildSpawnEnv: () => ({}) }))
 vi.mock('../../../logger', () => ({
   createLogger: () => ({
     info: (m: string) => void logged.lines.push(m),
@@ -124,13 +133,13 @@ const textOf = (r: ListHostsResult): string =>
 // ─── 工具面 ──────────────────────────────────────────────────────────────
 
 describe('ssh 内置服务器的工具声明', () => {
-  it('SSHS-U-85: 只有一个工具 list-hosts', async () => {
+  it('SSHS-U-85: 工具面恰为 list-hosts / exec / disconnect', async () => {
     writeConfig('Host web\n')
     const { client } = await open()
     const { tools } = await client.listTools()
 
-    // 本轮刻意只有只读的枚举：exec / 文件传输要等安全模块接上
-    expect(tools.map((t) => t.name)).toEqual(['list-hosts'])
+    // 文件传输（upload / download / sync）还没接上
+    expect(tools.map((t) => t.name)).toEqual(['list-hosts', 'exec', 'disconnect'])
   })
 
   it('SSHS-U-86: 无参工具 —— 显式只接受空对象', async () => {
@@ -244,9 +253,9 @@ describe('ssh 内置服务器的边界', () => {
     writeConfig('Host web\n')
     const { client } = await open()
 
-    const bad = await call(client, 'exec')
+    const bad = await call(client, 'upload')
     expect(bad.isError).toBe(true)
-    expect(textOf(bad)).toBe('Unknown tool: exec')
+    expect(textOf(bad)).toBe('Unknown tool: upload')
 
     // 不能把连接搞垮：模型试错一次就要重开一台 server，代价比错误本身大得多
     expect((await call(client)).structuredContent?.hosts.map((h) => h.alias)).toEqual(['web'])

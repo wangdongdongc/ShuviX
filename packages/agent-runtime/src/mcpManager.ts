@@ -523,19 +523,31 @@ export class McpManager {
     connKey: string,
     toolName: string,
     args: Record<string, unknown>,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    /** 本次调用在 pi 那边的 toolCallId —— 经 `_meta` 带给 server（内置服务器用它给询问卡片定位） */
+    toolCallId?: string
   ): Promise<{ content: unknown[]; isError?: boolean }> {
     const conn = this.connections.get(connKey)
     if (!conn || conn.status !== 'connected') {
       throw new Error(`MCP server ${connKey} is not connected`)
     }
     // SDK 默认 60s 太短；抬到 5 分钟 + progress 刷新计时 + 10 分钟总上限
-    const result = await conn.client.callTool({ name: toolName, arguments: args }, undefined, {
-      timeout: 5 * 60 * 1000,
-      resetTimeoutOnProgress: true,
-      maxTotalTimeout: 10 * 60 * 1000,
-      signal
-    })
+    const result = await conn.client.callTool(
+      {
+        name: toolName,
+        arguments: args,
+        // 规范允许在 `_meta` 里带实现自有的数据（键要带前缀）。内置能力服务器要挂询问，
+        // 而询问的路由键按约定就是 toolCallId —— 让它的 ask 卡和别的工具一样对得上调用。
+        _meta: toolCallId ? { 'shuvix.dev/toolCallId': toolCallId } : undefined
+      },
+      undefined,
+      {
+        timeout: 5 * 60 * 1000,
+        resetTimeoutOnProgress: true,
+        maxTotalTimeout: 10 * 60 * 1000,
+        signal
+      }
+    )
     const isError = 'isError' in result ? (result.isError as boolean | undefined) : undefined
     return { content: result.content as unknown[], isError }
   }
@@ -565,13 +577,14 @@ export class McpManager {
       label: mcpTool.description || mcpTool.name,
       description: mcpTool.description ?? '',
       parameters: jsonSchemaToTypebox(mcpTool.inputSchema),
-      execute: async (_toolCallId, params, signal): Promise<AgentToolResult<McpToolDetails>> => {
+      execute: async (toolCallId, params, signal): Promise<AgentToolResult<McpToolDetails>> => {
         try {
           const result = await this.callTool(
             connKey,
             mcpTool.name,
             params as Record<string, unknown>,
-            signal
+            signal,
+            toolCallId
           )
           const text = extractTextFromContent(result.content)
           if (result.isError) {

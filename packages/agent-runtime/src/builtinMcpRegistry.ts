@@ -9,6 +9,9 @@
  * per-session 资源。而 MCP 协议里没有会话身份这一层（2026-07-28 更是把 `Mcp-Session-Id` 退了役），
  * 所以身份不往协议里塞 —— 一个会话一份 server 实例，天然就是答案。
  *
+ * **scope 是泛型的**：运行时只保证 `sessionId`，宿主要什么自己往上加（桌面加了询问通道），
+ * 这样「内置服务器需要宿主能力」这件事不必变成运行时的概念。
+ *
  * 本模块只管「名字 → 工厂」和「造一对 InMemoryTransport 并把 server side 接上」。
  * 连接的生命周期归 McpManager（它按 `serverId#sessionId` 记账），资源释放归各 server 自己
  * 挂在 server-side transport 的 onclose 上。
@@ -28,8 +31,8 @@ export interface BuiltinMcpScope {
  * 实现方负责 `server.connect(transport)`，并把自己的资源释放挂在 `transport.onclose`
  * （客户端断开会传播到这一侧，见 InMemoryTransport.close）。
  */
-export type BuiltinMcpFactory = (
-  scope: BuiltinMcpScope,
+export type BuiltinMcpFactory<TScope extends BuiltinMcpScope = BuiltinMcpScope> = (
+  scope: TScope,
   serverTransport: Transport
 ) => Promise<void> | void
 
@@ -39,11 +42,11 @@ export type BuiltinMcpFactory = (
  * 注册表本身**不持有任何实例**：一份实例的寿命等于它那条连接的寿命，全部记在 McpManager 里，
  * 这样「会话结束 → 关连接 → 释放资源」只有一条路径。
  */
-export class BuiltinMcpRegistry {
-  private factories = new Map<string, BuiltinMcpFactory>()
+export class BuiltinMcpRegistry<TScope extends BuiltinMcpScope = BuiltinMcpScope> {
+  private factories = new Map<string, BuiltinMcpFactory<TScope>>()
 
   /** 注册一台内置服务器（同名后注册的覆盖先注册的，便于测试替身） */
-  register(name: string, factory: BuiltinMcpFactory): void {
+  register(name: string, factory: BuiltinMcpFactory<TScope>): void {
     this.factories.set(name, factory)
   }
 
@@ -59,7 +62,7 @@ export class BuiltinMcpRegistry {
    * 造一对 InMemoryTransport，把 server side 交给工厂接上，返回 client side 给 McpManager。
    * 名字没注册时抛错 —— 配置里有 `type: 'inproc'` 的行却没有对应实现，属于装配期就该暴露的问题。
    */
-  async createClientTransport(name: string, scope: BuiltinMcpScope): Promise<Transport> {
+  async createClientTransport(name: string, scope: TScope): Promise<Transport> {
     const factory = this.factories.get(name)
     if (!factory) {
       throw new Error(`No builtin MCP server registered under "${name}"`)
