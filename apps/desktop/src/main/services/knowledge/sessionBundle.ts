@@ -2,8 +2,7 @@
  * 会话 → 知识库：这条会话**启用了哪几个库**，以及工具参数里的 `base` 解析到哪个 bundle。
  *
  * 启用哪些是一条**活的回落链**（不落库、不快照）：
- *   会话设过 → 父会话设过（子会话抄上一级）→ 项目设过 → 缺省「全部用户库 +（属于项目时）项目库 +
- *   ShuviX 自带的内置库」。
+ *   会话设过 → 父会话设过（子会话抄上一级）→ 项目设过 → 缺省**一个都不启用**。
  * 与扩展能力勾选（`enabledTools`）的快照语义刻意不同：那一份在创建 Agent 时读死、之后只读，因为
  * 工具表烤进了 pi；知识库是这里每次调用现查的，所以新建一个库、改一次选择，下一次工具调用就作数。
  *
@@ -99,9 +98,12 @@ function builtinTarget(): SessionBundleTarget | null {
 }
 
 /**
- * 这条会话启用了哪几个库（回落链，见文件头）。缺省是「全部用户库 +（属于项目时）项目库 + 内置库」——
- * 用户建了库就用得上，不必先去勾一遍；项目库排在后面：它还在，但不再是主角；内置库垫底：
- * 它是说明书，不是用户的内容。
+ * 这条会话启用了哪几个库（回落链，见文件头）。
+ *
+ * **缺省是空的**（2026-09-17 裁决）：谁都没设过 = 一个库都不启用，围栏整个不注入，工具答「本会话没有
+ * 启用任何知识库」。此前缺省是「全部用户库 + 项目库 + 内置库」，理由是「建了库就用得上，不必先去勾
+ * 一遍」；实际用下来相反 —— 新会话开箱就把用户所有库（常常跨领域）摊给 agent，搜出来的多是无关条目。
+ * 范围由用户圈定才有意义，所以改成显式勾选，内置的说明书也不例外。
  */
 export function selectedBaseNames(rootSessionId: string): string[] {
   const row = sessionDao.pick(rootSessionId, ['projectId', 'parentId', 'settings'])
@@ -117,13 +119,7 @@ export function selectedBaseNames(rootSessionId: string): string[] {
   const fromProject = projectSelection(row?.projectId ?? parent?.projectId ?? null)
   if (fromProject) return fromProject
 
-  // `project` 只跟着**会话自己**的项目：sessionBundle 也只看这一列，两处必须同口径，
-  // 否则缺省里会出现一个解析不出来的名字
-  return [
-    ...userBaseNames(),
-    ...(row?.projectId ? [KNOWLEDGE_PROJECT_BASE] : []),
-    ...(builtinTarget() ? [KNOWLEDGE_BUILTIN_BASE] : [])
-  ]
+  return []
 }
 
 /** 本会话所属项目的库（目录可能还不存在 —— 那就是一个空库） */
@@ -211,8 +207,8 @@ export async function listBases(rootSessionId: string): Promise<KnowledgeBaseInf
 }
 
 /**
- * 配置界面的候选项与此刻生效的选择。`explicit` 为假表示这条会话（及其项目）从没设过 ——
- * 界面上勾的是回落出来的缺省，用户一改就落成这条会话自己的。
+ * 配置界面的候选项与此刻生效的选择。`explicit` 为假表示这条会话（及其项目）从没设过 —— 缺省是空的，
+ * 所以界面上一个也没勾；用户一勾就落成这条会话自己的。
  */
 export function knowledgeBaseOptions(rootSessionId?: string): {
   options: KnowledgeBaseOption[]

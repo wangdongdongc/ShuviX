@@ -76,7 +76,8 @@ function SessionExtensionsSection({ sessionId }: { sessionId: string }): React.J
  * 这条会话用哪几个知识库 —— 与扩展能力并排，但**不随 Agent 上锁**：知识库不进工具表，是
  * `knowledge` 工具每次调用时现查的，改完下一次调用就作数。
  *
- * 没设过时勾的是回落出来的缺省（全部用户库 +（属于项目时）项目库），动一下就固定成这条会话自己的。
+ * 没设过时**一个都不勾**（缺省就是空的，见 sessionBundle.selectedBaseNames），勾一下就固定成这条
+ * 会话自己的那一份。
  * 宿主没有知识库（扩展端）或一个候选都没有时整节不显示。
  */
 function SessionKnowledgeBasesSection({

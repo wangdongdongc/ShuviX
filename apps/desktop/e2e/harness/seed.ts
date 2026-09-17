@@ -525,6 +525,11 @@ export async function createAgentSession(
     notebookPath?: string
     /** 绑定一个 bot ⇒ 建出来的是 bot 会话：有根，根档案为基座 bot */
     bot?: string
+    /**
+     * 这条会话用哪几个知识库，**在根 Agent 起来之前**写下 —— 缺省是一个都不启用，而
+     * `<knowledge_bases>` 围栏在创建 Agent 那一刻定型，所以要围栏的用例必须先把选择放好。
+     */
+    knowledgeBases?: string[]
   } = {}
 ): Promise<{ sid: string; systemPrompt: string }> {
   return main.eval(
@@ -536,6 +541,11 @@ export async function createAgentSession(
         ...(opts.bot ? { bot: opts.bot } : {})
       })})
       const sid = s.id
+      ${
+        opts.knowledgeBases
+          ? `await window.api.session.updateKnowledgeBases({ id: sid, knowledgeBases: ${JSON.stringify(opts.knowledgeBases)} })`
+          : ''
+      }
       const info = await window.api.agent.getInfo(sid, { ensure: true })
       return { sid, systemPrompt: info.systemPrompt }
     })()`

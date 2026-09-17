@@ -324,7 +324,7 @@
     "extensionsLocked": "Read-only: the agent has already been created",
     "knowledgeGroup": "Knowledge bases",
     "knowledgeDesc": "Which bases this session can search and write to. Changes take effect right away.",
-    "knowledgeDefault": "Not picked yet — this is the default (all of your knowledge bases, this project's, and ShuviX's built-in reference). Touch it and it becomes this session's own.",
+    "knowledgeDefault": "Not picked yet — new sessions start with none. Tick the bases this session should use; changes take effect right away.",
     "knowledgeProjectBase": "This project"
   },
   "projectForm": {

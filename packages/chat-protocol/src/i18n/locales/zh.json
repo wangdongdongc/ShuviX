@@ -324,7 +324,7 @@
     "extensionsLocked": "智能体已创建，扩展能力只读",
     "knowledgeGroup": "知识库",
     "knowledgeDesc": "这条会话能搜、能写哪几个库。改完立刻生效，不用新开会话。",
-    "knowledgeDefault": "还没选过 —— 这是缺省（你全部的知识库、本项目的库，以及 ShuviX 内置的说明书）。动一下就固定成这条会话自己的。",
+    "knowledgeDefault": "还没选过 —— 新会话缺省一个都不启用。勾上这条会话要用的库，改完立即生效。",
     "knowledgeProjectBase": "本项目"
   },
   "projectForm": {
