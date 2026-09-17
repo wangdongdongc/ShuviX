@@ -246,8 +246,8 @@ type Result = AgentToolResult<{ action: KnowledgeAction; path?: string } | undef
 const DEFAULT_LIMIT = 20
 
 /**
- * `limit` 收下限：模型给 0 / 负数 / 小数时不能静默变成「悄悄少给几条」——
- * 表头报的是全部命中数，行数按它截，两者对不上最难查。
+ * `limit` 收下限：小数截尾（`2.7` → 2），**截完不是正数**（0 / 负数 / `0.5` / NaN / Infinity）就回落缺省。
+ * 表头报的是全部命中数、行数按它截，所以一个荒唐的 limit 会让两个数字对不上 —— 那种错最难查。
  */
 function positiveLimit(raw: number | undefined, fallback: number): number {
   const n = Math.trunc(raw ?? fallback)

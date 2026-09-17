@@ -19,6 +19,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
+  headingsOf,
   validateBundleFiles,
   HOOK_ON_KEY,
   HOOK_AGENT_KEY,
@@ -177,4 +178,58 @@ describe.each(LANGS)('BK 内置知识库 · %s', (lang) => {
       expect(conceptOf(file).body).toContain(key)
     }
   )
+
+  /**
+   * BK-9..BK-11 —— 2026-09-17 起检索是**两步走**（设计附录 Q）：`search` 只回答「哪几条可能相关」，
+   * 正文由 `read` 取，找字面串用 `grep`。说明书是 agent 读完之后照着做的那一份，所以这三件事必须
+   * 都写在里面，而且写在**同一段**里 —— 拆开写就等于让模型自己拼。
+   */
+  const ENTRY_GUIDE = 'knowledge-entry.md'
+  /**
+   * 讲检索那一段里指认索引面的五个词。en 就是键名本身，ja / zh 是本地化的说法（说明书是给人读的，
+   * 不是键名表）—— 所以这张表得手维护：改了措辞请同步，这里不会自动红。
+   */
+  const FACE_TERMS: Record<string, readonly string[]> = {
+    en: ['title', 'description', 'tags', 'type', 'headings'],
+    ja: ['タイトル', '説明', 'タグ', 'type', '見出し行'],
+    zh: ['标题', '描述', '标签', 'type', '标题行']
+  }
+  /** 正文按空行切段 */
+  const paragraphs = (body: string): string[] =>
+    body
+      .split(/\n[ \t]*\n/)
+      .map((p) => p.trim())
+      .filter(Boolean)
+
+  it(`BK-9 ${ENTRY_GUIDE} 教两步走：search / read / grep 三个动作词都出现`, () => {
+    const body = conceptOf(ENTRY_GUIDE).body
+    for (const verb of ['search', 'read', 'grep']) {
+      expect(body, verb).toContain(`\`${verb}\``)
+    }
+  })
+
+  it(`BK-10 ${ENTRY_GUIDE} 点名索引面：四个键名与「标题行」都在讲检索的同一段里`, () => {
+    // 讲检索的那一段 = 提到 `grep` 的那一段（BK-11 钉住它只有一段）
+    const [retrieval] = paragraphs(conceptOf(ENTRY_GUIDE).body).filter((p) => p.includes('`grep`'))
+    expect(retrieval).toBeDefined()
+    expect(retrieval).toContain('`search`')
+    for (const term of FACE_TERMS[lang]) {
+      expect(retrieval, term).toContain(term)
+    }
+  })
+
+  it(`BK-11 ${ENTRY_GUIDE} 里 grep 只出现在讲检索的那一段：含它的段落必同时含 read`, () => {
+    const withGrep = paragraphs(conceptOf(ENTRY_GUIDE).body).filter((p) => p.includes('`grep`'))
+    expect(withGrep).toHaveLength(1)
+    // 两步走的两半必须挨在一起：grep 是「索引里没有散文」的出口，read 是第二步本身
+    expect(withGrep[0]).toContain('`read`')
+  })
+
+  /**
+   * BK-12 索引面只有门面 + 正文标题行，所以一份没有任何 ATX 标题的说明书在库里只剩 title /
+   * description / tags 可搜 —— 说明书恰恰是最该被搜到的那一批。
+   */
+  it.each(paths)('BK-12 %s 正文里至少有一个 ATX 标题（否则新索引里只剩门面可搜）', (path) => {
+    expect(headingsOf(conceptOf(path).body).length).toBeGreaterThan(0)
+  })
 })

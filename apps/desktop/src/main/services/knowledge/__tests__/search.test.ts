@@ -35,8 +35,16 @@ vi.mock('i18next', () => ({
     t: (key: string) => key
   }
 }))
+/** 建索引时被跳过的笔记只在日志里留痕：`SR-12` 要直接钉「没有任何一篇被跳过」 */
+const logs = vi.hoisted(() => ({ warnings: [] as string[] }))
 vi.mock('../../../logger', () => ({
-  createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {} })
+  createLogger: () => ({
+    info: () => {},
+    warn: (msg: string) => {
+      logs.warnings.push(msg)
+    },
+    error: () => {}
+  })
 }))
 
 import { refreshBuiltinKnowledge } from '../changes'
@@ -57,6 +65,7 @@ beforeEach(() => {
   root = makeTempRoot()
   state.root = root
   i18n.language = 'en'
+  logs.warnings.length = 0
   invalidateKnowledgeScan()
   invalidateKnowledgeSearch()
 })
@@ -300,5 +309,296 @@ describe('searchBundle — 内置库按界面语言取那一版', () => {
 
     expect(await builtinHits('axolotl')).toEqual([['guide.md', '文件格式']])
     expect(await builtinHits('platypus')).toEqual([])
+  })
+})
+
+/**
+ * SR-10..SR-25 —— 2026-09-17 那次裁决（设计附录 Q）的检索面对照表，走的还是「扫描 → 建索引 → 检索」
+ * 那条真链路。
+ *
+ * **索引里有什么**：`title` / `description` / `tags` / `type` / `resource` / `sources`，加上正文里的
+ * **标题行**。散文一概不进 —— 全文入索引时一句常见的话就能把半个库拉回来，而每条命中还拖一段正文。
+ * 定位符（`resource` / `sources`）是**元数据不是散文**，所以留在索引里：「哪一篇引了 conceptFile.ts」
+ * 得搜得到（okf-minisearch 给 `resource` 的权重是全字段最高）。
+ */
+describe('searchBundle —— 索引面（门面 + 正文标题行）', () => {
+  it('SR-10 门面各字段都能单独命中：title / description / tags / type / 正文标题行', async () => {
+    seedConcept(
+      root,
+      `${BUNDLE}/face.md`,
+      [
+        'type: Runbook',
+        'title: Zebracorn',
+        'description: about the quokka',
+        'tags: [platypus, narwhal]'
+      ],
+      '## Marmoset section\n\nplain prose that must stay out\n'
+    )
+    // 每个词只出现在一个字段里 —— 命中即证明那个字段在索引面上
+    for (const q of ['Zebracorn', 'quokka', 'platypus', 'narwhal', 'Runbook', 'Marmoset']) {
+      expect(await pathsOf(q), q).toEqual(['face.md'])
+    }
+  })
+
+  it('SR-11 定位符（resource / sources）在索引面上；散文、围栏内文字、generated / stale_after 不在', async () => {
+    seedConcept(
+      root,
+      `${BUNDLE}/loc.md`,
+      [
+        'type: Memory',
+        'title: Locators',
+        'description: dl',
+        'resource: https://example.com/aardvark',
+        'sources:',
+        '  - resource: /abs/path/capybara.ts',
+        '    title: the capybara helper',
+        '  - resource: https://example.com/gerenuk'
+      ],
+      '## heading\n\nprose\n'
+    )
+    seedConcept(
+      root,
+      `${BUNDLE}/neg.md`,
+      [
+        'type: Memory',
+        'title: Negatives',
+        'description: dn',
+        'stale_after: 2031-12-31',
+        'generated: { by: "shuvix-work/wombatmodel", at: "2026-09-09T08:12:03.000Z" }'
+      ],
+      '## heading two\n\nprose about the dingo\n\n```\nfenced kakapo text\n```\n'
+    )
+
+    // 正向：定位符是元数据，本轮把散文赶出索引的理由盖不到它们
+    for (const q of ['aardvark', 'capybara', 'gerenuk']) {
+      expect(await pathsOf(q), q).toEqual(['loc.md'])
+    }
+    // 反向：散文、围栏里的文字、宿主的章与过期日期一个都搜不到
+    for (const q of ['dingo', 'kakapo', 'wombatmodel', '2031-12-31']) {
+      expect(await pathsOf(q), q).toEqual([])
+    }
+  })
+
+  it('SR-12 正文一个标题都没有的笔记：不被跳过、不发警告，门面照常命中', async () => {
+    seedConcept(
+      root,
+      `${BUNDLE}/nohead.md`,
+      ['type: Memory', 'title: Axolotl', 'description: dn'],
+      'just prose, not a single heading in here\n'
+    )
+    seedFile(root, `${BUNDLE}/bare.md`, 'no frontmatter and no headings either\n')
+
+    expect(await pathsOf('Axolotl')).toEqual(['nohead.md'])
+    expect(await pathsOf('bare')).toEqual(['bare.md'])
+    // 「被 okf-minisearch 拒了」只在日志里留痕：空正文不该走到那一步
+    expect(logs.warnings.filter((w) => w.includes('left out of'))).toEqual([])
+  })
+
+  it('SR-13 一篇全是标题的笔记：各级标题都能命中；同一个词出现在多个标题里仍只回一条', async () => {
+    seedFile(
+      root,
+      `${BUNDLE}/all.md`,
+      [
+        '# Gazelle one',
+        '## Gazelle two',
+        '### Gazelle three',
+        '#### Ibex four',
+        '##### Ibex five',
+        '###### Ibex six'
+      ].join('\n\n')
+    )
+
+    for (const q of ['one', 'two', 'three', 'four', 'five', 'six']) {
+      expect(await pathsOf(q), q).toEqual(['all.md'])
+    }
+    // 库按文档去重：三个标题里都有 Gazelle，回来的仍是一条
+    expect(await pathsOf('Gazelle')).toEqual(['all.md'])
+    expect(await pathsOf('Ibex')).toEqual(['all.md'])
+  })
+
+  it('SR-14 嵌套标题：搜父与搜子都命中同一个文件，且各只有一条', async () => {
+    seedFile(root, `${BUNDLE}/nest.md`, '# Okapi\n\n## Marmot parent\n\n### Lemur child\n\nprose\n')
+
+    expect(await pathsOf('Marmot')).toEqual(['nest.md'])
+    expect(await pathsOf('Lemur')).toEqual(['nest.md'])
+    // 父子同时命中也还是一条
+    expect(await pathsOf('Marmot Lemur')).toEqual(['nest.md'])
+  })
+
+  it('SR-15 标题里的 markdown：链接的可见文字 / 行内代码 / 强调可搜，链接的 URL 不可搜', async () => {
+    seedFile(
+      root,
+      `${BUNDLE}/md.md`,
+      [
+        '# Title',
+        '## See [the tapir docs](https://example.com/vicuna)',
+        '### Use `serval` here',
+        '#### **Caracal** and _Margay_'
+      ].join('\n\n')
+    )
+
+    for (const q of ['tapir', 'serval', 'Caracal', 'Margay']) {
+      expect(await pathsOf(q), q).toEqual(['md.md'])
+    }
+    // 标题行原样喂给索引，但 okf-minisearch 建 headingPath 时剥掉链接语法 —— URL 那一半进不去
+    for (const q of ['vicuna', 'example.com', 'https']) {
+      expect(await pathsOf(q), q).toEqual([])
+    }
+  })
+
+  it('SR-16 回包形状：一条命中恰四个键，没有 snippet / 分数 / 词界标记泄漏', async () => {
+    seedConcept(
+      root,
+      `${BUNDLE}/shape.md`,
+      ['type: Memory', 'title: 形状', 'description: 描述一行', 'status: draft'],
+      '## 小节标题\n\n散文\n'
+    )
+    const [hit] = await searchBundle(BUNDLE, '小节标题', { limit: 10 })
+    expect(Object.keys(hit).sort()).toEqual(['description', 'path', 'status', 'title'])
+    expect(hit).toEqual({
+      path: 'shape.md',
+      title: '形状',
+      description: '描述一行',
+      status: 'draft'
+    })
+    // 分词用的词界标记只活在喂给索引的那份文本里
+    expect(JSON.stringify(hit)).not.toMatch(/\u200A/)
+  })
+
+  it('SR-17 围栏里的标题不进索引（真链路对照 CF-17）', async () => {
+    seedFile(
+      root,
+      `${BUNDLE}/fence.md`,
+      '# Fencepost\n\n```\n## Hidden gerenuk\n```\n\n## Visible bongo\n'
+    )
+
+    expect(await pathsOf('bongo')).toEqual(['fence.md'])
+    expect(await pathsOf('Fencepost')).toEqual(['fence.md'])
+    expect(await pathsOf('gerenuk')).toEqual([])
+  })
+
+  /**
+   * SR-18 **已知取舍**（设计附录 Q 补充）：frontmatter 开了 `---` 却没闭合时整篇当正文 —— 于是里面的
+   * `# 注释` 成了可检索的标题行，而 `title: …` 那一行只是散文、搜不到。标题那一半是旧行为，
+   * 可检索这一半是本轮新增。
+   */
+  it('SR-18 未闭合的 frontmatter：里面的 `#` 注释成为可检索标题，`title:` 那一行仍是散文', async () => {
+    seedFile(
+      root,
+      `${BUNDLE}/open.md`,
+      '---\ntitle: Oryx\n## a yaml comment about the saiga\nprose about the numbat\n'
+    )
+
+    // 二级注释行 —— 不当一级标题用，免得它顺带成为笔记标题
+    expect(await hitsOf('saiga')).toEqual([['open.md', 'open']])
+    expect(await pathsOf('Oryx')).toEqual([])
+    expect(await pathsOf('numbat')).toEqual([])
+  })
+
+  it('SR-19 多词查询是 OR：只含其中一个词的两条都回来', async () => {
+    seedConcept(root, `${BUNDLE}/a.md`, ['type: Memory', 'title: Alpaca only', 'description: da'])
+    seedConcept(root, `${BUNDLE}/b.md`, ['type: Memory', 'title: Bison only', 'description: db'])
+    seedConcept(root, `${BUNDLE}/c.md`, ['type: Memory', 'title: Coyote only', 'description: dc'])
+
+    expect((await pathsOf('alpaca bison')).sort()).toEqual(['a.md', 'b.md'])
+  })
+
+  it('SR-20 limit 截断：五条都命中时 limit: 2 恰回两条，且是双重命中的那两条', async () => {
+    // 五条标题里都有 kudu；其中两条在描述与标签里再命中一次 —— 名次可预期，分数不钉
+    for (const name of ['one', 'two', 'three']) {
+      seedConcept(root, `${BUNDLE}/${name}.md`, [
+        'type: Memory',
+        `title: kudu ${name}`,
+        `description: d${name}`
+      ])
+    }
+    for (const name of ['top1', 'top2']) {
+      seedConcept(root, `${BUNDLE}/${name}.md`, [
+        'type: Memory',
+        `title: kudu ${name}`,
+        'description: kudu again',
+        'tags: [kudu]'
+      ])
+    }
+
+    expect((await pathsOf('kudu')).sort()).toEqual([
+      'one.md',
+      'three.md',
+      'top1.md',
+      'top2.md',
+      'two.md'
+    ])
+    const capped = await searchBundle(BUNDLE, 'kudu', { limit: 2 })
+    expect(capped.map((h) => h.path).sort()).toEqual(['top1.md', 'top2.md'])
+  })
+
+  it('SR-21 中日文的标题行 / 标签 / 描述都分词入索引', async () => {
+    seedConcept(
+      root,
+      `${BUNDLE}/cjk.md`,
+      [
+        'type: Memory',
+        'title: 中文标题',
+        'description: 这是一条关于缓存击穿的描述',
+        'tags: [数据库连接池, 索引重建]'
+      ],
+      '## 会话恢复的判定\n\n这一段散文不进索引\n'
+    )
+    seedFile(root, `${BUNDLE}/jp.md`, '# ひらがなの見出し\n\n## カタカナのミダシ\n')
+
+    // 段中间的词（默认分词器会把整段当一个词，中文因此曾经一条都搜不到）
+    for (const q of ['缓存', '击穿', '判定', '恢复', '数据库连接池', '索引重建']) {
+      expect(await pathsOf(q), q).toEqual(['cjk.md'])
+    }
+    for (const q of ['ひらがな', 'カタカナ']) {
+      expect(await pathsOf(q), q).toEqual(['jp.md'])
+    }
+    // 散文那一半照旧不在索引里
+    expect(await pathsOf('散文')).toEqual([])
+  })
+
+  it('SR-22 type 是中文时搜它命中，且不连累 `type: ·` 的普通笔记', async () => {
+    seedConcept(root, `${BUNDLE}/t.md`, ['type: 决策', 'title: 一个决定', 'description: dt'])
+    seedFile(root, `${BUNDLE}/p.md`, '# 普通笔记\n\n## 小节\n')
+
+    // 普通笔记的 type 占位是标点、切不出词，所以它不跟着任何 type 查询回来（英文那一半见 SR-7）
+    expect(await pathsOf('决策')).toEqual(['t.md'])
+    expect(await pathsOf('普通笔记')).toEqual(['p.md'])
+  })
+
+  it('SR-23 deprecated 即使标题行命中也不出现', async () => {
+    seedConcept(
+      root,
+      `${BUNDLE}/dep.md`,
+      ['type: Memory', 'title: Dep', 'description: dd', 'status: deprecated'],
+      '## Pangolin section\n'
+    )
+    seedConcept(
+      root,
+      `${BUNDLE}/live.md`,
+      ['type: Memory', 'title: Live', 'description: dl'],
+      '## Pangolin section\n'
+    )
+
+    expect(await pathsOf('Pangolin')).toEqual(['live.md'])
+  })
+
+  it('SR-24 用户手写的 index.md / sub/log.md：只靠标题行命中时也换回真实路径；隐藏的同名别名不在库里', async () => {
+    seedFile(root, `${BUNDLE}/index.md`, '## Tamarin section\n\nnot a projection, this is prose\n')
+    seedFile(root, `${BUNDLE}/sub/log.md`, '## Saola section\n\nnot a projection either\n')
+    // 别名（`sub/.index.md` 形状）撞不上真实笔记的理由：扫描从不收隐藏文件
+    seedFile(root, `${BUNDLE}/.index.md`, '## Tamarin hidden decoy\n')
+
+    // 标题回落到文件名（正文里没有一级标题）—— 命中只能来自标题行
+    expect(await hitsOf('Tamarin')).toEqual([['index.md', 'index']])
+    expect(await hitsOf('Saola')).toEqual([['sub/log.md', 'log']])
+    expect(await pathsOf('decoy')).toEqual([])
+  })
+
+  it('SR-25 无 frontmatter、无标题、只有散文：仍按文件名命中（标题回落文件名，而标题是索引字段）', async () => {
+    seedFile(root, `${BUNDLE}/quetzal-notes.md`, 'only prose about wombats, no headings at all\n')
+
+    expect(await hitsOf('quetzal')).toEqual([['quetzal-notes.md', 'quetzal-notes']])
+    expect(await pathsOf('wombats')).toEqual([])
   })
 })

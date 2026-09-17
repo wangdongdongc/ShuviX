@@ -1111,3 +1111,324 @@ describe('KT-21..24 只读库（随应用发布的内置库）', () => {
     expect(h.afterWrite).not.toHaveBeenCalled()
   })
 })
+
+/**
+ * KT-25..KT-33 —— 2026-09-17 的裁决（设计附录 Q）落在**工具**这一侧：检索是两步走的第一步，
+ * 所以**一条命中恰一行**（`snippet` 整个字段删掉了），而扩展端没有宿主索引时走的子串兜底
+ * 要与宿主索引**同一个召回口径**：门面（title / description / type / tags）+ 正文标题行，
+ * 散文与围栏里的文字都不算。
+ *
+ * 宿主那一端的同一张表在 `apps/desktop/.../knowledge/__tests__/search.test.ts` 的 SR-10 / SR-11，
+ * 两个文件各跑一遍 —— 两端对同一个查询的召回不该差一个数量级。
+ */
+/**
+ * 宿主回包多带字段是合法的（旧字段没清干净 / 将来加了别的）—— 类型上放宽一格才写得出这种替身。
+ * 注意**不能**直接把带 `snippet` 的字面量断言成 `KnowledgeSearchHit[]`：那个字段已经删了，
+ * 断言会当场 typecheck 报错（KT-32 正是钉这一点）。
+ */
+type LooseHit = KnowledgeSearchHit & Record<string, unknown>
+
+describe('KT-25..KT-27 一条命中恰一行', () => {
+  it('KT-25 宿主回包里多带 snippet / score 等字段：渲染不受影响，仍是一行', async () => {
+    // 回包多带字段是宿主的自由（旧字段没清干净、将来加了别的）—— 工具只读它认识的那四个
+    const search = vi.fn(
+      async (): Promise<LooseHit[]> => [
+        {
+          path: '/a.md',
+          title: 'A',
+          description: 'da',
+          status: 'stable',
+          snippet: 'a whole paragraph of body text\nwith a second line',
+          score: 12.5
+        },
+        { path: '/b.md', title: 'B', description: 'db', status: 'stable', snippet: 'more prose' }
+      ]
+    )
+    const h = makeTool({ search })
+    const lines = textOf(
+      await h.run('c1', { action: 'search', base: 'project', query: 'q' })
+    ).split('\n')
+    // 表头一行 + 每条命中一行，多一行都没有
+    expect(lines).toEqual([
+      `2 result(s) for "q" in project "Acme" — ${ROOT}:`,
+      '- /a.md — da',
+      '- /b.md — db'
+    ])
+    expect(
+      textOf(await h.run('c2', { action: 'search', base: 'project', query: 'q' }))
+    ).not.toMatch(/paragraph|prose|12\.5/)
+  })
+
+  it('KT-26 逐字渲染：description 优先于 title、status 非 stable 才括注、路径一律归一成 `- /path`', async () => {
+    const search = vi.fn(
+      async (): Promise<KnowledgeSearchHit[]> => [
+        { path: '/a.md', title: 'A', description: 'da', status: 'stable' },
+        // 空描述算没有：行尾退回标题
+        { path: 'b.md', title: 'B', description: '', status: 'draft' },
+        { path: 'sub/c.md', title: 'C', status: 'deprecated' },
+        { path: '/sub/d.md', title: 'D', description: 'dd' },
+        { path: './e.md', title: 'E', description: 'de', status: 'stable' }
+      ]
+    )
+    const h = makeTool({ search })
+    const res = await h.run('c1', { action: 'search', base: 'project', query: 'q' })
+    expect(textOf(res)).toBe(
+      [
+        `5 result(s) for "q" in project "Acme" — ${ROOT}:`,
+        '- /a.md — da',
+        '- /b.md (draft) — B',
+        '- /sub/c.md (deprecated) — C',
+        '- /sub/d.md — dd',
+        '- /e.md — de'
+      ].join('\n')
+    )
+  })
+
+  it('KT-27 跨库：每条命中仍恰一行、按库分组，块与块之间没有正文片段', async () => {
+    const NOTES = '/kb/user/notes'
+    const search = vi.fn(
+      async (_q: string, opts: { limit: number; bundleDir: string }): Promise<LooseHit[]> =>
+        opts.bundleDir === NOTES
+          ? [{ path: '/n1.md', title: 'N1', description: 'dn1', snippet: 'prose from notes' }]
+          : [
+              { path: '/a1.md', title: 'A1', description: 'da1', snippet: 'prose from acme' },
+              { path: '/a2.md', title: 'A2', status: 'draft', snippet: 'more acme prose' }
+            ]
+    )
+    const h = makeTool({
+      search,
+      bases: [
+        { base: 'notes', label: 'knowledge base "notes"', dir: NOTES },
+        { base: 'project', label: 'project "Acme"', dir: ROOT }
+      ]
+    })
+    const res = await h.run('c1', { action: 'search', query: 'q' })
+    expect(textOf(res)).toBe(
+      [
+        '3 result(s) for "q" across 2 base(s):',
+        `base "notes" — ${NOTES}:`,
+        '- /n1.md — dn1',
+        `base "project" — ${ROOT}:`,
+        '- /a1.md — da1',
+        '- /a2.md (draft) — A2'
+      ].join('\n')
+    )
+    // 行数 = 表头 1 + 分组行 2 + 命中 3；任何正文片段都会让它变多
+    expect(textOf(res).split('\n')).toHaveLength(6)
+  })
+})
+
+describe('KT-28..KT-31 子串兜底的召回口径', () => {
+  /** 每个词只出现在一个字段里 —— 命中即证明那个字段在召回面上（宿主那一端是 SR-10 / SR-11） */
+  const FILES = {
+    '/kb/projects/acme/title.md': doc(['type: Memory', 'title: Zebracorn', 'description: dt']),
+    '/kb/projects/acme/desc.md': doc([
+      'type: Memory',
+      'title: T2',
+      'description: about the quokka'
+    ]),
+    '/kb/projects/acme/type.md': doc(['type: Runbook', 'title: T3', 'description: d3']),
+    '/kb/projects/acme/tags.md': doc([
+      'type: Memory',
+      'title: T4',
+      'description: d4',
+      'tags: [platypus]'
+    ]),
+    '/kb/projects/acme/head.md': doc(
+      ['type: Memory', 'title: T5', 'description: d5'],
+      '## Marmoset section\n\na paragraph about the dingo'
+    ),
+    '/kb/projects/acme/fence.md': doc(
+      ['type: Memory', 'title: T6', 'description: d6'],
+      '```\n## Hidden kakapo\n```\n'
+    )
+  }
+  /** `[query, 渲染出来的命中行]`；空数组 = 一条都不该命中 */
+  const TABLE: [string, string[]][] = [
+    ['Zebracorn', ['- /title.md — dt']],
+    ['quokka', ['- /desc.md — about the quokka']],
+    ['Runbook', ['- /type.md — d3']],
+    ['platypus', ['- /tags.md — d4']],
+    ['Marmoset', ['- /head.md — d5']],
+    // 散文与围栏里的文字都不算 —— 这正是本轮赶出索引的那一半
+    ['dingo', []],
+    ['kakapo', []]
+  ]
+
+  it.each(TABLE)('KT-28 不注入 search：查 %s 的命中就是 %j', async (query, expected) => {
+    const h = makeTool({ files: FILES })
+    const out = textOf(await h.run('c1', { action: 'search', base: 'project', query }))
+    if (expected.length === 0) {
+      expect(out).toBe(`No entries match "${query}".`)
+      return
+    }
+    expect(out.split('\n').slice(1)).toEqual(expected)
+  })
+
+  it('KT-28 注入 search：工具一条都不自己筛 —— 宿主给什么就渲染什么', async () => {
+    // 这一侧的口径归宿主（SR-10 / SR-11 钉它）：工具只转发，连「库里有没有这个文件」都不查
+    const search = vi.fn(
+      async (): Promise<KnowledgeSearchHit[]> => [
+        { path: '/dingo-only.md', title: 'Prose hit', description: 'the host said so' }
+      ]
+    )
+    const h = makeTool({ files: FILES, search })
+    expect(textOf(await h.run('c1', { action: 'search', base: 'project', query: 'dingo' }))).toBe(
+      `1 result(s) for "dingo" in project "Acme" — ${ROOT}:\n- /dingo-only.md — the host said so`
+    )
+    expect(h.scan).not.toHaveBeenCalled()
+  })
+
+  it('KT-29 兜底只看标题行不看整段正文；未闭合 frontmatter 时与宿主同样把 YAML 注释当标题', async () => {
+    const h = makeTool({
+      files: {
+        // 同一个词分别落在标题行与散文里：前者算命中，后者不算
+        '/kb/projects/acme/a.md': doc(
+          ['type: Memory', 'title: A', 'description: da'],
+          '## the okapi heading\n\nand a paragraph about the numbat'
+        ),
+        // frontmatter 开了 `---` 却没闭合：整篇当正文，里面的 `##` 注释成了标题行（已知取舍）
+        '/kb/projects/acme/open.md':
+          '---\ntitle: Oryx\n## a yaml comment about the saiga\nprose about the tapir\n'
+      }
+    })
+    const found = async (query: string): Promise<string[]> =>
+      textOf(await h.run('c1', { action: 'search', base: 'project', query }))
+        .split('\n')
+        .slice(1)
+        .map((line) => line.slice(2).split(' ')[0])
+
+    expect(await found('okapi')).toEqual(['/a.md'])
+    expect(await found('numbat')).toEqual([])
+    expect(await found('saiga')).toEqual(['/open.md'])
+    // `title: Oryx` 与散文都只是正文的普通行
+    expect(await found('Oryx')).toEqual([])
+    expect(await found('tapir')).toEqual([])
+  })
+
+  it('KT-30 相邻标题用空格连接：标题 ["ab","cd"] 查 "b c" 会命中（兜底本就是粗口径）', async () => {
+    const h = makeTool({
+      files: {
+        '/kb/projects/acme/a.md': doc(
+          ['type: Memory', 'title: A', 'description: da'],
+          '## ab\n\n## cd\n'
+        )
+      }
+    })
+    const hit = async (query: string): Promise<boolean> =>
+      !textOf(await h.run('c1', { action: 'search', base: 'project', query })).startsWith(
+        'No entries'
+      )
+    // 连接产物：两个标题之间那一个空格是查询能跨过去的唯一原因
+    expect(await hit('b c')).toBe(true)
+    expect(await hit('ab cd')).toBe(true)
+    // 标题内部照旧
+    expect(await hit('ab')).toBe(true)
+    // 连接之后仍然不存在的串
+    expect(await hit('bc')).toBe(false)
+  })
+
+  it('KT-31 兜底大小写不敏感；对 CJK 不分词（整串包含即可，中间加空格就不算）', async () => {
+    const h = makeTool({
+      files: {
+        '/kb/projects/acme/a.md': doc(['type: Memory', 'title: Token Refresh', 'description: da']),
+        '/kb/projects/acme/z.md': doc([
+          'type: Memory',
+          'title: 鉴权与令牌刷新',
+          'description: 改动登录时看'
+        ])
+      }
+    })
+    const found = async (query: string): Promise<string[]> =>
+      textOf(await h.run('c1', { action: 'search', base: 'project', query }))
+        .split('\n')
+        .slice(1)
+        .map((line) => line.slice(2).split(' ')[0])
+
+    for (const q of ['token refresh', 'TOKEN REFRESH', 'ToKeN']) {
+      expect(await found(q), q).toEqual(['/a.md'])
+    }
+    // 不分词：整串在标题里连着出现才算
+    expect(await found('令牌刷新')).toEqual(['/z.md'])
+    expect(await found('与令牌')).toEqual(['/z.md'])
+    expect(await found('令牌 刷新')).toEqual([])
+    expect(await found('鉴权刷新')).toEqual([])
+  })
+})
+
+describe('KT-32..KT-33 文案与 limit', () => {
+  it('KT-32 文案与类型：描述同时教 `read` 与 `grep`；KnowledgeSearchHit 上没有 snippet', () => {
+    // 两步走：第一步 search 出候选、第二步 read 取正文；找字面串走 grep
+    expect(KNOWLEDGE_DESCRIPTION).toContain('`grep`')
+    expect(KNOWLEDGE_DESCRIPTION).toContain('`read`')
+    // 这两句是本轮的重点，掉了就等于没改
+    expect(KNOWLEDGE_DESCRIPTION).toContain('not the prose')
+    expect(KNOWLEDGE_DESCRIPTION).toMatch(/two steps/i)
+
+    // 类型层守卫：`snippet` 回来的话这一行先红（片段正是「每条命中拖一段正文」的那一半）
+    const keys: Record<keyof KnowledgeSearchHit, true> = {
+      path: true,
+      title: true,
+      description: true,
+      status: true
+    }
+    expect(Object.keys(keys).sort()).toEqual(['description', 'path', 'status', 'title'])
+  })
+
+  it('KT-33 兜底路径：表头报全部命中数、行数按 limit 截；非正数回落缺省，小数截断取整', async () => {
+    const files: Record<string, string> = {}
+    for (const n of ['a', 'b', 'c']) {
+      files[`/kb/projects/acme/${n}.md`] = doc([
+        'type: Memory',
+        `title: kudu ${n}`,
+        `description: d${n}`
+      ])
+    }
+    const h = makeTool({ files })
+    const lineCount = async (limit?: number): Promise<number> => {
+      const out = textOf(
+        await h.run('c1', { action: 'search', base: 'project', query: 'kudu', limit })
+      )
+      expect(out.split('\n')[0], String(limit)).toBe(
+        `3 result(s) for "kudu" in project "Acme" — ${ROOT}:`
+      )
+      return out.split('\n').length - 1
+    }
+
+    // 表头恒报全部命中数，行数才按 limit 截 —— 「还有更多」得一眼看得出来
+    expect(await lineCount(1)).toBe(1)
+    expect(await lineCount(2)).toBe(2)
+    // 缺省（search 是 20）：三条全给
+    expect(await lineCount(undefined)).toBe(3)
+    // 非正数一律回落缺省：负数曾经从尾部静默丢结果、`0` 反而只回一条
+    for (const limit of [0, -1, -5, 0.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(await lineCount(limit), String(limit)).toBe(3)
+    }
+    // 小数是**截断**不是回落缺省：2.7 → 2（Math.trunc 之后仍是正数）
+    expect(await lineCount(2.7)).toBe(2)
+  })
+
+  it('KT-33 list 的 limit 同一套：缺省 100，非正数回落，小数截断', async () => {
+    const files: Record<string, string> = {}
+    for (const n of ['a', 'b', 'c']) {
+      files[`/kb/projects/acme/${n}.md`] = doc([
+        'type: Memory',
+        `title: ${n}`,
+        `description: d${n}`
+      ])
+    }
+    const h = makeTool({ files })
+    const listed = async (limit?: number): Promise<string[]> =>
+      textOf(await h.run('c1', { action: 'list', base: 'project', limit }))
+        .split('\n')
+        .slice(1)
+
+    expect(await listed(undefined)).toHaveLength(3)
+    for (const limit of [0, -1, 0.5]) {
+      expect(await listed(limit), String(limit)).toHaveLength(3)
+    }
+    // 截断之外折成一行计数，所以 limit: 2 是「两条 + 一行 … 1 more」
+    expect(await listed(2)).toEqual(['- /a.md — da', '- /b.md — db', '- … 1 more'])
+    expect(await listed(2.7)).toEqual(['- /a.md — da', '- /b.md — db', '- … 1 more'])
+  })
+})

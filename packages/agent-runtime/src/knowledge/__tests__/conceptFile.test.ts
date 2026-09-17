@@ -13,13 +13,15 @@ import { describe, it, expect, vi } from 'vitest'
 import {
   buildConceptText,
   firstHeading,
+  headingsOf,
   isOkfConceptText,
   isVerificationCurrent,
   normalizeKnowledgeType,
   normalizeSources,
   normalizeVerified,
   parseConceptText,
-  readKnowledgeNote
+  readKnowledgeNote,
+  type BodyHeading
 } from '../conceptFile'
 import { parseOkfText } from '../okfCodec'
 
@@ -410,5 +412,188 @@ describe('readKnowledgeNote / firstHeading — 任何 md 都是一条笔记', ()
         entry: false
       })
     ).toMatchObject({ concept: null, type: '', title: 'Home', status: 'draft' })
+  })
+})
+
+/**
+ * headingsOf —— 正文里的全部 ATX 标题。两个消费方：笔记标题回落（`firstHeading`，老行为）与
+ * **检索索引的正文面**（2026-09-17 起索引只收门面 + 标题行，散文一概不进）。所以这里钉的既是
+ * 「哪些行算标题」，也是「索引里会出现哪些词」—— 判定放宽一点，库里就会多出一批可搜的散文。
+ *
+ * 判定刻意窄：只认行首 ATX（`#` 后必须有空白、最多三格缩进），跳过围栏代码块，标题文字**原样**
+ * 带出（不解析 markdown）。两条已知取舍见 CF-16 / SR-18。
+ */
+describe('headingsOf —— 索引的正文面', () => {
+  /** `[level, text]` 对照，比整个对象数组读着省事 */
+  const pairs = (body: string): [number, string][] =>
+    headingsOf(body).map((h): [number, string] => [h.level, h.text])
+  const textsOf = (body: string): string[] => headingsOf(body).map((h) => h.text)
+
+  it('CF-13 全部 ATX 标题按出现顺序返回，级别 1–6 原样带出；七个 `#` 不是标题', () => {
+    const body = [
+      '# One',
+      'prose that is not a heading',
+      '## Two',
+      '### Three',
+      '#### Four',
+      '##### Five',
+      '###### Six',
+      '####### Seven',
+      '# Back to one'
+    ].join('\n')
+    expect(pairs(body)).toEqual([
+      [1, 'One'],
+      [2, 'Two'],
+      [3, 'Three'],
+      [4, 'Four'],
+      [5, 'Five'],
+      [6, 'Six'],
+      [1, 'Back to one']
+    ])
+    // 一个标题都没有的正文（检索的正文面因此为空）
+    expect(headingsOf('just prose\n\nmore prose\n')).toEqual([])
+    expect(headingsOf('')).toEqual([])
+  })
+
+  it('CF-14 `#` 之后必须有空白（tab 也算），缩进最多三格', () => {
+    const table: [string, string[]][] = [
+      ['# Spaced\n', ['Spaced']],
+      ['#\tTabbed\n', ['Tabbed']],
+      ['#NoSpace\n', []],
+      ['##AlsoNoSpace\n', []],
+      [' # One space\n', ['One space']],
+      ['   # Three spaces\n', ['Three spaces']],
+      // 四格缩进是代码块，不是标题
+      ['    # Four spaces\n', []],
+      ['\t# Tab indented\n', []]
+    ]
+    for (const [body, expected] of table) {
+      expect(textsOf(body), JSON.stringify(body)).toEqual(expected)
+    }
+  })
+
+  it('CF-15 收尾的 `#` 序列剥掉（须有空白分隔）、词内 `#` 保留、空标题不算', () => {
+    const table: [string, string[]][] = [
+      ['# Title ##\n', ['Title']],
+      ['## Title ######\n', ['Title']],
+      // 没有空白分隔就不是收尾序列，是标题的一部分
+      ['# Title##\n', ['Title##']],
+      ['# C#\n', ['C#']],
+      ['# a#b\n', ['a#b']],
+      // 光秃秃的 `#` / 只有空白的标题不算
+      ['#\n', []],
+      ['#   \n', []],
+      ['# \t \n', []]
+    ]
+    for (const [body, expected] of table) {
+      expect(textsOf(body), JSON.stringify(body)).toEqual(expected)
+    }
+  })
+
+  /**
+   * CF-16 **已知取舍**：setext（`标题\n====`）不算标题，所以纯 setext 组织的笔记正文面为空。
+   * 改它会连带改变笔记的标题（`firstHeading` 与索引同源），那是另一件事。
+   */
+  it('CF-16 setext 不算标题：纯 setext 的正文返回空数组', () => {
+    expect(headingsOf('Title\n=====\n\nbody\n')).toEqual([])
+    expect(headingsOf('Sub\n---\n\nbody\n')).toEqual([])
+    // 同一篇里的 ATX 照常算，setext 那一行仍然不算
+    expect(textsOf('Setext\n======\n\n## Atx\n')).toEqual(['Atx'])
+  })
+
+  it('CF-17 围栏内的标题一律跳过，围栏按 CommonMark 闭合', () => {
+    const table: [string, string[]][] = [
+      ['```\n# Inner\n```\n# Real\n', ['Real']],
+      ['~~~\n# Inner\n~~~\n# Real\n', ['Real']],
+      // 闭栏可以比开栏长
+      ['```\n# Inner\n````\n# Real\n', ['Real']],
+      // 闭栏不能比开栏短
+      ['````\n```\n# Inner\n```\n````\n# Real\n', ['Real']],
+      // 带 info string 的那一行不是闭栏
+      ['```\n```js\n# Inner\n```\n# Real\n', ['Real']],
+      // 未闭合：吃到文末
+      ['# Before\n```\n# Inner\n', ['Before']],
+      // 围栏本身可以有三格缩进
+      ['   ```\n# Inner\n   ```\n# Real\n', ['Real']]
+    ]
+    for (const [body, expected] of table) {
+      expect(textsOf(body), JSON.stringify(body)).toEqual(expected)
+    }
+  })
+
+  it('CF-18 info string 含反引号的那一行不是开栏；`~~~` 与 ``` 互不闭合', () => {
+    // 行内代码，不是开栏 —— 后面的标题照常算
+    expect(textsOf('```code```\n# Real\n')).toEqual(['Real'])
+    // 反引号围栏的 info string 里不许有反引号，波浪围栏的可以
+    expect(textsOf('~~~js`x`\n# Inner\n~~~\n# Real\n')).toEqual(['Real'])
+    // 互不闭合：另一种字符的那一行只是围栏里的一行普通文本
+    expect(textsOf('~~~\n# A\n```\n# B\n~~~\n# C\n')).toEqual(['C'])
+    expect(textsOf('```\n# A\n~~~\n# B\n```\n# C\n')).toEqual(['C'])
+  })
+
+  it('CF-19 CRLF 正文：标题文字不带尾随 `\\r`', () => {
+    expect(pairs('# One\r\n\r\nprose\r\n## Two\r\n')).toEqual([
+      [1, 'One'],
+      [2, 'Two']
+    ])
+    // 围栏判定同样按 CRLF 切行
+    expect(textsOf('```\r\n# Inner\r\n```\r\n# Real\r\n')).toEqual(['Real'])
+  })
+
+  it('CF-20 firstHeading = headingsOf 里第一个 `level === 1`', () => {
+    expect(firstHeading('## Sub\n\n# Real\n\n# Later\n')).toBe('Real')
+    // 全篇只有二级标题：没有一级标题
+    expect(firstHeading('## Sub\n\n### Deeper\n')).toBeUndefined()
+    expect(firstHeading('body only\n')).toBeUndefined()
+    // 两者同源：firstHeading 恒是 headingsOf 里第一个一级标题
+    for (const body of ['## Sub\n# Real\n', '# A\n## B\n# C\n', '## only\n']) {
+      expect(firstHeading(body), JSON.stringify(body)).toBe(
+        headingsOf(body).find((h) => h.level === 1)?.text
+      )
+    }
+  })
+
+  it('CF-21 不做 markdown 解析：链接 / 行内代码 / 强调在标题文字里原样保留', () => {
+    expect(
+      textsOf(
+        [
+          '# See [the docs](https://example.com/a)',
+          '## Use `readKnowledgeNote` here',
+          '### **Bold** and _italic_'
+        ].join('\n')
+      )
+    ).toEqual([
+      'See [the docs](https://example.com/a)',
+      'Use `readKnowledgeNote` here',
+      '**Bold** and _italic_'
+    ])
+  })
+
+  it('CF-22 只认行首 ATX：引用块与列表里的 `#` 不算', () => {
+    const table: [string, string[]][] = [
+      ['> # quoted\n', []],
+      ['- # in a list\n', []],
+      ['* # in a list\n', []],
+      ['1. # numbered\n', []],
+      ['text # not at line start\n', []],
+      // 对照：同一篇里真正行首的那一个照常算
+      ['> # quoted\n\n# real\n', ['real']]
+    ]
+    for (const [body, expected] of table) {
+      expect(textsOf(body), JSON.stringify(body)).toEqual(expected)
+    }
+  })
+
+  it('CF-23 不截断、不去重：超长标题原样带出，全是标题的正文条数与顺序都对得上', () => {
+    const long = 'x'.repeat(5000)
+    expect(textsOf(`# ${long}\n`)).toEqual([long])
+
+    const headings: BodyHeading[] = Array.from({ length: 200 }, (_, i) => ({
+      level: (i % 6) + 1,
+      // 每三条重复一次标题文字：去重会让条数对不上
+      text: `Heading ${i % 3}`
+    }))
+    const body = headings.map((h) => `${'#'.repeat(h.level)} ${h.text}`).join('\n\n')
+    expect(headingsOf(body)).toEqual(headings)
   })
 })
