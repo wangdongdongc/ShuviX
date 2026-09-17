@@ -34,9 +34,23 @@ export function defaultSshConfigPath(): string {
   return join(homedir(), '.ssh', 'config')
 }
 
-/** `Host` 的模式项不是可连的别名：通配、否定、纯缺省块 */
+/**
+ * `Host` 的模式项不是可连的别名：通配、否定、纯缺省块。
+ *
+ * **以 `-` 开头的一律排除**，这不是洁癖：别名会原样进 `ssh` 的 argv，而
+ * `Host -oProxyCommand=…` 是一份配置可以合法写出的东西。真跑一遍就会发现
+ * `ssh -oProxyCommand=touch X <cmd>` 会在**本地**执行那条命令，而安全门看到的是
+ * `<cmd>` —— 询问卡片上写着一条无害的命令，跑的却是别的。所以这类记号既不进
+ * `list-hosts` 的清单，也过不了 resolveAlias 的复核（两道，见那里的注）。
+ */
 function isConnectableAlias(token: string): boolean {
-  return token.length > 0 && !token.startsWith('!') && !token.includes('*') && !token.includes('?')
+  return (
+    token.length > 0 &&
+    !token.startsWith('!') &&
+    !token.startsWith('-') &&
+    !token.includes('*') &&
+    !token.includes('?')
+  )
 }
 
 /** 把一行拆成 keyword + 剩余部分（OpenSSH 允许空白或 `=` 分隔，keyword 大小写不敏感） */

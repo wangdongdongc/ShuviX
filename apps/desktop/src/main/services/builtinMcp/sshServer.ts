@@ -38,6 +38,8 @@ const log = createLogger('mcp:ssh')
 const MAX_LISTED_HOSTS = 200
 /** exec 默认超时（秒） */
 const DEFAULT_TIMEOUT_SEC = 120
+/** exec 超时上限（秒，1 小时） */
+const MAX_TIMEOUT_SEC = 3600
 
 const EXEC_TOOL = {
   name: 'exec',
@@ -55,7 +57,7 @@ const EXEC_TOOL = {
       },
       timeout: {
         type: 'integer',
-        description: `Timeout in seconds (default ${DEFAULT_TIMEOUT_SEC}).`
+        description: `Timeout in seconds (default ${DEFAULT_TIMEOUT_SEC}, max ${MAX_TIMEOUT_SEC}).`
       }
     },
     required: ['host', 'command', 'description'],
@@ -189,6 +191,9 @@ export async function createSshMcpServer(
   const resolveAlias = (host: unknown): SshHostEntry | string => {
     const { configPath, hosts } = readConfig()
     if (typeof host !== 'string' || host.trim() === '') return 'A `host` alias is required.'
+    // 复核而非依赖枚举：枚举与校验是两件事，写在两处才叫两道。以 `-` 开头的记号
+    // 进了 argv 就是 ssh 的选项（`-oProxyCommand=…` = 本地执行），务必在这里也拦一次。
+    if (host.startsWith('-')) return `"${host}" is not a usable host alias.`
     const found = hosts.find((h) => h.alias === host)
     if (found) return found
     const known = hosts.map((h) => h.alias)
@@ -239,8 +244,13 @@ export async function createSshMcpServer(
     if (typeof alias === 'string') return err(alias)
     const command = typeof args.command === 'string' ? args.command : ''
     if (!command.trim()) return err('A `command` is required.')
+    // 上限不是洁癖：setTimeout 的毫秒数超过 2^31-1 会被 Node 截成 1ms，
+    // 于是「我要等很久」反而变成「立刻超时」—— 与模型的意图正好相反。
+    const rawTimeout = args.timeout
     const timeoutSec =
-      typeof args.timeout === 'number' && args.timeout > 0 ? args.timeout : DEFAULT_TIMEOUT_SEC
+      typeof rawTimeout === 'number' && Number.isFinite(rawTimeout) && rawTimeout > 0
+        ? Math.min(Math.floor(rawTimeout), MAX_TIMEOUT_SEC)
+        : DEFAULT_TIMEOUT_SEC
 
     // 命令级安全门。**这是内置服务器相对第三方 server 的实质特权**：它拿得到会话的
     // SecurityContext，于是远端命令走的是和 bash 同一条命令客体（channel: 'ssh'），
@@ -251,7 +261,7 @@ export async function createSshMcpServer(
       requestUserInput: scope.requestUserInput
     })
     const outcome = await security.enforceCommand(
-      { channel: 'ssh', command },
+      { channel: 'ssh', command, host: alias.alias },
       {
         toolCallId,
         toolName: 'mcp__ssh__exec',
@@ -285,7 +295,7 @@ export async function createSshMcpServer(
     // ssh 自身失败（连不上、主机密钥不认）用 255 报出来，翻译成可操作的说明；
     // 远端命令自己的非零退出码不属于这一类，原样带回去让 agent 自己判断
     if (result.exitCode === 255) {
-      const explained = classifySshFailure(alias.alias, result.stderr)
+      const explained = classifySshFailure(alias.alias, result.stderr, result.stdout)
       if (explained) return err(explained)
     }
     if (result.exitCode === 0) announceConnected(alias.alias)

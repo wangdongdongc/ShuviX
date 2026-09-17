@@ -45,6 +45,8 @@ function buildCommandObject(
     command: input.command,
     channel: input.channel
   }
+  // 仅 ssh 有；bash 不写这个键，好让策略用 has(object.host) 区分远端与本地
+  if (input.host) object.host = input.host
   let cached: CommandFactAttrs | null = null
   const facts = (): CommandFactAttrs => {
     if (!cached) {

@@ -83,8 +83,15 @@ interface McpConnection {
   serverName: string
   /** 仅 `inproc`：这份实例归哪条会话 */
   sessionId?: string
-  /** 内置 server（随产品发布）—— 唯一可信 annotations 的那一类 */
-  isBuiltin: boolean
+  /**
+   * annotations 可不可信。
+   *
+   * 判据是 **`type === 'inproc'` 且 isBuiltin** —— 不是光看 isBuiltin：那一位的含义历来是
+   * 「用户不能删改这一行」，而 v10 种的内置 Tavily 是一台 `type: 'http'` 的**远程第三方
+   * endpoint**。只看 isBuiltin，就等于把一串从网上收到的 `readOnlyHint` 当成保证，
+   * 而规范要求恰恰相反。只有跑在进程内、代码随产品发布的那一类才配。
+   */
+  trusted: boolean
 }
 
 /**
@@ -307,7 +314,7 @@ export class McpManager {
       serverId,
       serverName: server.name,
       sessionId: server.type === 'inproc' ? sessionId : undefined,
-      isBuiltin: server.isBuiltin === 1
+      trusted: server.type === 'inproc' && server.isBuiltin === 1
     }
     this.connections.set(key, conn)
 
@@ -563,7 +570,8 @@ export class McpManager {
     const a = mcpTool.annotations
     return {
       // 不可信 server 的 annotations **一条都不落**：策略于是只能写成 fail-safe 的
-      // `!(object.mcpTrusted && object.readOnly)`，而不会把第三方的自述当成保证
+      // `has(object.mcpServer) && !(object.mcpTrusted && object.readOnly)`，
+      // 而不会把第三方的自述当成保证
       mcpMeta: {
         server: serverName,
         tool: mcpTool.name,
@@ -616,9 +624,7 @@ export class McpManager {
   serverToAgentTools(connKey: string): AgentTool<TSchema, McpToolDetails>[] {
     const conn = this.connections.get(connKey)
     if (!conn || conn.status !== 'connected') return []
-    return conn.tools.map((t) =>
-      this.mcpToolToAgentTool(connKey, conn.serverName, t, conn.isBuiltin)
-    )
+    return conn.tools.map((t) => this.mcpToolToAgentTool(connKey, conn.serverName, t, conn.trusted))
   }
 
   /** 所有已连接 Server 的全部 AgentTool（flat） */

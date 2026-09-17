@@ -385,8 +385,14 @@ export interface EnforceOpts {
  *
  * **annotations 的信任规则**（MCP 规范的要求）：客户端必须把**不可信 server** 的 annotations
  * 当作不可信。这里的做法是「可信才给值」—— 第三方 server 的四个 hint 一律不落到客体上，
- * 于是策略只能写成 fail-safe 的形态：`!(object.mcpTrusted && object.readOnly)` 意为
- * 「除非被可信 server 证明是只读，否则就问」。内置能力服务器随产品发布，是可信的那一类。
+ * 于是策略只能写成 fail-safe 的形态。**注意要带 `has()` 守卫**：
+ *
+ *     has(object.mcpServer) && !(object.mcpTrusted && object.readOnly)
+ *
+ * 意为「除非被可信 server 证明是只读，否则就问」。守卫不能省 —— 非 MCP 工具的客体上
+ * 压根没有这些键，裸写 `!(object.mcpTrusted && ...)` 会让 CEL 抛错，而抛错按 fail-safe
+ * 算作命中，于是每一次 read / ls / bash 都弹一张卡。只有跑在进程内、代码随产品发布的
+ * 内置能力服务器才算可信（远程 endpoint 即便标了 isBuiltin 也不算，见 McpConnection.trusted）。
  */
 export interface McpInvocationFacts {
   /** server 名（工具名前缀 `mcp__<server>__*`） */
@@ -408,6 +414,14 @@ export type EnforceOutcome = { status: 'allowed' } | { status: 'feedback'; text:
 export interface CommandObjectInput {
   channel: 'bash' | 'ssh'
   command: string
+  /**
+   * 远端主机别名（仅 ssh）。
+   *
+   * 有它策略才写得出「生产要问、测试放行」，用户也才能在询问卡片上看出这条
+   * `rm -rf` 是要跑在哪台机器上 —— 否则卡片上只有命令，目标只能靠模型自己写的
+   * description，而那段文字在提示注入的场景里正是攻击者控制的。
+   */
+  host?: string
   /**
    * 命令的工作目录 —— 用于把重定向目标解析成绝对路径。
    * ssh 的远端 cwd 不可知，省略即可（相对目标此时保持原样）。

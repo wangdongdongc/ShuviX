@@ -120,7 +120,15 @@ function buildAskMaterials(
     // 给出按钮等于给一个点了不生效的假承诺
     return tier === 'force-ask' ? { command: entry } : { command: entry, rememberEntry: entry }
   }
-  if (typeof object.command === 'string') return { command: object.command }
+  // 远端命令把目标机器写进卡片：用户批准一条 `rm -rf` 时，必须看得见它要跑在哪台机器上
+  if (typeof object.command === 'string') {
+    return {
+      command:
+        typeof object.host === 'string' && object.host
+          ? `ssh ${object.host}: ${object.command}`
+          : object.command
+    }
+  }
   if (typeof object.sql === 'string') return { command: object.sql }
   const tool = request.tool
   if (tool) return { command: tool.operation ? `${tool.name}: ${tool.operation}` : tool.name }

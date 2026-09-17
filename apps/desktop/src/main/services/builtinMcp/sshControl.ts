@@ -15,7 +15,7 @@
  */
 import { spawn } from 'child_process'
 import { createHash } from 'crypto'
-import { mkdirSync, rmSync, existsSync, readdirSync } from 'fs'
+import { mkdirSync, rmSync, existsSync, readdirSync, statSync, chmodSync } from 'fs'
 import { join } from 'path'
 import { userInfo } from 'os'
 import { buildSpawnEnv } from '../../utils/paths'
@@ -57,10 +57,27 @@ function controlPath(sessionId: string, alias: string): string | undefined {
   return join(controlRoot(), hash.slice(0, 16))
 }
 
+/**
+ * 确保 control socket 目录存在且只有自己进得去。
+ *
+ * `mkdirSync` 的 `mode` **只在创建那一刻生效**（而且还要过 umask），目录已存在时
+ * `recursive: true` 是静默的空操作。而这个路径是完全可预测的
+ * （`/tmp/shuvix-ssh-<uid>`），共享机器上别的用户完全可以抢先把它建成 0777 ——
+ * 之后 ShuviX 就会把**活的、已认证的**多路复用 socket 丢进一个别人控制的目录里，
+ * 那等于把身份借出去。所以建完还要复核：不是自己的就拒绝，权限松了就收紧。
+ */
 function ensureControlRoot(): void {
   if (isWindows) return
-  // 0700：socket 目录里躺着的是活的、已认证的连接，别人能连上就等于借用了你的身份
-  mkdirSync(controlRoot(), { recursive: true, mode: 0o700 })
+  const root = controlRoot()
+  mkdirSync(root, { recursive: true, mode: 0o700 })
+  const st = statSync(root)
+  const myUid = typeof process.getuid === 'function' ? process.getuid() : st.uid
+  if (st.uid !== myUid) {
+    throw new Error(
+      `SSH control socket directory ${root} is owned by another user; refusing to use it.`
+    )
+  }
+  if ((st.mode & 0o077) !== 0) chmodSync(root, 0o700)
 }
 
 /**
@@ -183,6 +200,10 @@ export async function sshExec(opts: {
     '-o',
     `ConnectTimeout=${CONNECT_TIMEOUT_SEC}`,
     ...multiplexArgs(sock),
+    // `--` 终止选项解析：即便别名不知怎么以 `-` 开头混了进来，ssh 也只会把它当主机名，
+    // 不会当成 `-oProxyCommand=…` 那种能在**本地**执行命令的选项。与 sshConfig 的过滤
+    // 和 sshServer 的复核构成三道 —— 这条路上一次失手的代价是安全门被整个绕开。
+    '--',
     opts.alias,
     opts.command
   ]
@@ -199,9 +220,10 @@ export async function sshDisconnect(
   const sock = controlPath(sessionId, alias)
   if (!sock || !existsSync(sock)) return false
   try {
-    await runSsh([...configArgs(configPath), '-o', `ControlPath=${sock}`, '-O', 'exit', alias], {
-      timeoutSec: 10
-    })
+    await runSsh(
+      [...configArgs(configPath), '-o', `ControlPath=${sock}`, '-O', 'exit', '--', alias],
+      { timeoutSec: 10 }
+    )
   } catch (err: unknown) {
     log.warn(`disconnect ${alias}: ${err instanceof Error ? err.message : String(err)}`)
   }
@@ -249,24 +271,29 @@ export async function sshCloseSession(
  * 点下去只是安慰；而被提示注入的 agent 正好可以借它把一台中间人机器变成「已信任」。
  * 让用户在自己的终端里连一次，ssh 会把指纹打出来，他能拿别的渠道对照 —— 信任决定留在那里。
  */
-export function classifySshFailure(alias: string, stderr: string): string | undefined {
+export function classifySshFailure(alias: string, stderr: string, stdout = ''): string | undefined {
+  // 255 也可能是**远端命令自己**的退出码。远端一旦有输出，这次调用就确实连上了，
+  // 那 255 就是命令的意思，不是 ssh 的 —— 别把它翻译成「认证失败，去看 ssh-add -l」。
+  if (stdout !== '') return undefined
   const s = stderr.toLowerCase()
-  if (s.includes('host key verification failed') || s.includes('no matching host key')) {
+  if (/^host key verification failed/m.test(s) || s.includes('no matching host key')) {
     return `The host key for "${alias}" is not in the user's known_hosts, so ssh refused to connect. ShuviX will not add it — ask the user to run "ssh ${alias}" once in their own terminal, check the fingerprint it prints, and accept it there. Then retry.`
   }
   if (s.includes('remote host identification has changed')) {
     return `The host key for "${alias}" has CHANGED since it was recorded in known_hosts. That can mean the server was rebuilt — or that the connection is being intercepted. Do not work around it: tell the user and let them resolve it in their own terminal.`
   }
-  if (s.includes('permission denied')) {
+  // ssh 自己的拒绝恒带认证方式清单（`Permission denied (publickey,password).`）；
+  // 远端 shell 的 `Permission denied` 没有那个括号
+  if (/permission denied \(/.test(s)) {
     return `Authentication to "${alias}" was refused (permission denied). ShuviX holds no credentials — ssh uses the user's own keys and agent. Ask the user to check that the right key is loaded ("ssh-add -l") and that "ssh ${alias}" works in their terminal.`
   }
-  if (s.includes('could not resolve hostname') || s.includes('name or service not known')) {
+  if (s.includes('ssh: could not resolve hostname') || s.includes('name or service not known')) {
     return `The hostname configured for "${alias}" could not be resolved.`
   }
-  if (s.includes('connection timed out') || s.includes('operation timed out')) {
+  if (/ssh: .*(connection timed out|operation timed out)/.test(s)) {
     return `Connecting to "${alias}" timed out after ${CONNECT_TIMEOUT_SEC}s.`
   }
-  if (s.includes('connection refused')) {
+  if (/ssh: .*connection refused/.test(s)) {
     return `The SSH port on "${alias}" refused the connection.`
   }
   return undefined
