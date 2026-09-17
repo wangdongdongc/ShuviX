@@ -467,9 +467,10 @@ describe('只读态的外观（DOM）', () => {
       title: SKILL_A_DESC
     })
     expect(await sessionConfig.lockIndicatorCount()).toBe(0)
-    // 说明文字比对的是**两态下的同一句**（读两次比字符串），不钉具体本地化文案
-    const footer = await sessionConfig.footerText()
-    expect(footer).not.toBe('')
+    // 说明文字比对的是**两态下的同一句**（读两次比字符串），不钉具体本地化文案。
+    // 2026-09-17 起它只在悬浮 / 聚焦标题旁的问号时才在 DOM 里（pages.ts 的 SECTION_HINT 负责展开）
+    const hint = await sessionConfig.hintText()
+    expect(hint).not.toBe('')
     await sessionConfig.close()
 
     // ② 运行时建出来：整排按禁用态画，MCP / Skills 两个组名旁各挂一把锁
@@ -485,8 +486,8 @@ describe('只读态的外观（DOM）', () => {
     const lockedHint = extItem(locked, A)?.title ?? ''
     expect(lockedHint).not.toBe(SKILL_A_DESC)
     expect(lockedHint).not.toBe('')
-    // 卡片下方那句话两态完全相同 —— 只读原因从这里搬走了，它不该再随状态变
-    expect(await sessionConfig.footerText()).toBe(footer)
+    // 说明气泡里那句话两态完全相同 —— 只读原因从这里搬走了，它不该再随状态变
+    expect(await sessionConfig.hintText()).toBe(hint)
     await sessionConfig.close()
 
     // ③ 清空（关停运行时）：锁消失，整排重新可改

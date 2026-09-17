@@ -359,7 +359,7 @@ function SshToolPanel(): React.JSX.Element {
                   </span>
                 </div>
               }
-              description={
+              subtitle={
                 <span className="font-mono">
                   {cred.username}@{cred.host}:{cred.port}
                 </span>
@@ -528,7 +528,7 @@ function DatabaseToolPanel(): React.JSX.Element {
                   )}
                 </div>
               }
-              description={
+              subtitle={
                 <span className="font-mono">
                   {cred.username}@{cred.host}:{cred.port}/{cred.database}
                 </span>

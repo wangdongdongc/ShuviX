@@ -44,11 +44,12 @@ const P2_NAME = 'KB-项目二'
 const P3_NAME = 'KB-项目三'
 
 /**
- * 卡片脚注的两句话（三语全收）—— 隔离实例跟系统语言走，断言比的是「是哪一句」而不是哪门语言。
+ * 卡片说明气泡里的两句话（三语全收）—— 隔离实例跟系统语言走，断言比的是「是哪一句」而不是哪门语言。
  * `sessionConfig.knowledgeDefault` = 还没选过（一个都没勾）；`knowledgeDesc` = 已明确设过。
+ * 2026-09-17 起这两句只在悬浮 / 聚焦标题旁的问号时才在 DOM 里（见 pages.ts 的 SECTION_HINT）。
  */
-const FOOTER_DEFAULT = [en, zh, ja].map((l) => l.sessionConfig.knowledgeDefault)
-const FOOTER_EXPLICIT = [en, zh, ja].map((l) => l.sessionConfig.knowledgeDesc)
+const HINT_DEFAULT = [en, zh, ja].map((l) => l.sessionConfig.knowledgeDefault)
+const HINT_EXPLICIT = [en, zh, ja].map((l) => l.sessionConfig.knowledgeDesc)
 
 /** 内置库的人读名（同上，三语全收）—— 侧栏行与配置卡 chip 读的是同一个键 */
 const BUILTIN_NAMES = [en, zh, ja].map((l) => l.knowledge.builtinBaseName)
@@ -254,7 +255,7 @@ describe('会话设置卡与项目对话框（DOM）', () => {
     }
   })
 
-  it('KB-E-4 没设过时一个都没勾、脚注是缺省那一句；有运行时也点得动（扩展能力卡同时只读）；面板开着新建的库跟着长出来', async () => {
+  it('KB-E-4 没设过时一个都没勾、说明是缺省那一句；有运行时也点得动（扩展能力卡同时只读）；面板开着新建的库跟着长出来', async () => {
     const title = 'KB-E4-卡片'
     const live = 'kb-live-dom'
     const sid = await createSession({ title, projectId: p2 })
@@ -276,7 +277,7 @@ describe('会话设置卡与项目对话框（DOM）', () => {
     for (const name of [BASE_A, BASE_B, 'project']) {
       expect(kbItem(items, name), name).toMatchObject({ checked: false, disabled: false })
     }
-    expect(FOOTER_DEFAULT).toContain(await sessionConfig.knowledgeFooter())
+    expect(HINT_DEFAULT).toContain(await sessionConfig.knowledgeHint())
 
     // 同一个弹窗里的扩展能力卡：有运行时 → 只读（两者的语义差别就在这一屏上）
     const ext = await until(async () => {
@@ -285,7 +286,7 @@ describe('会话设置卡与项目对话框（DOM）', () => {
     }, 'extension items listed')
     expect(ext.every((it: ExtItemShot) => it.disabled)).toBe(true)
 
-    // ② 点一下某个 chip：立刻落库（没有锁、不用等关停），脚注换成「已明确设过」那一句。
+    // ② 点一下某个 chip：立刻落库（没有锁、不用等关停），说明换成「已明确设过」那一句。
     // 一个都没勾，所以这一下是**勾上**，写下的就是这一个
     await sessionConfig.toggleKnowledgeBase(BASE_B)
     await until(
@@ -293,8 +294,8 @@ describe('会话设置卡与项目对话框（DOM）', () => {
       `the card wrote the session selection ${JSON.stringify([BASE_B])}`
     )
     await until(
-      async () => FOOTER_EXPLICIT.includes(await sessionConfig.knowledgeFooter()),
-      'footer switched to the explicit sentence'
+      async () => HINT_EXPLICIT.includes(await sessionConfig.knowledgeHint()),
+      'the hint switched to the explicit sentence'
     )
 
     // ③ 面板开着的时候就地建一个库（侧栏的「新建知识库」走同一条路）→ 候选跟着长出来
@@ -361,7 +362,7 @@ describe('会话设置卡与项目对话框（DOM）', () => {
       expect(it, it.name).toMatchObject({ checked: false })
     }
     // 项目设过 = 有人明确设过：界面上不该再说「还没选过」
-    expect(FOOTER_EXPLICIT).toContain(await sessionConfig.knowledgeFooter())
+    expect(HINT_EXPLICIT).toContain(await sessionConfig.knowledgeHint())
     await sessionConfig.close()
   })
 

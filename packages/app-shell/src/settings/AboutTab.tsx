@@ -147,7 +147,7 @@ export function AboutTab(props: AboutTabProps): React.JSX.Element {
         <SettingsSection title={t('about.updateGroup')}>
           <SettingsRow
             title={t('about.checkUpdate')}
-            description={statusDesc || undefined}
+            subtitle={statusDesc || undefined}
             control={renderUpdateAction()}
           />
           <SettingsRow

@@ -1126,18 +1126,45 @@ const EXT_ITEMS = (scope: string): string =>
   })`
 
 /**
- * scope 内扩展能力卡的脚注文案（SettingsSection 的 footer）。没有这张卡、或没有脚注时回空串。
+ * 分节说明气泡里的文案：从分节里的某个锚点元素出发，找到标题旁那个问号（`data-info-hint`），
+ * 悬上去让它展开，读气泡（`data-info-tip`，portal 到 body 上）的文字，再移开收起。没有这张卡、
+ * 或这一节没有说明时回空串。
  *
- * 判据与知识库卡同款：脚注是分节的最后一个子节点，且必然不含条目。
+ * 2026-09-17 之前这些说明是铺在页面上的文字（SettingsSection 的 description / footer），
+ * 拿「分节的最后一个子节点」就能读到；现在它们只在悬浮 / 聚焦时才存在，所以只能这样读。
+ * 气泡是异步上屏的（事件 → setState → 重渲染），这里自带一小段轮询。
  */
-const EXT_FOOTER = (scope: string): string =>
-  `(() => {
-    const label = ${scope}?.querySelector('label[data-ext-item]')
-    const section = label?.closest('section')
-    const last = section?.lastElementChild
-    if (!last || last.contains(label)) return ''
-    return (last.textContent ?? '').trim()
+const SECTION_HINT = (anchor: string): string =>
+  `(async () => {
+    const section = (${anchor})?.closest('section')
+    // 只认标题那一行的问号：卡片里的行可能各有各的问号，document 序上都排在它后面
+    const header = section?.querySelector('h3')?.parentElement
+    const btn = header?.querySelector('[data-info-hint]')
+    if (!btn) return ''
+    // 走**悬浮**那条路，不走聚焦：气泡失焦即收起，而这一刻别处（弹窗挂载时的自动聚焦、异步数据
+    // 到货后的重渲染）随时可能把焦点抢走 —— 抢走就等于当场收起，先前按 focus() 读的版本因此每隔
+    // 几次就空手而归。悬浮态只由我们自己的 mouseout 结束，抢不走。
+    // React 的 onMouseEnter 是从 mouseover/mouseout 合成的（relatedTarget 在子树外才算「进入」），
+    // 所以派 mouseover 而不是 mouseenter —— 后者 React 根本不监听。
+    const fire = (type) =>
+      btn.dispatchEvent(
+        new MouseEvent(type, { bubbles: true, cancelable: true, relatedTarget: document.body })
+      )
+    let text = ''
+    for (let attempt = 0; attempt < 5 && !text; attempt++) {
+      fire('mouseover')
+      for (let i = 0; i < 20 && !text; i++) {
+        text = (document.querySelector('[data-info-tip]')?.textContent ?? '').trim()
+        if (!text) await new Promise((r) => setTimeout(r, 10))
+      }
+    }
+    fire('mouseout')
+    return text
   })()`
+
+/** scope 内扩展能力卡的说明文案（标题旁的问号气泡）。没有这张卡、或没有说明时回空串。 */
+const EXT_HINT = (scope: string): string =>
+  SECTION_HINT(`${scope}?.querySelector('label[data-ext-item]')`)
 
 /**
  * 等 scope 内某个扩展能力条目上屏（条目随 `tools.list` 异步到），再点它的勾选框。
@@ -1207,20 +1234,13 @@ async function toggleKnowledgeIn(
 }
 
 /**
- * scope 内知识库卡的脚注文案（SettingsSection 的 footer）。没有这张卡、或这张卡没有脚注时回空串。
+ * scope 内知识库卡的说明文案（标题旁的问号气泡）。没有这张卡、或没有说明时回空串。
  *
- * 「还没选过（勾的是缺省）」与「这条会话自己选过」正是靠它区分的 —— 断言方比对的是文案本身
+ * 「还没选过（一个都没勾）」与「这条会话自己选过」正是靠它区分的 —— 断言方比对的是文案本身
  * （三语取自 chat-protocol 的语言包），不是这里的结构。
  */
-const KNOWLEDGE_FOOTER = (scope: string): string =>
-  `(() => {
-    const label = ${scope}?.querySelector('label[data-knowledge-base]')
-    const section = label?.closest('section')
-    const last = section?.lastElementChild
-    // 脚注是分节的最后一个子节点，且必然不含条目（含条目的那个是卡片本身 = 没有脚注）
-    if (!last || last.contains(label)) return ''
-    return (last.textContent ?? '').trim()
-  })()`
+const KNOWLEDGE_HINT = (scope: string): string =>
+  SECTION_HINT(`${scope}?.querySelector('label[data-knowledge-base]')`)
 
 export interface SessionConfigPane {
   /** 等弹窗上屏 */
@@ -1245,14 +1265,14 @@ export interface SessionConfigPane {
    * 可改时一把都没有。
    */
   lockIndicatorCount(): Promise<number>
-  /** 扩展能力卡下方的说明文字：它是**恒定**的一句（只读原因不再挤进这里，改走悬停提示） */
-  footerText(): Promise<string>
+  /** 扩展能力卡的说明文字（标题旁的问号气泡）：它是**恒定**的一句，不随只读态变 */
+  hintText(): Promise<string>
   /** 弹窗里知识库卡的候选项（DOM 序；同样只在弹窗面板内找，口径同 extItems） */
   knowledgeItems(): Promise<KnowledgeItemShot[]>
   /** 点弹窗里某个知识库候选项的勾选框（这张卡不随 Agent 上锁，任何时候都点得动） */
   toggleKnowledgeBase(name: string): Promise<void>
-  /** 知识库卡的脚注文案（「还没选过」与「已明确设过」两句的判据） */
-  knowledgeFooter(): Promise<string>
+  /** 知识库卡的说明文案（「还没选过」与「已明确设过」两句的判据） */
+  knowledgeHint(): Promise<string>
 }
 
 /** 会话配置弹窗（SessionConfigDialog；由行菜单的 session-config 拉起） */
@@ -1282,10 +1302,10 @@ export function sessionConfigPane(main: CdpClient): SessionConfigPane {
     toggleExt: (key) => toggleExtIn(main, PANEL, key, 'session config dialog'),
     lockIndicatorCount: () =>
       main.eval<number>(`${PANEL}?.querySelectorAll('[data-ext-lock]').length ?? 0`),
-    footerText: () => main.eval<string>(EXT_FOOTER(PANEL)),
+    hintText: () => main.eval<string>(EXT_HINT(PANEL)),
     knowledgeItems: () => main.eval<KnowledgeItemShot[]>(KNOWLEDGE_ITEMS(PANEL)),
     toggleKnowledgeBase: (name) => toggleKnowledgeIn(main, PANEL, name, 'session config dialog'),
-    knowledgeFooter: () => main.eval<string>(KNOWLEDGE_FOOTER(PANEL))
+    knowledgeHint: () => main.eval<string>(KNOWLEDGE_HINT(PANEL))
   }
 }
 

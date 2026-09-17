@@ -1,11 +1,141 @@
-import { ChevronDown } from 'lucide-react'
-import type { ReactNode } from 'react'
+import { ChevronDown, CircleHelp } from 'lucide-react'
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode
+} from 'react'
+import { createPortal } from 'react-dom'
+import { useTranslation } from 'react-i18next'
 
 /**
- * 设置页通用基元：分节标题 + 圆角卡片 + 行式条目（左标题/描述，右控件）。
+ * 设置页通用基元：分节标题 + 圆角卡片 + 行式条目（左标题/说明，右控件）。
  *
  * 设计与 SessionConfigPanel 保持一致，可被 GeneralSettings / 其他设置 Tab 共用。
+ *
+ * **说明文字一律收进问号气泡**（2026-09-17）：`description` / `footer` 不再铺成正文，而是标题旁一个
+ * 小问号，悬浮或聚焦才展开。设置页的说明多是「这个开关是干嘛的」，一屏铺满灰字之后，真正要找的那一行
+ * 开关反而被埋住；收起来之后一屏只剩标题与控件，要看解释的人一眼知道去点哪。
+ *
+ * 少数 `description` 并不是解释，而是这一行自己的内容（SSH 凭据的 `user@host`、更新检查的当前状态）——
+ * 那些走 `subtitle`，照旧铺成一行文字。判据很简单：**收起来之后这一行还说得清自己是谁**，就该收起来。
  */
+
+/** 气泡与触发点之间留的空隙（px） */
+const HINT_GAP = 6
+/** 气泡到视口边缘的最小距离（px） */
+const HINT_MARGIN = 8
+
+/**
+ * 说明气泡：一个小问号，悬浮（或键盘聚焦）才展开说明。
+ *
+ * **为什么是 portal + fixed**：设置卡片本身是 `overflow-hidden` 的圆角容器，行内绝对定位的气泡会被
+ * 裁掉半截；挂到 body 上、按触发点现算坐标，就不受任何祖先的裁剪与层叠影响。
+ *
+ * 滚动与改窗口大小时**重新定位，不收起**：`focus()` 本身会把按钮滚进视野，若滚动即收起，键盘 Tab
+ * 过来的人刚展开就被自己那一下滚动关掉（e2e 的 UIF-E-1 正是撞在这上面）。锚点整个滚出视野时才藏起来。
+ *
+ * 可及性：问号是真的 `<button>`（能 Tab 到），聚焦即展开，Esc 收起；气泡以 `aria-describedby`
+ * 挂在按钮上，读屏把它当这个按钮的说明来念，而不是页面上多出来的一段散文。
+ */
+export function InfoHint({ hint }: { hint: ReactNode }): React.JSX.Element {
+  const { t } = useTranslation()
+  const [open, setOpen] = useState(false)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const tipRef = useRef<HTMLDivElement>(null)
+  const id = useId()
+
+  const close = useCallback(() => setOpen(false), [])
+
+  /**
+   * 坐标直接写在 DOM 上，不进 state：气泡是自适应宽度的，只有挂上去量过才知道往哪放，而「量完再
+   * setState 重渲染一次」既是级联渲染（lint 拦的正是这个），又会先在 (0,0) 画一帧。
+   * 配合 `useLayoutEffect`（浏览器绘制**之前**同步跑），用户看到的第一帧就已经在位。
+   * React 不管这三个属性（元素上没有 `style`），也就不会在下一次渲染时把它们抹掉。
+   */
+  const place = useCallback((): void => {
+    const trigger = triggerRef.current
+    const tip = tipRef.current
+    if (!trigger || !tip) return
+    const anchor = trigger.getBoundingClientRect()
+    // 锚点整个滚出视野：留在原地会变成一段飘在无关内容上的说明，藏起来更诚实
+    if (anchor.bottom < 0 || anchor.top > window.innerHeight) {
+      tip.style.visibility = 'hidden'
+      return
+    }
+    const box = tip.getBoundingClientRect()
+    const left = Math.min(
+      Math.max(HINT_MARGIN, anchor.left + anchor.width / 2 - box.width / 2),
+      Math.max(HINT_MARGIN, window.innerWidth - box.width - HINT_MARGIN)
+    )
+    const below = anchor.bottom + HINT_GAP
+    // 下方放不下就翻到上方；两边都放不下时仍取下方，让它自己滚
+    const fits = below + box.height <= window.innerHeight - HINT_MARGIN
+    const top = fits ? below : Math.max(HINT_MARGIN, anchor.top - HINT_GAP - box.height)
+    tip.style.top = `${top}px`
+    tip.style.left = `${left}px`
+    tip.style.visibility = 'visible'
+  }, [])
+
+  useLayoutEffect(() => {
+    if (open) place()
+  }, [open, hint, place])
+
+  useEffect(() => {
+    if (!open) return
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') close()
+    }
+    // capture：说明多半在某个内部滚动容器里，滚动事件不冒泡到 window
+    window.addEventListener('scroll', place, true)
+    window.addEventListener('resize', place)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('scroll', place, true)
+      window.removeEventListener('resize', place)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [open, close, place])
+
+  return (
+    <>
+      <button
+        ref={triggerRef}
+        type="button"
+        data-info-hint
+        aria-label={t('common.info')}
+        // 标准 tooltip 接法：气泡是这个按钮的**说明**。刻意不写 aria-expanded —— 那是展开/收起
+        // 一块内容的控件才有的语义，会让读屏把它念成一个可操作的开关
+        aria-describedby={open ? id : undefined}
+        onMouseEnter={() => setOpen(true)}
+        onMouseLeave={close}
+        onFocus={() => setOpen(true)}
+        onBlur={close}
+        // 说明不是操作：点问号什么都不发生，免得它在可点的行里被当成按钮
+        onClick={(e) => e.preventDefault()}
+        className="inline-flex shrink-0 items-center rounded text-text-tertiary/70 hover:text-text-secondary transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60"
+      >
+        <CircleHelp size={12} />
+      </button>
+      {open &&
+        createPortal(
+          <div
+            ref={tipRef}
+            id={id}
+            data-info-tip
+            role="tooltip"
+            className="fixed top-0 left-0 z-[70] w-max max-w-[280px] px-2.5 py-1.5 rounded-lg border border-border-secondary bg-bg-primary shadow-lg text-[11px] leading-relaxed text-text-secondary pointer-events-none"
+          >
+            {hint}
+          </div>,
+          document.body
+        )}
+    </>
+  )
+}
 
 export function SettingsSection({
   title,
@@ -16,21 +146,30 @@ export function SettingsSection({
   children
 }: {
   title: ReactNode
+  /** 这一节是干嘛的 —— 收进标题旁的问号气泡 */
   description?: ReactNode
   headerAction?: ReactNode
-  /** 渲染在分组标题与卡片之间的内容（例如警告 callout） */
+  /** 渲染在分组标题与卡片之间的内容（例如警告 callout）—— 不是说明，照旧铺在卡片上方 */
   preamble?: ReactNode
+  /** 卡片的补充说明 —— 与 description 同进一个气泡（两者都给时按先后叠成两段） */
   footer?: ReactNode
   children: ReactNode
 }): React.JSX.Element {
+  // 两个都是「这一节的说明」，只是历史上落在标题下方与卡片下方；收进气泡之后没有理由再分两处
+  const hint =
+    description || footer ? (
+      <div className="space-y-1.5">
+        {description && <div>{description}</div>}
+        {footer && <div>{footer}</div>}
+      </div>
+    ) : null
+
   return (
     <section>
       <div className="flex items-start justify-between mb-2 px-1 gap-3">
-        <div className="min-w-0">
+        <div className="min-w-0 flex items-center gap-1.5">
           <h3 className="text-[13px] font-semibold text-text-primary">{title}</h3>
-          {description && (
-            <p className="text-[11px] text-text-tertiary mt-0.5 leading-relaxed">{description}</p>
-          )}
+          {hint && <InfoHint hint={hint} />}
         </div>
         {headerAction && <div className="shrink-0">{headerAction}</div>}
       </div>
@@ -38,9 +177,6 @@ export function SettingsSection({
       <div className="rounded-xl border border-border-secondary/60 bg-bg-secondary/30 overflow-hidden divide-y divide-border-secondary/40">
         {children}
       </div>
-      {footer && (
-        <div className="text-[10px] text-text-tertiary mt-2 px-1 leading-relaxed">{footer}</div>
-      )}
     </section>
   )
 }
@@ -48,11 +184,15 @@ export function SettingsSection({
 export function SettingsRow({
   title,
   description,
+  subtitle,
   icon,
   control
 }: {
   title: ReactNode
+  /** 这一行是干嘛的 —— 收进标题旁的问号气泡 */
   description?: ReactNode
+  /** 这一行**自己的内容**（凭据的 user@host、当前更新状态）—— 照旧铺成标题下的一行字 */
+  subtitle?: ReactNode
   icon?: ReactNode
   control?: ReactNode
 }): React.JSX.Element {
@@ -62,9 +202,10 @@ export function SettingsRow({
         <div className="flex items-center gap-1.5 text-[13px] text-text-primary">
           {icon}
           {title}
+          {description && <InfoHint hint={description} />}
         </div>
-        {description && (
-          <div className="text-[11px] text-text-tertiary mt-0.5 leading-relaxed">{description}</div>
+        {subtitle && (
+          <div className="text-[11px] text-text-tertiary mt-0.5 leading-relaxed">{subtitle}</div>
         )}
       </div>
       {control && <div className="shrink-0">{control}</div>}
@@ -79,21 +220,28 @@ export function SettingsRow({
 export function SettingsBlock({
   label,
   description,
+  subtitle,
   children
 }: {
   label?: ReactNode
+  /** 这一块是干嘛的 —— 收进标签旁的问号气泡（没有标签时问号自己占一行） */
   description?: ReactNode
+  /** 这一块**自己的内容** —— 照旧铺成标签下的一行字 */
+  subtitle?: ReactNode
   children: ReactNode
 }): React.JSX.Element {
   return (
     <div className="px-4 py-3 space-y-2">
-      {(label || description) && (
+      {(label || description || subtitle) && (
         <div className="min-w-0">
-          {label && <div className="text-[13px] text-text-primary">{label}</div>}
-          {description && (
-            <div className="text-[11px] text-text-tertiary mt-0.5 leading-relaxed">
-              {description}
+          {(label || description) && (
+            <div className="flex items-center gap-1.5 text-[13px] text-text-primary">
+              {label}
+              {description && <InfoHint hint={description} />}
             </div>
+          )}
+          {subtitle && (
+            <div className="text-[11px] text-text-tertiary mt-0.5 leading-relaxed">{subtitle}</div>
           )}
         </div>
       )}
