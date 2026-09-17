@@ -563,6 +563,24 @@ export const migrations: Migration[] = [
       db.exec(`DELETE FROM sessions WHERE projectId = '__wiki__'`)
       db.exec(`DELETE FROM projects WHERE id = '__wiki__'`)
     }
+  },
+  {
+    version: 22,
+    description: '种子内置能力服务器 ssh（inproc MCP，全局可用、会话默认不勾）',
+    up: (db) => {
+      // 「内置能力服务器」= 随产品发布、跑在进程内、按会话实例化的 MCP server（type: 'inproc'），
+      // 没有 command / url / env 可配，所以除了启用位之外整行只读。
+      //
+      // **isEnabled = 1**，与内置 Tavily（v10，默认 0）刻意不同：Tavily 默认关是因为没填
+      // API key 之前连不上；ssh 不需要任何配置，它该立刻出现在会话的扩展能力列表里让人去勾。
+      // 真正的「默认关」在**会话那一层** —— settings.enabledTools 缺省为空，不勾就没有 ssh。
+      const now = Date.now()
+      db.prepare(
+        `INSERT OR IGNORE INTO mcp_servers
+           (id, name, type, command, args, env, url, headers, metadata, isEnabled, isBuiltin, cachedTools, createdAt, updatedAt)
+         VALUES (?, 'ssh', 'inproc', '', '[]', '{}', '', '{}', '{}', 1, 1, '[]', ?, ?)`
+      ).run('builtin-mcp-ssh', now, now)
+    }
   }
 ]
 

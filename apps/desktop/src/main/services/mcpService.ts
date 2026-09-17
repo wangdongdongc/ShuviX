@@ -14,6 +14,7 @@ import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 import type { McpServer } from '@shuvix/chat-protocol/types/mcp'
 import { mcpDao } from '../dao/mcpDao'
+import { BUILTIN_MCP_FACTORIES } from './builtinMcp'
 import { buildSpawnEnv } from '../utils/paths'
 import { createLogger } from '../logger'
 
@@ -42,6 +43,9 @@ function parseJsonObject(json: string): Record<string, string> {
  * 在 `registerBuiltinMcpServers()` 里填充 —— 放在独立模块，避免本文件反向依赖上层服务。
  */
 export const builtinMcpRegistry = new BuiltinMcpRegistry()
+for (const [name, factory] of Object.entries(BUILTIN_MCP_FACTORIES)) {
+  builtinMcpRegistry.register(name, factory)
+}
 
 /** 桌面 transport 工厂：stdio（本地进程）+ http（Streamable HTTP，失败回退 SSE）+ inproc（内置） */
 function createTransport(
