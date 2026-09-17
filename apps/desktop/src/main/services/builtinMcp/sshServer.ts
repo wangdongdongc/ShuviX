@@ -22,12 +22,17 @@ import type { BuiltinMcpFactory } from '@shuvix/agent-runtime'
 import { listSshHosts, defaultSshConfigPath, type SshHostEntry } from './sshConfig'
 import {
   sshExec,
+  sshCopy,
+  sshSync,
   sshDisconnect,
   sshConnectedAliases,
   sshCloseSession,
-  classifySshFailure
+  classifySshFailure,
+  rsyncAvailable,
+  type TransferDirection
 } from './sshControl'
-import { getDesktopSecurityContext, TOOL_ABORTED } from '../toolContext'
+import { getDesktopSecurityContext, resolveProjectConfig, TOOL_ABORTED } from '../toolContext'
+import { isAbsolute, resolve as resolvePath } from 'path'
 import { sanitizeBinaryOutput, collapseProgressOutput } from '../../utils/toolUtils/shell'
 import type { DesktopBuiltinMcpScope } from './types'
 import { createLogger } from '../../logger'
@@ -67,6 +72,95 @@ const EXEC_TOOL = {
     title: 'Run a command over SSH',
     readOnlyHint: false,
     // 远端命令能做任何事 —— 这条提示是给策略用的，别因为「多数命令只是看看」就调软
+    destructiveHint: true,
+    idempotentHint: false,
+    openWorldHint: true
+  }
+}
+
+/** 传输类工具共用的参数形状 */
+const transferSchema = (localDesc: string, remoteDesc: string): Record<string, unknown> => ({
+  type: 'object' as const,
+  properties: {
+    host: { type: 'string', description: 'A host alias from list-hosts.' },
+    localPath: { type: 'string', description: localDesc },
+    remotePath: { type: 'string', description: remoteDesc },
+    timeout: {
+      type: 'integer',
+      description: `Timeout in seconds (default ${DEFAULT_TIMEOUT_SEC}, max ${MAX_TIMEOUT_SEC}).`
+    }
+  },
+  required: ['host', 'localPath', 'remotePath'],
+  additionalProperties: false
+})
+
+const UPLOAD_TOOL = {
+  name: 'upload',
+  title: 'Copy a file to a remote machine',
+  description:
+    "Copy one local file to a remote machine over the same reused connection. `host` must be an alias from list-hosts. The local path is checked against this session's file-access policies exactly as a local read would be.",
+  inputSchema: transferSchema(
+    'Local file to send. Relative paths resolve against the session working directory.',
+    'Destination path on the remote machine.'
+  ),
+  annotations: {
+    title: 'Copy a file to a remote machine',
+    readOnlyHint: false,
+    destructiveHint: true,
+    idempotentHint: true,
+    openWorldHint: true
+  }
+}
+
+const DOWNLOAD_TOOL = {
+  name: 'download',
+  title: 'Copy a file from a remote machine',
+  description:
+    "Copy one remote file to this machine over the same reused connection. `host` must be an alias from list-hosts. The local destination is checked against this session's file-access policies exactly as a local write would be.",
+  inputSchema: transferSchema(
+    'Local destination. Relative paths resolve against the session working directory.',
+    'File to fetch from the remote machine.'
+  ),
+  annotations: {
+    title: 'Copy a file from a remote machine',
+    readOnlyHint: false,
+    destructiveHint: true,
+    idempotentHint: true,
+    openWorldHint: true
+  }
+}
+
+const SYNC_TOOL = {
+  name: 'sync',
+  title: 'Sync a directory over SSH',
+  description:
+    'Mirror a directory between this machine and a remote one with rsync, over the same reused connection. `direction` is "up" (local to remote) or "down". Only offered when rsync exists on this machine — Windows has none and macOS 15 ships openrsync, whose options differ.',
+  inputSchema: {
+    type: 'object' as const,
+    properties: {
+      host: { type: 'string', description: 'A host alias from list-hosts.' },
+      localPath: {
+        type: 'string',
+        description:
+          'Local directory. Relative paths resolve against the session working directory.'
+      },
+      remotePath: { type: 'string', description: 'Remote directory.' },
+      direction: {
+        type: 'string',
+        enum: ['up', 'down'],
+        description: '"up" sends the local directory to the remote one; "down" is the reverse.'
+      },
+      timeout: {
+        type: 'integer',
+        description: `Timeout in seconds (default ${DEFAULT_TIMEOUT_SEC}, max ${MAX_TIMEOUT_SEC}).`
+      }
+    },
+    required: ['host', 'localPath', 'remotePath', 'direction'],
+    additionalProperties: false
+  },
+  annotations: {
+    title: 'Sync a directory over SSH',
+    readOnlyHint: false,
     destructiveHint: true,
     idempotentHint: false,
     openWorldHint: true
@@ -134,6 +228,17 @@ const LIST_HOSTS_TOOL = {
   }
 }
 
+/**
+ * 超时取值。**两头都要夹住，而且是同一类错误**：上限是因为 setTimeout 的毫秒数超过
+ * 2^31-1 会被 Node 截成 1ms（「我要等很久」变成「立刻超时」）；下限是因为 floor 会把
+ * 0.5 变成 0（`setTimeout(0)` 同样立刻就烧）。两端都让模型拿到与它意图相反的结果。
+ */
+function clampTimeout(raw: unknown): number {
+  return typeof raw === 'number' && Number.isFinite(raw) && raw > 0
+    ? Math.min(Math.max(Math.floor(raw), 1), MAX_TIMEOUT_SEC)
+    : DEFAULT_TIMEOUT_SEC
+}
+
 /** 人读的一行：`alias  →  user@hostname:port` */
 function formatHost(h: { alias: string; hostname?: string; user?: string; port?: number }): string {
   const target = [h.user ? `${h.user}@` : '', h.hostname ?? '', h.port ? `:${h.port}` : '']
@@ -167,7 +272,15 @@ export async function createSshMcpServer(
   )
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: [LIST_HOSTS_TOOL, EXEC_TOOL, DISCONNECT_TOOL]
+    // `sync` 探测到 rsync 才声明：一个跑不起来的工具只会让模型在上面反复撞墙
+    tools: [
+      LIST_HOSTS_TOOL,
+      EXEC_TOOL,
+      UPLOAD_TOOL,
+      DOWNLOAD_TOOL,
+      ...((await rsyncAvailable()) ? [SYNC_TOOL] : []),
+      DISCONNECT_TOOL
+    ]
   }))
 
   /** 每次调用现读配置：用户可能刚改过 ~/.ssh/config，缓存在实例上只会让人困惑 */
@@ -244,14 +357,7 @@ export async function createSshMcpServer(
     if (typeof alias === 'string') return err(alias)
     const command = typeof args.command === 'string' ? args.command : ''
     if (!command.trim()) return err('A `command` is required.')
-    // 两头都要夹住，而且是同一类错误：上限是因为 setTimeout 的毫秒数超过 2^31-1 会被
-    // Node 截成 1ms（「我要等很久」变成「立刻超时」）；下限是因为 floor 会把 0.5 变成 0
-    // （`setTimeout(0)` 同样立刻就烧）。两端都让模型拿到与它意图相反的结果。
-    const rawTimeout = args.timeout
-    const timeoutSec =
-      typeof rawTimeout === 'number' && Number.isFinite(rawTimeout) && rawTimeout > 0
-        ? Math.min(Math.max(Math.floor(rawTimeout), 1), MAX_TIMEOUT_SEC)
-        : DEFAULT_TIMEOUT_SEC
+    const timeoutSec = clampTimeout(args.timeout)
 
     // 命令级安全门。**这是内置服务器相对第三方 server 的实质特权**：它拿得到会话的
     // SecurityContext，于是远端命令走的是和 bash 同一条命令客体（channel: 'ssh'），
@@ -311,6 +417,115 @@ export async function createSshMcpServer(
     return { content: [{ type: 'text' as const, text: text.trim() || '(no output)' }] }
   }
 
+  /**
+   * 传输类工具的公共部分：核对别名、把本地路径解析成绝对路径、过**文件访问策略**。
+   *
+   * 本地那一侧走 `enforcePath`，与本地读写完全同一条路 —— 于是 `ask-on-read` /
+   * `ask-on-write` / `protect-credentials` / `protect-system` / 项目沙箱对「下载到哪里」
+   * 照样生效。远端那一侧没有可表达的路径词汇，由 L1 门兜着（策略可按 `object.mcpTool` 设门）。
+   */
+  const prepareTransfer = async (
+    args: Record<string, unknown>,
+    direction: TransferDirection,
+    toolName: string,
+    toolCallId: string
+  ): Promise<
+    { error: string } | { alias: string; localAbs: string; remotePath: string; timeoutSec: number }
+  > => {
+    const alias = resolveAlias(args.host)
+    if (typeof alias === 'string') return { error: alias }
+    const localPath = typeof args.localPath === 'string' ? args.localPath.trim() : ''
+    const remotePath = typeof args.remotePath === 'string' ? args.remotePath.trim() : ''
+    if (!localPath) return { error: 'A `localPath` is required.' }
+    if (!remotePath) return { error: 'A `remotePath` is required.' }
+
+    const cwd = resolveProjectConfig(scope.sessionId).workingDirectory
+    const localAbs = isAbsolute(localPath) ? localPath : resolvePath(cwd, localPath)
+
+    const security = getDesktopSecurityContext({
+      sessionId: scope.sessionId,
+      requestUserInput: scope.requestUserInput
+    })
+    try {
+      // up = 本地当源（读），down = 本地当目标（写）
+      await security.enforcePath(direction === 'up' ? 'read' : 'write', localAbs, {
+        toolCallId,
+        toolName,
+        displayPath: localPath,
+        abortError: TOOL_ABORTED,
+        missingChannel: 'deny'
+      })
+    } catch (e: unknown) {
+      return { error: e instanceof Error ? e.message : String(e) }
+    }
+    return { alias: alias.alias, localAbs, remotePath, timeoutSec: clampTimeout(args.timeout) }
+  }
+
+  /** 传输结果的统一收尾：ssh 自身的失败翻译，其余原样 */
+  const transferResult = (
+    alias: string,
+    result: { stdout: string; stderr: string; exitCode: number; timedOut: boolean },
+    what: string,
+    timeoutSec: number
+  ): CallToolResult => {
+    if (result.exitCode === 255) {
+      const explained = classifySshFailure(alias, result.stderr, result.stdout)
+      if (explained) return err(explained)
+    }
+    if (result.timedOut) return err(`${what} timed out after ${timeoutSec}s.`)
+    if (result.exitCode !== 0) {
+      return err(
+        `${what} failed (exit ${result.exitCode}): ${result.stderr.trim() || '(no output)'}`
+      )
+    }
+    announceConnected(alias)
+    const detail = [result.stdout, result.stderr]
+      .filter((t) => t.trim())
+      .join('\n')
+      .trim()
+    return {
+      content: [
+        { type: 'text' as const, text: detail ? `${what} done.\n${detail}` : `${what} done.` }
+      ]
+    }
+  }
+
+  const handleTransfer = async (
+    args: Record<string, unknown>,
+    kind: 'upload' | 'download' | 'sync',
+    toolCallId: string,
+    signal?: AbortSignal
+  ): Promise<CallToolResult> => {
+    let direction: TransferDirection
+    if (kind === 'upload') direction = 'up'
+    else if (kind === 'download') direction = 'down'
+    else {
+      const d = args.direction
+      if (d !== 'up' && d !== 'down') return err('`direction` must be "up" or "down".')
+      direction = d
+    }
+    const prepared = await prepareTransfer(args, direction, `mcp__ssh__${kind}`, toolCallId)
+    if ('error' in prepared) return err(prepared.error)
+    if (signal?.aborted) return err('Aborted')
+
+    const run = kind === 'sync' ? sshSync : sshCopy
+    const result = await run({
+      sessionId: scope.sessionId,
+      alias: prepared.alias,
+      direction,
+      localPath: prepared.localAbs,
+      remotePath: prepared.remotePath,
+      timeoutSec: prepared.timeoutSec,
+      signal,
+      configPath: configPathOverride
+    })
+    const what =
+      kind === 'sync'
+        ? `Sync ${direction === 'up' ? 'to' : 'from'} "${prepared.alias}"`
+        : `${kind === 'upload' ? 'Upload to' : 'Download from'} "${prepared.alias}"`
+    return transferResult(prepared.alias, result, what, prepared.timeoutSec)
+  }
+
   const handleDisconnect = async (args: Record<string, unknown>): Promise<CallToolResult> => {
     const alias = resolveAlias(args.host)
     if (typeof alias === 'string') return err(alias)
@@ -352,6 +567,14 @@ export async function createSshMcpServer(
         return handleListHosts()
       case EXEC_TOOL.name:
         return handleExec(args, toolCallId, extra.signal)
+      case UPLOAD_TOOL.name:
+        return handleTransfer(args, 'upload', toolCallId, extra.signal)
+      case DOWNLOAD_TOOL.name:
+        return handleTransfer(args, 'download', toolCallId, extra.signal)
+      case SYNC_TOOL.name:
+        return (await rsyncAvailable())
+          ? handleTransfer(args, 'sync', toolCallId, extra.signal)
+          : err('rsync is not installed on this machine, so directory sync is unavailable.')
       case DISCONNECT_TOOL.name:
         return handleDisconnect(args)
       default:

@@ -172,6 +172,7 @@ vi.mock('node:child_process', cp.factory)
 import { migrations } from '../../../dao/migrations'
 import { BUILTIN_MCP_FACTORIES } from '../index'
 import { createSshMcpServerFactory } from '../sshServer'
+import { rsyncAvailable } from '../sshControl'
 
 // ─── 素材 ────────────────────────────────────────────────────────────────
 
@@ -284,13 +285,19 @@ const textOf = (r: ListHostsResult): string =>
 // ─── 工具面 ──────────────────────────────────────────────────────────────
 
 describe('ssh 内置服务器的工具声明', () => {
-  it('SSHS-U-85: 工具面恰为 list-hosts / exec / disconnect', async () => {
+  it('SSHS-U-85: 工具面固定这五个，sync 随 rsync 在不在而增减', async () => {
     writeConfig('Host web\n')
     const { client } = await open()
-    const { tools } = await client.listTools()
+    const names = (await client.listTools()).tools.map((t) => t.name)
 
-    // 文件传输（upload / download / sync）还没接上
-    expect(tools.map((t) => t.name)).toEqual(['list-hosts', 'exec', 'disconnect'])
+    // `sync` 探测到 rsync 才声明 —— 断言不能依赖跑它的那台机器装没装，
+    // 所以拿同一个探测函数对账（Windows 没有 rsync，macOS 15 起是 openrsync）
+    const withRsync = await rsyncAvailable()
+    expect(names).toEqual(
+      withRsync
+        ? ['list-hosts', 'exec', 'upload', 'download', 'sync', 'disconnect']
+        : ['list-hosts', 'exec', 'upload', 'download', 'disconnect']
+    )
   })
 
   it('SSHS-U-86: 无参工具 —— 显式只接受空对象', async () => {
@@ -404,9 +411,9 @@ describe('ssh 内置服务器的边界', () => {
     writeConfig('Host web\n')
     const { client } = await open()
 
-    const bad = await call(client, 'upload')
+    const bad = await call(client, 'tunnel')
     expect(bad.isError).toBe(true)
-    expect(textOf(bad)).toBe('Unknown tool: upload')
+    expect(textOf(bad)).toBe('Unknown tool: tunnel')
 
     // 不能把连接搞垮：模型试错一次就要重开一台 server，代价比错误本身大得多
     expect((await call(client)).structuredContent?.hosts.map((h) => h.alias)).toEqual(['web'])

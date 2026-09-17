@@ -111,8 +111,9 @@ function multiplexArgs(sock: string | undefined): string[] {
   ]
 }
 
-/** 跑一个 ssh 子进程，收集输出 */
-function runSsh(
+/** 跑一个子进程（ssh / scp / rsync 共用超时、中止与输出收集） */
+function runProcess(
+  bin: string,
   args: string[],
   opts: { timeoutSec: number; signal?: AbortSignal }
 ): Promise<SshExecResult> {
@@ -121,7 +122,7 @@ function runSsh(
       reject(new Error('Aborted'))
       return
     }
-    const child = spawn('ssh', args, {
+    const child = spawn(bin, args, {
       env: buildSpawnEnv() as NodeJS.ProcessEnv,
       // stdin 直接关掉：BatchMode 下没有交互，留着只会让读 stdin 的远端命令等到超时
       stdio: ['ignore', 'pipe', 'pipe']
@@ -170,7 +171,7 @@ function runSsh(
         reject(
           new Error(
             err.message.includes('ENOENT')
-              ? 'The `ssh` command was not found on this machine. Install OpenSSH and try again.'
+              ? `The \`${bin}\` command was not found on this machine.`
               : `Failed to run ssh: ${err.message}`
           )
         )
@@ -212,7 +213,110 @@ export async function sshExec(opts: {
     opts.command
   ]
   log.info(`exec ${opts.alias}: ${opts.command.slice(0, 80)}`)
-  return runSsh(args, { timeoutSec: opts.timeoutSec, signal: opts.signal })
+  return runProcess('ssh', args, { timeoutSec: opts.timeoutSec, signal: opts.signal })
+}
+
+/** 传输方向：up = 本地→远端，down = 远端→本地 */
+export type TransferDirection = 'up' | 'down'
+
+/** 跑一个任意二进制（scp / rsync 与 ssh 共用同一套超时 / 中止 / 输出收集） */
+function runBin(
+  bin: string,
+  args: string[],
+  opts: { timeoutSec: number; signal?: AbortSignal }
+): Promise<SshExecResult> {
+  return runProcess(bin, args, opts)
+}
+
+/**
+ * 文件传输（scp）。
+ *
+ * 复用同一个 control socket，所以传文件不会再认证一次。现代 OpenSSH 的 scp 走 SFTP 子系统，
+ * 远端不需要有 scp 命令。远端路径原样交给 scp 的 `host:path` 形式 —— 别名已在 server 那层
+ * 核对过，`--` 则挡住任何以 `-` 开头的路径被当成选项。
+ */
+export async function sshCopy(opts: {
+  sessionId: string
+  alias: string
+  direction: TransferDirection
+  localPath: string
+  remotePath: string
+  timeoutSec: number
+  signal?: AbortSignal
+  configPath?: string
+}): Promise<SshExecResult> {
+  ensureControlRoot()
+  const sock = controlPath(opts.sessionId, opts.alias)
+  const remote = `${opts.alias}:${opts.remotePath}`
+  const args = [
+    ...configArgs(opts.configPath),
+    '-o',
+    'BatchMode=yes',
+    '-o',
+    `ConnectTimeout=${CONNECT_TIMEOUT_SEC}`,
+    ...multiplexArgs(sock),
+    '--',
+    ...(opts.direction === 'up' ? [opts.localPath, remote] : [remote, opts.localPath])
+  ]
+  log.info(`scp ${opts.direction} ${opts.alias}: ${opts.remotePath}`)
+  return runBin('scp', args, { timeoutSec: opts.timeoutSec, signal: opts.signal })
+}
+
+/** rsync 探测结果（进程级缓存：一台机器上装没装 rsync 不会在运行期变） */
+let rsyncProbe: Promise<boolean> | undefined
+
+/**
+ * 这台机器有 rsync 吗。
+ *
+ * 必须探测而不能假定：Windows 没有内置 rsync，而 macOS 15 起把 rsync 换成了 openrsync
+ * （选项不全）。所以 `sync` 工具**探测到才注册** —— 声明一个跑不起来的工具，
+ * 只会让模型在上面反复撞墙。
+ */
+export function rsyncAvailable(): Promise<boolean> {
+  if (!rsyncProbe) {
+    rsyncProbe = runBin('rsync', ['--version'], { timeoutSec: 5 })
+      .then((r) => r.exitCode === 0)
+      .catch(() => false)
+  }
+  return rsyncProbe
+}
+
+/**
+ * 目录同步（rsync over ssh），同样复用 control socket。
+ *
+ * 已知限制：rsync 自己按空白切分 `-e` 的值，所以那串里的路径不能带空格。
+ * 生产路径（`/tmp/shuvix-ssh-<uid>/<hash>`）不会带，覆写了 `SHUVIX_SSH_CONTROL_ROOT`
+ * 到带空格的目录才会踩到。
+ */
+export async function sshSync(opts: {
+  sessionId: string
+  alias: string
+  direction: TransferDirection
+  localPath: string
+  remotePath: string
+  timeoutSec: number
+  signal?: AbortSignal
+  configPath?: string
+}): Promise<SshExecResult> {
+  ensureControlRoot()
+  const sock = controlPath(opts.sessionId, opts.alias)
+  const sshCmd = [
+    'ssh',
+    ...configArgs(opts.configPath),
+    '-o',
+    'BatchMode=yes',
+    ...multiplexArgs(sock)
+  ].join(' ')
+  const remote = `${opts.alias}:${opts.remotePath}`
+  const args = [
+    '-a',
+    '-e',
+    sshCmd,
+    '--',
+    ...(opts.direction === 'up' ? [opts.localPath, remote] : [remote, opts.localPath])
+  ]
+  log.info(`rsync ${opts.direction} ${opts.alias}: ${opts.remotePath}`)
+  return runBin('rsync', args, { timeoutSec: opts.timeoutSec, signal: opts.signal })
 }
 
 /** 关掉某台主机的 master（`ssh -O exit`）。返回「本来是否连着」 */
@@ -224,7 +328,8 @@ export async function sshDisconnect(
   const sock = controlPath(sessionId, alias)
   if (!sock || !existsSync(sock)) return false
   try {
-    await runSsh(
+    await runProcess(
+      'ssh',
       [...configArgs(configPath), '-o', `ControlPath=${sock}`, '-O', 'exit', '--', alias],
       { timeoutSec: 10 }
     )
