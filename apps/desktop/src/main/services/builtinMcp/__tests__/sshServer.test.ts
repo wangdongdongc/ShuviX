@@ -793,7 +793,7 @@ describe('ssh 内置服务器 exec 的超时取值', () => {
 
     // 另一端是同一类错误：floor 会把 0.5 变成 0，而 setTimeout(0) 同样立刻就烧
     await callTool(client, 'exec', execArgs({ timeout: 0.5 }))
-    expect(timeoutOf()).toBe(1)
+    expect(timeoutOf(1)).toBe(1)
   })
 
   it('SSHS-U-120: 零 / 负数 / 不是数 —— 一律回落到 120', async () => {
