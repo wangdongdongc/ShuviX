@@ -239,8 +239,9 @@ describe('面与设置项', () => {
 /**
  * `tools.list(sid)` 的 `defaultEnabled` = 这条会话根 Agent 档案的白名单 —— 档案由形态推导，
  * 含用户覆盖。只有内置条目带这个键（mcp / skill 条目没有），所以按「键在不在」筛。
- * 探针工具选 `ssh`：work / chat 白名单有它、notebook 没有，且它在清单里（`agent` 是 hidden
- * 工具，根本不进 tools.list，拿它当探针只会读到 undefined）。
+ * 探针工具选 `database`：work / chat 白名单有它、notebook 与 bot 没有，且它在清单里
+ * （`agent` 是 hidden 工具，根本不进 tools.list，拿它当探针只会读到 undefined）。
+ * 原先用的是 `ssh` —— 它已不再是内置工具，改由内置 MCP 能力服务器提供、默认不勾。
  */
 describe('FD-9 tools.list 的 defaultEnabled 随推导档案', () => {
   interface ToolRow {
@@ -254,28 +255,28 @@ describe('FD-9 tools.list 的 defaultEnabled 随推导档案', () => {
   const defaultOn = (rows: ToolRow[]): string[] =>
     rows.filter((t) => 'defaultEnabled' in t && t.defaultEnabled).map((t) => t.name)
 
-  it('项目会话 work：ssh 默认勾选、git 不进任何基座', async () => {
+  it('项目会话 work：database 默认勾选、git 不进任何基座', async () => {
     const sid = await createSession({ title: 'fd-tools-proj', projectId })
     const rows = await toolsOf(sid)
-    expect(flag(rows, 'ssh')).toBe(true)
+    expect(flag(rows, 'database')).toBe(true)
     // git 是内置工具（列表里有它），但不进任何基座的白名单
     expect(flag(rows, 'git')).toBe(false)
     expect(defaultOn(rows).length).toBeGreaterThan(1)
   })
 
-  it('笔记本会话 notebook：ssh 不勾选、ask 勾选', async () => {
+  it('笔记本会话 notebook：database 不勾选、ask 勾选', async () => {
     const sid = await createSession({ title: 'fd-tools-nb', projectId, notebookPath: NOTE_REL })
     const rows = await toolsOf(sid)
-    expect(flag(rows, 'ssh')).toBe(false)
+    expect(flag(rows, 'database')).toBe(false)
     expect(flag(rows, 'ask')).toBe(true)
   })
 
-  it('bot 会话落在 bot 基座：ssh 不勾选、read 勾选；不传 sid 回落 work：ssh 勾选', async () => {
+  it('bot 会话落在 bot 基座：database 不勾选、read 勾选；不传 sid 回落 work：database 勾选', async () => {
     const sid = await createBotSession(app.main, { bot: 'fd-bot' })
     const rows = await toolsOf(sid)
-    expect(flag(rows, 'ssh')).toBe(false)
+    expect(flag(rows, 'database')).toBe(false)
     expect(flag(rows, 'read')).toBe(true)
-    expect(flag(await toolsOf(), 'ssh')).toBe(true)
+    expect(flag(await toolsOf(), 'database')).toBe(true)
   })
 
   it('覆盖 chat.md 为 tools: read 之后，无项目会话只有 read 默认勾选', async () => {
@@ -285,7 +286,7 @@ describe('FD-9 tools.list 的 defaultEnabled 随推导档案', () => {
       expect(defaultOn(await toolsOf(sid))).toEqual(['read'])
       // 项目会话不受 chat 覆盖影响
       const proj = await createSession({ title: 'fd-tools-proj-2', projectId })
-      expect(flag(await toolsOf(proj), 'ssh')).toBe(true)
+      expect(flag(await toolsOf(proj), 'database')).toBe(true)
     } finally {
       expect(await deleteAgent('chat')).toEqual({ success: true })
     }

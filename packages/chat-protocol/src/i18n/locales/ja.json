@@ -295,24 +295,6 @@
     "imageZoomHint": "クリックで原寸表示",
     "imageMissing": "この画像ファイルは利用できません"
   },
-  "ssh": {
-    "credentialTitle": "SSH リモート接続 — サーバーの認証情報を入力",
-    "host": "ホスト",
-    "port": "ポート",
-    "username": "ユーザー名",
-    "authPassword": "パスワード",
-    "authKey": "鍵",
-    "password": "パスワード",
-    "privateKey": "秘密鍵",
-    "privateKeyPlaceholder": "秘密鍵の内容を貼り付け（PEM 形式）...",
-    "browseKey": "参照",
-    "selectKeyFile": "秘密鍵ファイルを選択",
-    "passphrase": "パスフレーズ",
-    "connect": "接続",
-    "cancel": "キャンセル",
-    "credentialHint": "認証情報はこの接続のみに使用され、保存や AI への送信は一切行いません",
-    "securityWarning": "認証情報はこの接続のみに使用され、保存されません。接続先が信頼できることを確認してください。AIはそのサーバーでコマンドを実行します。"
-  },
   "sessionConfig": {
     "title": "セッション設定",
     "sessionTitle": "セッションタイトル",
@@ -573,8 +555,6 @@
     "toolMetaNoParams": "パラメータなし",
     "toolMetaRequired": "必須",
     "toolMetaOptional": "任意",
-    "toolSshTitle": "SSH ツール",
-    "toolSshDesc": "SSH 接続認証情報を保存して素早く接続。AI は接続を開始できますが、保存された認証情報は見えません。",
     "toolSshSecurityWarning": "重要な認証情報を保存しないでください。財産損失を招く恐れがあります。",
     "toolSshAdd": "認証情報を追加",
     "toolSshAddTitle": "SSH 認証情報を追加",
@@ -806,7 +786,6 @@
     "lsLabel": "ファイル一覧",
     "grepLabel": "内容検索",
     "globLabel": "ファイル検索",
-    "sshLabel": "SSH リモート実行",
     "remoteDbLabel": "リモートデータベース",
     "bashHint": "ターミナルでコマンドを実行（パッケージインストール、スクリプト実行、Git 操作など）",
     "readHint": "ファイルの内容を読み込み、またはWebページを取得（テキスト、PDF、Word、Excel、URL などに対応）",
@@ -816,7 +795,6 @@
     "lsHint": "ディレクトリ内のファイルとフォルダをツリー形式で一覧表示",
     "grepHint": "キーワードまたは正規表現でファイル内容を検索",
     "globHint": "ファイル名パターン（例: *.ts）でファイルを検索",
-    "sshHint": "SSH でリモートサーバーに接続してコマンドを実行",
     "remoteDbHint": "リモートデータベース（MySQL、PostgreSQL など）に接続して SQL クエリを実行",
     "skillHint": "定義済みの指示セットを読み込み、AI に特定分野の能力を付与",
     "browserLabel": "ブラウザ",
@@ -1099,7 +1077,6 @@
   "notification": {
     "untitledSession": "無題のセッション",
     "askBody": "確認待ち：{{detail}}",
-    "askSshDetail": "SSH 認証情報",
     "doneBody": "完了しました",
     "failedBody": "実行エラー：{{error}}"
   },

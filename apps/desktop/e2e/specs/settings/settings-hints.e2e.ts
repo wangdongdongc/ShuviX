@@ -11,7 +11,7 @@
  *   - 气泡挂在 `document.body` 上（IH-E-6）：卡片是 `overflow-hidden` 的圆角容器，行内绝对定位会被
  *     裁掉半截；弹窗里还要压在 `z-50` 的遮罩之上。**这种回归下读文案的断言全绿** —— 它们只读
  *     `textContent`，剪没剪、盖没盖一概看不出来，所以这里读的是几何与 z-index。
- *   - 少数 `description` 其实是「这一行自己的内容」（SSH 凭据的 `user@host`、更新检查的当前状态），
+ *   - 少数 `description` 其实是「这一行自己的内容」（数据库凭据的 `user@host`、更新检查的当前状态），
  *     那些走 `subtitle`，照旧是明面上的文字（IH-E-8）。这是唯一在真实调用点上钉住这条分流的用例。
  *
  * 几何算术本身（翻转 / 夹边 / 钉上边距 / 出视口）在 `packages/app-shell/src/settings/
@@ -51,9 +51,9 @@ const FONT_TITLE = L.map((l) => l.settings.fontSize)
 const APPEARANCE_GROUP = L.map((l) => l.settings.appearanceGroup)
 /** 问号按钮的无障碍名字 —— 这个键缺了肉眼看不出来（它不上屏） */
 const INFO_LABEL = L.map((l) => l.common.info)
-/** 「LLM 工具」页 SSH 子页里那一节（页面够长，锚点滚得出视野） */
-const SSH_TITLE = L.map((l) => l.settings.toolSshTitle)
-const SSH_DESC = L.map((l) => l.settings.toolSshDesc)
+/** 「LLM 工具」页数据库子页里那一节（页面够长，锚点滚得出视野） */
+const DB_TITLE = L.map((l) => l.settings.toolDbTitle)
+const DB_DESC = L.map((l) => l.settings.toolDbDesc)
 const TOOLS_TAB = L.map((l) => l.settings.tabTools)
 const ABOUT_TAB = L.map((l) => l.settings.tabAbout)
 const CHECK_UPDATE = L.map((l) => l.about.checkUpdate)
@@ -64,9 +64,17 @@ const EXT_GROUP = L.map((l) => l.sessionConfig.extensionsGroup)
 const HINT_GAP = 6
 const HINT_MARGIN = 8
 
-/** 种一条 SSH 凭据：名字是「它是谁」，`user@host:port` 是「它连的是哪台机器」 */
-const SSH_CRED = { name: 'hints-box', host: '10.0.0.7', port: 2222, username: 'e2e' }
-const SSH_TARGET = `${SSH_CRED.username}@${SSH_CRED.host}:${SSH_CRED.port}`
+/** 种一条数据库凭据：名字是「它是谁」，`user@host:port/db` 是「它连的是哪台机器」 */
+const DB_CRED = {
+  name: 'hints-box',
+  dbType: 'postgres',
+  host: '10.0.0.7',
+  port: 5432,
+  username: 'e2e',
+  password: 'x',
+  database: 'hints'
+}
+const DB_TARGET = `${DB_CRED.username}@${DB_CRED.host}:${DB_CRED.port}/${DB_CRED.database}`
 
 /** 弹窗面板（sessionConfigPane 同款）—— 空会话的聊天区会内联渲染同一张面板，必须限定作用域 */
 const DIALOG_PANEL = `[...document.querySelectorAll('.dialog-panel')].find((p) => p.querySelector('input'))`
@@ -86,16 +94,16 @@ function gapToAnchor(shot: InfoHintShot, anchor: { top: number; bottom: number }
   )
 }
 
-/** 切到「LLM 工具」页的 SSH 子页（子页标签取自工具定义，不写死英文） */
-async function openSshToolPage(): Promise<void> {
+/** 切到「LLM 工具」页的数据库子页（子页标签取自工具定义，不写死英文） */
+async function openDbToolPage(): Promise<void> {
   await nav.selectTab(TOOLS_TAB)
   const defs = await app.main.eval<{ name: string; label?: string }[]>(
     'window.api.tools.definitions()'
   )
-  const ssh = defs.find((d) => d.name === 'ssh')
-  if (!ssh) throw new Error('builtin ssh tool missing from tools.definitions()')
-  await nav.selectToolSubTab(ssh.label || ssh.name)
-  await hints.waitRow(SSH_TITLE)
+  const db = defs.find((d) => d.name === 'database')
+  if (!db) throw new Error('builtin database tool missing from tools.definitions()')
+  await nav.selectToolSubTab(db.label || db.name)
+  await hints.waitRow(DB_TITLE)
 }
 
 beforeAll(async () => {
@@ -103,9 +111,7 @@ beforeAll(async () => {
   await waitRendererReady(app.main)
   // IH-E-6 的弹窗要有扩展能力卡才渲染；隔离实例恒有内置的 mcp:tavily，再种一个 skill 让两组都不空
   seedSkill(app, 'e2e-hint-skill')
-  await app.main.eval(
-    `window.api.sshCredential.add(${JSON.stringify({ ...SSH_CRED, authType: 'password', password: 'x' })})`
-  )
+  await app.main.eval(`window.api.dbCredential.add(${JSON.stringify(DB_CRED)})`)
   settings = await app.openSettings('general')
   hints = infoHintPane(settings)
   nav = settingsNavPane(settings)
@@ -219,30 +225,30 @@ describe('说明收进问号（通用 tab）', () => {
   })
 })
 
-describe('锚点滚出视野（LLM 工具 · SSH 子页）', () => {
+describe('锚点滚出视野（LLM 工具 · 数据库子页）', () => {
   it('IH-E-5 锚点整个滚出视口：气泡仍挂在 DOM 上，但被置成 visibility:hidden', async () => {
-    await openSshToolPage()
-    const room = await hints.scrollRoom(SSH_TITLE)
+    await openDbToolPage()
+    const room = await hints.scrollRoom(DB_TITLE)
     // 这一节在这个窗口里天然落在首屏之下，滚到底才看得见 —— 先滚下去把气泡开出来
     expect(room.down).toBeGreaterThan(0)
-    await hints.scrollBy(SSH_TITLE, room.down)
-    const inView = await hints.hoverOpen(SSH_TITLE)
-    expect(SSH_DESC).toContain(inView.text)
+    await hints.scrollBy(DB_TITLE, room.down)
+    const inView = await hints.hoverOpen(DB_TITLE)
+    expect(DB_DESC).toContain(inView.text)
     expect(inView.visibility).toBe('visible')
 
     // 再滚回顶：锚点整个落到视口下沿之外
-    const back = await hints.scrollBy(SSH_TITLE, -room.down)
+    const back = await hints.scrollBy(DB_TITLE, -room.down)
     expect(back).toBe(-room.down)
-    const anchor = await hints.anchorRect(SSH_TITLE)
+    const anchor = await hints.anchorRect(DB_TITLE)
     const vp = await hints.viewport()
     expect(anchor.top).toBeGreaterThan(vp.height) // 前置自检：真的整个出去了
 
     // 先断「没被卸掉」：悬浮态一刻没断过，气泡该一直挂着，只是看不见
-    expect(await hints.peek(SSH_TITLE)).not.toBeNull()
+    expect(await hints.peek(DB_TITLE)).not.toBeNull()
     // 失败 = 一段无主的说明飘在不相干的行上面（没藏起来）
     const out = await until(
       async () => {
-        const shot = await hints.peek(SSH_TITLE)
+        const shot = await hints.peek(DB_TITLE)
         return shot && shot.visibility === 'hidden' ? shot : null
       },
       'hint hidden once its anchor left the viewport',
@@ -250,8 +256,8 @@ describe('锚点滚出视野（LLM 工具 · SSH 子页）', () => {
     )
     expect(out.text).not.toBe('')
 
-    await hints.hoverOut(SSH_TITLE)
-    await hints.waitClosed(SSH_TITLE)
+    await hints.hoverOut(DB_TITLE)
+    await hints.waitClosed(DB_TITLE)
   })
 })
 
@@ -287,12 +293,12 @@ describe('气泡逃出卡片与弹窗层叠（会话设置弹窗）', () => {
 })
 
 describe('「这一行自己的内容」留在明面上', () => {
-  it('IH-E-8 SSH 凭据行的 user@host:port 与更新检查行的状态，不悬浮就在页面文字里', async () => {
-    await openSshToolPage()
+  it('IH-E-8 数据库凭据行的 user@host:port/db 与更新检查行的状态，不悬浮就在页面文字里', async () => {
+    await openDbToolPage()
     const toolsText = await hints.visibleText()
     // 失败 = 整改用过头：凭据行只剩名字，两台机器的区别藏进了悬浮，选哪一条全靠猜
-    expect(toolsText).toContain(SSH_CRED.name)
-    expect(toolsText).toContain(SSH_TARGET)
+    expect(toolsText).toContain(DB_CRED.name)
+    expect(toolsText).toContain(DB_TARGET)
     // 而且这一刻一个气泡都没开着 —— 上面那句是真·页面文字，不是谁顺手展开的
     expect(await hints.openTips()).toBe(0)
 

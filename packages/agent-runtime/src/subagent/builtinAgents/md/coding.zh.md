@@ -3,7 +3,7 @@ shuvix: agent v1
 shuvix-builtin: true
 name: coding
 description: 编码智能体——完整工具链（shell、SSH、数据库、浏览器）加上多文件代码工作的做事纪律；由 `work` 会话以 `coding` 子会话的形式启用。
-shuvix-tools: bash, read, write, edit, ask, browser, ls, grep, glob, ssh, database, agent, session, knowledge
+shuvix-tools: bash, read, write, edit, ask, browser, ls, grep, glob, database, agent, session, knowledge
 shuvix-displayName: 编码
 shuvix-instruction-files: AGENTS.md, CLAUDE.md
 shuvix-project-awareness: true

@@ -29,7 +29,6 @@ import './grep'
 import './glob'
 
 // 远程访问
-import './ssh'
 import './database'
 
 // Skill 工具（元数据注册；实例化由 agentToolBuilder 负责）

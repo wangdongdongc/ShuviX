@@ -39,13 +39,10 @@ export type {
   InputResponse,
   AskInputRequest,
   ChoiceInputRequest,
-  SshCredentialsInputRequest,
   AskResponse,
   ChoiceResponse,
-  SshCredentialsResponse,
   CancelResponse,
-  InputRequestKind,
-  SshCredentialPayload
+  InputRequestKind
 } from '@shuvix/chat-protocol/types/inputRequest'
 
 /** ChatEvent 去掉 sessionId 后的有效载荷（分布式 Omit，保留判别联合结构） */

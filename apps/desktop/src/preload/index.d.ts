@@ -51,9 +51,6 @@ import type {
   SkillUpdateParams,
   SkillDir,
   SkillGroup,
-  SshCredential,
-  SshCredentialAddParams,
-  SshCredentialUpdateParams,
   DbCredential,
   DbCredentialAddParams,
   DbCredentialUpdateParams,
@@ -614,13 +611,6 @@ declare global {
     runtime: {
       statuses: (sessionId: string) => Promise<Record<string, RuntimeStatus>>
       destroy: (params: { sessionId: string; runtimeId: string }) => Promise<{ success: boolean }>
-    }
-    sshCredential: {
-      list: () => Promise<SshCredential[]>
-      add: (params: SshCredentialAddParams) => Promise<{ id: string }>
-      update: (params: SshCredentialUpdateParams) => Promise<{ success: boolean }>
-      delete: (id: string) => Promise<{ success: boolean }>
-      listNames: () => Promise<string[]>
     }
     dbCredential: {
       list: () => Promise<Omit<DbCredential, 'password'>[]>

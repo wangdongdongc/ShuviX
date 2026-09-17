@@ -581,6 +581,19 @@ export const migrations: Migration[] = [
          VALUES (?, 'ssh', 'inproc', '', '[]', '{}', '', '{}', '{}', 1, 1, '[]', ?, ?)`
       ).run('builtin-mcp-ssh', now, now)
     }
+  },
+  {
+    version: 23,
+    description: '删除 ssh_credentials 表：SSH 凭据改为复用用户自己的 ~/.ssh/config',
+    up: (db) => {
+      // 旧 ssh 工具把 password / privateKey / passphrase 存在这张表里，加密用的密钥却是同机
+      // 明文文件（~/.shuvix/.session-state）—— 那是混淆不是保护。内置 ssh 能力服务器改为只接受
+      // 用户 ~/.ssh/config 里的 host 别名，由 ssh 自己解析与认证，ShuviX 不再持有任何 SSH 秘密。
+      //
+      // **不做数据迁移、不做导出**（同 v19 / v20 / v21 的裁决）：这张表里是私钥和密码，
+      // 把它们写进 ~/.ssh/ 是替用户动他最敏感的目录，不该由一次升级代劳。
+      db.exec(`DROP TABLE IF EXISTS ssh_credentials`)
+    }
   }
 ]
 

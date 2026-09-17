@@ -17,7 +17,6 @@ import { agentFactory } from '../agents/agentHost'
 import { hookService, hookTriggers } from './hookService'
 import { buildTurnCompletedFacts, isDefaultTitle } from './sessionTriggerFacts'
 import { clearSession as clearFileTimeSession, recordRead } from '../utils/toolUtils/fileTime'
-import { sshManager } from './sshManager'
 import type { ModelCapabilities, ThinkingLevel, AgentRuntimeInfo } from '../types'
 import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
 import type { SessionModelMetadata } from '../dao/types'
@@ -362,7 +361,6 @@ export class AgentSession {
     await this.abortQuietly()
     this.created.dispose()
     clearFileTimeSession(this.sessionId)
-    sshManager.disconnect(this.sessionId).catch(() => {})
     log.info(`invalidate session=${this.sessionId}`)
   }
 
@@ -375,7 +373,6 @@ export class AgentSession {
     this.created.dispose()
     clearFileTimeSession(this.sessionId)
     clearSessionDecisions(this.sessionId)
-    sshManager.disconnect(this.sessionId).catch(() => {})
     log.info(`destroy session=${this.sessionId}`)
   }
 

@@ -50,10 +50,8 @@ export type {
   InputResponse,
   AskInputRequest,
   ChoiceInputRequest,
-  SshCredentialsInputRequest,
   AskResponse,
   ChoiceResponse,
-  SshCredentialsResponse,
   CancelResponse
 } from '@shuvix/chat-protocol/types/inputRequest'
 import type { InputRequest } from '@shuvix/chat-protocol/types/inputRequest'

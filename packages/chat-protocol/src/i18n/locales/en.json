@@ -295,24 +295,6 @@
     "imageZoomHint": "Click to open at full size",
     "imageMissing": "This image file is no longer available"
   },
-  "ssh": {
-    "credentialTitle": "SSH Remote Connection — Enter server credentials",
-    "host": "Host",
-    "port": "Port",
-    "username": "Username",
-    "authPassword": "Password",
-    "authKey": "Key",
-    "password": "Password",
-    "privateKey": "Private Key",
-    "privateKeyPlaceholder": "Paste private key content (PEM format)...",
-    "browseKey": "Browse",
-    "selectKeyFile": "Select Private Key File",
-    "passphrase": "Passphrase",
-    "connect": "Connect",
-    "cancel": "Cancel",
-    "credentialHint": "Credentials are used for this connection only — never saved or sent to AI",
-    "securityWarning": "Credentials are used for this connection only and will not be saved. Ensure you trust the target server — AI will execute commands on it."
-  },
   "sessionConfig": {
     "title": "Session Config",
     "sessionTitle": "Session Title",
@@ -573,8 +555,6 @@
     "toolMetaNoParams": "No parameters",
     "toolMetaRequired": "required",
     "toolMetaOptional": "optional",
-    "toolSshTitle": "SSH Tool",
-    "toolSshDesc": "Save SSH credentials for quick connection. AI can initiate connections but cannot see your saved credentials.",
     "toolSshSecurityWarning": "Do not save critical credentials to avoid potential financial loss.",
     "toolSshAdd": "Add Credential",
     "toolSshAddTitle": "Add SSH Credential",
@@ -806,7 +786,6 @@
     "lsLabel": "List Files",
     "grepLabel": "Search Content",
     "globLabel": "Find Files",
-    "sshLabel": "SSH Remote",
     "remoteDbLabel": "Remote Database",
     "bashHint": "Run terminal commands like installing packages, running scripts, or Git operations",
     "readHint": "Read file contents or fetch web pages — supports text, PDF, Word, Excel, URLs and more",
@@ -816,7 +795,6 @@
     "lsHint": "List files and folders in a directory as a tree structure",
     "grepHint": "Search file contents by keyword or regular expression",
     "globHint": "Find files by name pattern (e.g. *.ts)",
-    "sshHint": "Connect to a remote server via SSH and execute commands",
     "remoteDbHint": "Connect to remote databases (MySQL, PostgreSQL, etc.) and run SQL queries",
     "skillHint": "Load predefined instruction sets to give AI domain-specific capabilities",
     "browserLabel": "Browser",
@@ -1099,7 +1077,6 @@
   "notification": {
     "untitledSession": "Untitled session",
     "askBody": "Waiting for approval: {{detail}}",
-    "askSshDetail": "SSH credentials",
     "doneBody": "Finished",
     "failedBody": "Run failed: {{error}}"
   },

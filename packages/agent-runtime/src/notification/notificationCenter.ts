@@ -82,14 +82,12 @@ function oneLine(text: string, max = MAX_BODY): string {
 }
 
 /** 询问请求 → 一句人话 */
-function describeRequest(request: InputRequest, t: NotificationTranslate): string {
+function describeRequest(request: InputRequest): string {
   switch (request.kind) {
     case 'ask':
       return oneLine(request.command)
     case 'choice':
       return oneLine(request.question)
-    case 'sshCredentials':
-      return t('notification.askSshDetail')
   }
 }
 
@@ -222,7 +220,7 @@ export function createNotificationCenter(deps: NotificationCenterDeps): Notifica
             sessionId: root,
             title: titleOf(root),
             body: deps.t('notification.askBody', {
-              detail: describeRequest(event.request, deps.t)
+              detail: describeRequest(event.request)
             }),
             requestId: event.request.id
           })

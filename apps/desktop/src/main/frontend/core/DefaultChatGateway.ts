@@ -9,7 +9,6 @@ import { getBuiltinToolEntries } from '../../services/toolRegistry'
 import { messageService } from '../../services/messageService'
 import { appendModelChange, appendThinkingLevelChange } from '../../services/sessionStorage'
 import { respondToUserInput } from '../../services/userInputBroker'
-import { sshManager } from '../../services/sshManager'
 import { dbManager } from '../../services/dbManager'
 import { mcpService } from '../../services/mcpService'
 import { skillService } from '../../services/skillService'
@@ -188,15 +187,6 @@ export class DefaultChatGateway implements ChatGateway {
   getRuntimeStatuses(sessionId: string): Record<string, RuntimeStatus> {
     const result: Record<string, RuntimeStatus> = {}
 
-    const ssh = sshManager.getConnectionInfo(sessionId)
-    if (ssh) {
-      result['ssh'] = {
-        label: `${ssh.username}@${ssh.host}`,
-        icon: 'Terminal',
-        color: '#38bdf8'
-      }
-    }
-
     const db = dbManager.getConnectionInfo(sessionId)
     if (db) {
       result['db'] = {
@@ -221,8 +211,6 @@ export class DefaultChatGateway implements ChatGateway {
     }
 
     if (runtimeId === 'ssh') {
-      if (!sshManager.getConnectionInfo(sessionId)) return { success: false }
-      await sshManager.disconnect(sessionId)
       broadcastDestroy()
       return { success: true }
     }

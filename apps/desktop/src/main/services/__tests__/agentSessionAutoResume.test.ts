@@ -35,7 +35,6 @@ vi.mock('../sessionTriggerFacts', () => ({
   isDefaultTitle: vi.fn()
 }))
 vi.mock('../../utils/toolUtils/fileTime', () => ({ clearSession: vi.fn() }))
-vi.mock('../sshManager', () => ({ sshManager: { disconnect: vi.fn(async () => {}) } }))
 vi.mock('../../logger', () => ({
   createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })
 }))

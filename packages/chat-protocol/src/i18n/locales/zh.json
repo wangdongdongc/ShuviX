@@ -295,24 +295,6 @@
     "imageZoomHint": "点击查看原图",
     "imageMissing": "该图片文件已不可用"
   },
-  "ssh": {
-    "credentialTitle": "SSH 远程连接 — 请输入服务器凭据",
-    "host": "主机地址",
-    "port": "端口",
-    "username": "用户名",
-    "authPassword": "密码",
-    "authKey": "密钥",
-    "password": "密码",
-    "privateKey": "私钥",
-    "privateKeyPlaceholder": "粘贴私钥内容（PEM 格式）...",
-    "browseKey": "浏览文件",
-    "selectKeyFile": "选择私钥文件",
-    "passphrase": "私钥口令",
-    "connect": "连接",
-    "cancel": "取消",
-    "credentialHint": "凭据仅用于本次连接，不会保存，也不会发送给 AI",
-    "securityWarning": "凭据仅用于本次连接，不会保存。请确认连接目标可信，AI 将在该服务器上执行命令。"
-  },
   "sessionConfig": {
     "title": "会话配置",
     "sessionTitle": "会话标题",
@@ -573,8 +555,6 @@
     "toolMetaNoParams": "无参数",
     "toolMetaRequired": "必填",
     "toolMetaOptional": "可选",
-    "toolSshTitle": "SSH 工具",
-    "toolSshDesc": "保存 SSH 连接凭据用于快速连接。AI 可以主动建立连接，但是看不到凭据的内容。",
     "toolSshSecurityWarning": "请勿保存重要凭据，以免造成财产损失。",
     "toolSshAdd": "添加凭据",
     "toolSshAddTitle": "添加 SSH 凭据",
@@ -806,7 +786,6 @@
     "lsLabel": "列出文件",
     "grepLabel": "搜索内容",
     "globLabel": "查找文件",
-    "sshLabel": "SSH 远程执行",
     "remoteDbLabel": "远程数据库",
     "bashHint": "在终端中执行命令，如安装依赖、运行脚本、Git 操作等",
     "readHint": "读取文件内容或获取网页，支持文本、PDF、Word、Excel、URL 等常见格式",
@@ -816,7 +795,6 @@
     "lsHint": "以树形结构列出目录中的文件和文件夹",
     "grepHint": "按关键词或正则表达式搜索文件内容",
     "globHint": "按文件名模式（如 *.ts）快速查找文件",
-    "sshHint": "通过 SSH 连接远程服务器并执行命令",
     "remoteDbHint": "连接远程数据库（MySQL、PostgreSQL 等）并执行 SQL 查询",
     "skillHint": "加载预定义的指令集，赋予 AI 特定领域的能力",
     "browserLabel": "浏览器",
@@ -1099,7 +1077,6 @@
   "notification": {
     "untitledSession": "未命名会话",
     "askBody": "等待确认：{{detail}}",
-    "askSshDetail": "SSH 凭证",
     "doneBody": "已完成",
     "failedBody": "运行出错：{{error}}"
   },

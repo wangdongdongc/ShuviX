@@ -3,7 +3,7 @@ shuvix: agent v1
 shuvix-builtin: true
 name: work
 description: ワークエージェント——すべてのプロジェクトセッションの基盤プロファイル。要件を固め、具体的な作業は `coding` サブセッションに渡し、結果を検収します。"work" という名前のカスタムエージェントで上書きできます。
-shuvix-tools: bash, read, write, edit, ask, browser, ls, grep, glob, ssh, database, agent, session, knowledge
+shuvix-tools: bash, read, write, edit, ask, browser, ls, grep, glob, database, agent, session, knowledge
 shuvix-displayName: ワーク
 shuvix-instruction-files: AGENTS.md, CLAUDE.md
 shuvix-project-awareness: true

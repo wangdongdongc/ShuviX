@@ -12,23 +12,9 @@
  * 3. 工具调用点 + 前端表单组件加一个分支
  */
 
-// ─── SshCredential 字段(沿用 tools/types.ts 中的旧定义,这里 mirror 一份避免循环依赖) ──
-
-export interface SshCredentialPayload {
-  host: string
-  port: number
-  username: string
-  /** 密码认证 */
-  password?: string
-  /** 私钥认证:私钥内容(PEM 格式) */
-  privateKey?: string
-  /** 私钥口令(如果私钥有加密) */
-  passphrase?: string
-}
-
 // ─── 请求侧 ──────────────────────────────────────────
 
-export type InputRequestKind = 'ask' | 'choice' | 'sshCredentials'
+export type InputRequestKind = 'ask' | 'choice'
 
 interface InputRequestBase {
   /** 与 toolCallId 一致,作为路由 key */
@@ -101,13 +87,7 @@ export interface ChoiceInputRequest extends InputRequestBase {
   allowMultiple: boolean
 }
 
-export interface SshCredentialsInputRequest extends InputRequestBase {
-  kind: 'sshCredentials'
-  /** 可选预填字段(host/user 等) */
-  prefill?: { host?: string; port?: number; username?: string }
-}
-
-export type InputRequest = AskInputRequest | ChoiceInputRequest | SshCredentialsInputRequest
+export type InputRequest = AskInputRequest | ChoiceInputRequest
 
 // ─── 响应侧 ──────────────────────────────────────────
 
@@ -125,11 +105,6 @@ export interface AskResponse extends InputResponseBase {
 export interface ChoiceResponse extends InputResponseBase {
   kind: 'choice'
   selections: string[]
-}
-
-export interface SshCredentialsResponse extends InputResponseBase {
-  kind: 'sshCredentials'
-  credentials: SshCredentialPayload
 }
 
 /**
@@ -155,9 +130,4 @@ export interface CancelResponse extends InputResponseBase {
   reason: 'aborted'
 }
 
-export type InputResponse =
-  | AskResponse
-  | ChoiceResponse
-  | SshCredentialsResponse
-  | OtherResponse
-  | CancelResponse
+export type InputResponse = AskResponse | ChoiceResponse | OtherResponse | CancelResponse

@@ -38,8 +38,6 @@ import type {
   McpServerAddParams,
   McpServerUpdateParams,
   SkillUpdateParams,
-  SshCredentialAddParams,
-  SshCredentialUpdateParams,
   DbCredentialAddParams,
   DbCredentialUpdateParams,
   DbCredentialTestParams,
@@ -326,14 +324,6 @@ const api = {
   },
 
   // ============ SSH 凭据管理 ============
-  sshCredential: {
-    list: () => ipcRenderer.invoke('sshCredential:list'),
-    add: (params: SshCredentialAddParams) => ipcRenderer.invoke('sshCredential:add', params),
-    update: (params: SshCredentialUpdateParams) =>
-      ipcRenderer.invoke('sshCredential:update', params),
-    delete: (id: string) => ipcRenderer.invoke('sshCredential:delete', id),
-    listNames: () => ipcRenderer.invoke('sshCredential:listNames')
-  },
 
   // ============ 数据库凭据管理 ============
   dbCredential: {

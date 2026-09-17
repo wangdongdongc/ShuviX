@@ -272,7 +272,6 @@ describe('work 档案钉板(项目会话基座：工具集/环境段的唯一事
       'ls',
       'grep',
       'glob',
-      'ssh',
       'database',
       'agent',
       'session',
@@ -350,7 +349,6 @@ describe('chat 档案钉板(不归属项目的会话的创建基座)', () => {
       'ls',
       'grep',
       'glob',
-      'ssh',
       'database',
       'agent',
       'session',
@@ -460,7 +458,6 @@ describe('coding 档案钉板(从 work 拆出的工程人格)', () => {
       'ls',
       'grep',
       'glob',
-      'ssh',
       'database',
       'agent',
       'session',
@@ -594,7 +591,7 @@ describe('bot 档案钉板（bot 会话的基座）', () => {
         'agent',
         'knowledge'
       ])
-      for (const forbidden of ['bash', 'write', 'ssh', 'database', 'browser', 'git', 'preview']) {
+      for (const forbidden of ['bash', 'write', 'database', 'browser', 'git', 'preview']) {
         expect(built.tools, `bot.${language} 不得持有 ${forbidden}`).not.toContain(forbidden)
       }
       // 不声明 shuvix-model：模型是**会话**的事（用户在模型选择器里选），不是档案的事

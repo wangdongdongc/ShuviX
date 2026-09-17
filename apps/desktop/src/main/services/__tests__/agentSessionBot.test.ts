@@ -49,7 +49,6 @@ vi.mock('../../utils/toolUtils/fileTime', () => ({
   clearSession: vi.fn(),
   recordRead: mocks.recordRead
 }))
-vi.mock('../sshManager', () => ({ sshManager: { disconnect: vi.fn(async () => {}) } }))
 vi.mock('../../logger', () => ({
   createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })
 }))

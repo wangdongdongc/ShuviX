@@ -13,7 +13,6 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { registerIpcHandlers } from './ipc/handlers'
 import { registerAppEventBridge } from './services/appEvents'
-import { sshManager } from './services/sshManager'
 import { litellmService } from './services/litellmService'
 import { providerService } from './services/providerService'
 import { initI18n, t } from './i18n'
@@ -671,7 +670,6 @@ app.on('before-quit', () => {
   destroyAllTabs()
   killAllBgTasks()
   mcpService.disconnectAll().catch(() => {})
-  sshManager.disconnectAll().catch(() => {})
   widgetServer.dispose()
   cliServer.stop()
   disposePglite()

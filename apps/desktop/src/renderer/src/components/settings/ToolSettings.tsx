@@ -4,31 +4,10 @@ import { Loader2, Plus, Trash2, Pencil, TriangleAlert, Globe } from 'lucide-reac
 import { BuiltinToolsView } from '@shuvix/app-shell'
 import { SettingsSection, SettingsRow, Toggle } from './SettingsPrimitives'
 import {
-  SshCredentialDialog,
-  type SshCredentialDialogData,
-  type SshCredentialDialogInitial
-} from './SshCredentialDialog'
-import {
   DbCredentialDialog,
   type DbCredentialDialogData,
   type DbCredentialDialogInitial
 } from './DbCredentialDialog'
-
-/** SSH 凭据信息（来自 IPC） */
-interface SshCredentialInfo {
-  id: string
-  name: string
-  host: string
-  port: number
-  username: string
-  authType: 'password' | 'key'
-  password: string
-  privateKey: string
-  passphrase: string
-  metadata: { proxyUrl?: string }
-  createdAt: number
-  updatedAt: number
-}
 
 /**
  * 工具配置页：复用共享的 <BuiltinToolsView>（每工具一个子页 + 顶部 metadata 卡片）。
@@ -41,7 +20,6 @@ export function ToolSettings(): React.JSX.Element {
     <BuiltinToolsView
       loadDefinitions={() => window.api.tools.definitions()}
       renderToolExtra={(name) => {
-        if (name === 'ssh') return <SshToolPanel />
         if (name === 'database') return <DatabaseToolPanel />
         if (name === 'browser') return <BrowserToolPanel />
         return null
@@ -249,168 +227,6 @@ function BrowserToolPanel(): React.JSX.Element {
           ))
         )}
       </SettingsSection>
-    </div>
-  )
-}
-
-// ────────────────────────────────────────────────────────────────
-// SSH 工具面板
-// ────────────────────────────────────────────────────────────────
-
-function SshToolPanel(): React.JSX.Element {
-  const { t } = useTranslation()
-
-  const [credentials, setCredentials] = useState<SshCredentialInfo[]>([])
-  const [dialogInitial, setDialogInitial] = useState<SshCredentialDialogInitial | null>(null)
-  const [dialogOpen, setDialogOpen] = useState(false)
-  const [deletingId, setDeletingId] = useState<string | null>(null)
-
-  const loadCredentials = useCallback(async () => {
-    const list = await window.api.sshCredential.list()
-    setCredentials(list)
-  }, [])
-
-  useEffect(() => {
-    loadCredentials() // eslint-disable-line react-hooks/set-state-in-effect
-  }, [loadCredentials])
-
-  const openAddDialog = (): void => {
-    setDialogInitial(null)
-    setDialogOpen(true)
-  }
-
-  const openEditDialog = (cred: SshCredentialInfo): void => {
-    setDialogInitial({
-      id: cred.id,
-      name: cred.name,
-      host: cred.host,
-      port: cred.port,
-      username: cred.username,
-      authType: cred.authType,
-      password: cred.password,
-      privateKey: cred.privateKey,
-      passphrase: cred.passphrase,
-      metadata: cred.metadata
-    })
-    setDialogOpen(true)
-  }
-
-  const handleSave = async (data: SshCredentialDialogData): Promise<void> => {
-    if (dialogInitial) {
-      await window.api.sshCredential.update({ id: dialogInitial.id, ...data })
-    } else {
-      await window.api.sshCredential.add(data)
-    }
-    await loadCredentials()
-  }
-
-  const handleDelete = async (id: string): Promise<void> => {
-    await window.api.sshCredential.delete(id)
-    await loadCredentials()
-    setDeletingId(null)
-  }
-
-  return (
-    <div className="flex-1 px-5 py-5 space-y-5">
-      {/* 凭据列表 */}
-      <SettingsSection
-        title={t('settings.toolSshTitle')}
-        description={t('settings.toolSshDesc')}
-        headerAction={
-          <button
-            onClick={openAddDialog}
-            className="flex items-center gap-1 px-2 py-1 rounded text-[11px] text-accent hover:bg-accent/10 transition-colors"
-          >
-            <Plus size={12} />
-            {t('settings.toolSshAdd')}
-          </button>
-        }
-        preamble={
-          <div className="flex items-start gap-2 px-3 py-2 rounded-lg border border-amber-500/30 bg-amber-500/5">
-            <TriangleAlert size={12} className="text-amber-500 shrink-0 mt-0.5" />
-            <p className="text-[11px] text-text-secondary leading-relaxed">
-              {t('settings.toolSshSecurityWarning')}
-            </p>
-          </div>
-        }
-      >
-        {credentials.length === 0 ? (
-          <div className="px-4 py-6 text-center">
-            <p className="text-[11px] text-text-tertiary">{t('settings.toolSshEmpty')}</p>
-            <p className="text-[10px] text-text-tertiary mt-1">{t('settings.toolSshEmptyHint')}</p>
-          </div>
-        ) : (
-          credentials.map((cred) => (
-            <SettingsRow
-              key={cred.id}
-              title={
-                <div className="flex items-center gap-2 min-w-0">
-                  <span className="truncate">{cred.name}</span>
-                  <span
-                    className={`px-1.5 py-0.5 text-[9px] rounded-md font-normal shrink-0 ${
-                      cred.authType === 'key'
-                        ? 'bg-blue-500/15 text-blue-400'
-                        : 'bg-green-500/15 text-green-400'
-                    }`}
-                  >
-                    {cred.authType === 'key'
-                      ? t('settings.toolSshAuthKey')
-                      : t('settings.toolSshAuthPassword')}
-                  </span>
-                </div>
-              }
-              subtitle={
-                <span className="font-mono">
-                  {cred.username}@{cred.host}:{cred.port}
-                </span>
-              }
-              control={
-                <div className="flex items-center gap-1">
-                  <button
-                    onClick={() => openEditDialog(cred)}
-                    className="p-1 text-text-tertiary hover:text-text-primary transition-colors"
-                    title="Edit"
-                  >
-                    <Pencil size={12} />
-                  </button>
-                  {deletingId === cred.id ? (
-                    <div className="flex items-center gap-1">
-                      <button
-                        onClick={() => handleDelete(cred.id)}
-                        className="px-1.5 py-0.5 text-[10px] text-error hover:bg-error/10 rounded transition-colors"
-                      >
-                        {t('common.confirm')}
-                      </button>
-                      <button
-                        onClick={() => setDeletingId(null)}
-                        className="px-1.5 py-0.5 text-[10px] text-text-tertiary hover:text-text-secondary rounded transition-colors"
-                      >
-                        {t('ssh.cancel')}
-                      </button>
-                    </div>
-                  ) : (
-                    <button
-                      onClick={() => setDeletingId(cred.id)}
-                      className="p-1 text-text-tertiary hover:text-error transition-colors"
-                      title="Delete"
-                    >
-                      <Trash2 size={12} />
-                    </button>
-                  )}
-                </div>
-              }
-            />
-          ))
-        )}
-      </SettingsSection>
-
-      {dialogOpen && (
-        <SshCredentialDialog
-          initial={dialogInitial}
-          onSave={handleSave}
-          onClose={() => setDialogOpen(false)}
-        />
-      )}
     </div>
   )
 }
