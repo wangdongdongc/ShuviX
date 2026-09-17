@@ -1,8 +1,8 @@
 /**
  * 写后审阅（reviewShuvixMdWrite）—— 展示型契约的 YAML 语法兜底。
  *
- * 直接动机：wiki 条目横幅曾含裸标量「冒号+空格」，每个生成条目 frontmatter 都非法，
- * 而 wiki-* 的 validate 返回 unknown、写后审阅静默放行 —— agent 全程无从自纠。
+ * 直接动机：曾有一种生成的 md 在 frontmatter 里写了裸标量「冒号+空格」，每一份的 frontmatter
+ * 都非法，而展示型契约的 validate 返回 unknown、写后审阅静默放行 —— agent 全程无从自纠。
  * 这里钉住：unknown 类型的 frontmatter 语法错必须随工具 result 回执。
  */
 import { describe, it, expect } from 'vitest'
@@ -11,57 +11,33 @@ import { reviewShuvixMdWrite } from '../shuvixMdWrite'
 
 const CTX = { today: '2026-08-28' }
 
-const wikiEntry = (description: string): string =>
+/** 展示型契约的样本：chart（validate 回 unknown —— 没有「整份拒绝」的解析器） */
+const chartFile = (description: string): string =>
   [
     '---',
-    'shuvix: wiki-entry v1',
-    'name: 测试条目',
+    'shuvix: chart v1',
+    'name: 测试图表',
     `description: ${description}`,
-    'shuvix-wiki-content: |-',
-    '  恰好一段话。',
-    'shuvix-wiki-status: draft',
     '---',
     '',
     '正文笔记'
   ].join('\n')
 
 describe('reviewShuvixMdWrite — 展示型契约的 YAML 语法兜底', () => {
-  it('wiki 条目 frontmatter 语法错（裸标量冒号）→ 回执 note，不动文件', () => {
+  it('展示型契约 frontmatter 语法错（裸标量冒号）→ 回执 note，不动文件', () => {
     const out = reviewShuvixMdWrite(
-      wikiEntry('your own notes: the agent reads them'),
-      'entry.md',
+      chartFile('your own notes: the agent reads them'),
+      'chart.md',
       CTX
     )
     expect(out).not.toBeNull()
     expect(out!.note).toContain('not valid YAML')
-    expect(out!.note).toContain('[shuvix wiki-entry v1]')
+    expect(out!.note).toContain('[shuvix chart v1]')
     expect(out!.content).toBeNull()
   })
 
-  it('合法 wiki 条目：updated 由宿主盖章（带引号 —— 裸日期会被 YAML 读成时间戳）', () => {
-    const out = reviewShuvixMdWrite(wikiEntry('plain banner without yaml hazards'), 'entry.md', CTX)
-    expect(out!.note).toContain('Filled in for you: shuvix-wiki-updated: 2026-08-28')
-    expect(out!.content).toContain("shuvix-wiki-updated: '2026-08-28'")
-    // 盖章不越界：frontmatter 之下的用户笔记原样保留
-    expect(out!.content).toContain('正文笔记')
-  })
-
-  it('updated 已是今天（带引号）→ null，不产生无意义改写', () => {
-    const withToday = wikiEntry('plain banner').replace(
-      'shuvix-wiki-status: draft',
-      "shuvix-wiki-status: draft\nshuvix-wiki-updated: '2026-08-28'"
-    )
-    expect(reviewShuvixMdWrite(withToday, 'entry.md', CTX)).toBeNull()
-  })
-
-  it('updated 过期（或裸写）→ 刷新为今天并规范成带引号', () => {
-    const stale = wikiEntry('plain banner').replace(
-      'shuvix-wiki-status: draft',
-      'shuvix-wiki-status: draft\nshuvix-wiki-updated: 2024-01-01'
-    )
-    const out = reviewShuvixMdWrite(stale, 'entry.md', CTX)
-    expect(out!.content).toContain("shuvix-wiki-updated: '2026-08-28'")
-    expect(out!.content).not.toContain('2024-01-01')
+  it('frontmatter 合法 → null：展示型契约没有要盖的章，不产生无意义改写', () => {
+    expect(reviewShuvixMdWrite(chartFile('plain description'), 'chart.md', CTX)).toBeNull()
   })
 
   it('chart 等其它 unknown 类型同样兜底', () => {

@@ -108,7 +108,7 @@ export function useAgentEvents(): void {
   })
 
   // 会话列表成员变化（创建/删除/移动项目）：信号事件 → 重拉全量。覆盖非 UI 发起的变更
-  // （IPC/CLI 直建、wiki/memory 去重开会话）与其它窗口的操作；UI 流程自身的乐观刷新照旧。
+  // （IPC/CLI 直建、知识库/记忆去重开会话）与其它窗口的操作；UI 流程自身的乐观刷新照旧。
   // seq 守卫丢弃乱序返回 —— 连续两次变更时旧响应不得覆盖新列表。
   const sessionsRefetchSeq = useRef(0)
   useAppEvent('session.listChanged', () => {

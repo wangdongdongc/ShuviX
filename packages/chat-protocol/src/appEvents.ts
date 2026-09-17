@@ -30,7 +30,7 @@ export type AppEvent =
   /**
    * 会话列表成员变化（创建 / 删除 / 移动项目）—— 信号事件，消费者重拉 session.list。
    * 不带载荷：列表查询是廉价本地读，快照载荷跨窗口重复且可能乱序；覆盖所有非 UI 发起的
-   * 变更（IPC/CLI 直建、wiki/memory 笔记去重开会话等），UI 流程的乐观刷新照旧。
+   * 变更（IPC/CLI 直建、知识库/记忆笔记去重开会话等），UI 流程的乐观刷新照旧。
    */
   | { type: 'session.listChanged' }
   /**

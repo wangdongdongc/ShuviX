@@ -48,8 +48,6 @@ describe('内置档案', () => {
       'titler',
       'visualization',
       'widget',
-      'wiki',
-      'wiki-writer',
       'work'
     ])
     // 派发专用的窄档案两样都不要：AGENTS.md/CLAUDE.md 是写代码的工程约定，

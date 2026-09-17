@@ -23,7 +23,7 @@ import { splitFrontmatter } from '../markdownFrontmatter'
 
 /**
  * 标记闸门：没有 `shuvix` 键（外部工具 / 用户手写的条目）或标记类型是 `okf` 都算概念；
- * 带别的标记的是本仓其它契约文件（agent / policy / 旧记忆 / 旧 wiki），不是概念。
+ * 带别的标记的是本仓其它契约文件（agent / policy / hook / bot / 旧记忆），不是概念。
  * 判别只看类型段，不看版本 —— 将来 OKF 升版，老条目仍要读得出来。
  */
 function markerAllows(fields: Record<string, unknown>): boolean {

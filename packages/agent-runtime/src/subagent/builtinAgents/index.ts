@@ -39,12 +39,6 @@ import visualizationJa from './md/visualization.ja.md?raw'
 import widgetEn from './md/widget.md?raw'
 import widgetZh from './md/widget.zh.md?raw'
 import widgetJa from './md/widget.ja.md?raw'
-import wikiEn from './md/wiki.md?raw'
-import wikiZh from './md/wiki.zh.md?raw'
-import wikiJa from './md/wiki.ja.md?raw'
-import wikiWriterEn from './md/wiki-writer.md?raw'
-import wikiWriterZh from './md/wiki-writer.zh.md?raw'
-import wikiWriterJa from './md/wiki-writer.ja.md?raw'
 import titlerEn from './md/titler.md?raw'
 import titlerZh from './md/titler.zh.md?raw'
 import titlerJa from './md/titler.ja.md?raw'
@@ -77,14 +71,6 @@ export const NOTEBOOK_PROFILE_NAME = 'notebook'
  * 那份文件的正文经 `renderBotContext` 围栏后追加到本会话**根** Agent 的系统提示词末尾。
  */
 export const BOT_PROFILE_NAME = 'bot'
-
-/**
- * wiki 条目/章程的管理横幅 —— 写在契约文件 frontmatter 的 `description` 字段，
- * 声明 agent 与用户各自拥有文件的哪一半。事实源在 chat-protocol 的 wiki 契约模块
- * （渲染层也要用它，那边够不到本包），与 md/wiki*.md 模板里的同一段文本互为副本
- * （守护测试钉住，改一处会失败）。
- */
-export { WIKI_ENTRY_BANNER, WIKI_TOPIC_BANNER } from '@shuvix/chat-protocol/wikiFileContract'
 
 /**
  * 工作档案 —— 归属项目的会话的基座（形态推导，见 WORK_PROFILE_NAME）：把需求敲定、
@@ -173,24 +159,6 @@ export const WIDGET_SPEC: BuiltinProfileSpec = {
 }
 
 /**
- * wiki 一分为二：`wiki` 是对话入口（只读工具 + Agent），
- * `wiki-writer` 是执行侧（握有全部写入/同意/提交政策，由 `wiki` 派发）。
- * 拆分的判据是爆炸半径 —— 违反后果静默且不可逆的政策必须跑在每次派发的新鲜上下文里，
- * 而对话侧被长对话稀释也无妨：它压根没有写入工具，损坏不了知识库。
- */
-export const WIKI_SPEC: BuiltinProfileSpec = {
-  name: 'wiki',
-  sources: { en: wikiEn, zh: wikiZh, ja: wikiJa },
-  requiredParams: ['wikiRoot']
-}
-
-export const WIKI_WRITER_SPEC: BuiltinProfileSpec = {
-  name: 'wiki-writer',
-  sources: { en: wikiWriterEn, zh: wikiWriterZh, ja: wikiWriterJa },
-  requiredParams: ['wikiRoot']
-}
-
-/**
  * 标题生成 agent —— auto-title 内置 hook 的执行侧。
  * 模型走 agent md `shuvix-model` 的通用链路：内置档案不声明 → 跟随派发方 = 会话当前模型；
  * 想钉住便宜模型就覆盖 `~/.shuvix/agents/titler.md` 写上 `shuvix-model`
@@ -204,7 +172,7 @@ export const TITLER_SPEC: BuiltinProfileSpec = {
 /**
  * 知识库写入侧（OKF，设计 docs/okf-knowledge-design.md §6.3）—— 派发执行：经 `knowledge` 工具
  * 往**本会话所属项目的那个 bundle** 写条目。没有 git、没有提交协议、没有反链复查：簿记归宿主
- * （P3）。与旧 wiki-writer 并存，互不相干。
+ * （P3）。
  *
  * 不依赖任何宿主参数：它从不点名文件系统路径，目标由工具按会话解析。编辑规范（布局、类型
  * 词汇表、写作规则）内联在这份提示词里 —— 库里不放用户可编辑的规范文件，那种文件一落盘就
@@ -217,7 +185,7 @@ export const KNOWLEDGE_WRITER_SPEC: BuiltinProfileSpec = {
 
 /**
  * 内置 spec 全集（四个基座档案 work / chat / notebook / bot 居首，其后为可派发的具名 agent；
- * widget/wiki 依赖宿主根目录参数，缺参自动跳过）
+ * widget 依赖宿主根目录参数，缺参自动跳过）
  */
 export const BUILTIN_PROFILE_SPECS: readonly BuiltinProfileSpec[] = [
   WORK_SPEC,
@@ -229,8 +197,6 @@ export const BUILTIN_PROFILE_SPECS: readonly BuiltinProfileSpec[] = [
   EXPLORE_SPEC,
   VISUALIZATION_SPEC,
   WIDGET_SPEC,
-  WIKI_SPEC,
-  WIKI_WRITER_SPEC,
   TITLER_SPEC,
   KNOWLEDGE_WRITER_SPEC
 ]

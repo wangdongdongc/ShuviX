@@ -56,7 +56,7 @@ export function ExtMainLayout({ host }: { host: ChatHostValue }): React.JSX.Elem
 
   // 揭示信号 → 会话面板（子智能体注册切 Sub-agent；previewInPanel：文件预览切 Preview 工具页）
   useSessionPanelReveal(true, true)
-  // 文件预览请求（preview 工具事件 / Files 面板点击 / 笔记本 wiki-link）→ 预览目标
+  // 文件预览请求（preview 工具事件 / Files 面板点击 / 笔记本 [[双链]]）→ 预览目标
   // （Side Panel 无 app 级右侧栏，由会话面板的 Preview 工具页展示，见 ExtSessionPanel）
   usePreviewRequestBridge()
 

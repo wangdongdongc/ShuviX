@@ -34,7 +34,7 @@ describe('parseConceptText / isOkfConceptText — 「不是概念」的判定表
       doc(["type: ''"]),
       doc(['type: [a]']),
       doc(['type: 5']),
-      // 旧契约文件（agent / policy / 旧记忆 / 旧 wiki）即便带 type 也不是 OKF 概念
+      // 别家契约文件（agent / policy / hook / bot / 旧记忆）即便带 type 也不是 OKF 概念
       doc(['shuvix: memory v1', 'type: Memory'])
     ]
     for (const text of notConcepts) {

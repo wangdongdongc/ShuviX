@@ -14,7 +14,7 @@
  * 用 `shuvix://` URI —— 链接校验对带 scheme 的目标天然跳过。
  */
 
-/** 承载知识库笔记本会话的隐藏项目 id（同 `__wiki__` 的做法；项目列表不可见） */
+/** 承载知识库笔记本会话的隐藏项目 id（项目列表不可见） */
 export const KNOWLEDGE_PROJECT_ID = '__knowledge__'
 
 /**
@@ -47,7 +47,7 @@ export const OKF_VERSION = '0.2'
  * （Obsidian、社区校验器）仍是一份合规概念；反过来，bundle 里**没有**标记的 `.md` 照样按概念
  * 解析 —— 外部工具与用户手写的条目不该因为少一行而消失。它买到的是判别力：写钩子据此把条目
  * 送进 OKF 分支、属性卡据此认出这是知识库条目，而带**别的**标记的文件（agent / policy /
- * 旧记忆 / 旧 wiki）明确不是概念。
+ * 旧记忆）明确不是概念。
  */
 export const KNOWLEDGE_MARKER_TYPE = 'okf'
 export const KNOWLEDGE_MARKER = `${KNOWLEDGE_MARKER_TYPE} v${OKF_VERSION}`

@@ -128,7 +128,7 @@ export class SessionDao extends BaseDao {
       .run(...values, Date.now(), id)
   }
 
-  /** 查找项目内绑定了指定 md 文件的笔记本会话（wiki 项目：一文件至多一会话） */
+  /** 查找项目内绑定了指定 md 文件的笔记本会话（知识库等载体项目：一文件至多一会话） */
   findByProjectAndNotebookPath(projectId: string, notebookPath: string): Session | undefined {
     const row = this.stmt(
       "SELECT * FROM sessions WHERE projectId = ? AND json_extract(settings, '$.notebookPath') = ? LIMIT 1"

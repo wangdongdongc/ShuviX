@@ -15,7 +15,7 @@
  * 写那一半全部绕开它：工具 `create` 拒、侧栏没有新建、写钩子不盖章、变更管线不提交，文件工具的
  * 写入由内置策略 protect-builtin-knowledge 拒。
  *
- * 旧 wiki（services/wikiService.ts）与旧项目记忆（services/memory/）整体搁置，本模块不碰它们。
+ * 旧项目记忆（services/memory/）整体搁置，本模块不碰它（旧 wiki 已于 2026-09-16 整体拆除）。
  */
 export {
   getShuvixKnowledgeRoot,

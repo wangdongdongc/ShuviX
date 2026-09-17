@@ -50,7 +50,7 @@ export function CalendarView({
   const placeholderHeight = Math.round(dayCellSize * 6 + chromeHeightRef.current)
 
   // 派生：YYYY-MM-DD -> Session[]；只在 sessions 引用变化时重算
-  // 隐藏项目（旧 wiki / 知识库 / 注册表目录）的会话不计入（其项目不在列表中,日列表本就渲染不出 → 连圆点一起排除）
+  // 隐藏项目（知识库 / 注册表目录）的会话不计入（其项目不在列表中,日列表本就渲染不出 → 连圆点一起排除）
   const sessionsByDay = useMemo(
     () => groupSessionsByDay(sessions.filter((s) => !isHiddenProjectId(s.projectId))),
     [sessions]

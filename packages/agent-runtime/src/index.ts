@@ -374,11 +374,7 @@ export {
   EXPLORE_SPEC,
   VISUALIZATION_SPEC,
   WIDGET_SPEC,
-  WIKI_SPEC,
-  WIKI_WRITER_SPEC,
   TITLER_SPEC,
-  WIKI_ENTRY_BANNER,
-  WIKI_TOPIC_BANNER,
   type BuiltinProfileDeps,
   type BuiltinProfileSpec
 } from './subagent/builtinAgents'

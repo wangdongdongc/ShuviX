@@ -40,7 +40,7 @@ export interface SidebarProps {
   footerActions?: React.ReactNode
   /** 正文整体替换（桌面日历视图）；非空时不渲染分组列表与归档区 */
   bodyOverride?: React.ReactNode
-  /** 分组列表前置插槽（桌面：知识库分组 WikiGroup，排在「项目」分节之上）；仅默认正文渲染，空态时也保留（功能入口） */
+  /** 分组列表前置插槽（桌面：Bots 与知识库分组，排在「项目」分节之上）；仅默认正文渲染，空态时也保留（功能入口） */
   groupsPrepend?: React.ReactNode
   /** 宿主弹窗插槽（项目编辑 / 会话配置 / 删除确认等） */
   overlays?: React.ReactNode

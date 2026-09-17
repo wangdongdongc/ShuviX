@@ -5,19 +5,16 @@
  * 这里补的是既有 bots/ui-sidebar 那一批（A0-11…）没覆盖的三处装配缝：
  *   - **临时组**走的是 `openGroupMenu(..., isTemp=true)` 分支：它没有项目配置。那半个
  *     分支此前无人碰过，而它恰好是「临时组头点了项目配置会怎样」的唯一防线。
- *   - **知识库组**是另一个装配点（WikiGroup 自己拼 items，不经 ProjectSessionGroups）。
- *     pages.ts 的 ACTION_HEADER 一直靠「跳过 wiki 组头」这个假设活着，这里把它验了。
+ *   - **知识库组**是另一个装配点（KnowledgeGroup 自己拼 items，不经 ProjectSessionGroups）。
+ *     它的组头菜单在 knowledge-sidebar.e2e.ts（KE-4 / KE-7）里覆盖。
  *   - `SessionGroup` 把 `onMenu` **直接**当 onContextMenu 用，而 `SessionItem` 外面包了
  *     一层带 id 的 lambda —— 两处接法不同，故「⋮ 与右键同源」两边各断一次。
  *
- * 全程无 LLM。知识库刷新那一条**必须排在本文件任何其它 wiki 交互之前**：wiki 项目行是
- * 首次扫描时懒建的，一旦被别的用例先扫出来，「之前没有」这半条就永远为真不了
- * （只打开菜单再取消不会扫 —— 那条路根本不调 onAction）。
+ * 全程无 LLM。
  */
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { WIKI_PROJECT_ID } from '@shuvix/chat-protocol/wiki'
 import { until } from '../../harness/cdp'
 import { launchApp, type E2EApp } from '../../harness/launch'
 import { createProject, newSessionsAfter, waitRendererReady } from '../../harness/seed'
@@ -41,12 +38,6 @@ let projectId = ''
 const projectIdOf = (sid: string): Promise<string | null> =>
   app.main.eval<string | null>(
     `window.api.session.getById(${JSON.stringify(sid)}).then((s) => s.projectId)`
-  )
-
-/** 隐藏的 wiki 项目行是否已落库 —— `project.list` 会把它滤掉，只能按 id 取 */
-const wikiProjectExists = (): Promise<boolean> =>
-  app.main.eval<boolean>(
-    `window.api.project.getById(${JSON.stringify(WIKI_PROJECT_ID)}).then((p) => !!p)`
   )
 
 /** items → 便于逐项比对的序列（分隔符记成 'sep'；分组菜单目前没有分隔符） */
@@ -82,20 +73,6 @@ describe('三种组头各给什么菜单', () => {
       'edit-project'
     ])
     expect(idsOf(await sidebar.groupMenuShots('temp'))).toEqual(['new-chat', 'new-bot-chat'])
-  })
-
-  // GM-02 —— 只开菜单再取消，不选任何项：这一步**不会**触发扫描，故排在 GM-03 之前无害
-  it('知识库组头只有「刷新」一项', async () => {
-    expect(idsOf(await sidebar.groupMenuShots('wiki'))).toEqual(['refresh'])
-  })
-
-  // GM-03 —— 必须排在本文件任何会触发扫描的 wiki 交互之前（见文件头）
-  it('选中「刷新」真的会扫：隐藏的 wiki 项目此刻才被懒建出来', async () => {
-    expect(await wikiProjectExists()).toBe(false)
-
-    await sidebar.pickGroupMenu('wiki', 'refresh')
-
-    await until(wikiProjectExists, 'wiki project row lazily created by the scan')
   })
 })
 
@@ -143,7 +120,7 @@ describe('⋮ 与右键同源（组头这一侧的接法与会话行不同）', 
     expect(temp!.legacyActionIcons).toEqual([])
     expect(temp!.menuOpacity).toBe('0')
 
-    for (const target of [{ project: PROJECT_NAME }, 'wiki'] as const) {
+    for (const target of [{ project: PROJECT_NAME }, 'knowledge'] as const) {
       const header = await sidebar.groupAffordances(target)
       expect(header, JSON.stringify(target)).not.toBeNull()
       expect(header!.buttons, JSON.stringify(target)).toEqual(['toggle', 'menu'])

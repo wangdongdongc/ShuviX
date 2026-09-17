@@ -12,7 +12,7 @@ import './edit'
 import './ask'
 import './browser'
 // git 工具（isomorphic-git 跨端实现）：不在内置 default 档案清单 —— 主 Agent 默认无、
-// 用户可覆盖 default.md 加入；子代理（如 wiki curator）经白名单解析不受默认集限制
+// 用户可覆盖 default.md 加入；子代理按自己档案的白名单解析，不受默认集限制
 import './git'
 // preview 工具：不在内置 default 档案清单 —— 可视化子代理经白名单解析使用
 import './preview'

@@ -37,8 +37,7 @@ const LANGS = ['en', 'zh', 'ja'] as const
 const build = (spec: BuiltinProfileSpec, language: string): AgentProfile =>
   buildBuiltinProfile(spec, {
     language,
-    widgetsRoot: '/w',
-    wikiRoot: '/k'
+    widgetsRoot: '/w'
   }) as AgentProfile
 
 describe('派发清单点名了哪些 agent', () => {

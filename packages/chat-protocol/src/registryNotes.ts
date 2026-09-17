@@ -10,7 +10,7 @@
 
 export type RegistryNoteKind = 'bot' | 'agent' | 'policy' | 'hook'
 
-/** 各注册表目录的隐藏载体项目 id（同 `__wiki__` / `__knowledge__` 的做法） */
+/** 各注册表目录的隐藏载体项目 id（同 `__knowledge__` 那几个的做法） */
 export const REGISTRY_NOTE_PROJECT_IDS: Readonly<Record<RegistryNoteKind, string>> = {
   bot: '__bots__',
   agent: '__agents__',

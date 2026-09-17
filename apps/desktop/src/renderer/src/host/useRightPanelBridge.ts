@@ -14,7 +14,7 @@ const isPinnedWindow = window.location.hash.startsWith('#pinned-chat')
  * 右侧面板（app 级：浏览器/Preview/Widget）属于宿主外壳（不在可复用的对话框 @shuvix/chat-ui 内），
  * 因此把"开/切右面板"的反应留在宿主侧：
  *   - browser_event 订阅 agent 事件开/关浏览器面板；
- *   - filePreviewRequest（preview 工具 / Files 面板点击 / 笔记本 wiki-link）经共享
+ *   - filePreviewRequest（preview 工具 / Files 面板点击 / 笔记本 [[双链]]）经共享
  *     usePreviewRequestBridge 落为预览目标，主窗再展开右侧面板并切到 preview tab
  *     （悬浮窗由 PreviewOverlay 按目标自动露出，不动窗口宽度）。
  * （Sub-agent tab 无自动揭示信号 —— 子会话经工具栏胶囊徽标可见，由用户手动打开。）

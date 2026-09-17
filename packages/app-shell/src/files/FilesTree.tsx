@@ -1,6 +1,6 @@
 /**
  * FilesTree — 文件树渲染容器(基于 @pierre/trees,path-first + Shadow DOM 隔离)。
- * 由 FilesPanel(右侧 Files 标签)与侧栏 WikiView 共用。
+ * 由 FilesPanel(右侧 Files 标签)使用。
  * key 由父组件按 root 切换,保证不同工作目录间彻底重建模型;
  * 同一 root 下的增量更新通过 model.resetPaths 推送。
  *

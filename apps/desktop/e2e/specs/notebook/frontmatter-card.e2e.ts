@@ -10,7 +10,7 @@
  * 校验态（解析器级校验经 ChatApi `shuvixMd.validate` 回传）：状态徽章只认
  * is-ok / is-warn / is-err 类名（chip 文案是 i18n 产物，不断言）；横幅行是解析器
  * 英文原文，可断言稳定片段（"unknown rule key" / "rejected" / "object.type"）；
- * 无校验器的类型（wiki-*）卡片照常渲染但不显示任何校验态。agent 与 policy 的解析器
+ * 无校验器的类型（chart）卡片照常渲染但不显示任何校验态。agent 与 policy 的解析器
  * 都带 warn 通道，非法时横幅逐条给出拒绝原因。
  */
 import { mkdirSync, writeFileSync, readFileSync } from 'node:fs'
@@ -72,14 +72,14 @@ const WARN_POLICY_MD = [
   ''
 ].join('\n')
 
-// 无校验器的契约类型（unknown）：卡片渲染但不显示校验态
-const WIKI_MD = [
+// 无校验器、也无描述符的契约类型（unknown）：卡片照常渲染但不显示校验态，徽章走裸类型名回退
+const CHART_MD = [
   '---',
-  'shuvix: wiki-entry v1',
-  'name: wiki-demo',
+  'shuvix: chart v1',
+  'name: chart-demo',
   '---',
   '',
-  'Wiki entry body.',
+  'Chart file body.',
   ''
 ].join('\n')
 
@@ -205,7 +205,7 @@ beforeAll(async () => {
   writeFileSync(join(projDir, 'plain-note.md'), PLAIN_MD)
   writeFileSync(join(projDir, 'bad-policy.md'), BAD_POLICY_MD)
   writeFileSync(join(projDir, 'warn-policy.md'), WARN_POLICY_MD)
-  writeFileSync(join(projDir, 'wiki-note.md'), WIKI_MD)
+  writeFileSync(join(projDir, 'chart-note.md'), CHART_MD)
   writeFileSync(join(projDir, 'bad-agent.md'), BAD_AGENT_MD)
   writeFileSync(join(projDir, 'okf-note.md'), OKF_MD)
   const project = await createProject(app.main, { name: 'FmCardProj', path: projDir })
@@ -216,7 +216,7 @@ beforeAll(async () => {
     'card-demo.md',
     'bad-policy.md',
     'warn-policy.md',
-    'wiki-note.md',
+    'chart-note.md',
     'bad-agent.md',
     'okf-note.md',
     'plain-note.md'
@@ -328,7 +328,7 @@ describe('frontmatter 属性卡', () => {
   /**
    * OKF 条目卡（设计 §8.3）。这份卡与别家有两处不同，都在这里钉住：
    *   1. 键名是 OKF 的通用词（`type` / `status`），候选项按「标记类型 + 键」分派 ——
-   *      给的必须是知识库词汇表与 OKF 状态，不是 wiki 那两套同名枚举；
+   *      给的必须是知识库词汇表与 OKF 状态，不是别家契约里同名键的枚举；
    *   2. 机器写的三行（sources / generated / verified）恒只读 —— 卡上但凡给个输入框，
    *      用户和读得到这张卡的 agent 就能自称已核实，那正是设计 P4 要防的事。
    */
@@ -342,7 +342,7 @@ describe('frontmatter 属性卡', () => {
       )
     ).toBe('OKF entry · v0.2')
 
-    // 两个下拉的候选项来自知识库契约（KNOWLEDGE_TYPES / OKF_STATUSES），不是 wiki 的同名枚举
+    // 两个下拉的候选项来自知识库契约（KNOWLEDGE_TYPES / OKF_STATUSES），不是别家契约里同名键的枚举
     const selects = await app.main.eval<Array<{ key: string; value: string; options: string[] }>>(
       `[...document.querySelectorAll('.cm-shuvix-fmcard-row')]
         .map((r) => ({ row: r, sel: r.querySelector('.cm-shuvix-fmcard-enum select') }))
@@ -356,7 +356,7 @@ describe('frontmatter 属性卡', () => {
     expect(selects.map((s) => s.key)).toEqual(['type', 'status'])
     expect(selects[0]).toMatchObject({ value: 'Memory' })
     expect(selects[0].options).toContain('Decision')
-    expect(selects[0].options).not.toContain('concept') // wiki 的条目类型枚举
+    expect(selects[0].options).not.toContain('concept') // 小写 'concept' 不是知识库词汇表里的值
     expect(selects[1]).toMatchObject({ value: 'draft', options: ['draft', 'stable', 'deprecated'] })
 
     // tags 是 YAML 块序列（不是逗号串）—— 照样渲染成 chips，而不是折成 `[2]`
@@ -454,17 +454,17 @@ describe('frontmatter 属性卡', () => {
     expect(banner.text).toContain('object.type')
   })
 
-  it('无校验器类型（wiki-entry）：卡片照常渲染但不显示任何校验态', async () => {
-    await openNotebook('wiki-note', 'Wiki entry body')
+  it('无校验器类型（chart）：卡片照常渲染但不显示任何校验态', async () => {
+    await openNotebook('chart-note', 'Chart file body')
     await until(
       () => app.main.eval<boolean>(`document.querySelector('.cm-shuvix-fmcard') !== null`),
-      'wiki frontmatter card rendered'
+      'chart frontmatter card rendered'
     )
     const badge = await app.main.eval<string>(
       `document.querySelector('.cm-shuvix-fmcard-badge')?.textContent ?? ''`
     )
-    // 徽章文案取 shuvixMdDescriptors 的 badge（f18e6d2 起 wiki-entry 有描述符），非裸类型名回退
-    expect(badge).toBe('ShuviX wiki entry · v1')
+    // chart 没有描述符：徽章走「ShuviX <类型段>」的裸回退（有描述符的类型另有用例钉 badge 文案）
+    expect(badge).toBe('ShuviX chart · v1')
 
     // unknown 状态不 paint：等异步校验落定后，状态徽章仍隐藏且无任何 is-* 语义类
     await sleep(800)

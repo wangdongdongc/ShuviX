@@ -17,57 +17,29 @@ import {
   NOTEBOOK_PROFILE_NAME,
   BOT_PROFILE_NAME,
   WIDGET_SPEC,
-  WIKI_SPEC,
-  WIKI_WRITER_SPEC,
-  WIKI_ENTRY_BANNER,
-  WIKI_TOPIC_BANNER,
   WORK_PROFILE_NAME,
   pickLocalizedSource
 } from '../../subagent/builtinAgents'
-import {
-  isWikiEntryFile,
-  parseWikiEntryHead,
-  WIKI_ALLOWED_TYPES_KEY,
-  WIKI_CONTENT_KEY,
-  WIKI_ENTRY_MARKER,
-  WIKI_ENTRY_STATUSES,
-  WIKI_ENTRY_TYPE_KEY,
-  WIKI_ENTRY_TYPES,
-  WIKI_FILE_MARKER_KEY,
-  WIKI_SOURCES_KEY,
-  WIKI_STATUS_KEY,
-  WIKI_TOPIC_MARKER,
-  WIKI_UPDATED_KEY
-} from '@shuvix/chat-protocol/wikiFileContract'
 import { KNOWLEDGE_TYPES } from '@shuvix/chat-protocol/knowledge'
 import { BOT_CONTEXT_TAG } from '../../bot/botContext'
-import { parse as parseYaml } from 'yaml'
 import type { AgentProfile } from '../../subagent/types'
 
-const ALL_PARAMS = { widgetsRoot: '/w', wikiRoot: '/k' }
+const ALL_PARAMS = { widgetsRoot: '/w' }
 const LANGS = ['en', 'zh', 'ja'] as const
 const profile = (name: string, language?: string): AgentProfile =>
   buildBuiltinProfiles({ ...ALL_PARAMS, language }).find((a) => a.name === name)!
 
-/** 条目/章程模板与横幅都在执行侧（wiki-writer）—— 对话侧只有它们的浓缩说明 */
-const wikiPrompt = (language: string): string =>
-  buildBuiltinProfile(WIKI_WRITER_SPEC, { wikiRoot: '/k', language })!.systemPrompt
-
-/** 取出提示词里的 ```markdown 围栏样例（wiki 的条目模板与章程模板都是这种块） */
-const markdownSamples = (prompt: string): string[] =>
-  [...prompt.matchAll(/```markdown\n([\s\S]*?)\n```/g)].map((m) => m[1])
-
 describe('buildBuiltinProfile — md 解析 + 宿主参数插值', () => {
   it('en 档案解析出全部字段，宿主参数就地替换', () => {
-    const built = buildBuiltinProfile(WIKI_WRITER_SPEC, { wikiRoot: '/wikis' })!
-    expect(built.displayName).toBe('Knowledge Base Writer')
+    const built = buildBuiltinProfile(WIDGET_SPEC, { widgetsRoot: '/widgets' })!
+    expect(built.displayName).toBe('Widget Builder')
     expect(built.description).toBe(
-      'Executes changes to the local wiki knowledge base: entries, topics, lifecycle and git history.'
+      'Creates, maintains and exports ShuviX Widgets — persistent mini React apps that live in the Widget panel.'
     )
-    expect(built.systemPrompt).toContain('The wiki root is: /wikis')
-    expect(built.systemPrompt).not.toContain('{{wikiRoot}}')
+    expect(built.systemPrompt).toContain('Widgets live at /widgets/<id>/')
+    expect(built.systemPrompt).not.toContain('{{widgetsRoot}}')
     expect(built.source).toBe('builtin')
-    expect(built.tools).toEqual(['read', 'grep', 'glob', 'ls', 'write', 'edit', 'git', 'ask'])
+    expect(built.tools).toEqual(['read', 'write', 'edit', 'ls', 'glob', 'grep', 'bash', 'git'])
   })
 
   it('会话级 {{shuvix:*}} 占位符不在此替换（留给 createAgent）', () => {
@@ -76,84 +48,8 @@ describe('buildBuiltinProfile — md 解析 + 宿主参数插值', () => {
 
   it('缺必需宿主参数 → 返回 null(该端不支持此 agent)', () => {
     expect(buildBuiltinProfile(WIDGET_SPEC, {})).toBeNull()
-    expect(buildBuiltinProfile(WIKI_SPEC, { widgetsRoot: '/w' })).toBeNull()
-  })
-
-  it('wiki 两个横幅常量与三语 md 模板互为副本（改一处即失败）', () => {
-    for (const language of LANGS) {
-      const prompt = wikiPrompt(language)
-      expect(prompt, `wiki.${language} entry banner`).toContain(WIKI_ENTRY_BANNER)
-      expect(prompt, `wiki.${language} topic banner`).toContain(WIKI_TOPIC_BANNER)
-    }
-  })
-
-  it('wiki 模板逐字使用契约的标记与字段名（契约改名而提示词未跟进即失败）', () => {
-    const keys = [
-      WIKI_CONTENT_KEY,
-      WIKI_STATUS_KEY,
-      WIKI_ENTRY_TYPE_KEY,
-      WIKI_UPDATED_KEY,
-      WIKI_SOURCES_KEY,
-      WIKI_ALLOWED_TYPES_KEY
-    ]
-    for (const language of LANGS) {
-      const prompt = wikiPrompt(language)
-      for (const key of keys) expect(prompt, `wiki.${language} ${key}`).toContain(`${key}:`)
-      for (const marker of [WIKI_ENTRY_MARKER, WIKI_TOPIC_MARKER]) {
-        expect(prompt, `wiki.${language} ${marker}`).toContain(`${WIKI_FILE_MARKER_KEY}: ${marker}`)
-      }
-      // 枚举全集也钉住 —— 契约里加一个状态/页面类型而三语提示词没跟进即失败
-      expect(prompt, `wiki.${language} statuses`).toContain(WIKI_ENTRY_STATUSES.join(' | '))
-      expect(prompt, `wiki.${language} types`).toContain(WIKI_ENTRY_TYPES.join(' | '))
-    }
-  })
-
-  it('wiki 拆分的结构性保证：对话侧无任何写入工具，执行侧只可派发', () => {
-    for (const language of LANGS) {
-      const desk = buildBuiltinProfile(WIKI_SPEC, { wikiRoot: '/k', language })!
-      // 拆分的意义就在这份清单上：对话侧拿不到写入类工具，长对话把上下文稀释掉时也不会
-      // 顺手改坏知识库（真要保证不被改坏得靠 security 策略，这里是少给工具少跑偏）。
-      // git 也不给 —— 它是单个工具带 commit 子命令，给了就等于把写入动作放回对话侧的清单里。
-      for (const forbidden of ['write', 'edit', 'git']) {
-        expect(desk.tools, `wiki.${language} 不得持有 ${forbidden}`).not.toContain(forbidden)
-      }
-      expect(desk.tools, `wiki.${language} 需能派发`).toContain('agent')
-      // 对话侧必须点名执行侧 —— 派发工具不枚举 agent 名，名字只能来自提示词
-      expect(desk.systemPrompt, `wiki.${language} 需点名 wiki-writer`).toContain('wiki-writer')
-      // 派发调用形状与确认通道必须写明 —— 弱模型曾靠猜参数名连番失败、把批准确认写成纯文本
-      expect(desk.systemPrompt, `wiki.${language} 需给出派发参数形状`).toContain(
-        'name: "wiki-writer"'
-      )
-      expect(desk.systemPrompt, `wiki.${language} 确认须走 ask 工具`).toContain('`ask`')
-    }
-  })
-
-  it('模板里的条目样例本身就是合法契约文件（提示词与解析器不漂移）', () => {
-    for (const language of LANGS) {
-      const sample = markdownSamples(wikiPrompt(language)).find((s) =>
-        s.includes(WIKI_ENTRY_MARKER)
-      )!
-      expect(sample, `wiki.${language} 缺条目样例`).toBeDefined()
-      expect(isWikiEntryFile(sample), `wiki.${language}`).toBe(true)
-      // 样例的占位正文必须能被取出 —— 取不到说明块标量写法与解析器不一致
-      expect(parseWikiEntryHead(sample)?.content, `wiki.${language}`).toBeTruthy()
-    }
-  })
-
-  it('模板 frontmatter 必须是合法 YAML（宽容解析器放得过，预览/校验的真 YAML 放不过）', () => {
-    // 上一条走 wikiFileContract 的零依赖宽容解析器 —— 它按规范形态取值,不做 YAML 合法性
-    // 判定,曾放过条目横幅里的 ": "（裸标量禁止冒号+空格）,LLM 逐字照抄后每个生成条目
-    // 都被 frontmatter 卡判为 YAML 语法错。这里用真 YAML 解析器把每个模板样例钉死,并
-    // round-trip 断言横幅逐字还原（防引号/特殊字符被解析改写）。
-    for (const language of LANGS) {
-      for (const sample of markdownSamples(wikiPrompt(language))) {
-        const fm = /^---\n([\s\S]*?)\n---/.exec(sample)?.[1]
-        expect(fm, `wiki.${language} 样例缺 frontmatter`).toBeTruthy()
-        const doc = parseYaml(fm!) as Record<string, unknown>
-        const banner = sample.includes(WIKI_ENTRY_MARKER) ? WIKI_ENTRY_BANNER : WIKI_TOPIC_BANNER
-        expect(doc.description, `wiki.${language} banner round-trip`).toBe(banner)
-      }
-    }
+    // 给了别的参数也不算数 —— 缺的是它自己声明的那一个
+    expect(buildBuiltinProfile(WIDGET_SPEC, { language: 'zh' })).toBeNull()
   })
 })
 
@@ -178,7 +74,7 @@ describe('语言解析 — 精确 → 基础 → en，按文件整体回退', ()
 })
 
 describe('buildBuiltinProfiles — 全集现算', () => {
-  it('全参数 → 十三个内置,四个基座档案居首;缺 widget/wiki 根 → 自动跳过', () => {
+  it('全参数 → 十一个内置,四个基座档案居首;缺 widget 根 → 自动跳过', () => {
     // bot-notes 已退役（bot 自己维护自己的正文，没有单独的笔记段）—— 名单里不该再有它
     expect(buildBuiltinProfiles(ALL_PARAMS).map((a) => a.name)).toEqual([
       'work',
@@ -190,12 +86,10 @@ describe('buildBuiltinProfiles — 全集现算', () => {
       'explore',
       'visualization',
       'widget',
-      'wiki',
-      'wiki-writer',
       'titler',
       'knowledge-writer'
     ])
-    // titler / knowledge-writer 无宿主参数依赖：缺 widget/wiki 根也在
+    // titler / knowledge-writer 无宿主参数依赖：缺 widget 根也在
     //（模型走 shuvix-model 通用链路，内置不声明；知识库目标由工具按会话解析，不吃参数）
     expect(buildBuiltinProfiles({}).map((a) => a.name)).toEqual([
       'work',
@@ -617,17 +511,12 @@ describe('coding 档案钉板(从 work 拆出的工程人格)', () => {
       for (const named of ['explore', 'visualization']) {
         expect(coding, `coding.${language} 需点名 ${named}`).toContain(named)
       }
-      for (const gone of ['widget', 'wiki-writer']) {
-        expect(coding, `coding.${language} 不应点名 ${gone}`).not.toContain(gone)
-      }
+      expect(coding, `coding.${language} 不应点名 widget`).not.toContain('widget')
       // work：通用场景要作图/小工具，广域调研留给 coding 子会话
       for (const named of ['visualization', 'widget']) {
         expect(work, `work.${language} 需点名 ${named}`).toContain(named)
       }
-      // 旧 wiki 已搁置：派发清单不再提它，免得模型把新知识库的活派给旧库的执行体
-      for (const gone of ['explore', 'wiki-writer']) {
-        expect(work, `work.${language} 不应点名 ${gone}`).not.toContain(gone)
-      }
+      expect(work, `work.${language} 不应点名 explore`).not.toContain('explore')
     }
   })
 })
@@ -757,8 +646,8 @@ describe('bot 档案钉板（bot 会话的基座）', () => {
  *  - 一律 `buildBuiltinProfile(spec, …)` 逐份构建并先断非 null，不遍历 `buildBuiltinProfiles()`
  *    的结果 —— 后者 filter 掉解析失败的项，一份写坏的本地化 md 会直接从数组里消失，
  *    循环于是照样全绿；
- *  - 宿主参数一律给全（ALL_PARAMS）—— 缺参的 spec 构建即返回 null，widget/wiki/wiki-writer
- *    三份会当场跳过检查，那正是本节要堵的洞。
+ *  - 宿主参数一律给全（ALL_PARAMS）—— 缺参的 spec 构建即返回 null，widget 那一份会当场
+ *    跳过检查，那正是本节要堵的洞。
  *
  * 用例清单：
  *  - AD-1 每份内置 × 每门语言都有真名字：构建非 null、displayName 非空且不等于 slug

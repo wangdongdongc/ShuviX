@@ -6,7 +6,7 @@
  * 文件的**笔记本会话**（隐藏项目 `__bots__`）—— 与知识库条目同一条路：live-preview、自动保存、
  * 外部改动自动重载，解析器的判定由属性卡实时显示。**没有内置 bot**，故列表里也没有内置/用户之分。
  *
- * prop 驱动、不触宿主 API（同 WikiGroup / KnowledgeGroup）：清单 / 打开 / 新建 / 打开目录 / 新建会话 /
+ * prop 驱动、不触宿主 API（同 KnowledgeGroup）：清单 / 打开 / 新建 / 打开目录 / 新建会话 /
  * 删除由宿主注入。扫描是懒的：**首次展开才扫**，之后每次展开 + 窗口聚焦 + `bot.changed` 事件（笔记本
  * 写入 / 新建 / 删除）重扫，stale-guard 防乱序回包。bot 自己在答话途中用 `edit` 改 md 不广播，由聚焦
  * 重扫兜底。
@@ -166,7 +166,7 @@ export function BotGroup({ adapter }: BotGroupProps): React.JSX.Element {
     })
   }
 
-  // 行的通用外壳：与 WikiGroup 的条目行同一副排版（10px 基准内缩、13px、选中态 bg-bg-active）。
+  // 行的通用外壳：与 KnowledgeGroup 的条目行同一副排版（10px 基准内缩、13px、选中态 bg-bg-active）。
   // 标签直接是行的子节点而不包一层 div —— 侧栏 e2e 按「div > span.truncate」认会话行，别撞上
   const rowClass = (active: boolean): string =>
     `group relative flex items-center gap-1.5 pl-2.5 pr-1.5 py-0.5 cursor-pointer transition-opacity duration-200 ${

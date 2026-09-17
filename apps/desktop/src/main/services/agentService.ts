@@ -1,7 +1,7 @@
 /**
  * AgentService — Sub-Agent 管理
  *
- * 内置 agents：硬编码进 @shuvix/agent-runtime（builtinAgents，各端共享；wiki 经工厂注入桌面 wiki 根）。
+ * 内置 agents：硬编码进 @shuvix/agent-runtime（builtinAgents，各端共享）。
  * 用户 agents：~/.shuvix/agents/<name>.md（用户可编辑；标准化单文件格式见
  *   agentDefinitionFile.ts —— 通用 key 对齐 Claude Code，ShuviX 自有字段带 `shuvix-` 前缀；
  *   文件名去掉 .md 即默认 agent name，frontmatter `name:` 可覆盖）。
@@ -15,7 +15,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, unlink
 import { basename, isAbsolute, join, resolve, sep } from 'path'
 import { shell } from 'electron'
 import i18next from 'i18next'
-import { getDefaultAgentsDir, getDefaultWikisDir, getWidgetsDir } from '../utils/paths'
+import { getDefaultAgentsDir, getWidgetsDir } from '../utils/paths'
 import {
   buildBuiltinProfiles,
   parseAgentDefinitionFile,
@@ -152,12 +152,11 @@ class AgentService implements AgentProfileRegistry {
     return { valid, invalid }
   }
 
-  /** 内置 agent 列表（统一 spec 构建器；每次现算以反映当前语言与 wiki / widget 根等宿主参数） */
+  /** 内置 agent 列表（统一 spec 构建器；每次现算以反映当前语言与 widget 根等宿主参数） */
   private builtinAgents(): AgentProfile[] {
     return buildBuiltinProfiles({
       language: i18next.language,
-      widgetsRoot: getWidgetsDir(),
-      wikiRoot: getDefaultWikisDir()
+      widgetsRoot: getWidgetsDir()
     })
   }
 
@@ -222,7 +221,7 @@ class AgentService implements AgentProfileRegistry {
    *
    * 判据只有名字：基座档案（work / chat / notebook）不算，它们由会话形态推导、从不被点名
    * （见 BASE_PROFILE_NAMES）；其余任何档案都可以。曾经还有第二道门 `shuvix-session-awareness`
-   * （只可派发的执行体如 wiki-writer 不声明它），随会话内切换档案一并退役：能点名子会话档案的
+   * （只可派发的执行体不声明它），随会话内切换档案一并退役：能点名子会话档案的
    * 只剩 LLM 自己，而它被提示词导向 `coding`；为这一种误用留一个要用户在 GUI 里勾的开关不值。
    */
   isSessionProfile(profile: AgentProfile): boolean {

@@ -31,12 +31,11 @@ import { basename, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { AgentProfile, ParsedAgentFile } from '@shuvix/agent-runtime'
 
-const state = vi.hoisted(() => ({ dir: '', wikis: '', widgets: '' }))
+const state = vi.hoisted(() => ({ dir: '', widgets: '' }))
 
 vi.mock('electron', () => ({ shell: { openPath: vi.fn() } }))
 vi.mock('../../utils/paths', () => ({
   getDefaultAgentsDir: () => state.dir,
-  getDefaultWikisDir: () => state.wikis,
   getWidgetsDir: () => state.widgets,
   getShuvixKnowledgeRootDir: () => '/tmp/shuvix-knowledge-shuvix'
 }))
@@ -50,7 +49,6 @@ let agentService: AgentService
 beforeAll(async () => {
   const base = mkdtempSync(join(tmpdir(), 'shuvix-agentsvc-'))
   state.dir = join(base, 'agents')
-  state.wikis = join(base, 'wikis')
   state.widgets = join(base, 'widgets')
   ;({ agentService } = await import('../agentService'))
 })
@@ -165,15 +163,15 @@ describe('agentService.getSource —— 原文编辑器的数据源', () => {
     expect(agentService.getSource('work', 'builtin')).toEqual({ text })
   })
 
-  it('AS-4 内置回写保真：{{shuvix:*}} 会话变量原样留给 createAgent，{{wikiRoot}} 宿主参数已插值', () => {
+  it('AS-4 内置回写保真：{{shuvix:*}} 会话变量原样留给 createAgent，{{widgetsRoot}} 宿主参数已插值', () => {
     const workText = (agentService.getSource('work', 'builtin') as { text: string }).text
     // 会话级变量在 createAgent 才替换 —— 副本里必须还是占位符，否则用户拿到的是别人的环境
     expect(workText).toContain('{{shuvix:workingDirectory}}')
 
-    const wikiText = (agentService.getSource('wiki', 'builtin') as { text: string }).text
+    const widgetText = (agentService.getSource('widget', 'builtin') as { text: string }).text
     // 宿主参数在构建档案时就地替换 —— 用户看到的是真实路径
-    expect(wikiText).toContain(state.wikis)
-    expect(wikiText).not.toContain('{{wikiRoot}}')
+    expect(widgetText).toContain(state.widgets)
+    expect(widgetText).not.toContain('{{widgetsRoot}}')
   })
 })
 
@@ -369,15 +367,14 @@ describe('agentService.isSessionProfile —— 可作子会话档案的判据表
     expect(judge('work')).toBe(false)
   })
 
-  it('AS-23b 其余内置全部为 true —— 含曾经只可派发的 wiki-writer / titler', () => {
+  it('AS-23b 其余内置全部为 true —— 含曾经只可派发的 titler', () => {
     for (const name of [
       'coding',
       'browser',
       'explore',
       'visualization',
       'widget',
-      'wiki',
-      'wiki-writer',
+      'knowledge-writer',
       'titler'
     ]) {
       expect(judge(name), name).toBe(true)

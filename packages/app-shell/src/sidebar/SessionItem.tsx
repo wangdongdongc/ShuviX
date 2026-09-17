@@ -9,8 +9,8 @@
  * 那份判断本来就在容器手里（ProjectSessionGroups / SessionList）。
  *
  * 子会话（`isSub` / `subCount`）借的是**知识库那套文件夹/文件语汇**：缩进用行内
- * paddingLeft（同 WikiGroup 的 `indent(depth)`，不是每行一条竖线），折叠钮就是行首那枚
- * 图标（同 WikiGroup 的 FolderClosed/FolderOpen 整行可点、ProjectMemoryFolder 的计数排版），
+ * paddingLeft（同 KnowledgeGroup 的 `indent(depth)`，不是每行一条竖线），折叠钮就是行首那枚
+ * 图标（同 KnowledgeGroup 的 FolderClosed/FolderOpen 整行可点、ProjectMemoryFolder 的计数排版），
  * 数量是标题后一个暗淡的小数字而不是一枚药丸。有子会话的行，行首图标外面包一层折叠钮：
  * 普通会话的图标换成 MessagesSquare（两片叠起来的对话框 = 这里不止一场对话），bot / 悬浮
  * 会话保留自己的身份图标 —— 身份图标若顶掉折叠钮，它们的子会话在侧栏里就够不着了（bot 恰恰

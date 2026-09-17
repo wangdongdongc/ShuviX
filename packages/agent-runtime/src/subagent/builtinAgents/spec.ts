@@ -9,9 +9,9 @@
  * 语言解析：精确语言 → 基础语言 → en，**按文件整体回退**（半中半英的档案比全英文更难读）。
  * 未翻译的语言文件里正文先放英文原文，翻译债因此出现在正确的位置。
  *
- * 宿主参数（`{{widgetsRoot}}` / `{{wikiRoot}}`）在**构建档案时**就地替换，与迁移前时机
+ * 宿主参数（`{{widgetsRoot}}`）在**构建档案时**就地替换，与迁移前时机
  * 一致（设置页展示内置档案时看到的是真实路径而非占位符）；spec 经 requiredParams 声明
- * 依赖，deps 缺参时该 agent 自动跳过（如扩展无 widget/wiki 根目录）。会话级的
+ * 依赖，deps 缺参时该 agent 自动跳过（如扩展无 widget 根目录）。会话级的
  * `{{shuvix:*}}` 占位符不在此处理，留给 createAgent。
  */
 import { parseAgentDefinitionFile } from '../../agentProfile/definitionFile'
@@ -26,7 +26,7 @@ export interface BuiltinProfileSpec {
   /** 各语言 md 原文（`?raw` 内联） */
   sources: BuiltinProfileSources
   /** md 正文/描述里的宿主参数名；deps 缺参时跳过本 agent */
-  requiredParams?: readonly ('widgetsRoot' | 'wikiRoot')[]
+  requiredParams?: readonly 'widgetsRoot'[]
 }
 
 export interface BuiltinProfileDeps {
@@ -34,8 +34,6 @@ export interface BuiltinProfileDeps {
   language?: string
   /** widget 根目录（桌面 ~/.shuvix/widgets 展开路径）；缺省时跳过 widget agent */
   widgetsRoot?: string
-  /** wiki 根目录；缺省时跳过 wiki agent */
-  wikiRoot?: string
   /** OKF 知识库根目录（桌面 ~/.shuvix/knowledge）；缺省时跳过 knowledge-writer */
 }
 

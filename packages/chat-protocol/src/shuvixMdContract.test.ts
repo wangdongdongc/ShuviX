@@ -5,8 +5,8 @@ import {
   readShuvixMarker,
   detectShuvixMarker
 } from './shuvixMdContract'
+import { KNOWLEDGE_MARKER } from './knowledge'
 import { CHART_FILE_MARKER_KEY, CHART_FILE_MARKER } from './chartFileContract'
-import { WIKI_FILE_MARKER_KEY, WIKI_ENTRY_MARKER, WIKI_TOPIC_MARKER } from './wikiFileContract'
 
 /** 按最小结构拼一个带 frontmatter 的 markdown 文件 */
 function fmFile(yaml: string): string {
@@ -64,10 +64,8 @@ describe('readShuvixMarker', () => {
   it('容忍缩进 / 引号 / 冒号后无空格；版本缺省为 null', () => {
     expect(readShuvixMarker('  shuvix: chart v1')).toEqual({ type: 'chart', version: '1' })
     expect(readShuvixMarker('shuvix:chart v1')).toEqual({ type: 'chart', version: '1' })
-    expect(readShuvixMarker("shuvix: 'wiki-entry v1'")).toEqual({
-      type: 'wiki-entry',
-      version: '1'
-    })
+    // 带连字符的类型段照样解析（引号包裹的写法一并容忍）
+    expect(readShuvixMarker("shuvix: 'okf v0.2'")).toEqual({ type: 'okf', version: '0.2' })
     expect(readShuvixMarker('shuvix: "chart v1"')).toEqual({ type: 'chart', version: '1' })
     expect(readShuvixMarker('shuvix: agent')).toEqual({ type: 'agent', version: null })
     expect(readShuvixMarker("shuvix: 'agent'")).toEqual({ type: 'agent', version: null })
@@ -138,22 +136,20 @@ describe('readShuvixMarker', () => {
 })
 
 describe('detectShuvixMarker', () => {
-  it('识别全部五种现役标记', () => {
-    // 防漂移链：chart / wiki 用同包常量拼文件；agent / policy 用字面量 —— 叶子包不跨包
+  it('识别现役的每一种标记', () => {
+    // 防漂移链：chart / okf 用同包常量拼文件；agent / policy 用字面量 —— 叶子包不跨包
     // 引常量，agent-runtime 侧 definitionFile.test.ts / policyFile.test.ts 已钉住序列化
     // 写出的字面值（'shuvix: agent v1' / 'shuvix: policy v1'），本侧钉「该字面值可解析」。
     expect(detectShuvixMarker(fmFile(`${CHART_FILE_MARKER_KEY}: ${CHART_FILE_MARKER}`))).toEqual({
       type: 'chart',
       version: '1'
     })
-    expect(detectShuvixMarker(fmFile(`${WIKI_FILE_MARKER_KEY}: ${WIKI_ENTRY_MARKER}`))).toEqual({
-      type: 'wiki-entry',
-      version: '1'
+    expect(detectShuvixMarker(fmFile(`${SHUVIX_MARKER_KEY}: ${KNOWLEDGE_MARKER}`))).toEqual({
+      type: 'okf',
+      version: '0.2'
     })
-    expect(detectShuvixMarker(fmFile(`${WIKI_FILE_MARKER_KEY}: ${WIKI_TOPIC_MARKER}`))).toEqual({
-      type: 'wiki-topic',
-      version: '1'
-    })
+    expect(detectShuvixMarker(fmFile('shuvix: bot v2'))).toEqual({ type: 'bot', version: '2' })
+    expect(detectShuvixMarker(fmFile('shuvix: hook v1'))).toEqual({ type: 'hook', version: '1' })
     expect(detectShuvixMarker(fmFile('shuvix: agent v1'))).toEqual({ type: 'agent', version: '1' })
     expect(detectShuvixMarker(fmFile('shuvix: policy v1'))).toEqual({
       type: 'policy',
@@ -195,6 +191,5 @@ describe('detectShuvixMarker', () => {
 
   it('各契约的 MARKER_KEY 常量同值', () => {
     expect(CHART_FILE_MARKER_KEY).toBe(SHUVIX_MARKER_KEY)
-    expect(WIKI_FILE_MARKER_KEY).toBe(SHUVIX_MARKER_KEY)
   })
 })

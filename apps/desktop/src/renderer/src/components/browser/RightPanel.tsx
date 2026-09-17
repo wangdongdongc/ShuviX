@@ -2,7 +2,7 @@
  * RightPanel — 右侧面板容器（app 级工具栏：Browser / Preview / Widget / Calendar，终端在底部栏 BottomPanel；
  * 会话绑定的 Files / Sub-agent 在聊天区内的会话面板 SessionPanel）
  *
- * Preview 是会话无关的独立文件预览（preview 工具事件 / Files 面板点击 / 笔记本 wiki-link 均落到此），
+ * Preview 是会话无关的独立文件预览（preview 工具事件 / Files 面板点击 / 笔记本 [[双链]] 均落到此），
  * 目标状态在共享 usePreviewPanelStore；媒体/PDF 经桌面 shuvix-preview:// 协议。
  *
  * 各面板始终挂载，通过 visibility 切换，避免 iframe/WebContentsView 重建

@@ -12,7 +12,7 @@
  *                                    承载项目 id 认出来，不给输入框、编辑器只读。
  *
  * 为什么不合成一个承载项目：它的 path 一变，存量会话的 notebookPath 就全部解析到错的地方。
- * 每个条目文件至多一个笔记本会话，重复打开复用已有会话。与 wikiService 同一套做法。
+ * 每个条目文件至多一个笔记本会话，重复打开复用已有会话。与注册表 md 的 registryNotes 同一套做法。
  */
 import {
   KNOWLEDGE_BUILTIN_PROJECT_ID,
@@ -39,7 +39,7 @@ import type { Project, Session } from '../types'
 
 const log = createLogger('KnowledgeNotes')
 
-/** 面向用户的功能名（隐藏项目的 name；同旧 wiki 项目的「知识库」，靠 id 区分） */
+/** 面向用户的功能名（隐藏项目的 name；三个承载项目靠 id 区分） */
 const KNOWLEDGE_PROJECT_NAME = '知识库'
 const KNOWLEDGE_USER_PROJECT_NAME = '用户知识库'
 const KNOWLEDGE_BUILTIN_PROJECT_NAME = 'ShuviX 系统说明'

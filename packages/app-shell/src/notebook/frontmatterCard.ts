@@ -13,7 +13,7 @@
  *
  * 实现样板：块级替换装饰必须来自 StateField（CM6 限制），揭示又依赖 hasFocus ——
  * 照 atomic-editor mermaid-blocks：焦点经 ViewPlugin 镜像进 state。放 app-shell 而非
- * atomic-editor（同 wikiEmbed.ts 的取舍）：ShuviX 语义（契约/描述符/i18n）不进 vendored
+ * atomic-editor（同 wikiEmbed.ts 的取舍 —— 那是笔记本的 `[[双链]]`，与已下线的旧 wiki 无关）：ShuviX 语义（契约/描述符/i18n）不进 vendored
  * 包，经 LivePreviewEditor 的 extensions 注入，桌面与扩展两宿主同时生效。
  */
 import { parse as parseYaml } from 'yaml'
@@ -172,7 +172,7 @@ function escapeRe(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
-/** frontmatter 顶层键所在行（锚零缩进 —— 嵌套键有缩进不会误中，同 wiki 契约的 NAME_LINE_RE） */
+/** frontmatter 顶层键所在行（锚零缩进 —— 嵌套键有缩进不会误中） */
 function keyLine(
   state: EditorState,
   fm: FmRange,
@@ -363,29 +363,8 @@ function csvEntries(value: unknown): string[] {
   return parts.map((s) => s.trim()).filter(Boolean)
 }
 
-/** 只读结构摘要（prose / list / conditions / exprMap / policyRules）；形状不符返回 null → 退回标量渲染 */
+/** 只读结构摘要（conditions / exprMap / policyRules / hookBindings / sources / stamp）；形状不符返回 null → 退回标量渲染 */
 function buildStructuredValue(kind: ShuvixMdFieldKind, value: unknown): HTMLElement | null {
-  // 长文段落（wiki 条目正文）：整宽左对齐阅读排版 —— 通用行的右对齐截断读不了一段话
-  if (kind === 'prose') {
-    if (typeof value !== 'string') return null
-    return el(
-      'div',
-      'cm-shuvix-fmcard-value cm-shuvix-fmcard-prose text-[12.5px] leading-relaxed text-text-primary whitespace-pre-wrap break-words',
-      value
-    )
-  }
-  // 标量数组（wiki 来源定位符）：逐行等宽 —— 通用行会把数组折成 "[3]"
-  if (kind === 'list') {
-    if (!Array.isArray(value)) return null
-    const box = el(
-      'div',
-      'cm-shuvix-fmcard-value font-mono text-[11px] text-text-secondary space-y-0.5'
-    )
-    for (const item of value) {
-      box.appendChild(el('div', 'cm-shuvix-fmcard-list-item break-all', scalarText(item)))
-    }
-    return box
-  }
   // OKF 来源清单：`{id, resource, title}` 映射或裸定位符字符串，逐条一行
   // （id 是正文脚注 `[^id]` 的锚点，故排在最前、单独一格）
   if (kind === 'sources') {
@@ -959,7 +938,7 @@ class FrontmatterCardWidget extends WidgetType {
       const known = descriptor?.fields ?? []
       const seen = new Set<string>([SHUVIX_MARKER_KEY, ...known.map((f) => f.key)])
       for (const f of known) {
-        // hidden：已知但不渲染（wiki 的横幅 description）—— 留在 seen 里防落通用行
+        // hidden：已知但不渲染（机器面的所有权声明之类）—— 留在 seen 里防落通用行
         if (f.kind === 'hidden') continue
         box.appendChild(
           buildFieldRow(

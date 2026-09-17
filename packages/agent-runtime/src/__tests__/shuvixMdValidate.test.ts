@@ -5,7 +5,7 @@
  *   - agent 与 policy 的解析器都带 warn 通道 —— invalid 时给出人读拒绝原因；
  *   - policy 侧 invalid 恒有 ≥1 条消息，文件级 reject 文案含 "; the whole file is rejected"，
  *     规则级细因（如未知规则键）先于文件级 reject 入列 —— 顺序即属性卡横幅行序；
- *   - 其余类型（chart / wiki-*）是宽容读取的展示型契约，无校验器 → unknown 且 messages 恒空。
+ *   - 其余类型（chart 等）是宽容读取的展示型契约，无校验器 → unknown 且 messages 恒空。
  */
 import { describe, expect, it } from 'vitest'
 import { parseBotDefinitionFile } from '../bot/botFile'
@@ -243,7 +243,7 @@ describe('validateShuvixMdText — bot', () => {
 })
 
 describe('validateShuvixMdText — 类型路由与边界', () => {
-  it.each(['chart', 'wiki-entry', 'wiki-topic', 'bogus', '', 'Agent'])(
+  it.each(['chart', 'bogus', '', 'Agent'])(
     'U8 无校验器类型 %j → unknown 且 messages 为空',
     (type) => {
       expect(validateShuvixMdText(type, VALID_AGENT)).toEqual({ status: 'unknown', messages: [] })

@@ -94,14 +94,9 @@ export function getDefaultBotsDir(): string {
   return join(homedir(), '.shuvix', 'bots')
 }
 
-/** Wiki 根目录：~/.shuvix/wikis/（不自动创建，由 Wiki Curator 子代理按政策管理） */
-export function getDefaultWikisDir(): string {
-  return join(homedir(), '.shuvix', 'wikis')
-}
-
 /**
  * 知识库 v2 的两个根（都不自动创建 —— 首次写入或首次打开入口才由 services/knowledge 懒建；
- * 与旧 wiki 根目录并存、互不相干）。
+ * 与用户自己的知识库根并存、互不相干）。
  *
  * ShuviX 维护的那个根（容器）：一个绑定实体一个 bundle，全套簿记归宿主。
  */

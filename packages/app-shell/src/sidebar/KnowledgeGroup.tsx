@@ -1,15 +1,15 @@
 /**
  * KnowledgeGroup —— 侧栏置顶的「知识库」分组（知识库 v2：`~/.shuvix/knowledge-shuvix/` 的项目库 +
  * `~/.shuvix/knowledge/` 下每个子目录一个的用户库，用户库与 Projects 容器平级、Projects 置顶），
- * 排在 Bots 之下、旧知识库（WikiGroup）之上。置顶的是随应用发布的**内置库**（ShuviX 自己的说明书，
+ * 排在 Bots 之下。置顶的是随应用发布的**内置库**（ShuviX 自己的说明书，
  * 只读，带书签图标），其后是项目容器（带看板图标）与用户自己的库。**一个库一个 OKF bundle**：树 = 项目容器 →
  * 每个项目库（显示项目当前的名字）→ 条目，外加与容器平级的每个用户库 → 条目；
  * 行 = 一个 md（标题依次取 frontmatter title、正文第一个 # 标题、文件名），行尾徽标：草稿 / 已核实 / 过期 / 已过时。
  * 点行经宿主打开 / 复用该文件的笔记本会话（隐藏承载项目：项目库 `__knowledge__`、用户库
- * `__knowledge_user__`、内置库 `__knowledge_builtin__`，同 WikiGroup 的做法）。随应用发布的
+ * `__knowledge_user__`、内置库 `__knowledge_builtin__`）。随应用发布的
  * **内置库**是根上置顶的一行：自己的图标 + 一把锁、没有新建菜单，点开是只读笔记本。
  *
- * prop 驱动、不触宿主 API（同 WikiGroup / BotGroup）：清单 / 打开 / 打开目录 / 在文件夹中显示
+ * prop 驱动、不触宿主 API（同 BotGroup）：清单 / 打开 / 打开目录 / 在文件夹中显示
  * 由宿主注入。树形派生在 knowledgeTree.ts（纯函数，可单测）。扫描是懒的：**首次展开才扫**
  * （清单只读，不建任何目录），之后每次展开 + 窗口聚焦 + `knowledge.changed`
  * 事件（宿主观察到的 agent 写入）重扫，stale-guard 防乱序回包。项目容器默认展开，项目库与

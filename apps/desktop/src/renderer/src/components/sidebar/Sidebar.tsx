@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ArrowUpCircle } from 'lucide-react'
 import { getChatApi, useChatStore } from '@shuvix/chat-ui'
@@ -9,7 +9,6 @@ import {
   type BotGroupAdapter,
   KnowledgeGroup,
   type KnowledgeGroupAdapter,
-  WikiGroup,
   useProjects,
   useSessionDelete,
   SessionConfigDialog
@@ -27,7 +26,7 @@ import { ConfirmDialog } from '../common/ConfirmDialog'
  *   - 会话配置弹窗、项目编辑弹窗
  *   - Bots 置顶分组（BotGroup 经 groupsPrepend 注入，接 window.api.bot.*；点行开 / 复用该文件的
  *     笔记本会话，删除的确认框在这里）+ 知识库置顶分组（KnowledgeGroup，接 window.api.knowledge.*，
- *     点行开 / 复用条目的笔记本会话）+ 旧知识库置顶分组（WikiGroup，同一插槽，排在最下）
+ *     点行开 / 复用条目的笔记本会话）
  *   - 底部更新提示。侧栏只有项目视图 —— 日历已迁至右面板 Calendar tab（CalendarPanel）
  *   - 归档项目的恢复 / 删除已移至「设置 → Projects → 已归档」
  */
@@ -68,8 +67,6 @@ export function Sidebar(): React.JSX.Element {
     setActiveSessionId(id)
     if (pinnedSessionIds.has(id)) void window.api.pinChat.focus(id)
   }
-
-  const listWikiFiles = useCallback(() => window.api.wiki.listFiles(), [])
 
   /** bots 能力注入（窄投影）—— 注入即点亮项目分组菜单里的「新建 Bot 会话」入口与 bot 单选 */
   const botsAdapter = useMemo(
@@ -178,16 +175,6 @@ export function Sidebar(): React.JSX.Element {
     [setActiveSessionId]
   )
 
-  /** 打开旧 wiki 笔记：一文件至多一笔记本会话（main 侧去重），刷新列表并选中 */
-  const handleOpenWikiNote = useCallback(
-    async (relPath: string): Promise<void> => {
-      const session = await window.api.wiki.openNote({ path: relPath })
-      useChatStore.getState().setSessions(await getChatApi().session.list())
-      setActiveSessionId(session.id)
-    },
-    [setActiveSessionId]
-  )
-
   return (
     <SharedSidebar
       caps={{ windowDrag: true, pin: true }}
@@ -220,7 +207,6 @@ export function Sidebar(): React.JSX.Element {
         <>
           <BotGroup adapter={botGroupAdapter} />
           <KnowledgeGroup adapter={knowledgeAdapter} />
-          <WikiGroup listFiles={listWikiFiles} onSelectFile={handleOpenWikiNote} />
         </>
       }
       overlays={

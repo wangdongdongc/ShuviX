@@ -550,6 +550,19 @@ export const migrations: Migration[] = [
       db.exec(`DELETE FROM sessions WHERE projectId = '__workflows__'`)
       db.exec(`DELETE FROM projects WHERE id = '__workflows__'`)
     }
+  },
+  {
+    version: 21,
+    description: '拆除旧 wiki：删除 __wiki__ 载体项目及其笔记本会话（不做数据迁移）',
+    up: (db) => {
+      // 旧 wiki（~/.shuvix/wikis + wiki / wiki-writer 两个内置 agent + 侧栏分组）整体下线，
+      // 知识库 v2 接手。隐藏载体项目 `__wiki__` 不再被 isHiddenProjectId 认得，留着会以
+      // 「知识库」之名冒到项目列表里 —— 删掉项目行与挂在它下面的笔记本会话。同 v19 / v20 的
+      // 裁决：不做数据迁移，**磁盘上的 ~/.shuvix/wikis/ 原样留着**（用户的 md 随时可以自己
+      // 拷进知识库），那几条会话的 jsonl 也不做启动扫描清理。
+      db.exec(`DELETE FROM sessions WHERE projectId = '__wiki__'`)
+      db.exec(`DELETE FROM projects WHERE id = '__wiki__'`)
+    }
   }
 ]
 

@@ -16,7 +16,6 @@
 import { parse as parseYaml } from 'yaml'
 import { KNOWLEDGE_MARKER_TYPE } from '@shuvix/chat-protocol/knowledge'
 import { detectShuvixMarker, type ShuvixMarker } from '@shuvix/chat-protocol/shuvixMdContract'
-import { WIKI_UPDATED_KEY } from '@shuvix/chat-protocol/wikiFileContract'
 import { isOkfConceptText } from './knowledge/conceptFile'
 import { isProjectionFile, isReservedFile, validateKnowledgeText } from './knowledge/validate'
 import { validateShuvixMdText } from './shuvixMdValidate'
@@ -52,8 +51,6 @@ export interface ShuvixMdWriteOutcome {
 interface FieldFiller {
   key: string
   refresh: boolean
-  /** 恒加单引号 —— wiki 契约要求日期带引号（裸日期会被 YAML 读者转成时间戳） */
-  quote?: boolean
   value: (ctx: ShuvixMdWriteContext) => string | undefined
 }
 
@@ -61,8 +58,7 @@ const FIELD_FILLERS: Record<string, readonly FieldFiller[]> = {
   memory: [
     { key: 'shuvix-memory-updated', refresh: true, value: (c) => c.today },
     { key: 'shuvix-memory-session', refresh: false, value: (c) => c.sessionId }
-  ],
-  'wiki-entry': [{ key: WIKI_UPDATED_KEY, refresh: true, quote: true, value: (c) => c.today }]
+  ]
 }
 
 /** 标记文案：`shuvix memory v1` / 无版本号时 `shuvix memory` */
@@ -110,8 +106,8 @@ function bounds(text: string): Bounds | null {
  * frontmatter 里补/改一个键（行级）。已是目标值则不动，返回是否发生改动。
  * 键名来自本模块的常量表，正则里直接用即可（无正则元字符）。
  */
-function upsert(b: Bounds, key: string, value: string, refresh: boolean, quote = false): boolean {
-  const rendered = quote ? `'${value.replace(/'/g, "''")}'` : scalar(value)
+function upsert(b: Bounds, key: string, value: string, refresh: boolean): boolean {
+  const rendered = scalar(value)
   const line = `${key}: ${rendered}${b.cr}`
   const re = new RegExp(`^[ \\t]*${key}[ \\t]*:`)
   for (let i = b.open + 1; i < b.close; i++) {
@@ -214,7 +210,7 @@ function reviewKnowledgeWrite(
   return { note: notes.join('\n\n'), content: stamped && b ? b.lines.join('\n') : null }
 }
 
-/** 展示型契约（chart/wiki-*，validate 回 unknown）的兜底：frontmatter 过不了真 YAML 就报语法错首行 */
+/** 展示型契约（chart，validate 回 unknown）的兜底：frontmatter 过不了真 YAML 就报语法错首行 */
 function frontmatterSyntaxError(text: string): string | null {
   const b = bounds(text)
   if (!b) return null
@@ -258,7 +254,7 @@ export function reviewShuvixMdWrite(
 
   // 展示型契约没有「整份拒绝」的解析器（status 'unknown'），但 frontmatter 仍要过预览/
   // 属性卡的**真 YAML** 解析 —— 语法错在此回执，agent 当场能修。宽容读取只保证文件不从
-  // 视图消失，救不了展示：wiki 条目横幅曾因裸标量里的「冒号+空格」让每个生成文件都亮
+  // 视图消失，救不了展示：曾有一份生成的 md 因裸标量里的「冒号+空格」让每个文件都亮
   // 「YAML 语法错误」、字段卡全空，而写它的 agent 毫无所觉。
   if (validation.status === 'unknown') {
     const yamlError = frontmatterSyntaxError(text)
@@ -283,7 +279,7 @@ export function reviewShuvixMdWrite(
   if (b) {
     for (const f of fillers) {
       const value = f.value(ctx)
-      if (value && upsert(b, f.key, value, f.refresh, f.quote === true)) {
+      if (value && upsert(b, f.key, value, f.refresh)) {
         filled.push(`${f.key}: ${value}`)
       }
     }

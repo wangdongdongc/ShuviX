@@ -942,19 +942,6 @@ const api = {
       ipcRenderer.invoke('knowledge:createEntry', params) as Promise<KnowledgeCreateReply>
   },
 
-  // ============ Wiki (侧栏旧知识库分组：隐藏 wiki 项目) ============
-  wiki: {
-    /** 扫描 wiki 根目录下全部 markdown 文件（相对路径，遵循 .gitignore），含条目显示名 */
-    listFiles: () =>
-      ipcRenderer.invoke('wiki:listFiles') as Promise<{
-        files: Array<{ path: string; name: string | null }>
-        truncated: boolean
-        root: string
-      }>,
-    /** 打开 wiki 笔记：一文件至多一笔记本会话，已存在则复用返回 */
-    openNote: (params: { path: string }) => ipcRenderer.invoke('wiki:openNote', params)
-  },
-
   // ============ 项目记忆（侧栏项目组下的「项目记忆」子文件夹） ============
   memory: {
     /** 列出某项目的记忆条目（视图形状，不含正文）；无记忆返回空数组 */

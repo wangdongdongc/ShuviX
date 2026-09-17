@@ -2,8 +2,8 @@
  * 属性卡字段槽位里的选择器 —— **直接复用仓库既有的成熟组件**，不另造轮子：
  *   - `shuvix-tools`（csv）→ ToolSelectList（分组勾选、MCP 连接态、skill 启停）
  *   - `shuvix-model`（select）→ ModelSelect（提供商图标、能力标记、搜索、清除）
- *   - wiki 的 status / entry-type（select）→ EnumField（契约封闭
- *     枚举的原生下拉；wiki 状态带生命周期圆点）。候选项直接引契约常量 —— 它们是静态
+ *   - OKF 条目的 type / status（select）→ EnumField（契约封闭
+ *     枚举的原生下拉；状态带生命周期圆点）。候选项直接引契约常量 —— 它们是静态
  *     契约，不像工具/模型那样依赖运行时目录。
  *   - 其余 csv 键（如 `shuvix-instruction-files` 的指令文件清单）→ 纯文本逗号串输入。
  *     刻意不给它挂文件选择器：清单里可以写工作目录下任意相对路径，而属性卡编辑档案时
@@ -21,12 +21,6 @@ import { useTranslation } from 'react-i18next'
 import { ChevronDown } from 'lucide-react'
 import { ModelSelect, useModelCatalogStore, getChatApi } from '@shuvix/chat-ui'
 import { formatModelRef, resolveModelRef } from '@shuvix/chat-protocol/agentModelRef'
-import {
-  WIKI_ENTRY_STATUSES,
-  WIKI_ENTRY_TYPES,
-  WIKI_ENTRY_TYPE_KEY,
-  WIKI_STATUS_KEY
-} from '@shuvix/chat-protocol/wikiFileContract'
 import { AGENT_MODEL_KEY } from '@shuvix/chat-protocol/shuvixMdDescriptors'
 import {
   KNOWLEDGE_MARKER_TYPE,
@@ -282,17 +276,9 @@ function TextListField({
   )
 }
 
-/** wiki 状态的生命周期圆点（draft 灰 / reviewed 琥珀 / stable 绿）—— 一眼可辨，色彩不承载唯一信息 */
-const STATUS_DOT: Record<string, string> = {
-  draft: 'bg-text-tertiary/50',
-  reviewed: 'bg-amber-400',
-  stable: 'bg-green-500'
-}
-
 /**
- * OKF 条目状态的圆点。与 wiki 的三色刻意不同：OKF 的 `draft` 是「还没人审」（琥珀，同侧栏
- * 那枚草稿徽标），`deprecated` 才是灰的退场态 —— 两套枚举同名不同义，共用一张表会把
- * 「等审阅」画成「已作废」。
+ * OKF 条目状态的生命周期圆点 —— 一眼可辨，色彩不承载唯一信息。`draft` 是「还没定稿」（琥珀，
+ * 同侧栏那枚草稿徽标），`deprecated` 才是灰的退场态。
  */
 const OKF_STATUS_DOT: Record<string, string> = {
   draft: 'bg-amber-400',
@@ -302,7 +288,7 @@ const OKF_STATUS_DOT: Record<string, string> = {
 
 /**
  * 契约封闭枚举的下拉（原生 select + 自绘箭头，样式对齐卡片输入框）。
- * 空值 = 删除该键（同其它控件的 onChange(null) 约定，wiki 读者对缺失自有缺省）；
+ * 空值 = 删除该键（同其它控件的 onChange(null) 约定，读者对缺失自有缺省）；
  * 枚举外的手改值如实并入候选（不静默吞掉 —— 保存前它仍是文件里的事实）。
  */
 function EnumField({
@@ -364,7 +350,8 @@ export function FrontmatterFieldPicker({
     if (fieldKey === AGENT_MODEL_KEY) {
       return <ModelField value={value} onChange={onChange} readOnly={readOnly} />
     }
-    // OKF 条目的键名是通用词，先按标记类型收窄再按键分派
+    // OKF 条目的键名是通用词（type / status），先按标记类型收窄再按键分派 ——
+    // 别家契约里的同名键不该拿到知识库的候选项
     const okf = markerType === KNOWLEDGE_MARKER_TYPE
     const options = okf
       ? fieldKey === OKF_TYPE_KEY
@@ -372,23 +359,11 @@ export function FrontmatterFieldPicker({
         : fieldKey === OKF_STATUS_KEY
           ? OKF_STATUSES
           : []
-      : fieldKey === WIKI_STATUS_KEY
-        ? WIKI_ENTRY_STATUSES
-        : fieldKey === WIKI_ENTRY_TYPE_KEY
-          ? WIKI_ENTRY_TYPES
-          : []
+      : []
     return (
       <EnumField
         options={options}
-        dotByValue={
-          okf
-            ? fieldKey === OKF_STATUS_KEY
-              ? OKF_STATUS_DOT
-              : undefined
-            : fieldKey === WIKI_STATUS_KEY
-              ? STATUS_DOT
-              : undefined
-        }
+        dotByValue={okf && fieldKey === OKF_STATUS_KEY ? OKF_STATUS_DOT : undefined}
         value={value}
         onChange={onChange}
         readOnly={readOnly}

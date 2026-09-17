@@ -592,7 +592,7 @@ export function LivePreviewEditor({
   // atomic 在 mount 时一次性捕获 extensions（按 documentId），父组件按文件 key 重挂载，故稳定即可。
   const editorExtensions = useMemo<readonly Extension[]>(() => {
     const tableMenu = tableContextMenu(renderTableMenu)
-    // shuvix 契约 md（agent/policy/chart/wiki）的 frontmatter 属性卡：自检测标记，
+    // shuvix 契约 md（agent/policy/hook/bot/chart/okf）的 frontmatter 属性卡：自检测标记，
     // 无标记的普通 md 零影响。文案走 i18n.t —— 同 renderTableMenu 的取舍：extensions
     // 在 mount 时一次性捕获，i18n 实例稳定且 t 按当前语言解析。
     const fmCard: Extension = frontmatterCard({

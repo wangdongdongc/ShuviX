@@ -5,11 +5,11 @@
  * 写入，先有文件才可能有会话，用会话当清单会漏掉「写过但没人点开过」的条目。点一条经宿主
  * 打开/复用绑定它的笔记本会话（进 live-preview 直接编辑）。
  *
- * prop 驱动、不触宿主 API（同 WikiView）：清单与打开都由宿主注入；未注入 adapter 的宿主
+ * prop 驱动、不触宿主 API（同 KnowledgeGroup）：清单与打开都由宿主注入；未注入 adapter 的宿主
  * （扩展端无记忆后端）整块不渲染。零条记忆也不渲染 —— 空文件夹只是噪声。
  *
  * 扫描时机：项目组展开时才扫（`enabled`），此外窗口聚焦与本文件夹每次展开各重扫一次
- * （agent 可能刚写了一条），带 stale-guard 丢弃乱序回包 —— 与 WikiView / FilesPanel 同策。
+ * （agent 可能刚写了一条），带 stale-guard 丢弃乱序回包 —— 与 KnowledgeGroup / FilesPanel 同策。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'

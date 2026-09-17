@@ -240,11 +240,11 @@ describe('create-sub-session 的 agent_profile 钉档案', () => {
     expect((await runtimeInfo(sub.id)).systemPrompt).toContain(WORK_ANCHOR)
   })
 
-  it('SP-5b 曾经只可派发的内置 wiki-writer 现在也钉得上 —— 会话感知这道门已退役', async () => {
+  it('SP-5b 曾经只可派发的内置 knowledge-writer 现在也钉得上 —— 会话感知这道门已退役', async () => {
     // 准入只剩「不是基座」：内置执行体、用户档案一视同仁。戳落下、body 换成它的、不再是父形态基座
-    const sub = await createSub('writer', { agent_profile: 'wiki-writer' })
+    const sub = await createSub('writer', { agent_profile: 'knowledge-writer' })
     expect(sub.isError).toBe(false)
-    expect((await settingsOf(sub.id)).agentProfile).toBe('wiki-writer')
+    expect((await settingsOf(sub.id)).agentProfile).toBe('knowledge-writer')
     expect((await runtimeInfo(sub.id)).systemPrompt).not.toContain(WORK_ANCHOR)
   })
 

@@ -24,7 +24,7 @@ import type { FileReadResult } from '@shuvix/chat-protocol/types/filePreview'
 /**
  * 读取预览内容 —— **不做工作目录准入判定**：预览只呈现给用户、不进模型上下文，
  * 而用户对本机文件本来就有完全访问权，拦下工作目录外的文件（~/.shuvix 里的
- * wiki/widget 产物等）只会挡路。
+ * widget 产物等）只会挡路。
  *
  * 曾经按调用方分档（本地渲染进程放行、WebUI 的 HTTP 路由保留判定），WebUI 下线后
  * 只剩本地一种调用方，分档随之取消。

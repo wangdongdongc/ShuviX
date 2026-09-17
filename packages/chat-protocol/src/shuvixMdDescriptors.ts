@@ -7,29 +7,19 @@
  * 「怎么展示/编辑」，不做合法性判定 —— 校验语义永远归各自解析器
  * （definitionFile.ts / policyFile.ts），后续经宿主校验接缝回传 UI。
  *
- * 覆盖策略：agent / policy / memory / wiki-* 已各有描述符。没有描述符的类型（chart）
+ * 覆盖策略：okf / agent / policy / hook / bot / memory 已各有描述符。没有描述符的类型（chart）
  * 与未列出的键落属性卡的通用 key/value 行 —— 新类型零描述符也有降级展示，补一份
  * 描述符即得完整卡片；嵌套结构（policy 的 rules/lets）按设计只做摘要不做表单，
  * 等专属 summarize 能力时再扩展本类型。
  */
 
 import { OKF_STATUS_KEY, OKF_TYPE_KEY } from './knowledge'
-import {
-  WIKI_ALLOWED_TYPES_KEY,
-  WIKI_CONTENT_KEY,
-  WIKI_ENTRY_TYPE_KEY,
-  WIKI_SOURCES_KEY,
-  WIKI_STATUS_KEY,
-  WIKI_UPDATED_KEY
-} from './wikiFileContract'
 
 /**
  * 字段渲染方式。前五种是可编辑/可点选的标量面：
  *   text 普通文本 / mono 等宽（标识符）/ boolean 开关 /
  *   csv 逗号分隔列表（chips，宿主给候选项时可增删）/ select 单选（宿主给候选项时可换）。
  * 后八种是**只读展示**（点击跳源码编辑）—— 嵌套/长文按设计不做表单：
- *   prose 长文段落（wiki 条目正文：标签在上、整宽左对齐阅读排版）
- *   list 标量数组（wiki 来源：逐行等宽展示）
  *   conditions 条件映射（键即 CEL 路径，值为字符串或字符串列表）
  *   exprMap 具名表达式映射（policy 的 lets）
  *   policyRules 规则数组（effect 徽章 + 条件/match 摘要）
@@ -37,8 +27,8 @@ import {
  *   sources OKF 来源数组（`{id, resource, title}` 映射或裸定位符字符串，逐条一行）
  *   stamp OKF 的宿主章（`generated` / `verified`：`{by, at}` 单值或列表）—— 只读**不是**排版
  *     偏好而是契约：`generated` 由写钩子盖、`verified` 只由 UI 动作盖，谁都不该在卡上手改
- * 另有 hidden：已知但不渲染（wiki 的 description 横幅是机器面所有权声明，
- * 对人只是噪音 —— 列进描述符防它落通用行，渲染时整行跳过；源码视图仍可见）。
+ * 另有 hidden：已知但不渲染（机器面的所有权声明之类对人只是噪音 —— 列进描述符防它落通用行，
+ * 渲染时整行跳过；源码视图仍可见）。
  * 值的实际形状与 kind 不符时一律退回通用标量渲染 —— 合法性判定归解析器，卡片只展示。
  */
 export type ShuvixMdFieldKind =
@@ -47,8 +37,6 @@ export type ShuvixMdFieldKind =
   | 'boolean'
   | 'csv'
   | 'select'
-  | 'prose'
-  | 'list'
   | 'conditions'
   | 'exprMap'
   | 'policyRules'
@@ -140,37 +128,6 @@ const MEMORY_DESCRIPTOR: ShuvixMdTypeDescriptor = {
 }
 
 /**
- * wiki 条目（wikiFileContract 的键集，键名直接引契约常量 —— 单一真源）。
- * 条目正文是卡片的主角（prose 阅读排版）；status/entry-type 是契约封闭枚举（select，
- * 候选项由宿主 picker 引契约常量）；updated 由写后处理盖章（shuvixMdWrite 的 FIELD_FILLERS）；
- * description 是 MANAGED BY WIKI CURATOR 横幅 —— 对机器/源码读者有意义，卡片隐藏。
- */
-const WIKI_ENTRY_DESCRIPTOR: ShuvixMdTypeDescriptor = {
-  type: 'wiki-entry',
-  badge: 'ShuviX wiki entry',
-  fields: [
-    { key: 'name', labelKey: 'tool.subAgentName', kind: 'text' },
-    { key: 'description', labelKey: 'tool.subAgentDescription', kind: 'hidden' },
-    { key: WIKI_CONTENT_KEY, labelKey: 'notebook.frontmatter.wikiContent', kind: 'prose' },
-    { key: WIKI_STATUS_KEY, labelKey: 'notebook.frontmatter.wikiStatus', kind: 'select' },
-    { key: WIKI_ENTRY_TYPE_KEY, labelKey: 'notebook.frontmatter.wikiEntryType', kind: 'select' },
-    { key: WIKI_UPDATED_KEY, labelKey: 'notebook.frontmatter.wikiUpdated', kind: 'mono' },
-    { key: WIKI_SOURCES_KEY, labelKey: 'notebook.frontmatter.wikiSources', kind: 'list' }
-  ]
-}
-
-/** wiki 主题章程（`WIKI.md`）：显示名 + 本主题允许的条目类型；横幅同条目卡隐藏 */
-const WIKI_TOPIC_DESCRIPTOR: ShuvixMdTypeDescriptor = {
-  type: 'wiki-topic',
-  badge: 'ShuviX wiki topic',
-  fields: [
-    { key: 'name', labelKey: 'tool.subAgentName', kind: 'text' },
-    { key: 'description', labelKey: 'tool.subAgentDescription', kind: 'hidden' },
-    { key: WIKI_ALLOWED_TYPES_KEY, labelKey: 'notebook.frontmatter.wikiAllowedTypes', kind: 'csv' }
-  ]
-}
-
-/**
  * hook 文件（agent-runtime hook/hookFile.ts 的键集）：「在哪些埋点、满足什么条件时，把哪个 agent
  * 叫起来」—— 这就是全部键。`shuvix-hook-on` 是最要紧的一行（什么时候会跑），给它专属摘要
  * （埋点 id + when 表达式），同 policy 的 rules；`shuvix-hook-agent` 是派发的 agent 名。
@@ -248,9 +205,7 @@ export const SHUVIX_MD_DESCRIPTORS: readonly ShuvixMdTypeDescriptor[] = [
   POLICY_DESCRIPTOR,
   HOOK_DESCRIPTOR,
   BOT_DESCRIPTOR,
-  MEMORY_DESCRIPTOR,
-  WIKI_ENTRY_DESCRIPTOR,
-  WIKI_TOPIC_DESCRIPTOR
+  MEMORY_DESCRIPTOR
 ]
 
 /** 按标记 type 查描述符；无 → null（属性卡降级为通用 key/value 卡） */

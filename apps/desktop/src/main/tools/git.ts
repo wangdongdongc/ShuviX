@@ -131,7 +131,7 @@ registerBuiltinTool({
   name: GIT_TOOL_NAME,
   group: 'general',
   // 不在内置 default 档案的工具清单里（用户可覆盖 ~/.shuvix/agents/default.md 加入主会话）；
-  // 子代理白名单（如 wiki curator）按名解析不受此限
+  // 子代理白名单（如 widget）按名解析不受此限
   getLabel: () => t('tool.gitLabel'),
   getHint: () => t('tool.gitHint'),
   factory: (ctx) =>

@@ -104,22 +104,17 @@ describe('i18n 语言包', () => {
   })
 
   /**
-   * L-3：侧栏同时有两个知识库分组 —— 新的 OKF 知识库（`sidebar.knowledgeGroup`）与整体搁置的
-   * 旧 wiki（`sidebar.wikiGroup`）。两条文案必须分得开，且旧的那条自带「旧 / legacy」标记，
-   * 否则用户看到两个同名分组只能靠猜哪个是哪个。
+   * L-3：侧栏只剩一个知识库分组。旧 wiki 整体拆除后，它那两条文案（`sidebar.wikiGroup` /
+   * `sidebar.wikiEmpty`）与 `notebook.frontmatter.wiki*` 一并下线 —— 留着会让下一个读语言包的人
+   * 以为侧栏还有第二个知识库分组。
    */
-  it('L-3 sidebar.knowledgeGroup 与 sidebar.wikiGroup 三语都非空且互不相同；wikiGroup 带旧标记', () => {
+  it('L-3 sidebar.knowledgeGroup 三语都非空；旧 wiki 的文案键三语都已下线', () => {
     for (const [lang, bundle] of Object.entries({ en, zh, ja })) {
-      const knowledge = leaf(bundle, 'sidebar.knowledgeGroup')
-      const wiki = leaf(bundle, 'sidebar.wikiGroup')
-      expect(knowledge, lang).toBeTruthy()
-      expect(wiki, lang).toBeTruthy()
-      expect(knowledge, lang).not.toBe(wiki)
+      expect(leaf(bundle, 'sidebar.knowledgeGroup'), lang).toBeTruthy()
+      const wikiKeys = flatten(bundle).filter((k) => /(^|\.)wiki/i.test(k))
+      expect(wikiKeys, lang).toEqual([])
     }
     expect(leaf(en, 'sidebar.knowledgeGroup')).toBe('Knowledge Base')
-    expect(leaf(en, 'sidebar.wikiGroup')).toMatch(/legacy/i)
-    expect(leaf(zh, 'sidebar.wikiGroup')).toMatch(/^旧/)
-    expect(leaf(ja, 'sidebar.wikiGroup')).toMatch(/^旧/)
   })
 
   /**

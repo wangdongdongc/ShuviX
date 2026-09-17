@@ -12,7 +12,7 @@ const MODE_LABEL_KEYS: Record<SidebarViewMode, string> = {
 export interface ViewSwitchButtonProps {
   viewMode: SidebarViewMode
   onChange: (mode: SidebarViewMode) => void
-  /** 菜单展示哪些视图入口;缺省全部(知识库不是视图,是项目视图里的置顶分组 WikiGroup) */
+  /** 菜单展示哪些视图入口;缺省全部(知识库不是视图,是项目视图里的置顶分组 KnowledgeGroup) */
   modes?: SidebarViewMode[]
 }
 

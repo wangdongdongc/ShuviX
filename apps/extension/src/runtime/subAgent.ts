@@ -64,7 +64,7 @@ export function getSessionTools(rootSessionId: string): Map<string, AnyAgentTool
 /**
  * 扩展支持的内置档案子集：三个基座档案 work（项目会话）/ chat（不归属项目的会话）/
  * notebook（笔记本会话根 Agent）+ visualization。explore 依赖 ls/grep/glob（ripgrep）扩展
- * 没有，coding 依赖 bash/ssh/database 更是无从谈起；widget/wiki 因缺根目录参数被构建器
+ * 没有，coding 依赖 bash/ssh/database 更是无从谈起；widget 因缺根目录参数被构建器
  * 自动跳过。
  */
 const EXTENSION_BUILTIN_NAMES = new Set([

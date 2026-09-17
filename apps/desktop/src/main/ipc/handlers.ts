@@ -27,7 +27,6 @@ import { registerContextMenuHandlers } from './contextMenuHandlers'
 import { registerWidgetHandlers } from './widgetHandlers'
 import { registerConfigShareHandlers } from './configShareHandlers'
 import { registerFilesHandlers } from './filesHandlers'
-import { registerWikiHandlers } from './wikiHandlers'
 import { registerKnowledgeHandlers } from './knowledgeHandlers'
 import { registerMemoryHandlers } from './memoryHandlers'
 import { registerPinChatHandlers } from './pinChatHandlers'
@@ -67,7 +66,6 @@ export function registerIpcHandlers(): void {
   registerWidgetHandlers()
   registerConfigShareHandlers()
   registerFilesHandlers()
-  registerWikiHandlers()
   registerKnowledgeHandlers()
   registerMemoryHandlers()
   registerPinChatHandlers()
