@@ -252,10 +252,11 @@ describe('输入框工具选择器与会话设置卡（DOM）', () => {
     await ensureRuntime(s)
     await until(() => picker.locked(), 'tool picker locked once the runtime exists')
     await picker.open()
-    await until(() => picker.lockHintVisible(), 'lock hint shown in the panel')
+    // 只读的可见性：触发钮挂锁 + 整排条目画成禁用态（面板里不再有一行文字说明）
+    await until(() => picker.lockIndicatorVisible(), 'lock indicator shown on the trigger')
     await until(async () => (await pickerItem(B))?.disabled === true, 'items disabled while locked')
-    expect(await pickerItem(A)).toMatchObject({ checked: true, disabled: true })
-    expect(await pickerItem(B)).toMatchObject({ checked: false, disabled: true })
+    expect(await pickerItem(A)).toMatchObject({ checked: true, disabled: true, lockedLook: true })
+    expect(await pickerItem(B)).toMatchObject({ checked: false, disabled: true, lockedLook: true })
     // 绕过禁用态硬点 b：只读不能只靠 disabled 撑着 —— 组件与写入口自己得挡住
     expect(await picker.toggle(B, { force: true })).toBe(true)
     await sleep(600)
@@ -267,7 +268,8 @@ describe('输入框工具选择器与会话设置卡（DOM）', () => {
     await until(async () => !(await picker.locked()), 'tool picker unlocked after clear')
     await picker.open()
     await until(async () => (await pickerItem(B))?.disabled === false, 'items editable again')
-    expect(await picker.lockHintVisible()).toBe(false)
+    expect(await picker.lockIndicatorVisible()).toBe(false)
+    expect(await pickerItem(B)).toMatchObject({ lockedLook: false })
     await picker.close()
   })
 

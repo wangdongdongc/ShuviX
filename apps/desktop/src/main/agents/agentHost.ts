@@ -156,10 +156,29 @@ async function resolveDesktopTools(req: ToolResolveRequest): Promise<AnyAgentToo
   // 连不上就少这台的工具，Agent 照常创建 —— 但失败要让人看见：往会话里落一条错误提示，
   // 用户刚发出的那条消息就在眼前，不至于以为工具凭空消失了。
   const attempts = await Promise.all(
-    mcpServers.map(async (server) => ({
-      server,
-      result: await mcpService.ensureServerByName(server, { timeoutMs: LAZY_CONNECT_TIMEOUT_MS })
-    }))
+    mcpServers.map(async (server) => {
+      // 连接期间把状态推给会话：占位卡上写明「正在连接 MCP」，用户知道这段等待在等什么。
+      // 已连上的不报 —— 它瞬间落定，报了只会闪一下
+      const notify = (connecting: boolean): void =>
+        chatFrontendRegistry.broadcast({
+          type: 'mcp_connecting',
+          sessionId: req.rootSessionId,
+          server,
+          connecting
+        })
+      const announce = mcpService.statusByName(server) !== 'connected'
+      if (announce) notify(true)
+      try {
+        return {
+          server,
+          result: await mcpService.ensureServerByName(server, {
+            timeoutMs: LAZY_CONNECT_TIMEOUT_MS
+          })
+        }
+      } finally {
+        if (announce) notify(false)
+      }
+    })
   )
   for (const { server, result } of attempts) {
     if (!result.ok) {

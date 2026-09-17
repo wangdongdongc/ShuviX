@@ -10,6 +10,8 @@ import { TokenBadge, InvalidTokenBadge } from './InlineTokenBadge'
 interface UserBubbleProps {
   msg: UserTextMessage
   onRollback?: () => void
+  /** 乐观占位：正在发送、后端还没落库 —— 压淡一档，落库后换成真实那条时恢复 */
+  pending?: boolean
 }
 
 /** 超过任一阈值即默认折叠（行数 / 字符数，字符兜底捕捉无换行长段落） */
@@ -27,7 +29,8 @@ const COLLAPSE_FADE_HEIGHT = 40
  */
 export const UserBubble = memo(function UserBubble({
   msg,
-  onRollback
+  onRollback,
+  pending = false
 }: UserBubbleProps): React.JSX.Element {
   const { t } = useTranslation()
   const [copied, setCopied] = useState(false)
@@ -59,7 +62,12 @@ export const UserBubble = memo(function UserBubble({
   const source = msg.metadata?.source
 
   return (
-    <div className="group flex flex-col items-end gap-1 px-4 py-2">
+    <div
+      data-msg-pending={pending || undefined}
+      className={`group flex flex-col items-end gap-1 px-4 py-2 transition-opacity ${
+        pending ? 'opacity-60' : ''
+      }`}
+    >
       {/* 图片 */}
       {msg.metadata?.images && msg.metadata.images.length > 0 && (
         <div className="flex flex-wrap justify-end gap-2">

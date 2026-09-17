@@ -253,6 +253,9 @@ export const chatApiAdapter: ChatApi = {
     // 入口是 agent.setModel / setThinkingLevel。
     // 扩展没有会话级扩展能力勾选（工具集固定：ask + 已连接 MCP 工具），改勾选一律不生效
     updateEnabledTools: async () => ({ success: false }),
+    // 扩展没有知识库（既无项目记忆也无知识库），会话级知识库勾选同样无处可写；界面在无
+    // knowledge 能力时本就不显示那一节
+    updateKnowledgeBases: async () => ({ success: false }),
     // autoAllow 仅落库（browser 询问门控已移除，扩展端暂无运行时消费者）
     updateAutoAllow: async ({ id, autoAllow }) => {
       await sessionStore.updateSettings(id, { autoAllow })

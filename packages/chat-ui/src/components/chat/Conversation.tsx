@@ -2,7 +2,12 @@ import { useChatHost } from '@shuvix/chat-ui'
 import { useCallback, useMemo, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
-import { useChatStore, selectIsStreaming, selectPendingInputs } from '../../stores/chatStore'
+import {
+  useChatStore,
+  selectIsStreaming,
+  selectPendingInputs,
+  selectPendingPrompt
+} from '../../stores/chatStore'
 import { useChatActions } from '../../hooks/useChatActions'
 import { ConfirmDialog } from '../common/ConfirmDialog'
 import { MessageRenderer, type VisibleItem } from './MessageRenderer'
@@ -42,6 +47,8 @@ export function Conversation({
   const { t } = useTranslation()
   const messages = useChatStore((s) => s.messages)
   const isStreaming = useChatStore(selectIsStreaming)
+  // 正在发送、后端还没落库的那条用户消息（乐观占位；user_message 一到就撤）
+  const pendingPrompt = useChatStore(selectPendingPrompt)
   const virtuosoRef = useRef<VirtuosoHandle>(null)
   // 悬浮输入卡片高度 → 根容器 CSS 变量（列表 Footer / 空态 padding 引用），避免卡片遮住末尾内容。
   // 直接写 DOM 变量而非 state：高度随输入增长高频变化，不触发列表重渲染
@@ -68,8 +75,8 @@ export function Conversation({
   // 注：被压缩掉的历史不在其中 —— message.list 走 buildContextEntries，自带压缩过滤，
   // 压缩点之前的消息原地换成一张摘要卡片，UI 不提供回看入口。
   const visibleItems = useMemo(
-    () => buildVisibleItems(messages, isStreaming),
-    [messages, isStreaming]
+    () => buildVisibleItems(messages, isStreaming, pendingPrompt),
+    [messages, isStreaming, pendingPrompt]
   )
   // 仅当最后一条消息是助手消息时才允许重新生成
   const lastAssistantId = useMemo(() => {
@@ -94,7 +101,10 @@ export function Conversation({
     <>
       {/* 对话列 relative 锚点：悬浮输入卡片绝对贴底定位于此（与笔记本会话同构） */}
       <div ref={rootRef} className="relative flex-1 min-h-0 flex flex-col">
-        {messages.length === 0 && !isStreaming ? (
+        {/* 空态只在**真的什么都没有**时才顶上：乐观占位也算内容 —— 漏掉它，「新会话第一条消息」
+            与「只有一轮时点重新生成」这两条路上，刚发出的那句话会被整片空态盖住（回退清空了
+            messages，而这两条路上流式态都没开着），正是占位要解决的那个毛病 */}
+        {messages.length === 0 && !isStreaming && !pendingPrompt ? (
           // 空态同样按输入卡片高度留白，避免居中内容被悬浮卡片遮挡
           <div
             className="flex-1 min-h-0 flex flex-col"

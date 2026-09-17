@@ -24,7 +24,11 @@ export type {
   UserTextMeta,
   AssistantMeta
 } from '@shuvix/chat-protocol/types/chatMessage'
-import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
+import type {
+  ChatMessage,
+  UserTextMessage,
+  UserTextMeta
+} from '@shuvix/chat-protocol/types/chatMessage'
 import { fillToolResult, upsertMessage } from './messageOps'
 export type { ToolResultDetails }
 
@@ -227,6 +231,16 @@ interface ChatState {
    * 期间，工具选择器与会话设置里的扩展能力都是只读的。
    */
   sessionAgentCreated: Record<string, boolean>
+  /**
+   * 各 session 正在发送、后端还没落库的那条用户消息（乐观占位）。
+   *
+   * 用户消息由后端持久化后经 `user_message` 事件回到列表；创建运行时（含 MCP 惰性连接）可能
+   * 要花几秒，这几秒里输入框已清空、列表里却没有那句话 —— 像是消息丢了。占位气泡先顶上，
+   * `user_message` 到达即撤（同一句话换成真实 entry），出错 / 轮结束也撤。
+   */
+  sessionPendingPrompt: Record<string, UserTextMessage>
+  /** 各 session 创建运行时期间正在连接的 MCP server 名（`mcp_connecting` 事件维护，`agent_created` 清空） */
+  sessionMcpConnecting: Record<string, string[]>
   /** 各 session 的工具执行实时状态（按 sessionId 隔离） */
   sessionToolExecutions: Record<string, ToolExecution[]>
   /** 当前模型是否支持深度思考 */
@@ -307,6 +321,12 @@ interface ChatState {
   setAgentClosing: (sessionId: string, closing: boolean) => void
   /** 标记某会话此刻有 / 没有 Agent 运行时（agent.init 与 agent_created / agent_closing 驱动） */
   setAgentCreated: (sessionId: string, created: boolean) => void
+  /** 设 / 撤某会话的乐观占位用户消息（null = 撤） */
+  setPendingPrompt: (sessionId: string, message: UserTextMessage | null) => void
+  /** 某会话创建运行时期间：某台 MCP 开始连 / 落定（`mcp_connecting` 事件驱动） */
+  setMcpConnecting: (sessionId: string, server: string, connecting: boolean) => void
+  /** 清空某会话的 MCP 连接态（agent_created / agent_end / error） */
+  clearMcpConnecting: (sessionId: string) => void
   getSessionStreamContent: (sessionId: string) => string
   getSessionStreamThinking: (sessionId: string) => string
   setStreamingToolCall: (
@@ -417,6 +437,38 @@ export const selectIsStreaming = (s: ChatState): boolean =>
 /** 当前会话的运行时是否正在关停（关停期间不能发送，见 sessionClosing） */
 export const selectIsAgentClosing = (s: ChatState): boolean =>
   s.activeSessionId ? s.sessionClosing[s.activeSessionId] || false : false
+
+/** 当前会话正在发送、还没落库的用户消息（乐观占位）；没有则 null */
+export const selectPendingPrompt = (s: ChatState): UserTextMessage | null =>
+  (s.activeSessionId && s.sessionPendingPrompt[s.activeSessionId]) || null
+
+/** 空列表常量：选择器不能每次返回新引用（zustand 按引用判等，否则次次重渲染） */
+const NO_SERVERS: string[] = []
+
+/** 当前会话创建运行时期间正在连接的 MCP server 名 */
+export const selectMcpConnecting = (s: ChatState): string[] =>
+  (s.activeSessionId && s.sessionMcpConnecting[s.activeSessionId]) || NO_SERVERS
+
+/** 乐观占位的用户消息 id：尚未落库，`user_message` 一到就换成真实 entry —— 这个 id 不会进 messages */
+export const PENDING_PROMPT_ID = 'pending-prompt'
+
+/** 构造乐观占位的用户消息：与真实 entry 同形，气泡组件不必区分 */
+export function pendingPromptMessage(
+  sessionId: string,
+  content: string,
+  metadata: Pick<UserTextMeta, 'inlineTokens' | 'images'> = {}
+): UserTextMessage {
+  return {
+    id: PENDING_PROMPT_ID,
+    sessionId,
+    role: 'user',
+    type: 'text',
+    content,
+    model: '',
+    createdAt: Date.now(),
+    metadata
+  }
+}
 
 /** 空图片数组常量，避免选择器每次返回新引用 */
 const EMPTY_IMAGES: Array<{ data: string; mimeType: string }> = []
@@ -544,6 +596,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   sessionStreams: {},
   sessionClosing: {},
   sessionAgentCreated: {},
+  sessionPendingPrompt: {},
+  sessionMcpConnecting: {},
   sessionToolExecutions: {},
   sessionPendingInputs: {},
   sessionInputDrafts: {},
@@ -692,6 +746,34 @@ export const useChatStore = create<ChatState>((set, get) => ({
       if (created) next[sessionId] = true
       else delete next[sessionId]
       return { sessionAgentCreated: next }
+    }),
+
+  setPendingPrompt: (sessionId, message) =>
+    set((state) => {
+      if (!message && !state.sessionPendingPrompt[sessionId]) return {}
+      const next = { ...state.sessionPendingPrompt }
+      if (message) next[sessionId] = message
+      else delete next[sessionId]
+      return { sessionPendingPrompt: next }
+    }),
+
+  setMcpConnecting: (sessionId, server, connecting) =>
+    set((state) => {
+      const prev = state.sessionMcpConnecting[sessionId] ?? []
+      if (connecting === prev.includes(server)) return {}
+      const list = connecting ? [...prev, server] : prev.filter((s) => s !== server)
+      const next = { ...state.sessionMcpConnecting }
+      if (list.length > 0) next[sessionId] = list
+      else delete next[sessionId]
+      return { sessionMcpConnecting: next }
+    }),
+
+  clearMcpConnecting: (sessionId) =>
+    set((state) => {
+      if (!state.sessionMcpConnecting[sessionId]) return {}
+      const next = { ...state.sessionMcpConnecting }
+      delete next[sessionId]
+      return { sessionMcpConnecting: next }
     }),
 
   getSessionStreamContent: (sessionId) => {

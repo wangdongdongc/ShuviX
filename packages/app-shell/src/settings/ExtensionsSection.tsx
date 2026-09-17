@@ -5,7 +5,7 @@
  * 勾选 —— Agent 创建之后只读）。本组件只管展示与回调，数据与持久化都在调用方。
  */
 import { useTranslation } from 'react-i18next'
-import { Puzzle, BookOpen, WifiOff } from 'lucide-react'
+import { Puzzle, BookOpen, WifiOff, Lock } from 'lucide-react'
 import type { ToolItem } from '../common/ToolSelectList'
 import { SettingsSection } from './SettingsPrimitives'
 
@@ -34,6 +34,7 @@ interface ExtGroupRowProps {
   enabledTools: string[]
   onToggle: (toolName: string) => void
   readonly: boolean
+  readonlyHint?: string
 }
 
 function ExtGroupRow({
@@ -43,7 +44,8 @@ function ExtGroupRow({
   items,
   enabledTools,
   onToggle,
-  readonly
+  readonly,
+  readonlyHint
 }: ExtGroupRowProps): React.JSX.Element {
   const { t } = useTranslation()
   return (
@@ -54,24 +56,29 @@ function ExtGroupRow({
       >
         {icon}
         {title}
+        {/* 只读态在组名旁挂把锁：整排压暗之外再给一个明确的「锁住了」信号 */}
+        {readonly && <Lock size={10} data-ext-lock className="text-text-tertiary" />}
       </div>
       {items.length > 0 && (
         <div className="flex flex-wrap gap-1.5 flex-1 min-w-0">
           {items.map((it) => {
             const checked = enabledTools.includes(it.key)
-            // 只读时没有悬停底色，未勾选的再压暗一档 —— 一眼看出哪些是真在用的
+            // 只读时整排按禁用态画（压暗 + 禁用光标）：勾选的还看得出是勾选的（描边留着），
+            // 但一眼就知道改不了；原因放在悬停提示里，不另起一行文字
             const stateCls = checked
               ? EXT_TONES[tone].checked
-              : readonly
-                ? 'border-border-secondary/60 opacity-60'
-                : 'border-border-secondary/60 hover:bg-bg-hover/60'
+              : `border-border-secondary/60${readonly ? '' : ' hover:bg-bg-hover/60'}`
             return (
               <label
                 key={it.key}
                 data-ext-item={it.key}
-                title={it.offline ? t('settings.mcpStatusError') : it.desc}
+                data-offline={it.offline || undefined}
+                aria-disabled={readonly || undefined}
+                title={
+                  readonly ? readonlyHint : it.offline ? t('settings.mcpStatusError') : it.desc
+                }
                 className={`inline-flex items-center gap-1.5 h-6 max-w-full px-2 rounded-md border transition-colors ${
-                  readonly ? 'cursor-default' : 'cursor-pointer'
+                  readonly ? 'cursor-not-allowed opacity-40' : 'cursor-pointer'
                 } ${stateCls}`}
               >
                 <input
@@ -122,8 +129,10 @@ export interface ExtensionsSectionProps {
   skillTools: ToolItem[]
   enabledTools: string[]
   onToggle: (toolName: string) => void
-  /** 只读：勾选框禁用、点击无效（会话已有 Agent 运行时） */
+  /** 只读：整排按禁用态画、勾选框禁用、点击无效（会话已有 Agent 运行时） */
   readonly?: boolean
+  /** 只读的原因，作为条目的悬停提示 —— 界面上不另起一行文字说 */
+  readonlyHint?: string
 }
 
 export function ExtensionsSection({
@@ -133,7 +142,8 @@ export function ExtensionsSection({
   skillTools,
   enabledTools,
   onToggle,
-  readonly = false
+  readonly = false,
+  readonlyHint
 }: ExtensionsSectionProps): React.JSX.Element {
   const { t } = useTranslation()
   // MCP 的 label 就是 server 名，和展示名重复，不当描述用
@@ -165,6 +175,7 @@ export function ExtensionsSection({
         enabledTools={enabledTools}
         onToggle={onToggle}
         readonly={readonly}
+        readonlyHint={readonlyHint}
       />
       <ExtGroupRow
         title={t('projectForm.skillsGroup')}
@@ -174,6 +185,7 @@ export function ExtensionsSection({
         enabledTools={enabledTools}
         onToggle={onToggle}
         readonly={readonly}
+        readonlyHint={readonlyHint}
       />
     </SettingsSection>
   )

@@ -15,7 +15,8 @@ import {
   useChatStore,
   selectIsStreaming,
   selectIsAgentClosing,
-  selectActivePendingInput
+  selectActivePendingInput,
+  pendingPromptMessage
 } from '../../stores/chatStore'
 import { useImageUpload } from '../../hooks/useImageUpload'
 import { ModelPicker } from './ModelPicker'
@@ -341,20 +342,36 @@ export function InputArea({
     const store = useChatStore.getState()
     store.setIsStreaming(sid, true)
     store.clearStreamingContent(sid)
-    // 后端直接使用附带的图片 + 内联 Token，不再重复查询
-    await getSessionChannelApi().agent.prompt({
-      sessionId: sid,
-      text: outgoing.contentText,
-      images:
-        images.length > 0
-          ? images.map((img) => ({
-              type: 'image' as const,
-              data: img.data,
-              mimeType: img.mimeType
-            }))
-          : undefined,
-      inlineTokens: outgoing.inlineTokens
-    })
+    // 乐观占位：用户消息要等后端落库才经 user_message 回来，而创建运行时（含 MCP 惰性连接）
+    // 可能要几秒 —— 输入框已清空、列表里却没这句话，像是消息丢了。先顶上，落库即换成真的
+    store.setPendingPrompt(
+      sid,
+      pendingPromptMessage(sid, outgoing.contentText, {
+        inlineTokens: outgoing.inlineTokens,
+        images: images.map((img) => ({ data: img.data, mimeType: img.mimeType }))
+      })
+    )
+    try {
+      // 后端直接使用附带的图片 + 内联 Token，不再重复查询
+      await getSessionChannelApi().agent.prompt({
+        sessionId: sid,
+        text: outgoing.contentText,
+        images:
+          images.length > 0
+            ? images.map((img) => ({
+                type: 'image' as const,
+                data: img.data,
+                mimeType: img.mimeType
+              }))
+            : undefined,
+        inlineTokens: outgoing.inlineTokens
+      })
+    } finally {
+      // 占位的唯一收尾处。正常路径上 user_message 早就把它换成真的了，这里兜两种它到不了的
+      // 情况：整轮跑完仍没落库，以及 prompt 本身抛出（IPC 把主进程的异常原样拒绝回来，
+      // 没有 finally 的话占位会一直挂着）。**不能改由 error 事件撤** —— 见 useAgentEvents
+      useChatStore.getState().setPendingPrompt(sid, null)
+    }
   }
 
   /**

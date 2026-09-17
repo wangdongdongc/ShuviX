@@ -947,6 +947,8 @@ export interface ExtItemShot {
   checked: boolean
   /** 勾选框被禁用 = 只读（会话已有 Agent 运行时） */
   disabled: boolean
+  /** 这一条是不是被画成了禁用态（`aria-disabled`）：只读时整排压暗，卡片下方不再写只读原因 */
+  lockedLook: boolean
 }
 
 /** scope 内扩展能力条目的快照（页内表达式；scope 为空时回 []） */
@@ -956,7 +958,8 @@ const EXT_ITEMS = (scope: string): string =>
     return {
       key: label.getAttribute('data-ext-item') ?? '',
       checked: !!box?.checked,
-      disabled: !!box?.disabled
+      disabled: !!box?.disabled,
+      lockedLook: label.getAttribute('aria-disabled') === 'true'
     }
   })`
 
@@ -1227,11 +1230,16 @@ export interface ToolPickerItem {
   /** 勾选框被禁用 = 只读 */
   disabled: boolean
   /**
-   * 这一行是不是被画成了「离线」：降透明度（`opacity-50`）或挂着 WifiOff 徽标。
+   * 这一行是不是被画成了「禁用态」（`aria-disabled`）：只读时整排压暗 + 禁用光标，
+   * 面板里不再另起一行文字说明 —— 只读的可见性全靠这个。
+   */
+  lockedLook: boolean
+  /**
+   * 这一行是不是被画成了「离线」：行上的 `data-offline` 标记，或挂着 WifiOff 徽标。
    *
    * 惰性启动之后只有**连接失败**（serverStatus === 'error'）才该这么画 —— 「还没连」是常态。
-   * 两个视觉信号由同一个判断驱动，这里取「任一成立」：少画一个也算没画成离线，
-   * 于是 `offline === false` 这条否定断言最严。
+   * 两个信号由同一个判断驱动，这里取「任一成立」：少画一个也算没画成离线，
+   * 于是 `offline === false` 这条否定断言最严。（只读态也压暗，所以不再按透明度类名判）
    */
   offline: boolean
 }
@@ -1257,8 +1265,8 @@ export interface ToolPickerPane {
    * onChange，钉的是组件与写入口自己的只读判断。
    */
   toggle(name: string, opts?: { force?: boolean }): Promise<boolean>
-  /** 只读提示行在不在（面板展开且只读时才渲染） */
-  lockHintVisible(): Promise<boolean>
+  /** 触发钮上的锁（`data-tool-lock`）在不在 —— 只读时不用展开面板就看得见 */
+  lockIndicatorVisible(): Promise<boolean>
 }
 
 /** 输入框卡片里的工具选择器（`[data-tool-picker]`；主窗里只有当前会话那一个输入区） */
@@ -1294,8 +1302,9 @@ export function toolPickerPane(main: CdpClient): ToolPickerPane {
           name: label.getAttribute('data-tool-item') ?? '',
           checked: !!box?.checked,
           disabled: !!box?.disabled,
+          lockedLook: label.getAttribute('aria-disabled') === 'true',
           offline:
-            label.className.includes('opacity-50') ||
+            label.hasAttribute('data-offline') ||
             !!label.querySelector('span.text-red-400 svg')
         }
       })`),
@@ -1315,7 +1324,7 @@ export function toolPickerPane(main: CdpClient): ToolPickerPane {
         return true
       })()`)
     },
-    lockHintVisible: () => main.eval<boolean>(`!!${ROOT}?.querySelector('[data-tool-lock-hint]')`)
+    lockIndicatorVisible: () => main.eval<boolean>(`!!${ROOT}?.querySelector('[data-tool-lock]')`)
   }
 }
 

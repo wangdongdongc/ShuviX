@@ -25,7 +25,8 @@ export interface SessionConfigPanelProps {
 /**
  * 会话的扩展能力勾选 —— 与输入框的工具选择器同一份数据、同一个写入口（useSessionTools）。
  *
- * 勾选只在创建 Agent 时读一次：会话已有运行时就只读，卡片下方写明原因。弹窗可能开在一条
+ * 勾选只在创建 Agent 时读一次：会话已有运行时就只读 —— 整排条目按禁用态画、组名挂锁，
+ * 原因只在悬停时说，不另起一行文字。弹窗可能开在一条
  * 非当前会话上，所以挂载时自己向后端拉一次「运行时是否已存在 + 勾选」，不依赖当前会话的初始化。
  * 一个 MCP / skill 都没有时整节不显示（扩展端也落在这里：它没有会话级扩展能力）。
  */
@@ -60,12 +61,13 @@ function SessionExtensionsSection({ sessionId }: { sessionId: string }): React.J
   return (
     <ExtensionsSection
       title={t('sessionConfig.extensionsGroup')}
-      footer={locked ? t('sessionConfig.extensionsLocked') : t('sessionConfig.extensionsDesc')}
+      footer={t('sessionConfig.extensionsDesc')}
       mcpTools={mcpTools}
       skillTools={skillTools}
       enabledTools={enabledTools}
       onToggle={toggle}
       readonly={locked}
+      readonlyHint={t('sessionConfig.extensionsLocked')}
     />
   )
 }

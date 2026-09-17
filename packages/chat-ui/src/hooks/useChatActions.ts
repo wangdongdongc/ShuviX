@@ -1,6 +1,6 @@
 import { getSessionChannelApi, getHostApi } from '@shuvix/chat-ui'
 import { useCallback, useState } from 'react'
-import { useChatStore } from '../stores/chatStore'
+import { useChatStore, pendingPromptMessage } from '../stores/chatStore'
 import type { InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
 
@@ -101,11 +101,21 @@ export function useChatActions(activeSessionId: string | null): UseChatActionsRe
       await getSessionChannelApi().agent.init({ sessionId: activeSessionId })
       // 重新发送（后端统一持久化用户消息）；透传原消息的内联 Token，
       // 否则含 {{shuvixInlineToken}} 标记的消息会以裸标记发给 LLM 且新落库消息丢失 metadata
-      await getSessionChannelApi().agent.prompt({
-        sessionId: activeSessionId,
-        text: lastUserText,
-        inlineTokens: lastUserTokens
-      })
+      // 回退把那条用户消息从列表里拿掉了，重发又要等后端落库才回来 —— 先用乐观占位顶上
+      store.setPendingPrompt(
+        activeSessionId,
+        pendingPromptMessage(activeSessionId, lastUserText, { inlineTokens: lastUserTokens })
+      )
+      try {
+        await getSessionChannelApi().agent.prompt({
+          sessionId: activeSessionId,
+          text: lastUserText,
+          inlineTokens: lastUserTokens
+        })
+      } finally {
+        // 与 InputArea 同一条纪律：占位只在这里收尾，不由 error 事件撤
+        useChatStore.getState().setPendingPrompt(activeSessionId, null)
+      }
     },
     [activeSessionId]
   )

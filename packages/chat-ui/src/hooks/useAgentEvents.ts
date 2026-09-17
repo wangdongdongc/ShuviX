@@ -238,7 +238,8 @@ export function useAgentEvents(): void {
 
     switch (event.type) {
       case 'user_message':
-        // 用户消息已由后端持久化，同步到本地 store（仅活跃会话）
+        // 真实 entry 到了：乐观占位撤下，同一句话换成落库的那条（仅活跃会话）
+        store.setPendingPrompt(sid, null)
         if (sid === store.activeSessionId && event.message) {
           store.addMessage(JSON.parse(event.message))
         }
@@ -358,6 +359,9 @@ export function useAgentEvents(): void {
         // 后端已统一落库，直接从事件中取已保存的 assistant 消息
         const savedMsg = event.message ? JSON.parse(event.message) : null
         store.finishStreaming(sid, savedMsg ?? undefined)
+        // 轮结束：乐观占位与 MCP 连接态都不该再留着（正常路径早就撤了，这里兜底）
+        store.setPendingPrompt(sid, null)
+        store.clearMcpConnecting(sid)
 
         // 自动 TTS 朗读
         if (savedMsg && sid === store.activeSessionId) {
@@ -375,6 +379,13 @@ export function useAgentEvents(): void {
       // ─── 运行时出生：扩展能力勾选从此只读，直到它关停完毕 ───
       case 'agent_created':
         store.setAgentCreated(sid, true)
+        // 运行时出生 = 工具装配完了：惰性连接全部落定，占位卡上的「正在连接」到此为止
+        store.clearMcpConnecting(sid)
+        break
+
+      // ─── 创建运行时期间的 MCP 惰性连接：占位卡上写明在等哪几台 ───
+      case 'mcp_connecting':
+        store.setMcpConnecting(sid, event.server, event.connecting)
         break
 
       // ─── 运行时关停（回退/切档案/清空：旧运行时停稳前不许有新的） ───
@@ -398,6 +409,10 @@ export function useAgentEvents(): void {
       case 'error':
         // 错误以独立提示消息形式写入会话（不再使用底部错误条/弹窗）
         store.finishStreaming(sid)
+        // 只撤连接态。**刻意不碰乐观占位**：MCP 惰性连接失败的 error 发生在创建运行时那一步，
+        // 早于用户 entry 落盘（user_message），在这里撤会让刚发出的消息先消失几秒再补回来 ——
+        // 正是占位要解决的那个毛病。占位的收尾在发送方的 finally 里（见 InputArea）
+        store.clearMcpConnecting(sid)
         {
           const content = event.error || 'Unknown error'
           const errorMsg = await reportError(sid, content)

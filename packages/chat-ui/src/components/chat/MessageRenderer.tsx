@@ -1,7 +1,7 @@
 import { AlertCircle, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import type { AssistantMessage, ChatMessage, ErrorEventMessage } from '../../stores/chatStore'
-import { useChatStore } from '../../stores/chatStore'
+import { useChatStore, PENDING_PROMPT_ID } from '../../stores/chatStore'
 import { UserBubble } from './UserBubble'
 import { AssistantBubble } from './AssistantBubble'
 import { BackgroundNoticeRow } from './BackgroundNoticeRow'
@@ -118,6 +118,8 @@ function MessageBody({
     if (msg.metadata?.isSystemNotice) {
       return <BackgroundNoticeRow msg={msg} />
     }
+    // 乐观占位（还没落库）：按用户气泡画但压淡，不给回退 —— 树上还没有它
+    if (msg.id === PENDING_PROMPT_ID) return <UserBubble msg={msg} pending />
     return <UserBubble msg={msg} onRollback={onRollback ? () => onRollback(msg.id) : undefined} />
   }
 

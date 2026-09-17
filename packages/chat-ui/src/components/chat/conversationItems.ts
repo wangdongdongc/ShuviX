@@ -7,7 +7,7 @@
  * 那里面，就意味着任何人想验证「A、A、B 该怎么分组」都得先起一个浏览器环境。
  * `Conversation.tsx` 仍然按同名再导出，既有 import 路径一个都不用改。
  */
-import type { ChatMessage, AssistantMessage } from '../../stores/chatStore'
+import type { ChatMessage, AssistantMessage, UserTextMessage } from '../../stores/chatStore'
 import { STREAMING_PLACEHOLDER_ID, type VisibleItem } from './MessageRenderer'
 
 /** 助手消息（会话树里一条 assistant entry = 一次 LLM 调用） */
@@ -45,8 +45,15 @@ export function streamingPlaceholder(sessionId: string): AssistantMessage {
  *
  * 每项的 key 取组首消息 id：流式占位并入已有组时组首不变，本轮结束换成真实终答
  * 也不会让这一项重挂载 —— 展开着的工具卡/思考块因此不会被折回去。
+ *
+ * `pending` 是正在发送、后端还没落库的那条用户消息（乐观占位）：排在列表末尾、流式占位卡
+ * 之前；它落库后 `user_message` 把真实 entry 送来，占位随即撤下，同一句话换成真的那条。
  */
-export function buildVisibleItems(messages: ChatMessage[], isStreaming: boolean): VisibleItem[] {
+export function buildVisibleItems(
+  messages: ChatMessage[],
+  isStreaming: boolean,
+  pending?: UserTextMessage | null
+): VisibleItem[] {
   const items: VisibleItem[] = []
   let group: AssistantMessage[] = []
 
@@ -82,8 +89,15 @@ export function buildVisibleItems(messages: ChatMessage[], isStreaming: boolean)
     items.push({ key: msg.id, msg })
   }
 
+  // 乐观占位的用户消息：先把没收口的助手卡收掉 —— 它是上一轮的，新一轮的占位卡不该并进去
+  if (pending) {
+    flush()
+    items.push({ key: pending.id, msg: pending })
+  }
+
   if (isStreaming) {
-    const sessionId = group[0]?.sessionId || messages[messages.length - 1]?.sessionId || ''
+    const sessionId =
+      group[0]?.sessionId || pending?.sessionId || messages[messages.length - 1]?.sessionId || ''
     group.push(streamingPlaceholder(sessionId))
     flush(true)
   } else {

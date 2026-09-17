@@ -175,6 +175,7 @@
     "builtinBaseName": "ShuviX 系统说明"
   },
   "chat": {
+    "mcpConnecting": "正在连接 MCP：{{names}}",
     "mcpConnectFailed": "[MCP] {{name}} 连接失败：{{error}}",
     "welcomePrompt": "我们今天聊点什么？",
     "welcomeCreateProject": "创建项目",

@@ -21,6 +21,7 @@ import {
   selectStreamingImages,
   selectStreamingToolCall,
   selectCompletedStreamingToolCalls,
+  selectMcpConnecting,
   type AssistantBlock,
   type AssistantMessage
 } from '../../stores/chatStore'
@@ -66,6 +67,7 @@ export const AssistantBubble = memo(function AssistantBubble({
   const storeStreamingImages = useChatStore(selectStreamingImages)
   const streamingToolCall = useChatStore(selectStreamingToolCall)
   const completedStreamingToolCalls = useChatStore(selectCompletedStreamingToolCalls)
+  const mcpConnecting = useChatStore(selectMcpConnecting)
 
   // 过程区的块 / 终答正文：末条不含工具块 = 本轮终答，它的 text 块下沉为正文；
   // 其余（含中间轮自己的 text）按原序留在过程区
@@ -111,6 +113,17 @@ export const AssistantBubble = memo(function AssistantBubble({
     <div className="group relative px-4 py-3">
       {/* 内容 */}
       <div className="min-w-0">
+        {/* 创建运行时期间的 MCP 惰性连接：这几秒没有任何流式内容，卡里一片空白像是出了 bug ——
+            写明在等什么。agent_created 之后这一行就没了 */}
+        {isStreaming && mcpConnecting.length > 0 && (
+          <div
+            data-mcp-connecting
+            className="flex items-center gap-1.5 mb-1 text-[11px] text-text-tertiary"
+          >
+            <Loader2 size={12} className="animate-spin flex-shrink-0" />
+            <span>{t('chat.mcpConnecting', { names: mcpConnecting.join(', ') })}</span>
+          </div>
+        )}
         {/* 过程区（步骤 + 思考）— 有正文跟随时只留一段间距收尾，不画分割线也不用左侧竖轴：
             步骤行已经比正文轻一级，再加一条线只是多一道视觉噪音 */}
         {(blockGroups.length > 0 || liveThinkingRow) && (

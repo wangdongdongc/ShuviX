@@ -285,6 +285,20 @@ export interface ChatAgentCreatedEvent extends ChatEventBase {
   type: 'agent_created'
 }
 
+/**
+ * 创建运行时期间正在连接某台 MCP 服务器（`connecting:true`）/ 这次尝试落定了（`false`，连上或失败）。
+ *
+ * MCP 惰性启动：服务器到装配工具那一刻才连，这段等待直接压在用户刚发出的那条消息上。
+ * 前端据此在助手占位卡上写明「正在连接 MCP：…」—— 否则那几秒只有一张空卡，像是出了 bug。
+ * 失败原因不走这里（另有 `error` 事件）；`agent_created` 之后不会再有它。
+ */
+export interface ChatMcpConnectingEvent extends ChatEventBase {
+  type: 'mcp_connecting'
+  /** server 名（`mcp:<server>` 里的 server） */
+  server: string
+  connecting: boolean
+}
+
 // ─── 错误 ──────────────────────────────────────────────
 
 /** 错误事件 */
@@ -353,6 +367,7 @@ export type ChatEvent =
   | ChatMessagesReloadedEvent
   | ChatAgentCreatedEvent
   | ChatAgentClosingEvent
+  | ChatMcpConnectingEvent
   | ChatErrorEvent
   | ChatUserMessageEvent
   | ChatQueueUpdateEvent

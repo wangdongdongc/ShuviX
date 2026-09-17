@@ -151,9 +151,24 @@ async function resolveRootTools(req: ToolResolveRequest): Promise<AnyAgentTool[]
   // MCP 惰性启动：装配工具这一刻才连全部已启用 server（扩展没有会话级勾选，全量注入），
   // 上次失败的在这里自动再试一次。连不上就少这台的工具，并往会话里落一条错误提示 ——
   // 用户刚发出的那条消息就在眼前，不至于以为工具凭空消失了
-  for (const { name, result } of await mcpManager.ensureEnabled({
-    timeoutMs: LAZY_CONNECT_TIMEOUT_MS
-  })) {
+  // 连接期间把状态推给会话：占位卡上写明「正在连接 MCP」；已连上的不报（瞬间落定，只会闪一下）
+  const pendingServers = mcpManager
+    .getEnabledToolNames()
+    .map((n) => n.slice('mcp:'.length))
+    .filter((n) => mcpManager.statusByName(n) !== 'connected')
+  const notify = (connecting: boolean): void => {
+    for (const server of pendingServers) {
+      eventBus.emit({ type: 'mcp_connecting', sessionId, server, connecting })
+    }
+  }
+  notify(true)
+  let mcpResults: Awaited<ReturnType<typeof mcpManager.ensureEnabled>>
+  try {
+    mcpResults = await mcpManager.ensureEnabled({ timeoutMs: LAZY_CONNECT_TIMEOUT_MS })
+  } finally {
+    notify(false)
+  }
+  for (const { name, result } of mcpResults) {
     if (result.error) {
       eventBus.emit({
         type: 'error',

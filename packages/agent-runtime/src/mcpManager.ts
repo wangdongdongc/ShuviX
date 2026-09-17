@@ -339,6 +339,12 @@ export class McpManager {
     return this.connections.get(serverId)?.error
   }
 
+  /** 按 server 名读连接状态（名字不存在也算 disconnected）—— 宿主据此决定要不要报「正在连接」 */
+  statusByName(serverName: string): McpServerStatus {
+    const server = this.store.findAll().find((s) => s.name === serverName)
+    return server ? this.getStatus(server.id) : 'disconnected'
+  }
+
   /** 某个 server 的工具信息（从 DB cachedTools 读 + 附加运行时状态） */
   getServerToolInfos(serverId: string): McpToolInfo[] {
     const server = this.store.findById(serverId)

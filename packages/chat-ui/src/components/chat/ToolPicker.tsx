@@ -1,8 +1,8 @@
 import { getSessionChannelApi } from '@shuvix/chat-ui'
 import { useRef, useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Server, BookOpen, WifiOff, Lock } from 'lucide-react'
-import { useChatStore } from '../../stores/chatStore'
+import { Server, BookOpen, WifiOff, Lock, Loader2 } from 'lucide-react'
+import { useChatStore, selectMcpConnecting } from '../../stores/chatStore'
 import { useClickOutside } from '../../hooks/useClickOutside'
 import { useSessionTools } from '../../hooks/useSessionTools'
 import type { ToolItem } from '../common/ToolSelectList'
@@ -32,13 +32,15 @@ function parseSkillDisplay(name: string): { label: string; builtin: boolean } {
  * 工具选择器 — 会话的扩展能力勾选（MCP / Skill），与会话设置里的扩展能力是同一份数据。
  *
  * 内置工具与 SubAgent 始终启用，不在此处控制。勾选只在创建 Agent 时读一次：会话已有运行时
- * 就只读（面板照常能打开看，勾选框禁用并说明原因）。还没有会话（欢迎页）时不显示 ——
+ * 就只读（面板照常能打开看：整排条目按禁用态画、触发钮挂锁，原因只在悬停时说）。
+ * 还没有会话（欢迎页）时不显示 ——
  * 没有可写的地方，而直接发送新建出来的聊天会话本就一个都不勾。
  */
 export function ToolPicker(): React.JSX.Element | null {
   const { t } = useTranslation()
   const activeSessionId = useChatStore((s) => s.activeSessionId)
   const { enabledTools, locked, setEnabledTools } = useSessionTools(activeSessionId)
+  const mcpConnecting = useChatStore(selectMcpConnecting)
 
   const toolsRef = useRef<HTMLDivElement>(null)
   const [open, setOpen] = useState(false)
@@ -81,10 +83,11 @@ export function ToolPicker(): React.JSX.Element | null {
     void setEnabledTools(next)
   }
 
-  // 只读时行不响应悬停：面板只用来看这条会话的 Agent 带着哪些扩展能力
+  // 只读时整排按禁用态画（压暗 + 禁用光标），不响应悬停：一眼看出改不了；原因放在悬停提示里
   const rowCls = `flex items-center gap-1.5 w-full px-2 py-0.5 transition-colors ${
-    locked ? 'cursor-default' : 'hover:bg-bg-hover cursor-pointer'
+    locked ? 'cursor-not-allowed opacity-40' : 'hover:bg-bg-hover cursor-pointer'
   }`
+  const lockedHint = locked ? t('sessionConfig.extensionsLocked') : undefined
 
   return (
     <div
@@ -95,11 +98,19 @@ export function ToolPicker(): React.JSX.Element | null {
     >
       <button
         onClick={() => setOpen(!open)}
+        title={lockedHint}
         className="inline-flex items-center gap-1.5 text-[11px] text-text-tertiary hover:text-text-secondary transition-colors border border-transparent hover:border-border-secondary rounded px-1.5 py-0.5"
       >
+        {/* 只读态把锁挂在触发钮上：不用展开面板就知道这条会话的扩展能力已经定了 */}
+        {locked && <Lock size={10} data-tool-lock className="flex-shrink-0" />}
         {mcpTools.length > 0 && (
           <span className="inline-flex items-center gap-0.5">
-            <Server size={10} />
+            {/* 创建运行时期间正在连 MCP：计数旁转个圈 */}
+            {mcpConnecting.length > 0 ? (
+              <Loader2 size={10} data-mcp-connecting className="animate-spin" />
+            ) : (
+              <Server size={10} />
+            )}
             <span>{enabledMcpTools.length}</span>
           </span>
         )}
@@ -138,15 +149,6 @@ export function ToolPicker(): React.JSX.Element | null {
 
       {open && (
         <div className="picker-panel absolute left-0 bottom-8 z-30 w-[240px] rounded-lg border border-border-primary bg-bg-secondary shadow-2xl overflow-hidden">
-          {locked && (
-            <div
-              data-tool-lock-hint
-              className="flex items-start gap-1.5 px-2 py-1.5 border-b border-border-secondary text-[10px] leading-snug text-text-tertiary whitespace-normal"
-            >
-              <Lock size={10} className="mt-px flex-shrink-0" />
-              <span>{t('sessionConfig.extensionsLocked')}</span>
-            </div>
-          )}
           <div className="py-1 max-h-[60vh] overflow-y-auto">
             {mcpTools.length > 0 && (
               <div className="py-0.5">
@@ -158,7 +160,10 @@ export function ToolPicker(): React.JSX.Element | null {
                     <label
                       key={tool.name}
                       data-tool-item={tool.name}
-                      className={`${rowCls} ${failed ? 'opacity-50' : ''}`}
+                      data-offline={failed || undefined}
+                      aria-disabled={locked || undefined}
+                      title={lockedHint}
+                      className={`${rowCls} ${failed && !locked ? 'opacity-50' : ''}`}
                     >
                       <input
                         type="checkbox"
@@ -202,7 +207,13 @@ export function ToolPicker(): React.JSX.Element | null {
                 {skillTools.map((tool) => {
                   const { label, builtin } = parseSkillDisplay(tool.name)
                   return (
-                    <label key={tool.name} data-tool-item={tool.name} className={rowCls}>
+                    <label
+                      key={tool.name}
+                      data-tool-item={tool.name}
+                      aria-disabled={locked || undefined}
+                      title={lockedHint}
+                      className={rowCls}
+                    >
                       <input
                         type="checkbox"
                         checked={enabledTools.includes(tool.name)}
