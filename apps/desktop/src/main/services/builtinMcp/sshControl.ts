@@ -45,6 +45,10 @@ export interface SshExecResult {
  * `os.tmpdir()` 本身就有五十来字符，套上会话 id 很容易越界。固定短前缀 + 16 位哈希稳稳在限内。
  */
 function controlRoot(): string {
+  // 可覆写：测试要彼此隔离（下面那道权限复核会真的改目录权限），
+  // 而 /tmp 不可写的环境也需要一个出口。现读，不缓存。
+  const override = process.env.SHUVIX_SSH_CONTROL_ROOT
+  if (override) return override
   const uid = typeof userInfo().uid === 'number' ? userInfo().uid : 0
   return `/tmp/shuvix-ssh-${uid}`
 }
