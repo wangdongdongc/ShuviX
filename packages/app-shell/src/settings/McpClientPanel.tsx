@@ -9,8 +9,6 @@ import {
   Plus,
   Trash2,
   RefreshCw,
-  Power,
-  PowerOff,
   ChevronDown,
   ChevronRight,
   Wrench,
@@ -24,7 +22,7 @@ import type {
   McpServerUpdateParams
 } from '@shuvix/chat-protocol/types/mcp'
 import { ConfirmDialog } from '../common/ConfirmDialog'
-import { SettingsSection } from './SettingsPrimitives'
+import { SettingsSection, Toggle } from './SettingsPrimitives'
 import {
   McpServerDialog,
   type McpServerDialogData,
@@ -257,6 +255,7 @@ export function McpClientPanel({ api, caps = {} }: McpClientPanelProps): React.J
             const expanded = expandedId === s.id
             const showError = s.status === 'error' && !!s.error
             const showBuiltinHint = s.isBuiltin === 1 && !envHasAllValues(s.env)
+            const toggleTitle = s.isEnabled ? t('settings.mcpDisable') : t('settings.mcpEnable')
             return (
               <div key={s.id} className="flex flex-col">
                 <div className="flex items-center gap-3 px-4 py-3">
@@ -302,20 +301,6 @@ export function McpClientPanel({ api, caps = {} }: McpClientPanelProps): React.J
                           <RefreshCw size={12} />
                         </button>
                       )}
-                    {/* 这个按钮改的是 isEnabled —— 「这台服务器能不能被会话勾选」。
-                        从前叫「连接 / 断开」，那是开机即连的年代；如今服务器惰性启动，
-                        按它并不连任何东西，旧文案只会让人以为它已经没用了。 */}
-                    <button
-                      onClick={() => handleToggle(s)}
-                      className={`p-1 transition-colors ${
-                        s.isEnabled
-                          ? 'text-accent hover:text-accent/70'
-                          : 'text-text-tertiary hover:text-text-secondary'
-                      }`}
-                      title={s.isEnabled ? t('settings.mcpDisable') : t('settings.mcpEnable')}
-                    >
-                      {s.isEnabled ? <Power size={12} /> : <PowerOff size={12} />}
-                    </button>
                     {s.type !== 'inproc' && (
                       <button
                         onClick={() => openEditDialog(s)}
@@ -341,6 +326,14 @@ export function McpClientPanel({ api, caps = {} }: McpClientPanelProps): React.J
                     >
                       <Trash2 size={12} />
                     </button>
+                    {/* 启用开关。它改的是 isEnabled ——「这台服务器能不能被会话勾选」，
+                        是**状态**而不是动作，所以用 Provider 那一版的开关而非电源键：
+                        电源键读起来像「启动/停止服务」，可服务器是惰性的，按它并不连任何东西。
+                        位置也跟 Provider 对齐（行尾）；删除因此内移一格 —— 这个方向是安全的，
+                        原先最右是删除，现在最右换成无害的开关，而不是反过来。 */}
+                    <span className="ml-1 shrink-0" title={toggleTitle}>
+                      <Toggle on={!!s.isEnabled} onClick={() => void handleToggle(s)} />
+                    </span>
                   </div>
                 </div>
 
