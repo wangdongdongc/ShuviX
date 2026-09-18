@@ -30,6 +30,7 @@ import {
   type McpServerDialogData,
   type McpServerDialogInitial
 } from './McpServerDialog'
+import { envHasAllValues, sortServersForDisplay } from './mcpServerList'
 
 /** MCP 操作契约（宿主注入：桌面 window.api.mcp / 扩展 chatApiAdapter.mcp） */
 export interface McpApi {
@@ -45,18 +46,6 @@ export interface McpApi {
 export interface McpClientPanelProps {
   api: McpApi
   caps?: { allowStdio?: boolean }
-}
-
-/** env JSON 是否所有 value 都非空（所需 API Key 均已配置） */
-function envHasAllValues(envJson: string): boolean {
-  try {
-    const obj = JSON.parse(envJson || '{}') as Record<string, string>
-    const entries = Object.entries(obj)
-    if (entries.length === 0) return false
-    return entries.every(([, v]) => typeof v === 'string' && v.trim().length > 0)
-  } catch {
-    return false
-  }
 }
 
 function StatusDot({ status }: { status: string }): React.JSX.Element {
@@ -149,7 +138,7 @@ export function McpClientPanel({ api, caps = {} }: McpClientPanelProps): React.J
   const [deletingServer, setDeletingServer] = useState<McpServerInfo | null>(null)
 
   const loadServers = useCallback(async () => {
-    setServers(await api.list())
+    setServers(sortServersForDisplay(await api.list()))
   }, [api])
 
   useEffect(() => {
@@ -313,6 +302,9 @@ export function McpClientPanel({ api, caps = {} }: McpClientPanelProps): React.J
                           <RefreshCw size={12} />
                         </button>
                       )}
+                    {/* 这个按钮改的是 isEnabled —— 「这台服务器能不能被会话勾选」。
+                        从前叫「连接 / 断开」，那是开机即连的年代；如今服务器惰性启动，
+                        按它并不连任何东西，旧文案只会让人以为它已经没用了。 */}
                     <button
                       onClick={() => handleToggle(s)}
                       className={`p-1 transition-colors ${
@@ -320,7 +312,7 @@ export function McpClientPanel({ api, caps = {} }: McpClientPanelProps): React.J
                           ? 'text-accent hover:text-accent/70'
                           : 'text-text-tertiary hover:text-text-secondary'
                       }`}
-                      title={s.isEnabled ? t('settings.mcpDisconnect') : t('settings.mcpConnect')}
+                      title={s.isEnabled ? t('settings.mcpDisable') : t('settings.mcpEnable')}
                     >
                       {s.isEnabled ? <Power size={12} /> : <PowerOff size={12} />}
                     </button>
