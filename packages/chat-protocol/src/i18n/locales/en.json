@@ -240,7 +240,8 @@
     "expandLines": "Show all {{lines}} lines",
     "collapseLines": "Collapse",
     "cacheRead": "cache read",
-    "cacheWrite": "cache write"
+    "cacheWrite": "cache write",
+    "artifactMissing": "Artifact \"{{name}}\" not found in this session"
   },
   "pendingInputs": {
     "title": "Pending inputs {{count}}",
@@ -852,7 +853,9 @@
     "subAgentModelNone": "Follow the session",
     "subAgentModelUnavailable": "\"{{ref}}\" is not available right now (provider disabled or model removed). The file keeps this value until you pick another.",
     "subAgentTemplateDesc": "What this agent does, in one line",
-    "subAgentTemplateBody": "Write the system prompt here."
+    "subAgentTemplateBody": "Write the system prompt here.",
+    "artifactLabel": "Artifact",
+    "artifactHint": "Session files you can revise instead of regenerating"
   },
   "widgets": {
     "panelEmptyHint": "No widgets yet. Ask the AI in chat to build one — e.g. \"make a JSON formatter widget\"",

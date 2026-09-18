@@ -24,6 +24,9 @@ import { authoredSvgFrame, svgFenceIsRenderable } from '../CodeBlock'
 /** 提示片段里教给模型的围栏语言串 —— 与分发用的 lang 值必须是同一个字面量 */
 const FENCE_LANG = 'svg'
 
+/** 引用围栏的语言串 —— 与 CodeBlock 的 `lang === 'artifact'` 分发同一个字面量 */
+const ARTIFACT_FENCE_LANG = 'artifact'
+
 /**
  * 三份 visual-guide 片段（`?raw` 内联的那批）—— 用 fs 读，**不 import**：chat-ui 不依赖
  * agent-runtime，一条 import 会凭空造出这个方向的包依赖。读文本不会。
@@ -137,10 +140,13 @@ describe('片段教的围栏语言串 ↔ 分发用的 lang 值', () => {
       // md 里的代码围栏开头行（```<lang>）
       const openers = [...text.matchAll(/^```([A-Za-z][\w+-]*)\s*$/gm)].map((m) => m[1])
       expect(openers.length, `片段 #${i} 应含至少一个示例围栏`).toBeGreaterThan(0)
+      // 片段现在教两种围栏：```svg（画）与 ```artifact（引用一件已落盘的产物）。
+      // 只有这两个是 CodeBlock 认识的，多出第三种就是提示词在教一个渲染不出来的写法。
       for (const lang of openers) {
-        expect(lang, `片段 #${i}`).toBe(FENCE_LANG)
-        expect(svgFenceIsRenderable(lang, '<svg viewBox="0 0 4 4"><rect/></svg>')).toBe(true)
+        expect([FENCE_LANG, ARTIFACT_FENCE_LANG], `片段 #${i}: 未知围栏 ${lang}`).toContain(lang)
       }
+      expect(openers, `片段 #${i} 应含 svg 示例`).toContain(FENCE_LANG)
+      expect(svgFenceIsRenderable(FENCE_LANG, '<svg viewBox="0 0 4 4"><rect/></svg>')).toBe(true)
       // 散文里介绍围栏的那句也是同一个串（「A ```svg fenced block…」）
       expect(text, `片段 #${i}`).toContain('```' + FENCE_LANG)
     }

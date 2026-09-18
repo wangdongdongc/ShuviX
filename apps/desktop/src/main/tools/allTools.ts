@@ -16,6 +16,8 @@ import './browser'
 import './git'
 // preview 工具：不在内置 default 档案清单 —— 可视化子代理经白名单解析使用
 import './preview'
+// artifact：会话 Artifacts 的创建/认领/列举（管存储与身份，不管画图；手艺在 builtin:drawing）
+import './artifact'
 // session：agent 读改自己所属会话的会话级能力（当前仅 set-title，内置 titler 的落笔工具）。
 // 注：与已删除的同名旧工具无关 —— 压缩不再经「compact 子代理 + 工具调用」，
 // 而是 harness 内建的自动压缩（见 HarnessSession.maybeAutoCompact）。

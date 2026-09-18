@@ -240,7 +240,8 @@
     "expandLines": "全 {{lines}} 行を表示",
     "collapseLines": "折りたたむ",
     "cacheRead": "キャッシュ読取",
-    "cacheWrite": "キャッシュ書込"
+    "cacheWrite": "キャッシュ書込",
+    "artifactMissing": "このセッションに成果物「{{name}}」がありません"
   },
   "pendingInputs": {
     "title": "確認待ち {{count}}",
@@ -852,7 +853,9 @@
     "subAgentModelNone": "セッションに従う",
     "subAgentModelUnavailable": "\"{{ref}}\" は現在利用できません（プロバイダーが無効、またはモデルが削除されています）。別のモデルを選ぶまで、ファイルにはこの値が残ります。",
     "subAgentTemplateDesc": "このエージェントの役割を一行で",
-    "subAgentTemplateBody": "ここにシステムプロンプトを書きます。"
+    "subAgentTemplateBody": "ここにシステムプロンプトを書きます。",
+    "artifactLabel": "成果物",
+    "artifactHint": "作り直さずに修正できるセッションのファイル"
   },
   "widgets": {
     "panelEmptyHint": "ウィジェットはまだありません。チャットで AI に作ってもらってください（例：「JSON フォーマッターのウィジェットを作って」）",

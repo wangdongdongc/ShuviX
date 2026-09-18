@@ -60,7 +60,9 @@ vi.mock('../sessionStorage', () => ({
 vi.mock('../../i18n', () => ({ t: (key: string) => key }))
 vi.mock('../../utils/paths', () => ({
   getTempWorkspace: (sid: string) => `/nonexistent/shuvix-unit/tmp/${sid}`,
-  getToolResultsBase: () => '/nonexistent/shuvix-unit/tool-results'
+  getToolResultsBase: () => '/nonexistent/shuvix-unit/tool-results',
+  // 会话 Artifacts 的删除级联也在 sessionService.delete 里（目录不存在时 no-op）
+  getSessionArtifactsDir: (sid: string) => `/nonexistent/shuvix-unit/artifacts/${sid}`
 }))
 // 本文件的主角：内置能力服务器的释放口
 vi.mock('../mcpService', () => ({ mcpService: { closeSession: mocks.closeSession } }))

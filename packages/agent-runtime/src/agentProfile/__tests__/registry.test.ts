@@ -275,7 +275,8 @@ describe('work 档案钉板(项目会话基座：工具集/环境段的唯一事
       'database',
       'agent',
       'session',
-      'knowledge'
+      'knowledge',
+      'artifact'
     ])
     // git/preview 不进任何基座（见 allTools.ts 的注释：主 Agent 默认无，用户可覆盖
     // work.md 加入，子代理经白名单解析不受默认集限制）
@@ -352,7 +353,8 @@ describe('chat 档案钉板(不归属项目的会话的创建基座)', () => {
       'database',
       'agent',
       'session',
-      'knowledge'
+      'knowledge',
+      'artifact'
     ])
     // 这是裁决过的形态：两个基座工具面完全相同，「自己干活 / 把活交给 coding 子会话」
     // 全靠正文表达（下面那条钉的就是正文差异）。谁想靠收窄 work 的工具来"强制"它
@@ -461,7 +463,8 @@ describe('coding 档案钉板(从 work 拆出的工程人格)', () => {
       'database',
       'agent',
       'session',
-      'knowledge'
+      'knowledge',
+      'artifact'
     ])
     // 拆分之初 coding 的卖点之一是「基座让出的 ssh/database 在这里」，那条理由已经
     // 作废：收窄工具从来不是表达分工的手段（收窄 work 只会让它拿 bash 绕一圈做同一件
@@ -573,7 +576,7 @@ describe('notebook 档案钉板(笔记本会话根 Agent 的基座)', () => {
  * 两处一致（RPer-3）。
  */
 describe('bot 档案钉板（bot 会话的基座）', () => {
-  it('RPer-1 三语工具清单恰为九件、不含 bash/write/ssh/database/browser、不声明模型', () => {
+  it('RPer-1 三语工具清单恰为十件、不含 bash/write/ssh/database/browser、不声明模型', () => {
     // 这份窄清单**就是**「看得见、动不了」那半个保证：它能读能查能问、能改自己那份
     // bot md（edit），但没有 shell、没有创建文件的路 —— 真要干活只能开子会话，
     // 而子会话按自己的档案生成提示词、拿不到人设围栏。谁想「顺手给它一个 bash」，
@@ -589,7 +592,8 @@ describe('bot 档案钉板（bot 会话的基座）', () => {
         'edit',
         'session',
         'agent',
-        'knowledge'
+        'knowledge',
+        'artifact'
       ])
       for (const forbidden of ['bash', 'write', 'database', 'browser', 'git', 'preview']) {
         expect(built.tools, `bot.${language} 不得持有 ${forbidden}`).not.toContain(forbidden)

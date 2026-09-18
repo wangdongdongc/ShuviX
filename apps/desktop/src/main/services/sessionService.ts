@@ -47,6 +47,7 @@ import {
 import { chatFrontendRegistry } from '../frontend/core/ChatFrontendRegistry'
 import { registerUserInputParticipant } from './userInputBroker'
 import { createLogger } from '../logger'
+import { deleteSessionArtifacts } from './artifacts/store'
 
 const log = createLogger('SessionService')
 
@@ -491,6 +492,9 @@ export class SessionService {
         /* 忽略 */
       }
     }
+    // 会话 Artifacts：产物归这场对话，会话没了它们也没有意义（目录不存在时是 no-op —— 多数
+    // 会话一件都没有，图缺省走 ```svg 围栏、根本不落盘）
+    deleteSessionArtifacts(id)
   }
 
   // ─── AgentSession 运行时管理 ──────────────────

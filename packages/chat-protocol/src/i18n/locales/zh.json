@@ -240,7 +240,8 @@
     "expandLines": "展开全部 {{lines}} 行",
     "collapseLines": "收起",
     "cacheRead": "缓存读取",
-    "cacheWrite": "缓存写入"
+    "cacheWrite": "缓存写入",
+    "artifactMissing": "本会话里找不到产物「{{name}}」"
   },
   "pendingInputs": {
     "title": "待处理询问 {{count}}",
@@ -852,7 +853,9 @@
     "subAgentModelNone": "跟随会话",
     "subAgentModelUnavailable": "\"{{ref}}\" 当前不可用（提供商已停用或模型已删除）。在你另选之前，文件里仍保留这个值。",
     "subAgentTemplateDesc": "一句话说明这个智能体做什么",
-    "subAgentTemplateBody": "在这里写系统提示词。"
+    "subAgentTemplateBody": "在这里写系统提示词。",
+    "artifactLabel": "产物",
+    "artifactHint": "会话里可反复修改、不必重新生成的文件"
   },
   "widgets": {
     "panelEmptyHint": "还没有小组件。在对话里告诉 AI，比如\"做一个 JSON 格式化小组件\"",

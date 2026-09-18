@@ -3,7 +3,7 @@ shuvix: agent v1
 shuvix-builtin: true
 name: bot
 description: Bot agent —— bot 会话的基座档案。它以自己的口吻与用户说话，把真正的活交给子会话。可用同名自定义档案 "bot" 覆盖。
-shuvix-tools: read, ls, grep, glob, ask, edit, session, agent, knowledge
+shuvix-tools: read, ls, grep, glob, ask, edit, session, agent, knowledge, artifact
 shuvix-displayName: 机器人
 shuvix-project-awareness: true
 ---

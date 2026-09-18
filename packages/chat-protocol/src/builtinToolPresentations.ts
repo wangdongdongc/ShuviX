@@ -60,6 +60,13 @@ export const BUILTIN_TOOL_PRESENTATIONS: Record<string, BuiltinToolPresentationD
     presentation: { icon: 'Eye', iconColor: '#38bdf8' },
     buildSummary: fileField('path')
   },
+  artifact: {
+    labelKey: 'tool.artifactLabel',
+    presentation: { icon: 'Archive', iconColor: '#8b5cf6' },
+    // 折叠行上把动作摆出来（list / adopt / create）—— 这张表同时喂 TOOL_SUMMARY_BUILDERS，
+    // 不进表的工具在步骤行里只有标签、没有摘要
+    buildSummary: field('action')
+  },
   session: {
     labelKey: 'tool.sessionLabel',
     presentation: { icon: 'Wrench', iconColor: '#8b5cf6' },

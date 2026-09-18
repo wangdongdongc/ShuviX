@@ -47,6 +47,21 @@ export function getQwen3TtsDir(): string {
   return ensureDir(join(homedir(), '.shuvix', 'tts', 'qwen3'))
 }
 
+/**
+ * 会话 Artifacts 根 —— `~/.shuvix/artifacts/<rootSessionId>/`，一场会话一个目录。
+ *
+ * 放 `~/.shuvix/` 而不是 `<userData>/data/`：凡是「智能体为用户产出的东西」都在这里
+ * （widgets / knowledge / bots / skills），用户找得到、拷得走；`data/sessions/*.jsonl`
+ * 是应用自己的账本，不是给人看的。
+ *
+ * 目录名就是会话 id（与知识库的项目 bundle `projects/<projectId>/` 同策：目录名就是 id，
+ * 永不冲突、改名不失效）。显示名从不来自目录 —— 由宿主用会话当前标题解析。
+ * 不自动创建：首次写入时才建，看一眼就结束的图在磁盘上什么都不留。
+ */
+export function getSessionArtifactsDir(rootSessionId: string): string {
+  return join(homedir(), '.shuvix', 'artifacts', rootSessionId)
+}
+
 /** 全局 Skills 目录：~/.shuvix/skills/（不自动创建，由 skillService 管理） */
 export function getDefaultSkillsDir(): string {
   return join(homedir(), '.shuvix', 'skills')

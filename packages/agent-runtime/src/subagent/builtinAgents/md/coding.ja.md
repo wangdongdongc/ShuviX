@@ -3,7 +3,7 @@ shuvix: agent v1
 shuvix-builtin: true
 name: coding
 description: コーディングエージェント——フルツールチェーン（shell、SSH、データベース、ブラウザ）と複数ファイルにまたがるコード作業の作法。`work` セッションが `coding` サブセッションとして起動します。
-shuvix-tools: bash, read, write, edit, ask, browser, ls, grep, glob, database, agent, session, knowledge
+shuvix-tools: bash, read, write, edit, ask, browser, ls, grep, glob, database, agent, session, knowledge, artifact
 shuvix-displayName: コーディング
 shuvix-instruction-files: AGENTS.md, CLAUDE.md
 shuvix-project-awareness: true

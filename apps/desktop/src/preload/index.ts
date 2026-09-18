@@ -849,6 +849,16 @@ const api = {
   },
 
   // ============ Files (会话工作目录文件树) ============
+  /** 会话 Artifacts —— 目前只有渲染端读内容这一条（```artifact 引用围栏） */
+  artifact: {
+    /** 按名字取一件的内容；不存在返回 null */
+    read: (params: { sessionId: string; name: string }) =>
+      ipcRenderer.invoke('artifact:read', params) as Promise<{
+        name: string
+        title: string
+        content: string
+      } | null>
+  },
   files: {
     /** 扫描当前会话工作目录下的所有文件路径（遵循 .gitignore） */
     scan: (params: { sessionId: string }) =>

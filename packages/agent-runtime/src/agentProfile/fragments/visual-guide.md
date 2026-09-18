@@ -4,10 +4,19 @@ A ```svg fenced block in your reply renders **inline as a figure** — hand-writ
 
 **A figure is an explanation, not a deliverable.** When the user wants a chart they can reopen, revise and preview later, that is a file and it belongs to the `visualization` sub-agent — dispatch it, and do not hand-write Mermaid into the conversation. An inline figure is for making a point now, which nobody needs to reopen. When prose is clearer, write prose; a figure that carries no argument is noise.
 
+**When the user asks to change a figure you already drew, adopt it — never redraw it.** `artifact` with action `adopt` turns that figure into a file without resending a single line: the source is taken from the transcript. Then `edit` that file surgically, and show the result with a fence naming it:
+
+```artifact
+requests-by-tier
+```
+
+Redrawing a whole figure to change one bar is exactly what this exists to prevent.
+
 <!-- shuvix:skill-hint -->
 
 ### The contract
 
+- **One element per line.** A figure you draw may later be adopted and edited in place, and a minified SVG gives `edit` no anchors to hold on to — the only way back is redrawing the whole thing.
 - **`viewBox` is required; never set `width` or `height`.** The card sizes the figure to its own width and clips overflow — a fixed size gets cropped, not scrolled.
 - **Every color comes from a token, never a hex literal.** `var()` works directly in presentation attributes: `fill="var(--viz-1)"`, `stroke="var(--viz-axis)"`. A literal color breaks under 10 of the 11 themes.
   - Series identity: `--viz-1` … `--viz-8`, **used in that order and never cycled**. A ninth series folds into "other" or becomes small multiples — never a color you invent.

@@ -1,7 +1,9 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Copy, Check, Code, FileText } from 'lucide-react'
 import { copyToClipboard } from '../../utils/clipboard'
+import { getHostApi } from '../../api/chatApi'
+import { useChatStore } from '../../stores/chatStore'
 import { sanitizeAuthoredSvg, sanitizeRenderedSvg } from '@shuvix/chat-protocol/utils/svgSanitize'
 import mermaid from 'mermaid'
 
@@ -72,6 +74,29 @@ export function authoredSvgFrame(code: string): string | null {
 export const svgFenceIsRenderable = (lang: string, code: string): boolean =>
   lang === 'svg' && authoredSvgFrame(code) !== null
 
+/**
+ * ```artifact 围栏体 → 要展示的那件 artifact 的名字；不是引用围栏、或围栏体是空的就 null。
+ *
+ * 只取**第一行**：围栏里只该有一个名字（对话里留下的是一行名字，不是几 KB 源码），多出来的
+ * 行是模型把说明写进了围栏。空体不渲染引用 —— 流式期间围栏刚开、名字还没写出来时也走这条，
+ * 否则会先闪一张「找不到」卡。大小写敏感与 ```svg 那档一致（提示词教的是小写）。
+ *
+ * 组件本身要 DOM，判定不要 —— 所以和 svgFenceIsRenderable 一样单独导出。
+ */
+export function artifactRefName(lang: string, code: string): string | null {
+  if (lang !== 'artifact') return null
+  const first = code.trim().split('\n')[0].trim()
+  return first || null
+}
+
+/**
+ * 取到的内容要不要按 SVG 内联（否则落 `<pre>` 源码分支）。
+ *
+ * 判定卡在「第一个非空白字符就是 `<svg`」：于是以 `<?xml …?>` 声明开头的 SVG 会落到文本
+ * 分支 —— **这是现状，钉住它**，别让人以为带 XML 声明的图也会被画出来。
+ */
+export const artifactRefIsSvg = (content: string): boolean => /^\s*<svg\b/i.test(content)
+
 interface HastNode {
   type: string
   value?: string
@@ -117,6 +142,12 @@ export function CodeBlock({
   // 手写 SVG 图：开标签一闭合就开始逐帧画，之前落到下方的普通代码块（见 authoredSvgFrame）
   if (svgFenceIsRenderable(lang, rawCode)) {
     return <AuthoredSvgBlock code={rawCode} />
+  }
+
+  // 会话 Artifact 的引用：围栏里只有一个名字，内容现取（见 ArtifactRefBlock）
+  const artifactName = artifactRefName(lang, rawCode)
+  if (artifactName) {
+    return <ArtifactRefBlock name={artifactName} />
   }
 
   const handleCopy = (): void => {
@@ -325,6 +356,86 @@ function AuthoredSvgBlock({ code }: { code: string }): React.JSX.Element {
           className="flex justify-center overflow-hidden p-3 [&_svg]:max-w-full [&_svg]:h-auto"
           dangerouslySetInnerHTML={{ __html: svgHtml }}
         />
+      )}
+    </div>
+  )
+}
+
+/**
+ * ```artifact 引用围栏 —— 正文里指名一件会话 Artifact，渲染它**当前**的内容。
+ *
+ * 这是「对话只持有引用」的落点：转写里留下的是一行名字，不是几 KB 源码。图改过之后
+ * 再发一条同名引用就展示新版，而修改本身是 `edit` 的一个小 diff —— 不必把整张图重画。
+ *
+ * 为什么不走 `<img>` 取内容：SVG 经 `<img>` 加载是一份**独立文档**，`var(--viz-1)` 解析不到，
+ * 整套 token 配色当场失效。所以必须取文本内联进宿主 DOM —— 也因此必须过 sanitizeAuthoredSvg，
+ * 与 ```svg 围栏同一道闸（内容虽已落盘，来源仍是模型手写）。
+ *
+ * 只在桌面端成立：扩展没有 artifact 存储，取不到就显示「找不到」而不是空白。
+ */
+function ArtifactRefBlock({ name }: { name: string }): React.JSX.Element {
+  const { t } = useTranslation()
+  const sessionId = useChatStore((s) => s.activeSessionId)
+  // 取不到宿主通道（扩展端没有 artifact 存储）就直接按「找不到」呈现 —— **派生出来，不写进
+  // state**：在 effect 里同步 setState 会触发级联渲染，react-hooks/set-state-in-effect 拦它
+  const reader = (getHostApi() as { artifact?: { read: (p: unknown) => Promise<unknown> } } | null)
+    ?.artifact?.read
+  const canLoad = !!sessionId && !!reader
+  const [loaded, setState] = useState<
+    { kind: 'loading' } | { kind: 'missing' } | { kind: 'ok'; title: string; content: string }
+  >({ kind: 'loading' })
+  const state = canLoad ? loaded : ({ kind: 'missing' } as const)
+
+  useEffect(() => {
+    let alive = true
+    if (!canLoad || !reader) return
+    void reader({ sessionId, name })
+      .then((r) => {
+        if (!alive) return
+        const row = r as { title: string; content: string } | null
+        setState(row ? { kind: 'ok', title: row.title, content: row.content } : { kind: 'missing' })
+      })
+      .catch(() => alive && setState({ kind: 'missing' }))
+    return () => {
+      alive = false
+    }
+  }, [canLoad, reader, sessionId, name])
+
+  if (state.kind === 'missing') {
+    return (
+      <div className="rounded-lg border border-orange-500/30 bg-orange-500/5 p-3">
+        <div className="text-[10px] text-orange-400">{t('message.artifactMissing', { name })}</div>
+      </div>
+    )
+  }
+
+  const svgHtml =
+    state.kind === 'ok' && artifactRefIsSvg(state.content) ? sanitizeAuthoredSvg(state.content) : ''
+
+  return (
+    <div
+      className="my-2 rounded-lg overflow-hidden"
+      style={{ background: 'color-mix(in srgb, var(--color-bg-tertiary) 60%, transparent)' }}
+    >
+      <div
+        className="flex items-center justify-between px-4 py-1.5"
+        style={{ background: 'color-mix(in srgb, var(--color-bg-tertiary) 60%, transparent)' }}
+      >
+        <span className="text-[10px] text-text-tertiary font-medium truncate">
+          {state.kind === 'ok' ? state.title : name}
+        </span>
+      </div>
+      {state.kind === 'loading' ? (
+        <div className="p-3 text-[11px] text-text-tertiary">{t('message.rendering')}</div>
+      ) : svgHtml ? (
+        <div
+          className="flex justify-center overflow-hidden p-3 [&_svg]:max-w-full [&_svg]:h-auto"
+          dangerouslySetInnerHTML={{ __html: svgHtml }}
+        />
+      ) : (
+        <pre className="p-3 text-[11px] text-text-secondary whitespace-pre-wrap break-words leading-relaxed font-mono overflow-auto">
+          {state.content}
+        </pre>
       )}
     </div>
   )
