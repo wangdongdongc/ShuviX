@@ -25,7 +25,7 @@
     "typecheck:ext": "npm run typecheck -w @shuvix/extension",
     "typecheck": "npm run typecheck -w shuvix && npm run typecheck:ext",
     "lint": "npm run lint -w shuvix && eslint packages",
-    "test": "npm run test -w shuvix",
+    "test": "npm run test -w shuvix && npm run test -w @shuvix/atomic-editor",
     "format": "prettier --write .",
     "postinstall": "node -e \"process.env.CI||require('child_process').execSync('electron-rebuild -f -w better-sqlite3,node-pty',{stdio:'inherit'})\"",
     "build:mac": "npm run build:mac -w shuvix",

@@ -96,6 +96,10 @@
     }
   },
   "devDependencies": {
+    "@vitejs/plugin-react": "*",
     "happy-dom": "^20.10.6"
+  },
+  "scripts": {
+    "test": "vitest run"
   }
 }

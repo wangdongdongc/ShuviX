@@ -15,7 +15,12 @@ so we can customize the editor at the source level (i18n, native table menu, …
 Keep this list current — it's what makes future merges predictable.
 
 - `package.json` — renamed to `@shuvix/atomic-editor`, `private: true`, `exports` point at
-  `src/` (we consume source), standalone build/test `devDependencies` + `scripts` stripped.
+  `src/` (we consume source), standalone **build** `devDependencies` + `scripts` stripped.
+  The `test` script is back (2026-09-18) and the root `npm run test` chains it: the package's
+  own 9 test files had been passing but running nowhere, and they cover in-tree customizations
+  (wiki-links, tables) alongside upstream's. They need happy-dom + `@vitejs/plugin-react`, which
+  the desktop vitest config cannot give them (`environment: 'node'`, no react plugin), so this
+  package keeps its own `vitest.config.ts` rather than folding into that one.
 - `VENDORING.md` — this file (not in upstream).
 - `src/table-widget.ts` — `findTableRange` iterate callback: made both non-`false` paths
   return `undefined` explicitly. Behavior-identical; satisfies ShuviX's stricter
