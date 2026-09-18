@@ -17,6 +17,7 @@ import i18next from 'i18next'
 import {
   createAgentFactory,
   formatLanguageDisplay,
+  renderVisualGuide,
   DISPATCH_TOOL_NAME,
   LAZY_CONNECT_TIMEOUT_MS,
   createAskTool,
@@ -97,6 +98,10 @@ async function extensionPromptVars(ctx: PromptVarsCtx): Promise<PromptVars> {
     date: new Date().toISOString().slice(0, 10),
     language: formatLanguageDisplay(i18next.language),
     appVersion,
+    // 内联作图的规矩与调色板 token（自含块）—— 围栏渲染在共用的 chat-ui 里，两端都成立。
+    // **不带 skillShelf**：这一端没有 SkillTool（下面 resolveTools 直接丢弃 `skill:` 名），
+    // 带上就等于指挥模型去加载一个这里不存在的技能
+    visualGuide: renderVisualGuide(i18next.language),
     workspaceIntro: handle ? projectIntro(handle.name) : SCRATCH_INTRO,
     // 根会话供给 {{shuvix:notebookPath}}（笔记本会话的根 Agent 走 notebook 基座档案）：
     // 非笔记本会话为空串 → 占位块收敛消失。派生 ctx.sessionId 是 agentId，无从解析 —— 不供给

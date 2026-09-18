@@ -1,0 +1,1 @@
+**Before a figure that carries data, or one with more than a handful of marks, load the `builtin:drawing` skill.** It holds the craft this section deliberately leaves out: choosing the form (and when not to draw at all), mark specs, label and legend rules, and a catalog of what goes wrong. A two-box sketch does not need it.

@@ -6,6 +6,7 @@ import { join, resolve, dirname, delimiter } from 'path'
 import { homedir } from 'os'
 import { mkdirSync, existsSync } from 'fs'
 import { app } from 'electron'
+import i18next from 'i18next'
 
 /** 确保目录存在并返回路径 */
 function ensureDir(dir: string): string {
@@ -51,14 +52,37 @@ export function getDefaultSkillsDir(): string {
   return join(homedir(), '.shuvix', 'skills')
 }
 
-/**
- * 内置 Skills 资源目录 —— 随应用版本包发布，只读
- * 打包后位于 Resources/skills/，开发时位于 resources/skills/
- */
-export function getBuiltinSkillsDir(): string {
-  return app.isPackaged
+/** 内置 Skills 资源根 —— 打包后 Resources/skills/，开发时 resources/skills/；下面按语言分层 */
+function getBuiltinSkillsRoot(): string {
+  // `app?.` 与 getBuiltinKnowledgeDir 同策：单测常只桩半个 electron，少这一个问号就 TypeError
+  return app?.isPackaged
     ? join(process.resourcesPath, 'skills')
     : resolve(__dirname, '../../resources/skills')
+}
+
+/** 语言回退的兜底（与内置知识库同一个常量语义：整份回退到 en，不做半中半英） */
+const BUILTIN_SKILL_FALLBACK_LANGUAGE = 'en'
+
+/**
+ * 内置 Skills 目录 —— 随应用版本包发布，只读，**按界面语言分层**
+ * （`skills/<lang>/<name>/SKILL.md`，与内置知识库的 `knowledge/<base>/<lang>/` 同策）。
+ *
+ * 为什么按语言分目录而不是一份英文：内置技能的正文是**提示散文**，与 builtinAgents 的
+ * md 属同一类东西，而那一类在本仓的规矩就是一语言一份、按整份回退。技能是目录不是单文件，
+ * 所以回退发生在这一层：界面语言的目录存在就用它，否则整个落到 en。
+ *
+ * 随之而来的约定（有守护测试）：**每个语言目录都要有每一个内置技能**，尚未翻译的那份
+ * 先放英文原文 —— 与「未翻译的语言文件里正文先放英文原文」同一条规矩，翻译债因此出现在
+ * 正确的位置，而不是变成「某个语言的用户静默少一个技能」。
+ *
+ * skillService 每次 findAll 都现扫，所以切换界面语言无需额外刷新。
+ */
+export function getBuiltinSkillsDir(): string {
+  const root = getBuiltinSkillsRoot()
+  const lang = (i18next.language || BUILTIN_SKILL_FALLBACK_LANGUAGE).split('-')[0].toLowerCase()
+  return existsSync(join(root, lang))
+    ? join(root, lang)
+    : join(root, BUILTIN_SKILL_FALLBACK_LANGUAGE)
 }
 
 /**

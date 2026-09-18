@@ -231,6 +231,7 @@
     "playTts": "朗读",
     "stopTts": "停止朗读",
     "mermaidFailed": "Mermaid 渲染失败",
+    "svgFailed": "SVG 无法安全渲染",
     "showDiagram": "显示图表",
     "rendering": "渲染中…",
     "diagram": "图表",
@@ -1011,6 +1012,7 @@
   "command": {
     "skills": {
       "browser": "打开和操作网页——浏览、点击、填写表单、截图或导出 PDF",
+      "drawing": "内联 SVG 作图的手艺 —— 怎么选图型、标记规格，以及常见的画错",
       "pglite": "用 SQL 分析数据——查询 CSV、临时建表、汇总报表"
     }
   },

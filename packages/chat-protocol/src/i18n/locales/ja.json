@@ -231,6 +231,7 @@
     "playTts": "読み上げ",
     "stopTts": "読み上げ停止",
     "mermaidFailed": "Mermaidレンダリング失敗",
+    "svgFailed": "SVG を安全に描画できません",
     "showDiagram": "図表を表示",
     "rendering": "レンダリング中…",
     "diagram": "図表",
@@ -1011,6 +1012,7 @@
   "command": {
     "skills": {
       "browser": "Web ページを開いて操作——閲覧、クリック、フォーム入力、スクリーンショットや PDF 保存",
+      "drawing": "インライン SVG 図の手わざ —— 図型の選び方、標記の仕様、よくある誤り",
       "pglite": "SQL でデータを分析——CSV の検索、テーブル作成、結果の集計"
     }
   },

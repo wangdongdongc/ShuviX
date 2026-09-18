@@ -11,9 +11,13 @@
     "../../packages/chat-protocol/src/**/*",
     "../../packages/agent-runtime/src/**/*"
   ],
+  // svgSanitize 那组是**渲染端**代码（DOMParser / Element / Document.body），而本配置的
+  // lib 只有 ES2022 —— 它们由 tsconfig.web.json 负责类型检查。两个单测也一并排除：
+  // 只要有一个文件 import 了 svgSanitize.ts，它就会被拉进本图并报一串 TS2304。
   "exclude": [
     "../../packages/chat-protocol/src/utils/svgSanitize.ts",
-    "../../packages/chat-protocol/src/utils/svgSanitize.test.ts"
+    "../../packages/chat-protocol/src/utils/svgSanitize.test.ts",
+    "../../packages/chat-protocol/src/utils/svgSanitize.dom.test.ts"
   ],
   "compilerOptions": {
     "composite": true,

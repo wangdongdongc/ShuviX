@@ -266,6 +266,11 @@ const isSessionScopedTool = (name: string): boolean =>
  *    写进勾选）—— 否则用户取消的勾选会被档案白名单并集加回来，勾选就是假的。
  *    反过来 root 的 overlay 也**只收** mcp: / skill:：勾选里混进一个内置名（手改的设置、
  *    被新会话继承的项目配置）不能借 overlay 越过档案 —— bot 基座的窄名单因此是结构保证。
+ *
+ * **一处已知的例外，别据此以为名单是全封闭的**：桌面宿主的 resolveTools 在这份名单之外
+ * 给每个 root 会话挂了 `skill` 工具（内置技能货架，见 services/skillTool.ts）。那是产品
+ * 决定 —— 内置技能只注入文本、不引入任何能力，所以 bot「能看不能碰」的实质仍然成立 ——
+ * 但它确实不经过本函数，`shuvix-tools` 因此不再是 root 工具表的完整列举。
  *  - spawned 没有选择器也没有会话设置，档案即全部（overlay 恒为空）。
  */
 function normalizeToolNames(

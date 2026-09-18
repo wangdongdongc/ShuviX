@@ -33,7 +33,7 @@ import { join } from 'path'
 import { type as osType, release as osRelease, platform } from 'os'
 import { app } from 'electron'
 import i18next from 'i18next'
-import { formatLanguageDisplay } from '@shuvix/agent-runtime'
+import { formatLanguageDisplay, renderVisualGuide } from '@shuvix/agent-runtime'
 import { getBuiltinToolEntries } from '../services/toolRegistry'
 import { SkillTool } from '../services/skillTool'
 import { mcpService } from '../services/mcpService'
@@ -145,11 +145,20 @@ async function resolveDesktopTools(req: ToolResolveRequest): Promise<AnyAgentToo
     )
   }
 
-  // SkillTool：root 有项目即注入（空名单也注入 —— 项目级 skills 兜底）；
-  // spawned 仅具名注入，但带 projectPath（修复：派生 agent 可见项目级 skills）
+  // SkillTool：root 恒注入（内置 skill 现在无条件在架，见 skillTool.ts 构造函数的说明 ——
+  // 于是无项目的 chat 会话也够得到）；spawned 仍仅具名注入，但带 projectPath（派生 agent
+  // 可见项目级 skills）。只有当这一次真有 skill 可给时才挂上：空手的工具只是噪音。
+  //
+  // 为什么 spawned 不跟着放开：只有 root 的散文是用户直接读到的，内联图也只在那里成立；
+  // 派生 agent 的产出要经父会话转述，给它一个「加载作图手艺」的工具是白占工具表。
   const projectPath = sessionProject(req.rootSessionId)?.path
-  if (skillNames.length > 0 || (req.kind === 'root' && projectPath)) {
-    tools.push(wrap(new SkillTool(skillNames, projectPath)))
+  if (req.kind === 'root' || skillNames.length > 0) {
+    // includeBuiltin 只给 root：内置技能是「说明 ShuviX 自己会什么」，而只有 root 的散文是
+    // 用户直接读到的。派生 agent 点名了某个 skill 时只拿它点的那个，不顺带收下整架内置。
+    const skillTool = new SkillTool(skillNames, projectPath, {
+      includeBuiltin: req.kind === 'root'
+    })
+    if (skillTool.hasSkills) tools.push(wrap(skillTool))
   }
 
   // MCP 惰性启动：勾选的服务器到这一刻才连（并发；上次失败的在这里自动再试一次）。
@@ -247,6 +256,10 @@ function desktopPromptVars(ctx: PromptVarsCtx): PromptVars {
     date: new Date().toISOString().slice(0, 10),
     language: formatLanguageDisplay(i18next.language),
     appVersion,
+    // 内联作图的规矩与调色板 token（自含块，正文里一行占位符引入）—— 与 body 同语言：
+    // 界面语言是宿主的权威，档案构建期挑 body 用的也是这一个。
+    // skillShelf：桌面端有内置技能货架（SkillTool），所以带上那句「先加载 builtin:drawing」
+    visualGuide: renderVisualGuide(i18next.language, { skillShelf: true }),
     projectName: project?.name ?? '',
     // 根会话供给 {{shuvix:notebookPath}}（笔记本会话的根 Agent 走 notebook 基座档案）：
     // 非笔记本会话为空串 → 占位块收敛消失。派生 ctx.sessionId 是 agentId，无从解析 —— 不供给，

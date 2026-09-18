@@ -14,6 +14,9 @@ export default defineConfig({
       'node:original-fs': 'node:fs'
     }
   },
+  // packages/** 下的 jsdom 用例：Vite 按 /@fs/ URL 取模，仓库根在 vitest root 之外会被
+  // fs 守卫挡掉（node 环境不走这条路径，所以只有 jsdom 会炸）
+  server: { fs: { allow: [resolvePath(__dirname, '../..')] } },
   test: {
     // 测试 main 进程及 Node.js 共享代码；外加共享包 chat-protocol / agent-runtime / chat-ui
     // 的单测，以及扩展端 runtime 里与桌面同语义的纯逻辑单测（扩展自身不配 vitest ——

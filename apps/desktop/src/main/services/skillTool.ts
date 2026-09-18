@@ -8,6 +8,7 @@
 
 import { resolve } from 'path'
 import { Type } from 'typebox'
+import type { TObject, TString } from 'typebox'
 import { rgFiles } from '../utils/toolUtils/ripgrep'
 import { BaseTool } from '@shuvix/agent-runtime'
 import type { AgentToolResult } from '@earendil-works/pi-agent-core'
@@ -15,42 +16,75 @@ import type { SkillToolDetails } from '@shuvix/chat-protocol/types/chatMessage'
 import { skillService } from './skillService'
 import { t } from '../i18n'
 
-const SkillParamsSchema = Type.Object({
-  name: Type.String({
-    description: 'The name of the skill from available_skills'
+/**
+ * 每个实例现造一份 schema —— **不要**改回模块级常量 + 构造函数就地改写。
+ *
+ * 把一个模块级常量直接赋给 `readonly parameters`，等于把同一个对象引用交给每一个实例，于是往
+ * `parameters.properties.name.description` 里写本次在架名单的示例名，就是写给所有还活着的
+ * SkillTool：最后构造的那个会话的示例名会盖掉先前每一个，连「这次一个 skill 都没有」的
+ * 实例也照样带着别的会话的示例名。深拷贝不是出路 —— TypeBox 的 schema 带 Symbol 键
+ * （`Symbol.for('TypeBox.Kind')`），structuredClone 会把它们丢掉。
+ */
+const makeSkillParams = (hint: string): TObject<{ name: TString }> =>
+  Type.Object({
+    name: Type.String({ description: `The name of the skill from available_skills${hint}` })
   })
-})
+
+/** 类型锚点：各实例的 schema 同形，值各造各的 */
+type SkillParams = ReturnType<typeof makeSkillParams>
 
 /** skill 工具 */
-export class SkillTool extends BaseTool<typeof SkillParamsSchema> {
+export class SkillTool extends BaseTool<SkillParams> {
   readonly name = 'skill'
   readonly label = t('tool.skillLabel')
   readonly description: string
-  readonly parameters = SkillParamsSchema
+  readonly parameters: SkillParams
 
   private skills: ReturnType<typeof skillService.findEnabled>
-  private projectPath?: string
 
-  constructor(enabledSkillNames: string[], projectPath?: string) {
+  /** 这一次装配到底有没有 skill 可给 —— 注入点据此决定要不要挂上本工具 */
+  get hasSkills(): boolean {
+    return this.skills.length > 0
+  }
+
+  constructor(
+    enabledSkillNames: string[],
+    projectPath?: string,
+    options?: { includeBuiltin?: boolean }
+  ) {
     super()
-    this.projectPath = projectPath
 
+    // 内置 skill **不经会话勾选**就在架（`includeBuiltin`，由注入点按 kind 决定）；
+    // 其余一律按 settings.enabledTools 的显式选择。
+    //
+    // 为什么内置的不走那道门：`enabledTools` 缺省为空要防的是 MCP 服务器（起进程、连网络、
+    // 注入未知工具）和用户自己的 skill（用户的文件、用户定范围）。内置 skill 三样都不沾 ——
+    // 它随包发布、只读、不引入任何新工具（就是本工具），而且它不是「扩展」，是 ShuviX 在
+    // 说明自己会什么。用户不该为了让图画得好，先知道有这么个技能存在并去勾它。
+    //
+    // 关闭仍然有效：findEnabled 已经把 .config.json 的 disabled / disabledDirs 过滤掉了。
+    //
+    // **同名用户 skill 不覆盖内置** —— 与 agent/policy/hook/bot 那套 md 家族**不同**，别照那个
+    // 直觉读这里：内置恒带 `dirName='builtin'`，globalName 因此恒为 `builtin:<name>`，而用户
+    // 全局目录的就是 `<name>`，两者永远不同名，于是并存、各占索引一行。要让内置那份失效，
+    // 路径是 .config.json 的 disabled（或整组 disabledDirs），不是放一个同名文件。
     const allSkills = skillService.findEnabled(projectPath)
-    this.skills = allSkills.filter((s) => enabledSkillNames.includes(s.name))
+    const userNames = new Set(enabledSkillNames)
+    this.skills = allSkills.filter(
+      (s) => (options?.includeBuiltin === true && s.source === 'builtin') || userNames.has(s.name)
+    )
+
+    // hint 无条件参与本实例的 schema 构造：空架子就得到空 hint，不会留着别处的示例名
+    const examples = this.skills
+      .slice(0, 3)
+      .map((s) => `'${s.name}'`)
+      .join(', ')
+    this.parameters = makeSkillParams(examples ? ` (e.g., ${examples}, ...)` : '')
 
     if (this.skills.length === 0) {
       this.description =
         'Load a specialized skill that provides domain-specific instructions and workflows. No skills are currently available.'
     } else {
-      // 动态生成 name 参数 hint
-      const examples = this.skills
-        .slice(0, 3)
-        .map((s) => `'${s.name}'`)
-        .join(', ')
-      const hint = examples ? ` (e.g., ${examples}, ...)` : ''
-      ;(this.parameters.properties.name as unknown as { description: string }).description =
-        `The name of the skill from available_skills${hint}`
-
       const skillListXml = this.skills
         .map(
           (s) =>
@@ -108,7 +142,10 @@ export class SkillTool extends BaseTool<typeof SkillParamsSchema> {
   ): Promise<AgentToolResult<SkillToolDetails>> {
     const skillName = params.name.trim()
 
-    const skill = skillService.findByName(skillName, this.projectPath)
+    // 从**这一次装配的名单**里取，而不是 findByName（它走 findAll，不看 .config.json 的
+    // disabled / disabledDirs）。否则「关掉」只是把它从索引里摘掉，模型按名调用照样拿到全文 ——
+    // 而内置 drawing 的名字写在每个 root agent 的常驻提示里，那条路径是默认可达的，不是理论。
+    const skill = this.skills.find((s) => s.name === skillName) ?? null
     if (!skill) {
       return {
         content: [

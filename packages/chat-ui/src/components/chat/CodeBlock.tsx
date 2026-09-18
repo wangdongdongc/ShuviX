@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Copy, Check, Code, FileText } from 'lucide-react'
 import { copyToClipboard } from '../../utils/clipboard'
-import { sanitizeRenderedSvg } from '@shuvix/chat-protocol/utils/svgSanitize'
+import { sanitizeAuthoredSvg, sanitizeRenderedSvg } from '@shuvix/chat-protocol/utils/svgSanitize'
 import mermaid from 'mermaid'
 
 // 初始化 mermaid（暗色主题，禁用自动启动）
@@ -17,6 +17,60 @@ mermaid.initialize({
 const mermaidSvgCache = new Map<string, string>()
 const mermaidViewState = new Map<string, boolean>() // code → showSource
 let mermaidIdCounter = 0
+
+/** 手写 SVG 的净化结果缓存（净化是纯函数，同一段源码恒得同一结果）；'' = 判死 */
+const authoredSvgCache = new Map<string, string>()
+/** 手写 SVG 的视图状态：code → showSource（缺省为图，与 mermaid 相反，见 AuthoredSvgBlock） */
+const authoredViewState = new Map<string, boolean>()
+
+/** 开标签已闭合 —— 拿到它才知道 viewBox */
+const SVG_OPEN_TAG_RE = /<svg\b[^>]*>/i
+
+/** 自闭合根 `<svg …/>`（贪婪的 [^>]* 会回溯，属性值里的 `/` 不会误判成自闭合） */
+const SVG_SELF_CLOSING_RE = /<svg\b[^>]*\/>/i
+
+/**
+ * 这段源码写完了没有 —— 决定要不要缓存净化结果、以及判死时要不要出错误卡。
+ * 自闭合根也算写完：它永远等不到 `</svg>`，不认的话会永久停在一张空图卡上。
+ */
+const isSvgComplete = (code: string): boolean =>
+  /<\/svg\s*>/i.test(code) || SVG_SELF_CLOSING_RE.test(code)
+
+/**
+ * 流式期间可渲染的那一帧 —— 不可渲染时返回 null。
+ *
+ * **图是一笔一笔画出来的，这是刻意的**：源码逐字符流进来，每一帧都画，用户就看着图长出来。
+ * 这不是省下来的复杂度，是这条载体最好的一点 —— 一次性的图本该像在被画，而不是先给你一屏
+ * path 数据、末尾再啪地换成成品。
+ *
+ * 但「每一帧都画」只有卡在对的边界上才成立，两处会抽：
+ *
+ *  1. **`viewBox` 还没写完**（`<svg viewBox="0 0 32`）—— 属性不完整等于没有 viewBox，
+ *     整张图先按错的比例画一遍，等属性写全再跳一次。所以门开在**开标签闭合**那一刻，
+ *     不是第一个字符。附带的好处比避开跳变更大：viewBox 一确定，卡片的宽高比就定了，
+ *     于是从第一帧起高度就不再变 —— 整个流式过程零布局位移。
+ *  2. **尾部半截的元素**（`<rect x="10" y=`）—— 切到最后一个完整标签为止，补上 `</svg>`
+ *     交给解析器收尾；没闭合的 `<g>` 它自己会补。于是每一帧都是结构完整的一张图。
+ *
+ * 判定是 code 的纯函数，不需要知道当前是否正在流式输出：开标签未闭合就落回普通代码块，
+ * 于是「模型写坏了、开标签都没写完」也停在源码可见的状态。
+ */
+export function authoredSvgFrame(code: string): string | null {
+  const open = SVG_OPEN_TAG_RE.exec(code)
+  if (!open) return null
+  if (isSvgComplete(code)) return code // 已完成：整段交出去
+  const cut = code.lastIndexOf('>')
+  // 至少要含整个开标签；恰好只有开标签时这一帧是张空图 —— 正是用来占住位置的第一帧
+  if (cut < open.index + open[0].length - 1) return null
+  return `${code.slice(0, cut + 1)}</svg>`
+}
+
+/**
+ * 该围栏要不要按图渲染 —— 分发判定，导出以便单测（组件本身要 DOM，判定不要）。
+ * 大小写敏感与 mermaid 那档保持一致：提示词教的是小写，两档在这点上不该有分歧。
+ */
+export const svgFenceIsRenderable = (lang: string, code: string): boolean =>
+  lang === 'svg' && authoredSvgFrame(code) !== null
 
 interface HastNode {
   type: string
@@ -58,6 +112,11 @@ export function CodeBlock({
   // 检测 mermaid
   if (lang === 'mermaid' && rawCode) {
     return <MermaidBlock code={rawCode} />
+  }
+
+  // 手写 SVG 图：开标签一闭合就开始逐帧画，之前落到下方的普通代码块（见 authoredSvgFrame）
+  if (svgFenceIsRenderable(lang, rawCode)) {
+    return <AuthoredSvgBlock code={rawCode} />
   }
 
   const handleCopy = (): void => {
@@ -173,6 +232,98 @@ function MermaidBlock({ code }: { code: string }): React.JSX.Element {
         <div
           className="flex justify-center overflow-auto p-3 bg-white rounded-b-lg [&_svg]:max-w-full"
           dangerouslySetInnerHTML={{ __html: svgHtml || '' }}
+        />
+      )}
+    </div>
+  )
+}
+
+/**
+ * 手写 SVG 代码块 → 图，支持图/源码切换。
+ *
+ * 与 MermaidBlock 的三处刻意不同：
+ *
+ * 1. **缺省显示图，不是源码。** mermaid 缺省显示源码是因为渲染要异步加载一个重库、
+ *    值得等用户点一下；这里的「渲染」只是一次同步净化（纯函数、已缓存），而且这张图
+ *    本身就是模型要说的那句话 —— 让它默认折叠成一屏 path 数据是把话藏起来。
+ * 2. **底色用主题面，不是写死白底。** mermaid 用的是它自己 default 主题的浅色产物，
+ *    所以外面得铺白底才不割裂；手写 SVG 一律走 --viz-* / --theme-* token 取色
+ *    （见 themes.css 的调色板段与 visual-guide 提示片段），写死白底会让它在深色主题下
+ *    变成白框里的浅色字。图直接坐在主题底色上，明暗由 color-scheme 带着 light-dark() 解析。
+ * 3. **净化用 sanitizeAuthoredSvg 这一档。** 来源是模型直接手写的整段标记，不是渲染器
+ *    的产物 —— <style>/<foreignObject>/远程地址都必须关掉，理由见 svgSanitize 头注释。
+ *
+ * 失败关闭：净化返回空串（找不到 <svg> 根，或整段被剥空）即判死，绝不注入未经检查的标记 ——
+ * 与 mermaid 同策。但**错误卡只在完成态出**：流式中间帧偶尔会被判死（此刻恰好只写到一个
+ * 被禁元素），那不是失败、只是还没写完，在那儿闪一下红边框比先不渲染更糟。
+ */
+function AuthoredSvgBlock({ code }: { code: string }): React.JSX.Element {
+  const { t } = useTranslation()
+  // 净化是同步纯函数：首帧即出图，无 rendering 态。
+  // **只有完成态进缓存**：流式期间每一帧都是一个新字符串，缓存下来就是一条会话涨一串
+  // 中间产物。单帧净化是一次几 KB 的 DOMParser 解析（实测亚毫秒），而上游的流式增量本身
+  // 已按 rAF 批过，所以照帧算不需要额外节流。
+  const frame = authoredSvgFrame(code)
+  const settled = frame !== null && isSvgComplete(code)
+  const svgHtml = (() => {
+    if (frame === null) return ''
+    if (!settled) return sanitizeAuthoredSvg(frame)
+    const cached = authoredSvgCache.get(code)
+    if (cached !== undefined) return cached
+    const clean = sanitizeAuthoredSvg(frame)
+    authoredSvgCache.set(code, clean)
+    return clean
+  })()
+  const [showSource, _setShowSource] = useState(authoredViewState.get(code) ?? false)
+
+  const setShowSource = (v: boolean): void => {
+    authoredViewState.set(code, v)
+    _setShowSource(v)
+  }
+
+  // 错误卡只在**完成态**出。流式中间帧偶尔会被判死（例如此刻只写到一个被禁元素），
+  // 那不是失败、只是还没写完 —— 在那里闪一下红边框比不渲染更糟。
+  if (!svgHtml && settled) {
+    return (
+      <div className="rounded-lg border border-orange-500/30 bg-orange-500/5 p-3">
+        <div className="text-[10px] text-orange-400 mb-1">{t('message.svgFailed')}</div>
+        <pre className="text-[11px] text-text-secondary whitespace-pre-wrap break-words">
+          {code}
+        </pre>
+      </div>
+    )
+  }
+
+  return (
+    <div
+      className="my-2 rounded-lg overflow-hidden"
+      style={{ background: 'color-mix(in srgb, var(--color-bg-tertiary) 60%, transparent)' }}
+    >
+      <div
+        className="flex items-center justify-between px-4 py-1.5"
+        style={{ background: 'color-mix(in srgb, var(--color-bg-tertiary) 60%, transparent)' }}
+      >
+        <span className="text-[10px] text-text-tertiary font-medium">SVG</span>
+        <button
+          onClick={() => setShowSource(!showSource)}
+          className="flex items-center gap-1 text-[10px] text-text-tertiary hover:text-text-secondary transition-colors"
+          title={showSource ? t('message.showDiagram') : t('message.source')}
+        >
+          {showSource ? <FileText size={10} /> : <Code size={10} />}
+          <span>{showSource ? t('message.diagram') : t('message.source')}</span>
+        </button>
+      </div>
+      {showSource ? (
+        <pre className="p-3 text-[11px] text-text-secondary whitespace-pre-wrap break-words leading-relaxed font-mono overflow-auto">
+          {code}
+        </pre>
+      ) : (
+        /* overflow-hidden 而非 auto：图按 viewBox 自适应宽度（提示片段要求必须带 viewBox、
+           不写死 width/height），超出的部分是画错了而不是该滚动的内容；同时它也是
+           「图里的东西跑不出这张卡」的兜底围栏。 */
+        <div
+          className="flex justify-center overflow-hidden p-3 [&_svg]:max-w-full [&_svg]:h-auto"
+          dangerouslySetInnerHTML={{ __html: svgHtml }}
         />
       )}
     </div>

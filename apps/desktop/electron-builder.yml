@@ -27,6 +27,11 @@ extraResources:
   # 是真实目录而不是 ?raw 内联 —— 扫描 / 检索 / 笔记本都按目录走，与用户库同一条路
   - from: resources/knowledge
     to: knowledge
+  # 内置 skills（ShuviX 自己的、按需加载的 know-how）：skills/<lang>/<name>/SKILL.md + 伴随文件。
+  # 同样是真实目录 —— skillService 按目录扫描，SkillTool 返回正文时带 Base directory 头，
+  # agent 再用 read 去取 references/ 下的那几份
+  - from: resources/skills
+    to: skills
   # workspace hoist 后 esbuild-wasm 在仓库根 node_modules
   - from: ../../node_modules/esbuild-wasm/esbuild.wasm
     to: esbuild/esbuild.wasm
