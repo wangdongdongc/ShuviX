@@ -44,7 +44,13 @@ import { treeGrowthEffect, treeProgressPlugin } from './tree-progress';
 // focus-watching ViewPlugin.
 
 export interface FencedPreviewSpec {
-  /** 围栏 info 串，小写比较（提示词教给模型的也是小写） */
+  /**
+   * 围栏 info 串。比较前 trim + 转小写，所以 ` ```SVG ` 在这里也出图 —— **与聊天那侧刻意
+   * 不同**：`svgFenceIsRenderable` 是严格 `===`。分歧是从 mermaid 继承来的（编辑器一直
+   * 这么宽、聊天一直这么严），这次没有跟着改：收紧会让某人笔记里既有的 ```Mermaid 突然
+   * 不再出图，而那是一个没人能预料的回归。提示词两边教的都是小写，所以模型写出来的东西
+   * 落在两者的交集里；踩到差异的只有手敲大写的人，代价是「笔记里出图、聊天里出代码块」。
+   */
   lang: string;
   /**
    * 源码 → widget。返回 null = 这一块**不渲染**，源码原样留着 —— 用来表达
@@ -116,6 +122,11 @@ function buildBlocks(state: EditorState, spec: FencedPreviewSpec): DecorationSet
 // Cheap pre-filter for doc edits: rebuild only when the change overlaps an
 // existing block or touches a line with a code fence. Selection / focus /
 // tree-growth are handled separately in `update`.
+//
+// 第二段（扫改动行里有没有 ```）看着像死代码：任何**用户输入**都会移动光标，于是
+// `update` 里的选区分支先一步触发重建。它唯一承重的是「改动落在光标之后、光标没动」的
+// 程序化写入 —— 也就是智能体 `edit` 这篇笔记的那条路。删掉它只坏那一条，而那一条没人会
+// 手动去点。
 function changeAffectsBlocks(
   tr: Transaction,
   existing: DecorationSet,
@@ -197,6 +208,9 @@ export function fencedPreviewField(spec: FencedPreviewSpec): Extension {
     provide: (f) => EditorView.decorations.from(f, (value) => value.deco),
   });
 
+  // 每种围栏各返回一份这四项，CM6 **按值**去重 —— 成立的前提是后三项是模块级单例常量。
+  // 哪天有人把 `focusWatcher` 改成工厂函数，两份插件会各自 queueMicrotask 派发
+  // setEditorFocused：每次聚焦两条事务、两次全量重建，而没有任何东西会报错。
   return [focusedField, field, focusWatcher, treeProgressPlugin];
 }
 

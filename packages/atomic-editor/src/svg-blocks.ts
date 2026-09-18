@@ -1,6 +1,9 @@
 import { EditorView, WidgetType } from '@codemirror/view';
 import type { Extension } from '@codemirror/state';
-import { authoredSvgFrame } from '@shuvix/chat-protocol/utils/svgFence';
+import {
+  authoredSvgFrame,
+  isSvgComplete,
+} from '@shuvix/chat-protocol/utils/svgFence';
 import { sanitizeAuthoredSvg } from '@shuvix/chat-protocol/utils/svgSanitize';
 import { fencedPreviewField, revealOnClick } from './fenced-preview';
 
@@ -12,9 +15,13 @@ import { fencedPreviewField, revealOnClick } from './fenced-preview';
 // Three things are deliberately NOT like the mermaid widget next door:
 //
 //  1. **Rendering is synchronous.** Sanitizing is a pure function over the
-//     source, so there is no loading state, no cache keyed by source and no
-//     render queue — `eq` already keeps the DOM across cursor moves, and a
-//     changed source has to be re-sanitized anyway.
+//     source, so there is no loading state and no render queue. There *is* a
+//     memo, for a different reason than mermaid's: the answer is needed twice
+//     per rebuild — once to decide whether to decorate at all, once to paint —
+//     and `buildBlocks` asks on every selection change. Keys are fence sources
+//     that have actually been rendered, and a fence being typed into is not
+//     decorated at all (the cursor is inside it), so this does not accumulate
+//     a key per keystroke.
 //  2. **No white card.** Mermaid renders its own light-themed product, so it
 //     needs a light surface under it; an authored figure takes every color
 //     from --viz-* / --theme-* tokens (see themes.css and the visual-guide
@@ -29,6 +36,21 @@ import { fencedPreviewField, revealOnClick } from './fenced-preview';
 // —— 从网上拷进知识库的笔记、仓库里的某个文件。净化档位（authored）恰好就是为这种情况
 // 写的那一档，而且失败关闭，所以来源变宽不改变结论；但值得写下来，别让下一个人以为这里
 // 的输入和聊天同源。
+
+/**
+ * 净化一次、两处用：工厂据此决定**画不画**，widget 据此决定**画什么**。
+ * 两处各算一遍会在每次光标移动时多跑一次 DOMParser（上限 256KB 的文档解析）。
+ */
+const sanitizedCache = new Map<string, string>();
+
+function figureHtml(code: string): string {
+  const cached = sanitizedCache.get(code);
+  if (cached !== undefined) return cached;
+  const frame = authoredSvgFrame(code);
+  const clean = frame ? sanitizeAuthoredSvg(frame) : '';
+  sanitizedCache.set(code, clean);
+  return clean;
+}
 
 class AuthoredSvgWidget extends WidgetType {
   constructor(readonly code: string) {
@@ -51,12 +73,10 @@ class AuthoredSvgWidget extends WidgetType {
     figure.className = 'cm-atomic-svg-figure';
     wrap.appendChild(figure);
 
-    // 帧判定已经在 widget 工厂里过过一遍（不成形的块压根不会到这里），这里再取一次是为了
-    // 拿到**补全后的那一帧** —— 文件里被截断的 SVG 照样画出能画的部分，与聊天同策。
-    const frame = authoredSvgFrame(this.code);
-    const clean = frame ? sanitizeAuthoredSvg(frame) : '';
+    // 画不出东西的那一帧根本到不了这里（工厂已经拦掉），所以这里只有两种结局。
+    const clean = figureHtml(this.code);
     if (clean) {
-      // 失败关闭在上一行：净化返回空串（找不到 <svg> 根，或整段被剥空）绝不注入。
+      // 失败关闭：净化返回空串（找不到 <svg> 根，或整段被剥空）绝不注入未经检查的标记。
       figure.innerHTML = clean;
     } else {
       paintError(figure, this.code);
@@ -92,11 +112,17 @@ export function svgBlocks(): Extension {
   return fencedPreviewField({
     lang: 'svg',
     widget: (code) => {
-      // 还不成形（开标签都没闭合）→ 不渲染，源码原样留着。手打到一半时看到的是自己正在
-      // 敲的那行字，而不是一张闪烁的空图；判死与「还没写完」是两回事，后者不该出错误卡。
+      // 开标签都没闭合 → 不渲染，源码原样留着（手打到一半时看到的是自己正在敲的那行字）。
       if (authoredSvgFrame(code) === null) return null;
-      // 成形之后的两种坏法分开处理：被净化判死 → widget 出错误卡（见 toDOM）；
-      // 只是被截断 → 照画能画的那部分，与聊天里流式的每一帧同一条规矩。
+      // **「写坏了」与「还没写完」是两回事，只有前者该出错误卡** —— 与聊天同一条闸
+      // （CodeBlock 的 `!svgHtml && settled`）。只有开标签的那一帧净化后恰好是空串
+      // （authored 档「剥空即判死」），而那不是失败：磁盘上截断在开标签处的文件、半成品
+      // 笔记失焦的那一刻都落在这里，给它一张红卡等于把「你还没写完」说成「你写错了」。
+      // 这一判必须在工厂里而不是 toDOM 里 —— widget 建出来就一定占一块地方，在那里
+      // 什么都不画得到的是一个空框，比源码更没用。
+      if (!figureHtml(code) && !isSvgComplete(code)) return null;
+      // 剩下的两种都进 widget：画得出来就画（含截断源码里能画的那部分），
+      // 写完了却被判死就出错误卡。
       return new AuthoredSvgWidget(code);
     },
   });
