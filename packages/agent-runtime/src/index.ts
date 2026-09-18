@@ -411,7 +411,7 @@ export {
   type PromptVarsCtx
 } from './agentProfile/promptVars'
 // 档案共用的提示片段（各档案在正文里用 {{shuvix:*}} 占位符引入；宿主在变量表里供值）
-export { renderVisualGuide } from './agentProfile/fragments'
+export { renderVisualGuide, renderVisualCraft } from './agentProfile/fragments'
 export { type AgentProfileRegistry } from './agentProfile/registry'
 // 注册表 md 的同名裁决（agent / 策略 / hook / bot 共用；运行时与设置页列表走同一个函数）
 export {

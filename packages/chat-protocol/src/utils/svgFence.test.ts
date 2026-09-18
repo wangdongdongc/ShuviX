@@ -9,17 +9,17 @@
  *  - **语言名**只认小写 `svg`，与 mermaid 那档一致：提示词教的是小写，两档在这点上
  *    不该有分歧（提示片段里的围栏串与这里的 lang 值是同一个字面量）。
  *
- * 组件本身要 DOM，判定不要 —— 所以 CodeBlock 把它单独导出。mermaid 在模块加载期
- * `initialize()`，node 环境下起不来，顶掉即可（被测函数与它无关）。
+ * 组件本身要 DOM，判定不要 —— 所以判定单独住在 chat-protocol 里（2026-09-18 从 CodeBlock
+ * 搬下来：笔记本 live preview 的 ```svg 围栏要用同一套判定，而 atomic-editor 不能反向
+ * 依赖 chat-ui）。搬下来顺带掉了一件脏活 —— 这份用例原本得 `vi.mock('mermaid')`，只因为
+ * CodeBlock 在模块加载期 `initialize()`，而被测函数与 mermaid 毫无关系。
  */
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-vi.mock('mermaid', () => ({ default: { initialize: () => {}, render: () => {} } }))
-
-import { authoredSvgFrame, svgFenceIsRenderable } from '../CodeBlock'
+import { authoredSvgFrame, svgFenceIsRenderable } from './svgFence'
 
 /** 提示片段里教给模型的围栏语言串 —— 与分发用的 lang 值必须是同一个字面量 */
 const FENCE_LANG = 'svg'
@@ -28,12 +28,12 @@ const FENCE_LANG = 'svg'
 const ARTIFACT_FENCE_LANG = 'artifact'
 
 /**
- * 三份 visual-guide 片段（`?raw` 内联的那批）—— 用 fs 读，**不 import**：chat-ui 不依赖
- * agent-runtime，一条 import 会凭空造出这个方向的包依赖。读文本不会。
+ * 三份 visual-guide 片段（`?raw` 内联的那批）—— 用 fs 读，**不 import**：chat-protocol 是
+ * 零依赖叶子包，一条 import 会凭空造出一个反向的包依赖。读文本不会。
  */
 const FRAGMENT_DIR = resolve(
   dirname(fileURLToPath(import.meta.url)),
-  '../../../../../agent-runtime/src/agentProfile/fragments'
+  '../../../agent-runtime/src/agentProfile/fragments'
 )
 const FRAGMENTS = ['visual-guide.md', 'visual-guide.zh.md', 'visual-guide.ja.md'].map((name) =>
   readFileSync(resolve(FRAGMENT_DIR, name), 'utf8')

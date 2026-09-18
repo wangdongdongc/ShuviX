@@ -1,6 +1,6 @@
 /**
- * 提示片段（`agentProfile/fragments/`）—— `renderVisualGuide` 的语言回退，以及
- * 「哪些内置档案引用了 `{{shuvix:visualGuide}}`」这份归属。
+ * 提示片段（`agentProfile/fragments/`）—— `renderVisualGuide` / `renderVisualCraft` 的语言回退，
+ * 以及「哪些内置档案引用了 `{{shuvix:visualGuide}}` / `{{shuvix:visualCraft}}`」这份归属。
  *
  * 两件事分开在两处钉：
  *  - **谁引用** 在这里（档案自己的事，纯文本，不需要宿主）；
@@ -12,7 +12,7 @@
  * 这里只钉结构（语言回退、非空、自含块、被谁引用）。
  */
 import { describe, it, expect } from 'vitest'
-import { renderVisualGuide } from '../fragments'
+import { renderVisualCraft, renderVisualGuide } from '../fragments'
 import { buildBuiltinProfiles, BASE_PROFILE_NAMES } from '../../subagent/builtinAgents'
 
 const LANGUAGES = ['en', 'zh', 'ja']
@@ -21,16 +21,17 @@ const LANGUAGES = ['en', 'zh', 'ja']
 const placeholdersOf = (text: string): string[] =>
   [...new Set([...text.matchAll(/\{\{shuvix:([A-Za-z][\w-]*)\}\}/g)].map((m) => m[1]))].sort()
 
-/** 引用了 visualGuide 的内置档案名（按名去重，跨语言取并集） */
-const profilesUsingVisualGuide = (): string[] => {
+/** 引用了某个占位符的内置档案名（按名去重，跨语言取并集） */
+const profilesUsing = (placeholder: string): string[] => {
   const names = new Set<string>()
   for (const language of LANGUAGES) {
     for (const profile of buildBuiltinProfiles({ language, widgetsRoot: '/w/widgets' })) {
-      if (placeholdersOf(profile.systemPrompt).includes('visualGuide')) names.add(profile.name)
+      if (placeholdersOf(profile.systemPrompt).includes(placeholder)) names.add(profile.name)
     }
   }
   return [...names].sort()
 }
+const profilesUsingVisualGuide = (): string[] => profilesUsing('visualGuide')
 
 describe('renderVisualGuide —— 语言回退', () => {
   it.each(LANGUAGES)('%s 取到对应 md，非空且已 trim', (language) => {
@@ -94,6 +95,37 @@ describe('renderVisualGuide —— skillShelf：唯一的宿主分支', () => {
   })
 })
 
+/**
+ * `{{shuvix:visualCraft}}` —— 同一份片段去掉「载体」那一段。两个出口的差集就是载体，
+ * 而载体讲的是聊天的规矩（图是回复的一部分、改图走 `artifact adopt`）；把那几段讲给一个
+ * 正在编辑文件的 agent，是教它一条走不通的路。
+ */
+describe('{{shuvix:visualCraft}} —— 只要手艺的那一档', () => {
+  // 这一层只看得见占位符本身：`buildBuiltinProfiles` 出来的正文尚未代入（代入在创建期，
+  // 由宿主的变量表供值）。「notebook 实际拿到的是手艺不是载体」因此钉在两端的
+  // promptVarsWiring 用例里 —— 与文件头说的「谁引用 / 谁供值分开钉」同一条分工。
+  it('恰好 notebook 一个档案引用它', () => {
+    // 图往**文件**里画的档案才该拿这一档。多一个引用点 = 回来改这条，顺带交代理由
+    expect(profilesUsing('visualCraft')).toEqual(['notebook'])
+  })
+
+  it.each(LANGUAGES)('%s：craft 是 guide 的真子集，差的那一段恰好是载体', (language) => {
+    const guide = renderVisualGuide(language)
+    const craft = renderVisualCraft(language)
+    // 手艺那半一字不差地同源 —— 抄成两份 md 迟早只改一边，这条就是拦它的
+    expect(guide).toContain(craft)
+    expect(craft.length).toBeLessThan(guide.length)
+    // 载体那几段只在 guide 里：`adopt` 是聊天独有的改图路径，craft 里出现就是漏删
+    expect(guide.toLowerCase()).toContain('adopt')
+    expect(craft.toLowerCase()).not.toContain('adopt')
+    // 界桩本身不该漏进任何一档的输出
+    for (const out of [guide, craft]) {
+      expect(out).not.toContain('shuvix:carrier')
+      expect(out).not.toContain('shuvix:skill-hint')
+    }
+  })
+})
+
 describe('{{shuvix:visualGuide}} 的归属', () => {
   it('恰好 work / chat / coding / bot 四个档案引用它', () => {
     // 加一个引用点 = 必须回来改这条，顺带交代理由。四个之外的档案引用它通常是复制粘贴
@@ -110,7 +142,7 @@ describe('{{shuvix:visualGuide}} 的归属', () => {
     }
   })
 
-  it.each(['notebook', 'titler', 'knowledge-writer', 'explore', 'browser', 'visualization'])(
+  it.each(['titler', 'knowledge-writer', 'explore', 'browser', 'visualization'])(
     '%s 不引用它，正文里也不含片段正文的特征串',
     (name) => {
       // 特征串从片段本身取（不抄文案）：任取片段里一行足够长的、别处不会出现的文本。

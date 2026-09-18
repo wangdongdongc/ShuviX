@@ -15,6 +15,7 @@ export { imageBlocks, refreshImageBlocks } from './image-blocks';
 export type { ImageBlocksConfig } from './image-blocks';
 export { mermaidBlocks, renderMermaid } from './mermaid-blocks';
 export type { MermaidResult, MermaidTheme } from './mermaid-blocks';
+export { svgBlocks } from './svg-blocks';
 export { mathBlocks, mathMarkdownSyntax, renderMath, scanMathSpans } from './math-blocks';
 export type { MathResult, MathSpan } from './math-blocks';
 export { commentBlocks } from './comment-blocks';

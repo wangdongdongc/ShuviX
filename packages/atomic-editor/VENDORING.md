@@ -33,8 +33,23 @@ Keep this list current — it's what makes future merges predictable.
   `sanitizeRenderedSvg` (`@shuvix/chat-protocol/utils/svgSanitize`) before it leaves this module —
   consumers inject it via `innerHTML` into the privileged renderer, and mermaid's
   `click <node> href "javascript:…"` directive otherwise carries a `javascript:` URL straight
-  into the DOM. This is the package's only `@shuvix/*` import; if upstreaming the widget, drop
-  that line (or vendor the sanitizer) to keep the package dependency-free.
+  into the DOM. If upstreaming the widget, drop that import (or vendor the sanitizer) to keep
+  the package dependency-free — the same applies to the two files below.
+
+- `src/fenced-preview.ts` — **ShuviX-added file** (not upstream): the reveal machinery shared by
+  the two fenced live previews (cursor inside the fence → raw source, outside → rendered widget),
+  plus the pointer-down freeze, the focus mirror, the tree-growth re-run and the doc-change
+  pre-filter. Extracted from `mermaid-blocks.ts` when `svg-blocks.ts` arrived: those four are
+  exactly the parts a second copy gets subtly wrong without anyone noticing.
+
+- `src/svg-blocks.ts` — **ShuviX-added file** (not upstream): ```svg live preview — hand-written
+  SVG rendered in place, the same carrier chat draws figures from. Rendering is one synchronous
+  `sanitizeAuthoredSvg` call (`@shuvix/chat-protocol/utils/svgSanitize`), the strict tier: the
+  author controls every tag, so `<style>`, `<foreignObject>` and anything that would fetch are
+  refused. Frame judgement (is this source renderable yet?) comes from
+  `@shuvix/chat-protocol/utils/svgFence`, shared with the chat renderer. No light card under the
+  figure, unlike mermaid: colors come from `--viz-*` / `--theme-*` tokens, so it must sit on the
+  editor's own surface to follow the theme.
 
 - `src/comment-blocks.ts` — **ShuviX-added file** (not upstream): HTML comment (`<!-- … -->`)
   handling for the live preview. In the read-only viewer comments are removed entirely (block

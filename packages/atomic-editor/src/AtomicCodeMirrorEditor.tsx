@@ -44,6 +44,7 @@ import { atomicEditorTheme, atomicMarkdownSyntax } from './atomic-theme';
 import { autoCloseCodeFence, extendEmphasisPair } from './edit-helpers';
 import { imageBlocks } from './image-blocks';
 import { mermaidBlocks } from './mermaid-blocks';
+import { svgBlocks } from './svg-blocks';
 import { mathBlocks, mathMarkdownSyntax } from './math-blocks';
 import { commentBlocks } from './comment-blocks';
 import { inlinePreview } from './inline-preview';
@@ -349,6 +350,7 @@ export function AtomicCodeMirrorEditor({
             resolveSrc: (src) => imageSrcResolverRef.current?.(src) ?? null,
           }),
           mermaidBlocks(),
+          svgBlocks(),
           mathBlocks(),
           commentBlocks(),
           inlinePreview({

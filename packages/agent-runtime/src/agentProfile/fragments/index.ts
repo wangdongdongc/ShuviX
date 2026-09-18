@@ -30,6 +30,24 @@ const VISUAL_SKILL_HINT_SOURCES = {
 const SKILL_HINT_MARKER = '<!-- shuvix:skill-hint -->'
 
 /**
+ * 「载体」那一段的界桩 —— 从这里到 carrier-end 讲的是**这张图去哪儿**（聊天里是回复的一部分、
+ * 改图走 `adopt`），而其后的契约、调色板与范例讲的是**怎么画**，与载体无关。
+ * 一份片段两个出口：{{shuvix:visualGuide}} 带载体，{{shuvix:visualCraft}} 只要手艺。
+ */
+const CARRIER_START = '<!-- shuvix:carrier-start -->'
+const CARRIER_END = '<!-- shuvix:carrier-end -->'
+
+/** 去掉界桩本身（带载体那一档）或连同其间的整段（只要手艺那一档） */
+function applyCarrier(guide: string, keep: boolean): string {
+  const start = guide.indexOf(CARRIER_START)
+  const end = guide.indexOf(CARRIER_END)
+  // 界桩缺失时原样返回：片段是手维护的 md，少一个标记不该让整段提示消失
+  if (start < 0 || end < 0) return guide
+  if (keep) return guide.replace(CARRIER_START, '').replace(CARRIER_END, '')
+  return guide.slice(0, start) + guide.slice(end + CARRIER_END.length)
+}
+
+/**
  * `{{shuvix:visualGuide}}` 的取值 —— 内联作图（聊天里的 ```svg 围栏）的规矩与调色板 token。
  *
  * 自含块：值自带小标题，可直接嵌在正文任意位置。**围栏本身**刻意不做宿主分支 —— 渲染在
@@ -44,10 +62,29 @@ export function renderVisualGuide(
   language: string | undefined,
   options?: { skillShelf?: boolean }
 ): string {
-  const guide = pickLocalizedSource(VISUAL_GUIDE_SOURCES, language)
-  const hint = options?.skillShelf
-    ? pickLocalizedSource(VISUAL_SKILL_HINT_SOURCES, language).trim()
-    : ''
+  return render(language, options?.skillShelf === true, true)
+}
+
+/**
+ * `{{shuvix:visualCraft}}` 的取值 —— **同一份片段去掉载体那一段**：契约、调色板 token 与范例。
+ *
+ * 给的是「图往文件里画」的档案（笔记本：```svg 围栏在 markdown live preview 里就地渲染，
+ * 见 atomic-editor 的 svg-blocks）。载体那段讲的是聊天的规矩 —— 图是回复的一部分、改图走
+ * `artifact adopt` —— 对着一个正在编辑文件的 agent 讲那些，是教它一条走不通的路。
+ *
+ * **刻意不是第二份 md**：手艺那部分（调色板、直接标注、一个元素一行）两边一字不差，抄成两份
+ * 迟早只改一边。载体框架短、且天然属于各档案自己的人格正文，由档案自己写。
+ */
+export function renderVisualCraft(
+  language: string | undefined,
+  options?: { skillShelf?: boolean }
+): string {
+  return render(language, options?.skillShelf === true, false)
+}
+
+function render(language: string | undefined, skillShelf: boolean, carrier: boolean): string {
+  const guide = applyCarrier(pickLocalizedSource(VISUAL_GUIDE_SOURCES, language), carrier)
+  const hint = skillShelf ? pickLocalizedSource(VISUAL_SKILL_HINT_SOURCES, language).trim() : ''
   return guide
     .replace(SKILL_HINT_MARKER, hint)
     .replace(/\n{3,}/g, '\n\n')

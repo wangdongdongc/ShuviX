@@ -147,17 +147,22 @@ describe('desktopPromptVars —— visualGuide 这一项', () => {
     // 「哪些档案该引用它」是档案自己的事（钉在 agentProfile/__tests__/fragments.test.ts）；
     // 这里钉的是接线：引用了就必须真的替换成内容，而不是原样留一行占位符。
     const vars = await varsFor()
-    let hit = 0
-    for (const language of LANGUAGES) {
-      for (const profile of builtins(language)) {
-        if (!placeholdersOf(profile.systemPrompt).includes('visualGuide')) continue
-        expect(renderProfileSystemPrompt(profile, vars), `${profile.name}.${language}`).toContain(
-          vars.visualGuide
-        )
-        hit++
+    // 两个出口一起查：visualGuide（带载体，聊天那档）与 visualCraft（只要手艺，笔记本那档）。
+    // 少查一个的代价是一样的 —— 引用了却没供值不报错，模型收到的是一行裸占位符。
+    for (const name of ['visualGuide', 'visualCraft'] as const) {
+      let hit = 0
+      for (const language of LANGUAGES) {
+        for (const profile of builtins(language)) {
+          if (!placeholdersOf(profile.systemPrompt).includes(name)) continue
+          expect(
+            renderProfileSystemPrompt(profile, vars),
+            `${profile.name}.${language}.${name}`
+          ).toContain(vars[name])
+          hit++
+        }
       }
+      expect(hit, `没有任何档案引用 ${name} —— 接线断了或占位符被删了`).toBeGreaterThan(0)
     }
-    expect(hit, '没有任何档案引用 visualGuide —— 接线断了或占位符被删了').toBeGreaterThan(0)
   })
 })
 

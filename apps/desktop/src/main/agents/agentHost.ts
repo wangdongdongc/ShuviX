@@ -33,7 +33,7 @@ import { join } from 'path'
 import { type as osType, release as osRelease, platform } from 'os'
 import { app } from 'electron'
 import i18next from 'i18next'
-import { formatLanguageDisplay, renderVisualGuide } from '@shuvix/agent-runtime'
+import { formatLanguageDisplay, renderVisualCraft, renderVisualGuide } from '@shuvix/agent-runtime'
 import { getBuiltinToolEntries } from '../services/toolRegistry'
 import { SkillTool } from '../services/skillTool'
 import { mcpService } from '../services/mcpService'
@@ -260,6 +260,7 @@ function desktopPromptVars(ctx: PromptVarsCtx): PromptVars {
     // 界面语言是宿主的权威，档案构建期挑 body 用的也是这一个。
     // skillShelf：桌面端有内置技能货架（SkillTool），所以带上那句「先加载 builtin:drawing」
     visualGuide: renderVisualGuide(i18next.language, { skillShelf: true }),
+    visualCraft: renderVisualCraft(i18next.language, { skillShelf: true }),
     projectName: project?.name ?? '',
     // 根会话供给 {{shuvix:notebookPath}}（笔记本会话的根 Agent 走 notebook 基座档案）：
     // 非笔记本会话为空串 → 占位块收敛消失。派生 ctx.sessionId 是 agentId，无从解析 —— 不供给，

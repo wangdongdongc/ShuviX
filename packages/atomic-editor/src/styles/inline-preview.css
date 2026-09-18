@@ -395,6 +395,61 @@
   color: var(--atomic-editor-fg-muted, #888);
 }
 
+/* ```svg figure — hand-written SVG that replaces the fence when the cursor
+ * is outside it. Unlike the mermaid card there is **no light surface**: an
+ * authored figure takes every color from --viz-* / --theme-* tokens, so it
+ * belongs on the editor's own background and follows the theme with it. */
+.cm-atomic-svg {
+  padding: 0.35em 0;
+}
+
+.cm-atomic-svg-figure {
+  display: flex;
+  justify-content: center;
+  /* hidden, not auto: the figure sizes itself from its viewBox (the prompt
+   * fragment forbids width/height), so anything outside the box is drawn
+   * wrong rather than scrolled to — and this is also the fence that keeps a
+   * figure's contents inside its own block. */
+  overflow: hidden;
+  padding: 0.75rem;
+  border: 1px solid var(--atomic-editor-border, #3d3d3d);
+  border-radius: 0.4em;
+}
+
+.cm-atomic-svg-figure svg {
+  /* 上限不是 100% —— 图没有 width/height，只有 viewBox，撑满就是按容器宽度整体放大。
+   * 聊天里的卡片本来就窄（≈40rem），笔记本却能有整屏宽：同一张 320 单位的图在那里被放大
+   * 四倍，`font-size="11"` 的标注变成巨幅字。封在一个接近聊天卡片的量度上，一张按聊天
+   * 画的图在笔记里读起来才是同一张图；比它窄的容器仍然照常缩小。 */
+  max-width: min(100%, 40rem);
+  height: auto;
+}
+
+/* Rejected by the sanitizer — keep the source visible so the author can fix it. */
+.cm-atomic-svg-error {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.4em;
+  justify-content: flex-start;
+  background: color-mix(in srgb, #e0833a 8%, transparent);
+  border-color: color-mix(in srgb, #e0833a 40%, transparent);
+}
+
+.cm-atomic-svg-error-label {
+  color: #e0833a;
+  font-size: 0.8em;
+  font-weight: 600;
+}
+
+.cm-atomic-svg-error-detail {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--atomic-editor-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.8em;
+  color: var(--atomic-editor-fg-muted, #888);
+}
+
 /* Bullet widget — replaces the raw `-` / `*` marker on bullet-list
  * items. Matches the visual weight of a real list marker while
  * staying in the muted-secondary color so the item text dominates. */

@@ -1,3 +1,5 @@
+<!-- shuvix:carrier-start -->
+
 ## Drawing figures inline
 
 A ```svg fenced block in your reply renders **inline as a figure** — hand-written SVG, no file, no tool call. It is part of your answer, the way a sentence is: reach for it when the shape itself carries the argument and prose or a table would not — an annotated schematic, a chart at true proportions, a layout or mockup, anything where you decide the placement.
@@ -12,12 +14,14 @@ requests-by-tier
 
 Redrawing a whole figure to change one bar is exactly what this exists to prevent.
 
+<!-- shuvix:carrier-end -->
+
 <!-- shuvix:skill-hint -->
 
 ### The contract
 
-- **One element per line.** A figure you draw may later be adopted and edited in place, and a minified SVG gives `edit` no anchors to hold on to — the only way back is redrawing the whole thing.
-- **`viewBox` is required; never set `width` or `height`.** The card sizes the figure to its own width and clips overflow — a fixed size gets cropped, not scrolled.
+- **One element per line.** A figure you draw may later be edited in place, and a minified SVG gives `edit` no anchors to hold on to — the only way back is redrawing the whole thing.
+- **`viewBox` is required; never set `width` or `height`.** Whatever holds the figure sizes it to its own width and clips overflow — a fixed size gets cropped, not scrolled.
 - **Every color comes from a token, never a hex literal.** `var()` works directly in presentation attributes: `fill="var(--viz-1)"`, `stroke="var(--viz-axis)"`. A literal color breaks under 10 of the 11 themes.
   - Series identity: `--viz-1` … `--viz-8`, **used in that order and never cycled**. A ninth series folds into "other" or becomes small multiples — never a color you invent.
   - Magnitude: `--viz-seq-1` (lowest) … `--viz-seq-5` (highest). Polarity: `--viz-1` ↔ `--viz-mid` ↔ `--viz-8`.
@@ -44,4 +48,4 @@ Redrawing a whole figure to change one bar is exactly what this exists to preven
 </svg>
 ```
 
-Read the figure once before you send it: labels that collide, marks outside the `viewBox`, or a legend doing work a direct label should do all mean it is not finished.
+Read the figure once before you call it done: labels that collide, marks outside the `viewBox`, or a legend doing work a direct label should do all mean it is not finished.
