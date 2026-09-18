@@ -3457,6 +3457,83 @@ export function infoHintPane(client: CdpClient, scope = 'document'): InfoHintPan
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// 笔记本 live preview 里的 ```svg 图（atomic-editor 的 svg-blocks）
+//
+// 锚点：widget 自己的两个类名 `.cm-atomic-svg`（外壳）/ `.cm-atomic-svg-figure`（外框）。
+// 这里只放两样单测够不着的东西 —— **级联**（happy-dom 不做级联，`var(--viz-1)` 在那里
+// 永远解析不出颜色）与**布局**（happy-dom 的 getBoundingClientRect 全是 0）。
+
+/** 一张已上屏的图的取样：颜色 + 两个盒子的几何 */
+export interface SvgFigureShot {
+  /** 图里第一个 `<rect>` 的 computed fill（Chromium 归一成 `rgb(r, g, b)`） */
+  rectFill: string
+  /** `<svg>` 自己的渲染矩形 */
+  svg: { width: number; height: number; left: number; right: number; top: number; bottom: number }
+  /** 外框的**内容盒**（border + padding 之内）—— 图整个落在里面才没被 overflow:hidden 切掉 */
+  frame: { width: number; height: number; left: number; right: number; top: number; bottom: number }
+  /** 根字号：CSS 上限写成 rem，换算成 px 才能比 */
+  rootFontSize: number
+}
+
+export interface SvgFigurePane {
+  /** 等图真正画出来（`.cm-atomic-svg-figure` 里有 `<svg>`；错误卡里没有） */
+  waitFigure(): Promise<void>
+  shot(): Promise<SvgFigureShot>
+  /**
+   * 当前生效的设计令牌值 —— 拿一个探针元素把 `var(--viz-1)` 交给浏览器解析再读 computed
+   * color。不直接读 `--viz-1`：自定义属性回的是原始 token 串（`light-dark(#…, #…)`），
+   * 而明暗哪一档生效取决于元素实际的 color-scheme。
+   */
+  tokenColor(token: string): Promise<string>
+}
+
+export function svgFigurePane(main: CdpClient): SvgFigurePane {
+  const FIGURE = `document.querySelector('.cm-atomic-svg-figure')`
+  const SVG = `document.querySelector('.cm-atomic-svg-figure svg')`
+
+  return {
+    waitFigure: async () => {
+      await until(() => main.eval<boolean>(`${SVG} !== null`), 'svg figure rendered in notebook')
+    },
+    shot: () =>
+      main.eval<SvgFigureShot>(`(() => {
+        const fig = ${FIGURE}
+        const svg = ${SVG}
+        const rect = svg.querySelector('rect')
+        const px = (v) => parseFloat(v) || 0
+        const fr = fig.getBoundingClientRect()
+        const cs = getComputedStyle(fig)
+        const left = fr.left + px(cs.borderLeftWidth) + px(cs.paddingLeft)
+        const right = fr.right - px(cs.borderRightWidth) - px(cs.paddingRight)
+        const top = fr.top + px(cs.borderTopWidth) + px(cs.paddingTop)
+        const bottom = fr.bottom - px(cs.borderBottomWidth) - px(cs.paddingBottom)
+        const sr = svg.getBoundingClientRect()
+        return {
+          rectFill: rect ? getComputedStyle(rect).fill : '',
+          svg: {
+            width: sr.width, height: sr.height,
+            left: sr.left, right: sr.right, top: sr.top, bottom: sr.bottom
+          },
+          frame: {
+            width: right - left, height: bottom - top,
+            left, right, top, bottom
+          },
+          rootFontSize: px(getComputedStyle(document.documentElement).fontSize)
+        }
+      })()`),
+    tokenColor: (token) =>
+      main.eval<string>(`(() => {
+        const probe = document.createElement('span')
+        probe.style.color = 'var(${token})'
+        document.body.appendChild(probe)
+        const color = getComputedStyle(probe).color
+        probe.remove()
+        return color
+      })()`)
+  }
+}
+
 /** 设置窗口的导航（左侧 tab 栏 + 「LLM 工具」页自己的工具子页栏） */
 export interface SettingsNavPane {
   /** 切到某个 tab（按本地化标签认，三语候选命中任一） */

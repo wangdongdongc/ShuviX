@@ -23,7 +23,7 @@
     "dev:ext": "npm run dev -w @shuvix/extension",
     "build:ext": "npm run build -w @shuvix/extension",
     "typecheck:ext": "npm run typecheck -w @shuvix/extension",
-    "typecheck": "npm run typecheck -w shuvix && npm run typecheck:ext",
+    "typecheck": "npm run typecheck -w shuvix && npm run typecheck:ext && npm run typecheck -w @shuvix/atomic-editor",
     "lint": "npm run lint -w shuvix && eslint packages",
     "test": "npm run test -w shuvix && npm run test -w @shuvix/atomic-editor",
     "format": "prettier --write .",

@@ -42,6 +42,18 @@ const FRAGMENTS = ['visual-guide.md', 'visual-guide.zh.md', 'visual-guide.ja.md'
   readFileSync(resolve(FRAGMENT_DIR, name), 'utf8')
 )
 
+/** 三份 notebook 基座提示词 —— 同样用 fs 读（理由同上：零依赖叶子包不反向 import） */
+const BUILTIN_AGENT_MD_DIR = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  '../../../agent-runtime/src/subagent/builtinAgents/md'
+)
+const NOTEBOOK_PROMPTS = ['notebook.md', 'notebook.zh.md', 'notebook.ja.md'].map((name) =>
+  readFileSync(resolve(BUILTIN_AGENT_MD_DIR, name), 'utf8')
+)
+
+/** 笔记本里另一种会出图的围栏（atomic-editor 的 mermaid-blocks）—— 允许，但仅此两种 */
+const MERMAID_FENCE_LANG = 'mermaid'
+
 describe('svgFenceIsRenderable', () => {
   it.each([
     ['闭合的完整图', '<svg viewBox="0 0 4 4"><rect/></svg>'],
@@ -153,5 +165,29 @@ describe('片段教的围栏语言串 ↔ 分发用的 lang 值', () => {
       // 散文里介绍围栏的那句也是同一个串（「A ```svg fenced block…」）
       expect(text, `片段 #${i}`).toContain('```' + FENCE_LANG)
     }
+  })
+
+  /**
+   * 同一条缝的第二处：**notebook 基座提示词**里教的围栏串。
+   *
+   * visual-guide 片段教的是「怎么画」，notebook.md 教的是「图放进笔记时写成什么」——
+   * 后者才是笔记本 live preview 那侧唯一的上游。这里教成 ```xml / ```html，模型会照写，
+   * 笔记里于是出来一坨源码：全绿、无报错、没人会去查提示词。
+   */
+  it('三份 notebook 基座提示词教的围栏串，正是渲染器认的那个', () => {
+    for (const [i, text] of NOTEBOOK_PROMPTS.entries()) {
+      // 散文里提到围栏的写法（不一定独占一行，所以不锚行首）
+      const langs = [...text.matchAll(/```([A-Za-z][\w+-]*)/g)].map((m) => m[1])
+      expect(langs, `notebook 提示词 #${i} 应教 svg 围栏`).toContain(FENCE_LANG)
+      // 笔记本只会把这两种围栏渲染成图；教第三种就是在教一个画不出来的写法
+      for (const lang of langs) {
+        expect(
+          [FENCE_LANG, MERMAID_FENCE_LANG],
+          `notebook 提示词 #${i}: 未知围栏 ${lang}`
+        ).toContain(lang)
+      }
+    }
+    // 教的那个值本身可渲染（与上一条同一个断言，钉的是「教的串 = 分发的值」这条等式）
+    expect(svgFenceIsRenderable(FENCE_LANG, '<svg viewBox="0 0 4 4"><rect/></svg>')).toBe(true)
   })
 })

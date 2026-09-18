@@ -20,7 +20,10 @@ Keep this list current — it's what makes future merges predictable.
   own 9 test files had been passing but running nowhere, and they cover in-tree customizations
   (wiki-links, tables) alongside upstream's. They need happy-dom + `@vitejs/plugin-react`, which
   the desktop vitest config cannot give them (`environment: 'node'`, no react plugin), so this
-  package keeps its own `vitest.config.ts` rather than folding into that one.
+  package keeps its own `vitest.config.ts` rather than folding into that one. A `typecheck`
+  script is back for the same reason: `apps/desktop/tsconfig.web.json` **excludes**
+  `packages/atomic-editor/src/**/__tests__/**`, so without it these files compile under no gate
+  at all — which is how a test file can go green while not type-checking.
 - `VENDORING.md` — this file (not in upstream).
 - `src/table-widget.ts` — `findTableRange` iterate callback: made both non-`false` paths
   return `undefined` explicitly. Behavior-identical; satisfies ShuviX's stricter
