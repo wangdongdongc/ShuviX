@@ -28,7 +28,7 @@ import {
   type McpServerDialogData,
   type McpServerDialogInitial
 } from './McpServerDialog'
-import { envHasAllValues, sortServersForDisplay } from './mcpServerList'
+import { sortServersForDisplay } from './mcpServerList'
 
 /** MCP 操作契约（宿主注入：桌面 window.api.mcp / 扩展 chatApiAdapter.mcp） */
 export interface McpApi {
@@ -254,7 +254,6 @@ export function McpClientPanel({ api, caps = {} }: McpClientPanelProps): React.J
           servers.map((s) => {
             const expanded = expandedId === s.id
             const showError = s.status === 'error' && !!s.error
-            const showBuiltinHint = s.isBuiltin === 1 && !envHasAllValues(s.env)
             const toggleTitle = s.isEnabled ? t('settings.mcpDisable') : t('settings.mcpEnable')
             return (
               <div key={s.id} className="flex flex-col">
@@ -339,12 +338,6 @@ export function McpClientPanel({ api, caps = {} }: McpClientPanelProps): React.J
 
                 {showError && (
                   <div className="px-4 py-2 text-[11px] text-red-400 bg-red-500/5">{s.error}</div>
-                )}
-
-                {showBuiltinHint && (
-                  <div className="px-4 py-2 text-[11px] text-amber-500 bg-amber-500/5">
-                    {t('settings.mcpBuiltinConfigureHint')}
-                  </div>
                 )}
 
                 {expanded && (

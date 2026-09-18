@@ -662,7 +662,6 @@
     "mcpDeleteConfirm": "MCP Server「{{name}}」を削除しますか？",
     "mcpBuiltin": "組み込み",
     "mcpBuiltinCannotDelete": "組み込みサーバーは削除できません",
-    "mcpBuiltinConfigureHint": "下部の「環境変数」で必要な API Key を入力してこの組み込みサーバーを有効化してください",
     "mcpBuiltinReadonlyNotice": "組み込みサーバーの接続パラメータはプリセット済みです。環境変数のみ設定してください",
     "mcpSaving": "保存中...",
     "tabTelegramBots": "Telegram Bot",

@@ -87,9 +87,10 @@ interface McpConnection {
    * annotations 可不可信。
    *
    * 判据是 **`type === 'inproc'` 且 isBuiltin** —— 不是光看 isBuiltin：那一位的含义历来是
-   * 「用户不能删改这一行」，而 v10 种的内置 Tavily 是一台 `type: 'http'` 的**远程第三方
-   * endpoint**。只看 isBuiltin，就等于把一串从网上收到的 `readOnlyHint` 当成保证，
-   * 而规范要求恰恰相反。只有跑在进程内、代码随产品发布的那一类才配。
+   * 「用户不能删改这一行」，而这两件事一度不是一回事：v10 把 Tavily —— 一台 `type: 'http'`
+   * 的**远程第三方 endpoint** —— 种成了 isBuiltin=1（v24 已把它降级）。只看 isBuiltin，
+   * 就等于把一串从网上收到的 `readOnlyHint` 当成保证，而规范要求恰恰相反。
+   * 只有跑在进程内、代码随产品发布的那一类才配，这条判据也因此挡住了「再种一台远程内置」。
    */
   trusted: boolean
 }

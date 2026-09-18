@@ -662,7 +662,6 @@
     "mcpDeleteConfirm": "Are you sure you want to delete MCP Server \"{{name}}\"?",
     "mcpBuiltin": "Built-in",
     "mcpBuiltinCannotDelete": "Built-in servers cannot be deleted",
-    "mcpBuiltinConfigureHint": "Fill in the required API Key in the Env section below to enable this built-in server",
     "mcpBuiltinReadonlyNotice": "Connection parameters for built-in servers are preset; only environment variables need to be configured",
     "mcpSaving": "Saving...",
     "tabTelegramBots": "Telegram Bots",

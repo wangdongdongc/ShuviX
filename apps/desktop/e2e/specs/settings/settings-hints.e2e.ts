@@ -109,7 +109,8 @@ async function openDbToolPage(): Promise<void> {
 beforeAll(async () => {
   app = await launchApp()
   await waitRendererReady(app.main)
-  // IH-E-6 的弹窗要有扩展能力卡才渲染；隔离实例恒有内置的 mcp:tavily，再种一个 skill 让两组都不空
+  // IH-E-6 的弹窗要有扩展能力卡才渲染；隔离实例恒有 v10 种下的 mcp:tavily（v24 起不再是内置，
+  // 但那一行仍在），再种一个 skill 让两组都不空
   seedSkill(app, 'e2e-hint-skill')
   // 多种几条：IH-E-5 要把锚点整个滚出视口，页面得够长
   for (let i = 0; i < 16; i++) {

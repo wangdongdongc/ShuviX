@@ -571,7 +571,7 @@ export const migrations: Migration[] = [
       // 「内置能力服务器」= 随产品发布、跑在进程内、按会话实例化的 MCP server（type: 'inproc'），
       // 没有 command / url / env 可配，所以除了启用位之外整行只读。
       //
-      // **isEnabled = 1**，与内置 Tavily（v10，默认 0）刻意不同：Tavily 默认关是因为没填
+      // **isEnabled = 1**，与 v10 种的 Tavily（默认 0）刻意不同：Tavily 默认关是因为没填
       // API key 之前连不上；ssh 不需要任何配置，它该立刻出现在会话的扩展能力列表里让人去勾。
       // 真正的「默认关」在**会话那一层** —— settings.enabledTools 缺省为空，不勾就没有 ssh。
       const now = Date.now()
@@ -593,6 +593,21 @@ export const migrations: Migration[] = [
       // **不做数据迁移、不做导出**（同 v19 / v20 / v21 的裁决）：这张表里是私钥和密码，
       // 把它们写进 ~/.ssh/ 是替用户动他最敏感的目录，不该由一次升级代劳。
       db.exec(`DROP TABLE IF EXISTS ssh_credentials`)
+    }
+  },
+  {
+    version: 24,
+    description: 'Tavily 不再是内置 server：清掉 isBuiltin，交给用户自己管',
+    up: (db) => {
+      // v10 把 Tavily 种成 isBuiltin=1。那一位的含义是「随产品发布、用户不能删改」，
+      // 可 Tavily 是一台 **远程第三方 endpoint** —— 与「内置」在这里应有的含义（跑在进程内、
+      // 代码随产品发布、因此 annotations 可信）不是一回事。两种东西共用一个徽章，
+      // 读起来就是同一类，而它们的信任级别恰好相反。
+      //
+      // **只清标记，不删行**：已经填过 key 的用户不该在一次升级里丢掉配置。降级之后那一行
+      // 变成普通的自定义 server —— 可改、可删、不置顶、不带徽章，想要就留着，不想要点删除。
+      // url 里的 `{{TAVILY_API_KEY}}` 模板对自定义 server 一样生效，所以它照常能用。
+      db.exec(`UPDATE mcp_servers SET isBuiltin = 0 WHERE id = 'builtin-mcp-tavily'`)
     }
   }
 ]

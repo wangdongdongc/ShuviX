@@ -662,7 +662,6 @@
     "mcpDeleteConfirm": "确定要删除 MCP Server「{{name}}」吗？",
     "mcpBuiltin": "内置",
     "mcpBuiltinCannotDelete": "内置服务不可删除",
-    "mcpBuiltinConfigureHint": "请在下方「环境变量」中配置所需 API Key 以启用此内置服务",
     "mcpBuiltinReadonlyNotice": "内置服务的连接参数已预置，仅需填写环境变量即可启用",
     "mcpSaving": "保存中...",
     "tabTelegramBots": "Telegram Bot",

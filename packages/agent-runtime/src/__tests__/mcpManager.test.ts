@@ -1083,7 +1083,7 @@ describe('McpManager 内置服务器的可用性与批量装配', () => {
 // MCP 规范要求客户端把**不可信 server** 的 annotations 当作不可信，而这里的做法是
 // 「可信才给值」：第三方的四个 hint 一条都不落到客体上。判据是 **`type === 'inproc'`
 // 且 isBuiltin** —— 光看 isBuiltin 不行，那一位的含义历来是「用户不可编辑/不可删除的
-// 预置行」，v10 种下的 tavily 就是一个 isBuiltin=1 的**远程 HTTP endpoint**。把一串
+// 预置行」，v10 种下的 tavily 一度就是个 isBuiltin=1 的**远程 HTTP endpoint**（v24 已降级）。把一串
 // 从网上收到的 `readOnlyHint` 当成保证，正好在最不可信的那批上开了口子。
 
 const FULL_HINTS = {
@@ -1188,7 +1188,7 @@ describe('McpManager 的 annotations 可信规则', () => {
     expect(byName.get('a')).toMatchObject({ trusted: false, readOnly: undefined })
   })
 
-  it('MCPB-U-41: isBuiltin=1 的**远程** endpoint（v10 种下的 tavily 形态）不可信', async () => {
+  it('MCPB-U-41: isBuiltin=1 的**远程** endpoint（v10~v23 的 tavily 形态）不可信', async () => {
     // 那一位的含义是「用户不可编辑」，不是「代码随产品发布」；两者混同一次，
     // 一台远程 server 就能用自述的 readOnlyHint 换来静默放行
     const h = setup([row({ id: 'builtin-mcp-tavily', name: 'tavily', type: 'http', isBuiltin: 1 })])
