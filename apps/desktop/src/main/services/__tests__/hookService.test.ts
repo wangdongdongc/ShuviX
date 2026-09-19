@@ -38,7 +38,13 @@ import {
   type TriggerPayloadMap
 } from '@shuvix/agent-runtime'
 
-const state = vi.hoisted(() => ({ dir: '', failReadPath: null as string | null }))
+const state = vi.hoisted(() => ({
+  dir: '',
+  failReadPath: null as string | null,
+  // 内置 hook 的事实源 —— 运行时读随包发布的目录，这里直接读仓库里那一份（同一批文件）。
+  // src/main/services/__tests__ 往上六级是仓库根
+  builtinDir: `${__dirname}/../../../../../../packages/agent-runtime/src/hook/builtinHooks/md`
+}))
 const mocks = vi.hoisted(() => ({
   runTask: vi.fn(),
   getProfile: vi.fn(),
@@ -49,7 +55,10 @@ const mocks = vi.hoisted(() => ({
 }))
 
 vi.mock('electron', () => ({ shell: { openPath: mocks.openPath } }))
-vi.mock('../../utils/paths', () => ({ getDefaultHooksDir: () => state.dir }))
+vi.mock('../../utils/paths', () => ({
+  getDefaultHooksDir: () => state.dir,
+  getBuiltinHooksDir: () => state.builtinDir
+}))
 vi.mock('../../agents/AgentManager', () => ({ agentManager: { runTask: mocks.runTask } }))
 vi.mock('../agentService', () => ({ agentService: { getProfile: mocks.getProfile } }))
 vi.mock('../sessionService', () => ({
@@ -323,7 +332,8 @@ describe('hookService — 内置 hook 与运行时装配', () => {
         agent: 'titler',
         triggers: BUILTIN_TRIGGERS,
         source: 'builtin',
-        basePath: ''
+        // 内置的 basePath 是随包那份当前语言版（这里 = 仓库里的 en 文件），不再为空串
+        basePath: join(state.builtinDir, 'auto-title.md')
       }
     ])
     expect(hookService.listInvalid()).toEqual([])
@@ -458,7 +468,7 @@ describe('hookService — 用户 hook（纯 md 驱动）', () => {
       userHook('auto-title', { agent: 'work', displayName: 'Broken', when: 'event.isDefaultTitle' })
     )
     expect(hookService.listInvalid().map((file) => file.fileName)).toEqual(['auto-title.md'])
-    expect(rowsNamed('auto-title')).toEqual([['builtin', '', false, undefined]])
+    expect(rowsNamed('auto-title')).toEqual([['builtin', 'auto-title.md', false, undefined]])
     firePrompt({ isDefaultTitle: true })
     await waitRuns(1)
     expect(descriptions()).toEqual([BUILTIN_TITLE])
@@ -521,7 +531,8 @@ describe('hookService — 同名覆盖与同名的几份', () => {
         agent: 'titler',
         triggers: BUILTIN_TRIGGERS,
         source: 'builtin',
-        basePath: '',
+        // 内置的 basePath 是随包那份当前语言版（这里 = 仓库里的 en 文件），不再为空串
+        basePath: join(state.builtinDir, 'auto-title.md'),
         overridden: true,
         overriddenBy: 'auto-title.md'
       }
@@ -551,7 +562,7 @@ describe('hookService — 同名覆盖与同名的几份', () => {
     // 排序口径：名字 → 生效在前 → basePath（内置的空串排在输掉的用户文件前）
     expect(rowsNamed('auto-title')).toEqual([
       ['user', 'auto-title.md', false, undefined],
-      ['builtin', '', true, 'auto-title.md'],
+      ['builtin', 'auto-title.md', true, 'auto-title.md'],
       ['user', 'at.md', true, 'auto-title.md']
     ])
     expect(hookService.listInvalid().map((file) => file.fileName)).toEqual(['auto-title copy.md'])
@@ -563,14 +574,14 @@ describe('hookService — 同名覆盖与同名的几份', () => {
     expect(descriptions()).toEqual(['CANON', 'SHORT'])
     expect(rowsNamed('auto-title')).toEqual([
       ['user', 'at.md', false, undefined],
-      ['builtin', '', true, 'at.md']
+      ['builtin', 'auto-title.md', true, 'at.md']
     ])
 
     expect(hookService.deleteByFile('at.md')).toEqual({ success: true })
     firePrompt({ isDefaultTitle: true })
     await waitRuns(3)
     expect(descriptions()).toEqual(['CANON', 'SHORT', BUILTIN_TITLE])
-    expect(rowsNamed('auto-title')).toEqual([['builtin', '', false, undefined]])
+    expect(rowsNamed('auto-title')).toEqual([['builtin', 'auto-title.md', false, undefined]])
     // 写着同一个名字的非法文件始终只在「无法解析」里，遮蔽不了内置
     expect(hookService.listInvalid().map((file) => file.fileName)).toEqual(['auto-title copy.md'])
   })
@@ -582,7 +593,7 @@ describe('hookService — 同名覆盖与同名的几份', () => {
     expect(existsSync(canon)).toBe(true)
     expect(rowsNamed('auto-title')).toEqual([
       ['user', 'auto-title.md', false, undefined],
-      ['builtin', '', true, 'auto-title.md']
+      ['builtin', 'auto-title.md', true, 'auto-title.md']
     ])
   })
 

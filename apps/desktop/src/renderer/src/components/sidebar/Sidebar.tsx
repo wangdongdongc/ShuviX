@@ -8,6 +8,8 @@ import {
   Sidebar as SharedSidebar,
   AgentGroup,
   type AgentGroupAdapter,
+  HookGroup,
+  type HookGroupAdapter,
   PolicyGroup,
   type PolicyGroupAdapter,
   BotGroup,
@@ -25,6 +27,7 @@ import { useUpdateStore } from '../../stores/updateStore'
 import { usePinChatStore } from '../../stores/pinChatStore'
 import { ProjectEditDialog } from './ProjectEditDialog'
 import { newAgentTemplate } from './agentTemplate'
+import { newHookTemplate } from './hookTemplate'
 import { newPolicyTemplate } from './policyTemplate'
 import { SkillDirDialog } from './SkillDirDialog'
 import { ConfirmDialog } from '../common/ConfirmDialog'
@@ -41,9 +44,11 @@ import { fileNameOf, uniqueName } from '../common/registryFiles'
  *     用户档案点行开可编辑的笔记本，内置档案点行开**随包发布那份 md 的只读笔记本**，右键才是
  *     「创建覆盖副本」）+ 安全策略置顶分组（PolicyGroup，接 window.api.policy.*；用户策略点行开
  *     可编辑的笔记本，内置策略点行开**随包发布那份 md 的只读笔记本**，右键才是「创建覆盖副本」）
+ *     + Hooks 置顶分组（HookGroup，接 window.api.hook.*，与策略组同形同构）
  *     + 技能置顶分组（SkillGroup，接 window.api.skill.*；目录成行、默认目录的
  *     技能平铺，点行开那个技能 SKILL.md 的笔记本，启用开关与增删在菜单里）+ 知识库置顶分组
- *     （KnowledgeGroup，接 window.api.knowledge.*，点行开 / 复用条目的笔记本会话）
+ *     （KnowledgeGroup，接 window.api.knowledge.*，点行开 / 复用条目的笔记本会话）。
+ *     分组顺序：bots → agents → policies → hooks → skills → knowledge（e2e PS-H2 钉死）
  *   - 底部更新提示。侧栏只有项目视图 —— 日历已迁至右面板 Calendar tab（CalendarPanel）
  *   - 归档项目的恢复 / 删除已移至「设置 → 已归档 → 项目」
  */
@@ -68,6 +73,10 @@ export function Sidebar(): React.JSX.Element {
   >(null)
   /** 待确认删除的用户策略（按名删生效的那份）或按文件名删（非法 / 同名里被遮蔽的那份） */
   const [confirmingPolicyDelete, setConfirmingPolicyDelete] = useState<
+    { name: string; displayName: string; fileName: string } | { fileName: string } | null
+  >(null)
+  /** 待确认删除的用户 hook（按名删生效的那份）或按文件名删（非法 / 同名里被遮蔽的那份） */
+  const [confirmingHookDelete, setConfirmingHookDelete] = useState<
     { name: string; displayName: string; fileName: string } | { fileName: string } | null
   >(null)
   /** 待确认删除的技能（整个子目录）或待移除的外部技能目录 */
@@ -371,6 +380,106 @@ export function Sidebar(): React.JSX.Element {
   }
 
   /**
+   * Hooks 分组能力注入 —— 清单 = 一次同名裁决的全部份数（`hook.list`）+ 无法解析的文件。
+   * 与策略组同一条接线：用户 hook 点一行 / 新建 / 覆盖副本都落在那份文件的笔记本会话
+   * （隐藏项目 `__hooks__`）；内置 hook 点行开**随包发布那份 md 的只读笔记本**
+   * （载体 `__hooks_builtin__`，main 侧按名挑当前语言那一版）。删除先弹确认框（见 overlays），
+   * 真删掉后 `hook.changed` 让分组重扫。引用必须稳定（useMemo）：分组以 adapter 为扫描依赖。
+   */
+  const hookGroupAdapter = useMemo<HookGroupAdapter>(() => {
+    /** 打开一份 hook md 的笔记本会话并选中它（用户与内置只差 main 侧那一步怎么找文件） */
+    const openNoteWith = async (open: () => Promise<{ id: string }>): Promise<void> => {
+      let session: { id: string }
+      try {
+        session = await open()
+      } catch {
+        return // 文件已不在（清单过期）—— hook.changed / 聚焦重扫会把这一行拿掉
+      }
+      useChatStore.getState().setSessions(await getChatApi().session.list())
+      setActiveSessionId(session.id)
+    }
+    const openNote = (fileName: string, title?: string): Promise<void> =>
+      openNoteWith(() => window.api.hook.openNote({ fileName, title }))
+    /** 落一份新的用户 hook 并打开它：create 只回名字，文件名回查列表（派生时可能加了后缀） */
+    const createAndOpen = async (text: string): Promise<void> => {
+      const r = await window.api.hook.create({ text })
+      if (!r.success || !r.name) return
+      const hit = (await window.api.hook.list()).find(
+        (h) => h.source === 'user' && h.name === r.name
+      )
+      if (hit) await openNote(fileNameOf(hit.basePath), hit.displayName)
+    }
+    return {
+      list: async () => {
+        const [list, invalid] = await Promise.all([
+          window.api.hook.list(),
+          window.api.hook.listInvalid()
+        ])
+        return {
+          hooks: list.map((h) => ({
+            name: h.name,
+            displayName: h.displayName || h.name,
+            description: h.description,
+            source: h.source,
+            // 两种 hook 的 basePath 都是真实文件：用户的在 ~/.shuvix/hooks，内置的在应用包里
+            // （运行时按语言挑中的那一份）—— 行按文件名认，点行开的就是这份 md 的笔记本
+            fileName: fileNameOf(h.basePath),
+            ...(h.overridden ? { overridden: true } : {}),
+            ...(h.overriddenBy ? { overriddenBy: h.overriddenBy } : {})
+          })),
+          invalid
+        }
+      },
+      open: openNote,
+      openBuiltin: (hook) =>
+        openNoteWith(() =>
+          window.api.hook.openBuiltinNote({ name: hook.name, title: hook.displayName })
+        ),
+      create: async () => {
+        const taken = (await window.api.hook.list()).map((h) => h.name)
+        await createAndOpen(newHookTemplate(t, uniqueName('my-hook', taken)))
+      },
+      createOverride: async (hook) => {
+        const r = await window.api.hook.getSource({ name: hook.name, source: 'builtin' })
+        if ('error' in r) return
+        await createAndOpen(r.text)
+      },
+      openFolder: () => window.api.hook.openFolder(),
+      delete: (hook) =>
+        setConfirmingHookDelete({
+          name: hook.name,
+          displayName: hook.displayName,
+          fileName: hook.fileName
+        }),
+      deleteFile: (fileName) => setConfirmingHookDelete({ fileName })
+    }
+  }, [setActiveSessionId, t])
+
+  /**
+   * 确认删除 hook：按名删的是生效的那份（删掉后同名内置自动恢复生效），按文件名删的是非法的 /
+   * 同名里被遮蔽的那份。删掉的正是主区开着的那份文件的笔记本时顺手离开它 —— 留着接着打字，
+   * 自动保存会把刚删掉的文件写回来。
+   */
+  const handleHookDelete = async (
+    target: { name: string; fileName: string } | { fileName: string }
+  ): Promise<void> => {
+    setConfirmingHookDelete(null)
+    const r =
+      'name' in target
+        ? await window.api.hook.delete({ name: target.name })
+        : await window.api.hook.deleteByFile({ fileName: target.fileName })
+    if (!r.success) return
+    const { sessions, activeSessionId } = useChatStore.getState()
+    const active = sessions.find((s) => s.id === activeSessionId)
+    if (
+      active?.projectId === REGISTRY_NOTE_PROJECT_IDS.hook &&
+      active.settings.notebookPath === target.fileName
+    ) {
+      setActiveSessionId(null)
+    }
+  }
+
+  /**
    * 项目记忆能力注入 —— 清单读盘，打开一条即打开/复用绑定它的笔记本会话（进 live-preview 直接编辑）。
    * 引用必须稳定（useMemo）：子文件夹以 adapter 为扫描依赖，每渲染新建对象会导致反复扫盘。
    */
@@ -525,6 +634,7 @@ export function Sidebar(): React.JSX.Element {
           <BotGroup adapter={botGroupAdapter} />
           <AgentGroup adapter={agentGroupAdapter} />
           <PolicyGroup adapter={policyGroupAdapter} />
+          <HookGroup adapter={hookGroupAdapter} />
           <SkillGroup adapter={skillGroupAdapter} />
           <KnowledgeGroup adapter={knowledgeAdapter} />
         </>
@@ -617,6 +727,24 @@ export function Sidebar(): React.JSX.Element {
               cancelText={t('common.cancel')}
               onConfirm={() => void handlePolicyDelete(confirmingPolicyDelete)}
               onCancel={() => setConfirmingPolicyDelete(null)}
+            />
+          )}
+          {confirmingHookDelete && (
+            <ConfirmDialog
+              title={t('settings.hookDeleteConfirmTitle')}
+              description={
+                'name' in confirmingHookDelete
+                  ? t('settings.hookDeleteConfirmDesc', {
+                      name: confirmingHookDelete.displayName
+                    })
+                  : t('settings.hookDeleteFileConfirmDesc', {
+                      name: confirmingHookDelete.fileName
+                    })
+              }
+              confirmText={t('common.delete')}
+              cancelText={t('common.cancel')}
+              onConfirm={() => void handleHookDelete(confirmingHookDelete)}
+              onCancel={() => setConfirmingHookDelete(null)}
             />
           )}
         </>

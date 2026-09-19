@@ -2,7 +2,8 @@
  * HookService —— hook 注册表 + runner 装配 + 埋点门面（桌面宿主层）。
  *
  * 设计见 docs/hook-design.md。分工：
- *  - 注册表：内置（@shuvix/agent-runtime buildBuiltinHooks，随语言现算）+ 用户
+ *  - 注册表：内置（@shuvix/agent-runtime buildBuiltinHooks，随语言现算；md 随包发布到
+ *    `Resources/builtin-hooks/`、运行时经 readBuiltinHookMd 现读 —— 与 agent/policy 同机制）+ 用户
  *    `~/.shuvix/hooks/<name>.md`（目录扫描，同名覆盖内置 —— 与 agentService 同口径）；
  *  - **纯 md 驱动**：文件存在且校验通过即生效，无启用开关、无旁路配置（同 agentService）；
  *  - `hookTriggers.fire(id, payload)`：业务埋点的唯一入口 —— **业务侧只声明
@@ -29,8 +30,8 @@ import { shell } from 'electron'
 import i18next from 'i18next'
 import {
   buildBuiltinHooks,
+  builtinMdFileNames,
   createHookRunner,
-  getBuiltinHookSource,
   parseHookDefinitionFile,
   registryFileBase,
   resolveShadowing,
@@ -42,7 +43,8 @@ import {
   type TriggerId,
   type TriggerPayloadMap
 } from '@shuvix/agent-runtime'
-import { getDefaultHooksDir } from '../utils/paths'
+import { getBuiltinHooksDir, getDefaultHooksDir } from '../utils/paths'
+import { appEventBus } from '../utils/appEventBus'
 import { agentManager } from '../agents/AgentManager'
 import { agentService } from './agentService'
 import { sessionService } from './sessionService'
@@ -63,7 +65,7 @@ export interface HookListItem {
   /** 绑定的埋点 id 列表（列表行的副标题） */
   triggers: string[]
   source: 'builtin' | 'user'
-  /** 用户文件路径（内置为空串） */
+  /** 文件路径：用户文件在 ~/.shuvix/hooks；内置是它当前语言那一版的随包文件 */
   basePath: string
   /**
    * 被同名遮蔽、当前不生效：被用户文件压过的内置，或同名用户文件里没胜出的那几份（仅展示）
@@ -222,10 +224,18 @@ class HookService {
    */
   private resolveHooks(): ShadowResolved<{ file: ParsedHookFile; basePath: string }>[] {
     return resolveShadowing([
-      ...buildBuiltinHooks({ language: i18next.language }).map((file) => ({
+      ...buildBuiltinHooks({
+        language: i18next.language,
+        readMd: this.readBuiltinHookMd
+      }).map((file) => ({
         name: file.name,
         source: 'builtin' as const,
-        value: { file, basePath: '' }
+        // 内置条目的 basePath 是它当前语言那一版的随包文件（与这次构建的语言回退同一条
+        // 候选序）—— 侧栏点内置行开的只读笔记本按它认
+        value: {
+          file,
+          basePath: join(getBuiltinHooksDir(), this.builtinSourceFile(file.name) ?? '')
+        }
       })),
       ...this.scanDir().valid.map((user) => ({
         name: user.file.name,
@@ -234,6 +244,30 @@ class HookService {
         value: user
       }))
     ])
+  }
+
+  /**
+   * 内置 hook md 的读取口 —— 随包发布的目录现读（与 policyService.readBuiltinPolicyMd 同一套）。
+   * 读不到回 null，构建器按语言回退。
+   */
+  readBuiltinHookMd(fileName: string): string | null {
+    try {
+      return readFileSync(join(getBuiltinHooksDir(), fileName), 'utf-8')
+    } catch {
+      return null // 该语言没有这一版（或目录不在）—— 构建器按 en 回退
+    }
+  }
+
+  /**
+   * 某份内置 hook 当前语言那一版的文件名（`auto-title.zh.md`）—— 侧栏点内置行开只读笔记本
+   * 要按它认。与构建时那次语言回退同一条候选序（精确语言 → 基础语言 → en），UI 不另挑。
+   */
+  builtinSourceFile(name: string): string | null {
+    const dir = getBuiltinHooksDir()
+    for (const fileName of builtinMdFileNames(name, i18next.language)) {
+      if (existsSync(join(dir, fileName))) return fileName
+    }
+    return null
   }
 
   /** 生效的用户 hook 里叫这个名字的那份（按名寻址的读 / 删用；被遮蔽的几份只能按文件名删） */
@@ -300,8 +334,9 @@ class HookService {
   }
 
   /**
-   * 取 md 原文。用户文件读原文；内置直接回 bundle 里的 md 原文（只读查看 +
-   * 「创建覆盖副本」的初值）。
+   * 取 md 原文。两侧都是**盘上文件逐字原文**：用户文件读生效那份；内置读随包发布目录里
+   * 当前语言那一版（与 builtinSourceFile / 构建的语言回退同一条候选序）—— 这就是
+   * 「创建覆盖副本」的初值，副本与运行时读的那一份逐字节相同。
    */
   getSource(name: string, source: 'builtin' | 'user'): { text: string } | { error: string } {
     if (source === 'user') {
@@ -313,8 +348,13 @@ class HookService {
         return { error: e instanceof Error ? e.message : String(e) }
       }
     }
-    const text = getBuiltinHookSource(name, { language: i18next.language })
-    return text === null ? { error: `Builtin hook "${name}" not found` } : { text }
+    const fileName = this.builtinSourceFile(name)
+    if (!fileName) return { error: `Builtin hook "${name}" not found` }
+    try {
+      return { text: readFileSync(join(getBuiltinHooksDir(), fileName), 'utf-8') }
+    } catch (e) {
+      return { error: e instanceof Error ? e.message : String(e) }
+    }
   }
 
   /**
@@ -354,6 +394,7 @@ class HookService {
       log.warn(`新建 hook "${name}" 失败:`, e)
       return { success: false, error: e instanceof Error ? e.message : String(e) }
     }
+    appEventBus.publish({ type: 'hook.changed' })
     return { success: true, name }
   }
 
@@ -369,6 +410,7 @@ class HookService {
       return { success: false, error: e instanceof Error ? e.message : String(e) }
     }
     log.info(`已删除 hook "${name}" (${target.basePath})`)
+    appEventBus.publish({ type: 'hook.changed' })
     return { success: true }
   }
 
@@ -394,6 +436,7 @@ class HookService {
       return { success: false, error: e instanceof Error ? e.message : String(e) }
     }
     log.info(`已删除 hook 文件 "${fileName}"`)
+    appEventBus.publish({ type: 'hook.changed' })
     return { success: true }
   }
 

@@ -99,6 +99,13 @@ export type {
   PolicyGroupItem,
   PolicyGroupInvalidFile
 } from './sidebar/PolicyGroup'
+export { HookGroup } from './sidebar/HookGroup'
+export type {
+  HookGroupProps,
+  HookGroupAdapter,
+  HookGroupItem,
+  HookGroupInvalidFile
+} from './sidebar/HookGroup'
 export { SkillGroup } from './sidebar/SkillGroup'
 export type {
   SkillGroupProps,

@@ -10,7 +10,8 @@
  * 第五种 `agentBuiltin` 是同一条路的**只读**分支：内置 agent 档案的 md 随包发布在应用包里
  * （`Resources/builtin-agents/`），运行时读的就是它，于是点开一份内置档案与点开自己的档案
  * 长得一样 —— 只是没有输入卡片、编辑器只渲染（见 isReadOnlyRegistryNoteProjectId）。
- * `policyBuiltin` 是它的安全策略翻版（`Resources/builtin-policies/`），同一套只读语义。
+ * `policyBuiltin` / `hookBuiltin` 是它的安全策略与 hook 翻版（`Resources/builtin-policies/` /
+ * `Resources/builtin-hooks/`），同一套只读语义。
  */
 
 export type RegistryNoteKind =
@@ -20,6 +21,7 @@ export type RegistryNoteKind =
   | 'policy'
   | 'policyBuiltin'
   | 'hook'
+  | 'hookBuiltin'
 
 /** 各注册表目录的隐藏载体项目 id（同 `__knowledge__` 那几个的做法） */
 export const REGISTRY_NOTE_PROJECT_IDS: Readonly<Record<RegistryNoteKind, string>> = {
@@ -28,17 +30,20 @@ export const REGISTRY_NOTE_PROJECT_IDS: Readonly<Record<RegistryNoteKind, string
   agentBuiltin: '__agents_builtin__',
   policy: '__policies__',
   policyBuiltin: '__policies_builtin__',
-  hook: '__hooks__'
+  hook: '__hooks__',
+  hookBuiltin: '__hooks_builtin__'
 }
 
 /**
- * 只读的注册表笔记：内置 agent 档案与内置安全策略随包发布（应用包里的
- * `builtin-agents/` / `builtin-policies/`），它就是运行时读的那一份，但不是用户的文件 ——
- * 笔记本只渲染、不给输入卡片（同内置知识库的 KNOWLEDGE_BUILTIN）。
+ * 只读的注册表笔记：内置 agent 档案 / 内置安全策略 / 内置 hook 随包发布（应用包里的
+ * `builtin-agents/` / `builtin-policies/` / `builtin-hooks/`），它就是运行时读的那一份，
+ * 但不是用户的文件 —— 笔记本只渲染、不给输入卡片（同内置知识库的 KNOWLEDGE_BUILTIN）。
  * 改它没有意义：下次更新整目录被替换，macOS 上还会破坏应用签名。
  */
 export const isReadOnlyRegistryNoteProjectId = (id: string | null | undefined): boolean =>
-  id === REGISTRY_NOTE_PROJECT_IDS.agentBuiltin || id === REGISTRY_NOTE_PROJECT_IDS.policyBuiltin
+  id === REGISTRY_NOTE_PROJECT_IDS.agentBuiltin ||
+  id === REGISTRY_NOTE_PROJECT_IDS.policyBuiltin ||
+  id === REGISTRY_NOTE_PROJECT_IDS.hookBuiltin
 
 /** 这个项目是不是某个注册表目录的笔记本载体 */
 export function isRegistryNoteProjectId(id: string | null | undefined): boolean {

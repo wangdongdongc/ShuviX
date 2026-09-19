@@ -735,7 +735,9 @@ const REGISTRY_API: Record<RegistryNoteKind, string> = {
   policy: 'policy',
   // 内置策略是只读的：没有写路径，开笔记本走 policy.openBuiltinNote（按策略名，不是文件名）
   policyBuiltin: 'policy',
-  hook: 'hook'
+  hook: 'hook',
+  // 内置 hook 是只读的：没有写路径，开笔记本走 hook.openBuiltinNote（按 hook 名，不是文件名）
+  hookBuiltin: 'hook'
 }
 
 export interface RegistryNoteSession {

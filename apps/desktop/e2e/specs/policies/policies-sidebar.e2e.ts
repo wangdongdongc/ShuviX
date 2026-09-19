@@ -708,12 +708,12 @@ describe('侧栏安全策略分组', () => {
     }
   })
 
-  it('PS-H2 侧栏置顶分组顺序 = bots → agents → policies → skills → knowledge', async () => {
+  it('PS-H2 侧栏置顶分组顺序 = bots → agents → policies → hooks → skills → knowledge', async () => {
     const order = await app.main.eval<string[]>(
       `[...document.querySelectorAll('div[class*="group/header"]')]
         .map((h) => h.getAttribute('data-group'))
-        .filter((g) => ['bots', 'agents', 'skills', 'knowledge', 'policies'].includes(g))`
+        .filter((g) => ['bots', 'agents', 'policies', 'hooks', 'skills', 'knowledge'].includes(g))`
     )
-    expect(order).toEqual(['bots', 'agents', 'policies', 'skills', 'knowledge'])
+    expect(order).toEqual(['bots', 'agents', 'policies', 'hooks', 'skills', 'knowledge'])
   })
 })

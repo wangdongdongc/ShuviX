@@ -11,6 +11,8 @@
  *     Bot 图标正是因为它指的就是「档案」，而 Bots 那组指的是一个个有人格的对话方
  *   - `policies`（安全策略置顶特殊分组，Shield 图标 —— 与设置页那个 tab 同一个图标，可折叠，
  *     正文为策略列表：内置置顶、用户随后、解析不过的缀末尾）
+ *   - `hooks`（Hook 置顶特殊分组，Webhook 图标 —— 与设置页那个 tab 同一个图标，可折叠，
+ *     正文与策略同构：内置置顶、用户随后、解析不过的缀末尾）
  *   - `skills`（技能置顶特殊分组，BookOpen 图标 —— 与设置页那个 tab 同一个图标，可折叠，
  *     正文是「目录行 + 默认目录的技能平铺」两层）
  *   - `temp`（临时对话，**摊开的纯分节**：无图标、无折叠）—— 它是侧栏最常用的落点，收在
@@ -25,13 +27,31 @@
  * 那一份菜单（右键组头与点 ⋮ 同一个入口，见 RowMenuButton）。菜单由容器组装 ——
  * 各形态能做什么本就是容器（ProjectSessionGroups / KnowledgeGroup）才知道的事。
  */
-import { Bot, BookOpen, FolderClosed, FolderOpen, Library, Shield, Users } from 'lucide-react'
+import {
+  Bot,
+  BookOpen,
+  FolderClosed,
+  FolderOpen,
+  Library,
+  Shield,
+  Users,
+  Webhook
+} from 'lucide-react'
 import { AnimatedCollapse } from '../common/AnimatedCollapse'
 import { RowMenuButton } from './RowMenuButton'
 
 export interface SessionGroupProps {
   label: string
-  variant: 'temp' | 'project' | 'knowledge' | 'bots' | 'agents' | 'policies' | 'skills' | 'section'
+  variant:
+    | 'temp'
+    | 'project'
+    | 'knowledge'
+    | 'bots'
+    | 'agents'
+    | 'policies'
+    | 'hooks'
+    | 'skills'
+    | 'section'
   /** 折叠态 + 切换；`temp` / `section` 形态是摊开的纯分节，两者都不传 */
   collapsed?: boolean
   onToggle?: () => void
@@ -76,11 +96,13 @@ export function SessionGroup({
           ? Bot
           : variant === 'policies'
             ? Shield
-            : variant === 'skills'
-              ? BookOpen
-              : collapsed
-                ? FolderClosed
-                : FolderOpen
+            : variant === 'hooks'
+              ? Webhook
+              : variant === 'skills'
+                ? BookOpen
+                : collapsed
+                  ? FolderClosed
+                  : FolderOpen
   return (
     <div className={`transition-opacity duration-200 ${dim ? 'opacity-30 hover:opacity-100' : ''}`}>
       {showDividerAbove && <div className="mx-4 my-2 border-t border-border-secondary/30" />}

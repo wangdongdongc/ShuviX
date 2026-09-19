@@ -1,22 +1,23 @@
 /**
  * 内置 hook（builtinHooks/）—— 目前只有 auto-title。
  *
- * md 是唯一事实源（`?raw` 内联），所以断言打在**解析后的 hook** 与盘上原文上：结构钉板
- * （agent / 绑定 / 条件）、三语言只动显示名与描述、语言回落、条件真值表，以及经真 runner 的
- * 端到端派发（首条 prompt 起快标题 / 第二轮结束后精修一次）。
+ * md 是唯一事实源（随包发布成文件，运行时经宿主注入的 readMd 现读；本测试注入构建期内联
+ * 读取口），所以断言打在**解析后的 hook** 与盘上原文上：结构钉板（agent / 绑定 / 条件）、
+ * 三语言只动显示名与描述、语言回落、条件真值表，以及经真 runner 的端到端派发
+ * （首条 prompt 起快标题 / 第二轮结束后精修一次）。
  */
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import {
-  AUTO_TITLE_HOOK_SPEC,
-  BUILTIN_HOOK_SPECS,
-  buildBuiltinHooks,
-  getBuiltinHookSource
-} from '../builtinHooks'
+import { AUTO_TITLE_HOOK_SPEC, BUILTIN_HOOK_SPECS, buildBuiltinHooks } from '../builtinHooks'
+import { createInlineHookMdReader, inlinedHookMdFileNames } from '../builtinHooks/inlineSources'
 import { parseHookDefinitionFile, type ParsedHookFile } from '../hookFile'
 import { evaluateWhen } from '../when'
 import { createInlineMdReader } from '../../subagent/builtinAgents/inlineSources'
-import { BASE_PROFILE_NAMES, buildBuiltinProfiles } from '../../subagent/builtinAgents'
+import {
+  BASE_PROFILE_NAMES,
+  buildBuiltinProfiles,
+  builtinMdFileNames
+} from '../../subagent/builtinAgents'
 import type { InProcessAgentType } from '../../subagent/types'
 import { PROFILE, entryOf, makeRunner, promptPayload, settle, turnPayload } from './harness'
 
@@ -30,6 +31,14 @@ const DISK: Record<(typeof LANGS)[number], string> = {
   zh: onDisk('auto-title.zh.md'),
   ja: onDisk('auto-title.ja.md')
 }
+
+/** 本测试注入的内置 hook md 读取口（构建期内联，与扩展同款；桌面读随包目录） */
+const INLINE_HOOK_MD = createInlineHookMdReader()
+const build = (language?: string): ReturnType<typeof buildBuiltinHooks> =>
+  buildBuiltinHooks({ language, readMd: INLINE_HOOK_MD })
+/** 某语言那一版的 md 文件名（en 无后缀） */
+const mdFileName = (lang: string): string =>
+  lang === 'en' ? 'auto-title.md' : `auto-title.${lang}.md`
 
 const QUICK_WHEN = 'event.isDefaultTitle'
 const REFINE_WHEN =
@@ -52,19 +61,20 @@ const parseSource = (raw: string): ParsedHookFile => {
 }
 
 describe('内置 hook 清单与交付', () => {
-  it('HB-1 只有 auto-title；三语言源与盘上文件逐字一致；buildBuiltinHooks 恰一份', () => {
+  it('HB-1 只有 auto-title；三语言文件与盘上原文逐字一致（经读取口）；buildBuiltinHooks 恰一份', () => {
     expect(BUILTIN_HOOK_SPECS.map((spec) => spec.name)).toEqual(['auto-title'])
     expect(BUILTIN_HOOK_SPECS[0]).toBe(AUTO_TITLE_HOOK_SPEC)
-    expect(Object.keys(AUTO_TITLE_HOOK_SPEC.sources).sort()).toEqual(['en', 'ja', 'zh'])
-    for (const lang of LANGS) expect(AUTO_TITLE_HOOK_SPEC.sources[lang]).toBe(DISK[lang])
+    // 内联表恰好是 auto-title 的三语言三份 —— 孤儿 md 会随包发布但运行时读不到
+    expect(inlinedHookMdFileNames().sort()).toEqual(LANGS.map(mdFileName).sort())
+    for (const lang of LANGS) expect(INLINE_HOOK_MD(mdFileName(lang))).toBe(DISK[lang])
 
-    const built = buildBuiltinHooks({})
+    const built = build()
     expect(built).toHaveLength(1)
     expect(built[0].name).toBe('auto-title')
   })
 
   it('HB-2 en 结构钉板：派 titler、两条绑定与条件、显示名与描述、正文点名字段且无模板语法', () => {
-    const [autoTitle] = buildBuiltinHooks({ language: 'en' })
+    const [autoTitle] = build('en')
     expect(autoTitle.name).toBe('auto-title')
     expect(autoTitle.agent).toBe('titler')
     expect(autoTitle.bindings).toStrictEqual([
@@ -84,9 +94,7 @@ describe('内置 hook 清单与交付', () => {
   it.each(LANGS)('HB-3 %s：零告警解析；带 shuvix-builtin 与 name 行', (lang) => {
     const warns: string[] = []
     expect(
-      parseHookDefinitionFile(AUTO_TITLE_HOOK_SPEC.sources[lang], 'auto-title', (m) =>
-        warns.push(m)
-      )
+      parseHookDefinitionFile(INLINE_HOOK_MD(mdFileName(lang))!, 'auto-title', (m) => warns.push(m))
     ).not.toBeNull()
     expect(warns).toEqual([])
     const lines = DISK[lang].split(/\r?\n/)
@@ -95,9 +103,9 @@ describe('内置 hook 清单与交付', () => {
   })
 
   it('HB-4 本地化只动 displayName / description：其余字段（含正文）与 en 深相等', () => {
-    const en = parseSource(AUTO_TITLE_HOOK_SPEC.sources.en)
-    const zh = parseSource(AUTO_TITLE_HOOK_SPEC.sources.zh)
-    const ja = parseSource(AUTO_TITLE_HOOK_SPEC.sources.ja)
+    const en = parseSource(DISK.en)
+    const zh = parseSource(DISK.zh)
+    const ja = parseSource(DISK.ja)
     expect(unlocalized(zh)).toStrictEqual(unlocalized(en))
     expect(unlocalized(ja)).toStrictEqual(unlocalized(en))
     expect(zh.prompt).toBe(en.prompt)
@@ -116,22 +124,25 @@ describe('内置 hook 清单与交付', () => {
     [undefined, EN_TITLE],
     ['ZH', ZH_TITLE]
   ])('HB-5 language %s → %s（精确 → 基础语言 → en 整文件回落）', (language, displayName) => {
-    expect(buildBuiltinHooks({ language })[0].displayName).toBe(displayName)
+    expect(build(language)[0].displayName).toBe(displayName)
   })
 
-  it('HB-6 getBuiltinHookSource：按语言回原文；未知名 null；原文重解析即 buildBuiltinHooks 的结果', () => {
-    expect(getBuiltinHookSource('auto-title')).toBe(DISK.en)
-    expect(getBuiltinHookSource('auto-title', { language: 'zh' })).toBe(DISK.zh)
-    expect(getBuiltinHookSource('nope')).toBeNull()
+  it('HB-6 读取口：按文件名回原文；缺失文件 null；构建器挑中的那份原文重解析即 build 的结果', () => {
+    expect(INLINE_HOOK_MD('auto-title.md')).toBe(DISK.en)
+    expect(INLINE_HOOK_MD('auto-title.zh.md')).toBe(DISK.zh)
+    expect(INLINE_HOOK_MD('nope.md')).toBeNull()
+    // 语言回退在构建器一侧（builtinMdFileNames 候选序）：按同一候选序挑出文件、
+    // 重解析，产物必须与 build 逐字相等 —— 「跑的就是读的那份」
     for (const language of ['en', 'zh', 'ja', 'zh-CN', 'fr']) {
-      const raw = getBuiltinHookSource('auto-title', { language })
-      expect(raw).not.toBeNull()
-      expect(parseSource(raw!)).toStrictEqual(buildBuiltinHooks({ language })[0])
+      const picked = builtinMdFileNames('auto-title', language)
+        .map((f) => INLINE_HOOK_MD(f))
+        .find((t) => t !== null)!
+      expect(parseSource(picked)).toStrictEqual(build(language)[0])
     }
   })
 
   it('HB-9 派发的 agent 是内置档案，且不是基座', () => {
-    const [autoTitle] = buildBuiltinHooks({})
+    const [autoTitle] = build()
     expect(
       buildBuiltinProfiles({ readMd: createInlineMdReader() }).map((profile) => profile.name)
     ).toContain(autoTitle.agent)
@@ -140,7 +151,7 @@ describe('内置 hook 清单与交付', () => {
 })
 
 describe('HB-7 条件真值表（经 evaluateWhen，event 带 trigger）', () => {
-  const [autoTitle] = buildBuiltinHooks({})
+  const [autoTitle] = build()
   const [quick, refine] = autoTitle.bindings
   const env = { host: 'desktop', platform: 'darwin' }
 
@@ -170,7 +181,7 @@ describe('HB-7 条件真值表（经 evaluateWhen，event 带 trigger）', () =>
 
 describe('HB-8 端到端：auto-title 经真 runner 派发 titler', () => {
   it('HB-8 快标题 / 精修各在该跑的时候跑一次，不该跑的时候不跑', async () => {
-    const [autoTitle] = buildBuiltinHooks({ language: 'en' })
+    const [autoTitle] = build('en')
     const titler: InProcessAgentType = {
       ...PROFILE,
       name: 'titler',

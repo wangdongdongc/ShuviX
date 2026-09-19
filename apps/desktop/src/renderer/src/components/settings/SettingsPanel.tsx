@@ -5,18 +5,7 @@
  */
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import {
-  Settings,
-  Layers,
-  Activity,
-  Info,
-  Puzzle,
-  Wrench,
-  Send,
-  Mic,
-  Archive,
-  Webhook
-} from 'lucide-react'
+import { Settings, Layers, Activity, Info, Puzzle, Wrench, Send, Mic, Archive } from 'lucide-react'
 import { SettingsContainer, type SettingsTab } from '@shuvix/app-shell'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { GeneralSettings } from './GeneralSettings'
@@ -26,7 +15,6 @@ import { MonitorSettings, MONITOR_SUB_TABS, type MonitorSubTab } from './Monitor
 import { AboutSettings } from './AboutSettings'
 import { McpSettings } from './McpSettings'
 import { ToolSettings } from './ToolSettings'
-import { HookSettings } from './HookSettings'
 import { TelegramBotsSettings } from './TelegramBotsSettings'
 import { VoiceSettings } from './VoiceSettings'
 
@@ -34,7 +22,6 @@ const VALID_TABS = new Set([
   'general',
   'archived',
   'providers',
-  'hooks',
   'tools',
   'mcp',
   'voice',
@@ -96,12 +83,6 @@ export function SettingsPanel(): React.JSX.Element {
           <ProviderSettings />
         </Scroll>
       )
-    },
-    {
-      id: 'hooks',
-      label: t('settings.tabHooks'),
-      icon: <Webhook size={14} />,
-      content: <HookSettings />
     },
     {
       id: 'tools',

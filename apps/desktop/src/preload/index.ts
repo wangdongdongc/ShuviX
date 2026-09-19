@@ -384,6 +384,9 @@ const api = {
     deleteByFile: (params: { fileName: string }) => ipcRenderer.invoke('hook:deleteByFile', params),
     openNote: (params: { fileName: string; title?: string }) =>
       ipcRenderer.invoke('hook:openNote', params),
+    /** 内置 hook 的只读笔记本（随包发布的那份 md —— 运行时读的就是它） */
+    openBuiltinNote: (params: { name: string; title?: string }) =>
+      ipcRenderer.invoke('hook:openBuiltinNote', params),
     openFolder: () => ipcRenderer.invoke('hook:openFolder')
   },
 

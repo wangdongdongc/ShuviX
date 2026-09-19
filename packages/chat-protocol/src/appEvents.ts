@@ -54,6 +54,12 @@ export type AppEvent =
    */
   | { type: 'policy.changed' }
   /**
+   * hook 注册表变化（新建 / 覆盖副本 / 删除 / 经笔记本落盘的编辑）—— 信号事件，
+   * 消费者重拉 hook.list。与 policy.changed 同口径：只覆盖经宿主落盘的变更，
+   * 外部编辑器写盘由窗口聚焦时的重扫兜底（runner 每次 fire 现算注册表，不依赖它）。
+   */
+  | { type: 'hook.changed' }
+  /**
    * 技能注册表变化（启用开关 / 增删外部目录 / 删除技能 / 经笔记本落盘的 SKILL.md 编辑）——
    * 信号事件，消费者重拉 skill.listGrouped。与 agent.changed 同口径：只覆盖经宿主落盘的变更，
    * 用户自己往目录里丢技能由窗口聚焦时的重扫兜底。

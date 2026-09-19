@@ -20,6 +20,7 @@ import { sessionService } from './sessionService'
 import { botService } from './botService'
 import {
   getBuiltinAgentsDir,
+  getBuiltinHooksDir,
   getBuiltinPoliciesDir,
   getDefaultAgentsDir,
   getDefaultBotsDir,
@@ -37,7 +38,9 @@ const REGISTRIES: Record<RegistryNoteKind, { name: string; dir: () => string }> 
   policy: { name: 'Policies', dir: getDefaultPoliciesDir },
   // 随包发布的内置策略 —— 只读，同 agentBuiltin
   policyBuiltin: { name: 'Builtin Policies', dir: getBuiltinPoliciesDir },
-  hook: { name: 'Hooks', dir: getDefaultHooksDir }
+  hook: { name: 'Hooks', dir: getDefaultHooksDir },
+  // 随包发布的内置 hook —— 只读，同 agentBuiltin
+  hookBuiltin: { name: 'Builtin Hooks', dir: getBuiltinHooksDir }
 }
 
 /** 存在且是普通文件 —— 一个恰好叫 `x.md` 的目录不算（笔记本读不了它） */
@@ -113,7 +116,7 @@ const CHANGED_DEBOUNCE_MS = 300
 const changedTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
 /** 注册表目录写完了：合并窗口内广播一次变更事件（没有服务要观察，只是让侧栏那一组重扫） */
-function noteRegistryWritten(type: 'agent.changed' | 'policy.changed'): void {
+function noteRegistryWritten(type: 'agent.changed' | 'policy.changed' | 'hook.changed'): void {
   const existing = changedTimers.get(type)
   if (existing) clearTimeout(existing)
   changedTimers.set(
@@ -130,12 +133,12 @@ function noteRegistryWritten(type: 'agent.changed' | 'policy.changed'): void {
  *
  * 三个目录要回执，理由不同：
  *   - bots：改名要迁会话绑定，侧栏与身份胶囊要重查（见 botService.noteWriting / noteWritten）；
- *   - agents / policies：没有服务要观察（每次用到都现扫目录，写完即生效；评估侧每次现装配），
- *     但侧栏那两组把显示名直接摆在屏幕上，而改名就发生在同一个窗口的笔记本里 —— 没有
- *     「切窗口」这一下可以兜底，所以写完各广播一次 `agent.changed` / `policy.changed` 让它重扫；
+ *   - agents / policies / hooks：没有服务要观察（每次用到都现扫目录，写完即生效；评估侧每次
+ *     现装配，runner 每次 fire 现算注册表），但侧栏那几组把显示名直接摆在屏幕上，而改名就发生在
+ *     同一个窗口的笔记本里 —— 没有「切窗口」这一下可以兜底，所以写完各广播一次
+ *     `agent.changed` / `policy.changed` / `hook.changed` 让它重扫；
  * 技能的写入回执不在这里 —— 它不是注册表 md，落点也在子目录（`<根>/<技能名>/SKILL.md`），
  * 归技能自己（skillService.noteFileWritten，由 filePreviewService 一并包住）。
- * hook 的列表在设置页，那边的详情区自己盯着这份文件的 files.changed，不需要通知。
  */
 export async function observeRegistryWrite<T>(
   absPath: string,
@@ -157,6 +160,14 @@ export async function observeRegistryWrite<T>(
       return await write()
     } finally {
       noteRegistryWritten('policy.changed')
+    }
+  }
+
+  if (dir === resolve(getDefaultHooksDir())) {
+    try {
+      return await write()
+    } finally {
+      noteRegistryWritten('hook.changed')
     }
   }
 

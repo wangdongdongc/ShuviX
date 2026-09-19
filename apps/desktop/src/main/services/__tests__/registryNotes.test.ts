@@ -5,9 +5,9 @@
  * 打开与 knowledgeNotes 同一套做法，测法也照它：每个目录一个隐藏承载项目（固定 id、path =
  * 该目录）按需插入、历史行漂移自愈；一份文件至多一条笔记本会话，重复打开复用；**文件名在碰
  * 任何东西之前先过白名单** —— 它来自渲染进程，而打开的是一条会往盘上写的笔记本会话。
- * 写入回执 bot 目录要（改名迁移 + bot.changed），agents 与 policies 目录也要（没有服务要观察，
- * 但侧栏那两组的行标签就在屏幕上、改名发生在同一个窗口里 → agent.changed / policy.changed）；
- * hook 的列表在设置窗，详情区自己盯着 files.changed，不该被打扰。
+ * 写入回执 bot 目录要（改名迁移 + bot.changed），agents / policies / hooks 目录也要（没有服务
+ * 要观察，但侧栏那几组的行标签就在屏幕上、改名发生在同一个窗口里 → agent.changed /
+ * policy.changed / hook.changed）；内置目录（随包发布、只读）一律不回执。
  *
  * dao / sessionService / botService 是替身；**fs 是真的** —— 「存在且是普通文件」只有真目录
  * 测得出来（一个叫 `looks-like.md` 的目录就是这么漏过去的，RN-9）。四个目录挂在每个用例各自的
@@ -34,7 +34,8 @@ const tmp = vi.hoisted(() => {
     policy: 'policies',
     // 内置策略同内置档案：另一个目录，钉「它不是 policies 目录」（只读，不写、不广播）
     policyBuiltin: 'builtin-policies',
-    hook: 'hooks'
+    hook: 'hooks',
+    hookBuiltin: 'builtin-hooks'
   }
   return {
     state,
@@ -48,7 +49,8 @@ vi.mock('../../utils/paths', () => ({
   getBuiltinAgentsDir: () => tmp.dirOf('agentBuiltin'),
   getDefaultPoliciesDir: () => tmp.dirOf('policy'),
   getBuiltinPoliciesDir: () => tmp.dirOf('policyBuiltin'),
-  getDefaultHooksDir: () => tmp.dirOf('hook')
+  getDefaultHooksDir: () => tmp.dirOf('hook'),
+  getBuiltinHooksDir: () => tmp.dirOf('hookBuiltin')
 }))
 vi.mock('../../dao/projectDao', () => ({
   projectDao: { findById: vi.fn(), insert: vi.fn(), update: vi.fn() }
@@ -74,7 +76,15 @@ import { ensureRegistryNoteProject, observeRegistryWrite, openRegistryNote } fro
 
 const publish = vi.spyOn(appEventBus, 'publish')
 
-const KINDS = ['bot', 'agent', 'agentBuiltin', 'policy', 'policyBuiltin', 'hook'] as const
+const KINDS = [
+  'bot',
+  'agent',
+  'agentBuiltin',
+  'policy',
+  'policyBuiltin',
+  'hook',
+  'hookBuiltin'
+] as const
 const { dirOf } = tmp
 
 /** 各注册表隐藏项目的名字（项目列表里看不见，只在日志与调试里认得出是谁） */
@@ -84,7 +94,8 @@ const NAMES: Record<RegistryNoteKind, string> = {
   agentBuiltin: 'Builtin Agents',
   policy: 'Policies',
   policyBuiltin: 'Builtin Policies',
-  hook: 'Hooks'
+  hook: 'Hooks',
+  hookBuiltin: 'Builtin Hooks'
 }
 
 /** 一行与当前目录一致的隐藏项目（over 用来制造漂移） */
@@ -417,16 +428,15 @@ describe('observeRegistryWrite', () => {
     expect(botService.noteWritten).toHaveBeenCalledTimes(1)
   })
 
-  it('RN-12 bots / agents / policies 目录之外一律不回执：非 .md、bots 的子目录、hook 与内置策略目录、名字以 bots 开头的兄弟目录、相对路径 —— 写照常只调一次、值照常透传、不广播', async () => {
-    // hook 的列表在设置窗，那边的详情区自己盯着这份文件的 files.changed，不需要通知；
-    // 内置策略目录只读（同 RN-15 的内置档案目录）：真有一笔写到这里，也不该当成
-    // 「用户改了自己的策略」去让侧栏重扫；`bots-evil` 是给前缀匹配（startsWith(botsDir)）准备的陷阱
+  it('RN-12 bots / agents / policies / hooks 目录之外一律不回执：非 .md、bots 的子目录、内置策略与内置 hook 目录、名字以 bots 开头的兄弟目录、相对路径 —— 写照常只调一次、值照常透传、不广播', async () => {
+    // 内置策略 / 内置 hook 目录只读（同 RN-15 的内置档案目录）：真有一笔写到这里，也不该当成
+    // 「用户改了自己的策略 / hook」去让侧栏重扫；`bots-evil` 是给前缀匹配（startsWith(botsDir)）准备的陷阱
     const bots = dirOf('bot')
     const targets = [
       join(bots, 'notes.txt'),
       join(bots, 'sub', 'x.md'),
-      join(dirOf('hook'), 'x.md'),
       join(dirOf('policyBuiltin'), 'x.md'),
+      join(dirOf('hookBuiltin'), 'x.md'),
       join(tmp.state.base, 'bots-evil', 'x.md'),
       'scout.md'
     ]
@@ -482,6 +492,28 @@ describe('observeRegistryWrite', () => {
 
       vi.advanceTimersByTime(300)
       expect(publish.mock.calls).toEqual([[{ type: 'policy.changed' }]])
+      expect(botService.noteWriting).not.toHaveBeenCalled()
+      expect(botService.noteWritten).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('RN-17 hooks 目录下的 .md：写完（promise 落定之后）合并窗口内广播一次 hook.changed；不惊动 botService，值照常透传', async () => {
+    // 与 RN-16 同一个理由：侧栏「Hooks」分组的行标签就在屏幕上，而改名 / 写坏 / 修好都发生在
+    // 同一个窗口的笔记本里。runner 不依赖这个事件（每次 fire 现算注册表），它只是给 UI 重扫
+    vi.useFakeTimers()
+    try {
+      const value = { ok: true as const }
+      const write = vi.fn(async () => value)
+
+      await expect(observeRegistryWrite(join(dirOf('hook'), 'x.md'), write)).resolves.toBe(value)
+      await expect(observeRegistryWrite(join(dirOf('hook'), 'y.md'), write)).resolves.toBe(value)
+      // 合并窗口未到：一笔都还没广播
+      expect(publish).not.toHaveBeenCalled()
+
+      vi.advanceTimersByTime(300)
+      expect(publish.mock.calls).toEqual([[{ type: 'hook.changed' }]])
       expect(botService.noteWriting).not.toHaveBeenCalled()
       expect(botService.noteWritten).not.toHaveBeenCalled()
     } finally {

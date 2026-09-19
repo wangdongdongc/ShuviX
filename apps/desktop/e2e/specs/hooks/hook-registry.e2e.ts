@@ -10,7 +10,7 @@
  * 用例有顺序依赖：HR-4 接着 HR-3 的会话；HR-5 ~ HR-7 在前面留下的文件上继续。
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { sleep, until } from '../../harness/cdp'
 import { launchApp, type E2EApp } from '../../harness/launch'
@@ -158,7 +158,7 @@ afterAll(async () => {
 })
 
 describe('hook IPC 面与注册表', () => {
-  it('HR-1 preload 的 window.api.hook 恰好八个方法；workflow 命名空间与旧的写路径方法都不在了', async () => {
+  it('HR-1 preload 的 window.api.hook 恰好九个方法；workflow 命名空间与旧的写路径方法都不在了', async () => {
     const keys = await app.main.eval<string[]>('Object.keys(window.api.hook).sort()')
     expect(keys).toEqual([
       'create',
@@ -167,6 +167,7 @@ describe('hook IPC 面与注册表', () => {
       'getSource',
       'list',
       'listInvalid',
+      'openBuiltinNote',
       'openFolder',
       'openNote'
     ])
@@ -177,16 +178,19 @@ describe('hook IPC 面与注册表', () => {
     expect(retired).toEqual(Array(5).fill('undefined'))
   })
 
-  it('HR-2 列表：内置 auto-title（titler、两个埋点、无文件）+ 合法用户文件；getSource 只回内置原文；六份非法文件带解析器原因', async () => {
+  it('HR-2 列表：内置 auto-title（titler、两个埋点、随包那份 md 的路径）+ 合法用户文件；getSource 回内置盘上原文；六份非法文件带解析器原因', async () => {
     const hooks = await listHooks()
     const autoTitle = hooks.filter((h) => h.name === 'auto-title')
     expect(autoTitle).toHaveLength(1)
     expect(autoTitle[0]).toMatchObject({
       source: 'builtin',
       agent: 'titler',
-      triggers: [PROMPT_ACCEPTED, TURN_COMPLETED],
-      basePath: ''
+      triggers: [PROMPT_ACCEPTED, TURN_COMPLETED]
     })
+    // 内置的 basePath 是随包发布那份 md（dev 实例 = 本仓 builtinHooks/md/ 当前语言版）——
+    // 运行时读的就是它，侧栏只读笔记本开的也是它。语言不钉死，文件名按候选形状认
+    expect(basename(autoTitle[0].basePath)).toMatch(/^auto-title(\.[a-zA-Z-]+)?\.md$/)
+    expect(autoTitle[0].basePath.includes('builtinHooks')).toBe(true)
     expect(autoTitle[0].overridden).toBeFalsy()
     expect(autoTitle[0].displayName).not.toBe('')
     expect(autoTitle[0].description).not.toBe('')
@@ -194,6 +198,8 @@ describe('hook IPC 面与注册表', () => {
     const builtinSource = await getSource('auto-title', 'builtin')
     expect(builtinSource).toHaveProperty('text')
     const text = (builtinSource as { text: string }).text
+    // getSource(builtin) 的契约 = 随包目录里当前语言那份 md 的逐字原文（不是序列化产物）
+    expect(text).toBe(readFileSync(autoTitle[0].basePath, 'utf-8'))
     for (const needle of [
       'shuvix: hook v1',
       'shuvix-hook-agent: titler',

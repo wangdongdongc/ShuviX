@@ -58,7 +58,7 @@ export interface E2EApp {
    * 没有先后保证，「栅栏行之后没有某行」只在文件这一条有序流上成立。
    */
   mainLog(): string
-  /** 打开设置窗口并连接其页面（tab 缺省 'hooks' —— 智能体 / 技能 / 安全策略三个 tab 已搬去侧栏） */
+  /** 打开设置窗口并连接其页面（tab 缺省 'general' —— 智能体 / 技能 / 安全策略 / Hooks 四个 tab 已搬去侧栏） */
   openSettings(tab?: string): Promise<CdpClient>
   /** 结束实例并清理 fake HOME（afterAll 必须调用） */
   stop(): Promise<void>
@@ -279,7 +279,7 @@ export async function launchApp(): Promise<E2EApp> {
       hooksDir,
       main,
       mainLog,
-      async openSettings(tab = 'hooks') {
+      async openSettings(tab = 'general') {
         await main.eval(`window.api.app.openSettings(${JSON.stringify(tab)})`)
         const st = await until(
           async () =>

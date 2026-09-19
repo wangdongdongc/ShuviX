@@ -55,6 +55,8 @@ export function registerSettingsHandlers(): void {
       appEventBus.publish({ type: 'agent.changed' })
       // 内置策略的显示名 / 描述同样按界面语言取（规则恒取 en）：侧栏「安全策略」那一组跟着重扫
       appEventBus.publish({ type: 'policy.changed' })
+      // 内置 hook 的显示名 / 描述同样按界面语言取：侧栏「Hooks」那一组跟着重扫
+      appEventBus.publish({ type: 'hook.changed' })
       // 内置技能同样按语言分目录：承载项目改指新语言那一版，侧栏那一组重扫（行标签取自 SKILL.md）
       syncSkillBuiltinProject()
       appEventBus.publish({ type: 'skill.changed' })

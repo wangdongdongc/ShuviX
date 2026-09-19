@@ -33,6 +33,10 @@ extraResources:
   # 侧栏点内置策略行开的只读笔记本读的也是它
   - from: ../../packages/agent-runtime/src/security/builtinPolicies/md
     to: builtin-policies
+  # 内置 hook（auto-title 的 md，一语言一文件）：**运行时就读这一份**（hookService 按当前语言现读，
+  # 见 getBuiltinHooksDir），侧栏点内置 hook 行开的只读笔记本读的也是它
+  - from: ../../packages/agent-runtime/src/hook/builtinHooks/md
+    to: builtin-hooks
   # 内置知识库（ShuviX 自己的说明书，`knowledge` 工具里的保留名 `shuvix`）：一库一目录、目录下按语言分层，
   # 是真实目录而不是 ?raw 内联 —— 扫描 / 检索 / 笔记本都按目录走，与用户库同一条路
   - from: resources/knowledge

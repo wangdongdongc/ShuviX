@@ -344,7 +344,6 @@ export {
 } from './hook/hookRunner'
 export {
   buildBuiltinHooks,
-  getBuiltinHookSource,
   BUILTIN_HOOK_SPECS,
   AUTO_TITLE_HOOK_SPEC,
   type BuiltinHookDeps,

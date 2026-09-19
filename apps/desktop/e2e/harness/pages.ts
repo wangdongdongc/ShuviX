@@ -1760,355 +1760,17 @@ export async function settingsTabsPane(settings: CdpClient): Promise<SettingsTab
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// 设置页的注册表 tab（Hooks）—— 两栏布局，历史上与安全策略 tab 共用这个工厂。
-// （智能体与安全策略两份已搬到主窗侧栏，见 agentsSidebarPane / policiesSidebarPane。）
-//
-// 左列（按宽度类认，`.pop()` 取最后一个）：合法行 = 带 `.font-medium` 标签的按钮（内置行另带锁
-// `.lucide-lock`，选中态 `bg-accent/10`）；解析不过的文件行没有 `.font-medium`、文件名在
-// `.font-mono` 里（选中态琥珀 `bg-amber-500/10`）；底栏 新建 `.lucide-plus` / 重扫描
-// `.lucide-refresh-cw`。右栏 = 列表列的下一个兄弟，自上而下：页级错误框（新建 / 删除失败才有）→
-// 头部（标题 `span.text-sm.font-semibold` + 动作图标，那条 `.border-b`）→ Hooks 才有的拒绝原因
-// 红框 → 详情。**用户文件的详情就是它的笔记本会话**（`[data-registry-note=<fileName>]`，openNote
-// 回来之前渲染 null）；内置是等价 md 的只读查看，没有 data-registry-note。
-//
-// 就绪判据一律是「挂载到位」而不是睡一觉：内置 = 头部标题对上 + 面板里有 .cm-content + 没有笔记；
-// 用户 = 头部标题对上 + 笔记里的属性卡上屏。头部动作一律按图标认（位置会随功能增减漂）。
-
-/** 行的来源（同名覆盖时内置行与用户行并存、标签相同，靠锁图标分开） */
-export type RegistryRowSource = 'builtin' | 'user'
-
-/** 详情头部的动作图标 */
-export interface RegistryHeaderIcons {
-  trash: boolean
-  save: boolean
-  copy: boolean
-}
-
-export interface RegistryConfirmSnapshot {
-  open: boolean
-  title: string
-  description: string
-}
-
-/** 两个注册表 tab 共有的面 */
-export interface RegistryTabPane {
-  /** 点底栏「重扫描」并等列表落定（列表只在挂载时加载，外部写入的新文件要重扫才可见） */
-  refresh(): Promise<void>
-  /** 「无法解析」分组里的文件名 */
-  invalidRows(): Promise<string[]>
-  /** 点一行解析不过的文件并等它的笔记挂上 */
-  selectInvalidRow(fileName: string): Promise<void>
-  /** 当前选中的非法文件行（琥珀态）；没有为空串 */
-  selectedInvalid(): Promise<string>
-  /** 点底栏「新建」并等**新**笔记（属性卡）上屏，回它的文件名；失败时抛出页级错误框原文 */
-  clickNew(): Promise<string>
-  /** 点内置详情头部的「创建覆盖副本」并等新笔记上屏，回文件名；失败同上 */
-  clickCreateOverride(): Promise<string>
-  /** 点详情头部的垃圾桶并等确认框弹出 */
-  clickDelete(): Promise<void>
-  confirmDialog(): Promise<RegistryConfirmSnapshot>
-  /** 点确认框的「删除」（页脚第二个按钮）并等确认框关闭 */
-  confirmDialogConfirm(): Promise<void>
-  /** 详情里开着的笔记绑定的文件名（`data-registry-note`）；内置 / 无选中为空串 */
-  noteFile(): Promise<string>
-  /** 详情头部标题（合法条目 = 显示名；解析不过的文件 = 文件名） */
-  headerTitle(): Promise<string>
-  /**
-   * 详情头部左栏逐行的文本（标题 span 的祖父节点的每个子节点，各自 trim）：[0] 标题行（名字 + 来源 /
-   * 覆盖徽标），[1] 文件路径或提示；同名里输掉的用户文件多出 [2]「与 X 同名、那一份优先」。三个 tab 同构
-   */
-  headerLines(): Promise<string[]>
-  /** 详情区里笔记之外的红框文本（页级错误框 + Hooks 的拒绝原因框），多个以换行连接 */
-  reasonText(): Promise<string>
-  headerIcons(): Promise<RegistryHeaderIcons>
-  /** 详情里属性卡输入框的个数，以及是否全部禁用（内置只读 = 控件照常渲染、全部禁用） */
-  inputs(): Promise<{ count: number; disabled: boolean }>
-}
-
-/**
- * 行的附加筛选。同名的几份都列出来时（覆盖内置 + 同名用户文件），标签 + 来源分不开两份用户文件：
- * `overridden` 按划线认 —— true 只挑被遮蔽的那行，false 只挑生效的那行，省略不限。
- */
-export interface RegistryRowFilter {
-  overridden?: boolean
-}
-
-/** 列表行原始快照（各 tab 再映射成自己的形状） */
-interface RegistryRowShot {
-  label: string
-  /** 行内第二行的 mono 小字（Hooks 行的 `agent · 触发器` 副标题；其余 tab 为空串） */
-  subtitle: string
-  struck: boolean
-  overriddenBadge: boolean
-  selected: boolean
-  builtin: boolean
-}
-
-interface RegistryTabInternals extends RegistryTabPane {
-  rawRows(): Promise<RegistryRowShot[]>
-  selectRow(label: string, which?: RegistryRowSource, opts?: RegistryRowFilter): Promise<void>
-}
-
-/**
- * 注册表 tab 的公共实现。`columnWidth` 是左列的宽度类（Hooks 240px）——
- * 两栏布局里只有它能不靠文案认出左列。
- */
-function registryTabPane(settings: CdpClient, columnWidth: string): RegistryTabInternals {
-  const COLUMN = `[...document.querySelectorAll('.w-\\\\[${columnWidth}\\\\]')].pop()`
-  const PANEL = `(${COLUMN}?.nextElementSibling ?? null)`
-  const COLUMN_BUTTONS = `[...(${COLUMN}?.querySelectorAll('button') ?? [])]`
-  const ROWS = `${COLUMN_BUTTONS}.filter((b) => b.querySelector('.font-medium'))`
-  const INVALID_ROWS = `${COLUMN_BUTTONS}.filter((b) => !b.querySelector('.font-medium') && b.querySelector('.font-mono'))`
-  const COLUMN_BTN = (icon: string): string =>
-    `${COLUMN_BUTTONS}.find((b) => b.querySelector('${icon}'))`
-  /** 头部 = 标题 span 所在的那条 border-b（笔记在它之后，querySelector 先命中头部） */
-  const HEADER = `(${PANEL}?.querySelector('span.text-sm.font-semibold')?.closest('.border-b') ?? null)`
-  const HEADER_BTN = (icon: string): string =>
-    `[...(${HEADER}?.querySelectorAll('button') ?? [])].find((b) => b.querySelector('${icon}'))`
-  const NOTE = `(${PANEL}?.querySelector('[data-registry-note]') ?? null)`
-  const DIALOG = `document.querySelector('.dialog-panel')`
-  // 标签 + 来源（锁图标）+ 可选的「是否被遮蔽」（划线）—— 同名的几份都列出来时靠后两者分开
-  const ROW = (label: string, which?: RegistryRowSource, filter: RegistryRowFilter = {}): string =>
-    `${ROWS}.find((r) =>
-      (r.querySelector('.font-medium')?.textContent ?? '').trim() === ${JSON.stringify(label)} &&
-      (${JSON.stringify(which ?? '')} === '' || (${JSON.stringify(which ?? '')} === 'builtin') === !!r.querySelector('.lucide-lock')) &&
-      (${JSON.stringify(filter.overridden ?? null)} === null || ${JSON.stringify(filter.overridden ?? null)} === !!r.querySelector('.line-through')))`
-
-  const noteFile = (): Promise<string> =>
-    settings.eval<string>(`${NOTE}?.getAttribute('data-registry-note') ?? ''`)
-
-  /**
-   * 等一份**新**笔记挂上（文件名与 before 不同 + 属性卡上屏）。新建 / 覆盖副本失败时详情区顶部
-   * 出页级错误框（右栏第一个子节点）—— until 会吞掉轮询期异常，故失败经返回值传出来再抛。
-   */
-  const waitNewNote = async (before: string, what: string): Promise<string> => {
-    const outcome = await until<{ file: string } | { rejected: string } | null>(async () => {
-      const state = await settings.eval<{ file: string; card: boolean; error: string }>(`(() => {
-        const note = ${NOTE}
-        const first = ${PANEL}?.firstElementChild ?? null
-        const isError = !!first && first.className.includes('bg-red-500/10')
-        return {
-          file: note?.getAttribute('data-registry-note') ?? '',
-          card: !!note?.querySelector('.cm-shuvix-fmcard'),
-          error: isError ? (first.textContent ?? '').trim() : ''
-        }
-      })()`)
-      if (state.file && state.file !== before && state.card) return { file: state.file }
-      if (state.error) return { rejected: state.error }
-      return null
-    }, what)
-    if ('rejected' in outcome) throw new Error(`${what} rejected: ${outcome.rejected}`)
-    return outcome.file
-  }
-
-  return {
-    rawRows: () =>
-      settings.eval<RegistryRowShot[]>(`${ROWS}.map((r) => ({
-        label: (r.querySelector('.font-medium')?.textContent ?? '').trim(),
-        subtitle: (r.querySelector('.font-mono')?.textContent ?? '').trim(),
-        struck: !!r.querySelector('.line-through'),
-        overriddenBadge: [...r.querySelectorAll('span')].some((s) => /覆盖|Overridden|上書き/.test(s.textContent ?? '')),
-        selected: r.className.includes('bg-accent/10'),
-        builtin: !!r.querySelector('.lucide-lock')
-      }))`),
-
-    selectRow: async (label, which, opts) => {
-      // 找行与「等详情挂好」用的是同一个带筛选的定位 —— 同名两行里点了哪行，就等哪行选中
-      const row = ROW(label, which, opts)
-      await until(() => settings.eval<boolean>(`!!(${row})`), `registry row "${label}"`)
-      const builtin = await settings.eval<boolean>(`(() => {
-        const r = ${row}
-        r.click()
-        return !!r.querySelector('.lucide-lock')
-      })()`)
-      await until(
-        () =>
-          settings.eval<boolean>(`(() => {
-            const r = ${row}
-            if (!r || !r.className.includes('bg-accent/10')) return false
-            const panel = ${PANEL}
-            const title = (panel?.querySelector('span.text-sm.font-semibold')?.textContent ?? '').trim()
-            if (title !== ${JSON.stringify(label)}) return false
-            const note = panel.querySelector('[data-registry-note]')
-            // 注册表 md 恒以 frontmatter 开头：两种详情都等属性卡上屏（槽位 / 开关的读数挂在卡上）
-            return ${builtin}
-              ? !note && !!panel.querySelector('.cm-shuvix-fmcard')
-              : !!note?.querySelector('.cm-shuvix-fmcard')
-          })()`),
-        `registry detail mounted for "${label}"`
-      )
-    },
-
-    refresh: async () => {
-      await settings.eval(`${COLUMN_BTN('.lucide-refresh-cw')}.click()`)
-      // 重扫期间按钮置灰（refreshing），恢复可点 = 这一轮 list + listInvalid 已回来并落进 state
-      await until(
-        () => settings.eval<boolean>(`${COLUMN_BTN('.lucide-refresh-cw')}?.disabled === false`),
-        'registry list rescanned'
-      )
-      await sleep(150)
-    },
-
-    invalidRows: () =>
-      settings.eval<string[]>(`${INVALID_ROWS}.map((b) => (b.textContent ?? '').trim())`),
-
-    selectInvalidRow: async (fileName) => {
-      const row = `${INVALID_ROWS}.find((b) => (b.textContent ?? '').trim() === ${JSON.stringify(fileName)})`
-      await until(() => settings.eval<boolean>(`!!(${row})`), `invalid row "${fileName}"`)
-      await settings.eval(`${row}.click()`)
-      await until(
-        () =>
-          settings.eval<boolean>(`(() => {
-            const note = ${NOTE}
-            return note?.getAttribute('data-registry-note') === ${JSON.stringify(fileName)} &&
-              !!note.querySelector('.cm-content')
-          })()`),
-        `note mounted for invalid file "${fileName}"`
-      )
-    },
-
-    selectedInvalid: () =>
-      settings.eval<string>(
-        `(${INVALID_ROWS}.find((b) => b.className.includes('bg-amber-500/10'))?.textContent ?? '').trim()`
-      ),
-
-    clickNew: async () => {
-      const before = await noteFile()
-      await settings.eval(`${COLUMN_BTN('.lucide-plus')}.click()`)
-      return waitNewNote(before, 'new registry file')
-    },
-
-    clickCreateOverride: async () => {
-      await until(
-        () => settings.eval<boolean>(`!!${HEADER_BTN('.lucide-copy')}`),
-        'create-override action'
-      )
-      const before = await noteFile()
-      await settings.eval(`${HEADER_BTN('.lucide-copy')}.click()`)
-      return waitNewNote(before, 'override copy')
-    },
-
-    clickDelete: async () => {
-      await until(
-        () => settings.eval<boolean>(`!!${HEADER_BTN('.lucide-trash-2')}`),
-        'delete action'
-      )
-      await settings.eval(`${HEADER_BTN('.lucide-trash-2')}.click()`)
-      await until(() => settings.eval<boolean>(`${DIALOG} !== null`), 'delete confirm dialog')
-    },
-
-    confirmDialog: () =>
-      settings.eval<RegistryConfirmSnapshot>(`(() => {
-        const panel = ${DIALOG}
-        if (!panel) return { open: false, title: '', description: '' }
-        return {
-          open: true,
-          title: (panel.querySelector('h3')?.textContent ?? '').trim(),
-          description: (panel.querySelector('h3 + div')?.textContent ?? '').trim()
-        }
-      })()`),
-
-    confirmDialogConfirm: async () => {
-      await settings.eval(`[...${DIALOG}.querySelectorAll('button')][1].click()`)
-      await until(() => settings.eval<boolean>(`${DIALOG} === null`), 'confirm dialog closed')
-      // 确认框先关、删除与重扫随后异步落定 —— 断言方仍应 until，这里只让出一拍
-      await sleep(300)
-    },
-
-    noteFile,
-
-    headerTitle: () =>
-      settings.eval<string>(
-        `(${HEADER}?.querySelector('span.text-sm.font-semibold')?.textContent ?? '').trim()`
-      ),
-
-    headerLines: () =>
-      settings.eval<string[]>(`(() => {
-        // 头部左栏 = 标题 span 的祖父节点：标题行 → 路径 / 提示 →（同名里输掉时）谁压过了它
-        const column = ${HEADER}?.querySelector('span.text-sm.font-semibold')?.parentElement?.parentElement
-        return column ? [...column.children].map((c) => (c.textContent ?? '').trim()) : []
-      })()`),
-
-    reasonText: () =>
-      settings.eval<string>(
-        `[...(${PANEL}?.querySelectorAll('div') ?? [])]
-          .filter((d) => d.className.includes('bg-red-500/10') && !d.closest('[data-registry-note]') && !d.closest('.cm-editor'))
-          .map((d) => (d.textContent ?? '').trim())
-          .join('\\n')`
-      ),
-
-    headerIcons: () =>
-      settings.eval<RegistryHeaderIcons>(`(() => {
-        const btns = [...(${HEADER}?.querySelectorAll('button') ?? [])]
-        const has = (icon) => btns.some((b) => b.querySelector(icon))
-        return { trash: has('.lucide-trash-2'), save: has('.lucide-save'), copy: has('.lucide-copy') }
-      })()`),
-
-    inputs: () =>
-      settings.eval<{ count: number; disabled: boolean }>(`(() => {
-        const els = [...(${PANEL}?.querySelectorAll('.cm-shuvix-fmcard-input') ?? [])]
-        return { count: els.length, disabled: els.length > 0 && els.every((i) => i.disabled) }
-      })()`)
-  }
-}
-
-export interface HooksPaneRow {
-  name: string
-  /** 行内副标题 `<agent> · <trigger>, <trigger>`（HookRow 的 hint：派谁 · 什么时候会跑） */
-  hint: string
-  struck: boolean
-  overriddenBadge: boolean
-  selected: boolean
-  builtin: boolean
-}
-
-export interface HooksPane extends RegistryTabPane {
-  rows(): Promise<HooksPaneRow[]>
-  /**
-   * 点一行并等详情挂好（见本节开头的就绪判据）；`which` 在覆盖后两行同名时点名来源，
-   * `opts.overridden` 再分开同名的几份用户文件（划线的那几行是输掉的）
-   */
-  selectRow(name: string, which?: RegistryRowSource, opts?: RegistryRowFilter): Promise<void>
-}
-
-/**
- * 设置窗口「Hooks」tab（openSettings('hooks') 后调用；等列表就绪）。
- * 与另外两个 tab 的差别只在左列宽 240px、行多一行 `agent · 触发器` 副标题（hint）、以及选中
- * 解析不过的文件时头部与笔记之间多一个拒绝原因红框（解析器原文，与属性卡横幅同源 —— reasonText）。
- * 内置 hook 没有 detail()：它的只读详情用公共面的 inputs() / headerIcons() 断言。
- */
-export async function hooksPane(settings: CdpClient): Promise<HooksPane> {
-  const { rawRows, ...common } = registryTabPane(settings, '240px')
-  await until(async () => (await rawRows()).length > 0, 'hooks tab ready')
-
-  return {
-    ...common,
-    rows: async () =>
-      (await rawRows()).map((r) => ({
-        name: r.label,
-        hint: r.subtitle,
-        struck: r.struck,
-        overriddenBadge: r.overriddenBadge,
-        selected: r.selected,
-        builtin: r.builtin
-      }))
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────
 // 注册表笔记（bot / agent / 策略 / hook md 的笔记本会话）的正文与属性卡 —— 两个窗口共用。
 //
-// 作用域：主窗里点 Bots 分组的一行，主区就是那份文件的笔记本（同一时刻只有它一个 .cm-content），
-// 作用域是整个 document；设置窗里是详情区的 `[data-registry-note]`（RegistryNoteView 根）——
-// 收在它里面，免得读到内置条目的只读预览，没有开着的笔记时一切读数为空。
+// 作用域：点 Bots / 智能体 / 策略 / Hooks 分组的一行，主区就是那份文件的笔记本（同一时刻
+// 只有它一个 .cm-content），作用域是整个 document。注册表笔记不再出现在设置窗
+// （RegistryNoteView 随设置页注册表 tab 一并拆除）。
 //
 // 写入只走两条路，**绝不往 CodeMirror 里打字**：属性卡字段 `commitField`（真实编辑路径：失焦
 // 提交 → 行级 scoped edit → 200ms 防抖自动保存落盘），或 seed.ts 的 `noteWrite`（写路径 IPC）。
 //
-// `mark()` / `isMarked()` 是挂在 `[data-registry-note]` 元素上的 JS 属性（刻意不是 data-*）：
-// 重挂载会造出一个新元素、标记随之消失 —— 「改名 / 合法性翻面时笔记没被卸载重开」的判据。
-// **只在设置窗有效**：主窗的笔记本没有这层壳，而它下面的 CM6 编辑器本就按设计随外部写入重挂载
-// （NotebookView 的 reloadNonce），钉不住 —— 主窗里「没被重开」请按会话 id 断（registryNoteSessions）。
+// 「改名 / 合法性翻面时笔记没被卸载重开」请按会话 id 断（registryNoteSessions）：CM6 编辑器
+// 本就按设计随外部写入重挂载（NotebookView 的 reloadNonce），DOM 侧钉不住。
 
 /** 属性卡校验徽章的语义类（'' = 未上屏，或该类型没有校验器） */
 export type FmCardStatus = 'ok' | 'warn' | 'err' | ''
@@ -2170,16 +1832,12 @@ export interface RegistryNotePane extends NotebookReadOnlyProbes {
   fieldValue(key: string): Promise<string | null>
   /** 改一个文本字段：写 value + 派发 blur（卡片失焦即提交）；字段不存在或只读则抛 */
   commitField(key: string, value: string): Promise<void>
-  mark(): Promise<void>
-  isMarked(): Promise<boolean>
 }
 
 export function registryNotePane(client: CdpClient): RegistryNotePane {
-  const ROOT = `(location.hash.startsWith('#settings') ? document.querySelector('[data-registry-note]') : document)`
+  const ROOT = 'document'
   const FIELD = (key: string): string =>
     `${ROOT}?.querySelector('.cm-shuvix-fmcard-input[data-key=${JSON.stringify(key)}]')`
-  const NOTE_EL = `document.querySelector('[data-registry-note]')`
-  const MARK = '__e2eRegistryNoteMark'
 
   const bodyText = (): Promise<string> =>
     client.eval<string>(`${ROOT}?.querySelector('.cm-content')?.textContent ?? ''`)
@@ -2233,17 +1891,7 @@ export function registryNotePane(client: CdpClient): RegistryNotePane {
         return 'ok'
       })()`)
       if (outcome !== 'ok') throw new Error(`card field "${key}" is ${outcome}`)
-    },
-    mark: async () => {
-      const marked = await client.eval<boolean>(`(() => {
-        const note = ${NOTE_EL}
-        if (!note) return false
-        note.${MARK} = true
-        return true
-      })()`)
-      if (!marked) throw new Error('no [data-registry-note] element to mark')
-    },
-    isMarked: () => client.eval<boolean>(`${NOTE_EL}?.${MARK} === true`)
+    }
   }
 }
 
@@ -3157,6 +2805,288 @@ export function policiesSidebarPane(main: CdpClient): PoliciesSidebarPane {
 
     refresh: async () => {
       await pickFromMenu(main, HEADER, 'refresh', 'policies group header')
+      await sleep(200)
+    }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 主窗侧栏「Hooks」分组（HookGroup）—— 与 policiesSidebarPane 同形面。
+//
+// 锚点：分组头按 `data-group="hooks"`（SessionGroup 的 group/header 层）认；内置行按
+// `data-hook-builtin-row=<name>`（身份是 name），用户 hook 行按 `data-hook-row=<fileName>`
+// （名字随编辑在变、文件名不变），解析不过的琥珀行按 `data-hook-invalid-row=<fileName>`；
+// 同名里不生效的那份（被覆盖的内置 / 输掉的用户文件）另带 `data-hook-overridden`
+// （划线 + 「已覆盖」徽标 —— 徽标带 `group-hover:invisible`，悬停隐去不挡 ⋮，DOM 里恒在）。
+// 行标签是行的**直接子** span.truncate（不包一层 div —— 侧栏 e2e 按「div > span.truncate」
+// 认会话行，hook 行刻意避开那个形状）。
+//
+// 点用户行 / 非法行打开的是那份文件的**笔记本会话**（隐藏项目 `__hooks__`）—— 主区就是普通
+// 笔记本，正文与属性卡经 `registryNotePane(main)` 读写，活动行 = 活动会话正是这份文件的笔记本。
+// 内置行走同一条路：它的 md 随包发布（运行时读的就是它），点行开的是那份文件的**只读**笔记本
+// （载体项目 `__hooks_builtin__`）—— 只读那一半经 `registryNotePane(main)` 的
+// `hasInputCard()` / `editorEditable()` 断言。
+// 分组是**懒扫**的：首次展开才扫，之后展开 / 窗口聚焦 / 组头菜单「刷新」/ `hook.changed`
+// 事件（经宿主落盘的写入，300ms 合并广播）重扫 —— 磁盘外写入不广播，种完 md 要 refresh。
+// 菜单走与会话行同一套桩（pickFromMenu / openMenu）。
+//
+// ⚠️ 组头菜单的 `open-folder` **只许做存在性断言，绝不点**：它开的是 OS 文件管理器，e2e 关不掉。
+
+/** 内置 hook 的一行（随包发布、运行时按语言挑中的那份 md） */
+export interface HooksBuiltinRow {
+  name: string
+  /** 显示名（本地化） */
+  label: string
+  /** 被同名用户 hook 压过：划线 */
+  struck: boolean
+  /** 「已覆盖」徽标（按三语认，同策略组的口径） */
+  badge: boolean
+  /** 行首的锁 —— 内置恒有（生效与否都只能看）；用户 hook 行首留空 */
+  locked: boolean
+  /** 行的 title 提示（未被覆盖时是 hook 描述，被覆盖时说清「有个同名的自定义 hook」） */
+  title: string
+}
+
+/** 用户 hook 的一行 */
+export interface HooksUserRow {
+  fileName: string
+  label: string
+  /** 同名里输掉了：划线 */
+  struck: boolean
+  badge: boolean
+  /** 行首的锁（用户 hook **不该**有：它可编辑，锁是内置的标记） */
+  locked: boolean
+  /** 行的 title 提示（输掉的那份说清被谁压过） */
+  title: string
+}
+
+/** 解析不过的琥珀行（身份是文件名 —— 它解析不出 name） */
+export interface HooksInvalidRow {
+  fileName: string
+  /** 行上显示的字 = 文件名（font-mono） */
+  label: string
+  /** 文件名是 font-mono 排的（与用户 hook 行的正文字体区分开） */
+  mono: boolean
+  /** 行的 title 提示 = 解析器的人读拒绝理由 */
+  title: string
+  /** 琥珀行没有锁 / 划线 / 徽标 —— 留这三个读数是为了能断「没有」 */
+  locked: boolean
+  struck: boolean
+  badge: boolean
+}
+
+/** 分组里的活动行：用户 hook 与琥珀行给文件名，内置行给 name（它的身份就是 name） */
+export interface HooksActiveRow {
+  row?: string
+  invalidRow?: string
+  builtinRow?: string
+}
+
+export interface HooksSidebarPane {
+  /** 组头显示的分组标签 */
+  label(): Promise<string>
+  /** 侧栏里 `data-group="hooks"` 的组头个数（分组只该有一个） */
+  headerCount(): Promise<number>
+  /**
+   * 分组正文的子节点数 —— **懒扫**的判据：首次展开前 scanned 为 null，正文一个子节点都不渲染。
+   * 扫过之后折叠只是收高度（AnimatedCollapse），行仍在 DOM 里，此读数不再归零。
+   */
+  bodyChildCount(): Promise<number>
+  /** 组头高亮（活动会话是某份 hook md 的笔记本时 SessionGroup 的 active 分支） */
+  headerActive(): Promise<boolean>
+  /** 展开分组并等首次扫描落定（内置 hook 恒非空，正文有内容即落定） */
+  expand(): Promise<void>
+  /** 折叠分组（幂等）—— 再展开会触发一次重扫 */
+  collapse(): Promise<void>
+  builtinRows(): Promise<HooksBuiltinRow[]>
+  userRows(): Promise<HooksUserRow[]>
+  /** 非法文件行（琥珀）的快照（DOM 序） */
+  invalidRows(): Promise<HooksInvalidRow[]>
+  /** 点一行用户 hook 并等它成为活动行（= 这份文件的笔记本成了活动会话） */
+  selectUserRow(fileName: string): Promise<void>
+  /** 点一行解析不过的文件并等它成为活动行 */
+  selectInvalidRow(fileName: string): Promise<void>
+  /** 点一行内置 hook 并等它成为活动行（= 随包那份 md 的只读笔记本成了活动会话） */
+  openBuiltin(name: string): Promise<void>
+  /** 当前活动行；活动会话不是任何 hook 文件的笔记本时为 null */
+  activeRow(): Promise<HooksActiveRow | null>
+  /** 内置行的菜单项（开一次 ⋮、不选任何项）—— 要断 enabled，故回完整 items */
+  builtinRowMenu(name: string): Promise<MenuItemShot[] | null>
+  /** 开内置行的 ⋮ 并选中一项（自带「该项真的在菜单里」的核对） */
+  pickBuiltinRowMenu(name: string, actionId: 'create-override'): Promise<void>
+  /** 用户 hook 行菜单里的动作 id（生效的那份按名删、输掉的那份按文件名删） */
+  userRowMenuIds(fileName: string): Promise<string[] | null>
+  pickUserRowMenu(fileName: string, actionId: 'delete-hook' | 'delete-hook-file'): Promise<void>
+  pickInvalidRowMenu(fileName: string, actionId: 'delete-hook-file'): Promise<void>
+  /** 组头菜单的**原始 items**（开一次 ⋮、不选任何项；含分隔符 —— HS-C1 断的是形状） */
+  groupMenuItems(): Promise<MenuItemShot[] | null>
+  /** 组头菜单「新建 Hook」—— 只触发；新文件落盘与笔记打开由调用方 until */
+  newHook(): Promise<void>
+  /** 组头菜单「刷新」—— 磁盘外改动不广播 hook.changed，需手动重扫 */
+  refresh(): Promise<void>
+}
+
+export function hooksSidebarPane(main: CdpClient): HooksSidebarPane {
+  const HEADER_SEL = `div[class*="group/header"][data-group="hooks"]`
+  const HEADER = `document.querySelector('${HEADER_SEL}')`
+  const TOGGLE = `[...(${HEADER}?.querySelectorAll(':scope > button') ?? [])].find((b) => b.querySelector('span.truncate'))`
+  const COLLAPSE = `${HEADER}?.nextElementSibling`
+  const BODY = `${COLLAPSE}?.firstElementChild?.firstElementChild`
+  const BUILTIN_ROWS = `[...document.querySelectorAll('[data-hook-builtin-row]')]`
+  const USER_ROWS = `[...document.querySelectorAll('[data-hook-row]')]`
+  const INVALID_ROWS = `[...document.querySelectorAll('[data-hook-invalid-row]')]`
+  const BUILTIN_ROW = (name: string): string =>
+    `document.querySelector('[data-hook-builtin-row=${JSON.stringify(name)}]')`
+  const USER_ROW = (fileName: string): string =>
+    `document.querySelector('[data-hook-row=${JSON.stringify(fileName)}]')`
+  const INVALID_ROW = (fileName: string): string =>
+    `document.querySelector('[data-hook-invalid-row=${JSON.stringify(fileName)}]')`
+  const ACTIVE = (list: string): string =>
+    `${list}.find((r) => r.className.includes('bg-bg-active'))`
+  /** 行的标签与徽标读法（三种行同构：span.truncate 是标签，划线在它身上） */
+  const rowShot = (extra: string): string => `({
+    label: (r.querySelector('span.truncate')?.textContent ?? '').trim(),
+    struck: !!r.querySelector('.line-through'),
+    badge: [...r.querySelectorAll('span')].some((s) => /覆盖|Overridden|上書き/.test(s.textContent ?? '')),
+    ${extra}
+  })`
+
+  /** 点一行并等它成为活动行（打开笔记是异步的：openNote → 重拉会话列表 → 选中） */
+  const clickUntilActive = async (scope: string, what: string): Promise<void> => {
+    await until(() => main.eval<boolean>(`${scope} !== null`), what)
+    await main.eval(`${scope}.click()`)
+    await until(
+      () => main.eval<boolean>(`(${scope}?.className ?? '').includes('bg-bg-active')`),
+      `${what} active`
+    )
+  }
+
+  /** 开某一行的 ⋮（不选任何项 = 取消）并回菜单里的动作 id */
+  const menuIds = async (scope: string, what: string): Promise<string[] | null> => {
+    await until(() => main.eval<boolean>(`${scope} !== null`), what)
+    const items = await openMenu(main, scope, 'menu-button')
+    return items ? items.filter((it) => it.id).map((it) => it.id as string) : null
+  }
+
+  return {
+    label: () =>
+      main.eval<string>(`(${HEADER}?.querySelector('span.truncate')?.textContent ?? '').trim()`),
+
+    headerCount: () => main.eval<number>(`document.querySelectorAll('${HEADER_SEL}').length`),
+
+    bodyChildCount: () => main.eval<number>(`${BODY}?.childElementCount ?? 0`),
+
+    // 组头高亮在 SessionGroup 的包裹层（active 分支给 data-group 那层的父级加 bg-bg-primary/30）
+    headerActive: () =>
+      main.eval<boolean>(
+        `(${HEADER}?.parentElement?.className ?? '').includes('bg-bg-primary/30')`
+      ),
+
+    expand: async () => {
+      await until(() => main.eval<boolean>(`${HEADER} !== null`), 'hooks group header')
+      const open = await main.eval<boolean>(`${COLLAPSE}?.style.gridTemplateRows === '1fr'`)
+      if (!open) await main.eval(`(${TOGGLE})?.click()`)
+      // 扫描是懒的：展开才发第一次请求，正文有内容才算落定（内置 hook 恒非空）
+      await until(
+        () => main.eval<boolean>(`(${BODY}?.childElementCount ?? 0) > 0`),
+        'hooks group scanned'
+      )
+    },
+
+    collapse: async () => {
+      await until(() => main.eval<boolean>(`${HEADER} !== null`), 'hooks group header')
+      const open = await main.eval<boolean>(`${COLLAPSE}?.style.gridTemplateRows === '1fr'`)
+      if (open) await main.eval(`(${TOGGLE})?.click()`)
+      await until(
+        () => main.eval<boolean>(`${COLLAPSE}?.style.gridTemplateRows === '0fr'`),
+        'hooks group collapsed'
+      )
+    },
+
+    builtinRows: () =>
+      main.eval<HooksBuiltinRow[]>(
+        `${BUILTIN_ROWS}.map((r) => ${rowShot(`name: r.getAttribute('data-hook-builtin-row') ?? '',
+    locked: !!r.querySelector('.lucide-lock'),
+    title: r.getAttribute('title') ?? ''`)})`
+      ),
+
+    userRows: () =>
+      main.eval<HooksUserRow[]>(
+        `${USER_ROWS}.map((r) => ${rowShot(`fileName: r.getAttribute('data-hook-row') ?? '',
+    locked: !!r.querySelector('.lucide-lock'),
+    title: r.getAttribute('title') ?? ''`)})`
+      ),
+
+    invalidRows: () =>
+      main.eval<HooksInvalidRow[]>(
+        `${INVALID_ROWS}.map((r) => ${rowShot(`fileName: r.getAttribute('data-hook-invalid-row') ?? '',
+    mono: !!r.querySelector('.font-mono'),
+    locked: !!r.querySelector('.lucide-lock'),
+    title: r.getAttribute('title') ?? ''`)})`
+      ),
+
+    selectUserRow: (fileName) => clickUntilActive(USER_ROW(fileName), `hook row "${fileName}"`),
+
+    selectInvalidRow: (fileName) =>
+      clickUntilActive(INVALID_ROW(fileName), `invalid hook row "${fileName}"`),
+
+    // 与点用户行同一条路（openBuiltinNote → 重拉会话列表 → 选中），只是开出来的笔记是只读的。
+    // **不等正文**：切换后先 note.waitCard() / waitBody(...)
+    openBuiltin: (name) => clickUntilActive(BUILTIN_ROW(name), `builtin hook row "${name}"`),
+
+    activeRow: () =>
+      main.eval<HooksActiveRow | null>(`(() => {
+        const row = ${ACTIVE(USER_ROWS)}
+        if (row) return { row: row.getAttribute('data-hook-row') }
+        const invalid = ${ACTIVE(INVALID_ROWS)}
+        if (invalid) return { invalidRow: invalid.getAttribute('data-hook-invalid-row') }
+        // 内置行也会成为活动行（它的 md 同样开笔记本，只是只读）—— 少了这一段，
+        // 「开着内置笔记时活动行是谁」只能答 null，与「谁都没选中」分不开
+        const builtin = ${ACTIVE(BUILTIN_ROWS)}
+        if (builtin) return { builtinRow: builtin.getAttribute('data-hook-builtin-row') }
+        return null
+      })()`),
+
+    builtinRowMenu: async (name) => {
+      await until(
+        () => main.eval<boolean>(`${BUILTIN_ROW(name)} !== null`),
+        `builtin hook row "${name}"`
+      )
+      return openMenu(main, BUILTIN_ROW(name), 'menu-button')
+    },
+
+    pickBuiltinRowMenu: async (name, actionId) => {
+      await until(
+        () => main.eval<boolean>(`${BUILTIN_ROW(name)} !== null`),
+        `builtin hook row "${name}"`
+      )
+      await pickFromMenu(main, BUILTIN_ROW(name), actionId, `builtin hook row "${name}"`)
+    },
+
+    userRowMenuIds: (fileName) => menuIds(USER_ROW(fileName), `hook row "${fileName}"`),
+
+    pickUserRowMenu: async (fileName, actionId) => {
+      await until(
+        () => main.eval<boolean>(`${USER_ROW(fileName)} !== null`),
+        `hook row "${fileName}"`
+      )
+      await pickFromMenu(main, USER_ROW(fileName), actionId, `hook row "${fileName}"`)
+    },
+
+    pickInvalidRowMenu: async (fileName, actionId) => {
+      await until(
+        () => main.eval<boolean>(`${INVALID_ROW(fileName)} !== null`),
+        `invalid hook row "${fileName}"`
+      )
+      await pickFromMenu(main, INVALID_ROW(fileName), actionId, `invalid hook row "${fileName}"`)
+    },
+
+    groupMenuItems: () => openMenu(main, HEADER, 'menu-button'),
+
+    newHook: () => pickFromMenu(main, HEADER, 'new-hook', 'hooks group header'),
+
+    refresh: async () => {
+      await pickFromMenu(main, HEADER, 'refresh', 'hooks group header')
       await sleep(200)
     }
   }
