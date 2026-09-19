@@ -4,8 +4,9 @@
  * 把 userData 重定向到一次性目录后加载正式主进程产物 —— 与用户自己的运行实例
  * （真实 HOME / userData / cli.sock）完全隔离。产物路径相对本文件：apps/desktop/out/。
  *
- * 另外把 `contextMenu:popup` 换成可脚本化的桩（见下）—— 侧栏的行/组头
- * 动作如今都只在那份菜单里，而原生菜单是 e2e 唯一驱动不了的东西。
+ * 另外把两个 **OS 级模态** 换成可脚本化的桩（见下）：`contextMenu:popup`（侧栏的行/组头
+ * 动作如今都只在那份菜单里）与 `skill:pickExternalDir`（添加外部技能目录的第一步）。
+ * 两者都起 OS 级嵌套 runloop，是 e2e 唯一驱动不了的东西。
  */
 const { app, ipcMain } = require('electron')
 const userData = process.env.SHUVIX_VERIFY_USERDATA
@@ -25,9 +26,10 @@ if (userData) app.setPath('userData', userData)
  * window），所以 pages.ts 里钉选择与读菜单都只用 `main.eval`。
  */
 const origHandle = ipcMain.handle.bind(ipcMain)
-ipcMain.handle = (channel, listener) => {
-  if (channel !== 'contextMenu:popup') return origHandle(channel, listener)
-  return origHandle(channel, async (event, request) => {
+
+/** 桩的实现表：channel → 收下正式入参、回一个正式形状的应答 */
+const STUBS = {
+  'contextMenu:popup': async (event, request) => {
     const items = JSON.stringify((request && request.items) || [])
     const actionId = await event.sender.executeJavaScript(
       `(() => {
@@ -38,7 +40,33 @@ ipcMain.handle = (channel, listener) => {
       })()`
     )
     return { actionId }
-  })
+  },
+
+  /**
+   * 目录选择器桩（`dialog.showOpenDialog`）—— 「添加外部技能目录」的第一步。
+   *
+   * 同样是 OS 级模态：CDP 关不掉它，整条 spec 会挂死。用例事先把要「选」的绝对路径钉在
+   * `window.__E2E_SKILL_DIR_PICK` 上（取走即清），没钉就等价于用户按了取消。
+   *
+   * **刻意保留这一步**而不是在 e2e 里直接调 `skill.addExternalDir` 绕过 UI：这个 IPC 之上
+   * 还有「选完再取名」的第二步（SkillDirDialog），而重名被拒之后对话框要停在原地 ——
+   * 绕过去就把那一整段流程测没了。
+   */
+  'skill:pickExternalDir': async (event) => {
+    const path = await event.sender.executeJavaScript(
+      `(() => {
+        const picked = window.__E2E_SKILL_DIR_PICK ?? null
+        window.__E2E_SKILL_DIR_PICK = null
+        return picked
+      })()`
+    )
+    return path ? { success: true, path } : { success: false, reason: 'canceled' }
+  }
+}
+
+ipcMain.handle = (channel, listener) => {
+  const stub = STUBS[channel]
+  return stub ? origHandle(channel, stub) : origHandle(channel, listener)
 }
 
 require('../../out/main/index.js')

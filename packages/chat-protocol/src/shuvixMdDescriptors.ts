@@ -199,13 +199,32 @@ const OKF_DESCRIPTOR: ShuvixMdTypeDescriptor = {
   ]
 }
 
+/**
+ * 技能定义文件（`SKILL.md` 的 frontmatter）—— **不是 ShuviX 自己的契约**：这批文件与
+ * Claude Code 的 skills 通用，键只有 `name` / `description`，没有 `shuvix:` 自述行。
+ * 所以它不靠标记选中，而是由技能笔记本传 `frontmatterFallbackType: 'skill'` 兜底
+ * （同知识库条目的 `okf`）—— 没有这层兜底，一份技能打开就是裸 YAML。
+ *
+ * `description` 是**触发条件**（agent 靠它判断这个技能该不该加载），不是摘要，所以给 text：
+ * 排成段落会诱人写成介绍。正文是技能本身，不是 frontmatter 字段，卡上没有它。
+ */
+const SKILL_DESCRIPTOR: ShuvixMdTypeDescriptor = {
+  type: 'skill',
+  badge: 'Skill',
+  fields: [
+    { key: 'name', labelKey: 'tool.subAgentName', kind: 'mono' },
+    { key: 'description', labelKey: 'tool.subAgentDescription', kind: 'text' }
+  ]
+}
+
 export const SHUVIX_MD_DESCRIPTORS: readonly ShuvixMdTypeDescriptor[] = [
   OKF_DESCRIPTOR,
   AGENT_DESCRIPTOR,
   POLICY_DESCRIPTOR,
   HOOK_DESCRIPTOR,
   BOT_DESCRIPTOR,
-  MEMORY_DESCRIPTOR
+  MEMORY_DESCRIPTOR,
+  SKILL_DESCRIPTOR
 ]
 
 /** 按标记 type 查描述符；无 → null（属性卡降级为通用 key/value 卡） */

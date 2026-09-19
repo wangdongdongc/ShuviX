@@ -1,11 +1,16 @@
 /**
- * 隐藏项目的判定 —— `isHiddenProjectId`，以及它合并的两个谓词：注册表的 `isRegistryNoteProjectId`、
- * 知识库的 `isKnowledgeProjectId`。
+ * 隐藏项目的判定 —— `isHiddenProjectId`，以及它合并的三个谓词：注册表的 `isRegistryNoteProjectId`、
+ * 知识库的 `isKnowledgeProjectId`、技能的 `isSkillProjectId`。
  *
- * 隐藏项目只承载笔记本会话：知识库的三个承载项目（项目库 / 用户库 / 内置库），以及 bot / agent /
- * 内置 agent（随包发布，只读）/ 安全策略 / hook 五个注册表目录。宿主的项目列表过滤（projectService）与 UI 的日历圆点（CalendarView）共用这一份判定 ——
+ * 隐藏项目只承载笔记本会话：知识库的三个承载项目（项目库 / 用户库 / 内置库），bot / agent /
+ * 内置 agent（随包发布，只读）/ 安全策略 / hook 五个注册表目录，以及技能的承载项目（默认目录 /
+ * 内置目录 / 每个外部目录一个）。宿主的项目列表过滤（projectService）与 UI 的日历圆点（CalendarView）共用这一份判定 ——
  * 日历那一侧**只有这里**有覆盖。漏认一个 id，打开一份 bot md 就会让一个没人认得的项目冒进
  * 项目列表、在日历上点出一个圆点。
+ *
+ * 技能的三个形态在 skillNotes.test.ts 里逐条钉死，这里只钉「它们进不进这几个谓词」——
+ * 三个谓词各答各的问题，认串了后果具体：`isKnowledgeProjectId` 若认进技能 id，SKILL.md
+ * 打开就会被套上知识库条目卡（okf 兜底），而不是它自己那张 `skill` 卡。
  *
  * id 是整串比较的常量：不 trim、不忽略大小写、不认前缀 —— 形似的输入一律不算。
  */
@@ -22,12 +27,28 @@ import {
   KNOWLEDGE_PROJECT_ID,
   KNOWLEDGE_USER_PROJECT_ID
 } from './knowledge'
+import {
+  isSkillProjectId,
+  skillExternalProjectId,
+  SKILL_BUILTIN_PROJECT_ID,
+  SKILL_DEFAULT_PROJECT_ID
+} from './skillNotes'
 
 type MaybeId = string | null | undefined
 
 const REGISTRY_IDS = Object.values(REGISTRY_NOTE_PROJECT_IDS)
+/** 技能的三个形态：默认目录 / 内置目录 / 一个外部目录 */
+const SKILL_IDS = [
+  SKILL_DEFAULT_PROJECT_ID,
+  SKILL_BUILTIN_PROJECT_ID,
+  skillExternalProjectId('ext')
+]
 
-/** 形似却不是的输入：空值三种、少字符、大小写、首尾空白、kind 名本身、一个普通项目的 uuid */
+/**
+ * 形似却不是的输入：空值三种、少字符、大小写、首尾空白、kind 名本身、一个普通项目的 uuid，
+ * 外加技能那三个形似 —— 少字符的 `__skills`、缺尾的 `__skills:x`、以及空目录名拼出的
+ * `__skills:__`（服务端拒空名，见 SSG-7；这里钉的是「拼出来了也不算」）
+ */
 const LOOKALIKES: MaybeId[] = [
   null,
   undefined,
@@ -37,6 +58,9 @@ const LOOKALIKES: MaybeId[] = [
   ' __bots__',
   '__bots__ ',
   'bot',
+  '__skills',
+  '__skills:x',
+  '__skills:__',
   '01923f6e-5b7a-7c3d-8e9f-0a1b2c3d4e5f'
 ]
 
@@ -63,20 +87,34 @@ describe('隐藏项目 id —— REGISTRY_NOTE_PROJECT_IDS / isRegistryNoteProje
     }
   })
 
-  it('HP-2 isRegistryNoteProjectId：五个注册表 id 为真；知识库 id 与形似输入一律为假', () => {
-    // 知识库的承载项目也是隐藏项目，但不是注册表目录 —— 两个谓词各答各的问题
+  it('HP-2 isRegistryNoteProjectId：五个注册表 id 为真；知识库 / 技能 id 与形似输入一律为假', () => {
+    // 知识库与技能的承载项目也是隐藏项目，但不是注册表目录 —— 三个谓词各答各的问题
     for (const id of REGISTRY_IDS) expect(isRegistryNoteProjectId(id), label(id)).toBe(true)
-    for (const id of [KNOWLEDGE_PROJECT_ID, KNOWLEDGE_USER_PROJECT_ID, ...LOOKALIKES]) {
+    for (const id of [
+      KNOWLEDGE_PROJECT_ID,
+      KNOWLEDGE_USER_PROJECT_ID,
+      ...SKILL_IDS,
+      ...LOOKALIKES
+    ]) {
       expect(isRegistryNoteProjectId(id), label(id)).toBe(false)
     }
   })
 
-  it('HP-3 isHiddenProjectId：知识库与每个注册表 id 为真；形似输入为假（日历圆点唯一的覆盖）', () => {
-    // 遍历表里的值而不是再抄一遍字面量：往表里加第五个注册表时，这条自动把它算进来
-    for (const id of [KNOWLEDGE_PROJECT_ID, KNOWLEDGE_USER_PROJECT_ID, ...REGISTRY_IDS]) {
+  it('HP-3 isHiddenProjectId：知识库 / 注册表 / 技能三族 id 全为真；形似输入为假（日历圆点唯一的覆盖）', () => {
+    // 遍历表里的值而不是再抄一遍字面量：往表里加第六个注册表时，这条自动把它算进来。
+    // 技能那三个是这一版新加的载体（默认 / 内置 / 每个外部目录一个）——漏认一个，
+    // 点开一份 SKILL.md 就会让一个没人认得的项目冒进项目列表、在日历上点出一个圆点
+    for (const id of [
+      KNOWLEDGE_PROJECT_ID,
+      KNOWLEDGE_USER_PROJECT_ID,
+      ...REGISTRY_IDS,
+      ...SKILL_IDS
+    ]) {
       expect(isHiddenProjectId(id), label(id)).toBe(true)
     }
     for (const id of LOOKALIKES) expect(isHiddenProjectId(id), label(id)).toBe(false)
+    // 技能那一支真的是经 isSkillProjectId 进来的（而不是恰好撞上别的谓词）
+    for (const id of SKILL_IDS) expect(isSkillProjectId(id), label(id)).toBe(true)
   })
 })
 
@@ -93,6 +131,9 @@ describe('只读的注册表笔记 —— isReadOnlyRegistryNoteProjectId', () =
       KNOWLEDGE_USER_PROJECT_ID,
       // 内置知识库也是只读的，但那一头由 knowledge 自己的判定管，不从这个谓词走
       KNOWLEDGE_BUILTIN_PROJECT_ID,
+      // 技能的内置载体同样只读，但那一头由 skillNotes 自己的谓词管（isReadOnlySkillProjectId）——
+      // 认进这个谓词，笔记本就会按「注册表笔记」的那条路去判只读，两套判定从此可以各走各的
+      ...SKILL_IDS,
       ...LOOKALIKES,
       '__agents_builtin',
       '__AGENTS_BUILTIN__',
@@ -108,13 +149,21 @@ describe('只读的注册表笔记 —— isReadOnlyRegistryNoteProjectId', () =
 })
 
 describe('知识库承载项目 id —— isKnowledgeProjectId', () => {
-  it('HP-4 只认三个知识库承载项目（id 按字面钉死）；每个注册表 id 与形似输入一律为假', () => {
+  it('HP-4 只认三个知识库承载项目（id 按字面钉死）；注册表 / 技能 id 与形似输入一律为假', () => {
     // 这个谓词不只喂隐藏项目过滤，笔记本属性卡的 okf 兜底也靠它。兜底那头最怕放宽 —— 认进 `__bots__`
-    // 这类 id，bot / agent / 策略 / hook 笔记本里暂时没有自述行的 md 就会被套上一张知识库条目卡
+    // 这类 id，bot / agent / 策略 / hook 笔记本里暂时没有自述行的 md 就会被套上一张知识库条目卡。
+    // 技能尤其要挡住：SKILL.md 的 frontmatter 本就没有 `shuvix:` 自述行，靠的正是笔记本传
+    // `frontmatterFallbackType: 'skill'` 兜底 —— 这里放宽一格，它就先被 okf 那张卡截走
     for (const id of ['__knowledge__', '__knowledge_user__']) {
       expect(isKnowledgeProjectId(id), label(id)).toBe(true)
     }
-    for (const id of [...REGISTRY_IDS, ...LOOKALIKES, '__knowledge_user', '__KNOWLEDGE__']) {
+    for (const id of [
+      ...REGISTRY_IDS,
+      ...SKILL_IDS,
+      ...LOOKALIKES,
+      '__knowledge_user',
+      '__KNOWLEDGE__'
+    ]) {
       expect(isKnowledgeProjectId(id), label(id)).toBe(false)
     }
   })

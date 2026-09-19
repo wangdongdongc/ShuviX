@@ -675,6 +675,9 @@ const api = {
 
   // ============ Skill 管理 ============
   skill: {
+    /** 打开 / 复用一个技能的 SKILL.md 笔记本（内置那份只读） */
+    openNote: (params: { name: string; title?: string }) =>
+      ipcRenderer.invoke('skill:openNote', params),
     /** 获取所有 Skill */
     list: () => ipcRenderer.invoke('skill:list'),
     /** 获取按目录分组的 Skill 列表 */

@@ -1,5 +1,6 @@
 import { ipcMain, dialog } from 'electron'
 import { skillService } from '../services/skillService'
+import { dropExternalSkillCarrier, openSkillNote } from '../services/skillNotes'
 import type { SkillUpdateParams, SkillDir } from '../types'
 
 /**
@@ -67,11 +68,20 @@ export function registerSkillHandlers(): void {
     }
   })
 
-  /** 移除外部 skill 源目录 */
-  ipcMain.handle('skill:removeExternalDir', (_event, name: string) => {
+  /**
+   * 移除外部 skill 源目录 —— 连同它的笔记本承载项目与那些会话一起清掉：目录都不在了，
+   * 那些会话指向的文件已经与本应用无关
+   */
+  ipcMain.handle('skill:removeExternalDir', async (_event, name: string) => {
     skillService.removeExternalDir(name)
+    await dropExternalSkillCarrier(name)
     return { success: true }
   })
+
+  /** 打开 / 复用一个技能的 SKILL.md 笔记本（按技能标识认；内置那份是只读的） */
+  ipcMain.handle('skill:openNote', (_event, params: { name: string; title?: string }) =>
+    openSkillNote(params.name, params.title)
+  )
 
   /** 切换分组总开关（关闭后整组 skills 失效） */
   ipcMain.handle(

@@ -125,7 +125,9 @@ function noteAgentWritten(): void {
  *   - bots：改名要迁会话绑定，侧栏与身份胶囊要重查（见 botService.noteWriting / noteWritten）；
  *   - agents：没有服务要观察（每次用到都现扫目录，写完即生效），但侧栏那一组把档案的显示名
  *     直接摆在屏幕上，而改名就发生在同一个窗口的笔记本里 —— 没有「切窗口」这一下可以兜底，
- *     所以写完广播一次 `agent.changed` 让它重扫。
+ *     所以写完广播一次 `agent.changed` 让它重扫；
+ * 技能的写入回执不在这里 —— 它不是注册表 md，落点也在子目录（`<根>/<技能名>/SKILL.md`），
+ * 归技能自己（skillService.noteFileWritten，由 filePreviewService 一并包住）。
  * policy / hook 的列表在设置页，那边的详情区自己盯着这份文件的 files.changed，不需要通知。
  */
 export async function observeRegistryWrite<T>(

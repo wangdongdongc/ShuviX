@@ -67,7 +67,6 @@ interface SettingsState {
     | 'policies'
     | 'tools'
     | 'mcp'
-    | 'skills'
     | 'voice'
     | 'telegramBots'
     | 'monitor'

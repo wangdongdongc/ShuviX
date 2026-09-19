@@ -933,6 +933,8 @@ declare global {
       clearAll: () => Promise<void>
     }
     skill: {
+      /** 打开 / 复用一个技能的 SKILL.md 笔记本（一份文件至多一条会话）；内置那份只读 */
+      openNote: (params: { name: string; title?: string }) => Promise<SessionInfo>
       list: () => Promise<Skill[]>
       listGrouped: () => Promise<SkillGroup[]>
       update: (params: SkillUpdateParams) => Promise<{ success: boolean }>

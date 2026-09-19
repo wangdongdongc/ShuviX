@@ -2845,6 +2845,284 @@ export function agentsSidebarPane(main: CdpClient): AgentsSidebarPane {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+// 侧栏「技能」分组（SkillGroup）+ 「添加外部技能目录」取名框（SkillDirDialog）
+//
+// 这一组比智能体那组**多一层**：技能是目录，所以目录成行、可折叠（`[data-skill-folder]`），
+// 而默认目录（`~/.shuvix/skills/`）刻意**不画文件夹行**，它的技能平铺在最后（`pl-2.5` 而非
+// `pl-6`）。于是「这一行归谁」不能靠全局选择器回答 —— 平铺行与某个目录下的行长得一样，只差
+// 缩进。`rowsUnder(dirName)` 从那行文件夹的 `nextElementSibling`（AnimatedCollapse 那层）里取，
+// `flatRows()` 取分组正文的**直接子元素**里带 `data-skill-row` 的那些，两者合起来才是全集。
+//
+// 锚点：组头 `[data-group="skills"]`、目录行 `[data-skill-folder=<dirName>]`、技能行
+// `[data-skill-row=<skill.name>]`（是**技能标识**，外部技能带 `<dirName>:` 前缀，与行上显示的
+// 短名不同）、两级禁用都用同一个 `data-skill-off`、取名框 `[data-skill-dir-dialog]`。
+// 折叠状态没有属性，只能看 chevron 的字形类（`.lucide-chevron-down` = 展开）——
+// 这是本组唯一按字形认的东西，动画本身不测。
+
+export interface SkillFolderShot {
+  /** 目录键：内置固定 `builtin`，外部是用户取的名字（默认目录不画行，不会出现在这里） */
+  dirName: string
+  /** 行上显示的字（内置是本地化的「内置」，外部就是目录名） */
+  label: string
+  /** 内置目录的锁徽标 */
+  locked: boolean
+  /** 整组开关关掉（`data-skill-off`） */
+  off: boolean
+  /** 展开态（chevron 朝下） */
+  open: boolean
+}
+
+export interface SkillRowShot {
+  /** 技能标识（外部技能带 `<dirName>:` 前缀）—— 宿主按它认 */
+  name: string
+  /** 行上显示的短名 */
+  label: string
+  /** 变淡：技能自己关了**或**整组关了（两者共用 `data-skill-off`） */
+  off: boolean
+  /** 缩进（`pl-6`）= 属于某个目录行；默认目录的平铺行不缩进 */
+  indented: boolean
+  active: boolean
+}
+
+export interface SkillDirDialogPane {
+  waitOpen(): Promise<void>
+  waitClosed(): Promise<void>
+  isOpen(): Promise<boolean>
+  /** 框头上那行只读路径（OS 选择器选中的目录） */
+  path(): Promise<string>
+  /** 输入框当前值（缺省预填目录名）；框不在返回 null */
+  name(): Promise<string | null>
+  /** 改名（native setter + input 事件 —— React 受控输入只认这一条路） */
+  setName(value: string): Promise<void>
+  /** 点「添加」；成功会自己关，失败停留并显示原因 */
+  submit(): Promise<void>
+  /** 宿主给的失败原因（原样显示）；没有为空串 */
+  error(): Promise<string>
+  cancel(): Promise<void>
+}
+
+export interface SkillsSidebarPane {
+  /** 组头显示的分组标签 */
+  label(): Promise<string>
+  /** 展开分组并等首次扫描落定 */
+  expand(): Promise<void>
+  /** 目录行（DOM 序 = 展示序：内置置顶 → 外部按添加顺序） */
+  folders(): Promise<SkillFolderShot[]>
+  /** 点一行目录并等折叠态翻面 */
+  toggleFolder(dirName: string): Promise<void>
+  /** 全部技能行（DOM 序） */
+  rows(): Promise<SkillRowShot[]>
+  /** 某个目录行下面的技能行（全局选择器分不出归属，见本节开头） */
+  rowsUnder(dirName: string): Promise<SkillRowShot[]>
+  /** 默认目录那一摞平铺行（分组正文的直接子元素） */
+  flatRows(): Promise<SkillRowShot[]>
+  /** 点一行技能并等它成为活动行（= 这份 SKILL.md 的笔记本成了活动会话） */
+  openSkill(name: string): Promise<void>
+  /** 当前活动行的技能标识；活动会话不是任何技能笔记时为 null */
+  activeRow(): Promise<string | null>
+  /** 组头菜单里的动作 id（开一次 ⋮、不选任何项） */
+  groupMenuIds(): Promise<string[] | null>
+  pickGroupMenu(actionId: string): Promise<void>
+  /** 目录行菜单里的动作 id */
+  folderMenuIds(dirName: string): Promise<string[] | null>
+  pickFolderMenu(dirName: string, actionId: string): Promise<void>
+  /** 技能行菜单里的动作 id */
+  skillMenuIds(name: string): Promise<string[] | null>
+  pickSkillMenu(name: string, actionId: string): Promise<void>
+  /** 组头菜单「刷新」—— 绕过宿主直接写盘不广播 `skill.changed`，需手动重扫 */
+  refresh(): Promise<void>
+  /** 空态文案（一个技能都没有时）；有内容返回空串 */
+  emptyText(): Promise<string>
+  /** 「添加外部技能目录」取名框 */
+  skillDirDialog(): SkillDirDialogPane
+}
+
+export function skillsSidebarPane(main: CdpClient): SkillsSidebarPane {
+  const HEADER = `document.querySelector('div[class*="group/header"][data-group="skills"]')`
+  const TOGGLE = `[...(${HEADER}?.querySelectorAll(':scope > button') ?? [])].find((b) => b.querySelector('span.truncate'))`
+  const COLLAPSE = `${HEADER}?.nextElementSibling`
+  // 分组正文 = 组头的下一个兄弟（AnimatedCollapse 的 grid 层）→ overflow 层 → SessionGroup 的内缩层
+  const BODY = `${COLLAPSE}?.firstElementChild?.firstElementChild`
+  const ALL_ROWS = `[...document.querySelectorAll('[data-skill-row]')]`
+  const ALL_FOLDERS = `[...document.querySelectorAll('[data-skill-folder]')]`
+  const ROW = (name: string): string =>
+    `document.querySelector('[data-skill-row=${JSON.stringify(name)}]')`
+  const FOLDER = (dirName: string): string =>
+    `document.querySelector('[data-skill-folder=${JSON.stringify(dirName)}]')`
+
+  const ROW_SHOT = `((r) => ({
+    name: r.getAttribute('data-skill-row') ?? '',
+    label: (r.querySelector('span.truncate')?.textContent ?? '').trim(),
+    off: r.hasAttribute('data-skill-off'),
+    indented: r.className.includes('pl-6'),
+    active: r.className.includes('bg-bg-active')
+  }))`
+  const FOLDER_SHOT = `((f) => ({
+    dirName: f.getAttribute('data-skill-folder') ?? '',
+    label: (f.querySelector('span.truncate')?.textContent ?? '').trim(),
+    locked: !!f.querySelector('.lucide-lock'),
+    off: f.hasAttribute('data-skill-off'),
+    open: !!f.querySelector('.lucide-chevron-down')
+  }))`
+
+  const shotsOf = (list: string): Promise<SkillRowShot[]> =>
+    main.eval<SkillRowShot[]>(`${list}.map(${ROW_SHOT})`)
+
+  /** 开某一处的 ⋮（不选任何项 = 取消）并回菜单里的动作 id */
+  const menuIds = async (scope: string, what: string): Promise<string[] | null> => {
+    await until(() => main.eval<boolean>(`${scope} !== null`), what)
+    const items = await openMenu(main, scope, 'menu-button')
+    return items ? items.filter((it) => it.id).map((it) => it.id as string) : null
+  }
+
+  const DIALOG = `document.querySelector('[data-skill-dir-dialog]')`
+  const DIALOG_INPUT = `${DIALOG}?.querySelector('input')`
+  const dialogOpen = (): Promise<boolean> => main.eval<boolean>(`${DIALOG} !== null`)
+  /** 页脚两颗按钮：倒数第二是取消、最后一颗是「添加」（头上那颗 X 不算） */
+  const clickDialogButton = async (fromEnd: number): Promise<void> => {
+    await main.eval(`(() => {
+      const buttons = [...(${DIALOG}?.querySelectorAll('button') ?? [])]
+      buttons[buttons.length - ${fromEnd}]?.click()
+      return true
+    })()`)
+    await sleep(200)
+  }
+
+  return {
+    label: () =>
+      main.eval<string>(`(${HEADER}?.querySelector('span.truncate')?.textContent ?? '').trim()`),
+
+    expand: async () => {
+      await until(() => main.eval<boolean>(`${HEADER} !== null`), 'skills group header')
+      const open = await main.eval<boolean>(`${COLLAPSE}?.style.gridTemplateRows === '1fr'`)
+      if (!open) await main.eval(`(${TOGGLE})?.click()`)
+      // 扫描是懒的：展开才发第一次请求。正文有内容才算落定 —— 空态也渲染一个元素，
+      // 所以这一条对「一个技能都没有」的实例同样成立
+      await until(
+        () => main.eval<boolean>(`(${BODY}?.childElementCount ?? 0) > 0`),
+        'skills group scanned'
+      )
+    },
+
+    folders: () => main.eval<SkillFolderShot[]>(`${ALL_FOLDERS}.map(${FOLDER_SHOT})`),
+
+    toggleFolder: async (dirName) => {
+      await until(
+        () => main.eval<boolean>(`${FOLDER(dirName)} !== null`),
+        `skill folder "${dirName}"`
+      )
+      const before = await main.eval<boolean>(
+        `!!${FOLDER(dirName)}?.querySelector('.lucide-chevron-down')`
+      )
+      await main.eval(`${FOLDER(dirName)}.click()`)
+      await until(
+        async () =>
+          (await main.eval<boolean>(
+            `!!${FOLDER(dirName)}?.querySelector('.lucide-chevron-down')`
+          )) !== before,
+        `skill folder "${dirName}" toggled`
+      )
+    },
+
+    rows: () => shotsOf(ALL_ROWS),
+
+    // 目录行的下一个兄弟就是它那层 AnimatedCollapse（折叠时子元素仍在 DOM 里，只是高度 0）
+    rowsUnder: (dirName) =>
+      shotsOf(
+        `[...(${FOLDER(dirName)}?.nextElementSibling?.querySelectorAll('[data-skill-row]') ?? [])]`
+      ),
+
+    flatRows: () =>
+      shotsOf(`[...(${BODY}?.children ?? [])].filter((el) => el.hasAttribute('data-skill-row'))`),
+
+    openSkill: async (name) => {
+      await until(() => main.eval<boolean>(`${ROW(name)} !== null`), `skill row "${name}"`)
+      await main.eval(`${ROW(name)}.click()`)
+      // 打开笔记是异步的（openNote → 重拉会话列表 → 选中）
+      await until(
+        () => main.eval<boolean>(`(${ROW(name)}?.className ?? '').includes('bg-bg-active')`),
+        `skill row "${name}" active`
+      )
+    },
+
+    activeRow: () =>
+      main.eval<string | null>(
+        `${ALL_ROWS}.find((r) => r.className.includes('bg-bg-active'))?.getAttribute('data-skill-row') ?? null`
+      ),
+
+    groupMenuIds: () => menuIds(HEADER, 'skills group header'),
+
+    pickGroupMenu: (actionId) => pickFromMenu(main, HEADER, actionId, 'skills group header'),
+
+    folderMenuIds: (dirName) => menuIds(FOLDER(dirName), `skill folder "${dirName}"`),
+
+    pickFolderMenu: async (dirName, actionId) => {
+      await until(
+        () => main.eval<boolean>(`${FOLDER(dirName)} !== null`),
+        `skill folder "${dirName}"`
+      )
+      await pickFromMenu(main, FOLDER(dirName), actionId, `skill folder "${dirName}"`)
+    },
+
+    skillMenuIds: (name) => menuIds(ROW(name), `skill row "${name}"`),
+
+    pickSkillMenu: async (name, actionId) => {
+      await until(() => main.eval<boolean>(`${ROW(name)} !== null`), `skill row "${name}"`)
+      await pickFromMenu(main, ROW(name), actionId, `skill row "${name}"`)
+    },
+
+    refresh: async () => {
+      await pickFromMenu(main, HEADER, 'refresh', 'skills group header')
+      await sleep(200)
+    },
+
+    emptyText: () =>
+      main.eval<string>(`(() => {
+        const kids = [...(${BODY}?.children ?? [])]
+        // 空态与有内容是同一个三元的两支：空态时正文只有那一个提示 div
+        if (kids.length !== 1) return ''
+        const only = kids[0]
+        if (only.hasAttribute('data-skill-row') || only.querySelector('[data-skill-folder]')) return ''
+        return (only.textContent ?? '').trim()
+      })()`),
+
+    skillDirDialog: () => ({
+      waitOpen: async () => {
+        await until(dialogOpen, 'skill dir dialog open')
+      },
+      waitClosed: async () => {
+        // 关闭走 120ms 动画后才卸载
+        await until(async () => !(await dialogOpen()), 'skill dir dialog closed')
+      },
+      isOpen: dialogOpen,
+      path: () =>
+        main.eval<string>(
+          `(${DIALOG}?.querySelector('p[class*="font-mono"]')?.textContent ?? '').trim()`
+        ),
+      name: () => main.eval<string | null>(`${DIALOG_INPUT}?.value ?? null`),
+      setName: async (value) => {
+        await main.eval(`(() => {
+          const el = ${DIALOG_INPUT}
+          if (!el) return false
+          const setter = Object.getOwnPropertyDescriptor(
+            window.HTMLInputElement.prototype, 'value'
+          ).set
+          setter.call(el, ${JSON.stringify(value)})
+          el.dispatchEvent(new Event('input', { bubbles: true }))
+          return true
+        })()`)
+      },
+      submit: () => clickDialogButton(1),
+      error: () =>
+        main.eval<string>(
+          `(${DIALOG}?.querySelector('p[class*="text-red"]')?.textContent ?? '').trim()`
+        ),
+      cancel: () => clickDialogButton(2)
+    })
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 // 「新建 Bot 会话」单选框（BotSessionDialog）+ bot 会话头部身份胶囊（BotBindingChip）+
 // 空 bot 会话的自我介绍（WelcomeView 的 BotEmptyState）
 //

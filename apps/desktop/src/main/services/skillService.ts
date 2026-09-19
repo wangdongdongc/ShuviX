@@ -8,12 +8,13 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync } from 'fs'
-import { join } from 'path'
+import { dirname, join, resolve, sep } from 'path'
 import i18next from 'i18next'
 import type { Skill, SkillUpdateParams, SkillDir, SkillGroup } from '../types'
 import type { SlashCommand } from '@shuvix/chat-protocol/types/slashCommand'
 import log from 'electron-log/main'
 import { getDefaultSkillsDir, getBuiltinSkillsDir } from '../utils/paths'
+import { appEventBus } from '../utils/appEventBus'
 
 /** 配置文件结构 */
 interface SkillConfig {
@@ -30,9 +31,14 @@ type SkillSource = 'default' | 'project' | 'external' | 'builtin'
 /** 内置 skill 的固定目录名（对应 dirName 字段，构建出 builtin:<name> 标识） */
 const BUILTIN_DIR_NAME = 'builtin'
 
+/** 笔记本写入后广播 `skill.changed` 的合并窗口（自动保存每 200ms 落一次盘） */
+const CHANGED_DEBOUNCE_MS = 300
+
 class SkillService {
   /** skills 根目录 */
   private readonly skillsDir: string
+  /** 笔记本写入 → `skill.changed` 的合并窗口计时器（见 noteFileWritten） */
+  private changedTimer: ReturnType<typeof setTimeout> | null = null
 
   constructor() {
     this.skillsDir = getDefaultSkillsDir()
@@ -68,6 +74,8 @@ class SkillService {
   private writeConfig(config: SkillConfig): void {
     const configPath = join(this.skillsDir, '.config.json')
     writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8')
+    // 配置是启用开关 / 分组开关 / 外部目录的唯一落点：从这里广播，侧栏那一组就不必各处补通知
+    appEventBus.publish({ type: 'skill.changed' })
   }
 
   /**
@@ -376,12 +384,31 @@ class SkillService {
       const content = params.content ?? skill.content
       const md = `---\nname: ${params.name}\ndescription: "${desc}"\n---\n\n${content}`
       writeFileSync(join(dir, 'SKILL.md'), md, 'utf-8')
+      appEventBus.publish({ type: 'skill.changed' })
     }
   }
 
-  /** 删除默认目录中的 Skill（移除整个子目录） */
+  /**
+   * 删除默认目录中的 Skill（移除整个子目录）。
+   *
+   * 两处刻意不省：
+   *   - **按注册表定位、删 `basePath`**，不拿 `name` 去拼路径 —— 技能的 name 来自 SKILL.md
+   *     的 frontmatter，与磁盘目录名并不总是相等（见 loadSkillFromDir），拼出来的路径可能
+   *     根本不存在：那会变成「配置清了、事件发了、目录纹丝不动」的静默失败；
+   *   - **删之前再确认这个目录就在默认根的下一层**。`name` 来自渲染进程，按不可信入参处理
+   *     （同 registryNotes 对文件名的白名单）：`rmSync(recursive)` 是不可逆操作，一个
+   *     `../` 就能出界。
+   */
   deleteDefaultSkill(name: string): void {
-    const dir = join(this.skillsDir, name)
+    const skill = this.findByName(name)
+    if (!skill || skill.source !== 'default') {
+      throw new Error(`Skill "${name}" not found in the default skills directory`)
+    }
+    const dir = resolve(skill.basePath)
+    const parent = resolve(this.skillsDir)
+    if (dirname(dir) !== parent || dir === parent) {
+      throw new Error(`Refusing to delete outside the default skills directory: ${dir}`)
+    }
     if (existsSync(dir)) {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -390,6 +417,30 @@ class SkillService {
     const config = this.readConfig()
     config.disabled = config.disabled.filter((n) => n !== name)
     this.writeConfig(config)
+  }
+
+  /**
+   * 这个绝对路径是不是落在**可写的**技能根下（默认目录或某个外部目录）——笔记本写完
+   * `SKILL.md` 之后据此广播 `skill.changed`，侧栏那一组才跟得上改名。
+   * 内置目录刻意不算：它只读，那儿本就不该有写入。
+   */
+  isInsideWritableRoot(absPath: string): boolean {
+    const roots = [this.skillsDir, ...this.listExternalDirs().map((d) => d.path)]
+    return roots.some((root) => absPath.startsWith(root.endsWith(sep) ? root : root + sep))
+  }
+
+  /**
+   * 笔记本刚往某个路径落了一笔盘：落在可写的技能根下就（合并窗口内）广播一次 `skill.changed`,
+   * 让侧栏那一组重扫 —— 技能的行标签取自 SKILL.md 的 frontmatter，改名就发生在笔记本里，
+   * 没有「切窗口」这一下可以兜底。合并窗口的理由同 bot / agent：自动保存每 200ms 落一次盘。
+   */
+  noteFileWritten(absPath: string): void {
+    if (!this.isInsideWritableRoot(absPath)) return
+    if (this.changedTimer) clearTimeout(this.changedTimer)
+    this.changedTimer = setTimeout(() => {
+      this.changedTimer = null
+      appEventBus.publish({ type: 'skill.changed' })
+    }, CHANGED_DEBOUNCE_MS)
   }
 
   /** 获取 skills 根目录路径 */
@@ -404,8 +455,29 @@ class SkillService {
     return this.readConfig().dirs
   }
 
-  /** 添加外部 skill 源目录 */
+  /**
+   * 添加外部 skill 源目录。
+   *
+   * 目录名不是装饰：它是组内技能标识的前缀（`<dirName>:<skillName>`）、分组的键、以及笔记本
+   * 承载项目 id 的一段（`__skills:<dirName>__`）。所以三条准入不能省：
+   *   - **不能为空**：空名拼出的承载 id 不被 `isSkillProjectId` 认作技能项目，那个隐藏载体
+   *     会就此出现在项目列表与日历上；
+   *   - **不能含 `:`**：标识按第一个冒号切，含冒号的目录名会让「哪一半是目录」整个错位；
+   *   - **不能占用保留组键**（`default` / `builtin` / `project`）：它们在分组、启用判定与侧栏
+   *     渲染里都当作来源标记用 —— 取名 `builtin` 会让这个外部目录被当成内置，点开的是另一个
+   *     根下的文件。
+   */
   addExternalDir(dir: SkillDir): void {
+    const name = dir.name.trim()
+    if (!name) {
+      throw new Error('Directory name is required')
+    }
+    if (name.includes(':')) {
+      throw new Error('Directory name cannot contain ":"')
+    }
+    if (name === 'default' || name === BUILTIN_DIR_NAME || name === 'project') {
+      throw new Error(`Directory name "${name}" is reserved`)
+    }
     if (!existsSync(dir.path)) {
       throw new Error(`Directory does not exist: ${dir.path}`)
     }
@@ -414,19 +486,22 @@ class SkillService {
     }
 
     const config = this.readConfig()
-    if (config.dirs.some((d) => d.name === dir.name)) {
-      throw new Error(`Directory name "${dir.name}" already exists`)
+    // 落库的是 trim 过的那个名字 —— 重名判定与之后的一切（标识前缀、承载 id）都按它算
+    if (config.dirs.some((d) => d.name === name)) {
+      throw new Error(`Directory name "${name}" already exists`)
     }
     if (config.dirs.some((d) => d.path === dir.path)) {
       throw new Error(`Directory path "${dir.path}" already added`)
     }
 
-    config.dirs.push({ name: dir.name, path: dir.path })
+    config.dirs.push({ name, path: dir.path })
     this.writeConfig(config)
   }
 
   /** 移除外部 skill 源目录 */
-  removeExternalDir(name: string): void {
+  removeExternalDir(rawName: string): void {
+    // 落库的是 trim 过的名字（见 addExternalDir），移除按同一口径找，免得一对读写各认各的
+    const name = rawName.trim()
     const config = this.readConfig()
     const prefix = `${name}:`
     config.dirs = config.dirs.filter((d) => d.name !== name)

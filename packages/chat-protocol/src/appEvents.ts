@@ -46,6 +46,12 @@ export type AppEvent =
    * 要回执；口径也一致：只覆盖经宿主落盘的写入，外部编辑器由窗口聚焦时的重扫兜底。
    */
   | { type: 'agent.changed' }
+  /**
+   * 技能注册表变化（启用开关 / 增删外部目录 / 删除技能 / 经笔记本落盘的 SKILL.md 编辑）——
+   * 信号事件，消费者重拉 skill.listGrouped。与 agent.changed 同口径：只覆盖经宿主落盘的变更，
+   * 用户自己往目录里丢技能由窗口聚焦时的重扫兜底。
+   */
+  | { type: 'skill.changed' }
   | { type: 'pinChat.changed'; pinnedSessionIds: string[] }
   | { type: 'widget.changed' }
   /**

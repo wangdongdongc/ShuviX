@@ -13,6 +13,7 @@ import {
   isKnowledgeProjectId
 } from '@shuvix/chat-protocol/knowledge'
 import { isReadOnlyRegistryNoteProjectId } from '@shuvix/chat-protocol/registryNotes'
+import { isReadOnlySkillProjectId, isSkillProjectId } from '@shuvix/chat-protocol/skillNotes'
 import { NotebookView, type NotebookViewProps } from './NotebookView'
 import { useFocusDim } from '../sidebar/useFocusDim'
 
@@ -44,7 +45,9 @@ export function NotebookSession({
   // 随应用发布的两类笔记（内置知识库的说明书、内置 agent 档案的 md）：只读 —— 编辑器只渲染，
   // 也不给输入框（notebook agent 能 edit 文件）。改它没有意义：下次更新整目录被替换
   const readOnly =
-    projectId === KNOWLEDGE_BUILTIN_PROJECT_ID || isReadOnlyRegistryNoteProjectId(projectId)
+    projectId === KNOWLEDGE_BUILTIN_PROJECT_ID ||
+    isReadOnlyRegistryNoteProjectId(projectId) ||
+    isReadOnlySkillProjectId(projectId)
   const { handleInputResponse } = useChatActions(sessionId)
   // 悬浮输入卡片实高 → 根容器 CSS 变量：编辑器滚动区据此给文末让位（.cm-scroller 的
   // padding-bottom，见 atomic-panel.css）。直接写 DOM 变量而非 state —— 高度随抽屉
@@ -59,7 +62,14 @@ export function NotebookSession({
         path={path}
         sessionId={sessionId}
         caps={caps}
-        frontmatterFallbackType={inKnowledgeBase ? KNOWLEDGE_MARKER_TYPE : undefined}
+        // 技能的 SKILL.md 是 Claude Code 的通用格式，没有 `shuvix:` 自述行 —— 不兜底就是裸 YAML
+        frontmatterFallbackType={
+          inKnowledgeBase
+            ? KNOWLEDGE_MARKER_TYPE
+            : isSkillProjectId(projectId)
+              ? 'skill'
+              : undefined
+        }
         readOnly={readOnly}
       />
       {/* 悬浮输入框：绝对贴底、背景透明不挡正文；对话抽屉与审批卡并入同一张卡片。

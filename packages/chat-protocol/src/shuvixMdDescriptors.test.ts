@@ -50,6 +50,31 @@ describe('okf 描述符 ↔ 知识库契约', () => {
   })
 })
 
+describe('skill 描述符 ↔ SKILL.md 的两个键', () => {
+  it('SMD-1 只有 name / description 两行：name 走等宽、description 走单行文本', () => {
+    // SKILL.md 与 Claude Code 的 skills 通用，frontmatter 只有这两个键、**没有 `shuvix:` 自述行**——
+    // 这张卡不靠标记选中，而是由技能笔记本传 `frontmatterFallbackType: 'skill'` 兜底。多列一个键
+    // 就是在卡上凭空造一个 ShuviX 私有字段；少列一个，那一行落回通用 key/value 行。
+    // description 是**触发条件**（agent 靠它判断该不该加载这个技能），不是摘要，所以是单行 text：
+    // 给 prose 会排成段落，诱人把它写成介绍
+    const d = descriptorForType('skill')
+    expect(d).toBeTruthy()
+    expect(d!.fields.map((f) => [f.key, f.kind])).toEqual([
+      ['name', 'mono'],
+      ['description', 'text']
+    ])
+  })
+})
+
+describe('描述符表本身', () => {
+  it('SMD-2 type 两两不重复（descriptorForType 取首个命中，撞名的那张永远选不中）', () => {
+    const types = SHUVIX_MD_DESCRIPTORS.map((d) => d.type)
+    expect(new Set(types).size).toBe(types.length)
+    // 顺带钉住「查得到」：每个 type 都能经 descriptorForType 回到自己那张
+    for (const d of SHUVIX_MD_DESCRIPTORS) expect(descriptorForType(d.type)).toBe(d)
+  })
+})
+
 describe('全部描述符的 labelKey 均存在于 en 文案', () => {
   it('labelKey 逐段可解析（打错的键会把行标签显示成键名本身）', () => {
     for (const d of SHUVIX_MD_DESCRIPTORS) {

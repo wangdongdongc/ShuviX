@@ -92,6 +92,13 @@ export type {
   AgentGroupItem,
   AgentGroupInvalidFile
 } from './sidebar/AgentGroup'
+export { SkillGroup } from './sidebar/SkillGroup'
+export type {
+  SkillGroupProps,
+  SkillGroupAdapter,
+  SkillGroupItem,
+  SkillGroupFolder
+} from './sidebar/SkillGroup'
 export { useProjects } from './sidebar/useProjects'
 export type { UseProjectsReturn, ProjectRef } from './sidebar/useProjects'
 export { useSessionDelete } from './sidebar/useSessionDelete'

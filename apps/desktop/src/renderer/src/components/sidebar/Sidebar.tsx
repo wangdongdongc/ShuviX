@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { ArrowUpCircle } from 'lucide-react'
 import { getChatApi, useChatStore } from '@shuvix/chat-ui'
 import { REGISTRY_NOTE_PROJECT_IDS } from '@shuvix/chat-protocol/registryNotes'
+import { isSkillProjectId } from '@shuvix/chat-protocol/skillNotes'
 import {
   Sidebar as SharedSidebar,
   AgentGroup,
@@ -11,6 +12,9 @@ import {
   type BotGroupAdapter,
   KnowledgeGroup,
   type KnowledgeGroupAdapter,
+  SkillGroup,
+  type SkillGroupAdapter,
+  type SkillGroupFolder,
   useProjects,
   useSessionDelete,
   SessionConfigDialog
@@ -19,6 +23,7 @@ import { useUpdateStore } from '../../stores/updateStore'
 import { usePinChatStore } from '../../stores/pinChatStore'
 import { ProjectEditDialog } from './ProjectEditDialog'
 import { newAgentTemplate } from './agentTemplate'
+import { SkillDirDialog } from './SkillDirDialog'
 import { ConfirmDialog } from '../common/ConfirmDialog'
 import { fileNameOf, uniqueName } from '../common/registryFiles'
 
@@ -31,8 +36,9 @@ import { fileNameOf, uniqueName } from '../common/registryFiles'
  *   - Bots 置顶分组（BotGroup 经 groupsPrepend 注入，接 window.api.bot.*；点行开 / 复用该文件的
  *     笔记本会话，删除的确认框在这里）+ 智能体档案置顶分组（AgentGroup，接 window.api.subAgent.*；
  *     用户档案点行开可编辑的笔记本，内置档案点行开**随包发布那份 md 的只读笔记本**，右键才是
- *     「创建覆盖副本」）+ 知识库置顶分组（KnowledgeGroup，接 window.api.knowledge.*，
- *     点行开 / 复用条目的笔记本会话）
+ *     「创建覆盖副本」）+ 技能置顶分组（SkillGroup，接 window.api.skill.*；目录成行、默认目录的
+ *     技能平铺，点行开那个技能 SKILL.md 的笔记本，启用开关与增删在菜单里）+ 知识库置顶分组
+ *     （KnowledgeGroup，接 window.api.knowledge.*，点行开 / 复用条目的笔记本会话）
  *   - 底部更新提示。侧栏只有项目视图 —— 日历已迁至右面板 Calendar tab（CalendarPanel）
  *   - 归档项目的恢复 / 删除已移至「设置 → Projects → 已归档」
  */
@@ -55,6 +61,12 @@ export function Sidebar(): React.JSX.Element {
   const [confirmingAgentDelete, setConfirmingAgentDelete] = useState<
     { name: string; displayName: string; fileName: string } | { fileName: string } | null
   >(null)
+  /** 待确认删除的技能（整个子目录）或待移除的外部技能目录 */
+  const [confirmingSkill, setConfirmingSkill] = useState<
+    { kind: 'skill'; name: string } | { kind: 'dir'; dirName: string } | null
+  >(null)
+  /** 已选好目录、正在给它取名（添加外部技能目录的第二步） */
+  const [namingSkillDir, setNamingSkillDir] = useState<string | null>(null)
 
   // 在指定项目下新建会话（文件夹流程用）
   const handleNewChat = async (projectId: string | null): Promise<void> => {
@@ -265,6 +277,88 @@ export function Sidebar(): React.JSX.Element {
   )
 
   /**
+   * 技能分组能力注入 —— 清单按**展示顺序**重排：内置置顶 → 用户添加的外部目录 → 默认目录
+   * （分组组件按 `isDefault` 决定「画不画那行文件夹」，默认目录的技能平铺在最后）。项目级技能
+   * 刻意不列：它随当前会话的项目变，而这一组是全局的，混在一起就看不出「当前生不生效」。
+   * 点一行开的是那个技能 `SKILL.md` 的笔记本（main 侧按技能标识找文件、去重会话）；
+   * 开关 / 增删目录 / 删除技能落回 window.api.skill.*，写完由 `skill.changed` 让本组重扫。
+   * 引用必须稳定（useMemo）：分组以 adapter 为扫描依赖。
+   */
+  const skillGroupAdapter = useMemo<SkillGroupAdapter>(
+    () => ({
+      list: async () => {
+        const groups = await window.api.skill.listGrouped()
+        const toFolder = (g: (typeof groups)[number]): SkillGroupFolder => ({
+          dirName: g.dirName,
+          dirPath: g.dirPath,
+          isDefault: g.isDefault,
+          isBuiltin: g.dirName === 'builtin',
+          isEnabled: g.isEnabled,
+          skills: g.skills.map((skill) => ({
+            name: skill.name,
+            // 外部技能的标识带目录前缀，行上只显示技能自己的名字
+            displayName: skill.name.includes(':')
+              ? skill.name.slice(skill.name.indexOf(':') + 1)
+              : skill.name,
+            // 磁盘目录名取自 basePath —— 技能的 name 来自 SKILL.md 的 frontmatter，两者不一定相等
+            dirEntry: skill.basePath.split(/[\\/]/).filter(Boolean).pop() ?? skill.name,
+            description: skill.description,
+            isEnabled: skill.isEnabled
+          }))
+        })
+        const builtin = groups.filter((g) => g.dirName === 'builtin').map(toFolder)
+        const external = groups
+          .filter((g) => !g.isDefault && g.dirName !== 'builtin' && g.dirName !== 'project')
+          .map(toFolder)
+        const def = groups.filter((g) => g.isDefault).map(toFolder)
+        return [...builtin, ...external, ...def]
+      },
+      open: async (skill) => {
+        let session: { id: string }
+        try {
+          session = await window.api.skill.openNote({ name: skill.name, title: skill.displayName })
+        } catch {
+          return // 技能目录已不在（清单过期）—— skill.changed / 聚焦重扫会把这一行拿掉
+        }
+        useChatStore.getState().setSessions(await getChatApi().session.list())
+        setActiveSessionId(session.id)
+      },
+      setSkillEnabled: (skill, isEnabled) =>
+        window.api.skill.update({ name: skill.name, isEnabled }),
+      setFolderEnabled: (folder, isEnabled) =>
+        window.api.skill.setGroupEnabled({ dirName: folder.dirName, isEnabled }),
+      addFolder: async () => {
+        // 两步：先让 OS 选目录，再给它取名（名字会成为组内技能标识的前缀，不能重名）
+        const picked = await window.api.skill.pickExternalDir()
+        if (picked.success && picked.path) setNamingSkillDir(picked.path)
+      },
+      removeFolder: (folder) => setConfirmingSkill({ kind: 'dir', dirName: folder.dirName }),
+      deleteSkill: (skill) => setConfirmingSkill({ kind: 'skill', name: skill.name }),
+      openFolder: (folder) => window.api.app.openFolder(folder.dirPath)
+    }),
+    [setActiveSessionId]
+  )
+
+  /**
+   * 确认删除技能 / 移除外部目录。删掉的正是主区开着的那份笔记时顺手离开它 —— 留着接着打字，
+   * 自动保存会把刚删掉的文件写回来（移除目录时 main 侧会把那一组笔记会话一并清掉）。
+   */
+  const handleSkillConfirm = async (
+    target: { kind: 'skill'; name: string } | { kind: 'dir'; dirName: string }
+  ): Promise<void> => {
+    setConfirmingSkill(null)
+    if (target.kind === 'skill') await window.api.skill.deleteDefault(target.name)
+    else await window.api.skill.removeExternalDir(target.dirName)
+    const { sessions, activeSessionId } = useChatStore.getState()
+    const active = sessions.find((s) => s.id === activeSessionId)
+    if (isSkillProjectId(active?.projectId)) {
+      useChatStore.getState().setSessions(await getChatApi().session.list())
+      const stillThere = (await getChatApi().session.list()).some((s) => s.id === activeSessionId)
+      if (!stillThere || target.kind === 'skill') setActiveSessionId(null)
+    }
+  }
+
+  /**
    * 知识库分组能力注入 —— 清单（只读），打开一条即打开 / 复用绑定它的笔记本会话（main 侧去重），
    * 刷新列表并选中；三个「新建」交给 main（建目录 / 按标题派生文件名写条目）。
    * 引用必须稳定（useMemo）：分组以 adapter 为扫描依赖。
@@ -319,6 +413,7 @@ export function Sidebar(): React.JSX.Element {
         <>
           <BotGroup adapter={botGroupAdapter} />
           <AgentGroup adapter={agentGroupAdapter} />
+          <SkillGroup adapter={skillGroupAdapter} />
           <KnowledgeGroup adapter={knowledgeAdapter} />
         </>
       }
@@ -349,6 +444,31 @@ export function Sidebar(): React.JSX.Element {
               cancelText={t('common.cancel')}
               onConfirm={() => void handleBotDelete(confirmingBotDelete)}
               onCancel={() => setConfirmingBotDelete(null)}
+            />
+          )}
+          {confirmingSkill && (
+            <ConfirmDialog
+              title={
+                confirmingSkill.kind === 'skill'
+                  ? t('settings.skillDeleteConfirm', { name: confirmingSkill.name })
+                  : t('settings.skillDirRemoveConfirm', { name: confirmingSkill.dirName })
+              }
+              confirmText={
+                confirmingSkill.kind === 'skill' ? t('common.delete') : t('settings.skillDirRemove')
+              }
+              cancelText={t('common.cancel')}
+              onConfirm={() => void handleSkillConfirm(confirmingSkill)}
+              onCancel={() => setConfirmingSkill(null)}
+            />
+          )}
+          {namingSkillDir && (
+            <SkillDirDialog
+              path={namingSkillDir}
+              onSubmit={async (name) => {
+                const r = await window.api.skill.addExternalDir({ name, path: namingSkillDir })
+                return r.success ? null : (r.reason ?? 'Failed to add directory')
+              }}
+              onClose={() => setNamingSkillDir(null)}
             />
           )}
           {confirmingAgentDelete && (

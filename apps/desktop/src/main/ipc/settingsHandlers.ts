@@ -3,6 +3,7 @@ import { settingsService, KNOWN_SETTINGS } from '../services/settingsService'
 import { changeLanguage } from '../i18n'
 import { refreshBuiltinKnowledge } from '../services/knowledge'
 import { syncKnowledgeBuiltinProject } from '../services/knowledgeNotes'
+import { syncSkillBuiltinProject } from '../services/skillNotes'
 import { appEventBus } from '../utils/appEventBus'
 import type { SettingsSetParams } from '../types'
 
@@ -52,6 +53,9 @@ export function registerSettingsHandlers(): void {
       // 把显示名直接摆在屏幕上，而它只在展开 / 窗口聚焦 / agent.changed 时重扫 —— 语言就是在
       // 另一个窗口切的，回主窗前那批行还挂着上一种语言的名字
       appEventBus.publish({ type: 'agent.changed' })
+      // 内置技能同样按语言分目录：承载项目改指新语言那一版，侧栏那一组重扫（行标签取自 SKILL.md）
+      syncSkillBuiltinProject()
+      appEventBus.publish({ type: 'skill.changed' })
     }
     // 主题变更时同步 nativeTheme（让 widget 等 webContents 的 prefers-color-scheme 跟随）
     if (params.key === 'general.theme') {

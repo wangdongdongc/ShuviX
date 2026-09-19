@@ -54,3 +54,17 @@ describe('MCP 可用性按配置算，不按连接状态', () => {
     expect(filterAvailableTools(['mcp:a', 'bash'])).toEqual(['bash'])
   })
 })
+
+describe('技能的两级开关同样落在这里', () => {
+  it('SSG-16: 整组关掉后，会话里存着的 skill:<name> 被 filterAvailableTools 抹掉', () => {
+    // 技能的可用性入口只有一个：`skillService.findEnabled()`，而它已经把两级开关（单个技能 +
+    // 整个目录）算完了 —— 侧栏把一整个目录关掉，模型的工具表里就不该再有那一族。
+    // 这里**只桩 findEnabled**、不写 `.config.json`：两级开关怎么算是 skillServiceGroups 的活
+    // （SSG-3/5/6），这一条只钉「算完之后工具层跟着变」这半段接缝
+    expect(filterAvailableTools(['skill:x', 'bash'])).toEqual(['skill:x', 'bash'])
+
+    mocks.findEnabled.mockReturnValue([])
+    expect(filterAvailableTools(['skill:x', 'bash'])).toEqual(['bash'])
+    expect(getAllToolNames()).not.toContain('skill:x')
+  })
+})

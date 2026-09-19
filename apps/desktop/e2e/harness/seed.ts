@@ -131,11 +131,57 @@ export function seedCustomProvider(
  * 剔除不存在的条目，光往会话设置里写一个查无此人的名字是断言不到的。
  */
 export function seedSkill(app: E2EApp, name: string, description = 'e2e seeded skill'): string {
-  const dir = join(app.home, '.shuvix', 'skills', name)
-  mkdirSync(dir, { recursive: true })
-  const filePath = join(dir, 'SKILL.md')
-  writeFileSync(filePath, `---\nname: ${name}\ndescription: ${description}\n---\n\nSKILL BODY.\n`)
+  return seedSkillIn(join(app.home, '.shuvix', 'skills'), name, { description })
+}
+
+export interface SkillSeed {
+  /** 触发条件（侧栏行的 title 提示；卡片上的 description 字段） */
+  description?: string
+  /**
+   * frontmatter 里的 `name`。**缺省等于目录名**；写成别的就是「目录名与 name 不同」那一类
+   * 技能 —— 宿主按 `basePath` 的最后一段拼 notebookPath、按注册表定位删除，两处都不能
+   * 从 name 切（见 SKN-7 / SSG-14）
+   */
+  frontmatterName?: string
+  /** 正文（笔记本里读到的就是它）—— 默认带一行纯散文，好当「读的是盘上这一份」的特征串 */
+  body?: string
+}
+
+/**
+ * 往**任意目录**写一个技能（`<dir>/<dirEntry>/SKILL.md`），返回 SKILL.md 的路径。
+ *
+ * 一个技能是目录而不是单文件，所以种子也是目录：`seedSkill` 是它在默认根上的特例，
+ * 外部目录与「目录名 ≠ frontmatter name」的样本都从这里来。
+ */
+export function seedSkillIn(dir: string, dirEntry: string, seed: SkillSeed = {}): string {
+  const base = join(dir, dirEntry)
+  mkdirSync(base, { recursive: true })
+  const filePath = join(base, 'SKILL.md')
+  const lines = [
+    '---',
+    `name: ${seed.frontmatterName ?? dirEntry}`,
+    `description: ${seed.description ?? 'e2e seeded skill'}`,
+    '---',
+    '',
+    seed.body ?? `Seeded body for ${dirEntry}.`,
+    ''
+  ]
+  writeFileSync(filePath, lines.join('\n'))
   return filePath
+}
+
+/**
+ * 造一个**外部技能目录**（隔离实例 HOME 下、技能默认根之外）并种两个技能，返回它的绝对路径。
+ *
+ * 只造目录、不落配置：把它加进来要走 UI 那两步（OS 选择器桩 → 取名框），这正是 SK-8 要测的
+ * 东西；两个技能是为了让「整组开关」与「组内每一行都变淡」有不止一行可断。
+ */
+export function seedExternalSkillDir(app: E2EApp, dirName: string): string {
+  const dir = join(app.home, 'external-skills', dirName)
+  mkdirSync(dir, { recursive: true })
+  seedSkillIn(dir, `${dirName}-one`, { description: `${dirName} first skill` })
+  seedSkillIn(dir, `${dirName}-two`, { description: `${dirName} second skill` })
+  return dir
 }
 
 // ── 最小 PNG 编码器（图片种子现造，不往仓库里塞二进制夹具） ──

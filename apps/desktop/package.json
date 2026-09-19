@@ -30,6 +30,7 @@
     "test:e2e:bots": "electron-vite build && vitest run --config vitest.config.e2e.ts e2e/specs/bots",
     "test:e2e:files": "electron-vite build && vitest run --config vitest.config.e2e.ts e2e/specs/files",
     "test:e2e:sessions": "electron-vite build && vitest run --config vitest.config.e2e.ts e2e/specs/sessions",
+    "test:e2e:skills": "electron-vite build && vitest run --config vitest.config.e2e.ts e2e/specs/skills",
     "probe": "electron-vite build && vitest run --config vitest.config.probe.ts"
   },
   "dependencies": {

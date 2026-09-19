@@ -11,7 +11,6 @@ import {
   Activity,
   Info,
   Puzzle,
-  BookOpen,
   Wrench,
   Send,
   Mic,
@@ -27,7 +26,6 @@ import { ProviderSettings } from './ProviderSettings'
 import { MonitorSettings, MONITOR_SUB_TABS, type MonitorSubTab } from './MonitorSettings'
 import { AboutSettings } from './AboutSettings'
 import { McpSettings } from './McpSettings'
-import { SkillSettings } from './SkillSettings'
 import { ToolSettings } from './ToolSettings'
 import { PolicySettings } from './PolicySettings'
 import { HookSettings } from './HookSettings'
@@ -42,7 +40,6 @@ const VALID_TABS = new Set([
   'policies',
   'tools',
   'mcp',
-  'skills',
   'voice',
   'telegramBots',
   'monitor',
@@ -128,16 +125,6 @@ export function SettingsPanel(): React.JSX.Element {
       content: (
         <Scroll>
           <McpSettings />
-        </Scroll>
-      )
-    },
-    {
-      id: 'skills',
-      label: t('settings.tabSkills'),
-      icon: <BookOpen size={14} />,
-      content: (
-        <Scroll>
-          <SkillSettings />
         </Scroll>
       )
     },
