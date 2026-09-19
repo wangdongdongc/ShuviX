@@ -77,6 +77,53 @@ export interface ToolImageShot {
   complete: boolean
 }
 
+/**
+ * 末条助手气泡里**真正落进 DOM 的标记**的快照 —— markdown 白名单闸的 e2e 判据。
+ *
+ * 单测断的是 hast 树，证不了「树过了 React 之后 DOM 里是什么」；这份快照就是那一半。
+ * 两条认法上的坑，写在类型上免得再踩：
+ *   - `.markdown-body` 里**合法地**有 lucide 的 `<svg>`（代码块的复制按钮），所以永远
+ *     不要断言「气泡里没有 svg」—— 要么数 `svg script`，要么数可执行标签本身；
+ *   - 文本一律取 `textContent`：`innerText` 在这里实测回空串。
+ */
+export interface BubbleMarkup {
+  /** 气泡正文（textContent） */
+  text: string
+  /** 气泡里出现过的元素名（去重、字典序） */
+  tags: string[]
+  /** 气泡内 script / style / link / iframe / object / embed / form 的总个数 */
+  executable: number
+  /** 气泡内 `svg script` 的个数（`<svg>` 本身不算 —— 见上） */
+  svgScripts: number
+  /** 气泡内计算样式为 position: fixed 的元素个数（整屏遮罩的判据） */
+  fixed: number
+  /** 气泡里每个 `<a>` 的 href（拿不到 href 的记空串） */
+  hrefs: string[]
+}
+
+/** 「气泡有没有影响到整个窗口」的判据 —— 全局样式表、body 计算样式、输入框可点性 */
+export interface WindowMarkup {
+  /** `document.styleSheets.length`（气泡里的 `<style>` 活下来就会 +1） */
+  styleSheets: number
+  /** `getComputedStyle(document.body).outlineWidth` —— 全局 CSS 注入的可见信号 */
+  bodyOutlineWidth: string
+  /** 输入框正中 `elementFromPoint` 命中的元素名（遮罩存在时命中的是遮罩） */
+  composerHitTag: string
+  /** 那一击是不是落在输入框自己身上 */
+  composerReachable: boolean
+}
+
+/** 页内被「执行」过的痕迹 —— 非空证与它同取一次 eval，见 `pwnMarks` */
+export interface PwnMarks {
+  /** `window.__PWNED__` 里记下的 id（未被写过时为空数组） */
+  hits: string[]
+  /**
+   * `typeof window.api.terminal` —— **必须**和 hits 同一次 eval 取。
+   * 没有它，「hits 是空的」也可能只是因为跑在一个根本没有特权面的页面上。
+   */
+  apiTerminal: string
+}
+
 export interface ChatPane {
   /** 输入框就绪（会话已选中、ChatView 已挂载） */
   ready(): Promise<void>
@@ -183,6 +230,22 @@ export interface ChatPane {
   confirmOpen(): Promise<boolean>
   /** 点 ConfirmDialog 的确认（页脚第二个按钮，与 policiesPane 同款） */
   confirmAccept(): Promise<void>
+
+  /** 末条助手气泡的标记快照（见 BubbleMarkup） */
+  bubbleMarkup(): Promise<BubbleMarkup>
+  /**
+   * 等到末条助手气泡的正文含 marker 后再取快照。
+   * `waitIdle()` 只保证流结束，实测它返回时气泡还没画上去 —— 中间这一手不能省。
+   */
+  waitBubbleMarkup(marker: string, timeoutMs?: number): Promise<BubbleMarkup>
+  /** 窗口级快照（见 WindowMarkup） */
+  windowMarkup(): Promise<WindowMarkup>
+  /** `window.__PWNED__` + 特权面的非空证（见 PwnMarks） */
+  pwnMarks(): Promise<PwnMarks>
+  /** 程序化点击气泡里正文等于 label 的 `<a>`，回它当时的 href（没有 href 时回空串） */
+  clickBubbleLink(label: string): Promise<string>
+  /** 展开气泡里第一个 `<details>`（真的触发 toggle，好让 ontoggle 那条不至于假绿） */
+  openBubbleDetails(): Promise<void>
 }
 
 /** '#rrggbb' → 'rgb(r, g, b)'（getComputedStyle 的归一形态；颜色断言做精确比较用） */
@@ -259,8 +322,31 @@ export function chatPane(main: CdpClient): ChatPane {
     return { id: el.dataset.msgId ?? '', role, type, text: text.trim() }
   })`
 
+  // 末条助手正文的 .markdown-body —— 认法同 ITEM_SNAPSHOT（`.min-w-0` 的直接子节点），
+  // 过程区里的中间文本块也用 .markdown-body，靠这一层父子关系区分
+  const BUBBLE = `[...document.querySelectorAll(
+    '[data-msg-role="assistant"][data-msg-type="message"] .markdown-body'
+  )].filter((m) => (m.parentElement?.className ?? '').includes('min-w-0')).pop()`
+
   const isBusy = (): Promise<boolean> =>
     main.eval<boolean>(`document.querySelector('[data-msg-id="streaming-live"]') !== null`)
+
+  const bubbleMarkup = (): Promise<BubbleMarkup> =>
+    main.eval<BubbleMarkup>(`(() => {
+      const body = ${BUBBLE}
+      if (!body) throw new Error('no assistant .markdown-body on screen')
+      const all = [...body.querySelectorAll('*')]
+      return {
+        text: body.textContent ?? '',
+        tags: [...new Set(all.map((el) => el.tagName.toLowerCase()))].sort(),
+        executable: body.querySelectorAll(
+          'script, style, link, iframe, object, embed, form'
+        ).length,
+        svgScripts: body.querySelectorAll('svg script').length,
+        fixed: all.filter((el) => getComputedStyle(el).position === 'fixed').length,
+        hrefs: [...body.querySelectorAll('a')].map((a) => a.getAttribute('href') ?? '')
+      }
+    })()`)
 
   const type = async (text: string): Promise<void> => {
     await main.eval(
@@ -486,6 +572,53 @@ export function chatPane(main: CdpClient): ChatPane {
     confirmAccept: async () => {
       await main.eval(`[...${DIALOG}.querySelectorAll('button')][1].click()`)
       await new Promise((r) => setTimeout(r, 400))
+    },
+
+    bubbleMarkup,
+    waitBubbleMarkup: async (marker, timeoutMs = 25_000) =>
+      until(
+        async () => {
+          const shot = await bubbleMarkup()
+          return shot.text.includes(marker) ? shot : null
+        },
+        `bubble painted with ${JSON.stringify(marker)}`,
+        timeoutMs
+      ),
+    windowMarkup: () =>
+      main.eval<WindowMarkup>(`(() => {
+        const ta = ${TEXTAREA}
+        const box = ta?.getBoundingClientRect()
+        const hit = box
+          ? document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)
+          : null
+        return {
+          styleSheets: document.styleSheets.length,
+          bodyOutlineWidth: getComputedStyle(document.body).outlineWidth,
+          composerHitTag: (hit?.tagName ?? 'none').toLowerCase(),
+          composerReachable: !!hit && !!ta && (hit === ta || ta.contains(hit) || hit.contains(ta))
+        }
+      })()`),
+    // CDP 把 undefined 按 null 回传，页内就先映射成哨兵字符串
+    pwnMarks: () =>
+      main.eval<PwnMarks>(`(() => ({
+        hits: Array.isArray(window.__PWNED__) ? window.__PWNED__.map(String) : [],
+        apiTerminal: typeof window.api?.terminal === 'undefined'
+          ? 'unset'
+          : typeof window.api.terminal
+      }))()`),
+    clickBubbleLink: (label) =>
+      main.eval<string>(`(() => {
+        const body = ${BUBBLE}
+        const a = [...(body?.querySelectorAll('a') ?? [])]
+          .find((el) => (el.textContent ?? '').trim() === ${JSON.stringify(label)})
+        if (!a) throw new Error('no bubble link: ' + ${JSON.stringify(label)})
+        const href = a.getAttribute('href') ?? ''
+        a.click()
+        return href
+      })()`),
+    openBubbleDetails: async () => {
+      await main.eval(`${BUBBLE}?.querySelector('details > summary')?.click()`)
+      await sleep(250)
     }
   }
 }

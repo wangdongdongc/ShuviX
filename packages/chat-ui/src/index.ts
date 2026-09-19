@@ -35,8 +35,7 @@ export { CodeBlock } from './components/chat/CodeBlock'
 export {
   markdownComponents,
   markdownRemarkPlugins,
-  markdownRehypePlugins,
-  markdownRehypePluginsNoRaw
+  markdownRehypePlugins
 } from './components/chat/markdownComponents'
 export { DiffViewer } from './components/chat/DiffViewer'
 export { TokenBadge, InvalidTokenBadge } from './components/chat/InlineTokenBadge'
