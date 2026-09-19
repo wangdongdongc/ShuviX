@@ -10,7 +10,8 @@
  *
  * 点任一行技能 = 打开 / 复用它 `SKILL.md` 的**笔记本会话**（内置那份只读）—— 与 Bots、智能体
  * 档案、知识库条目同一条路。技能比它们多一样东西：**启用开关**（单个技能 + 整个目录两级）。
- * 开关收在右键 / ⋮ 菜单里，禁用的行以变淡表示 —— 侧栏每行常驻一个控件与这里的语汇不符。
+ * 开关收在右键 / ⋮ 菜单里，禁用的行划线表示（与被覆盖的智能体行同一副样子）——
+ * 侧栏每行常驻一个控件与这里的语汇不符。
  *
  * prop 驱动、不触宿主 API：清单 / 打开 / 开关 / 增删目录 / 删除技能由宿主注入。扫描是懒的：
  * 首次展开才扫，之后展开 + 窗口聚焦 + `skill.changed` 事件重扫，stale-guard 防乱序回包。
@@ -242,7 +243,7 @@ export function SkillGroup({ adapter }: SkillGroupProps): React.JSX.Element {
       >
         <span className={`flex-shrink-0 w-3 ${off ? 'opacity-40' : ''}`} />
         <span
-          className={`flex-1 min-w-0 text-[13px] truncate group-hover:pr-5 ${off ? 'opacity-40' : ''}`}
+          className={`flex-1 min-w-0 text-[13px] truncate group-hover:pr-5 ${off ? 'line-through opacity-60' : ''}`}
         >
           {skill.displayName}
         </span>
