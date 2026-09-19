@@ -39,13 +39,13 @@ import { fileNameOf, uniqueName } from '../common/registryFiles'
  *   - Bots 置顶分组（BotGroup 经 groupsPrepend 注入，接 window.api.bot.*；点行开 / 复用该文件的
  *     笔记本会话，删除的确认框在这里）+ 智能体档案置顶分组（AgentGroup，接 window.api.subAgent.*；
  *     用户档案点行开可编辑的笔记本，内置档案点行开**随包发布那份 md 的只读笔记本**，右键才是
- *     「创建覆盖副本」）+ 技能置顶分组（SkillGroup，接 window.api.skill.*；目录成行、默认目录的
+ *     「创建覆盖副本」）+ 安全策略置顶分组（PolicyGroup，接 window.api.policy.*；用户策略点行开
+ *     可编辑的笔记本，内置策略点行开**随包发布那份 md 的只读笔记本**，右键才是「创建覆盖副本」）
+ *     + 技能置顶分组（SkillGroup，接 window.api.skill.*；目录成行、默认目录的
  *     技能平铺，点行开那个技能 SKILL.md 的笔记本，启用开关与增删在菜单里）+ 知识库置顶分组
- *     （KnowledgeGroup，接 window.api.knowledge.*，点行开 / 复用条目的笔记本会话）+ 安全策略
- *     置顶分组（PolicyGroup，接 window.api.policy.*；用户策略点行开可编辑的笔记本，内置策略
- *     点行开**随包发布那份 md 的只读笔记本**，右键才是「创建覆盖副本」）
+ *     （KnowledgeGroup，接 window.api.knowledge.*，点行开 / 复用条目的笔记本会话）
  *   - 底部更新提示。侧栏只有项目视图 —— 日历已迁至右面板 Calendar tab（CalendarPanel）
- *   - 归档项目的恢复 / 删除已移至「设置 → Projects → 已归档」
+ *   - 归档项目的恢复 / 删除已移至「设置 → 已归档 → 项目」
  */
 export function Sidebar(): React.JSX.Element {
   const { t } = useTranslation()
@@ -524,9 +524,9 @@ export function Sidebar(): React.JSX.Element {
         <>
           <BotGroup adapter={botGroupAdapter} />
           <AgentGroup adapter={agentGroupAdapter} />
+          <PolicyGroup adapter={policyGroupAdapter} />
           <SkillGroup adapter={skillGroupAdapter} />
           <KnowledgeGroup adapter={knowledgeAdapter} />
-          <PolicyGroup adapter={policyGroupAdapter} />
         </>
       }
       overlays={
