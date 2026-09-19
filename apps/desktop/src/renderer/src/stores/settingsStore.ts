@@ -61,7 +61,7 @@ interface SettingsState {
   /** 设置面板当前 Tab */
   activeSettingsTab:
     | 'general'
-    | 'projects'
+    | 'archived'
     | 'providers'
     | 'hooks'
     | 'policies'

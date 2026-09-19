@@ -358,8 +358,8 @@
   "settings": {
     "title": "Settings",
     "tabGeneral": "General",
-    "tabProjects": "Projects",
-    "projectsSubTabArchived": "Archived",
+    "tabArchived": "Archived",
+    "archivedSubTabProjects": "Projects",
     "projectsNoArchived": "No archived projects",
     "tabProviders": "Providers",
     "tabContextMgmt": "Context",

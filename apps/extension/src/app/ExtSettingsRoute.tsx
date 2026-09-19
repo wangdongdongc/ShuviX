@@ -1,12 +1,12 @@
 import { useTranslation } from 'react-i18next'
-import { Settings, ArrowLeft, Layers, Puzzle, Info, Wrench, FolderClosed } from 'lucide-react'
+import { Settings, ArrowLeft, Layers, Puzzle, Info, Wrench, Archive } from 'lucide-react'
 import { ChatHostProvider, getChatApi, useChatStore } from '@shuvix/chat-ui'
 import {
   SettingsContainer,
   AboutTab,
   McpClientPanel,
   BuiltinToolsView,
-  ProjectsSettings,
+  ArchivedSettings,
   type SettingsTab
 } from '@shuvix/app-shell'
 import { ExtAppearanceTab } from './settings/ExtAppearanceTab'
@@ -46,10 +46,10 @@ export function ExtSettingsRoute({
       )
     },
     {
-      id: 'projects',
-      label: t('settings.tabProjects'),
-      icon: <FolderClosed size={14} />,
-      content: <ProjectsSettings onDeleteProject={(id, name) => void deleteProject(id, name)} />
+      id: 'archived',
+      label: t('settings.tabArchived'),
+      icon: <Archive size={14} />,
+      content: <ArchivedSettings onDeleteProject={(id, name) => void deleteProject(id, name)} />
     },
     {
       id: 'providers',

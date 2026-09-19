@@ -1,54 +1,24 @@
-import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Archive, FolderClosed, RotateCcw, Trash2 } from 'lucide-react'
+import { FolderClosed, RotateCcw, Trash2 } from 'lucide-react'
 import { getChatApi } from '@shuvix/chat-ui'
 import { useProjects } from '../sidebar/useProjects'
+import { PanelTabBar } from '../panel/PanelTabBar'
 
-export interface ProjectsSettingsProps {
+export interface ArchivedSettingsProps {
   /** 删除归档项目（宿主自处理确认 + 级联）；缺省隐藏删除按钮 */
   onDeleteProject?: (projectId: string, name: string) => void
 }
 
-type ProjectsSubTab = 'archived'
-
-/** 子分类导航按钮（与 McpSettings / SkillSettings 视觉一致） */
-function SubTabButton({
-  icon,
-  label,
-  active,
-  onClick
-}: {
-  icon: React.ReactNode
-  label: string
-  active: boolean
-  onClick: () => void
-}): React.JSX.Element {
-  return (
-    <button
-      onClick={onClick}
-      className={`group w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-left transition-colors ${
-        active
-          ? 'bg-accent/10 text-accent'
-          : 'text-text-secondary hover:bg-bg-hover hover:text-text-primary'
-      }`}
-    >
-      <span className="shrink-0 inline-flex items-center h-[18px]">{icon}</span>
-      <div className="min-w-0 flex-1">
-        <div className="text-xs font-medium truncate">{label}</div>
-      </div>
-    </button>
-  )
-}
-
 /**
- * 项目设置页（桌面/扩展共用）—— 左侧子导航 + 右侧内容；当前仅「已归档」subtab：
- * 列出归档项目并支持恢复（内部直接经 getChatApi）/ 删除（宿主注入确认 + 级联）。
- * 数据经 useProjects() 订阅 'project.changed' 自动刷新。
+ * 已归档设置页（桌面/扩展共用）—— 归档内容的统一去处。
+ * 子分类走横向标签条（监视器同款 PanelTabBar，理由见其注释：一级 tab 列已吃掉宽度，
+ * 再加一列子导航正文就不剩了）；当前仅「项目」：列出归档项目并支持恢复（内部直接经
+ * getChatApi）/ 删除（宿主注入确认 + 级联）。日后新增归档对象（如会话）= tabs 加一项 +
+ * 一个内容分支。数据经 useProjects() 订阅 'project.changed' 自动刷新。
  */
-export function ProjectsSettings({ onDeleteProject }: ProjectsSettingsProps): React.JSX.Element {
+export function ArchivedSettings({ onDeleteProject }: ArchivedSettingsProps): React.JSX.Element {
   const { t } = useTranslation()
   const { archivedProjects } = useProjects()
-  const [subTab, setSubTab] = useState<ProjectsSubTab>('archived')
 
   const handleRestore = async (id: string): Promise<void> => {
     // 项目列表经 useProjects() 订阅 'project.changed' 自动刷新
@@ -56,21 +26,19 @@ export function ProjectsSettings({ onDeleteProject }: ProjectsSettingsProps): Re
   }
 
   return (
-    <div className="flex flex-1 min-h-0 h-full">
-      {/* 左侧子导航 */}
-      <div className="w-[220px] flex-shrink-0 border-r border-border-secondary flex flex-col">
-        <div className="flex-1 overflow-y-auto py-2 px-2 space-y-0.5">
-          <SubTabButton
-            icon={<Archive size={14} className="shrink-0 text-text-tertiary" />}
-            label={t('settings.projectsSubTabArchived')}
-            active={subTab === 'archived'}
-            onClick={() => setSubTab('archived')}
-          />
-        </div>
-      </div>
+    <div className="flex flex-col h-full min-h-0">
+      <PanelTabBar
+        tabs={[
+          { key: 'projects', label: t('settings.archivedSubTabProjects'), Icon: FolderClosed }
+        ]}
+        activeKey="projects"
+        onSelect={() => {
+          /* 单 tab 时代无可切换；新增归档对象时这里改为 setSubTab */
+        }}
+        className="px-1 bg-bg-primary"
+      />
 
-      {/* 右侧内容区 */}
-      <div className="flex-1 min-w-0 overflow-y-auto p-4">
+      <div className="flex-1 min-h-0 overflow-y-auto p-4">
         {archivedProjects.length === 0 ? (
           <div className="px-3 py-8 text-center text-text-tertiary text-xs">
             {t('settings.projectsNoArchived')}

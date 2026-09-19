@@ -14,14 +14,14 @@ import {
   Wrench,
   Send,
   Mic,
-  FolderClosed,
+  Archive,
   Shield,
   Webhook
 } from 'lucide-react'
 import { SettingsContainer, type SettingsTab } from '@shuvix/app-shell'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { GeneralSettings } from './GeneralSettings'
-import { ProjectsSettings } from './ProjectsSettings'
+import { ArchivedSettings } from './ArchivedSettings'
 import { ProviderSettings } from './ProviderSettings'
 import { MonitorSettings, MONITOR_SUB_TABS, type MonitorSubTab } from './MonitorSettings'
 import { AboutSettings } from './AboutSettings'
@@ -34,7 +34,7 @@ import { VoiceSettings } from './VoiceSettings'
 
 const VALID_TABS = new Set([
   'general',
-  'projects',
+  'archived',
   'providers',
   'hooks',
   'policies',
@@ -85,10 +85,10 @@ export function SettingsPanel(): React.JSX.Element {
       )
     },
     {
-      id: 'projects',
-      label: t('settings.tabProjects'),
-      icon: <FolderClosed size={14} />,
-      content: <ProjectsSettings />
+      id: 'archived',
+      label: t('settings.tabArchived'),
+      icon: <Archive size={14} />,
+      content: <ArchivedSettings />
     },
     {
       id: 'providers',

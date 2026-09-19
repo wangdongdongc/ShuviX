@@ -358,8 +358,8 @@
   "settings": {
     "title": "設定",
     "tabGeneral": "一般",
-    "tabProjects": "プロジェクト",
-    "projectsSubTabArchived": "アーカイブ済み",
+    "tabArchived": "アーカイブ",
+    "archivedSubTabProjects": "プロジェクト",
     "projectsNoArchived": "アーカイブされたプロジェクトはありません",
     "tabProviders": "プロバイダー",
     "tabContextMgmt": "コンテキスト管理",

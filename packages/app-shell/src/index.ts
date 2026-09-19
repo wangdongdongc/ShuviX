@@ -33,8 +33,8 @@ export { ProjectConfigDialog } from './settings/ProjectConfigDialog'
 export type { ProjectConfigDialogProps, ProjectConfigTab } from './settings/ProjectConfigDialog'
 export { BuiltinToolsView } from './settings/BuiltinToolsView'
 export type { BuiltinToolsViewProps, BuiltinToolsExtraTab } from './settings/BuiltinToolsView'
-export { ProjectsSettings } from './settings/ProjectsSettings'
-export type { ProjectsSettingsProps } from './settings/ProjectsSettings'
+export { ArchivedSettings } from './settings/ArchivedSettings'
+export type { ArchivedSettingsProps } from './settings/ArchivedSettings'
 
 // 侧边栏会话列表件（prop 驱动）
 export { SessionItem } from './sidebar/SessionItem'

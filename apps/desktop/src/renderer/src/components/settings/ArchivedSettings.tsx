@@ -1,14 +1,14 @@
 /**
- * 项目设置页（桌面）—— 薄封装共享 <ProjectsSettings>（已归档列表 + 恢复），
+ * 已归档设置页（桌面）—— 薄封装共享 <ArchivedSettings>（已归档项目列表 + 恢复），
  * 注入桌面专属删除：弹 ConfirmDialog 确认，确认后级联删除并在必要时重指活跃会话。
  */
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ProjectsSettings as SharedProjectsSettings } from '@shuvix/app-shell'
+import { ArchivedSettings as SharedArchivedSettings } from '@shuvix/app-shell'
 import { getChatApi, useChatStore } from '@shuvix/chat-ui'
 import { ConfirmDialog } from '../common/ConfirmDialog'
 
-export function ProjectsSettings(): React.JSX.Element {
+export function ArchivedSettings(): React.JSX.Element {
   const { t } = useTranslation()
   const [deletingProjectId, setDeletingProjectId] = useState<string | null>(null)
 
@@ -27,7 +27,7 @@ export function ProjectsSettings(): React.JSX.Element {
 
   return (
     <>
-      <SharedProjectsSettings onDeleteProject={(id) => setDeletingProjectId(id)} />
+      <SharedArchivedSettings onDeleteProject={(id) => setDeletingProjectId(id)} />
       {deletingProjectId && (
         <ConfirmDialog
           title={t('sidebar.confirmDeleteProject')}

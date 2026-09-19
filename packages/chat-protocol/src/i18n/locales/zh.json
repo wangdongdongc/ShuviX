@@ -358,8 +358,8 @@
   "settings": {
     "title": "设置",
     "tabGeneral": "通用",
-    "tabProjects": "项目",
-    "projectsSubTabArchived": "已归档",
+    "tabArchived": "已归档",
+    "archivedSubTabProjects": "项目",
     "projectsNoArchived": "暂无已归档项目",
     "tabProviders": "提供商",
     "tabContextMgmt": "上下文管理",

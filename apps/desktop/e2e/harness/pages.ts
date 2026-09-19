@@ -883,6 +883,11 @@ export interface SidebarPane {
   rowMenuShots(title: string, via?: MenuVia): Promise<MenuItemShot[] | null>
   /** 分组头菜单的**原始 items**；`via` 同上（组头的右键监听在标题行上）。找不到返回 null */
   groupMenuShots(target: GroupTarget, via?: MenuVia): Promise<MenuItemShot[] | null>
+  /**
+   * 某个分组头是否在屏。「组头消失」只能用它断：groupMenuShots 内部会先等组头**出现**，
+   * 拿它断「不在」会把用例挂死而不是返回 null。
+   */
+  groupHeaderPresent(target: GroupTarget): Promise<boolean>
   /** 开会话行的 ⋮ 并选中一项（自带「该项真的在菜单里」的核对） */
   pickRowMenu(title: string, actionId: string): Promise<void>
   /** 开分组头的 ⋮ 并选中一项（同上） */
@@ -1166,6 +1171,7 @@ export function sidebarPane(main: CdpClient): SidebarPane {
       await until(() => main.eval<boolean>(`${HEADER(target)} !== undefined`), 'group header')
       return openMenu(main, HEADER(target), via)
     },
+    groupHeaderPresent: (target) => main.eval<boolean>(`${HEADER(target)} !== undefined`),
     pickRowMenu: async (title, actionId) => {
       await until(() => main.eval<boolean>(`${ROW(title)} !== undefined`), `session row "${title}"`)
       await pickFromMenu(main, ROW(title), actionId, `session row "${title}"`)
@@ -4151,5 +4157,165 @@ export function settingsNavPane(settings: CdpClient): SettingsNavPane {
   return {
     selectTab: (labels) => clickButton(labels, `settings tab ${labels.join(' / ')}`),
     selectToolSubTab: (label) => clickButton([label], `tool sub-tab ${label}`)
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 设置窗口「已归档」页（openSettings('archived') 后调用）
+//
+// 「项目」一级入口改名「已归档」（Archive 图标）后，页内由「左侧 220px 子导航列 + 唯一子项」
+// 改为「顶部 PanelTabBar 横向标签条（唯一子 tab『项目』）+ 内容区」。这里钉的是那次整改的
+// 结构契约：左栏只剩「已归档」一个入口（不再有第二个「项目」）、页内只有一条横向标签条、
+// 归档列表 / 空态 / 行按钮挂在内容区里。
+// 作用域坑：旧一级入口与页内子 tab 同叫「项目」，一切断言必须限定作用域 —— 一级导航的
+// 断言走 nav*（限 180px 左栏），页内断言限内容区（左栏的下一个兄弟），裸查 document
+// 必然误命中另一头。
+
+/** 左栏一级导航按钮的快照 */
+export interface ArchivedNavButtonShot {
+  text: string
+  /** 活动态（TabButton 的 active 分支：bg-accent/10 text-accent） */
+  active: boolean
+  /** Archive 图标（svg.lucide-archive） */
+  archiveIcon: boolean
+}
+
+/** 内容区顶部 PanelTabBar 的快照 */
+export interface ArchivedTabBarShot {
+  /** 标签条容器类名（横向 flex / h-8 / border-b 的结构断言用） */
+  className: string
+  tabs: Array<{
+    text: string
+    /** FolderClosed 图标（svg.lucide-folder-closed） */
+    folderIcon: boolean
+    /** 选中 tab 内的下划线 span（absolute bottom-0 bg-accent） */
+    underline: boolean
+  }>
+}
+
+/** 归档项目列表里的一行 */
+export interface ArchivedRowShot {
+  name: string
+  /** 行尾按钮的 title（DOM 序：恢复 / 删除） */
+  buttonTitles: string[]
+  /** 行尾按钮容器的类名（opacity-0 group-hover:opacity-100 的结构断言用） */
+  actionsClass: string
+}
+
+export interface ArchivedSettingsPane {
+  /** 左栏一级导航内文本 ∈ labels 的按钮；没有返回 null */
+  navButton(labels: string[]): Promise<ArchivedNavButtonShot | null>
+  /** 左栏一级导航内是否存在文本 ∈ labels 的按钮 */
+  navHasButton(labels: string[]): Promise<boolean>
+  /** 内容区顶部的 PanelTabBar；没有返回 null */
+  tabBar(): Promise<ArchivedTabBarShot | null>
+  /** 内容区里竖向子导航列的条数（w-[220px] / border-r 列；整改后应为 0） */
+  verticalSubNavs(): Promise<number>
+  /** 归档项目行（DOM 序） */
+  rows(): Promise<ArchivedRowShot[]>
+  /** 等到指定名字的行全部出现 */
+  waitRows(names: string[]): Promise<void>
+  /** 等到指定名字的行消失（调用前该行须已在屏，否则秒过） */
+  waitRowGone(name: string): Promise<void>
+  /** 点指定行上 title ∈ titles 的按钮；行或按钮找不到即抛 */
+  clickRowButton(name: string, titles: string[]): Promise<void>
+  /** 空态文案；列表非空（空态未渲染）时为 null */
+  emptyText(): Promise<string | null>
+  /** 等到空态文案出现并返回它 */
+  waitEmpty(): Promise<string>
+}
+
+/** 「已归档」设置页（ArchivedSettings；openSettings('archived') 后调用） */
+export function archivedSettingsPane(settings: CdpClient): ArchivedSettingsPane {
+  // 一级导航列 = SettingsContainer 的 180px 列；内容区 = 它的下一个兄弟
+  const NAV = `document.querySelector('div[class*="w-[180px]"]')`
+  const CONTENT = `((${NAV})?.nextElementSibling ?? null)`
+  const NAV_BTN = (labels: string[]): string =>
+    `[...((${NAV})?.querySelectorAll('button') ?? [])].find((b) =>
+      ${JSON.stringify(labels)}.includes((b.textContent ?? '').trim()))`
+  // 内容区顶部的 PanelTabBar：h-8 + border-b 的横向条。设置窗头部是 pb-4 不是 h-8，
+  // PanelTabBar 自己的隐形测量节点是 absolute 定位的 span 列表 —— 两者都不会误命中
+  const TAB_BAR = `((${CONTENT})?.querySelector('div.h-8.border-b') ?? null)`
+  // 归档项目行 = 内容区里的 div.group.relative（行尾按钮靠 group-hover 浮现）
+  const ROWS = `[...((${CONTENT})?.querySelectorAll('div.group.relative') ?? [])]`
+  const ROW = (name: string): string =>
+    `${ROWS}.find((r) =>
+      (r.querySelector('span.truncate')?.textContent ?? '').trim() === ${JSON.stringify(name)})`
+
+  const rows = (): Promise<ArchivedRowShot[]> =>
+    settings.eval<ArchivedRowShot[]>(`${ROWS}.map((r) => ({
+      name: (r.querySelector('span.truncate')?.textContent ?? '').trim(),
+      buttonTitles: [...r.querySelectorAll('button')].map((b) => b.getAttribute('title') ?? ''),
+      actionsClass: r.querySelector('button')?.parentElement?.className ?? ''
+    }))`)
+
+  const emptyText = (): Promise<string | null> =>
+    settings.eval<string | null>(`(() => {
+      const el = (${CONTENT})?.querySelector('div.text-center')
+      return el ? (el.textContent ?? '').trim() : null
+    })()`)
+
+  return {
+    navButton: (labels) =>
+      settings.eval<ArchivedNavButtonShot | null>(`(() => {
+        const b = ${NAV_BTN(labels)}
+        if (!b) return null
+        return {
+          text: (b.textContent ?? '').trim(),
+          active: b.className.includes('bg-accent/10') && b.className.includes('text-accent'),
+          archiveIcon: !!b.querySelector('svg.lucide-archive')
+        }
+      })()`),
+    navHasButton: (labels) => settings.eval<boolean>(`!!(${NAV_BTN(labels)})`),
+    tabBar: () =>
+      settings.eval<ArchivedTabBarShot | null>(`(() => {
+        const bar = ${TAB_BAR}
+        if (!bar) return null
+        return {
+          className: bar.className,
+          tabs: [...bar.querySelectorAll('button')].map((b) => ({
+            text: (b.textContent ?? '').trim(),
+            folderIcon: !!b.querySelector('svg.lucide-folder-closed'),
+            underline: !!b.querySelector('span.absolute.bottom-0.bg-accent')
+          }))
+        }
+      })()`),
+    verticalSubNavs: () =>
+      settings.eval<number>(`[...((${CONTENT})?.querySelectorAll('*') ?? [])].filter((el) => {
+        const cls = typeof el.className === 'string' ? el.className : ''
+        return cls.split(/\\s+/).includes('border-r') || cls.includes('w-[220px]')
+      }).length`),
+    rows,
+    waitRows: async (names) => {
+      await until(
+        async () => {
+          const have = (await rows()).map((r) => r.name)
+          return names.every((n) => have.includes(n)) || null
+        },
+        `archived rows ${names.join(', ')}`
+      )
+    },
+    waitRowGone: async (name) => {
+      await until(
+        async () => !(await rows()).some((r) => r.name === name) || null,
+        `archived row "${name}" gone`
+      )
+    },
+    clickRowButton: async (name, titles) => {
+      const clicked = await settings.eval<boolean>(`(() => {
+        const row = ${ROW(name)}
+        const btn = [...(row?.querySelectorAll('button') ?? [])].find((b) =>
+          ${JSON.stringify(titles)}.includes(b.getAttribute('title') ?? ''))
+        if (!btn) return false
+        btn.click()
+        return true
+      })()`)
+      if (!clicked) {
+        throw new Error(`archived row "${name}" button (${titles.join(' / ')}) not found`)
+      }
+      await sleep(200)
+    },
+    emptyText,
+    waitEmpty: () => until(async () => (await emptyText()) || null, 'archived empty state')
   }
 }
