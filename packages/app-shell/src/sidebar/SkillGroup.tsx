@@ -298,7 +298,7 @@ export function SkillGroup({ adapter }: SkillGroupProps): React.JSX.Element {
                         {open ? <FolderOpen size={11} /> : <FolderClosed size={11} />}
                       </span>
                       <span
-                        className={`flex-1 min-w-0 text-[13px] truncate group-hover:pr-5 ${folder.isEnabled ? '' : 'opacity-40'}`}
+                        className={`flex-1 min-w-0 text-[13px] truncate group-hover:pr-5 ${folder.isEnabled ? '' : 'line-through opacity-60'}`}
                       >
                         {folder.isBuiltin ? t('settings.skillDirBuiltin') : folder.dirName}
                       </span>
