@@ -196,16 +196,39 @@ describe('说明收进问号（通用 tab）', () => {
   })
 
   it('IH-E-4 滚动是重新定位不是收起：气泡仍在、仍可见，跟着锚点走了同样的距离', async () => {
-    const before = await hints.hoverOpen(FOCUS_TITLE)
-    const a0 = await hints.anchorRect(FOCUS_TITLE)
+    let before = await hints.hoverOpen(FOCUS_TITLE)
+    let a0 = await hints.anchorRect(FOCUS_TITLE)
     expect(gapToAnchor(before, a0)).toBeLessThan(1)
 
-    // 只滚一小段：这一节的滚动余量只有几十像素，滚多了气泡会从锚点上方翻到下方，
+    // 「位移相同」只在不换侧时成立（换侧/翻转本身由 IH-U-2 钉，不是这条的事）。这一行
+    // 贴着视口底边，下方差几像素放不下时气泡初始翻在锚点**上方**，而下滚会把它翻回下方 ——
+    // 从上方出发取样，断言挂的是几何而不是行为。所以先下滚把它带进下方稳定区再取样；
+    // 带不进去（余量耗尽）= 这条用例在自己的窗口里跑不动，让它前置失败而不是断言假红
+    let scrolled = 0
+    for (let i = 0; before.rect.bottom <= a0.top + 1 && i < 4; i++) {
+      const settleRoom = await hints.scrollRoom(FOCUS_TITLE)
+      expect(settleRoom.down).toBeGreaterThan(24) // 前置自检：容器真能滚，否则这条用例是空转
+      scrolled += await hints.scrollBy(FOCUS_TITLE, 24)
+      a0 = await hints.anchorRect(FOCUS_TITLE)
+      before = await until(
+        async () => {
+          const shot = await hints.peek(FOCUS_TITLE)
+          return shot && gapToAnchor(shot, a0) < 1 ? shot : null
+        },
+        'hint settled below the anchor before sampling',
+        5_000
+      )
+    }
+    // 前置自检：必须从「下方」出发 —— 还翻在上方的话，下滚必然换侧，位移相等本来就不成立
+    expect(before.rect.top).toBeGreaterThanOrEqual(a0.bottom - 1)
+
+    // 只滚一小段：这一节的滚动余量只有几十像素，滚多了气泡可能再次换侧（翻回上方），
     // 那时「位移相同」本来就不该成立（翻转本身由 IH-U-2 钉）
     const room = await hints.scrollRoom(FOCUS_TITLE)
-    expect(room.down).toBeGreaterThan(24) // 前置自检：容器真能滚，否则这条用例是空转
+    expect(room.down).toBeGreaterThan(24)
     const moved = await hints.scrollBy(FOCUS_TITLE, 24)
     expect(moved).toBe(24)
+    scrolled += moved
 
     // 锚点是同步就位的（改 scrollTop 即生效），气泡不是：scroll 事件 → 重新量 → 写 style
     // 要跨一拍，所以先把锚点定下来，再等气泡追上它
@@ -226,7 +249,7 @@ describe('说明收进问号（通用 tab）', () => {
 
     await hints.hoverOut(FOCUS_TITLE)
     await hints.waitClosed(FOCUS_TITLE)
-    await hints.scrollBy(FOCUS_TITLE, -moved)
+    await hints.scrollBy(FOCUS_TITLE, -scrolled)
   })
 })
 
