@@ -28,6 +28,11 @@ extraResources:
   # 不再 ?raw 内联，避免「跑的是内联字符串、看的是另一份文件」
   - from: ../../packages/agent-runtime/src/subagent/builtinAgents/md
     to: builtin-agents
+  # 内置安全策略（protect-credentials / ask-on-write … 的 md，一个策略一语言一文件）：**运行时就读这一份**
+  # （桌面 SecurityHostProvider 的 readBuiltinPolicyMd 按当前语言现读，见 getBuiltinPoliciesDir），
+  # 侧栏点内置策略行开的只读笔记本读的也是它
+  - from: ../../packages/agent-runtime/src/security/builtinPolicies/md
+    to: builtin-policies
   # 内置知识库（ShuviX 自己的说明书，`knowledge` 工具里的保留名 `shuvix`）：一库一目录、目录下按语言分层，
   # 是真实目录而不是 ?raw 内联 —— 扫描 / 检索 / 笔记本都按目录走，与用户库同一条路
   - from: resources/knowledge

@@ -28,6 +28,7 @@ import type {
   InputResponse
 } from '@shuvix/chat-protocol/types/inputRequest'
 import type { RuntimeLogger } from '../types'
+import type { BuiltinMdReader } from '../subagent/builtinAgents/spec'
 import type { ShellFacts } from './shell/types'
 
 /** 判决输出的三态 —— PEP 看到的结果 */
@@ -321,6 +322,14 @@ export interface SecurityHostProvider {
   getLanguage?(): string
   /** 用户策略 md，全部可解析的份数（含同名的几份，谁生效见 resolvePolicyFiles）；无文件系统的宿主省略 */
   getUserPolicies?(): UserPolicyFile[]
+  /**
+   * 内置策略 md 的读取口（入参是目录内文件名如 `ask-on-read.zh.md`，没有那一版回 null）——
+   * 内置策略随包发布成文件后运行时现读：桌面注入「`Resources/builtin-policies/` 目录现读」，
+   * 扩展注入构建期内联的同一批文件（security/builtinPolicies/inlineSources.ts）。
+   * **省略即装配期 throw**：内置策略是出厂防护层，缺席必须响（开发期错误），
+   * 不能静默退化成「无策略 = 放行」。
+   */
+  readBuiltinPolicyMd?: BuiltinMdReader
   /** 宿主代码级派生规则 —— 仅限无法 md 化的特例（原生谓词） */
   derivedRules?(): SecurityRule[]
   /** 是否目录（read 询问的 UX 区分；可异步）。省略 = 恒 false */

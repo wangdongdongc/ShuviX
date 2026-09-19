@@ -12,6 +12,10 @@ import type { FileSystemPort, FileGuards } from '../../fileTools/port'
 import type { AccessMode, SecurityHostProvider } from '../../security/types'
 import { createSecurityContext } from '../../security/context'
 import { createFileToolSuite, type FileToolDeps, type FileToolSuite } from '../fileToolSuite'
+import { createInlinePolicyMdReader } from '@shuvix/agent-runtime/security/builtinPolicies/inlineSources'
+
+/** 内置策略 md 的构建期内联读取口（真实装配链要它；测试进程，不进桌面 bundle） */
+const INLINE_POLICY_MD = createInlinePolicyMdReader()
 
 const ROOT = '/ws'
 const INSIDE = 'notes.txt'
@@ -111,6 +115,7 @@ function makeSuite(opts: SuiteOptions = {}): SuiteHarness {
       home: '/fake-home',
       systemDirs: []
     }),
+    readBuiltinPolicyMd: INLINE_POLICY_MD,
     getSessionGrants: () => ({
       autoAllow: !!opts.autoAllow,
       allowList: opts.allowList ?? []

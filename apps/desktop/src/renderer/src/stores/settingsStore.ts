@@ -64,7 +64,6 @@ interface SettingsState {
     | 'archived'
     | 'providers'
     | 'hooks'
-    | 'policies'
     | 'tools'
     | 'mcp'
     | 'voice'

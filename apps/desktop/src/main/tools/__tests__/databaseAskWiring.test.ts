@@ -63,6 +63,7 @@ vi.mock('../../services/toolContext', async () => {
             home: join(tmpdir(), '.nonexistent-home'),
             systemDirs: []
           }),
+          readBuiltinPolicyMd: INLINE_POLICY_MD,
           getSessionGrants: () => ({ autoAllow: state.autoAllow, allowList: [] }),
           requestUserInput: state.withChannel
             ? async (req: InputRequest) => {
@@ -109,6 +110,10 @@ vi.mock('../../logger', () => ({
 
 import { DatabaseTool } from '../database'
 import type { ToolContext } from '../../services/toolContext'
+import { createInlinePolicyMdReader } from '@shuvix/agent-runtime/security/builtinPolicies/inlineSources'
+
+/** 内置策略 md 的构建期内联读取口（真实装配链要它；测试进程，不进桌面 bundle） */
+const INLINE_POLICY_MD = createInlinePolicyMdReader()
 
 const WRITABLE: CredentialRow = { name: 'prod-mysql', dbType: 'mysql', readonly: false }
 const READONLY: CredentialRow = { name: 'ro-pg', dbType: 'postgresql', readonly: true }

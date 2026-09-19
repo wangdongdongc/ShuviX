@@ -9,6 +9,7 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { join } from 'node:path'
+import { readFileSync } from 'node:fs'
 import { tmpdir, homedir } from 'node:os'
 
 const WORKSPACE = join(tmpdir(), 'shuvix-policy-ws')
@@ -21,7 +22,10 @@ const OUTSIDE = join(tmpdir(), 'shuvix-policy-elsewhere')
 
 const state = vi.hoisted(() => ({
   settings: undefined as { autoAllow?: boolean; allowList?: string[] } | undefined,
-  externalDirs: [] as { path: string }[]
+  externalDirs: [] as { path: string }[],
+  // 内置策略的事实源 —— 运行时读随包发布的目录，这里直接读仓库里那一份（同一批文件）。
+  // src/main/services/__tests__ 往上六级是仓库根
+  builtinDir: `${__dirname}/../../../../../../packages/agent-runtime/src/security/builtinPolicies/md`
 }))
 
 vi.mock('../../dao/projectDao', () => ({ projectDao: { pick: () => undefined } }))
@@ -35,7 +39,17 @@ vi.mock('../skillService', () => ({
   skillService: { listExternalDirs: () => state.externalDirs }
 }))
 vi.mock('../policyService', () => ({
-  policyService: { getUserPolicies: () => [] }
+  policyService: {
+    getUserPolicies: () => [],
+    // 与 policyService.readBuiltinPolicyMd 同形，只是基准目录直接钉在仓库那份上
+    readBuiltinPolicyMd: (fileName: string) => {
+      try {
+        return readFileSync(join(state.builtinDir, fileName), 'utf-8')
+      } catch {
+        return null
+      }
+    }
+  }
 }))
 vi.mock('../../utils/paths', () => ({
   getTempWorkspace: () => WORKSPACE,

@@ -169,9 +169,19 @@ export function assembleRules(
   const sep = provider.pathSep
   const rules: SecurityRule[] = []
 
+  // 内置策略是出厂防护层：读取口缺席是开发期错误（宿主忘了接线 / 打包漏了文件），
+  // 必须响 —— 静默跳过等于把全部内置门拆掉还假装它们在
+  const readBuiltinPolicyMd = provider.readBuiltinPolicyMd
+  if (!readBuiltinPolicyMd) {
+    throw new Error(
+      'SecurityHostProvider.readBuiltinPolicyMd is required: without the builtin policy md ' +
+        'reader, assembly would silently degrade to "no policy = allow"'
+    )
+  }
+
   // 1. 策略 md（内置 + 用户覆盖/新增）；语言只影响人读面，规则恒取 en
   for (const { policy, sourceKind } of mergePolicyFiles(
-    buildBuiltinPolicies(provider.getLanguage?.()),
+    buildBuiltinPolicies({ language: provider.getLanguage?.(), readMd: readBuiltinPolicyMd }),
     provider.getUserPolicies?.() ?? []
   )) {
     // 策略级 lets：惰性求值 + 按本次装配 memoize（条件不命中的请求永不触发）

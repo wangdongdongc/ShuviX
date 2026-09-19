@@ -1,6 +1,9 @@
 /**
- * 内置安全策略注册表 —— 策略本体全在同目录 `md/<name>[.<lang>].md`（`?raw` 构建期内联，
- * 两端统一：扩展没有文件系统，桌面的包也以源码内联进构建）。
+ * 内置安全策略注册表 —— 策略本体全在同目录 `md/<name>[.<lang>].md`（一个策略一语言一文件，
+ * 与内置 agent 档案同一套机制）。这些文件**随包发布到磁盘**，运行时经宿主注入的 `readMd`
+ * 现读（桌面 = `Resources/builtin-policies/`，见 electron-builder.yml；扩展 = 构建期内联的
+ * 同一批文件，见 inlineSources.ts）：侧栏点开一份内置策略时看到的只读笔记本，读的就是
+ * 运行时读的那一份。
  *
  * 原则：无策略 = 放行（evaluate 默认 allow）。出厂防护全部在此以策略表达 ——
  * protect-credentials（凭据写 deny + 读 ask）/ protect-system（系统目录写 deny，
@@ -26,169 +29,94 @@
  * 这套出厂组合与安全模块迁移前的询问围栏逐点等价（见设计文档「出厂等价性」）。
  *
  * 多语言：与 builtinAgents 同款「一语言一文件、整文件回退」（精确语言 → 基础语言 → en，
- * 复用 pickLocalizedSource），但有一条安全约束是 agent md 没有的 ——
+ * 复用 builtinMdFileNames 的候选序），但有一条安全约束是 agent md 没有的 ——
  * **规则唯一事实源恒为 en 文件**：本地化文件只贡献 description、body 与各规则的
- * `prompt`（三者都是人读面），frontmatter 里 rules 的判定字段与 lets 在构建时被忽略
+ * `prompt`（三者都是人读面），frontmatter 里 rules 的判定字段与 lets 在装配时被忽略
  * （守护测试另行断言各语言规则去掉 prompt 后与 en 一致，让翻译漂移在 CI 就红，
  * 而不是静默改变安全语义）。prompt 破这个例是因为它本就是给人读的一句话，
  * 留在 en 等于让中/日用户在询问卡片上读英文。
  *
- * **书写约定**（引擎不强制，仅约束这十一份范本）：规则的 `prompt` 按投递面分口吻 ——
+ * **书写约定**（引擎不强制，仅约束这十四份范本）：规则的 `prompt` 按投递面分口吻 ——
  * ask 门写给用户（这一步的风险），deny 门写给 agent（被拒的原因与替代路径），
  * force-allow 规则不投递、只在策略页当说明；`shuvix-policy-scope` 放
  * subject.kind / object.type / env.host（这份策略管什么），规则放 effect / action /
- * match（在这个范围内怎么判）。十份形状一致 —— 用户照抄时不必先挑该学哪一份。
+ * match（在这个范围内怎么判）。各份形状一致 —— 用户照抄时不必先挑该学哪一份。
  * （session-auto-allow 的 scope 只有 subject.kind：它本就跨所有客体类型，
  * 不写 object.type 正是"不约束"的正确表达，不是漏写。）
  *
- * 新增一个内置策略 = 三份 md（en/zh/ja）+ 一条 import + 一个 spec 条目。
+ * 新增一个内置策略 = 三份 md（en/zh/ja）+ 一个 spec 条目（不再需要 import）。
  * 用户可在 ~/.shuvix/policies/<name>.md 同名覆盖任意内置策略或新增自定义策略
  * （宿主 provider.getUserPolicies 提供，assemble 时合并；用户文件单语言即可）。
  */
-import { pickLocalizedSource } from '../../subagent/builtinAgents/spec'
+import { builtinMdFileNames, type BuiltinMdReader } from '../../subagent/builtinAgents/spec'
 import { parsePolicyDefinitionFile } from '../policyFile'
 import type { ParsedPolicyFile } from '../types'
-import askOnReadEn from './md/ask-on-read.md?raw'
-import askOnReadZh from './md/ask-on-read.zh.md?raw'
-import askOnReadJa from './md/ask-on-read.ja.md?raw'
-import reviewMemoryWritesEn from './md/review-memory-writes.md?raw'
-import reviewMemoryWritesZh from './md/review-memory-writes.zh.md?raw'
-import reviewMemoryWritesJa from './md/review-memory-writes.ja.md?raw'
-import askOnWriteEn from './md/ask-on-write.md?raw'
-import protectBotFilesEn from './md/protect-bot-files.md?raw'
-import protectBuiltinKnowledgeEn from './md/protect-builtin-knowledge.md?raw'
-import protectBuiltinKnowledgeZh from './md/protect-builtin-knowledge.zh.md?raw'
-import protectBuiltinKnowledgeJa from './md/protect-builtin-knowledge.ja.md?raw'
-import protectBotFilesZh from './md/protect-bot-files.zh.md?raw'
-import protectBotFilesJa from './md/protect-bot-files.ja.md?raw'
-import askOnWriteZh from './md/ask-on-write.zh.md?raw'
-import askOnWriteJa from './md/ask-on-write.ja.md?raw'
-import protectCredentialsEn from './md/protect-credentials.md?raw'
-import protectCredentialsZh from './md/protect-credentials.zh.md?raw'
-import protectCredentialsJa from './md/protect-credentials.ja.md?raw'
-import protectSystemEn from './md/protect-system.md?raw'
-import protectSystemZh from './md/protect-system.zh.md?raw'
-import protectSystemJa from './md/protect-system.ja.md?raw'
-import blockCatastrophicCommandsEn from './md/block-catastrophic-commands.md?raw'
-import blockCatastrophicCommandsZh from './md/block-catastrophic-commands.zh.md?raw'
-import blockCatastrophicCommandsJa from './md/block-catastrophic-commands.ja.md?raw'
-import askOnCommandEn from './md/ask-on-command.md?raw'
-import askOnCommandZh from './md/ask-on-command.zh.md?raw'
-import askOnCommandJa from './md/ask-on-command.ja.md?raw'
-import gitSafetyEn from './md/git-safety.md?raw'
-import gitSafetyZh from './md/git-safety.zh.md?raw'
-import gitSafetyJa from './md/git-safety.ja.md?raw'
-import askOnDatabaseEn from './md/ask-on-database.md?raw'
-import askOnDatabaseZh from './md/ask-on-database.zh.md?raw'
-import askOnDatabaseJa from './md/ask-on-database.ja.md?raw'
-import askOnSubSessionEn from './md/ask-on-sub-session.md?raw'
-import askOnSubSessionZh from './md/ask-on-sub-session.zh.md?raw'
-import askOnSubSessionJa from './md/ask-on-sub-session.ja.md?raw'
-import sessionAutoAllowEn from './md/session-auto-allow.md?raw'
-import sessionAutoAllowZh from './md/session-auto-allow.zh.md?raw'
-import sessionAutoAllowJa from './md/session-auto-allow.ja.md?raw'
-import sessionPathGrantsEn from './md/session-path-grants.md?raw'
-import sessionPathGrantsZh from './md/session-path-grants.zh.md?raw'
-import sessionPathGrantsJa from './md/session-path-grants.ja.md?raw'
 
-/** 一个内置策略的各语言 md 原文（键为语言代码，'en' 必有且为规则事实源） */
+/** 一个内置策略的声明 —— 纯名字（文案在 md/ 目录，一语言一文件，运行时经 readMd 现读） */
 export interface BuiltinPolicySpec {
+  /** name 必须与各语言 md frontmatter 的 name 一致（守护测试钉死） */
   name: string
-  sources: Record<string, string> & { en: string }
 }
 
-/** name 必须与各语言 md frontmatter 的 name 一致（守护测试钉死） */
 // 装配序 = 决策归因优先序（同 tier 多规则命中时 winning 取先装配者）：
 // 更具体的 protect-credentials 在前，凭据读取归因到它而非泛化的 ask-on-read
 export const BUILTIN_POLICY_SPECS: readonly BuiltinPolicySpec[] = [
-  {
-    name: 'protect-credentials',
-    sources: { en: protectCredentialsEn, zh: protectCredentialsZh, ja: protectCredentialsJa }
-  },
-  {
-    name: 'protect-system',
-    sources: { en: protectSystemEn, zh: protectSystemZh, ja: protectSystemJa }
-  },
-  {
-    name: 'block-catastrophic-commands',
-    sources: {
-      en: blockCatastrophicCommandsEn,
-      zh: blockCatastrophicCommandsZh,
-      ja: blockCatastrophicCommandsJa
-    }
-  },
-  {
-    name: 'protect-bot-files',
-    sources: { en: protectBotFilesEn, zh: protectBotFilesZh, ja: protectBotFilesJa }
-  },
-  {
-    name: 'protect-builtin-knowledge',
-    sources: {
-      en: protectBuiltinKnowledgeEn,
-      zh: protectBuiltinKnowledgeZh,
-      ja: protectBuiltinKnowledgeJa
-    }
-  },
-  {
-    name: 'ask-on-read',
-    sources: { en: askOnReadEn, zh: askOnReadZh, ja: askOnReadJa }
-  },
-  {
-    name: 'ask-on-write',
-    sources: { en: askOnWriteEn, zh: askOnWriteZh, ja: askOnWriteJa }
-  },
-  {
-    name: 'review-memory-writes',
-    sources: { en: reviewMemoryWritesEn, zh: reviewMemoryWritesZh, ja: reviewMemoryWritesJa }
-  },
-  {
-    name: 'ask-on-command',
-    sources: { en: askOnCommandEn, zh: askOnCommandZh, ja: askOnCommandJa }
-  },
-  {
-    name: 'git-safety',
-    sources: { en: gitSafetyEn, zh: gitSafetyZh, ja: gitSafetyJa }
-  },
-  {
-    name: 'ask-on-database',
-    sources: { en: askOnDatabaseEn, zh: askOnDatabaseZh, ja: askOnDatabaseJa }
-  },
-  {
-    name: 'ask-on-sub-session',
-    sources: { en: askOnSubSessionEn, zh: askOnSubSessionZh, ja: askOnSubSessionJa }
-  },
+  { name: 'protect-credentials' },
+  { name: 'protect-system' },
+  { name: 'block-catastrophic-commands' },
+  { name: 'protect-bot-files' },
+  { name: 'protect-builtin-knowledge' },
+  { name: 'ask-on-read' },
+  { name: 'ask-on-write' },
+  { name: 'review-memory-writes' },
+  { name: 'ask-on-command' },
+  { name: 'git-safety' },
+  { name: 'ask-on-database' },
+  { name: 'ask-on-sub-session' },
   // force-allow 层两份放最后：它们与上面的防护不在同一 tier，装配序对结算无影响，
   // 但列表尾部更贴合阅读顺序（先看拦什么，再看什么情况下放行）
-  {
-    name: 'session-auto-allow',
-    sources: { en: sessionAutoAllowEn, zh: sessionAutoAllowZh, ja: sessionAutoAllowJa }
-  },
-  {
-    name: 'session-path-grants',
-    sources: { en: sessionPathGrantsEn, zh: sessionPathGrantsZh, ja: sessionPathGrantsJa }
-  }
+  { name: 'session-auto-allow' },
+  { name: 'session-path-grants' }
 ]
 
-/** 语言 → 解析产物缓存（md 是编译期常量，无失效问题；键为归一化语言码） */
+/** 语言 → 解析产物缓存（键为归一化语言码）。readMd 是进程级稳定接缝（桌面 = 随包目录，
+ * 扩展 = 构建期内联表），不放进缓存键：同一语言换读取源只会发生在测试里，那里各有自己的进程 */
 const cache = new Map<string, ParsedPolicyFile[]>()
 
+export interface BuildBuiltinPoliciesDeps {
+  /** 当前界面语言（i18next.language，如 'zh' / 'zh-CN' / 'ja'）；缺省 en */
+  language?: string
+  /** 内置策略 md 的读取口（宿主注入；入参是目录内文件名，没有那一版返回 null） */
+  readMd: BuiltinMdReader
+}
+
 /**
- * 解析全部内置策略（按界面语言取 description/body；**rules 恒取 en**）。
- * 内置 md 随包发布、用户改不到，解析失败即开发期错误 —— 直接 throw
+ * 解析全部内置策略（按界面语言取 description/body/规则 prompt；**rules 的判定字段恒取 en**）。
+ * 内置 md 随包发布、用户改不到，en 文件缺失或解析失败即开发期错误 —— 直接 throw
  * （对齐「内置策略缺失比启动失败更危险」；守护测试保证发布前必绿）。
  */
-export function buildBuiltinPolicies(language?: string): ParsedPolicyFile[] {
-  const key = (language || 'en').toLowerCase()
+export function buildBuiltinPolicies(deps: BuildBuiltinPoliciesDeps): ParsedPolicyFile[] {
+  const key = (deps.language || 'en').toLowerCase()
   const cached = cache.get(key)
   if (cached) return cached
 
-  const policies = BUILTIN_POLICY_SPECS.map(({ name, sources }) => {
-    const canonical = parsePolicyDefinitionFile(sources.en, name)
+  const policies = BUILTIN_POLICY_SPECS.map(({ name }) => {
+    // en 是规则唯一事实源，必须读得到 —— 它缺席意味着打包漏了文件，绝不能静默退化成
+    // 「没有这道门」
+    const canonicalRaw = deps.readMd(`${name}.md`)
+    if (canonicalRaw === null) {
+      throw new Error(`builtin security policy '${name}' is missing its md file (${name}.md)`)
+    }
+    const canonical = parsePolicyDefinitionFile(canonicalRaw, name)
     if (!canonical || canonical.name !== name) {
       throw new Error(`builtin security policy '${name}' failed to parse`)
     }
-    const localizedRaw = pickLocalizedSource(sources, language)
-    if (localizedRaw === sources.en) return canonical
+    // 本地化文件：与 builtinMdFileNames 同一条回退序（精确语言 → 基础语言），en 自身跳过
+    const localizedRaw = builtinMdFileNames(name, deps.language)
+      .filter((fileName) => fileName !== `${name}.md`)
+      .map((fileName) => deps.readMd(fileName))
+      .find((text) => text !== null)
+    if (!localizedRaw) return canonical
 
     const localized = parsePolicyDefinitionFile(localizedRaw, name)
     if (!localized || localized.name !== name) {

@@ -22,6 +22,10 @@ import type {
   SecurityRule,
   UserPolicyFile
 } from '../types'
+import { createInlinePolicyMdReader } from '../builtinPolicies/inlineSources'
+
+/** 内置策略 md 的构建期内联读取口（运行时单测的宿主接缝；桌面/扩展各注入自己的） */
+const INLINE_POLICY_MD = createInlinePolicyMdReader()
 
 /** 内置策略引用的完整变量表 —— 全供给以免内置 lets 求值告警干扰断言 */
 const BUILTIN_VARS: Record<string, string | string[]> = {
@@ -43,6 +47,7 @@ function makeProvider(overrides: Partial<SecurityHostProvider> = {}): SecurityHo
     pathSep: '/',
     getVars: () => BUILTIN_VARS,
     getSessionGrants: () => ({ autoAllow: false, allowList: [] }),
+    readBuiltinPolicyMd: INLINE_POLICY_MD,
     ...overrides
   }
 }

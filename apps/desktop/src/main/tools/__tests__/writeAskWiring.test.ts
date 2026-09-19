@@ -44,6 +44,7 @@ vi.mock('../../services/toolContext', async () => {
           home: join(TEST_DIR, '.nonexistent-home'),
           systemDirs: []
         }),
+        readBuiltinPolicyMd: INLINE_POLICY_MD,
         getSessionGrants: () => ({ autoAllow: false, allowList: [] }),
         isDirectory: () => false,
         persistGrant: (mode: string, path: string) => void state.persisted.push({ mode, path }),
@@ -75,6 +76,10 @@ import { makeEditTool } from '../edit'
 import { makeReadTool } from '../read'
 import { _resetAll } from '../../utils/toolUtils/fileTime'
 import type { ToolContext } from '../../services/toolContext'
+import { createInlinePolicyMdReader } from '@shuvix/agent-runtime/security/builtinPolicies/inlineSources'
+
+/** 内置策略 md 的构建期内联读取口（真实装配链要它；测试进程，不进桌面 bundle） */
+const INLINE_POLICY_MD = createInlinePolicyMdReader()
 
 const ctx: ToolContext = { sessionId: SESSION_ID }
 

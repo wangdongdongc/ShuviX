@@ -25,10 +25,14 @@ export default defineConfig({
     alias: {
       '@shuvix/chat-protocol': chatProtocol,
       '@shuvix/chat-ui': chatUi,
-      // 内置 agent md 的**构建期内联**变体：只有没有文件系统的扩展用它（桌面读随包目录）
+      // 内置 agent / 安全策略 md 的**构建期内联**变体：只有没有文件系统的扩展用它（桌面读随包目录）
       '@shuvix/agent-runtime/builtinAgents/inlineSources': resolve(
         __dirname,
         '../../packages/agent-runtime/src/subagent/builtinAgents/inlineSources.ts'
+      ),
+      '@shuvix/agent-runtime/security/builtinPolicies/inlineSources': resolve(
+        __dirname,
+        '../../packages/agent-runtime/src/security/builtinPolicies/inlineSources.ts'
       ),
       '@shuvix/agent-runtime': agentRuntime,
       '@shuvix/app-shell': appShell,

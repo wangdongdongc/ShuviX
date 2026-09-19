@@ -8,6 +8,8 @@ import {
   Sidebar as SharedSidebar,
   AgentGroup,
   type AgentGroupAdapter,
+  PolicyGroup,
+  type PolicyGroupAdapter,
   BotGroup,
   type BotGroupAdapter,
   KnowledgeGroup,
@@ -23,6 +25,7 @@ import { useUpdateStore } from '../../stores/updateStore'
 import { usePinChatStore } from '../../stores/pinChatStore'
 import { ProjectEditDialog } from './ProjectEditDialog'
 import { newAgentTemplate } from './agentTemplate'
+import { newPolicyTemplate } from './policyTemplate'
 import { SkillDirDialog } from './SkillDirDialog'
 import { ConfirmDialog } from '../common/ConfirmDialog'
 import { fileNameOf, uniqueName } from '../common/registryFiles'
@@ -38,7 +41,9 @@ import { fileNameOf, uniqueName } from '../common/registryFiles'
  *     用户档案点行开可编辑的笔记本，内置档案点行开**随包发布那份 md 的只读笔记本**，右键才是
  *     「创建覆盖副本」）+ 技能置顶分组（SkillGroup，接 window.api.skill.*；目录成行、默认目录的
  *     技能平铺，点行开那个技能 SKILL.md 的笔记本，启用开关与增删在菜单里）+ 知识库置顶分组
- *     （KnowledgeGroup，接 window.api.knowledge.*，点行开 / 复用条目的笔记本会话）
+ *     （KnowledgeGroup，接 window.api.knowledge.*，点行开 / 复用条目的笔记本会话）+ 安全策略
+ *     置顶分组（PolicyGroup，接 window.api.policy.*；用户策略点行开可编辑的笔记本，内置策略
+ *     点行开**随包发布那份 md 的只读笔记本**，右键才是「创建覆盖副本」）
  *   - 底部更新提示。侧栏只有项目视图 —— 日历已迁至右面板 Calendar tab（CalendarPanel）
  *   - 归档项目的恢复 / 删除已移至「设置 → Projects → 已归档」
  */
@@ -59,6 +64,10 @@ export function Sidebar(): React.JSX.Element {
   >(null)
   /** 待确认删除的智能体档案（按名删生效的那份）或按文件名删（非法 / 同名里被遮蔽的那份） */
   const [confirmingAgentDelete, setConfirmingAgentDelete] = useState<
+    { name: string; displayName: string; fileName: string } | { fileName: string } | null
+  >(null)
+  /** 待确认删除的用户策略（按名删生效的那份）或按文件名删（非法 / 同名里被遮蔽的那份） */
+  const [confirmingPolicyDelete, setConfirmingPolicyDelete] = useState<
     { name: string; displayName: string; fileName: string } | { fileName: string } | null
   >(null)
   /** 待确认删除的技能（整个子目录）或待移除的外部技能目录 */
@@ -260,6 +269,108 @@ export function Sidebar(): React.JSX.Element {
   }
 
   /**
+   * 安全策略分组能力注入 —— 清单 = 一次同名裁决的全部份数（`policy.list`）+ 无法解析的文件。
+   * 用户策略点一行 / 新建一份 / 建覆盖副本，落点都是那份文件的**笔记本会话**（main 侧去重，
+   * 隐藏项目 `__policies__`）；内置策略的 md 随包发布在应用包里（运行时读的就是它），点行开的是
+   * 它的**只读**笔记本（载体 `__policies_builtin__`，main 侧按名挑当前语言那一版）。
+   * 新建与覆盖副本共用 `policy.create` 这一个写入口（非法一律拒绝），建好后按名回查文件名再开笔记。
+   * 删除先弹确认框（见 overlays），真删掉后 `policy.changed` 让分组重扫。
+   * 引用必须稳定（useMemo）：分组以 adapter 为扫描依赖。
+   */
+  const policyGroupAdapter = useMemo<PolicyGroupAdapter>(() => {
+    /** 打开一份策略 md 的笔记本会话并选中它（用户策略与内置策略只差 main 侧那一步怎么找文件） */
+    const openNoteWith = async (open: () => Promise<{ id: string }>): Promise<void> => {
+      let session: { id: string }
+      try {
+        session = await open()
+      } catch {
+        return // 文件已不在（清单过期）—— policy.changed / 聚焦重扫会把这一行拿掉
+      }
+      useChatStore.getState().setSessions(await getChatApi().session.list())
+      setActiveSessionId(session.id)
+    }
+    const openNote = (fileName: string, title?: string): Promise<void> =>
+      openNoteWith(() => window.api.policy.openNote({ fileName, title }))
+    /** 落一份新的用户策略并打开它：create 只回名字，文件名回查列表（派生时可能加了后缀） */
+    const createAndOpen = async (text: string): Promise<void> => {
+      const r = await window.api.policy.create({ text })
+      if (!r.success || !r.name) return
+      const hit = (await window.api.policy.list()).find(
+        (p) => p.source === 'user' && p.name === r.name
+      )
+      if (hit) await openNote(fileNameOf(hit.basePath), hit.displayName)
+    }
+    return {
+      list: async () => {
+        const [list, invalid] = await Promise.all([
+          window.api.policy.list(),
+          window.api.policy.listInvalid()
+        ])
+        return {
+          policies: list.map((p) => ({
+            name: p.name,
+            displayName: p.displayName || p.name,
+            description: p.description,
+            source: p.source,
+            // 两种策略的 basePath 都是真实文件：用户的在 ~/.shuvix/policies，内置的在应用包里
+            // （运行时按语言挑中的那一份）—— 行按文件名认，点行开的就是这份 md 的笔记本
+            fileName: fileNameOf(p.basePath),
+            ...(p.overridden ? { overridden: true } : {}),
+            ...(p.overriddenBy ? { overriddenBy: p.overriddenBy } : {})
+          })),
+          invalid
+        }
+      },
+      open: openNote,
+      openBuiltin: (policy) =>
+        openNoteWith(() =>
+          window.api.policy.openBuiltinNote({ name: policy.name, title: policy.displayName })
+        ),
+      create: async () => {
+        const taken = (await window.api.policy.list()).map((p) => p.name)
+        await createAndOpen(newPolicyTemplate(t, uniqueName('my-policy', taken)))
+      },
+      createOverride: async (policy) => {
+        const r = await window.api.policy.getSource({ name: policy.name, source: 'builtin' })
+        if ('error' in r) return
+        await createAndOpen(r.text)
+      },
+      openFolder: () => window.api.policy.openFolder(),
+      delete: (policy) =>
+        setConfirmingPolicyDelete({
+          name: policy.name,
+          displayName: policy.displayName,
+          fileName: policy.fileName
+        }),
+      deleteFile: (fileName) => setConfirmingPolicyDelete({ fileName })
+    }
+  }, [setActiveSessionId, t])
+
+  /**
+   * 确认删除策略：按名删的是生效的那份（删掉后同名内置自动恢复生效），按文件名删的是非法的 /
+   * 同名里被遮蔽的那份。删掉的正是主区开着的那份文件的笔记本时顺手离开它 —— 留着接着打字，
+   * 自动保存会把刚删掉的文件写回来。
+   */
+  const handlePolicyDelete = async (
+    target: { name: string; fileName: string } | { fileName: string }
+  ): Promise<void> => {
+    setConfirmingPolicyDelete(null)
+    const r =
+      'name' in target
+        ? await window.api.policy.delete({ name: target.name })
+        : await window.api.policy.deleteByFile({ fileName: target.fileName })
+    if (!r.success) return
+    const { sessions, activeSessionId } = useChatStore.getState()
+    const active = sessions.find((s) => s.id === activeSessionId)
+    if (
+      active?.projectId === REGISTRY_NOTE_PROJECT_IDS.policy &&
+      active.settings.notebookPath === target.fileName
+    ) {
+      setActiveSessionId(null)
+    }
+  }
+
+  /**
    * 项目记忆能力注入 —— 清单读盘，打开一条即打开/复用绑定它的笔记本会话（进 live-preview 直接编辑）。
    * 引用必须稳定（useMemo）：子文件夹以 adapter 为扫描依赖，每渲染新建对象会导致反复扫盘。
    */
@@ -415,6 +526,7 @@ export function Sidebar(): React.JSX.Element {
           <AgentGroup adapter={agentGroupAdapter} />
           <SkillGroup adapter={skillGroupAdapter} />
           <KnowledgeGroup adapter={knowledgeAdapter} />
+          <PolicyGroup adapter={policyGroupAdapter} />
         </>
       }
       overlays={
@@ -487,6 +599,24 @@ export function Sidebar(): React.JSX.Element {
               cancelText={t('common.cancel')}
               onConfirm={() => void handleAgentDelete(confirmingAgentDelete)}
               onCancel={() => setConfirmingAgentDelete(null)}
+            />
+          )}
+          {confirmingPolicyDelete && (
+            <ConfirmDialog
+              title={t('settings.policyDeleteConfirmTitle')}
+              description={
+                'name' in confirmingPolicyDelete
+                  ? t('settings.policyDeleteConfirmDesc', {
+                      name: confirmingPolicyDelete.displayName
+                    })
+                  : t('settings.policyDeleteFileConfirmDesc', {
+                      name: confirmingPolicyDelete.fileName
+                    })
+              }
+              confirmText={t('common.delete')}
+              cancelText={t('common.cancel')}
+              onConfirm={() => void handlePolicyDelete(confirmingPolicyDelete)}
+              onCancel={() => setConfirmingPolicyDelete(null)}
             />
           )}
         </>

@@ -34,6 +34,7 @@ export {
 export {
   buildBuiltinPolicies,
   BUILTIN_POLICY_SPECS,
+  type BuildBuiltinPoliciesDeps,
   type BuiltinPolicySpec
 } from './builtinPolicies'
 export { assembleRules, mergePolicyFiles, resolvePolicyFiles } from './assemble'

@@ -17,10 +17,18 @@ import { tmpdir } from 'node:os'
 import i18next from 'i18next'
 import { assembleRules, type SecurityHostProvider } from '@shuvix/agent-runtime'
 
-const state = vi.hoisted(() => ({ dir: '' }))
+const state = vi.hoisted(() => ({
+  dir: '',
+  // 内置策略的事实源 —— 运行时读随包发布的目录，这里直接读仓库里那一份（同一批文件）。
+  // src/main/services/__tests__ 往上六级是仓库根；hoisted 里没有 import，故不走 resolve()
+  builtinDir: `${__dirname}/../../../../../../packages/agent-runtime/src/security/builtinPolicies/md`
+}))
 
 vi.mock('electron', () => ({ shell: { openPath: vi.fn() } }))
-vi.mock('../../utils/paths', () => ({ getDefaultPoliciesDir: () => state.dir }))
+vi.mock('../../utils/paths', () => ({
+  getDefaultPoliciesDir: () => state.dir,
+  getBuiltinPoliciesDir: () => state.builtinDir
+}))
 vi.mock('../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {} })
 }))
@@ -164,6 +172,12 @@ describe('policyService — 拒绝原因与错误文案', () => {
       error: 'Policy "ask-on-write" not found'
     })
   })
+
+  it('PU-5b getSource(builtin) 回吐的是随包目录里当前语言那份 md 的逐字原文（注释/键序原样，不是序列化产物）', () => {
+    // 测试进程 i18next 未初始化 → en；en 是无后缀那份（规则唯一事实源）
+    const text = readFileSync(join(state.builtinDir, 'ask-on-write.md'), 'utf-8')
+    expect(policyService.getSource('ask-on-write', 'builtin')).toEqual({ text })
+  })
 })
 
 /**
@@ -229,6 +243,7 @@ describe('policyService —— 同名的几份：设置页列表与评估是同�
     }),
     getSessionGrants: () => ({ autoAllow: false, allowList: [] }),
     getLanguage: () => i18next.language,
+    readBuiltinPolicyMd: (fileName) => policyService.readBuiltinPolicyMd(fileName),
     getUserPolicies: () => policyService.getUserPolicies()
   })
 
@@ -252,7 +267,7 @@ describe('policyService —— 同名的几份：设置页列表与评估是同�
     )
   }
 
-  /** 设置页里这个名字的行：[来源, 文件名（内置为空串）, 是否被覆盖, 被谁覆盖] */
+  /** 设置页里这个名字的行：[来源, 文件名（内置 = 随包那份当前语言版）, 是否被覆盖, 被谁覆盖] */
   const rowsNamed = (name: string): Array<[string, string, boolean, string | undefined]> =>
     policyService
       .listForSettings()
@@ -288,10 +303,11 @@ describe('policyService —— 同名的几份：设置页列表与评估是同�
         name
       ).toHaveLength(1)
     }
-    // 排序口径（compareRows）：名字 → 生效在前 → basePath；内置的 basePath 是空串，排在输掉的用户文件前
+    // 排序口径（compareRows）：名字 → 生效在前 → basePath；内置的 basePath 是随包文件的真实路径
+    // （当前语言那一版），不再为空串
     expect(rowsNamed('ask-on-write')).toEqual([
       ['user', 'ask-on-write.md', false, undefined],
-      ['builtin', '', true, 'ask-on-write.md'],
+      ['builtin', 'ask-on-write.md', true, 'ask-on-write.md'],
       ['user', 'a.md', true, 'ask-on-write.md']
     ])
     expect(rowsNamed('gate')).toEqual([
@@ -320,7 +336,7 @@ describe('policyService —— 同名的几份：设置页列表与评估是同�
     expect(assembledFor('ask-on-write')).toEqual([['user', 'ask', "inDir(object.path, '/copy')"]])
     expect(rowsNamed('ask-on-write')).toEqual([
       ['user', 'a.md', false, undefined],
-      ['builtin', '', true, 'a.md']
+      ['builtin', 'ask-on-write.md', true, 'a.md']
     ])
     expect(policyService.getSource('ask-on-write', 'user')).toEqual({ text: COPY })
 
@@ -333,7 +349,7 @@ describe('policyService —— 同名的几份：设置页列表与评估是同�
 
     // 最后一份同名用户文件也删掉：只剩内置、不再被覆盖，评估里是内置的规则，user 源查不到
     expect(policyService.deleteByFile('a.md')).toEqual({ success: true })
-    expect(rowsNamed('ask-on-write')).toEqual([['builtin', '', false, undefined]])
+    expect(rowsNamed('ask-on-write')).toEqual([['builtin', 'ask-on-write.md', false, undefined]])
     const restored = assembledFor('ask-on-write')
     expect(restored.length).toBeGreaterThan(0)
     expect(restored.every(([kind]) => kind === 'builtin')).toBe(true)

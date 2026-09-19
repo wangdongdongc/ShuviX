@@ -15,7 +15,6 @@ import {
   Send,
   Mic,
   Archive,
-  Shield,
   Webhook
 } from 'lucide-react'
 import { SettingsContainer, type SettingsTab } from '@shuvix/app-shell'
@@ -27,7 +26,6 @@ import { MonitorSettings, MONITOR_SUB_TABS, type MonitorSubTab } from './Monitor
 import { AboutSettings } from './AboutSettings'
 import { McpSettings } from './McpSettings'
 import { ToolSettings } from './ToolSettings'
-import { PolicySettings } from './PolicySettings'
 import { HookSettings } from './HookSettings'
 import { TelegramBotsSettings } from './TelegramBotsSettings'
 import { VoiceSettings } from './VoiceSettings'
@@ -37,7 +35,6 @@ const VALID_TABS = new Set([
   'archived',
   'providers',
   'hooks',
-  'policies',
   'tools',
   'mcp',
   'voice',
@@ -105,12 +102,6 @@ export function SettingsPanel(): React.JSX.Element {
       label: t('settings.tabHooks'),
       icon: <Webhook size={14} />,
       content: <HookSettings />
-    },
-    {
-      id: 'policies',
-      label: t('settings.tabPolicies'),
-      icon: <Shield size={14} />,
-      content: <PolicySettings />
     },
     {
       id: 'tools',

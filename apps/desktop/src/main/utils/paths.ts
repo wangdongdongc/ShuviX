@@ -129,6 +129,21 @@ export function getBuiltinAgentsDir(): string {
       resolve(__dirname, '../../../../packages/agent-runtime/src/subagent/builtinAgents/md')
 }
 
+/**
+ * 内置安全策略目录 —— **内置策略的唯一事实源**。随包发布（`Resources/builtin-policies/`，
+ * 见 electron-builder.yml 的 extraResources），开发期指向仓库里
+ * `packages/agent-runtime/src/security/builtinPolicies/md`。
+ *
+ * 运行时按当前语言现读这里的文件（policyService / 桌面 SecurityHostProvider 的
+ * readBuiltinPolicyMd → buildBuiltinPolicies），侧栏点开一份内置策略时打开的
+ * 也是同一份文件的只读笔记本。与 getBuiltinAgentsDir 同策：没有 app（半桩的单测）按未打包算。
+ */
+export function getBuiltinPoliciesDir(): string {
+  return app?.isPackaged
+    ? join(process.resourcesPath, 'builtin-policies')
+    : resolve(__dirname, '../../../../packages/agent-runtime/src/security/builtinPolicies/md')
+}
+
 /** 全局 Agents 目录：~/.shuvix/agents/（用户自己的档案；不自动创建，由 agentService 管理） */
 export function getDefaultAgentsDir(): string {
   return join(homedir(), '.shuvix', 'agents')

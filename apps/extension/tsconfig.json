@@ -23,6 +23,9 @@
       "@shuvix/agent-runtime/builtinAgents/inlineSources": [
         "../../packages/agent-runtime/src/subagent/builtinAgents/inlineSources.ts"
       ],
+      "@shuvix/agent-runtime/security/builtinPolicies/inlineSources": [
+        "../../packages/agent-runtime/src/security/builtinPolicies/inlineSources.ts"
+      ],
       "@shuvix/app-shell": ["../../packages/app-shell/src/index.ts"],
       "@shuvix/app-shell/*": ["../../packages/app-shell/src/*"],
       "@shuvix/atomic-editor": ["../../packages/atomic-editor/src/index.ts"],

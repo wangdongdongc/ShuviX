@@ -45,6 +45,7 @@ vi.mock('../../services/toolContext', async () => {
           systemDirs: []
         }),
         // 免询问开着：库上没有策略，所以知识库写也不问
+        readBuiltinPolicyMd: INLINE_POLICY_MD,
         getSessionGrants: () => ({ autoAllow: true, allowList: [] }),
         isDirectory: () => false,
         persistGrant: () => {},
@@ -87,6 +88,10 @@ import { _resetAll } from '../../utils/toolUtils/fileTime'
 // FD-6 拿它证明那条路径**确实落在内置库里**，而不是「不属于任何库」—— 否则与 FD-2 就没区别了
 import { locateBundle } from '../../services/knowledge/knowledgePaths'
 import type { ToolContext } from '../../services/toolContext'
+import { createInlinePolicyMdReader } from '@shuvix/agent-runtime/security/builtinPolicies/inlineSources'
+
+/** 内置策略 md 的构建期内联读取口（真实装配链要它；测试进程，不进桌面 bundle） */
+const INLINE_POLICY_MD = createInlinePolicyMdReader()
 
 const DRAFT = [
   '---',

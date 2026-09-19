@@ -22,6 +22,13 @@ import type {
   SecurityHostProvider,
   SecurityObject
 } from '../types'
+import {
+  createInlinePolicyMdReader,
+  inlinedPolicyMdFileNames
+} from '../builtinPolicies/inlineSources'
+
+/** 内置策略 md 的构建期内联读取口（运行时单测的宿主接缝；桌面/扩展各注入自己的） */
+const INLINE_POLICY_MD = createInlinePolicyMdReader()
 
 /** 剥掉人读提示语后的规则 —— 各语言之间做「判定字段一致」比较的口径 */
 const withoutPrompt = (rule: PolicyRuleSpec): PolicyRuleSpec => {
@@ -29,16 +36,31 @@ const withoutPrompt = (rule: PolicyRuleSpec): PolicyRuleSpec => {
   return rest
 }
 
+/**
+ * 某份内置策略的各语言 md 原文表（键为语言代码，en 必有）—— 从内联读取口现取，
+ * 重建改制前 spec.sources 的形状，让 BP-1b/5/6 那批「逐语言文件」守护几乎不用动
+ */
+const sourcesOf = (name: string): Record<string, string> & { en: string } => {
+  const sources: Record<string, string> = {}
+  for (const fileName of inlinedPolicyMdFileNames()) {
+    if (fileName === `${name}.md`) sources.en = INLINE_POLICY_MD(fileName)!
+    else if (fileName.startsWith(`${name}.`))
+      sources[fileName.slice(name.length + 1, -'.md'.length)] = INLINE_POLICY_MD(fileName)!
+  }
+  expect(sources.en, `${name}.md 不在内联表里`).toBeTruthy()
+  return sources as Record<string, string> & { en: string }
+}
+
 const byName = (name: string): ParsedPolicyFile => {
-  const policy = buildBuiltinPolicies().find((p) => p.name === name)
+  const policy = buildBuiltinPolicies({ readMd: INLINE_POLICY_MD }).find((p) => p.name === name)
   expect(policy, `builtin policy '${name}' missing`).toBeDefined()
   return policy!
 }
 
 describe('buildBuiltinPolicies', () => {
   it('BP-1 不 throw；恰 14 份；名字与 SPECS 一致且互异', () => {
-    expect(() => buildBuiltinPolicies()).not.toThrow()
-    const policies = buildBuiltinPolicies()
+    expect(() => buildBuiltinPolicies({ readMd: INLINE_POLICY_MD })).not.toThrow()
+    const policies = buildBuiltinPolicies({ readMd: INLINE_POLICY_MD })
     expect(policies).toHaveLength(14)
     expect(policies.map((p) => p.name)).toEqual(BUILTIN_POLICY_SPECS.map((s) => s.name))
     expect(new Set(policies.map((p) => p.name)).size).toBe(14)
@@ -46,7 +68,7 @@ describe('buildBuiltinPolicies', () => {
 
   it('BP-1b 每份语言文件都声明 shuvix-builtin: true（新增内置策略漏写即红）', () => {
     for (const spec of BUILTIN_POLICY_SPECS) {
-      for (const [language, source] of Object.entries(spec.sources)) {
+      for (const [language, source] of Object.entries(sourcesOf(spec.name))) {
         expect(source, `${spec.name}.${language}`).toMatch(/^shuvix-builtin: true$/m)
       }
     }
@@ -56,7 +78,7 @@ describe('buildBuiltinPolicies', () => {
     // force-allow 不在此列且**必须**不在：出厂的 session-auto-allow / session-path-grants
     // 正是用它表达会话授权。要挡的是静态 allow —— 它只会白占一层 static-allow，
     // 既压不过询问门，又让"没有策略就是放行"这条默认语义多出一个等价的替身。
-    for (const policy of buildBuiltinPolicies()) {
+    for (const policy of buildBuiltinPolicies({ readMd: INLINE_POLICY_MD })) {
       for (const rule of policy.rules) {
         expect(rule.effect, `${policy.name} 存在内置 allow 规则`).not.toBe('allow')
       }
@@ -64,7 +86,7 @@ describe('buildBuiltinPolicies', () => {
   })
 
   it('BP-2b 不变式：每条内置规则的有效条件都限定 agent 主体（防护不作用于 user 主体）', () => {
-    for (const policy of buildBuiltinPolicies()) {
+    for (const policy of buildBuiltinPolicies({ readMd: INLINE_POLICY_MD })) {
       for (const rule of policy.rules) {
         const effective = mergeConditions(policy.scope, rule.conditions)
         expect(effective?.['subject.kind'], `${policy.name} 规则未限定 agent 主体`).toEqual([
@@ -75,7 +97,7 @@ describe('buildBuiltinPolicies', () => {
   })
 
   it('BP-2c 不变式：凡引用 object 属性的内置规则都声明 object.type（strict 语义下不误拦他类客体）', () => {
-    for (const policy of buildBuiltinPolicies()) {
+    for (const policy of buildBuiltinPolicies({ readMd: INLINE_POLICY_MD })) {
       for (const rule of policy.rules) {
         const effective = mergeConditions(policy.scope, rule.conditions)
         // 不碰 object 属性的规则无需类型守卫 —— strict 只在跨 type 误引用时报错。
@@ -274,7 +296,7 @@ describe('buildBuiltinPolicies', () => {
     // ask/deny 会让**每个**工具调用都落进真评估 —— 免询问会话会以每调用一条的速度刷爆
     // 决策 ring buffer。
     const gates: string[] = []
-    for (const policy of buildBuiltinPolicies()) {
+    for (const policy of buildBuiltinPolicies({ readMd: INLINE_POLICY_MD })) {
       for (const rule of policy.rules) {
         // allow/force-allow 命中 invocation 无害：L1 对 allow 一律走非事件快路，与默认放行同待遇
         if (rule.effect === 'allow' || rule.effect === 'force-allow') continue
@@ -304,16 +326,22 @@ describe('buildBuiltinPolicies', () => {
   })
 
   it('BP-4 同语言两次调用返回同一引用（按语言缓存）；不同语言各自缓存', () => {
-    expect(buildBuiltinPolicies()).toBe(buildBuiltinPolicies())
-    expect(buildBuiltinPolicies('zh')).toBe(buildBuiltinPolicies('zh'))
-    expect(buildBuiltinPolicies('zh')).not.toBe(buildBuiltinPolicies())
+    expect(buildBuiltinPolicies({ readMd: INLINE_POLICY_MD })).toBe(
+      buildBuiltinPolicies({ readMd: INLINE_POLICY_MD })
+    )
+    expect(buildBuiltinPolicies({ language: 'zh', readMd: INLINE_POLICY_MD })).toBe(
+      buildBuiltinPolicies({ language: 'zh', readMd: INLINE_POLICY_MD })
+    )
+    expect(buildBuiltinPolicies({ language: 'zh', readMd: INLINE_POLICY_MD })).not.toBe(
+      buildBuiltinPolicies({ readMd: INLINE_POLICY_MD })
+    )
   })
 })
 
 describe('buildBuiltinPolicies — 多语言', () => {
   it('BP-5 每份策略的每个语言文件都可独立解析，且 name 与 spec 一致', () => {
     for (const spec of BUILTIN_POLICY_SPECS) {
-      for (const [lang, raw] of Object.entries(spec.sources)) {
+      for (const [lang, raw] of Object.entries(sourcesOf(spec.name))) {
         const parsed = parsePolicyDefinitionFile(raw, spec.name)
         expect(parsed, `${spec.name}.${lang} 解析失败`).not.toBeNull()
         expect(parsed!.name, `${spec.name}.${lang} name 漂移`).toBe(spec.name)
@@ -325,8 +353,8 @@ describe('buildBuiltinPolicies — 多语言', () => {
     // prompt 是唯一允许各语言不同的规则字段（人读提示语，不参与匹配）——
     // 比较时剥掉它，其余判定字段（effect/conditions/match）仍必须与 en 逐字一致
     for (const spec of BUILTIN_POLICY_SPECS) {
-      const canonical = parsePolicyDefinitionFile(spec.sources.en, spec.name)!
-      for (const [lang, raw] of Object.entries(spec.sources)) {
+      const canonical = parsePolicyDefinitionFile(sourcesOf(spec.name).en, spec.name)!
+      for (const [lang, raw] of Object.entries(sourcesOf(spec.name))) {
         if (lang === 'en') continue
         const localized = parsePolicyDefinitionFile(raw, spec.name)!
         expect(
@@ -342,11 +370,11 @@ describe('buildBuiltinPolicies — 多语言', () => {
     // 内置策略「都加上 prompt」是这一版的约定；漏写一条即红。
     // 各语言不同则证明 overlay 生效（否则中/日用户会在询问卡片上读到英文）
     for (const spec of BUILTIN_POLICY_SPECS) {
-      const canonical = parsePolicyDefinitionFile(spec.sources.en, spec.name)!
+      const canonical = parsePolicyDefinitionFile(sourcesOf(spec.name).en, spec.name)!
       canonical.rules.forEach((rule, i) => {
         expect(rule.prompt, `${spec.name}.en 规则 #${i} 缺 prompt`).toBeTruthy()
       })
-      for (const [lang, raw] of Object.entries(spec.sources)) {
+      for (const [lang, raw] of Object.entries(sourcesOf(spec.name))) {
         if (lang === 'en') continue
         const localized = parsePolicyDefinitionFile(raw, spec.name)!
         expect(localized.rules, `${spec.name}.${lang} 规则条数与 en 不同`).toHaveLength(
@@ -363,12 +391,12 @@ describe('buildBuiltinPolicies — 多语言', () => {
   })
 
   it('BP-6c buildBuiltinPolicies 按语言 overlay prompt：判定字段恒取 en，prompt 取本地化文件', () => {
-    const en = buildBuiltinPolicies()
+    const en = buildBuiltinPolicies({ readMd: INLINE_POLICY_MD })
     for (const language of ['zh', 'ja']) {
-      const localized = buildBuiltinPolicies(language)
+      const localized = buildBuiltinPolicies({ language, readMd: INLINE_POLICY_MD })
       for (const policy of localized) {
         const canonical = en.find((p) => p.name === policy.name)!
-        const raw = BUILTIN_POLICY_SPECS.find((s) => s.name === policy.name)!.sources[language]
+        const raw = sourcesOf(policy.name)[language]
         const fromFile = parsePolicyDefinitionFile(raw, policy.name)!
         policy.rules.forEach((rule, i) => {
           expect(rule.prompt, `${policy.name}.${language} 规则 #${i} 未取本地化 prompt`).toBe(
@@ -383,10 +411,10 @@ describe('buildBuiltinPolicies — 多语言', () => {
   })
 
   it('BP-7 语言回退：zh/zh-CN 取中文人读面，未知语言与缺省取 en；规则恒等于 en', () => {
-    const en = buildBuiltinPolicies()
-    const zh = buildBuiltinPolicies('zh')
-    const zhCn = buildBuiltinPolicies('zh-CN')
-    const fr = buildBuiltinPolicies('fr')
+    const en = buildBuiltinPolicies({ readMd: INLINE_POLICY_MD })
+    const zh = buildBuiltinPolicies({ language: 'zh', readMd: INLINE_POLICY_MD })
+    const zhCn = buildBuiltinPolicies({ language: 'zh-CN', readMd: INLINE_POLICY_MD })
+    const fr = buildBuiltinPolicies({ language: 'fr', readMd: INLINE_POLICY_MD })
 
     const pick = (list: ParsedPolicyFile[]): ParsedPolicyFile =>
       list.find((p) => p.name === 'ask-on-write')!
@@ -409,8 +437,8 @@ describe('buildBuiltinPolicies — 多语言', () => {
   })
 
   it('BP-8 ja 人读面同样本地化', () => {
-    const ja = buildBuiltinPolicies('ja')
-    const en = buildBuiltinPolicies()
+    const ja = buildBuiltinPolicies({ language: 'ja', readMd: INLINE_POLICY_MD })
+    const en = buildBuiltinPolicies({ readMd: INLINE_POLICY_MD })
     for (const policy of ja) {
       const canonical = en.find((p) => p.name === policy.name)!
       expect(policy.description).not.toBe(canonical.description)
@@ -423,7 +451,7 @@ describe('buildBuiltinPolicies — 多语言', () => {
     // 用户不改一个字直接保存后，落盘文件被同一个解析器读回 —— 这条往返一旦不等，
     // 覆盖副本会在用户毫无察觉的情况下改变一道出厂防护的语义。
     for (const language of ['en', 'zh', 'ja']) {
-      for (const policy of buildBuiltinPolicies(language)) {
+      for (const policy of buildBuiltinPolicies({ language, readMd: INLINE_POLICY_MD })) {
         const label = `${policy.name}.${language}`
         const roundTripped = parsePolicyDefinitionFile(
           serializePolicyDefinitionFile(policy),
@@ -445,9 +473,9 @@ describe('buildBuiltinPolicies — 多语言', () => {
   })
 
   it('BP-9 displayName：每份内置都有显示名（≠ name 的 slug）且 zh/ja 本地化', () => {
-    const en = buildBuiltinPolicies()
-    const zh = buildBuiltinPolicies('zh')
-    const ja = buildBuiltinPolicies('ja')
+    const en = buildBuiltinPolicies({ readMd: INLINE_POLICY_MD })
+    const zh = buildBuiltinPolicies({ language: 'zh', readMd: INLINE_POLICY_MD })
+    const ja = buildBuiltinPolicies({ language: 'ja', readMd: INLINE_POLICY_MD })
     for (const policy of en) {
       // en 显示名存在且不是 kebab slug 本身
       expect(policy.displayName.length).toBeGreaterThan(0)
@@ -479,6 +507,7 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
       pathSep: '/',
       getVars: () => DESKTOP_VARS,
       getSessionGrants: () => ({ autoAllow: false, allowList: [] }),
+      readBuiltinPolicyMd: INLINE_POLICY_MD,
       ...overrides
     }
   }
@@ -757,10 +786,12 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
   // ── 命中提示语的真实组合（内置策略确实两两同 tier 命中的那几处）
   /** 某份内置策略的显示名（不硬编码文案 —— 它随界面语言变） */
   const displayNameOf = (policy: string, language?: string): string =>
-    buildBuiltinPolicies(language).find((p) => p.name === policy)!.displayName
+    buildBuiltinPolicies({ language, readMd: INLINE_POLICY_MD }).find((p) => p.name === policy)!
+      .displayName
   /** 某条内置规则的 prompt 原文（同上，取自 md 而不是抄进断言） */
   const promptOf = (policy: string, index: number, language?: string): string =>
-    buildBuiltinPolicies(language).find((p) => p.name === policy)!.rules[index].prompt!
+    buildBuiltinPolicies({ language, readMd: INLINE_POLICY_MD }).find((p) => p.name === policy)!
+      .rules[index].prompt!
 
   it('BP-P1 区外读凭据文件：protect-credentials#1 与 ask-on-read#0 同 tier 命中 → 两段文案 + 两个署名', () => {
     const decision = decide('read', { type: 'path', path: '/Users/u/.ssh/id_rsa' })

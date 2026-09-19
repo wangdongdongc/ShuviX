@@ -11,7 +11,11 @@ import {
   clearSessionDecisions,
   getSessionDecisions
 } from '@shuvix/agent-runtime'
+import { createInlinePolicyMdReader } from '@shuvix/agent-runtime/security/builtinPolicies/inlineSources'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
+
+/** 内置策略 md 的构建期内联读取口（W-9 走真装配链；测试进程，不进桌面 bundle） */
+const INLINE_POLICY_MD = createInlinePolicyMdReader()
 
 vi.mock('../toolContext', () => ({ TOOL_ABORTED: 'Aborted' }))
 vi.mock('../../logger', () => ({
@@ -267,6 +271,7 @@ describe('wrapToolOutput — L1 全工具门', () => {
           systemDirs: []
         }),
         getSessionGrants: () => ({ autoAllow: false, allowList: [] }),
+        readBuiltinPolicyMd: INLINE_POLICY_MD,
         getUserPolicies: () => [
           {
             name: 'tool-gate',

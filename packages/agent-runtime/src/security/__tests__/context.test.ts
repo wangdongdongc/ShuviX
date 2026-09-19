@@ -15,6 +15,10 @@ import type {
   SecurityObject
 } from '../types'
 import type { ShellFacts } from '../shell'
+import { createInlinePolicyMdReader } from '../builtinPolicies/inlineSources'
+
+/** 内置策略 md 的构建期内联读取口（运行时单测的宿主接缝；桌面/扩展各注入自己的） */
+const INLINE_POLICY_MD = createInlinePolicyMdReader()
 
 /**
  * 手工构造命令客体时的结构属性缺省值 —— 等同「宿主没有注入解析器」。
@@ -61,6 +65,7 @@ function makeProvider(
       systemDirs: []
     }),
     getSessionGrants: () => grants,
+    readBuiltinPolicyMd: INLINE_POLICY_MD,
     ...overrides
   }
 }
@@ -1330,7 +1335,8 @@ describe('createSecurityContext — 授权快照一次性（回归守护）', ()
       host: 'desktop',
       pathSep: '/',
       getVars,
-      getSessionGrants
+      getSessionGrants,
+      readBuiltinPolicyMd: INLINE_POLICY_MD
     })
 
     // 第一次快照 autoAllow=true → 命令被免询问放行

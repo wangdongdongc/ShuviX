@@ -367,6 +367,9 @@ const api = {
       ipcRenderer.invoke('policy:deleteByFile', params),
     openNote: (params: { fileName: string; title?: string }) =>
       ipcRenderer.invoke('policy:openNote', params),
+    /** 内置策略的只读笔记本（随包发布的那份 md —— 运行时读的就是它） */
+    openBuiltinNote: (params: { name: string; title?: string }) =>
+      ipcRenderer.invoke('policy:openBuiltinNote', params),
     openFolder: () => ipcRenderer.invoke('policy:openFolder')
   },
 

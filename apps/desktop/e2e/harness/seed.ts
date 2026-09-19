@@ -733,6 +733,8 @@ const REGISTRY_API: Record<RegistryNoteKind, string> = {
   // 内置档案是只读的：没有写路径，开笔记本走 subAgent.openBuiltinNote（按 agent 名，不是文件名）
   agentBuiltin: 'subAgent',
   policy: 'policy',
+  // 内置策略是只读的：没有写路径，开笔记本走 policy.openBuiltinNote（按策略名，不是文件名）
+  policyBuiltin: 'policy',
   hook: 'hook'
 }
 

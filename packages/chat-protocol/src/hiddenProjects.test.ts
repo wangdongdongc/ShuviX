@@ -3,7 +3,7 @@
  * 知识库的 `isKnowledgeProjectId`、技能的 `isSkillProjectId`。
  *
  * 隐藏项目只承载笔记本会话：知识库的三个承载项目（项目库 / 用户库 / 内置库），bot / agent /
- * 内置 agent（随包发布，只读）/ 安全策略 / hook 五个注册表目录，以及技能的承载项目（默认目录 /
+ * 内置 agent（随包发布，只读）/ 安全策略 / 内置安全策略（随包发布，只读）/ hook 六个注册表目录，以及技能的承载项目（默认目录 /
  * 内置目录 / 每个外部目录一个）。宿主的项目列表过滤（projectService）与 UI 的日历圆点（CalendarView）共用这一份判定 ——
  * 日历那一侧**只有这里**有覆盖。漏认一个 id，打开一份 bot md 就会让一个没人认得的项目冒进
  * 项目列表、在日历上点出一个圆点。
@@ -68,7 +68,7 @@ const LOOKALIKES: MaybeId[] = [
 const label = (id: MaybeId): string => (id === undefined ? 'undefined' : JSON.stringify(id))
 
 describe('隐藏项目 id —— REGISTRY_NOTE_PROJECT_IDS / isRegistryNoteProjectId / isHiddenProjectId', () => {
-  it('HP-1 id 表逐项钉死：五个值互不相同，也不与知识库的隐藏项目 id 撞车', () => {
+  it('HP-1 id 表逐项钉死：六个值互不相同，也不与知识库的隐藏项目 id 撞车', () => {
     // 这些 id 是写进数据库的项目行主键：改一个字，已有的笔记本会话就从它的承载项目里掉出去。
     // 撞车更糟 —— 两个目录共用一行项目，path 自愈会让它在两个目录之间来回改写
     expect(REGISTRY_NOTE_PROJECT_IDS).toEqual({
@@ -78,16 +78,18 @@ describe('隐藏项目 id —— REGISTRY_NOTE_PROJECT_IDS / isRegistryNoteProje
       // 决定 notebookPath 相对哪个根解析，两个根共用一行就得改存量会话的路径
       agentBuiltin: '__agents_builtin__',
       policy: '__policies__',
+      // 内置安全策略同 agentBuiltin：随包发布、只读，与用户策略分开一个承载项目
+      policyBuiltin: '__policies_builtin__',
       hook: '__hooks__'
     })
-    expect(new Set(REGISTRY_IDS).size).toBe(5)
+    expect(new Set(REGISTRY_IDS).size).toBe(6)
     for (const id of REGISTRY_IDS) {
       expect(id).not.toBe(KNOWLEDGE_PROJECT_ID)
       expect(id).not.toBe(KNOWLEDGE_USER_PROJECT_ID)
     }
   })
 
-  it('HP-2 isRegistryNoteProjectId：五个注册表 id 为真；知识库 / 技能 id 与形似输入一律为假', () => {
+  it('HP-2 isRegistryNoteProjectId：六个注册表 id 为真；知识库 / 技能 id 与形似输入一律为假', () => {
     // 知识库与技能的承载项目也是隐藏项目，但不是注册表目录 —— 三个谓词各答各的问题
     for (const id of REGISTRY_IDS) expect(isRegistryNoteProjectId(id), label(id)).toBe(true)
     for (const id of [
@@ -119,14 +121,18 @@ describe('隐藏项目 id —— REGISTRY_NOTE_PROJECT_IDS / isRegistryNoteProje
 })
 
 describe('只读的注册表笔记 —— isReadOnlyRegistryNoteProjectId', () => {
-  it('HP-5 只有 `__agents_builtin__` 为真；其余注册表 / 知识库承载项目与形似输入一律为假', () => {
+  it('HP-5 只有 `__agents_builtin__` 与 `__policies_builtin__` 为真；其余注册表 / 知识库承载项目与形似输入一律为假', () => {
     // 这个谓词决定笔记本给不给输入卡片、编辑器可不可写。放宽一格，用户的 bot / 档案 / 策略 /
-    // hook 就整片变成只能看；收紧一格，随包发布的内置档案就能被改 —— 改了下次更新照样被覆盖，
-    // macOS 上还会破坏应用签名
-    expect(isReadOnlyRegistryNoteProjectId(REGISTRY_NOTE_PROJECT_IDS.agentBuiltin)).toBe(true)
+    // hook 就整片变成只能看；收紧一格，随包发布的内置档案 / 内置策略就能被改 —— 改了下次更新
+    // 照样被覆盖，macOS 上还会破坏应用签名
+    const READ_ONLY = [
+      REGISTRY_NOTE_PROJECT_IDS.agentBuiltin,
+      REGISTRY_NOTE_PROJECT_IDS.policyBuiltin
+    ]
+    for (const id of READ_ONLY) expect(isReadOnlyRegistryNoteProjectId(id), label(id)).toBe(true)
 
     const notReadOnly: MaybeId[] = [
-      ...REGISTRY_IDS.filter((id) => id !== REGISTRY_NOTE_PROJECT_IDS.agentBuiltin),
+      ...REGISTRY_IDS.filter((id) => !READ_ONLY.includes(id)),
       KNOWLEDGE_PROJECT_ID,
       KNOWLEDGE_USER_PROJECT_ID,
       // 内置知识库也是只读的，但那一头由 knowledge 自己的判定管，不从这个谓词走
@@ -142,9 +148,11 @@ describe('只读的注册表笔记 —— isReadOnlyRegistryNoteProjectId', () =
     for (const id of notReadOnly) {
       expect(isReadOnlyRegistryNoteProjectId(id), label(id)).toBe(false)
     }
-    // 只读的那个仍然是注册表笔记、也仍然是隐藏项目 —— 三个谓词各答各的问题，不互相取代
-    expect(isRegistryNoteProjectId(REGISTRY_NOTE_PROJECT_IDS.agentBuiltin)).toBe(true)
-    expect(isHiddenProjectId(REGISTRY_NOTE_PROJECT_IDS.agentBuiltin)).toBe(true)
+    // 只读的那两个仍然是注册表笔记、也仍然是隐藏项目 —— 三个谓词各答各的问题，不互相取代
+    for (const id of READ_ONLY) {
+      expect(isRegistryNoteProjectId(id), label(id)).toBe(true)
+      expect(isHiddenProjectId(id), label(id)).toBe(true)
+    }
   })
 })
 

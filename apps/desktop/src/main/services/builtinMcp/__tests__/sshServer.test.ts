@@ -99,6 +99,7 @@ vi.mock('../../toolContext', async () => {
             builtinKnowledgeDir: '/opt/shuvix/Resources/knowledge',
             systemDirs: []
           }),
+          readBuiltinPolicyMd: INLINE_POLICY_MD,
           getSessionGrants: () => ({ autoAllow: gate.autoAllow, allowList: [] }),
           getUserPolicies: () => gate.policies as never,
           // 生产里这是 sessionService.addAllowListPaths —— 「允许并记住」的唯一落点。
@@ -230,6 +231,10 @@ import { migrations } from '../../../dao/migrations'
 import { BUILTIN_MCP_FACTORIES } from '../index'
 import { createSshMcpServerFactory } from '../sshServer'
 import { rsyncAvailable } from '../sshControl'
+import { createInlinePolicyMdReader } from '@shuvix/agent-runtime/security/builtinPolicies/inlineSources'
+
+/** 内置策略 md 的构建期内联读取口（真实装配链要它；测试进程，不进桌面 bundle） */
+const INLINE_POLICY_MD = createInlinePolicyMdReader()
 
 // ─── 素材 ────────────────────────────────────────────────────────────────
 

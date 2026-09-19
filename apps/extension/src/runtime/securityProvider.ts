@@ -18,7 +18,15 @@ import {
   type SecurityContext,
   type SecurityHostProvider
 } from '@shuvix/agent-runtime'
+import { createInlinePolicyMdReader } from '@shuvix/agent-runtime/security/builtinPolicies/inlineSources'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
+
+/**
+ * 内置策略 md 的读取口 —— 扩展跑在浏览器里读不了文件，于是构建期把**桌面运行时读的那批
+ * 同一个文件**内联进 bundle（inlineSources 的 glob；与扩展内置档案的 SHARED_MD 同一套）。
+ * 桌面那边读的是随包发布的 `Resources/builtin-policies/` 目录，两端的源仍然只有仓库里那一份。
+ */
+const INLINE_POLICY_MD = createInlinePolicyMdReader()
 
 export function createExtensionSecurityProvider(
   requestUserInput?: (req: InputRequest) => Promise<InputResponse>
@@ -44,6 +52,8 @@ export function createExtensionSecurityProvider(
     getSessionGrants: () => ({ autoAllow: false, allowList: [] }),
     // 仅影响内置策略的人读面（description/body/规则 prompt）；规则的判定字段恒取 en
     getLanguage: () => i18next.language,
+    // 内置策略 md：构建期内联的同一批文件（扩展没有文件系统；桌面读随包目录）
+    readBuiltinPolicyMd: INLINE_POLICY_MD,
     requestUserInput
   }
 }

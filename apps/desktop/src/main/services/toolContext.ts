@@ -212,6 +212,7 @@ function windowsSystemDirs(): string[] {
  * 桌面 SecurityHostProvider —— 把平台细节注入共享安全模块：
  *   - 变量表：workspace / tool_results / skills 目录 / home（策略 match/lets 里的 vars.*）
  *   - 会话授权：SQLite autoAllow + allowList
+ *   - 内置策略：随包发布的 `builtin-policies/` 目录现读（policyService.readBuiltinPolicyMd）
  *   - 用户策略：~/.shuvix/policies 现扫（policyService）
  *   - persistGrant 写 allowList、statSync 判目录、前端 requestUserInput 透传
  *
@@ -247,6 +248,8 @@ export function makeDesktopSecurityProvider(
     },
     // 仅影响内置策略的人读面（description/body/规则 prompt）；规则的判定字段恒取 en
     getLanguage: () => i18next.language,
+    // 内置策略 md：随包发布的目录现读（Resources/builtin-policies；缺席即装配期 throw，见 assemble）
+    readBuiltinPolicyMd: (fileName) => policyService.readBuiltinPolicyMd(fileName),
     getUserPolicies: () => policyService.getUserPolicies(),
     shellParser,
     isDirectory: (p) => {

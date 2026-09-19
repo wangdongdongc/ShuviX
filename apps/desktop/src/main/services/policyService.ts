@@ -1,7 +1,9 @@
 /**
  * PolicyService — 用户安全策略文件管理（对标 agentService 的纯 md 驱动模式）。
  *
- * 内置策略：硬编码进 @shuvix/agent-runtime（security/builtinPolicies，各端共享）。
+ * 内置策略：随包发布到 `Resources/builtin-policies/`（开发期指仓库源码目录，见
+ *   getBuiltinPoliciesDir），运行时按当前语言**现读**（readBuiltinPolicyMd）—— 与内置
+ *   agent 档案同一套机制；侧栏点开一份内置策略的只读笔记本，读的就是运行时读的那一份。
  * 用户策略：~/.shuvix/policies/<name>.md（文件存在即生效，无启用开关/旁路配置；
  *   文件名去掉 .md 即默认 name，frontmatter `name:` 可覆盖）。
  * 命名冲突：同名的几份谁生效由 agent-runtime 的 resolvePolicyFiles 裁决（用户压过内置，同为用户
@@ -18,22 +20,23 @@ import { join } from 'path'
 import { shell } from 'electron'
 import {
   buildBuiltinPolicies,
+  builtinMdFileNames,
   parsePolicyDefinitionFile,
   registryFileBase,
   resolvePolicyFiles,
-  serializePolicyDefinitionFile,
   type ParsedPolicyFile,
   type UserPolicyFile
 } from '@shuvix/agent-runtime'
 import i18next from 'i18next'
-import { getDefaultPoliciesDir } from '../utils/paths'
+import { getBuiltinPoliciesDir, getDefaultPoliciesDir } from '../utils/paths'
+import { appEventBus } from '../utils/appEventBus'
 import { createLogger } from '../logger'
 
 const log = createLogger('PolicyService')
 
 export interface PolicyListItem extends ParsedPolicyFile {
   source: 'builtin' | 'user'
-  /** 用户文件路径（内置为空串） */
+  /** 文件路径：用户策略在 ~/.shuvix/policies；内置策略是它当前语言那一版的随包文件 */
   basePath: string
   /**
    * 被同名遮蔽、当前不生效：被用户策略压过的内置，或同名用户文件里没胜出的那几份
@@ -135,15 +138,51 @@ class PolicyService {
   /**
    * 同名裁决的全部份数：当前界面语言的内置 + 全部用户文件，过 resolvePolicyFiles ——
    * 与 assembleRules 装配时是同一个函数、同一份候选（provider 的 getLanguage 即 i18next.language）。
+   * 内置条目的 basePath 是它**当前语言那一版**的文件（与装配时那次语言回退同一条候选序）——
+   * 侧栏点内置行开的只读笔记本按它认。
    */
   private resolve(): Array<ReturnType<typeof resolvePolicyFiles>[number] & { basePath: string }> {
     const dir = getDefaultPoliciesDir()
-    return resolvePolicyFiles(buildBuiltinPolicies(i18next.language), this.getUserPolicies()).map(
-      (entry) => ({
+    return resolvePolicyFiles(
+      buildBuiltinPolicies({ language: i18next.language, readMd: this.readBuiltinPolicyMd }),
+      this.getUserPolicies()
+    ).map((entry) => {
+      const builtinFile =
+        entry.sourceKind === 'builtin' ? this.builtinSourceFile(entry.policy.name) : null
+      return {
         ...entry,
-        basePath: entry.sourceKind === 'user' && entry.fileName ? join(dir, entry.fileName) : ''
-      })
-    )
+        basePath:
+          entry.sourceKind === 'user' && entry.fileName
+            ? join(dir, entry.fileName)
+            : builtinFile
+              ? join(getBuiltinPoliciesDir(), builtinFile)
+              : ''
+      }
+    })
+  }
+
+  /**
+   * 内置策略 md 的读取口 —— 随包发布的目录现读（桌面 SecurityHostProvider 的
+   * `readBuiltinPolicyMd` 也是它）。读不到回 null，构建器按语言回退。
+   */
+  readBuiltinPolicyMd(fileName: string): string | null {
+    try {
+      return readFileSync(join(getBuiltinPoliciesDir(), fileName), 'utf-8')
+    } catch {
+      return null // 该语言没有这一版（或目录不在）—— 构建器按 en 回退
+    }
+  }
+
+  /**
+   * 某份内置策略当前语言那一版的文件名（`ask-on-write.zh.md`）—— 侧栏点内置行开只读笔记本
+   * 要按它认。与装配时那次语言回退同一条候选序（精确语言 → 基础语言 → en），UI 不另挑。
+   */
+  builtinSourceFile(name: string): string | null {
+    const dir = getBuiltinPoliciesDir()
+    for (const fileName of builtinMdFileNames(name, i18next.language)) {
+      if (existsSync(join(dir, fileName))) return fileName
+    }
+    return null
   }
 
   /** 生效的用户策略里叫这个名字的那份（按名寻址的读 / 删用；被遮蔽的几份只能按文件名删） */
@@ -184,9 +223,10 @@ class PolicyService {
   }
 
   /**
-   * 取策略的 md 原文。用户策略读生效那份文件的原文（注释、键序原样）；
-   * 内置策略无文件，用 serializePolicyDefinitionFile 回写出等价 md —— 这就是
-   * 「创建覆盖副本」的初值（对齐 agent 设置页的 create override copy）。
+   * 取策略的 md 原文。两侧都是**盘上文件逐字原文**（注释、键序原样）：用户策略读生效那份
+   * 用户文件；内置策略读随包发布目录里当前语言那一版（与 builtinSourceFile / 装配的语言回退
+   * 同一条候选序：精确语言 → 基础语言 → en）。这就是「创建覆盖副本」的初值 —— 副本与
+   * 运行时读的那一份逐字节相同（对齐 agent 的 create override copy）。
    */
   getSource(name: string, source: 'builtin' | 'user'): { text: string } | { error: string } {
     if (source === 'user') {
@@ -198,9 +238,15 @@ class PolicyService {
         return { error: e instanceof Error ? e.message : String(e) }
       }
     }
-    const builtin = buildBuiltinPolicies(i18next.language).find((p) => p.name === name)
-    if (!builtin) return { error: `Builtin policy "${name}" not found` }
-    return { text: serializePolicyDefinitionFile(builtin) }
+    // 候选序最终落在 <name>.md（en）上；它读不到意味着规则的唯一事实源缺席 —— 名字不存在
+    // 与文件缺失都走同一个错误出口，装配侧（buildBuiltinPolicies）对后者另有 throw
+    const fileName = this.builtinSourceFile(name)
+    if (!fileName) return { error: `Builtin policy "${name}" not found` }
+    try {
+      return { text: readFileSync(join(getBuiltinPoliciesDir(), fileName), 'utf-8') }
+    } catch (e) {
+      return { error: e instanceof Error ? e.message : String(e) }
+    }
   }
 
   /**
@@ -245,6 +291,7 @@ class PolicyService {
       log.warn(`新建策略 "${name}" 失败:`, e)
       return { success: false, error: e instanceof Error ? e.message : String(e) }
     }
+    appEventBus.publish({ type: 'policy.changed' })
     return { success: true, name }
   }
 
@@ -269,6 +316,7 @@ class PolicyService {
       return { success: false, error: e instanceof Error ? e.message : String(e) }
     }
     log.info(`已删除策略文件 "${fileName}"`)
+    appEventBus.publish({ type: 'policy.changed' })
     return { success: true }
   }
 
@@ -283,6 +331,7 @@ class PolicyService {
       return { success: false, error: e instanceof Error ? e.message : String(e) }
     }
     log.info(`已删除策略 "${name}" (${target.basePath})`)
+    appEventBus.publish({ type: 'policy.changed' })
     return { success: true }
   }
 

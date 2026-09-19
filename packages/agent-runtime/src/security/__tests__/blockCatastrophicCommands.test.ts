@@ -21,6 +21,10 @@ import { projectCommandFacts, type CommandFactAttrs } from '../commandFacts'
 import { analyzeShellCommand, initShellParser } from '../shell'
 import { loadShellParserWasmFromNodeModules } from '../shell/nodeWasm'
 import type { SecurityDecision, SecurityHostProvider, SecurityObject } from '../types'
+import { createInlinePolicyMdReader } from '../builtinPolicies/inlineSources'
+
+/** 内置策略 md 的构建期内联读取口（运行时单测的宿主接缝；桌面/扩展各注入自己的） */
+const INLINE_POLICY_MD = createInlinePolicyMdReader()
 
 beforeAll(async () => {
   await initShellParser(loadShellParserWasmFromNodeModules())
@@ -44,6 +48,7 @@ function makeProvider(overrides: Partial<SecurityHostProvider> = {}): SecurityHo
     pathSep: '/',
     getVars: () => DESKTOP_VARS,
     getSessionGrants: () => ({ autoAllow: false, allowList: [] }),
+    readBuiltinPolicyMd: INLINE_POLICY_MD,
     ...overrides
   }
 }

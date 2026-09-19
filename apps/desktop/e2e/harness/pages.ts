@@ -228,7 +228,7 @@ export interface ChatPane {
   clickRegenerate(msgId: string): Promise<void>
   /** ConfirmDialog 是否在屏 */
   confirmOpen(): Promise<boolean>
-  /** 点 ConfirmDialog 的确认（页脚第二个按钮，与 policiesPane 同款） */
+  /** 点 ConfirmDialog 的确认（页脚第二个按钮） */
   confirmAccept(): Promise<void>
 
   /** 末条助手气泡的标记快照（见 BubbleMarkup） */
@@ -1488,7 +1488,7 @@ export function confirmPane(main: CdpClient): ConfirmPane {
   )`
   const isOpen = (): Promise<boolean> => main.eval<boolean>(`${PANEL} !== undefined`)
   const clickFooter = async (index: number): Promise<void> => {
-    // 页脚 = 两个按钮那一层（照 policiesPane 的口径：[0] 取消，[1] 确认）
+    // 页脚 = 两个按钮那一层（[0] 取消，[1] 确认）
     await main.eval(`[...${PANEL}.querySelectorAll('button')][${index}].click()`)
     await sleep(200)
   }
@@ -1760,8 +1760,8 @@ export async function settingsTabsPane(settings: CdpClient): Promise<SettingsTab
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// 设置页两个注册表 tab（安全策略 / Hooks）—— 同一副两栏布局，共用一个工厂。
-// （智能体那份已搬到主窗侧栏，见 agentsSidebarPane。）
+// 设置页的注册表 tab（Hooks）—— 两栏布局，历史上与安全策略 tab 共用这个工厂。
+// （智能体与安全策略两份已搬到主窗侧栏，见 agentsSidebarPane / policiesSidebarPane。）
 //
 // 左列（按宽度类认，`.pop()` 取最后一个）：合法行 = 带 `.font-medium` 标签的按钮（内置行另带锁
 // `.lucide-lock`，选中态 `bg-accent/10`）；解析不过的文件行没有 `.font-medium`、文件名在
@@ -1850,7 +1850,7 @@ interface RegistryTabInternals extends RegistryTabPane {
 }
 
 /**
- * 注册表 tab 的公共实现。`columnWidth` 是左列的宽度类（智能体 / 策略 220px，Hooks 240px）——
+ * 注册表 tab 的公共实现。`columnWidth` 是左列的宽度类（Hooks 240px）——
  * 两栏布局里只有它能不靠文案认出左列。
  */
 function registryTabPane(settings: CdpClient, columnWidth: string): RegistryTabInternals {
@@ -2048,107 +2048,6 @@ function registryTabPane(settings: CdpClient, columnWidth: string): RegistryTabI
       settings.eval<{ count: number; disabled: boolean }>(`(() => {
         const els = [...(${PANEL}?.querySelectorAll('.cm-shuvix-fmcard-input') ?? [])]
         return { count: els.length, disabled: els.length > 0 && els.every((i) => i.disabled) }
-      })()`)
-  }
-}
-
-export interface PoliciesPaneRow {
-  name: string
-  struck: boolean
-  overriddenBadge: boolean
-  /** 当前选中行（选中态是 accent 配色，不是 aria 属性） */
-  selected: boolean
-  builtin: boolean
-}
-
-export interface PoliciesPane extends RegistryTabPane {
-  rows(): Promise<PoliciesPaneRow[]>
-  /**
-   * 点一行并等详情挂好（见本节开头的就绪判据）；`which` 在覆盖后两行同名时点名来源，
-   * `opts.overridden` 再分开同名的几份用户文件（划线的那几行是输掉的）
-   */
-  selectRow(name: string, which?: RegistryRowSource, opts?: RegistryRowFilter): Promise<void>
-  /**
-   * 详情 —— 内置是等价 md 的只读查看、用户策略是它的笔记本，两者都是「md 原文 + 属性卡」，
-   * 故这里读的是卡片：
-   *   sourceBadge      来源徽标（内置 / 自定义）
-   *   cardBadge        类型徽章（'ShuviX policy · v1'）
-   *   fieldKeys        卡片各行的 frontmatter 键（data-key，locale-free）
-   *   effectBadges/Texts  规则摘要里的 effect 徽章数与**原始 effect 名**
-   *                    （卡片按 md 原文展示 deny/ask/force-allow，不做本地化 —— 所见即引擎所评估）
-   *   hasScope         策略级 scope 行有值（非「未设置」）
-   *   conditionLines   各规则行的条件/match 摘要文本
-   *   rulePrompts      各规则的人读提示语行（没写 prompt 的规则不产生这一行，故长度可小于规则数）
-   *   hasRationale     正文（Rationale）已渲染进 CM6
-   *   actionButtons    面板里 CM6 之外的按钮数（头部动作；断言优先用 headerIcons 按图标认）
-   *   inputs/slots     可编辑控件数（内置只读时照常渲染、全部禁用）
-   */
-  detail(): Promise<{
-    sourceBadge: string
-    cardBadge: string
-    fieldKeys: string[]
-    effectBadges: number
-    effectBadgeTexts: string[]
-    hasScope: boolean
-    conditionLines: string[]
-    rulePrompts: string[]
-    hasRationale: boolean
-    actionButtons: number
-    inputs: number
-    /** 输入框是否全部禁用（只读态的判据 —— 控件照常渲染，只是不可交互） */
-    inputsDisabled: boolean
-    slots: number
-  }>
-}
-
-/** 设置窗口「安全策略」tab（openSettings('policies') 后调用；等列表就绪） */
-export async function policiesPane(settings: CdpClient): Promise<PoliciesPane> {
-  // 按「含策略名的 .font-medium」认行，**不要**按图标认：列表图标随 object.type 变
-  // （path→FileText / command→Terminal / gitTool→GitBranch / database→Database，
-  // 未声明 object.type 的策略才回退 Shield），按图标筛会只剩零星几行。
-  const { rawRows, ...common } = registryTabPane(settings, '220px')
-  await until(async () => (await rawRows()).length > 0, 'policies tab ready')
-
-  return {
-    ...common,
-    rows: async () =>
-      (await rawRows()).map((r) => ({
-        name: r.label,
-        struck: r.struck,
-        overriddenBadge: r.overriddenBadge,
-        selected: r.selected,
-        builtin: r.builtin
-      })),
-    detail: () =>
-      settings.eval(`(() => {
-        // 右面板恒是列表列的下一个兄弟（PolicySettings 的两栏布局）
-        const col = [...document.querySelectorAll('.w-\\\\[220px\\\\]')].pop()
-        const pane = col.nextElementSibling
-        const effects = [...pane.querySelectorAll('.cm-shuvix-fmcard-effect')]
-        const scopeRow = pane.querySelector('[data-key="shuvix-policy-scope"]')
-        return {
-          sourceBadge: pane.querySelector('span.text-\\\\[9px\\\\]')?.textContent.trim() ?? '',
-          cardBadge: pane.querySelector('.cm-shuvix-fmcard-badge')?.textContent.trim() ?? '',
-          fieldKeys: [...pane.querySelectorAll('.cm-shuvix-fmcard-row')].map((r) => r.dataset.key),
-          effectBadges: effects.length,
-          effectBadgeTexts: effects.map((e) => e.textContent.trim()),
-          hasScope: !!scopeRow && !scopeRow.querySelector('.cm-shuvix-fmcard-unset'),
-          conditionLines: [...pane.querySelectorAll('.cm-shuvix-fmcard-rule-text')].map((e) =>
-            e.textContent.trim()
-          ),
-          rulePrompts: [...pane.querySelectorAll('.cm-shuvix-fmcard-rule-prompt')].map((e) =>
-            e.textContent.trim()
-          ),
-          hasRationale: (pane.querySelector('.cm-content')?.textContent ?? '').trim().length > 0,
-          actionButtons: [...pane.querySelectorAll('button')].filter(
-            (b) => !b.closest('.cm-editor')
-          ).length,
-          inputs: pane.querySelectorAll('.cm-shuvix-fmcard-input').length,
-          inputsDisabled: [...pane.querySelectorAll('.cm-shuvix-fmcard-input')].every(
-            (i) => i.disabled
-          ),
-          slots: pane.querySelectorAll('.cm-shuvix-fmcard-slot').length
-        }
       })()`)
   }
 }
@@ -2980,6 +2879,286 @@ export function agentsSidebarPane(main: CdpClient): AgentsSidebarPane {
     // 与点用户行同一条路（openBuiltinNote → 重拉会话列表 → 选中），只是开出来的笔记是只读的。
     // **不等正文**：切换后先 note.waitBody(...)
     openBuiltin: (name) => clickUntilActive(BUILTIN_ROW(name), `builtin agent row "${name}"`)
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 主窗侧栏「安全策略」分组（PolicyGroup）—— 与 agentsSidebarPane 同形面。
+//
+// 锚点：分组头按 `data-group="policies"`（SessionGroup 的 group/header 层）认；内置行按
+// `data-policy-builtin-row=<name>`（身份是 name），用户策略行按 `data-policy-row=<fileName>`
+// （名字随编辑在变、文件名不变），解析不过的琥珀行按 `data-policy-invalid-row=<fileName>`；
+// 同名里不生效的那份（被覆盖的内置 / 输掉的用户文件）另带 `data-policy-overridden`
+// （划线 + 「已覆盖」徽标）。
+//
+// 点用户行 / 非法行打开的是那份文件的**笔记本会话**（隐藏项目 `__policies__`）—— 主区就是普通
+// 笔记本，正文与属性卡经 `registryNotePane(main)` 读写，活动行 = 活动会话正是这份文件的笔记本。
+// 内置行走的是同一条路：它的 md 随包发布在应用包里（运行时读的就是它），点行开的是那份文件的
+// **只读**笔记本（载体项目 `__policies_builtin__`）—— 只读那一半经 `registryNotePane(main)`
+// 的 `hasInputCard()` / `editorEditable()` 断言。
+// 分组是**懒扫**的：首次展开才扫，之后展开 / 窗口聚焦 / 组头菜单「刷新」/ `policy.changed`
+// 事件（经宿主落盘的写入，300ms 合并广播）重扫 —— 磁盘外写入不广播，种完 md 要 refresh。
+// 菜单走与会话行同一套桩（pickFromMenu / openMenu）。
+//
+// ⚠️ 组头菜单的 `open-folder` **只许做存在性断言，绝不点**：它开的是 OS 文件管理器，e2e 关不掉。
+
+/** 内置策略的一行（随包发布、运行时按语言挑中的那份 md） */
+export interface PoliciesBuiltinRow {
+  name: string
+  /** 显示名（本地化） */
+  label: string
+  /** 被同名用户策略压过：划线 */
+  struck: boolean
+  /** 「已覆盖」徽标（按三语认，同 Bots / 智能体组的口径） */
+  badge: boolean
+  /** 行首的锁 —— 内置恒有（生效与否都只能看）；用户策略行首留空 */
+  locked: boolean
+  /** 行的 title 提示（未被覆盖时是策略描述，被覆盖时说清「有个同名的自定义策略」） */
+  title: string
+}
+
+/** 用户策略的一行 */
+export interface PoliciesUserRow {
+  fileName: string
+  label: string
+  /** 同名里输掉了：划线 */
+  struck: boolean
+  badge: boolean
+  /** 行首的锁（用户策略**不该**有：它可编辑，锁是内置的标记） */
+  locked: boolean
+  /** 行的 title 提示（输掉的那份说清被谁压过） */
+  title: string
+}
+
+/** 解析不过的琥珀行（身份是文件名 —— 它解析不出 name） */
+export interface PoliciesInvalidRow {
+  fileName: string
+  /** 行上显示的字 = 文件名（font-mono） */
+  label: string
+  /** 文件名是 font-mono 排的（与用户策略行的正文字体区分开） */
+  mono: boolean
+  /** 行的 title 提示 = 解析器的人读拒绝理由 */
+  title: string
+  /** 琥珀行没有锁 / 划线 / 徽标 —— 留这三个读数是为了能断「没有」 */
+  locked: boolean
+  struck: boolean
+  badge: boolean
+}
+
+/** 分组里的活动行：用户策略与琥珀行给文件名，内置行给 name（它的身份就是 name） */
+export interface PoliciesActiveRow {
+  row?: string
+  invalidRow?: string
+  builtinRow?: string
+}
+
+export interface PoliciesSidebarPane {
+  /** 组头显示的分组标签 */
+  label(): Promise<string>
+  /** 侧栏里 `data-group="policies"` 的组头个数（分组只该有一个） */
+  headerCount(): Promise<number>
+  /**
+   * 分组正文的子节点数 —— **懒扫**的判据：首次展开前 scanned 为 null，正文一个子节点都不渲染。
+   * 扫过之后折叠只是收高度（AnimatedCollapse），行仍在 DOM 里，此读数不再归零。
+   */
+  bodyChildCount(): Promise<number>
+  /** 组头高亮（活动会话是某份策略 md 的笔记本时 SessionGroup 的 active 分支） */
+  headerActive(): Promise<boolean>
+  /** 展开分组并等首次扫描落定（内置策略恒非空，正文有内容即落定） */
+  expand(): Promise<void>
+  /** 折叠分组（幂等）—— 再展开会触发一次重扫 */
+  collapse(): Promise<void>
+  builtinRows(): Promise<PoliciesBuiltinRow[]>
+  userRows(): Promise<PoliciesUserRow[]>
+  /** 非法文件行（琥珀）的快照（DOM 序） */
+  invalidRows(): Promise<PoliciesInvalidRow[]>
+  /** 点一行用户策略并等它成为活动行（= 这份文件的笔记本成了活动会话） */
+  selectUserRow(fileName: string): Promise<void>
+  /** 点一行解析不过的文件并等它成为活动行 */
+  selectInvalidRow(fileName: string): Promise<void>
+  /** 点一行内置策略并等它成为活动行（= 随包那份 md 的只读笔记本成了活动会话） */
+  openBuiltin(name: string): Promise<void>
+  /** 当前活动行；活动会话不是任何策略文件的笔记本时为 null */
+  activeRow(): Promise<PoliciesActiveRow | null>
+  /** 内置行的菜单项（开一次 ⋮、不选任何项）—— 要断 enabled，故回完整 items */
+  builtinRowMenu(name: string): Promise<MenuItemShot[] | null>
+  /** 开内置行的 ⋮ 并选中一项（自带「该项真的在菜单里」的核对） */
+  pickBuiltinRowMenu(name: string, actionId: 'create-override'): Promise<void>
+  /** 用户策略行菜单里的动作 id（生效的那份按名删、输掉的那份按文件名删） */
+  userRowMenuIds(fileName: string): Promise<string[] | null>
+  pickUserRowMenu(fileName: string, actionId: 'delete-policy' | 'delete-policy-file'): Promise<void>
+  pickInvalidRowMenu(fileName: string, actionId: 'delete-policy-file'): Promise<void>
+  /** 组头菜单的**原始 items**（开一次 ⋮、不选任何项；含分隔符 —— PS-C1 断的是形状） */
+  groupMenuItems(): Promise<MenuItemShot[] | null>
+  /** 组头菜单「新建策略」—— 只触发；新文件落盘与笔记打开由调用方 until */
+  newPolicy(): Promise<void>
+  /** 组头菜单「刷新」—— 磁盘外改动不广播 policy.changed，需手动重扫 */
+  refresh(): Promise<void>
+}
+
+export function policiesSidebarPane(main: CdpClient): PoliciesSidebarPane {
+  const HEADER_SEL = `div[class*="group/header"][data-group="policies"]`
+  const HEADER = `document.querySelector('${HEADER_SEL}')`
+  const TOGGLE = `[...(${HEADER}?.querySelectorAll(':scope > button') ?? [])].find((b) => b.querySelector('span.truncate'))`
+  const COLLAPSE = `${HEADER}?.nextElementSibling`
+  const BODY = `${COLLAPSE}?.firstElementChild?.firstElementChild`
+  const BUILTIN_ROWS = `[...document.querySelectorAll('[data-policy-builtin-row]')]`
+  const USER_ROWS = `[...document.querySelectorAll('[data-policy-row]')]`
+  const INVALID_ROWS = `[...document.querySelectorAll('[data-policy-invalid-row]')]`
+  const BUILTIN_ROW = (name: string): string =>
+    `document.querySelector('[data-policy-builtin-row=${JSON.stringify(name)}]')`
+  const USER_ROW = (fileName: string): string =>
+    `document.querySelector('[data-policy-row=${JSON.stringify(fileName)}]')`
+  const INVALID_ROW = (fileName: string): string =>
+    `document.querySelector('[data-policy-invalid-row=${JSON.stringify(fileName)}]')`
+  const ACTIVE = (list: string): string =>
+    `${list}.find((r) => r.className.includes('bg-bg-active'))`
+  /** 行的标签与徽标读法（三种行同构：span.truncate 是标签，划线在它身上） */
+  const rowShot = (extra: string): string => `({
+    label: (r.querySelector('span.truncate')?.textContent ?? '').trim(),
+    struck: !!r.querySelector('.line-through'),
+    badge: [...r.querySelectorAll('span')].some((s) => /覆盖|Overridden|上書き/.test(s.textContent ?? '')),
+    ${extra}
+  })`
+
+  /** 点一行并等它成为活动行（打开笔记是异步的：openNote → 重拉会话列表 → 选中） */
+  const clickUntilActive = async (scope: string, what: string): Promise<void> => {
+    await until(() => main.eval<boolean>(`${scope} !== null`), what)
+    await main.eval(`${scope}.click()`)
+    await until(
+      () => main.eval<boolean>(`(${scope}?.className ?? '').includes('bg-bg-active')`),
+      `${what} active`
+    )
+  }
+
+  /** 开某一行的 ⋮（不选任何项 = 取消）并回菜单里的动作 id */
+  const menuIds = async (scope: string, what: string): Promise<string[] | null> => {
+    await until(() => main.eval<boolean>(`${scope} !== null`), what)
+    const items = await openMenu(main, scope, 'menu-button')
+    return items ? items.filter((it) => it.id).map((it) => it.id as string) : null
+  }
+
+  return {
+    label: () =>
+      main.eval<string>(`(${HEADER}?.querySelector('span.truncate')?.textContent ?? '').trim()`),
+
+    headerCount: () => main.eval<number>(`document.querySelectorAll('${HEADER_SEL}').length`),
+
+    bodyChildCount: () => main.eval<number>(`${BODY}?.childElementCount ?? 0`),
+
+    // 组头高亮在 SessionGroup 的包裹层（active 分支给 data-group 那层的父级加 bg-bg-primary/30）
+    headerActive: () =>
+      main.eval<boolean>(
+        `(${HEADER}?.parentElement?.className ?? '').includes('bg-bg-primary/30')`
+      ),
+
+    expand: async () => {
+      await until(() => main.eval<boolean>(`${HEADER} !== null`), 'policies group header')
+      const open = await main.eval<boolean>(`${COLLAPSE}?.style.gridTemplateRows === '1fr'`)
+      if (!open) await main.eval(`(${TOGGLE})?.click()`)
+      // 扫描是懒的：展开才发第一次请求，正文有内容才算落定（内置策略恒非空）
+      await until(
+        () => main.eval<boolean>(`(${BODY}?.childElementCount ?? 0) > 0`),
+        'policies group scanned'
+      )
+    },
+
+    collapse: async () => {
+      await until(() => main.eval<boolean>(`${HEADER} !== null`), 'policies group header')
+      const open = await main.eval<boolean>(`${COLLAPSE}?.style.gridTemplateRows === '1fr'`)
+      if (open) await main.eval(`(${TOGGLE})?.click()`)
+      await until(
+        () => main.eval<boolean>(`${COLLAPSE}?.style.gridTemplateRows === '0fr'`),
+        'policies group collapsed'
+      )
+    },
+
+    builtinRows: () =>
+      main.eval<PoliciesBuiltinRow[]>(
+        `${BUILTIN_ROWS}.map((r) => ${rowShot(`name: r.getAttribute('data-policy-builtin-row') ?? '',
+    locked: !!r.querySelector('.lucide-lock'),
+    title: r.getAttribute('title') ?? ''`)})`
+      ),
+
+    userRows: () =>
+      main.eval<PoliciesUserRow[]>(
+        `${USER_ROWS}.map((r) => ${rowShot(`fileName: r.getAttribute('data-policy-row') ?? '',
+    locked: !!r.querySelector('.lucide-lock'),
+    title: r.getAttribute('title') ?? ''`)})`
+      ),
+
+    invalidRows: () =>
+      main.eval<PoliciesInvalidRow[]>(
+        `${INVALID_ROWS}.map((r) => ${rowShot(`fileName: r.getAttribute('data-policy-invalid-row') ?? '',
+    mono: !!r.querySelector('.font-mono'),
+    locked: !!r.querySelector('.lucide-lock'),
+    title: r.getAttribute('title') ?? ''`)})`
+      ),
+
+    selectUserRow: (fileName) => clickUntilActive(USER_ROW(fileName), `policy row "${fileName}"`),
+
+    selectInvalidRow: (fileName) =>
+      clickUntilActive(INVALID_ROW(fileName), `invalid policy row "${fileName}"`),
+
+    // 与点用户行同一条路（openBuiltinNote → 重拉会话列表 → 选中），只是开出来的笔记是只读的。
+    // **不等正文**：切换后先 note.waitCard() / waitBody(...)
+    openBuiltin: (name) => clickUntilActive(BUILTIN_ROW(name), `builtin policy row "${name}"`),
+
+    activeRow: () =>
+      main.eval<PoliciesActiveRow | null>(`(() => {
+        const row = ${ACTIVE(USER_ROWS)}
+        if (row) return { row: row.getAttribute('data-policy-row') }
+        const invalid = ${ACTIVE(INVALID_ROWS)}
+        if (invalid) return { invalidRow: invalid.getAttribute('data-policy-invalid-row') }
+        // 内置行也会成为活动行（它的 md 同样开笔记本，只是只读）—— 少了这一段，
+        // 「开着内置笔记时活动行是谁」只能答 null，与「谁都没选中」分不开
+        const builtin = ${ACTIVE(BUILTIN_ROWS)}
+        if (builtin) return { builtinRow: builtin.getAttribute('data-policy-builtin-row') }
+        return null
+      })()`),
+
+    builtinRowMenu: async (name) => {
+      await until(
+        () => main.eval<boolean>(`${BUILTIN_ROW(name)} !== null`),
+        `builtin policy row "${name}"`
+      )
+      return openMenu(main, BUILTIN_ROW(name), 'menu-button')
+    },
+
+    pickBuiltinRowMenu: async (name, actionId) => {
+      await until(
+        () => main.eval<boolean>(`${BUILTIN_ROW(name)} !== null`),
+        `builtin policy row "${name}"`
+      )
+      await pickFromMenu(main, BUILTIN_ROW(name), actionId, `builtin policy row "${name}"`)
+    },
+
+    userRowMenuIds: (fileName) => menuIds(USER_ROW(fileName), `policy row "${fileName}"`),
+
+    pickUserRowMenu: async (fileName, actionId) => {
+      await until(
+        () => main.eval<boolean>(`${USER_ROW(fileName)} !== null`),
+        `policy row "${fileName}"`
+      )
+      await pickFromMenu(main, USER_ROW(fileName), actionId, `policy row "${fileName}"`)
+    },
+
+    pickInvalidRowMenu: async (fileName, actionId) => {
+      await until(
+        () => main.eval<boolean>(`${INVALID_ROW(fileName)} !== null`),
+        `invalid policy row "${fileName}"`
+      )
+      await pickFromMenu(main, INVALID_ROW(fileName), actionId, `invalid policy row "${fileName}"`)
+    },
+
+    groupMenuItems: () => openMenu(main, HEADER, 'menu-button'),
+
+    newPolicy: () => pickFromMenu(main, HEADER, 'new-policy', 'policies group header'),
+
+    refresh: async () => {
+      await pickFromMenu(main, HEADER, 'refresh', 'policies group header')
+      await sleep(200)
+    }
   }
 }
 

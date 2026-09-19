@@ -75,6 +75,7 @@ vi.mock('../../services/toolContext', async () => {
           systemDirs: []
         }),
         // 免询问开着：这里验的是陈旧守卫，不是询问链路（那条在 writeAskWiring.test 里）
+        readBuiltinPolicyMd: INLINE_POLICY_MD,
         getSessionGrants: () => ({ autoAllow: true, allowList: [] }),
         isDirectory: () => false,
         persistGrant: () => {},
@@ -96,6 +97,10 @@ import { ArtifactTool } from '../artifact'
 import { makeEditTool } from '../edit'
 import { _resetAll, getReadTime } from '../../utils/toolUtils/fileTime'
 import type { ToolContext } from '../../services/toolContext'
+import { createInlinePolicyMdReader } from '@shuvix/agent-runtime/security/builtinPolicies/inlineSources'
+
+/** 内置策略 md 的构建期内联读取口（真实装配链要它；测试进程，不进桌面 bundle） */
+const INLINE_POLICY_MD = createInlinePolicyMdReader()
 
 const HOME_ARTIFACTS = join(homedir(), '.shuvix', 'artifacts')
 const homeSnapshot = (): string[] | null => {

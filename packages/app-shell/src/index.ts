@@ -92,6 +92,13 @@ export type {
   AgentGroupItem,
   AgentGroupInvalidFile
 } from './sidebar/AgentGroup'
+export { PolicyGroup } from './sidebar/PolicyGroup'
+export type {
+  PolicyGroupProps,
+  PolicyGroupAdapter,
+  PolicyGroupItem,
+  PolicyGroupInvalidFile
+} from './sidebar/PolicyGroup'
 export { SkillGroup } from './sidebar/SkillGroup'
 export type {
   SkillGroupProps,

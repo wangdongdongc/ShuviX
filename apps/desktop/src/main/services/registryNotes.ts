@@ -20,6 +20,7 @@ import { sessionService } from './sessionService'
 import { botService } from './botService'
 import {
   getBuiltinAgentsDir,
+  getBuiltinPoliciesDir,
   getDefaultAgentsDir,
   getDefaultBotsDir,
   getDefaultPoliciesDir,
@@ -34,6 +35,8 @@ const REGISTRIES: Record<RegistryNoteKind, { name: string; dir: () => string }> 
   // 随包发布的内置档案 —— 只读（笔记本不给输入卡片，见 isReadOnlyRegistryNoteProjectId）
   agentBuiltin: { name: 'Builtin Agents', dir: getBuiltinAgentsDir },
   policy: { name: 'Policies', dir: getDefaultPoliciesDir },
+  // 随包发布的内置策略 —— 只读，同 agentBuiltin
+  policyBuiltin: { name: 'Builtin Policies', dir: getBuiltinPoliciesDir },
   hook: { name: 'Hooks', dir: getDefaultHooksDir }
 }
 
@@ -105,30 +108,34 @@ export function openRegistryNote(
   return { ...session, workingDirectory: project.path }
 }
 
-/** `agent.changed` 的合并窗口：笔记本每 200ms 防抖落一次盘，连续打字不该让侧栏分组一直重扫 */
-const AGENT_CHANGED_DEBOUNCE_MS = 300
-let agentChangedTimer: ReturnType<typeof setTimeout> | null = null
+/** `*.changed` 的合并窗口：笔记本每 200ms 防抖落一次盘，连续打字不该让侧栏分组一直重扫 */
+const CHANGED_DEBOUNCE_MS = 300
+const changedTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
-/** 档案目录写完了：合并窗口内广播一次 `agent.changed`（没有服务要观察，只是让 UI 重扫） */
-function noteAgentWritten(): void {
-  if (agentChangedTimer) clearTimeout(agentChangedTimer)
-  agentChangedTimer = setTimeout(() => {
-    agentChangedTimer = null
-    appEventBus.publish({ type: 'agent.changed' })
-  }, AGENT_CHANGED_DEBOUNCE_MS)
+/** 注册表目录写完了：合并窗口内广播一次变更事件（没有服务要观察，只是让侧栏那一组重扫） */
+function noteRegistryWritten(type: 'agent.changed' | 'policy.changed'): void {
+  const existing = changedTimers.get(type)
+  if (existing) clearTimeout(existing)
+  changedTimers.set(
+    type,
+    setTimeout(() => {
+      changedTimers.delete(type)
+      appEventBus.publish({ type })
+    }, CHANGED_DEBOUNCE_MS)
+  )
 }
 
 /**
  * 包住一次经笔记本（writeSessionFile）的落盘，让它所属的注册表看见这次写入。
  *
- * 两个目录要回执，理由不同：
+ * 三个目录要回执，理由不同：
  *   - bots：改名要迁会话绑定，侧栏与身份胶囊要重查（见 botService.noteWriting / noteWritten）；
- *   - agents：没有服务要观察（每次用到都现扫目录，写完即生效），但侧栏那一组把档案的显示名
- *     直接摆在屏幕上，而改名就发生在同一个窗口的笔记本里 —— 没有「切窗口」这一下可以兜底，
- *     所以写完广播一次 `agent.changed` 让它重扫；
+ *   - agents / policies：没有服务要观察（每次用到都现扫目录，写完即生效；评估侧每次现装配），
+ *     但侧栏那两组把显示名直接摆在屏幕上，而改名就发生在同一个窗口的笔记本里 —— 没有
+ *     「切窗口」这一下可以兜底，所以写完各广播一次 `agent.changed` / `policy.changed` 让它重扫；
  * 技能的写入回执不在这里 —— 它不是注册表 md，落点也在子目录（`<根>/<技能名>/SKILL.md`），
  * 归技能自己（skillService.noteFileWritten，由 filePreviewService 一并包住）。
- * policy / hook 的列表在设置页，那边的详情区自己盯着这份文件的 files.changed，不需要通知。
+ * hook 的列表在设置页，那边的详情区自己盯着这份文件的 files.changed，不需要通知。
  */
 export async function observeRegistryWrite<T>(
   absPath: string,
@@ -141,7 +148,15 @@ export async function observeRegistryWrite<T>(
     try {
       return await write()
     } finally {
-      noteAgentWritten()
+      noteRegistryWritten('agent.changed')
+    }
+  }
+
+  if (dir === resolve(getDefaultPoliciesDir())) {
+    try {
+      return await write()
+    } finally {
+      noteRegistryWritten('policy.changed')
     }
   }
 

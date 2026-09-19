@@ -26,7 +26,7 @@ import {
   type EventRecorder,
   type RecordedEvent
 } from '../../harness/seed'
-import { policiesPane, type PoliciesPane } from '../../harness/pages'
+import { policiesSidebarPane, registryNotePane } from '../../harness/pages'
 
 const MODEL = 'e2e-model'
 
@@ -329,10 +329,32 @@ describe('policy prompt —— 删光 prompt 的覆盖副本', () => {
   })
 })
 
-describe('policy prompt —— 设置页与 md 原文', () => {
-  let pane: PoliciesPane
-
-  it('E2E-P5 属性卡逐规则渲染 prompt 行；没写 prompt 的用户策略不出现该行', async () => {
+describe('policy prompt —— 属性卡与 md 原文', () => {
+  it('E2E-P5 属性卡逐规则渲染 prompt 行；没写 prompt 的用户策略不出现该行；内置策略的只读笔记本同一张卡', async () => {
+    // 带 prompt 与不带 prompt 的用户策略各种一份。属性卡与描述符是同一份代码，
+    // 谁来承载这份 md（用户笔记本 / 内置的只读笔记本）不影响渲染
+    expect(
+      await createPolicy(
+        [
+          '---',
+          'shuvix: policy v1',
+          'name: e2e-with-prompts',
+          'description: a user policy with a prompt on every rule',
+          'shuvix-policy-scope:',
+          '  subject.kind: [agent]',
+          '  object.type: [command]',
+          'shuvix-policy-rules:',
+          '  - effect: ask',
+          '    action: [execute]',
+          '    prompt: first rule says this',
+          '  - effect: deny',
+          '    action: [execute]',
+          '    prompt: second rule says that',
+          '---',
+          'body'
+        ].join('\n')
+      )
+    ).toMatchObject({ success: true })
     expect(
       await createPolicy(
         [
@@ -352,19 +374,42 @@ describe('policy prompt —— 设置页与 md 原文', () => {
       )
     ).toMatchObject({ success: true })
 
-    pane = await policiesPane(await app.openSettings('policies'))
-    await pane.refresh()
+    // 走侧栏分组点开策略的笔记本（设置页之后的详情面）
+    const pane = policiesSidebarPane(app.main)
+    const note = registryNotePane(app.main)
+    await pane.expand()
 
-    // 内置 protect-credentials：两条规则各有一句提示语
-    const credentials = await builtinRow('protect-credentials')
-    await pane.selectRow(credentials.displayName)
-    expect((await pane.detail()).rulePrompts).toEqual(credentials.rules.map((r) => r.prompt))
+    // `.cm-shuvix-fmcard*` 钩子是卡片的稳定面，pages.ts 明确允许 spec 内联（见 fmCardPane 一节）
+    const rulePrompts = (): Promise<string[]> =>
+      app.main.eval<string[]>(
+        `[...document.querySelectorAll('.cm-shuvix-fmcard-rule-prompt')].map((e) => e.textContent.trim())`
+      )
+    const effectBadges = (): Promise<string[]> =>
+      app.main.eval<string[]>(
+        `[...document.querySelectorAll('.cm-shuvix-fmcard-effect')].map((e) => e.textContent.trim())`
+      )
+
+    // 两条规则各有一句提示语 → 逐行渲染（顺序 = md 里的规则序）
+    await pane.selectUserRow('e2e-with-prompts.md')
+    await note.waitCard()
+    expect(await rulePrompts()).toEqual(['first rule says this', 'second rule says that'])
+    expect(await effectBadges()).toEqual(['ask', 'deny'])
 
     // 用户策略没写 prompt → 该行整个不出现（规则行本身照常渲染）
-    await pane.selectRow('e2e-no-prompt')
-    const plain = await pane.detail()
-    expect(plain.effectBadges).toBe(1)
-    expect(plain.rulePrompts).toEqual([])
+    await pane.selectUserRow('e2e-no-prompt.md')
+    await note.waitCard()
+    expect(await effectBadges()).toEqual(['ask'])
+    expect(await rulePrompts()).toEqual([])
+
+    // 内置 protect-credentials：点内置行开的是随包那份 md 的**只读**笔记本（另一个载体项目），
+    // 两条规则各有一句提示语 —— 卡片上的 prompt 行与注册表裁决出的规则逐字一致
+    const credentials = await builtinRow('protect-credentials')
+    await pane.openBuiltin('protect-credentials')
+    await note.waitCard()
+    expect(await rulePrompts()).toEqual(credentials.rules.map((r) => r.prompt))
+    // 只读：没有悬浮输入卡，编辑器本身也不接受按键
+    expect(await note.hasInputCard()).toBe(false)
+    expect(await note.editorEditable()).toBe(false)
   })
 
   it('E2E-P6 policy.getSource(builtin) 回吐的 md 含 prompt: 键，且等于当前界面语言的文案', async () => {
