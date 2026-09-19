@@ -56,7 +56,7 @@ export function assertNotModifiedSinceRead(sessionId: string, filePath: string):
       `File ${filePath} has been modified since it was last read.\n` +
         `Last modification: ${mtime.toISOString()}\n` +
         `Last read: ${time.toISOString()}\n\n` +
-        `Please read the file again before modifying it.`
+        `Please read it again with the read tool before modifying it.`
     )
   }
 }

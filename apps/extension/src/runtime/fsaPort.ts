@@ -138,7 +138,7 @@ export function createFsaGuards(port: FileSystemPort): FileGuards {
       if (st.mtimeMs > t + 50) {
         throw new Error(
           `File ${p} has been modified since it was last read.\n` +
-            `Please read the file again before modifying it.`
+            `Please read it again with the read tool before modifying it.`
         )
       }
     },
