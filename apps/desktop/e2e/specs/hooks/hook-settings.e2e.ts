@@ -34,7 +34,15 @@ const PROMPT_ACCEPTED = 'session.prompt-accepted'
 const TURN_COMPLETED = 'session.turn-completed'
 /** Hooks tab 的导航文案（en / zh 都是 Hooks，ja 是フック） */
 const HOOKS_TAB_LABELS = ['Hooks', 'フック']
-const RETIRED_TAB_LABELS = ['Workflows', '工作流', 'ワークフロー']
+/** 已退役的 tab：工作流（被 hook 取代）+ 智能体（搬到侧栏分组，见 agents/agents-sidebar.e2e.ts） */
+const RETIRED_TAB_LABELS = [
+  'Workflows',
+  '工作流',
+  'ワークフロー',
+  'Agents',
+  '智能体',
+  'エージェント'
+]
 
 interface HookItem {
   name: string
@@ -117,7 +125,7 @@ afterAll(async () => {
 })
 
 describe('Hooks 设置页', () => {
-  it('HST-0 设置导航里有 Hooks 且处于选中态，旧的「工作流」tab 不在了', async () => {
+  it('HST-0 设置导航里有 Hooks 且处于选中态，退役的「工作流」「智能体」tab 都不在了', async () => {
     const tabs = await settingsTabsPane(settings)
     const labels = await tabs.labels()
     const hooksLabel = labels.find((l) => HOOKS_TAB_LABELS.includes(l))

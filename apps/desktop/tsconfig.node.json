@@ -26,6 +26,10 @@
     "baseUrl": ".",
     "paths": {
       "@shuvix/chat-protocol/*": ["../../packages/chat-protocol/src/*"],
+      // 内置 agent md 的构建期内联变体：只有单测与扩展用（主进程读随包目录，绝不导入它）
+      "@shuvix/agent-runtime/builtinAgents/inlineSources": [
+        "../../packages/agent-runtime/src/subagent/builtinAgents/inlineSources.ts"
+      ],
       "@shuvix/agent-runtime": ["../../packages/agent-runtime/src/index.ts"]
     }
   }

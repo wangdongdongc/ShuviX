@@ -13,7 +13,7 @@ import {
 } from 'lucide-react'
 import { ConfirmDialog } from '../common/ConfirmDialog'
 import { BuiltinSourceView, RegistryNoteView } from './RegistryNoteView'
-import { fileNameOf, uniqueName } from './registryFiles'
+import { fileNameOf, uniqueName } from '../common/registryFiles'
 
 /**
  * 设置页顶层「Hooks」tab —— 与智能体 / 安全策略 tab 同形：左侧每个 hook 一个子项

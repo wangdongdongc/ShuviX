@@ -106,14 +106,17 @@ vi.mock('../../services/knowledge', () => ({ enabledBaseChoices: () => [] }))
 vi.mock('@earendil-works/pi-agent-core/node', () => ({ NodeExecutionEnv: class {} }))
 
 import { buildBuiltinProfiles } from '@shuvix/agent-runtime'
+import { createInlineMdReader } from '@shuvix/agent-runtime/builtinAgents/inlineSources'
 import '../agentHost'
 
 const SID = 'sess-skill-injection'
 
 /** bot 基座那份刻意很窄的工具名单（见 STI-5） */
-const BOT_TOOLS = buildBuiltinProfiles({ language: 'en', widgetsRoot: '/w/widgets' }).find(
-  (p) => p.name === 'bot'
-)!.tools
+const BOT_TOOLS = buildBuiltinProfiles({
+  language: 'en',
+  widgetsRoot: '/w/widgets',
+  readMd: createInlineMdReader()
+}).find((p) => p.name === 'bot')!.tools
 
 const resolveToolNames = async (over: Partial<ToolResolveRequest> = {}): Promise<string[]> => {
   const host = mocks.host.value

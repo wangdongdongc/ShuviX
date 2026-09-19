@@ -641,6 +641,11 @@ declare global {
       }) => Promise<{ success: boolean; name?: string; error?: string }>
       /** 打开 / 复用一份档案文件的笔记本会话（一文件至多一会话）；回带工作目录 */
       openNote: (params: { fileName: string; title?: string }) => Promise<SessionInfo>
+      /**
+       * 打开 / 复用一份**内置**档案的只读笔记本 —— 内置 md 随包发布（`Resources/builtin-agents/`），
+       * 运行时读的就是它；按名给，当前语言那一版的文件名由主进程挑（与运行时同一次回退）。
+       */
+      openBuiltinNote: (params: { name: string; title?: string }) => Promise<SessionInfo>
       openFolder: () => Promise<{ success: boolean }>
     }
     policy: {

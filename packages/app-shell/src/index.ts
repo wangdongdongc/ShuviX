@@ -85,6 +85,13 @@ export type {
   BotGroupShadowedItem,
   BotGroupInvalidFile
 } from './sidebar/BotGroup'
+export { AgentGroup } from './sidebar/AgentGroup'
+export type {
+  AgentGroupProps,
+  AgentGroupAdapter,
+  AgentGroupItem,
+  AgentGroupInvalidFile
+} from './sidebar/AgentGroup'
 export { useProjects } from './sidebar/useProjects'
 export type { UseProjectsReturn, ProjectRef } from './sidebar/useProjects'
 export { useSessionDelete } from './sidebar/useSessionDelete'

@@ -20,7 +20,7 @@ import {
 import { POLICY_EFFECT_CLASS } from '@shuvix/app-shell'
 import { ConfirmDialog } from '../common/ConfirmDialog'
 import { BuiltinSourceView, RegistryNoteView } from './RegistryNoteView'
-import { fileNameOf, uniqueName } from './registryFiles'
+import { fileNameOf, uniqueName } from '../common/registryFiles'
 
 /**
  * 设置页顶层「安全策略」tab —— 与智能体 tab 同形：左侧每个策略一个子项（内置与

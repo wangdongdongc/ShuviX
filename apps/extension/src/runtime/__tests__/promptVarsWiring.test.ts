@@ -62,15 +62,12 @@ import {
   buildBuiltinProfiles,
   renderProfileSystemPrompt
 } from '@shuvix/agent-runtime'
-import type { AgentProfile, BuiltinProfileSpec } from '@shuvix/agent-runtime'
+import type { AgentProfile } from '@shuvix/agent-runtime'
+import {
+  createInlineMdReader,
+  createInlineMdReaderFrom
+} from '@shuvix/agent-runtime/builtinAgents/inlineSources'
 import '../agentHost'
-
-import extWorkEn from '../builtinAgents/md/work.md?raw'
-import extWorkZh from '../builtinAgents/md/work.zh.md?raw'
-import extWorkJa from '../builtinAgents/md/work.ja.md?raw'
-import extChatEn from '../builtinAgents/md/chat.md?raw'
-import extChatZh from '../builtinAgents/md/chat.zh.md?raw'
-import extChatJa from '../builtinAgents/md/chat.ja.md?raw'
 
 const LANGUAGES = ['en', 'zh', 'ja']
 const SID = 'sess-ext-1'
@@ -78,18 +75,26 @@ const SID = 'sess-ext-1'
 /** 与 subAgent.ts 的 EXTENSION_BUILTIN_NAMES 同一份（那边够不到：import 图带 chrome.*） */
 const SERVED = new Set(['work', 'chat', 'notebook', 'visualization'])
 
-/** 与 subAgent.ts 的 EXTENSION_*_SPEC 同形 */
-const OVERRIDES: BuiltinProfileSpec[] = [
-  { name: 'work', sources: { en: extWorkEn, zh: extWorkZh, ja: extWorkJa } },
-  { name: 'chat', sources: { en: extChatEn, zh: extChatZh, ja: extChatJa } }
-]
+/** 与 subAgent.ts 同一套读取口：共享档案读内联的那批 md，work/chat 读扩展自己的浏览器变体 */
+const SHARED_MD = createInlineMdReader()
+const EXT_MD = createInlineMdReaderFrom(
+  import.meta.glob('../builtinAgents/md/*.md', {
+    query: '?raw',
+    import: 'default',
+    eager: true
+  }) as Record<string, string>
+)
+const OVERRIDE_NAMES = ['work', 'chat']
 
 /** 扩展这一端实际服务的档案集（共享集过滤 + work/chat 换成浏览器变体） */
 const served = (language: string): AgentProfile[] => {
   const overridden = new Map(
-    OVERRIDES.map((spec) => [spec.name, buildBuiltinProfile(spec, { language })!])
+    OVERRIDE_NAMES.map((name) => [
+      name,
+      buildBuiltinProfile({ name }, { language, readMd: EXT_MD })!
+    ])
   )
-  return buildBuiltinProfiles({ language })
+  return buildBuiltinProfiles({ language, readMd: SHARED_MD })
     .filter((p) => SERVED.has(p.name))
     .map((p) => overridden.get(p.name) ?? p)
 }

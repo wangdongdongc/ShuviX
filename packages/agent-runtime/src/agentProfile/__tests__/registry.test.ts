@@ -20,18 +20,34 @@ import {
   WORK_PROFILE_NAME,
   pickLocalizedSource
 } from '../../subagent/builtinAgents'
+import { createInlineMdReader } from '../../subagent/builtinAgents/inlineSources'
 import { KNOWLEDGE_TYPES } from '@shuvix/chat-protocol/knowledge'
 import { BOT_CONTEXT_TAG } from '../../bot/botContext'
 import type { AgentProfile } from '../../subagent/types'
 
-const ALL_PARAMS = { widgetsRoot: '/w' }
+/** 内置 md 的读取口：桌面运行时读随包目录，测试读构建期内联的**同一批文件** */
+const readMd = createInlineMdReader()
+
+/**
+ * 某个内置 agent 的三语 md 原文（语言 → 原文）。文件按 `<name>[.<lang>].md` 命名，en 是无后缀
+ * 那份 —— 读不到的语言不进表，于是「齐不齐三门语言」这类断言直接看键集。
+ */
+const sourcesOf = (name: string): Record<string, string> => {
+  const out: Record<string, string> = {}
+  for (const language of LANGS) {
+    const text = readMd(language === 'en' ? `${name}.md` : `${name}.${language}.md`)
+    if (text !== null) out[language] = text
+  }
+  return out
+}
+const ALL_PARAMS = { widgetsRoot: '/w', readMd }
 const LANGS = ['en', 'zh', 'ja'] as const
 const profile = (name: string, language?: string): AgentProfile =>
   buildBuiltinProfiles({ ...ALL_PARAMS, language }).find((a) => a.name === name)!
 
 describe('buildBuiltinProfile — md 解析 + 宿主参数插值', () => {
   it('en 档案解析出全部字段，宿主参数就地替换', () => {
-    const built = buildBuiltinProfile(WIDGET_SPEC, { widgetsRoot: '/widgets' })!
+    const built = buildBuiltinProfile(WIDGET_SPEC, { widgetsRoot: '/widgets', readMd })!
     expect(built.displayName).toBe('Widget Builder')
     expect(built.description).toBe(
       'Creates, maintains and exports ShuviX Widgets — persistent mini React apps that live in the Widget panel.'
@@ -47,9 +63,9 @@ describe('buildBuiltinProfile — md 解析 + 宿主参数插值', () => {
   })
 
   it('缺必需宿主参数 → 返回 null(该端不支持此 agent)', () => {
-    expect(buildBuiltinProfile(WIDGET_SPEC, {})).toBeNull()
+    expect(buildBuiltinProfile(WIDGET_SPEC, { readMd })).toBeNull()
     // 给了别的参数也不算数 —— 缺的是它自己声明的那一个
-    expect(buildBuiltinProfile(WIDGET_SPEC, { language: 'zh' })).toBeNull()
+    expect(buildBuiltinProfile(WIDGET_SPEC, { language: 'zh', readMd })).toBeNull()
   })
 })
 
@@ -91,7 +107,7 @@ describe('buildBuiltinProfiles — 全集现算', () => {
     ])
     // titler / knowledge-writer 无宿主参数依赖：缺 widget 根也在
     //（模型走 shuvix-model 通用链路，内置不声明；知识库目标由工具按会话解析，不吃参数）
-    expect(buildBuiltinProfiles({}).map((a) => a.name)).toEqual([
+    expect(buildBuiltinProfiles({ readMd }).map((a) => a.name)).toEqual([
       'work',
       'chat',
       'notebook',
@@ -119,7 +135,7 @@ describe('buildBuiltinProfiles — 全集现算', () => {
 
   it('每份语言文件都声明 shuvix-builtin: true（新增内置 agent 漏写即红）', () => {
     for (const spec of BUILTIN_PROFILE_SPECS) {
-      for (const [language, source] of Object.entries(spec.sources)) {
+      for (const [language, source] of Object.entries(sourcesOf(spec.name))) {
         expect(source, `${spec.name}.${language}`).toMatch(/^shuvix-builtin: true$/m)
       }
     }
@@ -129,8 +145,9 @@ describe('buildBuiltinProfiles — 全集现算', () => {
     const placeholders = (text: string): string[] =>
       [...new Set(text.match(/\{\{[^}]+\}\}/g) ?? [])].sort()
     for (const spec of BUILTIN_PROFILE_SPECS) {
-      const expected = placeholders(spec.sources.en)
-      for (const [language, source] of Object.entries(spec.sources)) {
+      const sources = sourcesOf(spec.name)
+      const expected = placeholders(sources.en)
+      for (const [language, source] of Object.entries(sources)) {
         expect(placeholders(source), `${spec.name}.${language}`).toEqual(expected)
       }
     }
@@ -163,10 +180,10 @@ describe('knowledge-writer 档案钉板（OKF 知识库的派发执行侧）', (
     expect(KNOWLEDGE_WRITER_SPEC.name).toBe('knowledge-writer')
     // 它从不点名文件系统路径 —— 目标 bundle 由 knowledge 工具按会话解析，所以零参数也建得出来
     expect(KNOWLEDGE_WRITER_SPEC.requiredParams).toBeUndefined()
-    expect(buildBuiltinProfile(KNOWLEDGE_WRITER_SPEC, {})).not.toBeNull()
+    expect(buildBuiltinProfile(KNOWLEDGE_WRITER_SPEC, { readMd })).not.toBeNull()
     expect(BASE_PROFILE_NAMES.has('knowledge-writer')).toBe(false)
     for (const language of LANGS) {
-      const built = buildBuiltinProfile(KNOWLEDGE_WRITER_SPEC, { language })
+      const built = buildBuiltinProfile(KNOWLEDGE_WRITER_SPEC, { language, readMd })
       expect(built, language).not.toBeNull()
       // 条目用普通 write/edit 写（knowledge 工具只读）；没有 git —— 簿记归宿主
       expect(built!.tools, language).toEqual([
@@ -187,7 +204,7 @@ describe('knowledge-writer 档案钉板（OKF 知识库的派发执行侧）', (
 
   it('RG-2 三语正文接线：不点名任何文件系统路径、点名四步流程的动作、两个宿主章、会话资源 URI', () => {
     for (const language of LANGS) {
-      const body = buildBuiltinProfile(KNOWLEDGE_WRITER_SPEC, { language })!.systemPrompt
+      const body = buildBuiltinProfile(KNOWLEDGE_WRITER_SPEC, { language, readMd })!.systemPrompt
       // 一个项目一个 bundle，路径由工具按会话解析 —— 提示词里不该再有根目录占位符
       expect(body, `${language} 占位符`).not.toContain('{{knowledgeRoot}}')
       // search → create → edit → validate：四步缺一步，agent 就写不出能被收录的条目
@@ -222,7 +239,7 @@ describe('knowledge-writer 档案钉板（OKF 知识库的派发执行侧）', (
    */
   it('RG-3 三语正文自带编辑规范：类型词汇齐全、跨 bundle 用 shuvix:// URI；不再提退役的目录作用域', () => {
     for (const language of LANGS) {
-      const body = buildBuiltinProfile(KNOWLEDGE_WRITER_SPEC, { language })!.systemPrompt
+      const body = buildBuiltinProfile(KNOWLEDGE_WRITER_SPEC, { language, readMd })!.systemPrompt
       for (const type of KNOWLEDGE_TYPES) {
         expect(body, `${language} 需含类型 ${type}`).toContain(`\`${type}\``)
       }
@@ -242,14 +259,14 @@ describe('knowledge-writer 档案钉板（OKF 知识库的派发执行侧）', (
    */
   it('RG-4 三语正文都不再把项目库摆在第一位：指向 `bases`，不点名 "project"', () => {
     for (const language of LANGS) {
-      const body = buildBuiltinProfile(KNOWLEDGE_WRITER_SPEC, { language })!.systemPrompt
+      const body = buildBuiltinProfile(KNOWLEDGE_WRITER_SPEC, { language, readMd })!.systemPrompt
       // 「有哪几个库」只能从 `bases` 得知 —— 不教这一条，agent 只能瞎猜一个名字
       expect(body, `${language} 需指向 \`bases\``).toContain('`bases`')
       expect(body, `${language} 不得点名 "project"`).not.toContain('"project"')
     }
     // 旧开篇（静态围栏的框架句）不得从执行侧提示词里借尸还魂
     expect(
-      buildBuiltinProfile(KNOWLEDGE_WRITER_SPEC, { language: 'en' })!.systemPrompt
+      buildBuiltinProfile(KNOWLEDGE_WRITER_SPEC, { language: 'en', readMd })!.systemPrompt
     ).not.toContain('Each project has')
   })
 })
@@ -408,7 +425,7 @@ describe('基座名单钉板', () => {
     // 这个键随会话内切换档案一并退役：子会话的 agent_profile 只看「不是基座」，解析器把它当
     // 未知键忽略。内置 md 是用户「创建覆盖副本」的样板，样板里留一行死键等于教用户去写它
     for (const spec of BUILTIN_PROFILE_SPECS) {
-      for (const [language, source] of Object.entries(spec.sources)) {
+      for (const [language, source] of Object.entries(sourcesOf(spec.name))) {
         expect(source, `${spec.name}.${language}`).not.toContain('shuvix-session-awareness')
       }
     }
@@ -703,10 +720,11 @@ describe('内置档案 —— 三语言交付面（逐份 × 逐语言）', () =
     }
   })
 
-  it('AD-3 每份内置都齐三门语言：sources 键恰 en / ja / zh', () => {
-    // 恰等而非包含：应用就三门语言，多出第四个键应当是一次有意的编辑，顺手改这里
+  it('AD-3 每份内置都齐三门语言：md 目录里恰有 en / ja / zh 三份', () => {
+    // 恰等而非包含：应用就三门语言，多出第四份文件应当是一次有意的编辑，顺手改这里。
+    // 读的是运行时同一批文件（桌面读随包目录，这里读构建期内联的同一批）
     for (const spec of BUILTIN_PROFILE_SPECS) {
-      expect(Object.keys(spec.sources).sort(), `${spec.name} 的语言集合漂移`).toEqual([
+      expect(Object.keys(sourcesOf(spec.name)).sort(), `${spec.name} 的语言集合漂移`).toEqual([
         'en',
         'ja',
         'zh'

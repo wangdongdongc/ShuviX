@@ -29,13 +29,23 @@ import {
 } from 'node:fs'
 import { basename, join } from 'node:path'
 import { tmpdir } from 'node:os'
+import i18next from 'i18next'
+import { builtinMdFileNames } from '@shuvix/agent-runtime'
 import type { AgentProfile, ParsedAgentFile } from '@shuvix/agent-runtime'
 
-const state = vi.hoisted(() => ({ dir: '', widgets: '' }))
+const state = vi.hoisted(() => ({
+  dir: '',
+  widgets: '',
+  // 内置档案的事实源 —— 运行时读随包发布的目录，这里直接读仓库里那一份（同一批文件）。
+  // src/main/services/__tests__ 往上六级是仓库根；hoisted 里没有 import，故不走 resolve()
+  builtinDir: `${__dirname}/../../../../../../packages/agent-runtime/src/subagent/builtinAgents/md`
+}))
 
 vi.mock('electron', () => ({ shell: { openPath: vi.fn() } }))
 vi.mock('../../utils/paths', () => ({
   getDefaultAgentsDir: () => state.dir,
+  // 内置档案的事实源：运行时读随包发布的目录，单测直接读仓库里那一份（同一批文件）
+  getBuiltinAgentsDir: () => state.builtinDir,
   getWidgetsDir: () => state.widgets,
   getShuvixKnowledgeRootDir: () => '/tmp/shuvix-knowledge-shuvix'
 }))
@@ -101,6 +111,12 @@ const toolCountOf = (text: string): number => {
   const line = text.split('\n').find((l) => l.startsWith('shuvix-tools:'))
   return line ? line.slice('shuvix-tools:'.length).split(',').length : 0
 }
+/** 当前生效的内置档案名（现扫随包目录，份数不硬编码） */
+const builtinNames = (): string[] =>
+  agentService
+    .listForSettings()
+    .filter((a) => a.source === 'builtin')
+    .map((a) => a.name)
 
 describe('agentService.getSource —— 原文编辑器的数据源', () => {
   const RAW_FIDELITY = [
@@ -161,6 +177,14 @@ describe('agentService.getSource —— 原文编辑器的数据源', () => {
     expect(text).not.toContain('shuvix-builtin')
     // 自身可解析（覆盖副本的初值不能一开局就是坏文件）
     expect(agentService.getSource('work', 'builtin')).toEqual({ text })
+
+    // AS-34 这条对**每一份**内置都成立 —— 随包发布的 md 里 `shuvix-builtin: true` 是自述标记，
+    // 而覆盖副本落在 ~/.shuvix/agents 下，带着它就成了一份自称内置的用户文件
+    for (const name of builtinNames()) {
+      const copy = agentService.getSource(name, 'builtin')
+      expect('text' in copy, name).toBe(true)
+      expect((copy as { text: string }).text, name).not.toContain('shuvix-builtin')
+    }
   })
 
   it('AS-4 内置回写保真：{{shuvix:*}} 会话变量原样留给 createAgent，{{widgetsRoot}} 宿主参数已插值', () => {
@@ -172,6 +196,84 @@ describe('agentService.getSource —— 原文编辑器的数据源', () => {
     // 宿主参数在构建档案时就地替换 —— 用户看到的是真实路径
     expect(widgetText).toContain(state.widgets)
     expect(widgetText).not.toContain('{{widgetsRoot}}')
+  })
+})
+
+/**
+ * 内置档案的 md 随包发布、运行时按当前语言现读；`builtinSourceFile(name)` 是侧栏点内置行时
+ * 「开哪份文件的只读笔记本」的唯一答案（`subAgent:openBuiltinNote` 只认它）。
+ *
+ * 这一组盯的是**两个读数必须同源**：运行时挑中的那份（`basePath`）与 UI 打开的那份
+ * （`builtinSourceFile`）出自同一次语言回退。各挑各的，症状是「跑的是中文档案、点开看到的是
+ * 英文那一份」—— 两边都不报错，也没有任何日志。
+ */
+describe('agentService.builtinSourceFile —— 内置只读笔记本开哪一份文件', () => {
+  const ORIGINAL_LANGUAGE = i18next.language
+  afterAll(() => {
+    i18next.language = ORIGINAL_LANGUAGE
+  })
+  beforeEach(() => {
+    i18next.language = ORIGINAL_LANGUAGE
+  })
+
+  it('AS-30 每一份内置：builtinSourceFile 逐字节等于设置页那一行 basePath 的 basename', () => {
+    const rows = agentService.listForSettings().filter((a) => a.source === 'builtin')
+    expect(rows.length).toBeGreaterThan(0)
+    expect(rows.map((r) => [r.name, agentService.builtinSourceFile(r.name)])).toEqual(
+      rows.map((r) => [r.name, basename(r.basePath)])
+    )
+  })
+
+  it.each([
+    ['zh', 'work.zh.md'],
+    ['zh-CN', 'work.zh.md'],
+    ['de', 'work.md'],
+    ['en', 'work.md']
+  ])('AS-31 界面语言 %s → %s，且 basePath 与 builtinSourceFile 一起动', (language, fileName) => {
+    // 两个读数必须**同时**断：分开断的两条能各自变绿（一个跟着语言走、另一个恒 `<name>.md`），
+    // 而那正是「跑的和看的不是同一份」的形态
+    i18next.language = language
+
+    const row = agentService.listForSettings().find((a) => a.name === 'work' && !a.overridden)!
+    expect([basename(row.basePath), agentService.builtinSourceFile('work')]).toEqual([
+      fileName,
+      fileName
+    ])
+    // 顺带确认回退真的换了文案（否则上面那条在「三语同一份文件」时也会绿）
+    expect(agentService.getProfile('work')!.displayName).toBe(
+      language.startsWith('zh') ? '工作' : 'Work'
+    )
+  })
+
+  it('AS-32 三种边界：纯用户档案名 / 查无此名 → null；被同名用户档案覆盖的内置 → 仍回内置那一份', () => {
+    writeAgentFile('only-user.md', agentMd('only-user'))
+    expect(agentService.builtinSourceFile('only-user')).toBeNull()
+    expect(agentService.builtinSourceFile('no-such-agent')).toBeNull()
+
+    // 被覆盖的内置行照样列在设置页（划线 + 已覆盖），点它开的仍是随包那份 md ——
+    // 「看内置原文」与「哪一份在生效」是两个问题，这里回落到用户文件就把它们混成一个了
+    writeAgentFile('explore.md', agentMd('explore'))
+    const shadowed = agentService
+      .listForSettings()
+      .find((a) => a.name === 'explore' && a.source === 'builtin')!
+    expect(shadowed.overridden).toBe(true)
+    expect(agentService.builtinSourceFile('explore')).toBe(basename(shadowed.basePath))
+    expect(agentService.builtinSourceFile('explore')).toBe('explore.md')
+    // 同名的两份文件叫得一模一样，所以还要断目录：回落到用户目录那一份在文件名上看不出来
+    expect(shadowed.basePath).toBe(join(state.builtinDir, 'explore.md'))
+    expect(shadowed.basePath).not.toBe(join(state.dir, 'explore.md'))
+  })
+
+  it('AS-33 内置行的 basePath 非空、位于内置目录内、文件名是当前语言的候选之一', () => {
+    // basePath 为空（`''`）时 UI 那边的 fileNameOf 会退化成空串，点行开出来的是一条
+    // notebookPath 为空的会话 —— 列表看着一切正常，点开却是空白
+    for (const row of agentService.listForSettings().filter((a) => a.source === 'builtin')) {
+      expect(row.basePath, row.name).not.toBe('')
+      expect(join(state.builtinDir, basename(row.basePath)), row.name).toBe(row.basePath)
+      expect(builtinMdFileNames(row.name, i18next.language), row.name).toContain(
+        basename(row.basePath)
+      )
+    }
   })
 })
 

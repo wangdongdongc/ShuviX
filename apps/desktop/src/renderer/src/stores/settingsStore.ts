@@ -63,7 +63,6 @@ interface SettingsState {
     | 'general'
     | 'projects'
     | 'providers'
-    | 'agents'
     | 'hooks'
     | 'policies'
     | 'tools'

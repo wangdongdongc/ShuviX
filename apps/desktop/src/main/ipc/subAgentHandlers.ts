@@ -53,6 +53,16 @@ export function registerSubAgentHandlers(): void {
     openRegistryNote('agent', params.fileName, params.title)
   )
 
+  /**
+   * 打开 / 复用一份**内置**档案的只读笔记本 —— 它随包发布在应用包里，运行时读的就是这份文件，
+   * 所以按名问 agentService 要「当前语言那一版的文件名」再开，UI 不自己挑语言。
+   */
+  ipcMain.handle('subAgent:openBuiltinNote', (_e, params: { name: string; title?: string }) => {
+    const fileName = agentService.builtinSourceFile(params.name)
+    if (!fileName) throw new Error(`Builtin agent "${params.name}" not found`)
+    return openRegistryNote('agentBuiltin', fileName, params.title)
+  })
+
   /** 打开用户 agents 目录（OS 文件管理器） */
   ipcMain.handle('subAgent:openFolder', async () => {
     await agentService.openUserFolder()

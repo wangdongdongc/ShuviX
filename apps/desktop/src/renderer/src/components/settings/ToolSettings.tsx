@@ -13,7 +13,7 @@ import {
  * 工具配置页：复用共享的 <BuiltinToolsView>（每工具一个子页 + 顶部 metadata 卡片）。
  * 桌面注入：definitions 读取入口、各工具的专属配置（SSH/DB 凭据、
  * Browser 数据/证书设置——挂在统一 browser 工具的子页下）。
- * 子智能体管理已移至顶层「智能体」tab（AgentSettings）。
+ * 子智能体管理已移至侧栏的「智能体」分组（AgentGroup）。
  */
 export function ToolSettings(): React.JSX.Element {
   return (

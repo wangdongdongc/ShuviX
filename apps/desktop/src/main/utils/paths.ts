@@ -113,7 +113,23 @@ export function getBuiltinKnowledgeDir(): string {
     : resolve(__dirname, '../../resources/knowledge')
 }
 
-/** 全局 Agents 目录：~/.shuvix/agents/（不自动创建，由 agentService 管理；内置 agent 已硬编码进 @shuvix/agent-runtime） */
+/**
+ * 内置 agent 档案目录 —— **内置档案的唯一事实源**。随包发布（`Resources/builtin-agents/`，
+ * 见 electron-builder.yml 的 extraResources），开发期指向仓库里
+ * `packages/agent-runtime/src/subagent/builtinAgents/md`。
+ *
+ * 运行时按当前语言现读这里的文件（agentService → buildBuiltinProfiles 的 readMd），侧栏点开
+ * 一份内置档案时打开的也是同一份文件的只读笔记本 —— 不再有「跑的是内联字符串、看的是另一份」。
+ * 与 getBuiltinKnowledgeDir 同策：没有 app（半桩的单测）按未打包算。
+ */
+export function getBuiltinAgentsDir(): string {
+  return app?.isPackaged
+    ? join(process.resourcesPath, 'builtin-agents')
+    : // out/main → out → apps/desktop → apps → 仓库根
+      resolve(__dirname, '../../../../packages/agent-runtime/src/subagent/builtinAgents/md')
+}
+
+/** 全局 Agents 目录：~/.shuvix/agents/（用户自己的档案；不自动创建，由 agentService 管理） */
 export function getDefaultAgentsDir(): string {
   return join(homedir(), '.shuvix', 'agents')
 }

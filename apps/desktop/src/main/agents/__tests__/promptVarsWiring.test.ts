@@ -72,6 +72,7 @@ import {
   renderProfileSystemPrompt,
   type AgentProfile
 } from '@shuvix/agent-runtime'
+import { createInlineMdReader } from '@shuvix/agent-runtime/builtinAgents/inlineSources'
 import '../agentHost'
 
 const LANGUAGES = ['en', 'zh', 'ja']
@@ -83,7 +84,7 @@ const placeholdersOf = (text: string): string[] =>
 
 /** 桌面这一端供全部内置档案（含派生用的 coding / explore / titler …），不只四个基座 */
 const builtins = (language: string): AgentProfile[] =>
-  buildBuiltinProfiles({ language, widgetsRoot: '/w/widgets' })
+  buildBuiltinProfiles({ language, widgetsRoot: '/w/widgets', readMd: createInlineMdReader() })
 
 const varsFor = async (ctx: Partial<PromptVarsCtx> = {}): Promise<PromptVars> => {
   const host = mocks.host.value

@@ -15,6 +15,7 @@ import {
 } from '../builtinHooks'
 import { parseHookDefinitionFile, type ParsedHookFile } from '../hookFile'
 import { evaluateWhen } from '../when'
+import { createInlineMdReader } from '../../subagent/builtinAgents/inlineSources'
 import { BASE_PROFILE_NAMES, buildBuiltinProfiles } from '../../subagent/builtinAgents'
 import type { InProcessAgentType } from '../../subagent/types'
 import { PROFILE, entryOf, makeRunner, promptPayload, settle, turnPayload } from './harness'
@@ -131,7 +132,9 @@ describe('内置 hook 清单与交付', () => {
 
   it('HB-9 派发的 agent 是内置档案，且不是基座', () => {
     const [autoTitle] = buildBuiltinHooks({})
-    expect(buildBuiltinProfiles({}).map((profile) => profile.name)).toContain(autoTitle.agent)
+    expect(
+      buildBuiltinProfiles({ readMd: createInlineMdReader() }).map((profile) => profile.name)
+    ).toContain(autoTitle.agent)
     expect(BASE_PROFILE_NAMES.has(autoTitle.agent)).toBe(false)
   })
 })

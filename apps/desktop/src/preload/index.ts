@@ -349,6 +349,9 @@ const api = {
     createSource: (params: { text: string }) => ipcRenderer.invoke('subAgent:createSource', params),
     openNote: (params: { fileName: string; title?: string }) =>
       ipcRenderer.invoke('subAgent:openNote', params),
+    /** 内置档案的只读笔记本（随包发布的那份 md —— 运行时读的就是它） */
+    openBuiltinNote: (params: { name: string; title?: string }) =>
+      ipcRenderer.invoke('subAgent:openBuiltinNote', params),
     openFolder: () => ipcRenderer.invoke('subAgent:openFolder')
   },
 

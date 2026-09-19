@@ -1,54 +1,23 @@
 /**
  * 内置档案（md 文件 + 统一构建器，跨端共享）。
  *
- * 所有内置 agent —— 含三个基座档案 work / chat / notebook —— 的文案都以 `md/<name>[.<lang>].md`
- * 维护，格式与用户档案 `~/.shuvix/agents/<name>.md` 完全一致、经同一个解析器读取。
- * 构建期由 `?raw` 内联进 bundle（部署后不落磁盘，用户看不到也改不到，与迁移前的 TS
- * 字面量鲁棒性相同）；宿主 registry 调 buildBuiltinProfiles(deps) 现算列表（语言切换 /
- * 宿主参数变化自动跟随），用户仍可用同名用户档案覆盖（合并逻辑在各端 registry 内）。
+ * 所有内置 agent —— 含四个基座档案 work / chat / notebook / bot —— 的文案都以
+ * `md/<name>[.<lang>].md` 维护，格式与用户档案 `~/.shuvix/agents/<name>.md` 完全一致、
+ * 经同一个解析器读取。这些文件**随包发布到磁盘**，运行时经宿主注入的 `readMd` 现读
+ * （桌面 = Resources/builtin-agents，扩展 = 构建期内联的同一批文件）：侧栏点开一份内置档案
+ * 时看到的，就是运行时读的那一份。宿主 registry 调 buildBuiltinProfiles(deps) 现算列表
+ * （语言切换 / 宿主参数变化自动跟随），用户仍可用同名用户档案覆盖（合并逻辑在各端 registry 内）。
  *
- * 加一个内置 agent = 在 md/ 放三份文件 + 在本文件加一条 import 与一个 spec 条目。
+ * 加一个内置 agent = 在 md/ 放三份文件 + 在本文件加一个 spec 条目（不再需要 import）。
  */
 import type { AgentProfile } from '../types'
 import { buildBuiltinProfile, type BuiltinProfileDeps, type BuiltinProfileSpec } from './spec'
 
-import workEn from './md/work.md?raw'
-import workZh from './md/work.zh.md?raw'
-import workJa from './md/work.ja.md?raw'
-import chatEn from './md/chat.md?raw'
-import chatZh from './md/chat.zh.md?raw'
-import chatJa from './md/chat.ja.md?raw'
-import codingEn from './md/coding.md?raw'
-import codingZh from './md/coding.zh.md?raw'
-import codingJa from './md/coding.ja.md?raw'
-import botEn from './md/bot.md?raw'
-import botZh from './md/bot.zh.md?raw'
-import botJa from './md/bot.ja.md?raw'
-import notebookEn from './md/notebook.md?raw'
-import notebookZh from './md/notebook.zh.md?raw'
-import notebookJa from './md/notebook.ja.md?raw'
-import browserEn from './md/browser.md?raw'
-import browserZh from './md/browser.zh.md?raw'
-import browserJa from './md/browser.ja.md?raw'
-import exploreEn from './md/explore.md?raw'
-import exploreZh from './md/explore.zh.md?raw'
-import exploreJa from './md/explore.ja.md?raw'
-import visualizationEn from './md/visualization.md?raw'
-import visualizationZh from './md/visualization.zh.md?raw'
-import visualizationJa from './md/visualization.ja.md?raw'
-import widgetEn from './md/widget.md?raw'
-import widgetZh from './md/widget.zh.md?raw'
-import widgetJa from './md/widget.ja.md?raw'
-import titlerEn from './md/titler.md?raw'
-import titlerZh from './md/titler.zh.md?raw'
-import titlerJa from './md/titler.ja.md?raw'
-import knowledgeWriterEn from './md/knowledge-writer.md?raw'
-import knowledgeWriterZh from './md/knowledge-writer.zh.md?raw'
-import knowledgeWriterJa from './md/knowledge-writer.ja.md?raw'
-
 export {
   buildBuiltinProfile,
+  builtinMdFileNames,
   pickLocalizedSource,
+  type BuiltinMdReader,
   type BuiltinProfileDeps,
   type BuiltinProfileSpec,
   type BuiltinProfileSources
@@ -77,8 +46,7 @@ export const BOT_PROFILE_NAME = 'bot'
  * 把成规模的活儿交给 `coding` 子会话、自己做验收。
  */
 export const WORK_SPEC: BuiltinProfileSpec = {
-  name: WORK_PROFILE_NAME,
-  sources: { en: workEn, zh: workZh, ja: workJa }
+  name: WORK_PROFILE_NAME
 }
 
 /**
@@ -88,8 +56,7 @@ export const WORK_SPEC: BuiltinProfileSpec = {
  * 哪条路线用在哪种会话由会话形态决定（有没有项目），不是配置。
  */
 export const CHAT_SPEC: BuiltinProfileSpec = {
-  name: CHAT_PROFILE_NAME,
-  sources: { en: chatEn, zh: chatZh, ja: chatJa }
+  name: CHAT_PROFILE_NAME
 }
 
 /**
@@ -104,13 +71,11 @@ export const CHAT_SPEC: BuiltinProfileSpec = {
  * 策略 `protect-bot-files` 恒询问）。
  */
 export const BOT_SPEC: BuiltinProfileSpec = {
-  name: BOT_PROFILE_NAME,
-  sources: { en: botEn, zh: botZh, ja: botJa }
+  name: BOT_PROFILE_NAME
 }
 
 export const NOTEBOOK_SPEC: BuiltinProfileSpec = {
-  name: NOTEBOOK_PROFILE_NAME,
-  sources: { en: notebookEn, zh: notebookZh, ja: notebookJa }
+  name: NOTEBOOK_PROFILE_NAME
 }
 
 /**
@@ -119,8 +84,7 @@ export const NOTEBOOK_SPEC: BuiltinProfileSpec = {
  * （session 工具的 `agent_profile`）—— 它是子会话的档案，不是用户切换的目标。
  */
 export const CODING_SPEC: BuiltinProfileSpec = {
-  name: 'coding',
-  sources: { en: codingEn, zh: codingZh, ja: codingJa }
+  name: 'coding'
 }
 
 /**
@@ -138,23 +102,19 @@ export const CODING_SPEC: BuiltinProfileSpec = {
  * 用 `shuvix-model` 可以把它钉到便宜模型上（档案声明优先，不可用时回落派发方模型）。
  */
 export const BROWSER_SPEC: BuiltinProfileSpec = {
-  name: 'browser',
-  sources: { en: browserEn, zh: browserZh, ja: browserJa }
+  name: 'browser'
 }
 
 export const EXPLORE_SPEC: BuiltinProfileSpec = {
-  name: 'explore',
-  sources: { en: exploreEn, zh: exploreZh, ja: exploreJa }
+  name: 'explore'
 }
 
 export const VISUALIZATION_SPEC: BuiltinProfileSpec = {
-  name: 'visualization',
-  sources: { en: visualizationEn, zh: visualizationZh, ja: visualizationJa }
+  name: 'visualization'
 }
 
 export const WIDGET_SPEC: BuiltinProfileSpec = {
   name: 'widget',
-  sources: { en: widgetEn, zh: widgetZh, ja: widgetJa },
   requiredParams: ['widgetsRoot']
 }
 
@@ -165,8 +125,7 @@ export const WIDGET_SPEC: BuiltinProfileSpec = {
  * （旧的「标题模型」专项设置已废弃）。经 session 工具落标题。
  */
 export const TITLER_SPEC: BuiltinProfileSpec = {
-  name: 'titler',
-  sources: { en: titlerEn, zh: titlerZh, ja: titlerJa }
+  name: 'titler'
 }
 
 /**
@@ -179,8 +138,7 @@ export const TITLER_SPEC: BuiltinProfileSpec = {
  * 再也更新不了，而 agent 又被要求遵循它。
  */
 export const KNOWLEDGE_WRITER_SPEC: BuiltinProfileSpec = {
-  name: 'knowledge-writer',
-  sources: { en: knowledgeWriterEn, zh: knowledgeWriterZh, ja: knowledgeWriterJa }
+  name: 'knowledge-writer'
 }
 
 /**

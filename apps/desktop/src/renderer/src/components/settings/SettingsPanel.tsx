@@ -12,7 +12,6 @@ import {
   Info,
   Puzzle,
   BookOpen,
-  Bot,
   Wrench,
   Send,
   Mic,
@@ -30,7 +29,6 @@ import { AboutSettings } from './AboutSettings'
 import { McpSettings } from './McpSettings'
 import { SkillSettings } from './SkillSettings'
 import { ToolSettings } from './ToolSettings'
-import { AgentSettings } from './AgentSettings'
 import { PolicySettings } from './PolicySettings'
 import { HookSettings } from './HookSettings'
 import { TelegramBotsSettings } from './TelegramBotsSettings'
@@ -40,7 +38,6 @@ const VALID_TABS = new Set([
   'general',
   'projects',
   'providers',
-  'agents',
   'hooks',
   'policies',
   'tools',
@@ -105,12 +102,6 @@ export function SettingsPanel(): React.JSX.Element {
           <ProviderSettings />
         </Scroll>
       )
-    },
-    {
-      id: 'agents',
-      label: t('settings.tabAgents'),
-      icon: <Bot size={14} />,
-      content: <AgentSettings />
     },
     {
       id: 'hooks',

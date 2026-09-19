@@ -13,11 +13,13 @@ import {
   REGISTRY_NOTE_PROJECT_IDS,
   type RegistryNoteKind
 } from '@shuvix/chat-protocol/registryNotes'
+import { appEventBus } from '../utils/appEventBus'
 import { projectDao } from '../dao/projectDao'
 import { sessionDao } from '../dao/sessionDao'
 import { sessionService } from './sessionService'
 import { botService } from './botService'
 import {
+  getBuiltinAgentsDir,
   getDefaultAgentsDir,
   getDefaultBotsDir,
   getDefaultPoliciesDir,
@@ -29,6 +31,8 @@ import type { Project, SessionInfo } from '../types'
 const REGISTRIES: Record<RegistryNoteKind, { name: string; dir: () => string }> = {
   bot: { name: 'Bots', dir: getDefaultBotsDir },
   agent: { name: 'Agents', dir: getDefaultAgentsDir },
+  // 随包发布的内置档案 —— 只读（笔记本不给输入卡片，见 isReadOnlyRegistryNoteProjectId）
+  agentBuiltin: { name: 'Builtin Agents', dir: getBuiltinAgentsDir },
   policy: { name: 'Policies', dir: getDefaultPoliciesDir },
   hook: { name: 'Hooks', dir: getDefaultHooksDir }
 }
@@ -101,18 +105,46 @@ export function openRegistryNote(
   return { ...session, workingDirectory: project.path }
 }
 
+/** `agent.changed` 的合并窗口：笔记本每 200ms 防抖落一次盘，连续打字不该让侧栏分组一直重扫 */
+const AGENT_CHANGED_DEBOUNCE_MS = 300
+let agentChangedTimer: ReturnType<typeof setTimeout> | null = null
+
+/** 档案目录写完了：合并窗口内广播一次 `agent.changed`（没有服务要观察，只是让 UI 重扫） */
+function noteAgentWritten(): void {
+  if (agentChangedTimer) clearTimeout(agentChangedTimer)
+  agentChangedTimer = setTimeout(() => {
+    agentChangedTimer = null
+    appEventBus.publish({ type: 'agent.changed' })
+  }, AGENT_CHANGED_DEBOUNCE_MS)
+}
+
 /**
  * 包住一次经笔记本（writeSessionFile）的落盘，让它所属的注册表看见这次写入。
  *
- * 只有 bot 注册表需要：改名要迁会话绑定，侧栏与身份胶囊要重查（见 botService.noteWriting /
- * noteWritten）。agent / policy / hook 每次用到都现扫目录，写完即生效，不需要通知。
+ * 两个目录要回执，理由不同：
+ *   - bots：改名要迁会话绑定，侧栏与身份胶囊要重查（见 botService.noteWriting / noteWritten）；
+ *   - agents：没有服务要观察（每次用到都现扫目录，写完即生效），但侧栏那一组把档案的显示名
+ *     直接摆在屏幕上，而改名就发生在同一个窗口的笔记本里 —— 没有「切窗口」这一下可以兜底，
+ *     所以写完广播一次 `agent.changed` 让它重扫。
+ * policy / hook 的列表在设置页，那边的详情区自己盯着这份文件的 files.changed，不需要通知。
  */
 export async function observeRegistryWrite<T>(
   absPath: string,
   write: () => Promise<T>
 ): Promise<T> {
+  if (!/\.md$/i.test(absPath)) return write()
+  const dir = dirname(resolve(absPath))
+
+  if (dir === resolve(getDefaultAgentsDir())) {
+    try {
+      return await write()
+    } finally {
+      noteAgentWritten()
+    }
+  }
+
   const botsDir = getDefaultBotsDir()
-  if (!/\.md$/i.test(absPath) || dirname(resolve(absPath)) !== resolve(botsDir)) return write()
+  if (dir !== resolve(botsDir)) return write()
   const filePath = join(botsDir, basename(absPath))
   botService.noteWriting(filePath)
   try {

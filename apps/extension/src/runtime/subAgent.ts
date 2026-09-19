@@ -9,12 +9,10 @@
  * 与基座档案体系正交）、派发工具装配。
  */
 import i18next from 'i18next'
-import extWorkEn from './builtinAgents/md/work.md?raw'
-import extWorkZh from './builtinAgents/md/work.zh.md?raw'
-import extWorkJa from './builtinAgents/md/work.ja.md?raw'
-import extChatEn from './builtinAgents/md/chat.md?raw'
-import extChatZh from './builtinAgents/md/chat.zh.md?raw'
-import extChatJa from './builtinAgents/md/chat.ja.md?raw'
+import {
+  createInlineMdReader,
+  createInlineMdReaderFrom
+} from '@shuvix/agent-runtime/builtinAgents/inlineSources'
 import {
   createSubAgentManager,
   buildBuiltinProfile,
@@ -27,7 +25,6 @@ import {
   type AgentProfile,
   type AgentProfileRegistry,
   type AnyAgentTool,
-  type BuiltinProfileSpec,
   type DispatchAgentTool,
   type InProcessAgentType,
   type SubAgentModelConfig
@@ -75,38 +72,41 @@ const EXTENSION_BUILTIN_NAMES = new Set([
 ])
 
 /**
+ * 内置 md 的读取口 —— 扩展跑在浏览器里读不了文件，于是构建期把**桌面运行时读的那批同一个
+ * 文件**内联进 bundle（inlineSources 的 glob）。桌面那边读的是随包发布的目录，两端的源
+ * 仍然只有仓库里那一份。
+ */
+const SHARED_MD = createInlineMdReader()
+
+/**
  * 扩展的 work / chat 浏览器变体 —— 共享的这两份档案点名了 bash/ssh/glob/grep/ls/skill/
  * 子会话等扩展没有的工具，会误导 Agent；这里按扩展真实能力（read/write/edit/ask/浏览器/
- * MCP）各提供整份档案副本，与共享档案同一套语言回退规则。
+ * MCP）各提供整份档案副本，与共享档案同一套语言回退规则（同名文件覆盖同名内置）。
  *
  * 桌面上这两条路线差在「自己干 vs 交给 coding 子会话」，而扩展既没有 shell 也没有子会话，
  * 两份文案因此只差工作目录形态（项目文件夹 vs 隔离的临时目录）—— 保留两份档案是为了
  * 让「项目会话 work / 无项目会话 chat」这条形态推导在两端指同一件事。
  */
-const EXTENSION_WORK_SPEC: BuiltinProfileSpec = {
-  name: WORK_PROFILE_NAME,
-  sources: { en: extWorkEn, zh: extWorkZh, ja: extWorkJa }
-}
+const EXTENSION_MD = createInlineMdReaderFrom(
+  import.meta.glob('./builtinAgents/md/*.md', {
+    query: '?raw',
+    import: 'default',
+    eager: true
+  }) as Record<string, string>
+)
 
-const EXTENSION_CHAT_SPEC: BuiltinProfileSpec = {
-  name: CHAT_PROFILE_NAME,
-  sources: { en: extChatEn, zh: extChatZh, ja: extChatJa }
-}
-
-const EXTENSION_OVERRIDE_SPECS = new Map<string, BuiltinProfileSpec>([
-  [WORK_PROFILE_NAME, EXTENSION_WORK_SPEC],
-  [CHAT_PROFILE_NAME, EXTENSION_CHAT_SPEC]
-])
+const EXTENSION_OVERRIDE_NAMES = new Set([WORK_PROFILE_NAME, CHAT_PROFILE_NAME])
 
 /** 内置档案现算（文案按当前语言解析；work / chat 换成扩展的浏览器变体） */
 function builtinProfiles(): AgentProfile[] {
   const language = i18next.language
-  return buildBuiltinProfiles({ language })
+  return buildBuiltinProfiles({ language, readMd: SHARED_MD })
     .filter((a) => EXTENSION_BUILTIN_NAMES.has(a.name))
-    .map((a) => {
-      const spec = EXTENSION_OVERRIDE_SPECS.get(a.name)
-      return spec ? (buildBuiltinProfile(spec, { language }) ?? a) : a
-    })
+    .map((a) =>
+      EXTENSION_OVERRIDE_NAMES.has(a.name)
+        ? (buildBuiltinProfile({ name: a.name }, { language, readMd: EXTENSION_MD }) ?? a)
+        : a
+    )
 }
 
 export const extensionSubAgentRegistry: AgentProfileRegistry = {

@@ -12,6 +12,7 @@ import {
   KNOWLEDGE_MARKER_TYPE,
   isKnowledgeProjectId
 } from '@shuvix/chat-protocol/knowledge'
+import { isReadOnlyRegistryNoteProjectId } from '@shuvix/chat-protocol/registryNotes'
 import { NotebookView, type NotebookViewProps } from './NotebookView'
 import { useFocusDim } from '../sidebar/useFocusDim'
 
@@ -40,8 +41,10 @@ export function NotebookSession({
   // 规范里没有标识字段；从别处拷进用户库的 bundle 通常不带我们的自述行
   const projectId = useChatStore((s) => s.sessions.find((x) => x.id === sessionId)?.projectId)
   const inKnowledgeBase = isKnowledgeProjectId(projectId)
-  // 内置知识库（随应用发布的说明书）：只读 —— 编辑器只渲染，也不给输入框（notebook agent 能 edit 文件）
-  const readOnly = projectId === KNOWLEDGE_BUILTIN_PROJECT_ID
+  // 随应用发布的两类笔记（内置知识库的说明书、内置 agent 档案的 md）：只读 —— 编辑器只渲染，
+  // 也不给输入框（notebook agent 能 edit 文件）。改它没有意义：下次更新整目录被替换
+  const readOnly =
+    projectId === KNOWLEDGE_BUILTIN_PROJECT_ID || isReadOnlyRegistryNoteProjectId(projectId)
   const { handleInputResponse } = useChatActions(sessionId)
   // 悬浮输入卡片实高 → 根容器 CSS 变量：编辑器滚动区据此给文末让位（.cm-scroller 的
   // padding-bottom，见 atomic-panel.css）。直接写 DOM 变量而非 state —— 高度随抽屉

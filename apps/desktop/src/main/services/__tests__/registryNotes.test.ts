@@ -5,7 +5,9 @@
  * 打开与 knowledgeNotes 同一套做法，测法也照它：每个目录一个隐藏承载项目（固定 id、path =
  * 该目录）按需插入、历史行漂移自愈；一份文件至多一条笔记本会话，重复打开复用；**文件名在碰
  * 任何东西之前先过白名单** —— 它来自渲染进程，而打开的是一条会往盘上写的笔记本会话。
- * 写入回执只有 bot 目录要（改名迁移 + bot.changed），其余目录每次用到都现扫，不该被打扰。
+ * 写入回执 bot 目录要（改名迁移 + bot.changed），agents 目录也要（没有服务要观察，但侧栏那一组
+ * 的行标签就在屏幕上、改名发生在同一个窗口里 → agent.changed）；policy / hook 的列表在设置窗，
+ * 详情区自己盯着 files.changed，不该被打扰。
  *
  * dao / sessionService / botService 是替身；**fs 是真的** —— 「存在且是普通文件」只有真目录
  * 测得出来（一个叫 `looks-like.md` 的目录就是这么漏过去的，RN-9）。四个目录挂在每个用例各自的
@@ -21,10 +23,17 @@ import {
 } from '@shuvix/chat-protocol/registryNotes'
 import type { Project, Session } from '../../types'
 
-/** 临时根 + 四个注册表目录。paths 替身与用例共用这一份，两边拼出的路径逐字相同 */
+/** 临时根 + 五个注册表目录。paths 替身与用例共用这一份，两边拼出的路径逐字相同 */
 const tmp = vi.hoisted(() => {
   const state = { base: '' }
-  const subdir = { bot: 'bots', agent: 'agents', policy: 'policies', hook: 'hooks' }
+  const subdir = {
+    bot: 'bots',
+    agent: 'agents',
+    // 内置档案随包发布（真实路径在应用包里）——这里只要是**另一个目录**，用来钉「它不是 agents 目录」
+    agentBuiltin: 'builtin-agents',
+    policy: 'policies',
+    hook: 'hooks'
+  }
   return {
     state,
     dirOf: (kind: keyof typeof subdir): string => `${state.base}/${subdir[kind]}`
@@ -34,6 +43,7 @@ const tmp = vi.hoisted(() => {
 vi.mock('../../utils/paths', () => ({
   getDefaultBotsDir: () => tmp.dirOf('bot'),
   getDefaultAgentsDir: () => tmp.dirOf('agent'),
+  getBuiltinAgentsDir: () => tmp.dirOf('agentBuiltin'),
   getDefaultPoliciesDir: () => tmp.dirOf('policy'),
   getDefaultHooksDir: () => tmp.dirOf('hook')
 }))
@@ -61,13 +71,14 @@ import { ensureRegistryNoteProject, observeRegistryWrite, openRegistryNote } fro
 
 const publish = vi.spyOn(appEventBus, 'publish')
 
-const KINDS = ['bot', 'agent', 'policy', 'hook'] as const
+const KINDS = ['bot', 'agent', 'agentBuiltin', 'policy', 'hook'] as const
 const { dirOf } = tmp
 
 /** 各注册表隐藏项目的名字（项目列表里看不见，只在日志与调试里认得出是谁） */
 const NAMES: Record<RegistryNoteKind, string> = {
   bot: 'Bots',
   agent: 'Agents',
+  agentBuiltin: 'Builtin Agents',
   policy: 'Policies',
   hook: 'Hooks'
 }
@@ -195,6 +206,20 @@ describe('ensureRegistryNoteProject', () => {
     expect(vi.mocked(projectDao.findById).mock.calls).toEqual([[REGISTRY_NOTE_PROJECT_IDS.agent]])
     expect(vi.mocked(projectDao.insert).mock.calls[0][0].path).toBe(dirOf('agent'))
     expect(project.path).toBe(dirOf('agent'))
+  })
+
+  it('RN-4b 内置档案是**另一个**载体：agentBuiltin 只查 `__agents_builtin__`，插入行的 path 是随包目录', () => {
+    // 两种档案共用一行项目的后果最实在：承载项目的 path 决定 notebookPath 相对哪个根解析，
+    // 用户档案与随包档案挂在一起，path 自愈就会在两个根之间来回改写存量会话的落点
+    const project = ensureRegistryNoteProject('agentBuiltin')
+
+    expect(vi.mocked(projectDao.findById).mock.calls).toEqual([
+      [REGISTRY_NOTE_PROJECT_IDS.agentBuiltin]
+    ])
+    expect(REGISTRY_NOTE_PROJECT_IDS.agentBuiltin).not.toBe(REGISTRY_NOTE_PROJECT_IDS.agent)
+    expect(vi.mocked(projectDao.insert).mock.calls[0][0].path).toBe(dirOf('agentBuiltin'))
+    expect(project.path).toBe(dirOf('agentBuiltin'))
+    expect(project.path).not.toBe(dirOf('agent'))
   })
 })
 
@@ -388,14 +413,13 @@ describe('observeRegistryWrite', () => {
     expect(botService.noteWritten).toHaveBeenCalledTimes(1)
   })
 
-  it('RN-12 bots 目录之外一律不回执：非 .md、bots 的子目录、另外三个注册表目录、名字以 bots 开头的兄弟目录、相对路径 —— 写照常只调一次、值照常透传', async () => {
-    // agent / policy / hook 每次用到都现扫目录，不需要通知；`bots-evil` 是给前缀匹配
-    // （startsWith(botsDir)）准备的陷阱
+  it('RN-12 bots / agents 目录之外一律不回执：非 .md、bots 的子目录、policy 与 hook 目录、名字以 bots 开头的兄弟目录、相对路径 —— 写照常只调一次、值照常透传、不广播', async () => {
+    // policy / hook 的列表在设置窗，那边的详情区自己盯着这份文件的 files.changed，不需要通知；
+    // `bots-evil` 是给前缀匹配（startsWith(botsDir)）准备的陷阱
     const bots = dirOf('bot')
     const targets = [
       join(bots, 'notes.txt'),
       join(bots, 'sub', 'x.md'),
-      join(dirOf('agent'), 'x.md'),
       join(dirOf('policy'), 'x.md'),
       join(dirOf('hook'), 'x.md'),
       join(tmp.state.base, 'bots-evil', 'x.md'),
@@ -409,6 +433,32 @@ describe('observeRegistryWrite', () => {
     }
     expect(botService.noteWriting).not.toHaveBeenCalled()
     expect(botService.noteWritten).not.toHaveBeenCalled()
+    expect(publish).not.toHaveBeenCalled()
+  })
+
+  it('RN-14 agents 目录下的 .md：写完（promise 落定之后）合并窗口内广播一次 agent.changed；不惊动 botService，值照常透传', async () => {
+    // 没有服务要观察 agents 目录（每次用到都现扫），要的只是让侧栏那一组重扫 —— 而改名就发生在
+    // 同一个窗口的笔记本里，没有「切窗口」这一下可以兜底。合并窗口存在的理由同 bot：笔记本每
+    // 200ms 防抖落一次盘，连续打字不该让分组一直重扫
+    vi.useFakeTimers()
+    try {
+      const path = join(dirOf('agent'), 'x.md')
+      const value = { ok: true as const }
+      const write = vi.fn(async () => value)
+
+      await expect(observeRegistryWrite(path, write)).resolves.toBe(value)
+      expect(write).toHaveBeenCalledTimes(1)
+      expect(botService.noteWriting).not.toHaveBeenCalled()
+      expect(botService.noteWritten).not.toHaveBeenCalled()
+      // 合并窗口未到：一笔都还没广播
+      expect(publish).not.toHaveBeenCalled()
+
+      await expect(observeRegistryWrite(path, write)).resolves.toBe(value)
+      vi.advanceTimersByTime(300)
+      expect(publish.mock.calls).toEqual([[{ type: 'agent.changed' }]])
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('RN-13 路径先规范化再判：`sub/..` 绕回 bots 目录、重复分隔符都照样回执；noteWriting 收到的是 bots 目录 + 文件名（后缀大小写原样）', async () => {
@@ -425,5 +475,28 @@ describe('observeRegistryWrite', () => {
     expect(vi.mocked(botService.noteWriting).mock.calls[1]).toEqual([join(bots, 'x.md')])
     expect(botService.noteWritten).toHaveBeenCalledTimes(2)
     expect(write).toHaveBeenCalledTimes(2)
+  })
+
+  it('RN-15 **内置**档案目录下的 .md：不广播 agent.changed、不惊动 botService，值照常透传', async () => {
+    // 回执认的是 agents 目录，内置那份住在应用包里、只读，本就没有写路径 —— 真有一笔写到
+    // 这里，它也不该被当成「用户改了自己的档案」去让侧栏重扫（更别说那是在改产品文件）。
+    // 前缀匹配（startsWith）写法会把 `…/builtin-agents` 之外的兄弟目录一并认进来，这条同时挡它
+    vi.useFakeTimers()
+    try {
+      const value = { ok: true as const }
+      const write = vi.fn(async () => value)
+
+      await expect(
+        observeRegistryWrite(join(dirOf('agentBuiltin'), 'work.zh.md'), write)
+      ).resolves.toBe(value)
+      expect(write).toHaveBeenCalledTimes(1)
+      expect(botService.noteWriting).not.toHaveBeenCalled()
+      expect(botService.noteWritten).not.toHaveBeenCalled()
+      // 合并窗口整个走完也一声不吭（RN-14 里同样的等待会等出一次广播）
+      vi.advanceTimersByTime(1000)
+      expect(publish).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

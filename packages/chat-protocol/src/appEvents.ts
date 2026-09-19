@@ -39,6 +39,13 @@ export type AppEvent =
    * 答话途中用 `edit` 改 md、用户往目录里丢文件这类写入不广播，由消费者在窗口聚焦时重扫兜底。
    */
   | { type: 'bot.changed' }
+  /**
+   * 智能体档案注册表变化（新建 / 覆盖副本 / 删除 / 经笔记本落盘的编辑）—— 信号事件，
+   * 消费者重拉 subAgent.list。侧栏那一组把档案的显示名直接摆在屏幕上，而改名就发生在
+   * 同一个窗口的笔记本里（没有切窗口这一下可以兜底），所以 agent 目录与 bots 目录一样
+   * 要回执；口径也一致：只覆盖经宿主落盘的写入，外部编辑器由窗口聚焦时的重扫兜底。
+   */
+  | { type: 'agent.changed' }
   | { type: 'pinChat.changed'; pinnedSessionIds: string[] }
   | { type: 'widget.changed' }
   /**

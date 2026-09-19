@@ -26,41 +26,43 @@ import {
   buildBuiltinProfiles,
   CHAT_PROFILE_NAME,
   WORK_PROFILE_NAME,
-  type AgentProfile,
-  type BuiltinProfileSpec
+  type AgentProfile
 } from '@shuvix/agent-runtime'
-
-import extWorkEn from '../builtinAgents/md/work.md?raw'
-import extWorkZh from '../builtinAgents/md/work.zh.md?raw'
-import extWorkJa from '../builtinAgents/md/work.ja.md?raw'
-import extChatEn from '../builtinAgents/md/chat.md?raw'
-import extChatZh from '../builtinAgents/md/chat.zh.md?raw'
-import extChatJa from '../builtinAgents/md/chat.ja.md?raw'
+import {
+  createInlineMdReader,
+  createInlineMdReaderFrom
+} from '@shuvix/agent-runtime/builtinAgents/inlineSources'
 
 const LANGUAGES = ['en', 'zh', 'ja']
 
-/** 与 subAgent.ts 的 EXTENSION_*_SPEC 同形（那边够不到：import 图带 chrome.*） */
-const SPECS: Record<string, BuiltinProfileSpec> = {
-  [WORK_PROFILE_NAME]: {
-    name: WORK_PROFILE_NAME,
-    sources: { en: extWorkEn, zh: extWorkZh, ja: extWorkJa }
-  },
-  [CHAT_PROFILE_NAME]: {
-    name: CHAT_PROFILE_NAME,
-    sources: { en: extChatEn, zh: extChatZh, ja: extChatJa }
-  }
+/** 扩展自己那批浏览器变体 md（与 subAgent.ts 同一个 glob —— 那边够不到：import 图带 chrome.*） */
+const EXT_MD_SOURCES = import.meta.glob('../builtinAgents/md/*.md', {
+  query: '?raw',
+  import: 'default',
+  eager: true
+}) as Record<string, string>
+
+/** 文件名 → 原文（`work.zh.md` / `chat.md`），逐份断言时按它取原文 */
+const extSource = (name: string, language: string): string => {
+  const suffix = language === 'en' ? '' : `.${language}`
+  const hit = Object.entries(EXT_MD_SOURCES).find(([path]) => path.endsWith(`/${name}${suffix}.md`))
+  expect(hit, `扩展 ${name}.${language} 的 md 应存在`).toBeTruthy()
+  return hit![1]
 }
+
+const EXT_MD = createInlineMdReaderFrom(EXT_MD_SOURCES)
+const SHARED_MD = createInlineMdReader()
 
 /** 扩展副本 */
 const ext = (name: string, language: string): AgentProfile => {
-  const built = buildBuiltinProfile(SPECS[name], { language })
+  const built = buildBuiltinProfile({ name }, { language, readMd: EXT_MD })
   expect(built, `扩展 ${name}.${language} 应解析成合法档案`).not.toBeNull()
   return built!
 }
 
 /** 共享版（桌面用的那一份） */
 const shared = (name: string, language: string): AgentProfile =>
-  buildBuiltinProfiles({ language }).find((a) => a.name === name)!
+  buildBuiltinProfiles({ language, readMd: SHARED_MD }).find((a) => a.name === name)!
 
 const placeholders = (text: string): string[] =>
   [...new Set(text.match(/\{\{[^}]+\}\}/g) ?? [])].sort()
@@ -99,9 +101,11 @@ describe('扩展端基座档案 — 结构字段与共享版对齐', () => {
   })
 
   it('六份 md 都不带退役的 shuvix-session-awareness', () => {
-    for (const [name, spec] of Object.entries(SPECS)) {
-      for (const [language, source] of Object.entries(spec.sources)) {
-        expect(source, `${name}.${language}`).not.toContain('shuvix-session-awareness')
+    for (const name of [WORK_PROFILE_NAME, CHAT_PROFILE_NAME]) {
+      for (const language of LANGUAGES) {
+        expect(extSource(name, language), `${name}.${language}`).not.toContain(
+          'shuvix-session-awareness'
+        )
       }
     }
   })
@@ -119,10 +123,10 @@ describe('扩展端基座档案 — 结构字段与共享版对齐', () => {
   })
 
   it('各语言文件的 {{...}} 占位符集合与 en 完全一致（漏改/误译 = 变量失效）', () => {
-    for (const [name, spec] of Object.entries(SPECS)) {
-      const expected = placeholders(spec.sources.en)
-      for (const [language, source] of Object.entries(spec.sources)) {
-        expect(placeholders(source), `${name}.${language}`).toEqual(expected)
+    for (const name of [WORK_PROFILE_NAME, CHAT_PROFILE_NAME]) {
+      const expected = placeholders(extSource(name, 'en'))
+      for (const language of LANGUAGES) {
+        expect(placeholders(extSource(name, language)), `${name}.${language}`).toEqual(expected)
       }
     }
   })

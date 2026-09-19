@@ -20,6 +20,9 @@
       "@shuvix/chat-ui": ["../../packages/chat-ui/src/index.ts"],
       "@shuvix/chat-ui/*": ["../../packages/chat-ui/src/*"],
       "@shuvix/agent-runtime": ["../../packages/agent-runtime/src/index.ts"],
+      "@shuvix/agent-runtime/builtinAgents/inlineSources": [
+        "../../packages/agent-runtime/src/subagent/builtinAgents/inlineSources.ts"
+      ],
       "@shuvix/app-shell": ["../../packages/app-shell/src/index.ts"],
       "@shuvix/app-shell/*": ["../../packages/app-shell/src/*"],
       "@shuvix/atomic-editor": ["../../packages/atomic-editor/src/index.ts"],

@@ -23,6 +23,11 @@ extraResources:
   # extraResources 默认就在 Resources/ 下，路径保留 +x 权限
   - from: resources/cli
     to: cli
+  # 内置 agent 档案（work / chat / coding … 的 md，一个 agent 一语言一文件）：**运行时就读这一份**
+  # （agentService 按当前语言现读，见 getBuiltinAgentsDir），侧栏点内置行开的只读笔记本读的也是它 ——
+  # 不再 ?raw 内联，避免「跑的是内联字符串、看的是另一份文件」
+  - from: ../../packages/agent-runtime/src/subagent/builtinAgents/md
+    to: builtin-agents
   # 内置知识库（ShuviX 自己的说明书，`knowledge` 工具里的保留名 `shuvix`）：一库一目录、目录下按语言分层，
   # 是真实目录而不是 ?raw 内联 —— 扫描 / 检索 / 笔记本都按目录走，与用户库同一条路
   - from: resources/knowledge

@@ -5,6 +5,8 @@ import { getChatApi, useChatStore } from '@shuvix/chat-ui'
 import { REGISTRY_NOTE_PROJECT_IDS } from '@shuvix/chat-protocol/registryNotes'
 import {
   Sidebar as SharedSidebar,
+  AgentGroup,
+  type AgentGroupAdapter,
   BotGroup,
   type BotGroupAdapter,
   KnowledgeGroup,
@@ -16,7 +18,9 @@ import {
 import { useUpdateStore } from '../../stores/updateStore'
 import { usePinChatStore } from '../../stores/pinChatStore'
 import { ProjectEditDialog } from './ProjectEditDialog'
+import { newAgentTemplate } from './agentTemplate'
 import { ConfirmDialog } from '../common/ConfirmDialog'
+import { fileNameOf, uniqueName } from '../common/registryFiles'
 
 /**
  * 桌面侧边栏 —— 薄封装共享 <Sidebar>，注入桌面专属能力：
@@ -25,7 +29,9 @@ import { ConfirmDialog } from '../common/ConfirmDialog'
  *   - 会话/分组右键菜单由共享组件统一渲染（桌面经 ContextMenuProvider 注入原生渲染器）
  *   - 会话配置弹窗、项目编辑弹窗
  *   - Bots 置顶分组（BotGroup 经 groupsPrepend 注入，接 window.api.bot.*；点行开 / 复用该文件的
- *     笔记本会话，删除的确认框在这里）+ 知识库置顶分组（KnowledgeGroup，接 window.api.knowledge.*，
+ *     笔记本会话，删除的确认框在这里）+ 智能体档案置顶分组（AgentGroup，接 window.api.subAgent.*；
+ *     用户档案点行开可编辑的笔记本，内置档案点行开**随包发布那份 md 的只读笔记本**，右键才是
+ *     「创建覆盖副本」）+ 知识库置顶分组（KnowledgeGroup，接 window.api.knowledge.*，
  *     点行开 / 复用条目的笔记本会话）
  *   - 底部更新提示。侧栏只有项目视图 —— 日历已迁至右面板 Calendar tab（CalendarPanel）
  *   - 归档项目的恢复 / 删除已移至「设置 → Projects → 已归档」
@@ -44,6 +50,10 @@ export function Sidebar(): React.JSX.Element {
   /** 待确认删除的 bot（按名删，文件名用来认出开着的笔记本）或无法解析的 bot 文件（按文件名） */
   const [confirmingBotDelete, setConfirmingBotDelete] = useState<
     { name: string; fileName: string } | { fileName: string } | null
+  >(null)
+  /** 待确认删除的智能体档案（按名删生效的那份）或按文件名删（非法 / 同名里被遮蔽的那份） */
+  const [confirmingAgentDelete, setConfirmingAgentDelete] = useState<
+    { name: string; displayName: string; fileName: string } | { fileName: string } | null
   >(null)
 
   // 在指定项目下新建会话（文件夹流程用）
@@ -136,6 +146,108 @@ export function Sidebar(): React.JSX.Element {
   }
 
   /**
+   * 智能体档案分组能力注入 —— 清单 = 一次同名裁决的全部份数（`subAgent.list`）+ 无法解析的文件。
+   * 用户档案点一行 / 新建一份 / 建覆盖副本，落点都是那份文件的**笔记本会话**（main 侧去重，
+   * 隐藏项目 `__agents__`）；内置档案的 md 随包发布在应用包里（运行时读的就是它），点行开的是
+   * 它的**只读**笔记本（载体 `__agents_builtin__`，main 侧按名挑当前语言那一版）。
+   * 新建与覆盖副本共用 `createSource` 这一个写入口（非法一律拒绝），建好后按名回查文件名再开笔记。
+   * 删除先弹确认框（见 overlays），真删掉后 `agent.changed` 让分组重扫。
+   * 引用必须稳定（useMemo）：分组以 adapter 为扫描依赖。
+   */
+  const agentGroupAdapter = useMemo<AgentGroupAdapter>(() => {
+    /** 打开一份档案 md 的笔记本会话并选中它（用户档案与内置档案只差 main 侧那一步怎么找文件） */
+    const openNoteWith = async (open: () => Promise<{ id: string }>): Promise<void> => {
+      let session: { id: string }
+      try {
+        session = await open()
+      } catch {
+        return // 文件已不在（清单过期）—— agent.changed / 聚焦重扫会把这一行拿掉
+      }
+      useChatStore.getState().setSessions(await getChatApi().session.list())
+      setActiveSessionId(session.id)
+    }
+    const openNote = (fileName: string, title?: string): Promise<void> =>
+      openNoteWith(() => window.api.subAgent.openNote({ fileName, title }))
+    /** 落一份新的用户档案并打开它：createSource 只回名字，文件名回查列表（派生时可能加了后缀） */
+    const createAndOpen = async (text: string): Promise<void> => {
+      const r = await window.api.subAgent.createSource({ text })
+      if (!r.success || !r.name) return
+      const hit = (await window.api.subAgent.list()).find(
+        (a) => a.source === 'user' && a.name === r.name
+      )
+      if (hit) await openNote(fileNameOf(hit.basePath), hit.displayName)
+    }
+    return {
+      list: async () => {
+        const [list, invalid] = await Promise.all([
+          window.api.subAgent.list(),
+          window.api.subAgent.listInvalid()
+        ])
+        return {
+          agents: list.map((a) => ({
+            name: a.name,
+            displayName: a.displayName || a.name,
+            description: a.description,
+            source: a.source,
+            // 两种档案的 basePath 都是真实文件：用户的在 ~/.shuvix/agents，内置的在应用包里
+            // （运行时按语言挑中的那一份）—— 行按文件名认，点行开的就是这份 md 的笔记本
+            fileName: fileNameOf(a.basePath),
+            ...(a.overridden ? { overridden: true } : {}),
+            ...(a.overriddenBy ? { overriddenBy: a.overriddenBy } : {})
+          })),
+          invalid
+        }
+      },
+      open: openNote,
+      openBuiltin: (agent) =>
+        openNoteWith(() =>
+          window.api.subAgent.openBuiltinNote({ name: agent.name, title: agent.displayName })
+        ),
+      create: async () => {
+        const taken = (await window.api.subAgent.list()).map((a) => a.name)
+        await createAndOpen(newAgentTemplate(t, uniqueName('my-agent', taken)))
+      },
+      createOverride: async (agent) => {
+        const r = await window.api.subAgent.getSource({ name: agent.name, source: 'builtin' })
+        if ('error' in r) return
+        await createAndOpen(r.text)
+      },
+      openFolder: () => window.api.subAgent.openFolder(),
+      delete: (agent) =>
+        setConfirmingAgentDelete({
+          name: agent.name,
+          displayName: agent.displayName,
+          fileName: agent.fileName
+        }),
+      deleteFile: (fileName) => setConfirmingAgentDelete({ fileName })
+    }
+  }, [setActiveSessionId, t])
+
+  /**
+   * 确认删除档案：按名删的是生效的那份（删掉后同名内置自动恢复生效），按文件名删的是非法的 /
+   * 同名里被遮蔽的那份。删掉的正是主区开着的那份文件的笔记本时顺手离开它 —— 留着接着打字，
+   * 自动保存会把刚删掉的文件写回来。
+   */
+  const handleAgentDelete = async (
+    target: { name: string; fileName: string } | { fileName: string }
+  ): Promise<void> => {
+    setConfirmingAgentDelete(null)
+    const r =
+      'name' in target
+        ? await window.api.subAgent.delete({ name: target.name })
+        : await window.api.subAgent.deleteByFile({ fileName: target.fileName })
+    if (!r.success) return
+    const { sessions, activeSessionId } = useChatStore.getState()
+    const active = sessions.find((s) => s.id === activeSessionId)
+    if (
+      active?.projectId === REGISTRY_NOTE_PROJECT_IDS.agent &&
+      active.settings.notebookPath === target.fileName
+    ) {
+      setActiveSessionId(null)
+    }
+  }
+
+  /**
    * 项目记忆能力注入 —— 清单读盘，打开一条即打开/复用绑定它的笔记本会话（进 live-preview 直接编辑）。
    * 引用必须稳定（useMemo）：子文件夹以 adapter 为扫描依赖，每渲染新建对象会导致反复扫盘。
    */
@@ -206,6 +318,7 @@ export function Sidebar(): React.JSX.Element {
       groupsPrepend={
         <>
           <BotGroup adapter={botGroupAdapter} />
+          <AgentGroup adapter={agentGroupAdapter} />
           <KnowledgeGroup adapter={knowledgeAdapter} />
         </>
       }
@@ -236,6 +349,24 @@ export function Sidebar(): React.JSX.Element {
               cancelText={t('common.cancel')}
               onConfirm={() => void handleBotDelete(confirmingBotDelete)}
               onCancel={() => setConfirmingBotDelete(null)}
+            />
+          )}
+          {confirmingAgentDelete && (
+            <ConfirmDialog
+              title={t('tool.subAgentDeleteConfirmTitle')}
+              description={
+                'name' in confirmingAgentDelete
+                  ? t('tool.subAgentDeleteConfirmDesc', {
+                      name: confirmingAgentDelete.displayName
+                    })
+                  : t('tool.subAgentDeleteFileConfirmDesc', {
+                      name: confirmingAgentDelete.fileName
+                    })
+              }
+              confirmText={t('common.delete')}
+              cancelText={t('common.cancel')}
+              onConfirm={() => void handleAgentDelete(confirmingAgentDelete)}
+              onCancel={() => setConfirmingAgentDelete(null)}
             />
           )}
         </>

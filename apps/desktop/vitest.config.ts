@@ -8,6 +8,12 @@ export default defineConfig({
       // 不这么做时 Node 会沿 node_modules 往上找到工作区符号链接 —— 在 git worktree 里
       // 那条链接指向主检出，于是测试跑的是另一个检出的包源码（本地改动全看不见）。
       '@shuvix/chat-protocol': resolvePath(__dirname, '../../packages/chat-protocol/src'),
+      // 内置 agent md 的**构建期内联**变体（单测与扩展用；主进程读随包目录）。
+      // 必须排在下面那条之前：Vite 的字符串别名按顺序做前缀匹配，短的会先吃掉长的
+      '@shuvix/agent-runtime/builtinAgents/inlineSources': resolvePath(
+        __dirname,
+        '../../packages/agent-runtime/src/subagent/builtinAgents/inlineSources.ts'
+      ),
       '@shuvix/agent-runtime': resolvePath(__dirname, '../../packages/agent-runtime/src/index.ts'),
       // Electron 提供 node:original-fs（未被 ASAR 补丁的原始 fs），
       // 在 Vitest 的 Node.js 环境中不存在，映射到标准 node:fs

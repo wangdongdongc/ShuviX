@@ -3,6 +3,7 @@ import { settingsService, KNOWN_SETTINGS } from '../services/settingsService'
 import { changeLanguage } from '../i18n'
 import { refreshBuiltinKnowledge } from '../services/knowledge'
 import { syncKnowledgeBuiltinProject } from '../services/knowledgeNotes'
+import { appEventBus } from '../utils/appEventBus'
 import type { SettingsSetParams } from '../types'
 
 /**
@@ -47,6 +48,10 @@ export function registerSettingsHandlers(): void {
       // 内置知识库按界面语言选目录：失效它的扫描 / 检索缓存、把承载项目指向新语言那一版、让侧栏重扫
       refreshBuiltinKnowledge()
       syncKnowledgeBuiltinProject()
+      // 内置档案按界面语言选**文件**（`work.zh.md`）：目录不变、没有缓存要失效，但侧栏那一组
+      // 把显示名直接摆在屏幕上，而它只在展开 / 窗口聚焦 / agent.changed 时重扫 —— 语言就是在
+      // 另一个窗口切的，回主窗前那批行还挂着上一种语言的名字
+      appEventBus.publish({ type: 'agent.changed' })
     }
     // 主题变更时同步 nativeTheme（让 widget 等 webContents 的 prefers-color-scheme 跟随）
     if (params.key === 'general.theme') {

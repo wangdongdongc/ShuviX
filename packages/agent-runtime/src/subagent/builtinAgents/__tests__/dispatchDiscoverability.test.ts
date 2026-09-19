@@ -29,6 +29,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import { buildBuiltinProfile } from '../spec'
+import { createInlineMdReader } from '../inlineSources'
 import { BROWSER_SPEC, CODING_SPEC, EXPLORE_SPEC, WORK_SPEC } from '../index'
 import type { BuiltinProfileSpec } from '../spec'
 import type { AgentProfile } from '../../types'
@@ -37,7 +38,8 @@ const LANGS = ['en', 'zh', 'ja'] as const
 const build = (spec: BuiltinProfileSpec, language: string): AgentProfile =>
   buildBuiltinProfile(spec, {
     language,
-    widgetsRoot: '/w'
+    widgetsRoot: '/w',
+    readMd: createInlineMdReader()
   }) as AgentProfile
 
 describe('派发清单点名了哪些 agent', () => {

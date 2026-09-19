@@ -15,7 +15,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, unlink
 import { basename, isAbsolute, join, resolve, sep } from 'path'
 import { shell } from 'electron'
 import i18next from 'i18next'
-import { getDefaultAgentsDir, getWidgetsDir } from '../utils/paths'
+import { getBuiltinAgentsDir, getDefaultAgentsDir, getWidgetsDir } from '../utils/paths'
 import {
   buildBuiltinProfiles,
   parseAgentDefinitionFile,
@@ -28,6 +28,7 @@ import {
   type ParsedAgentFile,
   type ShadowResolved
 } from '@shuvix/agent-runtime'
+import { appEventBus } from '../utils/appEventBus'
 import { createLogger } from '../logger'
 
 const log = createLogger('AgentService')
@@ -152,12 +153,37 @@ class AgentService implements AgentProfileRegistry {
     return { valid, invalid }
   }
 
-  /** 内置 agent 列表（统一 spec 构建器；每次现算以反映当前语言与 widget 根等宿主参数） */
+  /**
+   * 内置 agent 列表（统一 spec 构建器；每次现算以反映当前语言与 widget 根等宿主参数）。
+   *
+   * 文案**从随包发布的目录现读**（getBuiltinAgentsDir），不再是构建期内联的字符串：这批 md
+   * 就是内置档案的事实源，用户在侧栏点开的只读笔记本读的也是它，两边由同一次语言回退挑中
+   * 同一个文件（`basePath` 回带的就是那条路径）。不缓存 —— 十来个几 KB 的文件，读盘的代价
+   * 远小于「改了 md 还得重启才生效」的代价。
+   */
   private builtinAgents(): AgentProfile[] {
+    const dir = getBuiltinAgentsDir()
     return buildBuiltinProfiles({
       language: i18next.language,
-      widgetsRoot: getWidgetsDir()
+      widgetsRoot: getWidgetsDir(),
+      readMd: (fileName) => {
+        try {
+          return readFileSync(join(dir, fileName), 'utf-8')
+        } catch {
+          return null // 该语言没有这一版（或目录不在）—— 构建器按 en 回退
+        }
+      },
+      mdPath: (fileName) => join(dir, fileName)
     })
+  }
+
+  /**
+   * 某份内置档案当前语言那一版的文件名（`work.zh.md`）—— 侧栏点内置行开只读笔记本要按它认。
+   * 取自 `basePath`：运行时读的就是这份文件，UI 不另挑一次。
+   */
+  builtinSourceFile(name: string): string | null {
+    const builtin = this.builtinAgents().find((a) => a.name === name)
+    return builtin?.basePath ? basename(builtin.basePath) : null
   }
 
   /**
@@ -341,6 +367,7 @@ class AgentService implements AgentProfileRegistry {
       log.warn(`新建 agent 原文 "${name}" 失败:`, e)
       return { success: false, error: e instanceof Error ? e.message : String(e) }
     }
+    appEventBus.publish({ type: 'agent.changed' })
     return { success: true, name }
   }
 
@@ -373,6 +400,7 @@ class AgentService implements AgentProfileRegistry {
       log.warn(`保存 agent "${originalName}" 失败:`, e)
       return { success: false, error: e instanceof Error ? e.message : String(e) }
     }
+    appEventBus.publish({ type: 'agent.changed' })
     return { success: true }
   }
 
@@ -411,6 +439,7 @@ class AgentService implements AgentProfileRegistry {
       log.warn(`新建 agent "${name}" 失败:`, e)
       return { success: false, error: e instanceof Error ? e.message : String(e) }
     }
+    appEventBus.publish({ type: 'agent.changed' })
     return { success: true, name }
   }
 
@@ -429,6 +458,7 @@ class AgentService implements AgentProfileRegistry {
       return { success: false, error: e instanceof Error ? e.message : String(e) }
     }
     log.info(`已删除 agent "${name}" (${target.basePath})`)
+    appEventBus.publish({ type: 'agent.changed' })
     return { success: true }
   }
 
@@ -454,6 +484,7 @@ class AgentService implements AgentProfileRegistry {
       return { success: false, error: e instanceof Error ? e.message : String(e) }
     }
     log.info(`已删除 agent 文件 "${fileName}"`)
+    appEventBus.publish({ type: 'agent.changed' })
     return { success: true }
   }
 

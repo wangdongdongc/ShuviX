@@ -21,12 +21,13 @@
  */
 import { describe, it, expect } from 'vitest'
 import { buildBuiltinProfile } from '../spec'
+import { createInlineMdReader } from '../inlineSources'
 import { BROWSER_SPEC } from '../index'
 import type { AgentProfile } from '../../types'
 
 const LANGS = ['en', 'zh', 'ja'] as const
 const build = (language: string): AgentProfile =>
-  buildBuiltinProfile(BROWSER_SPEC, { language }) as AgentProfile
+  buildBuiltinProfile(BROWSER_SPEC, { language, readMd: createInlineMdReader() }) as AgentProfile
 
 describe('browser 档案的结构', () => {
   it.each(LANGS)('%s：解析成合法档案，工具面收窄到 browser + read', (language) => {

@@ -1621,7 +1621,8 @@ export async function settingsTabsPane(settings: CdpClient): Promise<SettingsTab
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// 设置页三个注册表 tab（智能体 / 安全策略 / Hooks）—— 同一副两栏布局，共用一个工厂。
+// 设置页两个注册表 tab（安全策略 / Hooks）—— 同一副两栏布局，共用一个工厂。
+// （智能体那份已搬到主窗侧栏，见 agentsSidebarPane。）
 //
 // 左列（按宽度类认，`.pop()` 取最后一个）：合法行 = 带 `.font-medium` 标签的按钮（内置行另带锁
 // `.lucide-lock`，选中态 `bg-accent/10`）；解析不过的文件行没有 `.font-medium`、文件名在
@@ -1650,7 +1651,7 @@ export interface RegistryConfirmSnapshot {
   description: string
 }
 
-/** 三个注册表 tab 共有的面 */
+/** 两个注册表 tab 共有的面 */
 export interface RegistryTabPane {
   /** 点底栏「重扫描」并等列表落定（列表只在挂载时加载，外部写入的新文件要重扫才可见） */
   refresh(): Promise<void>
@@ -1912,78 +1913,6 @@ function registryTabPane(settings: CdpClient, columnWidth: string): RegistryTabI
   }
 }
 
-export interface AgentsPaneRow {
-  displayName: string
-  struck: boolean
-  overriddenBadge: boolean
-  selected: boolean
-  builtin: boolean
-}
-
-export interface AgentsPane extends RegistryTabPane {
-  rows(): Promise<AgentsPaneRow[]>
-  /**
-   * 点一行并等详情挂好（见本节开头的就绪判据）；`which` 在覆盖后两行同名时点名来源，
-   * `opts.overridden` 再分开同名的几份用户文件（划线的那几行是输掉的）
-   */
-  selectRow(displayName: string, which?: RegistryRowSource, opts?: RegistryRowFilter): Promise<void>
-  /**
-   * 详情面板 —— 内置是等价 md 的只读查看、自定义档案是它的笔记本，两者都是「md 原文 + 属性卡」，
-   * 故这里读的是卡片：
-   *   fieldKeys  卡片各行的 frontmatter 键（`data-key`，locale-free，优先用它断言）
-   *   cardBadge  类型徽章文案（'ShuviX agent · v1'）
-   *   toggles / togglesDisabled  布尔字段开关数与是否全部只读（内置档案只读）
-   *   slots      选择器槽位数（model / tools / instruction-files 可编辑时各一个）
-   *   hasDeleteButton / hasSaveButton  面板里的删除 / 保存图标（笔记本自动保存，恒无保存）
-   */
-  detail(): Promise<{
-    fieldKeys: string[]
-    cardBadge: string
-    toggles: number
-    togglesDisabled: boolean
-    slots: number
-    hasDeleteButton: boolean
-    hasSaveButton: boolean
-  }>
-}
-
-/** 设置窗口「智能体」tab（openSettings('agents') 后调用；等首屏详情就绪） */
-export async function agentsPane(settings: CdpClient): Promise<AgentsPane> {
-  await until(
-    () => settings.eval<boolean>(`document.querySelector('.cm-content') !== null`),
-    'agents tab ready'
-  )
-  const { rawRows, ...common } = registryTabPane(settings, '220px')
-
-  return {
-    ...common,
-    rows: async () =>
-      (await rawRows()).map((r) => ({
-        displayName: r.label,
-        struck: r.struck,
-        overriddenBadge: r.overriddenBadge,
-        selected: r.selected,
-        builtin: r.builtin
-      })),
-    detail: () =>
-      settings.eval(`(() => {
-        // 右面板恒是列表列的下一个兄弟（两栏布局）
-        const col = [...document.querySelectorAll('.w-\\\\[220px\\\\]')].pop()
-        const pane = col?.nextElementSibling
-        const toggles = [...pane.querySelectorAll('.cm-shuvix-fmcard-toggle')]
-        return {
-          fieldKeys: [...pane.querySelectorAll('.cm-shuvix-fmcard-row')].map((r) => r.dataset.key),
-          cardBadge: pane.querySelector('.cm-shuvix-fmcard-badge')?.textContent.trim() ?? '',
-          toggles: toggles.length,
-          togglesDisabled: toggles.length > 0 && toggles.every((b) => b.disabled),
-          slots: pane.querySelectorAll('.cm-shuvix-fmcard-slot').length,
-          hasDeleteButton: [...pane.querySelectorAll('button')].some((b) => b.querySelector('.lucide-trash-2')),
-          hasSaveButton: [...pane.querySelectorAll('button')].some((b) => b.querySelector('.lucide-save'))
-        }
-      })()`)
-  }
-}
-
 export interface PoliciesPaneRow {
   name: string
   struck: boolean
@@ -2140,11 +2069,53 @@ export async function hooksPane(settings: CdpClient): Promise<HooksPane> {
 //
 // `mark()` / `isMarked()` 是挂在 `[data-registry-note]` 元素上的 JS 属性（刻意不是 data-*）：
 // 重挂载会造出一个新元素、标记随之消失 —— 「改名 / 合法性翻面时笔记没被卸载重开」的判据。
+// **只在设置窗有效**：主窗的笔记本没有这层壳，而它下面的 CM6 编辑器本就按设计随外部写入重挂载
+// （NotebookView 的 reloadNonce），钉不住 —— 主窗里「没被重开」请按会话 id 断（registryNoteSessions）。
 
 /** 属性卡校验徽章的语义类（'' = 未上屏，或该类型没有校验器） */
 export type FmCardStatus = 'ok' | 'warn' | 'err' | ''
 
-export interface RegistryNotePane {
+/**
+ * 「这条笔记本是只读的吗」的两个读数 —— 内置知识库条目与随包发布的内置档案 md 共用同一套
+ * 只读笔记本，所以这两个读数也只该有一份（`knowledgePane` 与 `registryNotePane` 都摊开它）。
+ *
+ * ⚠️ 这里刻意不提供「模拟敲键」：本仓的 CDP 客户端只有 Runtime.evaluate（没有 Input 域），
+ * 而 CodeMirror 6 不认合成的 `beforeinput` / `keydown`（实测两者都不会改文档，**可写**的
+ * 笔记本也一样），所以那种助手只会造出一条两边都绿的假通道。要断「改不动」，断的是
+ * `contenteditable` 这个开关本身 —— 同一个读数在可写笔记本上必须回 true（用例自带对照组），
+ * 外加落盘字节不变。
+ */
+export interface NotebookReadOnlyProbes {
+  /**
+   * 笔记本编辑器可编辑吗 —— 读 `.cm-content` 的 `contenteditable`（只读时 CodeMirror 置成
+   * `'false'`，此后**浏览器自己**就不把按键送进来了）。编辑器不在返回 null。
+   */
+  editorEditable(): Promise<boolean | null>
+  /**
+   * 当前笔记本有没有那张悬浮输入卡（只读笔记本没有）。判据是**编辑器之外**的 textarea ——
+   * 属性卡的文本字段也是 textarea，而它是 CodeMirror 的 widget，住在 `.cm-editor` 里面，
+   * 裸查 `document.querySelector('textarea')` 必然误命中。
+   */
+  hasInputCard(): Promise<boolean>
+}
+
+/** 上面那两个读数的实现（`scope` 是一段求值出容器元素或 document 的表达式） */
+function notebookReadOnlyProbes(client: CdpClient, scope = 'document'): NotebookReadOnlyProbes {
+  return {
+    editorEditable: () =>
+      client.eval<boolean | null>(`(() => {
+        const el = ${scope}?.querySelector('.cm-content')
+        return el ? el.getAttribute('contenteditable') !== 'false' : null
+      })()`),
+
+    hasInputCard: () =>
+      client.eval<boolean>(
+        `[...(${scope}?.querySelectorAll('textarea') ?? [])].some((t) => !t.closest('.cm-editor'))`
+      )
+  }
+}
+
+export interface RegistryNotePane extends NotebookReadOnlyProbes {
   /** 等正文（.cm-content）里出现特征串 */
   waitBody(marker: string): Promise<void>
   /** 正文文本（没有笔记为空串） */
@@ -2181,6 +2152,7 @@ export function registryNotePane(client: CdpClient): RegistryNotePane {
     })()`)
 
   return {
+    ...notebookReadOnlyProbes(client, ROOT),
     waitBody: async (marker) => {
       await until(
         async () => (await bodyText()).includes(marker),
@@ -2637,6 +2609,242 @@ export function botsPane(main: CdpClient): BotsPane {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+// 主窗侧栏「智能体」分组（AgentGroup）—— 原设置页那个「智能体」tab 搬到前台之后的面。
+//
+// 锚点：分组头按 `data-group="agents"`（SessionGroup 的 group/header 层）认；内置行按
+// `data-agent-builtin-row=<name>`（它没有文件，身份只能是 name），用户档案行按
+// `data-agent-row=<fileName>`（名字随编辑在变、文件名不变），解析不过的琥珀行按
+// `data-agent-invalid-row=<fileName>`；同名里不生效的那份（被覆盖的内置 / 输掉的用户文件）
+// 另带 `data-agent-overridden`（划线 + 「已覆盖」徽标）。
+//
+// 点用户行 / 非法行打开的是那份文件的**笔记本会话**（隐藏项目 `__agents__`）—— 主区就是普通
+// 笔记本，正文与属性卡经 `registryNotePane(main)` 读写，活动行 = 活动会话正是这份文件的笔记本。
+// 内置行走的是**同一条路**：它的 md 随包发布在应用包里（运行时读的就是它），点行开的是那份文件的
+// **只读**笔记本（载体项目 `__agents_builtin__`）。所以这里没有任何「预览框」的读数 —— 正文与
+// 属性卡照样经 `registryNotePane(main)`，只读那一半经它的 `hasInputCard()` / `editorEditable()`。
+// 分组是**懒扫**的：首次展开才扫，之后展开 / 窗口聚焦 /
+// 组头菜单「刷新」/ `agent.changed` 事件（经宿主落盘的写入）重扫 —— 磁盘外写入不广播，
+// 种完 md 要 refresh。菜单走与会话行同一套桩（pickFromMenu / openMenu）。
+//
+// ⚠️ 组头菜单的 `open-folder` **只许做存在性断言，绝不点**：它开的是 OS 文件管理器，e2e 关不掉。
+
+/** 内置档案的一行（随包发布、没有文件） */
+export interface AgentsBuiltinRow {
+  name: string
+  /** 显示名（本地化） */
+  label: string
+  /** 被同名用户档案压过：划线 */
+  struck: boolean
+  /** 「已覆盖」徽标（按三语认，同 Bots 组的口径） */
+  badge: boolean
+  /** 行首的锁 —— 内置恒有（生效与否都只能看），用户档案行首是空格 */
+  locked: boolean
+  /** 行的 title 提示（未被覆盖时是档案描述，被覆盖时说清「有个同名的自定义档案」） */
+  title: string
+}
+
+/** 用户档案的一行 */
+export interface AgentsUserRow {
+  fileName: string
+  label: string
+  /** 同名里输掉了：划线 */
+  struck: boolean
+  badge: boolean
+  /** 行首的锁（用户档案**不该**有：它可编辑，锁是内置的标记） */
+  locked: boolean
+  /** 行的 title 提示（输掉的那份说清被谁压过） */
+  title: string
+}
+
+/** 分组里的活动行：用户档案与琥珀行给文件名，内置行给 name（它的身份就是 name） */
+export interface AgentsActiveRow {
+  row?: string
+  invalidRow?: string
+  builtinRow?: string
+}
+
+export interface AgentsSidebarPane {
+  /** 组头显示的分组标签 */
+  label(): Promise<string>
+  /** 侧栏里 `data-group="agents"` 的组头个数（分组只该有一个） */
+  headerCount(): Promise<number>
+  /** 展开分组并等首次扫描落定 */
+  expand(): Promise<void>
+  builtinRows(): Promise<AgentsBuiltinRow[]>
+  userRows(): Promise<AgentsUserRow[]>
+  /** 非法文件行（琥珀）的文件名 */
+  invalidRows(): Promise<string[]>
+  /** 点一行用户档案并等它成为活动行（= 这份文件的笔记本成了活动会话） */
+  selectUserRow(fileName: string): Promise<void>
+  /** 点一行解析不过的文件并等它成为活动行 */
+  selectInvalidRow(fileName: string): Promise<void>
+  /** 当前活动行；活动会话不是任何档案文件的笔记本时为 null */
+  activeRow(): Promise<AgentsActiveRow | null>
+  /** 内置行的菜单项（开一次 ⋮、不选任何项）—— 要断 enabled，故回完整 items */
+  builtinRowMenu(name: string): Promise<MenuItemShot[] | null>
+  /** 开内置行的 ⋮ 并选中一项（自带「该项真的在菜单里」的核对） */
+  pickBuiltinRowMenu(name: string, actionId: 'create-override'): Promise<void>
+  /** 用户档案行菜单里的动作 id（生效的那份按名删、输掉的那份按文件名删） */
+  userRowMenuIds(fileName: string): Promise<string[] | null>
+  pickUserRowMenu(fileName: string, actionId: 'delete-agent' | 'delete-agent-file'): Promise<void>
+  pickInvalidRowMenu(fileName: string, actionId: 'delete-agent-file'): Promise<void>
+  /** 组头菜单里的动作 id（开一次 ⋮、不选任何项） */
+  groupMenuIds(): Promise<string[] | null>
+  /** 组头菜单「新建智能体」—— 只触发；新文件落盘与笔记打开由调用方 until */
+  newAgent(): Promise<void>
+  /** 组头菜单「刷新」—— 磁盘外改动不广播 agent.changed，需手动重扫 */
+  refresh(): Promise<void>
+  /** 点一行内置档案并等它成为活动行（= 随包那份 md 的只读笔记本成了活动会话） */
+  openBuiltin(name: string): Promise<void>
+}
+
+export function agentsSidebarPane(main: CdpClient): AgentsSidebarPane {
+  const HEADER_SEL = `div[class*="group/header"][data-group="agents"]`
+  const HEADER = `document.querySelector('${HEADER_SEL}')`
+  const TOGGLE = `[...(${HEADER}?.querySelectorAll(':scope > button') ?? [])].find((b) => b.querySelector('span.truncate'))`
+  const COLLAPSE = `${HEADER}?.nextElementSibling`
+  const BODY = `${COLLAPSE}?.firstElementChild?.firstElementChild`
+  const BUILTIN_ROWS = `[...document.querySelectorAll('[data-agent-builtin-row]')]`
+  const USER_ROWS = `[...document.querySelectorAll('[data-agent-row]')]`
+  const INVALID_ROWS = `[...document.querySelectorAll('[data-agent-invalid-row]')]`
+  const BUILTIN_ROW = (name: string): string =>
+    `document.querySelector('[data-agent-builtin-row=${JSON.stringify(name)}]')`
+  const USER_ROW = (fileName: string): string =>
+    `document.querySelector('[data-agent-row=${JSON.stringify(fileName)}]')`
+  const INVALID_ROW = (fileName: string): string =>
+    `document.querySelector('[data-agent-invalid-row=${JSON.stringify(fileName)}]')`
+  const ACTIVE = (list: string): string =>
+    `${list}.find((r) => r.className.includes('bg-bg-active'))`
+  /** 行的标签与徽标读法（三种行同构：span.truncate 是标签，划线在它身上） */
+  const rowShot = (extra: string): string => `({
+    label: (r.querySelector('span.truncate')?.textContent ?? '').trim(),
+    struck: !!r.querySelector('.line-through'),
+    badge: [...r.querySelectorAll('span')].some((s) => /覆盖|Overridden|上書き/.test(s.textContent ?? '')),
+    ${extra}
+  })`
+
+  /** 点一行并等它成为活动行（打开笔记是异步的：openNote → 重拉会话列表 → 选中） */
+  const clickUntilActive = async (scope: string, what: string): Promise<void> => {
+    await until(() => main.eval<boolean>(`${scope} !== null`), what)
+    await main.eval(`${scope}.click()`)
+    await until(
+      () => main.eval<boolean>(`(${scope}?.className ?? '').includes('bg-bg-active')`),
+      `${what} active`
+    )
+  }
+
+  /** 开某一行的 ⋮（不选任何项 = 取消）并回菜单里的动作 id */
+  const menuIds = async (scope: string, what: string): Promise<string[] | null> => {
+    await until(() => main.eval<boolean>(`${scope} !== null`), what)
+    const items = await openMenu(main, scope, 'menu-button')
+    return items ? items.filter((it) => it.id).map((it) => it.id as string) : null
+  }
+
+  return {
+    label: () =>
+      main.eval<string>(`(${HEADER}?.querySelector('span.truncate')?.textContent ?? '').trim()`),
+
+    headerCount: () => main.eval<number>(`document.querySelectorAll('${HEADER_SEL}').length`),
+
+    expand: async () => {
+      await until(() => main.eval<boolean>(`${HEADER} !== null`), 'agents group header')
+      const open = await main.eval<boolean>(`${COLLAPSE}?.style.gridTemplateRows === '1fr'`)
+      if (!open) await main.eval(`(${TOGGLE})?.click()`)
+      // 扫描是懒的：展开才发第一次请求，正文有内容才算落定（内置档案恒非空）
+      await until(
+        () => main.eval<boolean>(`(${BODY}?.childElementCount ?? 0) > 0`),
+        'agents group scanned'
+      )
+    },
+
+    builtinRows: () =>
+      main.eval<AgentsBuiltinRow[]>(
+        `${BUILTIN_ROWS}.map((r) => ${rowShot(`name: r.getAttribute('data-agent-builtin-row') ?? '',
+    locked: !!r.querySelector('.lucide-lock'),
+    title: r.getAttribute('title') ?? ''`)})`
+      ),
+
+    userRows: () =>
+      main.eval<AgentsUserRow[]>(
+        `${USER_ROWS}.map((r) => ${rowShot(`fileName: r.getAttribute('data-agent-row') ?? '',
+    locked: !!r.querySelector('.lucide-lock'),
+    title: r.getAttribute('title') ?? ''`)})`
+      ),
+
+    invalidRows: () =>
+      main.eval<string[]>(`${INVALID_ROWS}.map((r) => r.getAttribute('data-agent-invalid-row'))`),
+
+    selectUserRow: (fileName) => clickUntilActive(USER_ROW(fileName), `agent row "${fileName}"`),
+
+    selectInvalidRow: (fileName) =>
+      clickUntilActive(INVALID_ROW(fileName), `invalid agent row "${fileName}"`),
+
+    activeRow: () =>
+      main.eval<AgentsActiveRow | null>(`(() => {
+        const row = ${ACTIVE(USER_ROWS)}
+        if (row) return { row: row.getAttribute('data-agent-row') }
+        const invalid = ${ACTIVE(INVALID_ROWS)}
+        if (invalid) return { invalidRow: invalid.getAttribute('data-agent-invalid-row') }
+        // 内置行也会成为活动行（它的 md 同样开笔记本，只是只读）—— 少了这一段，
+        // 「开着内置笔记时活动行是谁」只能答 null，与「谁都没选中」分不开
+        const builtin = ${ACTIVE(BUILTIN_ROWS)}
+        if (builtin) return { builtinRow: builtin.getAttribute('data-agent-builtin-row') }
+        return null
+      })()`),
+
+    builtinRowMenu: async (name) => {
+      await until(
+        () => main.eval<boolean>(`${BUILTIN_ROW(name)} !== null`),
+        `builtin row "${name}"`
+      )
+      return openMenu(main, BUILTIN_ROW(name), 'menu-button')
+    },
+
+    pickBuiltinRowMenu: async (name, actionId) => {
+      await until(
+        () => main.eval<boolean>(`${BUILTIN_ROW(name)} !== null`),
+        `builtin row "${name}"`
+      )
+      await pickFromMenu(main, BUILTIN_ROW(name), actionId, `builtin agent row "${name}"`)
+    },
+
+    userRowMenuIds: (fileName) => menuIds(USER_ROW(fileName), `agent row "${fileName}"`),
+
+    pickUserRowMenu: async (fileName, actionId) => {
+      await until(
+        () => main.eval<boolean>(`${USER_ROW(fileName)} !== null`),
+        `agent row "${fileName}"`
+      )
+      await pickFromMenu(main, USER_ROW(fileName), actionId, `agent row "${fileName}"`)
+    },
+
+    pickInvalidRowMenu: async (fileName, actionId) => {
+      await until(
+        () => main.eval<boolean>(`${INVALID_ROW(fileName)} !== null`),
+        `invalid agent row "${fileName}"`
+      )
+      await pickFromMenu(main, INVALID_ROW(fileName), actionId, `invalid agent row "${fileName}"`)
+    },
+
+    groupMenuIds: async () => {
+      const items = await openMenu(main, HEADER, 'menu-button')
+      return items ? items.filter((it) => it.id).map((it) => it.id as string) : null
+    },
+
+    newAgent: () => pickFromMenu(main, HEADER, 'new-agent', 'agents group header'),
+
+    refresh: async () => {
+      await pickFromMenu(main, HEADER, 'refresh', 'agents group header')
+      await sleep(200)
+    },
+
+    // 与点用户行同一条路（openBuiltinNote → 重拉会话列表 → 选中），只是开出来的笔记是只读的。
+    // **不等正文**：切换后先 note.waitBody(...)
+    openBuiltin: (name) => clickUntilActive(BUILTIN_ROW(name), `builtin agent row "${name}"`)
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 // 「新建 Bot 会话」单选框（BotSessionDialog）+ bot 会话头部身份胶囊（BotBindingChip）+
 // 空 bot 会话的自我介绍（WelcomeView 的 BotEmptyState）
 //
@@ -2864,7 +3072,7 @@ export interface KnowledgeCardFieldsShot {
   inputsDisabled: number
 }
 
-export interface KnowledgePane {
+export interface KnowledgePane extends NotebookReadOnlyProbes {
   /** 展开分组并等首次清单落定（正文里出现行或空态文案） */
   expand(): Promise<void>
   /** 全部目录行（任意层级），DOM 序 */
@@ -2920,22 +3128,6 @@ export interface KnowledgePane {
   card(): Promise<KnowledgeCardShot | null>
   /** 属性卡的可编辑性读数；当前笔记没有卡片为 null */
   cardFields(): Promise<KnowledgeCardFieldsShot | null>
-  /**
-   * 笔记本编辑器可编辑吗 —— 读 `.cm-content` 的 `contenteditable`（只读时 CodeMirror 置成
-   * `'false'`，此后**浏览器自己**就不把按键送进来了）。编辑器不在返回 null。
-   *
-   * ⚠️ 这里刻意不提供「模拟敲键」：本仓的 CDP 客户端只有 Runtime.evaluate（没有 Input 域），
-   * 而 CodeMirror 6 不认合成的 `beforeinput` / `keydown`（实测两者都不会改文档，可写的笔记本
-   * 也一样），所以那种助手只会造出一条两边都绿的假通道。要断「改不动」，断的是这个开关本身
-   * ——**同一个读数在可写笔记本上必须回 true**（用例自带对照组），外加落盘字节不变。
-   */
-  editorEditable(): Promise<boolean | null>
-  /**
-   * 当前笔记本有没有那张悬浮输入卡（只读笔记本没有）。判据是**编辑器之外**的 textarea ——
-   * 属性卡的文本字段也是 textarea，而它是 CodeMirror 的 widget，住在 `.cm-editor` 里面，
-   * 裸查 `document.querySelector('textarea')` 必然误命中。
-   */
-  hasInputCard(): Promise<boolean>
 }
 
 /** 这两个动作开的是 OS 文件管理器（隔离实例没有替换 shell）—— e2e 只读不选 */
@@ -3155,16 +3347,8 @@ export function knowledgePane(main: CdpClient): KnowledgePane {
         }
       })()`),
 
-    editorEditable: () =>
-      main.eval<boolean | null>(`(() => {
-        const el = document.querySelector('.cm-content')
-        return el ? el.getAttribute('contenteditable') !== 'false' : null
-      })()`),
-
-    hasInputCard: () =>
-      main.eval<boolean>(
-        `[...document.querySelectorAll('textarea')].some((t) => !t.closest('.cm-editor'))`
-      )
+    // 只读笔记本的两个读数与注册表笔记共用一份实现（见 notebookReadOnlyProbes）
+    ...notebookReadOnlyProbes(main)
   }
 }
 

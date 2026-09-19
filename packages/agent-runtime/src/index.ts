@@ -382,6 +382,8 @@ export {
   VISUALIZATION_SPEC,
   WIDGET_SPEC,
   TITLER_SPEC,
+  builtinMdFileNames,
+  type BuiltinMdReader,
   type BuiltinProfileDeps,
   type BuiltinProfileSpec
 } from './subagent/builtinAgents'

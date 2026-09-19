@@ -35,7 +35,7 @@ import {
   seedCustomProvider,
   waitFileWritten
 } from '../../harness/seed'
-import { agentsPane, fmCardPane, type FmCardPane } from '../../harness/pages'
+import { agentsSidebarPane, fmCardPane, type FmCardPane } from '../../harness/pages'
 
 let app: E2EApp
 let projDir: string
@@ -831,7 +831,7 @@ describe('F 组 · 零副作用与行尾归一', () => {
 })
 
 describe('E 组 · 宿主差异', () => {
-  it('AC-23 设置页「智能体」tab：卡片只接管文件开头的 frontmatter，正文里的 --- 块保持字面量', async () => {
+  it('AC-23 侧栏「智能体」分组打开的笔记：卡片只接管文件开头的 frontmatter，正文里的 --- 块保持字面量', async () => {
     // 正文里粘贴的 frontmatter 块必须保持纯文本 —— 那里编辑的不是完整契约文件
     mkdirSync(app.agentsDir, { recursive: true })
     writeFileSync(
@@ -851,30 +851,27 @@ describe('E 组 · 宿主差异', () => {
         'AC-23 BODY MARKER.'
       )
     )
-    const settings = await app.openSettings('agents')
-    const pane = await agentsPane(settings)
-    await pane.selectRow('ac23-body-fm')
-    // 自定义档案的详情就是这份文件的笔记本（按文件名认）
-    expect(await pane.noteFile()).toBe('ac23-body-fm.md')
+    // 档案 md 的第二个入口：侧栏分组点一行（主区就是这份文件的笔记本，按文件名认）
+    const pane = agentsSidebarPane(app.main)
+    await pane.expand()
+    await pane.refresh() // 直接写盘的种子不广播 agent.changed
+    await pane.selectUserRow('ac23-body-fm.md')
 
     await until(
       () =>
-        settings.eval<boolean>(
+        app.main.eval<boolean>(
           `[...document.querySelectorAll('.cm-content')].some((c) => c.textContent.includes('AC-23 BODY MARKER.'))`
         ),
       'agent body editor loaded'
     )
-    // 智能体页现在也是「md 原文 + 属性卡」（与笔记本同一套）：文件**自身**的 frontmatter
-    // 由卡片接管，而正文里粘贴的 --- 块保持纯文本 —— 卡片只认文件开头那一段。
+    // 档案 md 无论从哪个入口打开都是「md 原文 + 属性卡」（与笔记本同一套）：文件**自身**的
+    // frontmatter 由卡片接管，而正文里粘贴的 --- 块保持纯文本 —— 卡片只认文件开头那一段。
+    expect(await count('.cm-shuvix-fmcard')).toBe(1)
     expect(
-      await settings.eval<number>(`document.querySelectorAll('.cm-shuvix-fmcard').length`)
-    ).toBe(1)
-    expect(
-      await settings.eval<boolean>(
+      await app.main.eval<boolean>(
         `[...document.querySelectorAll('.cm-content')].some((c) => c.textContent.includes('name: pasted-inside-body'))`
       )
     ).toBe(true)
-    settings.close()
   })
 
   // 末位：点开右侧 Preview 会改变主窗布局（对话区收缩），之后的坐标类断言都不再可比

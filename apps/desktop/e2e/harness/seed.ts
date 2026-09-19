@@ -684,6 +684,8 @@ export { REGISTRY_NOTE_PROJECT_IDS, type RegistryNoteKind }
 const REGISTRY_API: Record<RegistryNoteKind, string> = {
   bot: 'bot',
   agent: 'subAgent',
+  // 内置档案是只读的：没有写路径，开笔记本走 subAgent.openBuiltinNote（按 agent 名，不是文件名）
+  agentBuiltin: 'subAgent',
   policy: 'policy',
   hook: 'hook'
 }

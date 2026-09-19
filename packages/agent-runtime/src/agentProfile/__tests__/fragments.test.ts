@@ -17,6 +17,10 @@ import { buildBuiltinProfiles, BASE_PROFILE_NAMES } from '../../subagent/builtin
 
 const LANGUAGES = ['en', 'zh', 'ja']
 
+import { createInlineMdReader } from '../../subagent/builtinAgents/inlineSources'
+
+/** 内置 md 的读取口：测试读构建期内联的**同一批文件**（桌面运行时读随包目录） */
+const readMd = createInlineMdReader()
 /** 文本里引用到的 `{{shuvix:name}}` 名字（去重排序） */
 const placeholdersOf = (text: string): string[] =>
   [...new Set([...text.matchAll(/\{\{shuvix:([A-Za-z][\w-]*)\}\}/g)].map((m) => m[1]))].sort()
@@ -25,7 +29,7 @@ const placeholdersOf = (text: string): string[] =>
 const profilesUsing = (placeholder: string): string[] => {
   const names = new Set<string>()
   for (const language of LANGUAGES) {
-    for (const profile of buildBuiltinProfiles({ language, widgetsRoot: '/w/widgets' })) {
+    for (const profile of buildBuiltinProfiles({ language, widgetsRoot: '/w/widgets', readMd })) {
       if (placeholdersOf(profile.systemPrompt).includes(placeholder)) names.add(profile.name)
     }
   }
@@ -136,7 +140,7 @@ describe('{{shuvix:visualGuide}} 的归属', () => {
   it('三种语言的引用集一致（翻译时漏改占位符 = 那个语言下变量失效）', () => {
     for (const name of profilesUsingVisualGuide()) {
       for (const language of LANGUAGES) {
-        const profile = buildBuiltinProfiles({ language }).find((p) => p.name === name)!
+        const profile = buildBuiltinProfiles({ language, readMd }).find((p) => p.name === name)!
         expect(placeholdersOf(profile.systemPrompt), `${name}.${language}`).toContain('visualGuide')
       }
     }
@@ -153,7 +157,7 @@ describe('{{shuvix:visualGuide}} 的归属', () => {
         return line[1] ?? line[0]
       })
       for (const language of LANGUAGES) {
-        const profile = buildBuiltinProfiles({ language, widgetsRoot: '/w/widgets' }).find(
+        const profile = buildBuiltinProfiles({ language, widgetsRoot: '/w/widgets', readMd }).find(
           (p) => p.name === name
         )
         expect(profile, `${name}.${language} 应当存在`).toBeDefined()
