@@ -55,7 +55,7 @@ interface FilePreviewProps {
   path: string
   sessionId: string
   onClose: () => void
-  /** 提供则在预览顶栏下方显示「创建笔记本」横幅按钮（仅 markdown 预览时由 FilesPanel 传入） */
+  /** 提供则在预览顶栏加「创建笔记本」小按钮（仅 markdown 预览时由 FilesPanel 传入） */
   onCreateNotebook?: () => void
   /** 宿主能力注入（笔记本主题 / 外链）；markdown 走只读 live-preview 渲染时透传给编辑器 */
   caps?: NotebookCaps
@@ -173,6 +173,17 @@ export function FilePreview({
           >
             {pathCopied ? <Check size={11} /> : <Copy size={11} />}
           </button>
+          {/* 创建绑定该 md 的笔记本会话 —— 仅 markdown 预览且宿主提供回调时显示。
+              图表契约文件不显示 —— 由可视化智能体维护，不引导手工编辑 */}
+          {onCreateNotebook && chartSource == null && (
+            <button
+              onClick={onCreateNotebook}
+              className="p-1 rounded text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/40 transition-colors"
+              title={t('panel.preview.createNotebook')}
+            >
+              <FileText size={11} />
+            </button>
+          )}
           {/* 定位到文件所在目录 —— 仅完整宿主（桌面）有系统文件管理器 */}
           {getHostApi() && (
             <button
@@ -246,19 +257,6 @@ export function FilePreview({
             {path}
           </span>
         </div>
-      )}
-
-      {/* 「新建会话」横幅：仅 markdown 预览且宿主提供回调时显示。按钮平铺整条横幅，
-          高度与上方预览标题栏一致（h-7）。点击创建绑定该 md 的笔记本会话。
-          图表契约文件不显示 —— 由可视化智能体维护，不引导手工编辑 */}
-      {onCreateNotebook && chartSource == null && (
-        <button
-          onClick={onCreateNotebook}
-          className="flex-shrink-0 flex items-center justify-center gap-1.5 px-2 h-7 border-b border-border-secondary/30 text-xs font-medium text-accent bg-accent/5 hover:bg-accent/10 transition-colors"
-        >
-          <FileText size={13} />
-          {t('panel.preview.createNotebook')}
-        </button>
       )}
 
       {/* 内容区不带 overflow —— CodeView / MarkdownView 的 .cm-scroller、HexView 虚拟化、
