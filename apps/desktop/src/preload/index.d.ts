@@ -175,11 +175,6 @@ declare global {
     url?: string
     title?: string
   }
-  interface ChatFilePreviewEvent extends ChatEventBase {
-    type: 'file_preview'
-    /** 要预览的文件绝对路径（须位于会话工作目录内） */
-    absPath: string
-  }
   interface ChatSubSessionRegisterEvent extends ChatEventBase {
     type: 'sub_session_register'
     parentSessionId: string
@@ -227,7 +222,6 @@ declare global {
     | ChatImageDataEvent
     | ChatRuntimeEvent
     | ChatBrowserEvent
-    | ChatFilePreviewEvent
     | ChatSubSessionRegisterEvent
     | ChatSubSessionEndEvent
     | ChatMessagesReloadedEvent
@@ -1052,21 +1046,6 @@ declare global {
         path: string
         content: string
       }) => Promise<{ ok: true } | { ok: false; error: string }>
-      /** 二进制另存为（图表导出 PNG / SVG）：弹系统保存对话框，落点由用户当场指定 */
-      saveAs: (params: {
-        defaultPath: string
-        dataBase64: string
-      }) => Promise<
-        { ok: true; path: string } | { ok: false; canceled: true } | { ok: false; error: string }
-      >
-    }
-    preview: {
-      /** 图表渲染验证回执（响应 AppEvent 'preview.validateChart'） */
-      reportRender: (params: {
-        validationId: string
-        ok: boolean
-        error?: string
-      }) => Promise<{ accepted: boolean }>
     }
     knowledge: {
       /** 全部条目（视图形状，不含正文）+ 两个根的绝对路径（root = knowledge-shuvix，userRoot = 用户根）；只读 */

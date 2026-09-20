@@ -109,10 +109,6 @@ export const EXPLORE_SPEC: BuiltinProfileSpec = {
   name: 'explore'
 }
 
-export const VISUALIZATION_SPEC: BuiltinProfileSpec = {
-  name: 'visualization'
-}
-
 export const WIDGET_SPEC: BuiltinProfileSpec = {
   name: 'widget',
   requiredParams: ['widgetsRoot']
@@ -153,7 +149,6 @@ export const BUILTIN_PROFILE_SPECS: readonly BuiltinProfileSpec[] = [
   CODING_SPEC,
   BROWSER_SPEC,
   EXPLORE_SPEC,
-  VISUALIZATION_SPEC,
   WIDGET_SPEC,
   TITLER_SPEC,
   KNOWLEDGE_WRITER_SPEC

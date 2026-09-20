@@ -1,12 +1,11 @@
-import { BrowserWindow, ipcMain } from 'electron'
+import { ipcMain } from 'electron'
 import {
   scanSessionFiles,
   scanSessionDir,
   watchSessionFile,
   unwatchSessionFile
 } from '../services/filesWatcherService'
-import { previewSessionFile, writeSessionFile, saveBinaryAs } from '../services/filePreviewService'
-import { reportChartValidation } from '../services/previewValidationBroker'
+import { previewSessionFile, writeSessionFile } from '../services/filePreviewService'
 import { findArtifact, readArtifact } from '../services/artifacts/store'
 import { sessionDao } from '../dao/sessionDao'
 
@@ -52,14 +51,4 @@ export function registerFilesHandlers(): void {
     }
     return null
   })
-  // 二进制另存为（图表预览导出 PNG / SVG）：落点由用户在系统保存对话框里当场指定
-  ipcMain.handle('files:saveAs', (event, params: { defaultPath: string; dataBase64: string }) =>
-    saveBinaryAs(params, BrowserWindow.fromWebContents(event.sender) ?? undefined)
-  )
-  // 渲染端图表验证回执（preview 工具 → AppEvent 'preview.validateChart' 的应答通道）
-  ipcMain.handle(
-    'preview:reportRender',
-    (_event, params: { validationId: string; ok: boolean; error?: string }) =>
-      reportChartValidation(params)
-  )
 }

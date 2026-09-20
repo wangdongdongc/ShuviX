@@ -764,19 +764,6 @@ export interface HostApi {
       path: string
       content: string
     }) => Promise<{ ok: true } | { ok: false; error: string }>
-    /**
-     * 二进制另存为：弹宿主的系统保存对话框（defaultPath 预填），用户确认后落盘。
-     * 落点由用户在对话框里当场指定，故不走工作目录准入 —— 与 widget 导出 zip 同一模型。
-     * 取不到 HostApi 的端由调用方退化为浏览器原生下载。
-     */
-    saveAs: (params: {
-      /** 建议保存路径（绝对路径，含文件名） */
-      defaultPath: string
-      /** 文件内容（base64） */
-      dataBase64: string
-    }) => Promise<
-      { ok: true; path: string } | { ok: false; canceled: true } | { ok: false; error: string }
-    >
   }
   /** MCP 客户端：服务器 CRUD + 连接控制 + 工具查询 */
   mcp: {

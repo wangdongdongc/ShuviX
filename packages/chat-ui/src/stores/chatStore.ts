@@ -192,7 +192,7 @@ interface ChatState {
   activeSessionId: string | null
   /**
    * 请求打开某文件预览的信号（绝对路径 + 单调 nonce）—— 独立预览面板的唯一入口。
-   * 触发方：preview 工具事件（useAgentEvents）/ 笔记本 [[双链]] / Files 面板点击文件。
+   * 触发方：笔记本 [[双链]] / Files 面板点击文件。
    * 消费方：宿主经 usePreviewRequestBridge 落为预览目标并揭示自己的预览面板
    * （桌面右侧 preview tab / 扩展与悬浮窗 PreviewOverlay）。
    * 含 nonce 以便重复请求同一文件也能触发（值变化）。
@@ -304,8 +304,8 @@ interface ChatState {
   // Actions
   setSessions: (sessions: Session[]) => void
   setActiveSessionId: (id: string | null) => void
-  /** 请求打开某文件预览（绝对路径）；preview 工具事件 / 笔记本 [[wiki-link]] / Files 面板点击触发。
-   *  openedBy 缺省 'user'：只有智能体事件那条路显式传 'agent'（预览面板据此亮出来源横幅）。 */
+  /** 请求打开某文件预览（绝对路径）；笔记本 [[wiki-link]] / Files 面板点击触发。
+   *  openedBy 缺省 'user'。 */
   requestFilePreview: (absPath: string, openedBy?: 'agent' | 'user') => void
   /** 请求在后台任务面板里亮出某条任务（工具卡行尾状态点击触发） */
   revealTask: (taskId: string) => void

@@ -2,9 +2,6 @@
  * FilePreview — 覆盖在 FilesTree 上的二级视图
  *
  * 各 kind 渲染策略：
- *  - text + 图表契约（shuvix:chart 标记，见 chat-protocol chartFileContract）
- *                                → ChartView（提取唯一 mermaid 块独立渲染：fit-to-view/缩放/平移；
- *                                  可切源码模式；提取失败自动降级回 markdown 渲染）
  *  - text + .md/.mdx/.markdown   → MarkdownView（只读 Atomic live-preview，可切源码模式）
  *  - text + 其它扩展             → CodeView（CodeMirror 6 read-only viewer）
  *  - image                       → <img> + data: URL
@@ -39,9 +36,7 @@ import {
   X
 } from 'lucide-react'
 import { CodeView, getHostApi, getSessionChannelApi, useAppEvent } from '@shuvix/chat-ui'
-import { extractChartMermaid } from '@shuvix/chat-protocol/chartFileContract'
 import { LivePreviewEditor, type NotebookCaps } from '../notebook/LivePreviewEditor'
-import { ChartView } from '../preview/ChartView'
 import { HexView } from './HexView'
 import { EbookView } from './EbookView'
 import { OfficeView, SHEET_CONFIRM_BYTES, DOCX_CONFIRM_BYTES } from './OfficeView'
@@ -138,8 +133,6 @@ export function FilePreview({
   const fileName = basename(path)
   // 当前预览是否为 markdown 文本 —— 决定是否显示「渲染/源码」模式切换
   const isMarkdownText = result?.kind === 'text' && MARKDOWN_EXTS.has(result.ext)
-  // 图表契约文件：提取到唯一 mermaid 块 → ChartView 独立渲染（提取失败为 null，降级 markdown）
-  const chartSource = result?.kind === 'text' ? extractChartMermaid(result.content) : null
   // wrap / 行号开关：非 markdown 文本，或 markdown 切到源码模式时显示（即落到 CodeView 时）
   const showWrapToggle = result?.kind === 'text' && (!isMarkdownText || mdSourceMode)
   // 渲染成本门控：非 null 时先展示确认卡片，用户点了才把结果交给 renderBody。
@@ -173,9 +166,8 @@ export function FilePreview({
           >
             {pathCopied ? <Check size={11} /> : <Copy size={11} />}
           </button>
-          {/* 创建绑定该 md 的笔记本会话 —— 仅 markdown 预览且宿主提供回调时显示。
-              图表契约文件不显示 —— 由可视化智能体维护，不引导手工编辑 */}
-          {onCreateNotebook && chartSource == null && (
+          {/* 创建绑定该 md 的笔记本会话 —— 仅 markdown 预览且宿主提供回调时显示。 */}
+          {onCreateNotebook && (
             <button
               onClick={onCreateNotebook}
               className="p-1 rounded text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/40 transition-colors"
@@ -284,7 +276,6 @@ export function FilePreview({
             wrapText,
             showLineNumbers,
             mdSourceMode,
-            chartSource,
             caps
           })
         )}
@@ -302,13 +293,11 @@ interface RenderBodyOpts {
   showLineNumbers: boolean
   /** markdown 是否走源码视图（CodeView）而非只读 live-preview */
   mdSourceMode: boolean
-  /** 图表契约文件提取出的 mermaid 源码（非契约/提取失败为 null） */
-  chartSource: string | null
   caps?: NotebookCaps
 }
 
 function renderBody(r: FileReadResult | null, opts: RenderBodyOpts): React.ReactNode {
-  const { t, path, sessionId, wrapText, showLineNumbers, mdSourceMode, chartSource, caps } = opts
+  const { t, path, sessionId, wrapText, showLineNumbers, mdSourceMode, caps } = opts
   if (!r) {
     // 文件加载中：纯居中 spinner，不写文案 —— 加载语义靠动画即可
     // （之前借用 panel.filesLoading 文案"正在扫描工作区"在文件加载语境下词不达意）
@@ -330,10 +319,6 @@ function renderBody(r: FileReadResult | null, opts: RenderBodyOpts): React.React
         </div>
       )
     case 'text':
-      // 图表契约文件：提取出的 mermaid 独立渲染（fit-to-view 视口）；切源码模式落 CodeView
-      if (chartSource && !mdSourceMode) {
-        return <ChartView source={chartSource} path={path} />
-      }
       // markdown 默认走只读 live-preview（笔记本同款渲染）；切到源码模式则落 CodeView
       if (MARKDOWN_EXTS.has(r.ext) && !mdSourceMode) {
         return <MarkdownView path={path} content={r.content} sessionId={sessionId} caps={caps} />

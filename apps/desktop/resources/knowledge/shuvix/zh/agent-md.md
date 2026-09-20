@@ -65,7 +65,7 @@ style, each with file and line. Never modify files.
 一个逗号分隔的字符串。每一项是下面之一：
 
 - **内置工具名** —— 大小写不敏感，归一为小写：`bash`、`read`、`write`、`edit`、`ls`、`glob`、`grep`、
-  `ask`、`browser`、`ssh`、`database`、`git`、`preview`、`session`、`knowledge`；
+  `ask`、`browser`、`ssh`、`database`、`git`、`session`、`knowledge`；
 - `agent` —— 选择加入用 `agent` 工具**派发子代理**（受嵌套上限约束：被派发的 agent 只在深度上限
   —— 缺省 2 —— 允许时才能继续派发）；
 - `mcp:<server>` —— 该 MCP 服务器的全部工具（服务器名按设置里配置的写；前缀后的大小写保留；创建
@@ -114,7 +114,7 @@ frontmatter 之后的全部内容（去首尾空白）就是系统提示词。�
 
 随应用发布（按界面语言一份，同一个解析器读）：四个**基座**人格 `work`（项目内会话的根）、`chat`
 （不属于任何项目的会话的根）、`notebook`（笔记本会话的根）、`bot`（bot 会话的根）—— 加上任务型
-agent `coding`、`browser`、`explore`、`visualization`、`widget`、`wiki`、`wiki-writer`、`titler`、
+agent `coding`、`browser`、`explore`、`widget`、`wiki`、`wiki-writer`、`titler`、
 `knowledge-writer`。
 
 - **会话的根人格由会话形态推导，从不选择**：笔记本 → `notebook`，bot 会话 → `bot`，在项目里 →

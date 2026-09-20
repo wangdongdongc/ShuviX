@@ -172,16 +172,6 @@ export interface ChatBrowserEvent extends ChatEventBase {
   title?: string
 }
 
-/**
- * 请求前端在会话 Files 面板打开某文件的预览（preview 工具触发；轻量通知，不持久化为消息）。
- * 前端复用 chatStore.filePreviewRequest 信号 —— 与 FilesPanel 中点击文件后的预览一致。
- */
-export interface ChatFilePreviewEvent extends ChatEventBase {
-  type: 'file_preview'
-  /** 要预览的文件绝对路径（须位于会话工作目录内，前端按 projectPath 相对化） */
-  absPath: string
-}
-
 // ─── 子智能体 ──────────────────────────────────────────────
 
 /**
@@ -360,7 +350,6 @@ export type ChatEvent =
   | ChatImageDataEvent
   | ChatRuntimeEvent
   | ChatBrowserEvent
-  | ChatFilePreviewEvent
   | ChatSubSessionRegisterEvent
   | ChatSubSessionEndEvent
   | ChatBgTaskEvent

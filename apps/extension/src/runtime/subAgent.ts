@@ -3,10 +3,10 @@
  *
  * 执行/事件管线/abort/深度校验全在共享核心；agent 创建（工具解析/模型构建/内存会话树）
  * 经统一创建管线（runtime/agentHost 的 extensionAgentFactory）完成 —— 派生路径的
- * 工具解析策略（复用父会话工具池、preview 就地构建、派发工具注入）见 agentHost。
- * 这里保留：会话工具池登记（根会话建好工具后供派生复用）、具名定义注册表
- * （内置 visualization）、默认子代理（general-purpose，继承父 prompt/工具的克隆语义，
- * 与基座档案体系正交）、派发工具装配。
+ * 工具解析策略（复用父会话工具池、派发工具注入）见 agentHost。
+ * 这里保留：会话工具池登记（根会话建好工具后供派生复用）、具名定义注册表、
+ * 默认子代理（general-purpose，继承父 prompt/工具的克隆语义，与基座档案体系正交）、
+ * 派发工具装配。
  */
 import i18next from 'i18next'
 import {
@@ -55,20 +55,18 @@ export function getSessionTools(rootSessionId: string): Map<string, AnyAgentTool
 }
 
 /**
- * 扩展子代理注册表 —— 具名专用子代理（内置 visualization；将来用户自定义可从 chrome.storage 并入）。
+ * 扩展子代理注册表 —— 具名专用子代理（将来用户自定义可从 chrome.storage 并入）。
  * 默认子代理不在此：它由 createExtensionDispatchTool 以 defaultAgentType 注入，`agent` 省略即用。
  */
 /**
  * 扩展支持的内置档案子集：三个基座档案 work（项目会话）/ chat（不归属项目的会话）/
- * notebook（笔记本会话根 Agent）+ visualization。explore 依赖 ls/grep/glob（ripgrep）扩展
- * 没有，coding 依赖 bash/ssh/database 更是无从谈起；widget 因缺根目录参数被构建器
- * 自动跳过。
+ * notebook（笔记本会话根 Agent）。explore 依赖 ls/grep/glob（ripgrep）扩展没有，
+ * coding 依赖 bash/ssh/database 更是无从谈起；widget 因缺根目录参数被构建器自动跳过。
  */
 const EXTENSION_BUILTIN_NAMES = new Set([
   WORK_PROFILE_NAME,
   CHAT_PROFILE_NAME,
-  NOTEBOOK_PROFILE_NAME,
-  'visualization'
+  NOTEBOOK_PROFILE_NAME
 ])
 
 /**

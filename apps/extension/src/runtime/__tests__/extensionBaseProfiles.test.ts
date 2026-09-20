@@ -147,7 +147,7 @@ describe('扩展端基座档案 — 两条路线在这一端只差工作目录�
     // 正控制组：清单非空，否则上面那条在两边都为空时也成立
     expect(chatTools.length).toBeGreaterThan(0)
     // 扩展没有这些能力，一份从共享档案抄过来的清单会带上它们
-    for (const gone of ['session', 'skill', 'preview', 'git']) {
+    for (const gone of ['session', 'skill', 'git']) {
       expect(chatTools, `扩展档案不该持有 ${gone}`).not.toContain(gone)
     }
   })

@@ -1,8 +1,6 @@
 import { useEffect } from 'react'
-import { getSessionChannelApi, useAppEvent, useChatStore } from '@shuvix/chat-ui'
+import { getSessionChannelApi, useChatStore } from '@shuvix/chat-ui'
 import { usePreviewRequestBridge } from '@shuvix/app-shell'
-import { extractChartMermaid } from '@shuvix/chat-protocol/chartFileContract'
-import { renderMermaid } from '@shuvix/atomic-editor'
 import { useBrowserStore } from '../stores/browserStore'
 
 /** 悬浮聊天窗口（#pinned-chat）：无 app 级右侧面板，预览经 PreviewOverlay 覆盖层展示 */
@@ -14,7 +12,7 @@ const isPinnedWindow = window.location.hash.startsWith('#pinned-chat')
  * 右侧面板（app 级：浏览器/Preview/Widget）属于宿主外壳（不在可复用的对话框 @shuvix/chat-ui 内），
  * 因此把"开/切右面板"的反应留在宿主侧：
  *   - browser_event 订阅 agent 事件开/关浏览器面板；
- *   - filePreviewRequest（preview 工具 / Files 面板点击 / 笔记本 [[双链]]）经共享
+ *   - filePreviewRequest（Files 面板点击 / 笔记本 [[双链]]）经共享
  *     usePreviewRequestBridge 落为预览目标，主窗再展开右侧面板并切到 preview tab
  *     （悬浮窗由 PreviewOverlay 按目标自动露出，不动窗口宽度）。
  * （Sub-agent tab 无自动揭示信号 —— 子会话经工具栏胶囊徽标可见，由用户手动打开。）
@@ -36,43 +34,6 @@ export function useRightPanelBridge(): void {
     browser.setActiveTab('preview')
   }, [filePreviewRequest, isWeb])
 
-  // 图表渲染验证请求（preview 工具经主进程 broker 发起）：用与 ChartView 同一管线跑
-  // mermaid，结果经 IPC 回执。不依赖面板开合/会话活跃；多窗口先到先得（broker 对号入座）。
-  // 验证只关心「能否渲染成功」，固定 default 主题（与明暗展示无关）。
-  useAppEvent('preview.validateChart', (e) => {
-    if (isWeb || !window.api?.preview) return
-    void (async () => {
-      try {
-        const r = await getSessionChannelApi().files.read({
-          sessionId: e.sessionId,
-          path: e.absPath
-        })
-        const mermaid = r.kind === 'text' ? extractChartMermaid(r.content) : null
-        if (!mermaid) {
-          await window.api.preview.reportRender({
-            validationId: e.validationId,
-            ok: false,
-            error: 'chart source is not extractable (contract violated or file unreadable)'
-          })
-          return
-        }
-        const res = await renderMermaid(mermaid, { theme: 'default' })
-        await window.api.preview.reportRender({
-          validationId: e.validationId,
-          ok: !!res.svg && !res.error,
-          error: res.error
-        })
-      } catch (err) {
-        await window.api.preview
-          .reportRender({
-            validationId: e.validationId,
-            ok: false,
-            error: err instanceof Error ? err.message : String(err)
-          })
-          .catch(() => {})
-      }
-    })()
-  })
   // 浏览器面板：宿主专属事件
   useEffect(() => {
     const unsub = getSessionChannelApi().agent.onEvent((event) => {

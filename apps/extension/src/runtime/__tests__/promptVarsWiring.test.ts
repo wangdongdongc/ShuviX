@@ -4,8 +4,8 @@
  * （纪律同 instructionFilesRuntime.test.ts：不跨 app 目录 import 夹具，否则「两端真的
  * 同语义」就失去证明力 —— 一端悄悄改了行为，另一端的表还是绿的）。
  *
- * 钉的是：**这一端实际服务的那批档案**（扩展自己的 work / chat 副本 + 共享的 notebook /
- * visualization）正文里引用的每一个 `{{shuvix:*}}`，变量表都供了值。
+ * 钉的是：**这一端实际服务的那批档案**（扩展自己的 work / chat 副本 + 共享的 notebook）
+ * 正文里引用的每一个 `{{shuvix:*}}`，变量表都供了值。
  * `substitutePromptVars` 的语义是「未知占位符原样保留并 warn」—— 少供一个值不报错，
  * 只会把一行裸占位符发给模型。
  *
@@ -49,7 +49,6 @@ vi.mock('../wrapToolOutput', () => ({ wrapToolsOutput: (t: unknown) => t }))
 vi.mock('../securityProvider', () => ({ createExtensionSecurityContext: vi.fn() }))
 vi.mock('../resolveSessionModel', () => ({ resolveSessionModel: vi.fn(), capsFor: () => ({}) }))
 vi.mock('../instructionFilesRuntime', () => ({ resolveInstructionForSession: vi.fn() }))
-vi.mock('../previewTool', () => ({ createExtensionPreviewTool: vi.fn() }))
 // subAgent 反向 import agentHost —— 顶掉它才不会在加载期绕回来
 vi.mock('../subAgent', () => ({
   getSessionTools: () => undefined,
@@ -73,7 +72,7 @@ const LANGUAGES = ['en', 'zh', 'ja']
 const SID = 'sess-ext-1'
 
 /** 与 subAgent.ts 的 EXTENSION_BUILTIN_NAMES 同一份（那边够不到：import 图带 chrome.*） */
-const SERVED = new Set(['work', 'chat', 'notebook', 'visualization'])
+const SERVED = new Set(['work', 'chat', 'notebook'])
 
 /** 与 subAgent.ts 同一套读取口：共享档案读内联的那批 md，work/chat 读扩展自己的浏览器变体 */
 const SHARED_MD = createInlineMdReader()

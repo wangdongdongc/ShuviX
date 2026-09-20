@@ -46,10 +46,8 @@ vi.mock('../../services/filesWatcherService', () => ({
 }))
 vi.mock('../../services/filePreviewService', () => ({
   previewSessionFile: vi.fn(),
-  writeSessionFile: vi.fn(),
-  saveBinaryAs: vi.fn()
+  writeSessionFile: vi.fn()
 }))
-vi.mock('../../services/previewValidationBroker', () => ({ reportChartValidation: vi.fn() }))
 
 import { registerFilesHandlers } from '../filesHandlers'
 import { writeArtifact } from '../../services/artifacts/store'

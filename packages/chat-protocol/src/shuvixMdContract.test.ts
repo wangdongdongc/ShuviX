@@ -6,7 +6,6 @@ import {
   detectShuvixMarker
 } from './shuvixMdContract'
 import { KNOWLEDGE_MARKER } from './knowledge'
-import { CHART_FILE_MARKER_KEY, CHART_FILE_MARKER } from './chartFileContract'
 
 /** 按最小结构拼一个带 frontmatter 的 markdown 文件 */
 function fmFile(yaml: string): string {
@@ -15,11 +14,11 @@ function fmFile(yaml: string): string {
 
 describe('frontmatterOf', () => {
   it('提取文件开头 frontmatter 的 YAML 原文（不含定界线、尾换行与正文）', () => {
-    expect(frontmatterOf('---\na: 1\nshuvix: chart v1\n---\nbody\n')).toBe('a: 1\nshuvix: chart v1')
+    expect(frontmatterOf('---\na: 1\nshuvix: agent v1\n---\nbody\n')).toBe('a: 1\nshuvix: agent v1')
   })
 
   it('正文中段的 --- 块不误认（frontmatter 只认文件开头）', () => {
-    expect(frontmatterOf('# doc\n\n---\nshuvix: chart v1\n---\n')).toBeNull()
+    expect(frontmatterOf('# doc\n\n---\nshuvix: agent v1\n---\n')).toBeNull()
   })
 
   it('拒绝空 frontmatter（--- 紧跟 ---）', () => {
@@ -62,11 +61,11 @@ describe('readShuvixMarker', () => {
   })
 
   it('容忍缩进 / 引号 / 冒号后无空格；版本缺省为 null', () => {
-    expect(readShuvixMarker('  shuvix: chart v1')).toEqual({ type: 'chart', version: '1' })
-    expect(readShuvixMarker('shuvix:chart v1')).toEqual({ type: 'chart', version: '1' })
+    expect(readShuvixMarker('  shuvix: agent v1')).toEqual({ type: 'agent', version: '1' })
+    expect(readShuvixMarker('shuvix:agent v1')).toEqual({ type: 'agent', version: '1' })
     // 带连字符的类型段照样解析（引号包裹的写法一并容忍）
     expect(readShuvixMarker("shuvix: 'okf v0.2'")).toEqual({ type: 'okf', version: '0.2' })
-    expect(readShuvixMarker('shuvix: "chart v1"')).toEqual({ type: 'chart', version: '1' })
+    expect(readShuvixMarker('shuvix: "hook v1"')).toEqual({ type: 'hook', version: '1' })
     expect(readShuvixMarker('shuvix: agent')).toEqual({ type: 'agent', version: null })
     expect(readShuvixMarker("shuvix: 'agent'")).toEqual({ type: 'agent', version: null })
   })
@@ -94,8 +93,8 @@ describe('readShuvixMarker', () => {
   })
 
   it('多个 shuvix 键以首行为准', () => {
-    expect(readShuvixMarker('shuvix: chart v1\nshuvix: agent v2')).toEqual({
-      type: 'chart',
+    expect(readShuvixMarker('shuvix: hook v1\nshuvix: agent v2')).toEqual({
+      type: 'hook',
       version: '1'
     })
   })
@@ -104,8 +103,8 @@ describe('readShuvixMarker', () => {
     expect(readShuvixMarker('shuvix: wiki-entry v1')).toEqual({ type: 'wiki-entry', version: '1' })
   })
 
-  it('完整 token 捕获：charter 不截成 chart（消费方全等比较不误认）', () => {
-    expect(readShuvixMarker('shuvix: charter v1')).toEqual({ type: 'charter', version: '1' })
+  it('完整 token 捕获：agentx 不截成 agent（消费方全等比较不误认）', () => {
+    expect(readShuvixMarker('shuvix: agentx v1')).toEqual({ type: 'agentx', version: '1' })
   })
 
   it('键的词法边界：shuvix- 前缀键与 xshuvix 不误认', () => {
@@ -126,8 +125,8 @@ describe('readShuvixMarker', () => {
   })
 
   it('容忍冒号前空白', () => {
-    expect(readShuvixMarker('shuvix : chart v1')).toEqual({ type: 'chart', version: '1' })
-    expect(readShuvixMarker('shuvix\t: chart v1')).toEqual({ type: 'chart', version: '1' })
+    expect(readShuvixMarker('shuvix : agent v1')).toEqual({ type: 'agent', version: '1' })
+    expect(readShuvixMarker('shuvix\t: agent v1')).toEqual({ type: 'agent', version: '1' })
   })
 
   it('注释行不误认', () => {
@@ -137,13 +136,9 @@ describe('readShuvixMarker', () => {
 
 describe('detectShuvixMarker', () => {
   it('识别现役的每一种标记', () => {
-    // 防漂移链：chart / okf 用同包常量拼文件；agent / policy 用字面量 —— 叶子包不跨包
+    // 防漂移链：okf 用同包常量拼文件；agent / policy 用字面量 —— 叶子包不跨包
     // 引常量，agent-runtime 侧 definitionFile.test.ts / policyFile.test.ts 已钉住序列化
     // 写出的字面值（'shuvix: agent v1' / 'shuvix: policy v1'），本侧钉「该字面值可解析」。
-    expect(detectShuvixMarker(fmFile(`${CHART_FILE_MARKER_KEY}: ${CHART_FILE_MARKER}`))).toEqual({
-      type: 'chart',
-      version: '1'
-    })
     expect(detectShuvixMarker(fmFile(`${SHUVIX_MARKER_KEY}: ${KNOWLEDGE_MARKER}`))).toEqual({
       type: 'okf',
       version: '0.2'
@@ -187,9 +182,5 @@ describe('detectShuvixMarker', () => {
     expect(detectShuvixMarker('---\n---\n')).toBeNull()
     // '---\n\n---\n'：frontmatterOf 取出的是空行 YAML（''），标记读取为 null —— 只钉 detect 层
     expect(detectShuvixMarker('---\n\n---\n')).toBeNull()
-  })
-
-  it('各契约的 MARKER_KEY 常量同值', () => {
-    expect(CHART_FILE_MARKER_KEY).toBe(SHUVIX_MARKER_KEY)
   })
 })

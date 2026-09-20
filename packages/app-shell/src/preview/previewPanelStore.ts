@@ -39,8 +39,8 @@ export const usePreviewPanelStore = create<PreviewPanelState>((set, get) => ({
 /**
  * filePreviewRequest → 预览面板目标（宿主常驻组件内调用一次）。
  *
- * chatStore.filePreviewRequest 是「打开某文件预览」的唯一信号（preview 工具事件 /
- * 笔记本 [[wiki-link]] / Files 面板点击文件都走它）；此桥把信号落为预览目标
+ * chatStore.filePreviewRequest 是「打开某文件预览」的唯一信号（笔记本 [[wiki-link]] /
+ * Files 面板点击文件都走它）；此桥把信号落为预览目标
  * （sessionId 取信号时刻的活跃会话）。宿主若需额外揭示动作（如桌面展开右侧面板并
  * 切到 preview tab），自行再订阅信号叠加。enabled=false 时忽略（如 WebUI 只读端）。
  */

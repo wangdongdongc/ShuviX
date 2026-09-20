@@ -11,12 +11,12 @@ import { reviewShuvixMdWrite } from '../shuvixMdWrite'
 
 const CTX = { today: '2026-08-28' }
 
-/** 展示型契约的样本：chart（validate 回 unknown —— 没有「整份拒绝」的解析器） */
-const chartFile = (description: string): string =>
+/** 展示型契约的样本：无校验器的假类型（validate 回 unknown —— 没有「整份拒绝」的解析器） */
+const displayFile = (description: string): string =>
   [
     '---',
-    'shuvix: chart v1',
-    'name: 测试图表',
+    'shuvix: note v1',
+    'name: 测试笔记',
     `description: ${description}`,
     '---',
     '',
@@ -26,23 +26,23 @@ const chartFile = (description: string): string =>
 describe('reviewShuvixMdWrite — 展示型契约的 YAML 语法兜底', () => {
   it('展示型契约 frontmatter 语法错（裸标量冒号）→ 回执 note，不动文件', () => {
     const out = reviewShuvixMdWrite(
-      chartFile('your own notes: the agent reads them'),
-      'chart.md',
+      displayFile('your own notes: the agent reads them'),
+      'note.md',
       CTX
     )
     expect(out).not.toBeNull()
     expect(out!.note).toContain('not valid YAML')
-    expect(out!.note).toContain('[shuvix chart v1]')
+    expect(out!.note).toContain('[shuvix note v1]')
     expect(out!.content).toBeNull()
   })
 
   it('frontmatter 合法 → null：展示型契约没有要盖的章，不产生无意义改写', () => {
-    expect(reviewShuvixMdWrite(chartFile('plain description'), 'chart.md', CTX)).toBeNull()
+    expect(reviewShuvixMdWrite(displayFile('plain description'), 'note.md', CTX)).toBeNull()
   })
 
-  it('chart 等其它 unknown 类型同样兜底', () => {
-    const chart = ['---', 'shuvix: chart v1', 'name: [unclosed', '---', 'body'].join('\n')
-    const out = reviewShuvixMdWrite(chart, 'chart.md', CTX)
+  it('其它 unknown 类型同样兜底', () => {
+    const note = ['---', 'shuvix: note v1', 'name: [unclosed', '---', 'body'].join('\n')
+    const out = reviewShuvixMdWrite(note, 'note.md', CTX)
     expect(out?.note).toContain('not valid YAML')
   })
 

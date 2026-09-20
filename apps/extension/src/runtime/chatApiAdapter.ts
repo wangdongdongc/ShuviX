@@ -418,22 +418,7 @@ export const chatApiAdapter: ChatApi = {
     // notebook/预览对 agent/子智能体编辑的自动刷新已由 fileTools.onFileChange 发布的 files.changed 覆盖
     // （见 fileTools.ts）；此处仅缺「捕获外部程序改盘」，属平台能力缺失，非缺陷。
     watch: async () => {},
-    unwatch: async () => {},
-    // 另存为：浏览器里没有系统保存对话框，走原生下载（落点由浏览器的下载设置决定），
-    // defaultPath 只取文件名部分。返回 ok 但 path 为空 —— 调用方只用它判成败。
-    saveAs: async ({ defaultPath, dataBase64 }) => {
-      const name = defaultPath.split(/[/\\]/).pop() || 'chart'
-      const bytes = Uint8Array.from(atob(dataBase64), (c) => c.charCodeAt(0))
-      const url = URL.createObjectURL(new Blob([bytes]))
-      const a = document.createElement('a')
-      a.href = url
-      a.download = name
-      document.body.appendChild(a)
-      a.click()
-      a.remove()
-      setTimeout(() => URL.revokeObjectURL(url), 10_000)
-      return { ok: true, path: name }
-    }
+    unwatch: async () => {}
   },
 
   // shuvix 契约 md 校验：同进程直调 agent-runtime 解析器（与桌面 IPC 为同一实现）

@@ -14,8 +14,6 @@ import './browser'
 // git 工具（isomorphic-git 跨端实现）：不在内置 default 档案清单 —— 主 Agent 默认无、
 // 用户可覆盖 default.md 加入；子代理按自己档案的白名单解析，不受默认集限制
 import './git'
-// preview 工具：不在内置 default 档案清单 —— 可视化子代理经白名单解析使用
-import './preview'
 // artifact：会话 Artifacts 的创建/认领/列举（管存储与身份，不管画图；手艺在 builtin:drawing）
 import './artifact'
 // session：agent 读改自己所属会话的会话级能力（当前仅 set-title，内置 titler 的落笔工具）。

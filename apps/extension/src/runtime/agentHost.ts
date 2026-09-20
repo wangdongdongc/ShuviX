@@ -8,9 +8,9 @@
  * instruction 与桌面统一走 entry 懒注入（不再拼进 systemPrompt）。
  *
  * spawned（派生）：沿用扩展既有模型 —— **复用父会话已实例化的工具**（sessionTools
- * 查表；与根 Agent 同工作目录/同询问范围），names 白名单按名筛选、preview 不在根
- * 工具池、白名单声明时就地构建。派发工具注入策略与旧实现一致：默认子代理（names 空）
- * 无条件可再派发、具名定义须显式白名单 'agent'（层级由内核 canSpawn 约束）。
+ * 查表；与根 Agent 同工作目录/同询问范围），names 白名单按名筛选。派发工具注入策略
+ * 与旧实现一致：默认子代理（names 空）无条件可再派发、具名定义须显式白名单 'agent'
+ * （层级由内核 canSpawn 约束）。
  */
 import type { AgentTool } from '@earendil-works/pi-agent-core'
 import i18next from 'i18next'
@@ -47,7 +47,6 @@ import { createExtensionSecurityContext } from './securityProvider'
 import { resolveSessionModel, capsFor } from './resolveSessionModel'
 import { resolveModelRef } from '@shuvix/chat-protocol/agentModelRef'
 import { resolveInstructionForSession } from './instructionFilesRuntime'
-import { createExtensionPreviewTool } from './previewTool'
 import { getSessionTools, registerSessionTools, createExtensionDispatchTool } from './subAgent'
 
 const logger: RuntimeLogger = {
@@ -222,9 +221,6 @@ function resolveSpawnedTools(req: ToolResolveRequest): AnyAgentTool[] {
     if (name === DISPATCH_TOOL_NAME) return false
     return named ? whitelist.includes(name) : true
   })
-  if (named && whitelist.includes('preview')) {
-    tools.push(createExtensionPreviewTool(req.rootSessionId) as unknown as AnyAgentTool)
-  }
   // 派发工具：默认子代理（names 空）全员可派发；具名定义须显式白名单 'agent'
   if (req.spawn?.canSpawn && (!named || whitelist.includes(DISPATCH_TOOL_NAME))) {
     tools.push(

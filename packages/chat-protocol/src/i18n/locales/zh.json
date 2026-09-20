@@ -795,8 +795,6 @@
       "discardChanges": "将丢弃这些文件未提交的本地改动，无法撤销",
       "deleteBranch": "将删除该分支，只存在于它上面的提交会一并丢失"
     },
-    "previewLabel": "文件预览",
-    "previewHint": "在会话 Files 面板中打开文件预览 —— 与在面板中点击该文件后的预览一致",
     "sessionLabel": "会话",
     "sessionHint": "读改本任务所属的会话 —— 重命名，以及创建并驱动子会话",
     "knowledgeLabel": "知识库",
@@ -938,18 +936,7 @@
       "markdownSourceToggle": "查看源码",
       "mediaCannotPlay": "无法播放",
       "mediaExpandToPreview": "展开到预览",
-      "mediaStop": "停止播放",
-      "chartFit": "适应窗口",
-      "chartFitWidth": "适应宽度（初始视图）",
-      "chartZoomIn": "放大",
-      "chartZoomOut": "缩小",
-      "chartError": "图表渲染失败",
-      "chartExport": "导出",
-      "chartExportPng": "导出 PNG（{{scale}}x）",
-      "chartExportSvg": "导出 SVG",
-      "chartCopyImage": "复制图片",
-      "chartCopied": "已复制",
-      "chartExportFailed": "导出失败"
+      "mediaStop": "停止播放"
     },
     "tasks": "任务",
     "tasksRunning": "运行中",

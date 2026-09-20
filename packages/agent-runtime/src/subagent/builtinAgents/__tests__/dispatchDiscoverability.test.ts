@@ -43,11 +43,12 @@ const build = (spec: BuiltinProfileSpec, language: string): AgentProfile =>
   }) as AgentProfile
 
 describe('派发清单点名了哪些 agent', () => {
-  it.each(LANGS)('%s：coding 点名 browser / explore / visualization', (language) => {
+  it.each(LANGS)('%s：coding 点名 browser / explore', (language) => {
     const s = build(CODING_SPEC, language).systemPrompt
-    for (const name of ['**browser**', '**explore**', '**visualization**']) {
+    for (const name of ['**browser**', '**explore**']) {
       expect(s, `coding.${language} 缺 ${name}`).toContain(name)
     }
+    expect(s, `coding.${language} 不应点名 visualization`).not.toContain('**visualization**')
   })
 
   it.each(LANGS)('%s：work 点名 browser', (language) => {

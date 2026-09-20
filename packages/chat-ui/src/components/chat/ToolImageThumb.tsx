@@ -20,7 +20,7 @@ import { useChatStore } from '../../stores/chatStore'
  * 见 ToolResultImage）。缩略图是同一份文件的 CSS 缩放，点开是同一份文件的原尺寸 ——
  * 用户不会看到比模型更清楚的画面。
  *
- * 点击走 requestFilePreview：与 Files 面板点文件、preview 工具、笔记本 [[wiki-link]]
+ * 点击走 requestFilePreview：与 Files 面板点文件、笔记本 [[wiki-link]]
  * 同一条信号，预览面板/覆盖层已经接好，不必另写 lightbox。
  */
 export function ToolImageThumb({ image }: { image: ToolResultImage }): React.JSX.Element | null {

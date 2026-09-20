@@ -795,8 +795,6 @@
       "discardChanges": "This discards uncommitted local changes to those files — it cannot be undone",
       "deleteBranch": "This deletes the branch; commits that exist only on it are lost with it"
     },
-    "previewLabel": "Preview File",
-    "previewHint": "Open a file preview in the session Files panel — same view as clicking the file in the panel",
     "sessionLabel": "Session",
     "sessionHint": "Read or change the session this task belongs to — rename it, and create and drive sub-sessions",
     "knowledgeLabel": "Knowledge Base",
@@ -938,18 +936,7 @@
       "markdownSourceToggle": "View source",
       "mediaCannotPlay": "Cannot play",
       "mediaExpandToPreview": "Open in preview",
-      "mediaStop": "Stop playback",
-      "chartFit": "Fit to view",
-      "chartFitWidth": "Fit to width (initial view)",
-      "chartZoomIn": "Zoom in",
-      "chartZoomOut": "Zoom out",
-      "chartError": "Mermaid diagram failed to render",
-      "chartExport": "Export",
-      "chartExportPng": "Export PNG ({{scale}}x)",
-      "chartExportSvg": "Export SVG",
-      "chartCopyImage": "Copy image",
-      "chartCopied": "Copied",
-      "chartExportFailed": "Export failed"
+      "mediaStop": "Stop playback"
     },
     "tasks": "Tasks",
     "tasksRunning": "Running",

@@ -37,7 +37,7 @@ Keep this list current — it's what makes future merges predictable.
 
 - `src/mermaid-blocks.ts` — **ShuviX-added file** (not upstream): mermaid live preview widget +
   the `renderMermaid` façade (lazy module load, theme-keyed SVG cache, serialized `initialize`),
-  also consumed by the app's ChartView. Rendered SVG is passed through
+  also consumed by chat mermaid fences. Rendered SVG is passed through
   `sanitizeRenderedSvg` (`@shuvix/chat-protocol/utils/svgSanitize`) before it leaves this module —
   consumers inject it via `innerHTML` into the privileged renderer, and mermaid's
   `click <node> href "javascript:…"` directive otherwise carries a `javascript:` URL straight

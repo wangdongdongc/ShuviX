@@ -82,7 +82,7 @@ function FilesTab(): React.JSX.Element {
 
 /** 会话面板（扩展装配）：共享卡片 + 扩展媒体解析 + 权限门控 Files 内容 + Preview 工具页 */
 export function ExtSessionPanel({ sessionId }: { sessionId: string | null }): React.JSX.Element {
-  // Side Panel 无 app 级右侧栏，独立预览（preview 工具事件 / Files 点击 / [[双链]]）在此工具页展示；
+  // Side Panel 无 app 级右侧栏，独立预览（Files 点击 / [[双链]]）在此工具页展示；
   // .md 预览顶栏「创建笔记本」绑定该文件（扩展中间区已支持 NotebookView）
   const createNotebook = useCreateNotebook()
   return (

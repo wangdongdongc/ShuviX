@@ -11,8 +11,7 @@
  */
 
 import { chmod, rename, stat, unlink, writeFile } from 'fs/promises'
-import { basename, dirname, extname, join } from 'path'
-import { BrowserWindow, dialog } from 'electron'
+import { basename, dirname, join } from 'path'
 import { previewFile } from '@shuvix/agent-runtime'
 import { sessionService } from './sessionService'
 import { observeRegistryWrite } from './registryNotes'
@@ -98,32 +97,5 @@ export async function writeSessionFile(
   } finally {
     // 与 bot / agent 的回执同口径：失败的一笔也回执（半途失败但其实已落盘的那一笔不该漏掉）
     skillService.noteFileWritten(absolutePath)
-  }
-}
-
-/**
- * 二进制另存为 —— 弹系统保存对话框（defaultPath 预填），用户确认后落盘。
- *
- * 落点由用户在对话框里当场指定，因此**不做工作目录准入**（与 widget 导出 zip 同一模型：
- * 用户亲自选的路径即授权）。目前的调用方是图表预览的 PNG / SVG 导出。
- */
-export async function saveBinaryAs(
-  params: { defaultPath: string; dataBase64: string },
-  win?: BrowserWindow
-): Promise<
-  { ok: true; path: string } | { ok: false; canceled: true } | { ok: false; error: string }
-> {
-  const ext = extname(params.defaultPath).replace(/^\./, '').toLowerCase()
-  const options = {
-    defaultPath: params.defaultPath,
-    filters: ext ? [{ name: ext.toUpperCase(), extensions: [ext] }] : undefined
-  }
-  const result = await (win ? dialog.showSaveDialog(win, options) : dialog.showSaveDialog(options))
-  if (result.canceled || !result.filePath) return { ok: false, canceled: true }
-  try {
-    await writeFile(result.filePath, Buffer.from(params.dataBase64, 'base64'))
-    return { ok: true, path: result.filePath }
-  } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) }
   }
 }

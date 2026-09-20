@@ -68,7 +68,7 @@ style, each with file and line. Never modify files.
 カンマ区切りの文字列。各項目は次のいずれか：
 
 - **組み込みツール名** —— 大文字小文字を区別せず、小文字に正規化：`bash`、`read`、`write`、`edit`、
-  `ls`、`glob`、`grep`、`ask`、`browser`、`ssh`、`database`、`git`、`preview`、`session`、`knowledge`；
+  `ls`、`glob`、`grep`、`ask`、`browser`、`ssh`、`database`、`git`、`session`、`knowledge`；
 - `agent` —— `agent` ツールで**サブエージェントを派遣**することへのオプトイン（入れ子の上限に従う：
   派遣されたエージェントは深さの上限 —— 既定 2 —— が許す間だけ、さらに派遣できる）；
 - `mcp:<server>` —— その MCP サーバーのすべてのツール（設定で構成した名前；接頭辞の後は大文字小文字を
@@ -122,7 +122,7 @@ frontmatter の後の全部（前後の空白を除く）がシステムプロ�
 アプリケーションに同梱（UI 言語ごとに一つ、同じパーサーで読まれる）：四つの**ベース**人格 `work`
 （プロジェクト内セッションのルート）、`chat`（どのプロジェクトにも属さないセッションのルート）、
 `notebook`（ノートブックセッションのルート）、`bot`（bot チャットのルート）—— に加えて、タスク型の
-`coding`、`browser`、`explore`、`visualization`、`widget`、`wiki`、`wiki-writer`、`titler`、
+`coding`、`browser`、`explore`、`widget`、`wiki`、`wiki-writer`、`titler`、
 `knowledge-writer`。
 
 - **セッションのルート人格はセッションの形から導かれ、決して選ばれません**：ノートブック → `notebook`、

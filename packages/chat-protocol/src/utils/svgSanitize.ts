@@ -1,14 +1,14 @@
 /**
  * 渲染后 SVG 的净化 —— 注入宿主 DOM 之前的最后一道闸。
  *
- * 为什么需要：图表源码来自不可信输入（智能体输出的 mermaid 代码块、磁盘上的图表契约文件），
+ * 为什么需要：图表源码来自不可信输入（智能体输出的 mermaid 代码块），
  * 而渲染结果是经 innerHTML / dangerouslySetInnerHTML 注入到**特权渲染进程**的 —— 那里
  * 有完整的 window.api（文件写入、终端执行）。任何在该源里执行的脚本都等于完全沦陷。
  *
  * mermaid 自己会用 DOMPurify 清洗节点标签（实测 onerror / onload / iframe / style 都会被剥离），
  * 但那是它的内部实现细节，且**不覆盖 `click <节点> href "javascript:..."` 指令** —— 该指令
- * 产出的锚点会带着 javascript: URL 原样进入 DOM（实测两条渲染路径都如此）。当前它点不动
- * 纯属偶然（ChartView 的平移手势用 setPointerCapture 吞掉了点击），不是设计出来的防御。
+ * 产出的锚点会带着 javascript: URL 原样进入 DOM（实测笔记本 mermaid 与对话 mermaid 两条
+ * 渲染路径都如此）。当前它点不动纯属偶然，不是设计出来的防御。
  * 本函数把这道防御变成显式的、不依赖上游行为也不依赖偶然的控制。
  *
  * 采用白名单：只放行已知安全的协议与标签，其余一律剥离 —— 黑名单挡不住没想到的写法。

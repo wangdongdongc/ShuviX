@@ -243,7 +243,7 @@ describe('validateShuvixMdText — bot', () => {
 })
 
 describe('validateShuvixMdText — 类型路由与边界', () => {
-  it.each(['chart', 'bogus', '', 'Agent'])(
+  it.each(['note', 'bogus', '', 'Agent'])(
     'U8 无校验器类型 %j → unknown 且 messages 为空',
     (type) => {
       expect(validateShuvixMdText(type, VALID_AGENT)).toEqual({ status: 'unknown', messages: [] })

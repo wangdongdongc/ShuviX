@@ -55,11 +55,6 @@ export const BUILTIN_TOOL_PRESENTATIONS: Record<string, BuiltinToolPresentationD
     presentation: { icon: 'MessageCircleQuestion', iconColor: '#60a5fa' },
     buildSummary: field('question')
   },
-  preview: {
-    labelKey: 'tool.previewLabel',
-    presentation: { icon: 'Eye', iconColor: '#38bdf8' },
-    buildSummary: fileField('path')
-  },
   artifact: {
     labelKey: 'tool.artifactLabel',
     presentation: { icon: 'Archive', iconColor: '#8b5cf6' },

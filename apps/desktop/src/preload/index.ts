@@ -901,20 +901,8 @@ const api = {
     write: (params: { sessionId: string; path: string; content: string }) =>
       ipcRenderer.invoke('files:write', params) as Promise<
         { ok: true } | { ok: false; error: string }
-      >,
-    /** 二进制另存为（图表导出 PNG / SVG）：弹系统保存对话框，落点由用户当场指定 */
-    saveAs: (params: { defaultPath: string; dataBase64: string }) =>
-      ipcRenderer.invoke('files:saveAs', params) as Promise<
-        { ok: true; path: string } | { ok: false; canceled: true } | { ok: false; error: string }
       >
     // 文件变动订阅已并入 events.subscribe（AppEvent 'files.changed'）
-  },
-
-  // ============ 预览验证（preview 工具 ⇆ 渲染端） ============
-  preview: {
-    /** 图表渲染验证回执 —— 响应 AppEvent 'preview.validateChart'，结果按 validationId 对号入座 */
-    reportRender: (params: { validationId: string; ok: boolean; error?: string }) =>
-      ipcRenderer.invoke('preview:reportRender', params) as Promise<{ accepted: boolean }>
   },
 
   // ============ 知识库 v2（OKF bundle：侧栏「知识库」分组，隐藏承载项目 __knowledge__ / __knowledge_user__） ============

@@ -27,7 +27,7 @@ A chart is for *shape* — order, proportion, trend, outlier. A table is for *va
 | Above/below a baseline, delta to target | Diverging bars from a centered axis | Polarity |
 | Part-to-whole | One stacked bar, horizontal | Categorical |
 | Before → after per item | Dumbbell (two dots, connector) | One hue, two steps |
-| Structure, flow, state machine | This is a *diagram* — dispatch `visualization` for a durable Mermaid file, or draw boxes and arrows by hand if it is one sentence's worth | — |
+| Structure, flow, state machine | This is a *diagram* — write a ```mermaid fence in the reply and the chat will render it, or draw boxes and arrows by hand if it is one sentence's worth | — |
 
 ## Rules behind the table
 

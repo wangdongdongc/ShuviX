@@ -470,15 +470,7 @@ describe('agentService.isSessionProfile —— 可作子会话档案的判据表
   })
 
   it('AS-23b 其余内置全部为 true —— 含曾经只可派发的 titler', () => {
-    for (const name of [
-      'coding',
-      'browser',
-      'explore',
-      'visualization',
-      'widget',
-      'knowledge-writer',
-      'titler'
-    ]) {
+    for (const name of ['coding', 'browser', 'explore', 'widget', 'knowledge-writer', 'titler']) {
       expect(judge(name), name).toBe(true)
     }
   })

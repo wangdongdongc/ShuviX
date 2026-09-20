@@ -43,7 +43,7 @@ function loadMermaid(): Promise<typeof import('mermaid')> {
 
 /**
  * 渲染 mermaid 源码为 SVG（懒加载模块 + 按 主题+源码 缓存）。
- * 编辑器内嵌 widget 固定 'default'（白底卡片）；ChartView 按宿主明暗传入主题。
+ * 编辑器内嵌 widget 固定 'default'（白底卡片）；对话里的 mermaid 块按宿主明暗传入主题。
  */
 export function renderMermaid(
   code: string,
@@ -71,7 +71,7 @@ export function renderMermaid(
           initializedTheme = theme;
         }
         const { svg } = await m.default.render(id, code);
-        // 净化后再出厂：调用方（笔记本 widget / ChartView）都是 innerHTML 直接注入特权渲染进程，
+        // 净化后再出厂：调用方（笔记本 widget / 对话 mermaid 块）都是 innerHTML 直接注入特权渲染进程，
         // 而 mermaid 的 `click X href "javascript:..."` 指令会把 javascript: 锚点原样带进 SVG。
         // 在这里做而不是在各注入点做 —— 缓存里存的就是净化后的结果，新增消费方不会漏。
         const clean = sanitizeRenderedSvg(svg);

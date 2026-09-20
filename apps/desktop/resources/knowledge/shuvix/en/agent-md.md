@@ -68,7 +68,7 @@ applications' meaning of tool names would be misread — use `shuvix-tools`), an
 A comma-separated string. Each entry is one of:
 
 - a **builtin tool name** — case-insensitive, normalised to lower case: `bash`, `read`, `write`,
-  `edit`, `ls`, `glob`, `grep`, `ask`, `browser`, `ssh`, `database`, `git`, `preview`,
+  `edit`, `ls`, `glob`, `grep`, `ask`, `browser`, `ssh`, `database`, `git`,
   `session`, `knowledge`;
 - `agent` — opt-in to **dispatching sub-agents** with the `agent` tool (only up to the nesting
   cap: a dispatched agent may itself dispatch only while the depth limit, 2 by default, allows);
@@ -125,7 +125,7 @@ An empty frontmatter (`---` directly followed by `---`) is valid: every field ta
 Shipped inside the application (per UI language, with the same parser): the four **base**
 personas `work` (root of a session inside a project), `chat` (root of a session outside any
 project), `notebook` (root of a notebook session) and `bot` (root of a bot chat) — plus the task
-agents `coding`, `browser`, `explore`, `visualization`, `widget`, `wiki`, `wiki-writer`,
+agents `coding`, `browser`, `explore`, `widget`, `wiki`, `wiki-writer`,
 `titler` and `knowledge-writer`.
 
 - **A session's root persona is derived from the session's form, never chosen**: notebook →

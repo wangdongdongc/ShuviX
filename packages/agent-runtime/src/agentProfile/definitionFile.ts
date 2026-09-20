@@ -2,7 +2,7 @@
  * Agent 定义文件（<name>.md）解析 —— 标准化格式。
  *
  * 格式对齐 Claude Code 社区惯例：YAML frontmatter + 正文即 system prompt。
- *   - 首行 `shuvix: agent v1` 是**文件类型标记**（与图表契约的 `shuvix:chart v1` 同形）：
+ *   - 首行 `shuvix: agent v1` 是**文件类型标记**（与 `shuvix: policy v1` 同形）：
  *     声明这份 markdown 是 ShuviX 的智能体定义文件。写入时恒输出，读取时**可选** ——
  *     标记引入之前的用户档案不带它，不能因此失效；经 GUI 再保存一次即自动补上；
  *   - 通用 key 与社区惯例同名同义：`name` / `description`；

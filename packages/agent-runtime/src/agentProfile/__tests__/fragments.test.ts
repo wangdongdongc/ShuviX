@@ -146,7 +146,7 @@ describe('{{shuvix:visualGuide}} 的归属', () => {
     }
   })
 
-  it.each(['titler', 'knowledge-writer', 'explore', 'browser', 'visualization'])(
+  it.each(['titler', 'knowledge-writer', 'explore', 'browser'])(
     '%s 不引用它，正文里也不含片段正文的特征串',
     (name) => {
       // 特征串从片段本身取（不抄文案）：任取片段里一行足够长的、别处不会出现的文本。

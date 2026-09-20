@@ -2,14 +2,14 @@
  * ShuviX 文件类型标记（`shuvix: <type> v<n>`）—— 全部 `shuvix: xxx` 契约共用的判别层。
  *
  * 词汇表：frontmatter 里的 `shuvix` key 声明这份 markdown 的文件类型，值为 `<type> v<n>`
- * （现有取值：agent v1 / bot v2 / policy v1 / hook v1 / chart v1 / okf v0.2，
+ * （现有取值：agent v1 / bot v2 / policy v1 / hook v1 / okf v0.2，
  * 常量分别定义在各自契约模块）。版本号是**原样文本**而不是数字：多数契约的版本是 ShuviX
  * 自己给该 md 格式排的序号（v1、v2），而知识库条目的版本是它遵循的 OKF 规范版本（v0.2），
  * 带小数位 —— 判别本就与版本无关，把它当字符串留着即可，不必替调用方解释它的含义。
  *
  * 此前各契约各抄一份判别正则，本模块把「frontmatter 提取 + 标记读取」收敛为
  * 单一实现：
- *   - 判别只做正则、不引 YAML 解析器 —— chat-protocol 是零依赖叶子包（同 chart 契约的取舍）；
+ *   - 判别只做正则、不引 YAML 解析器 —— chat-protocol 是零依赖叶子包；
  *   - frontmatter 只认（剥 BOM 与前导空白后的）文件开头（`^` 不带 m 标志）：正文中段的
  *     `---` 块不会被误认；
  *   - 标记行容忍缩进 / 引号 / `shuvix:` 后无空格 / 版本号缺省（判别版本无关，为演进留位）；
@@ -18,8 +18,7 @@
  *     解析侧（agent-runtime 的 markdownFrontmatter.ts）刻意不合并：那侧空 frontmatter 合法
  *     （全字段走缺省），两侧语义各有测试钉住。
  *
- * 消费方：chartFileContract 的判别，以及统一 frontmatter 属性卡
- * （app-shell）按 type 查描述符 —— 单一真源，判别语义不再各处漂移。
+ * 消费方：统一 frontmatter 属性卡（app-shell）按 type 查描述符 —— 单一真源，判别语义不再各处漂移。
  */
 
 /** 文件类型标记的 frontmatter key —— 各契约的 *_MARKER_KEY 常量同值 */

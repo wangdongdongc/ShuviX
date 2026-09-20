@@ -333,17 +333,6 @@ export function useAgentEvents(): void {
         useBgTaskStore.getState().upsert(event.task)
         break
 
-      case 'file_preview':
-        // preview 工具（可视化子智能体等）请求打开文件预览：仅当事件属于当前活跃会话时
-        // 触发 filePreviewRequest 信号 —— 宿主 useSessionPanelReveal 展开会话面板并切到
-        // Files，FilesPanel 相对化路径后打开与点击文件一致的预览。
-        // 标记 'agent'：预览面板据此亮出完整路径 —— 这是唯一由智能体（可能受提示注入影响）
-        // 发起的预览入口，用户该看见是谁打开了哪个文件。
-        if (sid === store.activeSessionId) {
-          store.requestFilePreview(event.absPath, 'agent')
-        }
-        break
-
       // 注：browser_event（右侧浏览器/预览面板）由宿主的 useRightPanelBridge 处理，对话框本身不响应
 
       case 'agent_end': {

@@ -10,7 +10,7 @@
  * 校验态（解析器级校验经 ChatApi `shuvixMd.validate` 回传）：状态徽章只认
  * is-ok / is-warn / is-err 类名（chip 文案是 i18n 产物，不断言）；横幅行是解析器
  * 英文原文，可断言稳定片段（"unknown rule key" / "rejected" / "object.type"）；
- * 无校验器的类型（chart）卡片照常渲染但不显示任何校验态。agent 与 policy 的解析器
+ * 无校验器的类型（note）卡片照常渲染但不显示任何校验态。agent 与 policy 的解析器
  * 都带 warn 通道，非法时横幅逐条给出拒绝原因。
  */
 import { mkdirSync, writeFileSync, readFileSync } from 'node:fs'
@@ -73,13 +73,13 @@ const WARN_POLICY_MD = [
 ].join('\n')
 
 // 无校验器、也无描述符的契约类型（unknown）：卡片照常渲染但不显示校验态，徽章走裸类型名回退
-const CHART_MD = [
+const NOTE_MD = [
   '---',
-  'shuvix: chart v1',
-  'name: chart-demo',
+  'shuvix: note v1',
+  'name: note-demo',
   '---',
   '',
-  'Chart file body.',
+  'Note file body.',
   ''
 ].join('\n')
 
@@ -205,7 +205,7 @@ beforeAll(async () => {
   writeFileSync(join(projDir, 'plain-note.md'), PLAIN_MD)
   writeFileSync(join(projDir, 'bad-policy.md'), BAD_POLICY_MD)
   writeFileSync(join(projDir, 'warn-policy.md'), WARN_POLICY_MD)
-  writeFileSync(join(projDir, 'chart-note.md'), CHART_MD)
+  writeFileSync(join(projDir, 'unknown-note.md'), NOTE_MD)
   writeFileSync(join(projDir, 'bad-agent.md'), BAD_AGENT_MD)
   writeFileSync(join(projDir, 'okf-note.md'), OKF_MD)
   const project = await createProject(app.main, { name: 'FmCardProj', path: projDir })
@@ -216,7 +216,7 @@ beforeAll(async () => {
     'card-demo.md',
     'bad-policy.md',
     'warn-policy.md',
-    'chart-note.md',
+    'unknown-note.md',
     'bad-agent.md',
     'okf-note.md',
     'plain-note.md'
@@ -454,17 +454,17 @@ describe('frontmatter 属性卡', () => {
     expect(banner.text).toContain('object.type')
   })
 
-  it('无校验器类型（chart）：卡片照常渲染但不显示任何校验态', async () => {
-    await openNotebook('chart-note', 'Chart file body')
+  it('无校验器类型（note）：卡片照常渲染但不显示任何校验态', async () => {
+    await openNotebook('unknown-note', 'Note file body')
     await until(
       () => app.main.eval<boolean>(`document.querySelector('.cm-shuvix-fmcard') !== null`),
-      'chart frontmatter card rendered'
+      'unknown-type frontmatter card rendered'
     )
     const badge = await app.main.eval<string>(
       `document.querySelector('.cm-shuvix-fmcard-badge')?.textContent ?? ''`
     )
-    // chart 没有描述符：徽章走「ShuviX <类型段>」的裸回退（有描述符的类型另有用例钉 badge 文案）
-    expect(badge).toBe('ShuviX chart · v1')
+    // note 没有描述符：徽章走「ShuviX <类型段>」的裸回退（有描述符的类型另有用例钉 badge 文案）
+    expect(badge).toBe('ShuviX note · v1')
 
     // unknown 状态不 paint：等异步校验落定后，状态徽章仍隐藏且无任何 is-* 语义类
     await sleep(800)

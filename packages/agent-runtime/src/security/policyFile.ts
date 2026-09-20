@@ -3,8 +3,7 @@
  * 平行的独立格式（frontmatter 键集完全不同，刻意不塞进 ParsedAgentFile）。
  *
  * 格式：YAML frontmatter + 正文。
- *   - 首行 `shuvix: policy v1` 是**文件类型标记**（与 `shuvix: agent v1` / `shuvix:chart v1`
- *     同形词汇表）：写入时恒输出，读取时可选；
+ *   - 首行 `shuvix: policy v1` 是**文件类型标记**（与 `shuvix: agent v1` 同形词汇表）：写入时恒输出，读取时可选；
  *   - `name` / `description`：策略标识与一句话摘要（列表/检视 UI 用）；
  *   - `shuvix-displayName`：显示名（对齐 agent md；缺省 = name；人读面，宽容解析）；
  *   - `shuvix-builtin: true`：随包发布的内置策略的**自述标记**，本解析器不读它

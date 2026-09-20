@@ -248,14 +248,6 @@ export {
   type FileToolSuite,
   type ReadDecoders
 } from './tools/fileToolSuite'
-// 共享 preview 工具内核（校验路径 → 分类判定 → 图表渲染验证 → 广播 file_preview；注入端适配）
-export {
-  createPreviewTool,
-  PreviewParamsSchema,
-  PREVIEW_DESCRIPTION,
-  type PreviewToolDeps,
-  type ChartValidation
-} from './tools/previewTool'
 // edit 内部的纯函数（行尾/BOM/diff、多级回退匹配链）—— 供桌面/扩展直接复用与单测
 export {
   detectLineEnding,
@@ -362,7 +354,6 @@ export {
 } from './bot/botFile'
 export { renderBotContext, BOT_CONTEXT_TAG, type BotContextInput } from './bot/botContext'
 // 内置档案（声明式 spec + 注入 t 的统一构建器；各端 registry 现算组装,用户同名定义可覆盖）
-// （visualization 的图表文件契约常量在 @shuvix/chat-protocol/chartFileContract —— UI 与提示词共用）
 export {
   buildBuiltinProfile,
   buildBuiltinProfiles,
@@ -378,7 +369,6 @@ export {
   BOT_SPEC,
   CODING_SPEC,
   EXPLORE_SPEC,
-  VISUALIZATION_SPEC,
   WIDGET_SPEC,
   TITLER_SPEC,
   builtinMdFileNames,

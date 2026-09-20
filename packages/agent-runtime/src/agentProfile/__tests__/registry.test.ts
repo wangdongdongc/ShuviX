@@ -90,7 +90,7 @@ describe('语言解析 — 精确 → 基础 → en，按文件整体回退', ()
 })
 
 describe('buildBuiltinProfiles — 全集现算', () => {
-  it('全参数 → 十一个内置,四个基座档案居首;缺 widget 根 → 自动跳过', () => {
+  it('全参数 → 十个内置,四个基座档案居首;缺 widget 根 → 自动跳过', () => {
     // bot-notes 已退役（bot 自己维护自己的正文，没有单独的笔记段）—— 名单里不该再有它
     expect(buildBuiltinProfiles(ALL_PARAMS).map((a) => a.name)).toEqual([
       'work',
@@ -100,7 +100,6 @@ describe('buildBuiltinProfiles — 全集现算', () => {
       'coding',
       'browser',
       'explore',
-      'visualization',
       'widget',
       'titler',
       'knowledge-writer'
@@ -115,7 +114,6 @@ describe('buildBuiltinProfiles — 全集现算', () => {
       'coding',
       'browser',
       'explore',
-      'visualization',
       'titler',
       'knowledge-writer'
     ])
@@ -272,7 +270,7 @@ describe('knowledge-writer 档案钉板（OKF 知识库的派发执行侧）', (
 })
 
 describe('work 档案钉板(项目会话基座：工具集/环境段的唯一事实源)', () => {
-  it('tools 按桌面注册序列出 + Agent/session 居末;git/preview 不进任何基座', () => {
+  it('tools 按桌面注册序列出 + Agent/session 居末;git 不进任何基座', () => {
     // 顺序与 apps/desktop/src/main/tools/allTools.ts 的注册序一致(bash→read→write→edit→ask→
     // browser→ls→grep→glob→ssh→database)——LLM 所见工具序列的稳定性依赖它;
     // 工具注册表导入链含 electron/native 模块无法在测试内加载,故硬编码钉住,改动需同步两侧。
@@ -295,11 +293,9 @@ describe('work 档案钉板(项目会话基座：工具集/环境段的唯一事
       'knowledge',
       'artifact'
     ])
-    // git/preview 不进任何基座（见 allTools.ts 的注释：主 Agent 默认无，用户可覆盖
+    // git 不进任何基座（见 allTools.ts 的注释：主 Agent 默认无，用户可覆盖
     // work.md 加入，子代理经白名单解析不受默认集限制）
-    for (const gone of ['git', 'preview']) {
-      expect(built.tools, `work 不应持有 ${gone}`).not.toContain(gone)
-    }
+    expect(built.tools, 'work 不应持有 git').not.toContain('git')
     // 环境/工作区模板已内化进 body（{{shuvix:*}} 占位符,createAgent 时替换）
     for (const v of [
       'isGitRepo',
@@ -524,15 +520,11 @@ describe('coding 档案钉板(从 work 拆出的工程人格)', () => {
     for (const language of LANGS) {
       const coding = profile('coding', language).systemPrompt
       const work = profile(WORK_PROFILE_NAME, language).systemPrompt
-      // coding：工程场景只要广域调研 + 作图
-      for (const named of ['explore', 'visualization']) {
-        expect(coding, `coding.${language} 需点名 ${named}`).toContain(named)
-      }
+      // coding：工程场景只要广域调研（结构图走对话 mermaid，不派子智能体）
+      expect(coding, `coding.${language} 需点名 explore`).toContain('explore')
       expect(coding, `coding.${language} 不应点名 widget`).not.toContain('widget')
-      // work：通用场景要作图/小工具，广域调研留给 coding 子会话
-      for (const named of ['visualization', 'widget']) {
-        expect(work, `work.${language} 需点名 ${named}`).toContain(named)
-      }
+      // work：通用场景要小工具，广域调研留给 coding 子会话
+      expect(work, `work.${language} 需点名 widget`).toContain('widget')
       expect(work, `work.${language} 不应点名 explore`).not.toContain('explore')
     }
   })
@@ -612,7 +604,7 @@ describe('bot 档案钉板（bot 会话的基座）', () => {
         'knowledge',
         'artifact'
       ])
-      for (const forbidden of ['bash', 'write', 'database', 'browser', 'git', 'preview']) {
+      for (const forbidden of ['bash', 'write', 'database', 'browser', 'git']) {
         expect(built.tools, `bot.${language} 不得持有 ${forbidden}`).not.toContain(forbidden)
       }
       // 不声明 shuvix-model：模型是**会话**的事（用户在模型选择器里选），不是档案的事
