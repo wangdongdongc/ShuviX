@@ -3104,7 +3104,7 @@ export function hooksSidebarPane(main: CdpClient): HooksSidebarPane {
 // 锚点：组头 `[data-group="skills"]`、目录行 `[data-skill-folder=<dirName>]`、技能行
 // `[data-skill-row=<skill.name>]`（是**技能标识**，外部技能带 `<dirName>:` 前缀，与行上显示的
 // 短名不同）、两级禁用都用同一个 `data-skill-off`、取名框 `[data-skill-dir-dialog]`。
-// 折叠状态没有属性，只能看 chevron 的字形类（`.lucide-chevron-down` = 展开）——
+// 折叠状态没有属性，只能看文件夹图标的字形类（`.lucide-folder-open` = 展开）——
 // 这是本组唯一按字形认的东西，动画本身不测。
 
 export interface SkillFolderShot {
@@ -3116,7 +3116,7 @@ export interface SkillFolderShot {
   locked: boolean
   /** 整组开关关掉（`data-skill-off`） */
   off: boolean
-  /** 展开态（chevron 朝下） */
+  /** 展开态（文件夹图标为打开形） */
   open: boolean
 }
 
@@ -3210,7 +3210,7 @@ export function skillsSidebarPane(main: CdpClient): SkillsSidebarPane {
     label: (f.querySelector('span.truncate')?.textContent ?? '').trim(),
     locked: !!f.querySelector('.lucide-lock'),
     off: f.hasAttribute('data-skill-off'),
-    open: !!f.querySelector('.lucide-chevron-down')
+    open: !!f.querySelector('.lucide-folder-open')
   }))`
 
   const shotsOf = (list: string): Promise<SkillRowShot[]> =>
@@ -3260,13 +3260,13 @@ export function skillsSidebarPane(main: CdpClient): SkillsSidebarPane {
         `skill folder "${dirName}"`
       )
       const before = await main.eval<boolean>(
-        `!!${FOLDER(dirName)}?.querySelector('.lucide-chevron-down')`
+        `!!${FOLDER(dirName)}?.querySelector('.lucide-folder-open')`
       )
       await main.eval(`${FOLDER(dirName)}.click()`)
       await until(
         async () =>
           (await main.eval<boolean>(
-            `!!${FOLDER(dirName)}?.querySelector('.lucide-chevron-down')`
+            `!!${FOLDER(dirName)}?.querySelector('.lucide-folder-open')`
           )) !== before,
         `skill folder "${dirName}" toggled`
       )

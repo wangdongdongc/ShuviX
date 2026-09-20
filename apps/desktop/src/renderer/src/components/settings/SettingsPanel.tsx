@@ -69,12 +69,6 @@ export function SettingsPanel(): React.JSX.Element {
       )
     },
     {
-      id: 'archived',
-      label: t('settings.tabArchived'),
-      icon: <Archive size={14} />,
-      content: <ArchivedSettings />
-    },
-    {
       id: 'providers',
       label: t('settings.tabProviders'),
       icon: <Layers size={14} />,
@@ -121,6 +115,12 @@ export function SettingsPanel(): React.JSX.Element {
       label: t('settings.tabMonitor'),
       icon: <Activity size={14} />,
       content: <MonitorSettings subTab={monitorSubTab} onSubTabChange={setMonitorSubTab} />
+    },
+    {
+      id: 'archived',
+      label: t('settings.tabArchived'),
+      icon: <Archive size={14} />,
+      content: <ArchivedSettings />
     },
     {
       id: 'about',

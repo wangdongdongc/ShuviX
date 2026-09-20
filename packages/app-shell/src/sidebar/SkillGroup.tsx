@@ -19,7 +19,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ChevronDown, ChevronRight, FolderClosed, FolderOpen, Lock } from 'lucide-react'
+import { FolderClosed, FolderOpen, Lock } from 'lucide-react'
 import { useAppEvent, useChatStore } from '@shuvix/chat-ui'
 import {
   SKILL_BUILTIN_PROJECT_ID,
@@ -289,9 +289,6 @@ export function SkillGroup({ adapter }: SkillGroupProps): React.JSX.Element {
                       title={folder.dirPath}
                       className={rowClass(false, false)}
                     >
-                      <span className="flex-shrink-0 text-text-tertiary">
-                        {open ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
-                      </span>
                       <span
                         className={`flex-shrink-0 text-text-tertiary ${folder.isEnabled ? '' : 'opacity-40'}`}
                       >
@@ -303,11 +300,13 @@ export function SkillGroup({ adapter }: SkillGroupProps): React.JSX.Element {
                         {folder.isBuiltin ? t('settings.skillDirBuiltin') : folder.dirName}
                       </span>
                       {folder.isBuiltin && (
+                        // 与知识库内置库（ShuviX 系统说明）同一副锁：小号、淡、悬停不隐去
                         <span
                           title={t('tool.subAgentBuiltin')}
-                          className="flex-shrink-0 text-text-tertiary group-hover:invisible"
+                          aria-label={t('tool.subAgentBuiltin')}
+                          className="flex shrink-0 pr-1"
                         >
-                          <Lock size={10} />
+                          <Lock size={9} className="text-text-tertiary/50" />
                         </span>
                       )}
                       <RowMenuButton

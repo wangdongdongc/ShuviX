@@ -46,12 +46,6 @@ export function ExtSettingsRoute({
       )
     },
     {
-      id: 'archived',
-      label: t('settings.tabArchived'),
-      icon: <Archive size={14} />,
-      content: <ArchivedSettings onDeleteProject={(id, name) => void deleteProject(id, name)} />
-    },
-    {
       id: 'providers',
       label: t('settings.tabProviders'),
       icon: <Layers size={14} />,
@@ -74,6 +68,12 @@ export function ExtSettingsRoute({
           <McpClientPanel api={getChatApi().mcp} caps={{ allowStdio: false }} />
         </div>
       )
+    },
+    {
+      id: 'archived',
+      label: t('settings.tabArchived'),
+      icon: <Archive size={14} />,
+      content: <ArchivedSettings onDeleteProject={(id, name) => void deleteProject(id, name)} />
     },
     {
       id: 'about',
