@@ -420,20 +420,47 @@ export function KnowledgeGroup({ adapter }: KnowledgeGroupProps): React.JSX.Elem
   /**
    * 目录行的图标。两类**身份**行有自己的图标、且不随展开状态变化 —— 置顶的内置库（ShuviX 自己的
    * 说明书）与项目容器；其余是普通目录，照旧一只开合的文件夹。内置库里面的层级是普通目录。
+   * active = 目录在活动条目的路径上（专注模式下随条目一起高亮），图标跟着穿 accent。
    */
-  const dirIcon = (node: KnowledgeTreeDir, depth: number, open: boolean): React.ReactNode => {
+  const dirIcon = (
+    node: KnowledgeTreeDir,
+    depth: number,
+    open: boolean,
+    active: boolean
+  ): React.ReactNode => {
     if (node.scopeDir === 'projects') {
-      return <FolderKanban size={11} className="flex-shrink-0 text-text-tertiary/50" />
+      return (
+        <FolderKanban
+          size={11}
+          className={`flex-shrink-0 ${active ? 'text-accent' : 'text-text-tertiary/50'}`}
+        />
+      )
     }
     if (node.readonly && depth === 0) {
-      return <BookMarked size={11} className="flex-shrink-0 text-sky-400/70" />
+      return (
+        <BookMarked
+          size={11}
+          className={`flex-shrink-0 ${active ? 'text-accent' : 'text-sky-400/70'}`}
+        />
+      )
     }
     const Icon = open ? FolderOpen : FolderClosed
-    return <Icon size={11} className="flex-shrink-0 text-text-tertiary/40" />
+    return (
+      <Icon
+        size={11}
+        className={`flex-shrink-0 ${active ? 'text-accent' : 'text-text-tertiary/40'}`}
+      />
+    )
   }
+
+  /** 目录是否在活动条目的路径上（条目 id 与目录 id 同命名空间，前缀即祖先） */
+  const isOnActivePath = (dirPath: string): boolean =>
+    activeNotePath !== null && activeNotePath.startsWith(`${dirPath}/`)
 
   const renderDir = (node: KnowledgeTreeDir, depth: number): React.ReactNode => {
     const open = isDirOpen(node.path)
+    // 专注模式下与条目、组头一起高亮：命中路径上的目录不被淡化，也不收 hover 淡化
+    const active = isOnActivePath(node.path)
 
     const label = node.scopeDir ? t(SCOPE_LABEL_KEY[node.scopeDir]) : (node.title ?? node.name)
     return (
@@ -445,11 +472,15 @@ export function KnowledgeGroup({ adapter }: KnowledgeGroupProps): React.JSX.Elem
           onContextMenu={(ev) => openDirMenu(node, ev)}
           title={node.path}
           style={{ paddingLeft: indent(depth) }}
-          className={`group relative flex items-center gap-1.5 pr-1.5 py-0.5 cursor-pointer text-text-secondary hover:bg-bg-hover/50 hover:text-text-primary transition-opacity duration-200 ${
-            dim && isActive ? 'opacity-30 hover:opacity-100' : ''
+          className={`group relative flex items-center gap-1.5 pr-1.5 py-0.5 cursor-pointer transition-opacity duration-200 ${
+            active
+              ? 'bg-bg-active/80 text-text-primary'
+              : `text-text-secondary hover:bg-bg-hover/50 hover:text-text-primary ${
+                  dim && isActive ? 'opacity-30 hover:opacity-100' : ''
+                }`
           }`}
         >
-          {dirIcon(node, depth, open)}
+          {dirIcon(node, depth, open, active)}
           <span className="flex-1 min-w-0 text-[13px] truncate">{label}</span>
           {/* 只读的内置库：库那一行挂一把锁（里面的层级不重复挂） */}
           {node.readonly && depth === 0 && (
