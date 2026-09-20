@@ -4,6 +4,7 @@
  */
 
 import type { InlineToken } from '../types/chatMessage'
+import { baseNameFromEntryPath } from '../knowledge'
 
 /** 匹配 {{shuvixInlineToken:uid}} 的正则 */
 export const TOKEN_RE = /\{\{shuvixInlineToken:([a-z0-9]+)\}\}/g
@@ -74,30 +75,79 @@ export function buildCommandToken(
   }
 }
 
-/** `@` 文件引用的最小定义（构造内联 Token 所需字段） */
-export interface AtFileLike {
-  /** 工作区相对路径（如 `src/components/Button.tsx`），作实体标识与展开正文 */
-  rel: string
-  /** 文件名（含扩展名，如 `Button.tsx`），作胶囊展示名 */
-  base: string
+/** `@` 引用的实体引用 —— 构造 token 所需的全部信息，随引用登记表与 at token 一起存活 */
+export type AtMentionRef =
+  | {
+      kind: 'file'
+      /** 工作区相对路径（如 `src/components/Button.tsx`），作实体标识与展开正文 */
+      rel: string
+      /** 文件名（含扩展名，如 `Button.tsx`），作胶囊展示名 */
+      base: string
+    }
+  | {
+      kind: 'knowledge'
+      /** 条目 id（`knowledge/<库名>/x.md` / `projects/<id>/x.md` / `builtin/<库名>/x.md`），作实体标识 */
+      entryPath: string
+      /** knowledge 工具侧库名（用户库目录名 / `project` / `shuvix`） */
+      baseName: string
+      /** bundle 内相对路径（前导 `/`，knowledge 工具 `read` 直接接受） */
+      bundlePath: string
+      title: string
+    }
+
+/** 实体引用的稳定标识（同一目标在一次发送内只构造一个 token） */
+export function mentionRefId(ref: AtMentionRef): string {
+  return ref.kind === 'file' ? ref.rel : `knowledge:${ref.entryPath}`
 }
 
 /**
- * 用选中的工作区文件构造 `at` 类型内联 Token。
- * - displayText/name = 文件名（胶囊仅展示文件名）
- * - payload = 展开正文，告知 Agent 用户引用了该文件（含相对路径便于其读取）
+ * 用选中的 `@` 引用目标构造 `at` 类型内联 Token（按 ref 分派 payload）。
+ * - 文件：displayText = 文件名（与存量消息逐字一致，零迁移），payload 告知相对路径便于读取；
+ * - 知识库条目：displayText = `knowledge:<标题>`（可能带调用方加的消歧后缀），payload 是
+ *   指针（base + bundle 相对路径），agent 用 knowledge 工具自读。
  *
  * 与 cmd 类型不同：at token 由 resolveTokensForAgent 就地替换标记、保留周围文本，
  * 故一条消息可含多个 at 引用 + 普通文字。
  */
-export function buildAtToken(file: AtFileLike): InlineToken {
+export function buildAtToken(ref: AtMentionRef, displayText?: string): InlineToken {
+  if (ref.kind === 'file') {
+    return {
+      type: 'at',
+      id: ref.rel,
+      displayText: displayText ?? ref.base,
+      payload: `[workspace file: ${ref.rel}]`,
+      name: ref.base
+    }
+  }
   return {
     type: 'at',
-    id: file.rel,
-    displayText: file.base,
-    payload: `[workspace file: ${file.rel}]`,
-    name: file.base
+    id: `knowledge:${ref.entryPath}`,
+    displayText: displayText ?? `knowledge:${ref.title}`,
+    payload: `[knowledge entry: base ${ref.baseName}, path ${ref.bundlePath} — ${ref.title}]`,
+    name: ref.title
   }
+}
+
+/**
+ * 从持久化的 at token 反推实体引用（草稿回退时重建引用登记表）。知识库 token 以 payload 前缀
+ * 判别（工作区文件相对路径理论上也可含 `knowledge:` 前缀，靠 id 单判会误判）；其余一律按
+ * 存量文件 token 处理（id = 相对路径、displayText = 文件名），与改制前逐字一致。
+ */
+export function atTokenRef(token: InlineToken): AtMentionRef {
+  if (token.payload.startsWith('[knowledge entry:') && token.id.startsWith('knowledge:')) {
+    const entryPath = token.id.slice('knowledge:'.length)
+    const parsed = baseNameFromEntryPath(entryPath)
+    if (parsed) {
+      return {
+        kind: 'knowledge',
+        entryPath,
+        baseName: parsed.baseName,
+        bundlePath: parsed.bundlePath,
+        title: token.name ?? token.displayText
+      }
+    }
+  }
+  return { kind: 'file', rel: token.id, base: token.displayText }
 }
 
 /** 粘贴长文的最小定义（构造内联 Token 所需字段） */

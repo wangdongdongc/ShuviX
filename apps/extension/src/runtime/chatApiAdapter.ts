@@ -423,6 +423,12 @@ export const chatApiAdapter: ChatApi = {
     validate: async ({ type, text, name }) => validateShuvixMdText(type, text, name)
   },
 
+  // @ 引用「知识库」源：扩展端没有知识库（与 HostApi.knowledge 缺位同一原因）—— 恒空，
+  // provider 不就绪、弹层不出现该分区。后续若给扩展接知识库，接入点就在此处。
+  mentions: {
+    listKnowledgeEntries: async () => []
+  },
+
   // 通用内部事件：进程内单例 bus，前端直接订阅（后端 publish 见 appEventBus）
   events: {
     subscribe: (cb) => appEventBus.subscribe(cb)

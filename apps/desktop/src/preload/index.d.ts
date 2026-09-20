@@ -1,7 +1,7 @@
 import { ElectronAPI } from '@electron-toolkit/preload'
 import type { LucideIconName, ThemeColor } from '@shuvix/chat-protocol/theme'
 import type { ShuvixMdValidation } from '@shuvix/chat-protocol/shuvixMdContract'
-import type { KnowledgeEntry } from '@shuvix/chat-protocol/knowledge'
+import type { KnowledgeEntry, KnowledgeMentionEntry } from '@shuvix/chat-protocol/knowledge'
 import type { BgTaskLogChunk } from '@shuvix/chat-protocol/types/bgTask'
 import type { TaskInfo } from '@shuvix/chat-protocol/types/task'
 import type {
@@ -1084,6 +1084,11 @@ declare global {
       createFolder: (params: { dir: string; name: string }) => Promise<KnowledgeCreateReply>
       /** 在某个目录下新建条目：元数据由宿主拼，文件名按标题派生 */
       createEntry: (params: { dir: string; title: string }) => Promise<KnowledgeCreateReply>
+    }
+    /** 聊天输入框 @ 引用多源数据（知识库源候选；文件源走 files.scan） */
+    mentions: {
+      /** 该会话启用库内的知识条目视图（含 knowledge 工具指针 baseName/bundlePath）；未启用任何库返回空 */
+      listKnowledgeEntries: (params: { sessionId: string }) => Promise<KnowledgeMentionEntry[]>
     }
     memory: {
       /** 列出某项目的记忆条目（视图形状，不含正文）；无记忆返回空数组 */

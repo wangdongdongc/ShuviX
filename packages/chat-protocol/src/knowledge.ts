@@ -156,3 +156,39 @@ export interface KnowledgeEntry {
   generatedAt?: string
   generatedBy?: string
 }
+
+/**
+ * 聊天输入框 `@` 引用「知识库」源的一条候选 —— 本会话**启用库**内的条目视图（不含正文）。
+ * `path` 用 KnowledgeEntry 同口径的条目 id；`baseName` + `bundlePath` 是发给 agent 的指针
+ * （knowledge 工具 `read` 直接接受的形态）。
+ */
+export interface KnowledgeMentionEntry {
+  /** 条目 id（KnowledgeEntry.path 口径：`knowledge/<库名>/x.md` / `projects/<id>/x.md` / `builtin/<库名>/x.md`） */
+  path: string
+  /** knowledge 工具侧库名（用户库目录名，或保留名 `project` / `shuvix`） */
+  baseName: string
+  /** bundle 内相对路径（前导 `/`，如 `/token-refresh.md`） */
+  bundlePath: string
+  title: string
+  description: string
+  /** 所属库显示名（用户库=目录名，项目库=项目当前名，内置库=产品名） */
+  bundleLabel: string
+}
+
+/**
+ * 条目 id → knowledge 工具指针（baseName + bundlePath）。库名映射：用户库 `knowledge/<名>` →
+ * base `<名>`；项目库 `projects/<id>` → `project`；内置库 `builtin/<名>` → `shuvix`。
+ * 落不进任何一种形态（或条目 id 只到库、没有文件部分）返回 null。
+ */
+export function baseNameFromEntryPath(
+  entryPath: string
+): { baseName: string; bundlePath: string } | null {
+  const segs = entryPath.split('/').filter(Boolean)
+  if (segs.length < 3) return null
+  const [container, , ...rest] = segs
+  const bundlePath = `/${rest.join('/')}`
+  if (container === KNOWLEDGE_USER_ROOT_DIR) return { baseName: segs[1], bundlePath }
+  if (container === KNOWLEDGE_PROJECTS_DIR) return { baseName: KNOWLEDGE_PROJECT_BASE, bundlePath }
+  if (container === KNOWLEDGE_BUILTIN_DIR) return { baseName: KNOWLEDGE_BUILTIN_BASE, bundlePath }
+  return null
+}

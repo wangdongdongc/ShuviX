@@ -10,11 +10,16 @@
  * `@Shuvi`→`@Shuvi2` 续写降级）与引用指向什么无关，文件引用同样适用。
  */
 import { describe, it, expect } from 'vitest'
-import { findActiveAt, matchMentions, type AtMention } from '../useAtMentions'
+import { buildMentionEntry, findActiveAt, matchMentions, type AtMention } from '../useAtMentions'
+import type { AtSuggestionItem } from '../atMentionProviders'
 
 /** 一条已登记的引用（text 含前导 @；rel 用一个不会撞上明文的路径） */
 function mention(label: string): AtMention {
-  return { text: `@${label}`, rel: `docs/${label}.md`, base: label }
+  return {
+    text: `@${label}`,
+    displayText: label,
+    ref: { kind: 'file', rel: `docs/${label}.md`, base: label }
+  }
 }
 
 describe('findActiveAt（B1）', () => {
@@ -38,6 +43,42 @@ describe('findActiveAt（B1）', () => {
     // 光标已越过 `@qui ` 的空格 —— 触发早已结束，不得再把后面的词当 query
     expect(findActiveAt('@qui hello', 10)).toBeNull()
     expect(findActiveAt('@qui ', 5)).toBeNull()
+  })
+})
+
+describe('findActiveAt —— 源前缀路由（B1b）', () => {
+  const SOURCES = ['file', 'knowledge']
+
+  it('`@源:query` 命中已注册源 → 路由该源，query 为冒号后文本', () => {
+    expect(findActiveAt('@knowledge:配置', 13, SOURCES)).toEqual({
+      at: 0,
+      source: 'knowledge',
+      query: '配置'
+    })
+    // 冒号后为空也算触发 —— 弹层此时列该源全员
+    expect(findActiveAt('@knowledge:', 11, SOURCES)).toEqual({
+      at: 0,
+      source: 'knowledge',
+      query: ''
+    })
+    expect(findActiveAt('看下 @file:src/a', 14, SOURCES)).toEqual({
+      at: 3,
+      source: 'file',
+      query: 'src/a'
+    })
+  })
+
+  it('前缀未注册 → 不路由，整体作为默认源 query', () => {
+    expect(findActiveAt('@unknown:x', 10, SOURCES)).toEqual({ at: 0, query: 'unknown:x' })
+  })
+
+  it('无冒号 / 冒号在首字符 → 默认源（`@knowledge` 不是路由）', () => {
+    expect(findActiveAt('@knowledge', 10, SOURCES)).toEqual({ at: 0, query: 'knowledge' })
+    expect(findActiveAt('@:x', 3, SOURCES)).toEqual({ at: 0, query: ':x' })
+  })
+
+  it('空 sources（未传路由表）时含冒号文本一律默认源', () => {
+    expect(findActiveAt('@knowledge:x', 12)).toEqual({ at: 0, query: 'knowledge:x' })
   })
 })
 
@@ -86,5 +127,54 @@ describe('matchMentions —— 前界与长 key 优先（B3）', () => {
     const { start, end } = hits[0]
     expect(text.slice(start, end)).toBe('@😀 Bot')
     expect(hits[0].mention).toBe(m)
+  })
+})
+
+describe('buildMentionEntry —— 明文构造与消歧（B4）', () => {
+  /** 一条知识库候选（标题 + 所属库；ref 用不同 entryPath 区分目标） */
+  function knowledgeSuggestion(title: string, lib: string, entry = title): AtSuggestionItem {
+    return {
+      source: 'knowledge',
+      label: title,
+      detail: lib,
+      displayText: `knowledge:${title}`,
+      disambiguator: lib,
+      ref: {
+        kind: 'knowledge',
+        entryPath: `knowledge/${lib}/${entry}.md`,
+        baseName: lib,
+        bundlePath: `/${entry}.md`,
+        title
+      }
+    }
+  }
+
+  it('知识条目明文带源前缀：`@knowledge:<标题>`', () => {
+    const entry = buildMentionEntry(knowledgeSuggestion('配置中心', 'notes'), [])
+    expect(entry.text).toBe('@knowledge:配置中心')
+    expect(entry.displayText).toBe('knowledge:配置中心')
+  })
+
+  it('明文撞上已登记的另一目标 → 自动加消歧后缀 `(<库名>)`', () => {
+    const existing = buildMentionEntry(knowledgeSuggestion('配置中心', 'notes'), [])
+    const second = buildMentionEntry(knowledgeSuggestion('配置中心', 'work'), [existing])
+    expect(second.text).toBe('@knowledge:配置中心 (work)')
+  })
+
+  it('明文相同但指向同一目标 → 不加后缀（重复选中同一条目不产生新明文）', () => {
+    const existing = buildMentionEntry(knowledgeSuggestion('配置中心', 'notes'), [])
+    const again = buildMentionEntry(knowledgeSuggestion('配置中心', 'notes'), [existing])
+    expect(again.text).toBe('@knowledge:配置中心')
+  })
+
+  it('文件候选不带消歧内容 → 撞名也维持现状明文（`@文件名`）', () => {
+    const fileSuggestion: AtSuggestionItem = {
+      source: 'file',
+      label: 'a.ts',
+      displayText: 'a.ts',
+      ref: { kind: 'file', rel: 'src/b/a.ts', base: 'a.ts' }
+    }
+    const entry = buildMentionEntry(fileSuggestion, [mention('a.ts')])
+    expect(entry.text).toBe('@a.ts')
   })
 })

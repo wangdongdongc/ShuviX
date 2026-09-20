@@ -131,7 +131,9 @@ export function sessionBundle(rootSessionId: string): SessionBundleTarget | { er
 }
 
 /** 启用了哪些库、这台机器上又真的有哪些 —— 两者的交集才是这条会话能点名的 */
-function enabledTargets(rootSessionId: string): { name: string; target: SessionBundleTarget }[] {
+export function enabledTargets(
+  rootSessionId: string
+): { name: string; target: SessionBundleTarget }[] {
   const selected = selectedBaseNames(rootSessionId)
   const names = userBaseNames()
   const out: { name: string; target: SessionBundleTarget }[] = []

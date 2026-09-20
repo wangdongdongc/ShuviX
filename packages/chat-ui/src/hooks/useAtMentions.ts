@@ -1,39 +1,42 @@
 /**
- * useAtMentions —— 聊天输入框 `@` 引用工作区文件（仿笔记本 `[[ ]]` 双链补全）。
+ * useAtMentions —— 聊天输入框 `@` 引用（仿笔记本 `[[ ]]` 双链补全），多源可注册。
  *
  * 与斜杠命令芯片（仅行首单个）不同：`@` 可在输入框任意位置触发、可多个。故不走「芯片 + text-indent」，
  * 而是让 textarea 存明文 `@<token>`，配合 MentionHighlighter 背景镜像画出胶囊（胶囊文字 === 底层文字，
  * 光标天然对齐）。发送时把每处引用就地替换成 {{shuvixInlineToken}} 标记 + 构造 InlineToken
- * （`at` 类型展开为「用户引用了工作区文件 xxx」）。
+ * （`at` 类型按 ref 分派展开正文：文件给相对路径、知识条目给 knowledge 工具指针）。
  *
- * 文件表：files.scan 一次性拉回工作目录路径，建内存 FileMap 后本地过滤（不每次击键回后端），
- * 随 files.changed 事件刷新。查询/排序复用 chat-protocol 的 searchFileMap（与双链同一套）。
+ * 多源：`@query` 走默认合并（各就绪源分区展示），`@源:query` 显式路由单个源（findActiveAt 解析）。
+ * 候选数据由 provider 体系提供（atMentionProviders.ts：内置 file / knowledge 两源，registry 可扩展）；
+ * 本 hook 只做触发解析路由、候选合并与明文登记表，选中/退格/prune/matchMentions 这些明文驱动机制
+ * 与单源时代一致。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  buildFileMap,
-  isContentOnlyFileChange,
-  searchFileMap,
-  type FileMap,
-  type FileSuggestion
-} from '@shuvix/chat-protocol/utils/fileMap'
-import {
+  atTokenRef,
   buildAtToken,
   makeTokenMarker,
-  type AtFileLike
+  mentionRefId,
+  type AtMentionRef
 } from '@shuvix/chat-protocol/utils/inlineTokens'
 import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
-import { getSessionChannelApi } from '../api/chatApi'
-import { useAppEvent } from './useAppEvents'
+import { getAtMentionProviders, type AtSuggestionItem } from './atMentionProviders'
 
-/** 一条已选中的 @ 引用：text 为写入 textarea 的明文（含前导 @），rel/base 供展开与展示 */
-export interface AtMention extends AtFileLike {
-  /** 写入 textarea 的明文，如 `@src/foo.ts`（含前导 @） */
+/** 合并弹层里每个源最多展示的条数（段头小字标题 + 每源 5 条，方向键跨段循环） */
+const PER_SOURCE_LIMIT = 5
+
+/** 一条已选中的 @ 引用：text 为写入 textarea 的明文（含前导 @），ref 供构造 token */
+export interface AtMention {
+  /** 写入 textarea 的明文，如 `@src/foo.ts` / `@knowledge:配置中心`（含前导 @） */
   text: string
+  /** 明文去掉前导 @（= token 的 displayText；知识条目可能带消歧后缀） */
+  displayText: string
+  /** 实体引用（构造 token 所需的全部信息） */
+  ref: AtMentionRef
 }
 
-/** @ 弹层候选：工作区文件 */
-export type AtSuggestion = FileSuggestion
+/** @ 弹层候选（provider 统一形态） */
+export type AtSuggestion = AtSuggestionItem
 
 /** textarea 内一处命中的引用区间 [start, end) */
 export interface MentionMatch {
@@ -42,23 +45,35 @@ export interface MentionMatch {
   mention: AtMention
 }
 
-const FILE_MAPS = new Map<string, FileMap>()
-
 function escapeRe(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
-/** 光标左侧最近的有效 `@` 触发；query 为 @ 到光标之间的文本（不含空白）。无则返回 null */
-export function findActiveAt(text: string, caret: number): { at: number; query: string } | null {
+/**
+ * 光标左侧最近的有效 `@` 触发；无则返回 null。
+ * `@` 到光标之间不允许空白（一遇空白即中断）。`@源:query` 显式路由：文本含 `:` 且前缀命中
+ * 已注册源名（sources）→ 回传 source 与冒号后的 query；否则整体作为默认源的 query。
+ */
+export function findActiveAt(
+  text: string,
+  caret: number,
+  sources: readonly string[] = []
+): { at: number; source?: string; query: string } | null {
   for (let i = caret - 1; i >= 0; i--) {
     const ch = text[i]
     if (ch === '@') {
       const prev = i > 0 ? text[i - 1] : ''
       // @ 须在词边界（行首或空白后），避免 email/代码里的 @ 误触发
-      if (prev === '' || /\s/.test(prev)) {
-        return { at: i, query: text.slice(i + 1, caret) }
+      if (prev !== '' && !/\s/.test(prev)) return null
+      const raw = text.slice(i + 1, caret)
+      const colon = raw.indexOf(':')
+      if (colon > 0) {
+        const prefix = raw.slice(0, colon)
+        if (sources.includes(prefix)) {
+          return { at: i, source: prefix, query: raw.slice(colon + 1) }
+        }
       }
-      return null
+      return { at: i, query: raw }
     }
     // 触发到光标之间不允许空白（一遇空白即中断）
     if (/\s/.test(ch)) return null
@@ -95,10 +110,30 @@ export function matchMentions(text: string, mentions: AtMention[]): MentionMatch
   return out
 }
 
+/**
+ * 由候选构造登记表项（选中与单测共用）。明文撞上已登记的**另一目标**且候选带了消歧内容时，
+ * 自动加 ` (suffix)` 后缀（知识条目标题跨库重名）——胶囊文字与底层明文逐字一致的原则不破。
+ */
+export function buildMentionEntry(
+  suggestion: AtSuggestionItem,
+  existing: readonly AtMention[]
+): AtMention {
+  let displayText = suggestion.displayText
+  if (
+    suggestion.disambiguator &&
+    existing.some(
+      (m) => m.text === `@${displayText}` && mentionRefId(m.ref) !== mentionRefId(suggestion.ref)
+    )
+  ) {
+    displayText = `${displayText} (${suggestion.disambiguator})`
+  }
+  return { text: `@${displayText}`, displayText, ref: suggestion.ref }
+}
+
 export interface UseAtMentions {
   /** 当前触发的补全弹层是否可见 */
   showPopover: boolean
-  /** 补全候选（按 searchFileMap 排序） */
+  /** 补全候选（合并模式按源分区、每源 ≤5；显式路由只出该源） */
   suggestions: AtSuggestion[]
   /** 键盘选中索引 */
   selectedIndex: number
@@ -121,7 +156,7 @@ export interface UseAtMentions {
   }
   /** 斜杠命令场景：把引用就地展开为 payload 文本内联进参数（cmd payload 为整条替换，无法混用 token） */
   resolveInline: (text: string) => string
-  /** 回退草稿重建：按 at 类型 token 重新登记引用（text=`@displayText`、rel=id），配合明文回填恢复胶囊 */
+  /** 回退草稿重建：按 at 类型 token 重新登记引用（text=`@displayText`），配合明文回填恢复胶囊 */
   restoreFromTokens: (tokens: InlineToken[]) => void
   /** 发送后清空引用登记与触发态 */
   reset: () => void
@@ -129,10 +164,14 @@ export interface UseAtMentions {
 
 export function useAtMentions(sessionId: string | null): UseAtMentions {
   const [mentions, setMentions] = useState<AtMention[]>([])
-  const [trigger, setTrigger] = useState<{ at: number; query: string } | null>(null)
+  const [trigger, setTrigger] = useState<{ at: number; source?: string; query: string } | null>(
+    null
+  )
   const [selectedIndex, setSelectedIndex] = useState(0)
-  // 扫描完成后自增以触发重渲染（文件表本体存模块级 FILE_MAPS，渲染期直接查表——切会话即时生效）
-  const [, setScanVersion] = useState(0)
+  // provider 数据到达后自增以触发重渲染（数据本体在 provider 的模块级缓存，渲染期直接查——切会话即时生效）
+  const [dataVersion, setDataVersion] = useState(0)
+
+  const providers = getAtMentionProviders()
 
   // 回调内读最新 mentions 而不进依赖数组（避免 refresh/backspace 频繁重建）。
   // 在 effect 中更新 ref（不在渲染期写 ref）——回调都在提交后的事件里触发，ref 已是最新。
@@ -146,73 +185,63 @@ export function useAtMentions(sessionId: string | null): UseAtMentions {
   // 空草稿的同值 input 事件被 React 去重，靠 refresh 清不掉它
   useEffect(() => {
     // 同步清态是本意：等微任务的话切换后首帧仍会闪一下旧弹层
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+
     setTrigger(null)
   }, [sessionId])
 
-  // ── 文件表：挂载即扫描，files.changed 时刷新（内存内过滤，不每次击键回后端） ──
-  const scan = useCallback(async (): Promise<void> => {
+  // ── provider 数据：挂载/切会话即确保加载；数据变化 bump 渲染 ──
+  useEffect(() => {
     if (!sessionId) return
-    try {
-      const r = await getSessionChannelApi().files.scan({ sessionId })
-      if (!r.root) return
-      FILE_MAPS.set(sessionId, buildFileMap(r.root, r.paths))
-      setScanVersion((v) => v + 1)
-    } catch {
-      /* 扫描失败：@ 引用暂不可用，输入不受影响 */
-    }
-  }, [sessionId])
+    for (const p of providers) p.load(sessionId)
+  }, [sessionId, providers])
 
   useEffect(() => {
-    void scan() // eslint-disable-line react-hooks/set-state-in-effect
-  }, [scan])
-
-  // 建表后按 root 过滤（别的会话工作目录的变更与本表无关）；纯内容变更（edit/write 且
-  // 路径均已在表中）不改变成员关系 → 跳过；其余防抖 200ms 重扫（对齐 FilesPanel）
-  const rescanTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  useAppEvent('files.changed', (e) => {
-    const map = sessionId ? FILE_MAPS.get(sessionId) : null
-    if (map) {
-      if (e.root !== map.root) return
-      if (isContentOnlyFileChange(e, (rel) => map.byRel.has(rel))) return
+    const unsubs = providers.map((p) => p.subscribe(() => setDataVersion((v) => v + 1)))
+    return () => {
+      for (const u of unsubs) u()
     }
-    if (rescanTimer.current) clearTimeout(rescanTimer.current)
-    rescanTimer.current = setTimeout(() => {
-      rescanTimer.current = null
-      void scan()
-    }, 200)
-  })
-  useEffect(
-    () => () => {
-      if (rescanTimer.current) clearTimeout(rescanTimer.current)
-    },
-    []
-  )
-
-  // 渲染期从模块级表取当前会话的文件表（切会话即时呈现缓存，scan 回来再刷新）
-  const fileMap = sessionId ? (FILE_MAPS.get(sessionId) ?? null) : null
+  }, [providers])
 
   const suggestions = useMemo<AtSuggestion[]>(() => {
-    if (!trigger) return []
-    return searchFileMap(fileMap, trigger.query)
-  }, [trigger, fileMap])
+    if (!trigger || !sessionId) return []
+    // 显式路由：只出该源
+    if (trigger.source) {
+      const p = providers.find((p) => p.source === trigger.source)
+      return p && p.ready(sessionId) ? p.search(sessionId, trigger.query, PER_SOURCE_LIMIT) : []
+    }
+    // 默认合并：各就绪源分区（顺序 = registry 注册序），每源 ≤ PER_SOURCE_LIMIT
+    return providers
+      .filter((p) => p.ready(sessionId))
+      .flatMap((p) => p.search(sessionId, trigger.query, PER_SOURCE_LIMIT))
+    // dataVersion 驱动重算：provider 数据到达/重扫后 trigger 未变也要刷新候选
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [trigger, sessionId, providers, dataVersion])
 
   const showPopover = trigger !== null && suggestions.length > 0
 
-  const refresh = useCallback((text: string, caret: number): void => {
-    const t = findActiveAt(text, caret)
-    // 光标恰落在一个完整已登记引用之后（无尾随空白）→ 不重开弹层
-    if (t && mentionsRef.current.some((m) => m.text === `@${t.query}`)) {
-      setTrigger(null)
-      return
-    }
-    setTrigger((prev) => {
-      if (!t) return null
-      if (prev && prev.at === t.at && prev.query === t.query) return prev
-      setSelectedIndex(0)
-      return t
-    })
-  }, [])
+  const refresh = useCallback(
+    (text: string, caret: number): void => {
+      const t = findActiveAt(
+        text,
+        caret,
+        providers.map((p) => p.source)
+      )
+      // 光标恰落在一个完整已登记引用之后（无尾随空白）→ 不重开弹层
+      if (t && mentionsRef.current.some((m) => m.text === text.slice(t.at, caret))) {
+        setTrigger(null)
+        return
+      }
+      setTrigger((prev) => {
+        if (!t) return null
+        if (prev && prev.at === t.at && prev.query === t.query && prev.source === t.source) {
+          return prev
+        }
+        setSelectedIndex(0)
+        return t
+      })
+    },
+    [providers]
+  )
 
   const prune = useCallback((text: string): void => {
     setMentions((prev) => {
@@ -249,13 +278,9 @@ export function useAtMentions(sessionId: string | null): UseAtMentions {
       const at = trigger?.at ?? caret
       const before = text.slice(0, at)
       const after = text.slice(caret)
-      // 写入 textarea 的明文用「完整文件名」（含扩展名）—— 胶囊即照此原样显示
-      // （镜像层字符须与底层一致）。唯一标识/展开正文用 rel，同名不同目录不串味。
-      const entry: AtMention = {
-        text: `@${suggestion.label}`,
-        rel: suggestion.rel,
-        base: suggestion.label
-      }
+      // 写入 textarea 的明文与胶囊逐字一致（镜像层字符须与底层一致）。知识条目标题重名时
+      // buildMentionEntry 自动加消歧后缀；唯一标识/展开正文用 ref，同名不同库不串味。
+      const entry = buildMentionEntry(suggestion, mentionsRef.current)
       const insert = `${entry.text} `
       setMentions((prev) => (prev.some((m) => m.text === entry.text) ? prev : [...prev, entry]))
       setTrigger(null)
@@ -286,18 +311,19 @@ export function useAtMentions(sessionId: string | null): UseAtMentions {
     (text: string): { contentText: string; inlineTokens?: Record<string, InlineToken> } => {
       const matches = matchMentions(text, mentionsRef.current)
       if (matches.length === 0) return { contentText: text }
-      const uidByRel = new Map<string, string>()
+      const uidByRef = new Map<string, string>()
       const tokens: Record<string, InlineToken> = {}
       let out = ''
       let last = 0
       let counter = 0
       for (const mt of matches) {
         out += text.slice(last, mt.start)
-        let uid = uidByRel.get(mt.mention.rel)
+        const refId = mentionRefId(mt.mention.ref)
+        let uid = uidByRef.get(refId)
         if (!uid) {
           uid = `a${counter++}`
-          uidByRel.set(mt.mention.rel, uid)
-          tokens[uid] = buildAtToken(mt.mention)
+          uidByRef.set(refId, uid)
+          tokens[uid] = buildAtToken(mt.mention.ref, mt.mention.displayText)
         }
         out += makeTokenMarker(uid)
         last = mt.end
@@ -314,7 +340,8 @@ export function useAtMentions(sessionId: string | null): UseAtMentions {
     let out = ''
     let last = 0
     for (const mt of matches) {
-      out += text.slice(last, mt.start) + buildAtToken(mt.mention).payload
+      out +=
+        text.slice(last, mt.start) + buildAtToken(mt.mention.ref, mt.mention.displayText).payload
       last = mt.end
     }
     return out + text.slice(last)
@@ -325,7 +352,13 @@ export function useAtMentions(sessionId: string | null): UseAtMentions {
     setMentions((prev) => {
       const next = [...prev]
       for (const t of tokens) {
-        const entry: AtMention = { text: `@${t.displayText}`, rel: t.id, base: t.displayText }
+        // 按 token 反推实体引用（知识条目恢复 base/path 指针，文件与存量逐字一致），
+        // 重建的引用发送时能构造出等价 payload —— 回退草稿里的引用仍是「活的」
+        const entry: AtMention = {
+          text: `@${t.displayText}`,
+          displayText: t.displayText,
+          ref: atTokenRef(t)
+        }
         if (!next.some((m) => m.text === entry.text)) {
           next.push(entry)
         }

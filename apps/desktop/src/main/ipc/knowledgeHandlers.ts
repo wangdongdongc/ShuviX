@@ -8,6 +8,7 @@ import {
   getUserKnowledgeRoot,
   knowledgeBaseOptions,
   listKnowledgeEntries,
+  listKnowledgeMentionEntries,
   locateBundle
 } from '../services/knowledge'
 import { openKnowledgeNote } from '../services/knowledgeNotes'
@@ -20,6 +21,10 @@ import { openKnowledgeNote } from '../services/knowledgeNotes'
  */
 export function registerKnowledgeHandlers(): void {
   ipcMain.handle('knowledge:list', () => listKnowledgeEntries())
+  /** 聊天输入框 `@` 引用「知识库」源候选：该会话启用库内的条目视图（含工具指针），只读 */
+  ipcMain.handle('knowledge:mentionEntries', (_event, params: { sessionId: string }) =>
+    listKnowledgeMentionEntries(params.sessionId)
+  )
   ipcMain.handle('knowledge:openNote', (_event, params: { path: string; title?: string }) =>
     openKnowledgeNote(params.path, params.title)
   )

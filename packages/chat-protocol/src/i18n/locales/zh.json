@@ -205,6 +205,8 @@
     "thinkXHigh": "极深",
     "tools": "工具",
     "skillBuiltinBadge": "内置",
+    "atSectionFiles": "文件",
+    "atSectionKnowledge": "知识库",
     "placeholderVision": "输入消息，可拖放或粘贴图片...",
     "placeholder": "输入消息... (Shift+Enter 换行)",
     "placeholderNoSession": "请先创建或选择一个对话",

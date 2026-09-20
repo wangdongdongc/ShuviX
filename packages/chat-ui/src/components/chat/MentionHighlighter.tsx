@@ -38,7 +38,7 @@ export const MentionHighlighter = forwardRef<HTMLDivElement, MentionHighlighterP
       ...matchMentions(text, mentions).map((mt) => ({
         start: mt.start,
         end: mt.end,
-        token: buildAtToken(mt.mention)
+        token: buildAtToken(mt.mention.ref, mt.mention.displayText)
       })),
       ...matchPasteChips(text, pasteChips ?? []).map((m) => ({
         start: m.start,

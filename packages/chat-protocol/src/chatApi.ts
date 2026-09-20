@@ -32,6 +32,7 @@ import type {
 } from './types/mcp'
 import type { InputResponse } from './types/inputRequest'
 import type { InlineToken } from './types/chatMessage'
+import type { KnowledgeMentionEntry } from './knowledge'
 import type { ChatEvent, RuntimeStatus } from './events'
 import type {
   ConfigSharePayload,
@@ -607,6 +608,14 @@ export interface SessionChannelApi {
   /** shuvix 契约 md 的解析器级校验（frontmatter 属性卡消费；两端实现共用 agent-runtime） */
   shuvixMd: {
     validate: (params: { type: string; text: string; name?: string }) => Promise<ShuvixMdValidation>
+  }
+  /**
+   * 聊天输入框 `@` 引用的多源数据（只读）。文件源走 `files.scan`（上面），这里是
+   * 「知识库」源：无知识库能力的宿主（扩展）返回空数组 —— provider 不就绪，弹层不出该分区。
+   */
+  mentions: {
+    /** 该会话**启用库**内的知识条目视图（含工具侧库名 + bundle 相对路径指针）；未启用任何库返回空 */
+    listKnowledgeEntries: (params: { sessionId: string }) => Promise<KnowledgeMentionEntry[]>
   }
   /** 通用内部事件订阅（后端发布的会话级/全局状态事件）。见 docs/internal-events.md */
   events: {

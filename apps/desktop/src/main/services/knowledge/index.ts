@@ -76,3 +76,4 @@ export {
   type KnowledgeChange
 } from './changes'
 export { listKnowledgeEntries } from './entries'
+export { listKnowledgeMentionEntries } from './mentionEntries'

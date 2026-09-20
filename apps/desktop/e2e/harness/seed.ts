@@ -9,7 +9,7 @@
  */
 import { execFileSync } from 'node:child_process'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { deflateSync } from 'node:zlib'
 import { expect } from 'vitest'
 import {
@@ -557,6 +557,59 @@ export async function createProject(main: CdpClient, seed: ProjectSeed): Promise
         : {})
     })})`
   )
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 知识库（OKF）种子 —— 聊天输入框 `@` 引用「知识库」源的候选来自这里。
+//
+// 库就是目录：用户库 = `~/.shuvix/knowledge/<库名>/`，项目库 =
+// `~/.shuvix/knowledge-shuvix/projects/<projectId>/`。条目 frontmatter 只写 title / description、
+// 刻意**不带** shuvix 标记 —— 读宽：没有标记的 md 照样按概念解析（knowledge.ts 的 KNOWLEDGE_MARKER
+// 说明），这条宽松路径顺带被钉住。
+//
+// **播种要在会话于 UI 里激活之前完成**：渲染端 provider 按 sessionId 缓存候选表
+// （atMentionProviders），激活后才铺的条目要等 knowledge.changed 重扫才看得见。
+
+export interface KnowledgeEntrySeed {
+  /** bundle 内相对路径（如 `notes/token-refresh.md`；条目 id = `<bundle>/<path>`） */
+  path: string
+  title: string
+  description?: string
+}
+
+function writeKnowledgeEntries(rootDir: string, entries: KnowledgeEntrySeed[]): void {
+  for (const e of entries) {
+    const filePath = join(rootDir, ...e.path.split('/'))
+    mkdirSync(dirname(filePath), { recursive: true })
+    const lines = ['---', `title: ${e.title}`]
+    if (e.description) lines.push(`description: ${e.description}`)
+    lines.push('---', '', `${e.title} 的正文。`, '')
+    writeFileSync(filePath, lines.join('\n'))
+  }
+}
+
+/** 铺一个用户知识库（`~/.shuvix/knowledge/<库名>/`），返回库目录（空库传 [] —— 库就是目录） */
+export function seedKnowledgeBase(
+  app: E2EApp,
+  name: string,
+  entries: KnowledgeEntrySeed[]
+): string {
+  const dir = join(app.home, '.shuvix', 'knowledge', name)
+  mkdirSync(dir, { recursive: true })
+  writeKnowledgeEntries(dir, entries)
+  return dir
+}
+
+/** 铺项目库条目（`~/.shuvix/knowledge-shuvix/projects/<projectId>/`），返回库目录 */
+export function seedProjectKnowledgeBase(
+  app: E2EApp,
+  projectId: string,
+  entries: KnowledgeEntrySeed[]
+): string {
+  const dir = join(app.home, '.shuvix', 'knowledge-shuvix', 'projects', projectId)
+  mkdirSync(dir, { recursive: true })
+  writeKnowledgeEntries(dir, entries)
+  return dir
 }
 
 /**

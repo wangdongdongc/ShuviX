@@ -130,6 +130,10 @@ export interface ChatPane {
 
   /** 往输入框填字（native value setter + input 事件，走 React 的 onChange） */
   type(text: string): Promise<void>
+  /** 把光标（选区折叠）设到指定字符位置 —— 退格整体删引用等用例需要光标紧贴引用尾部 */
+  setCaret(pos: number): Promise<void>
+  /** 输入框镜像层（MentionHighlighter）画出的胶囊明文（含前导 @，与底层 textarea 逐字一致） */
+  composerChips(): Promise<string[]>
   /** 敲回车（走 React 的 onKeyDown → handleSend / handleSteer） */
   pressEnter(): Promise<void>
   /** 往输入框派发任意按键（弹层方向键导航等；只走 keydown，不改 value） */
@@ -381,6 +385,26 @@ export function chatPane(main: CdpClient): ChatPane {
     },
 
     type: type,
+    setCaret: async (pos) => {
+      await main.eval(
+        `(() => {
+          const ta = ${TEXTAREA}
+          ta.focus()
+          ta.selectionStart = ta.selectionEnd = ${pos}
+          return true
+        })()`
+      )
+    },
+    // 镜像层 = textarea 容器里那个 aria-hidden 的覆层（MentionHighlighter），胶囊是它里面的
+    // span[role=button]；斜杠命令芯片也在同一容器但**不在**镜像层内，故必须锚进镜像层取
+    composerChips: () =>
+      main.eval<string[]>(
+        `(() => {
+          const mirror = ${TEXTAREA}?.parentElement?.querySelector('[aria-hidden="true"]')
+          return [...(mirror?.querySelectorAll('span[role="button"]') ?? [])]
+            .map((s) => (s.textContent ?? '').trim())
+        })()`
+      ),
     pressEnter: pressEnter,
     pressKey: pressKey,
     typeAndSend: async (text) => {
@@ -715,17 +739,24 @@ export function bubbleWatch(main: CdpClient): BubbleWatch {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// A3 · 输入框 `@` 提及弹层（AtMentionPopover）
+// A3 · 输入框 `@` 提及弹层（AtMentionPopover）—— 多源
 //
-// 行锚点是组件自带的 data-at-suggestion：值是工作区相对路径 —— 弹层只列工作区文件。
-// bot 行（曾经的 `bot:<name>` 名字空间）已整体退场；spec 里 `key.startsWith('bot:')` 只作否定断言。
-// 选中态按**结构类**认（键盘选中 = bg-accent/15），不认 i18n 文案。
-// 文件表是异步拉的（files.scan），行何时出现由 spec 用 until 等。
+// 裸 `@` 合并分区（文件 / 知识库两段，每源 ≤5，方向键跨段扁平循环）；`@源:query` 显式
+// 路由单源（此时只一段、不出段头）。行锚点是组件自带的 data-at-suggestion：
+//   - 文件     = 工作区相对路径（如 `docs/alpha-guide.md`）
+//   - 知识条目 = `knowledge:` + 条目 id（如 `knowledge:knowledge/kb-a/notes/x.md`）
+// 段头按 data-at-section 认（仅多源并出时渲染）；选中态按**结构类**认（键盘选中 =
+// bg-accent/15），不认 i18n 文案。
+// 候选表是异步拉的（files.scan / mentions.listKnowledgeEntries），行何时出现由 spec 用 until 等。
 
 /** @ 弹层里的一行 */
 export interface AtSuggestionRow {
-  /** data-at-suggestion 属性值：工作区相对路径 */
+  /** data-at-suggestion 属性值：文件=工作区相对路径；知识条目=`knowledge:`+条目 id */
   key: string
+  /** 主文案（文件名 / 条目标题） */
+  label: string
+  /** 次文案（文件=所在目录；知识条目=所属库显示名）；无则空串 */
+  detail: string
   /** 键盘选中态（bg-accent/15） */
   selected: boolean
 }
@@ -733,8 +764,10 @@ export interface AtSuggestionRow {
 export interface AtPopoverPane {
   /** 弹层是否在屏（有至少一行） */
   open(): Promise<boolean>
-  /** 行快照（document 序） */
+  /** 行快照（document 序 = 扁平循环序；段头不在其中） */
   rows(): Promise<AtSuggestionRow[]>
+  /** 段头序列（data-at-section 值，DOM 序）；单源不出段头时为空 */
+  sections(): Promise<string[]>
   /**
    * 选中某行 —— 派发 **bubbling mousedown**：行按钮监听的是 onMouseDown
    * （抢在 textarea blur 之前），element.click() 只发 click，选不中。
@@ -750,8 +783,15 @@ export function atPopoverPane(main: CdpClient): AtPopoverPane {
       main.eval<AtSuggestionRow[]>(
         `${ROWS}.map((b) => ({
           key: b.getAttribute('data-at-suggestion') ?? '',
+          label: (b.querySelector('span.text-accent')?.textContent ?? '').trim(),
+          detail: (b.querySelector('span.text-text-tertiary')?.textContent ?? '').trim(),
           selected: b.className.includes('bg-accent/15')
         }))`
+      ),
+    sections: () =>
+      main.eval<string[]>(
+        `[...document.querySelectorAll('[data-at-section]')]
+          .map((d) => d.getAttribute('data-at-section') ?? '')`
       ),
     select: async (key) => {
       const hit = await main.eval<boolean>(`(() => {

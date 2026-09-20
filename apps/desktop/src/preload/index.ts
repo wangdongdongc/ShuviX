@@ -45,7 +45,7 @@ import type {
   TelegramBotUpdateParams
 } from '../main/types'
 import type { ChatEvent } from '@shuvix/chat-protocol/events'
-import type { KnowledgeEntry } from '@shuvix/chat-protocol/knowledge'
+import type { KnowledgeEntry, KnowledgeMentionEntry } from '@shuvix/chat-protocol/knowledge'
 import type { BgTaskLogChunk } from '@shuvix/chat-protocol/types/bgTask'
 import type { TaskInfo } from '@shuvix/chat-protocol/types/task'
 import type {
@@ -950,6 +950,13 @@ const api = {
     /** 在某个目录下新建条目：元数据由宿主拼，文件名按标题派生 */
     createEntry: (params: { dir: string; title: string }) =>
       ipcRenderer.invoke('knowledge:createEntry', params) as Promise<KnowledgeCreateReply>
+  },
+
+  // ============ 聊天输入框 @ 引用多源（知识库源候选；文件源走 files.scan） ============
+  mentions: {
+    /** 该会话启用库内的知识条目视图（含 knowledge 工具指针 baseName/bundlePath）；未启用任何库返回空 */
+    listKnowledgeEntries: (params: { sessionId: string }) =>
+      ipcRenderer.invoke('knowledge:mentionEntries', params) as Promise<KnowledgeMentionEntry[]>
   },
 
   // ============ 项目记忆（侧栏项目组下的「项目记忆」子文件夹） ============

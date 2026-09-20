@@ -1,8 +1,12 @@
 import { describe, it, expect } from 'vitest'
 import type { InlineToken } from '../types/chatMessage'
+import { baseNameFromEntryPath } from '../knowledge'
 import {
+  atTokenRef,
+  buildAtToken,
   buildPasteToken,
   makeTokenMarker,
+  mentionRefId,
   parseSlashCommandInput,
   rebuildDraftFromContent,
   resolveTokensForAgent,
@@ -23,6 +27,115 @@ const pasteToken: InlineToken = buildPasteToken({
   displayText: '[粘贴文本 #1 · 3 行]',
   seq: 1,
   name: '粘贴文本 #1'
+})
+
+describe('buildAtToken —— 按 ref 分派 payload', () => {
+  it('文件 ref：与存量 token 逐字一致（零迁移）', () => {
+    expect(buildAtToken({ kind: 'file', rel: 'src/foo.ts', base: 'foo.ts' })).toEqual(atToken)
+  })
+
+  it('知识库 ref：payload 为 knowledge 工具指针（base + bundle 相对路径 + 标题）', () => {
+    const token = buildAtToken({
+      kind: 'knowledge',
+      entryPath: 'knowledge/notes/auth/token-refresh.md',
+      baseName: 'notes',
+      bundlePath: '/auth/token-refresh.md',
+      title: 'Token 刷新'
+    })
+    expect(token).toEqual({
+      type: 'at',
+      id: 'knowledge:knowledge/notes/auth/token-refresh.md',
+      displayText: 'knowledge:Token 刷新',
+      payload: '[knowledge entry: base notes, path /auth/token-refresh.md — Token 刷新]',
+      name: 'Token 刷新'
+    })
+  })
+
+  it('displayText 覆盖：消歧后缀随 token 存活（草稿回填逐字恢复）', () => {
+    const token = buildAtToken(
+      {
+        kind: 'knowledge',
+        entryPath: 'knowledge/work/配置中心.md',
+        baseName: 'work',
+        bundlePath: '/配置中心.md',
+        title: '配置中心'
+      },
+      'knowledge:配置中心 (work)'
+    )
+    expect(token.displayText).toBe('knowledge:配置中心 (work)')
+  })
+})
+
+describe('atTokenRef —— 从持久化 token 反推实体引用', () => {
+  it('存量文件 token → file ref（id=相对路径，displayText=文件名）', () => {
+    expect(atTokenRef(atToken)).toEqual({ kind: 'file', rel: 'src/foo.ts', base: 'foo.ts' })
+  })
+
+  it('知识库 token → knowledge ref（base/path 从条目 id 派生，发送时能重建等价 payload）', () => {
+    const ref = {
+      kind: 'knowledge' as const,
+      entryPath: 'projects/p1/架构.md',
+      baseName: 'project',
+      bundlePath: '/架构.md',
+      title: '架构'
+    }
+    const token = buildAtToken(ref, 'knowledge:架构 (项目A)')
+    const back = atTokenRef(token)
+    expect(back).toEqual(ref)
+    // 反推的 ref 重建 payload 与原始 token 一致（displayText 照旧由调用方带）
+    expect(buildAtToken(back, token.displayText).payload).toBe(token.payload)
+  })
+
+  it('payload 不是知识库指针的一律按文件 token 处理（哪怕 id 带 knowledge: 前缀）', () => {
+    const weird: InlineToken = {
+      type: 'at',
+      id: 'knowledge:foo.ts',
+      displayText: 'knowledge:foo.ts',
+      payload: '[workspace file: knowledge:foo.ts]'
+    }
+    expect(atTokenRef(weird)).toEqual({
+      kind: 'file',
+      rel: 'knowledge:foo.ts',
+      base: 'knowledge:foo.ts'
+    })
+  })
+})
+
+describe('mentionRefId —— 实体稳定标识', () => {
+  it('文件用相对路径；知识条目用 `knowledge:` + 条目 id（两者不撞名）', () => {
+    expect(mentionRefId({ kind: 'file', rel: 'a.ts', base: 'a.ts' })).toBe('a.ts')
+    expect(
+      mentionRefId({
+        kind: 'knowledge',
+        entryPath: 'knowledge/n/x.md',
+        baseName: 'n',
+        bundlePath: '/x.md',
+        title: 'x'
+      })
+    ).toBe('knowledge:knowledge/n/x.md')
+  })
+})
+
+describe('baseNameFromEntryPath —— 条目 id → 工具指针', () => {
+  it('三类库名映射 + bundle 相对路径', () => {
+    expect(baseNameFromEntryPath('knowledge/notes/auth/token-refresh.md')).toEqual({
+      baseName: 'notes',
+      bundlePath: '/auth/token-refresh.md'
+    })
+    expect(baseNameFromEntryPath('projects/p1/架构.md')).toEqual({
+      baseName: 'project',
+      bundlePath: '/架构.md'
+    })
+    expect(baseNameFromEntryPath('builtin/shuvix/agents.md')).toEqual({
+      baseName: 'shuvix',
+      bundlePath: '/agents.md'
+    })
+  })
+
+  it('落不进任何形态（未知容器 / 只到库没有文件）返回 null', () => {
+    expect(baseNameFromEntryPath('elsewhere/n/x.md')).toBeNull()
+    expect(baseNameFromEntryPath('knowledge/notes')).toBeNull()
+  })
 })
 
 describe('buildPasteToken', () => {
