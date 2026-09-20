@@ -584,6 +584,12 @@ declare global {
       /** 获取单个会话（含计算属性） */
       getById: (id: string) => Promise<SessionInfo | null>
     }
+    /** 桌面日历：按 session_day_prompts 开口日查询（扩展无此命名空间） */
+    calendar: {
+      daysInMonth: (params: { year: number; month: number }) => Promise<string[]>
+      sessionsOnDay: (params: { day: string }) => Promise<Session[]>
+      firstEntryOnDay: (params: { sessionId: string; day: string }) => Promise<string | null>
+    }
     message: {
       list: (sessionId: string) => Promise<ChatMessage[]>
       clear: (sessionId: string) => Promise<{ success: boolean }>

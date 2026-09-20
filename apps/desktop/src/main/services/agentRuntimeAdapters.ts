@@ -18,6 +18,7 @@ import { chatFrontendRegistry } from '../frontend/core'
 import { notifyOnChatEvent } from './notificationService'
 import { transformToolResultForPersist } from './stepPersistPipeline'
 import { httpLogService } from './httpLogService'
+import { recordFromUserMessageEvent } from './sessionDayPromptService'
 import { createLogger } from '../logger'
 import { t } from '../i18n'
 
@@ -33,6 +34,7 @@ export const electronEventSink: RuntimeEventSink = {
   broadcast: (event) => {
     chatFrontendRegistry.broadcast(event)
     notifyOnChatEvent(event)
+    recordFromUserMessageEvent(event)
   },
   hasUserInputCapability: (sessionId) => chatFrontendRegistry.hasCapability(sessionId, 'userInput')
 }

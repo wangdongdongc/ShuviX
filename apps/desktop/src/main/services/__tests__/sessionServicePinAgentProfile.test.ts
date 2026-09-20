@@ -42,6 +42,9 @@ vi.mock('../../dao/sessionDao', () => ({
     touchActive: mocks.daoTouchActive
   }
 }))
+vi.mock('../../dao/sessionDayPromptDao', () => ({
+  sessionDayPromptDao: { deleteBySessionId: vi.fn() }
+}))
 vi.mock('../../dao/httpLogDao', () => ({ httpLogDao: {} }))
 vi.mock('../../dao/providerDao', () => ({ providerDao: {} }))
 vi.mock('../../dao/projectDao', () => ({ projectDao: {} }))

@@ -41,6 +41,9 @@ vi.mock('../../dao/sessionDao', () => ({
     insert: mocks.daoInsert
   }
 }))
+vi.mock('../../dao/sessionDayPromptDao', () => ({
+  sessionDayPromptDao: { deleteBySessionId: vi.fn() }
+}))
 vi.mock('../../dao/httpLogDao', () => ({ httpLogDao: {} }))
 vi.mock('../../dao/providerDao', () => ({
   providerDao: { findModelsByProvider: mocks.findModelsByProvider }

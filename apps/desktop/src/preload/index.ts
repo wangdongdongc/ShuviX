@@ -290,6 +290,16 @@ const api = {
     // 配置变更订阅已并入 events.subscribe（AppEvent 'session.configChanged'）
   },
 
+  // ============ 桌面日历（session_day_prompts：同一会话可出现在多个开口日） ============
+  calendar: {
+    daysInMonth: (params: { year: number; month: number }) =>
+      ipcRenderer.invoke('calendar:daysInMonth', params) as Promise<string[]>,
+    sessionsOnDay: (params: { day: string }) =>
+      ipcRenderer.invoke('calendar:sessionsOnDay', params),
+    firstEntryOnDay: (params: { sessionId: string; day: string }) =>
+      ipcRenderer.invoke('calendar:firstEntryOnDay', params) as Promise<string | null>
+  },
+
   // ============ 消息管理 ============
   message: {
     list: (sessionId: string) => ipcRenderer.invoke('message:list', sessionId),

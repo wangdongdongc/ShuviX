@@ -1,10 +1,9 @@
-import { useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useLayoutEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { DayPicker, useDayPicker } from 'react-day-picker'
 import { zhCN, enUS } from 'react-day-picker/locale'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
-import { useChatStore, groupSessionsByDay, type Session } from '@shuvix/chat-ui'
-import { isHiddenProjectId } from '@shuvix/chat-protocol/hiddenProjects'
+import type { Session } from '@shuvix/chat-ui'
 import './calendar.css'
 
 export interface CalendarViewProps {
@@ -14,26 +13,34 @@ export interface CalendarViewProps {
   width: number
   /** 是否正在拖动侧栏：拖动期间不渲染 DayPicker，避免重 layout 卡顿（缺省 false） */
   isResizing?: boolean
-}
-
-function dayKey(date: Date): string {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+  /** 有过会话的日期（圆点）。桌面来自 session_day_prompts，扩展来自 groupSessionsByDay */
+  daysWithSessions: Date[]
+  /** 选中日的会话列表 */
+  daySessions: Session[]
+  selected: Date
+  onSelect: (date: Date) => void
+  month: Date
+  onMonthChange: (month: Date) => void
 }
 
 /**
  * 日历视图（桌面/扩展共用）—— 按天浏览会话。月历 + 选中日的会话分组列表。
- * 侧栏宽度 / 拖动态经 props 注入（宿主各自的 sidebar store）；会话数据读 chat-ui chatStore。
+ * 会话数据由宿主注入：桌面走索引表（同一会话可出现在多个开口日），扩展继续
+ * 本地 `groupSessionsByDay` / `lastActiveAt` 单日落点。
  */
 export function CalendarView({
   renderGroupedSessionsForDay,
   width,
-  isResizing = false
+  isResizing = false,
+  daysWithSessions,
+  daySessions,
+  selected,
+  onSelect,
+  month,
+  onMonthChange
 }: CalendarViewProps): React.JSX.Element {
   const { i18n, t } = useTranslation()
-  const sessions = useChatStore((s) => s.sessions)
   const showWeekNumber = width >= 240
-  const [selected, setSelected] = useState<Date>(() => new Date())
-  const [month, setMonth] = useState<Date>(() => new Date())
 
   // 拖动占位高度：chrome（caption/nav/weekday header 恒定）+ 6 行 × day cell（跟随 sidebar 宽度）
   // 公式与 calendar.css 中 --rdp-day-height: clamp(26px, 12cqw, 40px) 一致
@@ -49,26 +56,9 @@ export function CalendarView({
   })
   const placeholderHeight = Math.round(dayCellSize * 6 + chromeHeightRef.current)
 
-  // 派生：YYYY-MM-DD -> Session[]；只在 sessions 引用变化时重算
-  // 隐藏项目（知识库 / 注册表目录）的会话不计入（其项目不在列表中,日列表本就渲染不出 → 连圆点一起排除）
-  const sessionsByDay = useMemo(
-    () => groupSessionsByDay(sessions.filter((s) => !isHiddenProjectId(s.projectId))),
-    [sessions]
-  )
-
-  const daysWithSessions = useMemo(() => {
-    const arr: Date[] = []
-    for (const key of sessionsByDay.keys()) {
-      const [y, m, d] = key.split('-').map(Number)
-      arr.push(new Date(y, m - 1, d))
-    }
-    return arr
-  }, [sessionsByDay])
-
-  const daySessions = sessionsByDay.get(dayKey(selected)) ?? []
   const locale = i18n.language.startsWith('zh') ? zhCN : enUS
 
-  // 自定义导航：‹ 今天 ›（横排）。闭包定义以访问外部 setSelected
+  // 自定义导航：‹ 今天 ›（横排）。闭包定义以访问外部 onSelect / onMonthChange
   const CustomNav = (): React.JSX.Element => {
     const { goToMonth, nextMonth, previousMonth } = useDayPicker()
     return (
@@ -86,7 +76,8 @@ export function CalendarView({
           type="button"
           onClick={() => {
             const today = new Date()
-            setSelected(today)
+            onSelect(today)
+            onMonthChange(today)
             goToMonth(today)
           }}
           className="px-1 text-[11px] text-text-tertiary hover:text-text-secondary transition-colors"
@@ -116,9 +107,9 @@ export function CalendarView({
           <DayPicker
             mode="single"
             selected={selected}
-            onSelect={(d) => d && setSelected(d)}
+            onSelect={(d) => d && onSelect(d)}
             month={month}
-            onMonthChange={setMonth}
+            onMonthChange={onMonthChange}
             showWeekNumber={showWeekNumber}
             weekStartsOn={1}
             locale={locale}

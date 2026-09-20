@@ -105,7 +105,6 @@ function SessionKnowledgeBasesSection({
     // 乐观更新：这条写入没有锁，不会被拒；失败也只是下次打开时回到真实值
     setState({ ...state, selected: next, explicit: true })
     void getChatApi().session.updateKnowledgeBases({ id: sessionId, knowledgeBases: next })
-    useChatStore.getState().touchSessionActive(sessionId)
   }
 
   return (
@@ -145,18 +144,14 @@ export function SessionConfigPanel({ sessionId }: SessionConfigPanelProps): Reac
   const handleToggleAutoAllow = async (): Promise<void> => {
     const next = !autoAllow
     await getChatApi().session.updateAutoAllow({ id: sessionId, autoAllow: next })
-    const store = useChatStore.getState()
-    store.updateSessionSettings(sessionId, { autoAllow: next })
-    store.touchSessionActive(sessionId)
+    useChatStore.getState().updateSessionSettings(sessionId, { autoAllow: next })
   }
 
   /** 允许列表仅含路径条目（`Read(...)`/`Write(...)`）：命令类工具逐条询问，无模式记忆 */
   const handleRemoveAllowEntry = async (entry: string): Promise<void> => {
     await getChatApi().session.removeAllowListEntry({ id: sessionId, entry })
     const next = allowList.filter((e) => e !== entry)
-    const store = useChatStore.getState()
-    store.updateSessionSettings(sessionId, { allowList: next })
-    store.touchSessionActive(sessionId)
+    useChatStore.getState().updateSessionSettings(sessionId, { allowList: next })
   }
 
   return (

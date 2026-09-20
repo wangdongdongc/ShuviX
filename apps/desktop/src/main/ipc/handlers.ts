@@ -1,5 +1,6 @@
 import { registerAgentHandlers } from './agentHandlers'
 import { registerSessionHandlers } from './sessionHandlers'
+import { registerCalendarHandlers } from './calendarHandlers'
 import { registerProjectHandlers } from './projectHandlers'
 import { registerMessageHandlers } from './messageHandlers'
 import { registerSettingsHandlers } from './settingsHandlers'
@@ -38,6 +39,7 @@ import { registerNotificationHandlers } from './notificationHandlers'
 export function registerIpcHandlers(): void {
   registerAgentHandlers()
   registerSessionHandlers()
+  registerCalendarHandlers()
   registerProjectHandlers()
   registerMessageHandlers()
   registerSettingsHandlers()

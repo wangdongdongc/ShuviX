@@ -7,7 +7,15 @@ import eslintPluginReactRefresh from 'eslint-plugin-react-refresh'
 import eslintPluginBoundaries from 'eslint-plugin-boundaries'
 
 export default defineConfig(
-  { ignores: ['**/node_modules', '**/dist', '**/out', 'resources/**'] },
+  {
+    ignores: [
+      '**/node_modules',
+      '**/dist',
+      '**/out',
+      'resources/**',
+      'scripts/backfill-session-day-prompts.mjs'
+    ]
+  },
   tseslint.configs.recommended,
   eslintPluginReact.configs.flat.recommended,
   eslintPluginReact.configs.flat['jsx-runtime'],

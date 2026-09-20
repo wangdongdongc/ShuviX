@@ -22,6 +22,7 @@ import { join } from 'node:path'
 const mocks = vi.hoisted(() => ({
   daoInsert: vi.fn(),
   daoDeleteById: vi.fn(),
+  daoDeleteDayPrompts: vi.fn(),
   daoPick: vi.fn<(id: string, cols: string[]) => unknown>(),
   daoFindChildren: vi.fn<(id: string) => Array<{ id: string }>>(),
   findByKey: vi.fn(),
@@ -43,6 +44,9 @@ vi.mock('../../dao/sessionDao', () => ({
     updateTitle: vi.fn(),
     updateSettings: vi.fn()
   }
+}))
+vi.mock('../../dao/sessionDayPromptDao', () => ({
+  sessionDayPromptDao: { deleteBySessionId: mocks.daoDeleteDayPrompts }
 }))
 vi.mock('../../dao/httpLogDao', () => ({ httpLogDao: { deleteBySessionId: vi.fn() } }))
 vi.mock('../../dao/providerDao', () => ({ providerDao: {} }))
@@ -186,6 +190,13 @@ describe('delete —— 递归删子会话', () => {
     // 子会话不是「顺手删一行」：它们各自走了完整的清理链
     expect(mocks.killBySession.mock.calls.map((c) => c[0])).toEqual(['c1', 'c2', 'P'])
     expect(mocks.messageClear.mock.calls.map((c) => c[0])).toEqual(['c1', 'c2', 'P'])
+    // 日历索引：删父时子先清、各自 deleteBySessionId，且都在对应 deleteById 之前
+    expect(mocks.daoDeleteDayPrompts.mock.calls.map((c) => c[0])).toEqual(['c1', 'c2', 'P'])
+    const dayOrder = mocks.daoDeleteDayPrompts.mock.invocationCallOrder
+    const idOrder = mocks.daoDeleteById.mock.invocationCallOrder
+    expect(dayOrder[0]).toBeLessThan(idOrder[0])
+    expect(dayOrder[1]).toBeLessThan(idOrder[1])
+    expect(dayOrder[2]).toBeLessThan(idOrder[2])
   })
 
   it('删子会话本身不牵连父级（只往下走，不往上走）', async () => {

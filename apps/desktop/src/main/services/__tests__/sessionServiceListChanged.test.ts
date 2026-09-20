@@ -14,6 +14,7 @@ import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest'
 const mocks = vi.hoisted(() => ({
   daoInsert: vi.fn(),
   daoDeleteById: vi.fn(),
+  daoDeleteDayPrompts: vi.fn(),
   daoUpdateProjectId: vi.fn(),
   daoUpdateTitle: vi.fn(),
   daoUpdateSettings: vi.fn(),
@@ -34,6 +35,9 @@ vi.mock('../../dao/sessionDao', () => ({
     findChildren: () => [],
     pick: () => undefined
   }
+}))
+vi.mock('../../dao/sessionDayPromptDao', () => ({
+  sessionDayPromptDao: { deleteBySessionId: mocks.daoDeleteDayPrompts }
 }))
 vi.mock('../../dao/httpLogDao', () => ({ httpLogDao: { deleteBySessionId: vi.fn() } }))
 vi.mock('../../dao/providerDao', () => ({ providerDao: {} }))
@@ -83,6 +87,7 @@ beforeEach(() => {
   // 顺序断言：dao 写入与广播共用一本流水账
   mocks.daoInsert.mockImplementation(() => mocks.calls.push('insert'))
   mocks.daoDeleteById.mockImplementation(() => mocks.calls.push('deleteById'))
+  mocks.daoDeleteDayPrompts.mockImplementation(() => mocks.calls.push('deleteDayPrompts'))
   mocks.daoUpdateProjectId.mockImplementation(() => mocks.calls.push('updateProjectId'))
   mocks.broadcastListChanged.mockImplementation(() => mocks.calls.push('broadcast'))
 })
@@ -97,10 +102,12 @@ describe('session.listChanged 广播', () => {
     expect(mocks.calls).toEqual(['insert', 'broadcast'])
   })
 
-  it('delete：deleteById 之后广播一次', async () => {
+  it('delete：清日历索引后 deleteById，再广播一次', async () => {
     await sessionService.delete('s1')
     expect(mocks.broadcastListChanged).toHaveBeenCalledTimes(1)
+    expect(mocks.calls.indexOf('deleteDayPrompts')).toBeLessThan(mocks.calls.indexOf('deleteById'))
     expect(mocks.calls.indexOf('deleteById')).toBeLessThan(mocks.calls.indexOf('broadcast'))
+    expect(mocks.daoDeleteDayPrompts).toHaveBeenCalledWith('s1')
   })
 
   it('updateProjectId：移动项目也是列表分组变化 → 广播', () => {

@@ -2,6 +2,7 @@ import { v7 as uuidv7 } from 'uuid'
 import { join, basename } from 'path'
 import { rmSync, existsSync } from 'fs'
 import { sessionDao } from '../dao/sessionDao'
+import { sessionDayPromptDao } from '../dao/sessionDayPromptDao'
 import { messageService } from './messageService'
 import { readSessionRunConfig, addSessionTreePin, appendModelChange } from './sessionStorage'
 import { httpLogDao } from '../dao/httpLogDao'
@@ -378,21 +379,18 @@ export class SessionService {
   updateTitle(id: string, title: string, origin: 'user' | 'auto' = 'user'): void {
     sessionDao.updateTitle(id, title)
     sessionDao.updateSettings(id, { titleOrigin: origin })
-    if (origin === 'user') sessionDao.touchActive(id)
     if (origin === 'auto') broadcastSessionTitleChanged(id, title)
   }
 
   /** 更新会话所属项目 */
   updateProjectId(id: string, projectId: string | null): void {
     sessionDao.updateProjectId(id, projectId)
-    sessionDao.touchActive(id)
     broadcastSessionListChanged()
   }
 
   /** 更新命令免询问（bash + ssh 统一开关） */
   updateAutoAllow(id: string, autoAllow: boolean): void {
     sessionDao.updateSettings(id, { autoAllow })
-    sessionDao.touchActive(id)
   }
 
   /**
@@ -411,7 +409,6 @@ export class SessionService {
       return false
     }
     sessionDao.updateSettings(id, { enabledTools: sessionScopedTools(enabledTools) })
-    sessionDao.touchActive(id)
     broadcastSessionConfigChanged(id)
     return true
   }
@@ -426,7 +423,6 @@ export class SessionService {
     if (!sessionDao.pick(id, ['id'])) return false
     const names = [...new Set(knowledgeBases.map((n) => n.trim()).filter(Boolean))]
     sessionDao.updateSettings(id, { knowledgeBases: names })
-    sessionDao.touchActive(id)
     broadcastSessionConfigChanged(id)
     return true
   }
@@ -442,7 +438,6 @@ export class SessionService {
     const newEntries = prefixed.filter((p) => !list.includes(p))
     if (newEntries.length > 0) {
       sessionDao.updateSettings(id, { allowList: [...list, ...newEntries] })
-      sessionDao.touchActive(id)
       log.info(`addAllowListPaths session=${id} ${toolType} +${newEntries.length}`)
       broadcastSessionConfigChanged(id)
     }
@@ -453,7 +448,6 @@ export class SessionService {
     const sess = sessionDao.pickSettings(id, ['allowList'])
     const list = (sess?.allowList || []).filter((e) => e !== entry)
     sessionDao.updateSettings(id, { allowList: list })
-    sessionDao.touchActive(id)
     broadcastSessionConfigChanged(id)
   }
 
@@ -480,6 +474,8 @@ export class SessionService {
     // 再清理持久化数据
     messageService.clear(id)
     httpLogDao.deleteBySessionId(id)
+    // 未开 PRAGMA foreign_keys，session_day_prompts 的 ON DELETE CASCADE 不会触发
+    sessionDayPromptDao.deleteBySessionId(id)
     sessionDao.deleteById(id)
     broadcastSessionListChanged()
     // 清理临时会话工作目录

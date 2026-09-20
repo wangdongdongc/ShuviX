@@ -34,6 +34,9 @@ vi.mock('../../dao/sessionDao', () => ({
     deleteById: vi.fn()
   }
 }))
+vi.mock('../../dao/sessionDayPromptDao', () => ({
+  sessionDayPromptDao: { deleteBySessionId: vi.fn() }
+}))
 vi.mock('../../dao/httpLogDao', () => ({ httpLogDao: { deleteBySessionId: vi.fn() } }))
 vi.mock('../../dao/providerDao', () => ({ providerDao: {} }))
 // create 为项目会话读项目的扩展能力（继承进 settings.enabledTools）

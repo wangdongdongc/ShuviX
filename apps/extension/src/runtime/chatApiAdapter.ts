@@ -247,7 +247,6 @@ export const chatApiAdapter: ChatApi = {
     },
     updateTitle: async ({ id, title }) => {
       await sessionStore.updateTitle(id, title)
-      await sessionStore.touchActive(id)
       return ok
     },
     updateProject: async () => ok,
@@ -261,13 +260,11 @@ export const chatApiAdapter: ChatApi = {
     // autoAllow 仅落库（browser 询问门控已移除，扩展端暂无运行时消费者）
     updateAutoAllow: async ({ id, autoAllow }) => {
       await sessionStore.updateSettings(id, { autoAllow })
-      await sessionStore.touchActive(id)
       return ok
     },
     removeAllowListEntry: async ({ id, entry }) => {
       const cur = sessionStore.getSettingsSync(id).allowList ?? []
       await sessionStore.updateSettings(id, { allowList: cur.filter((e) => e !== entry) })
-      await sessionStore.touchActive(id)
       return ok
     },
     delete: async (id) => {

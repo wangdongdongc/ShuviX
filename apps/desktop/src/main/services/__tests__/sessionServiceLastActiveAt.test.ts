@@ -1,7 +1,8 @@
 /**
  * sessionService —— lastActiveAt（用户动手）与 updatedAt（账本）拆开。
  *
- * 新建时三者同刻；之后只有用户改标题 / 挪项目 / 改会话设置才 touchActive。
+ * 新建时三者同刻；之后改标题 / 挪项目 / 改会话设置都不再 touchActive
+ * （日历按 session_day_prompts，lastActiveAt 只在用户消息入账时写）。
  * 补键、自动标题、pinAgentProfile 不在这里 —— 见并列的 Title / EnabledTools / Pin 用例。
  */
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest'
@@ -10,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   daoInsert: vi.fn(),
   daoUpdateProjectId: vi.fn(),
   daoUpdateSettings: vi.fn(),
+  daoUpdateTitle: vi.fn(),
   daoPick: vi.fn(),
   daoPickSettings: vi.fn(),
   daoTouchActive: vi.fn(),
@@ -21,11 +23,15 @@ vi.mock('../../dao/sessionDao', () => ({
     insert: mocks.daoInsert,
     updateProjectId: mocks.daoUpdateProjectId,
     updateSettings: mocks.daoUpdateSettings,
+    updateTitle: mocks.daoUpdateTitle,
     pick: mocks.daoPick,
     pickSettings: mocks.daoPickSettings,
     touchActive: mocks.daoTouchActive,
     findChildren: () => []
   }
+}))
+vi.mock('../../dao/sessionDayPromptDao', () => ({
+  sessionDayPromptDao: { deleteBySessionId: vi.fn() }
 }))
 vi.mock('../../dao/httpLogDao', () => ({ httpLogDao: {} }))
 vi.mock('../../dao/providerDao', () => ({ providerDao: {} }))
@@ -87,18 +93,26 @@ describe('lastActiveAt', () => {
     expect(row.updatedAt).toBe(row.createdAt)
   })
 
-  it('updateProjectId / updateAutoAllow / addAllowListPaths / removeAllowListEntry 都 touchActive', () => {
+  it('updateProjectId / updateAutoAllow / addAllowListPaths / removeAllowListEntry 不 touchActive', () => {
     sessionService.updateProjectId('s1', 'p2')
     sessionService.updateAutoAllow('s1', true)
     sessionService.addAllowListPaths('s1', 'read', ['/a'])
     sessionService.removeAllowListEntry('s1', 'Read(/a)')
-    expect(mocks.daoTouchActive.mock.calls.map((c) => c[0])).toEqual(['s1', 's1', 's1', 's1'])
+    expect(mocks.daoTouchActive).not.toHaveBeenCalled()
   })
 
   it('addAllowListPaths 没有新条目时不 touchActive', () => {
     mocks.daoPickSettings.mockReturnValue({ allowList: ['Read(/a)'] })
     sessionService.addAllowListPaths('s1', 'read', ['/a'])
     expect(mocks.daoUpdateSettings).not.toHaveBeenCalled()
+    expect(mocks.daoTouchActive).not.toHaveBeenCalled()
+  })
+
+  it('updateTitle / updateEnabledTools / updateKnowledgeBases 不 touchActive', () => {
+    sessionService.updateTitle('s1', 'Renamed')
+    expect(mocks.daoUpdateTitle).toHaveBeenCalledWith('s1', 'Renamed')
+    expect(sessionService.updateEnabledTools('s1', ['skill:a'])).toBe(true)
+    expect(sessionService.updateKnowledgeBases('s1', ['notes'])).toBe(true)
     expect(mocks.daoTouchActive).not.toHaveBeenCalled()
   })
 })

@@ -105,7 +105,7 @@ export interface Session {
   /** 账本时间：改 title / projectId / settings 就 bump。日历和侧栏不读它。 */
   updatedAt: number
   /**
-   * 用户在这条会话上动过手的时间。日历按它落日，侧栏按它倒序。
+   * 用户在这条会话上动过手的时间。侧栏按它倒序；扩展日历单日落点；桌面日历不读它。
    * 缺省时读侧把 updatedAt 当回落（扩展 IndexedDB 旧行）。
    */
   lastActiveAt: number
@@ -217,6 +217,12 @@ interface ChatState {
     inlineTokens?: Record<string, InlineToken>
     nonce: number
   } | null
+  /**
+   * 请求滚到某条消息（日历点进某天会话：当天第一条用户消息）。
+   * 消费方：Conversation 等消息列表渲染后再 querySelector `[data-msg-id]`。
+   * 含 nonce 以便重复点同一条也能触发。entry 不在当前上下文（被 moveTo 切掉）时滚动失败就停顶部。
+   */
+  scrollToMessageRequest: { sessionId: string; messageId: string; nonce: number } | null
   /** 当前会话的消息列表 */
   messages: ChatMessage[]
   /** 各 session 的流式状态（按 sessionId 隔离） */
@@ -312,6 +318,10 @@ interface ChatState {
   /** 请求把历史用户消息重建为输入框草稿（消息回退触发）；由 InputArea 消费后 clear */
   requestDraftRestore: (content: string, inlineTokens?: Record<string, InlineToken>) => void
   clearDraftRestore: () => void
+  /** 请求滚到某条消息（日历点进某天）；Conversation 等消息列表渲染后消费 */
+  requestScrollToMessage: (sessionId: string, messageId: string) => void
+  /** 滚完或目标不在当前上下文后清掉，避免 visibleItems 再变时把用户弹回去 */
+  clearScrollToMessage: () => void
   setMessages: (messages: ChatMessage[]) => void
   addMessage: (message: ChatMessage) => void
   removeMessage: (id: string) => void
@@ -359,7 +369,7 @@ interface ChatState {
   updateSessionTitle: (id: string, title: string) => void
   updateSessionProject: (id: string, projectId: string | null) => void
   updateSessionSettings: (id: string, patch: Partial<SessionSettings>) => void
-  /** 用户动手：把该条 lastActiveAt 提到现在并按活动时间重排（侧栏上浮、日历归今天） */
+  /** 用户动手：把该条 lastActiveAt 提到现在并按活动时间重排（侧栏上浮）。发消息的乐观路径用。 */
   touchSessionActive: (id: string) => void
   removeSession: (id: string) => void
   setToolPresentations: (presentations: Record<string, ToolPresentation>) => void
@@ -417,7 +427,8 @@ interface ChatState {
 
 // ========== 派生选择器（UI 组件通过这些选择器从底层 map 读取当前活跃会话的状态） ==========
 
-/** 以本地时区按"YYYY-MM-DD"分组会话；用 lastActiveAt（用户动手时间）作为落点。
+/** 以本地时区按"YYYY-MM-DD"分组会话；用 lastActiveAt 作为单日落点。
+ *  扩展日历仍走这条路；桌面日历改读 session_day_prompts。
  *  不是 zustand selector——每次调用都返回新 Map，需在组件内用 useMemo 包裹。 */
 export const groupSessionsByDay = (sessions: Session[]): Map<string, Session[]> => {
   const map = new Map<string, Session[]>()
@@ -598,6 +609,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   filePreviewRequest: null,
   taskRevealRequest: null,
   draftRestoreRequest: null,
+  scrollToMessageRequest: null,
   messages: [],
   sessionStreams: {},
   sessionClosing: {},
@@ -657,6 +669,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
         nonce: (state.draftRestoreRequest?.nonce ?? 0) + 1
       }
     })),
+  requestScrollToMessage: (sessionId, messageId) =>
+    set((state) => ({
+      scrollToMessageRequest: {
+        sessionId,
+        messageId,
+        nonce: (state.scrollToMessageRequest?.nonce ?? 0) + 1
+      }
+    })),
+  clearScrollToMessage: () => set({ scrollToMessageRequest: null }),
   clearDraftRestore: () => set({ draftRestoreRequest: null }),
   setMessages: (messages) => set({ messages }),
   addMessage: (message) =>

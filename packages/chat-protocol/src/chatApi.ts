@@ -118,8 +118,9 @@ export interface Session {
   /** 账本时间：改 title / projectId / settings 就 bump。日历和侧栏不读它。 */
   updatedAt: number
   /**
-   * 用户在这条会话上动过手的时间（毫秒）。新建时 = createdAt；发消息、用户改标题、
-   * 挪项目、改会话设置时写。点开、补键、自动标题不算。日历按它落日，侧栏按它倒序。
+   * 用户在这条会话上动过手的时间（毫秒）。新建时 = createdAt；之后只在发消息时写。
+   * 点开、改标题、挪项目、改会话设置、补键、自动标题不算。侧栏按它倒序。
+   * 桌面日历按 session_day_prompts 落日，不再按这一列；扩展日历仍按它单日落点。
    */
   lastActiveAt: number
 }
@@ -683,6 +684,18 @@ export interface HostApi {
    */
   knowledge?: {
     baseOptions: (params: { sessionId?: string }) => Promise<KnowledgeBaseOptionsResult>
+  }
+  /**
+   * 桌面日历（按 session_day_prompts：同一会话可出现在多个开口日）。
+   * 扩展不实现 —— CalendarView 扩展路径继续本地 groupSessionsByDay，不调用这里。
+   */
+  calendar?: {
+    /** 可见月里有过开口的本地日（YYYY-MM-DD[]）。`month` 为 1–12。 */
+    daysInMonth: (params: { year: number; month: number }) => Promise<string[]>
+    /** 当天出现过的会话（隐藏项目已过滤） */
+    sessionsOnDay: (params: { day: string }) => Promise<Session[]>
+    /** 当天 timestamp 最小的用户消息 entryId；没有则 null */
+    firstEntryOnDay: (params: { sessionId: string; day: string }) => Promise<string | null>
   }
   session: {
     list: () => Promise<Session[]>

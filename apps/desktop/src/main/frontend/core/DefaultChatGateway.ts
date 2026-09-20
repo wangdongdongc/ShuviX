@@ -36,8 +36,8 @@ export class DefaultChatGateway implements ChatGateway {
     images?: Array<{ type: 'image'; data: string; mimeType: string }>,
     inlineTokens?: Record<string, InlineToken>
   ): Promise<{ error?: string }> {
-    // 用户发消息 = 动手。steer/followUp/nextTurn 不另 bump：消息已在 prompt 时入队。
-    sessionDao.touchActive(sessionId)
+    // lastActiveAt 在用户消息真正落树并广播 user_message 时入账（electronEventSink），
+    // 不在这里 bump：ensure 失败不会落树，却会误记一天。
     // 首次发送消息时才创建 Agent（打开会话/笔记本不创建）
     const session = await sessionService.ensureAgentSession(sessionId)
     if (!session) {

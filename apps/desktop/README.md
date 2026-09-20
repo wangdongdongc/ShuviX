@@ -74,6 +74,9 @@ npm install
 
 # 启动开发服务器
 npm run dev
+
+# 一次性回填日历开口日索引（v26 空表；可重复跑）
+node apps/desktop/scripts/backfill-session-day-prompts.mjs
 ```
 
 ## 📦 构建

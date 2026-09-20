@@ -48,6 +48,9 @@ vi.mock('../../dao/sessionDao', () => ({
     touchActive: mocks.daoTouchActive
   }
 }))
+vi.mock('../../dao/sessionDayPromptDao', () => ({
+  sessionDayPromptDao: { deleteBySessionId: vi.fn() }
+}))
 vi.mock('../../dao/httpLogDao', () => ({ httpLogDao: { deleteBySessionId: vi.fn() } }))
 vi.mock('../../dao/providerDao', () => ({
   providerDao: {
@@ -287,7 +290,7 @@ describe('SKB-3 / 4 / 5 写入口 updateKnowledgeBases', () => {
     expect(sessions.get(SID)!.settings.knowledgeBases).toEqual(['notes', 'gone', 'project'])
     expect(mocks.broadcastSessionConfigChanged.mock.calls).toEqual([[SID]])
     expect(mocks.filterAvailableTools).not.toHaveBeenCalled()
-    expect(mocks.daoTouchActive).toHaveBeenCalledWith(SID)
+    expect(mocks.daoTouchActive).not.toHaveBeenCalled()
   })
 
   it('SKB-4 空数组照写（与缺键不是一回事）', () => {

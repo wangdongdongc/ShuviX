@@ -89,7 +89,7 @@ export class SessionDao extends BaseDao {
     )
   }
 
-  /** 更新标题和账本时间（updatedAt）。用户改名的活动时间由调用方 touchActive。 */
+  /** 更新标题和账本时间（updatedAt）。不 bump lastActiveAt。 */
   updateTitle(id: string, title: string): void {
     this.stmt('UPDATE sessions SET title = ?, updatedAt = ? WHERE id = ?').run(
       title,
@@ -98,7 +98,7 @@ export class SessionDao extends BaseDao {
     )
   }
 
-  /** 账本时间：只 bump updatedAt。用户动手走 touchActive。 */
+  /** 账本时间：只 bump updatedAt。lastActiveAt 只在用户消息入账时 touchActive。 */
   touch(id: string): void {
     this.stmt('UPDATE sessions SET updatedAt = ? WHERE id = ?').run(Date.now(), id)
   }
@@ -127,7 +127,7 @@ export class SessionDao extends BaseDao {
 
   /**
    * 更新会话级配置（patch 语义：仅更新传入的字段，其余保留）。
-   * 恒 bump updatedAt（账本）；不 bump lastActiveAt —— 用户动手由调用方 touchActive。
+   * 恒 bump updatedAt（账本）；不 bump lastActiveAt。
    */
   updateSettings(id: string, patch: SessionSettings): void {
     const { setClauses, values } = buildJsonPatch(patch as Record<string, unknown>)
@@ -159,7 +159,7 @@ export class SessionDao extends BaseDao {
     return rows.map(parseRow)
   }
 
-  /** 删除会话 */
+  /** 删除会话。日历索引行由 sessionService.delete 显式清（FK CASCADE 未开）。 */
   deleteById(id: string): void {
     this.stmt('DELETE FROM sessions WHERE id = ?').run(id)
   }

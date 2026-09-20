@@ -49,6 +49,9 @@ vi.mock('../../dao/sessionDao', () => ({
     touchActive: mocks.daoTouchActive
   }
 }))
+vi.mock('../../dao/sessionDayPromptDao', () => ({
+  sessionDayPromptDao: { deleteBySessionId: vi.fn() }
+}))
 vi.mock('../../dao/httpLogDao', () => ({ httpLogDao: { deleteBySessionId: vi.fn() } }))
 vi.mock('../../dao/providerDao', () => ({
   providerDao: {
@@ -424,7 +427,7 @@ describe('EXT-U-13 / 14 / 15 写入口 updateEnabledTools', () => {
     ).toBe(true)
     expect(writesTo(SID)).toEqual([[SID, { enabledTools: ['skill:a', 'mcp:b', 'skill:unknown'] }]])
     expect(mocks.broadcastSessionConfigChanged.mock.calls).toEqual([[SID]])
-    expect(mocks.daoTouchActive).toHaveBeenCalledWith(SID)
+    expect(mocks.daoTouchActive).not.toHaveBeenCalled()
 
     // 整份替换：空数组就是清空，不是「没意见」
     expect(sessionService.updateEnabledTools(SID, [])).toBe(true)

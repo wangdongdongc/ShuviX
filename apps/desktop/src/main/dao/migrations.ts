@@ -622,6 +622,30 @@ export const migrations: Migration[] = [
       db.exec(`ALTER TABLE sessions ADD COLUMN lastActiveAt INTEGER NOT NULL DEFAULT 0`)
       db.exec(`UPDATE sessions SET lastActiveAt = updatedAt WHERE lastActiveAt = 0`)
     }
+  },
+  {
+    version: 26,
+    description: 'session_day_prompts：按本地日索引用户开口，日历按天列出（不回填）',
+    up: (db) => {
+      // 同一会话可以出现在多个日历日上（那天真正发过用户消息）。
+      // day 按写入瞬间的本机本地 YYYY-MM-DD 落，事后不用 UTC 重算。
+      // 本迁移只建空表：存量 JSONL 用 scripts/backfill-session-day-prompts.mjs 一次性回填，
+      // 不进 CI、不在启动时跑。
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS session_day_prompts (
+          sessionId  TEXT    NOT NULL,
+          entryId    TEXT    NOT NULL,
+          day        TEXT    NOT NULL,
+          timestamp  INTEGER NOT NULL,
+          PRIMARY KEY (sessionId, entryId),
+          FOREIGN KEY (sessionId) REFERENCES sessions(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_session_day_prompts_day
+          ON session_day_prompts(day);
+        CREATE INDEX IF NOT EXISTS idx_session_day_prompts_session_day
+          ON session_day_prompts(sessionId, day);
+      `)
+    }
   }
 ]
 

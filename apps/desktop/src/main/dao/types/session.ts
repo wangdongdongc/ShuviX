@@ -83,9 +83,10 @@ export interface Session {
    */
   updatedAt: number
   /**
-   * 用户在这条会话上动过手的时间（毫秒）。新建时 = createdAt；之后只在发消息、
-   * 用户改标题、挪项目、改会话设置时写。点开、补键、自动标题、pinAgentProfile、
-   * bot 文件改名都不算。日历按它落日，侧栏按它倒序。
+   * 用户在这条会话上动过手的时间（毫秒）。新建时 = createdAt；之后只在用户消息
+   * 真正落树入账时写。点开、改标题、挪项目、改会话设置、补键、自动标题、
+   * pinAgentProfile、bot 文件改名都不算。侧栏按它倒序。桌面日历按
+   * session_day_prompts 落日，不再按这一列。
    */
   lastActiveAt: number
 }

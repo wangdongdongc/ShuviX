@@ -72,9 +72,7 @@ export function ChatHeader({
     const host = getHostApi()
     if (!host) return // 渠道端只读：不可改标题
     await host.session.updateTitle({ id: activeSessionId, title: trimmed })
-    const store = useChatStore.getState()
-    store.updateSessionTitle(activeSessionId, trimmed)
-    store.touchSessionActive(activeSessionId)
+    useChatStore.getState().updateSessionTitle(activeSessionId, trimmed)
   }
 
   return (

@@ -1,5 +1,5 @@
 import { useChatHost } from '@shuvix/chat-ui'
-import { useCallback, useMemo, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
 import {
@@ -83,6 +83,25 @@ export function Conversation({
     const last = messages[messages.length - 1]
     return last && isAssistantMessage(last) ? last.id : null
   }, [messages])
+
+  // 日历点进某天：等消息列表渲染后再滚到当天第一条用户消息。
+  // 列表仍空 → 保留 request，等 useSessionInit 载入。滚完或目标不在当前上下文 → 清掉，
+  // 免得 visibleItems 再变（流式/新消息）把用户弹回去。
+  const scrollToMessageRequest = useChatStore((s) => s.scrollToMessageRequest)
+  useEffect(() => {
+    if (!scrollToMessageRequest || scrollToMessageRequest.sessionId !== sessionId) return
+    if (visibleItems.length === 0) return
+    const messageId = scrollToMessageRequest.messageId
+    const index = visibleItems.findIndex(
+      (item) => item.msg.id === messageId || item.msgs?.some((m) => m.id === messageId)
+    )
+    const el = document.querySelector(`[data-msg-id=${JSON.stringify(messageId)}]`)
+    if (index >= 0 || el) {
+      if (index >= 0) virtuosoRef.current?.scrollToIndex({ index, align: 'start' })
+      if (el) el.scrollIntoView({ block: 'start' })
+    }
+    useChatStore.getState().clearScrollToMessage()
+  }, [scrollToMessageRequest, sessionId, visibleItems])
 
   /** 渲染单条可见消息 */
   const renderItem = useCallback(

@@ -33,9 +33,7 @@ export function SessionConfigDialog({
     const trimmed = title.trim()
     if (!trimmed || trimmed === session?.title) return
     await getChatApi().session.updateTitle({ id: sessionId, title: trimmed })
-    const store = useChatStore.getState()
-    store.updateSessionTitle(sessionId, trimmed)
-    store.touchSessionActive(sessionId)
+    useChatStore.getState().updateSessionTitle(sessionId, trimmed)
   }
 
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)

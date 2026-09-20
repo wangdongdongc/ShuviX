@@ -86,4 +86,8 @@ describe('扩展端没有会话级扩展能力', () => {
     )
     expect(extensionItems).toEqual([])
   })
+
+  it('无 calendar 命名空间（扩展日历继续本地 groupSessionsByDay）', () => {
+    expect(chatApiAdapter).not.toHaveProperty('calendar')
+  })
 })

@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
-import { getChatApi, type Session } from '@shuvix/chat-ui'
+import { getChatApi, useChatStore, groupSessionsByDay, type Session } from '@shuvix/chat-ui'
+import { isHiddenProjectId } from '@shuvix/chat-protocol/hiddenProjects'
 import {
   Sidebar,
   ProjectConfigDialog,
@@ -13,6 +14,10 @@ import {
   type SidebarViewMode
 } from '@shuvix/app-shell'
 import { projectStore } from '../storage/projectStore'
+
+function dayKey(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
 
 /**
  * 扩展侧栏 —— 薄封装共享 <Sidebar>，仅注入扩展专属行为：
@@ -37,6 +42,22 @@ export function ExtSidebar({
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null)
   const [viewMode, setViewMode] = useState<SidebarViewMode>('projects')
   const [calendarCollapsed, setCalendarCollapsed] = useState<Set<string>>(() => new Set())
+  const [calendarSelected, setCalendarSelected] = useState<Date>(() => new Date())
+  const [calendarMonth, setCalendarMonth] = useState<Date>(() => new Date())
+  const sessions = useChatStore((s) => s.sessions)
+  const sessionsByDay = useMemo(
+    () => groupSessionsByDay(sessions.filter((s) => !isHiddenProjectId(s.projectId))),
+    [sessions]
+  )
+  const daysWithSessions = useMemo(() => {
+    const arr: Date[] = []
+    for (const key of sessionsByDay.keys()) {
+      const [y, m, d] = key.split('-').map(Number)
+      arr.push(new Date(y, m - 1, d))
+    }
+    return arr
+  }, [sessionsByDay])
+  const calendarDaySessions = sessionsByDay.get(dayKey(calendarSelected)) ?? []
 
   /** 打开文件夹 → 建项目 → 在该项目下新建会话（项目列表经 project.changed 自动刷新） */
   const openFolder = async (): Promise<void> => {
@@ -70,6 +91,12 @@ export function ExtSidebar({
         viewMode === 'calendar' ? (
           <CalendarView
             width={width}
+            daysWithSessions={daysWithSessions}
+            daySessions={calendarDaySessions}
+            selected={calendarSelected}
+            onSelect={setCalendarSelected}
+            month={calendarMonth}
+            onMonthChange={setCalendarMonth}
             renderGroupedSessionsForDay={(daySessions: Session[]) => (
               <ProjectSessionGroups
                 projects={projects}
