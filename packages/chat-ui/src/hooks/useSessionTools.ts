@@ -71,7 +71,8 @@ export function useSessionTools(sessionId: string | null): SessionToolsState {
         id: sessionId,
         enabledTools: next
       })
-      if (!success) await refreshSessionTools(sessionId)
+      if (success) store.touchSessionActive(sessionId)
+      else await refreshSessionTools(sessionId)
     },
     [sessionId]
   )

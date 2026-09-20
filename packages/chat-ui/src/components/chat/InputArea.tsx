@@ -344,6 +344,7 @@ export function InputArea({
     store.clearStreamingContent(sid)
     // 乐观占位：用户消息要等后端落库才经 user_message 回来，而创建运行时（含 MCP 惰性连接）
     // 可能要几秒 —— 输入框已清空、列表里却没这句话，像是消息丢了。先顶上，落库即换成真的
+    store.touchSessionActive(sid)
     store.setPendingPrompt(
       sid,
       pendingPromptMessage(sid, outgoing.contentText, {

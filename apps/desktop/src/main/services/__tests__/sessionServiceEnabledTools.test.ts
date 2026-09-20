@@ -31,7 +31,8 @@ const mocks = vi.hoisted(() => ({
   filterAvailableTools: vi.fn<(tools: string[], projectPath?: string) => string[]>(),
   agentCreate: vi.fn<(params: { sessionId: string; enabledTools: string[] }) => Promise<unknown>>(),
   broadcast: vi.fn<(event: Record<string, unknown>) => void>(),
-  broadcastSessionConfigChanged: vi.fn<(sessionId: string) => void>()
+  broadcastSessionConfigChanged: vi.fn<(sessionId: string) => void>(),
+  daoTouchActive: vi.fn<(id: string) => void>()
 }))
 
 vi.mock('../../dao/sessionDao', () => ({
@@ -44,7 +45,8 @@ vi.mock('../../dao/sessionDao', () => ({
     deleteById: vi.fn(),
     findChildren: vi.fn(() => []),
     updateProjectId: vi.fn(),
-    updateTitle: vi.fn()
+    updateTitle: vi.fn(),
+    touchActive: mocks.daoTouchActive
   }
 }))
 vi.mock('../../dao/httpLogDao', () => ({ httpLogDao: { deleteBySessionId: vi.fn() } }))
@@ -104,6 +106,7 @@ interface MemSession {
   settings: Record<string, unknown>
   createdAt: number
   updatedAt: number
+  lastActiveAt: number
 }
 
 interface MemProject {
@@ -135,7 +138,8 @@ function seedSession(row: {
     parentId: row.parentId ?? null,
     settings: row.settings ?? {},
     createdAt: 0,
-    updatedAt: 0
+    updatedAt: 0,
+    lastActiveAt: 0
   })
 }
 
@@ -299,6 +303,8 @@ describe('EXT-U-11 缺键的旧根会话：首次解析按同一条规则补一�
     const first = await sessionService.initAgent(SID)
     expect(writesTo(SID)).toEqual([[SID, { enabledTools: ['skill:x'] }]])
     expect(first.enabledTools).toEqual(['skill:x'])
+    // 补键 bump updatedAt（DAO updateSettings），不算用户动手
+    expect(mocks.daoTouchActive).not.toHaveBeenCalled()
 
     // 补上之后就是一份快照：项目配置的后续修改不再波及这条会话
     projects.get('p1')!.settings = { enabledTools: ['mcp:y'] }
@@ -418,6 +424,7 @@ describe('EXT-U-13 / 14 / 15 写入口 updateEnabledTools', () => {
     ).toBe(true)
     expect(writesTo(SID)).toEqual([[SID, { enabledTools: ['skill:a', 'mcp:b', 'skill:unknown'] }]])
     expect(mocks.broadcastSessionConfigChanged.mock.calls).toEqual([[SID]])
+    expect(mocks.daoTouchActive).toHaveBeenCalledWith(SID)
 
     // 整份替换：空数组就是清空，不是「没意见」
     expect(sessionService.updateEnabledTools(SID, [])).toBe(true)
@@ -451,6 +458,7 @@ describe('EXT-U-13 / 14 / 15 写入口 updateEnabledTools', () => {
     expect((await sessionService.initAgent(SID)).created).toBe(true)
     expect(mocks.daoUpdateSettings).not.toHaveBeenCalled()
     expect(mocks.broadcastSessionConfigChanged).not.toHaveBeenCalled()
+    expect(mocks.daoTouchActive).not.toHaveBeenCalled()
 
     // ③ 关停完毕：重新可改（下一个运行时创建时读）
     closed.resolve()

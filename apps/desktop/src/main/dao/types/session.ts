@@ -77,5 +77,15 @@ export interface Session {
   /** 会话级配置（SSH 免询问等） */
   settings: SessionSettings
   createdAt: number
+  /**
+   * 账本时间：任何改 title / projectId / settings 的 DAO 写入都 bump
+   * （含旧会话补 `enabledTools` 键）。不是「最后活跃」——日历和侧栏不读它。
+   */
   updatedAt: number
+  /**
+   * 用户在这条会话上动过手的时间（毫秒）。新建时 = createdAt；之后只在发消息、
+   * 用户改标题、挪项目、改会话设置时写。点开、补键、自动标题、pinAgentProfile、
+   * bot 文件改名都不算。日历按它落日，侧栏按它倒序。
+   */
+  lastActiveAt: number
 }

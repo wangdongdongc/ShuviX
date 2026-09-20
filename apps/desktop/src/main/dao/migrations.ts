@@ -609,6 +609,19 @@ export const migrations: Migration[] = [
       // url 里的 `{{TAVILY_API_KEY}}` 模板对自定义 server 一样生效，所以它照常能用。
       db.exec(`UPDATE mcp_servers SET isBuiltin = 0 WHERE id = 'builtin-mcp-tavily'`)
     }
+  },
+  {
+    version: 25,
+    description: 'sessions.lastActiveAt：用户动手时间，与账本 updatedAt 拆开',
+    up: (db) => {
+      // 日历 / 侧栏原先把 updatedAt 当成「最后活跃」。updatedAt 是账本时间（改 title /
+      // settings 就 bump），打开旧会话补 enabledTools 键也会把它刷成今天。
+      // lastActiveAt 才是「用户在这条会话上动过手」；打开、补键、自动标题都不算。
+      // 回填用当前 updatedAt 是有损的（今天被补键刷过的会暂时仍停在今天），接受；
+      // 不读 JSONL 消息。
+      db.exec(`ALTER TABLE sessions ADD COLUMN lastActiveAt INTEGER NOT NULL DEFAULT 0`)
+      db.exec(`UPDATE sessions SET lastActiveAt = updatedAt WHERE lastActiveAt = 0`)
+    }
   }
 ]
 

@@ -31,11 +31,16 @@ const mocks = vi.hoisted(() => ({
   getProfile: vi.fn<(name: string) => unknown>(),
   resolveProfileModelSpec: vi.fn(),
   appendModelChange: vi.fn(),
-  broadcastSessionConfigChanged: vi.fn()
+  broadcastSessionConfigChanged: vi.fn(),
+  daoTouchActive: vi.fn()
 }))
 
 vi.mock('../../dao/sessionDao', () => ({
-  sessionDao: { pick: mocks.daoPick, updateSettings: mocks.daoUpdateSettings }
+  sessionDao: {
+    pick: mocks.daoPick,
+    updateSettings: mocks.daoUpdateSettings,
+    touchActive: mocks.daoTouchActive
+  }
 }))
 vi.mock('../../dao/httpLogDao', () => ({ httpLogDao: {} }))
 vi.mock('../../dao/providerDao', () => ({ providerDao: {} }))
@@ -116,6 +121,7 @@ function expectNoSideEffects(): void {
   expect(mocks.appendModelChange).not.toHaveBeenCalled()
   expect(mocks.broadcastSessionConfigChanged).not.toHaveBeenCalled()
   expect(mocks.resolveProfileModelSpec).not.toHaveBeenCalled()
+  expect(mocks.daoTouchActive).not.toHaveBeenCalled()
 }
 
 describe('准入 —— 三种拒绝，都零副作用', () => {
@@ -182,6 +188,8 @@ describe('成功链', () => {
     ])
     expect(invalidateSpy).toHaveBeenCalledWith(SID)
     expect(mocks.broadcastSessionConfigChanged).toHaveBeenCalledWith(SID)
+    // 钉档案不是用户在这条会话上点选
+    expect(mocks.daoTouchActive).not.toHaveBeenCalled()
     // 未声明模型：压根不去解析
     expect(mocks.resolveProfileModelSpec).not.toHaveBeenCalled()
 

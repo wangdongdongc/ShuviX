@@ -102,6 +102,7 @@ export function useChatActions(activeSessionId: string | null): UseChatActionsRe
       // 重新发送（后端统一持久化用户消息）；透传原消息的内联 Token，
       // 否则含 {{shuvixInlineToken}} 标记的消息会以裸标记发给 LLM 且新落库消息丢失 metadata
       // 回退把那条用户消息从列表里拿掉了，重发又要等后端落库才回来 —— 先用乐观占位顶上
+      store.touchSessionActive(activeSessionId)
       store.setPendingPrompt(
         activeSessionId,
         pendingPromptMessage(activeSessionId, lastUserText, { inlineTokens: lastUserTokens })

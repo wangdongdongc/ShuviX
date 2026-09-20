@@ -35,7 +35,8 @@ const seedSession = (): Session => ({
   parentId: null,
   settings: { autoAllow: true, enabledTools: ['skill:old'] },
   createdAt: 0,
-  updatedAt: 0
+  updatedAt: 0,
+  lastActiveAt: 0
 })
 
 const settingsOf = (id: string): SessionSettings | undefined =>

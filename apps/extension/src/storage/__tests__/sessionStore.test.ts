@@ -8,7 +8,7 @@
  * mock：`./idb`（IndexedDB）与 `./opfsWorkspace`（OPFS）在 node 下不存在，整模块顶掉；
  * 存储层只剩内存缓存，create 的返回值就是它写进去的那一行。
  */
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('../idb', () => ({
   idb: { getAll: async () => [], put: async () => {}, delete: async () => {} }
@@ -18,6 +18,14 @@ vi.mock('../opfsWorkspace', () => ({ deleteTempWorkspace: async () => {} }))
 import { sessionStore } from '../sessionStore'
 
 describe('sessionStore.create —— settings 不带 agentProfile', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(1_000)
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
   it('EXT-6 普通会话 settings 恰为 {}；项目会话同样；笔记本会话恰为 { notebookPath }', async () => {
     const plain = await sessionStore.create({ provider: 'p', model: 'm' })
     expect(plain.settings).toEqual({})
@@ -42,5 +50,24 @@ describe('sessionStore.create —— settings 不带 agentProfile', () => {
     // 扩展没有 session 工具，也就没有「父级点名档案」这条唯一的写戳入口
     const s = await sessionStore.create({ provider: 'p', model: 'm' })
     expect(s.parentId).toBeNull()
+  })
+
+  it('create 写入 lastActiveAt === createdAt === updatedAt', async () => {
+    const s = await sessionStore.create({ provider: 'p', model: 'm' })
+    expect(s.lastActiveAt).toBe(s.createdAt)
+    expect(s.updatedAt).toBe(s.createdAt)
+  })
+
+  it('list 按 lastActiveAt 倒序', async () => {
+    const older = await sessionStore.create({ provider: 'p', model: 'm', title: 'older' })
+    vi.setSystemTime(2_000)
+    const newer = await sessionStore.create({ provider: 'p', model: 'm', title: 'newer' })
+    vi.setSystemTime(3_000)
+    await sessionStore.touchActive(older.id)
+    const listed = await sessionStore.list()
+    const iOlder = listed.findIndex((s) => s.id === older.id)
+    const iNewer = listed.findIndex((s) => s.id === newer.id)
+    expect(listed[iOlder]!.lastActiveAt).toBeGreaterThan(listed[iNewer]!.lastActiveAt)
+    expect(iOlder).toBeLessThan(iNewer)
   })
 })

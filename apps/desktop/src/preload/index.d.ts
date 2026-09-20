@@ -311,6 +311,7 @@ declare global {
     settings: SessionSettings
     createdAt: number
     updatedAt: number
+    lastActiveAt: number
   }
 
   /** 会话完整信息（含计算属性） */

@@ -96,7 +96,8 @@ function session(shape: {
     parentId: null,
     settings: shape.settings ?? {},
     createdAt: 0,
-    updatedAt: 0
+    updatedAt: 0,
+    lastActiveAt: 0
   })
   if (shape.folder) mocks.getHandle.mockReturnValue({ name: shape.folder })
 }

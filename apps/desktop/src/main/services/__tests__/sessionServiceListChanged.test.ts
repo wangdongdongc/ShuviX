@@ -29,6 +29,7 @@ vi.mock('../../dao/sessionDao', () => ({
     updateProjectId: mocks.daoUpdateProjectId,
     updateTitle: mocks.daoUpdateTitle,
     updateSettings: mocks.daoUpdateSettings,
+    touchActive: vi.fn(),
     // 删除先递归删子会话（本组用例都是无子会话的顶层会话）
     findChildren: () => [],
     pick: () => undefined

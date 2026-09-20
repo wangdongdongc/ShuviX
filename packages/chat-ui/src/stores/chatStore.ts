@@ -102,7 +102,13 @@ export interface Session {
   /** 会话级配置（SSH 免询问等） */
   settings: SessionSettings
   createdAt: number
+  /** 账本时间：改 title / projectId / settings 就 bump。日历和侧栏不读它。 */
   updatedAt: number
+  /**
+   * 用户在这条会话上动过手的时间。日历按它落日，侧栏按它倒序。
+   * 缺省时读侧把 updatedAt 当回落（扩展 IndexedDB 旧行）。
+   */
+  lastActiveAt: number
 }
 
 /** 每个 session 的流式状态 */
@@ -353,6 +359,8 @@ interface ChatState {
   updateSessionTitle: (id: string, title: string) => void
   updateSessionProject: (id: string, projectId: string | null) => void
   updateSessionSettings: (id: string, patch: Partial<SessionSettings>) => void
+  /** 用户动手：把该条 lastActiveAt 提到现在并按活动时间重排（侧栏上浮、日历归今天） */
+  touchSessionActive: (id: string) => void
   removeSession: (id: string) => void
   setToolPresentations: (presentations: Record<string, ToolPresentation>) => void
   setProjectPath: (path: string | null) => void
@@ -409,12 +417,12 @@ interface ChatState {
 
 // ========== 派生选择器（UI 组件通过这些选择器从底层 map 读取当前活跃会话的状态） ==========
 
-/** 以本地时区按"YYYY-MM-DD"分组会话；用 updatedAt（最后活跃时间）作为落点。
+/** 以本地时区按"YYYY-MM-DD"分组会话；用 lastActiveAt（用户动手时间）作为落点。
  *  不是 zustand selector——每次调用都返回新 Map，需在组件内用 useMemo 包裹。 */
 export const groupSessionsByDay = (sessions: Session[]): Map<string, Session[]> => {
   const map = new Map<string, Session[]>()
   for (const session of sessions) {
-    const d = new Date(session.updatedAt)
+    const d = new Date(session.lastActiveAt || session.updatedAt)
     const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
     const arr = map.get(key)
     if (arr) arr.push(session)
@@ -882,6 +890,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
         s.id === id ? { ...s, settings: { ...s.settings, ...patch } } : s
       )
     })),
+  touchSessionActive: (id) =>
+    set((state) => {
+      const now = Date.now()
+      const sessions = state.sessions.map((s) => (s.id === id ? { ...s, lastActiveAt: now } : s))
+      sessions.sort((a, b) => (b.lastActiveAt || b.updatedAt) - (a.lastActiveAt || a.updatedAt))
+      return { sessions }
+    }),
   removeSession: (id) =>
     set((state) => ({
       sessions: state.sessions.filter((s) => s.id !== id),

@@ -23,10 +23,14 @@ function persist(s: Session): void {
   void idb.put('sessions', s).catch((e) => console.error('[shuvix] persist session failed', e))
 }
 
+function lastActiveAtOf(s: Session): number {
+  return s.lastActiveAt || s.updatedAt || s.createdAt
+}
+
 export const sessionStore = {
   async list(): Promise<Session[]> {
     await ensureLoaded()
-    return [...cache.values()].sort((a, b) => b.updatedAt - a.updatedAt)
+    return [...cache.values()].sort((a, b) => lastActiveAtOf(b) - lastActiveAtOf(a))
   },
 
   async create(defaults: {
@@ -59,7 +63,8 @@ export const sessionStore = {
         ...(notebookPath ? { notebookPath } : {})
       },
       createdAt: now,
-      updatedAt: now
+      updatedAt: now,
+      lastActiveAt: now
     }
     persist(session)
     return session
@@ -94,6 +99,14 @@ export const sessionStore = {
     const s = cache.get(id)
     if (!s) return
     persist({ ...s, settings: { ...s.settings, ...patch }, updatedAt: Date.now() })
+  },
+
+  /** 用户动手。不 bump updatedAt。IndexedDB 旧行缺字段时一并补上。 */
+  async touchActive(id: string): Promise<void> {
+    await ensureLoaded()
+    const s = cache.get(id)
+    if (!s) return
+    persist({ ...s, lastActiveAt: Date.now() })
   },
 
   /** 同步读取会话 settings（运行时询问/注入需在工具执行链中直接取值，故走内存缓存） */

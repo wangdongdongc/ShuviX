@@ -250,7 +250,8 @@ export class SessionService {
         // 点名档案时由 subSessionRunner 经 pinAgentProfile 钉一个显式值。
       },
       createdAt: now,
-      updatedAt: now
+      updatedAt: now,
+      lastActiveAt: now
     }
     sessionDao.insert(session)
     broadcastSessionListChanged()
@@ -377,18 +378,21 @@ export class SessionService {
   updateTitle(id: string, title: string, origin: 'user' | 'auto' = 'user'): void {
     sessionDao.updateTitle(id, title)
     sessionDao.updateSettings(id, { titleOrigin: origin })
+    if (origin === 'user') sessionDao.touchActive(id)
     if (origin === 'auto') broadcastSessionTitleChanged(id, title)
   }
 
   /** 更新会话所属项目 */
   updateProjectId(id: string, projectId: string | null): void {
     sessionDao.updateProjectId(id, projectId)
+    sessionDao.touchActive(id)
     broadcastSessionListChanged()
   }
 
   /** 更新命令免询问（bash + ssh 统一开关） */
   updateAutoAllow(id: string, autoAllow: boolean): void {
     sessionDao.updateSettings(id, { autoAllow })
+    sessionDao.touchActive(id)
   }
 
   /**
@@ -407,6 +411,7 @@ export class SessionService {
       return false
     }
     sessionDao.updateSettings(id, { enabledTools: sessionScopedTools(enabledTools) })
+    sessionDao.touchActive(id)
     broadcastSessionConfigChanged(id)
     return true
   }
@@ -421,6 +426,7 @@ export class SessionService {
     if (!sessionDao.pick(id, ['id'])) return false
     const names = [...new Set(knowledgeBases.map((n) => n.trim()).filter(Boolean))]
     sessionDao.updateSettings(id, { knowledgeBases: names })
+    sessionDao.touchActive(id)
     broadcastSessionConfigChanged(id)
     return true
   }
@@ -436,6 +442,7 @@ export class SessionService {
     const newEntries = prefixed.filter((p) => !list.includes(p))
     if (newEntries.length > 0) {
       sessionDao.updateSettings(id, { allowList: [...list, ...newEntries] })
+      sessionDao.touchActive(id)
       log.info(`addAllowListPaths session=${id} ${toolType} +${newEntries.length}`)
       broadcastSessionConfigChanged(id)
     }
@@ -446,6 +453,7 @@ export class SessionService {
     const sess = sessionDao.pickSettings(id, ['allowList'])
     const list = (sess?.allowList || []).filter((e) => e !== entry)
     sessionDao.updateSettings(id, { allowList: list })
+    sessionDao.touchActive(id)
     broadcastSessionConfigChanged(id)
   }
 

@@ -136,7 +136,7 @@ export function ProjectSessionGroups({
       if (list) list.push(s)
       else map.set(s.parentId, [s])
     }
-    // 创建序：一组子会话每跑完一轮就按 updatedAt 重排会让人找不到刚才那条
+    // 创建序：一组子会话每跑完一轮就按 lastActiveAt 重排会让人找不到刚才那条
     for (const list of map.values()) list.sort((a, b) => a.createdAt - b.createdAt)
     return map
   }, [sessions])

@@ -23,9 +23,11 @@ function parseRow(row: SessionRow): Session {
  * Session DAO — 会话表的纯数据访问操作
  */
 export class SessionDao extends BaseDao {
-  /** 获取所有会话，按更新时间倒序 */
+  /** 获取所有会话，按用户最后动手时间倒序 */
   findAll(): Session[] {
-    const rows = this.stmt('SELECT * FROM sessions ORDER BY updatedAt DESC').all() as SessionRow[]
+    const rows = this.stmt(
+      'SELECT * FROM sessions ORDER BY lastActiveAt DESC'
+    ).all() as SessionRow[]
     return rows.map(parseRow)
   }
 
@@ -74,7 +76,7 @@ export class SessionDao extends BaseDao {
   /** 插入会话 */
   insert(session: Session): void {
     this.stmt(
-      'INSERT INTO sessions (id, title, projectId, parentId, settings, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?)'
+      'INSERT INTO sessions (id, title, projectId, parentId, settings, createdAt, updatedAt, lastActiveAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
     ).run(
       session.id,
       session.title,
@@ -82,11 +84,12 @@ export class SessionDao extends BaseDao {
       session.parentId,
       JSON.stringify(session.settings),
       session.createdAt,
-      session.updatedAt
+      session.updatedAt,
+      session.lastActiveAt
     )
   }
 
-  /** 更新标题和时间戳 */
+  /** 更新标题和账本时间（updatedAt）。用户改名的活动时间由调用方 touchActive。 */
   updateTitle(id: string, title: string): void {
     this.stmt('UPDATE sessions SET title = ?, updatedAt = ? WHERE id = ?').run(
       title,
@@ -95,9 +98,14 @@ export class SessionDao extends BaseDao {
     )
   }
 
-  /** 更新时间戳 */
+  /** 账本时间：只 bump updatedAt。用户动手走 touchActive。 */
   touch(id: string): void {
     this.stmt('UPDATE sessions SET updatedAt = ? WHERE id = ?').run(Date.now(), id)
+  }
+
+  /** 用户在这条会话上动手。不 bump updatedAt。 */
+  touchActive(id: string): void {
+    this.stmt('UPDATE sessions SET lastActiveAt = ? WHERE id = ?').run(Date.now(), id)
   }
 
   /** 更新会话所属项目 */
@@ -112,12 +120,15 @@ export class SessionDao extends BaseDao {
   /** 查找指定项目下的所有会话 */
   findByProjectId(projectId: string): Session[] {
     const rows = this.stmt(
-      'SELECT * FROM sessions WHERE projectId = ? ORDER BY updatedAt DESC'
+      'SELECT * FROM sessions WHERE projectId = ? ORDER BY lastActiveAt DESC'
     ).all(projectId) as SessionRow[]
     return rows.map(parseRow)
   }
 
-  /** 更新会话级配置（patch 语义：仅更新传入的字段，其余保留） */
+  /**
+   * 更新会话级配置（patch 语义：仅更新传入的字段，其余保留）。
+   * 恒 bump updatedAt（账本）；不 bump lastActiveAt —— 用户动手由调用方 touchActive。
+   */
   updateSettings(id: string, patch: SessionSettings): void {
     const { setClauses, values } = buildJsonPatch(patch as Record<string, unknown>)
     if (!setClauses) return
@@ -139,7 +150,7 @@ export class SessionDao extends BaseDao {
   /**
    * 某会话的直接子会话（创建序）。子会话只有一层，所以「直接子」就是全部后代。
    * 排序按 createdAt 升序：侧栏与工具的 list 都要求「先开的在上面」，
-   * 而 findAll 的 updatedAt 倒序会让一组子会话每跑一轮就重排一次。
+   * 而 findAll 的 lastActiveAt 倒序会让一组子会话每跑一轮就重排一次。
    */
   findChildren(parentId: string): Session[] {
     const rows = this.stmt('SELECT * FROM sessions WHERE parentId = ? ORDER BY createdAt ASC').all(

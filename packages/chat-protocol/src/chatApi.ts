@@ -115,7 +115,13 @@ export interface Session {
   parentId: string | null
   settings: SessionSettings
   createdAt: number
+  /** 账本时间：改 title / projectId / settings 就 bump。日历和侧栏不读它。 */
   updatedAt: number
+  /**
+   * 用户在这条会话上动过手的时间（毫秒）。新建时 = createdAt；发消息、用户改标题、
+   * 挪项目、改会话设置时写。点开、补键、自动标题不算。日历按它落日，侧栏按它倒序。
+   */
+  lastActiveAt: number
 }
 
 export interface SessionInfo extends Session {

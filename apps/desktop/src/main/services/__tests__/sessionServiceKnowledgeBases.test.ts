@@ -30,7 +30,8 @@ const mocks = vi.hoisted(() => ({
   filterAvailableTools: vi.fn<(tools: string[], projectPath?: string) => string[]>(),
   agentCreate: vi.fn<(params: { sessionId: string; enabledTools: string[] }) => Promise<unknown>>(),
   broadcast: vi.fn<(event: Record<string, unknown>) => void>(),
-  broadcastSessionConfigChanged: vi.fn<(sessionId: string) => void>()
+  broadcastSessionConfigChanged: vi.fn<(sessionId: string) => void>(),
+  daoTouchActive: vi.fn<(id: string) => void>()
 }))
 
 vi.mock('../../dao/sessionDao', () => ({
@@ -43,7 +44,8 @@ vi.mock('../../dao/sessionDao', () => ({
     deleteById: vi.fn(),
     findChildren: vi.fn(() => []),
     updateProjectId: vi.fn(),
-    updateTitle: vi.fn()
+    updateTitle: vi.fn(),
+    touchActive: mocks.daoTouchActive
   }
 }))
 vi.mock('../../dao/httpLogDao', () => ({ httpLogDao: { deleteBySessionId: vi.fn() } }))
@@ -103,6 +105,7 @@ interface MemSession {
   settings: Record<string, unknown>
   createdAt: number
   updatedAt: number
+  lastActiveAt: number
 }
 
 const sessions = new Map<string, MemSession>()
@@ -128,7 +131,8 @@ function seedSession(row: {
     parentId: row.parentId ?? null,
     settings: row.settings ?? {},
     createdAt: 0,
-    updatedAt: 0
+    updatedAt: 0,
+    lastActiveAt: 0
   })
 }
 
@@ -283,6 +287,7 @@ describe('SKB-3 / 4 / 5 写入口 updateKnowledgeBases', () => {
     expect(sessions.get(SID)!.settings.knowledgeBases).toEqual(['notes', 'gone', 'project'])
     expect(mocks.broadcastSessionConfigChanged.mock.calls).toEqual([[SID]])
     expect(mocks.filterAvailableTools).not.toHaveBeenCalled()
+    expect(mocks.daoTouchActive).toHaveBeenCalledWith(SID)
   })
 
   it('SKB-4 空数组照写（与缺键不是一回事）', () => {
