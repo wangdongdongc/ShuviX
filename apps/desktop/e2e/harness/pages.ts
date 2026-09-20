@@ -4428,3 +4428,163 @@ export function archivedSettingsPane(settings: CdpClient): ArchivedSettingsPane 
     waitEmpty: () => until(async () => (await emptyText()) || null, 'archived empty state')
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// 主窗右侧面板（RightPanel）与它的「智能体」监视 tab（AgentMonitorPanel）。
+//
+// 锚点（全部按结构 / 图标认，空态与徽章文案是 i18n 产物，一律不钉）：
+//   - 面板开关 = 顶栏 `button[data-side="right"]`（PanelToggleButton）；面板关上时
+//     RightPanel 整体不在 DOM 里，agents tab 按钮的存在性即「面板开着」的判据；
+//   - agents tab = 标签栏里含 `.lucide-activity` 的按钮（主窗里 PanelTabBar 只有 RightPanel
+//     这一处）；标签栏 = 它的父 div（PanelTabBar 的按钮是直接子节点；屏外测量节点是 span，
+//     不会混进来）；
+//   - agents 面板 = RightPanel 根（标签栏的父级）里内容区（`:scope > div.relative`）的
+//     **最后一个**子节点（RightPanel 按 browser/preview/widget/calendar/agents 固定序铺开，
+//     全部常驻挂载、visibility 切换）—— 行 / 空态 / 详情都 scope 在它之内；
+//   - 行 = 列表区 `.divide-y > div > button.w-full`（详情里的工具行也有 w-full，但不在
+//     这一层父子关系上）；相位灯 = 行内 `span.rounded-full`；孤儿徽章 =
+//     `span[class*="bg-error/10"]`；血缘箭头 = `.lucide-corner-down-right`；
+//     详情容器 = 行按钮父 div 的第二子节点（childElementCount > 1 即展开）。
+//
+// DOM 序恒等于 `monitorList()` 的数组序（面板就是 agents.map 出来的）—— spec 按 IPC
+// 快照里的下标定位行，不靠文案认行。
+
+/** 监视列表一行的快照 */
+export interface AgentMonitorRowShot {
+  /** 整行文本（标题 + 模型 id + 相对时间…），只用于「标题在不在」这类包含断言 */
+  text: string
+  /** 相位灯的 className（相位色与 animate-pulse 都在这串里） */
+  phaseClass: string
+  /** 相位灯在闪（animate-pulse）= 非 idle 相位 */
+  pulsing: boolean
+  /** 孤儿徽章在屏（根会话已删） */
+  orphan: boolean
+  /** 孤儿徽章文案（非空即可，不钉具体词） */
+  orphanText: string
+  /** 血缘箭头在屏（spawned 行） */
+  arrow: boolean
+}
+
+export interface RightPanelPane {
+  /** 打开右侧面板并等 agents tab 上屏（幂等：已开则不动） */
+  open(): Promise<void>
+  /** 点 agents tab 并等面板内容区变为可见（轮询随之开闸，首 tick 异步） */
+  activateAgentsTab(): Promise<void>
+  /** 标签栏可见 tab 的 lucide 图标类（DOM 序）—— tab 集合与顺序的判据，不认文案 */
+  tabIcons(): Promise<string[]>
+  /** 监视列表的行快照（DOM 序 = monitorList 序） */
+  rows(): Promise<AgentMonitorRowShot[]>
+  /** 空态文案块文本；空态未上屏（含 loading 期）回空串 */
+  emptyText(): Promise<string>
+  /** 点第 i 行（手风琴：展开 / 收起 / 换一条都由它驱动） */
+  clickRow(index: number): Promise<void>
+  /** 第 i 行是否展开（行按钮的父 div 长出了第二子节点 = 详情容器） */
+  detailOpen(index: number): Promise<boolean>
+  /** 第 a 行与第 b 行在 DOM 上相邻（a 的行容器紧贴 b 的之前） */
+  rowsAdjacent(a: number, b: number): Promise<boolean>
+}
+
+/** 主窗右侧面板（侧栏开关在顶栏；agents tab 与监视列表都在这里） */
+export function rightPanelPane(main: CdpClient): RightPanelPane {
+  const TOGGLE = `document.querySelector('button[data-side="right"]')`
+  const AGENTS_TAB = `[...document.querySelectorAll('button')].find((b) => b.querySelector('.lucide-activity'))`
+  // RightPanel 根 = 标签栏（agents tab 的父 div）的父级
+  const PANEL = `${AGENTS_TAB}?.parentElement?.parentElement`
+  // agents 面板 = 内容区固定序的最后一个（见本节开头的锚点说明）
+  const AGENTS = `${PANEL}?.querySelector(':scope > div.relative')?.lastElementChild`
+  const ROWS = `[...(${AGENTS}?.querySelectorAll('.divide-y > div > button.w-full') ?? [])]`
+
+  const tabPresent = (): Promise<boolean> => main.eval<boolean>(`${AGENTS_TAB} !== undefined`)
+
+  return {
+    open: async () => {
+      if (await tabPresent()) return
+      await main.eval(`${TOGGLE}?.click()`)
+      await until(tabPresent, 'right panel open (agents tab mounted)')
+    },
+    activateAgentsTab: async () => {
+      await until(tabPresent, 'agents tab mounted')
+      await main.eval(`${AGENTS_TAB}.click()`)
+      await until(
+        () =>
+          main.eval<boolean>(
+            `(() => { const p = ${AGENTS}; return !!p && getComputedStyle(p).visibility === 'visible' })()`
+          ),
+        'agents tab visible'
+      )
+    },
+    tabIcons: () =>
+      main.eval<string[]>(`[...(${AGENTS_TAB}?.parentElement?.children ?? [])]
+        .filter((el) => el.tagName === 'BUTTON')
+        .map((b) => [...(b.querySelector('svg')?.classList ?? [])].find((c) => c.startsWith('lucide-')) ?? '')`),
+    rows: () =>
+      main.eval<AgentMonitorRowShot[]>(`${ROWS}.map((row) => {
+        const dot = row.querySelector('span.rounded-full')
+        const badge = row.querySelector('span[class*="bg-error/10"]')
+        return {
+          text: (row.textContent ?? '').trim(),
+          phaseClass: dot?.className ?? '',
+          pulsing: (dot?.className ?? '').includes('animate-pulse'),
+          orphan: !!badge,
+          orphanText: (badge?.textContent ?? '').trim(),
+          arrow: !!row.querySelector('.lucide-corner-down-right')
+        }
+      })`),
+    emptyText: () =>
+      main.eval<string>(
+        `(${AGENTS}?.querySelector('.text-center.py-10')?.textContent ?? '').trim()`
+      ),
+    clickRow: async (index) => {
+      await main.eval(`${ROWS}[${index}]?.click()`)
+      await sleep(300)
+    },
+    detailOpen: (index) =>
+      main.eval<boolean>(`(${ROWS}[${index}]?.parentElement?.childElementCount ?? 0) > 1`),
+    rowsAdjacent: (a, b) =>
+      main.eval<boolean>(`(() => {
+        const rows = ${ROWS}
+        return !!rows[${a}] && !!rows[${b}] &&
+          rows[${a}].parentElement?.nextElementSibling === rows[${b}].parentElement
+      })()`)
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 设置窗口「监视器」页（MonitorSettings）—— 运行时观测迁去 RightPanel 之后，这里只剩
+// 「LLM 请求」一个子页；旧的 `monitor/agents` hash 自然回落到它。
+//
+// 锚点：子标签条 = `[data-monitor-toolbar]` 最近的 HttpLogSettings 根（.flex.flex-col.h-full
+// .min-h-0）的祖父（MonitorSettings 根）的第一个子节点（PanelTabBar，按钮是直接子节点）；
+// 激活态认按钮里的选中下划线 `span.bg-accent`。顶层 tab 导航沿用 `.w-[180px]` 那列
+// （settingsTabsPane 同一锚点），「智能体」tab 已拆除的判据是导航里不再出现它的图标
+// （lucide-bot）—— 文案是 i18n 产物，不认。
+
+export interface MonitorSettingsPane {
+  /** 监视器子标签条的 tab 按钮数（应恒为 1：只剩 LLM 请求） */
+  subTabCount(): Promise<number>
+  /** 子标签条的唯一 tab 呈激活态（选中下划线在） */
+  subTabActive(): Promise<boolean>
+  /** 顶层 tab 导航的图标类（DOM 序）—— 「没有智能体 tab」按没有 lucide-bot 断 */
+  navIcons(): Promise<string[]>
+  /** 设置窗口当前 hash（`#settings/<tab>[/<sub>]`） */
+  hash(): Promise<string>
+}
+
+/** 设置窗口监视器页（`openSettings('monitor/...')` 之后调用；自带 [data-monitor-toolbar] 就绪等待） */
+export async function monitorSettingsPane(settings: CdpClient): Promise<MonitorSettingsPane> {
+  const TOOLBAR = `document.querySelector('[data-monitor-toolbar]')`
+  const SUB_BAR = `${TOOLBAR}?.closest('.flex.flex-col.h-full.min-h-0')?.parentElement?.parentElement?.firstElementChild`
+  // 与 settingsTabsPane 同一根导航列；attribute 子串写法免得给 `[` 转义
+  const NAV = `document.querySelector('div[class*="w-[180px]"]')`
+  await until(() => settings.eval<boolean>(`${TOOLBAR} !== null`), 'monitor settings ready')
+  return {
+    subTabCount: () =>
+      settings.eval<number>(`${SUB_BAR}?.querySelectorAll(':scope > button').length ?? 0`),
+    subTabActive: () =>
+      settings.eval<boolean>(`!!${SUB_BAR}?.querySelector(':scope > button > span.bg-accent')`),
+    navIcons: () =>
+      settings.eval<string[]>(`[...(${NAV}?.querySelectorAll(':scope > button') ?? [])]
+        .map((b) => [...(b.querySelector('svg')?.classList ?? [])].find((c) => c.startsWith('lucide-')) ?? '')`),
+    hash: () => settings.eval<string>('location.hash')
+  }
+}

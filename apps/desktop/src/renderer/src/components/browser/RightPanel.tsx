@@ -1,5 +1,5 @@
 /**
- * RightPanel — 右侧面板容器（app 级工具栏：Browser / Preview / Widget / Calendar，终端在底部栏 BottomPanel；
+ * RightPanel — 右侧面板容器（app 级工具栏：Browser / Preview / Widget / Calendar / Agents，终端在底部栏 BottomPanel；
  * 会话绑定的 Files / Sub-agent 在聊天区内的会话面板 SessionPanel）
  *
  * Preview 是会话无关的独立文件预览（Files 面板点击 / 笔记本 [[双链]] 均落到此），
@@ -9,7 +9,7 @@
  */
 
 import { useEffect, useMemo } from 'react'
-import { CalendarDays, Eye, Monitor, Wrench } from 'lucide-react'
+import { Activity, CalendarDays, Eye, Monitor, Wrench } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useBrowserStore, type PanelTab } from '../../stores/browserStore'
 import { BrowserPanel } from './BrowserPanel'
@@ -24,6 +24,7 @@ import {
 } from '@shuvix/app-shell'
 import { WidgetPanel } from './WidgetPanel'
 import { CalendarPanel } from './CalendarPanel'
+import { AgentMonitorPanel } from './AgentMonitorPanel'
 import { useWidgetStore } from '../../stores/widgetStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 
@@ -37,7 +38,8 @@ const tabs: TabDef[] = [
   { key: 'browser', labelKey: 'panel.browser', Icon: Monitor },
   { key: 'preview', labelKey: 'panel.previewTab', Icon: Eye },
   { key: 'widget', labelKey: 'panel.widget', Icon: Wrench },
-  { key: 'calendar', labelKey: 'panel.calendar', Icon: CalendarDays }
+  { key: 'calendar', labelKey: 'panel.calendar', Icon: CalendarDays },
+  { key: 'agents', labelKey: 'panel.agents', Icon: Activity }
 ]
 
 export function RightPanel(): React.JSX.Element {
@@ -121,6 +123,15 @@ export function RightPanel(): React.JSX.Element {
           }
         >
           <CalendarPanel />
+        </div>
+        <div
+          className="absolute inset-0"
+          style={
+            activeTab === 'agents' ? undefined : { visibility: 'hidden', pointerEvents: 'none' }
+          }
+        >
+          {/* 常驻挂载，故轮询由 active 门控：只有 tab 可见时才每秒取数 */}
+          <AgentMonitorPanel active={activeTab === 'agents'} />
         </div>
       </div>
     </div>

@@ -370,7 +370,6 @@
     "tabProviders": "プロバイダー",
     "tabContextMgmt": "コンテキスト管理",
     "tabMonitor": "モニター",
-    "monitorSubTabAgents": "エージェント",
     "agentMonitorSummary": "稼働 {{total}} 件 · 待機 {{idle}} 件",
     "agentMonitorEmpty": "稼働中のエージェントランタイムはありません。ルートエージェントは最初の送信時に作成されます。",
     "agentMonitorOrphan": "孤立",
@@ -885,6 +884,7 @@
   },
   "panel": {
     "browser": "ブラウザ",
+    "agents": "エージェント",
     "previewTab": "プレビュー",
     "previewEmpty": "プレビューなし",
     "terminal": "ターミナル",

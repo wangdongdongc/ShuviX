@@ -1,5 +1,5 @@
 /**
- * 智能体监控面板（监视器 tab 的子页）—— 进程内还活着的全部 agent 运行时。
+ * 智能体监控面板（主窗口右侧面板 RightPanel 的「智能体」tab）—— 进程内还活着的全部 agent 运行时。
  *
  * 定位是**资源占用诊断**，不是"谁在跑"。派生 agent 跑完并不销毁（面板要支持继续追问），
  * 桌面端关闭会话时又不级联清理，于是一批早已 idle、却仍完整持有 harness 与内存会话树的
@@ -9,6 +9,9 @@
  *
  * 列表取数**不含任何遍历**：注册中心的快照全是字段读与事件影子，上下文占用直接来自 pi 判定
  * 自动压缩的那个数。所以每秒轮询的代价与 agent 的历史长度无关。
+ *
+ * 轮询由 `active` prop 门控：RightPanel 常驻挂载所有 tab，面板不可见时（`active === false`）
+ * 不轮询；重新激活时立即拉一次再恢复每秒轮询。
  *
  * 展开一条才拉「详情」（`AgentDetail`）—— 系统提示词全文、工具定义、模型细节，
  * 全部读自内存里的运行时对象，与实际下发给 LLM 的零漂移（这半边原先住在会话面板的
@@ -23,7 +26,7 @@ import { RefreshCw, Loader2, CornerDownRight, ChevronRight } from 'lucide-react'
 import type { AgentMonitorEntry, AgentMonitorPhase } from '@shuvix/chat-protocol/types/agentMonitor'
 import type { AgentRuntimeInfo } from '@shuvix/chat-protocol/chatApi'
 
-/** 轮询间隔：相位/活动时间要看着是活的，又不值得铺跨窗口事件推送（设置页是独立窗口） */
+/** 轮询间隔：相位/活动时间要看着是活的，又不值得铺跨窗口事件推送 */
 const POLL_MS = 1000
 
 /** 相位灯配色：只有 idle 是"静止"，其余都在占用 CPU/网络 */
@@ -49,7 +52,7 @@ function sinceParts(ts: number): { key: string; n: number } {
   return { key: 'settings.agentMonitorSinceHour', n: Math.floor(sec / 3600) }
 }
 
-export function AgentMonitorPanel(): React.JSX.Element {
+export function AgentMonitorPanel({ active }: { active: boolean }): React.JSX.Element {
   const { t } = useTranslation()
   const [agents, setAgents] = useState<AgentMonitorEntry[]>([])
   const [loading, setLoading] = useState(true)
@@ -58,11 +61,12 @@ export function AgentMonitorPanel(): React.JSX.Element {
   const [detailNonce, setDetailNonce] = useState(0)
 
   /**
-   * 轮询。取数与定时器都收在 effect 内，并自持一个取消位 —— 拉取是异步 IPC，
-   * 组件卸载（切子 tab / 关设置窗）时可能还有一次在途请求，回来时若照常 setState
-   * 就是对已卸载组件写状态。
+   * 轮询（仅 tab 激活时）。取数与定时器都收在 effect 内，并自持一个取消位 —— 拉取是
+   * 异步 IPC，切走 tab / 组件卸载时可能还有一次在途请求，回来时若照常 setState
+   * 就是对已卸载组件写状态。`active` 变 false 时清定时器；重新变 true 时立即拉一次。
    */
   useEffect(() => {
+    if (!active) return
     let cancelled = false
     const tick = async (): Promise<void> => {
       const rows = await window.api.agent.monitorList()
@@ -76,7 +80,7 @@ export function AgentMonitorPanel(): React.JSX.Element {
       cancelled = true
       clearInterval(timer)
     }
-  }, [])
+  }, [active])
 
   /** 手动刷新（与轮询同源，只是立刻取一次；展开中的详情一并重拉） */
   const refresh = useCallback(async () => {

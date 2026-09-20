@@ -15,3 +15,9 @@ LICENSE.md
 
 # Vendored upstream (git subtree) —— 不格式化，保持与上游一致以便干净合并
 packages/atomic-editor
+
+# Agent 提示词 md（visual-guide 片段 + 内置 agent 定义）—— 散文里行内提及的
+# ```svg / ```mermaid 围栏会被 prettier「规范化」成 `` 双反引号，腐蚀注入给 LLM 的
+# 契约文案且 diff 安静，故整目录排除（知识库：prettier 会腐蚀 visual-guide 提示词片段）
+packages/agent-runtime/src/agentProfile/fragments
+packages/agent-runtime/src/subagent/builtinAgents/md

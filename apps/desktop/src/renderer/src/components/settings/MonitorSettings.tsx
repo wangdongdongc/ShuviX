@@ -1,19 +1,19 @@
 /**
- * 监视器（桌面设置页）—— 运行时观测的统一去处：智能体 / LLM 请求。
+ * 监视器（桌面设置页）—— 运行时观测在设置侧的去处：LLM 请求日志。
  *
- * 子分类走**横向标签条**而不是 MCP/语音那样的第二列：设置窗口默认 820 宽，一级 tab 列
- * 已吃掉 180，再加一列 220 就只剩 240 给正文。横条复用右侧面板的 PanelTabBar，外观一致。
+ * 「智能体」运行时面板已迁到主窗口右侧面板（RightPanel 的 agents tab），此处只剩 httpLogs。
+ * 子分类仍走**横向标签条**（PanelTabBar，与右侧面板外观一致）而非去掉外壳 ——
+ * 后续新增观测页时直接往标签条里加。
  */
 import { useTranslation } from 'react-i18next'
-import { FileText, Activity } from 'lucide-react'
+import { FileText } from 'lucide-react'
 import { PanelTabBar } from '@shuvix/app-shell'
 import { HttpLogSettings } from './HttpLogSettings'
-import { AgentMonitorPanel } from './AgentMonitorPanel'
 
-export type MonitorSubTab = 'agents' | 'httpLogs'
+export type MonitorSubTab = 'httpLogs'
 
-/** 合法子 tab（供 hash 路由 `#settings/monitor/<sub>` 校验） */
-export const MONITOR_SUB_TABS = new Set<string>(['agents', 'httpLogs'])
+/** 合法子 tab（供 hash 路由 `#settings/monitor/<sub>` 校验；旧的 agents 自然回落到默认） */
+export const MONITOR_SUB_TABS = new Set<string>(['httpLogs'])
 
 export function MonitorSettings({
   subTab,
@@ -27,17 +27,14 @@ export function MonitorSettings({
   return (
     <div className="flex flex-col h-full min-h-0">
       <PanelTabBar
-        tabs={[
-          { key: 'agents', label: t('settings.monitorSubTabAgents'), Icon: Activity },
-          { key: 'httpLogs', label: t('settings.monitorSubTabLlm'), Icon: FileText }
-        ]}
+        tabs={[{ key: 'httpLogs', label: t('settings.monitorSubTabLlm'), Icon: FileText }]}
         activeKey={subTab}
         onSelect={(key) => onSubTabChange(key as MonitorSubTab)}
         className="px-1 bg-bg-primary"
       />
 
       <div className="flex-1 min-h-0 flex flex-col">
-        {subTab === 'agents' ? <AgentMonitorPanel /> : <HttpLogSettings />}
+        <HttpLogSettings />
       </div>
     </div>
   )

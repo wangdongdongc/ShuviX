@@ -370,7 +370,6 @@
     "tabProviders": "Providers",
     "tabContextMgmt": "Context",
     "tabMonitor": "Monitor",
-    "monitorSubTabAgents": "Agents",
     "agentMonitorSummary": "{{total}} live · {{idle}} idle",
     "agentMonitorEmpty": "No agent runtime is alive. Root agents are created lazily on the first message.",
     "agentMonitorOrphan": "orphan",
@@ -885,6 +884,7 @@
   },
   "panel": {
     "browser": "Browser",
+    "agents": "Agents",
     "previewTab": "Preview",
     "previewEmpty": "Nothing to preview",
     "terminal": "Terminal",

@@ -370,7 +370,6 @@
     "tabProviders": "提供商",
     "tabContextMgmt": "上下文管理",
     "tabMonitor": "监视器",
-    "monitorSubTabAgents": "智能体",
     "agentMonitorSummary": "活跃 {{total}} 个 · 闲置 {{idle}} 个",
     "agentMonitorEmpty": "没有活着的智能体运行时。会话根智能体在首次发消息时才创建。",
     "agentMonitorOrphan": "孤儿",
@@ -885,6 +884,7 @@
   },
   "panel": {
     "browser": "浏览器",
+    "agents": "智能体",
     "previewTab": "预览",
     "previewEmpty": "暂无预览",
     "terminal": "终端",
