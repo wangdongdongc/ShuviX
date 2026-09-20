@@ -885,6 +885,10 @@
   "panel": {
     "browser": "浏览器",
     "agents": "智能体",
+    "agentChipTitle": "Agent 配置：{{profile}} · 点击查看智能体面板",
+    "agentFilterPrefix": "会话：",
+    "agentFilterClear": "清除会话筛选",
+    "agentFilterEmpty": "正在按会话筛选：该会话暂无活跃的智能体运行时。",
     "previewTab": "预览",
     "previewEmpty": "暂无预览",
     "terminal": "终端",

@@ -885,6 +885,10 @@
   "panel": {
     "browser": "ブラウザ",
     "agents": "エージェント",
+    "agentChipTitle": "プロファイル：{{profile}} · エージェントパネルを開く",
+    "agentFilterPrefix": "セッション：",
+    "agentFilterClear": "セッション絞り込みを解除",
+    "agentFilterEmpty": "セッションで絞り込み中 — このセッションに稼働中のエージェントランタイムはありません。",
     "previewTab": "プレビュー",
     "previewEmpty": "プレビューなし",
     "terminal": "ターミナル",

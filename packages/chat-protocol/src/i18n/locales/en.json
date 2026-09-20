@@ -885,6 +885,10 @@
   "panel": {
     "browser": "Browser",
     "agents": "Agents",
+    "agentChipTitle": "Profile: {{profile}} · Open Agents panel",
+    "agentFilterPrefix": "Session: ",
+    "agentFilterClear": "Clear session filter",
+    "agentFilterEmpty": "Filtering by session — no live agent runtime for this session.",
     "previewTab": "Preview",
     "previewEmpty": "Nothing to preview",
     "terminal": "Terminal",

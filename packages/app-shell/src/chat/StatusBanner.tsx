@@ -1,17 +1,25 @@
+import type { ReactNode } from 'react'
 import { getHostApi, useChatStore } from '@shuvix/chat-ui'
 import { X, icons } from 'lucide-react'
 import { useFocusDim } from '../sidebar/useFocusDim'
 
 export interface StatusBannerProps {
   sessionId: string
+  /**
+   * 前插槽：渲染在连接胶囊之前的宿主内容（桌面端为 agent profile 标记 AgentProfileChip）。
+   * 宿主不传时（扩展）行为与原先一致。注意传入的元素自身可能渲染为 null —— 是否传
+   * leading 由宿主按可见性判断，本组件只认「传没传」。
+   */
+  leading?: ReactNode
 }
 
 /**
  * 运行时资源横幅（桌面/扩展共用）—— 紧贴顶栏下方，作为 ChatBody 的 banner 插槽。
  *
- * 只剩一件事：列出本会话持有的运行时连接（桌面为 SSH / 数据库，见 DefaultChatGateway
- * .getRuntimeStatuses），每项可点 X 断开。宿主没有生产者或本会话没有连接时整条横幅
- * 返回 null —— 于是绝大多数会话根本不会看到这条 bar。
+ * 内容两段：宿主经 `leading` 插槽注入的前置标记（桌面端是 agent profile 胶囊），外加本会话
+ * 持有的运行时连接（桌面为 SSH / 数据库，见 DefaultChatGateway.getRuntimeStatuses），每项
+ * 可点 X 断开。无 leading 且无连接时整条横幅返回 null —— 于是绝大多数会话根本不会看到
+ * 这条 bar。
  *
  * 曾经并列在这里的两项都已搬走：
  *   - 「免询问」提示胶囊删掉了（开关仍在会话设置里，见 SessionConfigPanel）；
@@ -22,13 +30,13 @@ export interface StatusBannerProps {
  * 专注模式淡化与顶栏 / 侧栏 / 面板页签同一套判定与手感（悬浮即恢复不透明）：整条一起淡，
  * 底色与描边也在内 —— 它是对话上方的一条陈设，不是对话本身。
  */
-export function StatusBanner({ sessionId }: StatusBannerProps): React.JSX.Element | null {
+export function StatusBanner({ sessionId, leading }: StatusBannerProps): React.JSX.Element | null {
   const runtimes = useChatStore((s) => s.sessionResources[sessionId]?.runtimes)
   // hook 必须在下面的早退之前调用
   const { dim } = useFocusDim()
 
   const runtimeEntries = runtimes ? Object.entries(runtimes) : []
-  if (runtimeEntries.length === 0) return null
+  if (!leading && runtimeEntries.length === 0) return null
 
   return (
     <div
@@ -36,6 +44,7 @@ export function StatusBanner({ sessionId }: StatusBannerProps): React.JSX.Elemen
         dim ? 'opacity-30 hover:opacity-100' : ''
       }`}
     >
+      {leading}
       {runtimeEntries.map(([runtimeId, info]) => {
         const IconComponent = info.icon ? icons[info.icon as keyof typeof icons] : null
         return (

@@ -4468,14 +4468,29 @@ export interface AgentMonitorRowShot {
 export interface RightPanelPane {
   /** 打开右侧面板并等 agents tab 上屏（幂等：已开则不动） */
   open(): Promise<void>
+  /** 关闭右侧面板（幂等：已关则不动） */
+  close(): Promise<void>
+  /** 面板是否开着（agents tab 按钮在 DOM 里 = RightPanel 已挂载） */
+  isOpen(): Promise<boolean>
   /** 点 agents tab 并等面板内容区变为可见（轮询随之开闸，首 tick 异步） */
   activateAgentsTab(): Promise<void>
+  /** agents tab 是否激活（activateAgentsTab 的 visibility 判据暴露成读数） */
+  agentsActive(): Promise<boolean>
+  /** 切到 browser tab 并等 agents 内容区不可见 —— 「面板开着但在别的 tab」的构造 */
+  activateBrowserTab(): Promise<void>
   /** 标签栏可见 tab 的 lucide 图标类（DOM 序）—— tab 集合与顺序的判据，不认文案 */
   tabIcons(): Promise<string[]>
   /** 监视列表的行快照（DOM 序 = monitorList 序） */
   rows(): Promise<AgentMonitorRowShot[]>
   /** 空态文案块文本；空态未上屏（含 loading 期）回空串 */
   emptyText(): Promise<string>
+  /**
+   * 工具栏里的会话筛选 chip；无筛选回 null。`label` 是**去掉 i18n 前缀后**的筛选标签
+   * （会话标题，或条目消失后的 id 截断回落）—— 前缀与标签是两个相邻文本节点。
+   */
+  filterChip(): Promise<{ label: string } | null>
+  /** 点筛选 chip 的 X 清除筛选并等 chip 消失（幂等：无筛选则不动） */
+  clearFilter(): Promise<void>
   /** 点第 i 行（手风琴：展开 / 收起 / 换一条都由它驱动） */
   clickRow(index: number): Promise<void>
   /** 第 i 行是否展开（行按钮的父 div 长出了第二子节点 = 详情容器） */
@@ -4495,6 +4510,10 @@ export function rightPanelPane(main: CdpClient): RightPanelPane {
   const ROWS = `[...(${AGENTS}?.querySelectorAll('.divide-y > div > button.w-full') ?? [])]`
 
   const tabPresent = (): Promise<boolean> => main.eval<boolean>(`${AGENTS_TAB} !== undefined`)
+  const agentsActive = (): Promise<boolean> =>
+    main.eval<boolean>(
+      `(() => { const p = ${AGENTS}; return !!p && getComputedStyle(p).visibility === 'visible' })()`
+    )
 
   return {
     open: async () => {
@@ -4502,16 +4521,25 @@ export function rightPanelPane(main: CdpClient): RightPanelPane {
       await main.eval(`${TOGGLE}?.click()`)
       await until(tabPresent, 'right panel open (agents tab mounted)')
     },
+    close: async () => {
+      if (!(await tabPresent())) return
+      await main.eval(`${TOGGLE}?.click()`)
+      await until(async () => !(await tabPresent()) || null, 'right panel closed')
+    },
+    isOpen: tabPresent,
     activateAgentsTab: async () => {
       await until(tabPresent, 'agents tab mounted')
       await main.eval(`${AGENTS_TAB}.click()`)
-      await until(
-        () =>
-          main.eval<boolean>(
-            `(() => { const p = ${AGENTS}; return !!p && getComputedStyle(p).visibility === 'visible' })()`
-          ),
-        'agents tab visible'
-      )
+      await until(agentsActive, 'agents tab visible')
+    },
+    agentsActive,
+    activateBrowserTab: async () => {
+      // 与 tabIcons 同一根标签栏，按图标点名 browser tab（lucide-monitor 只在这一处）
+      const BROWSER_TAB = `[...(${AGENTS_TAB}?.parentElement?.children ?? [])]
+        .find((b) => b.querySelector('.lucide-monitor'))`
+      await until(() => main.eval<boolean>(`!!${BROWSER_TAB}`), 'browser tab mounted')
+      await main.eval(`${BROWSER_TAB}.click()`)
+      await until(async () => !(await agentsActive()) || null, 'browser tab active')
     },
     tabIcons: () =>
       main.eval<string[]>(`[...(${AGENTS_TAB}?.parentElement?.children ?? [])]
@@ -4534,6 +4562,27 @@ export function rightPanelPane(main: CdpClient): RightPanelPane {
       main.eval<string>(
         `(${AGENTS}?.querySelector('.text-center.py-10')?.textContent ?? '').trim()`
       ),
+    filterChip: () =>
+      main.eval<{ label: string } | null>(`(() => {
+        // 筛选 chip = agents 面板内唯一「内含带 lucide-x 按钮」的 span.rounded-full
+        // （相位灯也是 span.rounded-full，但它是纯圆点、不含按钮）
+        const chip = [...(${AGENTS}?.querySelectorAll('span.rounded-full') ?? [])]
+          .find((s) => s.querySelector('button .lucide-x'))
+        if (!chip) return null
+        // 内层截断 span 里 i18n 前缀与筛选标签是两个相邻文本节点（React 19 不再插
+        // 注释节点）—— label 取最后一个文本节点，恰好不含前缀
+        const inner = chip.querySelector('span.truncate')
+        const texts = [...(inner?.childNodes ?? [])].filter((n) => n.nodeType === 3)
+        return { label: (texts[texts.length - 1]?.textContent ?? '').trim() }
+      })()`),
+    clearFilter: async () => {
+      const CHIP = `[...(${AGENTS}?.querySelectorAll('span.rounded-full') ?? [])]
+        .find((s) => s.querySelector('button .lucide-x'))`
+      const present = (): Promise<boolean> => main.eval<boolean>(`!!${CHIP}`)
+      if (!(await present())) return
+      await main.eval(`${CHIP}.querySelector('button')?.click()`)
+      await until(async () => !(await present()) || null, 'session filter cleared')
+    },
     clickRow: async (index) => {
       await main.eval(`${ROWS}[${index}]?.click()`)
       await sleep(300)
@@ -4546,6 +4595,65 @@ export function rightPanelPane(main: CdpClient): RightPanelPane {
         return !!rows[${a}] && !!rows[${b}] &&
           rows[${a}].parentElement?.nextElementSibling === rows[${b}].parentElement
       })()`)
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 主窗对话区顶部的运行时状态横幅（StatusBanner）与最前面的 agent profile 标记
+// （AgentProfileChip）。
+//
+// 锚点（按结构认，与右侧面板同一套纪律）：
+//   - 横幅 = `div[class*="bg-bg-secondary/60"][class*="border-b"]`（属性子串写法避开类名
+//     里的 `/`）；无标记且无运行时连接时整条返回 null —— 「banner 元素缺席」本身就是
+//     判据，不接受「banner 在但空」；
+//   - 标记 = 横幅里唯一的 button 胶囊：`button.rounded-full` 且内含 `span.font-mono`
+//     （profileName 的等宽标签是排他特征；SSH/DB 连接胶囊是 span，不会混进来）；
+//   - 相位灯 = 标记内的 `span.rounded-full`（与 AgentMonitorPanel 的 PHASE_DOT 同一套
+//     语义：idle 灰、其余绿脉冲）。
+
+/** agent profile 标记的快照 */
+export interface StatusBannerChipShot {
+  present: boolean
+  /** profileName 标签文本（如 chat / work） */
+  text: string
+  /** 相位灯的 className（相位色与 animate-pulse 都在这串里） */
+  phaseClass: string
+  /** 相位灯在闪（animate-pulse）= 非 idle 相位 */
+  pulsing: boolean
+}
+
+export interface StatusBannerPane {
+  /** 横幅整条在屏（无内容时组件返回 null，这里即 false） */
+  bannerPresent(): Promise<boolean>
+  /** profile 标记快照；不在屏回 null */
+  chip(): Promise<StatusBannerChipShot | null>
+  /** 点标记（= 打开右栏 agents tab 并按本会话筛选） */
+  clickChip(): Promise<void>
+}
+
+/** 主窗状态横幅（对话区顶部、顶栏之下） */
+export function statusBannerPane(main: CdpClient): StatusBannerPane {
+  const BANNER = `document.querySelector('div[class*="bg-bg-secondary/60"][class*="border-b"]')`
+  const CHIP = `[...document.querySelectorAll('button.rounded-full')]
+    .find((b) => b.querySelector('span.font-mono'))`
+  return {
+    bannerPresent: () => main.eval<boolean>(`${BANNER} !== null`),
+    chip: () =>
+      main.eval<StatusBannerChipShot | null>(`(() => {
+        const chip = ${CHIP}
+        if (!chip) return null
+        const dot = chip.querySelector('span.rounded-full')
+        return {
+          present: true,
+          text: (chip.querySelector('span.font-mono')?.textContent ?? '').trim(),
+          phaseClass: dot?.className ?? '',
+          pulsing: (dot?.className ?? '').includes('animate-pulse')
+        }
+      })()`),
+    clickChip: async () => {
+      await main.eval(`${CHIP}?.click()`)
+      await sleep(300)
+    }
   }
 }
 

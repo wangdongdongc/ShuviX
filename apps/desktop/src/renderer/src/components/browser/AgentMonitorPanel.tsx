@@ -10,8 +10,10 @@
  * 列表取数**不含任何遍历**：注册中心的快照全是字段读与事件影子，上下文占用直接来自 pi 判定
  * 自动压缩的那个数。所以每秒轮询的代价与 agent 的历史长度无关。
  *
- * 轮询由 `active` prop 门控：RightPanel 常驻挂载所有 tab，面板不可见时（`active === false`）
- * 不轮询；重新激活时立即拉一次再恢复每秒轮询。
+ * 列表数据来自 `agentMonitorStore`（全局引用计数轮询：横幅上的 profile 标记也消费同一份
+ * 快照，同一时刻只有一个 1s 轮询器）。本面板仅在 `active === true` 时订阅 —— RightPanel
+ * 常驻挂载所有 tab，不可见时不占轮询份额。工具栏支持按会话筛选（`sessionFilter`，面板级
+ * 不持久化）：只显示 rootSessionId 匹配的条目，root 与派生 agent 都入选。
  *
  * 展开一条才拉「详情」（`AgentDetail`）—— 系统提示词全文、工具定义、模型细节，
  * 全部读自内存里的运行时对象，与实际下发给 LLM 的零漂移（这半边原先住在会话面板的
@@ -22,12 +24,14 @@
  */
 import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { RefreshCw, Loader2, CornerDownRight, ChevronRight } from 'lucide-react'
+import { RefreshCw, Loader2, CornerDownRight, ChevronRight, X } from 'lucide-react'
 import type { AgentMonitorEntry, AgentMonitorPhase } from '@shuvix/chat-protocol/types/agentMonitor'
 import type { AgentRuntimeInfo } from '@shuvix/chat-protocol/chatApi'
-
-/** 轮询间隔：相位/活动时间要看着是活的，又不值得铺跨窗口事件推送 */
-const POLL_MS = 1000
+import {
+  refreshAgentMonitor,
+  subscribeAgentMonitor,
+  useAgentMonitorStore
+} from '../../stores/agentMonitorStore'
 
 /** 相位灯配色：只有 idle 是"静止"，其余都在占用 CPU/网络 */
 const PHASE_DOT: Record<AgentMonitorPhase, string> = {
@@ -54,38 +58,24 @@ function sinceParts(ts: number): { key: string; n: number } {
 
 export function AgentMonitorPanel({ active }: { active: boolean }): React.JSX.Element {
   const { t } = useTranslation()
-  const [agents, setAgents] = useState<AgentMonitorEntry[]>([])
-  const [loading, setLoading] = useState(true)
+  const entries = useAgentMonitorStore((s) => s.entries)
+  const loading = useAgentMonitorStore((s) => s.loading)
+  const sessionFilter = useAgentMonitorStore((s) => s.sessionFilter)
+  const setSessionFilter = useAgentMonitorStore((s) => s.setSessionFilter)
   const [expandedId, setExpandedId] = useState<string | null>(null)
   // 详情不参与轮询（贵），故手动刷新时用它把展开中的那条也重新拉一次
   const [detailNonce, setDetailNonce] = useState(0)
 
-  /**
-   * 轮询（仅 tab 激活时）。取数与定时器都收在 effect 内，并自持一个取消位 —— 拉取是
-   * 异步 IPC，切走 tab / 组件卸载时可能还有一次在途请求，回来时若照常 setState
-   * 就是对已卸载组件写状态。`active` 变 false 时清定时器；重新变 true 时立即拉一次。
-   */
+  /** 仅 tab 激活时占一份轮询份额（引用计数：横幅标记可能同时持有一份，不会双份 IPC） */
   useEffect(() => {
     if (!active) return
-    let cancelled = false
-    const tick = async (): Promise<void> => {
-      const rows = await window.api.agent.monitorList()
-      if (cancelled) return
-      setAgents(rows)
-      setLoading(false)
-    }
-    void tick()
-    const timer = setInterval(() => void tick(), POLL_MS)
-    return () => {
-      cancelled = true
-      clearInterval(timer)
-    }
+    return subscribeAgentMonitor()
   }, [active])
 
   /** 手动刷新（与轮询同源，只是立刻取一次；展开中的详情一并重拉） */
   const refresh = useCallback(async () => {
     setDetailNonce((n) => n + 1)
-    setAgents(await window.api.agent.monitorList())
+    await refreshAgentMonitor()
   }, [])
 
   /** 点同一条 = 收起（手风琴：同时只展开一条） */
@@ -93,15 +83,37 @@ export function AgentMonitorPanel({ active }: { active: boolean }): React.JSX.El
     setExpandedId((prev) => (prev === agentId ? null : agentId))
   }
 
-  const idleCount = agents.filter((a) => a.phase === 'idle').length
+  // 会话筛选：rootSessionId 匹配即入选（root 与派生 agent 都算）
+  const visible = sessionFilter ? entries.filter((e) => e.rootSessionId === sessionFilter) : entries
+  const idleCount = visible.filter((a) => a.phase === 'idle').length
+  // 筛选 chip 的标签：优先会话标题，取不到（条目已消失）用 id 截断
+  const filterLabel = sessionFilter
+    ? entries.find((e) => e.rootSessionId === sessionFilter)?.rootSessionTitle ||
+      `${sessionFilter.slice(0, 8)}…`
+    : null
 
   return (
     <div className="flex flex-col h-full min-h-0">
-      {/* 工具栏：总览 + 测量全部 + 刷新 */}
+      {/* 工具栏：总览 + 会话筛选 chip + 刷新 */}
       <div className="flex-shrink-0 flex items-center gap-2 px-3 py-2 border-b border-border-secondary">
         <span className="text-[10px] text-text-tertiary tabular-nums truncate">
-          {t('settings.agentMonitorSummary', { total: agents.length, idle: idleCount })}
+          {t('settings.agentMonitorSummary', { total: visible.length, idle: idleCount })}
         </span>
+        {sessionFilter && (
+          <span className="inline-flex items-center gap-0.5 px-1.5 py-px rounded-full bg-accent/10 text-accent text-[10px] shrink-0">
+            <span className="truncate max-w-[10rem]">
+              {t('panel.agentFilterPrefix')}
+              {filterLabel}
+            </span>
+            <button
+              onClick={() => setSessionFilter(null)}
+              title={t('panel.agentFilterClear')}
+              className="rounded hover:bg-current/20 transition-colors p-0.5"
+            >
+              <X size={9} />
+            </button>
+          </span>
+        )}
         <div className="ml-auto flex items-center gap-1 shrink-0">
           <button
             onClick={() => void refresh()}
@@ -120,13 +132,13 @@ export function AgentMonitorPanel({ active }: { active: boolean }): React.JSX.El
             <Loader2 size={14} className="animate-spin" />
             <span className="text-[11px]">{t('common.loading')}</span>
           </div>
-        ) : agents.length === 0 ? (
+        ) : visible.length === 0 ? (
           <div className="text-[11px] text-text-tertiary text-center py-10">
-            {t('settings.agentMonitorEmpty')}
+            {sessionFilter ? t('panel.agentFilterEmpty') : t('settings.agentMonitorEmpty')}
           </div>
         ) : (
           <div className="divide-y divide-border-secondary/30">
-            {agents.map((a) => (
+            {visible.map((a) => (
               <div key={a.agentId}>
                 <button
                   onClick={() => handleRowClick(a.agentId)}

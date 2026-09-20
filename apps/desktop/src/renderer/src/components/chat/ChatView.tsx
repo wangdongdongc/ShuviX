@@ -26,7 +26,9 @@ import {
 } from '@shuvix/app-shell'
 import { EmptySessionHint } from './WelcomeView'
 import { BotBindingChip } from './BotBindingChip'
+import { AgentProfileChip } from './AgentProfileChip'
 import { NotebookSessionView } from '../notebook/NotebookSessionView'
+import { subscribeAgentMonitor, useAgentMonitorStore } from '../../stores/agentMonitorStore'
 
 /**
  * 聊天主视图（桌面外壳）—— 经共享 <ChatBody> 渲染顶栏 + 欢迎/笔记本/对话三态，
@@ -62,6 +64,17 @@ export function ChatView({ pinnedMode }: ChatViewProps = {}): React.JSX.Element 
 
   const isWeb = getSessionChannelApi().app.platform === 'web'
   const isMac = getSessionChannelApi().app.platform === 'darwin'
+
+  // agent 监控轮询订阅（全局引用计数）：会话视图常驻，驱动横幅上的 profile 标记。
+  // 订阅放这里而非 chip 内 —— chip 只在 root entry 出现后渲染，由它自持订阅则新会话
+  // 永远等不到第一次拉取。
+  useEffect(() => subscribeAgentMonitor(), [])
+  // 标记可见性：与 agent 运行时绑定 —— monitor 列表里存在本会话的 root entry 才出现
+  const profileChipVisible = useAgentMonitorStore((s) =>
+    activeSessionId
+      ? s.entries.some((e) => e.kind === 'root' && e.agentId === activeSessionId)
+      : false
+  )
 
   // 揭示信号 → 会话面板（子智能体注册切 Sub-agent；共享 hook）。
   // 悬浮占位态不响应。文件预览：主窗由右侧面板承接（useRightPanelBridge），
@@ -229,10 +242,20 @@ export function ChatView({ pinnedMode }: ChatViewProps = {}): React.JSX.Element 
         ) : undefined
       }
       banner={
-        // 运行时资源横幅（SSH / 数据库连接）—— 无连接时自身返回 null，绝大多数会话看不到它。
+        // 运行时资源横幅 —— 前段是 agent profile 标记（root agent 出现后才渲染，见
+        // AgentProfileChip），后段是 SSH / 数据库连接胶囊；两者皆无时自身返回 null。
+        // 标记只在主窗渲染：悬浮窗没有 app 级右面板，点击标记的「开右栏 + 筛选」无的放矢
+        // （产品决议 2026-09）；SSH/DB 连接胶囊在悬浮窗照常。
         // 会话工具栏与「免询问」胶囊已不在这里：前者进了顶栏 rightActions，后者删除
         activeSessionId && pinnedMode !== 'placeholder' ? (
-          <StatusBanner sessionId={activeSessionId} />
+          <StatusBanner
+            sessionId={activeSessionId}
+            leading={
+              !pinnedMode && profileChipVisible ? (
+                <AgentProfileChip sessionId={activeSessionId} />
+              ) : undefined
+            }
+          />
         ) : undefined
       }
       contentOverride={placeholder}

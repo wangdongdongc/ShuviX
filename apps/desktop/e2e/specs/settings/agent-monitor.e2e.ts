@@ -1,27 +1,43 @@
 /**
  * 智能体监视端到端（隔离实例）—— 主窗 RightPanel 的 agents tab（AgentMonitorPanel）
- * 与设置窗口「监视器」页的回落，两条线共九个用例（AM-1 ~ AM-9）。
+ * 与设置窗口「监视器」页的回落，外加对话区顶部状态横幅（StatusBanner）的 profile 标记
+ * （AgentProfileChip）与监视面板的联动（AM-10 ~ AM-17）。
  *
  * 实例复用（减少启动开销，故两组用例收在同一文件）：
- *   - 组一（AM-1/2/8/9）：无 provider 的全新实例 —— 空态、tab 存在性、设置页形态与旧 hash 回落；
- *   - 组二（AM-3~7）：fakeProvider 实例 —— 根 agent 上屏、相位灯、血缘缩进、孤儿徽章、详情手风琴。
+ *   - 组一（AM-1/2/10/8/9）：无 provider 的全新实例 —— 空态、tab 存在性、未发消息的
+ *     新会话横幅缺席、设置页形态与旧 hash 回落；
+ *   - 组二（AM-3~7、AM-11~17）：fakeProvider 实例 —— 根 agent 上屏、相位灯、血缘缩进、
+ *     孤儿徽章、详情手风琴，以及横幅标记的出现/相位/点击三联动/筛选 chip。
  *     注意 **turn-completed 的 echo hook 到 AM-5 才种进 hooksDir**：AM-3 断的是「恰一条」，
  *      hook 若 beforeAll 就装好，首轮收尾就会多出一个派生 entry（hooksDir 是指纹缓存的现扫，
- *     中途落盘下一轮即生效，见 hookService.scanCache）。
+ *     中途落盘下一轮即生效，见 hookService.scanCache）；AM-17 反向利用同一机制 —— 先摘掉
+ *      hook 再发 F 的首轮，才能造出「无派生」的会话。
  *
  * 观测面：列表 / 详情数据一律走 IPC（`agent.monitorList` / `agent.monitorDetail`），DOM 只断
- * 呈现（相位灯配色与脉冲、孤儿徽章、血缘箭头、空态在屏、手风琴展开态）；空态/徽章文案是
- * i18n 产物，只认结构与非空。用例有顺序依赖：AM-4 续 AM-3 的会话，AM-6 删 AM-5 的会话，
- * AM-7 用 AM-3 的根 + AM-6 留下的孤儿做手风琴互斥。
+ * 呈现（相位灯配色与脉冲、孤儿徽章、血缘箭头、空态在屏、手风琴展开态、横幅标记）；空态/徽章
+ * 文案是 i18n 产物，只认结构与非空（AM-17 的「筛选空态 ≠ 通用空态」是同实例内的文案比对，
+ * 不钉具体句子）。用例有顺序依赖：AM-4 续 AM-3 的会话，AM-6 删 AM-5 的会话，
+ * AM-7 用 AM-3 的根 + AM-6 留下的孤儿做手风琴互斥；AM-13~15 续 AM-11 的会话，
+ * 所有「恰 N 条」断言都按 sid 过滤做相对比较，不做全量计数。
  */
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { sleep, until, type CdpClient } from '../../harness/cdp'
 import { startFakeProvider, type FakeProvider, type FakeRequest } from '../../harness/fakeProvider'
 import { launchApp, type E2EApp } from '../../harness/launch'
-import { monitorSettingsPane, rightPanelPane, type RightPanelPane } from '../../harness/pages'
 import {
+  chatPane,
+  monitorSettingsPane,
+  rightPanelPane,
+  sidebarPane,
+  statusBannerPane,
+  type RightPanelPane,
+  type SidebarPane,
+  type StatusBannerPane
+} from '../../harness/pages'
+import {
+  createProject,
   eventRecorder,
   seedFakeProvider,
   waitRendererReady,
@@ -32,6 +48,12 @@ import {
 const MODEL = 'e2e-model'
 const TURN_COMPLETED = 'session.turn-completed'
 const ECHO_BODY = 'E2E monitor echo hook.'
+
+/**
+ * AM-1 记下的通用空态原文（无任何运行时那条），供 AM-17 做「筛选空态文案不同」的比对 ——
+ * 跨 describe（两个实例）共享，故挂在模块级；文案本身是 i18n 产物，只比不等、不钉内容。
+ */
+let genericEmptyText = ''
 
 interface MonitorEntry {
   agentId: string
@@ -102,6 +124,7 @@ describe('空实例：空态、tab 位置与设置页回落', () => {
       'agent monitor empty state'
     )
     expect(empty.length).toBeGreaterThan(0)
+    genericEmptyText = empty
     expect(await pane.rows()).toEqual([])
   })
 
@@ -113,6 +136,27 @@ describe('空实例：空态、tab 位置与设置页回落', () => {
       'lucide-calendar-days',
       'lucide-activity'
     ])
+  })
+
+  it('AM-10 新会话未发消息：横幅整条不出现 —— chip 缺席且 banner 元素缺席（不是「banner 在但空」）；IPC 无该 sid entry', async () => {
+    // 只建会话不发消息：根 agent 首轮才创建，monitorList 里永远不会有它（AM-1 的空列表断言因此不被破坏）
+    const sid = await app.main.eval<string>(
+      `window.api.session.create(${JSON.stringify({ title: 'AM-10 fresh lane' })}).then((s) => s.id)`
+    )
+    const sidebar = sidebarPane(app.main)
+    await until(
+      async () => (await sidebar.openSession('AM-10 fresh lane')) || null,
+      'AM-10 session opened'
+    )
+    await chatPane(app.main).ready()
+
+    // 缺席断言没有 until 可用：让监视轮询先走完一个 tick（1s），证明「会出现的窗口」已经过去
+    await sleep(1200)
+    const banner = statusBannerPane(app.main)
+    expect(await banner.chip()).toBeNull()
+    expect(await banner.bannerPresent()).toBe(false)
+    const list = await monitorList(app.main)
+    expect(list.some((e) => e.agentId === sid || e.rootSessionId === sid)).toBe(false)
   })
 
   it('AM-8 设置窗口只剩 LLM 请求子页：子标签条恰 1 个 tab，顶层导航无「智能体」项（旧 tab 的 lucide-bot 图标不再出现）', async () => {
@@ -154,6 +198,8 @@ describe('fakeProvider：运行时的上屏、相位、血缘与详情', () => {
   let provider: FakeProvider
   let events: EventRecorder
   let pane: RightPanelPane
+  let banner: StatusBannerPane
+  let sidebar: SidebarPane
   const sids: Record<string, string> = {}
 
   beforeAll(async () => {
@@ -164,6 +210,8 @@ describe('fakeProvider：运行时的上屏、相位、血缘与详情', () => {
     events = eventRecorder(app.main)
     await events.install()
     pane = rightPanelPane(app.main)
+    banner = statusBannerPane(app.main)
+    sidebar = sidebarPane(app.main)
     await pane.open()
     await pane.activateAgentsTab()
   })
@@ -380,5 +428,193 @@ describe('fakeProvider：运行时的上屏、相位、血缘与详情', () => {
       async () => ((await pane.detailOpen(otherIdx)) && !(await pane.detailOpen(rootIdx))) || null,
       'accordion: B expanded, A unmounted'
     )
+  })
+
+  // ── AM-11 ~ AM-17：对话区状态横幅的 profile 标记（AgentProfileChip）与监视面板联动 ──
+  // 此刻 echo hook 已装（AM-5），每条新会话的首轮都会自动派生一个 echo-agent（无脚本匹配
+  // 时 fakeProvider 回默认 "OK" 收尾）；列表里还有 AM-3 的根与 AM-6 的孤儿 —— 故所有
+  // 「恰 N 条」都按 sid 过滤做相对比较，不做全量计数。
+
+  /** 建会话（IPC）→ 侧栏打开成行 → 发一轮并等收尾（横幅标记用例的公共前奏） */
+  const openAndPrompt = async (title: string, text: string): Promise<string> => {
+    const sid = await createSession(title)
+    await until(async () => (await sidebar.openSession(title)) || null, `session "${title}" opened`)
+    provider.script({ text: 'r1', when: rootRequest(text) })
+    await promptTurn(sid, text)
+    return sid
+  }
+
+  it('AM-11 首轮后标记出现：内容 = profileName（chat），idle 灰点不脉冲，横幅在屏', async () => {
+    const sid = await openAndPrompt('AM-11 banner lane', 'banner-1')
+    sids.banner = sid
+
+    const chip = await until(async () => (await banner.chip()) ?? null, 'profile chip on screen')
+    expect(chip.text).toBe('chat')
+    // 与 IPC 该 root entry 的 profileName 同源
+    const entry = (await monitorList(app.main)).find((e) => e.kind === 'root' && e.agentId === sid)!
+    expect(chip.text).toBe(entry.profileName)
+    expect(chip.phaseClass).toContain('bg-text-tertiary/40')
+    expect(chip.pulsing).toBe(false)
+    expect(await banner.bannerPresent()).toBe(true)
+  })
+
+  it('AM-12 项目会话的标记显示 work（与 IPC profileName 一致）', async () => {
+    const projDir = join(app.home, 'proj-am12')
+    mkdirSync(projDir, { recursive: true })
+    const { id: projectId } = await createProject(app.main, { name: 'AM-12 Proj', path: projDir })
+    const sid = await app.main.eval<string>(
+      `window.api.session.create(${JSON.stringify({ title: 'AM-12 work lane', projectId })}).then((s) => s.id)`
+    )
+    await until(
+      async () => (await sidebar.openSession('AM-12 work lane')) || null,
+      'AM-12 session opened'
+    )
+    provider.script({ text: 'r1', when: rootRequest('work-1') })
+    await promptTurn(sid, 'work-1')
+
+    const chip = await until(async () => (await banner.chip()) ?? null, 'work chip on screen')
+    expect(chip.text).toBe('work')
+    const entry = (await monitorList(app.main)).find((e) => e.kind === 'root' && e.agentId === sid)!
+    expect(chip.text).toBe(entry.profileName)
+  })
+
+  it('AM-13 点标记三联动（面板关着时）：面板开 + agents tab 激活 + 按本会话筛选（AM-3 根行与孤儿行被筛掉）', async () => {
+    const sid = sids.banner
+    // 活动会话换回 AM-11 的（AM-12 把活动会话切去了项目会话）
+    expect(await sidebar.openSession('AM-11 banner lane')).toBe(true)
+    await pane.close()
+    expect(await pane.isOpen()).toBe(false)
+
+    await until(async () => (await banner.chip()) ?? null, 'chip back on screen')
+    await banner.clickChip()
+
+    // agents tab 可见 ⟺ 面板开着且 tab 激活（一条判据证两件）
+    await until(() => pane.agentsActive(), 'agents tab activated by chip click')
+    const filter = await until(
+      async () => (await pane.filterChip()) ?? null,
+      'session filter chip on screen'
+    )
+    expect(filter.label).toContain('AM-11 banner lane')
+
+    const expected = (await monitorList(app.main)).filter((e) => e.rootSessionId === sid).length
+    expect(expected).toBeGreaterThan(0)
+    const rows = await until(async () => {
+      const rs = await pane.rows()
+      return rs.length === expected ? rs : null
+    }, 'filtered rows match IPC count')
+    expect(rows.some((r) => r.text.includes('AM-3 monitor lane'))).toBe(false)
+    expect(rows.some((r) => r.orphan)).toBe(false)
+  })
+
+  it('AM-14 面板已开但在 browser tab 时点标记：agents tab 重新激活，筛选仍是该 sid', async () => {
+    await pane.activateBrowserTab()
+    expect(await pane.agentsActive()).toBe(false)
+
+    await banner.clickChip()
+    await until(() => pane.agentsActive(), 'agents tab re-activated')
+    const filter = await until(
+      async () => (await pane.filterChip()) ?? null,
+      'filter chip still on screen'
+    )
+    expect(filter.label).toContain('AM-11 banner lane')
+  })
+
+  it('AM-15 相位点：hold 中绿脉冲，放行回灰', async () => {
+    const sid = sids.banner
+    // AM-13/14 之后活动会话仍是 AM-11 的（有 root entry，标记在屏）
+    provider.script({ holdMs: 20_000, when: rootRequest('hold-1') })
+    await promptTolerant(app.main, sid, 'hold-1')
+
+    await until(async () => {
+      const e = (await monitorList(app.main)).find((x) => x.agentId === sid)
+      return e?.phase === 'turn' ? e : null
+    }, 'root entry in turn phase')
+    // 标记的相位灯与面板同一套轮询（1s）—— until 等绿脉冲上屏
+    await until(async () => {
+      const chip = await banner.chip()
+      return chip?.pulsing && chip.phaseClass.includes('bg-emerald-500') ? chip : null
+    }, 'chip dot green-pulsing on screen')
+
+    provider.release()
+    await events.waitFor('agent_end', { sessionId: sid })
+    await until(
+      async () =>
+        (await monitorList(app.main)).find((x) => x.agentId === sid)?.phase === 'idle' || null,
+      'root entry back to idle'
+    )
+    await until(async () => {
+      const chip = await banner.chip()
+      return chip && !chip.pulsing && chip.phaseClass.includes('bg-text-tertiary/40') ? chip : null
+    }, 'chip dot back to gray')
+  })
+
+  it('AM-16 筛选含派生 entry（root + spawned，spawned 带血缘箭头）；点 X 清除后恢复全量', async () => {
+    const sid = await openAndPrompt('AM-16 lineage lane', 'lin-2')
+    // echo hook 已装：这轮自动派生 echo-agent —— 等它跑完回 idle，筛选时才是稳定的 2 条
+    await until(async () => {
+      const e = (await monitorList(app.main)).find(
+        (x) => x.kind === 'spawned' && x.rootSessionId === sid
+      )
+      return e?.phase === 'idle' ? e : null
+    }, 'spawned echo agent back to idle')
+
+    await until(async () => (await banner.chip()) ?? null, 'chip on screen')
+    await banner.clickChip()
+    await until(() => pane.agentsActive(), 'agents tab activated')
+
+    const filtered = (await monitorList(app.main)).filter((e) => e.rootSessionId === sid)
+    expect(filtered.length).toBe(2)
+    const rows = await until(async () => {
+      const rs = await pane.rows()
+      return rs.length === 2 ? rs : null
+    }, 'filtered rows = root + spawned')
+    expect(rows.filter((r) => r.arrow).length).toBe(1)
+
+    await pane.clearFilter()
+    expect(await pane.filterChip()).toBeNull()
+    // 只比数量不钉名单：全量里有 AM-3 根、AM-6 孤儿与各轮留下的 echo entry
+    const total = (await monitorList(app.main)).length
+    await until(
+      async () => (await pane.rows()).length === total || null,
+      'rows restored to full list'
+    )
+  })
+
+  it('AM-17 筛选空态（会话已删）+ chip 标签回落 id 截断；收尾清除筛选', async () => {
+    // F 要「无派生」：echo hook 还装着的话这一轮必然多一个 echo-agent entry，它随根会话
+    // 删除滞留成孤儿（rootSessionId 仍是 F），「无 entry」永远等不到 —— 先摘掉 hook
+    // （指纹缓存现扫，下一轮即生效，与 AM-5 落盘生效同一机制）
+    unlinkSync(join(app.hooksDir, 'echo.md'))
+
+    const sid = await openAndPrompt('AM-17 fade lane', 'fade-1')
+    await until(async () => (await banner.chip()) ?? null, 'chip on screen')
+    await banner.clickChip()
+    const filter = await until(
+      async () => (await pane.filterChip()) ?? null,
+      'filter chip on screen'
+    )
+    expect(filter.label).toContain('AM-17 fade lane')
+
+    // 切去别的会话（筛选不随会话切换复位 —— store 注释明示的设计），再删 F
+    expect(await sidebar.openSession('AM-11 banner lane')).toBe(true)
+    await app.main.eval(`window.api.session.delete(${JSON.stringify(sid)})`)
+    await until(
+      async () => !(await monitorList(app.main)).some((e) => e.rootSessionId === sid) || null,
+      'no monitor entry for the deleted session'
+    )
+
+    await until(async () => (await pane.rows()).length === 0 || null, 'filtered list empty')
+    const empty = await until(async () => (await pane.emptyText()) || null, 'filtered empty state')
+    // 筛选空态 ≠ AM-1 记下的通用空态（两条不同的 i18n 键；只比不等，不钉文案）
+    expect(genericEmptyText.length).toBeGreaterThan(0)
+    expect(empty).not.toBe(genericEmptyText)
+    // 条目已消失 → chip 标签从会话标题回落成 id 截断
+    const retained = await until(
+      async () => (await pane.filterChip()) ?? null,
+      'filter chip retained'
+    )
+    expect(retained.label).toBe(`${sid.slice(0, 8)}…`)
+
+    await pane.clearFilter()
   })
 })
