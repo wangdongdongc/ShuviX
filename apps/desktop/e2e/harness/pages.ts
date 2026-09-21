@@ -174,7 +174,7 @@ export interface ChatPane {
    * 不在屏时为 null。**只在对话区内找** —— 工具选择器触发钮上另有一个同名锚点。
    */
   mcpConnectingRow(): Promise<string | null>
-  /** 用户气泡内的内联 Token 胶囊文本（TokenChip 的 span[role=button]） */
+  /** 用户气泡内的内联 Token 胶囊文本（TokenChip 的 span[role=button]，读 data-token-display 锚点） */
   tokenBadges(msgId: string): Promise<string[]>
   /** 用户气泡内的附图解码状态 */
   images(): Promise<Array<{ naturalWidth: number; complete: boolean }>>
@@ -477,7 +477,7 @@ export function chatPane(main: CdpClient): ChatPane {
     tokenBadges: (msgId) =>
       main.eval<string[]>(
         `[...(${MSG(msgId)}?.querySelectorAll('span[role="button"]') ?? [])]
-          .map((s) => (s.textContent ?? '').trim())`
+          .map((s) => ((s instanceof HTMLElement && s.dataset.tokenDisplay) || (s.textContent ?? '')).trim())`
       ),
     images: () =>
       main.eval(

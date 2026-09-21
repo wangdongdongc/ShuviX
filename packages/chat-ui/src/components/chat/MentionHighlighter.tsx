@@ -28,8 +28,8 @@ interface ChipHit {
 /**
  * 输入框镜像层 —— 逐字复刻输入内容、覆于 textarea 之上（本层 pointer-events-none）。
  * 非胶囊文字透明（露出下方 textarea 的原生字形/光标/选区）；每处 @ 引用 / 粘贴占位渲染为
- * <TokenChip inline>—— 与斜杠命令芯片同款胶囊（accent 文字 + accent/10 底 + 圆角 + 点击弹 payload）。
- * 因镜像与 textarea 同字体同位置，胶囊 accent 字形恰压在下方原字形上；`inline` 变体布局中性故光标仍对齐。
+ * <TokenChip inline>—— 按类型分色的胶囊（类型色文字 + 类型色淡底，at 知识的前缀段弱化）。
+ * 因镜像与 textarea 同字体同位置，胶囊字形恰压在下方原字形上；`inline` 变体布局中性故光标仍对齐。
  * 滚动由父组件把本层 scrollTop 同步为 textarea.scrollTop。
  */
 export const MentionHighlighter = forwardRef<HTMLDivElement, MentionHighlighterProps>(

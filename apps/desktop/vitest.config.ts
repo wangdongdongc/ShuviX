@@ -37,6 +37,7 @@ export default defineConfig({
       '../../packages/chat-protocol/src/**/*.test.ts',
       '../../packages/agent-runtime/src/**/*.test.ts',
       '../../packages/chat-ui/src/**/*.test.ts',
+      '../../packages/chat-ui/src/**/*.test.tsx',
       '../../packages/app-shell/src/**/*.test.ts',
       '../../apps/extension/src/**/*.test.ts'
     ],
