@@ -174,7 +174,7 @@ describe('准入 —— 三种拒绝，都零副作用', () => {
 })
 
 describe('成功链', () => {
-  it('PIN-5 普通具名档案：落库 → invalidate → 工具种子 → 广播，返回 applied', async () => {
+  it('PIN-5 普通具名档案：落库 → invalidate → 广播，返回 applied（声明的工具不写进勾选）', async () => {
     mocks.getProfile.mockReturnValue(profile('myprof', { tools: ['read', 'skill:x', 'mcp:y'] }))
     const res = await pin('myprof')
 
@@ -184,11 +184,9 @@ describe('成功链', () => {
       applied: { model: undefined, tools: ['skill:x', 'mcp:y'] },
       modelUnavailable: undefined
     })
-    // 两次落库：先钉档案；工具种子是扩展能力勾选（settings.enabledTools）的整份替换
-    expect(mocks.daoUpdateSettings.mock.calls).toEqual([
-      [SID, { agentProfile: 'myprof' }],
-      [SID, { enabledTools: ['skill:x', 'mcp:y'] }]
-    ])
+    // 只落库一次：钉档案。档案声明的 mcp:/skill: 经 createAgent 的名单归一恒生效，
+    // 不写进扩展能力勾选 —— 写了只会替换掉从父会话继承来的那份
+    expect(mocks.daoUpdateSettings.mock.calls).toEqual([[SID, { agentProfile: 'myprof' }]])
     expect(invalidateSpy).toHaveBeenCalledWith(SID)
     expect(mocks.broadcastSessionConfigChanged).toHaveBeenCalledWith(SID)
     // 钉档案不是用户在这条会话上点选
@@ -197,12 +195,11 @@ describe('成功链', () => {
     expect(mocks.resolveProfileModelSpec).not.toHaveBeenCalled()
 
     // 顺序：钉档案在 invalidate 之前（解绑必须发生在关停之后，之后写种子才不会和旧运行时
-    // 抢着写），种子在 invalidate 之后，广播殿后
-    const [profileWrite, toolsWrite] = mocks.daoUpdateSettings.mock.invocationCallOrder
+    // 抢着写），广播殿后
+    const [profileWrite] = mocks.daoUpdateSettings.mock.invocationCallOrder
     const order = [
       profileWrite,
       invalidateSpy.mock.invocationCallOrder[0],
-      toolsWrite,
       mocks.broadcastSessionConfigChanged.mock.invocationCallOrder[0]
     ]
     expect(order).toEqual([...order].sort((a, b) => a - b))
@@ -221,7 +218,7 @@ describe('成功链', () => {
     expect(res.modelUnavailable).toBeUndefined()
   })
 
-  it('PIN-6b 模型声明但不可解析：不写模型种子、modelUnavailable 回传原始串，success 仍 true，工具种子与广播照常', async () => {
+  it('PIN-6b 模型声明但不可解析：不写模型种子、modelUnavailable 回传原始串，success 仍 true，广播照常', async () => {
     mocks.getProfile.mockReturnValue(
       profile('badmodel', { model: 'openai/nope', tools: ['read', 'skill:x'] })
     )
@@ -232,16 +229,16 @@ describe('成功链', () => {
     expect(res.applied?.model).toBeUndefined()
     expect(res.modelUnavailable).toBe('openai/nope')
     expect(mocks.appendModelChange).not.toHaveBeenCalled()
-    expect(mocks.daoUpdateSettings).toHaveBeenCalledWith(SID, { enabledTools: ['skill:x'] })
+    expect(res.applied?.tools).toEqual(['skill:x'])
     expect(mocks.broadcastSessionConfigChanged).toHaveBeenCalledWith(SID)
     // 档案本身照常生效（落库 + 失效重建）—— 模型不可用不阻断钉档案
     expect(mocks.daoUpdateSettings).toHaveBeenCalledWith(SID, { agentProfile: 'badmodel' })
     expect(invalidateSpy).toHaveBeenCalledTimes(1)
   })
 
-  it('PIN-7 工具种子：声明了才整份替换勾选；没声明 mcp:/skill: 就不写（空声明不算意见）', async () => {
-    // 内置 coding / explore 之流只列内置工具：按「完整声明」清空的话，每条子会话都会被摘掉
-    // 项目的 MCP 与 skill。勾选已在 create 时从父会话抄好，档案没意见就不该碰它
+  it('PIN-7 声明的 mcp:/skill: 永不写进勾选：继承来的那份原样留着，applied.tools 只回传声明的那截', async () => {
+    // 声明经名单归一恒生效；写进勾选只剩「替换掉从父会话继承来的」这一个作用 ——
+    // 内置 coding 声明了 skill:builtin:drawing，那样每条 coding 子会话都会丢掉项目的 MCP 与 skill
     mocks.getProfile.mockReturnValue(profile('builtin-only', { tools: ['read', 'bash'] }))
     const res = await pin('builtin-only')
     expect(mocks.daoUpdateSettings.mock.calls).toEqual([[SID, { agentProfile: 'builtin-only' }]])
@@ -253,9 +250,7 @@ describe('成功链', () => {
       profile('mixed', { tools: ['MCP:Ctx7', 'skill:a', 'mcp:b', 'read'] })
     )
     const mixed = await pin('mixed')
-    expect(mocks.daoUpdateSettings).toHaveBeenCalledWith(SID, {
-      enabledTools: ['skill:a', 'mcp:b']
-    })
+    expect(mocks.daoUpdateSettings.mock.calls).toEqual([[SID, { agentProfile: 'mixed' }]])
     expect(mixed.applied?.tools).toEqual(['skill:a', 'mcp:b'])
   })
 })

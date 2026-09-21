@@ -1286,7 +1286,12 @@ export interface ExtItemShot {
    * 只读态同样压暗，所以两种压暗不能按透明度分辨：离线只认这个标记。
    */
   offline: boolean
-  /** 悬停提示（`title`）：可改时是条目自己的说明，只读时换成「为什么改不了」 */
+  /**
+   * 这一条由会话的 agent 档案声明（`data-declared`）：恒生效，画成已勾、禁用、挂锁 —— 不在
+   * 会话勾选里，也不会被写进勾选。它的禁用与「运行时已建」的只读是两回事，按这个标记区分。
+   */
+  declared: boolean
+  /** 悬停提示（`title`）：可改时是条目自己的说明，只读时换成「为什么改不了」，声明项说是谁声明的 */
   title: string
 }
 
@@ -1300,6 +1305,7 @@ const EXT_ITEMS = (scope: string): string =>
       disabled: !!box?.disabled,
       lockedLook: label.getAttribute('aria-disabled') === 'true',
       offline: label.hasAttribute('data-offline'),
+      declared: label.hasAttribute('data-declared'),
       title: label.getAttribute('title') ?? ''
     }
   })`
@@ -1643,7 +1649,12 @@ export interface ToolPickerItem {
    * 于是 `offline === false` 这条否定断言最严。（只读态也压暗，所以不再按透明度类名判）
    */
   offline: boolean
-  /** 悬停提示（`title`）：只读时是「为什么改不了」，可改时没有 */
+  /**
+   * 这一行由会话的 agent 档案声明（`data-declared`）：恒生效，画成已勾、禁用、挂一把小锁 ——
+   * 与「运行时已建」的只读不是一回事（那时整排压暗、触发钮挂锁），按这个标记区分。
+   */
+  declared: boolean
+  /** 悬停提示（`title`）：只读时是「为什么改不了」，声明项是「谁声明的」，其余可改时没有 */
   title: string
 }
 
@@ -1714,6 +1725,7 @@ export function toolPickerPane(main: CdpClient): ToolPickerPane {
           offline:
             label.hasAttribute('data-offline') ||
             !!label.querySelector('span.text-red-400 svg'),
+          declared: label.hasAttribute('data-declared'),
           title: label.getAttribute('title') ?? ''
         }
       })`),

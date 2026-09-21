@@ -732,6 +732,8 @@ declare global {
           defaultEnabled?: boolean
           serverStatus?: 'connected' | 'disconnected' | 'connecting' | 'error'
           isEnabled?: boolean
+          isBuiltin?: boolean
+          declaredBy?: string
         }>
       >
       presentations: () => Promise<

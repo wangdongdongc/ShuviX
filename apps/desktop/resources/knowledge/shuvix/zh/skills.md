@@ -53,9 +53,11 @@ ShuviX 只读 `SKILL.md`。伴随文件留给 agent 在加载 skill 之后用 `r
 | 全局       | `~/.shuvix/skills/<dir>/SKILL.md`           | `<name>`              | 缺省开启；可禁用                                             |
 | 项目       | `<project>/.claude/skills/<dir>/SKILL.md`   | `<name>`              | 对该项目里的会话**恒开启**；名字撞车时优先                   |
 | 外部目录   | 设置 → Skills 里注册的任意文件夹            | `<dirName>:<name>`    | 缺省开启；整个目录或单个 skill 都可禁用                      |
+| 内置       | 随应用发布，只读                            | `builtin:<name>`      | 缺省开启；可禁用                                             |
 
-目录名与 `name` 可以不同；ShuviX 按 `name` 匹配。没有内置 skill。启用状态存在
-`~/.shuvix/skills/.config.json`：
+目录名与 `name` 可以不同；ShuviX 按 `name` 匹配。内置 skill 随应用发布（按界面语言一个目录），不能编辑；
+目前只有一个 `builtin:drawing` —— 内联 SVG 作图的手艺 —— `work`、`chat`、`coding`、`bot`、`notebook`
+几个 agent 在 `shuvix-tools` 里点了它的名。启用状态存在 `~/.shuvix/skills/.config.json`：
 
 ```json
 { "disabled": ["<name>", "<dirName>:<name>"], "disabledDirs": ["<dirName>"], "dirs": [{ "name": "<dirName>", "path": "/abs/path" }] }
@@ -74,7 +76,7 @@ ShuviX 只读 `SKILL.md`。伴随文件留给 agent 在加载 skill 之后用 `r
    长 skill 没用到时零成本。
    - **按会话**：会话配置的扩展能力一节（以及输入框的工具选择器）—— 存在会话的 `settings.enabledTools`
      里，形如 `skill:<name>`；项目自己的缺省会种进新会话；这份选择在会话的 agent 创建时读一次，agent
-     存在期间只读。
+     存在期间只读。会话的 agent 文件声明的条目也列在那里，显示为已勾、锁住：不管怎么选，它们都开着。
    - **按 agent 文件**：agent md 里 `shuvix-tools: …, skill:<name>` —— 不管会话选了什么，那个 agent
      总有这个 skill。
    - 项目级 skill 对在该项目里工作的任何根 agent 的 `skill` 工具都可见。

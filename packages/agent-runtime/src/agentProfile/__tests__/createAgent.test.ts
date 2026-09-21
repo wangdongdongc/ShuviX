@@ -11,6 +11,7 @@ import {
   type AgentHostAdapter,
   type ToolResolveRequest
 } from '../createAgent'
+import type { PromptVarsCtx } from '../promptVars'
 import type { InProcessAgentType, SubAgentModelConfig } from '../../subagent/types'
 import type { SpawnContext } from '../../subagent/manager'
 import type { RuntimeNetwork } from '../../types'
@@ -746,46 +747,42 @@ describe('createAgentFactory —— systemContext（调用方追加的上下文�
 })
 
 /**
- * 扩展能力（mcp:/skill:）的 overlay —— 会话设置里的勾选，**只在创建这一刻读一次**。
+ * 工具名单归一（TN）—— 档案 `shuvix-tools` 声明的一切（内置名 / mcp: / skill:）对 root 与 spawned
+ * **恒生效**；root 会话的勾选（`toolOverlay`，只收 mcp:/skill:）只能往上**加**：既去不掉档案声明的
+ * 项，也带不进一个内置工具名。
  *
- * root：档案里声明的 mcp:/skill: 不直接生效（它们是子会话钉档案时的种子，最终以勾选为准），
- * 勾选里只有 mcp:/skill: 进得来；spawned 没有勾选，档案即全部。产物上不再有换工具的入口 ——
- * 宿主在运行时存在期间把勾选锁成只读，靠的正是「运行期换不了」这条。
+ * 同一份名单喂给两处：变量表（`promptVars` 的 `toolNames`）与工具解析（`resolveTools` 的 `names`）。
+ * 提示词里提到的能力（加载哪个技能、用哪个工具改图）只能以它真在这份名单上为前提 —— 两边各算
+ * 各的，迟早一边指向另一边没有的东西。
+ *
+ * 勾选**只在创建这一刻读一次**：产物上没有换工具的入口，宿主在运行时存在期间把勾选锁成只读，
+ * 靠的正是「运行期换不了」这条。
  */
-describe('createAgentFactory —— 扩展能力 overlay（EXT-U-5）', () => {
-  const EXT_PROFILE: InProcessAgentType = {
-    ...PROFILE,
-    tools: ['read', 'mcp:prof', 'skill:prof', 'agent']
-  }
+describe('createAgentFactory —— 工具名单归一（TN）', () => {
+  /** P：内置名、mcp、skill、派发四类各一 */
+  const P = ['read', 'mcp:prof', 'skill:prof', 'agent']
+  const EXT_PROFILE: InProcessAgentType = { ...PROFILE, tools: P }
   /** 首次 resolveTools 请求里的归一名单 */
   const namesOf = (b: HostBundle): readonly string[] =>
     (b.resolveTools.mock.calls[0][0] as ToolResolveRequest).names
 
-  it('EXT-U-5 root 以勾选为准（档案的 mcp:/skill: 让位）、不带勾选只剩内置名；spawned 取档案全量；产物没有 applyToolOverlay', async () => {
-    const withOverlay = makeHost()
-    const created = await createAgentFactory(withOverlay.host).createAgent({
+  const createRoot = (
+    b: HostBundle,
+    toolOverlay?: readonly string[]
+  ): Promise<Awaited<ReturnType<AgentFactory['createAgent']>>> =>
+    createAgentFactory(b.host).createAgent({
       kind: 'root',
       sessionId: 's1',
       profile: EXT_PROFILE,
       model: MODEL_CFG,
       cwd: '/w',
-      toolOverlay: ['skill:sel']
+      toolOverlay
     })
-    expect(namesOf(withOverlay)).toEqual(['read', 'agent', 'skill:sel'])
 
-    // 没有勾选 = 一个扩展能力都不带：档案里的 mcp:prof / skill:prof 不会借白名单溜回来
-    const bare = makeHost()
-    await createAgentFactory(bare.host).createAgent({
-      kind: 'root',
-      sessionId: 's2',
-      profile: EXT_PROFILE,
-      model: MODEL_CFG,
-      cwd: '/w'
-    })
-    expect(namesOf(bare)).toEqual(['read', 'agent'])
-
-    const spawned = makeHost()
-    await createAgentFactory(spawned.host).createAgent({
+  const createSpawned = (
+    b: HostBundle
+  ): Promise<Awaited<ReturnType<AgentFactory['createAgent']>>> =>
+    createAgentFactory(b.host).createAgent({
       kind: 'spawned',
       sessionId: 'sub-1',
       profile: EXT_PROFILE,
@@ -795,9 +792,79 @@ describe('createAgentFactory —— 扩展能力 overlay（EXT-U-5）', () => {
       spawn: SPAWN,
       spawnHelpers: { requestUserInput: vi.fn() }
     })
-    expect(namesOf(spawned)).toEqual(['read', 'mcp:prof', 'skill:prof', 'agent'])
 
-    // 运行期换工具的入口已删：谁把它加回来，「运行时存在期间勾选只读」就不再成立
+  it('TN-1 root 带勾选：档案声明的 mcp:/skill: 原位留着，勾选的接在末尾', async () => {
+    const b = makeHost()
+    await createRoot(b, ['skill:sel'])
+    expect(namesOf(b)).toEqual(['read', 'mcp:prof', 'skill:prof', 'agent', 'skill:sel'])
+  })
+
+  it('TN-2 root 不带勾选 / 勾选为空：档案全量照样生效 —— 勾选去不掉档案声明的项', async () => {
+    for (const overlay of [undefined, []]) {
+      const b = makeHost()
+      await createRoot(b, overlay)
+      expect(namesOf(b), JSON.stringify(overlay)).toEqual(P)
+    }
+  })
+
+  it('TN-3 root 勾选里的脏数据：声明项保位、重复塌缩、内置名（bash / write / read）一个都进不来', async () => {
+    const b = makeHost()
+    await createRoot(b, ['skill:prof', 'bash', 'mcp:new', 'write', 'read', 'mcp:prof', 'mcp:new'])
+    const names = namesOf(b)
+    expect(names).toEqual(['read', 'mcp:prof', 'skill:prof', 'agent', 'mcp:new'])
+    // 勾选混进内置名（手改的设置、被新会话继承的项目配置）不能借 overlay 越过档案
+    expect(names).not.toContain('bash')
+    expect(names).not.toContain('write')
+    expect(names.filter((n) => n === 'read')).toHaveLength(1)
+  })
+
+  it('TN-4 spawned 没有勾选：名单恰为档案全量、保持档案顺序；root 不带勾选时与之逐项相同', async () => {
+    const spawned = makeHost()
+    await createSpawned(spawned)
+    expect(namesOf(spawned)).toEqual(P)
+
+    const root = makeHost()
+    await createRoot(root)
+    // 同一条规则：档案写了什么，这个 agent 就带什么 —— 不再分 root / spawned 两套
+    expect(namesOf(root)).toEqual(namesOf(spawned))
+  })
+
+  it('TN-5 变量表与工具解析读同一份名单：promptVars 恰调一次，toolNames 等于 resolveTools 的 names', async () => {
+    const root = makeHost()
+    const rootVars = vi.fn((_ctx: PromptVarsCtx) => ({ persona: 'PERSONA' }))
+    root.host.promptVars = rootVars
+    await createRoot(root, ['skill:sel', 'bash'])
+    expect(rootVars).toHaveBeenCalledTimes(1)
+    const rootNames = namesOf(root)
+    expect(rootVars).toHaveBeenCalledWith({
+      sessionId: 's1',
+      kind: 'root',
+      cwd: '/w',
+      toolNames: rootNames
+    })
+    // 被 overlay 滤掉的内置名同样不会出现在变量表的判断依据里
+    const rootCtx = rootVars.mock.calls[0][0]
+    expect(rootCtx.toolNames).toEqual(['read', 'mcp:prof', 'skill:prof', 'agent', 'skill:sel'])
+    expect(rootCtx.toolNames).not.toContain('bash')
+
+    const spawned = makeHost()
+    const spawnedVars = vi.fn((_ctx: PromptVarsCtx) => ({ persona: 'PERSONA' }))
+    spawned.host.promptVars = spawnedVars
+    await createSpawned(spawned)
+    expect(spawnedVars).toHaveBeenCalledTimes(1)
+    expect(spawnedVars).toHaveBeenCalledWith({
+      sessionId: 'sub-1',
+      kind: 'spawned',
+      cwd: '',
+      toolNames: P
+    })
+    expect(namesOf(spawned)).toEqual(P)
+  })
+
+  it('TN-6 产物上没有 applyToolOverlay —— 运行期换工具的入口已删', async () => {
+    const b = makeHost()
+    const created = await createRoot(b, ['skill:sel'])
+    // 谁把它加回来，「运行时存在期间勾选只读」就不再成立
     expect('applyToolOverlay' in created).toBe(false)
   })
 })

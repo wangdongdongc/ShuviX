@@ -145,16 +145,24 @@ describe('根会话残留的戳被忽略、不迁移', () => {
 })
 
 describe('子会话（parentId 非空）才读戳', () => {
-  it('FD-4 带戳的子会话：systemPrompt 换成该档案 body，内置工具收窄到其白名单', async () => {
+  it('FD-4 带戳的子会话：systemPrompt 换成该档案 body，工具表收窄到其白名单（连 skill 都没有）', async () => {
     const root = await createSession({ title: 'fd-root-chat' })
     const child = await createPinnedChildSession(app, { parentSid: root, agentProfile: PINNED })
     const info = (await runtimeInfo(child))!
     expect(info.systemPrompt.startsWith(PINNED_BODY)).toBe(true)
-    // shuvix-tools: read —— 内置工具收窄到白名单（SkillTool 由装配固定附加，不受白名单管辖）
+    // shuvix-tools: read —— 工具表就是这份白名单（加上会话勾选，这里为空）。SkillTool 没有
+    // 「装配固定附加」的例外：只有名单点了 `skill:<name>` 才挂，这份档案一个都没点
     const names = info.tools.map((t) => t.name)
     expect(names).toContain('read')
     expect(names).not.toContain('bash')
     expect(names).not.toContain('write')
+    expect(names).not.toContain('skill')
+
+    // 对照：父会话落在 chat 基座，它的 shuvix-tools 点了内置作图技能 —— 同一个实例里 skill 是挂得上的，
+    // 所以上面那条「没有」来自戳的档案收窄，不是这台实例压根没有技能
+    const parent = (await runtimeInfo(root))!
+    expectChatBody(parent.systemPrompt)
+    expect(parent.tools.map((t) => t.name)).toContain('skill')
   })
 
   it('FD-5 戳的档案被删：回落父形态基座（无项目父 chat / 项目父 work），戳留着；重写档案后恢复', async () => {

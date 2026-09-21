@@ -103,5 +103,7 @@ export interface ChatGateway {
     group?: string
     defaultEnabled?: boolean
     serverStatus?: string
+    /** 会话的 agent 档案声明了这条 mcp:/skill: 项（值为档案显示名）：恒生效，选择器里锁成已勾 */
+    declaredBy?: string
   }>
 }

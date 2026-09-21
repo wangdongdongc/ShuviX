@@ -56,9 +56,12 @@ ShuviX が読むのは `SKILL.md` だけです。同梱ファイルは、エー�
 | グローバル         | `~/.shuvix/skills/<dir>/SKILL.md`            | `<name>`               | 既定でオン；無効化できる                                                |
 | プロジェクト       | `<project>/.claude/skills/<dir>/SKILL.md`    | `<name>`               | そのプロジェクトのセッションでは**常にオン**；名前が衝突すれば優先      |
 | 外部ディレクトリ   | 設定 → Skills で登録した任意のフォルダ       | `<dirName>:<name>`     | 既定でオン；ディレクトリ全体または個々の skill を無効化できる           |
+| 組み込み           | アプリに同梱、読み取り専用                   | `builtin:<name>`       | 既定でオン；無効化できる                                                |
 
-ディレクトリ名と `name` は違っていてもよく、ShuviX は `name` で一致させます。組み込みの skill は
-ありません。有効化状態は `~/.shuvix/skills/.config.json` にあります：
+ディレクトリ名と `name` は違っていてもよく、ShuviX は `name` で一致させます。組み込みの skill はアプリに
+同梱され（UI 言語ごとに一つのディレクトリ）、編集できません。現在は `builtin:drawing` —— インライン SVG
+で図を描く手わざ —— の一つだけで、`work`、`chat`、`coding`、`bot`、`notebook` の各エージェントが
+`shuvix-tools` でその名を挙げています。有効化状態は `~/.shuvix/skills/.config.json` にあります：
 
 ```json
 { "disabled": ["<name>", "<dirName>:<name>"], "disabledDirs": ["<dirName>"], "dirs": [{ "name": "<dirName>", "path": "/abs/path" }] }
@@ -80,7 +83,8 @@ ShuviX が読むのは `SKILL.md` だけです。同梱ファイルは、エー�
    - **セッションごと**：セッション設定の拡張機能セクション（と入力欄のツールピッカー）——
      セッションの `settings.enabledTools` に `skill:<name>` として保存される；プロジェクト自身の既定が
      新しいセッションに植えられる；この選択はセッションのエージェント作成時に一度だけ読まれ、その
-     エージェントが存在する間は読み取り専用。
+     エージェントが存在する間は読み取り専用。セッションのエージェントファイルが宣言した項目もそこに
+     チェック済み・ロック状態で並ぶ：選択に関わらず常にオン。
    - **agent ファイルごと**：agent md の `shuvix-tools: …, skill:<name>` —— セッションが何を選んで
      いようと、そのエージェントは常にその skill を持つ。
    - プロジェクトレベルの skill は、そのプロジェクトで働くどのルートエージェントの `skill` ツール

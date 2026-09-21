@@ -68,19 +68,24 @@ applications' meaning of tool names would be misread — use `shuvix-tools`), an
 A comma-separated string. Each entry is one of:
 
 - a **builtin tool name** — case-insensitive, normalised to lower case: `bash`, `read`, `write`,
-  `edit`, `ls`, `glob`, `grep`, `ask`, `browser`, `ssh`, `database`, `git`,
-  `session`, `knowledge`;
+  `edit`, `ls`, `glob`, `grep`, `ask`, `browser`, `database`, `git`,
+  `session`, `knowledge`, `artifact`;
 - `agent` — opt-in to **dispatching sub-agents** with the `agent` tool (only up to the nesting
   cap: a dispatched agent may itself dispatch only while the depth limit, 2 by default, allows);
 - `mcp:<server>` — every tool of that MCP server (the server's name as configured in Settings;
   case is kept after the prefix; the server is connected lazily when the agent is created);
-- `skill:<name>` — that skill (a namespaced skill is written `skill:<dir>:<name>`).
+- `skill:<name>` — that skill (a namespaced skill is written `skill:<dir>:<name>`; the skills
+  shipped with ShuviX are `skill:builtin:<name>`).
 
 Entries are de-duplicated in order. A name that does not exist on this host is silently dropped
-— the agent is created without it. Narrowing a list is **not** how a role is expressed in
-ShuviX: an agent without `grep` just greps through `bash`. The builtin `work`, `chat` and
-`coding` agents deliberately share one list (`bash, read, write, edit, ask, browser, ls, grep,
-glob, ssh, database, agent, session, knowledge`) and differ only in their bodies.
+— the agent is created without it. **Everything the list names is on**, however the agent is put
+to use. When it is the root of a session, its `mcp:` / `skill:` entries appear in that session's
+extension pickers ticked and locked (hovering says which agent declared them); the session's own
+ticks only add to them, and taking one away means overriding the agent. Narrowing a list is
+**not** how a role is expressed in ShuviX: an agent without `grep` just greps through `bash`.
+The builtin `work`, `chat` and `coding` agents deliberately share one list (`bash, read, write,
+edit, ask, browser, ls, grep, glob, database, agent, session, knowledge, artifact,
+skill:builtin:drawing`) and differ only in their bodies.
 
 ### The body — the system prompt
 
@@ -150,8 +155,8 @@ agents `coding`, `browser`, `explore`, `widget`, `wiki`, `wiki-writer`,
    enumerate available agents to the model — a name must be known from the prompt or from the
    user.
 2. **As the persona of a sub-session** — the `session` tool's `agent_profile` (any agent that is
-   not a base). A non-empty list of `mcp:` / `skill:` entries in that agent's `shuvix-tools`
-   replaces the extensions the child copied from its parent; an empty one keeps them.
+   not a base). The child keeps the extensions it copied from its parent; the `mcp:` / `skill:`
+   entries in that agent's `shuvix-tools` are on in addition, like everything else the list names.
 3. **As a hook's agent** (`shuvix-hook-agent` — see the `hook-md` entry).
 4. **As a base override** (above).
 

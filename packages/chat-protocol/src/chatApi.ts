@@ -448,6 +448,12 @@ export interface ToolInfo {
   defaultEnabled?: boolean
   serverStatus?: 'connected' | 'disconnected' | 'connecting' | 'error'
   isEnabled?: boolean
+  /**
+   * 这条 mcp:/skill: 项由会话的 agent 档案在 `shuvix-tools` 里声明 —— 值是那个档案的显示名。
+   * 档案声明的项对这个档案的每条会话都恒生效，会话勾选只能在其上叠加；选择器因此把它画成
+   * 已勾、锁住，悬停时说是谁声明的。要去掉它，路径是覆盖那份档案 md。
+   */
+  declaredBy?: string
 }
 
 export interface ToolPresentation {

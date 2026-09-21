@@ -36,6 +36,7 @@ import i18next from 'i18next'
 import { formatLanguageDisplay, renderVisualCraft, renderVisualGuide } from '@shuvix/agent-runtime'
 import { getBuiltinToolEntries } from '../services/toolRegistry'
 import { SkillTool } from '../services/skillTool'
+import { skillService } from '../services/skillService'
 import { mcpService } from '../services/mcpService'
 import { resolveModel } from '../services/agentModelResolver'
 import { providerOAuthService } from '../services/providerOAuthService'
@@ -145,19 +146,12 @@ async function resolveDesktopTools(req: ToolResolveRequest): Promise<AnyAgentToo
     )
   }
 
-  // SkillTool：root 恒注入（内置 skill 现在无条件在架，见 skillTool.ts 构造函数的说明 ——
-  // 于是无项目的 chat 会话也够得到）；spawned 仍仅具名注入，但带 projectPath（派生 agent
-  // 可见项目级 skills）。只有当这一次真有 skill 可给时才挂上：空手的工具只是噪音。
-  //
-  // 为什么 spawned 不跟着放开：只有 root 的散文是用户直接读到的，内联图也只在那里成立；
-  // 派生 agent 的产出要经父会话转述，给它一个「加载作图手艺」的工具是白占工具表。
+  // SkillTool：名单里点了名的 skill 才上架 —— 档案声明的（含内置的 `skill:builtin:drawing`）
+  // 与会话勾选的一视同仁，root / spawned 同一条规则；带 projectPath（派生 agent 可见项目级
+  // skills）。只有当这一次真有 skill 可给时才挂上：空手的工具只是噪音。
   const projectPath = sessionProject(req.rootSessionId)?.path
-  if (req.kind === 'root' || skillNames.length > 0) {
-    // includeBuiltin 只给 root：内置技能是「说明 ShuviX 自己会什么」，而只有 root 的散文是
-    // 用户直接读到的。派生 agent 点名了某个 skill 时只拿它点的那个，不顺带收下整架内置。
-    const skillTool = new SkillTool(skillNames, projectPath, {
-      includeBuiltin: req.kind === 'root'
-    })
+  if (skillNames.length > 0) {
+    const skillTool = new SkillTool(skillNames, projectPath)
     if (skillTool.hasSkills) tools.push(wrap(skillTool))
   }
 
@@ -224,6 +218,30 @@ async function resolveDesktopTools(req: ToolResolveRequest): Promise<AnyAgentToo
 
 // ─── 创建期变量表（{{shuvix:*}} 占位符取值；原 environment/workspace 段拆解而来） ───
 
+/** 内置作图技能在档案 `shuvix-tools` 里的写法 */
+const DRAWING_SKILL = 'skill:builtin:drawing'
+/**
+ * artifact 工具的名字（tools/artifact.ts）。这里只拿它比对名单，不为一个字符串去引入工具模块 ——
+ * 工具模块加载即自注册。工具名本身就是档案 md 里写的契约，不会悄悄改
+ */
+const ARTIFACT_TOOL_NAME = 'artifact'
+
+/**
+ * 这个 agent 的货架上真有作图技能：名单点了它的名，且没在侧栏停用。与 SkillTool 上架是同一个
+ * 判断（名单 ∩ findEnabled）—— 提示里的「先加载 builtin:drawing」因此只出现在加载得到的地方。
+ *
+ * 差一处，写明而不穿线：这里不带项目路径（派生 agent 的 ctx.sessionId 是 agentId，解析不出根会话的
+ * 项目），SkillTool 带。两边只在「某个项目级 skill 的 frontmatter 自称 `builtin:drawing`、在那个
+ * 项目里顶替了内置那份」时才可能分岔 —— 那是有人故意撞内置命名空间，不值得为它改变量表的入参。
+ *
+ * 名单里没点名时不去扫技能目录：大多数 agent（titler、explore…）走的是这条短路。
+ */
+function hasDrawingSkill(names: readonly string[]): boolean {
+  if (!names.includes(DRAWING_SKILL)) return false
+  const name = DRAWING_SKILL.slice('skill:'.length)
+  return skillService.findEnabled().some((s) => s.name === name)
+}
+
 /**
  * 桌面变量表：environment 类标量（git/平台/shell/os/日期/语言/版本，取值逻辑自原
  * environment 段平移）+ 工作目录 + 项目名。文本本身（标题/标签/句式）已内化进
@@ -247,6 +265,13 @@ function desktopPromptVars(ctx: PromptVarsCtx): PromptVars {
     }
   })()
   const project = sessionProject(ctx.sessionId)
+  // 作图说明的两个开关按**这一个 agent** 的名单判，与 resolveTools 读的是同一份（ctx.toolNames）：
+  // 技能在架才给精简契约 + 指路，否则整段手艺留在提示里；手里有 artifact 才教 adopt。
+  // 这样说明里提到的每样东西都真在它手里 —— 派发出来的、覆盖了档案的、在侧栏停用了技能的都一样
+  const visual = {
+    drawingSkill: hasDrawingSkill(ctx.toolNames),
+    artifact: ctx.toolNames.includes(ARTIFACT_TOOL_NAME)
+  }
   return {
     workingDirectory: ctx.cwd,
     isGitRepo: existsSync(join(cwd, '.git')) ? 'Yes' : 'No',
@@ -258,9 +283,8 @@ function desktopPromptVars(ctx: PromptVarsCtx): PromptVars {
     appVersion,
     // 内联作图的规矩与调色板 token（自含块，正文里一行占位符引入）—— 与 body 同语言：
     // 界面语言是宿主的权威，档案构建期挑 body 用的也是这一个。
-    // skillShelf：桌面端有内置技能货架（SkillTool），所以带上那句「先加载 builtin:drawing」
-    visualGuide: renderVisualGuide(i18next.language, { skillShelf: true }),
-    visualCraft: renderVisualCraft(i18next.language, { skillShelf: true }),
+    visualGuide: renderVisualGuide(i18next.language, visual),
+    visualCraft: renderVisualCraft(i18next.language, visual),
     projectName: project?.name ?? '',
     // 根会话供给 {{shuvix:notebookPath}}（笔记本会话的根 Agent 走 notebook 基座档案）：
     // 非笔记本会话为空串 → 占位块收敛消失。派生 ctx.sessionId 是 agentId，无从解析 —— 不供给，

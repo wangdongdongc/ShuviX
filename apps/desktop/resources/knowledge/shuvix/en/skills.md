@@ -56,8 +56,12 @@ after loading the skill; refer to them by path from the skill's base directory.
 | global           | `~/.shuvix/skills/<dir>/SKILL.md`            | `<name>`               | on by default; can be disabled                                               |
 | project          | `<project>/.claude/skills/<dir>/SKILL.md`    | `<name>`               | **always on** for sessions in that project; preferred when a name clashes    |
 | external directory | any folder registered in Settings → Skills | `<dirName>:<name>`     | on by default; the whole directory or single skills can be disabled          |
+| builtin          | shipped inside the application, read-only    | `builtin:<name>`       | on by default; can be disabled                                               |
 
-The directory name and `name` may differ; ShuviX matches by `name`. There are no builtin skills.
+The directory name and `name` may differ; ShuviX matches by `name`. Builtin skills come with the
+application (one directory per UI language) and cannot be edited; today there is one,
+`builtin:drawing` — the craft for inline SVG figures — which the `work`, `chat`, `coding`, `bot`
+and `notebook` agents name in their `shuvix-tools`.
 Enable state lives in `~/.shuvix/skills/.config.json`:
 
 ```json
@@ -81,7 +85,8 @@ Edit it through Settings → Skills; the file is ShuviX's, not a place for hand 
    - **Per session**: the Extensions section of the session config (and the input-box tool
      picker) — stored in the session's `settings.enabledTools` as `skill:<name>`; a project's
      own defaults seed new sessions; the selection is read once when the session's agent is
-     created and is read-only while that agent exists.
+     created and is read-only while that agent exists. Entries the session's agent file declares
+     are listed there too, ticked and locked: they are on regardless of the selection.
    - **Per agent file**: `shuvix-tools: …, skill:<name>` in an agent md — that agent always has
      the skill, whatever the session selected.
    - Project-level skills are visible to the `skill` tool of any root agent working in that

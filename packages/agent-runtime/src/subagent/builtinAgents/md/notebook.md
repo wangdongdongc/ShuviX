@@ -3,7 +3,7 @@ shuvix: agent v1
 shuvix-builtin: true
 name: notebook
 description: Base profile for notebook sessions — the persistent root agent conversing alongside the open note. Override it with a custom agent named "notebook" to customize notebook behavior.
-shuvix-tools: read, write, edit, ls, grep, glob, bash, browser, ask
+shuvix-tools: read, write, edit, ls, grep, glob, bash, browser, ask, skill:builtin:drawing
 shuvix-displayName: Notebook
 shuvix-project-awareness: true
 ---

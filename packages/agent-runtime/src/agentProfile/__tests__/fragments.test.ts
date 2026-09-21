@@ -1,6 +1,7 @@
 /**
- * 提示片段（`agentProfile/fragments/`）—— `renderVisualGuide` / `renderVisualCraft` 的语言回退，
- * 以及「哪些内置档案引用了 `{{shuvix:visualGuide}}` / `{{shuvix:visualCraft}}`」这份归属。
+ * 提示片段（`agentProfile/fragments/`）—— `renderVisualGuide` / `renderVisualCraft` 的语言回退、
+ * 两个开关（`drawingSkill` / `artifact`）各自切掉哪一段，以及「哪些内置档案引用了
+ * `{{shuvix:visualGuide}}` / `{{shuvix:visualCraft}}`」这份归属。
  *
  * 两件事分开在两处钉：
  *  - **谁引用** 在这里（档案自己的事，纯文本，不需要宿主）；
@@ -9,13 +10,59 @@
  * `substitutePromptVars` 只会把裸占位符原样发给模型。
  *
  * 刻意不测片段 md 的散文文案：那是提示词措辞，会随调优改动，钉住只会制造维护噪声。
- * 这里只钉结构（语言回退、非空、自含块、被谁引用）。
+ * 这里只钉结构（语言回退、非空、自含块、被谁引用），段落只凭**代码记号**认 —— 三种语言里
+ * 一字不差的那些：
+ *  - POINTER `builtin:drawing` —— 只在「先加载技能」那句指路里；
+ *  - EXAMPLE 「```svg + 换行 + <svg」—— 手艺段的范例围栏（载体段那个 ```svg 后面跟的是空格）；
+ *  - CARRIER 「```mermaid」—— 只在载体段；
+ *  - ADOPT `adopt` —— 三种语言里都只出现在「改图走 adopt」那一段；
+ *  - CONTRACT —— 契约段的一组记号：无论两个开关怎么拨都必须在。
  */
 import { describe, it, expect } from 'vitest'
-import { renderVisualCraft, renderVisualGuide } from '../fragments'
+import { renderVisualCraft, renderVisualGuide, type VisualGuideOptions } from '../fragments'
 import { buildBuiltinProfiles, BASE_PROFILE_NAMES } from '../../subagent/builtinAgents'
 
 const LANGUAGES = ['en', 'zh', 'ja']
+
+const POINTER = 'builtin:drawing'
+const EXAMPLE = '```svg\n<svg'
+const CARRIER = '```mermaid'
+const ADOPT = 'adopt'
+const CONTRACT = [
+  'viewBox',
+  'role="img"',
+  'aria-label',
+  '--viz-1',
+  '--theme-text-secondary',
+  '<style>',
+  '<foreignObject>',
+  '<script>'
+]
+
+/** 两个开关的四种组合 */
+const OPTS: VisualGuideOptions[] = [
+  { drawingSkill: false, artifact: false },
+  { drawingSkill: true, artifact: false },
+  { drawingSkill: false, artifact: true },
+  { drawingSkill: true, artifact: true }
+]
+const label = (opts: VisualGuideOptions): string =>
+  `drawingSkill=${!!opts.drawingSkill} artifact=${!!opts.artifact}`
+
+/** 两个出口；craft 只认 drawingSkill（多给的 artifact 被忽略 —— 类型上它就只收那一个键） */
+const EXITS = [
+  ['guide', (l: string, o?: VisualGuideOptions): string => renderVisualGuide(l, o)],
+  ['craft', (l: string, o?: VisualGuideOptions): string => renderVisualCraft(l, o)]
+] as const
+
+/** 子串出现次数 */
+const countOf = (text: string, needle: string): number => text.split(needle).length - 1
+/** 按空行切段（与片段 md 的段落边界一致） */
+const paragraphs = (text: string): string[] =>
+  text
+    .split(/\n[ \t]*\n/)
+    .map((p) => p.trim())
+    .filter(Boolean)
 
 import { createInlineMdReader } from '../../subagent/builtinAgents/inlineSources'
 
@@ -64,37 +111,129 @@ describe('renderVisualGuide —— 语言回退', () => {
   })
 })
 
-describe('renderVisualGuide —— skillShelf：唯一的宿主分支', () => {
-  // 分的不是围栏（渲染在共用的 chat-ui 里，两端都成立），是那句「动笔前先加载
-  // `builtin:drawing`」：内置技能货架只有桌面端有（扩展端的 resolveTools 直接丢弃 `skill:` 名，
-  // 那边没有 SkillTool）。少了这个分支，扩展端每个 root agent 的系统提示都会指挥模型去加载
-  // 一个那里根本不存在的技能 —— 一条永远走不通的指路比没有指路更糟。
-  const BUILTIN_SKILL = 'builtin:drawing'
-
-  it.each(LANGUAGES)('%s：带 skillShelf 才有那句指路，不带时整行消失', (language) => {
-    expect(renderVisualGuide(language, { skillShelf: true })).toContain(BUILTIN_SKILL)
-    expect(renderVisualGuide(language)).not.toContain(BUILTIN_SKILL)
-    expect(renderVisualGuide(language, { skillShelf: false })).not.toContain(BUILTIN_SKILL)
-  })
-
-  it.each(LANGUAGES)('%s：两种取值下都不残留标记，也不留出空行豁口', (language) => {
-    for (const shelf of [true, false]) {
-      const out = renderVisualGuide(language, { skillShelf: shelf })
-      // 标记是 HTML 注释，模型看得见 —— 替换不干净就是把实现细节发给它
-      expect(out, `skillShelf=${shelf}`).not.toContain('shuvix:skill-hint')
-      // 不带指路时那一行被替成空串，前后两个空行会并成一个三连换行
-      expect(out, `skillShelf=${shelf}`).not.toMatch(/\n{3,}/)
+/**
+ * 两个开关 —— 都描述**这一个 agent 手里有什么**（宿主按创建时的工具名单判定），缺省即「没有」：
+ *  - `drawingSkill`：货架上有 `builtin:drawing` → 手艺段换成一句「先加载技能」的指路；
+ *  - `artifact`：工具表里有 `artifact` → 载体段里多一句「改图走 adopt」（只有 guide 这一档有载体）。
+ * 契约段不在任何界桩里：两个开关怎么拨它都得在。
+ */
+describe('renderVisualGuide / renderVisualCraft —— 两个开关（VG）', () => {
+  it.each(LANGUAGES)('VG-1 %s：两个出口 × 四种组合，契约记号一个不少', (language) => {
+    for (const [exit, render] of EXITS) {
+      for (const opts of OPTS) {
+        const out = render(language, opts)
+        for (const token of CONTRACT) {
+          expect(out, `${exit} ${label(opts)} 缺 ${token}`).toContain(token)
+        }
+      }
     }
   })
 
-  it.each(LANGUAGES)('%s：两种取值下都仍是完整的自含块（小标题 + 调色板）', (language) => {
-    for (const shelf of [true, false]) {
-      const out = renderVisualGuide(language, { skillShelf: shelf })
-      expect(out.startsWith('#'), `skillShelf=${shelf}`).toBe(true)
-      expect(out, `skillShelf=${shelf}`).toBe(out.trim())
-      // 拆坏 `.replace` 很容易把整块截断；调色板在片段尾部，它还在就说明没被腰斩
-      expect(out, `skillShelf=${shelf}`).toContain('--viz-1')
-      expect(out.length, `skillShelf=${shelf}`).toBeGreaterThan(200)
+  it.each(LANGUAGES)(
+    'VG-2 %s：drawingSkill 为真时指路恰好出现一次；缺省 / {} / false 时连 `builtin:` 都没有',
+    (language) => {
+      for (const [exit, render] of EXITS) {
+        expect(countOf(render(language, { drawingSkill: true }), POINTER), exit).toBe(1)
+        for (const opts of [undefined, {}, { drawingSkill: false }]) {
+          const out = render(language, opts)
+          expect(countOf(out, POINTER), `${exit} ${JSON.stringify(opts)}`).toBe(0)
+          expect(out, `${exit} ${JSON.stringify(opts)}`).not.toContain('builtin:')
+        }
+      }
+    }
+  )
+
+  it.each(LANGUAGES)(
+    'VG-3 %s：没有技能时手艺段（含范例）原样在；有技能时范例没了、整体变短，除指路那一段外每段都逐字来自无技能版',
+    (language) => {
+      for (const [exit, render] of EXITS) {
+        for (const artifact of [false, true]) {
+          const without = render(language, { drawingSkill: false, artifact })
+          const withSkill = render(language, { drawingSkill: true, artifact })
+          const what = `${exit} artifact=${artifact}`
+          expect(without, what).toContain(EXAMPLE)
+          expect(withSkill, what).not.toContain(EXAMPLE)
+          expect(withSkill.length, what).toBeLessThan(without.length)
+          // 换掉的只有手艺段：其余每一段都是同一份片段里的原文，没有被顺手改写或截断
+          const kept = paragraphs(withSkill).filter((p) => !p.includes(POINTER))
+          expect(kept.length, what).toBeGreaterThan(0)
+          for (const p of kept) expect(without, `${what}：${p.slice(0, 40)}`).toContain(p)
+        }
+      }
+    }
+  )
+
+  it.each(LANGUAGES)(
+    'VG-4 %s：artifact 为真时 guide 教 adopt 并点名 `artifact`；缺省 / false 不教；craft 无论如何都不教',
+    (language) => {
+      const taught = renderVisualGuide(language, { artifact: true })
+      expect(taught).toContain(ADOPT)
+      expect(taught).toContain('`artifact`')
+      expect(renderVisualGuide(language)).not.toContain(ADOPT)
+      expect(renderVisualGuide(language, { artifact: false })).not.toContain(ADOPT)
+      // craft 没有载体段，adopt 嵌在载体里 —— 硬塞 artifact 进去也不该冒出来
+      for (const drawingSkill of [false, true]) {
+        const craft = renderVisualCraft(language, { drawingSkill, artifact: true } as never)
+        expect(craft, `drawingSkill=${drawingSkill}`).not.toContain(ADOPT)
+      }
+    }
+  )
+
+  it.each(LANGUAGES)(
+    'VG-5 %s：guide 里 ADOPT 只随 artifact 变、POINTER 只随 drawingSkill 变（两个开关互不串扰）',
+    (language) => {
+      for (const opts of OPTS) {
+        const out = renderVisualGuide(language, opts)
+        expect(out.includes(ADOPT), label(opts)).toBe(!!opts.artifact)
+        expect(out.includes(POINTER), label(opts)).toBe(!!opts.drawingSkill)
+      }
+    }
+  )
+
+  it.each(LANGUAGES)(
+    'VG-6 %s：八种输出都干净 —— 无界桩残留、无三连换行、已 trim、以小标题开头、非空',
+    (language) => {
+      for (const [exit, render] of EXITS) {
+        for (const opts of OPTS) {
+          const out = render(language, opts)
+          const what = `${exit} ${label(opts)}`
+          // 界桩是 HTML 注释，模型看得见 —— 替换不干净就是把实现细节发给它
+          expect(out, what).not.toContain('<!--')
+          expect(out, what).not.toContain('shuvix:')
+          // 整段删掉时前后两个空行会并成三连换行
+          expect(out, what).not.toMatch(/\n{3,}/)
+          expect(out, what).toBe(out.trim())
+          // 自含块：值自带小标题，可嵌在正文任意位置
+          expect(out.startsWith('#'), what).toBe(true)
+          expect(out.length, what).toBeGreaterThan(200)
+        }
+      }
+    }
+  )
+
+  it.each(LANGUAGES)('VG-7 %s：缺省 / {} / 两个都 false —— 逐字节相同', (language) => {
+    for (const [exit, render] of EXITS) {
+      const bare = render(language)
+      expect(render(language, {}), exit).toBe(bare)
+      expect(render(language, { drawingSkill: false, artifact: false }), exit).toBe(bare)
+    }
+  })
+
+  it('VG-8 指路那一段三语各不相同（漏译会静默拿到英文原文）；zh-CN 落到 zh、ko 落到 en', () => {
+    for (const [exit, render] of EXITS) {
+      const pointerParagraph = (language: string): string => {
+        const hits = paragraphs(render(language, { drawingSkill: true })).filter((p) =>
+          p.includes(POINTER)
+        )
+        expect(hits, `${exit}.${language}`).toHaveLength(1)
+        return hits[0]
+      }
+      const [en, zh, ja] = LANGUAGES.map(pointerParagraph)
+      expect(new Set([en, zh, ja]).size, exit).toBe(3)
+      expect(render('zh-CN', { drawingSkill: true }), exit).toBe(
+        render('zh', { drawingSkill: true })
+      )
+      expect(render('ko', { drawingSkill: true }), exit).toBe(render('en', { drawingSkill: true }))
     }
   })
 })
@@ -113,21 +252,50 @@ describe('{{shuvix:visualCraft}} —— 只要手艺的那一档', () => {
     expect(profilesUsing('visualCraft')).toEqual(['notebook'])
   })
 
-  it.each(LANGUAGES)('%s：craft 是 guide 的真子集，差的那一段恰好是载体', (language) => {
-    const guide = renderVisualGuide(language)
-    const craft = renderVisualCraft(language)
-    // 手艺那半一字不差地同源 —— 抄成两份 md 迟早只改一边，这条就是拦它的
-    expect(guide).toContain(craft)
-    expect(craft.length).toBeLessThan(guide.length)
-    // 载体那几段只在 guide 里：`adopt` 是聊天独有的改图路径，craft 里出现就是漏删
-    expect(guide.toLowerCase()).toContain('adopt')
-    expect(craft.toLowerCase()).not.toContain('adopt')
-    // 界桩本身不该漏进任何一档的输出
-    for (const out of [guide, craft]) {
-      expect(out).not.toContain('shuvix:carrier')
-      expect(out).not.toContain('shuvix:skill-hint')
+  it.each(LANGUAGES)(
+    'VC-1 %s：每种组合下 craft 都是 guide 的真子集，差的那一段恰好是载体',
+    (language) => {
+      for (const opts of OPTS) {
+        const guide = renderVisualGuide(language, opts)
+        const craft = renderVisualCraft(language, { drawingSkill: opts.drawingSkill })
+        const what = label(opts)
+        // 契约与手艺一字不差地同源 —— 抄成两份 md 迟早只改一边，这条就是拦它的
+        expect(guide, what).toContain(craft)
+        expect(craft.length, what).toBeLessThan(guide.length)
+        // 载体只在 guide 里：mermaid 那句是聊天的规矩，adopt 是聊天独有的改图路径
+        expect(guide, what).toContain(CARRIER)
+        expect(craft, what).not.toContain(CARRIER)
+        expect(craft, what).not.toContain(ADOPT)
+      }
     }
-  })
+  )
+})
+
+/**
+ * 「谁点了作图技能的名」与「谁的正文用作图说明」必须是同一批档案：档案点了名却不引用片段，
+ * 技能就只是白占货架；引用了片段却不点名，那句「先加载技能」的指路就永远不会出现 —— 手艺
+ * 整段常驻，技能形同虚设。
+ */
+describe('作图技能的归属（OWN）', () => {
+  it.each(LANGUAGES)(
+    'OWN-1 %s：声明 skill:builtin:drawing 的档案集合 = 引用 visualGuide / visualCraft 的档案集合',
+    (language) => {
+      const profiles = buildBuiltinProfiles({ language, widgetsRoot: '/w/widgets', readMd })
+      const declaring = profiles
+        .filter((p) => p.tools.includes('skill:builtin:drawing'))
+        .map((p) => p.name)
+        .sort()
+      const referencing = profiles
+        .filter((p) => {
+          const used = placeholdersOf(p.systemPrompt)
+          return used.includes('visualGuide') || used.includes('visualCraft')
+        })
+        .map((p) => p.name)
+        .sort()
+      expect(declaring).toEqual(['bot', 'chat', 'coding', 'notebook', 'work'])
+      expect(referencing).toEqual(declaring)
+    }
+  )
 })
 
 describe('{{shuvix:visualGuide}} 的归属', () => {

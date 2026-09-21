@@ -68,18 +68,22 @@ style, each with file and line. Never modify files.
 カンマ区切りの文字列。各項目は次のいずれか：
 
 - **組み込みツール名** —— 大文字小文字を区別せず、小文字に正規化：`bash`、`read`、`write`、`edit`、
-  `ls`、`glob`、`grep`、`ask`、`browser`、`ssh`、`database`、`git`、`session`、`knowledge`；
+  `ls`、`glob`、`grep`、`ask`、`browser`、`database`、`git`、`session`、`knowledge`、`artifact`；
 - `agent` —— `agent` ツールで**サブエージェントを派遣**することへのオプトイン（入れ子の上限に従う：
   派遣されたエージェントは深さの上限 —— 既定 2 —— が許す間だけ、さらに派遣できる）；
 - `mcp:<server>` —— その MCP サーバーのすべてのツール（設定で構成した名前；接頭辞の後は大文字小文字を
   保持；エージェント作成時に遅延接続される）；
-- `skill:<name>` —— その skill（名前空間付きの skill は `skill:<dir>:<name>` と書く）。
+- `skill:<name>` —— その skill（名前空間付きの skill は `skill:<dir>:<name>` と書く。ShuviX に同梱の
+  スキルは `skill:builtin:<name>`）。
 
 項目は順序を保って重複除去されます。このホストに存在しない名前は黙って落とされ、エージェントはそれ無しで
-作られます。リストを狭めることは ShuviX で役割を表す方法では**ありません**：`grep` の無いエージェントは
-`bash` で grep するだけです。組み込みの `work`、`chat`、`coding` は意図的に一つのリスト（`bash, read,
-write, edit, ask, browser, ls, grep, glob, ssh, database, agent, session, knowledge`）を共有し、本文だけが
-異なります。
+作られます。**リストに書いたものは常に有効**で、エージェントがどう使われるかに関わりません。セッションの
+ルートになるとき、その `mcp:` / `skill:` 項目はそのセッションの拡張機能ピッカーにチェック済み・ロック状態で
+表示されます（ホバーすると、どのエージェントが宣言したかが出ます）。セッション自身のチェックはその上に
+足せるだけで、一つ外すにはそのエージェントを上書きします。リストを狭めることは ShuviX で役割を表す方法では
+**ありません**：`grep` の無いエージェントは `bash` で grep するだけです。組み込みの `work`、`chat`、`coding`
+は意図的に一つのリスト（`bash, read, write, edit, ask, browser, ls, grep, glob, database, agent, session,
+knowledge, artifact, skill:builtin:drawing`）を共有し、本文だけが異なります。
 
 ### 本文 —— システムプロンプト
 
@@ -145,8 +149,8 @@ frontmatter の後の全部（前後の空白を除く）がシステムプロ�
    返します。このツールは利用可能なエージェントをモデルに列挙**しません** —— 名前はプロンプトか
    ユーザーから知る必要があります。
 2. **サブセッションの人格として** —— `session` ツールの `agent_profile`（ベースでない任意の
-   エージェント）。そのエージェントの `shuvix-tools` にある空でない `mcp:` / `skill:` 項目は、子が親から
-   複写した拡張機能を置き換えます。空なら継承されたものを保ちます。
+   エージェント）。子は親から複写した拡張機能を保ちます。そのエージェントの `shuvix-tools` にある
+   `mcp:` / `skill:` 項目は、リストの他の項目と同じく常に有効で、その上に加わります。
 3. **hook のエージェントとして**（`shuvix-hook-agent` —— `hook-md` エントリを参照）。
 4. **ベースの上書きとして**（上記）。
 

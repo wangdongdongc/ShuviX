@@ -101,11 +101,27 @@ const served = (language: string): AgentProfile[] => {
 const placeholdersOf = (text: string): string[] =>
   [...new Set([...text.matchAll(/\{\{shuvix:([A-Za-z][\w-]*)\}\}/g)].map((m) => m[1]))].sort()
 
+/** 作图说明里的两个代码记号（三语一字不差）：指路里的技能名、手艺段的范例围栏 */
+const POINTER = 'builtin:drawing'
+const EXAMPLE = '```svg\n<svg'
+const ADOPT = 'adopt'
+
+/** EPW-0：变量表的入参带上归一工具名单（缺省为空 —— 与 createAgent 传进来的同形） */
 const varsFor = async (ctx: Partial<PromptVarsCtx> = {}): Promise<PromptVars> => {
   const host = mocks.host.value
   expect(host, 'agentHost 应把适配面交给 createAgentFactory').toBeDefined()
-  return await host!.promptVars({ sessionId: SID, kind: 'root', cwd: 'folder', ...ctx })
+  return await host!.promptVars({
+    sessionId: SID,
+    kind: 'root',
+    cwd: 'folder',
+    toolNames: [],
+    ...ctx
+  })
 }
+
+/** 共享的 notebook 档案（扩展直接服务它，不换副本）—— 它在 shuvix-tools 里点了作图技能 */
+const sharedNotebook = (language: string): AgentProfile =>
+  served(language).find((p) => p.name === 'notebook')!
 
 beforeEach(() => {
   mocks.getById.mockResolvedValue({ projectId: 'proj-1', settings: { notebookPath: 'a.md' } })
@@ -161,15 +177,36 @@ describe('extensionPromptVars —— visualGuide 这一项', () => {
     }
   })
 
-  it('这一端**不**带 skillShelf：不指挥模型去加载一个这里没有的技能', async () => {
-    // 这一端的 resolveTools 直接丢弃 `skill:` 名，压根没有 SkillTool —— 于是
-    // `renderVisualGuide` 不传 skillShelf，那句「动笔前先加载 `builtin:drawing`」整行消失。
-    // 一条永远走不通的指路比没有指路更糟。桌面那一端相反，钉在
-    // apps/desktop/src/main/agents/__tests__/promptVarsWiring.test.ts。
+  it('EPW-1 名单里点了作图技能、带着 artifact 也一样：不指路、不教 adopt、手艺整段留着 —— 与空名单逐字节相同', async () => {
+    // 这一端的 resolveTools 直接丢弃 `skill:` 名，压根没有 SkillTool，也没有 artifact 工具 ——
+    // 名单上写了什么都够不着。于是两个开关一个都不开：那句「先加载 `builtin:drawing`」不出现，
+    // 「改图走 adopt」也不教（一条永远走不通的指路比没有指路更糟），手艺段原样常驻。
+    // 桌面那一端按名单开关，钉在 apps/desktop/src/main/agents/__tests__/promptVarsWiring.test.ts。
+    const loaded = ['skill:builtin:drawing', 'artifact', ...sharedNotebook('en').tools]
     for (const kind of ['root', 'spawned'] as const) {
-      const vars = await varsFor({ kind, cwd: kind === 'root' ? 'folder' : '' })
-      expect(vars.visualGuide, kind).not.toContain('builtin:drawing')
-      expect(vars.visualGuide, kind).not.toContain('builtin:')
+      const cwd = kind === 'root' ? 'folder' : ''
+      const vars = await varsFor({ kind, cwd, toolNames: loaded })
+      const bare = await varsFor({ kind, cwd, toolNames: [] })
+      for (const name of ['visualGuide', 'visualCraft'] as const) {
+        const what = `${kind}.${name}`
+        expect(vars[name], what).not.toContain('builtin:')
+        expect(vars[name], what).not.toContain(ADOPT)
+        expect(vars[name], what).toContain(EXAMPLE)
+        expect(vars[name], what).toBe(bare[name])
+      }
+    }
+  })
+
+  it('EPW-2 共享的 notebook 点了作图技能，按它自己的名单组装：提示里是完整的手艺，没有指路', async () => {
+    for (const language of LANGUAGES) {
+      const notebook = sharedNotebook(language)
+      expect(notebook.tools, `notebook.${language} 点了作图技能`).toContain('skill:builtin:drawing')
+      const vars = await varsFor({ kind: 'root', toolNames: notebook.tools })
+      const out = renderProfileSystemPrompt(notebook, vars)
+      // 「完整」= 手艺段连范例一起在（桌面上点了技能会被换成一句指路，这里不会）
+      expect(vars.visualCraft, language).toContain(EXAMPLE)
+      expect(out, language).toContain(vars.visualCraft)
+      expect(out, language).not.toContain(POINTER)
     }
   })
 

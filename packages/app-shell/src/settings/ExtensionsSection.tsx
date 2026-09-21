@@ -3,6 +3,11 @@
  *
  * 两处共用：项目编辑页（项目的扩展能力 —— 新建会话从这里继承）与会话设置（这条会话自己的
  * 勾选 —— Agent 创建之后只读）。本组件只管展示与回调，数据与持久化都在调用方。
+ *
+ * 两条展示规矩：
+ *  - agent 档案声明的项（`declaredBy`）恒生效：画成已勾、挂锁、点不动，悬停说是哪个档案声明的。
+ *    它不在勾选里，也不会被写进勾选 —— 会话勾选只是在它之上叠加。
+ *  - 每组里 ShuviX 自带的项（内置 MCP / 内置技能）排在最前，其余保持后端给的顺序。
  */
 import { useTranslation } from 'react-i18next'
 import { Puzzle, BookOpen, WifiOff, Lock } from 'lucide-react'
@@ -18,7 +23,12 @@ interface ExtItem {
   desc?: string
   builtin?: boolean
   offline?: boolean
+  /** 会话的 agent 档案声明了它（值为档案显示名）：恒生效，画成已勾、锁住 */
+  declaredBy?: string
 }
+
+/** 内置项排前、其余保序（Array.prototype.sort 是稳定排序） */
+const builtinFirst = (a: ExtItem, b: ExtItem): number => Number(!!b.builtin) - Number(!!a.builtin)
 
 /** 组配色（MCP 紫 / Skills 绿）—— 写成完整类名，Tailwind 才扫得到 */
 const EXT_TONES = {
@@ -62,32 +72,51 @@ function ExtGroupRow({
       {items.length > 0 && (
         <div className="flex flex-wrap gap-1.5 flex-1 min-w-0">
           {items.map((it) => {
-            const checked = enabledTools.includes(it.key)
+            const declared = !!it.declaredBy
+            const checked = declared || enabledTools.includes(it.key)
+            const fixed = readonly || declared
             // 只读时整排按禁用态画（压暗 + 禁用光标）：勾选的还看得出是勾选的（描边留着），
-            // 但一眼就知道改不了；原因放在悬停提示里，不另起一行文字
+            // 但一眼就知道改不了；原因放在悬停提示里，不另起一行文字。
+            // 档案声明的那一项同样改不了，但它是**开着的**：不压暗，只挂一把锁
             const stateCls = checked
               ? EXT_TONES[tone].checked
-              : `border-border-secondary/60${readonly ? '' : ' hover:bg-bg-hover/60'}`
+              : `border-border-secondary/60${fixed ? '' : ' hover:bg-bg-hover/60'}`
             return (
               <label
                 key={it.key}
                 data-ext-item={it.key}
                 data-offline={it.offline || undefined}
-                aria-disabled={readonly || undefined}
+                data-declared={declared || undefined}
+                aria-disabled={fixed || undefined}
                 title={
-                  readonly ? readonlyHint : it.offline ? t('settings.mcpStatusError') : it.desc
+                  readonly
+                    ? readonlyHint
+                    : declared
+                      ? t('sessionConfig.extensionDeclared', { profile: it.declaredBy })
+                      : it.offline
+                        ? t('settings.mcpStatusError')
+                        : it.desc
                 }
                 className={`inline-flex items-center gap-1.5 h-6 max-w-full px-2 rounded-md border transition-colors ${
-                  readonly ? 'cursor-not-allowed opacity-40' : 'cursor-pointer'
+                  readonly
+                    ? 'cursor-not-allowed opacity-40'
+                    : declared
+                      ? 'cursor-default'
+                      : 'cursor-pointer'
                 } ${stateCls}`}
               >
                 <input
                   type="checkbox"
                   checked={checked}
-                  disabled={readonly}
-                  onChange={() => onToggle(it.key)}
+                  disabled={fixed}
+                  onChange={() => {
+                    if (!declared) onToggle(it.key)
+                  }}
                   className="rounded border-border-primary accent-accent w-3 h-3 shrink-0"
                 />
+                {declared && (
+                  <Lock size={9} data-ext-declared className="text-text-tertiary shrink-0" />
+                )}
                 {it.builtin && (
                   <span className="px-1 rounded text-[9px] text-amber-500 bg-amber-500/10 whitespace-nowrap shrink-0">
                     {t('input.skillBuiltinBadge')}
@@ -147,23 +176,29 @@ export function ExtensionsSection({
 }: ExtensionsSectionProps): React.JSX.Element {
   const { t } = useTranslation()
   // MCP 的 label 就是 server 名，和展示名重复，不当描述用
-  const mcpItems: ExtItem[] = mcpTools.map((tool) => ({
-    key: tool.name,
-    display: tool.name.startsWith('mcp:') ? tool.name.slice(4) : tool.name,
-    builtin: tool.isBuiltin,
-    // 惰性启动下「没连上」是常态（用到才连），只有连接失败才标成离线
-    offline: tool.serverStatus === 'error'
-  }))
-  const skillItems: ExtItem[] = skillTools.map((tool) => {
-    const short = tool.name.startsWith('skill:') ? tool.name.slice(6) : tool.name
-    const builtin = short.startsWith('builtin:')
-    return {
+  const mcpItems: ExtItem[] = mcpTools
+    .map((tool) => ({
       key: tool.name,
-      display: builtin ? short.slice('builtin:'.length) : short,
-      desc: tool.label,
-      builtin
-    }
-  })
+      display: tool.name.startsWith('mcp:') ? tool.name.slice(4) : tool.name,
+      builtin: tool.isBuiltin,
+      // 惰性启动下「没连上」是常态（用到才连），只有连接失败才标成离线
+      offline: tool.serverStatus === 'error',
+      declaredBy: tool.declaredBy
+    }))
+    .sort(builtinFirst)
+  const skillItems: ExtItem[] = skillTools
+    .map((tool) => {
+      const short = tool.name.startsWith('skill:') ? tool.name.slice(6) : tool.name
+      const builtin = short.startsWith('builtin:')
+      return {
+        key: tool.name,
+        display: builtin ? short.slice('builtin:'.length) : short,
+        desc: tool.label,
+        builtin,
+        declaredBy: tool.declaredBy
+      }
+    })
+    .sort(builtinFirst)
 
   return (
     <SettingsSection title={title} footer={footer}>

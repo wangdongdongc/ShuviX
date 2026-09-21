@@ -23,6 +23,11 @@ export interface PromptVarsCtx {
   kind: AgentKind
   /** 工作目录（桌面=绝对路径；扩展=项目文件夹名或 'scratch'） */
   cwd: string
+  /**
+   * 这个 agent 的归一工具名单 —— 与随后交给 resolveTools 的 `names` 是同一份。
+   * 取值要提到某项能力（加载哪个技能、调哪个工具）时，据此判断它在不在这个 agent 手里。
+   */
+  toolNames: readonly string[]
 }
 
 /** 变量表：name → 替换值（'' = 该占位符处整块消失） */

@@ -235,6 +235,7 @@ export class DefaultChatGateway implements ChatGateway {
     defaultEnabled?: boolean
     serverStatus?: string
     isBuiltin?: boolean
+    declaredBy?: string
   }> {
     // 解析项目路径（用于发现项目级 skills）
     let projectPath: string | undefined
@@ -249,7 +250,13 @@ export class DefaultChatGateway implements ChatGateway {
     const profileName = sessionId
       ? sessionService.resolveAgentProfileName(sessionId)
       : WORK_PROFILE_NAME
-    const defaultProfileTools = agentService.getProfile(profileName)?.tools ?? []
+    const profile = agentService.getProfile(profileName)
+    const defaultProfileTools = profile?.tools ?? []
+    // 档案声明的 mcp:/skill: 项对这条会话恒生效（createAgent 的名单归一），选择器据此画成已勾、锁住；
+    // 值是档案显示名，悬停时说「谁声明的」—— 要去掉只能覆盖那份档案，会话里取消不了
+    const declared = new Set(defaultProfileTools)
+    const declaredBy = (name: string): string | undefined =>
+      declared.has(name) ? profile?.displayName || profileName : undefined
     /** 内置工具（从注册表读取，system 分组不在 UI 中展示） */
     const builtinTools = getBuiltinToolEntries()
       .filter((e) => e.group !== 'system' && !e.hidden)
@@ -270,13 +277,15 @@ export class DefaultChatGateway implements ChatGateway {
       label: info.label,
       group: info.group,
       serverStatus: info.serverStatus,
-      isBuiltin: info.isBuiltin
+      isBuiltin: info.isBuiltin,
+      declaredBy: declaredBy(info.name)
     }))
     /** 已启用 Skill（含项目级 .claude/skills/） */
     const skillItems = skillService.findEnabled(projectPath).map((s) => ({
       name: `skill:${s.name}`,
       label: s.description.length > 60 ? s.description.slice(0, 57) + '...' : s.description,
-      group: '__skills__'
+      group: '__skills__',
+      declaredBy: declaredBy(`skill:${s.name}`)
     }))
     return [...merged, ...mcpTools, ...skillItems]
   }

@@ -307,16 +307,17 @@ export class SessionService {
    * 不接受 —— 子会话不点名就自然落到自己形态的基座上，点名一个基座只会得到说不清的组合
    * （无项目的父级开一条 `work` 子会话？）；其余任何档案都可以。
    *
-   * 钉下的同时把档案声明的运行配置作为**种子**写进会话（与用户手动改模型 / 勾选同一个落点）：
-   * 档案只在这一刻参与一次，之后用户改什么就是什么 —— 若让 createAgent 每次重建都按档案
-   * 覆盖，用户手选的会被默默还原。
-   *  - 模型（`shuvix-model`）：解析成功才往会话树写；不可用则保持当前模型，把原始值经
-   *    `modelUnavailable` 回传（后端日志之外调用方也该看得见）。
-   *  - 工具（`shuvix-tools` 里的 mcp:/skill:）：声明了就**替换**扩展能力勾选
-   *    （`settings.enabledTools`）；**没声明不算意见**，保留 create 时从父会话抄来的那份 ——
-   *    内置 coding / explore 之流只列内置工具，按「完整声明」读就会把项目的 MCP 与 skill 从每条
-   *    子会话上摘掉。内置工具不进勾选（它们恒由档案白名单决定）。
-   * 种子结果随 `applied` 回传（`tools` 是档案声明的那截，可能为空）。
+   * 钉下的同时把档案声明的模型作为**种子**写进会话树（与用户手动改模型同一个落点）：档案只在
+   * 这一刻参与一次，之后用户改什么就是什么 —— 若让 createAgent 每次重建都按档案覆盖，用户手选的
+   * 会被默默还原。解析成功才写；不可用则保持当前模型，把原始值经 `modelUnavailable` 回传（后端
+   * 日志之外调用方也该看得见）。
+   *
+   * 工具（`shuvix-tools` 里的 mcp:/skill:）**不写进勾选**：档案声明的每一项经 createAgent 的名单
+   * 归一对这条会话恒生效（选择器里画成已勾、锁住），会话勾选只在其上叠加。于是 create 时从父会话
+   * 抄来的勾选原样留着 —— 从前「声明了就替换勾选」是让声明生效的唯一办法，如今它只剩一个作用：
+   * 把父会话的 MCP 与 skill 摘掉。内置 coding 声明了 `skill:builtin:drawing` 之后，那等于每条
+   * coding 子会话都丢掉继承。
+   * `applied.tools` 回传档案声明的那截（恒生效的部分，可能为空），不代表写了什么。
    */
   async pinAgentProfile(
     sessionId: string,
@@ -362,9 +363,8 @@ export class SessionService {
       }
     }
 
-    // 工具种子：档案声明的 mcp:/skill: 替换扩展能力勾选；没声明就留着继承来的那份
+    // 档案声明的 mcp:/skill: 由名单归一恒生效，不写进勾选：继承来的那份原样留着
     const tools = sessionScopedTools(profile.tools)
-    if (tools.length) sessionDao.updateSettings(sessionId, { enabledTools: tools })
 
     broadcastSessionConfigChanged(sessionId)
     return { success: true, applied: { model, tools }, modelUnavailable }

@@ -325,6 +325,7 @@
     "extensionsGroup": "Extensions",
     "extensionsDesc": "Read when the agent is created (on the first message); read-only while it exists",
     "extensionsLocked": "Read-only: the agent has already been created",
+    "extensionDeclared": "Declared by the {{profile}} agent: every session of that agent has it. To remove it, override that agent's md.",
     "knowledgeGroup": "Knowledge bases",
     "knowledgeDesc": "Which bases this session can search and write to. Changes take effect right away.",
     "knowledgeDefault": "Not picked yet — new sessions start with none. Tick the bases this session should use; changes take effect right away.",

@@ -264,8 +264,8 @@ class SubSessionRunner {
 
     // 档案：父级点名才钉（准入见 sessionService.pinAgentProfile —— 基座被拒），
     // 不点名就什么也不写：子会话与父会话同一形态（projectId 恒随父），
-    // resolveAgentProfileName 推导出的基座天然一致。钉了的那次在档案声明了 mcp:/skill: 时
-    // 把勾选替换成档案那套，没声明就留着 create 从父会话抄来的
+    // resolveAgentProfileName 推导出的基座天然一致。勾选始终是 create 从父会话抄来的那份：
+    // 档案声明的 mcp:/skill: 由名单归一恒生效，叠在勾选之上，不替换它
     const requested = params.agentProfile?.trim()
     let declared: { model?: SubAgentModelConfig; tools: string[] } | undefined
     if (requested) {

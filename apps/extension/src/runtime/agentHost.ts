@@ -99,8 +99,8 @@ async function extensionPromptVars(ctx: PromptVarsCtx): Promise<PromptVars> {
     language: formatLanguageDisplay(i18next.language),
     appVersion,
     // 内联作图的规矩与调色板 token（自含块）—— 围栏渲染在共用的 chat-ui 里，两端都成立。
-    // **不带 skillShelf**：这一端没有 SkillTool（下面 resolveTools 直接丢弃 `skill:` 名），
-    // 带上就等于指挥模型去加载一个这里不存在的技能
+    // 两个开关都不开：这一端没有 SkillTool（下面 resolveTools 直接丢弃 `skill:` 名）、也没有
+    // artifact 工具 —— 于是手艺整段留在提示里，也不教 adopt。开了就是指向这里不存在的东西
     visualGuide: renderVisualGuide(i18next.language),
     visualCraft: renderVisualCraft(i18next.language),
     workspaceIntro: handle ? projectIntro(handle.name) : SCRATCH_INTRO,

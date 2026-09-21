@@ -9,8 +9,9 @@
  *
  * 钉的是：
  *   - 点名 coding：戳落下、body 换成 coding、工具含 bash；
- *   - 点名用户档案：档案声明的模型压过父模型、mcp:/skill: **替换**父勾选、思考档位仍随父；
- *   - 点名只列内置工具的档案（coding）：父级的 skill 勾选补回来；
+ *   - 点名用户档案：档案声明的模型压过父模型、勾选留着父会话那份、档案声明的 skill 叠加生效、
+ *     思考档位仍随父；
+ *   - 点名 coding（声明了内置作图技能）：父级的 skill 勾选原样留着；
  *   - 点名基座 / 只可派发 / 未知名：创建照常成功、不落戳、body 是父形态的基座（项目 → work）；
  *   - 不点名：不落戳、基座 body、工具随父；
  *   - 档案声明了不可用的模型：戳落下、body 生效、模型等于父模型（不写种子、不回落默认）。
@@ -33,7 +34,7 @@ import {
 const MODEL = 'e2e-model'
 /** 用户档案声明的模型（openai 目录里种一个合成 id，避免与同步进来的真实模型重名） */
 const MODEL_A = 'e2e-model-a'
-/** 父会话勾选的 skill / 档案声明的 skill —— 两个不同的名字，「替换」与「继承」才分得开 */
+/** 父会话勾选的 skill / 档案声明的 skill —— 两个不同的名字，「继承」与「声明」才分得开 */
 const SKILL_PARENT = 'e2e-skill-parent'
 const SKILL_PROFILE = 'e2e-skill-profile'
 const PARENT_TITLE = 'SP-parent'
@@ -60,7 +61,7 @@ interface InitResult {
 
 interface RuntimeInfo {
   systemPrompt: string
-  tools: { name: string }[]
+  tools: { name: string; description?: string }[]
 }
 
 let app: E2EApp
@@ -164,7 +165,7 @@ beforeAll(async () => {
   )
   // 内置 ask-on-sub-session 对「开子会话」要问一句 —— 扮演那个点「允许一次」的用户
   await installAutoAllow(app.main)
-  // 父会话勾选一个 skill：子会话「继承」与「替换」的对照物（父会话还没有运行时，勾选可改）
+  // 父会话勾选一个 skill：子会话「继承」与「声明」的对照物（父会话还没有运行时，勾选可改）
   const picked = await app.main.eval<{ success: boolean }>(
     `window.api.session.updateEnabledTools({ id: ${JSON.stringify(parentSid)}, enabledTools: [${JSON.stringify(`skill:${SKILL_PARENT}`)}] })`
   )
@@ -193,23 +194,28 @@ describe('create-sub-session 的 agent_profile 钉档案', () => {
     expect(info.tools.map((t) => t.name)).toContain('bash')
   })
 
-  it('SP-2 点名用户档案：档案模型压过父模型，skill 勾选被**替换**成档案声明的那套，思考档位仍随父', async () => {
+  it('SP-2 点名用户档案：档案模型压过父模型；勾选留着父会话那份，档案声明的 skill 叠加生效；思考档位仍随父', async () => {
     const sub = await createSub('prof', { agent_profile: 'e2e-sub-prof' })
     const cfg = await init(sub.id)
     expect({ provider: cfg.provider, model: cfg.model }).toEqual({
       provider: 'openai',
       model: MODEL_A
     })
-    // 替换语义：父会话勾的 SKILL_PARENT 没有被并进来
-    expect(cfg.enabledTools).toEqual([`skill:${SKILL_PROFILE}`])
+    // 勾选不被替换：父会话勾的 SKILL_PARENT 原样留着，档案声明的那项不写进勾选
+    expect(cfg.enabledTools).toEqual(parentCfg.enabledTools)
     // seedRunConfig 仍跑：思考档位没有档案声明这一路，恒随父
     expect(cfg.modelMetadata.thinkingLevel).toBe(parentCfg.modelMetadata.thinkingLevel)
-    expect((await runtimeInfo(sub.id)).systemPrompt.startsWith('SUB PROF BODY.')).toBe(true)
+    const info = await runtimeInfo(sub.id)
+    expect(info.systemPrompt.startsWith('SUB PROF BODY.')).toBe(true)
+    // 两边都真的上了架：继承的来自勾选，档案的来自声明（名单归一恒生效）
+    const skill = info.tools.find((t) => t.name === 'skill')?.description ?? ''
+    expect(skill).toContain(`<name>${SKILL_PROFILE}</name>`)
+    expect(skill).toContain(`<name>${SKILL_PARENT}</name>`)
   })
 
-  it('SP-3 点名 coding（只列内置工具、不声明模型）：父级的 skill 勾选补回来，模型等于父模型', async () => {
-    // 空的工具声明不算意见：pin 那一步不碰勾选，留着 create 从父会话抄来的那套 ——
-    // 否则每条 coding 子会话都被摘掉项目的 MCP 与 skill
+  it('SP-3 点名 coding（声明了内置作图技能、不声明模型）：父级的 skill 勾选原样留着，模型等于父模型', async () => {
+    // pin 那一步从不碰勾选，留着 create 从父会话抄来的那套 —— coding 声明了 skill:builtin:drawing，
+    // 若按「声明了就替换」，每条 coding 子会话都会被摘掉项目的 MCP 与 skill
     const sub = await createSub('coding2', { agent_profile: 'coding' })
     const cfg = await init(sub.id)
     expect(cfg.enabledTools).toEqual(parentCfg.enabledTools)

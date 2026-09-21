@@ -10,7 +10,7 @@
  * | Deps 项                  | root                        | spawned                        |
  * |--------------------------|-----------------------------|--------------------------------|
  * | 初始模型                  | params.model(会话树为准)     | 档案 shuvix-model 优先,否则继承 |
- * | 工具名单                  | 档案内置名 + 会话勾选overlay | 档案全量(含mcp/skill) + overlay |
+ * | 工具名单                  | 档案全量(含mcp/skill) + 会话勾选overlay | 档案全量(含mcp/skill) + overlay |
  * | session                  | host.openSessionTree(落盘)  | InMemorySessionStorage(内存)   |
  * | env                      | host.createExecutionEnv?stub| stub(工具自带执行环境)          |
  * | eventSink                | host.eventSink              | 包一层 hasUserInputCapability=false |
@@ -50,7 +50,7 @@ export interface ToolResolveRequest {
   profile: InProcessAgentType
   /** 组装后的完整系统提示（基座 + sections）——扩展的默认子代理继承它 */
   systemPrompt: string
-  /** 归一后的工具名单（保序去重）：root = 档案内置名 + overlay 里的 mcp:/skill:；spawned = 档案全量 */
+  /** 归一后的工具名单（保序去重）：档案全量 + overlay（root 的 overlay 只收 mcp:/skill:） */
   names: readonly string[]
   /**
    * 派发工具的模型配置（惰性）：跟随会话当前模型与思考档位 ——
@@ -260,31 +260,26 @@ const isSessionScopedTool = (name: string): boolean =>
 /**
  * 名单归一：档案白名单 + 会话勾选 overlay，去重保序。
  *
- * 档案的 `shuvix-tools` 对内置 / mcp / skill 三类是**一并声明**的，但两类的生效路径不同：
+ * 档案的 `shuvix-tools` 对内置 / mcp / skill 三类是**一并声明**的，而且三类都**恒生效** ——
+ * root 与 spawned 同一条规则：档案写了什么，这个 agent 就带什么。会话勾选只能往上**加**：
  *  - 内置工具名恒由档案决定（选择器里本就看不到它们）；
- *  - mcp: / skill: 在 **root** 会话以会话勾选为准（子会话钉档案时，档案声明的那截作为种子
- *    写进勾选）—— 否则用户取消的勾选会被档案白名单并集加回来，勾选就是假的。
- *    反过来 root 的 overlay 也**只收** mcp: / skill:：勾选里混进一个内置名（手改的设置、
- *    被新会话继承的项目配置）不能借 overlay 越过档案 —— bot 基座的窄名单因此是结构保证。
- *
- * **一处已知的例外，别据此以为名单是全封闭的**：桌面宿主的 resolveTools 在这份名单之外
- * 给每个 root 会话挂了 `skill` 工具（内置技能货架，见 services/skillTool.ts）。那是产品
- * 决定 —— 内置技能只注入文本、不引入任何能力，所以 bot「能看不能碰」的实质仍然成立 ——
- * 但它确实不经过本函数，`shuvix-tools` 因此不再是 root 工具表的完整列举。
+ *  - mcp: / skill: 档案声明的那截恒在，会话勾选在其上叠加。选择器与会话设置把档案声明的项
+ *    画成「已勾、锁住」（`tools.list` 的 `declaredBy`）—— 界面上取消不了，也就不存在
+ *    「取消了却被档案并集加回来」的假勾选。要去掉一项，路径是覆盖这份档案 md。
+ *  - root 的 overlay **只收** mcp: / skill:：勾选里混进一个内置名（手改的设置、被新会话继承的
+ *    项目配置）不能借 overlay 越过档案 —— bot 基座的窄名单因此是结构保证。
  *  - spawned 没有选择器也没有会话设置，档案即全部（overlay 恒为空）。
+ *
+ * 于是 `shuvix-tools` 加上会话勾选就是 agent 工具表的完整列举：宿主不在这份名单之外另挂工具
+ * （内置技能也要档案点名 `skill:builtin:<name>` 才上架）。
  */
 function normalizeToolNames(
   kind: AgentKind,
   profileTools: readonly string[],
   overlay: readonly string[] | undefined
 ): string[] {
-  if (kind !== 'root') return [...new Set([...profileTools, ...(overlay ?? [])])]
-  return [
-    ...new Set([
-      ...profileTools.filter((n) => !isSessionScopedTool(n)),
-      ...(overlay ?? []).filter(isSessionScopedTool)
-    ])
-  ]
+  const added = kind === 'root' ? (overlay ?? []).filter(isSessionScopedTool) : (overlay ?? [])
+  return [...new Set([...profileTools, ...added])]
 }
 
 export function createAgentFactory(host: AgentHostAdapter): AgentFactory {
@@ -333,9 +328,12 @@ export function createAgentFactory(host: AgentHostAdapter): AgentFactory {
         ? (req: InputRequest) => runtime!.requestUserInput(req)
         : spawnHelpers?.requestUserInput
 
+    // 名单先于提示词算好：变量表与工具解析读的是**同一份**。提示词里提到某项能力（去加载哪个
+    // 技能、用哪个工具改图）只能以它真在这份名单上为前提 —— 两边各算各的，迟早一边指向另一边没有的东西
+    const names = normalizeToolNames(kind, profile.tools, params.toolOverlay)
     let systemPrompt = renderProfileSystemPrompt(
       profile,
-      await host.promptVars({ sessionId, kind, cwd }),
+      await host.promptVars({ sessionId, kind, cwd, toolNames: names }),
       host.logger
     )
     // 上下文注入：直接 append 到系统提示词（指令文件 → 项目提示词 → 项目知识库 → 项目记忆），
@@ -376,7 +374,7 @@ export function createAgentFactory(host: AgentHostAdapter): AgentFactory {
       selfSessionId: sessionId,
       profile,
       systemPrompt,
-      names: normalizeToolNames(kind, profile.tools, params.toolOverlay),
+      names,
       getModelConfig,
       spawn,
       requestUserInput,

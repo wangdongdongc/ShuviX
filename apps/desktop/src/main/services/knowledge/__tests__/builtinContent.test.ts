@@ -19,6 +19,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
+  buildBuiltinProfiles,
   headingsOf,
   validateBundleFiles,
   HOOK_ON_KEY,
@@ -30,6 +31,7 @@ import {
   type BundleFile,
   type KnowledgeConcept
 } from '@shuvix/agent-runtime'
+import { createInlineMdReader } from '@shuvix/agent-runtime/builtinAgents/inlineSources'
 import {
   KNOWLEDGE_BUILTIN_BASE,
   KNOWLEDGE_MARKER,
@@ -231,5 +233,49 @@ describe.each(LANGS)('BK 内置知识库 · %s', (lang) => {
    */
   it.each(paths)('BK-12 %s 正文里至少有一个 ATX 标题（否则新索引里只剩门面可搜）', (path) => {
     expect(headingsOf(conceptOf(path).body).length).toBeGreaterThan(0)
+  })
+
+  /**
+   * BK-13 / BK-14 —— 说明书里抄着两份「内置档案的工具清单」事实：work / chat / coding 共用的那份
+   * 清单原文，以及「哪几个档案点了作图技能的名」。档案 md 一改（加一个工具、多一个档案点名），
+   * 说明书不跟就是在教用户一份过期的清单 —— 事实源是同语言的内置档案本身（运行时读的同一批 md）。
+   */
+  const profilesOf = (): ReturnType<typeof buildBuiltinProfiles> =>
+    buildBuiltinProfiles({
+      language: lang,
+      widgetsRoot: '/w/widgets',
+      readMd: createInlineMdReader()
+    })
+
+  it('BK-13 agent-md.md 里那份以 `bash,` 开头的清单 = 同语言 work / chat / coding 的 shuvix-tools', () => {
+    const body = conceptOf('agent-md.md').body
+    const match = /`(bash,[^`]*)`/.exec(body)
+    expect(match, '正文里找不到以 `bash,` 开头的清单').not.toBeNull()
+    // 清单在正文里会折行：空白一律压成一个空格再按「, 」切
+    const listed = match![1].replace(/\s+/g, ' ').trim().split(', ')
+    const profiles = profilesOf()
+    for (const name of ['work', 'chat', 'coding']) {
+      const profile = profiles.find((p) => p.name === name)
+      expect(profile, `${name}.${lang} 应当存在`).toBeDefined()
+      expect(listed, `${name}.${lang}`).toEqual(profile!.tools)
+    }
+  })
+
+  it('BK-14 skills.md 恰有一段提到 builtin:drawing，那段点名的内置档案 = 声明了 skill:builtin:drawing 的档案', () => {
+    const withDrawing = paragraphs(conceptOf('skills.md').body).filter((p) =>
+      p.includes('builtin:drawing')
+    )
+    expect(withDrawing).toHaveLength(1)
+    const profiles = profilesOf()
+    const builtinNames = new Set(profiles.map((p) => p.name))
+    // 那段里用反引号圈出来、且恰是某个内置档案名的那些
+    const named = [...withDrawing[0].matchAll(/`([^`]+)`/g)]
+      .map((m) => m[1])
+      .filter((token) => builtinNames.has(token))
+    const declaring = profiles
+      .filter((p) => p.tools.includes('skill:builtin:drawing'))
+      .map((p) => p.name)
+    expect(declaring.length, '语料自检：应当有档案点了作图技能').toBeGreaterThan(0)
+    expect([...new Set(named)].sort()).toEqual([...declaring].sort())
   })
 })

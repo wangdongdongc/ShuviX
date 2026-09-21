@@ -47,20 +47,13 @@ export class SkillTool extends BaseTool<SkillParams> {
     return this.skills.length > 0
   }
 
-  constructor(
-    enabledSkillNames: string[],
-    projectPath?: string,
-    options?: { includeBuiltin?: boolean }
-  ) {
+  constructor(skillNames: string[], projectPath?: string) {
     super()
 
-    // 内置 skill **不经会话勾选**就在架（`includeBuiltin`，由注入点按 kind 决定）；
-    // 其余一律按 settings.enabledTools 的显式选择。
-    //
-    // 为什么内置的不走那道门：`enabledTools` 缺省为空要防的是 MCP 服务器（起进程、连网络、
-    // 注入未知工具）和用户自己的 skill（用户的文件、用户定范围）。内置 skill 三样都不沾 ——
-    // 它随包发布、只读、不引入任何新工具（就是本工具），而且它不是「扩展」，是 ShuviX 在
-    // 说明自己会什么。用户不该为了让图画得好，先知道有这么个技能存在并去勾它。
+    // 上架的只有名单点了名的 skill：档案 `shuvix-tools` 声明的（内置的写作 `skill:builtin:<name>`）
+    // 加上会话勾选的。内置 skill 没有「不点名也在架」的特例 —— 哪个 agent 带它，由它的档案 md
+    // 说了算（用户不必为了让图画得好先知道有这么个技能再去勾它：基座档案已经替他点了名，界面上
+    // 画成已勾、锁住）。
     //
     // 关闭仍然有效：findEnabled 已经把 .config.json 的 disabled / disabledDirs 过滤掉了。
     //
@@ -68,11 +61,8 @@ export class SkillTool extends BaseTool<SkillParams> {
     // 直觉读这里：内置恒带 `dirName='builtin'`，globalName 因此恒为 `builtin:<name>`，而用户
     // 全局目录的就是 `<name>`，两者永远不同名，于是并存、各占索引一行。要让内置那份失效，
     // 路径是 .config.json 的 disabled（或整组 disabledDirs），不是放一个同名文件。
-    const allSkills = skillService.findEnabled(projectPath)
-    const userNames = new Set(enabledSkillNames)
-    this.skills = allSkills.filter(
-      (s) => (options?.includeBuiltin === true && s.source === 'builtin') || userNames.has(s.name)
-    )
+    const wanted = new Set(skillNames)
+    this.skills = skillService.findEnabled(projectPath).filter((s) => wanted.has(s.name))
 
     // hint 无条件参与本实例的 schema 构造：空架子就得到空 hint，不会留着别处的示例名
     const examples = this.skills

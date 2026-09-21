@@ -38,6 +38,11 @@ const LOCALE_FILES = ['en', 'zh', 'ja'].map((lang) => ({
   lang,
   path: join(REPO_ROOT, 'packages/chat-protocol/src/i18n/locales', `${lang}.json`)
 }))
+/** 内置 agent 档案 md（三语全集）：`shuvix-tools` 里的 `skill:builtin:<name>` 写在这里（见 BS-10） */
+const BUILTIN_AGENTS_MD_DIR = join(
+  REPO_ROOT,
+  'packages/agent-runtime/src/subagent/builtinAgents/md'
+)
 
 /**
  * `skillService` 只在这里出场一件事：借它的 **parseSkillMarkdown**。用产线那一份而不是在
@@ -159,6 +164,23 @@ describe('BS 内置技能资源：随应用发布的那批 know-how', () => {
       referenced += names.length
     }
     expect(referenced).toBeGreaterThan(0)
+  })
+
+  it('BS-10 内置 agent 档案点名的每个 `skill:builtin:<name>` 都是真实存在的技能（三语全集）', () => {
+    // 与 BS-6 同一类死链，另一个出口：档案在 packages/agent-runtime、技能在 apps/desktop/resources。
+    // 档案点了一个不存在的内置技能名不报错 —— 解析时静默丢掉，agent 就少了那本手艺，而它的提示
+    // 照样以为自己有（变量表按名单判「点没点」，货架按 findEnabled 判「有没有」，两边于是对不上）
+    const files = readdirSync(BUILTIN_AGENTS_MD_DIR).filter((f) => f.endsWith('.md'))
+    expect(files.length, `档案目录是空的：${BUILTIN_AGENTS_MD_DIR}`).toBeGreaterThan(0)
+    let referenced = 0
+    for (const file of files) {
+      const text = readFileSync(join(BUILTIN_AGENTS_MD_DIR, file), 'utf8')
+      for (const [, name] of text.matchAll(/skill:builtin:([A-Za-z0-9._-]+)/g)) {
+        expect(SKILL_NAMES, `${file} 点名了不存在的技能 builtin:${name}`).toContain(name)
+        referenced++
+      }
+    }
+    expect(referenced, '没有任何档案点名内置技能 —— 这条守护在空转').toBeGreaterThan(0)
   })
 
   it.each(MATRIX)('BS-7 %s/%s 正文点名的 references/*.md 都真实存在', (lang, name) => {

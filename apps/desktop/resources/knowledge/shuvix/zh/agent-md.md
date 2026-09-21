@@ -65,17 +65,21 @@ style, each with file and line. Never modify files.
 一个逗号分隔的字符串。每一项是下面之一：
 
 - **内置工具名** —— 大小写不敏感，归一为小写：`bash`、`read`、`write`、`edit`、`ls`、`glob`、`grep`、
-  `ask`、`browser`、`ssh`、`database`、`git`、`session`、`knowledge`；
+  `ask`、`browser`、`database`、`git`、`session`、`knowledge`、`artifact`；
 - `agent` —— 选择加入用 `agent` 工具**派发子代理**（受嵌套上限约束：被派发的 agent 只在深度上限
   —— 缺省 2 —— 允许时才能继续派发）；
 - `mcp:<server>` —— 该 MCP 服务器的全部工具（服务器名按设置里配置的写；前缀后的大小写保留；创建
   agent 时才惰性连接）；
-- `skill:<name>` —— 那个 skill（带命名空间的 skill 写成 `skill:<dir>:<name>`）。
+- `skill:<name>` —— 那个 skill（带命名空间的 skill 写成 `skill:<dir>:<name>`；ShuviX 自带的技能写成
+  `skill:builtin:<name>`）。
 
-条目按顺序去重。本机上不存在的名字静默丢弃 —— agent 照常创建，只是没有它。**收窄工具列表不是
-ShuviX 表达角色的方式**：一个没有 `grep` 的 agent 只会拿 `bash` 去 grep。内置的 `work`、`chat`、
-`coding` 三者刻意共用一份列表（`bash, read, write, edit, ask, browser, ls, grep, glob, ssh,
-database, agent, session, knowledge`），只在正文上有区别。
+条目按顺序去重。本机上不存在的名字静默丢弃 —— agent 照常创建，只是没有它。**列表里写了的都恒生效**，
+无论这个 agent 以哪种方式被用上。它做会话的根时，其中的 `mcp:` / `skill:` 项在这条会话的扩展能力
+选择器里显示为已勾、锁住（悬停会说是哪个 agent 声明的）；会话自己的勾选只能在其上叠加，要去掉一项
+就得覆盖这个 agent。**收窄工具列表不是 ShuviX 表达角色的方式**：一个没有 `grep` 的 agent 只会拿
+`bash` 去 grep。内置的 `work`、`chat`、`coding` 三者刻意共用一份列表（`bash, read, write, edit, ask,
+browser, ls, grep, glob, database, agent, session, knowledge, artifact, skill:builtin:drawing`），
+只在正文上有区别。
 
 ### 正文 —— 系统提示词
 
@@ -131,8 +135,9 @@ agent `coding`、`browser`、`explore`、`widget`、`wiki`、`wiki-writer`、`ti
    `prompt` 与一句 `description`。子代理在内存里作为根 agent 的同级运行，除非 `shuvix-model` 另有声明
    否则继承会话的模型与思考等级，拿到同样的指令文件 / 项目注入（按根会话的项目解析），最后把最终文本
    返回。这个工具**不会**向模型列举可用的 agent —— 名字得来自提示词或用户。
-2. **作为子会话的人格** —— `session` 工具的 `agent_profile`（任何不是基座的 agent）。该 agent
-   `shuvix-tools` 里非空的 `mcp:` / `skill:` 条目会取代子会话从父会话抄来的扩展能力；空的则保留。
+2. **作为子会话的人格** —— `session` 工具的 `agent_profile`（任何不是基座的 agent）。子会话保留从
+   父会话抄来的扩展能力；该 agent `shuvix-tools` 里的 `mcp:` / `skill:` 条目和列表里的其余各项一样
+   恒生效，叠加在上面。
 3. **作为 hook 的 agent**（`shuvix-hook-agent` —— 见 `hook-md` 条目）。
 4. **作为基座覆盖**（见上）。
 
