@@ -249,6 +249,8 @@
     "playTts": "Read aloud",
     "stopTts": "Stop reading",
     "mermaidFailed": "Mermaid render failed",
+    "diagramGenerating": "Drawing the diagram… ({{lines}} lines)",
+    "diagramExpand": "Expand",
     "svgFailed": "SVG could not be rendered safely",
     "showDiagram": "Show diagram",
     "rendering": "Rendering…",

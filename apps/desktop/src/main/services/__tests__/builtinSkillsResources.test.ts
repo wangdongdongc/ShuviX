@@ -14,7 +14,9 @@
  *
  * 刻意不测的两件事：SKILL.md / references 的**正文措辞**（提示散文，会随调优改动），以及
  * 「三语言是否真的翻译了」—— ja 目前就是 en 的逐字副本，这是约定允许的（未翻译的先放英文原文，
- * 翻译债因此摆在正确的位置，而不是变成「某个语言的用户静默少一个技能」）。只测在场，不测已译。
+ * 翻译债因此摆在正确的位置，而不是变成「某个语言的用户静默少一个技能」）。只测在场，不测已译 ——
+ * 但**没译的就得是原文**（BS-12）：一份不含假名的 ja 文件必须与 en 那份逐字节相同。否则 en 改了、
+ * ja 那份「英文原文」没跟着改，日语用户就静默拿到一份过时的手艺，而它看上去和别的未译文件一模一样。
  */
 import { describe, it, expect, afterAll } from 'vitest'
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
@@ -95,6 +97,15 @@ const filesUnder = (dir: string): string[] => {
 
 const readSkillMd = (lang: string, name: string): string =>
   readFileSync(join(skillDir(lang, name), 'SKILL.md'), 'utf8')
+
+/** 文本里点名的 `references/<x>.md`（去重，按出现顺序；写法相对技能根） */
+const citedReferences = (text: string): string[] => [
+  ...new Set([...text.matchAll(/references\/[\w.-]+\.md/g)].map((m) => m[0]))
+]
+
+/** 技能的 `references/` 下的文件（相对技能根，`references/x.md` 形式）；没有该目录时为空 */
+const referenceFiles = (lang: string, name: string): string[] =>
+  filesUnder(skillDir(lang, name)).filter((rel) => rel.startsWith('references/'))
 
 /** 每种语言 × 每个技能的笛卡尔积，给 it.each 用 */
 const MATRIX: [lang: string, name: string][] = LANGS.flatMap((lang) =>
@@ -183,14 +194,84 @@ describe('BS 内置技能资源：随应用发布的那批 know-how', () => {
     expect(referenced, '没有任何档案点名内置技能 —— 这条守护在空转').toBeGreaterThan(0)
   })
 
-  it.each(MATRIX)('BS-7 %s/%s 正文点名的 references/*.md 都真实存在', (lang, name) => {
-    const dir = skillDir(lang, name)
-    const cited = [
-      ...new Set([...readSkillMd(lang, name).matchAll(/references\/[\w.-]+\.md/g)].map((m) => m[0]))
-    ]
-    expect(cited.length, `${lang}/${name}: 正文没点名任何 references/`).toBeGreaterThan(0)
-    const missing = cited.filter((rel) => !existsSync(join(dir, rel)))
-    expect(missing).toEqual([])
+  it.each(MATRIX)(
+    'BS-7 %s/%s SKILL.md 与每份 references/*.md 点名的 references/*.md 都真实存在',
+    (lang, name) => {
+      const dir = skillDir(lang, name)
+      // SKILL.md 自己得点名至少一份 —— 否则技能根本没有入口去读它们
+      expect(
+        citedReferences(readSkillMd(lang, name)).length,
+        `${lang}/${name}: 正文没点名任何 references/`
+      ).toBeGreaterThan(0)
+      // 参考之间也互相指（choosing-a-form 的表格指向 diagrams）：同样是死链的来源。
+      // 写法一律相对**技能根**（`references/x.md`），不是相对引用它的那份文件
+      const sources = ['SKILL.md', ...referenceFiles(lang, name)]
+      const missing = sources.flatMap((source) =>
+        citedReferences(readFileSync(join(dir, source), 'utf8'))
+          .filter((rel) => !existsSync(join(dir, rel)))
+          .map((rel) => `${source} → ${rel}`)
+      )
+      expect(missing).toEqual([])
+    }
+  )
+
+  it.each(MATRIX)(
+    'BS-11 %s/%s references/ 下的每份文件都被 SKILL.md 点名（没有孤儿）',
+    (lang, name) => {
+      // 技能被加载时模型只看得见 SKILL.md；一份它不点名的参考永远不会被读到 ——
+      // 只被别的参考间接提到也不算（那要求模型先读对另一份，才知道这份存在）
+      const cited = new Set(citedReferences(readSkillMd(lang, name)))
+      const orphans = referenceFiles(lang, name).filter((rel) => !cited.has(rel))
+      expect(orphans).toEqual([])
+    }
+  )
+
+  it.each(LANGS)(
+    'DS-1 %s：drawing 有 diagrams 这份参考，SKILL.md 点名它，选型表里恰有一行指向它',
+    (lang) => {
+      const dir = skillDir(lang, 'drawing')
+      expect(existsSync(join(dir, 'references/diagrams.md'))).toBe(true)
+      expect(readSkillMd(lang, 'drawing')).toContain('references/diagrams.md')
+      // 「结构、流程、状态机」那一行：选型表是模型决定「这是不是示意图」的地方，
+      // 答案必须把它领到 diagrams 那份参考，而不是别的写法
+      const rows = readFileSync(join(dir, 'references/choosing-a-form.md'), 'utf8')
+        .split('\n')
+        .filter((line) => line.startsWith('|') && line.includes('references/diagrams.md'))
+      expect(rows).toHaveLength(1)
+    }
+  )
+
+  it('BS-12 没译的 ja 文件就是 en 原文：不含假名的 ja 文件与 en 那份逐字节相同', () => {
+    // 假名（平假名 + 片假名）是「这份已经译成日语」的判据；汉字不算，中日共用
+    const KANA = /[\u3040-\u30ff]/
+    let untranslated = 0
+    for (const name of SKILL_NAMES) {
+      for (const rel of filesUnder(skillDir('ja', name))) {
+        const ja = readFileSync(join(skillDir('ja', name), rel))
+        if (KANA.test(ja.toString('utf8'))) continue
+        untranslated++
+        const en = readFileSync(join(skillDir('en', name), rel))
+        expect(ja.equals(en), `ja/${name}/${rel} 没有假名，却与 en 那份不同`).toBe(true)
+      }
+    }
+    // 非空证：今天 drawing 的五份 ja 文件全是英文原文 —— 一份都没比过，这条就在空转
+    expect(untranslated).toBeGreaterThan(0)
+  })
+
+  it('BS-13 所有语言的技能文件里都不再提 mermaid —— 结构图也手画 ```svg', () => {
+    let scanned = 0
+    for (const lang of LANGS) {
+      for (const name of dirNamesIn(join(SKILLS_ROOT, lang))) {
+        for (const rel of filesUnder(skillDir(lang, name))) {
+          scanned++
+          expect(
+            readFileSync(join(skillDir(lang, name), rel), 'utf8'),
+            `${lang}/${name}/${rel}`
+          ).not.toMatch(/mermaid/i)
+        }
+      }
+    }
+    expect(scanned).toBeGreaterThan(0)
   })
 })
 

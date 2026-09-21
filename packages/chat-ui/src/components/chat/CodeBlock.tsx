@@ -4,30 +4,17 @@ import { Copy, Check, Code, FileText } from 'lucide-react'
 import { copyToClipboard } from '../../utils/clipboard'
 import { getHostApi } from '../../api/chatApi'
 import { useChatStore } from '../../stores/chatStore'
-import { sanitizeAuthoredSvg, sanitizeRenderedSvg } from '@shuvix/chat-protocol/utils/svgSanitize'
+import { sanitizeAuthoredSvg } from '@shuvix/chat-protocol/utils/svgSanitize'
 import {
   authoredSvgFrame,
   isSvgComplete,
   svgFenceIsRenderable
 } from '@shuvix/chat-protocol/utils/svgFence'
-import mermaid from 'mermaid'
-
-// 初始化 mermaid（暗色主题，禁用自动启动）
-mermaid.initialize({
-  startOnLoad: false,
-  theme: 'default',
-  securityLevel: 'loose',
-  fontFamily: 'ui-sans-serif, system-ui, sans-serif'
-})
-
-// 模块级缓存：组件频繁重挂载时保持 SVG 渲染结果和视图状态
-const mermaidSvgCache = new Map<string, string>()
-const mermaidViewState = new Map<string, boolean>() // code → showSource
-let mermaidIdCounter = 0
+import { MermaidBlock } from './MermaidBlock'
 
 /** 手写 SVG 的净化结果缓存（净化是纯函数，同一段源码恒得同一结果）；'' = 判死 */
 const authoredSvgCache = new Map<string, string>()
-/** 手写 SVG 的视图状态：code → showSource（缺省为图，与 mermaid 相反，见 AuthoredSvgBlock） */
+/** 手写 SVG 的视图状态：code → showSource（缺省为图，见 AuthoredSvgBlock） */
 const authoredViewState = new Map<string, boolean>()
 
 /**
@@ -131,112 +118,16 @@ export function CodeBlock({
   )
 }
 
-/** Mermaid 代码块 → SVG 图表，支持源码/图表切换（懒渲染） */
-function MermaidBlock({ code }: { code: string }): React.JSX.Element {
-  const { t } = useTranslation()
-  const [svgHtml, setSvgHtml] = useState<string | null>(mermaidSvgCache.get(code) ?? null)
-  const [error, setError] = useState<string | null>(null)
-  const [showSource, _setShowSource] = useState(mermaidViewState.get(code) ?? true)
-  const [rendering, setRendering] = useState(false)
-
-  // 包装 setShowSource，同步写入模块级缓存
-  const setShowSource = (v: boolean): void => {
-    mermaidViewState.set(code, v)
-    _setShowSource(v)
-  }
-
-  // 点击"图表"按钮时触发渲染
-  const handleToggle = async (): Promise<void> => {
-    if (!showSource) {
-      setShowSource(true)
-      return
-    }
-    // 首次切换到图表视图时渲染
-    if (!svgHtml && !error) {
-      setRendering(true)
-      try {
-        const id = `mermaid_${mermaidIdCounter++}`
-        const { svg } = await mermaid.render(id, code)
-        // 净化后再入缓存/注入 —— 图表源码来自智能体输出（可能受提示注入影响），而下方是
-        // dangerouslySetInnerHTML 直入特权渲染进程。mermaid 的 click href 指令会带出
-        // javascript: 锚点，本行是把它挡在 DOM 之外的地方。
-        const clean = sanitizeRenderedSvg(svg)
-        if (!clean) throw new Error('SVG sanitization failed') // 失败关闭，走下方 error 分支
-        mermaidSvgCache.set(code, clean)
-        setSvgHtml(clean)
-      } catch (e) {
-        setError(String(e))
-      } finally {
-        setRendering(false)
-      }
-    }
-    setShowSource(false)
-  }
-
-  if (error) {
-    return (
-      <div className="rounded-lg border border-orange-500/30 bg-orange-500/5 p-3">
-        <div className="text-[10px] text-orange-400 mb-1">{t('message.mermaidFailed')}</div>
-        <pre className="text-[11px] text-text-secondary whitespace-pre-wrap break-words">
-          {code}
-        </pre>
-      </div>
-    )
-  }
-
-  return (
-    <div
-      className="my-2 rounded-lg overflow-hidden"
-      style={{ background: 'color-mix(in srgb, var(--color-bg-tertiary) 60%, transparent)' }}
-    >
-      {/* 工具栏 */}
-      <div
-        className="flex items-center justify-between px-4 py-1.5"
-        style={{ background: 'color-mix(in srgb, var(--color-bg-tertiary) 60%, transparent)' }}
-      >
-        <span className="text-[10px] text-text-tertiary font-medium">Mermaid</span>
-        <button
-          onClick={handleToggle}
-          disabled={rendering}
-          className="flex items-center gap-1 text-[10px] text-text-tertiary hover:text-text-secondary transition-colors disabled:opacity-50"
-          title={showSource ? t('message.showDiagram') : t('message.source')}
-        >
-          {showSource ? <FileText size={10} /> : <Code size={10} />}
-          <span>
-            {rendering
-              ? t('message.rendering')
-              : showSource
-                ? t('message.diagram')
-                : t('message.source')}
-          </span>
-        </button>
-      </div>
-      {showSource ? (
-        <pre className="p-3 text-[11px] text-text-secondary whitespace-pre-wrap break-words leading-relaxed font-mono overflow-auto">
-          {code}
-        </pre>
-      ) : (
-        <div
-          className="flex justify-center overflow-auto p-3 bg-white rounded-b-lg [&_svg]:max-w-full"
-          dangerouslySetInnerHTML={{ __html: svgHtml || '' }}
-        />
-      )}
-    </div>
-  )
-}
-
 /**
  * 手写 SVG 代码块 → 图，支持图/源码切换。
  *
- * 与 MermaidBlock 的三处刻意不同：
+ * 与 MermaidBlock 的刻意不同：
  *
- * 1. **缺省显示图，不是源码。** mermaid 缺省显示源码是因为渲染要异步加载一个重库、
- *    值得等用户点一下；这里的「渲染」只是一次同步净化（纯函数、已缓存），而且这张图
- *    本身就是模型要说的那句话 —— 让它默认折叠成一屏 path 数据是把话藏起来。
- * 2. **底色用主题面，不是写死白底。** mermaid 用的是它自己 default 主题的浅色产物，
- *    所以外面得铺白底才不割裂；手写 SVG 一律走 --viz-* / --theme-* token 取色
- *    （见 themes.css 的调色板段与 visual-guide 提示片段），写死白底会让它在深色主题下
- *    变成白框里的浅色字。图直接坐在主题底色上，明暗由 color-scheme 带着 light-dark() 解析。
+ * 1. **边写边画，不等写完。** 「渲染」只是一次同步净化（纯函数），开标签一闭合就能出第一帧；
+ *    mermaid 要完整源码才能解析，只能等写完。
+ * 2. **颜色直接是 token。** 手写 SVG 一律走 --viz-* / --theme-* 取色（见 themes.css 的调色板段与
+ *    visual-guide 提示片段），paint 时由 CSS 解析，切主题不必重渲染；mermaid 要具体颜色值，
+ *    切主题得重新渲染一遍。
  * 3. **净化用 sanitizeAuthoredSvg 这一档。** 来源是模型直接手写的整段标记，不是渲染器
  *    的产物 —— <style>/<foreignObject>/远程地址都必须关掉，理由见 svgSanitize 头注释。
  *

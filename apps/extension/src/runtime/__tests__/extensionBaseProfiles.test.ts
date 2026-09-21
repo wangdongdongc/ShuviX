@@ -5,10 +5,12 @@
  * 副本存在的理由：共享的两份点名了 bash / ssh / glob / grep / ls / 子会话这些扩展没有的
  * 东西，直接用会误导 Agent。但代价是漂移无声 —— 最危险的一种是把桌面 `work` 新增的
  * 「交给子会话去做」整节同步过来：扩展根本没有 `session` 工具，模型会照着提示词调一个
- * 不存在的动作。故这里钉四样：
+ * 不存在的动作。故这里钉五样：
  *   - **结构字段与共享版逐项相等**（name / 指令文件 / 项目感知）；
  *   - **六份 md 都不带退役的 `shuvix-session-awareness`**：这个键随会话内切换档案一并退役，
  *     副本是用户「创建覆盖副本」的样板，样板里留一行死键等于教用户去写它；
+ *   - **六份 md 都不提 mermaid**（NM-3）：结构图也改成了手画 ```svg，共享版改掉那句时副本
+ *     不会跟着改；
  *   - **两份副本的工具面完全相等** —— 桌面上两条路线差在「自己干 vs 交给 coding 子会话」，
  *     扩展既没有 shell 也没有子会话，两份文案只该差工作目录形态（项目文件夹 vs 隔离临时
  *     目录）。工具面一旦分叉，「项目会话 work / 无项目会话 chat」这条形态推导在两端就不再
@@ -107,6 +109,16 @@ describe('扩展端基座档案 — 结构字段与共享版对齐', () => {
           'shuvix-session-awareness'
         )
       }
+    }
+  })
+
+  it('NM-3 六份 md 原文里都没有 mermaid —— 结构图也手画 ```svg，副本不该还教旧写法', () => {
+    // 副本是手抄的，共享版删掉 mermaid 那句时没有任何机制把这边一起改掉。
+    // 份数钉死为 6（work / chat × 三语）：glob 若一份都没扫到，下面那圈恒绿
+    const sources = Object.entries(EXT_MD_SOURCES)
+    expect(sources).toHaveLength(6)
+    for (const [path, text] of sources) {
+      expect(text, path).not.toMatch(/mermaid/i)
     }
   })
 

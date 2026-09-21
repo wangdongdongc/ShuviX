@@ -249,6 +249,8 @@
     "playTts": "読み上げ",
     "stopTts": "読み上げ停止",
     "mermaidFailed": "Mermaidレンダリング失敗",
+    "diagramGenerating": "図を生成中…（{{lines}} 行）",
+    "diagramExpand": "拡大して見る",
     "svgFailed": "SVG を安全に描画できません",
     "showDiagram": "図表を表示",
     "rendering": "レンダリング中…",

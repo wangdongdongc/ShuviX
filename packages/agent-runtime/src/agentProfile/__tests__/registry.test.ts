@@ -21,6 +21,7 @@ import {
   pickLocalizedSource
 } from '../../subagent/builtinAgents'
 import { createInlineMdReader } from '../../subagent/builtinAgents/inlineSources'
+import { renderVisualCraft } from '../fragments'
 import { KNOWLEDGE_TYPES } from '@shuvix/chat-protocol/knowledge'
 import { BOT_CONTEXT_TAG } from '../../bot/botContext'
 import type { AgentProfile } from '../../subagent/types'
@@ -551,7 +552,7 @@ describe('coding 档案钉板(从 work 拆出的工程人格)', () => {
     for (const language of LANGS) {
       const coding = profile('coding', language).systemPrompt
       const work = profile(WORK_PROFILE_NAME, language).systemPrompt
-      // coding：工程场景只要广域调研（结构图走对话 mermaid，不派子智能体）
+      // coding：工程场景只要广域调研（结构图在回复里手画 ```svg，不派子智能体）
       expect(coding, `coding.${language} 需点名 explore`).toContain('explore')
       expect(coding, `coding.${language} 不应点名 widget`).not.toContain('widget')
       // work：通用场景要小工具，广域调研留给 coding 子会话
@@ -612,6 +613,22 @@ describe('notebook 档案钉板(笔记本会话根 Agent 的基座)', () => {
       expect(profile(NOTEBOOK_PROFILE_NAME, language).tools, `notebook.${language}`).toContain(
         'skill:builtin:drawing'
       )
+    }
+  })
+
+  it('NB-1 三语正文都写出 ```svg 围栏的写法 —— 带技能时 visualCraft 里一个都没有，只能靠正文', () => {
+    // 两半合起来才是这条的意思：notebook 的技能在货架上，于是它拿到的 visualCraft 里手艺段
+    // （连同范例围栏）换成了指路 —— 围栏该怎么写，笔记本 agent 只能从自己的正文里学到。
+    // 正文把 ```svg 删成 ``svg（或整段删掉），这条先红
+    for (const language of LANGS) {
+      expect(
+        profile(NOTEBOOK_PROFILE_NAME, language).systemPrompt,
+        `notebook.${language}`
+      ).toContain('```svg')
+      expect(
+        renderVisualCraft(language, { drawingSkill: true }),
+        `visualCraft.${language}`
+      ).not.toContain('```svg')
     }
   })
 })

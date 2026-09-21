@@ -118,6 +118,20 @@ describe('i18n 语言包', () => {
   })
 
   /**
+   * H-1：mermaid 卡片的两句新文案。`diagramGenerating` 是流式期间那一行占位（「已写多少行」），
+   * 一门语言漏了 `{{lines}}` 运行期不报错，只是那一行里露出原始占位符 —— 齐平断言只比键，看不见。
+   * `diagramExpand` 是「放大查看」按钮上唯一的字：空串会留下一个只有图标、说不出自己干什么的按钮。
+   */
+  it('H-1 message.diagramGenerating 三语都只插 {{lines}}；message.diagramExpand 三语都非空', () => {
+    for (const [lang, bundle] of Object.entries({ en, zh, ja })) {
+      const generating = leaf(bundle, 'message.diagramGenerating')
+      expect(generating, `${lang} 缺 message.diagramGenerating`).toBeTypeOf('string')
+      expect(placeholders(generating!), lang).toEqual(['lines'])
+      expect(leaf(bundle, 'message.diagramExpand')?.trim(), lang).toBeTruthy()
+    }
+  })
+
+  /**
    * L-4：KnowledgeGroup 组件读的每个键在 en 里都是非空字符串（zh / ja 由齐平断言跟随）。
    * 缺键的表现是侧栏直接露出 `knowledge.badgeStale` 这样的原始键名 —— 组件不报错，只有肉眼
    * 能发现。清单与组件里的 t() 调用逐一对应，改组件时同步这里。

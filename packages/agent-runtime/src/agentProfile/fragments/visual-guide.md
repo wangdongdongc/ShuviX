@@ -2,7 +2,7 @@
 
 ## Drawing figures inline
 
-A ```svg fenced block in your reply renders **inline as a figure**, drawn as you write it — hand-written SVG, no file, no tool call. Reach for it when the shape itself carries the argument: a chart at true proportions, an annotated schematic, a layout or mockup. Structure — flow, state machines, sequence, ER — goes in a ```mermaid fence in the reply instead, not in a `*-graph.md` and not through a sub-agent. When prose is clearer, write prose.
+A ```svg fenced block in your reply renders **inline as a figure**, drawn as you write it — hand-written SVG, no file, no tool call. Reach for it when the shape itself carries the argument: a chart at true proportions, a flow or structure someone is trying to follow, an annotated schematic, a layout. Draw it here in the reply — not as a file, not through a sub-agent. When prose is clearer, write prose.
 
 <!-- shuvix:adopt-start -->
 
@@ -24,6 +24,14 @@ However small the figure, break one of these and it renders wrong.
   - Gridlines `--viz-grid` · axes `--viz-axis` · surfaces `--theme-bg-secondary` / `-tertiary` · borders `--theme-border-primary`
 - **Text in text tokens, never a series color** — `fill="var(--theme-text-secondary)"` (or `-primary` / `-tertiary`), `font-family="var(--theme-font-sans)"`, `font-size` at least 11.
 - **No `<style>`, `<foreignObject>`, `<script>` or remote `href` / `src`** — they are stripped before display. `url(#id)` references are fine; `url(https://…)` is not.
+
+### Boxes and arrows
+
+A figure that explains must be smaller than the thing it explains. Before a flow or a structure, name the one question it answers and count its parts.
+
+- At most 5 boxes, at most 4 in a row, one direction; a box holds a short phrase, not a sentence.
+- More parts than that: draw the overview — the boxes and the main flow only — then one small figure per part that matters, with prose between; or draw the overview and offer to open a part.
+- Arrows stop at box edges and cross no other box.
 
 <!-- shuvix:craft-start -->
 

@@ -739,6 +739,335 @@ export function bubbleWatch(main: CdpClient): BubbleWatch {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+// 对话里的 ```mermaid 图（chat-ui 的 MermaidBlock）
+//
+// 锚点全是组件自己打的 data 属性：`data-mermaid-figure`（放图那一格，值是布局 fit / clip /
+// natural）、`data-mermaid-pending`（占位行）、`data-mermaid-error`（错误卡）、`data-mermaid-expand`
+// （放大按钮）、`data-mermaid-dialog`（放大弹窗的面板；遮罩是它的父节点，面板本身不是遮罩）。
+// 卡片上的东西一律在**正文里含本轮标记的那条**助手消息里找（见 assistantBodyWith）—— 同一会话
+// 前几轮的图还在上面；弹窗 portal 到 body 上，全局只会有一个。弹窗里的图认「不是 `.lucide` 的
+// 那个 svg」：关闭按钮的 X 也是 svg。
+
+/**
+ * 正文里含 `marker` 的最后一条助手正文的 .markdown-body（认法同 chatPane 的 BUBBLE：`.min-w-0` 的
+ * 直接子节点）。按标记认而不是直接取最后一条：新一轮刚发出、流式卡还没上屏时，「最后一条」是
+ * 上一轮的那条 —— 它的图早就在了，等图的断言会在旧 DOM 上直接通过。
+ */
+const assistantBodyWith = (marker: string): string => `[...document.querySelectorAll(
+  '[data-msg-role="assistant"][data-msg-type="message"] .markdown-body'
+)].filter(
+  (m) =>
+    (m.parentElement?.className ?? '').includes('min-w-0') &&
+    (m.textContent ?? '').includes(${JSON.stringify(marker)})
+).pop()`
+
+/** 那条助手正文里 mermaid 卡的此刻 */
+export interface MermaidShot {
+  /** 放图那一格的布局（`data-mermaid-figure` 的值：fit / clip / natural）；没有图 = null */
+  figure: string | null
+  /** 占位行的文字；没有 = null（流式中带行数，写完后是「渲染中」） */
+  pending: string | null
+  /** 错误卡里的源码；没有错误卡 = null */
+  error: string | null
+  /** 正文里 `<pre>` 的个数（卡片切到源码时会多一个） */
+  pres: number
+  /** 「放大查看」按钮在不在 */
+  expandable: boolean
+}
+
+/** 颜色取样 —— 图里读的与令牌解析出来的，**同一次 eval** 里取（中间切了主题也不会错位） */
+export interface MermaidColors {
+  /** 第一个节点形状（fill 不是 none 的那个）的 computed fill */
+  nodeFill: string
+  /** 第一个节点标签的 computed color（`<text>` 标签取 fill） */
+  labelColor: string
+  /** 此刻 `var(--theme-bg-tertiary)` 的解析值 */
+  bgTertiary: string
+  /** 此刻 `var(--theme-text-primary)` 的解析值 */
+  textPrimary: string
+  /** 放图那一格的 computed background-color（透明 = 图直接坐在卡片底色上） */
+  figureBackground: string
+}
+
+/** 放图那一格与图本身的几何（CSS px） */
+export interface MermaidGeometry {
+  mode: string
+  /** 图的原始尺寸（根 `<svg>` 的 viewBox 宽高） */
+  viewBox: { width: number; height: number }
+  /** `<svg>` 的渲染矩形 */
+  svg: { width: number; height: number }
+  /** 放图那一格的外框（border-box） */
+  box: { width: number; height: number }
+  /** 截断时外框的上限：480 + 上下内边距 1.5rem（按根字号换算） */
+  capHeight: number
+}
+
+export interface MermaidDialogShot {
+  open: boolean
+  /** 遮罩进入了关闭动效（`dialog-closing`） */
+  closing: boolean
+  /** 弹窗里那张图的渲染宽度 */
+  svgWidth: number
+  /** 它的 viewBox 宽（原宽） */
+  viewBoxWidth: number
+  /** 弹窗滚动区（图外面那层 overflow-auto） */
+  scrollHeight: number
+  clientHeight: number
+}
+
+/** 绑在「正文里含某个标记」的那条助手消息上（见 assistantBodyWith）；弹窗与主题是全局的 */
+export interface MermaidPane {
+  /** 那条正文里的 mermaid 卡；正文还没上屏、或里面没有 mermaid 卡 = null */
+  shot(): Promise<MermaidShot | null>
+  /** 等图画出来（`[data-mermaid-figure] > svg`） */
+  waitFigure(timeoutMs?: number): Promise<void>
+  colors(): Promise<MermaidColors>
+  geometry(): Promise<MermaidGeometry>
+  /** mermaid 失败时可能留在 body 上的东西：临时容器 `#d<id>`、它自己画的错误图 */
+  leftovers(): Promise<{ tempNodes: number; syntaxError: boolean }>
+  /** 根上的 data-theme */
+  theme(): Promise<string>
+  /** 直接改根上的 data-theme（MermaidBlock 观察的就是这个属性；不经设置，不落盘） */
+  setTheme(id: string): Promise<void>
+  /** 点「放大查看」并等弹窗出现 */
+  openDialog(): Promise<void>
+  dialog(): Promise<MermaidDialogShot>
+  /** 三种关法之一，并等弹窗卸下（关闭动效 120ms） */
+  closeDialog(via: 'escape' | 'backdrop' | 'button'): Promise<void>
+}
+
+export function mermaidPane(main: CdpClient, marker: string): MermaidPane {
+  const BODY = assistantBodyWith(marker)
+  const FIGURE = `(${BODY})?.querySelector('[data-mermaid-figure]')`
+  const PANEL = `document.querySelector('[data-mermaid-dialog]')`
+
+  const dialog = (): Promise<MermaidDialogShot> =>
+    main.eval<MermaidDialogShot>(`(() => {
+      const panel = ${PANEL}
+      if (!panel) {
+        return { open: false, closing: false, svgWidth: 0, viewBoxWidth: 0, scrollHeight: 0, clientHeight: 0 }
+      }
+      const svg = [...panel.querySelectorAll('svg')].find((s) => !s.classList.contains('lucide'))
+      const scroller = svg?.closest('.overflow-auto')
+      const vb = (svg?.getAttribute('viewBox') ?? '').trim().split(/[\\s,]+/).map(Number)
+      return {
+        open: true,
+        closing: panel.parentElement?.classList.contains('dialog-closing') ?? false,
+        svgWidth: svg ? svg.getBoundingClientRect().width : 0,
+        viewBoxWidth: vb[2] ?? 0,
+        scrollHeight: scroller?.scrollHeight ?? 0,
+        clientHeight: scroller?.clientHeight ?? 0
+      }
+    })()`)
+
+  return {
+    shot: () =>
+      main.eval<MermaidShot | null>(`(() => {
+        const body = ${BODY}
+        if (!body) return null
+        const figure = body.querySelector('[data-mermaid-figure]')
+        const pending = body.querySelector('[data-mermaid-pending]')
+        const error = body.querySelector('[data-mermaid-error]')
+        if (!figure && !pending && !error && !body.querySelector('[data-mermaid-expand]')) {
+          // 切到源码的卡片没有上面任何一个锚点，只剩 <pre> —— 靠工具栏的「Mermaid」字样认
+          const card = [...body.querySelectorAll('span')].find((s) => s.textContent === 'Mermaid')
+          if (!card) return null
+        }
+        return {
+          figure: figure ? figure.getAttribute('data-mermaid-figure') : null,
+          pending: pending ? (pending.textContent ?? '').trim() : null,
+          error: error ? (error.querySelector('pre')?.textContent ?? '') : null,
+          pres: body.querySelectorAll('pre').length,
+          expandable: !!body.querySelector('[data-mermaid-expand]')
+        }
+      })()`),
+    waitFigure: async (timeoutMs = 25_000) => {
+      await until(
+        () => main.eval<boolean>(`!!(${BODY})?.querySelector('[data-mermaid-figure] > svg')`),
+        `mermaid figure painted in the bubble with ${JSON.stringify(marker)}`,
+        timeoutMs
+      )
+    },
+    colors: () =>
+      main.eval<MermaidColors>(`(() => {
+        const figure = ${FIGURE}
+        const svg = figure?.querySelector(':scope > svg')
+        if (!svg) throw new Error('no mermaid figure on screen')
+        const shape = [...svg.querySelectorAll('.node rect, .node path, .node polygon, .node circle')]
+          .find((el) => {
+            const fill = getComputedStyle(el).fill
+            return !!fill && fill !== 'none'
+          })
+        const label = svg.querySelector('.node .nodeLabel, .node text')
+        const probe = document.createElement('span')
+        document.body.appendChild(probe)
+        const resolve = (token) => {
+          probe.style.color = 'var(' + token + ')'
+          return getComputedStyle(probe).color
+        }
+        const bgTertiary = resolve('--theme-bg-tertiary')
+        const textPrimary = resolve('--theme-text-primary')
+        probe.remove()
+        const labelStyle = label ? getComputedStyle(label) : null
+        return {
+          nodeFill: shape ? getComputedStyle(shape).fill : '',
+          labelColor: !labelStyle
+            ? ''
+            : label.tagName.toLowerCase() === 'text'
+              ? labelStyle.fill
+              : labelStyle.color,
+          bgTertiary,
+          textPrimary,
+          figureBackground: getComputedStyle(figure).backgroundColor
+        }
+      })()`),
+    geometry: () =>
+      main.eval<MermaidGeometry>(`(() => {
+        const figure = ${FIGURE}
+        const svg = figure?.querySelector(':scope > svg')
+        if (!svg) throw new Error('no mermaid figure on screen')
+        const vb = (svg.getAttribute('viewBox') ?? '').trim().split(/[\\s,]+/).map(Number)
+        const sr = svg.getBoundingClientRect()
+        const fr = figure.getBoundingClientRect()
+        const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16
+        return {
+          mode: figure.getAttribute('data-mermaid-figure') ?? '',
+          viewBox: { width: vb[2] ?? 0, height: vb[3] ?? 0 },
+          svg: { width: sr.width, height: sr.height },
+          box: { width: fr.width, height: fr.height },
+          capHeight: 480 + 1.5 * rem
+        }
+      })()`),
+    leftovers: () =>
+      main.eval<{ tempNodes: number; syntaxError: boolean }>(`({
+        tempNodes: document.querySelectorAll('[id^="dmermaid"]').length,
+        syntaxError: (document.body.innerText ?? '').includes('Syntax error in text')
+      })`),
+    theme: () => main.eval<string>(`document.documentElement.getAttribute('data-theme') ?? ''`),
+    setTheme: async (id) => {
+      await main.eval(
+        `document.documentElement.setAttribute('data-theme', ${JSON.stringify(id)}); true`
+      )
+    },
+    openDialog: async () => {
+      await main.eval(`(() => {
+        const btn = (${BODY})?.querySelector('[data-mermaid-expand]')
+        if (!btn) throw new Error('no mermaid expand button on screen')
+        btn.click()
+        return true
+      })()`)
+      await until(() => main.eval<boolean>(`${PANEL} !== null`), 'mermaid dialog opened')
+      // 等入场动效（.dialog-panel 从 scale(0.96) 放大，120ms）走完 —— 动效期间量到的矩形
+      // 是缩小过的，「原宽」会差出 4%
+      await main.eval(`(async () => {
+        const panel = ${PANEL}
+        await Promise.all(
+          [panel, panel.parentElement].flatMap((el) => el.getAnimations()).map((a) => a.finished)
+        )
+        return true
+      })()`)
+    },
+    dialog,
+    closeDialog: async (via) => {
+      const act =
+        via === 'escape'
+          ? `document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`
+          : via === 'backdrop'
+            ? // 点的是遮罩本身（面板的父节点）：点在面板里面不该关
+              `${PANEL}.parentElement.dispatchEvent(new MouseEvent('click', { bubbles: true }))`
+            : `${PANEL}.querySelector('button[aria-label="Close"]').click()`
+      await main.eval(`(() => { ${act}; return true })()`)
+      await until(() => main.eval<boolean>(`${PANEL} === null`), `mermaid dialog closed via ${via}`)
+    }
+  }
+}
+
+/** 流式过程中 mermaid 卡的一帧（页内 MutationObserver 记录，连续相同的帧合并） */
+export interface MermaidFrame {
+  /** `Date.now()`（渲染进程的墙钟，与 spec 进程是同一台机器） */
+  t: number
+  /** 占位行的文字；没有 = null */
+  pending: string | null
+  /** 图在不在 */
+  figure: boolean
+  /** 错误卡在不在 */
+  error: boolean
+  /** 流式占位卡（`streaming-live`）在不在 = 这一轮还没结束 */
+  busy: boolean
+  /** 正文里是否已出现尾部标记（= 最后一片已经上屏） */
+  tail: boolean
+}
+
+export interface MermaidWatch {
+  /**
+   * 开始观察正文里含 `headMarker` 的那条助手消息（幂等：重复调用重新开始）；那条消息还没上屏时
+   * 记的是全空的帧。`tailMarker` 用来认「最后一片到了」
+   */
+  start(headMarker: string, tailMarker: string): Promise<void>
+  frames(): Promise<MermaidFrame[]>
+  /** 停止观察（不清空已记录的帧） */
+  stop(): Promise<void>
+}
+
+/**
+ * mermaid 卡的变动观察器 —— 「写围栏期间一直只有占位」「最后一片之后多久出图」都是**时段**断言，
+ * 轮询（400ms 一次）会漏掉中间态；装在页内，每次 DOM 变动记一帧（同 bubbleWatch）。
+ */
+export function mermaidWatch(main: CdpClient): MermaidWatch {
+  const KEY = '__e2eMermaidWatch'
+  return {
+    start: async (headMarker, tailMarker) => {
+      await main.eval(`(() => {
+        const prev = window.${KEY}
+        if (prev && prev.obs) prev.obs.disconnect()
+        const marker = ${JSON.stringify(tailMarker)}
+        const state = { frames: [], obs: null }
+        const snap = () => {
+          const body = ${assistantBodyWith(headMarker)}
+          const pending = body?.querySelector('[data-mermaid-pending]')
+          const frame = {
+            t: Date.now(),
+            pending: pending ? (pending.textContent ?? '').trim() : null,
+            figure: !!body?.querySelector('[data-mermaid-figure] > svg'),
+            error: !!body?.querySelector('[data-mermaid-error]'),
+            busy: !!document.querySelector('[data-msg-id="streaming-live"]'),
+            tail: (body?.textContent ?? '').includes(marker)
+          }
+          const last = state.frames[state.frames.length - 1]
+          if (
+            last &&
+            last.pending === frame.pending &&
+            last.figure === frame.figure &&
+            last.error === frame.error &&
+            last.busy === frame.busy &&
+            last.tail === frame.tail
+          )
+            return
+          state.frames.push(frame)
+        }
+        snap()
+        state.obs = new MutationObserver(snap)
+        state.obs.observe(document.body, {
+          childList: true,
+          subtree: true,
+          characterData: true,
+          attributes: true
+        })
+        window.${KEY} = state
+        return true
+      })()`)
+    },
+    frames: () => main.eval<MermaidFrame[]>(`(window.${KEY}?.frames ?? []).map((f) => f)`),
+    stop: async () => {
+      await main.eval(`(() => {
+        if (window.${KEY}?.obs) window.${KEY}.obs.disconnect()
+        return true
+      })()`)
+    }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 // A3 · 输入框 `@` 提及弹层（AtMentionPopover）—— 多源
 //
 // 裸 `@` 合并分区（文件 / 知识库两段，每源 ≤5，方向键跨段扁平循环）；`@源:query` 显式

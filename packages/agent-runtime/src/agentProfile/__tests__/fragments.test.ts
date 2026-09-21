@@ -14,9 +14,15 @@
  * 一字不差的那些：
  *  - POINTER `builtin:drawing` —— 只在「先加载技能」那句指路里；
  *  - EXAMPLE 「```svg + 换行 + <svg」—— 手艺段的范例围栏（载体段那个 ```svg 后面跟的是空格）；
- *  - CARRIER 「```mermaid」—— 只在载体段；
+ *  - CARRIER 「```svg + 空格」—— 只在载体段那一句「回复里的 ```svg 围栏会内联渲染」里：范例围栏的
+ *    ```svg 后面跟的是换行，技能指路里没有围栏；
  *  - ADOPT `adopt` —— 三种语言里都只出现在「改图走 adopt」那一段；
  *  - CONTRACT —— 契约段的一组记号：无论两个开关怎么拨都必须在。
+ *
+ * 两处例外只能认本地化措辞，那两张表因此得手维护（同 builtinContent.test.ts 的 FACE_TERMS）：
+ *  - BUDGET_HEADING —— 「框与箭头」那段预算没有任何代码记号可认，只能认它的小标题；
+ *  - DIAGRAM_TERM —— 指路那句点名「流程或结构图」的说法。
+ * 改了这两处的措辞请同步表：这里会红，但红的原因是表过期而不是片段坏了。
  */
 import { describe, it, expect } from 'vitest'
 import { renderVisualCraft, renderVisualGuide, type VisualGuideOptions } from '../fragments'
@@ -26,8 +32,24 @@ const LANGUAGES = ['en', 'zh', 'ja']
 
 const POINTER = 'builtin:drawing'
 const EXAMPLE = '```svg\n<svg'
-const CARRIER = '```mermaid'
+/** 围栏记号 + 一个空格：载体段那句里的写法（范例围栏后面是换行，见文件头） */
+const CARRIER = '```svg '
 const ADOPT = 'adopt'
+/**
+ * 「框与箭头」预算段的小标题 —— 这一段没有代码记号，只能按本地化措辞认（见文件头）。
+ * 它在两个出口 × 四种开关组合的**每一种**渲染里都得在：图再小也得守预算，而它不在任何界桩里。
+ */
+const BUDGET_HEADING: Record<string, string> = {
+  en: '### Boxes and arrows',
+  zh: '### 框与箭头',
+  ja: '### 箱と矢印'
+}
+/** 指路那句里点名「流程或结构图」的说法（技能如今也管框与箭头，指路得把它说出来） */
+const DIAGRAM_TERM: Record<string, string> = {
+  en: 'flow or structure diagram',
+  zh: '流程或结构图',
+  ja: '流れや構造の図'
+}
 const CONTRACT = [
   'viewBox',
   'role="img"',
@@ -236,6 +258,20 @@ describe('renderVisualGuide / renderVisualCraft —— 两个开关（VG）', ()
       expect(render('ko', { drawingSkill: true }), exit).toBe(render('en', { drawingSkill: true }))
     }
   })
+
+  it.each(LANGUAGES)(
+    'P-1 %s：指路那一段点名了流程或结构图 —— 画框与箭头之前也该先加载技能',
+    (language) => {
+      // 技能多了 diagrams 这份参考之后，指路若只说「数据图」，模型画流程图时就不会去加载它
+      for (const [exit, render] of EXITS) {
+        const hits = paragraphs(render(language, { drawingSkill: true })).filter((p) =>
+          p.includes(POINTER)
+        )
+        expect(hits, exit).toHaveLength(1)
+        expect(hits[0], exit).toContain(DIAGRAM_TERM[language])
+      }
+    }
+  )
 })
 
 /**
@@ -253,19 +289,94 @@ describe('{{shuvix:visualCraft}} —— 只要手艺的那一档', () => {
   })
 
   it.each(LANGUAGES)(
-    'VC-1 %s：每种组合下 craft 都是 guide 的真子集，差的那一段恰好是载体',
+    'VC-1 %s：每种组合下 craft 都是 guide 的后缀，前面多出的那一截恰好是载体',
     (language) => {
       for (const opts of OPTS) {
         const guide = renderVisualGuide(language, opts)
         const craft = renderVisualCraft(language, { drawingSkill: opts.drawingSkill })
         const what = label(opts)
-        // 契约与手艺一字不差地同源 —— 抄成两份 md 迟早只改一边，这条就是拦它的
-        expect(guide, what).toContain(craft)
+        // 契约与手艺一字不差地同源 —— 抄成两份 md 迟早只改一边，这条就是拦它的。
+        // 载体在片段最前面，所以不只是「包含」：guide 去掉载体之后剩下的正好是 craft
+        expect(guide.endsWith(craft), what).toBe(true)
         expect(craft.length, what).toBeLessThan(guide.length)
-        // 载体只在 guide 里：mermaid 那句是聊天的规矩，adopt 是聊天独有的改图路径
-        expect(guide, what).toContain(CARRIER)
+        const carrier = guide.slice(0, guide.length - craft.length)
+        // 载体只在 guide 里：「回复里的 ```svg 围栏会内联渲染」那句是聊天的规矩，
+        // adopt 是聊天独有的改图路径（只随 artifact 开关出现）
+        expect(countOf(carrier, CARRIER), what).toBe(1)
+        expect(carrier.includes(ADOPT), what).toBe(!!opts.artifact)
+        expect(countOf(guide, CARRIER), what).toBe(1)
         expect(craft, what).not.toContain(CARRIER)
         expect(craft, what).not.toContain(ADOPT)
+      }
+    }
+  )
+})
+
+/**
+ * mermaid 退场（NM）—— 结构图也手画 ```svg 之后，mermaid 不再出现在任何一份教给模型的文本里。
+ *
+ * 反向断言最容易空转（名单为空时恒绿），所以每条都带正控制组：渲染出来的确实是那份片段 /
+ * 档案清单里确实有那几份基座。聊天里仍能**显示** mermaid（用户自己的 agent 可能写），
+ * 那是 chat-ui 的事，与这里无关 —— 这里守的是「ShuviX 不再主动教它」。
+ */
+describe('mermaid 不再被教给模型（NM）', () => {
+  it.each(LANGUAGES)('NM-1 %s：两个出口 × 四种组合的渲染里都没有 mermaid', (language) => {
+    for (const [exit, render] of EXITS) {
+      for (const opts of OPTS) {
+        const out = render(language, opts)
+        const what = `${exit} ${label(opts)}`
+        // 正控制组：确实渲染出了那份片段（契约记号在）
+        expect(out, what).toContain('viewBox')
+        expect(out, what).not.toMatch(/mermaid/i)
+      }
+    }
+  })
+
+  it.each(LANGUAGES)('NM-2 %s：内置档案（含正文、描述、工具名单）里都没有 mermaid', (language) => {
+    const profiles = buildBuiltinProfiles({ language, widgetsRoot: '/w/widgets', readMd })
+    // 正控制组：会画图的五份档案都在清单里 —— 清单若是空的，下面那圈恒绿
+    const names = profiles.map((p) => p.name)
+    for (const name of ['notebook', 'work', 'chat', 'coding', 'bot']) {
+      expect(names, `${language} 缺 ${name}`).toContain(name)
+    }
+    for (const profile of profiles) {
+      expect(JSON.stringify(profile), `${profile.name}.${language}`).not.toMatch(/mermaid/i)
+    }
+  })
+})
+
+/**
+ * 预算（BG）—— 「框与箭头」那段是**契约的一部分**，不是手艺：图再小也得守，所以它不在任何
+ * 界桩里，两个开关怎么拨都原样在（有技能时手艺换成指路，预算照旧常驻）。
+ */
+describe('「框与箭头」预算段常驻（BG）', () => {
+  /** 从小标题到下一个以 `#` 开头的行（不含），去掉首尾空白 */
+  const budgetBlock = (text: string, heading: string): string | null => {
+    const start = text.indexOf(heading)
+    if (start < 0) return null
+    const rest = text.slice(start + heading.length)
+    const next = rest.search(/^#/m)
+    return (heading + (next < 0 ? rest : rest.slice(0, next))).trim()
+  }
+
+  it.each(LANGUAGES)(
+    'BG-1 %s：同一段预算在八种渲染里各恰好出现一次，且写着 5 与 4 这两个上限',
+    (language) => {
+      // 规范版取自「无技能的 craft」：那里预算段后面紧跟手艺段的小标题，边界明确
+      // （有技能时后面跟的是指路段落，没有小标题可以截）
+      const canonical = budgetBlock(
+        renderVisualCraft(language, { drawingSkill: false }),
+        BUDGET_HEADING[language]
+      )
+      expect(canonical, `${language} 找不到「${BUDGET_HEADING[language]}」`).not.toBeNull()
+      // 正控制组：截出来的不只是一行小标题
+      expect(canonical!.split('\n').length).toBeGreaterThan(3)
+      expect(canonical).toMatch(/\b5\b/)
+      expect(canonical).toMatch(/\b4\b/)
+      for (const [exit, render] of EXITS) {
+        for (const opts of OPTS) {
+          expect(countOf(render(language, opts), canonical!), `${exit} ${label(opts)}`).toBe(1)
+        }
       }
     }
   )

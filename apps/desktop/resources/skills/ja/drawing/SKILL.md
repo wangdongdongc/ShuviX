@@ -1,13 +1,15 @@
 ---
 name: drawing
-description: "Craft guidance for inline SVG figures in chat: picking the form (and when not to draw a chart at all), mark specs, label and legend rules, the categorical/sequential/status palette, and a catalog of what goes wrong. Load this before drawing anything that carries data or has more than a few marks."
+description: "Craft guidance for inline SVG figures: picking the form (and when not to draw a chart at all), boxes-and-arrows diagrams that stay small enough to read, mark specs, label and legend rules, the categorical/sequential/status palette, and a catalog of what goes wrong. Load this before drawing a chart, a flow or structure diagram, or anything with more than a few marks."
 ---
 
 # Drawing figures
 
 The contract for the ```svg fence — the tokens, what gets stripped, `viewBox` — is already in your system prompt. **This skill is the craft**: what to draw, and how to make it read.
 
-Load it before a figure that carries data or has more than a handful of marks. A two-box arrow sketch does not need it.
+Load it before a chart, a flow or structure diagram, or any figure with more than a handful of marks. A two-box arrow sketch does not need it.
+
+**Boxes and arrows** — flows, structures, layers, before-and-after — have their own reference: `references/diagrams.md`. Read it before drawing one; the steps below are for figures that carry data.
 
 ## Do this in order. Color comes last.
 
