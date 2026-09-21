@@ -198,7 +198,11 @@ async function resolveDesktopTools(req: ToolResolveRequest): Promise<AnyAgentToo
       }
       continue
     }
-    for (const mcpTool of mcpService.getAgentToolsByServerName(server, req.rootSessionId)) {
+    // 实例按根会话取（派生 agent 与根 agent 共用一份），调用方身份按**这一个** agent 带：
+    // 内置 server 要靠它把「谁看过哪份快照」之类的状态分开
+    for (const mcpTool of mcpService.getAgentToolsByServerName(server, req.rootSessionId, {
+      callerId: req.selfSessionId
+    })) {
       tools.push(wrap(mcpTool))
     }
   }

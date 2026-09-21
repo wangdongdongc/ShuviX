@@ -22,6 +22,7 @@ import type { HarnessEventContext } from '../eventHandler'
 import { INLINE_TOKENS_CUSTOM_TYPE, SYSTEM_NOTICE_CUSTOM_TYPE } from '../projection'
 import { defaultToolResultTransform } from '../../types'
 import type { ChatEvent, ToolResultTransform } from '../../types'
+import { imagePlaceholder } from '../../toolResultText'
 
 const SESSION_ID = 'sess-1'
 
@@ -83,16 +84,18 @@ describe('工具结果广播', () => {
     expect(JSON.stringify(ev)).not.toContain('AAAABBBBCCCC')
   })
 
-  it('默认 transform 是 passthrough：文本直取、非文本 JSON 序列化', async () => {
+  it('默认 transform 与重开会话同一份文字：文本按行拼、图片换占位，base64 不进广播', async () => {
     const { ctx, events } = makeCtx(defaultToolResultTransform)
 
     await forwardHarnessEvent(ctx, toolEnd([{ type: 'text', text: 'line1' }, IMAGE]))
 
-    // 不注入 transform 的宿主（扩展端）行为与接缝修复前逐字节相同
+    // 不注入 transform 的宿主（扩展端）以前把图片块 JSON 序列化 —— 截图的整段 base64 铺进
+    // 工具卡片；现在与重开会话的投影同走 toolResultText，跑着时和重开之后一字不差
     expect(events[0]).toMatchObject({
       type: 'tool_end',
-      result: `line1\n${JSON.stringify(IMAGE)}`
+      result: `line1\n${imagePlaceholder('image/png')}`
     })
+    expect(JSON.stringify(events[0])).not.toContain(IMAGE.data)
   })
 
   it('details 走 transform 的输出（它可以改写），isError 原样透传', async () => {

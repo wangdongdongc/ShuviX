@@ -21,6 +21,7 @@
  */
 import type { AgentMessage, SessionTreeEntry } from '@earendil-works/pi-agent-core'
 import type { AssistantMessage, ImageContent, TextContent } from '@earendil-works/pi-ai'
+import { toolResultText } from '../toolResultText'
 import type {
   AssistantBlock,
   AssistantToolBlock,
@@ -319,7 +320,8 @@ function projectToolResult(
 ): void {
   const target = state.pendingToolBlocks.get(msg.toolCallId)
   if (!target) return // 孤儿结果（历史被压缩截断）——静默丢弃，UI 无处挂载
-  target.result = textOf(msg.content)
+  // 与实时广播同一份文字化（见 toolResultText）：重开之后的卡片与跑着时一字不差
+  target.result = toolResultText(msg.content)
   target.isError = msg.isError || undefined
   target.details = (msg as { details?: ToolResultDetails }).details
   state.pendingToolBlocks.delete(msg.toolCallId)

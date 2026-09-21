@@ -20,6 +20,7 @@
 
 import type { ImageContent, TextContent } from '@earendil-works/pi-ai'
 import type { ToolResultDetails } from '@shuvix/chat-protocol/types/chatMessage'
+import { imagePlaceholder } from '@shuvix/agent-runtime'
 
 /** 传入管线的原始上下文（不可变——transformer 应返回新对象） */
 export interface ToolResultPersistContext {
@@ -70,19 +71,13 @@ export function _clearStepPersistTransformersForTest(): void {
 // ───── 内置 transformer：ImageContent → 文本占位符 ─────
 // 说明：只改 content 数组，不修改 details；details 里如果另有 base64
 // 字段（目前没有），由各自的工具自行加自己的 transformer 清理。
-// 占位文本是写给**用户**看的：模型读的是 entry 树里的原图，永远看不到这句。
-// 措辞别说成「这里看不到图」—— 工具卡片会另外把 details.image 那张图显示出来
-// （ToolImageThumb），这句只解释「base64 没在这儿重复一遍」。
+// 占位文字取自 agent-runtime 的 imagePlaceholder —— 重开会话的投影用的是同一句，
+// 同一张卡片跑着时和重开之后才会一字不差（见 toolResultText 的说明）。
 const stripImagesToPlaceholder: StepPersistTransformer = (ctx) => {
   if (!ctx.content.some((c) => c.type === 'image')) return ctx
   const rewritten = ctx.content.map<TextContent | ImageContent>((c) => {
     if (c.type !== 'image') return c
-    return {
-      type: 'text',
-      text:
-        `[image (${c.mimeType}) — delivered to the model in full; ` +
-        `the base64 is not repeated in the UI.]`
-    }
+    return { type: 'text', text: imagePlaceholder(c.mimeType) }
   })
   return { ...ctx, content: rewritten }
 }

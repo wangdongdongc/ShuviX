@@ -138,20 +138,123 @@ function jsonSchemaToTypebox(schema: McpDiscoveredTool['inputSchema']): TSchema 
 interface McpContentBlock {
   type: string
   text?: string
+  data?: string
   mimeType?: string
-  resource?: unknown
+  uri?: string
+  name?: string
+  title?: string
+  size?: number
+  resource?: { uri?: string; mimeType?: string; text?: string; blob?: string }
 }
 
-function extractTextFromContent(content: unknown[]): string {
-  return content
-    .map((c) => {
-      const block = c as McpContentBlock
-      if (block.type === 'text') return block.text
-      if (block.type === 'image') return `[image: ${block.mimeType}]`
-      if (block.type === 'resource') return JSON.stringify(block.resource)
-      return JSON.stringify(c)
-    })
-    .join('\n')
+/**
+ * 单张内联图片的上限（base64 字符数）。主流 provider 里最严的是 Claude on Bedrock / Vertex：
+ * 单图 base64 不得超过 5MB（直连 API 是 10MB，OpenAI / Gemini 更宽）。超过的图原样送出去，
+ * 整次请求会被拒掉 —— 而工具结果进了会话树、每一轮都会重发，于是这条会话之后的每一轮都失败。
+ * 所以按最严的那家卡，超了就换成一行说明，让模型知道有过这张图、以及它为什么没看到。
+ */
+export const MAX_INLINE_IMAGE_BASE64 = 5_000_000
+
+/**
+ * 模型收得下的图片格式。Anthropic 只收这四种，其余（svg、bmp、tiff、空 mime……）一律 400，
+ * 后果与超限相同：这条会话之后每一轮都失败。`image/jpg` 这种非标准写法归一到 `image/jpeg`。
+ */
+const MODEL_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp'])
+
+function modelImageType(mimeType: string | undefined): string | null {
+  const m = (mimeType ?? '').trim().toLowerCase()
+  const normalized = m === 'image/jpg' ? 'image/jpeg' : m
+  return MODEL_IMAGE_TYPES.has(normalized) ? normalized : null
+}
+
+/** base64 解码后的字节数（扣掉结尾的 `=` 填充） */
+function base64Bytes(b64: string): number {
+  const padding = b64.endsWith('==') ? 2 : b64.endsWith('=') ? 1 : 0
+  return Math.max(0, Math.floor((b64.length * 3) / 4) - padding)
+}
+
+type AgentContentBlock = AgentToolResult<unknown>['content'][number]
+
+/**
+ * MCP 的结果 content → pi 的 content。
+ *
+ * 文本类块按原顺序拼成文本（相邻的合成一块），**图片原样保留为图片块** —— 旧实现把图压成
+ * `[image: image/png]` 一行字，第三方 server 的截图于是从来到不了模型。模型收不下的图
+ * （格式不对、太大）换成一行说明。其余几类没有对应的模型输入形态，给一行能读懂的说明：
+ *  - `resource_link`：名字 + mime + uri（规范 2025-06-18 起的「指向一份资源」）
+ *  - 内嵌 `resource`：文本资源给正文，二进制只报大小
+ *  - `audio`：pi 没有音频块，说明它被略过了（base64 不进模型上下文）
+ */
+export function mcpContentToAgentContent(content: unknown[]): AgentContentBlock[] {
+  const out: AgentContentBlock[] = []
+  let pending: string[] = []
+  const flush = (): void => {
+    if (pending.length === 0) return
+    out.push({ type: 'text', text: pending.join('\n') })
+    pending = []
+  }
+  for (const c of content) {
+    const block = (c ?? {}) as McpContentBlock
+    switch (block.type) {
+      case 'text':
+        pending.push(block.text ?? '')
+        break
+      case 'image': {
+        const data = block.data ?? ''
+        const declared = block.mimeType || 'no type'
+        const mimeType = modelImageType(block.mimeType)
+        if (!data) {
+          pending.push(`[image omitted: ${declared}, empty]`)
+        } else if (!mimeType) {
+          pending.push(`[image omitted: ${declared} is not a format models accept]`)
+        } else if (data.length > MAX_INLINE_IMAGE_BASE64) {
+          const mb = (base64Bytes(data) / (1024 * 1024)).toFixed(1)
+          pending.push(
+            `[image omitted: ${mimeType}, ~${mb} MB exceeds the per-image limit models accept]`
+          )
+        } else {
+          flush()
+          out.push({ type: 'image', data, mimeType })
+        }
+        break
+      }
+      case 'audio':
+        pending.push(
+          `[audio: ${block.mimeType ?? 'unknown'} — not forwarded, audio is unsupported]`
+        )
+        break
+      case 'resource_link': {
+        const label = block.title || block.name || block.uri || 'resource'
+        const parts = [`[resource: ${label}`]
+        if (block.mimeType) parts.push(`(${block.mimeType})`)
+        if (block.uri && block.uri !== label) parts.push(block.uri)
+        pending.push(`${parts.join(' ')}]`)
+        break
+      }
+      case 'resource': {
+        const r = block.resource ?? {}
+        if (typeof r.text === 'string') {
+          pending.push(r.uri ? `[resource: ${r.uri}]\n${r.text}` : r.text)
+        } else {
+          const bytes = typeof r.blob === 'string' ? base64Bytes(r.blob) : 0
+          const mime = r.mimeType ? `${r.mimeType}, ` : ''
+          pending.push(
+            `[resource: ${r.uri ?? 'embedded'} (${mime}${bytes} bytes, binary not shown)]`
+          )
+        }
+        break
+      }
+      default:
+        pending.push(JSON.stringify(c))
+    }
+  }
+  flush()
+  return out
+}
+
+/** 只要文本（错误路径：`[MCP Error]` 前缀后面只接文字，图片没有意义） */
+function textOf(blocks: AgentContentBlock[]): string {
+  return blocks.map((b) => (b.type === 'text' ? b.text : `[image: ${b.mimeType}]`)).join('\n')
 }
 
 function parseJsonObject(json: string): Record<string, string> {
@@ -532,13 +635,26 @@ export class McpManager {
     toolName: string,
     args: Record<string, unknown>,
     signal?: AbortSignal,
-    /** 本次调用在 pi 那边的 toolCallId —— 经 `_meta` 带给 server（内置服务器用它给询问卡片定位） */
-    toolCallId?: string
+    meta?: {
+      /** 本次调用在 pi 那边的 toolCallId —— 经 `_meta` 带给 server（内置服务器用它给询问卡片定位） */
+      toolCallId?: string
+      /**
+       * 发起这次调用的是哪个 agent（root = 会话 id，派生 = agent id）。
+       *
+       * 只给**可信**（内置）server：一份内置实例由根 agent 与它派出的 agent 共用，状态若要
+       * 按调用方分开（浏览器「距上次快照几次操作」、快照差异的基线）只能靠它；第三方 server
+       * 拿到它没有任何用处，也就不必知道 ShuviX 内部的 id。
+       */
+      callerId?: string
+    }
   ): Promise<{ content: unknown[]; isError?: boolean }> {
     const conn = this.connections.get(connKey)
     if (!conn || conn.status !== 'connected') {
       throw new Error(`MCP server ${connKey} is not connected`)
     }
+    const _meta: Record<string, string> = {}
+    if (meta?.toolCallId) _meta['shuvix.dev/toolCallId'] = meta.toolCallId
+    if (meta?.callerId && conn.trusted) _meta['shuvix.dev/agentId'] = meta.callerId
     // SDK 默认 60s 太短；抬到 5 分钟 + progress 刷新计时 + 10 分钟总上限
     const result = await conn.client.callTool(
       {
@@ -546,7 +662,8 @@ export class McpManager {
         arguments: args,
         // 规范允许在 `_meta` 里带实现自有的数据（键要带前缀）。内置能力服务器要挂询问，
         // 而询问的路由键按约定就是 toolCallId —— 让它的 ask 卡和别的工具一样对得上调用。
-        _meta: toolCallId ? { 'shuvix.dev/toolCallId': toolCallId } : undefined
+        // 一个键都没有时整个缺席，而不是一个空对象
+        _meta: Object.keys(_meta).length > 0 ? _meta : undefined
       },
       undefined,
       {
@@ -566,7 +683,8 @@ export class McpManager {
     connKey: string,
     serverName: string,
     mcpTool: McpDiscoveredTool,
-    trusted: boolean
+    trusted: boolean,
+    callerId?: string
   ): AgentTool<TSchema, McpToolDetails> & McpAgentToolMeta {
     const a = mcpTool.annotations
     return {
@@ -593,17 +711,18 @@ export class McpManager {
             mcpTool.name,
             params as Record<string, unknown>,
             signal,
-            toolCallId
+            { toolCallId, callerId }
           )
-          const text = extractTextFromContent(result.content)
+          const blocks = mcpContentToAgentContent(result.content)
           if (result.isError) {
             return {
-              content: [{ type: 'text', text: `[MCP Error] ${text}` }],
+              content: [{ type: 'text', text: `[MCP Error] ${textOf(blocks) || '(no details)'}` }],
               details: { type: 'mcp', server: serverName, tool: mcpTool.name, isError: true }
             }
           }
           return {
-            content: [{ type: 'text', text }],
+            // 空结果也给一个文本块：pi 的 content 不接受空数组的语义（宿主包装层再兜底成 "(no output)"）
+            content: blocks.length > 0 ? blocks : [{ type: 'text', text: '' }],
             details: { type: 'mcp', server: serverName, tool: mcpTool.name }
           }
         } catch (err: unknown) {
@@ -621,16 +740,37 @@ export class McpManager {
     }
   }
 
-  /** 某条连接（连接键）的所有工具转 AgentTool[] */
-  serverToAgentTools(connKey: string): AgentTool<TSchema, McpToolDetails>[] {
+  /**
+   * 某条连接（连接键）的所有工具转 AgentTool[]。
+   *
+   * `callerId`：这批工具将装进哪个 agent（root = 会话 id，派生 = agent id）—— 每次调用经
+   * `_meta` 带给可信 server，见 callTool。
+   */
+  serverToAgentTools(
+    connKey: string,
+    opts?: { callerId?: string }
+  ): AgentTool<TSchema, McpToolDetails>[] {
     const conn = this.connections.get(connKey)
     if (!conn || conn.status !== 'connected') return []
-    return conn.tools.map((t) => this.mcpToolToAgentTool(connKey, conn.serverName, t, conn.trusted))
+    return conn.tools.map((t) =>
+      this.mcpToolToAgentTool(connKey, conn.serverName, t, conn.trusted, opts?.callerId)
+    )
   }
 
-  /** 所有已连接 Server 的全部 AgentTool（flat） */
-  getAllAgentTools(): AgentTool<TSchema, McpToolDetails>[] {
-    return [...this.connections.keys()].flatMap((key) => this.serverToAgentTools(key))
+  /**
+   * 已连接 Server 的全部 AgentTool（flat）—— 扩展宿主的全量注入用。
+   *
+   * `inproc` 的实例是按会话分身的：只收**这条会话**的那一份，外加全局服务器。不传 sessionId
+   * 就一台 inproc 都不给 —— 与 getAgentToolsByServerName 同一条规则：绝不回落到别人的实例，
+   * 否则两条会话会拿到同名的两套工具、各自操作对方的资源。
+   */
+  getAllAgentTools(
+    sessionId?: string,
+    opts?: { callerId?: string }
+  ): AgentTool<TSchema, McpToolDetails>[] {
+    return [...this.connections]
+      .filter(([, conn]) => conn.sessionId === undefined || conn.sessionId === sessionId)
+      .flatMap(([key]) => this.serverToAgentTools(key, opts))
   }
 
   /**
@@ -651,13 +791,14 @@ export class McpManager {
    */
   getAgentToolsByServerName(
     serverName: string,
-    sessionId?: string
+    sessionId?: string,
+    opts?: { callerId?: string }
   ): AgentTool<TSchema, McpToolDetails>[] {
     for (const [key, conn] of this.connections) {
       if (conn.status !== 'connected') continue
       if (conn.serverName !== serverName) continue
       if (conn.sessionId !== undefined && conn.sessionId !== sessionId) continue
-      return this.serverToAgentTools(key)
+      return this.serverToAgentTools(key, opts)
     }
     return []
   }

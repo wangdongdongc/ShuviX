@@ -20,7 +20,9 @@ import type { JSONRPCMessage, JSONRPCRequest } from '@modelcontextprotocol/sdk/t
 import type { McpServer } from '@shuvix/chat-protocol/types/mcp'
 import type { BuiltinMcpScope } from '../builtinMcpRegistry'
 import {
+  MAX_INLINE_IMAGE_BASE64,
   McpManager,
+  mcpContentToAgentContent,
   type McpAgentToolMeta,
   type McpDiscoveredTool,
   type McpStore
@@ -29,6 +31,13 @@ import {
 // ─── 假件 ────────────────────────────────────────────────────────────────
 
 const isRequest = (m: JSONRPCMessage): m is JSONRPCRequest => 'id' in m && 'method' in m
+
+/** 假 server 眼里的一次 tools/call（`callResult` 给函数时的入参） */
+interface FakeCall {
+  name: string
+  args: Record<string, unknown>
+  meta?: Record<string, unknown>
+}
 
 interface FakeOpts {
   /** tools/list 的应答 */
@@ -39,6 +48,16 @@ interface FakeOpts {
   notifyOnClose?: boolean
   /** close() 直接抛 —— 钉「一条实例释放失败不拖累同批的其余实例」 */
   throwOnClose?: boolean
+  /**
+   * tools/call 的应答（整份 result）；给函数就按这一次调用现算。不给 = 回一段
+   * `handled by <会话>` —— 跨会话串台类用例（MCPB-U-6 / 33、MCPL-U-13）靠它认出是哪份实例接的。
+   *
+   * ⚠️ 这里给的东西要先过 SDK 的 CallToolResultSchema 才到得了 McpManager：形态不合规
+   * （未知块类型、图片/音频缺 mimeType、data 不是 base64、resource_link 缺 name/uri、
+   * null 项……）的整份结果会被拒成 `[MCP Error] <zod 报错>`，于是「没有图片块」之类的断言
+   * 会因为错误的理由通过。规范之外的形态只能直接测 mcpContentToAgentContent。
+   */
+  callResult?: Record<string, unknown> | ((call: FakeCall) => Record<string, unknown>)
 }
 
 /** 手写 JSON-RPC 应答器：只认 initialize / tools/list / tools/call，其余一律空 result */
@@ -109,16 +128,19 @@ class FakeTransport implements Transport {
   }
 
   private answer(message: JSONRPCRequest): void {
+    let call: FakeCall | undefined
     if (message.method === 'tools/call') {
       const params = (message.params ?? {}) as {
         name?: string
         arguments?: unknown
         _meta?: Record<string, unknown>
       }
-      this.toolCalls.push({
+      call = {
         name: params.name ?? '',
-        args: (params.arguments ?? {}) as Record<string, unknown>
-      })
+        args: (params.arguments ?? {}) as Record<string, unknown>,
+        meta: params._meta
+      }
+      this.toolCalls.push({ name: call.name, args: call.args })
       this.toolCallMetas.push(params._meta)
     }
     const result =
@@ -130,13 +152,18 @@ class FakeTransport implements Transport {
           }
         : message.method === 'tools/list'
           ? { tools: this.opts.tools ?? [] }
-          : message.method === 'tools/call'
-            ? // 回执带上自己的身份：跨会话串台时断言看到的是**另一条会话**的名字
-              {
-                content: [{ type: 'text', text: `handled by ${this.scope?.sessionId ?? 'global'}` }]
-              }
+          : call
+            ? this.callResultFor(call)
             : {}
     queueMicrotask(() => this.onmessage?.({ jsonrpc: '2.0', id: message.id, result }))
+  }
+
+  private callResultFor(call: FakeCall): Record<string, unknown> {
+    const spec = this.opts.callResult
+    if (typeof spec === 'function') return spec(call)
+    if (spec) return spec
+    // 回执带上自己的身份：跨会话串台时断言看到的是**另一条会话**的名字
+    return { content: [{ type: 'text', text: `handled by ${this.scope?.sessionId ?? 'global'}` }] }
   }
 }
 
@@ -1178,7 +1205,7 @@ describe('McpManager 的 annotations 可信规则', () => {
 
     const byName = new Map(
       h.mgr
-        .getAllAgentTools()
+        .getAllAgentTools('s1')
         .map((t) => [
           (t as unknown as McpAgentToolMeta).mcpMeta.server,
           (t as unknown as McpAgentToolMeta).mcpMeta
@@ -1255,5 +1282,630 @@ describe('McpManager 的 MCP → AgentTool 桥接', () => {
     const wrapped = Object.create(Object.create(t)) as McpAgentToolMeta
     expect(wrapped.mcpMeta).toBe((t as unknown as McpAgentToolMeta).mcpMeta)
     expect(wrapped.mcpMeta).toMatchObject({ server: 'ssh', trusted: true, readOnly: true })
+  })
+})
+
+// ─── MCP 结果 content → pi content ───────────────────────────────────────
+//
+// 旧实现把整份结果压成一段文字：第三方 server 的截图于是成了 `[image: image/png]` 一行字，
+// 从来到不了模型。现在图片原样过去 —— 反面随之而来：模型**收不下**的图（格式不对、太大）
+// 原样送出去，整次请求就被拒；而工具结果进了会话树、每一轮都重发，这条会话之后的每一轮都失败。
+// 所以这一组钉两件事：该过去的原样过去、不多不少；过不去的换成一行说得清的文字。
+//
+// 这一半直接喂纯函数：SDK 会先按 CallToolResultSchema 校验整份结果，规范之外的形态
+// （未知块类型、缺 mime、null 项……）只能在这里测。文案只钉事实（mime、uri、大小、
+// 「没转发」、单独一行），契约写死了的几处除外。
+
+/** 1×1 PNG —— 合法 base64（SDK 拿 atob 校验），也足够有特征，便于断言「它没外泄」 */
+const PNG =
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
+/** JPEG 文件头（SOI + APP0） */
+const JPEG = '/9j/4AAQSkZJRgAB'
+
+const text = (t: string): { type: 'text'; text: string } => ({ type: 'text', text: t })
+const img = (
+  data = PNG,
+  mimeType = 'image/png'
+): { type: 'image'; data: string; mimeType: string } => ({ type: 'image', data, mimeType })
+
+/** 结果恰好是**一个**文本块（没有图片块、也没被拆成几段）时，取它的文字 */
+function onlyText(blocks: ReturnType<typeof mcpContentToAgentContent>): string {
+  expect(blocks).toHaveLength(1)
+  const [block] = blocks
+  expect(block.type).toBe('text')
+  return block.type === 'text' ? block.text : ''
+}
+
+/** `haystack` 里依次出现 `facts`（每一条都在上一条之后）—— 措辞不钉，只钉事实与先后 */
+function expectInOrder(haystack: string, facts: string[]): void {
+  let from = 0
+  for (const fact of facts) {
+    const at = haystack.indexOf(fact, from)
+    expect(at, `「${fact}」应出现在第 ${from} 个字符之后：\n${haystack}`).toBeGreaterThanOrEqual(0)
+    from = at + fact.length
+  }
+}
+
+describe('mcpContentToAgentContent：MCP 结果 content → pi content', () => {
+  it('MCPB-U-46: 相邻的文本块合成一块，按行拼接', () => {
+    expect(mcpContentToAgentContent([text('a'), text('b')])).toStrictEqual([text('a\nb')])
+  })
+
+  it('MCPB-U-47: 图片原样保留为图片块，与文字的先后不变；合并不跨过图片', () => {
+    expect(mcpContentToAgentContent([text('a'), img(), text('b')])).toStrictEqual([
+      text('a'),
+      img(),
+      text('b')
+    ])
+    expect(
+      mcpContentToAgentContent([text('a'), text('b'), img(), text('c'), text('d')])
+    ).toStrictEqual([text('a\nb'), img(), text('c\nd')])
+  })
+
+  it('MCPB-U-48: 只有图片时不多出空文本块', () => {
+    expect(mcpContentToAgentContent([img(), img(JPEG, 'image/jpeg')])).toStrictEqual([
+      img(),
+      img(JPEG, 'image/jpeg')
+    ])
+    expect(mcpContentToAgentContent([img()])).toStrictEqual([img()])
+  })
+
+  it('MCPB-U-49: 图片块只带 type / data / mimeType —— annotations、_meta 不跟进模型上下文', () => {
+    const decorated = {
+      ...img(),
+      annotations: { audience: ['user'], priority: 0.5 },
+      _meta: { 'vendor.example/id': 'x' }
+    }
+    expect(mcpContentToAgentContent([decorated])).toStrictEqual([
+      { type: 'image', data: PNG, mimeType: 'image/png' }
+    ])
+  })
+
+  it('MCPB-U-50: 单图上限卡在 MAX_INLINE_IMAGE_BASE64 —— 恰好等于放行，多一个字符就换成一行说明', () => {
+    const atLimit = 'A'.repeat(MAX_INLINE_IMAGE_BASE64)
+    expect(mcpContentToAgentContent([img(atLimit)])).toStrictEqual([img(atLimit)])
+
+    const note = onlyText(mcpContentToAgentContent([img('A'.repeat(MAX_INLINE_IMAGE_BASE64 + 1))]))
+    expect(note).not.toContain('\n')
+    expect(note).toContain('image/png')
+    // 报的是大约体积：让模型知道有过这张图、以及它为什么没看到
+    expect(note).toMatch(/~\d+(\.\d)? MB/)
+    expect(note).not.toContain('A'.repeat(16))
+  })
+
+  it('MCPB-U-51: 超限的图夹在文字中间 —— 说明占它那一行，前后文字照常合进同一块', () => {
+    const over = img('A'.repeat(MAX_INLINE_IMAGE_BASE64 + 1))
+    const lines = onlyText(mcpContentToAgentContent([text('a'), over, text('b')])).split('\n')
+    expect(lines).toHaveLength(3)
+    expect(lines[0]).toBe('a')
+    expect(lines[1]).toContain('image/png')
+    expect(lines[2]).toBe('b')
+  })
+
+  it('MCPB-U-52: data 为空的图不发出去，换成点名 mime 的一行说明', () => {
+    const lines = onlyText(
+      mcpContentToAgentContent([text('a'), img('', 'image/webp'), text('b')])
+    ).split('\n')
+    expect(lines).toHaveLength(3)
+    expect(lines[0]).toBe('a')
+    expect(lines[1]).toContain('image/webp')
+    expect(lines[1]).toContain('empty')
+    expect(lines[2]).toBe('b')
+  })
+
+  it('MCPB-U-53: 只放行模型收得下的四种格式；大小写与 image/jpg 归一', () => {
+    // 其余格式原样送出去就是一次 400，而这条会话之后每一轮都会把它重发一遍
+    const rejected: Array<[string, Record<string, unknown>]> = [
+      ['image/svg+xml', img(PNG, 'image/svg+xml')],
+      ['image/bmp', img(PNG, 'image/bmp')],
+      ['no type', { type: 'image', data: PNG }]
+    ]
+    for (const [named, block] of rejected) {
+      const note = onlyText(mcpContentToAgentContent([block]))
+      expect(note, named).toContain(named)
+      expect(note, named).toContain('is not a format models accept')
+      expect(note, named).not.toContain('\n')
+    }
+
+    expect(mcpContentToAgentContent([img(PNG, 'IMAGE/PNG')])).toStrictEqual([img(PNG, 'image/png')])
+    expect(mcpContentToAgentContent([img(JPEG, 'image/jpg')])).toStrictEqual([
+      img(JPEG, 'image/jpeg')
+    ])
+  })
+
+  it('MCPB-U-54: 音频没有对应的模型输入 —— 一行说明它没被转发，base64 哪儿都不出现', () => {
+    const WAV = 'UklGRiQAAABXQVZFZm10IGF1ZGlvLWJ5dGVzLWhlcmU='
+    const out = mcpContentToAgentContent([{ type: 'audio', data: WAV, mimeType: 'audio/wav' }])
+    const line = onlyText(out)
+    expect(line).not.toContain('\n')
+    expect(line).toContain('audio/wav')
+    expect(line).toMatch(/not forwarded/)
+    expect(JSON.stringify(out)).not.toContain(WAV.slice(0, 16))
+  })
+
+  it('MCPB-U-55: resource_link —— title 优先于 name，mime 有才写，uri 不重复，缺 uri 不留空格', () => {
+    const lineOf = (link: Record<string, unknown>): string =>
+      onlyText(mcpContentToAgentContent([{ type: 'resource_link', ...link }]))
+
+    const titled = lineOf({
+      uri: 'file:///w/report.pdf',
+      name: 'q3-draft',
+      title: 'Q3 Report',
+      mimeType: 'application/pdf'
+    })
+    expect(titled.startsWith('[resource: Q3 Report')).toBe(true)
+    expect(titled).not.toContain('q3-draft')
+    expect(titled).toContain('(application/pdf)')
+    expect(titled).toContain('file:///w/report.pdf')
+
+    // 没有 title 用 name；没有 mime 就没有那对括号
+    const named = lineOf({ uri: 'file:///w/a.txt', name: 'a.txt' })
+    expect(named.startsWith('[resource: a.txt')).toBe(true)
+    expect(named).not.toContain('(')
+    expect(named).toContain('file:///w/a.txt')
+
+    // 标签回落到 uri 时，uri 不在后面再重复一遍
+    const bare = lineOf({ uri: 'file:///w/only.txt' })
+    expect(bare.split('file:///w/only.txt')).toHaveLength(2)
+
+    // 没有 uri：右括号前不留空格
+    expect(lineOf({ name: 'n' })).toBe('[resource: n]')
+  })
+
+  it('MCPB-U-56: 内嵌文本资源给正文（有 uri 时先一行 `[resource: <uri>]`），与前后文字合进同一块', () => {
+    expect(
+      mcpContentToAgentContent([
+        text('a'),
+        {
+          type: 'resource',
+          resource: { uri: 'file:///w/notes.md', mimeType: 'text/markdown', text: '# Notes\nbody' }
+        },
+        text('b')
+      ])
+    ).toStrictEqual([text('a\n[resource: file:///w/notes.md]\n# Notes\nbody\nb')])
+
+    expect(
+      mcpContentToAgentContent([{ type: 'resource', resource: { text: 'plain body' } }])
+    ).toStrictEqual([text('plain body')])
+  })
+
+  it('MCPB-U-57: 内嵌二进制资源只报解码后的字节数，不给 base64', () => {
+    // 34 字节 → base64 结尾带 `==`：字节数要扣掉填充
+    const BLOB = 'YmluYXJ5IHBheWxvYWQgdGhhdCBtdXN0IG5vdCBsZWFrIQ=='
+    const out = mcpContentToAgentContent([
+      {
+        type: 'resource',
+        resource: { uri: 'file:///w/c.bin', mimeType: 'application/octet-stream', blob: BLOB }
+      }
+    ])
+    const line = onlyText(out)
+    expect(line).not.toContain('\n')
+    expect(line).toContain('file:///w/c.bin')
+    expect(line).toContain('application/octet-stream')
+    expect(line).toContain('34 bytes')
+    expect(line).toContain('binary not shown')
+    expect(JSON.stringify(out)).not.toContain(BLOB.slice(0, 16))
+
+    // 没有 mime：括号里直接是字节数
+    const noMime = onlyText(
+      mcpContentToAgentContent([
+        { type: 'resource', resource: { uri: 'file:///w/c.bin', blob: 'YWJj' } }
+      ])
+    )
+    expect(noMime).toContain('(3 bytes, binary not shown)')
+
+    // 扣填充：一个 `=`（hello → 5）、无填充（abc → 3）、两个 `=`（a → 1）
+    for (const [blob, bytes] of [
+      ['aGVsbG8=', 5],
+      ['YWJj', 3],
+      ['YQ==', 1]
+    ] as const) {
+      const padded = onlyText(
+        mcpContentToAgentContent([{ type: 'resource', resource: { uri: 'u', blob } }])
+      )
+      expect(padded, blob).toContain(`(${bytes} bytes`)
+    }
+  })
+
+  it('MCPB-U-58: 不认识的块类型给它的 JSON，与前后文字合进同一块', () => {
+    const foo = { type: 'foo', x: 1 }
+    expect(mcpContentToAgentContent([text('a'), foo, text('b')])).toStrictEqual([
+      text(`a\n${JSON.stringify(foo)}\nb`)
+    ])
+  })
+
+  it('MCPB-U-59: 空 content 给空数组；null / 非对象项不抛', () => {
+    expect(mcpContentToAgentContent([])).toStrictEqual([])
+    expect(() => mcpContentToAgentContent([null, 42])).not.toThrow()
+  })
+})
+
+// ─── 执行结果：经假 server 的一次 tools/call ──────────────────────────────
+//
+// 上面那组的结论要在真正的调用路径上也成立：结果先过 SDK 的 schema 校验，再经 AgentTool 的
+// execute 变成 pi 的结果。这里只喂 SDK 收得下的形态（见 FakeOpts.callResult 的注意事项）。
+
+type McpTool = ReturnType<McpManager['serverToAgentTools']>[number]
+
+/** 连上一份内置 ssh（会话 s1），它唯一的工具 `exec` 的 tools/call 回 `callResult` */
+async function sshExecReturning(
+  callResult: FakeOpts['callResult']
+): Promise<{ h: Harness; exec: McpTool }> {
+  const h = setup([sshRow()])
+  h.plan.set('ssh', { tools: [tool('exec')], callResult })
+  await h.mgr.ensureServerByName('ssh', { sessionId: 's1' })
+  const [exec] = h.mgr.getAgentToolsByServerName('ssh', 's1')
+  return { h, exec }
+}
+
+const run = (
+  t: McpTool,
+  toolCallId = 'pi-1',
+  args: Record<string, unknown> = {}
+): ReturnType<McpTool['execute']> => t.execute(toolCallId, args, new AbortController().signal)
+
+/** 成功结果的 details：server 是配置行名、tool 不带前缀，没有 isError 这个键 */
+const OK_DETAILS = { type: 'mcp', server: 'ssh', tool: 'exec' }
+
+describe('McpManager 执行结果：经假 server 的一次 tools/call', () => {
+  it('MCPB-U-60: 一张 PNG 原样到达 —— 图片块，而不是一行 `[image: image/png]`', async () => {
+    const { exec } = await sshExecReturning({ content: [img()] })
+    const result = await run(exec)
+    expect(result.content).toStrictEqual([{ type: 'image', data: PNG, mimeType: 'image/png' }])
+    expect(result.details).toStrictEqual(OK_DETAILS)
+  })
+
+  it('MCPB-U-61: 混排结果 —— 各类说明按原顺序合进图片前那块文字，图片与其后的文字各自成块', async () => {
+    const { exec } = await sshExecReturning({
+      content: [
+        text('first'),
+        { type: 'resource_link', uri: 'file:///w/a.txt', name: 'a.txt', mimeType: 'text/plain' },
+        {
+          type: 'resource',
+          resource: { uri: 'file:///w/b.md', mimeType: 'text/markdown', text: 'B body' }
+        },
+        {
+          type: 'resource',
+          resource: { uri: 'file:///w/c.bin', mimeType: 'application/octet-stream', blob: 'YWJj' }
+        },
+        { type: 'audio', data: 'AAAA', mimeType: 'audio/wav' },
+        img(),
+        text('last')
+      ]
+    })
+    const result = await run(exec)
+
+    expect(result.content).toHaveLength(3)
+    const [head, image, tail] = result.content
+    expect(image).toStrictEqual(img())
+    expect(tail).toStrictEqual(text('last'))
+    const merged = onlyText([head])
+    expectInOrder(merged, [
+      'first',
+      'a.txt',
+      'text/plain',
+      'file:///w/a.txt',
+      'file:///w/b.md',
+      'B body',
+      'file:///w/c.bin',
+      'application/octet-stream',
+      '3 bytes',
+      'binary not shown',
+      'audio/wav',
+      'not forwarded'
+    ])
+    // 每个块一行（文本资源是「uri 一行 + 正文」）：谁也没把谁拆开或吞掉
+    expect(merged.split('\n')).toHaveLength(6)
+    expect(merged).not.toContain('YWJj')
+    expect(merged).not.toContain('AAAA')
+    expect(result.details).toStrictEqual(OK_DETAILS)
+  })
+
+  it('MCPB-U-62: 空 content、以及压根没有 content 键 → 一个空文本块（不是空数组），也不算出错', async () => {
+    const { exec } = await sshExecReturning((call) =>
+      call.args.q === 'no-key' ? {} : { content: [] }
+    )
+    for (const q of ['empty', 'no-key']) {
+      const result = await run(exec, 'pi-1', { q })
+      expect(result.content, q).toStrictEqual([{ type: 'text', text: '' }])
+      expect(result.details, q).toStrictEqual(OK_DETAILS)
+    }
+  })
+
+  it('MCPB-U-63: 成功时 details 恰是 {type, server, tool} —— 没有连接键、没有前缀名、没有 isError', async () => {
+    const { exec } = await sshExecReturning({ content: [text('ok')] })
+    const result = await run(exec)
+    // 不是连接键 `ssh-id#s1`，也不是 LLM 看到的 `mcp__ssh__exec`
+    expect(result.details).toStrictEqual({ type: 'mcp', server: 'ssh', tool: 'exec' })
+    expect(result.content).toStrictEqual([text('ok')])
+  })
+
+  it('MCPB-U-64: isError 的结果只给文字 —— 图片写成 `[image: <mime>]`，base64 不外泄', async () => {
+    const { exec } = await sshExecReturning({
+      isError: true,
+      content: [text('a'), img(), text('b')]
+    })
+    const result = await run(exec)
+    expect(result.content).toStrictEqual([text('[MCP Error] a\n[image: image/png]\nb')])
+    expect(result.details).toStrictEqual({ ...OK_DETAILS, isError: true })
+    expect(JSON.stringify(result)).not.toContain(PNG.slice(0, 24))
+  })
+
+  it('MCPB-U-65: isError 只有一段文字 → `[MCP Error] <文字>`', async () => {
+    const { exec } = await sshExecReturning({ isError: true, content: [text('boom')] })
+    const result = await run(exec)
+    expect(result.content).toStrictEqual([text('[MCP Error] boom')])
+    expect(result.details).toStrictEqual({ ...OK_DETAILS, isError: true })
+  })
+
+  it('MCPB-U-66: isError 却什么都没说 → `[MCP Error] (no details)`，而不是一个悬空的前缀', async () => {
+    const { exec } = await sshExecReturning({ isError: true })
+    const result = await run(exec)
+    expect(result.content).toStrictEqual([text('[MCP Error] (no details)')])
+    expect(result.details).toStrictEqual({ ...OK_DETAILS, isError: true })
+  })
+
+  it('MCPB-U-67: server 回的图模型收不下（超限 / svg）—— 一个图片块都不出，每张一行说明，不算出错', async () => {
+    // 长度取 4 的倍数：SDK 用 atob 校验 base64，不合法的话整份结果会被拒成 [MCP Error]，
+    // 那样「没有图片块」就是因为错误的理由成立的
+    const huge = 'A'.repeat(MAX_INLINE_IMAGE_BASE64 + 4)
+    const { exec } = await sshExecReturning({
+      content: [text('shot:'), img(huge), img(PNG, 'image/svg+xml')]
+    })
+    const result = await run(exec)
+
+    const lines = onlyText(result.content).split('\n')
+    expect(lines).toHaveLength(3)
+    expect(lines[0]).toBe('shot:')
+    expect(lines[1]).toContain('image/png')
+    expect(lines[1]).toMatch(/~\d+(\.\d)? MB/)
+    expect(lines[2]).toContain('image/svg+xml')
+    expect(lines[2]).toContain('is not a format models accept')
+    expect(JSON.stringify(result).length).toBeLessThan(1000)
+    expect(result.details).toStrictEqual(OK_DETAILS)
+  })
+})
+
+// ─── `_meta`：toolCallId 给所有 server，调用方 id 只给可信 server ──────────
+//
+// 一份内置实例由根 agent 与它派出的 agent 共用（实例按根会话取），实例里要按调用方分开的状态
+// （浏览器「距上次快照几次操作」、快照差异的基线）只能靠每次调用带上的 `shuvix.dev/agentId`。
+// 第三方 server 拿到它毫无用处，也就不该知道 ShuviX 内部的 id —— 可信的判据与 annotations
+// 同一条：`type: 'inproc'` 且 isBuiltin。
+//
+// 断言一律对整个 `_meta` 用 toStrictEqual：`toHaveProperty('shuvix.dev/agentId')` 会把点号
+// 当成路径，`toEqual` 又会放过值为 undefined 的键。
+
+const TOOL_CALL = 'shuvix.dev/toolCallId'
+const AGENT = 'shuvix.dev/agentId'
+
+/** 连上一份内置 ssh（会话 s1，工具 `exec`） */
+async function trustedSsh(): Promise<Harness> {
+  const h = setup([sshRow()])
+  h.plan.set('ssh', { tools: [tool('exec')] })
+  await h.mgr.ensureServerByName('ssh', { sessionId: 's1' })
+  return h
+}
+
+describe('McpManager 的 `_meta`：调用方 id 只给可信 server', () => {
+  it('MCPB-U-68: 可信 server —— toolCallId 与调用方 id 一起带上', async () => {
+    const h = await trustedSsh()
+    const [exec] = h.mgr.getAgentToolsByServerName('ssh', 's1', { callerId: 's1' })
+    await run(exec, 'pi-1')
+    expect(h.lastFor('ssh', 's1').toolCallMetas).toStrictEqual([
+      { [TOOL_CALL]: 'pi-1', [AGENT]: 's1' }
+    ])
+  })
+
+  it('MCPB-U-69: 同一份实例、两个调用方 —— 每次调用各报各的，实例不因此多造一份', async () => {
+    const h = await trustedSsh()
+    const [root] = h.mgr.getAgentToolsByServerName('ssh', 's1', { callerId: 's1' })
+    const [spawned] = h.mgr.getAgentToolsByServerName('ssh', 's1', { callerId: 'agent-7' })
+
+    await run(root, 'pi-1')
+    await run(spawned, 'pi-2')
+    await run(root, 'pi-3')
+
+    expect(h.made('ssh')).toHaveLength(1)
+    const metas = h.lastFor('ssh', 's1').toolCallMetas
+    expect(metas.map((m) => m?.[AGENT])).toEqual(['s1', 'agent-7', 's1'])
+    expect(metas.map((m) => m?.[TOOL_CALL])).toEqual(['pi-1', 'pi-2', 'pi-3'])
+  })
+
+  it('MCPB-U-70: 不可信的行一律不带调用方 id —— 标了 isBuiltin 的 http/stdio、没标 isBuiltin 的 inproc 都算', async () => {
+    const rows: Array<[string, McpServer]> = [
+      ['http / isBuiltin 0', row({ id: 'h0-id', name: 'h0' })],
+      ['http / isBuiltin 1', row({ id: 'h1-id', name: 'h1', isBuiltin: 1 })],
+      [
+        'stdio / isBuiltin 0',
+        row({ id: 'p0-id', name: 'p0', type: 'stdio', command: 'node', url: '' })
+      ],
+      [
+        'stdio / isBuiltin 1',
+        row({ id: 'p1-id', name: 'p1', type: 'stdio', command: 'node', url: '', isBuiltin: 1 })
+      ],
+      ['inproc / isBuiltin 0', row({ id: 'i0-id', name: 'i0', type: 'inproc', url: '' })]
+    ]
+    for (const [label, server] of rows) {
+      const h = setup([server])
+      h.plan.set(server.name, { tools: [tool('exec')] })
+      // inproc 要会话才连得上；外部服务器对 sessionId 视而不见
+      expect(await h.mgr.ensureServerByName(server.name, { sessionId: 's1' }), label).toEqual({
+        ok: true
+      })
+      const [t] = h.mgr.getAgentToolsByServerName(server.name, 's1', { callerId: 'agent-x' })
+      expect((t as unknown as McpAgentToolMeta).mcpMeta.trusted, label).toBe(false)
+
+      await run(t, 'pi-1')
+      expect(h.last(server.name).toolCallMetas, label).toStrictEqual([{ [TOOL_CALL]: 'pi-1' }])
+    }
+  })
+
+  it('MCPB-U-71: 不可信 server 直接走 callTool、只给了调用方 id → `_meta` 整个缺席', async () => {
+    const h = setup([row({ id: 'a-id', name: 'a' })])
+    h.plan.set('a', { tools: [tool('search')] })
+    await h.mgr.ensureServerByName('a')
+
+    await h.mgr.callTool('a-id', 'search', { q: 'x' }, undefined, { callerId: 'agent-x' })
+    expect(h.last('a').toolCallMetas).toStrictEqual([undefined])
+  })
+
+  it('MCPB-U-72: 可信 server 没有 toolCallId、只有调用方 id → `_meta` 里恰好只有它', async () => {
+    const h = await trustedSsh()
+    await h.mgr.callTool('ssh-id#s1', 'exec', { q: 'x' }, undefined, { callerId: 'agent-x' })
+    expect(h.lastFor('ssh', 's1').toolCallMetas).toStrictEqual([{ [AGENT]: 'agent-x' }])
+  })
+
+  it('MCPB-U-73: 空串算没有 —— 两个都空则 `_meta` 缺席，只有 toolCallId 非空则只带它', async () => {
+    const h = await trustedSsh()
+    await h.mgr.callTool('ssh-id#s1', 'exec', {}, undefined, { toolCallId: '', callerId: '' })
+    await h.mgr.callTool('ssh-id#s1', 'exec', {}, undefined, { toolCallId: 'pi-1', callerId: '' })
+    expect(h.lastFor('ssh', 's1').toolCallMetas).toStrictEqual([undefined, { [TOOL_CALL]: 'pi-1' }])
+  })
+
+  it('MCPB-U-74: 取工具时没给调用方 id → 可信 server 也不带（按名取、全量取都一样）', async () => {
+    const h = await trustedSsh()
+    const [byName] = h.mgr.getAgentToolsByServerName('ssh', 's1')
+    const [fromAll] = h.mgr.getAllAgentTools('s1')
+
+    await run(byName, 'pi-1')
+    await run(fromAll, 'pi-2')
+    expect(h.lastFor('ssh', 's1').toolCallMetas).toStrictEqual([
+      { [TOOL_CALL]: 'pi-1' },
+      { [TOOL_CALL]: 'pi-2' }
+    ])
+  })
+})
+
+describe('McpManager 取工具的三条路都把调用方 id 带到调用上', () => {
+  it('MCPB-U-75: 按连接键 / 按名 / 全量取 —— 每批工具报的是自己拿到的那个 id', async () => {
+    const h = await trustedSsh()
+    const [viaKey] = h.mgr.serverToAgentTools('ssh-id#s1', { callerId: 'c1' })
+    const [viaName] = h.mgr.getAgentToolsByServerName('ssh', 's1', { callerId: 'c2' })
+    const [viaAll] = h.mgr.getAllAgentTools('s1', { callerId: 'c3' })
+
+    await run(viaKey, 'pi-1')
+    await run(viaName, 'pi-2')
+    await run(viaAll, 'pi-3')
+    expect(h.lastFor('ssh', 's1').toolCallMetas).toStrictEqual([
+      { [TOOL_CALL]: 'pi-1', [AGENT]: 'c1' },
+      { [TOOL_CALL]: 'pi-2', [AGENT]: 'c2' },
+      { [TOOL_CALL]: 'pi-3', [AGENT]: 'c3' }
+    ])
+  })
+
+  it('MCPB-U-76: 全量取的一批里混着可信与不可信 —— 只有可信的那台收到调用方 id', async () => {
+    const h = setup([sshRow(), row({ id: 'a-id', name: 'a' })])
+    h.plan.set('ssh', { tools: [tool('exec')] })
+    h.plan.set('a', { tools: [tool('search')] })
+    await h.mgr.ensureServerByName('ssh', { sessionId: 's1' })
+    await h.mgr.ensureServerByName('a')
+
+    const byName = new Map(
+      h.mgr.getAllAgentTools('s1', { callerId: 'agent-7' }).map((t) => [t.name, t])
+    )
+    expect([...byName.keys()].sort()).toEqual(['mcp__a__search', 'mcp__ssh__exec'])
+    await run(byName.get('mcp__ssh__exec')!, 'pi-1')
+    await run(byName.get('mcp__a__search')!, 'pi-2')
+
+    expect(h.lastFor('ssh', 's1').toolCallMetas).toStrictEqual([
+      { [TOOL_CALL]: 'pi-1', [AGENT]: 'agent-7' }
+    ])
+    expect(h.last('a').toolCallMetas).toStrictEqual([{ [TOOL_CALL]: 'pi-2' }])
+  })
+})
+
+// ─── getAllAgentTools 的会话范围 ─────────────────────────────────────────
+//
+// 全量注入（扩展宿主）同样不许回落到别人的实例：不传会话就一台 inproc 都不给，传了只给
+// 这条会话自己那份。否则两条会话会拿到同名的两套工具，名字一样、闭包各指一份实例 ——
+// 模型调到哪一个全凭顺序，操作的可能是另一条会话的 ssh / 浏览器。
+
+const namesOf = (tools: McpTool[]): string[] => tools.map((t) => t.name).sort()
+
+/** 一台外部服务器 a + 会话 s1 的一份内置 ssh */
+async function globalAndS1(): Promise<Harness> {
+  const h = setup([sshRow(), row({ id: 'a-id', name: 'a' })])
+  h.plan.set('ssh', { tools: [tool('list-hosts')] })
+  h.plan.set('a', { tools: [tool('search')] })
+  await h.mgr.ensureServerByName('a')
+  await h.mgr.ensureServerByName('ssh', { sessionId: 's1' })
+  return h
+}
+
+describe('McpManager.getAllAgentTools 的会话范围', () => {
+  it('MCPB-U-77: 不传会话 → 只有全局服务器的工具，一台 inproc 都不给', async () => {
+    const h = await globalAndS1()
+    expect(namesOf(h.mgr.getAllAgentTools())).toEqual(['mcp__a__search'])
+  })
+
+  it('MCPB-U-78: 传了会话 → 全局服务器 + 这条会话自己那份 inproc', async () => {
+    const h = await globalAndS1()
+    expect(namesOf(h.mgr.getAllAgentTools('s1'))).toEqual([
+      'mcp__a__search',
+      'mcp__ssh__list-hosts'
+    ])
+  })
+
+  it('MCPB-U-79: 两条会话的实例工具不同 —— 各自只看见自己那份', async () => {
+    const h = setup([sshRow()])
+    h.plan.set('ssh#s1', { tools: [tool('list-hosts')] })
+    h.plan.set('ssh#s2', { tools: [tool('s2-only')] })
+    await h.mgr.ensureServerByName('ssh', { sessionId: 's1' })
+    await h.mgr.ensureServerByName('ssh', { sessionId: 's2' })
+
+    expect(namesOf(h.mgr.getAllAgentTools('s1'))).toEqual(['mcp__ssh__list-hosts'])
+    expect(namesOf(h.mgr.getAllAgentTools('s2'))).toEqual(['mcp__ssh__s2-only'])
+  })
+
+  it('MCPB-U-80: 两条会话的实例工具同名 —— 各自恰好一个，调用落在自己那份实例上', async () => {
+    const h = setup([sshRow()])
+    h.plan.set('ssh', { tools: [tool('list-hosts')] })
+    await h.mgr.ensureServerByName('ssh', { sessionId: 's1' })
+    await h.mgr.ensureServerByName('ssh', { sessionId: 's2' })
+
+    const s1Tools = h.mgr.getAllAgentTools('s1')
+    expect(s1Tools.map((t) => t.name)).toEqual(['mcp__ssh__list-hosts'])
+    expect(onlyText((await run(s1Tools[0])).content)).toBe('handled by s1')
+    expect(h.lastFor('ssh', 's1').toolCalls).toHaveLength(1)
+    expect(h.lastFor('ssh', 's2').toolCalls).toEqual([])
+
+    // 反过来也一样
+    const s2Tools = h.mgr.getAllAgentTools('s2')
+    expect(s2Tools.map((t) => t.name)).toEqual(['mcp__ssh__list-hosts'])
+    expect(onlyText((await run(s2Tools[0])).content)).toBe('handled by s2')
+    expect(h.lastFor('ssh', 's2').toolCalls).toHaveLength(1)
+    expect(h.lastFor('ssh', 's1').toolCalls).toHaveLength(1)
+  })
+
+  it('MCPB-U-81: 这条会话没有实例 → 只有全局服务器，不回落到 s1 那份', async () => {
+    const h = await globalAndS1()
+    expect(namesOf(h.mgr.getAllAgentTools('s9'))).toEqual(['mcp__a__search'])
+  })
+
+  it('MCPB-U-82: 释放了的、连接中的、连失败的实例都不出工具；别的会话不受影响', async () => {
+    const h = setup([sshRow(), row({ id: 'a-id', name: 'a' })])
+    h.plan.set('ssh', { tools: [tool('list-hosts')] })
+    h.plan.set('a', { tools: [tool('search')] })
+    h.plan.set('ssh#s3', { tools: [tool('list-hosts')], hold: true })
+    h.plan.set('ssh#s4', new Error('boom'))
+    await h.mgr.ensureServerByName('a')
+    await h.mgr.ensureServerByName('ssh', { sessionId: 's1' })
+    await h.mgr.ensureServerByName('ssh', { sessionId: 's2' })
+    void h.mgr.ensureServerByName('ssh', { sessionId: 's3' })
+    await settle()
+    expect((await h.mgr.ensureServerByName('ssh', { sessionId: 's4' })).ok).toBe(false)
+    expect(h.mgr.getStatus('ssh-id', 's3')).toBe('connecting')
+    expect(h.mgr.getStatus('ssh-id', 's4')).toBe('error')
+
+    await h.mgr.closeSession('s1')
+
+    expect(namesOf(h.mgr.getAllAgentTools('s1'))).toEqual(['mcp__a__search'])
+    expect(namesOf(h.mgr.getAllAgentTools('s2'))).toEqual([
+      'mcp__a__search',
+      'mcp__ssh__list-hosts'
+    ])
+    expect(namesOf(h.mgr.getAllAgentTools('s3'))).toEqual(['mcp__a__search'])
+    expect(namesOf(h.mgr.getAllAgentTools('s4'))).toEqual(['mcp__a__search'])
   })
 })

@@ -7,6 +7,7 @@
 import { describe, it, expect } from 'vitest'
 import type { ImageContent, TextContent } from '@earendil-works/pi-ai'
 import type { ReadToolDetails } from '@shuvix/chat-protocol/types/chatMessage'
+import { imagePlaceholder, toolResultText } from '@shuvix/agent-runtime'
 import { transformToolResultForPersist } from '../stepPersistPipeline'
 
 /** 一段够长、够特征的假 base64 —— 断言「它没出现在输出里」 */
@@ -62,6 +63,19 @@ describe('transformToolResultForPersist', () => {
     )
     expect(out.details).toBe(readImageDetails)
     expect((out.details as ReadToolDetails).image).toEqual(readImageDetails.image)
+  })
+
+  it('TRT-6 与重开会话同一份文字：文本按行拼、图片换 imagePlaceholder —— 实时与重开一字不差', () => {
+    // 重开投影走的是 agent-runtime 的 toolResultText（见 projection.test.ts 的 TRT-5）；
+    // 这条管线的输出必须与它逐字相同，同一张卡片跑着时和重开之后才显示同一段文字
+    const content: Array<TextContent | ImageContent> = [
+      { type: 'text', text: 'a' },
+      { type: 'image', data: BASE64, mimeType: 'image/png' },
+      { type: 'text', text: 'b' }
+    ]
+    const out = transformToolResultForPersist(ctxOf(content))
+    expect(out.content).toBe(toolResultText(content))
+    expect(out.content).toBe(`a\n${imagePlaceholder('image/png')}\nb`)
   })
 
   it('没有图片块时原样透传', () => {

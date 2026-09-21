@@ -45,6 +45,8 @@ export {
 export { buildCustomProviderCompat } from './providerCompat'
 export { resolveInitialThinkingLevel } from './thinkingLevel'
 export { isAssistantMessage, isUserMessage, isToolResultMessage } from './messageGuards'
+// 工具结果的界面文字化（实时广播与重开会话同一份）
+export { toolResultText, imagePlaceholder } from './toolResultText'
 export {
   McpManager,
   LAZY_CONNECT_TIMEOUT_MS,

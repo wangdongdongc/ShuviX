@@ -16,6 +16,8 @@ import type {
   ToolResultDetails
 } from '@shuvix/chat-protocol/types/chatMessage'
 
+import { toolResultText } from './toolResultText'
+
 export type { ChatEvent, RuntimeStatus, ChatMessage, MessageMetadata, ToolResultDetails }
 
 /** 简单日志接口（默认 no-op；宿主可注入 electron-log / console） */
@@ -83,11 +85,12 @@ export interface ToolResultTransformOutput {
 /** 工具结果**广播前**的瘦身转换（如图片 → 占位文本）；不影响落盘与发给模型的内容。浏览器宿主可用 defaultToolResultTransform。 */
 export type ToolResultTransform = (input: ToolResultTransformInput) => ToolResultTransformOutput
 
-/** 默认 passthrough：拼接文本内容，非文本块 JSON 序列化。 */
+/**
+ * 缺省转换：与重开会话的投影**同一份**文字化（toolResultText：文本按行拼、图片换占位）——
+ * 以前这里把图片块 JSON 序列化，扩展的截图会把整段 base64 铺进工具卡片。
+ */
 export const defaultToolResultTransform: ToolResultTransform = (input) => ({
-  content:
-    input.content.map((c) => (c.type === 'text' ? (c.text ?? '') : JSON.stringify(c))).join('\n') ||
-    '',
+  content: toolResultText(input.content as Parameters<typeof toolResultText>[0]),
   details: input.details
 })
 

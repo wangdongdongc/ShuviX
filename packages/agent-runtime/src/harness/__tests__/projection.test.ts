@@ -12,7 +12,9 @@ import { join } from 'path'
 import { JsonlSessionStorage, Session } from '@earendil-works/pi-agent-core'
 import { NodeExecutionEnv } from '@earendil-works/pi-agent-core/node'
 import type { AgentMessage } from '@earendil-works/pi-agent-core'
+import type { ImageContent, TextContent } from '@earendil-works/pi-ai'
 import type { AssistantMessage, UserTextMeta } from '@shuvix/chat-protocol/types/chatMessage'
+import { imagePlaceholder, toolResultText } from '../../toolResultText'
 import {
   entriesToChatMessages,
   INLINE_TOKENS_CUSTOM_TYPE,
@@ -239,6 +241,39 @@ describe('entriesToChatMessages', () => {
         details: undefined
       }
     ])
+  })
+
+  it('TRT-5 带图的 toolResult：回填的 result 与 toolResultText 同一份文字（按行拼、图片换占位）', async () => {
+    // 以前投影把文本首尾相连、图片直接丢掉：同一张卡片跑着时显示「a / [图片占位] / b」三行，
+    // 重开之后变成「ab」。实时广播与重开都走 toolResultText，两边才一字不差
+    const base64 = 'iVBORw0KGgo' + 'QUJDRUZH'.repeat(64)
+    const content: Array<TextContent | ImageContent> = [
+      { type: 'text', text: 'a' },
+      { type: 'image', data: base64, mimeType: 'image/png' },
+      { type: 'text', text: 'b' }
+    ]
+    await session.appendMessage(
+      assistant(
+        [{ type: 'toolCall', id: 'call-1', name: 'mcp__browser__screenshot', arguments: {} }],
+        'toolUse'
+      )
+    )
+    await session.appendMessage({
+      role: 'toolResult',
+      toolCallId: 'call-1',
+      toolName: 'mcp__browser__screenshot',
+      content,
+      isError: false,
+      timestamp: Date.now()
+    } as AgentMessage)
+
+    const msgs = await project()
+    expect(msgs).toHaveLength(1)
+    const [block] = (msgs[0] as AssistantMessage).blocks
+    const result = (block as { result?: string }).result
+    expect(result).toBe(toolResultText(content))
+    expect(result).toBe(`a\n${imagePlaceholder('image/png')}\nb`)
+    expect(result).not.toContain(base64.slice(0, 64))
   })
 
   it('stopReason=error 塌成 error_event', async () => {

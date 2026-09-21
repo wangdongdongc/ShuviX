@@ -269,7 +269,7 @@ function handleToolEnd(
   // 广播前过一遍宿主注入的瘦身管线（桌面把 ImageContent 换成占位文本）——
   // 否则 read 一张图会把整段 base64 经 IPC 灌进渲染进程再铺到工具卡片上。
   // 只影响广播：entry 树里存的仍是发给模型的原始 toolResult。
-  // 宿主不注入时 defaultToolResultTransform 是 passthrough，与改动前逐字节相同。
+  // 宿主不注入时走 defaultToolResultTransform：与重开会话的投影同一份文字化（toolResultText）。
   const transformed = ctx.deps.transformToolResult({
     toolName: event.toolName,
     toolCallId: event.toolCallId,
