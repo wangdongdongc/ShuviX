@@ -175,11 +175,10 @@ export function TokenChip({
                 style={{ color }}
               />
             )}
-            {label && <span className="text-[0.85em] text-text-secondary">{label}</span>}
-            {label && <span className="text-[0.85em] text-text-tertiary mx-0.5">·</span>}
-            <span className={`text-text-primary ${kind === 'file' ? 'font-mono' : ''}`}>
-              {title}
-            </span>
+            {label && <span className="text-text-secondary">{label}</span>}
+            {label && <span className="text-text-tertiary mx-0.5">·</span>}
+            {/* 同一字号同一字体,只靠颜色分主次 —— 芯片内两种字号/字体混排不协调 */}
+            <span className="text-text-primary">{title}</span>
           </>
         )}
       </span>
