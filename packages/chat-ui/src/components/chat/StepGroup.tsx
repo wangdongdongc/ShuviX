@@ -1,6 +1,7 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { buildToolSummary } from '@shuvix/chat-protocol/toolSummaries'
+import { fallbackToolPresentation } from '@shuvix/chat-protocol/builtinMcpPresentations'
 import { useChatStore } from '../../stores/chatStore'
 import { clipLine } from '../../utils/clipLine'
 import { CountBadge, StepRow } from './StepRow'
@@ -25,7 +26,12 @@ export function StepGroup({ blocks }: { blocks: StepBlock[] }): React.JSX.Elemen
   const presentations = useChatStore((s) => s.toolPresentations)
 
   const toolName = uniformToolName(blocks)
-  const uniformPresentation = toolName ? presentations[toolName] : undefined
+  // 宿主下发的表里没有的（内置 MCP 工具、退役的旧工具）走 chat-protocol 的兜底呈现
+  const presentationOf = useCallback(
+    (name: string) => presentations[name] ?? fallbackToolPresentation(name, t),
+    [presentations, t]
+  )
+  const uniformPresentation = toolName ? presentationOf(toolName) : undefined
 
   // 各次调用的摘要去重后拼接（思考没有摘要）
   const detail = useMemo(() => {
@@ -41,10 +47,10 @@ export function StepGroup({ blocks }: { blocks: StepBlock[] }): React.JSX.Elemen
   // 混合段的标签：每种工具各几次，`阅读 ×2 · 文本编辑`；思考不进标签，除非这一段只有思考
   const sequence = useMemo(() => {
     const labelOf = (b: StepBlock): string =>
-      b.type === 'thinking' ? t('steps.thinking') : presentations[b.toolName]?.label || b.toolName
+      b.type === 'thinking' ? t('steps.thinking') : presentationOf(b.toolName)?.label || b.toolName
     const tools = blocks.filter((b) => b.type === 'tool')
     return formatStepSequence(summarizeSteps(tools.length > 0 ? tools : blocks, labelOf))
-  }, [blocks, presentations, t])
+  }, [blocks, presentationOf, t])
 
   const rowProps = toolName
     ? {

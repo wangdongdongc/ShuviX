@@ -91,8 +91,10 @@ ordinary rooted session: model picker, extensions, compaction, export, sub-sessi
 background auto-resume all work as usual.
 
 Its root persona is the builtin **`bot`** base, whose tool list is deliberately narrow:
-`read, ls, grep, glob, ask, edit, session, agent, knowledge` — no `bash`, `write`, `ssh`,
-`database` or `browser`. The bot can look but not touch: anything that changes or runs must go
+`read, ls, grep, glob, ask, edit, session, agent, knowledge, artifact, skill:builtin:drawing` —
+no `bash`, `write` or `database`, and neither of the built-in capability servers `mcp:ssh` /
+`mcp:browser` is declared (the user can still tick them on in the session's extensions — that is
+the user's own call). The bot can look but not touch: anything that changes or runs must go
 to a sub-session (programming work → `agent_profile: coding`). `edit` is there for one purpose —
 maintaining its own file — and every write under `~/.shuvix/bots/` goes through the builtin
 policy **protect-bot-files**, which asks the user even when auto-allow is on. Like `notebook`,

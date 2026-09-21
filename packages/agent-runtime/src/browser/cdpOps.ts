@@ -503,7 +503,8 @@ async function settleAfterAction(
 export async function snapshotOp(
   session: TabCdpSession,
   pageUrl: string,
-  opts: { full?: boolean } = {}
+  /** viewer：看这份快照的是谁 —— 差异的基线按它分开存（见 CdpController.lastBodies） */
+  opts: { full?: boolean; viewer?: string } = {}
 ): Promise<BrowserOpOutput> {
   // 扩展端（chrome.debugger）需要先 enable Accessibility 域；Electron 下幂等无害
   await session.send('Accessibility.enable').catch(() => {})
@@ -691,7 +692,9 @@ function sameValue(actual: string, expected: string, kind: FieldKind): boolean {
 export async function fillOp(
   session: TabCdpSession,
   uid: string,
-  text: string
+  text: string,
+  /** 这台 server 有没有 upload_file —— 文件 input 的提示只指向真有的工具 */
+  opts: { canUpload?: boolean } = {}
 ): Promise<BrowserOpOutput> {
   const ctl = session.controller
   const target = describeUid(session, uid)
@@ -709,7 +712,9 @@ export async function fillOp(
       return errorOut(`${target} is a ${info.type} — use click to toggle it.`)
     case 'file':
       return errorOut(
-        `${target} is a file input — set files with cdp(DOM.setFileInputFiles, {files:["/abs/path"], backendNodeId:{"$uid":"${uid}"}}).`
+        opts.canUpload
+          ? `${target} is a file input — set its files with upload_file instead of fill.`
+          : `${target} is a file input — fill cannot set files on it.`
       )
     case 'other':
       return errorOut(
@@ -867,6 +872,101 @@ export async function scrollOp(
     })
   }
   return { text: `Scrolled ${direction} by ${amount}px.` }
+}
+
+// ====== Hover ======
+
+/** 悬停后给菜单 / tooltip 的出场动画留的时间 */
+const HOVER_SETTLE_MS = 150
+
+/**
+ * 把鼠标移到元素上（先滚进视口）—— 菜单、tooltip 这类「悬停才出现」的东西靠它。
+ * 只发一次 mouseMoved：悬停没有「成功」可读回，出现了什么由随后的快照回答。
+ */
+export async function hoverOp(session: TabCdpSession, uid: string): Promise<BrowserOpOutput> {
+  const target = describeUid(session, uid)
+  let point: { x: number; y: number }
+  try {
+    point = await session.controller.resolveCoordinates(uid)
+  } catch (err) {
+    return errorOut(err instanceof Error ? err.message : String(err))
+  }
+  await session.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: point.x, y: point.y })
+  await sleep(HOVER_SETTLE_MS)
+  return {
+    text: `Hovering over ${target}. Take a snapshot to see what appeared (menu, tooltip, …).`
+  }
+}
+
+// ====== Upload ======
+
+/**
+ * 从 uid 指向的节点找到真正的 `<input type=file>`：它自己、一个 `<label>` 的 control、
+ * 或者它里面唯一的那一个。样式化的上传按钮通常把原生 input 藏起来（AX 树里看不到），
+ * agent 手里只有外面那个按钮或 label 的 uid —— 只认 input 本身的话，这类页面一个都传不上。
+ */
+const FIND_FILE_INPUT_FN = String.raw`function(){
+  const n = this.nodeType === 1 ? this : this.parentElement;
+  if (!n) return null;
+  const isFile = (e) => !!e && e.tagName === 'INPUT' && e.type === 'file';
+  if (isFile(n)) return n;
+  if (n.tagName === 'LABEL' && isFile(n.control)) return n.control;
+  const inner = n.querySelectorAll ? n.querySelectorAll('input[type=file]') : [];
+  return inner.length === 1 ? inner[0] : null;
+}`
+
+/**
+ * 给文件 input 设上本地文件（DOM.setFileInputFiles，浏览器随之派发 input / change）。
+ * paths 必须是**已经过安全门**的绝对路径 —— 这一步之后文件就交给网页了。
+ */
+export async function uploadFileOp(
+  session: TabCdpSession,
+  uid: string,
+  paths: string[]
+): Promise<BrowserOpOutput> {
+  const ctl = session.controller
+  const target = describeUid(session, uid)
+  const el = await ctl.resolveElement(uid)
+  let inputId: string | undefined
+  try {
+    const found = await session.send<{
+      result?: { objectId?: string }
+      exceptionDetails?: { text: string; exception?: { description?: string } }
+    }>('Runtime.callFunctionOn', {
+      objectId: el.objectId,
+      functionDeclaration: FIND_FILE_INPUT_FN,
+      returnByValue: false
+    })
+    if (found.exceptionDetails) {
+      const why = found.exceptionDetails.exception?.description ?? found.exceptionDetails.text
+      return errorOut(`Could not inspect ${target}: ${why}`)
+    }
+    inputId = found.result?.objectId
+    if (!inputId) {
+      return errorOut(
+        `${target} is not a file input, and it contains no single <input type=file> to set — pick the file input (or the label/button wrapping it) from the snapshot.`
+      )
+    }
+    const multiple = await session
+      .send<{ result?: { value?: unknown } }>('Runtime.callFunctionOn', {
+        objectId: inputId,
+        functionDeclaration: 'function(){ return this.multiple }',
+        returnByValue: true
+      })
+      .then((r) => r.result?.value === true)
+    if (paths.length > 1 && !multiple) {
+      return errorOut(`${target} accepts a single file, but ${paths.length} were given.`)
+    }
+    const { node } = await session.send<{ node: { backendNodeId: number } }>('DOM.describeNode', {
+      objectId: inputId
+    })
+    await session.send('DOM.setFileInputFiles', { files: paths, backendNodeId: node.backendNodeId })
+  } finally {
+    if (inputId) await session.send('Runtime.releaseObject', { objectId: inputId }).catch(() => {})
+    await ctl.release(el)
+  }
+  const names = paths.map((p) => p.split(/[\\/]/).pop() || p).join(', ')
+  return { text: `Set ${paths.length} file(s) on ${target}: ${names}.` }
 }
 
 // ====== Evaluate ======

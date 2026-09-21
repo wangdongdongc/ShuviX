@@ -89,30 +89,34 @@ export { parseImagePixelSize, type ImagePixelSize } from './fileTools/imageSize'
 // CDP 浏览器自动化共享内核（注入 CdpTransport；桌面 webContents.debugger / 扩展 chrome.debugger）
 export type { CdpTransport } from './cdp/transport'
 export { CdpController, type AXNode } from './cdp/controller'
-// 统一浏览器工具（multiplex）：操作目录 + 后端契约 + per-tab CDP 管理 + 手册
+// 浏览器自动化：后端契约 + per-tab CDP 管理（两端的后端各自实现，工具面在内置 MCP server）
 export {
-  BROWSER_ACTIONS,
-  BROWSER_OPS,
-  opsForCaps,
-  type BrowserAction,
-  type BrowserOpSpec,
-  type BrowserParamKey
-} from './browser/ops'
-export type {
-  BrowserBackend,
-  BrowserCaps,
-  BrowserOpOutput,
-  NavKind,
-  ScrollDirection
+  PDF_PAGE_SIZES,
+  PDF_SCALE_RANGE,
+  type BrowserBackend,
+  type BrowserCaps,
+  type BrowserOpOutput,
+  type NavKind,
+  type PdfPageSize,
+  type ScrollDirection
 } from './browser/backend'
+// 内置能力服务器 browser（逐动作的 MCP 工具，两端共用）
 export {
-  createBrowserTool,
-  buildBrowserParamsSchema,
-  buildBrowserToolDescription,
-  BROWSER_TOOL_NAME,
-  type CreateBrowserToolOptions
-} from './browser/tool'
-export { buildBrowserHelp, HELP_TOPICS, type HelpTopic } from './browser/help'
+  connectBrowserMcpServer,
+  createBrowserMcpServerFactory,
+  createBrowserTabQueue,
+  BROWSER_MCP_SERVER_NAME,
+  type BrowserTabQueue,
+  type BrowserMcpGates,
+  type BrowserGateContext,
+  type BrowserMcpServerOptions
+} from './browser/mcpServer'
+export {
+  browserToolsForCaps,
+  type BrowserMcpTool,
+  type BrowserToolName,
+  type BrowserToolAnnotations
+} from './browser/mcpTools'
 export {
   CdpAttachManager,
   TabCdpSession,
@@ -219,6 +223,8 @@ export {
   type SecurityRequest,
   type CommandObjectInput,
   type GitObjectInput,
+  type UrlObjectInput,
+  urlObjectOf,
   type SecurityRule,
   type SecurityDecision,
   type PolicyRuleSpec,

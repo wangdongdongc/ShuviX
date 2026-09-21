@@ -6,6 +6,7 @@
  * 扩展无内置 MCP，故导出端标记 builtin 的 MCP 项一律跳过（避免污染配置）。
  */
 import {
+  builtinNothingToImport,
   encodeConfigSharePayload,
   parseConfigSharePayload,
   planConfigImport
@@ -88,11 +89,14 @@ async function applyProvider(exported: ExportedProvider, modelKeySet: Set<string
 }
 
 async function applyMcpServer(exported: ExportedMcpServer): Promise<void> {
-  // 扩展无内置 MCP：导出端标记 builtin 的项一律跳过，避免以残缺字段污染本端
+  const existing = mcpStore.findAll().find((s) => s.name === exported.name)
+  // 本端同名项是内置能力服务器（扩展只有 browser）：没有可导入的配置，启停也不该被导入改动 ——
+  // 不论导出端是否标了内置（预览里是 skipBuiltin，与桌面同一句话）
+  if (existing?.isBuiltin) throw new Error(builtinNothingToImport(exported.name))
+  // 导出端标了内置、本端却没有（比如桌面的 ssh）：不拿残缺字段新建一行
   if (exported.isBuiltin) {
     throw new Error(`Built-in "${exported.name}" is not available in the extension — skipped`)
   }
-  const existing = mcpStore.findAll().find((s) => s.name === exported.name)
   const fields = {
     name: exported.name,
     url: exported.url ?? '',
@@ -103,8 +107,8 @@ async function applyMcpServer(exported: ExportedMcpServer): Promise<void> {
     mcpStore.update({ id: existing.id, ...fields, isEnabled: true })
     // 只断开旧连接（按旧配置建的）：新配置等哪条会话用到它时自然连上（惰性启动）
     await mcpManager.disconnect(existing.id)
-  } else {
-    mcpStore.add({ type: 'http', ...fields })
+  } else if (!mcpStore.add({ type: 'http', ...fields })) {
+    throw new Error(`An MCP server named "${exported.name}" already exists — skipped`)
   }
 }
 
@@ -125,9 +129,10 @@ export const configShareStore = {
           .filter((m) => m.isEnabled)
           .map((m) => ({ modelId: m.modelId }))
       }))
+    // 内置能力服务器（inproc）没有任何可迁移的配置 —— 每个安装自己种 —— 不进导出候选
     const mcpServers = mcpStore
       .findAll()
-      .filter((s) => s.isEnabled)
+      .filter((s) => s.isEnabled && s.type !== 'inproc')
       .map((s) => ({
         name: s.name,
         type: s.type as 'stdio' | 'http',
@@ -168,7 +173,7 @@ export const configShareStore = {
     }
 
     const exportedMcpServers: ExportedMcpServer[] = []
-    for (const server of mcpStore.findAll().filter((s) => s.isEnabled)) {
+    for (const server of mcpStore.findAll().filter((s) => s.isEnabled && s.type !== 'inproc')) {
       const sel = mcpSel.get(server.name)
       if (!sel) continue
       const envObj = safeJsonParse<Record<string, string>>(server.env, {})
@@ -215,7 +220,7 @@ export const configShareStore = {
       },
       findMcp: (name) => {
         const s = mcpStore.findAll().find((x) => x.name === name)
-        return s ? { isBuiltin: s.isBuiltin === 1 } : undefined
+        return s ? { isBuiltin: s.isBuiltin === 1, inproc: s.type === 'inproc' } : undefined
       }
     })
   },

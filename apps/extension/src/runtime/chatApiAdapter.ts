@@ -218,6 +218,8 @@ export const chatApiAdapter: ChatApi = {
       for (const s of await sessionStore.list()) {
         if (s.projectId === id) {
           await removeRuntimeSession(s.id)
+          // 内置能力服务器的实例绑在会话上（不是运行时上），会话没了才放
+          await mcpManager.closeSession(s.id)
           await sessionStore.delete(s.id)
         }
       }
@@ -269,6 +271,8 @@ export const chatApiAdapter: ChatApi = {
     },
     delete: async (id) => {
       await removeRuntimeSession(id)
+      // 内置能力服务器的实例绑在会话上（不是运行时上），会话没了才放
+      await mcpManager.closeSession(id)
       removeTitler(id)
       await sessionStore.delete(id)
       appEventBus.publish({ type: 'session.listChanged' })
@@ -358,17 +362,26 @@ export const chatApiAdapter: ChatApi = {
         }
       }),
     // 增改都不连 —— 惰性启动，等创建 Agent 装配工具时再连
+    // 名字有问题（撞名、含 `__`）→ success:false + 给人看的原因（设置页对话框原样显示）
     add: async (params) => {
-      mcpStore.add(params)
-      return ok
+      const problem = mcpStore.nameProblem(params.name)
+      if (problem) return { success: false, error: problem }
+      return mcpStore.add(params) ? ok : { success: false }
     },
     update: async (params) => {
+      if (params.name !== undefined) {
+        const problem = mcpStore.nameProblem(params.name, params.id)
+        if (problem) return { success: false, error: problem }
+      }
       const s = mcpStore.update(params)
+      if (!s) return { success: false }
       // 配置/启停变化 → 断开旧连接（按旧配置建的），新配置下次用到时自然连上
-      if (s) await mcpManager.disconnect(s.id)
+      await mcpManager.disconnect(s.id)
       return ok
     },
     delete: async (id) => {
+      // 内置行删不掉（只能停用）：先问存储，再断连接
+      if (mcpStore.findById(id)?.isBuiltin) return { success: false }
       await mcpManager.disconnect(id)
       mcpStore.delete(id)
       return ok

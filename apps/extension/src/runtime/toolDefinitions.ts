@@ -3,7 +3,7 @@
  *
  * 各工具「自举」：定义条目从各自的真源派生，复用共享 toBuiltinToolDefinitions 输出与桌面一致的结构。
  * - 文件工具(read/write/edit)：共享参数 schema + 扩展端描述常量，无需句柄、无需实例化；
- * - browser 工具（multiplex）：描述/参数经共享 buildBrowserToolDescription/Schema 按扩展 caps 生成；
+ * 浏览器不在这里：它是一台内置 MCP 能力服务器，出现在 MCP 设置的内置行里。
  * - ask：共享 schema + 描述常量。
  * 全程纯读、零实例化、无临时句柄/占位上下文。
  */
@@ -14,13 +14,9 @@ import {
   WriteParamsSchema,
   EditParamsSchema,
   AskParamsSchema,
-  ASK_DESCRIPTION,
-  BROWSER_TOOL_NAME,
-  buildBrowserToolDescription,
-  buildBrowserParamsSchema
+  ASK_DESCRIPTION
 } from '@shuvix/agent-runtime'
 import type { BuiltinToolDefinition } from '@shuvix/chat-protocol/chatApi'
-import { extensionBrowserBackend } from './browserBackend'
 import { READ_DESCRIPTION, WRITE_DESCRIPTION, EDIT_DESCRIPTION } from './fileTools'
 import { getToolPresentations } from './toolPresentations'
 
@@ -57,17 +53,6 @@ export function getBuiltinToolDefinitions(): BuiltinToolDefinition[] {
       group: 'general',
       icon: iconOf('edit'),
       describe: () => ({ description: EDIT_DESCRIPTION, parameters: EditParamsSchema })
-    },
-    // 统一 browser 工具（multiplex）：描述/参数按扩展端 caps 生成，与发给 LLM 的完全一致
-    {
-      name: BROWSER_TOOL_NAME,
-      label: labelOf(BROWSER_TOOL_NAME),
-      group: 'browser',
-      icon: 'Globe',
-      describe: () => ({
-        description: buildBrowserToolDescription(extensionBrowserBackend.caps),
-        parameters: buildBrowserParamsSchema(extensionBrowserBackend.caps)
-      })
     }
     // git 工具已实现（agent-runtime src/git/）但暂不进默认工具集，待后续规划启用
   ]

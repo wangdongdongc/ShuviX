@@ -33,8 +33,8 @@ import { sortServersForDisplay } from './mcpServerList'
 /** MCP 操作契约（宿主注入：桌面 window.api.mcp / 扩展 chatApiAdapter.mcp） */
 export interface McpApi {
   list: () => Promise<McpServerInfo[]>
-  add: (params: McpServerAddParams) => Promise<{ success: boolean }>
-  update: (params: McpServerUpdateParams) => Promise<{ success: boolean }>
+  add: (params: McpServerAddParams) => Promise<{ success: boolean; error?: string }>
+  update: (params: McpServerUpdateParams) => Promise<{ success: boolean; error?: string }>
   delete: (id: string) => Promise<{ success: boolean }>
   connect: (id: string) => Promise<{ success: boolean }>
   disconnect: (id: string) => Promise<{ success: boolean }>
@@ -44,6 +44,12 @@ export interface McpApi {
 export interface McpClientPanelProps {
   api: McpApi
   caps?: { allowStdio?: boolean }
+  /**
+   * 宿主给某台 server 的附加设置，画在该行展开区里、工具列表之后；返回 null 即没有。
+   * 用于内置能力服务器自带的设置（桌面：内置 browser 的站点数据 / 证书处理）——
+   * 设置跟着能力走，而不是散落在别的页面。
+   */
+  renderServerExtra?: (server: McpServerInfo) => React.ReactNode
 }
 
 function StatusDot({ status }: { status: string }): React.JSX.Element {
@@ -124,7 +130,11 @@ function headersToLines(json: string): string {
   }
 }
 
-export function McpClientPanel({ api, caps = {} }: McpClientPanelProps): React.JSX.Element {
+export function McpClientPanel({
+  api,
+  caps = {},
+  renderServerExtra
+}: McpClientPanelProps): React.JSX.Element {
   const { t } = useTranslation()
   const allowStdio = caps.allowStdio ?? true
   const [servers, setServers] = useState<McpServerInfo[]>([])
@@ -180,9 +190,13 @@ export function McpClientPanel({ api, caps = {} }: McpClientPanelProps): React.J
     setDialogOpen(true)
   }
 
+  /** 保存失败就抛：对话框接住、把原因显示出来并保持打开（名字撞了、含 `__` …） */
   const handleDialogSave = async (data: McpServerDialogData): Promise<void> => {
+    const failed = (r: { success: boolean; error?: string }): never | void => {
+      if (!r.success) throw new Error(r.error || t('settings.mcpSaveFailed'))
+    }
     if (dialogEditId) {
-      await api.update({
+      const result = await api.update({
         id: dialogEditId,
         name: data.name,
         type: data.type,
@@ -192,17 +206,20 @@ export function McpClientPanel({ api, caps = {} }: McpClientPanelProps): React.J
         url: data.url,
         headers: data.headersObject
       })
+      failed(result)
       if (data.autoEnableBuiltin) await api.update({ id: dialogEditId, isEnabled: true })
     } else {
-      await api.add({
-        name: data.name,
-        type: data.type,
-        command: data.command,
-        args: data.argsLines,
-        env: data.envObject,
-        url: data.url,
-        headers: data.headersObject
-      })
+      failed(
+        await api.add({
+          name: data.name,
+          type: data.type,
+          command: data.command,
+          args: data.argsLines,
+          env: data.envObject,
+          url: data.url,
+          headers: data.headersObject
+        })
+      )
     }
     await loadServers()
   }
@@ -256,7 +273,7 @@ export function McpClientPanel({ api, caps = {} }: McpClientPanelProps): React.J
             const showError = s.status === 'error' && !!s.error
             const toggleTitle = s.isEnabled ? t('settings.mcpDisable') : t('settings.mcpEnable')
             return (
-              <div key={s.id} className="flex flex-col">
+              <div key={s.id} className="flex flex-col" data-mcp-server={s.name}>
                 <div className="flex items-center gap-3 px-4 py-3">
                   <button
                     onClick={() => toggleExpand(s.id)}
@@ -356,6 +373,14 @@ export function McpClientPanel({ api, caps = {} }: McpClientPanelProps): React.J
                         ))}
                       </div>
                     )}
+                    {(() => {
+                      const extra = renderServerExtra?.(s)
+                      return extra ? (
+                        <div className="mt-3" data-mcp-server-extra={s.name}>
+                          {extra}
+                        </div>
+                      ) : null
+                    })()}
                   </div>
                 )}
               </div>

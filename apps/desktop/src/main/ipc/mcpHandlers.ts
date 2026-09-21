@@ -29,12 +29,28 @@ export function registerMcpHandlers(): void {
     })
   })
 
+  /**
+   * 名字是工具名前缀（`mcp__<name>__<tool>`）：必须唯一（表上有 UNIQUE，但让它抛出来的是一条
+   * 生 SQLite 错误），也不能含 `__` —— 那会让工具名的拼接有两种读法，还能让一台自定义 server
+   * 的工具以 `mcp__browser__` 开头、冒充内置浏览器。
+   */
+  const nameProblem = (name: string, selfId?: string): string | undefined => {
+    const trimmed = name.trim()
+    if (!trimmed) return 'An MCP server needs a name'
+    if (trimmed.includes('__')) return `An MCP server name cannot contain "__"`
+    const taken = mcpDao.findAll().some((s) => s.name === trimmed && s.id !== selfId)
+    return taken ? `An MCP server named "${trimmed}" already exists` : undefined
+  }
+
   /** 添加 MCP Server（不连接 —— 惰性启动，等哪条会话用到它再连） */
   ipcMain.handle('mcp:add', (_event, params: McpServerAddParams) => {
+    const problem = nameProblem(params.name)
+    if (problem) return { success: false, error: problem }
     const now = Date.now()
     const server = {
       id: uuidv7(),
-      name: params.name,
+      // 与 nameProblem 查的是同一个写法：带空格存进去，查重时就对不上了
+      name: params.name.trim(),
       type: params.type,
       command: params.command ?? '',
       args: JSON.stringify(params.args ?? []),
@@ -61,7 +77,11 @@ export function registerMcpHandlers(): void {
     const fields: Record<string, unknown> = {}
     // 内置 server: 仅允许修改 env / isEnabled / headers；其余字段忽略
     if (!isBuiltin) {
-      if (params.name !== undefined) fields.name = params.name
+      if (params.name !== undefined) {
+        const problem = nameProblem(params.name, params.id)
+        if (problem) return { success: false, error: problem }
+        fields.name = params.name.trim()
+      }
       if (params.type !== undefined) fields.type = params.type
       if (params.command !== undefined) fields.command = params.command
       if (params.args !== undefined) fields.args = JSON.stringify(params.args)

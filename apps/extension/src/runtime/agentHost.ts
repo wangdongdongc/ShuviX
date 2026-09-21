@@ -1,9 +1,10 @@
 /**
  * 扩展 AgentHostAdapter —— 统一创建管线（createAgentFactory）的浏览器端适配。
  *
- * root（根会话）：按会话基座档案（work / chat / notebook）的名单装配工具（ask/browser/read/write/edit；
+ * root（根会话）：按会话基座档案（work / chat / notebook）的名单装配工具（ask/read/write/edit；
  * bash/ls/grep/glob/ssh/database 等宿主缺失名自动跳过）+ 全部已启用 MCP（宿主策略，
- * 等价旧「全量注入不过滤」；服务器惰性启动 —— 就在这一刻连）；工具池登记进 sessionTools 供派生复用；systemPrompt 经
+ * 等价旧「全量注入不过滤」；服务器惰性启动 —— 就在这一刻连）—— 浏览器就在这里：它是一台
+ * 恒启用的内置 MCP 能力服务器（mcp__browser__*），不再是按名装配的内置工具；工具池登记进 sessionTools 供派生复用；systemPrompt 经
  * persona/workspace 两个具名段组装（'project' 段扩展不注册 → 引用时跳过）；
  * instruction 与桌面统一走 entry 懒注入（不再拼进 systemPrompt）。
  *
@@ -22,7 +23,6 @@ import {
   DISPATCH_TOOL_NAME,
   LAZY_CONNECT_TIMEOUT_MS,
   createAskTool,
-  createBrowserTool,
   createStubExecutionEnv,
   type AgentHostAdapter,
   type AnyAgentTool,
@@ -40,8 +40,8 @@ import { getTempWorkspaceHandle } from '../storage/opfsWorkspace'
 import { eventBus } from './eventBus'
 import { mcpManager } from './mcpRuntime'
 import { createFileTools } from './fileTools'
-import { extensionBrowserBackend } from './browserBackend'
 import { createSpillSink } from './opfsSpillSink'
+import { setSessionInputChannel } from './userInputBroker'
 import { wrapToolsOutput } from './wrapToolOutput'
 import { createExtensionSecurityContext } from './securityProvider'
 import { resolveSessionModel, capsFor } from './resolveSessionModel'
@@ -120,6 +120,8 @@ async function resolveRootTools(req: ToolResolveRequest): Promise<AnyAgentTool[]
   const requestUserInput =
     req.requestUserInput ??
     ((): Promise<InputResponse> => Promise.reject(new Error('NO_INTERACTIVE_INPUT')))
+  // 内置能力服务器（browser）的安全门按会话取询问通道 —— 在这里登记，运行时销毁时注销
+  setSessionInputChannel(sessionId, requestUserInput)
   const projectHandle = await projectHandleForSession(sessionId)
 
   let fileSuite: AgentTool[]
@@ -141,15 +143,6 @@ async function resolveRootTools(req: ToolResolveRequest): Promise<AnyAgentTool[]
       built.push(createAskTool({ requestUserInput, abortError: 'TOOL_ABORTED' }) as AgentTool)
       continue
     }
-    if (name === 'browser') {
-      built.push(
-        createBrowserTool({
-          backend: extensionBrowserBackend,
-          abortError: 'TOOL_ABORTED'
-        }) as AgentTool
-      )
-      continue
-    }
     const fileTool = fileSuite.find((t) => (t as { name?: string }).name === name)
     if (fileTool) built.push(fileTool)
     // 其余（bash/ls/grep/glob/ssh/database…）宿主缺失 → 静默跳过
@@ -161,7 +154,7 @@ async function resolveRootTools(req: ToolResolveRequest): Promise<AnyAgentTool[]
   const pendingServers = mcpManager
     .getEnabledToolNames()
     .map((n) => n.slice('mcp:'.length))
-    .filter((n) => mcpManager.statusByName(n) !== 'connected')
+    .filter((n) => mcpManager.statusByName(n, sessionId) !== 'connected')
   const notify = (connecting: boolean): void => {
     for (const server of pendingServers) {
       eventBus.emit({ type: 'mcp_connecting', sessionId, server, connecting })
@@ -170,7 +163,8 @@ async function resolveRootTools(req: ToolResolveRequest): Promise<AnyAgentTool[]
   notify(true)
   let mcpResults: Awaited<ReturnType<typeof mcpManager.ensureEnabled>>
   try {
-    mcpResults = await mcpManager.ensureEnabled({ timeoutMs: LAZY_CONNECT_TIMEOUT_MS })
+    // 带上会话：内置能力服务器（browser）按会话实例化，没有会话就没有它
+    mcpResults = await mcpManager.ensureEnabled({ timeoutMs: LAZY_CONNECT_TIMEOUT_MS, sessionId })
   } finally {
     notify(false)
   }
@@ -183,7 +177,9 @@ async function resolveRootTools(req: ToolResolveRequest): Promise<AnyAgentTool[]
       })
     }
   }
-  built.push(...(mcpManager.getAllAgentTools() as AgentTool[]))
+  // 只取全局 server + 本会话的内置实例（别的会话的 browser 实例不能混进来）；调用方身份是根会话 ——
+  // 扩展的默认子代理复用这份工具池，与根 agent 同一个身份（与改动前的共享工具实例一致）
+  built.push(...(mcpManager.getAllAgentTools(sessionId, { callerId: sessionId }) as AgentTool[]))
 
   // L1 全工具门（安全模块）：MCP 等无专属客体的工具由它统一获得"可设门"能力
   const security = createExtensionSecurityContext(sessionId, requestUserInput)

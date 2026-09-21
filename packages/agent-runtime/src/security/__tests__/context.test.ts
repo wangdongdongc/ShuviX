@@ -12,10 +12,12 @@ import type {
   ParsedPolicyFile,
   PolicyRuleSpec,
   SecurityHostProvider,
-  SecurityObject
+  SecurityObject,
+  UrlObjectInput
 } from '../types'
 import type { ShellFacts } from '../shell'
 import { createInlinePolicyMdReader } from '../builtinPolicies/inlineSources'
+import { parsePolicyDefinitionFile } from '../policyFile'
 
 /** 内置策略 md 的构建期内联读取口（运行时单测的宿主接缝；桌面/扩展各注入自己的） */
 const INLINE_POLICY_MD = createInlinePolicyMdReader()
@@ -1732,5 +1734,418 @@ describe('createSecurityContext — enforceCommand 的结构属性接线', () =>
     expect(warn).not.toHaveBeenCalled()
     const logged = getSessionDecisions(SHELL_SID)[0]
     expect([logged.effect, logged.winning]).toEqual(['ask', 'ask-on-command#0'])
+  })
+})
+
+// ─── enforceUrl（浏览器导航守卫）─────────────────────────────────────────
+//
+// 客体 `{type:'url', url, scheme, host, origin}`、action 'navigate'。出厂**没有**任何 url 策略
+// （no policy = allow）—— 这道门的意义是让用户能写「某个域名要问 / 禁止」。file:// 不走这里：
+// 宿主把它当成读那个路径，改走 enforcePath('read')（见两端宿主的接线测试）。
+
+/** 一个普通的导航目标（属性按 urlObjectOf 的写法给齐） */
+const PAGE: UrlObjectInput = {
+  url: 'https://a.example/p?q=1',
+  scheme: 'https',
+  host: 'a.example',
+  origin: 'https://a.example'
+}
+
+/** 某台主机上的一页 */
+const pageOn = (host: string): UrlObjectInput => ({
+  url: `https://${host}/x`,
+  scheme: 'https',
+  host,
+  origin: `https://${host}`
+})
+
+const OPEN_OPTS = {
+  toolCallId: 'tc-url',
+  toolName: 'mcp__browser__open_tab',
+  description: 'Open https://a.example/p?q=1'
+}
+
+/** 抓住一次拒绝的原话 —— toThrow 的字符串参数只做子串匹配，逐字对照要拿出来 toBe */
+async function rejectionOf(work: Promise<unknown>): Promise<string> {
+  try {
+    await work
+  } catch (err) {
+    return (err as Error).message
+  }
+  throw new Error('expected the promise to reject')
+}
+
+interface UrlHarness {
+  ctx: ReturnType<typeof createSecurityContext>
+  requestUserInput: Mock<(req: InputRequest) => Promise<InputResponse>>
+  persistGrant: Mock<(mode: string, path: string) => void>
+  warn: Mock<(msg: string) => void>
+}
+
+/**
+ * 用户的 url 策略 + 固定的询问应答。`channel: false` = 这条会话没有输入面板；
+ * 没给 response 时询问通道一弹就判红（「不该问」的断言用）。
+ */
+function urlContext(
+  policies: ParsedPolicyFile[],
+  opts: { response?: InputResponse; channel?: boolean; autoAllow?: boolean } = {}
+): UrlHarness {
+  const requestUserInput = opts.response
+    ? vi.fn(async (_req: InputRequest): Promise<InputResponse> => opts.response!)
+    : rejectingChannel()
+  const persistGrant = vi.fn<(mode: string, path: string) => void>()
+  const warn = vi.fn<(msg: string) => void>()
+  const ctx = createSecurityContext(
+    SUBJECT,
+    ENVIRONMENT,
+    makeProvider(
+      { autoAllow: opts.autoAllow ?? false, allowList: [] },
+      {
+        requestUserInput: opts.channel === false ? undefined : requestUserInput,
+        persistGrant,
+        logger: { info: vi.fn(), warn, error: vi.fn() },
+        getUserPolicies: () => policies
+      }
+    )
+  )
+  return { ctx, requestUserInput, persistGrant, warn }
+}
+
+/** 按主机拦 / 问的用户策略（规则里自带 type 守卫，与用户照手册写的一致） */
+const hostRule = (
+  effect: PolicyRuleSpec['effect'],
+  host: string,
+  prompt?: string
+): PolicyRuleSpec => ({
+  effect,
+  match: `object.type == 'url' && object.host == '${host}'`,
+  ...(prompt ? { prompt } : {})
+})
+
+describe('createSecurityContext — enforceUrl（浏览器导航守卫）', () => {
+  it('CT-U1 四个客体属性、action 与 tool.name 都到得了策略：逐一核对的 deny 命中；换个工具名就放行；零告警', async () => {
+    const { ctx, requestUserInput, warn } = urlContext([
+      userPolicy('probe', [
+        {
+          effect: 'deny',
+          match:
+            "object.type == 'url' && object.url == 'https://a.example/p?q=1' " +
+            "&& object.scheme == 'https' && object.host == 'a.example' " +
+            "&& object.origin == 'https://a.example' && action == 'navigate' " +
+            "&& tool.name == 'mcp__browser__open_tab'"
+        }
+      ])
+    ])
+
+    expect(await rejectionOf(ctx.enforceUrl(PAGE, OPEN_OPTS))).toBe(
+      "Denied by security policy rule 'probe#0'"
+    )
+    // 同一个地址换一个工具名：tool 维度不再命中 → 没有别的 url 策略 → 放行
+    await expect(
+      ctx.enforceUrl(PAGE, { ...OPEN_OPTS, toolName: 'mcp__browser__navigate' })
+    ).resolves.toBeUndefined()
+
+    expect(requestUserInput).not.toHaveBeenCalled()
+    // 属性给齐了，match 里读哪一个都不会走 fail-safe
+    expect(warn).not.toHaveBeenCalled()
+
+    const logs = getSessionDecisions(SID)
+    expect(logs.map((l) => [l.action, l.objectKind])).toEqual([
+      ['navigate', 'url'],
+      ['navigate', 'url']
+    ])
+    expect(logs[1]).toMatchObject({
+      effect: 'deny',
+      winning: 'probe#0',
+      toolCallId: 'tc-url',
+      objectSummary: 'https://a.example/p?q=1'
+    })
+    expect(logs[1].tool).toEqual({ name: 'mcp__browser__open_tab' })
+    expect(logs[0].tool).toEqual({ name: 'mcp__browser__navigate' })
+  })
+
+  it('CT-U2 出厂没有任何策略管 url：免询问关着，https / 带端口 / data: / about: / chrome: 一律放行、不问、零告警，日志归因 default:url', async () => {
+    const targets: UrlObjectInput[] = [
+      PAGE,
+      {
+        url: 'http://a.example:8080/',
+        scheme: 'http',
+        host: 'a.example',
+        origin: 'http://a.example:8080'
+      },
+      { url: 'data:text/html,x', scheme: 'data', host: '', origin: 'null' },
+      { url: 'about:blank', scheme: 'about', host: '', origin: 'null' },
+      { url: 'chrome://settings', scheme: 'chrome', host: 'settings', origin: 'null' }
+    ]
+    const { ctx, requestUserInput, warn } = urlContext([])
+
+    for (const target of targets) {
+      await expect(ctx.enforceUrl(target, OPEN_OPTS), target.url).resolves.toBeUndefined()
+    }
+    expect(requestUserInput).not.toHaveBeenCalled()
+    // 内置策略里要是有一条没写 type 守卫，读到 url 客体没有的属性就会 fail-safe 成命中 —— 这里零告警
+    expect(warn).not.toHaveBeenCalled()
+
+    const logs = getSessionDecisions(SID)
+    expect(logs).toHaveLength(targets.length)
+    for (const log of logs) {
+      expect(log).toMatchObject({ effect: 'allow', winning: 'default:url', matched: [] })
+    }
+    expect(logs.map((l) => l.objectSummary).reverse()).toEqual(targets.map((t) => t.url))
+  })
+
+  it('CT-U2b 免询问开着：照样放行，归因 session-auto-allow#0', async () => {
+    const { ctx, requestUserInput } = urlContext([], { autoAllow: true })
+    await expect(ctx.enforceUrl(PAGE, OPEN_OPTS)).resolves.toBeUndefined()
+    expect(requestUserInput).not.toHaveBeenCalled()
+    expect(getSessionDecisions(SID)[0]).toMatchObject({
+      effect: 'allow',
+      winning: 'session-auto-allow#0'
+    })
+  })
+
+  it('CT-U3 用户按主机 deny：逐字「Denied by security policy rule …」，有提示语就接在空行后；不弹卡；别的主机照常', async () => {
+    const bare = urlContext([userPolicy('host-gate', [hostRule('deny', 'evil.example')])])
+    expect(await rejectionOf(bare.ctx.enforceUrl(pageOn('evil.example'), OPEN_OPTS))).toBe(
+      "Denied by security policy rule 'host-gate#0'"
+    )
+    await expect(bare.ctx.enforceUrl(pageOn('good.example'), OPEN_OPTS)).resolves.toBeUndefined()
+    expect(bare.requestUserInput).not.toHaveBeenCalled()
+
+    clearSessionDecisions(SID)
+    const withPrompt = urlContext([
+      userPolicy('host-gate', [hostRule('deny', 'evil.example', 'That site is off limits.')])
+    ])
+    expect(await rejectionOf(withPrompt.ctx.enforceUrl(pageOn('evil.example'), OPEN_OPTS))).toBe(
+      "Denied by security policy rule 'host-gate#0'\n\nThat site is off limits."
+    )
+    expect(withPrompt.requestUserInput).not.toHaveBeenCalled()
+  })
+
+  it('CT-U4 用户按主机 ask：卡片上是地址本身、工具的一句说明与策略提示语；允许 → 放行，日志 ask/allowed', async () => {
+    const { ctx, requestUserInput } = urlContext(
+      [userPolicy('url-gate', [hostRule('ask', 'a.example', 'Check the site before opening it.')])],
+      { response: { kind: 'ask', allowed: true } }
+    )
+
+    await expect(ctx.enforceUrl(PAGE, OPEN_OPTS)).resolves.toBeUndefined()
+    expect(requestUserInput).toHaveBeenCalledTimes(1)
+    expect(requestUserInput.mock.calls[0][0]).toEqual({
+      id: 'tc-url',
+      kind: 'ask',
+      toolName: 'mcp__browser__open_tab',
+      command: 'https://a.example/p?q=1',
+      description: 'Open https://a.example/p?q=1',
+      // 只有 path × read 才探目录
+      pathIsDirectory: false,
+      policyPrompt: { text: 'Check the site before opening it.', policies: ['url-gate'] },
+      createdAt: expect.any(Number)
+    })
+
+    const logs = getSessionDecisions(SID)
+    expect(logs).toHaveLength(1)
+    expect(logs[0]).toMatchObject({
+      effect: 'ask',
+      winning: 'url-gate#0',
+      objectKind: 'url',
+      objectSummary: 'https://a.example/p?q=1',
+      userResponse: 'allowed'
+    })
+  })
+
+  it.each<[string, InputResponse, Partial<typeof OPEN_OPTS & { abortError: string }>, string]>([
+    ['拒绝', { kind: 'ask', allowed: false }, {}, 'User denied opening https://a.example/p?q=1'],
+    ['拒绝并写了理由', { kind: 'ask', allowed: false, reason: 'not today' }, {}, 'not today'],
+    [
+      '取消（宿主给了 abortError）',
+      { kind: 'cancel', reason: 'aborted' },
+      { abortError: 'TOOL_ABORTED' },
+      'TOOL_ABORTED'
+    ],
+    ['取消（缺省）', { kind: 'cancel', reason: 'aborted' }, {}, 'Aborted'],
+    [
+      '其它（反馈）',
+      { kind: 'other', text: 'read the docs page instead' },
+      {},
+      'User declined https://a.example/p?q=1 and provided feedback instead: read the docs page instead'
+    ]
+  ])('CT-U5 询问应答：%s → 抛出逐字文案', async (_label, response, extra, message) => {
+    const { ctx } = urlContext([userPolicy('url-gate', [hostRule('ask', 'a.example')])], {
+      response
+    })
+    expect(await rejectionOf(ctx.enforceUrl(PAGE, { ...OPEN_OPTS, ...extra }))).toBe(message)
+  })
+
+  it('CT-U5b 没有询问通道：缺省 / missingChannel:deny → fail-closed（地址写全）；missingChannel:allow → 放行', async () => {
+    const { ctx } = urlContext([userPolicy('url-gate', [hostRule('ask', 'a.example')])], {
+      channel: false
+    })
+    const failClosed =
+      'Access denied: this needs your confirmation but there is no way to ask: https://a.example/p?q=1'
+    expect(await rejectionOf(ctx.enforceUrl(PAGE, { ...OPEN_OPTS, missingChannel: 'deny' }))).toBe(
+      failClosed
+    )
+    expect(await rejectionOf(ctx.enforceUrl(PAGE, OPEN_OPTS))).toBe(failClosed)
+    await expect(
+      ctx.enforceUrl(PAGE, { ...OPEN_OPTS, missingChannel: 'allow' })
+    ).resolves.toBeUndefined()
+  })
+
+  it('CT-U6 「允许并记住」对地址没有可记的条目：不调 persistGrant，日志记 allowed（不是 allowed_remember）', async () => {
+    const { ctx, persistGrant } = urlContext(
+      [userPolicy('url-gate', [hostRule('ask', 'a.example')])],
+      { response: { kind: 'ask', allowed: true, extra: { rememberPath: true } } }
+    )
+    await expect(ctx.enforceUrl(PAGE, OPEN_OPTS)).resolves.toBeUndefined()
+    expect(persistGrant).not.toHaveBeenCalled()
+    expect(getSessionDecisions(SID)[0].userResponse).toBe('allowed')
+  })
+
+  it('CT-U7 照手册写的一份 url 策略 md：零告警解析；子域名被拦，形似的别的域名照常；路径类访问不受波及', async () => {
+    const parseWarn = vi.fn()
+    const policy = parsePolicyDefinitionFile(
+      [
+        '---',
+        'shuvix: policy v1',
+        'name: block-evil',
+        'shuvix-displayName: Keep Off evil.example',
+        'shuvix-policy-scope:',
+        '  subject.kind: [agent]',
+        '  object.type: [url]',
+        'shuvix-policy-rules:',
+        '  - effect: deny',
+        '    action: [navigate]',
+        "    match: object.host == 'evil.example' || object.host.endsWith('.evil.example')",
+        '    prompt: That site is off limits.',
+        '---',
+        'The agent stays off evil.example and every subdomain of it.'
+      ].join('\n'),
+      'block-evil',
+      parseWarn
+    )
+    expect(policy).not.toBeNull()
+    expect(parseWarn).not.toHaveBeenCalled()
+
+    const { ctx, requestUserInput, warn } = urlContext([policy!])
+    const denied = "Denied by security policy rule 'block-evil#0'\n\nThat site is off limits."
+    expect(await rejectionOf(ctx.enforceUrl(pageOn('evil.example'), OPEN_OPTS))).toBe(denied)
+    expect(await rejectionOf(ctx.enforceUrl(pageOn('login.evil.example'), OPEN_OPTS))).toBe(denied)
+    await expect(ctx.enforceUrl(pageOn('evil.example.com'), OPEN_OPTS)).resolves.toBeUndefined()
+    await expect(ctx.enforceUrl(pageOn('notevil.example'), OPEN_OPTS)).resolves.toBeUndefined()
+
+    // scope 把它限定在 url 客体上：工作区里的读照常放行，也不因读不到 object.host 而 fail-safe
+    await expect(
+      ctx.enforcePath('read', '/ws/a.txt', { toolCallId: 'tc-read', toolName: 'read' })
+    ).resolves.toBeUndefined()
+    expect(requestUserInput).not.toHaveBeenCalled()
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('CT-U8 免询问开着：用户的 ask 规则被静默放行；force-ask 规则照样问', async () => {
+    const asking = urlContext([userPolicy('url-gate', [hostRule('ask', 'a.example')])], {
+      autoAllow: true
+    })
+    await expect(asking.ctx.enforceUrl(PAGE, OPEN_OPTS)).resolves.toBeUndefined()
+    expect(asking.requestUserInput).not.toHaveBeenCalled()
+    expect(getSessionDecisions(SID)[0]).toMatchObject({
+      effect: 'allow',
+      winning: 'session-auto-allow#0'
+    })
+
+    const forced = urlContext([userPolicy('url-gate', [hostRule('force-ask', 'a.example')])], {
+      autoAllow: true,
+      response: { kind: 'ask', allowed: true }
+    })
+    await expect(forced.ctx.enforceUrl(PAGE, OPEN_OPTS)).resolves.toBeUndefined()
+    expect(forced.requestUserInput).toHaveBeenCalledTimes(1)
+    expect(forced.requestUserInput.mock.calls[0][0]).toMatchObject({
+      kind: 'ask',
+      command: 'https://a.example/p?q=1'
+    })
+    expect(getSessionDecisions(SID)[0]).toMatchObject({
+      effect: 'ask',
+      winning: 'url-gate#0',
+      userResponse: 'allowed'
+    })
+  })
+})
+
+// ─── 没有返回值的门：用户的反馈只能是拒绝 ──────────────────────────────────
+//
+// enforcePath / enforceGitOp / enforceUrl 返回 void —— 用户在询问卡片上选「其它」写的那段反馈
+// 没有地方带回给调用方。所以这三道门在内部**强制** onOther:'throw'：调用方误传 'return' 时，
+// 反馈也不能悄悄变成一次放行。有返回值的门（命令 / 数据库 / L1）照旧尊重调用方的选择。
+
+describe('createSecurityContext — 无返回值的门强制 onOther:throw', () => {
+  const FEEDBACK: InputResponse = { kind: 'other', text: 'try the docs first' }
+
+  function feedbackContext(policies: ParsedPolicyFile[] = []): {
+    ctx: ReturnType<typeof createSecurityContext>
+    requestUserInput: Mock<(req: InputRequest) => Promise<InputResponse>>
+  } {
+    const requestUserInput = vi.fn(async (_req: InputRequest): Promise<InputResponse> => FEEDBACK)
+    return {
+      ctx: createSecurityContext(
+        SUBJECT,
+        ENVIRONMENT,
+        makeProvider(
+          { autoAllow: false, allowList: [] },
+          { requestUserInput, getUserPolicies: () => policies }
+        )
+      ),
+      requestUserInput
+    }
+  }
+
+  it('CT-O1 enforcePath：传了 onOther:return，反馈照样抛成「declined access」', async () => {
+    const { ctx, requestUserInput } = feedbackContext()
+    // 工作区外的读 → 内置 ask-on-read 问
+    expect(
+      await rejectionOf(
+        ctx.enforcePath('read', '/outside/f.txt', {
+          toolCallId: 'o1',
+          toolName: 'read',
+          onOther: 'return'
+        })
+      )
+    ).toBe(
+      'User declined access to /outside/f.txt and provided feedback instead: try the docs first'
+    )
+    expect(requestUserInput).toHaveBeenCalledTimes(1)
+    expect(getSessionDecisions(SID)[0].userResponse).toBe('feedback')
+  })
+
+  it('CT-O2 enforceGitOp：传了 onOther:return，反馈照样抛', async () => {
+    const { ctx, requestUserInput } = feedbackContext()
+    expect(
+      await rejectionOf(
+        ctx.enforceGitOp(GIT_INPUT, { toolCallId: 'o2', toolName: 'git', onOther: 'return' })
+      )
+    ).toBe('User declined git init and provided feedback instead: try the docs first')
+    expect(requestUserInput).toHaveBeenCalledTimes(1)
+  })
+
+  it('CT-O3 enforceUrl：传了 onOther:return，反馈照样抛', async () => {
+    const { ctx, requestUserInput } = feedbackContext([
+      userPolicy('url-gate', [hostRule('ask', 'a.example')])
+    ])
+    expect(await rejectionOf(ctx.enforceUrl(PAGE, { ...OPEN_OPTS, onOther: 'return' }))).toBe(
+      'User declined https://a.example/p?q=1 and provided feedback instead: try the docs first'
+    )
+    expect(requestUserInput).toHaveBeenCalledTimes(1)
+  })
+
+  it('CT-O4 对照：有返回值的门照旧尊重 onOther:return —— 命令与数据库把反馈作为结果交回', async () => {
+    const { ctx } = feedbackContext()
+    await expect(
+      ctx.enforceCommand(COMMAND_INPUT, { toolCallId: 'o4', toolName: 'bash', onOther: 'return' })
+    ).resolves.toEqual({ status: 'feedback', text: 'try the docs first' })
+    await expect(
+      ctx.enforceDatabase(DATABASE_INPUT, {
+        toolCallId: 'o5',
+        toolName: 'database',
+        onOther: 'return'
+      })
+    ).resolves.toEqual({ status: 'feedback', text: 'try the docs first' })
   })
 })

@@ -16,6 +16,7 @@ import {
   type ImportSelection
 } from '@shuvix/chat-protocol/types/configShare'
 import {
+  builtinNothingToImport,
   encodeConfigSharePayload,
   parseConfigSharePayload,
   planConfigImport
@@ -56,11 +57,15 @@ class ConfigShareService {
         models: enabledModels.map((m) => ({ modelId: m.modelId }))
       }
     })
-    const mcpServers = mcpDao.findEnabled().map((s) => ({
-      name: s.name,
-      type: s.type as 'stdio' | 'http',
-      isBuiltin: s.isBuiltin === 1
-    }))
+    // 内置能力服务器（inproc：ssh / browser）没有任何可迁移的配置 —— 每个安装自己种 —— 不进导出候选
+    const mcpServers = mcpDao
+      .findEnabled()
+      .filter((s) => s.type !== 'inproc')
+      .map((s) => ({
+        name: s.name,
+        type: s.type as 'stdio' | 'http',
+        isBuiltin: s.isBuiltin === 1
+      }))
     return { providers, mcpServers }
   }
 
@@ -97,6 +102,8 @@ class ConfigShareService {
 
     const exportedMcpServers: ExportedMcpServer[] = []
     for (const server of mcpDao.findEnabled()) {
+      // 与导出候选同一条规则：内置能力服务器（inproc）没有可迁移的配置
+      if (server.type === 'inproc') continue
       const sel = mcpSelections.get(server.name)
       if (!sel) continue
 
@@ -161,7 +168,7 @@ class ConfigShareService {
       },
       findMcp: (name) => {
         const s = mcpDao.findByName(name)
-        return s ? { isBuiltin: s.isBuiltin === 1 } : undefined
+        return s ? { isBuiltin: s.isBuiltin === 1, inproc: s.type === 'inproc' } : undefined
       }
     })
   }
@@ -260,6 +267,12 @@ class ConfigShareService {
 
   private async applyMcpServer(exported: ExportedMcpServer): Promise<void> {
     const existing = mcpDao.findByName(exported.name)
+
+    // 0. 本端同名项是进程内的内置能力服务器（ssh / browser）→ 没有可导入的配置；启停是本机的
+    //    选择，不能被导入顺手打开（预览里是 skipBuiltin）
+    if (existing?.isBuiltin === 1 && existing.type === 'inproc') {
+      throw new Error(builtinNothingToImport(exported.name))
+    }
 
     // 1. 导出端标记为内置但本端不存在对应内置 → 跳过，避免以内置 payload 的残缺字段污染本端
     if (exported.isBuiltin && existing?.isBuiltin !== 1) {

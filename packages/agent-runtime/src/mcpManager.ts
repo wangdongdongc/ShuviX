@@ -650,7 +650,11 @@ export class McpManager {
   ): Promise<{ content: unknown[]; isError?: boolean }> {
     const conn = this.connections.get(connKey)
     if (!conn || conn.status !== 'connected') {
-      throw new Error(`MCP server ${connKey} is not connected`)
+      // 报 server 名而不是连接键：`builtin-mcp-browser#<sessionId>` 是记账用的，对模型和用户都没有意义。
+      // 工具闭包不在调用时重连（重连发生在下一次创建 Agent 时，见 MCPL-U-13）
+      const serverId = connKey.split('#')[0]
+      const name = conn?.serverName ?? this.store.findById(serverId)?.name ?? serverId
+      throw new Error(`MCP server "${name}" is not connected`)
     }
     const _meta: Record<string, string> = {}
     if (meta?.toolCallId) _meta['shuvix.dev/toolCallId'] = meta.toolCallId
@@ -704,37 +708,37 @@ export class McpManager {
       label: mcpTool.description || mcpTool.name,
       description: mcpTool.description ?? '',
       parameters: jsonSchemaToTypebox(mcpTool.inputSchema),
+      /**
+       * 失败一律**抛出**，而不是回一个带错误文字的结果：pi 只把抛出的调用记成失败（isError），
+       * 界面据此标红、不把它并进已完成的步骤组，重开会话也一样。模型看到的文字不变 ——
+       * pi 把抛出的消息原样作为这次调用的结果内容。这包括 server 自己报的 isError（被拒的询问、
+       * 找不到的文件……）与协议层的失败；远端命令非零退出之类的「正常结果」不在其中。
+       */
       execute: async (toolCallId, params, signal): Promise<AgentToolResult<McpToolDetails>> => {
+        let result: Awaited<ReturnType<McpManager['callTool']>>
         try {
-          const result = await this.callTool(
+          result = await this.callTool(
             connKey,
             mcpTool.name,
             params as Record<string, unknown>,
             signal,
             { toolCallId, callerId }
           )
-          const blocks = mcpContentToAgentContent(result.content)
-          if (result.isError) {
-            return {
-              content: [{ type: 'text', text: `[MCP Error] ${textOf(blocks) || '(no details)'}` }],
-              details: { type: 'mcp', server: serverName, tool: mcpTool.name, isError: true }
-            }
-          }
-          return {
-            // 空结果也给一个文本块：pi 的 content 不接受空数组的语义（宿主包装层再兜底成 "(no output)"）
-            content: blocks.length > 0 ? blocks : [{ type: 'text', text: '' }],
-            details: { type: 'mcp', server: serverName, tool: mcpTool.name }
-          }
         } catch (err: unknown) {
           // 中止时 SDK 抛的是 McpError(RequestTimeout, 'AbortError: ...')，文案会误导用户，
           // 统一按其它工具的约定报成 Aborted。
-          const text = signal?.aborted
-            ? '[MCP] Aborted'
-            : `[MCP Error] ${err instanceof Error ? err.message : String(err)}`
-          return {
-            content: [{ type: 'text', text }],
-            details: { type: 'mcp', server: serverName, tool: mcpTool.name, isError: true }
-          }
+          throw new Error(
+            signal?.aborted
+              ? '[MCP] Aborted'
+              : `[MCP Error] ${err instanceof Error ? err.message : String(err)}`
+          )
+        }
+        const blocks = mcpContentToAgentContent(result.content)
+        if (result.isError) throw new Error(`[MCP Error] ${textOf(blocks) || '(no details)'}`)
+        return {
+          // 空结果也给一个文本块：pi 的 content 不接受空数组的语义（宿主包装层再兜底成 "(no output)"）
+          content: blocks.length > 0 ? blocks : [{ type: 'text', text: '' }],
+          details: { type: 'mcp', server: serverName, tool: mcpTool.name }
         }
       }
     }

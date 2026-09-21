@@ -21,3 +21,6 @@ packages/atomic-editor
 # 契约文案且 diff 安静，故整目录排除（知识库：prettier 会腐蚀 visual-guide 提示词片段）
 packages/agent-runtime/src/agentProfile/fragments
 packages/agent-runtime/src/subagent/builtinAgents/md
+# 扩展自己的内置 agent 定义同理：prettier 会把 `mcp__browser__*` 这类工具名里的 `__x__`
+# 改写成粗体，模型读到的工具前缀就错了
+apps/extension/src/runtime/builtinAgents/md

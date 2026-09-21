@@ -22,11 +22,12 @@ import {
   type BrowserCaps,
   type BrowserOpOutput,
   type NavKind,
+  type PdfPageSize,
   type ScrollDirection,
   type TabCdpSession
 } from '@shuvix/agent-runtime'
 import { chatFrontendRegistry } from '../../frontend/core'
-import { isPathWithinWorkspace, resolveProjectConfig } from '../toolContext'
+import { resolveProjectConfig } from '../toolContext'
 import { getToolResultsDir } from '../../utils/paths'
 import { createLogger } from '../../logger'
 import { browserCdpManager } from './browserCdpService'
@@ -48,7 +49,8 @@ export const DESKTOP_BROWSER_CAPS: BrowserCaps = {
   evaluate: true,
   network: true,
   console: true,
-  rawCdp: true
+  rawCdp: true,
+  upload: true
 }
 
 // ====== 短号映射（模块级：tab 真源是全局的，映射也全局） ======
@@ -117,6 +119,12 @@ class DesktopBrowserBackend implements BrowserBackend {
     return { text: lines.join('\n') || '(no open tabs — use open_tab to open one)' }
   }
 
+  /** 不激活、不 attach —— server 只是想知道这个 tab 眼下显示的是什么 */
+  async tabUrl(p: { tabId: string }): Promise<string | undefined> {
+    const view = getTabView(shortToUuid.get(p.tabId) ?? p.tabId)
+    return view && !view.webContents.isDestroyed() ? view.webContents.getURL() : undefined
+  }
+
   async openTab(p: { url: string }): Promise<BrowserOpOutput> {
     const uuid = createTab(p.url, { activate: true })
     const short = shortIdFor(uuid)
@@ -158,10 +166,10 @@ class DesktopBrowserBackend implements BrowserBackend {
     return browserCdpOps.readPageOp(session)
   }
 
-  async snapshot(p: { tabId: string; full?: boolean }): Promise<BrowserOpOutput> {
+  async snapshot(p: { tabId: string; full?: boolean; viewer?: string }): Promise<BrowserOpOutput> {
     const { session, uuid } = await this.session(p.tabId)
     const pageUrl = getTabView(uuid)?.webContents.getURL() ?? ''
-    return browserCdpOps.snapshotOp(session, pageUrl, { full: p.full })
+    return browserCdpOps.snapshotOp(session, pageUrl, { full: p.full, viewer: p.viewer })
   }
 
   /**
@@ -256,54 +264,27 @@ class DesktopBrowserBackend implements BrowserBackend {
 
   /**
    * 导出 PDF 走 Electron 原生 `printToPDF()`（CDP 在 Electron debugger 里不暴露
-   * `Page.printToPDF`）。outputPath 准入校验：无交互询问通道，越界直接拒绝。
+   * `Page.printToPDF`）。
+   *
+   * outputPath 在到这里之前已经过了 browser server 的写路径门（enforcePath('write')，见
+   * builtinMcp/browserServer.ts）并解析成绝对路径 —— 能不能写那个位置是策略的事，不再是这里的
+   * 硬编码「工作区外一律拒绝」。相对路径的兜底解析只为不经 server 的直接调用。
    */
   async pdf(p: {
     tabId: string
     outputPath: string
-    pageSize?: string
+    pageSize?: PdfPageSize
     landscape?: boolean
     scale?: number
   }): Promise<BrowserOpOutput> {
     const { view } = resolveAndActivate(p.tabId)
 
-    // 解析为绝对路径（相对路径按 workspace 解析）+ 准入检查
-    const config = resolveProjectConfig(this.sessionId)
     const absolutePath = isAbsolute(p.outputPath)
       ? p.outputPath
-      : resolve(config.workingDirectory, p.outputPath)
-    const inWorkspace = isPathWithinWorkspace(absolutePath, config.workingDirectory)
-    if (!inWorkspace) {
-      const error = `outputPath "${absolutePath}" is outside the session working directory.`
-      return { text: `Error: ${error}`, details: { error } }
-    }
+      : resolve(resolveProjectConfig(this.sessionId).workingDirectory, p.outputPath)
 
-    const ALLOWED_PAGE_SIZES = [
-      'A0',
-      'A1',
-      'A2',
-      'A3',
-      'A4',
-      'A5',
-      'A6',
-      'Legal',
-      'Letter',
-      'Tabloid',
-      'Ledger'
-    ] as const
-    type AllowedPageSize = (typeof ALLOWED_PAGE_SIZES)[number]
-
-    let pageSize: Electron.PrintToPDFOptions['pageSize'] = 'A4'
-    if (typeof p.pageSize === 'string') {
-      const matched = ALLOWED_PAGE_SIZES.find(
-        (s) => s.toLowerCase() === p.pageSize!.toLowerCase()
-      ) as AllowedPageSize | undefined
-      if (!matched) {
-        const error = `Unknown pageSize "${p.pageSize}". Allowed: ${ALLOWED_PAGE_SIZES.join(', ')}.`
-        return { text: `Error: ${error}`, details: { error } }
-      }
-      pageSize = matched
-    }
+    // 纸张与 scale 已由 browser server 在过写路径门之前校验（PDF_PAGE_SIZES / PDF_SCALE_RANGE）
+    const pageSize: PdfPageSize = p.pageSize ?? 'A4'
 
     const opts: Electron.PrintToPDFOptions = {
       landscape: p.landscape === true,
@@ -320,9 +301,8 @@ class DesktopBrowserBackend implements BrowserBackend {
     await mkdir(dirname(absolutePath), { recursive: true })
     await writeFile(absolutePath, pdfBuffer)
 
-    const sizeLabel = typeof pageSize === 'string' ? pageSize : 'custom'
     return {
-      text: `Page exported to PDF: ${absolutePath} (${sizeLabel}${opts.landscape ? ', landscape' : ''})`
+      text: `Page exported to PDF: ${absolutePath} (${pageSize}${opts.landscape ? ', landscape' : ''})`
     }
   }
 
@@ -340,7 +320,7 @@ class DesktopBrowserBackend implements BrowserBackend {
 
   async fill(p: { tabId: string; uid: string; text: string }): Promise<BrowserOpOutput> {
     const { session } = await this.session(p.tabId)
-    return browserCdpOps.fillOp(session, p.uid, p.text)
+    return browserCdpOps.fillOp(session, p.uid, p.text, { canUpload: this.caps.upload })
   }
 
   async type(p: {
@@ -356,6 +336,17 @@ class DesktopBrowserBackend implements BrowserBackend {
   async pressKey(p: { tabId: string; key: string }): Promise<BrowserOpOutput> {
     const { session } = await this.session(p.tabId)
     return browserCdpOps.pressKeyOp(session, p.key)
+  }
+
+  async hover(p: { tabId: string; uid: string }): Promise<BrowserOpOutput> {
+    const { session } = await this.session(p.tabId)
+    return browserCdpOps.hoverOp(session, p.uid)
+  }
+
+  /** paths 已由 MCP server 的安全门解析成绝对路径并放行 */
+  async uploadFile(p: { tabId: string; uid: string; paths: string[] }): Promise<BrowserOpOutput> {
+    const { session } = await this.session(p.tabId)
+    return browserCdpOps.uploadFileOp(session, p.uid, p.paths)
   }
 
   async scroll(p: {

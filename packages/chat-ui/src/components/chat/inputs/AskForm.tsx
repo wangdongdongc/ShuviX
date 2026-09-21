@@ -8,6 +8,7 @@ import { useTranslation } from 'react-i18next'
 import hljs from 'highlight.js/lib/core'
 import bash from 'highlight.js/lib/languages/bash'
 import type { AskInputRequest, AskPolicyPrompt } from '@shuvix/chat-protocol/types/inputRequest'
+import { fallbackToolPresentation } from '@shuvix/chat-protocol/builtinMcpPresentations'
 import type { InputFormProps } from './types'
 import type { AskDraft } from './drafts'
 import { DiffViewer } from '../DiffViewer'
@@ -107,7 +108,10 @@ export function AskForm({
   const [policyOpen, setPolicyOpen] = useState(false)
   const { command, description, pathIsDirectory, policyPrompt, preview, toolName, background } =
     request
-  const presentation = useChatStore((s) => s.toolPresentations[toolName])
+  const hostPresentation = useChatStore((s) => s.toolPresentations[toolName])
+  // 内置 MCP 能力服务器发起的询问（browser 打开一个地址、读一个本地文件；ssh 执行一条命令）
+  // 也要有工具名与图标 —— 宿主下发的表里没有它们
+  const presentation = hostPresentation ?? fallbackToolPresentation(toolName, t)
   const diffPreview = preview?.kind === 'diff' ? preview : null
 
   // 路径类(read/write/edit/...):command 形如 Read(path)/Write(path),可"允许并记住"整条路径。

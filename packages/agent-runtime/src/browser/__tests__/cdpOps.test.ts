@@ -9,10 +9,14 @@ import {
   waitForOp,
   cdpOp,
   eventsOp,
-  readPageOp
+  readPageOp,
+  hoverOp,
+  uploadFileOp,
+  snapshotOp
 } from '../cdpOps'
 import type { TabCdpSession } from '../attachManager'
 import type { NavKind } from '../backend'
+import { CdpController, type AXNode } from '../../cdp/controller'
 
 type Params = Record<string, unknown>
 type Point = { x: number; y: number }
@@ -42,6 +46,12 @@ interface FakeController {
   callOnElement: Mock<(uid: string, fn: string, args?: unknown[]) => Promise<unknown>>
   getNode: Mock<(uid: string) => NodeInfo | undefined>
   reset: Mock<() => void>
+  buildSnapshot: Mock<
+    (
+      pageUrl?: string,
+      opts?: { full?: boolean; viewer?: string }
+    ) => Promise<{ text: string; elementCount: number; diffed?: boolean }>
+  >
 }
 
 type Reaction = (method: string, params?: Params) => void
@@ -179,7 +189,11 @@ function fakeSession(overrides: Params = {}): FakeSession {
       role: { value: 'button' },
       name: { value: 'Submit' }
     })),
-    reset: vi.fn((): void => {})
+    reset: vi.fn((): void => {}),
+    buildSnapshot: vi.fn(async () => ({
+      text: '[snapshot] Page:  — 0 elements\n',
+      elementCount: 0
+    }))
   }
 
   const session = {
@@ -613,11 +627,12 @@ describe('fillOp', () => {
       'hello',
       ['is a checkbox — use click to toggle it']
     ],
+    // 不传 canUpload（缺省当这台 server 没有 upload_file）；两种都有的对照见 F1
     [
       '文件 input',
       { kind: 'file', type: 'file' },
       'hello',
-      ['DOM.setFileInputFiles', '{"$uid":"e7"}']
+      ['is a file input — fill cannot set files on it.']
     ],
     [
       '不是表单控件',
@@ -1204,5 +1219,392 @@ describe('readPageOp', () => {
     const out = await readPageOp(session)
     expect(out.text).toContain('TypeError: boom')
     expect(out.details?.error).toBe('TypeError: boom')
+  })
+})
+
+describe('fillOp：文件 input 的提示只指向这台 server 真有的工具', () => {
+  it.each<[string, { canUpload?: boolean } | undefined, string]>([
+    [
+      '有 upload_file',
+      { canUpload: true },
+      'button "Submit" (uid=e7) is a file input — set its files with upload_file instead of fill.'
+    ],
+    [
+      '没有 upload_file',
+      { canUpload: false },
+      'button "Submit" (uid=e7) is a file input — fill cannot set files on it.'
+    ],
+    [
+      '不传（缺省当没有）',
+      undefined,
+      'button "Submit" (uid=e7) is a file input — fill cannot set files on it.'
+    ]
+  ])('F1 %s → 业务错误，只做了检查、不碰键盘', async (_label, opts, error) => {
+    const fake = fakeSession()
+    fake.results.inspect = [field({ kind: 'file', type: 'file' })]
+    const out = await fillOp(fake.session, 'e7', '/tmp/a.txt', opts)
+    expect(out).toEqual({ text: `Error: ${error}`, details: { error } })
+    expect(fake.controllerCalls).toEqual(['inspect'])
+    expect(fake.commands.filter((c) => c.method.startsWith('Input.'))).toEqual([])
+    // 教模型去用一个它手里没有的工具，是在教一条死路
+    if (!opts?.canUpload) expect(out.text).not.toContain('upload_file')
+  })
+})
+
+describe('snapshotOp', () => {
+  it('F2 先 enable Accessibility，再把 {full, viewer} 原样交给 buildSnapshot', async () => {
+    const fake = fakeSession()
+    fake.ctl.buildSnapshot.mockImplementation(async () => {
+      fake.timeline.push('buildSnapshot')
+      return { text: 'snap', elementCount: 3 }
+    })
+    const out = await snapshotOp(fake.session, 'https://a.com/', { full: false, viewer: 'agent-2' })
+    expect(fake.timeline).toEqual(['Accessibility.enable', 'buildSnapshot'])
+    expect(fake.ctl.buildSnapshot.mock.calls).toEqual([
+      ['https://a.com/', { full: false, viewer: 'agent-2' }]
+    ])
+    expect(out.text).toBe('snap')
+    expect(out.details?.elementCount).toBe(3)
+    expect(out.details?.error).toBeUndefined()
+  })
+
+  it('F2 Accessibility.enable 失败（已启用 / 不支持）被吞掉，照样拍', async () => {
+    const fake = fakeSession()
+    when(fake, cmd('Accessibility.enable'), () => {
+      throw new Error("'Accessibility.enable' wasn't found")
+    })
+    fake.ctl.buildSnapshot.mockResolvedValue({ text: 'snap', elementCount: 1 })
+    const out = await snapshotOp(fake.session, 'https://a.com/', { viewer: 'A' })
+    expect(out.text).toBe('snap')
+    expect(fake.ctl.buildSnapshot).toHaveBeenCalledWith('https://a.com/', { viewer: 'A' })
+  })
+})
+
+describe('hoverOp', () => {
+  const HOVER_TEXT =
+    'Hovering over button "Submit" (uid=e7). Take a snapshot to see what appeared (menu, tooltip, …).'
+
+  it('H1 在解析出的点上发一次 mouseMoved（不按不放），约 150ms 后才回（给菜单 / tooltip 出场）', async () => {
+    vi.useFakeTimers()
+    const fake = fakeSession()
+    fake.ctl.resolveCoordinates.mockResolvedValue({ x: 12, y: 34 })
+    let settled = false
+    const work = hoverOp(fake.session, 'e7')
+    work.then(
+      () => (settled = true),
+      () => (settled = true)
+    )
+    await vi.advanceTimersByTimeAsync(100)
+    expect(settled).toBe(false)
+    const out = await within(work, 100)
+    expect(out).toEqual({ text: HOVER_TEXT })
+    expect(fake.ctl.resolveCoordinates.mock.calls).toEqual([['e7']])
+    expect(fake.commands).toEqual([
+      { method: 'Input.dispatchMouseEvent', params: { type: 'mouseMoved', x: 12, y: 34 } }
+    ])
+  })
+
+  it.each<[string, unknown, string]>([
+    [
+      '元素不可见',
+      new Error('Element uid="e7" is not visible — it has no size on the page.'),
+      'Element uid="e7" is not visible — it has no size on the page.'
+    ],
+    [
+      'uid 已过期',
+      new Error('Element uid="e7" not found. Take a new snapshot.'),
+      'Element uid="e7" not found. Take a new snapshot.'
+    ],
+    ['抛出的不是 Error', 'detached', 'detached']
+  ])(
+    'H2/H3 取不到坐标（%s）→ 业务错误原话带回，不发鼠标事件、不等',
+    async (_label, thrown, message) => {
+      vi.useFakeTimers()
+      const fake = fakeSession()
+      fake.ctl.resolveCoordinates.mockRejectedValue(thrown)
+      const out = await within(hoverOp(fake.session, 'e7'), 0)
+      expect(out).toEqual({ text: `Error: ${message}`, details: { error: message } })
+      expect(fake.commands).toEqual([])
+    }
+  )
+
+  it('H4 真控制器：解析句柄 → 滚进视口 → 取点 → 释放句柄，然后才发鼠标', async () => {
+    vi.useFakeTimers()
+    const commands: Command[] = []
+    const nodes: AXNode[] = [
+      {
+        nodeId: '1',
+        backendDOMNodeId: 1,
+        role: { type: 'role', value: 'RootWebArea' },
+        name: { type: 'computed', value: 'App' },
+        childIds: ['10']
+      },
+      {
+        nodeId: '10',
+        backendDOMNodeId: 10,
+        role: { type: 'role', value: 'button' },
+        name: { type: 'computed', value: 'Menu' }
+      }
+    ]
+    const send = async (method: string, params?: Params): Promise<unknown> => {
+      commands.push({ method, params })
+      switch (method) {
+        case 'Accessibility.getFullAXTree':
+          return { nodes }
+        case 'DOM.resolveNode':
+          return { object: { objectId: `o${String(params?.backendNodeId)}` } }
+        case 'Runtime.callFunctionOn':
+          return { result: { value: true } }
+        case 'DOM.getContentQuads':
+          return { quads: [[10, 10, 30, 10, 30, 30, 10, 30]] }
+        case 'Page.getLayoutMetrics':
+          return { cssLayoutViewport: { clientWidth: 800, clientHeight: 600 } }
+        default:
+          return {}
+      }
+    }
+    const ctl = new CdpController({
+      sendCommand: <T = unknown>(method: string, params?: Params): Promise<T> =>
+        send(method, params) as Promise<T>
+    })
+    await ctl.buildSnapshot('u')
+    commands.length = 0
+
+    const session = { controller: ctl, send } as unknown as TabCdpSession
+    const out = await within(hoverOp(session, 'e1'), 200)
+    expect(commands.map((c) => c.method)).toEqual([
+      'DOM.resolveNode',
+      'Runtime.callFunctionOn',
+      'DOM.scrollIntoViewIfNeeded',
+      'DOM.getContentQuads',
+      'Page.getLayoutMetrics',
+      'Runtime.releaseObject',
+      'Input.dispatchMouseEvent'
+    ])
+    expect(commands[2].params).toEqual({ backendNodeId: 10 })
+    expect(commands[5].params).toEqual({ objectId: 'o10' })
+    expect(commands[6].params).toEqual({ type: 'mouseMoved', x: 20, y: 20 })
+    expect(out.text).toBe(
+      'Hovering over button "Menu" (uid=e1). Take a snapshot to see what appeared (menu, tooltip, …).'
+    )
+  })
+})
+
+// ====== upload_file 的页面 ======
+
+interface UploadPage {
+  /** 找 input 那一步（callFunctionOn、returnByValue:false）的回包；Error = 命令失败 */
+  locate: Params | Error
+  /** 找到的 input 的 multiple */
+  multiple: unknown
+  describe: Params | Error
+  setFiles: Params | Error
+  releaseObject: Params | Error
+}
+
+/** 上传用的假 session：几条 Runtime / DOM 命令按 page 回包；命令与 ctl.release 都记进 timeline */
+function uploadSession(page: Partial<UploadPage> = {}): FakeSession {
+  const cfg: UploadPage = {
+    locate: { result: { type: 'object', subtype: 'node', objectId: 'input-1' } },
+    multiple: false,
+    describe: { node: { backendNodeId: 99, nodeName: 'INPUT' } },
+    setFiles: {},
+    releaseObject: {},
+    ...page
+  }
+  const answer = (value: Params | Error): Params => {
+    if (value instanceof Error) throw value
+    return value
+  }
+  const fake: FakeSession = fakeSession({
+    send: vi.fn(async (method: string, params?: Params) => {
+      fake.commands.push({ method, params })
+      fake.timeline.push(method)
+      switch (method) {
+        case 'Runtime.callFunctionOn':
+          return params?.returnByValue === false
+            ? answer(cfg.locate)
+            : { result: { type: 'boolean', value: cfg.multiple } }
+        case 'DOM.describeNode':
+          return answer(cfg.describe)
+        case 'DOM.setFileInputFiles':
+          return answer(cfg.setFiles)
+        case 'Runtime.releaseObject':
+          return answer(cfg.releaseObject)
+        default:
+          return {}
+      }
+    })
+  })
+  fake.ctl.release.mockImplementation(async () => {
+    fake.timeline.push('ctl.release')
+  })
+  return fake
+}
+
+const locateCmd = (fake: FakeSession): Command | undefined =>
+  fake.commands.find(
+    (c) => c.method === 'Runtime.callFunctionOn' && c.params?.returnByValue === false
+  )
+
+describe('uploadFileOp', () => {
+  it('U1 顺序：找 input（不按值取回）→ 查 multiple → describeNode → 按 input 的 backendNodeId 设文件 → 释放 input → 释放元素句柄', async () => {
+    const fake = uploadSession()
+    const out = await uploadFileOp(fake.session, 'e7', ['/tmp/a.txt'])
+    expect(out).toEqual({ text: 'Set 1 file(s) on button "Submit" (uid=e7): a.txt.' })
+    expect(fake.ctl.resolveElement.mock.calls).toEqual([['e7']])
+    expect(fake.commands).toEqual([
+      {
+        method: 'Runtime.callFunctionOn',
+        params: {
+          objectId: 'obj-7',
+          functionDeclaration: expect.stringContaining('input[type=file]'),
+          returnByValue: false
+        }
+      },
+      {
+        method: 'Runtime.callFunctionOn',
+        params: {
+          objectId: 'input-1',
+          functionDeclaration: expect.stringContaining('multiple'),
+          returnByValue: true
+        }
+      },
+      { method: 'DOM.describeNode', params: { objectId: 'input-1' } },
+      // 是 input 自己的节点（99），不是 uid 指向的那个 label / 按钮（7）
+      { method: 'DOM.setFileInputFiles', params: { files: ['/tmp/a.txt'], backendNodeId: 99 } },
+      { method: 'Runtime.releaseObject', params: { objectId: 'input-1' } }
+    ])
+    expect(fake.timeline.at(-1)).toBe('ctl.release')
+    expect(fake.ctl.release).toHaveBeenCalledTimes(1)
+    expect(fake.ctl.release.mock.calls[0][0]).toMatchObject({ uid: 'e7', objectId: 'obj-7' })
+  })
+
+  it('U2 multiple 的 input 一次设多个文件', async () => {
+    const fake = uploadSession({ multiple: true })
+    const out = await uploadFileOp(fake.session, 'e7', ['/tmp/a.txt', '/tmp/b.png'])
+    expect(out).toEqual({ text: 'Set 2 file(s) on button "Submit" (uid=e7): a.txt, b.png.' })
+    expect(sent(fake, cmd('DOM.setFileInputFiles')).map((c) => c.params)).toEqual([
+      { files: ['/tmp/a.txt', '/tmp/b.png'], backendNodeId: 99 }
+    ])
+  })
+
+  it.each<[string, unknown, string[], boolean]>([
+    ['不是 multiple、给了两个', false, ['/tmp/a.txt', '/tmp/b.txt'], false],
+    [
+      'multiple 读回不是 true（"true" 字符串）、给了两个',
+      'true',
+      ['/tmp/a.txt', '/tmp/b.txt'],
+      false
+    ],
+    ['不是 multiple、给了一个', false, ['/tmp/a.txt'], true]
+  ])('U3/U4 %s', async (_label, multiple, paths, ok) => {
+    const fake = uploadSession({ multiple })
+    const out = await uploadFileOp(fake.session, 'e7', paths)
+    if (ok) {
+      expect(out.details?.error).toBeUndefined()
+      expect(sent(fake, cmd('DOM.setFileInputFiles'))).toHaveLength(1)
+      return
+    }
+    const error = `button "Submit" (uid=e7) accepts a single file, but ${paths.length} were given.`
+    expect(out).toEqual({ text: `Error: ${error}`, details: { error } })
+    // 拒绝发生在任何不可逆的动作之前：没 describe、没设文件
+    expect(sent(fake, cmd('DOM.describeNode'))).toEqual([])
+    expect(sent(fake, cmd('DOM.setFileInputFiles'))).toEqual([])
+    expect(sent(fake, cmd('Runtime.releaseObject')).map((c) => c.params)).toEqual([
+      { objectId: 'input-1' }
+    ])
+    expect(fake.ctl.release).toHaveBeenCalledTimes(1)
+  })
+
+  it('U5 uid 指向的既不是文件 input、里面也没有唯一的一个 → 业务错误，句柄照样释放', async () => {
+    const fake = uploadSession({
+      locate: { result: { type: 'object', subtype: 'null', value: null } }
+    })
+    const out = await uploadFileOp(fake.session, 'e7', ['/tmp/a.txt'])
+    const error =
+      'button "Submit" (uid=e7) is not a file input, and it contains no single <input type=file> to set — pick the file input (or the label/button wrapping it) from the snapshot.'
+    expect(out).toEqual({ text: `Error: ${error}`, details: { error } })
+    expect(fake.commands.map((c) => c.method)).toEqual(['Runtime.callFunctionOn'])
+    expect(fake.ctl.release).toHaveBeenCalledTimes(1)
+  })
+
+  it.each<[string, Params, string]>([
+    [
+      '有 exception.description',
+      {
+        text: 'Uncaught',
+        exception: { description: 'TypeError: n.querySelectorAll is not a function' }
+      },
+      'Could not inspect button "Submit" (uid=e7): TypeError: n.querySelectorAll is not a function'
+    ],
+    ['只有 text', { text: 'Uncaught' }, 'Could not inspect button "Submit" (uid=e7): Uncaught']
+  ])(
+    'U5b 找 input 的页面函数抛错（%s）→ 业务错误，句柄照样释放',
+    async (_label, exceptionDetails, error) => {
+      const fake = uploadSession({ locate: { result: { type: 'undefined' }, exceptionDetails } })
+      const out = await uploadFileOp(fake.session, 'e7', ['/tmp/a.txt'])
+      expect(out).toEqual({ text: `Error: ${error}`, details: { error } })
+      expect(fake.commands.map((c) => c.method)).toEqual(['Runtime.callFunctionOn'])
+      expect(fake.ctl.release).toHaveBeenCalledTimes(1)
+    }
+  )
+
+  it.each<[string, Partial<UploadPage>, string]>([
+    [
+      'describeNode 失败、释放 input 也失败',
+      {
+        describe: new Error('Could not find node with given id'),
+        releaseObject: new Error('Cannot find context with specified id')
+      },
+      'Could not find node with given id'
+    ],
+    ['setFileInputFiles 失败', { setFiles: new Error('Not allowed') }, 'Not allowed']
+  ])('U6 %s → 原错误冒出（释放的失败被吞掉），两样都照样释放', async (_label, page, message) => {
+    const fake = uploadSession(page)
+    await expect(uploadFileOp(fake.session, 'e7', ['/tmp/a.txt'])).rejects.toThrow(message)
+    expect(sent(fake, cmd('Runtime.releaseObject')).map((c) => c.params)).toEqual([
+      { objectId: 'input-1' }
+    ])
+    expect(fake.ctl.release).toHaveBeenCalledTimes(1)
+  })
+
+  it('U6 只有释放 input 失败 → 吞掉，这次上传照常算成功', async () => {
+    const fake = uploadSession({
+      releaseObject: new Error('Cannot find context with specified id')
+    })
+    const out = await uploadFileOp(fake.session, 'e7', ['/tmp/a.txt'])
+    expect(out).toEqual({ text: 'Set 1 file(s) on button "Submit" (uid=e7): a.txt.' })
+    expect(fake.ctl.release).toHaveBeenCalledTimes(1)
+  })
+
+  it('U7 回显只列文件名（两种分隔符都认）；以分隔符结尾的整条原样', async () => {
+    const fake = uploadSession({ multiple: true })
+    const out = await uploadFileOp(fake.session, 'e7', [
+      'C:\\Users\\me\\r.pdf',
+      '/tmp/a.txt',
+      '/tmp/dir/'
+    ])
+    expect(out.text).toBe('Set 3 file(s) on button "Submit" (uid=e7): r.pdf, a.txt, /tmp/dir/.')
+    // 交给页面的是完整路径
+    expect(sent(fake, cmd('DOM.setFileInputFiles'))[0].params?.files).toEqual([
+      'C:\\Users\\me\\r.pdf',
+      '/tmp/a.txt',
+      '/tmp/dir/'
+    ])
+  })
+
+  it.each<[string, Partial<UploadPage>, string[]]>([
+    ['成功', {}, ['/tmp/a.txt']],
+    ['多文件被拒', {}, ['/tmp/a.txt', '/tmp/b.txt']],
+    ['describeNode 抛错', { describe: new Error('gone') }, ['/tmp/a.txt']]
+  ])('U10 每条出口（%s）都先释放 input、最后释放元素句柄', async (_label, page, paths) => {
+    const fake = uploadSession(page)
+    await uploadFileOp(fake.session, 'e7', paths).catch(() => {})
+    const release = fake.timeline.indexOf('Runtime.releaseObject')
+    expect(release).toBeGreaterThanOrEqual(0)
+    expect(release).toBeLessThan(fake.timeline.indexOf('ctl.release'))
+    expect(fake.timeline.at(-1)).toBe('ctl.release')
+    expect(locateCmd(fake)?.params?.objectId).toBe('obj-7')
   })
 })

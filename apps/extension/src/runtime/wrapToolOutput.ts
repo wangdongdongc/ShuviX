@@ -5,6 +5,7 @@
 import type { AgentTool } from '@earendil-works/pi-agent-core'
 import {
   processToolOutput,
+  type McpAgentToolMeta,
   type SecurityContext,
   type SpillSink,
   type TruncateStrategy
@@ -30,7 +31,10 @@ export function wrapToolOutput(
         toolName,
         operation: typeof rawAction === 'string' ? rawAction : undefined,
         abortError: 'TOOL_ABORTED',
-        onOther: 'return'
+        onOther: 'return',
+        // MCP 工具带着可判定的事实来（server / tool + 可信 server 的 annotations）——
+        // 与桌面同一口径，策略才写得出「浏览器的非只读动作要问」
+        mcp: (tool as Partial<McpAgentToolMeta>).mcpMeta
       })
       if (outcome.status === 'feedback') {
         return {

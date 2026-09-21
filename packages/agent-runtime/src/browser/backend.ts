@@ -2,10 +2,10 @@
  * BrowserBackend —— 统一浏览器自动化的后端契约（宿主无关）。
  *
  * 桌面（Electron 内嵌 WebContentsView 面板）与扩展（chrome.* 操作用户真实标签页）
- * 各自实现本接口；上层 multiplex `browser` 工具（tool.ts）只面向该契约分发。
- * 端差异用 BrowserCaps 表达：cap 为 false 的操作不出现在工具 schema / 手册里。
+ * 各自实现本接口；内置 browser MCP server（mcpServer.ts）只面向该契约分发。
+ * 端差异用 BrowserCaps 表达：cap 为 false 的工具 / 参数不出现在工具表与描述里。
  */
-/** 端能力开关：false 的 op / 参数不进 schema、description、help */
+/** 端能力开关：false 的工具 / 参数不进工具表、描述与 cdp_recipes */
 export interface BrowserCaps {
   /** 导出 PDF（桌面：printToPDF + 准入落盘；扩展无落盘语义） */
   pdf: boolean
@@ -23,17 +23,40 @@ export interface BrowserCaps {
   console: boolean
   /** 原生 CDP 逃生口（cdp / events action）；两端 CDP 传输均支持 → 恒 true */
   rawCdp: boolean
+  /**
+   * 给文件 input 设本地文件（upload_file）。桌面 true；扩展 false —— 它的工作区是 OPFS /
+   * 文件夹句柄，模型手里没有可以交给 DOM.setFileInputFiles 的本机路径。
+   */
+  upload: boolean
 }
 
+/** pdf 认得的纸张（Chromium printToPDF 的命名尺寸）；server 在过写路径门之前就校验 */
+export const PDF_PAGE_SIZES = [
+  'A0',
+  'A1',
+  'A2',
+  'A3',
+  'A4',
+  'A5',
+  'A6',
+  'Legal',
+  'Letter',
+  'Tabloid',
+  'Ledger'
+] as const
+export type PdfPageSize = (typeof PDF_PAGE_SIZES)[number]
+/** pdf 的 scale 范围（printToPDF 超出即抛错） */
+export const PDF_SCALE_RANGE = { min: 0.1, max: 2 } as const
+
 /**
- * backend 方法的统一返回。tool.ts 负责包成 AgentToolResult<BrowserToolDetails>。
+ * backend 方法的统一返回。mcpServer.ts 负责包成 MCP 的工具结果。
  * details.error 置位 = 业务失败（不抛错，让 agent 读到错误信息后改道）。
  */
 export interface BrowserOpOutput {
   text?: string
   /** 内联图片（扩展 screenshot）；桌面截图落盘只回 text 路径 */
   images?: Array<{ data: string; mimeType: string }>
-  /** 合并进 BrowserToolDetails 的附加字段（url / elementCount / error 等） */
+  /** 附加字段（url / elementCount / error 等）；error 置位 = 这次没做成 */
   details?: Record<string, unknown>
 }
 
@@ -43,12 +66,21 @@ export type ScrollDirection = 'up' | 'down' | 'left' | 'right'
 export interface BrowserBackend {
   readonly caps: BrowserCaps
   listTabs(): Promise<BrowserOpOutput>
+  /**
+   * 这个 tab 此刻显示的地址（没有这个 tab → undefined）。**无副作用**：不激活、不 attach。
+   * server 用它把「在一个显示本地文件的 tab 上做任何事」都当成读那个文件 —— 页面自己导航过去的
+   * （点了链接、被 evaluate 改了 location）也逃不过路径门。宿主不实现 = 不做这层检查。
+   */
+  tabUrl?(p: { tabId: string }): Promise<string | undefined>
   /** 新标签页打开 URL，回显新 tabId */
   openTab(p: { url: string }): Promise<BrowserOpOutput>
   closeTab(p: { tabId: string }): Promise<BrowserOpOutput>
   navigate(p: { tabId: string; nav: NavKind; url?: string }): Promise<BrowserOpOutput>
-  /** full=true 时强制回全量；否则由 backend 决定是否回差异（见 cdp/snapshotDiff.ts） */
-  snapshot(p: { tabId: string; full?: boolean }): Promise<BrowserOpOutput>
+  /**
+   * full=true 时强制回全量；否则由 backend 决定是否回差异（见 cdp/snapshotDiff.ts）。
+   * viewer：看这份快照的是谁（调用方 agent）—— 差异的基线按它分开存。
+   */
+  snapshot(p: { tabId: string; full?: boolean; viewer?: string }): Promise<BrowserOpOutput>
   readPage(p: { tabId: string }): Promise<BrowserOpOutput>
   screenshot(p: { tabId: string; fullPage?: boolean; uid?: string }): Promise<BrowserOpOutput>
   click(p: { tabId: string; uid: string }): Promise<BrowserOpOutput>
@@ -60,6 +92,8 @@ export interface BrowserBackend {
     submitKey?: string
   }): Promise<BrowserOpOutput>
   pressKey(p: { tabId: string; key: string }): Promise<BrowserOpOutput>
+  /** 鼠标移到元素上（菜单 / tooltip） */
+  hover(p: { tabId: string; uid: string }): Promise<BrowserOpOutput>
   scroll(p: {
     tabId: string
     direction?: ScrollDirection
@@ -90,10 +124,13 @@ export interface BrowserBackend {
     sinceSeq?: number
     limit?: number
   }): Promise<BrowserOpOutput>
+  /** 给文件 input 设文件；paths 已是过了安全门的绝对路径（cap: upload） */
+  uploadFile?(p: { tabId: string; uid: string; paths: string[] }): Promise<BrowserOpOutput>
+  /** outputPath 已过写路径门；pageSize / scale 已由 server 校验（见 PDF_PAGE_SIZES） */
   pdf?(p: {
     tabId: string
     outputPath: string
-    pageSize?: string
+    pageSize?: PdfPageSize
     landscape?: boolean
     scale?: number
   }): Promise<BrowserOpOutput>

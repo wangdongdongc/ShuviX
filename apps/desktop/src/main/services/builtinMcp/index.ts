@@ -6,13 +6,15 @@
  *
  * 新增一台内置能力服务器 = 这里加一行 + 一条种子迁移。
  */
-import type { BuiltinMcpFactory } from '@shuvix/agent-runtime'
+import { BROWSER_MCP_SERVER_NAME, type BuiltinMcpFactory } from '@shuvix/agent-runtime'
 import type { DesktopBuiltinMcpScope } from './types'
 import { createSshMcpServerFactory } from './sshServer'
+import { createDesktopBrowserMcpServerFactory } from './browserServer'
 
-/** 键就是 `mcp_servers.name`，也是工具名前缀（`mcp__ssh__list-hosts`） */
+/** 键就是 `mcp_servers.name`，也是工具名前缀（`mcp__ssh__list-hosts`、`mcp__browser__click`） */
 export const BUILTIN_MCP_FACTORIES: Record<string, BuiltinMcpFactory<DesktopBuiltinMcpScope>> = {
-  ssh: createSshMcpServerFactory()
+  ssh: createSshMcpServerFactory(),
+  [BROWSER_MCP_SERVER_NAME]: createDesktopBrowserMcpServerFactory()
 }
 
 export { listSshHosts, defaultSshConfigPath, type SshHostEntry } from './sshConfig'

@@ -13,6 +13,7 @@
  *   直接在下方 EXTRA_SUMMARY_BUILDERS 按工具名补充。
  */
 import { BUILTIN_TOOL_PRESENTATIONS } from './builtinToolPresentations'
+import { builtinMcpToolSummary } from './builtinMcpPresentations'
 import { asStr, field, fileField } from './toolSummaryHelpers'
 
 /** 根据工具调用 args 生成折叠态摘要文本；返回 undefined 表示无摘要 */
@@ -32,7 +33,7 @@ const EXTRA_SUMMARY_BUILDERS: Record<string, ToolSummaryBuilder> = {
   glob: field('pattern'),
   grep: field('pattern'),
   skill: field('name'),
-  // ── 统一 browser 工具（桌面 + 扩展）：action + 该 action 最有信息量的参数 ──
+  // ── 旧 multiplex browser 工具（已改为内置 MCP server，见 builtinMcpPresentations；保留供历史会话展示）──
   // method 是 cdp/events 的主参数（如 "Fetch.enable"）：折叠态必须露出，用户才看得见原生协议调用
   browser: (args) => {
     const detail =
@@ -67,15 +68,19 @@ export const TOOL_SUMMARY_BUILDERS: Record<string, ToolSummaryBuilder> = {
   ...EXTRA_SUMMARY_BUILDERS
 }
 
-/** 生成工具折叠态摘要；无注册函数、函数返回空或抛错时返回 undefined */
+/**
+ * 生成工具折叠态摘要；无注册函数、函数返回空或抛错时返回 undefined。
+ * 表里没有的名字再试内置 MCP 能力服务器（`mcp__browser__*` / `mcp__ssh__*`）—— 它们按前缀认，
+ * 不逐个登记工具名。
+ */
 export function buildToolSummary(
   toolName: string,
   args?: Record<string, unknown>
 ): string | undefined {
+  if (!args) return undefined
   const builder = TOOL_SUMMARY_BUILDERS[toolName]
-  if (!builder || !args) return undefined
   try {
-    return builder(args) || undefined
+    return (builder ? builder(args) : builtinMcpToolSummary(toolName, args)) || undefined
   } catch {
     return undefined
   }

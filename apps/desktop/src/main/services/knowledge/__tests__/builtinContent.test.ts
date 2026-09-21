@@ -278,4 +278,68 @@ describe.each(LANGS)('BK 内置知识库 · %s', (lang) => {
     expect(declaring.length, '语料自检：应当有档案点了作图技能').toBeGreaterThan(0)
     expect([...new Set(named)].sort()).toEqual([...declaring].sort())
   })
+
+  /**
+   * BK-15 / BK-16 —— 浏览器与 ssh 改成按会话勾选的内置 MCP 能力服务器（`mcp:browser` / `mcp:ssh`）之后，
+   * 说明书里跟着变的两处事实：agent-md.md 里「内置工具名」那一条不再列 `browser` / `ssh`、并点名两台
+   * 内置 server；bot-md.md 抄的 bot 基座工具清单与 bot 档案的 shuvix-tools 一致、并说明两台 server
+   * 都没被声明（用户仍可在会话里勾上）。
+   */
+  /** 列表项：`- ` 开头的一行 + 其后缩进的续行（续行之外的段落不算这一条） */
+  const bulletsOf = (body: string): string[] => {
+    const out: string[] = []
+    let current: string[] | null = null
+    for (const line of body.split('\n')) {
+      if (line.startsWith('- ')) {
+        if (current) out.push(current.join('\n'))
+        current = [line]
+      } else if (current && /^ {2,}\S/.test(line)) {
+        current.push(line)
+      } else {
+        if (current) out.push(current.join('\n'))
+        current = null
+      }
+    }
+    if (current) out.push(current.join('\n'))
+    return out
+  }
+  /** 现役的内置工具名（agent md 里能写的那一批；`agent` 是派发开关，单独一条） */
+  const BUILTIN_TOOL_NAMES = [
+    'bash',
+    'read',
+    'write',
+    'edit',
+    'ls',
+    'glob',
+    'grep',
+    'ask',
+    'database',
+    'git',
+    'session',
+    'knowledge',
+    'artifact'
+  ]
+
+  it('BK-15 agent-md.md「内置工具名」那一条列的恰是现役内置工具（没有 browser / ssh），全文点名 mcp:browser 与 mcp:ssh', () => {
+    const body = conceptOf('agent-md.md').body
+    const toolBullets = bulletsOf(body).filter((b) => b.includes('`bash`'))
+    expect(toolBullets, '应当恰有一条列表项列出内置工具名').toHaveLength(1)
+    const names = [...toolBullets[0].matchAll(/`([^`]+)`/g)].map((m) => m[1])
+    expect([...new Set(names)].sort()).toEqual([...BUILTIN_TOOL_NAMES].sort())
+    expect(body).toContain('`mcp:browser`')
+    expect(body).toContain('`mcp:ssh`')
+  })
+
+  it('BK-16 bot-md.md 抄的 bot 基座工具清单 = 同语言 bot 档案的 shuvix-tools（按集合比），并点名 mcp:ssh 与 mcp:browser', () => {
+    const body = conceptOf('bot-md.md').body
+    const match = /`(read,[^`]*)`/.exec(body)
+    expect(match, '正文里找不到以 `read,` 开头的清单').not.toBeNull()
+    // 清单在正文里会折行：空白一律压成一个空格再按「, 」切
+    const listed = match![1].replace(/\s+/g, ' ').trim().split(', ')
+    const bot = profilesOf().find((p) => p.name === 'bot')
+    expect(bot, `bot.${lang} 应当存在`).toBeDefined()
+    expect([...new Set(listed)].sort()).toEqual([...new Set(bot!.tools)].sort())
+    expect(body).toContain('`mcp:ssh`')
+    expect(body).toContain('`mcp:browser`')
+  })
 })

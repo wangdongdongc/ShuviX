@@ -30,7 +30,7 @@
 import { describe, it, expect } from 'vitest'
 import { buildBuiltinProfile } from '../spec'
 import { createInlineMdReader } from '../inlineSources'
-import { BOT_SPEC, CODING_SPEC, EXPLORE_SPEC, WORK_SPEC } from '../index'
+import { BUILTIN_PROFILE_SPECS, CODING_SPEC, EXPLORE_SPEC } from '../index'
 import type { BuiltinProfileSpec } from '../spec'
 import type { AgentProfile } from '../../types'
 
@@ -52,8 +52,11 @@ describe('派发清单点名了哪些 agent', () => {
   it.each(LANGS)(
     '%s：没有档案再点名 browser 子代理 —— 它已被移除，派过去只会撞上「名字不存在」',
     (language) => {
-      // 浏览器改成了按会话勾选的内置 MCP 能力（mcp:browser），不再有专门的 browser 子代理
-      for (const spec of [WORK_SPEC, CODING_SPEC, BOT_SPEC]) {
+      // 浏览器改成了按会话勾选的内置 MCP 能力（mcp:browser），不再有专门的 browser 子代理。
+      // 查**全部**内置档案，而不只是会派发的那几份：explore / widget / notebook 的正文同样会被
+      // 模型当成「还有这么个 agent」来读，新加一份档案也自动进这一圈
+      expect(BUILTIN_PROFILE_SPECS.length).toBeGreaterThanOrEqual(9)
+      for (const spec of BUILTIN_PROFILE_SPECS) {
         expect(
           build(spec, language).systemPrompt,
           `${spec.name}.${language} 仍点名 **browser**`

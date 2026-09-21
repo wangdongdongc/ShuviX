@@ -19,10 +19,10 @@ const BLOCKED_DOMAINS: Record<string, string> = {
 
 /** 域内点名拒绝的方法（域本身可用） */
 const BLOCKED_METHODS: Record<string, string> = {
-  'Page.close': 'closes the tab out-of-band — use the close_tab action instead',
+  'Page.close': 'closes the tab out-of-band — use close_tab instead',
   'Page.crash': 'intentionally crashing the page is not allowed',
   'Security.setIgnoreCertificateErrors': 'certificate trust is a user-level setting',
-  'Network.setUserAgentOverride': 'use Emulation.setUserAgentOverride (gated) instead'
+  'Network.setUserAgentOverride': 'use Emulation.setUserAgentOverride instead'
 }
 
 /** 已知域（未列出的域一律 blocked——fail-safe） */

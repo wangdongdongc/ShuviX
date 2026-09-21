@@ -128,6 +128,9 @@ vi.mock('../../toolContext', async () => {
   }
 })
 vi.mock('../../../utils/paths', () => ({ buildSpawnEnv: () => ({}) }))
+// 工厂表（../index）同时登记了 browser —— 它的桌面接线会拉进 Electron 的浏览器面板模块，
+// 这份测试只关心 ssh，也只核对工厂表的键，所以换成一个空工厂
+vi.mock('../browserServer', () => ({ createDesktopBrowserMcpServerFactory: () => () => undefined }))
 
 /**
  * 连接层是假的 —— 这一组问的是 server 的判断，不是 ssh 的行为。
@@ -232,6 +235,7 @@ import { BUILTIN_MCP_FACTORIES } from '../index'
 import { createSshMcpServerFactory } from '../sshServer'
 import { rsyncAvailable } from '../sshControl'
 import { createInlinePolicyMdReader } from '@shuvix/agent-runtime/security/builtinPolicies/inlineSources'
+import { BUILTIN_MCP_PRESENTATIONS } from '@shuvix/chat-protocol/builtinMcpPresentations'
 
 /** 内置策略 md 的构建期内联读取口（真实装配链要它；测试进程，不进桌面 bundle） */
 const INLINE_POLICY_MD = createInlinePolicyMdReader()
@@ -359,14 +363,11 @@ describe('ssh 内置服务器的工具声明', () => {
     // 旧版这条用例把期望值**从实现读的同一个缓存里算出来**（`await rsyncAvailable()`），
     // 于是 sync 一行都不声明它也照样绿 —— 两个分支都得把清单逐字写下来才算断言
     control.rsync = true
-    expect((await (await open()).client.listTools()).tools.map((t) => t.name)).toEqual([
-      'list-hosts',
-      'exec',
-      'upload',
-      'download',
-      'sync',
-      'disconnect'
-    ])
+    const full = (await (await open()).client.listTools()).tools.map((t) => t.name)
+    expect(full).toEqual(['list-hosts', 'exec', 'upload', 'download', 'sync', 'disconnect'])
+    // 界面那边的防冒名白名单（builtinMcpPresentations 的 ssh.toolNames）必须就是这份全集 ——
+    // 名单漏一个，那个工具就在界面上丢了图标、标签、折叠摘要（exec 还丢了终端形态）
+    expect([...BUILTIN_MCP_PRESENTATIONS.ssh.toolNames].sort()).toEqual([...full].sort())
 
     // 声明一个跑不起来的工具，只会让模型在上面反复撞墙（Windows 没有 rsync，
     // macOS 15 起换成了选项不全的 openrsync）
@@ -2010,28 +2011,32 @@ describe('ssh 内置服务器传输结果的翻译', () => {
 // ─── 装配期对账 ──────────────────────────────────────────────────────────
 
 describe('内置能力服务器的清单', () => {
-  it('SSHS-U-41: 工厂表的键与迁移 v22 种下的行同名（今天恰好只有 ssh）', () => {
+  it('SSHS-U-41: 工厂表的键与迁移种下的内置行同名（v22 种 ssh，v27 种 browser）', () => {
     // 两边对不上 = 会话里勾了这台服务器、建连时 registry 抛「No builtin MCP server registered」。
-    // 新增一台内置能力服务器 = 工厂表加一行 + 一条种子迁移，这条用例就是那对括号
-    const seeded: string[] = []
+    // 新增一台内置能力服务器 = 工厂表加一行 + 一条种子迁移，这条用例就是那对括号。
+    // v22 把名字写死在 SQL 里，v27 用绑定参数（(id, name, createdAt, updatedAt)）—— 两种都认
+    const seeded = new Set<string>()
     const db = {
       prepare: (sql: string) => ({
-        run: (): void => {
-          const m =
-            /INSERT[\s\S]*INTO\s+mcp_servers[\s\S]*VALUES\s*\(\s*\?\s*,\s*'([^']+)'\s*,\s*'inproc'/i.exec(
-              sql
-            )
-          if (m) seeded.push(m[1])
+        // v27 先查「内置行在不在 / 名字有没有被占」：空库，一律没有
+        get: (): undefined => undefined,
+        run: (...args: unknown[]): void => {
+          if (!/INSERT[\s\S]*INTO\s+mcp_servers/i.test(sql) || !/'inproc'/.test(sql)) return
+          const literal = /VALUES\s*\(\s*\?\s*,\s*'([^']+)'\s*,\s*'inproc'/i.exec(sql)
+          const name = literal ? literal[1] : args[1]
+          if (typeof name === 'string') seeded.add(name)
         }
       }),
       exec: (): void => {}
     }
 
-    const v22 = migrations.find((m) => m.version === 22)
-    expect(v22, '迁移 v22 应当存在（内置能力服务器的种子）').toBeDefined()
-    v22!.up(db as unknown as Parameters<(typeof migrations)[number]['up']>[0])
+    for (const version of [22, 27]) {
+      const m = migrations.find((x) => x.version === version)
+      expect(m, `迁移 v${version} 应当存在（内置能力服务器的种子）`).toBeDefined()
+      m!.up(db as unknown as Parameters<(typeof migrations)[number]['up']>[0])
+    }
 
-    expect(seeded).toEqual(['ssh'])
-    expect(Object.keys(BUILTIN_MCP_FACTORIES)).toEqual(seeded)
+    expect([...seeded].sort()).toEqual(['browser', 'ssh'])
+    expect(Object.keys(BUILTIN_MCP_FACTORIES).sort()).toEqual([...seeded].sort())
   })
 })

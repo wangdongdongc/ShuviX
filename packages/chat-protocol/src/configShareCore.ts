@@ -65,8 +65,16 @@ export function parseConfigSharePayload(encoded: string): ConfigSharePayload {
 export interface ConfigImportLookups {
   /** 按名查本端 provider（不存在返回 undefined） */
   findProvider: (name: string) => { isBuiltin: boolean } | undefined
-  /** 按名查本端 mcp server（不存在返回 undefined） */
-  findMcp: (name: string) => { isBuiltin: boolean } | undefined
+  /** 按名查本端 mcp server（不存在返回 undefined）；inproc = 进程内的内置能力服务器 */
+  findMcp: (name: string) => { isBuiltin: boolean; inproc?: boolean } | undefined
+}
+
+/**
+ * 本端同名的内置能力服务器（inproc）没有任何可导入的东西 —— 两端导入时抛出的同一句话。
+ * 预览里对应的动作是 skipBuiltin。
+ */
+export function builtinNothingToImport(name: string): string {
+  return `"${name}" is a built-in server here and has nothing to import — skipped`
 }
 
 function hasAnyValue(record: Record<string, string>): boolean {
@@ -75,7 +83,7 @@ function hasAnyValue(record: Record<string, string>): boolean {
 
 /**
  * 预计算每一项将执行的动作（纯函数，语义见 ImportPlan 注释）。
- * 桌面与扩展共用此判定，保证两端「create/overwrite/mergeBuiltin/skipMissingBuiltin」一致。
+ * 桌面与扩展共用此判定，保证两端「create/overwrite/mergeBuiltin/skipMissingBuiltin/skipBuiltin」一致。
  */
 export function planConfigImport(
   payload: ConfigSharePayload,
@@ -101,8 +109,11 @@ export function planConfigImport(
 
   const mcpServers: ImportPlan['mcpServers'] = (payload.mcpServers ?? []).map((s) => {
     const existing = lookups.findMcp(s.name)
-    let action: 'create' | 'overwrite' | 'mergeBuiltin' | 'skipMissingBuiltin'
-    if (s.isBuiltin) {
+    let action: 'create' | 'overwrite' | 'mergeBuiltin' | 'skipMissingBuiltin' | 'skipBuiltin'
+    if (existing?.isBuiltin && existing.inproc) {
+      // 进程内的内置能力服务器：没有可合并的 env，也不该被导入顺手重新启用
+      action = 'skipBuiltin'
+    } else if (s.isBuiltin) {
       action = existing?.isBuiltin ? 'mergeBuiltin' : 'skipMissingBuiltin'
     } else if (existing?.isBuiltin) {
       action = 'mergeBuiltin'

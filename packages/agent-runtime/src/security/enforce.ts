@@ -34,6 +34,7 @@ function summarizeObject(request: SecurityRequest): string {
   if (typeof object.path === 'string') return object.path
   if (typeof object.command === 'string') return object.command.slice(0, 200)
   if (typeof object.sql === 'string') return object.sql.slice(0, 200)
+  if (typeof object.url === 'string') return object.url.slice(0, 200)
   if (object.type === 'invocation') {
     const tool = request.tool
     if (!tool) return 'invocation'
@@ -48,6 +49,7 @@ function displayName(request: SecurityRequest, opts: EnforceOpts): string {
   if (object.type === 'path') return opts.displayPath ?? String(object.path ?? '')
   if (typeof object.command === 'string') return object.command
   if (typeof object.sql === 'string') return object.sql
+  if (typeof object.url === 'string') return object.url
   return summarizeObject(request)
 }
 
@@ -58,6 +60,8 @@ function deniedMessage(request: SecurityRequest, display: string): string {
       return `User denied access to ${display}`
     case 'command':
       return 'User denied execution of this command'
+    case 'url':
+      return `User denied opening ${display}`
     default:
       return `User denied ${display}`
   }

@@ -130,6 +130,7 @@ function buildAskMaterials(
     }
   }
   if (typeof object.sql === 'string') return { command: object.sql }
+  if (typeof object.url === 'string') return { command: object.url }
   const tool = request.tool
   if (tool) return { command: tool.operation ? `${tool.name}: ${tool.operation}` : tool.name }
   return { command: object.type }

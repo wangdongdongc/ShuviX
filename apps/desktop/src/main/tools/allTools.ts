@@ -10,7 +10,7 @@ import './read'
 import './write'
 import './edit'
 import './ask'
-import './browser'
+// browser 不在这里：它是按会话勾选的内置 MCP 能力服务器（services/builtinMcp/browserServer.ts）
 // git 工具（isomorphic-git 跨端实现）：不在内置 default 档案清单 —— 主 Agent 默认无、
 // 用户可覆盖 default.md 加入；子代理按自己档案的白名单解析，不受默认集限制
 import './git'

@@ -744,3 +744,106 @@ describe('executeDecision — database 客体文案', () => {
     )
   })
 })
+
+describe('executeDecision — url 客体文案', () => {
+  // 日志摘要截断 200 字符，但给用户 / AI 的文案与询问卡片取地址原文（用超长地址对照）
+  const LONG_URL = `https://a.example/search?q=${'x'.repeat(300)}`
+  const urlObject = (url: string): SecurityObject => ({
+    type: 'url',
+    url,
+    scheme: 'https',
+    host: 'a.example',
+    origin: 'https://a.example'
+  })
+  const urlRequest = (url = LONG_URL): SecurityRequest =>
+    makeRequest({ action: 'navigate', object: urlObject(url) })
+  const OPEN = { toolName: 'mcp__browser__open_tab' }
+
+  it('EN-16 日志：objectKind=url；长地址摘要截断 200 字符，短地址原样', async () => {
+    for (const url of [LONG_URL, 'https://a.example/']) {
+      await executeDecision({
+        provider: makeProvider(),
+        request: urlRequest(url),
+        decision: ALLOW,
+        opts: makeOpts(OPEN),
+        evaluateMs: 0
+      })
+    }
+    const logs = getSessionDecisions(SID)
+    // 新→旧：logs[0] 是短地址，logs[1] 是长地址
+    expect(logs.map((l) => [l.action, l.objectKind])).toEqual([
+      ['navigate', 'url'],
+      ['navigate', 'url']
+    ])
+    expect(logs[0].objectSummary).toBe('https://a.example/')
+    expect(logs[1].objectSummary).toBe(LONG_URL.slice(0, 200))
+    expect(logs[1].objectSummary).toHaveLength(200)
+  })
+
+  it('EN-17 拒绝 → User denied opening <地址原文>；无询问通道 → needs confirmation … <地址原文>；无 reason 的 deny → Access denied: <地址原文>', async () => {
+    const denied = await rejectionMessage(
+      executeDecision({
+        provider: askProvider({ kind: 'ask', allowed: false }).provider,
+        request: urlRequest(),
+        decision: askDecision({ command: LONG_URL }),
+        opts: makeOpts(OPEN),
+        evaluateMs: 0
+      })
+    )
+    expect(denied).toBe(`User denied opening ${LONG_URL}`)
+
+    const noChannel = await rejectionMessage(
+      executeDecision({
+        provider: makeProvider(),
+        request: urlRequest(),
+        decision: askDecision({ command: LONG_URL }),
+        opts: makeOpts(OPEN),
+        evaluateMs: 0
+      })
+    )
+    expect(noChannel).toBe(
+      `Access denied: this needs your confirmation but there is no way to ask: ${LONG_URL}`
+    )
+
+    const policyDeny = await rejectionMessage(
+      executeDecision({
+        provider: makeProvider(),
+        request: urlRequest(),
+        decision: denyDecision(),
+        opts: makeOpts(OPEN),
+        evaluateMs: 0
+      })
+    )
+    expect(policyDeny).toBe(`Access denied: ${LONG_URL}`)
+
+    const feedback = await rejectionMessage(
+      executeDecision({
+        provider: askProvider({ kind: 'other', text: 'skip it' }).provider,
+        request: urlRequest(),
+        decision: askDecision({ command: LONG_URL }),
+        opts: makeOpts({ ...OPEN, onOther: 'throw' }),
+        evaluateMs: 0
+      })
+    )
+    expect(feedback).toBe(`User declined ${LONG_URL} and provided feedback instead: skip it`)
+  })
+
+  it('EN-18 询问卡片：决策没带材料时 command 回落到地址原文（不截断）', async () => {
+    const { provider, requestUserInput } = askProvider({ kind: 'ask', allowed: true })
+    await executeDecision({
+      provider,
+      request: urlRequest(),
+      decision: askDecision(),
+      opts: makeOpts({ ...OPEN, description: 'Open it' }),
+      evaluateMs: 0
+    })
+    expect(requestUserInput).toHaveBeenCalledTimes(1)
+    expect(requestUserInput.mock.calls[0][0]).toMatchObject({
+      kind: 'ask',
+      toolName: 'mcp__browser__open_tab',
+      command: LONG_URL,
+      description: 'Open it',
+      pathIsDirectory: false
+    })
+  })
+})

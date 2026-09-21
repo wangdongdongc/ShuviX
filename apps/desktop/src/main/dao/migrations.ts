@@ -646,6 +646,44 @@ export const migrations: Migration[] = [
           ON session_day_prompts(sessionId, day);
       `)
     }
+  },
+  {
+    version: 27,
+    description:
+      '种子内置能力服务器 browser（inproc MCP，会话默认不勾）；内置名被自定义 server 占着时让位',
+    up: (db) => {
+      // browser 从内置工具改成内置能力服务器：与 v22 的 ssh 同一个形状 —— 全局启用、整行只读，
+      // 真正的「默认关」在会话那一层（settings.enabledTools 缺省为空，不勾就没有浏览器）。
+      //
+      // **撞名要先让位**。mcp_servers.name 是 UNIQUE，而 v22 用的是 INSERT OR IGNORE：已经装了
+      // 一台叫 `ssh` 的自定义 server 的用户，内置 ssh 从来没种上，也没有任何提示。browser 撞名的
+      // 概率更高（有人会把 Playwright MCP 起名叫 browser）。所以两台一起处理：内置行缺失、名字
+      // 却被别的行占着 → 把那一行改名为 `<name>-custom`（再撞就加序号），然后种内置行。
+      // 会话里既有的 `mcp:<name>` 勾选从此指向内置的那台 —— 「这个会话要一个浏览器 / ssh」，
+      // 意图不变；改名后的自定义 server 仍在，用户想用可以重新勾。
+      const now = Date.now()
+      const hasId = db.prepare('SELECT 1 FROM mcp_servers WHERE id = ?')
+      const holderOf = db.prepare('SELECT id FROM mcp_servers WHERE name = ?')
+      const rename = db.prepare('UPDATE mcp_servers SET name = ?, updatedAt = ? WHERE id = ?')
+      const insert = db.prepare(
+        `INSERT INTO mcp_servers
+           (id, name, type, command, args, env, url, headers, metadata, isEnabled, isBuiltin, cachedTools, createdAt, updatedAt)
+         VALUES (?, ?, 'inproc', '', '[]', '{}', '', '{}', '{}', 1, 1, '[]', ?, ?)`
+      )
+      for (const { id, name } of [
+        { id: 'builtin-mcp-ssh', name: 'ssh' },
+        { id: 'builtin-mcp-browser', name: 'browser' }
+      ]) {
+        if (hasId.get(id)) continue
+        const occupant = holderOf.get(name) as { id: string } | undefined
+        if (occupant) {
+          let freeName = `${name}-custom`
+          for (let n = 2; holderOf.get(freeName); n++) freeName = `${name}-custom-${n}`
+          rename.run(freeName, now, occupant.id)
+        }
+        insert.run(id, name, now, now)
+      }
+    }
   }
 ]
 

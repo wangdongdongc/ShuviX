@@ -123,6 +123,8 @@ export type AttrValue = AttrScalar | string[] | Record<string, AttrScalar | stri
  *                                                           惰性求值，见 commandFacts.ts）
  *   { type:'gitTool', gitAction, command, force, delete }   内置 git 工具操作
  *   { type:'database', sql, credential, dbType, readonly }  远程库查询（readonly = 连接模式）
+ *   { type:'url', url, scheme, host, origin }               浏览器导航目标（action 'navigate'；
+ *                                                           file:// 不走这里，按读那个路径处理）
  * 未来扩展（url / mcp…）：PEP 上报新 type + 属性即可，引擎零改动。
  */
 export type SecurityObject = { type: string } & Record<string, AttrValue | undefined>
@@ -458,6 +460,24 @@ export interface DatabaseObjectInput {
   readonly: boolean
 }
 
+/**
+ * enforceUrl 的入参（对应 {type:'url'} 客体的属性）—— 浏览器要打开的地址。
+ *
+ * 属性拆好了给：策略写 `object.host.endsWith('.example.com')` 比在 CEL 里解析 URL 可靠得多。
+ * **file:// 不该走这里**：打开一个本地文件就是读它，宿主应当改走 enforcePath('read') ——
+ * 那样 ask-on-read / protect-credentials 这些现成的路径策略自动生效，不必为 URL 再写一套。
+ */
+export interface UrlObjectInput {
+  /** 原始地址（询问卡片展示 + 策略可 matches() 匹配） */
+  url: string
+  /** 协议名，不带冒号：'https' / 'http' / 'data' / 'javascript' … */
+  scheme: string
+  /** 主机名（无端口）；没有主机的协议为空串 */
+  host: string
+  /** `scheme://host:port`；没有意义的协议为 'null'（与 URL.origin 一致） */
+  origin: string
+}
+
 /** PEP 门面 —— 各工具调用点唯一入口（见 context.ts） */
 export interface SecurityContext {
   /** 评估（不执行、不弹窗、不记日志）。includeForceAllow 缺省 true。 */
@@ -491,6 +511,12 @@ export interface SecurityContext {
    * 只读连接放行）。'other' 反馈按 onOther 返回 feedback 结果，同 enforceCommand。
    */
   enforceDatabase(object: DatabaseObjectInput, opts: EnforceOpts): Promise<EnforceOutcome>
+  /**
+   * 浏览器导航守卫（内置 browser server 的 open_tab / navigate / cdp Page.navigate）：
+   * 客体 = `{type:'url'}`，action = 'navigate'。出厂**没有**任何 url 策略（no policy = allow），
+   * 这道门的意义是让用户能写「某个域名要问 / 禁止」。拒绝 / 取消 / 反馈时抛错，同 enforcePath。
+   */
+  enforceUrl(object: UrlObjectInput, opts: EnforceOpts): Promise<void>
   /**
    * L1 全工具门守卫（wrapToolOutput 咽喉）：客体 = `{type:'invocation'}`（调用本身），
    * 工具名/动作走 request.tool 维度（取自 opts.toolName / opts.operation）。

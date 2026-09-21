@@ -106,6 +106,8 @@ export function McpServerDialog({
   const [url, setUrl] = useState(initial?.url ?? '')
   const [headersText, setHeadersText] = useState(initial?.headersText ?? '')
   const [saving, setSaving] = useState(false)
+  /** 宿主拒绝保存时的原因（名字已被占用 …）—— 显示在按钮上方，对话框不关 */
+  const [saveError, setSaveError] = useState<string | null>(null)
 
   useEffect(() => {
     const handler = (e: KeyboardEvent): void => {
@@ -130,6 +132,7 @@ export function McpServerDialog({
   const handleSave = async (): Promise<void> => {
     if (!valid) return
     setSaving(true)
+    setSaveError(null)
     try {
       const envObject = pairsToObject(envPairs)
       const allEnvFilled =
@@ -146,6 +149,8 @@ export function McpServerDialog({
         autoEnableBuiltin: isBuiltin && !initial?.isEnabled && allEnvFilled
       })
       handleClose()
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : String(err))
     } finally {
       setSaving(false)
     }
@@ -326,6 +331,15 @@ export function McpServerDialog({
             )}
           </SettingsSection>
         </div>
+
+        {saveError && (
+          <div
+            className="px-5 py-2 text-[11px] text-red-400 border-t border-border-secondary"
+            data-mcp-dialog-error
+          >
+            {saveError}
+          </div>
+        )}
 
         {/* 按钮 */}
         <div className="flex justify-end gap-2 px-5 py-3 border-t border-border-secondary shrink-0">

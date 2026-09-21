@@ -40,6 +40,10 @@ import {
   type FormItemRenderer
 } from '../../stores/chatStore'
 import { buildToolSummary } from '@shuvix/chat-protocol/toolSummaries'
+import {
+  fallbackToolPresentation,
+  parseBuiltinMcpToolName
+} from '@shuvix/chat-protocol/builtinMcpPresentations'
 import { isBackgroundCall, toolResultImage } from '@shuvix/chat-protocol/types/chatMessage'
 import { ToolImageThumb } from './ToolImageThumb'
 import { CodeView } from '../code/CodeView'
@@ -156,7 +160,9 @@ export function ToolCallBlock({
 }: ToolCallBlockProps): React.JSX.Element {
   const { t } = useTranslation()
   const [expanded, setExpanded] = useState(false)
-  const presentation = useChatStore((s) => s.toolPresentations[toolName])
+  const hostPresentation = useChatStore((s) => s.toolPresentations[toolName])
+  // 宿主下发的表里没有的（内置 MCP 工具、退役的旧工具）走 chat-protocol 的兜底呈现
+  const presentation = hostPresentation ?? fallbackToolPresentation(toolName, t)
 
   // 从 store 读取实时工具执行状态，确保状态变更时组件能独立重渲染
   const liveExec = useChatStore((s) => {
@@ -276,7 +282,15 @@ export function ToolCallBlock({
                 command={String(args?.command ?? '')}
                 output={result}
                 cwd={details?.type === 'bash' ? details.cwd : undefined}
-                host={details?.type === 'ssh' ? details.host : undefined}
+                host={
+                  details?.type === 'ssh'
+                    ? details.host
+                    : // 内置 ssh server 的 exec：按工具名认，运行中（结果与 details 还没到）也有主机名
+                      parseBuiltinMcpToolName(toolName)?.server === 'ssh' &&
+                        typeof args?.host === 'string'
+                      ? args.host
+                      : undefined
+                }
                 exitCode={
                   details?.type === 'bash' || details?.type === 'ssh' ? details.exitCode : undefined
                 }

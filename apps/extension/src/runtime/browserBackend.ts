@@ -60,7 +60,9 @@ class ExtensionBrowserBackend implements BrowserBackend {
     evaluate: true,
     network: true,
     console: true,
-    rawCdp: true
+    rawCdp: true,
+    // 工作区是 OPFS / 文件夹句柄：模型手里没有能交给 DOM.setFileInputFiles 的本机路径
+    upload: false
   }
 
   private async session(tabId: string): Promise<TabCdpSession> {
@@ -84,6 +86,18 @@ class ExtensionBrowserBackend implements BrowserBackend {
         return `[${t.id}]${tag} ${t.title ?? '(untitled)'} — ${t.url ?? ''}`
       })
     return { text: lines.join('\n') || '(no open content tabs)' }
+  }
+
+  /** 不 attach（不挂调试横幅）—— server 只是想知道这个 tab 眼下显示的是什么 */
+  async tabUrl(p: { tabId: string }): Promise<string | undefined> {
+    const id = Number(p.tabId)
+    if (!Number.isInteger(id)) return undefined
+    try {
+      const tab = await chrome.tabs.get(id)
+      return tab.url || tab.pendingUrl || undefined
+    } catch {
+      return undefined
+    }
   }
 
   async openTab(p: { url: string }): Promise<BrowserOpOutput> {
@@ -148,11 +162,11 @@ class ExtensionBrowserBackend implements BrowserBackend {
 
   // ── 交互 / 快照 / 调试（chrome.debugger CDP，挂横幅；实现委托共享 cdpOps） ──
 
-  async snapshot(p: { tabId: string; full?: boolean }): Promise<BrowserOpOutput> {
+  async snapshot(p: { tabId: string; full?: boolean; viewer?: string }): Promise<BrowserOpOutput> {
     const id = await resolveTab(p.tabId)
     const session = await this.session(p.tabId)
     const pageUrl = (await chrome.tabs.get(id)).url ?? ''
-    return browserCdpOps.snapshotOp(session, pageUrl, { full: p.full })
+    return browserCdpOps.snapshotOp(session, pageUrl, { full: p.full, viewer: p.viewer })
   }
 
   async screenshot(p: { tabId: string }): Promise<BrowserOpOutput> {
@@ -177,7 +191,9 @@ class ExtensionBrowserBackend implements BrowserBackend {
   }
 
   async fill(p: { tabId: string; uid: string; text: string }): Promise<BrowserOpOutput> {
-    return browserCdpOps.fillOp(await this.session(p.tabId), p.uid, p.text)
+    return browserCdpOps.fillOp(await this.session(p.tabId), p.uid, p.text, {
+      canUpload: this.caps.upload
+    })
   }
 
   async type(p: {
@@ -191,6 +207,10 @@ class ExtensionBrowserBackend implements BrowserBackend {
 
   async pressKey(p: { tabId: string; key: string }): Promise<BrowserOpOutput> {
     return browserCdpOps.pressKeyOp(await this.session(p.tabId), p.key)
+  }
+
+  async hover(p: { tabId: string; uid: string }): Promise<BrowserOpOutput> {
+    return browserCdpOps.hoverOp(await this.session(p.tabId), p.uid)
   }
 
   async scroll(p: {

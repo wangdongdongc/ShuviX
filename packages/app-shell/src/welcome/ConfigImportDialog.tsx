@@ -102,7 +102,7 @@ export function ConfigImportDialog({ onClose }: { onClose: () => void }): React.
     }
     for (const s of parseState.plan.mcpServers) {
       if (!selectedMcps.has(s.name)) continue
-      if (s.action === 'skipMissingBuiltin') continue
+      if (s.action === 'skipMissingBuiltin' || s.action === 'skipBuiltin') continue
       if (s.action === 'create') create++
       else overwrite++
     }
@@ -133,7 +133,7 @@ export function ConfigImportDialog({ onClose }: { onClose: () => void }): React.
   }
 
   const renderActionBadge = (
-    action: 'create' | 'overwrite' | 'mergeBuiltin' | 'skipMissingBuiltin'
+    action: 'create' | 'overwrite' | 'mergeBuiltin' | 'skipMissingBuiltin' | 'skipBuiltin'
   ): React.JSX.Element => {
     const labelKey =
       action === 'create'
@@ -142,7 +142,9 @@ export function ConfigImportDialog({ onClose }: { onClose: () => void }): React.
           ? 'configShare.actionOverwrite'
           : action === 'skipMissingBuiltin'
             ? 'configShare.actionSkipMissingBuiltin'
-            : 'configShare.actionMergeBuiltin'
+            : action === 'skipBuiltin'
+              ? 'configShare.actionSkipBuiltin'
+              : 'configShare.actionMergeBuiltin'
     const color =
       action === 'create'
         ? 'text-success bg-success/10'

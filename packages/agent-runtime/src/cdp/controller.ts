@@ -144,8 +144,14 @@ export class CdpController {
   private uidKey = new Map<string, string>()
   /** 「角色 + 名字」在最近一次快照里出现的次数；重新定位只认快照时就唯一的 */
   private baseCounts = new Map<string, number>()
-  /** 上一次快照的正文行，用于差异回传；reset / 全量请求后作废 */
-  private lastBody: string[] | null = null
+  /**
+   * 每个**看快照的人**上一次拿到的正文行，用于差异回传；reset（导航等）后整张表作废。
+   *
+   * 按看的人分，而不是一个 tab 一份：差异的前提是「上一份快照还在**这个模型**的上下文里」。
+   * 同一个 tab 被两个 agent 交替快照时，一份共用的基线会让 A 拿到相对于 B 那份的差异 ——
+   * 一份它从没见过的快照。缺省的看的人是空串（不区分调用方的旧用法）。
+   */
+  private lastBodies = new Map<string, string[]>()
 
   constructor(private transport: CdpTransport) {}
 
@@ -161,7 +167,7 @@ export class CdpController {
     this.nodeMap.clear()
     this.uidKey.clear()
     this.baseCounts.clear()
-    this.lastBody = null
+    this.lastBodies.clear()
   }
 
   /** 取某 uid 对应的 AX 节点（供上层生成动作描述） */
@@ -191,12 +197,13 @@ export class CdpController {
    */
   async buildSnapshot(
     pageUrl = '',
-    opts: { full?: boolean } = {}
+    opts: { full?: boolean; viewer?: string } = {}
   ): Promise<{ text: string; elementCount: number; diffed?: boolean }> {
+    const viewer = opts.viewer ?? ''
     const result = await this.send<{ nodes: AXNode[] }>('Accessibility.getFullAXTree')
     const nodes = result.nodes
     if (!nodes[0]) {
-      this.lastBody = null
+      this.lastBodies.delete(viewer)
       return { text: '(empty page)', elementCount: 0 }
     }
 
@@ -238,8 +245,8 @@ export class CdpController {
 
     // 差异回传：调用方说可以、且手上有上一份时才试；不值得回差异时 diffSnapshotBody
     // 返回 null，自然退回全量（见该模块对判定条件与安全边界的说明）。
-    const prev = this.lastBody
-    this.lastBody = lines
+    const prev = this.lastBodies.get(viewer)
+    this.lastBodies.set(viewer, lines)
     if (!opts.full && prev) {
       const d = diffSnapshotBody(prev, lines)
       if (d)

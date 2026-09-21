@@ -614,7 +614,7 @@ describe('McpManager 可用性与批量装配', () => {
 })
 
 describe('McpManager 连接中途的意外', () => {
-  it('MCPL-U-13: 掉线后状态回落、工具清空，已构建的 AgentTool 回错误结果而不是抛出；下次用到重连', async () => {
+  it('MCPL-U-13: 掉线后状态回落、工具清空，已构建的 AgentTool 以「没连上」失败（抛出 → pi 记成失败）；下次用到重连', async () => {
     const h = setup([row({ id: 'a-id', name: 'a' })])
     h.plan.set('a', { tools: [tool('search')] })
     expect(await h.mgr.ensureServerByName('a')).toEqual({ ok: true })
@@ -627,9 +627,9 @@ describe('McpManager 连接中途的意外', () => {
     expect(h.mgr.getStatus('a-id')).toBe('disconnected')
     expect(h.mgr.serverToAgentTools('a-id')).toEqual([])
 
-    const result = await held[0].execute('call-1', {}, new AbortController().signal)
-    expect(result.details).toMatchObject({ type: 'mcp', server: 'a', isError: true })
-    expect(JSON.stringify(result.content)).toContain('is not connected')
+    await expect(held[0].execute('call-1', {}, new AbortController().signal)).rejects.toThrow(
+      '[MCP Error] MCP server "a" is not connected'
+    )
 
     // 下一次创建 Agent 会把它重新连起来
     expect(await h.mgr.ensureConnected('a-id')).toEqual({ ok: true })
@@ -993,9 +993,9 @@ describe('McpManager 内置实例的释放', () => {
 
     await h.mgr.closeSession('s1')
 
-    const result = await stale.execute('call-1', {}, new AbortController().signal)
-    expect(result.details).toMatchObject({ type: 'mcp', server: 'ssh', isError: true })
-    expect(JSON.stringify(result.content)).toContain('is not connected')
+    await expect(stale.execute('call-1', {}, new AbortController().signal)).rejects.toThrow(
+      '[MCP Error] MCP server "ssh" is not connected'
+    )
     // 闭包记的是 `ssh-id#s1`，s2 那份实例没有理由收到任何东西
     expect(h.lastFor('ssh', 's2').toolCalls).toEqual([])
   })
@@ -1620,29 +1620,35 @@ describe('McpManager 执行结果：经假 server 的一次 tools/call', () => {
     expect(result.content).toStrictEqual([text('ok')])
   })
 
+  // isError 的结果**抛出**：pi 只把抛出的调用记成失败（界面标红、不并进已完成的步骤组），
+  // 并把抛出的消息原样作为这次调用的结果内容 —— 模型看到的就是这里的文字
+  const failureOf = async (exec: McpTool): Promise<string> => {
+    const err = await run(exec).then(
+      () => undefined,
+      (e: unknown) => e
+    )
+    expect(err, '应当抛出').toBeInstanceOf(Error)
+    return (err as Error).message
+  }
+
   it('MCPB-U-64: isError 的结果只给文字 —— 图片写成 `[image: <mime>]`，base64 不外泄', async () => {
     const { exec } = await sshExecReturning({
       isError: true,
       content: [text('a'), img(), text('b')]
     })
-    const result = await run(exec)
-    expect(result.content).toStrictEqual([text('[MCP Error] a\n[image: image/png]\nb')])
-    expect(result.details).toStrictEqual({ ...OK_DETAILS, isError: true })
-    expect(JSON.stringify(result)).not.toContain(PNG.slice(0, 24))
+    const message = await failureOf(exec)
+    expect(message).toBe('[MCP Error] a\n[image: image/png]\nb')
+    expect(message).not.toContain(PNG.slice(0, 24))
   })
 
   it('MCPB-U-65: isError 只有一段文字 → `[MCP Error] <文字>`', async () => {
     const { exec } = await sshExecReturning({ isError: true, content: [text('boom')] })
-    const result = await run(exec)
-    expect(result.content).toStrictEqual([text('[MCP Error] boom')])
-    expect(result.details).toStrictEqual({ ...OK_DETAILS, isError: true })
+    expect(await failureOf(exec)).toBe('[MCP Error] boom')
   })
 
   it('MCPB-U-66: isError 却什么都没说 → `[MCP Error] (no details)`，而不是一个悬空的前缀', async () => {
     const { exec } = await sshExecReturning({ isError: true })
-    const result = await run(exec)
-    expect(result.content).toStrictEqual([text('[MCP Error] (no details)')])
-    expect(result.details).toStrictEqual({ ...OK_DETAILS, isError: true })
+    expect(await failureOf(exec)).toBe('[MCP Error] (no details)')
   })
 
   it('MCPB-U-67: server 回的图模型收不下（超限 / svg）—— 一个图片块都不出，每张一行说明，不算出错', async () => {

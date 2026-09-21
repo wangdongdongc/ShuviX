@@ -121,11 +121,13 @@ export function createSecurityContext(
     evaluateReadOnly: (action, object, opts) =>
       evaluateInternal(action, object, opts?.includeForceAllow === true).effect === 'allow',
 
+    // enforcePath / enforceGitOp / enforceUrl 什么都不返回 —— 用户的「其它」反馈没有地方带回去，
+    // 只能抛出。强制 onOther:'throw'：调用方误传 'return' 时，反馈不能被当成放行
     async enforcePath(mode: AccessMode, resolvedPath: string, opts: EnforceOpts): Promise<void> {
       await enforce(
         mode,
         { type: 'path', path: resolvedPath, displayPath: opts.displayPath ?? resolvedPath },
-        opts
+        { ...opts, onOther: 'throw' }
       )
     },
 
@@ -181,7 +183,7 @@ export function createSecurityContext(
           force: object.force,
           delete: object.delete
         },
-        opts
+        { ...opts, onOther: 'throw' }
       )
     },
 
@@ -196,6 +198,20 @@ export function createSecurityContext(
           readonly: object.readonly
         },
         opts
+      ),
+
+    async enforceUrl(object, opts): Promise<void> {
+      await enforce(
+        'navigate',
+        {
+          type: 'url',
+          url: object.url,
+          scheme: object.scheme,
+          host: object.host,
+          origin: object.origin
+        },
+        { ...opts, onOther: 'throw' }
       )
+    }
   }
 }

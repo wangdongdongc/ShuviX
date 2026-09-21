@@ -32,6 +32,7 @@ import { titlerFor } from './titleRuntime'
 import { extensionAgentFactory } from './agentHost'
 import { clearSessionTools, extensionSubAgentRegistry, subAgentManager } from './subAgent'
 import { eventBus } from './eventBus'
+import { clearSessionInputChannel } from './userInputBroker'
 
 /**
  * 会话运行时生命周期由共享 SessionManager 托管（Map + 懒创建 + 失效/销毁）。
@@ -51,6 +52,8 @@ const manager = new SessionManager<CreatedAgent>({
     created.dispose()
     subAgentManager.destroyAll(sessionId)
     clearSessionTools(sessionId)
+    // 运行时没了，它的询问通道也跟着作废（内置 browser 的门此后按「没人能答」fail-closed）
+    clearSessionInputChannel(sessionId)
   },
   onClosingChange: (sessionId, closing) =>
     eventBus.emit({ type: 'agent_closing', sessionId, closing }),

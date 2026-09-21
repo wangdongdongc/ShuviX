@@ -52,6 +52,7 @@ vi.mock('../subAgent', () => ({
 }))
 
 import { ensureRuntimeSession, removeRuntimeSession } from '../agentRuntime'
+import { requestUserInputFor, setSessionInputChannel } from '../userInputBroker'
 
 /** 注册表按名回一份最小档案（只有名字有信息量：断言看的是 createAgent 收到的 profile.name） */
 const minimalProfile = (name: string): AgentProfile => ({
@@ -200,5 +201,49 @@ describe('运行时区间事件（与桌面同一对事件，chat-ui 的扩展�
       { type: 'agent_closing', sessionId: SID, closing: true },
       { type: 'agent_closing', sessionId: SID, closing: false }
     ])
+  })
+})
+
+/**
+ * 询问通道的寿命跟着运行时走：装配工具那一刻（agentHost.resolveTools，这里由 createAgent 替身代为登记）
+ * 登记进 userInputBroker，运行时销毁时注销 —— 此后内置 browser 的安全门按「没人能答」fail-closed，
+ * 而不是把询问送进一个已经不在的运行时。注销只动这一条会话。
+ */
+describe('运行时销毁时注销本会话的询问通道', () => {
+  const req = {
+    id: 'tc-1',
+    kind: 'ask' as const,
+    toolName: 'mcp__browser__open_tab',
+    command: 'https://a.example/',
+    createdAt: 0
+  }
+
+  it('EXT-U-18 ensure → remove：本会话的通道没了（NO_INTERACTIVE_INPUT），别的会话的通道照旧', async () => {
+    const OTHER = `${SID}-other`
+    const mine = vi.fn(async () => ({ kind: 'ask' as const, allowed: true }))
+    const other = vi.fn(async () => ({ kind: 'ask' as const, allowed: false }))
+    mocks.createAgent.mockImplementation(
+      async (params: { sessionId: string; profile: { name: string } }) => {
+        setSessionInputChannel(params.sessionId, mine)
+        return {
+          runtime: { abort: async () => {} },
+          profile: params.profile,
+          systemPrompt: '',
+          dispose: () => {}
+        }
+      }
+    )
+    setSessionInputChannel(OTHER, other)
+    session({ projectId: 'proj-1', folder: 'Folder' })
+
+    await ensureRuntimeSession(SID)
+    // 运行时活着时通道可用
+    await expect(requestUserInputFor(SID, req)).resolves.toEqual({ kind: 'ask', allowed: true })
+    expect(mine).toHaveBeenCalledTimes(1)
+
+    await removeRuntimeSession(SID)
+    await expect(requestUserInputFor(SID, req)).rejects.toThrow('NO_INTERACTIVE_INPUT')
+    expect(mine).toHaveBeenCalledTimes(1)
+    await expect(requestUserInputFor(OTHER, req)).resolves.toEqual({ kind: 'ask', allowed: false })
   })
 })

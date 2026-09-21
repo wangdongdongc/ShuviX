@@ -796,8 +796,9 @@ export interface HostApi {
   /** MCP 客户端：服务器 CRUD + 连接控制 + 工具查询 */
   mcp: {
     list: () => Promise<McpServerInfo[]>
-    add: (params: McpServerAddParams) => Promise<{ success: boolean }>
-    update: (params: McpServerUpdateParams) => Promise<{ success: boolean }>
+    /** 失败时 error 是给人看的原因（名字已被占用、含 `__` …），设置页的对话框原样显示 */
+    add: (params: McpServerAddParams) => Promise<{ success: boolean; error?: string }>
+    update: (params: McpServerUpdateParams) => Promise<{ success: boolean; error?: string }>
     delete: (id: string) => Promise<{ success: boolean }>
     connect: (id: string) => Promise<{ success: boolean }>
     disconnect: (id: string) => Promise<{ success: boolean }>

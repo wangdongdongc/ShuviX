@@ -80,8 +80,10 @@ export interface ImportPlan {
      * - overwrite: 本端有同名非内置项，将全量覆盖
      * - mergeBuiltin: 本端或导出端是内置项，仅合并 env（不改 url/command 等结构字段）
      * - skipMissingBuiltin: 导出端标记为内置但本端未找到同名内置，将跳过
+     * - skipBuiltin: 本端同名项是进程内的内置能力服务器（ssh / browser）—— 它没有任何可导入的
+     *   配置，启停也是本机自己的选择，将跳过（不论导出端是否标了内置）
      */
-    action: 'create' | 'overwrite' | 'mergeBuiltin' | 'skipMissingBuiltin'
+    action: 'create' | 'overwrite' | 'mergeBuiltin' | 'skipMissingBuiltin' | 'skipBuiltin'
     missingSecrets: boolean
   }>
 }
