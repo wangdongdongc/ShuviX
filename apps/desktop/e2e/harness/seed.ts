@@ -458,6 +458,8 @@ export interface EventRecorder {
   install(): Promise<void>
   clear(): Promise<void>
   all<T = RecordedEvent>(): Promise<T[]>
+  /** 序号在 `since`（`mark()` 取得）之后的事件 —— 「这一步里发生了什么（没发生什么）」的切片 */
+  allSince<T = RecordedEvent>(since: number): Promise<T[]>
   /** 事件类型序列（去掉高频 delta 后更好读；传 true 保留 delta） */
   types(withDeltas?: boolean): Promise<string[]>
   count(type: string): Promise<number>
@@ -506,6 +508,8 @@ export function eventRecorder(main: CdpClient): EventRecorder {
       await main.eval(`${BUF}.length = 0`)
     },
     all,
+    allSince: <T>(since: number) =>
+      main.eval<T[]>(`${BUF}.filter((w) => w.seq > ${since}).map((w) => w.e)`),
     mark: () => main.eval<number>(`window.${SEQ_KEY} ?? 0`),
     types: (withDeltas = false) =>
       main.eval<string[]>(
@@ -701,12 +705,80 @@ export function sessionsBoundTo(main: CdpClient, bot: string): Promise<string[]>
   )
 }
 
+/** 隔离实例的 SQLite 库文件（`<home>/userdata/data/shuvix.db`） */
+export function dbPathOf(home: string): string {
+  return join(home, 'userdata', 'data', 'shuvix.db')
+}
+
+/** SQL 字符串字面量（sqlite3 CLI 没有参数绑定，值一律经它转义后拼进语句） */
+export function sqlLit(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`
+}
+
 /**
- * 绕过 API 直接往会话行的 settings 里写 `agentProfile`（系统 sqlite3 CLI 直写）。
+ * 对隔离实例的库直接跑一段 SQL（系统 sqlite3 CLI），回 stdout 原文。
  *
  * 用系统 sqlite3 而不是 better-sqlite3（先例：`e2e/live/probe.ts`）：后者是为 Electron
- * 编译的，普通 node 里加载会报 NODE_MODULE_VERSION 不符。CLI 没有参数绑定，SQL 由单引号
- * 转义现拼；`.timeout` 挡住与主进程写锁的偶发相撞。
+ * 编译的，普通 node 里加载会报 NODE_MODULE_VERSION 不符。`.timeout` 挡住与主进程写锁的
+ * 偶发相撞 —— 实例在跑时也能读（WAL），改库则应在 `stop({ keepHome: true })` 之后做。
+ * `home` 而不是 `app`：停机之后没有 app，只剩 HOME。
+ */
+export function sqlite(home: string, sql: string, opts: { json?: boolean } = {}): string {
+  return execFileSync(
+    'sqlite3',
+    ['-cmd', '.timeout 3000', ...(opts.json ? ['-json'] : []), dbPathOf(home), sql],
+    { encoding: 'utf8' }
+  )
+}
+
+/** 跑一条查询、按行回 JSON 对象（`sqlite3 -json`；没有行时 CLI 什么都不输出 → 空数组） */
+export function sqliteJson<T = Record<string, unknown>>(home: string, sql: string): T[] {
+  const out = sqlite(home, sql, { json: true }).trim()
+  return out ? (JSON.parse(out) as T[]) : []
+}
+
+/**
+ * 主进程日志里的一条安全决策（`security_decision {json}`，见 agent-runtime security/decisionLog.ts）。
+ *
+ * 每一次 enforce 都记一条 —— **放行也记**（L1 全工具门除外：它的放行是非事件）。这是断言
+ * 「门到底有没有被过、按什么客体、谁赢了」的与语言无关的入口：询问卡片的文案随界面语言变，
+ * 这里的字段不变。只声明断言会读的字段。
+ */
+export interface SecurityDecisionEntry {
+  ts: number
+  sessionId: string
+  toolCallId: string
+  toolName: string
+  action: string
+  /** 客体 type（'path' / 'url' / 'invocation' / …） */
+  objectKind: string
+  /** 路径全量 / 命令与 url 截断 200 字符 */
+  objectSummary: string
+  effect: 'allow' | 'ask' | 'deny'
+  matched: string[]
+  /** 胜出规则 id（`<policy>#<i>`），未命中任何规则时是 `default:<type>` */
+  winning: string
+  userResponse?: 'allowed' | 'allowed_remember' | 'denied' | 'feedback' | 'cancel'
+}
+
+/** 此刻主进程日志里的全部安全决策（按写入顺序）；解析不了的行跳过 */
+export function securityDecisions(app: E2EApp): SecurityDecisionEntry[] {
+  const MARK = 'security_decision '
+  const out: SecurityDecisionEntry[] = []
+  for (const line of app.mainLog().split('\n')) {
+    const at = line.indexOf(MARK)
+    if (at < 0) continue
+    try {
+      out.push(JSON.parse(line.slice(at + MARK.length)) as SecurityDecisionEntry)
+    } catch {
+      /* 被截断的行（日志正在写） */
+    }
+  }
+  return out
+}
+
+/**
+ * 绕过 API 直接往会话行的 settings 里写 `agentProfile`（系统 sqlite3 CLI 直写，见 `sqlite`）。
  *
  * 今天唯一会写这个键的入口是 session 工具 `create-sub-session` 的 `agent_profile`（经
  * sessionService.pinAgentProfile），它没有 IPC 面；「根会话残留的戳被忽略」「子会话的戳生效」
@@ -716,15 +788,10 @@ export function sessionsBoundTo(main: CdpClient, bot: string): Promise<string[]>
  * `agent.getInfo(sid, { ensure: true })` 之前，或写完后 `message.clear(sid)` 让它失效重建。
  */
 export async function stampAgentProfile(app: E2EApp, sid: string, name: string): Promise<void> {
-  const dbPath = join(app.home, 'userdata', 'data', 'shuvix.db')
-  const nameLit = name.replace(/'/g, "''")
-  const idLit = sid.replace(/'/g, "''")
-  execFileSync('sqlite3', [
-    '-cmd',
-    '.timeout 3000',
-    dbPath,
-    `UPDATE sessions SET settings = json_set(settings, '$.agentProfile', '${nameLit}') WHERE id = '${idLit}'`
-  ])
+  sqlite(
+    app.home,
+    `UPDATE sessions SET settings = json_set(settings, '$.agentProfile', ${sqlLit(name)}) WHERE id = ${sqlLit(sid)}`
+  )
   const settings = await app.main.eval<Record<string, unknown> | undefined>(
     `window.api.session.getById(${JSON.stringify(sid)}).then((s) => s && s.settings)`
   )

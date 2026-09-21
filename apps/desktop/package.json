@@ -31,6 +31,7 @@
     "test:e2e:files": "electron-vite build && vitest run --config vitest.config.e2e.ts e2e/specs/files",
     "test:e2e:sessions": "electron-vite build && vitest run --config vitest.config.e2e.ts e2e/specs/sessions",
     "test:e2e:skills": "electron-vite build && vitest run --config vitest.config.e2e.ts e2e/specs/skills",
+    "test:e2e:browser": "electron-vite build && vitest run --config vitest.config.e2e.ts e2e/specs/browser",
     "probe": "electron-vite build && vitest run --config vitest.config.probe.ts"
   },
   "dependencies": {

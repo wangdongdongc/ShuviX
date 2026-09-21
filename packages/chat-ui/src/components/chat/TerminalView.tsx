@@ -63,7 +63,11 @@ export function TerminalView({
   const location = host || (cwd ? shortCwd(cwd) : '')
 
   return (
-    <div className="group/term relative rounded-md bg-bg-tertiary/50 font-mono text-[11px] leading-[1.6]">
+    // `data-terminal-view`：终端形态详情的语义锚点（e2e 据此认，不认样式类）
+    <div
+      data-terminal-view=""
+      className="group/term relative rounded-md bg-bg-tertiary/50 font-mono text-[11px] leading-[1.6]"
+    >
       {/* 复制命令 —— 悬浮才出，不占提示符行的位置 */}
       <button
         onClick={() => {

@@ -61,6 +61,55 @@ export interface ChatToolRow {
 }
 
 /**
+ * 工具行的完整快照（ToolCallBlock → StepRow）—— 「这一行画成了什么样」：
+ * 呈现（图标 / 标签 / 摘要）是内置 MCP 工具那张兜底呈现表的出口，状态图标会顶替类型图标。
+ */
+export interface ChatToolRowShot extends ChatToolRow {
+  /** 标签位文本（工具显示名；随界面语言变） */
+  label: string
+  /**
+   * 图标槽里那枚 lucide 图标的类名（如 `lucide-globe`）。状态图标（运行中 / 出错 / 待询问）
+   * 会顶替类型图标 —— 这里读到的就是屏幕上那一枚；没有图标槽时为空串。
+   */
+  icon: string
+  /** 摘要位文本（`buildToolSummary` 的首行，限长 60） */
+  detail: string
+  /** 图标槽是待询问的盾牌（`lucide-shield-alert`）：这一行有一条挂着的询问，按 toolCallId 认领 */
+  awaiting: boolean
+  /** 这一行在一个展开的步骤合并行里（StepGroup 展开后逐条列出的原始行） */
+  inGroup: boolean
+  /**
+   * 展开之后的终端形态详情（chat-ui TerminalView，`data-terminal-view`）的全文 —— 提示符行
+   * （主机 / 目录 + 命令）连同输出；没展开、或这一行的详情不是终端形态时为 null。
+   */
+  terminal: string | null
+}
+
+/** 步骤合并行（StepGroup）的完整快照 */
+export interface ChatStepGroupShot extends ChatStepGroup {
+  /** 头行图标（全是同一个工具时有；混合段不出图标 → 空串） */
+  icon: string
+  /** 标签位：同一工具时是工具显示名；混合段是「每种工具各几次」（`浏览器 ×3`） */
+  label: string
+  /** 摘要位：各次调用摘要去重后以 ` · ` 拼接，限长 60 */
+  detail: string
+  /** 计数徽章（`data-group-count`）上的数字 */
+  count: number
+}
+
+/** 输入卡片顶上那张询问卡片（AskForm）的快照 */
+export interface PendingAskShot {
+  /** 标题：路径类是「读取 / 写入文件」一类的动作名，其余是工具显示名（随界面语言变） */
+  title: string
+  /** 标题前那枚图标的 lucide 类名 */
+  icon: string
+  /** 工具自己给的一句话说明（`request.description`） */
+  description: string
+  /** 预览块的文字：路径类是那条路径，其余是命令原文 */
+  preview: string
+}
+
+/**
  * 屏幕上一张图的快照 —— 「它显示的是哪一份文件」是这组断言的核心。
  *
  * 工具卡片里的模型图走 `shuvix-preview://`（主进程流式读盘，零 base64 进渲染进程），
@@ -183,6 +232,12 @@ export interface ChatPane {
   /** 错误行数量（error_event 条目） */
   errorRows(): Promise<number>
   toolRows(): Promise<ChatToolRow[]>
+  /** 工具行的完整快照（DOM 序，含展开的合并行里逐条列出的那些） */
+  toolRowShots(): Promise<ChatToolRowShot[]>
+  /** 步骤合并行的完整快照（DOM 序） */
+  stepGroupShots(): Promise<ChatStepGroupShot[]>
+  /** 输入卡片顶上的询问卡片；没有挂着的询问时为 null */
+  pendingAskShot(): Promise<PendingAskShot | null>
   /** 展开第 i 个工具行并回其详情区文本（**切换**语义 —— 已展开时会折叠回去） */
   expandToolRow(index: number): Promise<string>
   /** 第 i 个工具行是否展开（展开态在摘要行下方多长出一个详情容器） */
@@ -331,6 +386,22 @@ export function chatPane(main: CdpClient): ChatPane {
   const BUBBLE = `[...document.querySelectorAll(
     '[data-msg-role="assistant"][data-msg-type="message"] .markdown-body'
   )].filter((m) => (m.parentElement?.className ?? '').includes('min-w-0')).pop()`
+
+  /**
+   * StepRow（工具行 / 合并行共用的单行骨架）的三段：图标槽 / 标签 / 摘要。
+   * 图标槽是按钮的第一个子节点、且它的直接子节点是 svg（没有图标时整槽不渲染，第一个子节点
+   * 就成了标签）；标签是 `span.font-medium`，摘要是占满剩余宽度的 `span.flex-1`。
+   * 不认 Tailwind 的宽度类（`w-3.5` 带点号，拼选择器要转义两层）。
+   */
+  const STEP_ROW_PARTS = `(btn) => {
+    const first = btn?.firstElementChild
+    const svg = first && first.tagName === 'SPAN' ? first.querySelector(':scope > svg') : null
+    return {
+      icon: svg ? ([...svg.classList].find((c) => c.startsWith('lucide-')) ?? '') : '',
+      label: (btn?.querySelector(':scope > span.font-medium')?.textContent ?? '').trim(),
+      detail: (btn?.querySelector(':scope > span.flex-1')?.textContent ?? '').trim()
+    }
+  }`
 
   const isBusy = (): Promise<boolean> =>
     main.eval<boolean>(`document.querySelector('[data-msg-id="streaming-live"]') !== null`)
@@ -496,6 +567,57 @@ export function chatPane(main: CdpClient): ChatPane {
           status: el.dataset.toolStatus ?? ''
         }))`
       ),
+    toolRowShots: () =>
+      main.eval<ChatToolRowShot[]>(
+        `(() => {
+          const parts = ${STEP_ROW_PARTS}
+          return ${TOOLS}.map((el) => {
+            const p = parts(el.querySelector(':scope > button'))
+            return {
+              name: el.dataset.toolName ?? '',
+              status: el.dataset.toolStatus ?? '',
+              ...p,
+              awaiting: p.icon === 'lucide-shield-alert',
+              inGroup: el.closest('[data-step-group]') !== null,
+              terminal: (() => {
+                const term = el.querySelector('[data-terminal-view]')
+                return term ? (term.textContent ?? '').trim() : null
+              })()
+            }
+          })
+        })()`
+      ),
+    stepGroupShots: () =>
+      main.eval<ChatStepGroupShot[]>(
+        `(() => {
+          const parts = ${STEP_ROW_PARTS}
+          return ${GROUPS}.map((el) => {
+            const btn = el.querySelector(':scope > button')
+            return {
+              state: el.dataset.groupState ?? '',
+              size: Number(el.dataset.groupSize ?? 0),
+              text: (btn?.textContent ?? '').trim(),
+              ...parts(btn),
+              count: Number((btn?.querySelector('[data-group-count]')?.textContent ?? '').trim() || 0)
+            }
+          })
+        })()`
+      ),
+    // 询问卡片 = 待处理面板（输入卡片顶上的 rounded-t-2xl）里的 AskForm：标题是一个不换行的
+    // font-medium 段落，它所在那一行的第一枚 svg 是标题图标，标题行的下一个兄弟是预览块
+    pendingAskShot: () =>
+      main.eval<PendingAskShot | null>(`(() => {
+        const title = [...document.querySelectorAll('.rounded-t-2xl p.font-medium.whitespace-nowrap')][0]
+        if (!title) return null
+        const row = title.parentElement
+        const svg = row?.querySelector('svg')
+        return {
+          title: (title.textContent ?? '').trim(),
+          icon: svg ? ([...svg.classList].find((c) => c.startsWith('lucide-')) ?? '') : '',
+          description: (title.nextElementSibling?.textContent ?? '').trim(),
+          preview: (row?.nextElementSibling?.textContent ?? '').trim()
+        }
+      })()`),
     expandToolRow: async (index) => {
       await main.eval(`${TOOLS}[${index}]?.querySelector('button')?.click()`)
       await new Promise((r) => setTimeout(r, 250))
@@ -4631,6 +4753,11 @@ export interface SettingsNavPane {
   selectTab(labels: string[]): Promise<void>
   /** 切到「LLM 工具」页左侧的某个工具子页（标签取自 `tools.definitions()` 的 label/name） */
   selectToolSubTab(label: string): Promise<void>
+  /**
+   * 「LLM 工具」页左侧子页列的全部标签（DOM 序）—— 等到列表非空才回。
+   * 列是这一页的 `w-[220px]` 导航列；调用前先切到这一页（selectTab）。
+   */
+  toolSubTabLabels(): Promise<string[]>
 }
 
 /**
@@ -4646,7 +4773,231 @@ export function settingsNavPane(settings: CdpClient): SettingsNavPane {
   }
   return {
     selectTab: (labels) => clickButton(labels, `settings tab ${labels.join(' / ')}`),
-    selectToolSubTab: (label) => clickButton([label], `tool sub-tab ${label}`)
+    selectToolSubTab: (label) => clickButton([label], `tool sub-tab ${label}`),
+    toolSubTabLabels: () =>
+      until(async () => {
+        const labels = await settings.eval<string[]>(
+          `[...(document.querySelector('div[class*="w-[220px]"]')?.querySelectorAll('button') ?? [])]
+            .map((b) => (b.querySelector('.font-medium')?.textContent ?? b.textContent ?? '').trim())`
+        )
+        return labels.length > 0 ? labels : null
+      }, 'LLM tools sub-tab column')
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 设置窗口「MCP」页（McpClientPanel；openSettings('mcp') 后调用）
+//
+// 锚点：行根 `[data-mcp-server=<name>]`，展开区里宿主附加的设置 `[data-mcp-server-extra=<name>]`
+// （桌面：内置 browser 那一行挂着 BrowserDataSettings）。行内按钮按**图标**认（重连
+// refresh-cw / 编辑 pencil / 删除 trash-2），启用开关是行尾 `span[title]` 里的 Toggle，开的判据是
+// 它的 `bg-accent` 背景（关是 bg-bg-hover）。文案是 i18n 产物，一律不钉。
+//
+// 列表每 3 秒轮询一次 `mcp.list()`，所以状态类断言一律 `until`。只能同时展开一行。
+
+/** MCP 设置页里一台服务器那一行的快照 */
+export interface McpRowShot {
+  name: string
+  /** 「内置」徽章（琥珀色那枚）在不在 */
+  builtinBadge: boolean
+  /** 类型徽章上的字（stdio / http / inproc） */
+  typeBadge: string
+  /** 名字下面那行状态文字（「未启动」/「已连接 · 22 个工具」…，随界面语言变） */
+  statusText: string
+  hasReconnect: boolean
+  hasEdit: boolean
+  deleteDisabled: boolean
+  /** 删除按钮的 title（内置行是「不能删」的说明） */
+  deleteTitle: string
+  /** 启用开关是开着的 */
+  enabledOn: boolean
+  expanded: boolean
+}
+
+/** 展开区里宿主附加设置（`data-mcp-server-extra`）的快照；这一行没有附加设置时 `present: false` */
+export interface McpExtraShot {
+  present: boolean
+  /** 附加设置里各分节的标题（h3，DOM 序） */
+  sectionTitles: string[]
+  /** 第一节里第一颗开关（浏览器：忽略证书错误）的开合；没有开关时为 null */
+  firstToggleOn: boolean | null
+  /** 三角警告（`lucide-triangle-alert`）在不在 —— 忽略证书错误打开后才出现 */
+  warning: boolean
+  /** 「已保存站点」一节里的站点（等宽的 host 文字，DOM 序） */
+  sites: string[]
+  /** 那一节的空态文字（有站点时为空串） */
+  sitesEmptyText: string
+}
+
+export interface McpSettingsPane {
+  /** 全部行（DOM 序 = 显示顺序：内置置顶） */
+  rows(): Promise<McpRowShot[]>
+  /** 某一行（不在为 null） */
+  row(name: string): Promise<McpRowShot | null>
+  /** 等某一行上屏 */
+  waitRow(name: string): Promise<McpRowShot>
+  /** 展开 / 收起某一行（幂等） */
+  setExpanded(name: string, expanded: boolean): Promise<void>
+  /** 展开区里列出的工具名（去掉 `mcp__<server>__` 前缀的那一截；没展开时为空） */
+  expandedToolNames(name: string): Promise<string[]>
+  /** 展开区里宿主附加设置的快照 */
+  extra(name: string): Promise<McpExtraShot>
+  /** 点附加设置第一节的第一颗开关（浏览器：忽略证书错误） */
+  clickExtraFirstToggle(name: string): Promise<void>
+  /** 点附加设置「已保存站点」一节的刷新（标题行里的最后一颗按钮） */
+  refreshSites(name: string): Promise<void>
+  /** 点某个站点行的删除，再点随之出现的确认 */
+  clearSite(name: string, host: string): Promise<void>
+  /** 点某一行的启用开关 */
+  clickEnabled(name: string): Promise<void>
+}
+
+export function mcpSettingsPane(settings: CdpClient): McpSettingsPane {
+  const ROW = (name: string): string =>
+    `[...document.querySelectorAll('[data-mcp-server]')]
+      .find((el) => el.getAttribute('data-mcp-server') === ${JSON.stringify(name)})`
+  const EXTRA = (name: string): string =>
+    `[...document.querySelectorAll('[data-mcp-server-extra]')]
+      .find((el) => el.getAttribute('data-mcp-server-extra') === ${JSON.stringify(name)})`
+  // 附加设置里的第二节 = 已保存站点（BrowserDataSettings 的固定顺序：行为 → 站点）
+  const SITES_SECTION = (name: string): string => `(${EXTRA(name)})?.querySelectorAll('section')[1]`
+  // 展开区 = 行根里头行之后那块 py-3 的容器（头行自己也是 px-4 py-3，所以跳过第一个子节点；
+  // 两者之间可能夹着一条 py-2 的错误行）
+  const BODY = (rowExpr: string): string =>
+    `[...((${rowExpr})?.children ?? [])].slice(1).find((c) => c.classList.contains('py-3'))`
+  const ROW_SHOT = `(el) => {
+    const head = el.firstElementChild
+    const btns = [...(head?.querySelectorAll('button') ?? [])]
+    const byIcon = (cls) => btns.find((b) => b.querySelector('.' + cls))
+    const del = byIcon('lucide-trash-2')
+    const toggle = head?.querySelector('span[title] > button')
+    const badges = [...(head?.querySelectorAll('span.rounded-md') ?? [])]
+    return {
+      name: el.getAttribute('data-mcp-server') ?? '',
+      builtinBadge: badges.some((b) => b.className.includes('text-amber-500')),
+      typeBadge: (badges.find((b) => b.className.includes('bg-bg-tertiary'))?.textContent ?? '').trim(),
+      statusText: (head?.querySelector('div.min-w-0.flex-1')?.lastElementChild?.textContent ?? '').trim(),
+      hasReconnect: !!byIcon('lucide-refresh-cw'),
+      hasEdit: !!byIcon('lucide-pencil'),
+      deleteDisabled: !!del?.disabled,
+      deleteTitle: del?.getAttribute('title') ?? '',
+      enabledOn: !!toggle && toggle.className.includes('bg-accent'),
+      expanded: !!(${BODY('el')})
+    }
+  }`
+  const rows = (): Promise<McpRowShot[]> =>
+    settings.eval<McpRowShot[]>(
+      `[...document.querySelectorAll('[data-mcp-server]')].map(${ROW_SHOT})`
+    )
+  const row = async (name: string): Promise<McpRowShot | null> =>
+    (await rows()).find((r) => r.name === name) ?? null
+  const clickInRow = async (name: string, expr: string, what: string): Promise<void> => {
+    const ok = await settings.eval<boolean>(`(() => {
+      const el = ${ROW(name)}
+      const target = el ? (${expr}) : null
+      if (!target) return false
+      target.click()
+      return true
+    })()`)
+    if (!ok) throw new Error(`mcp settings: ${what} of "${name}" not found`)
+    await sleep(200)
+  }
+  return {
+    rows,
+    row,
+    waitRow: (name) => until(() => row(name), `mcp settings row "${name}"`),
+    setExpanded: async (name, expanded) => {
+      const now = await until(() => row(name), `mcp settings row "${name}"`)
+      if (now.expanded === expanded) return
+      // 行首那颗 chevron 按钮开合展开区
+      await clickInRow(name, `el.firstElementChild?.querySelector('button')`, 'expand chevron')
+      await until(
+        async () => (await row(name))?.expanded === expanded,
+        `mcp row "${name}" ${expanded ? 'expanded' : 'collapsed'}`
+      )
+    },
+    expandedToolNames: (name) =>
+      settings.eval<string[]>(
+        `[...((${BODY(ROW(name))})?.querySelectorAll('span.text-purple-300') ?? [])]
+          .map((s) => (s.textContent ?? '').trim())`
+      ),
+    extra: (name) =>
+      settings.eval<McpExtraShot>(`(() => {
+        const extra = ${EXTRA(name)}
+        if (!extra) {
+          return { present: false, sectionTitles: [], firstToggleOn: null, warning: false, sites: [], sitesEmptyText: '' }
+        }
+        const sections = [...extra.querySelectorAll('section')]
+        const toggle = sections[0]?.querySelector('button.rounded-full')
+        const sites = sections[1]
+        return {
+          present: true,
+          sectionTitles: sections.map((s) => (s.querySelector('h3')?.textContent ?? '').trim()),
+          firstToggleOn: toggle ? toggle.className.includes('bg-accent') : null,
+          warning: !!extra.querySelector('.lucide-triangle-alert'),
+          sites: [...(sites?.querySelectorAll('span.font-mono') ?? [])].map((s) => (s.textContent ?? '').trim()),
+          sitesEmptyText: (sites?.querySelector('div.text-center')?.textContent ?? '').trim()
+        }
+      })()`),
+    clickExtraFirstToggle: async (name) => {
+      const ok = await settings.eval<boolean>(`(() => {
+        const t = (${EXTRA(name)})?.querySelector('section button.rounded-full')
+        if (!t) return false
+        t.click()
+        return true
+      })()`)
+      if (!ok) throw new Error(`mcp settings: extra toggle of "${name}" not found`)
+      await sleep(200)
+    },
+    refreshSites: async (name) => {
+      const ok = await settings.eval<boolean>(`(() => {
+        const head = (${SITES_SECTION(name)})?.firstElementChild
+        const btns = [...(head?.querySelectorAll('button') ?? [])]
+        const refresh = btns[btns.length - 1]
+        if (!refresh) return false
+        refresh.click()
+        return true
+      })()`)
+      if (!ok) throw new Error(`mcp settings: saved-sites refresh of "${name}" not found`)
+      await sleep(300)
+    },
+    clearSite: async (name, host) => {
+      // 站点行 = 含这个 host 的等宽文字的那一行（SettingsRow 根：px-4 py-3 的 flex 行）
+      const SITE_ROW = `[...((${SITES_SECTION(name)})?.querySelectorAll('span.font-mono') ?? [])]
+        .find((s) => (s.textContent ?? '').trim() === ${JSON.stringify(host)})
+        ?.closest('div.px-4')`
+      const clickIn = async (expr: string, what: string): Promise<void> => {
+        await until(
+          () =>
+            settings.eval<boolean>(`(() => {
+              const row = ${SITE_ROW}
+              const btn = row ? (${expr}) : null
+              if (!btn) return false
+              btn.click()
+              return true
+            })()`),
+          `saved site "${host}": ${what}`
+        )
+        await sleep(200)
+      }
+      await clickIn(
+        `[...row.querySelectorAll('button')].find((b) => b.querySelector('.lucide-trash-2'))`,
+        'delete'
+      )
+      // 删除点下去之后原地换成「确认 / 取消」两颗文字按钮，确认在前（等垃圾桶那颗真的换下去）
+      await clickIn(
+        `[...row.querySelectorAll('button')].some((b) => b.querySelector('.lucide-trash-2'))
+          ? null
+          : row.querySelectorAll('button')[0]`,
+        'confirm'
+      )
+    },
+    clickEnabled: (name) =>
+      clickInRow(
+        name,
+        `el.firstElementChild?.querySelector('span[title] > button')`,
+        'enable toggle'
+      )
   }
 }
 
@@ -4861,6 +5212,11 @@ export interface RightPanelPane {
   activateBrowserTab(): Promise<void>
   /** 标签栏可见 tab 的 lucide 图标类（DOM 序）—— tab 集合与顺序的判据，不认文案 */
   tabIcons(): Promise<string[]>
+  /**
+   * 当前激活 tab 的 lucide 图标类（PanelTabBar 的选中下划线所在那颗按钮）；面板关着时为空串。
+   * browser tab 是 `lucide-monitor`。
+   */
+  activeTabIcon(): Promise<string>
   /** 监视列表的行快照（DOM 序 = monitorList 序） */
   rows(): Promise<AgentMonitorRowShot[]>
   /** 空态文案块文本；空态未上屏（含 loading 期）回空串 */
@@ -4926,6 +5282,13 @@ export function rightPanelPane(main: CdpClient): RightPanelPane {
       main.eval<string[]>(`[...(${AGENTS_TAB}?.parentElement?.children ?? [])]
         .filter((el) => el.tagName === 'BUTTON')
         .map((b) => [...(b.querySelector('svg')?.classList ?? [])].find((c) => c.startsWith('lucide-')) ?? '')`),
+    // 选中态 = 按钮里那条 absolute bottom-0 的下划线（PanelTabBar 的 active 分支）
+    activeTabIcon: () =>
+      main.eval<string>(`(() => {
+        const active = [...(${AGENTS_TAB}?.parentElement?.children ?? [])]
+          .find((b) => b.tagName === 'BUTTON' && b.querySelector('span.absolute.bottom-0'))
+        return [...(active?.querySelector('svg')?.classList ?? [])].find((c) => c.startsWith('lucide-')) ?? ''
+      })()`),
     rows: () =>
       main.eval<AgentMonitorRowShot[]>(`${ROWS}.map((row) => {
         const dot = row.querySelector('span.rounded-full')

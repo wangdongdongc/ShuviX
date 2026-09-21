@@ -60,8 +60,23 @@ export interface E2EApp {
   mainLog(): string
   /** 打开设置窗口并连接其页面（tab 缺省 'general' —— 智能体 / 技能 / 安全策略 / Hooks 四个 tab 已搬去侧栏） */
   openSettings(tab?: string): Promise<CdpClient>
-  /** 结束实例并清理 fake HOME（afterAll 必须调用） */
-  stop(): Promise<void>
+  /**
+   * 结束实例并清理 fake HOME（afterAll 必须调用）。
+   *
+   * `keepHome: true` 只停进程、留下 HOME（数据库、会话树、日志都在里面）—— 「停机 → 改库 →
+   * 用同一个 HOME 再起一次」这类升级用例靠它（配合 `launchApp({ home })`）。留下的 HOME 由
+   * 调用方最后用一次不带参数的 `stop()` 收走。
+   */
+  stop(opts?: { keepHome?: boolean }): Promise<void>
+}
+
+export interface LaunchOptions {
+  /**
+   * 复用一个已有的 fake HOME（上一个实例 `stop({ keepHome: true })` 留下的），而不是新建。
+   * 数据库照常走迁移 —— 这正是「老库升级」要测的那一步。复用的 HOME 在启动失败时**不删**：
+   * 它不是这次启动建的。
+   */
+  home?: string
 }
 
 /**
@@ -153,7 +168,7 @@ async function installForensics(main: CdpClient): Promise<void> {
   )
 }
 
-export async function launchApp(): Promise<E2EApp> {
+export async function launchApp(opts: LaunchOptions = {}): Promise<E2EApp> {
   const pinned = process.env.SHUVIX_E2E_PORT
   const port = pinned ? Number(pinned) : await freePort()
 
@@ -172,7 +187,9 @@ export async function launchApp(): Promise<E2EApp> {
   // fake HOME 用短路径优先：cliServer 的 unix socket（$HOME/.shuvix/cli.sock）受
   // macOS ~104 字节路径上限约束，os.tmpdir 的 /var/folders/... 可能超长
   const tmpBase = existsSync('/private/tmp') ? '/private/tmp' : tmpdir()
-  const home = mkdtempSync(join(tmpBase, 'shuvix-e2e-'))
+  // 复用的 HOME 不归这次启动所有：失败时不删，stop 也只在调用方要求时才删
+  const ownsHome = !opts.home
+  const home = opts.home ?? mkdtempSync(join(tmpBase, 'shuvix-e2e-'))
   const userData = join(home, 'userdata')
   mkdirSync(userData, { recursive: true })
   const agentsDir = join(home, '.shuvix', 'agents')
@@ -256,7 +273,7 @@ export async function launchApp(): Promise<E2EApp> {
     await until(() => main.eval<boolean>('!!window.api'), 'window.api ready')
     await installForensics(main)
 
-    const stop = async (): Promise<void> => {
+    const stop = async (stopOpts: { keepHome?: boolean } = {}): Promise<void> => {
       setTimeoutDiagnostic(null)
       main.close()
       if (!exited) {
@@ -268,7 +285,7 @@ export async function launchApp(): Promise<E2EApp> {
           await waitExit(5000)
         }
       }
-      rmSync(home, { recursive: true, force: true })
+      if (!stopOpts.keepHome) rmSync(home, { recursive: true, force: true })
     }
 
     return {
@@ -295,7 +312,7 @@ export async function launchApp(): Promise<E2EApp> {
   } catch (err) {
     child.kill('SIGKILL')
     await waitExit(5000)
-    rmSync(home, { recursive: true, force: true })
+    if (ownsHome) rmSync(home, { recursive: true, force: true })
     throw err
   }
 }
