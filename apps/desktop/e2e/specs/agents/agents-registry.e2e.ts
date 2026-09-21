@@ -33,13 +33,12 @@ interface AgentRow {
 const listAgents = (): Promise<AgentRow[]> => app.main.eval('window.api.subAgent.list()')
 
 describe('内置档案', () => {
-  it('十个内置齐全，上下文注入默认全开（notebook/bot 只开项目感知、派发专用档案全关），描述非空；无启用开关字段', async () => {
+  it('九个内置齐全，上下文注入默认全开（notebook/bot 只开项目感知、派发专用档案全关），描述非空；无启用开关字段', async () => {
     const builtins = (await listAgents()).filter((a) => a.source === 'builtin')
     // bot 是 bot 会话根 Agent 的基座（bot 用 edit 自己维护自己那份 md，没有专职的笔记 agent）；
     // 旧 Bots 的意图门控 bot-intent 随管线一并拆除
     expect(builtins.map((a) => a.name).sort()).toEqual([
       'bot',
-      'browser',
       'chat',
       'coding',
       'explore',

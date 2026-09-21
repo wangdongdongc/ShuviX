@@ -126,8 +126,7 @@ frontmatter の後の全部（前後の空白を除く）がシステムプロ�
 アプリケーションに同梱（UI 言語ごとに一つ、同じパーサーで読まれる）：四つの**ベース**人格 `work`
 （プロジェクト内セッションのルート）、`chat`（どのプロジェクトにも属さないセッションのルート）、
 `notebook`（ノートブックセッションのルート）、`bot`（bot チャットのルート）—— に加えて、タスク型の
-`coding`、`browser`、`explore`、`widget`、`wiki`、`wiki-writer`、`titler`、
-`knowledge-writer`。
+`coding`、`explore`、`widget`、`titler`、`knowledge-writer`。
 
 - **セッションのルート人格はセッションの形から導かれ、決して選ばれません**：ノートブック → `notebook`、
   bot チャット → `bot`、プロジェクト内 → `work`、それ以外 → `chat`。設定もピッカーもありません。

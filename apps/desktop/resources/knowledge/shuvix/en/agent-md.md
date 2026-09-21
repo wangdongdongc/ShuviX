@@ -130,8 +130,7 @@ An empty frontmatter (`---` directly followed by `---`) is valid: every field ta
 Shipped inside the application (per UI language, with the same parser): the four **base**
 personas `work` (root of a session inside a project), `chat` (root of a session outside any
 project), `notebook` (root of a notebook session) and `bot` (root of a bot chat) — plus the task
-agents `coding`, `browser`, `explore`, `widget`, `wiki`, `wiki-writer`,
-`titler` and `knowledge-writer`.
+agents `coding`, `explore`, `widget`, `titler` and `knowledge-writer`.
 
 - **A session's root persona is derived from the session's form, never chosen**: notebook →
   `notebook`, bot chat → `bot`, in a project → `work`, otherwise → `chat`. There is no setting

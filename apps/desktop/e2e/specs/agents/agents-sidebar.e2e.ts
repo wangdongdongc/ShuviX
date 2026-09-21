@@ -51,7 +51,7 @@ import {
 const AGENTS_PROJECT = REGISTRY_NOTE_PROJECT_IDS.agent
 /** 内置档案（随包发布的 md）的只读载体 —— 与用户档案分属两个项目 */
 const BUILTIN_PROJECT = REGISTRY_NOTE_PROJECT_IDS.agentBuiltin
-/** AS-2 系列点开的那份内置档案：整份 spec 里没人覆盖它（explore 归 AS-5~7、browser 归 AS-12） */
+/** AS-2 系列点开的那份内置档案：整份 spec 里没人覆盖它（explore 归 AS-5~7、knowledge-writer 归 AS-12） */
 const BUILTIN_SAMPLE = 'titler'
 
 interface AgentRow {
@@ -195,7 +195,7 @@ describe('侧栏智能体分组', () => {
   })
 
   it('AS-2 内置行：点它开的是**随包那份 md** 的只读笔记本（另一个载体项目、正文来自盘上同一路径、没有输入卡片、编辑器不可编辑）', async () => {
-    // 刻意点 titler：explore 留给 AS-5~AS-7（那里会被覆盖），browser 留给 AS-12。
+    // 刻意点 titler：explore 留给 AS-5~AS-7（那里会被覆盖），knowledge-writer 留给 AS-12。
     // 也刻意不用 builtinRows()[0] —— 名单一变，这条测的就是另一个 agent 了
     const listed = await builtinRow(BUILTIN_SAMPLE)
     const fileName = basename(listed.basePath)
@@ -454,7 +454,7 @@ describe('侧栏智能体分组', () => {
 
   it('AS-12 被遮蔽的两种行：内置那份说「被同名自定义档案覆盖」，输掉的用户文件点名胜者；两种都划线带徽标，输的那份只能按文件名删', async () => {
     // 两种遮蔽长得一样（划线 + 徽标），但**原因不同**，提示因此也是两句不同的话
-    writeFileSync(agentPath('browser.md'), validAgent('browser'))
+    writeFileSync(agentPath('knowledge-writer.md'), validAgent('knowledge-writer'))
     writeFileSync(agentPath('twin.md'), validAgent('twin'))
     // `aa.md` 更短、码点序也靠前 —— 只有「文件名就是名字」这一条能让 twin.md 胜出
     writeFileSync(agentPath('aa.md'), validAgent('twin'))
@@ -462,10 +462,10 @@ describe('侧栏智能体分组', () => {
 
     // ① 被覆盖的内置
     await until(async () => {
-      const row = (await pane.builtinRows()).find((r) => r.name === 'browser')
+      const row = (await pane.builtinRows()).find((r) => r.name === 'knowledge-writer')
       return !!row && row.struck && row.badge
-    }, 'builtin browser row struck + badged')
-    const shadowedBuiltin = (await pane.builtinRows()).find((r) => r.name === 'browser')!
+    }, 'builtin knowledge-writer row struck + badged')
+    const shadowedBuiltin = (await pane.builtinRows()).find((r) => r.name === 'knowledge-writer')!
     expect(shadowedBuiltin.locked).toBe(true)
     // 内置那句说「有个同名的自定义档案压着它」—— 与用户那句是两个不同的原因
     expect(shadowedBuiltin.title).toBe(en.tool.subAgentOverriddenHint)

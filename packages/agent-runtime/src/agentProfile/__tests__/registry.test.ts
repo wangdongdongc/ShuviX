@@ -91,7 +91,7 @@ describe('语言解析 — 精确 → 基础 → en，按文件整体回退', ()
 })
 
 describe('buildBuiltinProfiles — 全集现算', () => {
-  it('全参数 → 十个内置,四个基座档案居首;缺 widget 根 → 自动跳过', () => {
+  it('全参数 → 九个内置,四个基座档案居首;缺 widget 根 → 自动跳过', () => {
     // bot-notes 已退役（bot 自己维护自己的正文，没有单独的笔记段）—— 名单里不该再有它
     expect(buildBuiltinProfiles(ALL_PARAMS).map((a) => a.name)).toEqual([
       'work',
@@ -99,7 +99,6 @@ describe('buildBuiltinProfiles — 全集现算', () => {
       'notebook',
       'bot',
       'coding',
-      'browser',
       'explore',
       'widget',
       'titler',
@@ -113,7 +112,6 @@ describe('buildBuiltinProfiles — 全集现算', () => {
       'notebook',
       'bot',
       'coding',
-      'browser',
       'explore',
       'titler',
       'knowledge-writer'

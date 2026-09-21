@@ -118,8 +118,7 @@ frontmatter 之后的全部内容（去首尾空白）就是系统提示词。�
 
 随应用发布（按界面语言一份，同一个解析器读）：四个**基座**人格 `work`（项目内会话的根）、`chat`
 （不属于任何项目的会话的根）、`notebook`（笔记本会话的根）、`bot`（bot 会话的根）—— 加上任务型
-agent `coding`、`browser`、`explore`、`widget`、`wiki`、`wiki-writer`、`titler`、
-`knowledge-writer`。
+agent `coding`、`explore`、`widget`、`titler`、`knowledge-writer`。
 
 - **会话的根人格由会话形态推导，从不选择**：笔记本 → `notebook`，bot 会话 → `bot`，在项目里 →
   `work`，否则 → `chat`。没有设置项，没有选择器。想改主对话的行为，**按名字覆盖基座**：

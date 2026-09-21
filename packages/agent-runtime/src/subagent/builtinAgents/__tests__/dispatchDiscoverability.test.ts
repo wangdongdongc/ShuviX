@@ -30,7 +30,7 @@
 import { describe, it, expect } from 'vitest'
 import { buildBuiltinProfile } from '../spec'
 import { createInlineMdReader } from '../inlineSources'
-import { BROWSER_SPEC, CODING_SPEC, EXPLORE_SPEC, WORK_SPEC } from '../index'
+import { BOT_SPEC, CODING_SPEC, EXPLORE_SPEC, WORK_SPEC } from '../index'
 import type { BuiltinProfileSpec } from '../spec'
 import type { AgentProfile } from '../../types'
 
@@ -43,33 +43,24 @@ const build = (spec: BuiltinProfileSpec, language: string): AgentProfile =>
   }) as AgentProfile
 
 describe('派发清单点名了哪些 agent', () => {
-  it.each(LANGS)('%s：coding 点名 browser / explore', (language) => {
+  it.each(LANGS)('%s：coding 点名 explore', (language) => {
     const s = build(CODING_SPEC, language).systemPrompt
-    for (const name of ['**browser**', '**explore**']) {
-      expect(s, `coding.${language} 缺 ${name}`).toContain(name)
-    }
+    expect(s, `coding.${language} 缺 **explore**`).toContain('**explore**')
     expect(s, `coding.${language} 不应点名 visualization`).not.toContain('**visualization**')
   })
 
-  it.each(LANGS)('%s：work 点名 browser', (language) => {
-    // work 手里有 browser 工具，浏览器密集的活儿正是它最该外包的
-    expect(build(WORK_SPEC, language).systemPrompt).toContain('**browser**')
-  })
-
-  it.each(LANGS)('%s：派发 browser 时提示带上浏览器现状', (language) => {
-    // 挡的是「新 agent 不知道已登录，重开 tab 重走一遍登录」这条真实浪费。
-    // browser 自己的 md 有「先 list_tabs」兜底，这里是调用方一侧的第二道。
-    const s = build(CODING_SPEC, language).systemPrompt.toLowerCase()
-    const hints = ['already signed in', '是否已登录', 'ログイン済み']
-    expect(
-      hints.some((h) => s.includes(h.toLowerCase())),
-      `coding.${language} 缺现状提示`
-    ).toBe(true)
-  })
-
-  it('browser 档案本身可被构建 —— 点名了却建不出来等于没有', () => {
-    for (const language of LANGS) expect(build(BROWSER_SPEC, language).name).toBe('browser')
-  })
+  it.each(LANGS)(
+    '%s：没有档案再点名 browser 子代理 —— 它已被移除，派过去只会撞上「名字不存在」',
+    (language) => {
+      // 浏览器改成了按会话勾选的内置 MCP 能力（mcp:browser），不再有专门的 browser 子代理
+      for (const spec of [WORK_SPEC, CODING_SPEC, BOT_SPEC]) {
+        expect(
+          build(spec, language).systemPrompt,
+          `${spec.name}.${language} 仍点名 **browser**`
+        ).not.toContain('**browser**')
+      }
+    }
+  )
 })
 
 describe('explore 的回报设计（实测驱动，改 md 时别写回去）', () => {
