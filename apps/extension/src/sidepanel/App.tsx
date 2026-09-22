@@ -5,6 +5,7 @@ import {
   Conversation,
   useAgentEvents,
   useAppEvent,
+  useChatStore,
   useModelCatalogSync,
   useSessionInit,
   type ChatHostValue
@@ -99,7 +100,10 @@ export function App({ link }: { link: PanelLink }): React.JSX.Element {
           tabId: link.tabId,
           title: tab?.title
         })
-        if (!cancelled) setSessionId(id)
+        if (cancelled) return
+        // 输入框往 chatStore 的「当前会话」里发 —— 侧边栏只有这一条，开出来就是它
+        useChatStore.getState().setActiveSessionId(id)
+        setSessionId(id)
       } catch (err) {
         if (!cancelled) setOpenError(err instanceof Error ? err.message : String(err))
       }
