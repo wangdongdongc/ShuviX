@@ -71,9 +71,56 @@ export function truncateTail(
   return { text: result.join('\n'), truncated: true, originalLines, originalBytes }
 }
 
+/** 一个码点的 UTF-8 字节数（孤立的代理项按 TextEncoder 的做法算作 U+FFFD，3 字节） */
+function utf8Size(cp: number): number {
+  return cp < 0x80 ? 1 : cp < 0x800 ? 2 : cp < 0x10000 ? 3 : 4
+}
+
+/**
+ * 按 UTF-8 字节数截取字符串的开头 / 结尾，不劈开字符。只走到预算用完为止 —— 几 MB 的一整行也
+ * 不会被整个拆成字符数组。用于「只剩一行、它自己就超过上限」的场合：整行丢掉就什么都不剩了。
+ */
+function sliceBytes(text: string, maxBytes: number, from: 'start' | 'end'): string {
+  if (maxBytes <= 0 || !text) return ''
+  let used = 0
+  if (from === 'start') {
+    let i = 0
+    while (i < text.length) {
+      const cp = text.codePointAt(i)!
+      const size = utf8Size(cp)
+      if (used + size > maxBytes) break
+      used += size
+      i += cp > 0xffff ? 2 : 1
+    }
+    return text.slice(0, i)
+  }
+  let j = text.length
+  while (j > 0) {
+    let cp = text.charCodeAt(j - 1)
+    let units = 1
+    if (cp >= 0xdc00 && cp <= 0xdfff && j >= 2) {
+      const hi = text.charCodeAt(j - 2)
+      if (hi >= 0xd800 && hi <= 0xdbff) {
+        cp = ((hi - 0xd800) << 10) + (cp - 0xdc00) + 0x10000
+        units = 2
+      }
+    }
+    const size = utf8Size(cp)
+    if (used + size > maxBytes) break
+    used += size
+    j -= units
+  }
+  return text.slice(j)
+}
+
 /**
  * 中间截断（保留首尾，砍掉中间）—— 适用于 bash/ssh 工具。
  * 默认比例：头部 30%、尾部 70%（尾部权重更高，错误信息通常在末尾）。
+ *
+ * 首尾两段从**实际有的行**里按比例分（`min(行数, maxLines)`），两段不重叠：只因字节超限而截断时
+ * （行数远小于 maxLines），按 maxLines 分出的头尾各自都能罩住全文，同样的内容会在首尾各出现一遍，
+ * 省略的行数还会算成负数。只剩一行而这一行自己就超过字节上限时，在行内按字节截首尾 ——
+ * 否则结果里只剩一句「省略了多少行」。
  */
 export function truncateMiddle(
   text: string,
@@ -89,16 +136,18 @@ export function truncateMiddle(
     return { text, truncated: false, originalLines, originalBytes }
   }
 
-  let headCount = Math.floor(maxLines * headRatio)
-  let tailCount = maxLines - headCount
+  const budget = Math.min(originalLines, maxLines)
+  let headCount = Math.floor(budget * headRatio)
+  let tailCount = budget - headCount
 
   let head = lines.slice(0, headCount)
-  let tail = lines.slice(-tailCount)
+  let tail = tailCount > 0 ? lines.slice(-tailCount) : []
 
-  const separator = `\n... [${originalLines - headCount - tailCount} lines omitted] ...\n`
+  const marker = (omitted: number): string => `\n... [${omitted} lines omitted] ...\n`
   while (
     head.length + tail.length > 0 &&
-    byteLength(head.join('\n') + separator + tail.join('\n')) > maxBytes
+    byteLength([...head, marker(originalLines - headCount - tailCount), ...tail].join('\n')) >
+      maxBytes
   ) {
     if (head.length > 0 && head.length >= tail.length * headRatio) {
       head = head.slice(0, -1)
@@ -112,7 +161,25 @@ export function truncateMiddle(
     }
   }
 
-  const omitted = originalLines - headCount - tailCount
-  const result = [...head, `\n... [${omitted} lines omitted] ...\n`, ...tail].join('\n')
-  return { text: result, truncated: true, originalLines, originalBytes }
+  if (head.length + tail.length > 0) {
+    const omitted = originalLines - headCount - tailCount
+    return {
+      text: [...head, marker(omitted), ...tail].join('\n'),
+      truncated: true,
+      originalLines,
+      originalBytes
+    }
+  }
+
+  // 一行都放不下（有一行自己就超过上限）：在全文里按字节截首尾，中间标出省略了多少字节
+  const room = Math.max(0, maxBytes - byteLength('\n... [99999999999 bytes omitted] ...\n'))
+  const start = sliceBytes(text, Math.floor(room * headRatio), 'start')
+  const end = sliceBytes(text, room - byteLength(start), 'end')
+  const omittedBytes = originalBytes - byteLength(start) - byteLength(end)
+  return {
+    text: `${start}\n... [${omittedBytes} bytes omitted] ...\n${end}`,
+    truncated: true,
+    originalLines,
+    originalBytes
+  }
 }

@@ -21,6 +21,11 @@ export interface ProcessToolOutputOptions {
   strategy: TruncateStrategy
   maxLines?: number
   maxBytes?: number
+  /**
+   * 超限时落盘、回预览 + 「用 read 工具取全文」。缺省 true。false = 只在内存里截断：这个 agent
+   * 没有 read 工具，落盘的全文它取不回来，那句指引就成了死路（Chrome 标签页会话的 `tab` 档案即如此）。
+   */
+  spill?: boolean
 }
 
 export function processToolOutput(
@@ -45,6 +50,6 @@ export function processToolOutput(
     strategy: opts.strategy,
     maxLines: opts.maxLines,
     maxBytes: opts.maxBytes,
-    sink
+    sink: opts.spill === false ? undefined : sink
   })
 }

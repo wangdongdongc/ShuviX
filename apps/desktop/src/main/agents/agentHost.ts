@@ -101,12 +101,15 @@ async function resolveDesktopTools(req: ToolResolveRequest): Promise<AnyAgentToo
   // L1 全工具门的评估门面（每次 evaluate 现读，实例可复用）；MCP/skill/dispatch 等
   // 无专属客体的工具由它统一获得"可设门"能力
   const security = getDesktopSecurityContext(ctx)
+  // 超长输出落盘后给的是「用 read 取全文」——没有 read 的 agent（如 Chrome 标签页会话的 `tab`）
+  // 取不回来，就只在内存里截断：它至少拿到截断上限那么多，而不是一段指向它没有的工具的预览
+  const spill = req.names.includes('read')
   const wrap = (tool: object): AnyAgentTool =>
     wrapToolOutput(
       tool as PiAgentTool<TSchema, unknown>,
       req.rootSessionId,
       getOutputStrategy(tool),
-      pickOverrides(tool),
+      { ...pickOverrides(tool), spill },
       security
     ) as unknown as AnyAgentTool
 

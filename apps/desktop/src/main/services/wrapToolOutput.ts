@@ -25,10 +25,12 @@ export function getOutputStrategy(tool: object): TruncateStrategy {
   return s ?? 'middle'
 }
 
-/** 工具可以传入的截断阈值覆写 */
+/** 工具可以传入的截断阈值覆写；`spill` 由宿主按 agent 给（见 processToolOutput） */
 export interface ProcessToolOutputOverrides {
   maxBytes?: number
   maxLines?: number
+  /** false = 超限只在内存里截断、不落盘（agent 没有 read 工具取回全文） */
+  spill?: boolean
 }
 
 /**
@@ -107,7 +109,8 @@ export function wrapToolOutput<P extends TSchema, D>(
         fullText: block.text,
         strategy,
         maxBytes: overrides?.maxBytes,
-        maxLines: overrides?.maxLines
+        maxLines: overrides?.maxLines,
+        spill: overrides?.spill
       })
       if (proc.truncated) truncated = true
       if (proc.persisted) persisted = true
