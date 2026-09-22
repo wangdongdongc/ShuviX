@@ -16,6 +16,7 @@ import { createLogger } from '../../logger'
 import { settingsDao } from '../../dao/settingsDao'
 import { t } from '../../i18n'
 import { browserCdpManager } from './browserCdpService'
+import { clipUrl, createExternalOpenAsk, externalOpenDecision } from './externalOpen'
 
 const log = createLogger('BrowserView')
 
@@ -71,6 +72,9 @@ export function initBrowserSession(): void {
   sessionInitialized = true
 
   const sess = session.fromPartition(BROWSER_PARTITION)
+  // 这也是页面**导航**到非网页协议（同框链接、改 location、iframe、cdp Page.navigate）通往系统的
+  // 那道门：Electron 以 `openExternal` 权限来问，这里照样拒绝。弹窗的去向另在 createTab 的
+  // setWindowOpenHandler 里裁决（externalOpen.ts）。
   sess.setPermissionRequestHandler((_webContents, permission, callback) => {
     log.info(`Permission denied for embedded browser: ${permission}`)
     callback(false)
@@ -126,6 +130,68 @@ function applyLayout(): void {
   }
 }
 
+/**
+ * 弹窗要交给系统的地址先问用户（`ask` 裁决，见 externalOpen.ts）：原生询问框写明地址与发起
+ * 页面，默认按钮是取消。一次只弹一个、拒绝后静默一阵，由 createExternalOpenAsk 管。
+ */
+const askExternalOpen = createExternalOpenAsk(
+  async ({ url, pageUrl }: { url: string; pageUrl: string }): Promise<boolean> => {
+    if (!hostWindow || hostWindow.isDestroyed()) return false
+    const { response } = await dialog.showMessageBox(hostWindow, {
+      type: 'warning',
+      buttons: [t('browser.external.open'), t('browser.external.cancel')],
+      defaultId: 1,
+      cancelId: 1,
+      message: t('browser.external.title'),
+      // 地址与页面是页面给的字符串，拼接而不走 i18next 插值：插值按首次出现替换占位符，
+      // 地址里写一个 `{{page}}`（自定义协议里原样送到），框里显示的就不是要打开的那个地址了
+      detail: [
+        clipUrl(url),
+        '',
+        t('browser.external.requestedBy'),
+        clipUrl(pageUrl),
+        '',
+        t('browser.external.hint')
+      ].join('\n')
+    })
+    return response === 0
+  }
+)
+
+function openExternally(url: string): void {
+  shell.openExternal(url).catch((err) => log.warn(`openExternal failed: ${clipUrl(url)}`, err))
+}
+
+/**
+ * tab 里的 window.open / target=_blank 往哪去（面板从不真开新窗口）：http(s) 在面板新开 tab，
+ * 其余按 externalOpenDecision 直接交给系统、先问用户、或拒绝。
+ */
+function routeWindowOpen(targetUrl: string, pageUrl: string): void {
+  const decision = externalOpenDecision(targetUrl)
+  switch (decision.action) {
+    case 'web':
+      try {
+        createTab(decision.url, { activate: true })
+      } catch (err) {
+        log.warn('window.open createTab failed', err)
+      }
+      return
+    case 'open':
+      openExternally(decision.url)
+      return
+    case 'ask': {
+      const { url } = decision
+      void askExternalOpen({ url, pageUrl }).then((allowed) => {
+        if (allowed) openExternally(url)
+        else log.info(`window.open declined or suppressed: ${clipUrl(url)}`)
+      })
+      return
+    }
+    case 'refuse':
+      log.info(`window.open refused (${decision.reason}): ${clipUrl(targetUrl)}`)
+  }
+}
+
 /** 创建新 tab；返回 tabId。超过 MAX_TABS 抛错 */
 export function createTab(url?: string, opts?: { activate?: boolean }): string {
   if (!hostWindow || hostWindow.isDestroyed()) {
@@ -154,17 +220,9 @@ export function createTab(url?: string, opts?: { activate?: boolean }): string {
 
   const wc = view.webContents
 
-  // http(s) 弹窗/target=_blank 在面板新开 tab；其他协议（mailto 等）交系统处理
+  // 弹窗 / target=_blank：http(s) 在面板新开 tab，其他协议能否交给系统见 routeWindowOpen
   wc.setWindowOpenHandler(({ url: targetUrl }) => {
-    if (/^https?:/i.test(targetUrl)) {
-      try {
-        createTab(targetUrl, { activate: true })
-      } catch (err) {
-        log.warn('window.open createTab failed', err)
-      }
-    } else {
-      shell.openExternal(targetUrl)
-    }
+    routeWindowOpen(targetUrl, wc.getURL())
     return { action: 'deny' }
   })
 

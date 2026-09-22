@@ -992,6 +992,13 @@
       "continue": "继续访问",
       "cancel": "取消"
     },
+    "external": {
+      "title": "用其他应用打开这个链接？",
+      "requestedBy": "发起的页面（浏览器面板）：",
+      "hint": "系统会把链接交给处理它的应用。不是你预期的操作就取消。",
+      "open": "打开",
+      "cancel": "取消"
+    },
     "error": {
       "title": "无法访问此网站",
       "code": "错误代码：{{code}} ({{description}})",

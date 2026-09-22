@@ -154,4 +154,31 @@ describe('i18n 语言包', () => {
     const missingOrEmpty = KNOWLEDGE_GROUP_KEYS.filter((k) => !leaf(en, k)?.trim())
     expect(missingOrEmpty).toEqual([])
   })
+
+  /**
+   * EO-52：浏览器面板「用别的应用打开这个链接？」询问框的五句文案。目标地址与发起页面是页面给的
+   * 不可信字符串，由 browserViewService 逐行拼进 detail —— 这几句里一旦出现 `{{x}}`，就是又有人把
+   * 地址交给了 i18next 插值（插值会连地址里写的 `{{page}}` 也一起换掉，框里显示的就不是要打开的那个
+   * 地址了）。旧的 `browser.external.detail` 模板键就是那条路，它必须不在。open 与 cancel 同字，
+   * 两个按钮就分不出来。
+   */
+  it('EO-52 browser.external.* 五句三语都非空、都不含 {{x}} 插值，open ≠ cancel；旧键 browser.external.detail 三语都已下线', () => {
+    const EXTERNAL_KEYS = ['title', 'requestedBy', 'hint', 'open', 'cancel'].map(
+      (name) => `browser.external.${name}`
+    )
+    for (const [lang, bundle] of Object.entries({ en, zh, ja })) {
+      for (const key of EXTERNAL_KEYS) {
+        const text = leaf(bundle, key)
+        expect(text?.trim(), `${lang} ${key}`).toBeTruthy()
+        expect(placeholders(text ?? ''), `${lang} ${key}`).toEqual([])
+      }
+      expect(leaf(bundle, 'browser.external.open'), lang).not.toBe(
+        leaf(bundle, 'browser.external.cancel')
+      )
+      const oldDetail = flatten(bundle).filter((k) => /^browser\.external\.detail(\.|$)/.test(k))
+      expect(oldDetail, lang).toEqual([])
+    }
+    // 正控制组：确实读到了那几句（取错路径时上面的「非空」断言会先失败，这里再钉一句原文）
+    expect(leaf(en, 'browser.external.open')).toBe('Open')
+  })
 })

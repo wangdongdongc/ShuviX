@@ -992,6 +992,13 @@
       "continue": "Continue anyway",
       "cancel": "Cancel"
     },
+    "external": {
+      "title": "Open this link in another app?",
+      "requestedBy": "Requested by the page in the browser panel:",
+      "hint": "Your system will hand the link to whichever app handles it. Only open it if you expected this.",
+      "open": "Open",
+      "cancel": "Cancel"
+    },
     "error": {
       "title": "This site can't be reached",
       "code": "Error code: {{code}} ({{description}})",
