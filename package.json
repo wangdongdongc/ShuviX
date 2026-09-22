@@ -44,6 +44,7 @@
     "test:e2e:skills": "npm run test:e2e:skills -w shuvix",
     "test:e2e:browser": "npm run test:e2e:browser -w shuvix",
     "test:e2e:database": "npm run test:e2e:database -w shuvix",
+    "test:e2e:chrome": "npm run test:e2e:chrome -w shuvix",
     "probe": "npm run probe -w shuvix"
   }
 }

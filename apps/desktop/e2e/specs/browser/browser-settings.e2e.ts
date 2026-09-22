@@ -163,7 +163,7 @@ afterAll(async () => {
 })
 
 describe('种子行（IPC）', () => {
-  it('BRS-1 browser 与 ssh 各一行：内置、inproc、全局启用、没连过、没有工具；内置的恰好三台', async () => {
+  it('BRS-1 browser 与 ssh 各一行：内置、inproc、全局启用、没连过、没有工具；内置的恰好四台', async () => {
     const rows = await mcpList()
 
     const browsers = rows.filter((r) => r.name === 'browser')
@@ -189,13 +189,13 @@ describe('种子行（IPC）', () => {
       toolCount: 0
     })
 
-    // 内置的恰好这三台（database 是 v28 种的，形状由 database 区钉；Tavily 在 v24 交还给用户了）
+    // 内置的恰好这四台（database 是 v28 种的，chrome 是 v29 种的，形状各由自己的区钉；Tavily 在 v24 交还给用户了）
     expect(
       rows
         .filter((r) => r.isBuiltin === 1)
         .map((r) => r.name)
         .sort()
-    ).toEqual(['browser', 'database', 'ssh'])
+    ).toEqual(['browser', 'chrome', 'database', 'ssh'])
     expect(rows.find((r) => r.id === TAVILY_ID)?.isBuiltin).toBe(0)
 
     // 没连过就没有工具（工具数与工具表都取自上次连上时的 cachedTools）
@@ -248,7 +248,7 @@ describe('MCP 设置页（DOM）', () => {
         .filter((r) => r.builtinBadge)
         .map((r) => r.name)
         .sort()
-    ).toEqual(['browser', 'database', 'ssh'])
+    ).toEqual(['browser', 'chrome', 'database', 'ssh'])
 
     const browser = rows.find((r) => r.name === 'browser')!
     expect(browser).toMatchObject({

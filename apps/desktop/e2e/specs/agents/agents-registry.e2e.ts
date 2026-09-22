@@ -33,10 +33,10 @@ interface AgentRow {
 const listAgents = (): Promise<AgentRow[]> => app.main.eval('window.api.subAgent.list()')
 
 describe('内置档案', () => {
-  it('九个内置齐全，上下文注入默认全开（notebook/bot 只开项目感知、派发专用档案全关），描述非空；无启用开关字段', async () => {
+  it('十个内置齐全，上下文注入默认全开（notebook/bot/tab 只开项目感知、派发专用档案全关），描述非空；无启用开关字段', async () => {
     const builtins = (await listAgents()).filter((a) => a.source === 'builtin')
     // bot 是 bot 会话根 Agent 的基座（bot 用 edit 自己维护自己那份 md，没有专职的笔记 agent）；
-    // 旧 Bots 的意图门控 bot-intent 随管线一并拆除
+    // 旧 Bots 的意图门控 bot-intent 随管线一并拆除。tab 是 Chrome 标签页会话（侧边栏）的基座
     expect(builtins.map((a) => a.name).sort()).toEqual([
       'bot',
       'chat',
@@ -44,6 +44,7 @@ describe('内置档案', () => {
       'explore',
       'knowledge-writer',
       'notebook',
+      'tab',
       'titler',
       'widget',
       'work'
@@ -54,8 +55,9 @@ describe('内置档案', () => {
     for (const a of builtins) {
       // notebook 是笔记本会话根 Agent 的基座：开项目感知（笔记就写在项目里），但不吃指令文件。
       // bot（bot 会话的基座）同一取舍：AGENTS.md/CLAUDE.md 是写代码的工程约定，而真正
-      // 写代码的是它派出去的子会话 —— 那条会话自己会吃这份文件
-      const noInstructions = ['notebook', 'bot']
+      // 写代码的是它派出去的子会话 —— 那条会话自己会吃这份文件。tab（Chrome 侧边栏会话）也不吃：
+      // 它处理的是网页，工作目录只是个临时目录
+      const noInstructions = ['notebook', 'bot', 'tab']
       const instructionsOn = !noInstructions.includes(a.name) && !narrow.includes(a.name)
       const awarenessOn = !narrow.includes(a.name)
       // 指令文件清单顺序即优先级 —— 内置沿用改制前的 AGENTS.md 优先、CLAUDE.md 次之

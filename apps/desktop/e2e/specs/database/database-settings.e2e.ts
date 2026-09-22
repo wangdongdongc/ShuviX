@@ -138,7 +138,7 @@ afterAll(async () => {
 })
 
 describe('种子行（IPC）', () => {
-  it('DBE-S1 database 恰好一行：内置、inproc、全局启用、没连过、没有工具；内置的恰好 browser / database / ssh', async () => {
+  it('DBE-S1 database 恰好一行：内置、inproc、全局启用、没连过、没有工具；内置的恰好 browser / chrome / database / ssh', async () => {
     const rows = await mcpList()
     const dbRows = rows.filter((r) => r.name === 'database')
     expect(dbRows).toHaveLength(1)
@@ -157,7 +157,7 @@ describe('种子行（IPC）', () => {
         .filter((r) => r.isBuiltin === 1)
         .map((r) => r.name)
         .sort()
-    ).toEqual(['browser', 'database', 'ssh'])
+    ).toEqual(['browser', 'chrome', 'database', 'ssh'])
     // 没连过就没有工具（工具数与工具表都取自上次连上时的 cachedTools）
     expect(await mcpTools(DATABASE_SERVER_ID)).toEqual([])
   }, 120_000)
@@ -210,7 +210,7 @@ describe('MCP 设置页（DOM）', () => {
         .filter((r) => r.builtinBadge)
         .map((r) => r.name)
         .sort()
-    ).toEqual(['browser', 'database', 'ssh'])
+    ).toEqual(['browser', 'chrome', 'database', 'ssh'])
 
     const database = rows.find((r) => r.name === 'database')!
     expect(database).toMatchObject({

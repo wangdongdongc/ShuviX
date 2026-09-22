@@ -225,11 +225,14 @@ export async function startFakeProvider(): Promise<FakeProvider> {
     res.end()
   }
 
+  // 攒齐字节再一次解码：逐块 toString 会把拆在两块之间的多字节字符（中文、emoji）各换成
+  // U+FFFD —— 请求体一大（几百 KB 的中文工具结果）就必然撞上，而 JSON 照样能解析，
+  // 「发给模型的内容完好」这类断言会因为假提供商自己读坏了而假红
   const readBody = (req: IncomingMessage): Promise<string> =>
     new Promise((resolve) => {
-      let raw = ''
-      req.on('data', (c: Buffer) => (raw += c.toString()))
-      req.on('end', () => resolve(raw))
+      const chunks: Buffer[] = []
+      req.on('data', (c: Buffer) => chunks.push(c))
+      req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')))
     })
 
   const server: Server = createServer((req, res) => {

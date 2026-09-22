@@ -23,6 +23,7 @@ import {
 
 const BROWSER_ID = 'builtin-mcp-browser'
 const SSH_ID = 'builtin-mcp-ssh'
+const CHROME_ID = 'builtin-mcp-chrome'
 const MIGRATION_LINE = 'Running migration v28'
 const ALL_DB_TOOLS = DATABASE_TOOL_NAMES.map(dbTool).sort()
 
@@ -104,7 +105,7 @@ afterAll(async () => {
 })
 
 describe('迁移 v28', () => {
-  it('DBE-M1 全新安装：内置 database 恰好一行（完整的内置行形状），库版本 28，v28 跑了恰好一次', async () => {
+  it('DBE-M1 全新安装：内置 database 恰好一行（完整的内置行形状），库版本至少 28，v28 跑了恰好一次', async () => {
     const listed = await mcpList()
     expect(listed.filter((r) => r.name === 'database')).toEqual([
       expect.objectContaining({ id: DATABASE_SERVER_ID, isBuiltin: 1, type: 'inproc' })
@@ -124,14 +125,15 @@ describe('迁移 v28', () => {
       cachedTools: '[]'
     })
     expect(row.createdAt).toBe(row.updatedAt)
-    // 内置的三台一台不少
+    // 内置的一台不少（chrome 是之后的 v29 种的）
     expect(
       rows()
         .filter((r) => r.type === 'inproc')
         .map((r) => r.id)
         .sort()
-    ).toEqual([BROWSER_ID, DATABASE_SERVER_ID, SSH_ID])
-    expect(userVersion()).toBe('28')
+    ).toEqual([BROWSER_ID, CHROME_ID, DATABASE_SERVER_ID, SSH_ID])
+    // 之后的迁移照跑，库版本只会往上走（v27 区同一个写法）
+    expect(Number(userVersion())).toBeGreaterThanOrEqual(28)
     expect(migrationRuns()).toBe(1)
   }, 120_000)
 
@@ -169,7 +171,7 @@ describe('迁移 v28', () => {
       ].join('\n')
     )
 
-    expect(userVersion()).toBe('28')
+    expect(Number(userVersion())).toBeGreaterThanOrEqual(28)
     expect(migrationRuns()).toBe(2)
 
     // 内置行回来了
@@ -218,7 +220,7 @@ describe('迁移 v28', () => {
     const before = rows()
     const credsBefore = credentialRows()
     await relaunchAfter('')
-    expect(userVersion()).toBe('28')
+    expect(Number(userVersion())).toBeGreaterThanOrEqual(28)
     expect(migrationRuns()).toBe(2)
     // cachedTools 会在第一次连上时写回（M2 末尾那次）—— 它是连接的产物，不是迁移的；
     // 这里比的是两次启动之间：什么都没连，一行都不该变
