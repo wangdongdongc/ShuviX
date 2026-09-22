@@ -129,7 +129,7 @@ export function BrowserDataSettings(): React.JSX.Element {
                     disabled={clearingAll}
                     className="px-1.5 py-0.5 text-[10px] text-text-tertiary hover:text-text-secondary rounded transition-colors disabled:opacity-50"
                   >
-                    {t('ssh.cancel')}
+                    {t('common.cancel')}
                   </button>
                 </div>
               ) : (
@@ -187,7 +187,7 @@ export function BrowserDataSettings(): React.JSX.Element {
                         disabled={clearingHost === site.host}
                         className="px-1.5 py-0.5 text-[10px] text-text-tertiary hover:text-text-secondary rounded transition-colors disabled:opacity-50"
                       >
-                        {t('ssh.cancel')}
+                        {t('common.cancel')}
                       </button>
                     </div>
                   ) : (
