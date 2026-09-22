@@ -10,7 +10,8 @@ import './read'
 import './write'
 import './edit'
 import './ask'
-// browser 不在这里：它是按会话勾选的内置 MCP 能力服务器（services/builtinMcp/browserServer.ts）
+// browser / database 不在这里：它们是按会话勾选的内置 MCP 能力服务器
+// （services/builtinMcp/browserServer.ts / databaseServer.ts），ssh 同理
 // git 工具（isomorphic-git 跨端实现）：不在内置 default 档案清单 —— 主 Agent 默认无、
 // 用户可覆盖 default.md 加入；子代理按自己档案的白名单解析，不受默认集限制
 import './git'
@@ -27,9 +28,6 @@ import './knowledge'
 import './ls'
 import './grep'
 import './glob'
-
-// 远程访问
-import './database'
 
 // Skill 工具（元数据注册；实例化由 agentToolBuilder 负责）
 // skill.ts 已迁至 services/skillTool.ts；这里仍然 import 触发其 registerBuiltinTool() 副作用

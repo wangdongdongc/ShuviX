@@ -9,7 +9,7 @@ import { getBuiltinToolEntries } from '../../services/toolRegistry'
 import { messageService } from '../../services/messageService'
 import { appendModelChange, appendThinkingLevelChange } from '../../services/sessionStorage'
 import { respondToUserInput } from '../../services/userInputBroker'
-import { dbManager } from '../../services/dbManager'
+import { dbManager } from '../../services/builtinMcp/dbConnections'
 import { mcpService } from '../../services/mcpService'
 import { skillService } from '../../services/skillService'
 import type { ChatMessage, InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
@@ -189,15 +189,8 @@ export class DefaultChatGateway implements ChatGateway {
   getRuntimeStatuses(sessionId: string): Record<string, RuntimeStatus> {
     const result: Record<string, RuntimeStatus> = {}
 
-    const db = dbManager.getConnectionInfo(sessionId)
-    if (db) {
-      result['db'] = {
-        label: `${db.dbType} ${db.database}`,
-        icon: 'Database',
-        color: '#f59e0b',
-        description: db.host
-      }
-    }
+    const db = dbManager.runtimeStatus(sessionId)
+    if (db) result['db'] = db
 
     return result
   }

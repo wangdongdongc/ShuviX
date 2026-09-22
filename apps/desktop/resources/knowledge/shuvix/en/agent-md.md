@@ -68,14 +68,15 @@ applications' meaning of tool names would be misread — use `shuvix-tools`), an
 A comma-separated string. Each entry is one of:
 
 - a **builtin tool name** — case-insensitive, normalised to lower case: `bash`, `read`, `write`,
-  `edit`, `ls`, `glob`, `grep`, `ask`, `database`, `git`, `session`, `knowledge`, `artifact`;
+  `edit`, `ls`, `glob`, `grep`, `ask`, `git`, `session`, `knowledge`, `artifact`;
 - `agent` — opt-in to **dispatching sub-agents** with the `agent` tool (only up to the nesting
   cap: a dispatched agent may itself dispatch only while the depth limit, 2 by default, allows);
 - `mcp:<server>` — every tool of that MCP server (the server's name as configured in Settings;
-  case is kept after the prefix; the server is connected lazily when the agent is created). Two
-  servers ship inside ShuviX and run in-process: `mcp:browser` (ShuviX's own browser panel) and
-  `mcp:ssh` (the hosts in your `~/.ssh/config`). No builtin agent declares them — a session ticks
-  them when it needs them — so an agent that should always drive the browser lists `mcp:browser`;
+  case is kept after the prefix; the server is connected lazily when the agent is created). Three
+  servers ship inside ShuviX and run in-process: `mcp:browser` (ShuviX's own browser panel),
+  `mcp:ssh` (the hosts in your `~/.ssh/config`) and `mcp:database` (the database connections saved
+  in ShuviX's settings). No builtin agent declares them — a session ticks them when it needs them —
+  so an agent that should always drive the browser lists `mcp:browser`;
 - `skill:<name>` — that skill (a namespaced skill is written `skill:<dir>:<name>`; the skills
   shipped with ShuviX are `skill:builtin:<name>`).
 
@@ -86,7 +87,7 @@ extension pickers ticked and locked (hovering says which agent declared them); t
 ticks only add to them, and taking one away means overriding the agent. Narrowing a list is
 **not** how a role is expressed in ShuviX: an agent without `grep` just greps through `bash`.
 The builtin `work`, `chat` and `coding` agents deliberately share one list (`bash, read, write,
-edit, ask, ls, grep, glob, database, agent, session, knowledge, artifact, skill:builtin:drawing`) and differ only in their bodies.
+edit, ask, ls, grep, glob, agent, session, knowledge, artifact, skill:builtin:drawing`) and differ only in their bodies.
 
 ### The body — the system prompt
 

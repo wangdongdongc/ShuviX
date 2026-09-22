@@ -90,8 +90,8 @@ frontmatter がマッピングでない、`shuvix` マーカーが別の種別�
 バックグラウンドの自動再開はすべて通常どおり動きます。
 
 そのルート人格は組み込みの **`bot`** ベースで、ツールリストは意図的に狭められています：`read, ls,
-grep, glob, ask, edit, session, agent, knowledge, artifact, skill:builtin:drawing` —— `bash`、`write`、
-`database` はなく、組み込み機能サーバー `mcp:ssh` / `mcp:browser` も宣言していません（このセッションの
+grep, glob, ask, edit, session, agent, knowledge, artifact, skill:builtin:drawing` —— `bash`、`write`
+はなく、組み込み機能サーバー `mcp:ssh` / `mcp:browser` / `mcp:database` も宣言していません（このセッションの
 拡張機能でユーザーがオンにすることはでき、それはユーザー自身の選択です）。bot は見ることはできても触れません：変更や実行を伴うことはすべてサブセッションへ
 （プログラミングは `agent_profile: coding`）。`edit` は一つの目的 —— 自分のファイルの維持 —— のために
 あり、`~/.shuvix/bots/` 配下へのすべての書き込みは組み込みポリシー **protect-bot-files** を通り、

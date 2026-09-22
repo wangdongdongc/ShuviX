@@ -129,7 +129,16 @@ function buildAskMaterials(
           : object.command
     }
   }
-  if (typeof object.sql === 'string') return { command: object.sql }
+  // SQL 同理：批准一条 `DELETE` 时必须看得见它落在哪个已保存的连接上（生产库还是测试库）——
+  // 用一行 SQL 注释写在语句前面，卡片上仍是一段合法的 SQL
+  if (typeof object.sql === 'string') {
+    return {
+      command:
+        typeof object.credential === 'string' && object.credential
+          ? `-- ${object.credential}\n${object.sql}`
+          : object.sql
+    }
+  }
   if (typeof object.url === 'string') return { command: object.url }
   const tool = request.tool
   if (tool) return { command: tool.operation ? `${tool.name}: ${tool.operation}` : tool.name }

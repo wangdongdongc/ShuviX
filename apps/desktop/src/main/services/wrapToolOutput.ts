@@ -37,9 +37,10 @@ export interface ProcessToolOutputOverrides {
  *
  * 也是安全模块 **L1 全工具门** 的挂载点：execute（含 preExecute）之前，以
  * {kind:'invocation'} 客体 + 请求的工具维度（toolName/operation）过统一评估 ——
- * MCP/browser/database 等尚无专属资源客体的入口由此可被策略设门。
+ * 第三方 MCP 这类没有专属资源客体的入口由此可被策略设门（内置能力服务器的工具另带可信的
+ * annotations，见 McpInvocationFacts）。
  * 无内置门（未命中规则 = 非事件，不弹窗不记日志）；deny throw、ask 挂起询问、
- * 「其它」反馈转为正常 tool result。先于 preExecute，故 ssh 的凭据抢跑连接也被覆盖。
+ * 「其它」反馈转为正常 tool result。
  *
  * 实现要点：用 Object.create(tool) 让原 tool 成为返回对象的原型，仅把 `execute`
  * 设为 own property 覆盖原方法。这样原型链上的 getter / method / class field

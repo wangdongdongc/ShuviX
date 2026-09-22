@@ -315,7 +315,7 @@ describe('evaluate — ask 询问材料', () => {
     expect(gitTool.ask!.rememberEntry).toBeUndefined()
   })
 
-  it('EV-15b database 的 ask → ask.command=SQL 原文（多行/超长都不截断改写）；rememberEntry 缺省', () => {
+  it('EV-15b database 的 ask → ask.command = 一行注释写明连接名 + SQL 原文（多行/超长都不截断改写）；rememberEntry 缺省', () => {
     const sql = `WITH recent AS (\n  SELECT * FROM orders WHERE created_at > '2024-01-01'\n)\nSELECT ${'c'.repeat(300)} FROM recent;`
     const object: SecurityObject = {
       type: 'database',
@@ -326,8 +326,16 @@ describe('evaluate — ask 询问材料', () => {
     }
 
     const asked = evaluate(ASK_GATE, makeRequest({ action: 'execute', object }))
-    expect(asked.ask!.command).toBe(sql)
+    // 批准一条写语句时必须看得见它落在哪个连接上（生产库还是测试库）
+    expect(asked.ask!.command).toBe(`-- prod-mysql\n${sql}`)
     expect(asked.ask!.rememberEntry).toBeUndefined()
+    // 没有连接名（或是空串）→ 只有 SQL
+    for (const credential of [undefined, '']) {
+      const bare: SecurityObject = { ...object, credential }
+      expect(
+        evaluate(ASK_GATE, makeRequest({ action: 'execute', object: bare })).ask!.command
+      ).toBe(sql)
+    }
 
     // 同客体的 allow/deny 不产询问材料
     expect(

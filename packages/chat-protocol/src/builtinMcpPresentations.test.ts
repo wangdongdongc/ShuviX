@@ -2,16 +2,17 @@
  * 内置 MCP 能力服务器的专属渲染（`builtinMcpPresentations.ts`）—— 工具名认领、折叠摘要、兜底呈现。
  *
  * 钉的是三件事：
- *   - **认名字要认全**：只有 `mcp__browser__<真实工具名>` / `mcp__ssh__<真实工具名>` 才拿得到
- *     「浏览器」「SSH」的名字与图标。一台叫 `browser__x` 的自定义 server 的工具
- *     `mcp__browser__x__tool` 同样以 `mcp__browser__` 开头 —— 它若也被认领，就能顶着内置浏览器
- *     的身份出现在询问卡片上；
+ *   - **认名字要认全**：只有 `mcp__browser__<真实工具名>` / `mcp__ssh__<真实工具名>` /
+ *     `mcp__database__<真实工具名>` 才拿得到「浏览器」「SSH」「远程数据库」的名字与图标。一台叫
+ *     `browser__x` 的自定义 server 的工具 `mcp__browser__x__tool` 同样以 `mcp__browser__` 开头 ——
+ *     它若也被认领，就能顶着内置浏览器的身份出现在询问卡片上；
  *   - **摘要**：每个工具「动作 + 最有信息量的那个参数」，一种优先级一条用例；
- *   - **兜底呈现**：宿主表里没有的内置 MCP 工具、退役的 multiplex `browser` 工具各有呈现，
- *     原型链上的名字（`constructor` / `toString` …）不算。
+ *   - **兜底呈现**：宿主表里没有的内置 MCP 工具、退役的 multiplex `browser` 工具与退役的
+ *     `database` 工具各有呈现，原型链上的名字（`constructor` / `toString` …）不算。
  *
- * 工具名清单与两台 server 真实工具目录的一致性由桌面侧的守护用例钉（chat-protocol 不能 import
- * agent-runtime）；这里手抄一份清单，是为了让「清单里的每个名字都认得出」有一个独立的对照物。
+ * 工具名清单与三台 server 真实工具目录的一致性由桌面侧的守护用例钉（chat-protocol 不能 import
+ * agent-runtime，database server 只在桌面）；这里手抄一份清单，是为了让「清单里的每个名字都认得出」
+ * 有一个独立的对照物。
  */
 import { describe, expect, it } from 'vitest'
 import en from './i18n/locales/en.json'
@@ -54,6 +55,9 @@ const BROWSER_TOOLS = [
 /** 内置 ssh server 的 6 个工具 */
 const SSH_TOOLS = ['list-hosts', 'exec', 'upload', 'download', 'sync', 'disconnect']
 
+/** 内置 database server 的 2 个工具（仅桌面） */
+const DATABASE_TOOLS = ['list-connections', 'query']
+
 /** 把 key 原样包一层的 t —— 断言看得出「用的是哪个 key」，而不依赖文案 */
 const T = (key: string): string => `T(${key})`
 
@@ -92,6 +96,20 @@ describe('parseBuiltinMcpToolName — 认名字要认全', () => {
     expect([...BUILTIN_MCP_PRESENTATIONS.ssh.toolNames].sort()).toEqual([...SSH_TOOLS].sort())
   })
 
+  it('BMP-1c database 的两个工具都认到 database 名下；手抄清单与表里的 toolNames 一致；表里恰是三台', () => {
+    expect(DATABASE_TOOLS).toHaveLength(2)
+    for (const tool of DATABASE_TOOLS) {
+      expect(parseBuiltinMcpToolName(`mcp__database__${tool}`), tool).toEqual({
+        server: 'database',
+        tool
+      })
+    }
+    expect([...BUILTIN_MCP_PRESENTATIONS.database.toolNames].sort()).toEqual(
+      [...DATABASE_TOOLS].sort()
+    )
+    expect(Object.keys(BUILTIN_MCP_PRESENTATIONS).sort()).toEqual(['browser', 'database', 'ssh'])
+  })
+
   it.each([
     // 冒名：一台叫 `browser__x` 的自定义 server 的工具
     'mcp__browser__x__tool',
@@ -107,8 +125,15 @@ describe('parseBuiltinMcpToolName — 认名字要认全', () => {
     'mcp__Browser__click',
     'mcp__ssh-custom__exec',
     'xmcp__browser__click',
-    // 退役的 multiplex 工具名与空串
+    // database 同样：冒名、不在清单、空工具名、被改名的自定义行（v28 迁移给撞名行起的名字）、大小写
+    'mcp__database__x__query',
+    'mcp__database__nope',
+    'mcp__database__',
+    'mcp__database-custom__query',
+    'mcp__Database__query',
+    // 退役的 multiplex 工具名、退役的 database 工具名与空串
     'browser',
+    'database',
     ''
   ])('BMP-2 %j 不认领', (name) => {
     expect(parseBuiltinMcpToolName(name)).toBeUndefined()
@@ -219,6 +244,68 @@ describe('ssh 摘要 —— 主机在前，动作的要点在后', () => {
   })
 })
 
+describe('database 摘要 —— 连接名在前，这条查询在做什么在后', () => {
+  const summary = (args: Record<string, unknown>): string | undefined =>
+    buildToolSummary('mcp__database__query', args)
+
+  it.each<[string, Record<string, unknown>, string]>([
+    [
+      '连接名 · 说明',
+      { connection: 'prod', description: 'Count users', sql: 'SELECT count(*) FROM users' },
+      'prod · Count users'
+    ],
+    // 模型没写说明 → 退到 SQL
+    [
+      '没有说明',
+      { connection: 'prod', sql: 'SELECT count(*) FROM users' },
+      'prod · SELECT count(*) FROM users'
+    ],
+    // 只有空白的说明不算说明
+    [
+      '说明只有空白',
+      { connection: 'prod', description: '   ', sql: 'SELECT 1' },
+      'prod · SELECT 1'
+    ],
+    // SQL 取第一个有内容的行，去掉缩进（开头的空行不算）
+    [
+      'SQL 以空行与缩进开头',
+      { connection: 'prod', sql: '\n   \n    SELECT id\n  FROM users' },
+      'prod · SELECT id'
+    ],
+    ['只有连接名', { connection: 'prod' }, 'prod'],
+    ['只有说明', { description: 'Count users' }, 'Count users']
+  ])('BMP-10 query：%s', (_label, args, expected) => {
+    expect(summary(args)).toBe(expected)
+    expect(builtinMcpToolSummary('mcp__database__query', args)).toBe(expected)
+  })
+
+  it('BMP-10b 什么都没有 → 没有摘要（undefined，不是空串）；list-connections 从不带摘要', () => {
+    expect(summary({})).toBeUndefined()
+    expect(builtinMcpToolSummary('mcp__database__query', {})).toBeUndefined()
+    expect(summary({ description: '', sql: '  \n  ' })).toBeUndefined()
+    // 无参工具：参数里就算有东西也不拿来写摘要
+    expect(buildToolSummary('mcp__database__list-connections', {})).toBeUndefined()
+    expect(
+      builtinMcpToolSummary('mcp__database__list-connections', { connection: 'prod' })
+    ).toBeUndefined()
+  })
+
+  it('BMP-11 退役的 `database` 工具：历史会话里的块摘要是说明；没写说明就没有摘要（它从不退到 SQL）', () => {
+    expect(
+      buildToolSummary('database', {
+        credentialName: 'prod',
+        sql: 'SELECT 1',
+        description: 'Count users'
+      })
+    ).toBe('Count users')
+    expect(buildToolSummary('database', { credentialName: 'prod', sql: 'SELECT 1' })).toBe(
+      undefined
+    )
+    // 旧工具的名字不在内置 server 的名下：摘要只走 toolSummaries 的旧条目
+    expect(builtinMcpToolSummary('database', { description: 'Count users' })).toBeUndefined()
+  })
+})
+
 describe('fallbackToolPresentation —— 宿主表里没有时的呈现', () => {
   it('BMP-7 browser 工具 / ssh 普通工具 / ssh exec（终端形态）/ 退役的 browser 工具', () => {
     expect(fallbackToolPresentation('mcp__browser__snapshot', T)).toEqual({
@@ -245,6 +332,21 @@ describe('fallbackToolPresentation —— 宿主表里没有时的呈现', () =>
     })
   })
 
+  it('BMP-7c database 的两个工具与退役的 database 工具：远程数据库的标签、Database 图标，没有详情形态', () => {
+    for (const name of [
+      'mcp__database__list-connections',
+      'mcp__database__query',
+      // 历史会话里旧 `database` 工具的块
+      'database'
+    ]) {
+      expect(fallbackToolPresentation(name, T), name).toStrictEqual({
+        label: 'T(tool.remoteDbLabel)',
+        icon: 'Database',
+        iconColor: '#f59e0b'
+      })
+    }
+  })
+
   it.each(['mcp__tavily__search', 'read', 'ssh', 'constructor', '__proto__', 'toString', ''])(
     'BMP-7b %j → undefined（第三方工具、普通内置工具、原型链上的名字都不给呈现）',
     (name) => {
@@ -253,7 +355,13 @@ describe('fallbackToolPresentation —— 宿主表里没有时的呈现', () =>
   )
 
   it('BMP-8 改动返回的对象不影响下一次调用', () => {
-    for (const name of ['mcp__browser__click', 'mcp__ssh__exec', 'browser']) {
+    for (const name of [
+      'mcp__browser__click',
+      'mcp__ssh__exec',
+      'browser',
+      'mcp__database__query',
+      'database'
+    ]) {
       const first = fallbackToolPresentation(name, T)!
       const before = { ...first }
       first.label = 'hacked'
@@ -267,13 +375,18 @@ describe('fallbackToolPresentation —— 宿主表里没有时的呈现', () =>
       icon: 'Globe',
       iconColor: '#60a5fa'
     })
+    expect(BUILTIN_MCP_PRESENTATIONS.database.presentation).toEqual({
+      icon: 'Database',
+      iconColor: '#f59e0b'
+    })
   })
 
-  it('BMP-9 每个 labelKey 在三语里都是非空字符串；zh 是「浏览器」与「SSH」', () => {
+  it('BMP-9 每个 labelKey 在三语里都是非空字符串；zh 是「浏览器」「SSH」与「远程数据库」', () => {
     const keys = [
       ...Object.values(BUILTIN_MCP_PRESENTATIONS).map((def) => def.labelKey),
-      // 退役的 browser 工具走同一个 key（经兜底呈现取）
-      'tool.browserLabel'
+      // 退役的 browser / database 工具走同一个 key（经兜底呈现取）
+      'tool.browserLabel',
+      'tool.remoteDbLabel'
     ]
     for (const key of keys) {
       for (const [lang, bundle] of Object.entries({ en, zh, ja })) {
@@ -284,5 +397,6 @@ describe('fallbackToolPresentation —— 宿主表里没有时的呈现', () =>
     }
     expect(leaf(zh, BUILTIN_MCP_PRESENTATIONS.browser.labelKey)).toBe('浏览器')
     expect(leaf(zh, BUILTIN_MCP_PRESENTATIONS.ssh.labelKey)).toBe('SSH')
+    expect(leaf(zh, BUILTIN_MCP_PRESENTATIONS.database.labelKey)).toBe('远程数据库')
   })
 })

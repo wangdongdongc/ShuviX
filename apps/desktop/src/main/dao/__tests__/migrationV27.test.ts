@@ -96,9 +96,10 @@ const builtinRow = (id: string, name: string, at: unknown = expect.any(Number)):
 })
 
 describe('迁移 v27：内置 browser 的种子与撞名让位', () => {
-  it('MV-1 新库：恰好两行内置 inproc —— builtin-mcp-ssh 叫 ssh、builtin-mcp-browser 叫 browser', () => {
+  it('MV-1 新库跑到 v27：恰好两行内置 inproc —— builtin-mcp-ssh 叫 ssh、builtin-mcp-browser 叫 browser', () => {
     const db = new DatabaseSync(':memory:')
-    migrate(db)
+    // 只跑到 v27：之后的版本还会种别的内置行（v28 的 database），那是它们自己的用例
+    migrate(db, {}, 27)
 
     expect(byId(db, 'builtin-mcp-ssh')).toEqual(builtinRow('builtin-mcp-ssh', 'ssh'))
     expect(byId(db, 'builtin-mcp-browser')).toEqual(

@@ -684,6 +684,34 @@ export const migrations: Migration[] = [
         insert.run(id, name, now, now)
       }
     }
+  },
+  {
+    version: 28,
+    description:
+      '种子内置能力服务器 database（inproc MCP，会话默认不勾）；内置名被自定义 server 占着时让位',
+    up: (db) => {
+      // database 从内置工具改成内置能力服务器，与 v27 的 browser 同一个形状与同一条让位规则：
+      // 内置行缺失、名字却被别的行占着 → 那一行改名为 `database-custom`（再撞就加序号），再种内置行。
+      // 已保存的数据库连接（db_credentials）原样不动 —— server 在进程内读它们。
+      const now = Date.now()
+      const holderOf = db.prepare('SELECT id FROM mcp_servers WHERE name = ?')
+      if (db.prepare('SELECT 1 FROM mcp_servers WHERE id = ?').get('builtin-mcp-database')) return
+      const occupant = holderOf.get('database') as { id: string } | undefined
+      if (occupant) {
+        let freeName = 'database-custom'
+        for (let n = 2; holderOf.get(freeName); n++) freeName = `database-custom-${n}`
+        db.prepare('UPDATE mcp_servers SET name = ?, updatedAt = ? WHERE id = ?').run(
+          freeName,
+          now,
+          occupant.id
+        )
+      }
+      db.prepare(
+        `INSERT INTO mcp_servers
+           (id, name, type, command, args, env, url, headers, metadata, isEnabled, isBuiltin, cachedTools, createdAt, updatedAt)
+         VALUES (?, ?, 'inproc', '', '[]', '{}', '', '{}', '{}', 1, 1, '[]', ?, ?)`
+      ).run('builtin-mcp-database', 'database', now, now)
+    }
   }
 ]
 

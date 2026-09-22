@@ -68,14 +68,15 @@ style, each with file and line. Never modify files.
 カンマ区切りの文字列。各項目は次のいずれか：
 
 - **組み込みツール名** —— 大文字小文字を区別せず、小文字に正規化：`bash`、`read`、`write`、`edit`、
-  `ls`、`glob`、`grep`、`ask`、`database`、`git`、`session`、`knowledge`、`artifact`；
+  `ls`、`glob`、`grep`、`ask`、`git`、`session`、`knowledge`、`artifact`；
 - `agent` —— `agent` ツールで**サブエージェントを派遣**することへのオプトイン（入れ子の上限に従う：
   派遣されたエージェントは深さの上限 —— 既定 2 —— が許す間だけ、さらに派遣できる）；
 - `mcp:<server>` —— その MCP サーバーのすべてのツール（設定で構成した名前；接頭辞の後は大文字小文字を
-  保持；エージェント作成時に遅延接続される）。ShuviX にはプロセス内で動く二台が同梱されています：
-  `mcp:browser`（ShuviX 自身のブラウザパネル）と `mcp:ssh`（`~/.ssh/config` のホスト）。組み込み
-  エージェントはどれもこれらを宣言しません —— 必要なセッションが自分でチェックします —— ので、常にブラウザを
-  使うべきエージェントはリストに `mcp:browser` と書きます；
+  保持；エージェント作成時に遅延接続される）。ShuviX にはプロセス内で動く三台が同梱されています：
+  `mcp:browser`（ShuviX 自身のブラウザパネル）、`mcp:ssh`（`~/.ssh/config` のホスト）、
+  `mcp:database`（ShuviX の設定に保存したデータベース接続）。組み込みエージェントはどれもこれらを
+  宣言しません —— 必要なセッションが自分でチェックします —— ので、常にブラウザを使うべきエージェントは
+  リストに `mcp:browser` と書きます；
 - `skill:<name>` —— その skill（名前空間付きの skill は `skill:<dir>:<name>` と書く。ShuviX に同梱の
   スキルは `skill:builtin:<name>`）。
 
@@ -85,8 +86,8 @@ style, each with file and line. Never modify files.
 表示されます（ホバーすると、どのエージェントが宣言したかが出ます）。セッション自身のチェックはその上に
 足せるだけで、一つ外すにはそのエージェントを上書きします。リストを狭めることは ShuviX で役割を表す方法では
 **ありません**：`grep` の無いエージェントは `bash` で grep するだけです。組み込みの `work`、`chat`、`coding`
-は意図的に一つのリスト（`bash, read, write, edit, ask, ls, grep, glob, database, agent, session,
-knowledge, artifact, skill:builtin:drawing`）を共有し、本文だけが異なります。
+は意図的に一つのリスト（`bash, read, write, edit, ask, ls, grep, glob, agent, session, knowledge,
+artifact, skill:builtin:drawing`）を共有し、本文だけが異なります。
 
 ### 本文 —— システムプロンプト
 
