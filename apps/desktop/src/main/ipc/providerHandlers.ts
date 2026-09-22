@@ -1,4 +1,5 @@
-import { ipcMain, shell } from 'electron'
+import { BrowserWindow, ipcMain } from 'electron'
+import { routeExternalUrl } from '../services/externalOpen'
 import { providerService } from '../services/providerService'
 import { providerOAuthService } from '../services/providerOAuthService'
 import type {
@@ -136,8 +137,11 @@ export function registerProviderHandlers(): void {
           verificationUri: e.verificationUri,
           expiresInSeconds: e.expiresInSeconds
         })
-        // 顺手把验证页打开；打不开也不算失败，界面上有链接和用户码可以手动走
-        void shell.openExternal(e.verificationUri).catch(() => undefined)
+        // 顺手把验证页打开；打不开也不算失败，界面上有链接和用户码可以手动走。
+        // 这个地址来自提供商服务器的响应，不是写死的，所以同样过 externalOpen 那道闸
+        void routeExternalUrl(e.verificationUri, {
+          parent: BrowserWindow.fromWebContents(event.sender)
+        })
         return
       }
       if (e.type === 'auth_url') {

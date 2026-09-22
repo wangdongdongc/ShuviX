@@ -1,26 +1,27 @@
 /**
- * 浏览器面板里的页面能交给操作系统什么 —— tab 里 `window.open` / `target=_blank` 的去向裁决。
+ * 一个地址能不能交给操作系统 —— 全桌面端共用的裁决。
  *
- * 面板跑的是任意外部站点，agent 还能经 evaluate / cdp 在页面里执行代码。实测（Electron 39）：
- *  - 页面**导航**到非网页协议（同框链接、改 location、iframe、loadURL、cdp Page.navigate）不经过
- *    这里：Electron 以 `openExternal` 权限去问 partition 的权限处理器，initBrowserSession 一律拒绝。
- *  - **弹窗**经过这里，而且不要用户手势：自定义协议、mailto、`about:blank`（`window.open()` 与
- *    `javascript:` 弹窗到这里都是它）、`data:`、`blob:`；正显示本地文件的 tab 还能弹 `file:`
- *    （http 页面弹 file: 在渲染进程就被挡了）。
- *
- * 以前除 http(s) 外原样交给 shell.openExternal —— 一句 `window.open('file:///Applications/Calculator.app')`
- * 或某个应用的 URL scheme，系统就会打开本地文件、启动程序，不经任何询问。现在的裁决：
- *  - `web`    http(s)：面板新开 tab（与以前相同）。
+ * `shell.openExternal` 是应用与系统之间的交接：系统按协议或文件类型挑一个已注册的程序打开它，
+ * `file:///…/X.app` 就是启动那个程序，`.command` 就是让 Terminal 跑里面的命令。而想让应用走这一步
+ * 的地址，很多并不是我们写的 —— 面板里的任意站点、widget 里模型写的 HTML、聊天与笔记本里模型给出
+ * 的链接，都能说一句「打开这个地址」。裁决因此放在交接之前，且只此一份：
+ *  - `web`    http(s)：面板新开 tab / 其余窗口交给系统浏览器。这一档不问 —— 最频繁、风险最低，
+ *             天天弹只会把用户训练成闭眼点确认。
  *  - `open`   mailto:：不问，直接交给系统 —— 它只会起一封草稿。带 attach 类参数的除外（有的邮件
  *             客户端照做，把本地文件塞进草稿），改走 ask。
  *  - `refuse` 指向文件的：file:、单字母协议（Windows 盘符，`c:/…/calc.exe` 交给系统就是运行它）、
  *             网络共享（smb / afp / nfs / ftp …）—— 询问框里只有一个路径，说不清 `.app` / `.command`
- *             一打开就是运行，所以不问；浏览器内部地址（about / blob / data / javascript …，离开页面
- *             毫无意义）；解析不了的。
+ *             一打开就是运行，用户据此点确认等于没确认；浏览器内部地址（about / blob / data /
+ *             javascript …，离开页面毫无意义）；解析不了的。
  *  - `ask`    其余协议（别的应用的 URL scheme）：原生询问框写明地址，用户点了才交给系统。
  *
  * 交给系统的是裁决时解析出的规范化地址（`URL.href`），不是原串 —— 被判的就是被打开的。
- * 本文件不依赖 electron，询问框与 shell.openExternal 的接线在 browserViewService。
+ * 本文件不依赖 electron；询问框、shell.openExternal 与各窗口的接线都在 gate.ts。
+ *
+ * 实测（Electron 39）哪些路径会走到这里：**弹窗**（`window.open` / `target=_blank`）一律经过窗口的
+ * setWindowOpenHandler，且不需要用户手势；自定义协议、mailto、`about:blank`（`window.open()` 与
+ * `javascript:` 弹窗到这里都是它）、`data:`、`blob:` 都到得了，正显示本地文件的页面还能弹 `file:`。
+ * 页面**导航**到非网页协议则由 Electron 以 `openExternal` 权限去问会话的权限处理器（见 gate.ts）。
  */
 
 export type ExternalOpenDecision =
@@ -108,17 +109,20 @@ export const DECLINE_QUIET_MS = 10_000
 
 /**
  * 给 `ask` 裁决套上节流：同一时刻至多一个询问，弹着时再来的请求直接拒绝（不排队）；
- * 用户拒绝（或询问本身失败）后 DECLINE_QUIET_MS 内的请求也直接拒绝，不再调 confirm。
- * 全局一份，不分 tab。
+ * 用户拒绝（或询问本身失败）后 `quietMs` 内的请求也直接拒绝，不再调 confirm。
+ * 一份节流管所有窗口 —— 模态框压住的是窗口，按来源各算各的等于没算。
  *
  * 弹窗不要用户手势，页面可以在循环里 window.open：排队就是点完一个取消又来一个；拒绝后立刻重弹，
- * 宿主窗口就一直被模态框压着，连关掉那个 tab 的空当都没有；按 tab 分开算，页面自己多开几个 tab
- * 就绕过去了。返回的函数不会 reject。
+ * 窗口就一直被模态框压着，连关掉那个页面的空当都没有。用户自己点出来的那一档（渲染进程经
+ * `app:open-external` 递过来的）传 `quietMs: 0`：它没有循环触发的可能，而「刚点过取消所以这次点击
+ * 静默失效」只会让人以为界面坏了。返回的函数不会 reject。
  */
 export function createExternalOpenAsk<T>(
   confirm: (request: T) => Promise<boolean>,
-  now: () => number = () => Date.now()
+  opts: { now?: () => number; quietMs?: number } = {}
 ): (request: T) => Promise<boolean> {
+  const now = opts.now ?? ((): number => Date.now())
+  const quietMs = opts.quietMs ?? DECLINE_QUIET_MS
   let asking = false
   let quietUntil = 0
   return async (request) => {
@@ -132,7 +136,7 @@ export function createExternalOpenAsk<T>(
     } finally {
       asking = false
     }
-    if (!allowed) quietUntil = now() + DECLINE_QUIET_MS
+    if (!allowed) quietUntil = now() + quietMs
     return allowed
   }
 }

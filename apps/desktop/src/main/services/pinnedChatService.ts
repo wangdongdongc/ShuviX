@@ -4,6 +4,7 @@ import { is } from '@electron-toolkit/utils'
 import { chatFrontendRegistry, type ChatFrontend } from '../frontend/core'
 import { settingsDao } from '../dao/settingsDao'
 import { destroyTerminalsByWindow } from './terminalService'
+import { guardAppWindow } from './externalOpen'
 import { getBrowserOffset, clearBrowserOffset } from './panelLayoutState'
 import { appEventBus } from '../utils/appEventBus'
 import { createLogger } from '../logger'
@@ -197,6 +198,9 @@ function createFloatingWindow(sessionId: string): BrowserWindow {
       contextIsolation: true
     }
   })
+
+  // 与主窗口同样的守卫：聊天里的链接点开走系统浏览器，而不是把这个窗口带去外站
+  guardAppWindow(win)
 
   applyAlwaysOnTop(win, panel.alwaysOnTop)
 

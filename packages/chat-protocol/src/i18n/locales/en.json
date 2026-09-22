@@ -972,6 +972,14 @@
     "tasksBlockedOn": "Waiting for you",
     "calendar": "Calendar"
   },
+  "externalOpen": {
+    "title": "Open this link in another app?",
+    "fromPanel": "Requested by the page in the browser panel:",
+    "fromWidget": "Requested by the widget:",
+    "hint": "Your system will hand the link to whichever app handles it. Only open it if you expected this.",
+    "open": "Open",
+    "cancel": "Cancel"
+  },
   "browser": {
     "back": "Back",
     "forward": "Forward",
@@ -990,13 +998,6 @@
     "cert": {
       "title": "Untrusted certificate: {{host}}",
       "continue": "Continue anyway",
-      "cancel": "Cancel"
-    },
-    "external": {
-      "title": "Open this link in another app?",
-      "requestedBy": "Requested by the page in the browser panel:",
-      "hint": "Your system will hand the link to whichever app handles it. Only open it if you expected this.",
-      "open": "Open",
       "cancel": "Cancel"
     },
     "error": {

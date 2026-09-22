@@ -1,7 +1,8 @@
-import { BrowserWindow, shell } from 'electron'
+import { BrowserWindow } from 'electron'
 import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
 import { settingsDao } from '../dao/settingsDao'
+import { guardAppWindow } from './externalOpen'
 import { widgetService } from './widget'
 import { appEventBus } from '../utils/appEventBus'
 import { createLogger } from '../logger'
@@ -131,18 +132,10 @@ export function open(widgetId: string): void {
     }
   })
 
-  // widget 内容（跨源 iframe）里的 window.open / target=_blank → 系统浏览器
-  win.webContents.setWindowOpenHandler((details) => {
-    shell.openExternal(details.url)
-    return { action: 'deny' }
-  })
-  // 拦截顶层导航（防 widget 把 shell 整个带走），dev 下放行 HMR
-  win.webContents.on('will-navigate', (event, url) => {
-    const rendererUrl = process.env['ELECTRON_RENDERER_URL'] || ''
-    if (rendererUrl && url.startsWith(rendererUrl)) return
-    event.preventDefault()
-    shell.openExternal(url)
-  })
+  // widget 内容（跨源 iframe 里模型写的 HTML）的 window.open / target=_blank，以及顶层导航
+  // （防 widget 把 shell 整个带走）：都交给 externalOpen 那道闸，http(s) 才去系统浏览器。
+  // 询问框里点名是哪个 widget 要开 —— 用户看到的是窗口里那张卡片，不是某个地址。
+  guardAppWindow(win, { labelKey: 'externalOpen.fromWidget', value: widget.name })
 
   const hash = `widget-window?widgetId=${encodeURIComponent(widgetId)}`
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {

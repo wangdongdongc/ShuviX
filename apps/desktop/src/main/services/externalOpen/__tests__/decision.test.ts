@@ -9,6 +9,8 @@
  *  - EO-19…31 createExternalOpenAsk 的节流：同一时刻至多一个询问，弹着时再来的直接 false（不排队）；
  *    拒绝或询问本身失败之后静默 DECLINE_QUIET_MS（从询问框关掉那一刻起算），允许之后不静默；
  *    返回的函数从不 reject。
+ *  - AG-54…57 `quietMs` 这个参数本身：0 就是「只保一次一个、不设静默期」—— 用户亲手点出来的那一档
+ *    用的正是它（gate.ts 的 askFromUser），「刚点过取消所以这次点击静默失效」只会让人以为界面坏了。
  */
 import { afterEach, describe, expect, it, vi, type Mock } from 'vitest'
 import {
@@ -17,7 +19,7 @@ import {
   createExternalOpenAsk,
   externalOpenDecision,
   type ExternalOpenDecision
-} from '../externalOpen'
+} from '../decision'
 
 type Row = [raw: string, expected: ExternalOpenDecision]
 
@@ -384,7 +386,7 @@ describe('createExternalOpenAsk', () => {
 
   it('EO-19 confirm 答 true → 返回 true；confirm 只调一次，收到的就是那个请求对象', async () => {
     const { confirm, answers } = controlled()
-    const ask = createExternalOpenAsk(confirm, () => 0)
+    const ask = createExternalOpenAsk(confirm, { now: () => 0 })
     const request = { tab: 'A' }
     const pending = ask(request)
     answers[0].resolve(true)
@@ -396,7 +398,7 @@ describe('createExternalOpenAsk', () => {
 
   it('EO-20 confirm 答 false → 返回 false', async () => {
     const { confirm, answers } = controlled()
-    const ask = createExternalOpenAsk(confirm, () => 0)
+    const ask = createExternalOpenAsk(confirm, { now: () => 0 })
     const pending = ask({ tab: 'A' })
     answers[0].resolve(false)
 
@@ -406,7 +408,7 @@ describe('createExternalOpenAsk', () => {
   it('EO-21 拒绝后 DECLINE_QUIET_MS 内直接 false、不调 confirm；满 DECLINE_QUIET_MS 再问', async () => {
     const { confirm, answers } = controlled()
     let clock = 1000
-    const ask = createExternalOpenAsk(confirm, () => clock)
+    const ask = createExternalOpenAsk(confirm, { now: () => clock })
     const declined = ask({ tab: 'A' })
     answers[0].resolve(false)
     await expect(declined).resolves.toBe(false)
@@ -426,7 +428,7 @@ describe('createExternalOpenAsk', () => {
   it('EO-22 静默期从询问框关掉那一刻起算，不是从弹出时', async () => {
     const { confirm, answers } = controlled()
     let clock = 0
-    const ask = createExternalOpenAsk(confirm, () => clock)
+    const ask = createExternalOpenAsk(confirm, { now: () => clock })
     const pending = ask({ tab: 'A' })
 
     clock = 60_000
@@ -447,7 +449,7 @@ describe('createExternalOpenAsk', () => {
 
   it('EO-23 允许之后不静默：同一时刻再来照样问', async () => {
     const { confirm, answers } = controlled()
-    const ask = createExternalOpenAsk(confirm, () => 0)
+    const ask = createExternalOpenAsk(confirm, { now: () => 0 })
     const allowed = ask({ tab: 'A' })
     answers[0].resolve(true)
     await expect(allowed).resolves.toBe(true)
@@ -461,7 +463,7 @@ describe('createExternalOpenAsk', () => {
 
   it('EO-24 询问框弹着时再来的请求直接 false：不排队，也不起静默期', async () => {
     const { confirm, answers } = controlled()
-    const ask = createExternalOpenAsk(confirm, () => 0)
+    const ask = createExternalOpenAsk(confirm, { now: () => 0 })
     const requestA = { tab: 'A' }
     const requestB = { tab: 'B' }
     const pendingA = ask(requestA)
@@ -488,7 +490,7 @@ describe('createExternalOpenAsk', () => {
     const confirm = vi.fn(
       (_request: Req): Promise<boolean> => Promise.reject(new Error('dialog failed'))
     )
-    const ask = createExternalOpenAsk(confirm, () => clock)
+    const ask = createExternalOpenAsk(confirm, { now: () => clock })
     await expect(ask({ tab: 'A' })).resolves.toBe(false)
 
     clock = 1
@@ -505,7 +507,7 @@ describe('createExternalOpenAsk', () => {
     const confirm = vi.fn((_request: Req): Promise<boolean> => {
       throw new Error('dialog failed')
     })
-    const ask = createExternalOpenAsk(confirm, () => clock)
+    const ask = createExternalOpenAsk(confirm, { now: () => clock })
     await expect(ask({ tab: 'A' })).resolves.toBe(false)
 
     clock = 1
@@ -526,7 +528,7 @@ describe('createExternalOpenAsk', () => {
     async (_label, value) => {
       let clock = 0
       const confirm = vi.fn((_request: Req) => Promise.resolve(value as unknown as boolean))
-      const ask = createExternalOpenAsk(confirm, () => clock)
+      const ask = createExternalOpenAsk(confirm, { now: () => clock })
       await expect(ask({ tab: 'A' })).resolves.toBe(false)
 
       clock = 1
@@ -542,7 +544,7 @@ describe('createExternalOpenAsk', () => {
   it('EO-28 静默期里被拒的请求不顺延静默期', async () => {
     const { confirm, answers } = controlled()
     let clock = 0
-    const ask = createExternalOpenAsk(confirm, () => clock)
+    const ask = createExternalOpenAsk(confirm, { now: () => clock })
     const declined = ask({ tab: 'A' })
     answers[0].resolve(false)
     await expect(declined).resolves.toBe(false)
@@ -586,8 +588,8 @@ describe('createExternalOpenAsk', () => {
   it('EO-30 两份节流互不相干：一份刚被拒，另一份照样问', async () => {
     const one = controlled()
     const two = controlled()
-    const askOne = createExternalOpenAsk(one.confirm, () => 0)
-    const askTwo = createExternalOpenAsk(two.confirm, () => 0)
+    const askOne = createExternalOpenAsk(one.confirm, { now: () => 0 })
+    const askTwo = createExternalOpenAsk(two.confirm, { now: () => 0 })
     const declined = askOne({ tab: 'A' })
     one.answers[0].resolve(false)
     await expect(declined).resolves.toBe(false)
@@ -604,5 +606,68 @@ describe('createExternalOpenAsk', () => {
 
   it('EO-31 DECLINE_QUIET_MS 是 10 秒', () => {
     expect(DECLINE_QUIET_MS).toBe(10_000)
+  })
+
+  it('AG-54 quietMs: 0 —— 拒绝后不静默：同一时刻再来照样调 confirm，答什么就回什么', async () => {
+    const { confirm, answers } = controlled()
+    const ask = createExternalOpenAsk(confirm, { now: () => 0, quietMs: 0 })
+    const declined = ask({ tab: 'A' })
+    answers[0].resolve(false)
+    await expect(declined).resolves.toBe(false)
+
+    const again = ask({ tab: 'A' })
+    await flush()
+    expect(confirm).toHaveBeenCalledTimes(2)
+    answers[1].resolve(true)
+    await expect(again).resolves.toBe(true)
+  })
+
+  it('AG-55 quietMs: 0 照样一次一个：confirm 还没答时第二个直接 false，第一个落定后第三个才又问', async () => {
+    const { confirm, answers } = controlled()
+    const ask = createExternalOpenAsk(confirm, { now: () => 0, quietMs: 0 })
+    const pending = ask({ tab: 'A' })
+
+    await expect(ask({ tab: 'B' })).resolves.toBe(false)
+    expect(confirm).toHaveBeenCalledTimes(1)
+
+    answers[0].resolve(false)
+    await expect(pending).resolves.toBe(false)
+
+    const third = ask({ tab: 'C' })
+    await flush()
+    expect(confirm).toHaveBeenCalledTimes(2)
+    answers[1].resolve(true)
+    await expect(third).resolves.toBe(true)
+  })
+
+  it('AG-56 quietMs 自定义（500 ms）：拒绝后 499 ms 内不问，满 500 ms 再问', async () => {
+    const { confirm, answers } = controlled()
+    let clock = 1000
+    const ask = createExternalOpenAsk(confirm, { now: () => clock, quietMs: 500 })
+    const declined = ask({ tab: 'A' })
+    answers[0].resolve(false)
+    await expect(declined).resolves.toBe(false)
+
+    clock = 1000 + 499
+    await expect(ask({ tab: 'A' })).resolves.toBe(false)
+    expect(confirm).toHaveBeenCalledTimes(1)
+
+    clock = 1000 + 500
+    const again = ask({ tab: 'A' })
+    await flush()
+    expect(confirm).toHaveBeenCalledTimes(2)
+    answers[1].resolve(false)
+    await expect(again).resolves.toBe(false)
+  })
+
+  it('AG-57 quietMs: 0 且 confirm reject → 回 false 而不 reject；下一次照样问（锁确实放开了）', async () => {
+    const confirm = vi.fn(
+      (_request: Req): Promise<boolean> => Promise.reject(new Error('dialog failed'))
+    )
+    const ask = createExternalOpenAsk(confirm, { now: () => 0, quietMs: 0 })
+    await expect(ask({ tab: 'A' })).resolves.toBe(false)
+
+    await expect(ask({ tab: 'A' })).resolves.toBe(false)
+    expect(confirm).toHaveBeenCalledTimes(2)
   })
 })

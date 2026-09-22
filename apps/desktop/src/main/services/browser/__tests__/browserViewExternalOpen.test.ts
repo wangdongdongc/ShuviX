@@ -16,7 +16,7 @@
  * 用例里 load() 重新导入。
  */
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
-import { clipUrl } from '../externalOpen'
+import { clipUrl } from '../../externalOpen'
 
 /** dialog.showMessageBox 收到的选项里本文件关心的那几项 */
 interface MessageBoxOptions {

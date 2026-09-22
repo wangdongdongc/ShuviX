@@ -1,6 +1,5 @@
 import {
   app,
-  shell,
   session,
   BrowserWindow,
   Menu,
@@ -35,6 +34,11 @@ import { getBrowserOffset, setBrowserOffset, clearBrowserOffset } from './servic
 // pglite: widget 共享库的 WASM 运行时，退出时统一回收 worker
 import { disposePglite } from './services/pglite'
 import { initBrowserHost, destroyAllTabs, initBrowserSession } from './services/browser'
+import {
+  approveOpenExternalPermission,
+  guardAppWindow,
+  routeExternalUrl
+} from './services/externalOpen'
 import { widgetServer } from './services/widget'
 import { cliServer } from './services/cliServer'
 import { closeAllWatchers } from './services/filesWatcherService'
@@ -160,6 +164,9 @@ function openSettingsWindow(tab?: string): void {
       contextIsolation: true
     }
   })
+
+  // 与主窗口同样的守卫：设置页里的链接不该把这个窗口带去外站（preload 对新页面照样生效）
+  guardAppWindow(settingsWindow)
 
   // 加载同一渲染入口，用 #settings hash 区分（可附加 tab 路径如 #settings/providers）
   const hash = tab ? `settings/${tab}` : 'settings'
@@ -425,19 +432,9 @@ function createWindow(): void {
   // 记录浏览器面板的宿主窗口（tab 的 WebContentsView 按需创建，renderer 通过 IPC 控制）
   initBrowserHost(mainWindow)
 
-  mainWindow.webContents.setWindowOpenHandler((details) => {
-    shell.openExternal(details.url)
-    return { action: 'deny' }
-  })
-
-  // 拦截页面内导航（点击 <a href> 链接），阻止应用变成浏览器，改用系统默认浏览器打开
-  mainWindow.webContents.on('will-navigate', (event, url) => {
-    // 允许开发环境的 HMR 热更新导航
-    const rendererUrl = process.env['ELECTRON_RENDERER_URL'] || ''
-    if (rendererUrl && url.startsWith(rendererUrl)) return
-    event.preventDefault()
-    shell.openExternal(url)
-  })
+  // 弹窗与页面内导航（点 <a href>、PDF 里的链接、预览 iframe 里的脚本）都不自己走：
+  // 阻止应用变成浏览器，去向交给 externalOpen 那道闸（http(s) → 系统浏览器）
+  guardAppWindow(mainWindow)
 
   // 关闭前清理该窗口关联的终端实例 + 释放 browserOffset 跟踪
   const mainWebContentsId = mainWindow.webContents.id
@@ -518,11 +515,15 @@ ipcMain.handle('app:open-settings', (_event, tab?: string) => {
   return { success: true }
 })
 
-// 用系统默认浏览器打开外部链接
-ipcMain.handle('app:open-external', async (_event, url: string) => {
-  const { shell } = await import('electron')
-  await shell.openExternal(url)
-  return { success: true }
+// 渲染进程要打开的外链（聊天 / 笔记本里的链接、面板的「在系统浏览器打开」、验证页…）。
+// 调用方是自己人，但地址多半来自内容（模型写的 md、面板里那个 tab 的地址），所以照样过闸；
+// 用户是亲手点的，询问因此不设静默期（byUser）。回 success=false 表示没交给系统。
+ipcMain.handle('app:open-external', async (event, url: string) => {
+  const success = await routeExternalUrl(url, {
+    parent: BrowserWindow.fromWebContents(event.sender),
+    byUser: true
+  })
+  return { success }
 })
 
 // 用系统文件管理器打开指定文件夹
@@ -596,10 +597,18 @@ app.whenReady().then(async () => {
   registerCustomProtocolHandlers()
 
   // 主窗口（自有页面）的权限请求一律放行。
+  // 例外是 `openExternal` —— 它不是「页面要用某个能力」，而是页面导航到非网页协议、Electron 在问
+  // 要不要把这个地址交给操作系统（准了由它自己交，不经 shell.openExternal）。那一档走同一道闸。
   // 注意：内置浏览器跑在独立 partition（BROWSER_PARTITION），权限策略由 initBrowserSession() 单独管理。
-  session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => {
-    callback(true)
-  })
+  session.defaultSession.setPermissionRequestHandler(
+    (webContents, permission, callback, details) => {
+      if (permission === 'openExternal' && 'externalURL' in details) {
+        void approveOpenExternalPermission(webContents, details).then(callback)
+        return
+      }
+      callback(true)
+    }
+  )
 
   // 设置应用图标（开发模式下 Dock/任务栏也显示自定义图标）
   const iconPath = join(app.getAppPath(), 'resources/icon.png')

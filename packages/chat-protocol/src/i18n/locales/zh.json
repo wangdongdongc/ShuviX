@@ -972,6 +972,14 @@
     "tasksBlockedOn": "等你回答",
     "calendar": "日历"
   },
+  "externalOpen": {
+    "title": "用其他应用打开这个链接？",
+    "fromPanel": "发起的页面（浏览器面板）：",
+    "fromWidget": "发起的 widget：",
+    "hint": "系统会把链接交给处理它的应用。不是你预期的操作就取消。",
+    "open": "打开",
+    "cancel": "取消"
+  },
   "browser": {
     "back": "后退",
     "forward": "前进",
@@ -990,13 +998,6 @@
     "cert": {
       "title": "证书不受信任：{{host}}",
       "continue": "继续访问",
-      "cancel": "取消"
-    },
-    "external": {
-      "title": "用其他应用打开这个链接？",
-      "requestedBy": "发起的页面（浏览器面板）：",
-      "hint": "系统会把链接交给处理它的应用。不是你预期的操作就取消。",
-      "open": "打开",
       "cancel": "取消"
     },
     "error": {

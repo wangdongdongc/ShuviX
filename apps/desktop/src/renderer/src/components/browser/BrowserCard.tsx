@@ -86,6 +86,9 @@ export function BrowserCard({
   }, [tab.url])
 
   const view = window.api.browserView
+  // 「在系统浏览器打开」只对网页有意义：本地文件与别的协议不会交给系统（见 services/externalOpen），
+  // 按钮留着就是一个点了没反应的控件
+  const canOpenExternal = /^https?:/i.test(tab.url || '')
   const btn =
     'flex-shrink-0 p-0.5 rounded text-text-tertiary hover:text-text-secondary hover:bg-bg-hover'
 
@@ -168,16 +171,18 @@ export function BrowserCard({
             <Bot size={11} />
           </span>
         )}
-        <button
-          onClick={(e) => {
-            e.stopPropagation()
-            onOpenExternal()
-          }}
-          title={t('browser.openExternal')}
-          className={btn}
-        >
-          <ExternalLink size={10} />
-        </button>
+        {canOpenExternal && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              onOpenExternal()
+            }}
+            title={t('browser.openExternal')}
+            className={btn}
+          >
+            <ExternalLink size={10} />
+          </button>
+        )}
         <button
           onClick={(e) => {
             e.stopPropagation()

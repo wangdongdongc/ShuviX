@@ -10,13 +10,13 @@
  * 面板关闭不销毁 tab（保留页面状态），销毁只发生在 closeTab 与 app 退出。
  */
 
-import { WebContentsView, BrowserWindow, dialog, session, shell } from 'electron'
+import { WebContentsView, BrowserWindow, dialog, session } from 'electron'
 import { randomUUID } from 'crypto'
 import { createLogger } from '../../logger'
 import { settingsDao } from '../../dao/settingsDao'
 import { t } from '../../i18n'
 import { browserCdpManager } from './browserCdpService'
-import { clipUrl, createExternalOpenAsk, externalOpenDecision } from './externalOpen'
+import { routeExternalUrl } from '../externalOpen'
 
 const log = createLogger('BrowserView')
 
@@ -131,65 +131,21 @@ function applyLayout(): void {
 }
 
 /**
- * 弹窗要交给系统的地址先问用户（`ask` 裁决，见 externalOpen.ts）：原生询问框写明地址与发起
- * 页面，默认按钮是取消。一次只弹一个、拒绝后静默一阵，由 createExternalOpenAsk 管。
- */
-const askExternalOpen = createExternalOpenAsk(
-  async ({ url, pageUrl }: { url: string; pageUrl: string }): Promise<boolean> => {
-    if (!hostWindow || hostWindow.isDestroyed()) return false
-    const { response } = await dialog.showMessageBox(hostWindow, {
-      type: 'warning',
-      buttons: [t('browser.external.open'), t('browser.external.cancel')],
-      defaultId: 1,
-      cancelId: 1,
-      message: t('browser.external.title'),
-      // 地址与页面是页面给的字符串，拼接而不走 i18next 插值：插值按首次出现替换占位符，
-      // 地址里写一个 `{{page}}`（自定义协议里原样送到），框里显示的就不是要打开的那个地址了
-      detail: [
-        clipUrl(url),
-        '',
-        t('browser.external.requestedBy'),
-        clipUrl(pageUrl),
-        '',
-        t('browser.external.hint')
-      ].join('\n')
-    })
-    return response === 0
-  }
-)
-
-function openExternally(url: string): void {
-  shell.openExternal(url).catch((err) => log.warn(`openExternal failed: ${clipUrl(url)}`, err))
-}
-
-/**
  * tab 里的 window.open / target=_blank 往哪去（面板从不真开新窗口）：http(s) 在面板新开 tab，
- * 其余按 externalOpenDecision 直接交给系统、先问用户、或拒绝。
+ * 其余交给 externalOpen 那道闸 —— 直接交给系统、先问用户、或拒绝。
  */
 function routeWindowOpen(targetUrl: string, pageUrl: string): void {
-  const decision = externalOpenDecision(targetUrl)
-  switch (decision.action) {
-    case 'web':
+  void routeExternalUrl(targetUrl, {
+    parent: hostWindow,
+    source: { labelKey: 'externalOpen.fromPanel', value: pageUrl },
+    onWeb: (url) => {
       try {
-        createTab(decision.url, { activate: true })
+        createTab(url, { activate: true })
       } catch (err) {
         log.warn('window.open createTab failed', err)
       }
-      return
-    case 'open':
-      openExternally(decision.url)
-      return
-    case 'ask': {
-      const { url } = decision
-      void askExternalOpen({ url, pageUrl }).then((allowed) => {
-        if (allowed) openExternally(url)
-        else log.info(`window.open declined or suppressed: ${clipUrl(url)}`)
-      })
-      return
     }
-    case 'refuse':
-      log.info(`window.open refused (${decision.reason}): ${clipUrl(targetUrl)}`)
-  }
+  })
 }
 
 /** 创建新 tab；返回 tabId。超过 MAX_TABS 抛错 */
