@@ -5,7 +5,7 @@
   "type": "module",
   "description": "ShuviX Chrome 扩展（MV3）—— 每个标签页右侧一个侧边栏临时会话，会话跑在 ShuviX 桌面端；扩展只是界面与标签页上的手（经原生消息连桌面）。",
   "scripts": {
-    "dev": "vite",
+    "dev": "vite build --watch",
     "build": "vite build",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },

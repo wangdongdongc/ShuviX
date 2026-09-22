@@ -8,9 +8,9 @@ A desktop AI assistant that connects to mainstream LLMs and acts on your compute
 
 → [`apps/desktop`](./apps/desktop/README.md)
 
-## Browser extension
+## Chrome extension
 
-A browser-native AI assistant that lives in the side panel and works alongside whatever you're browsing, so its help stays in the flow of your work on the web.
+ShuviX next to any page in your own Chrome. Each tab can open a side panel with its own conversation; the conversation runs in the desktop app, with your models, keys and policies, and can read and operate your signed-in tabs — asking before it touches a site you have not used in that conversation.
 
 → [`apps/extension`](./apps/extension/README.md)
 
