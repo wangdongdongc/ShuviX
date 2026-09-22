@@ -31,10 +31,12 @@ import {
   NOTEBOOK_PROFILE_NAME,
   BOT_PROFILE_NAME,
   SessionManager,
+  TAB_PROFILE_NAME,
   WORK_PROFILE_NAME
 } from '@shuvix/agent-runtime'
 import type { SubAgentModelConfig } from '@shuvix/agent-runtime'
 import { isBotSessionSettings } from '@shuvix/chat-protocol/botSession'
+import { chromeTabOf, isChromeTabSessionSettings } from '@shuvix/chat-protocol/chromeTabSession'
 import { agentService } from './agentService'
 // 仅在方法体内调用：两个模块的构造期都不互相触碰，ESM 活绑定下无初始化环
 import { AgentSession } from './agentSession'
@@ -61,6 +63,12 @@ function broadcastAgentClosing(sessionId: string, closing: boolean): void {
 function broadcastAgentCreated(sessionId: string): void {
   chatFrontendRegistry.broadcast({ type: 'agent_created', sessionId })
 }
+
+/**
+ * 内置能力服务器 `chrome`（用户真实的 Chrome）在工具名单里的写法。它不是会话可勾选的扩展能力：
+ * 只由 Chrome 标签页会话的基座档案 `tab` 声明（桌面自己的会话只用应用内的浏览器面板）。
+ */
+const CHROME_TOOL_NAME = 'mcp:chrome'
 
 /** 只留会话级工具名（mcp:/skill:）并去重保序 —— 扩展能力勾选里不该有别的东西 */
 function sessionScopedTools(names: readonly string[]): string[] {
@@ -125,9 +133,12 @@ export class SessionService {
 
   // ─── DB CRUD ──────────────────────────────────
 
-  /** 获取所有会话 */
+  /**
+   * 获取所有会话（侧栏列表）。Chrome 标签页会话不在其中：它是那个标签页的临时对话，
+   * 不是用户的一条会话记录（寿命跟着标签页，见 chromeTabSession.ts）。
+   */
   list(): Session[] {
-    return sessionDao.findAll()
+    return sessionDao.findAll().filter((s) => !isChromeTabSessionSettings(s.settings))
   }
 
   /**
@@ -217,13 +228,16 @@ export class SessionService {
    */
   create(params?: SessionCreateParams): Session {
     const id = uuidv7()
-    const notebookPath = params?.notebookPath
+    // Chrome 标签页会话：无项目、无父会话、不继承任何扩展能力勾选 —— 它的工具全由基座档案 `tab`
+    // 声明（含 mcp:chrome），形态推导见 resolveAgentProfileName
+    const chromeTab = chromeTabOf(params)
+    const notebookPath = chromeTab ? undefined : params?.notebookPath
     const now = Date.now()
-    const parentId = params?.parentId ?? null
+    const parentId = chromeTab ? null : (params?.parentId ?? null)
     const parent = parentId ? sessionDao.pick(parentId, ['projectId', 'settings']) : undefined
-    const pid = parent ? parent.projectId : (params?.projectId ?? null)
+    const pid = chromeTab ? null : parent ? parent.projectId : (params?.projectId ?? null)
     // 子会话抄父会话的勾选，其余按项目继承（与旧会话补键同一条规则，见 inheritedSelection）
-    const enabledTools = this.inheritedSelection(parentId, pid)
+    const enabledTools = chromeTab ? [] : this.inheritedSelection(parentId, pid)
 
     // bot 会话：绑定一个 bot，**有根**（根档案 bot，形态推导见 resolveAgentProfileName）。空串 / 空白视同没给
     const bot = params?.bot?.trim() || undefined
@@ -244,6 +258,7 @@ export class SessionService {
         // 用户为这条对话关掉的询问，不该在它每开一条子会话时原样回来。
         // 路径授权（allowList）刻意**不**继承：那是一条会长大的记账，快照过去只会漂移。
         ...(parent?.settings?.autoAllow ? { autoAllow: true } : {}),
+        ...(chromeTab ? { chromeTab } : {}),
         // 扩展能力勾选恒写键（见方法注释）
         enabledTools
         // 档案**不在这里写**：根 Agent 的档案由会话形态推导（项目会话 work / 无项目 chat /
@@ -273,6 +288,7 @@ export class SessionService {
    *  - 笔记本会话（settings.notebookPath 非空）恒为 `notebook`
    *    （用户覆盖 `~/.shuvix/agents/notebook.md` 经 getProfile 按名合并自动生效）；
    *  - bot 会话（settings.bot 非空）恒为 `bot`：人设与记忆经 systemContext 注入（见 agentSession）；
+   *  - Chrome 标签页会话（settings.chromeTab）恒为 `tab`；
    *  - 子会话可以带一个父级点名、`pinAgentProfile` 钉下的 `settings.agentProfile`
    *    （如 `coding`）：档案还在就用它。档案是纯 md 驱动的，用户随时可能删掉某个
    *    `~/.shuvix/agents/<name>.md`，钉着一个已不存在的名字时回落形态基座而不是卡死；
@@ -289,6 +305,8 @@ export class SessionService {
     // bot 会话：根 Agent 恒为基座 `bot`，人设与记忆经 systemContext 注入（见 agentSession.create）。
     // 与笔记本一样按形态推导，没有设置项
     if (isBotSessionSettings(settings)) return BOT_PROFILE_NAME
+    // Chrome 标签页会话：根 Agent 恒为基座 `tab`（只有它声明 mcp:chrome —— 用户真实的 Chrome）
+    if (isChromeTabSessionSettings(settings)) return TAB_PROFILE_NAME
     const pinned = session?.parentId ? settings?.agentProfile : undefined
     if (pinned) {
       if (agentService.getProfile(pinned)) return pinned
@@ -542,8 +560,12 @@ export class SessionService {
       : undefined
     const workingDirectory = project?.path || getTempWorkspace(sessionId)
     // 滤掉已不可用的 MCP（配置里已停用 / 已删）与 skill（已删 / 已停用）；设置里的原值不动。
-    // 可用性**不看连接状态** —— MCP 惰性启动，没连上的那台正要在下一步（装配工具）被连起来
-    const enabledTools = filterAvailableTools(selectedTools, project?.path)
+    // 可用性**不看连接状态** —— MCP 惰性启动，没连上的那台正要在下一步（装配工具）被连起来。
+    // `mcp:chrome`（用户真实的 Chrome）不接受会话勾选：只由 Chrome 标签页会话的基座档案声明
+    const enabledTools = filterAvailableTools(
+      selectedTools.filter((name) => name !== CHROME_TOOL_NAME),
+      project?.path
+    )
     return {
       provider,
       model,

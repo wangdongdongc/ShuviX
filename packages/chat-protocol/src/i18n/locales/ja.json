@@ -751,7 +751,25 @@
     "hookTemplateBody": "このセッションが何をしているかを一文で要約して終了してください。このフックを起動したイベントは、この文の後ろに自動的に付加されます。",
     "botDeleteConfirmTitle": "Bot を削除",
     "botDeleteConfirmDesc": "Bot「{{name}}」を削除しますか？セッションは残りますが、作り直すまで人格も記憶もありません。",
-    "botDeleteFileConfirmDesc": "ファイル「{{name}}」を削除しますか？現在は無効です。"
+    "botDeleteFileConfirmDesc": "ファイル「{{name}}」を削除しますか？現在は無効です。",
+    "chromeExtConnectedTitle": "接続中のブラウザー",
+    "chromeExtConnectedDesc": "ShuviX 拡張機能がこのアプリにつながっているブラウザー。各タブで ShuviX サイドパネルを開け、その会話はここで、あなたのモデルとキーで動く。あなたの Chrome を操作できるのはこれらの会話だけ —— このアプリ内のセッションは引き続き内蔵のブラウザーパネルを使う。",
+    "chromeExtNoBrowser": "接続中のブラウザーはない。Chrome に ShuviX 拡張機能を読み込み、任意のページでツールバーのアイコンをクリックする。",
+    "chromeExtVersion": "拡張機能 {{version}}",
+    "chromeExtConnected": "接続中",
+    "chromeExtMismatch": "更新が必要",
+    "chromeExtSetupTitle": "拡張機能のインストール",
+    "chromeExtSetupDesc": "拡張機能はまだ Chrome ウェブストアにない。ShuviX の各リリースに zip として同梱され、「パッケージ化されていない拡張機能」として読み込む。",
+    "chromeExtStepDownload": "このバージョンの shuvix-chrome-extension-<バージョン>.zip をダウンロードして展開する：",
+    "chromeExtReleases": "リリース",
+    "chromeExtStepLoad": "Chrome で chrome://extensions を開き、デベロッパーモードをオンにして「パッケージ化されていない拡張機能を読み込む」から展開したフォルダーを選ぶ。",
+    "chromeExtStepOpen": "任意のページで ShuviX アイコンをクリックしてサイドパネルを開く。",
+    "chromeExtHostTitle": "ローカルコンポーネント",
+    "chromeExtHostDesc": "Chrome は小さなローカルプログラム（ネイティブメッセージングホスト）を通じてこのアプリにつながる。ShuviX は起動のたびに見つかったすべての Chromium 系ブラウザーへ登録する。「修復」は今すぐ登録し直す —— 新しいブラウザーを入れた後やアプリを移動した後に使う。",
+    "chromeExtRepair": "修復",
+    "chromeExtHostPending": "登録しています…",
+    "chromeExtHostInstalled": "登録先",
+    "chromeExtHostNoBrowser": "このコンピューターに Chromium 系ブラウザーが見つからない"
   },
   "about": {
     "description": "あなたのAIアシスタント",
@@ -796,6 +814,7 @@
     "globHint": "ファイル名パターン（例: *.ts）でファイルを検索",
     "skillHint": "定義済みの指示セットを読み込み、AI に特定分野の能力を付与",
     "browserLabel": "ブラウザ",
+    "chromeLabel": "Chrome",
     "sshLabel": "SSH",
     "gitLabel": "バージョン管理",
     "gitHint": "ローカルバージョン管理 — status/diff/ステージ/コミット/ブランチ/チェックアウト、isomorphic-git ベース、ネットワーク操作なし",
@@ -1092,5 +1111,22 @@
     "dialogEmpty": "Bot がまだありません。定義ファイルをフォルダに置くと使えます。",
     "dialogOpenFolder": "Bots フォルダを開く",
     "emptyHint": "{{name}} に最初のメッセージを送りましょう。"
+  },
+  "chromePanel": {
+    "connecting": "ShuviX に接続しています…",
+    "hostMissingTitle": "このブラウザーはまだ ShuviX とつながっていない",
+    "hostMissingBody": "ShuviX デスクトップアプリをインストールして一度起動する —— 起動時にこの拡張機能とつながる。その後このパネルを開き直す。",
+    "offlineTitle": "ShuviX が起動していない",
+    "offlineBody": "ShuviX デスクトップアプリを開くと、このページについて会話できる。会話はそちらで、あなた自身のモデルとキーで動く。",
+    "mismatchTitle": "更新が必要",
+    "mismatchBody": "この拡張機能と ShuviX デスクトップアプリのバージョンが一致しない。両方を同じリリースに更新する。",
+    "errorTitle": "このタブの会話を開けなかった",
+    "retry": "再試行",
+    "thisTab": "このタブ",
+    "addTab": "タブを追加",
+    "removeTab": "このタブを外す",
+    "noOtherTabs": "ほかのタブはない",
+    "emptyTitle": "このページについて聞く",
+    "emptyHint": "ShuviX はこのページを読み、情報を取り出し、入力し、ほかのタブにまたがる用事も片付けられる。"
   }
 }

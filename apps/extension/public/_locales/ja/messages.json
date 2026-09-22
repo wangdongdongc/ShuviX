@@ -1,0 +1,11 @@
+{
+  "appName": {
+    "message": "ShuviX"
+  },
+  "appDescription": {
+    "message": "Chrome のどのページの隣でも ShuviX と会話できる。会話は ShuviX デスクトップアプリ上で、あなた自身のモデルとキーで動く。"
+  },
+  "actionTitle": {
+    "message": "このページについて ShuviX に聞く"
+  }
+}

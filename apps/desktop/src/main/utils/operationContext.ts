@@ -5,6 +5,8 @@ import { v4 as uuid } from 'uuid'
 export type OperationSource =
   | { type: 'electron' }
   | { type: 'telegram'; botId: string; userId: string; chatId: string }
+  /** Chrome 扩展的侧边栏（经桥）：哪个浏览器（扩展安装 id） */
+  | { type: 'chrome'; installId: string }
 
 /** 操作上下文 — 每次用户操作一个实例 */
 export interface OperationContext {
@@ -25,6 +27,16 @@ export function getOperationContext(): OperationContext | undefined {
 /** 工厂：Electron IPC 上下文 */
 export function createElectronContext(sessionId?: string): OperationContext {
   return { requestId: uuid(), source: { type: 'electron' }, sessionId, timestamp: Date.now() }
+}
+
+/** 工厂：Chrome 侧边栏上下文 */
+export function createChromeContext(installId: string, sessionId?: string): OperationContext {
+  return {
+    requestId: uuid(),
+    source: { type: 'chrome', installId },
+    sessionId,
+    timestamp: Date.now()
+  }
 }
 
 /** 工厂：Telegram Bot 上下文 */

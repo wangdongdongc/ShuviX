@@ -1,0 +1,11 @@
+{
+  "appName": {
+    "message": "ShuviX"
+  },
+  "appDescription": {
+    "message": "在 Chrome 的任意页面旁与 ShuviX 对话。对话在 ShuviX 桌面端运行，用你自己的模型与密钥。"
+  },
+  "actionTitle": {
+    "message": "就这个页面问问 ShuviX"
+  }
+}

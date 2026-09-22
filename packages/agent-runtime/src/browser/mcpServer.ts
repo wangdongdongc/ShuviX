@@ -1,9 +1,10 @@
 /**
- * 内置能力服务器 `browser` —— 进程内 MCP server，按会话实例化，两端（桌面 / 扩展）共用这一份。
+ * 内置能力服务器 `browser` / `chrome` —— 进程内 MCP server，按会话实例化，一份实现跑两台：
+ * `browser` 是桌面应用内的浏览器面板，`chrome` 是用户真实的 Chrome（经扩展执行，只有 Chrome
+ * 标签页会话才带它）。
  *
- * 宿主差异全在注入里：`BrowserBackend`（桌面内嵌面板 / 扩展的真实标签页）、安全门
- * （`BrowserMcpGates`：路径怎么解析、走哪条策略由宿主决定）、给 list_tabs 的宿主说明，
- * 以及 SDK Server 的选项（扩展在 MV3 CSP 下要换掉默认的 Ajv 校验器）。
+ * 差异全在注入里：`BrowserBackend`（内嵌面板 / 经桥转发到扩展）、安全门（`BrowserMcpGates`：
+ * 路径怎么解析、走哪条策略、要不要按站点问由宿主决定）、给 list_tabs 的宿主说明，以及 server 名。
  *
  * 用**低层 `Server`** 而不是 `McpServer`：后者的 `registerTool` 要 zod shape，而 zod 只是 SDK 的
  * 传递依赖；低层接口收纯 JSON Schema，与 ssh server、客户端侧的 `jsonSchemaToTypebox` 同一条路。
@@ -12,6 +13,7 @@
  *  - **安全门**：`file://` 导航、上传的文件、pdf 的输出位置、原生 cdp 里等价的那几个方法，
  *    都先交给宿主的门（见 BrowserMcpGates）。浏览器第一次有了自己的安全客体。在一个正显示本地
  *    文件的 tab 上做任何事，也按读那个文件过门 —— 页面自己跳过去的也算（见 checkDocument）。
+ *    宿主给了 site 门时，网页也照此办理：按 tab 此刻所在的站点过门，每个站点每个实例一次。
  *    参数一律在过门之前校验完：用户在询问卡片上点了允许，不该再因为一个类型错误白点。
  *  - **按 tab 排队**：同一个 tab 上的操作串行（两个 agent 同时点同一页、或模型在一条消息里
  *    并发发出同一 tab 的两个动作），不同 tab 互不等待。tab 是宿主全局的，所以队列由宿主给一份
@@ -64,6 +66,11 @@ export interface BrowserGateContext {
   description?: string
 }
 
+/** 站点门的上下文：多一个 tab —— 宿主可能按「是哪个 tab」区别对待（例如会话挂着的那个页） */
+export interface BrowserSiteGateContext extends BrowserGateContext {
+  tabId: string
+}
+
 /**
  * 宿主提供的安全门。**拒绝（deny / 用户取消 / 用户给了反馈）时抛错**，错误文本原样作为这次工具
  * 调用的失败回给模型。不提供某道门 = 这一类访问不设门（no policy = allow）。
@@ -71,6 +78,12 @@ export interface BrowserGateContext {
 export interface BrowserMcpGates {
   /** 导航目标（open_tab / navigate goto / cdp Page.navigate）。`file://` 应当按读那个本地路径处理 */
   navigate?(url: string, ctx: BrowserGateContext): Promise<void>
+  /**
+   * 在一个显示网页（http / https）的 tab 上做任何事之前，按这个 tab **此刻**所在的站点（host）过门。
+   * 给了这道门，server 就按站点记账：一个站点每个实例只过一次门 —— 导航到一个已经放行过的站点也
+   * 不再问。不给 = 网页只在导航时过 `navigate`（内置浏览器面板即如此），不按站点记账。
+   */
+  site?(url: string, ctx: BrowserSiteGateContext): Promise<void>
   /** 将交给网页的本地文件（upload_file / cdp DOM.setFileInputFiles）；返回解析后的绝对路径 */
   fileRead?(path: string, ctx: BrowserGateContext): Promise<string>
   /** 将被写入的本地位置（pdf / cdp Page.setDownloadBehavior）；返回解析后的绝对路径 */
@@ -103,6 +116,11 @@ export function createBrowserTabQueue(): BrowserTabQueue {
 }
 
 export interface BrowserMcpServerOptions {
+  /**
+   * `mcp_servers.name`（缺省 `browser`）—— 客户端给工具名加的前缀，也是询问卡片上的工具名。
+   * 同一份 server 还跑在 `chrome`（用户真实的 Chrome，经扩展）上。
+   */
+  serverName?: string
   backend: BrowserBackend
   gates?: BrowserMcpGates
   /** 进程级的 tab 队列（见 BrowserTabQueue）；不给 = 这台 server 自己一份（只在本实例内串行） */
@@ -248,6 +266,23 @@ function localDocument(raw: string | undefined): { url: string; key: string } | 
   return { url: parsed.href, key: parsed.href.replace(/\/+$/, '') }
 }
 
+/**
+ * 网页地址的站点键（http / https 的 host，小写、去掉结尾的点 —— 与 url 客体同一种写法）；
+ * 其余地址（about:blank、chrome://、data: …）没有站点，回 undefined —— 站点门不管它们。
+ */
+function webSiteOf(raw: string | undefined): string | undefined {
+  if (!raw) return undefined
+  let parsed: URL
+  try {
+    parsed = new URL(raw.trim())
+  } catch {
+    return undefined
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return undefined
+  const host = parsed.hostname.toLowerCase().replace(/\.+$/, '')
+  return host || undefined
+}
+
 /** pdf 的纸张：大小写不敏感，回规范写法 */
 function pdfPageSize(v: string | undefined): PdfPageSize | undefined {
   if (!v?.trim()) return undefined
@@ -287,6 +322,7 @@ export async function connectBrowserMcpServer(
   transport: Transport
 ): Promise<void> {
   const { backend, gates, hostNote } = opts
+  const serverName = opts.serverName ?? BROWSER_MCP_SERVER_NAME
   const caps = backend.caps
   const tabQueue = opts.tabQueue ?? createBrowserTabQueue()
 
@@ -294,9 +330,11 @@ export async function connectBrowserMcpServer(
   const opsSinceSnapshot = new Map<string, number>()
   /** 这条会话里已经过了门的本地文件（localDocument 的去重键）—— 同一个文件不在每次操作上重复问 */
   const approvedLocal = new Set<string>()
+  /** 这条会话里已经过了站点门的 host（只在宿主给了 site 门时记账） */
+  const approvedSites = new Set<string>()
 
   const server = new Server(
-    { name: 'shuvix-browser', version: '1.0.0' },
+    { name: `shuvix-${serverName}`, version: '1.0.0' },
     { ...opts.serverOptions, capabilities: { tools: {} } }
   )
 
@@ -332,7 +370,7 @@ export async function connectBrowserMcpServer(
     const tool = name as BrowserToolName
     const gateCtx = (description?: string): BrowserGateContext => ({
       toolCallId,
-      toolName: `mcp__${BROWSER_MCP_SERVER_NAME}__${tool}`,
+      toolName: `mcp__${serverName}__${tool}`,
       description
     })
     /**
@@ -344,12 +382,17 @@ export async function connectBrowserMcpServer(
       if (extra.signal.aborted) throw new Error('Aborted')
       return value
     }
-    /** 导航目标过门；本地文件放行后记下，之后在显示它的 tab 上操作不再重复问 */
+    /**
+     * 导航目标过门；本地文件放行后记下，之后在显示它的 tab 上操作不再重复问。按站点记账时
+     * （宿主给了 site 门），已经放行过的站点不再过导航门，放行后的站点也记下。
+     */
     const gateNavigation = async (url: string): Promise<void> => {
-      if (!gates?.navigate) return
-      await passed(gates.navigate(url, gateCtx(`Open ${url}`)))
+      const site = gates?.site ? webSiteOf(url) : undefined
+      if (site && approvedSites.has(site)) return
+      if (gates?.navigate) await passed(gates.navigate(url, gateCtx(`Open ${url}`)))
       const local = localDocument(url)
       if (local) approvedLocal.add(local.key)
+      if (site) approvedSites.add(site)
     }
     /**
      * 在一个显示本地文件的 tab 上做任何事，都是在读那个文件 —— 页面自己跳过去的（点了 file://
@@ -358,11 +401,22 @@ export async function connectBrowserMcpServer(
      * 不是沙箱（见 security 模块）。
      */
     const checkDocument = async (tabId: string): Promise<void> => {
-      if (!gates?.navigate || !backend.tabUrl) return
-      const local = localDocument(await backend.tabUrl({ tabId }))
-      if (!local || approvedLocal.has(local.key)) return
-      await passed(gates.navigate(local.url, gateCtx(`Read the local file shown in tab ${tabId}`)))
-      approvedLocal.add(local.key)
+      if ((!gates?.navigate && !gates?.site) || !backend.tabUrl) return
+      const current = await backend.tabUrl({ tabId })
+      const local = localDocument(current)
+      if (local) {
+        if (!gates?.navigate || approvedLocal.has(local.key)) return
+        await passed(
+          gates.navigate(local.url, gateCtx(`Read the local file shown in tab ${tabId}`))
+        )
+        approvedLocal.add(local.key)
+        return
+      }
+      // 网页按站点过门（宿主给了 site 门才有）：页面自己跳去的新站点，也在下一步之前问
+      const site = gates?.site ? webSiteOf(current) : undefined
+      if (!current || !site || approvedSites.has(site)) return
+      await passed(gates!.site!(current, { ...gateCtx(`Use ${site} in tab ${tabId}`), tabId }))
+      approvedSites.add(site)
     }
     const cdpGates: CdpGates = {
       navigate: gateNavigation,
@@ -568,6 +622,7 @@ export async function connectBrowserMcpServer(
     closed = true
     opsSinceSnapshot.clear()
     approvedLocal.clear()
+    approvedSites.clear()
     opts.onClose?.()
   }
 

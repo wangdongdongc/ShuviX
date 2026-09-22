@@ -8,6 +8,7 @@
 import type { ChatEvent } from '@shuvix/chat-protocol/events'
 import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
 import { isHiddenProjectId } from '@shuvix/chat-protocol/hiddenProjects'
+import { isChromeTabSessionSettings } from '@shuvix/chat-protocol/chromeTabSession'
 import type { Session } from '../dao/types'
 import { sessionDao } from '../dao/sessionDao'
 import { localDayKey, sessionDayPromptDao } from '../dao/sessionDayPromptDao'
@@ -29,6 +30,8 @@ function isUserOpening(message: ChatMessage): boolean {
  */
 export function recordUserPrompt(sessionId: string, message: ChatMessage): void {
   if (!isUserOpening(message)) return
+  // Chrome 标签页会话不进日历：它是某个标签页的临时对话，标签页一关就删
+  if (isChromeTabSessionSettings(sessionDao.pickSettings(sessionId, ['chromeTab']))) return
   const timestamp = message.createdAt || Date.now()
   const inserted = sessionDayPromptDao.insert({
     sessionId,

@@ -127,7 +127,9 @@ export type AttrValue = AttrScalar | string[] | Record<string, AttrScalar | stri
  *                                                           惰性求值，见 commandFacts.ts）
  *   { type:'gitTool', gitAction, command, force, delete }   内置 git 工具操作
  *   { type:'database', sql, credential, dbType, readonly }  远程库查询（readonly = 连接模式）
- *   { type:'url', url, scheme, host, origin }               浏览器导航目标（action 'navigate'；
+ *   { type:'url', url, scheme, host, origin, browser }      浏览器导航目标 / Chrome 里要用的站点
+ *                                                           （action 'navigate'；browser: 'app' = 应用内
+ *                                                           浏览器面板，'chrome' = 用户真实的 Chrome；
  *                                                           file:// 不走这里，按读那个路径处理）
  * 未来扩展（url / mcp…）：PEP 上报新 type + 属性即可，引擎零改动。
  */
@@ -500,6 +502,12 @@ export interface UrlObjectInput {
   host: string
   /** `scheme://host:port`；没有意义的协议为 'null'（与 URL.origin 一致） */
   origin: string
+  /**
+   * 哪个浏览器：`app` = 桌面应用内的浏览器面板（独立 cookie，与用户日常浏览器隔离）；
+   * `chrome` = 用户真实的 Chrome（带着用户自己的登录态，经扩展操作）。按浏览器区别对待的策略
+   * （如出厂的 ask-on-new-site 只管 chrome）写 `object.browser == 'chrome'`。恒有值。
+   */
+  browser: 'app' | 'chrome'
 }
 
 /** PEP 门面 —— 各工具调用点唯一入口（见 context.ts） */

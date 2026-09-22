@@ -403,17 +403,19 @@ describe('作图技能的归属（OWN）', () => {
         })
         .map((p) => p.name)
         .sort()
-      expect(declaring).toEqual(['bot', 'chat', 'coding', 'notebook', 'work'])
+      expect(declaring).toEqual(['bot', 'chat', 'coding', 'notebook', 'tab', 'work'])
       expect(referencing).toEqual(declaring)
     }
   )
 })
 
 describe('{{shuvix:visualGuide}} 的归属', () => {
-  it('恰好 work / chat / coding / bot 四个档案引用它', () => {
-    // 加一个引用点 = 必须回来改这条，顺带交代理由。四个之外的档案引用它通常是复制粘贴
+  it('恰好 work / chat / coding / bot / tab 五个档案引用它', () => {
+    // 加一个引用点 = 必须回来改这条，顺带交代理由。五个之外的档案引用它通常是复制粘贴
     // 带出来的（例如从 work 抄一段到 titler），而那一段提示对那个 agent 毫无意义。
-    expect(profilesUsingVisualGuide()).toEqual(['bot', 'chat', 'coding', 'work'])
+    // tab（Chrome 侧边栏会话）在列：侧边栏里的 chat-ui 同样渲染 ```svg 图，用户问「把这页的数据画出来」
+    // 是它的本分，没有 artifact —— 说明里的 adopt 那节按工具表自动缺席
+    expect(profilesUsingVisualGuide()).toEqual(['bot', 'chat', 'coding', 'tab', 'work'])
   })
 
   it('三种语言的引用集一致（翻译时漏改占位符 = 那个语言下变量失效）', () => {

@@ -34,8 +34,6 @@ const REPO_ROOT = resolve(HERE, '../../../../../..')
 /** 内置档案 md 的事实源（打包后整目录进 `Resources/builtin-agents/`，见 BA-4） */
 const MD_DIR_REL = 'packages/agent-runtime/src/subagent/builtinAgents/md'
 const MD_DIR = join(REPO_ROOT, MD_DIR_REL)
-/** 扩展自带的两份变体档案（浏览器里的 work / chat），构建期内联，不随桌面包发布 */
-const EXT_MD_DIR = join(REPO_ROOT, 'apps/extension/src/runtime/builtinAgents/md')
 
 /** 三门界面语言。en 是无后缀那一份 —— 整份语言回退的落点 */
 const LANGS = ['en', 'zh', 'ja'] as const
@@ -80,14 +78,6 @@ describe('BA 内置档案 md：随应用发布的那批文案', () => {
     // 反向那一半防的是孤儿 md：改名 / 删 spec 之后留在目录里的文件会照样随包发布，
     // 用户在只读笔记本里点得开一份运行时根本不认的档案
     expect(mdFilesIn(MD_DIR)).toEqual(MATRIX.map(([name, lang]) => mdFileName(name, lang)).sort())
-  })
-
-  it('BA-2b 扩展自带的变体档案恰好是 work / chat 三语共六份', () => {
-    // 扩展跑在浏览器里读不了文件，这两份是它自己的构建期内联表（见 subAgent.ts 的 glob）——
-    // 与桌面共享的那批同名不同源，多一份少一份都意味着某端的档案对不上
-    expect(mdFilesIn(EXT_MD_DIR)).toEqual(
-      ['chat', 'work'].flatMap((name) => LANGS.map((lang) => mdFileName(name, lang))).sort()
-    )
   })
 
   it.each(MATRIX)('BA-3 %s.%s 经产线解析器解析成功、无告警、name 就是文件基名', (name, lang) => {

@@ -336,7 +336,8 @@ describe.skipIf(!POSIX)('browser 桌面接线 —— 地址上报 url 客体', (
           url: 'https://a.example/p?q=1',
           scheme: 'https',
           host: 'a.example',
-          origin: 'https://a.example'
+          origin: 'https://a.example',
+          browser: 'app'
         },
         opts: enforceOpts('open_tab', 'Open https://a.example/p?q=1')
       }
@@ -353,7 +354,8 @@ describe.skipIf(!POSIX)('browser 桌面接线 —— 地址上报 url 客体', (
         url: 'https://evil.example:8443/a?b#c',
         scheme: 'https',
         host: 'evil.example',
-        origin: 'https://evil.example:8443'
+        origin: 'https://evil.example:8443',
+        browser: 'app'
       }
     ],
     [
@@ -362,12 +364,19 @@ describe.skipIf(!POSIX)('browser 桌面接线 —— 地址上报 url 客体', (
         url: 'https://evil.example/x',
         scheme: 'https',
         host: 'evil.example',
-        origin: 'https://evil.example'
+        origin: 'https://evil.example',
+        browser: 'app'
       }
     ],
     [
       'http://[::1]:3000/',
-      { url: 'http://[::1]:3000/', scheme: 'http', host: '[::1]', origin: 'http://[::1]:3000' }
+      {
+        url: 'http://[::1]:3000/',
+        scheme: 'http',
+        host: '[::1]',
+        origin: 'http://[::1]:3000',
+        browser: 'app'
+      }
     ]
   ])(
     'BS-3 %s → 给策略看的客体是规整过的（小写、去结尾的点、不带账号口令）；后端拿到的仍是原话',
@@ -380,8 +389,14 @@ describe.skipIf(!POSIX)('browser 桌面接线 —— 地址上报 url 客体', (
   )
 
   it.each<[string, Record<string, string>]>([
-    ['data:text/html,x', { url: 'data:text/html,x', scheme: 'data', host: '', origin: 'null' }],
-    ['about:blank', { url: 'about:blank', scheme: 'about', host: '', origin: 'null' }]
+    [
+      'data:text/html,x',
+      { url: 'data:text/html,x', scheme: 'data', host: '', origin: 'null', browser: 'app' }
+    ],
+    [
+      'about:blank',
+      { url: 'about:blank', scheme: 'about', host: '', origin: 'null', browser: 'app' }
+    ]
   ])('BS-4 %s：不是网络地址也走 url 客体；出厂没有 url 策略 → 放行、不问', async (url, object) => {
     const s = await open()
     expect((await s.call('open_tab', { url })).isError).toBeFalsy()

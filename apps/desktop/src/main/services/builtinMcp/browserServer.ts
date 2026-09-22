@@ -67,7 +67,7 @@ function desktopGates(scope: DesktopBuiltinMcpScope): BrowserMcpGates {
         await security().enforcePath('read', path, enforceOpts(ctx, path))
         return
       }
-      await security().enforceUrl(urlObjectOf(url), enforceOpts(ctx))
+      await security().enforceUrl(urlObjectOf(url, 'app'), enforceOpts(ctx))
     },
 
     async fileRead(path, ctx) {

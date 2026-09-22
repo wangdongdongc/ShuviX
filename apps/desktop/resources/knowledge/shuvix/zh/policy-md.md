@@ -117,6 +117,7 @@ vars     宿主变量表（见下）+ 会话授权
 | `command`      | `bash`、`ssh`                                              | `execute`        | `command`（原文）、`channel`（`bash` / `ssh`），以及由 shell 解析器惰性提供的：`parsed`（布尔）、`commands`（`{ base, argv, wrappers, complete, depth }` 的列表 —— `base` 是剥掉 `sudo` / `env` / `timeout` 之后真正的程序，动态词是 `''`）、`writes`（重定向目标，绝对路径）              |
 | `gitTool`      | `git` 工具                                                 | `execute`        | `gitAction`、`command`、`force`（布尔）、`delete`（布尔）                                                                                                                                                                                                                            |
 | `database`     | 内置 `database` 服务器的 `query` 工具                      | `execute`        | `sql`、`credential`、`dbType`、`readonly`（布尔 —— 连接是否只读）                                                                                                                                                                                                                   |
+| `url`          | 内置 `browser` / `chrome` 服务器：每次导航；在 `chrome` 里还有每个站点的第一次使用 | `navigate`       | `url`、`scheme`、`host`（小写、去掉结尾的点）、`origin`、`browser`（`app` = ShuviX 里的浏览器面板，`chrome` = 你自己的 Chrome）；`file://` 不是 url 客体 —— 按读那个路径判定 |
 | `invocation`   | **每一次**工具调用，执行之前                               | `execute`        | 无 —— 按 `tool.name` / `tool.operation` 判（如 `session` / `create-sub-session`）。这里的规则必须点名工具；不指定工具的 invocation 询问会拦住每一次调用。                                                                                                                              |
 
 **strict 语义**：读取客体没有的属性（如对 `command` 取 `object.path`）是错误，而错误**按效力 fail-safe**
@@ -178,6 +179,7 @@ YAML 语法错 / 不是映射；裸的 `rules` / `lets` / `scope` 键；`shuvix-
 | `git-safety`                    | 危险的 git 操作询问（`init`、`restore`、强制 checkout、删分支）                                               |
 | `ask-on-database`               | 可写数据库连接上的每条语句询问                                                                                |
 | `ask-on-sub-session`            | 开子会话时询问一次（`tool.name == 'session' && tool.operation == 'create-sub-session'`）                        |
+| `ask-on-new-site`               | 在你自己的 Chrome 里（ShuviX 侧边栏），一场对话第一次打开或操作某个站点时询问（`object.browser == 'chrome'`） |
 | `session-auto-allow`            | 会话的免询问开关打开时 `force-allow` 一切                                                                     |
 | `session-path-grants`           | 用户答过「允许并记住」的路径下的读 / 写 `force-allow`                                                          |
 

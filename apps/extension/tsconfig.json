@@ -5,11 +5,10 @@
     "vite.config.ts",
     "../../packages/chat-protocol/src/**/*",
     "../../packages/chat-ui/src/**/*",
-    "../../packages/agent-runtime/src/**/*",
-    "../../packages/app-shell/src/**/*",
-    "../../packages/atomic-editor/src/**/*"
+    "../../packages/app-shell/src/contextmenu/**/*",
+    "../../packages/agent-runtime/src/browser/extractPage.ts"
   ],
-  "exclude": ["../../packages/atomic-editor/src/**/__tests__/**"],
+  "exclude": ["../../packages/**/__tests__/**", "../../packages/**/*.test.ts"],
   "compilerOptions": {
     "jsx": "react-jsx",
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
@@ -19,17 +18,10 @@
       "@shuvix/chat-protocol/*": ["../../packages/chat-protocol/src/*"],
       "@shuvix/chat-ui": ["../../packages/chat-ui/src/index.ts"],
       "@shuvix/chat-ui/*": ["../../packages/chat-ui/src/*"],
-      "@shuvix/agent-runtime": ["../../packages/agent-runtime/src/index.ts"],
-      "@shuvix/agent-runtime/builtinAgents/inlineSources": [
-        "../../packages/agent-runtime/src/subagent/builtinAgents/inlineSources.ts"
-      ],
-      "@shuvix/agent-runtime/security/builtinPolicies/inlineSources": [
-        "../../packages/agent-runtime/src/security/builtinPolicies/inlineSources.ts"
-      ],
-      "@shuvix/app-shell": ["../../packages/app-shell/src/index.ts"],
       "@shuvix/app-shell/*": ["../../packages/app-shell/src/*"],
-      "@shuvix/atomic-editor": ["../../packages/atomic-editor/src/index.ts"],
-      "@shuvix/atomic-editor/code-languages": ["../../packages/atomic-editor/src/code-languages.ts"]
+      "@shuvix/agent-runtime/browser/extractPage": [
+        "../../packages/agent-runtime/src/browser/extractPage.ts"
+      ]
     }
   }
 }

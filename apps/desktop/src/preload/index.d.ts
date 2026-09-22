@@ -1,3 +1,4 @@
+import type { ChromeExtensionStatus } from '@shuvix/chat-protocol/chromeBridge'
 import { ElectronAPI } from '@electron-toolkit/preload'
 import type { LucideIconName, ThemeColor } from '@shuvix/chat-protocol/theme'
 import type { ShuvixMdValidation } from '@shuvix/chat-protocol/shuvixMdContract'
@@ -939,6 +940,10 @@ declare global {
           url: string
         }) => void
       ) => () => void
+    }
+    chromeExtension: {
+      status: () => Promise<ChromeExtensionStatus>
+      repair: () => Promise<ChromeExtensionStatus>
     }
     browserData: {
       listSites: () => Promise<Array<{ host: string; cookieCount: number }>>

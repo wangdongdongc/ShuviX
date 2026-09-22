@@ -122,6 +122,7 @@ vars     ホスト変数表（後述）+ セッションの許諾
 | `command`      | `bash`、`ssh`                                                | `execute`        | `command`（生のテキスト）、`channel`（`bash` / `ssh`）、およびシェルパーサーから遅延で：`parsed`（ブール）、`commands`（`{ base, argv, wrappers, complete, depth }` のリスト —— `base` は `sudo` / `env` / `timeout` を剥がした後の本当のプログラム、動的な語は `''`）、`writes`（リダイレクト先の絶対パス） |
 | `gitTool`      | `git` ツール                                                 | `execute`        | `gitAction`、`command`、`force`（ブール）、`delete`（ブール）                                                                                                                                                                                           |
 | `database`     | 組み込み `database` サーバーの `query` ツール                | `execute`        | `sql`、`credential`、`dbType`、`readonly`（ブール —— 接続が読み取り専用か）                                                                                                                                                                              |
+| `url`          | 組み込み `browser` / `chrome` サーバー：すべてのナビゲーション、`chrome` ではサイトごとの初回利用も | `navigate`       | `url`、`scheme`、`host`（小文字、末尾のドットなし）、`origin`、`browser`（`app` = ShuviX 内のブラウザーパネル、`chrome` = あなた自身の Chrome）。`file://` は url オブジェクトではなく、そのパスの読み取りとして判定 |
 | `invocation`   | **すべての**ツール呼び出し、実行前                           | `execute`        | なし —— `tool.name` / `tool.operation` で判断する（例：`session` / `create-sub-session`）。ここでの規則はツールを名指す必要がある。対象を定めない invocation の確認はすべての呼び出しを止めてしまう。                                                       |
 
 **strict セマンティクス**：オブジェクトに無い属性を読む（例：`command` に対して `object.path`）のは
@@ -188,6 +189,7 @@ scope と交差して空になる規則；不正な `lets`（不正な名前、�
 | `git-safety`                    | 破壊的な git 操作を確認（`init`、`restore`、強制 checkout、ブランチ削除）                                     |
 | `ask-on-database`               | 書き込み可能なデータベース接続上のすべての文を確認                                                            |
 | `ask-on-sub-session`            | サブセッションを開くときに一度確認（`tool.name == 'session' && tool.operation == 'create-sub-session'`）       |
+| `ask-on-new-site`               | あなた自身の Chrome（ShuviX サイドパネル）で、会話が初めてあるサイトを開く・操作するときに確認（`object.browser == 'chrome'`） |
 | `session-auto-allow`            | セッションの自動許可スイッチがオンの間、すべてを `force-allow`                                                |
 | `session-path-grants`           | ユーザーが「許可して記憶」と答えたパス配下の読み書きを `force-allow`                                          |
 

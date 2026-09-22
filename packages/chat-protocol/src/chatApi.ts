@@ -33,6 +33,7 @@ import type {
 import type { InputResponse } from './types/inputRequest'
 import type { InlineToken } from './types/chatMessage'
 import type { KnowledgeMentionEntry } from './knowledge'
+import type { ChromeTabBinding } from './chromeTabSession'
 import type { ChatEvent, RuntimeStatus } from './events'
 import type {
   ConfigSharePayload,
@@ -94,6 +95,11 @@ export interface SessionSettings {
   memorySlug?: string
   /** 标题最近一次由谁写入：'user' = UI 重命名，'auto' = 自动化（session 工具）。缺省视同 'user' */
   titleOrigin?: 'user' | 'auto'
+  /**
+   * Chrome 标签页会话挂着的标签页（用户在那个页上打开了 ShuviX 侧边栏）。有值即为标签页会话；
+   * 判定经 `chromeTabSession.ts` 的 `chromeTabOf` / `isChromeTabSessionSettings`。
+   */
+  chromeTab?: ChromeTabBinding
 }
 
 /**

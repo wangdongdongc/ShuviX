@@ -9,6 +9,7 @@ import {
   screen
 } from 'electron'
 import { join } from 'path'
+import { homedir, userInfo } from 'os'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { registerIpcHandlers } from './ipc/handlers'
 import { registerAppEventBridge } from './services/appEvents'
@@ -41,6 +42,10 @@ import {
 } from './services/externalOpen'
 import { widgetServer } from './services/widget'
 import { cliServer } from './services/cliServer'
+import { chromeBridge } from './services/chromeBridge'
+import { installChromeNativeHost } from './services/chromeExtensionService'
+import { registerChromeFrontend } from './frontend/chrome'
+import { chromeBridgeSocketPath } from '@shuvix/chat-protocol/chromeBridge'
 import { closeAllWatchers } from './services/filesWatcherService'
 import { hookService } from './services/hookService'
 import { installLlmNetwork } from './services/llmNetwork'
@@ -666,6 +671,21 @@ app.whenReady().then(async () => {
     log.error(`cliServer.start failed: ${err}`)
   })
 
+  // Chrome 扩展：桥服务（本地组件连进来）+ 每次启动重写原生消息宿主的启动脚本与各浏览器的清单。
+  // token 与 CLI 共用 —— cliServer.start 同步生成，此刻已经在了
+  registerChromeFrontend()
+  chromeBridge
+    .start({
+      socketPath: chromeBridgeSocketPath({
+        home: homedir(),
+        platform: process.platform,
+        user: userInfo().username
+      }),
+      getToken: () => cliServer.getToken()
+    })
+    .catch((err) => log.error(`chromeBridge.start failed: ${err}`))
+  void installChromeNativeHost()
+
   measure('createWindow', () => createWindow())
 
   app.on('activate', () => {
@@ -680,6 +700,7 @@ app.on('before-quit', () => {
   killAllBgTasks()
   mcpService.disconnectAll().catch(() => {})
   widgetServer.dispose()
+  chromeBridge.stop()
   cliServer.stop()
   disposePglite()
   closeAllWatchers()

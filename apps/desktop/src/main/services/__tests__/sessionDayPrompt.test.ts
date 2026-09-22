@@ -33,7 +33,8 @@ vi.mock('../../dao/sessionDayPromptDao', () => ({
   }
 }))
 vi.mock('../../dao/sessionDao', () => ({
-  sessionDao: { touchActive: mocks.touchActive }
+  // 普通会话：设置里没有 chromeTab（Chrome 标签页会话不进日历，见 recordUserPrompt）
+  sessionDao: { touchActive: mocks.touchActive, pickSettings: () => ({}) }
 }))
 vi.mock('../../frontend/core', () => ({
   chatFrontendRegistry: { broadcast: mocks.frontendBroadcast, hasCapability: vi.fn(() => false) }

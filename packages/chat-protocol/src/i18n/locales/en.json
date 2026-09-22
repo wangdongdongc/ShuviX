@@ -751,7 +751,25 @@
     "hookTemplateBody": "Summarize what this session is about in one sentence, then finish. The event that fired this hook is appended below this text automatically.",
     "botDeleteConfirmTitle": "Delete bot",
     "botDeleteConfirmDesc": "Delete bot “{{name}}”? Its sessions stay, but they will have no persona or memory until you recreate it.",
-    "botDeleteFileConfirmDesc": "Delete file “{{name}}”? It is not currently active."
+    "botDeleteFileConfirmDesc": "Delete file “{{name}}”? It is not currently active.",
+    "chromeExtConnectedTitle": "Connected browsers",
+    "chromeExtConnectedDesc": "Browsers where the ShuviX extension is connected to this app. Each tab can open a ShuviX side panel; its conversation runs here, with your models and keys, and only those conversations can operate your Chrome — sessions in this app keep using the built-in browser panel.",
+    "chromeExtNoBrowser": "No browser connected. Load the ShuviX extension in Chrome, then click its toolbar icon on any page.",
+    "chromeExtVersion": "Extension {{version}}",
+    "chromeExtConnected": "Connected",
+    "chromeExtMismatch": "Update needed",
+    "chromeExtSetupTitle": "Install the extension",
+    "chromeExtSetupDesc": "The extension is not in the Chrome Web Store yet; it ships as a zip with every ShuviX release and is loaded as an unpacked extension.",
+    "chromeExtStepDownload": "Download shuvix-chrome-extension-<version>.zip for this version and unzip it:",
+    "chromeExtReleases": "Releases",
+    "chromeExtStepLoad": "In Chrome, open chrome://extensions, turn on Developer mode, click \"Load unpacked\" and pick the unzipped folder.",
+    "chromeExtStepOpen": "Click the ShuviX icon on any page to open its side panel.",
+    "chromeExtHostTitle": "Local component",
+    "chromeExtHostDesc": "Chrome reaches this app through a small local program (a native messaging host). ShuviX registers it with every Chromium browser it finds each time it starts; repair re-registers it now — use it after installing a new browser or moving the app.",
+    "chromeExtRepair": "Repair",
+    "chromeExtHostPending": "Registering…",
+    "chromeExtHostInstalled": "Registered with",
+    "chromeExtHostNoBrowser": "No Chromium browser found on this computer"
   },
   "about": {
     "description": "Your AI Assistant",
@@ -796,6 +814,7 @@
     "globHint": "Find files by name pattern (e.g. *.ts)",
     "skillHint": "Load predefined instruction sets to give AI domain-specific capabilities",
     "browserLabel": "Browser",
+    "chromeLabel": "Chrome",
     "sshLabel": "SSH",
     "gitLabel": "Version Control",
     "gitHint": "Local version control — status/diff/stage/commit/branch/checkout, powered by isomorphic-git; no network operations",
@@ -1092,5 +1111,22 @@
     "dialogEmpty": "No bots yet. Drop a bot definition file into the folder to get started.",
     "dialogOpenFolder": "Open bots folder",
     "emptyHint": "Send {{name}} your first message."
+  },
+  "chromePanel": {
+    "connecting": "Connecting to ShuviX…",
+    "hostMissingTitle": "ShuviX isn't set up for this browser yet",
+    "hostMissingBody": "Install the ShuviX desktop app and open it once — it connects this extension on launch. Then reopen this panel.",
+    "offlineTitle": "ShuviX isn't running",
+    "offlineBody": "Open the ShuviX desktop app to chat about this page. Conversations run there, with your own models and keys.",
+    "mismatchTitle": "Update needed",
+    "mismatchBody": "This extension and the ShuviX desktop app are different versions. Update both to the same release.",
+    "errorTitle": "Couldn't open a conversation for this tab",
+    "retry": "Retry",
+    "thisTab": "This tab",
+    "addTab": "Add a tab",
+    "removeTab": "Remove this tab",
+    "noOtherTabs": "No other tabs",
+    "emptyTitle": "Ask about this page",
+    "emptyHint": "ShuviX can read this page, pull information out of it, fill it in, or get something done across your other tabs."
   }
 }

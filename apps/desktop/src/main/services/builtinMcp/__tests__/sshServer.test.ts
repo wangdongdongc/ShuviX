@@ -128,12 +128,16 @@ vi.mock('../../toolContext', async () => {
   }
 })
 vi.mock('../../../utils/paths', () => ({ buildSpawnEnv: () => ({}) }))
-// 工厂表（../index）同时登记了 browser 与 database —— 它们的桌面接线会拉进 Electron 的浏览器面板
-// 与凭据 DAO，这份测试只关心 ssh，也只核对工厂表的键，所以换成空工厂
+// 工厂表（../index）同时登记了 browser / database / chrome —— 它们的桌面接线会拉进 Electron 的浏览器
+// 面板、凭据 DAO 与会话 DAO，这份测试只关心 ssh，也只核对工厂表的键，所以换成空工厂
 vi.mock('../browserServer', () => ({ createDesktopBrowserMcpServerFactory: () => () => undefined }))
 vi.mock('../databaseServer', () => ({
   createDatabaseMcpServerFactory: () => () => undefined,
   DATABASE_MCP_SERVER_NAME: 'database'
+}))
+vi.mock('../chromeServer', () => ({
+  createChromeMcpServerFactory: () => () => undefined,
+  CHROME_MCP_SERVER_NAME: 'chrome'
 }))
 
 /**
@@ -2015,14 +2019,14 @@ describe('ssh 内置服务器传输结果的翻译', () => {
 // ─── 装配期对账 ──────────────────────────────────────────────────────────
 
 describe('内置能力服务器的清单', () => {
-  it('SSHS-U-41: 工厂表的键与迁移种下的内置行同名（v22 种 ssh，v27 种 browser，v28 种 database）', () => {
+  it('SSHS-U-41: 工厂表的键与迁移种下的内置行同名（v22 种 ssh，v27 种 browser，v28 种 database，v29 种 chrome）', () => {
     // 两边对不上 = 会话里勾了这台服务器、建连时 registry 抛「No builtin MCP server registered」。
     // 新增一台内置能力服务器 = 工厂表加一行 + 一条种子迁移，这条用例就是那对括号。
-    // v22 把名字写死在 SQL 里，v27 / v28 用绑定参数（(id, name, createdAt, updatedAt)）—— 两种都认
+    // v22 把名字写死在 SQL 里，v27 / v28 / v29 用绑定参数（(id, name, createdAt, updatedAt)）—— 两种都认
     const seeded = new Set<string>()
     const db = {
       prepare: (sql: string) => ({
-        // v27 / v28 先查「内置行在不在 / 名字有没有被占」：空库，一律没有
+        // v27 / v28 / v29 先查「内置行在不在 / 名字有没有被占」：空库，一律没有
         get: (): undefined => undefined,
         run: (...args: unknown[]): void => {
           if (!/INSERT[\s\S]*INTO\s+mcp_servers/i.test(sql) || !/'inproc'/.test(sql)) return
@@ -2034,13 +2038,13 @@ describe('内置能力服务器的清单', () => {
       exec: (): void => {}
     }
 
-    for (const version of [22, 27, 28]) {
+    for (const version of [22, 27, 28, 29]) {
       const m = migrations.find((x) => x.version === version)
       expect(m, `迁移 v${version} 应当存在（内置能力服务器的种子）`).toBeDefined()
       m!.up(db as unknown as Parameters<(typeof migrations)[number]['up']>[0])
     }
 
-    expect([...seeded].sort()).toEqual(['browser', 'database', 'ssh'])
+    expect([...seeded].sort()).toEqual(['browser', 'chrome', 'database', 'ssh'])
     expect(Object.keys(BUILTIN_MCP_FACTORIES).sort()).toEqual([...seeded].sort())
   })
 })

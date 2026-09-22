@@ -1,0 +1,11 @@
+{
+  "appName": {
+    "message": "ShuviX"
+  },
+  "appDescription": {
+    "message": "Chat with ShuviX next to any page in your Chrome. Conversations run in the ShuviX desktop app, with your own models and keys."
+  },
+  "actionTitle": {
+    "message": "Ask ShuviX about this page"
+  }
+}

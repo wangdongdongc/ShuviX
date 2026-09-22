@@ -40,6 +40,11 @@ export type AppEvent =
    */
   | { type: 'bot.changed' }
   /**
+   * Chrome 扩展的连接状态变化（浏览器连上 / 断开 / 协议不符、原生消息宿主重装完）—— 信号事件，
+   * 设置页重拉 chromeExtension.status。
+   */
+  | { type: 'chromeExtension.changed' }
+  /**
    * 智能体档案注册表变化（新建 / 覆盖副本 / 删除 / 经笔记本落盘的编辑）—— 信号事件，
    * 消费者重拉 subAgent.list。侧栏那一组把档案的显示名直接摆在屏幕上，而改名就发生在
    * 同一个窗口的笔记本里（没有切窗口这一下可以兜底），所以 agent 目录与 bots 目录一样

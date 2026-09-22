@@ -109,6 +109,7 @@ export {
   type BrowserTabQueue,
   type BrowserMcpGates,
   type BrowserGateContext,
+  type BrowserSiteGateContext,
   type BrowserMcpServerOptions
 } from './browser/mcpServer'
 export {
@@ -374,6 +375,7 @@ export {
   NOTEBOOK_PROFILE_NAME,
   NOTEBOOK_SPEC,
   BOT_PROFILE_NAME,
+  TAB_PROFILE_NAME,
   BOT_SPEC,
   CODING_SPEC,
   EXPLORE_SPEC,

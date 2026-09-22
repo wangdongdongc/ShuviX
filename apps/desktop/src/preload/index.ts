@@ -1,3 +1,4 @@
+import type { ChromeExtensionStatus } from '@shuvix/chat-protocol/chromeBridge'
 import { contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
 import type { UpdateEvent } from '../main/types'
@@ -673,6 +674,14 @@ const api = {
         url: string
       }) => void
     ) => onBrowserViewEvent('browser-view:did-fail-load', callback)
+  },
+
+  // ============ Chrome 扩展（侧边栏会话 + 用户的 Chrome） ============
+  chromeExtension: {
+    /** 桥服务在不在听、连着哪些浏览器、最近一次装本地组件的结果 */
+    status: () => ipcRenderer.invoke('chromeExtension:status') as Promise<ChromeExtensionStatus>,
+    /** 重装本地组件（原生消息宿主的启动脚本 + 各浏览器的清单），回新的状态 */
+    repair: () => ipcRenderer.invoke('chromeExtension:repair') as Promise<ChromeExtensionStatus>
   },
 
   // ============ Browser 分区数据 ============

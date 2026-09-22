@@ -1,3 +1,5 @@
+import type { ChromeTabBinding } from '@shuvix/chat-protocol/chromeTabSession'
+
 /**
  * 模型相关元数据。
  *
@@ -60,6 +62,12 @@ export interface SessionSettings {
    * 自动标题据此不覆盖用户手动改过的名字。
    */
   titleOrigin?: 'user' | 'auto'
+  /**
+   * Chrome 标签页会话挂着的标签页（用户在那个页上打开了 ShuviX 侧边栏）。有值即为标签页会话 ——
+   * 无项目、根档案由形态推出基座 `tab`、不进侧栏与日历、标签页关掉就删。创建那一刻定死。
+   * 判定一律经 chat-protocol `chromeTabSession.ts` 的 `chromeTabOf` / `isChromeTabSessionSettings`。
+   */
+  chromeTab?: ChromeTabBinding
 }
 
 /** 会话数据结构（对应 DB 表 sessions） */

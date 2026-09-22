@@ -1,7 +1,7 @@
 /**
  * 内置档案（md 文件 + 统一构建器，跨端共享）。
  *
- * 所有内置 agent —— 含四个基座档案 work / chat / notebook / bot —— 的文案都以
+ * 所有内置 agent —— 含五个基座档案 work / chat / notebook / bot / tab —— 的文案都以
  * `md/<name>[.<lang>].md` 维护，格式与用户档案 `~/.shuvix/agents/<name>.md` 完全一致、
  * 经同一个解析器读取。这些文件**随包发布到磁盘**，运行时经宿主注入的 `readMd` 现读
  * （桌面 = Resources/builtin-agents，扩展 = 构建期内联的同一批文件）：侧栏点开一份内置档案
@@ -40,6 +40,12 @@ export const NOTEBOOK_PROFILE_NAME = 'notebook'
  * 那份文件的正文经 `renderBotContext` 围栏后追加到本会话**根** Agent 的系统提示词末尾。
  */
 export const BOT_PROFILE_NAME = 'bot'
+/**
+ * Chrome 标签页会话的基座。形态判据是 `settings.chromeTab` —— 用户在自己 Chrome 的某个标签页上打开了
+ * ShuviX 侧边栏，这条会话就挂在那一页上。只有它声明 `mcp:chrome`（用户真实的 Chrome）：桌面自己的
+ * 会话只用应用内的浏览器面板。
+ */
+export const TAB_PROFILE_NAME = 'tab'
 
 /**
  * 工作档案 —— 归属项目的会话的基座（形态推导，见 WORK_PROFILE_NAME）：把需求敲定、
@@ -76,6 +82,16 @@ export const BOT_SPEC: BuiltinProfileSpec = {
 
 export const NOTEBOOK_SPEC: BuiltinProfileSpec = {
   name: NOTEBOOK_PROFILE_NAME
+}
+
+/**
+ * 标签页档案 —— **Chrome 标签页会话的基座**（ShuviX 扩展的侧边栏）。工具面刻意收窄到
+ * 「用户的 Chrome + 询问 + 画图」：这类会话的主要输入是网页内容，而网页内容不可信 ——
+ * 一个同时握着 bash / write 的 agent 读到一段恶意页面文字，代价是用户的整台机器。
+ * 要放宽就同名覆盖 `~/.shuvix/agents/tab.md`。
+ */
+export const TAB_SPEC: BuiltinProfileSpec = {
+  name: TAB_PROFILE_NAME
 }
 
 /**
@@ -121,7 +137,7 @@ export const KNOWLEDGE_WRITER_SPEC: BuiltinProfileSpec = {
 }
 
 /**
- * 内置 spec 全集（四个基座档案 work / chat / notebook / bot 居首，其后为可派发的具名 agent；
+ * 内置 spec 全集（五个基座档案 work / chat / notebook / bot / tab 居首，其后为可派发的具名 agent；
  * widget 依赖宿主根目录参数，缺参自动跳过）
  */
 export const BUILTIN_PROFILE_SPECS: readonly BuiltinProfileSpec[] = [
@@ -129,6 +145,7 @@ export const BUILTIN_PROFILE_SPECS: readonly BuiltinProfileSpec[] = [
   CHAT_SPEC,
   NOTEBOOK_SPEC,
   BOT_SPEC,
+  TAB_SPEC,
   CODING_SPEC,
   EXPLORE_SPEC,
   WIDGET_SPEC,
@@ -138,7 +155,8 @@ export const BUILTIN_PROFILE_SPECS: readonly BuiltinProfileSpec[] = [
 
 /**
  * 「基座档案」——某种会话形态的根 Agent 人格，由形态推导、按名钉死，而非可派发的具名 agent：
- * `work` 是项目会话，`chat` 是不归属项目的会话，`notebook` 是笔记本会话，`bot` 是 bot 会话。
+ * `work` 是项目会话，`chat` 是不归属项目的会话，`notebook` 是笔记本会话，`bot` 是 bot 会话，
+ * `tab` 是 Chrome 标签页会话。
  *
  * 三者都可被同名用户档案覆盖（这正是自定义人格的入口），但都不该被点名：不进派发工具
  * 的可用名单（会诱导 LLM 拿基座档案当一次性任务 agent 使 —— 它们是某种会话形态的人格，
@@ -149,7 +167,8 @@ export const BASE_PROFILE_NAMES: ReadonlySet<string> = new Set([
   WORK_PROFILE_NAME,
   CHAT_PROFILE_NAME,
   NOTEBOOK_PROFILE_NAME,
-  BOT_PROFILE_NAME
+  BOT_PROFILE_NAME,
+  TAB_PROFILE_NAME
 ])
 
 /** 按宿主 deps 现算全部可用内置档案（文案按当前语言解析） */

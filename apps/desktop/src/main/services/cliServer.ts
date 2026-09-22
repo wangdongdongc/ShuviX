@@ -133,6 +133,14 @@ class CliServer {
 
   // ────────────────────── paths ──────────────────────
 
+  /**
+   * 本次启动的鉴权 token（`~/.shuvix/cli-token` 的内容）。Chrome 桥服务与 CLI 共用它：
+   * 原生消息宿主读的是同一个文件。start 之前为空串（桥服务据此拒绝一切连接）。
+   */
+  getToken(): string {
+    return this.token
+  }
+
   /** 给 bash 工具注入 env 时用：返回 CLI 套接字 / token 文件路径 */
   getPaths(): { socketPath: string; tokenPath: string } {
     return { socketPath: this.socketPath(), tokenPath: this.tokenPath() }

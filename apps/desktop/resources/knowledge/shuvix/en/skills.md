@@ -60,8 +60,8 @@ after loading the skill; refer to them by path from the skill's base directory.
 
 The directory name and `name` may differ; ShuviX matches by `name`. Builtin skills come with the
 application (one directory per UI language) and cannot be edited; today there is one,
-`builtin:drawing` — the craft for inline SVG figures — which the `work`, `chat`, `coding`, `bot`
-and `notebook` agents name in their `shuvix-tools`.
+`builtin:drawing` — the craft for inline SVG figures — which the `work`, `chat`, `coding`, `bot`,
+`notebook` and `tab` agents name in their `shuvix-tools`.
 Enable state lives in `~/.shuvix/skills/.config.json`:
 
 ```json

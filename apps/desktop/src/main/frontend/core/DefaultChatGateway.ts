@@ -264,15 +264,21 @@ export class DefaultChatGateway implements ChatGateway {
     // 过去的 "plugin 工具" (postgres / python) 已合并进 builtinTools，无需再单独拼接
     const merged = builtinTools
 
-    /** MCP 工具 */
-    const mcpTools = mcpService.getAllToolInfos().map((info) => ({
-      name: info.name,
-      label: info.label,
-      group: info.group,
-      serverStatus: info.serverStatus,
-      isBuiltin: info.isBuiltin,
-      declaredBy: declaredBy(info.name)
-    }))
+    /**
+     * MCP 工具。内置 `chrome`（用户真实的 Chrome）只出现在声明它的档案（Chrome 标签页会话的 `tab`）
+     * 那里，以锁住的已勾形态 —— 别的会话选不到它：桌面自己的会话只用应用内的浏览器面板
+     */
+    const mcpTools = mcpService
+      .getAllToolInfos()
+      .filter((info) => info.name !== 'mcp:chrome' || declared.has(info.name))
+      .map((info) => ({
+        name: info.name,
+        label: info.label,
+        group: info.group,
+        serverStatus: info.serverStatus,
+        isBuiltin: info.isBuiltin,
+        declaredBy: declaredBy(info.name)
+      }))
     /** 已启用 Skill（含项目级 .claude/skills/） */
     const skillItems = skillService.findEnabled(projectPath).map((s) => ({
       name: `skill:${s.name}`,

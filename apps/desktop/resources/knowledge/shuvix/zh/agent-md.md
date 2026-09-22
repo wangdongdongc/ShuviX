@@ -119,17 +119,18 @@ frontmatter 之后的全部内容（去首尾空白）就是系统提示词。�
 
 ## 内置 agent 与覆盖
 
-随应用发布（按界面语言一份，同一个解析器读）：四个**基座**人格 `work`（项目内会话的根）、`chat`
-（不属于任何项目的会话的根）、`notebook`（笔记本会话的根）、`bot`（bot 会话的根）—— 加上任务型
+随应用发布（按界面语言一份，同一个解析器读）：五个**基座**人格 `work`（项目内会话的根）、`chat`
+（不属于任何项目的会话的根）、`notebook`（笔记本会话的根）、`bot`（bot 会话的根）、`tab`（Chrome 侧边栏
+对话的根，唯一带 `mcp:chrome` —— 用户自己的 Chrome —— 的一个）—— 加上任务型
 agent `coding`、`explore`、`widget`、`titler`、`knowledge-writer`。
 
-- **会话的根人格由会话形态推导，从不选择**：笔记本 → `notebook`，bot 会话 → `bot`，在项目里 →
-  `work`，否则 → `chat`。没有设置项，没有选择器。想改主对话的行为，**按名字覆盖基座**：
+- **会话的根人格由会话形态推导，从不选择**：笔记本 → `notebook`，bot 会话 → `bot`，Chrome 侧边栏 →
+  `tab`，在项目里 → `work`，否则 → `chat`。没有设置项，没有选择器。想改主对话的行为，**按名字覆盖基座**：
   `~/.shuvix/agents/work.md` 整个取代内置的 `work`（设置 → Agent → 「创建覆盖副本」给你当前文本作起点）。
 - 任何 `name` 与内置同名的用户文件都取代那个内置。用户文件之间的同名按 `shuvix-files` 条目里的规则
   裁决；输的那几份列为已被覆盖。写坏的覆盖永远不会遮蔽内置。
 - 基座**从不被派发、从不被点名**：`agent` 工具、hook 的 `shuvix-hook-agent`、子会话的 `agent_profile`
-  都拒绝 `work` / `chat` / `notebook` / `bot`。
+  都拒绝 `work` / `chat` / `notebook` / `bot` / `tab`。
 
 ## 一个 agent 怎样被用起来
 

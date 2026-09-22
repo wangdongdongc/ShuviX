@@ -1,36 +1,94 @@
 /**
- * MV3 Service Worker —— 点击工具栏图标时打开（或聚焦）整页 App。
+ * MV3 service worker —— ShuviX 扩展在 Chrome 里的全部常驻逻辑。
  *
- * Agent 循环与 chat-ui 都跑在整页 App（常驻 tab，有完整 DOM/fetch/IndexedDB），
- * SW 不承载长任务（MV3 SW ~30s idle 会被回收）。
- *
- * 另：维护 declarativeNetRequest 动态规则，为 LLM 请求注入自定义请求头
- * （kimi User-Agent + 自定义 provider headers，详见 headerRules.ts）。
+ * 扩展不跑 agent、没有模型与密钥：它是桌面 ShuviX 在用户 Chrome 里的「手」与「窗口」。
+ *  - 窗口：每个标签页右侧可以开一个侧边栏，里面是挂在这个标签页上的一条临时会话（会话跑在桌面）；
+ *  - 手：桌面的 `chrome` 内置能力服务器要做的浏览器操作，经这里执行（browserOps.ts）。
+ * 两者都走同一条原生消息端口（nativeLink.ts）。
  */
-import { syncHeaderRules } from './headerRules'
+import type { BridgeRequest } from '@shuvix/chat-protocol/chromeBridge'
+import { ensureNativeLink, linkState, onDesktopMessage, sendToDesktop } from './nativeLink'
+import {
+  acceptPanelPort,
+  deliverDesktopEvent,
+  deliverResponse,
+  forgetTab,
+  openPanelForTab
+} from './panels'
+import { forgetDebugger, isAttached, runBrowserOp } from './browserOps'
 
-// 安装/启动时重建一次；provider 配置变更时（settingsStore 写 chrome.storage）增量重建
-chrome.runtime.onInstalled.addListener(() => void syncHeaderRules())
-chrome.runtime.onStartup.addListener(() => void syncHeaderRules())
-chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === 'local' && ('providerOverrides' in changes || 'customProviderIds' in changes)) {
-    void syncHeaderRules()
-  }
+const RECONNECT_ALARM = 'shuvix-native-link'
+
+// ─── 侧边栏：按标签页开，全局默认关（没开过的标签页不显示） ───
+
+chrome.runtime.onInstalled.addListener(() => {
+  void chrome.sidePanel.setOptions({ enabled: false }).catch(() => {})
+  void chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false }).catch(() => {})
+  void chrome.alarms.create(RECONNECT_ALARM, { periodInMinutes: 1 })
+  ensureNativeLink()
 })
 
-chrome.action.onClicked.addListener(async () => {
-  const url = chrome.runtime.getURL('app.html')
+chrome.runtime.onStartup.addListener(() => {
+  void chrome.sidePanel.setOptions({ enabled: false }).catch(() => {})
+  void chrome.alarms.create(RECONNECT_ALARM, { periodInMinutes: 1 })
+  ensureNativeLink()
+})
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === RECONNECT_ALARM) ensureNativeLink()
+})
+
+chrome.action.onClicked.addListener((tab) => openPanelForTab(tab))
+
+chrome.runtime.onConnect.addListener((port) => acceptPanelPort(port))
+
+// ─── 桌面发来的：浏览器操作请求、侧边栏请求的应答、事件 ───
+
+async function answerBrowserOp(request: BridgeRequest): Promise<void> {
   try {
-    const existing = await chrome.tabs.query({ url })
-    const tab = existing[0]
-    if (tab?.id != null) {
-      await chrome.tabs.update(tab.id, { active: true })
-      if (tab.windowId != null) await chrome.windows.update(tab.windowId, { focused: true })
-    } else {
-      await chrome.tabs.create({ url })
-    }
+    const result = await runBrowserOp(request.method, request.params)
+    sendToDesktop({ type: 'response', id: request.id, ok: true, result: result ?? null })
   } catch (err) {
-    console.error('[shuvix-sw] open app tab failed', err)
-    await chrome.tabs.create({ url })
+    sendToDesktop({
+      type: 'response',
+      id: request.id,
+      ok: false,
+      error: err instanceof Error ? err.message : String(err)
+    })
   }
+}
+
+onDesktopMessage((message) => {
+  if (message.type === 'request') void answerBrowserOp(message)
+  else if (message.type === 'response') deliverResponse(message)
+  else deliverDesktopEvent(message)
 })
+
+// ─── 浏览器事件 → 桌面 ───
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  forgetTab(tabId)
+  forgetDebugger(tabId)
+  if (linkState() === 'ready')
+    sendToDesktop({ type: 'event', name: 'tabs.removed', params: { tabId } })
+})
+
+chrome.debugger.onEvent.addListener((source, method, params) => {
+  const tabId = source.tabId
+  if (tabId == null || !isAttached(tabId)) return
+  sendToDesktop({
+    type: 'event',
+    name: 'debugger.event',
+    params: { tabId, method, params: (params ?? {}) as Record<string, unknown> }
+  })
+})
+
+chrome.debugger.onDetach.addListener((source, reason) => {
+  const tabId = source.tabId
+  if (tabId == null) return
+  forgetDebugger(tabId)
+  sendToDesktop({ type: 'event', name: 'debugger.detached', params: { tabId, reason } })
+})
+
+// SW 每次被唤醒都先把线连上
+ensureNativeLink()

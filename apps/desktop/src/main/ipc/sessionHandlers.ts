@@ -24,8 +24,9 @@ export function registerSessionHandlers(): void {
   })
 
   /** 创建新会话（笔记本会话：params.notebookPath 非空；聊天会话：params.bot 非空） */
+  // Chrome 标签页会话只由 Chrome 前端开（它核对过是哪个浏览器、哪个标签页）—— 渲染层传来的一律滤掉
   ipcMain.handle('session:create', (_event, params?: SessionCreateParams) =>
-    sessionService.create(params)
+    sessionService.create(params ? { ...params, chromeTab: undefined } : params)
   )
 
   /** 更新会话标题 */

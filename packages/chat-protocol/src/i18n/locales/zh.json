@@ -751,7 +751,25 @@
     "hookTemplateBody": "用一句话概括这个会话在做什么，然后结束。触发本 hook 的事件会自动附在这段文字后面。",
     "botDeleteConfirmTitle": "删除 Bot",
     "botDeleteConfirmDesc": "删除 Bot「{{name}}」？它的会话都还在，但在你重建之前它们没有人设也没有记忆。",
-    "botDeleteFileConfirmDesc": "删除文件「{{name}}」？它当前不生效。"
+    "botDeleteFileConfirmDesc": "删除文件「{{name}}」？它当前不生效。",
+    "chromeExtConnectedTitle": "已连接的浏览器",
+    "chromeExtConnectedDesc": "装了 ShuviX 扩展、并已连上本应用的浏览器。每个标签页都可以打开一个 ShuviX 侧边栏，里面的对话在这里运行、用你的模型与密钥；只有这些对话能操作你的 Chrome —— 本应用里的会话照旧只用内置的浏览器面板。",
+    "chromeExtNoBrowser": "没有连着的浏览器。在 Chrome 里加载 ShuviX 扩展，然后在任意页面点它的工具栏图标。",
+    "chromeExtVersion": "扩展 {{version}}",
+    "chromeExtConnected": "已连接",
+    "chromeExtMismatch": "需要更新",
+    "chromeExtSetupTitle": "安装扩展",
+    "chromeExtSetupDesc": "扩展还没有上架 Chrome 应用商店：它随每个 ShuviX 版本以 zip 发布，以「已解压的扩展程序」方式加载。",
+    "chromeExtStepDownload": "下载与本版本对应的 shuvix-chrome-extension-<版本>.zip 并解压：",
+    "chromeExtReleases": "发布页",
+    "chromeExtStepLoad": "在 Chrome 里打开 chrome://extensions，开启「开发者模式」，点「加载已解压的扩展程序」，选中解压出的文件夹。",
+    "chromeExtStepOpen": "在任意页面点 ShuviX 图标，打开它的侧边栏。",
+    "chromeExtHostTitle": "本地组件",
+    "chromeExtHostDesc": "Chrome 经一个小的本地程序（原生消息宿主）连到本应用。ShuviX 每次启动都会把它登记到找到的每个 Chromium 系浏览器；「修复」立即重新登记 —— 新装了浏览器或挪动了应用之后用它。",
+    "chromeExtRepair": "修复",
+    "chromeExtHostPending": "正在登记…",
+    "chromeExtHostInstalled": "已登记到",
+    "chromeExtHostNoBrowser": "这台电脑上没找到 Chromium 系浏览器"
   },
   "about": {
     "description": "您的 AI 助手",
@@ -796,6 +814,7 @@
     "globHint": "按文件名模式（如 *.ts）快速查找文件",
     "skillHint": "加载预定义的指令集，赋予 AI 特定领域的能力",
     "browserLabel": "浏览器",
+    "chromeLabel": "Chrome",
     "sshLabel": "SSH",
     "gitLabel": "版本控制",
     "gitHint": "本地版本控制 —— status/diff/暂存/提交/分支/检出，基于 isomorphic-git，不含网络操作",
@@ -1092,5 +1111,22 @@
     "dialogEmpty": "还没有 Bot。把 bot 定义文件放进目录即可使用。",
     "dialogOpenFolder": "打开 Bots 文件夹",
     "emptyHint": "给 {{name}} 发第一条消息吧。"
+  },
+  "chromePanel": {
+    "connecting": "正在连接 ShuviX…",
+    "hostMissingTitle": "这个浏览器还没接上 ShuviX",
+    "hostMissingBody": "安装 ShuviX 桌面端并打开一次 —— 它启动时会接上这个扩展。然后重新打开这个面板。",
+    "offlineTitle": "ShuviX 没在运行",
+    "offlineBody": "打开 ShuviX 桌面端，就可以就这个页面对话了。对话在桌面端运行，用你自己的模型与密钥。",
+    "mismatchTitle": "需要更新",
+    "mismatchBody": "这个扩展与 ShuviX 桌面端的版本不一致。请把两者都更新到同一个版本。",
+    "errorTitle": "没能为这个标签页打开对话",
+    "retry": "重试",
+    "thisTab": "本标签页",
+    "addTab": "添加标签页",
+    "removeTab": "移除这个标签页",
+    "noOtherTabs": "没有别的标签页",
+    "emptyTitle": "问问这个页面",
+    "emptyHint": "ShuviX 可以读这个页面、从里面取出信息、帮你填写，或者在你的其它标签页上把事情做完。"
   }
 }

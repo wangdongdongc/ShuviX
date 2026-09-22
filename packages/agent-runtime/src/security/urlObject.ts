@@ -7,10 +7,15 @@
  *    host / origin 按那个源给，按站点写的规则才管得到它。
  *
  * 只规整给策略看的这一份；真正导航去哪仍是调用方手里的原地址。解析不了时抛出（门之前应已校验）。
+ *
+ * `browser` 说明是哪个浏览器（应用内面板 / 用户的 Chrome），缺省 `app`。
  */
 import type { UrlObjectInput } from './types'
 
-export function urlObjectOf(raw: string): UrlObjectInput {
+export function urlObjectOf(
+  raw: string,
+  browser: UrlObjectInput['browser'] = 'app'
+): UrlObjectInput {
   const parsed = new URL(raw)
   parsed.username = ''
   parsed.password = ''
@@ -30,5 +35,5 @@ export function urlObjectOf(raw: string): UrlObjectInput {
     parsed.origin === 'null'
       ? 'null'
       : `${site.protocol.replace(/:$/, '')}://${host}${site.port ? `:${site.port}` : ''}`
-  return { url: parsed.href, scheme, host, origin }
+  return { url: parsed.href, scheme, host, origin, browser }
 }

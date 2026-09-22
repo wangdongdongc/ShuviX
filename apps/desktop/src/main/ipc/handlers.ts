@@ -31,6 +31,7 @@ import { registerKnowledgeHandlers } from './knowledgeHandlers'
 import { registerMemoryHandlers } from './memoryHandlers'
 import { registerPinChatHandlers } from './pinChatHandlers'
 import { registerNotificationHandlers } from './notificationHandlers'
+import { registerChromeExtensionHandlers } from './chromeExtensionHandlers'
 
 /**
  * 统一注册所有 IPC 处理器
@@ -70,4 +71,5 @@ export function registerIpcHandlers(): void {
   registerMemoryHandlers()
   registerPinChatHandlers()
   registerNotificationHandlers()
+  registerChromeExtensionHandlers()
 }

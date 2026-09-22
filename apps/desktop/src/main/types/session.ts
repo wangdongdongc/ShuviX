@@ -1,5 +1,6 @@
 export type { Session, SessionModelMetadata, SessionSettings } from '../dao/types'
 import type { Session } from '../dao/types'
+import type { ChromeTabBinding } from '@shuvix/chat-protocol/chromeTabSession'
 
 /** 会话完整信息（含 service 层计算属性，用于 IPC 返回给渲染进程） */
 export interface SessionInfo extends Session {
@@ -21,6 +22,11 @@ export interface SessionCreateParams {
   title?: string
   /** 绑定的 bot 名；提供则创建 bot 会话（普通有根会话，见 SessionSettings.bot） */
   bot?: string
+  /**
+   * 挂着的 Chrome 标签页；提供则创建 Chrome 标签页会话（无项目、不进列表，见 SessionSettings.chromeTab）。
+   * 只有 Chrome 前端（frontend/chrome）走这条路，渲染层的新建入口不传、IPC 也会滤掉。
+   */
+  chromeTab?: ChromeTabBinding
 }
 
 /** IPC: 更新会话标题参数 */

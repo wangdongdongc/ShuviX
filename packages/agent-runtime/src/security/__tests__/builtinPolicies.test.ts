@@ -58,12 +58,12 @@ const byName = (name: string): ParsedPolicyFile => {
 }
 
 describe('buildBuiltinPolicies', () => {
-  it('BP-1 不 throw；恰 14 份；名字与 SPECS 一致且互异', () => {
+  it('BP-1 不 throw；恰 15 份；名字与 SPECS 一致且互异', () => {
     expect(() => buildBuiltinPolicies({ readMd: INLINE_POLICY_MD })).not.toThrow()
     const policies = buildBuiltinPolicies({ readMd: INLINE_POLICY_MD })
-    expect(policies).toHaveLength(14)
+    expect(policies).toHaveLength(15)
     expect(policies.map((p) => p.name)).toEqual(BUILTIN_POLICY_SPECS.map((s) => s.name))
-    expect(new Set(policies.map((p) => p.name)).size).toBe(14)
+    expect(new Set(policies.map((p) => p.name)).size).toBe(15)
   })
 
   it('BP-1b 每份语言文件都声明 shuvix-builtin: true（新增内置策略漏写即红）', () => {

@@ -96,7 +96,7 @@ describe('parseBuiltinMcpToolName — 认名字要认全', () => {
     expect([...BUILTIN_MCP_PRESENTATIONS.ssh.toolNames].sort()).toEqual([...SSH_TOOLS].sort())
   })
 
-  it('BMP-1c database 的两个工具都认到 database 名下；手抄清单与表里的 toolNames 一致；表里恰是三台', () => {
+  it('BMP-1c database 的两个工具都认到 database 名下；手抄清单与表里的 toolNames 一致；表里恰是四台', () => {
     expect(DATABASE_TOOLS).toHaveLength(2)
     for (const tool of DATABASE_TOOLS) {
       expect(parseBuiltinMcpToolName(`mcp__database__${tool}`), tool).toEqual({
@@ -107,7 +107,12 @@ describe('parseBuiltinMcpToolName — 认名字要认全', () => {
     expect([...BUILTIN_MCP_PRESENTATIONS.database.toolNames].sort()).toEqual(
       [...DATABASE_TOOLS].sort()
     )
-    expect(Object.keys(BUILTIN_MCP_PRESENTATIONS).sort()).toEqual(['browser', 'database', 'ssh'])
+    expect(Object.keys(BUILTIN_MCP_PRESENTATIONS).sort()).toEqual([
+      'browser',
+      'chrome',
+      'database',
+      'ssh'
+    ])
   })
 
   it.each([

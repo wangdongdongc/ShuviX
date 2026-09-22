@@ -2,50 +2,32 @@ import { resolve } from 'path'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
-import { nodePolyfills } from 'vite-plugin-node-polyfills'
 
 const chatProtocol = resolve(__dirname, '../../packages/chat-protocol/src')
 const chatUi = resolve(__dirname, '../../packages/chat-ui/src/index.ts')
-const agentRuntime = resolve(__dirname, '../../packages/agent-runtime/src/index.ts')
 const appShell = resolve(__dirname, '../../packages/app-shell/src')
-const atomicEditorSrc = resolve(__dirname, '../../packages/atomic-editor/src')
 
 // MV3 Chrome 扩展构建：
-//  - 两个入口：整页 App（app.html）+ 后台 Service Worker（src/background/sw.ts）
+//  - 两个入口：每标签页的侧边栏（sidepanel.html）+ 后台 service worker（src/background/sw.ts）
 //  - 输出固定文件名（manifest 引用稳定路径，不带 hash）
-//  - 复用 @shuvix/* 包源码（别名）；pi-ai/pi-agent-core 纯 ESM 由 Vite 正常 bundle
+//  - 复用 @shuvix/* 包源码（别名）。扩展不跑 agent：agent-runtime 只取一个自包含的
+//    extractPage（子路径别名，不经包入口 —— 入口会把 pi-* 整个拖进来）
 export default defineConfig({
-  plugins: [
-    react(),
-    tailwindcss(),
-    // isomorphic-git 浏览器构建需要 Buffer 全局 —— 严格限定只注入 buffer，不引入全家桶
-    nodePolyfills({ include: ['buffer'], globals: { Buffer: true, global: false, process: false } })
-  ],
+  plugins: [react(), tailwindcss()],
   resolve: {
     alias: {
+      '@shuvix/agent-runtime/browser/extractPage': resolve(
+        __dirname,
+        '../../packages/agent-runtime/src/browser/extractPage.ts'
+      ),
       '@shuvix/chat-protocol': chatProtocol,
       '@shuvix/chat-ui': chatUi,
-      // 内置 agent / 安全策略 md 的**构建期内联**变体：只有没有文件系统的扩展用它（桌面读随包目录）
-      '@shuvix/agent-runtime/builtinAgents/inlineSources': resolve(
-        __dirname,
-        '../../packages/agent-runtime/src/subagent/builtinAgents/inlineSources.ts'
-      ),
-      '@shuvix/agent-runtime/security/builtinPolicies/inlineSources': resolve(
-        __dirname,
-        '../../packages/agent-runtime/src/security/builtinPolicies/inlineSources.ts'
-      ),
-      '@shuvix/agent-runtime': agentRuntime,
-      '@shuvix/app-shell': appShell,
-      // 子路径别名须在裸包别名之前——Vite 前缀匹配，否则 '@shuvix/atomic-editor' 会吞掉 '/code-languages'
-      '@shuvix/atomic-editor/code-languages': resolve(atomicEditorSrc, 'code-languages.ts'),
-      '@shuvix/atomic-editor/styles.css': resolve(atomicEditorSrc, 'styles/inline-preview.css'),
-      '@shuvix/atomic-editor': resolve(atomicEditorSrc, 'index.ts')
+      '@shuvix/app-shell': appShell
     },
     // 跨包共享单一 React 实例（hooks 跨副本会炸）
     dedupe: ['react', 'react-dom']
   },
   define: {
-    // pi-ai 内部少量 `typeof process !== 'undefined' && process.env.X` 守卫的兜底
     'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV || 'production')
   },
   build: {
@@ -54,7 +36,7 @@ export default defineConfig({
     target: 'esnext',
     rollupOptions: {
       input: {
-        app: resolve(__dirname, 'app.html'),
+        sidepanel: resolve(__dirname, 'sidepanel.html'),
         background: resolve(__dirname, 'src/background/sw.ts')
       },
       output: {

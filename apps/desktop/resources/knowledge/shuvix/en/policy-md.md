@@ -123,6 +123,7 @@ why every builtin rule carries `subject.kind: [agent]`.
 | `command`      | `bash`, `ssh`                                               | `execute`        | `command` (raw text), `channel` (`bash` / `ssh`), and lazily from the shell parser: `parsed` (bool), `commands` (list of `{ base, argv, wrappers, complete, depth }` — `base` is the real program after `sudo` / `env` / `timeout` are stripped, dynamic words are `''`), `writes` (redirect targets as absolute paths) |
 | `gitTool`      | the `git` tool                                              | `execute`        | `gitAction`, `command`, `force` (bool), `delete` (bool)                                                                                                                                                                                                                                                  |
 | `database`     | the built-in `database` server's `query` tool               | `execute`        | `sql`, `credential`, `dbType`, `readonly` (bool — whether the connection is read-only)                                                                                                                                                                                                                   |
+| `url`          | the built-in `browser` / `chrome` servers: every navigation, and in `chrome` the first use of each site | `navigate`       | `url`, `scheme`, `host` (lower-cased, no trailing dot), `origin`, `browser` (`app` = the browser panel inside ShuviX, `chrome` = your own Chrome); `file://` is not a url object — it is judged as a read of that path |
 | `invocation`   | **every** tool call, before it runs                         | `execute`        | none — judge it by `tool.name` / `tool.operation` (e.g. `session` / `create-sub-session`). A rule here must name a tool; an untargeted ask on `invocation` would stop every call.                                                                                                                       |
 
 **Strict semantics**: reading an attribute the object does not have (e.g. `object.path` on a
@@ -190,6 +191,7 @@ English file**, translations only change the text people read):
 | `git-safety`                    | ask on destructive git operations (`init`, `restore`, forced checkout, branch delete)                                  |
 | `ask-on-database`               | ask on every statement over a writable database connection                                                             |
 | `ask-on-sub-session`            | ask once when a sub-session is opened (`tool.name == 'session' && tool.operation == 'create-sub-session'`)             |
+| `ask-on-new-site`               | in your own Chrome (the ShuviX side panel), ask the first time a conversation opens or works on a site (`object.browser == 'chrome'`) |
 | `session-auto-allow`            | `force-allow` everything while the session's auto-allow switch is on                                                    |
 | `session-path-grants`           | `force-allow` reads / writes under paths the user answered "allow and remember" for                                    |
 

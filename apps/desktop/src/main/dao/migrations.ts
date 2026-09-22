@@ -712,6 +712,34 @@ export const migrations: Migration[] = [
          VALUES (?, ?, 'inproc', '', '[]', '{}', '', '{}', '{}', 1, 1, '[]', ?, ?)`
       ).run('builtin-mcp-database', 'database', now, now)
     }
+  },
+  {
+    version: 29,
+    description:
+      '种子内置能力服务器 chrome（inproc MCP，用户真实的 Chrome；只由 Chrome 标签页会话的 tab 档案声明）；内置名被自定义 server 占着时让位',
+    up: (db) => {
+      // 与 v27 / v28 同一个形状、同一条让位规则。chrome 不出现在普通会话的扩展能力选择里（桌面自己的
+      // 会话只用应用内浏览器面板），这一行存在是为了让 tab 档案的 `mcp:chrome` 按名解析得到，
+      // 也给 MCP 设置页一个挂「Chrome 扩展连接状态」的位置。
+      const now = Date.now()
+      const holderOf = db.prepare('SELECT id FROM mcp_servers WHERE name = ?')
+      if (db.prepare('SELECT 1 FROM mcp_servers WHERE id = ?').get('builtin-mcp-chrome')) return
+      const occupant = holderOf.get('chrome') as { id: string } | undefined
+      if (occupant) {
+        let freeName = 'chrome-custom'
+        for (let n = 2; holderOf.get(freeName); n++) freeName = `chrome-custom-${n}`
+        db.prepare('UPDATE mcp_servers SET name = ?, updatedAt = ? WHERE id = ?').run(
+          freeName,
+          now,
+          occupant.id
+        )
+      }
+      db.prepare(
+        `INSERT INTO mcp_servers
+           (id, name, type, command, args, env, url, headers, metadata, isEnabled, isBuiltin, cachedTools, createdAt, updatedAt)
+         VALUES (?, ?, 'inproc', '', '[]', '{}', '', '{}', '{}', 1, 1, '[]', ?, ?)`
+      ).run('builtin-mcp-chrome', 'chrome', now, now)
+    }
   }
 ]
 

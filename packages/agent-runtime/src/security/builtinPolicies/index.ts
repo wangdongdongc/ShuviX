@@ -16,7 +16,8 @@
  * ask-on-database（可写数据库连接的逐条查询询问）/ ask-on-sub-session（开子会话前询问 ——
  * 唯一一条走 L1 全工具门的内置策略：客体是 {type:'invocation'}，判据落在工具维度
  * tool.name/tool.operation 上，因为「开一条子会话」没有路径/命令那样的专属客体，
- * 它的分量在于开出去的是**一整场会自己跑的对话**）——
+ * 它的分量在于开出去的是**一整场会自己跑的对话**）/ ask-on-new-site（在用户自己的 Chrome 里
+ * 第一次用一个站点前询问 —— 客体是 {type:'url'}，只管 browser 为 chrome 的那一种）——
  * 用户同名覆盖（含空 rules 的"清空"覆盖）即可放宽或移除任何一道门。
  *
  * 出厂内容**不只有防护**：session-auto-allow 与 session-path-grants 用
@@ -73,6 +74,7 @@ export const BUILTIN_POLICY_SPECS: readonly BuiltinPolicySpec[] = [
   { name: 'git-safety' },
   { name: 'ask-on-database' },
   { name: 'ask-on-sub-session' },
+  { name: 'ask-on-new-site' },
   // force-allow 层两份放最后：它们与上面的防护不在同一 tier，装配序对结算无影响，
   // 但列表尾部更贴合阅读顺序（先看拦什么，再看什么情况下放行）
   { name: 'session-auto-allow' },

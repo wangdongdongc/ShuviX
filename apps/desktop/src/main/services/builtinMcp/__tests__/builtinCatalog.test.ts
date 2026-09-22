@@ -26,6 +26,10 @@ vi.mock('../databaseServer', () => ({
   createDatabaseMcpServerFactory: () => () => undefined,
   DATABASE_MCP_SERVER_NAME: 'database'
 }))
+vi.mock('../chromeServer', () => ({
+  createChromeMcpServerFactory: () => () => undefined,
+  CHROME_MCP_SERVER_NAME: 'chrome'
+}))
 vi.mock('../../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {} })
 }))
@@ -52,12 +56,16 @@ describe('内置能力服务器的清单对账', () => {
     )
   })
 
-  it('BC-2 呈现表里 browser 的工具名单 = server 目录（能力全开）的全部工具名，不多不少、没有重复', () => {
-    const catalog = browserToolsForCaps(ALL_CAPS).map((t) => t.name)
-    const listed = BUILTIN_MCP_PRESENTATIONS.browser.toolNames
-    expect(new Set(listed).size).toBe(listed.length)
-    expect([...listed].sort()).toEqual([...catalog].sort())
-  })
+  it.each(['browser', 'chrome'])(
+    'BC-2 呈现表里 %s 的工具名单 = server 目录（能力全开）的全部工具名，不多不少、没有重复',
+    (server) => {
+      // chrome 与 browser 是同一份 server 实现（用户的 Chrome / 应用内面板），工具目录相同
+      const catalog = browserToolsForCaps(ALL_CAPS).map((t) => t.name)
+      const listed = BUILTIN_MCP_PRESENTATIONS[server].toolNames
+      expect(new Set(listed).size).toBe(listed.length)
+      expect([...listed].sort()).toEqual([...catalog].sort())
+    }
+  )
 
   it('BC-2 目录里的每个工具都认得出是内置 browser 的（界面拿到图标、标签与摘要）', () => {
     for (const tool of browserToolsForCaps(ALL_CAPS)) {

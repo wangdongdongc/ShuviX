@@ -19,6 +19,7 @@ import { join } from 'path'
 import { createNotificationCenter, type NotificationCenter } from '@shuvix/agent-runtime'
 import type { AgentNotification } from '@shuvix/chat-protocol/notification'
 import type { ChatEvent } from '@shuvix/chat-protocol/events'
+import { isChromeTabSessionSettings } from '@shuvix/chat-protocol/chromeTabSession'
 import { sessionDao } from '../dao/sessionDao'
 import { settingsDao } from '../dao/settingsDao'
 import { focusFloating, isPinned } from './pinnedChatService'
@@ -151,7 +152,25 @@ export function initNotificationService(injected: NotificationServiceDeps): void
 }
 
 /** ChatEvent 流的旁路入口（electronEventSink 广播时顺带喂一份）—— 未初始化时静默丢弃 */
+/**
+ * 会话是不是 Chrome 标签页会话（记一次就够：`chromeTab` 创建那一刻定死，会话 id 不复用）。
+ * 事件是逐 token 来的，不能每条都读一次库。
+ */
+const chromeTabSessions = new Map<string, boolean>()
+
+function isChromeTabSession(sessionId: string): boolean {
+  let known = chromeTabSessions.get(sessionId)
+  if (known === undefined) {
+    known = isChromeTabSessionSettings(sessionDao.pickSettings(sessionId, ['chromeTab']))
+    chromeTabSessions.set(sessionId, known)
+  }
+  return known
+}
+
 export function notifyOnChatEvent(event: ChatEvent): void {
+  // Chrome 标签页会话的对话在 Chrome 侧边栏里 —— 用户在那边看着、在那边答询问；桌面通知的点击
+  // 只会把人拽进一个根本不列这条会话的窗口
+  if (isChromeTabSession(event.sessionId)) return
   center?.handleEvent(event)
 }
 

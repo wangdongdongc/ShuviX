@@ -1752,7 +1752,8 @@ const PAGE: UrlObjectInput = {
   url: 'https://a.example/p?q=1',
   scheme: 'https',
   host: 'a.example',
-  origin: 'https://a.example'
+  origin: 'https://a.example',
+  browser: 'app'
 }
 
 /** 某台主机上的一页 */
@@ -1760,7 +1761,8 @@ const pageOn = (host: string): UrlObjectInput => ({
   url: `https://${host}/x`,
   scheme: 'https',
   host,
-  origin: `https://${host}`
+  origin: `https://${host}`,
+  browser: 'app'
 })
 
 const OPEN_OPTS = {
@@ -1875,11 +1877,18 @@ describe('createSecurityContext — enforceUrl（浏览器导航守卫）', () =
         url: 'http://a.example:8080/',
         scheme: 'http',
         host: 'a.example',
-        origin: 'http://a.example:8080'
+        origin: 'http://a.example:8080',
+        browser: 'app'
       },
-      { url: 'data:text/html,x', scheme: 'data', host: '', origin: 'null' },
-      { url: 'about:blank', scheme: 'about', host: '', origin: 'null' },
-      { url: 'chrome://settings', scheme: 'chrome', host: 'settings', origin: 'null' }
+      { url: 'data:text/html,x', scheme: 'data', host: '', origin: 'null', browser: 'app' },
+      { url: 'about:blank', scheme: 'about', host: '', origin: 'null', browser: 'app' },
+      {
+        url: 'chrome://settings',
+        scheme: 'chrome',
+        host: 'settings',
+        origin: 'null',
+        browser: 'app'
+      }
     ]
     const { ctx, requestUserInput, warn } = urlContext([])
 
@@ -2335,7 +2344,8 @@ describe('createSecurityContext — 真实路径（provider.realPath）', () => 
         url: 'https://a.example/',
         scheme: 'https',
         host: 'a.example',
-        origin: 'https://a.example'
+        origin: 'https://a.example',
+        browser: 'app'
       },
       { toolCallId: 'u1', toolName: 'mcp__browser__open_tab' }
     )

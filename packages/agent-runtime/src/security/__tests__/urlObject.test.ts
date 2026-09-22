@@ -23,7 +23,8 @@ describe('urlObjectOf', () => {
         url: 'https://evil.example/x',
         scheme: 'https',
         host: 'evil.example',
-        origin: 'https://evil.example'
+        origin: 'https://evil.example',
+        browser: 'app'
       }
     ],
     [
@@ -32,7 +33,8 @@ describe('urlObjectOf', () => {
         url: 'https://evil.example:8443/x',
         scheme: 'https',
         host: 'evil.example',
-        origin: 'https://evil.example:8443'
+        origin: 'https://evil.example:8443',
+        browser: 'app'
       }
     ],
     [
@@ -41,12 +43,19 @@ describe('urlObjectOf', () => {
         url: 'https://a.b.example/',
         scheme: 'https',
         host: 'a.b.example',
-        origin: 'https://a.b.example'
+        origin: 'https://a.b.example',
+        browser: 'app'
       }
     ],
     [
       'HTTPS://A.EXAMPLE/',
-      { url: 'https://a.example/', scheme: 'https', host: 'a.example', origin: 'https://a.example' }
+      {
+        url: 'https://a.example/',
+        scheme: 'https',
+        host: 'a.example',
+        origin: 'https://a.example',
+        browser: 'app'
+      }
     ]
   ])('UO-1 %s → 主机名小写、结尾的点（一个或几个）都去掉，url 里写回的也是它', (raw, expected) => {
     expect(urlObjectOf(raw)).toEqual(expected)
@@ -59,7 +68,7 @@ describe('urlObjectOf', () => {
       'https://evil.example./x',
       'https://EVIL.EXAMPLE../x',
       'https://someone:secret@evil.example./x'
-    ].map(urlObjectOf)
+    ].map((raw) => urlObjectOf(raw))
     for (const v of variants) {
       expect(v.host).toBe('evil.example')
       expect(v.origin).toBe('https://evil.example')
@@ -70,7 +79,13 @@ describe('urlObjectOf', () => {
   it.each<[string, UrlObjectInput]>([
     [
       'http://[::1]:3000/',
-      { url: 'http://[::1]:3000/', scheme: 'http', host: '[::1]', origin: 'http://[::1]:3000' }
+      {
+        url: 'http://[::1]:3000/',
+        scheme: 'http',
+        host: '[::1]',
+        origin: 'http://[::1]:3000',
+        browser: 'app'
+      }
     ],
     [
       'http://127.0.0.1:8080/',
@@ -78,7 +93,8 @@ describe('urlObjectOf', () => {
         url: 'http://127.0.0.1:8080/',
         scheme: 'http',
         host: '127.0.0.1',
-        origin: 'http://127.0.0.1:8080'
+        origin: 'http://127.0.0.1:8080',
+        browser: 'app'
       }
     ],
     [
@@ -87,7 +103,8 @@ describe('urlObjectOf', () => {
         url: 'http://localhost:8080/',
         scheme: 'http',
         host: 'localhost',
-        origin: 'http://localhost:8080'
+        origin: 'http://localhost:8080',
+        browser: 'app'
       }
     ]
   ])('UO-3 %s：IP 字面量原样，IPv6 保留方括号', (raw, expected) => {
@@ -101,7 +118,8 @@ describe('urlObjectOf', () => {
         url: 'https://evil.example:8443/a?b#c',
         scheme: 'https',
         host: 'evil.example',
-        origin: 'https://evil.example:8443'
+        origin: 'https://evil.example:8443',
+        browser: 'app'
       }
     ],
     [
@@ -110,12 +128,19 @@ describe('urlObjectOf', () => {
         url: 'https://host.example/',
         scheme: 'https',
         host: 'host.example',
-        origin: 'https://host.example'
+        origin: 'https://host.example',
+        browser: 'app'
       }
     ],
     [
       'https://:pw@a.example/',
-      { url: 'https://a.example/', scheme: 'https', host: 'a.example', origin: 'https://a.example' }
+      {
+        url: 'https://a.example/',
+        scheme: 'https',
+        host: 'a.example',
+        origin: 'https://a.example',
+        browser: 'app'
+      }
     ]
   ])('UO-4 %s：账号口令不进客体（只有用户名、只有口令也一样）', (raw, expected) => {
     const object = urlObjectOf(raw)
@@ -128,36 +153,67 @@ describe('urlObjectOf', () => {
       url: 'https://a.example/Path/To?Q=1&r=Two#Frag',
       scheme: 'https',
       host: 'a.example',
-      origin: 'https://a.example'
+      origin: 'https://a.example',
+      browser: 'app'
     })
   })
 
   it.each<[string, UrlObjectInput]>([
-    ['foo://u:p@Host./p', { url: 'foo://host/p', scheme: 'foo', host: 'host', origin: 'null' }],
+    [
+      'foo://u:p@Host./p',
+      { url: 'foo://host/p', scheme: 'foo', host: 'host', origin: 'null', browser: 'app' }
+    ],
     [
       'chrome://Settings./x',
-      { url: 'chrome://settings/x', scheme: 'chrome', host: 'settings', origin: 'null' }
+      {
+        url: 'chrome://settings/x',
+        scheme: 'chrome',
+        host: 'settings',
+        origin: 'null',
+        browser: 'app'
+      }
     ],
     [
       'chrome://settings',
-      { url: 'chrome://settings', scheme: 'chrome', host: 'settings', origin: 'null' }
+      {
+        url: 'chrome://settings',
+        scheme: 'chrome',
+        host: 'settings',
+        origin: 'null',
+        browser: 'app'
+      }
     ]
   ])('UO-6 %s：不透明来源的协议带主机时同样规整（origin 仍是 null）', (raw, expected) => {
     expect(urlObjectOf(raw)).toEqual(expected)
   })
 
   it.each<[string, UrlObjectInput]>([
-    ['data:text/html,x', { url: 'data:text/html,x', scheme: 'data', host: '', origin: 'null' }],
-    ['about:blank', { url: 'about:blank', scheme: 'about', host: '', origin: 'null' }],
+    [
+      'data:text/html,x',
+      { url: 'data:text/html,x', scheme: 'data', host: '', origin: 'null', browser: 'app' }
+    ],
+    [
+      'about:blank',
+      { url: 'about:blank', scheme: 'about', host: '', origin: 'null', browser: 'app' }
+    ],
     [
       'javascript:alert(1)',
-      { url: 'javascript:alert(1)', scheme: 'javascript', host: '', origin: 'null' }
+      { url: 'javascript:alert(1)', scheme: 'javascript', host: '', origin: 'null', browser: 'app' }
     ],
     [
       'mailto:Someone@Example.com',
-      { url: 'mailto:Someone@Example.com', scheme: 'mailto', host: '', origin: 'null' }
+      {
+        url: 'mailto:Someone@Example.com',
+        scheme: 'mailto',
+        host: '',
+        origin: 'null',
+        browser: 'app'
+      }
     ],
-    ['file:///tmp/a.html', { url: 'file:///tmp/a.html', scheme: 'file', host: '', origin: 'null' }]
+    [
+      'file:///tmp/a.html',
+      { url: 'file:///tmp/a.html', scheme: 'file', host: '', origin: 'null', browser: 'app' }
+    ]
   ])('UO-7 %s：没有主机 → host 是空串、origin 是 null，scheme 不带冒号', (raw, expected) => {
     expect(urlObjectOf(raw)).toEqual(expected)
   })
@@ -165,11 +221,23 @@ describe('urlObjectOf', () => {
   it.each<[string, UrlObjectInput]>([
     [
       'https://a.example:443/',
-      { url: 'https://a.example/', scheme: 'https', host: 'a.example', origin: 'https://a.example' }
+      {
+        url: 'https://a.example/',
+        scheme: 'https',
+        host: 'a.example',
+        origin: 'https://a.example',
+        browser: 'app'
+      }
     ],
     [
       'http://a.example:80/x',
-      { url: 'http://a.example/x', scheme: 'http', host: 'a.example', origin: 'http://a.example' }
+      {
+        url: 'http://a.example/x',
+        scheme: 'http',
+        host: 'a.example',
+        origin: 'http://a.example',
+        browser: 'app'
+      }
     ],
     [
       'ws://Echo.Example.:81/s',
@@ -177,15 +245,17 @@ describe('urlObjectOf', () => {
         url: 'ws://echo.example:81/s',
         scheme: 'ws',
         host: 'echo.example',
-        origin: 'ws://echo.example:81'
+        origin: 'ws://echo.example:81',
+        browser: 'app'
       }
     ]
   ])('UO-8 %s：默认端口省略，非默认端口进 origin', (raw, expected) => {
     expect(urlObjectOf(raw)).toEqual(expected)
   })
 
-  it('UO-9 只有这四个键 —— 没有 type（那是 enforceUrl 加的），也没有账号口令的位置', () => {
+  it('UO-9 只有这五个键 —— 没有 type（那是 enforceUrl 加的），也没有账号口令的位置', () => {
     expect(Object.keys(urlObjectOf('https://u:p@a.example/')).sort()).toEqual([
+      'browser',
       'host',
       'origin',
       'scheme',
@@ -207,7 +277,8 @@ describe('urlObjectOf', () => {
         url: 'blob:https://a.example/0b1c',
         scheme: 'blob',
         host: 'a.example',
-        origin: 'https://a.example'
+        origin: 'https://a.example',
+        browser: 'app'
       }
     ],
     [
@@ -216,10 +287,14 @@ describe('urlObjectOf', () => {
         url: 'blob:https://A.Example.:8443/0b1c',
         scheme: 'blob',
         host: 'a.example',
-        origin: 'https://a.example:8443'
+        origin: 'https://a.example:8443',
+        browser: 'app'
       }
     ],
-    ['blob:null/0b1c', { url: 'blob:null/0b1c', scheme: 'blob', host: '', origin: 'null' }]
+    [
+      'blob:null/0b1c',
+      { url: 'blob:null/0b1c', scheme: 'blob', host: '', origin: 'null', browser: 'app' }
+    ]
   ])('UO-11 %s：blob: 按创建它的那个源给 host / origin（url 原样）', (raw, expected) => {
     expect(urlObjectOf(raw)).toEqual(expected)
   })

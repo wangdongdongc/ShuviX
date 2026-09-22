@@ -9,38 +9,12 @@
  * turndown 在浏览器用原生 DOM、在 Node 用内置 domino，双端可跑；动态 import 保持懒加载。
  */
 
-export interface ExtractedPage {
-  title: string
-  url: string
-  html: string
-}
+export { extractPage, type ExtractedPage } from './extractPage'
+import type { ExtractedPage } from './extractPage'
+import { extractPage } from './extractPage'
 
 /** read_page 转换后 Markdown 字符上限 */
 export const MAX_PAGE_MARKDOWN_CHARS = 200_000
-
-// 本包被无 DOM lib 的 tsconfig（桌面主进程）整体编译，故用最小局部声明代替全局 DOM 类型；
-// declare 不产生代码，extractPage 序列化注入页面后引用的仍是页面全局 document/location。
-interface MinimalElement {
-  cloneNode(deep: boolean): MinimalElement
-  querySelectorAll(selector: string): { forEach(cb: (el: { remove(): void }) => void): void }
-  innerHTML: string
-}
-declare const document: {
-  body: MinimalElement | null
-  documentElement: MinimalElement
-  title: string
-}
-declare const location: { href: string }
-
-/** 注入页面的抽取函数（自包含；序列化后在目标页执行）：去脚本/样式，返回正文 HTML + 元信息 */
-export function extractPage(): ExtractedPage {
-  const rootSrc = document.body ?? document.documentElement
-  const clone = rootSrc.cloneNode(true)
-  clone
-    .querySelectorAll('script,style,noscript,svg,template,link,iframe')
-    .forEach((el) => el.remove())
-  return { title: document.title, url: location.href, html: clone.innerHTML }
-}
 
 /** 供 executeJavaScript 使用的自执行表达式形式 */
 export const EXTRACT_PAGE_EXPR = `(${extractPage.toString()})()`

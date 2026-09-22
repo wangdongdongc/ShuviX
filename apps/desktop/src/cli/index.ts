@@ -14,12 +14,17 @@
  *
  * Session 信息：bash 工具 spawn 时把 SHUVIX_SESSION_ID 注入 env，CLI 透传给主进程，
  *               主进程据此把目标 widget 目录加进 session 的 read/write allowList。
+ *
+ * 另有一个与命令无关的模式：`native-host` —— Chrome 为 ShuviX 扩展拉起的原生消息宿主，
+ * 常驻、双向转发，见 nativeHost.ts。
  */
 
 import { connect } from 'net'
 import { readFileSync, existsSync } from 'fs'
 import { homedir, platform, userInfo } from 'os'
 import { join, resolve } from 'path'
+import { chromeBridgeSocketPath } from '@shuvix/chat-protocol/chromeBridge'
+import { runNativeHost } from './nativeHost'
 
 interface ParsedCommand {
   command: string
@@ -270,7 +275,39 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((e) => {
-  process.stderr.write(`Fatal: ${(e as Error).message}\n`)
-  process.exit(1)
-})
+/**
+ * 原生消息宿主模式：由宿主清单指向的启动脚本以 `native-host` 拉起（Chrome 另会追加调用方扩展的
+ * origin，Windows 上还有 `--parent-window=`）。这一支**绝不能**往 stdout 写任何非帧内容，所以在
+ * 解析普通命令之前就分流。
+ */
+function isNativeHostInvocation(argv: string[]): boolean {
+  return argv[0] === 'native-host' || argv.some((a) => a.startsWith('chrome-extension://'))
+}
+
+function runNativeHostMain(): void {
+  const handle = runNativeHost(process.stdin, process.stdout, {
+    socketPath: chromeBridgeSocketPath({
+      home: homedir(),
+      platform: platform(),
+      user: userInfo().username
+    }),
+    readToken: () => {
+      try {
+        return readFileSync(tokenFilePath(), 'utf-8').trim() || undefined
+      } catch {
+        return undefined
+      }
+    },
+    log: (message) => process.stderr.write(`[shuvix native-host] ${message}\n`)
+  })
+  void handle.done.then(() => process.exit(0))
+}
+
+if (isNativeHostInvocation(process.argv.slice(2))) {
+  runNativeHostMain()
+} else {
+  main().catch((e) => {
+    process.stderr.write(`Fatal: ${(e as Error).message}\n`)
+    process.exit(1)
+  })
+}

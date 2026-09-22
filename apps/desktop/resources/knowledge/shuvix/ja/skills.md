@@ -60,7 +60,7 @@ ShuviX が読むのは `SKILL.md` だけです。同梱ファイルは、エー�
 
 ディレクトリ名と `name` は違っていてもよく、ShuviX は `name` で一致させます。組み込みの skill はアプリに
 同梱され（UI 言語ごとに一つのディレクトリ）、編集できません。現在は `builtin:drawing` —— インライン SVG
-で図を描く手わざ —— の一つだけで、`work`、`chat`、`coding`、`bot`、`notebook` の各エージェントが
+で図を描く手わざ —— の一つだけで、`work`、`chat`、`coding`、`bot`、`notebook`、`tab` の各エージェントが
 `shuvix-tools` でその名を挙げています。有効化状態は `~/.shuvix/skills/.config.json` にあります：
 
 ```json

@@ -129,13 +129,15 @@ An empty frontmatter (`---` directly followed by `---`) is valid: every field ta
 
 ## Builtin agents and overriding them
 
-Shipped inside the application (per UI language, with the same parser): the four **base**
+Shipped inside the application (per UI language, with the same parser): the five **base**
 personas `work` (root of a session inside a project), `chat` (root of a session outside any
-project), `notebook` (root of a notebook session) and `bot` (root of a bot chat) — plus the task
-agents `coding`, `explore`, `widget`, `titler` and `knowledge-writer`.
+project), `notebook` (root of a notebook session), `bot` (root of a bot chat) and `tab` (root of a
+Chrome side panel conversation, the only one holding `mcp:chrome` — the user's own Chrome) — plus
+the task agents `coding`, `explore`, `widget`, `titler` and `knowledge-writer`.
 
 - **A session's root persona is derived from the session's form, never chosen**: notebook →
-  `notebook`, bot chat → `bot`, in a project → `work`, otherwise → `chat`. There is no setting
+  `notebook`, bot chat → `bot`, Chrome side panel → `tab`, in a project → `work`, otherwise →
+  `chat`. There is no setting
   and no picker. To change how a main conversation behaves, **override the base by name**:
   `~/.shuvix/agents/work.md` replaces the builtin `work` completely (Settings → Agents →
   "create override copy" gives you the current text to start from).
@@ -144,7 +146,7 @@ agents `coding`, `explore`, `widget`, `titler` and `knowledge-writer`.
   Overridden. A broken override never shadows the builtin.
 - The bases are **never dispatched and never named**: the `agent` tool, a hook's
   `shuvix-hook-agent` and a sub-session's `agent_profile` all refuse `work` / `chat` /
-  `notebook` / `bot`.
+  `notebook` / `bot` / `tab`.
 
 ## How an agent is put to use
 

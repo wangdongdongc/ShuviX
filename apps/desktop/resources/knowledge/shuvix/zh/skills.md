@@ -56,8 +56,8 @@ ShuviX 只读 `SKILL.md`。伴随文件留给 agent 在加载 skill 之后用 `r
 | 内置       | 随应用发布，只读                            | `builtin:<name>`      | 缺省开启；可禁用                                             |
 
 目录名与 `name` 可以不同；ShuviX 按 `name` 匹配。内置 skill 随应用发布（按界面语言一个目录），不能编辑；
-目前只有一个 `builtin:drawing` —— 内联 SVG 作图的手艺 —— `work`、`chat`、`coding`、`bot`、`notebook`
-几个 agent 在 `shuvix-tools` 里点了它的名。启用状态存在 `~/.shuvix/skills/.config.json`：
+目前只有一个 `builtin:drawing` —— 内联 SVG 作图的手艺 —— `work`、`chat`、`coding`、`bot`、`notebook`、
+`tab` 几个 agent 在 `shuvix-tools` 里点了它的名。启用状态存在 `~/.shuvix/skills/.config.json`：
 
 ```json
 { "disabled": ["<name>", "<dirName>:<name>"], "disabledDirs": ["<dirName>"], "dirs": [{ "name": "<dirName>", "path": "/abs/path" }] }

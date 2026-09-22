@@ -16,6 +16,7 @@ import {
   KNOWLEDGE_WRITER_SPEC,
   NOTEBOOK_PROFILE_NAME,
   BOT_PROFILE_NAME,
+  TAB_PROFILE_NAME,
   WIDGET_SPEC,
   WORK_PROFILE_NAME,
   pickLocalizedSource
@@ -91,13 +92,14 @@ describe('语言解析 — 精确 → 基础 → en，按文件整体回退', ()
 })
 
 describe('buildBuiltinProfiles — 全集现算', () => {
-  it('全参数 → 九个内置,四个基座档案居首;缺 widget 根 → 自动跳过', () => {
+  it('全参数 → 十个内置,五个基座档案居首;缺 widget 根 → 自动跳过', () => {
     // bot-notes 已退役（bot 自己维护自己的正文，没有单独的笔记段）—— 名单里不该再有它
     expect(buildBuiltinProfiles(ALL_PARAMS).map((a) => a.name)).toEqual([
       'work',
       'chat',
       'notebook',
       'bot',
+      'tab',
       'coding',
       'explore',
       'widget',
@@ -111,6 +113,7 @@ describe('buildBuiltinProfiles — 全集现算', () => {
       'chat',
       'notebook',
       'bot',
+      'tab',
       'coding',
       'explore',
       'titler',
@@ -337,7 +340,7 @@ describe('work 档案钉板(项目会话基座：工具集/环境段的唯一事
     }
   })
 
-  it('内置档案默认认 AGENTS.md → CLAUDE.md（notebook / bot / titler 除外）、项目感知默认开（titler 除外）', () => {
+  it('内置档案默认认 AGENTS.md → CLAUDE.md（notebook / bot / tab / titler 除外）、项目感知默认开（titler 除外）', () => {
     /** 两样注入都不要的执行型档案（上下文无关的一次性任务，注入整份项目文档纯属浪费 token 且稀释指令） */
     const NO_INJECTION = ['titler']
     for (const spec of BUILTIN_PROFILE_SPECS) {
@@ -348,9 +351,11 @@ describe('work 档案钉板(项目会话基座：工具集/环境段的唯一事
       //  - titler 两样都不要：拟一个标题用不上项目文档，注入只是噪声。
       // bot 与 notebook 同一取舍：bot 是对话人格，AGENTS.md/CLAUDE.md 是写代码的工程
       // 约定 —— 真正写代码的是它派出去的子会话，那条会话自己会吃这份文件。
+      // tab（Chrome 侧边栏会话）也不吃：它处理的是网页，工作目录只是个临时目录。
       const instructionsOn =
         spec.name !== NOTEBOOK_PROFILE_NAME &&
         spec.name !== BOT_PROFILE_NAME &&
+        spec.name !== TAB_PROFILE_NAME &&
         !NO_INJECTION.includes(spec.name)
       const awarenessOn = !NO_INJECTION.includes(spec.name)
       // 清单顺序即优先级：两份都在时取 AGENTS.md（正是改制前那条内置默认优先级）
@@ -426,18 +431,21 @@ describe('chat 档案钉板(不归属项目的会话的创建基座)', () => {
 
 /**
  * 基座名单钉板 —— 会话根 Agent 的档案**由形态推导**（项目 work / 无项目 chat / 笔记本
- * notebook / bot 会话 bot），四者都不可被点名：不进派发名单，也不可作子会话的 `agent_profile`。
+ * notebook / bot 会话 bot / Chrome 标签页会话 tab），五者都不可被点名：不进派发名单，也不可作子会话的
+ * `agent_profile`。
  * 曾经存在的「可切换基座名单」（SWITCHABLE_BASE_PROFILE_NAMES）与旧基座名 `default`
  * 已随会话内切换一并下线，这里钉住导出面，防它们悄悄复活。
  */
 describe('基座名单钉板', () => {
-  it('恰为 bot / chat / notebook / work 四个名字', () => {
-    expect([...BASE_PROFILE_NAMES].sort()).toEqual(['bot', 'chat', 'notebook', 'work'])
+  it('恰为 bot / chat / notebook / tab / work 五个名字', () => {
+    expect([...BASE_PROFILE_NAMES].sort()).toEqual(['bot', 'chat', 'notebook', 'tab', 'work'])
     expect(BASE_PROFILE_NAMES.has(WORK_PROFILE_NAME)).toBe(true)
     expect(BASE_PROFILE_NAMES.has(CHAT_PROFILE_NAME)).toBe(true)
     expect(BASE_PROFILE_NAMES.has(NOTEBOOK_PROFILE_NAME)).toBe(true)
     // bot 是 bot 会话的基座：同样由形态推导、同样不可被点名
     expect(BASE_PROFILE_NAMES.has(BOT_PROFILE_NAME)).toBe(true)
+    // tab 是 Chrome 标签页会话的基座：同上
+    expect(BASE_PROFILE_NAMES.has(TAB_PROFILE_NAME)).toBe(true)
   })
 
   it('没有任何内置 md 还带着退役的 shuvix-session-awareness（三语全集）', () => {

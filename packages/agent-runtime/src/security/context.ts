@@ -277,7 +277,8 @@ export function createSecurityContext(
           url: object.url,
           scheme: object.scheme,
           host: object.host,
-          origin: object.origin
+          origin: object.origin,
+          browser: object.browser
         },
         { ...opts, onOther: 'throw' }
       )

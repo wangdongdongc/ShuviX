@@ -38,11 +38,17 @@ export { buildVisibleItems } from './conversationItems'
  */
 export function Conversation({
   sessionId,
-  emptyState
+  emptyState,
+  inputTop
 }: {
   sessionId: string
   /** 会话无消息时的占位（宿主可注入，如桌面的会话配置面板）；缺省为简单提示文案 */
   emptyState?: React.ReactNode
+  /**
+   * 输入卡片最顶格的宿主内容（InputArea 的 thread 插槽）—— Chrome 侧边栏把「这条消息带哪些标签页」
+   * 的选择放在这里，紧挨着要发出去的那段话
+   */
+  inputTop?: React.ReactNode
 }): React.JSX.Element {
   const { t } = useTranslation()
   const messages = useChatStore((s) => s.messages)
@@ -157,6 +163,7 @@ export function Conversation({
           className={`transition-opacity duration-200 ${dim ? 'opacity-30 hover:opacity-100 focus-within:opacity-100' : ''}`}
         >
           <InputArea
+            thread={inputTop}
             accessory={<PendingInputsPanel onResponse={handleInputResponse} />}
             onHeightChange={handleInputHeightChange}
           />
