@@ -21,7 +21,6 @@
     "info": "More info"
   },
   "sidebar": {
-    "title": "ShuviX",
     "projects": "Projects",
     "tempChats": "Chats",
     "archivedProjects": "Archived Projects",
@@ -48,8 +47,6 @@
     "deleteSession": "Delete Session",
     "exportSession": "Export Session",
     "viewMore": "View more",
-    "viewProjects": "Projects",
-    "viewCalendar": "Calendar",
     "knowledgeGroup": "Knowledge Base",
     "knowledgeEmpty": "No entries yet — agents and you can add notes under ~/.shuvix/knowledge/",
     "botsGroup": "Bots",
@@ -69,7 +66,6 @@
     "projectMemory": "Project Memory",
     "projectMemoryHint": "What the agent learned about this project — injected into every session",
     "memoryPinned": "Always applies (full text injected every session)",
-    "switchView": "Switch view",
     "today": "Today",
     "noSessionsOnDay": "No sessions on this day",
     "newBotChat": "New bot chat",
@@ -937,8 +933,6 @@
     "filesTruncated": "Showing first {{count}} files",
     "filesRefresh": "Refresh",
     "filesSearch": "Search",
-    "filesPermissionNeeded": "Access to folder “{{name}}” has expired. Grant access to view its files.",
-    "filesGrantAccess": "Grant access",
     "preview": {
       "copyPath": "Copy full path",
       "revealInFolder": "Show in folder",

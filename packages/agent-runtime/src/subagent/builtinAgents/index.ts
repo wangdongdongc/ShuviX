@@ -4,7 +4,7 @@
  * 所有内置 agent —— 含五个基座档案 work / chat / notebook / bot / tab —— 的文案都以
  * `md/<name>[.<lang>].md` 维护，格式与用户档案 `~/.shuvix/agents/<name>.md` 完全一致、
  * 经同一个解析器读取。这些文件**随包发布到磁盘**，运行时经宿主注入的 `readMd` 现读
- * （桌面 = Resources/builtin-agents，扩展 = 构建期内联的同一批文件）：侧栏点开一份内置档案
+ * （桌面 = Resources/builtin-agents；单测读构建期内联的同一批文件）：侧栏点开一份内置档案
  * 时看到的，就是运行时读的那一份。宿主 registry 调 buildBuiltinProfiles(deps) 现算列表
  * （语言切换 / 宿主参数变化自动跟随），用户仍可用同名用户档案覆盖（合并逻辑在各端 registry 内）。
  *

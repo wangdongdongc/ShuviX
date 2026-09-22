@@ -4,7 +4,8 @@
  * 聊天组件树（components/chat + 相关 hooks）只通过 `getChatApi()` 访问后端，
  * 不直接依赖任何宿主的全局 `window.api`。这样：
  *   - 桌面端（Electron preload）/ WebUI 通过暴露 `window.api` 满足契约；
- *   - 外部宿主（Chrome 扩展、HTTP/WS 服务端）在挂载前 `setChatApi(myAdapter)` 注入实现。
+ *   - 外部宿主（HTTP/WS 服务端的 Web 前端）在挂载前 `setChatApi(myAdapter)` 注入实现；
+ *   - 只驱动一条会话的渠道端（Chrome 扩展的侧边栏）用 `setSessionChannelApi` 注入更小的那份。
  *
  * 契约本身（接口与协议数据形状）定义在 `@shuvix/chat-protocol/chatApi`，与 ChatEvent /
  * ChatMessage 并列为前↔后端协议的单一来源。Electron 侧通过编译期断言保证 window.api
@@ -23,7 +24,7 @@ export function setChatApi(api: ChatApi): void {
 }
 
 /**
- * 由「渠道端」（如 WebUI 局域网分享、Telegram、扩展）注入**仅** SessionChannelApi 实现。
+ * 由「渠道端」（如 Chrome 扩展的侧边栏）注入**仅** SessionChannelApi 实现。
  * 此时 getHostApi() 返回 null，宿主管理类 UI（模型/项目/设置/绑定…）自动隐藏。
  */
 export function setSessionChannelApi(api: SessionChannelApi): void {

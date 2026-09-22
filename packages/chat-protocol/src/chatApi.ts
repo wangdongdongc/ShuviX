@@ -708,7 +708,6 @@ export interface HostApi {
   }
   /**
    * 桌面日历（按 session_day_prompts：同一会话可出现在多个开口日）。
-   * 扩展不实现 —— CalendarView 扩展路径继续本地 groupSessionsByDay，不调用这里。
    */
   calendar?: {
     /** 可见月里有过开口的本地日（YYYY-MM-DD[]）。`month` 为 1–12。 */

@@ -39,8 +39,6 @@ export type { ArchivedSettingsProps } from './settings/ArchivedSettings'
 // 侧边栏会话列表件（prop 驱动）
 export { SessionItem } from './sidebar/SessionItem'
 export type { SessionItemProps } from './sidebar/SessionItem'
-export { SessionList } from './sidebar/SessionList'
-export type { SessionListProps } from './sidebar/SessionList'
 export { SessionGroup } from './sidebar/SessionGroup'
 export type { SessionGroupProps } from './sidebar/SessionGroup'
 export { ProjectSessionGroups, TEMP_GROUP_KEY } from './sidebar/ProjectSessionGroups'
@@ -57,8 +55,6 @@ export type {
 } from './sidebar/BotSessionDialog'
 export { CalendarView } from './sidebar/CalendarView'
 export type { CalendarViewProps } from './sidebar/CalendarView'
-export { ViewSwitchButton } from './sidebar/ViewSwitchButton'
-export type { ViewSwitchButtonProps, SidebarViewMode } from './sidebar/ViewSwitchButton'
 export { KnowledgeBasesSection } from './settings/KnowledgeBasesSection'
 export type {
   KnowledgeBaseChoice,
@@ -222,6 +218,5 @@ export type { ConfirmDialogProps } from './common/ConfirmDialog'
 
 // 欢迎页 + 配置分享对话框（prop 驱动，经 getChatApi().config 取后端）
 export { WelcomeView } from './welcome/WelcomeView'
-export type { WelcomeViewProps } from './welcome/WelcomeView'
 export { ConfigExportDialog } from './welcome/ConfigExportDialog'
 export { ConfigImportDialog } from './welcome/ConfigImportDialog'

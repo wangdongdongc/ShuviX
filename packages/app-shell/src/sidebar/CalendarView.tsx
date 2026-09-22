@@ -13,7 +13,7 @@ export interface CalendarViewProps {
   width: number
   /** 是否正在拖动侧栏：拖动期间不渲染 DayPicker，避免重 layout 卡顿（缺省 false） */
   isResizing?: boolean
-  /** 有过会话的日期（圆点）。桌面来自 session_day_prompts，扩展来自 groupSessionsByDay */
+  /** 有过会话的日期（圆点）—— 来自 session_day_prompts */
   daysWithSessions: Date[]
   /** 选中日的会话列表 */
   daySessions: Session[]
@@ -24,9 +24,8 @@ export interface CalendarViewProps {
 }
 
 /**
- * 日历视图（桌面/扩展共用）—— 按天浏览会话。月历 + 选中日的会话分组列表。
- * 会话数据由宿主注入：桌面走索引表（同一会话可出现在多个开口日），扩展继续
- * 本地 `groupSessionsByDay` / `lastActiveAt` 单日落点。
+ * 日历视图 —— 按天浏览会话。月历 + 选中日的会话分组列表。
+ * 会话数据由宿主注入：桌面走索引表（同一会话可出现在多个开口日）。
  */
 export function CalendarView({
   renderGroupedSessionsForDay,

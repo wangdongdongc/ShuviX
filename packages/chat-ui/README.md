@@ -1,6 +1,6 @@
 # @shuvix/chat-ui
 
-可复用的"中间对话框"前端（React）。把 ShuviX 桌面端的聊天对话区抽出，供外部服务端智能体项目的 Web 前端复用——单一源码，桌面/扩展/服务端共用。
+可复用的"中间对话框"前端（React）。把 ShuviX 桌面端的聊天对话区抽出，供外部服务端智能体项目的 Web 前端复用——单一源码，桌面主窗口、Chrome 扩展的侧边栏与外部 Web 前端共用。
 
 ## 它包含什么
 
@@ -34,11 +34,16 @@ setChatApi({
       ws.onmessage = (e) => cb(JSON.parse(e.data)) // 收到的是 ChatEvent JSON
       return () => ws.close()
     }
-    // …其余 namespace 见 ChatApi 类型；可参考 apps/extension/src/runtime/chatApiAdapter.ts 的完整实现
+    // …其余 namespace 见 ChatApi 类型
   }
   // session / message / provider / settings / tools / …
 } as ChatApi)
 ```
+
+只驱动**一条会话**、不需要宿主管理能力（模型切换、项目、会话配置、设置入口）时，注入更小的
+`SessionChannelApi` 即可：`setSessionChannelApi(adapter)` 之后 `getHostApi()` 为空，那些界面自动隐藏。
+Chrome 扩展的侧边栏就是这样接的 —— 会话跑在桌面，适配器把调用经原生消息转过去，见
+`apps/extension/src/sidepanel/channelApi.ts`。
 
 事件协议 `ChatEvent`、消息类型 `ChatMessage` 等都来自 `@shuvix/chat-protocol`，前后端（Node 后端）可共享同一份类型，零漂移。
 

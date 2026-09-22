@@ -23,7 +23,7 @@ export interface SidebarProps {
    *  events 'project.changed' 自动刷新项目列表。入口：「项目」分节头的 ⋮ / 右键、空态提示、
    *  宿主菜单栏的「新建项目」—— 顶栏不再有那颗 + 按钮 */
   onOpenFolder: () => void | Promise<void>
-  /** 打开设置（桌面开独立窗口，扩展切 hash） */
+  /** 打开设置（桌面开独立窗口） */
   onOpenSettings: (tab?: string) => void
   /** 选中会话覆盖（桌面：若已悬浮则聚焦悬浮窗）；缺省 chatStore.setActiveSessionId */
   onSelectSession?: (id: string) => void
@@ -34,32 +34,24 @@ export interface SidebarProps {
   onEditProject?: (projectId: string) => void
   /** 已悬浮会话集合（caps.pin 时用于徽标 / 选中行为） */
   pinnedSessionIds?: Set<string>
-  /** 标题行右侧额外按钮（桌面：视图切换） */
-  titleActions?: React.ReactNode
   /** 底部设置栏右侧额外按钮（桌面：更新提示） */
   footerActions?: React.ReactNode
-  /** 正文整体替换（桌面日历视图）；非空时不渲染分组列表与归档区 */
-  bodyOverride?: React.ReactNode
   /** 分组列表前置插槽（桌面：Bots 与知识库分组，排在「项目」分节之上）；仅默认正文渲染，空态时也保留（功能入口） */
   groupsPrepend?: React.ReactNode
   /** 宿主弹窗插槽（项目编辑 / 会话配置 / 删除确认等） */
   overlays?: React.ReactNode
-  /** 顶栏文案。不传则不渲染标题 —— 桌面端产品名 header 已退役（无实际用途）；
-   *  扩展两种视图都显式传（sidebar.title / sidebar.viewCalendar） */
-  title?: string
   /** 项目记忆能力（桌面注入；见 ProjectSessionGroupsProps.memory） */
   memory?: ProjectMemoryAdapter
-  /** bots 能力（桌面注入 window.api.bot 的窄投影；扩展 v1 无 —— 缺省时 Bot 会话入口整体不渲染） */
+  /** bots 能力（桌面注入 window.api.bot 的窄投影 —— 缺省时 Bot 会话入口整体不渲染） */
   bots?: SidebarBotsAdapter
 }
 
 /**
- * 侧边栏（桌面/扩展共用）—— 按需顶栏（标题/宿主按钮/macOS 拖拽带）+ 知识库插槽 + 按项目分组的会话列表
+ * 侧边栏 —— macOS 拖拽带（按需）+ 知识库插槽 + 按项目分组的会话列表
  * （ProjectSessionGroups：「项目」与「临时对话」两个并列分节）+ 底部设置。
- * 项目/会话/事件经 getChatApi() 统一访问（宿主无关）；宿主差异走 caps + 注入回调/插槽：
- *   - 打开文件夹（dialog vs FSA）、打开设置、选中（悬浮聚焦）、右键菜单、删除项目均注入；
- *   - 视图切换 / 更新提示 / 弹窗经 titleActions / footerActions / overlays 插槽；
- *   - 日历视图经 bodyOverride 替换正文（桌面侧复用 ProjectSessionGroups 按天渲染）。
+ * 项目/会话/事件经 getChatApi() 统一访问；宿主差异走 caps + 注入回调/插槽：
+ *   - 打开文件夹、打开设置、选中（悬浮聚焦）、右键菜单、删除项目均注入；
+ *   - 更新提示 / 弹窗经 footerActions / overlays 插槽。
  */
 export function Sidebar({
   caps = {},
@@ -71,12 +63,9 @@ export function Sidebar({
   onConfigureSession,
   onEditProject,
   pinnedSessionIds,
-  titleActions,
   footerActions,
-  bodyOverride,
   groupsPrepend,
   overlays,
-  title,
   memory,
   bots
 }: SidebarProps): React.JSX.Element {
@@ -148,65 +137,51 @@ export function Sidebar({
   // Windows 是原生标题栏，app-region 惰性，留条空带纯属占位
   const needDragStrip = !!caps.windowDrag && platform === 'darwin'
   const drag = needDragStrip ? 'titlebar-drag' : ''
-  const noDrag = needDragStrip ? 'titlebar-no-drag' : ''
   const topPad = needDragStrip ? 'pt-10' : 'pt-3'
-  // 顶栏按需渲染：标题 / 宿主按钮 / 拖拽带任一存在才占位。
-  // 桌面不传 title（产品名 header 退役）—— Windows 上整行消失；macOS 只留交通灯拖拽带
-  const showHeader = title !== undefined || !!titleActions || needDragStrip
+  // 顶栏只剩 macOS 的交通灯拖拽带：Windows 上整行消失
+  const showHeader = needDragStrip
 
   return (
     <div className="flex flex-col h-full bg-bg-secondary/50">
-      {/* 标题行（可选窗口拖拽区）+ 宿主额外按钮；打开文件夹在「项目」分节头的菜单里 */}
+      {/* 窗口拖拽带（macOS）；打开文件夹在「项目」分节头的菜单里 */}
       {showHeader && (
         <div
           className={`${drag} flex items-center pl-3 pr-2 pb-2 ${topPad} transition-opacity duration-200 ${dim ? 'opacity-30 hover:opacity-100' : ''}`}
-        >
-          {/* 分节标题之下重一档的产品名/视图名；不 uppercase（"ShuviX" 不是全大写） */}
-          {title !== undefined && (
-            <h1 className="text-[13px] font-semibold text-text-secondary tracking-wide">{title}</h1>
-          )}
-          <div className={`${noDrag} ml-auto flex items-center`}>{titleActions}</div>
-        </div>
+        />
       )}
 
-      {/* 会话列表（或宿主正文替换，如日历视图） */}
+      {/* 会话列表 */}
       <div className="flex-1 overflow-y-auto pl-2 pr-1 py-1 no-scrollbar">
-        {bodyOverride ? (
-          bodyOverride
+        {groupsPrepend}
+        {isEmpty ? (
+          // 空态提示本身就是那句「打开一个文件夹作为项目」—— 点它即打开文件夹
+          // （此时分组列表整个不渲染，分节头那份菜单也就不在）
+          <button
+            onClick={() => void onOpenFolder()}
+            className="w-full px-3 py-8 text-center text-text-tertiary hover:text-text-secondary text-xs transition-colors"
+          >
+            {t('sidebar.emptyHint')}
+          </button>
         ) : (
-          <>
-            {groupsPrepend}
-            {isEmpty ? (
-              // 空态提示本身就是那句「打开一个文件夹作为项目」—— 点它即打开文件夹
-              // （此时分组列表整个不渲染，分节头那份菜单也就不在）
-              <button
-                onClick={() => void onOpenFolder()}
-                className="w-full px-3 py-8 text-center text-text-tertiary hover:text-text-secondary text-xs transition-colors"
-              >
-                {t('sidebar.emptyHint')}
-              </button>
-            ) : (
-              <ProjectSessionGroups
-                projects={projects}
-                collapsed={collapsedGroups}
-                onToggleGroup={toggleGroup}
-                onNewChat={(pid) => void handleNewChat(pid)}
-                onNewBotChat={bots ? (pid) => setBotDialogFor({ projectId: pid }) : undefined}
-                onSelect={onSelectSession}
-                onDelete={onDeleteSession}
-                onEditProject={onEditProject}
-                onConfigureSession={onConfigureSession}
-                projectsSection={{
-                  // 上方有知识库插槽时才画分隔线（扩展没有插槽，线会贴在列表最顶上）
-                  dividerAbove: !!groupsPrepend,
-                  onNewProject: () => void onOpenFolder()
-                }}
-                caps={{ pin: caps.pin }}
-                pinnedSessionIds={pinnedSessionIds}
-                memory={memory}
-              />
-            )}
-          </>
+          <ProjectSessionGroups
+            projects={projects}
+            collapsed={collapsedGroups}
+            onToggleGroup={toggleGroup}
+            onNewChat={(pid) => void handleNewChat(pid)}
+            onNewBotChat={bots ? (pid) => setBotDialogFor({ projectId: pid }) : undefined}
+            onSelect={onSelectSession}
+            onDelete={onDeleteSession}
+            onEditProject={onEditProject}
+            onConfigureSession={onConfigureSession}
+            projectsSection={{
+              // 上方有插槽时才画分隔线（没有插槽时线会贴在列表最顶上）
+              dividerAbove: !!groupsPrepend,
+              onNewProject: () => void onOpenFolder()
+            }}
+            caps={{ pin: caps.pin }}
+            pinnedSessionIds={pinnedSessionIds}
+            memory={memory}
+          />
         )}
       </div>
 

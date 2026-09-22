@@ -133,14 +133,13 @@ export { type CdpSpill } from './browser/cdpOps'
 export { blockedCdpReason, resolveUidMacros } from './browser/cdpPolicy'
 export { KEY_DEFS, dispatchKey, type CdpSend } from './browser/keyboard'
 export {
-  extractPage,
   EXTRACT_PAGE_EXPR,
   htmlToMarkdown,
   formatReadPage,
   MAX_PAGE_MARKDOWN_CHARS,
   type ExtractedPage
 } from './browser/readPage'
-// 统一 git 工具（multiplex）：操作目录 + 注入环境 + isomorphic-git 单后端 + FSA fs 适配器
+// 统一 git 工具（multiplex）：操作目录 + 注入环境 + isomorphic-git 单后端
 export {
   GIT_ACTIONS,
   GIT_OPS,
@@ -166,13 +165,6 @@ export {
   GIT_TOOL_NAME,
   type CreateGitToolOptions
 } from './git/tool'
-export {
-  createFsaFsClient,
-  type FsaDirHandleLike,
-  type FsaFileHandleLike,
-  type FsaFileLike,
-  type FsaWritableLike
-} from './git/fsaFsClient'
 export { buildGitHelp, GIT_HELP_TOPICS, type GitHelpTopic } from './git/help'
 export { resolveAuthor, AUTHOR_MISSING_MESSAGE } from './git/author'
 // 单 op 直用入口 —— 宿主自身的自动提交（如 widget 目录自举）复用同一套实现，不经工具壳，
@@ -458,7 +450,6 @@ export {
   createHarnessEventState,
   entriesToChatMessages,
   createModelsAdapter,
-  createStubExecutionEnv,
   INSTRUCTION_CUSTOM_TYPE,
   INLINE_TOKENS_CUSTOM_TYPE,
   SIDECAR_CUSTOM_TYPES,
@@ -473,14 +464,6 @@ export {
 // transcript：AgentMessage → ChatMessage 投影 + 面向 Agent 的转写门面
 // （派生 agent 的内存上下文经这条路径渲染成可读转写 —— 面板/导出共用）
 export { agentMessagesToChatMessages, extractBase64, transcribeAgentMessages } from './transcript'
-// 会话标题生成：宿主无关内核（端解析模型来源 + apiKey）；
-// SessionTitler 是两端共用的两阶段触发策略（quick 首轮 + refine 精修）
-export { generateSessionTitle, parseTitle, TITLE_GEN_SYSTEM_PROMPT } from './title/generateTitle'
-export {
-  SessionTitler,
-  type SessionTitlerDeps,
-  type TitleSourceMessage
-} from './title/sessionTitler'
 // shuvix 契约 md 的解析器级校验（ChatApi shuvixMd.validate 的两端共用实现）
 export { validateShuvixMdText } from './shuvixMdValidate'
 // 契约 md 的写后处理（文件工具末尾：校验回执 + 缺省字段盖章）

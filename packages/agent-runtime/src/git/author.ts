@@ -1,9 +1,9 @@
 /**
- * commit 署名解析 —— 四级解析链，两端共用（差异只在 env.resolveAuthorFallback）：
+ * commit 署名解析 —— 四级解析链（宿主差异只在 env.resolveAuthorFallback）：
  *
- * 1. params.authorName + params.authorEmail（两者都给才生效 —— 扩展端的逃生口）
+ * 1. params.authorName + params.authorEmail（两者都给才生效 —— 没有任何配置时的逃生口）
  * 2. 仓库 .git/config 的 user.name / user.email（isomorphic-git getConfig）
- * 3. env.resolveAuthorFallback()（桌面解析 ~/.gitconfig [user] 段；扩展不注入）
+ * 3. env.resolveAuthorFallback()（桌面解析 ~/.gitconfig [user] 段）
  * 4. 全缺 → 返回 undefined，由 commitOp 转为业务错误（AUTHOR_MISSING_MESSAGE）
  *
  * 明确不做：固定 ShuviX 署名（错误归属比报错更糟）、隐式写回 config。committer 恒等于 author。

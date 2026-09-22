@@ -105,18 +105,3 @@ export const BUILTIN_TOOL_PRESENTATIONS: Record<string, BuiltinToolPresentationD
         .join(' · ') || undefined
   }
 }
-
-/**
- * 用注入的 t 把若干 BuiltinToolPresentationDef 解析为 chat-ui 期望的 Record<name, ToolPresentation>。
- * 桌面 toolRegistry 走 getLabel + presentation 自行拼装；扩展直接用本函数。
- */
-export function resolveBuiltinToolPresentations(
-  t: (key: string) => string,
-  defs: Record<string, BuiltinToolPresentationDef> = BUILTIN_TOOL_PRESENTATIONS
-): Record<string, ToolPresentation> {
-  const out: Record<string, ToolPresentation> = {}
-  for (const [name, def] of Object.entries(defs)) {
-    out[name] = { label: t(def.labelKey), ...def.presentation }
-  }
-  return out
-}

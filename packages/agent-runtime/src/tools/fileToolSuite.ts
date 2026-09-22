@@ -5,7 +5,7 @@
  * 就只说出它指向哪里) → 路径询问(securityCheck) → 内核(readTextContent/readDirContent/applyWrite/
  * applyEdit) + read 的分派(url/图片/富文档/.doc/二进制/目录/纯文本)。平台差异全部经注入:
  * FileSystemPort / FileGuards / resolvePath / SecurityContext(安全模块 PEP 门面) /
- * ReadDecoders(内容解码器,可选能力函数) / ensureAccess。
+ * ReadDecoders(内容解码器,可选能力函数)。
  */
 import { Type } from 'typebox'
 import type { AgentToolResult } from '@earendil-works/pi-agent-core'
@@ -114,14 +114,12 @@ export interface ReadDecoders {
 export interface FileToolDeps {
   port: FileSystemPort
   guards: FileGuards
-  /** displayPath(params.path) → port 路径。桌面:read=resolveReadPath/write=resolveToCwd(绝对);扩展:identity */
+  /** displayPath(params.path) → port 路径。桌面:read=resolveReadPath/write=resolveToCwd(绝对) */
   resolvePath(displayPath: string, mode: AccessMode): string
   /** 安全模块 PEP 门面（统一评估 + 询问挂起；宿主经 SecurityHostProvider 注入平台细节） */
   security: SecurityContext
   decoders?: ReadDecoders
-  /** 执行前的平台访问校验(扩展 FSA 权限);默认 no-op */
-  ensureAccess?(): Promise<void>
-  /** 取消错误文案(桌面 'Aborted' / 扩展 'TOOL_ABORTED') */
+  /** 取消错误文案（缺省 'Aborted'） */
   abortError?: string
   labels: { read: string; write: string; edit: string }
   descriptions: { read: string; write: string; edit: string }
@@ -209,7 +207,6 @@ abstract class FileToolBase<
     if (signal?.aborted) throw new Error(this.abortError)
     // read 的 URL 分支不走文件系统询问
     if (this.mode === 'read' && this.isUrl(params.path)) return
-    await this.deps.ensureAccess?.()
     const portPath = this.deps.resolvePath(params.path, this.mode)
     await this.refuseSymlink(params.path, portPath)
     if (this.deferAskToApply) return

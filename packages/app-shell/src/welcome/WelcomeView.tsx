@@ -5,19 +5,11 @@ import { Download, Upload } from 'lucide-react'
 import { ConfigExportDialog } from './ConfigExportDialog'
 import { ConfigImportDialog } from './ConfigImportDialog'
 
-export interface WelcomeViewProps {
-  /**
-   * 是否显示配置导入/导出入口。缺省按平台推断（非 web 宿主显示）。
-   * 扩展（platform 'web'）须显式传 true；WebUI 共享查看端保持缺省（隐藏）。
-   */
-  enableConfigShare?: boolean
-}
-
-/** 欢迎页（桌面/扩展共用）— 无活跃会话时显示：标题 + 复用对话输入框 + 配置导入/导出 */
-export function WelcomeView({ enableConfigShare }: WelcomeViewProps = {}): React.JSX.Element {
+/** 欢迎页 — 无活跃会话时显示：标题 + 复用对话输入框 + 配置导入/导出 */
+export function WelcomeView(): React.JSX.Element {
   const { t } = useTranslation()
-  // 配置导入/导出依赖 HostApi.config（宿主能力）；渠道端（无 host）默认隐藏
-  const showConfigShare = enableConfigShare ?? getHostApi() !== null
+  // 配置导入/导出依赖 HostApi.config（宿主能力）；渠道端（无 host）隐藏
+  const showConfigShare = getHostApi() !== null
   const [exportOpen, setExportOpen] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
 

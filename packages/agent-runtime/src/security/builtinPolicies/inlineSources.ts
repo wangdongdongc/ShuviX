@@ -1,11 +1,10 @@
 /**
- * 构建期内联的内置**安全策略** md —— 给**没有文件系统的宿主**（浏览器扩展）和本包自己的
- * 单测用（与 builtinAgents/inlineSources.ts 同一个模式、同一条规矩）。
+ * 构建期内联的内置**安全策略** md —— **只给单测用**（与 builtinAgents/inlineSources.ts 同一个
+ * 模式、同一条规矩）。
  *
  * 内置策略的事实源是 `md/` 目录里的那批文件：桌面把它们随包发布到
- * `Resources/builtin-policies/`，运行时现读（见桌面的 getBuiltinPoliciesDir）。扩展跑在
- * 浏览器里读不了文件，于是构建期把**同一批文件**内联进 bundle —— 内联的是那份源文件的
- * 构建产物，不是另一份拷贝，仓库里仍然只有一处可编辑的策略。
+ * `Resources/builtin-policies/`，运行时现读（见桌面的 getBuiltinPoliciesDir）。这里把**同一批
+ * 文件**经 Vite glob 内联进来，给测试一个不依赖磁盘布局的读取口 —— 仓库里仍然只有一处可编辑的策略。
  *
  * **桌面产品代码一律不要导入本模块**（有守护测试扫这个）：它一旦进了 main 的依赖图，
  * 那批 md 就又以字符串形式躺进 bundle，「跑的和看的是同一份文件」这条就没了。

@@ -266,6 +266,17 @@ function setup(rows: McpServer[]): Harness {
   }
 }
 
+/**
+ * 一条会话能拿到的全部 MCP 工具：全局 server 的，加这条会话自己那份 inproc 实例的。宿主按 server
+ * 名逐台取（getAgentToolsByServerName），这里把表里每一台都取一遍拼起来 —— 不传会话就一台 inproc
+ * 都拿不到，与宿主的取法同一条规则。
+ */
+function toolsFor(h: Harness, sessionId?: string, opts?: { callerId?: string }): McpTool[] {
+  return [...h.store.rows.values()].flatMap((s) =>
+    h.mgr.getAgentToolsByServerName(s.name, sessionId, opts)
+  )
+}
+
 /** 让微任务与已到期的定时器跑完（fake timers 下 advanceTimersByTimeAsync 会真让出事件循环） */
 const settle = async (ms = 0): Promise<void> => {
   await vi.advanceTimersByTimeAsync(ms)
@@ -526,40 +537,6 @@ describe('McpManager 可用性与批量装配', () => {
     expect(h.mgr.getEnabledToolNames()).toEqual(['mcp:a', 'mcp:b', 'mcp:d'])
   })
 
-  it('MCPL-U-11: ensureEnabled 全量并发，部分失败不拖累其余', async () => {
-    const h = setup([
-      row({ id: 'a-id', name: 'a' }),
-      row({ id: 'b-id', name: 'b' }),
-      row({ id: 'c-id', name: 'c', isEnabled: 0 }),
-      row({ id: 'd-id', name: 'd' })
-    ])
-    h.plan.set('a', { tools: [tool('search')] })
-    h.plan.set('b', new Error('server exploded'))
-    h.plan.set('d', { tools: [tool('fetch')] })
-
-    expect(await h.mgr.ensureServerByName('d')).toEqual({ ok: true })
-    const beforeD = h.made('d').length
-
-    const results = await h.mgr.ensureEnabled()
-    expect(results.map((r) => r.name).sort()).toEqual(['a', 'b', 'd'])
-    const byName = new Map(results.map((r) => [r.name, r.result]))
-    expect(byName.get('a')).toEqual({ ok: true })
-    expect(byName.get('b')?.ok).toBe(false)
-    expect(byName.get('b')?.error).toBe('server exploded')
-    expect(byName.get('d')).toEqual({ ok: true })
-    // 已连上的那台不被重开
-    expect(h.made('d')).toHaveLength(beforeD)
-    // 停用的那台从没被尝试过
-    expect(h.made('c')).toHaveLength(0)
-
-    expect(
-      h.mgr
-        .getAllAgentTools()
-        .map((t) => t.name)
-        .sort()
-    ).toEqual(['mcp__a__search', 'mcp__d__fetch'])
-  })
-
   it('MCPL-U-12: cachedTools 成功时写、失败时不清；状态映射喂给 mcp:list', async () => {
     const h = setup([
       row({ id: 'a-id', name: 'a' }),
@@ -694,7 +671,7 @@ describe('McpManager 内置能力服务器：没有会话就没有实例', () =>
 
     expect(h.createTransport).not.toHaveBeenCalled()
     expect(h.mgr.getStatus('ssh-id')).toBe('disconnected')
-    expect(h.mgr.getAllAgentTools()).toEqual([])
+    expect(toolsFor(h)).toEqual([])
     // 连接表里什么都没有 —— 也就不存在一份「谁都能捡走」的无主实例
     expect(h.mgr.getAgentToolsByServerName('ssh', 's1')).toEqual([])
   })
@@ -937,7 +914,7 @@ describe('McpManager 内置实例的释放', () => {
     expect(released(h.lastFor('ssh', 's1'))).toBe(true)
     expect(released(h.lastFor('ssh', 's2'))).toBe(true)
     expect(released(h.last('a'))).toBe(true)
-    expect(h.mgr.getAllAgentTools()).toEqual([])
+    expect(toolsFor(h)).toEqual([])
     expect(h.mgr.getStatus('ssh-id')).toBe('disconnected')
     expect(h.mgr.getStatus('a-id')).toBe('disconnected')
   })
@@ -1080,20 +1057,6 @@ describe('McpManager 内置服务器的状态查询', () => {
 })
 
 describe('McpManager 内置服务器的可用性与批量装配', () => {
-  it('MCPB-U-30 / 31: ensureEnabled 没有会话就跳过 inproc，有会话才带上', async () => {
-    const h = setup([sshRow(), row({ id: 'a-id', name: 'a' })])
-
-    // 扩展宿主全量装配，没有逐会话概念：跳过而不是报错
-    const without = await h.mgr.ensureEnabled()
-    expect(without.map((r) => r.name)).toEqual(['a'])
-    expect(h.made('ssh')).toHaveLength(0)
-
-    const withSession = await h.mgr.ensureEnabled({ sessionId: 's1' })
-    expect(withSession.map((r) => r.name).sort()).toEqual(['a', 'ssh'])
-    expect(withSession.every((r) => r.result.ok)).toBe(true)
-    expect(h.madeFor('ssh', 's1')).toHaveLength(1)
-  })
-
   it('MCPB-U-32: 可用性看配置不看连接 —— 一条会话都没连也照样在勾选列表里', async () => {
     const h = setup([sshRow(), row({ id: 'a-id', name: 'a' })])
 
@@ -1204,12 +1167,10 @@ describe('McpManager 的 annotations 可信规则', () => {
     await h.mgr.ensureServerByName('a')
 
     const byName = new Map(
-      h.mgr
-        .getAllAgentTools('s1')
-        .map((t) => [
-          (t as unknown as McpAgentToolMeta).mcpMeta.server,
-          (t as unknown as McpAgentToolMeta).mcpMeta
-        ])
+      toolsFor(h, 's1').map((t) => [
+        (t as unknown as McpAgentToolMeta).mcpMeta.server,
+        (t as unknown as McpAgentToolMeta).mcpMeta
+      ])
     )
     expect(byName.get('ssh')).toMatchObject({ trusted: true, readOnly: true })
     expect(byName.get('a')).toMatchObject({ trusted: false, readOnly: undefined })
@@ -1772,7 +1733,7 @@ describe('McpManager 的 `_meta`：调用方 id 只给可信 server', () => {
   it('MCPB-U-74: 取工具时没给调用方 id → 可信 server 也不带（按名取、全量取都一样）', async () => {
     const h = await trustedSsh()
     const [byName] = h.mgr.getAgentToolsByServerName('ssh', 's1')
-    const [fromAll] = h.mgr.getAllAgentTools('s1')
+    const [fromAll] = toolsFor(h, 's1')
 
     await run(byName, 'pi-1')
     await run(fromAll, 'pi-2')
@@ -1788,7 +1749,7 @@ describe('McpManager 取工具的三条路都把调用方 id 带到调用上', (
     const h = await trustedSsh()
     const [viaKey] = h.mgr.serverToAgentTools('ssh-id#s1', { callerId: 'c1' })
     const [viaName] = h.mgr.getAgentToolsByServerName('ssh', 's1', { callerId: 'c2' })
-    const [viaAll] = h.mgr.getAllAgentTools('s1', { callerId: 'c3' })
+    const [viaAll] = toolsFor(h, 's1', { callerId: 'c3' })
 
     await run(viaKey, 'pi-1')
     await run(viaName, 'pi-2')
@@ -1807,9 +1768,7 @@ describe('McpManager 取工具的三条路都把调用方 id 带到调用上', (
     await h.mgr.ensureServerByName('ssh', { sessionId: 's1' })
     await h.mgr.ensureServerByName('a')
 
-    const byName = new Map(
-      h.mgr.getAllAgentTools('s1', { callerId: 'agent-7' }).map((t) => [t.name, t])
-    )
+    const byName = new Map(toolsFor(h, 's1', { callerId: 'agent-7' }).map((t) => [t.name, t]))
     expect([...byName.keys()].sort()).toEqual(['mcp__a__search', 'mcp__ssh__exec'])
     await run(byName.get('mcp__ssh__exec')!, 'pi-1')
     await run(byName.get('mcp__a__search')!, 'pi-2')
@@ -1821,9 +1780,9 @@ describe('McpManager 取工具的三条路都把调用方 id 带到调用上', (
   })
 })
 
-// ─── getAllAgentTools 的会话范围 ─────────────────────────────────────────
+// ─── 一条会话能拿到的工具：会话范围 ─────────────────────────────────────────
 //
-// 全量注入（扩展宿主）同样不许回落到别人的实例：不传会话就一台 inproc 都不给，传了只给
+// 按会话取工具不许回落到别人的实例：不传会话就一台 inproc 都不给，传了只给
 // 这条会话自己那份。否则两条会话会拿到同名的两套工具，名字一样、闭包各指一份实例 ——
 // 模型调到哪一个全凭顺序，操作的可能是另一条会话的 ssh / 浏览器。
 
@@ -1839,18 +1798,15 @@ async function globalAndS1(): Promise<Harness> {
   return h
 }
 
-describe('McpManager.getAllAgentTools 的会话范围', () => {
+describe('McpManager 按会话取工具的范围', () => {
   it('MCPB-U-77: 不传会话 → 只有全局服务器的工具，一台 inproc 都不给', async () => {
     const h = await globalAndS1()
-    expect(namesOf(h.mgr.getAllAgentTools())).toEqual(['mcp__a__search'])
+    expect(namesOf(toolsFor(h))).toEqual(['mcp__a__search'])
   })
 
   it('MCPB-U-78: 传了会话 → 全局服务器 + 这条会话自己那份 inproc', async () => {
     const h = await globalAndS1()
-    expect(namesOf(h.mgr.getAllAgentTools('s1'))).toEqual([
-      'mcp__a__search',
-      'mcp__ssh__list-hosts'
-    ])
+    expect(namesOf(toolsFor(h, 's1'))).toEqual(['mcp__a__search', 'mcp__ssh__list-hosts'])
   })
 
   it('MCPB-U-79: 两条会话的实例工具不同 —— 各自只看见自己那份', async () => {
@@ -1860,8 +1816,8 @@ describe('McpManager.getAllAgentTools 的会话范围', () => {
     await h.mgr.ensureServerByName('ssh', { sessionId: 's1' })
     await h.mgr.ensureServerByName('ssh', { sessionId: 's2' })
 
-    expect(namesOf(h.mgr.getAllAgentTools('s1'))).toEqual(['mcp__ssh__list-hosts'])
-    expect(namesOf(h.mgr.getAllAgentTools('s2'))).toEqual(['mcp__ssh__s2-only'])
+    expect(namesOf(toolsFor(h, 's1'))).toEqual(['mcp__ssh__list-hosts'])
+    expect(namesOf(toolsFor(h, 's2'))).toEqual(['mcp__ssh__s2-only'])
   })
 
   it('MCPB-U-80: 两条会话的实例工具同名 —— 各自恰好一个，调用落在自己那份实例上', async () => {
@@ -1870,14 +1826,14 @@ describe('McpManager.getAllAgentTools 的会话范围', () => {
     await h.mgr.ensureServerByName('ssh', { sessionId: 's1' })
     await h.mgr.ensureServerByName('ssh', { sessionId: 's2' })
 
-    const s1Tools = h.mgr.getAllAgentTools('s1')
+    const s1Tools = toolsFor(h, 's1')
     expect(s1Tools.map((t) => t.name)).toEqual(['mcp__ssh__list-hosts'])
     expect(onlyText((await run(s1Tools[0])).content)).toBe('handled by s1')
     expect(h.lastFor('ssh', 's1').toolCalls).toHaveLength(1)
     expect(h.lastFor('ssh', 's2').toolCalls).toEqual([])
 
     // 反过来也一样
-    const s2Tools = h.mgr.getAllAgentTools('s2')
+    const s2Tools = toolsFor(h, 's2')
     expect(s2Tools.map((t) => t.name)).toEqual(['mcp__ssh__list-hosts'])
     expect(onlyText((await run(s2Tools[0])).content)).toBe('handled by s2')
     expect(h.lastFor('ssh', 's2').toolCalls).toHaveLength(1)
@@ -1886,7 +1842,7 @@ describe('McpManager.getAllAgentTools 的会话范围', () => {
 
   it('MCPB-U-81: 这条会话没有实例 → 只有全局服务器，不回落到 s1 那份', async () => {
     const h = await globalAndS1()
-    expect(namesOf(h.mgr.getAllAgentTools('s9'))).toEqual(['mcp__a__search'])
+    expect(namesOf(toolsFor(h, 's9'))).toEqual(['mcp__a__search'])
   })
 
   it('MCPB-U-82: 释放了的、连接中的、连失败的实例都不出工具；别的会话不受影响', async () => {
@@ -1906,12 +1862,9 @@ describe('McpManager.getAllAgentTools 的会话范围', () => {
 
     await h.mgr.closeSession('s1')
 
-    expect(namesOf(h.mgr.getAllAgentTools('s1'))).toEqual(['mcp__a__search'])
-    expect(namesOf(h.mgr.getAllAgentTools('s2'))).toEqual([
-      'mcp__a__search',
-      'mcp__ssh__list-hosts'
-    ])
-    expect(namesOf(h.mgr.getAllAgentTools('s3'))).toEqual(['mcp__a__search'])
-    expect(namesOf(h.mgr.getAllAgentTools('s4'))).toEqual(['mcp__a__search'])
+    expect(namesOf(toolsFor(h, 's1'))).toEqual(['mcp__a__search'])
+    expect(namesOf(toolsFor(h, 's2'))).toEqual(['mcp__a__search', 'mcp__ssh__list-hosts'])
+    expect(namesOf(toolsFor(h, 's3'))).toEqual(['mcp__a__search'])
+    expect(namesOf(toolsFor(h, 's4'))).toEqual(['mcp__a__search'])
   })
 })

@@ -1,9 +1,9 @@
 /**
  * 黑盒验收探针 —— 独立于既有三个测试文件，覆盖其未触及的规格边界。
  *
- * 只 import 公开导出（gitOps/diffOps/author/fsaFsClient/tool/help），不读实现。
+ * 只 import 公开导出（gitOps/diffOps/author/tool/help），不读实现。
  * 探针方向：racy-git 保护、diff 不含 untracked、init 幂等、log 默认 depth、
- * 多行 message subject、unstage 新增文件、组合分支流、FSA mock × checkout、tool 层 usage/help。
+ * 多行 message subject、unstage 新增文件、组合分支流、tool 层 usage/help。
  */
 import { describe, it, expect, afterEach } from 'vitest'
 import * as nodeFs from 'node:fs'
@@ -25,13 +25,6 @@ import {
 import { diffOp } from '../diffOps'
 import { createGitTool } from '../tool'
 import { buildGitHelp, GIT_HELP_TOPICS } from '../help'
-import {
-  createFsaFsClient,
-  type FsaDirHandleLike,
-  type FsaFileHandleLike,
-  type FsaFileLike,
-  type FsaWritableLike
-} from '../fsaFsClient'
 
 // ---------------------------------------------------------------------------
 // fixture 辅助（与既有测试同惯例）
@@ -291,137 +284,6 @@ describe('acceptance - 组合分支流', () => {
 
     const featLog2 = await logOp(env, cache, { ref: 'feature' })
     expect(logSubjects(featLog2.text ?? '')).toEqual(['c2', 'c1'])
-  })
-})
-
-// ---------------------------------------------------------------------------
-// fsaFsClient × checkout：内存 mock 句柄树上切分支（写/删/缓存失效的真实 churn）
-// ---------------------------------------------------------------------------
-
-interface FileNode {
-  kind: 'file'
-  data: Uint8Array
-  mtime: number
-}
-interface DirNode {
-  kind: 'directory'
-  children: Map<string, FileNode | DirNode>
-}
-
-let mtimeCounter = 0
-
-function domError(name: string): Error {
-  const e = new Error(name)
-  e.name = name
-  return e
-}
-
-function fileHandleFor(node: FileNode): FsaFileHandleLike {
-  return {
-    async getFile(): Promise<FsaFileLike> {
-      const snapshot = node.data
-      const mtime = node.mtime
-      return {
-        size: snapshot.byteLength,
-        lastModified: mtime,
-        arrayBuffer: async () => snapshot.slice().buffer as ArrayBuffer
-      }
-    },
-    async createWritable(): Promise<FsaWritableLike> {
-      const chunks: Uint8Array[] = []
-      return {
-        async write(data: Uint8Array | string): Promise<void> {
-          chunks.push(typeof data === 'string' ? new TextEncoder().encode(data) : data)
-        },
-        async close(): Promise<void> {
-          const total = chunks.reduce((n, c) => n + c.byteLength, 0)
-          const merged = new Uint8Array(total)
-          let offset = 0
-          for (const c of chunks) {
-            merged.set(c, offset)
-            offset += c.byteLength
-          }
-          node.data = merged
-          node.mtime = ++mtimeCounter
-        }
-      }
-    }
-  }
-}
-
-function dirHandleFor(node: DirNode): FsaDirHandleLike {
-  return {
-    async getDirectoryHandle(
-      name: string,
-      options?: { create?: boolean }
-    ): Promise<FsaDirHandleLike> {
-      const child = node.children.get(name)
-      if (child) {
-        if (child.kind !== 'directory') throw domError('TypeMismatchError')
-        return dirHandleFor(child)
-      }
-      if (!options?.create) throw domError('NotFoundError')
-      const created: DirNode = { kind: 'directory', children: new Map() }
-      node.children.set(name, created)
-      return dirHandleFor(created)
-    },
-    async getFileHandle(name: string, options?: { create?: boolean }): Promise<FsaFileHandleLike> {
-      const child = node.children.get(name)
-      if (child) {
-        if (child.kind !== 'file') throw domError('TypeMismatchError')
-        return fileHandleFor(child)
-      }
-      if (!options?.create) throw domError('NotFoundError')
-      const created: FileNode = { kind: 'file', data: new Uint8Array(0), mtime: ++mtimeCounter }
-      node.children.set(name, created)
-      return fileHandleFor(created)
-    },
-    async removeEntry(name: string, options?: { recursive?: boolean }): Promise<void> {
-      const child = node.children.get(name)
-      if (!child) throw domError('NotFoundError')
-      if (child.kind === 'directory' && child.children.size > 0 && !options?.recursive) {
-        throw domError('InvalidModificationError')
-      }
-      node.children.delete(name)
-    },
-    async *entries(): AsyncGenerator<[string, { kind: 'file' | 'directory' }]> {
-      for (const [name, child] of node.children) {
-        yield [name, { kind: child.kind }]
-      }
-    }
-  }
-}
-
-describe('acceptance - fsaFsClient × 分支切换（纯内存）', () => {
-  it('init → 两分支各一提交 → checkout 来回切，内容正确、状态干净', async () => {
-    const client = createFsaFsClient(dirHandleFor({ kind: 'directory', children: new Map() }))
-    const env: GitEnv = { fs: client, dir: '/' }
-    const cache: GitCache = {}
-
-    await initOp(env, cache, {})
-    await client.promises.writeFile('/a.txt', 'v1\n', 'utf8')
-    await addOp(env, cache, { paths: ['a.txt'] })
-    const c1 = await commitOp(env, cache, { message: 'c1', ...AUTHOR })
-    expect(c1.text).toMatch(/^\[main [0-9a-f]{7}\] c1/)
-
-    const br = await branchOp(env, cache, { name: 'feature' })
-    expect(br.text).toContain("Switched to a new branch 'feature'")
-    await client.promises.writeFile('/a.txt', 'v2\n', 'utf8')
-    await addOp(env, cache, { paths: ['a.txt'] })
-    const c2 = await commitOp(env, cache, { message: 'c2', ...AUTHOR })
-    expect(c2.text).toMatch(/^\[feature [0-9a-f]{7}\] c2/)
-
-    const back = await checkoutOp(env, cache, { ref: 'main' })
-    expect(back.text ?? '').not.toMatch(/^Error: /)
-    expect(await client.promises.readFile('/a.txt', 'utf8')).toBe('v1\n')
-
-    const fwd = await checkoutOp(env, cache, { ref: 'feature' })
-    expect(fwd.text ?? '').not.toMatch(/^Error: /)
-    expect(await client.promises.readFile('/a.txt', 'utf8')).toBe('v2\n')
-
-    const st = await statusOp(env, cache, {})
-    expect(st.text).toContain('working tree clean')
-    expect(st.details?.fileCount).toBe(0)
   })
 })
 

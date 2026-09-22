@@ -1,7 +1,7 @@
 /**
  * 内置安全策略注册表 —— 策略本体全在同目录 `md/<name>[.<lang>].md`（一个策略一语言一文件，
  * 与内置 agent 档案同一套机制）。这些文件**随包发布到磁盘**，运行时经宿主注入的 `readMd`
- * 现读（桌面 = `Resources/builtin-policies/`，见 electron-builder.yml；扩展 = 构建期内联的
+ * 现读（桌面 = `Resources/builtin-policies/`，见 electron-builder.yml；单测读构建期内联的
  * 同一批文件，见 inlineSources.ts）：侧栏点开一份内置策略时看到的只读笔记本，读的就是
  * 运行时读的那一份。
  *

@@ -48,8 +48,6 @@ export interface ToolResolveRequest {
   selfSessionId: string
   /** 本次创建的运行投影（宿主策略可读白名单来源等） */
   profile: InProcessAgentType
-  /** 组装后的完整系统提示（基座 + sections）——扩展的默认子代理继承它 */
-  systemPrompt: string
   /** 归一后的工具名单（保序去重）：档案全量 + overlay（root 的 overlay 只收 mcp:/skill:） */
   names: readonly string[]
   /**
@@ -373,7 +371,6 @@ export function createAgentFactory(host: AgentHostAdapter): AgentFactory {
       rootSessionId,
       selfSessionId: sessionId,
       profile,
-      systemPrompt,
       names,
       getModelConfig,
       spawn,

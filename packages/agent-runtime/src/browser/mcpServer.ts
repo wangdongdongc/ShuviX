@@ -22,7 +22,7 @@
  *    快照差异的基线都按调用方（`_meta['shuvix.dev/agentId']`）分开 —— 差异的前提是上一份
  *    快照还在**这个模型**的上下文里。
  */
-import { Server, type ServerOptions } from '@modelcontextprotocol/sdk/server/index.js'
+import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
@@ -127,8 +127,6 @@ export interface BrowserMcpServerOptions {
   tabQueue?: BrowserTabQueue
   /** 接在 list_tabs 描述后面的宿主说明（这是谁的浏览器、tab 与登录会不会留着） */
   hostNote?: string
-  /** 透传给 SDK Server（扩展：CSP 安全的 jsonSchemaValidator） */
-  serverOptions?: Omit<ServerOptions, 'capabilities'>
   /** 连接关闭（会话结束）时回调 */
   onClose?: () => void
 }
@@ -335,7 +333,7 @@ export async function connectBrowserMcpServer(
 
   const server = new Server(
     { name: `shuvix-${serverName}`, version: '1.0.0' },
-    { ...opts.serverOptions, capabilities: { tools: {} } }
+    { capabilities: { tools: {} } }
   )
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({

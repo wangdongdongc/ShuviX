@@ -21,7 +21,6 @@
     "info": "说明"
   },
   "sidebar": {
-    "title": "ShuviX",
     "projects": "项目",
     "tempChats": "聊天",
     "archivedProjects": "已归档项目",
@@ -48,8 +47,6 @@
     "deleteSession": "删除会话",
     "exportSession": "导出会话",
     "viewMore": "查看更多",
-    "viewProjects": "项目",
-    "viewCalendar": "日历",
     "knowledgeGroup": "知识库",
     "knowledgeEmpty": "暂无条目 —— agent 或你都可以往 ~/.shuvix/knowledge/ 里添加",
     "botsGroup": "Bots",
@@ -69,7 +66,6 @@
     "projectMemory": "项目记忆",
     "projectMemoryHint": "该项目的记忆：agent 记下的项目经验，随会话注入模型上下文",
     "memoryPinned": "常驻记忆（正文每次注入）",
-    "switchView": "切换视图",
     "today": "今天",
     "noSessionsOnDay": "当日无会话",
     "newBotChat": "新建 Bot 会话",
@@ -937,8 +933,6 @@
     "filesTruncated": "已显示前 {{count}} 个文件",
     "filesRefresh": "刷新",
     "filesSearch": "搜索",
-    "filesPermissionNeeded": "对文件夹「{{name}}」的访问权限已失效，点击重新授权以查看文件。",
-    "filesGrantAccess": "授权访问",
     "preview": {
       "copyPath": "复制完整路径",
       "revealInFolder": "在文件夹中显示",

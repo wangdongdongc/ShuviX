@@ -492,9 +492,6 @@ describe('CreatedAgent 运行期操作', () => {
       '<project_memory>\nPROJ-MEMORY\n</project_memory>'
     expect(created.systemPrompt).toBe(expected)
     expect(constructed[constructed.length - 1].deps.systemPrompt).toBe(expected)
-    // resolveTools 收到的也是完整系统提示词（扩展默认子代理继承它）
-    const req = b.resolveTools.mock.calls[0][0] as ToolResolveRequest
-    expect(req.systemPrompt).toBe(expected)
   })
 })
 
@@ -708,13 +705,12 @@ describe('createAgentFactory —— systemContext（调用方追加的上下文�
     })
   }
 
-  it('CTX-1 各块按序追加在项目注入之后，逐块以空行分隔；deps 与 resolveTools 收到同一份', async () => {
+  it('CTX-1 各块按序追加在项目注入之后，逐块以空行分隔；harness 收到的就是这一份', async () => {
     const b = makeHost()
     const created = await spawnFull(b, [BLOCK_A, BLOCK_B])
     const expected = `${FULL_APPENDS}\n\n${BLOCK_A}\n\n${BLOCK_B}`
     expect(created.systemPrompt).toBe(expected)
     expect(constructed[constructed.length - 1].deps.systemPrompt).toBe(expected)
-    expect((b.resolveTools.mock.calls[0][0] as ToolResolveRequest).systemPrompt).toBe(expected)
   })
 
   it('CTX-2 空白块跳过（不留空段落）；块两端空白被 trim', async () => {

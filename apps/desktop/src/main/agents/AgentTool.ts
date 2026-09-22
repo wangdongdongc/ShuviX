@@ -68,7 +68,7 @@ registerBuiltinTool({
   presentation: BUILTIN_TOOL_PRESENTATIONS.agent.presentation,
   // 设置页定义：静态描述（不罗列 agent 类型；桌面支持路径 ref），参数 schema 与派发工具一致
   describe: () => ({
-    description: buildDispatchDescription(false, true),
+    description: buildDispatchDescription(true),
     parameters: AgentParamsSchema
   })
 })

@@ -1,19 +1,18 @@
 /**
- * McpManager —— 宿主无关的 MCP 客户端核心（桌面/扩展单一来源）。
+ * McpManager —— 宿主无关的 MCP 客户端核心。
  *
  * 承载：连接/断开、工具发现、callTool、MCP 工具 → pi-agent-core AgentTool 转换、状态跟踪、
- * 内置 server 的 {{ENV}} 模板替换。两处只有「存储」和「transport 创建」不同，经构造参数注入：
- *  - store：server 配置读取 + cachedTools 持久化（桌面 mcpDao / 扩展 chrome.storage）
- *  - createTransport：按 server.type 造 transport（桌面 stdio+http / 扩展仅 http）
+ * 内置 server 的 {{ENV}} 模板替换。「存储」和「transport 创建」经构造参数注入：
+ *  - store：server 配置读取 + cachedTools 持久化（桌面 mcpDao）
+ *  - createTransport：按 server.type 造 transport（桌面 stdio + http + inproc）
  *
  * **惰性启动**：没有「开机连全部」这回事 —— 连接只发生在装配工具那一刻（宿主创建 Agent 时按名
- * `ensureServerByName` / `ensureEnabled`），以及用户在设置页手动点连接。失败也不进后台重试队列：
+ * `ensureServerByName`），以及用户在设置页手动点连接。失败也不进后台重试队列：
  * 下次用到它时原地再连一次（`ensureConnected` 对 error/disconnected 一律重开）。惰性路径带超时
  * （`LAZY_CONNECT_TIMEOUT_MS`）—— 一台挂掉的服务器不能把整次 Agent 创建拖住；手动连接不带超时，
  * 用户就在旁边看着，首次 npx 冷启动慢是可以等的。
  *
- * 注意：stdio transport 依赖 Node child_process，故其 import 只留在桌面宿主的 createTransport 里，
- * 不进本模块——保证浏览器（扩展）也能打包本模块。
+ * stdio transport 依赖 Node child_process，其 import 留在桌面宿主的 createTransport 里。
  */
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
@@ -43,7 +42,7 @@ export interface McpDiscoveredTool {
   }
 }
 
-/** server 配置存取（宿主注入：桌面 mcpDao / 扩展 chrome.storage） */
+/** server 配置存取（宿主注入：桌面 mcpDao） */
 export interface McpStore {
   findById(id: string): McpServer | undefined
   findEnabled(): McpServer[]
@@ -54,7 +53,7 @@ export interface McpStore {
 export interface McpManagerOptions {
   store: McpStore
   /**
-   * 按 server 造 transport（桌面 stdio+http+inproc；扩展仅 http，遇 stdio 抛错）。
+   * 按 server 造 transport（桌面 stdio + http + inproc）。
    *
    * `scope` 只在 `type: 'inproc'` 的内置能力服务器上有值 —— 它们按会话实例化，工厂据此把
    * server side 接到这条会话自己的实例上（见 builtinMcpRegistry）。返回值允许是 Promise：
@@ -62,13 +61,6 @@ export interface McpManagerOptions {
    */
   createTransport: (server: McpServer, scope?: BuiltinMcpScope) => Transport | Promise<Transport>
   logger?: { info: (m: string) => void; warn: (m: string) => void; error: (m: string) => void }
-  /**
-   * 透传给 SDK Client 的构造选项（第二参）。
-   * 浏览器（扩展）须注入 CSP 安全的 jsonSchemaValidator（CfWorkerJsonSchemaValidator），
-   * 否则默认 ajv 会用 new Function 编译 schema → 触发 MV3 'unsafe-eval' CSP 报错。
-   * 桌面（Node）省略即用默认 ajv。
-   */
-  clientOptions?: ConstructorParameters<typeof Client>[1]
 }
 
 interface McpConnection {
@@ -280,13 +272,11 @@ export class McpManager {
     scope?: BuiltinMcpScope
   ) => Transport | Promise<Transport>
   private log: NonNullable<McpManagerOptions['logger']>
-  private clientOptions?: ConstructorParameters<typeof Client>[1]
 
   constructor(opts: McpManagerOptions) {
     this.store = opts.store
     this.createTransport = opts.createTransport
     this.log = opts.logger ?? noopLog
-    this.clientOptions = opts.clientOptions
   }
 
   // ─── 连接管理 ───
@@ -350,20 +340,6 @@ export class McpManager {
     return this.ensureConnected(server.id, opts)
   }
 
-  /** 连上全部已启用 server（扩展宿主：会话没有逐台勾选，装配时要全量工具），并发进行 */
-  async ensureEnabled(opts?: {
-    timeoutMs?: number
-    sessionId?: string
-  }): Promise<Array<{ name: string; result: McpConnectResult }>> {
-    return Promise.all(
-      this.store
-        .findEnabled()
-        // inproc 要会话上下文；全量装配（扩展宿主）没有逐会话概念，跳过而不是报错
-        .filter((s) => s.type !== 'inproc' || !!opts?.sessionId)
-        .map(async (s) => ({ name: s.name, result: await this.ensureConnected(s.id, opts) }))
-    )
-  }
-
   /**
    * 断开单个 MCP Server。
    *
@@ -411,7 +387,7 @@ export class McpManager {
     if (this.connections.has(key)) await this.disconnect(serverId, sessionId)
 
     const conn: McpConnection = {
-      client: new Client({ name: 'shuvix', version: '1.0.0' }, this.clientOptions),
+      client: new Client({ name: 'shuvix', version: '1.0.0' }),
       transport: null as unknown as Transport,
       tools: [],
       status: 'connecting',
@@ -759,22 +735,6 @@ export class McpManager {
     return conn.tools.map((t) =>
       this.mcpToolToAgentTool(connKey, conn.serverName, t, conn.trusted, opts?.callerId)
     )
-  }
-
-  /**
-   * 已连接 Server 的全部 AgentTool（flat）—— 扩展宿主的全量注入用。
-   *
-   * `inproc` 的实例是按会话分身的：只收**这条会话**的那一份，外加全局服务器。不传 sessionId
-   * 就一台 inproc 都不给 —— 与 getAgentToolsByServerName 同一条规则：绝不回落到别人的实例，
-   * 否则两条会话会拿到同名的两套工具、各自操作对方的资源。
-   */
-  getAllAgentTools(
-    sessionId?: string,
-    opts?: { callerId?: string }
-  ): AgentTool<TSchema, McpToolDetails>[] {
-    return [...this.connections]
-      .filter(([, conn]) => conn.sessionId === undefined || conn.sessionId === sessionId)
-      .flatMap(([key]) => this.serverToAgentTools(key, opts))
   }
 
   /**

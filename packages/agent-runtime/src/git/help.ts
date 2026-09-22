@@ -47,7 +47,7 @@ This tool has no clone/fetch/pull/push — network git is out of scope.`,
 commit resolves the author in this order:
 1. authorName + authorEmail parameters (both required to take effect);
 2. user.name / user.email in the repository .git/config;
-3. host-level fallback (desktop reads ~/.gitconfig; not available in the browser extension).
+3. your global git identity (~/.gitconfig).
 If none is found, commit fails with an explanatory error — ask the user for their name/email
 and pass them as parameters. The committer always equals the author.`
 }
@@ -59,7 +59,7 @@ export function buildGitHelp(topic?: string): string {
   const usageList = GIT_OPS.map((op) => `- ${op.usage}`).join('\n')
   return `# git tool manual
 
-Local version control backed by isomorphic-git — works identically on desktop and in the browser extension.
+Local version control backed by isomorphic-git.
 
 Actions:
 ${usageList}

@@ -46,15 +46,6 @@ const EXTRA_SUMMARY_BUILDERS: Record<string, ToolSummaryBuilder> = {
       asStr(args.event)
     return [asStr(args.action), detail].filter(Boolean).join(' ') || undefined
   },
-  // ── 扩展端旧离散浏览器工具（已并入 browser，保留供历史会话展示） ──
-  open_tab: field('url'),
-  read_page: field('tabId'),
-  snapshot: field('tabId'),
-  click: field('uid'),
-  fill: field('text'),
-  key: field('key'),
-  navigate: field('url'),
-  screenshot: field('tabId'),
   // ── 旧派发工具名（现为小写 `agent`，保留供历史会话展示） ──
   Agent: (args) => BUILTIN_TOOL_PRESENTATIONS.agent.buildSummary?.(args)
 }

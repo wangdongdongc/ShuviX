@@ -182,7 +182,6 @@ interface OpenOpts {
   caps?: BrowserCaps
   gates?: BrowserMcpGates
   hostNote?: string
-  serverOptions?: BrowserMcpServerOptions['serverOptions']
   onClose?: () => void
   /** 进程级的 tab 队列（H4）；不给 = 这台 server 自己一份 */
   tabQueue?: BrowserTabQueue
@@ -219,7 +218,6 @@ async function open(opts: OpenOpts = {}): Promise<Harness> {
       backend: backend as unknown as BrowserBackend,
       gates: opts.gates,
       hostNote: opts.hostNote,
-      serverOptions: opts.serverOptions,
       onClose: opts.onClose,
       tabQueue: opts.tabQueue
     },
@@ -1988,17 +1986,6 @@ describe('L 生命周期', () => {
     expect(h.client.getServerVersion()).toEqual({ name: 'shuvix-browser', version: '1.0.0' })
     expect(h.client.getServerCapabilities()).toEqual({ tools: {} })
     expect(h.client.getInstructions()).toBeUndefined()
-  })
-
-  it('L4 serverOptions 透传给 SDK Server（instructions 到得了客户端），但盖不掉 capabilities', async () => {
-    const h = await open({
-      serverOptions: {
-        instructions: 'Start with list_tabs.',
-        capabilities: { logging: {}, prompts: {} }
-      } as unknown as BrowserMcpServerOptions['serverOptions']
-    })
-    expect(h.client.getInstructions()).toBe('Start with list_tabs.')
-    expect(h.client.getServerCapabilities()).toEqual({ tools: {} })
   })
 
   it('L5 经 BuiltinMcpRegistry 按会话实例化：resolve 每条会话调一次，两条会话的后端与账本互不相干', async () => {

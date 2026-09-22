@@ -6,7 +6,7 @@
  *
  * 行内**没有任何动作按钮**：配置/导出/删除这些动作统一收在行尾那颗 ⋮ 里（`onMenu`，与右键
  * 同一份菜单，见 RowMenuButton）。菜单由容器组装 —— 一行能做什么取决于宿主注入了哪些回调，
- * 那份判断本来就在容器手里（ProjectSessionGroups / SessionList）。
+ * 那份判断本来就在容器手里（ProjectSessionGroups）。
  *
  * 子会话（`isSub` / `subCount`）借的是**知识库那套文件夹/文件语汇**：缩进用行内
  * paddingLeft（同 KnowledgeGroup 的 `indent(depth)`，不是每行一条竖线），折叠钮就是行首那枚

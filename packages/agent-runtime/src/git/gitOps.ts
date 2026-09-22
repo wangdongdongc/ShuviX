@@ -29,7 +29,7 @@ export async function runOp(fn: () => Promise<GitOpOutput>): Promise<GitOpOutput
   }
 }
 
-/** 仓库根 + 仓库相对路径 → env.fs 可用的路径（桌面绝对路径 / 扩展 '/x/y'） */
+/** 仓库根 + 仓库相对路径 → env.fs 可用的路径 */
 export function joinPath(dir: string, rel: string): string {
   if (dir === '/') return `/${rel}`
   return dir.endsWith('/') ? `${dir}${rel}` : `${dir}/${rel}`

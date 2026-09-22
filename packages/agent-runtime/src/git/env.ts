@@ -1,9 +1,8 @@
 /**
- * git 工具的注入环境 —— 两端唯一的差异点。
+ * git 工具的注入环境 —— 宿主给的那一份。
  *
- * gitOps/diffOps 的全部逻辑跨端共享（isomorphic-git 单后端），宿主只注入 GitEnv：
- * - 桌面：fs = node:fs 模块整体，dir = 会话 workingDirectory 绝对路径，fallback 解析 ~/.gitconfig
- * - 扩展：fs = createFsaFsClient(会话根句柄)（FSA/OPFS），dir = '/'，无 fallback
+ * gitOps/diffOps 的全部逻辑在这个包里（isomorphic-git 单后端），宿主只注入 GitEnv：
+ * 桌面是 fs = node:fs 模块整体，dir = 会话 workingDirectory 绝对路径，fallback 解析 ~/.gitconfig。
  *
  * GitFsClient 是 isomorphic-git PromiseFsClient 的最小结构类型（不依赖 node/dom lib）。
  * 注意与 fileTools 的 FileSystemPort 语义不同：这里要求 node-fs 语义 ——
@@ -21,7 +20,7 @@ export interface GitFsStat {
   isFile(): boolean
   isDirectory(): boolean
   isSymbolicLink(): boolean
-  /** 文件 0o100644 / 目录 0o40000（FSA 适配器造假值） */
+  /** 文件 0o100644 / 目录 0o40000 */
   mode: number
   size: number
   /** 无真实值的实现填 0 */
@@ -69,11 +68,10 @@ export type GitCache = Record<string, unknown>
 /** 端注入的 git 运行环境 */
 export interface GitEnv {
   fs: GitFsClient
-  /** 仓库根：桌面为绝对路径；扩展以句柄为根，恒为 '/' */
+  /** 仓库根（绝对路径） */
   dir: string
   /**
-   * .git/config 缺 user.name/user.email 且未传参时的端级回退
-   * （桌面读 ~/.gitconfig；扩展不注入）。
+   * .git/config 缺 user.name/user.email 且未传参时的端级回退（桌面读 ~/.gitconfig）。
    */
   resolveAuthorFallback?: () => Promise<GitAuthor | undefined>
 }

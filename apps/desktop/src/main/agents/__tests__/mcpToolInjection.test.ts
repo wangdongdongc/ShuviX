@@ -96,7 +96,6 @@ const resolveTools = async (over: Partial<ToolResolveRequest>): Promise<unknown[
     rootSessionId: 'sess-1',
     selfSessionId: 'sess-1',
     profile: { name: 'work' } as ToolResolveRequest['profile'],
-    systemPrompt: '',
     names: ['mcp:ssh'],
     getModelConfig: () =>
       ({ provider: 'p', model: 'm', capabilities: {} }) as ReturnType<

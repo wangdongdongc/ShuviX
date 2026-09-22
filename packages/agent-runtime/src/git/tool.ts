@@ -109,7 +109,7 @@ Rules:
 }
 
 export interface CreateGitToolOptions {
-  /** 每次 execute 调用取最新环境（桌面 workingDirectory 可变；扩展可返回缓存实例） */
+  /** 每次 execute 调用取最新环境（workingDirectory 可变） */
   getEnv: () => GitEnv | Promise<GitEnv>
   /**
    * 解析 "dir" 参数为仓库目录（归一 + 权限检查），未注入时工具拒绝带 dir 的调用。
@@ -136,7 +136,7 @@ export interface CreateGitToolOptions {
     command: string
     toolCallId: string
   }) => Promise<void>
-  /** abort 时抛出的错误文案（桌面 'Aborted'，扩展 'TOOL_ABORTED'）；默认 'Aborted' */
+  /** abort 时抛出的错误文案；默认 'Aborted' */
   abortError?: string
   /** 工具显示名（宿主可传本地化值）；默认 'Git' */
   label?: string

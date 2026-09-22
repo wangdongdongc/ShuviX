@@ -21,7 +21,6 @@
     "info": "説明"
   },
   "sidebar": {
-    "title": "ShuviX",
     "projects": "プロジェクト",
     "tempChats": "チャット",
     "archivedProjects": "アーカイブ済みプロジェクト",
@@ -48,8 +47,6 @@
     "deleteSession": "セッションを削除",
     "exportSession": "セッションをエクスポート",
     "viewMore": "もっと表示",
-    "viewProjects": "プロジェクト",
-    "viewCalendar": "カレンダー",
     "knowledgeGroup": "ナレッジベース",
     "knowledgeEmpty": "項目はまだありません — エージェントやあなたが ~/.shuvix/knowledge/ に追加できます",
     "botsGroup": "Bots",
@@ -69,7 +66,6 @@
     "projectMemory": "プロジェクトメモリ",
     "projectMemoryHint": "エージェントが記録したプロジェクトの知見。各セッションに注入されます",
     "memoryPinned": "常駐メモリ（本文を毎回注入）",
-    "switchView": "ビュー切り替え",
     "today": "今日",
     "noSessionsOnDay": "この日のセッションはありません",
     "newBotChat": "新しい Bot 会話",
@@ -937,8 +933,6 @@
     "filesTruncated": "最初の {{count}} 件を表示しています",
     "filesRefresh": "更新",
     "filesSearch": "検索",
-    "filesPermissionNeeded": "フォルダ「{{name}}」へのアクセス権限が失効しました。ファイルを表示するには再度許可してください。",
-    "filesGrantAccess": "アクセスを許可",
     "preview": {
       "copyPath": "フルパスをコピー",
       "revealInFolder": "フォルダで表示",

@@ -149,7 +149,6 @@ const resolveToolNames = async (over: Partial<ToolResolveRequest> = {}): Promise
     rootSessionId: SID,
     selfSessionId: SID,
     profile: { name: 'work' } as ToolResolveRequest['profile'],
-    systemPrompt: '',
     names: [],
     getModelConfig: () =>
       ({ provider: 'p', model: 'm', capabilities: {} }) as ReturnType<

@@ -1,14 +1,13 @@
 /**
- * 最小 `ExecutionEnv` 占位实现。
+ * 最小 `ExecutionEnv` 占位实现 —— 派生 agent 用它。
  *
  * `AgentHarness` 的构造参数要求一个 `ExecutionEnv`（FileSystem + Shell），但它自己
  * **一次都不调用**这些方法 —— 只是原样透传给 `systemPrompt` 回调的上下文，供应用层
  * 在拼提示词时读文件用。真正依赖它的是 pi 自带的 `loadSkills` / `loadPromptTemplates` /
- * `executeShellWithCapture`，而 ShuviX 两端都有自己的实现（桌面 Node fs + skillService，
- * 扩展 FSA/OPFS + fileTools）。
+ * `executeShellWithCapture`，而 ShuviX 有自己的实现（Node fs + skillService + 文件工具）。
  *
- * 因此浏览器宿主不需要为了跑 harness 去实现一整套 FSA 版 ExecutionEnv：给这个占位即可，
- * 任何方法被调用都会抛出明确错误而不是静默返回错误结果。桌面用真的 `NodeExecutionEnv`。
+ * 派生 agent 的提示词在创建时就拼好了，用不上执行环境：给这个占位即可，任何方法被调用都会
+ * 抛出明确错误而不是静默返回错误结果。根会话用宿主给的真环境（桌面 `NodeExecutionEnv`）。
  */
 import { ExecutionError, FileError } from '@earendil-works/pi-agent-core'
 import type { ExecutionEnv, Result } from '@earendil-works/pi-agent-core'
@@ -18,7 +17,7 @@ function fileErr<T>(method: string): Result<T, FileError> {
     ok: false,
     error: new FileError(
       'not_supported',
-      `ExecutionEnv.${method} 在本宿主上不可用 —— 文件访问请走宿主自己的文件工具（FSA/OPFS）。`
+      `ExecutionEnv.${method} 在这里不可用 —— 文件访问请走 ShuviX 自己的文件工具。`
     )
   } as Result<T, FileError>
 }
@@ -52,7 +51,7 @@ export function createStubExecutionEnv(cwd = '/'): ExecutionEnv {
         ok: false,
         error: new ExecutionError(
           'shell_unavailable',
-          'ExecutionEnv.exec 在本宿主上不可用 —— 浏览器端没有 shell。'
+          'ExecutionEnv.exec 在这里不可用 —— 命令请走 ShuviX 自己的 bash 工具。'
         )
       }) as Result<{ stdout: string; stderr: string; exitCode: number }, ExecutionError>
   } as unknown as ExecutionEnv

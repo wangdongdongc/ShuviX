@@ -136,7 +136,6 @@ async function bothSides(
     rootSessionId: SID,
     selfSessionId: selfId,
     profile: { name: kind === 'root' ? 'work' : 'coding' } as ToolResolveRequest['profile'],
-    systemPrompt: '',
     names,
     getModelConfig: () =>
       ({ provider: 'p', model: 'm', capabilities: {} }) as ReturnType<

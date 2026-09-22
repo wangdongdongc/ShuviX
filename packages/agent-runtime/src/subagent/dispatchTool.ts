@@ -6,8 +6,7 @@
  *   - 具名 ref（如 "explore"）→ 注入的 SubAgentRegistry 按名解析（内置 + 用户全局定义）；
  *   - 路径 ref（含 "/" 或以 .md 结尾）→ 宿主注入的 resolveAgentFile 即时解析定义文件
  *     （frontmatter: name/description/shuvix-tools + 正文为 system prompt）——支持项目内
- *     检入的定义与运行时动态生成的定义，无需注册表刷新；
- *   - 省略 → 默认 agent（宿主提供 defaultAgentType 时）。
+ *     检入的定义与运行时动态生成的定义，无需注册表刷新。
  * description 为静态文案（纯 md 驱动：不罗列可用类型——要用具名 agent 由用户在系统
  * 提示词/指令文件里自行引导；未知名的错误里才回报可用名列表）。执行时校验 ref，
  * 委托 SubAgentManager.runTask，返回最终文本结果。注册表/文件解析/模型配置经注入，宿主无关。
@@ -69,14 +68,11 @@ export function toInProcessAgentType(def: AgentProfile): InProcessAgentType {
  * 静态工具描述（纯 md 驱动）：不罗列可用 agent 类型 —— 具名派发由用户在系统提示词/
  * 指令文件中自行引导，模型不该猜名字；未知名在执行错误里回报可用名列表。
  */
-export function buildDescription(hasDefaultAgent: boolean, supportsFileRefs?: boolean): string {
+export function buildDescription(supportsFileRefs?: boolean): string {
   const typesBlock =
     'Named agent types are defined by the host configuration (built-in and user agent definition files); ' +
     'they are not enumerated here. Set `name` only when your instructions or the user provide one — ' +
-    'an unknown name fails with the list of valid names.' +
-    (hasDefaultAgent
-      ? ' Omit `name` to dispatch a default agent that inherits your current tools.'
-      : '')
+    'an unknown name fails with the list of valid names.'
 
   const fileRefNote = supportsFileRefs
     ? '\n- `name` also accepts a path to an agent definition file: markdown with YAML frontmatter ' +
@@ -113,11 +109,6 @@ export interface DispatchAgentToolDeps {
   /** 工具显示名（缺省即工具名 'agent'；宿主可注入本地化名） */
   label?: string
   /**
-   * 默认 agent —— 提供后 `name` 参数变为可选：省略时用它派发。
-   * 注册表里的具名定义成为可选附加，而非调用前提。缺省则维持"必须指定 agent"。
-   */
-  defaultAgentType?: InProcessAgentType
-  /**
    * 路径 ref 解析器（可选；桌面注入，浏览器宿主省略 → 路径形态返回明确错误）。
    * 解析失败应 throw 带原因的 Error；文件不存在/无法解析返回 undefined。
    */
@@ -140,7 +131,7 @@ export class DispatchAgentTool extends BaseTool<typeof AgentParamsSchema> {
   }
 
   get description(): string {
-    return buildDescription(!!this.deps.defaultAgentType, !!this.deps.resolveAgentFile)
+    return buildDescription(!!this.deps.resolveAgentFile)
   }
 
   async preExecute(): Promise<void> {
@@ -162,9 +153,8 @@ export class DispatchAgentTool extends BaseTool<typeof AgentParamsSchema> {
     const ref = (params.name || '').trim()
     const prompt = params.prompt || ''
     const names = (): string[] => this.deps.registry.list().map((a) => a.name)
-    const hasDefault = !!this.deps.defaultAgentType
 
-    // ── ref 解析：路径 → resolveAgentFile；具名 → 注册表；省略 → 默认 agent ──
+    // ── ref 解析：路径 → resolveAgentFile；具名 → 注册表 ──
     let def: AgentProfile | undefined
     if (ref && isAgentFileRef(ref)) {
       if (!this.deps.resolveAgentFile) {
@@ -186,24 +176,18 @@ export class DispatchAgentTool extends BaseTool<typeof AgentParamsSchema> {
     } else if (ref) {
       def = this.deps.registry.get(ref)
       if (!def) {
-        const tail = hasDefault ? ' (or omit `name` to use the default)' : ''
         return errorResult(
-          `Unknown agent "${ref}". Available: [${names().join(', ')}]${tail}. A path to an agent definition file is also accepted.`
+          `Unknown agent "${ref}". Available: [${names().join(', ')}]. A path to an agent definition file is also accepted.`
         )
       }
     }
 
-    let agentType: InProcessAgentType
-    if (def) {
-      agentType = toInProcessAgentType(def)
-    } else if (this.deps.defaultAgentType) {
-      // 省略 ref：用注入的默认 agent（继承调用方工具/系统提示，由宿主装配）
-      agentType = this.deps.defaultAgentType
-    } else {
+    if (!def) {
       return errorResult(
-        `Missing "name": this host offers no default agent, so \`name\` must select one. Available: [${names().join(', ')}]`
+        `Missing "name": \`name\` must select an agent. Available: [${names().join(', ')}]`
       )
     }
+    const agentType: InProcessAgentType = toInProcessAgentType(def)
 
     try {
       // getter 形态在派发时求值：跟随会话当前模型/思考档位

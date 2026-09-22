@@ -427,21 +427,6 @@ interface ChatState {
 
 // ========== 派生选择器（UI 组件通过这些选择器从底层 map 读取当前活跃会话的状态） ==========
 
-/** 以本地时区按"YYYY-MM-DD"分组会话；用 lastActiveAt 作为单日落点。
- *  扩展日历仍走这条路；桌面日历改读 session_day_prompts。
- *  不是 zustand selector——每次调用都返回新 Map，需在组件内用 useMemo 包裹。 */
-export const groupSessionsByDay = (sessions: Session[]): Map<string, Session[]> => {
-  const map = new Map<string, Session[]>()
-  for (const session of sessions) {
-    const d = new Date(session.lastActiveAt || session.updatedAt)
-    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-    const arr = map.get(key)
-    if (arr) arr.push(session)
-    else map.set(key, [session])
-  }
-  return map
-}
-
 export const selectStreamingContent = (s: ChatState): string =>
   s.activeSessionId ? s.sessionStreams[s.activeSessionId]?.content || '' : ''
 

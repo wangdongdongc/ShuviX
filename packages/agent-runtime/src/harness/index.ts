@@ -22,4 +22,3 @@ export {
   type InlineTokensSidecar
 } from './projection'
 export { createModelsAdapter, type ModelsAdapterDeps } from './modelsAdapter'
-export { createStubExecutionEnv } from './stubEnv'
