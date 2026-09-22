@@ -8,7 +8,8 @@
  *
  *   - 种子行的形状与「整行只读」（删不掉、改不了名字 / 类型 / 命令 / 地址、名字不能被占）；
  *   - 列表里内置置顶、内置行的徽章与按钮（没有编辑、没有重连、删除灰着）；
- *   - 展开区：只有 browser 那一行有附加设置，开关写的是 `tool.browser.ignoreCertificateErrors`，
+ *   - 展开区：browser 那一行挂着浏览器面板的设置（database 那一行挂的是已保存的数据库连接，
+ *     见 database 区；ssh / tavily 没有附加设置），开关写的是 `tool.browser.ignoreCertificateErrors`，
  *     已保存站点可以逐个清掉；
  *   - 第一次用到才连（会话级实例），连上之后工具数与工具名、会话删掉之后回到「未启动」；
  *   - 启用开关：关掉会断开活着的会话实例，新会话再勾它也拿不到工具（而且不报错、不转圈），
@@ -162,7 +163,7 @@ afterAll(async () => {
 })
 
 describe('种子行（IPC）', () => {
-  it('BRS-1 browser 与 ssh 各一行：内置、inproc、全局启用、没连过、没有工具', async () => {
+  it('BRS-1 browser 与 ssh 各一行：内置、inproc、全局启用、没连过、没有工具；内置的恰好三台', async () => {
     const rows = await mcpList()
 
     const browsers = rows.filter((r) => r.name === 'browser')
@@ -188,13 +189,13 @@ describe('种子行（IPC）', () => {
       toolCount: 0
     })
 
-    // 内置的只有这两台（Tavily 在 v24 交还给用户了）
+    // 内置的恰好这三台（database 是 v28 种的，形状由 database 区钉；Tavily 在 v24 交还给用户了）
     expect(
       rows
         .filter((r) => r.isBuiltin === 1)
         .map((r) => r.name)
         .sort()
-    ).toEqual(['browser', 'ssh'])
+    ).toEqual(['browser', 'database', 'ssh'])
     expect(rows.find((r) => r.id === TAVILY_ID)?.isBuiltin).toBe(0)
 
     // 没连过就没有工具（工具数与工具表都取自上次连上时的 cachedTools）
@@ -247,7 +248,7 @@ describe('MCP 设置页（DOM）', () => {
         .filter((r) => r.builtinBadge)
         .map((r) => r.name)
         .sort()
-    ).toEqual(['browser', 'ssh'])
+    ).toEqual(['browser', 'database', 'ssh'])
 
     const browser = rows.find((r) => r.name === 'browser')!
     expect(browser).toMatchObject({
@@ -265,7 +266,7 @@ describe('MCP 设置页（DOM）', () => {
     expect(tavily).toMatchObject({ builtinBadge: false, hasEdit: true, deleteDisabled: false })
   }, 120_000)
 
-  it('BRS-4 只有 browser 那一行展开后有附加设置：面板标题、证书开关关着、没有已保存站点', async () => {
+  it('BRS-4 browser 那一行展开后是面板设置：面板标题、证书开关关着、没有已保存站点；ssh / tavily 没有附加设置', async () => {
     await mcp.setExpanded('browser', true)
     const extra = await loadedExtra()
     expect(PANEL_TITLES).toContain(extra.sectionTitles[0])

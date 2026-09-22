@@ -5002,6 +5002,270 @@ export function mcpSettingsPane(settings: CdpClient): McpSettingsPane {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+// MCP 页内置 `database` 那一行展开区里的「已保存的连接」（DatabaseConnectionsSettings）与它的
+// 添加 / 编辑弹窗（DbCredentialDialog）。先 `mcpSettingsPane(...).setExpanded('database', true)`。
+//
+// **不要拿 `mcpSettingsPane.extra()` 读它**：那个快照按浏览器面板的两节结构写死（第二节 = 已保存
+// 站点），它的 `warning` 找的是 `lucide-triangle-alert`，而这一块的安全警告是**一直在**的。
+//
+// 锚点：块根 = `[data-mcp-server-extra="database"]`；节 = 其中唯一的 `section`（标题 h3、问号、
+// 右上角「添加」、preamble 里的三角警告、圆角卡片）；卡片里每个直接子节点是一行 SettingsRow
+// （标题行 = 名字 `span.truncate` + 徽章 `span.rounded-md`，库类型徽章蓝、只读徽章绿；subtitle 里
+// 等宽的 `user@host:port/db`；行尾是 pencil / trash-2 两颗图标，点了删除垃圾桶原地换成「确认 /
+// 取消」两颗文字按钮，确认在前，编辑图标留着）。空态是卡片里 `div.text-center` 的两段 `p`。
+//
+// 弹窗 = 块里的 `.dialog-panel`（固定定位的遮罩就渲染在这一块里）：头部 h3；表单里恰好六个
+// `input`，DOM 序 = 名称、主机、端口、用户名、密码、库名；库类型是 MySQL / PostgreSQL 两段的
+// SegmentedControl（选中那段带 `shadow-sm`）；只读开关是弹窗里唯一的 `button.rounded-full`；
+// 表单区直接子节点里的 `p` 是「测试连接」的结果行与保存失败的报错行；页脚三颗按钮 = 测试、取消、
+// 保存。文案是 i18n 产物 —— 需要比对文字的地方由调用方按三语候选认。
+
+/** 已保存的连接里的一行 */
+export interface DbConnRowShot {
+  name: string
+  /** 库类型徽章上的字（`PostgreSQL` / `MySQL`） */
+  engine: string
+  /** 只读徽章上的字；没有这枚徽章时为 '' */
+  readonlyBadge: string
+  /** 这一行自己的内容（subtitle）：`user@host:port/db` */
+  target: string
+  /** 行尾此刻是「确认 / 取消」（点过删除）而不是两颗图标 */
+  confirming: boolean
+}
+
+/** 「已保存的连接」这一块的快照；块不在屏时 `present: false` */
+export interface DbConnectionsShot {
+  present: boolean
+  /** 节标题（h3） */
+  title: string
+  /** 节标题旁的问号个数（说明收在气泡里） */
+  hints: number
+  /** preamble 里的安全警告（三角图标旁那句）；不在为 '' */
+  warning: string
+  /** 空态的两段文字；有连接时为 [] */
+  empty: string[]
+  rows: DbConnRowShot[]
+}
+
+/** 添加 / 编辑连接弹窗的快照 */
+export interface DbDialogShot {
+  open: boolean
+  /** 头部标题（添加 / 编辑，随界面语言变） */
+  title: string
+  fields: {
+    name: string
+    host: string
+    port: string
+    username: string
+    password: string
+    database: string
+  }
+  /** 库类型分段控件选中那段的字 */
+  engine: string
+  /** 只读开关开着 */
+  readonlyOn: boolean
+  /** 表单区里的提示行（测试结果 / 保存报错），`ok` = 绿色那一种 */
+  messages: Array<{ text: string; ok: boolean }>
+  /** 保存按钮禁用 */
+  saveDisabled: boolean
+}
+
+export type DbDialogField = keyof DbDialogShot['fields']
+
+export interface DbConnectionsPane {
+  shot(): Promise<DbConnectionsShot>
+  /** 等列表读出来（有行或有空态 —— 连接列表是挂载之后异步读的） */
+  loaded(): Promise<DbConnectionsShot>
+  clickAdd(): Promise<void>
+  clickEdit(name: string): Promise<void>
+  /** 点某一行的删除（垃圾桶），等行尾换成确认 / 取消 */
+  clickDelete(name: string): Promise<void>
+  /** 删除之后的确认 / 取消 */
+  answerDelete(name: string, confirm: boolean): Promise<void>
+  dialog(): Promise<DbDialogShot>
+  /** 往弹窗的输入框里填字（native setter + input 事件，走 React 的 onChange） */
+  fill(values: Partial<DbDialogShot['fields']>): Promise<void>
+  pickEngine(label: 'MySQL' | 'PostgreSQL'): Promise<void>
+  clickReadonly(): Promise<void>
+  clickTest(): Promise<void>
+  clickSave(): Promise<void>
+  clickCancel(): Promise<void>
+  /** 等弹窗离开 DOM（关闭有一段收起动画） */
+  waitDialogClosed(): Promise<void>
+}
+
+export function dbConnectionsPane(settings: CdpClient): DbConnectionsPane {
+  const ROOT = `document.querySelector('[data-mcp-server-extra="database"]')`
+  const SECTION = `(${ROOT})?.querySelector('section')`
+  const CARD = `(${SECTION})?.lastElementChild`
+  const PANEL = `(${ROOT})?.querySelector('.dialog-panel')`
+  /** 名字恰好等于 name 的那一行（SettingsRow 根） */
+  const ROW = (name: string): string =>
+    `[...((${CARD})?.children ?? [])].find((r) =>
+      (r.querySelector('span.truncate')?.textContent ?? '').trim() === ${JSON.stringify(name)})`
+  const FIELD_ORDER: DbDialogField[] = ['name', 'host', 'port', 'username', 'password', 'database']
+
+  const shot = (): Promise<DbConnectionsShot> =>
+    settings.eval<DbConnectionsShot>(`(() => {
+      const section = ${SECTION}
+      if (!section) return { present: false, title: '', hints: 0, warning: '', empty: [], rows: [] }
+      const card = section.lastElementChild
+      const emptyBox = card?.querySelector(':scope > div.text-center')
+      const warnIcon = section.querySelector('.lucide-triangle-alert')
+      const rows = emptyBox ? [] : [...(card?.children ?? [])].map((r) => {
+        const badges = [...r.querySelectorAll('span.rounded-md')]
+        const control = r.lastElementChild
+        return {
+          name: (r.querySelector('span.truncate')?.textContent ?? '').trim(),
+          engine: (badges.find((b) => b.className.includes('bg-blue-500'))?.textContent ?? '').trim(),
+          readonlyBadge: (badges.find((b) => b.className.includes('bg-green-500'))?.textContent ?? '').trim(),
+          target: (r.querySelector('span.font-mono')?.textContent ?? '').trim(),
+          // 编辑那颗图标一直在；点过删除之后，垃圾桶原地换成两颗文字按钮
+          confirming: !!control && !control.querySelector('.lucide-trash-2')
+        }
+      })
+      return {
+        present: true,
+        title: (section.querySelector('h3')?.textContent ?? '').trim(),
+        hints: section.firstElementChild?.querySelectorAll('[data-info-hint]').length ?? 0,
+        warning: (warnIcon?.parentElement?.querySelector('p')?.textContent ?? '').trim(),
+        empty: emptyBox ? [...emptyBox.querySelectorAll('p')].map((p) => (p.textContent ?? '').trim()) : [],
+        rows
+      }
+    })()`)
+
+  /** 在块里找到 expr 指向的按钮并点它；找不到就抛 */
+  const click = async (expr: string, what: string): Promise<void> => {
+    await until(
+      () =>
+        settings.eval<boolean>(`(() => {
+          const b = ${expr}
+          if (!b) return false
+          b.click()
+          return true
+        })()`),
+      `database connections: ${what}`
+    )
+    await sleep(200)
+  }
+
+  return {
+    shot,
+    loaded: () =>
+      until(async () => {
+        const s = await shot()
+        return s.present && (s.rows.length > 0 || s.empty.length > 0) ? s : null
+      }, 'saved database connections loaded'),
+    clickAdd: () =>
+      click(
+        `(${SECTION})?.firstElementChild?.querySelector(':scope > div.shrink-0 button')`,
+        'add'
+      ),
+    clickEdit: (name) =>
+      click(
+        `[...((${ROW(name)})?.querySelectorAll('button') ?? [])].find((b) => b.querySelector('.lucide-pencil'))`,
+        `edit ${name}`
+      ),
+    clickDelete: async (name) => {
+      await click(
+        `[...((${ROW(name)})?.querySelectorAll('button') ?? [])].find((b) => b.querySelector('.lucide-trash-2'))`,
+        `delete ${name}`
+      )
+      await until(
+        async () => (await shot()).rows.find((r) => r.name === name)?.confirming === true,
+        `delete of ${name} awaiting confirmation`
+      )
+    },
+    answerDelete: (name, confirm) =>
+      click(
+        `(() => {
+          const row = ${ROW(name)}
+          // 行尾：编辑图标 + 「确认 / 取消」两颗文字按钮（没有图标的那两颗）
+          const btns = row ? [...row.lastElementChild.querySelectorAll('button')].filter((b) => !b.querySelector('svg')) : []
+          return btns.length === 2 ? btns[${confirm ? 0 : 1}] : null
+        })()`,
+        `${confirm ? 'confirm' : 'cancel'} delete of ${name}`
+      ),
+    dialog: () =>
+      settings.eval<DbDialogShot>(`(() => {
+        const panel = ${PANEL}
+        const empty = { name: '', host: '', port: '', username: '', password: '', database: '' }
+        if (!panel) {
+          return { open: false, title: '', fields: empty, engine: '', readonlyOn: false, messages: [], saveDisabled: true }
+        }
+        const inputs = [...panel.querySelectorAll('input')]
+        const order = ${JSON.stringify(FIELD_ORDER)}
+        const fields = Object.fromEntries(order.map((k, i) => [k, inputs[i] ? inputs[i].value : '']))
+        const seg = [...panel.querySelectorAll('button')].find((b) =>
+          ['MySQL', 'PostgreSQL'].includes((b.textContent ?? '').trim()) && b.className.includes('shadow-sm'))
+        const toggle = panel.querySelector('button.rounded-full')
+        const form = panel.children[1]
+        const footer = panel.lastElementChild
+        const footBtns = [...(footer?.querySelectorAll('button') ?? [])]
+        return {
+          open: true,
+          title: (panel.querySelector('h3')?.textContent ?? '').trim(),
+          fields,
+          engine: (seg?.textContent ?? '').trim(),
+          readonlyOn: !!toggle && toggle.className.includes('bg-accent'),
+          messages: [...(form?.children ?? [])]
+            .filter((c) => c.tagName === 'P')
+            .map((p) => ({ text: (p.textContent ?? '').trim(), ok: p.className.includes('text-green-400') })),
+          saveDisabled: !!footBtns[footBtns.length - 1]?.disabled
+        }
+      })()`),
+    fill: async (values) => {
+      const pairs = FIELD_ORDER.flatMap((k, i) =>
+        values[k] === undefined ? [] : [[i, values[k] as string] as const]
+      )
+      const ok = await settings.eval<boolean>(`(() => {
+        const panel = ${PANEL}
+        if (!panel) return false
+        const inputs = [...panel.querySelectorAll('input')]
+        const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+        for (const [i, v] of ${JSON.stringify(pairs)}) {
+          const input = inputs[i]
+          if (!input) return false
+          setter.call(input, v)
+          input.dispatchEvent(new Event('input', { bubbles: true }))
+        }
+        return true
+      })()`)
+      if (!ok) throw new Error('database connection dialog: inputs not found')
+      await sleep(100)
+    },
+    pickEngine: (label) =>
+      click(
+        `[...((${PANEL})?.querySelectorAll('button') ?? [])].find((b) => (b.textContent ?? '').trim() === ${JSON.stringify(label)})`,
+        `engine ${label}`
+      ),
+    clickReadonly: () =>
+      click(`(${PANEL})?.querySelector('button.rounded-full')`, 'read-only toggle'),
+    clickTest: () => click(`(${PANEL})?.lastElementChild?.querySelectorAll('button')[0]`, 'test'),
+    clickCancel: () =>
+      click(
+        `(() => {
+          const btns = [...((${PANEL})?.lastElementChild?.querySelectorAll('button') ?? [])]
+          return btns.length === 3 ? btns[1] : null
+        })()`,
+        'cancel'
+      ),
+    clickSave: () =>
+      click(
+        `(() => {
+          const btns = [...((${PANEL})?.lastElementChild?.querySelectorAll('button') ?? [])]
+          const save = btns[btns.length - 1]
+          return save && !save.disabled ? save : null
+        })()`,
+        'save'
+      ),
+    waitDialogClosed: async () => {
+      await until(() => settings.eval<boolean>(`!(${PANEL})`), 'database connection dialog closed')
+    }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 // 设置窗口「已归档」页（openSettings('archived') 后调用）
 //
 // 「项目」一级入口改名「已归档」（Archive 图标）后，页内由「左侧 220px 子导航列 + 唯一子项」

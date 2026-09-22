@@ -51,7 +51,11 @@ let sessionX = ''
 const rows = (): ServerRow[] => sqliteJson<ServerRow>(home, 'SELECT * FROM mcp_servers ORDER BY id')
 const rowById = (id: string): ServerRow | undefined => rows().find((r) => r.id === id)
 const rowByName = (name: string): ServerRow | undefined => rows().find((r) => r.name === name)
-const userVersion = (): string => sqlite(home, 'PRAGMA user_version').trim()
+/**
+ * 库版本。v27 之后还有迁移（v28 种 database，拨回 26 再起时它也跑一遍、是个空操作）——
+ * 这里只断「至少到了 27」，v27 本身跑没跑、跑了几次按日志里那一行的次数断，下一条迁移不必再来改这里
+ */
+const userVersion = (): number => Number(sqlite(home, 'PRAGMA user_version').trim())
 const migrationRuns = (): number => app!.mainLog().split(MIGRATION_LINE).length - 1
 
 /** 一行用户自己的 server（字段取值刻意都不是缺省，好看出改名之后别的字段一个没动） */
@@ -102,7 +106,7 @@ afterAll(async () => {
 })
 
 describe('迁移 v27', () => {
-  it('BRM-1 全新安装：内置 browser 与 ssh 各一行，库版本 27，v27 跑了恰好一次', async () => {
+  it('BRM-1 全新安装：内置 browser 与 ssh 各一行，库版本至少 27，v27 跑了恰好一次', async () => {
     const listed = await mcpList()
     expect(listed.filter((r) => r.name === 'browser')).toEqual([
       expect.objectContaining({ id: BROWSER_ID, isBuiltin: 1, type: 'inproc' })
@@ -110,7 +114,7 @@ describe('迁移 v27', () => {
     expect(listed.filter((r) => r.name === 'ssh')).toEqual([
       expect.objectContaining({ id: SSH_ID, isBuiltin: 1, type: 'inproc' })
     ])
-    expect(userVersion()).toBe('27')
+    expect(userVersion()).toBeGreaterThanOrEqual(27)
     expect(migrationRuns()).toBe(1)
   }, 120_000)
 
@@ -135,7 +139,7 @@ describe('迁移 v27', () => {
       ].join('\n')
     )
 
-    expect(userVersion()).toBe('27')
+    expect(userVersion()).toBeGreaterThanOrEqual(27)
     expect(migrationRuns()).toBe(2)
 
     // 内置行回来了
@@ -190,7 +194,7 @@ describe('迁移 v27', () => {
       ].join('\n')
     )
 
-    expect(userVersion()).toBe('27')
+    expect(userVersion()).toBeGreaterThanOrEqual(27)
     expect(migrationRuns()).toBe(3)
     expect(rowById(SSH_ID)).toMatchObject({
       name: 'ssh',
@@ -208,7 +212,7 @@ describe('迁移 v27', () => {
   it('BRM-4 幂等：再起一次什么都不改，v27 不再跑', async () => {
     const before = rows()
     await relaunchAfter('')
-    expect(userVersion()).toBe('27')
+    expect(userVersion()).toBeGreaterThanOrEqual(27)
     expect(migrationRuns()).toBe(3)
     expect(rows()).toEqual(before)
     expect(rowByName('browser')?.id).toBe(BROWSER_ID)
