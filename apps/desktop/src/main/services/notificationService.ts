@@ -157,11 +157,14 @@ export function initNotificationService(injected: NotificationServiceDeps): void
  * 事件是逐 token 来的，不能每条都读一次库。
  */
 const chromeTabSessions = new Map<string, boolean>()
+/** 记这么多条就整个清掉重记 —— 会话 id 不复用，只进不出的表会跟着进程一直长 */
+const CHROME_TAB_CACHE_LIMIT = 1000
 
 function isChromeTabSession(sessionId: string): boolean {
   let known = chromeTabSessions.get(sessionId)
   if (known === undefined) {
     known = isChromeTabSessionSettings(sessionDao.pickSettings(sessionId, ['chromeTab']))
+    if (chromeTabSessions.size >= CHROME_TAB_CACHE_LIMIT) chromeTabSessions.clear()
     chromeTabSessions.set(sessionId, known)
   }
   return known

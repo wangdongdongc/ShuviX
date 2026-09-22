@@ -228,8 +228,8 @@ export class SessionService {
    */
   create(params?: SessionCreateParams): Session {
     const id = uuidv7()
-    // Chrome 标签页会话：无项目、无父会话、不继承任何扩展能力勾选 —— 它的工具全由基座档案 `tab`
-    // 声明（含 mcp:chrome），形态推导见 resolveAgentProfileName
+    // Chrome 标签页会话：无项目、无父会话、不是笔记本也不是 bot、不继承任何扩展能力勾选 ——
+    // 它的工具全由基座档案 `tab` 声明（含 mcp:chrome），形态推导见 resolveAgentProfileName
     const chromeTab = chromeTabOf(params)
     const notebookPath = chromeTab ? undefined : params?.notebookPath
     const now = Date.now()
@@ -240,7 +240,8 @@ export class SessionService {
     const enabledTools = chromeTab ? [] : this.inheritedSelection(parentId, pid)
 
     // bot 会话：绑定一个 bot，**有根**（根档案 bot，形态推导见 resolveAgentProfileName）。空串 / 空白视同没给
-    const bot = params?.bot?.trim() || undefined
+    const bot = chromeTab ? undefined : params?.bot?.trim() || undefined
+    const memorySlug = chromeTab ? undefined : params?.memorySlug
     const session: Session = {
       id,
       title: params?.title ?? (notebookPath ? basename(notebookPath) : t('agent.defaultTitle')),
@@ -249,7 +250,7 @@ export class SessionService {
       // 指令文件不预写配置：留空即「未显式配置」，注入时按 AGENTS.md → CLAUDE.md 优先级自动选
       settings: {
         ...(notebookPath ? { notebookPath } : {}),
-        ...(params?.memorySlug ? { memorySlug: params.memorySlug } : {}),
+        ...(memorySlug ? { memorySlug } : {}),
         // 只在有值时写键：缺省即无键
         ...(bot ? { bot } : {}),
         // 子会话继承父会话的免询问开关（模型 / 思考档位的种子在 subSessionRunner.create）。
@@ -301,12 +302,14 @@ export class SessionService {
   resolveAgentProfileName(sessionId: string): string {
     const session = sessionDao.pick(sessionId, ['projectId', 'parentId', 'settings'])
     const settings = session?.settings
+    // Chrome 标签页会话：根 Agent 恒为基座 `tab`（只有它声明 mcp:chrome —— 用户真实的 Chrome）。
+    // 排在最前：create 不会让它同时是笔记本 / bot，万一行里真有那些键，也不能让它落到一个
+    // 没有 mcp:chrome 的基座上
+    if (isChromeTabSessionSettings(settings)) return TAB_PROFILE_NAME
     if (settings?.notebookPath) return NOTEBOOK_PROFILE_NAME
     // bot 会话：根 Agent 恒为基座 `bot`，人设与记忆经 systemContext 注入（见 agentSession.create）。
     // 与笔记本一样按形态推导，没有设置项
     if (isBotSessionSettings(settings)) return BOT_PROFILE_NAME
-    // Chrome 标签页会话：根 Agent 恒为基座 `tab`（只有它声明 mcp:chrome —— 用户真实的 Chrome）
-    if (isChromeTabSessionSettings(settings)) return TAB_PROFILE_NAME
     const pinned = session?.parentId ? settings?.agentProfile : undefined
     if (pinned) {
       if (agentService.getProfile(pinned)) return pinned

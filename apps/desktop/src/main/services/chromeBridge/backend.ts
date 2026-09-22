@@ -44,6 +44,8 @@ export const CHROME_BROWSER_CAPS: BrowserCaps = {
 const OPEN_TAB_LOAD_TIMEOUT_MS = 10_000
 /** 截图的上限：后台标签页偶尔不出帧，宁可早点报错让 agent 换个做法 */
 const SCREENSHOT_TIMEOUT_MS = 20_000
+/** 问一个 tab 眼下在哪（站点门要用）：只是一次 chrome.tabs.get，答不上来就是连接出了问题 */
+const TAB_URL_TIMEOUT_MS = 10_000
 
 /** 标签组标题里带的页面标题长度 */
 const GROUP_TITLE_PAGE_CHARS = 18
@@ -141,16 +143,19 @@ export class ChromeBridgeBackend implements BrowserBackend {
     }
   }
 
-  /** 不 attach —— server 只是想知道这个 tab 眼下显示的是什么 */
+  /**
+   * 不 attach —— server 只是想知道这个 tab 眼下显示的是什么，据此按站点问。
+   * 没连着 / Chrome 没答上来就抛（门得知道 tab 在哪才能放行）；没有这个 tab 才回 undefined。
+   */
   async tabUrl(p: { tabId: string }): Promise<string | undefined> {
     const id = Number(p.tabId)
     if (!Number.isInteger(id)) return undefined
-    try {
-      const tab = await this.conn().request('tabs.get', { tabId: id })
-      return tab ? tab.url || tab.pendingUrl || undefined : undefined
-    } catch {
-      return undefined
-    }
+    const tab = await this.conn().request(
+      'tabs.get',
+      { tabId: id },
+      { timeoutMs: TAB_URL_TIMEOUT_MS }
+    )
+    return tab ? tab.url || tab.pendingUrl || undefined : undefined
   }
 
   async openTab(p: { url: string }): Promise<BrowserOpOutput> {
@@ -159,18 +164,21 @@ export class ChromeBridgeBackend implements BrowserBackend {
     const state = this.state()
     const anchor = await conn.request('tabs.get', { tabId: binding.tabId }).catch(() => null)
     const tab = await conn.request('tabs.create', { url: p.url, windowId: anchor?.windowId })
-    // 放进本会话的标签组：组还在就并进去，不在了（浏览器重启 / 用户解散）就新建
-    try {
-      const { groupId } = await conn.request('group.ensure', {
-        groupId: state.groups.get(this.sessionId),
-        tabIds: [tab.id],
-        title: groupTitleFor(anchor?.title),
-        color: groupColorFor(this.sessionId)
+    // 放进本会话的标签组：组还在就并进去，不在了（浏览器重启 / 用户解散）就新建。同一会话串行 ——
+    // 并发的两个 open_tab 各自看到「还没有组」，就会建出两个组
+    await state
+      .joinGroup(this.sessionId, async (current) => {
+        const { groupId } = await conn.request('group.ensure', {
+          groupId: current,
+          tabIds: [tab.id],
+          title: groupTitleFor(anchor?.title),
+          color: groupColorFor(this.sessionId)
+        })
+        return groupId
       })
-      state.groups.set(this.sessionId, groupId)
-    } catch {
-      /* 分组失败不影响开页本身 */
-    }
+      .catch(() => {
+        /* 分组失败不影响开页本身 */
+      })
     const { loaded } = await conn
       .request('tabs.waitLoad', { tabId: tab.id, timeoutMs: OPEN_TAB_LOAD_TIMEOUT_MS })
       .catch(() => ({ loaded: false }))
@@ -223,8 +231,11 @@ export class ChromeBridgeBackend implements BrowserBackend {
       format: 'jpeg',
       quality: 60
     })
-    const timeout = new Promise<never>((_, reject) =>
-      setTimeout(
+    // 超时先到时，截图那一路之后才失败也不该成为未处理的拒绝
+    shot.catch(() => {})
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(
         () =>
           reject(
             new Error(
@@ -233,11 +244,15 @@ export class ChromeBridgeBackend implements BrowserBackend {
           ),
         SCREENSHOT_TIMEOUT_MS
       )
-    )
-    const { data } = await Promise.race([shot, timeout])
-    return {
-      text: `Screenshot of tab ${p.tabId}.`,
-      images: [{ data, mimeType: 'image/jpeg' }]
+    })
+    try {
+      const { data } = await Promise.race([shot, timeout])
+      return {
+        text: `Screenshot of tab ${p.tabId}.`,
+        images: [{ data, mimeType: 'image/jpeg' }]
+      }
+    } finally {
+      clearTimeout(timer)
     }
   }
 

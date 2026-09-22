@@ -6,8 +6,11 @@
  *
  *  - **按站点问**（site 门）：在一个显示网页的标签页上做任何事之前，按它此刻所在的站点过
  *    `{type:'url', browser:'chrome'}` 客体 —— 出厂策略 ask-on-new-site 据此每个站点每条会话问一次。
- *    会话挂着的那个标签页例外：用户就是在那一页上打开侧边栏来问的，那是它自己的授权。
- *  - **导航**同一个客体过门；`file://` 按读那个本地路径（现有的路径策略自动生效）。
+ *    用户随消息带上的标签页所在的站点不问（见 chromeBridge/siteGrants）：带上它就是在问它。
+ *    会话挂着的那一页**不**因为「是它」就放行 —— 它会变：agent 点了个链接、页面自己跳走了，
+ *    就已经不是用户打开侧边栏时问的那一页了。
+ *  - **导航**同一个客体过门（用户带上过的站点同样不问）；`file://` 按读那个本地路径（现有的路径
+ *    策略自动生效）。
  *  - **本地文件交给网页、决定下载落在哪**：一律拒绝。upload_file / pdf 不在工具表上（caps 关着 ——
  *    扩展的 chrome.debugger 下 `DOM.setFileInputFiles` 本就回 "Not allowed"），但原生 cdp 里等价的
  *    方法还在，不给门 = 不设门，所以这里要给一道「不」。
@@ -17,6 +20,7 @@
  */
 import { fileURLToPath } from 'url'
 import {
+  browserSiteOf,
   createBrowserMcpServerFactory,
   createBrowserTabQueue,
   urlObjectOf,
@@ -27,7 +31,7 @@ import {
 } from '@shuvix/agent-runtime'
 import { chromeTabOf } from '@shuvix/chat-protocol/chromeTabSession'
 import { sessionDao } from '../../dao/sessionDao'
-import { chromeBrowserState, createChromeBrowserBackend } from '../chromeBridge'
+import { chromeBrowserState, createChromeBrowserBackend, isSiteGranted } from '../chromeBridge'
 import { getDesktopSecurityContext, TOOL_ABORTED } from '../toolContext'
 import type { DesktopBuiltinMcpScope } from './types'
 
@@ -36,7 +40,7 @@ export const CHROME_MCP_SERVER_NAME = 'chrome'
 
 /** 接在 list_tabs 描述后面：这是谁的浏览器、对话挂在哪一页、操作会留下什么 */
 const CHROME_HOST_NOTE =
-  "These are the user's real Chrome tabs, signed in as the user. This conversation is attached to one of them — the tab the user opened the ShuviX side panel on; it is listed first, and each user message names the tabs the user selected. Reading a tab (list_tabs, read_page) leaves no trace; operating one (snapshot, click, type, screenshot, …) attaches a debugger and shows a banner in Chrome until your turn ends. Tabs you open go into this conversation's tab group, in the background. Tab ids are Chrome's numeric tab ids."
+  "These are the user's real Chrome tabs, signed in as the user. This conversation is attached to one of them — the tab the user opened the ShuviX side panel on; it is listed first, and each user message names the tabs the user selected. The sites of the tabs the user sent are already allowed; the first time you open or work on any other site in this conversation, the user is asked. Reading a tab (list_tabs, read_page) leaves no trace; operating one (snapshot, click, type, screenshot, …) attaches a debugger and shows a banner in Chrome until your turn ends. Tabs you open go into this conversation's tab group, in the background. Tab ids are Chrome's numeric tab ids."
 
 function chromeGates(scope: DesktopBuiltinMcpScope): BrowserMcpGates {
   const security = (): ReturnType<typeof getDesktopSecurityContext> =>
@@ -67,12 +71,16 @@ function chromeGates(scope: DesktopBuiltinMcpScope): BrowserMcpGates {
     await security().enforceUrl(urlObjectOf(url, 'chrome'), enforceOpts(ctx))
   }
 
+  /** 用户随消息带上过这个站点的标签页：带上它就是在问它 */
+  const granted = (url: string): boolean => isSiteGranted(scope.sessionId, browserSiteOf(url))
+
   return {
-    navigate: enforceTarget,
+    async navigate(url, ctx) {
+      if (granted(url)) return
+      await enforceTarget(url, ctx)
+    },
     async site(url, ctx) {
-      // 会话挂着的那个页：用户就是在这一页上打开侧边栏来问的 —— 它此刻所在的站点算已放行
-      const binding = chromeTabOf(sessionDao.pickSettings(scope.sessionId, ['chromeTab']))
-      if (binding && String(binding.tabId) === ctx.tabId) return
+      if (granted(url)) return
       await enforceTarget(url, ctx)
     },
     async fileRead() {

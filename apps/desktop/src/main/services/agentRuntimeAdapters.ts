@@ -19,11 +19,13 @@ import { notifyOnChatEvent } from './notificationService'
 import { transformToolResultForPersist } from './stepPersistPipeline'
 import { httpLogService } from './httpLogService'
 import { recordFromUserMessageEvent } from './sessionDayPromptService'
+import { observeChromeTabRun } from './chromeBridge'
 import { createLogger } from '../logger'
 import { t } from '../i18n'
 
 /**
- * 事件广播适配器：委托 chatFrontendRegistry，并旁路一份给通知决策器。
+ * 事件广播适配器：委托 chatFrontendRegistry，并旁路一份给通知决策器、当日提示词记录，以及
+ * Chrome 标签页会话的调试租约（一轮跑完就释放 Chrome 里的调试横幅 —— 与侧边栏开没开无关）。
  *
  * 通知**不走 ChatFrontend**：registry 按能力过滤，`input_request` 只发给
  * `userInput: true` 的前端 —— 而询问恰恰是最该弹通知的一类事件。与其为通知造一个
@@ -35,6 +37,7 @@ export const electronEventSink: RuntimeEventSink = {
     chatFrontendRegistry.broadcast(event)
     notifyOnChatEvent(event)
     recordFromUserMessageEvent(event)
+    observeChromeTabRun(event)
   },
   hasUserInputCapability: (sessionId) => chatFrontendRegistry.hasCapability(sessionId, 'userInput')
 }

@@ -3,10 +3,17 @@
  *
  * 缺省只选中**本标签页**（侧边栏挂着的那一页）；用户可以取消它，也可以从全部标签页里再加选。
  * 发送时，选中的标签页作为行内 token 带在消息开头：气泡里是一排芯片，模型看到的是
- * `[Chrome tab <id>: <标题> — <地址>]`。页面内容**不**随消息附上 —— agent 需要时自己读，那一下读取
- * 过站点门。标题与地址在发送那一刻现取（页面可能早就导航走了）。
+ * `[Chrome tab <id>: "<标题>" — <地址>]`（chat-protocol 的 `chromeTabPayload`）。页面内容**不**随
+ * 消息附上 —— agent 需要时自己读。带上的标签页此刻所在的站点，桌面记为这条会话已经同意的站点
+ * （带上它就是在问它）；别的站点 agent 第一次用到时问一次。标题与地址在发送那一刻现取（页面可能
+ * 早就导航走了）。
  */
 import { useSyncExternalStore } from 'react'
+import {
+  CHROME_TAB_TOKEN_TYPE,
+  chromeTabPayload,
+  chromeTabTokenId
+} from '@shuvix/chat-protocol/chromeBridge'
 import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
 import { makeTokenMarker } from '@shuvix/chat-protocol/utils/inlineTokens'
 
@@ -65,7 +72,7 @@ export function useSelectedTabIds(): number[] {
 
 /** 模型看到的那一行 */
 export function tabPayload(tab: SelectedTab): string {
-  return `[Chrome tab ${tab.id}: ${tab.title || '(untitled)'} — ${tab.url}]`
+  return chromeTabPayload(tab)
 }
 
 const TOKEN_UID_PREFIX = 'ctab'
@@ -85,8 +92,8 @@ export function withTabTokens(
   tabs.forEach((tab, i) => {
     const uid = `${TOKEN_UID_PREFIX}${i}`
     merged[uid] = {
-      type: 'tab',
-      id: `chrome-tab:${tab.id}`,
+      type: CHROME_TAB_TOKEN_TYPE,
+      id: chromeTabTokenId(tab.id),
       displayText: tab.title || tab.url || `tab ${tab.id}`,
       payload: tabPayload(tab),
       name: tab.title || undefined

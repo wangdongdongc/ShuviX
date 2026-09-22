@@ -58,7 +58,9 @@ export async function openTabSession(
 ): Promise<string> {
   const info = conn.info
   if (!info) throw new Error('not-ready')
-  if (!Number.isInteger(params?.tabId)) throw new Error('"tabId" must be an integer.')
+  if (!Number.isInteger(params?.tabId) || params.tabId < 0) {
+    throw new Error('"tabId" must be a Chrome tab id (a non-negative integer).')
+  }
   const key = `${info.installId}:${info.runId}:${params.tabId}`
   const inflight = opening.get(key)
   if (inflight) return inflight

@@ -91,6 +91,10 @@ function onNativeMessage(raw: unknown): void {
         void sendHello()
       } else {
         setState('desktop-offline')
+        // 桌面走了（退出 / 重启），本地组件还在：桌面那边的 attach 记账已随连接作废，横幅不该留着；
+        // 拼了一半的分片也永远等不到后半截了
+        assembler.clear()
+        void detachAllDebuggers()
       }
       return
     case 'welcome':

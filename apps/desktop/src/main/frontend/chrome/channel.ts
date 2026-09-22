@@ -6,7 +6,7 @@
  * 桥不是 `window.api` 的远程版 —— IPC 处理器不检查调用方（桌面窗口里谁都能调），照搬过来就等于
  * 把整个桌面交给了扩展。侧边栏只能碰它自己标签页的那条会话。
  */
-import { validateShuvixMdText } from '@shuvix/agent-runtime'
+import { browserSiteOf, validateShuvixMdText } from '@shuvix/agent-runtime'
 import type {
   AgentFollowUpParams,
   AgentInitParams,
@@ -16,16 +16,21 @@ import type {
 } from '@shuvix/chat-protocol/chatApi'
 import {
   CHROME_PANEL_CHANNEL_PATHS,
+  chromeTabIdsOf,
   type ChromePanelChannelPath
 } from '@shuvix/chat-protocol/chromeBridge'
+import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
 import type { InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
-import { chatGateway, createChromeContext, operationContext } from '../core'
+import { chatFrontendRegistry, chatGateway, createChromeContext, operationContext } from '../core'
 import { sessionService } from '../../services/sessionService'
 import { taskRegistry } from '../../services/taskRegistry'
 import { getBuiltinToolPresentations } from '../../services/toolRegistry'
 import { getBuiltinToolDefinitions } from '../../services/agentToolBuilder'
-import type { BridgeConnection } from '../../services/chromeBridge'
+import { grantSite, type BridgeConnection } from '../../services/chromeBridge'
 import { connectionOwnsSession } from './tabSessions'
+import { createLogger } from '../../logger'
+
+const log = createLogger('ChromeFrontend:Channel')
 
 const ALLOWED: ReadonlySet<string> = new Set(CHROME_PANEL_CHANNEL_PATHS)
 
@@ -34,6 +39,33 @@ export const NOT_YOUR_SESSION = 'This session does not belong to this Chrome tab
 
 export function isPanelChannelPath(path: unknown): path is ChromePanelChannelPath {
   return typeof path === 'string' && ALLOWED.has(path)
+}
+
+/** 问一个带上的标签页此刻在哪，最多等这么久 —— 这一步挡在发送前面 */
+const TAB_LOOKUP_TIMEOUT_MS = 5_000
+
+/**
+ * 用户这条消息带上了哪些标签页 → 它们此刻所在的站点记为这条会话已同意的站点（见 siteGrants）。
+ * 地址向 Chrome 现问，不取 token 里那一行字；问不到的（关了、超时）不记，用到时照常问。
+ */
+async function grantSelectedTabSites(
+  conn: BridgeConnection,
+  sessionId: string,
+  tokens: Record<string, InlineToken> | undefined
+): Promise<void> {
+  const tabIds = chromeTabIdsOf(tokens)
+  await Promise.all(
+    tabIds.map(async (tabId) => {
+      try {
+        const tab = await conn.request('tabs.get', { tabId }, { timeoutMs: TAB_LOOKUP_TIMEOUT_MS })
+        // 与芯片上显示的同一个地址：正在导航就是导航目标
+        const site = browserSiteOf(tab ? tab.pendingUrl || tab.url : undefined)
+        if (site) grantSite(sessionId, site)
+      } catch (err) {
+        log.warn(`could not look up selected tab ${tabId}: ${(err as Error).message}`)
+      }
+    })
+  )
 }
 
 /** 调一个对话接口；path 不在白名单、会话不归这条连接时抛错 */
@@ -68,6 +100,8 @@ export async function callPanelChannel(
     }
     case 'agent.prompt': {
       const p = params<AgentPromptParams>()
+      // 先记下用户指着的站点，再开跑：agent 的第一步就可能用到它们
+      await grantSelectedTabSites(conn, p.sessionId, p.inlineTokens)
       await inContext(p.sessionId, () =>
         chatGateway.prompt(p.sessionId, p.text, p.images, p.inlineTokens)
       )
@@ -94,7 +128,18 @@ export async function callPanelChannel(
     }
     case 'agent.respondToInput': {
       const p = params<{ sessionId: string; requestId: string; response: InputResponse }>()
-      inContext(p.sessionId, () => chatGateway.respondToInput(p.sessionId, p.requestId, p.response))
+      // 只送进这条会话自己的运行时。桌面的网关按 requestId 在**所有**会话里找认领者（前端以为的
+      // 会话不作数 —— 那是对桌面窗口的裁决）；侧边栏却只该答它自己那条会话的询问：requestId 就是
+      // 工具调用 id，别的会话的它未必拿不到。没人认领（请求已取消）就把这张卡片收走，与网关同理
+      inContext(p.sessionId, () => {
+        const agent = sessionService.getAgentSession(p.sessionId)
+        if (agent?.respondToInput(p.requestId, p.response)) return
+        chatFrontendRegistry.broadcast({
+          type: 'input_request_resolved',
+          sessionId: p.sessionId,
+          requestId: p.requestId
+        })
+      })
       return { success: true }
     }
     case 'session.getById':

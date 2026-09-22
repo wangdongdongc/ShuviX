@@ -20,11 +20,13 @@ side panel (per tab) ─┘                                    (cli.js native-ho
   messaging host) with every Chromium browser it finds each time it starts; open the app once
   after installing it. Settings → MCP → the built-in `chrome` row shows connected browsers and
   can repair the registration.
-- **Each site asks once.** The first time a conversation opens or works on a site, ShuviX asks
-  (builtin policy `ask-on-new-site`); the tab you opened the panel on is already allowed.
 - **Tabs you ask about ride along.** The chips above the input choose which tabs go with the
   message (this tab by default); the model gets their titles and addresses, and reads page
   content itself when it needs it.
+- **Each other site asks once.** The sites of the tabs you send are allowed — sending a tab is
+  asking about it. The first time a conversation opens or works on any other site (a tab the
+  agent opened, a page that moved on to another site by itself), ShuviX asks (builtin policy
+  `ask-on-new-site`).
 
 Protocol and contracts: `packages/chat-protocol/src/chromeBridge.ts`. Desktop side:
 `apps/desktop/src/main/services/chromeBridge/` (bridge server, native host installer, the `chrome`

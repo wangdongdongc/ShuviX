@@ -43,6 +43,7 @@ import {
 import { browserToolSpec, browserToolsForCaps, type BrowserToolName } from './mcpTools'
 import { blockedCdpReason } from './cdpPolicy'
 import { devtoolsRecipes } from './devtoolsRecipes'
+import { browserSiteOf } from './site'
 
 /** `mcp_servers.name` —— 也是客户端给工具名加的前缀（`mcp__browser__click`） */
 export const BROWSER_MCP_SERVER_NAME = 'browser'
@@ -264,23 +265,6 @@ function localDocument(raw: string | undefined): { url: string; key: string } | 
   return { url: parsed.href, key: parsed.href.replace(/\/+$/, '') }
 }
 
-/**
- * 网页地址的站点键（http / https 的 host，小写、去掉结尾的点 —— 与 url 客体同一种写法）；
- * 其余地址（about:blank、chrome://、data: …）没有站点，回 undefined —— 站点门不管它们。
- */
-function webSiteOf(raw: string | undefined): string | undefined {
-  if (!raw) return undefined
-  let parsed: URL
-  try {
-    parsed = new URL(raw.trim())
-  } catch {
-    return undefined
-  }
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return undefined
-  const host = parsed.hostname.toLowerCase().replace(/\.+$/, '')
-  return host || undefined
-}
-
 /** pdf 的纸张：大小写不敏感，回规范写法 */
 function pdfPageSize(v: string | undefined): PdfPageSize | undefined {
   if (!v?.trim()) return undefined
@@ -320,6 +304,10 @@ export async function connectBrowserMcpServer(
   transport: Transport
 ): Promise<void> {
   const { backend, gates, hostNote } = opts
+  // 按站点问，得先知道 tab 此刻在哪个站点 —— 读不到就等于不设门，宁可建不出来
+  if (gates?.site && !backend.tabUrl) {
+    throw new Error('A browser site gate needs a backend that can report tab URLs (tabUrl).')
+  }
   const serverName = opts.serverName ?? BROWSER_MCP_SERVER_NAME
   const caps = backend.caps
   const tabQueue = opts.tabQueue ?? createBrowserTabQueue()
@@ -330,6 +318,11 @@ export async function connectBrowserMcpServer(
   const approvedLocal = new Set<string>()
   /** 这条会话里已经过了站点门的 host（只在宿主给了 site 门时记账） */
   const approvedSites = new Set<string>()
+  /**
+   * 正在过门的站点 → 那一次过门。并发的几个操作（模型一条消息里对同一站点的两个 tab 各发一个动作）
+   * 共用一张询问卡片，而不是各弹一张；允许了一起往下走，拒绝了一起失败。
+   */
+  const siteChecks = new Map<string, Promise<void>>()
 
   const server = new Server(
     { name: `shuvix-${serverName}`, version: '1.0.0' },
@@ -381,16 +374,39 @@ export async function connectBrowserMcpServer(
       return value
     }
     /**
+     * 一个站点过一次门：放行过的直接过，正在问的等那一次，否则跑 `gate`、放行后记下。
+     * 只有真的过了一道门才记 —— 没有门可过就不算放行（下一步在那个站点上操作时由 site 门来问）。
+     */
+    const approveSite = async (site: string, gate: () => Promise<void>): Promise<void> => {
+      if (approvedSites.has(site)) return
+      let check = siteChecks.get(site)
+      if (!check) {
+        const started = gate().then(() => {
+          approvedSites.add(site)
+        })
+        check = started
+        const settle = (): void => {
+          if (siteChecks.get(site) === started) siteChecks.delete(site)
+        }
+        started.then(settle, settle)
+        siteChecks.set(site, started)
+      }
+      await passed(check)
+    }
+    /**
      * 导航目标过门；本地文件放行后记下，之后在显示它的 tab 上操作不再重复问。按站点记账时
      * （宿主给了 site 门），已经放行过的站点不再过导航门，放行后的站点也记下。
      */
     const gateNavigation = async (url: string): Promise<void> => {
-      const site = gates?.site ? webSiteOf(url) : undefined
-      if (site && approvedSites.has(site)) return
-      if (gates?.navigate) await passed(gates.navigate(url, gateCtx(`Open ${url}`)))
+      const navigate = gates?.navigate
+      const site = gates?.site ? browserSiteOf(url) : undefined
+      if (site && navigate) {
+        await approveSite(site, () => navigate(url, gateCtx(`Open ${url}`)))
+        return
+      }
+      if (navigate) await passed(navigate(url, gateCtx(`Open ${url}`)))
       const local = localDocument(url)
       if (local) approvedLocal.add(local.key)
-      if (site) approvedSites.add(site)
     }
     /**
      * 在一个显示本地文件的 tab 上做任何事，都是在读那个文件 —— 页面自己跳过去的（点了 file://
@@ -411,10 +427,12 @@ export async function connectBrowserMcpServer(
         return
       }
       // 网页按站点过门（宿主给了 site 门才有）：页面自己跳去的新站点，也在下一步之前问
-      const site = gates?.site ? webSiteOf(current) : undefined
-      if (!current || !site || approvedSites.has(site)) return
-      await passed(gates!.site!(current, { ...gateCtx(`Use ${site} in tab ${tabId}`), tabId }))
-      approvedSites.add(site)
+      const siteGate = gates?.site
+      const site = siteGate ? browserSiteOf(current) : undefined
+      if (!current || !siteGate || !site) return
+      await approveSite(site, () =>
+        siteGate(current, { ...gateCtx(`Use ${site} in tab ${tabId}`), tabId })
+      )
     }
     const cdpGates: CdpGates = {
       navigate: gateNavigation,
@@ -621,6 +639,7 @@ export async function connectBrowserMcpServer(
     opsSinceSnapshot.clear()
     approvedLocal.clear()
     approvedSites.clear()
+    siteChecks.clear()
     opts.onClose?.()
   }
 

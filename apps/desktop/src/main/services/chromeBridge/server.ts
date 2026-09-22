@@ -15,6 +15,7 @@ import { createServer, type Server, type Socket } from 'net'
 import { chmodSync, existsSync, mkdirSync, unlinkSync } from 'fs'
 import { dirname } from 'path'
 import { timingSafeEqual } from 'crypto'
+import { StringDecoder } from 'string_decoder'
 import { v4 as uuid } from 'uuid'
 import {
   BRIDGE_ERROR_PROTOCOL_MISMATCH,
@@ -35,6 +36,9 @@ const log = createLogger('ChromeBridge')
 
 /** 浏览器操作的默认超时。CDP 命令偶尔很慢（大页面截图、awaitPromise 的 evaluate），宁宽勿紧 */
 const DEFAULT_REQUEST_TIMEOUT_MS = 60_000
+
+/** 连上来之后多久内得说出正确的 token —— 过时不候（本地组件连上就发，正常是毫秒级） */
+const AUTH_TIMEOUT_MS = 10_000
 
 /** 连接断开时，挂着的请求统一以这句失败 */
 export const CHROME_DISCONNECTED_ERROR = 'Chrome is no longer connected to ShuviX.'
@@ -80,16 +84,29 @@ export class BridgeConnection {
   private connectedAt = 0
   private seq = 0
   private rest = ''
+  /**
+   * 按字节流解码：一个多字节字符（中文、emoji）被拆在两次 `data` 之间时，前半截留在解码器里等
+   * 后半截。逐块 `toString('utf8')` 会把两半各自换成 U+FFFD，而 JSON 照样能解析 —— 内容被悄悄
+   * 改坏，谁也发现不了。
+   */
+  private readonly decoder = new StringDecoder('utf8')
   private readonly pending = new Map<string, PendingRequest>()
   private readonly assembler = new BridgeChunkAssembler()
+  private authTimer: ReturnType<typeof setTimeout> | null
 
   constructor(
     private readonly socket: Socket,
     private readonly owner: ChromeBridgeServer
   ) {
-    socket.on('data', (chunk: Buffer) => this.onData(chunk))
+    socket.on('data', (chunk: Buffer | string) => this.onData(chunk))
     socket.on('error', (err) => log.warn(`connection error: ${err.message}`))
     socket.on('close', () => this.onClosed())
+    this.authTimer = setTimeout(() => {
+      if (this.state !== 'authing') return
+      log.warn('dropped a connection that did not authenticate in time')
+      this.socket.destroy()
+    }, AUTH_TIMEOUT_MS)
+    this.authTimer.unref?.()
   }
 
   get ready(): boolean {
@@ -165,8 +182,9 @@ export class BridgeConnection {
 
   // ─── 收 ───────────────────────────────────────
 
-  private onData(chunk: Buffer): void {
-    this.rest += chunk.toString('utf8')
+  private onData(chunk: Buffer | string): void {
+    if (this.state === 'closed') return
+    this.rest += typeof chunk === 'string' ? chunk : this.decoder.write(chunk)
     const lines = this.rest.split('\n')
     this.rest = lines.pop() ?? ''
     for (const line of lines) {
@@ -175,11 +193,18 @@ export class BridgeConnection {
       try {
         parsed = JSON.parse(line)
       } catch {
+        if (this.state === 'authing') {
+          // 第一行就不是 JSON：不是本地组件，不陪它等
+          log.warn('rejected a connection whose first line is not JSON')
+          this.socket.destroy()
+          return
+        }
         log.warn('dropped a malformed line from the native host')
         continue
       }
       if (this.state === 'authing') {
         this.onAuth(parsed)
+        if (this.state === 'authing') return // 被拒：socket 已销毁，余下的行不再处理
         continue
       }
       if (isBridgeMessage(parsed)) this.onMessage(parsed)
@@ -193,6 +218,7 @@ export class BridgeConnection {
       this.socket.destroy()
       return
     }
+    this.clearAuthTimer()
     this.state = 'awaiting-hello'
     this.socket.write(JSON.stringify({ auth: 'ok' }) + '\n')
   }
@@ -200,6 +226,12 @@ export class BridgeConnection {
   private onMessage(message: BridgeMessage): void {
     switch (message.type) {
       case 'hello':
+        // 一条连接只握一次手：再来一个 hello（尤其换了 installId）会让登记表里留下一条
+        // 指向这条连接的旧记录
+        if (this.state !== 'awaiting-hello') {
+          log.warn('ignored a second hello on the same connection')
+          return
+        }
         this.onHello(message)
         return
       case 'chunk': {
@@ -263,7 +295,7 @@ export class BridgeConnection {
     this.send({ type: 'welcome', protocol: CHROME_BRIDGE_PROTOCOL, ok: true })
     log.info(`ready: ${hello.browser} (install ${hello.installId.slice(0, 8)})`)
     this.owner.adopt(this)
-    this.owner.handlers.onReady?.(this, this.hello)
+    this.owner.announceReady(this, this.hello)
   }
 
   private async onRequest(id: string, method: string, params: unknown): Promise<void> {
@@ -294,10 +326,16 @@ export class BridgeConnection {
     }
   }
 
+  private clearAuthTimer(): void {
+    if (this.authTimer) clearTimeout(this.authTimer)
+    this.authTimer = null
+  }
+
   private onClosed(): void {
     if (this.state === 'closed') return
     const wasReady = this.state === 'ready'
     this.state = 'closed'
+    this.clearAuthTimer()
     for (const [, entry] of this.pending) {
       clearTimeout(entry.timer)
       entry.reject(new Error(CHROME_DISCONNECTED_ERROR))
@@ -319,6 +357,9 @@ export class ChromeBridgeServer {
     (conn: BridgeConnection, name: string, params: unknown) => void
   >()
   private readonly internalCloseHandlers = new Set<(conn: BridgeConnection) => void>()
+  private readonly internalReadyHandlers = new Set<(conn: BridgeConnection) => void>()
+  /** 全部活着的连接（含还没鉴权 / 还没握手的）—— stop 时一并关掉 */
+  private readonly connections = new Set<BridgeConnection>()
   /** 握手过（ready / mismatch）的连接，按 installId */
   private readonly byInstall = new Map<string, BridgeConnection>()
   private readonly changeListeners = new Set<() => void>()
@@ -338,7 +379,9 @@ export class ChromeBridgeServer {
         }
       }
     }
-    const server = createServer((socket) => new BridgeConnection(socket, this))
+    const server = createServer((socket) => {
+      this.connections.add(new BridgeConnection(socket, this))
+    })
     await new Promise<void>((resolve, reject) => {
       server.once('error', reject)
       server.listen(opts.socketPath, () => {
@@ -359,7 +402,8 @@ export class ChromeBridgeServer {
   }
 
   stop(): void {
-    for (const conn of this.byInstall.values()) conn.close()
+    for (const conn of [...this.connections]) conn.close()
+    this.connections.clear()
     this.byInstall.clear()
     if (this.server) {
       try {
@@ -394,6 +438,12 @@ export class ChromeBridgeServer {
   onConnectionClosed(fn: (conn: BridgeConnection) => void): () => void {
     this.internalCloseHandlers.add(fn)
     return () => this.internalCloseHandlers.delete(fn)
+  }
+
+  /** 本模块内的消费者订阅握手就绪（先于上层的 onReady） */
+  onConnectionReady(fn: (conn: BridgeConnection) => void): () => void {
+    this.internalReadyHandlers.add(fn)
+    return () => this.internalReadyHandlers.delete(fn)
   }
 
   /** 已就绪的连接（按 installId）；没连着 / 协议不符回 undefined */
@@ -446,8 +496,21 @@ export class ChromeBridgeServer {
     this.notifyChange()
   }
 
+  /** @internal 握手就绪：模块内的消费者先知道（CDP 记账要在任何请求之前归零），再是上层 */
+  announceReady(conn: BridgeConnection, hello: BridgeHello): void {
+    for (const fn of this.internalReadyHandlers) {
+      try {
+        fn(conn)
+      } catch (err) {
+        log.warn(`ready handler failed: ${(err as Error).message}`)
+      }
+    }
+    this.handlers.onReady?.(conn, hello)
+  }
+
   /** @internal 连接断开 */
   release(conn: BridgeConnection, wasReady: boolean): void {
+    this.connections.delete(conn)
     const installId = conn.info?.installId
     if (installId && this.byInstall.get(installId) === conn) this.byInstall.delete(installId)
     for (const fn of this.internalCloseHandlers) {

@@ -18,6 +18,7 @@
  */
 import { connect, type Socket } from 'net'
 import type { Readable, Writable } from 'stream'
+import { StringDecoder } from 'string_decoder'
 import {
   BRIDGE_ERROR_DESKTOP_OFFLINE,
   CHROME_NATIVE_MESSAGE_MAX_BYTES,
@@ -52,12 +53,16 @@ export class NativeMessageReader {
   }
 }
 
-/** 按行切 socket 上的文本流 */
+/**
+ * 按行切 socket 上的文本流。按字节流解码：多字节字符被拆在两次 `data` 之间时，前半截留在解码器里
+ * 等后半截 —— 逐块 `toString('utf8')` 会把两半各换成 U+FFFD，而 JSON 照样能解析，内容被悄悄改坏。
+ */
 class LineReader {
   private rest = ''
+  private readonly decoder = new StringDecoder('utf8')
 
   push(chunk: Buffer): string[] {
-    this.rest += chunk.toString('utf8')
+    this.rest += this.decoder.write(chunk)
     const lines = this.rest.split('\n')
     this.rest = lines.pop() ?? ''
     return lines.filter((l) => l.length > 0)

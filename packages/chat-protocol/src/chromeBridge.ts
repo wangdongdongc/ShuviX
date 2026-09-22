@@ -268,6 +268,69 @@ export const CHROME_PANEL_CHANNEL_PATHS = [
 
 export type ChromePanelChannelPath = (typeof CHROME_PANEL_CHANNEL_PATHS)[number]
 
+// ─────────────────────────── 随消息带上的标签页 ───────────────────────────
+
+/**
+ * 侧边栏输入卡片顶上那排标签页芯片：选中的标签页作为行内 token 带在消息里，
+ * `{type: 'tab', id: 'chrome-tab:<tabId>', payload: chromeTabPayload(tab)}`。
+ *
+ * 桌面从 token 里认出用户选了哪些标签页（`chromeTabIdsOf`），把它们此刻所在的站点记为这条会话
+ * 已同意的站点 —— 靠的是 token 的结构，不是去正文里找 `[Chrome tab …]` 字样：那一行里有页面
+ * 自己定的标题，谁都能写出一行像模像样的来。
+ */
+export const CHROME_TAB_TOKEN_TYPE = 'tab'
+const CHROME_TAB_TOKEN_ID_PREFIX = 'chrome-tab:'
+
+export function chromeTabTokenId(tabId: number): string {
+  return `${CHROME_TAB_TOKEN_ID_PREFIX}${tabId}`
+}
+
+/** 一条消息的行内 token 里带着的标签页 id（按出现顺序、去重）；不是标签页 token 的跳过 */
+export function chromeTabIdsOf(
+  tokens: Record<string, { type?: unknown; id?: unknown } | null | undefined> | null | undefined
+): number[] {
+  const out: number[] = []
+  if (!tokens || typeof tokens !== 'object') return out
+  for (const token of Object.values(tokens)) {
+    if (!token || token.type !== CHROME_TAB_TOKEN_TYPE || typeof token.id !== 'string') continue
+    if (!token.id.startsWith(CHROME_TAB_TOKEN_ID_PREFIX)) continue
+    const rest = token.id.slice(CHROME_TAB_TOKEN_ID_PREFIX.length)
+    if (!/^[0-9]+$/.test(rest)) continue
+    const tabId = Number(rest)
+    if (Number.isSafeInteger(tabId) && !out.includes(tabId)) out.push(tabId)
+  }
+  return out
+}
+
+/** 标题 / 地址在那一行里的长度上限（字符） */
+const TAB_TITLE_MAX = 120
+const TAB_URL_MAX = 500
+
+/** 控制字符与行 / 段分隔符（C0、DEL、C1、U+2028、U+2029）—— 它们能让一行断成两行 */
+function isLineBreaking(code: number): boolean {
+  return code < 0x20 || (code >= 0x7f && code <= 0x9f) || code === 0x2028 || code === 0x2029
+}
+
+/** 压成一行（控制字符、换行一律换成空格）并截断 —— 按码点截，不劈开 emoji */
+function oneLine(text: string, max: number): string {
+  let flat = ''
+  for (const ch of text) flat += isLineBreaking(ch.codePointAt(0) ?? 0) ? ' ' : ch
+  const chars = Array.from(flat.replace(/\s+/g, ' ').trim())
+  return chars.length > max ? `${chars.slice(0, max - 1).join('')}…` : chars.join('')
+}
+
+/**
+ * 模型看到的那一行：`[Chrome tab 5: "Inbox" — https://mail.example/]`。
+ *
+ * 标题是页面自己定的，而这一行落在**用户的**消息里 —— 所以压成一行、截断、加引号（JSON 转义），
+ * 让它只能读成一个标题，而不是用户接着说的话。
+ */
+export function chromeTabPayload(tab: { id: number; title: string; url: string }): string {
+  const title = oneLine(tab.title ?? '', TAB_TITLE_MAX)
+  const url = oneLine(tab.url ?? '', TAB_URL_MAX)
+  return `[Chrome tab ${tab.id}: ${title ? JSON.stringify(title) : '(untitled)'} — ${url || '(no address)'}]`
+}
+
 /** 侧边栏外观（主题 / 字号 / 专注模式 / 语言）—— 取自桌面设置，侧边栏跟着桌面走 */
 export interface ChromePanelAppearance {
   theme: 'dark' | 'light' | 'system'

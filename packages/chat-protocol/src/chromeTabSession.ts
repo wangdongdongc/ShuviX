@@ -35,7 +35,8 @@ export function chromeTabOf(settings?: ChromeTabSessionShape | null): ChromeTabB
   const { installId, runId, tabId } = raw as Record<string, unknown>
   if (typeof installId !== 'string' || !installId) return undefined
   if (typeof runId !== 'string' || !runId) return undefined
-  if (typeof tabId !== 'number' || !Number.isInteger(tabId)) return undefined
+  // Chrome 的 tabs.TAB_ID_NONE 是 -1（不是标签页的上下文，如 devtools 窗口）—— 负数都不是标签页
+  if (typeof tabId !== 'number' || !Number.isInteger(tabId) || tabId < 0) return undefined
   return { installId, runId, tabId }
 }
 

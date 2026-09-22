@@ -1,6 +1,6 @@
 import type { ChatEvent } from '@shuvix/chat-protocol/events'
 import type { ChatFrontend, ChatFrontendCapabilities } from '../core'
-import { chromeBrowserState, type BridgeConnection } from '../../services/chromeBridge'
+import type { BridgeConnection } from '../../services/chromeBridge'
 
 /**
  * Chrome 侧边栏前端 —— 一条标签页会话在一条桥连接上的推送口。
@@ -9,7 +9,8 @@ import { chromeBrowserState, type BridgeConnection } from '../../services/chrome
  * 扩展，扩展按会话 id 转到对应标签页的侧边栏。询问卡片（input_request）也走这里，所以要声明
  * `userInput`：侧边栏里弹、侧边栏里答。连接断了 isAlive 即假，注册表随之剪掉它。
  *
- * 顺带看一眼这条会话的轮次起止，给浏览器的「一轮跑完就释放调试」租约计数（见 browserState）。
+ * 它只管推送。「这一轮跑完就释放调试」的租约不在这里记 —— 侧边栏关着、连接断过，一轮照样有始有终
+ * （见 chromeBridge 的 observeChromeTabRun）。
  */
 export class ChromeFrontend implements ChatFrontend {
   readonly id: string
@@ -23,18 +24,10 @@ export class ChromeFrontend implements ChatFrontend {
   }
 
   sendEvent(event: ChatEvent): void {
-    if (event.sessionId === this.sessionId) this.trackRun(event)
     this.conn.emit('chat.event', { sessionId: this.sessionId, event })
   }
 
   isAlive(): boolean {
     return this.conn.ready
-  }
-
-  private trackRun(event: ChatEvent): void {
-    const installId = this.conn.info?.installId
-    if (!installId) return
-    if (event.type === 'agent_start') chromeBrowserState(installId).beginRun(this.sessionId)
-    else if (event.type === 'agent_end') chromeBrowserState(installId).endRun(this.sessionId)
   }
 }

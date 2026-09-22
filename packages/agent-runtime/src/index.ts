@@ -112,6 +112,7 @@ export {
   type BrowserSiteGateContext,
   type BrowserMcpServerOptions
 } from './browser/mcpServer'
+export { browserSiteOf } from './browser/site'
 export {
   browserToolsForCaps,
   type BrowserMcpTool,

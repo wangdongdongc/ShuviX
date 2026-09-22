@@ -69,7 +69,9 @@ export interface BrowserBackend {
   /**
    * 这个 tab 此刻显示的地址（没有这个 tab → undefined）。**无副作用**：不激活、不 attach。
    * server 用它把「在一个显示本地文件的 tab 上做任何事」都当成读那个文件 —— 页面自己导航过去的
-   * （点了链接、被 evaluate 改了 location）也逃不过路径门。宿主不实现 = 不做这层检查。
+   * （点了链接、被 evaluate 改了 location）也逃不过路径门。宿主不实现 = 不做这层检查（给了 site
+   * 门的宿主必须实现）。**问不到就抛**，别回 undefined：undefined 的意思是「没有这个 tab」，门据此
+   * 放行、让操作自己失败；问不到时放行就是不设门。
    */
   tabUrl?(p: { tabId: string }): Promise<string | undefined>
   /** 新标签页打开 URL，回显新 tabId */
