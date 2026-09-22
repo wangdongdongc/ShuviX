@@ -1,11 +1,16 @@
 /**
  * SecurityContext —— PEP 门面。各工具调用点唯一入口：
- * 内部固定「装配 → 评估 →（enforce 时）执行 + 决策日志」的流水。
+ * 内部固定「（路径客体）解析真实去处 → 装配 → 评估 →（enforce 时）执行 + 决策日志」的流水。
  * 客体属性文档在此构造（PEP 约定：该 type 的已知属性全部给值 —— strict 语义
  * 只用于跨 type 的误引用，见 celMatch.ts）。
  *
+ * **真实路径只在这里解析**（provider.realPath）：PEP 交来的是写法，策略要判的是位置。
+ * 路径客体的 path 换成解析结果、requestedPath 留原样；同一个解析（带本次记忆）再递给
+ * 评估，让 inDir 把它比较的目录也按位置比（见 types.ts SecurityHostProvider.realPath）。
+ *
  * 实例可整会话复用：内部全是 getter（provider 的 grants/vars/用户策略每次现取），
  * 无任何快照 —— 会话中途开「免询问」或「允许并记住」落库后立即可见（禁缓存红线）。
+ * 真实路径同理，每次评估现解析 —— 链接随时可能被改指向。
  */
 import { assembleRules } from './assemble'
 import { projectCommandFacts, type CommandFactAttrs } from './commandFacts'
@@ -68,16 +73,62 @@ function buildCommandObject(
   return object
 }
 
+/**
+ * 路径客体换成它真正通向的地方：path = 解析结果（策略按它判、卡片按它问、授权按它记），
+ * requestedPath = 调用方交来的原样（已带着的就保留 —— 重复解析幂等，不能把原样冲掉）。
+ * 非路径客体原样返回：命令客体挂着惰性 getter，复制会把它们读出来。
+ */
+function atRealPath(
+  object: SecurityObject,
+  realPath: ((path: string) => string) | undefined
+): SecurityObject {
+  if (object.type !== 'path' || typeof object.path !== 'string') return object
+  return {
+    ...object,
+    path: realPath ? realPath(object.path) : object.path,
+    requestedPath: typeof object.requestedPath === 'string' ? object.requestedPath : object.path
+  }
+}
+
 export function createSecurityContext(
   subject: SecuritySubject,
   environment: SecurityEnvironment,
   provider: SecurityHostProvider
 ): SecurityContext {
+  /**
+   * 一次评估用的真实路径解析：宿主 realPath 加本次的记忆表 —— 同一个目录被几条规则、几份
+   * lets 引用只解析一次；解析结果也记成它自己（解析是幂等的），于是 inDir 拿客体已解析的
+   * path 再来问时直接命中。**每次评估现建**，不跨评估缓存：链接随时可能被改指向。
+   * 宿主没给解析器 → undefined（按写法比较）；解析抛错 → 该路径按原样比较并告警；
+   * 给出空串或非字符串 → 按原样比较。
+   */
+  const realPathsForOneEvaluation = (): ((path: string) => string) | undefined => {
+    if (!provider.realPath) return undefined
+    const memo = new Map<string, string>()
+    return (path) => {
+      const known = memo.get(path)
+      if (known !== undefined) return known
+      let real = path
+      try {
+        const resolved = provider.realPath?.(path)
+        if (typeof resolved === 'string' && resolved !== '') real = resolved
+      } catch (err) {
+        provider.logger?.warn(
+          `realPath 解析抛错，该路径按原样比较：${path}（${err instanceof Error ? err.message : String(err)}）`
+        )
+      }
+      memo.set(path, real)
+      memo.set(real, real)
+      return real
+    }
+  }
+
   const evaluateInternal = (
     action: string,
     object: SecurityObject,
     includeForceAllow: boolean,
-    tool?: { name: string; operation?: string }
+    tool: { name: string; operation?: string } | undefined,
+    realPath: ((path: string) => string) | undefined
   ): SecurityDecision => {
     // 一次现取，装配（lets）与求值（match）共用同一份 —— 两处各取一次会给出
     // 不一致的授权视图，且 vars.granted* 缺席时授权会静默失效（见 policyVars.ts）
@@ -90,9 +141,26 @@ export function createSecurityContext(
         includeForceAllow,
         // match 上下文的 vars 与 fail-safe 告警出口
         vars,
-        warn: (msg) => provider.logger?.warn(msg)
+        warn: (msg) => provider.logger?.warn(msg),
+        // 与客体用的是同一个解析（同一张记忆表）：inDir 对客体已解析 path 的再解析直接命中
+        realPath
       }
     )
+  }
+
+  /** 评估入口的公共前半段：路径客体解析真实去处，再评估（被动 UI 与 enforce 同一条路） */
+  const judge = (
+    action: string,
+    object: SecurityObject,
+    includeForceAllow: boolean,
+    tool?: { name: string; operation?: string }
+  ): { object: SecurityObject; decision: SecurityDecision } => {
+    const realPath = realPathsForOneEvaluation()
+    const resolved = atRealPath(object, realPath)
+    return {
+      object: resolved,
+      decision: evaluateInternal(action, resolved, includeForceAllow, tool, realPath)
+    }
   }
 
   const enforce = async (
@@ -103,11 +171,12 @@ export function createSecurityContext(
     const t0 = Date.now()
     // 工具维度自动填充：每个 PEP 都带 opts.toolName（match 里的 tool.name 因此对全客体可用）
     const tool = { name: opts.toolName, operation: opts.operation }
-    const decision = evaluateInternal(action, object, true, tool)
+    // 询问卡片、「允许并记住」与决策日志都拿解析后的客体 —— 与策略判的是同一个位置
+    const judged = judge(action, object, true, tool)
     return executeDecision({
       provider,
-      request: { subject, action, tool, object, environment },
-      decision,
+      request: { subject, action, tool, object: judged.object, environment },
+      decision: judged.decision,
       opts,
       evaluateMs: Date.now() - t0
     })
@@ -115,11 +184,11 @@ export function createSecurityContext(
 
   return {
     evaluate: (action, object, opts) =>
-      evaluateInternal(action, object, opts?.includeForceAllow !== false),
+      judge(action, object, opts?.includeForceAllow !== false).decision,
 
     // 被动 UI 判定：includeForceAllow 缺省 false（per-path 授权不放宽 UI 范围），不记日志
     evaluateReadOnly: (action, object, opts) =>
-      evaluateInternal(action, object, opts?.includeForceAllow === true).effect === 'allow',
+      judge(action, object, opts?.includeForceAllow === true).decision.effect === 'allow',
 
     // enforcePath / enforceGitOp / enforceUrl 什么都不返回 —— 用户的「其它」反馈没有地方带回去，
     // 只能抛出。强制 onOther:'throw'：调用方误传 'return' 时，反馈不能被当成放行
@@ -165,10 +234,10 @@ export function createSecurityContext(
             openWorld: opts.mcp.openWorld
           }
         : { type: 'invocation' }
-      const probe = evaluateInternal('execute', object, true, {
+      const probe = judge('execute', object, true, {
         name: opts.toolName,
         operation: opts.operation
-      })
+      }).decision
       if (probe.effect === 'allow') return { status: 'allowed' }
       return enforce('execute', object, opts)
     },

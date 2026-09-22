@@ -24,6 +24,11 @@ it again. Granting a directory covers everything under it. A write grant covers
 reading too — if you trusted the agent to write there, reading is not a further
 concession.
 
+Paths are compared by where they really lead. The ask names the real location
+(a link or `..` in the requested path is resolved first), that is what gets
+recorded, and the grant then covers that location under any name. An entry
+that itself goes through a link covers whatever the link points to now.
+
 **What it does not do**:
 
 - It cannot beat a deny. protect-credentials and protect-system still apply to

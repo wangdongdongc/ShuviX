@@ -3,7 +3,7 @@
  * 所有工具通过 ToolContext + resolveProjectConfig 获取运行时项目配置
  */
 
-import { resolve, sep } from 'path'
+import { isAbsolute, resolve, sep } from 'path'
 import { existsSync, statSync } from 'fs'
 import { homedir } from 'os'
 import { projectDao } from '../dao/projectDao'
@@ -18,6 +18,7 @@ import {
   getBuiltinSkillsDir,
   getBuiltinKnowledgeDir
 } from '../utils/paths'
+import { resolveRealPath } from '../utils/toolUtils/realPath'
 import { skillService } from './skillService'
 import { shellParser } from './shellParserService'
 import { policyService } from './policyService'
@@ -109,10 +110,16 @@ export function agentActorOf(ctx: Pick<ToolContext, 'agent'>): string {
   return `shuvix-${profile}/${actorToken(model, 'unknown')}`
 }
 
-/** 检查路径是否在工作目录内（路径越界检查） */
+/**
+ * 检查路径是否在工作目录内（路径越界检查）—— 按**位置**比：两边都先解析成真正通向的地方
+ * （与安全模块的路径策略同一个解析，见 makeDesktopSecurityProvider 的 realPath）。
+ * 按写法比的话，工作区里一条指向别处的链接会被当成「区内」，git 就绕过路径门去读写那个位置。
+ * 绝对路径原样交给解析（不先 resolve）：`..` 要跟着链接走物理父目录，字面折叠会把它折回区内。
+ */
 export function isPathWithinWorkspace(absolutePath: string, workingDirectory: string): boolean {
-  const resolved = resolve(absolutePath)
-  const base = resolve(workingDirectory)
+  const real = (p: string): string => resolveRealPath(isAbsolute(p) ? p : resolve(p))
+  const resolved = real(absolutePath)
+  const base = real(workingDirectory)
   return resolved === base || resolved.startsWith(base + sep)
 }
 
@@ -211,6 +218,9 @@ function windowsSystemDirs(): string[] {
 /**
  * 桌面 SecurityHostProvider —— 把平台细节注入共享安全模块：
  *   - 变量表：workspace / tool_results / skills 目录 / home（策略 match/lets 里的 vars.*）
+ *   - 真实路径：realPath（符号链接 / `..` / 盘上大小写）—— 安全模块拿它解析路径客体与 inDir 比较的
+ *     每个目录，两边都按位置比。变量表因此照写法给即可：工作区、临时工作区（macOS 的
+ *     /var → /private/var 这类系统级链接）由 inDir 现解析，不在这里预先 realpath
  *   - 会话授权：SQLite autoAllow + allowList
  *   - 内置策略：随包发布的 `builtin-policies/` 目录现读（policyService.readBuiltinPolicyMd）
  *   - 用户策略：~/.shuvix/policies 现扫（policyService）
@@ -227,6 +237,7 @@ export function makeDesktopSecurityProvider(
   return {
     host: 'desktop',
     pathSep: sep,
+    realPath: resolveRealPath,
     getVars: () => ({
       workspace: getConfig().workingDirectory,
       toolResultsBase: getToolResultsBase(),

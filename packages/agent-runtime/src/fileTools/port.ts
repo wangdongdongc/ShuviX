@@ -34,6 +34,13 @@ export interface FileSystemPort {
   writeFile(path: string, content: string): Promise<void>
   /** 列目录条目 */
   readdir(path: string): Promise<DirEntry[]>
+  /**
+   * 路径**本身**是符号链接时，说出它指向哪里（不跟过去）；不是链接、不存在 → null。
+   * 中间段照常跟（lstat 语义）。`target` 是链接里存的原文；`resolved` 是它最终通向的绝对路径
+   * （整条链跟到底，终点可以还不存在）—— agent 真要读写那头，用的就是这一条。
+   * 文件工具据此不跟链接（见 fileToolSuite）；没有符号链接可言的宿主（扩展：OPFS / FSA）省略。
+   */
+  readLink?(path: string): Promise<{ target: string; resolved: string } | null>
 }
 
 /**

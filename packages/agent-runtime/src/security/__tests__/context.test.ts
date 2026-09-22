@@ -1,12 +1,16 @@
 /**
  * createSecurityContext（PEP 门面）全链 —— evaluateReadOnly 的 force-allow 缺省、
  * enforce 的 action/displayPath 转发、禁缓存红线（grants 变化即生效）、
- * L1 全工具门的 allow 即非事件。
+ * L1 全工具门的 allow 即非事件、路径客体经 provider.realPath 换成真实去处（CT-R 系列）。
  */
 import { describe, it, expect, afterEach, vi, type Mock } from 'vitest'
 import { createSecurityContext } from '../context'
 import { clearSessionDecisions, getSessionDecisions } from '../decisionLog'
-import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
+import type {
+  AskInputRequest,
+  InputRequest,
+  InputResponse
+} from '@shuvix/chat-protocol/types/inputRequest'
 import type {
   MatchContext,
   ParsedPolicyFile,
@@ -2147,5 +2151,411 @@ describe('createSecurityContext — 无返回值的门强制 onOther:throw', () 
         onOther: 'return'
       })
     ).resolves.toEqual({ status: 'feedback', text: 'try the docs first' })
+  })
+})
+
+// ─── 真实路径（provider.realPath）────────────────────────────────────────
+//
+// 门面在评估之前把路径客体换成它真正通向的地方（path = 解析结果，requestedPath = 交来的写法），
+// 并把同一个带本次记忆表的解析递给 inDir，让它比较的目录也按位置比。解析器在这里一律是一张表的
+// 假件 —— 问的是接线；真文件系统上的那一半在桌面的 realPath.test / realPathPolicy.test。
+
+/** 一张表的假解析器：写法 → 真实去处，表外原样；vi.fn 记下被问过的每个参数 */
+const tableResolver = (table: Record<string, string>): Mock<(p: string) => string> =>
+  vi.fn((p: string): string => table[p] ?? p)
+
+/** 解析器就绪但什么都没抽到的解析事实（与「宿主没注入解析器」同形态） */
+const UNPARSED_FACTS = (source: string): ShellFacts => ({
+  source,
+  parsed: false,
+  reason: 'not-initialized',
+  errorSpans: [],
+  wordOnly: false,
+  wordOnlyCommands: [],
+  literalCommands: [],
+  dynamics: [],
+  redirects: [],
+  depthExceeded: false
+})
+
+describe('createSecurityContext — 真实路径（provider.realPath）', () => {
+  /** 工作区里的一条链接 → 私钥（这组用例的旗舰形态） */
+  const KEY_LINK = '/ws/key'
+  const KEY_REAL = '/home/u/.ssh/id_rsa'
+  const NO_GRANTS = (): { autoAllow: boolean; allowList: string[] } => ({
+    autoAllow: false,
+    allowList: []
+  })
+
+  /** 记下每次评估里策略看到的路径客体（derived 规则恒不命中，只当探针） */
+  function captureProbe(): {
+    derivedRules: SecurityHostProvider['derivedRules']
+    seen: () => MatchContext['object'] | undefined
+  } {
+    let captured: MatchContext['object'] | undefined
+    return {
+      derivedRules: () => [
+        {
+          id: 'derived:capture',
+          effect: 'allow' as const,
+          tier: 'static-allow' as const,
+          source: { kind: 'derived' as const },
+          matches: (matchCtx) => {
+            captured = matchCtx.object
+            return false
+          }
+        }
+      ],
+      seen: () => captured
+    }
+  }
+
+  it('CT-R1 路径客体换成真实去处：策略、ask 的 command / rememberEntry、卡片、目录探测、「允许并记住」、日志都按它；requestedPath 是交来的写法', async () => {
+    const probe = captureProbe()
+    const requestUserInput = vi.fn(
+      async (_req: InputRequest): Promise<InputResponse> => ({
+        kind: 'ask',
+        allowed: true,
+        extra: { rememberPath: true }
+      })
+    )
+    const persistGrant = vi.fn()
+    const isDirectory = vi.fn(() => false)
+    const ctx = createSecurityContext(
+      SUBJECT,
+      ENVIRONMENT,
+      makeProvider(NO_GRANTS(), {
+        realPath: tableResolver({ [KEY_LINK]: KEY_REAL }),
+        requestUserInput,
+        persistGrant,
+        isDirectory,
+        derivedRules: probe.derivedRules
+      })
+    )
+
+    // 按写法这是工作区里的一次普通读；按位置是私钥 —— 凭据门接手
+    const decision = ctx.evaluate('read', { type: 'path', path: KEY_LINK })
+    expect(decision).toMatchObject({ effect: 'ask', winning: 'protect-credentials#1' })
+    expect(decision.ask).toEqual({
+      command: `Read(${KEY_REAL})`,
+      rememberEntry: `Read(${KEY_REAL})`,
+      requestedPath: KEY_LINK
+    })
+    expect(probe.seen()).toMatchObject({ type: 'path', path: KEY_REAL, requestedPath: KEY_LINK })
+
+    await ctx.enforcePath('read', KEY_LINK, {
+      toolCallId: 'r1',
+      toolName: 'read',
+      displayPath: 'key'
+    })
+    expect(requestUserInput).toHaveBeenCalledTimes(1)
+    expect(requestUserInput.mock.calls[0][0]).toMatchObject({
+      kind: 'ask',
+      id: 'r1',
+      command: `Read(${KEY_REAL})`,
+      requestedPath: KEY_LINK
+    })
+    // displayPath 是报错用的写法，门面不动它
+    expect(probe.seen()).toMatchObject({
+      path: KEY_REAL,
+      requestedPath: KEY_LINK,
+      displayPath: 'key'
+    })
+    expect(isDirectory).toHaveBeenCalledWith(KEY_REAL)
+    // 记下的是用户在卡片上批准的那个位置，而不是链接名
+    expect(persistGrant).toHaveBeenCalledWith('read', KEY_REAL)
+    expect(getSessionDecisions(SID)[0]).toMatchObject({
+      objectKind: 'path',
+      objectSummary: KEY_REAL,
+      requestedPath: KEY_LINK,
+      userResponse: 'allowed_remember'
+    })
+  })
+
+  it('CT-R2 解析器给回原样（中间没有链接）：ask 材料、卡片、日志都没有 requestedPath；客体上 requestedPath 与 path 相同', async () => {
+    const probe = captureProbe()
+    const requestUserInput = vi.fn(
+      async (_req: InputRequest): Promise<InputResponse> => ({ kind: 'ask', allowed: true })
+    )
+    const ctx = createSecurityContext(
+      SUBJECT,
+      ENVIRONMENT,
+      makeProvider(NO_GRANTS(), {
+        realPath: vi.fn((p: string) => p),
+        requestUserInput,
+        derivedRules: probe.derivedRules
+      })
+    )
+
+    const decision = ctx.evaluate('read', { type: 'path', path: '/outside/f.txt' })
+    expect(decision).toMatchObject({ effect: 'ask', winning: 'ask-on-read#0' })
+    expect(decision.ask).toEqual({
+      command: 'Read(/outside/f.txt)',
+      rememberEntry: 'Read(/outside/f.txt)'
+    })
+    expect(decision.ask).not.toHaveProperty('requestedPath')
+    expect(probe.seen()).toMatchObject({ path: '/outside/f.txt', requestedPath: '/outside/f.txt' })
+
+    await ctx.enforcePath('read', '/outside/f.txt', { toolCallId: 'r2', toolName: 'read' })
+    const request = requestUserInput.mock.calls[0][0] as AskInputRequest
+    expect(request.command).toBe('Read(/outside/f.txt)')
+    expect(request.requestedPath).toBeUndefined()
+    expect(getSessionDecisions(SID)[0].requestedPath).toBeUndefined()
+  })
+
+  it('CT-R3 非路径客体原样过门：命令客体的惰性 getter 没被复制读出、解析器一次都没被问；git / 数据库 / url / L1 同样', async () => {
+    const probe = captureProbe()
+    const realPath = vi.fn((p: string) => p)
+    const analyze = vi.fn(() => UNPARSED_FACTS('ls -la'))
+    const ctx = createSecurityContext(
+      SUBJECT,
+      ENVIRONMENT,
+      makeProvider(NO_GRANTS(), {
+        realPath,
+        shellParser: { ensureReady: async () => {}, analyze },
+        requestUserInput: vi.fn(
+          async (_req: InputRequest): Promise<InputResponse> => ({ kind: 'ask', allowed: true })
+        ),
+        derivedRules: probe.derivedRules
+      })
+    )
+
+    await ctx.enforceCommand(COMMAND_INPUT, { toolCallId: 'c1', toolName: 'bash' })
+    // 客体还是门面造出来的那一个：枚举面只有三个标量，结构属性仍是非枚举的惰性 getter
+    const commandObject = probe.seen()!
+    expect(Object.keys(commandObject)).toEqual(['type', 'command', 'channel'])
+    expect('requestedPath' in commandObject).toBe(false)
+    // 惰性仍在：只有 block-catastrophic-commands 读了它，且记忆化到一次
+    expect(analyze).toHaveBeenCalledTimes(1)
+
+    await ctx.enforceGitOp(GIT_INPUT, { toolCallId: 'g1', toolName: 'git' })
+    await ctx.enforceDatabase(DATABASE_INPUT, { toolCallId: 'd1', toolName: 'database' })
+    await ctx.enforceUrl(
+      {
+        url: 'https://a.example/',
+        scheme: 'https',
+        host: 'a.example',
+        origin: 'https://a.example'
+      },
+      { toolCallId: 'u1', toolName: 'mcp__browser__open_tab' }
+    )
+    await ctx.enforceInvocation({ toolCallId: 'i1', toolName: 'ssh' })
+
+    expect(realPath).not.toHaveBeenCalled()
+    for (const record of getSessionDecisions(SID)) {
+      expect(record.requestedPath, record.objectKind).toBeUndefined()
+    }
+  })
+
+  it('CT-R4 evaluateReadOnly（被动 UI）同样按真实去处判：区内的链接指向凭据 → 不放行；区外的写法实际落在区内 → 放行', () => {
+    const table = { [KEY_LINK]: KEY_REAL, '/elsewhere/alias': '/ws/f.txt' }
+    const located = createSecurityContext(
+      SUBJECT,
+      ENVIRONMENT,
+      makeProvider(NO_GRANTS(), { realPath: tableResolver(table) })
+    )
+    expect(located.evaluateReadOnly('read', { type: 'path', path: KEY_LINK })).toBe(false)
+    expect(located.evaluateReadOnly('read', { type: 'path', path: '/elsewhere/alias' })).toBe(true)
+
+    // 同两条在不给解析器的宿主上按写法：结论正相反
+    const written = createSecurityContext(SUBJECT, ENVIRONMENT, makeProvider(NO_GRANTS()))
+    expect(written.evaluateReadOnly('read', { type: 'path', path: KEY_LINK })).toBe(true)
+    expect(written.evaluateReadOnly('read', { type: 'path', path: '/elsewhere/alias' })).toBe(false)
+  })
+
+  it('CT-R5 一次评估里每个参数至多解析一次：客体路径被一串内置规则引用、同一个目录被两条规则引用，都只问一次', () => {
+    const realPath = vi.fn((p: string) => p)
+    const ctx = createSecurityContext(
+      SUBJECT,
+      ENVIRONMENT,
+      makeProvider(NO_GRANTS(), {
+        realPath,
+        getUserPolicies: () => [
+          userPolicy('twice', [
+            { effect: 'ask', match: "object.type == 'path' && inDir(object.path, vars.workspace)" },
+            {
+              effect: 'ask',
+              match: "object.type == 'path' && inDir(object.path, [vars.workspace])"
+            }
+          ])
+        ]
+      })
+    )
+
+    // 一次写评估里客体路径被 protect-credentials / protect-system（两次）/ protect-bot-files /
+    // protect-builtin-knowledge / review-memory-writes / session-path-grants / 上面两条引用
+    expect(ctx.evaluate('write', { type: 'path', path: '/ws/f.txt' })).toMatchObject({
+      effect: 'ask',
+      winning: 'ask-on-write#0'
+    })
+    const asked = realPath.mock.calls.map(([p]) => p)
+    expect(asked).toHaveLength(new Set(asked).size)
+    expect(asked.filter((p) => p === '/ws/f.txt')).toHaveLength(1)
+    expect(asked.filter((p) => p === '/ws')).toHaveLength(1)
+
+    // 经链接的一次评估：参数照样各问一次（记忆表按参数记）
+    const redirected = tableResolver({ [KEY_LINK]: KEY_REAL })
+    const viaLink = createSecurityContext(
+      SUBJECT,
+      ENVIRONMENT,
+      makeProvider(NO_GRANTS(), { realPath: redirected })
+    )
+    viaLink.evaluate('write', { type: 'path', path: KEY_LINK })
+    const askedViaLink = redirected.mock.calls.map(([p]) => p)
+    expect(askedViaLink).toHaveLength(new Set(askedViaLink).size)
+    expect(askedViaLink.filter((p) => p === KEY_LINK)).toHaveLength(1)
+  })
+
+  it('CT-R6 不跨评估缓存：链接在两次评估之间被改指向，第二次就按新目标判（每次评估都重新问）', () => {
+    const table: Record<string, string> = { [KEY_LINK]: '/ws/notes.txt' }
+    const realPath = vi.fn((p: string): string => table[p] ?? p)
+    const ctx = createSecurityContext(SUBJECT, ENVIRONMENT, makeProvider(NO_GRANTS(), { realPath }))
+
+    expect(ctx.evaluate('read', { type: 'path', path: KEY_LINK })).toMatchObject({
+      effect: 'allow',
+      winning: 'default:path'
+    })
+    // 有人把 key 改指向了私钥
+    table[KEY_LINK] = KEY_REAL
+    expect(ctx.evaluate('read', { type: 'path', path: KEY_LINK })).toMatchObject({
+      effect: 'ask',
+      winning: 'protect-credentials#1'
+    })
+    expect(realPath.mock.calls.filter(([p]) => p === KEY_LINK)).toHaveLength(2)
+  })
+
+  it('CT-R7 解析抛错：该路径按写法比较、判决照常，provider.logger 恰记一行（点名那条路径与原因）；抛错的是目录也一样', () => {
+    const warn = vi.fn()
+    const failing = (bad: string): Mock<(p: string) => string> =>
+      vi.fn((p: string): string => {
+        if (p === bad) throw new Error('EACCES: permission denied')
+        return p
+      })
+    const contextFor = (
+      realPath: (p: string) => string
+    ): ReturnType<typeof createSecurityContext> =>
+      createSecurityContext(
+        SUBJECT,
+        ENVIRONMENT,
+        makeProvider(NO_GRANTS(), {
+          realPath,
+          logger: { info: vi.fn(), warn, error: vi.fn() }
+        })
+      )
+    const realPathWarnings = (): string[] =>
+      warn.mock.calls.map((c) => String(c[0])).filter((m) => m.includes('realPath'))
+
+    // 客体路径解析不了：按写法判（写 → ask-on-write），卡片上就是写法本身
+    const decision = contextFor(failing('/ws/broken')).evaluate('write', {
+      type: 'path',
+      path: '/ws/broken'
+    })
+    expect(decision).toMatchObject({ effect: 'ask', winning: 'ask-on-write#0' })
+    expect(decision.ask).toEqual({
+      command: 'Write(/ws/broken)',
+      rememberEntry: 'Write(/ws/broken)'
+    })
+    // 被好几条规则引用，告警也只有一行（记忆表记下了「按写法」这个结论）
+    expect(realPathWarnings()).toHaveLength(1)
+    expect(realPathWarnings()[0]).toContain('/ws/broken')
+    expect(realPathWarnings()[0]).toContain('EACCES: permission denied')
+    // 抛错被门面接住了，没有变成谓词的 fail-safe
+    expect(warn.mock.calls.filter((c) => String(c[0]).includes('match evaluation failed'))).toEqual(
+      []
+    )
+
+    // 目录（vars.workspace）解析不了：那个目录按写法比 —— 区内读照旧放行
+    warn.mockClear()
+    const dirFails = contextFor(failing('/ws'))
+    expect(dirFails.evaluate('read', { type: 'path', path: '/ws/f.txt' })).toMatchObject({
+      effect: 'allow',
+      winning: 'default:path'
+    })
+    expect(realPathWarnings()).toHaveLength(1)
+    expect(realPathWarnings()[0]).toContain('/ws')
+  })
+
+  it("CT-R8 解析器给回空串（或非字符串）：当作解析不了、按写法比较 —— 不崩，也不因 '' 前缀命中一切而凭空多出 deny / ask", () => {
+    const written = createSecurityContext(SUBJECT, ENVIRONMENT, makeProvider(NO_GRANTS()))
+    const objects: Array<[string, SecurityObject]> = [
+      ['write', { type: 'path', path: '/ws/f.txt' }],
+      ['read', { type: 'path', path: '/ws/f.txt' }],
+      ['read', { type: 'path', path: '/outside/f.txt' }],
+      ['write', { type: 'path', path: '/home/u/.ssh/id_rsa' }],
+      ['write', { type: 'path', path: '/etc/hosts' }]
+    ]
+    for (const bogus of ['', undefined, null, 42]) {
+      const ctx = createSecurityContext(
+        SUBJECT,
+        ENVIRONMENT,
+        makeProvider(NO_GRANTS(), { realPath: () => bogus as unknown as string })
+      )
+      for (const [action, object] of objects) {
+        const label = `${JSON.stringify(bogus)} × ${action} ${String(object.path)}`
+        let decision: ReturnType<typeof ctx.evaluate> | undefined
+        expect(() => (decision = ctx.evaluate(action, object)), label).not.toThrow()
+        // 与不给解析器的宿主逐字段同一个判决：没有凭空的命中，也没有蒸发的保护
+        expect(decision, label).toEqual(written.evaluate(action, object))
+      }
+    }
+    // 对照：真正的保护仍在（上面的「相同」不是「都放行」）
+    expect(written.evaluate('write', { type: 'path', path: '/home/u/.ssh/id_rsa' })).toMatchObject({
+      effect: 'deny',
+      winning: 'protect-credentials#0'
+    })
+    expect(written.evaluate('write', { type: 'path', path: '/ws/f.txt' }).matched).toEqual([
+      'ask-on-write#0'
+    ])
+  })
+
+  it('CT-R9 宿主不给 realPath（扩展端）：按写法比较；卡片、日志、拒绝文案与从前一致 —— 没有 requestedPath、没有「resolves to」', async () => {
+    const requestUserInput = vi.fn(
+      async (_req: InputRequest): Promise<InputResponse> => ({ kind: 'ask', allowed: false })
+    )
+    const ctx = createSecurityContext(
+      SUBJECT,
+      ENVIRONMENT,
+      makeProvider(NO_GRANTS(), { requestUserInput })
+    )
+
+    // /ws/key 按写法就是工作区里的一个文件
+    expect(ctx.evaluate('read', { type: 'path', path: KEY_LINK })).toMatchObject({
+      effect: 'allow',
+      winning: 'default:path'
+    })
+
+    const denied = await rejectionOf(
+      ctx.enforcePath('write', KEY_REAL, { toolCallId: 'w9', toolName: 'write' })
+    )
+    expect(denied).toMatch(/^Denied by security policy rule 'protect-credentials#0'\n\n/)
+    expect(denied).not.toContain('resolves to')
+
+    expect(
+      await rejectionOf(
+        ctx.enforcePath('read', '/outside/f.txt', { toolCallId: 'r9', toolName: 'read' })
+      )
+    ).toBe('User denied access to /outside/f.txt')
+    const request = requestUserInput.mock.calls[0][0] as AskInputRequest
+    expect(request.command).toBe('Read(/outside/f.txt)')
+    expect(request.requestedPath).toBeUndefined()
+    for (const record of getSessionDecisions(SID)) expect(record.requestedPath).toBeUndefined()
+  })
+
+  it('CT-R10 客体已带着 requestedPath（上游交来的原写法）：原样保留，不被这一次的 path 冲掉；再过一遍门面也不变', () => {
+    const ctx = createSecurityContext(
+      SUBJECT,
+      ENVIRONMENT,
+      makeProvider(NO_GRANTS(), { realPath: tableResolver({ [KEY_LINK]: KEY_REAL }) })
+    )
+    const decision = ctx.evaluate('read', {
+      type: 'path',
+      path: KEY_LINK,
+      requestedPath: '/ws/alias'
+    })
+    expect(decision.ask).toMatchObject({ command: `Read(${KEY_REAL})`, requestedPath: '/ws/alias' })
+
+    // 已经是真实去处、带着原写法的客体再判一次：幂等
+    const again = ctx.evaluate('read', { type: 'path', path: KEY_REAL, requestedPath: KEY_LINK })
+    expect(again.ask).toMatchObject({ command: `Read(${KEY_REAL})`, requestedPath: KEY_LINK })
   })
 })

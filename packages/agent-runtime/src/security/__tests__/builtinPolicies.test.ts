@@ -126,6 +126,12 @@ describe('buildBuiltinPolicies', () => {
     expect(policy.lets!.systemDirs).toContain("'/etc'")
     expect(policy.lets!.systemDirs).toContain("'/System'")
     expect(policy.lets!.systemDirs).toContain('vars.systemDirs')
+    // macOS 的临时目录在 /private/var 底下（$TMPDIR = /private/var/folders/…）：路径按真实去处判之后，
+    // 不挖掉它们，临时工作区里的每一次写都会被当成写系统目录拒掉
+    expect(rule.match).toContain('!inDir(object.path, tempDirs)')
+    expect(policy.lets!.tempDirs).toContain("'/private/var/folders'")
+    expect(policy.lets!.tempDirs).toContain("'/private/var/tmp'")
+    expect(policy.lets!.systemDirs).toContain("'/private/var'")
   })
 
   it('BP-3 ask-on-read：ask × read × path × 工作区/只读目录取反，desktop 限定（迁移前读取围栏的恢复）', () => {
@@ -611,6 +617,36 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
       })
 
       const extension = decide(action, object, { host: 'extension' })
+      expect({ label, effect: extension.effect, winning: extension.winning }).toEqual({
+        label,
+        effect: 'allow',
+        winning: 'default:path'
+      })
+    }
+  })
+
+  it('BP-N13 protect-system × 临时目录：/private/var 底下只挖掉 folders 与 tmp 两棵（段边界），其余照拒；扩展端全部放行', () => {
+    const cases: Array<[string, string, 'ask' | 'deny', string]> = [
+      ['$TMPDIR 里的文件', '/private/var/folders/x/y/T/f', 'ask', 'ask-on-write#0'],
+      ['临时根本身', '/private/var/folders', 'ask', 'ask-on-write#0'],
+      ['/private/var/tmp', '/private/var/tmp/f', 'ask', 'ask-on-write#0'],
+      ['/private/var 下别的目录', '/private/var/log/f', 'deny', 'protect-system#0'],
+      ['/private/var 的直接子项', '/private/var/f', 'deny', 'protect-system#0'],
+      ['段边界：foldersX 不是 folders', '/private/var/foldersX/f', 'deny', 'protect-system#0'],
+      ['段边界：tmpfoo 不是 tmp', '/private/var/tmpfoo/f', 'deny', 'protect-system#0'],
+      ['/etc', '/etc/hosts', 'deny', 'protect-system#0']
+    ]
+    for (const [label, path, effect, winning] of cases) {
+      const desktop = decide('write', { type: 'path', path })
+      expect({ label, effect: desktop.effect, winning: desktop.winning }).toEqual({
+        label,
+        effect,
+        winning
+      })
+      // 被挖掉的临时目录是真的没命中 protect-system（不是被别的规则压过）
+      if (effect === 'ask') expect(desktop.matched, label).not.toContain('protect-system#0')
+
+      const extension = decide('write', { type: 'path', path }, { host: 'extension' })
       expect({ label, effect: extension.effect, winning: extension.winning }).toEqual({
         label,
         effect: 'allow',

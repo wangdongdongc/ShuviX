@@ -21,7 +21,10 @@
  *                   语义与 allowList 前缀匹配一致，/foo 不命中 /foobar，绑定平台 sep；
  *                   Windows 下两侧分隔符先归一为 '/'，见 matchesPathEntry；
  *                   空串目录恒不命中 —— '' + sep 会前缀命中一切绝对路径，必须挡掉；
- *                   非字符串条目（含 null）一律忽略）
+ *                   非字符串条目（含 null）一律忽略）。
+ *                   宿主给了 realPath 时比的是**位置**：p 与每个目录都先解析成真正通向的
+ *                   地方再比（见 withRealPaths）—— 只解析 p 的话，凭据目录、工作区这些目录
+ *                   本身是链接时就对不上；目录来自 vars、lets 还是字面量都一样，所以只能在这里做
  *
  * **strict 语义**：object 是开放属性文档，访问缺失属性（如对 command 客体取
  * `object.path`）按 CEL 语义报错，由 evaluate 按规则 effect fail-safe 处置
@@ -55,6 +58,29 @@ interface SepEnvironment {
 /** inDir 语义绑定平台 sep → 每个 sep 一个 Environment（现实中只有 '/' 与 '\\' 两个） */
 const environments = new Map<string, SepEnvironment>()
 
+/**
+ * 本次求值里 inDir 用的真实路径解析；求值之外为 null（inDir 退回按写法比较）。
+ *
+ * 为什么是一个动态作用域的槽而不是参数：cel-js 调注册函数时只给实参（this 是共享的 evaluator），
+ * 拿不到求值上下文；而解析器是每次评估现给的（带本次的记忆表）。CEL 求值是同步的，不会有两次
+ * 求值交错，所以「evaluate 在规则循环期间设上、结束复原」就是把它递给 inDir 的最小通道。
+ */
+let activeRealPath: ((path: string) => string) | null = null
+
+/** 在 realPath 生效的作用域里执行 run（可嵌套，结束复原外层的值）；realPath 省略 = 按写法比较 */
+export function withRealPaths<T>(
+  realPath: ((path: string) => string) | undefined,
+  run: () => T
+): T {
+  const outer = activeRealPath
+  activeRealPath = realPath ?? null
+  try {
+    return run()
+  } finally {
+    activeRealPath = outer
+  }
+}
+
 function environmentFor(sep: string): SepEnvironment {
   let entry = environments.get(sep)
   if (!entry) {
@@ -63,8 +89,14 @@ function environmentFor(sep: string): SepEnvironment {
     const env = new Environment({ unlistedVariablesAreDyn: true })
       .registerFunction('inDir(string, dyn): bool', (p: string, dirs: unknown): boolean => {
         const list = Array.isArray(dirs) ? dirs : [dirs]
+        const real = activeRealPath
+        const target = real ? real(p) : p
         return list.some(
-          (dir) => typeof dir === 'string' && dir !== '' && matchesPathEntry(dir, p, sep)
+          // 空串先挡（解析一个空串会得到某个进程目录），再解析目录本身
+          (dir) =>
+            typeof dir === 'string' &&
+            dir !== '' &&
+            matchesPathEntry(real ? real(dir) : dir, target, sep)
         )
       })
       /**

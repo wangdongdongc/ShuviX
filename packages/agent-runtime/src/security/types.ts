@@ -116,7 +116,11 @@ export type AttrValue = AttrScalar | string[] | Record<string, AttrScalar | stri
  * 决策日志、UI 展示用），引擎匹配不按 type 分派 —— 规则用 `object.type == '…'`
  * 自行守卫。既有 type 与属性约定（PEP 构造时该 type 的已知属性全部给值）：
  *   { type:'invocation' }                                   L1 全工具门（执行前，无资源事实）
- *   { type:'path', path, displayPath }                      文件类工具触达的路径
+ *   { type:'path', path, displayPath, requestedPath }       文件类工具触达的路径。path 是它**真正
+ *                                                           通向**的位置（门面经宿主 realPath 解析：
+ *                                                           符号链接展开、`..` 按物理父目录），requestedPath
+ *                                                           是 PEP 交来的原样，displayPath 是报错用
+ *                                                           的写法（模型写的相对路径等）
  *   { type:'command', command, channel, parsed, commands, writes }
  *                                                           bash/ssh 命令（channel: 'bash'|'ssh'；
  *                                                           后三项是解析层贡献的结构属性，
@@ -220,6 +224,11 @@ export interface SecurityDecision {
     /** 询问卡片展示文本（路径类为 allowList 条目字面值，命令类为命令原文） */
     command: string
     /**
+     * 路径类：请求时的写法，仅当它与真实去处（command 里那条）不同时给出 —— 中间隔着符号链接
+     * （或 `..`）。卡片两条都摆出来：用户批准的是真实去处，也认得出是哪一次调用在要它。
+     */
+    requestedPath?: string
+    /**
      * 勾选「允许并记住」时写入 allowList 的条目；缺省 = 不可记住。
      * 当前仅路径类客体给出（allowList 只有 Read/Write 条目形态；命令类没有
      * 对应的记忆机制 —— 用户想放宽命令可自写 allow 策略，含 matches() 正则）。
@@ -306,6 +315,21 @@ export interface SecurityHostProvider {
   host: 'desktop' | 'extension'
   /** 路径分隔符（Node-free：桌面注入 path.sep，扩展 '/'）—— inDir 与 allowList 匹配绑定 */
   pathSep: string
+  /**
+   * 一个绝对路径**真正通向**哪里（同步）：符号链接展开、`..` 取物理父目录（先跟链接再退一级，与打开它时
+   * 一样 —— 先按字面折叠会把 `<ws>/link/../x` 判回区内），大小写不敏感的卷上给出盘上的写法。
+   * 还不存在的路径（写一个新文件）解析最近的存在的祖先、其余段照写接上 —— 途中的悬空链接要顺着走到
+   * 它将创建的目标。相对路径原样返回。须幂等：解析结果再解析一次还是它自己（门面据此把结果也记进
+   * 本次评估的记忆表）。
+   *
+   * 路径策略比的是位置，而 PEP 交来的是写法：`<ws>/key -> ~/.ssh/id_rsa` 按写法在工作区里，
+   * 按位置是私钥。安全模块是它**唯一的消费者**，且两边一起解析 —— 门面把路径客体的 path 换成
+   * 解析结果（requestedPath 留原样），inDir 把它比较的每个目录也过一遍同一个解析（见 celMatch.ts）；
+   * 只解析一边的话，`~/.ssh` 本身是链接（dotfiles 仓库）时凭据门就对不上了。PEP 不自己调它。
+   * 解析抛错按「解析不了」处理（该路径照原样比较，并记一行告警）。
+   * 省略 = 宿主没有符号链接可言（扩展：OPFS / FSA），路径按写法比较。
+   */
+  realPath?(path: string): string
   /**
    * 策略变量表（match/lets 里的 `vars.*`）：workspace / toolResultsBase / skillsDirs / memoryDirs /
    * home / systemDirs…。每次装配现取。宿主应为内置策略引用的变量恒供给取值
@@ -500,7 +524,11 @@ export interface SecurityContext {
     object: SecurityObject,
     opts?: { includeForceAllow?: boolean }
   ): boolean
-  /** 路径守卫：allow 返回 / deny、拒绝、取消 throw / ask 挂起询问 */
+  /**
+   * 路径守卫：allow 返回 / deny、拒绝、取消 throw / ask 挂起询问。
+   * resolvedPath 是 PEP 算好的绝对路径（请求时的写法）；它真正通向哪里由门面经
+   * provider.realPath 解析后再交给策略 —— PEP 不必、也不该自己 realpath。
+   */
   enforcePath(mode: AccessMode, resolvedPath: string, opts: EnforceOpts): Promise<void>
   /** 命令守卫：'other' 反馈按 onOther 返回 feedback 结果 */
   enforceCommand(object: CommandObjectInput, opts: EnforceOpts): Promise<EnforceOutcome>
@@ -542,6 +570,8 @@ export interface SecurityDecisionRecord {
   objectKind: string
   /** 摘要：路径全量 / 命令截断 200 字符（防超长脚本刷爆日志） */
   objectSummary: string
+  /** 路径类：请求时的写法，仅当它与判定用的真实路径（objectSummary）不同时记录 */
+  requestedPath?: string
   effect: SecurityEffect
   matched: string[]
   winning: string

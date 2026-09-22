@@ -307,6 +307,7 @@
     "allow": "允许",
     "deny": "拒绝",
     "allowAndRememberPath": "允许该路径",
+    "requestedAs": "请求的路径",
     "policyPromptFrom": "来自安全策略：{{policies}}",
     "params": "参数",
     "result": "结果",

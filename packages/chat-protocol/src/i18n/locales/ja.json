@@ -307,6 +307,7 @@
     "allow": "許可",
     "deny": "拒否",
     "allowAndRememberPath": "このパスを許可",
+    "requestedAs": "要求されたパス",
     "policyPromptFrom": "セキュリティポリシー：{{policies}}",
     "params": "パラメータ",
     "result": "結果",

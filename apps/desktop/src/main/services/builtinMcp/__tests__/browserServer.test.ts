@@ -12,18 +12,23 @@
  *   BS-14…18    upload_file 的读门：相对路径按工作目录解析、先问策略再查存在、绝对路径也 resolve；
  *   BS-19…21    pdf 的写门：工作区里也问（ask-on-write）、区外问而不拒、系统 / 凭据目录拒绝；
  *   BS-22       原生 cdp 里等价的那几个方法不是绕开门的旁路；
- *   BS-23…25    每条会话一台 server（后端与询问通道各归各）、策略不缓存、各会话共用一条 tab 队列。
+ *   BS-23…25    每条会话一台 server（后端与询问通道各归各）、策略不缓存、各会话共用一条 tab 队列；
+ *   BS-R1…R3    经符号链接的本地访问按真实去处过门：upload_file 一条指向私钥的链接、file:// 打开
+ *               一条指向区外的链接、pdf 输出到一条指向 /etc 的目录链接。
  *
  * mock 掉的只是会拉起 Electron 的两条取用路径：`getDesktopSecurityContext`（换成同形态的真
  * `createSecurityContext`，外面包一层记下 enforcePath / enforceUrl 的实参）与浏览器面板
  * （`createDesktopBrowserBackend` 换成假后端）。工作目录是**真的临时目录** —— upload_file 的门
- * 会 stat 真文件；也**不 realpath** 它：macOS 上那会变成 /private/var/…，落进 protect-system
- * 的禁写名单。用例按 POSIX 路径写，Windows 上跳过。
+ * 会 stat 真文件。这台 provider 缺省**不带** realPath，路径照写法比：macOS 上工作目录写作
+ * /var/folders/…、解析之后是 /private/var/folders/… —— protect-system 已挖掉这棵临时目录，拒不了它，
+ * 但每条 `Write(<ws>/…)` 断言都会换一种写法。按真实去处判的 BS-R 系列用 `gate.realPath` 单独打开
+ * 桌面的 resolveRealPath（生产里 makeDesktopSecurityProvider 恒带它）。用例按 POSIX 路径写，
+ * Windows 上跳过。
  *
  * 工具失败回来的是原话 + isError（`[MCP Error]` 前缀是 McpManager 加的，这里绕过了它）。
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
@@ -44,11 +49,16 @@ const gate = vi.hoisted(() => ({
   pathCalls: [] as Array<{ mode: unknown; path: unknown; opts: unknown }>,
   urlCalls: [] as Array<{ object: unknown; opts: unknown }>,
   policies: [] as unknown[],
-  autoAllow: false
+  autoAllow: false,
+  /** 打开桌面的真实路径解析（BS-R 系列）；缺省关 —— 其余用例的路径断言都照写法 */
+  realPath: false,
+  /** vars.home：缺省是个不存在的 /home/u；BS-R 换成临时目录里真有 .ssh 的家目录 */
+  home: '/home/u'
 }))
 
 vi.mock('../../toolContext', async () => {
   const { createSecurityContext } = await import('@shuvix/agent-runtime')
+  const { resolveRealPath } = await import('../../../utils/toolUtils/realPath')
   const { createInlinePolicyMdReader } =
     await import('@shuvix/agent-runtime/security/builtinPolicies/inlineSources')
   const readBuiltinPolicyMd = createInlinePolicyMdReader()
@@ -65,6 +75,7 @@ vi.mock('../../toolContext', async () => {
         {
           host: 'desktop',
           pathSep: '/',
+          ...(gate.realPath ? { realPath: resolveRealPath } : {}),
           getVars: () => ({
             workspace: gate.ws,
             toolResultsBase: '/tool-results',
@@ -72,7 +83,7 @@ vi.mock('../../toolContext', async () => {
             memoryDirs: [],
             knowledgeRoot: '/kb',
             knowledgeSessionDirs: [],
-            home: '/home/u',
+            home: gate.home,
             botsDir: '/home/u/.shuvix/bots',
             builtinKnowledgeDir: '/opt/shuvix/Resources/knowledge',
             systemDirs: []
@@ -187,6 +198,8 @@ beforeEach(() => {
   gate.urlCalls.length = 0
   gate.policies.length = 0
   gate.autoAllow = false
+  gate.realPath = false
+  gate.home = '/home/u'
   browser.created.length = 0
 })
 
@@ -795,5 +808,92 @@ describe.skipIf(!POSIX)('browser 桌面接线 —— 会话', () => {
       'shared-2',
       'shared-1'
     ])
+  })
+})
+
+// ─── 经链接的本地访问按真实去处过门 ─────────────────────────────────────
+
+describe.skipIf(!POSIX)('browser 桌面接线 —— 按真实去处过门（桌面的 realPath 打开）', () => {
+  /** 工作区之外的一块临时地：家目录（真有 .ssh/id_rsa）与一个区外文件 */
+  let elsewhere = ''
+  const homeKey = (): string => join(elsewhere, 'home', '.ssh', 'id_rsa')
+
+  beforeAll(() => {
+    elsewhere = mkdtempSync(join(tmpdir(), 'shuvix-browsersrv-real-'))
+    mkdirSync(join(elsewhere, 'home', '.ssh'), { recursive: true })
+    writeFileSync(homeKey(), 'PRIVATE KEY')
+    writeFileSync(join(elsewhere, 'page.html'), '<p>x</p>')
+    // 工作区里的三条链接：→ 私钥、→ 区外文件、→ /etc（目录）
+    symlinkSync(homeKey(), join(WS(), 'klink'))
+    symlinkSync(join(elsewhere, 'page.html'), join(WS(), 'plink'))
+    symlinkSync('/etc', join(WS(), 'outdir'))
+  })
+
+  afterAll(() => {
+    if (elsewhere) rmSync(elsewhere, { recursive: true, force: true })
+  })
+
+  beforeEach(() => {
+    gate.realPath = true
+    gate.home = join(elsewhere, 'home')
+  })
+
+  it('BS-R1 upload_file 工作区里一条指向 ~/.ssh/id_rsa 的链接：按读私钥过门 —— 卡片是私钥、注着链接；拒绝则网页拿不到', async () => {
+    const s = await open({ respond: async () => ({ kind: 'ask', allowed: false }) })
+    expectFailure(
+      await s.call('upload_file', { tabId: 't1', uid: 'e1', paths: ['klink'] }, TC),
+      'User denied access to klink'
+    )
+    // PEP 交的仍是写法（绝对化之后）；它通向哪里由门面解析
+    expect(gate.pathCalls.map((c) => [c.mode, c.path])).toEqual([['read', `${WS()}/klink`]])
+    expect(s.asks).toHaveLength(1)
+    expect(s.asks[0]).toMatchObject({
+      kind: 'ask',
+      id: 'tc-1',
+      toolName: 'mcp__browser__upload_file',
+      command: `Read(${realpathSync.native(homeKey())})`,
+      requestedPath: `${WS()}/klink`
+    })
+    expect(s.backend.uploadFile).not.toHaveBeenCalled()
+
+    // 对照：按写法比（不开解析器）时，同一次调用不问就把私钥交给了网页 —— 这就是被堵上的那条路
+    gate.realPath = false
+    const lexical = await open({ respond: async () => ({ kind: 'ask', allowed: false }) })
+    expect(
+      (await lexical.call('upload_file', { tabId: 't1', uid: 'e1', paths: ['klink'] })).isError
+    ).toBeFalsy()
+    expect(lexical.asks).toEqual([])
+    expect(lexical.backend.uploadFile.mock.calls).toEqual([
+      [{ tabId: 't1', uid: 'e1', paths: [`${WS()}/klink`] }]
+    ])
+  })
+
+  it('BS-R2 file:// 打开工作区里一条指向区外文件的链接：按读那个文件过门（ask-on-read）；没有输入面板 → 拒绝，文案带着真实去处', async () => {
+    const s = await open({ respond: null })
+    const link = `${WS()}/plink`
+    const target = realpathSync.native(join(elsewhere, 'page.html'))
+    expectFailure(
+      await s.call('open_tab', { url: `file://${link}` }),
+      `Access denied: path outside workspace and no way to ask: ${link} (${link} resolves to ${target})`
+    )
+    expect(gate.pathCalls.map((c) => [c.mode, c.path])).toEqual([['read', link]])
+    expect(gate.urlCalls).toEqual([])
+    expect(s.backend.openTab).not.toHaveBeenCalled()
+  })
+
+  it('BS-R3 pdf 输出到 outdir/p.pdf、outdir → /etc：按写系统目录拒（protect-system#0，免询问也不管用），文案带着真实去处；不弹卡、不导出', async () => {
+    gate.autoAllow = true
+    const s = await open()
+    const r = await s.call('pdf', { tabId: 't1', outputPath: 'outdir/p.pdf' })
+    expect(r.isError).toBe(true)
+    const target = join(realpathSync.native('/etc'), 'p.pdf')
+    expect(
+      textOf(r).startsWith(
+        `Denied by security policy rule 'protect-system#0' (${WS()}/outdir/p.pdf resolves to ${target})`
+      )
+    ).toBe(true)
+    expect(gate.pathCalls.map((c) => [c.mode, c.path])).toEqual([['write', `${WS()}/outdir/p.pdf`]])
+    expect(s.asks).toEqual([])
+    expect(s.backend.pdf).not.toHaveBeenCalled()
   })
 })

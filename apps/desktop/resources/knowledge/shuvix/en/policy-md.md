@@ -119,7 +119,7 @@ why every builtin rule carries `subject.kind: [agent]`.
 
 | `object.type`  | Raised by                                                   | `action`         | Attributes                                                                                                                                                                                                                                                                                               |
 | -------------- | ----------------------------------------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `path`         | `read`, `write`, `edit`, the `knowledge` tool, file previews | `read` / `write` | `path` (resolved absolute path), `displayPath`                                                                                                                                                                                                                                                           |
+| `path`         | `read`, `write`, `edit`, the `knowledge` tool, file previews | `read` / `write` | `path` (where the path really leads: absolute; on the desktop symlinks are followed and `..` goes to the real parent, as the OS does when it opens the path), `requestedPath` (the absolute path as the tool asked for it — differs from `path` when a link or `..` was in the way), `displayPath` (as the model wrote it, for messages) |
 | `command`      | `bash`, `ssh`                                               | `execute`        | `command` (raw text), `channel` (`bash` / `ssh`), and lazily from the shell parser: `parsed` (bool), `commands` (list of `{ base, argv, wrappers, complete, depth }` — `base` is the real program after `sudo` / `env` / `timeout` are stripped, dynamic words are `''`), `writes` (redirect targets as absolute paths) |
 | `gitTool`      | the `git` tool                                              | `execute`        | `gitAction`, `command`, `force` (bool), `delete` (bool)                                                                                                                                                                                                                                                  |
 | `database`     | the built-in `database` server's `query` tool               | `execute`        | `sql`, `credential`, `dbType`, `readonly` (bool — whether the connection is read-only)                                                                                                                                                                                                                   |
@@ -134,7 +134,10 @@ matched (with a warning), an allow rule as not matched. Always guard with the ty
 
 - `inDir(path, dirs)` — `dirs` is a string or a list; true when `path` is inside one of them,
   on path-segment boundaries (`/foo` does not match `/foobar`); empty and non-string entries
-  never match.
+  never match. On the desktop both sides are compared by **where they really lead**: `path` and
+  every directory are resolved first (symlinks, `..`, the on-disk letter case), so a link in the
+  workspace that points at `~/.ssh/id_rsa` is inside `~/.ssh`, and `~/.ssh` still matches when it
+  is itself a link into a dotfiles repo. Relative directories are compared as written.
 - `hasShortFlags(argv, 'rf')` — whether a GNU-style short-flag cluster in `argv` carries all of
   those letters (`-rf`, `-fr`, `-r -f` all count).
 - The usual CEL operators, `in`, `startsWith`, `has(...)`, string and list functions.

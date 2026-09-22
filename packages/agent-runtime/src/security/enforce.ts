@@ -43,10 +43,32 @@ function summarizeObject(request: SecurityRequest): string {
   return object.type
 }
 
-/** 展示名：路径类优先 displayPath，带命令/SQL 属性的用其原文 */
+/**
+ * 路径类：请求时的写法（门面解析真实去处之前的那条），与真实去处相同或非路径客体时 undefined。
+ * 文案、卡片与日志据此把两条都交代清楚 —— 只说其中一条，要么看不出被链接带去了哪里，
+ * 要么认不出是哪一次调用。
+ */
+function redirectedFrom(request: SecurityRequest): string | undefined {
+  const { object } = request
+  if (object.type !== 'path' || typeof object.requestedPath !== 'string') return undefined
+  return object.requestedPath !== object.path ? object.requestedPath : undefined
+}
+
+/**
+ * 拒绝类文案的补注：请求的路径落到了别处时，把真实去处说出来 ——
+ * 否则 agent 看到的是「工作区里的一个文件被凭据门拒了」，只能瞎猜为什么
+ */
+function resolutionNote(request: SecurityRequest): string {
+  const from = redirectedFrom(request)
+  return from ? ` (${from} resolves to ${String(request.object.path)})` : ''
+}
+
+/** 展示名：路径类优先 displayPath（缺省用请求时的写法），带命令/SQL 属性的用其原文 */
 function displayName(request: SecurityRequest, opts: EnforceOpts): string {
   const object = request.object
-  if (object.type === 'path') return opts.displayPath ?? String(object.path ?? '')
+  if (object.type === 'path') {
+    return opts.displayPath ?? String(object.requestedPath ?? object.path ?? '')
+  }
   if (typeof object.command === 'string') return object.command
   if (typeof object.sql === 'string') return object.sql
   if (typeof object.url === 'string') return object.url
@@ -115,6 +137,7 @@ export async function executeDecision(args: {
         action: request.action,
         objectKind: request.object.type,
         objectSummary: summarizeObject(request),
+        requestedPath: redirectedFrom(request),
         effect: decision.effect,
         matched: decision.matched,
         winning: decision.winning,
@@ -135,7 +158,7 @@ export async function executeDecision(args: {
 
   if (decision.effect === 'deny') {
     record()
-    const denied = decision.reason ?? `Access denied: ${display}`
+    const denied = (decision.reason ?? `Access denied: ${display}`) + resolutionNote(request)
     // 策略提示语拼在归因之后：agent 从 tool error 读到「为什么被拦、该走什么路」，
     // 用户在工具块里看到同一段（deny 不弹卡片，这是它唯一的露出面）
     throw new Error(decision.prompt ? `${denied}\n\n${decision.prompt.text}` : denied)
@@ -148,7 +171,7 @@ export async function executeDecision(args: {
       return { status: 'allowed' }
     }
     record()
-    throw new Error(missingChannelMessage(request, display))
+    throw new Error(missingChannelMessage(request, display) + resolutionNote(request))
   }
 
   // 仅 read 路径询问关心目录（write 通常指向具体文件；目录授权在 UI 上天然持久）
@@ -162,6 +185,7 @@ export async function executeDecision(args: {
     kind: 'ask',
     toolName: opts.toolName,
     command: decision.ask?.command ?? display,
+    requestedPath: decision.ask?.requestedPath,
     description: opts.description,
     // 询问场景只投递给用户：拒绝/反馈的回话文案保持原样，不把策略文本带进 agent 上下文
     policyPrompt: decision.prompt

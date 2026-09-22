@@ -307,6 +307,7 @@
     "allow": "Allow",
     "deny": "Deny",
     "allowAndRememberPath": "Allow this path",
+    "requestedAs": "requested as",
     "policyPromptFrom": "From security policy: {{policies}}",
     "params": "Parameters",
     "result": "Result",

@@ -10,7 +10,8 @@
  *   - 第三方 MCP 工具维持通用形态（原始工具名、扳手、参数 / 结果两块）；退役的 multiplex
  *     `browser` 工具的历史块照旧有名字与图标；
  *   - 步骤合并行：同为浏览器的不同动作 → 「浏览器 ×2」；同一动作 → 图标 + 「浏览器」；
- *   - 询问卡片：内置 MCP 工具的询问以工具名为标题；路径询问（`Read(…)`）不看呈现。
+ *   - 询问卡片：内置 MCP 工具的询问以工具名为标题；路径询问（`Read(…)`）不看呈现；
+ *     请求的写法落到了别处（requestedPath，隔着符号链接或 `..`）时，真实去处领头、写法注在下面。
  *
  * 包入口 `@shuvix/chat-ui` 整个顶掉（AskForm 从入口取 getHostApi，入口会带上模块加载期就读
  * window.location 的 useSessionInit —— 同 toolPicker.dom.test.tsx）。i18n 走真 zh 资源。
@@ -355,5 +356,78 @@ describe('AskForm — 内置 MCP 工具发起的询问', () => {
     expect(titleRow().querySelector('svg.lucide-globe')).toBeNull()
     // 路径预览里是那条路径本身
     expect(container.textContent).toContain('/x')
+  })
+
+  // ─── 请求的写法与真实去处不同（requestedPath）──────────────────────────
+  //
+  // 主路径恒是真实去处（command 里那条：用户批准的、「允许并记住」记下的都是它），请求时的写法
+  // 作为「请求的路径」一行挂在它下面 —— 只给写法等于替链接瞒下目标，只给去处又对不上上方那次调用。
+
+  const REQUESTED_AS = (): string => i18n.t('toolCall.requestedAs')
+  /** 「请求的路径」那个标签（没有这一行 → undefined） */
+  const requestedAsLabel = (): HTMLElement | undefined =>
+    [...container.querySelectorAll<HTMLElement>('span')].find(
+      (s) => s.textContent === REQUESTED_AS()
+    )
+  /** 写入预览的两块：diff 头（路径那一行）与 DiffViewer 的表格 */
+  const diffParts = (): { header: HTMLElement; table: HTMLTableElement } => {
+    const table = container.querySelector('table')
+    if (!table) throw new Error('DiffViewer not rendered')
+    const viewer = table.parentElement!.parentElement!
+    return { header: viewer.previousElementSibling as HTMLElement, table }
+  }
+
+  it('D-R1 路径询问带 requestedPath：主行是真实去处，下面一行「请求的路径」+ 请求时的写法', () => {
+    // 文案真在 zh 资源里（不是回落成键名）
+    expect(REQUESTED_AS()).not.toBe('toolCall.requestedAs')
+    renderAsk({ ...ask('read', 'Read(/Users/u/.ssh/id_rsa)'), requestedPath: '/ws/key' })
+    expect(title()).toBe(i18n.t('toolCall.pendingPathRead'))
+
+    const label = requestedAsLabel()
+    expect(label, '应有「请求的路径」一行').toBeDefined()
+    const line = label!.parentElement!
+    expect(line.textContent).toBe(`${REQUESTED_AS()} /ws/key`)
+    // 那一行挂在预览块里、主路径之后：块的第一段文字就是真实去处
+    const preview = line.parentElement!
+    expect(preview.firstChild?.textContent).toBe('/Users/u/.ssh/id_rsa')
+    expect(preview.textContent).toBe(`/Users/u/.ssh/id_rsa${REQUESTED_AS()} /ws/key`)
+  })
+
+  it('D-R2 没有 requestedPath：路径询问与写入预览都只有那一条路径，不多一行；命令询问即便带着 requestedPath 也不显示它', () => {
+    renderAsk(ask('read', 'Read(/outside/f.txt)'))
+    expect(requestedAsLabel()).toBeUndefined()
+    expect(container.textContent).toContain('/outside/f.txt')
+
+    // 写入预览：diff 头照旧是模型写的路径
+    renderAsk({
+      ...ask('write', 'Write(/ws/notes.txt)'),
+      preview: { kind: 'diff', path: 'notes.txt', diff: '+1 hi', isNewFile: true }
+    })
+    expect(requestedAsLabel()).toBeUndefined()
+    expect(diffParts().header.textContent).toBe('notes.txt')
+
+    // 不是路径询问（命令 / 地址）：没有「真实去处」可言，这一栏不上卡
+    renderAsk({ ...ask('bash', 'ls -la'), requestedPath: '/ws/key' })
+    expect(requestedAsLabel()).toBeUndefined()
+    expect(container.textContent).not.toContain('/ws/key')
+  })
+
+  it('D-R3 写入预览带 requestedPath：diff 头改由真实去处领头（取自 command）、写法注在下面；DiffViewer 照旧渲染那份 diff', () => {
+    renderAsk({
+      ...ask('write', 'Write(/Users/u/real/target.txt)'),
+      requestedPath: '/ws/wlink',
+      preview: { kind: 'diff', path: 'wlink', diff: '-1 old\n+1 new', isNewFile: false }
+    })
+    expect(title()).toBe(i18n.t('toolCall.pendingWritePreview'))
+
+    const { header, table } = diffParts()
+    expect(header.firstChild?.textContent).toBe('/Users/u/real/target.txt')
+    expect(header.textContent).toBe(`/Users/u/real/target.txt${REQUESTED_AS()} /ws/wlink`)
+    expect(requestedAsLabel()?.parentElement?.textContent).toBe(`${REQUESTED_AS()} /ws/wlink`)
+    // 同一份 diff 一行不少
+    const rows = [...table.querySelectorAll('tr')].map((tr) => tr.textContent ?? '')
+    expect(rows).toHaveLength(2)
+    expect(rows[0]).toContain('old')
+    expect(rows[1]).toContain('new')
   })
 })
