@@ -5,14 +5,15 @@
  * （进程内、代码随产品发布）的工具名是确定的 `mcp__<server>__<tool>`，于是可以像内置工具一样
  * 给图标、标签、折叠摘要和详情形态。
  *
- * **认名字要认全**：server 名唯一、内置行占着 `browser` / `ssh`（桌面 v27 迁移、扩展 mcpStore
- * 都会给撞名的自定义行改名），但光凭前缀还不够 —— 一台叫 `browser__x` 的自定义 server，
+ * **认名字要认全**：server 名唯一、内置行占着 `browser` / `ssh` / `database`（桌面 v27 / v28 迁移、
+ * 扩展 mcpStore 都会给撞名的自定义行改名），但光凭前缀还不够 —— 一台叫 `browser__x` 的自定义 server，
  * 它的工具 `mcp__browser__x__tool` 也以 `mcp__browser__` 开头，于是会在询问卡片上顶着
  * 「浏览器」的名字和图标出现。所以前缀之后的那一截还必须是这台内置 server 真有的工具名
  * （`toolNames`；与 server 那边工具目录的一致性由守护用例钉住）。
  *
- * 另收一条**历史兼容**：browser 曾是一个 multiplex 内置工具（名字就叫 `browser`），
- * 旧会话里的这些块要照旧有图标与标签（摘要仍在 toolSummaries 的 `browser` 条目里）。
+ * 另收**历史兼容**：browser 曾是一个 multiplex 内置工具（名字就叫 `browser`），database 曾是一个
+ * 内置工具（名字就叫 `database`）—— 旧会话里的这些块要照旧有图标与标签（摘要仍在 toolSummaries
+ * 的 `browser` / `database` 条目里）。
  */
 import type { ToolPresentation } from './types/toolPresentation'
 import { asStr, fileNameOf } from './toolSummaryHelpers'
@@ -31,6 +32,7 @@ interface BuiltinMcpServerPresentationDef {
 }
 
 const BROWSER_ICON: Omit<ToolPresentation, 'label'> = { icon: 'Globe', iconColor: '#60a5fa' }
+const DATABASE_ICON: Omit<ToolPresentation, 'label'> = { icon: 'Database', iconColor: '#f59e0b' }
 
 /** 多行代码的第一行有内容的那一行（开头的空行不算） */
 function firstLine(v: unknown): string | undefined {
@@ -131,6 +133,18 @@ export const BUILTIN_MCP_PRESENTATIONS: Record<string, BuiltinMcpServerPresentat
           return host
       }
     }
+  },
+  database: {
+    labelKey: 'tool.remoteDbLabel',
+    toolNames: ['list-connections', 'query'],
+    presentation: DATABASE_ICON,
+    // 「连接名 · 这条查询在做什么」—— 模型没写说明时退到 SQL 的第一行
+    summary: (tool, args) =>
+      tool === 'query'
+        ? [asStr(args.connection), asStr(args.description) ?? firstLine(args.sql)]
+            .filter(Boolean)
+            .join(' · ') || undefined
+        : undefined
   }
 }
 
@@ -139,7 +153,8 @@ const LEGACY_TOOL_PRESENTATIONS: Record<
   string,
   { labelKey: string; presentation: Omit<ToolPresentation, 'label'> }
 > = {
-  browser: { labelKey: 'tool.browserLabel', presentation: BROWSER_ICON }
+  browser: { labelKey: 'tool.browserLabel', presentation: BROWSER_ICON },
+  database: { labelKey: 'tool.remoteDbLabel', presentation: DATABASE_ICON }
 }
 
 /**

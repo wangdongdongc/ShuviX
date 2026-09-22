@@ -26,7 +26,9 @@ vi.mock('../../../services/sessionStorage', () => ({
   appendThinkingLevelChange: vi.fn()
 }))
 vi.mock('../../../services/userInputBroker', () => ({ respondToUserInput: vi.fn() }))
-vi.mock('../../../services/dbManager', () => ({ dbManager: { getConnectionInfo: vi.fn() } }))
+vi.mock('../../../services/builtinMcp/dbConnections', () => ({
+  dbManager: { getConnectionInfo: vi.fn() }
+}))
 vi.mock('../../../services/mcpService', () => ({ mcpService: { getAllToolInfos: () => [] } }))
 vi.mock('../../../services/skillService', () => ({ skillService: { findEnabled: () => [] } }))
 vi.mock('../../../dao/sessionDao', () => ({

@@ -64,7 +64,7 @@ export const CHAT_SPEC: BuiltinProfileSpec = {
  * 正文规定它以消息而非文档的形状答复、把一切真正的活交给子会话，而**它是谁**由会话绑定的
  * 那份 bot md 经 systemContext 注入。
  *
- * 工具面**刻意收窄**（没有 bash / write / ssh / database / browser）：这是「执行任务不受人设
+ * 工具面**刻意收窄**（没有 bash / write，也不声明内置能力服务器 ssh / browser / database）：这是「执行任务不受人设
  * 干扰」的结构落点 —— 人格够得到的地方只能看不能动，要动就得开一条子会话，而子会话按自己的
  * 档案生成系统提示词、拿不到那段围栏。靠提示词纪律表达这条分工是不够的：一个握着 bash 的
  * 人格会顺手把活干了，那正是要避免的事。`edit` 留着是为了让 bot 维护自己那份 md（写入经出厂
@@ -79,7 +79,8 @@ export const NOTEBOOK_SPEC: BuiltinProfileSpec = {
 }
 
 /**
- * 编码智能体 —— 从 work 里拆出来的工程人格：完整工具链（含 ssh / database）+ 做事纪律。
+ * 编码智能体 —— 从 work 里拆出来的工程人格：完整的本地工具链 + 做事纪律（ssh / browser / database
+ * 是按会话勾选的内置能力服务器，子会话随父会话继承勾选）。
  * work 只留编排的薄壳，遇到成规模的工程活儿开一条 `coding` 子会话把活交过去
  * （session 工具的 `agent_profile`）—— 它是子会话的档案，不是用户切换的目标。
  */

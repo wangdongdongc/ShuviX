@@ -283,7 +283,6 @@ const SHARED_BASE_TOOLS = [
   'ls',
   'grep',
   'glob',
-  'database',
   'agent',
   'session',
   'knowledge',
@@ -294,8 +293,8 @@ const SHARED_BASE_TOOLS = [
 describe('work 档案钉板(项目会话基座：工具集/环境段的唯一事实源)', () => {
   it('REG-1 tools 按桌面注册序列出 + Agent/session 居末、作图技能收尾;git 不进任何基座', () => {
     // 顺序与 apps/desktop/src/main/tools/allTools.ts 的注册序一致(bash→read→write→edit→ask→
-    // ls→grep→glob→database)——LLM 所见工具序列的稳定性依赖它;浏览器与 ssh 已是按会话勾选的
-    // 内置 MCP 能力服务器(mcp:browser / mcp:ssh),不在任何基座的名单上;
+    // ls→grep→glob)——LLM 所见工具序列的稳定性依赖它;浏览器、ssh 与数据库已是按会话勾选的
+    // 内置 MCP 能力服务器(mcp:browser / mcp:ssh / mcp:database),不在任何基座的名单上;
     // 工具注册表导入链含 electron/native 模块无法在测试内加载,故硬编码钉住,改动需同步两侧。
     const built = profile(WORK_PROFILE_NAME)
     // session 在末尾：它是「管自己这条会话」的工具（改标题 / 开子会话并驱动它），
@@ -310,7 +309,6 @@ describe('work 档案钉板(项目会话基座：工具集/环境段的唯一事
       'ls',
       'grep',
       'glob',
-      'database',
       'agent',
       'session',
       'knowledge',
@@ -387,7 +385,6 @@ describe('chat 档案钉板(不归属项目的会话的创建基座)', () => {
       'ls',
       'grep',
       'glob',
-      'database',
       'agent',
       'session',
       'knowledge',
@@ -498,7 +495,6 @@ describe('coding 档案钉板(从 work 拆出的工程人格)', () => {
       'ls',
       'grep',
       'glob',
-      'database',
       'agent',
       'session',
       'knowledge',
@@ -676,7 +672,7 @@ describe('bot 档案钉板（bot 会话的基座）', () => {
         'skill:builtin:drawing'
       ])
       expect(built.tools, `bot.${language}`).toHaveLength(11)
-      for (const forbidden of ['bash', 'write', 'database', 'mcp:browser', 'git']) {
+      for (const forbidden of ['bash', 'write', 'database', 'mcp:database', 'mcp:browser', 'git']) {
         expect(built.tools, `bot.${language} 不得持有 ${forbidden}`).not.toContain(forbidden)
       }
       // 档案声明的 mcp:/skill: 恒生效 —— 清单里唯一的一项扩展能力就是作图技能，
@@ -812,7 +808,7 @@ describe('内置档案 —— 三语言交付面（逐份 × 逐语言）', () =
  * 漏过去的（模型被告知它有一个根本不存在的工具）。
  */
 describe('内置档案的能力面：浏览器 / ssh 是按会话勾选的内置 MCP', () => {
-  /** 内置工具名的全集 + 两个已退役的名字（退役的也要认得出来，才抓得到残留） */
+  /** 内置工具名的全集 + 三个已退役的名字（退役的也要认得出来，才抓得到残留） */
   const KNOWN_TOOLS = new Set([
     'bash',
     'read',
@@ -822,14 +818,14 @@ describe('内置档案的能力面：浏览器 / ssh 是按会话勾选的内置
     'glob',
     'grep',
     'ask',
-    'database',
     'git',
     'session',
     'knowledge',
     'artifact',
     'agent',
     'ssh',
-    'browser'
+    'browser',
+    'database'
   ])
   /** ` / ` 分隔的一串词（可带反引号）：`read / write / edit`、`` `ls` / `glob` / `grep` `` */
   const TOKEN = '`?[A-Za-z][\\w-]*`?'
@@ -842,7 +838,7 @@ describe('内置档案的能力面：浏览器 / ssh 是按会话勾选的内置
     return tools.length >= 2 ? tools : null
   }
 
-  it('REG-6 没有任何内置档案（任何语言）列裸 browser / ssh，或声明 mcp:browser / mcp:ssh', () => {
+  it('REG-6 没有任何内置档案（任何语言）列裸 browser / ssh / database，或声明对应的内置能力服务器', () => {
     for (const language of LANGS) {
       const built = buildBuiltinProfiles({ ...ALL_PARAMS, language })
       // 全集都在（缺一份，下面那圈就少查一份）
@@ -851,7 +847,14 @@ describe('内置档案的能力面：浏览器 / ssh 是按会话勾选的内置
       )
       for (const p of built) {
         const tools = p.tools.map((t) => t.toLowerCase())
-        for (const name of ['browser', 'ssh', 'mcp:browser', 'mcp:ssh']) {
+        for (const name of [
+          'browser',
+          'ssh',
+          'database',
+          'mcp:browser',
+          'mcp:ssh',
+          'mcp:database'
+        ]) {
           expect(tools, `${p.name}.${language} 不该有 ${name}`).not.toContain(name)
         }
       }
@@ -878,14 +881,14 @@ describe('内置档案的能力面：浏览器 / ssh 是按会话勾选的内置
     expect(checked).toBeGreaterThanOrEqual(6)
   })
 
-  it('REG-7b 判据自检：身份句里残留 ssh / browser 的那种清单会被抓住，非工具的斜杠串不算清单', () => {
+  it('REG-7b 判据自检：身份句里残留 ssh / database / browser 的那种清单会被抓住，非工具的斜杠串不算清单', () => {
     const chatTools = profile(CHAT_PROFILE_NAME).tools
     const stale =
       'You help users with built-in tools — read / write / edit / ls / glob / grep / bash / ssh / database / browser / ask.'
     const [list] = slashLists(stale)
     const tools = toolListOf(list)
     expect(tools).not.toBeNull()
-    expect(tools!.filter((t) => !chatTools.includes(t))).toEqual(['ssh', 'browser'])
+    expect(tools!.filter((t) => !chatTools.includes(t))).toEqual(['ssh', 'database', 'browser'])
     // 反引号版本同样认得
     expect(toolListOf(slashLists('`read` / `ls` / `browser`')[0])).toEqual([
       'read',

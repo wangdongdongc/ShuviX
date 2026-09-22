@@ -1,10 +1,17 @@
 /**
  * celMatch —— CEL 匹配层直测：compileMatch 只校验语法（未知面推迟到求值期）、
  * evaluateMatch 的 strict 语义与错误吸收、inDir 段边界/空串防御、sep 绑定环境、
- * evaluateLet 的 {vars} 上下文、inDirOnlyVarNames 的目录变量识别。
+ * evaluateLet 的 {vars} 上下文、inDirOnlyVarNames 的目录变量识别、
+ * withRealPaths 作用域里 inDir 按位置比较（路径与每个目录两边都解析）。
  */
-import { describe, it, expect } from 'vitest'
-import { compileMatch, evaluateMatch, evaluateLet, inDirOnlyVarNames } from '../celMatch'
+import { describe, it, expect, vi, type Mock } from 'vitest'
+import {
+  compileMatch,
+  evaluateMatch,
+  evaluateLet,
+  inDirOnlyVarNames,
+  withRealPaths
+} from '../celMatch'
 
 /** 典型请求文档（evaluate.buildMatchContext 的产物形态） */
 function makeDoc(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -209,6 +216,171 @@ describe('evaluateMatch — inDir', () => {
     })
     expect(evaluateMatch(expression, custom, '/')).toBe(true)
     expect(evaluateMatch(expression, posixDoc('/other/f'), '/')).toBe(false)
+  })
+})
+
+/**
+ * 按位置比较（withRealPaths）—— 宿主给了 realPath 时，inDir 的路径参数与**每个**目录参数都先过
+ * 同一个解析再比。解析器在这里是 Node-free 的假件（一张表：写法 → 真实去处，表外原样），
+ * 用 vi.fn 包一层，数得出它被问过哪些参数。
+ */
+describe('evaluateMatch — inDir 按位置比较（withRealPaths）', () => {
+  /** 一张表的假解析器：写法 → 真实去处，表外原样 */
+  const resolverOf = (table: Record<string, string>): Mock<(p: string) => string> =>
+    vi.fn((p: string): string => table[p] ?? p)
+  const docAt = (
+    path: string,
+    vars: Record<string, unknown> = { workspace: '/ws' }
+  ): Record<string, unknown> => makeDoc({ object: { type: 'path', path }, vars })
+
+  it('CM-R1 路径参数被解析：工作区里的一条链接指向凭据目录 → 按位置命中；作用域之外按写法不命中', () => {
+    const realPath = resolverOf({ '/ws/key': '/home/u/.ssh/id_rsa' })
+    const expression = "inDir(object.path, '/home/u/.ssh')"
+    const doc = docAt('/ws/key')
+
+    expect(withRealPaths(realPath, () => evalBool(expression, doc))).toBe(true)
+    expect(realPath).toHaveBeenCalledWith('/ws/key')
+    // 同一份文档、同一张表，出了作用域就回到按写法比较 —— 解析器一次都不再被问
+    realPath.mockClear()
+    expect(evalBool(expression, doc)).toBe(false)
+    expect(realPath).not.toHaveBeenCalled()
+  })
+
+  it('CM-R2 目录参数也被解析：受保护的目录本身是链接（dotfiles 仓库）时，落在它真实位置里的文件照样命中', () => {
+    // ~/.ssh → ~/dotfiles/ssh；交来的是真实位置上的私钥（写法里根本没有 .ssh）
+    const realPath = resolverOf({ '/home/u/.ssh': '/home/u/dotfiles/ssh' })
+    const expression = 'inDir(object.path, vars.credentials)'
+    const doc = docAt('/home/u/dotfiles/ssh/id_rsa', { credentials: '/home/u/.ssh' })
+
+    expect(withRealPaths(realPath, () => evalBool(expression, doc))).toBe(true)
+    expect(realPath).toHaveBeenCalledWith('/home/u/.ssh')
+    // 只按写法（或只解析路径那一边）就对不上 —— 这不在 ~/.ssh 里
+    expect(evalBool(expression, doc)).toBe(false)
+
+    // 两边都经链接：经链接的写法 × 经链接的目录，按位置仍是同一处
+    const both = resolverOf({
+      '/ws/key': '/home/u/dotfiles/ssh/id_rsa',
+      '/home/u/.ssh': '/home/u/dotfiles/ssh'
+    })
+    const viaLink = docAt('/ws/key', { credentials: '/home/u/.ssh' })
+    expect(withRealPaths(both, () => evalBool(expression, viaLink))).toBe(true)
+  })
+
+  it('CM-R3 目录从哪来都一样被解析：字面量 / 字面量列表 / vars 字符串 / vars 数组 / lets 算出来的列表', () => {
+    const realPath = resolverOf({
+      '/lit': '/real/lit',
+      '/v': '/real/v',
+      '/home/u/.ssh': '/real/ssh'
+    })
+    // lets 的产物：与 assemble 一样经 evaluateLet 算出、以顶层名字注入
+    const credentialDirs = evaluateLet(
+      "['.ssh'].map(s, vars.home + '/' + s)",
+      { home: '/home/u' },
+      '/'
+    )
+    expect(credentialDirs).toEqual(['/home/u/.ssh'])
+
+    const cases: Array<[string, string, Record<string, unknown>]> = [
+      ["inDir(object.path, '/lit')", '/real/lit/f', {}],
+      ["inDir(object.path, ['/nope', '/lit'])", '/real/lit/f', {}],
+      ['inDir(object.path, vars.dir)', '/real/v/f', { vars: { dir: '/v' } }],
+      ['inDir(object.path, vars.dirs)', '/real/v/f', { vars: { dirs: ['/nope', '/v'] } }],
+      ['inDir(object.path, credentialDirs)', '/real/ssh/id_rsa', { credentialDirs }]
+    ]
+    for (const [expression, path, extra] of cases) {
+      const doc = makeDoc({ object: { type: 'path', path }, ...extra })
+      const located = withRealPaths(realPath, () => evalBool(expression, doc))
+      expect({ expression, located, written: evalBool(expression, doc) }).toEqual({
+        expression,
+        located: true,
+        written: false
+      })
+    }
+  })
+
+  it('CM-R4 空串目录照样恒不命中，且在解析之前就挡掉（解析一个空串会得到某个进程目录）；非字符串条目也不交给解析器', () => {
+    // 一个把 '' 解析成「当前目录」的宿主 —— 若空串先被解析再比，就会前缀命中工作区里的一切
+    const realPath = resolverOf({ '': '/ws' })
+    const doc = docAt('/ws/f.txt', { a: null, b: '' })
+    for (const expression of [
+      "inDir(object.path, '')",
+      "inDir(object.path, [''])",
+      'inDir(object.path, [vars.a, vars.b])'
+    ]) {
+      const hit = withRealPaths(realPath, () => evalBool(expression, doc))
+      expect({ expression, hit }).toEqual({ expression, hit: false })
+    }
+    // 被问过的只有路径本身：空串与 null 条目都没到解析器那里
+    expect(new Set(realPath.mock.calls.map(([p]) => p))).toEqual(new Set(['/ws/f.txt']))
+  })
+
+  it('CM-R5 取反的用法与正向一致：`!inDir` 恰是 `inDir` 的反面 —— 链接带出工作区 → 区外；工作区本身是链接 → 区内', () => {
+    const expression = 'inDir(object.path, vars.workspace)'
+    const negated = '!inDir(object.path, vars.workspace)'
+    const table: Array<[string, Record<string, string>, string, boolean]> = [
+      // 工作区里的链接指向区外：按位置不在区内（ask-on-read 的取反豁免因此不再豁免它）
+      ['链接带出区外', { '/ws/link': '/elsewhere/f' }, '/ws/link', false],
+      // 工作区本身是链接（/ws → /data/ws），交来的是真实位置上的文件：按位置在区内
+      ['工作区是链接', { '/ws': '/data/ws' }, '/data/ws/f', true]
+    ]
+    for (const [label, map, path, inside] of table) {
+      const realPath = resolverOf(map)
+      const doc = docAt(path)
+      const hit = withRealPaths(realPath, () => evalBool(expression, doc))
+      const miss = withRealPaths(realPath, () => evalBool(negated, doc))
+      // 作用域之外按写法：结论恰好翻过来
+      const written = evalBool(expression, doc)
+      expect({ label, hit, miss, written }).toEqual({
+        label,
+        hit: inside,
+        miss: !inside,
+        written: !inside
+      })
+    }
+  })
+
+  it('CM-R6 没有作用域 / 作用域给的是 undefined：按写法比较，谁也不问', () => {
+    const realPath = resolverOf({ '/ws/key': '/home/u/.ssh/id_rsa' })
+    const expression = "inDir(object.path, '/home/u/.ssh')"
+    const doc = docAt('/ws/key')
+    expect(evalBool(expression, doc)).toBe(false)
+    expect(withRealPaths(undefined, () => evalBool(expression, doc))).toBe(false)
+    // 装过一次解析器、离开作用域之后，再求值也不再问它
+    expect(withRealPaths(realPath, () => evalBool(expression, doc))).toBe(true)
+    realPath.mockClear()
+    expect(evalBool(expression, doc)).toBe(false)
+    expect(realPath).not.toHaveBeenCalled()
+  })
+
+  it('CM-R7 作用域可嵌套、结束复原外层（含内层显式关掉解析）；run 抛错也复原；返回值原样交回', () => {
+    const expression = "inDir(object.path, '/target')"
+    const doc = docAt('/ws/link')
+    const outer = resolverOf({ '/ws/link': '/target/x' })
+    const inner = resolverOf({ '/ws/link': '/elsewhere/x' })
+
+    const seen = withRealPaths(outer, () => {
+      const before = evalBool(expression, doc)
+      const nested = withRealPaths(inner, () => evalBool(expression, doc))
+      const disabled = withRealPaths(undefined, () => evalBool(expression, doc))
+      const after = evalBool(expression, doc)
+      return { before, nested, disabled, after }
+    })
+    expect(seen).toEqual({ before: true, nested: false, disabled: false, after: true })
+
+    // run 抛错（含 CEL 求值自己的报错）：异常原样穿出，作用域照样复原
+    expect(() =>
+      withRealPaths(outer, () => {
+        throw new Error('boom')
+      })
+    ).toThrow('boom')
+    expect(() =>
+      withRealPaths(outer, () => evalBool('inDir(object.path, vars.missing)', doc))
+    ).toThrow(/No such key/)
+    outer.mockClear()
+    expect(evalBool(expression, doc)).toBe(false)
+    expect(outer).not.toHaveBeenCalled()
+
+    expect(withRealPaths(outer, () => 42)).toBe(42)
   })
 })
 

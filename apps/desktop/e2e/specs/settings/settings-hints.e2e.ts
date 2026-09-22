@@ -18,7 +18,8 @@
  * SettingsPrimitives.test.ts` 的 IH-U-* 里 —— 那几条分支在真实设置页里走不到。
  *
  * 一个隔离实例、**一个设置窗口一路点下去**（`openSettings` 对已存在的窗口只聚焦、不切 tab），
- * 所以用例之间有顺序依赖：通用 tab 的几条在前，切到「LLM 工具」与「关于」的在后。
+ * 所以用例之间有顺序依赖：通用 tab 的几条在前，切到「MCP」与「关于」的在后。数据库凭据那一节
+ * 跟着 database 能力搬进了 MCP 页内置 `database` 那一行的展开区（「LLM 工具」页上不再有它）。
  * 三语取串照抄 session-knowledge-bases.e2e.ts：隔离实例跟系统语言走，断的是「是哪一句」。
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -29,6 +30,7 @@ import { until, type CdpClient } from '../../harness/cdp'
 import { launchApp, type E2EApp } from '../../harness/launch'
 import {
   infoHintPane,
+  mcpSettingsPane,
   sessionConfigPane,
   settingsNavPane,
   sidebarPane,
@@ -51,10 +53,10 @@ const FONT_TITLE = L.map((l) => l.settings.fontSize)
 const APPEARANCE_GROUP = L.map((l) => l.settings.appearanceGroup)
 /** 问号按钮的无障碍名字 —— 这个键缺了肉眼看不出来（它不上屏） */
 const INFO_LABEL = L.map((l) => l.common.info)
-/** 「LLM 工具」页数据库子页里那一节（页面够长，锚点滚得出视野） */
+/** MCP 页内置 database 那一行展开区里「已保存的连接」那一节（种了 16 条，页面够长，锚点滚得出视野） */
 const DB_TITLE = L.map((l) => l.settings.toolDbTitle)
 const DB_DESC = L.map((l) => l.settings.toolDbDesc)
-const TOOLS_TAB = L.map((l) => l.settings.tabTools)
+const MCP_TAB = L.map((l) => l.settings.tabMcp)
 const ABOUT_TAB = L.map((l) => l.settings.tabAbout)
 const CHECK_UPDATE = L.map((l) => l.about.checkUpdate)
 /** 会话设置弹窗里的扩展能力卡（说明走 SettingsSection 的 footer，同样收进问号） */
@@ -94,15 +96,10 @@ function gapToAnchor(shot: InfoHintShot, anchor: { top: number; bottom: number }
   )
 }
 
-/** 切到「LLM 工具」页的数据库子页（子页标签取自工具定义，不写死英文） */
-async function openDbToolPage(): Promise<void> {
-  await nav.selectTab(TOOLS_TAB)
-  const defs = await app.main.eval<{ name: string; label?: string }[]>(
-    'window.api.tools.definitions()'
-  )
-  const db = defs.find((d) => d.name === 'database')
-  if (!db) throw new Error('builtin database tool missing from tools.definitions()')
-  await nav.selectToolSubTab(db.label || db.name)
+/** 切到 MCP 页、展开内置 database 那一行（已保存的连接挂在它的展开区里；已展开时不动） */
+async function openDbSection(): Promise<void> {
+  await nav.selectTab(MCP_TAB)
+  await mcpSettingsPane(settings).setExpanded('database', true)
   await hints.waitRow(DB_TITLE)
 }
 
@@ -253,9 +250,9 @@ describe('说明收进问号（通用 tab）', () => {
   })
 })
 
-describe('锚点滚出视野（LLM 工具 · 数据库子页）', () => {
+describe('锚点滚出视野（MCP · 内置 database 行的已保存连接）', () => {
   it('IH-E-5 锚点整个滚出视口：气泡仍挂在 DOM 上，但被置成 visibility:hidden', async () => {
-    await openDbToolPage()
+    await openDbSection()
     // 这一节天然落在首屏之下，先把它滚进视野（留 100px 余地）再开气泡
     const start = await hints.anchorRect(DB_TITLE)
     await hints.scrollBy(DB_TITLE, start.top - 100)
@@ -269,8 +266,8 @@ describe('锚点滚出视野（LLM 工具 · 数据库子页）', () => {
     // 前置自检：下方要够长，才能把锚点整个推出视口上沿
     expect(room.down).toBeGreaterThan(200)
 
-    // 再滚到底：锚点整个落到视口**上沿**之外（数据库子页标题上方的内容比旧的 SSH 子页少，
-    // 滚到顶时它还差几十像素没出下沿；换个方向考的是同一件事，且只依赖下方有滚动空间）
+    // 再滚到底：锚点整个落到视口**上沿**之外（往上沿推而不是往下沿推：考的是同一件事，
+    // 且只依赖这一节下方有滚动空间 —— 16 条连接铺出来的那一段）
     const moved = await hints.scrollBy(DB_TITLE, room.down)
     expect(moved).toBe(room.down)
     const anchor = await hints.anchorRect(DB_TITLE)
@@ -327,7 +324,7 @@ describe('气泡逃出卡片与弹窗层叠（会话设置弹窗）', () => {
 
 describe('「这一行自己的内容」留在明面上', () => {
   it('IH-E-8 数据库凭据行的 user@host:port/db 与更新检查行的状态，不悬浮就在页面文字里', async () => {
-    await openDbToolPage()
+    await openDbSection()
     const toolsText = await hints.visibleText()
     // 失败 = 整改用过头：凭据行只剩名字，两台机器的区别藏进了悬浮，选哪一条全靠猜
     expect(toolsText).toContain(DB_CRED.name)

@@ -113,10 +113,10 @@ vars     宿主变量表（见下）+ 会话授权
 
 | `object.type`  | 由谁发起                                                   | `action`         | 属性                                                                                                                                                                                                                                                                                |
 | -------------- | ---------------------------------------------------------- | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `path`         | `read`、`write`、`edit`、`knowledge` 工具、文件预览        | `read` / `write` | `path`（解析后的绝对路径）、`displayPath`                                                                                                                                                                                                                                           |
+| `path`         | `read`、`write`、`edit`、`knowledge` 工具、文件预览        | `read` / `write` | `path`（路径真正通向的位置：绝对路径；桌面端展开符号链接，`..` 取真实的父目录 —— 与系统打开它时一样）、`requestedPath`（工具请求时的绝对路径 —— 中间隔着链接或 `..` 时与 `path` 不同）、`displayPath`（模型写的原样，用于提示文案） |
 | `command`      | `bash`、`ssh`                                              | `execute`        | `command`（原文）、`channel`（`bash` / `ssh`），以及由 shell 解析器惰性提供的：`parsed`（布尔）、`commands`（`{ base, argv, wrappers, complete, depth }` 的列表 —— `base` 是剥掉 `sudo` / `env` / `timeout` 之后真正的程序，动态词是 `''`）、`writes`（重定向目标，绝对路径）              |
 | `gitTool`      | `git` 工具                                                 | `execute`        | `gitAction`、`command`、`force`（布尔）、`delete`（布尔）                                                                                                                                                                                                                            |
-| `database`     | `database` 工具                                            | `execute`        | `sql`、`credential`、`dbType`、`readonly`（布尔 —— 连接是否只读）                                                                                                                                                                                                                   |
+| `database`     | 内置 `database` 服务器的 `query` 工具                      | `execute`        | `sql`、`credential`、`dbType`、`readonly`（布尔 —— 连接是否只读）                                                                                                                                                                                                                   |
 | `invocation`   | **每一次**工具调用，执行之前                               | `execute`        | 无 —— 按 `tool.name` / `tool.operation` 判（如 `session` / `create-sub-session`）。这里的规则必须点名工具；不指定工具的 invocation 询问会拦住每一次调用。                                                                                                                              |
 
 **strict 语义**：读取客体没有的属性（如对 `command` 取 `object.path`）是错误，而错误**按效力 fail-safe**
@@ -126,7 +126,10 @@ vars     宿主变量表（见下）+ 会话授权
 ### `match` 里可用的函数
 
 - `inDir(path, dirs)` —— `dirs` 是字符串或列表；`path` 落在其中某个目录内（按路径段边界：`/foo`
-  不命中 `/foobar`）时为真；空条目与非字符串条目永远不命中。
+  不命中 `/foobar`）时为真；空条目与非字符串条目永远不命中。桌面端两边都按**真正通向的位置**比：
+  `path` 与每个目录都先解析（符号链接、`..`、盘上的大小写）再比较 —— 工作区里一条指向
+  `~/.ssh/id_rsa` 的链接算在 `~/.ssh` 里；`~/.ssh` 本身是链进 dotfiles 仓库的链接时照样命中。
+  相对路径的目录按写法比较。
 - `hasShortFlags(argv, 'rf')` —— `argv` 里 GNU 风格的短选项簇是否带齐这些字母（`-rf`、`-fr`、`-r -f`
   都算）。
 - 常规的 CEL 运算符、`in`、`startsWith`、`has(...)`、字符串与列表函数。

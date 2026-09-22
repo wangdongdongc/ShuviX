@@ -42,7 +42,7 @@ function parseJsonObject(json: string): Record<string, string> {
 }
 
 /**
- * 内置能力服务器注册表（ssh / 后续 database、browser）。
+ * 内置能力服务器注册表（ssh / browser / database）。
  * 在 `registerBuiltinMcpServers()` 里填充 —— 放在独立模块，避免本文件反向依赖上层服务。
  */
 export const builtinMcpRegistry = new BuiltinMcpRegistry<DesktopBuiltinMcpScope>()

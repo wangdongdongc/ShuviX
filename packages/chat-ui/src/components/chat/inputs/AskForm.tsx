@@ -33,11 +33,31 @@ function CommandPreview({ command }: { command: string }): React.JSX.Element {
   )
 }
 
-/** 路径询问预览：待放行的那条路径 */
-function PathPreview({ path }: { path: string }): React.JSX.Element {
+/**
+ * 请求时的写法 —— 仅当它与真实去处不同（中间隔着符号链接或 `..`）时，挂在主路径下面。
+ * 主路径是真实去处：用户批准、「允许并记住」记下的都是它；这一行让卡片对得上上方那次调用。
+ */
+function RequestedAs({ path }: { path: string }): React.JSX.Element {
+  const { t } = useTranslation()
+  return (
+    <div className="mt-0.5 text-[10px] leading-snug break-all font-mono text-text-tertiary">
+      <span className="font-sans">{t('toolCall.requestedAs')}</span> {path}
+    </div>
+  )
+}
+
+/** 路径询问预览：待放行的那条路径（真实去处） */
+function PathPreview({
+  path,
+  requestedPath
+}: {
+  path: string
+  requestedPath?: string
+}): React.JSX.Element {
   return (
     <div className="text-[11px] leading-snug bg-bg-secondary/70 rounded-lg px-2.5 py-1.5 break-all font-mono text-text-primary">
       {path}
+      {requestedPath && <RequestedAs path={requestedPath} />}
     </div>
   )
 }
@@ -48,11 +68,20 @@ function PathPreview({ path }: { path: string }): React.JSX.Element {
  * 这里的 diff 与工具执行后步骤块里那份是同一个字符串（后端算一次两处共用），
  * 所以用的也必须是同一个 DiffViewer —— 换渲染器就等于给"所见即所批"开了个口子。
  */
-function DiffPreview({ path, diff }: { path: string; diff: string }): React.JSX.Element {
+function DiffPreview({
+  path,
+  requestedPath,
+  diff
+}: {
+  path: string
+  requestedPath?: string
+  diff: string
+}): React.JSX.Element {
   return (
     <div className="space-y-1">
       <div className="text-[11px] leading-snug break-all font-mono text-text-secondary px-0.5">
         {path}
+        {requestedPath && <RequestedAs path={requestedPath} />}
       </div>
       <DiffViewer diff={diff} maxHeight={ASK_PREVIEW_MAX_H} />
     </div>
@@ -106,8 +135,16 @@ export function AskForm({
 }: InputFormProps<AskInputRequest, AskDraft>): React.JSX.Element {
   const { t } = useTranslation()
   const [policyOpen, setPolicyOpen] = useState(false)
-  const { command, description, pathIsDirectory, policyPrompt, preview, toolName, background } =
-    request
+  const {
+    command,
+    requestedPath,
+    description,
+    pathIsDirectory,
+    policyPrompt,
+    preview,
+    toolName,
+    background
+  } = request
   const hostPresentation = useChatStore((s) => s.toolPresentations[toolName])
   // 内置 MCP 能力服务器发起的询问（browser 打开一个地址、读一个本地文件；ssh 执行一条命令）
   // 也要有工具名与图标 —— 宿主下发的表里没有它们
@@ -205,9 +242,14 @@ export function AskForm({
       </div>
 
       {diffPreview ? (
-        <DiffPreview path={diffPreview.path} diff={diffPreview.diff} />
+        // 平常 diff 头上是模型写的路径；写入被链接带去别处时，改为真实去处领头、原写法注在下面
+        <DiffPreview
+          path={requestedPath && pathAsk ? pathAsk.path : diffPreview.path}
+          requestedPath={pathAsk ? requestedPath : undefined}
+          diff={diffPreview.diff}
+        />
       ) : pathAsk ? (
-        <PathPreview path={pathAsk.path} />
+        <PathPreview path={pathAsk.path} requestedPath={requestedPath} />
       ) : (
         <CommandPreview command={command} />
       )}

@@ -1,5 +1,6 @@
 /**
- * 统一评估函数（PDP 核心）—— 同步纯函数，无 IO、无副作用。
+ * 统一评估函数（PDP 核心）—— 同步函数，无副作用；唯一的 IO 是门面递进来的真实路径解析
+ * （opts.realPath，供 inDir 按位置比较），不给就是纯函数。
  *
  * 原则（个人桌面应用，用户主权优先）：**无策略 = 放行** —— 未命中任何规则的操作
  * 直接执行，所有策略都是叠加上去的防护限制（deny 硬保护 / ask 询问门）。
@@ -29,6 +30,7 @@
  * （免询问/记住）或同名覆盖门策略本身。
  */
 import { buildAllowEntry } from './allowEntries'
+import { withRealPaths } from './celMatch'
 import type {
   AttrValue,
   MatchContext,
@@ -62,6 +64,12 @@ export interface EvaluateOpts {
   vars?: Record<string, PolicyVarValue>
   /** 告警出口（谓词求值失败的 fail-safe 处置需要可见） */
   warn?: (msg: string) => void
+  /**
+   * 真实路径解析（门面按次给出、带本次的记忆表）—— 规则求值期间交给 inDir，让它按位置比较
+   * （见 celMatch.withRealPaths）。省略 = 按写法比较。唯一的 IO 入口：给了它，本函数就不再是
+   * 纯函数，而是「给定文件系统状态下确定」的函数。
+   */
+  realPath?: (path: string) => string
 }
 
 /**
@@ -115,10 +123,19 @@ function buildAskMaterials(
   const object = request.object
   if (object.type === 'path' && typeof object.path === 'string') {
     const mode = request.action === 'write' ? 'write' : 'read'
+    // 条目与卡片上的主路径都是**真实去处**：策略判的是它，「允许并记住」记下的也是它 ——
+    // 记成请求时的写法，同一个文件换个链接名就得再授权一次，而一条经链接记下的授权
+    // 会替用户同意一个他没见过的位置
     const entry = buildAllowEntry(mode, object.path)
+    const requested =
+      typeof object.requestedPath === 'string' && object.requestedPath !== object.path
+        ? { requestedPath: object.requestedPath }
+        : {}
     // force-ask 胜出时不给「允许并记住」：那条授权落在 force-allow 层、压不过这道门，
     // 给出按钮等于给一个点了不生效的假承诺
-    return tier === 'force-ask' ? { command: entry } : { command: entry, rememberEntry: entry }
+    return tier === 'force-ask'
+      ? { command: entry, ...requested }
+      : { command: entry, rememberEntry: entry, ...requested }
   }
   // 远端命令把目标机器写进卡片：用户批准一条 `rm -rf` 时，必须看得见它要跑在哪台机器上
   if (typeof object.command === 'string') {
@@ -129,7 +146,16 @@ function buildAskMaterials(
           : object.command
     }
   }
-  if (typeof object.sql === 'string') return { command: object.sql }
+  // SQL 同理：批准一条 `DELETE` 时必须看得见它落在哪个已保存的连接上（生产库还是测试库）——
+  // 用一行 SQL 注释写在语句前面，卡片上仍是一段合法的 SQL
+  if (typeof object.sql === 'string') {
+    return {
+      command:
+        typeof object.credential === 'string' && object.credential
+          ? `-- ${object.credential}\n${object.sql}`
+          : object.sql
+    }
+  }
   if (typeof object.url === 'string') return { command: object.url }
   const tool = request.tool
   if (tool) return { command: tool.operation ? `${tool.name}: ${tool.operation}` : tool.name }
@@ -172,11 +198,13 @@ export function evaluate(
     if (!includeForceAllow && rule.tier === 'force-allow') continue
 
     let matched: boolean
-    if (!rule.matches) {
+    const matches = rule.matches
+    if (!matches) {
       matched = true
     } else {
       try {
-        matched = rule.matches(ctx)
+        // inDir 按位置比较：解析器只在谓词求值期间生效（其间惰性求值的 lets 也在内）
+        matched = withRealPaths(opts.realPath, () => matches(ctx))
       } catch (e) {
         // fail-safe：deny/ask 视为命中（保护绝不静默蒸发），allow 视为不命中（不白送放行）
         matched = rule.effect !== 'allow'

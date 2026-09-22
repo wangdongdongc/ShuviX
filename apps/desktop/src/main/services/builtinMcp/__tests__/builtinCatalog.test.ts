@@ -17,10 +17,14 @@ import {
   parseBuiltinMcpToolName
 } from '@shuvix/chat-protocol/builtinMcpPresentations'
 
-// 工厂表只要键：两台 server 的桌面接线会拉进 Electron 的面板与 toolContext，换成空工厂
+// 工厂表只要键：几台 server 的桌面接线会拉进 Electron 的面板、凭据 DAO 与 toolContext，换成空工厂
 vi.mock('../sshServer', () => ({ createSshMcpServerFactory: () => () => undefined }))
 vi.mock('../browserServer', () => ({
   createDesktopBrowserMcpServerFactory: () => () => undefined
+}))
+vi.mock('../databaseServer', () => ({
+  createDatabaseMcpServerFactory: () => () => undefined,
+  DATABASE_MCP_SERVER_NAME: 'database'
 }))
 vi.mock('../../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {} })

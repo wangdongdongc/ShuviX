@@ -1,11 +1,23 @@
 /**
  * evaluate（PDP 核心）—— 纯函数直测：tier 结算优先序、CEL match 谓词、
- * strict fail-safe、默认兜底与 ask 询问材料。
+ * strict fail-safe、默认兜底与 ask 询问材料；opts.realPath（门面递进来的真实路径解析）
+ * 在谓词求值期间交给 inDir。
  */
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, type Mock } from 'vitest'
 import { evaluate, buildMatchContext } from '../evaluate'
 import { evaluateMatch } from '../celMatch'
-import type { MatchContext, SecurityObject, SecurityRequest, SecurityRule } from '../types'
+import { assembleRules } from '../assemble'
+import { buildPolicyVars } from '../policyVars'
+import { createInlinePolicyMdReader } from '../builtinPolicies/inlineSources'
+import type {
+  MatchContext,
+  ParsedPolicyFile,
+  SecurityDecision,
+  SecurityHostProvider,
+  SecurityObject,
+  SecurityRequest,
+  SecurityRule
+} from '../types'
 
 const PATH_OBJECT: SecurityObject = {
   type: 'path',
@@ -315,7 +327,7 @@ describe('evaluate — ask 询问材料', () => {
     expect(gitTool.ask!.rememberEntry).toBeUndefined()
   })
 
-  it('EV-15b database 的 ask → ask.command=SQL 原文（多行/超长都不截断改写）；rememberEntry 缺省', () => {
+  it('EV-15b database 的 ask → ask.command = 一行注释写明连接名 + SQL 原文（多行/超长都不截断改写）；rememberEntry 缺省', () => {
     const sql = `WITH recent AS (\n  SELECT * FROM orders WHERE created_at > '2024-01-01'\n)\nSELECT ${'c'.repeat(300)} FROM recent;`
     const object: SecurityObject = {
       type: 'database',
@@ -326,8 +338,16 @@ describe('evaluate — ask 询问材料', () => {
     }
 
     const asked = evaluate(ASK_GATE, makeRequest({ action: 'execute', object }))
-    expect(asked.ask!.command).toBe(sql)
+    // 批准一条写语句时必须看得见它落在哪个连接上（生产库还是测试库）
+    expect(asked.ask!.command).toBe(`-- prod-mysql\n${sql}`)
     expect(asked.ask!.rememberEntry).toBeUndefined()
+    // 没有连接名（或是空串）→ 只有 SQL
+    for (const credential of [undefined, '']) {
+      const bare: SecurityObject = { ...object, credential }
+      expect(
+        evaluate(ASK_GATE, makeRequest({ action: 'execute', object: bare })).ask!.command
+      ).toBe(sql)
+    }
 
     // 同客体的 allow/deny 不产询问材料
     expect(
@@ -826,6 +846,154 @@ describe('evaluate — 命中提示语（prompt）', () => {
       makeRequest()
     )
     expect(decision).toEqual({ effect: 'allow', matched: [], winning: 'default:path' })
+  })
+})
+
+/**
+ * opts.realPath —— 门面按次给出的真实路径解析，evaluate 只负责在谓词求值期间把它交给 inDir
+ * （换路径客体、记忆化都是门面的事，见 context.test 的 CT-R 系列）。解析器一律是一张表的假件。
+ */
+describe('evaluate — opts.realPath（inDir 按位置比较）', () => {
+  /** 一张表的假解析器：写法 → 真实去处，表外原样 */
+  const resolverOf = (table: Record<string, string>): Mock<(p: string) => string> =>
+    vi.fn((p: string): string => table[p] ?? p)
+  const pathRequest = (path: string, action = 'read'): SecurityRequest =>
+    makeRequest({ action, object: { type: 'path', path, displayPath: path } })
+
+  const INLINE_POLICY_MD = createInlinePolicyMdReader()
+  /** 内置策略 + 给定用户策略的装配（每次现装配 —— lets 按装配 memoize，复用一份会把上次的值带过来） */
+  function decideAssembled(
+    request: SecurityRequest,
+    realPath: ((p: string) => string) | undefined,
+    userPolicies: ParsedPolicyFile[] = []
+  ): SecurityDecision {
+    const provider: SecurityHostProvider = {
+      host: 'desktop',
+      pathSep: '/',
+      getVars: () => ({
+        workspace: '/ws',
+        toolResultsBase: '/tool-results',
+        skillsDirs: ['/skills'],
+        memoryDirs: [],
+        home: '/home/u',
+        botsDir: '/home/u/.shuvix/bots',
+        builtinKnowledgeDir: '/opt/shuvix/knowledge',
+        systemDirs: [],
+        dotfiles: '/data'
+      }),
+      getSessionGrants: () => ({ autoAllow: false, allowList: [] }),
+      readBuiltinPolicyMd: INLINE_POLICY_MD,
+      getUserPolicies: () => userPolicies
+    }
+    const vars = buildPolicyVars(provider)
+    return evaluate(assembleRules(provider, vars), request, { vars, realPath })
+  }
+
+  it('EV-R1 解析器到得了 inDir：工作区里一条指向受保护目录的链接 → deny；不给解析器 → 按写法落 default allow', () => {
+    const rules = [deny('d1', "inDir(object.path, '/protected')")]
+    const request = pathRequest('/ws/link')
+    const realPath = resolverOf({ '/ws/link': '/protected/secret' })
+
+    const located = evaluate(rules, request, { realPath })
+    expect(located).toMatchObject({ effect: 'deny', winning: 'd1', matched: ['d1'] })
+    expect(realPath).toHaveBeenCalledWith('/ws/link')
+
+    const written = evaluate(rules, request)
+    expect(written).toEqual({ effect: 'allow', matched: [], winning: 'default:path' })
+
+    // 分工：evaluate 不改写客体 —— ask 材料照客体上的 path 出（换成真实去处是门面的事）
+    const asked = evaluate([ask('a1', "inDir(object.path, '/protected')")], request, { realPath })
+    expect(asked.ask).toEqual({ command: 'Read(/ws/link)', rememberEntry: 'Read(/ws/link)' })
+  })
+
+  it('EV-R2 惰性求值的 lets 也在解析器的作用域里：let 里的 inDir 按位置算；lets 算出来的凭据目录也按位置比', () => {
+    // 一条 let 自己调 inDir：它在规则求值当中才被算（惰性），那时解析器已经生效
+    const linkedHome: ParsedPolicyFile = {
+      name: 'linked-home',
+      displayName: 'linked-home',
+      description: '',
+      lets: { homeIsLinked: 'inDir(vars.home, vars.dotfiles)' },
+      rules: [{ effect: 'deny', match: "object.type == 'path' && homeIsLinked" }],
+      body: ''
+    }
+    const inWorkspace = pathRequest('/ws/f.txt')
+    const homeMovesToData = resolverOf({ '/home/u': '/data/u' })
+    expect(decideAssembled(inWorkspace, homeMovesToData, [linkedHome])).toMatchObject({
+      effect: 'deny',
+      winning: 'linked-home#0'
+    })
+    expect(decideAssembled(inWorkspace, undefined, [linkedHome])).toMatchObject({
+      effect: 'allow',
+      winning: 'default:path'
+    })
+
+    // 内置 protect-credentials 的 credentialDirs 就是 lets 算出来的：~/.ssh 本身是链接时，
+    // 真实位置上的私钥照样归它管（不给解析器 → 只被 ask-on-read 当成一次普通的区外读）
+    const sshIsLinked = resolverOf({ '/home/u/.ssh': '/data/ssh' })
+    const key = pathRequest('/data/ssh/id_rsa')
+    expect(decideAssembled(key, sshIsLinked)).toMatchObject({
+      effect: 'ask',
+      winning: 'protect-credentials#1'
+    })
+    expect(decideAssembled(key, undefined)).toMatchObject({
+      effect: 'ask',
+      winning: 'ask-on-read#0'
+    })
+    expect(decideAssembled(pathRequest('/data/ssh/new_key', 'write'), sshIsLinked)).toMatchObject({
+      effect: 'deny',
+      winning: 'protect-credentials#0'
+    })
+  })
+
+  it('EV-R3 恒等解析器与不给解析器逐字段同一个判决（内置全套 × 读写 × 各类位置 × 非路径客体）', () => {
+    const identity = (p: string): string => p
+    const requests: SecurityRequest[] = [
+      pathRequest('/ws/f.txt'),
+      pathRequest('/ws/f.txt', 'write'),
+      pathRequest('/home/u/.ssh/id_rsa'),
+      pathRequest('/home/u/.ssh/id_rsa', 'write'),
+      pathRequest('/etc/hosts', 'write'),
+      pathRequest('/outside/x'),
+      makeRequest({
+        action: 'execute',
+        object: { ...COMMAND_OBJECT, parsed: false, commands: [], writes: [] }
+      })
+    ]
+    for (const request of requests) {
+      expect(decideAssembled(request, identity)).toEqual(decideAssembled(request, undefined))
+    }
+  })
+
+  it('EV-R4 引擎自己不记忆：同一个参数被几条规则引用就问几次，每次 evaluate 都重新问（记忆化在门面，见 CT-R5）', () => {
+    const realPath = resolverOf({})
+    const rules = [deny('d1', "inDir(object.path, '/a')"), ask('a1', "inDir(object.path, '/a')")]
+    evaluate(rules, pathRequest('/x'), { realPath })
+    expect(realPath.mock.calls.map(([p]) => p)).toEqual(['/x', '/a', '/x', '/a'])
+    evaluate(rules, pathRequest('/x'), { realPath })
+    expect(realPath).toHaveBeenCalledTimes(8)
+  })
+
+  it('EV-R5 ask 材料里的 requestedPath：客体带着且与 path 不同才给；force-ask 胜出时照给（只是不给 rememberEntry）', () => {
+    const redirected = makeRequest({
+      object: { type: 'path', path: '/home/u/.ssh/id_rsa', requestedPath: '/ws/key' }
+    })
+    expect(evaluate([ask('a1')], redirected).ask).toEqual({
+      command: 'Read(/home/u/.ssh/id_rsa)',
+      rememberEntry: 'Read(/home/u/.ssh/id_rsa)',
+      requestedPath: '/ws/key'
+    })
+    expect(evaluate([ask('a1'), forceAsk('fa1')], redirected).ask).toEqual({
+      command: 'Read(/home/u/.ssh/id_rsa)',
+      requestedPath: '/ws/key'
+    })
+
+    // 写法就是真实去处：不给这一栏（卡片上不多一行）
+    const same = makeRequest({
+      object: { type: 'path', path: '/ws/f.txt', requestedPath: '/ws/f.txt' }
+    })
+    const materials = evaluate([ask('a1')], same).ask
+    expect(materials).toEqual({ command: 'Read(/ws/f.txt)', rememberEntry: 'Read(/ws/f.txt)' })
+    expect(materials).not.toHaveProperty('requestedPath')
   })
 })
 

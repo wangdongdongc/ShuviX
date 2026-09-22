@@ -14,9 +14,12 @@
  *
  * ⚠️ SSG-15 会让产品代码走到 `rmSync(recursive)` 的那条路：夹具根是本文件独有的一次性目录，
  * 哨兵是它的**子目录**，任何断言都不把路径算到这个根之外。
+ *
+ * SSG-17 在各个技能根里放符号链接条目（真技能目录放在各根之外、同一个夹具根之下）：beforeEach 的
+ * rmSync(recursive) 删的是链接本身、不跟过去，整棵树照样一次清干净。
  */
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest'
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 /**
@@ -441,5 +444,35 @@ describe('SSG 删除默认目录里的技能', () => {
     )
     expect(existsSync(join(DIRS.builtin, 'drawing'))).toBe(true)
     expect(existsSync(tool)).toBe(true)
+  })
+})
+
+describe.skipIf(process.platform === 'win32')('SSG 技能根里的符号链接条目', () => {
+  it('SSG-17 链接条目一律不算技能：内置 / 默认 / 外部目录里指向真技能目录的链接、悬空链接都不列，只有真的 mine 在；内置目录里只剩链接 → 没有 builtin 组；项目级 .claude/skills 里的链接同样不列；整个过程不抛', () => {
+    // 被链接的真技能目录放在所有根之外（它自己在哪个根里都不该出现）
+    const realSkill = writeSkill(join(DIRS.root, 'elsewhere'), 'linked')
+    writeSkill(DIRS.user, 'mine')
+    symlinkSync(realSkill, join(DIRS.builtin, 'linked'))
+    symlinkSync(realSkill, join(DIRS.user, 'linked'))
+    symlinkSync(join(DIRS.root, 'gone'), join(DIRS.user, 'dangling'))
+    skillService.addExternalDir({ name: 'ext', path: DIRS.ext })
+    symlinkSync(realSkill, join(DIRS.ext, 'linked'))
+    const project = join(DIRS.root, 'project')
+    mkdirSync(join(project, '.claude', 'skills'), { recursive: true })
+    symlinkSync(realSkill, join(project, '.claude', 'skills', 'linked'))
+
+    let groups: ReturnType<typeof skillService.findAllGrouped> = []
+    expect(() => (groups = skillService.findAllGrouped(project))).not.toThrow()
+    // 内置目录里只有一条链接 → 整组不出现；项目级只有链接 → 也没有 project 组
+    expect(groups.map((g) => g.dirName)).toEqual(['default', 'ext'])
+    expect(groups.map((g) => [g.dirName, g.skills.map((s) => s.name)])).toEqual([
+      ['default', ['mine']],
+      ['ext', []]
+    ])
+
+    expect(namesOf(skillService.findAll(project))).toEqual(['mine'])
+    expect(namesOf(skillService.findEnabled(project))).toEqual(['mine'])
+    expect(skillService.findEnabledAsCommands(project).map((c) => c.commandId)).toEqual(['mine'])
+    expect(skillService.findByName('linked')).toBe(null)
   })
 })

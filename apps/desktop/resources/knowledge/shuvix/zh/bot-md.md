@@ -81,8 +81,8 @@ talking about, and you never pad feedback with praise.
 说的话。除此之外它是一条普通有根会话：模型选择、扩展能力、压缩、导出、子会话与后台自动续跑一应照常。
 
 它的根人格是内置的 **`bot`** 基座，工具列表刻意收窄：`read, ls, grep, glob, ask, edit, session, agent,
-knowledge, artifact, skill:builtin:drawing` —— 没有 `bash`、`write`、`database`，也不声明内置能力服务器
-`mcp:ssh` / `mcp:browser`（用户仍可在这条会话的扩展里勾上它们，那是用户自己的选择）。bot 看得见、
+knowledge, artifact, skill:builtin:drawing` —— 没有 `bash`、`write`，也不声明内置能力服务器
+`mcp:ssh` / `mcp:browser` / `mcp:database`（用户仍可在这条会话的扩展里勾上它们，那是用户自己的选择）。bot 看得见、
 动不了：任何要改动或执行的事都得开一条子会话（编程活 → `agent_profile: coding`）。`edit` 只为一件事留着 —— 维护自己的文件 ——
 而 `~/.shuvix/bots/` 下的每次写入都经内置策略 **protect-bot-files**，即使开了免询问也会问用户。
 与 `notebook` 一样，这个基座声明项目感知但不读指令文件（AGENTS.md / CLAUDE.md 是给真正写代码的

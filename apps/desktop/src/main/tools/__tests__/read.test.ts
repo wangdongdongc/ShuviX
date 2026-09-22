@@ -3,15 +3,17 @@
  * 使用临时文件/目录，mock resolveProjectConfig 和 i18n
  */
 
-import { describe, it, expect, afterEach, beforeAll, afterAll, vi } from 'vitest'
+import { describe, it, expect, afterEach, beforeAll, afterAll, beforeEach, vi } from 'vitest'
 import {
   mkdirSync,
   writeFileSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   statSync,
   existsSync,
-  rmSync
+  rmSync,
+  symlinkSync
 } from 'node:fs'
 import { deflateSync } from 'node:zlib'
 import { join, resolve, sep } from 'node:path'
@@ -21,6 +23,11 @@ const TEST_DIR = join(tmpdir(), 'shuvix-read-test-' + Date.now())
 /** 假 userData —— 派生图落盘走真实的 utils/paths.ts（getToolResultsDir），必须给它一个真目录 */
 const USER_DATA_DIR = join(tmpdir(), 'shuvix-read-test-userdata-' + Date.now())
 const SESSION_ID = 'test-session'
+
+/** 门面 enforcePath 的 spy（恒放行）—— RD-L 看门问没问、问的是哪一条写法 */
+const enforcePath = vi.hoisted(() =>
+  vi.fn(async (_mode: string, _path: string, _opts: unknown): Promise<void> => {})
+)
 
 // mock toolContext（避免加载 projectDao/sessionService → electron app.getPath）
 vi.mock('../../services/toolContext', () => ({
@@ -40,7 +47,7 @@ vi.mock('../../services/toolContext', () => ({
   getDesktopSecurityContext: () => ({
     evaluate: () => ({ effect: 'allow', matched: [], winning: 'test' }),
     evaluateReadOnly: () => true,
-    enforcePath: async () => {},
+    enforcePath,
     enforceCommand: async () => ({ status: 'allowed' }),
     enforceGitOp: async () => {}
   }),
@@ -794,5 +801,87 @@ describe('read 工具 - 非图片结果不带 image', () => {
     expect(detailsOf(text).image).toBeUndefined()
     expect(detailsOf(dir).image).toBeUndefined()
     expect(detailsOf(url).image).toBeUndefined()
+  })
+})
+
+// 路径本身是符号链接 → 不跟（真的桌面 port.readLink）；中间段是链接的照常读。
+// 门在这里是恒放行的 spy：看的是「问没问、问的是哪一条写法」，判定本身在 writeAskWiring.test
+describe.skipIf(process.platform === 'win32')('read 工具 - 符号链接不跟（RD-L）', () => {
+  /** fixture 都放在 links/ 下（随 TEST_DIR 一起清掉） */
+  const L = join(TEST_DIR, 'links')
+
+  /** 抓住一次拒绝的原话（没拒就判红） */
+  const messageOf = async (work: Promise<unknown>): Promise<string> => {
+    try {
+      await work
+    } catch (err) {
+      return err instanceof Error ? err.message : String(err)
+    }
+    throw new Error('expected the read to be refused')
+  }
+
+  /**
+   * links/ 下：realdir/f.txt、dirlink → links/realdir；dangling → links/nowhere.txt（悬空），
+   * 旁边一个 dangling-sibling.txt —— 换成不是链接的名字，「Did you mean」就有东西可建议；
+   * pic.png → TEST_DIR/screenshot.png（超宽度上限：真跟过去就会解码、落一张派生图）
+   */
+  beforeAll(() => {
+    mkdirSync(join(L, 'realdir'), { recursive: true })
+    writeFileSync(join(L, 'realdir', 'f.txt'), 'through the link\n')
+    symlinkSync(join(L, 'realdir'), join(L, 'dirlink'))
+    symlinkSync(join(L, 'nowhere.txt'), join(L, 'dangling'))
+    writeFileSync(join(L, 'dangling-sibling.txt'), 'x')
+    symlinkSync(join(TEST_DIR, 'screenshot.png'), join(L, 'pic.png'))
+  })
+
+  beforeEach(() => enforcePath.mockClear())
+
+  it('RD-L1 指向目录的链接本身：拒（门都不问）；经它读里面的文件：照常读到，门恰问一次、问的是写法那一条', async () => {
+    const link = join(L, 'dirlink')
+    const real = realpathSync.native(join(L, 'realdir'))
+
+    expect(await messageOf(makeReadTool(ctx).execute('rdl1a', { path: link }))).toContain(
+      `${link} is a symbolic link to ${real}. Symbolic links are not followed`
+    )
+    expect(enforcePath).not.toHaveBeenCalled()
+
+    const through = join(link, 'f.txt')
+    const result = await makeReadTool(ctx).execute('rdl1b', { path: through })
+    expect(getText(result)).toContain('through the link')
+    expect(enforcePath).toHaveBeenCalledTimes(1)
+    expect(enforcePath.mock.calls[0].slice(0, 2)).toEqual(['read', through])
+  })
+
+  it('RD-L2 悬空链接：拒的是链接这一条 —— 不是 File not found，也不给 Did you mean（对照：同目录里真不存在的名字才给）', async () => {
+    const link = join(L, 'dangling')
+
+    const msg = await messageOf(makeReadTool(ctx).execute('rdl2a', { path: link }))
+    expect(msg).toContain(
+      `${link} is a symbolic link to ${join(realpathSync.native(L), 'nowhere.txt')}.`
+    )
+    expect(msg).not.toContain('File not found')
+    expect(msg).not.toContain('Did you mean')
+    expect(enforcePath).not.toHaveBeenCalled()
+
+    // 对照：同一个目录里一个真不存在（不是链接）的名字 —— 相似路径建议照常出现
+    const missing = await messageOf(
+      makeReadTool(ctx).execute('rdl2b', { path: join(L, 'danglin') })
+    )
+    expect(missing).toContain('File not found')
+    expect(missing).toContain('Did you mean')
+  })
+
+  it('RD-L3 带图片扩展名的链接：在解码之前就拒 —— nativeImage 一次都没碰，tool_results 里什么都没多', async () => {
+    const link = join(L, 'pic.png')
+    const derivedDir = toolResultsDir(SESSION_ID)
+    const derivedBefore = existsSync(derivedDir) ? readdirSync(derivedDir).length : 0
+
+    expect(await messageOf(makeReadTool(ctx).execute('rdl3', { path: link }))).toContain(
+      `${link} is a symbolic link to ${realpathSync.native(join(TEST_DIR, 'screenshot.png'))}.`
+    )
+    expect(nativeImageStub.decodes).toBe(0)
+    expect(nativeImageStub.calls).toBe(0)
+    expect(existsSync(derivedDir) ? readdirSync(derivedDir).length : 0).toBe(derivedBefore)
+    expect(enforcePath).not.toHaveBeenCalled()
   })
 })

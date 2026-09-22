@@ -59,6 +59,12 @@ export interface AskPolicyPrompt {
 export interface AskInputRequest extends InputRequestBase {
   kind: 'ask'
   command: string
+  /**
+   * 路径询问:工具请求的路径与 command 里那条**真实去处**不同时(中间隔着符号链接或 `..`),
+   * 请求时的写法。卡片以真实去处为主(策略判的、「允许并记住」记下的都是它),再注一行这个 ——
+   * 只给写法等于替链接瞒下真实目标,只给去处又对不上上方那次工具调用的参数。
+   */
+  requestedPath?: string
   description?: string
   /** 命中策略的提示语（有则卡片多渲染一栏） */
   policyPrompt?: AskPolicyPrompt

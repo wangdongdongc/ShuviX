@@ -3,12 +3,27 @@
  * （P2 抽共享内核前补齐基线：edit 之前无集成测试。）
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest'
-import { mkdirSync, writeFileSync, readFileSync, rmSync, utimesSync } from 'node:fs'
+import {
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  readlinkSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  utimesSync
+} from 'node:fs'
 import { join, resolve, sep } from 'node:path'
 import { tmpdir } from 'node:os'
 
 const TEST_DIR = join(tmpdir(), 'shuvix-edit-test-' + Date.now())
 const SESSION_ID = 'test-session'
+
+/** 门面 enforcePath 的 spy（恒放行）—— ED-L 看门问没问、问的是哪一条写法 */
+const enforcePath = vi.hoisted(() =>
+  vi.fn(async (_mode: string, _path: string, _opts: unknown): Promise<void> => {})
+)
 
 vi.mock('../../services/toolContext', () => ({
   resolveProjectConfig: () => ({ workingDirectory: TEST_DIR, referenceDirs: [] }),
@@ -23,7 +38,7 @@ vi.mock('../../services/toolContext', () => ({
   getDesktopSecurityContext: () => ({
     evaluate: () => ({ effect: 'allow', matched: [], winning: 'test' }),
     evaluateReadOnly: () => true,
-    enforcePath: async () => {},
+    enforcePath,
     enforceCommand: async () => ({ status: 'allowed' }),
     enforceGitOp: async () => {}
   }),
@@ -36,7 +51,7 @@ vi.mock('../../logger', () => ({
 }))
 
 import { makeEditTool } from '../edit'
-import { recordRead, _resetAll } from '../../utils/toolUtils/fileTime'
+import { recordRead, getReadTime, _resetAll } from '../../utils/toolUtils/fileTime'
 import type { ToolContext } from '../../services/toolContext'
 
 const ctx: ToolContext = { sessionId: SESSION_ID }
@@ -172,5 +187,52 @@ describe('edit 工具', () => {
     expect(results).toHaveLength(4)
     // 四处改动全部落盘
     expect(readFileSync(p, 'utf-8')).toBe('a = 10\nb = 20\nc = 30\nd = 40\n')
+  })
+})
+
+// 路径本身是符号链接 → 不跟（真的桌面 port.readLink）；中间段是链接的照常改。
+// 门在这里是恒放行的 spy：看的是「问没问、问的是哪一条写法」，判定本身在 writeAskWiring.test
+describe.skipIf(process.platform === 'win32')('edit 工具 - 符号链接不跟（ED-L）', () => {
+  /** fixture 都放在 links/ 下（随 TEST_DIR 一起清掉） */
+  const L = join(TEST_DIR, 'links')
+
+  /** links/ 下：etarget.txt、elink → etarget.txt（相对原文）；ereal/f.txt、edir → links/ereal */
+  beforeAll(() => {
+    mkdirSync(join(L, 'ereal'), { recursive: true })
+    writeFileSync(join(L, 'etarget.txt'), 'orig\n')
+    symlinkSync('etarget.txt', join(L, 'elink'))
+    writeFileSync(join(L, 'ereal', 'f.txt'), 'one\n')
+    symlinkSync(join(L, 'ereal'), join(L, 'edir'))
+  })
+
+  beforeEach(() => enforcePath.mockClear())
+
+  it('ED-L1 经相对原文的链接 edit：拒、原文原样引出；那头的字节 / mtime / 读取时间都不动，链接那一条也没落下读取时间，门没被问', async () => {
+    const link = join(L, 'elink')
+    const target = join(L, 'etarget.txt')
+    recordRead(SESSION_ID, target)
+    const readAt = getReadTime(SESSION_ID, target)
+    const mtimeMs = statSync(target).mtimeMs
+
+    await expect(
+      makeEditTool(ctx).execute('edl1', { path: link, oldText: 'orig', newText: 'x' })
+    ).rejects.toThrow(
+      `Not edited: ${link} is a symbolic link to ${realpathSync.native(target)} (the link says "etarget.txt"). Symbolic links are not followed`
+    )
+    expect(readFileSync(target, 'utf-8')).toBe('orig\n')
+    expect(statSync(target).mtimeMs).toBe(mtimeMs)
+    expect(getReadTime(SESSION_ID, target)).toBe(readAt)
+    expect(getReadTime(SESSION_ID, link)).toBeUndefined()
+    expect(readlinkSync(link)).toBe('etarget.txt')
+    expect(enforcePath).not.toHaveBeenCalled()
+  })
+
+  it('ED-L2 链接在中间（经链接目录 edit 那头的文件）：照常改到，门恰问一次、问的是写法那一条', async () => {
+    const p = join(L, 'edir', 'f.txt')
+
+    await makeEditTool(ctx).execute('edl2', { path: p, oldText: 'one', newText: 'two' })
+    expect(readFileSync(join(L, 'ereal', 'f.txt'), 'utf-8')).toBe('two\n')
+    expect(enforcePath).toHaveBeenCalledTimes(1)
+    expect(enforcePath.mock.calls[0].slice(0, 2)).toEqual(['write', p])
   })
 })

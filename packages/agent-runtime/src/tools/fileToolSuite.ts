@@ -1,10 +1,11 @@
 /**
  * 共享文件工具套件 —— read / write / edit 的整条执行流程（宿主无关）。
  *
- * 把桌面 tools/{read,write,edit}.ts 的 shell 逻辑收敛成一份:路径解析 → 路径询问(securityCheck)
- * → 内核(readTextContent/readDirContent/applyWrite/applyEdit) + read 的分派(url/图片/富文档/.doc/
- * 二进制/目录/纯文本)。平台差异全部经注入:FileSystemPort / FileGuards / resolvePath / SecurityContext
- * (安全模块 PEP 门面) / ReadDecoders(内容解码器,可选能力函数) / ensureAccess。
+ * 把桌面 tools/{read,write,edit}.ts 的 shell 逻辑收敛成一份:路径解析 → 符号链接不跟(路径本身是链接
+ * 就只说出它指向哪里) → 路径询问(securityCheck) → 内核(readTextContent/readDirContent/applyWrite/
+ * applyEdit) + read 的分派(url/图片/富文档/.doc/二进制/目录/纯文本)。平台差异全部经注入:
+ * FileSystemPort / FileGuards / resolvePath / SecurityContext(安全模块 PEP 门面) /
+ * ReadDecoders(内容解码器,可选能力函数) / ensureAccess。
  */
 import { Type } from 'typebox'
 import type { AgentToolResult } from '@earendil-works/pi-agent-core'
@@ -178,6 +179,28 @@ abstract class FileToolBase<
     return false
   }
 
+  /**
+   * 路径本身是符号链接：不跟过去，抛一句说明 —— 它指向哪里、真要操作就直接用那一条，工具就此结束。
+   * 那条链接是谁放的、为什么指向那里都说不准，替 agent 跟过去不如让它看见了自己决定；它真去读写
+   * 那头时，那一次照常过路径门。只看最后一段：中间段是链接的（链接目录、macOS 的 /var）照常走，
+   * 路径门按真实位置判。放在询问之前 —— 不为一次不会发生的访问弹卡。
+   */
+  private async refuseSymlink(displayPath: string, portPath: string): Promise<void> {
+    const link = await this.deps.port.readLink?.(portPath)
+    if (!link) return
+    // 相对的链接原文说不出落在哪，但说得出它是怎么写的（`../../.ssh/id_rsa`）；绝对的原文与
+    // resolved 往往只差系统级链接（macOS 的 /var → /private/var），再抄一遍只是噪音
+    const relative = !/^([\\/]|[A-Za-z]:[\\/])/.test(link.target)
+    const said = relative ? ` (the link says "${link.target}")` : ''
+    const lead =
+      this.name === 'write' ? 'Not written: ' : this.name === 'edit' ? 'Not edited: ' : ''
+    const verb = this.name === 'write' ? 'write to' : this.name === 'edit' ? 'edit' : 'read'
+    throw new Error(
+      `${lead}${displayPath} is a symbolic link to ${link.resolved}${said}. ` +
+        `Symbolic links are not followed — ${verb} ${link.resolved} directly if that is the file you mean.`
+    )
+  }
+
   protected async securityCheck(
     toolCallId: string,
     params: { path: string },
@@ -187,8 +210,9 @@ abstract class FileToolBase<
     // read 的 URL 分支不走文件系统询问
     if (this.mode === 'read' && this.isUrl(params.path)) return
     await this.deps.ensureAccess?.()
-    if (this.deferAskToApply) return
     const portPath = this.deps.resolvePath(params.path, this.mode)
+    await this.refuseSymlink(params.path, portPath)
+    if (this.deferAskToApply) return
     await this.deps.security.enforcePath(this.mode, portPath, {
       toolCallId,
       toolName: this.name,

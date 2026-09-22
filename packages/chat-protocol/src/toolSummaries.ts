@@ -27,6 +27,7 @@ const EXTRA_SUMMARY_BUILDERS: Record<string, ToolSummaryBuilder> = {
     const timeout = asStr(args.timeout)
     return [description, timeout && `${timeout}s`].filter(Boolean).join(' · ') || undefined
   },
+  // ssh / database 曾是内置工具，现为内置 MCP server（见 builtinMcpPresentations）；保留供历史会话展示
   ssh: field('description'),
   database: field('description'),
   ls: fileField('path'),

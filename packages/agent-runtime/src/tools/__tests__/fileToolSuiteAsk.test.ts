@@ -4,19 +4,32 @@
  * 关注点在「工具壳怎么问」：写类工具把询问推迟到 apply 层（一次调用只弹一张带 diff 预览的卡），
  * 放行短路（工作目录读 / 免询问 / allowList，经统一评估的 force-allow/static-allow 层）逐层生效，
  * 以及 InputResponse 判别联合的五个分支。
+ *
+ * 组 7（SYM）问的是门之前的那一步：路径本身是符号链接（port.readLink 答非 null）就不跟 —— 抛一句
+ * 说明它指向哪里，门不问、卡不弹、port 一个字节都不读写。链接由假 port 的 `links` 表给出
+ * （port 路径 → readLink 的答复），真文件系统上的那一半在桌面的 nodeFileSystemPort.test /
+ * writeAskWiring.test。「门没被问」看 enforcePath 的 spy 与决策日志（每次 enforce 都记一条）。
  */
 
-import { describe, it, expect, vi, type Mock } from 'vitest'
+import { describe, it, expect, vi, beforeEach, type Mock, type MockInstance } from 'vitest'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import type { FileSystemPort, FileGuards } from '../../fileTools/port'
-import type { AccessMode, SecurityHostProvider } from '../../security/types'
+import type { AccessMode, SecurityContext, SecurityHostProvider } from '../../security/types'
 import { createSecurityContext } from '../../security/context'
-import { createFileToolSuite, type FileToolDeps, type FileToolSuite } from '../fileToolSuite'
+import { clearSessionDecisions, getSessionDecisions } from '../../security/decisionLog'
+import {
+  createFileToolSuite,
+  type FileToolDeps,
+  type FileToolSuite,
+  type ReadDecoders
+} from '../fileToolSuite'
 import { createInlinePolicyMdReader } from '@shuvix/agent-runtime/security/builtinPolicies/inlineSources'
 
 /** 内置策略 md 的构建期内联读取口（真实装配链要它；测试进程，不进桌面 bundle） */
 const INLINE_POLICY_MD = createInlinePolicyMdReader()
 
+/** 套件的会话 id（决策日志按它分桶） */
+const SID = 'test-session'
 const ROOT = '/ws'
 const INSIDE = 'notes.txt'
 const INSIDE_ABS = '/ws/notes.txt'
@@ -39,6 +52,18 @@ interface SuiteOptions {
   knowledgeSessionDirs?: string[]
   /** OKF 写钩子的知识库注入（不传 = 扩展端口径：根目录下的 md 与普通 md 无异） */
   knowledge?: FileToolDeps['knowledge']
+  /** port 路径 → 它是符号链接时 readLink 的答复；表外 = 不是链接（null）。表是活的，用例可中途改 */
+  links?: Record<string, LinkInfo>
+  /** false = port 不带 readLink（扩展端口径：没有符号链接可言）；缺省带 */
+  withReadLink?: boolean
+  /** read 的内容解码器（URL / 相似路径建议…）；缺省不注入 */
+  decoders?: ReadDecoders
+}
+
+/** port.readLink 的非 null 答复 */
+interface LinkInfo {
+  target: string
+  resolved: string
 }
 
 interface SuiteHarness {
@@ -49,12 +74,32 @@ interface SuiteHarness {
   persistGrant: Mock<(mode: AccessMode, p: string) => void>
   onFileChange: Mock<(e: { portPath: string; kind: 'write' | 'edit' }) => void>
   readTimes: Set<string>
+  /** 与 opts.links 同一个对象（用例改它 = 改盘上的链接） */
+  links: Record<string, LinkInfo>
+  port: FileSystemPort
+  /** port.readLink 的 spy；withReadLink:false 时没有 */
+  readLink?: MockInstance<(p: string) => Promise<LinkInfo | null>>
+  resolvePath: Mock<(p: string, mode: AccessMode) => string>
+  /** 门面 enforcePath 的 spy（照常调真实现，只记实参） */
+  enforcePath: MockInstance<SecurityContext['enforcePath']>
+  /** port / guards 各方法的 spy（照常调真实现，只记实参） */
+  spies: {
+    stat: MockInstance<FileSystemPort['stat']>
+    readFile: MockInstance<FileSystemPort['readFile']>
+    readTextLines: MockInstance<FileSystemPort['readTextLines']>
+    readBytes: MockInstance<FileSystemPort['readBytes']>
+    readdir: MockInstance<FileSystemPort['readdir']>
+    writeFile: MockInstance<FileSystemPort['writeFile']>
+    withFileLock: MockInstance<(p: string, fn: () => Promise<unknown>) => Promise<unknown>>
+    recordRead: MockInstance<FileGuards['recordRead']>
+  }
 }
 
 function makeSuite(opts: SuiteOptions = {}): SuiteHarness {
   const files = new Map(Object.entries(opts.files ?? {}))
   const readTimes = new Set<string>()
   const requests: InputRequest[] = []
+  const links = opts.links ?? {}
 
   const port: FileSystemPort = {
     stat: (p) => {
@@ -79,7 +124,10 @@ function makeSuite(opts: SuiteOptions = {}): SuiteHarness {
     readBytes: () => {
       throw new Error('not used')
     },
-    readdir: () => Promise.resolve([])
+    readdir: () => Promise.resolve([]),
+    ...(opts.withReadLink === false
+      ? {}
+      : { readLink: (p: string) => Promise.resolve(links[p] ?? null) })
   }
 
   // 并发串行由 applyAsk.test.ts 覆盖；这里只关心询问接线
@@ -89,6 +137,17 @@ function makeSuite(opts: SuiteOptions = {}): SuiteHarness {
     recordRead: (p) => void readTimes.add(p),
     withFileLock: (_p, fn) => fn()
   }
+  const spies: SuiteHarness['spies'] = {
+    stat: vi.spyOn(port, 'stat'),
+    readFile: vi.spyOn(port, 'readFile'),
+    readTextLines: vi.spyOn(port, 'readTextLines'),
+    readBytes: vi.spyOn(port, 'readBytes'),
+    readdir: vi.spyOn(port, 'readdir'),
+    writeFile: vi.spyOn(port, 'writeFile'),
+    withFileLock: vi.spyOn(guards, 'withFileLock'),
+    recordRead: vi.spyOn(guards, 'recordRead')
+  }
+  const readLink = port.readLink ? vi.spyOn(port, 'readLink') : undefined
 
   const requestUserInput = opts.respond
     ? vi.fn(async (req: InputRequest): Promise<InputResponse> => {
@@ -125,16 +184,21 @@ function makeSuite(opts: SuiteOptions = {}): SuiteHarness {
     requestUserInput
   }
   const security = createSecurityContext(
-    { kind: 'agent', sessionId: 'test-session', agentKind: 'root' },
+    { kind: 'agent', sessionId: SID, agentKind: 'root' },
     { host: 'desktop' },
     provider
+  )
+  const enforcePath = vi.spyOn(security, 'enforcePath')
+  const resolvePath = vi.fn((p: string, _mode: AccessMode) =>
+    p.startsWith('/') ? p : `${ROOT}/${p}`
   )
 
   const deps: FileToolDeps = {
     port,
     guards,
-    resolvePath: (p) => (p.startsWith('/') ? p : `${ROOT}/${p}`),
+    resolvePath,
     security,
+    decoders: opts.decoders,
     abortError: opts.abortError,
     labels: { read: 'Read', write: 'Write', edit: 'Edit' },
     descriptions: { read: 'read', write: 'write', edit: 'edit' },
@@ -149,7 +213,13 @@ function makeSuite(opts: SuiteOptions = {}): SuiteHarness {
     requestUserInput,
     persistGrant,
     onFileChange,
-    readTimes
+    readTimes,
+    links,
+    port,
+    readLink,
+    resolvePath,
+    enforcePath,
+    spies
   }
 }
 
@@ -440,5 +510,369 @@ describe('文件工具套件 — OKF 知识库写钩子（deps.knowledge）', ()
     expect(h.files.get('/kb/sessions/x.md')).toBe(DRAFT)
     expect(textOf(res)).not.toContain('[OKF]')
     expect(h.onFileChange).toHaveBeenCalledTimes(1)
+  })
+})
+
+// ─── 组 7：路径本身是符号链接 —— 不跟，只说出它指向哪里 ──────────────────────
+
+/** 抓住一次拒绝的原话（没拒就判红） */
+async function messageOf(work: Promise<unknown>): Promise<string> {
+  try {
+    await work
+  } catch (err) {
+    return err instanceof Error ? err.message : String(err)
+  }
+  throw new Error('expected the call to be refused')
+}
+
+/** 取出一次询问（不是 ask 就判红） */
+function askOf(req: InputRequest | undefined): Extract<InputRequest, { kind: 'ask' }> {
+  if (req?.kind !== 'ask') throw new Error('expected an ask request')
+  return req
+}
+
+describe('文件工具套件 — 路径本身是符号链接：不跟（port.readLink）', () => {
+  /** 工作区里一条指向私钥的链接：R 本身归凭据门管（read 询问 / write 拒绝） */
+  const KEY_REAL = '/fake-home/.ssh/id_rsa'
+  const keyLink = (): Record<string, LinkInfo> => ({
+    '/ws/key': { target: KEY_REAL, resolved: KEY_REAL }
+  })
+  /** 工作区外的一个真文件（写它要问） */
+  const OUT = '/outside/target.txt'
+  const textOf = (res: { content: unknown[] }): string => (res.content[0] as { text: string }).text
+
+  // 决策日志是模块级的：每条用例从空桶起，「门没被问」才看得出来
+  beforeEach(() => clearSessionDecisions(SID))
+
+  it('SYM-1 read 一条链接：原话说出它指向哪里（D 照写、R 取 readLink 的 resolved）；readLink 恰一次、问的是 port 路径；门不问、卡不弹、port 一个字节都不读、不落读取时间', async () => {
+    // 放行的应答器：没弹卡不是因为被拒
+    const h = makeSuite({
+      files: { [KEY_REAL]: 'PRIVATE KEY\n' },
+      links: keyLink(),
+      respond: allowed
+    })
+
+    expect(await messageOf(h.suite.read.execute('s1', { path: 'key' }))).toBe(
+      `key is a symbolic link to ${KEY_REAL}. Symbolic links are not followed — read ${KEY_REAL} directly if that is the file you mean.`
+    )
+    expect(h.readLink?.mock.calls).toEqual([['/ws/key']])
+    expect(h.enforcePath).not.toHaveBeenCalled()
+    expect(getSessionDecisions(SID)).toEqual([])
+    expect(h.requestUserInput).not.toHaveBeenCalled()
+    for (const [name, spy] of Object.entries(h.spies)) expect(spy, name).not.toHaveBeenCalled()
+    expect(h.readTimes.size).toBe(0)
+  })
+
+  it('SYM-2 write 一条链接：原话以 Not written 起头；一个字节都没写 —— 不加锁、不 stat、不 writeFile，门不问、卡不弹、不广播变更、不记读取时间', async () => {
+    const h = makeSuite({
+      files: { [OUT]: 'old\n' },
+      links: { '/ws/wlink': { target: OUT, resolved: OUT } },
+      respond: allowed
+    })
+
+    expect(await messageOf(h.suite.write.execute('s2', { path: 'wlink', content: 'new\n' }))).toBe(
+      `Not written: wlink is a symbolic link to ${OUT}. Symbolic links are not followed — write to ${OUT} directly if that is the file you mean.`
+    )
+    expect([...h.files]).toEqual([[OUT, 'old\n']])
+    for (const [name, spy] of Object.entries(h.spies)) expect(spy, name).not.toHaveBeenCalled()
+    expect(h.enforcePath).not.toHaveBeenCalled()
+    expect(getSessionDecisions(SID)).toEqual([])
+    expect(h.requestUserInput).not.toHaveBeenCalled()
+    expect(h.onFileChange).not.toHaveBeenCalled()
+    expect(h.readTimes.size).toBe(0)
+  })
+
+  it('SYM-3 edit 一条链接（两头先前都读过）：原话以 Not edited 起头；那头原文不动，先前记下的读取时间原样', async () => {
+    const DOC = '/outside/doc.txt'
+    const h = makeSuite({
+      files: { [DOC]: 'alpha\nbeta\n' },
+      links: { '/ws/elink': { target: DOC, resolved: DOC } },
+      respond: allowed
+    })
+    h.readTimes.add(DOC)
+    h.readTimes.add('/ws/elink')
+
+    expect(
+      await messageOf(
+        h.suite.edit.execute('s3', { path: 'elink', oldText: 'beta', newText: 'BETA' })
+      )
+    ).toBe(
+      `Not edited: elink is a symbolic link to ${DOC}. Symbolic links are not followed — edit ${DOC} directly if that is the file you mean.`
+    )
+    expect([...h.files]).toEqual([[DOC, 'alpha\nbeta\n']])
+    expect([...h.readTimes].sort()).toEqual([DOC, '/ws/elink'])
+    for (const [name, spy] of Object.entries(h.spies)) expect(spy, name).not.toHaveBeenCalled()
+    expect(h.enforcePath).not.toHaveBeenCalled()
+    expect(getSessionDecisions(SID)).toEqual([])
+    expect(h.requestUserInput).not.toHaveBeenCalled()
+    expect(h.onFileChange).not.toHaveBeenCalled()
+  })
+
+  it('SYM-4 引不引链接原文：相对的原样引出（含 `~/x`、盘符相对的 `C:t.txt`）；绝对的（POSIX、Windows 盘符、UNC、根相对）从不引', async () => {
+    const R = '/resolved/end.txt'
+    const cases: Array<[text: string, quoted: boolean]> = [
+      ['../../.ssh/id_rsa', true],
+      ['real/a.txt', true],
+      ['./x', true],
+      ['x', true],
+      ['..', true],
+      // 链接原文里的 `~` 不是家目录，是一个名叫 `~` 的相对目录
+      ['~/x', true],
+      // 盘符后面没有分隔符：那个盘当前目录下的相对路径
+      ['C:t.txt', true],
+      ['/etc/passwd', false],
+      ['/', false],
+      ['C:\\Users\\me\\t.txt', false],
+      ['c:/Users/me/t.txt', false],
+      ['\\\\server\\share\\t.txt', false],
+      ['\\rooted\\t.txt', false]
+    ]
+    for (const [text, quoted] of cases) {
+      const h = makeSuite({ links: { '/ws/l': { target: text, resolved: R } } })
+      const msg = await messageOf(h.suite.read.execute('s4', { path: 'l' }))
+      // 引文紧跟在 R 后面、句号前面；两处说的都是 resolved，原文只出现在引文里
+      const said = quoted ? ` (the link says "${text}")` : ''
+      expect(msg, text).toContain(
+        `l is a symbolic link to ${R}${said}. Symbolic links are not followed — read ${R} directly`
+      )
+      expect(msg.includes('the link says'), text).toBe(quoted)
+    }
+
+    // write / edit 的引法与 read 同一条
+    const h = makeSuite({ links: { '/ws/l': { target: '../x', resolved: R } } })
+    expect(await messageOf(h.suite.write.execute('s4w', { path: 'l', content: 'x' }))).toContain(
+      `Not written: l is a symbolic link to ${R} (the link says "../x").`
+    )
+    expect(
+      await messageOf(h.suite.edit.execute('s4e', { path: 'l', oldText: 'a', newText: 'b' }))
+    ).toContain(`Not edited: l is a symbolic link to ${R} (the link says "../x").`)
+  })
+
+  it('SYM-5 链接链：说出的是链的尽头（resolved），引出的是第一跳的原文；工具自己不沿链再去问', async () => {
+    const END = '/ws/real/a.txt'
+    const h = makeSuite({
+      files: { [END]: 'a\n' },
+      // c1 → c2 → c3 → real/a.txt：port 把整条链跟到底，只交回第一跳原文与尽头
+      links: { '/ws/c1': { target: 'c2', resolved: END } },
+      respond: allowed
+    })
+
+    const msg = await messageOf(h.suite.read.execute('s5', { path: 'c1' }))
+    expect(msg).toContain(`c1 is a symbolic link to ${END} (the link says "c2").`)
+    expect(msg).toContain(`read ${END} directly`)
+    expect(msg).not.toContain('/ws/c2')
+    expect(h.readLink).toHaveBeenCalledTimes(1)
+  })
+
+  it('SYM-6 悬空链接也算：read 拒的是链接这一条（不是 File not found，也不去找相似路径）；write 同样拒、什么都不建', async () => {
+    const GONE = '/nowhere/x.txt'
+    const suggestSimilar = vi.fn((_p: string) => ['/ws/dang.txt'])
+    const h = makeSuite({
+      links: { '/ws/dang': { target: GONE, resolved: GONE } },
+      decoders: { suggestSimilar },
+      respond: allowed
+    })
+
+    const readMsg = await messageOf(h.suite.read.execute('s6r', { path: 'dang' }))
+    expect(readMsg).toContain(`dang is a symbolic link to ${GONE}.`)
+    expect(readMsg).not.toContain('File not found')
+    expect(readMsg).not.toContain('Did you mean')
+    expect(suggestSimilar).not.toHaveBeenCalled()
+
+    const writeMsg = await messageOf(h.suite.write.execute('s6w', { path: 'dang', content: 'x\n' }))
+    expect(writeMsg).toContain(`Not written: dang is a symbolic link to ${GONE}.`)
+    expect(h.files.size).toBe(0)
+    expect(h.spies.writeFile).not.toHaveBeenCalled()
+    expect(h.requestUserInput).not.toHaveBeenCalled()
+    expect(getSessionDecisions(SID)).toEqual([])
+
+    // 对照：同一个套件里真不存在（不是链接）的路径才走 File not found + 相似路径建议
+    const missing = await messageOf(h.suite.read.execute('s6m', { path: 'dang.tx' }))
+    expect(missing).toContain('File not found: dang.tx')
+    expect(missing).toContain('Did you mean')
+    expect(suggestSimilar).toHaveBeenCalledTimes(1)
+  })
+
+  it('SYM-7 会话授权跳不过这一条：免询问、allowList（链接与 R 的 Read / Write 条目都在）下 read / write / edit 照样拒，一个字节都不动', async () => {
+    const grantCases: Array<Pick<SuiteOptions, 'autoAllow' | 'allowList'>> = [
+      { autoAllow: true },
+      { allowList: ['Read(/ws/key)', 'Write(/ws/key)', `Read(${KEY_REAL})`, `Write(${KEY_REAL})`] }
+    ]
+    for (const grants of grantCases) {
+      const label = JSON.stringify(grants)
+      const h = makeSuite({
+        ...grants,
+        files: { [KEY_REAL]: 'PRIVATE KEY\n' },
+        links: keyLink(),
+        respond: allowed
+      })
+
+      expect(await messageOf(h.suite.read.execute('s7r', { path: 'key' })), label).toContain(
+        `key is a symbolic link to ${KEY_REAL}.`
+      )
+      expect(
+        await messageOf(h.suite.write.execute('s7w', { path: 'key', content: 'x' })),
+        label
+      ).toContain(`Not written: key is a symbolic link to ${KEY_REAL}.`)
+      expect(
+        await messageOf(
+          h.suite.edit.execute('s7e', { path: 'key', oldText: 'PRIVATE', newText: 'x' })
+        ),
+        label
+      ).toContain(`Not edited: key is a symbolic link to ${KEY_REAL}.`)
+
+      expect([...h.files], label).toEqual([[KEY_REAL, 'PRIVATE KEY\n']])
+      expect(h.enforcePath, label).not.toHaveBeenCalled()
+      expect(h.requestUserInput, label).not.toHaveBeenCalled()
+      expect(h.persistGrant, label).not.toHaveBeenCalled()
+      expect(h.readTimes.size, label).toBe(0)
+    }
+    expect(getSessionDecisions(SID)).toEqual([])
+  })
+
+  it('SYM-8 照提示改用 R 重发：那一次照常过门 —— read 问一次 Read(R)、允许后读到；凭据目录里的新 key 被 protect-credentials 直接拒；区外文件带 diff 问一次、允许后落盘', async () => {
+    // read：R 在凭据目录里 → 询问（链接那一次一张卡都没弹）
+    const r = makeSuite({
+      files: { [KEY_REAL]: 'PRIVATE KEY\n' },
+      links: keyLink(),
+      respond: allowed
+    })
+    expect(await messageOf(r.suite.read.execute('s8a', { path: 'key' }))).toContain(
+      `key is a symbolic link to ${KEY_REAL}.`
+    )
+    expect(r.requestUserInput).not.toHaveBeenCalled()
+    const read = await r.suite.read.execute('s8b', { path: KEY_REAL })
+    expect(r.requestUserInput).toHaveBeenCalledTimes(1)
+    expect(askOf(r.requests[0]).command).toBe(allowEntry('read', KEY_REAL))
+    expect(textOf(read)).toContain('PRIVATE KEY')
+
+    // write 一把还不存在的新 key（悬空链接的那头）：链接那一次被这一条拒；R 那一次被凭据门拒 —— 都不弹卡
+    const NEW_KEY = '/fake-home/.ssh/new_key'
+    const d = makeSuite({
+      links: { '/ws/newkey': { target: NEW_KEY, resolved: NEW_KEY } },
+      respond: allowed
+    })
+    expect(
+      await messageOf(d.suite.write.execute('s8c', { path: 'newkey', content: 'k' }))
+    ).toContain(`Not written: newkey is a symbolic link to ${NEW_KEY}.`)
+    const denied = await messageOf(d.suite.write.execute('s8d', { path: NEW_KEY, content: 'k' }))
+    expect(denied.startsWith(`Denied by security policy rule 'protect-credentials#0'`)).toBe(true)
+    expect(d.requestUserInput).not.toHaveBeenCalled()
+    expect(d.files.size).toBe(0)
+
+    // write 区外真文件：链接那一次不弹卡；R 那一次恰一张带 diff 的卡，允许后字节落在 R
+    const w = makeSuite({
+      files: { [OUT]: 'old\n' },
+      links: { '/ws/wlink': { target: OUT, resolved: OUT } },
+      respond: allowed
+    })
+    expect(
+      await messageOf(w.suite.write.execute('s8e', { path: 'wlink', content: 'new\n' }))
+    ).toContain(`Not written: wlink is a symbolic link to ${OUT}.`)
+    expect(w.requestUserInput).not.toHaveBeenCalled()
+    const res = await w.suite.write.execute('s8f', { path: OUT, content: 'new\n' })
+    expect(w.requestUserInput).toHaveBeenCalledTimes(1)
+    const req = askOf(w.requests[0])
+    expect(req.command).toBe(allowEntry('write', OUT))
+    expect(req.preview).toMatchObject({ kind: 'diff', path: OUT, isNewFile: false })
+    expect(req.preview?.diff).toBe((res.details as { diff: string }).diff)
+    expect(req.preview?.diff).toContain('-1 old')
+    expect(req.preview?.diff).toContain('+1 new')
+    expect(w.files.get(OUT)).toBe('new\n')
+  })
+
+  it('SYM-9 readLink 答 null：什么都不变 —— 每次调用拿 port 路径问一次，其后照旧（read 不弹，edit / write 各弹一次并落盘）', async () => {
+    const h = makeSuite({ files: { [INSIDE_ABS]: 'alpha\nbeta\n' }, respond: allowed })
+
+    expect(textOf(await h.suite.read.execute('s9r', { path: INSIDE }))).toContain('alpha')
+    expect(h.requestUserInput).not.toHaveBeenCalled()
+    await h.suite.edit.execute('s9e', { path: INSIDE, oldText: 'beta', newText: 'BETA' })
+    await h.suite.write.execute('s9w', { path: 'fresh.txt', content: 'x\n' })
+
+    expect(h.requestUserInput).toHaveBeenCalledTimes(2)
+    expect(h.readLink?.mock.calls).toEqual([[INSIDE_ABS], [INSIDE_ABS], ['/ws/fresh.txt']])
+    expect(h.files.get(INSIDE_ABS)).toBe('alpha\nBETA\n')
+    expect(h.files.get('/ws/fresh.txt')).toBe('x\n')
+  })
+
+  it('SYM-10 port 不带 readLink（扩展端）：照旧 —— read 读到，edit / write 各问一次并落盘', async () => {
+    const h = makeSuite({
+      withReadLink: false,
+      files: { [INSIDE_ABS]: 'alpha\n' },
+      respond: allowed
+    })
+    expect('readLink' in h.port).toBe(false)
+    expect(h.readLink).toBeUndefined()
+
+    expect(textOf(await h.suite.read.execute('s10r', { path: INSIDE }))).toContain('alpha')
+    await h.suite.edit.execute('s10e', { path: INSIDE, oldText: 'alpha', newText: 'ALPHA' })
+    await h.suite.write.execute('s10w', { path: 'fresh.txt', content: 'x\n' })
+
+    expect(h.requestUserInput).toHaveBeenCalledTimes(2)
+    expect(h.files.get(INSIDE_ABS)).toBe('ALPHA\n')
+    expect(h.files.get('/ws/fresh.txt')).toBe('x\n')
+  })
+
+  it('SYM-11 URL 读取不沾这一步：readLink、resolvePath、门都不碰，照常交给 readUrl', async () => {
+    const readUrl = vi.fn(async (url: string) => ({
+      content: [{ type: 'text' as const, text: `page ${url}` }],
+      details: { type: 'read' as const, truncated: false, url }
+    }))
+    const h = makeSuite({ decoders: { readUrl }, respond: allowed })
+
+    const res = await h.suite.read.execute('s11', { path: 'https://example.com/a' })
+    expect(textOf(res)).toBe('page https://example.com/a')
+    expect(readUrl).toHaveBeenCalledTimes(1)
+    expect(h.readLink).not.toHaveBeenCalled()
+    expect(h.resolvePath).not.toHaveBeenCalled()
+    expect(h.enforcePath).not.toHaveBeenCalled()
+    expect(h.requestUserInput).not.toHaveBeenCalled()
+  })
+
+  it('SYM-12 没有询问通道时照样是这一句（不是「no way to ask」）—— 拒在门之前', async () => {
+    const h = makeSuite({ files: { [KEY_REAL]: 'PRIVATE KEY\n' }, links: keyLink() })
+    expect(h.requestUserInput).toBeUndefined()
+
+    const readMsg = await messageOf(h.suite.read.execute('s12r', { path: 'key' }))
+    expect(readMsg).toContain(`key is a symbolic link to ${KEY_REAL}.`)
+    expect(readMsg).not.toContain('no way to ask')
+    const writeMsg = await messageOf(h.suite.write.execute('s12w', { path: 'key', content: 'x' }))
+    expect(writeMsg).toContain(`Not written: key is a symbolic link to ${KEY_REAL}.`)
+    expect(writeMsg).not.toContain('no way to ask')
+    expect(getSessionDecisions(SID)).toEqual([])
+  })
+
+  it('SYM-13 调用已中止：三个工具都抛注入的 abortError，连 readLink 都不问（中止先于这一步）', async () => {
+    const h = makeSuite({ links: keyLink(), abortError: 'TOOL_ABORTED', respond: allowed })
+    const ac = new AbortController()
+    ac.abort()
+
+    const calls: Array<() => Promise<unknown>> = [
+      () => h.suite.read.execute('s13r', { path: 'key' }, ac.signal),
+      () => h.suite.write.execute('s13w', { path: 'key', content: 'x' }, ac.signal),
+      () => h.suite.edit.execute('s13e', { path: 'key', oldText: 'a', newText: 'b' }, ac.signal)
+    ]
+    for (const call of calls) expect(await messageOf(call())).toBe('TOOL_ABORTED')
+    expect(h.readLink).not.toHaveBeenCalled()
+  })
+
+  it('SYM-14 每次调用现问、不记上一次的答复：同一个工具实例，链接换成同名真文件就照常读到，再换回链接又被拒', async () => {
+    const h = makeSuite({
+      files: { [KEY_REAL]: 'PRIVATE KEY\n', '/ws/key': 'plain\n' },
+      links: keyLink(),
+      respond: allowed
+    })
+    const read = h.suite.read
+
+    expect(await messageOf(read.execute('s14a', { path: 'key' }))).toContain('is a symbolic link')
+    // 链接被换成了同名的真文件（区内读：不弹卡）
+    delete h.links['/ws/key']
+    expect(textOf(await read.execute('s14b', { path: 'key' }))).toContain('plain')
+    // 又换回链接
+    h.links['/ws/key'] = { target: KEY_REAL, resolved: KEY_REAL }
+    expect(await messageOf(read.execute('s14c', { path: 'key' }))).toContain('is a symbolic link')
+
+    expect(h.readLink).toHaveBeenCalledTimes(3)
+    expect(h.requestUserInput).not.toHaveBeenCalled()
   })
 })

@@ -55,10 +55,15 @@ describe('笔记本会话的根 Agent', () => {
     expect(res.systemPrompt).not.toContain('{{shuvix:')
   })
 
-  it('工具白名单来自 notebook 档案：含 ask、不含 agent / database', async () => {
+  it('工具白名单来自 notebook 档案：含 ask、不含 agent / knowledge / session，也没有数据库', async () => {
     const names = (await runtimeInfo(nbSid)).tools.map((t) => t.name)
     expect(names).toContain('ask')
     expect(names).not.toContain('agent')
+    expect(names).not.toContain('knowledge')
+    expect(names).not.toContain('session')
+    // 数据库是按会话勾选的内置 MCP 能力服务器：notebook 档案不声明它、这条会话也没勾；
+    // 退役的内置工具名 database 不再存在（这一条对任何会话都成立，留着防它回来）
+    expect(names.filter((n) => n.startsWith('mcp__database__'))).toEqual([])
     expect(names).not.toContain('database')
   })
 

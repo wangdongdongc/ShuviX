@@ -9,7 +9,7 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { join } from 'node:path'
-import { readFileSync } from 'node:fs'
+import { readFileSync, realpathSync } from 'node:fs'
 import { tmpdir, homedir } from 'node:os'
 
 const WORKSPACE = join(tmpdir(), 'shuvix-policy-ws')
@@ -145,11 +145,12 @@ describe('桌面安全 provider — allowList 语义（force-allow 层）', () =
     expect(effectOf(context(), 'write', target)).toBe('ask')
   })
 
-  it('PERM-4: 询问材料的字面值就是 allowList 条目形态', () => {
+  it('PERM-4: 询问材料的字面值就是 allowList 条目形态（路径是真实去处 —— macOS 的临时目录在 /private/var 下）', () => {
     const decision = context().evaluate('write', { type: 'path', path: target })
+    const realTarget = join(realpathSync.native(tmpdir()), 'shuvix-policy-ws', 'a.txt')
     expect(decision.effect).toBe('ask')
-    expect(decision.ask?.command).toBe(`Write(${target})`)
-    expect(decision.ask?.rememberEntry).toBe(`Write(${target})`)
+    expect(decision.ask?.command).toBe(`Write(${realTarget})`)
+    expect(decision.ask?.rememberEntry).toBe(`Write(${realTarget})`)
 
     // read 的 ask 只剩凭据目录（其余默认放行无询问材料）
     const credential = join(homedir(), '.ssh', 'config')

@@ -65,13 +65,14 @@ style, each with file and line. Never modify files.
 一个逗号分隔的字符串。每一项是下面之一：
 
 - **内置工具名** —— 大小写不敏感，归一为小写：`bash`、`read`、`write`、`edit`、`ls`、`glob`、`grep`、
-  `ask`、`database`、`git`、`session`、`knowledge`、`artifact`；
+  `ask`、`git`、`session`、`knowledge`、`artifact`；
 - `agent` —— 选择加入用 `agent` 工具**派发子代理**（受嵌套上限约束：被派发的 agent 只在深度上限
   —— 缺省 2 —— 允许时才能继续派发）；
 - `mcp:<server>` —— 该 MCP 服务器的全部工具（服务器名按设置里配置的写；前缀后的大小写保留；创建
-  agent 时才惰性连接）。ShuviX 自带两台跑在进程内的：`mcp:browser`（ShuviX 自己的浏览器面板）与
-  `mcp:ssh`（你 `~/.ssh/config` 里的主机）。内置 agent 都不声明它们 —— 会话需要时自己勾 —— 所以一个
-  应当始终能用浏览器的 agent 要在列表里写上 `mcp:browser`；
+  agent 时才惰性连接）。ShuviX 自带三台跑在进程内的：`mcp:browser`（ShuviX 自己的浏览器面板）、
+  `mcp:ssh`（你 `~/.ssh/config` 里的主机）与 `mcp:database`（在 ShuviX 设置里保存的数据库连接）。
+  内置 agent 都不声明它们 —— 会话需要时自己勾 —— 所以一个应当始终能用浏览器的 agent 要在列表里写上
+  `mcp:browser`；
 - `skill:<name>` —— 那个 skill（带命名空间的 skill 写成 `skill:<dir>:<name>`；ShuviX 自带的技能写成
   `skill:builtin:<name>`）。
 
@@ -80,7 +81,7 @@ style, each with file and line. Never modify files.
 选择器里显示为已勾、锁住（悬停会说是哪个 agent 声明的）；会话自己的勾选只能在其上叠加，要去掉一项
 就得覆盖这个 agent。**收窄工具列表不是 ShuviX 表达角色的方式**：一个没有 `grep` 的 agent 只会拿
 `bash` 去 grep。内置的 `work`、`chat`、`coding` 三者刻意共用一份列表（`bash, read, write, edit, ask,
-ls, grep, glob, database, agent, session, knowledge, artifact, skill:builtin:drawing`），
+ls, grep, glob, agent, session, knowledge, artifact, skill:builtin:drawing`），
 只在正文上有区别。
 
 ### 正文 —— 系统提示词

@@ -847,3 +847,180 @@ describe('executeDecision — url 客体文案', () => {
     })
   })
 })
+
+/**
+ * 请求的写法落到了别处 —— 门面经 provider.realPath 解析过（见 context.ts）：客体上 path 是真实去处、
+ * requestedPath 是交来的写法。执行层据此把两条都交代清楚：卡片（requestedPath 那一栏）、拒绝类文案的
+ * 补注、决策日志；两条相同时一个字都不多。
+ */
+describe('executeDecision — 请求的写法落到了别处（requestedPath）', () => {
+  const REAL = '/home/u/.ssh/id_rsa'
+  const REQUESTED = '/ws/key'
+  const NOTE = ` (${REQUESTED} resolves to ${REAL})`
+  type AskRequest = Extract<InputRequest, { kind: 'ask' }>
+
+  const redirected = (action = 'read'): SecurityRequest =>
+    makeRequest({ action, object: { type: 'path', path: REAL, requestedPath: REQUESTED } })
+  const unchanged = (action = 'read'): SecurityRequest =>
+    makeRequest({
+      action,
+      object: { type: 'path', path: '/ws/file.txt', requestedPath: '/ws/file.txt' }
+    })
+  const REDIRECTED_ASK = askDecision({
+    command: `Read(${REAL})`,
+    rememberEntry: `Read(${REAL})`,
+    requestedPath: REQUESTED
+  })
+
+  it('EN-R1 询问卡片的 requestedPath 取自决策材料：材料里有 → 原样透传；没有 → 缺席', async () => {
+    const { provider, requestUserInput } = askProvider({ kind: 'ask', allowed: true })
+    await executeDecision({
+      provider,
+      request: redirected(),
+      decision: REDIRECTED_ASK,
+      opts: makeOpts(),
+      evaluateMs: 0
+    })
+    expect(requestUserInput.mock.calls[0][0]).toMatchObject({
+      kind: 'ask',
+      command: `Read(${REAL})`,
+      requestedPath: REQUESTED
+    })
+
+    await executeDecision({
+      provider,
+      request: unchanged(),
+      decision: PATH_ASK,
+      opts: makeOpts(),
+      evaluateMs: 0
+    })
+    const plain = requestUserInput.mock.calls[1][0] as AskRequest
+    expect(plain.command).toBe('Read(/ws/file.txt)')
+    expect(plain.requestedPath).toBeUndefined()
+  })
+
+  it('EN-R2 策略拒绝：归因之后、提示语之前补一句「(<写法> resolves to <真实去处>)」；没有 reason 的兜底文案同样', async () => {
+    const run = (decision: SecurityDecision, opts = makeOpts()): Promise<string> =>
+      rejectionMessage(
+        executeDecision({
+          provider: makeProvider(),
+          request: redirected('write'),
+          decision,
+          opts,
+          evaluateMs: 0
+        })
+      )
+
+    expect(await run(denyDecision("Denied by security policy rule 'd1'", PROMPT))).toBe(
+      `Denied by security policy rule 'd1'${NOTE}\n\n${PROMPT.text}`
+    )
+    expect(await run(denyDecision("Denied by security policy rule 'd1'"))).toBe(
+      `Denied by security policy rule 'd1'${NOTE}`
+    )
+    expect(await run(denyDecision(), makeOpts({ displayPath: 'key' }))).toBe(
+      `Access denied: key${NOTE}`
+    )
+  })
+
+  it('EN-R3 没有询问通道的 fail-closed 文案同样补上这一句（展示名之后）', async () => {
+    expect(
+      await rejectionMessage(
+        executeDecision({
+          provider: makeProvider(),
+          request: redirected(),
+          decision: REDIRECTED_ASK,
+          opts: makeOpts(),
+          evaluateMs: 0
+        })
+      )
+    ).toBe(`Access denied: path outside workspace and no way to ask: ${REQUESTED}${NOTE}`)
+  })
+
+  it('EN-R4 没给 displayPath 时展示名是请求时的写法（agent 认得出是哪一次调用），给了则 displayPath 优先；客体上没有 requestedPath 时回落到 path', async () => {
+    const run = (
+      response: InputResponse,
+      request = redirected(),
+      opts = makeOpts()
+    ): Promise<string> =>
+      rejectionMessage(
+        executeDecision({
+          provider: askProvider(response).provider,
+          request,
+          decision: REDIRECTED_ASK,
+          opts,
+          evaluateMs: 0
+        })
+      )
+
+    expect(await run({ kind: 'ask', allowed: false })).toBe(`User denied access to ${REQUESTED}`)
+    expect(await run({ kind: 'other', text: 'no' })).toBe(
+      `User declined access to ${REQUESTED} and provided feedback instead: no`
+    )
+    expect(
+      await run({ kind: 'ask', allowed: false }, redirected(), makeOpts({ displayPath: 'key' }))
+    ).toBe('User denied access to key')
+    // 未经门面的旧形态客体（没有 requestedPath）：照旧用 path
+    expect(
+      await run(
+        { kind: 'ask', allowed: false },
+        makeRequest({ object: { type: 'path', path: REAL } })
+      )
+    ).toBe(`User denied access to ${REAL}`)
+  })
+
+  it('EN-R5 决策日志：objectSummary 恒是真实去处；requestedPath 只在与它不同时记（落进 logger 的那一行同样）', async () => {
+    const info = vi.fn()
+    const provider = makeProvider({ logger: { info, warn: vi.fn(), error: vi.fn() } })
+    const run = (request: SecurityRequest): Promise<EnforceOutcome> =>
+      executeDecision({ provider, request, decision: ALLOW, opts: makeOpts(), evaluateMs: 0 })
+
+    await run(redirected())
+    await run(unchanged())
+    await run(makeRequest())
+    // 非路径客体带着同名属性（开放属性文档挡不住）：不算改道
+    await run(
+      makeRequest({ action: 'execute', object: { ...COMMAND_OBJECT, requestedPath: '/elsewhere' } })
+    )
+
+    // 新→旧
+    expect(getSessionDecisions(SID).map((l) => [l.objectSummary, l.requestedPath])).toEqual([
+      ['ls -la', undefined],
+      ['/ws/file.txt', undefined],
+      ['/ws/file.txt', undefined],
+      [REAL, REQUESTED]
+    ])
+    const lines = info.mock.calls.map((c) => String(c[0]))
+    expect(lines.filter((l) => l.includes('"requestedPath"'))).toEqual([
+      expect.stringContaining(`"requestedPath":"${REQUESTED}"`)
+    ])
+  })
+
+  it('EN-R6 写法与真实去处相同：拒绝与 fail-closed 文案与从前逐字一致（不多一个括号）；非路径客体上的同名属性不补注', async () => {
+    const run = (request: SecurityRequest, decision: SecurityDecision): Promise<string> =>
+      rejectionMessage(
+        executeDecision({
+          provider: makeProvider(),
+          request,
+          decision,
+          opts: makeOpts(),
+          evaluateMs: 0
+        })
+      )
+
+    expect(
+      await run(unchanged('write'), denyDecision("Denied by security policy rule 'd1'", PROMPT))
+    ).toBe(`Denied by security policy rule 'd1'\n\n${PROMPT.text}`)
+    expect(await run(unchanged(), PATH_ASK)).toBe(
+      'Access denied: path outside workspace and no way to ask: /ws/file.txt'
+    )
+    expect(
+      await run(
+        makeRequest({
+          action: 'execute',
+          object: { ...COMMAND_OBJECT, requestedPath: '/elsewhere' }
+        }),
+        denyDecision("Denied by security policy rule 'd1'")
+      )
+    ).toBe("Denied by security policy rule 'd1'")
+  })
+})
