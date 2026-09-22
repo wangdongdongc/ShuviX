@@ -98,6 +98,7 @@ export function wrapToolOutput<P extends TSchema, D>(
     let truncated = false
     let persisted = false
     const newContent: typeof result.content = []
+    let textIndex = 0
     for (const block of result.content) {
       if (block.type !== 'text') {
         newContent.push(block)
@@ -105,7 +106,9 @@ export function wrapToolOutput<P extends TSchema, D>(
       }
       const proc = await processToolOutput({
         sessionId,
-        toolCallId,
+        // 一次调用可能回好几段超长文本：每段落自己的文件，不然后一段覆盖前一段，
+        // 前一段预览里写的「全文在这里」指向的就是别人的全文
+        toolCallId: textIndex++ === 0 ? toolCallId : `${toolCallId}-${textIndex}`,
         fullText: block.text,
         strategy,
         maxBytes: overrides?.maxBytes,

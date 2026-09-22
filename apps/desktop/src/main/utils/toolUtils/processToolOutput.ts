@@ -28,6 +28,15 @@ export interface ProcessToolOutputOptions {
   spill?: boolean
 }
 
+/**
+ * 落盘文件名。toolCallId 来自模型提供商（自定义的 OpenAI 兼容中转也算），不能原样拼进路径 ——
+ * 带 `/` 或 `..` 的 id 会写出 tool_results 目录之外；只留字母、数字、`_`、`-`，截到一个正常长度。
+ */
+export function spillFileName(toolCallId: string): string {
+  const safe = toolCallId.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 128)
+  return `${safe || 'tool-call'}.txt`
+}
+
 export function processToolOutput(
   opts: ProcessToolOutputOptions
 ): Promise<ProcessToolOutputResult> {
@@ -36,7 +45,7 @@ export function processToolOutput(
   const sink: SpillSink = {
     async write(toolCallId, fullText) {
       try {
-        const filePath = join(getToolResultsDir(opts.sessionId), `${toolCallId}.txt`)
+        const filePath = join(getToolResultsDir(opts.sessionId), spillFileName(toolCallId))
         writeFileSync(filePath, fullText, 'utf-8')
         return { locator: filePath }
       } catch {
