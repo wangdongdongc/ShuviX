@@ -26,7 +26,9 @@ const TITLE_PAGE_CHARS = 60
 export function tabSessionTitle(pageTitle: string | undefined): string {
   const title = (pageTitle ?? '').trim()
   if (!title) return 'Chrome'
-  return `Chrome · ${title.length > TITLE_PAGE_CHARS ? `${title.slice(0, TITLE_PAGE_CHARS - 1)}…` : title}`
+  // 按码点截：按 UTF-16 截会把跨在边界上的 emoji 劈成半个
+  const chars = Array.from(title)
+  return `Chrome · ${chars.length > TITLE_PAGE_CHARS ? `${chars.slice(0, TITLE_PAGE_CHARS - 1).join('')}…` : title}`
 }
 
 /** 某浏览器名下的全部标签页会话 */

@@ -23,6 +23,11 @@
  *   H1–H9   显示本地文件的 tab 按读那个文件过门（哪些工具看、问什么、记住什么、先后顺序）、
  *           view-source: 不开、参数错不排队、进程级共享队列、pdf 参数先于写门校验、
  *           「失败」只有一个口径、服务端关连接、包入口导出、三处工具描述的措辞。
+ *   W1–W22  宿主给了 site 门（Chrome 那台）时按站点过门：server 名进工具名；按 tab **此刻**所在的
+ *           站点问、每个站点每个实例一次（写法规整、协议端口不算、blob: / view-source: /
+ *           filesystem: 按里面的站点算）；导航过了门的站点也记下、被拒的不记、没有门可过的不记；
+ *           并发的同站点操作共用一次询问；站点门也占着这个 tab 的队列；取消；
+ *           读不到 tab 地址时宁可建不出来 / 这一次失败（fail closed）。
  */
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
@@ -36,6 +41,7 @@ import {
   type BrowserGateContext,
   type BrowserMcpGates,
   type BrowserMcpServerOptions,
+  type BrowserSiteGateContext,
   type BrowserTabQueue
 } from '../mcpServer'
 import { browserToolsForCaps } from '../mcpTools'
@@ -185,6 +191,8 @@ interface OpenOpts {
   onClose?: () => void
   /** 进程级的 tab 队列（H4）；不给 = 这台 server 自己一份 */
   tabQueue?: BrowserTabQueue
+  /** `mcp_servers.name`（W1：chrome）；不给 = browser */
+  serverName?: string
 }
 
 const clients: Client[] = []
@@ -215,6 +223,7 @@ async function open(opts: OpenOpts = {}): Promise<Harness> {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
   await connectBrowserMcpServer(
     {
+      serverName: opts.serverName,
       backend: backend as unknown as BrowserBackend,
       gates: opts.gates,
       hostNote: opts.hostNote,
@@ -2806,5 +2815,551 @@ describe('H9 工具描述（过线之后）', () => {
     expect(pdf.inputSchema.properties?.pageSize.description).toBe(
       `Paper size: ${PDF_PAGE_SIZES.join(', ')} (default A4).`
     )
+  })
+})
+
+// ─── W 按站点过门（宿主给了 site 门 —— Chrome 那台）────────────────────────
+
+type SiteGateMock = Mock<(url: string, ctx: BrowserSiteGateContext) => Promise<void>>
+type SiteGateSpies = GateSpies & { site: SiteGateMock }
+
+/** 四道门都放行（两道文件门把路径解析成 `/abs/<原样>`）—— Chrome 那台的形状 */
+function siteGates(): SiteGateSpies {
+  return {
+    ...spyGates(),
+    site: vi.fn<(url: string, ctx: BrowserSiteGateContext) => Promise<void>>(async () => {})
+  }
+}
+
+/** 站点门一句话说明 */
+const SITE_GATE = (site: string, tabId = 't1'): string => `Use ${site} in tab ${tabId}`
+
+describe('W 按站点过门', () => {
+  const unhandled: unknown[] = []
+  const onUnhandled = (reason: unknown): void => {
+    unhandled.push(reason)
+  }
+
+  beforeEach(() => {
+    unhandled.length = 0
+    process.on('unhandledRejection', onUnhandled)
+  })
+
+  afterEach(() => {
+    process.off('unhandledRejection', onUnhandled)
+  })
+
+  async function expectNoUnhandled(): Promise<void> {
+    await settle(10)
+    await new Promise((r) => setTimeout(r, 10))
+    expect(unhandled).toEqual([])
+  }
+
+  it('W1 serverName chrome：server 叫 shuvix-chrome；导航门与站点门拿到的工具名都是 mcp__chrome__*', async () => {
+    const gates = siteGates()
+    const h = await open({
+      serverName: 'chrome',
+      backend: docBackend({ t1: 'https://b.com/' }, EXTENSION),
+      gates
+    })
+    expect(h.client.getServerVersion()).toEqual({ name: 'shuvix-chrome', version: '1.0.0' })
+
+    await h.call('open_tab', { url: 'https://a.com/' }, TC)
+    expect(gates.navigate.mock.calls.map(([, ctx]) => ctx.toolName)).toEqual([
+      'mcp__chrome__open_tab'
+    ])
+    await h.call('click', { tabId: 't1', uid: 'e1' }, TC)
+    expect(gates.site.mock.calls.map(([, ctx]) => ctx.toolName)).toEqual(['mcp__chrome__click'])
+  })
+
+  it('W1 不给 serverName：仍是 shuvix-browser 与 mcp__browser__*', async () => {
+    const gates = siteGates()
+    const h = await open({ backend: docBackend({ t1: 'https://b.com/' }), gates })
+    expect(h.client.getServerVersion()).toEqual({ name: 'shuvix-browser', version: '1.0.0' })
+    await h.call('open_tab', { url: 'https://a.com/' })
+    await h.call('click', { tabId: 't1', uid: 'e1' })
+    expect(gates.navigate.mock.calls[0][1].toolName).toBe('mcp__browser__open_tab')
+    expect(gates.site.mock.calls[0][1].toolName).toBe('mcp__browser__click')
+  })
+
+  it('W2 在显示网页的 tab 上操作：先按它此刻的地址过一次站点门（路由键、工具名、一句说明、tabId），放行后才做；导航门不问', async () => {
+    const timeline: string[] = []
+    const gates = siteGates()
+    gates.site.mockImplementation(async (url) => void timeline.push(`site ${url}`))
+    const backend = docBackend({ t1: 'https://a.com/x?q=1' })
+    backend.click.mockImplementation(async () => {
+      timeline.push('click')
+      return { text: 'clicked' }
+    })
+    const h = await open({ backend, gates })
+
+    expect(textOf(await h.call('click', { tabId: 't1', uid: 'e1' }, TC))).toBe('clicked')
+    expect(gates.site.mock.calls).toEqual([
+      [
+        'https://a.com/x?q=1',
+        {
+          toolCallId: 'tc-7',
+          toolName: 'mcp__browser__click',
+          description: SITE_GATE('a.com'),
+          tabId: 't1'
+        }
+      ]
+    ])
+    expect(timeline).toEqual(['site https://a.com/x?q=1', 'click'])
+    expect(gates.navigate).not.toHaveBeenCalled()
+  })
+
+  it('W3 同一个站点换了 tab、换了写法（大写、结尾的点）→ 不再问', async () => {
+    const gates = siteGates()
+    const urls: Record<string, string | undefined> = {
+      t1: 'https://a.com/x?q=1',
+      t2: 'https://A.COM./y'
+    }
+    const h = await open({ backend: docBackend(urls), gates })
+    await h.call('click', { tabId: 't1', uid: 'e1' })
+    expect(textOf(await h.call('read_page', { tabId: 't2' }))).toBe('readPage ok')
+    expect(gates.site).toHaveBeenCalledTimes(1)
+  })
+
+  it('W4 别的站点（含子域名）各问一次', async () => {
+    const gates = siteGates()
+    const urls: Record<string, string | undefined> = {
+      t1: 'https://a.com/',
+      t2: 'https://b.com/',
+      t3: 'https://sub.a.com/'
+    }
+    const h = await open({ backend: docBackend(urls), gates })
+    for (const tabId of ['t1', 't2', 't3', 't1', 't2', 't3']) {
+      await h.call('scroll', { tabId })
+    }
+    expect(gates.site.mock.calls.map(([url, ctx]) => [url, ctx.description])).toEqual([
+      ['https://a.com/', SITE_GATE('a.com', 't1')],
+      ['https://b.com/', SITE_GATE('b.com', 't2')],
+      ['https://sub.a.com/', SITE_GATE('sub.a.com', 't3')]
+    ])
+  })
+
+  it('W5 协议与端口不算站点的一部分；IPv6 字面量照样能做键', async () => {
+    const gates = siteGates()
+    const urls: Record<string, string | undefined> = { t1: 'http://a.com:8080/' }
+    const h = await open({ backend: docBackend(urls), gates })
+    await h.call('scroll', { tabId: 't1' })
+    urls.t1 = 'https://a.com/'
+    await h.call('scroll', { tabId: 't1' })
+    expect(gates.site).toHaveBeenCalledTimes(1)
+
+    urls.t1 = 'http://[::1]:3000/'
+    await h.call('scroll', { tabId: 't1' })
+    urls.t1 = 'http://[::1]:4000/other'
+    await h.call('scroll', { tabId: 't1' })
+    expect(gates.site.mock.calls.map(([, ctx]) => ctx.description)).toEqual([
+      SITE_GATE('a.com'),
+      SITE_GATE('[::1]')
+    ])
+  })
+
+  it.each([
+    'about:blank',
+    'data:text/html,x',
+    'chrome://settings',
+    'chrome-extension://x/y',
+    'devtools://x',
+    'blob:null/u'
+  ])('W6 tab 显示 %s（不属于任何站点）→ 不过站点门，后端照做', async (shown) => {
+    const gates = siteGates()
+    const backend = docBackend({ t1: shown })
+    const h = await open({ backend, gates })
+    expect(textOf(await h.call('read_page', { tabId: 't1' }))).toBe('readPage ok')
+    expect(backend.tabUrl).toHaveBeenCalledTimes(1)
+    expect(gates.site).not.toHaveBeenCalled()
+    expect(gates.navigate).not.toHaveBeenCalled()
+  })
+
+  it('W7 tab 显示本地文件 → 按读那个文件过导航门，站点门不问', async () => {
+    const gates = siteGates()
+    const h = await open({ backend: docBackend({ t1: 'file:///tmp/r.html' }), gates })
+    await h.call('snapshot', { tabId: 't1' }, TC)
+    expect(gates.navigate.mock.calls).toEqual([
+      [
+        'file:///tmp/r.html',
+        { toolCallId: 'tc-7', toolName: 'mcp__browser__snapshot', description: DOC_GATE() }
+      ]
+    ])
+    expect(gates.site).not.toHaveBeenCalled()
+  })
+
+  it.each<[string, string, OpParams]>([
+    ['list_tabs', 'list_tabs', {}],
+    ['open_tab', 'open_tab', { url: 'https://b.com/' }],
+    ['close_tab', 'close_tab', { tabId: 't1' }],
+    ['navigate goto', 'navigate', { tabId: 't1', url: 'https://b.com/' }],
+    ['navigate back', 'navigate', { tabId: 't1', nav: 'back' }],
+    ['navigate forward', 'navigate', { tabId: 't1', nav: 'forward' }],
+    ['navigate reload', 'navigate', { tabId: 't1', nav: 'reload' }],
+    ['cdp_recipes', 'cdp_recipes', {}]
+  ])('W8 %s：不碰 tab 里的文档 → 不看它眼下的站点（站点门一次都不问）', async (_l, name, args) => {
+    const gates = siteGates()
+    const backend = docBackend({ t1: 'https://a.com/' })
+    const h = await open({ backend, gates })
+    expect((await h.call(name, args)).isError).toBeFalsy()
+    expect(backend.tabUrl).not.toHaveBeenCalled()
+    expect(gates.site).not.toHaveBeenCalled()
+  })
+
+  it.each(NAV_ENTRIES)(
+    'W9 %s 去一个已经放行过的站点 → 导航门不再问，后端照做',
+    async (_l, tool, argsOf, method) => {
+      const gates = siteGates()
+      const backend = docBackend({ t1: 'https://a.com/' })
+      const h = await open({ backend, gates })
+      await h.call('scroll', { tabId: 't1' })
+      expect(gates.site).toHaveBeenCalledTimes(1)
+
+      expect((await h.call(tool, argsOf('https://a.com/other'))).isError).toBeFalsy()
+      expect(gates.navigate).not.toHaveBeenCalled()
+      expect(backend[method]).toHaveBeenCalledTimes(1)
+      expect(gates.site).toHaveBeenCalledTimes(1)
+    }
+  )
+
+  it('W10 导航过了门的站点记下：之后在显示它的 tab 上操作不再问', async () => {
+    const gates = siteGates()
+    const urls: Record<string, string | undefined> = {}
+    const backend = docBackend(urls)
+    const h = await open({ backend, gates })
+    expect((await h.call('open_tab', { url: 'https://b.com/' })).isError).toBeFalsy()
+    expect(gates.navigate.mock.calls.map(([url, ctx]) => [url, ctx.description])).toEqual([
+      ['https://b.com/', 'Open https://b.com/']
+    ])
+
+    urls.t2 = 'https://b.com/inbox'
+    expect(textOf(await h.call('click', { tabId: 't2', uid: 'e1' }))).toBe('click ok')
+    expect(gates.site).not.toHaveBeenCalled()
+    expect(gates.navigate).toHaveBeenCalledTimes(1)
+  })
+
+  it('W11 导航门拒绝 → 失败原话回去、不记：页面若照样到了那个站点，在它上面的操作仍要问', async () => {
+    const gates = siteGates()
+    gates.navigate.mockRejectedValueOnce(new Error('User denied opening https://c.com/'))
+    const urls: Record<string, string | undefined> = {}
+    const backend = docBackend(urls)
+    const h = await open({ backend, gates })
+    expectFailure(
+      await h.call('navigate', { tabId: 't1', url: 'https://c.com/' }),
+      'User denied opening https://c.com/'
+    )
+    expect(backend.navigate).not.toHaveBeenCalled()
+
+    urls.t2 = 'https://c.com/'
+    await h.call('read_page', { tabId: 't2' })
+    expect(gates.site.mock.calls.map(([url, ctx]) => [url, ctx.description])).toEqual([
+      ['https://c.com/', SITE_GATE('c.com', 't2')]
+    ])
+  })
+
+  it('W12 放行的是当初导航的站点：页面自己跳去了别的站点 → 下一步之前按那个站点问', async () => {
+    const gates = siteGates()
+    const urls: Record<string, string | undefined> = {}
+    const h = await open({ backend: docBackend(urls), gates })
+    await h.call('open_tab', { url: 'https://short.link/x' })
+    urls.t1 = 'https://evil.com/'
+    await h.call('read_page', { tabId: 't1' }, TC)
+    expect(gates.site.mock.calls).toEqual([
+      [
+        'https://evil.com/',
+        {
+          toolCallId: 'tc-7',
+          toolName: 'mcp__browser__read_page',
+          description: SITE_GATE('evil.com'),
+          tabId: 't1'
+        }
+      ]
+    ])
+  })
+
+  it('W13 站点门拒绝 → 它的原话作为失败回去，后端一个都不碰；被拒的不记，下一次照样问', async () => {
+    const gates = siteGates()
+    gates.site.mockRejectedValueOnce(new Error('no'))
+    const backend = docBackend({ t1: 'https://a.com/' })
+    const h = await open({ backend, gates })
+    expectFailure(await h.call('click', { tabId: 't1', uid: 'e1' }), 'no')
+    expect(backendCalls(backend)).toBe(0)
+
+    expect(textOf(await h.call('click', { tabId: 't1', uid: 'e1' }))).toBe('click ok')
+    expect(gates.site).toHaveBeenCalledTimes(2)
+  })
+
+  it('W14 只有导航门（桌面的形状）：不按站点记账 —— 同一地址导航两次问两次；网页上的操作一道门都不过', async () => {
+    const gates = spyGates()
+    const backend = docBackend({ t1: 'https://a.com/' })
+    const h = await open({ backend, gates })
+    await h.call('navigate', { tabId: 't1', url: 'https://a.com/x' })
+    await h.call('navigate', { tabId: 't1', url: 'https://a.com/x' })
+    expect(gates.navigate).toHaveBeenCalledTimes(2)
+
+    await h.call('click', { tabId: 't1', uid: 'e1' })
+    await h.call('read_page', { tabId: 't1' })
+    expect(gates.navigate).toHaveBeenCalledTimes(2)
+    expect(backend.click).toHaveBeenCalledTimes(1)
+  })
+
+  it('W15 放行按实例记：共用同一份门的另一台实例、关掉之后新开的实例，都从头问', async () => {
+    const gates = siteGates()
+    const backend = docBackend({ t1: 'https://a.com/' })
+    const one = await open({ backend, gates })
+    const two = await open({ backend, gates })
+
+    await one.call('scroll', { tabId: 't1' })
+    await one.call('scroll', { tabId: 't1' })
+    expect(gates.site).toHaveBeenCalledTimes(1)
+    await two.call('scroll', { tabId: 't1' })
+    expect(gates.site).toHaveBeenCalledTimes(2)
+
+    await one.client.close()
+    const three = await open({ backend, gates })
+    await three.call('scroll', { tabId: 't1' })
+    expect(gates.site).toHaveBeenCalledTimes(3)
+  })
+
+  it('W16 站点门还挂着时被取消 → 随后放行也不往下做，同一 tab 不被卡住，没有未处理的拒绝；用户那一下允许照样算数', async () => {
+    const gates = siteGates()
+    const ask = deferred<void>()
+    gates.site.mockImplementationOnce(() => ask.promise)
+    const backend = docBackend({ t1: 'https://a.com/' })
+    const h = await open({ backend, gates })
+
+    const ac = new AbortController()
+    const pending = h.call('click', { tabId: 't1', uid: 'e1' }, undefined, ac.signal)
+    await vi.waitFor(() => expect(gates.site).toHaveBeenCalledTimes(1))
+    ac.abort()
+    await expect(pending).rejects.toThrow()
+
+    ask.resolve()
+    await settle()
+    expect(backend.click).not.toHaveBeenCalled()
+
+    expect(textOf(await within(h.call('scroll', { tabId: 't1' })))).toBe('scroll ok')
+    expect(gates.site).toHaveBeenCalledTimes(1)
+    await expectNoUnhandled()
+  })
+
+  it('W16 站点门在取消之后才拒绝 → 同样安静地结束', async () => {
+    const gates = siteGates()
+    const ask = deferred<void>()
+    gates.site.mockImplementationOnce(() => ask.promise)
+    const backend = docBackend({ t1: 'https://a.com/' })
+    const h = await open({ backend, gates })
+
+    const ac = new AbortController()
+    const pending = h.call('read_page', { tabId: 't1' }, undefined, ac.signal)
+    await vi.waitFor(() => expect(gates.site).toHaveBeenCalledTimes(1))
+    ac.abort()
+    await expect(pending).rejects.toThrow()
+    ask.reject(new Error('Aborted'))
+    await expectNoUnhandled()
+    expect(backend.readPage).not.toHaveBeenCalled()
+  })
+
+  it('W17 cdp Page.navigate：先按 tab 当前的站点过站点门，再按目标过导航门，最后才发命令', async () => {
+    const timeline: string[] = []
+    const gates = siteGates()
+    gates.site.mockImplementation(async (url) => void timeline.push(`site ${url}`))
+    gates.navigate.mockImplementation(async (url) => void timeline.push(`navigate ${url}`))
+    const backend = docBackend({ t1: 'https://a.com/' })
+    backend.cdp.mockImplementation(async () => {
+      timeline.push('cdp')
+      return { text: 'Page.navigate →' }
+    })
+    const h = await open({ backend, gates })
+    await h.call('cdp', { tabId: 't1', method: 'Page.navigate', params: { url: 'https://b.com/' } })
+    expect(timeline).toEqual(['site https://a.com/', 'navigate https://b.com/', 'cdp'])
+  })
+
+  it('W18 等站点询问的调用占着这个 tab：同 tab 的下一个排在后面，别的 tab 照常', async () => {
+    const gates = siteGates()
+    const ask = deferred<void>()
+    gates.site.mockImplementationOnce(() => ask.promise)
+    const backend = docBackend({ t1: 'https://a.com/', t2: 'https://b.com/' })
+    const h = await open({ backend, gates })
+
+    const first = h.call('click', { tabId: 't1', uid: 'e1' })
+    await vi.waitFor(() => expect(gates.site).toHaveBeenCalledTimes(1))
+    const second = h.call('scroll', { tabId: 't1' })
+    expect(textOf(await within(h.call('read_page', { tabId: 't2' })))).toBe('readPage ok')
+    await settle()
+    expect(backend.click).not.toHaveBeenCalled()
+    expect(backend.scroll).not.toHaveBeenCalled()
+
+    ask.resolve()
+    expect(textOf(await first)).toBe('click ok')
+    expect(textOf(await within(second))).toBe('scroll ok')
+    // t1 的站点只问了一次；t2 的站点单独问过
+    expect(gates.site.mock.calls.map(([, ctx]) => ctx.description)).toEqual([
+      SITE_GATE('a.com', 't1'),
+      SITE_GATE('b.com', 't2')
+    ])
+  })
+
+  it('W19 给了站点门、后端却读不了 tab 地址 → 直接建不出来（逐字原话），不是悄悄不设门', async () => {
+    const gates = siteGates()
+    const [, serverTransport] = InMemoryTransport.createLinkedPair()
+    await expect(
+      connectBrowserMcpServer(
+        { backend: fakeBackend() as unknown as BrowserBackend, gates },
+        serverTransport
+      )
+    ).rejects.toThrow('A browser site gate needs a backend that can report tab URLs (tabUrl).')
+
+    // 经注册表按会话实例化：这条会话的连接建不起来
+    const reg = new BuiltinMcpRegistry()
+    reg.register(
+      'chrome',
+      createBrowserMcpServerFactory(() => ({
+        serverName: 'chrome',
+        backend: fakeBackend(EXTENSION) as unknown as BrowserBackend,
+        gates
+      }))
+    )
+    await expect(reg.createClientTransport('chrome', { sessionId: 's1' })).rejects.toThrow(
+      'A browser site gate needs a backend that can report tab URLs (tabUrl).'
+    )
+  })
+
+  it('W19 只有导航门 / 文件门、后端读不了 tab 地址 → 照常建（那一层检查整个不做）', async () => {
+    const gates = spyGates()
+    const [, serverTransport] = InMemoryTransport.createLinkedPair()
+    await expect(
+      connectBrowserMcpServer(
+        { backend: fakeBackend() as unknown as BrowserBackend, gates },
+        serverTransport
+      )
+    ).resolves.toBeUndefined()
+  })
+
+  it('W19 tabUrl 回 undefined（没有这个 tab）→ 不过站点门，后端照做', async () => {
+    const gates = siteGates()
+    const backend = docBackend({})
+    const h = await open({ backend, gates })
+    expect(textOf(await h.call('click', { tabId: 't9', uid: 'e1' }))).toBe('click ok')
+    expect(backend.tabUrl).toHaveBeenCalledTimes(1)
+    expect(gates.site).not.toHaveBeenCalled()
+  })
+
+  it('W19 tabUrl 失败（问不到 tab 在哪）→ 这一次以它的原话失败，门与后端都不碰；tab 不被卡住', async () => {
+    const gates = siteGates()
+    const backend = docBackend({ t1: 'https://a.com/' })
+    backend.tabUrl.mockRejectedValueOnce(new Error('Chrome did not answer "tabs.get" within 10s.'))
+    const h = await open({ backend, gates })
+    expectFailure(
+      await h.call('click', { tabId: 't1', uid: 'e1' }),
+      'Chrome did not answer "tabs.get" within 10s.'
+    )
+    expect(backendCalls(backend)).toBe(0)
+    expect(gates.site).not.toHaveBeenCalled()
+    expect(gates.navigate).not.toHaveBeenCalled()
+    expect(textOf(await within(h.call('click', { tabId: 't1', uid: 'e1' })))).toBe('click ok')
+  })
+
+  it.each(NAV_ENTRIES)(
+    'W20 只有站点门、没有导航门：%s 不过门也不记下 —— 之后在显示那个站点的 tab 上操作照样问',
+    async (_l, tool, argsOf, method) => {
+      const site = vi.fn<(url: string, ctx: BrowserSiteGateContext) => Promise<void>>(
+        async () => {}
+      )
+      const urls: Record<string, string | undefined> = {}
+      const backend = docBackend(urls)
+      const h = await open({ backend, gates: { site } })
+      if (tool === 'cdp') urls.t1 = 'about:blank'
+      expect((await h.call(tool, argsOf('https://x.com/'))).isError).toBeFalsy()
+      expect(backend[method]).toHaveBeenCalledTimes(1)
+      expect(site).not.toHaveBeenCalled()
+
+      urls.t2 = 'https://x.com/'
+      await h.call('read_page', { tabId: 't2' })
+      expect(site.mock.calls.map(([url, ctx]) => [url, ctx.description])).toEqual([
+        ['https://x.com/', SITE_GATE('x.com', 't2')]
+      ])
+    }
+  )
+
+  it.each([
+    'blob:https://evil.com/u',
+    'view-source:https://evil.com/',
+    'VIEW-SOURCE:view-source:https://Evil.com./x',
+    'filesystem:https://evil.com/temporary/x'
+  ])('W21 tab 显示 %s（带着 evil.com 的登录态）→ 按 evil.com 过站点门', async (shown) => {
+    const gates = siteGates()
+    const backend = docBackend({ t1: shown })
+    const h = await open({ backend, gates })
+    await h.call('read_page', { tabId: 't1' })
+    expect(gates.site.mock.calls.map(([url, ctx]) => [url, ctx.description])).toEqual([
+      [shown, SITE_GATE('evil.com')]
+    ])
+    // 同一站点的普通网页随后不再问
+    backend.tabUrl.mockResolvedValue('https://evil.com/inbox')
+    await h.call('read_page', { tabId: 't1' })
+    expect(gates.site).toHaveBeenCalledTimes(1)
+  })
+
+  it('W22 两个 tab 同时第一次用同一个站点 → 只问一次；放行后两个都做', async () => {
+    const gates = siteGates()
+    const ask = deferred<void>()
+    gates.site.mockImplementationOnce(() => ask.promise)
+    const backend = docBackend({ t1: 'https://a.com/1', t2: 'https://a.com/2' })
+    const h = await open({ backend, gates })
+
+    const one = h.call('click', { tabId: 't1', uid: 'e1' })
+    const two = h.call('read_page', { tabId: 't2' })
+    await vi.waitFor(() => expect(backend.tabUrl).toHaveBeenCalledTimes(2))
+    await settle()
+    expect(gates.site).toHaveBeenCalledTimes(1)
+    expect(backendCalls(backend)).toBe(0)
+
+    ask.resolve()
+    expect(textOf(await within(one))).toBe('click ok')
+    expect(textOf(await within(two))).toBe('readPage ok')
+    expect(gates.site).toHaveBeenCalledTimes(1)
+  })
+
+  it('W22 共用的那一次被拒 → 两个都以它的原话失败；之后的操作重新问', async () => {
+    const gates = siteGates()
+    const ask = deferred<void>()
+    gates.site.mockImplementationOnce(() => ask.promise)
+    const backend = docBackend({ t1: 'https://a.com/1', t2: 'https://a.com/2' })
+    const h = await open({ backend, gates })
+
+    const one = h.call('click', { tabId: 't1', uid: 'e1' })
+    const two = h.call('read_page', { tabId: 't2' })
+    await vi.waitFor(() => expect(backend.tabUrl).toHaveBeenCalledTimes(2))
+    await settle()
+    ask.reject(new Error('User denied opening https://a.com/1'))
+    expectFailure(await within(one), 'User denied opening https://a.com/1')
+    expectFailure(await within(two), 'User denied opening https://a.com/1')
+    expect(backendCalls(backend)).toBe(0)
+
+    expect(textOf(await h.call('scroll', { tabId: 't1' }))).toBe('scroll ok')
+    expect(gates.site).toHaveBeenCalledTimes(2)
+    await expectNoUnhandled()
+  })
+
+  it('W22 导航门正在问一个站点时，同站点 tab 上的操作等那一次，不另弹站点门', async () => {
+    const gates = siteGates()
+    const ask = deferred<void>()
+    gates.navigate.mockImplementationOnce(() => ask.promise)
+    const backend = docBackend({ t1: 'https://a.com/' })
+    const h = await open({ backend, gates })
+
+    const opening = h.call('open_tab', { url: 'https://a.com/new' })
+    await vi.waitFor(() => expect(gates.navigate).toHaveBeenCalledTimes(1))
+    const clicking = h.call('click', { tabId: 't1', uid: 'e1' })
+    await vi.waitFor(() => expect(backend.tabUrl).toHaveBeenCalledTimes(1))
+    await settle()
+    expect(backend.click).not.toHaveBeenCalled()
+
+    ask.resolve()
+    expect(textOf(await within(opening))).toBe('openTab ok')
+    expect(textOf(await within(clicking))).toBe('click ok')
+    expect(gates.site).not.toHaveBeenCalled()
+    expect(gates.navigate).toHaveBeenCalledTimes(1)
   })
 })

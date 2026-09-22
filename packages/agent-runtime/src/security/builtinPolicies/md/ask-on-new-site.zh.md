@@ -10,7 +10,7 @@ shuvix-policy-scope:
 shuvix-policy-rules:
   - effect: ask
     action: [navigate]
-    match: object.browser == 'chrome' && object.scheme in ['http', 'https', 'blob']
+    match: object.browser == 'chrome' && object.scheme in ['http', 'https', 'blob'] && object.host != ''
     prompt: 这是你自己的 Chrome，登录着你的账号 —— 智能体能以你的身份看到并操作这个站点。
 ---
 
@@ -29,4 +29,4 @@ shuvix-policy-rules:
 - 当你打开免询问的开关后，另一条内置的 session-auto-allow 策略将生效并跳过询问。
 
 **想调整**：创建覆盖副本后收窄匹配条件。想让某个信任的站点不再询问，就把它排除在外，例如
-`object.browser == 'chrome' && object.scheme in ['http', 'https', 'blob'] && !(object.host in ['docs.example.com'])`。
+`object.browser == 'chrome' && object.scheme in ['http', 'https', 'blob'] && object.host != '' && !(object.host in ['docs.example.com'])`。

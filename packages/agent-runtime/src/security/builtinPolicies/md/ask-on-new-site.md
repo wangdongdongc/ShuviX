@@ -10,7 +10,7 @@ shuvix-policy-scope:
 shuvix-policy-rules:
   - effect: ask
     action: [navigate]
-    match: object.browser == 'chrome' && object.scheme in ['http', 'https', 'blob']
+    match: object.browser == 'chrome' && object.scheme in ['http', 'https', 'blob'] && object.host != ''
     prompt: This is your own Chrome, signed in as you — the agent can see and act on this site with your accounts.
 ---
 
@@ -37,4 +37,4 @@ that went on to another site by itself, is not.
 
 **To adjust**: create an override copy and narrow the match. To stop asking
 for a site you trust, exclude it, for example
-`object.browser == 'chrome' && object.scheme in ['http', 'https', 'blob'] && !(object.host in ['docs.example.com'])`.
+`object.browser == 'chrome' && object.scheme in ['http', 'https', 'blob'] && object.host != '' && !(object.host in ['docs.example.com'])`.

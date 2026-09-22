@@ -114,9 +114,11 @@ export class ChromeBridgeBackend implements BrowserBackend {
     return requireConnection(this.binding().installId)
   }
 
+  /** Chrome 的标签页 id 是非负整数；只认一串数字（`Number('')` 是 0，不能让空串变成 0 号标签页） */
   private tabNumber(tabId: string): number {
-    const id = Number(tabId)
-    if (!Number.isInteger(id)) {
+    const text = String(tabId).trim()
+    const id = Number(text)
+    if (!/^[0-9]+$/.test(text) || !Number.isSafeInteger(id)) {
       throw new Error(`Invalid tabId "${tabId}". Use a tab id from list_tabs / open_tab.`)
     }
     return id
@@ -148,8 +150,12 @@ export class ChromeBridgeBackend implements BrowserBackend {
    * 没连着 / Chrome 没答上来就抛（门得知道 tab 在哪才能放行）；没有这个 tab 才回 undefined。
    */
   async tabUrl(p: { tabId: string }): Promise<string | undefined> {
-    const id = Number(p.tabId)
-    if (!Number.isInteger(id)) return undefined
+    let id: number
+    try {
+      id = this.tabNumber(p.tabId)
+    } catch {
+      return undefined // 不是标签页 id：操作自己会以同一句话失败
+    }
     const tab = await this.conn().request(
       'tabs.get',
       { tabId: id },
@@ -201,9 +207,11 @@ export class ChromeBridgeBackend implements BrowserBackend {
 
   async readPage(p: { tabId: string }): Promise<BrowserOpOutput> {
     const id = this.tabNumber(p.tabId)
+    // 连接 / 挂靠的问题原样抛：下面那句「这类页面读不了」只说页面本身
+    const conn = this.conn()
     let extracted: ExtractedPage
     try {
-      extracted = (await this.conn().request('page.extract', { tabId: id })) as ExtractedPage
+      extracted = (await conn.request('page.extract', { tabId: id })) as ExtractedPage
       if (!extracted || typeof extracted.html !== 'string') throw new Error('no result')
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)

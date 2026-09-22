@@ -21,6 +21,7 @@ import type {
 } from '../types'
 import type { ShellFacts } from '../shell'
 import { createInlinePolicyMdReader } from '../builtinPolicies/inlineSources'
+import { buildBuiltinPolicies } from '../builtinPolicies'
 import { parsePolicyDefinitionFile } from '../policyFile'
 
 /** 内置策略 md 的构建期内联读取口（运行时单测的宿主接缝；桌面/扩展各注入自己的） */
@@ -1743,9 +1744,11 @@ describe('createSecurityContext — enforceCommand 的结构属性接线', () =>
 
 // ─── enforceUrl（浏览器导航守卫）─────────────────────────────────────────
 //
-// 客体 `{type:'url', url, scheme, host, origin}`、action 'navigate'。出厂**没有**任何 url 策略
-// （no policy = allow）—— 这道门的意义是让用户能写「某个域名要问 / 禁止」。file:// 不走这里：
-// 宿主把它当成读那个路径，改走 enforcePath('read')（见两端宿主的接线测试）。
+// 客体 `{type:'url', url, scheme, host, origin, browser}`、action 'navigate'。应用内的浏览器面板
+// （browser app）出厂**没有**任何 url 策略（no policy = allow）—— 这道门的意义是让用户能写
+// 「某个域名要问 / 禁止」；用户自己的 Chrome（browser chrome）有一条出厂的 ask-on-new-site
+// （CT-U9 系列）。file:// 不走这里：宿主把它当成读那个路径，改走 enforcePath('read')
+// （见两端宿主的接线测试）。
 
 /** 一个普通的导航目标（属性按 urlObjectOf 的写法给齐） */
 const PAGE: UrlObjectInput = {
@@ -1770,6 +1773,24 @@ const OPEN_OPTS = {
   toolName: 'mcp__browser__open_tab',
   description: 'Open https://a.example/p?q=1'
 }
+
+/** 同一页，在用户自己的 Chrome 里（出厂的 ask-on-new-site 只管它） */
+const CHROME_PAGE: UrlObjectInput = { ...PAGE, browser: 'chrome' }
+
+/** Chrome 那台 server 的站点门上下文 */
+const CHROME_OPTS = {
+  toolCallId: 'tc-url',
+  toolName: 'mcp__chrome__read_page',
+  description: 'Use a.example in tab 6'
+}
+
+/** 出厂 ask-on-new-site 的 en 显示名与话（取自 md，不抄进断言） */
+const NEW_SITE = (() => {
+  const policy = buildBuiltinPolicies({ readMd: INLINE_POLICY_MD }).find(
+    (p) => p.name === 'ask-on-new-site'
+  )!
+  return { displayName: policy.displayName, prompt: policy.rules[0].prompt! }
+})()
 
 /** 抓住一次拒绝的原话 —— toThrow 的字符串参数只做子串匹配，逐字对照要拿出来 toBe */
 async function rejectionOf(work: Promise<unknown>): Promise<string> {
@@ -2080,6 +2101,98 @@ describe('createSecurityContext — enforceUrl（浏览器导航守卫）', () =
       winning: 'url-gate#0',
       userResponse: 'allowed'
     })
+  })
+
+  it('CT-U1b browser 也到得了策略：按 browser 写的 deny 只拦 Chrome 里的，应用内的照常；零告警', async () => {
+    const { ctx, requestUserInput, warn } = urlContext([
+      userPolicy('chrome-probe', [
+        { effect: 'deny', match: "object.type == 'url' && object.browser == 'chrome'" }
+      ])
+    ])
+    expect(await rejectionOf(ctx.enforceUrl(CHROME_PAGE, CHROME_OPTS))).toBe(
+      "Denied by security policy rule 'chrome-probe#0'"
+    )
+    await expect(ctx.enforceUrl(PAGE, OPEN_OPTS)).resolves.toBeUndefined()
+    expect(requestUserInput).not.toHaveBeenCalled()
+    expect(warn).not.toHaveBeenCalled()
+    // 应用内那一次：没有任何 url 策略命中
+    expect(getSessionDecisions(SID)[0]).toMatchObject({ effect: 'allow', winning: 'default:url' })
+  })
+
+  it('CT-U9 Chrome 里的新站点、只有出厂策略：卡片是地址本身 + 工具的一句说明 + ask-on-new-site 的话与名字；允许 → 放行，日志 ask/allowed', async () => {
+    const { ctx, requestUserInput, warn } = urlContext([], {
+      response: { kind: 'ask', allowed: true }
+    })
+    await expect(ctx.enforceUrl(CHROME_PAGE, CHROME_OPTS)).resolves.toBeUndefined()
+    expect(requestUserInput).toHaveBeenCalledTimes(1)
+    expect(requestUserInput.mock.calls[0][0]).toEqual({
+      id: 'tc-url',
+      kind: 'ask',
+      toolName: 'mcp__chrome__read_page',
+      command: 'https://a.example/p?q=1',
+      description: 'Use a.example in tab 6',
+      pathIsDirectory: false,
+      policyPrompt: { text: NEW_SITE.prompt, policies: [NEW_SITE.displayName] },
+      createdAt: expect.any(Number)
+    })
+    expect(NEW_SITE.displayName).toBe('Ask Before Using a New Site in Chrome')
+    expect(warn).not.toHaveBeenCalled()
+
+    const logs = getSessionDecisions(SID)
+    expect(logs).toHaveLength(1)
+    expect(logs[0]).toMatchObject({
+      effect: 'ask',
+      winning: 'ask-on-new-site#0',
+      objectKind: 'url',
+      objectSummary: 'https://a.example/p?q=1',
+      userResponse: 'allowed'
+    })
+  })
+
+  it.each<[string, InputResponse, string]>([
+    ['拒绝', { kind: 'ask', allowed: false }, 'User denied opening https://a.example/p?q=1'],
+    ['取消', { kind: 'cancel', reason: 'aborted' }, 'Aborted']
+  ])('CT-U9 Chrome 里的新站点，用户%s → 抛出逐字文案', async (_l, response, message) => {
+    const { ctx } = urlContext([], { response })
+    expect(await rejectionOf(ctx.enforceUrl(CHROME_PAGE, CHROME_OPTS))).toBe(message)
+  })
+
+  it('CT-U9 Chrome 里的新站点，没有询问通道 → fail-closed（地址写全）', async () => {
+    const { ctx } = urlContext([], { channel: false })
+    expect(
+      await rejectionOf(ctx.enforceUrl(CHROME_PAGE, { ...CHROME_OPTS, missingChannel: 'deny' }))
+    ).toBe(
+      'Access denied: this needs your confirmation but there is no way to ask: https://a.example/p?q=1'
+    )
+  })
+
+  it('CT-U9b Chrome 里的新站点，免询问开着 → 不问、放行，日志归因 session-auto-allow#0', async () => {
+    const { ctx, requestUserInput } = urlContext([], { autoAllow: true })
+    await expect(ctx.enforceUrl(CHROME_PAGE, CHROME_OPTS)).resolves.toBeUndefined()
+    expect(requestUserInput).not.toHaveBeenCalled()
+    expect(getSessionDecisions(SID)[0]).toMatchObject({
+      effect: 'allow',
+      winning: 'session-auto-allow#0'
+    })
+  })
+
+  it('CT-U9c Chrome 里不属于任何站点的页（about:blank / data: / chrome:）→ 不问、放行，归因 default:url', async () => {
+    const { ctx, requestUserInput, warn } = urlContext([])
+    for (const target of [
+      { url: 'about:blank', scheme: 'about', host: '', origin: 'null' },
+      { url: 'data:text/html,x', scheme: 'data', host: '', origin: 'null' },
+      { url: 'chrome://settings', scheme: 'chrome', host: 'settings', origin: 'null' }
+    ]) {
+      await expect(
+        ctx.enforceUrl({ ...target, browser: 'chrome' }, CHROME_OPTS),
+        target.url
+      ).resolves.toBeUndefined()
+    }
+    expect(requestUserInput).not.toHaveBeenCalled()
+    expect(warn).not.toHaveBeenCalled()
+    for (const log of getSessionDecisions(SID)) {
+      expect(log).toMatchObject({ effect: 'allow', winning: 'default:url', matched: [] })
+    }
   })
 })
 

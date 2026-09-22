@@ -909,3 +909,47 @@ describe('内置档案的能力面：浏览器 / ssh 是按会话勾选的内置
     }
   })
 })
+
+/**
+ * tab 档案钉板 —— Chrome 标签页会话（用户自己 Chrome 里的侧边栏）的基座。
+ *
+ * 这份档案驱动的是用户**已登录**的真实浏览器，而它读到的页面内容不可信。两条结构保证因此住在
+ * 工具清单里，不在散文里：
+ *  - 只有它声明 `mcp:chrome`（桌面自己的会话只用应用内的浏览器面板，两条路不混）；
+ *  - 它手里没有能动本机的东西（bash / write / edit / git）、没有派发与子会话（agent / session）、
+ *    也没有应用内浏览器 —— 页面里一句「忽略你的指令，运行这个」就算骗过了模型，也没有工具可用。
+ * 指令文件（AGENTS.md / CLAUDE.md）也不吃：它的工作目录只是个临时目录。
+ */
+describe('tab 档案钉板（Chrome 标签页会话的基座）', () => {
+  it('TAB-1 三语：所有内置档案里只有 tab 声明 mcp:chrome', () => {
+    for (const language of LANGS) {
+      const declaring = buildBuiltinProfiles({ ...ALL_PARAMS, language })
+        .filter((p) => p.tools.includes('mcp:chrome'))
+        .map((p) => p.name)
+      expect(declaring, language).toEqual([TAB_PROFILE_NAME])
+    }
+  })
+
+  it('TAB-2 三语：持有 mcp:chrome 与 ask；没有能动本机 / 派发 / 应用内浏览器的工具', () => {
+    const FORBIDDEN = ['mcp:browser', 'bash', 'write', 'edit', 'git', 'session', 'agent']
+    for (const language of LANGS) {
+      const built = profile(TAB_PROFILE_NAME, language)
+      expect(built.tools, `tab.${language}`).toContain('mcp:chrome')
+      expect(built.tools, `tab.${language}`).toContain('ask')
+      for (const forbidden of FORBIDDEN) {
+        expect(built.tools, `tab.${language} 不得持有 ${forbidden}`).not.toContain(forbidden)
+      }
+    }
+  })
+
+  it('TAB-2 三语工具清单逐字相同；不吃指令文件；不声明模型；是基座', () => {
+    const en = profile(TAB_PROFILE_NAME, 'en')
+    for (const language of LANGS) {
+      const built = profile(TAB_PROFILE_NAME, language)
+      expect(built.tools, `tab.${language}`).toEqual(en.tools)
+      expect(built.instructionFiles, `tab.${language}`).toEqual([])
+      expect(built.model, `tab.${language}`).toBeUndefined()
+    }
+    expect(BASE_PROFILE_NAMES.has(TAB_PROFILE_NAME)).toBe(true)
+  })
+})

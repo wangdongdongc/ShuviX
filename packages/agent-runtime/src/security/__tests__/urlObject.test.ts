@@ -8,6 +8,7 @@
  *           其余是 `scheme://host[:port]`（默认端口省略）；
  *   UO-10   解析不了就抛（门之前应已校验，客体不该带着猜出来的属性去求值）。
  *   UO-11   blob: 自己没有主机，属于创建它的那个源 —— host / origin 按那个源给（规整同上）。
+ *   UO-12   browser：缺省 app（应用内面板）；给 chrome 时其余四个属性一字不差。
  *
  * 只规整给策略看的这一份 —— 真正导航去哪仍是调用方手里的原地址（见两端宿主的接线测试）。
  */
@@ -297,5 +298,20 @@ describe('urlObjectOf', () => {
     ]
   ])('UO-11 %s：blob: 按创建它的那个源给 host / origin（url 原样）', (raw, expected) => {
     expect(urlObjectOf(raw)).toEqual(expected)
+  })
+
+  it.each([
+    'https://User:pw@Evil.Example.:8443/a?b#c',
+    'blob:https://A.Example.:8443/0b1c',
+    'data:text/html,x',
+    'file:///tmp/a.html',
+    'chrome://Settings./x'
+  ])('UO-12 %s：browser 缺省 app；给 chrome 时只有 browser 这一处不同', (raw) => {
+    const app = urlObjectOf(raw)
+    expect(app.browser).toBe('app')
+    expect(urlObjectOf(raw, 'app')).toEqual(app)
+    const chrome = urlObjectOf(raw, 'chrome')
+    expect(chrome).toEqual({ ...app, browser: 'chrome' })
+    expect(Object.keys(chrome).sort()).toEqual(Object.keys(app).sort())
   })
 })

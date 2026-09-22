@@ -5,6 +5,9 @@
  *  - 地址里的账号口令（`https://user:pass@host/`）不进客体：客体会原样出现在询问卡片与决策日志里。
  *  - `blob:` 地址自己没有主机，它属于创建它的那个源（`URL.origin` 就是内层地址的源）——
  *    host / origin 按那个源给，按站点写的规则才管得到它。
+ *  - `view-source:` / `filesystem:` 包着另一个地址（带着那个站点的登录态读它的源码 / 它的沙箱文件），
+ *    客体就是里面那个地址 —— 否则它在策略眼里是个没有主机的怪协议，按站点写的规则全部落空，
+ *    而按站点记账的一方（`browserSiteOf`）却会把里面的站点记成放行过。
  *
  * 只规整给策略看的这一份；真正导航去哪仍是调用方手里的原地址。解析不了时抛出（门之前应已校验）。
  *
@@ -12,11 +15,25 @@
  */
 import type { UrlObjectInput } from './types'
 
+/** 包着另一个地址的前缀 —— 剥掉之后才是真正被访问的那个 */
+const WRAPPER_PREFIXES = ['view-source:', 'filesystem:'] as const
+
+/** 剥掉 `view-source:` / `filesystem:`（可叠、大小写不敏感），回里面那个地址；没有包装原样回 */
+export function innerUrlOf(raw: string): string {
+  let text = raw.trim()
+  for (;;) {
+    const lower = text.slice(0, 16).toLowerCase()
+    const prefix = WRAPPER_PREFIXES.find((p) => lower.startsWith(p))
+    if (!prefix) return text
+    text = text.slice(prefix.length)
+  }
+}
+
 export function urlObjectOf(
   raw: string,
   browser: UrlObjectInput['browser'] = 'app'
 ): UrlObjectInput {
-  const parsed = new URL(raw)
+  const parsed = new URL(innerUrlOf(raw))
   parsed.username = ''
   parsed.password = ''
   const scheme = parsed.protocol.replace(/:$/, '')

@@ -14,6 +14,7 @@ import { assembleRules } from '../assemble'
 import { mergeConditions } from '../conditions'
 import { evaluate } from '../evaluate'
 import { buildPolicyVars } from '../policyVars'
+import { urlObjectOf } from '../urlObject'
 import type {
   ParsedPolicyFile,
   PolicyRuleSpec,
@@ -269,6 +270,30 @@ describe('buildBuiltinPolicies', () => {
     // 只读连接放行的判定在 match 里；刻意不按 SQL 文本分辨读写
     expect(rule.match).toBe('!object.readonly')
     expect(rule.match).not.toContain('sql')
+  })
+
+  it('BP-S1 ask-on-new-site：ask × navigate × url × 只管用户的 Chrome 里属于某个站点的页（http / https / blob），两端同待遇', () => {
+    const policy = byName('ask-on-new-site')
+    expect(policy.rules).toHaveLength(1)
+    // 无 env.host：客体上的 browser 已经说清是哪个浏览器
+    expect(policy.scope).toEqual({ 'subject.kind': ['agent'], 'object.type': ['url'] })
+    expect(withoutPrompt(policy.rules[0])).toEqual({
+      effect: 'ask',
+      conditions: { action: ['navigate'] },
+      match:
+        "object.browser == 'chrome' && object.scheme in ['http', 'https', 'blob'] && object.host != ''"
+    })
+    expect(policy.rules[0].prompt).toBeTruthy()
+    expect(policy.lets).toBeUndefined()
+    expect(policy.displayName).toBe('Ask Before Using a New Site in Chrome')
+    for (const language of ['zh', 'ja']) {
+      const localized = buildBuiltinPolicies({ language, readMd: INLINE_POLICY_MD }).find(
+        (p) => p.name === 'ask-on-new-site'
+      )!
+      expect(localized.displayName, language).toBeTruthy()
+      expect(localized.displayName, language).not.toBe(policy.displayName)
+      expect(localized.displayName, language).not.toBe(policy.name)
+    }
   })
 
   it('BP-3e protect-builtin-knowledge：deny × write × path × 内置库目录，desktop 限定（恰一条规则）', () => {
@@ -1382,5 +1407,170 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
     expect(workspaceLines).toHaveLength(1)
     expect(workspaceLines[0]).toContain("'ask-on-read'")
     expect(workspaceLines[0]).toContain('vars.workspace')
+  })
+
+  // ── ask-on-new-site：用户自己的 Chrome 里，第一次用到一个站点先问 ─────────────────
+  //
+  // 客体由宿主经 urlObjectOf 构造（{type:'url', url, scheme, host, origin, browser}）；
+  // 「每个站点每条会话只问一次」是 server 的记账（mcpServer W 系列），这里只钉一次判定的形状。
+
+  /** 宿主构造的 url 客体（缺省是 Chrome 里的） */
+  const urlObject = (raw: string, browser: 'app' | 'chrome' = 'chrome'): SecurityObject => ({
+    type: 'url',
+    ...urlObjectOf(raw, browser)
+  })
+
+  it.each([
+    'https://a.example/p?q=1',
+    'http://a.example:8080/',
+    'http://[::1]:3000/',
+    'blob:https://a.example/0b1c',
+    // 包着网页的地址按里面那个站点算（urlObjectOf 剥掉包装）—— 否则它们是没有主机的怪协议，策略落空
+    'view-source:https://a.example/p',
+    'filesystem:https://a.example/temporary/x'
+  ])('BP-S2 Chrome 里的 %s → ask，归因 ask-on-new-site#0，带 en 的话与显示名', (raw) => {
+    const decision = decide('navigate', urlObject(raw))
+    expect(decision.effect).toBe('ask')
+    expect(decision.winning).toBe('ask-on-new-site#0')
+    expect(decision.matched).toEqual(['ask-on-new-site#0'])
+    expect(decision.prompt).toEqual({
+      text: promptOf('ask-on-new-site', 0),
+      rules: ['ask-on-new-site#0'],
+      policies: [displayNameOf('ask-on-new-site')]
+    })
+    expect(decision.prompt!.policies).toEqual(['Ask Before Using a New Site in Chrome'])
+  })
+
+  it.each([
+    'about:blank',
+    'data:text/html,x',
+    'chrome://settings',
+    'chrome-extension://abc/page.html',
+    'file:///tmp/a.html'
+  ])('BP-S2 Chrome 里不属于任何站点的 %s → 放行（default:url），不带话', (raw) => {
+    const decision = decide('navigate', urlObject(raw))
+    expect(decision.effect).toBe('allow')
+    expect(decision.winning).toBe('default:url')
+    expect(decision.matched).toEqual([])
+    expect(decision.prompt).toBeUndefined()
+  })
+
+  it('BP-S2 blob:null/…（不透明来源，host 为空）不属于任何站点 → 放行，与 browserSiteOf 同一个口径', () => {
+    // 不透明来源的文档不带任何站点的登录态；规则要求 host 非空，于是它与 about:blank 同待遇 ——
+    // 否则把它当导航目标时每次都问（没有站点可记），而策略自己的说明写的是「不属于站点的页不问」
+    const object = urlObject('blob:null/0b1c')
+    expect(object).toMatchObject({ scheme: 'blob', host: '', origin: 'null' })
+    const decision = decide('navigate', object)
+    expect(decision.effect).toBe('allow')
+    expect(decision.winning).toBe('default:url')
+  })
+
+  it.each(['https://a.example/p?q=1', 'blob:https://a.example/0b1c', 'about:blank'])(
+    'BP-S2 应用内浏览器面板（browser app）的 %s → 放行，出厂没有管它的 url 策略',
+    (raw) => {
+      const decision = decide('navigate', urlObject(raw, 'app'))
+      expect(decision.effect).toBe('allow')
+      expect(decision.winning).toBe('default:url')
+      expect(decision.matched).toEqual([])
+    }
+  )
+
+  it('BP-S3 免询问开着 → 放行，归因 session-auto-allow#0，不带话', () => {
+    const provider = makeProvider({
+      getSessionGrants: () => ({ autoAllow: true, allowList: [] })
+    })
+    const decision = decide('navigate', urlObject('https://a.example/'), { provider })
+    expect(decision.effect).toBe('allow')
+    expect(decision.winning).toBe('session-auto-allow#0')
+    expect(decision.prompt).toBeUndefined()
+  })
+
+  it('BP-S4 user 主体不受约束', () => {
+    const decision = decide('navigate', urlObject('https://a.example/'), { subjectKind: 'user' })
+    expect(decision.effect).toBe('allow')
+    expect(decision.matched).toEqual([])
+  })
+
+  it.each(['read', 'execute', 'write'])(
+    'BP-S5 action %s 落在 Chrome 的地址上 → 不命中（只管 navigate）',
+    (action) => {
+      const decision = decide(action, urlObject('https://a.example/'))
+      expect(decision.effect).toBe('allow')
+      expect(decision.matched).not.toContain('ask-on-new-site#0')
+    }
+  )
+
+  it('BP-S6 fail-safe：url 客体缺 browser（PEP 违约）、地址是网页 → 仍 ask，告警里有规则 id 与 fail-safe 字样', () => {
+    const warn = vi.fn()
+    const { browser: _browser, ...incomplete } = urlObject('https://a.example/') as Record<
+      string,
+      string
+    >
+    const decision = decide('navigate', incomplete as SecurityObject, { warn })
+    expect(decision.effect).toBe('ask')
+    expect(decision.winning).toBe('ask-on-new-site#0')
+    const failSafe = warn.mock.calls
+      .map((c) => String(c[0]))
+      .filter((m) => m.includes('match evaluation failed'))
+    expect(failSafe).toHaveLength(1)
+    expect(failSafe[0]).toContain("'ask-on-new-site#0'")
+    expect(failSafe[0]).toContain('treating as matched (fail-safe)')
+  })
+
+  it('BP-S6 缺 browser、地址不属于任何站点 → && 的另一侧已定为假：不命中、也不告警（CEL 吸收错误）', () => {
+    const warn = vi.fn()
+    const { browser: _browser, ...incomplete } = urlObject('about:blank') as Record<string, string>
+    const decision = decide('navigate', incomplete as SecurityObject, { warn })
+    expect(decision.effect).toBe('allow')
+    expect(decision.winning).toBe('default:url')
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('BP-S6 客体属性给齐：Chrome / 应用内、网页 / 空白页各判一次，零告警', () => {
+    const warn = vi.fn()
+    const provider = makeProvider({ logger: { info: vi.fn(), warn, error: vi.fn() } })
+    for (const [raw, browser] of [
+      ['https://a.example/', 'chrome'],
+      ['about:blank', 'chrome'],
+      ['https://a.example/', 'app']
+    ] as const) {
+      decide('navigate', urlObject(raw, browser), { provider, warn })
+    }
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('BP-S7 language=zh/ja：话换成对应语言，effect / winning / matched 一字不变；规则去掉话之后与 en 相同', () => {
+    const en = decide('navigate', urlObject('https://a.example/'))
+    const enRules = buildBuiltinPolicies({ readMd: INLINE_POLICY_MD }).find(
+      (p) => p.name === 'ask-on-new-site'
+    )!.rules
+    for (const language of ['zh', 'ja']) {
+      const provider = makeProvider({ getLanguage: () => language })
+      const decision = decide('navigate', urlObject('https://a.example/'), { provider })
+      expect(decision.effect, language).toBe(en.effect)
+      expect(decision.winning, language).toBe(en.winning)
+      expect(decision.matched, language).toEqual(en.matched)
+      expect(decision.prompt!.text, language).toBe(promptOf('ask-on-new-site', 0, language))
+      expect(decision.prompt!.text, language).not.toBe(en.prompt!.text)
+      expect(decision.prompt!.policies, language).toEqual([
+        displayNameOf('ask-on-new-site', language)
+      ])
+      const rules = buildBuiltinPolicies({ language, readMd: INLINE_POLICY_MD }).find(
+        (p) => p.name === 'ask-on-new-site'
+      )!.rules
+      expect(rules.map(withoutPrompt), language).toEqual(enRules.map(withoutPrompt))
+    }
+  })
+
+  it('BP-S8 会话的路径授权（允许并记住）管不到地址：allowList 里有 Read / Write 条目照样 ask', () => {
+    const provider = makeProvider({
+      getSessionGrants: () => ({
+        autoAllow: false,
+        allowList: ['Read(/)', 'Read(/Users/u)', 'Write(/ws)']
+      })
+    })
+    const decision = decide('navigate', urlObject('https://a.example/'), { provider })
+    expect(decision.effect).toBe('ask')
+    expect(decision.winning).toBe('ask-on-new-site#0')
   })
 })

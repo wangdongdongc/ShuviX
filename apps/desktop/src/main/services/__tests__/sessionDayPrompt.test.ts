@@ -14,7 +14,10 @@ const mocks = vi.hoisted(() => ({
   daysInMonth: vi.fn((): Array<{ day: string; projectId: string | null }> => []),
   firstEntryOnDay: vi.fn((): string | undefined => undefined),
   frontendBroadcast: vi.fn(),
-  notify: vi.fn()
+  notify: vi.fn(),
+  pickSettings: vi.fn<(id: string, keys: string[]) => Record<string, unknown> | undefined>(
+    () => ({})
+  )
 }))
 
 function localDayKey(ts: number): string {
@@ -33,8 +36,8 @@ vi.mock('../../dao/sessionDayPromptDao', () => ({
   }
 }))
 vi.mock('../../dao/sessionDao', () => ({
-  // 普通会话：设置里没有 chromeTab（Chrome 标签页会话不进日历，见 recordUserPrompt）
-  sessionDao: { touchActive: mocks.touchActive, pickSettings: () => ({}) }
+  // 缺省是普通会话：设置里没有 chromeTab（Chrome 标签页会话不进日历，见 DP-C*）
+  sessionDao: { touchActive: mocks.touchActive, pickSettings: mocks.pickSettings }
 }))
 vi.mock('../../frontend/core', () => ({
   chatFrontendRegistry: { broadcast: mocks.frontendBroadcast, hasCapability: vi.fn(() => false) }
@@ -82,6 +85,7 @@ beforeEach(() => {
   mocks.firstEntryOnDay.mockReset().mockReturnValue(undefined)
   mocks.frontendBroadcast.mockReset()
   mocks.notify.mockReset()
+  mocks.pickSettings.mockReset().mockReturnValue({})
 })
 
 describe('recordUserPrompt', () => {
@@ -181,6 +185,57 @@ describe('electronEventSink 旁听 user_message', () => {
     )
     expect(mocks.frontendBroadcast).toHaveBeenCalled()
     expect(mocks.insert).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * Chrome 标签页会话不进日历：它是某个标签页的临时对话，标签页一关就删 —— 日历上留一个点，
+ * 点进去却是一条已经不存在的会话。判定按 `settings.chromeTab` 是不是**合法绑定**
+ * （chat-protocol 的 chromeTabOf）：字段不全的算普通会话，照常入账。
+ */
+describe('DP-C Chrome 标签页会话不入账', () => {
+  const TAB = { installId: 'i1', runId: 'r1', tabId: 5 }
+
+  it('DP-C1 合法绑定：recordUserPrompt 不入账、不 touchActive；按 (sid, [chromeTab]) 查', () => {
+    mocks.pickSettings.mockReturnValue({ chromeTab: TAB })
+    recordUserPrompt('tab-1', userMsg({ id: 'e1', sessionId: 'tab-1' }))
+    expect(mocks.insert).not.toHaveBeenCalled()
+    expect(mocks.touchActive).not.toHaveBeenCalled()
+    expect(mocks.pickSettings.mock.calls).toEqual([['tab-1', ['chromeTab']]])
+  })
+
+  it('DP-C1 经 recordFromUserMessageEvent / electronEventSink 同样不入账（前端照发）', () => {
+    mocks.pickSettings.mockReturnValue({ chromeTab: TAB })
+    recordFromUserMessageEvent(userEvent(userMsg({ id: 'e2', sessionId: 'tab-1' }), 'tab-1'))
+    const event = userEvent(userMsg({ id: 'e3', sessionId: 'tab-1' }), 'tab-1')
+    electronEventSink.broadcast(event)
+    expect(mocks.insert).not.toHaveBeenCalled()
+    expect(mocks.touchActive).not.toHaveBeenCalled()
+    expect(mocks.frontendBroadcast).toHaveBeenCalledWith(event)
+  })
+
+  it.each([
+    ['tabId 是字符串', { ...TAB, tabId: '5' }],
+    ['tabId 是 -1', { ...TAB, tabId: -1 }],
+    ['缺 installId', { runId: 'r1', tabId: 5 }]
+  ])('DP-C2 绑定不合法（%s）→ 普通会话，照常入账', (_label, chromeTab) => {
+    mocks.pickSettings.mockReturnValue({ chromeTab })
+    const msg = userMsg({ id: 'e4', sessionId: 's9' })
+    recordUserPrompt('s9', msg)
+    expect(mocks.pickSettings).toHaveBeenCalledWith('s9', ['chromeTab'])
+    expect(mocks.insert).toHaveBeenCalledWith({
+      sessionId: 's9',
+      entryId: 'e4',
+      day: '2026-09-18',
+      timestamp: msg.createdAt
+    })
+    expect(mocks.touchActive).toHaveBeenCalledWith('s9')
+  })
+
+  it('DP-C2 会话行不存在（pickSettings 回 undefined）→ 照常入账', () => {
+    mocks.pickSettings.mockReturnValue(undefined)
+    recordUserPrompt('ghost', userMsg({ id: 'e5', sessionId: 'ghost' }))
+    expect(mocks.insert).toHaveBeenCalledTimes(1)
   })
 })
 

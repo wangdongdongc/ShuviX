@@ -2,7 +2,8 @@
  * sessionService —— 会话根 Agent 档案的**形态推导**（`resolveAgentProfileName`）与「创建不落戳」。
  *
  * 契约（改制后）：档案不是用户选的，由会话形态推导 ——
- *   - 笔记本会话（`notebookPath` 非空）→ `notebook`，判定先于一切；
+ *   - Chrome 标签页会话（`chromeTab` 是合法绑定）→ `tab`，判定先于一切（RP-T*）；
+ *   - 笔记本会话（`notebookPath` 非空）→ `notebook`；
  *   - bot 会话（`bot` 非空白）→ `bot`；
  *   - 其余按形态：有项目 `work`、无项目 `chat`；
  *   - **只有子会话**（`parentId` 非空）读 `settings.agentProfile`，且档案 md 还在才用；
@@ -293,7 +294,7 @@ describe('RP-10 推导结果真的送进了运行时（resolveAgentProfileName �
  * RP-12 … RP-16：bot 会话 —— `settings.bot` 非空白 → 基座 `bot`。
  *
  * 它与上面三条基座同一性质：**由形态推导**，没有设置项、没有选择器、没有切换命令。
- * 分支次序是 笔记本(notebookPath) → bot 会话(bot) → 子会话戳 → 项目/无项目。
+ * 分支次序是 Chrome 标签页(chromeTab) → 笔记本(notebookPath) → bot 会话(bot) → 子会话戳 → 项目/无项目。
  */
 describe('RP-12 bot 会话恒 bot —— 项目分支压不过它', () => {
   it.each([
@@ -397,5 +398,80 @@ describe('RP-11 create 不再落戳', () => {
     expect('agentProfile' in insertedSettings()).toBe(false)
     expect(mocks.findByKey).not.toHaveBeenCalled()
     expect(mocks.getProfile).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * RP-T*：Chrome 标签页会话 —— `settings.chromeTab` 是合法绑定 → 基座 `tab`（只有它声明
+ * `mcp:chrome`，也就是用户真实的 Chrome）。它排在**最前**：create 不会让它同时是笔记本 / bot /
+ * 子会话，但行里万一真有那些键，也不能让它落到一个没有 mcp:chrome 的基座上。
+ */
+describe('RP-T1 标签页会话恒 tab —— 项目、子会话戳都压不过它', () => {
+  const TAB = { installId: 'i1', runId: 'r1', tabId: 5 }
+
+  it.each([
+    ['只有 chromeTab', { projectId: null, parentId: null, settings: { chromeTab: TAB } }],
+    ['chromeTab + 项目', { projectId: 'p1', parentId: null, settings: { chromeTab: TAB } }],
+    [
+      '带 coding 戳的子会话 + chromeTab',
+      { projectId: 'p1', parentId: 'P', settings: { chromeTab: TAB, agentProfile: 'coding' } }
+    ]
+  ])("%s → 'tab'；不查档案、不读设置项", (_label, shape) => {
+    world(shape)
+    mocks.getProfile.mockImplementation((name) => existing(name))
+    expect(resolve()).toBe('tab')
+    expect(mocks.getProfile).not.toHaveBeenCalled()
+    expect(mocks.findByKey).not.toHaveBeenCalled()
+  })
+})
+
+describe('RP-T2 分支次序：chromeTab 先于笔记本与 bot；不合法的绑定不是一种形态', () => {
+  const TAB = { installId: 'i1', runId: 'r1', tabId: 5 }
+
+  it("notebookPath + chromeTab → 'tab'", () => {
+    world({ projectId: 'p1', settings: { notebookPath: 'notes/a.md', chromeTab: TAB } })
+    expect(resolve()).toBe('tab')
+  })
+
+  it("bot + chromeTab → 'tab'", () => {
+    world({ projectId: null, settings: { bot: 'scout', chromeTab: TAB } })
+    expect(resolve()).toBe('tab')
+  })
+
+  it.each([
+    ['tabId 是字符串、无项目', null, { ...TAB, tabId: '5' }, 'chat'],
+    ['tabId 是 -1、有项目', 'p1', { ...TAB, tabId: -1 }, 'work'],
+    ['缺 runId、无项目', null, { installId: 'i1', tabId: 5 }, 'chat'],
+    ['不是对象、有项目', 'p1', 'i1:r1:5', 'work']
+  ])('不合法的 chromeTab（%s）→ 按形态落 %s', (_label, projectId, chromeTab, expected) => {
+    world({ projectId, settings: { chromeTab } })
+    expect(resolve()).toBe(expected)
+  })
+
+  it("不合法的 chromeTab 不挡后面的分支：+ notebookPath → 'notebook'", () => {
+    world({
+      projectId: 'p1',
+      settings: { chromeTab: { ...TAB, tabId: 1.5 }, notebookPath: 'n.md' }
+    })
+    expect(resolve()).toBe('notebook')
+  })
+})
+
+describe('RP-T3 推导结果送进了运行时：AgentSession.create 收到 tab', () => {
+  it("标签页会话：profileName 'tab'，工作目录是临时工作区", async () => {
+    world({
+      projectId: null,
+      parentId: null,
+      settings: { chromeTab: { installId: 'i1', runId: 'r1', tabId: 5 } }
+    })
+    mocks.agentCreate.mockResolvedValue({ name: 'fake' })
+
+    await sessionService.ensureAgentSession(SID)
+    expect(mocks.agentCreate).toHaveBeenCalledTimes(1)
+    expect(mocks.agentCreate.mock.calls[0][0]).toMatchObject({
+      sessionId: SID,
+      profileName: 'tab',
+      workingDirectory: `/nonexistent/shuvix-unit/tmp/${SID}`
+    })
   })
 })

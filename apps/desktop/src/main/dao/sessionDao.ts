@@ -51,24 +51,27 @@ export class SessionDao extends BaseDao {
     return result as Pick<Session, K>
   }
 
-  /** 从 settings JSON 中按需提取指定字段（使用 json_extract，无需解析整个 JSON） */
+  /**
+   * 从 settings JSON 中按需提取指定字段（无需解析整个 JSON）。
+   *
+   * 用 `->` 而不是 `json_extract`：`->` 对任何值都回它的 **JSON 文本**（字符串带引号、true 是
+   * `true`），逐个 `JSON.parse` 就得到原本的类型。`json_extract` 回的是 SQL 值 —— 对象与数组
+   * 是 JSON 文本、布尔是 1 / 0、字符串是裸文本，调用方分不清一段文本本来是字符串还是对象：
+   * 从前只把 `[` 开头的再解析一遍，对象值（`chromeTab`）于是一律以字符串回来，形态判定全判成「不是」。
+   * 缺键仍是 null。
+   */
   pickSettings<K extends keyof SessionSettings>(
     id: string,
     keys: K[]
   ): Pick<SessionSettings, K> | undefined {
-    const selects = keys
-      .map((k) => `json_extract(settings, '$.${String(k)}') as ${String(k)}`)
-      .join(', ')
+    const selects = keys.map((k) => `settings -> '$.${String(k)}' as ${String(k)}`).join(', ')
     const row = this.stmt(`SELECT ${selects} FROM sessions WHERE id = ?`).get(id) as
       | Record<string, unknown>
       | undefined
     if (!row) return undefined
-    // json_extract 对数组/对象返回 JSON 字符串，需二次解析
     for (const k of keys) {
       const v = row[String(k)]
-      if (typeof v === 'string' && v.startsWith('[')) {
-        row[String(k)] = JSON.parse(v)
-      }
+      if (typeof v === 'string') row[String(k)] = JSON.parse(v)
     }
     return row as Pick<SessionSettings, K>
   }

@@ -403,6 +403,30 @@ describe('EXT-U-12 勾选只在创建根 Agent 时读一次，此刻才按可用
     expect(await sessionService.ensureAgentSession(SID)).toBe(agent)
     expect(mocks.agentCreate).toHaveBeenCalledTimes(1)
   })
+
+  it('EXT-U-12c 勾选里的 mcp:chrome 不作数：过滤与创建都见不到它；init 回原值；不写库', async () => {
+    // 内置 `chrome`（用户真实的 Chrome）不是会话可勾选的扩展能力 —— 只由 Chrome 标签页会话的
+    // 基座 `tab` 声明。桌面会话的勾选里就算有它（手改的库、旧数据），也不能借此碰到用户的 Chrome
+    seedProject('p1')
+    seedSession({
+      id: SID,
+      projectId: 'p1',
+      settings: { enabledTools: ['mcp:chrome', 'mcp:ssh', 'skill:x'] }
+    })
+
+    expect((await sessionService.initAgent(SID)).enabledTools).toEqual([
+      'mcp:chrome',
+      'mcp:ssh',
+      'skill:x'
+    ])
+    await sessionService.ensureAgentSession(SID)
+    const filtered = mocks.filterAvailableTools.mock.calls.map(([tools]) => tools)
+    expect(filtered.length).toBeGreaterThan(0)
+    for (const tools of filtered) expect(tools).toEqual(['mcp:ssh', 'skill:x'])
+    expect(mocks.agentCreate.mock.calls[0][0].enabledTools).toEqual(['mcp:ssh', 'skill:x'])
+    expect(mocks.daoUpdateSettings).not.toHaveBeenCalled()
+    expect(sessions.get(SID)!.settings.enabledTools).toEqual(['mcp:chrome', 'mcp:ssh', 'skill:x'])
+  })
 })
 
 // ─── 写入口 ────────────────────────────────────────────────────────────────

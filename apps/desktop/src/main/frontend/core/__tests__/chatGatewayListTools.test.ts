@@ -224,3 +224,83 @@ describe('DefaultChatGateway.listTools —— 档案声明的 mcp:/skill: 项', 
     expect(declaredOf(rows)).toEqual({})
   })
 })
+
+/**
+ * 内置 `chrome`（用户真实的 Chrome）不是会话可勾选的扩展能力：只出现在声明它的档案那里 ——
+ * Chrome 标签页会话的基座 `tab` —— 而且是锁住的已勾形态。桌面自己的会话（以及没有会话的
+ * 项目编辑页）的选择器里根本见不到它。
+ */
+describe('DefaultChatGateway.listTools —— 内置 mcp:chrome 只给声明它的档案', () => {
+  const MCP_BROWSER: McpInfo = {
+    name: 'mcp:browser',
+    label: 'browser',
+    group: 'mcp:browser',
+    isBuiltin: true
+  }
+  const MCP_CHROME: McpInfo = {
+    name: 'mcp:chrome',
+    label: 'chrome',
+    group: 'mcp:chrome',
+    isBuiltin: true
+  }
+  const TAB: ProfileShot = {
+    name: 'tab',
+    displayName: 'Chrome Tab',
+    tools: ['mcp:chrome', 'ask', 'skill:builtin:drawing']
+  }
+
+  beforeEach(() => {
+    mocks.mcpInfos = [MCP_BROWSER, MCP_CHROME, MCP_CTX]
+    mocks.getProfile.mockImplementation((name: string) =>
+      name === 'work' ? WORK : name === 'tab' ? TAB : undefined
+    )
+  })
+
+  it('LT-C1 work 档案的会话：没有 mcp:chrome 这一行；browser 与别的 MCP 照列', () => {
+    const rows = chatGateway.listTools(SID)
+    expect(rowOf(rows, 'mcp:chrome')).toBeUndefined()
+    expect(rowOf(rows, 'mcp:browser')).toBeDefined()
+    expect(rowOf(rows, 'mcp:ctx')?.declaredBy).toBe('Work')
+  })
+
+  it("LT-C2 tab 档案的会话：mcp:chrome 在，锁成 'Chrome Tab' 声明的；mcp:browser 不锁", () => {
+    mocks.resolveAgentProfileName.mockReturnValue('tab')
+    const rows = chatGateway.listTools(SID)
+    expect(rowOf(rows, 'mcp:chrome')).toMatchObject({
+      name: 'mcp:chrome',
+      label: 'chrome',
+      isBuiltin: true,
+      declaredBy: 'Chrome Tab'
+    })
+    expect(rowOf(rows, 'mcp:browser')).toBeDefined()
+    expect(rowOf(rows, 'mcp:browser')?.declaredBy).toBeUndefined()
+    expect(declaredOf(rows)).toEqual({
+      'mcp:chrome': 'Chrome Tab',
+      'skill:builtin:drawing': 'Chrome Tab'
+    })
+  })
+
+  it('LT-C3 没有会话（项目编辑页）→ 回落 work，没有 mcp:chrome', () => {
+    const rows = chatGateway.listTools()
+    expect(rowOf(rows, 'mcp:chrome')).toBeUndefined()
+    expect(mocks.resolveAgentProfileName).not.toHaveBeenCalled()
+  })
+
+  it('LT-C4 tab 档案声明了但内置 chrome 行不在（被删 / 停用）→ 不凭空造一条', () => {
+    mocks.resolveAgentProfileName.mockReturnValue('tab')
+    mocks.mcpInfos = [MCP_BROWSER, MCP_CTX]
+    const rows = chatGateway.listTools(SID)
+    expect(rowOf(rows, 'mcp:chrome')).toBeUndefined()
+    expect(declaredOf(rows)).toEqual({ 'skill:builtin:drawing': 'Chrome Tab' })
+  })
+
+  it('LT-C5 别的档案（bot / 子会话钉的 coding）同样见不到 mcp:chrome', () => {
+    mocks.getProfile.mockImplementation((name: string) =>
+      name === 'coding'
+        ? { name: 'coding', displayName: 'Coding', tools: ['read', 'bash'] }
+        : undefined
+    )
+    mocks.resolveAgentProfileName.mockReturnValue('coding')
+    expect(rowOf(chatGateway.listTools(SID), 'mcp:chrome')).toBeUndefined()
+  })
+})

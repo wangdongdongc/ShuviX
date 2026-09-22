@@ -10,7 +10,7 @@ shuvix-policy-scope:
 shuvix-policy-rules:
   - effect: ask
     action: [navigate]
-    match: object.browser == 'chrome' && object.scheme in ['http', 'https', 'blob']
+    match: object.browser == 'chrome' && object.scheme in ['http', 'https', 'blob'] && object.host != ''
     prompt: これはあなた自身の Chrome で、あなたのアカウントでログインしている —— エージェントはあなたとしてこのサイトを閲覧・操作できる。
 ---
 
@@ -31,4 +31,4 @@ shuvix-policy-rules:
   効いて確認はスキップされる。
 
 **調整するには**：上書きコピーを作成して一致条件を絞る。信頼するサイトで確認を止めるには、
-例えば `object.browser == 'chrome' && object.scheme in ['http', 'https', 'blob'] && !(object.host in ['docs.example.com'])` のように除外する。
+例えば `object.browser == 'chrome' && object.scheme in ['http', 'https', 'blob'] && object.host != '' && !(object.host in ['docs.example.com'])` のように除外する。
