@@ -71,7 +71,11 @@ export interface ChromeBridgeHandlers {
   onClose?: (conn: BridgeConnection) => void
 }
 
-type ConnState = 'authing' | 'awaiting-hello' | 'ready' | 'mismatch' | 'closed'
+/**
+ * `refused` 与 `closed` 的差别是有意的：被拒之后 socket 还要走完它自己的 close 事件，
+ * 那一下才是登记表里摘掉它的时机（`onClosed` 遇到 `closed` 直接返回）。
+ */
+type ConnState = 'authing' | 'awaiting-hello' | 'ready' | 'mismatch' | 'refused' | 'closed'
 
 interface PendingRequest {
   resolve: (value: unknown) => void
@@ -95,7 +99,9 @@ export class BridgeConnection {
    */
   private readonly decoder = new StringDecoder('utf8')
   private readonly pending = new Map<string, PendingRequest>()
-  private readonly assembler = new BridgeChunkAssembler()
+  private readonly assembler = new BridgeChunkAssembler((reason) =>
+    log.warn(`dropped an incomplete chunk group: ${reason}`)
+  )
   private authTimer: ReturnType<typeof setTimeout> | null
 
   constructor(
@@ -311,7 +317,13 @@ export class BridgeConnection {
   /** @internal claim 拒绝：说清理由再收线（对面据此显示，不会当成「桌面没开」一直重试） */
   refuse(error: string): void {
     this.send({ type: 'welcome', protocol: CHROME_BRIDGE_PROTOCOL, ok: false, error })
-    this.state = 'closed'
+    this.state = 'refused'
+    this.socket.end()
+  }
+
+  /** @internal welcome 已经发出去了，收线（等它自己 close，登记表在那时摘） */
+  endAfterWelcome(): void {
+    this.state = 'refused'
     this.socket.end()
   }
 
@@ -389,6 +401,8 @@ export class ChromeBridgeServer {
   private readonly connections = new Set<BridgeConnection>()
   /** 握手过（ready / mismatch）的连接，按 installId */
   private readonly byInstall = new Map<string, BridgeConnection>()
+  /** 正在处理的 claim（按 installId 串行，见 claim） */
+  private readonly claiming = new Map<string, Promise<void>>()
   private readonly changeListeners = new Set<() => void>()
 
   async start(opts: {
@@ -398,8 +412,6 @@ export class ChromeBridgeServer {
     addressFile?: string
   }): Promise<void> {
     if (this.server) return
-    this.socketPath = opts.socketPath
-    this.addressFile = opts.addressFile ?? ''
     this.getToken = opts.getToken
     const isPipe = process.platform === 'win32'
     if (!isPipe) {
@@ -431,6 +443,10 @@ export class ChromeBridgeServer {
     }
     server.on('error', (err) => log.warn(`server error: ${err.message}`))
     this.server = server
+    // 监听成功之后才认领这两个路径：listen 失败（端口/管道被占）的那个实例不能在自己
+    // stop 的时候把**在用的那一份**地址文件删掉
+    this.socketPath = opts.socketPath
+    this.addressFile = opts.addressFile ?? ''
     if (this.addressFile) {
       try {
         mkdirSync(dirname(this.addressFile), { recursive: true })
@@ -539,10 +555,32 @@ export class ChromeBridgeServer {
   async claim(conn: BridgeConnection): Promise<void> {
     const installId = conn.info?.installId
     if (!installId) return
+    const inflight = this.claiming.get(installId)
+    const previous = this.byInstall.get(installId)
+    // 没人占着、也没有别的 claim 在跑：当场就绪。这条路必须是**同步**的 —— 握手那一下就该
+    // 有一条就绪的连接，插一个微任务进去，紧跟着 hello 的第一条请求就会撞上「还没就绪」
+    if (!inflight && !(previous && previous !== conn && previous.ready)) {
+      this.accept(conn, installId)
+      return
+    }
+    // 有争用：按 installId 串起来。两条新连接同时来、旧的又不答话时，两条都会等满超时、
+    // 都以为自己接手了 —— 结果一条「就绪」却没登记，什么都收不到
+    const run = (inflight ?? Promise.resolve()).then(() => this.settleClaim(conn, installId))
+    const settled = run.catch(() => undefined)
+    this.claiming.set(installId, settled)
+    void settled.then(() => {
+      if (this.claiming.get(installId) === settled) this.claiming.delete(installId)
+    })
+    await run
+  }
+
+  /** 争用时的裁决：旧的还答话就拒绝新的，不答话才让位 */
+  private async settleClaim(conn: BridgeConnection, installId: string): Promise<void> {
+    if (!conn.alive) return
     const previous = this.byInstall.get(installId)
     if (previous && previous !== conn && previous.ready) {
-      // 顶替不能是静默的：旧连接还答话就拒绝新的 —— 拿到 token 的本地进程报一个在用的
-      // installId，否则就能把真浏览器挤下线、接手它那些标签页会话
+      // 顶替不能是静默的：拿到 token 的本地进程报一个在用的 installId，否则就能把真浏览器
+      // 挤下线、接手它那些标签页会话
       if (await previous.respondsToPing()) {
         log.warn(
           `refused a second connection for install ${installId.slice(0, 8)}: the first one is still answering`
@@ -553,20 +591,35 @@ export class ChromeBridgeServer {
       log.info(`replacing a connection that stopped answering (install ${installId.slice(0, 8)})`)
       previous.close()
     }
+    this.accept(conn, installId)
+  }
+
+  /** 登记为就绪并回 welcome（两条路径共用） */
+  private accept(conn: BridgeConnection, installId: string): void {
+    if (!conn.alive) return
     const hello = conn.markReady()
-    if (!hello) return // 探活期间它自己断了
+    if (!hello) return // 这期间它自己断了
     this.byInstall.set(installId, conn)
     this.notifyChange()
     this.announceReady(conn, hello)
   }
 
-  /** @internal 协议版本对不上的连接也登记（设置页要显示它），但不算就绪 */
+  /**
+   * @internal 协议版本对不上的连接也登记（设置页要显示「请更新扩展」），但不算就绪。
+   *
+   * 这个 installId 上已经有一条**活着**的连接时不登记：登记表一个 installId 只有一格，
+   * 顶掉真在用的那条去显示一条版本不符的，是本末倒置 —— 那条说完自己的 welcome 就收线。
+   */
   adopt(conn: BridgeConnection): void {
     const installId = conn.info?.installId
     if (!installId) return
     const previous = this.byInstall.get(installId)
-    if (previous && previous !== conn && !previous.ready) previous.close()
-    if (!previous || !previous.ready) this.byInstall.set(installId, conn)
+    if (previous && previous !== conn && previous.ready) {
+      conn.endAfterWelcome()
+      return
+    }
+    if (previous && previous !== conn) previous.close()
+    this.byInstall.set(installId, conn)
     this.notifyChange()
   }
 

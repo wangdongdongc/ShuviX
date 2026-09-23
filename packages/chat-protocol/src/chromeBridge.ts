@@ -479,14 +479,24 @@ export class BridgeChunkAssembler {
   >()
   private chars = 0
 
+  /** @param onDrop 丢掉一组时说一声（上限撞上了、分片自相矛盾）——不给就是静默丢 */
+  constructor(private readonly onDrop?: (reason: string) => void) {}
+
   /**
    * 喂一片；收齐回原消息，未齐回 null。分片与自身声明矛盾（total 变了、seq 越界）时丢掉整组。
    *
-   * 三道上限（见常量）：片数、同时攒的组数、攒着的总字符数。拿到 token 的本地进程可以一直发
-   * 永远凑不齐的分片，没有上限就是一条撑爆内存的路。
+   * 三道上限（见常量）：片数、同时攒的组数、攒着的总字符数。对面是什么都可能发 —— 拿到 token 的
+   * 本地进程可以一直发永远凑不齐的分片，没有上限就是一条撑爆内存的路。
    */
   push(chunk: BridgeChunk): BridgeMessage | null {
     if (!Number.isInteger(chunk.total) || chunk.total < 1 || chunk.total > MAX_CHUNK_PARTS) {
+      return null
+    }
+    // 片的内容必须是字符串：不是的话既算不了长度也拼不起来 —— 不挡住就是主进程里的一次未捕获异常
+    if (typeof chunk.data !== 'string') return null
+    // seq 的合法性先于建组 / 挤掉别人判：拿越界的 seq 配个新 id，本来能把正常的组挤出去
+    if (!Number.isInteger(chunk.seq) || chunk.seq < 0 || chunk.seq >= chunk.total) {
+      if (this.pending.has(chunk.id)) this.drop(chunk.id, 'contradictory chunk')
       return null
     }
     let slot = this.pending.get(chunk.id)
@@ -495,18 +505,13 @@ export class BridgeChunkAssembler {
       while (this.pending.size >= MAX_PENDING_GROUPS) {
         const oldest = this.pending.keys().next()
         if (oldest.done) break
-        this.drop(oldest.value)
+        this.drop(oldest.value, 'too many incomplete chunk groups')
       }
       slot = { total: chunk.total, parts: new Array(chunk.total), got: 0, chars: 0 }
       this.pending.set(chunk.id, slot)
     }
-    if (
-      slot.total !== chunk.total ||
-      !Number.isInteger(chunk.seq) ||
-      chunk.seq < 0 ||
-      chunk.seq >= slot.total
-    ) {
-      this.drop(chunk.id)
+    if (slot.total !== chunk.total) {
+      this.drop(chunk.id, 'contradictory chunk')
       return null
     }
     if (slot.parts[chunk.seq] === undefined) {
@@ -518,12 +523,12 @@ export class BridgeChunkAssembler {
       while (this.chars > MAX_PENDING_CHARS) {
         const oldest = this.pending.keys().next()
         if (oldest.done) break
-        this.drop(oldest.value)
+        this.drop(oldest.value, 'chunk buffer full')
         if (!this.pending.has(chunk.id)) return null
       }
     }
     if (slot.got < slot.total) return null
-    this.drop(chunk.id)
+    this.drop(chunk.id, '')
     try {
       return JSON.parse(slot.parts.join('')) as BridgeMessage
     } catch {
@@ -541,11 +546,13 @@ export class BridgeChunkAssembler {
     this.chars = 0
   }
 
-  private drop(id: string): void {
+  /** 拿掉一组并退还它占的额度；`reason` 非空表示是被丢掉的（收齐取走时为空） */
+  private drop(id: string, reason: string): void {
     const slot = this.pending.get(id)
     if (!slot) return
     this.chars -= slot.chars
     this.pending.delete(id)
+    if (reason) this.onDrop?.(`${reason} (id=${id}, ${slot.got}/${slot.total} parts)`)
   }
 }
 

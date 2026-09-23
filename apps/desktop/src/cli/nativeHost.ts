@@ -16,11 +16,14 @@
  *
  * **stdout 只能写原生消息帧**：任何日志都走 stderr，否则 Chrome 读到的是一帧坏数据、直接断开。
  */
+import { readFileSync } from 'fs'
 import { connect, type Socket } from 'net'
 import type { Readable, Writable } from 'stream'
 import { StringDecoder } from 'string_decoder'
 import {
   BRIDGE_ERROR_DESKTOP_OFFLINE,
+  chromeBridgeAddressFile,
+  chromeBridgeSocketPath,
   CHROME_NATIVE_MESSAGE_MAX_BYTES,
   type BridgeHostStatus,
   type BridgeResponse
@@ -67,6 +70,26 @@ class LineReader {
     this.rest = lines.pop() ?? ''
     return lines.filter((l) => l.length > 0)
   }
+}
+
+/**
+ * 桥服务此刻的地址：先读桌面写下的地址文件，读不到（桌面没开过、刚退出）回落到确定地址。
+ *
+ * 每次重连都现调 —— 桌面重启后地址可能就变了（Windows 的管道名每次带一个随机后缀）。
+ * POSIX 上的回落就是那个 0600 的 socket 文件，所以桌面没写地址文件也照样连得上。
+ */
+export function resolveBridgeAddress(env: {
+  home: string
+  platform: string
+  user: string
+}): string {
+  try {
+    const written = readFileSync(chromeBridgeAddressFile(env.home), 'utf-8').trim()
+    if (written) return written
+  } catch {
+    /* 桌面没开过 / 刚退出 */
+  }
+  return chromeBridgeSocketPath(env)
 }
 
 // ────────────────────── 宿主本体 ──────────────────────
@@ -197,8 +220,16 @@ export function runNativeHost(
 
   function connectDesktop(): void {
     if (stopped) return
-    const token = opts.readToken()
-    const target = typeof opts.socketPath === 'function' ? opts.socketPath() : opts.socketPath
+    // 读 token / 算地址都可能抛（文件系统出问题、注入的实现自己炸了）——
+    // 抛出去就是宿主进程直接死掉，扩展那头只看到端口断了
+    let token: string | undefined
+    let target: string | undefined
+    try {
+      token = opts.readToken()
+      target = typeof opts.socketPath === 'function' ? opts.socketPath() : opts.socketPath
+    } catch (err) {
+      log(`resolving the desktop address failed: ${(err as Error).message}`)
+    }
     if (!token || !target) {
       report('offline')
       scheduleRetry()

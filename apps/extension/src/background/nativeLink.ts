@@ -33,7 +33,9 @@ let state: PanelLinkState = 'connecting'
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 let reconnectDelay = 1000
 const MAX_RECONNECT_DELAY = 60_000
-const assembler = new BridgeChunkAssembler()
+const assembler = new BridgeChunkAssembler((reason) =>
+  console.warn(`[ShuviX] dropped an incomplete chunk group: ${reason}`)
+)
 const stateListeners = new Set<(state: PanelLinkState) => void>()
 const messageListeners = new Set<(message: DesktopMessage) => void>()
 
