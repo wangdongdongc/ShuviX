@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   ChatHostProvider,
@@ -19,10 +19,16 @@ import { TabChips } from './TabChips'
 import { applyAppearance, DEFAULT_APPEARANCE } from './appearance'
 import i18n, { resolveLocale } from './i18n'
 
+/**
+ * 连接状态。**订阅与读取必须是同一个瞬间**：先 `useState(link.state)` 取一次、再在 effect 里订阅，
+ * 两者之间到达的那次变化就永远丢了 —— SW 在端口连上时立刻回一条状态，它正好落在这条缝里的话，
+ * 侧边栏就卡在「连接中」不动（真实 Chrome 里复现得到，假 Chrome 的 e2e 不走这段界面所以看不见）。
+ */
 function useLinkState(link: PanelLink): PanelLinkState {
-  const [state, setState] = useState<PanelLinkState>(link.state)
-  useEffect(() => link.onState(setState), [link])
-  return state
+  return useSyncExternalStore(
+    useCallback((onChange: () => void) => link.onState(onChange), [link]),
+    () => link.state
+  )
 }
 
 /** 会话级 hook 的宿主（须在 ChatHostProvider 之下）。渠道模式：模型目录留空但放行初始化时序 */
