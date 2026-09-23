@@ -11,6 +11,7 @@
  * 由 sw.ts 的 alarm 与各个唤醒点（启动、安装、打开侧边栏）再拉起这条线。
  */
 import {
+  BRIDGE_ERROR_ALREADY_CONNECTED,
   BridgeChunkAssembler,
   CHROME_BRIDGE_HOST_NAME,
   CHROME_BRIDGE_PROTOCOL,
@@ -98,7 +99,13 @@ function onNativeMessage(raw: unknown): void {
       }
       return
     case 'welcome':
-      setState(raw.ok ? 'ready' : 'mismatch')
+      setState(
+        raw.ok
+          ? 'ready'
+          : raw.error === BRIDGE_ERROR_ALREADY_CONNECTED
+            ? 'already-connected'
+            : 'mismatch'
+      )
       return
     case 'chunk': {
       const whole = assembler.push(raw)

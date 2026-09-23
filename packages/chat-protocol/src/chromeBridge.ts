@@ -41,9 +41,27 @@ export function chromeBridgeSocketPath(env: {
   home: string
   platform: string
   user: string
+  /**
+   * Windows 专用的随机后缀（桌面每次启动现生成）。命名管道没有 POSIX 那种 0600：Node 建出来的管道
+   * 用的是默认安全描述符，名字又是可猜的，于是「谁都能来敲这个名字」。名字里带上随机后缀、真实
+   * 地址写进用户目录下的地址文件（见 {@link chromeBridgeAddressFile}），敲门的前提就变成「读得到
+   * 那个文件」——与 token 同一道门。POSIX 不需要它（socket 文件本身就是 0600）。
+   */
+  nonce?: string
 }): string {
-  if (env.platform === 'win32') return `\\\\.\\pipe\\shuvix-chrome-bridge-${env.user || 'shuvix'}`
+  if (env.platform === 'win32') {
+    const suffix = env.nonce ? `-${env.nonce}` : ''
+    return `\\\\.\\pipe\\shuvix-chrome-bridge-${env.user || 'shuvix'}${suffix}`
+  }
   return `${env.home.replace(/\/+$/, '')}/.shuvix/chrome-bridge.sock`
+}
+
+/**
+ * 桥服务实际监听的地址写在这里（桌面启动时写、退出时删；POSIX 上 0600）。本地组件每次重连都现读它 ——
+ * 桌面重启后 Windows 的管道名会变。读不到就回落到 {@link chromeBridgeSocketPath} 的确定地址。
+ */
+export function chromeBridgeAddressFile(home: string): string {
+  return `${home.replace(/\/+$/, '')}/.shuvix/chrome-bridge.addr`
 }
 
 /**
@@ -145,6 +163,15 @@ export const BRIDGE_ERROR_DESKTOP_OFFLINE = 'desktop-offline'
 /** 协议版本不符 */
 export const BRIDGE_ERROR_PROTOCOL_MISMATCH = 'protocol-mismatch'
 
+/**
+ * 同一个扩展安装（installId）已经有一条**还活着**的连接 —— 新来的这条被拒。
+ *
+ * 顶替是静默的话，任何拿到 token 的本地进程报一个已在用的 installId 就能把真浏览器挤下线、
+ * 接手它那些标签页会话的历史。所以顶替之前先探一下旧连接还答不答话（`bridge.ping`）：
+ * 还答话就拒绝新的；不答话（浏览器关了、本地组件死了）才让位。
+ */
+export const BRIDGE_ERROR_ALREADY_CONNECTED = 'already-connected'
+
 // ─────────────────────────── 浏览器操作（桌面 → 扩展） ───────────────────────────
 
 /** 扩展交给桌面的标签页快照（chrome.tabs.Tab 的子集） */
@@ -192,6 +219,8 @@ export const CHROME_GROUP_COLORS: readonly ChromeGroupColor[] = [
  * 扩展只是执行者：选哪个标签页、要不要过门，全在桌面。
  */
 export interface BrowserOpMap {
+  /** 探活：只回 `{ ok: true }`，不碰浏览器。顶替一条连接之前用它确认旧的是不是真的还在 */
+  'bridge.ping': { params: Record<string, never>; result: { ok: true } }
   'tabs.list': { params: Record<string, never>; result: ChromeTabInfo[] }
   /** 无副作用（不激活、不 attach）；标签页不存在回 null */
   'tabs.get': { params: { tabId: number }; result: ChromeTabInfo | null }
@@ -433,15 +462,42 @@ export function splitBridgeMessage(
  * 分片组装器：逐条喂分片，收齐一组就回还原出的消息，否则回 null。
  * 同一组分片可能与别的消息交错到达（事件流不停），所以按 id 分开攒。
  */
-export class BridgeChunkAssembler {
-  private readonly pending = new Map<string, { total: number; parts: string[]; got: number }>()
+/**
+ * 同时攒着的分片组数上限。正常情况下一条连接上只会有一组在飞（一条消息的各片是连着写出去的），
+ * 给到 4 只是留余量；超了就丢最老的那组。
+ */
+const MAX_PENDING_GROUPS = 4
+/** 一组分片的片数上限（`total` 直接用来开数组，不设上限等于让对面决定分配多大） */
+const MAX_CHUNK_PARTS = 4096
+/** 所有未完成的组加起来能占的字符数上限 —— 永远凑不齐的分片不能把内存撑爆 */
+const MAX_PENDING_CHARS = 32 * 1024 * 1024
 
-  /** 喂一片；收齐回原消息，未齐回 null。分片与自身声明矛盾（total 变了、seq 越界）时丢掉整组 */
+export class BridgeChunkAssembler {
+  private readonly pending = new Map<
+    string,
+    { total: number; parts: string[]; got: number; chars: number }
+  >()
+  private chars = 0
+
+  /**
+   * 喂一片；收齐回原消息，未齐回 null。分片与自身声明矛盾（total 变了、seq 越界）时丢掉整组。
+   *
+   * 三道上限（见常量）：片数、同时攒的组数、攒着的总字符数。拿到 token 的本地进程可以一直发
+   * 永远凑不齐的分片，没有上限就是一条撑爆内存的路。
+   */
   push(chunk: BridgeChunk): BridgeMessage | null {
-    if (!Number.isInteger(chunk.total) || chunk.total < 1) return null
+    if (!Number.isInteger(chunk.total) || chunk.total < 1 || chunk.total > MAX_CHUNK_PARTS) {
+      return null
+    }
     let slot = this.pending.get(chunk.id)
     if (!slot) {
-      slot = { total: chunk.total, parts: new Array(chunk.total), got: 0 }
+      // 组数超了：丢最老的那组（Map 按插入序）
+      while (this.pending.size >= MAX_PENDING_GROUPS) {
+        const oldest = this.pending.keys().next()
+        if (oldest.done) break
+        this.drop(oldest.value)
+      }
+      slot = { total: chunk.total, parts: new Array(chunk.total), got: 0, chars: 0 }
       this.pending.set(chunk.id, slot)
     }
     if (
@@ -450,15 +506,24 @@ export class BridgeChunkAssembler {
       chunk.seq < 0 ||
       chunk.seq >= slot.total
     ) {
-      this.pending.delete(chunk.id)
+      this.drop(chunk.id)
       return null
     }
     if (slot.parts[chunk.seq] === undefined) {
       slot.parts[chunk.seq] = chunk.data
       slot.got++
+      slot.chars += chunk.data.length
+      this.chars += chunk.data.length
+      // 攒得太多：从最老的开始丢，直到回到上限以内（自己这一组也可能被丢掉）
+      while (this.chars > MAX_PENDING_CHARS) {
+        const oldest = this.pending.keys().next()
+        if (oldest.done) break
+        this.drop(oldest.value)
+        if (!this.pending.has(chunk.id)) return null
+      }
     }
     if (slot.got < slot.total) return null
-    this.pending.delete(chunk.id)
+    this.drop(chunk.id)
     try {
       return JSON.parse(slot.parts.join('')) as BridgeMessage
     } catch {
@@ -473,6 +538,14 @@ export class BridgeChunkAssembler {
 
   clear(): void {
     this.pending.clear()
+    this.chars = 0
+  }
+
+  private drop(id: string): void {
+    const slot = this.pending.get(id)
+    if (!slot) return
+    this.chars -= slot.chars
+    this.pending.delete(id)
   }
 }
 

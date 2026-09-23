@@ -12,12 +12,13 @@
  * 同一个 installId 再连上来（本地组件重启），旧连接让位。
  */
 import { createServer, type Server, type Socket } from 'net'
-import { chmodSync, existsSync, mkdirSync, unlinkSync } from 'fs'
+import { chmodSync, existsSync, mkdirSync, unlinkSync, writeFileSync } from 'fs'
 import { dirname } from 'path'
 import { timingSafeEqual } from 'crypto'
 import { StringDecoder } from 'string_decoder'
 import { v4 as uuid } from 'uuid'
 import {
+  BRIDGE_ERROR_ALREADY_CONNECTED,
   BRIDGE_ERROR_PROTOCOL_MISMATCH,
   BridgeChunkAssembler,
   CHROME_BRIDGE_PROTOCOL,
@@ -39,6 +40,9 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 60_000
 
 /** 连上来之后多久内得说出正确的 token —— 过时不候（本地组件连上就发，正常是毫秒级） */
 const AUTH_TIMEOUT_MS = 10_000
+
+/** 顶替一条已有连接之前，探活等它多久（本地一问一答，2 秒足够） */
+const TAKEOVER_PING_TIMEOUT_MS = 2_000
 
 /** 连接断开时，挂着的请求统一以这句失败 */
 export const CHROME_DISCONNECTED_ERROR = 'Chrome is no longer connected to ShuviX.'
@@ -291,11 +295,33 @@ export class BridgeConnection {
       this.owner.adopt(this)
       return
     }
+    // 同一个 installId 已有连接时要先探活，所以「就绪还是被拒」由 owner 决定（见 claim）
+    void this.owner.claim(this)
+  }
+
+  /** @internal claim 放行：登记为就绪并回 welcome */
+  markReady(): BridgeHello | undefined {
+    if (this.state !== 'awaiting-hello' || !this.hello) return undefined
     this.state = 'ready'
     this.send({ type: 'welcome', protocol: CHROME_BRIDGE_PROTOCOL, ok: true })
-    log.info(`ready: ${hello.browser} (install ${hello.installId.slice(0, 8)})`)
-    this.owner.adopt(this)
-    this.owner.announceReady(this, this.hello)
+    log.info(`ready: ${this.hello.browser} (install ${this.hello.installId.slice(0, 8)})`)
+    return this.hello
+  }
+
+  /** @internal claim 拒绝：说清理由再收线（对面据此显示，不会当成「桌面没开」一直重试） */
+  refuse(error: string): void {
+    this.send({ type: 'welcome', protocol: CHROME_BRIDGE_PROTOCOL, ok: false, error })
+    this.state = 'closed'
+    this.socket.end()
+  }
+
+  /** @internal 探活：只走协议层的 ping，不碰浏览器（`alive` 是「socket 还没关」，这里问的是「还答不答话」） */
+  async respondsToPing(): Promise<boolean> {
+    if (!this.ready) return false
+    return this.request('bridge.ping', {}, { timeoutMs: TAKEOVER_PING_TIMEOUT_MS }).then(
+      () => true,
+      () => false
+    )
   }
 
   private async onRequest(id: string, method: string, params: unknown): Promise<void> {
@@ -350,6 +376,7 @@ export class BridgeConnection {
 export class ChromeBridgeServer {
   private server: Server | null = null
   private socketPath = ''
+  private addressFile = ''
   private getToken: () => string = () => ''
   handlers: ChromeBridgeHandlers = {}
   /** 本模块内部先消费浏览器事件（CDP 状态），再交给上层 */
@@ -364,9 +391,15 @@ export class ChromeBridgeServer {
   private readonly byInstall = new Map<string, BridgeConnection>()
   private readonly changeListeners = new Set<() => void>()
 
-  async start(opts: { socketPath: string; getToken: () => string }): Promise<void> {
+  async start(opts: {
+    socketPath: string
+    getToken: () => string
+    /** 实际地址写到这里，本地组件每次重连现读（Windows 的管道名每次启动都不一样，见协议包） */
+    addressFile?: string
+  }): Promise<void> {
     if (this.server) return
     this.socketPath = opts.socketPath
+    this.addressFile = opts.addressFile ?? ''
     this.getToken = opts.getToken
     const isPipe = process.platform === 'win32'
     if (!isPipe) {
@@ -398,6 +431,15 @@ export class ChromeBridgeServer {
     }
     server.on('error', (err) => log.warn(`server error: ${err.message}`))
     this.server = server
+    if (this.addressFile) {
+      try {
+        mkdirSync(dirname(this.addressFile), { recursive: true })
+        writeFileSync(this.addressFile, opts.socketPath, 'utf-8')
+        if (!isPipe) chmodSync(this.addressFile, 0o600)
+      } catch (err) {
+        log.warn(`write address file failed: ${(err as Error).message}`)
+      }
+    }
     log.info(`listening at ${opts.socketPath}`)
   }
 
@@ -416,6 +458,13 @@ export class ChromeBridgeServer {
     if (process.platform !== 'win32' && this.socketPath && existsSync(this.socketPath)) {
       try {
         unlinkSync(this.socketPath)
+      } catch {
+        /* 忽略 */
+      }
+    }
+    if (this.addressFile && existsSync(this.addressFile)) {
+      try {
+        unlinkSync(this.addressFile)
       } catch {
         /* 忽略 */
       }
@@ -487,12 +536,37 @@ export class ChromeBridgeServer {
   }
 
   /** @internal 握手完成：登记，同一 installId 的旧连接让位 */
+  async claim(conn: BridgeConnection): Promise<void> {
+    const installId = conn.info?.installId
+    if (!installId) return
+    const previous = this.byInstall.get(installId)
+    if (previous && previous !== conn && previous.ready) {
+      // 顶替不能是静默的：旧连接还答话就拒绝新的 —— 拿到 token 的本地进程报一个在用的
+      // installId，否则就能把真浏览器挤下线、接手它那些标签页会话
+      if (await previous.respondsToPing()) {
+        log.warn(
+          `refused a second connection for install ${installId.slice(0, 8)}: the first one is still answering`
+        )
+        conn.refuse(BRIDGE_ERROR_ALREADY_CONNECTED)
+        return
+      }
+      log.info(`replacing a connection that stopped answering (install ${installId.slice(0, 8)})`)
+      previous.close()
+    }
+    const hello = conn.markReady()
+    if (!hello) return // 探活期间它自己断了
+    this.byInstall.set(installId, conn)
+    this.notifyChange()
+    this.announceReady(conn, hello)
+  }
+
+  /** @internal 协议版本对不上的连接也登记（设置页要显示它），但不算就绪 */
   adopt(conn: BridgeConnection): void {
     const installId = conn.info?.installId
     if (!installId) return
     const previous = this.byInstall.get(installId)
-    if (previous && previous !== conn) previous.close()
-    this.byInstall.set(installId, conn)
+    if (previous && previous !== conn && !previous.ready) previous.close()
+    if (!previous || !previous.ready) this.byInstall.set(installId, conn)
     this.notifyChange()
   }
 

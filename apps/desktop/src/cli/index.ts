@@ -23,7 +23,7 @@ import { connect } from 'net'
 import { readFileSync, existsSync } from 'fs'
 import { homedir, platform, userInfo } from 'os'
 import { join, resolve } from 'path'
-import { chromeBridgeSocketPath } from '@shuvix/chat-protocol/chromeBridge'
+import { chromeBridgeAddressFile, chromeBridgeSocketPath } from '@shuvix/chat-protocol/chromeBridge'
 import { runNativeHost } from './nativeHost'
 
 interface ParsedCommand {
@@ -286,11 +286,21 @@ function isNativeHostInvocation(argv: string[]): boolean {
 
 function runNativeHostMain(): void {
   const handle = runNativeHost(process.stdin, process.stdout, {
-    socketPath: chromeBridgeSocketPath({
-      home: homedir(),
-      platform: platform(),
-      user: userInfo().username
-    }),
+    // 每次重连现读：桌面写下的真实地址（Windows 的管道名每次启动都不一样）。
+    // 读不到就回落到确定地址 —— POSIX 上它就是那个 0600 的 socket 文件
+    socketPath: () => {
+      try {
+        const written = readFileSync(chromeBridgeAddressFile(homedir()), 'utf-8').trim()
+        if (written) return written
+      } catch {
+        /* 桌面没开过 / 刚退出 */
+      }
+      return chromeBridgeSocketPath({
+        home: homedir(),
+        platform: platform(),
+        user: userInfo().username
+      })
+    },
     readToken: () => {
       try {
         return readFileSync(tokenFilePath(), 'utf-8').trim() || undefined

@@ -72,8 +72,11 @@ class LineReader {
 // ────────────────────── 宿主本体 ──────────────────────
 
 export interface NativeHostOptions {
-  /** 桌面桥服务的地址（`chromeBridgeSocketPath`） */
-  socketPath: string
+  /**
+   * 桌面桥服务的地址。给函数的话**每次重连都现算**：桌面重启后地址可能变了
+   * （Windows 的管道名每次启动带一个随机后缀，见 `chromeBridgeAddressFile`）。
+   */
+  socketPath: string | (() => string | undefined)
   /** 读鉴权 token；读不到（桌面从没启动过）回 undefined */
   readToken: () => string | undefined
   /** 重连间隔（毫秒），按失败次数取，用完后一直取最后一个 */
@@ -195,14 +198,15 @@ export function runNativeHost(
   function connectDesktop(): void {
     if (stopped) return
     const token = opts.readToken()
-    if (!token) {
+    const target = typeof opts.socketPath === 'function' ? opts.socketPath() : opts.socketPath
+    if (!token || !target) {
       report('offline')
       scheduleRetry()
       return
     }
     state = 'connecting'
     const lines = new LineReader()
-    const sock = connect(opts.socketPath)
+    const sock = connect(target)
     socket = sock
     sock.on('connect', () => {
       state = 'authing'

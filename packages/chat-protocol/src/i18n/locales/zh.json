@@ -1114,6 +1114,8 @@
     "offlineBody": "打开 ShuviX 桌面端，就可以就这个页面对话了。对话在桌面端运行，用你自己的模型与密钥。",
     "mismatchTitle": "需要更新",
     "mismatchBody": "这个扩展与 ShuviX 桌面端的版本不一致。请把两者都更新到同一个版本。",
+    "alreadyConnectedTitle": "已经有一个浏览器连着了",
+    "alreadyConnectedBody": "ShuviX 上这个扩展安装已经有一条活着的连接。如果你没有开第二份这个浏览器，那就是这台机器上别的东西在冒充它 —— 退出 ShuviX 再启动一次以确认。",
     "errorTitle": "没能为这个标签页打开对话",
     "retry": "重试",
     "thisTab": "本标签页",

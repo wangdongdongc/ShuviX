@@ -26,7 +26,9 @@ export function StatusView({
         ? t('chromePanel.offlineTitle')
         : state === 'mismatch'
           ? t('chromePanel.mismatchTitle')
-          : t('chromePanel.errorTitle')
+          : state === 'already-connected'
+            ? t('chromePanel.alreadyConnectedTitle')
+            : t('chromePanel.errorTitle')
   const body =
     state === 'host-missing'
       ? t('chromePanel.hostMissingBody')
@@ -34,9 +36,11 @@ export function StatusView({
         ? t('chromePanel.offlineBody')
         : state === 'mismatch'
           ? t('chromePanel.mismatchBody')
-          : state === 'error'
-            ? error
-            : undefined
+          : state === 'already-connected'
+            ? t('chromePanel.alreadyConnectedBody')
+            : state === 'error'
+              ? error
+              : undefined
   return (
     <div
       className="h-full flex flex-col items-center justify-center gap-3 px-8 text-center bg-bg-primary text-text-primary"

@@ -1114,6 +1114,8 @@
     "offlineBody": "Open the ShuviX desktop app to chat about this page. Conversations run there, with your own models and keys.",
     "mismatchTitle": "Update needed",
     "mismatchBody": "This extension and the ShuviX desktop app are different versions. Update both to the same release.",
+    "alreadyConnectedTitle": "Another browser is already connected",
+    "alreadyConnectedBody": "ShuviX already has a live connection for this extension. If you did not open a second copy of this browser, something else on this computer is claiming to be it — quit ShuviX and start it again to be sure.",
     "errorTitle": "Couldn't open a conversation for this tab",
     "retry": "Retry",
     "thisTab": "This tab",

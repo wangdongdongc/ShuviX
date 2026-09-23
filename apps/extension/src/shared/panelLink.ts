@@ -22,6 +22,8 @@ export type PanelLinkState =
   | 'host-missing'
   | 'desktop-offline'
   | 'mismatch'
+  /** 桌面那边这个扩展安装已经有一条活着的连接了（见 BRIDGE_ERROR_ALREADY_CONNECTED） */
+  | 'already-connected'
   | 'ready'
 
 export type PanelMethod = keyof PanelRequestMap

@@ -426,6 +426,9 @@ export function startFakeChrome(opts: FakeChromeOptions): FakeChrome {
   /** 一条浏览器操作（BrowserOpMap）—— 扩展 browserOps.ts 的假版本 */
   const runOp = async (method: string, p: Record<string, unknown>): Promise<unknown> => {
     switch (method) {
+      // 桌面顶替一条连接之前的探活（扩展那边也只回这一句）
+      case 'bridge.ping':
+        return { ok: true }
       case 'tabs.list':
         return [...tabs.values()].map(infoOf)
       case 'tabs.get': {

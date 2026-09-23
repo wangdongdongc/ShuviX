@@ -119,6 +119,9 @@ const handlers: { [M in BrowserOpName]: Handler<M> } = {
     return { groupId: finalId }
   },
 
+  // 探活：桌面在顶替一条连接之前问的，只回一句「我还在」，不碰浏览器
+  'bridge.ping': async () => ({ ok: true }) as { ok: true },
+
   'debugger.attach': async ({ tabId }) => {
     if (attached.has(tabId)) return null
     try {

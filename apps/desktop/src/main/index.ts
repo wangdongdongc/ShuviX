@@ -45,7 +45,8 @@ import { cliServer } from './services/cliServer'
 import { chromeBridge } from './services/chromeBridge'
 import { installChromeNativeHost } from './services/chromeExtensionService'
 import { registerChromeFrontend } from './frontend/chrome'
-import { chromeBridgeSocketPath } from '@shuvix/chat-protocol/chromeBridge'
+import { randomBytes } from 'crypto'
+import { chromeBridgeAddressFile, chromeBridgeSocketPath } from '@shuvix/chat-protocol/chromeBridge'
 import { closeAllWatchers } from './services/filesWatcherService'
 import { hookService } from './services/hookService'
 import { installLlmNetwork } from './services/llmNetwork'
@@ -679,8 +680,12 @@ app.whenReady().then(async () => {
       socketPath: chromeBridgeSocketPath({
         home: homedir(),
         platform: process.platform,
-        user: userInfo().username
+        user: userInfo().username,
+        // Windows 的命名管道没有 0600 那种门，名字又是可猜的：每次启动换一个随机后缀，
+        // 真实地址只写进用户目录下的地址文件（本地组件现读），敲门的前提于是与 token 同一道
+        nonce: process.platform === 'win32' ? randomBytes(6).toString('hex') : undefined
       }),
+      addressFile: chromeBridgeAddressFile(homedir()),
       getToken: () => cliServer.getToken()
     })
     .catch((err) => log.error(`chromeBridge.start failed: ${err}`))
