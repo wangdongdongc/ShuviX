@@ -253,7 +253,15 @@ describe.skipIf(!CHROME_BIN)('真实浏览器', () => {
       return tabs.some((t) => t.id === tabId && t.title === 'E2E Form')
     }, 'fixture page loaded')
 
-    // 侧边栏页面本身（SW 打开侧边栏时给的就是这个地址）
+    // 侧边栏的**容器**测不到：`chrome.sidePanel.open()` 只认真实的用户手势（点工具栏图标），
+    // CDP 连 Runtime.evaluate 的 userGesture 都不算数（实测报「may only be called in response to a
+    // user gesture」）。所以这里把同一个页面按 SW 给的那个地址当普通标签页打开 —— 页面、代码、
+    // 整条链路完全一样，只有外壳不同；「点图标 → 在这一页右侧弹出侧边栏」那两行只能人工过一遍。
+    // 能自动断的是它旁边那半：全局默认必须是关的，只有点过图标的标签页才有侧边栏。
+    const globalPanel = await sw.eval<{ enabled?: boolean }>(
+      'chrome.sidePanel.getOptions({}).then((o) => ({ enabled: o.enabled }))'
+    )
+    expect(globalPanel.enabled).toBe(false)
     await sw.eval(
       `chrome.windows.getAll({}).then((ws) =>
          chrome.tabs.create({ url: 'chrome-extension://${CHROME_EXTENSION_ID}/sidepanel.html?tabId=' + ${tabId}, active: true, windowId: ws[0]?.id })
