@@ -7,10 +7,48 @@
  * 另外把两个 **OS 级模态** 换成可脚本化的桩（见下）：`contextMenu:popup`（侧栏的行/组头
  * 动作如今都只在那份菜单里）与 `skill:pickExternalDir`（添加外部技能目录的第一步）。
  * 两者都起 OS 级嵌套 runloop，是 e2e 唯一驱动不了的东西。
+ *
+ * 再加一道保险：`dialog.showOpenDialog` / `showOpenDialogSync` 一律回「取消」，并把每次请求记进
+ * `<userData>/e2e-native-dialogs.log`（见 NATIVE_DIALOG_LOG）—— e2e 永远不该在开发者的屏幕上弹出
+ * 原生「打开文件」框（它同样起 OS 级模态，CDP 关不掉），spec 可以断这个文件是空的。
+ * 这只挡得住**主进程 JS** 发起的框；页面里 `<input type=file>` 自己弹的框走 Chromium 的 C++ 路径，
+ * 由产品的 agentGuards 与 spec 自己的 `interceptFileChoosers`（browserFixtures.ts）挡。
  */
-const { app, ipcMain } = require('electron')
+const { app, dialog, ipcMain } = require('electron')
+const { appendFileSync } = require('fs')
+const { join } = require('path')
 const userData = process.env.SHUVIX_VERIFY_USERDATA
 if (userData) app.setPath('userData', userData)
+
+/** 原生「打开文件」框请求的记录文件名（在 userData 下；每行一个请求：方法名 + 选项 JSON） */
+const NATIVE_DIALOG_LOG = 'e2e-native-dialogs.log'
+
+/** 记下一次原生框请求（选项里可能挂着窗口对象，序列化失败就只记方法名） */
+// eslint-disable-next-line @typescript-eslint/explicit-function-return-type -- 纯 CommonJS，写不了类型标注
+function recordNativeDialog(method, args) {
+  if (!userData) return
+  const opts = args.find((a) => a && typeof a === 'object' && !a.webContents)
+  let detail = ''
+  try {
+    detail = JSON.stringify(opts ?? null)
+  } catch {
+    detail = '(unserializable options)'
+  }
+  try {
+    appendFileSync(join(userData, NATIVE_DIALOG_LOG), `${method} ${detail}\n`)
+  } catch {
+    // 记不下来也不能让调用方失败
+  }
+}
+
+dialog.showOpenDialog = async (...args) => {
+  recordNativeDialog('showOpenDialog', args)
+  return { canceled: true, filePaths: [] }
+}
+dialog.showOpenDialogSync = (...args) => {
+  recordNativeDialog('showOpenDialogSync', args)
+  return undefined
+}
 
 /**
  * 原生右键菜单桩 —— 侧栏动作（新建对话 / 新建 Bot 会话 / 项目配置 / 导出 / 删除…）收进

@@ -5435,7 +5435,7 @@ export function archivedSettingsPane(settings: CdpClient): ArchivedSettingsPane 
 //     这一处）；标签栏 = 它的父 div（PanelTabBar 的按钮是直接子节点；屏外测量节点是 span，
 //     不会混进来）；
 //   - agents 面板 = RightPanel 根（标签栏的父级）里内容区（`:scope > div.relative`）的
-//     **最后一个**子节点（RightPanel 按 browser/preview/widget/calendar/agents 固定序铺开，
+//     **最后一个**子节点（RightPanel 按 preview/widget/calendar/agents 固定序铺开，
 //     全部常驻挂载、visibility 切换）—— 行 / 空态 / 详情都 scope 在它之内；
 //   - 行 = 列表区 `.divide-y > div > button.w-full`（详情里的工具行也有 w-full，但不在
 //     这一层父子关系上）；相位灯 = 行内 `span.rounded-full`；孤儿徽章 =
@@ -5472,13 +5472,13 @@ export interface RightPanelPane {
   activateAgentsTab(): Promise<void>
   /** agents tab 是否激活（activateAgentsTab 的 visibility 判据暴露成读数） */
   agentsActive(): Promise<boolean>
-  /** 切到 browser tab 并等 agents 内容区不可见 —— 「面板开着但在别的 tab」的构造 */
-  activateBrowserTab(): Promise<void>
+  /** 切到 widget tab 并等 agents 内容区不可见 —— 「面板开着但在别的 tab」的构造 */
+  activateWidgetTab(): Promise<void>
   /** 标签栏可见 tab 的 lucide 图标类（DOM 序）—— tab 集合与顺序的判据，不认文案 */
   tabIcons(): Promise<string[]>
   /**
    * 当前激活 tab 的 lucide 图标类（PanelTabBar 的选中下划线所在那颗按钮）；面板关着时为空串。
-   * browser tab 是 `lucide-monitor`。
+   * widget tab 是 `lucide-wrench`（浏览器已搬进独立窗口，面板里没有它）。
    */
   activeTabIcon(): Promise<string>
   /** 监视列表的行快照（DOM 序 = monitorList 序） */
@@ -5534,13 +5534,13 @@ export function rightPanelPane(main: CdpClient): RightPanelPane {
       await until(agentsActive, 'agents tab visible')
     },
     agentsActive,
-    activateBrowserTab: async () => {
-      // 与 tabIcons 同一根标签栏，按图标点名 browser tab（lucide-monitor 只在这一处）
-      const BROWSER_TAB = `[...(${AGENTS_TAB}?.parentElement?.children ?? [])]
-        .find((b) => b.querySelector('.lucide-monitor'))`
-      await until(() => main.eval<boolean>(`!!${BROWSER_TAB}`), 'browser tab mounted')
-      await main.eval(`${BROWSER_TAB}.click()`)
-      await until(async () => !(await agentsActive()) || null, 'browser tab active')
+    activateWidgetTab: async () => {
+      // 与 tabIcons 同一根标签栏，按图标点名 widget tab（它常驻可见，不像 preview 要有目标才出现）
+      const WIDGET_TAB = `[...(${AGENTS_TAB}?.parentElement?.children ?? [])]
+        .find((b) => b.querySelector('.lucide-wrench'))`
+      await until(() => main.eval<boolean>(`!!${WIDGET_TAB}`), 'widget tab mounted')
+      await main.eval(`${WIDGET_TAB}.click()`)
+      await until(async () => !(await agentsActive()) || null, 'widget tab active')
     },
     tabIcons: () =>
       main.eval<string[]>(`[...(${AGENTS_TAB}?.parentElement?.children ?? [])]
@@ -5702,5 +5702,120 @@ export async function monitorSettingsPane(settings: CdpClient): Promise<MonitorS
       settings.eval<string[]>(`[...(${NAV}?.querySelectorAll(':scope > button') ?? [])]
         .map((b) => [...(b.querySelector('svg')?.classList ?? [])].find((c) => c.startsWith('lucide-')) ?? '')`),
     hash: () => settings.eval<string>('location.hash')
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 浏览器独立窗口（#browser-window）：BrowserWindowShell → BrowserWall 卡片墙；以及主窗侧栏
+// 底部打开它的那颗按钮。
+//
+// 锚点（全是产品代码专门留的 data 属性，不认文案 / 类名）：
+//   - 窗口根 = `[data-browser-window]`；
+//   - 墙格 = `[data-wall-cell="<tabId>"]`，滚动容器 = 墙格的父节点（BrowserWall 的 grid，
+//     墙空时它不在 DOM 里）；
+//   - 卡片 = `[data-browser-card="<tabId>"]`，激活的那张带 `data-active="true"`；
+//   - 页面区 = 卡片里的 `[data-page-area]`（主进程把 WebContentsView 叠在它的矩形上）；
+//   - 主窗开窗按钮 = `[data-open-browser-window]`。
+// tab id 是 UUID（十六进制与连字符），直接进属性选择器无需转义。
+//
+// 窗口「开没开」不从这里读：e2e 带着 `--disable-renderer-backgrounding` /
+// `--disable-backgrounding-occluded-windows` 启动，`document.visibilityState` 不反映窗口是否隐藏
+// —— 用 IPC `window.api.browserView.isWindowOpen()`。
+
+/** 一个元素的视口矩形（CSS px） */
+export interface WallRect {
+  left: number
+  top: number
+  right: number
+  bottom: number
+  width: number
+  height: number
+}
+
+export interface BrowserWallPane {
+  /** 窗口根 `[data-browser-window]` 已挂载 */
+  mounted(): Promise<boolean>
+  /** 墙上卡片的 tab id（DOM 序 = tab 顺序） */
+  cardIds(): Promise<string[]>
+  /** 带 `data-active="true"` 的卡片的 tab id（正常恰好一个；墙空时为空） */
+  activeCardIds(): Promise<string[]>
+  /** 某张卡片的矩形；不在 DOM 里回 null */
+  cardRect(tabId: string): Promise<WallRect | null>
+  /** 某张卡片所在墙格的矩形；不在 DOM 里回 null */
+  cellRect(tabId: string): Promise<WallRect | null>
+  /** 某张卡片页面区（WebContentsView 叠上去的那块）的矩形；卡片不挂页面时回 null */
+  pageAreaRect(tabId: string): Promise<WallRect | null>
+  /** 墙的滚动容器的矩形；墙空时回 null */
+  wallRect(): Promise<WallRect | null>
+  /** 滚动容器的 scrollTop（墙空时 0） */
+  scrollTop(): Promise<number>
+  /** 把墙滚回顶上并等它停在 0 */
+  scrollToTop(): Promise<void>
+}
+
+/** 浏览器窗口的卡片墙（`app.browserWindow()` 连上的那个页面） */
+export function browserWallPane(bw: CdpClient): BrowserWallPane {
+  const SCROLLER = `document.querySelector('[data-wall-cell]')?.parentElement`
+  const rectOf = (expr: string): Promise<WallRect | null> =>
+    bw.eval<WallRect | null>(`(() => {
+      const el = ${expr}
+      if (!el) return null
+      const r = el.getBoundingClientRect()
+      return { left: r.left, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height }
+    })()`)
+  const scrollTop = (): Promise<number> => bw.eval<number>(`${SCROLLER}?.scrollTop ?? 0`)
+  return {
+    mounted: () => bw.eval<boolean>(`!!document.querySelector('[data-browser-window]')`),
+    cardIds: () =>
+      bw.eval<string[]>(
+        `[...document.querySelectorAll('[data-browser-card]')].map((el) => el.dataset.browserCard)`
+      ),
+    activeCardIds: () =>
+      bw.eval<string[]>(
+        `[...document.querySelectorAll('[data-browser-card][data-active="true"]')].map((el) => el.dataset.browserCard)`
+      ),
+    cardRect: (tabId) => rectOf(`document.querySelector('[data-browser-card="${tabId}"]')`),
+    cellRect: (tabId) => rectOf(`document.querySelector('[data-wall-cell="${tabId}"]')`),
+    pageAreaRect: (tabId) =>
+      rectOf(`document.querySelector('[data-browser-card="${tabId}"] [data-page-area]')`),
+    wallRect: () => rectOf(SCROLLER),
+    scrollTop,
+    scrollToTop: async () => {
+      await bw.eval(`(() => { const s = ${SCROLLER}; if (s) s.scrollTop = 0 })()`)
+      await until(async () => (await scrollTop()) === 0, 'browser wall scrolled to top')
+    }
+  }
+}
+
+export interface OpenBrowserWindowButton {
+  /** 按钮在主窗侧栏里 */
+  present(): Promise<boolean>
+  /** 点它（等它挂载后再点） */
+  click(): Promise<void>
+  /**
+   * 按钮上的 tab 计数徽标（`[data-browser-tab-count]` 的值）；没有徽标（0 个 tab）时回 null。
+   * 这是用户知道「agent 开了页面」的唯一地方 —— agent 开 tab 不会把浏览器窗口弄出来。
+   */
+  count(): Promise<number | null>
+  /** 按钮的 title（带计数时写着 tab 数）；按钮不在时回空串 */
+  title(): Promise<string>
+}
+
+/** 主窗侧栏底部「打开浏览器窗口」按钮 */
+export function openBrowserWindowButton(main: CdpClient): OpenBrowserWindowButton {
+  const BTN = `document.querySelector('[data-open-browser-window]')`
+  const present = (): Promise<boolean> => main.eval<boolean>(`!!${BTN}`)
+  return {
+    present,
+    click: async () => {
+      await until(present, 'open-browser-window button mounted')
+      await main.eval(`${BTN}.click()`)
+    },
+    count: () =>
+      main.eval<number | null>(`(() => {
+        const badge = ${BTN}?.querySelector('[data-browser-tab-count]')
+        return badge ? Number(badge.getAttribute('data-browser-tab-count')) : null
+      })()`),
+    title: () => main.eval<string>(`${BTN}?.getAttribute('title') ?? ''`)
   }
 }

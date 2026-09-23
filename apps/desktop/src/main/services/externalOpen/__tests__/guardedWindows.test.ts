@@ -32,6 +32,8 @@ const UNGUARDED_ALLOWLIST: Record<string, number> = {}
 /** 今天造窗口的文件与各自的窗口数；数目对不上说明有人新加/挪走了窗口，顺手把这张表也更新掉 */
 const EXPECTED_WINDOW_FILES: Record<string, number> = {
   'index.ts': 2,
+  'services/browser/browserWindowService.ts': 1,
+  'services/browser/stagingWindow.ts': 1,
   'services/pinnedChatService.ts': 1,
   'services/widgetWindowService.ts': 1
 }

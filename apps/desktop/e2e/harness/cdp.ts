@@ -24,14 +24,28 @@ export async function listTargets(port: number): Promise<CdpTarget[]> {
 }
 
 /**
- * 主窗口页面判别（区别于设置窗口 #settings 与 devtools 目标）。
+ * 副窗口的 hash —— 它们与主窗口加载同一个 renderer 入口，只靠 hash 区分。
+ * 漏掉任何一个，那个窗口一开着 harness 就可能把它当成主窗口（浏览器窗口由 spec 经侧栏按钮 /
+ * openWindow 打开，漏掉它会让 browser 区的 spec 时好时坏）。
+ */
+const SECONDARY_WINDOW_HASHES = ['#settings', '#pinned-chat', '#widget-window', '#browser-window']
+
+/**
+ * 主窗口页面判别（区别于各副窗口与 devtools 目标）。
  *
  * `appUrl` 给定时还要求 target 属于**该 checkout 的产物目录** —— 端口被别的实例占着时
  * Chromium 不报错也不换端口，`/json` 回的是那个实例的 target，长相与自己的一模一样
  * （见 launch.ts 的端口说明）。
  */
 export function isMainPage(t: CdpTarget, appUrl?: string): boolean {
-  if (t.type !== 'page' || !t.url.includes('out/renderer') || t.url.includes('#settings')) {
+  if (t.type !== 'page' || !t.url.includes('out/renderer')) return false
+  if (SECONDARY_WINDOW_HASHES.some((hash) => t.url.includes(hash))) return false
+  return !appUrl || t.url.startsWith(appUrl)
+}
+
+/** 浏览器独立窗口的页面判别 */
+export function isBrowserWindowPage(t: CdpTarget, appUrl?: string): boolean {
+  if (t.type !== 'page' || !t.url.includes('out/renderer') || !t.url.includes('#browser-window')) {
     return false
   }
   return !appUrl || t.url.startsWith(appUrl)

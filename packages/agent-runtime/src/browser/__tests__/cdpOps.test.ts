@@ -81,6 +81,11 @@ interface FakeSession {
   history: { currentIndex: number; entries: Array<{ id: number; url?: string }> }
   /** 页面函数的返回序列（按名字）：每调一次取下一个，剩最后一个时一直沿用 */
   results: Record<string, unknown[]>
+  /**
+   * 「焦点是不是单选 <select>」探针的回答：`value` 原样放进 result.value（缺省 false）；
+   * `reject` 为真时那条 Runtime.evaluate 失败
+   */
+  selectProbe: { value?: unknown; reject?: boolean }
 }
 
 /**
@@ -135,6 +140,7 @@ function fakeSession(overrides: Params = {}): FakeSession {
     ]
   }
   const results: FakeSession['results'] = {}
+  const selectProbe: FakeSession['selectProbe'] = { value: false }
   let seq = 0
   let reaction: Reaction | null = null
   let lastInserted = ''
@@ -144,6 +150,10 @@ function fakeSession(overrides: Params = {}): FakeSession {
   }
 
   const evaluate = (expression: string): Params => {
+    if (isSelectProbe(expression)) {
+      if (selectProbe.reject) throw new Error('Execution context was destroyed.')
+      return { result: { value: selectProbe.value } }
+    }
     // DOM 安静探针（及其清理）里也有 defineProperty(window —— 要先认出来
     if (expression.includes('__shuvixQuiet')) return { result: { value: 1000 } }
     if (expression.includes('defineProperty(window')) {
@@ -234,8 +244,14 @@ function fakeSession(overrides: Params = {}): FakeSession {
     },
     navigateResult,
     history,
-    results
+    results,
+    selectProbe
   }
+}
+
+/** 「焦点是不是单选 <select>」探针（按表达式特征认） */
+function isSelectProbe(expression: string): boolean {
+  return expression.includes("tagName === 'SELECT'")
 }
 
 // ====== 命令匹配、页面反应、计时 ======
@@ -250,6 +266,9 @@ const keyUp: Match = (c) => c.method === 'Input.dispatchKeyEvent' && c.params?.t
 /** 动作前给文档打记号的 evaluate（DOM 安静探针里也有 defineProperty(window，但总在它之后发） */
 const markEvaluate: Match = (c) =>
   c.method === 'Runtime.evaluate' && String(c.params?.expression).includes('defineProperty(window')
+/** 按键前问「焦点是不是单选 <select>」的那条 evaluate */
+const selectProbeEvaluate: Match = (c) =>
+  c.method === 'Runtime.evaluate' && isSelectProbe(String(c.params?.expression))
 const pageStateRead: Match = (c) =>
   c.method === 'Runtime.evaluate' && String(c.params?.expression).includes('readyState')
 
@@ -817,6 +836,8 @@ describe('pressKeyOp', () => {
     expect(fake.ctl.reset).toHaveBeenCalledTimes(1)
     expectCommandOrder(
       fake,
+      // NG-U12a 按键前先问焦点是不是单选 <select>，再给文档打记号
+      selectProbeEvaluate,
       cmd('Page.getFrameTree'),
       (c) =>
         c.method === 'Input.dispatchKeyEvent' &&
@@ -831,6 +852,113 @@ describe('pressKeyOp', () => {
     const out = await pressKeyOp(fake.session, 'Tab')
     expect(out.text).toBe('Pressed Tab.')
     expect(fake.ctl.reset).not.toHaveBeenCalled()
+  })
+})
+
+const selectRefusal = (combo: string): string =>
+  `Focus is on a <select>, and pressing ${combo} there would open its native dropdown. Choose an option with fill(uid, "<option label or value>") instead (Tab / Escape are still fine).`
+
+describe('焦点在单选 <select> 上时不按会弹原生下拉菜单的键（NG-U12）', () => {
+  it('NG-U12 探针的形状：returnByValue 的 Runtime.evaluate，只问一次', async () => {
+    const fake = fakeSession()
+    await pressKeyOp(fake.session, 'ArrowDown')
+    const probes = sent(fake, selectProbeEvaluate)
+    expect(probes).toHaveLength(1)
+    expect(probes[0].params?.returnByValue).toBe(true)
+    expect(Object.keys(probes[0].params ?? {}).sort()).toEqual(['expression', 'returnByValue'])
+  })
+
+  it.each(['ArrowDown', ' ', 'Space', 'Enter', 'a', 'Alt+ArrowDown', 'Control++', 'ArrowUp'])(
+    'NG-U12 探针说是（%j）：拒绝，原文指向 fill；不发按键、不打记号、不作废 uid',
+    async (combo) => {
+      const fake = fakeSession()
+      fake.selectProbe.value = true
+      const out = await pressKeyOp(fake.session, combo)
+      expect(out.text).toBe(`Error: ${selectRefusal(combo)}`)
+      expect(out.details?.error).toBe(selectRefusal(combo))
+      expect(sent(fake, cmd('Input.dispatchKeyEvent'))).toEqual([])
+      expect(sent(fake, cmd('Input.insertText'))).toEqual([])
+      expect(sent(fake, cmd('Page.getFrameTree'))).toEqual([])
+      expect(fake.ctl.reset).not.toHaveBeenCalled()
+      expect(fake.commands.map((c) => c.method)).toEqual(['Runtime.evaluate'])
+    }
+  )
+
+  it.each(['Tab', 'Shift+Tab', 'Shift + Tab', 'escape', 'ESCAPE', 'Escape', 'esc', 'Esc'])(
+    'NG-U12 %j 只挪焦点 / 收起：不问探针，照常按（哪怕焦点真在 <select> 上）',
+    async (combo) => {
+      const fake = fakeSession()
+      fake.selectProbe.value = true
+      const out = await pressKeyOp(fake.session, combo)
+      expect(out.text).toBe(`Pressed ${combo}.`)
+      expect(sent(fake, selectProbeEvaluate)).toEqual([])
+      const main = /tab/i.test(combo) ? 'Tab' : 'Escape'
+      expect(sent(fake, keyUp).filter((c) => c.params?.key === main)).toHaveLength(1)
+    }
+  )
+
+  it.each([
+    ['probe rejects', { reject: true }],
+    ['false', { value: false }],
+    ['undefined', { value: undefined }],
+    ["the string 'true'", { value: 'true' }],
+    ['1', { value: 1 }]
+  ])('NG-U12 探针 %s：不拦，按键照发', async (_label, probe) => {
+    const fake = fakeSession()
+    Object.assign(fake.selectProbe, probe)
+    const out = await pressKeyOp(fake.session, 'ArrowDown')
+    expect(out.text).toBe('Pressed ArrowDown.')
+    expect(sent(fake, selectProbeEvaluate)).toHaveLength(1)
+    expect(sent(fake, keyUp)).toHaveLength(1)
+    expect(countAfter(fake, selectProbeEvaluate, cmd('Input.dispatchKeyEvent'))).toBe(2)
+  })
+
+  it('NG-U12 typeOp 带 submitKey ArrowDown、焦点在 <select> 上：同样拒绝，而且一个字都不打', async () => {
+    const fake = fakeSession()
+    fake.selectProbe.value = true
+    const out = await typeOp(fake.session, 'M', undefined, 'ArrowDown')
+    expect(out.text).toBe(`Error: ${selectRefusal('ArrowDown')}`)
+    expect(out.details?.error).toBe(selectRefusal('ArrowDown'))
+    expect(fake.commands.filter((c) => c.method.startsWith('Input.'))).toEqual([])
+    expect(sent(fake, cmd('Page.getFrameTree'))).toEqual([])
+  })
+
+  it('NG-U12 typeOp 带 uid + submitKey：先聚焦那个元素，再问探针，拒绝时不打字', async () => {
+    const fake = fakeSession()
+    fake.results.focus = [{ focused: true, active: '<select>' }]
+    fake.selectProbe.value = true
+    const out = await typeOp(fake.session, 'M', 'e7', 'Enter')
+    expect(out.details?.error).toBe(selectRefusal('Enter'))
+    const focus = fake.timeline.indexOf('fn:focus')
+    const probe = fake.timeline.indexOf('Runtime.evaluate')
+    expect(focus).toBeGreaterThanOrEqual(0)
+    expect(focus).toBeLessThan(probe)
+    expect(fake.commands.filter((c) => c.method.startsWith('Input.'))).toEqual([])
+  })
+
+  it('NG-U12 typeOp submitKey 是 Tab：不问探针，照常打字再按 Tab', async () => {
+    const fake = fakeSession()
+    fake.selectProbe.value = true
+    const out = await typeOp(fake.session, 'M', undefined, 'Tab')
+    expect(out.text).toBe('Typed "M". Pressed Tab.')
+    expect(sent(fake, selectProbeEvaluate)).toEqual([])
+    expect(sent(fake, cmd('Input.insertText')).map((c) => c.params)).toEqual([{ text: 'M' }])
+  })
+
+  it('NG-U12 typeOp 不带 submitKey：不问探针（光打字不会弹菜单）', async () => {
+    const fake = fakeSession()
+    fake.selectProbe.value = true
+    const out = await typeOp(fake.session, 'M')
+    expect(out.text).toBe('Typed "M".')
+    expect(sent(fake, selectProbeEvaluate)).toEqual([])
+    expect(fake.commands.map((c) => c.method)).toEqual(['Input.insertText'])
+  })
+
+  it('NG-U12 typeOp 探针说否：先打字后按键，照旧', async () => {
+    const fake = fakeSession()
+    const out = await typeOp(fake.session, 'q', undefined, 'ArrowDown')
+    expect(out.text).toBe('Typed "q". Pressed ArrowDown.')
+    expectCommandOrder(fake, selectProbeEvaluate, cmd('Input.insertText'), keyUp)
   })
 })
 

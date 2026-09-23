@@ -22,7 +22,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { until } from '../../harness/cdp'
+import { sleep, until } from '../../harness/cdp'
 import { launchApp, type E2EApp } from '../../harness/launch'
 import { startFakeProvider, type FakeProvider } from '../../harness/fakeProvider'
 import {
@@ -360,7 +360,10 @@ describe('主流程（BRF：一条勾了浏览器的项目会话，开在界面�
     await right.close()
   })
 
-  it('BRF-1 open_tab：页面真的被请求、面板在浏览器 tab 上打开、url 门放行并记账、没有询问', async () => {
+  it('BRF-1 open_tab：页面真的被请求、tab 激活、浏览器窗口不出现（连 target 都没有）、右侧面板不动、url 门放行并记账、没有询问', async () => {
+    // 到这里为止没有任何东西打开过浏览器窗口（BRT 只看工具列表，不开 tab）
+    expect(await app.browserWindow()).toBeNull()
+
     provider.reset()
     const url = fixture.url('/form.html')
     const { ends, since } = await driver.run(sid, [
@@ -375,13 +378,20 @@ describe('主流程（BRF：一条勾了浏览器的项目会话，开在界面�
     tabId = tabIdOf(end.result)
     expect(fixture.hits('/form.html')).toBe(1)
 
-    // 面板跟着 agent 打开，停在浏览器 tab 上
+    // browser_event 仍广播（web 平台与旧 CLI 语义靠它）；tab 是激活的那个
     const opens = await driver.eventsSince(since, 'browser_event')
     expect(opens.map((e) => [e.sessionId, e.action])).toEqual([[sid, 'open']])
-    await until(() => right.isOpen(), 'right panel opened by browser_event')
-    expect(await right.activeTabIcon()).toBe('lucide-monitor')
     const tab = (await listTabs()).find((t) => t.url === url)
     expect(tab?.active).toBe(true)
+    // agent 开 tab 不把浏览器窗口弄出来：tab 住在从不显示的停放窗口里。当场没有，过一会儿也没有
+    const isWindowOpen = (): Promise<boolean> =>
+      app.main.eval<boolean>('window.api.browserView.isWindowOpen()')
+    expect(await app.browserWindow()).toBeNull()
+    expect(await isWindowOpen()).toBe(false)
+    await sleep(1000)
+    expect(await app.browserWindow()).toBeNull()
+    expect(await isWindowOpen()).toBe(false)
+    expect(await right.isOpen()).toBe(false)
 
     // http 目标上报 url 客体：出厂没有 url 策略，放行 —— 但决策照样记下，带着这次调用的 id
     const decision = securityDecisions(app).find((d) => d.toolCallId === 'brf1_open')
@@ -487,8 +497,8 @@ describe('主流程（BRF：一条勾了浏览器的项目会话，开在界面�
     )
   }, 120_000)
 
-  it('BRF-5 关掉最后一个 tab：广播 close、面板收起、tab 真的没了', async () => {
-    // 先经 IPC 关掉别的 tab —— 「最后一个」才会收起面板
+  it('BRF-5 关掉最后一个 tab：广播 close、tab 真的没了、浏览器窗口始终没出现', async () => {
+    // 先经 IPC 关掉别的 tab —— 「最后一个」才会广播 close
     const mine = (await listTabs()).find((t) => t.url === fixture.url('/form.html'))!
     for (const t of await listTabs()) {
       if (t.id !== mine.id) {
@@ -504,8 +514,10 @@ describe('主流程（BRF：一条勾了浏览器的项目会话，开在界面�
     expect(ends.brf5_close.isError).toBe(false)
     const closes = await driver.eventsSince(since, 'browser_event')
     expect(closes.map((e) => [e.sessionId, e.action])).toEqual([[sid, 'close']])
-    await until(async () => !(await right.isOpen()), 'right panel closed with the last tab')
     expect(await listTabs()).toEqual([])
+    // 整段主流程（开 / 快照 / 填 / 点 / 读 / 截图 / 关）都在后台完成：浏览器窗口一次都没被建出来
+    expect(await app.browserWindow()).toBeNull()
+    expect(await app.main.eval<boolean>('window.api.browserView.isWindowOpen()')).toBe(false)
   }, 120_000)
 })
 

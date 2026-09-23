@@ -7,6 +7,14 @@
  * 只弹一个、拒绝后静默一阵；refuse 只记日志。initBrowserSession 的权限处理器是页面**导航**到外部
  * 协议的那道门，一律回 false。
  *
+ * 以上 EO-* 走的都是「用户正看着浏览器窗口」那条路（假宿主可见、未最小化、有焦点）。ST-U9b 是另一半：
+ * 窗口不在前台（隐藏 / 最小化 / 可见但没焦点 / 根本没有）时，页面 window.open 的非网页协议一律静默
+ * 拒绝 —— 不交给系统、不弹询问框；http(s) 照样新开一个激活的 tab。下载同一条规矩：不在前台且没有
+ * 保存路径的一律取消（否则 Electron 缺省弹「另存为」框），在前台的、或已经带着保存路径的照常。
+ *
+ * 另附 U7：三条建 tab 的路（createTab 带 url 与激活、空白 createTab、window.open 转来的）构造
+ * view 时都已关掉后台节流 —— 浏览器窗口常是隐藏的，这个开关只能在构造时定（见 createTab 的注释）。
+ *
  * electron 整个换成假件：WebContentsView 记下构造选项、加载过的地址与 window.open handler，
  * dialog / shell / session 是间谍。externalOpen 与 i18n 用真的 —— 询问框里得是真的英文文案，才看得
  * 出 detail 是逐行拼出来的、没走插值（EO-51：地址里的 `{{page}}` 不能被换成发起页面）。
@@ -37,6 +45,13 @@ type PermissionHandler = (
   details: Record<string, unknown>
 ) => void
 
+/** partition 上 `will-download` 的处理函数（只声明本文件用到的 DownloadItem 字段） */
+type DownloadHandler = (
+  event: { preventDefault: () => void },
+  item: { getSavePath(): string; getURL(): string },
+  webContents: unknown
+) => void
+
 /** 假 WebContentsView（见下面 electron 的 mock） */
 interface FakeView {
   opts: { webPreferences: Record<string, unknown> }
@@ -47,10 +62,16 @@ interface FakeView {
   }
 }
 
-/** 假宿主窗口：isDestroyed 按用例拨，send 是间谍 */
+/** 假宿主窗口：isDestroyed / 可见 / 最小化 / 焦点按用例拨，send 是间谍 */
 interface FakeHost {
   destroyed: boolean
+  visible: boolean
+  minimized: boolean
+  focused: boolean
   isDestroyed(): boolean
+  isVisible(): boolean
+  isMinimized(): boolean
+  isFocused(): boolean
   webContents: { send: Mock<(channel: string, payload: unknown) => void>; getZoomFactor(): number }
   contentView: { addChildView(): void; removeChildView(): void }
 }
@@ -61,12 +82,17 @@ const state = vi.hoisted(() => {
     views: [] as FakeView[],
     /** initBrowserSession 登记到 partition 上的权限处理器 */
     permissionHandler: undefined as PermissionHandler | undefined,
+    /** initBrowserSession 登记到 partition 上的 will-download 处理函数 */
+    downloadHandlers: [] as DownloadHandler[],
     showMessageBox:
       vi.fn<(win: unknown, opts: MessageBoxOptions) => Promise<{ response: number }>>(),
     openExternal: vi.fn<(url: string) => Promise<void>>(),
     fromPartition: vi.fn((_partition: string) => ({
       setPermissionRequestHandler(handler: PermissionHandler): void {
         s.permissionHandler = handler
+      },
+      on(event: string, handler: DownloadHandler): void {
+        if (event === 'will-download') s.downloadHandlers.push(handler)
       }
     })),
     host: undefined as unknown as FakeHost
@@ -114,6 +140,20 @@ vi.mock('electron', () => ({
   // 真的 i18n 模块 import 了它（initI18n 给了语言就不会去读）
   app: { getLocale: () => 'en-US' }
 }))
+// tab 从停放窗口出生（stagingWindow.ts 建的是真 BrowserWindow）：这里给一个只有 contentView 的假窗口，
+// 本文件测的是弹窗去向，与 tab 挂在哪个窗口上无关
+vi.mock('../stagingWindow', () => {
+  const staging = {
+    isDestroyed: () => false,
+    contentView: { addChildView() {}, removeChildView() {} }
+  }
+  return {
+    STAGING_SIZE: { width: 1280, height: 800 },
+    getStagingWindow: () => staging,
+    isStagingWindow: (w: unknown) => w === staging,
+    destroyStagingWindow: () => {}
+  }
+})
 vi.mock('../../../logger', () => ({
   createLogger: () => ({ info() {}, warn() {}, error() {}, debug() {} })
 }))
@@ -132,11 +172,24 @@ const OPENER = 'https://opener.example/page'
 /** 假 Date 的起点（EO-45 / EO-47） */
 const T = 1_800_000_000_000
 
+/** 缺省是「用户正看着浏览器窗口」：可见、未最小化、有焦点（EO-* 测的都是这条路） */
 function makeHost(): FakeHost {
   return {
     destroyed: false,
+    visible: true,
+    minimized: false,
+    focused: true,
     isDestroyed() {
       return this.destroyed
+    },
+    isVisible() {
+      return this.visible
+    },
+    isMinimized() {
+      return this.minimized
+    },
+    isFocused() {
+      return this.focused
     },
     webContents: {
       send: vi.fn<(channel: string, payload: unknown) => void>(),
@@ -151,7 +204,7 @@ async function load(): Promise<Service> {
   const svc = await import('../browserViewService')
   const { initI18n } = await import('../../../i18n')
   initI18n('en')
-  svc.initBrowserHost(state.host as never)
+  svc.setHostWindow(state.host as never)
   return svc
 }
 
@@ -221,6 +274,7 @@ beforeEach(() => {
   vi.resetModules()
   state.views.length = 0
   state.permissionHandler = undefined
+  state.downloadHandlers.length = 0
   state.showMessageBox.mockReset()
   state.showMessageBox.mockResolvedValue({ response: 1 })
   state.openExternal.mockReset()
@@ -551,7 +605,7 @@ describe('browserViewService：tab 弹窗的去向', () => {
     }
   })
 
-  it('EO-48 宿主窗口已销毁：自定义协议不弹框、不交给系统；http(s) 也不开 tab —— 都照样 deny', async () => {
+  it('EO-48 浏览器窗口已销毁：自定义协议不弹框、不交给系统；http(s) 照样新开 tab（tab 住在停放窗口，不依赖浏览器窗口）—— 都照样 deny', async () => {
     const svc = await load()
     const opener = tabAt(svc)
     state.host.destroyed = true
@@ -562,7 +616,8 @@ describe('browserViewService：tab 弹窗的去向', () => {
     expect(state.openExternal).not.toHaveBeenCalled()
 
     expectDeny(opener, 'https://example.com/')
-    expect(state.views).toHaveLength(1)
+    expect(state.views).toHaveLength(2)
+    expect(state.views[1].webContents.loaded).toEqual(['https://example.com/'])
   })
 
   it('EO-49 shell.openExternal 失败（没有应用接）：mailto 与点了 Open 的询问两条路都不留未处理的 rejection', async () => {
@@ -641,5 +696,133 @@ describe('browserViewService：tab 弹窗的去向', () => {
       answer(0)
       await flush()
     }
+  })
+})
+
+/** 浏览器窗口不在前台的四种样子：每种只差一个条件（其余三个判据都满足） */
+const NOT_IN_FRONT = ['hidden', 'minimized', 'visible but unfocused', 'no browser window'] as const
+type NotInFront = (typeof NOT_IN_FRONT)[number]
+
+/** 把宿主摆成「用户没在看它」的某一种 */
+function putAway(svc: Service, how: NotInFront): void {
+  if (how === 'hidden') state.host.visible = false
+  if (how === 'minimized') state.host.minimized = true
+  if (how === 'visible but unfocused') state.host.focused = false
+  if (how === 'no browser window') svc.setHostWindow(null)
+}
+
+/** 以浏览器 partition 的名义开始一次下载；回事件（看它被没被取消） */
+function download(savePath = ''): { preventDefault: Mock } {
+  const event = { preventDefault: vi.fn() }
+  const item = { getSavePath: () => savePath, getURL: () => 'https://files.example/x.zip' }
+  expect(state.downloadHandlers, 'initBrowserSession 没有登记 will-download').toHaveLength(1)
+  for (const handler of state.downloadHandlers) handler(event, item, {})
+  return event
+}
+
+describe('浏览器窗口不在前台：外部协议与下载一律不打扰（ST-U9b）', () => {
+  it.each(NOT_IN_FRONT)(
+    'ST-U9b 窗口 %s：mailto 不交给系统、自定义协议不弹询问框 —— 都照样 deny、什么都不打开',
+    async (how) => {
+      const svc = await load()
+      const opener = tabAt(svc)
+      putAway(svc, how)
+
+      expectDeny(opener, 'mailto:x@y.z')
+      expectDeny(opener, 'zoommtg://zoom.us/join?confno=1')
+      expectDeny(opener, 'x-probe-custom://Upper')
+      await flush()
+      await flush()
+      expect(state.openExternal).not.toHaveBeenCalled()
+      expect(state.showMessageBox).not.toHaveBeenCalled()
+      expect(state.views).toHaveLength(1)
+    }
+  )
+
+  it.each(NOT_IN_FRONT)(
+    'ST-U9b 窗口 %s：https 照样新开一个激活的 tab（住在停放窗口），不交给系统、不弹框',
+    async (how) => {
+      const svc = await load()
+      const opener = tabAt(svc)
+      putAway(svc, how)
+
+      expectDeny(opener, 'https://example.com/next')
+      expect(state.views).toHaveLength(2)
+      const view = state.views[1]
+      expect(view.webContents.loaded).toEqual(['https://example.com/next'])
+      expect(svc.getActiveView()).toBe(view)
+      expect(
+        svc
+          .listTabs()
+          .filter((t) => t.active)
+          .map((t) => t.url)
+      ).toEqual(['https://example.com/next'])
+      await flush()
+      expect(state.openExternal).not.toHaveBeenCalled()
+      expect(state.showMessageBox).not.toHaveBeenCalled()
+    }
+  )
+
+  it('ST-U9b 正控制组：同一个窗口回到前台（重新拿到焦点）之后，mailto 照常交给系统、自定义协议照常问', async () => {
+    const svc = await load()
+    const opener = tabAt(svc)
+    putAway(svc, 'visible but unfocused')
+    expectDeny(opener, 'mailto:x@y.z')
+    expect(state.openExternal).not.toHaveBeenCalled()
+
+    state.host.focused = true
+    expectDeny(opener, 'mailto:x@y.z')
+    expect(state.openExternal).toHaveBeenCalledTimes(1)
+    expect(state.openExternal).toHaveBeenCalledWith('mailto:x@y.z')
+    holdNextDialog()
+    expectDeny(opener, 'zoommtg://zoom.us/join?confno=1')
+    expect(state.showMessageBox).toHaveBeenCalledTimes(1)
+    expect(state.showMessageBox.mock.calls[0][0]).toBe(state.host)
+  })
+
+  it.each(NOT_IN_FRONT)(
+    'ST-U9b 窗口 %s：没有保存路径的下载被取消（不弹「另存为」框）',
+    async (how) => {
+      const svc = await load()
+      svc.initBrowserSession()
+      putAway(svc, how)
+      expect(download().preventDefault).toHaveBeenCalledTimes(1)
+    }
+  )
+
+  it('ST-U9b 用户正看着浏览器窗口：下载照常（不取消）', async () => {
+    const svc = await load()
+    svc.initBrowserSession()
+    expect(download().preventDefault).not.toHaveBeenCalled()
+  })
+
+  it.each(NOT_IN_FRONT)(
+    'ST-U9b 窗口 %s，但下载已经带着保存路径（agent 经 cdp 指定了目录）：照常，不取消',
+    async (how) => {
+      const svc = await load()
+      svc.initBrowserSession()
+      putAway(svc, how)
+      expect(download('/tmp/shuvix-downloads/x.zip').preventDefault).not.toHaveBeenCalled()
+    }
+  )
+})
+
+describe('browserViewService：tab 不做后台节流（构造时就定）', () => {
+  it('U7 三条建 tab 的路 —— createTab(url, {activate})、createTab()、tab 里 window.open 转来的 http(s) —— 都在构造时就关了后台节流', async () => {
+    const svc = await load()
+    svc.createTab('https://a.example/', { activate: true })
+    svc.createTab()
+    // window.open 转来的：面板新开一个 tab（不是交给系统）
+    expectDeny(state.views[0], 'https://b.example/')
+
+    expect(state.views).toHaveLength(3)
+    // 空白 createTab 也真的导航一次（about:blank）：从没导航过的 webContents 没有渲染进程
+    expect(state.views[1].webContents.loaded).toEqual(['about:blank'])
+    expect(state.views[2].webContents.loaded).toEqual(['https://b.example/'])
+    for (const [i, view] of state.views.entries()) {
+      // 严格 false：没写（undefined）就是 Electron 的缺省 true
+      expect(view.opts.webPreferences.backgroundThrottling, `view #${i}`).toBe(false)
+    }
+    expect(state.openExternal).not.toHaveBeenCalled()
   })
 })

@@ -129,9 +129,8 @@ describe('空实例：空态、tab 位置与设置页回落', () => {
   })
 
   it('AM-2 agents tab 存在且是最后一个可见 tab；preview 默认隐藏（认图标 + DOM 序，不认文案）', async () => {
-    // 面板已在 AM-1 打开；可见集合 = browser / widget / calendar / agents
+    // 面板已在 AM-1 打开；可见集合 = widget / calendar / agents（浏览器是独立窗口，不在面板里）
     expect(await pane.tabIcons()).toEqual([
-      'lucide-monitor',
       'lucide-wrench',
       'lucide-calendar-days',
       'lucide-activity'
@@ -526,8 +525,8 @@ describe('fakeProvider：运行时的上屏、相位、血缘与详情', () => {
     expect(rows.some((r) => r.orphan)).toBe(false)
   })
 
-  it('AM-14 面板已开但在 browser tab 时点标记：agents tab 重新激活，筛选仍是该 sid', async () => {
-    await pane.activateBrowserTab()
+  it('AM-14 面板已开但在 widget tab 时点标记：agents tab 重新激活，筛选仍是该 sid', async () => {
+    await pane.activateWidgetTab()
     expect(await pane.agentsActive()).toBe(false)
 
     await banner.clickChip()
