@@ -34,6 +34,7 @@
     "test:e2e:browser": "electron-vite build && vitest run --config vitest.config.e2e.ts e2e/specs/browser",
     "test:e2e:database": "electron-vite build && vitest run --config vitest.config.e2e.ts e2e/specs/database",
     "test:e2e:chrome": "electron-vite build && vitest run --config vitest.config.e2e.ts e2e/specs/chrome",
+    "test:e2e:markdown": "electron-vite build && vitest run --config vitest.config.e2e.ts e2e/specs/markdown",
     "probe": "electron-vite build && vitest run --config vitest.config.probe.ts"
   },
   "dependencies": {

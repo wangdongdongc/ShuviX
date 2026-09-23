@@ -82,6 +82,11 @@ export interface FakeRequest {
   raw: string
   /** 最后一条 user 消息的纯文本 */
   lastUserText: string
+  /**
+   * 客户端在回复写完之前就断开了（中止一轮、关掉会话的窗口……）。请求刚记下时为 false，
+   * 断开那一刻原地改成 true —— `requests()` 回的是同一批对象，轮询读得到。
+   */
+  aborted: boolean
 }
 
 export interface FakeProvider {
@@ -251,9 +256,14 @@ export async function startFakeProvider(): Promise<FakeProvider> {
         isTitle,
         body,
         raw: rawBody,
-        lastUserText: textOfContent(lastUser?.content)
+        lastUserText: textOfContent(lastUser?.content),
+        aborted: false
       }
       recorded.push(record)
+      // 回复还没写完连接就关了 = 客户端中止（正常收尾时 writableEnded 已为真）
+      res.on('close', () => {
+        if (!res.writableEnded) record.aborted = true
+      })
 
       const model = body.model ?? 'e2e-model'
       // 标题请求：直接回 JSON 标题，绝不动脚本队列

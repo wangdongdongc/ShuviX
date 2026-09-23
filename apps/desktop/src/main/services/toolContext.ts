@@ -345,8 +345,9 @@ export function resolveProjectConfig(sessionId: string): ProjectConfig {
     }
   }
 
-  // 无项目（临时会话） → 使用 temp workspace
+  // 无项目（临时会话） → 会话自带的工作目录（从系统打开的 md 窗口：文件所在目录），否则 temp workspace。
+  // 口径与 sessionService.getById 同一处（workingDirectoryOf）；会话不存在时仍回落临时工作区
   return {
-    workingDirectory: getTempWorkspace(sessionId)
+    workingDirectory: session?.workingDirectory ?? getTempWorkspace(sessionId)
   }
 }

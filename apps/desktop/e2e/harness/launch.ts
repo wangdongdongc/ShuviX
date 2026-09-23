@@ -25,6 +25,8 @@ import {
   connect,
   isMainPage,
   isBrowserWindowPage,
+  isMarkdownWindowPage,
+  markdownWindowOf,
   setTimeoutDiagnostic,
   listTargets,
   sleep,
@@ -37,7 +39,23 @@ const DESKTOP_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 /** 本 checkout 渲染端产物的 URL 前缀 —— target 的身份判据（percent-encoding 与 CDP 一致） */
 const APP_URL = pathToFileURL(join(DESKTOP_ROOT, 'out', 'renderer')).href
 
-export interface E2EApp {
+/** 一个从系统打开的 md 窗口的 target（hash 里的会话 id 与**真实路径**） */
+export interface MarkdownWindowTarget {
+  sessionId: string
+  /** 文件的真实路径（主进程按 realpath 开窗） */
+  path: string
+  url: string
+  webSocketDebuggerUrl: string
+}
+
+/**
+ * 实例的公共面 —— 与「有没有主窗口」无关的那一半。
+ *
+ * 从系统打开 md 启动（`launchApp({ args: [file.md], expectMainWindow: false })`）时主窗口根本
+ * 不开，`main` 为 null（见 E2EMarkdownApp）；其余一切（日志、md 窗口、之后才被建出来的主窗口、
+ * 第二个实例）两种启动都一样。
+ */
+export interface E2EAppBase {
   port: number
   /** fake HOME（种子文件基于它，如 `${home}/.shuvix/agents`） */
   home: string
@@ -47,8 +65,8 @@ export interface E2EApp {
   botsDir: string
   /** ~/.shuvix/hooks（惰性创建） */
   hooksDir: string
-  /** 主窗口页面的 CDP 客户端（window.api 已就绪） */
-  main: CdpClient
+  /** 重定向后的 userData（SQLite / 会话树 / temp_workspace 都在这下面） */
+  userData: string
   /**
    * 主进程日志文件（electron-log file transport）此刻的全文；第一次写入之前为空串。
    * 只进主进程日志的事实（如 hook run 的起止与 skip 原因）靠它断言。
@@ -59,8 +77,8 @@ export interface E2EApp {
    * 没有先后保证，「栅栏行之后没有某行」只在文件这一条有序流上成立。
    */
   mainLog(): string
-  /** 打开设置窗口并连接其页面（tab 缺省 'general' —— 智能体 / 技能 / 安全策略 / Hooks 四个 tab 已搬去侧栏） */
-  openSettings(tab?: string): Promise<CdpClient>
+  /** 实例 stdout + stderr 的全文（取证用；有序断言请用 mainLog） */
+  output(): string
   /**
    * 浏览器独立窗口（#browser-window）的页面；窗口还没被建出来时回 null（不等待，配合 `until`）。
    * 窗口是懒创建的，而且**只有用户**能把它建出来（侧栏按钮 / `browserView.openWindow()`）——
@@ -68,6 +86,19 @@ export interface E2EApp {
    * 调用方用完自己 close()。
    */
   browserWindow(): Promise<CdpClient | null>
+  /** 此刻开着的 md 窗口（不等待，配合 `until`）；顺序按 CDP /json 的顺序，不保证 */
+  markdownWindows(): Promise<MarkdownWindowTarget[]>
+  /**
+   * 连上真实路径含 `pathSubstr` 的那个 md 窗口，等它的 `window.api` 就绪；没有这个窗口回 null
+   * （不等待，配合 `until`）。调用方用完自己 close()。
+   */
+  connectMarkdownWindow(pathSubstr: string): Promise<CdpClient | null>
+  /**
+   * 此刻的主窗口页面（`window.api` 已就绪）；没有主窗口回 null（不等待，配合 `until`）。
+   * 从 md 启动的实例，主窗口是之后才被建出来的（第二个实例 / Dock）—— 用它发现。
+   * 调用方用完自己 close()（默认启动的 `app.main` 除外，那条由 stop 收）。
+   */
+  mainWindow(): Promise<CdpClient | null>
   /**
    * 结束实例并清理 fake HOME（afterAll 必须调用）。
    *
@@ -78,6 +109,19 @@ export interface E2EApp {
   stop(opts?: { keepHome?: boolean }): Promise<void>
 }
 
+/** 默认启动：主窗口开着（绝大多数 spec） */
+export interface E2EApp extends E2EAppBase {
+  /** 主窗口页面的 CDP 客户端（window.api 已就绪） */
+  main: CdpClient
+  /** 打开设置窗口并连接其页面（tab 缺省 'general' —— 智能体 / 技能 / 安全策略 / Hooks 四个 tab 已搬去侧栏） */
+  openSettings(tab?: string): Promise<CdpClient>
+}
+
+/** 带着 md 文件启动、不等主窗口（`expectMainWindow: false`）：启动时没有主窗口 */
+export interface E2EMarkdownApp extends E2EAppBase {
+  main: null
+}
+
 export interface LaunchOptions {
   /**
    * 复用一个已有的 fake HOME（上一个实例 `stop({ keepHome: true })` 留下的），而不是新建。
@@ -85,6 +129,20 @@ export interface LaunchOptions {
    * 它不是这次启动建的。
    */
   home?: string
+  /**
+   * 追加在引导脚本与开关之后的命令行参数 —— Windows / Linux 上「用 ShuviX 打开」一个 md，
+   * 文件就是这样到的（`process.argv`）。相对路径按 `cwd` 解析。
+   */
+  args?: string[]
+  /** 实例进程的工作目录（缺省 apps/desktop）；相对的 md 参数按它解析 */
+  cwd?: string
+}
+
+export interface MarkdownLaunchOptions extends LaunchOptions {
+  /** 不等主窗口：等 md 窗口（带着能开的 md 启动时主窗口根本不开） */
+  expectMainWindow: false
+  /** 至少等到这么多个 md 窗口（缺省 1） */
+  markdownWindows?: number
 }
 
 /**
@@ -92,7 +150,7 @@ export interface LaunchOptions {
  * 归还到 Electron 真正 bind 之间有个极小窗口，真被别人抢走也不会静默驱动错实例
  * —— 那种情况下本实例没监听，目标发现会一直找不到「自己的」target 并超时报错。
  */
-function freePort(): Promise<number> {
+export function freePort(): Promise<number> {
   return new Promise((resolvePort, rejectPort) => {
     const srv = createServer()
     srv.on('error', rejectPort)
@@ -176,7 +234,45 @@ async function installForensics(main: CdpClient): Promise<void> {
   )
 }
 
-export async function launchApp(opts: LaunchOptions = {}): Promise<E2EApp> {
+/** 仓库里的 electron 二进制（git worktree 里那一层没有 node_modules 时退回 Node 自己的解析） */
+function electronBinary(): string {
+  // 工作区依赖装在检出根；**git worktree 里那一层没有 node_modules**（npm 只在主检出装过），
+  // 于是退回 Node 自己的解析 —— electron 包的入口导出的就是二进制的绝对路径。
+  const localBin = resolve(DESKTOP_ROOT, '../../node_modules/.bin/electron')
+  return existsSync(localBin) ? localBin : (createRequire(import.meta.url)('electron') as string)
+}
+
+/** 隔离实例的环境：fake HOME + 重定向的 userData；剔除会让 electron 退化成纯 node 的变量 */
+function instanceEnv(home: string): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    HOME: home,
+    SHUVIX_VERIFY_USERDATA: join(home, 'userdata')
+  }
+  // 该变量会让 electron 二进制退化为纯 node（不起窗口）—— 必须剔除
+  delete env.ELECTRON_RUN_AS_NODE
+  return env
+}
+
+/** 超时取证（没有主窗口时）：列出本实例的页面 target —— 至少看得出此刻开着哪些窗口 */
+function installTargetForensics(port: number): void {
+  setTimeoutDiagnostic(async () => {
+    const pages = (await listTargets(port).catch(() => [])).filter((t) => t.type === 'page')
+    const urls = pages.map((t) => {
+      const md = markdownWindowOf(t)
+      return md ? `#markdown-window session=${md.sessionId} path=${md.path}` : t.url.slice(-120)
+    })
+    return `page targets (${pages.length}):\n${urls.join('\n') || '(none)'}`
+  })
+}
+
+export function launchApp(opts?: LaunchOptions): Promise<E2EApp>
+export function launchApp(opts: MarkdownLaunchOptions): Promise<E2EMarkdownApp>
+export async function launchApp(
+  opts: LaunchOptions | MarkdownLaunchOptions = {}
+): Promise<E2EApp | E2EMarkdownApp> {
+  const expectMain = !('expectMainWindow' in opts && opts.expectMainWindow === false)
+  const expectMarkdown = expectMain ? 0 : ((opts as MarkdownLaunchOptions).markdownWindows ?? 1)
   const pinned = process.env.SHUVIX_E2E_PORT
   const port = pinned ? Number(pinned) : await freePort()
 
@@ -213,18 +309,8 @@ export async function launchApp(opts: LaunchOptions = {}): Promise<E2EApp> {
     return file ? readFileSync(file, 'utf8') : ''
   }
 
-  const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, SHUVIX_VERIFY_USERDATA: userData }
-  // 该变量会让 electron 二进制退化为纯 node（不起窗口）—— 必须剔除
-  delete env.ELECTRON_RUN_AS_NODE
-
-  // 工作区依赖装在检出根；**git worktree 里那一层没有 node_modules**（npm 只在主检出装过），
-  // 于是退回 Node 自己的解析 —— electron 包的入口导出的就是二进制的绝对路径。
-  const localBin = resolve(DESKTOP_ROOT, '../../node_modules/.bin/electron')
-  const electronBin = existsSync(localBin)
-    ? localBin
-    : (createRequire(import.meta.url)('electron') as string)
   const child: ChildProcess = spawn(
-    electronBin,
+    electronBinary(),
     [
       join(DESKTOP_ROOT, 'e2e/harness/bootstrap.cjs'),
       `--remote-debugging-port=${port}`,
@@ -234,9 +320,10 @@ export async function launchApp(opts: LaunchOptions = {}): Promise<E2EApp> {
       // 而轮询 63 次、每次几毫秒，渲染进程其实活得好好的）。
       // 这两个开关让实例不理会遮挡与后台化，e2e 结果于是与「屏幕上还有什么窗口」无关。
       '--disable-backgrounding-occluded-windows',
-      '--disable-renderer-backgrounding'
+      '--disable-renderer-backgrounding',
+      ...(opts.args ?? [])
     ],
-    { cwd: DESKTOP_ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] }
+    { cwd: opts.cwd ?? DESKTOP_ROOT, env: instanceEnv(home), stdio: ['ignore', 'pipe', 'pipe'] }
   )
   track(child)
   let output = ''
@@ -255,6 +342,27 @@ export async function launchApp(opts: LaunchOptions = {}): Promise<E2EApp> {
     return exited
   }
 
+  const markdownWindows = async (): Promise<MarkdownWindowTarget[]> =>
+    (await listTargets(port).catch(() => [] as CdpTarget[]))
+      .filter((t) => isMarkdownWindowPage(t, APP_URL))
+      .flatMap((t) => {
+        const md = markdownWindowOf(t)
+        return md ? [{ ...md, url: t.url, webSocketDebuggerUrl: t.webSocketDebuggerUrl }] : []
+      })
+
+  /** 连一个页面并等它的 window.api（preload 跑完）；连不上 / 等不到都回 null（配合 until） */
+  const connectReady = async (wsUrl: string): Promise<CdpClient | null> => {
+    const client = await connect(wsUrl).catch(() => null)
+    if (!client) return null
+    try {
+      await until(() => client.eval<boolean>('!!window.api'), 'window.api ready', 15_000)
+      return client
+    } catch {
+      client.close()
+      return null
+    }
+  }
+
   try {
     // 目标发现自己轮询（不走 until）：until 把 fn 抛的错一律当「未就绪」，
     // 实例启动即崩时会白等满 60s 才报一个与真因无关的超时
@@ -264,26 +372,39 @@ export async function launchApp(opts: LaunchOptions = {}): Promise<E2EApp> {
     for (;;) {
       if (exited) throw fail('instance exited during startup')
       seen = await listTargets(port).catch(() => [])
-      target = seen.find((t) => isMainPage(t, APP_URL))
-      if (target) break
+      if (expectMain) {
+        target = seen.find((t) => isMainPage(t, APP_URL))
+        if (target) break
+      } else if (seen.filter((t) => isMarkdownWindowPage(t, APP_URL)).length >= expectMarkdown) {
+        break
+      }
       if (Date.now() > deadline) {
         const foreign = seen.filter((t) => t.type === 'page').map((t) => t.url)
+        const what = expectMain
+          ? 'CDP main page target'
+          : `${expectMarkdown} #markdown-window target(s)`
         throw fail(
-          `timeout waiting: CDP main page target on port ${port}` +
+          `timeout waiting: ${what} on port ${port}` +
             (foreign.length
-              ? `\n--- targets on that port, none of them ours (ours start with ${APP_URL}) ---\n${foreign.join('\n')}`
+              ? `\n--- page targets on that port (ours start with ${APP_URL}) ---\n${foreign.join('\n')}`
               : '')
         )
       }
       await sleep(200)
     }
-    const main = await connect(target.webSocketDebuggerUrl)
-    await until(() => main.eval<boolean>('!!window.api'), 'window.api ready')
-    await installForensics(main)
+
+    let main: CdpClient | null = null
+    if (target) {
+      main = await connect(target.webSocketDebuggerUrl)
+      await until(() => main!.eval<boolean>('!!window.api'), 'window.api ready')
+      await installForensics(main)
+    } else {
+      installTargetForensics(port)
+    }
 
     const stop = async (stopOpts: { keepHome?: boolean } = {}): Promise<void> => {
       setTimeoutDiagnostic(null)
-      main.close()
+      main?.close()
       if (!exited) {
         child.kill('SIGTERM')
         if (!(await waitExit(5000))) {
@@ -296,16 +417,40 @@ export async function launchApp(opts: LaunchOptions = {}): Promise<E2EApp> {
       if (!stopOpts.keepHome) rmSync(home, { recursive: true, force: true })
     }
 
-    return {
+    const base: E2EAppBase = {
       port,
       home,
       agentsDir,
       botsDir,
       hooksDir,
-      main,
+      userData,
       mainLog,
+      output: () => output,
+      async browserWindow() {
+        const bt = (await listTargets(port)).find((t) => isBrowserWindowPage(t, APP_URL))
+        return bt ? connect(bt.webSocketDebuggerUrl) : null
+      },
+      markdownWindows,
+      async connectMarkdownWindow(pathSubstr) {
+        const hit = (await markdownWindows()).find((w) => w.path.includes(pathSubstr))
+        return hit ? connectReady(hit.webSocketDebuggerUrl) : null
+      },
+      async mainWindow() {
+        const mt = (await listTargets(port).catch(() => [] as CdpTarget[])).find((t) =>
+          isMainPage(t, APP_URL)
+        )
+        return mt ? connectReady(mt.webSocketDebuggerUrl) : null
+      },
+      stop
+    }
+
+    if (!main) return { ...base, main: null }
+    const mainClient = main
+    return {
+      ...base,
+      main: mainClient,
       async openSettings(tab = 'general') {
-        await main.eval(`window.api.app.openSettings(${JSON.stringify(tab)})`)
+        await mainClient.eval(`window.api.app.openSettings(${JSON.stringify(tab)})`)
         const st = await until(
           async () =>
             (await listTargets(port)).find(
@@ -314,12 +459,7 @@ export async function launchApp(opts: LaunchOptions = {}): Promise<E2EApp> {
           'settings window target'
         )
         return connect(st.webSocketDebuggerUrl)
-      },
-      async browserWindow() {
-        const bt = (await listTargets(port)).find((t) => isBrowserWindowPage(t, APP_URL))
-        return bt ? connect(bt.webSocketDebuggerUrl) : null
-      },
-      stop
+      }
     }
   } catch (err) {
     child.kill('SIGKILL')
@@ -327,4 +467,55 @@ export async function launchApp(opts: LaunchOptions = {}): Promise<E2EApp> {
     if (ownsHome) rmSync(home, { recursive: true, force: true })
     throw err
   }
+}
+
+/** 第二个实例的结局 */
+export interface SecondInstanceResult {
+  /** 退出码（被信号杀掉时为 null） */
+  code: number | null
+  signal: NodeJS.Signals | null
+  /** stdout + stderr */
+  output: string
+}
+
+/**
+ * 起一个**第二个实例**：同一个 electron + 引导脚本、同一个 HOME / userData（所以拿不到单实例锁），
+ * **不带**调试端口。它把自己的 argv 与 cwd 交给第一个实例（`second-instance` 事件）然后退出 ——
+ * Windows / Linux 上「用 ShuviX 打开」一个 md、或者再点一次应用图标，走的就是这条路。
+ *
+ * 等它退出才 resolve；上界内没退出就杀掉并抛（它不该活着：活着说明它以为自己是第一个实例）。
+ */
+export async function spawnSecondInstance(
+  app: E2EAppBase,
+  opts: { args?: string[]; cwd?: string; timeoutMs?: number } = {}
+): Promise<SecondInstanceResult> {
+  const child = spawn(
+    electronBinary(),
+    [join(DESKTOP_ROOT, 'e2e/harness/bootstrap.cjs'), ...(opts.args ?? [])],
+    { cwd: opts.cwd ?? DESKTOP_ROOT, env: instanceEnv(app.home), stdio: ['ignore', 'pipe', 'pipe'] }
+  )
+  track(child)
+  let output = ''
+  child.stdout?.on('data', (c: Buffer) => (output += c.toString()))
+  child.stderr?.on('data', (c: Buffer) => (output += c.toString()))
+  const timeoutMs = opts.timeoutMs ?? 30_000
+  return new Promise<SecondInstanceResult>((resolveResult, rejectResult) => {
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL')
+      rejectResult(
+        new Error(
+          `second instance did not exit within ${timeoutMs}ms (did it get the single-instance lock?)` +
+            `\n--- its output (tail) ---\n${output.slice(-2000)}`
+        )
+      )
+    }, timeoutMs)
+    child.on('error', (err) => {
+      clearTimeout(timer)
+      rejectResult(err)
+    })
+    child.on('exit', (code, signal) => {
+      clearTimeout(timer)
+      resolveResult({ code, signal, output })
+    })
+  })
 }

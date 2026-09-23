@@ -174,6 +174,10 @@ export function notifyOnChatEvent(event: ChatEvent): void {
   // Chrome 标签页会话的对话在 Chrome 侧边栏里 —— 用户在那边看着、在那边答询问；桌面通知的点击
   // 只会把人拽进一个根本不列这条会话的窗口
   if (isChromeTabSession(event.sessionId)) return
+  // 内存会话（从系统打开的 md 窗口）同理：对话在它自己的窗口里，主窗口的列表里没有它。
+  // 删掉之后迟到的事件也一样 —— 那条会话已经不存在了
+  if (sessionRecords.isEphemeral(event.sessionId) || sessionRecords.wasEphemeral(event.sessionId))
+    return
   center?.handleEvent(event)
 }
 

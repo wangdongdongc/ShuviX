@@ -78,11 +78,20 @@ win:
         - arm64
 nsis:
   artifactName: ${name}-${version}-${arch}-setup.${ext}
+  # Windows 的 md 关联不走 fileAssociations：electron-builder 的 NSIS 模板会把 .md 的默认值写成
+  # 自己的 ProgID（抢默认应用）。build/installer.nsh 只登记 OpenWithProgids，只进「打开方式」
   shortcutName: ${productName}
   uninstallDisplayName: ${productName}
   createDesktopShortcut: always
 mac:
   entitlementsInherit: build/entitlements.mac.plist
+  # 「用 ShuviX 打开」md：只进访达的「打开方式」列表（Alternate），不抢系统默认的 md 应用。
+  # 打开后是独立的 md 窗口（markdownWindowService），不是主窗口。扩展名与 utils/markdownFiles 同一份
+  fileAssociations:
+    - ext: [md, markdown]
+      name: Markdown
+      role: Editor
+      rank: Alternate
   extendInfo:
     - NSCameraUsageDescription: Application requests access to the device's camera.
     - NSMicrophoneUsageDescription: Application requests access to the device's microphone.
@@ -103,6 +112,11 @@ dmg:
   artifactName: ${name}-${version}-${arch}.${ext}
 linux:
   icon: build/icons
+  # deb 的 .desktop 声明 MimeType，出现在「打开方式」里；AppImage 不注册关联
+  fileAssociations:
+    - ext: [md, markdown]
+      name: Markdown
+      mimeType: text/markdown
   target:
     - target: AppImage
       arch:

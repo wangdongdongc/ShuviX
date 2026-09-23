@@ -23,7 +23,7 @@ import type {
   AgentInitResult,
   ModelCapabilities
 } from '../types'
-import type { Project } from '../dao/types'
+import type { Project, SessionSettings } from '../dao/types'
 
 import { DEFAULT_THINKING_LEVEL } from '@shuvix/chat-protocol/types/thinking'
 import {
@@ -69,6 +69,18 @@ function broadcastAgentCreated(sessionId: string): void {
  * 只由 Chrome 标签页会话的基座档案 `tab` 声明（桌面自己的会话只用应用内的浏览器面板）。
  */
 const CHROME_TOOL_NAME = 'mcp:chrome'
+
+/**
+ * 会话的工作目录：项目根 → 无项目会话自带的目录（settings.workingDirectory）→ 临时工作区。
+ * 三处要这个答案（getById / resolveSessionAgentContext / toolContext 经 getById），口径只写在这里。
+ */
+function workingDirectoryOf(
+  sessionId: string,
+  projectPath: string | undefined,
+  settings: SessionSettings | undefined
+): string {
+  return projectPath || settings?.workingDirectory || getTempWorkspace(sessionId)
+}
 
 /** 只留会话级工具名（mcp:/skill:）并去重保序 —— 扩展能力勾选里不该有别的东西 */
 function sessionScopedTools(names: readonly string[]): string[] {
@@ -153,7 +165,10 @@ export class SessionService {
     const project = session.projectId
       ? projectDao.pick(session.projectId, ['path', 'settings'])
       : undefined
-    return { ...session, workingDirectory: project?.path || getTempWorkspace(id) }
+    return {
+      ...session,
+      workingDirectory: workingDirectoryOf(id, project?.path, session.settings)
+    }
   }
 
   /**
@@ -232,8 +247,14 @@ export class SessionService {
    * 渲染层经 IPC 建不出内存会话。内存会话的子会话**同为内存会话**（按父会话推定，不看 options）：
    * 父会话一删，子会话随级联删除一起消失，不会在库里留下一条挂在不存在的父会话下的子会话。
    * 同一个理由，父会话是一条已被删掉的内存会话时拒绝创建，而不是建出一条孤儿。
+   *
+   * `options.workingDirectory`（绝对路径）给**不属于任何项目**的会话指定工作目录，代替临时工作区；
+   * 有项目时忽略。子会话不看 options，随父会话（父会话有就同一个目录）。同样只有主进程能给。
    */
-  create(params?: SessionCreateParams, options?: { ephemeral?: boolean }): Session {
+  create(
+    params?: SessionCreateParams,
+    options?: { ephemeral?: boolean; workingDirectory?: string }
+  ): Session {
     const id = uuidv7()
     // Chrome 标签页会话：无项目、无父会话、不是笔记本也不是 bot、不继承任何扩展能力勾选 ——
     // 它的工具全由基座档案 `tab` 声明（含 mcp:chrome），形态推导见 resolveAgentProfileName
@@ -249,6 +270,11 @@ export class SessionService {
     }
     const ephemeral = parentId ? sessionRecords.isEphemeral(parentId) : !!options?.ephemeral
     const pid = chromeTab ? null : parent ? parent.projectId : (params?.projectId ?? null)
+    const workingDirectory = parentId
+      ? parent?.settings?.workingDirectory
+      : chromeTab
+        ? undefined
+        : options?.workingDirectory
     // 子会话抄父会话的勾选，其余按项目继承（与旧会话补键同一条规则，见 inheritedSelection）
     const enabledTools = chromeTab ? [] : this.inheritedSelection(parentId, pid)
 
@@ -263,6 +289,9 @@ export class SessionService {
       // 指令文件不预写配置：留空即「未显式配置」，注入时按 AGENTS.md → CLAUDE.md 优先级自动选
       settings: {
         ...(notebookPath ? { notebookPath } : {}),
+        // 自带工作目录只给无项目会话：有项目时工作目录恒为项目根。子会话随父会话（与 projectId
+        // 同一条理由 —— 工作目录是会话的地基），调用方给的不算
+        ...(!pid && workingDirectory ? { workingDirectory } : {}),
         ...(memorySlug ? { memorySlug } : {}),
         // 只在有值时写键：缺省即无键
         ...(bot ? { bot } : {}),
@@ -558,7 +587,7 @@ export class SessionService {
     project: Pick<Project, 'path' | 'settings'> | undefined
     modelMetadata: SessionModelMetadata
   } | null> {
-    const session = sessionRecords.pick(sessionId, ['projectId'])
+    const session = sessionRecords.pick(sessionId, ['projectId', 'settings'])
     if (!session) return null
     // 扩展能力勾选在会话设置里（创建会话时定下，创建 Agent 时读这一次）
     const selectedTools = this.sessionEnabledTools(sessionId)
@@ -576,7 +605,7 @@ export class SessionService {
     const project = session.projectId
       ? projectDao.pick(session.projectId, ['path', 'settings'])
       : undefined
-    const workingDirectory = project?.path || getTempWorkspace(sessionId)
+    const workingDirectory = workingDirectoryOf(sessionId, project?.path, session.settings)
     // 滤掉已不可用的 MCP（配置里已停用 / 已删）与 skill（已删 / 已停用）；设置里的原值不动。
     // 可用性**不看连接状态** —— MCP 惰性启动，没连上的那台正要在下一步（装配工具）被连起来。
     // `mcp:chrome`（用户真实的 Chrome）不接受会话勾选：只由 Chrome 标签页会话的基座档案声明

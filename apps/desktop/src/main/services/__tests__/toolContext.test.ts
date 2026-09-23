@@ -2,18 +2,31 @@
  * toolContext —— agentActorOf：本工具实例所属 agent 的 OKF actor 字符串
  * （`shuvix-<profile>/<model>`）。模型惰性取（会话中途换模型也跟得上）；元数据缺失时回落
  * `shuvix-agent/unknown` —— 章要盖，但不能编。dao / 服务 / paths 全部 mock（同 askPolicy.test）。
+ *
+ * resolveProjectConfig —— 工具每次执行时读的工作目录。口径只有一处（sessionService.getById 的
+ * 「项目根 → 无项目会话自带的目录 → 临时工作区」），这里只能照抄它、不能另算：
+ *   TC-WD1 项目会话 → getById 给的（即项目根，哪怕 settings 里另有一个目录），envVars 取项目的
+ *   TC-WD2 无项目、自带目录 → 那个目录，不去问临时工作区
+ *   TC-WD3 无项目、没有自带目录 → getById 给的临时工作区
+ *   TC-WD4 会话不存在 → 临时工作区（按 sessionId 取）
  */
-import { describe, it, expect, vi } from 'vitest'
+import { beforeEach, describe, it, expect, vi } from 'vitest'
 
-vi.mock('../../dao/projectDao', () => ({ projectDao: { pick: () => undefined } }))
+const tc = vi.hoisted(() => ({
+  getById: vi.fn((_id: string): unknown => undefined),
+  projectPick: vi.fn((_id: string, _cols: string[]): unknown => undefined),
+  getTempWorkspace: vi.fn((_sid: string) => '/tmp/shuvix-actor-ws')
+}))
+
+vi.mock('../../dao/projectDao', () => ({ projectDao: { pick: tc.projectPick } }))
 vi.mock('../../dao/sessionDao', () => ({ sessionDao: { pickSettings: () => undefined } }))
 vi.mock('../sessionService', () => ({
-  sessionService: { getById: () => undefined, addAllowListPaths: () => {} }
+  sessionService: { getById: tc.getById, addAllowListPaths: () => {} }
 }))
 vi.mock('../skillService', () => ({ skillService: { listExternalDirs: () => [] } }))
 vi.mock('../policyService', () => ({ policyService: { getUserPolicies: () => [] } }))
 vi.mock('../../utils/paths', () => ({
-  getTempWorkspace: () => '/tmp/shuvix-actor-ws',
+  getTempWorkspace: tc.getTempWorkspace,
   getToolResultsBase: () => '/tmp/shuvix-actor-tool-results',
   getDefaultSkillsDir: () => '/tmp/shuvix-actor-skills',
   getBuiltinSkillsDir: () => '/tmp/shuvix-actor-builtin-skills',
@@ -26,7 +39,7 @@ vi.mock('../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {} })
 }))
 
-import { agentActorOf, makeDesktopSecurityProvider } from '../toolContext'
+import { agentActorOf, makeDesktopSecurityProvider, resolveProjectConfig } from '../toolContext'
 
 describe('agentActorOf', () => {
   it('TC-1 `shuvix-<profile>/<model>`：模型惰性取；缺元数据回落 shuvix-agent/unknown；取模型抛错或空白 → unknown；档案名空白归一为 -', () => {
@@ -100,5 +113,61 @@ describe('makeDesktopSecurityProvider —— 变量表', () => {
     expect(vars().botsDir).toBe('/tmp/shuvix-bots')
     // 工作区来自 getConfig()（每次评估现读），不是构造时的快照
     expect(vars().workspace).toBe('/ws')
+  })
+})
+
+describe('resolveProjectConfig —— 工作目录照抄 getById 的口径', () => {
+  beforeEach(() => {
+    tc.getById.mockReset()
+    tc.projectPick.mockReset()
+    tc.getTempWorkspace.mockClear()
+  })
+
+  it('TC-WD1 项目会话 → 项目根（settings 里另有目录也不用），envVars 取项目的', () => {
+    tc.getById.mockReturnValue({
+      id: 's1',
+      projectId: 'p1',
+      settings: { workingDirectory: '/own/dir' },
+      workingDirectory: '/proj/root'
+    })
+    tc.projectPick.mockReturnValue({
+      id: 'p1',
+      path: '/proj/root',
+      settings: { tool: { envVars: [{ key: 'K', value: 'v' }] } }
+    })
+    expect(resolveProjectConfig('s1')).toEqual({
+      workingDirectory: '/proj/root',
+      envVars: { K: 'v' }
+    })
+    expect(tc.projectPick).toHaveBeenCalledWith('p1', ['id', 'path', 'settings'])
+    expect(tc.getTempWorkspace).not.toHaveBeenCalled()
+  })
+
+  it('TC-WD2 无项目、自带目录 → 那个目录；不问临时工作区', () => {
+    tc.getById.mockReturnValue({
+      id: 's2',
+      projectId: null,
+      settings: { workingDirectory: '/own/dir' },
+      workingDirectory: '/own/dir'
+    })
+    expect(resolveProjectConfig('s2')).toEqual({ workingDirectory: '/own/dir' })
+    expect(tc.projectPick).not.toHaveBeenCalled()
+    expect(tc.getTempWorkspace).not.toHaveBeenCalled()
+  })
+
+  it('TC-WD3 无项目、没有自带目录 → getById 给的临时工作区', () => {
+    tc.getById.mockReturnValue({
+      id: 's3',
+      projectId: null,
+      settings: {},
+      workingDirectory: '/tmp/temp_workspace/s3'
+    })
+    expect(resolveProjectConfig('s3')).toEqual({ workingDirectory: '/tmp/temp_workspace/s3' })
+  })
+
+  it('TC-WD4 会话不存在 → 临时工作区（按 sessionId 取）', () => {
+    tc.getById.mockReturnValue(undefined)
+    expect(resolveProjectConfig('gone')).toEqual({ workingDirectory: '/tmp/shuvix-actor-ws' })
+    expect(tc.getTempWorkspace).toHaveBeenCalledWith('gone')
   })
 })

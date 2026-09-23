@@ -1,8 +1,13 @@
 import { useEffect } from 'react'
 import { useChatStore } from '@shuvix/chat-ui'
 
-/** 悬浮聊天窗口：只上报"在看哪个会话"，不接受通知跳转（跳转恒落在主窗） */
-const isPinnedWindow = window.location.hash.startsWith('#pinned-chat')
+/**
+ * 悬浮聊天窗口与从系统打开的 md 窗口：只上报"在看哪个会话"，不接受通知跳转（跳转恒落在主窗）——
+ * 它们各自钉着一条会话，被一次通知点击换掉就不再是那个窗口了
+ */
+const isPinnedWindow =
+  window.location.hash.startsWith('#pinned-chat') ||
+  window.location.hash.startsWith('#markdown-window')
 
 /**
  * 通知桥 —— 渲染层与主进程通知服务之间的两条细线。

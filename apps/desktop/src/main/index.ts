@@ -27,6 +27,8 @@ import { destroyTerminalsByWindow } from './services/terminalService'
 import { killAllBgTasks } from './services/bgTaskService'
 import { initPinnedChatService, unpinAll as unpinAllPinnedChat } from './services/pinnedChatService'
 import { initNotificationService } from './services/notificationService'
+import { initMarkdownWindowService, openMarkdownFile } from './services/markdownWindowService'
+import { markdownFilesFromArgv } from './utils/markdownFiles'
 import {
   initWidgetWindowService,
   closeAll as closeAllWidgetWindows
@@ -68,6 +70,30 @@ const log = createLogger('App')
 let mainWindow: BrowserWindow | null = null
 let settingsWindow: BrowserWindow | null = null
 const isMac = process.platform === 'darwin'
+
+/**
+ * 这次启动自己带来的 md 文件（Windows / Linux 的 argv；macOS 冷启动的 open-file 早于 ready 就到）。
+ * 只有它们决定「这次启动不开主窗口」—— 而且至少一个真开出了窗口才算数（文件在 ready 之前被删了、
+ * 其实是个叫 x.md 的目录……），一个都没开成就照常开主窗口，不能让用户面对一个没有窗口的应用。
+ */
+const launchMarkdownFiles: string[] = markdownFilesFromArgv(process.argv, process.cwd())
+/**
+ * ready 之前**第二个实例**交来的请求：带文件 = 开这些 md，不带 = 要主窗口。它们不是这次启动的意图，
+ * 不能让一次普通启动因此不开主窗口 —— ready 之后照请求补做。
+ */
+const earlySecondInstance = { files: [] as string[], wantsMainWindow: false }
+/** ready 之后（共享窗口服务已装配）才能开窗；之前到的一律先记下 */
+let windowIntakeReady = false
+
+/** 把主窗口带到眼前：没开过 / 已关掉就现开一个 */
+function showMainWindow(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    createWindow()
+    return
+  }
+  if (mainWindow.isMinimized()) mainWindow.restore()
+  mainWindow.focus()
+}
 
 /** 各主题对应的窗口背景色（用于创建窗口时避免白闪） */
 const THEME_BG_COLORS: Record<string, string> = {
@@ -387,6 +413,38 @@ function getSavedWindowBounds(): { width: number; height: number; x?: number; y?
   }
 }
 
+/**
+ * 与主窗口无关、整个应用只需装配一次的窗口服务。主窗口与 md 窗口都可能是第一个窗口
+ * （从系统打开 md 启动时主窗口根本不开），所以谁先来谁装配。
+ */
+let sharedWindowServicesReady = false
+function initSharedWindowServices(): void {
+  if (sharedWindowServicesReady) return
+  sharedWindowServicesReady = true
+
+  // 初始化通知服务（决策在 agent-runtime，这里只提供窗口句柄：聚焦 / 关窗后重建）
+  initNotificationService({
+    getMainWindow: () => mainWindow,
+    ensureMainWindow: () => {
+      if (!mainWindow || mainWindow.isDestroyed()) createWindow()
+    }
+  })
+
+  // 初始化 widget 独立窗口服务（owns widget app 窗口）
+  initWidgetWindowService({ getThemeBgColor })
+
+  // 初始化内置浏览器 partition 的权限策略（独立于 defaultSession，默认拒绝所有权限请求）
+  initBrowserSession()
+  // 浏览器是独立窗口（懒创建）：只在用户点开时才建，关窗只隐藏；agent 的 tab 住在停放窗口里
+  initBrowserWindowService({ getThemeBgColor })
+
+  // 从系统打开的 md 窗口：每个窗口一条内存会话，前端按窗口单独绑定（id 各不相同）
+  initMarkdownWindowService({
+    getThemeBgColor,
+    createFrontend: (window, id) => new ElectronFrontend(window, id)
+  })
+}
+
 function createWindow(): void {
   const bounds = getSavedWindowBounds()
 
@@ -428,21 +486,7 @@ function createWindow(): void {
     createFrontend: (window) => new ElectronFrontend(window, 'electron-pinned')
   })
 
-  // 初始化通知服务（决策在 agent-runtime，这里只提供窗口句柄：聚焦 / 关窗后重建）
-  initNotificationService({
-    getMainWindow: () => mainWindow,
-    ensureMainWindow: () => {
-      if (!mainWindow || mainWindow.isDestroyed()) createWindow()
-    }
-  })
-
-  // 初始化 widget 独立窗口服务（owns widget app 窗口）
-  initWidgetWindowService({ getThemeBgColor })
-
-  // 初始化内置浏览器 partition 的权限策略（独立于 defaultSession，默认拒绝所有权限请求）
-  initBrowserSession()
-  // 浏览器是独立窗口（懒创建）：只在用户点开时才建，关窗只隐藏；agent 的 tab 住在停放窗口里
-  initBrowserWindowService({ getThemeBgColor })
+  initSharedWindowServices()
 
   // 弹窗与页面内导航（点 <a href>、PDF 里的链接、预览 iframe 里的脚本）都不自己走：
   // 阻止应用变成浏览器，去向交给 externalOpen 那道闸（http(s) → 系统浏览器）
@@ -586,11 +630,25 @@ if (!gotTheLock) {
   log.info('另一个 ShuviX 实例已在运行（单实例锁未获取），本进程退出')
   app.quit()
 } else {
-  app.on('second-instance', () => {
-    if (mainWindow) {
-      if (mainWindow.isMinimized()) mainWindow.restore()
-      mainWindow.focus()
+  // 第二个实例：Windows / Linux 上「用 ShuviX 打开」一个 md，文件在它的 argv 里 —— 在这里开 md 窗口；
+  // 什么文件都没带（再点一次应用图标）才是要主窗口，没开过（从 md 启动的）就现开一个
+  app.on('second-instance', (_event, argv, workingDirectory) => {
+    const files = markdownFilesFromArgv(argv, workingDirectory)
+    if (!windowIntakeReady) {
+      if (files.length > 0) earlySecondInstance.files.push(...files)
+      else earlySecondInstance.wantsMainWindow = true
+      return
     }
+    if (files.length > 0) files.forEach((file) => openMarkdownFile(file))
+    else showMainWindow()
+  })
+
+  // macOS 只经这个事件交文件（冷启动时早于 ready，所以必须在 whenReady 之前挂上）。
+  // 是不是 md 交给 openMarkdownFile 判（它两头都认：点的名字与链接指向的真实文件）
+  app.on('open-file', (event, path) => {
+    event.preventDefault()
+    if (windowIntakeReady) openMarkdownFile(path)
+    else launchMarkdownFiles.push(path)
   })
 }
 
@@ -706,7 +764,21 @@ app.whenReady().then(async () => {
     .catch((err) => log.error(`chromeBridge.start failed: ${err}`))
   void installChromeNativeHost()
 
-  measure('createWindow', () => createWindow())
+  // 带着 md 文件启动：只开 md 窗口，主窗口等用户要（点 Dock / 再点一次应用图标）才开
+  initSharedWindowServices()
+  windowIntakeReady = true
+  let openedAtLaunch = 0
+  for (const file of launchMarkdownFiles.splice(0)) {
+    if (openMarkdownFile(file)) openedAtLaunch++
+  }
+  if (openedAtLaunch > 0) {
+    log.info(`从系统打开 ${openedAtLaunch} 个 md 文件，不开主窗口`)
+  } else {
+    measure('createWindow', () => createWindow())
+  }
+  // ready 之前第二个实例交来的请求：照做，但不影响上面这次启动开不开主窗口
+  for (const file of earlySecondInstance.files.splice(0)) openMarkdownFile(file)
+  if (earlySecondInstance.wantsMainWindow) showMainWindow()
 
   app.on('activate', () => {
     // macOS dock 点击时重新创建主窗口。按主窗口本身判断，不按「一个窗口都没有」：

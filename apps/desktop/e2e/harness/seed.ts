@@ -762,7 +762,7 @@ export interface SecurityDecisionEntry {
 }
 
 /** 此刻主进程日志里的全部安全决策（按写入顺序）；解析不了的行跳过 */
-export function securityDecisions(app: E2EApp): SecurityDecisionEntry[] {
+export function securityDecisions(app: Pick<E2EApp, 'mainLog'>): SecurityDecisionEntry[] {
   const MARK = 'security_decision '
   const out: SecurityDecisionEntry[] = []
   for (const line of app.mainLog().split('\n')) {

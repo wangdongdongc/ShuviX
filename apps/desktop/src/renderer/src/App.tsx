@@ -10,6 +10,7 @@ import { ChatView } from './components/chat/ChatView'
 import { PinnedChatShell } from './components/chat/PinnedChatShell'
 import { WidgetWindowShell } from './components/widget/WidgetWindowShell'
 import { BrowserWindowShell } from './components/browser/BrowserWindowShell'
+import { MarkdownWindowShell } from './components/notebook/MarkdownWindowShell'
 import { RightPanel } from './components/browser/RightPanel'
 import { BrowserResizeHandle } from './components/browser/BrowserResizeHandle'
 import { BottomPanel } from './components/terminal/BottomPanel'
@@ -27,6 +28,7 @@ const isSettingsWindow = window.location.hash.startsWith('#settings')
 const isPinnedWindow = window.location.hash.startsWith('#pinned-chat')
 const isWidgetWindow = window.location.hash.startsWith('#widget-window')
 const isBrowserWindow = window.location.hash.startsWith('#browser-window')
+const isMarkdownWindow = window.location.hash.startsWith('#markdown-window')
 
 /** 桌面原生右键菜单渲染器（Electron Menu.popup，于光标处弹出，故忽略 position） */
 const nativeContextMenu: ContextMenuRenderer = async (items) =>
@@ -34,11 +36,12 @@ const nativeContextMenu: ContextMenuRenderer = async (items) =>
 
 /**
  * 应用主入口
- * 根据 hash 区分五种渲染：
+ * 根据 hash 区分六种渲染：
  * - 设置窗口（#settings）
  * - 悬浮聊天窗口（#pinned-chat）
  * - Widget 独立窗口（#widget-window）
  * - 浏览器独立窗口（#browser-window）
+ * - 从系统打开的 md 窗口（#markdown-window）
  * - 主窗口（侧边栏 + 聊天区 + 右侧面板）
  *
  * 核心流程由三个 hook 分别承担：
@@ -60,6 +63,11 @@ function App(): React.JSX.Element {
   // 浏览器独立窗口：网格卡片墙，同样只加载设置
   if (isBrowserWindow) {
     return <BrowserWindowShell />
+  }
+
+  // 从系统打开的 md 窗口：笔记本会话（编辑器 + 输入卡片），内存会话随窗口销毁
+  if (isMarkdownWindow) {
+    return <MarkdownWindowShell />
   }
 
   return <MainOrSettings />

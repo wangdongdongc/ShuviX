@@ -14,6 +14,12 @@ export interface CdpTarget {
 export interface CdpClient {
   /** 在页面上下文执行表达式（自动 await Promise，按值返回） */
   eval<T = unknown>(expression: string): Promise<T>
+  /**
+   * 发一条任意 CDP 命令、回它的 result（协议错误抛）。`eval` 之外的少数几件事靠它 ——
+   * 例如 `Input.insertText`：CodeMirror 6 不认合成的 keydown / beforeinput，往编辑器里「打字」
+   * 只能走浏览器自己的可信输入（见 pages.ts 的 markdownWindowPane）。
+   */
+  send<T = unknown>(method: string, params?: Record<string, unknown>): Promise<T>
   close(): void
 }
 
@@ -28,7 +34,13 @@ export async function listTargets(port: number): Promise<CdpTarget[]> {
  * 漏掉任何一个，那个窗口一开着 harness 就可能把它当成主窗口（浏览器窗口由 spec 经侧栏按钮 /
  * openWindow 打开，漏掉它会让 browser 区的 spec 时好时坏）。
  */
-const SECONDARY_WINDOW_HASHES = ['#settings', '#pinned-chat', '#widget-window', '#browser-window']
+const SECONDARY_WINDOW_HASHES = [
+  '#settings',
+  '#pinned-chat',
+  '#widget-window',
+  '#browser-window',
+  '#markdown-window'
+]
 
 /**
  * 主窗口页面判别（区别于各副窗口与 devtools 目标）。
@@ -52,6 +64,30 @@ export function isBrowserWindowPage(t: CdpTarget, appUrl?: string): boolean {
 }
 
 /**
+ * 从系统打开的 md 窗口（#markdown-window?sessionId=…&path=…）的页面判别。
+ * 一个文件一个窗口，所以可能有好几个 —— 按 hash 里的 path 区分（见 markdownWindowOf）。
+ */
+export function isMarkdownWindowPage(t: CdpTarget, appUrl?: string): boolean {
+  if (t.type !== 'page' || !t.url.includes('out/renderer') || !t.url.includes('#markdown-window')) {
+    return false
+  }
+  return !appUrl || t.url.startsWith(appUrl)
+}
+
+/** md 窗口 target 的 hash 解开（与渲染端 MarkdownWindowShell.parseHash 同一种读法） */
+export function markdownWindowOf(t: CdpTarget): { sessionId: string; path: string } | null {
+  const at = t.url.indexOf('#markdown-window')
+  if (at < 0) return null
+  const hash = t.url.slice(at + 1)
+  const q = hash.indexOf('?')
+  if (q < 0) return null
+  const params = new URLSearchParams(hash.slice(q + 1))
+  const sessionId = params.get('sessionId')
+  const path = params.get('path')
+  return sessionId && path ? { sessionId, path } : null
+}
+
+/**
  * 连一个页面 target。
  *
  * socket 一关（页面被关、窗口被销毁、target 崩了），在途与之后的 `eval` 一律**失败**，不挂着：
@@ -68,22 +104,26 @@ export function connect(wsUrl: string): Promise<CdpClient> {
     let closed = false
     const pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>()
 
+    /** 发一条命令、等它的应答（socket 已关则立刻失败，理由见上） */
+    const send = async <T>(method: string, params: Record<string, unknown> = {}): Promise<T> => {
+      if (closed || ws.readyState !== WebSocket.OPEN) {
+        throw new Error(`CDP socket closed: ${wsUrl}`)
+      }
+      const id = ++nextId
+      return new Promise<T>((resolve, reject) => {
+        pending.set(id, { resolve: resolve as (v: unknown) => void, reject })
+        ws.send(JSON.stringify({ id, method, params }))
+      })
+    }
+
     ws.onopen = () => {
       resolveClient({
+        send,
         async eval<T>(expression: string): Promise<T> {
-          if (closed || ws.readyState !== WebSocket.OPEN) {
-            throw new Error(`CDP socket closed: ${wsUrl}`)
-          }
-          const id = ++nextId
-          const result = await new Promise<unknown>((resolve, reject) => {
-            pending.set(id, { resolve, reject })
-            ws.send(
-              JSON.stringify({
-                id,
-                method: 'Runtime.evaluate',
-                params: { expression, returnByValue: true, awaitPromise: true }
-              })
-            )
+          const result = await send('Runtime.evaluate', {
+            expression,
+            returnByValue: true,
+            awaitPromise: true
           })
           const r = result as {
             exceptionDetails?: unknown

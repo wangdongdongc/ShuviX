@@ -5819,3 +5819,245 @@ export function openBrowserWindowButton(main: CdpClient): OpenBrowserWindowButto
     title: () => main.eval<string>(`${BTN}?.getAttribute('title') ?? ''`)
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// 从系统打开的 md 窗口（#markdown-window）—— 笔记本会话本身：live preview 编辑器 + 底部输入卡片，
+// 对话在卡片顶上的抽屉里（ThreadDrawer），询问卡片在抽屉与输入框之间（PendingInputsDrawer）。
+//
+// 作用域是整窗（`[data-markdown-window]`，窗口里只有这一个笔记本）。两条与 notebook 区同样的约束：
+//   - 输入卡片的 textarea 按「不在 .cm-editor 里」认 —— 属性卡的文本字段也是 textarea；
+//   - 往编辑器里打字**不能**靠合成事件（CodeMirror 6 不认合成的 keydown / beforeinput，见
+//     NotebookReadOnlyProbes 的说明）：`typeAtEnd` 走 CDP `Input.insertText`，是浏览器自己的
+//     可信输入，与用户敲键盘同一条路（DOM 变更 → CM6 的观察器 → 事务 → 200ms 防抖自动保存）。
+
+/** 对话抽屉里的一个条目（MessageRenderer 根节点的 data-msg-* + 正文） */
+export interface DrawerItemShot {
+  id: string
+  role: string
+  type: string
+  text: string
+}
+
+/** 编辑器里的一张图（live preview 的图片挂件） */
+export interface EditorImageShot {
+  src: string
+  /** `shuvix-preview://load/?session=…&path=…` 里的 path（解码后）；不是这种地址时为空串 */
+  path: string
+  naturalWidth: number
+  complete: boolean
+}
+
+export interface MarkdownWindowPane {
+  /** 编辑器与输入卡片都挂上了 */
+  ready(): Promise<void>
+  /** 编辑器正文（逐行 textContent，以换行连接 —— live preview 会藏掉语法标记，别拿它比源码） */
+  editorText(): Promise<string>
+  /** 等正文里出现 marker */
+  waitEditorText(marker: string, timeoutMs?: number): Promise<void>
+  /** 把光标放到文末，经 CDP Input.insertText 打进一段文字（可信输入） */
+  typeAtEnd(text: string): Promise<void>
+  /** 输入卡片：填字（native setter + input 事件）后回车发送 */
+  send(text: string): Promise<void>
+  /** 输入卡片的当前文字 */
+  inputValue(): Promise<string>
+  /** 输入卡片的发送钮可点吗（选了模型、有字、不在跑） */
+  sendEnabled(): Promise<boolean>
+  /** 抽屉细条在屏吗（没有对话且不在跑时整条隐藏） */
+  drawerPresent(): Promise<boolean>
+  /** 抽屉细条上的文字（跑着时是「运行中」，否则是末条助手消息的首行）；不在屏为 null */
+  drawerSummary(): Promise<string | null>
+  /** 抽屉里的条目（折叠着就先展开 —— 一轮结束时抽屉会自己折起来） */
+  drawerItems(): Promise<DrawerItemShot[]>
+  /** 等抽屉里某条助手消息的正文含 marker */
+  waitDrawerText(marker: string, timeoutMs?: number): Promise<void>
+  /** 询问卡片（没有挂着的询问时为 null） */
+  pendingAsk(): Promise<PendingAskShot | null>
+  /** 等询问卡片上屏 */
+  waitAsk(timeoutMs?: number): Promise<PendingAskShot>
+  /** 点询问卡片的「允许」（单次放行） */
+  allow(): Promise<void>
+  /** 点询问卡片的「拒绝」 */
+  deny(): Promise<void>
+  /** 编辑器里的图片 */
+  images(): Promise<EditorImageShot[]>
+}
+
+export function markdownWindowPane(client: CdpClient): MarkdownWindowPane {
+  const ROOT = `document.querySelector('[data-markdown-window]')`
+  const EDITOR = `${ROOT}?.querySelector('.cm-content')`
+  const INPUT = `[...(${ROOT}?.querySelectorAll('textarea') ?? [])].find((t) => !t.closest('.cm-editor'))`
+  // 抽屉细条：带 MessagesSquare 图标的那颗按钮；它的父节点是抽屉根（展开时条目列表是它的兄弟）
+  const DRAWER_BTN = `[...(${ROOT}?.querySelectorAll('button') ?? [])].find((b) => b.querySelector('.lucide-messages-square'))`
+  // 询问卡片 = AskForm 根（标题段落 p.font-medium.whitespace-nowrap 所在的 .space-y-2）
+  const ASK_ROOT = `(${ROOT}?.querySelector('p.font-medium.whitespace-nowrap')?.closest('.space-y-2') ?? null)`
+  // 允许 = 操作栏里唯一的 bg-accent 按钮；拒绝 = 操作栏里 flex-1 占位之后的第一颗按钮
+  //（占位之前可能还有命中策略的角标，那也是按钮）
+  const ALLOW_BTN = `${ASK_ROOT}?.querySelector('button.bg-accent')`
+
+  const editorText = (): Promise<string> =>
+    client.eval<string>(
+      `[...(${EDITOR}?.querySelectorAll('.cm-line') ?? [])].map((l) => l.textContent ?? '').join('\\n')`
+    )
+
+  const drawerItems = async (): Promise<DrawerItemShot[]> => {
+    const open = await client.eval<boolean | null>(`(() => {
+      const btn = ${DRAWER_BTN}
+      if (!btn) return null
+      return btn.nextElementSibling !== null
+    })()`)
+    if (open === null) return []
+    if (!open) {
+      await client.eval(`${DRAWER_BTN}?.click()`)
+      await until(
+        () => client.eval<boolean>(`!!(${DRAWER_BTN})?.nextElementSibling`),
+        'thread drawer expanded'
+      )
+    }
+    // 助手正文：.markdown-body 是 .min-w-0 的直接子节点（过程区里的中间文本块也用 .markdown-body，
+    // 靠这一层父子关系区分 —— 与 chatPane 的 ITEM_SNAPSHOT 同一认法）
+    return client.eval<DrawerItemShot[]>(`(() => {
+      const list = (${DRAWER_BTN})?.nextElementSibling
+      return [...(list?.querySelectorAll('[data-msg-id]') ?? [])].map((el) => {
+        const role = el.dataset.msgRole ?? ''
+        const type = el.dataset.msgType ?? ''
+        let text = ''
+        if (role === 'assistant' && type === 'message') {
+          text = [...el.querySelectorAll('.markdown-body')]
+            .filter((m) => (m.parentElement?.className ?? '').includes('min-w-0'))
+            .map((m) => m.textContent ?? '')
+            .join('')
+        } else {
+          text = el.querySelector('.whitespace-pre-wrap')?.textContent ?? ''
+        }
+        return { id: el.dataset.msgId ?? '', role, type, text: text.trim() }
+      })
+    })()`)
+  }
+
+  const pendingAsk = (): Promise<PendingAskShot | null> =>
+    client.eval<PendingAskShot | null>(`(() => {
+      const root = ${ASK_ROOT}
+      if (!root) return null
+      const title = root.querySelector('p.font-medium.whitespace-nowrap')
+      const row = title.parentElement
+      const svg = row?.querySelector('svg')
+      return {
+        title: (title.textContent ?? '').trim(),
+        icon: svg ? ([...svg.classList].find((c) => c.startsWith('lucide-')) ?? '') : '',
+        description: (title.nextElementSibling?.textContent ?? '').trim(),
+        preview: (row?.nextElementSibling?.textContent ?? '').trim()
+      }
+    })()`)
+
+  const clickAsk = async (which: 'allow' | 'deny'): Promise<void> => {
+    const outcome = await client.eval<string>(`(() => {
+      const allow = ${ALLOW_BTN}
+      if (!allow) return 'no ask card'
+      if (${JSON.stringify(which)} === 'allow') { allow.click(); return 'ok' }
+      const spacer = allow.parentElement?.querySelector(':scope > span.flex-1')
+      const deny = spacer?.nextElementSibling
+      if (!deny || deny.tagName !== 'BUTTON') return 'no deny button'
+      deny.click()
+      return 'ok'
+    })()`)
+    if (outcome !== 'ok') throw new Error(`ask card ${which}: ${outcome}`)
+  }
+
+  return {
+    ready: async () => {
+      await until(
+        () => client.eval<boolean>(`!!${EDITOR} && !!(${INPUT})`),
+        'markdown window: editor + input card mounted'
+      )
+    },
+    editorText,
+    waitEditorText: async (marker, timeoutMs) => {
+      await until(
+        async () => (await editorText()).includes(marker),
+        `markdown window editor shows ${JSON.stringify(marker)}`,
+        timeoutMs
+      )
+    },
+    typeAtEnd: async (text) => {
+      // 窗口不一定是系统里有焦点的那个（同时开着好几个 md 窗口）；没有焦点时 CM6 不理 DOM 选区的变化，
+      // 字会落在它自己记着的光标处（文首）。焦点仿真让页面认为自己有焦点 —— 只在这条 CDP 连接上生效，
+      // 不把窗口拽到前面
+      await client.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+      const placed = await client.eval<boolean>(`(() => {
+        const content = ${EDITOR}
+        if (!content) return false
+        content.focus()
+        const lines = content.querySelectorAll('.cm-line')
+        const last = lines[lines.length - 1]
+        if (!last) return false
+        const range = document.createRange()
+        range.selectNodeContents(last)
+        range.collapse(false)
+        const sel = getSelection()
+        sel.removeAllRanges()
+        sel.addRange(range)
+        return true
+      })()`)
+      if (!placed) throw new Error('markdown window: no editor to type into')
+      // 让 CM6 先把 selectionchange 读进自己的状态，再落字
+      await sleep(150)
+      await client.send('Input.insertText', { text })
+    },
+    send: async (text) => {
+      await client.eval(`(() => {
+        const ta = ${INPUT}
+        const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set
+        setter.call(ta, ${JSON.stringify(text)})
+        ta.dispatchEvent(new Event('input', { bubbles: true }))
+        return true
+      })()`)
+      await sleep(120)
+      await client.eval(
+        `(${INPUT}).dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))`
+      )
+    },
+    inputValue: () => client.eval<string>(`(${INPUT})?.value ?? ''`),
+    sendEnabled: () =>
+      client.eval<boolean>(`(() => {
+        const btn = [...(${ROOT}?.querySelectorAll('button') ?? [])].find((b) => b.querySelector('.lucide-send'))
+        return !!btn && !btn.disabled
+      })()`),
+    drawerPresent: () => client.eval<boolean>(`!!(${DRAWER_BTN})`),
+    drawerSummary: () =>
+      client.eval<string | null>(`(() => {
+        const btn = ${DRAWER_BTN}
+        return btn ? (btn.querySelector('span.flex-1')?.textContent ?? '').trim() : null
+      })()`),
+    drawerItems,
+    waitDrawerText: async (marker, timeoutMs) => {
+      await until(
+        async () =>
+          (await drawerItems()).some((i) => i.role === 'assistant' && i.text.includes(marker)),
+        `markdown window drawer shows ${JSON.stringify(marker)}`,
+        timeoutMs
+      )
+    },
+    pendingAsk,
+    waitAsk: (timeoutMs) =>
+      until(
+        pendingAsk,
+        'markdown window: ask card on screen',
+        timeoutMs
+      ) as Promise<PendingAskShot>,
+    allow: () => clickAsk('allow'),
+    deny: () => clickAsk('deny'),
+    images: () =>
+      client.eval<EditorImageShot[]>(`[...(${EDITOR}?.querySelectorAll('img') ?? [])]
+        .filter((i) => !i.classList.contains('cm-widgetBuffer'))
+        .map((i) => {
+          const src = i.getAttribute('src') || ''
+          const m = /[?&]path=([^&]*)/.exec(src)
+          return {
+            src: src.slice(0, 200),
+            path: src.startsWith('shuvix-preview://') && m ? decodeURIComponent(m[1]) : '',
+            naturalWidth: i.naturalWidth,
+            complete: i.complete
+          }
+        })`)
+  }
+}

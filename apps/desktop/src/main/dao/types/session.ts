@@ -52,6 +52,13 @@ export interface SessionSettings {
   /** 笔记本会话绑定的 md 文件（相对项目根，forward-slash；项目记忆为绝对路径）；非空即为笔记本会话（根 Agent 钉死 notebook 基座档案，对话经输入卡片的抽屉呈现） */
   notebookPath?: string
   /**
+   * 不属于任何项目的会话自带的工作目录（绝对路径）。缺省即临时工作区 `temp_workspace/<id>`；
+   * 有项目时不读（工作目录恒为项目根）。只由主进程在创建时写（sessionService.create 的 options）——
+   * 目前唯一的写入方是从系统打开的 md 窗口：工作目录就是那个文件所在的目录。
+   * 删除会话**不会**删它：那是用户自己的目录，删除只清临时工作区。
+   */
+  workingDirectory?: string
+  /**
    * 项目记忆笔记本：该会话绑定的是 `~/.shuvix/memory/<projectId>/<slug>.md`。
    * 侧栏据此把它归入项目组下的「项目记忆」子文件夹，而不是并排混进会话列表。
    */

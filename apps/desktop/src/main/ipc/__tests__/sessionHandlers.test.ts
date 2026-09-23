@@ -9,6 +9,8 @@
  *
  *   SH-2 内存会话是主进程内部的选项（create 的**第二个**参数），渲染层经 IPC 建不出来：
  *        载荷里带 `ephemeral: true`，create 收到的也只有一个参数
+ *   SH-3 自带工作目录同样是主进程内部的选项：载荷里带 `workingDirectory`，create 也只收到一个参数
+ *        （它留在 params 里 —— sessionService.create 不从 params 读它，见 sessionServiceWorkingDirectory 的 WD-6）
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -95,6 +97,19 @@ describe('SH-2 session:create 建不出内存会话', () => {
   it('SH-2 载荷带 ephemeral: true → create 只收到一个参数（没有 options）', () => {
     invoke('session:create', { title: 'x', ephemeral: true })
     expect(state.create).toHaveBeenCalledTimes(1)
+    expect(state.create.mock.calls[0]).toHaveLength(1)
+  })
+})
+
+describe('SH-3 session:create 给不了自带工作目录', () => {
+  it('SH-3 载荷带 workingDirectory → create 只收到一个参数（没有 options）', () => {
+    invoke('session:create', { title: 'x', workingDirectory: '/Users/someone/private' })
+    expect(state.create).toHaveBeenCalledTimes(1)
+    expect(state.create.mock.calls[0]).toHaveLength(1)
+  })
+
+  it('SH-3 与 ephemeral 一起带 → 仍只有一个参数', () => {
+    invoke('session:create', { workingDirectory: '/tmp/x', ephemeral: true })
     expect(state.create.mock.calls[0]).toHaveLength(1)
   })
 })
