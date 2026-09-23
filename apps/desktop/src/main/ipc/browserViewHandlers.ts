@@ -15,10 +15,23 @@ import {
   getTabView,
   setLayout,
   captureTab,
-  setPanelVisible
+  setPanelVisible,
+  isHostWebContents,
+  openBrowserWindow,
+  isBrowserWindowOpen
 } from '../services/browser'
 
 export function registerBrowserViewHandlers(): void {
+  // ====== 浏览器窗口 ======
+
+  /** 用户从主窗口（侧栏按钮 / widget「在浏览器中打开」）打开或聚焦浏览器窗口 */
+  ipcMain.handle('browser-view:open-window', () => {
+    openBrowserWindow()
+  })
+
+  /** 浏览器窗口此刻是否建出来且可见（关窗只是隐藏 → false）；只读 */
+  ipcMain.handle('browser-view:is-window-open', () => isBrowserWindowOpen())
+
   // ====== tab 生命周期 ======
 
   ipcMain.handle('browser-view:create-tab', (_event, url?: string) =>
@@ -80,19 +93,23 @@ export function registerBrowserViewHandlers(): void {
   ipcMain.on(
     'browser-view:set-layout',
     (
-      _event,
+      event,
       entries: Array<{
         tabId: string
         bounds: { x: number; y: number; width: number; height: number }
         zoom?: number
       }>
     ) => {
+      // 布局表只认宿主窗口（浏览器窗口）上报的矩形：别的窗口发来的会把整张表换掉，
+      // 等于让所有 view 消失。主窗口里留下的旧代码若还在发，这里挡住。
+      if (!isHostWebContents(event.sender.id)) return
       setLayout(entries)
     }
   )
 
-  /** 控制面板（激活 tab 的 view）可见性 */
-  ipcMain.on('browser-view:set-visible', (_event, visible: boolean) => {
+  /** 卡片墙自身的可见性门（对话框覆盖层等）；同样只认宿主窗口 */
+  ipcMain.on('browser-view:set-visible', (event, visible: boolean) => {
+    if (!isHostWebContents(event.sender.id)) return
     setPanelVisible(visible)
   })
 }

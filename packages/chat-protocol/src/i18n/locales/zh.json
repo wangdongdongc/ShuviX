@@ -43,6 +43,8 @@
     "deleteProjectWarningBold": "彻底删除该项目及其所有会话和消息",
     "deleteProjectWarningEnd": "，且无法恢复。确定要删除吗？",
     "updateAvailable": "发现新版本",
+    "openBrowserWindow": "打开浏览器窗口",
+    "openBrowserWindowWithTabs": "打开浏览器窗口（{{count}} 个标签页）",
     "updateReady": "可以安装更新",
     "deleteSession": "删除会话",
     "exportSession": "导出会话",

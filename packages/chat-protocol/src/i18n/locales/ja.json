@@ -43,6 +43,8 @@
     "deleteProjectWarningBold": "プロジェクトとすべてのセッション・メッセージが完全に削除",
     "deleteProjectWarningEnd": "され、復元できません。削除しますか？",
     "updateAvailable": "新しいバージョンがあります",
+    "openBrowserWindow": "ブラウザウィンドウを開く",
+    "openBrowserWindowWithTabs": "ブラウザウィンドウを開く（タブ {{count}} 個）",
     "updateReady": "インストール準備完了",
     "deleteSession": "セッションを削除",
     "exportSession": "セッションをエクスポート",

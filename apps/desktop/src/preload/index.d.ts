@@ -881,6 +881,10 @@ declare global {
       onExit: (callback: (payload: { terminalId: string; exitCode: number }) => void) => () => void
     }
     browserView: {
+      /** 打开（或聚焦）独立浏览器窗口 */
+      openWindow: () => Promise<void>
+      /** 浏览器窗口此刻是否建出来且可见（关窗只是隐藏 → false） */
+      isWindowOpen: () => Promise<boolean>
       createTab: (url?: string) => Promise<string>
       closeTab: (tabId: string) => Promise<void>
       activateTab: (tabId: string) => Promise<void>

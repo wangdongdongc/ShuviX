@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ArrowUpCircle } from 'lucide-react'
+import { BrowserWindowButton } from './BrowserWindowButton'
 import { getChatApi, useChatStore } from '@shuvix/chat-ui'
 import { REGISTRY_NOTE_PROJECT_IDS } from '@shuvix/chat-protocol/registryNotes'
 import { isSkillProjectId } from '@shuvix/chat-protocol/skillNotes'
@@ -615,19 +616,23 @@ export function Sidebar(): React.JSX.Element {
       onConfigureSession={setConfiguringSessionId}
       onEditProject={setEditingProjectId}
       footerActions={
-        hasUpdate ? (
-          <button
-            onClick={() => void getChatApi().app.openSettings('about')}
-            className="flex-shrink-0 p-1.5 rounded-md text-accent/80 hover:bg-accent/10 hover:text-accent transition-colors"
-            title={
-              updateEvent?.type === 'ready'
-                ? t('sidebar.updateReady')
-                : t('sidebar.updateAvailable')
-            }
-          >
-            <ArrowUpCircle size={14} />
-          </button>
-        ) : undefined
+        <>
+          {/* 浏览器是独立窗口：这里开 / 聚焦它；agent 开 tab 不会弹窗，这里的计数告诉用户有页面 */}
+          <BrowserWindowButton />
+          {hasUpdate && (
+            <button
+              onClick={() => void getChatApi().app.openSettings('about')}
+              className="flex-shrink-0 p-1.5 rounded-md text-accent/80 hover:bg-accent/10 hover:text-accent transition-colors"
+              title={
+                updateEvent?.type === 'ready'
+                  ? t('sidebar.updateReady')
+                  : t('sidebar.updateAvailable')
+              }
+            >
+              <ArrowUpCircle size={14} />
+            </button>
+          )}
+        </>
       }
       groupsPrepend={
         <>

@@ -1,18 +1,17 @@
 /**
- * RightPanel — 右侧面板容器（app 级工具栏：Browser / Preview / Widget / Calendar / Agents，终端在底部栏 BottomPanel；
- * 会话绑定的 Files / Sub-agent 在聊天区内的会话面板 SessionPanel）
+ * RightPanel — 右侧面板容器（app 级工具栏：Preview / Widget / Calendar / Agents，终端在底部栏 BottomPanel；
+ * 会话绑定的 Files / Sub-agent 在聊天区内的会话面板 SessionPanel；浏览器是独立窗口 BrowserWindowShell）
  *
  * Preview 是会话无关的独立文件预览（Files 面板点击 / 笔记本 [[双链]] 均落到此），
  * 目标状态在共享 usePreviewPanelStore；媒体/PDF 经桌面 shuvix-preview:// 协议。
  *
- * 各面板始终挂载，通过 visibility 切换，避免 iframe/WebContentsView 重建
+ * 各面板始终挂载，通过 visibility 切换，避免 iframe 重建
  */
 
 import { useEffect, useMemo } from 'react'
-import { Activity, CalendarDays, Eye, Monitor, Wrench } from 'lucide-react'
+import { Activity, CalendarDays, Eye, Wrench } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useBrowserStore, type PanelTab } from '../../stores/browserStore'
-import { BrowserPanel } from './BrowserPanel'
 import {
   MediaUrlProvider,
   PanelTabBar,
@@ -31,11 +30,10 @@ import { useSettingsStore } from '../../stores/settingsStore'
 interface TabDef {
   key: PanelTab
   labelKey: string
-  Icon: typeof Monitor
+  Icon: typeof Eye
 }
 
 const tabs: TabDef[] = [
-  { key: 'browser', labelKey: 'panel.browser', Icon: Monitor },
   { key: 'preview', labelKey: 'panel.previewTab', Icon: Eye },
   { key: 'widget', labelKey: 'panel.widget', Icon: Wrench },
   { key: 'calendar', labelKey: 'panel.calendar', Icon: CalendarDays },
@@ -52,10 +50,10 @@ export function RightPanel(): React.JSX.Element {
   const hasPreviewTarget = usePreviewPanelStore((s) => s.target !== null)
   const visibleTabs = tabs.filter((td) => td.key !== 'preview' || hasPreviewTarget)
 
-  // activeTab 兜底：共享 store 默认 'files'（该 tab 已移至会话面板）→ 落到 browser；
+  // activeTab 兜底：共享 store 默认 'files'（该 tab 已移至会话面板）→ 落到 widget；
   // 停在 preview 但目标已关闭（tab 随之隐藏）同走此兜底
   useEffect(() => {
-    if (!visibleTabs.some((td) => td.key === activeTab)) setActiveTab('browser')
+    if (!visibleTabs.some((td) => td.key === activeTab)) setActiveTab('widget')
   }, [visibleTabs, activeTab, setActiveTab])
 
   /** Preview tab 的 markdown 宿主能力（主题 / 外链）与「创建笔记本」—— 与会话面板 Files 同源 */
@@ -90,14 +88,6 @@ export function RightPanel(): React.JSX.Element {
 
       {/* 内容区 — 所有面板共存，visibility 切换 */}
       <div className="flex-1 min-h-0 relative">
-        <div
-          className="absolute inset-0"
-          style={
-            activeTab === 'browser' ? undefined : { visibility: 'hidden', pointerEvents: 'none' }
-          }
-        >
-          <BrowserPanel />
-        </div>
         <div
           className="absolute inset-0"
           style={

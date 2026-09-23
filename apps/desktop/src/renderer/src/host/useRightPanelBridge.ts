@@ -9,13 +9,13 @@ const isPinnedWindow = window.location.hash.startsWith('#pinned-chat')
 /**
  * 宿主右侧面板桥。
  *
- * 右侧面板（app 级：浏览器/Preview/Widget）属于宿主外壳（不在可复用的对话框 @shuvix/chat-ui 内），
+ * 右侧面板（app 级：Preview/Widget/Calendar/Agents）属于宿主外壳（不在可复用的对话框 @shuvix/chat-ui 内），
  * 因此把"开/切右面板"的反应留在宿主侧：
- *   - browser_event 订阅 agent 事件开/关浏览器面板；
  *   - filePreviewRequest（Files 面板点击 / 笔记本 [[双链]]）经共享
  *     usePreviewRequestBridge 落为预览目标，主窗再展开右侧面板并切到 preview tab
  *     （悬浮窗由 PreviewOverlay 按目标自动露出，不动窗口宽度）。
  * （Sub-agent tab 无自动揭示信号 —— 子会话经工具栏胶囊徽标可见，由用户手动打开。）
+ * 浏览器不在这里：它是独立窗口，只由用户从侧栏按钮打开；agent 开 tab 不会把它弄出来（见 browserWindowService）。
  *
  * 服务端项目若有自己的预览面板，会用它自己的等价桥替换本文件。
  */
@@ -33,37 +33,4 @@ export function useRightPanelBridge(): void {
     browser.open()
     browser.setActiveTab('preview')
   }, [filePreviewRequest, isWeb])
-
-  // 浏览器面板：宿主专属事件
-  useEffect(() => {
-    const unsub = getSessionChannelApi().agent.onEvent((event) => {
-      if (event.type === 'browser_event') {
-        if (event.action === 'open') {
-          const browser = useBrowserStore.getState()
-          if (getSessionChannelApi()?.app?.platform === 'web') {
-            // web 平台：面板是会话镜像 iframe，与主进程 tab 无关，始终重写 URL
-            browser.openAndNavigate(`${window.location.origin}/shuvix/browser/${event.sessionId}/`)
-          } else if (event.url) {
-            // 旧广播兼容（带 url）：renderer 建 tab / 导航激活 tab
-            browser.openAndNavigate(event.url)
-          } else if (!browser.isOpen) {
-            // 新链路（browser 工具 openTab）：tab 已由主进程建好并经 browser-view:tab-* 镜像，
-            // 这里只负责露出右侧面板
-            browser.open()
-          }
-          browser.setActiveTab('browser')
-        } else if (event.action === 'close') {
-          const { tabs, activeTabId, closeTab, close } = useBrowserStore.getState()
-          if (tabs.length === 0) {
-            // 新链路（backend 关掉最后一个 tab 后广播）：收起面板
-            close()
-          } else if (activeTabId) {
-            // 旧语义（CLI browser close）：清掉 agent 占用的页面 → 关激活 tab（面板本身不关）
-            closeTab(activeTabId)
-          }
-        }
-      }
-    })
-    return unsub
-  }, [])
 }

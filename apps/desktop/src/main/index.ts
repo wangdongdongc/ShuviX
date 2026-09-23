@@ -34,7 +34,13 @@ import {
 import { getBrowserOffset, setBrowserOffset, clearBrowserOffset } from './services/panelLayoutState'
 // pglite: widget 共享库的 WASM 运行时，退出时统一回收 worker
 import { disposePglite } from './services/pglite'
-import { initBrowserHost, destroyAllTabs, initBrowserSession } from './services/browser'
+import {
+  destroyAllTabs,
+  initBrowserSession,
+  initBrowserWindowService,
+  closeBrowserWindowWithMain,
+  destroyBrowserWindow
+} from './services/browser'
 import {
   approveOpenExternalPermission,
   guardAppWindow,
@@ -435,8 +441,8 @@ function createWindow(): void {
 
   // 初始化内置浏览器 partition 的权限策略（独立于 defaultSession，默认拒绝所有权限请求）
   initBrowserSession()
-  // 记录浏览器面板的宿主窗口（tab 的 WebContentsView 按需创建，renderer 通过 IPC 控制）
-  initBrowserHost(mainWindow)
+  // 浏览器是独立窗口（懒创建）：只在用户点开时才建，关窗只隐藏；agent 的 tab 住在停放窗口里
+  initBrowserWindowService({ getThemeBgColor })
 
   // 弹窗与页面内导航（点 <a href>、PDF 里的链接、预览 iframe 里的脚本）都不自己走：
   // 阻止应用变成浏览器，去向交给 externalOpen 那道闸（http(s) → 系统浏览器）
@@ -448,6 +454,8 @@ function createWindow(): void {
     destroyTerminalsByWindow(mainWebContentsId)
     void unpinAllPinnedChat('window-closed')
     closeAllWidgetWindows()
+    // 销毁而非隐藏：隐藏的窗口会让 window-all-closed / Dock 重建主窗口都失灵（tab 留着）
+    closeBrowserWindowWithMain()
   })
   mainWindow.on('closed', () => {
     clearBrowserOffset(mainWebContentsId)
@@ -589,6 +597,13 @@ if (!gotTheLock) {
 // 自定义协议 scheme 注册必须早于 app.whenReady
 registerCustomProtocolSchemes()
 
+// 被遮挡的窗口照常合成。内置浏览器的 tab 常常出生在不可见的地方 —— 停放窗口从不显示，
+// 浏览器窗口可能被主窗口盖住、被关掉（隐藏）、最小化、在别的桌面，屏幕也可能锁着。
+// 没有这个开关，这些状态下新出生（或跨站导航后）的 view 拿不到第一帧：截图报
+// "Current display surface not available"、agent 的鼠标点击不落地（2026-09-23 实测）。
+// 代价：被遮挡的窗口不再停止渲染（主窗口被盖住时动画照跑）。e2e harness 本来就带着它启动。
+app.commandLine.appendSwitch('disable-backgrounding-occluded-windows')
+
 // 全局 fetch 包装：只作用于 LLM 请求（作用域外原样透传），放宽 undici 默认的
 // 300s 传输超时并记录 fetch 失败的成因链。必须早于任何 agent 跑起来。
 installLlmNetwork()
@@ -694,13 +709,15 @@ app.whenReady().then(async () => {
   measure('createWindow', () => createWindow())
 
   app.on('activate', () => {
-    // macOS dock 点击时重新创建窗口
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+    // macOS dock 点击时重新创建主窗口。按主窗口本身判断，不按「一个窗口都没有」：
+    // 浏览器的停放窗口从不显示却一直在（主窗口关着时后台 agent 仍可能在用浏览器）
+    if (!mainWindow || mainWindow.isDestroyed()) createWindow()
   })
 })
 
 // 应用退出前清理
 app.on('before-quit', () => {
+  destroyBrowserWindow()
   destroyAllTabs()
   killAllBgTasks()
   mcpService.disconnectAll().catch(() => {})

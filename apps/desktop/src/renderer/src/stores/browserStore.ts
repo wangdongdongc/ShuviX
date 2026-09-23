@@ -13,7 +13,7 @@ function adjustWindowWidth(delta: number): Promise<void> {
   return Promise.resolve()
 }
 
-/** 通知主进程浏览器面板占用的额外宽度（关闭窗口时扣除） */
+/** 通知主进程右侧面板占用的额外宽度（关闭窗口时扣除） */
 function syncBrowserOffset(offset: number): void {
   if (window.api?.app?.platform !== 'web' && window.api?.app?.setBrowserOffset) {
     window.api.app.setBrowserOffset(offset)
@@ -23,43 +23,29 @@ function syncBrowserOffset(offset: number): void {
 /** ChatView 容器的 data 属性，用于 DOM 测量 */
 export const CHAT_CONTAINER_ATTR = 'data-chat-container'
 
-/** 右侧面板激活的标签页（终端在底部栏，见 bottomPanelStore；Files/Sub-agent 在聊天区内的会话面板，见 sessionPanelStore） */
-export type PanelTab = 'browser' | 'preview' | 'widget' | 'calendar' | 'agents'
+/**
+ * 右侧面板激活的标签页（终端在底部栏，见 bottomPanelStore；Files/Sub-agent 在聊天区内的会话面板，
+ * 见 sessionPanelStore；浏览器是独立窗口，见 browserTabsStore / browserWindowService）
+ */
+export type PanelTab = 'preview' | 'widget' | 'calendar' | 'agents'
 
 const BROWSER_MIN = 320
 const BROWSER_MAX = 960
 
-/** 浏览器 tab 的镜像信息（真源在主进程 browserViewService，经 useBrowserTabsBridge 事件同步） */
-export interface BrowserTabInfo {
-  id: string
-  url: string
-  title: string
-  favicon?: string
-  isLoading: boolean
-  loadError: { errorCode: number; errorDescription: string; url: string } | null
-  /** agent 已通过 CDP 接入此 tab（可观察和操作页面）；桌面 attach 跨轮持久，标识随之常亮 */
-  cdpAttached: boolean
-  /** agent 开启了请求拦截（Fetch 域）——此 tab 加载的内容可能被修改或替换 */
-  cdpIntercepting: boolean
-}
-
 /**
- * 桌面右侧面板 store —— 现为共享 usePanelStore（@shuvix/app-shell）之上的「浏览器面板 + 原生窗口」外层。
+ * 桌面右侧面板 store —— 共享 usePanelStore（@shuvix/app-shell）之上的「右侧面板 + 原生窗口宽度」外层。
+ *
+ * 名字是历史遗留：浏览器曾是右侧面板的第一个页签，2026-09 起搬进了独立窗口
+ * （tab 状态见 browserTabsStore）。保留原名是因为持久化键（panelLayout.browserOpen /
+ * browserWidth）与主进程的 browserOffset 都以「右侧面板」的含义沿用着这个词。
  *
  * 通用三态 isOpen/activeTab/width 的**真源在 usePanelStore**；这里把它们「镜像」过来（底部单向订阅），
- * 使桌面既有消费点继续用 useBrowserStore 不变。本 store 自有的是浏览器面板专属态（tabs/lockedChatWidth）
- * 与「开/关面板要联动原生窗口宽度 + WebContentsView 偏移」的命令式 actions（这些副作用桌面专属、无法搬进共享 store）。
- *
- * 浏览器 tab 状态同样是镜像：actions 只发 IPC，主进程 `browser-view:tab-*` 事件回填
- * tabs/activeTabId（见 host/useBrowserTabsBridge.ts），单一数据流。
+ * 使桌面既有消费点继续用 useBrowserStore 不变。本 store 自有的是 lockedChatWidth 与
+ * 「开/关面板要联动原生窗口宽度」的命令式 actions（这些副作用桌面专属、无法搬进共享 store）。
  */
 interface BrowserState {
   /** 面板是否展开（镜像自 usePanelStore） */
   isOpen: boolean
-  /** 浏览器 tab 列表（镜像自主进程，顺序 = tab 条顺序） */
-  tabs: BrowserTabInfo[]
-  /** 当前激活的浏览器 tab id（镜像自主进程） */
-  activeTabId: string | null
   /** 面板宽度（px，镜像自 usePanelStore） */
   width: number
   /** ChatView 锁定宽度（仅在开关瞬间短暂锁定，窗口 resize 完成后自动解锁；桌面专属） */
@@ -73,18 +59,6 @@ interface BrowserState {
   setWidth: (width: number) => void
   /** 切换右侧面板标签页 */
   setActiveTab: (tab: PanelTab) => void
-
-  createTab: (url?: string) => void
-  closeTab: (id: string) => void
-  activateTab: (id: string) => void
-  navigateTab: (id: string, url: string) => void
-  /** 统一入口：面板未开则打开；有激活 tab 则导航之，无 tab 则新建 */
-  openAndNavigate: (url: string) => void
-}
-
-/** 多 tab WebContentsView 仅 Electron 主窗口存在（web 平台无此 API） */
-function browserViewApi(): (typeof window.api)['browserView'] | undefined {
-  return window.api?.browserView
 }
 
 /** 测量 ChatView 容器当前宽度 */
@@ -132,8 +106,6 @@ const panel = (): ReturnType<typeof usePanelStore.getState> => usePanelStore.get
 export const useBrowserStore = create<BrowserState>((set, get) => ({
   // 通用三态初值镜像自共享 store（之后由底部订阅保持同步）
   isOpen: panel().isOpen,
-  tabs: [],
-  activeTabId: null,
   width: panel().width,
   lockedChatWidth: null,
   activeTab: panel().activeTab as PanelTab,
@@ -193,30 +165,7 @@ export const useBrowserStore = create<BrowserState>((set, get) => ({
     }
   },
 
-  setActiveTab: (tab) => panel().setActiveTab(tab),
-
-  // ====== 浏览器 tab actions（薄封装 IPC；状态由主进程事件经 useBrowserTabsBridge 回填） ======
-
-  createTab: (url) => {
-    void browserViewApi()?.createTab(url)
-  },
-  closeTab: (id) => {
-    void browserViewApi()?.closeTab(id)
-  },
-  activateTab: (id) => {
-    void browserViewApi()?.activateTab(id)
-  },
-  navigateTab: (id, url) => {
-    void browserViewApi()?.navigate(id, url)
-  },
-  openAndNavigate: (url) => {
-    get().open()
-    const api = browserViewApi()
-    if (!api) return
-    const { activeTabId } = get()
-    if (activeTabId) void api.navigate(activeTabId, url)
-    else void api.createTab(url)
-  }
+  setActiveTab: (tab) => panel().setActiveTab(tab)
 }))
 
 // 单向镜像：共享 store 的通用三态 → 本 store（使既有 useBrowserStore 消费点零改动）。

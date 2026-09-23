@@ -71,6 +71,8 @@ export type AppEvent =
    */
   | { type: 'skill.changed' }
   | { type: 'pinChat.changed'; pinnedSessionIds: string[] }
+  /** 内置浏览器的 tab 数变了（建 / 关）—— 主窗口侧栏的浏览器按钮据此显示计数 */
+  | { type: 'browser.tabsChanged'; count: number }
   | { type: 'widget.changed' }
   /**
    * 知识库（OKF bundle）内容变化 —— 宿主观察到的写入（knowledge 工具 / 文件工具落在根目录下）

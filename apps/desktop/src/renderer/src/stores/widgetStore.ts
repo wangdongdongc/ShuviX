@@ -1,5 +1,4 @@
 import { create } from 'zustand'
-import { useBrowserStore } from './browserStore'
 
 type WidgetItem = WidgetSummary
 
@@ -47,10 +46,11 @@ export const useWidgetStore = create<WidgetState>((set, get) => ({
     if (!res.success) {
       return { success: false, error: res.error }
     }
-    // 切到 Browser tab 并加载 widget URL（面板未开则打开；有激活 tab 导航之，无则新建）
-    const browser = useBrowserStore.getState()
-    browser.openAndNavigate(res.url)
-    browser.setActiveTab('browser')
+    // 在浏览器窗口新开一张 tab 加载 widget，再把窗口亮出来并聚焦。
+    // 不导航「激活 tab」（旧面板的做法）—— 网格里的激活 tab 很可能正被 agent 使用。
+    const api = window.api.browserView
+    await api.createTab(res.url)
+    await api.openWindow()
     // 刷新卡片顺序（lastOpenedAt）
     void get().reload()
     return { success: true }

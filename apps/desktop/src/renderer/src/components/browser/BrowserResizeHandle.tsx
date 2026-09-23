@@ -5,8 +5,8 @@ const MIN_W = 320
 const MAX_W = 960
 
 /**
- * 浏览器面板左侧的拖拽分隔条
- * 作为独立 flex 子元素放在 ChatView 和 BrowserPanel 之间，不受 iframe 事件干扰
+ * 右侧面板左侧的拖拽分隔条（名字是历史遗留：浏览器曾是右侧面板的第一个页签）
+ * 作为独立 flex 子元素放在 ChatView 和 RightPanel 之间，不受 iframe 事件干扰
  */
 export function BrowserResizeHandle(): React.JSX.Element {
   const width = useBrowserStore((s) => s.width)

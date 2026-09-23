@@ -1,12 +1,16 @@
-import type { BrowserTabInfo } from '../../stores/browserStore'
+import type { BrowserTabInfo } from '../../stores/browserTabsStore'
 
 /**
  * 浏览器面板的纯函数工具与布局常数。
  * 单独成文件（不放组件文件里）是因为组件文件只能导出组件，否则 fast refresh 失效。
  */
 
-/** 卡片目标高度（px）：面板高度按它自动等分，同屏几张不用用户选 */
-export const CARD_TARGET_H = 260
+/** 卡片目标高度（px）：墙高按它自动等分，同屏几行不用用户选 */
+export const CARD_TARGET_H = 320
+/** 卡片目标宽度（px）：墙宽按它自动分列，窗口越宽列越多（上限 MAX_COLS） */
+export const CARD_TARGET_W = 620
+/** 列数上限 —— 再多每张就小到只剩缩略图 */
+export const MAX_COLS = 3
 /** 卡片最小高度（px）：面板太矮时宁可放不下也不摊成纸片 */
 export const CARD_MIN_H = 140
 /**

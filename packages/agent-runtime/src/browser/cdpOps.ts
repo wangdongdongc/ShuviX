@@ -275,7 +275,7 @@ const HIT_TEST_FN = pageFn(
  */
 const DOC_MARK = '__shuvixDocMark'
 
-interface DocMark {
+export interface DocMark {
   token: string
   url: string | null
   /** 动作前的事件序号：之后只看此后的 Page.* 事件 */
@@ -283,7 +283,7 @@ interface DocMark {
   frameId: string | null
 }
 
-async function markDocument(session: TabCdpSession): Promise<DocMark> {
+export async function markDocument(session: TabCdpSession): Promise<DocMark> {
   const token = Math.random().toString(36).slice(2)
   const seq = session.eventCursor()
   const frameId = await session
@@ -824,6 +824,11 @@ export async function typeOp(
     }
     into = ` into ${target}`
   }
+  // 提交键按在 <select> 上同样会弹原生下拉菜单：在打字之前就拒绝，不留半截输入
+  if (submitKey) {
+    const refused = await refuseKeyOnSelect(session, submitKey)
+    if (refused) return refused
+  }
   if (text) await session.send('Input.insertText', { text })
   let settled: string | null = null
   if (submitKey) {
@@ -837,7 +842,53 @@ export async function typeOp(
 
 // ====== Press Key ======
 
+/** 焦点在单选 <select> 上时仍放行的键：只挪焦点 / 收起，不会弹出原生下拉菜单（esc 是 dispatchKey 认的别名） */
+const SELECT_SAFE_KEYS = new Set(['tab', 'escape', 'esc'])
+
+/**
+ * 焦点是否落在单选 <select> 上（穿过 shadow root 与同源 iframe 找到真正的焦点元素）。
+ * 跨源 iframe 看不进去，当作不是 —— 那种情形少见，漏过去也只是弹个下拉菜单。
+ */
+const FOCUSED_SELECT_EXPR = String.raw`(() => {
+  let a = document.activeElement;
+  for (let i = 0; a && i < 32; i++) {
+    if (a.shadowRoot && a.shadowRoot.activeElement) { a = a.shadowRoot.activeElement; continue; }
+    if (a.tagName === 'IFRAME') {
+      try { const inner = a.contentDocument && a.contentDocument.activeElement; if (inner) { a = inner; continue; } } catch (e) {}
+    }
+    break;
+  }
+  return !!a && a.tagName === 'SELECT' && !a.multiple && !(a.size > 1);
+})()`
+
+/**
+ * 这个键若按在焦点所在的原生单选 <select> 上会弹出**原生**下拉菜单，回拒绝结果；否则回 null。
+ * 在桌面端那个菜单会把主进程卡住数秒，在用户自己的 Chrome 里会在用户眼前弹出来。与 click 对 <select>
+ * 的处理一致，拒绝并指向 fill —— fill 直接按选项 label / value 选中，不经过菜单。
+ * 探测失败（evaluate 抛错）不拦：宁可放过一个键，也不能让所有按键都失败。
+ */
+async function refuseKeyOnSelect(
+  session: TabCdpSession,
+  combo: string
+): Promise<BrowserOpOutput | null> {
+  const key = combo.split('+').pop()?.trim().toLowerCase() ?? ''
+  if (SELECT_SAFE_KEYS.has(key)) return null
+  const onSelect = await session
+    .send<{ result?: { value?: unknown } }>('Runtime.evaluate', {
+      expression: FOCUSED_SELECT_EXPR,
+      returnByValue: true
+    })
+    .then((r) => r?.result?.value === true)
+    .catch(() => false)
+  if (!onSelect) return null
+  return errorOut(
+    `Focus is on a <select>, and pressing ${combo} there would open its native dropdown. Choose an option with fill(uid, "<option label or value>") instead (Tab / Escape are still fine).`
+  )
+}
+
 export async function pressKeyOp(session: TabCdpSession, combo: string): Promise<BrowserOpOutput> {
+  const refused = await refuseKeyOnSelect(session, combo)
+  if (refused) return refused
   const before = await markDocument(session)
   await dispatchKey((m, p) => session.send(m, p), combo)
   const settled = await settleAfterAction(session, before, { quiet: false })

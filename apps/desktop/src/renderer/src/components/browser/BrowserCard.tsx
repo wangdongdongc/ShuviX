@@ -10,7 +10,7 @@ import {
   TriangleAlert,
   X
 } from 'lucide-react'
-import type { BrowserTabInfo } from '../../stores/browserStore'
+import type { BrowserTabInfo } from '../../stores/browserTabsStore'
 import { CARD_LOGICAL_W, normalizeTargetUrl, tabLabel } from './tabUtils'
 
 /** Chromium net error code 范围：CERT_* 在 -200 ~ -211 */
@@ -95,6 +95,8 @@ export function BrowserCard({
   return (
     <div
       onClick={isActive ? undefined : onActivate}
+      data-browser-card={tab.id}
+      data-active={isActive ? 'true' : undefined}
       className={`relative flex flex-col h-full min-h-0 rounded-md overflow-hidden border transition-colors ${
         isActive ? 'border-accent/50' : 'border-border-secondary/40 hover:border-border-secondary'
       }`}
@@ -236,7 +238,7 @@ export function BrowserCard({
           </div>
         ) : (
           /* WebContentsView 占位区域 —— 该 tab 的 view 叠放在此 div 上方 */
-          <div ref={registerPlaceholder} className="relative w-full h-full">
+          <div ref={registerPlaceholder} data-page-area className="relative w-full h-full">
             {!live &&
               (snapshot ? (
                 <img

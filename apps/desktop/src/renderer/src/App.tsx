@@ -9,6 +9,7 @@ import { SidebarResizeHandle } from './components/sidebar/SidebarResizeHandle'
 import { ChatView } from './components/chat/ChatView'
 import { PinnedChatShell } from './components/chat/PinnedChatShell'
 import { WidgetWindowShell } from './components/widget/WidgetWindowShell'
+import { BrowserWindowShell } from './components/browser/BrowserWindowShell'
 import { RightPanel } from './components/browser/RightPanel'
 import { BrowserResizeHandle } from './components/browser/BrowserResizeHandle'
 import { BottomPanel } from './components/terminal/BottomPanel'
@@ -25,6 +26,7 @@ import { SessionRuntime } from './host/SessionRuntime'
 const isSettingsWindow = window.location.hash.startsWith('#settings')
 const isPinnedWindow = window.location.hash.startsWith('#pinned-chat')
 const isWidgetWindow = window.location.hash.startsWith('#widget-window')
+const isBrowserWindow = window.location.hash.startsWith('#browser-window')
 
 /** 桌面原生右键菜单渲染器（Electron Menu.popup，于光标处弹出，故忽略 position） */
 const nativeContextMenu: ContextMenuRenderer = async (items) =>
@@ -32,11 +34,12 @@ const nativeContextMenu: ContextMenuRenderer = async (items) =>
 
 /**
  * 应用主入口
- * 根据 hash 区分四种渲染：
+ * 根据 hash 区分五种渲染：
  * - 设置窗口（#settings）
  * - 悬浮聊天窗口（#pinned-chat）
  * - Widget 独立窗口（#widget-window）
- * - 主窗口（侧边栏 + 聊天区 + 浏览器面板）
+ * - 浏览器独立窗口（#browser-window）
+ * - 主窗口（侧边栏 + 聊天区 + 右侧面板）
  *
  * 核心流程由三个 hook 分别承担：
  * - useAppInit()         应用级初始化（设置、提供商、会话列表）
@@ -52,6 +55,11 @@ function App(): React.JSX.Element {
   // Widget 独立窗口：仅加载设置的最小 shell，不进入主流程
   if (isWidgetWindow) {
     return <WidgetWindowShell />
+  }
+
+  // 浏览器独立窗口：网格卡片墙，同样只加载设置
+  if (isBrowserWindow) {
+    return <BrowserWindowShell />
   }
 
   return <MainOrSettings />

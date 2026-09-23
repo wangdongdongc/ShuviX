@@ -43,6 +43,8 @@
     "deleteProjectWarningBold": "permanently delete the project and all its sessions and messages",
     "deleteProjectWarningEnd": ", and cannot be recovered. Are you sure?",
     "updateAvailable": "Update available",
+    "openBrowserWindow": "Open browser window",
+    "openBrowserWindowWithTabs": "Open browser window ({{count}} tabs)",
     "updateReady": "Ready to install",
     "deleteSession": "Delete Session",
     "exportSession": "Export Session",

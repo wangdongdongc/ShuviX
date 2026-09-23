@@ -11,6 +11,7 @@
 
 import { CdpAttachManager, type CdpTabTransportFactory } from '@shuvix/agent-runtime'
 import { getBrowserHostWindow, getTabView } from './browserViewService'
+import { installAgentGuards, uninstallAgentGuards } from './agentGuards'
 import { createLogger } from '../../logger'
 
 const log = createLogger('BrowserCDP')
@@ -37,15 +38,10 @@ const factory: CdpTabTransportFactory = {
       }
     }
 
-    // agent 接管的 tab 不做后台节流。面板收起、切到别的页签、平铺墙里没完整露出的卡片，view 都是
-    // 隐藏的；默认节流下隐藏页面的计时器被压到约 1 次/秒、requestAnimationFrame 直接停摆
-    // （实测 setTimeout(50) 要 650~990ms，点击后 50ms 的界面更新拖到近 1 秒）—— SPA 对操作的响应
-    // 慢到 agent 下一拍快照还看不到，于是「点了没反应」再点一次。只对被接管的 tab 关：
-    // 用户自己开着、没让 agent 碰的页面照常节流。
-    wc.setBackgroundThrottling(false)
-    const restoreThrottling = (): void => {
-      if (!wc.isDestroyed()) wc.setBackgroundThrottling(true)
-    }
+    // 后台节流在 browserViewService 建 view 时就关掉了（构造时设，见那里的注释）。
+    // 这里**不要**再调 setBackgroundThrottling —— 浏览器窗口以隐藏态起步，在它第一次
+    // 显示之前翻动这个开关会永久弄坏该 webContents 的 capturePage，screenshot 工具与
+    // 卡片快照会全部变成 "Current display surface not available for capture"。
 
     const listeners = new Set<(method: string, params: Record<string, unknown>) => void>()
     const onMessage = (_event: unknown, method: string, params: Record<string, unknown>): void => {
@@ -56,10 +52,13 @@ const factory: CdpTabTransportFactory = {
     // 页面崩溃 / 手动 detach 等外部断开 → 清理本地状态
     const onDetach = (): void => {
       log.info(`CDP debugger detached externally (tab ${tabId})`)
-      restoreThrottling()
+      uninstallAgentGuards(tabId)
       browserCdpManager.handleExternalDetach(tabId)
     }
     wc.debugger.once('detach', onDetach)
+
+    // 别打扰用户的两道防护（文件选择框 / 打印），赶在 agent 的第一个动作之前装好（见 agentGuards.ts）
+    await installAgentGuards(tabId, wc)
 
     log.info(`CDP debugger attached (tab ${tabId})`)
     return {
@@ -81,7 +80,7 @@ const factory: CdpTabTransportFactory = {
         } catch {
           // 可能已 detach，忽略
         }
-        restoreThrottling()
+        uninstallAgentGuards(tabId)
         log.info(`CDP debugger detached (tab ${tabId})`)
       }
     }

@@ -1,9 +1,11 @@
 /**
  * DesktopBrowserBackend —— 统一 browser 工具的桌面端实现。
  *
- * 操作主窗口内嵌的多 tab WebContentsView 面板（隔离 partition，非用户系统浏览器）：
- *   - tab 管理走 browserViewService（真源）；每个带 tabId 的操作执行前隐式 activateTab，
- *     右侧面板跟随 agent 正在操作的页面；面板开/关经 browser_event 广播联动 renderer。
+ * 操作内置浏览器的多 tab WebContentsView（隔离 partition，非用户系统浏览器）：
+ *   - tab 管理走 browserViewService（真源）；每个带 tabId 的操作执行前隐式 activateTab
+ *     （浏览器窗口开着时卡片墙会把激活卡片滚进视野）。**任何操作都不会把浏览器窗口弄出来** ——
+ *     tab 不上墙时住在停放窗口里照常可操作，agent 不能打扰用户在主窗口里打字和操作。
+ *     browser_event open/close 仍然广播，给 web 平台的会话镜像与旧 CLI 语义用。
  *   - CDP 交互/快照/调试委托共享 browserCdpOps（与扩展同一份配方），per-tab 会话走
  *     browserCdpManager。
  *   - screenshot / pdf 走 Electron 原生 capturePage / printToPDF（CDP 在 WebContentsView
@@ -31,6 +33,7 @@ import { resolveProjectConfig } from '../toolContext'
 import { getToolResultsDir } from '../../utils/paths'
 import { createLogger } from '../../logger'
 import { browserCdpManager } from './browserCdpService'
+import { fileChooserNote, withAgentGuards } from './agentGuards'
 import {
   activateTab,
   closeTab as closeTabView,
@@ -101,6 +104,19 @@ class DesktopBrowserBackend implements BrowserBackend {
     return { session, uuid }
   }
 
+  /**
+   * 包一个可能打开原生文件框的动作（点击、键盘、页面脚本、原始 CDP……）：动作期间及之后几秒拦文件框，
+   * 被拦下的在回报里告诉 agent 改用 upload_file（见 agentGuards.ts）。
+   */
+  private async guarded(
+    uuid: string,
+    op: () => Promise<BrowserOpOutput>
+  ): Promise<BrowserOpOutput> {
+    const { result, suppressed } = await withAgentGuards(uuid, op)
+    if (suppressed.length === 0) return result
+    return { ...result, text: `${result.text}\n${fileChooserNote(suppressed)}` }
+  }
+
   private broadcast(action: 'open' | 'close'): void {
     chatFrontendRegistry.broadcast({
       type: 'browser_event',
@@ -126,18 +142,42 @@ class DesktopBrowserBackend implements BrowserBackend {
   }
 
   async openTab(p: { url: string }): Promise<BrowserOpOutput> {
-    const uuid = createTab(p.url, { activate: true })
+    // 先建一个空白 tab、接上 CDP（attach 时装好文件框 / 打印防护），**再**导航过去：页面若一加载就
+    // 调 window.print()，防护得已经在第一个文档之前装好（新文档注入脚本只作用于之后的文档）。
+    // 显式加载 about:blank：从没导航过的 webContents 还没有渲染进程，attach 之后的 CDP 命令会一直等下去
+    const uuid = createTab('about:blank', { activate: true })
     const short = shortIdFor(uuid)
-    // 通知 renderer 露出右侧浏览器面板（tab 已由主进程建好，经 browser-view:tab-* 镜像）
+    // 不把浏览器窗口弄出来：agent 的动作不能打扰用户在主窗口里打字和操作（showInactive 在
+    // macOS 上会把窗口叠到最前、盖住主窗口）。新 tab 在停放窗口里照常可操作；用户从侧栏按钮
+    // （带 tab 计数）自己打开浏览器窗口来看。
+    // web 平台（会话镜像 iframe）与旧 CLI 语义仍靠这条广播
     this.broadcast('open')
-    // 等加载完再回：agent 紧接着就会 snapshot，拍到空白页或加载一半的页面，拿到的 uid
-    // 随后会被水合 / 首屏渲染整个换掉
     const { session } = await this.session(uuid)
-    const load = await browserCdpOps.waitForLoad(session, { allowBlank: p.url === 'about:blank' })
-    if (load.state === 'failed') {
-      const error = `${p.url} failed to load — tab ${short} shows the browser's error page.`
+    const failed = (reason?: string): BrowserOpOutput => {
+      const error = `${p.url} failed to load${reason ? ` (${reason})` : ''} — tab ${short} shows the browser's error page.`
       return { text: `Error: ${error}`, details: { url: p.url, error } }
     }
+    // 等加载完再回：agent 紧接着就会 snapshot，拍到空白页或加载一半的页面，拿到的 uid
+    // 随后会被水合 / 首屏渲染整个换掉。按导航前的文档标记等「换成了新文档」，不会把空白页当结果
+    let load: { state: browserCdpOps.LoadState; url: string | null }
+    if (p.url === 'about:blank') {
+      load = await browserCdpOps.waitForLoad(session, { allowBlank: true })
+    } else {
+      const before = await browserCdpOps.markDocument(session)
+      const nav = await session.send<{ loaderId?: string; errorText?: string }>('Page.navigate', {
+        url: p.url
+      })
+      if (nav?.errorText === 'net::ERR_ABORTED') {
+        // 下载（浏览器窗口不在前台时已被 will-download 取消）或被中止：没换页面，不是加载失败 ——
+        // 与从前一样报「开了，但没有新页面」而不是报错
+        load = { state: 'stopped', url: p.url }
+      } else if (nav?.errorText) {
+        return failed(nav.errorText)
+      } else {
+        load = await browserCdpOps.waitForLoad(session, { mark: before })
+      }
+    }
+    if (load.state === 'failed') return failed()
     const url = load.url ?? p.url
     return {
       text: `Opened ${url} in new tab ${short}${browserCdpOps.loadNote(load.state)}. Use snapshot/read_page with this tab id.`,
@@ -309,18 +349,20 @@ class DesktopBrowserBackend implements BrowserBackend {
   // ── 交互 / 导航 / 调试（委托共享 cdpOps） ──
 
   async navigate(p: { tabId: string; nav: NavKind; url?: string }): Promise<BrowserOpOutput> {
-    const { session } = await this.session(p.tabId)
-    return browserCdpOps.navigateOp(session, p.nav, p.url)
+    const { session, uuid } = await this.session(p.tabId)
+    return this.guarded(uuid, () => browserCdpOps.navigateOp(session, p.nav, p.url))
   }
 
   async click(p: { tabId: string; uid: string }): Promise<BrowserOpOutput> {
-    const { session } = await this.session(p.tabId)
-    return browserCdpOps.clickOp(session, p.uid)
+    const { session, uuid } = await this.session(p.tabId)
+    return this.guarded(uuid, () => browserCdpOps.clickOp(session, p.uid))
   }
 
   async fill(p: { tabId: string; uid: string; text: string }): Promise<BrowserOpOutput> {
-    const { session } = await this.session(p.tabId)
-    return browserCdpOps.fillOp(session, p.uid, p.text, { canUpload: this.caps.upload })
+    const { session, uuid } = await this.session(p.tabId)
+    return this.guarded(uuid, () =>
+      browserCdpOps.fillOp(session, p.uid, p.text, { canUpload: this.caps.upload })
+    )
   }
 
   async type(p: {
@@ -329,18 +371,18 @@ class DesktopBrowserBackend implements BrowserBackend {
     uid?: string
     submitKey?: string
   }): Promise<BrowserOpOutput> {
-    const { session } = await this.session(p.tabId)
-    return browserCdpOps.typeOp(session, p.text, p.uid, p.submitKey)
+    const { session, uuid } = await this.session(p.tabId)
+    return this.guarded(uuid, () => browserCdpOps.typeOp(session, p.text, p.uid, p.submitKey))
   }
 
   async pressKey(p: { tabId: string; key: string }): Promise<BrowserOpOutput> {
-    const { session } = await this.session(p.tabId)
-    return browserCdpOps.pressKeyOp(session, p.key)
+    const { session, uuid } = await this.session(p.tabId)
+    return this.guarded(uuid, () => browserCdpOps.pressKeyOp(session, p.key))
   }
 
   async hover(p: { tabId: string; uid: string }): Promise<BrowserOpOutput> {
-    const { session } = await this.session(p.tabId)
-    return browserCdpOps.hoverOp(session, p.uid)
+    const { session, uuid } = await this.session(p.tabId)
+    return this.guarded(uuid, () => browserCdpOps.hoverOp(session, p.uid))
   }
 
   /** paths 已由 MCP server 的安全门解析成绝对路径并放行 */
@@ -355,8 +397,8 @@ class DesktopBrowserBackend implements BrowserBackend {
     amount?: number
     uid?: string
   }): Promise<BrowserOpOutput> {
-    const { session } = await this.session(p.tabId)
-    return browserCdpOps.scrollOp(session, p)
+    const { session, uuid } = await this.session(p.tabId)
+    return this.guarded(uuid, () => browserCdpOps.scrollOp(session, p))
   }
 
   async waitFor(p: {
@@ -370,8 +412,8 @@ class DesktopBrowserBackend implements BrowserBackend {
   }
 
   async evaluate(p: { tabId: string; expression: string }): Promise<BrowserOpOutput> {
-    const { session } = await this.session(p.tabId)
-    return browserCdpOps.evaluateOp(session, p.expression)
+    const { session, uuid } = await this.session(p.tabId)
+    return this.guarded(uuid, () => browserCdpOps.evaluateOp(session, p.expression))
   }
 
   async network(p: { tabId: string; limit?: number }): Promise<BrowserOpOutput> {
@@ -390,7 +432,7 @@ class DesktopBrowserBackend implements BrowserBackend {
     method: string
     params?: Record<string, unknown>
   }): Promise<BrowserOpOutput> {
-    const { session } = await this.session(p.tabId)
+    const { session, uuid } = await this.session(p.tabId)
     const spill = async (content: string, ext: string): Promise<string> => {
       const dir = getToolResultsDir(this.sessionId)
       const path = join(dir, `cdp-${Date.now()}.${ext}`)
@@ -398,7 +440,7 @@ class DesktopBrowserBackend implements BrowserBackend {
       await writeFile(path, content)
       return path
     }
-    return browserCdpOps.cdpOp(session, p.method, p.params, spill)
+    return this.guarded(uuid, () => browserCdpOps.cdpOp(session, p.method, p.params, spill))
   }
 
   async events(p: {

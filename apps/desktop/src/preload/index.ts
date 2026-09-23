@@ -605,6 +605,11 @@ const api = {
 
   // ============ Browser WebContentsView（多 tab） ============
   browserView: {
+    // ---- 浏览器窗口 ----
+    /** 打开（或聚焦）独立浏览器窗口 */
+    openWindow: () => ipcRenderer.invoke('browser-view:open-window') as Promise<void>,
+    /** 浏览器窗口此刻是否建出来且可见（关窗只是隐藏 → false） */
+    isWindowOpen: () => ipcRenderer.invoke('browser-view:is-window-open') as Promise<boolean>,
     // ---- tab 生命周期 ----
     createTab: (url?: string) =>
       ipcRenderer.invoke('browser-view:create-tab', url) as Promise<string>,
