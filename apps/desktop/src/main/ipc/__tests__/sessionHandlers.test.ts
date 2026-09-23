@@ -6,6 +6,9 @@
  * 再以侧边栏的身份去碰它。其余字段原样交给 sessionService.create；不传参数就是不传。
  *
  * electron 是替身（handle 收进 Map）；sessionService 只替到 create 那一层。
+ *
+ *   SH-2 内存会话是主进程内部的选项（create 的**第二个**参数），渲染层经 IPC 建不出来：
+ *        载荷里带 `ephemeral: true`，create 收到的也只有一个参数
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -85,5 +88,13 @@ describe('SH-1 session:create 滤掉 chromeTab', () => {
     invoke('session:create', params)
     expect(params.chromeTab).toEqual(BINDING)
     expect(state.create.mock.calls[0][0]).not.toBe(params)
+  })
+})
+
+describe('SH-2 session:create 建不出内存会话', () => {
+  it('SH-2 载荷带 ephemeral: true → create 只收到一个参数（没有 options）', () => {
+    invoke('session:create', { title: 'x', ephemeral: true })
+    expect(state.create).toHaveBeenCalledTimes(1)
+    expect(state.create.mock.calls[0]).toHaveLength(1)
   })
 })

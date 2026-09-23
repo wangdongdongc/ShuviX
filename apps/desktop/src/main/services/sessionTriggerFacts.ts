@@ -7,7 +7,7 @@
  * 这里只答「会话此刻是什么样」，与任何具体 hook 无关 —— 谁订阅、订阅去做什么，都不是
  * 埋点该知道的事。
  */
-import { sessionDao } from '../dao/sessionDao'
+import { sessionRecords } from './sessionRecords'
 import { messageService } from './messageService'
 import { t } from '../i18n'
 
@@ -32,7 +32,7 @@ export function isDefaultTitle(title: string): boolean {
 export async function buildTurnCompletedFacts(
   sessionId: string
 ): Promise<TurnCompletedFacts | null> {
-  const picked = sessionDao.pick(sessionId, ['title', 'settings'])
+  const picked = sessionRecords.pick(sessionId, ['title', 'settings'])
   if (!picked) return null
   const messages = await messageService.listBySession(sessionId)
   const textMessages = messages.filter(

@@ -12,7 +12,7 @@ import {
   type KnowledgeMentionEntry
 } from '@shuvix/chat-protocol/knowledge'
 import { projectDao } from '../../dao/projectDao'
-import { sessionDao } from '../../dao/sessionDao'
+import { sessionRecords } from '../sessionRecords'
 import { builtinBaseDisplayName } from './knowledgePaths'
 import { scanBundle } from './scan'
 import { enabledTargets } from './sessionBundle'
@@ -24,7 +24,7 @@ export async function listKnowledgeMentionEntries(
   const targets = enabledTargets(sessionId)
   if (targets.length === 0) return []
   // 项目库显示名 = 项目当前的名字（改名即时生效，同侧栏口径）
-  const projectId = sessionDao.pick(sessionId, ['projectId'])?.projectId
+  const projectId = sessionRecords.pick(sessionId, ['projectId'])?.projectId
   const projectName = (projectId ? projectDao.findById(projectId)?.name : undefined)?.trim()
 
   const out: KnowledgeMentionEntry[] = []

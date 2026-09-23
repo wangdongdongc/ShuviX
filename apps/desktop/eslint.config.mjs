@@ -57,6 +57,26 @@ export default defineConfig(
       '@typescript-eslint/no-require-imports': 'off'
     }
   },
+  // 会话这一行只有一个出入口：services/sessionRecords（它在持久会话与只在内存里的内存会话之间分流）。
+  // 直连 sessionDao 的代码对内存会话一概看不见 —— 读成「会话不存在」，写进一个不存在的行
+  {
+    files: ['src/main/**/*.ts'],
+    ignores: ['src/main/services/sessionRecords/**', 'src/main/dao/**', '**/__tests__/**'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: ['**/dao/sessionDao'],
+              message:
+                'Go through services/sessionRecords: it is the only entry point for session rows, including in-memory (ephemeral) sessions.'
+            }
+          ]
+        }
+      ]
+    }
+  },
   // 架构分层依赖约束（eslint-plugin-boundaries）
   //
   // 元素类型顺序敏感：先写的 pattern 先匹配，确保特化在前、回退在后。
@@ -200,7 +220,9 @@ export default defineConfig(
               }
             },
             // main-service-contract：services/ 根目录的工具子系统原语（baseTool / toolContext / toolRegistry）
-            // 只依赖下层（dao / util / types / shared）；tool 实现 / 各模块都能引
+            // 只依赖下层（dao / util / types / shared）；tool 实现 / 各模块都能引。
+            // 放行 main-service-module 是为了 sessionRecords（会话行的唯一出入口，toolContext 要读会话配置）——
+            // 它比已放行的 main-service 更低一层，不构成新的反向依赖
             {
               from: { type: 'main-service-contract' },
               allow: {
@@ -208,6 +230,7 @@ export default defineConfig(
                   type: [
                     'main-service-contract',
                     'main-service',
+                    'main-service-module',
                     'main-dao',
                     'main-util',
                     'main-types',

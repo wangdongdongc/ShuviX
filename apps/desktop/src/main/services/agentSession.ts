@@ -10,7 +10,7 @@ import {
   type InlineTokensSidecar
 } from '@shuvix/agent-runtime'
 import { providerDao } from '../dao/providerDao'
-import { sessionDao } from '../dao/sessionDao'
+import { sessionRecords } from './sessionRecords'
 import { agentService } from './agentService'
 import { botService } from './botService'
 import { agentFactory } from '../agents/agentHost'
@@ -312,7 +312,7 @@ export class AgentSession {
 
   /** prompt 受理埋点：派发前同步取会话事实，fire 后立即返回（fire 绝不抛出） */
   private firePromptAccepted(promptText: string): void {
-    const title = sessionDao.pick(this.sessionId, ['title'])?.title ?? ''
+    const title = sessionRecords.pick(this.sessionId, ['title'])?.title ?? ''
     hookTriggers.fire('session.prompt-accepted', {
       sessionId: this.sessionId,
       profileName: this.created.profile.name,

@@ -1,7 +1,7 @@
 import { v7 as uuidv7 } from 'uuid'
 import { join, basename } from 'path'
 import { rmSync, existsSync } from 'fs'
-import { sessionDao } from '../dao/sessionDao'
+import { sessionRecords } from './sessionRecords'
 import { sessionDayPromptDao } from '../dao/sessionDayPromptDao'
 import { messageService } from './messageService'
 import { readSessionRunConfig, addSessionTreePin, appendModelChange } from './sessionStorage'
@@ -138,7 +138,7 @@ export class SessionService {
    * 不是用户的一条会话记录（寿命跟着标签页，见 chromeTabSession.ts）。
    */
   list(): Session[] {
-    return sessionDao.findAll().filter((s) => !isChromeTabSessionSettings(s.settings))
+    return sessionRecords.findAll().filter((s) => !isChromeTabSessionSettings(s.settings))
   }
 
   /**
@@ -148,7 +148,7 @@ export class SessionService {
    * 可用的项、旧会话补上继承值）走 `agent.init`（AgentInitResult.enabledTools）。
    */
   getById(id: string): SessionInfo | undefined {
-    const session = sessionDao.findById(id)
+    const session = sessionRecords.findById(id)
     if (!session) return undefined
     const project = session.projectId
       ? projectDao.pick(session.projectId, ['path', 'settings'])
@@ -179,7 +179,7 @@ export class SessionService {
    * 新建会话（create）与旧会话补键（sessionEnabledTools）共用这一条。
    */
   private inheritedSelection(parentId: string | null, projectId: string | null): string[] {
-    const parent = parentId ? sessionDao.pick(parentId, ['projectId', 'settings']) : undefined
+    const parent = parentId ? sessionRecords.pick(parentId, ['projectId', 'settings']) : undefined
     if (!parent) return this.inheritedEnabledTools(projectId)
     const parentTools = parent.settings?.enabledTools
     return Array.isArray(parentTools)
@@ -195,12 +195,12 @@ export class SessionService {
    * 漂移。会话不存在返回 []。
    */
   private sessionEnabledTools(sessionId: string): string[] {
-    const row = sessionDao.pick(sessionId, ['projectId', 'parentId', 'settings'])
+    const row = sessionRecords.pick(sessionId, ['projectId', 'parentId', 'settings'])
     if (!row) return []
     const stored = row.settings?.enabledTools
     if (Array.isArray(stored)) return stored
     const inherited = this.inheritedSelection(row.parentId, row.projectId)
-    sessionDao.updateSettings(sessionId, { enabledTools: inherited })
+    sessionRecords.updateSettings(sessionId, { enabledTools: inherited })
     log.info(`补齐旧会话的扩展能力勾选 session=${sessionId} tools=[${inherited.join(',')}]`)
     return inherited
   }
@@ -225,8 +225,15 @@ export class SessionService {
    * 调用方传的 projectId 在这种情况下被忽略；免询问开关（autoAllow）与扩展能力勾选同样跟着
    * 抄一份，它们是 settings 的键所以在这里，而模型 / 思考档位是会话树上的 change entry，
    * 由 `subSessionRunner.seedRunConfig` 在建完之后种（见那里的说明）。
+   *
+   * `options.ephemeral` 为真时建**内存会话**：行只在内存里（sessionRecords）、对话树也只在内存里
+   * （sessionStorage），不进侧栏、不进日历、不记活跃、不记 LLM 请求日志，进程一退就没了 —— 寿命归
+   * 开它的宿主管，用完由宿主 `delete`。它是主进程内部的选项，刻意不在 SessionCreateParams 里：
+   * 渲染层经 IPC 建不出内存会话。内存会话的子会话**同为内存会话**（按父会话推定，不看 options）：
+   * 父会话一删，子会话随级联删除一起消失，不会在库里留下一条挂在不存在的父会话下的子会话。
+   * 同一个理由，父会话是一条已被删掉的内存会话时拒绝创建，而不是建出一条孤儿。
    */
-  create(params?: SessionCreateParams): Session {
+  create(params?: SessionCreateParams, options?: { ephemeral?: boolean }): Session {
     const id = uuidv7()
     // Chrome 标签页会话：无项目、无父会话、不是笔记本也不是 bot、不继承任何扩展能力勾选 ——
     // 它的工具全由基座档案 `tab` 声明（含 mcp:chrome），形态推导见 resolveAgentProfileName
@@ -234,7 +241,13 @@ export class SessionService {
     const notebookPath = chromeTab ? undefined : params?.notebookPath
     const now = Date.now()
     const parentId = chromeTab ? null : (params?.parentId ?? null)
-    const parent = parentId ? sessionDao.pick(parentId, ['projectId', 'settings']) : undefined
+    const parent = parentId ? sessionRecords.pick(parentId, ['projectId', 'settings']) : undefined
+    // 父会话行不在了，一般照旧建（一个坏指针不值得拒绝建会话）—— 唯独它曾是内存会话：那是宿主刚把它
+    // 删掉，此刻建出来的子会话要么落库成侧栏里的孤儿，要么成为谁也不会去删的内存会话，两样都不对
+    if (parentId && !parent && sessionRecords.wasEphemeral(parentId)) {
+      throw new Error(`Parent session ${parentId} has been deleted`)
+    }
+    const ephemeral = parentId ? sessionRecords.isEphemeral(parentId) : !!options?.ephemeral
     const pid = chromeTab ? null : parent ? parent.projectId : (params?.projectId ?? null)
     // 子会话抄父会话的勾选，其余按项目继承（与旧会话补键同一条规则，见 inheritedSelection）
     const enabledTools = chromeTab ? [] : this.inheritedSelection(parentId, pid)
@@ -270,8 +283,9 @@ export class SessionService {
       updatedAt: now,
       lastActiveAt: now
     }
-    sessionDao.insert(session)
-    broadcastSessionListChanged()
+    sessionRecords.insert(session, { ephemeral })
+    // 内存会话不在任何列表里，没有列表变化可广播
+    if (!ephemeral) broadcastSessionListChanged()
     // 注：指令文件不在创建时注入。改为在用户首次发送 prompt 时按当前配置懒注入
     // （由 AgentSession.prompt 判定 agent 上下文是否为空），使得用户可以在
     // 创建会话后、发送第一条消息前任意切换配置。
@@ -280,7 +294,7 @@ export class SessionService {
 
   /** bot 会话判定 —— 绑定了一个 bot。口径在 chat-protocol 的 botSession（两个宿主与三层 UI 共用一份） */
   isBotSession(sessionId: string): boolean {
-    return isBotSessionSettings(sessionDao.pickSettings(sessionId, ['bot']))
+    return isBotSessionSettings(sessionRecords.pickSettings(sessionId, ['bot']))
   }
 
   /**
@@ -300,7 +314,7 @@ export class SessionService {
    * 没有切换命令、没有选择器，键留在 settings 里只是遗留数据。
    */
   resolveAgentProfileName(sessionId: string): string {
-    const session = sessionDao.pick(sessionId, ['projectId', 'parentId', 'settings'])
+    const session = sessionRecords.pick(sessionId, ['projectId', 'parentId', 'settings'])
     const settings = session?.settings
     // Chrome 标签页会话：根 Agent 恒为基座 `tab`（只有它声明 mcp:chrome —— 用户真实的 Chrome）。
     // 排在最前：create 不会让它同时是笔记本 / bot，万一行里真有那些键，也不能让它落到一个
@@ -351,7 +365,7 @@ export class SessionService {
   }> {
     // 只有子会话可钉。守在方法体第一句：拒绝必须先于 getProfile / 落库 / 种子写入 /
     // invalidateAgent，零副作用
-    const row = sessionDao.pick(sessionId, ['parentId'])
+    const row = sessionRecords.pick(sessionId, ['parentId'])
     if (!row?.parentId) {
       return { success: false, error: 'Only a sub-session can be pinned to an agent profile' }
     }
@@ -364,7 +378,7 @@ export class SessionService {
       }
     }
     log.info(`pinAgentProfile session=${sessionId} → ${name}`)
-    sessionDao.updateSettings(sessionId, { agentProfile: name })
+    sessionRecords.updateSettings(sessionId, { agentProfile: name })
     // 刚建好的子会话还没有运行时；仍走一遍失效是为守住不变量 —— 钉档案与重建之间不能有
     // 一个还在写树的旧运行时（await：解绑必须发生在关停之后，之后往树上追加种子才不会和它抢叶子）
     await this.invalidateAgent(sessionId)
@@ -398,20 +412,20 @@ export class SessionService {
    * 自动写入才广播 titleChanged（用户改名时渲染端自行更新，维持旧行为）。
    */
   updateTitle(id: string, title: string, origin: 'user' | 'auto' = 'user'): void {
-    sessionDao.updateTitle(id, title)
-    sessionDao.updateSettings(id, { titleOrigin: origin })
+    sessionRecords.updateTitle(id, title)
+    sessionRecords.updateSettings(id, { titleOrigin: origin })
     if (origin === 'auto') broadcastSessionTitleChanged(id, title)
   }
 
   /** 更新会话所属项目 */
   updateProjectId(id: string, projectId: string | null): void {
-    sessionDao.updateProjectId(id, projectId)
-    broadcastSessionListChanged()
+    sessionRecords.updateProjectId(id, projectId)
+    if (!sessionRecords.isEphemeral(id)) broadcastSessionListChanged()
   }
 
   /** 更新命令免询问（bash + ssh 统一开关） */
   updateAutoAllow(id: string, autoAllow: boolean): void {
-    sessionDao.updateSettings(id, { autoAllow })
+    sessionRecords.updateSettings(id, { autoAllow })
   }
 
   /**
@@ -424,12 +438,12 @@ export class SessionService {
    * 这个窗口里被拒 —— 不会出现「勾选落库了、运行时却是按旧勾选建的」。
    */
   updateEnabledTools(id: string, enabledTools: readonly string[]): boolean {
-    if (!sessionDao.pick(id, ['id'])) return false
+    if (!sessionRecords.pick(id, ['id'])) return false
     if (this.agents.tracked(id)) {
       log.info(`拒绝修改扩展能力：会话已有运行时 session=${id}`)
       return false
     }
-    sessionDao.updateSettings(id, { enabledTools: sessionScopedTools(enabledTools) })
+    sessionRecords.updateSettings(id, { enabledTools: sessionScopedTools(enabledTools) })
     broadcastSessionConfigChanged(id)
     return true
   }
@@ -441,9 +455,9 @@ export class SessionService {
    * 现查的，所以运行时存在期间照样可改、改完下一次调用就生效。会话不存在返回 false。
    */
   updateKnowledgeBases(id: string, knowledgeBases: readonly string[]): boolean {
-    if (!sessionDao.pick(id, ['id'])) return false
+    if (!sessionRecords.pick(id, ['id'])) return false
     const names = [...new Set(knowledgeBases.map((n) => n.trim()).filter(Boolean))]
-    sessionDao.updateSettings(id, { knowledgeBases: names })
+    sessionRecords.updateSettings(id, { knowledgeBases: names })
     broadcastSessionConfigChanged(id)
     return true
   }
@@ -453,12 +467,12 @@ export class SessionService {
    *  仅路径类:命令类工具(bash/ssh)不再有允许列表,逐条询问。
    */
   addAllowListPaths(id: string, toolType: AllowToolType, paths: string[]): void {
-    const sess = sessionDao.pickSettings(id, ['allowList'])
+    const sess = sessionRecords.pickSettings(id, ['allowList'])
     const list = sess?.allowList || []
     const prefixed = paths.map((p) => buildAllowEntry(toolType, p))
     const newEntries = prefixed.filter((p) => !list.includes(p))
     if (newEntries.length > 0) {
-      sessionDao.updateSettings(id, { allowList: [...list, ...newEntries] })
+      sessionRecords.updateSettings(id, { allowList: [...list, ...newEntries] })
       log.info(`addAllowListPaths session=${id} ${toolType} +${newEntries.length}`)
       broadcastSessionConfigChanged(id)
     }
@@ -466,9 +480,9 @@ export class SessionService {
 
   /** 从统一允许列表移除条目 */
   removeAllowListEntry(id: string, entry: string): void {
-    const sess = sessionDao.pickSettings(id, ['allowList'])
+    const sess = sessionRecords.pickSettings(id, ['allowList'])
     const list = (sess?.allowList || []).filter((e) => e !== entry)
-    sessionDao.updateSettings(id, { allowList: list })
+    sessionRecords.updateSettings(id, { allowList: list })
     broadcastSessionConfigChanged(id)
   }
 
@@ -477,7 +491,7 @@ export class SessionService {
     // 子会话先走一遍同样的清理（嵌套只有一层，所以不会递归下去第二层）。
     // 放在最前面：父会话的资源清理不该被子会话的运行时拖着。删除确认框已经告诉用户
     // 会一起删掉几条（见 useSessionDelete）——这是「递归删」唯一的补偿。
-    for (const child of sessionDao.findChildren(id)) {
+    for (const child of sessionRecords.findChildren(id)) {
       await this.delete(child.id)
     }
     // 后台任务是会话资源：必须在下面 rm tool_results 之前杀掉，否则进程还活着写一个已删目录。
@@ -497,8 +511,9 @@ export class SessionService {
     httpLogDao.deleteBySessionId(id)
     // 未开 PRAGMA foreign_keys，session_day_prompts 的 ON DELETE CASCADE 不会触发
     sessionDayPromptDao.deleteBySessionId(id)
-    sessionDao.deleteById(id)
-    broadcastSessionListChanged()
+    const ephemeral = sessionRecords.isEphemeral(id)
+    sessionRecords.deleteById(id)
+    if (!ephemeral) broadcastSessionListChanged()
     // 清理临时会话工作目录
     const tempDir = getTempWorkspace(id)
     if (existsSync(tempDir)) {
@@ -543,7 +558,7 @@ export class SessionService {
     project: Pick<Project, 'path' | 'settings'> | undefined
     modelMetadata: SessionModelMetadata
   } | null> {
-    const session = sessionDao.pick(sessionId, ['projectId'])
+    const session = sessionRecords.pick(sessionId, ['projectId'])
     if (!session) return null
     // 扩展能力勾选在会话设置里（创建会话时定下，创建 Agent 时读这一次）
     const selectedTools = this.sessionEnabledTools(sessionId)

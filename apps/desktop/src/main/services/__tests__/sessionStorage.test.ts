@@ -18,6 +18,8 @@ vi.mock('../../utils/paths', () => ({
 vi.mock('../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {} })
 }))
+// 树注册表经 sessionRecords.isEphemeral 分流；持久会话那一侧不碰表，DAO 置空即可（不拉起真库）
+vi.mock('../../dao/sessionDao', () => ({ sessionDao: {} }))
 
 import type { AgentMessage } from '@earendil-works/pi-agent-core'
 import {

@@ -30,7 +30,7 @@ import {
   type EnforceOpts
 } from '@shuvix/agent-runtime'
 import { chromeTabOf } from '@shuvix/chat-protocol/chromeTabSession'
-import { sessionDao } from '../../dao/sessionDao'
+import { sessionRecords } from '../sessionRecords'
 import { chromeBrowserState, createChromeBrowserBackend, isSiteGranted } from '../chromeBridge'
 import { getDesktopSecurityContext, TOOL_ABORTED } from '../toolContext'
 import type { DesktopBuiltinMcpScope } from './types'
@@ -97,7 +97,7 @@ const orphanTabQueue = createBrowserTabQueue()
 
 export function createChromeMcpServerFactory(): BuiltinMcpFactory<DesktopBuiltinMcpScope> {
   return createBrowserMcpServerFactory<DesktopBuiltinMcpScope>((scope) => {
-    const binding = chromeTabOf(sessionDao.pickSettings(scope.sessionId, ['chromeTab']))
+    const binding = chromeTabOf(sessionRecords.pickSettings(scope.sessionId, ['chromeTab']))
     return {
       serverName: CHROME_MCP_SERVER_NAME,
       backend: createChromeBrowserBackend(scope.sessionId),

@@ -12,7 +12,7 @@
  */
 import { chromeTabOf, type ChromeTabBinding } from '@shuvix/chat-protocol/chromeTabSession'
 import type { BridgeHello } from '@shuvix/chat-protocol/chromeBridge'
-import { sessionDao } from '../../dao/sessionDao'
+import { sessionRecords } from '../../services/sessionRecords'
 import { sessionService } from '../../services/sessionService'
 import { existingChromeBrowserState, type BridgeConnection } from '../../services/chromeBridge'
 import { createLogger } from '../../logger'
@@ -34,7 +34,7 @@ export function tabSessionTitle(pageTitle: string | undefined): string {
 /** 某浏览器名下的全部标签页会话 */
 export function tabSessionsOf(installId: string): Array<{ id: string; binding: ChromeTabBinding }> {
   const out: Array<{ id: string; binding: ChromeTabBinding }> = []
-  for (const session of sessionDao.findAll()) {
+  for (const session of sessionRecords.findAll()) {
     const binding = chromeTabOf(session.settings)
     if (binding && binding.installId === installId) out.push({ id: session.id, binding })
   }
@@ -46,7 +46,7 @@ export function connectionOwnsSession(conn: BridgeConnection, sessionId: unknown
   if (typeof sessionId !== 'string' || !sessionId) return false
   const info = conn.info
   if (!info) return false
-  const binding = chromeTabOf(sessionDao.pickSettings(sessionId, ['chromeTab']))
+  const binding = chromeTabOf(sessionRecords.pickSettings(sessionId, ['chromeTab']))
   return !!binding && binding.installId === info.installId && binding.runId === info.runId
 }
 

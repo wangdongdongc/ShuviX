@@ -22,7 +22,7 @@ import {
   skillNotebookPath
 } from '@shuvix/chat-protocol/skillNotes'
 import { projectDao } from '../dao/projectDao'
-import { sessionDao } from '../dao/sessionDao'
+import { sessionRecords } from './sessionRecords'
 import { sessionService } from './sessionService'
 import { skillService } from './skillService'
 import { getBuiltinSkillsDir, getDefaultSkillsDir } from '../utils/paths'
@@ -108,7 +108,7 @@ export function openSkillNote(name: string, title?: string): SessionInfo {
 
   const project = ensureCarrier(carrier.id, carrierName(skill), carrier.root)
   const session =
-    sessionDao.findByProjectAndNotebookPath(project.id, notebookPath) ??
+    sessionRecords.findByProjectAndNotebookPath(project.id, notebookPath) ??
     sessionService.create({
       projectId: project.id,
       notebookPath,
@@ -134,7 +134,7 @@ export function syncSkillBuiltinProject(): void {
 export async function dropExternalSkillCarrier(dirName: string): Promise<void> {
   const id = skillExternalProjectId(dirName)
   if (!projectDao.findById(id)) return
-  for (const session of sessionDao.findByProjectId(id)) await sessionService.delete(session.id)
+  for (const session of sessionRecords.findByProjectId(id)) await sessionService.delete(session.id)
   projectDao.deleteById(id)
 }
 

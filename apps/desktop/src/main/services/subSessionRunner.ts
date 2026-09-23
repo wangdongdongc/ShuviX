@@ -22,7 +22,7 @@ import { sessionService } from './sessionService'
 import { taskRegistry } from './taskRegistry'
 import { messageService } from './messageService'
 import { appendModelChange, appendThinkingLevelChange } from './sessionStorage'
-import { sessionDao } from '../dao/sessionDao'
+import { sessionRecords } from './sessionRecords'
 import type { SubAgentModelConfig } from '@shuvix/agent-runtime'
 import { createLogger } from '../logger'
 
@@ -117,7 +117,7 @@ class SubSessionRunner {
    * 返回错误文案（null = 通过）。
    */
   private rejectIfNotNormal(sessionId: string): string | null {
-    const s = sessionDao.pick(sessionId, ['settings', 'parentId'])
+    const s = sessionRecords.pick(sessionId, ['settings', 'parentId'])
     if (!s) return 'This task is not attached to a session — sub-sessions are unavailable here.'
     if (s.settings?.notebookPath) return 'Notebook sessions cannot have sub-sessions.'
     if (s.parentId) {
@@ -128,7 +128,7 @@ class SubSessionRunner {
 
   /** 取调用方名下的子会话（不存在 / 不是它的孩子都返回 null —— 越权在这里落空） */
   private ownChild(parentId: string, childId: string): { id: string; title: string } | null {
-    const child = sessionDao.pick(childId, ['title', 'parentId'])
+    const child = sessionRecords.pick(childId, ['title', 'parentId'])
     if (!child || child.parentId !== parentId) return null
     return { id: childId, title: child.title }
   }
@@ -147,7 +147,7 @@ class SubSessionRunner {
       const child = this.ownChild(parentId, childId)
       return child ?? { error: this.unknownChildError(parentId, childId) }
     }
-    const children = sessionDao.findChildren(parentId)
+    const children = sessionRecords.findChildren(parentId)
     if (children.length === 1) return { id: children[0].id, title: children[0].title }
     if (children.length === 0) {
       return {
@@ -186,7 +186,7 @@ class SubSessionRunner {
     const rejected = this.rejectIfNotNormal(parentId)
     if (rejected) return { error: rejected }
     return {
-      subSessions: sessionDao.findChildren(parentId).map((s) => ({
+      subSessions: sessionRecords.findChildren(parentId).map((s) => ({
         id: s.id,
         title: s.title,
         status: this.statusOf(s.id),
@@ -208,7 +208,7 @@ class SubSessionRunner {
     const childId = resolved.id
 
     const last = await this.lastAnswer(childId)
-    const row = sessionDao.pick(childId, ['title', 'updatedAt'])
+    const row = sessionRecords.pick(childId, ['title', 'updatedAt'])
     return {
       info: {
         id: childId,
@@ -248,7 +248,7 @@ class SubSessionRunner {
     const rejected = this.rejectIfNotNormal(parentId)
     if (rejected) return { error: rejected }
 
-    const existing = sessionDao.findChildren(parentId)
+    const existing = sessionRecords.findChildren(parentId)
     if (existing.length >= MAX_SUB_SESSIONS) {
       return {
         error:
@@ -277,7 +277,10 @@ class SubSessionRunner {
     await this.seedRunConfig(parentId, session.id, declared)
 
     log.info(`create sub-session ${session.id} parent=${parentId} profile=${requested ?? '-'}`)
-    return { id: session.id, title: sessionDao.pick(session.id, ['title'])?.title ?? session.title }
+    return {
+      id: session.id,
+      title: sessionRecords.pick(session.id, ['title'])?.title ?? session.title
+    }
   }
 
   /**
@@ -439,7 +442,7 @@ class SubSessionRunner {
 
   /** 单条子会话的快照（不含答复；lastAnswer 另取） */
   private infoOf(parentId: string, childId: string): SubSessionInfo | undefined {
-    const row = sessionDao.findChildren(parentId).find((s) => s.id === childId)
+    const row = sessionRecords.findChildren(parentId).find((s) => s.id === childId)
     if (!row) return undefined
     return {
       id: row.id,
@@ -480,7 +483,7 @@ class SubSessionRunner {
       }
       targets = [childId]
     } else {
-      targets = sessionDao
+      targets = sessionRecords
         .findChildren(parentId)
         .map((s) => s.id)
         .filter((id) => this.statusOf(id) === 'running')
@@ -527,7 +530,7 @@ class SubSessionRunner {
     parentId: string,
     ids?: string[]
   ): Promise<Array<SubSessionInfo & { answer?: string; isError?: boolean }>> {
-    const children = sessionDao.findChildren(parentId).filter((s) => !ids || ids.includes(s.id))
+    const children = sessionRecords.findChildren(parentId).filter((s) => !ids || ids.includes(s.id))
     return Promise.all(
       children.map(async (s) => ({
         id: s.id,
@@ -562,7 +565,7 @@ class SubSessionRunner {
     // 已经有人在 wait 它 —— 结果会在**同一轮里**交回去，再补一条通知只会让父级
     // 把刚拿到的东西再读一遍（实测里就白烧了一轮）
     if (this.waiters.has(childId)) return null
-    const title = sessionDao.pick(childId, ['title'])?.title ?? childId
+    const title = sessionRecords.pick(childId, ['title'])?.title ?? childId
     // 状态词用与别处一致的那套；卡在等批准时明说，别让父级以为它跑完了
     const status = this.statusOf(childId)
     const asked = this.blockedOn(childId)
@@ -642,7 +645,7 @@ class SubSessionRunner {
   }
 
   private unknownChildError(parentId: string, childId: string): string {
-    const children = sessionDao.findChildren(parentId)
+    const children = sessionRecords.findChildren(parentId)
     const list = children.length
       ? children.map((s) => `  ${s.id}  ${s.title}`).join('\n')
       : '  (none — create one with action "create-sub-session")'

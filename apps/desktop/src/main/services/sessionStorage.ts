@@ -32,11 +32,12 @@
  */
 import { join } from 'path'
 import { existsSync, unlinkSync } from 'fs'
-import { JsonlSessionStorage, Session } from '@earendil-works/pi-agent-core'
+import { InMemorySessionStorage, JsonlSessionStorage, Session } from '@earendil-works/pi-agent-core'
 import { NodeExecutionEnv } from '@earendil-works/pi-agent-core/node'
 import { createSessionTreeRegistry } from '@shuvix/agent-runtime'
 import { getSessionsDir } from '../utils/paths'
 import { createLogger } from '../logger'
+import { sessionRecords } from './sessionRecords'
 
 const log = createLogger('SessionStorage')
 
@@ -61,19 +62,42 @@ export function sessionFilePath(sessionId: string): string {
 
 // ─── 共享缓存（内核在 @shuvix/agent-runtime 的 createSessionTreeRegistry） ───
 
+// 内存会话（sessionRecords.isEphemeral）的树只在内存里：从不 open、从不落 jsonl，`exists` 恒假 ——
+// 于是第一次 ensure 建出一棵内存树，之后靠缓存槽找回它。没有文件兜底，槽被 LRU 逐出就等于对话丢了，
+// 所以内存会话恒钉住（见 applyPins），直到删除会话时显式逐出。删除之后（wasEphemeral）迟到的
+// ensure 一律拒绝：不能给一条从没落过盘的会话在磁盘上补出一个 jsonl。
+function isInMemoryTree(sessionId: string): boolean {
+  return sessionRecords.isEphemeral(sessionId) || sessionRecords.wasEphemeral(sessionId)
+}
+
 const registry = createSessionTreeRegistry({
-  open: async (sessionId) =>
-    new Session(await JsonlSessionStorage.open(getFsEnv(), sessionFilePath(sessionId))),
+  open: async (sessionId) => {
+    if (isInMemoryTree(sessionId)) {
+      throw new Error(`in-memory session ${sessionId} has no stored tree to open`)
+    }
+    return new Session(await JsonlSessionStorage.open(getFsEnv(), sessionFilePath(sessionId)))
+  },
   // 注意 pi 的 open() 校验 header cwd 非空而 create() 不校验 —— 空 cwd 会写出一个
   // 再也读不回来的文件，这里统一回落到 sessions 目录兜底。
-  create: async (sessionId, cwd) =>
-    new Session(
+  create: async (sessionId, cwd) => {
+    if (sessionRecords.isEphemeral(sessionId)) {
+      return new Session(
+        new InMemorySessionStorage({
+          metadata: { id: sessionId, createdAt: new Date().toISOString() }
+        })
+      )
+    }
+    if (sessionRecords.wasEphemeral(sessionId)) {
+      throw new Error(`in-memory session ${sessionId} has been deleted`)
+    }
+    return new Session(
       await JsonlSessionStorage.create(getFsEnv(), sessionFilePath(sessionId), {
         cwd: cwd || getSessionsDir(),
         sessionId
       })
-    ),
-  exists: (sessionId) => existsSync(sessionFilePath(sessionId))
+    )
+  },
+  exists: (sessionId) => !isInMemoryTree(sessionId) && existsSync(sessionFilePath(sessionId))
 })
 
 /**
@@ -88,9 +112,17 @@ const registry = createSessionTreeRegistry({
  */
 const pinPredicates: Array<(sessionId: string) => boolean> = []
 
+/** 内存会话恒钉住：它不在可清空的谓词表里，测试隔离清掉谓词也清不掉这一条 */
+function applyPins(): void {
+  registry.setPinned(
+    (sessionId) => sessionRecords.isEphemeral(sessionId) || pinPredicates.some((p) => p(sessionId))
+  )
+}
+applyPins()
+
 export function addSessionTreePin(fn: (sessionId: string) => boolean): void {
   pinPredicates.push(fn)
-  registry.setPinned((sessionId) => pinPredicates.some((p) => p(sessionId)))
+  applyPins()
 }
 
 /**
@@ -120,7 +152,7 @@ export function clearSessionTreeCacheForTests(): void {
   registry.clearForTests()
   // 谓词是叠加的，测试之间必须一并清掉，否则上一例注册的钉住会漏进下一例
   pinPredicates.length = 0
-  registry.setPinned(() => false)
+  applyPins()
 }
 
 // ─── 运行配置：会话树是唯一事实源 ─────────────────────────────────

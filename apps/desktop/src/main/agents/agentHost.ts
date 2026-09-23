@@ -41,7 +41,7 @@ import { mcpService } from '../services/mcpService'
 import { resolveModel } from '../services/agentModelResolver'
 import { providerOAuthService } from '../services/providerOAuthService'
 import { providerDao } from '../dao/providerDao'
-import { sessionDao } from '../dao/sessionDao'
+import { sessionRecords } from '../services/sessionRecords'
 import { projectDao } from '../dao/projectDao'
 import { ensureSessionTree } from '../services/sessionStorage'
 import { resolveInstructionContent } from '../services/instruction'
@@ -73,7 +73,7 @@ import { enabledBaseChoices } from '../services/knowledge'
 function sessionProject(
   sessionId: string
 ): Pick<Project, 'name' | 'path' | 'systemPrompt' | 'settings'> | undefined {
-  const session = sessionDao.pick(sessionId, ['projectId'])
+  const session = sessionRecords.pick(sessionId, ['projectId'])
   return session?.projectId
     ? projectDao.pick(session.projectId, ['name', 'path', 'systemPrompt', 'settings'])
     : undefined
@@ -298,7 +298,8 @@ function desktopPromptVars(ctx: PromptVarsCtx): PromptVars {
     // 占位符原样保留并 warn（派生档案本就不该引用它）
     ...(ctx.kind === 'root'
       ? {
-          notebookPath: sessionDao.pickSettings(ctx.sessionId, ['notebookPath'])?.notebookPath ?? ''
+          notebookPath:
+            sessionRecords.pickSettings(ctx.sessionId, ['notebookPath'])?.notebookPath ?? ''
         }
       : {})
   }

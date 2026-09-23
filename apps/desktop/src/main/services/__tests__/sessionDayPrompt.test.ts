@@ -1,7 +1,11 @@
 /**
  * 日历入账：user_message 旁听、系统通知/指令注入不入账、eventSink 接线。
+ *
+ *   DP-T1 内存会话（sessionRecords.isEphemeral）不入账：不 insert、不 touchActive、不查 settings；
+ *         时钟往前走之后它的 lastActiveAt 也没动
+ *   DP-T2 已删的内存会话（wasEphemeral）同样不入账 —— 迟到的 user_message 不给它补一行日历
  */
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import type { ChatEvent } from '@shuvix/chat-protocol/events'
 import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
 
@@ -36,8 +40,13 @@ vi.mock('../../dao/sessionDayPromptDao', () => ({
   }
 }))
 vi.mock('../../dao/sessionDao', () => ({
-  // 缺省是普通会话：设置里没有 chromeTab（Chrome 标签页会话不进日历，见 DP-C*）
-  sessionDao: { touchActive: mocks.touchActive, pickSettings: mocks.pickSettings }
+  // 缺省是普通会话：设置里没有 chromeTab（Chrome 标签页会话不进日历，见 DP-C*）。
+  // pick 只给 DP-T*：插内存会话时 sessionRecords 要先问库里有没有同 id 的行
+  sessionDao: {
+    touchActive: mocks.touchActive,
+    pickSettings: mocks.pickSettings,
+    pick: () => undefined
+  }
 }))
 vi.mock('../../frontend/core', () => ({
   chatFrontendRegistry: { broadcast: mocks.frontendBroadcast, hasCapability: vi.fn(() => false) }
@@ -58,6 +67,7 @@ import {
   sessionsOnDay
 } from '../sessionDayPromptService'
 import { electronEventSink } from '../agentRuntimeAdapters'
+import { sessionRecords } from '../sessionRecords'
 import { KNOWLEDGE_PROJECT_ID } from '@shuvix/chat-protocol/knowledge'
 
 function userMsg(over: Partial<ChatMessage> & { id: string }): ChatMessage {
@@ -86,6 +96,7 @@ beforeEach(() => {
   mocks.frontendBroadcast.mockReset()
   mocks.notify.mockReset()
   mocks.pickSettings.mockReset().mockReturnValue({})
+  sessionRecords.clearEphemeralForTests()
 })
 
 describe('recordUserPrompt', () => {
@@ -236,6 +247,68 @@ describe('DP-C Chrome 标签页会话不入账', () => {
     mocks.pickSettings.mockReturnValue(undefined)
     recordUserPrompt('ghost', userMsg({ id: 'e5', sessionId: 'ghost' }))
     expect(mocks.insert).toHaveBeenCalledTimes(1)
+  })
+})
+
+/**
+ * 内存会话（只在内存里、宿主一关就没）不记活跃：不进日历、不动 lastActiveAt。
+ * 删掉之后也一样 —— 一行日历指向一条从没落过库、此刻也已不在内存里的会话，点进去什么都没有。
+ */
+describe('DP-T 内存会话不入账', () => {
+  const T0 = new Date(2026, 8, 18, 9).getTime()
+
+  function insertEphemeral(id: string): void {
+    sessionRecords.insert(
+      {
+        id,
+        title: id,
+        projectId: null,
+        parentId: null,
+        settings: {},
+        createdAt: T0,
+        updatedAt: T0,
+        lastActiveAt: T0
+      },
+      { ephemeral: true }
+    )
+  }
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('DP-T1 活着的内存会话：不 insert、不 touchActive、不查 settings；lastActiveAt 不动', () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(T0)
+    insertEphemeral('mem-1')
+    vi.setSystemTime(T0 + 60_000)
+
+    recordUserPrompt('mem-1', userMsg({ id: 'e1', sessionId: 'mem-1', createdAt: Date.now() }))
+    recordFromUserMessageEvent(userEvent(userMsg({ id: 'e2', sessionId: 'mem-1' }), 'mem-1'))
+
+    expect(mocks.insert).not.toHaveBeenCalled()
+    expect(mocks.touchActive).not.toHaveBeenCalled()
+    expect(mocks.pickSettings).not.toHaveBeenCalled()
+    expect(sessionRecords.findById('mem-1')).toMatchObject({ lastActiveAt: T0, updatedAt: T0 })
+  })
+
+  it('DP-T2 已删的内存会话：同样不入账', () => {
+    insertEphemeral('mem-2')
+    sessionRecords.deleteById('mem-2')
+    expect(sessionRecords.wasEphemeral('mem-2')).toBe(true)
+
+    recordUserPrompt('mem-2', userMsg({ id: 'e3', sessionId: 'mem-2' }))
+
+    expect(mocks.insert).not.toHaveBeenCalled()
+    expect(mocks.touchActive).not.toHaveBeenCalled()
+    expect(mocks.pickSettings).not.toHaveBeenCalled()
+  })
+
+  it('DP-T 对照：同一时刻的普通会话照常入账', () => {
+    insertEphemeral('mem-3')
+    recordUserPrompt('s1', userMsg({ id: 'e4' }))
+    expect(mocks.insert).toHaveBeenCalledTimes(1)
+    expect(mocks.touchActive).toHaveBeenCalledWith('s1')
   })
 })
 

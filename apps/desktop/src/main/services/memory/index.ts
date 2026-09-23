@@ -8,7 +8,7 @@
  * 无项目会话解析为 null（不注入）：与项目提示词同一种降级，同一族开关不该有两种语义。
  */
 import { renderMemoryIndex } from '@shuvix/agent-runtime'
-import { sessionDao } from '../../dao/sessionDao'
+import { sessionRecords } from '../sessionRecords'
 import { getProjectMemoryDir } from '../../utils/paths'
 import { scanProjectMemories } from './memoryScanner'
 
@@ -19,7 +19,7 @@ export { scanProjectMemories } from './memoryScanner'
  * 目录为空时**仍返回文本**（只有表头与写入段）—— 否则记忆库无法从空启动。
  */
 export function resolveProjectMemoryIndex(rootSessionId: string): string | null {
-  const projectId = sessionDao.pick(rootSessionId, ['projectId'])?.projectId
+  const projectId = sessionRecords.pick(rootSessionId, ['projectId'])?.projectId
   if (!projectId) return null
   const memories = scanProjectMemories(projectId)
   return renderMemoryIndex(memories, getProjectMemoryDir(projectId)) || null

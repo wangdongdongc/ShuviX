@@ -15,7 +15,7 @@ import { existsSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { parseMemoryFile } from '@shuvix/agent-runtime'
 import type { ProjectMemoryEntry } from '@shuvix/chat-protocol/types/memory'
-import { sessionDao } from '../dao/sessionDao'
+import { sessionRecords } from './sessionRecords'
 import { getProjectMemoryDir } from '../utils/paths'
 import { scanProjectMemories } from './memory'
 import { sessionService } from './sessionService'
@@ -56,7 +56,7 @@ export function openMemoryNote(projectId: string, slug: string): Session | null 
   const path = memoryFilePath(projectId, slug)
   if (!existsSync(path)) return null
 
-  const existing = sessionDao.findByProjectAndNotebookPath(projectId, path)
+  const existing = sessionRecords.findByProjectAndNotebookPath(projectId, path)
   if (existing) return existing
 
   // 标题取 frontmatter 的 name（人话标题），读不出/解析不出就用 slug —— 与侧栏那一行同一个名字

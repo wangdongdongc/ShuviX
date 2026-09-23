@@ -10,7 +10,7 @@ import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
 import { isHiddenProjectId } from '@shuvix/chat-protocol/hiddenProjects'
 import { isChromeTabSessionSettings } from '@shuvix/chat-protocol/chromeTabSession'
 import type { Session } from '../dao/types'
-import { sessionDao } from '../dao/sessionDao'
+import { sessionRecords } from './sessionRecords'
 import { localDayKey, sessionDayPromptDao } from '../dao/sessionDayPromptDao'
 import { createLogger } from '../logger'
 
@@ -30,8 +30,11 @@ function isUserOpening(message: ChatMessage): boolean {
  */
 export function recordUserPrompt(sessionId: string, message: ChatMessage): void {
   if (!isUserOpening(message)) return
+  // 内存会话（只在内存里、宿主一关就没）不记活跃：不进日历，也不动 lastActiveAt。
+  // 删了的也一样 —— 迟到的 user_message 不该给它补一行日历
+  if (sessionRecords.isEphemeral(sessionId) || sessionRecords.wasEphemeral(sessionId)) return
   // Chrome 标签页会话不进日历：它是某个标签页的临时对话，标签页一关就删
-  if (isChromeTabSessionSettings(sessionDao.pickSettings(sessionId, ['chromeTab']))) return
+  if (isChromeTabSessionSettings(sessionRecords.pickSettings(sessionId, ['chromeTab']))) return
   const timestamp = message.createdAt || Date.now()
   const inserted = sessionDayPromptDao.insert({
     sessionId,
@@ -39,7 +42,7 @@ export function recordUserPrompt(sessionId: string, message: ChatMessage): void 
     day: localDayKey(timestamp),
     timestamp
   })
-  if (inserted) sessionDao.touchActive(sessionId)
+  if (inserted) sessionRecords.touchActive(sessionId)
 }
 
 /** electronEventSink 旁路：只认 `user_message`，解析失败静默丢掉（不能挡广播） */

@@ -18,7 +18,7 @@ import { existsSync } from 'fs'
 import { KNOWLEDGE_BUILTIN_BASE, KNOWLEDGE_PROJECT_BASE } from '@shuvix/chat-protocol/knowledge'
 import type { KnowledgeBaseInfo } from '@shuvix/agent-runtime'
 import { projectDao } from '../../dao/projectDao'
-import { sessionDao } from '../../dao/sessionDao'
+import { sessionRecords } from '../sessionRecords'
 import type { Project } from '../../dao/types/project'
 import {
   builtinBaseDisplayName,
@@ -63,7 +63,7 @@ const BUILTIN_GUIDE_LABEL =
   "ShuviX's own reference (read-only): how its agent, bot, policy and hook files, knowledge entries and skills are written, and where they live"
 
 function rootProject(rootSessionId: string): Project | undefined {
-  const picked = sessionDao.pick(rootSessionId, ['projectId'])
+  const picked = sessionRecords.pick(rootSessionId, ['projectId'])
   return picked?.projectId ? projectDao.findById(picked.projectId) : undefined
 }
 
@@ -106,12 +106,12 @@ function builtinTarget(): SessionBundleTarget | null {
  * 范围由用户圈定才有意义，所以改成显式勾选，内置的说明书也不例外。
  */
 export function selectedBaseNames(rootSessionId: string): string[] {
-  const row = sessionDao.pick(rootSessionId, ['projectId', 'parentId', 'settings'])
+  const row = sessionRecords.pick(rootSessionId, ['projectId', 'parentId', 'settings'])
   const own = row?.settings?.knowledgeBases
   if (Array.isArray(own)) return sanitize(own)
 
   const parent = row?.parentId
-    ? sessionDao.pick(row.parentId, ['projectId', 'settings'])
+    ? sessionRecords.pick(row.parentId, ['projectId', 'settings'])
     : undefined
   const fromParent = parent?.settings?.knowledgeBases
   if (Array.isArray(fromParent)) return sanitize(fromParent)
@@ -233,9 +233,9 @@ export function knowledgeBaseOptions(rootSessionId?: string): {
   if (!rootSessionId) return { options, selected: [], explicit: false }
 
   // 「有人明确设过」要走完整条回落链 —— 漏掉父会话那一级，子会话就会显示成「还没选过」
-  const row = sessionDao.pick(rootSessionId, ['projectId', 'parentId', 'settings'])
+  const row = sessionRecords.pick(rootSessionId, ['projectId', 'parentId', 'settings'])
   const parent = row?.parentId
-    ? sessionDao.pick(row.parentId, ['projectId', 'settings'])
+    ? sessionRecords.pick(row.parentId, ['projectId', 'settings'])
     : undefined
   const explicit =
     Array.isArray(row?.settings?.knowledgeBases) ||

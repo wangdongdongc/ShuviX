@@ -24,7 +24,7 @@ export interface SessionTreeRegistryDeps {
   create: (sessionId: string, cwd: string) => Promise<Session>
   /** 会话存储是否已存在 */
   exists: (sessionId: string) => boolean | Promise<boolean>
-  /** 无钉住会话的 LRU 缓存上限（默认 8） */
+  /** 未钉住会话的 LRU 缓存上限（默认 8；钉住的槽不占这个名额） */
   maxUnpinned?: number
 }
 
@@ -67,15 +67,17 @@ export function createSessionTreeRegistry(deps: SessionTreeRegistryDeps): Sessio
     return slot.promise
   }
 
-  /** LRU 限量：只逐出未钉住的槽（有 Agent 的会话树与运行时共享，不可回收） */
+  /**
+   * LRU 限量：只逐出未钉住的槽（有 Agent 的会话树与运行时共享，不可回收）。
+   * 上限只数**未钉住**的槽 —— 钉住的槽若也算进去，钉住的一多（几个在跑的会话、几条内存会话），
+   * 每个刚打开的旁观树都会在打开的同一刻被逐出，下一个读者只好再开一份分叉实例。
+   */
   function trim(): void {
-    if (cache.size <= maxUnpinned) return
     const evictable = [...cache.entries()]
       .filter(([id]) => !isPinned(id))
       .sort((a, b) => a[1].lastUsed - b[1].lastUsed)
-    for (const [id] of evictable) {
-      if (cache.size <= maxUnpinned) break
-      cache.delete(id)
+    for (let i = 0; evictable.length - i > maxUnpinned; i++) {
+      cache.delete(evictable[i][0])
     }
   }
 

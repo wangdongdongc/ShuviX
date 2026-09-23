@@ -7,7 +7,7 @@ import {
 } from '../services/filesWatcherService'
 import { previewSessionFile, writeSessionFile } from '../services/filePreviewService'
 import { findArtifact, readArtifact } from '../services/artifacts/store'
-import { sessionDao } from '../dao/sessionDao'
+import { sessionRecords } from '../services/sessionRecords'
 
 export function registerFilesHandlers(): void {
   ipcMain.handle('files:scan', (_event, params: { sessionId: string }) =>
@@ -41,7 +41,7 @@ export function registerFilesHandlers(): void {
     // 父会话终答里的引用必须展示得出来。嵌套只有一层，所以不递归。
     const candidates = [
       params.sessionId,
-      ...sessionDao.findChildren(params.sessionId).map((c) => c.id)
+      ...sessionRecords.findChildren(params.sessionId).map((c) => c.id)
     ]
     for (const sid of candidates) {
       const found = findArtifact(sid, params.name)

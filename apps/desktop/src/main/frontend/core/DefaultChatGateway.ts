@@ -14,7 +14,7 @@ import { mcpService } from '../../services/mcpService'
 import { skillService } from '../../services/skillService'
 import type { ChatMessage, InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
 import { resolveTokensForAgent } from '@shuvix/chat-protocol/utils/inlineTokens'
-import { sessionDao } from '../../dao/sessionDao'
+import { sessionRecords } from '../../services/sessionRecords'
 import { projectDao } from '../../dao/projectDao'
 import { WORK_PROFILE_NAME } from '@shuvix/agent-runtime'
 import { agentService } from '../../services/agentService'
@@ -233,7 +233,7 @@ export class DefaultChatGateway implements ChatGateway {
     // 解析项目路径（用于发现项目级 skills）
     let projectPath: string | undefined
     if (sessionId) {
-      const session = sessionDao.findById(sessionId)
+      const session = sessionRecords.findById(sessionId)
       const project = session?.projectId ? projectDao.pick(session.projectId, ['path']) : null
       projectPath = project?.path
     }

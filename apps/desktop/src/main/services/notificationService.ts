@@ -7,7 +7,7 @@
  *     叠加 `win.isFocused()` 实时判定。主进程自己是不知道 activeSessionId 的，
  *     而判定又不能放渲染层：macOS 关窗不退出应用，agent 照跑，那时压根没有渲染进程，
  *     恰恰是最该通知的时候。
- *  3. **会话叫什么** —— sessionDao。
+ *  3. **会话叫什么** —— sessionRecords。
  *  4. **开关** —— `notification.enabled`，实时读，缺省开。
  *
  * 点击行为本期只有一个：把对应会话拉到眼前（悬浮窗优先，其次主窗；主窗已销毁就重建，
@@ -20,7 +20,7 @@ import { createNotificationCenter, type NotificationCenter } from '@shuvix/agent
 import type { AgentNotification } from '@shuvix/chat-protocol/notification'
 import type { ChatEvent } from '@shuvix/chat-protocol/events'
 import { isChromeTabSessionSettings } from '@shuvix/chat-protocol/chromeTabSession'
-import { sessionDao } from '../dao/sessionDao'
+import { sessionRecords } from './sessionRecords'
 import { settingsDao } from '../dao/settingsDao'
 import { focusFloating, isPinned } from './pinnedChatService'
 import { t } from '../i18n'
@@ -144,7 +144,7 @@ export function initNotificationService(injected: NotificationServiceDeps): void
   center = createNotificationCenter({
     notifier: { show, dismiss },
     isForeground,
-    sessionTitle: (sessionId) => sessionDao.findById(sessionId)?.title,
+    sessionTitle: (sessionId) => sessionRecords.findById(sessionId)?.title,
     enabled: notificationsEnabled,
     t: (key, vars) => t(key, vars),
     logger: { warn: (message) => log.warn(message) }
@@ -163,7 +163,7 @@ const CHROME_TAB_CACHE_LIMIT = 1000
 function isChromeTabSession(sessionId: string): boolean {
   let known = chromeTabSessions.get(sessionId)
   if (known === undefined) {
-    known = isChromeTabSessionSettings(sessionDao.pickSettings(sessionId, ['chromeTab']))
+    known = isChromeTabSessionSettings(sessionRecords.pickSettings(sessionId, ['chromeTab']))
     if (chromeTabSessions.size >= CHROME_TAB_CACHE_LIMIT) chromeTabSessions.clear()
     chromeTabSessions.set(sessionId, known)
   }

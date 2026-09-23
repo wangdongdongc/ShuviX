@@ -1,6 +1,7 @@
 import { v7 as uuidv7 } from 'uuid'
 import { httpLogDao } from '../dao/httpLogDao'
 import { settingsService } from './settingsService'
+import { sessionRecords } from './sessionRecords'
 import type { HttpLog, HttpLogSummary } from '../types'
 
 /** 记录开关的设置 key —— 缺省（未写过）即关闭 */
@@ -31,6 +32,8 @@ export class HttpLogService {
   /**
    * 记录一次请求体，返回日志 ID（用于后续更新 token 用量）。
    * 关闭时返回空串 —— 调用方据此跳过用量回填，序列化开销也一并省掉。
+   * 内存会话同样不记：一行日志就是整段对话的快照，记下来它就不再只在内存里了
+   * （它派生的 Agent 也按根会话记账，于是一并跳过）。
    */
   logRequest(params: {
     sessionId: string
@@ -38,7 +41,7 @@ export class HttpLogService {
     model: string
     payload: unknown
   }): string {
-    if (!this.isEnabled()) return ''
+    if (!this.isEnabled() || sessionRecords.isEphemeral(params.sessionId)) return ''
 
     const log: HttpLog = {
       id: uuidv7(),

@@ -25,7 +25,7 @@ import {
 } from '@shuvix/agent-runtime'
 import { CHROME_GROUP_COLORS, type ChromeTabInfo } from '@shuvix/chat-protocol/chromeBridge'
 import { chromeTabOf, type ChromeTabBinding } from '@shuvix/chat-protocol/chromeTabSession'
-import { sessionDao } from '../../dao/sessionDao'
+import { sessionRecords } from '../sessionRecords'
 import { chromeBrowserState, requireConnection, type ChromeBrowserState } from './browserState'
 
 export const CHROME_BROWSER_CAPS: BrowserCaps = {
@@ -101,7 +101,7 @@ export class ChromeBridgeBackend implements BrowserBackend {
 
   /** 会话挂着的标签页（每次现读：会话设置是事实源） */
   private binding(): ChromeTabBinding {
-    const binding = chromeTabOf(sessionDao.pickSettings(this.sessionId, ['chromeTab']))
+    const binding = chromeTabOf(sessionRecords.pickSettings(this.sessionId, ['chromeTab']))
     if (!binding) throw new Error('This conversation is not attached to a Chrome tab.')
     return binding
   }

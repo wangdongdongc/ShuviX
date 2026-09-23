@@ -32,7 +32,7 @@ import { getDefaultBotsDir } from '../utils/paths'
 import { appEventBus } from '../utils/appEventBus'
 import { writeFileAtomic } from '../utils/atomicWrite'
 import { createLogger } from '../logger'
-import { sessionDao } from '../dao/sessionDao'
+import { sessionRecords } from './sessionRecords'
 import { broadcastSessionConfigChanged } from '../utils/sessionConfigBroadcast'
 
 const log = createLogger('BotService')
@@ -209,7 +209,7 @@ class BotService {
    * 不是数据损坏。
    */
   forSession(sessionId: string): BotEntry | null {
-    const settings = sessionDao.pick(sessionId, ['settings'])?.settings
+    const settings = sessionRecords.pick(sessionId, ['settings'])?.settings
     const name = boundBotOf(settings)
     if (!name) return null
     const entry = this.get(name)
@@ -250,9 +250,9 @@ class BotService {
     // 走 dao 而不是 sessionService：本服务被 agentSession 在创建根 Agent 的路径上调用，
     // 而 sessionService 恰恰 import 了 agentSession —— 经 dao 读写是这一层既有的破环手法
     // （agentSession 自己也这么做）。
-    let sessions: ReturnType<typeof sessionDao.findAll> = []
+    let sessions: ReturnType<typeof sessionRecords.findAll> = []
     try {
-      sessions = sessionDao.findAll()
+      sessions = sessionRecords.findAll()
     } catch (e) {
       log.warn(`改名迁移：会话列表读取失败 ${oldName} → ${newName}:`, e)
       return
@@ -261,7 +261,7 @@ class BotService {
       if (session.settings?.bot !== oldName) continue
       // **逐会话独立 try**：一个会话写失败不该让它后面的会话全部留在旧名上
       try {
-        sessionDao.updateSettings(session.id, { bot: newName })
+        sessionRecords.updateSettings(session.id, { bot: newName })
         broadcastSessionConfigChanged(session.id)
       } catch (e) {
         log.warn(`改名迁移：会话 ${session.id} 绑定改写失败:`, e)

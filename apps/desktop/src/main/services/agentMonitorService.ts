@@ -15,7 +15,7 @@
 import { agentRuntimeRegistry } from '@shuvix/agent-runtime'
 import type { AgentMonitorEntry } from '@shuvix/chat-protocol/types/agentMonitor'
 import type { AgentRuntimeInfo } from '@shuvix/chat-protocol/chatApi'
-import { sessionDao } from '../dao/sessionDao'
+import { sessionRecords } from './sessionRecords'
 import { providerDao } from '../dao/providerDao'
 import { agentManager } from '../agents/AgentManager'
 import { sessionService } from './sessionService'
@@ -35,7 +35,7 @@ export function listAgentRuntimes(): AgentMonitorEntry[] {
   const resolve = (rootSessionId: string): { title?: string; exists: boolean } => {
     const cached = lookup.get(rootSessionId)
     if (cached) return cached
-    const row = sessionDao.pick(rootSessionId, ['title'])
+    const row = sessionRecords.pick(rootSessionId, ['title'])
     const resolved = { title: row?.title, exists: !!row }
     lookup.set(rootSessionId, resolved)
     return resolved

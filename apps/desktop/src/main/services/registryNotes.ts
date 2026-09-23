@@ -15,7 +15,7 @@ import {
 } from '@shuvix/chat-protocol/registryNotes'
 import { appEventBus } from '../utils/appEventBus'
 import { projectDao } from '../dao/projectDao'
-import { sessionDao } from '../dao/sessionDao'
+import { sessionRecords } from './sessionRecords'
 import { sessionService } from './sessionService'
 import { botService } from './botService'
 import {
@@ -102,7 +102,7 @@ export function openRegistryNote(
   if (!valid) throw new Error(`Invalid ${kind} file: ${fileName}`)
   const project = ensureRegistryNoteProject(kind)
   const session =
-    sessionDao.findByProjectAndNotebookPath(project.id, fileName) ??
+    sessionRecords.findByProjectAndNotebookPath(project.id, fileName) ??
     sessionService.create({
       projectId: project.id,
       notebookPath: fileName,

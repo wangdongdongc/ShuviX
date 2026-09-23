@@ -22,7 +22,7 @@ import {
 import { normalizeBundlePath, titleFromPath } from '@shuvix/agent-runtime'
 import { createLogger } from '../logger'
 import { projectDao } from '../dao/projectDao'
-import { sessionDao } from '../dao/sessionDao'
+import { sessionRecords } from './sessionRecords'
 import { sessionService } from './sessionService'
 import {
   bundleDir,
@@ -143,7 +143,7 @@ export async function openKnowledgeNote(relPath: string, title?: string): Promis
     : user
       ? entryId.slice(USER_CONTAINER.length + 1)
       : entryId
-  const existing = sessionDao.findByProjectAndNotebookPath(project.id, notebookPath)
+  const existing = sessionRecords.findByProjectAndNotebookPath(project.id, notebookPath)
   if (existing) return existing
   return sessionService.create({
     projectId: project.id,

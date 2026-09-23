@@ -23,7 +23,7 @@ import {
 import type { ExtensionEventMap } from '@shuvix/chat-protocol/chromeBridge'
 import { chromeTabOf } from '@shuvix/chat-protocol/chromeTabSession'
 import type { ChatEvent } from '@shuvix/chat-protocol/events'
-import { sessionDao } from '../../dao/sessionDao'
+import { sessionRecords } from '../sessionRecords'
 import { chromeBridge, type BridgeConnection } from './server'
 import { forgetSiteGrants } from './siteGrants'
 
@@ -207,7 +207,7 @@ chromeBridge.onConnectionClosed((conn) => {
  */
 export function observeChromeTabRun(event: ChatEvent): void {
   if (event.type !== 'agent_start' && event.type !== 'agent_end') return
-  const binding = chromeTabOf(sessionDao.pickSettings(event.sessionId, ['chromeTab']))
+  const binding = chromeTabOf(sessionRecords.pickSettings(event.sessionId, ['chromeTab']))
   if (!binding) return
   const state = chromeBrowserState(binding.installId)
   if (event.type === 'agent_start') state.beginRun(event.sessionId)

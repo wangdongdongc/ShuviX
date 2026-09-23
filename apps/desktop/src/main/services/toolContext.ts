@@ -7,7 +7,7 @@ import { isAbsolute, resolve, sep } from 'path'
 import { existsSync, statSync } from 'fs'
 import { homedir } from 'os'
 import { projectDao } from '../dao/projectDao'
-import { sessionDao } from '../dao/sessionDao'
+import { sessionRecords } from './sessionRecords'
 import { sessionService } from './sessionService'
 import {
   getTempWorkspace,
@@ -254,7 +254,7 @@ export function makeDesktopSecurityProvider(
       systemDirs: windowsSystemDirs()
     }),
     getSessionGrants: () => {
-      const s = sessionDao.pickSettings(ctx.sessionId, ['autoAllow', 'allowList'])
+      const s = sessionRecords.pickSettings(ctx.sessionId, ['autoAllow', 'allowList'])
       return { autoAllow: !!s?.autoAllow, allowList: s?.allowList ?? [] }
     },
     // 仅影响内置策略的人读面（description/body/规则 prompt）；规则的判定字段恒取 en

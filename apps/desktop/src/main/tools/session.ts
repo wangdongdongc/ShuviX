@@ -27,7 +27,7 @@ import { BUILTIN_TOOL_PRESENTATIONS } from '@shuvix/chat-protocol/builtinToolPre
 import type { SessionToolDetails } from '@shuvix/chat-protocol/types/chatMessage'
 import { registerBuiltinTool } from '../services/toolRegistry'
 import type { ToolContext } from '../services/toolContext'
-import { sessionDao } from '../dao/sessionDao'
+import { sessionRecords } from '../services/sessionRecords'
 import { sessionService } from '../services/sessionService'
 import {
   subSessionRunner,
@@ -417,7 +417,7 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
   /** 重命名本任务所属会话；笔记本会话的标题绑在文件名上，拒绝而不是悄悄改别的 */
   private setTitle(rawTitle: string | undefined): AgentToolResult<SessionToolDetails | undefined> {
     const sessionId = this.ctx.sessionId
-    const session = sessionDao.pick(sessionId, ['title', 'settings'])
+    const session = sessionRecords.pick(sessionId, ['title', 'settings'])
     if (!session) {
       // 无会话上下文的派发（rootSessionId 不是会话）等场景：没有可操作的会话
       throw new Error('This task is not attached to a session — there is nothing to rename.')

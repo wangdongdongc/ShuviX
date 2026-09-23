@@ -1,7 +1,7 @@
 import { ipcMain } from 'electron'
 import { commandService } from '../services/commandService'
 import { skillService } from '../services/skillService'
-import { sessionDao } from '../dao/sessionDao'
+import { sessionRecords } from '../services/sessionRecords'
 import { projectDao } from '../dao/projectDao'
 import type { SlashCommand } from '@shuvix/chat-protocol/types/slashCommand'
 
@@ -46,7 +46,7 @@ export function registerCommandHandlers(): void {
   ipcMain.handle('command:list', (_event, params: { sessionId: string | null }) => {
     let projectPath: string | null = null
     if (params.sessionId) {
-      const projectId = sessionDao.pick(params.sessionId, ['projectId'])?.projectId
+      const projectId = sessionRecords.pick(params.sessionId, ['projectId'])?.projectId
       if (projectId) projectPath = projectDao.pick(projectId, ['path'])?.path ?? null
     }
     return gatherSlashCommands(projectPath)
