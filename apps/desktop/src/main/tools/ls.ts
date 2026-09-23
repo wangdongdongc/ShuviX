@@ -46,7 +46,7 @@ export class ListTool extends BaseTool<typeof LsParamsSchema> {
   readonly label = t('tool.lsLabel')
   readonly description = LS_DESCRIPTION
   readonly parameters = LsParamsSchema
-  readonly outputStrategy = 'tail' as const
+  readonly outputStrategy = 'keep-start' as const
 
   constructor(private ctx: ToolContext) {
     super()

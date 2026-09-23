@@ -1,6 +1,11 @@
 /**
  * 文本截断工具（宿主无关，桌面/扩展共用）。
  * 字节长度用 TextEncoder（浏览器 + Node 皆可），替代原 Node-only 的 Buffer.byteLength。
+ *
+ * 三个截法的名字一律说**留下**哪一段（truncateKeepStart / truncateKeepEnd / truncateMiddle
+ * 保留首尾），与 TruncateStrategy 的 'keep-start' / 'keep-end' / 'middle' 一一对应。
+ * 不要退回 head / tail 那套叫法：「truncateHead」既能读成「砍掉头部」也能读成「保留头部」，
+ * 两边曾各读一种，read 工具因此保留的是文件**末尾**。
  */
 
 export const DEFAULT_MAX_LINES = 2000
@@ -27,8 +32,8 @@ export function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)}MB`
 }
 
-/** 从头部截断（保留尾部内容），适用于 read 工具 */
-export function truncateHead(
+/** 保留末尾、砍掉开头 —— 适用于「结论在最后」的输出（长日志的收尾、栈顶之后的错误行） */
+export function truncateKeepEnd(
   text: string,
   maxLines = DEFAULT_MAX_LINES,
   maxBytes = DEFAULT_MAX_BYTES
@@ -49,8 +54,8 @@ export function truncateHead(
   return { text: result.join('\n'), truncated: true, originalLines, originalBytes }
 }
 
-/** 从尾部截断（保留头部内容），适用于 bash 工具 */
-export function truncateTail(
+/** 保留开头、砍掉末尾 —— 适用于「从头往下看」的输出（read 的文件开头、ls/glob/grep 的前几条结果） */
+export function truncateKeepStart(
   text: string,
   maxLines = DEFAULT_MAX_LINES,
   maxBytes = DEFAULT_MAX_BYTES

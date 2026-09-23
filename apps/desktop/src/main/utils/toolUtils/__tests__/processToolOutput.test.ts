@@ -24,8 +24,8 @@ vi.mock('electron', () => ({
 
 import {
   truncateMiddle,
-  truncateHead,
-  truncateTail,
+  truncateKeepStart,
+  truncateKeepEnd,
   formatSize,
   DEFAULT_MAX_LINES,
   DEFAULT_MAX_BYTES
@@ -144,27 +144,27 @@ describe('DPO spill: false —— 只在内存里截断', () => {
     expect(existsSync(resultsDir(sid))).toBe(false)
   })
 
-  it('DPO-8 strategy tail / head 照常生效', async () => {
-    const tail = await processToolOutput({
+  it('DPO-8 strategy keep-start / keep-end 照常生效', async () => {
+    const start = await processToolOutput({
       sessionId: 'dpo-8a',
       toolCallId: 'call_dpo8a',
       fullText: BIG,
-      strategy: 'tail',
+      strategy: 'keep-start',
       spill: false
     })
-    expect(tail.text).toBe(
-      `${header(BIG)}\n\n${truncateTail(BIG, DEFAULT_MAX_LINES, DEFAULT_MAX_BYTES).text}`
+    expect(start.text).toBe(
+      `${header(BIG)}\n\n${truncateKeepStart(BIG, DEFAULT_MAX_LINES, DEFAULT_MAX_BYTES).text}`
     )
 
-    const head = await processToolOutput({
+    const end = await processToolOutput({
       sessionId: 'dpo-8b',
       toolCallId: 'call_dpo8b',
       fullText: BIG,
-      strategy: 'head',
+      strategy: 'keep-end',
       spill: false
     })
-    expect(head.text).toBe(
-      `${header(BIG)}\n\n${truncateHead(BIG, DEFAULT_MAX_LINES, DEFAULT_MAX_BYTES).text}`
+    expect(end.text).toBe(
+      `${header(BIG)}\n\n${truncateKeepEnd(BIG, DEFAULT_MAX_LINES, DEFAULT_MAX_BYTES).text}`
     )
   })
 })

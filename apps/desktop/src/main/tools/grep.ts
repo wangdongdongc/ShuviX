@@ -52,7 +52,7 @@ export class GrepTool extends BaseTool<typeof GrepParamsSchema> {
   readonly label = t('tool.grepLabel')
   readonly description = GREP_DESCRIPTION
   readonly parameters = GrepParamsSchema
-  readonly outputStrategy = 'tail' as const
+  readonly outputStrategy = 'keep-start' as const
 
   constructor(private ctx: ToolContext) {
     super()

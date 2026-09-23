@@ -379,7 +379,7 @@ describe('wrapToolOutput — 截断 / 落盘参数的穿线', () => {
 
   it('W-S2 三个覆写原样到达；首个文本块用的就是这一次的 toolCallId 与会话 id', async () => {
     const { tool } = makeMultiBlockTool()
-    const wrapped = wrapToolOutput(tool, SID, 'tail', {
+    const wrapped = wrapToolOutput(tool, SID, 'keep-start', {
       maxBytes: 4096,
       maxLines: 10,
       spill: false
@@ -394,7 +394,7 @@ describe('wrapToolOutput — 截断 / 落盘参数的穿线', () => {
       expect(call.maxLines).toBe(10)
       expect(call.spill).toBe(false)
       expect(call.sessionId).toBe(SID)
-      expect(call.strategy).toBe('tail')
+      expect(call.strategy).toBe('keep-start')
     }
     // 第一段用本次调用 id；后面每段各自一个文件名，否则后一段会盖掉前一段的全文
     expect(calls[0].toolCallId).toBe('tc-s2')

@@ -279,7 +279,8 @@ class ReadFileTool extends FileToolBase<typeof ReadParamsSchema> {
   readonly label: string
   readonly description: string
   readonly parameters = ReadParamsSchema
-  readonly outputStrategy = 'head' as const
+  // 保留开头：超限的 read 结果里模型该拿到文件的前 80KB，接着用 offset 往下读
+  readonly outputStrategy = 'keep-start' as const
   readonly outputMaxBytes = 80 * 1024
 
   constructor(deps: FileToolDeps) {

@@ -279,8 +279,8 @@ export {
 } from './fileTools/replacers'
 export {
   truncateLine,
-  truncateHead,
-  truncateTail,
+  truncateKeepStart,
+  truncateKeepEnd,
   truncateMiddle,
   formatSize,
   DEFAULT_MAX_LINES,

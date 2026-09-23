@@ -14,7 +14,7 @@ export abstract class BaseTool<TParams extends TSchema = TSchema> {
   abstract readonly label: string
   abstract readonly description: string
   abstract readonly parameters: TParams
-  /** 输出过长时的截断策略 —— 包装器读取此字段决定保留首部 / 尾部 / 首尾 */
+  /** 输出过长时的截断策略 —— 包装器读取此字段决定留下开头 / 末尾 / 首尾（缺省留首尾） */
   readonly outputStrategy: TruncateStrategy = 'middle'
   /** 自定义最大字节数；不设置则采用 processToolOutput 的默认值 */
   readonly outputMaxBytes?: number

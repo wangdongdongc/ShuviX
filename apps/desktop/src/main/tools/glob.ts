@@ -46,7 +46,7 @@ export class GlobTool extends BaseTool<typeof GlobParamsSchema> {
   readonly label = t('tool.globLabel')
   readonly description = GLOB_DESCRIPTION
   readonly parameters = GlobParamsSchema
-  readonly outputStrategy = 'tail' as const
+  readonly outputStrategy = 'keep-start' as const
 
   constructor(private ctx: ToolContext) {
     super()

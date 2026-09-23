@@ -2,8 +2,8 @@ import { describe, it, expect } from 'vitest'
 import {
   truncateLine,
   MAX_LINE_LENGTH,
-  truncateHead,
-  truncateTail,
+  truncateKeepEnd,
+  truncateKeepStart,
   truncateMiddle,
   formatSize,
   DEFAULT_MAX_LINES,
@@ -36,10 +36,10 @@ describe('truncateLine', () => {
   })
 })
 
-describe('truncateHead', () => {
+describe('truncateKeepEnd', () => {
   it('不超限时原样返回', () => {
     const text = 'line1\nline2\nline3'
-    const result = truncateHead(text, 10, 1024)
+    const result = truncateKeepEnd(text, 10, 1024)
     expect(result.truncated).toBe(false)
     expect(result.text).toBe(text)
   })
@@ -47,7 +47,7 @@ describe('truncateHead', () => {
   it('超行数时保留尾部', () => {
     const lines = Array.from({ length: 10 }, (_, i) => `line${i + 1}`)
     const text = lines.join('\n')
-    const result = truncateHead(text, 3, 100000)
+    const result = truncateKeepEnd(text, 3, 100000)
     expect(result.truncated).toBe(true)
     expect(result.text).toBe('line8\nline9\nline10')
   })
@@ -57,16 +57,16 @@ describe('truncateHead', () => {
     const lines = Array.from({ length: 10 }, (_, i) => `${'x'.repeat(90)}-${i}`)
     const text = lines.join('\n')
     // 限制 300 字节，应该只保留最后几行
-    const result = truncateHead(text, 10, 300)
+    const result = truncateKeepEnd(text, 10, 300)
     expect(result.truncated).toBe(true)
     expect(Buffer.byteLength(result.text, 'utf-8')).toBeLessThanOrEqual(300)
   })
 })
 
-describe('truncateTail', () => {
+describe('truncateKeepStart', () => {
   it('不超限时原样返回', () => {
     const text = 'line1\nline2\nline3'
-    const result = truncateTail(text, 10, 1024)
+    const result = truncateKeepStart(text, 10, 1024)
     expect(result.truncated).toBe(false)
     expect(result.text).toBe(text)
   })
@@ -74,7 +74,7 @@ describe('truncateTail', () => {
   it('超行数时保留头部', () => {
     const lines = Array.from({ length: 10 }, (_, i) => `line${i + 1}`)
     const text = lines.join('\n')
-    const result = truncateTail(text, 3, 100000)
+    const result = truncateKeepStart(text, 3, 100000)
     expect(result.truncated).toBe(true)
     expect(result.text).toBe('line1\nline2\nline3')
   })

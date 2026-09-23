@@ -7,15 +7,23 @@
  */
 import {
   truncateMiddle,
-  truncateHead,
-  truncateTail,
+  truncateKeepStart,
+  truncateKeepEnd,
   formatSize,
   DEFAULT_MAX_LINES,
   DEFAULT_MAX_BYTES
 } from '../fileTools/truncate'
 
-/** 截断策略：决定保留内容的哪个部分 */
-export type TruncateStrategy = 'middle' | 'head' | 'tail'
+/**
+ * 截断策略 —— 名字说的是**留下**哪一段：
+ *  - `middle` 保留首尾、砍掉中间（缺省，bash / ssh 这类「命令在前、结论在后」的输出）
+ *  - `keep-start` 保留开头（read 的文件开头 —— 模型再用 offset 往下读；ls/glob/grep 的前几条结果）
+ *  - `keep-end` 保留末尾（只有结尾有用的输出）
+ *
+ * 曾经叫 head / tail：这两个词既能读成「砍掉那一段」也能读成「留下那一段」，声明策略的一侧
+ * 与执行截断的一侧各读了一种，`read` 于是保留的是文件末尾。名字改成说结果，别再改回去。
+ */
+export type TruncateStrategy = 'middle' | 'keep-start' | 'keep-end'
 
 /**
  * 落盘 sink（注入）：把完整文本持久化，返回一个「模型可用 read 工具取回」的 locator。
@@ -28,7 +36,7 @@ export interface SpillSink {
 export interface ProcessToolOutputOptions {
   toolCallId: string
   fullText: string
-  /** 截断策略：middle=保留首尾, head=保留开头, tail=保留末尾 */
+  /** 截断策略：middle=保留首尾, keep-start=保留开头, keep-end=保留末尾 */
   strategy: TruncateStrategy
   maxLines?: number
   maxBytes?: number
@@ -106,9 +114,9 @@ function applyTruncation(
   switch (strategy) {
     case 'middle':
       return truncateMiddle(text, maxLines, maxBytes)
-    case 'head':
-      return truncateHead(text, maxLines, maxBytes)
-    case 'tail':
-      return truncateTail(text, maxLines, maxBytes)
+    case 'keep-start':
+      return truncateKeepStart(text, maxLines, maxBytes)
+    case 'keep-end':
+      return truncateKeepEnd(text, maxLines, maxBytes)
   }
 }

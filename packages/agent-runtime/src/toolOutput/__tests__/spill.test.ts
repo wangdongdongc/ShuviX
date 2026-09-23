@@ -9,15 +9,15 @@
  *  - **截到多少**。没落盘时按调用方给的上限截（它拿到的就只有这些）；落盘成功时正文在盘上，
  *    正文里只留 200 行 / 10KB 的预览，且这个预览还要受调用方上限的**再一次**收紧。
  *
- * 正文一律与 truncateMiddle / truncateHead / truncateTail 的**返回值**对照，不写死形状 ——
+ * 正文一律与 truncateMiddle / truncateKeepStart / truncateKeepEnd 的**返回值**对照，不写死形状 ——
  * 截断算法自己的契约在 apps/desktop/src/shared/node/__tests__/truncate.test.ts 里钉。
  */
 import { describe, it, expect, vi } from 'vitest'
 import { processToolOutput, type SpillSink, type TruncateStrategy } from '../spill'
 import {
   truncateMiddle,
-  truncateHead,
-  truncateTail,
+  truncateKeepStart,
+  truncateKeepEnd,
   formatSize,
   DEFAULT_MAX_LINES,
   DEFAULT_MAX_BYTES
@@ -85,19 +85,17 @@ describe('SPL 没有落盘口', () => {
     expect(threw.truncated).toBe(true)
   })
 
-  it('SPL-6 strategy tail / head 决定留哪一段 —— 与函数本身对照，不照抄注释', async () => {
-    // ⚠️ spill.ts 的注释说 head「保留开头」，实际映射到 truncateHead（留的是**结尾**）。
-    // 这里钉的是今天的映射关系本身，命名是另一件事。
-    const tail = await run({ fullText: BIG, strategy: 'tail' })
-    expect(tail.text).toBe(
-      `${header(BIG)}\n\n${truncateTail(BIG, DEFAULT_MAX_LINES, DEFAULT_MAX_BYTES).text}`
+  it('SPL-6 strategy keep-start / keep-end 决定留哪一段 —— 与函数本身对照，不照抄注释', async () => {
+    const start = await run({ fullText: BIG, strategy: 'keep-start' })
+    expect(start.text).toBe(
+      `${header(BIG)}\n\n${truncateKeepStart(BIG, DEFAULT_MAX_LINES, DEFAULT_MAX_BYTES).text}`
     )
 
-    const head = await run({ fullText: BIG, strategy: 'head' })
-    expect(head.text).toBe(
-      `${header(BIG)}\n\n${truncateHead(BIG, DEFAULT_MAX_LINES, DEFAULT_MAX_BYTES).text}`
+    const end = await run({ fullText: BIG, strategy: 'keep-end' })
+    expect(end.text).toBe(
+      `${header(BIG)}\n\n${truncateKeepEnd(BIG, DEFAULT_MAX_LINES, DEFAULT_MAX_BYTES).text}`
     )
-    expect(head.text).not.toBe(tail.text)
+    expect(end.text).not.toBe(start.text)
   })
 })
 
@@ -178,7 +176,7 @@ describe('SPL 调用方给的上限', () => {
 describe('SPL 结果字段', () => {
   it('SPL-7 originalLines / originalBytes 描述的是入参全文，落没落盘都一样', async () => {
     const { sink } = okSink()
-    const strategies: TruncateStrategy[] = ['middle', 'head', 'tail']
+    const strategies: TruncateStrategy[] = ['middle', 'keep-start', 'keep-end']
     for (const strategy of strategies) {
       for (const s of [undefined, sink]) {
         const r = await run({ fullText: BIG, strategy, sink: s })
