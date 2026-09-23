@@ -17,6 +17,7 @@ import type {
 import { BaseTool } from './baseTool'
 import type { FileSystemPort, FileGuards, WriteAskHook } from '../fileTools/port'
 import { readTextContent, readDirContent } from '../fileTools/read'
+import { DEFAULT_MAX_LINES } from '../fileTools/truncate'
 import { applyWrite } from '../fileTools/write'
 import { applyEdit } from '../fileTools/edit'
 import { reviewShuvixMdWrite } from '../shuvixMdWrite'
@@ -279,9 +280,14 @@ class ReadFileTool extends FileToolBase<typeof ReadParamsSchema> {
   readonly label: string
   readonly description: string
   readonly parameters = ReadParamsSchema
-  // 保留开头：超限的 read 结果里模型该拿到文件的前 80KB，接着用 offset 往下读
+  // 保留开头：超限的 read 结果里模型该拿到文件的**前**一段，接着用 offset 往下读
   readonly outputStrategy = 'keep-start' as const
   readonly outputMaxBytes = 80 * 1024
+  // readTextContent 已经自己把正文截到 DEFAULT_MAX_LINES 行，再包上最多 5 行外壳（文件头、
+  // 空行、末尾那句 `Use offset=N to continue.`）。宿主的行数上限若还是 DEFAULT_MAX_LINES，
+  // keep-start 正好砍掉的就是那句提示 —— 而「接着用 offset 往下读」正是 keep-start 的理由。
+  // 给外壳留出位置：≥2000 行的文件照常一次读满 2000 行并拿到续读的 offset。
+  readonly outputMaxLines = DEFAULT_MAX_LINES + 5
 
   constructor(deps: FileToolDeps) {
     super(deps, 'read')

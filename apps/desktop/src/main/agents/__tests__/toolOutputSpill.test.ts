@@ -9,7 +9,9 @@
  *  - 判断按**各自的**名单做，不是按根会话做 —— 根 agent 有 read、它派出去的 titler 没有；
  *  - 名单里每一个工具都带上同一个答案（内置、MCP、skill、派发工具 `agent`、派发结果契约的
  *    extraTools 一个都不能漏）；
- *  - 工具自带的 `outputMaxBytes` / `outputMaxLines` 与这个开关同时存在，不互相顶掉。
+ *  - 工具自带的 `outputMaxBytes` / `outputMaxLines` 与这个开关同时存在，不互相顶掉；
+ *  - 截断**策略**也是一工具一答案：交给包装器的是这个工具自己声明的那一个，不是一张表一个值
+ *    （策略从声明走到「模型最后看到的文字」那一段在 tools/__tests__/toolOutputStrategy.test.ts）。
  *
  * 脚手架同 mcpToolInjection / skillToolInjection：顶掉 `createAgentFactory` 把 agentHost 交出来的
  * 适配面接住，包装器换成只记账的桩（于是能看见每一次包装收到的参数）。工具名单取**真的**内置档案。
@@ -47,24 +49,32 @@ vi.mock('@shuvix/agent-runtime', async (importOriginal) => {
   }
 })
 
-/** 包装器换成记账的恒等桩：工具表里的还是原对象，但每一次包装的参数都留下了 */
-vi.mock('../../services/wrapToolOutput', () => ({
-  wrapToolOutput: (
-    tool: object,
-    sessionId: string,
-    strategy: string,
-    overrides?: WrapCall['overrides']
-  ) => {
-    mocks.wrapCalls.push({
-      name: (tool as { name?: string }).name ?? '<anonymous>',
-      sessionId,
-      strategy,
-      overrides
-    })
-    return tool
-  },
-  getOutputStrategy: () => 'middle'
-}))
+/**
+ * 包装器换成记账的恒等桩：工具表里的还是原对象，但每一次包装的参数都留下了。
+ * `getOutputStrategy` 用**真的**那一个（AHS-7 要看的正是「每个工具自己的声明有没有送到这里」，
+ * 桩成恒定值会让 strategy 那一栏什么也不说）——真模块经 `../paths` 摸 electron.app.getPath，
+ * 本文件下面已把 electron mock 掉。
+ */
+vi.mock('../../services/wrapToolOutput', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../services/wrapToolOutput')>()
+  return {
+    getOutputStrategy: actual.getOutputStrategy,
+    wrapToolOutput: (
+      tool: object,
+      sessionId: string,
+      strategy: string,
+      overrides?: WrapCall['overrides']
+    ) => {
+      mocks.wrapCalls.push({
+        name: (tool as { name?: string }).name ?? '<anonymous>',
+        sessionId,
+        strategy,
+        overrides
+      })
+      return tool
+    }
+  }
+})
 
 vi.mock('../../services/toolRegistry', () => ({
   getBuiltinToolEntries: () =>
@@ -167,6 +177,10 @@ const resolve = async (over: Partial<ToolResolveRequest>): Promise<void> => {
 /** 这一次解析里每个工具拿到的 spill */
 const spillByName = (): Record<string, boolean | undefined> =>
   Object.fromEntries(mocks.wrapCalls.map((c) => [c.name, c.overrides?.spill]))
+
+/** 这一次解析里每个工具拿到的截断策略 */
+const strategyByName = (): Record<string, string> =>
+  Object.fromEntries(mocks.wrapCalls.map((c) => [c.name, c.strategy]))
 
 beforeEach(() => {
   mocks.wrapCalls.length = 0
@@ -283,5 +297,20 @@ describe('AHS 名单之外注入进来的工具', () => {
     await resolve({ names: ['mcp:read', 'skill:read'] })
 
     expect(spillByName()).toEqual({ skill: false, mcp__read__fetch: false })
+  })
+})
+
+describe('AHS 截断策略按工具各自的声明', () => {
+  it('AHS-7 交给包装器的是这个工具自己声明的策略', async () => {
+    // 一侧声明「保留开头」，另一侧什么也不声明（MCP / skill 工具都是后一种形状）
+    mocks.builtinNames = ['read', 'ask']
+    mocks.builtinExtra = { read: { outputStrategy: 'keep-start' } }
+
+    await resolve({ names: ['read', 'ask'] })
+
+    // 写死一个 'middle'、或把某一个工具的声明套给整张表，都要在这里当场红掉
+    const strategies = strategyByName()
+    expect(strategies.read).not.toBe(strategies.ask)
+    expect(strategies).toEqual({ read: 'keep-start', ask: 'middle' })
   })
 })
