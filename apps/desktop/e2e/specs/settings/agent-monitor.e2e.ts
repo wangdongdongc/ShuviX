@@ -23,7 +23,7 @@
 import { mkdirSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { sleep, until, type CdpClient } from '../../harness/cdp'
+import { listTargets, sleep, until, type CdpClient } from '../../harness/cdp'
 import { startFakeProvider, type FakeProvider, type FakeRequest } from '../../harness/fakeProvider'
 import { launchApp, type E2EApp } from '../../harness/launch'
 import {
@@ -168,18 +168,20 @@ describe('空实例：空态、tab 位置与设置页回落', () => {
   })
 
   it('AM-9 旧 hash monitor/agents 回落：与 AM-8 同态（唯一子 tab 激活），hash 不被重写', async () => {
-    // openSettings 对已存在窗口只聚焦不切 tab —— 旧窗必须死透再重开（ARC-E-12 同款探活）
+    // openSettings 对已存在窗口只聚焦不切 tab，且按「url 含 #settings」找 target —— 旧窗必须死透、
+    // 连 target 也从 /json 里消失，才能保证重开的是新窗、连上的也是新窗。
+    // 判据取 /json（主进程侧的事实），不取页内探活：页内 eval 在窗口拆掉时可能收不到回包，
+    // 而「800ms 没回包就算死了」在满载时会把一个还活着的窗口当成已死。
+    // window.close() 与回包赛跑：回包先到则 resolve，socket 先断则 reject（cdp.ts 的 onclose），都不挂
     await settings!.eval('window.close()').catch(() => undefined)
-    await until(async () => {
-      const alive = await Promise.race([
-        settings!.eval('1 + 1').then(
-          () => true,
-          () => false
-        ),
-        sleep(800).then(() => false)
-      ])
-      return alive ? null : true
-    }, 'settings window destroyed')
+    settings!.close()
+    await until(
+      async () =>
+        !(await listTargets(app.port)).some(
+          (t) => t.type === 'page' && t.url.includes('#settings')
+        ) || null,
+      'settings window target gone from /json'
+    )
 
     settings = await app.openSettings('monitor/agents')
     const ms = await monitorSettingsPane(settings)
@@ -435,6 +437,12 @@ describe('fakeProvider：运行时的上屏、相位、血缘与详情', () => {
   // 时 fakeProvider 回默认 "OK" 收尾）；列表里还有 AM-3 的根与 AM-6 的孤儿 —— 故所有
   // 「恰 N 条」都按 sid 过滤做相对比较，不做全量计数。
 
+  /**
+   * IPC 已报 idle 之后，标记最多再等多久跟上：一个轮询周期（agentMonitorStore POLL_MS = 1000）
+   * + until 自己的 400ms 轮询间隔 + 渲染余量。超过它说明标记不跟随轮询，是产品问题。
+   */
+  const CHIP_CATCH_UP_MS = 3000
+
   /** 建会话（IPC）→ 侧栏打开成行 → 发一轮并等收尾（横幅标记用例的公共前奏） */
   const openAndPrompt = async (title: string, text: string): Promise<string> => {
     const sid = await createSession(title)
@@ -448,13 +456,25 @@ describe('fakeProvider：运行时的上屏、相位、血缘与详情', () => {
     const sid = await openAndPrompt('AM-11 banner lane', 'banner-1')
     sids.banner = sid
 
-    const chip = await until(async () => (await banner.chip()) ?? null, 'profile chip on screen')
+    // 标记的相位来自监视 store 的 1s 轮询（agentMonitorStore POLL_MS）：首轮刚收尾时，store 里的
+    // 那一拍可能还是 turn 中取的，标记已在屏却仍是绿脉冲 —— 不能断言第一次读到的相位。
+    // 先等 IPC（store 的数据源）报 idle，再等标记跟上；标记必须在约一个轮询周期内跟上，
+    // 跟不上才是产品问题（轮询停了 / 标记没订阅），所以这一步给的是紧的上限而不是缺省的 25s。
+    const entry = await until(async () => {
+      const e = (await monitorList(app.main)).find((x) => x.kind === 'root' && x.agentId === sid)
+      return e?.phase === 'idle' ? e : null
+    }, 'root entry idle in IPC')
+    const chip = await until(
+      async () => {
+        const c = await banner.chip()
+        return c && !c.pulsing && c.phaseClass.includes('bg-text-tertiary/40') ? c : null
+      },
+      'profile chip shows the idle dot',
+      CHIP_CATCH_UP_MS
+    )
     expect(chip.text).toBe('chat')
     // 与 IPC 该 root entry 的 profileName 同源
-    const entry = (await monitorList(app.main)).find((e) => e.kind === 'root' && e.agentId === sid)!
     expect(chip.text).toBe(entry.profileName)
-    expect(chip.phaseClass).toContain('bg-text-tertiary/40')
-    expect(chip.pulsing).toBe(false)
     expect(await banner.bannerPresent()).toBe(true)
   })
 

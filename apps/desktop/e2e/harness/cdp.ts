@@ -37,15 +37,29 @@ export function isMainPage(t: CdpTarget, appUrl?: string): boolean {
   return !appUrl || t.url.startsWith(appUrl)
 }
 
+/**
+ * 连一个页面 target。
+ *
+ * socket 一关（页面被关、窗口被销毁、target 崩了），在途与之后的 `eval` 一律**失败**，不挂着：
+ * 没有这条时，`eval('window.close()')` 与回包赛跑输掉的那一次会永远等不到回包（`.catch` 也接不住
+ * —— 根本没有 rejection），`until` 卡在那一拍上查不了自己的截止时间，最后只剩 vitest 光秃秃的
+ * 60s 用例超时、没有现场（AM-9 的偶发超时就是这么来的）。`until` 把轮询期的失败当「未就绪」，
+ * 所以失败只会把「无限挂起」变成「有界超时 + 现场」。关着的 socket 上 `send` 是静默丢弃的，
+ * 所以之后的调用也要先看状态。
+ */
 export function connect(wsUrl: string): Promise<CdpClient> {
   return new Promise((resolveClient, rejectClient) => {
     const ws = new WebSocket(wsUrl)
     let nextId = 0
+    let closed = false
     const pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>()
 
     ws.onopen = () => {
       resolveClient({
         async eval<T>(expression: string): Promise<T> {
+          if (closed || ws.readyState !== WebSocket.OPEN) {
+            throw new Error(`CDP socket closed: ${wsUrl}`)
+          }
           const id = ++nextId
           const result = await new Promise<unknown>((resolve, reject) => {
             pending.set(id, { resolve, reject })
@@ -84,6 +98,13 @@ export function connect(wsUrl: string): Promise<CdpClient> {
       else resolve(msg.result)
     }
     ws.onerror = () => rejectClient(new Error(`CDP connect failed: ${wsUrl}`))
+    ws.onclose = () => {
+      closed = true
+      for (const { reject } of pending.values()) reject(new Error(`CDP socket closed: ${wsUrl}`))
+      pending.clear()
+      // 还没 open 就关了：连接本身失败（已 resolve 过的话这句是 no-op）
+      rejectClient(new Error(`CDP socket closed before open: ${wsUrl}`))
+    }
   })
 }
 
