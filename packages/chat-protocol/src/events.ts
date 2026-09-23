@@ -87,6 +87,12 @@ export interface ChatTokenUsageEvent extends ChatEventBase {
 export interface ChatToolCallGeneratingEvent extends ChatEventBase {
   type: 'toolcall_generating'
   toolName: string
+  /**
+   * 正在生成的这次工具调用的 id（与执行时的 toolCallId 相同）。一条消息里可能先后生成几次调用，
+   * 按它把增量归到各自名下 —— 协作编辑的虚影预览靠它把「正在写的参数」与「随后执行的那次调用」对上。
+   * provider 没给 id 时缺省。
+   */
+  toolCallId?: string
   /** 参数 JSON 增量文本（与 text_delta 类似，前端累积拼接） */
   argsDelta?: string
 }

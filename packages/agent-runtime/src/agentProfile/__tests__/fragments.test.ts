@@ -283,9 +283,10 @@ describe('{{shuvix:visualCraft}} —— 只要手艺的那一档', () => {
   // 这一层只看得见占位符本身：`buildBuiltinProfiles` 出来的正文尚未代入（代入在创建期，
   // 由宿主的变量表供值）。「notebook 实际拿到的是手艺不是载体」因此钉在两端的
   // promptVarsWiring 用例里 —— 与文件头说的「谁引用 / 谁供值分开钉」同一条分工。
-  it('恰好 notebook 一个档案引用它', () => {
+  it('恰好 notebook 与 coedit 两个档案引用它', () => {
     // 图往**文件**里画的档案才该拿这一档。多一个引用点 = 回来改这条，顺带交代理由
-    expect(profilesUsing('visualCraft')).toEqual(['notebook'])
+    // coedit（协作编辑窗口）与 notebook 一样：图画进用户的文档，不是画在回复里
+    expect(profilesUsing('visualCraft')).toEqual(['coedit', 'notebook'])
   })
 
   it.each(LANGUAGES)(
@@ -403,7 +404,7 @@ describe('作图技能的归属（OWN）', () => {
         })
         .map((p) => p.name)
         .sort()
-      expect(declaring).toEqual(['bot', 'chat', 'coding', 'notebook', 'tab', 'work'])
+      expect(declaring).toEqual(['bot', 'chat', 'coding', 'coedit', 'notebook', 'tab', 'work'])
       expect(referencing).toEqual(declaring)
     }
   )
@@ -452,9 +453,9 @@ describe('{{shuvix:visualGuide}} 的归属', () => {
     }
   )
 
-  it('基座名单里只有 notebook 不画图 —— 另外三个基座都引用了片段', () => {
+  it('基座名单里只有 notebook 与 coedit 不引用 visualGuide —— 它们拿的是 visualCraft（图画进文档）', () => {
     const using = new Set(profilesUsingVisualGuide())
     const basesWithout = [...BASE_PROFILE_NAMES].filter((n) => !using.has(n)).sort()
-    expect(basesWithout).toEqual(['notebook'])
+    expect(basesWithout).toEqual(['coedit', 'notebook'])
   })
 })

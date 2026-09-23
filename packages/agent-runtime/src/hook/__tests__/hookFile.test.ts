@@ -302,8 +302,15 @@ describe('shuvix-hook-agent', () => {
     }
   })
 
-  it('HF-10 五个基座档案不可点名（trim 后判定，大小写敏感）', () => {
-    expect([...BASE_PROFILE_NAMES].sort()).toEqual(['bot', 'chat', 'notebook', 'tab', 'work'])
+  it('HF-10 六个基座档案不可点名（trim 后判定，大小写敏感）', () => {
+    expect([...BASE_PROFILE_NAMES].sort()).toEqual([
+      'bot',
+      'chat',
+      'coedit',
+      'notebook',
+      'tab',
+      'work'
+    ])
     for (const base of BASE_PROFILE_NAMES) {
       const { parsed, warns } = parse(withAgent(`shuvix-hook-agent: ${base}`))
       expect(parsed).toBeNull()

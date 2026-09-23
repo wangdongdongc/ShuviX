@@ -41,6 +41,8 @@ export default defineConfig({
       'src/main/**/*.test.ts',
       'src/cli/**/*.test.ts',
       'src/shared/node/**/*.test.ts',
+      // 渲染层只收**纯逻辑**的单测（node 环境、没有 DOM）：协作编辑的文档运算与 CM6 状态层
+      'src/renderer/**/*.test.ts',
       '../../packages/chat-protocol/src/**/*.test.ts',
       '../../packages/agent-runtime/src/**/*.test.ts',
       '../../packages/chat-ui/src/**/*.test.ts',

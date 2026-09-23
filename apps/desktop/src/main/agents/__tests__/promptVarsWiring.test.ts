@@ -182,7 +182,8 @@ describe('desktopPromptVars —— 占位符覆盖', () => {
     const vars = await varsFor({ kind: 'spawned', cwd: '' })
     const needed = new Set(
       LANGUAGES.flatMap((l) => builtins(l))
-        .filter((p) => p.name !== 'notebook') // 笔记本基座只做会话根 Agent
+        // 笔记本 / 协作编辑两个基座只做会话根 Agent（notebookPath 只有根会话解析得出）
+        .filter((p) => p.name !== 'notebook' && p.name !== 'coedit')
         .flatMap((p) => placeholdersOf(p.systemPrompt))
     )
     for (const name of needed) expect(vars[name], `缺 {{shuvix:${name}}}`).toBeTypeOf('string')
@@ -307,8 +308,9 @@ describe('desktopPromptVars —— 按档案自己的名单组装出的系统提
       for (const language of LANGUAGES) {
         await inLanguage(language, async () => {
           for (const profile of builtins(language)) {
-            // 笔记本基座只做会话根 Agent：派生 ctx 解析不出 notebookPath，本就不供
-            if (kind === 'spawned' && profile.name === 'notebook') continue
+            // 笔记本 / 协作编辑基座只做会话根 Agent：派生 ctx 解析不出 notebookPath，本就不供
+            if (kind === 'spawned' && (profile.name === 'notebook' || profile.name === 'coedit'))
+              continue
             const vars = await varsFor({
               kind,
               cwd: kind === 'root' ? '/w/proj' : '',

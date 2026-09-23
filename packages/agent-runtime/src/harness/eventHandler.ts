@@ -55,7 +55,7 @@ export interface HarnessEventDeps {
 export interface HarnessEventState {
   streamBuffer: { content: string; thinking: string }
   pendingLogIds: string[]
-  generatingToolCall: { name: string; argsJson: string } | null
+  generatingToolCall: { name: string; id?: string; argsJson: string } | null
   /**
    * 最近一条已广播的 assistant 卡片 id（= entry id）。
    * 工具事件带上它，前端就知道该把结果回填进哪张卡的哪个块 ——
@@ -122,12 +122,19 @@ function handleMessageUpdate(
   }
   if (msgEvent.type === 'toolcall_start') {
     const block = msgEvent.partial?.content?.[msgEvent.contentIndex ?? 0] as
-      | { type: string; name?: string }
+      | { type: string; name?: string; id?: string }
       | undefined
     const toolName = block?.type === 'toolCall' ? block.name || '' : ''
     if (toolName) {
-      ctx.state.generatingToolCall = { name: toolName, argsJson: '' }
-      ctx.broadcast({ type: 'toolcall_generating', sessionId: ctx.sessionId, toolName })
+      // id 与执行时的 toolCallId 是同一个：渲染端据此把正在写的参数与随后执行的调用对上
+      const toolCallId = block?.id || undefined
+      ctx.state.generatingToolCall = { name: toolName, id: toolCallId, argsJson: '' }
+      ctx.broadcast({
+        type: 'toolcall_generating',
+        sessionId: ctx.sessionId,
+        toolName,
+        ...(toolCallId ? { toolCallId } : {})
+      })
     }
     return
   }
@@ -140,6 +147,7 @@ function handleMessageUpdate(
       type: 'toolcall_generating',
       sessionId: ctx.sessionId,
       toolName: gen.name,
+      ...(gen.id ? { toolCallId: gen.id } : {}),
       argsDelta: delta
     })
   }

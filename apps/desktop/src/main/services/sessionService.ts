@@ -32,6 +32,7 @@ import {
   BOT_PROFILE_NAME,
   SessionManager,
   TAB_PROFILE_NAME,
+  COEDIT_PROFILE_NAME,
   WORK_PROFILE_NAME
 } from '@shuvix/agent-runtime'
 import type { SubAgentModelConfig } from '@shuvix/agent-runtime'
@@ -250,10 +251,13 @@ export class SessionService {
    *
    * `options.workingDirectory`（绝对路径）给**不属于任何项目**的会话指定工作目录，代替临时工作区；
    * 有项目时忽略。子会话不看 options，随父会话（父会话有就同一个目录）。同样只有主进程能给。
+   *
+   * `options.coEdit` 标记**协作编辑会话**（须同时给 notebookPath）：根档案由形态推出基座 `coedit`，
+   * 文档经 doc_* 工具在编辑窗口的活缓冲上修改。只给根会话；子会话、Chrome 标签页会话忽略。
    */
   create(
     params?: SessionCreateParams,
-    options?: { ephemeral?: boolean; workingDirectory?: string }
+    options?: { ephemeral?: boolean; workingDirectory?: string; coEdit?: boolean }
   ): Session {
     const id = uuidv7()
     // Chrome 标签页会话：无项目、无父会话、不是笔记本也不是 bot、不继承任何扩展能力勾选 ——
@@ -289,6 +293,8 @@ export class SessionService {
       // 指令文件不预写配置：留空即「未显式配置」，注入时按 AGENTS.md → CLAUDE.md 优先级自动选
       settings: {
         ...(notebookPath ? { notebookPath } : {}),
+        // 协作编辑只对根上的笔记本会话有意义：它说的是「这份 md 开在一个协作窗口里」
+        ...(notebookPath && !parentId && options?.coEdit ? { coEdit: true } : {}),
         // 自带工作目录只给无项目会话：有项目时工作目录恒为项目根。子会话随父会话（与 projectId
         // 同一条理由 —— 工作目录是会话的地基），调用方给的不算
         ...(!pid && workingDirectory ? { workingDirectory } : {}),
@@ -349,6 +355,8 @@ export class SessionService {
     // 排在最前：create 不会让它同时是笔记本 / bot，万一行里真有那些键，也不能让它落到一个
     // 没有 mcp:chrome 的基座上
     if (isChromeTabSessionSettings(settings)) return TAB_PROFILE_NAME
+    // 协作编辑窗口里的笔记本：基座 `coedit`（只经 doc_* 改那份活文档，不握 write / edit）
+    if (settings?.notebookPath && settings.coEdit) return COEDIT_PROFILE_NAME
     if (settings?.notebookPath) return NOTEBOOK_PROFILE_NAME
     // bot 会话：根 Agent 恒为基座 `bot`，人设与记忆经 systemContext 注入（见 agentSession.create）。
     // 与笔记本一样按形态推导，没有设置项

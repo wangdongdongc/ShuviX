@@ -31,7 +31,10 @@ export type NotebookSessionProps = NotebookViewProps
 export function NotebookSession({
   path,
   sessionId,
-  caps
+  caps,
+  editorHandleRef,
+  extraExtensions,
+  onExternalChange
 }: NotebookSessionProps): React.JSX.Element {
   // 专注模式：淡化输入区，hover / 聚焦时点亮；有待处理输入时不淡化（同 Conversation ——
   // Agent 正等用户回答，鼠标没悬浮也必须一眼看见）
@@ -62,6 +65,9 @@ export function NotebookSession({
         path={path}
         sessionId={sessionId}
         caps={caps}
+        editorHandleRef={editorHandleRef}
+        extraExtensions={extraExtensions}
+        onExternalChange={onExternalChange}
         // 技能的 SKILL.md 是 Claude Code 的通用格式，没有 `shuvix:` 自述行 —— 不兜底就是裸 YAML
         frontmatterFallbackType={
           inKnowledgeBase

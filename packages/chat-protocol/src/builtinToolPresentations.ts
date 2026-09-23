@@ -22,6 +22,17 @@ export interface BuiltinToolPresentationDef {
   buildSummary?: ToolSummaryBuilder
 }
 
+/** 多行参数的折叠行摘要：第一行非空文字，过长截断 */
+function firstLine(v: unknown): string | undefined {
+  const text = asStr(v)
+  const line = text
+    ?.split('\n')
+    .map((l) => l.trim())
+    .find(Boolean)
+  if (!line) return undefined
+  return line.length > 48 ? `${line.slice(0, 47)}…` : line
+}
+
 export const BUILTIN_TOOL_PRESENTATIONS: Record<string, BuiltinToolPresentationDef> = {
   read: {
     labelKey: 'tool.readLabel',
@@ -49,6 +60,37 @@ export const BUILTIN_TOOL_PRESENTATIONS: Record<string, BuiltinToolPresentationD
       ]
     },
     buildSummary: fileField('path')
+  },
+  // 协作编辑（md 窗口的 coedit 基座）：改的是编辑器里那份活文档，不是磁盘文件 —— 折叠行摘要取
+  // 定位原文 / 插入文字的第一行，参数单独渲染成代码块
+  doc_read: {
+    labelKey: 'tool.docReadLabel',
+    presentation: { icon: 'BookOpen', iconColor: '#8b5cf6' }
+  },
+  doc_edit: {
+    labelKey: 'tool.docEditLabel',
+    presentation: {
+      icon: 'FilePen',
+      iconColor: '#8b5cf6',
+      formItems: [
+        { field: 'find', renderer: { type: 'code', language: 'markdown' } },
+        { field: 'replace', renderer: { type: 'code', language: 'markdown' } }
+      ]
+    },
+    buildSummary: (args) => firstLine(args.find)
+  },
+  doc_insert: {
+    labelKey: 'tool.docInsertLabel',
+    presentation: {
+      icon: 'FileOutput',
+      iconColor: '#8b5cf6',
+      formItems: [
+        { field: 'after' },
+        { field: 'before' },
+        { field: 'text', renderer: { type: 'code', language: 'markdown' } }
+      ]
+    },
+    buildSummary: (args) => firstLine(args.text)
   },
   ask: {
     labelKey: 'tool.askLabel',

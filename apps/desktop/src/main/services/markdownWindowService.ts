@@ -9,7 +9,8 @@
  * 会话的形态：
  *  - 不属于任何项目，工作目录是文件所在的目录（settings.workingDirectory）—— md 里的相对图片能显示，
  *    Agent 的 ls / grep 看得到文件的邻居；
- *  - notebookPath 是文件名（相对工作目录），根档案按形态推导为 `notebook`；
+ *  - notebookPath 是文件名（相对工作目录），coEdit 标记让根档案按形态推导为 `coedit`：agent 只经
+ *    doc_* 工具改文档，在本窗口编辑器的当前缓冲上执行（liveDocumentBridge），而不是写盘再让编辑器重载；
  *  - 事件经本窗口自己的前端绑定送达（主窗口可能根本没开过）。
  *
  * 同一个文件（按真实路径）只开一个窗口，再打开就把已有的窗口带到前面。
@@ -20,6 +21,7 @@ import { realpathSync } from 'fs'
 import { is } from '@electron-toolkit/utils'
 import { chatFrontendRegistry, type ChatFrontend } from '../frontend/core'
 import { sessionService } from './sessionService'
+import { attachLiveDocument, detachLiveDocument } from './liveDocumentBridge'
 import { guardAppWindow } from './externalOpen'
 import { isExistingFile, isMarkdownPath } from '../utils/markdownFiles'
 import { createLogger } from '../logger'
@@ -85,7 +87,7 @@ export function openMarkdownFile(filePath: string): boolean {
   const fileName = basename(path)
   const session = sessionService.create(
     { title: fileName, notebookPath: fileName },
-    { ephemeral: true, workingDirectory: dirname(path) }
+    { ephemeral: true, workingDirectory: dirname(path), coEdit: true }
   )
 
   const offset = windows.size * CASCADE_STEP
@@ -112,6 +114,8 @@ export function openMarkdownFile(filePath: string): boolean {
 
   const frontend = deps.createFrontend(win, `markdown-window:${session.id}`)
   chatFrontendRegistry.bind(session.id, frontend)
+  // 协作编辑：agent 的 doc_* 工具经这个窗口的编辑器执行（文档的事实源是它的缓冲，不是磁盘）
+  attachLiveDocument(session.id, win.webContents)
   windows.set(path, { window: win, sessionId: session.id })
   log.info(`打开 ${path} session=${session.id}`)
 
@@ -125,6 +129,7 @@ export function openMarkdownFile(filePath: string): boolean {
   win.on('closed', () => {
     if (windows.get(path)?.window === win) windows.delete(path)
     chatFrontendRegistry.unbind(session.id, frontend.id)
+    detachLiveDocument(session.id)
     // 删会话 = 停 Agent、杀后台任务、丢内存里的行与对话树、清 tool_results/<id>。工作目录是用户的，不动
     void sessionService
       .delete(session.id)

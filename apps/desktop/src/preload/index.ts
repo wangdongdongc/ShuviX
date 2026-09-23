@@ -60,6 +60,7 @@ import type {
 import type { ContextMenuRequest } from '@shuvix/chat-protocol/types/contextMenu'
 import type { ProjectMemoryEntry } from '@shuvix/chat-protocol/types/memory'
 import type { AppEvent } from '@shuvix/chat-protocol/appEvents'
+import type { LiveDocRequest, LiveDocResult } from '@shuvix/chat-protocol/liveDocument'
 
 /**
  * AppEvent 扇出：整页只在 'app:event' 通道挂 **一个** ipcRenderer 监听，再派发给本地订阅者集合。
@@ -882,6 +883,25 @@ const api = {
       ipcRenderer.on('notification:open-session', handler)
       return () => ipcRenderer.removeListener('notification:open-session', handler)
     }
+  },
+
+  // ============ 协作编辑（md 窗口：agent 的 doc_* 工具在本窗口的编辑器里执行） ============
+  liveDoc: {
+    /** 主进程转来的一次文档操作（读 / 改 / 插入）；执行后用 respond 答复。返回取消订阅函数 */
+    onRequest: (callback: (request: LiveDocRequest) => void) => {
+      const handler = (_e: unknown, request: LiveDocRequest): void => callback(request)
+      ipcRenderer.on('liveDoc:request', handler)
+      return () => ipcRenderer.removeListener('liveDoc:request', handler)
+    },
+    /** 主进程撤回一次请求（工具被中止 / 超时）：收掉它的虚影，别再等用户停手 */
+    onCancel: (callback: (params: { requestId: string }) => void) => {
+      const handler = (_e: unknown, params: { requestId: string }): void => callback(params)
+      ipcRenderer.on('liveDoc:cancel', handler)
+      return () => ipcRenderer.removeListener('liveDoc:cancel', handler)
+    },
+    /** 答复一次请求 */
+    respond: (requestId: string, result: LiveDocResult) =>
+      ipcRenderer.invoke('liveDoc:respond', { requestId, result }) as Promise<{ success: boolean }>
   },
 
   // ============ Files (会话工作目录文件树) ============

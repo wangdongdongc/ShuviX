@@ -153,6 +153,11 @@ export interface LivePreviewEditorHandle {
   getMarkdown(): string | undefined
   /** 取消待写入的防抖定时（调用方接管落盘，避免「先 rename 后 write 又重建旧文件」竞态） */
   cancelPendingSave(): void
+  /**
+   * 编辑器的 CM6 视图（尚未挂载 / 已卸载时为 null）。宿主据此把外来的改动**派发成事务**而不是重挂载
+   * 编辑器 —— 光标、滚动、撤销历史都留得住（协作编辑窗口的 agent 修改、外部写盘的合并都走这条）。
+   */
+  getView(): EditorView | null
 }
 
 export interface LivePreviewEditorProps {
@@ -189,6 +194,11 @@ export interface LivePreviewEditorProps {
   caps?: NotebookCaps
   /** 无 `shuvix:` 自述行的文件按哪个契约渲染属性卡（见 FrontmatterCardConfig.fallbackMarkerType） */
   frontmatterFallbackType?: string
+  /**
+   * 宿主追加的 CM6 扩展（排在内置扩展之后）。与内置扩展一样只在挂载时捕获一次 —— 传一个稳定的数组。
+   * 协作编辑窗口用它挂 agent 的虚影预览与修改高亮。
+   */
+  extraExtensions?: readonly Extension[]
 }
 
 /**
@@ -209,7 +219,8 @@ export function LivePreviewEditor({
   fileContext,
   caps,
   readOnly = false,
-  layout = 'notebook'
+  layout = 'notebook',
+  extraExtensions
 }: LivePreviewEditorProps): React.JSX.Element {
   const { t, i18n } = useTranslation()
   // 笔记本主题预设（如 Things）—— 映射到 .atomic-panel 的 data-notebook-theme，由 CSS 上色
@@ -275,6 +286,10 @@ export function LivePreviewEditor({
           timerRef.current = null
         }
         pendingRef.current = null
+      },
+      getView: () => {
+        const dom = panelRef.current?.querySelector<HTMLElement>('.cm-editor')
+        return dom ? EditorView.findFromDOM(dom) : null
       }
     }),
     []
@@ -604,7 +619,8 @@ export function LivePreviewEditor({
       mountField,
       fallbackMarkerType: frontmatterFallbackType
     })
-    if (!sessionId) return [markdownKeymap, tableMenu, imageLoadRemeasure, fmCard]
+    const extra = extraExtensions ?? []
+    if (!sessionId) return [markdownKeymap, tableMenu, imageLoadRemeasure, fmCard, ...extra]
     return [
       markdownKeymap,
       tableMenu,
@@ -625,7 +641,8 @@ export function LivePreviewEditor({
         resolveStatus: resolveWikiStatus,
         displayTarget: stripMdExt
       }),
-      wikiImageEmbeds({ resolveSrc: resolveEmbedSrc })
+      wikiImageEmbeds({ resolveSrc: resolveEmbedSrc }),
+      ...extra
     ]
   }, [
     frontmatterFallbackType,
@@ -638,7 +655,8 @@ export function LivePreviewEditor({
     resolveEmbedSrc,
     i18n,
     documentId,
-    mountField
+    mountField,
+    extraExtensions
   ])
 
   return (

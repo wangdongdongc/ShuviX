@@ -143,6 +143,18 @@
         "insertColumnRight": "右に列を挿入",
         "deleteColumn": "列を削除"
       }
+    },
+    "coEdit": {
+      "rewriting": "ShuviX がここを書き換えています",
+      "writing": "ShuviX が書いています",
+      "waiting": "ShuviX は入力が止まるのを待っています",
+      "reading": "ShuviX が読んでいます",
+      "changesAbove_one": "ShuviX が上で {{count}} か所変更しました",
+      "changesAbove_other": "ShuviX が上で {{count}} か所変更しました",
+      "changesBelow_one": "ShuviX が下で {{count}} か所変更しました",
+      "changesBelow_other": "ShuviX が下で {{count}} か所変更しました",
+      "workingAbove": "ShuviX が上で編集中です",
+      "workingBelow": "ShuviX が下で編集中です"
     }
   },
   "memory": {
@@ -865,7 +877,13 @@
     "subAgentTemplateDesc": "このエージェントの役割を一行で",
     "subAgentTemplateBody": "ここにシステムプロンプトを書きます。",
     "artifactLabel": "成果物",
-    "artifactHint": "作り直さずに修正できるセッションのファイル"
+    "artifactHint": "作り直さずに修正できるセッションのファイル",
+    "docReadLabel": "ドキュメントを読む",
+    "docEditLabel": "ドキュメントを編集",
+    "docInsertLabel": "ドキュメントに挿入",
+    "docReadHint": "共有エディタで開いているドキュメントの現在の内容と、ユーザーがどこにいるかを読む",
+    "docEditHint": "共有ドキュメントの一節を置き換える —— 生成中にプレビューし、実行時に一度で反映",
+    "docInsertHint": "共有ドキュメントの一節の前後、または末尾に新しいテキストを挿入する"
   },
   "widgets": {
     "panelEmptyHint": "ウィジェットはまだありません。チャットで AI に作ってもらってください（例：「JSON フォーマッターのウィジェットを作って」）",

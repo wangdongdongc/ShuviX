@@ -33,8 +33,11 @@ export interface FakeTurn {
   text?: string | string[]
   /** 思考正文（走 delta.reasoning_content）；数组 = 逐片下发 */
   thinking?: string | string[]
-  /** 工具调用；有值时 finishReason 缺省为 'tool_calls' */
-  toolCalls?: Array<{ id: string; name: string; args: string }>
+  /**
+   * 工具调用；有值时 finishReason 缺省为 'tool_calls'。`args` 是数组时逐片下发参数 JSON
+   * （片间隔 chunkDelayMs）—— 看「参数一边生成一边渲染」的用例（协作编辑的虚影）靠它
+   */
+  toolCalls?: Array<{ id: string; name: string; args: string | string[] }>
   /**
    * 按请求内容认领这个 turn；缺省 = 纯 FIFO（既有用例零改动）。
    *
@@ -104,6 +107,11 @@ export interface FakeProvider {
   chatRequestCount(): number
   /** 提前放行当前 hold（未在 hold 中则无副作用） */
   release(): void
+  /**
+   * 此刻是否正挂在某个 turn 的 hold 里（内容片都发完、还没收尾）。`release()` 在 hold 开始之前调是
+   * 空操作 —— 片间隔较长的流式脚本里，先等它为真再放行
+   */
+  holding(): boolean
   close(): Promise<void>
 }
 
@@ -132,6 +140,12 @@ export async function startFakeProvider(): Promise<FakeProvider> {
   const queue: FakeTurn[] = []
   const recorded: FakeRequest[] = []
   let releaseHold: (() => void) | null = null
+  /**
+   * 客户端已经断开的响应。hold 可能在断开**之后**才开始（中止落在片间隔的 sleep 里）：那时 'close'
+   * 早就发过了，再挂监听永远等不到 —— 这一轮会白挂满 holdMs，还把 releaseHold 占着，下一个用例的
+   * release() 放掉的就是这个过期的 hold 而不是它自己的
+   */
+  const closedResponses = new WeakSet<ServerResponse>()
 
   const writeChunk = (res: ServerResponse, payload: Record<string, unknown>): void => {
     res.write(`data: ${JSON.stringify(payload)}\n\n`)
@@ -148,13 +162,18 @@ export async function startFakeProvider(): Promise<FakeProvider> {
   /** 挂住直到 release() / 超时 / 客户端断开，三者取先 */
   const hold = (res: ServerResponse, ms: number): Promise<void> =>
     new Promise<void>((resolve) => {
+      if (closedResponses.has(res) || res.destroyed) {
+        resolve()
+        return
+      }
       let done = false
       const finish = (): void => {
         if (done) return
         done = true
         clearTimeout(timer)
         res.off('close', finish)
-        releaseHold = null
+        // 只清自己：别的 turn 的 hold 可能已经接上了
+        if (releaseHold === finish) releaseHold = null
         resolve()
       }
       const timer = setTimeout(finish, ms)
@@ -188,18 +207,20 @@ export async function startFakeProvider(): Promise<FakeProvider> {
           ]
         })
       )
-      writeChunk(
-        res,
-        chunkOf(model, {
-          tool_calls: [{ index, function: { arguments: call.args } }]
-        })
-      )
-      if (delay) await sleep(delay)
+      for (const piece of asChunks(call.args)) {
+        writeChunk(
+          res,
+          chunkOf(model, {
+            tool_calls: [{ index, function: { arguments: piece } }]
+          })
+        )
+        if (delay) await sleep(delay)
+      }
     }
 
     if (turn.holdMs) await hold(res, turn.holdMs)
     // 客户端已断开（abort）：不再写收尾帧，让适配器按 aborted 收场
-    if (res.writableEnded || res.destroyed) return
+    if (res.writableEnded || res.destroyed || closedResponses.has(res)) return
 
     const finishReason = turn.finishReason ?? (turn.toolCalls?.length ? 'tool_calls' : 'stop')
     writeChunk(res, {
@@ -262,6 +283,7 @@ export async function startFakeProvider(): Promise<FakeProvider> {
       recorded.push(record)
       // 回复还没写完连接就关了 = 客户端中止（正常收尾时 writableEnded 已为真）
       res.on('close', () => {
+        closedResponses.add(res)
         if (!res.writableEnded) record.aborted = true
       })
 
@@ -301,6 +323,7 @@ export async function startFakeProvider(): Promise<FakeProvider> {
     chatRequests: () => recorded.filter((r) => !r.isTitle),
     chatRequestCount: () => recorded.filter((r) => !r.isTitle).length,
     release: () => releaseHold?.(),
+    holding: () => releaseHold !== null,
     close: () =>
       new Promise<void>((resolve) => {
         releaseHold?.()

@@ -1,4 +1,9 @@
-import { NotebookSession, MediaUrlProvider, shuvixPreviewResolver } from '@shuvix/app-shell'
+import {
+  NotebookSession,
+  MediaUrlProvider,
+  shuvixPreviewResolver,
+  type NotebookViewProps
+} from '@shuvix/app-shell'
 import { useSettingsStore } from '../../stores/settingsStore'
 
 /**
@@ -8,11 +13,17 @@ import { useSettingsStore } from '../../stores/settingsStore'
  */
 export function NotebookSessionView({
   path,
-  sessionId
+  sessionId,
+  editorHandleRef,
+  extraExtensions,
+  onExternalChange
 }: {
   path: string
   sessionId: string
-}): React.JSX.Element {
+} & Pick<
+  NotebookViewProps,
+  'editorHandleRef' | 'extraExtensions' | 'onExternalChange'
+>): React.JSX.Element {
   const notebookTheme = useSettingsStore((s) => s.notebookTheme)
 
   return (
@@ -26,6 +37,9 @@ export function NotebookSessionView({
           openExternal: (url) => void window.api.app.openExternal(url),
           popupContextMenu: (request) => window.api.contextMenu.popup(request)
         }}
+        editorHandleRef={editorHandleRef}
+        extraExtensions={extraExtensions}
+        onExternalChange={onExternalChange}
       />
     </MediaUrlProvider>
   )

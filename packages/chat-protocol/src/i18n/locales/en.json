@@ -143,6 +143,18 @@
         "insertColumnRight": "Insert column right",
         "deleteColumn": "Delete column"
       }
+    },
+    "coEdit": {
+      "rewriting": "ShuviX is rewriting this",
+      "writing": "ShuviX is writing",
+      "waiting": "ShuviX is waiting for you to pause",
+      "reading": "ShuviX is reading",
+      "changesAbove_one": "ShuviX changed {{count}} place above",
+      "changesAbove_other": "ShuviX changed {{count}} places above",
+      "changesBelow_one": "ShuviX changed {{count}} place below",
+      "changesBelow_other": "ShuviX changed {{count}} places below",
+      "workingAbove": "ShuviX is working above",
+      "workingBelow": "ShuviX is working below"
     }
   },
   "memory": {
@@ -865,7 +877,13 @@
     "subAgentTemplateDesc": "What this agent does, in one line",
     "subAgentTemplateBody": "Write the system prompt here.",
     "artifactLabel": "Artifact",
-    "artifactHint": "Session files you can revise instead of regenerating"
+    "artifactHint": "Session files you can revise instead of regenerating",
+    "docReadLabel": "Read Document",
+    "docEditLabel": "Edit Document",
+    "docInsertLabel": "Insert Into Document",
+    "docReadHint": "Read the document open in the shared editor as it is right now, and where the user is in it",
+    "docEditHint": "Replace one passage of the shared document — previewed while written, applied in one step",
+    "docInsertHint": "Insert new text into the shared document after or before a passage, or at the end"
   },
   "widgets": {
     "panelEmptyHint": "No widgets yet. Ask the AI in chat to build one — e.g. \"make a JSON formatter widget\"",

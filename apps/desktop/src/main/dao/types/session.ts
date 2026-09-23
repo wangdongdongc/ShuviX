@@ -59,6 +59,12 @@ export interface SessionSettings {
    */
   workingDirectory?: string
   /**
+   * 协作编辑会话（与 notebookPath 同在）：这份 md 开在一个协作编辑窗口里，用户与 agent 同时编辑
+   * 编辑器里的那份活文档。有值即根档案由形态推出基座 `coedit`（只经 doc_* 工具改文档）。
+   * 只由主进程在创建时写（sessionService.create 的 options）—— 目前唯一的写入方是从系统打开的 md 窗口。
+   */
+  coEdit?: boolean
+  /**
    * 项目记忆笔记本：该会话绑定的是 `~/.shuvix/memory/<projectId>/<slug>.md`。
    * 侧栏据此把它归入项目组下的「项目记忆」子文件夹，而不是并排混进会话列表。
    */

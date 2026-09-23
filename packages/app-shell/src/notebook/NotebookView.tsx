@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import type { Extension } from '@codemirror/state'
+import type { EditorView } from '@codemirror/view'
 import { getSessionChannelApi, getHostApi, useAppEvent } from '@shuvix/chat-ui'
 import {
   LivePreviewEditor,
@@ -26,6 +28,22 @@ export interface NotebookViewProps {
   frontmatterFallbackType?: string
   /** 只读：只渲染不编辑、不自动保存（随应用发布的内置知识库 —— 文件在应用包里，改了会随更新消失） */
   readOnly?: boolean
+  /** 宿主追加的 CM6 扩展（见 LivePreviewEditor.extraExtensions；挂载时捕获一次，传稳定数组） */
+  extraExtensions?: readonly Extension[]
+  /**
+   * 别的程序改了这个文件时，交给宿主**并入**编辑器（派发事务），而不是整篇重挂载。
+   *
+   * 给了它，编辑器缓冲就是事实源：这次变化不会因为「有未保存的输入」被丢掉（宿主拿 base / 磁盘 /
+   * 当前缓冲自己做三方合并），自身的保存也不会被误当成外部变化（等在途写完再读、认得自己写过的内容）。
+   * 返回 false = 宿主没处理，回落到重挂载。缺省时行为与从前一致。
+   */
+  onExternalChange?: (change: {
+    /** 磁盘上的新内容 */
+    disk: string
+    /** 上一次与磁盘同步的内容（三方合并的共同祖先） */
+    base: string
+    view: EditorView
+  }) => boolean
 }
 
 /**
@@ -44,7 +62,9 @@ export function NotebookView({
   editorHandleRef,
   layout,
   frontmatterFallbackType,
-  readOnly = false
+  readOnly = false,
+  extraExtensions,
+  onExternalChange
 }: NotebookViewProps): React.JSX.Element {
   const { t } = useTranslation()
 
@@ -62,6 +82,17 @@ export function NotebookView({
   useEffect(() => {
     saveStatusRef.current = saveStatus
   }, [saveStatus])
+  const onExternalChangeRef = useRef(onExternalChange)
+  useEffect(() => {
+    onExternalChangeRef.current = onExternalChange
+  }, [onExternalChange])
+  // onExternalChange 模式的磁盘记账：读盘与写盘串成一条链（彼此不交错，files.changed 也排在自己的
+  // 写之后读），lastWritten = 自己最近一次写下的内容 —— 磁盘上既不是它、也不是上次同步的内容，
+  // 就是别的程序写过（只认**最近**一次：别的程序把文件退回到我们更早写过的某个版本，那也是它的改动）
+  const writeChainRef = useRef<Promise<void>>(Promise.resolve())
+  const lastWrittenRef = useRef<string | null>(null)
+  const isForeign = (disk: string): boolean =>
+    disk !== lastSyncedContentRef.current && disk !== lastWrittenRef.current
   // 双链解析上下文（[[file]] / ![[image]] 按文件名在该会话工作目录内解析）
   const fileContext = useMemo(() => ({ sessionId }), [sessionId])
 
@@ -98,6 +129,17 @@ export function NotebookView({
     }
   }, [path, sessionId, t])
 
+  /** 把别的程序写下的磁盘内容交给宿主并入编辑器；宿主没处理就回落到重挂载 */
+  const absorbDisk = (disk: string): void => {
+    const base = lastSyncedContentRef.current
+    if (base === null) return
+    lastSyncedContentRef.current = disk
+    const view = editorRef.current?.getView() ?? null
+    if (view && onExternalChangeRef.current?.({ disk, base, view })) return
+    setContent(disk)
+    setReloadNonce((n) => n + 1)
+  }
+
   const onSave = useCallback(
     (md: string): void => {
       // 写回属宿主能力：渠道端（只读）无 HostApi，保存置为 failed 状态
@@ -106,14 +148,51 @@ export function NotebookView({
         setSaveStatus('failed')
         return
       }
+      if (onExternalChangeRef.current) {
+        // 协作模式：写之前先看一眼磁盘。上次同步之后别的程序写过，就先把那次改动并进来、这一次不写 ——
+        // 直接写会把它盖掉；并入本身会触发下一次保存，那一次写的是合并后的全文
+        writeChainRef.current = writeChainRef.current.then(async () => {
+          const r = await getSessionChannelApi()
+            .files.read({ sessionId, path })
+            .catch(() => null)
+          if (r?.kind === 'text' && isForeign(r.content)) {
+            absorbDisk(r.content)
+            return
+          }
+          const w = await host.files
+            .write({ sessionId, path, content: md })
+            .catch(() => ({ ok: false }))
+          if (!w.ok) {
+            // 没写成：记账保持原样（磁盘上仍是上次同步的内容）。若先记成「已同步 md」，下次保存会把
+            // 盘上的旧内容当成别的程序写的，拿没写下去的 md 当共同祖先去合并 —— 用户的字就被合并吃掉了
+            setSaveStatus('failed')
+            return
+          }
+          lastSyncedContentRef.current = md
+          lastWrittenRef.current = md
+        })
+        return
+      }
       // 记录我们写入磁盘的内容，使随后的 files.changed 不被当成外部写回而触发重挂载
       lastSyncedContentRef.current = md
       void host.files.write({ sessionId, path, content: md }).then((r) => {
         if (!r.ok) setSaveStatus('failed')
       })
     },
+    // absorbDisk / isForeign 只读 ref 与稳定的 setter
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [sessionId, path]
   )
+
+  /** onExternalChange 模式：排在自己的读写之后 → 读盘 → 是别的程序写的就并入 */
+  const mergeExternal = (): void => {
+    writeChainRef.current = writeChainRef.current.then(async () => {
+      const r = await getSessionChannelApi()
+        .files.read({ sessionId, path })
+        .catch(() => null)
+      if (r?.kind === 'text' && isForeign(r.content)) absorbDisk(r.content)
+    })
+  }
 
   // 外部写回（如子智能体编辑了绑定文件）→ 自动刷新 live preview：
   // 仅在无未保存草稿（saved）、且磁盘新内容 ≠ 我们已知内容（去重自身保存）时，重读并重挂载编辑器。
@@ -125,6 +204,10 @@ export function NotebookView({
     const target = norm(path)
     const hit = !e.paths || e.paths.length === 0 || e.paths.some((p) => norm(p).endsWith(target))
     if (!hit) return // 本笔记本绑定文件未被改动
+    if (onExternalChangeRef.current) {
+      mergeExternal()
+      return
+    }
     if (saveStatusRef.current !== 'saved') return // 正在编辑/保存中，避免打断光标
     void getSessionChannelApi()
       .files.read({ sessionId, path })
@@ -180,6 +263,7 @@ export function NotebookView({
         caps={caps}
         layout={layout}
         frontmatterFallbackType={frontmatterFallbackType}
+        extraExtensions={extraExtensions}
       />
     </div>
   )

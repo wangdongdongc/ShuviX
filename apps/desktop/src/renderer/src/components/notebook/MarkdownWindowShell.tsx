@@ -5,6 +5,8 @@ import { useAppInit } from '../../hooks/useAppInit'
 import { useSettingsChatHost } from '../../host/settingsChatHost'
 import { SessionRuntime } from '../../host/SessionRuntime'
 import { NotebookSessionView } from './NotebookSessionView'
+import { useCoEditing } from './coEdit/useCoEditing'
+import { CoEditIndicator } from './coEdit/CoEditIndicator'
 
 /**
  * `#markdown-window?sessionId=…&path=…` —— path 是文件的**绝对路径**（读写、监听都按它走；
@@ -25,6 +27,8 @@ function parseHash(): { sessionId: string | null; path: string | null } {
  *   所以不能像主窗口那样从 store 的会话列表里找它，路径也就由主进程直接给
  * - 界面就是笔记本会话本身：live preview 编辑器 + 底部输入卡片（对话在卡片的抽屉里），
  *   没有侧栏、没有顶栏 —— 文件名在系统标题栏上
+ * - 协作编辑（useCoEditing）：会话的根档案是 `coedit`，agent 经 doc_* 工具直接在这个编辑器的缓冲上改 ——
+ *   写参数时就有虚影，执行时一次落下，不进 ⌘Z；外部写盘三方合并，不重挂载编辑器
  * - 复用主窗口的初始化钩子（每个 BrowserWindow 是独立的 Zustand 实例）：模型选择、发送都要
  *   提供商与模型目录
  */
@@ -36,6 +40,8 @@ export function MarkdownWindowShell(): React.JSX.Element {
 
   useAppInit()
   const chatHost = useSettingsChatHost()
+  // 协作编辑：agent 的 doc_* 工具在这个编辑器里执行（虚影预览 → 一次落下 → 看见后淡出的痕迹）
+  const coEdit = useCoEditing(sessionId ?? '')
 
   // 输入卡片按 store 里的 activeSessionId 发送 —— 单次写入
   useEffect(() => {
@@ -69,9 +75,18 @@ export function MarkdownWindowShell(): React.JSX.Element {
   return (
     <ChatHostProvider value={chatHost}>
       <SessionRuntime sessionId={activeSessionId} />
-      <div className="flex h-full flex-col bg-bg-primary" data-markdown-window="">
+      <div className="relative flex h-full flex-col bg-bg-primary" data-markdown-window="">
         {sessionId && path && activeSessionId === sessionId ? (
-          <NotebookSessionView path={path} sessionId={sessionId} />
+          <>
+            <NotebookSessionView
+              path={path}
+              sessionId={sessionId}
+              editorHandleRef={coEdit.editorRef}
+              extraExtensions={coEdit.extensions}
+              onExternalChange={coEdit.onExternalChange}
+            />
+            <CoEditIndicator state={coEdit.indicator} onReveal={coEdit.reveal} />
+          </>
         ) : null}
       </div>
     </ChatHostProvider>

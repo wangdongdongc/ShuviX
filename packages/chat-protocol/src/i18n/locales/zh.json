@@ -143,6 +143,18 @@
         "insertColumnRight": "在右侧插入列",
         "deleteColumn": "删除列"
       }
+    },
+    "coEdit": {
+      "rewriting": "ShuviX 正在改写这里",
+      "writing": "ShuviX 正在写",
+      "waiting": "ShuviX 等你停下来再改",
+      "reading": "ShuviX 正在读",
+      "changesAbove_one": "ShuviX 在上方改了 {{count}} 处",
+      "changesAbove_other": "ShuviX 在上方改了 {{count}} 处",
+      "changesBelow_one": "ShuviX 在下方改了 {{count}} 处",
+      "changesBelow_other": "ShuviX 在下方改了 {{count}} 处",
+      "workingAbove": "ShuviX 正在上方编辑",
+      "workingBelow": "ShuviX 正在下方编辑"
     }
   },
   "memory": {
@@ -865,7 +877,13 @@
     "subAgentTemplateDesc": "一句话说明这个智能体做什么",
     "subAgentTemplateBody": "在这里写系统提示词。",
     "artifactLabel": "产物",
-    "artifactHint": "会话里可反复修改、不必重新生成的文件"
+    "artifactHint": "会话里可反复修改、不必重新生成的文件",
+    "docReadLabel": "读取文档",
+    "docEditLabel": "修改文档",
+    "docInsertLabel": "插入文档",
+    "docReadHint": "读取共享编辑器里此刻的文档，以及用户正在文档的哪里",
+    "docEditHint": "替换共享文档里的一段原文 —— 生成时就有预览，执行时一次落下",
+    "docInsertHint": "在共享文档的某段之前、之后或文末插入新内容"
   },
   "widgets": {
     "panelEmptyHint": "还没有小组件。在对话里告诉 AI，比如\"做一个 JSON 格式化小组件\"",

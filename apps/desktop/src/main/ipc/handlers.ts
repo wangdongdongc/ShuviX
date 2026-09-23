@@ -31,6 +31,7 @@ import { registerKnowledgeHandlers } from './knowledgeHandlers'
 import { registerMemoryHandlers } from './memoryHandlers'
 import { registerPinChatHandlers } from './pinChatHandlers'
 import { registerNotificationHandlers } from './notificationHandlers'
+import { registerLiveDocumentHandlers } from './liveDocumentHandlers'
 import { registerChromeExtensionHandlers } from './chromeExtensionHandlers'
 
 /**
@@ -71,5 +72,6 @@ export function registerIpcHandlers(): void {
   registerMemoryHandlers()
   registerPinChatHandlers()
   registerNotificationHandlers()
+  registerLiveDocumentHandlers()
   registerChromeExtensionHandlers()
 }

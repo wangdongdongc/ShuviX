@@ -5821,6 +5821,46 @@ export function openBrowserWindowButton(main: CdpClient): OpenBrowserWindowButto
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+// 主窗口里的笔记本编辑器（当前打开的那一个）—— 外部写盘后是「重读 + 重挂载」还是「原地并入」，
+// 看的是 `.cm-editor` 这个节点还是不是原来那个（打一个标记属性，重挂载后它就没了）。
+
+export interface NotebookEditorPane {
+  /** 编辑器正文（逐行 textContent 以换行连接；没有编辑器为 null） */
+  text(): Promise<string | null>
+  /** 给 `.cm-editor` 打标记，回标记值 */
+  tagEditor(): Promise<string>
+  /** `.cm-editor` 上的标记（没有 / 重挂载过为 null） */
+  editorTag(): Promise<string | null>
+  /** 协作编辑的改动痕迹数（`.cm-coedit-change`）—— 普通笔记本上恒为 0 */
+  coEditMarks(): Promise<number>
+}
+
+export function notebookEditorPane(main: CdpClient): NotebookEditorPane {
+  const EDITOR = `document.querySelector('.cm-editor')`
+  return {
+    text: () =>
+      main.eval<string | null>(`(() => {
+        const content = ${EDITOR}?.querySelector('.cm-content')
+        if (!content) return null
+        return [...content.querySelectorAll('.cm-line')].map((l) => l.textContent ?? '').join('\\n')
+      })()`),
+    tagEditor: async () => {
+      const tag = `mount-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+      const ok = await main.eval<boolean>(`(() => {
+        const ed = ${EDITOR}
+        if (!ed) return false
+        ed.setAttribute('data-e2e-mount', ${JSON.stringify(tag)})
+        return true
+      })()`)
+      if (!ok) throw new Error('notebook: no .cm-editor to tag')
+      return tag
+    },
+    editorTag: () => main.eval<string | null>(`${EDITOR}?.getAttribute('data-e2e-mount') ?? null`),
+    coEditMarks: () => main.eval<number>(`document.querySelectorAll('.cm-coedit-change').length`)
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 // 从系统打开的 md 窗口（#markdown-window）—— 笔记本会话本身：live preview 编辑器 + 底部输入卡片，
 // 对话在卡片顶上的抽屉里（ThreadDrawer），询问卡片在抽屉与输入框之间（PendingInputsDrawer）。
 //
@@ -5829,6 +5869,12 @@ export function openBrowserWindowButton(main: CdpClient): OpenBrowserWindowButto
 //   - 往编辑器里打字**不能**靠合成事件（CodeMirror 6 不认合成的 keydown / beforeinput，见
 //     NotebookReadOnlyProbes 的说明）：`typeAtEnd` 走 CDP `Input.insertText`，是浏览器自己的
 //     可信输入，与用户敲键盘同一条路（DOM 变更 → CM6 的观察器 → 事务 → 200ms 防抖自动保存）。
+//
+// 协作编辑（md 窗口里 agent 与用户同时改一份活文档）的探针也在这里：真实文本、放光标 / 选区、在某处打字
+// （含「一直在打」）、⌘Z / ⌘⇧Z（CDP `Input.dispatchKeyEvent`，同样是可信输入）、虚影块 / 目标段 /
+// 改动痕迹 / 删除竖线、指路条、滚动。编辑器里的**真实文本**（live preview 会藏语法标记）与放光标
+// 都得经 CM6 视图 —— 从 `.cm-content` 摸到视图用的是 CM6 的内部字段（`cmTile.root.view`，
+// 即 `EditorView.findFromDOM` 的实现），只收在 `CM_VIEW` 这一处：升级 CM6 时只改这里。
 
 /** 对话抽屉里的一个条目（MessageRenderer 根节点的 data-msg-* + 正文） */
 export interface DrawerItemShot {
@@ -5846,6 +5892,37 @@ export interface EditorImageShot {
   naturalWidth: number
   complete: boolean
 }
+
+/** 协作编辑的虚影块（`.cm-coedit-ghost`） */
+export interface CoEditGhostShot {
+  /** rewriting（doc_edit）/ writing（doc_insert）/ waiting（等用户停手） */
+  mode: string
+  label: string
+  /** 虚影里目前写出来的新内容（还没有时为空串） */
+  text: string
+  /** 紧挨在虚影块之前 / 之后的那一行编辑器行的文字（没有为 null）—— 证「挂在哪一行之下 / 之上」 */
+  prevLine: string | null
+  nextLine: string | null
+}
+
+/** 一段改动痕迹（`.cm-coedit-change`；跨行的痕迹每行一段） */
+export interface CoEditMarkShot {
+  text: string
+  /** 用户已看见、正在淡出 */
+  fading: boolean
+  /** 外部写盘并进来的（不是 agent 的） */
+  external: boolean
+}
+
+/** 协作编辑的指路条（`[data-coedit-indicator]`） */
+export interface CoEditIndicatorShot {
+  /** up / down（可点的按钮）或 reading（一闪而过的「正在读」） */
+  direction: string
+  text: string
+}
+
+/** 在文档里放光标的位置：某段原文之后 / 之前（须唯一）、某一行的行尾、文末 */
+export type CaretTarget = { after: string } | { before: string } | { line: number } | 'end'
 
 export interface MarkdownWindowPane {
   /** 编辑器与输入卡片都挂上了 */
@@ -5880,11 +5957,62 @@ export interface MarkdownWindowPane {
   deny(): Promise<void>
   /** 编辑器里的图片 */
   images(): Promise<EditorImageShot[]>
+
+  // ─── 协作编辑 ───
+  /** 编辑器里的真实文本（CM6 的 doc，含没存盘的输入；不是 DOM 上被 live preview 处理过的样子） */
+  docText(): Promise<string>
+  /** 以用户的身份把全文换成 text（一个进撤销栈的事务，像全选后粘贴）—— 用例之间复位文档用 */
+  setDoc(text: string): Promise<void>
+  /** 聚焦编辑器并放光标（不滚动）；回光标位置 */
+  placeCaret(at: CaretTarget): Promise<number>
+  /** 选中 text 的唯一一处（光标在选区末端）；回 [from, to] */
+  select(text: string): Promise<[number, number]>
+  /** 在光标处打一段字（可信输入） */
+  insertText(text: string): Promise<void>
+  /** 光标放到 anchor（唯一）之后，打一段字 */
+  typeAt(anchor: string, text: string): Promise<void>
+  /**
+   * 光标放到 anchor 之后，每 every ms 打一个 ch，打满 ms。回打进去的全部字与最后一个键落下的时刻
+   * （本进程的 Date.now()，与页面同一台机器的时钟）
+   */
+  keepTyping(
+    anchor: string,
+    ms: number,
+    every?: number,
+    ch?: string
+  ): Promise<{ typed: string; lastAt: number }>
+  /** ⌘Z / ⌘⇧Z（CDP 可信按键） */
+  undo(): Promise<void>
+  redo(): Promise<void>
+  /** 开始一段输入法组字（CDP Input.imeSetComposition）；`insertText` 提交 */
+  compose(text: string): Promise<void>
+  /** 虚影块 */
+  ghosts(): Promise<CoEditGhostShot[]>
+  /** 被虚线标出、正在被改写的原文（`.cm-coedit-target`，多段按文档顺序连起来） */
+  targetText(): Promise<string>
+  /** 改动痕迹（按文档顺序） */
+  changeMarks(): Promise<CoEditMarkShot[]>
+  /** 纯删除留下的细竖线条数 */
+  deletionBars(): Promise<number>
+  /** 指路条；不在屏为 null */
+  indicator(): Promise<CoEditIndicatorShot | null>
+  /** 点指路条（它是按钮时） */
+  clickIndicator(): Promise<void>
+  /** 编辑器滚动区的 scrollTop */
+  scrollTop(): Promise<number>
+  /** 把第 n 行滚到视口顶上 */
+  scrollToLine(n: number): Promise<void>
+  /** 给 `.cm-editor` 打一个标记属性，回标记值 —— 之后还读得到同一个值 = 编辑器没被重挂载 */
+  tagEditor(): Promise<string>
+  /** `.cm-editor` 上的标记（没有 / 被重挂载了为 null） */
+  editorTag(): Promise<string | null>
 }
 
 export function markdownWindowPane(client: CdpClient): MarkdownWindowPane {
   const ROOT = `document.querySelector('[data-markdown-window]')`
   const EDITOR = `${ROOT}?.querySelector('.cm-content')`
+  // CM6 视图：内部字段，只在这一处（见本段文件头的说明）
+  const CM_VIEW = `((${EDITOR})?.cmTile?.root?.view ?? null)`
   const INPUT = `[...(${ROOT}?.querySelectorAll('textarea') ?? [])].find((t) => !t.closest('.cm-editor'))`
   // 抽屉细条：带 MessagesSquare 图标的那颗按钮；它的父节点是抽屉根（展开时条目列表是它的兄弟）
   const DRAWER_BTN = `[...(${ROOT}?.querySelectorAll('button') ?? [])].find((b) => b.querySelector('.lucide-messages-square'))`
@@ -5961,6 +6089,76 @@ export function markdownWindowPane(client: CdpClient): MarkdownWindowPane {
       return 'ok'
     })()`)
     if (outcome !== 'ok') throw new Error(`ask card ${which}: ${outcome}`)
+  }
+
+  const docText = (): Promise<string> =>
+    client.eval<string>(`${CM_VIEW}?.state.doc.toString() ?? ''`)
+
+  // 窗口不一定是系统里有焦点的那个（同时开着好几个 md 窗口）：焦点仿真让页面认为自己有焦点 ——
+  // 只在这条 CDP 连接上生效，不把窗口拽到前面（与 typeAtEnd 同一条理由）
+  let focusEmulated = false
+  const focusEditor = async (): Promise<void> => {
+    if (!focusEmulated) {
+      await client.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+      focusEmulated = true
+    }
+  }
+
+  const placeCaret = async (at: CaretTarget): Promise<number> => {
+    await focusEditor()
+    const pos = await client.eval<number | string>(`(() => {
+      const view = ${CM_VIEW}
+      if (!view) return 'no editor view'
+      const at = ${JSON.stringify(at)}
+      const doc = view.state.doc.toString()
+      const unique = (needle) => {
+        const i = doc.indexOf(needle)
+        if (i < 0) return 'not found: ' + needle
+        if (doc.indexOf(needle, i + 1) >= 0) return 'not unique: ' + needle
+        return i
+      }
+      let pos
+      if (at === 'end') pos = doc.length
+      else if ('line' in at) pos = view.state.doc.line(at.line).to
+      else if ('after' in at) {
+        const i = unique(at.after)
+        if (typeof i === 'string') return i
+        pos = i + at.after.length
+      } else {
+        const i = unique(at.before)
+        if (typeof i === 'string') return i
+        pos = i
+      }
+      view.focus()
+      view.dispatch({ selection: { anchor: pos } })
+      return pos
+    })()`)
+    if (typeof pos === 'string') throw new Error(`placeCaret ${JSON.stringify(at)}: ${pos}`)
+    // 让 CM6 把选区同步进 DOM，可信输入才落在这里
+    await sleep(60)
+    return pos
+  }
+
+  const insertText = async (text: string): Promise<void> => {
+    await focusEditor()
+    await client.send('Input.insertText', { text })
+  }
+
+  /** ⌘Z（modifiers 4 = Meta）/ ⌘⇧Z（12 = Meta + Shift） */
+  const pressZ = async (modifiers: number): Promise<void> => {
+    await focusEditor()
+    await client.eval(`(${CM_VIEW})?.focus()`)
+    const key = modifiers & 8 ? 'Z' : 'z'
+    const base = {
+      modifiers,
+      key,
+      code: 'KeyZ',
+      windowsVirtualKeyCode: 90,
+      nativeVirtualKeyCode: 90
+    }
+    await client.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...base })
+    await client.send('Input.dispatchKeyEvent', { type: 'keyUp', ...base })
+    await sleep(80)
   }
 
   return {
@@ -6058,6 +6256,143 @@ export function markdownWindowPane(client: CdpClient): MarkdownWindowPane {
             naturalWidth: i.naturalWidth,
             complete: i.complete
           }
-        })`)
+        })`),
+
+    docText,
+    setDoc: async (text) => {
+      const ok = await client.eval<boolean>(`(() => {
+        const view = ${CM_VIEW}
+        if (!view) return false
+        view.dispatch({
+          changes: { from: 0, to: view.state.doc.length, insert: ${JSON.stringify(text)} },
+          userEvent: 'input.paste'
+        })
+        return true
+      })()`)
+      if (!ok) throw new Error('markdown window: no editor view')
+    },
+    placeCaret,
+    select: async (text) => {
+      await focusEditor()
+      const range = await client.eval<[number, number] | string>(`(() => {
+        const view = ${CM_VIEW}
+        if (!view) return 'no editor view'
+        const doc = view.state.doc.toString()
+        const needle = ${JSON.stringify(text)}
+        const at = doc.indexOf(needle)
+        if (at < 0) return 'not found'
+        if (doc.indexOf(needle, at + 1) >= 0) return 'not unique'
+        view.focus()
+        view.dispatch({ selection: { anchor: at, head: at + needle.length } })
+        return [at, at + needle.length]
+      })()`)
+      if (typeof range === 'string') throw new Error(`select ${JSON.stringify(text)}: ${range}`)
+      await sleep(50)
+      return range
+    },
+    insertText,
+    typeAt: async (anchor, text) => {
+      await placeCaret({ after: anchor })
+      await insertText(text)
+    },
+    keepTyping: async (anchor, ms, every = 150, ch = 'x') => {
+      await placeCaret({ after: anchor })
+      let typed = ''
+      let lastAt = Date.now()
+      const end = Date.now() + ms
+      while (Date.now() < end) {
+        await client.send('Input.insertText', { text: ch })
+        lastAt = Date.now()
+        typed += ch
+        await sleep(every)
+      }
+      return { typed, lastAt }
+    },
+    undo: () => pressZ(4),
+    redo: () => pressZ(12),
+    compose: async (text) => {
+      await focusEditor()
+      await client.send('Input.imeSetComposition', {
+        text,
+        selectionStart: text.length,
+        selectionEnd: text.length
+      })
+    },
+    ghosts: () =>
+      client.eval<CoEditGhostShot[]>(`(() => {
+        const content = ${EDITOR}
+        if (!content) return []
+        // 虚影是块挂件：往上找到 .cm-content 的直接子节点，再看它两边最近的编辑器行
+        const lineNear = (el, dir) => {
+          let top = el
+          while (top.parentElement && top.parentElement !== content) top = top.parentElement
+          let n = dir < 0 ? top.previousElementSibling : top.nextElementSibling
+          while (n && !n.classList.contains('cm-line')) n = dir < 0 ? n.previousElementSibling : n.nextElementSibling
+          return n ? (n.textContent ?? '') : null
+        }
+        return [...content.querySelectorAll('.cm-coedit-ghost')].map((g) => ({
+          mode: g.dataset.mode ?? '',
+          label: (g.querySelector('.cm-coedit-ghost-label')?.textContent ?? '').trim(),
+          text: g.querySelector('.cm-coedit-ghost-text')?.textContent ?? '',
+          prevLine: lineNear(g, -1),
+          nextLine: lineNear(g, 1)
+        }))
+      })()`),
+    targetText: () =>
+      client.eval<string>(
+        `[...(${EDITOR}?.querySelectorAll('.cm-coedit-target') ?? [])].map((el) => el.textContent ?? '').join('')`
+      ),
+    changeMarks: () =>
+      client.eval<CoEditMarkShot[]>(
+        `[...(${EDITOR}?.querySelectorAll('.cm-coedit-change') ?? [])].map((el) => ({
+          text: el.textContent ?? '',
+          fading: el.classList.contains('cm-coedit-fading'),
+          external: el.classList.contains('cm-coedit-external')
+        }))`
+      ),
+    deletionBars: () =>
+      client.eval<number>(`${EDITOR}?.querySelectorAll('.cm-coedit-deletion').length ?? 0`),
+    indicator: () =>
+      client.eval<CoEditIndicatorShot | null>(`(() => {
+        const el = ${ROOT}?.querySelector('[data-coedit-indicator]')
+        return el ? { direction: el.getAttribute('data-coedit-indicator') ?? '', text: (el.textContent ?? '').trim() } : null
+      })()`),
+    clickIndicator: async () => {
+      const ok = await client.eval<boolean>(`(() => {
+        const el = ${ROOT}?.querySelector('button[data-coedit-indicator]')
+        if (!el) return false
+        el.click()
+        return true
+      })()`)
+      if (!ok) throw new Error('markdown window: no clickable co-edit indicator')
+    },
+    scrollTop: () => client.eval<number>(`${CM_VIEW}?.scrollDOM.scrollTop ?? -1`),
+    scrollToLine: async (n) => {
+      const ok = await client.eval<boolean>(`(() => {
+        const view = ${CM_VIEW}
+        if (!view) return false
+        const line = view.state.doc.line(Math.max(1, Math.min(${n}, view.state.doc.lines)))
+        view.dispatch({ effects: view.constructor.scrollIntoView(line.from, { y: 'start' }) })
+        return true
+      })()`)
+      if (!ok) throw new Error('markdown window: no editor view')
+      // 滚动在下一帧测量后才落定
+      await sleep(150)
+    },
+    tagEditor: async () => {
+      const tag = `mount-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+      const ok = await client.eval<boolean>(`(() => {
+        const ed = ${ROOT}?.querySelector('.cm-editor')
+        if (!ed) return false
+        ed.setAttribute('data-e2e-mount', ${JSON.stringify(tag)})
+        return true
+      })()`)
+      if (!ok) throw new Error('markdown window: no .cm-editor to tag')
+      return tag
+    },
+    editorTag: () =>
+      client.eval<string | null>(
+        `${ROOT}?.querySelector('.cm-editor')?.getAttribute('data-e2e-mount') ?? null`
+      )
   }
 }

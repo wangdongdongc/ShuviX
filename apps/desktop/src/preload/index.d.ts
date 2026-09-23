@@ -1140,6 +1140,17 @@ declare global {
       /** 监听通知点击要求打开的会话；返回取消订阅函数 */
       onOpenSession: (callback: (sessionId: string) => void) => () => void
     }
+    /** 协作编辑（md 窗口）：主进程把 agent 的 doc_* 工具调用交给本窗口的编辑器执行 */
+    liveDoc: {
+      onRequest: (
+        callback: (request: import('@shuvix/chat-protocol/liveDocument').LiveDocRequest) => void
+      ) => () => void
+      onCancel: (callback: (params: { requestId: string }) => void) => () => void
+      respond: (
+        requestId: string,
+        result: import('@shuvix/chat-protocol/liveDocument').LiveDocResult
+      ) => Promise<{ success: boolean }>
+    }
   }
 
   interface WidgetSummary {
