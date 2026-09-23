@@ -470,7 +470,7 @@ const MAX_PENDING_GROUPS = 4
 /** 一组分片的片数上限（`total` 直接用来开数组，不设上限等于让对面决定分配多大） */
 const MAX_CHUNK_PARTS = 4096
 /** 所有未完成的组加起来能占的字符数上限 —— 永远凑不齐的分片不能把内存撑爆 */
-const MAX_PENDING_CHARS = 32 * 1024 * 1024
+const MAX_PENDING_CHARS = 64 * 1024 * 1024
 
 export class BridgeChunkAssembler {
   private readonly pending = new Map<

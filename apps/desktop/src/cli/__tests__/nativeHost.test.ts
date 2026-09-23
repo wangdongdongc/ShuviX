@@ -15,17 +15,25 @@
  *            拼回一次；多字节字符劈在两次 data 之间也不变成 U+FFFD
  *   NH-12~14 stdin 结束 / stop() / stdout 出错 → 宿主停下：done 兑现、socket 关掉、不再重连、不再写帧
  *   NH-15    stdout 上只有完整的帧、每帧都是 JSON；日志只走 opts.log
+ *   NH-16~22 地址是**每次重连现算的**：解析器按次调用（顺序 token → 地址）、算不出来就当离线照常退避、
+ *            中途算出来了直接连上、桌面换地址重启后连到新地址；字符串写法照旧；解析器抛了宿主也不能死
+ *   NH-23    resolveBridgeAddress：地址文件在就用它（trim），空 / 只有空白 / 读不到就回落到确定地址
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { PassThrough } from 'stream'
 import { createServer, type Server, type Socket } from 'net'
-import { mkdtempSync, rmSync } from 'fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
-import { join } from 'path'
-import { CHROME_NATIVE_MESSAGE_MAX_BYTES } from '@shuvix/chat-protocol/chromeBridge'
+import { dirname, join } from 'path'
+import {
+  chromeBridgeAddressFile,
+  chromeBridgeSocketPath,
+  CHROME_NATIVE_MESSAGE_MAX_BYTES
+} from '@shuvix/chat-protocol/chromeBridge'
 import {
   encodeNativeMessage,
   NativeMessageReader,
+  resolveBridgeAddress,
   runNativeHost,
   type NativeHostHandle,
   type NativeHostOptions
@@ -633,5 +641,174 @@ describe.skipIf(process.platform === 'win32')('runNativeHost —— 真 unix soc
     for (const spy of consoleSpies) expect(spy).not.toHaveBeenCalled()
     expect(stdoutWrite).not.toHaveBeenCalled()
     expect(stderrWrite).not.toHaveBeenCalled()
+  })
+
+  it('NH-16 socketPath 给的是函数：**每次重连都现调**（不是启动时算一次）；顺序是先读 token 再算地址', async () => {
+    const order: string[] = []
+    const readToken = vi.fn(() => {
+      order.push('token')
+      return TOKEN
+    })
+    const socketPath = vi.fn(() => {
+      order.push('path')
+      return sockPath
+    })
+    // 桌面没起：每次 connect 都失败，于是每次重试都得重新走一遍解析
+    const ext = startHost({ readToken, socketPath })
+
+    await vi.waitFor(() => expect(socketPath.mock.calls.length).toBeGreaterThanOrEqual(3), WAIT)
+    expect(socketPath.mock.calls.length).toBe(readToken.mock.calls.length)
+    expect(order.slice(0, 6)).toEqual(['token', 'path', 'token', 'path', 'token', 'path'])
+    expect(ext.statuses()).toEqual(['offline'])
+  })
+
+  it.each([
+    ['undefined（地址文件读不到、桌面没开过）', undefined],
+    ["''（地址文件被截断成空）", '']
+  ])(
+    'NH-17/18 地址算不出来（%s）：一次也不连、offline 只报一次、退避照常走（0/100/300/600ms）',
+    async (_label, value) => {
+      const desktop = await startDesktop()
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+      const socketPath = vi.fn(() => value)
+      const ext = startHost({ socketPath, retryDelaysMs: [100, 200, 300] })
+
+      expect(socketPath).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(99)
+      expect(socketPath).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(socketPath).toHaveBeenCalledTimes(2)
+      await vi.advanceTimersByTimeAsync(200)
+      expect(socketPath).toHaveBeenCalledTimes(3)
+      await vi.advanceTimersByTimeAsync(300)
+      expect(socketPath).toHaveBeenCalledTimes(4)
+
+      expect(ext.statuses()).toEqual(['offline'])
+      expect(desktop.conns).toHaveLength(0)
+    }
+  )
+
+  it('NH-19 头三次算不出地址、第四次算出来了：同一个宿主直接连上（不用重启）；状态帧是 offline, connected', async () => {
+    const desktop = await startDesktop()
+    let calls = 0
+    const socketPath = vi.fn(() => (++calls > 3 ? sockPath : undefined))
+    const ext = startHost({ socketPath })
+
+    await vi.waitFor(() => expect(ext.statuses()).toEqual(['offline', 'connected']), WAIT)
+    expect(calls).toBeGreaterThanOrEqual(4)
+    expect(desktop.conns).toHaveLength(1)
+    expect(desktop.conns[0].lines[0]).toBe(AUTH_LINE)
+  })
+
+  it('NH-20 桌面换了地址重启：报 offline 之后**重读**地址、连到新的那一个 —— 地址是每次重连现读的，不是启动时定死的', async () => {
+    const pathB = join(dir, 'd2.sock')
+    const first = await startDesktop()
+    let target = sockPath
+    const socketPath = vi.fn(() => target)
+    const ext = startHost({ socketPath })
+    await connected(ext)
+
+    await first.close()
+    await vi.waitFor(() => expect(ext.statuses()).toEqual(['connected', 'offline']), WAIT)
+
+    const second = new FakeDesktop(pathB)
+    desktops.push(second)
+    await second.listen()
+    target = pathB
+
+    await vi.waitFor(
+      () => expect(ext.statuses()).toEqual(['connected', 'offline', 'connected']),
+      WAIT
+    )
+    expect(second.conns).toHaveLength(1)
+    expect(second.conns[0].lines[0]).toBe(AUTH_LINE)
+    expect(first.conns[0].closed).toBe(true)
+  })
+
+  it('NH-21 socketPath 给的是普通字符串：断开重连也照用它 —— 联合类型的向后兼容', async () => {
+    const desktop = await startDesktop()
+    const ext = startHost({ socketPath: sockPath })
+    await connected(ext)
+
+    await desktop.close()
+    await vi.waitFor(() => expect(ext.statuses()).toEqual(['connected', 'offline']), WAIT)
+    await desktop.listen()
+    await vi.waitFor(
+      () => expect(ext.statuses()).toEqual(['connected', 'offline', 'connected']),
+      WAIT
+    )
+    expect(desktop.conns.at(-1)?.lines[0]).toBe(AUTH_LINE)
+  })
+
+  it.each([
+    ['socketPath 抛', 'socketPath' as const],
+    ['readToken 抛', 'readToken' as const]
+  ])(
+    'NH-22 %s：宿主不能死（重连是 setTimeout 的回调，抛出去就是进程直接没了、扩展那头只看到端口断了）—— 记一笔、报 offline、继续重试',
+    async (_label, which) => {
+      const boom = vi.fn(() => {
+        throw new Error('resolver boom')
+      })
+      const ext = startHost({ [which]: boom } as unknown as Partial<NativeHostOptions>)
+
+      await vi.waitFor(() => expect(ext.statuses()).toEqual(['offline']), WAIT)
+      await vi.waitFor(() => expect(boom.mock.calls.length).toBeGreaterThanOrEqual(3), WAIT)
+      expect(ext.statuses()).toEqual(['offline'])
+      expect(ext.log).toHaveBeenCalledWith(
+        expect.stringMatching(/resolving the desktop address failed/)
+      )
+
+      // 还活着：照常收尾
+      ext.handle.stop()
+      await ext.handle.done
+    }
+  )
+})
+
+describe.skipIf(process.platform === 'win32')('resolveBridgeAddress —— 地址是读出来的', () => {
+  let home: string
+
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), 'cbh-'))
+    mkdirSync(dirname(chromeBridgeAddressFile(home)), { recursive: true })
+  })
+
+  afterEach(() => {
+    rmSync(home, { recursive: true, force: true })
+  })
+
+  it('NH-23 地址文件在就用它的内容（首尾空白 trim 掉）；没有 / 空 / 只有空白 / 读不到 → 回落到确定地址，而回落算出来的正是桌面会监听的那个', () => {
+    const addr = chromeBridgeAddressFile(home)
+    const env = { home, platform: 'darwin', user: 'u' }
+    const fallback = chromeBridgeSocketPath(env)
+    expect(fallback).toBe(join(home, '.shuvix', 'chrome-bridge.sock'))
+    expect(addr).toBe(join(home, '.shuvix', 'chrome-bridge.addr'))
+
+    // 桌面从没开过：文件不存在
+    expect(resolveBridgeAddress(env)).toBe(fallback)
+
+    writeFileSync(addr, '/tmp/written-by-desktop.sock')
+    expect(resolveBridgeAddress(env)).toBe('/tmp/written-by-desktop.sock')
+
+    // 写的时候没加换行，但用户 / 编辑器可能加了
+    writeFileSync(addr, '  \n/tmp/written-by-desktop.sock\n  ')
+    expect(resolveBridgeAddress(env)).toBe('/tmp/written-by-desktop.sock')
+
+    // 写了一半被打断 / 被截断
+    writeFileSync(addr, '')
+    expect(resolveBridgeAddress(env)).toBe(fallback)
+    writeFileSync(addr, ' \n\t ')
+    expect(resolveBridgeAddress(env)).toBe(fallback)
+
+    // 读不到（这里拿目录冒充；真实情形是权限不对）
+    rmSync(addr)
+    mkdirSync(addr)
+    expect(resolveBridgeAddress(env)).toBe(fallback)
+
+    // Windows 的回落是按用户名的管道名 —— 没有随机后缀（那个只出现在地址文件里，
+    // 所以 Windows 上读不到地址文件就真的连不上；POSIX 靠这条回落活着）
+    expect(resolveBridgeAddress({ home, platform: 'win32', user: 'alice' })).toBe(
+      String.raw`\\.\pipe\shuvix-chrome-bridge-alice`
+    )
   })
 })

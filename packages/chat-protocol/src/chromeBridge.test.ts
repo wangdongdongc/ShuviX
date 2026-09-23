@@ -4,7 +4,7 @@
  * 协议包不引 Node：字节数由调用方注入，这里与桌面一样用 `Buffer.byteLength`。钉的都是「一端改了、
  * 另一端悄悄坏掉」的地方：
  *
- *   CB-1       常量：协议版本、宿主名（合 Chrome 的命名规则）、1 MB 上限、标签组颜色、两个线上错误码
+ *   CB-1       常量：协议版本、宿主名（合 Chrome 的命名规则）、1 MB 上限、标签组颜色、三个线上错误码
  *   CB-2       CHROME_BRIDGE_CHUNK_CHARS 的取值：最坏的字符（3 字节 CJK、转义后 2 字节的 `"` `\`、
  *              片尾劈开的半个代理对）下，一片编码后仍不超 1 MB
  *   CB-3~8     splitBridgeMessage：不超限原样一条；超限按 chunkChars 切、共享一个 id；字节数听注入的
@@ -15,13 +15,21 @@
  *   CB-20      isBridgeMessage 只认 type
  *   CB-21      chromeBridgeSocketPath：POSIX 与 Windows named pipe
  *   CB-22      CHROME_PANEL_CHANNEL_PATHS 钉死 —— 多一条就是给侧边栏多开一个口子
+ *   CB-23~32   组装器的三道上限（片数 / 组数 / 总字符数）与额度记账：边界、淘汰顺序、四条丢弃路径
+ *              都要把额度退回来、重复片只算一次、几 MB 的正常消息照样过、坏 data 既不抛也不投毒
+ *   CB-33/34   地址是**读**出来的：地址文件的位置；Windows 管道名里的随机后缀（POSIX 无视它）
+ *   CB-35      onDrop：丢一组说一次（原因 + id），收齐与 clear 不说，不给回调也不抛
  *   CB-T1~7    随消息带上的标签页：token 类型 / id、chromeTabIdsOf（只认结构）、chromeTabPayload
  *              （压成一行、截断不劈 emoji、标题 JSON 加引号 —— 页面定的标题落在**用户的**消息里）
  *
  * 控制字符、行 / 段分隔符与孤立代理一律按码点构造，源文件里不出现它们本身。
+ *
+ * 上限用例真的要占内存：**只造一个** 4 MiB 的字符串，各片存的都是同一个引用（`parts` 存引用、
+ * 不复制），而且**永远不让超大的组收齐** —— `parts.join('')` 才是真正会分配的那一下。
  */
 import { describe, expect, it, vi } from 'vitest'
 import {
+  BRIDGE_ERROR_ALREADY_CONNECTED,
   BRIDGE_ERROR_DESKTOP_OFFLINE,
   BRIDGE_ERROR_PROTOCOL_MISMATCH,
   BridgeChunkAssembler,
@@ -32,6 +40,7 @@ import {
   CHROME_NATIVE_MESSAGE_MAX_BYTES,
   CHROME_PANEL_CHANNEL_PATHS,
   CHROME_TAB_TOKEN_TYPE,
+  chromeBridgeAddressFile,
   chromeBridgeSocketPath,
   chromeTabIdsOf,
   chromeTabPayload,
@@ -147,9 +156,11 @@ describe('Chrome 桥协议：常量', () => {
       new Set(['grey', 'blue', 'red', 'yellow', 'green', 'pink', 'purple', 'cyan', 'orange'])
     )
     expect(CHROME_GROUP_COLORS).toHaveLength(9)
-    // 扩展与本地组件拿这两个字符串比对，改了任何一端都对不上
+    // 扩展与本地组件拿这三个字符串比对，改了任何一端都对不上
     expect(BRIDGE_ERROR_DESKTOP_OFFLINE).toBe('desktop-offline')
     expect(BRIDGE_ERROR_PROTOCOL_MISMATCH).toBe('protocol-mismatch')
+    // 桌面写在 welcome 里、扩展据此把侧边栏切到 already-connected —— 跨两个代码库比较的字面量
+    expect(BRIDGE_ERROR_ALREADY_CONNECTED).toBe('already-connected')
   })
 
   it('CB-2 CHROME_BRIDGE_CHUNK_CHARS 的取值：满片的 3 字节 CJK、满片的 `"` `\\`、片尾半个代理对，编码后都不超 1 MB', () => {
@@ -400,7 +411,9 @@ describe('Chrome 桥协议：BridgeChunkAssembler', () => {
     ['-1', -1],
     ['1.5', 1.5],
     ['NaN', Number.NaN],
-    ["字符串 '2'", '2']
+    ["字符串 '2'", '2'],
+    // 片数上限之外（4096 是上限，见 CB-23）——「不合法的 total」与「过大的 total」走同一条路
+    ['4097（超出片数上限）', 4097]
   ])(
     'CB-15 一片的 total 不合法（%s）：回 null；同 id 的既有组不受牵连、照样收齐',
     (_label, total) => {
@@ -482,6 +495,365 @@ describe('Chrome 桥协议：BridgeChunkAssembler', () => {
   })
 })
 
+// ───────────────────── 组装器的三道上限 ─────────────────────
+
+/** 一组分片的片数上限（实现里是模块私有常量，这里照抄 —— 对不上时用例会红） */
+const MAX_CHUNK_PARTS = 4096
+/** 同时攒着的组数上限 */
+const MAX_PENDING_GROUPS = 4
+/**
+ * 所有未完成的组加起来能占的字符数上限 —— **裁定值**（CB-26 单独钉它）。
+ *
+ * 它同时也是**一条消息的天花板**：一条消息的各片是连着写出去的，一条消息就是一个组。
+ * 一张内联图片最多 5M base64 字符（MAX_INLINE_IMAGE_BASE64），所以这个数必须装得下一条
+ * 带好几张图的会话事件 —— 装不下的后果是那条消息永远拼不齐，而且**没有任何提示**。
+ */
+const MAX_PENDING_CHARS = 64 * 1024 * 1024
+
+/** 4 MiB 字符。**全文件只造这一个**：所有片存的都是同一个引用，占的内存就是这一份 */
+const MB4 = 'a'.repeat(4 * 1024 * 1024)
+
+/**
+ * 一片大的。`total` 一律取片数上限 —— 这样组永远凑不齐，`parts.join('')` 那一下
+ * （真正会分配几十 MB 的地方）就不会发生。
+ */
+const big = (id: string, seq: number, data: string = MB4): BridgeChunk => ({
+  type: 'chunk',
+  id,
+  seq,
+  total: MAX_CHUNK_PARTS,
+  data
+})
+
+/**
+ * 实测「一组装得下几片 4 MiB」：一片片喂到有一组被丢为止。
+ *
+ * 上限是模块私有常量，而**语义**（撞满不丢、多一个字符才丢、从最老的开始淘汰、四条丢弃路径都退额度）
+ * 与它取多大无关 —— 量出来再用，改一个可调常量就不必连坐一屏用例。取值本身由 CB-26 单独钉：
+ * 量出来的片数 × 4 MiB 必须等于 {@link MAX_PENDING_CHARS}。
+ *
+ * 这一步 + CB-27（再多一个字符就丢）合起来把上限钉死在精确值上：前者说「这么多装得下」，
+ * 后者说「多一个字符就装不下」。
+ */
+function measurePartsToCap(): number {
+  const dropped: string[] = []
+  const assembler = new BridgeChunkAssembler((reason) => dropped.push(reason))
+  for (let seq = 0; seq < MAX_CHUNK_PARTS; seq++) {
+    assembler.push(big('measure', seq))
+    if (dropped.length) return seq
+  }
+  throw new Error('字符上限比 4096 片 × 4 MiB 还高？')
+}
+
+/** 恰好撞满字符上限要几片 4 MiB */
+const PARTS_TO_CAP = measurePartsToCap()
+
+/** 组装器 + 它丢掉过的组（onDrop 说的那些原因） */
+interface Recorder {
+  assembler: BridgeChunkAssembler
+  dropped: string[]
+}
+
+function recorder(): Recorder {
+  const dropped: string[] = []
+  return { assembler: new BridgeChunkAssembler((reason) => dropped.push(reason)), dropped }
+}
+
+/**
+ * 把一组喂到恰好撞满字符上限（{@link PARTS_TO_CAP} 片 × 4 MiB），并确认这一路**一组都没丢**；
+ * 回攒着的组数。
+ *
+ * 那句「一组都没丢」是这组用例的命门：只看 pendingCount 的话，上限只有一半的实现也蒙混得过去 ——
+ * 撑过线的那一片把组丢掉，余下的片另起一组，喂完照样是「攒着 1 组」，全程一声不响。
+ */
+function fillToCap({ assembler, dropped }: Recorder, id: string): number {
+  const before = dropped.length
+  for (let seq = 0; seq < PARTS_TO_CAP; seq++) {
+    expect(assembler.push(big(id, seq)), `${id} 的第 ${seq} 片`).toBeNull()
+  }
+  expect(dropped.slice(before), `喂满 ${id} 的这一路不该丢掉任何一组`).toEqual([])
+  return assembler.pendingCount
+}
+
+describe('Chrome 桥协议：BridgeChunkAssembler 的三道上限', () => {
+  it('CB-23 片数上限：total=4096 收下（攒着一组）；total=4097 回 null 而且**不建组**', () => {
+    const ok = new BridgeChunkAssembler()
+    expect(
+      ok.push({ type: 'chunk', id: 'ok', seq: 0, total: MAX_CHUNK_PARTS, data: 'x' })
+    ).toBeNull()
+    expect(ok.pendingCount).toBe(1)
+
+    // `total` 直接拿去 new Array(total)：不设上限就是让对面决定这里分配多大
+    const over = new BridgeChunkAssembler()
+    expect(
+      over.push({ type: 'chunk', id: 'over', seq: 0, total: MAX_CHUNK_PARTS + 1, data: 'x' })
+    ).toBeNull()
+    expect(over.pendingCount).toBe(0)
+    // 既有的组遇到过大的 total 只是被无视、照样收得齐 —— 见 CB-15 的 4097 一行
+  })
+
+  it('CB-24 组数上限 4：第 5 组挤掉**最先建的**那组；攒着的组数从不超过 4；其余三组与新来的都照常收齐', () => {
+    const assembler = new BridgeChunkAssembler()
+    const groups = ['A', 'B', 'C', 'D', 'E'].map((id) => ({
+      id,
+      message: sampleEvent(`第 ${id} 组的正文`),
+      parts: [] as BridgeChunk[]
+    }))
+    for (const group of groups) group.parts = threeChunks(group.message, group.id)
+
+    const counts: number[] = []
+    for (const group of groups) {
+      expect(assembler.push(group.parts[0])).toBeNull()
+      counts.push(assembler.pendingCount)
+    }
+    expect(counts).toEqual([1, 2, 3, 4, 4])
+
+    for (const group of groups.slice(1)) {
+      expect(assembler.push(group.parts[1]), group.id).toBeNull()
+      expect(assembler.push(group.parts[2]), group.id).toEqual(group.message)
+    }
+    expect(assembler.pendingCount).toBe(0)
+
+    // A 的第一片随组丢了：剩下两片只会另起一组、永远凑不齐
+    expect(assembler.push(groups[0].parts[1])).toBeNull()
+    expect(assembler.push(groups[0].parts[2])).toBeNull()
+    expect(assembler.pendingCount).toBe(1)
+  })
+
+  it('CB-25 淘汰按**建组顺序**、不按最近使用：刚喂过的 A 照样第一个让位，一直没动过的 B 留着', () => {
+    const assembler = new BridgeChunkAssembler()
+    const messages = Object.fromEntries(
+      ['A', 'B', 'C', 'D', 'E'].map((id) => [id, sampleEvent(`组 ${id} 的正文`)])
+    )
+    const parts = Object.fromEntries(
+      Object.entries(messages).map(([id, message]) => [id, threeChunks(message, id)])
+    )
+
+    for (const id of ['A', 'B', 'C', 'D']) expect(assembler.push(parts[id][0])).toBeNull()
+    // A 变成最近动过的那一组 —— 按「最近最少使用」淘汰的话该走的是 B
+    expect(assembler.push(parts.A[1])).toBeNull()
+    expect(assembler.pendingCount).toBe(MAX_PENDING_GROUPS)
+
+    expect(assembler.push(parts.E[0])).toBeNull()
+    expect(assembler.pendingCount).toBe(MAX_PENDING_GROUPS)
+
+    // B 还在（先验证它，不然下一步的新组又会挤掉一个）
+    expect(assembler.push(parts.B[1])).toBeNull()
+    expect(assembler.push(parts.B[2])).toEqual(messages.B)
+
+    // A 没了：它已经有两片，还在的话补上第三片就该收齐
+    expect(assembler.push(parts.A[2])).toBeNull()
+  })
+
+  it('CB-26 字符上限恰是 64 MiB 字符，而且是「大于」才丢：撞满的那一组一片没掉地留着', () => {
+    expect(MB4).toHaveLength(4 * 1024 * 1024)
+    // 撞满不丢（配 CB-27 的「多一个字符就丢」，两条合起来把上限钉在精确值上）
+    expect(fillToCap(recorder(), 'cap')).toBe(1)
+
+    // 取值本身：一条消息的各片是一个组，所以这个数也是**一条消息的天花板**。
+    // 32 MiB 时一条带七八张内联图（每张最多 5M base64 字符）的会话事件永远拼不齐，
+    // 而且不报错、不记录 —— 侧边栏就只是收不到那条消息。裁定改成 64 MiB 正是为了这个。
+    expect(MAX_PENDING_CHARS).toBe(67_108_864)
+    expect(PARTS_TO_CAP * MB4.length).toBe(MAX_PENDING_CHARS)
+  })
+
+  it('CB-27 再多一个字符就丢 —— 而且丢的正是把它撑过去的那一组', () => {
+    const rec = recorder()
+    expect(fillToCap(rec, 'cap')).toBe(1)
+
+    expect(rec.assembler.push(big('cap', PARTS_TO_CAP, 'x'))).toBeNull()
+    expect(rec.assembler.pendingCount).toBe(0)
+    expect(rec.dropped).toHaveLength(1)
+  })
+
+  it('CB-28 撑满之后从最老的开始丢、直到装得下：新来的那组留着，攒着的组数不超过 4', () => {
+    const { assembler, dropped } = recorder()
+    /** 四组平分上限：四组加起来恰好撞满 */
+    const each = PARTS_TO_CAP / MAX_PENDING_GROUPS
+    expect(Number.isInteger(each), '上限得能被组数上限整除，不然这条用例的算术要重排').toBe(true)
+
+    for (const id of ['A', 'B', 'C', 'D']) {
+      for (let seq = 0; seq < each; seq++) expect(assembler.push(big(id, seq))).toBeNull()
+    }
+    expect(assembler.pendingCount).toBe(MAX_PENDING_GROUPS)
+    expect(dropped).toEqual([])
+
+    // 第 5 组先撞上组数上限：最老的 A 让位
+    expect(assembler.push(big('E', 0))).toBeNull()
+    expect(assembler.pendingCount).toBe(MAX_PENDING_GROUPS)
+
+    // 接着喂 E，直到字符上限也撞上 —— 这一回让位的是 B，E 自己留着
+    for (let seq = 1; seq <= each; seq++) expect(assembler.push(big('E', seq))).toBeNull()
+    expect(assembler.pendingCount).toBe(MAX_PENDING_GROUPS - 1)
+
+    expect(dropped).toEqual([
+      expect.stringContaining('too many incomplete chunk groups (id=A,'),
+      expect.stringContaining('chunk buffer full (id=B,')
+    ])
+  })
+
+  it('CB-29 四条丢弃路径都要把额度退回来（收齐取走 / 自相矛盾 / 组数上限 / clear）—— 记账只要往上漂一点，之后每条消息都会被默默丢掉，而且没有任何日志', () => {
+    /** 轮数取得比上限还多几组：额度不退的话，攒到的总数必然撞线 */
+    const ROUNDS = PARTS_TO_CAP + 4
+    expect(ROUNDS * MB4.length).toBeGreaterThan(PARTS_TO_CAP * MB4.length)
+
+    // 1. 收齐取走
+    const whole = recorder()
+    const text = `{"type":"event","name":"${MB4}"}`
+    for (let i = 0; i < ROUNDS; i++) {
+      const message = whole.assembler.push({
+        type: 'chunk',
+        id: `m${i}`,
+        seq: 0,
+        total: 1,
+        data: text
+      })
+      expect((message as { type?: string } | null)?.type, `第 ${i} 条`).toBe('event')
+      expect((message as { name?: string } | null)?.name, `第 ${i} 条`).toHaveLength(MB4.length)
+    }
+    expect(whole.assembler.pendingCount).toBe(0)
+    expect(whole.dropped).toEqual([])
+    expect(fillToCap(whole, 'probe')).toBe(1)
+
+    // 2. 自相矛盾的片（seq 越界）
+    const clash = recorder()
+    for (let i = 0; i < ROUNDS; i++) {
+      expect(clash.assembler.push(big(`c${i}`, 0))).toBeNull()
+      expect(clash.assembler.push(big(`c${i}`, MAX_CHUNK_PARTS))).toBeNull()
+      expect(clash.assembler.pendingCount, `第 ${i} 轮`).toBe(0)
+    }
+    expect(clash.dropped).toHaveLength(ROUNDS)
+    clash.dropped.length = 0
+    expect(fillToCap(clash, 'probe')).toBe(1)
+
+    // 3. 组数上限
+    const evicted = recorder()
+    for (let i = 0; i < ROUNDS; i++) {
+      expect(evicted.assembler.push(big(`g${i}`, 0))).toBeNull()
+      expect(evicted.assembler.pendingCount, `第 ${i} 轮`).toBeLessThanOrEqual(MAX_PENDING_GROUPS)
+    }
+    expect(evicted.dropped).toHaveLength(ROUNDS - MAX_PENDING_GROUPS)
+    evicted.dropped.length = 0
+    // 还剩 4 组、共 16 MiB：再喂 12 片就恰好撞满 64 MiB，一组也不该掉
+    for (let seq = 1; seq <= PARTS_TO_CAP - MAX_PENDING_GROUPS; seq++) {
+      expect(evicted.assembler.push(big(`g${ROUNDS - 1}`, seq))).toBeNull()
+    }
+    expect(evicted.dropped).toEqual([])
+    expect(evicted.assembler.pendingCount).toBe(MAX_PENDING_GROUPS)
+
+    // 4. clear()
+    const cleared = recorder()
+    for (let round = 0; round < 3; round++) {
+      expect(fillToCap(cleared, `round${round}`), `第 ${round} 轮`).toBe(1)
+      cleared.assembler.clear()
+      expect(cleared.assembler.pendingCount).toBe(0)
+    }
+  })
+
+  it('CB-30 同一片来 50 遍只算一次额度：随后一条撞满上限的正常消息照样攒得下', () => {
+    const { assembler, dropped } = recorder()
+    for (let i = 0; i < 50; i++) expect(assembler.push(big('dup', 0))).toBeNull()
+    expect(assembler.pendingCount).toBe(1)
+
+    // 重复片各算一次的话这里早就是 200 MiB，组在第 17 遍就被丢了
+    for (let seq = 1; seq < PARTS_TO_CAP; seq++) expect(assembler.push(big('dup', seq))).toBeNull()
+    expect(dropped).toEqual([])
+    expect(assembler.pendingCount).toBe(1)
+
+    expect(assembler.push(big('dup', PARTS_TO_CAP, 'x'))).toBeNull()
+    expect(assembler.pendingCount).toBe(0)
+  })
+
+  it('CB-31 默认参数下一条 ~3 MB 的会话事件：按 300k 切片、每片不超 1 MB、原样拼回（几 MB 的正常消息必须照常走得通）', () => {
+    const message = sampleEvent('x'.repeat(3_000_000))
+    const text = JSON.stringify(message)
+    const lines = splitBridgeMessage(message, { newId: () => 'big', byteLength })
+
+    expect(lines).toHaveLength(Math.ceil(text.length / CHROME_BRIDGE_CHUNK_CHARS))
+    expect(lines.length).toBeGreaterThanOrEqual(10)
+    for (const line of lines) expect(byteLength(line)).toBeLessThanOrEqual(MAX)
+
+    const pieces = lines.map((line) => JSON.parse(line) as BridgeChunk)
+    expect(pieces.map((p) => p.data).join('')).toBe(text)
+    expect(reassemble(pieces)).toEqual(message)
+  })
+
+  it.each([
+    ['没有 data 这个键', { type: 'chunk', id: 'poison', seq: 0, total: 2 }],
+    ['data: null', { type: 'chunk', id: 'poison', seq: 0, total: 2, data: null }],
+    ['data 是数字', { type: 'chunk', id: 'poison', seq: 0, total: 2, data: 123 }],
+    ['data 是数组', { type: 'chunk', id: 'poison', seq: 0, total: 2, data: [] }],
+    ['data 是对象', { type: 'chunk', id: 'poison', seq: 0, total: 2, data: {} }],
+    ['data 是布尔', { type: 'chunk', id: 'poison', seq: 0, total: 2, data: true }]
+  ])('CB-32 %s：不抛、回 null、不建组，也不会把额度记账搞坏', (_label, raw) => {
+    const rec = recorder()
+    const bad = raw as unknown as BridgeChunk
+
+    // 拿不到 length 就是主进程 socket 回调里的一次未捕获异常；
+    // 拿到个 undefined 更糟 —— chars 变成 NaN，之后 `NaN > 上限` 永远为假，上限等于没有
+    expect(() => rec.assembler.push(bad)).not.toThrow()
+    expect(rec.assembler.push(bad)).toBeNull()
+    expect(rec.assembler.pendingCount).toBe(0)
+
+    expect(fillToCap(rec, 'cap')).toBe(1)
+    expect(rec.assembler.push(big('cap', PARTS_TO_CAP, 'x'))).toBeNull()
+    expect(rec.assembler.pendingCount).toBe(0)
+  })
+
+  it('CB-35 onDrop：丢一组说一次（原因带上 id 与进度）；收齐取走与 clear() 不说；不给回调也照常工作', () => {
+    const reasons: string[] = []
+    const assembler = new BridgeChunkAssembler((reason) => reasons.push(reason))
+    const message = sampleEvent('给 onDrop 用的正文')
+    const [p0, p1, p2] = threeChunks(message, 'X')
+
+    // 1. 自相矛盾的片（同一组换了 total）
+    expect(assembler.push(p0)).toBeNull()
+    expect(assembler.push({ ...p1, total: 4 })).toBeNull()
+    expect(reasons).toEqual(['contradictory chunk (id=X, 1/3 parts)'])
+
+    // 2. 收齐取走：不说
+    reasons.length = 0
+    expect(assembler.push(p0)).toBeNull()
+    expect(assembler.push(p1)).toBeNull()
+    expect(assembler.push(p2)).toEqual(message)
+    expect(reasons).toEqual([])
+
+    // 3. 组数上限
+    for (const id of ['g1', 'g2', 'g3', 'g4']) expect(assembler.push(big(id, 0))).toBeNull()
+    expect(reasons).toEqual([])
+    expect(assembler.push(big('g5', 0))).toBeNull()
+    expect(reasons).toEqual([
+      `too many incomplete chunk groups (id=g1, 1/${MAX_CHUNK_PARTS} parts)`
+    ])
+
+    // 4. 字符上限
+    assembler.clear()
+    reasons.length = 0
+    expect(fillToCap({ assembler, dropped: reasons }, 'cap')).toBe(1)
+    expect(assembler.push(big('cap', PARTS_TO_CAP, 'x'))).toBeNull()
+    expect(reasons).toEqual([
+      `chunk buffer full (id=cap, ${PARTS_TO_CAP + 1}/${MAX_CHUNK_PARTS} parts)`
+    ])
+
+    // 5. clear() 不说：连接断了，攒着的组本来就没人再关心
+    reasons.length = 0
+    expect(assembler.push(p0)).toBeNull()
+    assembler.clear()
+    expect(reasons).toEqual([])
+
+    // 6. 不给回调：行为一模一样，不抛
+    const silent = new BridgeChunkAssembler()
+    expect(() => {
+      silent.push(p0)
+      silent.push({ ...p1, total: 4 })
+    }).not.toThrow()
+    expect(silent.pendingCount).toBe(0)
+    expect(silent.push(p0)).toBeNull()
+    expect(silent.push(p1)).toBeNull()
+    expect(silent.push(p2)).toEqual(message)
+  })
+})
+
 describe('Chrome 桥协议：isBridgeMessage / chromeBridgeSocketPath / 侧边栏接口白名单', () => {
   it('CB-20 只看 type：七种 type 即便没有别的字段也算；其余一律不算（鉴权行也不是桥消息）', () => {
     for (const type of ['hello', 'welcome', 'request', 'response', 'event', 'chunk', 'host']) {
@@ -519,6 +891,49 @@ describe('Chrome 桥协议：isBridgeMessage / chromeBridgeSocketPath / 侧边�
     expect(at('win32', 'C:\\Users\\alice', 'alice')).toBe(pipe('alice'))
     expect(at('win32', '', 'alice')).toBe(pipe('alice'))
     expect(at('win32', 'C:\\Users\\x', '')).toBe(pipe('shuvix'))
+  })
+
+  it('CB-33 地址文件落在 ~/.shuvix/chrome-bridge.addr（home 尾部斜杠不影响）；与 token 同一道门 —— 和 cli-token、socket 同一个目录', () => {
+    expect(chromeBridgeAddressFile('/Users/u')).toBe('/Users/u/.shuvix/chrome-bridge.addr')
+    expect(chromeBridgeAddressFile('/Users/u/')).toBe('/Users/u/.shuvix/chrome-bridge.addr')
+    expect(chromeBridgeAddressFile('/Users/u///')).toBe('/Users/u/.shuvix/chrome-bridge.addr')
+    expect(chromeBridgeAddressFile('/home/u')).toBe('/home/u/.shuvix/chrome-bridge.addr')
+    expect(chromeBridgeAddressFile('')).toBe('/.shuvix/chrome-bridge.addr')
+
+    // 读得到这个文件才敲得开门 —— 前提是它和 token（~/.shuvix/cli-token，0600）在同一个
+    // 目录里；Windows 的命名管道没有 0600，随机后缀能挡住猜名字的人，全靠这一点
+    const dirOf = (path: string): string => path.slice(0, path.lastIndexOf('/'))
+    expect(dirOf(chromeBridgeAddressFile('/Users/u'))).toBe('/Users/u/.shuvix')
+    expect(dirOf(`/Users/u/.shuvix/cli-token`)).toBe('/Users/u/.shuvix')
+    expect(dirOf(chromeBridgeSocketPath({ platform: 'darwin', home: '/Users/u', user: 'u' }))).toBe(
+      '/Users/u/.shuvix'
+    )
+  })
+
+  it('CB-34 Windows 管道名带桌面每次启动现生成的随机后缀；不给 / 给空串时与从前一字不差；POSIX 完全无视它', () => {
+    const win = (user: string, nonce?: string): string =>
+      chromeBridgeSocketPath({ platform: 'win32', home: 'C:\\Users\\x', user, nonce })
+    const pipe = (name: string): string =>
+      ['', '', '.', 'pipe', `shuvix-chrome-bridge-${name}`].join('\\')
+
+    expect(win('alice', 'a1b2c3')).toBe(pipe('alice-a1b2c3'))
+    expect(win('alice', 'a1b2c3')).toBe(String.raw`\\.\pipe\shuvix-chrome-bridge-alice-a1b2c3`)
+    // 后缀不同 = 名字不同（桌面重启就换一个，旧名字上的监听者接不到新的本地组件）
+    expect(win('alice', 'n1')).not.toBe(win('alice', 'n2'))
+    // 老口径（CB-21）原样保留：CLI 回落时算的就是这个
+    expect(win('alice')).toBe(pipe('alice'))
+    expect(win('alice', '')).toBe(pipe('alice'))
+    expect(win('', 'n1')).toBe(pipe('shuvix-n1'))
+
+    // POSIX 的 socket 文件自己就是 0600，不需要随机后缀 —— 而且桌面传了也必须无视：
+    // 本地组件读不到地址文件时回落算的是这个确定地址，两边算出来必须是同一个
+    for (const platform of ['darwin', 'linux', 'freebsd']) {
+      const env = { platform, home: '/Users/u', user: 'u' }
+      expect(chromeBridgeSocketPath({ ...env, nonce: 'n1' })).toBe(chromeBridgeSocketPath(env))
+      expect(chromeBridgeSocketPath({ ...env, nonce: 'n1' })).toBe(
+        '/Users/u/.shuvix/chrome-bridge.sock'
+      )
+    }
   })
 
   it('CB-22 CHROME_PANEL_CHANNEL_PATHS 恰是这 15 条（顺序也钉）；文件、斜杠命令、朗读、子会话、设置、改模型之类一概不在', () => {

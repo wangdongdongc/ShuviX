@@ -17,11 +17,25 @@
  *   CBS-21~23  statuses 新的在前；stop 后能在同一路径重启；checkToken
  *   CBS-24~27  鉴权超时（10s，计时器 unref）；stop 关掉没鉴权 / 没握手的连接；同一连接第二个 hello 不理；
  *              onConnectionReady 先于上层 onReady
+ *   CBS-28     入站的坏分片（没有 data）掀不翻主进程：连接照样答话
+ *   CBS-14a/b  顶替的两条岔路：旧连接**还答话**就拒掉新的；不答话才让位
+ *   CBS-29~37  顶替不能是静默的：探活恰一次、被拒的收到 already-connected 并收线、争用按 installId
+ *              串行（两条新连接不能都「就绪」）、版本不符的让位给在用的那条、被拒的连接不许留着
+ *   CBS-38~44  地址是**写**下来的：内容 / 权限 / 父目录 / 重启后改写 / stop 后删掉 /
+ *              写不进去也不耽误监听 / 监听失败的那个实例不许删掉在用的那一份
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { EventEmitter, once } from 'events'
 import { connect, type Socket } from 'net'
-import { existsSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync
+} from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import {
@@ -141,11 +155,33 @@ class Client {
   }
 }
 
-/** 假 socket：只有 on / emit / write / destroy —— 直接喂 Buffer 给 BridgeConnection */
+/**
+ * 假 socket：只有 on / emit / write / end / destroy —— 直接喂 Buffer 给 BridgeConnection。
+ *
+ * `end` / `destroy` 会跟着发 `close`，真 socket 就是这样 —— 「被拒之后连接要被摘掉」「顶替之后
+ * 旧连接要触发 onClose」这些路径全靠那一下才走得完（多发一次 close 由 onClosed 自己挡住）。
+ */
 class FakeSocket extends EventEmitter {
   write = vi.fn((_data: string) => true)
-  destroy = vi.fn()
+  end = vi.fn(() => {
+    this.emit('close')
+  })
+  destroy = vi.fn(() => {
+    this.emit('close')
+  })
 }
+
+/** 一个假 socket 上写出去的全部桥消息（send 是一行一条） */
+function written(sock: FakeSocket): Message[] {
+  return sock.write.mock.calls
+    .flatMap(([line]) => String(line).split('\n'))
+    .filter((line) => line.length > 0)
+    .map((line) => JSON.parse(line) as Message)
+}
+
+/** 写给这条连接的探活请求（顶替之前问「你还在吗」） */
+const pingsIn = (messages: Message[]): Message[] =>
+  messages.filter((m) => m.type === 'request' && m.method === 'bridge.ping')
 
 let dir: string
 let sockPath: string
@@ -159,11 +195,12 @@ function track(server: ChromeBridgeServer): ChromeBridgeServer {
 
 async function startServer(
   handlers: ChromeBridgeHandlers = {},
-  getToken: () => string = () => TOKEN
+  getToken: () => string = () => TOKEN,
+  extra: { addressFile?: string } = {}
 ): Promise<ChromeBridgeServer> {
   const server = track(new ChromeBridgeServer())
   server.setHandlers(handlers)
-  await server.start({ socketPath: sockPath, getToken })
+  await server.start({ socketPath: sockPath, getToken, ...extra })
   return server
 }
 
@@ -172,6 +209,30 @@ function client(path = sockPath): Client {
   clients.push(c)
   return c
 }
+
+/**
+ * 让这个客户端应答 `bridge.ping`。**有意不并进 `readyPair`** —— 顶替的两条岔路就靠「答不答话」
+ * 分开，默认都答话的话 CBS-14a/b、CBS-29/30 全都失去意义。
+ */
+function pong(c: Client, opts: { ok?: boolean } = {}): { pings: Message[] } {
+  const pings: Message[] = []
+  const answered = new Set<unknown>()
+  const scan = (): void => {
+    for (const m of c.messages()) {
+      if (m.type !== 'request' || m.method !== 'bridge.ping' || answered.has(m.id)) continue
+      answered.add(m.id)
+      pings.push(m)
+      if (opts.ok === false) c.send({ type: 'response', id: m.id, ok: false, error: 'nope' })
+      else c.send({ type: 'response', id: m.id, ok: true, result: { ok: true } })
+    }
+  }
+  c.socket.on('data', scan)
+  return { pings }
+}
+
+/** 活着的连接数（含没鉴权 / 没握手 / 被拒的）—— 没有公开访问器，只能伸手进去看 */
+const liveConnections = (server: ChromeBridgeServer): number =>
+  (server as unknown as { connections: Set<BridgeConnection> }).connections.size
 
 /** 一个就绪的连接：服务端的 BridgeConnection 与客户端 */
 async function readyPair(
@@ -578,7 +639,7 @@ describe.skipIf(process.platform === 'win32')('ChromeBridgeServer —— 真 uni
     expect(order).toEqual(['event:tabs.removed', 'request:channel.call'])
   })
 
-  it('CBS-14 同一个 installId 再握手：旧连接被关掉、登记换成新的；statuses 仍一条；onClose(旧) 恰一次；新连接照常往返', async () => {
+  it('CBS-14b 同一个 installId 再握手、旧的**不答话**：旧连接被关掉、登记换成新的；statuses 仍一条；onClose(旧) 恰一次；新连接照常往返（走满 2 秒探活超时）', async () => {
     const onClose = vi.fn()
     const server = await startServer({ onClose })
     const a = client()
@@ -599,11 +660,233 @@ describe.skipIf(process.platform === 'win32')('ChromeBridgeServer —— 真 uni
     ])
 
     const pending = connB.request('tabs.get', { tabId: 7 })
-    const req = await b.waitFor((m) => m.type === 'request')
+    const req = await b.waitFor((m) => m.type === 'request' && m.method === 'tabs.get')
     b.send({ type: 'response', id: req.id, ok: true, result: { id: 7 } })
     await expect(pending).resolves.toEqual({ id: 7 })
     await settle()
     expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('CBS-14a 同一个 installId 再握手、旧的**还答话**：新的被拒（already-connected）、旧的原封不动', async () => {
+    const onClose = vi.fn()
+    const server = await startServer({ onClose })
+    const a = client()
+    await a.ready()
+    pong(a)
+    const connA = server.connectionFor('i1')!
+
+    const b = client()
+    await b.auth()
+    expect(await b.hello({ runId: 'r2' })).toEqual({
+      type: 'welcome',
+      protocol: 1,
+      ok: false,
+      error: 'already-connected'
+    })
+
+    expect(server.connectionFor('i1')).toBe(connA)
+    expect(connA.ready).toBe(true)
+    expect(a.closed).toBe(false)
+    await settle()
+    expect(onClose).not.toHaveBeenCalled()
+  })
+
+  it('CBS-29 顶替不能是静默的：旧的答了探活 → 新的收到 already-connected 并被收线；登记、statuses、三个回调都当没发生过；旧连接照常往返', async () => {
+    const onReady = vi.fn()
+    const server = await startServer({ onReady })
+    const a = client()
+    await a.ready()
+    const { pings } = pong(a)
+    const connA = server.connectionFor('i1')!
+    const statusesBefore = server.statuses()
+
+    const internalReady = vi.fn()
+    server.onConnectionReady(internalReady)
+    // onChange 会随「被拒的那条 socket 关掉」触发一次（每条连接摘掉都触发）；要紧的是它每次
+    // 报出来的东西都没变 —— 设置页刷新一遍看到的还是同一个浏览器
+    const seen: unknown[] = []
+    server.onChange(() => seen.push(server.statuses()))
+
+    const b = client()
+    await b.auth()
+    const welcome = await b.hello({ runId: 'r2', browser: 'Chrome 141' })
+
+    expect(welcome).toEqual({
+      type: 'welcome',
+      protocol: 1,
+      ok: false,
+      error: 'already-connected'
+    })
+    // 被拒的那条自己收线 —— 对面据此显示「这个浏览器已经连着了」，而不是当成桌面没开一直重试
+    await vi.waitFor(() => expect(b.closed).toBe(true), WAIT)
+
+    // 探活恰一次、而且只是协议层的 ping（不碰浏览器）
+    expect(pings).toHaveLength(1)
+    expect(pings[0]).toEqual({
+      type: 'request',
+      id: expect.stringMatching(/^d\d+$/),
+      method: 'bridge.ping',
+      params: {}
+    })
+    expect(a.messages().filter((m) => m.type === 'request' && m.method !== 'bridge.ping')).toEqual(
+      []
+    )
+
+    expect(server.connectionFor('i1')).toBe(connA)
+    expect(server.readyConnections()).toEqual([connA])
+    expect(server.statuses()).toEqual(statusesBefore)
+    expect(server.statuses()).toHaveLength(1)
+    expect(server.statuses()[0].runId).toBe('r1')
+    expect(onReady).toHaveBeenCalledTimes(1)
+    expect(internalReady).not.toHaveBeenCalled()
+    for (const snapshot of seen) expect(snapshot).toEqual(statusesBefore)
+
+    // 旧连接一点没受影响
+    const pending = connA.request('tabs.get', { tabId: 3 })
+    const req = await a.waitFor((m) => m.type === 'request' && m.method === 'tabs.get')
+    a.send({ type: 'response', id: req.id, ok: true, result: { id: 3 } })
+    await expect(pending).resolves.toEqual({ id: 3 })
+  })
+
+  it('CBS-31 一个 installId 的**第一条**连接：不探活（一个 ping 也不写），而且 hello 处理完当场就绪 —— 紧跟 hello 的第一条请求不能撞上「还没就绪」', async () => {
+    const server = await startServer()
+    const a = client()
+    await a.auth()
+
+    // hello 与随后的请求写在同一块里：claim 若插一个微任务进去，这条请求就会收到 not-ready
+    a.write(
+      JSON.stringify(helloOf()) +
+        '\n' +
+        JSON.stringify({ type: 'request', id: 'right-after-hello', method: 'm' }) +
+        '\n'
+    )
+    expect(await a.waitFor((m) => m.id === 'right-after-hello')).toEqual({
+      type: 'response',
+      id: 'right-after-hello',
+      ok: false,
+      error: 'Unknown method "m".'
+    })
+    expect(server.connectionFor('i1')?.ready).toBe(true)
+
+    // 另一个 installId 也一样：探活只属于「有人占着」那条路
+    const b = client()
+    await b.ready({ installId: 'i2' })
+    await settle()
+    expect(pingsIn(a.messages())).toEqual([])
+    expect(pingsIn(b.messages())).toEqual([])
+  })
+
+  it('CBS-32 版本不符的新连接撞上在用的那条：旧的不探活、不关、照样登记着；新的说完 welcome 就收线，statuses 仍只有旧的那一行', async () => {
+    const onClose = vi.fn()
+    const server = await startServer({ onClose })
+    const a = client()
+    await a.ready()
+    const { pings } = pong(a)
+    const connA = server.connectionFor('i1')!
+    const before = server.statuses()
+
+    const b = client()
+    await b.auth()
+    expect(await b.hello({ protocol: 2, runId: 'r2' })).toEqual({
+      type: 'welcome',
+      protocol: 1,
+      ok: false,
+      error: 'protocol-mismatch'
+    })
+
+    // 登记表一个 installId 只有一格：顶掉真在用的那条去显示一条版本不符的，是本末倒置
+    await vi.waitFor(() => expect(b.closed).toBe(true), WAIT)
+    expect(pings).toEqual([])
+    expect(a.closed).toBe(false)
+    expect(server.connectionFor('i1')).toBe(connA)
+    expect(server.statuses()).toEqual(before)
+    expect(server.statuses().map((s) => [s.runId, s.state])).toEqual([['r1', 'ready']])
+    await settle()
+    expect(onClose).not.toHaveBeenCalled()
+
+    // 换个没人占的 installId：版本不符的照样登记（设置页要显示「请更新扩展」）
+    const c = client()
+    await c.auth()
+    await c.hello({ installId: 'i9', protocol: 2 })
+    expect(server.statuses().map((s) => [s.installId, s.state])).toContainEqual(['i9', 'mismatch'])
+  })
+
+  it('CBS-33 那条版本不符的连接断开之后：在用的那条仍登记着、仍答话（release 认连接本人，不认 installId）', async () => {
+    const server = await startServer()
+    const a = client()
+    await a.ready()
+    pong(a)
+    const connA = server.connectionFor('i1')!
+
+    const b = client()
+    await b.auth()
+    await b.hello({ protocol: 2, runId: 'r2' })
+    b.close()
+    await settle()
+
+    expect(server.connectionFor('i1')).toBe(connA)
+    expect(server.readyConnections()).toEqual([connA])
+    const pending = connA.request('tabs.get', { tabId: 4 })
+    const req = await a.waitFor((m) => m.type === 'request' && m.method === 'tabs.get')
+    a.send({ type: 'response', id: req.id, ok: true, result: { id: 4 } })
+    await expect(pending).resolves.toEqual({ id: 4 })
+  })
+
+  it('CBS-36 旧连接答的是 ok:false：**按不答话算**、照样让位 —— 有意如此（真扩展只会答 ok:true，答错的只可能是别的本地进程）', async () => {
+    const server = await startServer()
+    const a = client()
+    await a.ready()
+    const { pings } = pong(a, { ok: false })
+    const connA = server.connectionFor('i1')!
+
+    const b = client()
+    await b.ready({ runId: 'r2' })
+
+    expect(pings).toHaveLength(1)
+    expect(server.connectionFor('i1')).not.toBe(connA)
+    expect(server.connectionFor('i1')?.info?.runId).toBe('r2')
+    await vi.waitFor(() => expect(a.closed).toBe(true), WAIT)
+  })
+
+  it('CBS-37 被拒的连接不许留着：连拒 5 次之后，活着的连接只剩在用的那一条（socket 也跟着收掉）', async () => {
+    const server = await startServer()
+    const a = client()
+    await a.ready()
+    pong(a)
+    await vi.waitFor(() => expect(liveConnections(server)).toBe(1), WAIT)
+
+    for (let i = 0; i < 5; i++) {
+      const b = client()
+      await b.auth()
+      expect(await b.hello({ runId: `r${i}` })).toMatchObject({
+        ok: false,
+        error: 'already-connected'
+      })
+      await vi.waitFor(() => expect(b.closed).toBe(true), WAIT)
+    }
+
+    // 被拒时先把 state 置成 closed 的话，socket 的 close 事件就早退了 —— 连接与它的 socket 会一直留到进程结束
+    await vi.waitFor(() => expect(liveConnections(server)).toBe(1), WAIT)
+    expect(server.connectionFor('i1')?.ready).toBe(true)
+  })
+
+  it('CBS-28 入站的分片没有 data：不抛（socket 回调里抛出去就是主进程的一次未捕获异常），连接照常答话', async () => {
+    const onRequest = vi.fn(async () => 'alive')
+    const { c, conn } = await readyPair({ onRequest })
+
+    c.send({ type: 'chunk', id: 'x', seq: 0, total: 2 })
+    c.send({ type: 'chunk', id: 'y', seq: 0, total: 2, data: null })
+    c.send({ type: 'chunk', id: 'z', seq: 0, total: 2, data: 123 })
+    c.send({ type: 'request', id: 'after-garbage', method: 'm' })
+
+    expect(await c.waitFor((m) => m.id === 'after-garbage')).toEqual({
+      type: 'response',
+      id: 'after-garbage',
+      ok: true,
+      result: 'alive'
+    })
+    expect(conn.ready).toBe(true)
+    expect(c.closed).toBe(false)
   })
 
   it('CBS-15 断开：onClose 只给就绪过的那条；模块内的 onConnectionClosed 每条都给（没鉴权 / 等 hello / mismatch / 就绪）', async () => {
@@ -846,6 +1129,101 @@ describe.skipIf(process.platform === 'win32')('ChromeBridgeServer —— 真 uni
     expect(onReady).toHaveBeenCalledTimes(1)
   })
 
+  it('CBS-38 地址文件：内容恰是监听地址（不带换行）、0600、父目录补建；照着它连得上', async () => {
+    const addressFile = join(dir, 'a', 'b', 'chrome-bridge.addr')
+    const server = await startServer({}, () => TOKEN, { addressFile })
+
+    expect(readFileSync(addressFile, 'utf-8')).toBe(sockPath)
+    expect(statSync(addressFile).mode & 0o777).toBe(0o600)
+    expect(statSync(join(dir, 'a', 'b')).isDirectory()).toBe(true)
+
+    // 「地址是读出来的」全靠这一点：本地组件拿文件里的字符串直接去连
+    await client(readFileSync(addressFile, 'utf-8')).auth()
+    expect(server.listening).toBe(true)
+  })
+
+  it('CBS-39 地址文件里躺着上一轮的地址：启动时原地改写成这一轮的', async () => {
+    const addressFile = join(dir, 'chrome-bridge.addr')
+    writeFileSync(addressFile, join(dir, 'gone.sock'))
+
+    await startServer({}, () => TOKEN, { addressFile })
+    expect(readFileSync(addressFile, 'utf-8')).toBe(sockPath)
+  })
+
+  it('CBS-40 stop：地址文件与 socket 文件都删掉；再 stop 一次不抛；文件被人先删了也不抛', async () => {
+    const addressFile = join(dir, 'chrome-bridge.addr')
+    const server = await startServer({}, () => TOKEN, { addressFile })
+    expect(existsSync(addressFile)).toBe(true)
+
+    server.stop()
+    expect(existsSync(addressFile)).toBe(false)
+    expect(existsSync(sockPath)).toBe(false)
+    expect(() => server.stop()).not.toThrow()
+
+    // 外面有人把文件删了（清理脚本、用户）——桌面退出时不该因此炸掉
+    const again = await startServer({}, () => TOKEN, { addressFile })
+    rmSync(addressFile)
+    rmSync(sockPath)
+    expect(() => again.stop()).not.toThrow()
+  })
+
+  it('CBS-41 桌面重启（换了监听地址）：地址文件跟着改成新地址 —— 这就是它存在的理由', async () => {
+    const addressFile = join(dir, 'chrome-bridge.addr')
+    const pathB = join(dir, 's2.sock')
+
+    const server = await startServer({}, () => TOKEN, { addressFile })
+    expect(readFileSync(addressFile, 'utf-8')).toBe(sockPath)
+    server.stop()
+
+    const second = track(new ChromeBridgeServer())
+    await second.start({ socketPath: pathB, getToken: () => TOKEN, addressFile })
+    expect(readFileSync(addressFile, 'utf-8')).toBe(pathB)
+    await client(pathB).auth()
+  })
+
+  it('CBS-42 地址文件写不进去（那个位置是个目录）：桥照样起得来、连得上 —— 写不下地址最多是回落到确定地址，不该拖垮监听', async () => {
+    const addressFile = join(dir, 'blocked')
+    mkdirSync(addressFile)
+
+    const server = await startServer({}, () => TOKEN, { addressFile })
+    expect(server.listening).toBe(true)
+    await client().auth()
+    expect(statSync(addressFile).isDirectory()).toBe(true)
+  })
+
+  it('CBS-43 没给 addressFile：一个字不写；之后 stop() 也不去删任何东西', async () => {
+    const bystander = join(dir, 'chrome-bridge.addr')
+    writeFileSync(bystander, '/somebody/elses.sock')
+
+    const server = await startServer()
+    expect(readFileSync(bystander, 'utf-8')).toBe('/somebody/elses.sock')
+
+    server.stop()
+    expect(existsSync(bystander)).toBe(true)
+    expect(readFileSync(bystander, 'utf-8')).toBe('/somebody/elses.sock')
+  })
+
+  it('CBS-44 监听失败的那个实例，stop() 时不许删掉**在用的**那一份地址文件（两个实例抢同一个地址时，本地组件就会再也找不到桌面）', async () => {
+    const addressFile = join(dir, 'chrome-bridge.addr')
+    const live = await startServer({}, () => TOKEN, { addressFile })
+    expect(readFileSync(addressFile, 'utf-8')).toBe(sockPath)
+
+    // 监听一个已经是目录的地址：bind 失败
+    const taken = join(dir, 'taken')
+    mkdirSync(taken)
+    const loser = track(new ChromeBridgeServer())
+    await expect(
+      loser.start({ socketPath: taken, getToken: () => TOKEN, addressFile })
+    ).rejects.toThrow()
+    expect(loser.listening).toBe(false)
+
+    loser.stop()
+    expect(existsSync(addressFile)).toBe(true)
+    expect(readFileSync(addressFile, 'utf-8')).toBe(sockPath)
+    expect(live.listening).toBe(true)
+    await client().auth()
+  })
+
   it('CBS-27 onConnectionReady：模块内的就绪处理器先于上层 onReady（此时连接已登记可查）；抛错的不挡上层；退订生效；mismatch 不触发', async () => {
     const order: string[] = []
     const server = await startServer({
@@ -878,22 +1256,134 @@ describe.skipIf(process.platform === 'win32')('ChromeBridgeServer —— 真 uni
 })
 
 describe('BridgeConnection —— 假 socket 控制字节边界与时钟', () => {
-  /** 一个挂在假 socket 上、已就绪的连接 */
+  /** 一台挂假 socket 的桥服务 */
+  function fakeServer(handlers: ChromeBridgeHandlers = {}): ChromeBridgeServer {
+    const server = new ChromeBridgeServer()
+    vi.spyOn(server, 'checkToken').mockImplementation((token) => token === TOKEN)
+    server.setHandlers(handlers)
+    return server
+  }
+
+  /** 接一条假连接、走完鉴权与 hello（就不就绪由 claim 决定，这里不断言） */
+  function fakeConnect(
+    server: ChromeBridgeServer,
+    over: Message = {}
+  ): { sock: FakeSocket; conn: BridgeConnection } {
+    const sock = new FakeSocket()
+    const conn = new BridgeConnection(sock as unknown as Socket, server)
+    sock.emit('data', Buffer.from(AUTH_LINE + '\n'))
+    sock.emit('data', Buffer.from(JSON.stringify(helloOf(over)) + '\n'))
+    return { sock, conn }
+  }
+
+  /** 替这条连接回一句「我在」 */
+  function answerPing(sock: FakeSocket): Message {
+    const pings = pingsIn(written(sock))
+    expect(pings).toHaveLength(1)
+    sock.emit(
+      'data',
+      Buffer.from(
+        JSON.stringify({ type: 'response', id: pings[0].id, ok: true, result: { ok: true } }) + '\n'
+      )
+    )
+    return pings[0]
+  }
+
+  /** 一个挂在假 socket 上、已就绪的连接（没人占着这个 installId：就绪是同步发生的） */
   function fakeReady(handlers: ChromeBridgeHandlers = {}): {
     server: ChromeBridgeServer
     sock: FakeSocket
     conn: BridgeConnection
   } {
-    const server = new ChromeBridgeServer()
-    vi.spyOn(server, 'checkToken').mockImplementation((token) => token === TOKEN)
-    server.setHandlers(handlers)
-    const sock = new FakeSocket()
-    const conn = new BridgeConnection(sock as unknown as Socket, server)
-    sock.emit('data', Buffer.from(AUTH_LINE + '\n'))
-    sock.emit('data', Buffer.from(JSON.stringify(helloOf()) + '\n'))
+    const server = fakeServer(handlers)
+    const { sock, conn } = fakeConnect(server)
     expect(conn.ready).toBe(true)
     return { server, sock, conn }
   }
+
+  it('CBS-30 旧连接不答话：满 2 秒之前一切照旧；到点才关掉旧的、让新的就绪', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const onClose = vi.fn()
+    const onReady = vi.fn()
+    const server = fakeServer({ onClose, onReady })
+    const a = fakeConnect(server)
+    expect(a.conn.ready).toBe(true)
+    onReady.mockClear()
+
+    const b = fakeConnect(server, { runId: 'r2' })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(pingsIn(written(a.sock))).toHaveLength(1)
+
+    await vi.advanceTimersByTimeAsync(1999)
+    expect(a.sock.destroy).not.toHaveBeenCalled()
+    expect(b.conn.ready).toBe(false)
+    expect(onClose).not.toHaveBeenCalled()
+    expect(server.connectionFor('i1')).toBe(a.conn)
+
+    await vi.advanceTimersByTimeAsync(1)
+    expect(a.sock.destroy).toHaveBeenCalledTimes(1)
+    expect(onClose).toHaveBeenCalledTimes(1)
+    expect(onClose).toHaveBeenCalledWith(a.conn)
+    expect(b.conn.ready).toBe(true)
+    expect(written(b.sock)).toContainEqual({ type: 'welcome', protocol: 1, ok: true })
+    expect(onReady).toHaveBeenCalledTimes(1)
+    expect(server.connectionFor('i1')).toBe(b.conn)
+  })
+
+  it('CBS-34 旧的不答话、两条新连接同时来：claim 按 installId 串起来 —— 最后只有一条就绪，另一条被拒（不串行的话两条都会以为自己接手了，其中一条「就绪」却没登记、什么也收不到）', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const onReady = vi.fn()
+    const server = fakeServer({ onReady })
+    const a = fakeConnect(server)
+    expect(onReady).toHaveBeenCalledTimes(1)
+    onReady.mockClear()
+
+    const b = fakeConnect(server, { runId: 'rB' })
+    const c = fakeConnect(server, { runId: 'rC' })
+    await vi.advanceTimersByTimeAsync(2000)
+
+    // A 不答话 → B 接手；接着轮到 C，它探的是**此刻**登记着的 B
+    expect(a.sock.destroy).toHaveBeenCalled()
+    expect(b.conn.ready).toBe(true)
+    answerPing(b.sock)
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(c.conn.ready).toBe(false)
+    expect(written(c.sock)).toContainEqual({
+      type: 'welcome',
+      protocol: 1,
+      ok: false,
+      error: 'already-connected'
+    })
+    expect(onReady).toHaveBeenCalledTimes(1)
+    expect(onReady.mock.calls[0][0]).toBe(b.conn)
+    expect([a.conn, b.conn, c.conn].filter((conn) => conn.ready)).toEqual([b.conn])
+    expect(server.connectionFor('i1')).toBe(b.conn)
+  })
+
+  it('CBS-35 探活还没到点、新连接自己先断了：不抛、不登记、markReady 一次都没调；旧的已经先关掉了，于是这个 installId 最后一条就绪连接也没有', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const onReady = vi.fn()
+    const server = fakeServer({ onReady })
+    const a = fakeConnect(server)
+    onReady.mockClear()
+
+    const b = fakeConnect(server, { runId: 'r2' })
+    const markReady = vi.spyOn(b.conn, 'markReady')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(pingsIn(written(a.sock))).toHaveLength(1)
+
+    b.sock.emit('close')
+    await vi.advanceTimersByTimeAsync(2000)
+
+    expect(a.sock.destroy).toHaveBeenCalled()
+    expect(markReady).not.toHaveBeenCalled()
+    expect(b.conn.ready).toBe(false)
+    expect(written(b.sock).some((m) => m.type === 'welcome' && m.ok === true)).toBe(false)
+    expect(server.connectionFor('i1')).toBeUndefined()
+    expect(server.readyConnections()).toEqual([])
+    expect(onReady).not.toHaveBeenCalled()
+  })
 
   it('CBS-19 多字节字符（中文、emoji）劈在两个 Buffer 之间（每一种劈法）：处理器拿到的参数一字不差；字符串形式的 data 也照收', async () => {
     const onRequest = vi.fn(async () => 'ok')

@@ -18,6 +18,12 @@ export default defineConfig({
         __dirname,
         '../../packages/agent-runtime/src/security/builtinPolicies/inlineSources.ts'
       ),
+      // 扩展的 browserOps 引这个自带子路径（扩展自己的构建也只给它开了这一条别名）；
+      // 同样得排在下面那条前缀别名之前
+      '@shuvix/agent-runtime/browser/extractPage': resolvePath(
+        __dirname,
+        '../../packages/agent-runtime/src/browser/extractPage.ts'
+      ),
       '@shuvix/agent-runtime': resolvePath(__dirname, '../../packages/agent-runtime/src/index.ts'),
       // Electron 提供 node:original-fs（未被 ASAR 补丁的原始 fs），
       // 在 Vitest 的 Node.js 环境中不存在，映射到标准 node:fs

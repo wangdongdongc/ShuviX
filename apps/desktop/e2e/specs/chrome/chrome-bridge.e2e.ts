@@ -21,7 +21,12 @@ import { existsSync, mkdirSync, readFileSync, statSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { CHROME_BRIDGE_HOST_NAME, CHROME_EXTENSION_ID } from '@shuvix/chat-protocol/chromeBridge'
+import {
+  BRIDGE_ERROR_ALREADY_CONNECTED,
+  chromeBridgeAddressFile,
+  CHROME_BRIDGE_HOST_NAME,
+  CHROME_EXTENSION_ID
+} from '@shuvix/chat-protocol/chromeBridge'
 import { until } from '../../harness/cdp'
 import { launchApp, type E2EApp } from '../../harness/launch'
 import { appEventRecorder, sqliteJson, type AppEventRecorder } from '../../harness/seed'
@@ -246,6 +251,45 @@ describe.skipIf(process.platform === 'win32')('本地组件的安装与握手', 
       'leaving browser dropped from the status'
     )
   }, 120_000)
+
+  it('CBE-8 桥在监听时地址文件写着真地址（0600、不带换行）—— 本地组件靠读它找到桌面，这条接线只有这里能证', async () => {
+    const addressFile = chromeBridgeAddressFile(app.home)
+    await until(() => existsSync(addressFile), 'address file written at startup')
+
+    const written = readFileSync(addressFile, 'utf8')
+    expect(written).toBe(join(app.home, '.shuvix', 'chrome-bridge.sock'))
+    expect(written.endsWith('\n')).toBe(false)
+    expect(statSync(written).isSocket()).toBe(true)
+    // 与 token 同一道门：读得到这个文件才敲得开（Windows 的管道名没有 0600 可依靠）
+    expect(statSync(addressFile).mode & 0o777).toBe(0o600)
+  }, 120_000)
+
+  it('CBE-9 另一个本地进程冒用在用的 installId：旧的还答得出 bridge.ping，新的就被拒（already-connected）；旧的那条对话一点没受影响', async () => {
+    const before = (await status()).browsers.find((b) => b.installId === 'inst-bridge-a')
+    expect(before?.state).toBe('ready')
+
+    const impostor = startFakeChrome({
+      home: app.home,
+      installId: 'inst-bridge-a',
+      runId: 'run-impostor',
+      browser: 'E2E Chrome Impostor',
+      tabs: [{ id: 77, url: 'https://impostor.example/' }]
+    })
+    others.push(impostor)
+    await impostor.waitHost('connected')
+
+    // 顶替静默的话，任何拿到 token 的本地进程报一个在用的 installId，就能把真浏览器挤下线、
+    // 接手它那些标签页会话的历史
+    expect(await impostor.hello()).toEqual({
+      type: 'welcome',
+      protocol: 1,
+      ok: false,
+      error: BRIDGE_ERROR_ALREADY_CONNECTED
+    })
+
+    expect((await status()).browsers.find((b) => b.installId === 'inst-bridge-a')).toEqual(before)
+    expect(await chromeA.openTabSession(5)).toBe(sidA5)
+  }, 120_000)
 })
 
 describe.skipIf(process.platform === 'win32')('桌面不在、桌面回来', () => {
@@ -255,6 +299,8 @@ describe.skipIf(process.platform === 'win32')('桌面不在、桌面回来', () 
   it('CBE-6 桌面停了：本地组件报「桌面不在」，扩展的请求由它当场回 desktop-offline', async () => {
     const since = chromeA.mark()
     await app.stop({ keepHome: true })
+    // 桌面退出时把地址文件收走：这期间本地组件算出来的是回落地址，那里没人监听（CBE-8 的另一半）
+    expect(existsSync(chromeBridgeAddressFile(app.home))).toBe(false)
 
     await chromeA.waitHost('offline', { since })
     const t0 = Date.now()
@@ -283,7 +329,15 @@ describe.skipIf(process.platform === 'win32')('桌面不在、桌面回来', () 
     const sinceLate = late.mark()
     app = await launchApp({ home: app.home })
 
-    // 新的一次启动换了 token：本地组件每次连都重读，照样鉴权通过
+    // 新的一次启动换了 token：本地组件每次连都重读，照样鉴权通过。
+    // 地址文件也是重启时重写的 —— 本地组件每次重连都现读它（Windows 上的管道名会变）
+    await until(
+      () => existsSync(chromeBridgeAddressFile(app.home)),
+      'address file rewritten on restart'
+    )
+    expect(readFileSync(chromeBridgeAddressFile(app.home), 'utf8')).toBe(
+      join(app.home, '.shuvix', 'chrome-bridge.sock')
+    )
     await chromeA.waitHost('connected', { since: sinceA, timeoutMs: 45_000 })
     await late.waitHost('connected', { since: sinceLate, timeoutMs: 45_000 })
 

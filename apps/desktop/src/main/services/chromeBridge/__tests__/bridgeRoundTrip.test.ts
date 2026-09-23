@@ -9,14 +9,17 @@
  *   RT-4  大段中文（含 emoji）两个方向：不必分片的 600 KB 行、要分片的 1 MB+ 事件、扩展发来的大请求 ——
  *         拼回来一字不差、没有 U+FFFD
  *   RT-5  桥服务 stop、同一路径起新的：本地组件报 offline → 重连 → connected；重说 hello 即就绪
+ *   RT-6  桌面换**地址**重启：写地址文件 → 本地组件重读 → 连到新地址。地址那条链子（桌面写 /
+ *         本地组件读 / 回落）只有这里从头到尾走一遍，而且是在非 Windows 上唯一能走通的地方
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { PassThrough } from 'stream'
-import { mkdtempSync, rmSync } from 'fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import {
   BridgeChunkAssembler,
+  chromeBridgeAddressFile,
   CHROME_BRIDGE_PROTOCOL,
   CHROME_NATIVE_MESSAGE_MAX_BYTES,
   type BridgeChunk,
@@ -32,8 +35,10 @@ import { ChromeBridgeServer, type BridgeConnection, type ChromeBridgeHandlers } 
 import {
   encodeNativeMessage,
   NativeMessageReader,
+  resolveBridgeAddress,
   runNativeHost,
-  type NativeHostHandle
+  type NativeHostHandle,
+  type NativeHostOptions
 } from '../../../../cli/nativeHost'
 /* eslint-enable boundaries/dependencies */
 
@@ -50,16 +55,23 @@ let sockPath: string
 const servers: ChromeBridgeServer[] = []
 const hosts: NativeHostHandle[] = []
 
-async function startServer(handlers: ChromeBridgeHandlers = {}): Promise<ChromeBridgeServer> {
+async function startServer(
+  handlers: ChromeBridgeHandlers = {},
+  opts: { socketPath?: string; addressFile?: string } = {}
+): Promise<ChromeBridgeServer> {
   const server = new ChromeBridgeServer()
   servers.push(server)
   server.setHandlers(handlers)
-  await server.start({ socketPath: sockPath, getToken: () => TOKEN })
+  await server.start({
+    socketPath: opts.socketPath ?? sockPath,
+    getToken: () => TOKEN,
+    ...(opts.addressFile ? { addressFile: opts.addressFile } : {})
+  })
   return server
 }
 
 /** 扩展这一侧：本地组件的 stdin / stdout */
-function startExtension(): {
+function startExtension(socketPath: NativeHostOptions['socketPath'] = sockPath): {
   bodies: string[]
   send: (message: unknown) => void
   messages: (from?: number) => Message[]
@@ -73,7 +85,7 @@ function startExtension(): {
   stdout.on('data', (chunk: Buffer) => bodies.push(...reader.push(chunk)))
   hosts.push(
     runNativeHost(stdin, stdout, {
-      socketPath: sockPath,
+      socketPath,
       readToken: () => TOKEN,
       retryDelaysMs: [20, 40]
     })
@@ -289,5 +301,37 @@ describe.skipIf(process.platform === 'win32')('Chrome 桥往返：真本地组�
     expect(second.statuses()).toEqual([
       expect.objectContaining({ installId: 'i1', state: 'ready', protocol: 1 })
     ])
+  })
+
+  it('RT-6 桌面换**地址**重启：地址文件改写 → 本地组件重读 → 连到新地址、重说 hello 即就绪（地址靠猜的话，这里就永远停在 offline）', async () => {
+    const addressFile = chromeBridgeAddressFile(dir)
+    const pathA = join(dir, 'a.sock')
+    const pathB = join(dir, 'b.sock')
+    // 本地组件真正用的那个解析器：读地址文件，读不到回落到确定地址
+    const env = { home: dir, platform: process.platform, user: 'shuvix-test' }
+
+    const first = await startServer({}, { socketPath: pathA, addressFile })
+    expect(readFileSync(addressFile, 'utf-8')).toBe(pathA)
+    expect(resolveBridgeAddress(env)).toBe(pathA)
+
+    const ext = startExtension(() => resolveBridgeAddress(env))
+    await handshake(ext, first)
+
+    first.stop()
+    await vi.waitFor(() => expect(ext.statuses()).toEqual(['connected', 'offline']), WAIT)
+    // 桌面退出时把地址文件也收走了：这期间解析器算出来的是回落地址，那里没人监听
+    expect(existsSync(addressFile)).toBe(false)
+    expect(resolveBridgeAddress(env)).toBe(join(dir, '.shuvix', 'chrome-bridge.sock'))
+
+    const second = await startServer({}, { socketPath: pathB, addressFile })
+    expect(readFileSync(addressFile, 'utf-8')).toBe(pathB)
+
+    await vi.waitFor(
+      () => expect(ext.statuses()).toEqual(['connected', 'offline', 'connected']),
+      WAIT
+    )
+    const conn = await handshake(ext, second)
+    expect(second.readyConnections()).toEqual([conn])
+    expect(first.listening).toBe(false)
   })
 })
