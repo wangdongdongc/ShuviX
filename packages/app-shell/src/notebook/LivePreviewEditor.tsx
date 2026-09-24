@@ -24,7 +24,7 @@ import { runMarkdownCommand, markdownKeymap } from './markdownCommands'
 import { frontmatterCard, type FrontmatterFieldMount } from './frontmatterCard'
 import { FrontmatterFieldPicker } from './FrontmatterFieldPicker'
 import { NotebookMinimap } from './NotebookMinimap'
-import { parseHeadings, type NotebookHeading } from './notebookHeadings'
+import { activeHeadingIndex, parseHeadings, type NotebookHeading } from './notebookHeadings'
 import {
   type FileMap,
   buildFileMap,
@@ -37,6 +37,11 @@ import {
 } from './wikiEmbed'
 
 const SAVE_DEBOUNCE_MS = 200
+/**
+ * 右侧目录判定当前章节的探针深度（离视口顶部的 px）。onJump 把标题**文字**顶到 yMargin(24) 处，探针须落在
+ * 那一行文字里：比 24 浅会落回上一节，太深则会越过一行小号标题 —— 紧跟其后的下一个标题就被当成了当前章节。
+ */
+const OUTLINE_PROBE_PX = 32
 
 /**
  * 宿主能力注入（去除对 window.api / 桌面 store 的直接依赖，供桌面 + 扩展复用）。
@@ -170,13 +175,13 @@ export interface LivePreviewEditorProps {
   /**
    * 只读 live-preview：仅渲染、不可编辑（供 Files 面板 md 预览复用笔记本渲染）。
    * 编辑器不可聚焦 → inline-preview 全量渲染（无光标行揭示源码）；同时关闭自动保存、
-   * 编辑右键菜单与 minimap 跳转聚焦。双链 [[file]] / 内嵌 ![[image]] 仍生效。
+   * 编辑右键菜单与目录跳转聚焦。双链 [[file]] / 内嵌 ![[image]] 仍生效。
    */
   readOnly?: boolean
   /**
-   * 排版模式。`notebook`（缺省）= 写作页：侧边距 + 700px 限宽居中 + 标题角标 + minimap；
-   * `fill` = 嵌入模式：铺满容器、去角标与 minimap，供设置页这类**自带边距**的宿主使用
-   * （两套边距叠加会把正文挤成窄条，且 minimap 会浮在铺满的正文上）。
+   * 排版模式。`notebook`（缺省）= 写作页：侧边距 + 700px 限宽居中 + 标题角标 + 右侧目录；
+   * `fill` = 嵌入模式：铺满容器、去角标与目录，供设置页这类**自带边距**的宿主使用
+   * （两套边距叠加会把正文挤成窄条，且目录会浮在铺满的正文上）。
    */
   layout?: 'notebook' | 'fill'
   /** 内容是否已下滑（非顶端）—— 父组件据此给标题栏加柔和阴影 */
@@ -203,7 +208,7 @@ export interface LivePreviewEditorProps {
 
 /**
  * LivePreviewEditor —— Atomic Editor（CM6 live preview）编辑区核心，供 NotebookView 使用。
- * 负责编辑器本体、防抖自动保存（+ 卸载 flush）、滚动阴影探测、右键菜单、右侧悬浮 minimap、
+ * 负责编辑器本体、防抖自动保存（+ 卸载 flush）、滚动阴影探测、右键菜单、右侧悬浮目录、
  * 笔记本主题预设（data-notebook-theme）。标题栏由父组件渲染，本组件只负责其下方的编辑区。
  * 宿主无关：文件读写/扫描经 getSessionChannelApi().files、图片内嵌经注入的 mediaUrl seam、
  * 主题/外链/右键菜单经 caps 注入。
@@ -229,8 +234,10 @@ export function LivePreviewEditor({
 
   const sessionId = fileContext?.sessionId
 
-  // minimap 标题列表（解析自 markdown 文本）
+  // 右侧目录的标题列表（解析自 markdown 文本）
   const [headings, setHeadings] = useState<NotebookHeading[]>(() => parseHeadings(initialContent))
+  // 视口顶部往下 OUTLINE_PROBE_PX 处落在哪一行 —— 当前章节 = 这一行之前的最后一个标题
+  const [probeLine, setProbeLine] = useState(0)
 
   const panelRef = useRef<HTMLDivElement>(null)
   const atomicRef = useRef<AtomicCodeMirrorEditorHandle | null>(null)
@@ -275,6 +282,54 @@ export function LivePreviewEditor({
     panel.addEventListener('scroll', onScroll, { capture: true, passive: true })
     return () => panel.removeEventListener('scroll', onScroll, { capture: true })
   }, [onScrolledChange])
+
+  // 右侧目录的当前章节：滚动时（同样在祖先上 capture 监听）和标题变动时（上方插入内容会让行号整体
+  // 挪动，却不产生 scroll）按帧重量一次探针所在行
+  const probeRafRef = useRef<number | null>(null)
+  const scheduleProbe = useCallback((): void => {
+    if (probeRafRef.current !== null) return
+    probeRafRef.current = requestAnimationFrame(() => {
+      probeRafRef.current = null
+      const dom = panelRef.current?.querySelector<HTMLElement>('.cm-editor')
+      const view = dom ? EditorView.findFromDOM(dom) : null
+      if (!view) return
+      const scroller = view.scrollDOM
+      const { doc } = view.state
+      // 滚到底了：最后一节可能短到永远到不了视口顶部，此时算读到了最后
+      const atBottom =
+        scroller.scrollTop > 0 &&
+        scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 2
+      if (atBottom) {
+        setProbeLine(doc.lines)
+        return
+      }
+      const height = scroller.getBoundingClientRect().top + OUTLINE_PROBE_PX - view.documentTop
+      setProbeLine(doc.lineAt(view.lineBlockAtHeight(height).from).number)
+    })
+  }, [])
+  useEffect(() => {
+    const panel = panelRef.current
+    if (layout !== 'notebook' || !panel) return undefined
+    panel.addEventListener('scroll', scheduleProbe, { capture: true, passive: true })
+    // 改窗口大小、开合会话面板会让正文重新折行：行与高度的对应变了，却没有 scroll
+    const resize = new ResizeObserver(scheduleProbe)
+    resize.observe(panel)
+    return () => {
+      panel.removeEventListener('scroll', scheduleProbe, { capture: true })
+      resize.disconnect()
+    }
+  }, [layout, scheduleProbe])
+  useEffect(() => {
+    if (layout === 'notebook') scheduleProbe()
+  }, [layout, headings, scheduleProbe])
+  useEffect(
+    () => () => {
+      // 取消后必须清空：StrictMode 开发态会「挂载 → 清理 → 再挂载」，留着旧 id 会让 scheduleProbe 从此永远提前返回
+      if (probeRafRef.current !== null) cancelAnimationFrame(probeRafRef.current)
+      probeRafRef.current = null
+    },
+    []
+  )
 
   useImperativeHandle(
     handleRef,
@@ -403,7 +458,7 @@ export function LivePreviewEditor({
     [flushSave, onSaveStatusChange]
   )
 
-  /** minimap 点击：滚动到对应标题行并聚焦（复用 findFromDOM 取 view） */
+  /** 目录点击：滚动到对应标题行并聚焦（复用 findFromDOM 取 view） */
   const onJump = useCallback(
     (line: number): void => {
       const dom = panelRef.current?.querySelector<HTMLElement>('.cm-editor')
@@ -684,8 +739,12 @@ export function LivePreviewEditor({
           readOnly={readOnly}
         />
       </div>
-      {layout === 'notebook' && headings.length > 0 && (
-        <NotebookMinimap headings={headings} onJump={onJump} />
+      {layout === 'notebook' && headings.length >= 2 && (
+        <NotebookMinimap
+          headings={headings}
+          activeIndex={activeHeadingIndex(headings, probeLine)}
+          onJump={onJump}
+        />
       )}
     </div>
   )

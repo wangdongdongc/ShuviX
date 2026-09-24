@@ -6396,3 +6396,393 @@ export function markdownWindowPane(client: CdpClient): MarkdownWindowPane {
       )
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// 主窗口笔记本的右侧目录（app-shell NotebookMinimap）—— `.notebook-scroller` 里那个 `<nav aria-label>`：
+// 第一个孩子是 `aria-hidden` 的横线列（rail），另一个孩子是目录卡片（card，里面一个标题一颗按钮）。
+//
+// 读法只认结构与计算样式，不认 Tailwind 类名：
+//   - 「加深的横线」= 计算后的 `background-color` 与众不同的那条（调用方按多数 / 已知底色判）；
+//   - 「展开」= card 的计算 `opacity` 为 1、rail 为 0（150ms 过渡期间是中间值 —— 调用方一律 until）；
+//   - 当前项 = `aria-current="location"` 的按钮。
+//
+// 悬停 / 点击走 CDP `Input.dispatchMouseEvent`（可信输入，坐标是视口 CSS px）：`:hover` 与 mouseenter
+// 只认真指针，合成的 MouseEvent 碰不到它们。按键走 `Input.dispatchKeyEvent`。焦点态（`:focus-visible`、
+// CM6 的 hasFocus）要求页面认为自己有焦点 —— 隔离实例的窗口不一定是前台，所以首次动手前开焦点仿真
+// （与 markdownWindowPane 同一理由，只作用于这条 CDP 连接）。
+//
+// 编辑器那一半（行号、把某行摆到离滚动区顶部 N px、滚动、光标）经 CM6 视图，从 `.cm-content` 摸到视图的
+// 内部字段与 markdownWindowPane 的 `CM_VIEW` 同一条（升级 CM6 时两处一起改）。
+
+/** 视口坐标下的矩形（CSS px） */
+export interface OutlineRect {
+  left: number
+  top: number
+  right: number
+  bottom: number
+  width: number
+  height: number
+}
+
+/** 目录卡片里的一项 */
+export interface OutlineEntryShot {
+  text: string
+  title: string
+  /** `aria-current="location"` */
+  current: boolean
+  /** 计算后的 font-weight */
+  weight: number
+  /** 内联 padding-left（px） */
+  indent: number
+}
+
+/** 横线列里的一条 */
+export interface OutlineDashShot {
+  /** 渲染宽度（px） */
+  width: number
+  /** 计算后的 background-color */
+  background: string
+}
+
+/** 目录与编辑器滚动区的几何 + 展开态读数；没有目录时 nav / rail / card 为 null */
+export interface OutlineLayout {
+  /** 编辑器滚动区（`.cm-scroller`） */
+  scroller: OutlineRect
+  nav: OutlineRect | null
+  rail: OutlineRect | null
+  card: OutlineRect | null
+  railOpacity: number
+  cardOpacity: number
+  railScroll: { top: number; height: number; client: number } | null
+}
+
+/** 某一点上 `elementFromPoint` 命中的是什么 */
+export type OutlineHit = 'rail' | 'entry' | 'card' | 'nav' | 'editor' | 'none' | `other:${string}`
+
+/** 焦点在哪 */
+export interface OutlineFocusShot {
+  /** editor = `.cm-content`；entry = 目录卡片里的按钮；body = 没有元素握着焦点 */
+  active: 'editor' | 'entry' | 'body' | 'other'
+  /** active 为 entry 时是那颗按钮的文字 */
+  entryText: string | null
+  /** CM6 自己的 hasFocus */
+  editorHasFocus: boolean
+}
+
+export interface NotebookOutlinePane {
+  /** 目录在不在 */
+  present(): Promise<boolean>
+  /** nav 的 aria-label；目录不在为 null */
+  label(): Promise<string | null>
+  entries(): Promise<OutlineEntryShot[]>
+  dashes(): Promise<OutlineDashShot[]>
+  /** `aria-current` 的项的下标（DOM 序）；一个都没有为空数组 */
+  currentEntries(): Promise<number[]>
+  layout(): Promise<OutlineLayout | null>
+  /** 第 i 项 / 第 i 条横线的视口矩形；不在为 null */
+  entryRect(i: number): Promise<OutlineRect | null>
+  dashRect(i: number): Promise<OutlineRect | null>
+  /** 某一点命中了什么 */
+  hitAt(x: number, y: number): Promise<OutlineHit>
+
+  /** 可信指针：移到某点 */
+  moveMouse(x: number, y: number): Promise<void>
+  /** 可信指针：移到横线列中心，回那一点 */
+  hoverRail(): Promise<{ x: number; y: number }>
+  /** 可信指针：移到编辑器左半边的空处（不在目录上） */
+  moveAway(): Promise<void>
+  /** 可信指针：在某点按下并抬起左键（单击） */
+  clickAt(x: number, y: number): Promise<void>
+  /** 可信指针：点目录卡片的第 i 项（卡片须已展开 —— 先 hoverRail 并 until 展开） */
+  clickEntry(i: number): Promise<void>
+  /** 可信按键 */
+  pressKey(key: 'Escape' | 'Tab' | 'Enter' | 'ArrowDown'): Promise<void>
+  /** 焦点在哪 */
+  focus(): Promise<OutlineFocusShot>
+  /** 聚焦编辑器（不移光标） */
+  focusEditor(): Promise<void>
+  /** 让编辑器失焦（光标不动） */
+  blurEditor(): Promise<void>
+
+  /** 编辑器文档全文（CM6 doc） */
+  docText(): Promise<string>
+  /** 文本**恰好等于** text 的那一行的行号（1-based；须唯一，否则抛） */
+  lineOf(text: string): Promise<number>
+  /** 某行的 [from, to] */
+  lineRange(line: number): Promise<{ from: number; to: number }>
+  /** 某行所在块的顶边离滚动区顶边多少 px（负数 = 在视口上方） */
+  lineOffset(line: number): Promise<number>
+  /** 滚动，使某行所在块的顶边落在离滚动区顶边 px 处（容差 1px，等 CM6 量完高度再核一遍） */
+  placeLine(line: number, px: number): Promise<void>
+  /** 滚动区读数 */
+  scroll(): Promise<{ top: number; height: number; client: number }>
+  /** 直接设滚动区的 scrollTop，等两帧 */
+  setScrollTop(top: number): Promise<void>
+  /**
+   * 滚到底：视口外的行高是估的，一次设到 scrollHeight 之后 CM6 量出真高度、按锚点改回 scrollTop，
+   * 落点并不在底 —— 反复设，直到连着两次都贴底
+   */
+  scrollToBottom(): Promise<void>
+  /** 以程序身份改一段文字（一个事务，不滚动） */
+  replace(from: number, to: number, insert: string): Promise<void>
+  /** 光标（主选区的 head）与它所在行 */
+  caret(): Promise<{ head: number; line: number; lineFrom: number }>
+}
+
+export function notebookOutlinePane(main: CdpClient): NotebookOutlinePane {
+  const SCOPE = `document.querySelector('.notebook-scroller')`
+  const NAV = `${SCOPE}?.querySelector('nav[aria-label]')`
+  const RAIL = `([...((${NAV})?.children ?? [])].find((c) => c.getAttribute('aria-hidden') === 'true') ?? null)`
+  const CARD = `([...((${NAV})?.children ?? [])].find((c) => c.getAttribute('aria-hidden') !== 'true') ?? null)`
+  const ENTRIES = `[...((${CARD})?.querySelectorAll('button') ?? [])]`
+  const DASHES = `[...((${RAIL})?.children ?? [])]`
+  const CONTENT = `${SCOPE}?.querySelector('.cm-content')`
+  // CM6 视图：内部字段（与 markdownWindowPane 的 CM_VIEW 同一条）
+  const CM_VIEW = `((${CONTENT})?.cmTile?.root?.view ?? null)`
+  const RECT = `((el) => { const r = el.getBoundingClientRect(); return { left: r.left, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height } })`
+  const TWO_FRAMES = `new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))`
+
+  let focusEmulated = false
+  const emulateFocus = async (): Promise<void> => {
+    if (focusEmulated) return
+    await main.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+    focusEmulated = true
+  }
+
+  const layout = (): Promise<OutlineLayout | null> =>
+    main.eval<OutlineLayout | null>(`(() => {
+      const view = ${CM_VIEW}
+      if (!view) return null
+      const rect = ${RECT}
+      const nav = ${NAV}
+      const rail = ${RAIL}
+      const card = ${CARD}
+      return {
+        scroller: rect(view.scrollDOM),
+        nav: nav ? rect(nav) : null,
+        rail: rail ? rect(rail) : null,
+        card: card ? rect(card) : null,
+        railOpacity: rail ? Number(getComputedStyle(rail).opacity) : -1,
+        cardOpacity: card ? Number(getComputedStyle(card).opacity) : -1,
+        railScroll: rail ? { top: rail.scrollTop, height: rail.scrollHeight, client: rail.clientHeight } : null
+      }
+    })()`)
+
+  const mouse = async (
+    type: 'mouseMoved' | 'mousePressed' | 'mouseReleased',
+    x: number,
+    y: number
+  ): Promise<void> => {
+    await main.send('Input.dispatchMouseEvent', {
+      type,
+      x,
+      y,
+      ...(type === 'mouseMoved' ? {} : { button: 'left', clickCount: 1 })
+    })
+  }
+
+  const clickAt = async (x: number, y: number): Promise<void> => {
+    await emulateFocus()
+    await mouse('mouseMoved', x, y)
+    await mouse('mousePressed', x, y)
+    await mouse('mouseReleased', x, y)
+  }
+
+  const rectOf = (list: string, i: number): Promise<OutlineRect | null> =>
+    main.eval<OutlineRect | null>(`(() => {
+      const el = ${list}[${i}]
+      return el ? ${RECT}(el) : null
+    })()`)
+
+  const lineOffset = (line: number): Promise<number> =>
+    main.eval<number>(`(() => {
+      const view = ${CM_VIEW}
+      if (!view) throw new Error('no editor view')
+      const block = view.lineBlockAt(view.state.doc.line(${line}).from)
+      return view.documentTop + block.top - view.scrollDOM.getBoundingClientRect().top
+    })()`)
+
+  const KEYS: Record<string, Record<string, unknown>> = {
+    Escape: { key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 },
+    Tab: { key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9, nativeVirtualKeyCode: 9 },
+    // Enter 带 text：它的「按下」要生成 keypress —— 按钮的回车激活挂在那上面
+    Enter: {
+      key: 'Enter',
+      code: 'Enter',
+      windowsVirtualKeyCode: 13,
+      nativeVirtualKeyCode: 13,
+      text: '\r',
+      unmodifiedText: '\r'
+    },
+    ArrowDown: {
+      key: 'ArrowDown',
+      code: 'ArrowDown',
+      windowsVirtualKeyCode: 40,
+      nativeVirtualKeyCode: 40
+    }
+  }
+
+  return {
+    present: () => main.eval<boolean>(`!!(${NAV})`),
+    label: () => main.eval<string | null>(`(${NAV})?.getAttribute('aria-label') ?? null`),
+    entries: () =>
+      main.eval<OutlineEntryShot[]>(`${ENTRIES}.map((b) => ({
+        text: b.textContent ?? '',
+        title: b.title,
+        current: b.getAttribute('aria-current') === 'location',
+        weight: Number(getComputedStyle(b).fontWeight),
+        indent: parseFloat(b.style.paddingLeft)
+      }))`),
+    dashes: () =>
+      main.eval<OutlineDashShot[]>(`${DASHES}.map((d) => ({
+        width: d.getBoundingClientRect().width,
+        background: getComputedStyle(d).backgroundColor
+      }))`),
+    currentEntries: () =>
+      main.eval<number[]>(
+        `${ENTRIES}.map((b, i) => (b.getAttribute('aria-current') === 'location' ? i : -1)).filter((i) => i >= 0)`
+      ),
+    layout,
+    entryRect: (i) => rectOf(ENTRIES, i),
+    dashRect: (i) => rectOf(DASHES, i),
+    hitAt: (x, y) =>
+      main.eval<OutlineHit>(`(() => {
+        const el = document.elementFromPoint(${x}, ${y})
+        if (!el) return 'none'
+        const nav = ${NAV}
+        if (nav && nav.contains(el)) {
+          if ((${RAIL})?.contains(el)) return 'rail'
+          if (el.closest('button') && (${CARD})?.contains(el)) return 'entry'
+          if ((${CARD})?.contains(el)) return 'card'
+          return 'nav'
+        }
+        if (el.closest('.cm-editor')) return 'editor'
+        return 'other:' + el.tagName + '.' + String(el.className).slice(0, 80)
+      })()`),
+
+    moveMouse: (x, y) => mouse('mouseMoved', x, y),
+    hoverRail: async () => {
+      const l = await layout()
+      if (!l?.rail) throw new Error('notebook outline: no rail to hover')
+      const x = l.rail.left + l.rail.width / 2
+      const y = l.rail.top + l.rail.height / 2
+      await mouse('mouseMoved', x, y)
+      return { x, y }
+    },
+    moveAway: async () => {
+      const l = await layout()
+      if (!l) throw new Error('notebook outline: no editor')
+      await mouse('mouseMoved', l.scroller.left + 24, l.scroller.top + l.scroller.height / 2)
+    },
+    clickAt,
+    clickEntry: async (i) => {
+      const r = await rectOf(ENTRIES, i)
+      if (!r) throw new Error(`notebook outline: no entry ${i}`)
+      await clickAt(r.left + Math.min(r.width / 2, 40), r.top + r.height / 2)
+    },
+    pressKey: async (key) => {
+      await emulateFocus()
+      const base = KEYS[key]
+      await main.send('Input.dispatchKeyEvent', {
+        type: 'text' in base ? 'keyDown' : 'rawKeyDown',
+        ...base
+      })
+      await main.send('Input.dispatchKeyEvent', { type: 'keyUp', ...base })
+    },
+    focus: () =>
+      main.eval<OutlineFocusShot>(`(() => {
+        const a = document.activeElement
+        const view = ${CM_VIEW}
+        let active = 'other'
+        if (!a || a === document.body) active = 'body'
+        else if (a === ${CONTENT}) active = 'editor'
+        else if (a.tagName === 'BUTTON' && (${CARD})?.contains(a)) active = 'entry'
+        return {
+          active,
+          entryText: active === 'entry' ? (a.textContent ?? '') : null,
+          editorHasFocus: !!view?.hasFocus
+        }
+      })()`),
+    focusEditor: async () => {
+      await emulateFocus()
+      await main.eval(`(${CM_VIEW})?.focus()`)
+    },
+    blurEditor: async () => {
+      await main.eval(`(${CM_VIEW})?.contentDOM.blur()`)
+    },
+
+    docText: () => main.eval<string>(`${CM_VIEW}?.state.doc.toString() ?? ''`),
+    lineOf: async (text) => {
+      const hit = await main.eval<number[]>(`(() => {
+        const doc = ${CM_VIEW}?.state.doc
+        if (!doc) return []
+        const out = []
+        for (let n = 1; n <= doc.lines; n++) if (doc.line(n).text === ${JSON.stringify(text)}) out.push(n)
+        return out
+      })()`)
+      if (hit.length !== 1) {
+        throw new Error(`notebook outline: line ${JSON.stringify(text)} found ${hit.length} times`)
+      }
+      return hit[0]
+    },
+    lineRange: (line) =>
+      main.eval<{ from: number; to: number }>(`(() => {
+        const l = ${CM_VIEW}.state.doc.line(${line})
+        return { from: l.from, to: l.to }
+      })()`),
+    lineOffset,
+    placeLine: async (line, px) => {
+      // 视口外的行高是 CM6 估的：滚过去、等它量完、再校正，直到连着两次都落在容差内
+      let settled = 0
+      for (let round = 0; round < 20 && settled < 2; round++) {
+        const off = await lineOffset(line)
+        if (Math.abs(off - px) <= 1) {
+          settled++
+        } else {
+          settled = 0
+          await main.eval(`(${CM_VIEW}).scrollDOM.scrollTop += ${off - px}`)
+        }
+        await main.eval(TWO_FRAMES)
+      }
+      const off = await lineOffset(line)
+      if (Math.abs(off - px) > 1) {
+        throw new Error(`notebook outline: could not place line ${line} at ${px}px (got ${off})`)
+      }
+    },
+    scroll: () =>
+      main.eval<{ top: number; height: number; client: number }>(`(() => {
+        const s = (${CM_VIEW}).scrollDOM
+        return { top: s.scrollTop, height: s.scrollHeight, client: s.clientHeight }
+      })()`),
+    setScrollTop: async (top) => {
+      await main.eval(`(${CM_VIEW}).scrollDOM.scrollTop = ${top}`)
+      await main.eval(TWO_FRAMES)
+    },
+    scrollToBottom: async () => {
+      let settled = 0
+      for (let round = 0; round < 30 && settled < 2; round++) {
+        const atBottom = await main.eval<boolean>(`(() => {
+          const s = (${CM_VIEW}).scrollDOM
+          if (s.scrollTop + s.clientHeight >= s.scrollHeight - 1) return true
+          s.scrollTop = s.scrollHeight
+          return false
+        })()`)
+        settled = atBottom ? settled + 1 : 0
+        await main.eval(TWO_FRAMES)
+      }
+      if (settled < 2) throw new Error('notebook outline: could not settle at the bottom')
+    },
+    replace: async (from, to, insert) => {
+      await main.eval(
+        `(${CM_VIEW}).dispatch({ changes: { from: ${from}, to: ${to}, insert: ${JSON.stringify(insert)} } })`
+      )
+    },
+    caret: () =>
+      main.eval<{ head: number; line: number; lineFrom: number }>(`(() => {
+        const view = ${CM_VIEW}
+        const head = view.state.selection.main.head
+        const line = view.state.doc.lineAt(head)
+        return { head, line: line.number, lineFrom: line.from }
+      })()`)
+  }
+}
