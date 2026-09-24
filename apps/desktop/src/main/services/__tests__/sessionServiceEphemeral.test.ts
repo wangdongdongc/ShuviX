@@ -132,7 +132,9 @@ vi.mock('../../i18n', () => ({ t: (key: string) => key }))
 vi.mock('../../utils/paths', () => ({
   getTempWorkspace: (sid: string) => `/nonexistent/shuvix-unit/tmp/${sid}`,
   getToolResultsBase: () => '/nonexistent/shuvix-unit/tool-results',
-  getSessionArtifactsDir: (sid: string) => `/nonexistent/shuvix-unit/artifacts/${sid}`
+  getSessionArtifactsDir: (sid: string) => `/nonexistent/shuvix-unit/artifacts/${sid}`,
+  isSafeSessionId: (id: string) =>
+    !!id && !/[/\\]/.test(id) && id !== '.' && id !== '..' && !id.includes('..')
 }))
 vi.mock('../mcpService', () => ({ mcpService: { closeSession: mocks.closeSession } }))
 vi.mock('../toolAggregator', () => ({

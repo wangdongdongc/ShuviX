@@ -15,7 +15,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync
 import { join } from 'path'
 import { slugify } from '@shuvix/agent-runtime'
 import { SANDBOX_CSP } from '@shuvix/chat-protocol/utils/interactiveFence'
-import { getSessionArtifactsDir } from '../../utils/paths'
+import { getSessionArtifactsDir, isSafeSessionId } from '../../utils/paths'
 
 /** 一件 artifact 的元信息（标题现算，不落盘） */
 export interface ArtifactInfo {
@@ -76,18 +76,11 @@ function dedupe(stem: string, ext: string, taken: (n: string) => boolean): strin
   return `${stem}-${Date.now()}.${ext}`
 }
 
-/**
- * 会话 id 是否能安全地当作目录名 —— 含路径分隔符或 `..` 一律拒。
- *
- * 今天 id 是 DB 的 uuidv7、不可达；但这是全仓唯一一条对该目录的**递归删除**，而
- * `artifact:read` 的 sessionId 来自**渲染端**。一行守卫换掉一整类事故。
- *
- * **四个入口都要过它** —— 曾经只挡了 listArtifacts / deleteSessionArtifacts，偏偏漏了
- * findArtifact / readArtifact，也就是渲染端真正会抵达的那两个，正好落空了上面这条理由。
+/*
+ * 会话 id 的安全判定（isSafeSessionId，utils/paths）：**四个入口都要过它** —— 曾经只挡了
+ * listArtifacts / deleteSessionArtifacts，偏偏漏了 findArtifact / readArtifact，也就是渲染端
+ * 真正会抵达的那两个。安全策略的免询问范围（toolContext 的 sessionArtifactsDir）用的是同一个判定。
  */
-function isSafeSessionId(id: string): boolean {
-  return !!id && !/[/\\]/.test(id) && id !== '.' && id !== '..' && !id.includes('..')
-}
 
 /** 列出这场会话的 artifact（目录不存在 = 空，不创建） */
 export function listArtifacts(sessionId: string): ArtifactInfo[] {

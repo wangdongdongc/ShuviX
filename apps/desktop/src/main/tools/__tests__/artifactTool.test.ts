@@ -36,7 +36,9 @@ const state = vi.hoisted(() => ({
 }))
 
 vi.mock('../../utils/paths', () => ({
-  getSessionArtifactsDir: (sessionId: string) => `${state.root}/${sessionId}`
+  getSessionArtifactsDir: (sessionId: string) => `${state.root}/${sessionId}`,
+  isSafeSessionId: (id: string) =>
+    !!id && !/[/\\]/.test(id) && id !== '.' && id !== '..' && !id.includes('..')
 }))
 vi.mock('../../services/messageService', () => ({
   messageService: { listBySession: async () => state.messages }

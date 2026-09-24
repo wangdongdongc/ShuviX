@@ -124,7 +124,9 @@ vi.mock('../../i18n', () => ({ t: (key: string) => key }))
 vi.mock('../../utils/paths', () => ({
   getTempWorkspace: mocks.getTempWorkspace,
   getToolResultsBase: () => join(mocks.tempRoot.dir, 'tool-results'),
-  getSessionArtifactsDir: (sid: string) => join(mocks.tempRoot.dir, 'artifacts', sid)
+  getSessionArtifactsDir: (sid: string) => join(mocks.tempRoot.dir, 'artifacts', sid),
+  isSafeSessionId: (id: string) =>
+    !!id && !/[/\\]/.test(id) && id !== '.' && id !== '..' && !id.includes('..')
 }))
 vi.mock('../mcpService', () => ({ mcpService: { closeSession: mocks.closeSession } }))
 vi.mock('../toolAggregator', () => ({

@@ -1,7 +1,11 @@
 /**
  * 认领之后的那次 `edit` —— artifact 工具的 `recordRead` 到底买到了什么。
  * 真实临时目录 + 真实 store/adopt + 真实 fileTime + 真实 edit 内核（安全上下文照
- * writeAskWiring/fileToolDepsKnowledge 的桩，免询问开着）。
+ * writeAskWiring/fileToolDepsKnowledge 的桩，免询问缺省开着）。
+ *
+ * AG-8 把免询问关掉，看的是工具这条路上的询问链：认领下来的那件在本会话自己的 artifacts 目录里，
+ * ask-on-write 对它不问（`vars.sessionArtifactsDir`），别的会话的目录照问。这里的 provider 是桩 ——
+ * 真实变量表由 toolContext.test 的 SEC-7 与 realPathPolicy.test 的 RPP-A3 钉。
  *
  * **先纠正一条常被写反的前提**：`fileTools/edit.ts` 只在「本会话读过」时才校验陈旧，
  * **没读过不拦**（它自己的注释：「必须先 read 一遍」只是仪式性约束）。所以「零重发」
@@ -37,11 +41,15 @@ const state = vi.hoisted(() => ({
   root: '',
   workspace: '',
   messages: [] as ChatMessage[],
-  requests: [] as InputRequest[]
+  requests: [] as InputRequest[],
+  /** 会话的免询问开关（缺省开着：AG-1…7 验的是陈旧守卫，不是询问链路） */
+  autoAllow: true
 }))
 
 vi.mock('../../utils/paths', () => ({
-  getSessionArtifactsDir: (sessionId: string) => `${state.root}/${sessionId}`
+  getSessionArtifactsDir: (sessionId: string) => `${state.root}/${sessionId}`,
+  isSafeSessionId: (id: string) =>
+    !!id && !/[/\\]/.test(id) && id !== '.' && id !== '..' && !id.includes('..')
 }))
 vi.mock('../../services/messageService', () => ({
   messageService: { listBySession: async () => state.messages }
@@ -59,9 +67,9 @@ vi.mock('../../services/knowledge/knowledgePaths', () => ({
 vi.mock('../../services/toolContext', async () => {
   const { createSecurityContext } = await import('@shuvix/agent-runtime')
   const { sep: pathSep, join: joinPath } = await import('node:path')
-  const makeContext = (): unknown =>
+  const makeContext = (ctx: { sessionId: string }): unknown =>
     createSecurityContext(
-      { kind: 'agent', sessionId: 'artifact-session', agentKind: 'root' },
+      { kind: 'agent', sessionId: ctx.sessionId, agentKind: 'root' },
       { host: 'desktop' },
       {
         host: 'desktop',
@@ -72,11 +80,13 @@ vi.mock('../../services/toolContext', async () => {
           skillsDirs: [],
           memoryDirs: [],
           home: joinPath(state.workspace, '.nonexistent-home'),
+          // 与 getSessionArtifactsDir 的 mock 同一个目录 —— ask-on-write / ask-on-read 对它免询问
+          sessionArtifactsDir: joinPath(state.root, ctx.sessionId),
           systemDirs: []
         }),
-        // 免询问开着：这里验的是陈旧守卫，不是询问链路（那条在 writeAskWiring.test 里）
         readBuiltinPolicyMd: INLINE_POLICY_MD,
-        getSessionGrants: () => ({ autoAllow: true, allowList: [] }),
+        // 免询问缺省开着：AG-1…7 验的是陈旧守卫，询问链路在 writeAskWiring.test 里；AG-8 关掉它
+        getSessionGrants: () => ({ autoAllow: state.autoAllow, allowList: [] }),
         isDirectory: () => false,
         persistGrant: () => {},
         requestUserInput: async (req: InputRequest): Promise<InputResponse> => {
@@ -87,7 +97,7 @@ vi.mock('../../services/toolContext', async () => {
     )
   return {
     resolveProjectConfig: () => ({ workingDirectory: state.workspace }),
-    getDesktopSecurityContext: makeContext,
+    getDesktopSecurityContext: (ctx: { sessionId: string }) => makeContext(ctx),
     agentActorOf: () => 'shuvix-work/test-model',
     TOOL_ABORTED: 'Aborted'
   }
@@ -174,6 +184,7 @@ beforeEach(() => {
   sid = `s${++seq}`
   state.messages = []
   state.requests = []
+  state.autoAllow = true
   _resetAll()
 })
 
@@ -286,5 +297,35 @@ describe('认领 → edit', () => {
     // 新建的话这里会是转写里的原始源码（height="30"），用户看到的是「我的修改被撤销了」
     expect(readFileSync(path, 'utf-8')).toBe(chart('Bar chart', '12'))
     expect(readdirSync(join(state.root, sid)).sort()).toEqual(['bar-chart.svg'])
+  })
+
+  it('AG-8 免询问关着：认领之后的 edit 不弹卡（本会话 artifacts 免询问）；对照：别的会话目录里的同样一次 edit 弹一张 ask 卡', async () => {
+    state.autoAllow = false
+    state.messages = [said(['```svg', chart('Sales'), '```'].join('\n'))]
+    const path = await adopt()
+
+    const res = await makeEditTool(ctx()).execute('c2', {
+      path,
+      oldText: 'height="30"',
+      newText: 'height="35"'
+    } as never)
+    expect(textOf(res)).toContain('Successfully edited')
+    expect(readFileSync(path, 'utf-8')).toContain('height="35"')
+    expect(state.requests).toEqual([])
+
+    // 对照：同一个会话去改别的会话目录里的文件 —— ask-on-write 照问（桩答允许，改动随后落盘）
+    const otherDir = join(state.root, 'other-session')
+    mkdirSync(otherDir, { recursive: true })
+    const other = join(otherDir, 'x.svg')
+    writeFileSync(other, chart('X'), 'utf-8')
+    const otherRes = await makeEditTool(ctx()).execute('c3', {
+      path: other,
+      oldText: 'height="30"',
+      newText: 'height="35"'
+    } as never)
+    expect(state.requests).toHaveLength(1)
+    expect(state.requests[0]).toMatchObject({ kind: 'ask', toolName: 'edit' })
+    expect(textOf(otherRes)).toContain('Successfully edited')
+    expect(readFileSync(other, 'utf-8')).toContain('height="35"')
   })
 })

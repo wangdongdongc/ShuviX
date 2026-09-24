@@ -6,6 +6,11 @@
  * dao / sessionService / paths / skillService / policyService 全部 mock
  * （照 sessionStorage.test.ts 的惯例），allowList 条目语义保持真实 ——
  * Read 条目不得隐含写权限这条语义要真的被验证。
+ *
+ * DP-A1：ask-on-write / ask-on-read 对**本会话自己的** artifacts 目录免询问
+ * （vars.sessionArtifactsDir = getSessionArtifactsDir(ctx.sessionId)）—— 会话之间互不豁免，
+ * 父会话在子会话的目录里也照问。mock 的 `/tmp/shuvix-artifacts/<id>` 盘上不存在，且 macOS 上
+ * /tmp 是 /private/tmp 的链接：两侧都经 realPath 解析，比的是同一处。
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { join } from 'node:path'
@@ -58,7 +63,10 @@ vi.mock('../../utils/paths', () => ({
   getBuiltinSkillsDir: () => BUILTIN_SKILLS,
   getMemoryRootDir: () => MEMORY_ROOT,
   getDefaultBotsDir: () => '/tmp/shuvix-bots',
-  getBuiltinKnowledgeDir: () => '/tmp/shuvix-builtin-knowledge'
+  getBuiltinKnowledgeDir: () => '/tmp/shuvix-builtin-knowledge',
+  getSessionArtifactsDir: (id: string) => `/tmp/shuvix-artifacts/${id}`,
+  isSafeSessionId: (id: string) =>
+    !!id && !/[/\\]/.test(id) && id !== '.' && id !== '..' && !id.includes('..')
 }))
 vi.mock('../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {} })
@@ -68,7 +76,8 @@ import { getDesktopSecurityContext, type ProjectConfig } from '../toolContext'
 import type { SecurityContext, SecurityEffect } from '@shuvix/agent-runtime'
 
 const config: ProjectConfig = { workingDirectory: WORKSPACE }
-const context = (): SecurityContext => getDesktopSecurityContext({ sessionId: 's1' }, () => config)
+const context = (sessionId = 's1'): SecurityContext =>
+  getDesktopSecurityContext({ sessionId }, () => config)
 
 /** 完整评估链（含 force-allow 层）的 effect */
 const effectOf = (ctx: SecurityContext, mode: 'read' | 'write', p: string): SecurityEffect =>
@@ -205,5 +214,43 @@ describe('桌面安全 provider — deny 层压制 force-allow（protect-credent
     const decision = context().evaluate('write', { type: 'path', path: sshKey })
     expect(decision.effect).toBe('deny')
     expect(decision.winning).toContain('protect-credentials')
+  })
+})
+
+describe('桌面安全 provider — 本会话 artifacts 免询问（ask-on-write / ask-on-read）', () => {
+  const ART = '/tmp/shuvix-artifacts'
+
+  it('DP-A1 会话之间互不豁免：各自目录里读写放行；在对方（含父 → 子）的目录里读写照问', () => {
+    const matrix: Array<[string, string, SecurityEffect]> = [
+      ['s1', `${ART}/s1/chart.svg`, 'allow'],
+      ['child', `${ART}/child/chart.svg`, 'allow'],
+      // 父会话在子会话的目录里不豁免（子会话有自己的目录，不是父会话的一部分）
+      ['s1', `${ART}/child/chart.svg`, 'ask'],
+      ['child', `${ART}/s1/chart.svg`, 'ask']
+    ]
+    for (const [sessionId, path, expected] of matrix) {
+      const ctx = context(sessionId)
+      for (const mode of ['read', 'write'] as const) {
+        expect({ sessionId, path, mode, effect: effectOf(ctx, mode, path) }).toEqual({
+          sessionId,
+          path,
+          mode,
+          effect: expected
+        })
+      }
+      if (expected === 'ask') {
+        expect(ctx.evaluate('read', { type: 'path', path }).winning, `${sessionId} ${path}`).toBe(
+          'ask-on-read#0'
+        )
+        expect(ctx.evaluate('write', { type: 'path', path }).winning, `${sessionId} ${path}`).toBe(
+          'ask-on-write#0'
+        )
+      } else {
+        // 自己目录里的写是真的没命中任何门（不是被哪条授权压过）
+        expect(ctx.evaluate('write', { type: 'path', path }).winning, `${sessionId} ${path}`).toBe(
+          'default:path'
+        )
+      }
+    }
   })
 })

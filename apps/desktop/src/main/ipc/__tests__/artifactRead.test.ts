@@ -33,7 +33,9 @@ vi.mock('electron', () => ({
   BrowserWindow: { fromWebContents: () => undefined }
 }))
 vi.mock('../../utils/paths', () => ({
-  getSessionArtifactsDir: (sessionId: string) => `${state.root}/${sessionId}`
+  getSessionArtifactsDir: (sessionId: string) => `${state.root}/${sessionId}`,
+  isSafeSessionId: (id: string) =>
+    !!id && !/[/\\]/.test(id) && id !== '.' && id !== '..' && !id.includes('..')
 }))
 vi.mock('../../dao/sessionDao', () => ({
   sessionDao: { findChildren: (id: string) => state.children.get(id) ?? [] }

@@ -17,12 +17,14 @@ shuvix-policy-rules:
       && !inDir(object.path, vars.skillsDirs)
       && !inDir(object.path, vars.memoryDirs)
       && !inDir(object.path, vars.builtinKnowledgeDir)
+      && !inDir(object.path, vars.sessionArtifactsDir)
     prompt: Reading outside the working directory pulls that file into the model context, where later turns and tool calls can carry it further.
 ---
 
 **What it does**: the agent reads freely inside your working directory (and the
 app's read-only directories: tool results, skills, project memories, and ShuviX's own built-in
-knowledge base — reading that reference is what it is shipped for). Reading anything outside
+knowledge base — reading that reference is what it is shipped for — plus this conversation's own
+artifacts). Reading anything outside
 that range — other locations, files belonging to other projects — asks you
 first.
 

@@ -150,9 +150,11 @@ describe('buildBuiltinPolicies', () => {
     expect(rule.match).toContain('!inDir(object.path, vars.toolResultsBase)')
     expect(rule.match).toContain('!inDir(object.path, vars.skillsDirs)')
     expect(rule.match).toContain('!inDir(object.path, vars.memoryDirs)')
+    // 本会话自己的 artifacts（认领下来的图与交互块）：读它们不问，与写侧同一个豁免（BP-A1）
+    expect(rule.match).toContain('!inDir(object.path, vars.sessionArtifactsDir)')
   })
 
-  it('BP-3 ask-on-write：ask × write × path 任意路径，desktop 限定（无 match —— 条件即全部）', () => {
+  it('BP-3 ask-on-write：ask × write × path，desktop 限定；唯一收窄是本会话自己的 artifacts 目录', () => {
     const policy = byName('ask-on-write')
     expect(policy.rules).toHaveLength(1)
     expect(policy.scope).toEqual({
@@ -162,11 +164,11 @@ describe('buildBuiltinPolicies', () => {
     })
     expect(withoutPrompt(policy.rules[0])).toEqual({
       effect: 'ask',
-      conditions: { action: ['write'] }
+      conditions: { action: ['write'] },
+      match: '!inDir(object.path, vars.sessionArtifactsDir)'
     })
     expect(policy.rules[0].prompt).toBeTruthy()
-    // 全域门：无 match 即无路径收窄
-    expect(policy.rules[0].match).toBeUndefined()
+    // 几乎全域：唯一的路径收窄是本会话自己的 artifacts（认领下来的图与交互块，用户 2026-09-24 裁决免询问）
   })
 
   it('BP-3 protect-credentials：deny × write + ask × read，共享同一 credentialDirs let（保护面一致）', () => {
@@ -530,6 +532,8 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
     home: '/Users/u',
     botsDir: '/Users/u/.shuvix/bots',
     builtinKnowledgeDir: '/Applications/ShuviX.app/Contents/Resources/knowledge',
+    // 与 home 同一棵树（~/.shuvix/artifacts/<会话>）—— BP-A 一组的「A」
+    sessionArtifactsDir: '/Users/u/.shuvix/artifacts/sess-1',
     systemDirs: []
   }
 
@@ -694,6 +698,7 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
         home: '',
         botsDir: '',
         builtinKnowledgeDir: '',
+        sessionArtifactsDir: '',
         systemDirs: []
       }),
       logger: { info: vi.fn(), warn, error: vi.fn() }
@@ -1230,6 +1235,206 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
     expect(workspaceLines).toHaveLength(1)
     expect(workspaceLines[0]).toContain("'ask-on-read'")
     expect(workspaceLines[0]).toContain('vars.workspace')
+  })
+
+  // ── 本会话自己的 artifacts 目录：ask-on-write / ask-on-read 的唯一新豁免 ─────────────────
+  //
+  // 两道询问门对 `vars.sessionArtifactsDir`（桌面 = ~/.shuvix/artifacts/<本会话 id>）不再命中：认领
+  // 下来的图与交互块是这场对话自己的文件、不在用户的项目里，改一张刚画的图也逐次询问只会把人训练
+  // 成闭眼点允许。它只是把一条 **ask** 规则收窄了，不是 allow 规则 —— 所以 deny / force-ask 与会话
+  // 授权那一层一个字都不变（BP-A3 / BP-A5 钉的就是这个），而且只收窄**恰好这一个目录**、按路径段比
+  // （BP-A2）。宿主没给这个变量时两道门照问、各记一行（BP-A4，同 BP-N12 / BP-B11 的口径）。
+
+  /** 本会话的 artifacts 目录（DESKTOP_VARS 里那一个）与它的上一级 —— 所有会话的 artifacts 根 */
+  const A = DESKTOP_VARS.sessionArtifactsDir as string
+  const R = '/Users/u/.shuvix/artifacts'
+  const at = (path: string): SecurityObject => ({ type: 'path', path })
+
+  it('BP-A1 本会话 artifacts 里读写都不问（零命中、无询问材料）；别处照旧各归各的门', () => {
+    for (const path of [`${A}/chart.svg`, `${A}/sub/deep.md`, A]) {
+      for (const action of ['write', 'read']) {
+        const decision = decide(action, at(path))
+        expect({
+          action,
+          path,
+          effect: decision.effect,
+          winning: decision.winning,
+          matched: decision.matched
+        }).toEqual({ action, path, effect: 'allow', winning: 'default:path', matched: [] })
+        expect(decision.ask, `${action} ${path}`).toBeUndefined()
+        expect(decision.prompt, `${action} ${path}`).toBeUndefined()
+      }
+    }
+
+    // 对照：门本身没坏 —— 工作区里的写、区外的读照样问
+    expect(decide('write', at('/ws/f.txt'))).toMatchObject({
+      effect: 'ask',
+      winning: 'ask-on-write#0'
+    })
+    expect(decide('read', at('/elsewhere/f.txt'))).toMatchObject({
+      effect: 'ask',
+      winning: 'ask-on-read#0'
+    })
+  })
+
+  it('BP-A2 豁免恰是一个目录、按路径段比：artifacts 根、根下的文件、别的会话、同前缀兄弟、更长的 id、上一级的策略目录 —— 读写都照问', () => {
+    const rows: Array<[string, string]> = [
+      ['artifacts 根本身', R],
+      ['根下直接的文件', `${R}/x.svg`],
+      ['别的会话', `${R}/sess-2/x.svg`],
+      ['同前缀的兄弟目录', `${R}/sess-1-evil/x.svg`],
+      ['更长的 id', `${R}/sess-10/x.svg`],
+      ['根的上一级（策略目录）', '/Users/u/.shuvix/policies/ask-on-write.md']
+    ]
+    for (const [label, path] of rows) {
+      const write = decide('write', at(path))
+      expect({ label, effect: write.effect, winning: write.winning }).toEqual({
+        label,
+        effect: 'ask',
+        winning: 'ask-on-write#0'
+      })
+      // 普通询问的样子：给「允许并记住」（不是 force-ask 那种不给按钮的卡）
+      expect(write.ask?.rememberEntry, label).toBeTruthy()
+
+      const read = decide('read', at(path))
+      expect({ label, effect: read.effect, winning: read.winning }).toEqual({
+        label,
+        effect: 'ask',
+        winning: 'ask-on-read#0'
+      })
+    }
+  })
+
+  it('BP-A3 豁免抬不起别的门：变量故意指到凭据 / 系统 / bots 目录，deny 照拒、凭据读与 bot 文件写照问', () => {
+    const pointedAt = (dir: string, autoAllow = false): SecurityHostProvider =>
+      makeProvider({
+        getVars: () => ({ ...DESKTOP_VARS, sessionArtifactsDir: dir }),
+        getSessionGrants: () => ({ autoAllow, allowList: [] })
+      })
+
+    // ① 凭据目录：写 deny（免询问开着也一样）；读仍是凭据门的 ask —— 只是 ask-on-read 那条不再陪着命中
+    const key = at('/Users/u/.ssh/id_rsa')
+    for (const autoAllow of [false, true]) {
+      expect(
+        decide('write', key, { provider: pointedAt('/Users/u/.ssh', autoAllow) }),
+        `autoAllow=${autoAllow}`
+      ).toMatchObject({ effect: 'deny', winning: 'protect-credentials#0' })
+    }
+    const read = decide('read', key, { provider: pointedAt('/Users/u/.ssh') })
+    expect(read).toMatchObject({ effect: 'ask', winning: 'protect-credentials#1' })
+    expect(read.matched).toEqual(['protect-credentials#1'])
+
+    // ② 系统目录：deny
+    expect(
+      decide('write', at('/etc/shuvix-art/x'), { provider: pointedAt('/etc/shuvix-art') })
+    ).toMatchObject({ effect: 'deny', winning: 'protect-system#0' })
+
+    // ③ bots 目录：force-ask 照问，免询问开着也免不掉
+    for (const autoAllow of [false, true]) {
+      expect(
+        decide('write', botFile(), { provider: pointedAt('/Users/u/.shuvix/bots', autoAllow) }),
+        `autoAllow=${autoAllow}`
+      ).toMatchObject({ effect: 'ask', winning: 'protect-bot-files#0' })
+    }
+  })
+
+  it('BP-A4 宿主没给 sessionArtifactsDir（缺键 / undefined / 空串）：两道门都照问，其余豁免不受牵连；缺键与 undefined 各策略只记一行', () => {
+    const { sessionArtifactsDir: _sessionArtifactsDir, ...withoutArtifacts } = DESKTOP_VARS
+    const variants: Array<[string, Record<string, PolicyVarValue>, string[]]> = [
+      [
+        '缺键',
+        withoutArtifacts,
+        [
+          "security policy 'ask-on-read': vars.sessionArtifactsDir is not provided by the host; inDir treats it as no directory",
+          "security policy 'ask-on-write': vars.sessionArtifactsDir is not provided by the host; inDir treats it as no directory"
+        ]
+      ],
+      [
+        'undefined',
+        { ...withoutArtifacts, sessionArtifactsDir: undefined } as unknown as Record<
+          string,
+          PolicyVarValue
+        >,
+        [
+          "security policy 'ask-on-read': vars.sessionArtifactsDir is not provided by the host; inDir treats it as no directory",
+          "security policy 'ask-on-write': vars.sessionArtifactsDir is not provided by the host; inDir treats it as no directory"
+        ]
+      ],
+      // 空串是宿主明说「没有这个目录」（桌面对坏会话 id、扩展端都这么给）：恒不命中、无须告警
+      ['空串', { ...withoutArtifacts, sessionArtifactsDir: '' }, []]
+    ]
+
+    for (const [label, vars, expectedLines] of variants) {
+      const logWarn = vi.fn()
+      const evalWarn = vi.fn()
+      const logger = { info: vi.fn(), warn: logWarn, error: vi.fn() }
+      const off = makeProvider({ getVars: () => vars, logger })
+
+      // 评估两轮：「只记一次」要在重复评估下成立
+      for (let round = 0; round < 2; round++) {
+        expect(
+          decide('write', at(`${A}/x.svg`), { provider: off, warn: evalWarn }),
+          label
+        ).toMatchObject({ effect: 'ask', winning: 'ask-on-write#0' })
+        expect(
+          decide('read', at(`${A}/x.svg`), { provider: off, warn: evalWarn }),
+          label
+        ).toMatchObject({ effect: 'ask', winning: 'ask-on-read#0' })
+        // 同一条 match 里的别的豁免照常（工作区内读）
+        expect(
+          decide('read', at('/ws/f.txt'), { provider: off, warn: evalWarn }),
+          label
+        ).toMatchObject({ effect: 'allow', winning: 'default:path' })
+      }
+
+      // 免询问开着：缺变量没有变成一张免不掉的询问
+      const on = makeProvider({
+        getVars: () => vars,
+        logger,
+        getSessionGrants: () => ({ autoAllow: true, allowList: [] })
+      })
+      expect(
+        decide('write', at(`${A}/x.svg`), { provider: on, warn: evalWarn }),
+        label
+      ).toMatchObject({ effect: 'allow', winning: 'session-grants#0' })
+
+      expect(evalWarn, label).not.toHaveBeenCalled()
+      const lines = logWarn.mock.calls.map((c) => String(c[0])).sort()
+      expect(lines, label).toEqual(expectedLines)
+    }
+  })
+
+  it('BP-A5 会话授权那一层不变：免询问照放别的会话的目录；本会话目录免询问下只剩 session-grants#0 一条命中；路径授权各归 #1 / #2', () => {
+    const autoAllow = autoAllowProvider()
+    expect(decide('write', at(`${R}/sess-2/x.svg`), { provider: autoAllow })).toMatchObject({
+      effect: 'allow',
+      winning: 'session-grants#0'
+    })
+    const own = decide('write', at(`${A}/x.svg`), { provider: autoAllow })
+    expect(own.effect).toBe('allow')
+    // ask-on-write#0 根本没命中（不是被 force-allow 压过）
+    expect(own.matched).toEqual(['session-grants#0'])
+
+    const writeGrant = makeProvider({
+      getSessionGrants: () => ({ autoAllow: false, allowList: [`Write(${R}/sess-2)`] })
+    })
+    expect(decide('write', at(`${R}/sess-2/x.svg`), { provider: writeGrant })).toMatchObject({
+      effect: 'allow',
+      winning: 'session-grants#2'
+    })
+
+    const readGrant = makeProvider({
+      getSessionGrants: () => ({ autoAllow: false, allowList: [`Read(${R}/sess-2)`] })
+    })
+    expect(decide('read', at(`${R}/sess-2/x.svg`), { provider: readGrant })).toMatchObject({
+      effect: 'allow',
+      winning: 'session-grants#1'
+    })
+    // 读授权不隐含写
+    expect(decide('write', at(`${R}/sess-2/x.svg`), { provider: readGrant })).toMatchObject({
+      effect: 'ask',
+      winning: 'ask-on-write#0'
+    })
   })
 
   // ── ask-on-new-site：用户自己的 Chrome 里，第一次用到一个站点先问 ─────────────────

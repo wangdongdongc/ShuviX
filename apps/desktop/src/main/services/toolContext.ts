@@ -16,7 +16,9 @@ import {
   getDefaultBotsDir,
   getMemoryRootDir,
   getBuiltinSkillsDir,
-  getBuiltinKnowledgeDir
+  getBuiltinKnowledgeDir,
+  getSessionArtifactsDir,
+  isSafeSessionId
 } from '../utils/paths'
 import { resolveRealPath } from '../utils/toolUtils/realPath'
 import { skillService } from './skillService'
@@ -250,6 +252,14 @@ export function makeDesktopSecurityProvider(
       botsDir: getDefaultBotsDir(),
       // 随应用发布的内置知识库目录：ask-on-read 对它免询问（说明书发出来就是给 agent 查的）
       builtinKnowledgeDir: getBuiltinKnowledgeDir(),
+      // 本会话自己的 artifacts 目录：ask-on-write / ask-on-read 对它免询问。认领下来的图与交互块是
+      // 这场对话自己的文件、不在用户的项目里，改一张刚画的图也逐次询问只会把人训练成闭眼点允许。
+      // 按 ctx.sessionId 取，与 artifact 工具落盘用的是同一个 id（子会话有自己的目录，见 artifacts/store）。
+      // 坏 id 给空串（inDir 对空串恒不命中 = 不豁免）：空 id 会把豁免放大到所有会话的 artifacts，
+      // `..` 会放大到 ~/.shuvix（里面有 policies/）
+      sessionArtifactsDir: isSafeSessionId(ctx.sessionId)
+        ? getSessionArtifactsDir(ctx.sessionId)
+        : '',
       home: homedir(),
       systemDirs: windowsSystemDirs()
     }),

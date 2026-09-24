@@ -69,6 +69,7 @@ function makeProvider(
       home: '/home/u',
       botsDir: '/home/u/.shuvix/bots',
       builtinKnowledgeDir: '/opt/shuvix/Resources/knowledge',
+      sessionArtifactsDir: '/home/u/.shuvix/artifacts/sess-1',
       systemDirs: []
     }),
     getSessionGrants: () => grants,

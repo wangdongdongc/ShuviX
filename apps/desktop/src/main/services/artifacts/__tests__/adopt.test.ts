@@ -46,7 +46,9 @@ import type {
 const state = vi.hoisted(() => ({ root: '' }))
 
 vi.mock('../../../utils/paths', () => ({
-  getSessionArtifactsDir: (sessionId: string) => `${state.root}/${sessionId}`
+  getSessionArtifactsDir: (sessionId: string) => `${state.root}/${sessionId}`,
+  isSafeSessionId: (id: string) =>
+    !!id && !/[/\\]/.test(id) && id !== '.' && id !== '..' && !id.includes('..')
 }))
 
 import { SANDBOX_CSP } from '@shuvix/chat-protocol/utils/interactiveFence'

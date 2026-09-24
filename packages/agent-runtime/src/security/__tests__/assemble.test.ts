@@ -3,7 +3,8 @@
  * 会话授权已不在这里编译（下沉为 buildPolicyVars + 内置 session-* 两份策略 md），
  * 相应用例迁到本文件的「会话授权（下沉为 vars + 策略 md）」一节与端到端断言。
  * （lets 求值与 strict fail-safe 的专项用例见 test-designer 清单落地部分）
- * 宿主没供给的目录变量（deny / ask 两档绑定为 null、按 logger 去重告警）见文末 AS-D 一节。
+ * 宿主没供给的目录变量（deny / ask 两档绑定为 null、按 logger 去重告警）见 AS-D 一节；
+ * 用户覆盖副本拿掉 ask-on-write 的本会话 artifacts 豁免（用户主权）见文末 AS-A 一节。
  */
 import { describe, it, expect, vi } from 'vitest'
 import { assembleRules, mergePolicyFiles, resolvePolicyFiles } from '../assemble'
@@ -38,6 +39,7 @@ const BUILTIN_VARS: Record<string, string | string[]> = {
   home: '/home/u',
   botsDir: '/home/u/.shuvix/bots',
   builtinKnowledgeDir: '/opt/shuvix/Resources/knowledge',
+  sessionArtifactsDir: '/home/u/.shuvix/artifacts/sess-1',
   systemDirs: []
 }
 
@@ -1425,5 +1427,61 @@ describe('assembleRules — 宿主没供给的目录变量', () => {
     expect(writeAll(makeProvider({ getUserPolicies: policies }))).toEqual(decisionsA)
     // 全程没有一条走到 fail-safe
     expect(evalWarn).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * 用户主权 × 本会话 artifacts 豁免 —— 出厂的 ask-on-write 对 `vars.sessionArtifactsDir` 不问；
+ * 用户把覆盖副本里那行 `match:` 删掉，就是要回「写哪儿都问」。覆盖按策略整份替换，所以只动写
+ * 那一份：ask-on-read 仍是出厂的，读同一个文件照样不问。
+ */
+describe('assembleRules — 用户覆盖拿掉本会话 artifacts 豁免', () => {
+  const OWN_ARTIFACT = '/home/u/.shuvix/artifacts/sess-1/x.svg'
+
+  /** 端到端判定（生产同款：vars 一次现取，装配与求值共用） */
+  function decide(
+    provider: SecurityHostProvider,
+    action: string,
+    path: string
+  ): ReturnType<typeof evaluate> {
+    const vars = buildPolicyVars(provider)
+    return evaluate(
+      assembleRules(provider, vars),
+      {
+        subject: { kind: 'agent', sessionId: 's1', agentKind: 'root' },
+        action,
+        object: { type: 'path', path, displayPath: path },
+        environment: { host: 'desktop', platform: 'darwin' }
+      },
+      { vars }
+    )
+  }
+
+  it('AS-A1 覆盖副本删掉 match 行 → 本会话 artifacts 的写又问，归因用户那份；读不受牵连；对照：不覆盖时放行', () => {
+    // 用户拿到的覆盖副本 = 出厂 en 文件原样；删掉的恰是那一行 match（形态守护：真删到了一行）
+    const builtinRaw = INLINE_POLICY_MD('ask-on-write.md')!
+    const lines = builtinRaw.split('\n')
+    const kept = lines.filter((line) => !/^\s+match:/.test(line))
+    expect(lines.length - kept.length).toBe(1)
+    const parsed = parsePolicyDefinitionFile(kept.join('\n'), 'ask-on-write')
+    expect(parsed).not.toBeNull()
+    expect(parsed!.rules[0].match).toBeUndefined()
+
+    const overridden = makeProvider({
+      getUserPolicies: (): UserPolicyFile[] => [{ ...parsed!, fileName: 'ask-on-write.md' }]
+    })
+    const rules = assembleRules(overridden, buildPolicyVars(overridden))
+    const askOnWrite = rules.filter((r) => r.source.policy === 'ask-on-write')
+    expect(askOnWrite.map((r) => [r.id, r.source.kind])).toEqual([['ask-on-write#0', 'user']])
+
+    const write = decide(overridden, 'write', OWN_ARTIFACT)
+    expect(write.effect).toBe('ask')
+    expect(write.winning).toBe('ask-on-write#0')
+
+    // 覆盖按策略整份替换：ask-on-read 仍是出厂那份，豁免还在
+    expect(decide(overridden, 'read', OWN_ARTIFACT).effect).toBe('allow')
+
+    // 对照：没有用户策略时同一次写放行
+    expect(decide(makeProvider(), 'write', OWN_ARTIFACT).effect).toBe('allow')
   })
 })

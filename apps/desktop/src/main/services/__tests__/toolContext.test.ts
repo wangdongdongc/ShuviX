@@ -15,7 +15,8 @@ import { beforeEach, describe, it, expect, vi } from 'vitest'
 const tc = vi.hoisted(() => ({
   getById: vi.fn((_id: string): unknown => undefined),
   projectPick: vi.fn((_id: string, _cols: string[]): unknown => undefined),
-  getTempWorkspace: vi.fn((_sid: string) => '/tmp/shuvix-actor-ws')
+  getTempWorkspace: vi.fn((_sid: string) => '/tmp/shuvix-actor-ws'),
+  getSessionArtifactsDir: vi.fn((id: string) => `/tmp/shuvix-artifacts/${id}`)
 }))
 
 vi.mock('../../dao/projectDao', () => ({ projectDao: { pick: tc.projectPick } }))
@@ -33,6 +34,10 @@ vi.mock('../../utils/paths', () => ({
   getMemoryRootDir: () => '/tmp/shuvix-actor-memory',
   getDefaultBotsDir: () => '/tmp/shuvix-bots',
   getBuiltinKnowledgeDir: () => '/tmp/shuvix-builtin-knowledge',
+  getSessionArtifactsDir: tc.getSessionArtifactsDir,
+  // 与 utils/paths 的真实判定逐字相同（含单独的 '.'）—— SEC-8 判的就是它挡不挡得住
+  isSafeSessionId: (id: string) =>
+    !!id && !/[/\\]/.test(id) && id !== '.' && id !== '..' && !id.includes('..'),
   getShuvixKnowledgeRootDir: () => '/tmp/shuvix-knowledge-shuvix'
 }))
 vi.mock('../../logger', () => ({
@@ -101,11 +106,13 @@ describe('agentActorOf', () => {
  * 这道门其实没在工作。所以每加一份引用新变量的内置策略，这张表都得跟着长一项。
  */
 describe('makeDesktopSecurityProvider —— 变量表', () => {
-  const vars = (): Record<string, string | string[]> =>
+  const providerFor = (sessionId: string): ReturnType<typeof makeDesktopSecurityProvider> =>
     makeDesktopSecurityProvider(
-      { sessionId: 's1', requestUserInput: undefined },
+      { sessionId, requestUserInput: undefined },
       () => ({ workingDirectory: '/ws' }) as never
-    ).getVars() as Record<string, string | string[]>
+    )
+  const vars = (sessionId = 's1'): Record<string, string | string[]> =>
+    providerFor(sessionId).getVars() as Record<string, string | string[]>
 
   it('SEC-6 botsDir 由 getDefaultBotsDir() 填 —— protect-bot-files 指的就是它', () => {
     // 漏填 botsDir 的后果是那份策略静默失效，而它守的是「bot 改写自己那份文件」这条会话中途、
@@ -114,6 +121,36 @@ describe('makeDesktopSecurityProvider —— 变量表', () => {
     // 工作区来自 getConfig()（每次评估现读），不是构造时的快照
     expect(vars().workspace).toBe('/ws')
   })
+
+  // sessionArtifactsDir —— ask-on-write / ask-on-read 对它免询问（本会话认领下来的图与交互块）。
+  // 它是**免询问的范围**，所以两件事都得钉：取的是哪一个会话的目录（SEC-7），以及坏 id 不能把
+  // 这个范围放大（SEC-8：空 id = 所有会话的 artifacts 根，`..` = ~/.shuvix，里面有 policies/）。
+
+  it('SEC-7 sessionArtifactsDir 由 getSessionArtifactsDir(ctx.sessionId) 填：一会话一个目录，子会话不继承父会话的', () => {
+    tc.getSessionArtifactsDir.mockClear()
+    expect(vars('s1').sessionArtifactsDir).toBe('/tmp/shuvix-artifacts/s1')
+    // 取目录用的正是 ctx.sessionId —— artifact 工具落盘用的也是这个 id
+    expect(tc.getSessionArtifactsDir).toHaveBeenCalledWith('s1')
+    expect(tc.getSessionArtifactsDir.mock.calls.every(([id]) => id === 's1')).toBe(true)
+
+    tc.getSessionArtifactsDir.mockClear()
+    expect(vars('child').sessionArtifactsDir).toBe('/tmp/shuvix-artifacts/child')
+    expect(tc.getSessionArtifactsDir.mock.calls.every(([id]) => id === 'child')).toBe(true)
+
+    // 同一个 provider 反复现取，值不漂
+    const provider = providerFor('s1')
+    const first = (provider.getVars() as Record<string, unknown>).sessionArtifactsDir
+    const second = (provider.getVars() as Record<string, unknown>).sessionArtifactsDir
+    expect(first).toBe('/tmp/shuvix-artifacts/s1')
+    expect(second).toBe(first)
+  })
+
+  it.each(['', '.', '..', '../x', 'a/b', 'a\\b'])(
+    'SEC-8 坏会话 id %j 不放大豁免：sessionArtifactsDir 给空串（inDir 恒不命中，两道门照问）',
+    (id) => {
+      expect(vars(id).sessionArtifactsDir).toBe('')
+    }
+  )
 })
 
 describe('resolveProjectConfig —— 工作目录照抄 getById 的口径', () => {

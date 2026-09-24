@@ -62,6 +62,20 @@ export function getSessionArtifactsDir(rootSessionId: string): string {
   return join(homedir(), '.shuvix', 'artifacts', rootSessionId)
 }
 
+/**
+ * 会话 id 是否能安全地拼进 artifacts 目录 —— 空串、含路径分隔符或 `..` 一律拒。
+ *
+ * 今天 id 是 DB 的 uuidv7、不可达；但这个目录有两个用法经不起一个坏 id：
+ *  - artifacts/store 对它**递归删除**，而 `artifact:read` 的 sessionId 来自渲染端；
+ *  - 安全策略把它当作**免询问的写入范围**（ask-on-write / ask-on-read 的 `vars.sessionArtifactsDir`）。
+ *    空 id 会把豁免放大到所有会话的 artifacts，`..` 会放大到 `~/.shuvix` —— 那里有 `policies/`，
+ *    等于让 agent 不经询问改写自己的安全策略。
+ * 两处共用这一个判定，别各写一份。
+ */
+export function isSafeSessionId(id: string): boolean {
+  return !!id && !/[/\\]/.test(id) && id !== '.' && id !== '..' && !id.includes('..')
+}
+
 /** 全局 Skills 目录：~/.shuvix/skills/（不自动创建，由 skillService 管理） */
 export function getDefaultSkillsDir(): string {
   return join(homedir(), '.shuvix', 'skills')

@@ -66,7 +66,9 @@ vi.mock('../../utils/paths', () => ({
   getToolResultsBase: vi.fn(() => '/nonexistent/e2e-results'),
   // 会话 Artifacts 的删除级联也在 sessionService.delete 里（目录不存在时 no-op）。
   // 指到临时目录而不是 /nonexistent：级联那几条用例要看目录**真的**没了
-  getSessionArtifactsDir: (sid: string) => `${mocks.artifactsRoot}/${sid}`
+  getSessionArtifactsDir: (sid: string) => `${mocks.artifactsRoot}/${sid}`,
+  isSafeSessionId: (id: string) =>
+    !!id && !/[/\\]/.test(id) && id !== '.' && id !== '..' && !id.includes('..')
 }))
 vi.mock('../mcpService', () => ({ mcpService: { closeSession: vi.fn() } }))
 vi.mock('../toolAggregator', () => ({

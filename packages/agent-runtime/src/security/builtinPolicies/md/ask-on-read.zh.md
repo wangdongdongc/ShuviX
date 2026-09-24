@@ -17,11 +17,12 @@ shuvix-policy-rules:
       && !inDir(object.path, vars.skillsDirs)
       && !inDir(object.path, vars.memoryDirs)
       && !inDir(object.path, vars.builtinKnowledgeDir)
+      && !inDir(object.path, vars.sessionArtifactsDir)
     prompt: 读取工作目录之外的文件，内容会进入模型上下文，之后的对话与工具调用都可能把它带出去。
 ---
 
 **它做什么**：智能体在你的工作目录（以及应用的只读目录：工具结果、skills、项目记忆，
-还有 ShuviX 自己的内置知识库 —— 那份说明书发出来就是给它查的）内
+还有 ShuviX 自己的内置知识库 —— 那份说明书发出来就是给它查的；以及本会话自己的产物）内
 自由读取；读取范围之外的任何内容 —— 其它位置、其他项目的文件 ——
 都会先问你。
 

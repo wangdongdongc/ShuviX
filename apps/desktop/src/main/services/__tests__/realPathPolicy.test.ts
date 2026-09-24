@@ -12,6 +12,11 @@
  * macOS 上 tmpdir 在 /var → /private/var 这条系统级链接之下：变量表照写法给（/var/folders/…），
  * 解析之后是 /private/var/folders/…（protect-system 的 /private/var 里挖掉了它）。期望一律按
  * realpathSync.native 算，写法一律从 mkdtemp 的原样起算。符号链接在 Windows 上要开发者模式，整份跳过。
+ *
+ * RPP-A 一组：ask-on-write / ask-on-read 对**本会话自己的** artifacts 目录（vars.sessionArtifactsDir
+ * = getSessionArtifactsDir(ctx.sessionId)，这里是 <ROOT>/artifacts/<id>）免询问。豁免同样按真实去处判：
+ * 目录里的链接按它指向哪儿过门（凭据照拒、区外照问），`..` 与链接走出这个目录就不再豁免；
+ * artifact store 真正写出来的文件只对自己的会话免询问，也不留下任何授权。
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -80,7 +85,10 @@ vi.mock('../../utils/paths', () => ({
   getBuiltinSkillsDir: () => join(state.root, 'builtin-skills'),
   getMemoryRootDir: () => join(state.root, 'memory'),
   getDefaultBotsDir: () => join(state.root, 'bots'),
-  getBuiltinKnowledgeDir: () => join(state.root, 'builtin-knowledge')
+  getBuiltinKnowledgeDir: () => join(state.root, 'builtin-knowledge'),
+  getSessionArtifactsDir: (id: string) => join(state.root, 'artifacts', id),
+  isSafeSessionId: (id: string) =>
+    !!id && !/[/\\]/.test(id) && id !== '.' && id !== '..' && !id.includes('..')
 }))
 vi.mock('../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {} })
@@ -91,6 +99,7 @@ import {
   isPathWithinWorkspace,
   type ProjectConfig
 } from '../toolContext'
+import { writeArtifact } from '../artifacts/store'
 import type { SecurityContext, SecurityDecision } from '@shuvix/agent-runtime'
 
 /** 抓住一次拒绝的原话 */
@@ -119,15 +128,17 @@ describe.skipIf(process.platform === 'win32')('路径策略按真实去处判（
   let HOME = ''
   let REAL_HOME = ''
   let HOME_B = ''
+  /** 所有会话的 artifacts 根（写法；getSessionArtifactsDir 的 mock 挂在这下面） */
+  let ART = ''
 
   const config: ProjectConfig = { workingDirectory: '' }
   const asks: InputRequest[] = []
   let respond: (req: InputRequest) => InputResponse = () => ({ kind: 'ask', allowed: false })
 
-  const context = (): SecurityContext =>
+  const context = (sessionId = 's1'): SecurityContext =>
     getDesktopSecurityContext(
       {
-        sessionId: 's1',
+        sessionId,
         requestUserInput: async (req) => {
           asks.push(req)
           return respond(req)
@@ -135,8 +146,8 @@ describe.skipIf(process.platform === 'win32')('路径策略按真实去处判（
       },
       () => config
     )
-  const evaluatePath = (mode: 'read' | 'write', path: string): SecurityDecision =>
-    context().evaluate(mode, { type: 'path', path })
+  const evaluatePath = (mode: 'read' | 'write', path: string, sessionId = 's1'): SecurityDecision =>
+    context(sessionId).evaluate(mode, { type: 'path', path })
 
   /**
    * 目录树（ROOT 下）：
@@ -149,6 +160,11 @@ describe.skipIf(process.platform === 'win32')('路径策略按真实去处判（
    *   ws/vlink → /var/log/shuvix-rpp-never/x（悬空）
    *   ws/wlink → outside/target.txt      ws/rlink → outside/doc.txt
    *   wslink → ws
+   *   home/.bashrc
+   *   artifacts/s1/、artifacts/s2/（本会话 s1 与另一场会话的 artifacts 目录）
+   *   artifacts/s1/rc → home/.bashrc          artifacts/s1/key → home/.ssh/id_rsa
+   *   artifacts/s1/sshlink → home/.ssh        artifacts/s1/dangling → home/.ssh/authorized_keys（悬空）
+   *   artifacts/s1/up → artifacts
    */
   beforeAll(() => {
     ROOT = mkdtempSync(join(tmpdir(), 'shuvix-rpp-'))
@@ -178,6 +194,16 @@ describe.skipIf(process.platform === 'win32')('路径策略按真实去处判（
     symlinkSync(join(ROOT, 'outside', 'target.txt'), join(WS, 'wlink'))
     symlinkSync(join(ROOT, 'outside', 'doc.txt'), join(WS, 'rlink'))
     symlinkSync(WS, WS_LINK)
+
+    ART = join(ROOT, 'artifacts')
+    mkdirSync(join(ART, 's1'), { recursive: true })
+    mkdirSync(join(ART, 's2'))
+    writeFileSync(join(HOME, '.bashrc'), 'export X=1')
+    symlinkSync(join(HOME, '.bashrc'), join(ART, 's1', 'rc'))
+    symlinkSync(join(HOME, '.ssh', 'id_rsa'), join(ART, 's1', 'key'))
+    symlinkSync(join(HOME, '.ssh'), join(ART, 's1', 'sshlink'))
+    symlinkSync(join(HOME, '.ssh', 'authorized_keys'), join(ART, 's1', 'dangling'))
+    symlinkSync(ART, join(ART, 's1', 'up'))
 
     REAL_WS = realpathSync.native(WS)
     REAL_HOME = realpathSync.native(HOME)
@@ -423,5 +449,122 @@ describe.skipIf(process.platform === 'win32')('路径策略按真实去处判（
     ).toBe(true)
     // 写是直接拒，不弹卡
     expect(asks).toHaveLength(1)
+  })
+
+  // ── 本会话 artifacts 的豁免同样按真实去处判 ─────────────────────────────────────────
+
+  it('RPP-A1 本会话目录里的链接按它真正指向哪儿过门：rc → ~/.bashrc 照问（卡片是真实去处、注着写法）；key / sshlink / 悬空的 authorized_keys 归凭据门 —— 写拒（免询问也拒）、读问', async () => {
+    const rc = join(ART, 's1', 'rc')
+    const rcWrite = evaluatePath('write', rc)
+    expect(verdict(rcWrite)).toEqual({ effect: 'ask', winning: 'ask-on-write#0' })
+    expect(rcWrite.ask?.command).toBe(`Write(${REAL_HOME}/.bashrc)`)
+    expect(rcWrite.ask?.requestedPath).toBe(rc)
+    expect(verdict(evaluatePath('read', rc))).toEqual({ effect: 'ask', winning: 'ask-on-read#0' })
+
+    const key = join(ART, 's1', 'key')
+    expect(verdict(evaluatePath('write', key))).toEqual({
+      effect: 'deny',
+      winning: 'protect-credentials#0'
+    })
+    expect(verdict(evaluatePath('read', key))).toEqual({
+      effect: 'ask',
+      winning: 'protect-credentials#1'
+    })
+    for (const p of [join(ART, 's1', 'sshlink', 'new_key'), join(ART, 's1', 'dangling')]) {
+      expect({ p, write: verdict(evaluatePath('write', p)) }).toEqual({
+        p,
+        write: { effect: 'deny', winning: 'protect-credentials#0' }
+      })
+    }
+
+    state.settings = { autoAllow: true }
+    expect(verdict(evaluatePath('write', key))).toEqual({
+      effect: 'deny',
+      winning: 'protect-credentials#0'
+    })
+    const message = await rejectionOf(
+      context().enforcePath('write', key, { toolCallId: 'wa1', toolName: 'write' })
+    )
+    expect(
+      message.startsWith(
+        `Denied by security policy rule 'protect-credentials#0' (${key} resolves to ${REAL_HOME}/.ssh/id_rsa)`
+      )
+    ).toBe(true)
+    expect(asks).toEqual([])
+  })
+
+  it('RPP-A2 `..` 与链接走出本会话目录就不再豁免（别的会话、同前缀兄弟、区外、经 up 链接落进 s2）；留在目录里的 `..` 照旧豁免；还没建出来的会话目录同样豁免、不被 protect-system 拒', () => {
+    const toS2 = `${ART}/s1/../s2/x.svg`
+    const s2Write = evaluatePath('write', toS2)
+    expect(verdict(s2Write)).toEqual({ effect: 'ask', winning: 'ask-on-write#0' })
+    expect(s2Write.ask?.command).toBe(`Write(${REAL_ROOT}/artifacts/s2/x.svg)`)
+
+    for (const p of [
+      `${ART}/s1/../s1-evil/x.svg`,
+      `${ART}/s1/../../outside/target.txt`,
+      // 写法在 s1 底下，物理上在 s2
+      `${ART}/s1/up/s2/x.svg`
+    ]) {
+      expect({ p, write: verdict(evaluatePath('write', p)) }).toEqual({
+        p,
+        write: { effect: 'ask', winning: 'ask-on-write#0' }
+      })
+    }
+
+    expect(verdict(evaluatePath('write', `${ART}/s1/sub/../chart.svg`))).toEqual({
+      effect: 'allow',
+      winning: 'default:path'
+    })
+
+    // 会话的目录要等第一件 artifact 才建出来；macOS 上两侧都从 /var/folders 解析成 /private/var/folders
+    const fresh = context('fresh').evaluate('write', {
+      type: 'path',
+      path: join(ART, 'fresh', 'new.svg')
+    })
+    expect(verdict(fresh)).toEqual({ effect: 'allow', winning: 'default:path' })
+    expect(fresh.matched).not.toContain('protect-system#0')
+  })
+
+  it('RPP-A3 artifact store 真写出来的文件只对自己的会话免询问：s1 读写直接过门、不弹卡、不留授权；换成 s2 照问；别处的写照旧问', async () => {
+    const info = writeArtifact({
+      sessionId: 's1',
+      title: 'Revenue',
+      ext: 'svg',
+      content: '<svg aria-label="Revenue"></svg>'
+    })
+    expect(info.path.startsWith(join(ART, 's1'))).toBe(true)
+
+    expect(verdict(evaluatePath('write', info.path))).toEqual({
+      effect: 'allow',
+      winning: 'default:path'
+    })
+    expect(verdict(evaluatePath('read', info.path))).toEqual({
+      effect: 'allow',
+      winning: 'default:path'
+    })
+
+    expect(verdict(evaluatePath('write', info.path, 's2'))).toEqual({
+      effect: 'ask',
+      winning: 'ask-on-write#0'
+    })
+    expect(verdict(evaluatePath('read', info.path, 's2'))).toEqual({
+      effect: 'ask',
+      winning: 'ask-on-read#0'
+    })
+
+    await expect(
+      context().enforcePath('write', info.path, { toolCallId: 'wa', toolName: 'edit' })
+    ).resolves.toBeUndefined()
+    await expect(
+      context().enforcePath('read', info.path, { toolCallId: 'ra', toolName: 'read' })
+    ).resolves.toBeUndefined()
+    expect(asks).toEqual([])
+    // 豁免不是「允许并记住」：什么都没记进会话授权
+    expect(state.granted).toEqual([])
+
+    expect(verdict(evaluatePath('write', join(WS, 'notes.txt')))).toEqual({
+      effect: 'ask',
+      winning: 'ask-on-write#0'
+    })
   })
 })

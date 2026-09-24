@@ -56,7 +56,9 @@ vi.mock('../../utils/paths', () => ({
   getTempWorkspace: vi.fn(() => '/nonexistent/e2e-tmp'),
   getToolResultsBase: vi.fn(() => '/nonexistent/e2e-results'),
   // 会话 Artifacts 的删除级联也在 sessionService.delete 里（目录不存在时 no-op）
-  getSessionArtifactsDir: (sid: string) => `/nonexistent/shuvix-unit/artifacts/${sid}`
+  getSessionArtifactsDir: (sid: string) => `/nonexistent/shuvix-unit/artifacts/${sid}`,
+  isSafeSessionId: (id: string) =>
+    !!id && !/[/\\]/.test(id) && id !== '.' && id !== '..' && !id.includes('..')
 }))
 vi.mock('../mcpService', () => ({ mcpService: { closeSession: vi.fn() } }))
 vi.mock('../toolAggregator', () => ({

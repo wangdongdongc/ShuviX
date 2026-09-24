@@ -46,7 +46,9 @@ const state = vi.hoisted(() => ({ root: '' }))
 // 纯 factory，不走 importActual：utils/paths 顶层 `import { app } from 'electron'`，
 // 展开会把 electron 拖进单测
 vi.mock('../../../utils/paths', () => ({
-  getSessionArtifactsDir: (sessionId: string) => `${state.root}/${sessionId}`
+  getSessionArtifactsDir: (sessionId: string) => `${state.root}/${sessionId}`,
+  isSafeSessionId: (id: string) =>
+    !!id && !/[/\\]/.test(id) && id !== '.' && id !== '..' && !id.includes('..')
 }))
 
 import { SANDBOX_CSP } from '@shuvix/chat-protocol/utils/interactiveFence'

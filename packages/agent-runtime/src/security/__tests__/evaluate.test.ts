@@ -878,6 +878,7 @@ describe('evaluate — opts.realPath（inDir 按位置比较）', () => {
         home: '/home/u',
         botsDir: '/home/u/.shuvix/bots',
         builtinKnowledgeDir: '/opt/shuvix/knowledge',
+        sessionArtifactsDir: '/home/u/.shuvix/artifacts/sess-1',
         systemDirs: [],
         dotfiles: '/data'
       }),
