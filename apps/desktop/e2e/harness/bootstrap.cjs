@@ -125,4 +125,25 @@ ipcMain.handle = (channel, listener) => {
   return stub ? origHandle(channel, stub) : origHandle(channel, listener)
 }
 
+/**
+ * 主进程的 JS 退出流程走完的信号（launch.ts 的 stop() 认这一行）。
+ *
+ * 为什么需要：窗口首次上屏后约 15 秒内，Chromium 的收尾要等 GPU 那边的活干完才让进程退出 ——
+ * 与 ShuviX 的代码无关（一个只开一个可见窗口的空 Electron 应用同样要等 ~14 秒；`--disable-gpu`
+ * 则立刻退出）。真实用户不会在启动后十几秒内退出，e2e 实例却几乎都是：stop() 以前每次都白等满
+ * 5 秒超时再 SIGKILL。Node 的 'exit' 事件在 before-quit / 关窗 / will-quit 全部跑完之后才来，
+ * 应用自己的清理此时都已做完，剩下的只是 Chromium 的原生收尾 —— stop() 看到这一行就可以直接收走进程。
+ *
+ * 用 writeSync 而不是 process.stderr.write：macOS 上管道写是异步的，'exit' 回调里排进队列的写
+ * 不保证能冲出去。
+ */
+const JS_EXITED_MARKER = '[e2e] main-process js exited\n'
+process.on('exit', () => {
+  try {
+    require('fs').writeSync(2, JS_EXITED_MARKER)
+  } catch {
+    /* stderr 已关：stop() 退回到等进程自己退出 / 超时 SIGKILL */
+  }
+})
+
 require('../../out/main/index.js')

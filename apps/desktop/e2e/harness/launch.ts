@@ -38,6 +38,8 @@ import {
 const DESKTOP_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 /** 本 checkout 渲染端产物的 URL 前缀 —— target 的身份判据（percent-encoding 与 CDP 一致） */
 const APP_URL = pathToFileURL(join(DESKTOP_ROOT, 'out', 'renderer')).href
+/** bootstrap.cjs 在主进程 Node 'exit' 时写到 stderr 的一行：应用自己的退出流程已走完（见 stop()） */
+const JS_EXITED_MARKER = '[e2e] main-process js exited'
 
 /** 一个从系统打开的 md 窗口的 target（hash 里的会话 id 与**真实路径**） */
 export interface MarkdownWindowTarget {
@@ -234,12 +236,17 @@ async function installForensics(main: CdpClient): Promise<void> {
   )
 }
 
-/** 仓库里的 electron 二进制（git worktree 里那一层没有 node_modules 时退回 Node 自己的解析） */
+/**
+ * Electron 二进制本体的绝对路径（electron 包的入口导出的就是它；Node 的解析会一路往上找，
+ * git worktree 里那一层没有 node_modules 时也找得到主检出的）。
+ *
+ * **不能用 `node_modules/.bin/electron`**：那是 electron 包的 cli.js —— 一个再 spawn 真二进制、
+ * 只转发 SIGINT / SIGTERM 的 Node 包装进程。stop() 的 SIGKILL 落在包装上，真正的主进程就成了
+ * 孤儿（父进程变成 launchd），在后台把自己的退出流程跑完，一路往 userData 里写 Preferences 之类的
+ * 文件 —— 与 stop() 之后的 rmSync 抢跑，也让快速连跑的 spec 文件在后台叠着好几个将死的实例。
+ */
 function electronBinary(): string {
-  // 工作区依赖装在检出根；**git worktree 里那一层没有 node_modules**（npm 只在主检出装过），
-  // 于是退回 Node 自己的解析 —— electron 包的入口导出的就是二进制的绝对路径。
-  const localBin = resolve(DESKTOP_ROOT, '../../node_modules/.bin/electron')
-  return existsSync(localBin) ? localBin : (createRequire(import.meta.url)('electron') as string)
+  return createRequire(import.meta.url)('electron') as string
 }
 
 /** 隔离实例的环境：fake HOME + 重定向的 userData；剔除会让 electron 退化成纯 node 的变量 */
@@ -390,7 +397,7 @@ export async function launchApp(
               : '')
         )
       }
-      await sleep(200)
+      await sleep(50)
     }
 
     let main: CdpClient | null = null
@@ -406,15 +413,29 @@ export async function launchApp(
       setTimeoutDiagnostic(null)
       main?.close()
       if (!exited) {
+        const markerFrom = output.length
         child.kill('SIGTERM')
-        if (!(await waitExit(5000))) {
+        // 应用的 JS 退出流程走完（bootstrap.cjs 在 Node 'exit' 时写这一行）就不再等：之后只剩 Chromium
+        // 的原生收尾，而窗口上屏后 ~15 秒内那段收尾要等 GPU —— 以前每个 spec 文件都在这里白等满 5 秒
+        const t0 = Date.now()
+        while (
+          !exited &&
+          Date.now() - t0 < 5000 &&
+          !output.includes(JS_EXITED_MARKER, markerFrom)
+        ) {
+          await sleep(20)
+        }
+        if (!exited) {
           child.kill('SIGKILL')
           // 等它真的死透再往下走：端口与 userdata 的释放都跟着进程退出，
           // 抢跑会把「上一实例还没死」变成下一个 spec 文件的谜之失败
           await waitExit(5000)
         }
       }
-      if (!stopOpts.keepHome) rmSync(home, { recursive: true, force: true })
+      // 主进程死了，它的 GPU / 网络子进程还要一小会儿才发现父进程没了 —— 期间可能再落一个文件
+      if (!stopOpts.keepHome) {
+        rmSync(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+      }
     }
 
     const base: E2EAppBase = {

@@ -293,12 +293,18 @@ function lineOf(text: string, needle: string): number {
 /** 等缓冲与文件一致（自动保存落定） */
 async function settled(w: Win, what = `${w.key} saved`): Promise<string> {
   let last = ''
-  await until(async () => {
-    const text = await w.pane.docText()
-    const ok = text === disk(w) && text === last
-    last = text
-    return ok
-  }, what)
+  // 「连续两次一样」要真隔着一段时间才算落定 —— 间隔钉死，不随 until 加密
+  await until(
+    async () => {
+      const text = await w.pane.docText()
+      const ok = text === disk(w) && text === last
+      last = text
+      return ok
+    },
+    what,
+    undefined,
+    { intervalMs: 400 }
+  )
   return last
 }
 

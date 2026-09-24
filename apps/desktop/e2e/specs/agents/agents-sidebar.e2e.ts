@@ -494,7 +494,8 @@ describe('侧栏智能体分组', () => {
     await pane.openBuiltin('work')
     const enNote = await openBuiltinNote('work')
     expect(enNote.notebookPath).toBe('work.md')
-    expect(await note.bodyText()).toContain(bodyMarkerOf(enRow.basePath))
+    // openBuiltin 不等正文（见 pages.ts）：先等它上屏再读
+    await note.waitBody(bodyMarkerOf(enRow.basePath))
 
     await setLanguage('zh')
 

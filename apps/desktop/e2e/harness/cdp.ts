@@ -192,21 +192,37 @@ async function forensics(): Promise<string> {
 }
 
 /**
+ * 轮询间隔先密后疏：从 POLL_FIRST_MS 起每轮乘 POLL_GROWTH，封顶 POLL_MAX_MS。
+ *
+ * 点击 / 输入之后等的状态多半几十毫秒就到，而第一轮检查总是早了一步 —— 间隔固定 400ms 时，
+ * 几乎每个 until 都要白等一整轮，整条 spec 看上去就是「停一下、动一下」。前几轮密一些就接住
+ * 了这种；真要等上几秒的（起流、防抖落盘）不到一秒就回到 400ms 一轮，不会把渲染进程淹在 eval 里。
+ */
+const POLL_FIRST_MS = 25
+const POLL_GROWTH = 1.5
+const POLL_MAX_MS = 400
+
+/**
  * 轮询直到 fn 返回真值；超时抛错（带 what 说明 + 现场取证）。
  *
- * 错误消息里带 **polls / 每轮耗时**：这一个数就把两类失败分开了 —— 轮询次数接近
- * `timeoutMs / 400`（本例 ~62）说明每次 eval 都很快、渲染进程活着，是**状态压根没到**；
- * 次数远小于它说明每次往返都在等，是**机器或渲染进程被拖住**。没有这个数的时候，两种
- * 失败在日志里长得一模一样，只能靠反复重跑对照去猜（那正是它一直难查的原因）。
+ * 错误消息里带 **polls / 每轮耗时**：这一个数就把两类失败分开了 —— 轮询次数接近满速上限
+ * （前 1 秒约 7 轮，之后每 400ms 一轮：25s 约 67 轮）说明每次 eval 都很快、渲染进程活着，是
+ * **状态压根没到**；次数远小于它说明每次往返都在等，是**机器或渲染进程被拖住**。没有这个数的
+ * 时候，两种失败在日志里长得一模一样，只能靠反复重跑对照去猜（那正是它一直难查的原因）。
+ *
+ * `intervalMs` 钉死间隔：只给「连续两次读到一样才算落定」这类判据用 —— 它们的含义依赖两次读之间
+ * 真隔着一段时间，间隔一密，「落定」就退化成了「25ms 内没变」。
  */
 export async function until<T>(
   fn: () => T | Promise<T>,
   what: string,
-  timeoutMs = 25_000
+  timeoutMs = 25_000,
+  opts: { intervalMs?: number } = {}
 ): Promise<NonNullable<T>> {
   const t0 = Date.now()
   let polls = 0
   let slowest = 0
+  let interval = opts.intervalMs ?? POLL_FIRST_MS
   for (;;) {
     let value: T | undefined
     const p0 = Date.now()
@@ -223,6 +239,7 @@ export async function until<T>(
       const stats = `after ${(elapsed / 1000).toFixed(1)}s, ${polls} polls, slowest poll ${slowest}ms`
       throw new Error(`timeout waiting: ${what} (${stats})${await forensics()}`)
     }
-    await sleep(400)
+    await sleep(interval)
+    if (opts.intervalMs === undefined) interval = Math.min(POLL_MAX_MS, interval * POLL_GROWTH)
   }
 }

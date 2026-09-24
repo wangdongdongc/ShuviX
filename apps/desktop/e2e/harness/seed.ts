@@ -982,12 +982,18 @@ export async function waitFileWritten(
   what = `file rewritten: ${filePath}`
 ): Promise<string> {
   let last = ''
-  await until(() => {
-    const now = readFileSync(filePath, 'utf8')
-    const settled = now !== before && now !== '' && now === last
-    last = now
-    return settled
-  }, what)
+  // 「两次读到一样」要真隔着一段时间才算落定（防抖 200ms、先截断再写的半截）—— 间隔钉死，不随 until 加密
+  await until(
+    () => {
+      const now = readFileSync(filePath, 'utf8')
+      const settled = now !== before && now !== '' && now === last
+      last = now
+      return settled
+    },
+    what,
+    undefined,
+    { intervalMs: 400 }
+  )
   return last
 }
 
