@@ -48,8 +48,13 @@ export interface FakeTurn {
    * `body.tools?.length === 1`（只有 next 的意图段）。
    */
   when?: (req: FakeRequest) => boolean
-  /** 本次调用的用量（prompt/completion，务必是小数值） */
-  usage?: { prompt: number; completion: number }
+  /**
+   * 本次调用的用量（prompt/completion，务必是小数值）。`cached` 是 prompt 里命中缓存的部分，
+   * 按 OpenAI 的形状发成 `prompt_tokens_details.cached_tokens`（**含在 prompt 之内**，pi 的
+   * openai-completions 适配器会从 prompt_tokens 里扣掉它得到 input）；缺省则不发这个字段 ——
+   * 即「不上报缓存」的 provider。
+   */
+  usage?: { prompt: number; completion: number; cached?: number }
   finishReason?: 'stop' | 'tool_calls' | 'length'
   /** 每片之间的间隔，制造可观察的流式过程 */
   chunkDelayMs?: number
@@ -243,7 +248,10 @@ export async function startFakeProvider(): Promise<FakeProvider> {
         usage: {
           prompt_tokens: usage.prompt,
           completion_tokens: usage.completion,
-          total_tokens: usage.prompt + usage.completion
+          total_tokens: usage.prompt + usage.completion,
+          ...(usage.cached !== undefined && {
+            prompt_tokens_details: { cached_tokens: usage.cached }
+          })
         }
       })
     }

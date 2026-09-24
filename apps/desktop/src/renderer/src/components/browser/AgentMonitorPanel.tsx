@@ -4,8 +4,9 @@
  * 定位是**资源占用诊断**，不是"谁在跑"。派生 agent 跑完并不销毁（面板要支持继续追问），
  * 桌面端关闭会话时又不级联清理，于是一批早已 idle、却仍完整持有 harness 与内存会话树的
  * agent 会一直堆到进程退出。这个页就是用来把它们指出来的：相位灯区分"在跑"与"赖着"、
- * 「孤儿」徽章标出根会话都没了的、上下文占用条回答"它占着多大一块"。刻意不显示 token
- * 花费与跨 agent 合计 —— 那是成本视角，这页只看单个 agent 占着什么。
+ * 「孤儿」徽章标出根会话都没了的、上下文占用条回答"它占着多大一块"，缓存命中率回答
+ * "那一块里多少是复用的"。刻意不显示 token 花费与跨 agent 合计 —— 那是成本视角，这页只看
+ * 单个 agent 占着什么；命中率是比例不是花费，所以它的原料（累计 token）也不上屏。
  *
  * 列表取数**不含任何遍历**：注册中心的快照全是字段读与事件影子，上下文占用直接来自 pi 判定
  * 自动压缩的那个数。所以每秒轮询的代价与 agent 的历史长度无关。
@@ -24,9 +25,14 @@
  */
 import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { RefreshCw, Loader2, CornerDownRight, ChevronRight, X } from 'lucide-react'
-import type { AgentMonitorEntry, AgentMonitorPhase } from '@shuvix/chat-protocol/types/agentMonitor'
+import { RefreshCw, Loader2, CornerDownRight, ChevronRight, X, DatabaseZap } from 'lucide-react'
+import type {
+  AgentMonitorCacheUsage,
+  AgentMonitorEntry,
+  AgentMonitorPhase
+} from '@shuvix/chat-protocol/types/agentMonitor'
 import type { AgentRuntimeInfo } from '@shuvix/chat-protocol/chatApi'
+import { cacheHitRate } from '@shuvix/chat-protocol/utils/cacheHitRate'
 import {
   refreshAgentMonitor,
   subscribeAgentMonitor,
@@ -126,7 +132,8 @@ export function AgentMonitorPanel({ active }: { active: boolean }): React.JSX.El
       </div>
 
       {/* 单列流。面板宽度可拖（320–960px），行与详情按**这个容器**的宽度排版（容器查询），
-          不按窗口：窄时一行拆两行、详情改单列，宽（≥ @lg）时回到一行一条的表格式 */}
+          不按窗口：窄时一行拆两行、详情改单列；够宽时行回到一行一条的表格式（≥ @xl），
+          详情回到两栏（≥ @lg）—— 行多一列定宽的命中率，所以比详情晚一档才并成一行 */}
       <div className="@container flex-1 min-h-0 overflow-y-auto">
         {loading ? (
           <div className="flex items-center justify-center gap-2 py-10 text-text-tertiary">
@@ -142,17 +149,17 @@ export function AgentMonitorPanel({ active }: { active: boolean }): React.JSX.El
             {visible.map((a) => (
               <div key={a.agentId}>
                 {/* 窄：两列网格 —— 左列是相位灯 + 血缘箭头，右列上行「标题 · 徽章 … 时间」、
-                    下行「模型 … 占用条」，下行因此天然与标题左对齐（含派生缩进）。
-                    宽（@lg）：按钮改 flex，三个分组 span 变 `contents` 退出布局，子元素并成
+                    下行「模型 … 占用条 · 命中率」，下行因此天然与标题左对齐（含派生缩进）。
+                    宽（@xl）：按钮改 flex，三个分组 span 变 `contents` 退出布局，子元素并成
                     一行，时间靠 order 排到末尾 —— 同一份 DOM，两种排版。
                     标题与模型都可收缩（min-w-0 + truncate），任何宽度下都不会撑出横向滚动。 */}
                 <button
                   onClick={() => handleRowClick(a.agentId)}
-                  className={`w-full grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-2 gap-y-0.5 px-3 py-1.5 @lg:flex @lg:gap-3 @lg:px-4 @lg:py-2 text-[11px] hover:bg-bg-hover/40 transition-colors ${
+                  className={`w-full grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-2 gap-y-0.5 px-3 py-1.5 @xl:flex @xl:gap-3 @xl:px-4 @xl:py-2 text-[11px] hover:bg-bg-hover/40 transition-colors ${
                     expandedId === a.agentId ? 'bg-bg-hover/40' : ''
                   }`}
                 >
-                  <span className="flex items-center gap-2 @lg:contents">
+                  <span className="flex items-center gap-2 @xl:contents">
                     <span
                       className={`w-1.5 h-1.5 rounded-full shrink-0 ${PHASE_DOT[a.phase]} ${
                         a.phase === 'idle' ? '' : 'animate-pulse'
@@ -169,8 +176,8 @@ export function AgentMonitorPanel({ active }: { active: boolean }): React.JSX.El
                       />
                     )}
                   </span>
-                  <span className="flex items-center gap-2 min-w-0 @lg:contents">
-                    <span className="text-text-primary truncate min-w-0 text-left @lg:max-w-[11rem]">
+                  <span className="flex items-center gap-2 min-w-0 @xl:contents">
+                    <span className="text-text-primary truncate min-w-0 text-left @xl:max-w-[11rem]">
                       {a.kind === 'root' ? a.rootSessionTitle || a.displayName : a.displayName}
                     </span>
                     {!a.rootSessionExists && (
@@ -178,15 +185,16 @@ export function AgentMonitorPanel({ active }: { active: boolean }): React.JSX.El
                         {t('settings.agentMonitorOrphan')}
                       </span>
                     )}
-                    <span className="ml-auto text-text-tertiary text-[10px] text-right shrink-0 tabular-nums @lg:order-last @lg:ml-0 @lg:w-20">
+                    <span className="ml-auto text-text-tertiary text-[10px] text-right shrink-0 tabular-nums @xl:order-last @xl:ml-0 @xl:w-20">
                       {t(sinceParts(a.lastActivityAt).key, { n: sinceParts(a.lastActivityAt).n })}
                     </span>
                   </span>
-                  <span className="col-start-2 flex items-center gap-2 min-w-0 @lg:contents">
+                  <span className="col-start-2 flex items-center gap-2 min-w-0 @xl:contents">
                     <span className="font-mono text-text-tertiary truncate min-w-0 flex-1 text-left text-[10px]">
                       {a.model.id || '—'}
                     </span>
                     <ContextGauge tokens={a.contextTokens} window={a.model.contextWindow} />
+                    <CacheHitCell cache={a.cache} />
                   </span>
                 </button>
 
@@ -211,15 +219,15 @@ function ContextGauge({
   tokens: number
   window: number
 }): React.JSX.Element {
-  // 定宽 w-20 只在单行排版（@lg）里要 —— 那时它是一列，靠定宽上下对齐；
+  // 定宽 w-20 只在单行排版（@xl）里要 —— 那时它是一列，靠定宽上下对齐；
   // 窄时它在第二行末尾、按内容宽，空占位也就不再白占一块
   if (tokens <= 0 || ctxWindow <= 0) {
-    return <span className="shrink-0 @lg:w-20" />
+    return <span className="shrink-0 @xl:w-20" />
   }
   const ratio = Math.min(1, tokens / ctxWindow)
   const near = tokens > ctxWindow - 16_000
   return (
-    <span className="flex items-center gap-1.5 shrink-0 justify-end @lg:w-20">
+    <span className="flex items-center gap-1.5 shrink-0 justify-end @xl:w-20">
       <span className="relative h-1 w-8 rounded-full bg-bg-tertiary overflow-hidden">
         <span
           className={`absolute inset-y-0 left-0 rounded-full ${near ? 'bg-amber-500' : 'bg-accent/60'}`}
@@ -227,6 +235,34 @@ function ContextGauge({
         />
       </span>
       <span className="text-text-secondary text-[10px] tabular-nums">{formatCount(tokens)}</span>
+    </span>
+  )
+}
+
+/** 命中率的百分数文本：行里取整（列窄），详情里保留一位小数 */
+function formatRate(rate: number, digits: 0 | 1): string {
+  return (rate * 100).toFixed(digits)
+}
+
+/**
+ * 行里的缓存命中率（自登记起累计）。三种状态要分开画，因为它们回答的是不同的事：
+ *  - 还没有完成的调用 → 空占位（与占用条一样，没有数据就不画）；
+ *  - 有调用、provider 却从没报过缓存 → 「—」：「上报了 0」与「不上报」在 usage 里都读作 0，
+ *    这里不能替它说成 0%，悬停说明两种可能；
+ *  - 报过 → 百分数，悬停说明口径。
+ * 图标而不是文字标签：日文「キャッシュ」放进定宽列会溢出，完整名称在悬停与详情里。
+ */
+function CacheHitCell({ cache }: { cache: AgentMonitorCacheUsage }): React.JSX.Element {
+  const { t } = useTranslation()
+  if (cache.calls === 0) return <span className="shrink-0 @xl:w-12" />
+  const rate = cache.reported ? cacheHitRate(cache) : null
+  return (
+    <span
+      title={rate === null ? t('panel.agentCacheUnreportedTitle') : t('panel.agentCacheHitTitle')}
+      className="flex items-center gap-1 shrink-0 justify-end text-text-secondary text-[10px] tabular-nums @xl:w-12"
+    >
+      <DatabaseZap size={10} className="text-text-tertiary shrink-0" />
+      {rate === null ? '—' : `${formatRate(rate, 0)}%`}
     </span>
   )
 }
@@ -293,7 +329,7 @@ function AgentDetail({
   const pending = info === undefined ? '…' : '—'
 
   return (
-    <div className="px-3 py-3 bg-bg-tertiary/15 grid grid-cols-1 gap-x-6 gap-y-1.5 text-[10px] @lg:px-4 @lg:grid-cols-2">
+    <div className="px-3 py-3 bg-bg-tertiary/15 grid grid-cols-1 gap-x-6 gap-y-1.5 text-[10px] @xl:px-4 @lg:grid-cols-2">
       <Field label={t('settings.agentMonitorFieldProfile')}>
         <span className="font-mono">{a.profileName}</span>
         <span className="text-text-tertiary ml-1">
@@ -342,6 +378,7 @@ function AgentDetail({
       <Field label={t('settings.agentMonitorFieldMessages')}>
         {info ? info.messageCount : pending}
       </Field>
+      <CacheHitFields cache={a.cache} />
       <Field label={t('settings.agentMonitorFieldQueue')}>
         {a.queue.steer} / {a.queue.followUp} / {a.queue.nextTurn}
       </Field>
@@ -423,6 +460,42 @@ function AgentDetail({
         {a.kind === 'spawned' && ` ← ${a.rootSessionId}`}
       </div>
     </div>
+  )
+}
+
+/**
+ * 详情里的两格命中率：累计（附计入的调用次数）与最近一次。
+ * 「—」规则与行里一致：provider 从没报过缓存时两格都说「未上报」，不说 0%。
+ */
+function CacheHitFields({ cache }: { cache: AgentMonitorCacheUsage }): React.JSX.Element {
+  const { t } = useTranslation()
+  const unknown =
+    cache.calls === 0
+      ? t('settings.agentMonitorCacheNone')
+      : !cache.reported
+        ? t('settings.agentMonitorCacheUnreported')
+        : null
+  const total = cacheHitRate(cache)
+  const last = cache.last ? cacheHitRate(cache.last) : null
+  return (
+    <>
+      <Field label={t('settings.agentMonitorFieldCacheHit')}>
+        <span data-cache-hit="total">
+          {unknown ??
+            (total === null
+              ? '—'
+              : t('settings.agentMonitorCacheHit', {
+                  percent: formatRate(total, 1),
+                  calls: cache.calls
+                }))}
+        </span>
+      </Field>
+      <Field label={t('settings.agentMonitorFieldCacheLast')}>
+        <span data-cache-hit="last">
+          {unknown ?? (last === null ? '—' : `${formatRate(last, 1)}%`)}
+        </span>
+      </Field>
+    </>
   )
 }
 

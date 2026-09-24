@@ -5440,7 +5440,10 @@ export function archivedSettingsPane(settings: CdpClient): ArchivedSettingsPane 
 //   - 行 = 列表区 `.divide-y > div > button.w-full`（详情里的工具行也有 w-full，但不在
 //     这一层父子关系上）；相位灯 = 行内 `span.rounded-full`；孤儿徽章 =
 //     `span[class*="bg-error/10"]`；血缘箭头 = `.lucide-corner-down-right`；
-//     详情容器 = 行按钮父 div 的第二子节点（childElementCount > 1 即展开）。
+//     详情容器 = 行按钮父 div 的第二子节点（childElementCount > 1 即展开）；
+//   - 行内缓存命中率格 = `svg.lucide-database-zap` 的父 span（空占位不画图标）；详情里的
+//     两格命中率数值 = `[data-cache-hit="total" | "last"]`（产品侧的纯标记，不靠字段位置）；
+//   - 列表滚动区 = agents 面板里的 `.overflow-y-auto`（`@container` 那一层，行与详情都在它里面）。
 //
 // DOM 序恒等于 `monitorList()` 的数组序（面板就是 agents.map 出来的）—— spec 按 IPC
 // 快照里的下标定位行，不靠文案认行。
@@ -5459,6 +5462,11 @@ export interface AgentMonitorRowShot {
   orphanText: string
   /** 血缘箭头在屏（spawned 行） */
   arrow: boolean
+  /**
+   * 缓存命中率格：`text` 是 `—`（未上报）或 `NN%`，`title` 是悬停说明（i18n 产物，只比非空 /
+   * 相等）；还没有计入的调用时格子是空占位（不画图标），此时为 null
+   */
+  cache: { text: string; title: string } | null
 }
 
 export interface RightPanelPane {
@@ -5498,6 +5506,18 @@ export interface RightPanelPane {
   detailOpen(index: number): Promise<boolean>
   /** 第 a 行与第 b 行在 DOM 上相邻（a 的行容器紧贴 b 的之前） */
   rowsAdjacent(a: number, b: number): Promise<boolean>
+  /**
+   * 第 i 行展开后的两格缓存命中率（累计 / 最近一次）的数值文本；该行未展开回 null。
+   * 文案类取值（尚无调用 / 未上报）是 i18n 产物，spec 只比相等 / 不等 / 含不含 `%`
+   */
+  detailCacheFields(index: number): Promise<{ total: string; last: string } | null>
+  /** 列表滚动区是否横向溢出（scrollWidth > clientWidth）—— 窄面板里行 / 详情撑破了宽度 */
+  listOverflowsX(): Promise<boolean>
+  /**
+   * 把 RightPanel 根的宽度直接写成 `px`（inline style），并等布局量到这个宽度。
+   * 不走拖拽：只要面板宽度 state 不变，React 就不会重写这条 inline style。
+   */
+  setPanelWidth(px: number): Promise<void>
 }
 
 /** 主窗右侧面板（侧栏开关在顶栏；agents tab 与监视列表都在这里） */
@@ -5563,7 +5583,13 @@ export function rightPanelPane(main: CdpClient): RightPanelPane {
           pulsing: (dot?.className ?? '').includes('animate-pulse'),
           orphan: !!badge,
           orphanText: (badge?.textContent ?? '').trim(),
-          arrow: !!row.querySelector('.lucide-corner-down-right')
+          arrow: !!row.querySelector('.lucide-corner-down-right'),
+          cache: (() => {
+            const cell = row.querySelector('svg.lucide-database-zap')?.parentElement
+            return cell
+              ? { text: (cell.textContent ?? '').trim(), title: cell.getAttribute('title') ?? '' }
+              : null
+          })()
         }
       })`),
     emptyText: () =>
@@ -5602,7 +5628,36 @@ export function rightPanelPane(main: CdpClient): RightPanelPane {
         const rows = ${ROWS}
         return !!rows[${a}] && !!rows[${b}] &&
           rows[${a}].parentElement?.nextElementSibling === rows[${b}].parentElement
+      })()`),
+    detailCacheFields: (index) =>
+      main.eval<{ total: string; last: string } | null>(`(() => {
+        const detail = ${ROWS}[${index}]?.parentElement?.children[1]
+        if (!detail) return null
+        const read = (key) =>
+          (detail.querySelector('[data-cache-hit="' + key + '"]')?.textContent ?? '').trim()
+        return { total: read('total'), last: read('last') }
+      })()`),
+    listOverflowsX: () =>
+      main.eval<boolean>(`(() => {
+        const list = ${AGENTS}?.querySelector('.overflow-y-auto')
+        if (!list) throw new Error('agent monitor list not mounted')
+        return list.scrollWidth > list.clientWidth
+      })()`),
+    setPanelWidth: async (px) => {
+      await main.eval(`(() => {
+        const panel = ${PANEL}
+        if (!panel) throw new Error('right panel not mounted')
+        panel.style.width = '${px}px'
+        return true
       })()`)
+      await until(
+        () =>
+          main.eval<boolean>(
+            `Math.abs((${PANEL}?.getBoundingClientRect().width ?? 0) - ${px}) < 1`
+          ),
+        `right panel laid out at ${px}px`
+      )
+    }
   }
 }
 

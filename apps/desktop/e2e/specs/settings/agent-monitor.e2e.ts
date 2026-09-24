@@ -1,13 +1,16 @@
 /**
  * 智能体监视端到端（隔离实例）—— 主窗 RightPanel 的 agents tab（AgentMonitorPanel）
  * 与设置窗口「监视器」页的回落，外加对话区顶部状态横幅（StatusBanner）的 profile 标记
- * （AgentProfileChip）与监视面板的联动（AM-10 ~ AM-17）。
+ * （AgentProfileChip）与监视面板的联动（AM-10 ~ AM-17），以及提示词缓存命中率
+ * （AM-18 ~ AM-22）。
  *
  * 实例复用（减少启动开销，故两组用例收在同一文件）：
  *   - 组一（AM-1/2/10/8/9）：无 provider 的全新实例 —— 空态、tab 存在性、未发消息的
  *     新会话横幅缺席、设置页形态与旧 hash 回落；
- *   - 组二（AM-3~7、AM-11~17）：fakeProvider 实例 —— 根 agent 上屏、相位灯、血缘缩进、
- *     孤儿徽章、详情手风琴，以及横幅标记的出现/相位/点击三联动/筛选 chip。
+ *   - 组二（AM-3~7、AM-11~22）：fakeProvider 实例 —— 根 agent 上屏、相位灯、血缘缩进、
+ *     孤儿徽章、详情手风琴，横幅标记的出现/相位/点击三联动/筛选 chip，以及缓存命中率的
+ *     三态（尚无调用 / 未上报 / 百分数）、按 token 加权的累计、中止与零内容空回复不计入、
+ *     窄面板不横向溢出。
  *     注意 **turn-completed 的 echo hook 到 AM-5 才种进 hooksDir**：AM-3 断的是「恰一条」，
  *      hook 若 beforeAll 就装好，首轮收尾就会多出一个派生 entry（hooksDir 是指纹缓存的现扫，
  *     中途落盘下一轮即生效，见 hookService.scanCache）；AM-17 反向利用同一机制 —— 先摘掉
@@ -19,6 +22,13 @@
  * 不钉具体句子）。用例有顺序依赖：AM-4 续 AM-3 的会话，AM-6 删 AM-5 的会话，
  * AM-7 用 AM-3 的根 + AM-6 留下的孤儿做手风琴互斥；AM-13~15 续 AM-11 的会话，
  * 所有「恰 N 条」断言都按 sid 过滤做相对比较，不做全量计数。
+ *
+ * 缓存命中率（AM-18 ~ AM-21）共用一条会话 `sids.cache`，累计数值逐条往后接（AM-19 断的是
+ * AM-18 那一轮收尾后的累计，AM-20 在它之上加两轮，AM-21 断「再来两轮也不变」）；AM-22 用
+ * AM-21 收尾时的全量列表量宽度。这一段刻意放在 **AM-17 之后**：那时 echo hook 已经摘掉，
+ * 新会话的轮次不会再派生 echo-agent —— 否则列表里多出 spawned 行、而且它会争用脚本。
+ * 行定位靠横幅 chip 按 `sids.cache` 筛选（AM-13 那套），让列表只剩这一行；数值一律走 IPC，
+ * DOM 只断呈现（图标在不在、`—` 还是 `NN%`、详情两格），文案类格子只比相等 / 不等。
  */
 import { mkdirSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -32,6 +42,7 @@ import {
   rightPanelPane,
   sidebarPane,
   statusBannerPane,
+  type AgentMonitorRowShot,
   type RightPanelPane,
   type SidebarPane,
   type StatusBannerPane
@@ -55,6 +66,13 @@ const ECHO_BODY = 'E2E monitor echo hook.'
  */
 let genericEmptyText = ''
 
+/** 三项缓存用量（pi 归一后互不重叠：input 已扣掉命中的部分） */
+interface CacheTriple {
+  input: number
+  cacheRead: number
+  cacheWrite: number
+}
+
 interface MonitorEntry {
   agentId: string
   kind: string
@@ -64,8 +82,10 @@ interface MonitorEntry {
   phase: string
   rootSessionTitle?: string
   rootSessionExists: boolean
-  counters: { turns: number }
+  counters: { turns: number; aborts: number; providerRequests: number }
   model: { id: string }
+  contextTokens: number
+  cache: CacheTriple & { calls: number; reported: boolean; last?: CacheTriple }
 }
 
 interface MonitorDetail {
@@ -635,5 +655,269 @@ describe('fakeProvider：运行时的上屏、相位、血缘与详情', () => {
     expect(retained.label).toBe(`${sid.slice(0, 8)}…`)
 
     await pane.clearFilter()
+  })
+
+  // ── AM-18 ~ AM-22：提示词缓存命中率 ──
+  // 共用会话 `sids.cache`，累计逐条往后接（见文件头）。此刻 echo hook 已在 AM-17 摘掉，
+  // 这条会话的轮次不会派生任何 agent；标题显式给出，不触发 auto-title。
+
+  /** AM-18 记下的「尚无完成的调用」原文 —— 只用来与 AM-19 的「未上报」比不等，不钉内容 */
+  let noneText = ''
+  /** AM-19 记下的「未上报」悬停说明 —— AM-20 断言百分数状态的悬停口径换了一句 */
+  let unreportedTitle = ''
+
+  /** 缓存会话的根 entry（IPC）；缺席即抛，给 until 当「未就绪」 */
+  const cacheEntry = async (): Promise<MonitorEntry> => {
+    const e = (await monitorList(app.main)).find((x) => x.agentId === sids.cache)
+    if (!e) throw new Error('no monitor entry for the cache lane')
+    return e
+  }
+
+  /** 等缓存会话回到 idle，且已计入 `calls` 次调用（message_end 先于 agent_end，这里只是兜轮询） */
+  const settledCacheEntry = (calls: number): Promise<MonitorEntry> =>
+    until(async () => {
+      const e = await cacheEntry()
+      return e.phase === 'idle' && e.cache.calls === calls ? e : null
+    }, `cache lane idle with ${calls} counted calls`)
+
+  /** 筛选后唯一的那一行，等它的命中率格显示成 `text` */
+  const cacheRowShowing = (text: string): Promise<NonNullable<AgentMonitorRowShot['cache']>> =>
+    until(async () => {
+      const rows = await pane.rows()
+      return rows.length === 1 && rows[0].cache?.text === text ? rows[0].cache : null
+    }, `cache cell shows "${text}"`)
+
+  /** 展开唯一的那一行，等详情两格满足 `ready`，读完收起 */
+  const readCacheFields = async (
+    ready: (f: { total: string; last: string }) => boolean
+  ): Promise<{ total: string; last: string }> => {
+    await pane.clickRow(0)
+    await until(() => pane.detailOpen(0), 'cache lane detail expanded')
+    const fields = await until(async () => {
+      const f = await pane.detailCacheFields(0)
+      return f && ready(f) ? f : null
+    }, 'cache fields in the detail')
+    await pane.clickRow(0)
+    await until(async () => !(await pane.detailOpen(0)) || null, 'cache lane detail collapsed')
+    return fields
+  }
+
+  it('AM-18 尚无计入的调用：IPC cache 全 0 且没有 last；行里是空占位，详情两格同一句非百分数的说明', async () => {
+    const sid = await createSession('AM-18 cache lane')
+    sids.cache = sid
+    await until(
+      async () => (await sidebar.openSession('AM-18 cache lane')) || null,
+      'AM-18 session opened'
+    )
+    provider.script({
+      text: 'c1',
+      holdMs: 20_000,
+      usage: { prompt: 400, completion: 5, cached: 0 },
+      when: rootRequest('cache-1')
+    })
+    await promptTolerant(app.main, sid, 'cache-1')
+
+    // hold 中：内容片已发，message_end 还没到 —— 这一刻运行时已登记、却一次调用都没计入
+    const entry = await until(async () => {
+      const e = await cacheEntry()
+      return e.phase === 'turn' ? e : null
+    }, 'cache lane in turn phase')
+    expect(entry.cache).toEqual({
+      calls: 0,
+      input: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      reported: false
+    })
+    expect(entry.cache.last).toBeUndefined()
+
+    // 横幅 chip 按本会话筛选，列表只剩这一行
+    await until(async () => (await banner.chip()) ?? null, 'chip on screen')
+    await banner.clickChip()
+    await until(
+      async () => (await pane.filterChip())?.label.includes('AM-18 cache lane') || null,
+      'filter on the cache lane'
+    )
+    const row = await until(async () => {
+      const rows = await pane.rows()
+      return rows.length === 1 ? rows[0] : null
+    }, 'only the cache lane row')
+    expect(row.text).toContain('AM-18 cache lane')
+    expect(row.cache).toBeNull()
+
+    const fields = await readCacheFields((f) => f.total !== '')
+    expect(fields.last).toBe(fields.total)
+    expect(fields.total).not.toContain('%')
+    expect(fields.total).not.toMatch(/\d/)
+    noneText = fields.total
+
+    provider.release()
+    await events.waitFor('agent_end', { sessionId: sid })
+    await until(
+      async () => (await cacheEntry()).phase === 'idle' || null,
+      'cache lane back to idle'
+    )
+  })
+
+  it('AM-19 有调用、从未上报缓存：累计照记但 reported 为 false，行里是「—」，详情是与「尚无」不同的一句', async () => {
+    // AM-18 那一轮带 cached_tokens: 0（上报了 0）—— 与「不上报」一样只能读作未知
+    const entry = await settledCacheEntry(1)
+    expect(entry.cache).toEqual({
+      calls: 1,
+      input: 400,
+      cacheRead: 0,
+      cacheWrite: 0,
+      reported: false,
+      last: { input: 400, cacheRead: 0, cacheWrite: 0 }
+    })
+    expect(entry.contextTokens).toBe(405)
+
+    const cell = await cacheRowShowing('—')
+    expect(cell.title).not.toBe('')
+    unreportedTitle = cell.title
+
+    const fields = await readCacheFields((f) => f.total !== '' && f.total !== noneText)
+    expect(fields.last).toBe(fields.total)
+    expect(fields.total).not.toContain('%')
+    expect(noneText).not.toBe('')
+    expect(fields.total).not.toBe(noneText)
+
+    // 「根本不上报」那一半：AM-3 的根跑的轮次没带 usage，provider 压根没发 usage 块
+    const root = (await monitorList(app.main)).find((e) => e.agentId === sids.root)
+    expect(root).toBeDefined()
+    expect(root!.cache.calls).toBeGreaterThanOrEqual(1)
+    expect(root!.cache.reported).toBe(false)
+  })
+
+  it('AM-20 命中率按 token 加权累计、最近一次单算，reported 置真后不回落', async () => {
+    const sid = sids.cache
+
+    // 第二轮：prompt 600 里命中 300（pi 从 prompt_tokens 里扣掉 cached → input 300）
+    provider.script({
+      text: 'c2',
+      usage: { prompt: 600, completion: 5, cached: 300 },
+      when: rootRequest('cache-2')
+    })
+    await promptTurn(sid, 'cache-2')
+    const second = await settledCacheEntry(2)
+    expect(second.cache).toEqual({
+      calls: 2,
+      input: 700,
+      cacheRead: 300,
+      cacheWrite: 0,
+      reported: true,
+      last: { input: 300, cacheRead: 300, cacheWrite: 0 }
+    })
+    expect(second.contextTokens).toBe(605)
+
+    // 300 / 1000 = 30%：「每次比例取平均」得 25%，「只看最近一次」或「只累计上报过的调用」得 50%
+    const cell = await cacheRowShowing('30%')
+    expect(cell.title).not.toBe('')
+    expect(cell.title).not.toBe(unreportedTitle)
+
+    const fields = await readCacheFields((f) => f.total.includes('30.0%'))
+    // 外层文案是 i18n，只认数字：去掉百分数后剩下的是计入次数
+    expect(fields.total.replace('30.0%', '')).toMatch(/\b2\b/)
+    expect(fields.last).toBe('50.0%')
+
+    // 第三轮：上报了、但一次没命中 —— reported 不回落，最近一次是真 0%
+    provider.script({
+      text: 'c3',
+      usage: { prompt: 500, completion: 5, cached: 0 },
+      when: rootRequest('cache-3')
+    })
+    await promptTurn(sid, 'cache-3')
+    const third = await settledCacheEntry(3)
+    expect(third.cache).toEqual({
+      calls: 3,
+      input: 1200,
+      cacheRead: 300,
+      cacheWrite: 0,
+      reported: true,
+      last: { input: 500, cacheRead: 0, cacheWrite: 0 }
+    })
+    expect(third.contextTokens).toBe(505)
+
+    await cacheRowShowing('20%')
+    const after = await readCacheFields((f) => f.total.includes('20.0%'))
+    expect(after.total.replace('20.0%', '')).toMatch(/\b3\b/)
+    expect(after.last).toBe('0.0%')
+  })
+
+  it('AM-21 中止与零内容空回复都不计入：cache 与上下文占用原样，轮次与请求却确实发生了', async () => {
+    const sid = sids.cache
+    const before = await settledCacheEntry(3)
+    expect(before.contextTokens).toBe(505)
+
+    // 中止：部分文本已发（content 非空），usage 块还没发（OpenAI 系的 usage 在流的最后）
+    provider.script({
+      text: 'partial',
+      holdMs: 20_000,
+      usage: { prompt: 70, completion: 2, cached: 60 },
+      when: rootRequest('cache-abort')
+    })
+    await promptTolerant(app.main, sid, 'cache-abort')
+    await until(() => provider.holding() || null, 'abort turn held by the provider')
+    await app.main.eval(`window.api.agent.abort(${JSON.stringify(sid)})`)
+    await events.waitFor('agent_end', { sessionId: sid })
+    const aborted = await until(async () => {
+      const e = await cacheEntry()
+      return e.phase === 'idle' && e.counters.turns === before.counters.turns + 1 ? e : null
+    }, 'cache lane idle after the aborted turn')
+    expect(aborted.cache).toEqual(before.cache)
+    expect(aborted.contextTokens).toBe(505)
+    // 事件确实到过注册中心（轮次 +1 已由上面的 until 证明）：中止也 +1
+    expect(aborted.counters.aborts).toBe(before.counters.aborts + 1)
+
+    // 零内容空回复（放在最后：空 assistant 会进下一次请求的历史）。text '' 经适配器不建块，
+    // content 是 []；它的 usage（prompt 50）若被当真，上下文占用会缩水到 51
+    provider.script({
+      text: '',
+      usage: { prompt: 50, completion: 1, cached: 0 },
+      when: rootRequest('cache-empty')
+    })
+    await promptTurn(sid, 'cache-empty')
+    const empty = await until(async () => {
+      const e = await cacheEntry()
+      return e.phase === 'idle' && e.counters.turns === before.counters.turns + 2 ? e : null
+    }, 'cache lane idle after the empty reply')
+    expect(empty.cache).toEqual(before.cache)
+    expect(empty.contextTokens).toBe(505)
+    // 两次请求都真的发出去、也收到了响应
+    expect(empty.counters.providerRequests).toBe(before.counters.providerRequests + 2)
+
+    // 行里仍是 20%（漏掉零内容门会变成 300/1550 ≈ 19%）。没有会变的东西可 until，
+    // 先让监视轮询走完一个 tick（1s），再读
+    await sleep(1200)
+    const rows = await pane.rows()
+    expect(rows.length).toBe(1)
+    expect(rows[0].cache?.text).toBe('20%')
+
+    await pane.clearFilter()
+  })
+
+  it('AM-22 窄面板（320px）：全量列表收起与展开时都不横向溢出（行里多了一列命中率格）', async () => {
+    await pane.setPanelWidth(320)
+    // 全量列表：AM-3 的根、孤儿、各轮留下的 echo 派生行、带命中率格的缓存会话行
+    const total = (await monitorList(app.main)).length
+    const rows = await until(async () => {
+      const rs = await pane.rows()
+      return rs.length === total ? rs : null
+    }, 'rows restored to the full list')
+    const idx = rows.findIndex((r) => r.text.includes('AM-18 cache lane'))
+    expect(idx).toBeGreaterThanOrEqual(0)
+    expect(rows[idx].cache?.text).toBe('20%')
+    expect(await pane.listOverflowsX()).toBe(false)
+
+    // 展开详情（两格命中率在里面）同样不能撑破宽度
+    await pane.clickRow(idx)
+    await until(() => pane.detailOpen(idx), 'cache lane detail expanded at 320px')
+    await until(
+      async () => (await pane.detailCacheFields(idx))?.total.includes('20.0%') || null,
+      'cache fields rendered at 320px'
+    )
+    expect(await pane.listOverflowsX()).toBe(false)
+    await pane.clickRow(idx)
+    await until(async () => !(await pane.detailOpen(idx)) || null, 'cache lane detail collapsed')
   })
 })

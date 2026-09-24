@@ -22,6 +22,7 @@ export {
   type AgentRuntimePhase,
   type AgentRuntimeIdentity,
   type AgentRuntimeCounters,
+  type AgentRuntimeCacheUsage,
   type AgentRuntimeSnapshot
 } from './runtimeRegistry'
 // 会话运行时生命周期簿记（Map + 懒创建 + 失效/销毁）—— 桌面/扩展共享，构造与清理经注入

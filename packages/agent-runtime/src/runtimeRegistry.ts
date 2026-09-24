@@ -27,8 +27,9 @@
  *     多订阅安全，返回 unsubscribe）。
  */
 import { calculateContextTokens } from '@earendil-works/pi-agent-core'
-import type { AgentHarness, Session } from '@earendil-works/pi-agent-core'
+import type { AgentHarness, AgentMessage, Session } from '@earendil-works/pi-agent-core'
 import type { Usage } from '@earendil-works/pi-ai'
+import { isZeroContentAssistant } from './harness/zeroContent'
 
 export type AgentRuntimeKind = 'root' | 'spawned'
 
@@ -61,6 +62,22 @@ export interface AgentRuntimeCounters {
   compactions: number
 }
 
+/**
+ * 提示词缓存用量的累计 —— 只为算命中率（与 chat-protocol `AgentMonitorCacheUsage` 同形，
+ * 字段语义与计入规则的完整说明在那边）。
+ */
+export interface AgentRuntimeCacheUsage {
+  /** 计入的调用次数（中止 / 出错 / 零内容空回复不计） */
+  calls: number
+  input: number
+  cacheRead: number
+  cacheWrite: number
+  /** 最近一次计入的调用 */
+  last?: { input: number; cacheRead: number; cacheWrite: number }
+  /** 任一次计入的调用里 cacheRead 或 cacheWrite 大于 0 —— 「上报了 0」与「不上报」只能这样区分 */
+  reported: boolean
+}
+
 /** 一次拉取的**廉价**快照：只读 pi getter + 事件影子，不碰会话树 */
 export interface AgentRuntimeSnapshot extends AgentRuntimeIdentity {
   phase: AgentRuntimePhase
@@ -84,6 +101,8 @@ export interface AgentRuntimeSnapshot extends AgentRuntimeIdentity {
    * 不值得为这点尾差去重建上下文。
    */
   contextTokens: number
+  /** 提示词缓存用量累计（命中率的原料） */
+  cache: AgentRuntimeCacheUsage
 }
 
 interface LiveEntry {
@@ -103,6 +122,7 @@ interface LiveEntry {
   queue: { steer: number; followUp: number; nextTurn: number }
   counters: AgentRuntimeCounters
   contextTokens: number
+  cache: AgentRuntimeCacheUsage
 }
 
 const emptyCounters = (): AgentRuntimeCounters => ({
@@ -135,7 +155,8 @@ export class AgentRuntimeRegistry {
       phase: 'idle',
       queue: { steer: 0, followUp: 0, nextTurn: 0 },
       counters: emptyCounters(),
-      contextTokens: 0
+      contextTokens: 0,
+      cache: { calls: 0, input: 0, cacheRead: 0, cacheWrite: 0, reported: false }
     }
     // 监控绝不能成为 agent 跑挂的原因：pi 会把订阅者抛出的错 rethrow 成 hook error
     entry.unsubscribe = harness.subscribe((event) => {
@@ -195,6 +216,7 @@ function snapshotOf(entry: LiveEntry): AgentRuntimeSnapshot {
     queue: { ...entry.queue },
     counters: { ...entry.counters },
     contextTokens: entry.contextTokens,
+    cache: { ...entry.cache, last: entry.cache.last && { ...entry.cache.last } },
     model: {
       provider: model.provider,
       id: model.id,
@@ -237,7 +259,7 @@ function reduce(entry: LiveEntry, event: { type: string } & Record<string, unkno
       entry.counters.providerRequests++
       break
     case 'message_end':
-      updateContextTokens(entry, event.message)
+      updateFromUsage(entry, event.message)
       break
     case 'queue_update':
       entry.queue = {
@@ -274,23 +296,43 @@ function lengthOf(value: unknown): number {
 }
 
 /**
- * 从 provider 真实用量更新当前上下文占用 —— 一条 assistant 消息的用量，就是发出它时
- * 上下文有多大（pi 把 usage 挂在 assistant 消息上）。
+ * 从 provider 真实用量更新两份读数 —— 一条 assistant 消息的用量，就是发出它时上下文
+ * 有多大、其中多少命中了缓存（pi 把 usage 挂在 assistant 消息上）。
  *
- * 用 pi 自己的 `calculateContextTokens` 而不是自己加字段，是为了让这个数与驱动自动
- * 压缩的那个**定义相同**：否则监控页显示"快满了"而压缩不触发（或反过来）就成了误导。
+ * 两份读数跳过同一批消息，因为它们的 usage 都不能当真：
+ *  - 中止 / 出错：用量不完整（pi 的 `getAssistantUsage` 同样排除它们）—— 拿来当上下文尺寸
+ *    会突然缩水，计进命中率会凭空多出一次「未命中」；
+ *  - 零内容空回复：usage 是坏数据（`cacheRead` 归零、prompt 少算一截，见 `isZeroContentAssistant`）。
+ *    自动压缩的估算也剔掉它，这里不剔的话，「与 pi 判定压缩用的是同一个数」就不成立了。
  *
- * 中止/出错的消息跳过：pi 的 `getAssistantUsage` 同样排除它们（用量不完整，拿来当
- * 上下文尺寸会突然缩水）。
+ * **上下文占用**用 pi 自己的 `calculateContextTokens` 而不是自己加字段，是为了让这个数与驱动
+ * 自动压缩的那个**定义相同**：否则监控页显示"快满了"而压缩不触发（或反过来）就成了误导。
  *
- * 刻意**不累计** token 花费 —— 那是"花了多少"，本登记簿只回答"占着多少"。
+ * **缓存**是本登记簿唯一的累计 token 量，而且只为算一个比例 —— 命中率回答的是「上下文里
+ * 多少是被复用的」，与「占着多少」同属效率诊断。花费（output、成本、跨 agent 合计）仍然
+ * 刻意不记：那是"花了多少"，本登记簿只回答"占着多少、复用了多少"。
  */
-function updateContextTokens(entry: LiveEntry, message: unknown): void {
+function updateFromUsage(entry: LiveEntry, message: unknown): void {
   const msg = message as { usage?: Usage; stopReason?: string } | undefined
   if (!msg?.usage) return
   if (msg.stopReason === 'aborted' || msg.stopReason === 'error') return
+  if (isZeroContentAssistant(message as AgentMessage)) return
+
   const context = calculateContextTokens(msg.usage)
   if (context > 0) entry.contextTokens = context
+
+  const call = {
+    input: msg.usage.input || 0,
+    cacheRead: msg.usage.cacheRead || 0,
+    cacheWrite: msg.usage.cacheWrite || 0
+  }
+  const cache = entry.cache
+  cache.calls++
+  cache.input += call.input
+  cache.cacheRead += call.cacheRead
+  cache.cacheWrite += call.cacheWrite
+  cache.last = call
+  if (call.cacheRead > 0 || call.cacheWrite > 0) cache.reported = true
 }
 
 /**

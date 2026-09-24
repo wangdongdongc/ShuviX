@@ -20,7 +20,6 @@ import {
   shouldCompact
 } from '@earendil-works/pi-agent-core'
 import type {
-  AgentMessage,
   AgentTool,
   ExecutionEnv,
   Session,
@@ -31,6 +30,7 @@ import type { AgentRuntimeInfo } from '@shuvix/chat-protocol/chatApi'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import type { ThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
 import { elideHistoricalThinking, type ThinkingElisionState } from './thinkingElision'
+import { isZeroContentAssistant } from './zeroContent'
 import {
   INLINE_TOKENS_CUSTOM_TYPE,
   SYSTEM_NOTICE_CUSTOM_TYPE,
@@ -85,32 +85,6 @@ const TURN_GROWTH_RESERVE_RATIO = 0.1
  *     一次重做，换全类脏数据免疫和窗口利用率。
  */
 const OUTPUT_RESERVE_CAP = 32768
-
-/**
- * 「零内容 assistant 消息」—— provider 偶发返回的空回复（`text: ''`，output 只有 1 个 token）。
- *
- * 它有两重危害，这里只处理第二重：
- *  1. agent-loop 看它没有 toolCall，判定为终答并静默结束整轮（"continue 只跑一轮"）；
- *  2. 它带回来的 usage **不可信** —— 实测 `cacheRead` 归零、`prompt_tokens` 比真实少约 24k
- *     （系统提示词 + 工具 schema 没计进去）。而 pi 的 `estimateContextTokens` 锚定
- *     「最后一条有效 assistant 的 usage」，`stopReason` 又恰好是 'stop'（pi 只排除
- *     error/aborted），于是这条坏数据会把估算硬拽回阈值以下，压缩永不触发。
- *
- * 估算前把它剔掉，锚点自然回落到前一条真实调用上。它本身内容为空，不参与估算也不丢信息。
- */
-function isZeroContentAssistant(message: AgentMessage): boolean {
-  if ((message as { role?: string }).role !== 'assistant') return false
-  const content = (message as { content?: unknown }).content
-  if (typeof content === 'string') return content.trim() === ''
-  if (!Array.isArray(content)) return false
-  return content.every((block) => {
-    const b = block as { type?: string; text?: string; thinking?: string }
-    if (b.type === 'text') return !b.text?.trim()
-    if (b.type === 'thinking') return !b.thinking?.trim()
-    // toolCall / image / 其它任何块都算「有内容」
-    return false
-  })
-}
 
 /** 工具调用拦截结果：block=true 时 harness 不执行该工具，改回一条错误 tool result */
 export type ToolCallGate = (
