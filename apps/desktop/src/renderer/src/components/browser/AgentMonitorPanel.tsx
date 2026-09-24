@@ -125,8 +125,9 @@ export function AgentMonitorPanel({ active }: { active: boolean }): React.JSX.El
         </div>
       </div>
 
-      {/* 单列流 */}
-      <div className="flex-1 min-h-0 overflow-y-auto">
+      {/* 单列流。面板宽度可拖（320–960px），行与详情按**这个容器**的宽度排版（容器查询），
+          不按窗口：窄时一行拆两行、详情改单列，宽（≥ @lg）时回到一行一条的表格式 */}
+      <div className="@container flex-1 min-h-0 overflow-y-auto">
         {loading ? (
           <div className="flex items-center justify-center gap-2 py-10 text-text-tertiary">
             <Loader2 size={14} className="animate-spin" />
@@ -140,41 +141,52 @@ export function AgentMonitorPanel({ active }: { active: boolean }): React.JSX.El
           <div className="divide-y divide-border-secondary/30">
             {visible.map((a) => (
               <div key={a.agentId}>
+                {/* 窄：两列网格 —— 左列是相位灯 + 血缘箭头，右列上行「标题 · 徽章 … 时间」、
+                    下行「模型 … 占用条」，下行因此天然与标题左对齐（含派生缩进）。
+                    宽（@lg）：按钮改 flex，三个分组 span 变 `contents` 退出布局，子元素并成
+                    一行，时间靠 order 排到末尾 —— 同一份 DOM，两种排版。
+                    标题与模型都可收缩（min-w-0 + truncate），任何宽度下都不会撑出横向滚动。 */}
                 <button
                   onClick={() => handleRowClick(a.agentId)}
-                  className={`w-full flex items-center gap-3 px-4 py-2 text-[11px] hover:bg-bg-hover/40 transition-colors ${
+                  className={`w-full grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-2 gap-y-0.5 px-3 py-1.5 @lg:flex @lg:gap-3 @lg:px-4 @lg:py-2 text-[11px] hover:bg-bg-hover/40 transition-colors ${
                     expandedId === a.agentId ? 'bg-bg-hover/40' : ''
                   }`}
                 >
-                  <span
-                    className={`w-1.5 h-1.5 rounded-full shrink-0 ${PHASE_DOT[a.phase]} ${
-                      a.phase === 'idle' ? '' : 'animate-pulse'
-                    }`}
-                  />
-                  {/* 派生 agent 用箭头 + 缩进标记血缘：列表按血缘分组排序（父在上、子紧随），
-                      所以箭头指的就是紧邻的上一行；再按 depth 递进缩进，是为了把"上一行派出的"
-                      与"和上一行同父的兄弟"分开 —— 两者都是派生 agent，只差一层。 */}
-                  {a.kind === 'spawned' && (
-                    <CornerDownRight
-                      size={11}
-                      className="text-text-tertiary/60 shrink-0"
-                      style={{ marginLeft: (a.depth - 1) * 12 }}
+                  <span className="flex items-center gap-2 @lg:contents">
+                    <span
+                      className={`w-1.5 h-1.5 rounded-full shrink-0 ${PHASE_DOT[a.phase]} ${
+                        a.phase === 'idle' ? '' : 'animate-pulse'
+                      }`}
                     />
-                  )}
-                  <span className="text-text-primary truncate max-w-[11rem] shrink-0 text-left">
-                    {a.kind === 'root' ? a.rootSessionTitle || a.displayName : a.displayName}
+                    {/* 派生 agent 用箭头 + 缩进标记血缘：列表按血缘分组排序（父在上、子紧随），
+                        所以箭头指的就是紧邻的上一行；再按 depth 递进缩进，是为了把"上一行派出的"
+                        与"和上一行同父的兄弟"分开 —— 两者都是派生 agent，只差一层。 */}
+                    {a.kind === 'spawned' && (
+                      <CornerDownRight
+                        size={11}
+                        className="text-text-tertiary/60 shrink-0"
+                        style={{ marginLeft: (a.depth - 1) * 12 }}
+                      />
+                    )}
                   </span>
-                  {!a.rootSessionExists && (
-                    <span className="shrink-0 px-1 py-px rounded bg-error/10 text-error text-[9px]">
-                      {t('settings.agentMonitorOrphan')}
+                  <span className="flex items-center gap-2 min-w-0 @lg:contents">
+                    <span className="text-text-primary truncate min-w-0 text-left @lg:max-w-[11rem]">
+                      {a.kind === 'root' ? a.rootSessionTitle || a.displayName : a.displayName}
                     </span>
-                  )}
-                  <span className="font-mono text-text-tertiary truncate flex-1 text-left text-[10px]">
-                    {a.model.id || '—'}
+                    {!a.rootSessionExists && (
+                      <span className="shrink-0 px-1 py-px rounded bg-error/10 text-error text-[9px]">
+                        {t('settings.agentMonitorOrphan')}
+                      </span>
+                    )}
+                    <span className="ml-auto text-text-tertiary text-[10px] text-right shrink-0 tabular-nums @lg:order-last @lg:ml-0 @lg:w-20">
+                      {t(sinceParts(a.lastActivityAt).key, { n: sinceParts(a.lastActivityAt).n })}
+                    </span>
                   </span>
-                  <ContextGauge tokens={a.contextTokens} window={a.model.contextWindow} />
-                  <span className="text-text-tertiary text-[10px] w-20 text-right shrink-0 tabular-nums">
-                    {t(sinceParts(a.lastActivityAt).key, { n: sinceParts(a.lastActivityAt).n })}
+                  <span className="col-start-2 flex items-center gap-2 min-w-0 @lg:contents">
+                    <span className="font-mono text-text-tertiary truncate min-w-0 flex-1 text-left text-[10px]">
+                      {a.model.id || '—'}
+                    </span>
+                    <ContextGauge tokens={a.contextTokens} window={a.model.contextWindow} />
                   </span>
                 </button>
 
@@ -199,13 +211,15 @@ function ContextGauge({
   tokens: number
   window: number
 }): React.JSX.Element {
+  // 定宽 w-20 只在单行排版（@lg）里要 —— 那时它是一列，靠定宽上下对齐；
+  // 窄时它在第二行末尾、按内容宽，空占位也就不再白占一块
   if (tokens <= 0 || ctxWindow <= 0) {
-    return <span className="w-20 shrink-0" />
+    return <span className="shrink-0 @lg:w-20" />
   }
   const ratio = Math.min(1, tokens / ctxWindow)
   const near = tokens > ctxWindow - 16_000
   return (
-    <span className="flex items-center gap-1.5 w-20 shrink-0 justify-end">
+    <span className="flex items-center gap-1.5 shrink-0 justify-end @lg:w-20">
       <span className="relative h-1 w-8 rounded-full bg-bg-tertiary overflow-hidden">
         <span
           className={`absolute inset-y-0 left-0 rounded-full ${near ? 'bg-amber-500' : 'bg-accent/60'}`}
@@ -279,7 +293,7 @@ function AgentDetail({
   const pending = info === undefined ? '…' : '—'
 
   return (
-    <div className="px-4 py-3 bg-bg-tertiary/15 grid grid-cols-2 gap-x-6 gap-y-1.5 text-[10px]">
+    <div className="px-3 py-3 bg-bg-tertiary/15 grid grid-cols-1 gap-x-6 gap-y-1.5 text-[10px] @lg:px-4 @lg:grid-cols-2">
       <Field label={t('settings.agentMonitorFieldProfile')}>
         <span className="font-mono">{a.profileName}</span>
         <span className="text-text-tertiary ml-1">
@@ -353,13 +367,13 @@ function AgentDetail({
       )}
 
       {info === null ? (
-        <div className="col-span-2 mt-2 pt-2 border-t border-border-secondary/40 text-text-tertiary">
+        <div className="col-span-full mt-2 pt-2 border-t border-border-secondary/40 text-text-tertiary">
           {t('settings.agentMonitorDetailUnavailable')}
         </div>
       ) : (
         <>
           {/* 已装载工具 —— 展开一条即看到与实际发给 LLM 一致的 description + 参数名 */}
-          <div className="col-span-2 mt-2 pt-2 border-t border-border-secondary/40">
+          <div className="col-span-full mt-2 pt-2 border-t border-border-secondary/40">
             <div className="pb-1 font-semibold text-text-secondary">
               {t('settings.agentMonitorToolsSection', { count: info?.tools.length ?? a.toolCount })}
             </div>
@@ -376,7 +390,7 @@ function AgentDetail({
           </div>
 
           {/* 系统提示词 —— 默认折叠：它常有上万字符，展开的条目在单列流里会把后面的条目推到天边 */}
-          <div className="col-span-2 mt-2 pt-2 border-t border-border-secondary/40">
+          <div className="col-span-full mt-2 pt-2 border-t border-border-secondary/40">
             <button
               disabled={!info}
               onClick={() => setPromptOpen((v) => !v)}
@@ -404,7 +418,7 @@ function AgentDetail({
         </>
       )}
 
-      <div className="col-span-2 pt-2 font-mono text-[9px] text-text-tertiary/70 break-all">
+      <div className="col-span-full pt-2 font-mono text-[9px] text-text-tertiary/70 break-all">
         {a.agentId}
         {a.kind === 'spawned' && ` ← ${a.rootSessionId}`}
       </div>
@@ -426,8 +440,9 @@ function ToolRow({ tool }: { tool: AgentRuntimeInfo['tools'][number] }): React.J
           size={11}
           className={`shrink-0 text-text-tertiary transition-transform ${expanded ? 'rotate-90' : ''}`}
         />
-        <span className="font-mono text-text-primary">{tool.name}</span>
-        <span className="min-w-0 truncate text-text-tertiary">{tool.label}</span>
+        {/* 名字按内容宽、只在一行都放不下时才截；label 只拿剩下的（basis 0） */}
+        <span className="min-w-0 truncate font-mono text-text-primary">{tool.name}</span>
+        <span className="min-w-0 flex-1 truncate text-text-tertiary">{tool.label}</span>
       </button>
       {expanded && (
         <div className="ml-[9px] pl-2 border-l border-border-secondary/60 space-y-1 pb-1">
