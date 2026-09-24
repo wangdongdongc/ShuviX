@@ -41,6 +41,24 @@ function recordNativeDialog(method, args) {
   }
 }
 
+/**
+ * 主进程未捕获的异常：Electron 缺省弹「A JavaScript error occurred in the main process」原生框 ——
+ * 又一个 OS 级模态（spec 挂在那，框留在开发者屏幕上，而失败原因只在框里）。隔离实例改为把它记进
+ * `<userData>/e2e-uncaught.log`（每条一段 stack）并打到 stderr，spec 可以断这个文件不存在 / 为空。
+ * 挂上这个监听器 Electron 就不再弹框：它的缺省处理只在没有别的监听器时才弹。
+ */
+const UNCAUGHT_LOG = 'e2e-uncaught.log'
+process.on('uncaughtException', (err) => {
+  const stack = (err && err.stack) || String(err)
+  process.stderr.write(`[e2e] uncaught exception in main: ${stack}\n`)
+  if (!userData) return
+  try {
+    appendFileSync(join(userData, UNCAUGHT_LOG), `${stack}\n\n`)
+  } catch {
+    // 记不下来也只能这样了：stderr 那一行还在实例输出里
+  }
+})
+
 dialog.showOpenDialog = async (...args) => {
   recordNativeDialog('showOpenDialog', args)
   return { canceled: true, filePaths: [] }

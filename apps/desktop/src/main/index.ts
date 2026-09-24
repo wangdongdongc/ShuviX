@@ -494,6 +494,7 @@ function createWindow(): void {
 
   // 关闭前清理该窗口关联的终端实例 + 释放 browserOffset 跟踪
   const mainWebContentsId = mainWindow.webContents.id
+  const thisWindow = mainWindow
   mainWindow.on('close', () => {
     destroyTerminalsByWindow(mainWebContentsId)
     void unpinAllPinnedChat('window-closed')
@@ -503,6 +504,9 @@ function createWindow(): void {
   })
   mainWindow.on('closed', () => {
     clearBrowserOffset(mainWebContentsId)
+    // macOS 关掉主窗口应用仍在跑：别让变量留着一个已销毁的窗口 —— 之后别的窗口（md 窗口、widget）
+    // 发来的 window-ready、菜单的「新建会话」一碰它的 webContents 就是 "Object has been destroyed"
+    if (mainWindow === thisWindow) mainWindow = null
   })
 
   // 关闭前保存窗口位置和尺寸

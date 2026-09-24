@@ -18,7 +18,10 @@
  *   SI-2 同一个文件换一种写法再来 → 仍一个窗口，「打开」那一行仍只有一条
  *   SI-3 从 md 冷启动之后，不带文件的第二个实例 → 主窗口建出来、好用；日志里没有重复注册的错误
  *   SI-4 主窗口开着时再来一个不带文件的 → 不建第二个主窗口；关掉主窗口后再来一个 → 重建
+ *   SI-5 主窗口关掉之后再打开一个 md → 窗口照常开出来，主进程没有未捕获的异常
+ *        （回归：md 窗口的 window-ready 碰了已销毁主窗口的 webContents → "Object has been destroyed"）
  */
+import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { isMainPage, listTargets, sleep, until, type CdpClient } from '../../harness/cdp'
@@ -49,6 +52,12 @@ afterAll(async () => {
 
 async function mainTargets(): Promise<Array<{ webSocketDebuggerUrl: string }>> {
   return (await listTargets(app.port)).filter((t) => isMainPage(t))
+}
+
+/** 主进程未捕获的异常（bootstrap.cjs 把它们记进这个文件，而不是弹原生框） */
+function uncaughtExceptions(): string {
+  const file = join(app.home, 'userdata', 'e2e-uncaught.log')
+  return existsSync(file) ? readFileSync(file, 'utf8') : ''
 }
 
 /** 主进程日志与实例输出里「重复注册 IPC 处理函数」一类的错误 */
@@ -146,5 +155,24 @@ describe('第二个实例什么都不带 = 要主窗口', () => {
     }
     expect(await mainTargets()).toHaveLength(1)
     expect(doubleRegistrationErrors()).toEqual([])
+  })
+
+  it('SI-5 主窗口关掉之后再打开一个 md → 窗口开出来，主进程没有未捕获的异常', async () => {
+    const cPath = files.file('c.md', '# C\n')
+    const main = await app.mainWindow()
+    expect(main).not.toBeNull()
+    await main!.eval('window.close()').catch(() => undefined)
+    main!.close()
+    await until(async () => (await mainTargets()).length === 0, 'main window closed')
+
+    expect((await spawnSecondInstance(app, { args: [cPath] })).code).toBe(0)
+    await until(
+      async () => (await app.markdownWindows()).some((w) => w.path === cPath),
+      'c.md window opened after the main window was closed'
+    )
+    // 渲染端挂载完才发 window-ready：等它过去再下「没有异常」的结论
+    await sleep(SETTLE_MS)
+    expect(uncaughtExceptions()).toBe('')
+    expect(await mainTargets()).toEqual([])
   })
 })
