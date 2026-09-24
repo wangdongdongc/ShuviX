@@ -42,6 +42,23 @@ const FRAGMENTS = ['visual-guide.md', 'visual-guide.zh.md', 'visual-guide.ja.md'
   readFileSync(resolve(FRAGMENT_DIR, name), 'utf8')
 )
 
+/**
+ * 三份作图技能 SKILL.md（`apps/desktop/resources/skills/<lang>/drawing/`）—— 同样用 fs 读。
+ * 2026-09-24 起（用户裁决）范例图连同契约从提示片段搬进了这里：行首的 ```svg 开栅栏如今只在技能里，
+ * 片段只在散文里提到围栏。
+ */
+const DRAWING_SKILLS = ['en', 'zh', 'ja'].map((lang) =>
+  readFileSync(
+    resolve(
+      dirname(fileURLToPath(import.meta.url)),
+      '../../../../apps/desktop/resources/skills',
+      lang,
+      'drawing/SKILL.md'
+    ),
+    'utf8'
+  )
+)
+
 /** 三份 notebook 基座提示词 —— 同样用 fs 读（理由同上：零依赖叶子包不反向 import） */
 const BUILTIN_AGENT_MD_DIR = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -148,24 +165,34 @@ describe('authoredSvgFrame', () => {
  *
  * 这两个字面量分住两个包，中间没有类型把它们拴在一起：片段里写成 ```SVG 或 ```xml，
  * 模型会照写，而 CodeBlock 一个字都不认，图变成一坨源码 —— 全绿，没有报错。
+ * 教这个串的地方有两处：提示片段的散文（常驻），和作图技能 SKILL.md 里的范例图（加载后才看见）。
  */
 describe('片段教的围栏语言串 ↔ 分发用的 lang 值', () => {
-  it('三份片段里的围栏开头都是小写 svg，且这个值可渲染', () => {
+  it('三份片段在散文里教的是小写 ```svg，且这个值可渲染；片段里没有行首的 ```svg 范例（范例只在技能里）', () => {
     for (const [i, text] of FRAGMENTS.entries()) {
-      // md 里的代码围栏开头行（```<lang>）
+      // 散文里介绍围栏的那句（「A ```svg fenced block…」）—— 模型照写的就是这个串
+      expect(text, `片段 #${i}`).toContain('```' + FENCE_LANG)
+      // md 里的代码围栏开头行（```<lang>）：范例图搬走之后，片段里不该再有 svg 开栅栏；
+      // 若有别的，也只能是渲染器认的那两种（```interactive 只在散文里，见 interactiveFence.test.ts 的 IF-18）
       const openers = [...text.matchAll(/^```([A-Za-z][\w+-]*)\s*$/gm)].map((m) => m[1])
-      expect(openers.length, `片段 #${i} 应含至少一个示例围栏`).toBeGreaterThan(0)
-      // 行首的开栅栏只有这两种：```svg（画）与 ```artifact（引用一件已落盘的产物）。
-      // 第三种 ```interactive 只在散文里提到（没有行首示例），连散文一起数的那条在
-      // interactiveFence.test.ts 的 IF-18。多出别的就是提示词在教一个渲染不出来的写法。
+      expect(openers, `片段 #${i} 还有 svg 范例围栏`).not.toContain(FENCE_LANG)
       for (const lang of openers) {
         expect([FENCE_LANG, ARTIFACT_FENCE_LANG], `片段 #${i}: 未知围栏 ${lang}`).toContain(lang)
       }
-      expect(openers, `片段 #${i} 应含 svg 示例`).toContain(FENCE_LANG)
-      expect(svgFenceIsRenderable(FENCE_LANG, '<svg viewBox="0 0 4 4"><rect/></svg>')).toBe(true)
-      // 散文里介绍围栏的那句也是同一个串（「A ```svg fenced block…」）
-      expect(text, `片段 #${i}`).toContain('```' + FENCE_LANG)
     }
+    expect(svgFenceIsRenderable(FENCE_LANG, '<svg viewBox="0 0 4 4"><rect/></svg>')).toBe(true)
+  })
+
+  it('三份作图技能 SKILL.md 里的范例围栏开头是小写 svg，且这个值可渲染', () => {
+    for (const [i, text] of DRAWING_SKILLS.entries()) {
+      const openers = [...text.matchAll(/^```([A-Za-z][\w+-]*)\s*$/gm)].map((m) => m[1])
+      // 范例图就住在这里：至少一个行首开栅栏，且是 svg
+      expect(openers, `SKILL.md #${i} 应含 svg 范例`).toContain(FENCE_LANG)
+      for (const lang of openers) {
+        expect([FENCE_LANG], `SKILL.md #${i}: 未知围栏 ${lang}`).toContain(lang)
+      }
+    }
+    expect(svgFenceIsRenderable(FENCE_LANG, '<svg viewBox="0 0 4 4"><rect/></svg>')).toBe(true)
   })
 
   /**

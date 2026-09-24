@@ -3,7 +3,8 @@
  *
  * 作图技能在桌面上出现在两处，由两段代码各自决定：
  *  - 变量表（`desktopPromptVars`）：名单点了 `skill:builtin:drawing` 且 findEnabled 里有它 →
- *    visualGuide / visualCraft 的手艺段换成一句「先加载 `builtin:drawing`」的指路；
+ *    visualGuide / visualCraft 带一句「先加载 `builtin:drawing`」的指路；否则两个值都是空串
+ *    （2026-09-24 起契约、预算与范例只在技能里，整份作图说明都挂在「技能在架」上）；
  *  - 工具解析（`resolveTools` → 真的 `SkillTool`）：名单点了名的 ∩ findEnabled → 技能进货架索引。
  * 两边读的是同一份名单（createAgent 先算好名单，再分别交给两处）。这一组把两边放在同一组输入下
  * 逐格比对：指路出现的地方技能一定加载得到，加载得到的地方提示一定指了路 —— 任何一边自己改了
@@ -13,6 +14,9 @@
  * 那个对象。与那边不同的是这里用**真的 SkillTool** —— 要比的正是它装配出的货架；于是桩
  * skillService（可控的 findEnabled）、`../../i18n`（顶层 import electron）与 ripgrep（真二进制），
  * 注册表桩要带 `registerBuiltinTool`（skillTool.ts 加载即自注册）。
+ *
+ * 2026-09-24 DSC-1 同号改写：从前「不指路时手艺范例常驻」，如今不指路时两个值都是空串，
+ * 指路时恰好一次、不带范例。
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { AgentHostAdapter, PromptVars, ToolResolveRequest } from '@shuvix/agent-runtime'
@@ -104,6 +108,7 @@ const DRAWING = 'skill:builtin:drawing'
 const POINTER = 'builtin:drawing'
 const EXAMPLE = '```svg\n<svg'
 const INDEX_LINE = '<name>builtin:drawing</name>'
+const countOf = (text: string, needle: string): number => text.split(needle).length - 1
 
 const BUILTIN: Skill = {
   name: 'builtin:drawing',
@@ -164,7 +169,7 @@ describe('DSC 指路与货架同一个判断', () => {
   )
 
   it.each(MATRIX)(
-    'DSC-1 kind=%s 名单点名=%s 技能在架=%s：提示指路 ⇔ 货架索引里有它 ⇔ 点名且在架；范例恰在不指路时常驻',
+    'DSC-1 kind=%s 名单点名=%s 技能在架=%s：提示指路 ⇔ 货架索引里有它 ⇔ 点名且在架；不指路时整份作图说明是空串，指路时恰好一次、不带范例',
     async (kind, named, enabled) => {
       mocks.findEnabled.mockReturnValue(enabled ? [BUILTIN] : [])
       const names = named ? ['read', DRAWING] : ['read']
@@ -182,11 +187,19 @@ describe('DSC 指路与货架同一个判断', () => {
       expect(pointed, '(a) 提示里的指路').toBe(expected)
       expect(shelved, '(b) 货架上的技能').toBe(expected)
 
-      // 手艺范例与指路互斥：指了路就不常驻整段手艺，没指路就原样留着
       for (const name of ['visualGuide', 'visualCraft'] as const) {
-        const hasPointer = vars[name].includes(POINTER)
-        expect(vars[name].includes(EXAMPLE), `${name} 的范例`).toBe(!hasPointer)
+        if (!expected) {
+          // 货架上没有它：契约只在技能里，提示里就一个字都不讲（指向拿不到的技能是死路）
+          expect(vars[name], `${name} 应为空串`).toBe('')
+          continue
+        }
+        // 货架上有它：指路恰好一次，范例图不在提示里（它在技能里）
+        expect(countOf(vars[name], POINTER), `${name} 的指路`).toBe(1)
+        expect(vars[name], `${name} 的范例`).not.toContain(EXAMPLE)
       }
+      // 根会话（不是 Chrome 标签页）连交互段一起给：交互段也指向技能 —— 上面的「恰好一次」
+      // 因此覆盖了它不重复点名这一点
+      if (expected && kind === 'root') expect(vars.visualGuide).toContain('```interactive')
     }
   )
 

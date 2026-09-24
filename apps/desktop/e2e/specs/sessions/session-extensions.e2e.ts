@@ -519,7 +519,7 @@ describe('档案声明的作图技能（IPC + DOM）', () => {
     expect(info!.systemPrompt).toContain('adopt')
   })
 
-  it('EXT-E-9 在侧栏停用内置作图技能后新建的会话：没有这一条、没有 skill 工具、提示不指路而是整段手艺常驻', async () => {
+  it('EXT-E-9 在侧栏停用内置作图技能后新建的会话：没有这一条、没有 skill 工具、提示里整份作图说明都不出', async () => {
     await setSkillEnabled('builtin:drawing', false)
     try {
       const s = await createSession({ title: 'EXT-E9-停用作图技能', projectId: p1 })
@@ -533,9 +533,11 @@ describe('档案声明的作图技能（IPC + DOM）', () => {
       const info = await ensureRuntime(s)
       expect(info).not.toBeNull()
       expect(info!.tools.map((t) => t.name)).not.toContain('skill')
-      // 指路只出现在加载得到的地方：此刻加载不到，于是手艺整段留在提示里
+      // 契约与手艺只在技能里（2026-09-24 起）：技能加载不到，就整份作图说明都不出 —— 不指路，
+      // 也没有一份常驻的手艺或范例图可以兜底（指一个拿不到的技能是死路）
       expect(info!.systemPrompt).not.toContain(DRAWING_POINTER)
-      expect(info!.systemPrompt).toContain(DRAWING_EXAMPLE)
+      expect(info!.systemPrompt).not.toContain(DRAWING_EXAMPLE)
+      expect(info!.systemPrompt).not.toContain('```svg')
     } finally {
       await setSkillEnabled('builtin:drawing', true)
     }

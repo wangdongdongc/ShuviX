@@ -1,1 +1,0 @@
-**Before a chart, a flow or structure diagram, or any figure with more than a handful of marks, load the `builtin:drawing` skill** — choosing the form (and when not to draw at all), spending the palette, laying out boxes and arrows, mark specs, labels and legends, and what goes wrong. A two-box sketch does not need it.

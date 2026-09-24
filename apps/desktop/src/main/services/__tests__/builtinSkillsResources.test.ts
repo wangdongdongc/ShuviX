@@ -17,6 +17,12 @@
  * 翻译债因此摆在正确的位置，而不是变成「某个语言的用户静默少一个技能」）。只测在场，不测已译 ——
  * 但**没译的就得是原文**（BS-12）：一份不含假名的 ja 文件必须与 en 那份逐字节相同。否则 en 改了、
  * ja 那份「英文原文」没跟着改，日语用户就静默拿到一份过时的手艺，而它看上去和别的未译文件一模一样。
+ *
+ * 2026-09-24（用户裁决）：```svg 的契约、框箭头预算与范例图从提示片段搬进了 drawing 的 SKILL.md，
+ * 系统提示只留「本会话第一张图之前先加载技能」。BS-6 改指向 visual-guide 片段（原先的
+ * visual-skill-hint*.md 已删）；新增 BS-14（三段在每种语言的 SKILL.md 里各恰好一处）与 BS-15
+ * （片段里一行都不重复它们 —— 契约只有一份）。这一处只能认本地化的小标题（DRAWING_SECTIONS），
+ * 与片段测试的 TWO_BOX 同一种手维护表。
  */
 import { describe, it, expect, afterAll } from 'vitest'
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
@@ -30,12 +36,13 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = resolve(HERE, '../../../../../..')
 /** 内置技能资源根（打包后是 `Resources/skills/`，开发时就是它）；下面按语言分层 */
 const SKILLS_ROOT = join(REPO_ROOT, 'apps/desktop/resources/skills')
-/** 提示片段：指路那句 `builtin:<name>` 写在这里，与技能目录分属两个 workspace（见 BS-6） */
-const HINT_FILES = [
-  'visual-skill-hint.md',
-  'visual-skill-hint.zh.md',
-  'visual-skill-hint.ja.md'
-].map((name) => join(REPO_ROOT, 'packages/agent-runtime/src/agentProfile/fragments', name))
+/**
+ * 作图说明的提示片段（三语）：指路那句 `builtin:<name>` 写在它的 load 段里，与技能目录分属两个
+ * workspace（见 BS-6）。2026-09-24 之前那句住在单独的 visual-skill-hint*.md 里，已删。
+ */
+const FRAGMENT_FILES = ['visual-guide.md', 'visual-guide.zh.md', 'visual-guide.ja.md'].map((name) =>
+  join(REPO_ROOT, 'packages/agent-runtime/src/agentProfile/fragments', name)
+)
 const LOCALE_FILES = ['en', 'zh', 'ja'].map((lang) => ({
   lang,
   path: join(REPO_ROOT, 'packages/chat-protocol/src/i18n/locales', `${lang}.json`)
@@ -112,6 +119,53 @@ const MATRIX: [lang: string, name: string][] = LANGS.flatMap((lang) =>
   SKILL_NAMES.map((name): [string, string] => [lang, name])
 )
 
+/**
+ * drawing 的 SKILL.md 里那三段的小标题 —— 只能按本地化措辞认（ja 目前是 en 的逐字副本，见 BS-12）。
+ * 改了措辞请同步表：BS-14 会红，但红的原因是表过期而不是技能坏了。
+ */
+const DRAWING_SECTIONS: Record<string, { contract: string; budget: string; example: string }> = {
+  en: {
+    contract: '## The contract',
+    budget: '## Boxes and arrows: the budget',
+    example: '## A small figure in full'
+  },
+  ja: {
+    contract: '## The contract',
+    budget: '## Boxes and arrows: the budget',
+    example: '## A small figure in full'
+  },
+  zh: { contract: '## 契约', budget: '## 框与箭头：预算', example: '## 一张完整的小图' }
+}
+/** 契约段必须点到的代码记号（三语一字不差） */
+const DRAWING_CONTRACT = [
+  'viewBox',
+  '`width`',
+  '`height`',
+  'role="img"',
+  'aria-label',
+  '--viz-1',
+  '--viz-seq-1',
+  '--viz-good',
+  '--theme-text-secondary',
+  '--theme-font-sans',
+  '<style>',
+  '<foreignObject>',
+  '<script>'
+]
+/** 一张范例图的围栏开头 */
+const EXAMPLE_FENCE = '```svg\n<svg'
+
+const countOf = (text: string, needle: string): number => text.split(needle).length - 1
+
+/** 从某个 `## ` 小标题到下一个 `## ` 小标题（不含）；找不到小标题时为空串 */
+const sectionOf = (text: string, heading: string): string => {
+  const start = text.indexOf(`${heading}\n`)
+  if (start < 0) return ''
+  const rest = text.slice(start + heading.length)
+  const next = rest.search(/^## /m)
+  return heading + (next < 0 ? rest : rest.slice(0, next))
+}
+
 describe('BS 内置技能资源：随应用发布的那批 know-how', () => {
   it('BS-0 护栏：真的扫到了技能 —— 目录定位一错，下面所有「集合相等」都会在空集上恒真', () => {
     // 这一条必须在最前面。绿的且什么都没测，是最坏的形态。
@@ -162,8 +216,9 @@ describe('BS 内置技能资源：随应用发布的那批 know-how', () => {
   it('BS-6 提示片段里指的 `builtin:<name>` 都是真实存在的技能', () => {
     // 最高价值的一条：片段在 packages/agent-runtime、技能在 apps/desktop/resources，
     // 分属两个 workspace —— 改技能名时没人会同时改那三份 md，指路直接变死链。
+    // 如今契约只在技能里，这条死链的代价更大：模型拿到的是一句「先加载」而加载不到，整份契约就没了
     let referenced = 0
-    for (const file of HINT_FILES) {
+    for (const file of FRAGMENT_FILES) {
       expect(existsSync(file), `片段不存在：${file}`).toBe(true)
       const names = [...readFileSync(file, 'utf8').matchAll(/builtin:([A-Za-z0-9._-]+)/g)].map(
         (m) => m[1]
@@ -238,6 +293,54 @@ describe('BS 内置技能资源：随应用发布的那批 know-how', () => {
         .split('\n')
         .filter((line) => line.startsWith('|') && line.includes('references/diagrams.md'))
       expect(rows).toHaveLength(1)
+    }
+  )
+
+  it.each(LANGS)(
+    'BS-14 %s：drawing 的 SKILL.md 里有契约、框箭头预算与一张完整的范例图，各恰好一处',
+    (lang) => {
+      const text = readSkillMd(lang, 'drawing')
+      const headings = DRAWING_SECTIONS[lang]
+      expect(headings, `${lang}：DRAWING_SECTIONS 缺这一种语言`).toBeDefined()
+      for (const heading of Object.values(headings)) {
+        expect(countOf(text, `${heading}\n`), `${lang}：「${heading}」`).toBe(1)
+      }
+      // 契约：图再小也得守的那几条，凭代码记号认（与片段测试从前的 CONTRACT 同一批）
+      const contract = sectionOf(text, headings.contract)
+      for (const token of DRAWING_CONTRACT) {
+        expect(contract, `${lang} 契约段缺 ${token}`).toContain(token)
+      }
+      // 预算：框数与一行的框数两个上限
+      const budget = sectionOf(text, headings.budget)
+      expect(budget, `${lang} 预算段`).toMatch(/\b5\b/)
+      expect(budget, `${lang} 预算段`).toMatch(/\b4\b/)
+      // 范例：恰好一张完整的 ```svg 图，而且就在「一张完整的小图」那一段里
+      expect(countOf(text, EXAMPLE_FENCE), `${lang} 全文的范例图`).toBe(1)
+      expect(countOf(sectionOf(text, headings.example), EXAMPLE_FENCE), `${lang} 范例段`).toBe(1)
+    }
+  )
+
+  it.each(LANGS)(
+    'BS-15 %s：契约、预算、范例只有技能里这一份 —— 三份 visual-guide 片段里一行都不重复，也不点任何颜色 token',
+    (lang) => {
+      const text = readSkillMd(lang, 'drawing')
+      const headings = DRAWING_SECTIONS[lang]
+      // 三段里每一行足够长、有辨识度的原文（去掉列表记号；短行如 ``` / </svg> 不算）
+      const lines = Object.values(headings)
+        .flatMap((heading) => sectionOf(text, heading).split('\n'))
+        .map((line) => line.replace(/^\s*(?:[-*]\s+)?/, '').trim())
+        .filter((line) => line.length >= 20)
+      // 正控制组：确实取到了一批行 —— 取空了，下面那圈就在空集上恒真
+      expect(lines.length, `${lang}：三段里取不到行`).toBeGreaterThan(10)
+      for (const file of FRAGMENT_FILES) {
+        const fragment = readFileSync(file, 'utf8')
+        // 正控制组：读到的就是那份片段（它点了技能的名）
+        expect(fragment, file).toContain('builtin:drawing')
+        const copied = lines.filter((line) => fragment.includes(line))
+        expect(copied, `${file} 里抄了 ${lang} 技能的契约 / 预算 / 范例`).toEqual([])
+        expect(fragment, `${file} 点了颜色 token`).not.toMatch(/--(viz|theme)-/)
+        expect(fragment, `${file} 写了十六进制颜色`).not.toMatch(/#[0-9a-f]{3,8}\b/i)
+      }
     }
   )
 

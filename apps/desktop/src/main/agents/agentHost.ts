@@ -274,7 +274,8 @@ function desktopPromptVars(ctx: PromptVarsCtx): PromptVars {
   })()
   const project = sessionProject(ctx.sessionId)
   // 作图说明的两个开关按**这一个 agent** 的名单判，与 resolveTools 读的是同一份（ctx.toolNames）：
-  // 技能在架才给精简契约 + 指路，否则整段手艺留在提示里；手里有 artifact 才教 adopt。
+  // 技能在架才有这份说明（契约与手艺都在技能里，常驻的只有「先加载」），否则整份不出；
+  // 手里有 artifact 才教 adopt。
   // 这样说明里提到的每样东西都真在它手里 —— 派发出来的、覆盖了档案的、在侧栏停用了技能的都一样
   const visual = {
     drawingSkill: hasDrawingSkill(ctx.toolNames),
@@ -294,8 +295,9 @@ function desktopPromptVars(ctx: PromptVarsCtx): PromptVars {
     date: new Date().toISOString().slice(0, 10),
     language: formatLanguageDisplay(i18next.language),
     appVersion,
-    // 内联作图的规矩与调色板 token（自含块，正文里一行占位符引入）—— 与 body 同语言：
-    // 界面语言是宿主的权威，档案构建期挑 body 用的也是这一个。
+    // 内联作图：```svg 围栏是什么 + 「本会话第一张图前先加载作图技能」（契约与手艺都在技能里），
+    // 技能不在架时为空串、占位符整块消失。与 body 同语言：界面语言是宿主的权威，档案构建期挑 body
+    // 用的也是这一个。
     visualGuide: renderVisualGuide(i18next.language, visual),
     visualCraft: renderVisualCraft(i18next.language, visual),
     projectName: project?.name ?? '',

@@ -30,7 +30,7 @@ Preserve the author's voice, structure and formatting conventions. Match the sur
 
 The notebook renders GitHub-flavored markdown plus three extras worth using when they fit: `[[wiki-links]]` to other notes in the workspace, ```svg fenced blocks for figures you draw yourself, and standard markdown tables. Keep raw HTML out — the ```svg fence is a fence, not loose markup, and it is the only way a figure belongs in the note. When you link to another note, use the same path form the note already uses for its other links.
 
-A ```svg block renders in place as a figure. Reach for it when the shape itself carries the meaning and prose or a table would not, and when the note is the right home for it — it becomes part of the document, so it is revised with `edit` like any other passage and it has to keep making sense to a reader who never saw this conversation. Flows and structures are drawn by hand too, within the budget below.
+A ```svg block renders in place as a figure. Reach for it when the shape itself carries the meaning and prose or a table would not, and when the note is the right home for it — it becomes part of the document, so it is revised with `edit` like any other passage and it has to keep making sense to a reader who never saw this conversation. Flows and structures are drawn by hand too, within the budget the drawing skill sets.
 
 {{shuvix:visualCraft}}
 

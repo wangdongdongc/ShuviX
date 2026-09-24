@@ -8,7 +8,9 @@
  *  2. 作图说明（visualGuide / visualCraft）的两个开关按**这一个 agent 的归一工具名单**
  *     （`PromptVarsCtx.toolNames`，与 resolveTools 收到的是同一份）判：
  *      - `drawingSkill`：名单点了 `skill:builtin:drawing` **且** skillService.findEnabled() 里有它
- *        （没在侧栏停用）→ 手艺段换成一句「先加载技能」的指路；否则整段手艺留在提示里；
+ *        （没在侧栏停用）→ 才有这份说明（载体 + 「本会话第一张图之前先加载技能」）；否则两个值都是
+ *        空串，引用处整块收敛消失。2026-09-24 起 svg 契约、框箭头预算与范例图只在技能里
+ *        （用户裁决）：指一个拿不到的技能是死路，而契约不再有常驻的第二份；
  *      - `artifact`：名单里有 `artifact` → guide 教「改图走 adopt」（craft 没有载体，永远不教）。
  *     说明里提到的每样东西都得真在它手里 —— 派发出来的、覆盖了档案的、停用了技能的都一样。
  *
@@ -18,7 +20,10 @@
  *
  * 待查名单**从档案正文现算**，不手抄：加一个占位符就自动进入检查，而一份手抄名单只会停在写它的那天。
  * 段落只凭代码记号认（三语一字不差）：POINTER `builtin:drawing`、EXAMPLE「```svg + 换行 + <svg」
- * （手艺段的范例围栏）、ADOPT `adopt`。
+ * （范例图的围栏 —— 如今只在技能里，提示里任何时候都不该有）、ADOPT `adopt`。
+ *
+ * 编号变动（2026-09-24）：PVW-3 / 5 / 6 / 7 / 8 同号改写（技能不在架时的期望从「手艺常驻」变成
+ * 「空串」）；新增 PVW-16（引用处在空串下收敛干净）与 PVW-17（组装出的提示里没有契约）。
  *
  * 取 host 适配面的办法：顶掉 `createAgentFactory`，把 agentHost 传进去的那个对象接住。
  * 其余 mock 只为让模块能加载（dao 会开 SQLite，electron / mcp 在 node 下起不来）；skillService
@@ -198,41 +203,46 @@ describe('desktopPromptVars —— 占位符覆盖', () => {
 describe('desktopPromptVars —— 作图说明按这个 agent 的名单开关', () => {
   const LISTS: string[][] = [[], [DRAWING], ['artifact'], [DRAWING, 'artifact']]
 
-  it('PVW-3 四种名单下两个值都是自含块（自带小标题）且已 trim —— 空串会让整块静默消失', async () => {
+  it('PVW-3 四种名单：技能在架时 visualGuide 是自含块（自带小标题）、visualCraft 恰好一段，都已 trim；技能不在名单上时两个都是空串', async () => {
     for (const toolNames of LISTS) {
       const vars = await varsFor({ toolNames })
+      const skill = toolNames.includes(DRAWING)
       for (const name of FRAGMENT_VARS) {
         const what = `${name} ${JSON.stringify(toolNames)}`
-        expect(vars[name].startsWith('#'), what).toBe(true)
         expect(vars[name], what).toBe(vars[name].trim())
-        expect(vars[name].length, what).toBeGreaterThan(200)
+        // 契约只在技能里：技能不在，整份说明不出（空串会让引用处整块收敛，见 PVW-16）
+        if (!skill) expect(vars[name], what).toBe('')
+        else expect(vars[name].length, what).toBeGreaterThan(0)
+      }
+      if (skill) {
+        const what = JSON.stringify(toolNames)
+        expect(vars.visualGuide.startsWith('#'), what).toBe(true)
+        expect(vars.visualGuide.length, what).toBeGreaterThan(200)
+        // visualCraft 嵌在档案自己的段落之间：它只是一段（「先加载技能」）
+        expect(vars.visualCraft.split(/\n[ \t]*\n/), what).toHaveLength(1)
       }
     }
   })
 
-  it('PVW-4 名单点了作图技能且在架 → 两个值都恰好一句指路，手艺范例不再常驻', async () => {
+  it('PVW-4 名单点了作图技能且在架 → 两个值都恰好一句指路，范例图不在提示里', async () => {
+    // 缺省 ctx 是桌面根会话 → visualGuide 连交互段一起给；交互段也指向技能，但不重复点名
     const vars = await varsFor({ toolNames: [DRAWING] })
+    expect(vars.visualGuide).toContain('```interactive')
     for (const name of FRAGMENT_VARS) {
       expect(countOf(vars[name], POINTER), name).toBe(1)
       expect(vars[name], name).not.toContain(EXAMPLE)
     }
   })
 
-  it('PVW-5 点了名但在侧栏停用（findEnabled 没有它）→ 不指路（连 `builtin:` 都不提），手艺原样留着', async () => {
+  it('PVW-5 点了名但在侧栏停用（findEnabled 没有它）→ 两个值都是空串（连 `builtin:` 都不提），手里有 artifact 也一样', async () => {
     mocks.findEnabled.mockReturnValue([])
-    const vars = await varsFor({ toolNames: [DRAWING] })
-    for (const name of FRAGMENT_VARS) {
-      expect(vars[name], name).not.toContain('builtin:')
-      expect(vars[name], name).toContain(EXAMPLE)
-    }
+    const vars = await varsFor({ toolNames: [DRAWING, 'artifact'] })
+    for (const name of FRAGMENT_VARS) expect(vars[name], name).toBe('')
   })
 
-  it('PVW-6 名单没点它（技能照样在架）→ 不指路、手艺留着；而且根本不去扫技能目录', async () => {
+  it('PVW-6 名单没点它（技能照样在架）→ 两个值都是空串；而且根本不去扫技能目录', async () => {
     const vars = await varsFor({ toolNames: [] })
-    for (const name of FRAGMENT_VARS) {
-      expect(vars[name], name).not.toContain(POINTER)
-      expect(vars[name], name).toContain(EXAMPLE)
-    }
+    for (const name of FRAGMENT_VARS) expect(vars[name], name).toBe('')
     // 大多数 agent（titler、explore…）走这条短路：名单里没有就不碰文件系统
     expect(mocks.findEnabled).not.toHaveBeenCalled()
   })
@@ -240,16 +250,18 @@ describe('desktopPromptVars —— 作图说明按这个 agent 的名单开关',
   it('PVW-7 按全局名精确匹配：用户的 `drawing` 顶替不了 `builtin:drawing`，点 `skill:drawing` 也不算点了内置', async () => {
     mocks.findEnabled.mockReturnValue([USER_DRAWING])
     const shadowed = await varsFor({ toolNames: [DRAWING] })
-    for (const name of FRAGMENT_VARS) expect(shadowed[name], name).not.toContain(POINTER)
+    for (const name of FRAGMENT_VARS) expect(shadowed[name], name).toBe('')
 
     mocks.findEnabled.mockReturnValue([BUILTIN])
     const wrongName = await varsFor({ toolNames: ['skill:drawing'] })
-    for (const name of FRAGMENT_VARS) expect(wrongName[name], name).not.toContain(POINTER)
+    for (const name of FRAGMENT_VARS) expect(wrongName[name], name).toBe('')
   })
 
-  it('PVW-8 手里有 artifact 才教 adopt（只在 visualGuide 里）；visualCraft 无论名单如何都不教', async () => {
-    expect((await varsFor({ toolNames: ['artifact'] })).visualGuide).toContain(ADOPT)
-    expect((await varsFor({ toolNames: [] })).visualGuide).not.toContain(ADOPT)
+  it('PVW-8 技能在架且手里有 artifact 才教 adopt（只在 visualGuide 里）；visualCraft 无论名单如何都不教', async () => {
+    expect((await varsFor({ toolNames: [DRAWING, 'artifact'] })).visualGuide).toContain(ADOPT)
+    expect((await varsFor({ toolNames: [DRAWING] })).visualGuide).not.toContain(ADOPT)
+    // 只有 artifact、没有技能：整份说明都不出，adopt 不会单独冒出来
+    expect((await varsFor({ toolNames: ['artifact'] })).visualGuide).toBe('')
     for (const toolNames of LISTS) {
       const vars = await varsFor({ toolNames })
       expect(vars.visualCraft, JSON.stringify(toolNames)).not.toContain(ADOPT)
@@ -416,5 +428,75 @@ describe('desktopPromptVars —— 交互块按回复落在哪儿给（PVW-12…
       })
     }
     expect(checked, '一个档案都没查到就等于空转').toBeGreaterThan(20)
+  })
+})
+
+describe('desktopPromptVars —— 契约只在技能里（PVW-16 / PVW-17）', () => {
+  /** 引用了作图片段的那几个占位符 */
+  const fragmentVarsOf = (profile: AgentProfile): string[] =>
+    placeholdersOf(profile.systemPrompt).filter((n) =>
+      (FRAGMENT_VARS as readonly string[]).includes(n)
+    )
+
+  it('PVW-16 每个引用作图片段的内置档案 × 三语言：名单去掉作图技能 → 两个值都是空串，引用处收敛干净', async () => {
+    let checked = 0
+    for (const language of LANGUAGES) {
+      await inLanguage(language, async () => {
+        for (const profile of builtins(language)) {
+          const used = fragmentVarsOf(profile)
+          if (used.length === 0) continue
+          const what = `${profile.name}.${language}`
+          const withSkill = await varsFor({ kind: 'root', toolNames: profile.tools })
+          const without = await varsFor({
+            kind: 'root',
+            toolNames: profile.tools.filter((n) => n !== DRAWING)
+          })
+          const promptWith = renderProfileSystemPrompt(profile, withSkill)
+          const out = renderProfileSystemPrompt(profile, without)
+          for (const name of used) {
+            expect(without[name], `${what}.${name}`).toBe('')
+            // 正控制组：点了名时确实有内容、而且确实替换进了提示 —— 下面的「不在」才有意义
+            expect(withSkill[name].length, `${what}.${name}`).toBeGreaterThan(0)
+            expect(promptWith, `${what}.${name}`).toContain(withSkill[name])
+            expect(out, `${what}.${name}`).not.toContain(withSkill[name])
+          }
+          // 空串占位符：没有裸占位符留下，也没有两段空行并成的三连换行
+          expect(out, what).not.toContain('{{shuvix:')
+          expect(out, what).not.toMatch(/\n{3,}/)
+          expect(out, what).toBe(out.trim())
+          expect(out, what).not.toContain(POINTER)
+          checked++
+        }
+      })
+    }
+    // 七个档案（OWN-1 那份名单）× 三语言
+    expect(checked, '一个引用作图片段的档案都没查到 —— 这条在空转').toBeGreaterThanOrEqual(21)
+  })
+
+  it('PVW-17 每个内置档案 × 三语言按自己的名单组装：提示里没有颜色 token、十六进制颜色、范例图 —— 这些只在技能里', async () => {
+    let checked = 0
+    let pointing = 0
+    for (const language of LANGUAGES) {
+      await inLanguage(language, async () => {
+        for (const profile of builtins(language)) {
+          const out = renderProfileSystemPrompt(
+            profile,
+            await varsFor({ kind: 'root', toolNames: profile.tools })
+          )
+          const what = `${profile.name}.${language}`
+          // 从前常驻的 token 表、范例图如今一行都不该出现在任何一份组装好的提示里 ——
+          // 片段不带，档案正文（例如 notebook 的「守作图技能里的预算」）也不该自己再抄一份
+          expect(out, what).not.toMatch(/--(viz|theme)-/)
+          expect(out, what).not.toMatch(/#[0-9a-f]{3,8}\b/i)
+          expect(out, what).not.toContain(EXAMPLE)
+          expect(out, what).not.toMatch(/<svg\b/i)
+          if (out.includes(POINTER)) pointing++
+          checked++
+        }
+      })
+    }
+    expect(checked, '一个档案都没查到就等于空转').toBeGreaterThan(20)
+    // 正控制组：确实有档案拿到了作图说明（七个档案 × 三语言）
+    expect(pointing).toBeGreaterThanOrEqual(21)
   })
 })

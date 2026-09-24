@@ -1,15 +1,34 @@
 ---
 name: drawing
-description: "Craft guidance for inline SVG figures: picking the form (and when not to draw a chart at all), boxes-and-arrows diagrams that stay small enough to read, mark specs, label and legend rules, the categorical/sequential/status palette, interactive blocks where your system prompt describes them (when one earns its place, layout, wiring, a worked example), and a catalog of what goes wrong. Load this before drawing a chart, a flow or structure diagram, or anything with more than a few marks."
+description: "The contract and the craft for inline SVG figures — what a figure must keep to render at all (viewBox, color tokens, what gets stripped), picking the form (and when not to draw a chart at all), boxes-and-arrows diagrams that stay small enough to read, mark specs, label and legend rules, the categorical/sequential/status palette, interactive blocks where your system prompt describes them (when one earns its place, layout, wiring, a worked example), and a catalog of what goes wrong. Load this before the first figure in a conversation, even a two-box sketch."
 ---
 
 # Drawing figures
 
-The contract for the ```svg fence — the tokens, what gets stripped, `viewBox` — is already in your system prompt. **This skill is the craft**: what to draw, and how to make it read.
+This skill is the whole guide to figures: first the **contract** a ```svg figure has to keep to render at all, then the **craft** — what to draw, and how to make it read. Your system prompt only tells you to load it. Once loaded it stays in the conversation, so the next figure does not need it again.
 
-Load it before a chart, a flow or structure diagram, or any figure with more than a handful of marks. A two-box arrow sketch does not need it.
+## The contract
 
-**Boxes and arrows** — flows, structures, layers, before-and-after — have their own reference: `references/diagrams.md`. Read it before drawing one; the steps below are for figures that carry data.
+However small the figure, break one of these and it renders wrong.
+
+- **One element per line** — `edit` needs anchors; a minified figure can only be redrawn.
+- **`viewBox` on the root, never `width` / `height`** — the figure is scaled to the column and overflow is clipped.
+- **`role="img"` and an `aria-label` on the root**, saying what it shows — the label is also its title.
+- **Colors only from tokens, never hex** — a literal color breaks in 10 of the 11 themes. `var()` works in presentation attributes: `fill="var(--viz-1)"`.
+  - Series `--viz-1` … `--viz-8` in that order · magnitude `--viz-seq-1` … `--viz-seq-5` · polarity `--viz-1` ↔ `--viz-mid` ↔ `--viz-8` · state `--viz-good` / `--viz-warn` / `--viz-serious` / `--viz-critical`
+  - Gridlines `--viz-grid` · axes `--viz-axis` · surfaces `--theme-bg-secondary` / `-tertiary` · borders `--theme-border-primary`
+- **Text in text tokens, never a series color** — `fill="var(--theme-text-secondary)"` (or `-primary` / `-tertiary`), `font-family="var(--theme-font-sans)"`, `font-size` at least 11.
+- **No `<style>`, `<foreignObject>`, `<script>` or remote `href` / `src`** — they are stripped before display. `url(#id)` references are fine; `url(https://…)` is not.
+
+## Boxes and arrows: the budget
+
+A figure that explains must be smaller than the thing it explains. Before a flow or a structure, name the one question it answers and count its parts.
+
+- At most 5 boxes, at most 4 in a row, one direction; a box holds a short phrase, not a sentence.
+- More parts than that: draw the overview — the boxes and the main flow only — then one small figure per part that matters, with prose between; or draw the overview and offer to open a part.
+- Arrows stop at box edges and cross no other box.
+
+Flows, structures, layers, before-and-after have their own reference: `references/diagrams.md`. Read it before drawing one; the steps below are for figures that carry data.
 
 **Interactive blocks** (```interactive — sliders, step-throughs, hover-to-read charts) have theirs too: `references/interactive.md` — **only if your system prompt describes ```interactive blocks**; where it does not, your replies are shown somewhere that cannot run them, so do not write one. Read it before writing one; the palette rules below apply inside a block as well.
 
@@ -42,6 +61,23 @@ Frame and ink are not color jobs: gridlines `--viz-grid`, axes and baselines `--
 **Sequential is the safe default.** One hue, more-is-further-from-the-surface. Reach for categorical only when the series themselves are the subject — and when the story is "this one moved", that is *emphasis* (one slot plus `--theme-text-tertiary` for the rest), not eight colors.
 
 **Some slots sit below 3:1 against some theme surfaces.** That is the palette paying for colorblind separability, and the price is that **every part of the figure must be labeled directly**. A figure whose parts are told apart by color alone is wrong here, regardless of how it looks in your current theme.
+
+## A small figure in full
+
+```svg
+<svg viewBox="0 0 320 120" role="img" aria-label="Requests by tier">
+  <line x1="40" y1="100" x2="300" y2="100" stroke="var(--viz-axis)" stroke-width="1"/>
+  <rect x="56" y="40" width="40" height="60" rx="4" fill="var(--viz-1)"/>
+  <rect x="136" y="64" width="40" height="36" rx="4" fill="var(--viz-2)"/>
+  <g font-family="var(--theme-font-sans)" font-size="11" text-anchor="middle"
+     fill="var(--theme-text-secondary)">
+    <text x="76" y="116">free</text>
+    <text x="156" y="116">paid</text>
+  </g>
+</svg>
+```
+
+Read the figure once before you call it done: labels that collide, marks outside the `viewBox`, or a legend doing work a direct label should do all mean it is not finished.
 
 ## Things only true of hand-written SVG
 

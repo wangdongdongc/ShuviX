@@ -1,7 +1,11 @@
 // @vitest-environment jsdom
 /**
- * 教给模型的**范例图**本身得是对的 —— 作图技能的 `references/diagrams.md`（三语）与三份
- * visual-guide 提示片段里的 ```svg 块，逐张过一遍它们自己教的契约。
+ * 教给模型的**范例图**本身得是对的 —— 作图技能的 `references/diagrams.md` 与 `SKILL.md`（各三语）
+ * 里的 ```svg 块，逐张过一遍它们自己教的契约。
+ *
+ * 2026-09-24（用户裁决）：「一张完整的小图」那个范例连同契约与预算，从 visual-guide 提示片段
+ * 搬进了技能的 SKILL.md —— 系统提示只留「先加载技能」。所以 SOURCES 里原先那三份片段换成了
+ * 三份 SKILL.md，同一套 E1…E5 照旧逐张过；新增 E7 反过来钉「片段里一张范例图都没有」。
  *
  * 为什么要这一组：范例是模型最会照抄的东西。一张范例里写了十六进制颜色、`width`/`height`、
  * 一行塞三个元素、或者一个会被净化器剥掉的属性，模型就会把同样的错画进每一张图 —— 而那些错
@@ -10,7 +14,8 @@
  * 块的分类与聊天里的 CodeBlock 同一把尺子（`svgFenceIsRenderable`）：能渲染的是**图**
  * （figure），不能的是**片段**（snippet，例如只有一个 `<defs><marker>` 的那段）。
  *
- *  - E1 在场：diagrams.md 各有一张带箭头的图，片段各有一张图；图都写完了，片段里没有 `<svg`；
+ *  - E1 在场：diagrams.md 各有一张带箭头的图，SKILL.md 各有一张图；图都写完了，片段里没有 `<svg`
+ *    （这里的「片段」是分类名：不能单独渲染的 snippet，与提示片段无关）；
  *  - E2 契约（只对图）：viewBox、不写宽高、role/aria-label、一行一个元素、字号 ≥ 11、
  *    没有被禁的标签、`url()` 只指片段内、没有外链；
  *  - E3 取色（图与片段）：颜色只取 token（或 none / url(#…)），没有十六进制，用到的 token 在
@@ -18,12 +23,13 @@
  *  - E4 过净化器（sanitizeAuthoredSvg，聊天里的那一档）原样通过：元素、属性一个不少，值除了
  *    按内容加前缀的 id 与对它的 url(#…) 引用之外一字不改；
  *  - E5 箭头：marker 引用在 id 加前缀之后仍指向输出里真实存在的 marker；
- *  - E6 预算（只对 diagrams.md 的图）：框数、同一行的框数、元素都在 viewBox 里、连线不穿框。
+ *  - E6 预算（只对 diagrams.md 的图）：框数、同一行的框数、元素都在 viewBox 里、连线不穿框；
+ *  - E7 范例只在技能里：三份 visual-guide 提示片段里没有任何 ```svg 块、也没有 `<svg`。
  *
  * ⚠️ 放在这里而不是 `apps/desktop/src/main/services/__tests__`（技能资源那组 BS 用例的邻居）：
  * 那个目录由 tsconfig.node.json 做类型检查（lib 只有 ES2022），而这一组要 DOMParser，并且会把
  * svgSanitize.ts 拉进 node 那张图（它在那里被刻意排除）。app-shell 走 web / 扩展两套配置，
- * 而且隔壁的 themes.test.ts 本来就在跨包读这几份片段、比对这份 themes.css。
+ * 而且隔壁的 themes.test.ts 本来就在跨包读技能文件与提示片段、比对这份 themes.css。
  */
 import { describe, it, expect } from 'vitest'
 import { existsSync, readFileSync } from 'node:fs'
@@ -61,15 +67,24 @@ const SOURCES: Source[] = [
       isDiagrams: true
     }
   }),
-  ...['visual-guide.md', 'visual-guide.zh.md', 'visual-guide.ja.md'].map((file) => ({
-    name: `fragments/${file}`,
-    text: readFileSync(
-      join(REPO_ROOT, 'packages/agent-runtime/src/agentProfile/fragments', file),
-      'utf8'
-    ),
-    isDiagrams: false
-  }))
+  ...['en', 'zh', 'ja'].map((lang) => {
+    const path = join(REPO_ROOT, 'apps/desktop/resources/skills', lang, 'drawing/SKILL.md')
+    return {
+      name: `skills/${lang}/drawing/SKILL.md`,
+      text: existsSync(path) ? readFileSync(path, 'utf8') : '',
+      isDiagrams: false
+    }
+  })
 ]
+
+/** 三份 visual-guide 提示片段 —— 只在 E7 里用：范例图已经不该在这里 */
+const FRAGMENTS = ['visual-guide.md', 'visual-guide.zh.md', 'visual-guide.ja.md'].map((file) => ({
+  name: `fragments/${file}`,
+  text: readFileSync(
+    join(REPO_ROOT, 'packages/agent-runtime/src/agentProfile/fragments', file),
+    'utf8'
+  )
+}))
 
 interface Block {
   source: Source
@@ -348,4 +363,18 @@ describe('diagrams.md 的范例守自己的预算（E6）', () => {
     expect(lines.length).toBeGreaterThan(0)
     expect(crossings).toEqual([])
   })
+})
+
+describe('范例图只在技能里（E7）', () => {
+  it.each(FRAGMENTS.map((f) => [f.name, f] as const))(
+    'E7 %s：提示片段里没有 ```svg 块，也没有 <svg',
+    (_name, fragment) => {
+      // 正控制组：读到的是那份片段（它讲 ```svg 围栏、并叫模型先加载作图技能）
+      expect(fragment.text, `${fragment.name} 读不到`).toContain('```svg')
+      expect(fragment.text, fragment.name).toContain('builtin:drawing')
+      // 范例搬进了 SKILL.md（E1 在那里钉它在场）；片段里再出现一张，就是契约又有了第二份
+      expect(blocksOf({ ...fragment, isDiagrams: false }), fragment.name).toEqual([])
+      expect(fragment.text, fragment.name).not.toMatch(/<svg\b/i)
+    }
+  )
 })
