@@ -272,7 +272,12 @@
     "collapseLines": "Collapse",
     "cacheRead": "cache read",
     "cacheWrite": "cache write",
-    "artifactMissing": "Artifact \"{{name}}\" not found in this session"
+    "artifactMissing": "Artifact \"{{name}}\" not found in this session",
+    "interactive": "Interactive",
+    "interactiveBuilding": "Building the interactive figure… ({{lines}} lines)",
+    "interactiveRerun": "Run again",
+    "interactiveFrameTitle": "Interactive figure",
+    "interactiveDesktopOnly": "Interactive figures run in the ShuviX desktop app"
   },
   "pendingInputs": {
     "title": "Pending inputs {{count}}",

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
@@ -7,6 +7,7 @@ import mermaid from 'mermaid'
 import { sanitizeRenderedSvg } from '@shuvix/chat-protocol/utils/svgSanitize'
 import { useDialogClose } from '../../hooks/useDialogClose'
 import { useMarkdownStreaming } from './markdownStreaming'
+import { useThemeId } from './useThemeId'
 import {
   MERMAID_MAX_HEIGHT,
   mermaidLayout,
@@ -52,32 +53,6 @@ const mermaidViewState = new Map<string, boolean>()
 const inflight = new Map<string, Promise<string>>()
 let mermaidIdCounter = 0
 let renderQueue: Promise<unknown> = Promise.resolve()
-
-// ─── 主题：跟着根上的 data-theme 走 ─────────────────────────
-
-const readThemeId = (): string => document.documentElement.getAttribute('data-theme') ?? ''
-const readThemeIdOnServer = (): string => ''
-
-const themeListeners = new Set<() => void>()
-let themeObserver: MutationObserver | null = null
-
-function subscribeTheme(listener: () => void): () => void {
-  themeListeners.add(listener)
-  if (!themeObserver && typeof MutationObserver !== 'undefined') {
-    themeObserver = new MutationObserver(() => themeListeners.forEach((l) => l()))
-    themeObserver.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ['data-theme']
-    })
-  }
-  return () => {
-    themeListeners.delete(listener)
-    if (themeListeners.size === 0) {
-      themeObserver?.disconnect()
-      themeObserver = null
-    }
-  }
-}
 
 /** 此刻主题 token 的解析值 —— 拿一个探针元素读 computed color（light-dark() 也在这一步解析） */
 function currentThemeVariables(): Record<string, string | boolean> {
@@ -145,7 +120,7 @@ function renderMermaid(
 export function MermaidBlock({ code }: { code: string }): React.JSX.Element {
   const { t } = useTranslation()
   const streaming = useMarkdownStreaming()
-  const themeId = useSyncExternalStore(subscribeTheme, readThemeId, readThemeIdOnServer)
+  const themeId = useThemeId()
   const key = `${themeId}\u0000${code}`
   const cached = mermaidSvgCache.get(key)
 

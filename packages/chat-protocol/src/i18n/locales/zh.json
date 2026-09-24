@@ -272,7 +272,12 @@
     "collapseLines": "收起",
     "cacheRead": "缓存读取",
     "cacheWrite": "缓存写入",
-    "artifactMissing": "本会话里找不到产物「{{name}}」"
+    "artifactMissing": "本会话里找不到产物「{{name}}」",
+    "interactive": "交互图",
+    "interactiveBuilding": "正在生成交互图…（{{lines}} 行）",
+    "interactiveRerun": "重新运行",
+    "interactiveFrameTitle": "交互图",
+    "interactiveDesktopOnly": "交互图只在 ShuviX 桌面端运行"
   },
   "pendingInputs": {
     "title": "待处理询问 {{count}}",

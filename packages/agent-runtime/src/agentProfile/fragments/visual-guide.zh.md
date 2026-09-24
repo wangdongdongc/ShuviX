@@ -33,6 +33,22 @@
 - 部分比这多：先画总览 —— 只有框和主干 —— 再为值得展开的部分各画一张小图，中间用文字串起来；或者只画总览，问用户要展开哪一块。
 - 箭头停在框的边上，不穿过别的框。
 
+<!-- shuvix:interactive-start -->
+
+### 交互块
+
+回复里的 ```interactive 围栏会在回复里运行一个小的活页面 —— HTML、CSS 和 JavaScript，跑在沙箱里。只在**交互本身就是重点**时用它：要拖一拖的参数、要一步步走的过程、要悬停或筛选才读得出的数；静态的一律仍用 ```svg 图。它就长在回复里：除非用户要，不要再把页面另写成文件。
+
+**写之前，先加载下面点名的作图技能，并读它的 `references/interactive.md`。** 沙箱里没有网络、没有存储、没有 `eval`，只有它自己的库和颜色 token 能用 —— 不看那一页写出来的块多半跑不起来。
+
+<!-- shuvix:interactive-adopt-start -->
+
+**要改一块已经写过的交互块，用 `artifact` 认领（adopt）它、再 `edit` 那个 `.html` 文件 —— 绝不整块重写。**
+
+<!-- shuvix:interactive-adopt-end -->
+
+<!-- shuvix:interactive-end -->
+
 <!-- shuvix:craft-start -->
 
 ### 手艺

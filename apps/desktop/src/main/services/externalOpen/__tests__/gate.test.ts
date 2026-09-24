@@ -13,6 +13,10 @@
  *    静默；两份互不相干，且都是进程级一份而不是按窗口各算各的。
  *  - AG-39…53 guardAppWindow：弹窗一律 deny 但照样过闸，顶层导航一律 preventDefault 后过闸，
  *    只有 dev 渲染端地址（按**源**比较，每次导航现读环境变量）放行。
+ *  - AG-59…64 guardAppWindow 装的第二个监听 will-frame-navigate（blockOpaqueFrameNavigation）：
+ *    **发起方**是不透明源（`'null'`，即 sandbox 且不带 allow-same-origin 的 iframe —— 今天只有
+ *    交互图）的子框架导航一律拦下、也不交给系统；发起方取不到（PDF 查看器那条路）、是真实的源、
+ *    或是顶层导航（那是 will-navigate 的事）都放行。判的是发起方，不是目标。
  *
  * electron 整个换成假件：dialog / shell / BrowserWindow.fromWebContents 是间谍（gate.ts 只用到
  * BrowserWindow 这一个静态方法，其余都是类型），窗口是只有 isDestroyed 与 webContents 的假对象。
@@ -44,6 +48,15 @@ type NavListener = (event: FakeNavEvent, url: string) => void
 interface FakeNavEvent {
   preventDefault: Mock<() => void>
 }
+
+/** will-frame-navigate 的假事件：守卫只读这几个字段 */
+interface FakeFrameNavEvent {
+  preventDefault: Mock<() => void>
+  isMainFrame: boolean
+  initiator: { origin: string } | null | undefined
+  url: string
+}
+type FrameNavListener = (event: FakeFrameNavEvent) => void
 
 /** 假窗口：isDestroyed 按用例拨，两个登记口是间谍 —— 守卫装的 handler 从这里取回来 */
 interface FakeWindow {
@@ -148,6 +161,41 @@ function navHandler(win: FakeWindow): NavListener {
 /** 以这个窗口的名义 window.open(url)：返回 handler 的**同步**返回值 */
 function popup(win: FakeWindow, url: string): unknown {
   return popupHandler(win)({ url })
+}
+
+function frameNavHandler(win: FakeWindow): FrameNavListener {
+  const call = win.webContents.on.mock.calls.find(([event]) => event === 'will-frame-navigate')
+  if (!call) throw new Error('guardAppWindow 没有登记 will-frame-navigate')
+  return call[1] as unknown as FrameNavListener
+}
+
+/**
+ * 这个窗口里某个框架发起一次导航：返回那个假事件。`initiator` 缺省是一个不透明源的帧；
+ * 传 `'throws'` 模拟发起帧已销毁（Electron 在那时读 origin 会抛）。
+ */
+function frameNavigate(
+  win: FakeWindow,
+  url: string,
+  opts: { isMainFrame?: boolean; initiator?: { origin: string } | null | 'throws' } = {}
+): FakeFrameNavEvent {
+  const initiator =
+    opts.initiator === 'throws'
+      ? Object.defineProperty({} as { origin: string }, 'origin', {
+          get() {
+            throw new Error('Render frame was disposed before WebFrameMain could be accessed')
+          }
+        })
+      : opts.initiator === undefined && !('initiator' in opts)
+        ? { origin: 'null' }
+        : opts.initiator
+  const event: FakeFrameNavEvent = {
+    preventDefault: vi.fn<() => void>(),
+    isMainFrame: opts.isMainFrame ?? false,
+    initiator,
+    url
+  }
+  frameNavHandler(win)(event)
+  return event
 }
 
 /** 这个窗口顶层导航到 url：返回那个假事件，看 preventDefault 有没有被调 */
@@ -856,12 +904,18 @@ describe('两份询问节流：内容触发 / 用户亲手点', () => {
 })
 
 describe('guardAppWindow：自有窗口的弹窗与顶层导航', () => {
-  it('AG-39 两条路都装上：setWindowOpenHandler 恰好一次，webContents 上恰好一个 will-navigate 监听', async () => {
+  it('AG-39′ 三条路都装上：setWindowOpenHandler 恰好一次；webContents 上恰好 will-navigate 与 will-frame-navigate 各一个，后者就是 blockOpaqueFrameNavigation', async () => {
     const gate = await load()
+    // 同一份模块注册表里的 gate.ts（barrel 不再导出这个函数，直接取它的定义处）
+    const { blockOpaqueFrameNavigation } = await import('../gate')
     gate.guardAppWindow(asWin(state.win))
 
     expect(state.win.webContents.setWindowOpenHandler).toHaveBeenCalledTimes(1)
-    expect(state.win.webContents.on.mock.calls.map(([event]) => event)).toEqual(['will-navigate'])
+    expect(state.win.webContents.on.mock.calls.map(([event]) => event)).toEqual([
+      'will-navigate',
+      'will-frame-navigate'
+    ])
+    expect(state.win.webContents.on.mock.calls[1][1]).toBe(blockOpaqueFrameNavigation)
   })
 
   it.each([
@@ -1064,5 +1118,74 @@ describe('guardAppWindow：自有窗口的弹窗与顶层导航', () => {
 
     answerB(1)
     await flush()
+  })
+})
+
+describe('guardAppWindow：不透明源的子框架导航（blockOpaqueFrameNavigation）', () => {
+  it('AG-59 交互图（不透明源）把自己导航去本机端口：preventDefault 一次，不交给系统、不弹框', async () => {
+    const gate = await load()
+    const win = guarded(gate)
+    const event = frameNavigate(win, 'http://127.0.0.1:5555/?leak=1')
+
+    expect(event.preventDefault).toHaveBeenCalledTimes(1)
+    await flush()
+    expect(state.openExternal).not.toHaveBeenCalled()
+    expect(state.showMessageBox).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['null', null],
+    ['undefined', undefined]
+  ])(
+    'AG-60 发起方取不到（%s —— PDF 查看器自己的帧走的就是这条）：放行',
+    async (_label, initiator) => {
+      const gate = await load()
+      const win = guarded(gate)
+      const event = frameNavigate(win, 'https://example.com/', { initiator })
+      expect(event.preventDefault).not.toHaveBeenCalled()
+    }
+  )
+
+  it.each(['file://', 'http://localhost:5173', 'https://example.com', 'shuvix-preview://x'])(
+    'AG-61 发起方是真实的源（应用自己的 iframe：PDF 预览、widget、电子书）：放行 —— %s',
+    async (origin) => {
+      const gate = await load()
+      const win = guarded(gate)
+      const event = frameNavigate(win, 'http://127.0.0.1:5555/', { initiator: { origin } })
+      expect(event.preventDefault).not.toHaveBeenCalled()
+    }
+  )
+
+  it('AG-62 顶层导航不归它管（那是 will-navigate 的事）：isMainFrame 且发起方不透明也放行', async () => {
+    const gate = await load()
+    const win = guarded(gate)
+    const event = frameNavigate(win, 'https://example.com/', { isMainFrame: true })
+    expect(event.preventDefault).not.toHaveBeenCalled()
+  })
+
+  it('AG-63 发起帧已销毁（读 origin 会抛）：放行，且不把异常抛出去', async () => {
+    const gate = await load()
+    const win = guarded(gate)
+    let event: FakeFrameNavEvent | undefined
+    expect(() => {
+      event = frameNavigate(win, 'https://example.com/', { initiator: 'throws' })
+    }).not.toThrow()
+    expect(event?.preventDefault).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    'about:srcdoc',
+    'about:blank',
+    'data:text/html,x',
+    'shuvix-lib://chart.js',
+    'https://example.com'
+  ])('AG-64 拦的是发起方不是目标：不透明源发起、去哪儿都拦 —— %s', async (target) => {
+    const gate = await load()
+    const win = guarded(gate)
+    const event = frameNavigate(win, target)
+    expect(event.preventDefault).toHaveBeenCalledTimes(1)
+    await flush()
+    expect(state.openExternal).not.toHaveBeenCalled()
+    expect(state.showMessageBox).not.toHaveBeenCalled()
   })
 })

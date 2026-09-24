@@ -10,12 +10,17 @@
  *    必须是转写里那一份，不是被谁重新排版过的一份。
  *  - **文件名由标题 slug 化 + 去重，不由模型指定**：让模型挑路径等于让它有一天静默覆盖掉
  *    上一件。去重要保证第一件的字节不动 —— 那才是「不覆盖」的实质。
- *  - **白名单恰是五项**（`html` 已移出：第 1 期渲染分支只内联 SVG，放行它买不到东西，
- *    却留下一个模型手写、可能被双击以 `file://` 打开的页面）。
+ *  - **白名单恰是六项**（`html` 曾被移出：那时没有渲染器，放行它只会留下一个模型手写、可能被
+ *    双击以 `file://` 打开的页面。交互图沙箱补上了渲染器，落盘时又加了一行 CSP，它才回来）。
  *  - **目录不存在就是空**，读侧一律不创建目录：看一眼就结束的图在磁盘上什么都不留。
  *  - **`findArtifact` 先按文件名直判**，标题匹配是回退且**重名时拒绝而不是猜**。
  *  - **会话 id 守卫**：这是全仓唯一一条对该目录的递归删除，而 `artifact:read` 的 sessionId
  *    来自渲染端。
+ *  - **html 落盘带一行 CSP**（AS-29…34，交互图认领后的样子）：双击用浏览器以 `file://` 打开时
+ *    这一行生效、没有网络出口；它必须排在最前（前面不能有 BOM 或 doctype），其余字节原样。
+ *    标题取**开头**那个 `<title>`（前面可以有那行 meta），而且先于 svg 的两条判 —— 块里画的一张
+ *    SVG 自带的 aria-label / `<title>` 不锚开头，排在前面就会抢走整块的名字。
+ *    （用例清单里这一组编号是 AS-17…22；本文件那几个号早已占用，顺延为 AS-29…34。）
  *
  * 顶桩纪律：凡是（直接或间接）import 了 store.ts 的测试文件都必须顶掉
  * `utils/paths` 的 `getSessionArtifactsDir` —— 漏一条的表现是**往真实 home 写盘**，
@@ -44,12 +49,14 @@ vi.mock('../../../utils/paths', () => ({
   getSessionArtifactsDir: (sessionId: string) => `${state.root}/${sessionId}`
 }))
 
+import { SANDBOX_CSP } from '@shuvix/chat-protocol/utils/interactiveFence'
 import {
   deleteSessionArtifacts,
   findArtifact,
   listArtifacts,
   readArtifact,
   titleOf,
+  withStandaloneCsp,
   writeArtifact
 } from '../store'
 
@@ -226,15 +233,15 @@ describe('writeArtifact —— 文件名由标题派生，内容原样落盘', (
   it('AS-15 非法 ext 抛错，且抛错前一个目录都没建', () => {
     const sid = newSession()
     expect(() =>
-      writeArtifact({ sessionId: sid, title: 'Page', ext: 'html', content: '<h1/>' })
+      writeArtifact({ sessionId: sid, title: 'Page', ext: 'exe', content: 'MZ' })
     ).toThrow(/Unsupported artifact type/)
     // 校验在 mkdirSync 之前：否则一次失败的 create 也会留下一个空目录
     expect(entries(sid)).toBeNull()
   })
 
-  it('AS-16 白名单恰为五项：svg / md / txt / csv / json（`html` 在外）', () => {
+  it('AS-16 白名单恰为六项：svg / md / txt / csv / json / html', () => {
     const sid = newSession()
-    const allowed = ['svg', 'md', 'txt', 'csv', 'json']
+    const allowed = ['svg', 'md', 'txt', 'csv', 'json', 'html']
     for (const ext of allowed) {
       expect(writeArtifact({ sessionId: sid, title: ext, ext, content: 'x' }).name).toBe(
         `${ext}.${ext}`
@@ -243,12 +250,14 @@ describe('writeArtifact —— 文件名由标题派生，内容原样落盘', (
     // 报错文案就是这份名单的唯一读面（ALLOWED_EXT 是模块私有）—— 顺序与内容一起钉
     let message = ''
     try {
-      writeArtifact({ sessionId: sid, title: 'X', ext: 'html', content: 'x' })
+      writeArtifact({ sessionId: sid, title: 'X', ext: 'exe', content: 'x' })
     } catch (err) {
       message = (err as Error).message
     }
-    expect(message).toBe('Unsupported artifact type ".html" (allowed: svg, md, txt, csv, json)')
-    for (const ext of ['exe', 'js', 'htm', 'xhtml', '']) {
+    expect(message).toBe(
+      'Unsupported artifact type ".exe" (allowed: svg, md, txt, csv, json, html)'
+    )
+    for (const ext of ['js', 'htm', 'xhtml', '']) {
       expect(() => writeArtifact({ sessionId: sid, title: 'X', ext, content: 'x' })).toThrow(
         /Unsupported artifact type/
       )
@@ -410,5 +419,86 @@ describe('deleteSessionArtifacts —— 会话删除时的级联', () => {
     expect(readFileSync(outside, 'utf-8')).toBe('keep me')
     expect(readFileSync(join(nested, 'k.txt'), 'utf-8')).toBe('keep')
     expect(entries(sid)).toEqual(['sibling.svg'])
+  })
+})
+
+/** html artifact 开头那一行（与沙箱的 SANDBOX_CSP 同一条）—— 按契约自己拼，不从被测模块取 */
+const CSP_LINE = `<meta http-equiv="Content-Security-Policy" content="${SANDBOX_CSP}">`
+
+describe('html artifact —— 落盘带一行 CSP，标题取开头的 <title>', () => {
+  it('AS-29 写 html：文件 = CSP 那一行 + 换行 + 内容（逐字节）；前面没有 BOM、没有 doctype', () => {
+    const sid = newSession()
+    const content = '<title>Growth</title>\r\n<p>a &amp; b\t中文</p>\n<script>1</script>'
+    const made = writeArtifact({ sessionId: sid, title: 'Growth', ext: 'html', content })
+    const bytes = readFileSync(made.path)
+    expect(bytes.equals(Buffer.from(`${CSP_LINE}\n${content}`, 'utf-8'))).toBe(true)
+    expect(bytes[0]).toBe('<'.charCodeAt(0)) // 没有 BOM
+    expect(bytes.toString('utf-8').startsWith('<meta http-equiv="Content-Security-Policy"')).toBe(
+      true
+    )
+    expect(made.title).toBe('Growth')
+  })
+
+  it('AS-30 ext 先归一再判：HTML / .html / .HTML 都落成 *.html 且带 CSP；别的类型里就算是 html 也原样落盘、不加', () => {
+    const sid = newSession()
+    for (const [i, ext] of ['HTML', '.html', '.HTML'].entries()) {
+      const made = writeArtifact({ sessionId: sid, title: `page ${i}`, ext, content: '<p>x</p>' })
+      expect(made.name, ext).toBe(`page-${i}.html`)
+      expect(readFileSync(made.path, 'utf-8'), ext).toBe(`${CSP_LINE}\n<p>x</p>`)
+    }
+    const htmlish = '<title>x</title><script>alert(1)</script>'
+    for (const ext of ['svg', 'md', 'txt', 'csv', 'json']) {
+      const made = writeArtifact({ sessionId: sid, title: `other ${ext}`, ext, content: htmlish })
+      expect(readFileSync(made.path, 'utf-8'), ext).toBe(htmlish)
+    }
+  })
+
+  it('AS-31 块里画了一张带 <title> / aria-label 的 SVG：整块的名字仍取开头那个 <title>', () => {
+    const innerTitle =
+      '<title>Dashboard</title><div><svg viewBox="0 0 4 4"><title>Bars</title><rect/></svg></div>'
+    expect(titleOf(innerTitle, 'x.html')).toBe('Dashboard')
+    const innerAria =
+      '<title>Dashboard</title>\n<svg viewBox="0 0 4 4" role="img" aria-label="Bars chart"><rect/></svg>'
+    expect(titleOf(innerAria, 'x.html')).toBe('Dashboard')
+  })
+
+  it('AS-32 开头的 <title>：前面可以有那行 meta 或空白；不在开头就不算；首尾空白去掉；空的回落文件名主干', () => {
+    expect(titleOf('<title>Growth</title><p>x</p>', 'g.html')).toBe('Growth')
+    expect(titleOf(`${CSP_LINE}\n<title>Growth</title><p>x</p>`, 'g.html')).toBe('Growth')
+    expect(titleOf('\n  \t<title>Growth</title>', 'g.html')).toBe('Growth')
+    expect(titleOf('<p>intro</p><title>Growth</title>', 'late.html')).toBe('late')
+    expect(titleOf('<title>  G  </title>', 'g.html')).toBe('G')
+    expect(titleOf('<title></title><p>x</p>', 'empty.html')).toBe('empty')
+    // 反过来不误伤 svg：svg 文件以 <svg 开头，锚在开头的那一条匹配不上，照旧取 aria-label
+    expect(titleOf('<svg viewBox="0 0 4 4" aria-label="Svg title"/>', 'x.svg')).toBe('Svg title')
+  })
+
+  it('AS-33 withStandaloneCsp 幂等：套两次与套一次相同；已以那行开头的原样；那行在中间或前面多一个换行时再加一行（钉住现状）', () => {
+    const x = '<title>T</title><p>x</p>'
+    const once = withStandaloneCsp(x)
+    expect(once).toBe(`${CSP_LINE}\n${x}`)
+    expect(withStandaloneCsp(once)).toBe(once)
+    expect(withStandaloneCsp(`${CSP_LINE}<p>no newline</p>`)).toBe(`${CSP_LINE}<p>no newline</p>`)
+    // 只认**开头**：出现在中间、或前面多了一个换行，都当作没有 —— 再加一行在最前
+    const mid = `<p>x</p>\n${CSP_LINE}\n`
+    expect(withStandaloneCsp(mid)).toBe(`${CSP_LINE}\n${mid}`)
+    const leadingNewline = `\n${CSP_LINE}\n<p>x</p>`
+    expect(withStandaloneCsp(leadingNewline)).toBe(`${CSP_LINE}\n${leadingNewline}`)
+  })
+
+  it('AS-34 读侧：list / find 的标题取 <title>（跳过那行 meta），read 回的内容以 CSP 那行开头', () => {
+    const sid = newSession()
+    const made = writeArtifact({
+      sessionId: sid,
+      title: 'Whatever',
+      ext: 'html',
+      content: '<title>Growth chart</title><p>x</p>'
+    })
+    expect(listArtifacts(sid).map((a) => [a.name, a.title])).toEqual([
+      ['whatever.html', 'Growth chart']
+    ])
+    expect(findArtifact(sid, 'whatever.html')?.title).toBe('Growth chart')
+    expect(findArtifact(sid, 'growth chart')?.name).toBe(made.name)
+    expect(readArtifact(sid, made.name)?.startsWith(`${CSP_LINE}\n`)).toBe(true)
   })
 })

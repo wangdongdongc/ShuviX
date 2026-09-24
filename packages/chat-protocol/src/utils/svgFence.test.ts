@@ -155,8 +155,9 @@ describe('片段教的围栏语言串 ↔ 分发用的 lang 值', () => {
       // md 里的代码围栏开头行（```<lang>）
       const openers = [...text.matchAll(/^```([A-Za-z][\w+-]*)\s*$/gm)].map((m) => m[1])
       expect(openers.length, `片段 #${i} 应含至少一个示例围栏`).toBeGreaterThan(0)
-      // 片段现在教两种围栏：```svg（画）与 ```artifact（引用一件已落盘的产物）。
-      // 只有这两个是 CodeBlock 认识的，多出第三种就是提示词在教一个渲染不出来的写法。
+      // 行首的开栅栏只有这两种：```svg（画）与 ```artifact（引用一件已落盘的产物）。
+      // 第三种 ```interactive 只在散文里提到（没有行首示例），连散文一起数的那条在
+      // interactiveFence.test.ts 的 IF-18。多出别的就是提示词在教一个渲染不出来的写法。
       for (const lang of openers) {
         expect([FENCE_LANG, ARTIFACT_FENCE_LANG], `片段 #${i}: 未知围栏 ${lang}`).toContain(lang)
       }

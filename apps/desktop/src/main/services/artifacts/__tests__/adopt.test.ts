@@ -14,6 +14,12 @@
  *    原始源码**，第一次的编辑就此分叉丢失，而新发的引用展示的是未编辑版 —— 用户看到的是
  *    「我的修改被撤销了」。
  *
+ * ```interactive 交互块走同一条路（AD-24…33）：`kind` 决定落盘扩展名（svg → `.svg`，interactive →
+ * `.html`，html 落盘带一行 CSP），幂等按「标题 + 种类」派生的文件名判 —— 同名的一张 svg 与一块
+ * 交互图各是各的一件。抽取面与 svg 同宽：只认小写 `interactive`、只认已闭合的、容忍缩进 / CRLF /
+ * 语言串后的空格；```html 不算（那是代码示例）。（用例清单里这一组编号是 AD-8…18、其中 AD-13 已裁掉；
+ * 本文件那几个号早已占用，顺延为 AD-24…33。）
+ *
  * 顶桩纪律：adopt.ts 间接 import store.ts，所以这里同样必须顶掉 `getSessionArtifactsDir`
  * （漏一条的表现是往真实 home 写盘），文件末尾有真实 home 哨兵。
  */
@@ -43,6 +49,7 @@ vi.mock('../../../utils/paths', () => ({
   getSessionArtifactsDir: (sessionId: string) => `${state.root}/${sessionId}`
 }))
 
+import { SANDBOX_CSP } from '@shuvix/chat-protocol/utils/interactiveFence'
 import { adoptFigure, figureArtifactName, listAdoptableFigures } from '../adopt'
 
 const HOME_ARTIFACTS = join(homedir(), '.shuvix', 'artifacts')
@@ -136,7 +143,7 @@ describe('listAdoptableFigures —— 抽取面与用户看到的东西同宽', 
     const body = `\n${svg('Tiers')}\n`
     const figures = listAdoptableFigures([said(`看这张：\n${fence(body)}\n就这样。`)])
     expect(figures).toHaveLength(1)
-    expect(figures[0]).toEqual({ title: 'Tiers', index: 1, source: svg('Tiers') })
+    expect(figures[0]).toEqual({ title: 'Tiers', index: 1, source: svg('Tiers'), kind: 'svg' })
   })
 
   it('AD-2 多围栏按出现顺序，index 从 1 连续（跨消息也连续）', () => {
@@ -338,5 +345,153 @@ describe('adoptFigure —— 幂等（主线场景第二轮的全部依赖）', 
     expect(second?.existing).toBe(true)
     expect(second?.artifact.path).toBe(first?.artifact.path)
     expect(entries(sid)).toEqual(['same.svg'])
+  })
+})
+
+// ─── ```interactive 交互块 ─────────────────────────────────────────────────────
+
+/** 一块带标题的交互图（开头的 <title> 就是它的名字） */
+const block = (title: string, extra = ''): string =>
+  `<title>${title}</title>\n<p id="out"></p>\n<script>\n  document.getElementById('out').textContent = '${title}'${extra}\n</script>`
+
+/** html artifact 开头那一行（与沙箱的 SANDBOX_CSP 同一条）—— 按契约自己拼 */
+const CSP_LINE = `<meta http-equiv="Content-Security-Policy" content="${SANDBOX_CSP}">`
+
+const interactive = (body: string, opts: { indent?: string; eol?: string } = {}): string =>
+  fence(body, { ...opts, lang: 'interactive' })
+
+describe('```interactive —— 与 ```svg 走同一条认领路', () => {
+  it('AD-24 一块交互图可以认领：title 取开头的 <title>，source 已 trim，kind 是 interactive', () => {
+    const figures = listAdoptableFigures([said(`看：\n${interactive(`\n${block('Growth')}\n`)}`)])
+    expect(figures).toEqual([
+      { title: 'Growth', index: 1, source: block('Growth'), kind: 'interactive' }
+    ])
+  })
+
+  it('AD-25 svg 与交互图混排、跨消息：index 连续，kind 各自对得上', () => {
+    const figures = listAdoptableFigures([
+      said(`${fence(svg('One'))}\n散文\n${interactive(block('Two'))}`, 'a1'),
+      said(fence(svg('Three')), 'a2')
+    ])
+    expect(figures.map((f) => [f.index, f.title, f.kind])).toEqual([
+      [1, 'One', 'svg'],
+      [2, 'Two', 'interactive'],
+      [3, 'Three', 'svg']
+    ])
+  })
+
+  it('AD-26 与渲染器同宽：大小写变体 / ```html / 没闭合 / 用户消息里的都不算；语言串后有空格、缩进、CRLF 照样算', () => {
+    for (const msg of [
+      said(fence(block('Cap'), { lang: 'Interactive' })),
+      said(fence(block('Upper'), { lang: 'INTERACTIVE' })),
+      said(fence(block('Html'), { lang: 'html' })),
+      said(`\`\`\`interactive\n${block('Open')}`),
+      user(interactive(block('Pasted')))
+    ]) {
+      expect(listAdoptableFigures([msg]), msg.content.slice(0, 40)).toEqual([])
+    }
+    const trailing = listAdoptableFigures([
+      said(`\`\`\`interactive   \n${block('Spaced')}\n\`\`\``)
+    ])
+    expect(trailing.map((f) => [f.title, f.kind])).toEqual([['Spaced', 'interactive']])
+    const indented = listAdoptableFigures([said(interactive(block('Indented'), { indent: '  ' }))])
+    expect(indented.map((f) => f.title)).toEqual(['Indented'])
+    const crlf = listAdoptableFigures([said(interactive(block('Crlf'), { eol: '\r\n' }))])
+    expect(crlf.map((f) => f.title)).toEqual(['Crlf'])
+  })
+
+  it('AD-27 文件名按种类：interactive → .html；缺省种类仍是 .svg', () => {
+    expect(figureArtifactName('Growth', 'interactive')).toBe('growth.html')
+    expect(figureArtifactName('Growth', 'svg')).toBe('growth.svg')
+    expect(figureArtifactName('Growth')).toBe('growth.svg')
+  })
+
+  it('AD-28 名字取这一块自己开头的 <title>，块里那张 SVG 的 aria-label 抢不走', () => {
+    const sid = newSession()
+    const source =
+      '<title>Dashboard</title>\n<svg viewBox="0 0 4 4" role="img" aria-label="Bars"><rect/></svg>'
+    const messages = [said(interactive(source))]
+    expect(listAdoptableFigures(messages).map((f) => f.title)).toEqual(['Dashboard'])
+    const got = adoptFigure({ sessionId: sid, messages })
+    expect(got?.figure.title).toBe('Dashboard')
+    expect(got?.artifact.name).toBe('dashboard.html')
+  })
+
+  it('AD-29 认领交互图 → 新建 growth.html，文件 = CSP 那一行 + 换行 + 转写里的源码', () => {
+    const sid = newSession()
+    const got = adoptFigure({ sessionId: sid, messages: [said(interactive(block('Growth')))] })
+    expect(got?.existing).toBe(false)
+    expect(got?.figure.kind).toBe('interactive')
+    expect(got?.artifact.name).toBe('growth.html')
+    expect(readFileSync(got!.artifact.path, 'utf-8')).toBe(`${CSP_LINE}\n${block('Growth')}`)
+    expect(entries(sid)).toEqual(['growth.html'])
+  })
+
+  it('AD-30 再认领 → existing: true、同一件、字节不动（手改过也不动），不会冒出 growth-2.html', () => {
+    const sid = newSession()
+    const messages = [said(interactive(block('Growth')))]
+    const first = adoptFigure({ sessionId: sid, messages })
+    const again = adoptFigure({ sessionId: sid, messages })
+    expect(again?.existing).toBe(true)
+    expect(again?.artifact.name).toBe(first?.artifact.name)
+    expect(readFileSync(again!.artifact.path, 'utf-8')).toBe(`${CSP_LINE}\n${block('Growth')}`)
+
+    const edited = `${CSP_LINE}\n${block('Growth', ' + " (edited)"')}`
+    writeFileSync(first!.artifact.path, edited, 'utf-8')
+    const third = adoptFigure({ sessionId: sid, messages })
+    expect(third?.existing).toBe(true)
+    expect(readFileSync(third!.artifact.path, 'utf-8')).toBe(edited)
+    expect(entries(sid)).toEqual(['growth.html'])
+  })
+
+  it('AD-31 幂等按种类分开：同名的 svg 已认领，再认领同名交互图得 growth.html（不是 growth-2.svg），反过来也一样', () => {
+    const sid = newSession()
+    const svgFirst = [said(`${fence(svg('Growth'))}\n${interactive(block('Growth'))}`)]
+    expect(adoptFigure({ sessionId: sid, messages: svgFirst, ref: '1' })?.artifact.name).toBe(
+      'growth.svg'
+    )
+    const html = adoptFigure({ sessionId: sid, messages: svgFirst, ref: '2' })
+    expect([html?.existing, html?.artifact.name]).toEqual([false, 'growth.html'])
+    expect(entries(sid)).toEqual(['growth.html', 'growth.svg'])
+
+    const other = newSession()
+    const htmlFirst = [said(`${interactive(block('Growth'))}\n${fence(svg('Growth'))}`)]
+    expect(adoptFigure({ sessionId: other, messages: htmlFirst, ref: '1' })?.artifact.name).toBe(
+      'growth.html'
+    )
+    const svgAfter = adoptFigure({ sessionId: other, messages: htmlFirst, ref: '2' })
+    expect([svgAfter?.existing, svgAfter?.artifact.name]).toEqual([false, 'growth.svg'])
+    expect(entries(other)).toEqual(['growth.html', 'growth.svg'])
+  })
+
+  it('AD-32 ref 跨种类选：按标题取最近那张（哪种都算）；数字按序号；不给取最后一张', () => {
+    const svgThenBlock = [said(`${fence(svg('Growth'))}\n${interactive(block('Growth'))}`)]
+    const blockThenSvg = [said(`${interactive(block('Growth'))}\n${fence(svg('Growth'))}`)]
+    const pick = (messages: ChatMessage[], ref?: string): [number, string] | undefined => {
+      const got = adoptFigure({ sessionId: newSession(), messages, ref })
+      return got ? [got.figure.index, got.figure.kind] : undefined
+    }
+    expect(pick(svgThenBlock, 'growth')).toEqual([2, 'interactive'])
+    expect(pick(blockThenSvg, 'growth')).toEqual([2, 'svg'])
+    expect(pick(svgThenBlock, '1')).toEqual([1, 'svg'])
+    expect(pick(blockThenSvg, '1')).toEqual([1, 'interactive'])
+    expect(pick(svgThenBlock)).toEqual([2, 'interactive'])
+    expect(pick(blockThenSvg)).toEqual([2, 'svg'])
+  })
+
+  it('AD-33 没有 <title> 的交互块：标题回落 figure-<它在整场里的序号>，文件 figure-N.html；再认领幂等', () => {
+    const sid = newSession()
+    const untitled =
+      '<div id="x"></div>\n<script>\n  document.getElementById("x").textContent = 1\n</script>'
+    const messages = [said(`${fence(svg('One'))}\n${interactive(untitled)}`)]
+    expect(listAdoptableFigures(messages).map((f) => [f.title, f.kind])).toEqual([
+      ['One', 'svg'],
+      ['figure-2', 'interactive']
+    ])
+    const first = adoptFigure({ sessionId: sid, messages })
+    expect([first?.existing, first?.artifact.name]).toEqual([false, 'figure-2.html'])
+    const again = adoptFigure({ sessionId: sid, messages })
+    expect([again?.existing, again?.artifact.name]).toEqual([true, 'figure-2.html'])
+    expect(entries(sid)).toEqual(['figure-2.html'])
   })
 })

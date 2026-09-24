@@ -46,6 +46,10 @@ extraResources:
   # agent 再用 read 去取 references/ 下的那几份
   - from: resources/skills
     to: skills
+  # 交互图沙箱能加载的库（Chart.js / D3）：`shuvix-lib://<name>` 协议按名字白名单从这里取，
+  # 见 customProtocols.ts 与 resources/sandbox-libs/README.md
+  - from: resources/sandbox-libs
+    to: sandbox-libs
   # workspace hoist 后 esbuild-wasm 在仓库根 node_modules
   - from: ../../node_modules/esbuild-wasm/esbuild.wasm
     to: esbuild/esbuild.wasm

@@ -46,6 +46,12 @@ export interface ChatHostValue {
   appearance: ChatAppearance
   models: ChatModelSelection
   voice?: ChatVoiceConfig
+  /**
+   * 这个宿主能运行 ```interactive 交互图（沙箱 iframe + `shuvix-lib:` 库协议）。
+   * 桌面给 true；Chrome 扩展不给 —— MV3 扩展页的 CSP 禁内联脚本，srcdoc 又继承它，
+   * 块在那里跑不起来，按代码块显示并说明只在桌面端运行。
+   */
+  interactiveFigures?: boolean
 }
 
 export const ChatHostContext = createContext<ChatHostValue | null>(null)

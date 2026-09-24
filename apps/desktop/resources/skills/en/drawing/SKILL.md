@@ -1,6 +1,6 @@
 ---
 name: drawing
-description: "Craft guidance for inline SVG figures: picking the form (and when not to draw a chart at all), boxes-and-arrows diagrams that stay small enough to read, mark specs, label and legend rules, the categorical/sequential/status palette, and a catalog of what goes wrong. Load this before drawing a chart, a flow or structure diagram, or anything with more than a few marks."
+description: "Craft guidance for inline SVG figures: picking the form (and when not to draw a chart at all), boxes-and-arrows diagrams that stay small enough to read, mark specs, label and legend rules, the categorical/sequential/status palette, interactive blocks where your system prompt describes them (when one earns its place, layout, wiring, a worked example), and a catalog of what goes wrong. Load this before drawing a chart, a flow or structure diagram, or anything with more than a few marks."
 ---
 
 # Drawing figures
@@ -10,6 +10,8 @@ The contract for the ```svg fence — the tokens, what gets stripped, `viewBox` 
 Load it before a chart, a flow or structure diagram, or any figure with more than a handful of marks. A two-box arrow sketch does not need it.
 
 **Boxes and arrows** — flows, structures, layers, before-and-after — have their own reference: `references/diagrams.md`. Read it before drawing one; the steps below are for figures that carry data.
+
+**Interactive blocks** (```interactive — sliders, step-throughs, hover-to-read charts) have theirs too: `references/interactive.md` — **only if your system prompt describes ```interactive blocks**; where it does not, your replies are shown somewhere that cannot run them, so do not write one. Read it before writing one; the palette rules below apply inside a block as well.
 
 ## Do this in order. Color comes last.
 

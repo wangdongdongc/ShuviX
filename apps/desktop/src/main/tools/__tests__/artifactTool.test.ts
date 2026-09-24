@@ -13,6 +13,11 @@
  *     空转门。再加一条：回执文本不含内容哨兵 —— 挡的是「给回执加上『这是你认领的内容：<全文>』
  *     当凭据」这种善意回归，那会让 SVG 在下一个请求里整份回到上下文。
  *
+ * ```interactive 交互块（AT-19…22）：认领落成 `.html`，list 按「标题 + 种类」判已认领（同名的 svg
+ * 不受牵连），create 也收 html 且落盘带一行 CSP；四处写着允许集的文案（工具说明、ext 参数说明、
+ * 缺 ext 的回执、store 的拒收文案）必须是同一份集合。（用例清单里这一组是 AT-13…16；本文件
+ * 那几个号早已占用，顺延为 AT-19…22。）
+ *
  * `recordRead` 买到的**不是**「让 edit 能用」（edit 只在本会话读过时才校验陈旧，没读过不拦）——
  * 它买到的是**开启陈旧检测**。这里只钉「对返回的那个 path 记了一笔」，拦不拦得住在
  * artifactEditGuard.test.ts。
@@ -43,6 +48,7 @@ vi.mock('../../services/toolRegistry', () => ({
 }))
 vi.mock('../../i18n', () => ({ t: (k: string) => k }))
 
+import { SANDBOX_CSP } from '@shuvix/chat-protocol/utils/interactiveFence'
 import { ARTIFACT_DESCRIPTION, ArtifactParamsSchema, ArtifactTool } from '../artifact'
 import { _resetAll, getReadTime } from '../../utils/toolUtils/fileTime'
 import type { ToolContext } from '../../services/toolContext'
@@ -208,10 +214,10 @@ describe('create —— 内容经参数写盘（给本来就是文件的产物�
 
   it('AT-9 非法 ext ⇒ 可读回执（含允许集），不是工具异常，且一个文件都没写', async () => {
     // 四条失败模式要同形：另外三条前置校验都是回执，单这一条抛成工具异常是两种 UI，
-    // 而且模型从异常里拿不到「允许哪些」。白名单里没有 html（第 1 期渲染分支只内联 SVG）。
-    const res = await run({ action: 'create', title: 'Page', ext: 'html', content: '<h1/>' })
+    // 而且模型从异常里拿不到「允许哪些」。
+    const res = await run({ action: 'create', title: 'Tool', ext: 'exe', content: 'MZ' })
     const out = textOf(res)
-    expect(out).toMatch(/Unsupported artifact type "\.html"/)
+    expect(out).toMatch(/Unsupported artifact type "\.exe"/)
     expect(out).toMatch(/svg/) // 回执要把允许集摆出来，模型才知道改成什么
     expect(entries()).toBeNull() // 抛错前不该已经 mkdir
   })
@@ -232,7 +238,9 @@ describe('create —— 内容经参数写盘（给本来就是文件的产物�
 describe('adopt —— 失败文案与幂等文案', () => {
   it('AT-11 两种失败文案不同：一张图都没有 vs 有图但 ref 匹配不上', async () => {
     const none = textOf(await run({ action: 'adopt' }))
-    expect(none).toContain('There is no ```svg figure in this conversation to adopt.')
+    expect(none).toContain(
+      'There is no ```svg figure or ```interactive block in this conversation to adopt.'
+    )
     expect(none).toContain('action "create"')
 
     state.messages = [said(`${fenced(svg('One'))}\n${fenced(svg('Two'))}`)]
@@ -335,5 +343,79 @@ describe('「模型零重发」不变式（双哨兵）', () => {
     expect(out).toContain('[1] Pending')
     expect(out).not.toContain(D)
     expect(out).not.toContain('<svg')
+  })
+})
+
+// ─── ```interactive 交互块 ─────────────────────────────────────────────────────
+
+const interactiveFenced = (body: string): string => ['```interactive', body, '```'].join('\n')
+const block = (title: string): string =>
+  `<title>${title}</title>\n<p id="o"></p>\n<script>document.getElementById('o').textContent = 1</script>`
+/** html artifact 开头那一行（与沙箱的 SANDBOX_CSP 同一条） */
+const CSP_LINE = `<meta http-equiv="Content-Security-Policy" content="${SANDBOX_CSP}">`
+
+describe('```interactive —— 认领成 .html、list 按种类判、create 收 html', () => {
+  it('AT-19 list 按种类判已认领：认领了交互图 Growth 之后，同名的 svg Growth 仍列为可认领', async () => {
+    state.messages = [said(`${interactiveFenced(block('Growth'))}\n${fenced(svg('Growth'))}`)]
+    const before = textOf(await run({ action: 'list' }))
+    expect(before).toContain('not yet adopted (2):')
+    expect(before).toContain('[1] Growth')
+    expect(before).toContain('[2] Growth')
+
+    await run({ action: 'adopt', ref: '1' })
+    const after = textOf(await run({ action: 'list' }))
+    expect(after).toContain('growth.html — Growth')
+    expect(after).toContain('not yet adopted (1):')
+    expect(after).toContain('[2] Growth')
+    expect(after).not.toContain('[1] Growth')
+  })
+
+  it('AT-20 adopt 的回执点名 growth.html 与它的路径；details.name 是 .html；对那个路径记了一笔（edit 的读前检查过得去）', async () => {
+    state.messages = [said(interactiveFenced(block('Growth')))]
+    const res = await run({ action: 'adopt' })
+    const out = textOf(res)
+    const path = join(state.root, sid, 'growth.html')
+    expect(out).toContain('Adopted "Growth" as growth.html.')
+    expect(out).toContain(path)
+    expect(out).toContain('```artifact\ngrowth.html\n```')
+    expect((res.details as { name: string }).name).toBe('growth.html')
+    expect((res.details as { name: string }).name.endsWith('.html')).toBe(true)
+    expect(getReadTime(sid, path)).toBeInstanceOf(Date)
+    // 回执不回显内容（零重发不变式对交互块同样成立）
+    expect(out).not.toContain('<script>')
+  })
+
+  it('AT-21 create 收 html：回执 `Created x.html.`，文件以 CSP 那一行开头', async () => {
+    const content = '<title>X</title><p>x</p>'
+    const out = textOf(await run({ action: 'create', title: 'X', ext: 'html', content }))
+    expect(out).toContain('Created x.html.')
+    expect(readFileSync(join(state.root, sid, 'x.html'), 'utf-8')).toBe(`${CSP_LINE}\n${content}`)
+  })
+
+  it('AT-22 四处写着的允许集是同一份：工具说明、ext 参数说明、缺 ext 的回执、store 的拒收文案；工具说明提到 ```interactive', async () => {
+    const EXPECTED = ['csv', 'html', 'json', 'md', 'svg', 'txt']
+    const setOf = (list: string | undefined, where: string): string[] => {
+      expect(list, `${where} 里找不到允许集`).toBeTruthy()
+      return list!
+        .split(',')
+        .map((x) => x.trim())
+        .filter(Boolean)
+        .sort()
+    }
+
+    const inDescription = /needs `title` and `ext`: ([a-z, ]+)\)/.exec(ARTIFACT_DESCRIPTION)?.[1]
+    const extParam = (ArtifactParamsSchema.properties.ext as unknown as { description?: string })
+      .description
+    const inParam = /— ([a-z, ]+)$/.exec(extParam ?? '')?.[1]
+    const missingExt = textOf(await run({ action: 'create', title: 'T', content: 'x' }))
+    const inMissing = /\(([a-z, ]+)\)/.exec(missingExt)?.[1]
+    const rejected = textOf(await run({ action: 'create', title: 'T', ext: 'exe', content: 'x' }))
+    const inRejected = /allowed: ([a-z, ]+)\)/.exec(rejected)?.[1]
+
+    expect(setOf(inDescription, 'ARTIFACT_DESCRIPTION')).toEqual(EXPECTED)
+    expect(setOf(inParam, 'ext 参数说明')).toEqual(EXPECTED)
+    expect(setOf(inMissing, '缺 ext 的回执')).toEqual(EXPECTED)
+    expect(setOf(inRejected, 'store 的拒收文案')).toEqual(EXPECTED)
+    expect(ARTIFACT_DESCRIPTION).toContain('```interactive')
   })
 })

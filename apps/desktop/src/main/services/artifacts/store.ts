@@ -14,6 +14,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { slugify } from '@shuvix/agent-runtime'
+import { SANDBOX_CSP } from '@shuvix/chat-protocol/utils/interactiveFence'
 import { getSessionArtifactsDir } from '../../utils/paths'
 
 /** 一件 artifact 的元信息（标题现算，不落盘） */
@@ -27,17 +28,33 @@ export interface ArtifactInfo {
 }
 
 /**
- * 允许的扩展名。**刻意不含 `html`**：第 1 期的渲染分支只内联 SVG，html 只会显示成源码 ——
- * 放行它买不到任何东西，却在用户找得到的目录里留下一个模型手写、可能被双击以 `file://`
- * 源打开的页面。等预览分支连着净化一起做时再放。
+ * 允许的扩展名。`html` 当初被刻意拿掉（没有渲染器，放行它只会在用户找得到的目录里留下一个
+ * 模型手写、可能被双击以 `file://` 源打开的页面）；现在它回来了，两个前提都补上了：
+ *  - **渲染器**：```artifact 引用一件 `.html` 时走交互图的沙箱 iframe（chat-ui InteractiveBlock），
+ *    与 ```interactive 围栏同一道边界；
+ *  - **双击打开**：写盘时在最前面加一行与沙箱同一条的 meta CSP（withStandaloneCsp）。浏览器以
+ *    `file://` 打开它时这条策略生效、没有网络出口；在沙箱里它落在 body 里，按规范不生效也不碍事。
  */
-const ALLOWED_EXT = new Set(['svg', 'md', 'txt', 'csv', 'json'])
+const ALLOWED_EXT = new Set(['svg', 'md', 'txt', 'csv', 'json', 'html'])
+
+/** 独立打开时生效的那一行（与沙箱的 SANDBOX_CSP 同一条） */
+const STANDALONE_CSP_LINE = `<meta http-equiv="Content-Security-Policy" content="${SANDBOX_CSP}">`
+
+/** html artifact 落盘前加上 STANDALONE_CSP_LINE；已经有了就不重复加（adopt 幂等、edit 后再写都安全） */
+export function withStandaloneCsp(content: string): string {
+  return content.startsWith(STANDALONE_CSP_LINE) ? content : `${STANDALONE_CSP_LINE}\n${content}`
+}
 
 /**
  * 标题提取 —— 从内容里取，不搞元数据文件（`readKnowledgeNote` 的既有做法）。
  * SVG 取 `aria-label` 或 `<title>`（提示片段已强制要求写其一），markdown 取首个 `#`。
  */
 export function titleOf(content: string, name: string): string {
+  // 交互图（html）：开头那个 `<title>`（前面可以有 withStandaloneCsp 加的那行 meta）。**排在 svg 的
+  // 两条之前**：那两条不锚开头，块里画的一张 SVG 自带的 aria-label / `<title>` 会抢走整块的名字。
+  // 反过来不会误伤 svg：svg 文件以 `<svg` 开头，锚在开头的这一条匹配不上
+  const htmlTitle = /^\s*(?:<meta\b[^>]*>\s*)?<title[^>]*>([^<]+)<\/title>/i.exec(content)
+  if (htmlTitle?.[1].trim()) return htmlTitle[1].trim()
   const aria = /<svg\b[^>]*\saria-label\s*=\s*"([^"]+)"/i.exec(content)
   if (aria?.[1].trim()) return aria[1].trim()
   // `<title>` 只认**根 svg 的首个子元素**。不锚住的话，给每根柱子写无障碍 tooltip
@@ -162,8 +179,9 @@ export function writeArtifact(params: {
   const taken = new Set(readdirSync(dir))
   const name = dedupe(slugify(params.title, 'artifact'), ext, (n) => taken.has(n))
   const path = join(dir, name)
-  writeFileSync(path, params.content, 'utf-8')
-  return { name, title: titleOf(params.content, name), path }
+  const content = ext === 'html' ? withStandaloneCsp(params.content) : params.content
+  writeFileSync(path, content, 'utf-8')
+  return { name, title: titleOf(content, name), path }
 }
 
 /** 会话删除时的级联 —— 目录整删（挂在 sessionService.delete 上） */

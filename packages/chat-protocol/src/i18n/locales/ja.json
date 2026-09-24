@@ -272,7 +272,12 @@
     "collapseLines": "折りたたむ",
     "cacheRead": "キャッシュ読取",
     "cacheWrite": "キャッシュ書込",
-    "artifactMissing": "このセッションに成果物「{{name}}」がありません"
+    "artifactMissing": "このセッションに成果物「{{name}}」がありません",
+    "interactive": "インタラクティブ",
+    "interactiveBuilding": "インタラクティブ図を生成中…（{{lines}} 行）",
+    "interactiveRerun": "再実行",
+    "interactiveFrameTitle": "インタラクティブ図",
+    "interactiveDesktopOnly": "インタラクティブ図は ShuviX デスクトップアプリでのみ動作します"
   },
   "pendingInputs": {
     "title": "確認待ち {{count}}",

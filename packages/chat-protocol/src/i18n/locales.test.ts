@@ -132,6 +132,30 @@ describe('i18n 语言包', () => {
   })
 
   /**
+   * L-5：交互图卡片的五句文案。`interactiveBuilding` 是围栏写完之前那一行占位（「已写多少行」），
+   * 一门语言漏了 `{{lines}}` 运行期不报错，只是那一行里露出原始占位符；其余四句（卡片名、重跑、
+   * iframe 标题、「只在桌面端运行」）是按钮与卡片上唯一的字，空串会留下一个说不出自己是什么的控件，
+   * 也都不该有插值 —— 它们没有要填的东西。
+   */
+  it('L-5 message.interactiveBuilding 三语都只插 {{lines}}；另外四句三语都非空、不含插值', () => {
+    for (const [lang, bundle] of Object.entries({ en, zh, ja })) {
+      const building = leaf(bundle, 'message.interactiveBuilding')
+      expect(building, `${lang} 缺 message.interactiveBuilding`).toBeTypeOf('string')
+      expect(placeholders(building!), lang).toEqual(['lines'])
+      for (const key of [
+        'interactive',
+        'interactiveRerun',
+        'interactiveFrameTitle',
+        'interactiveDesktopOnly'
+      ]) {
+        const text = leaf(bundle, `message.${key}`)
+        expect(text?.trim(), `${lang} message.${key}`).toBeTruthy()
+        expect(placeholders(text ?? ''), `${lang} message.${key}`).toEqual([])
+      }
+    }
+  })
+
+  /**
    * L-4：KnowledgeGroup 组件读的每个键在 en 里都是非空字符串（zh / ja 由齐平断言跟随）。
    * 缺键的表现是侧栏直接露出 `knowledge.badgeStale` 这样的原始键名 —— 组件不报错，只有肉眼
    * 能发现。清单与组件里的 t() 调用逐一对应，改组件时同步这里。

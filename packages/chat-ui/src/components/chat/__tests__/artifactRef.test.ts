@@ -1,5 +1,5 @@
 /**
- * ```artifact 引用围栏的两个纯判定（CodeBlock 导出）—— 正文里指名一件会话 Artifact，
+ * ```artifact 引用围栏（以及交互图围栏）的几个纯判定（CodeBlock 导出）—— 正文里指名一件会话 Artifact，
  * 渲染它**当前**的内容。这是「对话只持有引用」的落点：转写里留下的是一行名字，不是几 KB 源码。
  *
  *  - `artifactRefName`：围栏体 → 名字。**只取第一行**（围栏里只该有一个名字，多出来的行是模型
@@ -7,10 +7,14 @@
  *    否则会先闪一张「找不到」卡）。语言串大小写敏感，与 ```svg 那档一致。
  *  - `artifactRefIsSvg`：取到的内容要不要按 SVG 内联。以 `<?xml …?>` 声明开头的 SVG 会落到
  *    `<pre>` 文本分支 —— **钉住现状**，别让人以为带 XML 声明的图也会被画出来。
+ *  - `artifactRefIsHtml`：取到的那件要不要进交互图的沙箱 —— 按**名字**判（`.html` 结尾，大小写
+ *    不敏感），不嗅内容：唯一不能发生的是 html 绕开沙箱，按扩展名判它永远走沙箱。
+ *  - `codeFenceIsClosed`：交互图要等围栏闭合才挂。不在流式 ⇒ 写完了；流式中按 hast 节点的
+ *    position 把源文本切回来判，拿不到位置或源文本时保守地当没写完。
  *
- * 组件本身要 DOM（useEffect + 宿主通道 + dangerouslySetInnerHTML），判定不要 —— 所以两个判定
- * 单独导出再单测，理由与 svgFenceIsRenderable 已经这么做过的一样。仓里没有 @testing-library，
- * 这一轮刻意不做组件测试。mermaid 的 mock 留着，但理由已经不是「起不来」：它如今在 MermaidBlock
+ * 组件本身要 DOM（useEffect + 宿主通道 + dangerouslySetInnerHTML），判定不要 —— 所以判定
+ * 单独导出再单测，理由与 svgFenceIsRenderable 已经这么做过的一样。引用块与交互图的组件行为
+ * （含 `.html` 引用进沙箱）在 interactiveBlock.dom.test.tsx。mermaid 的 mock 留着，但理由已经不是「起不来」：它如今在 MermaidBlock
  * 里逐次渲染时才 initialize()（CodeBlock 经 MermaidBlock 引入它），mermaid 11.16 在 node 下也能
  * import —— 顶掉是为了不让一个纯函数单测为了两个判定去加载一整个重型渲染库。
  */
@@ -18,7 +22,12 @@ import { describe, it, expect, vi } from 'vitest'
 
 vi.mock('mermaid', () => ({ default: { initialize: () => {}, render: () => {} } }))
 
-import { artifactRefIsSvg, artifactRefName } from '../CodeBlock'
+import {
+  artifactRefIsHtml,
+  artifactRefIsSvg,
+  artifactRefName,
+  codeFenceIsClosed
+} from '../CodeBlock'
 
 /** 与 CodeBlock 的 `lang === 'artifact'` 分发同一个字面量 */
 const LANG = 'artifact'
@@ -78,5 +87,51 @@ describe('artifactRefIsSvg —— 内联 SVG 还是 <pre> 源码', () => {
     expect(artifactRefIsSvg('')).toBe(false)
     // `<svgx>` 不是 svg（\b 挡住前缀撞名）
     expect(artifactRefIsSvg('<svgx/>')).toBe(false)
+  })
+})
+
+describe('artifactRefIsHtml —— 进沙箱还是走 svg / 文本分支（按名字判）', () => {
+  it('CR-9 只有 `.html` 结尾（大小写不敏感）才算；.htm / .xhtml / 中间带 .html / 没有点都不算', () => {
+    expect(artifactRefIsHtml('x.html')).toBe(true)
+    expect(artifactRefIsHtml('X.HTML')).toBe(true)
+    for (const name of ['x.htm', 'x.xhtml', 'x.html.svg', 'x.svg', 'html', '']) {
+      expect(artifactRefIsHtml(name), JSON.stringify(name)).toBe(false)
+    }
+  })
+})
+
+describe('codeFenceIsClosed —— 交互图的围栏写完了没有', () => {
+  /** 一个带 position 的 hast 节点（只有 offset 这两个字段被读） */
+  const at = (start?: number, end?: number): { type: string; position?: unknown } => ({
+    type: 'element',
+    position: { start: { offset: start }, end: { offset: end } }
+  })
+
+  it('CR-10 不在流式 ⇒ 一律当写完了，不管节点与源文本长什么样', () => {
+    expect(codeFenceIsClosed(undefined, null, false)).toBe(true)
+    expect(codeFenceIsClosed(at(0, 3) as never, '```interactive\nx', false)).toBe(true)
+    expect(codeFenceIsClosed({ type: 'element' }, 'anything', false)).toBe(true)
+  })
+
+  it('CR-11 流式中：没有位置 / 没有源文本 ⇒ 没写完；有就恰按 [start, end) 切回来判，切片外的文字不算', () => {
+    const closed = '```interactive\n<p>a</p>\n```'
+    const open = '```interactive\n<p>b</p>'
+    expect(codeFenceIsClosed(undefined, closed, true)).toBe(false)
+    expect(codeFenceIsClosed({ type: 'element' }, closed, true)).toBe(false)
+    expect(codeFenceIsClosed(at(undefined, closed.length) as never, closed, true)).toBe(false)
+    expect(codeFenceIsClosed(at(0, closed.length) as never, null, true)).toBe(false)
+
+    expect(codeFenceIsClosed(at(0, closed.length) as never, closed, true)).toBe(true)
+    expect(codeFenceIsClosed(at(0, open.length) as never, open, true)).toBe(false)
+
+    // 先一块闭合的、后面又开了一块没写完的：按第一块的偏移判，后面那块不影响它
+    const both = `intro\n\n${closed}\n\n${open}`
+    const start = both.indexOf(closed)
+    expect(codeFenceIsClosed(at(start, start + closed.length) as never, both, true)).toBe(true)
+    // 切片**恰**是 [start, end)：少切最后一个字符，闭栅栏就只剩两个反引号
+    expect(codeFenceIsClosed(at(start, start + closed.length - 1) as never, both, true)).toBe(false)
+    // 后面那块自己的偏移：确实没写完
+    const second = both.lastIndexOf(open)
+    expect(codeFenceIsClosed(at(second, both.length) as never, both, true)).toBe(false)
   })
 })

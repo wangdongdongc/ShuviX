@@ -19,6 +19,7 @@ import {
 import { useChatStore, type ChatMessage } from '@shuvix/chat-ui'
 import { isImeComposing } from '@shuvix/chat-ui'
 import { markdownComponents, markdownRemarkPlugins, markdownRehypePlugins } from '@shuvix/chat-ui'
+import { MarkdownSourceContext, MarkdownStreamingContext } from '@shuvix/chat-ui'
 import { ToolCallBlock } from '@shuvix/chat-ui'
 import { ThinkingBlock } from '@shuvix/chat-ui'
 import { segmentContent, parseSlashCommandInput } from '@shuvix/chat-protocol/utils/inlineTokens'
@@ -234,13 +235,19 @@ export const SubSessionStream = memo(function SubSessionStream({
         {/* 流式 text */}
         {sub.streamingContent && (
           <div className="markdown-body text-xs">
-            <ReactMarkdown
-              remarkPlugins={markdownRemarkPlugins}
-              rehypePlugins={markdownRehypePlugins}
-              components={markdownComponents}
-            >
-              {sub.streamingContent}
-            </ReactMarkdown>
+            {/* 与 AssistantBubble 同一对上下文：没有它们，代码块会以为自己写完了 —— 交互图会在半截时
+                挂上、每来一片就整块重载，mermaid 也会拿半截源码去解析 */}
+            <MarkdownStreamingContext.Provider value={sub.isStreaming}>
+              <MarkdownSourceContext.Provider value={sub.isStreaming ? sub.streamingContent : null}>
+                <ReactMarkdown
+                  remarkPlugins={markdownRemarkPlugins}
+                  rehypePlugins={markdownRehypePlugins}
+                  components={markdownComponents}
+                >
+                  {sub.streamingContent}
+                </ReactMarkdown>
+              </MarkdownSourceContext.Provider>
+            </MarkdownStreamingContext.Provider>
             {sub.isStreaming && (
               <span className="inline-block w-2 h-4 ml-0.5 bg-accent/70 animate-pulse rounded-sm" />
             )}

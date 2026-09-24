@@ -114,6 +114,16 @@ export function getBuiltinKnowledgeDir(): string {
 }
 
 /**
+ * 交互图沙箱能加载的库（Chart.js / D3）—— 随包发布，只读，由 `shuvix-lib://` 协议按名字白名单
+ * 取用（见 customProtocols.ts 与 resources/sandbox-libs/README.md）。
+ */
+export function getSandboxLibsDir(): string {
+  return app?.isPackaged
+    ? join(process.resourcesPath, 'sandbox-libs')
+    : resolve(__dirname, '../../resources/sandbox-libs')
+}
+
+/**
  * 内置 agent 档案目录 —— **内置档案的唯一事实源**。随包发布（`Resources/builtin-agents/`，
  * 见 electron-builder.yml 的 extraResources），开发期指向仓库里
  * `packages/agent-runtime/src/subagent/builtinAgents/md`。

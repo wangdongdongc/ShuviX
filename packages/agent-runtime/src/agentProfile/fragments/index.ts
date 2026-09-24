@@ -27,11 +27,21 @@ const VISUAL_SKILL_HINT_SOURCES = {
 }
 
 /**
- * 片段里的三段，各由一对界桩 `<!-- shuvix:<name>-start -->` … `<!-- shuvix:<name>-end -->` 圈出：
+ * 片段里的五段，各由一对界桩 `<!-- shuvix:<name>-start -->` … `<!-- shuvix:<name>-end -->` 圈出：
  *
  *  - `carrier` —— **这张图去哪儿**：聊天里是回复的一部分（其余各段讲的是怎么画，与载体无关）。
  *    一份片段两个出口：{{shuvix:visualGuide}} 带载体，{{shuvix:visualCraft}} 不带。
  *  - `adopt`（嵌在 carrier 里）—— 改图走 `artifact adopt`。只给手里真有 `artifact` 工具的 agent。
+ *  - `interactive` —— ```interactive 交互块：什么时候用，以及「写之前先加载技能」。它和 carrier 一样
+ *    只属于聊天：笔记本不渲染它，Chrome 侧栏跑不起来它（扩展页 CSP 禁内联脚本）。所以既要带载体，
+ *    又要宿主说这个 agent 的回复会落在能跑它的地方，**还要技能在架** —— 交互块的契约（库、token、
+ *    沙箱拒绝什么、桥）只写在 `builtin:drawing` 的 `references/interactive.md` 里，不常驻系统提示：
+ *    与 svg 契约不同，交互块是一件要动手的活，天然有「写之前」那一刻可以挂「先加载」，而那份契约
+ *    有一屏长，常驻就是每场会话都付（2026-09-24 实测占了整份作图说明的四成）。技能不在架的
+ *    agent 干脆不教交互块，于是契约只有一份，不必在提示与技能之间同步两份。不嵌进 carrier 里，
+ *    是因为它讲的是另一种围栏，放在 svg 契约与框箭头预算之后读起来才顺。
+ *  - `interactive-adopt`（嵌在 interactive 里）—— 改一块交互块走 `artifact adopt` + `edit`。只给手里有
+ *    `artifact` 的 agent；它得常驻而不是写进技能：「改一下范围」那一轮模型不会想到回头再读技能页。
  *  - `craft` —— 契约之外的手艺（调色板怎么花、直接标注、一根轴、范例）。这个 agent 的技能货架上
  *    有 `builtin:drawing` 时换成一句「先加载技能」的指路 —— 手艺在技能里，按需才付；没有时原样留下。
  *
@@ -55,15 +65,23 @@ function applySection(guide: string, name: string, keep: boolean, replacement = 
 }
 
 /**
- * 两个选项都描述**这一个 agent 手里有什么**，由宿主按创建时的工具名单判定（见 PromptVarsCtx.toolNames）
+ * 前两个选项描述**这一个 agent 手里有什么**，由宿主按创建时的工具名单判定（见 PromptVarsCtx.toolNames）
  * —— 不是「这个宿主支持什么」。按宿主判就会出现名单上没有、提示里却指着的死路：派发出来的 agent
  * 被告知去加载一个它货架上没有的技能，扩展端被教一个它调不到的 `adopt`。缺省即「没有」。
+ * 第三个（`interactive`）是例外，理由见它自己的注释；缺省同样是「没有」。
  */
 export interface VisualGuideOptions {
   /** 技能货架上有 `builtin:drawing`（档案点了名，且没在侧栏停用）→ 手艺段换成指路 */
   drawingSkill?: boolean
   /** 工具表里有 `artifact` → 教改图走 adopt（只对带载体的那一档有意义） */
   artifact?: boolean
+  /**
+   * 这个 agent 的回复会显示在能运行 ```interactive 的地方（桌面的会话；不是 Chrome 侧栏的标签页
+   * 会话，也不是把回复当工具结果交回去的派生 agent）→ 教交互块。这一项确实是宿主判的，不是
+   * 工具名单 —— 交互块不需要任何工具，它能不能跑只取决于回复在哪儿显示。另外还要 `drawingSkill`：
+   * 交互块的契约只在技能里（见上面的界桩说明），技能不在架时这一段整段不出。
+   */
+  interactive?: boolean
 }
 
 /**
@@ -93,6 +111,7 @@ export function renderVisualCraft(
   language: string | undefined,
   options?: Pick<VisualGuideOptions, 'drawingSkill'>
 ): string {
+  // interactive 不传：笔记本的 live preview 不渲染交互块，教它就是教一条死路
   return render(language, { drawingSkill: options?.drawingSkill }, false)
 }
 
@@ -105,6 +124,12 @@ function render(
   // 先里后外：adopt 嵌在 carrier 里，外层整段删掉时里层的界桩也就一起走了
   guide = applySection(guide, 'adopt', carrier && options.artifact === true)
   guide = applySection(guide, 'carrier', carrier)
+  guide = applySection(guide, 'interactive-adopt', options.artifact === true)
+  guide = applySection(
+    guide,
+    'interactive',
+    carrier && options.interactive === true && options.drawingSkill === true
+  )
   const skill = options.drawingSkill === true
   const hint = skill ? pickLocalizedSource(VISUAL_SKILL_HINT_SOURCES, language).trim() : ''
   guide = applySection(guide, 'craft', !skill, hint)

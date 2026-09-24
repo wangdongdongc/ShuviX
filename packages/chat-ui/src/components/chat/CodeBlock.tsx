@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useContext, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Copy, Check, Code, FileText } from 'lucide-react'
 import { copyToClipboard } from '../../utils/clipboard'
@@ -10,7 +10,14 @@ import {
   isSvgComplete,
   svgFenceIsRenderable
 } from '@shuvix/chat-protocol/utils/svgFence'
+import {
+  INTERACTIVE_FENCE_LANG,
+  fenceSourceIsClosed
+} from '@shuvix/chat-protocol/utils/interactiveFence'
+import { ChatHostContext } from '../../host/chatHostContext'
 import { MermaidBlock } from './MermaidBlock'
+import { InteractiveBlock, InteractiveUnsupportedBlock } from './InteractiveBlock'
+import { useMarkdownSource, useMarkdownStreaming } from './markdownStreaming'
 
 /** 手写 SVG 的净化结果缓存（净化是纯函数，同一段源码恒得同一结果）；'' = 判死 */
 const authoredSvgCache = new Map<string, string>()
@@ -40,11 +47,36 @@ export function artifactRefName(lang: string, code: string): string | null {
  */
 export const artifactRefIsSvg = (content: string): boolean => /^\s*<svg\b/i.test(content)
 
+/**
+ * 按**名字**判：`.html` 的 artifact 只可能来自认领一块交互图（或 `create` 一个 html），内容什么样
+ * 都进沙箱。按内容嗅探反而危险 —— 一段看起来不像 html 的文本落到 `<pre>` 里没事，一段 html 被
+ * 当成别的东西也没事，唯一不能发生的是 html 绕开沙箱，而按扩展名判它永远走沙箱。
+ */
+export const artifactRefIsHtml = (name: string): boolean => /\.html$/i.test(name)
+
 interface HastNode {
   type: string
   value?: string
   children?: HastNode[]
   properties?: Record<string, unknown>
+  position?: { start?: { offset?: number }; end?: { offset?: number } }
+}
+
+/**
+ * 这个代码块的围栏闭合了没有（交互图要等闭合才挂）。消息不在流式中 → 写完了；流式中则按
+ * 节点位置把源文本切回来，看最后一行是不是闭合栅栏。拿不到位置或源文本时保守地当没写完 ——
+ * 消息写完那一刻流式标志翻成 false，块照样会挂上。
+ */
+export function codeFenceIsClosed(
+  node: HastNode | undefined,
+  source: string | null,
+  streaming: boolean
+): boolean {
+  if (!streaming) return true
+  const start = node?.position?.start?.offset
+  const end = node?.position?.end?.offset
+  if (source === null || start === undefined || end === undefined) return false
+  return fenceSourceIsClosed(source.slice(start, end))
 }
 
 /** 代码块容器 — 带复制按钮 */
@@ -58,6 +90,10 @@ export function CodeBlock({
   [key: string]: unknown
 }): React.JSX.Element {
   const [copied, setCopied] = useState(false)
+  const streaming = useMarkdownStreaming()
+  const source = useMarkdownSource()
+  // 可空地读：markdown 也在没有 ChatHostProvider 的地方渲染，那里当作不能跑交互图
+  const canRunInteractive = useContext(ChatHostContext)?.interactiveFigures === true
 
   // 从 hast 节点提取语言名称
   const codeNode = node?.children?.[0] as HastNode | undefined
@@ -85,6 +121,12 @@ export function CodeBlock({
   // 手写 SVG 图：开标签一闭合就开始逐帧画，之前落到下方的普通代码块（见 authoredSvgFrame）
   if (svgFenceIsRenderable(lang, rawCode)) {
     return <AuthoredSvgBlock code={rawCode} />
+  }
+
+  // 交互图：沙箱 iframe 里跑的 HTML/JS，围栏闭合才挂（见 InteractiveBlock）
+  if (lang === INTERACTIVE_FENCE_LANG && rawCode) {
+    if (!canRunInteractive) return <InteractiveUnsupportedBlock code={rawCode} />
+    return <InteractiveBlock code={rawCode} closed={codeFenceIsClosed(node, source, streaming)} />
   }
 
   // 会话 Artifact 的引用：围栏里只有一个名字，内容现取（见 ArtifactRefBlock）
@@ -222,6 +264,7 @@ function AuthoredSvgBlock({ code }: { code: string }): React.JSX.Element {
  */
 function ArtifactRefBlock({ name }: { name: string }): React.JSX.Element {
   const { t } = useTranslation()
+  const canRunInteractive = useContext(ChatHostContext)?.interactiveFigures === true
   const sessionId = useChatStore((s) => s.activeSessionId)
   // 取不到宿主通道（扩展端没有 artifact 存储）就直接按「找不到」呈现 —— **派生出来，不写进
   // state**：在 effect 里同步 setState 会触发级联渲染，react-hooks/set-state-in-effect 拦它
@@ -229,7 +272,9 @@ function ArtifactRefBlock({ name }: { name: string }): React.JSX.Element {
     ?.artifact?.read
   const canLoad = !!sessionId && !!reader
   const [loaded, setState] = useState<
-    { kind: 'loading' } | { kind: 'missing' } | { kind: 'ok'; title: string; content: string }
+    | { kind: 'loading' }
+    | { kind: 'missing' }
+    | { kind: 'ok'; name: string; title: string; content: string }
   >({ kind: 'loading' })
   const state = canLoad ? loaded : ({ kind: 'missing' } as const)
 
@@ -239,8 +284,14 @@ function ArtifactRefBlock({ name }: { name: string }): React.JSX.Element {
     void reader({ sessionId, name })
       .then((r) => {
         if (!alive) return
-        const row = r as { title: string; content: string } | null
-        setState(row ? { kind: 'ok', title: row.title, content: row.content } : { kind: 'missing' })
+        const row = r as { name?: string; title: string; content: string } | null
+        // 围栏里写的可能是标题而不是文件名（artifact:read 两种都认）：按宿主解析出来的真实文件名走，
+        // 否则按标题引用的一件 .html 会落进 <pre> 而不是沙箱
+        setState(
+          row
+            ? { kind: 'ok', name: row.name ?? name, title: row.title, content: row.content }
+            : { kind: 'missing' }
+        )
       })
       .catch(() => alive && setState({ kind: 'missing' }))
     return () => {
@@ -253,6 +304,15 @@ function ArtifactRefBlock({ name }: { name: string }): React.JSX.Element {
       <div className="rounded-lg border border-orange-500/30 bg-orange-500/5 p-3">
         <div className="text-[10px] text-orange-400">{t('message.artifactMissing', { name })}</div>
       </div>
+    )
+  }
+
+  // .html 的 artifact 是认领下来的交互图：与 ```interactive 围栏同一个沙箱
+  if (state.kind === 'ok' && artifactRefIsHtml(state.name)) {
+    return canRunInteractive ? (
+      <InteractiveBlock code={state.content} closed title={state.title} />
+    ) : (
+      <InteractiveUnsupportedBlock code={state.content} />
     )
   }
 

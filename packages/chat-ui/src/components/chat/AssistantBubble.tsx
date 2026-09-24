@@ -10,7 +10,7 @@ import {
   markdownRemarkPlugins,
   markdownRehypePlugins
 } from './markdownComponents'
-import { MarkdownStreamingContext } from './markdownStreaming'
+import { MarkdownSourceContext, MarkdownStreamingContext } from './markdownStreaming'
 import { ThinkingBlock } from './ThinkingBlock'
 import { ToolCallBlock } from './ToolCallBlock'
 import { StepGroupView } from './StepGroupView'
@@ -167,13 +167,16 @@ export const AssistantBubble = memo(function AssistantBubble({
             <div className="markdown-body text-sm">
               {/* 代码块自己看不出围栏写没写完（mermaid 要完整源码才解析），由这一层告诉它 */}
               <MarkdownStreamingContext.Provider value={!!isStreaming}>
-                <ReactMarkdown
-                  remarkPlugins={markdownRemarkPlugins}
-                  rehypePlugins={markdownRehypePlugins}
-                  components={markdownComponents}
-                >
-                  {displayContent}
-                </ReactMarkdown>
+                {/* 交互图要确切知道自己的围栏闭合没有，靠节点位置切回这段源文本 */}
+                <MarkdownSourceContext.Provider value={isStreaming ? displayContent : null}>
+                  <ReactMarkdown
+                    remarkPlugins={markdownRemarkPlugins}
+                    rehypePlugins={markdownRehypePlugins}
+                    components={markdownComponents}
+                  >
+                    {displayContent}
+                  </ReactMarkdown>
+                </MarkdownSourceContext.Provider>
               </MarkdownStreamingContext.Provider>
               {isStreaming && displayContent && !streamingToolCall && (
                 <span className="inline-block w-2 h-4 ml-0.5 bg-accent/70 animate-pulse rounded-sm" />

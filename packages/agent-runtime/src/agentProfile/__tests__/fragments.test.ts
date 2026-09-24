@@ -17,7 +17,11 @@
  *  - CARRIER 「```svg + 空格」—— 只在载体段那一句「回复里的 ```svg 围栏会内联渲染」里：范例围栏的
  *    ```svg 后面跟的是换行，技能指路里没有围栏；
  *  - ADOPT `adopt` —— 三种语言里都只出现在「改图走 adopt」那一段；
- *  - CONTRACT —— 契约段的一组记号：无论两个开关怎么拨都必须在。
+ *  - CONTRACT —— 契约段的一组记号：无论两个开关怎么拨都必须在；
+ *  - INTERACTIVE「```interactive」—— 交互块那一段（第三个开关 `interactive`，VG-I 组）。它只属于聊天、
+ *    只在回复落在能跑它的地方、而且作图技能在架时才教（契约在技能的 references/interactive.md 里，
+ *    不常驻）：craft 这一档无论如何不教。LIB `shuvix-lib://` / BRIDGE `shuvix.sendPrompt` 是那份契约
+ *    的记号，**任何组合下都不该出现在片段里**。
  *
  * 两处例外只能认本地化措辞，那两张表因此得手维护（同 builtinContent.test.ts 的 FACE_TERMS）：
  *  - BUDGET_HEADING —— 「框与箭头」那段预算没有任何代码记号可认，只能认它的小标题；
@@ -458,4 +462,171 @@ describe('{{shuvix:visualGuide}} 的归属', () => {
     const basesWithout = [...BASE_PROFILE_NAMES].filter((n) => !using.has(n)).sort()
     expect(basesWithout).toEqual(['coedit', 'notebook'])
   })
+})
+
+/**
+ * 第三个开关 `interactive`（VG-I）—— 交互块那一段。与前两个不同，它不看工具名单，看**回复落在哪儿**
+ * （宿主判：桌面会话的根 agent 才给；Chrome 侧栏、派生 agent 不给），另外还要作图技能在架：
+ * 这一段只有「什么时候用 + 先加载技能」和（有 artifact 时）「改块走 adopt」，契约本身在技能里。
+ * 这里只钉片段这一层：只加不改、位置固定、与另外两个开关的关系、craft 这一档永远不教、契约不常驻。
+ * 注意 CARRIER 记号（```svg + 空格）在交互段里也出现（「一张 ```svg 图」），所以 VC-1 的载体计数
+ * 只在不开 interactive 时成立，这里不去扩它。
+ */
+describe('第三个开关 interactive（VG-I）', () => {
+  const INTERACTIVE = '```interactive'
+  const LIB = 'shuvix-lib://'
+  const BRIDGE = 'shuvix.sendPrompt'
+  /** 契约的记号 —— 契约只在技能里，片段在任何组合下都不带它们 */
+  const CONTRACT_MARKERS = [LIB, BRIDGE]
+  /** 指向技能里那一页 */
+  const REFERENCE = 'references/interactive.md'
+  /** 「改块走 adopt」那一句的记号（只有它提 `.html`） */
+  const HTML_ADOPT = '`.html`'
+  const MARKERS = [INTERACTIVE, REFERENCE, HTML_ADOPT]
+
+  /** 三个开关的八种组合 */
+  const ALL: VisualGuideOptions[] = [false, true].flatMap((drawingSkill) =>
+    [false, true].flatMap((artifact) =>
+      [false, true].map((interactive) => ({ drawingSkill, artifact, interactive }))
+    )
+  )
+  const label3 = (o: VisualGuideOptions): string =>
+    `drawingSkill=${!!o.drawingSkill} artifact=${!!o.artifact} interactive=${!!o.interactive}`
+
+  /** 从某个小标题到下一个以 `#` 开头的行（不含），去掉首尾空白 */
+  const blockFrom = (text: string, heading: string): string | null => {
+    const start = text.indexOf(heading)
+    if (start < 0) return null
+    const rest = text.slice(start + heading.length)
+    const next = rest.search(/^#/m)
+    return (heading + (next < 0 ? rest : rest.slice(0, next))).trim()
+  }
+
+  it.each(LANGUAGES)(
+    'VG-I1 %s：guide 开了 interactive + 技能 + artifact 三个记号都在、契约记号一个没有；缺技能 / 缺省 / {} / false 一个都没有',
+    (language) => {
+      const on = renderVisualGuide(language, {
+        interactive: true,
+        drawingSkill: true,
+        artifact: true
+      })
+      for (const marker of MARKERS) expect(on, marker).toContain(marker)
+      for (const marker of CONTRACT_MARKERS) expect(on, marker).not.toContain(marker)
+      for (const opts of [
+        undefined,
+        {},
+        { interactive: false, drawingSkill: true },
+        { interactive: true, drawingSkill: false, artifact: true }
+      ]) {
+        const off = renderVisualGuide(language, opts)
+        for (const marker of [...MARKERS, ...CONTRACT_MARKERS])
+          expect(off, `${JSON.stringify(opts)} ${marker}`).not.toContain(marker)
+      }
+    }
+  )
+
+  it.each(LANGUAGES)(
+    'VG-I2 %s：craft 硬塞 interactive 也不教（笔记本的 live preview 不渲染交互块）',
+    (language) => {
+      for (const drawingSkill of [false, true]) {
+        const craft = renderVisualCraft(language, { drawingSkill, interactive: true } as never)
+        for (const marker of [...MARKERS, ...CONTRACT_MARKERS]) {
+          expect(craft, `drawingSkill=${drawingSkill} ${marker}`).not.toContain(marker)
+        }
+      }
+    }
+  )
+
+  it.each(LANGUAGES)(
+    'VG-I3 %s：开关只加不改 —— 关时的每一段按原顺序都在开时里；多出来的几段连成一片，紧跟预算段、在指路之前；没有技能时什么都不加',
+    (language) => {
+      for (const artifact of [false, true]) {
+        const bare = renderVisualGuide(language, { artifact })
+        expect(
+          renderVisualGuide(language, { artifact, interactive: true }),
+          `artifact=${artifact}`
+        ).toBe(bare)
+      }
+      for (const drawingSkill of [true]) {
+        for (const artifact of [false, true]) {
+          const what = `drawingSkill=${drawingSkill} artifact=${artifact}`
+          const off = paragraphs(renderVisualGuide(language, { drawingSkill, artifact }))
+          const on = paragraphs(
+            renderVisualGuide(language, { drawingSkill, artifact, interactive: true })
+          )
+          // 贪心匹配子序列：on 里依次认出 off 的每一段，认不出的就是多出来的
+          const extra: number[] = []
+          let j = 0
+          on.forEach((p, i) => {
+            if (j < off.length && p === off[j]) j++
+            else extra.push(i)
+          })
+          expect(j, `${what}：关时的段落没有按顺序全部出现在开时里`).toBe(off.length)
+          expect(extra.length, what).toBeGreaterThan(2)
+          // 连成一片
+          expect(extra, what).toEqual(Array.from({ length: extra.length }, (_, k) => extra[0] + k))
+          const first = extra[0]
+          const last = extra[extra.length - 1]
+          expect(on[first].startsWith('### '), `${what}：多出来的那片应以小标题开头`).toBe(true)
+          // 紧跟预算段：前面最近的小标题就是「框与箭头」
+          const headingBefore = on
+            .slice(0, first)
+            .filter((p) => p.startsWith('#'))
+            .at(-1)
+          expect(headingBefore, what).toBe(BUDGET_HEADING[language])
+          // 之后是手艺段的小标题（没有技能）或指路那一段（有技能）
+          const next = on[last + 1]
+          expect(next, `${what}：多出来的那片后面应当还有内容`).toBeDefined()
+          if (drawingSkill) expect(next, what).toContain(POINTER)
+          else expect(next.startsWith('### '), what).toBe(true)
+        }
+      }
+    }
+  )
+
+  it.each(LANGUAGES)(
+    'VG-I4 %s：八种组合下 ADOPT 只随 artifact、POINTER 只随 drawingSkill、INTERACTIVE 随 interactive 且技能在架、改块那句还要 artifact、契约记号从不出现',
+    (language) => {
+      for (const opts of ALL) {
+        const out = renderVisualGuide(language, opts)
+        expect(out.includes(ADOPT), label3(opts)).toBe(!!opts.artifact)
+        expect(out.includes(POINTER), label3(opts)).toBe(!!opts.drawingSkill)
+        const taught = !!opts.interactive && !!opts.drawingSkill
+        expect(out.includes(INTERACTIVE), label3(opts)).toBe(taught)
+        expect(out.includes(HTML_ADOPT), label3(opts)).toBe(taught && !!opts.artifact)
+        for (const marker of CONTRACT_MARKERS)
+          expect(out, `${label3(opts)} ${marker}`).not.toContain(marker)
+      }
+    }
+  )
+
+  it.each(LANGUAGES)(
+    'VG-I5 %s：两个出口 × 八种组合都干净，契约段与预算段各恰好出现一次',
+    (language) => {
+      // 规范版取自「无技能、无交互的 craft」：它以契约段开头，预算段后面紧跟手艺段的小标题
+      const bare = renderVisualCraft(language, { drawingSkill: false })
+      const contract = bare.slice(0, bare.indexOf('\n### ')).trim()
+      expect(contract.startsWith('### '), `${language} 的 craft 不以契约段开头`).toBe(true)
+      for (const token of CONTRACT) expect(contract, token).toContain(token)
+      const budget = blockFrom(bare, BUDGET_HEADING[language])
+      expect(budget, `${language} 找不到预算段`).not.toBeNull()
+
+      let checked = 0
+      for (const [exit, render] of EXITS) {
+        for (const opts of ALL) {
+          const out = render(language, opts as never)
+          const what = `${exit} ${label3(opts)}`
+          expect(out, what).not.toContain('<!--')
+          expect(out, what).not.toContain('shuvix:')
+          expect(out, what).not.toMatch(/\n{3,}/)
+          expect(out, what).toBe(out.trim())
+          expect(out.startsWith('#'), what).toBe(true)
+          expect(countOf(out, contract), `${what} 契约段`).toBe(1)
+          expect(countOf(out, budget!), `${what} 预算段`).toBe(1)
+          checked++
+        }
+      }
+      expect(checked).toBe(16)
+    }
+  )
 })

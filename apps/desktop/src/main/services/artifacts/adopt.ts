@@ -1,5 +1,6 @@
 /**
- * 认领（adopt）—— 把对话里一张已经画出来的 ```svg 图变成可反复修改的 artifact。
+ * 认领（adopt）—— 把对话里一张已经画出来的 ```svg 图（或一块 ```interactive 交互图）变成可反复
+ * 修改的 artifact。两种都走同一条路：svg 落成 `.svg`，交互图落成 `.html`。
  *
  * **这条路存在的全部理由是：模型一个字都不用重发。** 源码已经在会话转写里，宿主直接取出来
  * 写盘即可 —— 于是「作画」可以永远走 ```svg 围栏（流式逐帧画、长在散文里、不落盘），
@@ -24,16 +25,23 @@ export interface AdoptableFigure {
   /** 在整场会话里的出现序号，1 起（标题重名时的消歧钥匙） */
   index: number
   source: string
+  /** 哪一种围栏 —— 决定落盘的扩展名 */
+  kind: FigureKind
 }
 
+export type FigureKind = 'svg' | 'interactive'
+
+const EXT_OF: Record<FigureKind, string> = { svg: 'svg', interactive: 'html' }
+
 /**
- * ```svg 围栏。三处宽容度都是刻意的：
+ * ```svg / ```interactive 围栏。三处宽容度都是刻意的：
  *  - **只认已闭合的**：半截的本就不成图（流式被打断是常态，认领半张图会写出坏文件）。
  *  - **语言串大小写敏感**：与 CodeBlock 的分发同宽（那边只认小写，svgFence.test.ts 已把
  *    这点钉成契约）。带 `i` 会让 adopt 认领一个用户看到的其实是普通代码块的东西。
  *  - 容忍围栏缩进与 CRLF。
  */
-const SVG_FENCE_RE = /^[ \t]*```[ \t]*svg[ \t]*\r?\n([\s\S]*?)\r?\n[ \t]*```[ \t]*$/gm
+const FIGURE_FENCE_RE =
+  /^[ \t]*```[ \t]*(svg|interactive)[ \t]*\r?\n([\s\S]*?)\r?\n[ \t]*```[ \t]*$/gm
 
 /**
  * 扫出转写里所有可认领的图 —— 按出现顺序，最后一张在数组末尾。
@@ -45,22 +53,24 @@ export function listAdoptableFigures(messages: readonly ChatMessage[]): Adoptabl
     if (msg.role !== 'assistant') continue
     const text = typeof msg.content === 'string' ? msg.content : ''
     if (!text) continue
-    for (const m of text.matchAll(SVG_FENCE_RE)) {
-      const source = m[1].trim()
+    for (const m of text.matchAll(FIGURE_FENCE_RE)) {
+      const kind = m[1] as FigureKind
+      const source = m[2].trim()
       if (!source) continue
       out.push({
         title: titleOf(source, `figure-${out.length + 1}`),
         index: out.length + 1,
-        source
+        source,
+        kind
       })
     }
   }
   return out
 }
 
-/** 一张图认领后会落成的文件名 —— 幂等的钥匙（同一标题恒得同一个名字） */
-export function figureArtifactName(title: string): string {
-  return `${slugify(title, 'artifact')}.svg`
+/** 一张图认领后会落成的文件名 —— 幂等的钥匙（同一标题 + 同一种围栏恒得同一个名字） */
+export function figureArtifactName(title: string, kind: FigureKind = 'svg'): string {
+  return `${slugify(title, 'artifact')}.${EXT_OF[kind]}`
 }
 
 /**
@@ -93,13 +103,13 @@ export function adoptFigure(params: {
   }
   if (!figure) return null
 
-  const already = findArtifact(params.sessionId, figureArtifactName(figure.title))
+  const already = findArtifact(params.sessionId, figureArtifactName(figure.title, figure.kind))
   if (already) return { artifact: already, figure, existing: true }
 
   const artifact = writeArtifact({
     sessionId: params.sessionId,
     title: figure.title,
-    ext: 'svg',
+    ext: EXT_OF[figure.kind],
     content: figure.source
   })
   return { artifact, figure, existing: false }

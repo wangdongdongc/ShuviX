@@ -33,6 +33,22 @@ A figure that explains must be smaller than the thing it explains. Before a flow
 - More parts than that: draw the overview — the boxes and the main flow only — then one small figure per part that matters, with prose between; or draw the overview and offer to open a part.
 - Arrows stop at box edges and cross no other box.
 
+<!-- shuvix:interactive-start -->
+
+### Interactive blocks
+
+An ```interactive fenced block runs a small live HTML/JS page inside the reply, in a sandbox. Use it only when **interaction is the point** — a parameter to drag, a process to step through, values to hover or filter; anything static stays a ```svg figure. The block lives in the reply: do not also write the page to a file unless asked.
+
+**Before writing one, load the drawing skill named below and read its `references/interactive.md`.** The sandbox has no network, no storage and no `eval`, and only its own libraries and color tokens work there — a block written without that page usually breaks.
+
+<!-- shuvix:interactive-adopt-start -->
+
+**To change a block you already wrote, `artifact` adopt it and `edit` the `.html` file — never rewrite the block.**
+
+<!-- shuvix:interactive-adopt-end -->
+
+<!-- shuvix:interactive-end -->
+
 <!-- shuvix:craft-start -->
 
 ### Craft

@@ -12,6 +12,10 @@
  *      - `artifact`：名单里有 `artifact` → guide 教「改图走 adopt」（craft 没有载体，永远不教）。
  *     说明里提到的每样东西都得真在它手里 —— 派发出来的、覆盖了档案的、停用了技能的都一样。
  *
+ *  3. 第三个开关 `interactive`（交互块那一段）**不看名单，看回复落在哪儿**：只有根 agent 的回复显示成
+ *     一条对话（派生 agent 的回复是交回父 agent 的工具结果），而 Chrome 标签页会话显示在扩展侧栏里
+ *     —— 那里的 CSP 跑不了它。所以：根 + 不是标签页会话 → 教；标签页会话 / 派生 → 不教（PVW-12…15）。
+ *
  * 待查名单**从档案正文现算**，不手抄：加一个占位符就自动进入检查，而一份手抄名单只会停在写它的那天。
  * 段落只凭代码记号认（三语一字不差）：POINTER `builtin:drawing`、EXAMPLE「```svg + 换行 + <svg」
  * （手艺段的范例围栏）、ADOPT `adopt`。
@@ -328,4 +332,89 @@ describe('desktopPromptVars —— 按档案自己的名单组装出的系统提
       expect(checked, '一个档案都没查到就等于空转').toBeGreaterThan(20)
     }
   )
+})
+
+describe('desktopPromptVars —— 交互块按回复落在哪儿给（PVW-12…15）', () => {
+  const INTERACTIVE = '```interactive'
+  /** 载体段那句「回复里的 ```svg 围栏会内联渲染」的记号（```svg + 空格） */
+  const CARRIER = '```svg '
+  /** 一条 Chrome 标签页会话的 settings（字段齐全，chromeTabOf 认它） */
+  const CHROME_TAB = { chromeTab: { installId: 'i', runId: 'r', tabId: 7 } }
+  /** 引用 visualGuide、在桌面根会话里就该教交互块的档案 */
+  const INTERACTIVE_PROFILES = ['bot', 'chat', 'coding', 'work']
+
+  it('PVW-12 桌面会话的根 agent：作图技能在架才教交互块（契约在技能里、不常驻），visualCraft 从不教', async () => {
+    const withSkill = await varsFor({ kind: 'root', toolNames: [DRAWING, 'artifact'] })
+    expect(withSkill.visualGuide).toContain(INTERACTIVE)
+    expect(withSkill.visualGuide).toContain('references/interactive.md')
+    expect(withSkill.visualGuide).not.toContain('shuvix-lib://')
+    expect(withSkill.visualCraft).not.toContain(INTERACTIVE)
+    for (const toolNames of [[], ['read'], ['artifact']]) {
+      const vars = await varsFor({ kind: 'root', toolNames })
+      const what = JSON.stringify(toolNames)
+      expect(vars.visualGuide, what).not.toContain(INTERACTIVE)
+      expect(vars.visualCraft, what).not.toContain(INTERACTIVE)
+    }
+  })
+
+  it('PVW-13 Chrome 标签页会话的根：不教交互块（侧栏的 CSP 跑不了它），svg 载体照旧在', async () => {
+    mocks.pickSettings.mockReturnValue(CHROME_TAB)
+    const vars = await varsFor({ kind: 'root', toolNames: [DRAWING] })
+    expect(vars.visualGuide).not.toContain(INTERACTIVE)
+    expect(vars.visualGuide).not.toContain('shuvix-lib://')
+    expect(vars.visualGuide).toContain(CARRIER)
+    // 反证：同一份 ctx 换成普通会话就教 —— 上面的「不教」确实是 chromeTab 带来的
+    mocks.pickSettings.mockReturnValue({})
+    expect((await varsFor({ kind: 'root', toolNames: [DRAWING] })).visualGuide).toContain(
+      INTERACTIVE
+    )
+  })
+
+  it('PVW-14 派生 agent（coding 的名单）：不教交互块，但指路与 adopt 照旧按名单给', async () => {
+    const coding = builtins('en').find((p) => p.name === 'coding')!
+    const vars = await varsFor({
+      kind: 'spawned',
+      sessionId: 'agent-1',
+      cwd: '',
+      toolNames: coding.tools
+    })
+    expect(vars.visualGuide).not.toContain(INTERACTIVE)
+    expect(vars.visualGuide).toContain(POINTER)
+    expect(vars.visualGuide).toContain(ADOPT)
+  })
+
+  it('PVW-15 组装出的提示：根会话里恰 work / chat / coding / bot 教交互块（tab 给了 chromeTab）；派生一个都不教', async () => {
+    let checked = 0
+    for (const language of LANGUAGES) {
+      await inLanguage(language, async () => {
+        for (const profile of builtins(language)) {
+          mocks.pickSettings.mockReturnValue(
+            profile.name === 'tab' ? CHROME_TAB : { notebookPath: 'notes/a.md' }
+          )
+          const root = renderProfileSystemPrompt(
+            profile,
+            await varsFor({ kind: 'root', toolNames: profile.tools })
+          )
+          const what = `${profile.name}.${language}`
+          expect(root.includes(INTERACTIVE), `${what} root`).toBe(
+            INTERACTIVE_PROFILES.includes(profile.name)
+          )
+          checked++
+
+          if (profile.name === 'notebook' || profile.name === 'coedit') continue
+          const spawned = renderProfileSystemPrompt(
+            profile,
+            await varsFor({
+              kind: 'spawned',
+              sessionId: 'agent-1',
+              cwd: '',
+              toolNames: profile.tools
+            })
+          )
+          expect(spawned, `${what} spawned`).not.toContain(INTERACTIVE)
+        }
+      })
+    }
+    expect(checked, '一个档案都没查到就等于空转').toBeGreaterThan(20)
+  })
 })

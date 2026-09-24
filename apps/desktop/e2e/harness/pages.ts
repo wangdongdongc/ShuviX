@@ -1190,6 +1190,282 @@ export function mermaidWatch(main: CdpClient): MermaidWatch {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+// 对话里的 ```interactive 交互图（chat-ui 的 InteractiveBlock；`.html` 的 ```artifact 引用也走它）
+//
+// 锚点全是组件自己打的 data 属性：`data-interactive-figure`（整张卡）、`data-interactive-pending`
+// （围栏还没闭合时的占位行）、`data-interactive-unsupported`（宿主跑不了交互图时的源码卡）、
+// `data-interactive-rerun` / `data-interactive-toggle`（工具栏上的两个按钮）。沙箱就是卡里唯一的
+// iframe。卡片一律在**正文里含本轮标记的那条**助手消息里找（assistantBodyWith，理由同 mermaid）。
+//
+// iframe 是不透明源（`sandbox="allow-scripts"`），主页面读不进它的 DOM —— 块里的结果由块自己经
+// `shuvix.sendPrompt(…)` 填进输入框，spec 用 `chatPane.inputValue()` 读回来；这里只读宿主这一侧
+// 看得见的东西（属性、高度、工具栏）。「还是不是同一个 iframe 节点」靠页内给节点挂的 expando 判：
+// 重挂载换的是节点，expando 跟着旧节点一起走。
+
+/** 那条助手正文里交互图卡的此刻 */
+export interface InteractiveShot {
+  /** 占位行在不在（围栏还没闭合） */
+  pending: boolean
+  /** 占位行的文字（带源码行数）；没有 = null */
+  pendingText: string | null
+  /** 卡里 iframe 的个数（看源码时为 0） */
+  frames: number
+  /** iframe 的 `sandbox` 属性原文（getAttribute，不经 DOMTokenList）；没有 iframe = null */
+  sandbox: string | null
+  /** iframe 的 `referrerpolicy` 属性；没有 iframe = null */
+  referrerPolicy: string | null
+  /** iframe 有没有 `src` 属性（只该有 srcdoc） */
+  hasSrc: boolean
+  /** srcdoc 的前 600 字符（CSP meta 在最前面，够看） */
+  srcdocHead: string
+  srcdocLength: number
+  /** 工具栏上的名字（卡片第一行的第一个 span） */
+  toolbarTitle: string
+  /** iframe 的 `title` 属性；没有 iframe = null */
+  frameTitle: string | null
+  /** iframe 的内联高度（`120px` 这种）；没有 iframe = '' */
+  height: string
+  /** 看源码时卡里 `<pre>` 的文字；没在看源码 = null */
+  source: string | null
+  /** 工具栏的「重新运行」在不在 */
+  rerun: boolean
+  /** 工具栏的「源码 / 交互」切换钮在不在 */
+  toggle: boolean
+  /** 宿主跑不了交互图时的源码卡（`data-interactive-unsupported`）在不在 —— 与上面的卡互斥 */
+  unsupported: boolean
+}
+
+/** 绑在「正文里含某个标记」的那条助手消息上（见 assistantBodyWith） */
+export interface InteractivePane {
+  /** 那条正文里的第一张交互图卡；正文还没上屏、或里面没有交互图卡 = null */
+  shot(): Promise<InteractiveShot | null>
+  /** 等沙箱 iframe 挂上，回那一刻的快照 */
+  waitFrame(timeoutMs?: number): Promise<InteractiveShot>
+  /** 给此刻的 iframe 节点挂一个页内 expando；没有 iframe 回 false */
+  markFrame(tag: string): Promise<boolean>
+  /** 此刻 iframe 节点上的 expando（换了节点就没了 → null）；没有 iframe 也是 null */
+  frameMark(): Promise<string | null>
+  /** 点工具栏的「源码 / 交互」切换钮 */
+  toggleSource(): Promise<void>
+  /** 点工具栏的「重新运行」 */
+  rerun(): Promise<void>
+  /**
+   * 页内每 `everyMs`（缺省 10ms）取一次 iframe 的内联高度，持续 `durationMs`，只记变化 —— 第一条是
+   * 开始那一刻的值（那一刻还没有 iframe = `''`）。「高度来回跳」是时段断言，而一个来回只有几十毫秒，
+   * 从 spec 进程逐次 CDP 轮询会漏掉，所以采样整段跑在页内、一次带回
+   */
+  heightTrace(durationMs: number, everyMs?: number): Promise<InteractiveHeightSample[]>
+  /**
+   * 宿主主文档里 `var(name)` 此刻解析成的颜色（探针 span 挂在主文档上取 computed color）——
+   * 与块里 `shuvix.color(name)` / `getComputedStyle` 读到的比对：两边同一套 token 原串、同一个
+   * color-scheme，解析值应当逐字相等
+   */
+  hostTokenColor(name: string): Promise<string>
+}
+
+/** heightTrace 的一条记录：高度在这一刻变成了 `height` */
+export interface InteractiveHeightSample {
+  /** 距采样开始的毫秒数（渲染进程的 performance.now，取整） */
+  t: number
+  /** iframe 的内联高度（`401px` 这种）；没有 iframe = '' */
+  height: string
+}
+
+export function interactivePane(main: CdpClient, marker: string): InteractivePane {
+  const BODY = assistantBodyWith(marker)
+  const CARD = `(${BODY})?.querySelector('[data-interactive-figure], [data-interactive-unsupported]')`
+  const FRAME = `(${BODY})?.querySelector('[data-interactive-figure] iframe')`
+  const EXPANDO = '__e2eInteractiveMark'
+
+  const shot = (): Promise<InteractiveShot | null> =>
+    main.eval<InteractiveShot | null>(`(() => {
+      const card = ${CARD}
+      if (!card) return null
+      const unsupported = card.hasAttribute('data-interactive-unsupported')
+      const frames = [...card.querySelectorAll('iframe')]
+      const frame = frames[0] ?? null
+      const pending = card.querySelector('[data-interactive-pending]')
+      const pre = card.querySelector('pre')
+      const srcdoc = frame?.getAttribute('srcdoc') ?? ''
+      return {
+        pending: !!pending,
+        pendingText: pending ? (pending.textContent ?? '').trim() : null,
+        frames: frames.length,
+        sandbox: frame ? frame.getAttribute('sandbox') : null,
+        referrerPolicy: frame ? frame.getAttribute('referrerpolicy') : null,
+        hasSrc: !!frame && frame.hasAttribute('src'),
+        srcdocHead: srcdoc.slice(0, 600),
+        srcdocLength: srcdoc.length,
+        toolbarTitle: unsupported
+          ? ''
+          : (card.firstElementChild?.querySelector('span')?.textContent ?? '').trim(),
+        frameTitle: frame ? frame.getAttribute('title') : null,
+        height: frame ? frame.style.height : '',
+        source: !unsupported && pre ? (pre.textContent ?? '') : null,
+        rerun: !!card.querySelector('[data-interactive-rerun]'),
+        toggle: !!card.querySelector('[data-interactive-toggle]'),
+        unsupported
+      }
+    })()`)
+
+  const click = async (attr: string): Promise<void> => {
+    await main.eval(`(() => {
+      const btn = (${BODY})?.querySelector('[${attr}]')
+      if (!btn) throw new Error('no ${attr} button on screen')
+      btn.click()
+      return true
+    })()`)
+    await sleep(150)
+  }
+
+  return {
+    shot,
+    waitFrame: (timeoutMs = 25_000) =>
+      until(
+        async () => {
+          const s = await shot()
+          return s && s.frames > 0 ? s : null
+        },
+        `interactive iframe mounted in the bubble with ${JSON.stringify(marker)}`,
+        timeoutMs
+      ),
+    markFrame: (tag) =>
+      main.eval<boolean>(`(() => {
+        const frame = ${FRAME}
+        if (!frame) return false
+        frame.${EXPANDO} = ${JSON.stringify(tag)}
+        return true
+      })()`),
+    frameMark: async () =>
+      (await main.eval<string | null>(`(${FRAME})?.${EXPANDO} ?? null`)) ?? null,
+    toggleSource: () => click('data-interactive-toggle'),
+    rerun: () => click('data-interactive-rerun'),
+    heightTrace: (durationMs, everyMs = 10) =>
+      main.eval<InteractiveHeightSample[]>(`new Promise((resolve) => {
+        const t0 = performance.now()
+        const out = []
+        let timer = 0
+        const tick = () => {
+          const frame = ${FRAME}
+          const height = frame ? frame.style.height : ''
+          const t = performance.now() - t0
+          if (!out.length || out[out.length - 1].height !== height) {
+            out.push({ t: Math.round(t), height })
+          }
+          if (t >= ${durationMs}) {
+            clearInterval(timer)
+            resolve(out)
+          }
+        }
+        tick()
+        timer = setInterval(tick, ${everyMs})
+      })`),
+    hostTokenColor: (name) =>
+      main.eval<string>(`(() => {
+        const probe = document.createElement('span')
+        probe.style.display = 'none'
+        document.body.appendChild(probe)
+        probe.style.color = 'var(' + ${JSON.stringify(name)} + ')'
+        const color = getComputedStyle(probe).color
+        probe.remove()
+        return color
+      })()`)
+  }
+}
+
+/** 流式过程中交互图卡的一帧（页内 MutationObserver 记录，连续相同的帧合并） */
+export interface InteractiveFrame {
+  /** `Date.now()`（渲染进程的墙钟） */
+  t: number
+  /** 占位行在不在 */
+  pending: boolean
+  /** 占位行的文字；没有 = null（行数跟着源码长） */
+  pendingText: string | null
+  /**
+   * 此刻卡里那个 iframe **节点**的编号：页内按节点身份给号，第一个见到的是 1，每换一个新节点 +1；
+   * 没有 iframe = 0。一段录像里出现过的非零编号只有一个 = 从挂上到最后都没重挂载过
+   */
+  frame: number
+  /** 流式占位卡（`streaming-live`）在不在 = 这一轮还没结束 */
+  busy: boolean
+  /** 正文里是否已出现尾部标记（= 围栏之后那一片已经上屏） */
+  tail: boolean
+}
+
+export interface InteractiveWatch {
+  /** 开始观察正文里含 `headMarker` 的那条助手消息（幂等：重复调用重新开始）；`tailMarker` 认最后一片 */
+  start(headMarker: string, tailMarker: string): Promise<void>
+  frames(): Promise<InteractiveFrame[]>
+  /** 停止观察（不清空已记录的帧） */
+  stop(): Promise<void>
+}
+
+/**
+ * 交互图卡的变动观察器 —— 「围栏闭合之前一直只有占位」「挂上之后到落定都没换过节点」都是**时段**
+ * 断言，轮询会漏掉中间态（同 mermaidWatch）。节点身份用页内的 WeakMap 编号，不给节点挂东西。
+ */
+export function interactiveWatch(main: CdpClient): InteractiveWatch {
+  const KEY = '__e2eInteractiveWatch'
+  return {
+    start: async (headMarker, tailMarker) => {
+      await main.eval(`(() => {
+        const prev = window.${KEY}
+        if (prev && prev.obs) prev.obs.disconnect()
+        const marker = ${JSON.stringify(tailMarker)}
+        const ids = new WeakMap()
+        const state = { frames: [], obs: null, next: 1 }
+        const idOf = (node) => {
+          if (!node) return 0
+          if (!ids.has(node)) ids.set(node, state.next++)
+          return ids.get(node)
+        }
+        const snap = () => {
+          const body = ${assistantBodyWith(headMarker)}
+          const card = body?.querySelector('[data-interactive-figure]')
+          const pending = card?.querySelector('[data-interactive-pending]')
+          const frame = {
+            t: Date.now(),
+            pending: !!pending,
+            pendingText: pending ? (pending.textContent ?? '').trim() : null,
+            frame: idOf(card?.querySelector('iframe') ?? null),
+            busy: !!document.querySelector('[data-msg-id="streaming-live"]'),
+            tail: (body?.textContent ?? '').includes(marker)
+          }
+          const last = state.frames[state.frames.length - 1]
+          if (
+            last &&
+            last.pending === frame.pending &&
+            last.pendingText === frame.pendingText &&
+            last.frame === frame.frame &&
+            last.busy === frame.busy &&
+            last.tail === frame.tail
+          )
+            return
+          state.frames.push(frame)
+        }
+        snap()
+        state.obs = new MutationObserver(snap)
+        state.obs.observe(document.body, {
+          childList: true,
+          subtree: true,
+          characterData: true,
+          attributes: true
+        })
+        window.${KEY} = state
+        return true
+      })()`)
+    },
+    frames: () => main.eval<InteractiveFrame[]>(`(window.${KEY}?.frames ?? []).map((f) => f)`),
+    stop: async () => {
+      await main.eval(`(() => {
+        if (window.${KEY}?.obs) window.${KEY}.obs.disconnect()
+        return true
+      })()`)
+    }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 // A3 · 输入框 `@` 提及弹层（AtMentionPopover）—— 多源
 //
 // 裸 `@` 合并分区（文件 / 知识库两段，每源 ≤5，方向键跨段扁平循环）；`@源:query` 显式

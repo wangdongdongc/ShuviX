@@ -37,6 +37,10 @@ export {
   markdownRemarkPlugins,
   markdownRehypePlugins
 } from './components/chat/markdownComponents'
+export {
+  MarkdownSourceContext,
+  MarkdownStreamingContext
+} from './components/chat/markdownStreaming'
 export { DiffViewer } from './components/chat/DiffViewer'
 export { TokenBadge, InvalidTokenBadge } from './components/chat/InlineTokenBadge'
 export { TokenChip, TokenPayloadDialog } from './components/chat/TokenChip'

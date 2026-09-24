@@ -27,6 +27,7 @@ import {
 } from '@shuvix/agent-runtime'
 import type { ChatEvent } from '@shuvix/chat-protocol/events'
 import { resolveModelRef } from '@shuvix/chat-protocol/agentModelRef'
+import { isChromeTabSessionSettings } from '@shuvix/chat-protocol/chromeTabSession'
 import type { ModelCapabilities } from '@shuvix/chat-protocol/types/provider'
 import { existsSync } from 'fs'
 import { join } from 'path'
@@ -277,7 +278,12 @@ function desktopPromptVars(ctx: PromptVarsCtx): PromptVars {
   // 这样说明里提到的每样东西都真在它手里 —— 派发出来的、覆盖了档案的、在侧栏停用了技能的都一样
   const visual = {
     drawingSkill: hasDrawingSkill(ctx.toolNames),
-    artifact: ctx.toolNames.includes(ARTIFACT_TOOL_NAME)
+    artifact: ctx.toolNames.includes(ARTIFACT_TOOL_NAME),
+    // 交互块不看名单，看回复落在哪儿：只有根 agent 的回复会显示成一条对话（派生 agent 的回复是
+    // 交回父 agent 的工具结果），而 Chrome 标签页会话显示在扩展侧栏里 —— 那里的 CSP 跑不了它
+    interactive:
+      ctx.kind === 'root' &&
+      !isChromeTabSessionSettings(sessionRecords.pickSettings(ctx.sessionId, ['chromeTab']))
   }
   return {
     workingDirectory: ctx.cwd,

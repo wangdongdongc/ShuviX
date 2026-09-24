@@ -32,7 +32,9 @@ export function useSettingsChatHost(): ChatHostValue {
         setActiveProvider,
         setActiveModel
       },
-      voice: { ttsEnabled: voiceTtsEnabled }
+      voice: { ttsEnabled: voiceTtsEnabled },
+      // 桌面能跑 ```interactive：页面 CSP 放行了 `shuvix-lib:`，main 注册了那个库协议
+      interactiveFigures: true
     }),
     [
       theme,

@@ -161,6 +161,11 @@ function isDevRendererUrl(url: string): boolean {
  *    之外的窗口从不真开新窗口；
  *  - **顶层**导航拦下 —— 否则窗口会被带去外站，而 preload 对新页面照样生效。子框架自己的导航不
  *    走这里（那是 will-frame-navigate），非网页协议的那种由会话权限里的 `openExternal` 兜底。
+ *  - **不透明源的子框架发起的导航**拦下（blockOpaqueFrameNavigation）—— 交互图（```interactive）
+ *    跑在 `sandbox="allow-scripts"` 的 srcdoc iframe 里，它的 CSP 没有任何网络出口，但「把自己导航
+ *    到某个地址」不归 CSP 的 connect/img 管：页面 CSP 的 frame-src 挡住了外站，却为 widget 放行了
+ *    `http://127.0.0.1:*`，于是一块交互图能带着查询串打到本机任意端口（e2e 实测过）。拦的是
+ *    **发起方**不透明，不是目标：宿主给这个 iframe 换 srcdoc 时发起方是宿主页面，照常放行。
  *
  * 开发环境的 HMR 地址放行，不然渲染端一刷新就被自己的守卫挡住 —— 比的是**源**而不是前缀：
  * `http://localhost:5173.evil.example/` 也 startsWith 得了 `http://localhost:5173`。
@@ -175,6 +180,35 @@ export function guardAppWindow(win: BrowserWindow, source?: ExternalOpenSource):
     event.preventDefault()
     void routeExternalUrl(url, { parent: win, source })
   })
+  win.webContents.on('will-frame-navigate', blockOpaqueFrameNavigation)
+}
+
+/**
+ * 子框架的导航，发起方是不透明源（`sandbox` 且不带 allow-same-origin 的 iframe，今天只有交互图）
+ * → 拦下，也不交给系统：块里的链接本来就说好了「点不开」。应用自己的 iframe（PDF 预览、widget、
+ * 电子书）都不是不透明源，不受影响。
+ *
+ * 发起方取不到时**放行**：Electron 在「不是由某个帧发起」时也给 null，而 PDF 预览里 Chromium 自己
+ * 的查看器帧走的正是这类路子 —— 把 null 当不透明会误伤它。交互图自己发起的导航总有发起方（就是
+ * 它自己），唯一的缺口是发起帧恰好在事件发出前被销毁，那时它也已经不在了。
+ */
+export function blockOpaqueFrameNavigation(
+  details: Pick<
+    Electron.Event<Electron.WebContentsWillFrameNavigateEventParams>,
+    'preventDefault'
+  > &
+    Pick<Electron.WebContentsWillFrameNavigateEventParams, 'isMainFrame' | 'initiator' | 'url'>
+): void {
+  if (details.isMainFrame) return
+  let origin: string | undefined
+  try {
+    origin = details.initiator?.origin
+  } catch {
+    origin = undefined // 帧已销毁时读属性会抛
+  }
+  if (origin !== 'null') return
+  details.preventDefault()
+  log.info(`Blocked a sandboxed frame navigating to ${clipUrl(details.url)}`)
 }
 
 /**

@@ -15,6 +15,12 @@
  *           否则 <video>/<audio> 进度条不可拖、PDFium 翻页慢
  *        3. 显式 Content-Type，否则 Chromium 媒体元素拒绝 seek
  *
+ *  - `shuvix-lib://<name>`
+ *      交互图（```interactive 围栏）沙箱里 `<script src>` 能加载的库。只按名字查白名单
+ *      （chat-protocol 的 SANDBOX_LIBS），路径部分一概不看，名字不在表里就 404 —— 它不是一个
+ *      文件服务器，只是两份随包静态文件的固定地址。**刻意不开 bypassCSP**：沙箱的 meta CSP 与
+ *      宿主页面的 script-src 都显式列了 `shuvix-lib:`，放行是写在策略里的，而不是协议一句话绕过。
+ *
  * 调用约定：
  *   - 在 app.whenReady 之前 调 `registerCustomProtocolSchemes()`（设置 privileges）
  *   - 在 app.whenReady 之后 调 `registerCustomProtocolHandlers()`（安装 handler）
@@ -22,11 +28,13 @@
 
 import { protocol, net } from 'electron'
 import { createReadStream } from 'fs'
-import { stat as fsStat } from 'fs/promises'
-import { extname } from 'path'
+import { readFile, stat as fsStat } from 'fs/promises'
+import { extname, join } from 'path'
 import { Readable } from 'stream'
+import { SANDBOX_LIBS, SANDBOX_LIB_SCHEME } from '@shuvix/chat-protocol/utils/interactiveFence'
 import { resolveProjectConfig } from './toolContext'
 import { resolveReadPath } from '../utils/toolUtils/pathUtils'
+import { getSandboxLibsDir } from '../utils/paths'
 import { createLogger } from '../logger'
 
 const log = createLogger('CustomProtocols')
@@ -81,6 +89,12 @@ export function registerCustomProtocolSchemes(): void {
         stream: true,
         bypassCSP: true
       }
+    },
+    {
+      // standard：`shuvix-lib://chart.js` 按标准 URL 解析，名字落在 host 上；
+      // secure：不被当成混合内容。没有 bypassCSP —— 见文件头
+      scheme: SANDBOX_LIB_SCHEME,
+      privileges: { standard: true, secure: true }
     }
   ])
 }
@@ -91,6 +105,42 @@ export function registerCustomProtocolSchemes(): void {
 export function registerCustomProtocolHandlers(): void {
   protocol.handle('shuvix-media', handleMediaRequest)
   protocol.handle('shuvix-preview', handlePreviewRequest)
+  protocol.handle(SANDBOX_LIB_SCHEME, handleSandboxLibRequest)
+}
+
+/** 读过的库文件（两份、各两三百 KB，随包只读 —— 进程内缓存一次就够） */
+const sandboxLibCache = new Map<string, Buffer>()
+
+/**
+ * shuvix-lib —— 名字（URL 的 host）查白名单，命中就回随包文件。路径、查询串一概不看，
+ * 所以 `shuvix-lib://chart.js/../../etc/passwd` 与 `shuvix-lib://chart.js` 是同一个请求。
+ */
+export async function handleSandboxLibRequest(request: GlobalRequest): Promise<GlobalResponse> {
+  let name: string
+  try {
+    name = new URL(request.url).hostname
+  } catch {
+    return new Response('Bad request', { status: 400 })
+  }
+  // Object.hasOwn：`constructor` / `__proto__` 这类名字不能从原型链上摸到东西
+  const lib = Object.hasOwn(SANDBOX_LIBS, name) ? SANDBOX_LIBS[name] : undefined
+  if (!lib || request.method !== 'GET') {
+    return new Response('Not found', { status: 404 })
+  }
+  try {
+    let body = sandboxLibCache.get(lib.file)
+    if (!body) {
+      body = await readFile(join(getSandboxLibsDir(), lib.file))
+      sandboxLibCache.set(lib.file, body)
+    }
+    return new Response(new Uint8Array(body), {
+      status: 200,
+      headers: { 'Content-Type': 'text/javascript; charset=utf-8' }
+    })
+  } catch (err) {
+    log.warn(`shuvix-lib handler error: ${err instanceof Error ? err.message : String(err)}`)
+    return new Response('Internal error', { status: 500 })
+  }
 }
 
 /** shuvix-media —— 路径在 URL pathname 里，调用方可信，net.fetch 直通 file:// */

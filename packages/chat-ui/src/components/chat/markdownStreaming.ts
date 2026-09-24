@@ -11,3 +11,15 @@ import { createContext, useContext } from 'react'
 export const MarkdownStreamingContext = createContext(false)
 
 export const useMarkdownStreaming = (): boolean => useContext(MarkdownStreamingContext)
+
+/**
+ * 这段 markdown 的源文本 —— 流式中判断某个围栏闭合没有要用。
+ *
+ * 交互图（```interactive）不能像 svg 那样逐帧画：半截脚本跑起来只会报错，也不能像 mermaid 那样
+ * 「源码停一会儿就当写完」—— 模型停顿时挂上一个半截的页面，下一帧又得整块重载。它要的是确切的
+ * 答案：hast 节点的 position 切回这段源文本，看最后一行是不是闭合栅栏（fenceSourceIsClosed）。
+ * 只在流式中有意义，所以只有 AssistantBubble 在流式时提供；缺省 null = 当作已写完。
+ */
+export const MarkdownSourceContext = createContext<string | null>(null)
+
+export const useMarkdownSource = (): string | null => useContext(MarkdownSourceContext)

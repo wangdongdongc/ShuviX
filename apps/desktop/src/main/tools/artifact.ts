@@ -6,7 +6,8 @@
  *
  * 三个动作对应两条创建路径与一条查询：
  *  - `create` —— 内容经参数写盘。给**本来就是文件**的产物（草稿、数据表、配置）。
- *  - `adopt`  —— 把对话里一张已画出来的 ```svg 图变成可改的文件。**模型零重发**：源码
+ *  - `adopt`  —— 把对话里一张已画出来的 ```svg 图（或一块 ```interactive 交互图，落成 `.html`）
+ *    变成可改的文件。**模型零重发**：源码
  *    已在转写里，宿主取出来写盘即可。于是作画可以永远走围栏（流式逐帧画），只有要改时
  *    才付一次拷贝。
  *  - `list`   —— 已有哪些 artifact，以及转写里还有哪些图可以被认领。
@@ -18,8 +19,10 @@
  *
  * **一处裁决过的取舍要写下来**：`securityCheck` 是 no-op、也不过 `enforcePath`，所以这是一条
  * 不经询问的写原语，而 `ask-on-write` 对任何位置的文件写入都要问。`bot` 基座刻意收窄过的
- * 工具清单里现在有它。之所以接受：落点是**会话自己的目录**、碰不到用户仓库，类型白名单里
- * 也没有可执行/可渲染的东西（`html` 已移出）。bot「要动就得开子会话」那条不变式针对的是
+ * 工具清单里现在有它。之所以接受：落点是**会话自己的目录**、碰不到用户仓库。类型白名单里唯一
+ * 能执行的是 `html`，而它能做的不超过模型本来就能在回复里写的一块 ```interactive：只在交互图的
+ * 沙箱 iframe 里渲染（不透明源、没有网络），落盘时还带一行同样的 CSP，双击用浏览器打开也没有
+ * 出口（见 artifacts/store.ts 的 ALLOWED_EXT）。bot「要动就得开子会话」那条不变式针对的是
  * 用户的工作区，这里不构成缺口 —— 但它确实是个没有复核的入口，改动前先回来读这一段。
  *
  * **会话粒度用 ctx.sessionId，不上溯根会话**：子会话是一场普通会话、有自己的转写，而
@@ -42,10 +45,10 @@ export const ARTIFACT_DESCRIPTION = [
   "Manage this conversation's artifacts: named files the session owns, which you can revise with `edit` instead of regenerating.",
   '',
   '- `list` — what this session already has, plus which figures in the transcript can still be adopted.',
-  '- `adopt` — turn a ```svg figure you already drew into a file. Give `ref` (its title or its number from `list`); omitted means the most recent one. Nothing is re-sent: the source is taken from the transcript.',
-  '- `create` — write a new artifact from `content` (needs `title` and `ext`: svg, md, txt, csv, json). Use this for things that are a file first — a draft, a table, a config — not for figures.',
+  '- `adopt` — turn a ```svg figure or an ```interactive block you already wrote into a file (`.svg` / `.html`). Give `ref` (its title or its number from `list`); omitted means the most recent one. Nothing is re-sent: the source is taken from the transcript.',
+  '- `create` — write a new artifact from `content` (needs `title` and `ext`: svg, md, txt, csv, json, html). Use this for things that are a file first — a draft, a table, a config — not for figures.',
   '',
-  'Draw figures with a ```svg fence, not with this tool. Adopt one only when it is about to be changed: the reply then shows the new version with a ```artifact fence naming it.'
+  'Draw figures with a ```svg or ```interactive fence, not with this tool. Adopt one only when it is about to be changed: the reply then shows the new version with a ```artifact fence naming it.'
 ].join('\n')
 
 export const ArtifactParamsSchema: TObject<{
@@ -66,7 +69,7 @@ export const ArtifactParamsSchema: TObject<{
   ) as unknown as TString,
   ext: Type.Optional(
     Type.String({
-      description: 'create: extension without the dot — svg, md, txt, csv, json'
+      description: 'create: extension without the dot — svg, md, txt, csv, json, html'
     })
   ) as unknown as TString,
   content: Type.Optional(
@@ -117,7 +120,9 @@ export class ArtifactTool extends BaseTool<typeof ArtifactParamsSchema> {
       // 已经认领过的图不再算「可认领」：否则模型每次 list 都被邀请再认领一次，而再认领
       // 会把既有编辑分叉掉（adoptFigure 现在幂等，但邀请本身就是误导）
       const ownedNames = new Set(owned.map((a) => a.name.toLowerCase()))
-      const figures = all.filter((f) => !ownedNames.has(figureArtifactName(f.title).toLowerCase()))
+      const figures = all.filter(
+        (f) => !ownedNames.has(figureArtifactName(f.title, f.kind).toLowerCase())
+      )
       const lines = [
         owned.length
           ? `Artifacts (${owned.length}) — change these with \`edit\`, show them with an \`\`\`artifact fence:\n${owned.map((a) => `  ${a.name} — ${a.title}\n    ${a.path}`).join('\n')}`
@@ -137,7 +142,7 @@ export class ArtifactTool extends BaseTool<typeof ArtifactParamsSchema> {
         return text(
           figures.length
             ? `No figure matched "${params.ref ?? ''}". Available: ${figures.map((f) => `[${f.index}] ${f.title}`).join(', ')}`
-            : 'There is no ```svg figure in this conversation to adopt. Draw one first, or use action "create".'
+            : 'There is no ```svg figure or ```interactive block in this conversation to adopt. Draw one first, or use action "create".'
         )
       }
       recordRead(sessionId, result.artifact.path)
@@ -164,7 +169,7 @@ export class ArtifactTool extends BaseTool<typeof ArtifactParamsSchema> {
 
     if (action === 'create') {
       if (!params.title?.trim()) return text('create needs a `title`.')
-      if (!params.ext?.trim()) return text('create needs an `ext` (svg, md, txt, csv, json).')
+      if (!params.ext?.trim()) return text('create needs an `ext` (svg, md, txt, csv, json, html).')
       if (params.content === undefined) return text('create needs `content`.')
       // 非法 ext 由 writeArtifact 抛；接住变成回执 —— 另外三条前置校验都是回执，
       // 单这一条抛成工具异常是两种 UI，而且模型拿不到「允许哪些」这条信息
