@@ -94,7 +94,26 @@ export const AssistantBubble = memo(function AssistantBubble({
   // 相邻的步骤（思考 / 已完成的工具调用）合并为一行 + 次数；中间文本切段，其余块原样透传
   const blockGroups = useMemo(() => groupConsecutiveSteps(processBlocks), [processBlocks])
 
-  const displayContent = isStreaming ? storeStreamingContent : answerText
+  // 流式正文的最后一帧，按「当时这张卡拿着的是哪一组消息」记下来。
+  //
+  // 一次 LLM 调用落盘时，store 在同一次 set 里清空流式正文、upsert 那张卡；但卡的新消息要经
+  // Virtuoso 传进来，比 store 订阅晚一次渲染。中间那一帧这张卡还拿着旧的 msgs（仍是流式占位），
+  // 正文却已经是空串 —— 正文容器被卸下，下一帧换成新节点：里面的交互图整块重载、加载时的动作
+  // 再跑一遍（chat-interactive e2e 的 E-4b 抓到的），mermaid 重画，展开的东西折回去。
+  // 所以只要 msgs 还是记下时的那一组，就接着显示那一帧；msgs 一换（新消息到了）就放手 ——
+  // 换成的要么是终答（走 answerText），要么是带着这段中间文本的工具卡（文本在过程区里）。
+  // 新出生的流式卡（下一轮占位）没有记下的东西，不会把上一段正文重复显示一遍。
+  const [held, setHeld] = useState<{ msgs: AssistantMessage[]; content: string } | null>(null)
+  if (
+    isStreaming &&
+    storeStreamingContent &&
+    (held?.content !== storeStreamingContent || held.msgs !== msgs)
+  ) {
+    setHeld({ msgs, content: storeStreamingContent })
+  }
+  const displayContent = isStreaming
+    ? storeStreamingContent || (held && held.msgs === msgs ? held.content : '')
+    : answerText
   // 落盘后的思考已经是过程区里的块（按原序），这里只补流式期间还在缓冲里的那段
   const liveThinking =
     isStreaming && hasThinkingContent(storeStreamingThinking) ? storeStreamingThinking : null

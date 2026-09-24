@@ -2,8 +2,9 @@
  * `buildVisibleItems` —— 消息列表 → 对话流的项。
  *
  * 钉的是**分组**：连续的 assistant 消息收成一张卡（遇终答 / 用户消息 / 列表结束收口），
- * 每项的 key 取组**首**条消息 id 而代表消息 `msg` 取组**末**条 —— 这条不对称是
- * 「流式占位换成真实终答时不重挂载」的全部依据。压缩摘要是边界标记，自成一项。
+ * 代表消息 `msg` 取组**末**条。助手卡的 key **按轮次起**（`turn:<用户消息条数>.<本轮第几张卡>`），
+ * 不取任何一条消息的 id —— 流式到落定之间卡里的消息 id 会换三次（见 K 组），key 一次都不能跟着换，
+ * 否则整张卡重挂载。用户消息 / 压缩摘要 / 错误行仍按自己的 id。压缩摘要是边界标记，自成一项。
  */
 import { describe, it, expect } from 'vitest'
 import type {
@@ -73,16 +74,16 @@ function compactionMsg(id: string, summary = '此前对话的摘要'): Assistant
 }
 
 describe('buildVisibleItems —— 分组', () => {
-  it('G-1 带工具块的消息不收口，与紧随的终答合成一项：key 取组首、msg 取组末', () => {
+  it('G-1 带工具块的消息不收口，与紧随的终答合成一项：key 按轮次、msg 取组末', () => {
     const items = buildVisibleItems(
       [agentMsg('m1', { tools: 1 }), agentMsg('m2'), agentMsg('m3')],
       false
     )
     expect(items).toHaveLength(2)
-    expect(items[0].key).toBe('m1')
+    expect(items[0].key).toBe('turn:0.0')
     expect(items[0].msg.id).toBe('m2')
     expect(items[0].msgs?.map((m) => m.id)).toEqual(['m1', 'm2'])
-    expect(items[1].key).toBe('m3')
+    expect(items[1].key).toBe('turn:0.1')
   })
 
   it('G-2 用户消息与 error_event 各自成项，并把前后的助手消息隔开', () => {
@@ -104,14 +105,15 @@ describe('buildVisibleItems —— 分组', () => {
       metadata: null
     } as unknown as ChatMessage
     const items = buildVisibleItems([agentMsg('m1', { tools: 1 }), notice, agentMsg('m2')], false)
-    expect(items.map((i) => i.key)).toEqual(['m1'])
+    expect(items.map((i) => i.key)).toEqual(['turn:0.0'])
     expect(items[0].msgs?.map((m) => m.id)).toEqual(['m1', 'm2'])
   })
 
   it('G-4 流式 + 末项已收口 → 占位自成一项，metadata 为 null，前面的项不受影响', () => {
     const items = buildVisibleItems([agentMsg('m1'), agentMsg('m2')], true)
     expect(items).toHaveLength(3)
-    expect(items.slice(0, 2).map((i) => i.key)).toEqual(['m1', 'm2'])
+    expect(items.slice(0, 2).map((i) => i.key)).toEqual(['turn:0.0', 'turn:0.1'])
+    expect(items[2].key).toBe('turn:0.2')
     expect(items[2].msg.id).toBe(STREAMING_PLACEHOLDER_ID)
     expect(items[2].msg.metadata).toBeNull()
     expect(items[2].isStreamingPlaceholder).toBe(true)
@@ -158,29 +160,29 @@ describe('buildVisibleItems —— 压缩摘要自成一项', () => {
     const c = compactionMsg('c')
     const items = buildVisibleItems([m1, c], false)
     expect(items).toHaveLength(2)
-    expect(items[0]).toMatchObject({ key: 'm1', msgs: [m1] })
+    expect(items[0]).toMatchObject({ key: 'turn:0.0', msgs: [m1] })
     expect(items[1].key).toBe('c')
     expect(items[1].msgs).toBeUndefined()
   })
 
-  it('C-3 压缩摘要之后的终答另起一项：key 取自己的 id，msgs 只有它', () => {
-    // 回归：摘要若留在 group 里当组首，后面终答那张卡的 key 会变成摘要的 id
+  it('C-3 压缩摘要之后的终答另起一项：msgs 只有它，key 是一张卡的 key 而不是摘要的 id', () => {
+    // 回归：摘要若留在 group 里当组首，后面终答那张卡会把摘要卷进 msgs
     const c = compactionMsg('c')
     const m2 = agentMsg('m2')
     const items = buildVisibleItems([c, m2], false)
     expect(items).toHaveLength(2)
-    expect(items[1]).toMatchObject({ key: 'm2', msgs: [m2] })
+    expect(items[1]).toMatchObject({ key: 'turn:0.0', msgs: [m2] })
     expect(items[1].msg.id).toBe('m2')
   })
 
-  it('C-4 u1 → m1(工具) → c → m2(工具) → m3(终答)：keys 为 u1 / m1 / c / m2，末项 msgs=[m2,m3]', () => {
+  it('C-4 u1 → m1(工具) → c → m2(工具) → m3(终答)：keys 为 u1 / 第 1 轮第 0 张 / c / 第 1 轮第 1 张，末项 msgs=[m2,m3]', () => {
     const m2 = agentMsg('m2', { tools: 1 })
     const m3 = agentMsg('m3')
     const items = buildVisibleItems(
       [userMsg('u1'), agentMsg('m1', { tools: 1 }), compactionMsg('c'), m2, m3],
       false
     )
-    expect(items.map((i) => i.key)).toEqual(['u1', 'm1', 'c', 'm2'])
+    expect(items.map((i) => i.key)).toEqual(['u1', 'turn:1.0', 'c', 'turn:1.1'])
     expect(items[3].msgs).toEqual([m2, m3])
     expect(items[3].msg.id).toBe('m3')
   })
@@ -191,7 +193,7 @@ describe('buildVisibleItems —— 压缩摘要自成一项', () => {
     const items = buildVisibleItems([c], true)
     expect(items).toHaveLength(2)
     expect(items[0]).toMatchObject({ key: 'c', msg: c })
-    expect(items[1].key).toBe(STREAMING_PLACEHOLDER_ID)
+    expect(items[1].key).toBe('turn:0.0')
     expect(items[1].isStreamingPlaceholder).toBe(true)
     expect(items[1].msgs).not.toContain(c)
     expect(items[1].msgs?.map((m) => m.id)).toEqual([STREAMING_PLACEHOLDER_ID])
@@ -206,7 +208,7 @@ describe('buildVisibleItems —— 压缩摘要自成一项', () => {
       const m2: AssistantMessage = { ...agentMsg('m2'), metadata }
       const items = buildVisibleItems([m1, m2], false)
       expect(items).toHaveLength(1)
-      expect(items[0]).toMatchObject({ key: 'm1', msgs: [m1, m2] })
+      expect(items[0]).toMatchObject({ key: 'turn:0.0', msgs: [m1, m2] })
       expect(items[0].msg.id).toBe('m2')
     }
   })
@@ -225,12 +227,7 @@ describe('buildVisibleItems —— 乐观占位', () => {
     const pending = pendingPromptMessage(SID, '新的一句')
     const items = buildVisibleItems([userMsg('u1'), a1], true, pending)
 
-    expect(items.map((i) => i.key)).toEqual([
-      'u1',
-      'a1',
-      PENDING_PROMPT_ID,
-      STREAMING_PLACEHOLDER_ID
-    ])
+    expect(items.map((i) => i.key)).toEqual(['u1', 'turn:1.0', PENDING_PROMPT_ID, 'turn:2.0'])
     // a1 那张卡在占位之前就收口了：它是上一轮的，既不是流式卡也不该把占位卷进去
     expect(items[1].isStreamingPlaceholder).toBeUndefined()
     expect(items[1].msgs?.map((m) => m.id)).toEqual(['a1'])
@@ -256,7 +253,7 @@ describe('buildVisibleItems —— 乐观占位', () => {
     expect(buildVisibleItems(msgs, false, null)).toEqual(bare)
     expect(buildVisibleItems(msgs, false, undefined)).toEqual(bare)
 
-    expect(bare.map((i) => i.key)).toEqual(['u1', 'm1', 'c', 'e1'])
+    expect(bare.map((i) => i.key)).toEqual(['u1', 'turn:1.0', 'c', 'e1'])
     expect(bare.map((i) => i.msg.id)).toEqual(['u1', 'm2', 'c', 'e1'])
   })
 
@@ -274,7 +271,70 @@ describe('buildVisibleItems —— 乐观占位', () => {
     // 空列表 + 流式：sessionId 只剩 pending 这一个来源（G-5 里没有它时回落空串），
     // 而 AssistantBubble 要靠它读本会话的流式状态
     const items = buildVisibleItems([], true, pendingPromptMessage(SID, '会话里的第一句'))
-    expect(items.map((i) => i.key)).toEqual([PENDING_PROMPT_ID, STREAMING_PLACEHOLDER_ID])
+    expect(items.map((i) => i.key)).toEqual([PENDING_PROMPT_ID, 'turn:1.0'])
     expect(items[1].msg.sessionId).toBe(SID)
+  })
+})
+
+/**
+ * 一张助手卡从「刚按下发送」到「这一轮写完」，里面的消息 id 要换三次；它的 key 一次都不能换 ——
+ * 换了就是整张卡重挂载：展开的工具卡 / 思考块被折回去，卡里的交互图（```interactive）整块重载。
+ * 从前 key 取组首消息 id，纯文字回复收尾那一刻占位本身就是组首，于是恰好在第 3 步换了 key
+ * （chat-interactive e2e 的 E-4b）。
+ */
+describe('buildVisibleItems —— 助手卡的 key 从流式到落定不变', () => {
+  const cardKey = (items: ReturnType<typeof buildVisibleItems>): string | undefined =>
+    items.find((i) => i.msgs !== undefined)?.key
+
+  it('K-1 纯文字的一轮：乐观占位 → 落库的用户消息 → 流式占位 → 真实终答，卡的 key 始终一样', () => {
+    const history: ChatMessage[] = [userMsg('u0'), agentMsg('a0')]
+    const sending = buildVisibleItems(history, true, pendingPromptMessage(SID, '问一句'))
+    const accepted = buildVisibleItems([...history, userMsg('u1')], true)
+    const settled = buildVisibleItems([...history, userMsg('u1'), agentMsg('a1')], false)
+    const last = (items: ReturnType<typeof buildVisibleItems>): string => items.at(-1)!.key
+    expect(last(sending)).toBe(last(accepted))
+    expect(last(accepted)).toBe(last(settled))
+    // 上一轮那张卡的 key 在三个时刻都没动
+    expect(cardKey(sending)).toBe(cardKey(settled))
+  })
+
+  it('K-2 带工具的一轮：第一条落库的助手消息并进流式卡、再到终答，key 不变', () => {
+    const history: ChatMessage[] = [userMsg('u1')]
+    const placeholderOnly = buildVisibleItems(history, true)
+    const withTool = buildVisibleItems([...history, agentMsg('m1', { tools: 1 })], true)
+    const settled = buildVisibleItems(
+      [...history, agentMsg('m1', { tools: 1 }), agentMsg('m2')],
+      false
+    )
+    expect(placeholderOnly.at(-1)!.key).toBe(withTool.at(-1)!.key)
+    expect(withTool.at(-1)!.key).toBe(settled.at(-1)!.key)
+    expect(settled.at(-1)!.msgs?.map((m) => m.id)).toEqual(['m1', 'm2'])
+  })
+
+  it('K-3 key 互不相同：同一轮里收口后又来的卡、各轮之间、与消息 id 都不撞', () => {
+    const items = buildVisibleItems(
+      [
+        userMsg('u1'),
+        agentMsg('m1'),
+        agentMsg('m2'),
+        errMsg('e1'),
+        agentMsg('m3'),
+        userMsg('u2'),
+        agentMsg('m4')
+      ],
+      true
+    )
+    const keys = items.map((i) => i.key)
+    expect(new Set(keys).size).toBe(keys.length)
+    expect(keys).toEqual([
+      'u1',
+      'turn:1.0',
+      'turn:1.1',
+      'e1',
+      'turn:1.2',
+      'u2',
+      'turn:2.0',
+      'turn:2.1'
+    ])
   })
 })

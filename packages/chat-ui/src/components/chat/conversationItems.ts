@@ -43,8 +43,15 @@ export function streamingPlaceholder(sessionId: string): AssistantMessage {
  * 中途 abort 都只是「这张卡没有终答」，不需要造合成消息去承载它们。
  * 压缩摘要虽然也是 assistant 消息，但它是边界标记而不是哪一轮的终答：自成一项。
  *
- * 每项的 key 取组首消息 id：流式占位并入已有组时组首不变，本轮结束换成真实终答
- * 也不会让这一项重挂载 —— 展开着的工具卡/思考块因此不会被折回去。
+ * **助手卡的 key 按轮次起，不取任何一条消息的 id**：`turn:<第几条用户消息>.<这一轮的第几张卡>`。
+ * 一张卡从流式到落定要经过三次换人，每一次换的都是它里面的消息 id：
+ *  1. 乐观占位的用户消息换成落库的那条（`pending` → 真实 id）—— 两者都算作「一条用户消息」，轮次不变；
+ *  2. 第一条落库的助手消息并进流式占位卡 —— 组首从占位换成它；
+ *  3. 本轮结束，流式占位换成真实终答 —— **纯文字的一轮里占位本身就是组首**。
+ * 从前 key 取组首消息 id，只挡得住第 2 条里「占位并入已有组」的那一半：纯文字回复收尾那一刻整张卡
+ * 重挂载，里面的交互图（```interactive）被整块重载、加载时的动作再跑一遍、用户已经拖过的滑块归零
+ * （chat-interactive e2e 的 E-4b 抓到的）。按轮次起 key，三次换人都不动 key，展开着的工具卡 / 思考块
+ * 也照旧不会被折回去。用户消息、压缩摘要、错误行仍按自己的 id —— 它们从出现起 id 就不变。
  *
  * `pending` 是正在发送、后端还没落库的那条用户消息（乐观占位）：排在列表末尾、流式占位卡
  * 之前；它落库后 `user_message` 把真实 entry 送来，占位随即撤下，同一句话换成真的那条。
@@ -56,16 +63,25 @@ export function buildVisibleItems(
 ): VisibleItem[] {
   const items: VisibleItem[] = []
   let group: AssistantMessage[] = []
+  /** 到目前为止的用户消息条数（乐观占位也算一条）—— 助手卡 key 的轮次 */
+  let turn = 0
+  /** 这一轮里已经收口了几张助手卡 */
+  let card = 0
 
   const flush = (streamingTail = false): void => {
     if (group.length === 0) return
     items.push({
-      key: group[0].id,
+      key: `turn:${turn}.${card}`,
       msg: group[group.length - 1],
       msgs: group,
       ...(streamingTail ? { isStreamingPlaceholder: true } : {})
     })
+    card++
     group = []
+  }
+  const userTurn = (): void => {
+    turn++
+    card = 0
   }
 
   for (const msg of messages) {
@@ -86,12 +102,14 @@ export function buildVisibleItems(
     }
 
     flush()
+    if (msg.role === 'user') userTurn()
     items.push({ key: msg.id, msg })
   }
 
   // 乐观占位的用户消息：先把没收口的助手卡收掉 —— 它是上一轮的，新一轮的占位卡不该并进去
   if (pending) {
     flush()
+    userTurn()
     items.push({ key: pending.id, msg: pending })
   }
 
