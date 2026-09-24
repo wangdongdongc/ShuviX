@@ -31,8 +31,18 @@ const log = createLogger('MarkdownWindow')
 /** 新窗口相对上一个错开的像素（同时打开几个文件时不完全叠在一起） */
 const CASCADE_STEP = 24
 
+/**
+ * 开窗宽度（CSS 像素，按 UI 缩放换算成 DIP）：正文列 700（atomic-panel.css `.cm-content` 的
+ * max-width）两边各留 50 —— 左边放得下标题角标（H1…，贴在正文左外侧 ~22px），右边让开标题小地图
+ * 那一条（36px）。再宽就只是两边的空白。
+ */
+const WINDOW_CSS_WIDTH = 800
+const WINDOW_HEIGHT = 820
+
 interface MarkdownWindowDeps {
   getThemeBgColor: () => string
+  /** 用户的 UI 缩放（zoomFactor）：页面按它缩放，窗口宽度也得跟着换算 */
+  getZoomFactor: () => number
   /** 由 main-entry 注入 ElectronFrontend 工厂：service 层不反向依赖 frontend-impl */
   createFrontend: (window: BrowserWindow, id: string) => ChatFrontend
 }
@@ -93,8 +103,8 @@ export function openMarkdownFile(filePath: string): boolean {
   const offset = windows.size * CASCADE_STEP
   const anchor = BrowserWindow.getFocusedWindow()?.getBounds()
   const win = new BrowserWindow({
-    width: 960,
-    height: 820,
+    width: Math.round(WINDOW_CSS_WIDTH * deps.getZoomFactor()),
+    height: WINDOW_HEIGHT,
     ...(anchor ? { x: anchor.x + CASCADE_STEP + offset, y: anchor.y + CASCADE_STEP + offset } : {}),
     minWidth: 480,
     minHeight: 400,
@@ -107,8 +117,8 @@ export function openMarkdownFile(filePath: string): boolean {
       contextIsolation: true
     }
   })
-  // 标题栏的文件代理图标（⌘ 点标题看路径、拖出文件）
-  if (process.platform === 'darwin') win.setRepresentedFilename(path)
+  // 刻意不 setRepresentedFilename：它在标题栏放一个文件代理图标，而 md 的文档图标就是 ShuviX 的
+  // 应用图标（electron-builder 给文档类型填的 CFBundleTypeIconFile）—— 标题栏只留文件名
   // 与主窗口同样的守卫：正文里的链接点开走系统浏览器，而不是把这个窗口带去外站
   guardAppWindow(win)
 

@@ -22,7 +22,7 @@
  *   MW-3  开窗的全部接线（create 的两个参数、窗口选项、守卫、前端绑定、loadFile 的 hash）
  *   MW-4  文件名 `a b#c&d%e 中.md` 经 hash 的 URLSearchParams 原样读回
  *   MW-5  开发态（is.dev + ELECTRON_RENDERER_URL）→ loadURL(url#hash)，不 loadFile
- *   MW-6  setRepresentedFilename 只在 darwin
+ *   MW-6  任何平台都不 setRepresentedFilename（标题栏的代理图标就是 ShuviX 的应用图标，不要它）
  *   MW-7  page-title-updated → preventDefault；ready-to-show → show + focus（之前不显示）
  *   MW-8  经符号链接 / dir/../a.md /（大小写不敏感的盘上）大小写变体再开 → 只建一次会话、仍一个窗口；
  *         最小化的窗口被还原、显示、聚焦；回 true
@@ -228,6 +228,7 @@ afterEach(() => {
 function init(): void {
   service.initMarkdownWindowService({
     getThemeBgColor: () => '#101010',
+    getZoomFactor: () => 1.25,
     createFrontend: (window, id) => {
       const frontend = { id, window } as FakeFrontend
       frontends.push(frontend)
@@ -314,7 +315,13 @@ describe('MW-3 ~ MW-7 开窗', () => {
     const sid = fx.create.mock.results[0].value.id as string
 
     const win = onlyWindow()
-    expect(win.options).toMatchObject({ title: 'a.md', show: false, backgroundColor: '#101010' })
+    // 宽度 = 800 CSS 像素 × UI 缩放（1.25）
+    expect(win.options).toMatchObject({
+      title: 'a.md',
+      show: false,
+      backgroundColor: '#101010',
+      width: 1000
+    })
     expect(win.show).not.toHaveBeenCalled()
     expect(fx.guardAppWindow.mock.calls).toEqual([[win]])
 
@@ -371,20 +378,11 @@ describe('MW-3 ~ MW-7 开窗', () => {
     expect(win.loadFile).toHaveBeenCalledTimes(1)
   })
 
-  it.each([
-    ['darwin', true],
-    ['linux', false],
-    ['win32', false]
-  ])('MW-6 %s：setRepresentedFilename %s', (platform, expected) => {
+  it.each(['darwin', 'linux', 'win32'])('MW-6 %s：不 setRepresentedFilename', (platform) => {
     stubPlatform(platform)
     init()
     service.openMarkdownFile(join(rawRoot, 'dir', 'a.md'))
-    const win = onlyWindow()
-    if (expected) {
-      expect(win.setRepresentedFilename.mock.calls).toEqual([[join(realRoot, 'dir', 'a.md')]])
-    } else {
-      expect(win.setRepresentedFilename).not.toHaveBeenCalled()
-    }
+    expect(onlyWindow().setRepresentedFilename).not.toHaveBeenCalled()
   })
 
   it('MW-7 page-title-updated → preventDefault；ready-to-show → show + focus', () => {

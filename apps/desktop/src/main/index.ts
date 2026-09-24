@@ -441,6 +441,7 @@ function initSharedWindowServices(): void {
   // 从系统打开的 md 窗口：每个窗口一条内存会话，前端按窗口单独绑定（id 各不相同）
   initMarkdownWindowService({
     getThemeBgColor,
+    getZoomFactor: getStartupZoomFactor,
     createFrontend: (window, id) => new ElectronFrontend(window, id)
   })
 }
