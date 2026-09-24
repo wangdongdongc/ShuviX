@@ -401,7 +401,7 @@ describe.skipIf(!POSIX)('chrome 桌面接线 —— 新站点先问（ask-on-new
     expect(s.asks).toHaveLength(2)
   })
 
-  it('CS-6 免询问开着 → 不问，照做（session-auto-allow 压过 ask-on-new-site）', async () => {
+  it('CS-6 免询问开着 → 不问，照做（session-grants 压过 ask-on-new-site）', async () => {
     gate.autoAllow = true
     const s = await open()
     s.backend.urls['6'] = PAGE

@@ -7,8 +7,8 @@
  *   vars.grantedWrite  string[]  allowList 里的 Write(...) 路径
  *
  * 为什么会话授权走 vars 而不是像从前那样在 assemble 里编译成原生谓词：
- * 授权的**逻辑**（写授权隐含读、路径段边界匹配）现在由内置的 session-path-grants /
- * session-auto-allow 两份策略 md 用 `effect: force-allow` 表达，用户可覆盖可移除；
+ * 授权的**逻辑**（写授权隐含读、路径段边界匹配）现在由内置的 session-grants 策略 md
+ * 用 `effect: force-allow` 表达，用户可覆盖可移除；
  * 授权的**数据**（哪些路径）仍是运行时值，经 vars 以数据绑定进入求值上下文。
  * 注入安全性没有退化：md 里的表达式是固定文本（`inDir(object.path, vars.grantedWrite)`），
  * 路径从不拼进 CEL 源码 —— 这正是从前坚持用原生谓词想守住的性质。

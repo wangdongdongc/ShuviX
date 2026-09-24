@@ -67,7 +67,7 @@ const gate = vi.hoisted(() => ({
   grants: [] as Array<{ mode: unknown; path: unknown }>,
   /** 这条会话的用户策略；空 = 只有内置那套 */
   policies: [] as unknown[],
-  /** 免询问开关（session-auto-allow 的 force-allow） */
+  /** 免询问开关（session-grants 的 force-allow） */
   autoAllow: false
 }))
 

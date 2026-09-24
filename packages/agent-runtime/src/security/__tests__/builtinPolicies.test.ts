@@ -59,12 +59,12 @@ const byName = (name: string): ParsedPolicyFile => {
 }
 
 describe('buildBuiltinPolicies', () => {
-  it('BP-1 不 throw；恰 15 份；名字与 SPECS 一致且互异', () => {
+  it('BP-1 不 throw；恰 12 份；名字与 SPECS 一致且互异', () => {
     expect(() => buildBuiltinPolicies({ readMd: INLINE_POLICY_MD })).not.toThrow()
     const policies = buildBuiltinPolicies({ readMd: INLINE_POLICY_MD })
-    expect(policies).toHaveLength(15)
+    expect(policies).toHaveLength(12)
     expect(policies.map((p) => p.name)).toEqual(BUILTIN_POLICY_SPECS.map((s) => s.name))
-    expect(new Set(policies.map((p) => p.name)).size).toBe(15)
+    expect(new Set(policies.map((p) => p.name)).size).toBe(12)
   })
 
   it('BP-1b 每份语言文件都声明 shuvix-builtin: true（新增内置策略漏写即红）', () => {
@@ -76,7 +76,7 @@ describe('buildBuiltinPolicies', () => {
   })
 
   it('BP-2 不变式：内置策略不含静态 allow 规则（无策略即放行，无需内置豁免）', () => {
-    // force-allow 不在此列且**必须**不在：出厂的 session-auto-allow / session-path-grants
+    // force-allow 不在此列且**必须**不在：出厂的 session-grants
     // 正是用它表达会话授权。要挡的是静态 allow —— 它只会白占一层 static-allow，
     // 既压不过询问门，又让"没有策略就是放行"这条默认语义多出一个等价的替身。
     for (const policy of buildBuiltinPolicies({ readMd: INLINE_POLICY_MD })) {
@@ -102,7 +102,7 @@ describe('buildBuiltinPolicies', () => {
       for (const rule of policy.rules) {
         const effective = mergeConditions(policy.scope, rule.conditions)
         // 不碰 object 属性的规则无需类型守卫 —— strict 只在跨 type 误引用时报错。
-        // session-auto-allow 的 match 只看 vars.autoAllow，故意跨所有客体类型生效。
+        // session-grants#0（免询问）的 match 只看 vars.autoAllow，故意跨所有客体类型生效。
         if (!rule.match?.includes('object.')) continue
         expect(
           effective?.['object.type'],
@@ -296,24 +296,25 @@ describe('buildBuiltinPolicies', () => {
     }
   })
 
-  it('BP-3e protect-builtin-knowledge：deny × write × path × 内置库目录，desktop 限定（恰一条规则）', () => {
-    const policy = byName('protect-builtin-knowledge')
-    expect(policy.rules).toHaveLength(1)
-    expect(policy.scope).toEqual({
-      'subject.kind': ['agent'],
-      'object.type': ['path'],
-      'env.host': ['desktop']
-    })
-    // 整条规则逐字段钉死。deny 而不是 protect-bot-files 那样的 force-ask：内置库在应用包里、
-    // 随更新整体替换，写进去的东西下个版本就没了 —— 没有「用户点一下就该放行」的分支可给。
-    // 目录本身绝不拼进 CEL 源码，恒经宿主的 vars.builtinKnowledgeDir 以数据绑定进来
-    expect(withoutPrompt(policy.rules[0])).toEqual({
-      effect: 'deny',
-      conditions: { action: ['write'] },
-      match: 'inDir(object.path, [vars.builtinKnowledgeDir])'
-    })
-    expect(policy.rules[0].prompt).toBeTruthy()
-    // 无 lets：只守一个目录，清单化只会多一层（对照 protect-system 的 systemDirs）
+  it('BP-3e session-grants：三条 force-allow —— #0 免询问跨所有客体，#1 / #2 是路径授权的读 / 写', () => {
+    const policy = byName('session-grants')
+    // scope 只放主体：#0 本就跨所有客体类型（BP-2c 放过它的理由），路径两条各自在规则上收窄
+    expect(policy.scope).toEqual({ 'subject.kind': ['agent'] })
+    expect(policy.rules.map(withoutPrompt)).toEqual([
+      { effect: 'force-allow', match: 'vars.autoAllow' },
+      {
+        effect: 'force-allow',
+        conditions: { 'object.type': ['path'], action: ['read'] },
+        // 写授权隐含读：读规则两份清单都认
+        match: 'inDir(object.path, vars.grantedRead) || inDir(object.path, vars.grantedWrite)'
+      },
+      {
+        effect: 'force-allow',
+        conditions: { 'object.type': ['path'], action: ['write'] },
+        match: 'inDir(object.path, vars.grantedWrite)'
+      }
+    ])
+    // 无 env.host：会话授权两端同待遇
     expect(policy.lets).toBeUndefined()
   })
 
@@ -556,7 +557,7 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
    * 仅内置策略的完整装配 + 统一评估。
    *
    * vars 必须走 buildPolicyVars（生产路径 context.ts 同款）：直接用 provider.getVars()
-   * 会缺 autoAllow/grantedRead/grantedWrite，strict 语义下 session-* 两份策略的 match
+   * 会缺 autoAllow/grantedRead/grantedWrite，strict 语义下 session-grants 各条规则的 match
    * 报错走 fail-safe —— force-allow 规则视为不命中（方向安全），但每次评估都刷告警。
    */
   function decide(action: string, object: SecurityObject, opts: DecideOpts = {}): SecurityDecision {
@@ -886,7 +887,7 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
     })
     const decision = decide('write', { type: 'path', path: '/ws/f.txt' }, { provider })
     expect(decision.effect).toBe('allow')
-    expect(decision.winning).toBe('session-auto-allow#0')
+    expect(decision.winning).toBe('session-grants#0')
     expect(decision.prompt).toBeUndefined()
   })
 
@@ -966,7 +967,7 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
     expect(decision.matched).toContain('ask-on-write#0')
   })
 
-  it('BP-B2 免询问开着照样 ask —— force-ask 压过 session-auto-allow 的 force-allow', () => {
+  it('BP-B2 免询问开着照样 ask —— force-ask 压过 session-grants 的 force-allow', () => {
     // 这是这份策略存在的**全部理由**：bot 会话的根 Agent 在回答你的半途就地改这份文件、没人
     // 看着，而一次整份重写既可能悄悄丢掉半份记忆，也可能改写人设本身。对照组是同一开关下的普通写
     const provider = autoAllowProvider()
@@ -977,7 +978,7 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
   })
 
   it('BP-B3 「允许并记住」也压不过：授权了整个 bots 目录仍然 ask', () => {
-    // session-path-grants 与 session-auto-allow 同为 force-allow 层，而这道门在它之上。
+    // 路径授权与免询问同为 session-grants 的 force-allow 层，而这道门在它之上。
     // 少了这条，用户在第一张卡上点一次「允许并记住」就等于永久关掉了这道门
     const provider = makeProvider({
       getSessionGrants: () => ({
@@ -1092,141 +1093,35 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
     })
   })
 
-  // ── protect-builtin-knowledge：随应用发布的内置知识库的只读门 ──────────────────
+  // ── 内置知识库：读免询问，写没有专门的门 ──────────────────────────────────────────
   //
-  // 它守的是**应用包里的那份参考**（桌面 getBuiltinKnowledgeDir()）：ShuviX 自己的
-  // agent / bot / policy / hook 文件、知识条目与 skill 怎么写。与 protect-bot-files 同形
-  // （deny×write×path，目录经一个 vars 供给），但档位不同 —— 那道是 force-ask（写 bot 文件
-  // 是正当需求，只是不该没人看着），这道是 deny：写进应用包的东西下个版本随整包替换消失，
-  // 在 macOS 上还会让签名对不上，没有「用户点一下就该放行」的分支可给。
-  // knowledge 工具已经拒绝在那里 create，这一组钉的是剩下那条路 —— 拿工具印出来的绝对路径
-  // 直接 write / edit —— 被堵死的形状：谁撞、谁不撞、免询问与「允许并记住」能不能盖过。
+  // 随应用包发布的目录刻意不设拒写策略（裁决见 builtinPolicies/index.ts 头注释）：写进去与
+  // 写别处同待遇 —— 走 ask-on-write，免询问能免；读则由 ask-on-read 连同 skills / 工具结果
+  // 一起豁免，查一次说明书就弹一张卡片的话，agent 就会学会不查。
 
-  const builtinKnowledgeDir = DESKTOP_VARS.builtinKnowledgeDir as string
-  const builtinKnowledgeFile = (
-    path = `${builtinKnowledgeDir}/shuvix-formats/agent-md.md`
-  ): SecurityObject => ({ type: 'path', path })
-
-  it('BP-K1 agent 写内置知识库 → deny，归因 protect-builtin-knowledge#0', () => {
-    const decision = decide('write', builtinKnowledgeFile())
-    expect(decision.effect).toBe('deny')
-    expect(decision.winning).toBe('protect-builtin-knowledge#0')
-    // ask-on-write 同样命中（任意写都问），但 deny 档在它之上 —— 归因与文案都只认这一条
-    expect(decision.matched).toEqual(['protect-builtin-knowledge#0', 'ask-on-write#0'])
-    // 拒绝文案取自 md：deny 的 prompt 是拼进抛出错误、给模型读的那段（enforce.ts），
-    // 它得讲清楚「这是内置库、去写用户自己的库」，而不是泛泛一句「有人要写文件」
-    expect(decision.prompt).toEqual({
-      text: promptOf('protect-builtin-knowledge', 0),
-      rules: ['protect-builtin-knowledge#0'],
-      policies: [displayNameOf('protect-builtin-knowledge')]
-    })
-  })
-
-  it('BP-K2 免询问开着照样 deny —— deny 压过 session-auto-allow 的 force-allow', () => {
-    const provider = autoAllowProvider()
-    const guarded = decide('write', builtinKnowledgeFile(), { provider })
-    expect(guarded.effect).toBe('deny')
-    expect(guarded.winning).toBe('protect-builtin-knowledge#0')
-    // 对照：同一开关下工作区里的普通写是放行的 —— 免询问本身没坏，只是盖不住这一道
-    const ordinary = decide('write', { type: 'path', path: '/ws/f.txt' }, { provider })
-    expect(ordinary.effect).toBe('allow')
-    expect(ordinary.winning).toBe('session-auto-allow#0')
-  })
-
-  it('BP-K3 「允许并记住」也压不过：授权整个内置库目录仍然 deny，且决策里没有可记住的选项', () => {
-    const provider = makeProvider({
-      getSessionGrants: () => ({
-        autoAllow: false,
-        allowList: [`Write(${builtinKnowledgeDir})`]
-      })
-    })
-    const decision = decide('write', builtinKnowledgeFile(), { provider })
-    expect(decision.effect).toBe('deny')
-    expect(decision.winning).toBe('protect-builtin-knowledge#0')
-    // 比 protect-bot-files 的 BP-B4 更进一步：force-ask 只是不给 rememberEntry，deny 连询问
-    // 材料都没有（buildAskMaterials 只在 effect==='ask' 时构建）—— 压根没有那张卡可点
-    expect(decision.ask).toBeUndefined()
-    expect(decision.ask?.rememberEntry).toBeUndefined()
-    // 对照：同一份授权下别处的普通写照样是 ask，且照给「允许并记住」
-    const ordinary = decide('write', { type: 'path', path: '/Users/u/doc.txt' }, { provider })
-    expect(ordinary.effect).toBe('ask')
-    expect(ordinary.ask?.rememberEntry).toBeTruthy()
-  })
-
-  it('BP-K4 edit 与 write 同待遇（判定不看工具名）；read 不归它管', () => {
-    // 文件工具的安全动作只有 AccessMode 的 read / write —— edit 工具的 PEP 同样是
-    // enforcePath('write', …)（fileToolSuite 的 securityCheck / makeAsk）。所以「edit 同待遇」
-    // 在这一层的形状是「同一个 write 动作、换哪个工具名都 deny」，规则不点名 tool.name；
-    // 不存在另一个叫 'edit' 的动作需要策略再兜一条
-    for (const name of ['write', 'edit']) {
-      const decision = decide('write', builtinKnowledgeFile(), { tool: { name } })
-      expect({ name, effect: decision.effect }).toEqual({ name, effect: 'deny' })
-      expect(decision.winning, name).toBe('protect-builtin-knowledge#0')
+  it('BP-K1 内置知识库：读放行且零命中；写与普通区外写同待遇（ask-on-write，给记住，免询问能免）', () => {
+    const builtinKnowledgeDir = DESKTOP_VARS.builtinKnowledgeDir as string
+    const file: SecurityObject = {
+      type: 'path',
+      path: `${builtinKnowledgeDir}/shuvix-formats/agent-md.md`
     }
 
-    // 读一个字都不管 —— 读这个库正是它存在的意义，所以两道门都不拦：protect-builtin-knowledge 只管写，
-    // ask-on-read 把它连同 skills / 工具结果一起豁免（同一类东西：随应用发布的只读参考资料）。
-    // 查一次说明书就弹一张卡片的话，agent 就会学会不查
-    const read = decide('read', builtinKnowledgeFile())
+    const read = decide('read', file)
     expect(read.effect).toBe('allow')
     expect(read.matched).toEqual([])
     // 对照：同样在工作区外、但不在豁免清单里的路径照样 ask —— 豁免的是这个目录，不是「读」这件事
-    const outside = decide('read', { type: 'path', path: '/elsewhere/notes.md' })
-    expect(outside.effect).toBe('ask')
-    expect(outside.winning).toBe('ask-on-read#0')
-  })
+    expect(decide('read', { type: 'path', path: '/elsewhere/notes.md' }).winning).toBe(
+      'ask-on-read#0'
+    )
 
-  it('BP-K5 前缀边界：库内与任意深子目录命中，同前缀的兄弟目录不命中', () => {
-    // `inDir` 就是 allowList 那个 matchesPathEntry（按路径段而不是按字符串前缀），
-    // 所以 `knowledge-extra` 不是 `knowledge` 的里面 —— 这条守的是那个 `+ sep`
-    const table: Array<[string, boolean]> = [
-      [`${builtinKnowledgeDir}/shuvix-formats/agent-md.md`, true],
-      [`${builtinKnowledgeDir}/a/b/c/deep.md`, true],
-      // 目录本身（不带尾斜杠）也算在内 —— matchesPathEntry 的等值分支
-      [builtinKnowledgeDir, true],
-      [`${builtinKnowledgeDir}-extra/x.md`, false],
-      [`${builtinKnowledgeDir}.bak/x.md`, false],
-      // 末段同名但根不同：用户自己的库照 ask-on-write 走，不被这道门牵连
-      ['/ws/knowledge/x.md', false]
-    ]
-    for (const [path, guarded] of table) {
-      const decision = decide('write', builtinKnowledgeFile(path))
-      expect({ path, denied: decision.winning === 'protect-builtin-knowledge#0' }).toEqual({
-        path,
-        denied: guarded
-      })
-    }
-  })
-
-  it('BP-K6 user 主体不受约束；扩展端不命中且零告警', () => {
-    // 主体分界（BP-2b 的行为面）：用户亲手动这些文件走 user 主体，内置防护一条都不作用于它
-    const asUser = decide('write', builtinKnowledgeFile(), { subjectKind: 'user' })
-    expect(asUser.effect).toBe('allow')
-    expect(asUser.matched).toEqual([])
-
-    // scope 里的 `env.host: [desktop]` 是原生条件、排在 CEL 之前：扩展端这条规则根本不跑，
-    // 连 vars.builtinKnowledgeDir 都不会去读（这里的 getVars 刻意不给它）。于是它既不该命中，
-    // 也不该因为「宿主没供给这个变量」记一行 assemble 告警 —— 两个告警出口都钉成零调用
-    const warn = vi.fn()
-    const logWarn = vi.fn()
-    const provider = makeProvider({
-      host: 'extension',
-      getVars: () => ({
-        workspace: '',
-        toolResultsBase: '',
-        skillsDirs: [],
-        memoryDirs: [],
-        home: '',
-        systemDirs: []
-      }),
-      logger: { info: vi.fn(), warn: logWarn, error: vi.fn() }
+    const write = decide('write', file)
+    expect(write.effect).toBe('ask')
+    expect(write.matched).toEqual(['ask-on-write#0'])
+    expect(write.ask?.rememberEntry).toBeTruthy()
+    expect(decide('write', file, { provider: autoAllowProvider() })).toMatchObject({
+      effect: 'allow',
+      winning: 'session-grants#0'
     })
-    const decision = decide('write', builtinKnowledgeFile(), { provider, host: 'extension', warn })
-    expect(decision.effect).toBe('allow')
-    expect(decision.winning).toBe('default:path')
-    expect(decision.matched).not.toContain('protect-builtin-knowledge#0')
-    expect(warn).not.toHaveBeenCalled()
-    expect(logWarn).not.toHaveBeenCalled()
   })
 
   // ── 宿主没供给门引用的目录变量 ────────────────────────────────────────────────
@@ -1274,7 +1169,7 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
       // 免询问开着：普通写放行 —— 不绑的话这里会是一张免不掉的 force-ask
       const autoAllowed = decide('write', ordinaryWrite, { provider: on, warn: evalWarn })
       expect(autoAllowed.effect, label).toBe('allow')
-      expect(autoAllowed.winning, label).toBe('session-auto-allow#0')
+      expect(autoAllowed.winning, label).toBe('session-grants#0')
 
       // 接受的代价：门没有目录可守，bot 文件本身的写也跟着放行
       expect(decide('write', botFile(), { provider: on, warn: evalWarn }).effect, label).toBe(
@@ -1291,98 +1186,26 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
     }
   })
 
-  it('BP-K7 桌面宿主没供给 builtinKnowledgeDir（缺键 / undefined / 空串）：门失效，而不是变成「每次写都 deny」', () => {
-    // 同 BP-B11 的三变体表，档位换成 deny —— 代价的方向更要紧：缺键报错被 fail-safe 当成命中，
-    // 一条只守一个目录的 deny 就成了对**每一次**写的 deny，而 deny 是谁都盖不过的那一档
-    const { builtinKnowledgeDir: _builtinKnowledgeDir, ...withoutBuiltinDir } = DESKTOP_VARS
-    const variants: Array<[string, Record<string, PolicyVarValue>, number]> = [
-      ['缺键', withoutBuiltinDir, 1],
-      [
-        'undefined',
-        {
-          ...withoutBuiltinDir,
-          builtinKnowledgeDir: undefined
-        } as unknown as Record<string, PolicyVarValue>,
-        1
-      ],
-      // 空串是宿主明说「没有这个目录」（扩展端就这么供给）：inDir 恒不命中，无须绑定也无须告警
-      ['空串', { ...withoutBuiltinDir, builtinKnowledgeDir: '' }, 0]
-    ]
-
-    for (const [label, vars, expectedLines] of variants) {
-      // 一个变体一个 logger，贯穿开 / 关两个 provider 的全部判定（去重按 logger 键控）
-      const logWarn = vi.fn()
-      const evalWarn = vi.fn()
-      const logger = { info: vi.fn(), warn: logWarn, error: vi.fn() }
-      const off = makeProvider({ getVars: () => vars, logger })
-      const on = makeProvider({
-        getVars: () => vars,
-        logger,
-        getSessionGrants: () => ({ autoAllow: true, allowList: [] })
-      })
-      const ordinaryWrite: SecurityObject = { type: 'path', path: '/ws/f.txt' }
-
-      // 普通写照旧：免询问关着落回 ask-on-write，开着放行 —— 不绑的话这里会是一条免不掉的 deny
-      const asked = decide('write', ordinaryWrite, { provider: off, warn: evalWarn })
-      expect(asked.effect, label).toBe('ask')
-      expect(asked.winning, label).toBe('ask-on-write#0')
-      expect(asked.matched, label).not.toContain('protect-builtin-knowledge#0')
-
-      const autoAllowed = decide('write', ordinaryWrite, { provider: on, warn: evalWarn })
-      expect(autoAllowed.effect, label).toBe('allow')
-      expect(autoAllowed.winning, label).toBe('session-auto-allow#0')
-
-      // 接受的代价：门没有目录可守，内置库自己的写也跟着落回普通写的待遇
-      const guarded = decide('write', builtinKnowledgeFile(), { provider: off, warn: evalWarn })
-      expect(guarded.effect, label).toBe('ask')
-      expect(guarded.winning, label).toBe('ask-on-write#0')
-      expect(
-        decide('write', builtinKnowledgeFile(), { provider: on, warn: evalWarn }).effect,
-        label
-      ).toBe('allow')
-
-      expect(evalWarn, label).not.toHaveBeenCalled()
-      const lines = logWarn.mock.calls.map((c) => String(c[0]))
-      expect(lines, label).toHaveLength(expectedLines)
-      for (const line of lines) {
-        expect(line, label).toContain("'protect-builtin-knowledge'")
-        expect(line, label).toContain('vars.builtinKnowledgeDir')
-      }
-    }
-  })
-
-  it('BP-N12 其他把变量交给 inDir 的内置门缺了那个变量：正向的门失效、取反的豁免失效（多问），各记一行', () => {
-    // memoryDirs 被两份内置引用：review-memory-writes（force-ask，正向）与 ask-on-read（ask，取反豁免）
+  it('BP-N12 把变量交给取反 inDir 的豁免缺了那个变量：豁免失效（多问），各记一行', () => {
+    // memoryDirs 只被 ask-on-read 引用（ask，取反豁免）→ 读记忆的豁免没了，当作区外读照问
     const { memoryDirs: _memoryDirs, ...withoutMemoryDirs } = DESKTOP_VARS
     const memoryLogWarn = vi.fn()
     const memoryEvalWarn = vi.fn()
-    const memoryLogger = { info: vi.fn(), warn: memoryLogWarn, error: vi.fn() }
-    const memoryOn = makeProvider({
+    const memoryOff = makeProvider({
       getVars: () => withoutMemoryDirs,
-      logger: memoryLogger,
-      getSessionGrants: () => ({ autoAllow: true, allowList: [] })
+      logger: { info: vi.fn(), warn: memoryLogWarn, error: vi.fn() }
     })
-    const memoryOff = makeProvider({ getVars: () => withoutMemoryDirs, logger: memoryLogger })
     const memoryFile: SecurityObject = { type: 'path', path: '/memory/m.md' }
 
-    // 正向：记忆写的 force-ask 没有目录可守 → 免询问开着即放行
-    expect(decide('write', memoryFile, { provider: memoryOn, warn: memoryEvalWarn }).effect).toBe(
-      'allow'
-    )
-    // 取反：读记忆的豁免没了 → 当作区外读照问
     const memoryRead = decide('read', memoryFile, { provider: memoryOff, warn: memoryEvalWarn })
     expect(memoryRead.effect).toBe('ask')
     expect(memoryRead.winning).toBe('ask-on-read#0')
 
     expect(memoryEvalWarn).not.toHaveBeenCalled()
     const memoryLines = memoryLogWarn.mock.calls.map((c) => String(c[0]))
-    expect(memoryLines).toHaveLength(2)
-    for (const policy of ['review-memory-writes', 'ask-on-read']) {
-      expect(
-        memoryLines.filter((m) => m.includes(`'${policy}'`) && m.includes('vars.memoryDirs')),
-        policy
-      ).toHaveLength(1)
-    }
+    expect(memoryLines).toHaveLength(1)
+    expect(memoryLines[0]).toContain("'ask-on-read'")
+    expect(memoryLines[0]).toContain('vars.memoryDirs')
 
     // workspace 只被 ask-on-read 引用（取反）→ 工作区内的读也问；其余豁免照常
     const { workspace: _workspace, ...withoutWorkspace } = DESKTOP_VARS
@@ -1475,13 +1298,13 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
     }
   )
 
-  it('BP-S3 免询问开着 → 放行，归因 session-auto-allow#0，不带话', () => {
+  it('BP-S3 免询问开着 → 放行，归因 session-grants#0，不带话', () => {
     const provider = makeProvider({
       getSessionGrants: () => ({ autoAllow: true, allowList: [] })
     })
     const decision = decide('navigate', urlObject('https://a.example/'), { provider })
     expect(decision.effect).toBe('allow')
-    expect(decision.winning).toBe('session-auto-allow#0')
+    expect(decision.winning).toBe('session-grants#0')
     expect(decision.prompt).toBeUndefined()
   })
 

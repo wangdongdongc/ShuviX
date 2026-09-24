@@ -172,7 +172,7 @@ scope と交差して空になる規則；不正な `lets`（不正な名前、�
 
 ## 組み込みポリシー
 
-アプリケーションに十四本同梱（UI 言語ごとに一つ；**規則は常に英語ファイルから取られ**、翻訳は人が読む
+アプリケーションに十二本同梱（UI 言語ごとに一つ；**規則は常に英語ファイルから取られ**、翻訳は人が読む
 テキストだけを変える）：
 
 | 名前                            | ゲート                                                                                                       |
@@ -181,17 +181,14 @@ scope と交差して空になる規則；不正な `lets`（不正な名前、�
 | `protect-system`                | OS ディレクトリへの書き込みを拒否                                                                             |
 | `block-catastrophic-commands`   | マシンを破壊する少数のコマンドを、解析された構造で判断して拒否（`rm -rf /`、`mkfs`、デバイスへの `dd`……）     |
 | `protect-bot-files`             | `~/.shuvix/bots` 配下のあらゆる書き込みを **force-ask**                                                       |
-| `protect-builtin-knowledge`     | ShuviX の組み込みナレッジベースへの書き込みを拒否                                                             |
 | `ask-on-read`                   | ワークスペース、ツール結果、skill ディレクトリ、本リファレンスの外の読み取りを確認                            |
 | `ask-on-write`                  | すべてのファイル書き込みを diff プレビュー付きで確認                                                          |
-| `review-memory-writes`          | 旧記憶ストアへの書き込みを force-ask                                                                          |
 | `ask-on-command`                | すべての `bash` / `ssh` コマンドを確認                                                                        |
 | `git-safety`                    | 破壊的な git 操作を確認（`init`、`restore`、強制 checkout、ブランチ削除）                                     |
 | `ask-on-database`               | 書き込み可能なデータベース接続上のすべての文を確認                                                            |
 | `ask-on-sub-session`            | サブセッションを開くときに一度確認（`tool.name == 'session' && tool.operation == 'create-sub-session'`）       |
 | `ask-on-new-site`               | あなた自身の Chrome（ShuviX サイドパネル）で、会話が初めてあるサイトを開く・操作するときに確認（`object.browser == 'chrome'`） |
-| `session-auto-allow`            | セッションの自動許可スイッチがオンの間、すべてを `force-allow`                                                |
-| `session-path-grants`           | ユーザーが「許可して記憶」と答えたパス配下の読み書きを `force-allow`                                          |
+| `session-grants`                | セッションの自動許可スイッチがオンの間はすべてを、ユーザーが「許可して記憶」と答えたパス配下の読み書きを `force-allow` |
 
 設定 → ポリシーは各ポリシーとその規則を表示します。「上書きコピーを作成」は現在のテキストを
 `~/.shuvix/policies/<name>.md` に書き出します。

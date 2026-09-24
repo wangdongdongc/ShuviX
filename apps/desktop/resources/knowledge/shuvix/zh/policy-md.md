@@ -163,7 +163,7 @@ YAML 语法错 / 不是映射；裸的 `rules` / `lets` / `scope` 键；`shuvix-
 
 ## 内置策略
 
-随应用发布十四份（按界面语言一份；**规则恒取英文文件**，翻译只改人读的文字）：
+随应用发布十二份（按界面语言一份；**规则恒取英文文件**，翻译只改人读的文字）：
 
 | 名字                            | 门                                                                                                           |
 | ------------------------------- | ------------------------------------------------------------------------------------------------------------ |
@@ -171,17 +171,14 @@ YAML 语法错 / 不是映射；裸的 `rules` / `lets` / `scope` 键；`shuvix-
 | `protect-system`                | 拒绝写操作系统目录                                                                                            |
 | `block-catastrophic-commands`   | 拒绝一小撮毁灭整机的命令，按解析结构判（`rm -rf /`、`mkfs`、`dd` 到设备……）                                    |
 | `protect-bot-files`             | `~/.shuvix/bots` 下任何写入 **force-ask**                                                                     |
-| `protect-builtin-knowledge`     | 拒绝写入 ShuviX 的内置知识库                                                                                  |
 | `ask-on-read`                   | 在工作区、工具结果、skill 目录与本说明书之外的读取询问                                                        |
 | `ask-on-write`                  | 每次文件写入询问，带 diff 预览                                                                                |
-| `review-memory-writes`          | 写旧记忆存储 force-ask                                                                                        |
 | `ask-on-command`                | 每条 `bash` / `ssh` 命令询问                                                                                  |
 | `git-safety`                    | 危险的 git 操作询问（`init`、`restore`、强制 checkout、删分支）                                               |
 | `ask-on-database`               | 可写数据库连接上的每条语句询问                                                                                |
 | `ask-on-sub-session`            | 开子会话时询问一次（`tool.name == 'session' && tool.operation == 'create-sub-session'`）                        |
 | `ask-on-new-site`               | 在你自己的 Chrome 里（ShuviX 侧边栏），一场对话第一次打开或操作某个站点时询问（`object.browser == 'chrome'`） |
-| `session-auto-allow`            | 会话的免询问开关打开时 `force-allow` 一切                                                                     |
-| `session-path-grants`           | 用户答过「允许并记住」的路径下的读 / 写 `force-allow`                                                          |
+| `session-grants`                | 会话的免询问开关打开时 `force-allow` 一切；用户答过「允许并记住」的路径下的读 / 写 `force-allow`               |
 
 设置 → 策略逐份显示其规则；「创建覆盖副本」把当前文本写到 `~/.shuvix/policies/<name>.md`。
 

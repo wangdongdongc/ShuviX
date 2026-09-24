@@ -22,6 +22,6 @@ has write access, it asks you statement by statement.
 - Read-only connections are not gated: the database itself refuses writes.
 - It does not tell reads from writes: this policy does not analyze the SQL.
 - Once you turn the auto-allow switch on, another builtin policy —
-  session-auto-allow — takes over and skips the ask.
+  session-grants — takes over and skips the ask.
 
 **To adjust**: create an override copy and edit it.

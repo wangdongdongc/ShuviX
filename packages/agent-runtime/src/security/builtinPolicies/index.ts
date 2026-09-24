@@ -8,10 +8,9 @@
  * 原则：无策略 = 放行（evaluate 默认 allow）。出厂防护全部在此以策略表达 ——
  * protect-credentials（凭据写 deny + 读 ask）/ protect-system（系统目录写 deny，
  * 原 pathSafety hook 的策略化替身）/ block-catastrophic-commands（毁灭整机的
- * 少数命令写法直接 deny，原 bash-audit 内置 hook 的策略化替身）/ ask-on-read（工作区外读取门）/
- * ask-on-write（写入询问门）/ review-memory-writes（记忆写入 force-ask —— 免询问也照问）/
- * ask-on-command（命令询问门）/ protect-builtin-knowledge（随应用发布的内置知识库写 deny ——
- * 它在应用包里，写了会随更新消失、在 macOS 上还会破坏签名）/ git-safety
+ * 少数命令写法直接 deny，原 bash-audit 内置 hook 的策略化替身）/ protect-bot-files
+ * （bot 文件写 force-ask —— 免询问也照问）/ ask-on-read（工作区外读取门）/
+ * ask-on-write（写入询问门）/ ask-on-command（命令询问门）/ git-safety
  * （git 危险操作门，含 checkout&&force / branch&&delete 的参数级细化）/
  * ask-on-database（可写数据库连接的逐条查询询问）/ ask-on-sub-session（开子会话前询问 ——
  * 唯一一条走 L1 全工具门的内置策略：客体是 {type:'invocation'}，判据落在工具维度
@@ -20,10 +19,18 @@
  * 第一次用一个站点前询问 —— 客体是 {type:'url'}，只管 browser 为 chrome 的那一种）——
  * 用户同名覆盖（含空 rules 的"清空"覆盖）即可放宽或移除任何一道门。
  *
- * 出厂内容**不只有防护**：session-auto-allow 与 session-path-grants 用
- * `effect: force-allow` 表达会话授权（免询问开关 / 「允许并记住」）。它们曾是引擎里写死的
+ * 随应用包发布的目录（内置知识库 / skills / agent 档案）**刻意没有**拒写策略：它们本就
+ * 不和用户的日常文件在一起，真要改就让它改，版本更新会还原；而一条拒写在开发态会把仓库
+ * 源码目录一起锁上（用 ShuviX 开发 ShuviX 时 agent 改不了它们）。只读语义由 UI 与工具
+ * 自己承担（只读笔记本、knowledge 工具对内置库拒绝 create）。旧记忆库同理不再单设
+ * force-ask：它已只读、没有任何写入路径，偶发的写照常落到 ask-on-write。
+ *
+ * 出厂内容**不只有防护**：session-grants 用 `effect: force-allow` 表达会话授权 ——
+ * 规则 #0 是免询问开关，#1 / #2 是「允许并记住」的路径读 / 写。它们曾是引擎里写死的
  * 第四层规则来源，下沉成 md 后同样可见、可覆盖、可移除；授权条目本身仍是会话数据，
  * 经 vars.autoAllow / vars.grantedRead / vars.grantedWrite 进来（见 policyVars.ts）。
+ * 两种粒度合在一份里，因为它们是同一件事（用户在本会话给出的同意）的两个尺寸，
+ * 不存在只想关掉其中一种的理由。
  *
  * 全部规则的 subject.kind 恒为 [agent]（守护测试钉死）：防护与授权都只作用于智能体，
  * 用户主体（UI 亲手操作）不受内置策略约束 —— 多主体模型见 types.ts SecuritySubject。
@@ -37,13 +44,14 @@
  * 而不是静默改变安全语义）。prompt 破这个例是因为它本就是给人读的一句话，
  * 留在 en 等于让中/日用户在询问卡片上读英文。
  *
- * **书写约定**（引擎不强制，仅约束这十四份范本）：规则的 `prompt` 按投递面分口吻 ——
+ * **书写约定**（引擎不强制，仅约束这十二份范本）：规则的 `prompt` 按投递面分口吻 ——
  * ask 门写给用户（这一步的风险），deny 门写给 agent（被拒的原因与替代路径），
  * force-allow 规则不投递、只在策略页当说明；`shuvix-policy-scope` 放
  * subject.kind / object.type / env.host（这份策略管什么），规则放 effect / action /
  * match（在这个范围内怎么判）。各份形状一致 —— 用户照抄时不必先挑该学哪一份。
- * （session-auto-allow 的 scope 只有 subject.kind：它本就跨所有客体类型，
- * 不写 object.type 正是"不约束"的正确表达，不是漏写。）
+ * （session-grants 是唯一的例外：scope 只有 subject.kind，因为规则 #0 本就跨所有客体
+ * 类型，不写 object.type 正是"不约束"的正确表达，不是漏写；两条路径规则各自在规则上
+ * 声明 object.type: [path]。）
  *
  * 新增一个内置策略 = 三份 md（en/zh/ja）+ 一个 spec 条目（不再需要 import）。
  * 用户可在 ~/.shuvix/policies/<name>.md 同名覆盖任意内置策略或新增自定义策略
@@ -66,19 +74,16 @@ export const BUILTIN_POLICY_SPECS: readonly BuiltinPolicySpec[] = [
   { name: 'protect-system' },
   { name: 'block-catastrophic-commands' },
   { name: 'protect-bot-files' },
-  { name: 'protect-builtin-knowledge' },
   { name: 'ask-on-read' },
   { name: 'ask-on-write' },
-  { name: 'review-memory-writes' },
   { name: 'ask-on-command' },
   { name: 'git-safety' },
   { name: 'ask-on-database' },
   { name: 'ask-on-sub-session' },
   { name: 'ask-on-new-site' },
-  // force-allow 层两份放最后：它们与上面的防护不在同一 tier，装配序对结算无影响，
+  // force-allow 层放最后：它与上面的防护不在同一 tier，装配序对结算无影响，
   // 但列表尾部更贴合阅读顺序（先看拦什么，再看什么情况下放行）
-  { name: 'session-auto-allow' },
-  { name: 'session-path-grants' }
+  { name: 'session-grants' }
 ]
 
 /** 语言 → 解析产物缓存（键为归一化语言码）。readMd 是进程级稳定接缝（桌面 = 随包目录，

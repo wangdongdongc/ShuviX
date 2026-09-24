@@ -28,7 +28,7 @@ you. That is worth one decision from you up front.
 - It does not gate what the sub-session then does: every tool call inside it is
   evaluated against these same policies, in that session, as usual.
 - Once you turn the auto-allow switch on, another builtin policy —
-  session-auto-allow — takes over and skips the ask.
+  session-grants — takes over and skips the ask.
 
 **To adjust**: create an override copy and edit it. Removing the rules makes
 sub-sessions open without asking.

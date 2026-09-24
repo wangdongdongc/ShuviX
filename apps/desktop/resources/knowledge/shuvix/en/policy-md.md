@@ -174,7 +174,7 @@ reads `object.*` without declaring `object.type` is accepted with a warning.
 
 ## Builtin policies
 
-Fourteen ship with the application (per UI language; **the rules are always taken from the
+Twelve ship with the application (per UI language; **the rules are always taken from the
 English file**, translations only change the text people read):
 
 | Name                            | Gate                                                                                                                  |
@@ -183,17 +183,14 @@ English file**, translations only change the text people read):
 | `protect-system`                | deny writes to operating-system directories                                                                            |
 | `block-catastrophic-commands`   | deny a short list of machine-destroying commands, judged on parsed structure (`rm -rf /`, `mkfs`, `dd` to a device…)  |
 | `protect-bot-files`             | **force-ask** on any write under `~/.shuvix/bots`                                                                      |
-| `protect-builtin-knowledge`     | deny writes into ShuviX's built-in knowledge base                                                                      |
 | `ask-on-read`                   | ask on reads outside the workspace, tool results, skill directories and this reference base                            |
 | `ask-on-write`                  | ask on every file write, with a diff preview                                                                           |
-| `review-memory-writes`          | force-ask on writes to the legacy memory store                                                                         |
 | `ask-on-command`                | ask on every `bash` / `ssh` command                                                                                    |
 | `git-safety`                    | ask on destructive git operations (`init`, `restore`, forced checkout, branch delete)                                  |
 | `ask-on-database`               | ask on every statement over a writable database connection                                                             |
 | `ask-on-sub-session`            | ask once when a sub-session is opened (`tool.name == 'session' && tool.operation == 'create-sub-session'`)             |
 | `ask-on-new-site`               | in your own Chrome (the ShuviX side panel), ask the first time a conversation opens or works on a site (`object.browser == 'chrome'`) |
-| `session-auto-allow`            | `force-allow` everything while the session's auto-allow switch is on                                                    |
-| `session-path-grants`           | `force-allow` reads / writes under paths the user answered "allow and remember" for                                    |
+| `session-grants`                | `force-allow` everything while the session's auto-allow switch is on, and reads / writes under paths the user answered "allow and remember" for |
 
 Settings → Policies shows each with its rules; "create override copy" writes the current text to
 `~/.shuvix/policies/<name>.md`.

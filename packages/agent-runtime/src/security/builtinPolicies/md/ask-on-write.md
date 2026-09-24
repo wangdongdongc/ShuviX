@@ -22,6 +22,6 @@ outside your working directory — it asks you first.
 - It gates the file tools only; if you allow it, the agent can write files by
   running commands too.
 - Once you turn the auto-allow switch on, another builtin policy —
-  session-auto-allow — takes over and skips the ask.
+  session-grants — takes over and skips the ask.
 
 **To adjust**: create an override copy and edit it.

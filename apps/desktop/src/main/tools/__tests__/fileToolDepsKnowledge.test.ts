@@ -8,9 +8,8 @@
  * 盖章与变更管线跟安全模块是两件事，这条得分开钉住。
  *
  * 第三个根是随应用发布的**内置库**（`<内置根>/<库名>/<语言>/…`，只读）：`knowledge.locate` 对它回 null，
- * 所以不盖章、不回执、不进管线（FD-6..FD-8）。**它的「写不进去」是安全策略那一道**
- * （protect-builtin-knowledge，按 `vars.builtinKnowledgeDir` 判），这里的 getVars 刻意不供给那个变量 ——
- * 写确实落盘，才看得见「盖章与管线绕开它」这半件事本身，两件事照样分开钉。
+ * 所以不盖章、不回执、不进管线（FD-6..FD-8）。它**没有**拒写策略（随包资源的统一裁决，见
+ * builtinPolicies/index.ts）：写确实落盘，只是盖章与管线都绕开它 —— 下个版本随包还原。
  */
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
@@ -265,7 +264,7 @@ describe('桌面文件工具 — 知识库根目录下的写入', () => {
 
     const res = await makeWriteTool(ctx).execute('w8', { path: p, content: DRAFT })
 
-    // 写确实落盘了（这里没有 protect-builtin-knowledge 那一道：见文件头）—— 不是「没写成」所以没盖章
+    // 写确实落盘了（内置库没有拒写策略：见文件头）—— 不是「没写成」所以没盖章
     expect(readFileSync(p, 'utf-8')).toBe(DRAFT)
     expect(textOf(res)).not.toContain('[OKF]')
     expect(state.requests).toEqual([])

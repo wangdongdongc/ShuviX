@@ -186,9 +186,7 @@ describe('桌面安全 provider — 不缓存 settings 快照', () => {
     // 会话中途打开「免询问」
     state.settings = { autoAllow: true }
     expect(effectOf(ctx, 'write', target)).toBe('allow')
-    expect(ctx.evaluate('write', { type: 'path', path: target }).winning).toBe(
-      'session-auto-allow#0'
-    )
+    expect(ctx.evaluate('write', { type: 'path', path: target }).winning).toBe('session-grants#0')
 
     // 再关掉，改为对具体路径「允许并记住」
     state.settings = { allowList: [`Write(${target})`] }

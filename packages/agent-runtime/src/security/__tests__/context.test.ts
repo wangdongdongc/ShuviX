@@ -150,7 +150,7 @@ describe('createSecurityContext', () => {
     grants.autoAllow = true
     const allowed = ctx.evaluate('execute', commandObject)
     expect(allowed.effect).toBe('allow')
-    expect(allowed.winning).toBe('session-auto-allow#0')
+    expect(allowed.winning).toBe('session-grants#0')
     grants.autoAllow = false
     expect(
       ctx.evaluate('execute', {
@@ -884,7 +884,7 @@ describe('createSecurityContext — enforceDatabase（数据库查询守卫）',
     })
     expect(getSessionDecisions(SID)[0]).toMatchObject({
       effect: 'allow',
-      winning: 'session-auto-allow#0'
+      winning: 'session-grants#0'
     })
   })
 })
@@ -1225,8 +1225,8 @@ describe('createSecurityContext — 用户策略的 force-allow（端到端）',
     const guarded = ctx.evaluate('read', { type: 'path', path: '/data/prod/secrets.env' })
     expect(guarded.effect).toBe('ask')
     expect(guarded.winning).toBe('guard-prod#0')
-    expect(guarded.matched).toContain('session-auto-allow#0')
-    expect(guarded.matched).toContain('session-path-grants#0')
+    expect(guarded.matched).toContain('session-grants#0')
+    expect(guarded.matched).toContain('session-grants#1')
     // 记忆入口不给：那条授权落在 force-allow 层，点了也压不过这道门
     expect(guarded.ask?.rememberEntry).toBeUndefined()
 
@@ -1258,19 +1258,29 @@ describe('createSecurityContext — 用户策略的 force-allow（端到端）',
     expect(ctx.evaluate('read', target).effect).toBe('allow')
   })
 
-  it('CU-5 照 session-auto-allow 正文的收窄示例同名覆盖：免询问只覆盖读与执行，写仍 ask', () => {
-    // 与内置 session-auto-allow 正文「To adjust」示例逐字同构
+  it('CU-5 照 session-grants 正文的收窄示例同名覆盖：免询问只覆盖读与执行，写仍 ask；路径授权照抄照旧', () => {
+    // 与内置 session-grants 正文「To adjust」示例逐字同构：覆盖是整份替换，路径两条跟着抄
     const ctx = contextWith(
       [
-        scopedPolicy('session-auto-allow', { 'subject.kind': ['agent'] }, [
+        scopedPolicy('session-grants', { 'subject.kind': ['agent'] }, [
           {
             effect: 'force-allow',
             conditions: { action: ['read', 'execute'] },
             match: 'vars.autoAllow'
+          },
+          {
+            effect: 'force-allow',
+            conditions: { 'object.type': ['path'], action: ['read'] },
+            match: 'inDir(object.path, vars.grantedRead) || inDir(object.path, vars.grantedWrite)'
+          },
+          {
+            effect: 'force-allow',
+            conditions: { 'object.type': ['path'], action: ['write'] },
+            match: 'inDir(object.path, vars.grantedWrite)'
           }
         ])
       ],
-      { autoAllow: true, allowList: [] }
+      { autoAllow: true, allowList: ['Write(/granted)'] }
     )
 
     // 命令（execute）：照常被免询问放行
@@ -1281,12 +1291,12 @@ describe('createSecurityContext — 用户策略的 force-allow（端到端）',
       command: 'ls -la'
     })
     expect(command.effect).toBe('allow')
-    expect(command.winning).toBe('session-auto-allow#0')
+    expect(command.winning).toBe('session-grants#0')
 
     // 区外读取：同样放行
     expect(ctx.evaluate('read', { type: 'path', path: '/outside/f.txt' })).toMatchObject({
       effect: 'allow',
-      winning: 'session-auto-allow#0'
+      winning: 'session-grants#0'
     })
 
     // 写入：收窄后不再被免询问覆盖 → 内置写入门重新生效
@@ -1294,29 +1304,39 @@ describe('createSecurityContext — 用户策略的 force-allow（端到端）',
       effect: 'ask',
       winning: 'ask-on-write#0'
     })
+
+    // 抄过来的路径授权照旧：「允许并记住」过的目录写入不问
+    expect(ctx.evaluate('write', { type: 'path', path: '/granted/f.txt' })).toMatchObject({
+      effect: 'allow',
+      winning: 'session-grants#2'
+    })
   })
 
-  it('CU-6 同名覆盖 session-path-grants 为 rules: [] → 已授权路径重新 ask；免询问开关不受影响', () => {
+  it('CU-6 同名覆盖 session-grants 只留免询问规则 → 已授权路径重新 ask；免询问开关不受影响', () => {
     const grants = { autoAllow: false, allowList: ['Write(/data)'] }
-    const emptyOverride = [userPolicy('session-path-grants', [])]
+    const autoAllowOnly = [
+      scopedPolicy('session-grants', { 'subject.kind': ['agent'] }, [
+        { effect: 'force-allow', match: 'vars.autoAllow' }
+      ])
+    ]
 
     // 对照：内置在位时授权生效
     expect(
       contextWith([], grants).evaluate('write', { type: 'path', path: '/data/x.txt' })
-    ).toMatchObject({ effect: 'allow', winning: 'session-path-grants#1' })
+    ).toMatchObject({ effect: 'allow', winning: 'session-grants#2' })
 
-    // 覆盖成空规则：条目还在会话里，但没有策略读它了 → 回到询问
-    const stripped = contextWith(emptyOverride, grants)
+    // 去掉路径规则：条目还在会话里，但没有规则读它了 → 回到询问
+    const stripped = contextWith(autoAllowOnly, grants)
     expect(stripped.evaluate('write', { type: 'path', path: '/data/x.txt' })).toMatchObject({
       effect: 'ask',
       winning: 'ask-on-write#0'
     })
 
-    // 另一份会话授权策略是独立的：免询问照常放行
-    const autoAllow = contextWith(emptyOverride, { autoAllow: true, allowList: [] })
+    // 留下的免询问规则照常放行
+    const autoAllow = contextWith(autoAllowOnly, { autoAllow: true, allowList: [] })
     expect(autoAllow.evaluate('write', { type: 'path', path: '/data/x.txt' })).toMatchObject({
       effect: 'allow',
-      winning: 'session-auto-allow#0'
+      winning: 'session-grants#0'
     })
   })
 })
@@ -1353,7 +1373,7 @@ describe('createSecurityContext — 授权快照一次性（回归守护）', ()
       command: 'ls -la',
       ...NO_SHELL_FACTS
     })
-    expect(first).toMatchObject({ effect: 'allow', winning: 'session-auto-allow#0' })
+    expect(first).toMatchObject({ effect: 'allow', winning: 'session-grants#0' })
     // 丢掉 assembleRules 的第二参（各自 buildPolicyVars）时，这两个计数会变成 2
     expect(getSessionGrants).toHaveBeenCalledTimes(1)
     expect(getVars).toHaveBeenCalledTimes(1)
@@ -1928,13 +1948,13 @@ describe('createSecurityContext — enforceUrl（浏览器导航守卫）', () =
     expect(logs.map((l) => l.objectSummary).reverse()).toEqual(targets.map((t) => t.url))
   })
 
-  it('CT-U2b 免询问开着：照样放行，归因 session-auto-allow#0', async () => {
+  it('CT-U2b 免询问开着：照样放行，归因 session-grants#0', async () => {
     const { ctx, requestUserInput } = urlContext([], { autoAllow: true })
     await expect(ctx.enforceUrl(PAGE, OPEN_OPTS)).resolves.toBeUndefined()
     expect(requestUserInput).not.toHaveBeenCalled()
     expect(getSessionDecisions(SID)[0]).toMatchObject({
       effect: 'allow',
-      winning: 'session-auto-allow#0'
+      winning: 'session-grants#0'
     })
   })
 
@@ -2083,7 +2103,7 @@ describe('createSecurityContext — enforceUrl（浏览器导航守卫）', () =
     expect(asking.requestUserInput).not.toHaveBeenCalled()
     expect(getSessionDecisions(SID)[0]).toMatchObject({
       effect: 'allow',
-      winning: 'session-auto-allow#0'
+      winning: 'session-grants#0'
     })
 
     const forced = urlContext([userPolicy('url-gate', [hostRule('force-ask', 'a.example')])], {
@@ -2166,13 +2186,13 @@ describe('createSecurityContext — enforceUrl（浏览器导航守卫）', () =
     )
   })
 
-  it('CT-U9b Chrome 里的新站点，免询问开着 → 不问、放行，日志归因 session-auto-allow#0', async () => {
+  it('CT-U9b Chrome 里的新站点，免询问开着 → 不问、放行，日志归因 session-grants#0', async () => {
     const { ctx, requestUserInput } = urlContext([], { autoAllow: true })
     await expect(ctx.enforceUrl(CHROME_PAGE, CHROME_OPTS)).resolves.toBeUndefined()
     expect(requestUserInput).not.toHaveBeenCalled()
     expect(getSessionDecisions(SID)[0]).toMatchObject({
       effect: 'allow',
-      winning: 'session-auto-allow#0'
+      winning: 'session-grants#0'
     })
   })
 
@@ -2506,7 +2526,7 @@ describe('createSecurityContext — 真实路径（provider.realPath）', () => 
     )
 
     // 一次写评估里客体路径被 protect-credentials / protect-system（两次）/ protect-bot-files /
-    // protect-builtin-knowledge / review-memory-writes / session-path-grants / 上面两条引用
+    // session-grants 的路径规则 / 上面两条引用
     expect(ctx.evaluate('write', { type: 'path', path: '/ws/f.txt' })).toMatchObject({
       effect: 'ask',
       winning: 'ask-on-write#0'

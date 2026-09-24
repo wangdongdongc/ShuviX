@@ -17,7 +17,7 @@
  *   1. deny         任意来源 deny 命中 → deny（不可被任何层覆盖）
  *   2. force-ask    这道门不接受会话级同意 → ask（免询问开着也照问）
  *   3. force-allow  用户明示同意 → allow（策略 md 里的 `effect: force-allow`；出厂由
- *                   session-auto-allow / session-path-grants 表达「免询问」与「允许并记住」，
+ *                   session-grants 表达「免询问」与「允许并记住」，
  *                   用户策略也可声明，用于叠加式地局部放宽某道询问门）
  *   4. ask          显式 ask 规则（内置/用户策略 md）→ ask
  *   5. static-allow 静态 allow 规则 → allow（当前主要供决策日志归因与用户自定义）

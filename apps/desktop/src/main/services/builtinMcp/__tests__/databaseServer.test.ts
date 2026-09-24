@@ -2,7 +2,7 @@
  * 内置能力服务器 `database` —— 隔着**真的 MCP 协议**看它（与 sshServer.test 同一个架子）。
  *
  * `InMemoryTransport.createLinkedPair()` + SDK 的 `Client`，安全门后面是**真的**安全模块
- * （内置策略一条不少，ask-on-database / session-auto-allow 都是 md 里那一份）。换成假的只有：
+ * （内置策略一条不少，ask-on-database / session-grants 都是 md 里那一份）。换成假的只有：
  * 连接池（`../dbConnections`，这一组问的是 server 的判断，连接池的行为在 dbConnections.test
  * 对着真 PostgreSQL 问）、凭据 DAO（better-sqlite3 进不了 vitest 的 Node 进程）与日志。
  *
@@ -36,7 +36,7 @@ const gate = vi.hoisted(() => ({
   calls: [] as Array<{ object: unknown; opts: unknown }>,
   /** 这条会话的用户策略；空 = 只有内置那套 */
   policies: [] as unknown[],
-  /** 免询问开关（session-auto-allow 的 force-allow） */
+  /** 免询问开关（session-grants 的 force-allow） */
   autoAllow: false
 }))
 
@@ -814,7 +814,7 @@ describe('database 内置服务器 query 的安全门', () => {
     expect(pool.queries.map((q) => q.name)).toEqual(['ro-pg'])
   })
 
-  it('DBSV-26 免询问开着：可写连接不弹卡直接执行，决策归到 session-auto-allow', async () => {
+  it('DBSV-26 免询问开着：可写连接不弹卡直接执行，决策归到 session-grants', async () => {
     saveDefaults()
     gate.autoAllow = true
     const { client, asks } = await open()
@@ -825,7 +825,7 @@ describe('database 内置服务器 query 的安全门', () => {
     expect(pool.queries).toHaveLength(1)
     expect(getSessionDecisions('s1')[0]).toMatchObject({
       effect: 'allow',
-      winning: 'session-auto-allow#0'
+      winning: 'session-grants#0'
     })
   })
 

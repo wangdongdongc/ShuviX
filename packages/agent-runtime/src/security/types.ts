@@ -17,8 +17,8 @@
  *   - user     用户策略 md（桌面 ~/.shuvix/policies/<name>.md，同名覆盖内置）
  *   - derived  宿主代码级派生规则（仅限无法 md 化的宿主特例；桌面/扩展当前都不供给）
  * 会话授权（免询问开关 / "允许并记住"）不再是独立一层：条目经 buildPolicyVars 变成
- * `vars.autoAllow` / `vars.grantedRead` / `vars.grantedWrite`，由内置的 session-auto-allow
- * 与 session-path-grants 两份策略 md 用 `effect: force-allow` 表达（见 policyVars.ts）。
+ * `vars.autoAllow` / `vars.grantedRead` / `vars.grantedWrite`，由内置的 session-grants
+ * 策略 md 用 `effect: force-allow` 表达（见 policyVars.ts）。
  *
  * 结算优先序（tier，见 evaluate.ts）：deny → force-ask → force-allow → ask → static-allow → default。
  */

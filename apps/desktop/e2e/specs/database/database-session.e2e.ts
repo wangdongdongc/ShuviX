@@ -787,7 +787,7 @@ describe('主流程（DBE-F：一条勾了 database 的会话，开在界面上�
     expect(await rw.count('items')).toBe(2)
   }, 120_000)
 
-  it('DBE-F8 会话开了免询问：可写连接上的语句不问就跑，决策记在 session-auto-allow 名下', async () => {
+  it('DBE-F8 会话开了免询问：可写连接上的语句不问就跑，决策记在 session-grants 的免询问规则名下', async () => {
     const SQL = "INSERT INTO items (label) VALUES ('delta')"
     await setAutoAllow(sid, true)
     try {
@@ -800,7 +800,7 @@ describe('主流程（DBE-F：一条勾了 database 的会话，开在界面上�
       expect(await rw.count('items')).toBe(3)
       const decision = await decisionOf('dbf8_insert')
       expect(decision).toMatchObject({ objectKind: 'database', effect: 'allow' })
-      expect(decision.winning.startsWith('session-auto-allow#')).toBe(true)
+      expect(decision.winning).toBe('session-grants#0')
     } finally {
       await setAutoAllow(sid, false)
     }

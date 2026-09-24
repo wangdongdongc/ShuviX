@@ -343,7 +343,7 @@ describe.skipIf(process.platform === 'win32')('路径策略按真实去处判（
     for (const p of [link, target, join(ROOT, 'outside', 'target.txt')]) {
       expect({ p, write: verdict(evaluatePath('write', p)) }).toEqual({
         p,
-        write: { effect: 'allow', winning: 'session-path-grants#1' }
+        write: { effect: 'allow', winning: 'session-grants#2' }
       })
     }
   })
@@ -361,7 +361,7 @@ describe.skipIf(process.platform === 'win32')('路径策略按真实去处判（
       state.settings = { allowList: [entry] }
       expect({ entry, read: verdict(evaluatePath('read', link)) }).toEqual({
         entry,
-        read: { effect: 'allow', winning: 'session-path-grants#0' }
+        read: { effect: 'allow', winning: 'session-grants#1' }
       })
     }
   })

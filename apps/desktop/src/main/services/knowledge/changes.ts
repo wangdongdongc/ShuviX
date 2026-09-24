@@ -104,7 +104,8 @@ export function notifyKnowledgeFileChanged(
   const located = locateBundle(absPath)
   if (!located || !/\.md$/i.test(located.rel)) return
   const { bundle, rel } = located
-  // 内置库在应用包里：不 git init、不提交、不广播 —— 写入本身由 protect-builtin-knowledge 策略拒
+  // 内置库在应用包里：不 git init、不提交、不广播。写入本身不设拒写策略（随包资源的统一裁决，
+  // 见 builtinPolicies/index.ts）—— 真写进去了，下个版本会还原
   if (isBuiltinBundle(bundle)) return
   const existed = knownKnowledgePaths().has(`${bundle}/${rel}`)
   recordKnowledgeChange({

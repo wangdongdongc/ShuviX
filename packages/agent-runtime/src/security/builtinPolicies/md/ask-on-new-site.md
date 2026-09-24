@@ -33,7 +33,7 @@ that went on to another site by itself, is not.
 - It does not look inside pages: once a site is allowed, what the agent does
   there in that conversation runs without asking.
 - Once you turn the auto-allow switch on, another builtin policy —
-  session-auto-allow — takes over and skips the ask.
+  session-grants — takes over and skips the ask.
 
 **To adjust**: create an override copy and narrow the match. To stop asking
 for a site you trust, exclude it, for example

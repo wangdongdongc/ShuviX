@@ -116,7 +116,7 @@ describe('会话授权（下沉为 vars + 策略 md）', () => {
     expect(decide(provider, 'read', '/data/b.txt').effect).toBe('allow')
     expect(decide(provider, 'write', '/data/b.txt').effect).toBe('allow')
     // 归因到内置策略而非从前的 session:allowList:<entry>
-    expect(decide(provider, 'write', '/data/b.txt').winning).toMatch(/^session-path-grants#/)
+    expect(decide(provider, 'write', '/data/b.txt').winning).toMatch(/^session-grants#[12]$/)
   })
 
   it('AS-1b 授权按路径段边界匹配；非 path 客体不受影响且不告警', () => {
@@ -128,7 +128,7 @@ describe('会话授权（下沉为 vars + 策略 md）', () => {
     // /data 不得命中 /database（inDir 与旧 matchesPathEntry 同一实现）
     expect(decide(provider, 'read', '/database/x.txt').effect).toBe('ask')
 
-    // 非 path 客体：session-path-grants 的 object.type 条件先短路，CEL 不跑、零告警
+    // 非 path 客体：session-grants 两条路径规则的 object.type 条件先短路，CEL 不跑、零告警
     const warn = vi.fn()
     const vars = buildPolicyVars(provider)
     const decision = evaluate(
@@ -171,7 +171,7 @@ describe('会话授权（下沉为 vars + 策略 md）', () => {
     expect(buildPolicyVars(on).autoAllow).toBe(true)
     const decision = decide(on, 'write', '/anywhere/x.txt')
     expect(decision.effect).toBe('allow')
-    expect(decision.winning).toBe('session-auto-allow#0')
+    expect(decision.winning).toBe('session-grants#0')
 
     expect(decide(makeProvider(), 'write', '/anywhere/x.txt').effect).toBe('ask')
   })
@@ -202,8 +202,8 @@ describe('会话授权（下沉为 vars + 策略 md）', () => {
     const decision = decide(provider, 'write', '/anywhere/x.txt')
     expect(decision.effect).toBe('allow')
     // 同 tier 多条 → 装配顺序第一条胜出；内置在用户之前（mergePolicyFiles）
-    expect(decision.winning).toBe('session-auto-allow#0')
-    expect(decision.matched).toContain('session-auto-allow#0')
+    expect(decision.winning).toBe('session-grants#0')
+    expect(decision.matched).toContain('session-grants#0')
     expect(decision.matched).toContain('trust-anywhere#0')
     // 被压过的 ask 门仍在 matched（门没拆，只是没胜出）
     expect(decision.matched).toContain('ask-on-write#0')
@@ -299,9 +299,9 @@ describe('assembleRules × evaluate — 授权 vars 的失效模式守护', () =
     const messages = warn.mock.calls.map((c) => String(c[0]))
     const notMatched = messages.filter((m) => m.includes('treating as not matched'))
     expect(notMatched.length).toBeGreaterThan(0)
-    // 免询问与路径授权两份策略都该报（force-allow 归一为 allow → fail-safe 不命中）
-    expect(notMatched.some((m) => m.includes("'session-auto-allow#0'"))).toBe(true)
-    expect(notMatched.some((m) => m.includes('session-path-grants#'))).toBe(true)
+    // 免询问与路径授权两种规则都该报（force-allow 归一为 allow → fail-safe 不命中）
+    expect(notMatched.some((m) => m.includes("'session-grants#0'"))).toBe(true)
+    expect(notMatched.some((m) => /'session-grants#[12]'/.test(m))).toBe(true)
 
     // 每次评估现装配现求值：告警不被任何缓存/去重吞掉
     const after1 = warn.mock.calls.length
@@ -447,9 +447,9 @@ describe('assembleRules — 策略合并与 tier 标定', () => {
     }
   })
 
-  it('CA-3 完整内置装配：tier force-allow 的规则当且仅当来自两份会话授权策略，且 effect 恒 allow', () => {
+  it('CA-3 完整内置装配：tier force-allow 的规则当且仅当来自会话授权策略，且 effect 恒 allow', () => {
     const rules = assembleRules(makeProvider())
-    const SESSION_POLICIES = ['session-auto-allow', 'session-path-grants']
+    const SESSION_POLICIES = ['session-grants']
 
     const forceAllowRules = rules.filter((r) => r.tier === 'force-allow')
     expect([...new Set(forceAllowRules.map((r) => r.source.policy))].sort()).toEqual(
@@ -457,9 +457,13 @@ describe('assembleRules — 策略合并与 tier 标定', () => {
     )
     expect(forceAllowRules.every((r) => r.effect === 'allow')).toBe(true)
 
-    // 反向：两份会话授权策略的每条规则都在 force-allow 层（没有半截落回 static-allow 的）
+    // 反向：会话授权策略的每条规则都在 force-allow 层（没有半截落回 static-allow 的）
     const sessionRules = rules.filter((r) => SESSION_POLICIES.includes(r.source.policy ?? ''))
-    expect(sessionRules.length).toBeGreaterThanOrEqual(3) // auto-allow 1 条 + path-grants 2 条
+    expect(sessionRules.map((r) => r.id)).toEqual([
+      'session-grants#0', // 免询问开关
+      'session-grants#1', // 路径授权：读
+      'session-grants#2' // 路径授权：写
+    ])
     expect(sessionRules.every((r) => r.tier === 'force-allow')).toBe(true)
   })
 
@@ -815,7 +819,7 @@ describe('assembleRules — 派生规则与省略容错', () => {
       makeProvider({ getSessionGrants: () => ({ autoAllow: true, allowList: [] }) })
     )
     expect(rules.some((r) => r.source.kind === 'builtin')).toBe(true)
-    expect(rules.some((r) => r.id === 'session-auto-allow#0')).toBe(true)
+    expect(rules.some((r) => r.id === 'session-grants#0')).toBe(true)
     expect(rules.some((r) => r.source.kind === 'user')).toBe(false)
   })
 })

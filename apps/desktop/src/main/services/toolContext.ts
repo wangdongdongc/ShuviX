@@ -248,7 +248,7 @@ export function makeDesktopSecurityProvider(
       ],
       memoryDirs: [getMemoryRootDir()],
       botsDir: getDefaultBotsDir(),
-      // protect-builtin-knowledge：随应用发布的内置知识库目录，agent 永远不能写
+      // 随应用发布的内置知识库目录：ask-on-read 对它免询问（说明书发出来就是给 agent 查的）
       builtinKnowledgeDir: getBuiltinKnowledgeDir(),
       home: homedir(),
       systemDirs: windowsSystemDirs()

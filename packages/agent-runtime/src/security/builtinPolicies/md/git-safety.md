@@ -31,6 +31,6 @@ important ones ask first — creating a repo (`init`), discarding changes
 - Git-tool operations targeting a directory outside the workspace go through
   the normal path ask as well.
 - Once you turn the auto-allow switch on, another builtin policy —
-  session-auto-allow — takes over and skips the ask.
+  session-grants — takes over and skips the ask.
 
 **To adjust**: create an override copy and edit it.

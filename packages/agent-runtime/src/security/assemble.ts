@@ -7,8 +7,8 @@
  *
  * 会话授权曾是独立的第四层（allowList / autoAllow 在这里编译成 force-allow 原生谓词），
  * 现已下沉为策略 md：条目经 buildPolicyVars 变成 vars.autoAllow / vars.grantedRead /
- * vars.grantedWrite，逻辑由内置 session-auto-allow 与 session-path-grants 两份策略用
- * `effect: force-allow` 表达 —— 于是它们也可覆盖、可移除、在策略页可见。
+ * vars.grantedWrite，逻辑由内置 session-grants 策略用 `effect: force-allow` 表达 ——
+ * 于是它也可覆盖、可移除、在策略页可见。
  *
  * tier 由 md 声明的 effect 唯一决定（TIER_BY_EFFECT）；强度编进 effect 名字（force- 前缀）
  * 而非拆一根正交轴，理由见 types.ts PolicyEffect。结算优先序见 evaluate.ts。

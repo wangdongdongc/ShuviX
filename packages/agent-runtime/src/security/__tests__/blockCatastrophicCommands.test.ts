@@ -534,7 +534,7 @@ describe('block-catastrophic-commands — tier 结算与通道', () => {
     // 而不是「免询问规则碰巧没命中」——后者会让这条用例失去意义。
     expect(decision.matched).toEqual([
       'block-catastrophic-commands#0',
-      'session-auto-allow#0',
+      'session-grants#0',
       'ask-on-command#0'
     ])
   })
@@ -542,7 +542,7 @@ describe('block-catastrophic-commands — tier 结算与通道', () => {
   it('BC-71 同开关下的普通命令照常放行（免询问没被这条策略连坐）', () => {
     const decision = decide('ls -la', { provider: autoAllowProvider })
     expect(decision.effect).toBe('allow')
-    expect(decision.winning).toBe('session-auto-allow#0')
+    expect(decision.winning).toBe('session-grants#0')
   })
 
   it('BC-72 ssh 渠道同待遇：远端毁灭命令一样 deny', () => {
