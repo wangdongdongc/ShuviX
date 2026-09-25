@@ -79,6 +79,38 @@
      由主题决定，alpha 会就地合成，实色则只在它被调出来的那一种底色上成立。 */
   --viz-grid: light-dark(rgba(31, 35, 40, 0.1), rgba(230, 237, 243, 0.12));
   --viz-axis: light-dark(rgba(31, 35, 40, 0.28), rgba(230, 237, 243, 0.3));
+
+  /* 分类框的「浅底 + 同色深字」—— 示意图按类别分组时用：tint 铺底、ink 写字、描边用 --viz-N 本身。
+     没有这一对，模型想按类别上色只剩两条路：灰框（安全但平），或拿系列色当字色（部分槽位对底色
+     不到 3:1，读不清）。
+
+     两者都从 --viz-N **派生**，不逐主题调：
+     - tint 是**半透明**的 14%：叠在哪张卡片、哪套主题的底色上都就地合成，不必知道底色是什么；
+     - ink 往**极点**混 60%（浅档往黑、深档往白），不往 --theme-text-primary 混 —— 后者在
+       solarized-light 这类低对比文字色的主题上会把黄槽拖到 2.3:1。
+     验算（卡片底 = bg-tertiary 60% 叠 bg-primary，再叠 tint）：11 套主题 × 8 槽，ink 对 tint 最差
+     5.16:1（nord 的 viz-6），过 AA 的 4.5。卡片底的比例是这个数的一部分 —— 直接叠在纯 bg-tertiary
+     上最差只剩约 4.54，改卡片底色时要重算。有测试按同一公式逐套主题复算，改色或加主题时会报。
+
+     --viz-wash 是中性的同一件事：指标卡、图例条、表头这类「比卡片高一级」的浅底。取文字色 5% ——
+     浅主题上是一层淡灰、深主题上是一层淡白，永远朝「离底色更远」的方向。 */
+  --viz-1-tint: color-mix(in srgb, var(--viz-1) 14%, transparent);
+  --viz-2-tint: color-mix(in srgb, var(--viz-2) 14%, transparent);
+  --viz-3-tint: color-mix(in srgb, var(--viz-3) 14%, transparent);
+  --viz-4-tint: color-mix(in srgb, var(--viz-4) 14%, transparent);
+  --viz-5-tint: color-mix(in srgb, var(--viz-5) 14%, transparent);
+  --viz-6-tint: color-mix(in srgb, var(--viz-6) 14%, transparent);
+  --viz-7-tint: color-mix(in srgb, var(--viz-7) 14%, transparent);
+  --viz-8-tint: color-mix(in srgb, var(--viz-8) 14%, transparent);
+  --viz-1-ink: color-mix(in srgb, var(--viz-1) 40%, light-dark(#000, #fff));
+  --viz-2-ink: color-mix(in srgb, var(--viz-2) 40%, light-dark(#000, #fff));
+  --viz-3-ink: color-mix(in srgb, var(--viz-3) 40%, light-dark(#000, #fff));
+  --viz-4-ink: color-mix(in srgb, var(--viz-4) 40%, light-dark(#000, #fff));
+  --viz-5-ink: color-mix(in srgb, var(--viz-5) 40%, light-dark(#000, #fff));
+  --viz-6-ink: color-mix(in srgb, var(--viz-6) 40%, light-dark(#000, #fff));
+  --viz-7-ink: color-mix(in srgb, var(--viz-7) 40%, light-dark(#000, #fff));
+  --viz-8-ink: color-mix(in srgb, var(--viz-8) 40%, light-dark(#000, #fff));
+  --viz-wash: color-mix(in srgb, var(--theme-text-primary) 5%, transparent);
 }
 
 /* ========== 深色主题 ========== */

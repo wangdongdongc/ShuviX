@@ -16,7 +16,11 @@
  *  - **闭合判定**（IF-12 / 13）：交互图不能逐帧画，半截脚本跑起来只会报错 —— 判定必须确切。
  *  - **契约同源**（IF-14…18）：库名、token 名单、高度上限这些常量，与提示片段 / 技能参考里教给
  *    模型的写法是同一份。片段与技能 md 用 fs 读（与 svgFence.test.ts 同策：chat-protocol 是零依赖
- *    叶子包，一条 import 会凭空造出一个反向的包依赖，读文本不会）。
+ *    叶子包，一条 import 会凭空造出一个反向的包依赖，读文本不会）。themes.css 里每个 `--viz-*`
+ *    （含 tint / ink / wash）都得注入（IF-15b）。
+ *  - **基础样式**（IF-19…21）：只给裸标签、只用注入的 token、只有 400 / 500 两种字重，控件的缺省
+ *    外观守几条关键的形状（不钉具体调出来的像素数）。技能教「写裸标签、别重新设计它们」，前提是
+ *    裸标签本身已经像应用。
  *
  * 已知管不到的两条出口（WebRTC、DNS 预取）在源文件头注释里写着，这里不断言它们被挡住。
  */
@@ -246,6 +250,21 @@ describe('buildSandboxDocument —— 顺序就是安全前提（IF-4…8）', (
     expect(countOf(doc, '<script>')).toBe(1)
   })
 
+  it('IF-7b 宿主读到的真实取值（color-mix 套 light-dark、带百分号与逗号）原样进 :root{…}', () => {
+    // 宿主拿到的是 var() 已代入的原串；形状过滤不能误伤 `%`、`(`、`,`、`#` 这些正常字符
+    const tokens = {
+      '--viz-1-tint': 'color-mix(in srgb, light-dark(#2a78d6, #3987e5) 14%, transparent)',
+      '--viz-1-ink': 'color-mix(in srgb, light-dark(#2a78d6, #3987e5) 40%, light-dark(#000, #fff))',
+      '--viz-wash': 'color-mix(in srgb, #e6edf3 5%, transparent)'
+    }
+    const doc = buildSandboxDocument({ body: 'X', colorScheme: 'dark', tokens })
+    const root = /:root\{([^}]*)\}/.exec(doc)
+    expect(root, '找不到 :root{…}').not.toBeNull()
+    expect(root![1]).toBe(
+      ['color-scheme:dark', ...Object.entries(tokens).map(([k, v]) => `${k}:${v}`)].join(';')
+    )
+  })
+
   it('IF-8 color-scheme 只认那几个值（去首尾空白）；别的一律 normal', () => {
     const schemeOf = (colorScheme: string): string | undefined =>
       /:root\{(color-scheme:[^;}]*)/.exec(
@@ -386,6 +405,22 @@ describe('契约同源：常量 ↔ 教给模型的写法（IF-14…18）', () =
     }
   })
 
+  it('IF-15b themes.css 定义的每个 --viz-* 都注入沙箱（含 8 对 tint / ink 与 wash）—— 技能教了就得够得着', () => {
+    const css = readFileSync(join(REPO_ROOT, 'packages/app-shell/src/themes.css'), 'utf8')
+    const viz = [...new Set([...css.matchAll(/(--viz-[\w-]+)\s*:/g)].map((m) => m[1]))]
+    // 正控制组：确实从 css 里扫出了整套调色板（8 分类 + 5 顺序 + 中点 + 4 状态 + 2 结构 + 17 派生）
+    expect(viz.length).toBeGreaterThanOrEqual(37)
+    for (const name of viz) {
+      expect(SANDBOX_THEME_TOKENS, `themes.css 的 ${name} 没注入沙箱`).toContain(name)
+    }
+    const derived = [
+      ...[1, 2, 3, 4, 5, 6, 7, 8].flatMap((n) => [`--viz-${n}-tint`, `--viz-${n}-ink`]),
+      '--viz-wash'
+    ]
+    expect(derived).toHaveLength(17)
+    for (const name of derived) expect(SANDBOX_THEME_TOKENS, name).toContain(name)
+  })
+
   it('IF-16 技能参考是契约的唯一一份：教全库名、720px、用到的 token；片段只指路，不带契约', () => {
     const keys = Object.keys(SANDBOX_LIBS)
     for (const { name, text } of FRAGMENTS) {
@@ -404,8 +439,8 @@ describe('契约同源：常量 ↔ 教给模型的写法（IF-14…18）', () =
       expect(pixels, `${name} 提到的高度上限`).toContain(SANDBOX_MAX_HEIGHT)
       expect(text, name).toContain('shuvix.sendPrompt')
       expect(text, name).toContain('shuvix.color')
-      // `--viz-N` 是散文里的占位写法，不是一个真 token
-      const tokens = tokensIn(text).filter((t) => t !== '--viz-N')
+      // `--viz-N`（及 `--viz-N-tint` / `--viz-N-ink`）是散文里的占位写法，不是真 token
+      const tokens = tokensIn(text).filter((t) => !/^--viz-N(-|$)/.test(t))
       expect(tokens.length, `${name} 应当用到 token`).toBeGreaterThan(0)
       for (const token of tokens) {
         expect(SANDBOX_THEME_TOKENS, `${name} 用了 ${token}`).toContain(token)
@@ -440,6 +475,109 @@ describe('契约同源：常量 ↔ 教给模型的写法（IF-14…18）', () =
           lang
         )
       }
+    }
+  })
+})
+
+describe('沙箱的基础样式：只给裸标签、只用注入的 token、只两种字重（IF-19…21）', () => {
+  /** 宿主拼的基础样式：`:root{…}` 之后、`</style>` 之前那一截 */
+  const baseStyleOf = (doc: string): string => {
+    const root = /<style>:root\{[^}]*\}\n/.exec(doc)
+    expect(root, '找不到 <style>:root{…}').not.toBeNull()
+    const start = root!.index + root![0].length
+    const end = doc.indexOf('</style>', start)
+    expect(end, '基础样式后面没有 </style>').toBeGreaterThan(start)
+    return doc.slice(start, end)
+  }
+  const BASE = baseStyleOf(plainDoc())
+
+  interface Rule {
+    selectors: string[]
+    decls: Map<string, string>
+  }
+  /** 平铺的规则表（基础样式里没有 @ 规则与嵌套；一行可以有几条规则） */
+  const RULES: Rule[] = [...BASE.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((m) => ({
+    selectors: m[1].split(',').map((s) => s.trim()),
+    decls: new Map(
+      m[2]
+        .split(';')
+        .map((d) => d.trim())
+        .filter(Boolean)
+        .map((d) => {
+          const at = d.indexOf(':')
+          return [d.slice(0, at).trim(), d.slice(at + 1).trim()] as const
+        })
+    )
+  }))
+  /** 选择器表里恰有这一项的所有规则 */
+  const rulesFor = (selector: string): Rule[] => RULES.filter((r) => r.selectors.includes(selector))
+  /** 某个选择器上某个属性的取值（多条规则时后写的赢，与层叠一致） */
+  const declOf = (selector: string, prop: string): string | undefined =>
+    rulesFor(selector)
+      .map((r) => r.decls.get(prop))
+      .filter((v): v is string => v !== undefined)
+      .at(-1)
+
+  it('IF-19 用到的每个 var(--x) 都在注入名单里；没有十六进制与 rgb() 字面量；选择器里没有 class', () => {
+    expect(RULES.length, '基础样式一条规则都没解析出来').toBeGreaterThan(20)
+    const used = [...new Set([...BASE.matchAll(/var\((--[A-Za-z0-9-]+)\)/g)].map((m) => m[1]))]
+    expect(used.length).toBeGreaterThan(5)
+    for (const name of used) expect(SANDBOX_THEME_TOKENS, `基础样式用了 ${name}`).toContain(name)
+    expect(BASE).not.toMatch(/#[0-9a-f]{3,8}\b/i)
+    expect(BASE).not.toMatch(/\brgba?\(/i)
+    // 只给裸标签上样式：选择器里出现 `.x` 就是发明了一个模型得记住的类名（声明里的 `.98` 不算）
+    for (const rule of RULES) {
+      for (const selector of rule.selectors) {
+        expect(selector, `选择器 ${selector}`).not.toMatch(/\.[A-Za-z_-]/)
+      }
+    }
+  })
+
+  it('IF-20 font-weight 只有 400 / 500；h1–h6、strong、b、th 都被一条 500 的规则覆盖', () => {
+    const weights = [...BASE.matchAll(/font-weight\s*:\s*([^;}]+)/g)].map((m) => m[1].trim())
+    expect(weights.length).toBeGreaterThan(0)
+    for (const w of weights) expect(['400', '500'], `font-weight:${w}`).toContain(w)
+    for (const tag of ['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'strong', 'b', 'th']) {
+      expect(declOf(tag, 'font-weight'), `${tag} 没有被设成 500`).toBe('500')
+    }
+  })
+
+  it('IF-21 控件缺省外观：按钮、分段选中态、输入框、滑块、label、output、表格、canvas、文字色', () => {
+    // 按钮：透明底 + 1px 描边（像应用里的次级按钮，不是系统灰按钮）
+    expect(declOf('button', 'background')).toBe('transparent')
+    expect(declOf('button', 'border')).toMatch(/^1px solid var\(--theme-border-[a-z]+\)$/)
+    // 分段选中态靠语义属性，取强调色
+    const pressed = rulesFor('button[aria-pressed=true]')
+    expect(pressed, 'button[aria-pressed=true] 没有规则').not.toHaveLength(0)
+    expect([...pressed.flatMap((r) => [...r.decls.values()])].join(';')).toMatch(
+      /var\(--theme-accent/
+    )
+    // 文本类输入与下拉框是**同一条**规则：同高、同描边
+    const fields = [
+      'input:not([type])',
+      'input[type=text]',
+      'input[type=number]',
+      'input[type=search]',
+      'select'
+    ]
+    const shared = RULES.filter((r) => fields.every((f) => r.selectors.includes(f)))
+    expect(shared, '文本输入与 select 不在同一条规则里').toHaveLength(1)
+    expect(shared[0].decls.get('height')).toBe('28px')
+    expect(shared[0].decls.get('border')).toMatch(/^1px solid var\(--theme-border-[a-z]+\)$/)
+    // 滑块：去掉系统外观，轨道与拇指两个伪元素都有样式
+    expect(declOf('input[type=range]', 'appearance')).toBe('none')
+    expect(rulesFor('input[type=range]::-webkit-slider-runnable-track')).not.toHaveLength(0)
+    expect(rulesFor('input[type=range]::-webkit-slider-thumb')).not.toHaveLength(0)
+    // label：与控件横排、次级文字色
+    expect(declOf('label', 'display')).toBe('inline-flex')
+    expect(declOf('label', 'color')).toBe('var(--theme-text-secondary)')
+    // output：拖动时数字不抖
+    expect(declOf('output', 'font-variant-numeric')).toBe('tabular-nums')
+    expect(declOf('table', 'border-collapse')).toBe('collapse')
+    expect(declOf('canvas', 'display')).toBe('block')
+    // 表单控件不继承系统的黑字
+    for (const tag of ['input', 'select', 'textarea']) {
+      expect(declOf(tag, 'color'), tag).toBe('var(--theme-text-primary)')
     }
   })
 })

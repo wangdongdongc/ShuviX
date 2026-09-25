@@ -78,3 +78,37 @@ Check every figure against this list before you send it. If your figure matches 
 
 **Mixed flow directions** — some arrows down, some right, some back up.
 → One direction, with returns visually distinct.
+
+## Look
+
+The full guide is `references/style.md`; these are the misses that make a correct figure look unfinished.
+
+**Heavy type** — `font-weight` 600, 700 or `bold`, or a bold word inside a label.
+→ 400 and 500 only; 500 for a box title or a headline number.
+
+**Title Case or capitals** in labels, axis names and buttons.
+→ Sentence case.
+
+**Emoji, icon glyphs, decorative numbering.**
+→ Shape, position and a few words.
+
+**A title or a paragraph inside the figure.**
+→ The title is the `aria-label` and your sentence before it; explanations go in the reply.
+
+**Gradients, shadows, glow, a background rectangle.**
+→ Flat fills; the card is the background.
+
+**Every box a different color** — a rainbow by position.
+→ Neutral by default; color only for kinds, at most three, in slot order.
+
+**Gray or series-colored text on a tint**, or text faded with `opacity`.
+→ The tint's ink: `--viz-N-ink` on `--viz-N-tint`.
+
+**Borders 2 or thicker**, or every box outlined in a saturated color.
+→ 1 for everything, 1.5 for the one accent.
+
+**Raw numbers** — `0.30000000000000004`, `2653.2977`, a unit on every tick.
+→ Rounded, formatted, each unit once.
+
+**Cramped** — labels touching box edges, a figure filling its `viewBox` edge to edge.
+→ Margins on every side; the geometry in `references/diagrams.md`.

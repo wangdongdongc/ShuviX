@@ -14,6 +14,9 @@
  *   5. **认领 → 引用**：adopt 写出带 CSP 首行的 `.html`，```artifact 引用它走同一个沙箱（E-5）；
  *   6. **高度一次落定**：经典（占宽度的）滚动条下，按宽度定高的 Chart.js 图不让块高来回振荡 ——
  *      滚动条出没改宽度只在真 Chromium 的布局里发生（E-7）；
+ *   6b. **观感缺省值在真图里生效**：桥写进 Chart.defaults 的那些值，经真 Chart.js 的选项解析
+ *      （作用域、可脚本化、overrides、scale 合并）之后，落到一张真图上是不是那个样子 —— 单测里只有
+ *      defaults 与注册表，建不了图（E-8）；
  *   7. **死循环冻不住应用**：沙箱跑在自己的进程里（E-6，放最后 —— 那个进程转到实例退出为止）。
  *
  * 块里的结果怎么读出来：沙箱是不透明源，主页面读不进它的 DOM，所以让块自己
@@ -63,6 +66,7 @@ const SESSIONS = [
   'interactive-E4b',
   'interactive-E5',
   'interactive-E7',
+  'interactive-E8',
   'interactive-E6',
   // 一条空会话：E-6 切过去卸下块（切回别的用例的会话，它们的块又会挂上）
   'interactive-idle'
@@ -147,6 +151,19 @@ const waitComposerLines = (prefix: string, n = 1, timeoutMs = 20_000): Promise<s
   )
 
 const payloadOf = <T>(line: string, prefix: string): T => JSON.parse(line.slice(prefix.length)) as T
+
+/**
+ * 一个解析后颜色串的 alpha：`rgba(r, g, b, a)` / `color(srgb r g b / a)`；不带 alpha 的是 1。
+ * Chromium 把 color-mix 的结果写成 `color(srgb …)`，把 rgb 系的写成 `rgb[a](…)`，两种都认
+ */
+const alphaOf = (color: string): number => {
+  const rgba = /^rgba\([^,]+,[^,]+,[^,]+,\s*([\d.]+)\s*\)$/.exec(color)
+  if (rgba) return Number(rgba[1])
+  const modern = /^color\([^)]*\/\s*([\d.]+)\s*\)$/.exec(color)
+  if (modern) return Number(modern[1])
+  if (/^(rgb|color)\(/.test(color)) return 1
+  return Number.NaN
+}
 
 const pageTargetCount = async (): Promise<number> =>
   (await listTargets(app.port)).filter((t) => t.type === 'page').length
@@ -295,6 +312,9 @@ const E3_BLOCK = block(
   "  try { d3.csvParse('a,b\\n1,2'); r.csv = 'ok'; } catch (e) { r.csv = 'threw:' + e.name; }",
   "  r.viz1 = shuvix.color('--viz-1');",
   "  r.text = shuvix.color('--theme-text-primary');",
+  "  r.ink = shuvix.color('--viz-1-ink');",
+  "  r.tint = shuvix.color('--viz-1-tint');",
+  "  r.wash = shuvix.color('--viz-wash');",
   '  r.body = getComputedStyle(document.body).color;',
   "  shuvix.sendPrompt('LIBS ' + JSON.stringify(r));",
   '});',
@@ -369,6 +389,77 @@ const E7_BLOCK = block(
   '      }',
   '    }]',
   '  });',
+  '})();',
+  '</script>'
+)
+
+/**
+ * E-8：观感缺省值落到真图上。五张小图各在一个定高的外层里（maintainAspectRatio: false），建好之后
+ * 稍等（用 setTimeout 不用 rAF：窗口被遮住时 rAF 可能停摆）、读每张图**解析后**的选项（不是
+ * Chart.defaults —— 那是单测看的），再给最后一张加第二个系列、update()、再读一次图例。
+ * 每一项单独 try，抛了记下原因。
+ */
+const E8_BLOCK = block(
+  '<title>E8 look</title>',
+  '<style>.box { position: relative; height: 100px; }</style>',
+  '<div class="box"><canvas id="line"></canvas></div>',
+  '<div class="box"><canvas id="bars"></canvas></div>',
+  '<div class="box"><canvas id="pie"></canvas></div>',
+  '<div class="box"><canvas id="own"></canvas></div>',
+  '<div class="box"><canvas id="grow"></canvas></div>',
+  '<script src="shuvix-lib://chart.js"></script>',
+  '<script>',
+  '(function () {',
+  "  var L = ['a', 'b', 'c'];",
+  '  function make(id, config) {',
+  '    config.options = Object.assign({ maintainAspectRatio: false }, config.options || {});',
+  '    return new Chart(document.getElementById(id), config);',
+  '  }',
+  '  var r = {};',
+  "  function t(k, f) { try { r[k] = f(); } catch (e) { r[k] = 'threw:' + (e && e.message); } }",
+  '  function legend(chart) { return { display: chart.legend.options.display, height: chart.legend.height }; }',
+  "  var line = make('line', { type: 'line', data: { labels: L, datasets: [{ label: 'y', data: [1, 3, 2], fill: true }] } });",
+  "  var bars = make('bars', { type: 'bar', data: { labels: L, datasets: [{ label: 'p', data: [1, 2, 3] }, { label: 'q', data: [3, 2, 1] }] } });",
+  "  var pie = make('pie', { type: 'pie', data: { labels: L, datasets: [{ data: [1, 2, 3] }] } });",
+  "  var own = make('own', {",
+  "    type: 'line',",
+  "    data: { labels: L, datasets: [{ label: 'y', data: [1, 3, 2], borderWidth: 4 }] },",
+  "    options: { plugins: { legend: { display: true } }, interaction: { mode: 'nearest' } }",
+  '  });',
+  "  var grow = make('grow', { type: 'bar', data: { labels: L, datasets: [{ label: 'p', data: [1, 2, 3] }] } });",
+  '  setTimeout(function () {',
+  "    t('line', function () {",
+  '      return {',
+  '        legend: legend(line),',
+  '        mode: line.options.interaction.mode,',
+  '        intersect: line.options.interaction.intersect,',
+  '        background: String(line.data.datasets[0].backgroundColor),',
+  '        border: String(line.data.datasets[0].borderColor),',
+  '        width: line.getDatasetMeta(0).dataset.options.borderWidth',
+  '      };',
+  '    });',
+  "    t('bars', function () {",
+  '      return {',
+  '        legend: legend(bars),',
+  '        xGrid: bars.scales.x.options.grid.display,',
+  '        yGrid: bars.scales.y.options.grid.display,',
+  '        radius: bars.getDatasetMeta(0).data[0].options.borderRadius',
+  '      };',
+  '    });',
+  "    t('pie', function () { return { legend: legend(pie) }; });",
+  "    t('own', function () {",
+  '      return {',
+  '        legend: legend(own),',
+  '        mode: own.options.interaction.mode,',
+  '        width: own.getDatasetMeta(0).dataset.options.borderWidth',
+  '      };',
+  '    });',
+  "    t('growBefore', function () { return legend(grow); });",
+  "    grow.data.datasets.push({ label: 'q', data: [3, 2, 1] });",
+  '    grow.update();',
+  "    t('growAfter', function () { return legend(grow); });",
+  "    shuvix.sendPrompt('LOOK ' + JSON.stringify(r));",
+  '  }, 100);',
   '})();',
   '</script>'
 )
@@ -508,6 +599,9 @@ describe('对话里的 interactive 交互图', () => {
         csv: string
         viz1: string
         text: string
+        ink: string
+        tint: string
+        wash: string
         body: string
       }
       const [first] = await waitComposerLines('LIBS ')
@@ -524,6 +618,15 @@ describe('对话里的 interactive 交互图', () => {
       const hostText = await card.hostTokenColor('--theme-text-primary')
       expect(libs.text).toBe(hostText)
       expect(libs.body).toBe(hostText)
+      // 派生的 tint / ink / wash（color-mix 套 light-dark）在沙箱里与宿主解析成同一个颜色
+      const hostInk = await card.hostTokenColor('--viz-1-ink')
+      const hostTint = await card.hostTokenColor('--viz-1-tint')
+      const hostWash = await card.hostTokenColor('--viz-wash')
+      expect(libs.ink).toBe(hostInk)
+      expect(libs.tint).toBe(hostTint)
+      expect(libs.wash).toBe(hostWash)
+      // tint 是半透明的一层（叠在哪张卡片上都就地合成）
+      expect(alphaOf(hostTint), hostTint).toBeCloseTo(0.14, 2)
 
       // 切到另一种明暗：块整块重挂载（新节点），再报一行，颜色是新主题的
       await card.markFrame('before-theme')
@@ -550,6 +653,15 @@ describe('对话里的 interactive 交互图', () => {
       expect(second.viz1).toBe(hostViz1After)
       expect(second.dataset).toBe(hostViz1After)
       expect(second.body).toBe(await card.hostTokenColor('--theme-text-primary'))
+      const hostInkAfter = await card.hostTokenColor('--viz-1-ink')
+      const hostTintAfter = await card.hostTokenColor('--viz-1-tint')
+      expect(second.ink).toBe(hostInkAfter)
+      expect(second.tint).toBe(hostTintAfter)
+      expect(second.wash).toBe(await card.hostTokenColor('--viz-wash'))
+      // ink 往极点混（浅档往黑、深档往白）：换了明暗就是另一个颜色
+      expect(hostInkAfter).not.toBe(hostInk)
+      expect(second.ink).not.toBe(libs.ink)
+      expect(alphaOf(hostTintAfter), hostTintAfter).toBeCloseTo(0.14, 2)
     } finally {
       await app.main.eval(
         `window.api.settings.set({ key: 'general.theme', value: ${JSON.stringify(themeBefore || 'dark')} })`
@@ -756,6 +868,71 @@ describe('对话里的 interactive 交互图', () => {
     expect(report.painted, line).toBeGreaterThan(0)
     // 落定的高度装得下整张图（加上段落与内边距），不是挂载时那个占位高度
     expect(parseFloat(last.height), `${detail} ${line}`).toBeGreaterThan(report.cssHeight)
+    expect(provider.chatRequestCount()).toBe(1)
+  }, 120_000)
+
+  it('E-8 观感缺省值落到真图上：单系列不画图例、折线按 x 读全部系列、面积是 0.1 的淡洗、分类轴不画网格、柱带圆角；作者自己写的配置照样赢；加了第二个系列图例就回来', async () => {
+    await openSession('interactive-E8')
+    provider.reset()
+    provider.script({ text: doc('MARK-E8 the house look:', fence(E8_BLOCK)), usage: USAGE })
+    await chat.typeAndSend('draw E8')
+    await chat.waitIdle()
+    await cardOf('MARK-E8').waitFrame()
+
+    type Legend = { display: unknown; height: number }
+    type Look = {
+      line: {
+        legend: Legend
+        mode: unknown
+        intersect: unknown
+        background: string
+        border: string
+        width: unknown
+      }
+      bars: { legend: Legend; xGrid: unknown; yGrid: unknown; radius: unknown }
+      pie: { legend: Legend }
+      own: { legend: Legend; mode: unknown; width: unknown }
+      growBefore: Legend
+      growAfter: Legend
+    }
+    const [line] = await waitComposerLines('LOOK ')
+    const look = payloadOf<Look>(line, 'LOOK ')
+    // 每一项都读出来了（没有 threw:…）
+    for (const [key, value] of Object.entries(look)) {
+      expect(typeof value, `${key}: ${JSON.stringify(value)}`).toBe('object')
+    }
+    /** 图例：解析后的 display 与真画出来的高度对得上 */
+    const expectLegend = (legend: Legend, shown: boolean, what: string): void => {
+      expect(legend.display, `${what} ${line}`).toBe(shown)
+      if (shown) expect(legend.height, `${what} ${line}`).toBeGreaterThan(0)
+      else expect(legend.height, `${what} ${line}`).toBe(0)
+    }
+
+    // 单系列面积折线：不画图例、按 x 读全部系列、底色是同色 0.1、描边实色、线宽 2
+    expectLegend(look.line.legend, false, 'line')
+    expect(look.line.mode, line).toBe('index')
+    expect(look.line.intersect, line).toBe(false)
+    expect(alphaOf(look.line.background), look.line.background).toBeCloseTo(0.1, 5)
+    expect(alphaOf(look.line.border), look.line.border).toBe(1)
+    expect(look.line.width, line).toBe(2)
+
+    // 两个系列的柱：画图例；分类轴（x）不画网格、数值轴（y）画；柱的圆角 4
+    expectLegend(look.bars.legend, true, 'bars')
+    expect(look.bars.xGrid, line).toBe(false)
+    expect(look.bars.yGrid, line).toBe(true)
+    expect(look.bars.radius, line).toBe(4)
+
+    // 单系列的饼：图例列的是扇区，照画
+    expectLegend(look.pie.legend, true, 'pie')
+
+    // 作者自己写的：图例、interaction、线宽都是作者的
+    expectLegend(look.own.legend, true, 'own')
+    expect(look.own.mode, line).toBe('nearest')
+    expect(look.own.width, line).toBe(4)
+
+    // 图例是每次渲染现算的：加了第二个系列、update() 之后就回来
+    expectLegend(look.growBefore, false, 'grow before')
+    expectLegend(look.growAfter, true, 'grow after')
     expect(provider.chatRequestCount()).toBe(1)
   }, 120_000)
 

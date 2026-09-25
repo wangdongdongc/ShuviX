@@ -148,6 +148,11 @@ const DRAWING_CONTRACT = [
   '--viz-good',
   '--theme-text-secondary',
   '--theme-font-sans',
+  // 画布宽度（字号表与线宽都按 640 宽时一单位约一像素写的）与分类框的浅底 / 同色深字、中性浅底
+  '640',
+  '--viz-wash',
+  '-tint',
+  '-ink',
   '<style>',
   '<foreignObject>',
   '<script>'

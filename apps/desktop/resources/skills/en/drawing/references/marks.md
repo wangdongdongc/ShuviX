@@ -25,11 +25,11 @@ Gridlines are a last resort: direct labels first, gridlines only if the reader m
 ## Labels
 
 - **Label directly, and label selectively.** Every part of the figure must be identifiable without relying on color — but a number on *every* point is chaos and goes unread. Name each series once, and call out the endpoint, the extreme, or the one value the argument rests on.
-- **Text never wears the series color.** Labels, values and axis text use `--theme-text-secondary` or `-tertiary`; identity comes from the colored mark *beside* the text. Several slots are illegible as text on some theme surfaces, so this is a correctness rule, not a style preference.
+- **Text never wears the series color.** Labels, values and axis text use `--theme-text-secondary` or `-tertiary`; identity comes from the colored mark *beside* the text. The one exception is text sitting on a category tint, which uses that slot's `--viz-N-ink`. Several slots are illegible as text on some theme surfaces, so this is a correctness rule, not a style preference.
 - **Put labels outside marks.** You cannot measure text in hand-written SVG, so an inside-the-bar label is a bet you will sometimes lose, and a clipped label is worse than none. Bars → value past the tip. Columns → value above the cap. Lines → name at the right end.
 - **Anchor deliberately.** `text-anchor="end"` for row labels in a left gutter, `middle` under a column, `start` after a bar tip. Getting this right is what makes a hand-laid grid look aligned.
 - **Vertical centering.** SVG text sits on its baseline, so a label centered on a row at `y` goes at about `y + 4` for an 11-unit font. `dominant-baseline` is inconsistent across renderers — just do the arithmetic.
-- **Size.** 11 units is the floor for anything that must be read; 10 is acceptable for axis ticks only. Set `font-family="var(--theme-font-sans)"` on a wrapping `<g>` rather than on every `<text>`.
+- **Size.** 11 units is the floor for anything that must be read, axis ticks included. Set `font-family="var(--theme-font-sans)"` on a wrapping `<g>` rather than on every `<text>`.
 - **Aligned columns of numbers** get `style="font-variant-numeric: tabular-nums"`. A single large number does not — equal-width digits make it look loose.
 
 ## Legend

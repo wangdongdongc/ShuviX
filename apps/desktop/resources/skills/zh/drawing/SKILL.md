@@ -1,6 +1,6 @@
 ---
 name: drawing
-description: "内联 SVG 图的契约与手艺 —— 图要能正确渲染必须守的规矩（viewBox、颜色 token、什么会被剥掉），怎么选图型（以及什么时候根本不该画图）、小到读得懂的框与箭头图、标记规格、标注与图例规矩、分类/顺序/状态三套色板、交互块（仅限系统提示里讲了它的场合：什么时候值得用、怎么排、怎么接线、一个成品范例），以及一份「画成这样就是错的」清单。本会话画第一张图之前先加载，哪怕只是两个框的草图。"
+description: "内联 SVG 图的契约与手艺 —— 图要能正确渲染必须守的规矩（viewBox、颜色 token、什么会被剥掉），怎么选图型（以及什么时候根本不该画图）、小到读得懂的框与箭头图、标记规格、标注与图例规矩、分类/顺序/状态三套色板、观感（字号表、两种字重、分类浅底、线宽、留白、数字格式）、交互块（仅限系统提示里讲了它的场合：什么时候值得用、怎么排、怎么接线、一个成品范例），以及一份「画成这样就是错的」清单。本会话画第一张图之前先加载，哪怕只是两个框的草图。"
 ---
 
 # 作图
@@ -12,12 +12,13 @@ description: "内联 SVG 图的契约与手艺 —— 图要能正确渲染必�
 图再小，违反其中一条就会渲染错。
 
 - **一个元素一行** —— `edit` 需要锚点，压成一行的图只能重画。
-- **根上带 `viewBox`，绝不写 `width` / `height`** —— 图按栏宽缩放，溢出部分被裁掉。
+- **根上带 `viewBox`，绝不写 `width` / `height`，宽度取 640** —— 图按栏宽缩放，溢出部分被裁掉。640 大约就是栏宽，于是一个单位约等于一个像素，`font-size="11"` 看上去就是 11；`viewBox` 更窄会被整体放大，连文字一起（320 宽会把 11 号字放成 22）。内容窄就在 640 宽的 `viewBox` 里居中。
 - **根上带 `role="img"` 和 `aria-label`**，说这张图画的是什么 —— 这个标签同时就是图的标题。
 - **颜色只取自 token，绝不写十六进制** —— 写死颜色会在 11 套主题里的 10 套下失效。`var()` 在 presentation attribute 里直接可用：`fill="var(--viz-1)"`。
   - 系列 `--viz-1` … `--viz-8`，按此顺序 · 量级 `--viz-seq-1` … `--viz-seq-5` · 极性 `--viz-1` ↔ `--viz-mid` ↔ `--viz-8` · 状态 `--viz-good` / `--viz-warn` / `--viz-serious` / `--viz-critical`
   - 网格线 `--viz-grid` · 坐标轴 `--viz-axis` · 底色 `--theme-bg-secondary` / `-tertiary` · 边框 `--theme-border-primary`
-- **文字穿文字色，绝不穿系列色** —— `fill="var(--theme-text-secondary)"`（或 `-primary` / `-tertiary`）、`font-family="var(--theme-font-sans)"`、`font-size` 不小于 11。
+  - 分类框 `--viz-N-tint`（铺底）配 `--viz-N-ink`（文字）· 高一级的浅底或中性框 `--viz-wash`
+- **文字穿文字色，绝不穿系列色** —— `fill="var(--theme-text-secondary)"`（或 `-primary` / `-tertiary`）、`font-family="var(--theme-font-sans)"`、`font-size` 不小于 11。唯一的例外：分类浅底上的文字用那个槽位的 ink —— `var(--viz-2-tint)` 上写 `var(--viz-2-ink)`。
 - **不要 `<style>`、`<foreignObject>`、`<script>`，不要远程 `href` / `src`** —— 它们在上屏前就被剥掉了。`url(#id)` 这类片段引用没问题，`url(https://…)` 不行。
 
 ## 框与箭头：预算
@@ -32,14 +33,28 @@ description: "内联 SVG 图的契约与手艺 —— 图要能正确渲染必�
 
 **交互块**（```interactive —— 滑块、逐步演示、悬停读数的图）也有自己的参考：`references/interactive.md` —— **前提是你的系统提示里讲了 ```interactive 交互块**；没讲的话，你的回复显示在跑不了它的地方，就不要写。写之前先读它；下面的色板规矩在块里同样适用。
 
+## 观感
+
+画对不等于画完。下面八条决定一张图看起来是不是应用自己画的；完整的指南 —— 字号表、留白、数字格式、交互块的组件（前提是你的系统提示里讲了交互块）—— 在 `references/style.md`。
+
+1. **两种字重：400 和 500。** 框标题、头条数字用 500，其余 400。绝不用 600、700 或 `bold`。
+2. **短标注，不加粗、不全大写。** 英文只首字母大写（"Monthly revenue"，不写 "Monthly Revenue"）；标注里不加粗，末尾不加句号。
+3. **细线。** 框、连线、坐标轴、网格线都是 1；唯一的强调 1.5；除非线宽本身是数据，不再更粗。
+4. **按种类上色，不按顺序上色。** 缺省是中性（`--viz-wash` 铺底、`--theme-border-primary` 描边）。框按种类分组时，一种就是一个槽位：`--viz-N-tint` 铺底、`--viz-N` 描边、`--viz-N-ink` 写字。最多三种；结构性的框保持中性。
+5. **扁平。** 不要渐变、阴影、模糊、发光，也不要背景矩形 —— 卡片本身就是底。
+6. **不要 emoji，图里不放标题。** 标题是 `aria-label` 和图前面那句话；解释写在回复里。
+7. **数字取整、带格式。** `1,234`、`12.5%`、`-$5M`；同一张图精度一致；单位只写一次。
+8. **留白。** 四边都有边距，同类的东西一样高，用留白而不是边框来分隔。
+
 ## 按这个顺序走。颜色排最后。
 
 1. **先判断它该不该是一张图。** 散文常常更清楚，而一个数字不是图表。→ `references/choosing-a-form.md`
 2. **按数据的职责选图型**——量级、身份、极性、单个头条数、随时间变化。职责决定图型，这不是品味问题。→ 同一份
 3. **摆标记。** 细笔、退让的骨架、用留白而不是描边来分隔。→ `references/marks.md`
 4. **按职责分配颜色**（见下）——不按喜好，也不按排名。
-5. **拿 `references/anti-patterns.md` 过一遍。** 你的图对上哪一条，它就是错的。这一步的性价比高于本技能里的任何东西，别跳过。
-6. **读一遍渲染出来的图。** 标注互相压住、图元跑出 `viewBox`、用图例干了直接标注该干的活——都说明还没画完。
+5. **套上观感**（见上）。写交互块之前 —— 前提是你的系统提示里讲了它 —— 或者画部件较多的图之前，先读 `references/style.md`。
+6. **拿 `references/anti-patterns.md` 过一遍。** 你的图对上哪一条，它就是错的。这一步的性价比高于本技能里的任何东西，别跳过。
+7. **读一遍渲染出来的图。** 标注互相压住、图元跑出 `viewBox`、用图例干了直接标注该干的活——都说明还没画完。
 
 ## 颜色：四种职责，四组 token
 
@@ -65,17 +80,25 @@ description: "内联 SVG 图的契约与手艺 —— 图要能正确渲染必�
 ## 一张完整的小图
 
 ```svg
-<svg viewBox="0 0 320 120" role="img" aria-label="各档请求量">
-  <line x1="40" y1="100" x2="300" y2="100" stroke="var(--viz-axis)" stroke-width="1"/>
-  <rect x="56" y="40" width="40" height="60" rx="4" fill="var(--viz-1)"/>
-  <rect x="136" y="64" width="40" height="36" rx="4" fill="var(--viz-2)"/>
-  <g font-family="var(--theme-font-sans)" font-size="11" text-anchor="middle"
-     fill="var(--theme-text-secondary)">
-    <text x="76" y="116">免费</text>
-    <text x="156" y="116">付费</text>
+<svg viewBox="0 0 640 128" role="img" aria-label="各档请求量：免费 1,840，团队 960，企业 410">
+  <g font-family="var(--theme-font-sans)" font-size="11" text-anchor="end" fill="var(--theme-text-secondary)">
+    <text x="100" y="32" dominant-baseline="central">免费</text>
+    <text x="100" y="64" dominant-baseline="central">团队</text>
+    <text x="100" y="96" dominant-baseline="central">企业</text>
+  </g>
+  <rect x="112" y="22" width="460" height="20" rx="4" fill="var(--viz-1)"/>
+  <rect x="112" y="54" width="240" height="20" rx="4" fill="var(--viz-1)"/>
+  <rect x="112" y="86" width="102" height="20" rx="4" fill="var(--viz-1)"/>
+  <line x1="112" y1="14" x2="112" y2="114" stroke="var(--viz-axis)" stroke-width="1"/>
+  <g font-family="var(--theme-font-sans)" font-size="11" fill="var(--theme-text-secondary)" style="font-variant-numeric: tabular-nums">
+    <text x="580" y="32" dominant-baseline="central">1,840</text>
+    <text x="360" y="64" dominant-baseline="central">960</text>
+    <text x="222" y="96" dominant-baseline="central">410</text>
   </g>
 </svg>
 ```
+
+每根柱子同一个色相（它们比的是同一个量，上色只会把长度再说一遍），标签放在右对齐的左侧栏，数值紧跟在柱端之后，柱子 20 粗、彼此留有空隙，数值都写出来了所以不画网格线。
 
 收工之前先自己读一遍这张图：标注互相压住、图元跑到 `viewBox` 外面、或者用图例干了本该由直接标注干的活，都说明它还没画完。
 
@@ -83,5 +106,5 @@ description: "内联 SVG 图的契约与手艺 —— 图要能正确渲染必�
 
 - **你量不了文字。** 没有任何东西告诉你一个标注渲染出来有多宽，所以塞进柱子里的标注是一次押注，迟早会被裁掉。标注放在标记外面。非要估算时，西文按每字符约 0.6em、中日韩按每字 1em 打底，然后再留出余量。
 - **没有任何东西替你排版。** 每一个坐标都是你自己定的，所以碰撞是缺省的失败方式。按网格干活——固定的左侧栏放行标签、固定的基线、均匀的间距——并把数量压到网格能保持粗疏。
-- **`viewBox` 就是整个坐标系。** 取整数，缩放交给卡片。别去追像素尺寸；`0 0 320 180` 比 `0 0 1024 576` 好摆得多，渲染出来一模一样。
+- **`viewBox` 就是整个坐标系，而它的宽度决定比例。** 宽度保持 640，单位就等于像素：本技能里的字号表和线宽都以此为准。高度取一个能装下内容加边距的整数。
 - **给图一个无障碍名字**：根节点上写 `role="img"` 加 `aria-label`，说清这张图给的是什么。应用也正是从这里读回标题。
