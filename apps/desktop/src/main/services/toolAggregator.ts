@@ -3,7 +3,7 @@
  * 独立于 agent / sessionService，避免循环依赖
  */
 
-import { getBuiltinToolEntries } from './toolRegistry'
+import { getPlatformBuiltinToolEntries } from './toolRegistry'
 import { mcpService } from './mcpService'
 import { skillService } from './skillService'
 export type { ToolName } from '../types/tools'
@@ -15,7 +15,7 @@ export type { ToolName } from '../types/tools'
  * 这里若按连接状态过滤就会把还没连的那台在前一刻抹掉。
  */
 export function getAllToolNames(projectPath?: string): string[] {
-  const builtinNames = getBuiltinToolEntries().map((e) => e.name)
+  const builtinNames = getPlatformBuiltinToolEntries().map((e) => e.name)
   const skillNames = skillService.findEnabled(projectPath).map((s) => `skill:${s.name}`)
   return [...builtinNames, ...mcpService.getEnabledToolNames(), ...skillNames]
 }

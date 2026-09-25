@@ -22,6 +22,7 @@ export function getBuiltinToolDefinitions(): BuiltinToolDefinition[] {
       name: entry.name,
       label: entry.getLabel(),
       group: entry.group,
+      platforms: entry.platforms,
       icon: entry.presentation?.icon,
       iconColor: entry.presentation?.iconColor,
       describe: entry.describe

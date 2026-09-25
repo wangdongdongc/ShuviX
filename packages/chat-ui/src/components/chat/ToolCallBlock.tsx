@@ -44,7 +44,11 @@ import {
   fallbackToolPresentation,
   parseBuiltinMcpToolName
 } from '@shuvix/chat-protocol/builtinMcpPresentations'
-import { isBackgroundCall, toolResultImage } from '@shuvix/chat-protocol/types/chatMessage'
+import {
+  isBackgroundCall,
+  isShellCommandDetails,
+  toolResultImage
+} from '@shuvix/chat-protocol/types/chatMessage'
 import { ToolImageThumb } from './ToolImageThumb'
 import { CodeView } from '../code/CodeView'
 import { copyToClipboard } from '../../utils/clipboard'
@@ -105,6 +109,7 @@ const LANG_TO_EXT: Record<string, string> = {
   shell: '.sh',
   sh: '.sh',
   zsh: '.sh',
+  powershell: '.ps1',
   python: '.py',
   sql: '.sql',
   typescript: '.ts',
@@ -281,7 +286,7 @@ export function ToolCallBlock({
               <TerminalView
                 command={String(args?.command ?? '')}
                 output={result}
-                cwd={details?.type === 'bash' ? details.cwd : undefined}
+                cwd={isShellCommandDetails(details) ? details.cwd : undefined}
                 host={
                   details?.type === 'ssh'
                     ? details.host
@@ -292,7 +297,9 @@ export function ToolCallBlock({
                       : undefined
                 }
                 exitCode={
-                  details?.type === 'bash' || details?.type === 'ssh' ? details.exitCode : undefined
+                  isShellCommandDetails(details) || details?.type === 'ssh'
+                    ? details.exitCode
+                    : undefined
                 }
                 running={status === 'running'}
               />

@@ -5,7 +5,9 @@
  */
 
 // 通用工具
+// 命令工具按平台二选一：bash（macOS / Linux）与 powershell（Windows），见注册项的 platforms
 import './bash'
+import './powershell'
 import './read'
 import './write'
 import './edit'

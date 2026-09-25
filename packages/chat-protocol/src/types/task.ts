@@ -23,7 +23,10 @@ export type TaskKind = 'bash' | 'agent' | 'sub-session'
  */
 export type TaskStatus = 'running' | 'waiting-input' | 'done' | 'error' | 'killed'
 
-/** bash 任务的专属面 —— 进程与日志 */
+/**
+ * bash 任务的专属面 —— 进程与日志。
+ * 「bash」在这里指「命令工具起的进程」：Windows 上 powershell 工具起的任务也是这个 kind。
+ */
 export interface BashTaskSubject {
   kind: 'bash'
   command: string

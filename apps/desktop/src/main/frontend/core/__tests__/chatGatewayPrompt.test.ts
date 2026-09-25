@@ -12,7 +12,10 @@ const mocks = vi.hoisted(() => ({
 }))
 
 vi.mock('../../../tools/allTools', () => ({}))
-vi.mock('../../../services/toolRegistry', () => ({ getBuiltinToolEntries: () => [] }))
+vi.mock('../../../services/toolRegistry', () => ({
+  getBuiltinToolEntries: () => [],
+  getPlatformBuiltinToolEntries: () => []
+}))
 vi.mock('../../../services/sessionService', () => ({
   sessionService: {
     ensureAgentSession: mocks.ensureAgentSession,

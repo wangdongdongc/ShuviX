@@ -64,8 +64,8 @@ style, each with file and line. Never modify files.
 
 一个逗号分隔的字符串。每一项是下面之一：
 
-- **内置工具名** —— 大小写不敏感，归一为小写：`bash`、`read`、`write`、`edit`、`ls`、`glob`、`grep`、
-  `ask`、`git`、`session`、`knowledge`、`artifact`；
+- **内置工具名** —— 大小写不敏感，归一为小写：`bash`、`powershell`、`read`、`write`、`edit`、`ls`、`glob`、
+  `grep`、`ask`、`git`、`session`、`knowledge`、`artifact`；
 - `agent` —— 选择加入用 `agent` 工具**派发子代理**（受嵌套上限约束：被派发的 agent 只在深度上限
   —— 缺省 2 —— 允许时才能继续派发）；
 - `mcp:<server>` —— 该 MCP 服务器的全部工具（服务器名按设置里配置的写；前缀后的大小写保留；创建
@@ -76,11 +76,16 @@ style, each with file and line. Never modify files.
 - `skill:<name>` —— 那个 skill（带命名空间的 skill 写成 `skill:<dir>:<name>`；ShuviX 自带的技能写成
   `skill:builtin:<name>`）。
 
+**平台特定工具**只在部分平台上存在：`bash` 在 macOS 和 Linux 上，`powershell` 在 Windows 上
+（设置 → LLM 工具里会在它们后面标出平台）。把每个平台的版本都列上 —— 内置 agent 把 `bash` 和
+`powershell` 都写上了 —— 每台机器只装配它有的那一个，于是同一份文件在哪台机器上都成立。只列了 `bash`
+的 agent 在 Windows 上就没有命令工具。
+
 条目按顺序去重。本机上不存在的名字静默丢弃 —— agent 照常创建，只是没有它。**列表里写了的都恒生效**，
 无论这个 agent 以哪种方式被用上。它做会话的根时，其中的 `mcp:` / `skill:` 项在这条会话的扩展能力
 选择器里显示为已勾、锁住（悬停会说是哪个 agent 声明的）；会话自己的勾选只能在其上叠加，要去掉一项
 就得覆盖这个 agent。**收窄工具列表不是 ShuviX 表达角色的方式**：一个没有 `grep` 的 agent 只会拿
-`bash` 去 grep。内置的 `work`、`chat`、`coding` 三者刻意共用一份列表（`bash, read, write, edit, ask,
+`bash` 去 grep。内置的 `work`、`chat`、`coding` 三者刻意共用一份列表（`bash, powershell, read, write, edit, ask,
 ls, grep, glob, agent, session, knowledge, artifact, skill:builtin:drawing`），
 只在正文上有区别。
 
@@ -94,7 +99,8 @@ frontmatter 之后的全部内容（去首尾空白）就是系统提示词。�
 | `{{shuvix:workingDirectory}}`   | 会话工作目录的绝对路径                                        |
 | `{{shuvix:isGitRepo}}`          | `Yes` / `No` —— 该目录下有没有 `.git`                          |
 | `{{shuvix:platform}}`           | `darwin` / `win32` / `linux`                                   |
-| `{{shuvix:shell}}`              | `zsh` / `bash` / `fish` / shell 的路径                          |
+| `{{shuvix:shell}}`              | 命令工具所用的 shell：`bash`，Windows 上是 `PowerShell 7 (pwsh)` / `Windows PowerShell 5.1` |
+| `{{shuvix:shellTool}}`          | 本平台的命令工具：`bash` / `powershell`                        |
 | `{{shuvix:os}}`                 | 操作系统类型与版本                                            |
 | `{{shuvix:date}}`               | 今天，`YYYY-MM-DD`                                             |
 | `{{shuvix:language}}`           | 界面语言，如 `中文 (zh)` / `English (en)`                       |

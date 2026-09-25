@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # shuvix-cli — POSIX shim that runs the bundled Electron binary in node mode.
 #
-# Required env (injected by ShuviX's bash tool when launching the AI):
+# Required env (injected by ShuviX's command tools when launching the AI):
 #   SHUVIX_ELECTRON  absolute path to the Electron binary shipped with ShuviX
 #   SHUVIX_CLI_JS    absolute path to the bundled cli.js
 #

@@ -1,5 +1,6 @@
 /**
  * 后台任务服务 —— `bash({ run_in_background: true })` 起的长驻进程
+ * （Windows 上是 `powershell`，同一条路径；下文的「bash 任务」泛指两者，任务 kind 也都记作 'bash'）
  *
  * **簿记不在这里**：任务的身份、状态、等待者与完成通知归后台任务枢纽
  * （`services/taskRegistry` → `@shuvix/agent-runtime` 的 task/registry），bash、派生 agent
@@ -51,7 +52,12 @@ import {
 } from 'node:fs'
 import { join } from 'node:path'
 import type { TaskInfo } from '@shuvix/agent-runtime'
-import { getShellConfig, killProcessTree, sanitizeBinaryOutput } from '../utils/toolUtils/shell'
+import {
+  killProcessTree,
+  sanitizeBinaryOutput,
+  shellInvocation,
+  type ShellKind
+} from '../utils/toolUtils/shell'
 import { buildSpawnEnv, getToolResultsDir } from '../utils/paths'
 import { createLogger } from '../logger'
 import { taskRegistry, toBgTaskInfo, setTaskNotifier, type TaskNotifier } from './taskRegistry'
@@ -131,6 +137,8 @@ export type CommandOutcome =
 export interface RunCommandParams {
   sessionId: string
   toolCallId: string
+  /** 跑命令的 shell —— 与发起它的命令工具同名（bash / powershell），各自只在自己的平台上存在 */
+  shell: ShellKind
   command: string
   description: string
   cwd: string
@@ -319,22 +327,27 @@ function formatExitNotice(task: TaskInfo, tail: string): string {
 export async function runCommand(params: RunCommandParams): Promise<CommandOutcome> {
   const { sessionId, toolCallId, command, description, cwd, extraEnv, background } = params
   const logPath = join(getToolResultsDir(sessionId), `${toolCallId}.log`)
-  const { shell, args } = getShellConfig()
+  const invocation = shellInvocation(params.shell, command)
 
   // Windows 上不能用 'a'：libuv 以 append-only 访问权（FILE_APPEND_DATA，无 FILE_WRITE_DATA）
-  // 打开 O_APPEND 文件，而 MSYS2/cygwin 子进程（Git Bash）对磁盘文件按偏移写，往这种继承
-  // 句柄写字节拿不到 —— 日志恒为空，且最后一个 echo 写失败会把退出码带成 1。
+  // 打开 O_APPEND 文件，而 MSYS2/cygwin 程序（Git for Windows 带的 ls / grep 等，PowerShell 里
+  // 照样能调到）对磁盘文件按偏移写，往这种继承句柄写字节拿不到 —— 日志恒为空，且最后一次
+  // 写失败会把退出码带成 1。
   // logPath 按 toolCallId 唯一、不存在跨调用追加的场景，'w' 与 'a' 等价；POSIX 保持 'a'。
   // 回归测试：services/__tests__/bgTaskService.test.ts
   const fd = openSync(logPath, process.platform === 'win32' ? 'w' : 'a')
   let child: ChildProcess
   try {
-    child = spawn(shell, [...args, command], {
+    child = spawn(invocation.file, invocation.args, {
       cwd,
       env: buildSpawnEnv(extraEnv),
       // stdin 恒为 /dev/null（见文件头第 6 点）；stdout/stderr 同一个 fd
       stdio: ['ignore', fd, fd],
-      detached: process.platform !== 'win32'
+      detached: process.platform !== 'win32',
+      // Windows：GUI 进程（Electron）拉起控制台程序（powershell.exe）时，不带 CREATE_NO_WINDOW
+      // 就会给它新开一个可见的控制台窗口 —— 每条命令闪一下黑框。隐藏后子进程拿到的是
+      // 无窗口的控制台，命令里再起的 git/node 等继承它，也不会各自再弹。POSIX 上无作用
+      windowsHide: true
     })
   } finally {
     // uv_spawn 在 spawn() 内部同步把 fd dup 进子进程，此处关闭是安全的
@@ -598,9 +611,12 @@ export function stopCommandFor(info: BgTaskInfo): string {
   return process.platform === 'win32' ? `taskkill /T /F /PID ${info.pid}` : `kill -- -${info.pid}`
 }
 
-/** 停止命令的模板形态 —— 供参数 schema 描述使用（见 formatStartReceipt 关于指令归属的说明） */
-export function stopCommandHint(): string {
-  return process.platform === 'win32' ? 'taskkill /T /F /PID <pid>' : 'kill -- -<pid>'
+/**
+ * 停止命令的模板形态 —— 供参数 schema 描述使用（见 formatStartReceipt 关于指令归属的说明）。
+ * 按 shell 而不是按当前平台给：设置页在任何平台上都要展示两个工具各自真实的描述。
+ */
+export function stopCommandHint(shell: ShellKind): string {
+  return shell === 'powershell' ? 'taskkill /T /F /PID <pid>' : 'kill -- -<pid>'
 }
 
 /**

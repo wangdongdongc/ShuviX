@@ -3,7 +3,7 @@ shuvix: policy v1
 shuvix-builtin: true
 name: ask-on-command
 shuvix-displayName: 命令执行前询问
-description: bash/ssh 每条命令都逐条询问用户；唯一豁免是会话级免询问开关。
+description: bash / PowerShell / ssh 每条命令都逐条询问用户；唯一豁免是会话级免询问开关。
 shuvix-policy-scope:
   subject.kind: [agent]
   object.type: [command]

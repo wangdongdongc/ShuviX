@@ -3,7 +3,7 @@ shuvix: policy v1
 shuvix-builtin: true
 name: ask-on-command
 shuvix-displayName: コマンド実行前に確認
-description: bash/ssh の全コマンドはコマンドごとにユーザー確認が必要。唯一の免除はセッション単位の自動許可。
+description: bash / PowerShell / ssh の全コマンドはコマンドごとにユーザー確認が必要。唯一の免除はセッション単位の自動許可。
 shuvix-policy-scope:
   subject.kind: [agent]
   object.type: [command]

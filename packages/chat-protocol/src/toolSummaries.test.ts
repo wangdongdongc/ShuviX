@@ -23,6 +23,35 @@ describe('buildToolSummary', () => {
   })
 })
 
+/** Windows 上的命令工具 `powershell` 与 bash 共用一个摘要：模型写的用途说明 + 自定义超时 */
+describe('buildToolSummary — powershell', () => {
+  it('F2 — 说明 + 超时；没有超时只有说明；空参数没有摘要', () => {
+    expect(buildToolSummary('powershell', { description: 'List files', timeout: 30 })).toBe(
+      'List files · 30s'
+    )
+    expect(buildToolSummary('powershell', { description: 'List files' })).toBe('List files')
+    expect(buildToolSummary('powershell', {})).toBeUndefined()
+  })
+
+  it('F2 — 与 bash 的摘要逐条一致', () => {
+    const table: Record<string, unknown>[] = [
+      {},
+      { command: 'Get-Date' },
+      { description: 'Build' },
+      { description: 'Build', timeout: 300 },
+      { description: 'Build', timeout: 0 },
+      { timeout: 45 },
+      { description: '', timeout: '10' },
+      { description: 'Tail log', run_in_background: true }
+    ]
+    for (const args of table) {
+      expect(buildToolSummary('powershell', args), JSON.stringify(args)).toBe(
+        buildToolSummary('bash', args)
+      )
+    }
+  })
+})
+
 describe('buildToolSummary — knowledge', () => {
   it('TS-1 action + 该 action 最有信息量的参数（write 标题 / read 路径 / search 查询词）；只有动作时不带尾巴；无参数无摘要；图标与 labelKey', () => {
     expect(

@@ -19,14 +19,18 @@ import { asStr, field, fileField } from './toolSummaryHelpers'
 /** 根据工具调用 args 生成折叠态摘要文本；返回 undefined 表示无摘要 */
 export type ToolSummaryBuilder = (args: Record<string, unknown>) => string | undefined
 
+/** 命令工具（bash / powershell）的折叠态摘要：模型写的用途说明 + 自定义超时 */
+const shellCommandSummary: ToolSummaryBuilder = (args) => {
+  const description = asStr(args.description)
+  const timeout = asStr(args.timeout)
+  return [description, timeout && `${timeout}s`].filter(Boolean).join(' · ') || undefined
+}
+
 /** 非共享定义的工具摘要函数（按工具名对齐各端注册的工具） */
 const EXTRA_SUMMARY_BUILDERS: Record<string, ToolSummaryBuilder> = {
   // ── 桌面端主进程注册的内置工具 ──
-  bash: (args) => {
-    const description = asStr(args.description)
-    const timeout = asStr(args.timeout)
-    return [description, timeout && `${timeout}s`].filter(Boolean).join(' · ') || undefined
-  },
+  bash: shellCommandSummary,
+  powershell: shellCommandSummary,
   // ssh / database 曾是内置工具，现为内置 MCP server（见 builtinMcpPresentations）；保留供历史会话展示
   ssh: field('description'),
   database: field('description'),

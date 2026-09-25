@@ -24,7 +24,7 @@ import {
   Wrench,
   type LucideIcon
 } from 'lucide-react'
-import type { BuiltinToolDefinition } from '@shuvix/chat-protocol/chatApi'
+import type { BuiltinToolDefinition, ToolPlatform } from '@shuvix/chat-protocol/chatApi'
 import { SettingsSection } from './SettingsPrimitives'
 
 /** 列表末尾追加的宿主特有子页（无对应 LLM 工具，如桌面 Browser 数据/证书设置） */
@@ -65,15 +65,44 @@ function ToolTabIcon({ name }: { name?: string }): React.JSX.Element {
   return <Icon size={14} className="shrink-0 text-text-tertiary" />
 }
 
+/** 平台的展示名 —— 专有名词，各语言相同，不进 locales */
+const PLATFORM_NAMES: Record<ToolPlatform, string> = {
+  darwin: 'macOS',
+  linux: 'Linux',
+  win32: 'Windows'
+}
+
+/**
+ * 平台特定工具名后的小标签（`macOS · Linux` / `Windows`）；全平台工具不画。
+ * 列表在任何平台上都列出全部工具，标签说的是「这个工具在哪些平台上存在」。
+ */
+function PlatformTag({ platforms }: { platforms?: ToolPlatform[] }): React.JSX.Element | null {
+  const { t } = useTranslation()
+  if (!platforms?.length) return null
+  const text = platforms.map((p) => PLATFORM_NAMES[p] ?? p).join(' · ')
+  return (
+    <span
+      data-tool-platforms={platforms.join(' ')}
+      title={t('settings.toolPlatformOnly', { platforms: text })}
+      className="shrink-0 text-[9px] leading-none px-[3px] py-0.5 rounded border border-border-secondary text-text-tertiary whitespace-nowrap"
+    >
+      {text}
+    </span>
+  )
+}
+
 /** 子分类导航按钮（与 ProviderSettings / SkillSettings 保持视觉一致） */
 function SubTabButton({
   icon,
   label,
+  tag,
   active,
   onClick
 }: {
   icon: React.ReactNode
   label: string
+  /** 标签后的附注（平台标签）—— 不随标签截断 */
+  tag?: React.ReactNode
   active: boolean
   onClick: () => void
 }): React.JSX.Element {
@@ -88,8 +117,9 @@ function SubTabButton({
     >
       {/* 18px 高度槽位 — 与 Provider/Skill 行末 Toggle 同高，保证内容行高一致 */}
       <span className="shrink-0 inline-flex items-center h-[18px]">{icon}</span>
-      <div className="min-w-0 flex-1">
-        <div className="text-xs font-medium truncate">{label}</div>
+      <div className="min-w-0 flex-1 flex items-center gap-1">
+        <div className="min-w-0 text-xs font-medium truncate">{label}</div>
+        {tag}
       </div>
     </button>
   )
@@ -223,6 +253,7 @@ function ToolMetaCard({ def }: { def: BuiltinToolDefinition }): React.JSX.Elemen
             <span className="text-[10px] px-1.5 py-0.5 rounded bg-bg-tertiary text-text-tertiary">
               {def.group}
             </span>
+            <PlatformTag platforms={def.platforms} />
           </div>
 
           {/* 描述（与发给 LLM 一致） */}
@@ -282,6 +313,7 @@ export function BuiltinToolsView({
               key={d.name}
               icon={<ToolTabIcon name={d.icon} />}
               label={d.label || d.name}
+              tag={<PlatformTag platforms={d.platforms} />}
               active={subTab === d.name}
               onClick={() => setSubTab(d.name)}
             />

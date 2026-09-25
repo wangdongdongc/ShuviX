@@ -7,13 +7,15 @@
  * 在调用时计算；全程不实例化工具、不需要宿主运行时上下文，因此各端无需占位 ctx / 临时句柄。
  */
 import type { TSchema } from 'typebox'
-import type { BuiltinToolDefinition } from '@shuvix/chat-protocol/chatApi'
+import type { BuiltinToolDefinition, ToolPlatform } from '@shuvix/chat-protocol/chatApi'
 
 /** 单个工具「发给 LLM」定义的注册条目（宿主无关） */
 export interface ToolDefinitionEntry {
   name: string
   label: string
   group: string
+  /** 仅在这些平台上可用；缺省 = 全平台（见 BuiltinToolDefinition.platforms） */
+  platforms?: readonly ToolPlatform[]
   /** 折叠图标名（lucide），来自工具 presentation */
   icon?: string
   iconColor?: string
@@ -40,6 +42,7 @@ export function toBuiltinToolDefinitions(
       name: e.name,
       label: e.label,
       group: e.group,
+      ...(e.platforms ? { platforms: [...e.platforms] } : {}),
       icon: e.icon,
       iconColor: e.iconColor,
       description: described.description,

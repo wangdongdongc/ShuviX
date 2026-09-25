@@ -10,6 +10,7 @@
 import type { TSchema } from 'typebox'
 import type { ToolContext } from '../services/toolContext'
 import type { ToolPresentation } from '@shuvix/chat-protocol/types/toolPresentation'
+import type { ToolPlatform } from '@shuvix/chat-protocol/chatApi'
 
 /** 工具在 UI 中的分组标识 */
 export type BuiltinGroup = 'general' | 'ripgrep' | 'remote' | 'agent' | 'system'
@@ -21,6 +22,14 @@ export interface BuiltinToolMeta {
   // （agent-runtime DEFAULT_AGENT_PROFILE / 用户 ~/.shuvix/agents/default.md）显式列出。
   /** 隐藏工具不在工具选择器中展示，由系统自动管理 */
   hidden?: boolean
+  /**
+   * 平台特定工具：只在这些平台上解析给 agent（缺省 = 全平台）。
+   *
+   * 档案可以同时列出几个平台各自的版本（内置档案写 `bash, powershell`），宿主按当前平台
+   * 只装配其中存在的那个 —— 档案因此与平台无关，用户的 agent md 拷到另一台机器上照样成立。
+   * 注册与展示不受影响：设置页恒列出全部工具，给平台特定的那些挂上平台标签。
+   */
+  platforms?: readonly ToolPlatform[]
   getLabel: () => string
   getHint: () => string
   /**
@@ -45,6 +54,22 @@ export function registerBuiltinTool(meta: BuiltinToolMeta): void {
 
 export function getBuiltinToolEntries(): readonly BuiltinToolMeta[] {
   return _entries
+}
+
+/** 这个工具在给定平台（缺省 = 当前进程平台）上存不存在 */
+export function isToolOnPlatform(
+  meta: Pick<BuiltinToolMeta, 'platforms'>,
+  platform: string = process.platform
+): boolean {
+  return !meta.platforms || (meta.platforms as readonly string[]).includes(platform)
+}
+
+/**
+ * 当前平台上存在的内置工具 —— agent 装配、工具列表这类「这台机器上能用什么」的消费方读它；
+ * 只有设置页的只读展示读全量（getBuiltinToolEntries）。
+ */
+export function getPlatformBuiltinToolEntries(): readonly BuiltinToolMeta[] {
+  return _entries.filter((e) => isToolOnPlatform(e))
 }
 
 export function unregisterBuiltinTool(name: string): void {

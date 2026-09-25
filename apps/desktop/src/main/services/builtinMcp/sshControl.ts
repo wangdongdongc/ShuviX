@@ -127,7 +127,9 @@ function runProcess(
     const child = spawn(bin, args, {
       env: buildSpawnEnv() as NodeJS.ProcessEnv,
       // stdin 直接关掉：BatchMode 下没有交互，留着只会让读 stdin 的远端命令等到超时
-      stdio: ['ignore', 'pipe', 'pipe']
+      stdio: ['ignore', 'pipe', 'pipe'],
+      // Windows 上 ssh.exe / scp.exe 是控制台程序，不隐藏就每次弹一个空控制台窗口
+      windowsHide: true
     })
 
     let stdout = ''

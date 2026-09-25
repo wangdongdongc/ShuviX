@@ -78,16 +78,20 @@ vi.mock('../../services/skillService', () => ({
 }))
 
 /** 名单里的内置工具都造得出来，这样工具表里的名字就是 `names` 的投影 */
-vi.mock('../../services/toolRegistry', () => ({
-  getBuiltinToolEntries: () =>
-    mocks.builtinNames.map((name) => ({
-      name,
-      group: 'general' as const,
-      getLabel: () => name,
-      getHint: () => name,
-      factory: () => ({ name })
-    }))
-}))
+vi.mock('../../services/toolRegistry', () => {
+  const registry = {
+    getBuiltinToolEntries: () =>
+      mocks.builtinNames.map((name) => ({
+        name,
+        group: 'general' as const,
+        getLabel: () => name,
+        getHint: () => name,
+        factory: () => ({ name })
+      }))
+  }
+  // 平台特定工具（bash / powershell）按平台过滤后的那份；本组的桩都不声明平台
+  return { ...registry, getPlatformBuiltinToolEntries: registry.getBuiltinToolEntries }
+})
 
 /** 包装器走恒等：本组只关心工具表里有哪些名字 */
 vi.mock('../../services/wrapToolOutput', () => ({

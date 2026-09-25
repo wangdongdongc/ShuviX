@@ -67,8 +67,8 @@ applications' meaning of tool names would be misread — use `shuvix-tools`), an
 
 A comma-separated string. Each entry is one of:
 
-- a **builtin tool name** — case-insensitive, normalised to lower case: `bash`, `read`, `write`,
-  `edit`, `ls`, `glob`, `grep`, `ask`, `git`, `session`, `knowledge`, `artifact`;
+- a **builtin tool name** — case-insensitive, normalised to lower case: `bash`, `powershell`, `read`,
+  `write`, `edit`, `ls`, `glob`, `grep`, `ask`, `git`, `session`, `knowledge`, `artifact`;
 - `agent` — opt-in to **dispatching sub-agents** with the `agent` tool (only up to the nesting
   cap: a dispatched agent may itself dispatch only while the depth limit, 2 by default, allows);
 - `mcp:<server>` — every tool of that MCP server (the server's name as configured in Settings;
@@ -80,13 +80,18 @@ A comma-separated string. Each entry is one of:
 - `skill:<name>` — that skill (a namespaced skill is written `skill:<dir>:<name>`; the skills
   shipped with ShuviX are `skill:builtin:<name>`).
 
+**Platform-specific tools** exist only on some platforms: `bash` on macOS and Linux, `powershell`
+on Windows (Settings → LLM tools tags them with their platforms). List every platform's version —
+the builtin agents list both `bash` and `powershell` — and each machine assembles the one it has, so the
+same file works on every machine. An agent that lists only `bash` has no command tool on Windows.
+
 Entries are de-duplicated in order. A name that does not exist on this host is silently dropped
 — the agent is created without it. **Everything the list names is on**, however the agent is put
 to use. When it is the root of a session, its `mcp:` / `skill:` entries appear in that session's
 extension pickers ticked and locked (hovering says which agent declared them); the session's own
 ticks only add to them, and taking one away means overriding the agent. Narrowing a list is
 **not** how a role is expressed in ShuviX: an agent without `grep` just greps through `bash`.
-The builtin `work`, `chat` and `coding` agents deliberately share one list (`bash, read, write,
+The builtin `work`, `chat` and `coding` agents deliberately share one list (`bash, powershell, read, write,
 edit, ask, ls, grep, glob, agent, session, knowledge, artifact, skill:builtin:drawing`) and differ only in their bodies.
 
 ### The body — the system prompt
@@ -99,7 +104,8 @@ of the form `{{shuvix:name}}`, substituted when the agent is created. On the des
 | `{{shuvix:workingDirectory}}`  | absolute working directory of the session                                           |
 | `{{shuvix:isGitRepo}}`         | `Yes` / `No` — whether that directory has a `.git`                                 |
 | `{{shuvix:platform}}`          | `darwin` / `win32` / `linux`                                                        |
-| `{{shuvix:shell}}`             | `zsh` / `bash` / `fish` / the shell's path                                          |
+| `{{shuvix:shell}}`             | the shell the command tool runs in: `bash`, on Windows `PowerShell 7 (pwsh)` / `Windows PowerShell 5.1` |
+| `{{shuvix:shellTool}}`         | the command tool on this platform: `bash` / `powershell`                            |
 | `{{shuvix:os}}`                | OS type and release                                                                 |
 | `{{shuvix:date}}`              | today, `YYYY-MM-DD`                                                                 |
 | `{{shuvix:language}}`          | the UI language, e.g. `中文 (zh)` / `English (en)`                                  |

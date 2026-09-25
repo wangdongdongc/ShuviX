@@ -1,7 +1,7 @@
 @echo off
 REM shuvix-cli — Windows shim that runs the bundled Electron binary in node mode.
 REM
-REM Required env (injected by ShuviX's bash tool):
+REM Required env (injected by ShuviX's command tools):
 REM   SHUVIX_ELECTRON  absolute path to the Electron binary shipped with ShuviX
 REM   SHUVIX_CLI_JS    absolute path to the bundled cli.js
 

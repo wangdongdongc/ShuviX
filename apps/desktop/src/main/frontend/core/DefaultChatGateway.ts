@@ -5,7 +5,7 @@ import type { InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import { sessionService } from '../../services/sessionService'
 import type { AgentSession } from '../../services/agentSession'
 import '../../tools/allTools'
-import { getBuiltinToolEntries } from '../../services/toolRegistry'
+import { getPlatformBuiltinToolEntries } from '../../services/toolRegistry'
 import { messageService } from '../../services/messageService'
 import { appendModelChange, appendThinkingLevelChange } from '../../services/sessionStorage'
 import { respondToUserInput } from '../../services/userInputBroker'
@@ -250,8 +250,8 @@ export class DefaultChatGateway implements ChatGateway {
     const declared = new Set(defaultProfileTools)
     const declaredBy = (name: string): string | undefined =>
       declared.has(name) ? profile?.displayName || profileName : undefined
-    /** 内置工具（从注册表读取，system 分组不在 UI 中展示） */
-    const builtinTools = getBuiltinToolEntries()
+    /** 内置工具（从注册表读取，system 分组不在 UI 中展示；另一个平台的版本不在这台机器上） */
+    const builtinTools = getPlatformBuiltinToolEntries()
       .filter((e) => e.group !== 'system' && !e.hidden)
       .map((e) => ({
         name: e.name,

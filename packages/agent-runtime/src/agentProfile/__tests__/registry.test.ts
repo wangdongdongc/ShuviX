@@ -58,7 +58,17 @@ describe('buildBuiltinProfile — md 解析 + 宿主参数插值', () => {
     expect(built.systemPrompt).toContain('Widgets live at /widgets/<id>/')
     expect(built.systemPrompt).not.toContain('{{widgetsRoot}}')
     expect(built.source).toBe('builtin')
-    expect(built.tools).toEqual(['read', 'write', 'edit', 'ls', 'glob', 'grep', 'bash', 'git'])
+    expect(built.tools).toEqual([
+      'read',
+      'write',
+      'edit',
+      'ls',
+      'glob',
+      'grep',
+      'bash',
+      'powershell',
+      'git'
+    ])
   })
 
   it('会话级 {{shuvix:*}} 占位符不在此替换（留给 createAgent）', () => {
@@ -282,6 +292,7 @@ describe('knowledge-writer 档案钉板（OKF 知识库的派发执行侧）', (
  */
 const SHARED_BASE_TOOLS = [
   'bash',
+  'powershell',
   'read',
   'write',
   'edit',
@@ -308,6 +319,7 @@ describe('work 档案钉板(项目会话基座：工具集/环境段的唯一事
     // 而是 skill 工具货架上的一本，排在所有工具名之后
     expect(built.tools).toEqual([
       'bash',
+      'powershell',
       'read',
       'write',
       'edit',
@@ -388,6 +400,7 @@ describe('chat 档案钉板(不归属项目的会话的创建基座)', () => {
     // 模块，测试内加载不了），改动需同步 apps/desktop/src/main/tools/allTools.ts
     expect(profile(CHAT_PROFILE_NAME).tools).toEqual([
       'bash',
+      'powershell',
       'read',
       'write',
       'edit',
@@ -509,6 +522,7 @@ describe('coding 档案钉板(从 work 拆出的工程人格)', () => {
     const built = profile('coding')
     expect(built.tools).toEqual([
       'bash',
+      'powershell',
       'read',
       'write',
       'edit',
@@ -655,6 +669,7 @@ describe('notebook 档案钉板(笔记本会话根 Agent 的基座)', () => {
         'grep',
         'glob',
         'bash',
+        'powershell',
         'ask',
         'skill:builtin:drawing'
       ])
@@ -832,6 +847,7 @@ describe('内置档案的能力面：浏览器 / ssh 是按会话勾选的内置
   /** 内置工具名的全集 + 三个已退役的名字（退役的也要认得出来，才抓得到残留） */
   const KNOWN_TOOLS = new Set([
     'bash',
+    'powershell',
     'read',
     'write',
     'edit',
@@ -964,5 +980,66 @@ describe('tab 档案钉板（Chrome 标签页会话的基座）', () => {
       expect(built.model, `tab.${language}`).toBeUndefined()
     }
     expect(BASE_PROFILE_NAMES.has(TAB_PROFILE_NAME)).toBe(true)
+  })
+})
+
+/**
+ * 命令工具按平台二选一（bash：macOS / Linux，powershell：Windows）—— 内置档案因此**成对**点名两个，
+ * 由宿主只装配这台机器上存在的那个；正文里不写死任何一个，而是用 `{{shuvix:shellTool}}` 指代
+ * 「本平台的那个 shell 工具」。三条钉住这套约定，漏一处的后果都是静默的：
+ *  - 只点了 bash 的档案在 Windows 上没有命令工具（反之亦然）；
+ *  - 正文里写死的 `bash` 在 Windows 上指向一个不存在的工具，模型会照着去调；
+ *  - 没有命令工具的档案里出现 shellTool，渲染出来的是一句指向空处的话。
+ */
+describe('命令工具成对 + 正文用 {{shuvix:shellTool}} 指代（三语全集）', () => {
+  const SHELL_TOOL = '{{shuvix:shellTool}}'
+  const allProfiles = (): { profile: AgentProfile; language: string }[] =>
+    LANGS.flatMap((language) =>
+      buildBuiltinProfiles({ ...ALL_PARAMS, language }).map((p) => ({ profile: p, language }))
+    )
+  const holdsShell = (p: AgentProfile): boolean =>
+    p.tools.includes('bash') || p.tools.includes('powershell')
+  /**
+   * 正文去掉代码围栏的 info string（```bash 是给代码块着色的语言名，不是在指代工具）。
+   * 围栏里的内容照查 —— 今天没有哪份正文在那里写 bash / powershell。
+   */
+  const withoutFenceInfo = (body: string): string =>
+    body.replace(/^(\s*(?:```|~~~))[^\n]*$/gm, '$1')
+
+  it('SH-1 点了 bash 就点了 powershell，反之亦然（每份 × 每门语言）', () => {
+    let paired = 0
+    for (const { profile: p, language } of allProfiles()) {
+      const what = `${p.name}.${language}`
+      expect(p.tools.includes('powershell'), what).toBe(p.tools.includes('bash'))
+      if (p.tools.includes('bash')) paired++
+    }
+    // work / chat / coding / notebook / widget × 三语
+    expect(paired, '自检：确实有成对点名的档案').toBeGreaterThanOrEqual(15)
+  })
+
+  it('SH-2 正文（frontmatter 与围栏 info string 之外）不写死 bash / powershell 这两个名字', () => {
+    let fenced = 0
+    for (const { profile: p, language } of allProfiles()) {
+      const body = withoutFenceInfo(p.systemPrompt)
+      if (body !== p.systemPrompt) fenced++
+      const hit = /\b(?:bash|powershell)\b/i.exec(body)
+      // 命中时把前后文一起报出来，省得去三份 md 里翻
+      const context = hit ? body.slice(Math.max(0, hit.index - 40), hit.index + 40) : ''
+      expect(hit?.[0] ?? null, `${p.name}.${language}: ${context}`).toBeNull()
+    }
+    // 自检：剥 info string 这一步确实剥到了东西（widget 正文里有 ```bash 代码块）
+    expect(fenced).toBeGreaterThan(0)
+  })
+
+  it('SH-3 {{shuvix:shellTool}} 只出现在手里有命令工具的档案里；今天引用它的恰是持有命令工具的那五份', () => {
+    const referencing = new Set<string>()
+    for (const { profile: p, language } of allProfiles()) {
+      const what = `${p.name}.${language}`
+      if (p.systemPrompt.includes(SHELL_TOOL)) {
+        expect(holdsShell(p), `${what} 引用了 shellTool 却没有命令工具`).toBe(true)
+        referencing.add(p.name)
+      }
+    }
+    expect([...referencing].sort()).toEqual(['chat', 'coding', 'notebook', 'widget', 'work'])
   })
 })

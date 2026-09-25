@@ -276,7 +276,7 @@ class Qwen3ModelManager {
   /** 运行命令的通用封装 */
   private runCommand(cmd: string, args: string[]): Promise<void> {
     return new Promise((resolve, reject) => {
-      const child = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'] })
+      const child = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
       let stderr = ''
       child.stderr.on('data', (chunk: Buffer) => {
         stderr += chunk.toString()

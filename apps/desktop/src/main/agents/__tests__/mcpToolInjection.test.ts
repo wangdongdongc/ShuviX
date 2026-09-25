@@ -48,7 +48,10 @@ vi.mock('../../services/mcpService', () => ({
 /** 名单里没有 `skill:`，SkillTool 不会被构造；桩在这里只为不加载真模块 */
 vi.mock('../../services/skillTool', () => ({ SkillTool: class {} }))
 vi.mock('../../services/skillService', () => ({ skillService: { findEnabled: () => [] } }))
-vi.mock('../../services/toolRegistry', () => ({ getBuiltinToolEntries: () => [] }))
+vi.mock('../../services/toolRegistry', () => ({
+  getBuiltinToolEntries: () => [],
+  getPlatformBuiltinToolEntries: () => []
+}))
 /** 包装器走恒等：工具表里的就是 getAgentToolsByServerName 返回的对象本身 */
 vi.mock('../../services/wrapToolOutput', () => ({
   wrapToolOutput: (tool: object) => tool,

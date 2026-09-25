@@ -41,15 +41,21 @@ const mocks = vi.hoisted(() => ({
 }))
 
 vi.mock('../../../tools/allTools', () => ({}))
-vi.mock('../../../services/toolRegistry', () => ({
-  getBuiltinToolEntries: () =>
-    ['read', 'bash'].map((name) => ({
+vi.mock('../../../services/toolRegistry', () => {
+  const entries = (names: string[]): object[] =>
+    names.map((name) => ({
       name,
       group: 'general' as const,
       getLabel: () => name,
       getHint: () => `${name} hint`
     }))
-}))
+  // 两份刻意不同：全量里多一个另一平台的 powershell，按平台过滤后的那份（这台 macOS / Linux
+  // 上的）没有它 —— 工具列表该读后者（LT-P1）
+  return {
+    getBuiltinToolEntries: () => entries(['read', 'bash', 'powershell']),
+    getPlatformBuiltinToolEntries: () => entries(['read', 'bash'])
+  }
+})
 vi.mock('../../../services/sessionService', () => ({
   sessionService: {
     ensureAgentSession: vi.fn(),
@@ -222,6 +228,26 @@ describe('DefaultChatGateway.listTools —— 档案声明的 mcp:/skill: 项', 
     expect(rowOf(rows, 'skill:builtin:drawing')).toBeDefined()
     expect(rowOf(rows, 'skill:builtin:drawing')?.declaredBy).toBeUndefined()
     expect(declaredOf(rows)).toEqual({})
+  })
+})
+
+/**
+ * 平台特定的内置工具：工具列表是「这台机器上能用什么」，读按平台过滤后的注册表视图 —— 档案点了
+ * `bash, powershell` 两个，这台机器上只有其中一个，另一个既不出现、也不凭空造一行来锁。
+ */
+describe('DefaultChatGateway.listTools —— 另一个平台的命令工具不列', () => {
+  it('LT-P1 档案点了 powershell（Windows 版）：内置段没有这一行，也没有它的 declaredBy；bash 照列', () => {
+    mocks.getProfile.mockImplementation((name: string) =>
+      name === 'work' ? { ...WORK, tools: ['bash', 'powershell', ...WORK.tools] } : undefined
+    )
+    const rows = chatGateway.listTools(SID)
+    expect(rowOf(rows, 'powershell')).toBeUndefined()
+    expect(rows.filter((r) => r.name === 'powershell')).toEqual([])
+    expect(declaredOf(rows)).not.toHaveProperty('powershell')
+    // 这台机器上有的那个照旧：勾着（档案点了名），不带 declaredBy（内置条目从不带）
+    expect(rowOf(rows, 'bash')).toMatchObject({ defaultEnabled: true })
+    expect(rowOf(rows, 'bash')?.declaredBy).toBeUndefined()
+    expect(rows.filter((r) => r.group === 'general').map((r) => r.name)).toEqual(['read', 'bash'])
   })
 })
 

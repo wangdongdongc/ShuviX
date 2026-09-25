@@ -13,11 +13,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   getBuiltinToolEntries: vi.fn(),
+  getPlatformBuiltinToolEntries: vi.fn(),
   getEnabledToolNames: vi.fn(),
   findEnabled: vi.fn()
 }))
 
-vi.mock('../toolRegistry', () => ({ getBuiltinToolEntries: mocks.getBuiltinToolEntries }))
+vi.mock('../toolRegistry', () => ({
+  // 两份刻意不同（见 PLAT-1）：全量里有另一平台的 powershell，按平台过滤后的那份没有
+  getBuiltinToolEntries: mocks.getBuiltinToolEntries,
+  getPlatformBuiltinToolEntries: mocks.getPlatformBuiltinToolEntries
+}))
 vi.mock('../mcpService', () => ({ mcpService: { getEnabledToolNames: mocks.getEnabledToolNames } }))
 vi.mock('../skillService', () => ({ skillService: { findEnabled: mocks.findEnabled } }))
 
@@ -25,6 +30,12 @@ import { filterAvailableTools, getAllToolNames } from '../toolAggregator'
 
 beforeEach(() => {
   mocks.getBuiltinToolEntries.mockReturnValue([
+    { name: 'bash' },
+    { name: 'powershell' },
+    { name: 'read' },
+    { name: 'edit' }
+  ])
+  mocks.getPlatformBuiltinToolEntries.mockReturnValue([
     { name: 'bash' },
     { name: 'read' },
     { name: 'edit' }
@@ -66,5 +77,20 @@ describe('技能的两级开关同样落在这里', () => {
     mocks.findEnabled.mockReturnValue([])
     expect(filterAvailableTools(['skill:x', 'bash'])).toEqual(['bash'])
     expect(getAllToolNames()).not.toContain('skill:x')
+  })
+})
+
+describe('内置部分只算这台机器上存在的工具', () => {
+  it('PLAT-1: getAllToolNames 的内置部分来自按平台过滤的视图 —— 另一平台的 powershell 不算可用', () => {
+    // 调用记录跨用例累积（beforeEach 只重设返回值）—— 先清掉，下面的「调没调过」才只说这一条
+    mocks.getPlatformBuiltinToolEntries.mockClear()
+    mocks.getBuiltinToolEntries.mockClear()
+    const names = getAllToolNames()
+    expect(names.slice(0, 3)).toEqual(['bash', 'read', 'edit'])
+    expect(names).not.toContain('powershell')
+    expect(mocks.getPlatformBuiltinToolEntries).toHaveBeenCalled()
+    expect(mocks.getBuiltinToolEntries).not.toHaveBeenCalled()
+    // 勾选层面同理：会话里存着的 powershell 在这台机器上被当成不存在
+    expect(filterAvailableTools(['powershell', 'bash'])).toEqual(['bash'])
   })
 })

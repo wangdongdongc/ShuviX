@@ -306,6 +306,7 @@ describe.each(LANGS)('BK 内置知识库 · %s', (lang) => {
   /** 现役的内置工具名（agent md 里能写的那一批；`agent` 是派发开关，单独一条） */
   const BUILTIN_TOOL_NAMES = [
     'bash',
+    'powershell',
     'read',
     'write',
     'edit',

@@ -492,10 +492,21 @@ export interface SlashCommandInfo {
  * 供「LLM 工具」设置页只读展示工具机制（各端共享，数据由各宿主后端按自身运行时枚举）。
  * 不含 MCP 工具（另由 mcp 契约提供）。
  */
+/**
+ * 平台特定工具所声明的平台（取值同 Node 的 `process.platform`）。
+ * 工具没有声明就是全平台可用 —— 这里只列出「只在某些平台上存在」的那一类。
+ */
+export type ToolPlatform = 'darwin' | 'linux' | 'win32'
+
 export interface BuiltinToolDefinition {
   name: string
   label: string
   group: string
+  /**
+   * 仅在这些平台上可用（如 bash = macOS / Linux，powershell = Windows）；缺省 = 全平台。
+   * 设置页把它画成工具名后的小标签 —— 列表恒展示全部工具，与当前平台无关。
+   */
+  platforms?: ToolPlatform[]
   /** 折叠图标名（lucide），来自工具 presentation */
   icon?: string
   iconColor?: string

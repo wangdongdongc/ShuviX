@@ -35,7 +35,12 @@ import { type as osType, release as osRelease, platform } from 'os'
 import { app } from 'electron'
 import i18next from 'i18next'
 import { formatLanguageDisplay, renderVisualCraft, renderVisualGuide } from '@shuvix/agent-runtime'
-import { getBuiltinToolEntries } from '../services/toolRegistry'
+import { getPlatformBuiltinToolEntries } from '../services/toolRegistry'
+import {
+  getPowerShellConfig,
+  platformShellKind,
+  powerShellEditionLabel
+} from '../utils/toolUtils/shell'
 import { SkillTool } from '../services/skillTool'
 import { skillService } from '../services/skillService'
 import { mcpService } from '../services/mcpService'
@@ -114,8 +119,10 @@ async function resolveDesktopTools(req: ToolResolveRequest): Promise<AnyAgentToo
       security
     ) as unknown as AnyAgentTool
 
+  // 只收当前平台上存在的工具：档案里另一个平台的版本（Windows 上的 bash、macOS 上的
+  // powershell）在这里自然缺位，与下面「未知名静默跳过」同一条路
   const builtinMap = new Map(
-    getBuiltinToolEntries()
+    getPlatformBuiltinToolEntries()
       .filter((e) => e.factory)
       .map((e) => [e.name, e])
   )
@@ -257,14 +264,7 @@ function hasDrawingSkill(names: readonly string[]): boolean {
  */
 function desktopPromptVars(ctx: PromptVarsCtx): PromptVars {
   const cwd = ctx.cwd || process.cwd()
-  const shell = process.env.SHELL || 'unknown'
-  const shellName = shell.includes('zsh')
-    ? 'zsh'
-    : shell.includes('bash')
-      ? 'bash'
-      : shell.includes('fish')
-        ? 'fish'
-        : shell
+  const shellTool = platformShellKind()
   const appVersion = (() => {
     try {
       return app.getVersion()
@@ -290,7 +290,15 @@ function desktopPromptVars(ctx: PromptVarsCtx): PromptVars {
     workingDirectory: ctx.cwd,
     isGitRepo: existsSync(join(cwd, '.git')) ? 'Yes' : 'No',
     platform: platform(),
-    shell: shellName,
+    // Shell 一行说的是**命令工具**跑在哪个 shell 里，不是用户的登录 shell：模型据此选语法。
+    // 过去取 $SHELL —— 从开始菜单启动的 Windows 应用没有它，模型看到的是 `Shell: unknown`，
+    // 于是按 Windows 的直觉写 PowerShell，再被 bash 吞掉 `$`
+    shell:
+      shellTool === 'powershell'
+        ? powerShellEditionLabel(getPowerShellConfig().edition)
+        : (shellTool ?? 'unknown'),
+    // 本平台命令工具的名字 —— 档案正文用它指代「那个 shell 工具」，而不必写死 bash
+    shellTool: shellTool ?? '',
     os: `${osType()} ${osRelease()}`,
     date: new Date().toISOString().slice(0, 10),
     language: formatLanguageDisplay(i18next.language),

@@ -121,9 +121,12 @@ export interface WriteToolDetails {
   isNewFile?: boolean
 }
 
-/** bash 工具详情 */
+/**
+ * 本地命令工具详情 —— `bash`（macOS / Linux）与 `powershell`（Windows）同一条执行路径、同一种形状，
+ * `type` 就是工具名。判别「是不是本地命令」用 isShellCommandDetails，不要只比 'bash'。
+ */
 export interface BashToolDetails {
-  type: 'bash'
+  type: 'bash' | 'powershell'
   exitCode: number
   truncated: boolean
   /** 完整输出是否已持久化到磁盘 */
@@ -321,12 +324,19 @@ export type ToolResultDetails =
  * 这次工具调用是不是**后台形态**（活还在跑、结果要另外去收）。
  *
  * 收在这里而不是让 UI 写 `details.type === 'bash' && details.background`：后台形态
- * 已经有两个来源（bash 的 run_in_background、子会话的后台/超时降级），下一个再加
+ * 已经有两个来源（命令工具的 run_in_background、子会话的后台/超时降级），下一个再加
  * 只改这一处。
  */
 export function isBackgroundCall(details?: ToolResultDetails): boolean {
   if (!details) return false
-  return (details.type === 'bash' || details.type === 'session') && details.background === true
+  return (
+    (isShellCommandDetails(details) || details.type === 'session') && details.background === true
+  )
+}
+
+/** 本地命令工具（bash / powershell）的详情 */
+export function isShellCommandDetails(details?: ToolResultDetails): details is BashToolDetails {
+  return details?.type === 'bash' || details?.type === 'powershell'
 }
 
 /**

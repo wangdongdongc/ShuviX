@@ -2,12 +2,18 @@ import { useEffect, useRef, useState } from 'react'
 import { Check, Copy } from 'lucide-react'
 import { copyToClipboard } from '../../utils/clipboard'
 
-/** 提示符里的 cwd：先折 home，再长则只留末两段 —— 终端提示符本来也不显示全路径 */
+/**
+ * 提示符里的 cwd：先折 home，再长则只留末两段 —— 终端提示符本来也不显示全路径。
+ * Windows 路径（`C:\Users\<name>\…`，powershell 工具的 cwd）同样折，并保留反斜杠。
+ */
 function shortCwd(cwd: string): string {
-  const home = cwd.replace(/^\/(?:Users|home)\/[^/]+(?=\/|$)/, '~')
+  const sep = /^[A-Za-z]:\\/.test(cwd) ? '\\' : '/'
+  const home = cwd
+    .replace(/^\/(?:Users|home)\/[^/]+(?=\/|$)/, '~')
+    .replace(/^[A-Za-z]:\\Users\\[^\\]+(?=\\|$)/i, '~')
   if (home.length <= 34) return home
   const segs = home.split(/[/\\]/).filter(Boolean)
-  return segs.length > 2 ? `…/${segs.slice(-2).join('/')}` : home
+  return segs.length > 2 ? `…${sep}${segs.slice(-2).join(sep)}` : home
 }
 
 interface TerminalViewProps {

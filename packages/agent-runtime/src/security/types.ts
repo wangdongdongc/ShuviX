@@ -122,9 +122,11 @@ export type AttrValue = AttrScalar | string[] | Record<string, AttrScalar | stri
  *                                                           是 PEP 交来的原样，displayPath 是报错用
  *                                                           的写法（模型写的相对路径等）
  *   { type:'command', command, channel, parsed, commands, writes }
- *                                                           bash/ssh 命令（channel: 'bash'|'ssh'；
- *                                                           后三项是解析层贡献的结构属性，
- *                                                           惰性求值，见 commandFacts.ts）
+ *                                                           本地 / 远端命令（channel: 'bash'|'powershell'
+ *                                                           |'ssh'；后三项是解析层贡献的结构属性，
+ *                                                           惰性求值，见 commandFacts.ts —— bash / ssh 由
+ *                                                           tree-sitter-bash 读，powershell 由
+ *                                                           security/powershell/ 的扫描器读）
  *   { type:'gitTool', gitAction, command, force, delete }   内置 git 工具操作
  *   { type:'database', sql, credential, dbType, readonly }  远程库查询（readonly = 连接模式）
  *   { type:'url', url, scheme, host, origin, browser }      浏览器导航目标 / Chrome 里要用的站点
@@ -449,7 +451,11 @@ export type EnforceOutcome = { status: 'allowed' } | { status: 'feedback'; text:
 
 /** enforceCommand 的入参（object 属性文档由门面构造） */
 export interface CommandObjectInput {
-  channel: 'bash' | 'ssh'
+  /**
+   * 命令经由的通道 —— 本地的两个命令工具各按平台存在（bash：macOS / Linux，powershell：Windows），
+   * ssh 是远端。
+   */
+  channel: 'bash' | 'powershell' | 'ssh'
   command: string
   /**
    * 远端主机别名（仅 ssh）。

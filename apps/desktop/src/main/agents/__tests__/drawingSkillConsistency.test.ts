@@ -53,18 +53,22 @@ vi.mock('../../utils/toolUtils/ripgrep', () => ({
 }))
 
 /** 名单里只有 `read` 一个内置工具；`registerBuiltinTool` 给真 skillTool.ts 加载期自注册用 */
-vi.mock('../../services/toolRegistry', () => ({
-  getBuiltinToolEntries: () => [
-    {
-      name: 'read',
-      group: 'general' as const,
-      getLabel: () => 'read',
-      getHint: () => 'read',
-      factory: () => ({ name: 'read' })
-    }
-  ],
-  registerBuiltinTool: vi.fn()
-}))
+vi.mock('../../services/toolRegistry', () => {
+  const registry = {
+    getBuiltinToolEntries: () => [
+      {
+        name: 'read',
+        group: 'general' as const,
+        getLabel: () => 'read',
+        getHint: () => 'read',
+        factory: () => ({ name: 'read' })
+      }
+    ],
+    registerBuiltinTool: vi.fn()
+  }
+  // 平台特定工具（bash / powershell）按平台过滤后的那份；本组的桩都不声明平台
+  return { ...registry, getPlatformBuiltinToolEntries: registry.getBuiltinToolEntries }
+})
 
 /** 包装器走恒等：拿到的就是真 SkillTool 实例本身，description 即货架索引 */
 vi.mock('../../services/wrapToolOutput', () => ({

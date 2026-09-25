@@ -3,7 +3,8 @@
  *
  * 背景：bgTaskService 曾用 openSync(logPath, 'a') 把日志 fd 直传给子进程。Windows 上
  * libuv 以 append-only 访问权（FILE_APPEND_DATA，无 FILE_WRITE_DATA）打开 O_APPEND
- * 文件，而 MSYS2/cygwin 子进程（Git Bash）对磁盘文件按偏移写 —— 往这种继承句柄里
+ * 文件，而 MSYS2/cygwin 子进程（当时是 Git Bash，现在是 PowerShell 里调到的 Git for Windows
+ * 自带工具）对磁盘文件按偏移写 —— 往这种继承句柄里
  * 一个字节都写不进：日志恒为空；且命令最后一个 echo 写失败会把整条命令的退出码
  * 带成 1，成功命令被误报成失败。修复：win32 改用 'w' 打开（logPath 按 toolCallId
  * 唯一，无跨调用追加场景，'w' 与 'a' 等价）。
@@ -24,6 +25,13 @@ const USER_DATA_DIR = join(tmpdir(), `shuvix-bgtask-userdata-${STAMP}`)
 vi.mock('electron', () => ({ app: { getPath: () => USER_DATA_DIR, isPackaged: false } }))
 
 import { runCommand, getBgTask, killAllBgTasks, readBgTaskLog } from '../bgTaskService'
+import { platformShellKind } from '../../utils/toolUtils/shell'
+
+/**
+ * 本平台的命令工具背后的 shell（Windows = powershell，其余 = bash）。下面的命令都写成两种
+ * shell 里意思相同的样子（`echo` / `sleep` 在 PowerShell 里是 Write-Output / Start-Sleep 的别名）
+ */
+const SHELL = platformShellKind() ?? 'bash'
 
 const SESSION_ID = 'bgtask-test-session'
 const MARKER = 'BGTASK_PAYLOAD_MARKER'
@@ -54,6 +62,7 @@ describe('后台任务：输出落盘 + 退出码透传', () => {
     const started = await runCommand({
       sessionId: SESSION_ID,
       toolCallId: nextId(),
+      shell: SHELL,
       command: `echo ${MARKER}`,
       description: 'settled 路径输出捕获',
       cwd: tmpdir(),
@@ -70,6 +79,7 @@ describe('后台任务：输出落盘 + 退出码透传', () => {
     const started = await runCommand({
       sessionId: SESSION_ID,
       toolCallId,
+      shell: SHELL,
       // sleep 3 秒保过 2s 预热窗口，强制走 background 形态
       command: `echo ${MARKER}; sleep 3; echo DONE`,
       description: 'background 路径输出捕获',
@@ -96,31 +106,38 @@ describe('后台任务：输出落盘 + 退出码透传', () => {
  * 也是「再拆回两套实现」时最先坏掉的地方。
  */
 describe('同步形态', () => {
-  it('stdout 与 stderr 按**真实顺序**交错 —— 两条管道分别收集再拼是做不到的', async () => {
-    const outcome = await runCommand({
-      sessionId: SESSION_ID,
-      toolCallId: nextId(),
-      command: `echo one; echo two 1>&2; echo three`,
-      description: '交错顺序',
-      cwd: tmpdir(),
-      background: false
-    })
+  // `1>&2` 是 bash 写法（PowerShell 不支持把成功流重定向到错误流）；交错靠的是共用 spawn 路径
+  // 把两条流接到同一个 fd，与 shell 无关，POSIX 上钉住即可
+  it.skipIf(SHELL !== 'bash')(
+    'stdout 与 stderr 按**真实顺序**交错 —— 两条管道分别收集再拼是做不到的',
+    async () => {
+      const outcome = await runCommand({
+        sessionId: SESSION_ID,
+        toolCallId: nextId(),
+        shell: SHELL,
+        command: `echo one; echo two 1>&2; echo three`,
+        description: '交错顺序',
+        cwd: tmpdir(),
+        background: false
+      })
 
-    expect(outcome.kind).toBe('settled')
-    const text = outcome.kind === 'settled' ? outcome.output : ''
-    // 旧实现（stdout 全文 + '\n' + stderr 全文）这里必然是 one three two
-    expect(
-      text
-        .trim()
-        .split('\n')
-        .map((l) => l.trim())
-    ).toEqual(['one', 'two', 'three'])
-  })
+      expect(outcome.kind).toBe('settled')
+      const text = outcome.kind === 'settled' ? outcome.output : ''
+      // 旧实现（stdout 全文 + '\n' + stderr 全文）这里必然是 one three two
+      expect(
+        text
+          .trim()
+          .split('\n')
+          .map((l) => l.trim())
+      ).toEqual(['one', 'two', 'three'])
+    }
+  )
 
   it('超时：到点杀掉并说清是超时（调用方据此回 124，而不是把信号退出码当成命令结果）', async () => {
     const outcome = await runCommand({
       sessionId: SESSION_ID,
       toolCallId: nextId(),
+      shell: SHELL,
       command: 'sleep 30',
       description: '超时杀',
       cwd: tmpdir(),

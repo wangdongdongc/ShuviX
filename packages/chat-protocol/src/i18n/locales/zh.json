@@ -585,6 +585,7 @@
     "toolMetaTitle": "工具定义",
     "toolMetaParams": "参数",
     "toolMetaNoParams": "无参数",
+    "toolPlatformOnly": "仅在 {{platforms}} 上可用",
     "toolMetaRequired": "必填",
     "toolMetaOptional": "可选",
     "toolSshSecurityWarning": "请勿保存重要凭据，以免造成财产损失。",
@@ -816,6 +817,7 @@
   },
   "tool": {
     "bashLabel": "执行命令",
+    "powershellLabel": "执行命令",
     "readLabel": "阅读",
     "writeLabel": "写入文件",
     "editLabel": "文本编辑",
@@ -826,6 +828,7 @@
     "globLabel": "查找文件",
     "remoteDbLabel": "远程数据库",
     "bashHint": "在终端中执行命令，如安装依赖、运行脚本、Git 操作等",
+    "powershellHint": "在 PowerShell 中执行命令，如安装依赖、运行脚本、Git 操作等",
     "readHint": "读取文件内容或获取网页，支持文本、PDF、Word、Excel、URL 等常见格式",
     "writeHint": "创建新文件或覆盖已有文件，自动创建所需的目录",
     "editHint": "精确替换文件中的指定文本片段，适合小范围修改",

@@ -1,5 +1,5 @@
 /**
- * getShellConfig 的**形状**测试 —— 锁死 `--norc` 出现在每一个 bash 分支上，且 sh 回退分支上没有。
+ * getBashConfig 的**形状**测试 —— 锁死 `--norc` 出现在每一个 bash 分支上，且 sh 回退分支上没有。
  *
  * 为什么这是正确性而非风格：macOS 的 /bin/bash 在非交互、非登录、未被当作 sh 调用时，
  * 若 fd 0 是 socket（libuv 的 'pipe' stdio 正是 socketpair）且 SHLVL 缺失或为 "0"，
@@ -56,7 +56,7 @@ function restorePlatform(): void {
 async function loadShellConfig(): Promise<{ shell: string; args: string[] }> {
   vi.resetModules()
   const mod = await import('../../utils/toolUtils/shell')
-  return mod.getShellConfig()
+  return mod.getBashConfig()
 }
 
 beforeEach(() => {
@@ -71,7 +71,7 @@ afterEach(() => {
 
 // ─── U1 / U11：每一个 bash 分支都带 --norc ───────────────────────────────────
 
-describe('getShellConfig：bash 分支恒带 --norc', () => {
+describe('getBashConfig：bash 分支恒带 --norc', () => {
   it('U1 — Unix /bin/bash：args 恰为 ["--norc", "-c"]，顺序不可颠倒', async () => {
     setPlatform('darwin')
     fsStub.exists = (path) => path === '/bin/bash'
@@ -97,31 +97,14 @@ describe('getShellConfig：bash 分支恒带 --norc', () => {
     expect(config.args).toEqual(['--norc', '-c'])
   })
 
-  it('U11a — Windows Git Bash 分支带 --norc', async () => {
+  it('U11 — Windows 上没有 bash 分支：直接报错并指向 powershell 工具（不再经 Git Bash）', async () => {
     setPlatform('win32')
     vi.stubEnv('ProgramFiles', 'C:\\Program Files')
-    const gitBash = 'C:\\Program Files\\Git\\bin\\bash.exe'
-    fsStub.exists = (path) => path === gitBash
+    // 就算装了 Git Bash、PATH 上也有 bash.exe，也不该被拿来跑命令
+    fsStub.exists = () => true
+    bashOnPath.path = 'C:\\Program Files\\Git\\bin\\bash.exe'
 
-    const config = await loadShellConfig()
-
-    expect(config.shell).toBe(gitBash)
-    expect(config.args).toEqual(['--norc', '-c'])
-  })
-
-  it('U11b — Windows PATH 中的 bash.exe 分支带 --norc', async () => {
-    setPlatform('win32')
-    vi.stubEnv('ProgramFiles', 'C:\\Program Files')
-    vi.stubEnv('ProgramFiles(x86)', undefined)
-    const pathBash = 'C:\\tools\\bash.exe'
-    bashOnPath.path = pathBash
-    // Git Bash 不存在；但 findBashOnPath 找到后会再 existsSync 校验一次
-    fsStub.exists = (path) => path === pathBash
-
-    const config = await loadShellConfig()
-
-    expect(config.shell).toBe(pathBash)
-    expect(config.args).toEqual(['--norc', '-c'])
+    await expect(loadShellConfig()).rejects.toThrow(/powershell/)
   })
 
   it('本机实际解析出的配置也带 --norc（防止上面四条把真实分支绕过去）', async () => {
@@ -131,7 +114,7 @@ describe('getShellConfig：bash 分支恒带 --norc', () => {
 
     const config = await loadShellConfig()
 
-    // Windows 上没装 bash 时 getShellConfig 会抛；本仓库的测试跑在 POSIX 上
+    // Windows 上 getBashConfig 恒抛（那里的命令工具是 powershell）
     if (process.platform !== 'win32') {
       expect(config.shell).toMatch(/bash$/)
       expect(config.args).toEqual(['--norc', '-c'])
@@ -141,7 +124,7 @@ describe('getShellConfig：bash 分支恒带 --norc', () => {
 
 // ─── U10：sh 回退分支刻意**不带** --norc ─────────────────────────────────────
 
-describe('getShellConfig：sh 回退分支', () => {
+describe('getBashConfig：sh 回退分支', () => {
   /**
    * 守护用例（不是回归用例）——修复前后都绿。
    * 钉住的是那条刻意的例外：dash/busybox 不认 --norc，且 sh 模式（act_like_sh）

@@ -11,7 +11,7 @@ export function newAgentTemplate(t: (key: string) => string, name: string): stri
     'shuvix: agent v1',
     `name: ${name}`,
     `description: ${t('tool.subAgentTemplateDesc')}`,
-    'shuvix-tools: read, bash',
+    'shuvix-tools: read, bash, powershell',
     'shuvix-instruction-files: AGENTS.md, CLAUDE.md',
     'shuvix-project-awareness: true',
     '---',

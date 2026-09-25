@@ -29,7 +29,7 @@
  * 其余 mock 只为让模块能加载（dao 会开 SQLite，electron / mcp 在 node 下起不来）；skillService
  * 必须桩成可控的 findEnabled —— 真服务的构造函数会去碰真实 HOME 下的 `~/.shuvix/skills`。
  */
-import { describe, it, expect, vi, beforeAll, beforeEach, afterAll } from 'vitest'
+import { describe, it, expect, vi, beforeAll, beforeEach, afterAll, afterEach } from 'vitest'
 import type { AgentHostAdapter, PromptVars, PromptVarsCtx } from '@shuvix/agent-runtime'
 import type { Skill } from '../../types/skill'
 
@@ -38,7 +38,9 @@ const mocks = vi.hoisted(() => ({
   pick: vi.fn(),
   pickSettings: vi.fn(),
   projectPick: vi.fn(),
-  findEnabled: vi.fn()
+  findEnabled: vi.fn(),
+  /** Windows 上解析出的 PowerShell 版本（PVW-S*）；null = 用真的 getPowerShellConfig */
+  psConfig: null as null | { exe: string; edition: 'pwsh' | 'windows-powershell' }
 }))
 
 vi.mock('@shuvix/agent-runtime', async (importOriginal) => {
@@ -58,7 +60,10 @@ vi.mock('../../dao/sessionDao', () => ({
 }))
 vi.mock('../../dao/projectDao', () => ({ projectDao: { pick: mocks.projectPick } }))
 vi.mock('../../dao/providerDao', () => ({ providerDao: { findAllEnabledModels: () => [] } }))
-vi.mock('../../services/toolRegistry', () => ({ getBuiltinToolEntries: () => [] }))
+vi.mock('../../services/toolRegistry', () => ({
+  getBuiltinToolEntries: () => [],
+  getPlatformBuiltinToolEntries: () => []
+}))
 vi.mock('../../services/skillTool', () => ({ SkillTool: class {} }))
 vi.mock('../../services/skillService', () => ({
   skillService: { findEnabled: mocks.findEnabled }
@@ -88,6 +93,13 @@ vi.mock('../../services/toolContext', () => ({
 vi.mock('../../services/knowledge', () => ({ enabledBaseChoices: () => [] }))
 vi.mock('@earendil-works/pi-agent-core/node', () => ({ NodeExecutionEnv: class {} }))
 vi.mock('../AgentTool', () => ({ createAgentTool: vi.fn() }))
+vi.mock('../../utils/toolUtils/shell', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../utils/toolUtils/shell')>()
+  return {
+    ...actual,
+    getPowerShellConfig: () => mocks.psConfig ?? actual.getPowerShellConfig()
+  }
+})
 
 import i18next from 'i18next'
 import {
@@ -498,5 +510,86 @@ describe('desktopPromptVars —— 契约只在技能里（PVW-16 / PVW-17）', 
     expect(checked, '一个档案都没查到就等于空转').toBeGreaterThan(20)
     // 正控制组：确实有档案拿到了作图说明（七个档案 × 三语言）
     expect(pointing).toBeGreaterThanOrEqual(21)
+  })
+})
+
+/**
+ * Shell 一行说的是**命令工具**跑在哪个 shell 里（模型据此选语法），不是用户的登录 shell —— 所以
+ * `$SHELL` 一概不读；`shellTool` 是本平台命令工具的名字，档案正文用它指代「那个 shell 工具」。
+ *
+ *   | 平台             | shell                                         | shellTool    |
+ *   | win32            | PowerShell 7 (pwsh) / Windows PowerShell 5.1  | powershell   |
+ *   | darwin / linux   | bash                                          | bash         |
+ *   | 其它             | unknown                                       | ''           |
+ */
+describe('desktopPromptVars —— shell / shellTool 按平台给（PVW-S1…S5）', () => {
+  const REAL_PLATFORM_DESC = Object.getOwnPropertyDescriptor(process, 'platform')!
+  const setPlatform = (platform: string): void => {
+    Object.defineProperty(process, 'platform', { ...REAL_PLATFORM_DESC, value: platform })
+  }
+
+  afterEach(() => {
+    Object.defineProperty(process, 'platform', REAL_PLATFORM_DESC)
+    vi.unstubAllEnvs()
+    mocks.psConfig = null
+  })
+
+  it('PVW-S1 darwin + SHELL=/bin/zsh：shell 是 bash（命令工具的 shell，不是登录 shell）', async () => {
+    setPlatform('darwin')
+    vi.stubEnv('SHELL', '/bin/zsh')
+    const vars = await varsFor()
+    expect(vars.shell).toBe('bash')
+    expect(vars.shellTool).toBe('bash')
+  })
+
+  it('PVW-S2 linux、SHELL 没设：同样是 bash（从前这里是 unknown）', async () => {
+    setPlatform('linux')
+    vi.stubEnv('SHELL', undefined)
+    const vars = await varsFor()
+    expect(vars.shell).toBe('bash')
+    expect(vars.shellTool).toBe('bash')
+  })
+
+  it('PVW-S3 ShuviX 不发布的平台（freebsd）：shell unknown、shellTool 空串', async () => {
+    setPlatform('freebsd')
+    vi.stubEnv('SHELL', '/usr/local/bin/bash')
+    const vars = await varsFor()
+    expect(vars.shell).toBe('unknown')
+    expect(vars.shellTool).toBe('')
+  })
+
+  it('PVW-S4 win32 + pwsh 7：shell 说出版本、shellTool 是 powershell；混进来的 SHELL=/usr/bin/bash 不理', async () => {
+    setPlatform('win32')
+    vi.stubEnv('SHELL', '/usr/bin/bash')
+    mocks.psConfig = { exe: 'C:\\Program Files\\PowerShell\\7\\pwsh.exe', edition: 'pwsh' }
+    const vars = await varsFor()
+    expect(vars.shell).toBe('PowerShell 7 (pwsh)')
+    expect(vars.shellTool).toBe('powershell')
+  })
+
+  it('PVW-S5 win32 + 系统自带的 5.1：shell 是 Windows PowerShell 5.1', async () => {
+    setPlatform('win32')
+    vi.stubEnv('SHELL', '/usr/bin/bash')
+    mocks.psConfig = { exe: 'C:\\Windows\\powershell.exe', edition: 'windows-powershell' }
+    const vars = await varsFor()
+    expect(vars.shell).toBe('Windows PowerShell 5.1')
+    expect(vars.shellTool).toBe('powershell')
+  })
+
+  it('PVW-S6 引用 shellTool 的档案组装出来：win32 上正文里说 powershell，darwin 上说 bash，都不留占位符', async () => {
+    const work = builtins('en').find((p) => p.name === 'work')!
+    expect(work.systemPrompt).toContain('{{shuvix:shellTool}}')
+
+    setPlatform('win32')
+    mocks.psConfig = { exe: 'C:\\pwsh.exe', edition: 'pwsh' }
+    const onWindows = renderProfileSystemPrompt(work, await varsFor({ toolNames: work.tools }))
+    expect(onWindows).not.toContain('{{shuvix:shellTool}}')
+    expect(onWindows).toContain('over powershell')
+    expect(onWindows).not.toMatch(/\bbash\b/)
+
+    setPlatform('darwin')
+    const onMac = renderProfileSystemPrompt(work, await varsFor({ toolNames: work.tools }))
+    expect(onMac).toContain('over bash')
+    expect(onMac).not.toMatch(/\bpowershell\b/i)
   })
 })

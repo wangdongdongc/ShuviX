@@ -65,7 +65,7 @@ vi.mock('../../services/toolRegistry', () => ({ registerBuiltinTool: () => {} })
 vi.mock('../../i18n', () => ({ t: (key: string) => key }))
 
 import { runCommand, killAllBgTasks, type CommandOutcome } from '../../services/bgTaskService'
-import { getShellConfig } from '../../utils/toolUtils/shell'
+import { getBashConfig } from '../../utils/toolUtils/shell'
 import { getShuvixCliEnv } from '../../utils/paths'
 import { BashTool } from '../bash'
 
@@ -97,6 +97,7 @@ function runBackground(command: string): Promise<CommandOutcome> {
   return runCommand({
     sessionId: SESSION_ID,
     toolCallId: `bg-${++bgCall}`,
+    shell: 'bash',
     command,
     description: 'rc leak test',
     cwd: WORK_DIR,
@@ -318,12 +319,12 @@ posixOnly('N1 — spawn 层：即便 stdin 是 socket 且无 SHLVL，--norc 依�
   })
 
   /**
-   * 上一条用字面量写死了 `--norc`，锁的是"这个 flag 有效"；这一条用 **getShellConfig()
+   * 上一条用字面量写死了 `--norc`，锁的是"这个 flag 有效"；这一条用 **getBashConfig()
    * 解析出的真实参数**跑同一个触发条件，锁的是"生产配置在这个条件下确实干净"。
    * 二者缺一不可：前者证明工具有效，后者证明工具确实被拿在手里。
    */
   it('生产配置解析出的 shell/args 在完整触发条件下同样干净', async () => {
-    const { shell, args } = getShellConfig()
+    const { shell, args } = getBashConfig()
     writeRc(`echo ${NOISE}`)
 
     expect(await rawSpawn(shell, [...args, ECHO_PAYLOAD])).toBe(PAYLOAD)

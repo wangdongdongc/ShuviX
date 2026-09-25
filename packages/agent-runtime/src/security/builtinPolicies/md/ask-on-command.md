@@ -3,7 +3,7 @@ shuvix: policy v1
 shuvix-builtin: true
 name: ask-on-command
 shuvix-displayName: Ask Before Running a Command
-description: Every bash/ssh command asks you per command; the only exemption is the session-level auto-allow switch.
+description: Every bash / PowerShell / ssh command asks you per command; the only exemption is the session-level auto-allow switch.
 shuvix-policy-scope:
   subject.kind: [agent]
   object.type: [command]

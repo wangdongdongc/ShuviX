@@ -585,6 +585,7 @@
     "toolMetaTitle": "ツール定義",
     "toolMetaParams": "パラメータ",
     "toolMetaNoParams": "パラメータなし",
+    "toolPlatformOnly": "{{platforms}} でのみ利用可能",
     "toolMetaRequired": "必須",
     "toolMetaOptional": "任意",
     "toolSshSecurityWarning": "重要な認証情報を保存しないでください。財産損失を招く恐れがあります。",
@@ -816,6 +817,7 @@
   },
   "tool": {
     "bashLabel": "コマンド実行",
+    "powershellLabel": "コマンド実行",
     "readLabel": "読む",
     "writeLabel": "ファイルを書き込む",
     "editLabel": "テキスト編集",
@@ -826,6 +828,7 @@
     "globLabel": "ファイル検索",
     "remoteDbLabel": "リモートデータベース",
     "bashHint": "ターミナルでコマンドを実行（パッケージインストール、スクリプト実行、Git 操作など）",
+    "powershellHint": "PowerShell でコマンドを実行（パッケージインストール、スクリプト実行、Git 操作など）",
     "readHint": "ファイルの内容を読み込み、またはWebページを取得（テキスト、PDF、Word、Excel、URL などに対応）",
     "writeHint": "新しいファイルを作成、または既存ファイルを上書き（ディレクトリも自動作成）",
     "editHint": "ファイル内の指定テキストを正確に置換（小規模な修正に最適）",

@@ -7,6 +7,7 @@ import { useChatStore } from '../../../stores/chatStore'
 import { useTranslation } from 'react-i18next'
 import hljs from 'highlight.js/lib/core'
 import bash from 'highlight.js/lib/languages/bash'
+import powershell from 'highlight.js/lib/languages/powershell'
 import type { AskInputRequest, AskPolicyPrompt } from '@shuvix/chat-protocol/types/inputRequest'
 import { fallbackToolPresentation } from '@shuvix/chat-protocol/builtinMcpPresentations'
 import type { InputFormProps } from './types'
@@ -15,20 +16,31 @@ import { DiffViewer } from '../DiffViewer'
 import { ASK_PREVIEW_MAX_H } from '../detailViewport'
 
 hljs.registerLanguage('bash', bash)
+hljs.registerLanguage('powershell', powershell)
 
-function CommandPreview({ command }: { command: string }): React.JSX.Element {
+/** 命令询问按发起它的工具着色：Windows 上的 powershell 工具写的是 PowerShell，其余都按 shell 读 */
+function CommandPreview({
+  command,
+  language
+}: {
+  command: string
+  language: 'bash' | 'powershell'
+}): React.JSX.Element {
   const highlighted = useMemo(() => {
     if (!command) return ''
     try {
-      return hljs.highlight(command, { language: 'bash' }).value
+      return hljs.highlight(command, { language }).value
     } catch {
       return command.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     }
-  }, [command])
+  }, [command, language])
 
   return (
     <pre className="text-[11px] leading-snug bg-bg-secondary/70 rounded-lg px-2.5 py-1.5 overflow-auto max-h-28 whitespace-pre-wrap break-words !m-0">
-      <code className="hljs language-bash" dangerouslySetInnerHTML={{ __html: highlighted }} />
+      <code
+        className={`hljs language-${language}`}
+        dangerouslySetInnerHTML={{ __html: highlighted }}
+      />
     </pre>
   )
 }
@@ -251,7 +263,10 @@ export function AskForm({
       ) : pathAsk ? (
         <PathPreview path={pathAsk.path} requestedPath={requestedPath} />
       ) : (
-        <CommandPreview command={command} />
+        <CommandPreview
+          command={command}
+          language={toolName === 'powershell' ? 'powershell' : 'bash'}
+        />
       )}
 
       {/* 操作栏：左端是命中的策略（角标），动作一律靠右 —— 与输入区的发送键同侧 */}

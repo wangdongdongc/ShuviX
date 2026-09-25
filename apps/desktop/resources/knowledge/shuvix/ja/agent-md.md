@@ -67,8 +67,8 @@ style, each with file and line. Never modify files.
 
 カンマ区切りの文字列。各項目は次のいずれか：
 
-- **組み込みツール名** —— 大文字小文字を区別せず、小文字に正規化：`bash`、`read`、`write`、`edit`、
-  `ls`、`glob`、`grep`、`ask`、`git`、`session`、`knowledge`、`artifact`；
+- **組み込みツール名** —— 大文字小文字を区別せず、小文字に正規化：`bash`、`powershell`、`read`、`write`、
+  `edit`、`ls`、`glob`、`grep`、`ask`、`git`、`session`、`knowledge`、`artifact`；
 - `agent` —— `agent` ツールで**サブエージェントを派遣**することへのオプトイン（入れ子の上限に従う：
   派遣されたエージェントは深さの上限 —— 既定 2 —— が許す間だけ、さらに派遣できる）；
 - `mcp:<server>` —— その MCP サーバーのすべてのツール（設定で構成した名前；接頭辞の後は大文字小文字を
@@ -80,13 +80,19 @@ style, each with file and line. Never modify files.
 - `skill:<name>` —— その skill（名前空間付きの skill は `skill:<dir>:<name>` と書く。ShuviX に同梱の
   スキルは `skill:builtin:<name>`）。
 
+**プラットフォーム固有のツール**は一部のプラットフォームにだけ存在します：`bash` は macOS と Linux、
+`powershell` は Windows（設定 → LLM ツールでプラットフォームのタグが付きます）。各プラットフォームの版を
+すべて書いてください —— 組み込みエージェントは `bash` と `powershell` の両方を書いています —— 各マシンは自分にある方だけを
+組み立てるので、同じファイルがどのマシンでも成り立ちます。`bash` だけを書いたエージェントは Windows では
+コマンドツールを持ちません。
+
 項目は順序を保って重複除去されます。このホストに存在しない名前は黙って落とされ、エージェントはそれ無しで
 作られます。**リストに書いたものは常に有効**で、エージェントがどう使われるかに関わりません。セッションの
 ルートになるとき、その `mcp:` / `skill:` 項目はそのセッションの拡張機能ピッカーにチェック済み・ロック状態で
 表示されます（ホバーすると、どのエージェントが宣言したかが出ます）。セッション自身のチェックはその上に
 足せるだけで、一つ外すにはそのエージェントを上書きします。リストを狭めることは ShuviX で役割を表す方法では
 **ありません**：`grep` の無いエージェントは `bash` で grep するだけです。組み込みの `work`、`chat`、`coding`
-は意図的に一つのリスト（`bash, read, write, edit, ask, ls, grep, glob, agent, session, knowledge,
+は意図的に一つのリスト（`bash, powershell, read, write, edit, ask, ls, grep, glob, agent, session, knowledge,
 artifact, skill:builtin:drawing`）を共有し、本文だけが異なります。
 
 ### 本文 —— システムプロンプト
@@ -99,7 +105,8 @@ frontmatter の後の全部（前後の空白を除く）がシステムプロ�
 | `{{shuvix:workingDirectory}}`    | セッションの作業ディレクトリの絶対パス                               |
 | `{{shuvix:isGitRepo}}`           | `Yes` / `No` —— そのディレクトリに `.git` があるか                    |
 | `{{shuvix:platform}}`            | `darwin` / `win32` / `linux`                                          |
-| `{{shuvix:shell}}`               | `zsh` / `bash` / `fish` / シェルのパス                                |
+| `{{shuvix:shell}}`               | コマンドツールが動くシェル：`bash`、Windows では `PowerShell 7 (pwsh)` / `Windows PowerShell 5.1` |
+| `{{shuvix:shellTool}}`           | このプラットフォームのコマンドツール：`bash` / `powershell`           |
 | `{{shuvix:os}}`                  | OS の種類とリリース                                                  |
 | `{{shuvix:date}}`                | 今日、`YYYY-MM-DD`                                                    |
 | `{{shuvix:language}}`            | UI の言語、例：`中文 (zh)` / `English (en)`                           |

@@ -10,7 +10,8 @@ const log = createLogger('Qwen3Tts')
 function spawnPython(bin: string, script: string, args: string[]): Promise<void> {
   return new Promise((resolve, reject) => {
     const child = spawn(bin, [script, ...args], {
-      stdio: ['ignore', 'pipe', 'pipe']
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true
     })
 
     let stderr = ''

@@ -26,15 +26,19 @@ const mocks = vi.hoisted(() => ({
 }))
 
 vi.mock('../../../tools/allTools', () => ({}))
-vi.mock('../../../services/toolRegistry', () => ({
-  getBuiltinToolEntries: () =>
-    mocks.builtinNames.map((name) => ({
-      name,
-      group: 'general' as const,
-      getLabel: () => name,
-      getHint: () => `${name} hint`
-    }))
-}))
+vi.mock('../../../services/toolRegistry', () => {
+  const registry = {
+    getBuiltinToolEntries: () =>
+      mocks.builtinNames.map((name) => ({
+        name,
+        group: 'general' as const,
+        getLabel: () => name,
+        getHint: () => `${name} hint`
+      }))
+  }
+  // 平台特定工具（bash / powershell）按平台过滤后的那份；本组的桩都不声明平台
+  return { ...registry, getPlatformBuiltinToolEntries: registry.getBuiltinToolEntries }
+})
 vi.mock('../../../services/sessionService', () => ({
   sessionService: {
     ensureAgentSession: vi.fn(),
