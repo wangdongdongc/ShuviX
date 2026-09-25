@@ -19,7 +19,7 @@ sources:
 ShuviX 的权限系统是**询问模型，不是沙箱**。每次工具调用都在进程内对照一组规则，得到
 **放行 / 询问 / 拒绝**之一，而规则是用户能读、能覆盖、能删除的 markdown 文件。第一原则是
 **无策略 = 放行**：命中不了任何规则的操作自由执行；ShuviX 自带的每道防护都是一份看得见的策略。
-（放行了的 `bash` 命令以用户的完整权限运行 —— 这里没有任何操作系统级隔离。）
+（放行了的 `bash` / `powershell` 命令以用户的完整权限运行 —— 这里没有任何操作系统级隔离。）
 
 - 位置：`~/.shuvix/policies/<name>.md`。
 - 标记：`shuvix: policy v1`；读取可选，写出恒带。
@@ -114,7 +114,7 @@ vars     宿主变量表（见下）+ 会话授权
 | `object.type`  | 由谁发起                                                   | `action`         | 属性                                                                                                                                                                                                                                                                                |
 | -------------- | ---------------------------------------------------------- | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `path`         | `read`、`write`、`edit`、`knowledge` 工具、文件预览        | `read` / `write` | `path`（路径真正通向的位置：绝对路径；桌面端展开符号链接，`..` 取真实的父目录 —— 与系统打开它时一样）、`requestedPath`（工具请求时的绝对路径 —— 中间隔着链接或 `..` 时与 `path` 不同）、`displayPath`（模型写的原样，用于提示文案） |
-| `command`      | `bash`、`ssh`                                              | `execute`        | `command`（原文）、`channel`（`bash` / `ssh`），以及由 shell 解析器惰性提供的：`parsed`（布尔）、`commands`（`{ base, argv, wrappers, complete, depth }` 的列表 —— `base` 是剥掉 `sudo` / `env` / `timeout` 之后真正的程序，动态词是 `''`）、`writes`（重定向目标，绝对路径）              |
+| `command`      | `bash`、`powershell`、`ssh`                                | `execute`        | `command`（原文）、`channel`（`bash` / `powershell` / `ssh`），以及由 shell 解析器惰性提供的（`powershell` 命令由 ShuviX 自己的 PowerShell 扫描器读：`base` 是规范化的命令名 —— 别名解析成 cmdlet 名、去掉路径与 `.exe` / `.com`、大小写保持原样，比较前先 `lowerAscii()` —— `-Name:value` 拆成两项）：`parsed`（布尔）、`commands`（`{ base, argv, wrappers, complete, depth }` 的列表 —— `base` 是剥掉 `sudo` / `env` / `timeout` 之后真正的程序，动态词是 `''`）、`writes`（重定向目标，绝对路径）              |
 | `gitTool`      | `git` 工具                                                 | `execute`        | `gitAction`、`command`、`force`（布尔）、`delete`（布尔）                                                                                                                                                                                                                            |
 | `database`     | 内置 `database` 服务器的 `query` 工具                      | `execute`        | `sql`、`credential`、`dbType`、`readonly`（布尔 —— 连接是否只读）                                                                                                                                                                                                                   |
 | `url`          | 内置 `browser` / `chrome` 服务器：每次导航；在 `chrome` 里还有每个站点的第一次使用 | `navigate`       | `url`、`scheme`、`host`（小写、去掉结尾的点）、`origin`、`browser`（`app` = ShuviX 里的浏览器面板，`chrome` = 你自己的 Chrome）；`file://` 不是 url 客体 —— 按读那个路径判定 |
@@ -169,11 +169,11 @@ YAML 语法错 / 不是映射；裸的 `rules` / `lets` / `scope` 键；`shuvix-
 | ------------------------------- | ------------------------------------------------------------------------------------------------------------ |
 | `protect-credentials`           | 拒绝写、询问读凭据目录（`.ssh`、`.aws`……）                                                                    |
 | `protect-system`                | 拒绝写操作系统目录                                                                                            |
-| `block-catastrophic-commands`   | 拒绝一小撮毁灭整机的命令，按解析结构判（`rm -rf /`、`mkfs`、`dd` 到设备……）                                    |
+| `block-catastrophic-commands`   | 拒绝一小撮毁灭整机的命令，按解析结构判（`rm -rf /`、`mkfs`、`dd` 到设备、`Format-Volume`……）                                    |
 | `protect-bot-files`             | `~/.shuvix/bots` 下任何写入 **force-ask**                                                                     |
 | `ask-on-read`                   | 在工作区、工具结果、skill 目录与本说明书之外的读取询问                                                        |
 | `ask-on-write`                  | 每次文件写入询问，带 diff 预览                                                                                |
-| `ask-on-command`                | 每条 `bash` / `ssh` 命令询问                                                                                  |
+| `ask-on-command`                | 每条 `bash` / `powershell` / `ssh` 命令询问                                                                                  |
 | `git-safety`                    | 危险的 git 操作询问（`init`、`restore`、强制 checkout、删分支）                                               |
 | `ask-on-database`               | 可写数据库连接上的每条语句询问                                                                                |
 | `ask-on-sub-session`            | 开子会话时询问一次（`tool.name == 'session' && tool.operation == 'create-sub-session'`）                        |

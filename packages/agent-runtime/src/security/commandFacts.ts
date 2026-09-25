@@ -19,6 +19,7 @@
 import { spanIntersectsError } from './shell/analyze'
 import { stripWrappers } from './shell/wrappers'
 import type { ShellFacts, ShellRedirect, ShellSpan } from './shell/types'
+import type { PowerShellFacts } from './powershell/types'
 import type { AttrScalar } from './types'
 
 /** 投影给 CEL 的单条命令 —— base/argv 是**剥掉透明 wrapper 之后**的有效命令 */
@@ -82,13 +83,31 @@ function isAbsolute(p: string): boolean {
  */
 function normalize(input: string, sep: string): string {
   const winDrive = /^([A-Za-z]:)[\\/]/.exec(input)
-  const root = winDrive ? winDrive[1] + sep : input.startsWith('/') ? sep : ''
+  // Windows 路径（sep 为 `\`）才认 UNC / 设备路径 `\\server\share`、`\\.\PhysicalDrive0` 与
+  // 当前盘根 `\Windows` —— POSIX 上 `//dev/sda` 就是 `/dev/sda`，照旧折成一个根，
+  // 否则写块设备的重定向换个双斜杠就绕过了按前缀比较的规则
+  const windows = sep === '\\'
+  const unc = windows && !winDrive && /^[\\/]{2}[^\\/]/.test(input)
+  const root = winDrive
+    ? winDrive[1] + sep
+    : unc
+      ? sep + sep
+      : /^[\\/]/.test(input) && (windows || input.startsWith('/'))
+        ? sep
+        : ''
   const out: string[] = []
-  for (const seg of input.split(/[\\/]+/)) {
+  const segments = input.split(/[\\/]+/)
+  if (unc) {
+    // 第一段是服务器名（或设备前缀 `.` / `?`），原样保留，不参与 `.` / `..` 折叠
+    segments.shift()
+    out.push(segments.shift() as string)
+  }
+  for (const seg of segments) {
     if (seg === '' || seg === '.') continue
     if (winDrive && seg === winDrive[1]) continue
     if (seg === '..') {
-      if (out.length > 0 && out[out.length - 1] !== '..') out.pop()
+      // UNC 的服务器名是根的一部分，`..` 退不过它
+      if (out.length > (unc ? 1 : 0) && out[out.length - 1] !== '..') out.pop()
       else if (!root) out.push('..')
       continue
     }
@@ -137,4 +156,37 @@ export function projectCommandFacts(
       .filter((r) => WRITE_KINDS.has(r.kind) && r.target !== null && usable(r))
       .map((r) => resolveTarget(r.target as string, cwd, sep))
   }
+}
+
+/**
+ * PowerShell 的投影 —— 同一份属性形状（规则不必知道命令是哪种 shell 读出来的），
+ * 差别只在命令名：base 取 PowerShell 层已经规范化好的那一个（别名已解析成 cmdlet 名，
+ * 路径与 `.exe` / `.com` 已去掉），**大小写保持原样**，规则比较前一律 `lowerAscii()`。
+ * wrapper 也已由那一层剥过（`sudo`），这里不再套 bash 的 wrapper 表。
+ *
+ * PowerShell 层遇到结构错误就停，交出来的全是错误之前读到的 —— 不需要按错误区间再筛。
+ * 其中嵌着的 `bash -c` 载荷按 bash 的投影并入，depth 叠加载荷所在的层。
+ */
+export function projectPowerShellFacts(
+  facts: PowerShellFacts,
+  cwd: string | undefined,
+  sep: string
+): CommandFactAttrs {
+  const commands: CommandAttr[] = facts.commands.map((c) => ({
+    base: c.base,
+    argv: c.argv.map((a) => a ?? ''),
+    wrappers: c.wrappers,
+    complete: c.complete,
+    depth: c.depth
+  }))
+  const writes = facts.redirects
+    .filter((r) => WRITE_KINDS.has(r.kind) && r.target !== null)
+    .map((r) => resolveTarget(r.target as string, cwd, sep))
+  for (const nested of facts.nestedBash) {
+    // bash 载荷（Git Bash / WSL）里的路径是 POSIX 写法：按 `/` 投影，`/dev/sda` 才还是 `/dev/sda`
+    const inner = projectCommandFacts(nested.facts, cwd, '/')
+    commands.push(...inner.commands.map((c) => ({ ...c, depth: c.depth + nested.depth })))
+    writes.push(...inner.writes)
+  }
+  return { parsed: facts.parsed, commands, writes }
 }

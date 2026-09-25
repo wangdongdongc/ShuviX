@@ -19,8 +19,8 @@ sources:
 ShuviX の権限システムは**確認モデルであって、サンドボックスではありません**。すべてのツール呼び出しは
 プロセス内で規則の集合に照らされ、**許可 / 確認 / 拒否**のいずれかになります。規則はユーザーが読み、
 上書きし、削除できる markdown ファイルです。第一原則は**ポリシーなし = 許可**：どの規則にも一致しない
-操作は自由に実行され、ShuviX が同梱するすべての保護は目に見えるポリシーです。（許可された `bash`
-コマンドはユーザーの完全な権限で実行されます —— ここに OS レベルの隔離はありません。）
+操作は自由に実行され、ShuviX が同梱するすべての保護は目に見えるポリシーです。（許可された `bash` /
+`powershell` コマンドはユーザーの完全な権限で実行されます —— ここに OS レベルの隔離はありません。）
 
 - 場所：`~/.shuvix/policies/<name>.md`。
 - マーカー：`shuvix: policy v1`。読み取り時は省略可、書くときは必ず付く。
@@ -119,7 +119,7 @@ vars     ホスト変数表（後述）+ セッションの許諾
 | `object.type`  | 発生元                                                       | `action`         | 属性                                                                                                                                                                                                                                                      |
 | -------------- | ------------------------------------------------------------ | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `path`         | `read`、`write`、`edit`、`knowledge` ツール、ファイルプレビュー | `read` / `write` | `path`（パスが実際に行き着く場所：絶対パス。デスクトップではシンボリックリンクを展開し、`..` は実際の親ディレクトリを指す —— OS が開くときと同じ）、`requestedPath`（ツールが要求した時点の絶対パス —— リンクや `..` を挟むと `path` と異なる）、`displayPath`（モデルが書いたまま、メッセージ用） |
-| `command`      | `bash`、`ssh`                                                | `execute`        | `command`（生のテキスト）、`channel`（`bash` / `ssh`）、およびシェルパーサーから遅延で：`parsed`（ブール）、`commands`（`{ base, argv, wrappers, complete, depth }` のリスト —— `base` は `sudo` / `env` / `timeout` を剥がした後の本当のプログラム、動的な語は `''`）、`writes`（リダイレクト先の絶対パス） |
+| `command`      | `bash`、`powershell`、`ssh`                                  | `execute`        | `command`（生のテキスト）、`channel`（`bash` / `powershell` / `ssh`）、およびシェルパーサーから遅延で（`powershell` のコマンドは ShuviX 独自の PowerShell スキャナーで読む：`base` は正規化したコマンド名 —— エイリアスは cmdlet 名に解決、パスと `.exe` / `.com` は除去、大文字小文字はそのまま、比較の前に `lowerAscii()` —— `-Name:value` は二項目に分割）：`parsed`（ブール）、`commands`（`{ base, argv, wrappers, complete, depth }` のリスト —— `base` は `sudo` / `env` / `timeout` を剥がした後の本当のプログラム、動的な語は `''`）、`writes`（リダイレクト先の絶対パス） |
 | `gitTool`      | `git` ツール                                                 | `execute`        | `gitAction`、`command`、`force`（ブール）、`delete`（ブール）                                                                                                                                                                                           |
 | `database`     | 組み込み `database` サーバーの `query` ツール                | `execute`        | `sql`、`credential`、`dbType`、`readonly`（ブール —— 接続が読み取り専用か）                                                                                                                                                                              |
 | `url`          | 組み込み `browser` / `chrome` サーバー：すべてのナビゲーション、`chrome` ではサイトごとの初回利用も | `navigate`       | `url`、`scheme`、`host`（小文字、末尾のドットなし）、`origin`、`browser`（`app` = ShuviX 内のブラウザーパネル、`chrome` = あなた自身の Chrome）。`file://` は url オブジェクトではなく、そのパスの読み取りとして判定 |
@@ -179,11 +179,11 @@ scope と交差して空になる規則；不正な `lets`（不正な名前、�
 | ------------------------------- | ------------------------------------------------------------------------------------------------------------ |
 | `protect-credentials`           | 認証情報ディレクトリ（`.ssh`、`.aws`……）への書き込みを拒否、読み取りを確認                                    |
 | `protect-system`                | OS ディレクトリへの書き込みを拒否                                                                             |
-| `block-catastrophic-commands`   | マシンを破壊する少数のコマンドを、解析された構造で判断して拒否（`rm -rf /`、`mkfs`、デバイスへの `dd`……）     |
+| `block-catastrophic-commands`   | マシンを破壊する少数のコマンドを、解析された構造で判断して拒否（`rm -rf /`、`mkfs`、デバイスへの `dd`、`Format-Volume`……）     |
 | `protect-bot-files`             | `~/.shuvix/bots` 配下のあらゆる書き込みを **force-ask**                                                       |
 | `ask-on-read`                   | ワークスペース、ツール結果、skill ディレクトリ、本リファレンスの外の読み取りを確認                            |
 | `ask-on-write`                  | すべてのファイル書き込みを diff プレビュー付きで確認                                                          |
-| `ask-on-command`                | すべての `bash` / `ssh` コマンドを確認                                                                        |
+| `ask-on-command`                | すべての `bash` / `powershell` / `ssh` コマンドを確認                                                                        |
 | `git-safety`                    | 破壊的な git 操作を確認（`init`、`restore`、強制 checkout、ブランチ削除）                                     |
 | `ask-on-database`               | 書き込み可能なデータベース接続上のすべての文を確認                                                            |
 | `ask-on-sub-session`            | サブセッションを開くときに一度確認（`tool.name == 'session' && tool.operation == 'create-sub-session'`）       |

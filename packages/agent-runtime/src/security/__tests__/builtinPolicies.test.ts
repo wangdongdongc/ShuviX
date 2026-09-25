@@ -197,9 +197,9 @@ describe('buildBuiltinPolicies', () => {
     expect(dirs).toContain('vars.home')
   })
 
-  it('BP-3c block-catastrophic-commands：deny × execute × command × 三条结构化规则，两端同待遇', () => {
+  it('BP-3c block-catastrophic-commands：deny × execute × command × 五条结构化规则，两端同待遇', () => {
     const policy = byName('block-catastrophic-commands')
-    expect(policy.rules).toHaveLength(3)
+    expect(policy.rules).toHaveLength(5)
     // 无 env.host —— 扩展端当前没有命令工具，规则天然不命中；将来有了自动同待遇
     expect(policy.scope).toEqual({ 'subject.kind': ['agent'], 'object.type': ['command'] })
     for (const rule of policy.rules) {
@@ -219,6 +219,9 @@ describe('buildBuiltinPolicies', () => {
     // 规则 2：Windows 的两条，base 与参数都过 lowerAscii
     expect(policy.rules[2].match).toContain("lowerAscii() == 'format'")
     expect(policy.rules[2].match).toContain("startsWith('/w:')")
+    // 规则 3 / 4：PowerShell 的写法 —— base 已由 PowerShell 层规范化（别名 → cmdlet），仍过 lowerAscii
+    expect(policy.rules[3].match).toContain("c.base.lowerAscii() == 'remove-item'")
+    expect(policy.rules[4].match).toContain("['format-volume', 'clear-disk']")
     // 清单本体在 lets 中（lets 只见 vars，故是纯字面清单）
     for (const prefix of ['/dev/sd', '/dev/nvme', '/dev/disk', '/dev/hd', '/dev/vd']) {
       expect(policy.lets!.blockDevices).toContain(prefix)
@@ -227,7 +230,7 @@ describe('buildBuiltinPolicies', () => {
     expect(policy.lets!.recursiveForce).toContain('--force')
   })
 
-  it('BP-3c-b block-catastrophic-commands：三条规则的 match 都不看命令原文', () => {
+  it('BP-3c-b block-catastrophic-commands：五条规则的 match 都不看命令原文', () => {
     // 结构化改造的本质就是这一条：判定只读解析产物（commands / writes），不读
     // object.command。留一条原文正则在里面，前面所有「引号/嵌套/重定向」的收益都会被
     // 那条正则的误拦重新吃掉（`git commit -m "format c:"` 即是）。

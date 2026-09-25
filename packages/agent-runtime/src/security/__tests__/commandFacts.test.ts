@@ -1,12 +1,12 @@
 /**
- * projectCommandFacts —— 命令客体结构属性的投影层直测（纯函数，不起解析器）。
+ * projectCommandFacts / projectPowerShellFacts —— 命令客体结构属性的投影层直测（纯函数，不起解析器）。
  *
  * 这一层是 CEL 唯一能看到的命令结构，所以它的契约要独立于任何一条策略被钉住：
  * 事实用手工字面量喂，摆脱 bash 语法细节（那部分由 shell/__tests__ 的 108 条覆盖），
  * 这里只管「解析层的事实怎么变成规则能写的属性」。
  */
 import { describe, it, expect } from 'vitest'
-import { projectCommandFacts } from '../commandFacts'
+import { projectCommandFacts, projectPowerShellFacts } from '../commandFacts'
 import type {
   LiteralCommand,
   ShellFacts,
@@ -14,6 +14,7 @@ import type {
   ShellRedirectKind,
   ShellSpan
 } from '../shell'
+import type { PowerShellCommand, PowerShellFacts, PowerShellRedirect } from '../powershell'
 
 const SPAN = { start: 0, end: 0 }
 
@@ -291,5 +292,258 @@ describe('projectCommandFacts — 暴露面收敛', () => {
       'complete',
       'depth'
     ])
+  })
+})
+
+// ─── projectPowerShellFacts ─────────────────────────────────
+
+/**
+ * PowerShell 那一层的投影：同一份属性形状（规则不必知道命令是哪种 shell 读出来的），
+ * 差别在命令名已由 PowerShell 层规范化、wrapper 已由那一层剥过，以及嵌套 `bash -c` 载荷的并入。
+ * 事实同样用手工字面量喂，扫描本身见 powershell/__tests__/analyze.test.ts。
+ */
+function psCommand(overrides: Partial<PowerShellCommand> = {}): PowerShellCommand {
+  return {
+    shell: 'powershell',
+    name: 'Remove-Item',
+    base: 'Remove-Item',
+    argv: ['Remove-Item'],
+    wrappers: [],
+    complete: true,
+    span: SPAN,
+    depth: 0,
+    ...overrides
+  }
+}
+
+function psRedirect(kind: ShellRedirectKind, target: string | null, depth = 0): PowerShellRedirect {
+  return { kind, target, span: SPAN, depth }
+}
+
+function psFacts(overrides: Partial<PowerShellFacts> = {}): PowerShellFacts {
+  return {
+    source: '',
+    parsed: true,
+    reason: 'ok',
+    errorAt: null,
+    commands: [],
+    redirects: [],
+    nestedBash: [],
+    depthExceeded: false,
+    ...overrides
+  }
+}
+
+describe('projectPowerShellFacts — 形状', () => {
+  it('PSP-1 键恰为 parsed/commands/writes；单条命令键恰为 base/argv/wrappers/complete/depth', () => {
+    const projected = projectPowerShellFacts(
+      psFacts({
+        commands: [
+          psCommand({
+            name: 'sudo',
+            base: 'FORMAT',
+            argv: ['FORMAT.EXE', null, 'D:'],
+            wrappers: ['sudo'],
+            complete: false
+          }),
+          psCommand({
+            shell: 'cmd',
+            name: 'rd',
+            base: 'rd',
+            argv: ['rd', '/s', 'x'],
+            depth: 1
+          })
+        ],
+        redirects: [psRedirect('write', '/w.txt')],
+        nestedBash: [],
+        depthExceeded: true
+      }),
+      '/ws',
+      '/'
+    )
+    // shell / name / span、depthExceeded / errorAt / reason 都不外露：规则只看这一份形状
+    expect(Object.keys(projected)).toEqual(['parsed', 'commands', 'writes'])
+    for (const c of projected.commands) {
+      expect(Object.keys(c)).toEqual(['base', 'argv', 'wrappers', 'complete', 'depth'])
+    }
+    expect(projected.commands).toEqual([
+      // null 动态词原位换成空串；base 大小写原样（规则里自己 lowerAscii）
+      {
+        base: 'FORMAT',
+        argv: ['FORMAT.EXE', '', 'D:'],
+        wrappers: ['sudo'],
+        complete: false,
+        depth: 0
+      },
+      // cmd 载荷里的命令没有 wrapper，也不再套 bash 的 wrapper 表
+      { base: 'rd', argv: ['rd', '/s', 'x'], wrappers: [], complete: true, depth: 1 }
+    ])
+  })
+
+  it('PSP-1b 不套 bash 的 wrapper 表：argv 原样透传', () => {
+    // wrapper 已由 PowerShell 层剥过（只有 sudo）。Windows 上的 timeout 是 timeout.exe ——
+    // 等几秒就退出，不跑后面的词；按 bash 的表再剥一次会凭空造出一条 rm
+    const projected = projectPowerShellFacts(
+      psFacts({
+        commands: [
+          psCommand({ name: 'timeout', base: 'timeout', argv: ['timeout', '5', 'rm', '-rf', '/'] })
+        ]
+      }),
+      '/ws',
+      '/'
+    )
+    expect(projected.commands[0]).toMatchObject({
+      base: 'timeout',
+      argv: ['timeout', '5', 'rm', '-rf', '/'],
+      wrappers: []
+    })
+  })
+})
+
+describe('projectPowerShellFacts — writes', () => {
+  it('PSP-2 只有目标字面可知的 write / append 进 writes，并按 cwd 解析（Windows sep）', () => {
+    const projected = projectPowerShellFacts(
+      psFacts({
+        redirects: [
+          psRedirect('write', 'out.txt'),
+          psRedirect('append', '..\\up.txt'),
+          psRedirect('write', 'C:/a/../b.txt'),
+          psRedirect('write', null),
+          psRedirect('fd-dup', null),
+          psRedirect('read', 'in.txt'),
+          // cmd /c 载荷里的重定向（depth 1）同样进 writes
+          psRedirect('write', 'C:\\o.txt', 1)
+        ]
+      }),
+      'C:\\ws\\sub',
+      '\\'
+    )
+    expect(projected.writes).toEqual([
+      'C:\\ws\\sub\\out.txt',
+      'C:\\ws\\up.txt',
+      'C:\\b.txt',
+      'C:\\o.txt'
+    ])
+  })
+
+  it('PSP-2b 无 cwd：相对目标原样', () => {
+    const projected = projectPowerShellFacts(
+      psFacts({ redirects: [psRedirect('write', 'out.txt'), psRedirect('write', '..\\x')] }),
+      undefined,
+      '\\'
+    )
+    expect(projected.writes).toEqual(['out.txt', '..\\x'])
+  })
+
+  it('PSP-3 （修过的 SB-6）Windows 的当前盘根、UNC 与设备路径保持为根，不被拼到 cwd 上', () => {
+    const writesOf = (target: string): string[] =>
+      projectPowerShellFacts(psFacts({ redirects: [psRedirect('write', target)] }), 'C:\\ws', '\\')
+        .writes
+    expect(writesOf('\\Windows\\x.txt')).toEqual(['\\Windows\\x.txt'])
+    expect(writesOf('\\\\server\\share\\f')).toEqual(['\\\\server\\share\\f'])
+    expect(writesOf('\\\\.\\PhysicalDrive0')).toEqual(['\\\\.\\PhysicalDrive0'])
+    // 服务器名是根的一部分，`..` 退不过它
+    expect(writesOf('\\\\server\\share\\..\\f')).toEqual(['\\\\server\\f'])
+  })
+
+  it('PSP-3b POSIX 护栏：sep 为 / 时 //dev/sda 仍折成 /dev/sda', () => {
+    // UNC 只在 Windows sep 下成立。若 POSIX 也把双斜杠当 UNC 根，写块设备的重定向换个
+    // `//dev/sda` 就绕过了按前缀比较的 block-catastrophic-commands#1
+    const projected = projectCommandFacts(
+      facts({ redirects: [redirect('write', '//dev/sda')] }),
+      '/ws',
+      '/'
+    )
+    expect(projected.writes).toEqual(['/dev/sda'])
+  })
+})
+
+describe('projectPowerShellFacts — 嵌套 bash 载荷', () => {
+  const bashInner = (overrides: Partial<ShellFacts> = {}): ShellFacts =>
+    facts({
+      literalCommands: [
+        literal({ name: 'sudo', base: 'sudo', argv: ['sudo', 'rm', '-rf', '/'], depth: 1 })
+      ],
+      redirects: [redirect('write', 'disk.img')],
+      ...overrides
+    })
+
+  it('PSP-4 按 bash 的投影并入：wrapper 照剥、depth 叠加载荷所在的层、writes 一并并入', () => {
+    const projected = projectPowerShellFacts(
+      psFacts({
+        commands: [psCommand({ name: 'bash', base: 'bash', argv: ['bash', '-c', 'x'] })],
+        redirects: [psRedirect('write', 'ps.txt')],
+        nestedBash: [{ facts: bashInner(), depth: 2 }]
+      }),
+      '/ws',
+      '/'
+    )
+    expect(projected.parsed).toBe(true)
+    expect(projected.commands).toEqual([
+      { base: 'bash', argv: ['bash', '-c', 'x'], wrappers: [], complete: true, depth: 0 },
+      // 载荷自身 depth 1 + 载荷所在层 2
+      { base: 'rm', argv: ['rm', '-rf', '/'], wrappers: ['sudo'], complete: true, depth: 3 }
+    ])
+    expect(projected.writes).toEqual(['/ws/ps.txt', '/ws/disk.img'])
+  })
+
+  it('PSP-4b 载荷读得不完整：按 bash 的规矩丢掉落在错误区间里的节点；外层 parsed 不受牵连', () => {
+    const projected = projectPowerShellFacts(
+      psFacts({
+        nestedBash: [
+          {
+            depth: 1,
+            facts: facts({
+              parsed: false,
+              reason: 'syntax-error',
+              errorSpans: [{ start: 10, end: 20 }],
+              literalCommands: [
+                literal({ argv: ['rm', '-rf', '/'], span: { start: 0, end: 8 } }),
+                literal({
+                  name: 'mkfs',
+                  base: 'mkfs',
+                  argv: ['mkfs'],
+                  span: { start: 12, end: 16 }
+                })
+              ],
+              redirects: [
+                redirect('write', '/dev/sda', { start: 0, end: 5 }),
+                redirect('write', '/dev/sdb', { start: 15, end: 18 })
+              ]
+            })
+          }
+        ]
+      }),
+      '/ws',
+      '/'
+    )
+    expect(projected.parsed).toBe(true)
+    expect(projected.commands.map((c) => [c.base, c.depth])).toEqual([['rm', 1]])
+    expect(projected.writes).toEqual(['/dev/sda'])
+  })
+})
+
+describe('projectPowerShellFacts — 未解析', () => {
+  it('PSP-5 parsed=false 的事实照样投影（PowerShell 层只交出错误之前读到的），parsed 保持 false', () => {
+    const projected = projectPowerShellFacts(
+      psFacts({
+        parsed: false,
+        reason: 'syntax-error',
+        errorAt: 15,
+        commands: [
+          psCommand({ name: 'Format-Volume', base: 'Format-Volume', argv: ['Format-Volume'] })
+        ],
+        redirects: [psRedirect('write', '/w.txt')]
+      }),
+      '/ws',
+      '/'
+    )
+    expect(projected).toEqual({
+      parsed: false,
+      commands: [
+        { base: 'Format-Volume', argv: ['Format-Volume'], wrappers: [], complete: true, depth: 0 }
+      ],
+      writes: ['/w.txt']
+    })
   })
 })

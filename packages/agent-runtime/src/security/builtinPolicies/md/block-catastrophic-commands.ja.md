@@ -3,7 +3,7 @@ shuvix: policy v1
 shuvix-builtin: true
 name: block-catastrophic-commands
 shuvix-displayName: 壊滅的なコマンドをいくつか遮断
-description: マシン全体を破壊する数種類の書き方——ルートディレクトリの削除、ディスクのフォーマットや上書き——を実行前に拒否します。ローカルコマンドと ssh コマンドを同じに扱います。
+description: マシン全体を破壊する数種類の書き方——ルートディレクトリの削除、ディスクのフォーマットや上書き——を実行前に拒否します。bash・PowerShell・ssh のコマンドを同じに扱います。
 shuvix-policy-scope:
   subject.kind: [agent]
   object.type: [command]
@@ -38,15 +38,36 @@ shuvix-policy-rules:
       (c.base.lowerAscii() == 'format' && c.argv.exists(a, a.lowerAscii().matches('^[a-z]:')))
       || (c.base.lowerAscii() == 'cipher' && c.argv.exists(a, a.lowerAscii().startsWith('/w:'))))
     prompt: 実行は拒否された。このコマンドは Windows のドライブ単位のフォーマットまたは完全消去として解析された。
+  # PowerShell：ドライブのルートの再帰削除 —— Remove-Item のいずれかの名前（rm / del / rd …）、
+  # -Recurse の任意の省略形、字面のルート（C:\ / C:\* / \ / /）
+  - effect: deny
+    action: [execute]
+    match: >-
+      object.commands.exists(c,
+      c.base.lowerAscii() == 'remove-item'
+      && c.argv.exists(a, a.lowerAscii().matches('^-r(e(c(u(r(s(e)?)?)?)?)?)?$'))
+      && c.argv.exists(a, a.matches('^([A-Za-z]:)?[\\\\/]\\*?$')))
+    prompt: 実行を拒否しました。このコマンドはドライブのルートの再帰削除として解析されました。
+  # PowerShell：ボリュームのフォーマットまたはディスクの消去
+  - effect: deny
+    action: [execute]
+    match: >-
+      object.commands.exists(c, c.base.lowerAscii() in ['format-volume', 'clear-disk'])
+    prompt: 実行を拒否しました。このコマンドはボリュームのフォーマットまたはディスクの消去として解析されました。
 ---
 
 **すること**：マシン全体を壊す数種類の書き方——ルートディレクトリの削除、ディスクの
 フォーマットや上書き——を実行前に拒否します。ローカルコマンドと ssh コマンドは同じ
-扱いで、自動許可がオンでもこの拒否は覆りません。
+扱いで、自動許可がオンでもこの拒否は覆りません。Windows では PowerShell 独自の書き方も
+含みます：`Remove-Item -Recurse`（`rm`・`del`・`rd` など、どの名前で書いても）による
+ドライブのルートの削除、`Format-Volume`、`Clear-Disk`。
 
 コマンドはテキストではなく構造として読まれるため、書き換えてもすり抜けません。
 コマンド名に引用符を挟む、`bash -c` で包む、ツールではなくリダイレクトでディスクに
-書く——どれも同じ判定にたどり着きます。
+書く——どれも同じ判定にたどり着きます。PowerShell のコマンドも構造として読みます——
+エイリアス、省略したパラメーター名、曲がった引用符、ハイフンの代わりの en dash、
+外側の `powershell -Command` / `-EncodedCommand`、`cmd /c`、`Invoke-Expression '…'` の
+どれでも結論は変わりません。
 
 **しないこと**：
 
@@ -58,6 +79,11 @@ shuvix-policy-rules:
   すべてのコマンドを実際にあなたの目の前に出すのは、そちらの門です。
 - 引数ではなく標準入力からシェルに渡されるスクリプト——`bash <<'EOF' … EOF`、`sh -s`、
   シェルへのパイプ——は中身を読みません。`bash -c '…'` の形は読みます。
+- PowerShell は ShuviX 自身のスキャナーで読みます。PowerShell 本体に解析させるわけでは
+  ありません。この言語の引用符と入れ子は読めますが、`[IO.Directory]::Delete(…)` のような
+  .NET 呼び出し、スクリプトファイル、実行時に組み立てられるものは読みません。あるコマンドが
+  ルートを示し、次のコマンドがそれを削除する書き方
+  （`Get-ChildItem C:\ | Remove-Item -Recurse`）も拾えません。
 - コマンドが何と言っているかだけを見ます。最終的に何に触れるかは判断しません。
 
 **調整するには**：上書きコピーを作成して編集してください——慎重に。

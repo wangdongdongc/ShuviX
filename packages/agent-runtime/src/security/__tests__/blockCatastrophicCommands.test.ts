@@ -1,13 +1,16 @@
 /**
- * block-catastrophic-commands 行为判定 —— 装配真实内置策略 + 真实 tree-sitter 解析器，
+ * block-catastrophic-commands 行为判定 —— 装配真实内置策略 + 真实 tree-sitter 解析器
+ * （powershell 通道则是 PowerShell 扫描器，嵌套的 `bash -c` 载荷仍交给真实 bash 解析器），
  * 表驱动跑「命令原文 → 决策」。
  *
  * 为什么单开一个文件而不是留在 builtinPolicies.test.ts：这条策略是唯一读**结构事实**
  * 而非客体标量的内置策略，用例要起解析器、要断言投影产物，与那边「md 形态守卫 + 各策略
  * 一两条行为抽查」的定位不同；混在一起会让那份文件的 beforeAll 拖着所有策略跑 wasm。
  *
- * 三条规则的分工（id 在断言里写死，改规则顺序必须同步改这里）：
+ * 五条规则的分工（id 在断言里写死，改规则顺序必须同步改这里）：
  *   #0 递归强删根目录   #1 mkfs / dd / 重定向打块设备   #2 Windows format / cipher /w:
+ *   #3 PowerShell 递归删盘根（Remove-Item 各别名 × -Recurse 各缩写 × 字面盘根）
+ *   #4 PowerShell Format-Volume / Clear-Disk
  *
  * 组织顺序刻意是「误拦护栏 → 正例 → 挡不住的 → 未解析 → tier/通道」：
  * deny 不可为单条命令豁免，一次误拦比一次漏拦贵得多，所以护栏组的用例数多于正例组，
@@ -17,8 +20,9 @@ import { describe, it, expect, beforeAll, vi } from 'vitest'
 import { assembleRules } from '../assemble'
 import { evaluate } from '../evaluate'
 import { buildPolicyVars } from '../policyVars'
-import { projectCommandFacts, type CommandFactAttrs } from '../commandFacts'
+import { projectCommandFacts, projectPowerShellFacts, type CommandFactAttrs } from '../commandFacts'
 import { analyzeShellCommand, initShellParser } from '../shell'
+import { analyzePowerShellCommand, MAX_POWERSHELL_PAYLOAD_DEPTH } from '../powershell'
 import { loadShellParserWasmFromNodeModules } from '../shell/nodeWasm'
 import type { SecurityDecision, SecurityHostProvider, SecurityObject } from '../types'
 import { createInlinePolicyMdReader } from '../builtinPolicies/inlineSources'
@@ -53,10 +57,14 @@ function makeProvider(overrides: Partial<SecurityHostProvider> = {}): SecurityHo
   }
 }
 
+type Channel = 'bash' | 'ssh' | 'powershell'
+
 interface DecideOpts {
-  channel?: 'bash' | 'ssh'
+  channel?: Channel
   /** 命令的工作目录；ssh 远端不可知，传 null 表示「没有 cwd」 */
   cwd?: string | null
+  /** 投影 writes 用的路径分隔符；缺省 '/'（与 makeProvider 的 pathSep 一致） */
+  sep?: string
   subjectKind?: 'agent' | 'user'
   host?: 'desktop' | 'extension'
   provider?: SecurityHostProvider
@@ -67,17 +75,32 @@ interface DecideOpts {
  * 解析 + 投影 —— 判定表走这条纯同步路径（惰性/记忆化那组在 context.test.ts）。
  * cwd 传 null 表示「没有工作目录」（ssh 远端）；缺省参数不能用 undefined 表达它，
  * 显式传 undefined 会落回默认值，正是 BC-73 要区分的那一格。
+ *
+ * powershell 通道与 context.ts 同一条路：PowerShell 扫描器 + 真实 bash 解析器读嵌套载荷。
  */
-function factsOf(command: string, cwd: string | null = '/ws'): CommandFactAttrs {
-  return projectCommandFacts(analyzeShellCommand(command), cwd ?? undefined, '/')
+function factsOf(
+  command: string,
+  cwd: string | null = '/ws',
+  channel: Channel = 'bash',
+  sep = '/'
+): CommandFactAttrs {
+  if (channel === 'powershell') {
+    return projectPowerShellFacts(
+      analyzePowerShellCommand(command, { analyzeBash: analyzeShellCommand }),
+      cwd ?? undefined,
+      sep
+    )
+  }
+  return projectCommandFacts(analyzeShellCommand(command), cwd ?? undefined, sep)
 }
 
 function commandObject(command: string, opts: DecideOpts = {}): SecurityObject {
+  const channel = opts.channel ?? 'bash'
   return {
     type: 'command',
     command,
-    channel: opts.channel ?? 'bash',
-    ...factsOf(command, opts.cwd === undefined ? '/ws' : opts.cwd)
+    channel,
+    ...factsOf(command, opts.cwd === undefined ? '/ws' : opts.cwd, channel, opts.sep ?? '/')
   }
 }
 
@@ -114,7 +137,7 @@ function expectAsk(command: string, opts: DecideOpts = {}): SecurityDecision {
 /** 被拒 —— ruleIndex 钉住是哪条红线，防止将来某条规则扩张后悄悄接管另一条的用例 */
 function expectDeny(
   command: string,
-  ruleIndex: 0 | 1 | 2,
+  ruleIndex: 0 | 1 | 2 | 3 | 4,
   opts: DecideOpts = {}
 ): SecurityDecision {
   const decision = decide(command, opts)
@@ -249,6 +272,8 @@ describe('block-catastrophic-commands — 误拦护栏（数量多于正例组�
     // 真正的兜底是将来的沙箱隔离，不是往这张短名单里继续塞正则。
     // 它们落到 ask 的唯一原因就是「没有规则」—— 后三条虽然尾随反斜杠会让 bash 语法
     // 解析失败，但错误区间只覆盖那个反斜杠，命令节点本身照样交给了规则（见 BC-63）。
+    // 这里走的是 bash 通道；powershell 通道上的 `Remove-Item -Recurse … C:\` 由 #3 拒（BC-PS10），
+    // cmd 的 `rd /s /q C:\` 在哪个通道都只走询问（BC-PS21）。
     for (const command of [
       ':(){ :|:& };:',
       '%0|%0',
@@ -593,7 +618,7 @@ describe('block-catastrophic-commands — tier 结算与通道', () => {
 })
 
 describe('block-catastrophic-commands — PEP 对偶约定被违反的后果', () => {
-  it('BC-80 手工命令客体缺结构属性 → 三条规则全 fail-safe 命中，命令被拒死', () => {
+  it('BC-80 手工命令客体缺结构属性 → 五条规则全 fail-safe 命中，命令被拒死', () => {
     // 方向安全但用户不可用：任何绕开 enforceCommand 自造命令客体的新宿主/新调用点，
     // 会把**所有**命令拒死（连 ls 都不行）。这条用例的价值是让那种接线方式一上来就红，
     // 而不是等到线上发现「智能体一条命令都跑不了」。
@@ -616,11 +641,13 @@ describe('block-catastrophic-commands — PEP 对偶约定被违反的后果', (
       'block-catastrophic-commands#0',
       'block-catastrophic-commands#1',
       'block-catastrophic-commands#2',
+      'block-catastrophic-commands#3',
+      'block-catastrophic-commands#4',
       'ask-on-command#0'
     ])
 
     const messages = warn.mock.calls.map((c) => String(c[0]))
-    expect(messages).toHaveLength(3)
+    expect(messages).toHaveLength(5)
     messages.forEach((message, i) => {
       expect(message).toContain(`'block-catastrophic-commands#${i}'`)
       expect(message).toContain('match evaluation failed')
@@ -1115,5 +1142,305 @@ if true; then
   rm -rf /`
     expectAsk(command)
     expect(factsOf(command)).toEqual({ parsed: false, commands: [], writes: [] })
+  })
+})
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * PowerShell 通道（BC-PS*）
+ *
+ * 同一套五条规则，客体换成 PowerShell 扫描器的投影。#3 / #4 只为 PowerShell 的写法而设，
+ * #0 ~ #2 照样覆盖 PowerShell 里的原生程序（format.com、rm.exe）与嵌套的 `bash -c`。
+ * 顺序沿用文件头的约定：误拦护栏 → 正例 → 已知缺口 → 语法错 → tier/通道。
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+const PS: DecideOpts = { channel: 'powershell' }
+const psAsk = (command: string, opts: DecideOpts = {}): SecurityDecision =>
+  expectAsk(command, { ...PS, ...opts })
+const psDeny = (
+  command: string,
+  ruleIndex: 0 | 1 | 2 | 3 | 4,
+  opts: DecideOpts = {}
+): SecurityDecision => expectDeny(command, ruleIndex, { ...PS, ...opts })
+const psFactsOf = (command: string, sep = '/'): CommandFactAttrs =>
+  factsOf(command, '/ws', 'powershell', sep)
+/** `-EncodedCommand` 的编码：UTF-16LE 再 base64 */
+const encode = (s: string): string => Buffer.from(s, 'utf16le').toString('base64')
+
+describe('block-catastrophic-commands — PowerShell 误拦护栏', () => {
+  it('BC-PS1 日常删除与只差一格的写法 → ask', () => {
+    for (const command of [
+      'Remove-Item -Recurse .\\build',
+      'Remove-Item -Recurse -Force .\\node_modules',
+      'rm -r -fo .\\dist, .\\out',
+      'Remove-Item -Path .\\build\\* -Recurse',
+      // 盘根之下的目录不是盘根
+      'Remove-Item C:\\Windows -Recurse',
+      // `C:` 是 C 盘的当前目录，不是盘根
+      'Remove-Item C: -Recurse',
+      'Remove-Item C:\\*.tmp -Recurse',
+      // 目标动态：看不见值就不判
+      'Remove-Item -Recurse $env:TEMP\\*',
+      // 删盘根但不递归
+      'Remove-Item C:\\',
+      // 开关显式关掉
+      'Remove-Item C:\\ -Recurse:$false',
+      'Remove-Item C:\\ -Recurse: $false',
+      'Remove-Item C:\\ -Recurse:0',
+      // `-rf` 不是 -Recurse 的任何缩写（PowerShell 里这条只会报参数错）
+      'rm -rf /',
+      // 比 -Recurse 更长的不是它的缩写
+      'Remove-Item C:\\ -recursive',
+      // 递归但不删
+      'Get-ChildItem C:\\ -Recurse',
+      'Copy-Item C:\\ D:\\bk -Recurse'
+    ]) {
+      psAsk(command)
+    }
+  })
+
+  it('BC-PS2 危险词只是数据 → ask', () => {
+    for (const command of [
+      'git commit -m "Format-Volume"',
+      "Write-Output 'Remove-Item -Recurse C:\\'",
+      'Write-Output "Remove-Item -Recurse C:\\"',
+      'Get-Help Format-Volume -Full',
+      "Get-Command | Where-Object { $_.Name -eq 'Format-Volume' }",
+      '# Format-Volume',
+      "$s = @'\nFormat-Volume -DriveLetter D\n'@",
+      'Write-Output "`$(Clear-Disk 0)"',
+      'Write-Output --% ; Format-Volume',
+      "& 'Remove-Item C:\\ -Recurse'",
+      'cmd /c echo "a & format C:"',
+      'cmd /c "echo (format C:)"'
+    ]) {
+      psAsk(command)
+    }
+  })
+
+  it('BC-PS3 名字撞车：同前缀的 cmdlet、formatter、裸 format、Remove-ItemProperty → ask', () => {
+    for (const command of [
+      'Format-Hex x.bin',
+      'Format-Table',
+      'Format-List',
+      'formatter C:',
+      'format',
+      'Clear-Content x',
+      'Clear-Host',
+      'Remove-ItemProperty HKCU:\\x -Name y'
+    ]) {
+      psAsk(command)
+    }
+  })
+})
+
+describe('block-catastrophic-commands — PowerShell 正例', () => {
+  it('BC-PS10 #3：Remove-Item 各别名 × -Recurse 各缩写 × 各种盘根写法', () => {
+    const names = ['Remove-Item', 'rm', 'del', 'erase', 'rd', 'ri', 'rmdir']
+    const flags = ['-r', '-re', '-rec', '-recu', '-recur', '-recurs', '-recurse', '-R', '-RECURSE']
+    const roots = ['C:\\', 'c:/', 'C:\\*', '\\', '/', '/*', '\\*']
+    // 名字 × 缩写（盘根固定）与 盘根 × 名字（缩写固定）两张表 —— 三维全交叉 400 来条，
+    // 每一维的判据彼此独立（base / argv 里各找一项），两两交叉已能钉住每一格
+    for (const name of names) {
+      for (const flag of flags) psDeny(`${name} C:\\ ${flag}`, 3)
+      for (const root of roots) psDeny(`${name} ${root} -Recurse`, 3)
+    }
+    // 参数写法
+    for (const command of [
+      'Remove-Item -Path:C:\\ -Recurse',
+      'Remove-Item -LiteralPath "C:\\" -Recurse',
+      'Remove-Item C:\\ -Recurse:$true',
+      'Remove-Item a,C:\\ -Recurse'
+    ]) {
+      psDeny(command, 3)
+    }
+    // 绕过写法：弯引号 + en/em dash、命令名里夹反引号、模块限定名、sudo
+    for (const command of [
+      'Remove\u2013Item \u2018C:\\\u2019 \u2014Recurse',
+      'Re`move-Item C:\\ -Recurse',
+      'Microsoft.PowerShell.Management\\Remove-Item C:\\ -Recurse',
+      'sudo rm C:\\ -r'
+    ]) {
+      psDeny(command, 3)
+    }
+    // 容器里的命令一样是真命令
+    for (const command of [
+      'Invoke-Command { rd C:\\ -rec }',
+      'Invoke-Command -ScriptBlock:{ Remove-Item C:\\ -Recurse }',
+      '$null = Remove-Item \\ -r',
+      'Write-Output $(Remove-Item C:\\ -Recurse)',
+      'if ($true) { rm C:\\ -r }',
+      'gci | foreach { Remove-Item C:\\ -Recurse }',
+      'Remove-Item C:\\ -Recurse &'
+    ]) {
+      psDeny(command, 3)
+    }
+  })
+
+  it('BC-PS11 #4：Format-Volume / Clear-Disk 的各种写法', () => {
+    for (const command of [
+      'Format-Volume -DriveLetter D',
+      'format-volume -DriveLetter D',
+      'Storage\\Format-Volume -DriveLetter D',
+      'Format\u2014Volume -DriveLetter D',
+      'Clear-Disk -Number 1 -RemoveData -Confirm:$false',
+      'Get-Disk 1 | Clear-Disk -RemoveData',
+      'Clear\u2015Disk 1',
+      'Start-Job { Format-Volume -DriveLetter D } &'
+    ]) {
+      psDeny(command, 4)
+    }
+  })
+
+  it('BC-PS12 #2：PowerShell 里的 format / cipher，以及 cmd /c 载荷里的', () => {
+    for (const command of [
+      'format C:',
+      'format.com d: /q',
+      'C:\\Windows\\System32\\format.com E:',
+      '& "format" C:',
+      'cipher /w:C:\\'
+    ]) {
+      psDeny(command, 2)
+    }
+    for (const command of [
+      'cmd /c "format C: /q"',
+      'cmd /c format D:',
+      'cmd /cformat D:',
+      'cmd /c "f^ormat C:"',
+      'cmd /c "@format C:"',
+      'cmd /c "echo ok && cipher /w:C:\\"',
+      // 动态参数不让整段载荷失明（SB-8）
+      'cmd /c format C: $null',
+      'cmd /c "if exist x (echo) else (format C:)"'
+    ]) {
+      psDeny(command, 2)
+    }
+  })
+
+  it('BC-PS13 套壳不改判：-Command / -EncodedCommand / Invoke-Expression / cmd ⇄ powershell 互套', () => {
+    psDeny('powershell -NoProfile -Command "Remove-Item C:\\ -Recurse"', 3)
+    psDeny(`powershell -EncodedCommand ${encode('Format-Volume -DriveLetter D')}`, 4)
+    psDeny(`pwsh -ec ${encode('Remove-Item C:\\ -Recurse')}`, 3)
+    psDeny("Invoke-Expression 'Clear-Disk 0'", 4)
+    psDeny("iex -ErrorAction Stop 'Clear-Disk 0'", 4)
+    psDeny("iex @'\nClear-Disk 0\n'@", 4)
+    psDeny('cmd /c powershell -c Format-Volume -DriveLetter D', 4)
+    psDeny('powershell -c "cmd /c format C:"', 2)
+    const deepest = 'cmd /c '.repeat(MAX_POWERSHELL_PAYLOAD_DEPTH - 1) + 'format C:'
+    psDeny(deepest, 2)
+  })
+
+  it('BC-PS14 bash 的规则穿过 PowerShell：嵌套 bash -c（真实解析器）、rm.exe、写块设备的重定向', () => {
+    psDeny("bash -c 'rm -rf /'", 0)
+    psDeny("sh -c 'mkfs.ext4 /dev/sda1'", 1)
+    psDeny("bash -c 'echo x > /dev/sda'", 1)
+    // 带路径 / 扩展名的 rm 不解析成 Remove-Item：它就是 rm 程序本身
+    psDeny('rm.exe -rf /', 0)
+    psDeny("& 'C:\\Program Files\\Git\\usr\\bin\\rm.exe' -rf /", 0)
+    psDeny('Write-Output x > /dev/sda', 1)
+    expect(psFactsOf("bash -c 'rm -rf /'").commands.map((c) => [c.base, c.depth])).toEqual([
+      ['bash', 0],
+      ['rm', 1]
+    ])
+  })
+})
+
+describe('block-catastrophic-commands — PowerShell 已知缺口快照（钉现状，不是钉「正确」）', () => {
+  // 与上面 BC-110 起那一组同一个意思：全部期望 ask，存在是为了让将来的修复显式地把它改红。
+
+  it('BC-PS20 运行时才定的东西看不见 → ask', () => {
+    for (const command of [
+      // 已知漏拦：盘根藏在环境变量里
+      'Remove-Item $env:SystemDrive\\ -Recurse',
+      // 已知漏拦：参数在展开的哈希表里
+      'Remove-Item @p',
+      // 已知漏拦：载荷在变量里
+      'iex $cmd',
+      // 已知漏拦：命令名在变量里
+      '& $cmd C:\\ -r',
+      // 已知漏拦：载荷从管道进来
+      "'Format-Volume' | iex",
+      // 已知漏拦：盘根由前一条命令给出
+      'Get-ChildItem C:\\ | Remove-Item -Recurse',
+      // 已知漏拦：.NET 调用不是命令
+      "[IO.Directory]::Delete('C:\\',$true)",
+      // 已知漏拦：pwsh 的第一个位置参数是脚本文件，不读
+      'pwsh Remove-Item C:\\ -Recurse',
+      // 已知漏拦：%VAR% 在 cmd 执行前才展开
+      'cmd /c format %SystemDrive%'
+    ]) {
+      psAsk(command)
+    }
+  })
+
+  it('BC-PS21 判据之外的写法 → ask', () => {
+    // 有意不拦：cmd 的 rd 没有对应规则（#3 只认 PowerShell 的 Remove-Item）
+    psAsk('cmd /c "rd /s /q C:\\"')
+    // 已知漏拦：盘根的非规范写法、注册表盘根
+    for (const root of ['C:\\\\', 'C:\\.', 'HKCU:\\']) psAsk(`Remove-Item ${root} -Recurse`)
+    // 已知漏拦：foreach 的集合位置上的管道不读
+    psAsk('foreach ($f in Remove-Item C:\\ -Recurse) {}')
+    // 已知漏拦：超过嵌套深度上限（8 层）
+    psAsk('cmd /c '.repeat(MAX_POWERSHELL_PAYLOAD_DEPTH) + 'format C:')
+    // 已知漏拦：括号嵌套超过 64 层按结构错误处理，错误发生在读到命令之前
+    psAsk('('.repeat(65) + 'Format-Volume -DriveLetter D' + ')'.repeat(65))
+  })
+
+  it('BC-PS21b 宿主 sep 为 \\ 时，嵌套 bash 写 /dev/sda 仍按 POSIX 投影、被 #1 拒', () => {
+    // Windows 宿主的 pathSep 是 `\`。PowerShell 自己的 `> /dev/sda` 在 Windows 上是当前盘根下的
+    // 普通文件，按宿主 sep 投影成 `\dev\sda`；但嵌套的 `bash -c` 跑在 Git Bash / WSL 里，那里的
+    // /dev/sda 是整块磁盘 —— bash 载荷按 `/` 投影，#1 的重定向分支看得见它
+    const command = "bash -c 'echo x > /dev/sda'"
+    expect(psFactsOf(command, '\\').writes).toEqual(['/dev/sda'])
+    psDeny(command, 1, { sep: '\\' })
+    psDeny("bash -c 'dd if=/dev/zero of=/dev/sda'", 1, { sep: '\\' })
+    // PowerShell 自己的重定向照旧按宿主 sep
+    expect(psFactsOf('Write-Output x > /dev/sda', '\\').writes).toEqual(['\\dev\\sda'])
+  })
+})
+
+describe('block-catastrophic-commands — PowerShell 语法错', () => {
+  it('BC-PS22 错误之前读到的命令照判；读不通的载荷与超长命令落到 ask', () => {
+    // PowerShell 遇到语法错误整段都不执行，所以这两条其实跑不起来 —— 拒绝只是换了种失败方式，
+    // 不构成误拦；反过来若错误让整道门变暗，「末尾追加一个未闭合引号」就成了通用绕过
+    const trailing = "Format-Volume -DriveLetter D; 'unterminated"
+    expect(psFactsOf(trailing).parsed).toBe(false)
+    psDeny(trailing, 4)
+    psDeny('Remove-Item C:\\ -Recurse )', 3)
+    // 载荷自身读不通：整段不并入（与 bash 那一层同一取舍）
+    psAsk(`powershell -c "Format-Volume; 'x"`)
+    // 超长：按未解析处理
+    const long = 'Format-Volume -DriveLetter D; ' + 'Get-Date '.repeat(8000)
+    expect(long.length).toBeGreaterThan(64 * 1024)
+    psAsk(long)
+  })
+})
+
+describe('block-catastrophic-commands — PowerShell 的 tier 与通道', () => {
+  const autoAllowProvider = makeProvider({
+    getSessionGrants: () => ({ autoAllow: true, allowList: [] })
+  })
+
+  it('BC-PS30 deny 压过免询问；普通命令照常放行；user 主体不受内置防护', () => {
+    for (const [command, ruleIndex] of [
+      ['Remove-Item C:\\ -Recurse', 3],
+      ['Format-Volume -DriveLetter D', 4]
+    ] as Array<[string, 3 | 4]>) {
+      const decision = psDeny(command, ruleIndex, { provider: autoAllowProvider })
+      expect({ command, matched: decision.matched }).toEqual({
+        command,
+        matched: expect.arrayContaining(['session-grants#0'])
+      })
+    }
+    const listing = decide('Get-ChildItem', { ...PS, provider: autoAllowProvider })
+    expect([listing.effect, listing.winning]).toEqual(['allow', 'session-grants#0'])
+
+    const user = decide('Format-Volume -DriveLetter D', { ...PS, subjectKind: 'user' })
+    expect([user.effect, user.matched]).toEqual(['allow', []])
+  })
+
+  it('BC-PS31 同一条 `rm -rf /`：bash 通道拒（#0），powershell 通道落到询问', () => {
+    // PowerShell 里 rm 是 Remove-Item 的别名，`-rf` 不是 -Recurse 的缩写，`/` 也不是 bash 那个根
+    expectDeny('rm -rf /', 0, { channel: 'bash' })
+    psAsk('rm -rf /')
   })
 })

@@ -12,6 +12,7 @@
  *   context.ts        createSecurityContext —— PEP 唯一入口
  *   decisionLog.ts    每会话 ring buffer + RuntimeLogger 结构化输出
  *   shell/            bash 命令解析层（tree-sitter-bash；双轨事实抽取）
+ *   powershell/       PowerShell 命令解析层（手写扫描器；只有宽松轨）
  */
 export * from './types'
 export {
@@ -43,6 +44,12 @@ export { compileMatch, evaluateMatch, evaluateLet } from './celMatch'
 export { executeDecision } from './enforce'
 export { createSecurityContext } from './context'
 export { urlObjectOf } from './urlObject'
-export { projectCommandFacts, type CommandAttr, type CommandFactAttrs } from './commandFacts'
+export {
+  projectCommandFacts,
+  projectPowerShellFacts,
+  type CommandAttr,
+  type CommandFactAttrs
+} from './commandFacts'
 export { recordDecision, getSessionDecisions, clearSessionDecisions } from './decisionLog'
 export * from './shell'
+export * from './powershell'

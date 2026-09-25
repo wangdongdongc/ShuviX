@@ -1516,7 +1516,7 @@ describe('createSecurityContext — enforceCommand 的结构属性接线', () =>
     )
   }
 
-  it('CT-S1 一次 enforce 只解析一次：三条 deny 规则多次引用 object.commands 也只跑一遍', async () => {
+  it('CT-S1 一次 enforce 只解析一次：五条 deny 规则多次引用 object.commands 也只跑一遍', async () => {
     const analyze = vi.fn(() => rmRootFacts())
     const ensureReady = vi.fn(async () => {})
     const ctx = createSecurityContext(
@@ -1760,6 +1760,485 @@ describe('createSecurityContext — enforceCommand 的结构属性接线', () =>
     expect(warn).not.toHaveBeenCalled()
     const logged = getSessionDecisions(SHELL_SID)[0]
     expect([logged.effect, logged.winning]).toEqual(['ask', 'ask-on-command#0'])
+  })
+
+  /**
+   * Windows 的 `powershell` 命令工具：命令交给 PowerShell 自己的扫描器读（bash 解析器读 PowerShell
+   * 会得出貌似合理的错事实 —— 反引号在 bash 里是命令替换、在 PowerShell 里是转义），结构规则照常
+   * 对它生效。宿主的 bash 解析器只用来读嵌在里面的 `bash -c '…'` 载荷：真有这种载荷时才调用、
+   * 收到的是载荷本身而不是整条命令；它的就绪照样要等（载荷随时可能有）；它抛错只跳过那一段载荷
+   * 并留下告警，其余事实保留。通道本身照样是策略可见的属性：用户规则能按 `object.channel` 单独管它。
+   */
+  describe('powershell 通道：PowerShell 扫描器，bash 解析器只读嵌套载荷', () => {
+    const PS_OPTS = { toolCallId: 'ps-1', toolName: 'powershell' }
+
+    /** 一个会触发 Windows 格式化规则（#2）的解析结果 —— 只有 bash 通道会读到它 */
+    const formatFacts = (): ShellFacts => ({
+      source: 'format C:',
+      parsed: true,
+      reason: 'ok',
+      errorSpans: [],
+      wordOnly: true,
+      wordOnlyCommands: [['format', 'C:']],
+      literalCommands: [
+        {
+          name: 'format',
+          base: 'format',
+          argv: ['format', 'C:'],
+          complete: true,
+          span: SPAN,
+          depth: 0
+        }
+      ],
+      dynamics: [],
+      redirects: [],
+      depthExceeded: false
+    })
+
+    /** `echo x > /dev/sda` 的解析结果：一条写块设备的重定向 */
+    const redirectToDiskFacts = (): ShellFacts => ({
+      source: 'echo x > /dev/sda',
+      parsed: true,
+      reason: 'ok',
+      errorSpans: [],
+      wordOnly: false,
+      wordOnlyCommands: [],
+      literalCommands: [
+        { name: 'echo', base: 'echo', argv: ['echo', 'x'], complete: true, span: SPAN, depth: 0 }
+      ],
+      dynamics: [],
+      redirects: [{ kind: 'write', target: '/dev/sda', span: SPAN }],
+      depthExceeded: false
+    })
+
+    /** 把门面构造的命令客体截下来（静态 allow 层的派生规则，永不命中） */
+    function capturingProvider(
+      analyze: Mock,
+      ensureReady: Mock
+    ): {
+      provider: SecurityHostProvider
+      captured: () => MatchContext['object'] | undefined
+    } {
+      let captured: MatchContext['object'] | undefined
+      const provider = shellProvider(
+        { analyze, ensureReady },
+        {
+          derivedRules: () => [
+            {
+              id: 'derived:capture',
+              effect: 'allow' as const,
+              tier: 'static-allow' as const,
+              source: { kind: 'derived' as const },
+              matches: (matchCtx) => {
+                captured = matchCtx.object
+                return false
+              }
+            }
+          ]
+        }
+      )
+      return { provider, captured: () => captured }
+    }
+
+    // PowerShell 里 `rm` 是 Remove-Item 的别名，`-rf` 不是 -Recurse 的任何缩写（那条命令在 PowerShell 里
+    // 只会报参数错）—— 所以落到询问；bash 解析器只读嵌套的 `bash -c` 载荷，这里一次都不叫
+    it('CT-PS1 同一份「rm -rf /」事实：bash 被 block-catastrophic-commands 拒；powershell 落到询问、允许后放行，bash 解析器一次都不叫', async () => {
+      const bashAnalyze = vi.fn(() => rmRootFacts())
+      const bashCtx = createSecurityContext(
+        SHELL_SUBJECT,
+        ENVIRONMENT,
+        shellProvider({ analyze: bashAnalyze })
+      )
+      await expect(
+        bashCtx.enforceCommand(
+          { channel: 'bash', command: 'rm -rf /' },
+          { ...PS_OPTS, toolName: 'bash' }
+        )
+      ).rejects.toThrow('block-catastrophic-commands#0')
+      expect(bashAnalyze).toHaveBeenCalledTimes(1)
+
+      clearSessionDecisions(SHELL_SID)
+      const analyze = vi.fn(() => rmRootFacts())
+      const requestUserInput = allowingChannel()
+      const ctx = createSecurityContext(
+        SHELL_SUBJECT,
+        ENVIRONMENT,
+        shellProvider({ analyze }, { requestUserInput })
+      )
+      await expect(
+        ctx.enforceCommand({ channel: 'powershell', command: 'rm -rf /' }, PS_OPTS)
+      ).resolves.toEqual({ status: 'allowed' })
+      expect(analyze).not.toHaveBeenCalled()
+      expect(requestUserInput).toHaveBeenCalledTimes(1)
+      const logged = getSessionDecisions(SHELL_SID)[0]
+      expect([logged.effect, logged.winning]).toEqual(['ask', 'ask-on-command#0'])
+    })
+
+    it('CT-PS2 powershell 的命令客体：只有 type / command / channel 三个可枚举键（没有 host），结构属性来自 PowerShell 扫描器', async () => {
+      const analyze = vi.fn(() => redirectToDiskFacts())
+      const ensureReady = vi.fn(async () => {})
+      const probe = capturingProvider(analyze, ensureReady)
+      const ctx = createSecurityContext(SHELL_SUBJECT, ENVIRONMENT, probe.provider)
+
+      // 写块设备的重定向照样被看见 —— 与 bash 同一条规则拒
+      await expect(
+        ctx.enforceCommand(
+          { channel: 'powershell', command: 'echo x > /dev/sda', cwd: '/ws' },
+          PS_OPTS
+        )
+      ).rejects.toThrow('block-catastrophic-commands#1')
+      const object = probe.captured()
+      expect(object).toBeDefined()
+      expect(Object.keys(object!)).toEqual(['type', 'command', 'channel'])
+      expect(object!.channel).toBe('powershell')
+      expect('host' in object!).toBe(false)
+      expect(object!.parsed).toBe(true)
+      // echo 是 Write-Output 的别名：base 取规范名，argv 保留字面
+      expect(object!.commands).toEqual([
+        { base: 'Write-Output', argv: ['echo', 'x'], wrappers: [], complete: true, depth: 0 }
+      ])
+      expect(object!.writes).toEqual(['/dev/sda'])
+      // bash 解析器只用来读嵌套的 `bash -c` 载荷：这里没有，所以没叫它；但就绪照样等（载荷随时可能有）
+      expect(analyze).not.toHaveBeenCalled()
+      expect(ensureReady).toHaveBeenCalledTimes(1)
+    })
+
+    it('CT-PS2b 对照：同一条命令走 bash 通道 —— 等解析器就绪、解析一次、writes 里有 /dev/sda', async () => {
+      const analyze = vi.fn(() => redirectToDiskFacts())
+      const ensureReady = vi.fn(async () => {})
+      const probe = capturingProvider(analyze, ensureReady)
+      const ctx = createSecurityContext(SHELL_SUBJECT, ENVIRONMENT, probe.provider)
+
+      await expect(
+        ctx.enforceCommand(
+          { channel: 'bash', command: 'echo x > /dev/sda', cwd: '/ws' },
+          { ...PS_OPTS, toolName: 'bash' }
+        )
+      ).rejects.toThrow('block-catastrophic-commands#1')
+      expect(ensureReady).toHaveBeenCalledTimes(1)
+      const object = probe.captured()
+      expect(object).toBeDefined()
+      expect(object!.parsed).toBe(true)
+      expect(object!.writes).toEqual(['/dev/sda'])
+      expect(analyze).toHaveBeenCalledTimes(1)
+    })
+
+    it('CT-PS3 用户规则可以按通道写：`channel == powershell` 的 deny 只拦 powershell，按 bash 写的也碰不到 powershell', async () => {
+      const analyze = vi.fn((command: string) => unparsedFacts(command))
+      const denyOn = (channel: string): ParsedPolicyFile =>
+        userPolicy(`deny-${channel}`, [
+          { effect: 'deny', match: `object.type == 'command' && object.channel == '${channel}'` }
+        ])
+
+      const psRule = createSecurityContext(
+        SHELL_SUBJECT,
+        ENVIRONMENT,
+        shellProvider({ analyze }, { getUserPolicies: () => [denyOn('powershell')] })
+      )
+      await expect(
+        psRule.enforceCommand({ channel: 'powershell', command: 'Get-Date' }, PS_OPTS)
+      ).rejects.toThrow(/Denied by security policy rule/)
+      await expect(
+        psRule.enforceCommand(
+          { channel: 'bash', command: 'date' },
+          { ...PS_OPTS, toolName: 'bash' }
+        )
+      ).resolves.toEqual({ status: 'allowed' })
+
+      const bashRule = createSecurityContext(
+        SHELL_SUBJECT,
+        ENVIRONMENT,
+        shellProvider({ analyze }, { getUserPolicies: () => [denyOn('bash')] })
+      )
+      await expect(
+        bashRule.enforceCommand({ channel: 'powershell', command: 'Get-Date' }, PS_OPTS)
+      ).resolves.toEqual({ status: 'allowed' })
+      await expect(
+        bashRule.enforceCommand(
+          { channel: 'bash', command: 'date' },
+          { ...PS_OPTS, toolName: 'bash' }
+        )
+      ).rejects.toThrow(/Denied by security policy rule/)
+    })
+
+    it('CT-PS4 询问卡片：toolName 是 powershell、命令一字不改（不加任何前缀）、后台标记带到', async () => {
+      const requestUserInput = allowingChannel()
+      const ctx = createSecurityContext(
+        SHELL_SUBJECT,
+        ENVIRONMENT,
+        shellProvider({ analyze: vi.fn(() => rmRootFacts()) }, { requestUserInput })
+      )
+      const command = 'Get-ChildItem $env:USERPROFILE | Where-Object { $_.Length -gt 1MB }'
+      await ctx.enforceCommand(
+        { channel: 'powershell', command },
+        { ...PS_OPTS, description: 'Big files', background: true }
+      )
+
+      expect(requestUserInput).toHaveBeenCalledTimes(1)
+      const request = requestUserInput.mock.calls[0][0] as AskInputRequest
+      expect(request.kind).toBe('ask')
+      expect(request.toolName).toBe('powershell')
+      expect(request.command).toBe(command)
+      expect(request.background).toBe(true)
+      expect(request.description).toBe('Big files')
+    })
+
+    /**
+     * 这条曾经钉的是一个已知缺口（PowerShell 命令不解析，免询问开着时它们前面什么都没有）；
+     * PowerShell 扫描器接上之后，Windows 的格式化规则对两种 shell 一视同仁，deny 压过免询问。
+     */
+    it('CT-PS5 `format C:`：bash 与 powershell 都被 Windows 格式化规则拒，免询问也压不过', async () => {
+      const autoAllow = (
+        analyze: Mock,
+        requestUserInput: SecurityHostProvider['requestUserInput']
+      ): SecurityHostProvider =>
+        makeProvider(
+          { autoAllow: true, allowList: [] },
+          {
+            shellParser: {
+              ensureReady: async () => {},
+              analyze: analyze as unknown as (command: string) => ShellFacts
+            },
+            requestUserInput
+          }
+        )
+
+      const bashAnalyze = vi.fn(() => formatFacts())
+      const bashCtx = createSecurityContext(
+        SHELL_SUBJECT,
+        ENVIRONMENT,
+        autoAllow(bashAnalyze, rejectingChannel())
+      )
+      await expect(
+        bashCtx.enforceCommand(
+          { channel: 'bash', command: 'format C:' },
+          { ...PS_OPTS, toolName: 'bash' }
+        )
+      ).rejects.toThrow('block-catastrophic-commands#2')
+
+      clearSessionDecisions(SHELL_SID)
+      const analyze = vi.fn(() => formatFacts())
+      const requestUserInput = rejectingChannel()
+      const ctx = createSecurityContext(
+        SHELL_SUBJECT,
+        ENVIRONMENT,
+        autoAllow(analyze, requestUserInput)
+      )
+      await expect(
+        ctx.enforceCommand({ channel: 'powershell', command: 'format C:' }, PS_OPTS)
+      ).rejects.toThrow('block-catastrophic-commands#2')
+      expect(requestUserInput).not.toHaveBeenCalled()
+      // 用的是 PowerShell 扫描器，不是 bash 解析器
+      expect(analyze).not.toHaveBeenCalled()
+      const logged = getSessionDecisions(SHELL_SID)[0]
+      expect([logged.effect, logged.winning]).toEqual(['deny', 'block-catastrophic-commands#2'])
+    })
+
+    const quietLogger = (warn: Mock): SecurityHostProvider['logger'] => ({
+      info: vi.fn(),
+      warn,
+      error: vi.fn()
+    })
+
+    it('CT-PS6 宿主没注入 bash 解析器：PowerShell 照样扫描，Format-Volume 被 #4 拒，零告警', async () => {
+      const warn = vi.fn()
+      const ctx = createSecurityContext(
+        SHELL_SUBJECT,
+        ENVIRONMENT,
+        makeProvider(
+          { autoAllow: false, allowList: [] },
+          { requestUserInput: rejectingChannel(), logger: quietLogger(warn) }
+        )
+      )
+      await expect(
+        ctx.enforceCommand(
+          { channel: 'powershell', command: 'Format-Volume -DriveLetter D' },
+          PS_OPTS
+        )
+      ).rejects.toThrow('block-catastrophic-commands#4')
+      expect(warn).not.toHaveBeenCalled()
+    })
+
+    it('CT-PS7 bash 解析器就绪失败：只告警，PowerShell 的规则照判（Clear-Disk 被 #4 拒）', async () => {
+      const warn = vi.fn()
+      const analyze = vi.fn(() => unparsedFacts(''))
+      const ctx = createSecurityContext(
+        SHELL_SUBJECT,
+        ENVIRONMENT,
+        shellProvider(
+          {
+            analyze,
+            ensureReady: async () => {
+              throw new Error('wasm gone')
+            }
+          },
+          { requestUserInput: rejectingChannel(), logger: quietLogger(warn) }
+        )
+      )
+      await expect(
+        ctx.enforceCommand({ channel: 'powershell', command: 'Clear-Disk 1' }, PS_OPTS)
+      ).rejects.toThrow('block-catastrophic-commands#4')
+      const messages = warn.mock.calls.map((c) => String(c[0]))
+      expect(messages.filter((m) => m.includes('shell 解析器初始化失败'))).toHaveLength(1)
+      expect(analyze).not.toHaveBeenCalled()
+    })
+
+    it('CT-PS8 嵌套 bash -c：先等就绪，再把载荷本身（不是整条命令）交给 bash 解析器，#0 照拒', async () => {
+      const order: string[] = []
+      const ensureReady = vi.fn(async () => {
+        order.push('ensureReady')
+      })
+      const analyze = vi.fn((_command: string) => {
+        order.push('analyze')
+        return rmRootFacts()
+      })
+      const ctx = createSecurityContext(
+        SHELL_SUBJECT,
+        ENVIRONMENT,
+        shellProvider({ analyze, ensureReady }, { requestUserInput: rejectingChannel() })
+      )
+      await expect(
+        ctx.enforceCommand({ channel: 'powershell', command: "bash -c 'rm -rf /'" }, PS_OPTS)
+      ).rejects.toThrow('block-catastrophic-commands#0')
+      expect(analyze).toHaveBeenCalledTimes(1)
+      expect(analyze).toHaveBeenCalledWith('rm -rf /')
+      expect(order).toEqual(['ensureReady', 'analyze'])
+    })
+
+    it('CT-PS9 惰性与记忆化：每次 enforce 读一次载荷；没有规则引用结构属性时一次都不读，序列化也不读', async () => {
+      const analyze = vi.fn((command: string) => unparsedFacts(command))
+      const ctx = createSecurityContext(SHELL_SUBJECT, ENVIRONMENT, shellProvider({ analyze }))
+      await ctx.enforceCommand({ channel: 'powershell', command: "bash -c 'ls'" }, PS_OPTS)
+      expect(analyze).toHaveBeenCalledTimes(1)
+      await ctx.enforceCommand({ channel: 'powershell', command: "bash -c 'ls'" }, PS_OPTS)
+      expect(analyze).toHaveBeenCalledTimes(2)
+
+      // 用户同名覆盖把 block-catastrophic-commands 换成只看原文的版本（同 CT-S3）
+      const lazyAnalyze = vi.fn(() => rmRootFacts())
+      let captured: MatchContext['object'] | undefined
+      const lazy = createSecurityContext(
+        SHELL_SUBJECT,
+        ENVIRONMENT,
+        shellProvider(
+          { analyze: lazyAnalyze },
+          {
+            getUserPolicies: () => [
+              userPolicy('block-catastrophic-commands', [
+                {
+                  effect: 'deny' as const,
+                  conditions: { 'subject.kind': ['agent'], 'object.type': ['command'] },
+                  match: "object.command == 'nope'"
+                }
+              ])
+            ],
+            derivedRules: () => [
+              {
+                id: 'derived:capture',
+                effect: 'allow' as const,
+                tier: 'static-allow' as const,
+                source: { kind: 'derived' as const },
+                matches: (matchCtx) => {
+                  captured = matchCtx.object
+                  return false
+                }
+              }
+            ]
+          }
+        )
+      )
+      await expect(
+        lazy.enforceCommand({ channel: 'powershell', command: "bash -c 'rm -rf /'" }, PS_OPTS)
+      ).resolves.toEqual({ status: 'allowed' })
+      expect(lazyAnalyze).not.toHaveBeenCalled()
+      expect(captured).toBeDefined()
+      const serialized = JSON.stringify(captured)
+      expect(serialized).not.toContain('commands')
+      expect(lazyAnalyze).not.toHaveBeenCalled()
+      // 直接读才触发 —— getter 仍然活着，只是没人问
+      expect(captured!.commands).toEqual([
+        { base: 'bash', argv: ['bash', '-c', 'rm -rf /'], wrappers: [], complete: true, depth: 0 },
+        { base: 'rm', argv: ['rm', '-rf', '/'], wrappers: [], complete: true, depth: 1 }
+      ])
+      expect(lazyAnalyze).toHaveBeenCalledTimes(1)
+    })
+
+    it('CT-PS10 （修过的 SB-5）嵌套 bash 解析抛错：留下告警、只跳过那段载荷，前面的 Format-Volume 照拒', async () => {
+      const warn = vi.fn()
+      const analyze = vi.fn((): ShellFacts => {
+        throw new Error('boom')
+      })
+      const ctx = createSecurityContext(
+        SHELL_SUBJECT,
+        ENVIRONMENT,
+        shellProvider(
+          { analyze },
+          { requestUserInput: rejectingChannel(), logger: quietLogger(warn) }
+        )
+      )
+      await expect(
+        ctx.enforceCommand(
+          { channel: 'powershell', command: "Format-Volume -DriveLetter D; bash -c 'x'" },
+          PS_OPTS
+        )
+      ).rejects.toThrow('block-catastrophic-commands#4')
+      expect(analyze).toHaveBeenCalledTimes(1)
+      const messages = warn.mock.calls.map((c) => String(c[0]))
+      const nested = messages.filter((m) => m.includes('嵌套 bash 载荷'))
+      expect(nested).toHaveLength(1)
+      expect(nested[0]).toContain('boom')
+      // 没有退化成「整条命令按未解析处理」—— 那条告警出现就说明其余事实也一起丢了
+      expect(messages.some((m) => m.includes('shell 解析抛错'))).toBe(false)
+    })
+
+    it('CT-PS11 Windows 宿主：pathSep 为 \\ 时相对重定向按 cwd 解析成 Windows 路径', async () => {
+      let captured: MatchContext['object'] | undefined
+      const ctx = createSecurityContext(
+        SHELL_SUBJECT,
+        ENVIRONMENT,
+        shellProvider(
+          { analyze: vi.fn(() => unparsedFacts('')) },
+          {
+            pathSep: '\\',
+            derivedRules: () => [
+              {
+                id: 'derived:capture',
+                effect: 'allow' as const,
+                tier: 'static-allow' as const,
+                source: { kind: 'derived' as const },
+                matches: (matchCtx) => {
+                  captured = matchCtx.object
+                  return false
+                }
+              }
+            ]
+          }
+        )
+      )
+      await ctx.enforceCommand(
+        { channel: 'powershell', command: 'Write-Output x > out.txt', cwd: 'C:\\ws' },
+        PS_OPTS
+      )
+      expect(captured).toBeDefined()
+      expect(captured!.writes).toEqual(['C:\\ws\\out.txt'])
+    })
+
+    it('CT-PS12 ssh 通道不变：整条命令交给 bash 解析器', async () => {
+      const analyze = vi.fn((_command: string) => rmRootFacts())
+      const ctx = createSecurityContext(
+        SHELL_SUBJECT,
+        ENVIRONMENT,
+        shellProvider({ analyze }, { requestUserInput: rejectingChannel() })
+      )
+      const command = "bash -c 'rm -rf /'"
+      await expect(
+        ctx.enforceCommand(
+          { channel: 'ssh', command, host: 'prod' },
+          { toolCallId: 'ssh-1', toolName: 'mcp__ssh__exec' }
+        )
+      ).rejects.toThrow('block-catastrophic-commands#0')
+      expect(analyze).toHaveBeenCalledTimes(1)
+      expect(analyze).toHaveBeenCalledWith(command)
+    })
   })
 })
 

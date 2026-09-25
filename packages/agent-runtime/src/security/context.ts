@@ -13,7 +13,8 @@
  * 真实路径同理，每次评估现解析 —— 链接随时可能被改指向。
  */
 import { assembleRules } from './assemble'
-import { projectCommandFacts, type CommandFactAttrs } from './commandFacts'
+import { projectCommandFacts, projectPowerShellFacts, type CommandFactAttrs } from './commandFacts'
+import { analyzePowerShellCommand } from './powershell/analyze'
 import { evaluate } from './evaluate'
 import { executeDecision } from './enforce'
 import { buildPolicyVars } from './policyVars'
@@ -50,20 +51,47 @@ function buildCommandObject(
     command: input.command,
     channel: input.channel
   }
-  // 仅 ssh 有；bash 不写这个键，好让策略用 has(object.host) 区分远端与本地
+  // 仅 ssh 有；bash / powershell 不写这个键，好让策略用 has(object.host) 区分远端与本地
   if (input.host) object.host = input.host
   let cached: CommandFactAttrs | null = null
   const facts = (): CommandFactAttrs => {
     if (!cached) {
-      let analyzed
       try {
-        analyzed = provider.shellParser?.analyze(input.command)
+        cached =
+          input.channel === 'powershell'
+            ? // PowerShell 走它自己的扫描器 —— bash 解析器读 PowerShell 会得出貌似合理的错事实
+              // （反引号在 bash 里是命令替换、在 PowerShell 里是转义）。bash 解析器只用来读
+              // 嵌在里面的 `bash -c '…'` 载荷
+              projectPowerShellFacts(
+                analyzePowerShellCommand(input.command, {
+                  analyzeBash: provider.shellParser
+                    ? (source) => {
+                        try {
+                          return provider.shellParser!.analyze(source)
+                        } catch (err) {
+                          // 扫描器会跳过这段载荷、保留其余事实；这里只负责留下痕迹
+                          provider.logger?.warn(
+                            `嵌套 bash 载荷解析抛错，该载荷按未解析处理：${err instanceof Error ? err.message : String(err)}`
+                          )
+                          throw err
+                        }
+                      }
+                    : undefined
+                }),
+                input.cwd,
+                provider.pathSep
+              )
+            : projectCommandFacts(
+                provider.shellParser?.analyze(input.command),
+                input.cwd,
+                provider.pathSep
+              )
       } catch (err) {
         provider.logger?.warn(
           `shell 解析抛错，命令按未解析处理：${err instanceof Error ? err.message : String(err)}`
         )
+        cached = projectCommandFacts(undefined, input.cwd, provider.pathSep)
       }
-      cached = projectCommandFacts(analyzed, input.cwd, provider.pathSep)
     }
     return cached
   }
@@ -206,6 +234,7 @@ export function createSecurityContext(
       // 不命中，命令落回 ask-on-command（解析器是进程级单例，若别处已初始化成功，
       // 这里的失败不影响解析）。wasm 加载不上属于开发期就该暴露的程序问题，
       // 不为它设计运行时兜底。
+      // PowerShell 命令也要等：嵌在里面的 `bash -c '…'` 载荷由它读（见 buildCommandObject）
       try {
         await provider.shellParser?.ensureReady()
       } catch (err) {

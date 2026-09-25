@@ -20,7 +20,7 @@ ShuviX's permission system is an **ask model, not a sandbox**. Every tool call i
 in-process against a set of rules that answer **allow / ask / deny**, and the rules are markdown
 files the user can read, override and remove. The first principle is **no policy = allow**: an
 operation that matches no rule runs freely; every protection ShuviX ships is a visible policy.
-(An allowed `bash` command runs with the user's full privileges — nothing here is OS-level
+(An allowed `bash` / `powershell` command runs with the user's full privileges — nothing here is OS-level
 isolation.)
 
 - Location: `~/.shuvix/policies/<name>.md`.
@@ -120,7 +120,7 @@ why every builtin rule carries `subject.kind: [agent]`.
 | `object.type`  | Raised by                                                   | `action`         | Attributes                                                                                                                                                                                                                                                                                               |
 | -------------- | ----------------------------------------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `path`         | `read`, `write`, `edit`, the `knowledge` tool, file previews | `read` / `write` | `path` (where the path really leads: absolute; on the desktop symlinks are followed and `..` goes to the real parent, as the OS does when it opens the path), `requestedPath` (the absolute path as the tool asked for it — differs from `path` when a link or `..` was in the way), `displayPath` (as the model wrote it, for messages) |
-| `command`      | `bash`, `ssh`                                               | `execute`        | `command` (raw text), `channel` (`bash` / `ssh`), and lazily from the shell parser: `parsed` (bool), `commands` (list of `{ base, argv, wrappers, complete, depth }` — `base` is the real program after `sudo` / `env` / `timeout` are stripped, dynamic words are `''`), `writes` (redirect targets as absolute paths) |
+| `command`      | `bash`, `powershell`, `ssh`                                 | `execute`        | `command` (raw text), `channel` (`bash` / `powershell` / `ssh`), and lazily from the shell parser (a `powershell` command is read by ShuviX's own PowerShell scanner: `base` is the canonical name — aliases resolved to cmdlets, path and `.exe` / `.com` dropped, case kept, so compare with `lowerAscii()` — and `-Name:value` is split into two items): `parsed` (bool), `commands` (list of `{ base, argv, wrappers, complete, depth }` — `base` is the real program after `sudo` / `env` / `timeout` are stripped, dynamic words are `''`), `writes` (redirect targets as absolute paths) |
 | `gitTool`      | the `git` tool                                              | `execute`        | `gitAction`, `command`, `force` (bool), `delete` (bool)                                                                                                                                                                                                                                                  |
 | `database`     | the built-in `database` server's `query` tool               | `execute`        | `sql`, `credential`, `dbType`, `readonly` (bool — whether the connection is read-only)                                                                                                                                                                                                                   |
 | `url`          | the built-in `browser` / `chrome` servers: every navigation, and in `chrome` the first use of each site | `navigate`       | `url`, `scheme`, `host` (lower-cased, no trailing dot), `origin`, `browser` (`app` = the browser panel inside ShuviX, `chrome` = your own Chrome); `file://` is not a url object — it is judged as a read of that path |
@@ -181,11 +181,11 @@ English file**, translations only change the text people read):
 | ------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
 | `protect-credentials`           | deny writes to and ask on reads of credential directories (`.ssh`, `.aws`, …)                                        |
 | `protect-system`                | deny writes to operating-system directories                                                                            |
-| `block-catastrophic-commands`   | deny a short list of machine-destroying commands, judged on parsed structure (`rm -rf /`, `mkfs`, `dd` to a device…)  |
+| `block-catastrophic-commands`   | deny a short list of machine-destroying commands, judged on parsed structure (`rm -rf /`, `mkfs`, `dd` to a device, `Format-Volume`…) |
 | `protect-bot-files`             | **force-ask** on any write under `~/.shuvix/bots`                                                                      |
 | `ask-on-read`                   | ask on reads outside the workspace, tool results, skill directories and this reference base                            |
 | `ask-on-write`                  | ask on every file write, with a diff preview                                                                           |
-| `ask-on-command`                | ask on every `bash` / `ssh` command                                                                                    |
+| `ask-on-command`                | ask on every `bash` / `powershell` / `ssh` command                                                                               |
 | `git-safety`                    | ask on destructive git operations (`init`, `restore`, forced checkout, branch delete)                                  |
 | `ask-on-database`               | ask on every statement over a writable database connection                                                             |
 | `ask-on-sub-session`            | ask once when a sub-session is opened (`tool.name == 'session' && tool.operation == 'create-sub-session'`)             |
