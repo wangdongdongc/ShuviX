@@ -78,8 +78,11 @@ wrapper do not change the verdict.
   misses something, because a refusal cannot be waived for a single command.
 - Anything whose target is only decided while the command runs — the output of
   `$(...)`, a command name assembled from a variable — is invisible to any check
-  made beforehand. Those reach ask-on-command, which is the gate that actually
-  puts every command in front of you.
+  made beforehand. Those reach ask-on-command, which puts every command that
+  is not confined to the sandbox in front of you; a confined one is held by the
+  sandbox instead, which cannot reach past the project, temporary folders and
+  tool caches — but can still wipe those, which is why this list applies inside
+  the sandbox too.
 - A script handed to a shell on its standard input rather than as an argument —
   `bash <<'EOF' … EOF`, `sh -s`, or a pipe into a shell — is not looked into.
   The `bash -c '…'` form is.

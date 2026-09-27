@@ -69,6 +69,8 @@ interface DecideOpts {
   host?: 'desktop' | 'extension'
   provider?: SecurityHostProvider
   warn?: (msg: string) => void
+  /** 宿主上报的 sandboxed（省略 = 客体上不写这个键，与改制前的判定表同形） */
+  sandboxed?: boolean
 }
 
 /**
@@ -100,6 +102,7 @@ function commandObject(command: string, opts: DecideOpts = {}): SecurityObject {
     type: 'command',
     command,
     channel,
+    ...(opts.sandboxed === undefined ? {} : { sandboxed: opts.sandboxed }),
     ...factsOf(command, opts.cwd === undefined ? '/ws' : opts.cwd, channel, opts.sep ?? '/')
   }
 }
@@ -614,6 +617,35 @@ describe('block-catastrophic-commands — tier 结算与通道', () => {
       })
     })
     expectDeny('rm -rf /', 0, { provider: extension, host: 'extension' })
+  })
+
+  it('PO-2 圈进沙箱照拒：rm -rf / 与 dd 写块设备在 sandboxed:true 下仍 deny（免询问开着也一样）；同样圈住的普通命令放行', () => {
+    // 沙箱挡不住它们在可写根里的破坏（删掉整个项目就在沙箱之内），而且 deny 不能为单条命令豁免 ——
+    // 所以这份清单不看 sandboxed。matched 里没有 ask-on-command#0：拒绝不靠询问门陪着命中
+    const cases: Array<[string, 0 | 1]> = [
+      ['rm -rf /', 0],
+      ['dd if=/dev/zero of=/dev/disk0', 1]
+    ]
+    for (const [command, ruleIndex] of cases) {
+      const confined = expectDeny(command, ruleIndex, { sandboxed: true })
+      expect({ command, matched: confined.matched }).toEqual({
+        command,
+        matched: [`block-catastrophic-commands#${ruleIndex}`]
+      })
+
+      const autoAllowed = expectDeny(command, ruleIndex, {
+        sandboxed: true,
+        provider: autoAllowProvider
+      })
+      expect({ command, matched: autoAllowed.matched }).toEqual({
+        command,
+        matched: [`block-catastrophic-commands#${ruleIndex}`, 'session-grants#0']
+      })
+    }
+
+    // 对照：同样 sandboxed:true 的普通命令不被连坐，也不问
+    const ordinary = decide('ls -la', { sandboxed: true })
+    expect(ordinary).toMatchObject({ effect: 'allow', winning: 'default:command', matched: [] })
   })
 })
 

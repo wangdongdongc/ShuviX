@@ -238,6 +238,11 @@ export interface ChatPane {
   stepGroupShots(): Promise<ChatStepGroupShot[]>
   /** 输入卡片顶上的询问卡片；没有挂着的询问时为 null */
   pendingAskShot(): Promise<PendingAskShot | null>
+  /**
+   * 询问卡片上有没有「完全访问」标签（FullAccessBadge 的 `data-full-access`）——
+   * 模型为这条命令申请了不受限运行（`dangerouslyDisableSandbox`）。没有挂着的询问时为 false
+   */
+  pendingAskFullAccess(): Promise<boolean>
   /** 展开第 i 个工具行并回其详情区文本（**切换**语义 —— 已展开时会折叠回去） */
   expandToolRow(index: number): Promise<string>
   /** 第 i 个工具行是否展开（展开态在摘要行下方多长出一个详情容器） */
@@ -618,6 +623,9 @@ export function chatPane(main: CdpClient): ChatPane {
           preview: (row?.nextElementSibling?.textContent ?? '').trim()
         }
       })()`),
+    // 标签在询问卡片的标题行里（与后台标签同一个槽），卡片在待处理面板（rounded-t-2xl）里
+    pendingAskFullAccess: () =>
+      main.eval<boolean>(`!!document.querySelector('.rounded-t-2xl [data-full-access]')`),
     expandToolRow: async (index) => {
       await main.eval(`${TOOLS}[${index}]?.querySelector('button')?.click()`)
       await new Promise((r) => setTimeout(r, 250))

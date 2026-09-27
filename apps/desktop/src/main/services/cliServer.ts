@@ -30,6 +30,7 @@ import * as widgetWindowService from './widgetWindowService'
 import { sessionService } from './sessionService'
 import { resolveProjectConfig, isPathWithinWorkspace } from './toolContext'
 import { resolve as resolvePath } from 'path'
+import { stopBgTaskByAgent } from './bgTaskService'
 
 const log = createLogger('cliServer')
 
@@ -233,6 +234,24 @@ class CliServer {
   // ────────────────────── handlers ──────────────────────
 
   private registerHandlers(): void {
+    // 停本会话的一条后台任务：沙箱里的命令够不到上一条命令起的进程（见 bgTaskService.stopBgTaskByAgent）
+    this.handlers.set('task.stop', async (p, sessionId) => {
+      if (!sessionId)
+        throw new Error('SHUVIX_SESSION_ID is not set — run this from a ShuviX command')
+      const raw = p.pid
+      const pid =
+        typeof raw === 'number'
+          ? raw
+          : typeof raw === 'string' && /^\d+$/.test(raw)
+            ? Number(raw)
+            : NaN
+      if (!Number.isInteger(pid) || pid <= 0) throw new Error('pid must be a positive integer')
+      const result = stopBgTaskByAgent(sessionId, pid)
+      if (result === 'not-found')
+        throw new Error(`no background task with pid ${pid} in this session`)
+      return result === 'stopped' ? `stopping background task ${pid}` : `task ${pid} is not running`
+    })
+
     this.handlers.set('widget.init', async (p, sessionId) => {
       const id = String(p.id ?? '')
       const name = String(p.name ?? '')
@@ -250,6 +269,9 @@ class CliServer {
     this.handlers.set('widget.build', async (p, sessionId) => {
       const id = String(p.id ?? '')
       if (!id) throw new Error('id required')
+      // 先校验再授权：授权是持久写进会话的，而 id 原样拼进路径 —— `../..` 这类 id 会把
+      // 任意目录的读写授权记到会话上（widgetService.build 自己的校验在授权之后才跑）
+      widgetService.validateId(id)
       const dir = widgetService.getWidgetDir(id)
       if (sessionId) {
         sessionService.addAllowListPaths(sessionId, 'read', [dir])
@@ -269,9 +291,6 @@ class CliServer {
 
     this.handlers.set('widget.export', async (p, sessionId) => {
       const id = String(p.id ?? '')
-      // 先校验再授权：授权是持久写进会话的，而 id 原样拼进路径 —— `../..` 这类 id 会把
-      // 任意目录的读写授权记到会话上（widgetService.build 自己的校验在授权之后才跑）
-      widgetService.validateId(id)
       const targetPath = String(p.targetPath ?? '')
       if (!id) throw new Error('id required')
       if (!targetPath) throw new Error('targetPath required')

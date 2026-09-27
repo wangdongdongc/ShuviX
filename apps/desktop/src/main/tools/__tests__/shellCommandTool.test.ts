@@ -8,7 +8,8 @@
  *  - D3 用户选「其它」：不执行，反馈原样回给模型；
  *  - D4 PowerShell 长度上限：按转义后的长度判、在询问之前拒；bash 没有这道；
  *  - D5 PowerShell 描述按版本说语法差异（pwsh 7 / 5.1 / 不在 Windows 上时两种都说）；
- *  - D6 停止命令的提示按 shell 给，不按当前平台 —— 设置页在任何平台上展示两个工具各自真实的描述。
+ *  - D6 停止命令的提示按 shell 给，不按当前平台 —— 设置页在任何平台上展示两个工具各自真实的描述；
+ *    bash 教 `shuvix task stop <pid>`（宿主代停）而不是 `kill -- -<pid>`：沙箱里的命令发不出跨实例的信号。
  *
  * 替身：toolContext（安全门是 spy、项目配置固定）、bgTaskService 的三个执行入口（回执与停止命令
  * 的文案用真的）、i18n。getPowerShellConfig 可按用例换成固定版本（D5）。
@@ -231,6 +232,9 @@ describe.each(['bash', 'powershell'] as const)('%s —— 与另一个命令工�
   })
 
   it(`D2 — ${shell} 后台任务已达上限：说清楚、列出停止命令，不起新进程`, async () => {
+    // 各自所在的平台：bash 在 macOS / Linux，powershell 在 Windows（停止命令按当前平台给）
+    setPlatform(shell === 'bash' ? 'darwin' : 'win32')
+    if (shell === 'powershell') mocks.psConfig = { exe: 'pwsh.exe', edition: 'pwsh' }
     mocks.runningCount.mockReturnValue(MAX_RUNNING_PER_SESSION)
     mocks.listBgTasks.mockReturnValue([
       taskInfo({ pid: 11, status: 'running', description: 'dev server' }),
@@ -243,6 +247,16 @@ describe.each(['bash', 'powershell'] as const)('%s —— 与另一个命令工�
     expect(r.text).not.toContain('done one')
     expect(r.details).toMatchObject({ type: shell, exitCode: -1 })
     expect(mocks.runCommand).not.toHaveBeenCalled()
+
+    // FU-6：列出的停止命令就是模型该跑的那一条
+    const lines = r.text.split('\n')
+    if (shell === 'bash') {
+      expect(lines).toContain('  shuvix task stop 11   # dev server')
+      expect(r.text).not.toContain('kill')
+    } else {
+      expect(lines).toContain('  taskkill /T /F /PID 11   # dev server')
+      expect(r.text).not.toContain('shuvix task stop')
+    }
   })
 
   it(`D3 — ${shell} 用户选「其它」：命令不执行，反馈原样回给模型`, async () => {
@@ -351,7 +365,7 @@ describe('停止命令的提示按 shell 给，不按平台', () => {
   it.each(['win32', 'darwin'] as const)('D6 — %s 上：两个 shell 各自的写法', (platform) => {
     setPlatform(platform)
     expect(stopCommandHint('powershell')).toBe('taskkill /T /F /PID <pid>')
-    expect(stopCommandHint('bash')).toBe('kill -- -<pid>')
+    expect(stopCommandHint('bash')).toBe('shuvix task stop <pid>')
   })
 
   /** 参数 schema 里 run_in_background 的说明 */
@@ -359,9 +373,10 @@ describe('停止命令的提示按 shell 给，不按平台', () => {
     (makeTool(shell).parameters.properties.run_in_background as { description?: string })
       .description ?? ''
 
-  it('D6 — bash 的 run_in_background 说明：kill 进程组，不提 taskkill', () => {
+  it('D6 — bash 的 run_in_background 说明：由宿主代停（shuvix task stop），不教 kill 进程组，不提 taskkill', () => {
     const text = backgroundHelp('bash')
-    expect(text).toContain('kill -- -<pid>')
+    expect(text).toContain('shuvix task stop <pid>')
+    expect(text).not.toContain('kill -- -')
     expect(text).not.toContain('taskkill')
   })
 
@@ -371,5 +386,6 @@ describe('停止命令的提示按 shell 给，不按平台', () => {
     expect(text).toContain('Start-Process')
     expect(text).toContain('-Confirm:$false')
     expect(text).not.toContain('kill -- -')
+    expect(text).not.toContain('shuvix task stop')
   })
 })

@@ -1,0 +1,151 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`PR-1 golden > PR-1 夹具规格（一个写授权 + 一个读授权）的 profile 与参数表 > params 1`] = `
+{
+  "P0": "/Users/u/Documents",
+  "P1": "/Users/u/Desktop",
+  "P10": "/Users/u/Library/Cookies",
+  "P100": "/Volumes/data/shared/.codex",
+  "P101": "/Volumes/data/shared/.zed",
+  "P102": "/Volumes/data/shared/.mcp.json",
+  "P103": "/Volumes/data/shared/.envrc",
+  "P104": "/Users/u/proj",
+  "P105": "/Volumes/data/shared",
+  "P106": "/Users/u/.shuvix/cli.sock",
+  "P107": "/private/var/run/mDNSResponder",
+  "P108": "/private/tmp/shuvix-501/abe633f3",
+  "P109": "/Users/u/proj",
+  "P11": "/Users/u/Library/Keychains",
+  "P12": "/Users/u/Library/Containers",
+  "P13": "/Users/u/Library/Group Containers",
+  "P14": "/Users/u/Library/Calendars",
+  "P15": "/Users/u/Library/Accounts",
+  "P16": "/Users/u/Library/Application Support/AddressBook",
+  "P17": "/Users/u/Library/Application Support/Google/Chrome",
+  "P18": "/Users/u/Library/Application Support/Firefox",
+  "P19": "/Users/u/Library/Application Support/Arc",
+  "P2": "/Users/u/Downloads",
+  "P20": "/Users/u/Library/Application Support/BraveSoftware",
+  "P21": "/Users/u/Library/Application Support/Microsoft Edge",
+  "P22": "/Users/u/Library/Application Support/ShuviX",
+  "P23": "/Users/u/proj",
+  "P24": "/Users/u/Library/Application Support/ShuviX/tool_results/sess-1",
+  "P25": "/Users/u/Documents/ref",
+  "P26": "/Volumes/data/shared",
+  "P27": "/Users/u/.ssh",
+  "P28": "/Users/u/.aws",
+  "P29": "/Users/u/.gnupg",
+  "P3": "/Users/u/Pictures",
+  "P30": "/Users/u/.config/gh",
+  "P31": "/Users/u/.netrc",
+  "P32": "/Users/u/AppData/Local/Microsoft/Credentials",
+  "P33": "/Users/u/AppData/Roaming/Microsoft/Credentials",
+  "P34": "/Users/u/.shuvix/.session-state",
+  "P35": "/Users/u/Library/Application Support/ShuviX/data",
+  "P36": "/Users/u/proj",
+  "P37": "/private/tmp/shuvix-501/abe633f3",
+  "P38": "/private/tmp",
+  "P39": "/Users/u/.npm",
+  "P4": "/Users/u/Movies",
+  "P40": "/Users/u/.cache",
+  "P41": "/Users/u/.yarn/berry/cache",
+  "P42": "/Users/u/.pnpm-store",
+  "P43": "/Users/u/.bun/install/cache",
+  "P44": "/Users/u/.cargo/registry",
+  "P45": "/Users/u/.cargo/git",
+  "P46": "/Users/u/go/pkg/mod",
+  "P47": "/Users/u/.gradle/caches",
+  "P48": "/Users/u/.m2/repository",
+  "P49": "/Users/u/Library/pnpm",
+  "P5": "/Users/u/Music",
+  "P50": "/Users/u/Library/Caches/pip",
+  "P51": "/Users/u/Library/Caches/pnpm",
+  "P52": "/Users/u/Library/Caches/Yarn",
+  "P53": "/Users/u/Library/Caches/go-build",
+  "P54": "/Users/u/Library/Caches/node-gyp",
+  "P55": "/Users/u/Library/Caches/typescript",
+  "P56": "/Users/u/Library/Caches/deno",
+  "P57": "/Users/u/Library/Developer/Xcode/DerivedData",
+  "P58": "/Users/u/.shuvix/artifacts/sess-1",
+  "P59": "/Volumes/data/shared",
+  "P6": "/Users/u/Library/Mobile Documents",
+  "P60": "/Users/u/.shuvix",
+  "P61": "/Users/u/Library/Application Support/ShuviX",
+  "P62": "/Users/u/.shuvix/artifacts/sess-1",
+  "P63": "/Users/u/proj",
+  "P64": "/Volumes/data/shared",
+  "P65": "/Users/u/.ssh",
+  "P66": "/Users/u/.aws",
+  "P67": "/Users/u/.gnupg",
+  "P68": "/Users/u/.config/gh",
+  "P69": "/Users/u/.netrc",
+  "P7": "/Users/u/Library/Mail",
+  "P70": "/Users/u/AppData/Local/Microsoft/Credentials",
+  "P71": "/Users/u/AppData/Roaming/Microsoft/Credentials",
+  "P72": "/Users/u/.zshrc",
+  "P73": "/Users/u/.zshenv",
+  "P74": "/Users/u/.zprofile",
+  "P75": "/Users/u/.zlogin",
+  "P76": "/Users/u/.zlogout",
+  "P77": "/Users/u/.bashrc",
+  "P78": "/Users/u/.bash_profile",
+  "P79": "/Users/u/.bash_login",
+  "P8": "/Users/u/Library/Messages",
+  "P80": "/Users/u/.bash_logout",
+  "P81": "/Users/u/.profile",
+  "P82": "/Users/u/.config/fish",
+  "P83": "/Users/u/.gitconfig",
+  "P84": "/Users/u/.config/git",
+  "P85": "/Users/u/Library/LaunchAgents",
+  "P86": "/private/tmp/shuvix-ssh-501",
+  "P87": "/private/tmp/tmux-501",
+  "P88": "/Users/u/proj/.vscode",
+  "P89": "/Users/u/proj/.idea",
+  "P9": "/Users/u/Library/Safari",
+  "P90": "/Users/u/proj/.claude",
+  "P91": "/Users/u/proj/.cursor",
+  "P92": "/Users/u/proj/.codex",
+  "P93": "/Users/u/proj/.zed",
+  "P94": "/Users/u/proj/.mcp.json",
+  "P95": "/Users/u/proj/.envrc",
+  "P96": "/Volumes/data/shared/.vscode",
+  "P97": "/Volumes/data/shared/.idea",
+  "P98": "/Volumes/data/shared/.claude",
+  "P99": "/Volumes/data/shared/.cursor",
+}
+`;
+
+exports[`PR-1 golden > PR-1 夹具规格（一个写授权 + 一个读授权）的 profile 与参数表 > profile 1`] = `
+"(version 1)
+(deny default)
+(import "system.sb")
+(allow process-exec process-fork)
+(allow signal (target same-sandbox))
+(allow process-info* (target same-sandbox))
+(allow mach-task-name)
+(allow sysctl-read)
+(allow pseudo-tty)
+(allow file-read* file-write* file-ioctl (literal "/dev/ptmx") (regex #"^/dev/ttys[0-9]+$"))
+(allow ipc-posix-sem)
+(allow ipc-posix-shm*)
+(allow file-map-executable)
+(system-network)
+(allow file-read*)
+(deny file-read-data file-read-xattr (subpath (param "P0")) (subpath (param "P1")) (subpath (param "P2")) (subpath (param "P3")) (subpath (param "P4")) (subpath (param "P5")) (subpath (param "P6")) (subpath (param "P7")) (subpath (param "P8")) (subpath (param "P9")) (subpath (param "P10")) (subpath (param "P11")) (subpath (param "P12")) (subpath (param "P13")) (subpath (param "P14")) (subpath (param "P15")) (subpath (param "P16")) (subpath (param "P17")) (subpath (param "P18")) (subpath (param "P19")) (subpath (param "P20")) (subpath (param "P21")) (subpath (param "P22")))
+(allow file-read-data file-read-xattr (subpath (param "P23")) (subpath (param "P24")) (subpath (param "P25")) (subpath (param "P26")))
+(deny file-read* (subpath (param "P27")) (subpath (param "P28")) (subpath (param "P29")) (subpath (param "P30")) (subpath (param "P31")) (subpath (param "P32")) (subpath (param "P33")) (subpath (param "P34")) (subpath (param "P35")))
+(allow file-write* (subpath (param "P36")) (subpath (param "P37")) (subpath (param "P38")) (subpath (param "P39")) (subpath (param "P40")) (subpath (param "P41")) (subpath (param "P42")) (subpath (param "P43")) (subpath (param "P44")) (subpath (param "P45")) (subpath (param "P46")) (subpath (param "P47")) (subpath (param "P48")) (subpath (param "P49")) (subpath (param "P50")) (subpath (param "P51")) (subpath (param "P52")) (subpath (param "P53")) (subpath (param "P54")) (subpath (param "P55")) (subpath (param "P56")) (subpath (param "P57")) (subpath (param "P58")) (subpath (param "P59")))
+(deny file-write* (subpath (param "P60")) (subpath (param "P61")))
+(allow file-write* (subpath (param "P62")))
+(deny file-write* (subpath (param "P65")) (subpath (param "P66")) (subpath (param "P67")) (subpath (param "P68")) (subpath (param "P69")) (subpath (param "P70")) (subpath (param "P71")) (subpath (param "P72")) (subpath (param "P73")) (subpath (param "P74")) (subpath (param "P75")) (subpath (param "P76")) (subpath (param "P77")) (subpath (param "P78")) (subpath (param "P79")) (subpath (param "P80")) (subpath (param "P81")) (subpath (param "P82")) (subpath (param "P83")) (subpath (param "P84")) (subpath (param "P85")) (subpath (param "P86")) (subpath (param "P87")) (subpath (param "P88")) (subpath (param "P89")) (subpath (param "P90")) (subpath (param "P91")) (subpath (param "P92")) (subpath (param "P93")) (subpath (param "P94")) (subpath (param "P95")) (subpath (param "P96")) (subpath (param "P97")) (subpath (param "P98")) (subpath (param "P99")) (subpath (param "P100")) (subpath (param "P101")) (subpath (param "P102")) (subpath (param "P103")) (regex #"^/private/tmp/com\\.apple\\.launchd\\.") (require-all (subpath (param "P63")) (regex #"/\\.[Gg][Ii][Tt]/([Hh][Oo][Oo][Kk][Ss](/|$)|[Cc][Oo][Nn][Ff][Ii][Gg]$|[Cc][Oo][Nn][Ff][Ii][Gg]\\.[Ww][Oo][Rr][Kk][Tt][Rr][Ee][Ee]$|[Cc][Oo][Mm][Mm][Oo][Nn][Dd][Ii][Rr]$)")) (require-all (subpath (param "P63")) (regex #"/\\.[Gg][Ii][Tt]/([Mm][Oo][Dd][Uu][Ll][Ee][Ss]|[Ww][Oo][Rr][Kk][Tt][Rr][Ee][Ee][Ss])/.*/([Hh][Oo][Oo][Kk][Ss](/|$)|[Cc][Oo][Nn][Ff][Ii][Gg]$|[Cc][Oo][Nn][Ff][Ii][Gg]\\.[Ww][Oo][Rr][Kk][Tt][Rr][Ee][Ee]$|[Cc][Oo][Mm][Mm][Oo][Nn][Dd][Ii][Rr]$)")) (require-all (subpath (param "P64")) (regex #"/\\.[Gg][Ii][Tt]/([Hh][Oo][Oo][Kk][Ss](/|$)|[Cc][Oo][Nn][Ff][Ii][Gg]$|[Cc][Oo][Nn][Ff][Ii][Gg]\\.[Ww][Oo][Rr][Kk][Tt][Rr][Ee][Ee]$|[Cc][Oo][Mm][Mm][Oo][Nn][Dd][Ii][Rr]$)")) (require-all (subpath (param "P64")) (regex #"/\\.[Gg][Ii][Tt]/([Mm][Oo][Dd][Uu][Ll][Ee][Ss]|[Ww][Oo][Rr][Kk][Tt][Rr][Ee][Ee][Ss])/.*/([Hh][Oo][Oo][Kk][Ss](/|$)|[Cc][Oo][Nn][Ff][Ii][Gg]$|[Cc][Oo][Nn][Ff][Ii][Gg]\\.[Ww][Oo][Rr][Kk][Tt][Rr][Ee][Ee]$|[Cc][Oo][Mm][Mm][Oo][Nn][Dd][Ii][Rr]$)")))
+(deny file-write-create file-write-unlink (require-all (subpath (param "P104")) (regex #"/\\.[Gg][Ii][Tt]$")) (require-all (subpath (param "P105")) (regex #"/\\.[Gg][Ii][Tt]$")))
+(allow network-outbound (remote ip "*:*"))
+(allow network-bind network-inbound (local ip "*:*"))
+(allow network-outbound (remote unix-socket (path-literal (param "P106"))) (remote unix-socket (path-literal (param "P107"))))
+(allow network-bind network-outbound (local unix-socket (subpath (param "P108"))) (remote unix-socket (subpath (param "P108"))) (local unix-socket (subpath (param "P109"))) (remote unix-socket (subpath (param "P109"))))
+(deny lsopen)
+(deny appleevent-send)
+(deny job-creation)
+(deny mach-lookup (global-name "com.apple.coreservices.launchservicesd") (global-name "com.apple.CoreServices.coreservicesd") (global-name "com.apple.coreservices.appleevents") (global-name "com.apple.lsd.mapdb") (global-name "com.apple.lsd.modifydb"))
+"
+`;

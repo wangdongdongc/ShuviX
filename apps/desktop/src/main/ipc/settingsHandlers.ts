@@ -6,6 +6,7 @@ import { syncKnowledgeBuiltinProject } from '../services/knowledgeNotes'
 import { syncSkillBuiltinProject } from '../services/skillNotes'
 import { appEventBus } from '../utils/appEventBus'
 import type { SettingsSetParams } from '../types'
+import { sandboxStatus } from '../services/sandbox'
 
 /**
  * 同步 ShuviX 主题选择到 Electron nativeTheme.themeSource
@@ -38,6 +39,11 @@ export function registerSettingsHandlers(): void {
   /** 获取已知设置 key 的元数据（labelKey + desc） */
   ipcMain.handle('settings:getKnownKeys', () => {
     return KNOWN_SETTINGS
+  })
+
+  /** 命令沙箱的状态（平台支持 / 探测是否可用 / 开关）—— 设置页 bash 子页读 */
+  ipcMain.handle('settings:sandboxStatus', () => {
+    return sandboxStatus()
   })
 
   /** 保存设置，并广播通知所有窗口刷新 */

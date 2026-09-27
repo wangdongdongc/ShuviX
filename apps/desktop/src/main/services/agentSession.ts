@@ -22,6 +22,7 @@ import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
 import type { SessionModelMetadata } from '../dao/types'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import { settingsService } from './settingsService'
+import { unpinSession } from './sandbox'
 import { createLogger } from '../logger'
 
 const log = createLogger('AgentSession')
@@ -361,6 +362,8 @@ export class AgentSession {
     await this.abortQuietly()
     this.created.dispose()
     clearFileTimeSession(this.sessionId)
+    // 下一个运行时按那时的开关重新决定套不套沙箱（工具参数与说明随之重建）
+    unpinSession(this.sessionId)
     log.info(`invalidate session=${this.sessionId}`)
   }
 
@@ -373,6 +376,7 @@ export class AgentSession {
     this.created.dispose()
     clearFileTimeSession(this.sessionId)
     clearSessionDecisions(this.sessionId)
+    unpinSession(this.sessionId)
     log.info(`destroy session=${this.sessionId}`)
   }
 

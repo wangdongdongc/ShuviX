@@ -29,7 +29,7 @@ import { createInlinePolicyMdReader } from '../builtinPolicies/inlineSources'
 const INLINE_POLICY_MD = createInlinePolicyMdReader()
 
 /** 内置策略引用的完整变量表 —— 全供给以免内置 lets 求值告警干扰断言 */
-const BUILTIN_VARS: Record<string, string | string[]> = {
+const BUILTIN_VARS: Record<string, string | string[] | boolean> = {
   workspace: '/ws',
   toolResultsBase: '/tool-results',
   skillsDirs: ['/skills/a', '/skills/b'],
@@ -40,6 +40,13 @@ const BUILTIN_VARS: Record<string, string | string[]> = {
   botsDir: '/home/u/.shuvix/bots',
   builtinKnowledgeDir: '/opt/shuvix/Resources/knowledge',
   sessionArtifactsDir: '/home/u/.shuvix/artifacts/sess-1',
+  // 沙箱未套上时宿主给的那一组（桌面 getVars 展开 sandbox.sessionView 的 INACTIVE_VIEW）
+  sandboxActive: false,
+  sandboxWritableRoots: [],
+  sandboxWriteDenied: [],
+  sandboxProtectedPatterns: [],
+  sandboxReadDenied: [],
+  sandboxReadAllowed: [],
   systemDirs: []
 }
 
@@ -580,7 +587,7 @@ describe('assembleRules — lets 注入', () => {
   })
 
   it('AS-N3 lets 每次装配现算：getVars 变化后第二次装配按新值命中（旧装配产物保持旧值）', () => {
-    const vars: Record<string, string | string[]> = { ...BUILTIN_VARS, blocked: '/a' }
+    const vars: Record<string, string | string[] | boolean> = { ...BUILTIN_VARS, blocked: '/a' }
     const provider = makeProvider({
       getVars: () => ({ ...vars }),
       getUserPolicies: () => [
@@ -1458,11 +1465,17 @@ describe('assembleRules — 用户覆盖拿掉本会话 artifacts 豁免', () =>
   }
 
   it('AS-A1 覆盖副本删掉 match 行 → 本会话 artifacts 的写又问，归因用户那份；读不受牵连；对照：不覆盖时放行', () => {
-    // 用户拿到的覆盖副本 = 出厂 en 文件原样；删掉的恰是那一行 match（形态守护：真删到了一行）
+    // 用户拿到的覆盖副本 = 出厂 en 文件原样；删掉的恰是整个 match（`match: >-` 连同它缩进更深的
+    // 续行 —— 形态守护：真删到了、且只删了这一段）
     const builtinRaw = INLINE_POLICY_MD('ask-on-write.md')!
     const lines = builtinRaw.split('\n')
-    const kept = lines.filter((line) => !/^\s+match:/.test(line))
-    expect(lines.length - kept.length).toBe(1)
+    const start = lines.findIndex((line) => /^\s+match:/.test(line))
+    expect(start).toBeGreaterThan(0)
+    const indent = lines[start].match(/^\s*/)![0].length
+    let end = start + 1
+    while (end < lines.length && lines[end].match(/^\s*/)![0].length > indent) end++
+    const kept = [...lines.slice(0, start), ...lines.slice(end)]
+    expect(kept.some((line) => /^\s+match:/.test(line))).toBe(false)
     const parsed = parsePolicyDefinitionFile(kept.join('\n'), 'ask-on-write')
     expect(parsed).not.toBeNull()
     expect(parsed!.rules[0].match).toBeUndefined()

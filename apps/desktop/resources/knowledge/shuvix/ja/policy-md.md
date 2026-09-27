@@ -19,8 +19,14 @@ sources:
 ShuviX の権限システムは**確認モデルであって、サンドボックスではありません**。すべてのツール呼び出しは
 プロセス内で規則の集合に照らされ、**許可 / 確認 / 拒否**のいずれかになります。規則はユーザーが読み、
 上書きし、削除できる markdown ファイルです。第一原則は**ポリシーなし = 許可**：どの規則にも一致しない
-操作は自由に実行され、ShuviX が同梱するすべての保護は目に見えるポリシーです。（許可された `bash` /
-`powershell` コマンドはユーザーの完全な権限で実行されます —— ここに OS レベルの隔離はありません。）
+操作は自由に実行され、ShuviX が同梱するすべての保護は目に見えるポリシーです。
+ポリシー自体は OS レベルの隔離ではありません。それは別物の**コマンドサンドボックス**です：macOS で
+設定 → LLM ツール → bash → サンドボックスがオンのとき、各 `bash` コマンドは OS によって閉じ込められて
+実行されます（変更できるのはプロジェクト・一時フォルダ・パッケージのキャッシュの中だけで、認証情報や
+ShuviX のデータ、個人フォルダは読めません）。ホストはこの実行が本当に閉じ込められたかをコマンドの
+`sandboxed` 属性として報告し、組み込みポリシーがそれで判断します：閉じ込められたコマンドは確認なしで
+実行され、閉じ込められていないもの——サンドボックスがオフまたは使えない、エージェントがフルアクセスを
+求めた、すべての `ssh` コマンド——は確認が出て、許可されるとユーザーの完全な権限で実行されます。
 
 - 場所：`~/.shuvix/policies/<name>.md`。
 - マーカー：`shuvix: policy v1`。読み取り時は省略可、書くときは必ず付く。
@@ -119,7 +125,7 @@ vars     ホスト変数表（後述）+ セッションの許諾
 | `object.type`  | 発生元                                                       | `action`         | 属性                                                                                                                                                                                                                                                      |
 | -------------- | ------------------------------------------------------------ | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `path`         | `read`、`write`、`edit`、`knowledge` ツール、ファイルプレビュー | `read` / `write` | `path`（パスが実際に行き着く場所：絶対パス。デスクトップではシンボリックリンクを展開し、`..` は実際の親ディレクトリを指す —— OS が開くときと同じ）、`requestedPath`（ツールが要求した時点の絶対パス —— リンクや `..` を挟むと `path` と異なる）、`displayPath`（モデルが書いたまま、メッセージ用） |
-| `command`      | `bash`、`powershell`、`ssh`                                  | `execute`        | `command`（生のテキスト）、`channel`（`bash` / `powershell` / `ssh`）、およびシェルパーサーから遅延で（`powershell` のコマンドは ShuviX 独自の PowerShell スキャナーで読む：`base` は正規化したコマンド名 —— エイリアスは cmdlet 名に解決、パスと `.exe` / `.com` は除去、大文字小文字はそのまま、比較の前に `lowerAscii()` —— `-Name:value` は二項目に分割）：`parsed`（ブール）、`commands`（`{ base, argv, wrappers, complete, depth }` のリスト —— `base` は `sudo` / `env` / `timeout` を剥がした後の本当のプログラム、動的な語は `''`）、`writes`（リダイレクト先の絶対パス） |
+| `command`      | `bash`、`powershell`、`ssh`                                  | `execute`        | `command`（生のテキスト）、`channel`（`bash` / `powershell` / `ssh`）、`sandboxed`（ブール —— ホストがこの実行を本当にコマンドサンドボックスに閉じ込めた；常に存在し、`ssh` とサンドボックスのない環境では `false`）、およびシェルパーサーから遅延で（`powershell` のコマンドは ShuviX 独自の PowerShell スキャナーで読む：`base` は正規化したコマンド名 —— エイリアスは cmdlet 名に解決、パスと `.exe` / `.com` は除去、大文字小文字はそのまま、比較の前に `lowerAscii()` —— `-Name:value` は二項目に分割）：`parsed`（ブール）、`commands`（`{ base, argv, wrappers, complete, depth }` のリスト —— `base` は `sudo` / `env` / `timeout` を剥がした後の本当のプログラム、動的な語は `''`）、`writes`（リダイレクト先の絶対パス） |
 | `gitTool`      | `git` ツール                                                 | `execute`        | `gitAction`、`command`、`force`（ブール）、`delete`（ブール）                                                                                                                                                                                           |
 | `database`     | 組み込み `database` サーバーの `query` ツール                | `execute`        | `sql`、`credential`、`dbType`、`readonly`（ブール —— 接続が読み取り専用か）                                                                                                                                                                              |
 | `url`          | 組み込み `browser` / `chrome` サーバー：すべてのナビゲーション、`chrome` ではサイトごとの初回利用も | `navigate`       | `url`、`scheme`、`host`（小文字、末尾のドットなし）、`origin`、`browser`（`app` = ShuviX 内のブラウザーパネル、`chrome` = あなた自身の Chrome）。`file://` は url オブジェクトではなく、そのパスの読み取りとして判定 |
@@ -153,6 +159,13 @@ vars     ホスト変数表（後述）+ セッションの許諾
 | `memoryDirs`                  | string[] | 旧プロジェクト記憶のルート                                                    |
 | `botsDir`                     | string   | `~/.shuvix/bots`                                                              |
 | `builtinKnowledgeDir`         | string   | ShuviX が同梱する読み取り専用のナレッジベース（このベース）                   |
+| `sessionArtifactsDir`         | string   | この会話自身の成果物 `~/.shuvix/artifacts/<セッション>`                        |
+| `sandboxActive`               | boolean  | このセッションのコマンドはコマンドサンドボックス内で動く                       |
+| `sandboxWritableRoots`        | string[] | 制限付きコマンドが書ける場所（サンドボックスが無効なら空）                     |
+| `sandboxWriteDenied`          | string[] | その中の保護された場所（プロジェクトの `.vscode`、`.claude` など；認証情報ディレクトリ） |
+| `sandboxProtectedPatterns`    | string[] | 保護された git メタデータの正規表現（`.git/hooks`、`.git/config` など）、`matches` と併用 |
+| `sandboxReadDenied`           | string[] | 制限付きコマンドが読めない場所（個人フォルダ、ShuviX のデータ、認証情報ディレクトリ） |
+| `sandboxReadAllowed`          | string[] | その中で読める例外（ワークスペース、このセッションのツール結果、読み取り許可）   |
 | `systemDirs`                  | string[] | 追加の OS ディレクトリ（Windows のシステム / プログラムディレクトリ）          |
 | `autoAllow`                   | boolean  | セッションの「自動許可」スイッチ                                              |
 | `grantedRead`、`grantedWrite` | string[] | ユーザーがこのセッションで「許可して記憶」と答えたパス（書き込みは読み取りを含意） |
@@ -181,9 +194,9 @@ scope と交差して空になる規則；不正な `lets`（不正な名前、�
 | `protect-system`                | OS ディレクトリへの書き込みを拒否                                                                             |
 | `block-catastrophic-commands`   | マシンを破壊する少数のコマンドを、解析された構造で判断して拒否（`rm -rf /`、`mkfs`、デバイスへの `dd`、`Format-Volume`……）     |
 | `protect-bot-files`             | `~/.shuvix/bots` 配下のあらゆる書き込みを **force-ask**                                                       |
-| `ask-on-read`                   | ワークスペース、ツール結果、skill ディレクトリ、本リファレンスの外の読み取りを確認                            |
-| `ask-on-write`                  | すべてのファイル書き込みを diff プレビュー付きで確認                                                          |
-| `ask-on-command`                | すべての `bash` / `powershell` / `ssh` コマンドを確認                                                                        |
+| `ask-on-read`                   | ワークスペース、ツール結果、skill ディレクトリ、本リファレンスの外の読み取りを確認；サンドボックス有効時は制限付きコマンドも読めない場所だけ |
+| `ask-on-write`                  | ファイル書き込みを diff プレビュー付きで確認 —— この会話の成果物と、サンドボックス有効時は制限付きコマンドがもともと書ける場所を除く |
+| `ask-on-command`                | サンドボックスに閉じ込められていないコマンドを確認（`object.sandboxed` が false：サンドボックスがオフ／使えない、フルアクセスの要求、`ssh`） |
 | `git-safety`                    | 破壊的な git 操作を確認（`init`、`restore`、強制 checkout、ブランチ削除）                                     |
 | `ask-on-database`               | 書き込み可能なデータベース接続上のすべての文を確認                                                            |
 | `ask-on-sub-session`            | サブセッションを開くときに一度確認（`tool.name == 'session' && tool.operation == 'create-sub-session'`）       |

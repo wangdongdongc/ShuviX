@@ -83,6 +83,12 @@ export interface AskInputRequest extends InputRequestBase {
    * 这跟批准一条跑完就完的命令不是一回事，不该长得一模一样。
    */
   background?: boolean
+  /**
+   * 模型为这条命令**申请了**不受限运行（`dangerouslyDisableSandbox`）。卡片上标一个「完全访问」
+   * 标签 —— 平时沙箱里的命令不问，出现这张卡本身就说明它要的比平时多，要让人一眼看出来。
+   * 沙箱没能套上（关闭、不可用、工作区不适合）时的逐条询问**不**带它：那时每条都问，标签只是噪音。
+   */
+  unsandboxed?: boolean
 }
 
 export interface ChoiceInputRequest extends InputRequestBase {

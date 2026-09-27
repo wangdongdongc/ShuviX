@@ -61,6 +61,7 @@ import {
 import { buildSpawnEnv, getToolResultsDir } from '../utils/paths'
 import { createLogger } from '../logger'
 import { taskRegistry, toBgTaskInfo, setTaskNotifier, type TaskNotifier } from './taskRegistry'
+import type { SandboxPlan } from './sandbox'
 import type { BgTaskInfo, BgTaskLogChunk, BgTaskStatus } from '@shuvix/chat-protocol/types/bgTask'
 
 export type { BgTaskInfo, BgTaskLogChunk, BgTaskStatus }
@@ -110,6 +111,8 @@ interface BgProc {
   stopRequested: boolean
   /** SIGINT → SIGKILL 的升级定时器 */
   escalateTimer: NodeJS.Timeout | null
+  /** 这条命令套了沙箱：退出时据此判断失败是不是沙箱拦的，并把说明追加进日志 */
+  sandbox?: SandboxPlan
 }
 
 /** toolCallId → 进程簿记 */
@@ -153,6 +156,11 @@ export interface RunCommandParams {
   timeoutMs?: number
   /** 同步形态的中止信号。异步形态刻意不接 —— 那正是后台的意义（见文件头第 5 点） */
   signal?: AbortSignal
+  /**
+   * 沙箱执行计划（调用方已按它上报过 `sandboxed: true`）。有它就把 shell 包进沙箱、
+   * 注入沙箱的环境变量（TMPDIR 等），退出时把「沙箱拦了什么」追加进日志。
+   */
+  sandbox?: SandboxPlan
 }
 
 /** 退出通知实现的注入口 —— 保留旧名，转接到枢纽（调用方是 sessionService） */
@@ -327,7 +335,8 @@ function formatExitNotice(task: TaskInfo, tail: string): string {
 export async function runCommand(params: RunCommandParams): Promise<CommandOutcome> {
   const { sessionId, toolCallId, command, description, cwd, extraEnv, background } = params
   const logPath = join(getToolResultsDir(sessionId), `${toolCallId}.log`)
-  const invocation = shellInvocation(params.shell, command)
+  const base = shellInvocation(params.shell, command)
+  const invocation = params.sandbox ? params.sandbox.wrap(base) : base
 
   // Windows 上不能用 'a'：libuv 以 append-only 访问权（FILE_APPEND_DATA，无 FILE_WRITE_DATA）
   // 打开 O_APPEND 文件，而 MSYS2/cygwin 程序（Git for Windows 带的 ls / grep 等，PowerShell 里
@@ -340,7 +349,7 @@ export async function runCommand(params: RunCommandParams): Promise<CommandOutco
   try {
     child = spawn(invocation.file, invocation.args, {
       cwd,
-      env: buildSpawnEnv(extraEnv),
+      env: buildSpawnEnv(params.sandbox ? { ...extraEnv, ...params.sandbox.env } : extraEnv),
       // stdin 恒为 /dev/null（见文件头第 6 点）；stdout/stderr 同一个 fd
       stdio: ['ignore', fd, fd],
       detached: process.platform !== 'win32',
@@ -364,7 +373,8 @@ export async function runCommand(params: RunCommandParams): Promise<CommandOutco
     child,
     logPath,
     stopRequested: false,
-    escalateTimer: null
+    escalateTimer: null,
+    sandbox: params.sandbox
   }
   procs.set(toolCallId, proc)
 
@@ -449,6 +459,23 @@ function isAnnounced(toolCallId: string): boolean {
   return !!task && taskRegistry.list(task.sessionId).some((t) => t.taskId === toolCallId)
 }
 
+/** 沙箱拒绝说明取日志尾部多少字节来判断 */
+const SANDBOX_TAIL_BYTES = 16 * 1024
+
+/**
+ * 套了沙箱的命令失败时，判断是不是沙箱拦的，是就把说明追加进日志（见 sandbox/classify.ts）。
+ * 用户主动停掉的不追究。任何异常都只记日志：这一步不能把一次正常的退出变成别的东西。
+ */
+function annotateSandboxDenial(proc: BgProc, code: number | null): void {
+  if (!proc.sandbox || proc.stopRequested) return
+  try {
+    const note = proc.sandbox.explain(readTail(proc.logPath, SANDBOX_TAIL_BYTES), code)
+    if (note) appendFileSync(proc.logPath, `\n${note}\n`)
+  } catch (err) {
+    log.warn(`sandbox denial annotation failed: ${(err as Error).message}`)
+  }
+}
+
 /** 进程退出：把结果交回枢纽（解挂等待者，没人等的话由枢纽发通知） */
 function finishTask(toolCallId: string, code: number | null, signal: NodeJS.Signals | null): void {
   const proc = procs.get(toolCallId)
@@ -459,6 +486,8 @@ function finishTask(toolCallId: string, code: number | null, signal: NodeJS.Sign
   }
   const status = proc.stopRequested ? 'killed' : code === 0 ? 'done' : 'error'
   log.info(`exit ${toolCallId} status=${status} code=${code} signal=${signal}`)
+  // 在 settle 之前：前台结果（readWhole）与后台退出通知（readTail）都在之后读日志
+  annotateSandboxDenial(proc, code)
   taskRegistry.settle(toolCallId, { status, subject: { exitCode: code, signal } })
   maybeStopFstatTimer()
 }
@@ -502,6 +531,26 @@ function killProc(toolCallId: string, force: boolean): void {
 /** 用户从面板停止任务（停完仍会通知智能体 —— 停它的不是它自己） */
 export function stopBgTask(toolCallId: string, force = false): boolean {
   return taskRegistry.stop(toolCallId, { by: 'user', force })
+}
+
+/**
+ * 智能体停掉本会话的一条后台任务（`shuvix task stop <pid>`，经 CLI 服务）。
+ *
+ * 为什么不让它自己 `kill -- -<pid>`：命令沙箱里每条命令是一个独立的 sandbox-exec 实例，
+ * `signal (target same-sandbox)` 只够到自己这一条；能跨实例的 `(target others)` 实测连主进程、
+ * Finder 这些不在沙箱里的同用户进程都够得到。所以停「上一条命令起的后台任务」交给宿主 ——
+ * 与面板上的停止同一条路径，只是记为智能体自己停的（不再回头通知它）。
+ */
+export function stopBgTaskByAgent(
+  sessionId: string,
+  pid: number
+): 'stopped' | 'not-found' | 'not-running' {
+  // pid 会被复用：同一个 pid 可能对着一条早已结束的旧任务和一条正在跑的新任务，先认正在跑的
+  const matches = listBgTasks(sessionId).filter((t) => t.pid === pid)
+  const info = matches.find((t) => t.status === 'running') ?? matches.at(-1)
+  if (!info) return 'not-found'
+  if (info.status !== 'running') return 'not-running'
+  return taskRegistry.stop(info.toolCallId, { by: 'agent' }) ? 'stopped' : 'not-running'
 }
 
 /** 丢掉本地簿记（可选连日志文件一起删） */
@@ -608,7 +657,9 @@ function maybeStopFstatTimer(): void {
 
 /** 停止该任务的命令（逐字给模型，它不需要知道 pgid 是怎么来的） */
 export function stopCommandFor(info: BgTaskInfo): string {
-  return process.platform === 'win32' ? `taskkill /T /F /PID ${info.pid}` : `kill -- -${info.pid}`
+  return process.platform === 'win32'
+    ? `taskkill /T /F /PID ${info.pid}`
+    : `shuvix task stop ${info.pid}`
 }
 
 /**
@@ -616,7 +667,8 @@ export function stopCommandFor(info: BgTaskInfo): string {
  * 按 shell 而不是按当前平台给：设置页在任何平台上都要展示两个工具各自真实的描述。
  */
 export function stopCommandHint(shell: ShellKind): string {
-  return shell === 'powershell' ? 'taskkill /T /F /PID <pid>' : 'kill -- -<pid>'
+  // bash 不教 `kill`：沙箱里的命令发不出跨实例的信号（见 stopBgTaskByAgent），宿主代停在沙箱内外都能用
+  return shell === 'powershell' ? 'taskkill /T /F /PID <pid>' : 'shuvix task stop <pid>'
 }
 
 /**

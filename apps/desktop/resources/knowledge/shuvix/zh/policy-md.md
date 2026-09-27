@@ -19,7 +19,11 @@ sources:
 ShuviX 的权限系统是**询问模型，不是沙箱**。每次工具调用都在进程内对照一组规则，得到
 **放行 / 询问 / 拒绝**之一，而规则是用户能读、能覆盖、能删除的 markdown 文件。第一原则是
 **无策略 = 放行**：命中不了任何规则的操作自由执行；ShuviX 自带的每道防护都是一份看得见的策略。
-（放行了的 `bash` / `powershell` 命令以用户的完整权限运行 —— 这里没有任何操作系统级隔离。）
+策略本身不是操作系统级隔离，那是另一样东西——**命令沙箱**：macOS 上开着设置 → LLM 工具 → bash →
+沙箱时，每条 `bash` 命令由操作系统圈住运行（只能改动项目、临时目录和包缓存里的文件，读不到凭据、
+ShuviX 的数据和个人资料目录）。宿主把这次执行是否真的被圈住作为命令的 `sandboxed` 属性上报，内置策略
+据此判断：圈住的命令直接运行；没圈住的——沙箱关闭或不可用、智能体申请了完全访问、每条 `ssh`
+命令——要询问，放行后以用户的完整权限运行。
 
 - 位置：`~/.shuvix/policies/<name>.md`。
 - 标记：`shuvix: policy v1`；读取可选，写出恒带。
@@ -114,7 +118,7 @@ vars     宿主变量表（见下）+ 会话授权
 | `object.type`  | 由谁发起                                                   | `action`         | 属性                                                                                                                                                                                                                                                                                |
 | -------------- | ---------------------------------------------------------- | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `path`         | `read`、`write`、`edit`、`knowledge` 工具、文件预览        | `read` / `write` | `path`（路径真正通向的位置：绝对路径；桌面端展开符号链接，`..` 取真实的父目录 —— 与系统打开它时一样）、`requestedPath`（工具请求时的绝对路径 —— 中间隔着链接或 `..` 时与 `path` 不同）、`displayPath`（模型写的原样，用于提示文案） |
-| `command`      | `bash`、`powershell`、`ssh`                                | `execute`        | `command`（原文）、`channel`（`bash` / `powershell` / `ssh`），以及由 shell 解析器惰性提供的（`powershell` 命令由 ShuviX 自己的 PowerShell 扫描器读：`base` 是规范化的命令名 —— 别名解析成 cmdlet 名、去掉路径与 `.exe` / `.com`、大小写保持原样，比较前先 `lowerAscii()` —— `-Name:value` 拆成两项）：`parsed`（布尔）、`commands`（`{ base, argv, wrappers, complete, depth }` 的列表 —— `base` 是剥掉 `sudo` / `env` / `timeout` 之后真正的程序，动态词是 `''`）、`writes`（重定向目标，绝对路径）              |
+| `command`      | `bash`、`powershell`、`ssh`                                | `execute`        | `command`（原文）、`channel`（`bash` / `powershell` / `ssh`）、`sandboxed`（布尔 —— 宿主真的把这次执行圈进了命令沙箱；恒有值，`ssh` 与没有沙箱的地方为 `false`），以及由 shell 解析器惰性提供的（`powershell` 命令由 ShuviX 自己的 PowerShell 扫描器读：`base` 是规范化的命令名 —— 别名解析成 cmdlet 名、去掉路径与 `.exe` / `.com`、大小写保持原样，比较前先 `lowerAscii()` —— `-Name:value` 拆成两项）：`parsed`（布尔）、`commands`（`{ base, argv, wrappers, complete, depth }` 的列表 —— `base` 是剥掉 `sudo` / `env` / `timeout` 之后真正的程序，动态词是 `''`）、`writes`（重定向目标，绝对路径）              |
 | `gitTool`      | `git` 工具                                                 | `execute`        | `gitAction`、`command`、`force`（布尔）、`delete`（布尔）                                                                                                                                                                                                                            |
 | `database`     | 内置 `database` 服务器的 `query` 工具                      | `execute`        | `sql`、`credential`、`dbType`、`readonly`（布尔 —— 连接是否只读）                                                                                                                                                                                                                   |
 | `url`          | 内置 `browser` / `chrome` 服务器：每次导航；在 `chrome` 里还有每个站点的第一次使用 | `navigate`       | `url`、`scheme`、`host`（小写、去掉结尾的点）、`origin`、`browser`（`app` = ShuviX 里的浏览器面板，`chrome` = 你自己的 Chrome）；`file://` 不是 url 客体 —— 按读那个路径判定 |
@@ -146,6 +150,13 @@ vars     宿主变量表（见下）+ 会话授权
 | `memoryDirs`                 | string[] | 旧项目记忆的根                                                                  |
 | `botsDir`                    | string   | `~/.shuvix/bots`                                                                |
 | `builtinKnowledgeDir`        | string   | ShuviX 随应用发布的只读知识库（就是本库）                                       |
+| `sessionArtifactsDir`        | string   | 本会话自己的产物目录 `~/.shuvix/artifacts/<会话>`                               |
+| `sandboxActive`              | boolean  | 本会话的命令在命令沙箱里运行                                                    |
+| `sandboxWritableRoots`       | string[] | 受限命令能写的位置（沙箱未启用时为空）                                          |
+| `sandboxWriteDenied`         | string[] | 这些位置里受保护的地方（项目的 `.vscode`、`.claude` 等；凭据目录）              |
+| `sandboxProtectedPatterns`   | string[] | 受保护的 git 元数据的正则（`.git/hooks`、`.git/config` 等），配合 `matches` 用 |
+| `sandboxReadDenied`          | string[] | 受限命令读不到的位置（个人资料目录、ShuviX 的数据、凭据目录）                   |
+| `sandboxReadAllowed`         | string[] | 其中可读的例外（工作区、本会话的工具结果、读授权）                              |
 | `systemDirs`                 | string[] | 额外的操作系统目录（Windows 的系统 / 程序目录）                                 |
 | `autoAllow`                  | boolean  | 会话的「免询问」开关                                                            |
 | `grantedRead`、`grantedWrite` | string[] | 用户在本会话里答过「允许并记住」的路径（写授权隐含读）                          |
@@ -171,9 +182,9 @@ YAML 语法错 / 不是映射；裸的 `rules` / `lets` / `scope` 键；`shuvix-
 | `protect-system`                | 拒绝写操作系统目录                                                                                            |
 | `block-catastrophic-commands`   | 拒绝一小撮毁灭整机的命令，按解析结构判（`rm -rf /`、`mkfs`、`dd` 到设备、`Format-Volume`……）                                    |
 | `protect-bot-files`             | `~/.shuvix/bots` 下任何写入 **force-ask**                                                                     |
-| `ask-on-read`                   | 在工作区、工具结果、skill 目录与本说明书之外的读取询问                                                        |
-| `ask-on-write`                  | 每次文件写入询问，带 diff 预览                                                                                |
-| `ask-on-command`                | 每条 `bash` / `powershell` / `ssh` 命令询问                                                                                  |
+| `ask-on-read`                   | 在工作区、工具结果、skill 目录与本说明书之外的读取询问；沙箱启用时，只在受限命令也读不到的位置询问            |
+| `ask-on-write`                  | 文件写入询问，带 diff 预览 —— 本会话产物除外；沙箱启用时，受限命令本来就能写的位置也除外                      |
+| `ask-on-command`                | 每条没被圈进沙箱的命令询问（`object.sandboxed` 为 false：沙箱关闭或不可用、申请了完全访问、`ssh`）                           |
 | `git-safety`                    | 危险的 git 操作询问（`init`、`restore`、强制 checkout、删分支）                                               |
 | `ask-on-database`               | 可写数据库连接上的每条语句询问                                                                                |
 | `ask-on-sub-session`            | 开子会话时询问一次（`tool.name == 'session' && tool.operation == 'create-sub-session'`）                        |

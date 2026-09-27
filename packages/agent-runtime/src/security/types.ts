@@ -121,11 +121,13 @@ export type AttrValue = AttrScalar | string[] | Record<string, AttrScalar | stri
  *                                                           符号链接展开、`..` 按物理父目录），requestedPath
  *                                                           是 PEP 交来的原样，displayPath 是报错用
  *                                                           的写法（模型写的相对路径等）
- *   { type:'command', command, channel, parsed, commands, writes }
+ *   { type:'command', command, channel, sandboxed, parsed, commands, writes }
  *                                                           本地 / 远端命令（channel: 'bash'|'powershell'
- *                                                           |'ssh'；后三项是解析层贡献的结构属性，
- *                                                           惰性求值，见 commandFacts.ts —— bash / ssh 由
- *                                                           tree-sitter-bash 读，powershell 由
+ *                                                           |'ssh'；sandboxed = 宿主**实际**把这次执行圈进了
+ *                                                           OS 沙箱（恒有值，缺省 false —— ssh 与沙箱不可用
+ *                                                           的平台永远是 false）；后三项是解析层贡献的结构
+ *                                                           属性，惰性求值，见 commandFacts.ts —— bash / ssh
+ *                                                           由 tree-sitter-bash 读，powershell 由
  *                                                           security/powershell/ 的扫描器读）
  *   { type:'gitTool', gitAction, command, force, delete }   内置 git 工具操作
  *   { type:'database', sql, credential, dbType, readonly }  远程库查询（readonly = 连接模式）
@@ -401,6 +403,8 @@ export interface EnforceOpts {
   preview?: AskPreview
   /** 命令将作为后台任务运行 —— 询问卡片据此标注（见 AskInputRequest.background） */
   background?: boolean
+  /** 命令申请了不受限运行 —— 询问卡片据此标「完全访问」（见 AskInputRequest.unsandboxed） */
+  unsandboxed?: boolean
   /**
    * 用户选「其它」（提交反馈文本而非允许/拒绝）时的处置：
    * 'throw'（默认，路径/git 类）或 'return'（bash/ssh：反馈作为正常 tool result 返回）。
@@ -470,6 +474,13 @@ export interface CommandObjectInput {
    * ssh 的远端 cwd 不可知，省略即可（相对目标此时保持原样）。
    */
   cwd?: string
+  /**
+   * 这次执行**实际**被宿主圈进了 OS 沙箱（写入限定在沙箱可写根内、敏感位置读不到）。
+   * 只有真套上了才传 true —— 沙箱关闭、平台没有后端、模型申请了不受限运行、ssh，都省略。
+   * 客体上的 `sandboxed` 由它而来，缺省 false：内置 ask-on-command 只问没被圈住的命令，
+   * 所以「以为套了其实没套」只会多问，不会少问。
+   */
+  sandboxed?: boolean
 }
 
 /** enforceGitOp 的入参（对应 {type:'gitTool'} 客体的属性） */

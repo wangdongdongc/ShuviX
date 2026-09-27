@@ -194,6 +194,7 @@ export async function executeDecision(args: {
     pathIsDirectory,
     preview: opts.preview,
     background: opts.background,
+    unsandboxed: opts.unsandboxed,
     createdAt: Date.now()
   })
 

@@ -31,8 +31,9 @@ your project that points into `/etc` is refused like `/etc` itself, and on macOS
 
 **What it does not do**:
 
-- Only writes by the agent's file tools are blocked; a command you allow runs
-  with your full system privileges and is not restricted here.
+- Only writes by the agent's file tools are blocked here. Commands are held by
+  the sandbox where it is on (it cannot write these locations either); a
+  command that runs unconfined runs with your full system privileges.
 - Reading these locations is not blocked.
 - Temporary directories are not system locations, even where macOS keeps them
   under `/private/var`: your own temp directory (`$TMPDIR`, under

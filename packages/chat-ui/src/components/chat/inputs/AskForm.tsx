@@ -1,7 +1,7 @@
 import { getHostApi } from '@shuvix/chat-ui'
 import { FileOutput, FilePen, FileText, FolderOpen, Shield, ShieldAlert } from 'lucide-react'
 import { useMemo, useState } from 'react'
-import { BackgroundBadge } from '../BgTaskTag'
+import { BackgroundBadge, FullAccessBadge } from '../BgTaskTag'
 import { renderToolIcon } from '../ToolCallBlock'
 import { useChatStore } from '../../../stores/chatStore'
 import { useTranslation } from 'react-i18next'
@@ -155,7 +155,8 @@ export function AskForm({
     policyPrompt,
     preview,
     toolName,
-    background
+    background,
+    unsandboxed
   } = request
   const hostPresentation = useChatStore((s) => s.toolPresentations[toolName])
   // 内置 MCP 能力服务器发起的询问（browser 打开一个地址、读一个本地文件；ssh 执行一条命令）
@@ -250,6 +251,7 @@ export function AskForm({
         </span>
         {/* 后台任务标签 —— 与「跑完就完的命令」在视觉上分开：这条批准之后进程会一直活着 */}
         {background && <BackgroundBadge />}
+        {unsandboxed && <FullAccessBadge />}
         {titleAccessory}
       </div>
 

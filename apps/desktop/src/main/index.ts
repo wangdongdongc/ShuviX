@@ -50,6 +50,7 @@ import {
 } from './services/externalOpen'
 import { widgetServer } from './services/widget'
 import { cliServer } from './services/cliServer'
+import { SANDBOX_ENABLED_KEY, setSandboxSettingReader } from './services/sandbox'
 import { chromeBridge } from './services/chromeBridge'
 import { installChromeNativeHost } from './services/chromeExtensionService'
 import { registerChromeFrontend } from './frontend/chrome'
@@ -744,6 +745,10 @@ app.whenReady().then(async () => {
   // MCP Client 惰性启动：不在这里连 —— 哪条会话用到哪台，创建 Agent 装配工具时才连（见 agents/agentHost）
 
   // MCP Server 出于安全考虑不自动启动，需用户在设置中手动开启
+
+  // 命令沙箱读开关的口子：模块本身不碰设置表（它在很多导入链上），由这里注入。
+  // 没注入就是关闭 —— 只有真正起来的应用才套沙箱
+  setSandboxSettingReader(() => settingsDao.findByKey(SANDBOX_ENABLED_KEY))
 
   // 启动 CLI IPC 服务 —— 给 shuvix-cli 提供 Unix socket / named pipe
   cliServer.start().catch((err) => {

@@ -76,6 +76,10 @@ export const KNOWN_SETTINGS: Record<string, SettingMeta> = {
   'httpLog.enabled': {
     labelKey: 'settings.httpLogEnabled',
     desc: 'true | false — record LLM request payloads (default off; payloads are large)'
+  },
+  'sandbox.enabled': {
+    labelKey: 'settings.sandboxEnabled',
+    desc: 'true | false — run agent bash commands confined in the macOS sandbox, without asking (default true; takes effect for new conversations)'
   }
 }
 

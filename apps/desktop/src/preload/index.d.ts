@@ -603,6 +603,13 @@ declare global {
       set: (params: SettingsSetParams) => Promise<{ success: boolean }>
       /** 获取已知设置 key 的元数据（labelKey + desc） */
       getKnownKeys: () => Promise<Record<string, ConfigMeta>>
+      /** 命令沙箱的状态：supported = 本平台有后端，available = 探测可用，enabled = 设置开关 */
+      sandboxStatus: () => Promise<{
+        supported: boolean
+        available: boolean
+        enabled: boolean
+        reason?: string
+      }>
       /** 列出全部内置系统提示词卡片 */
     }
     httpLog: {

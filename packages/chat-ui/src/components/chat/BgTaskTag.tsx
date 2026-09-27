@@ -62,6 +62,23 @@ export function BackgroundBadge(): React.JSX.Element {
 }
 
 /**
+ * 询问卡片上的「完全访问」标签：这条命令申请不受限运行。与后台标签同形，用危险色 ——
+ * 平时沙箱里的命令根本不问，出现它就说明这条要的比平时多。
+ */
+export function FullAccessBadge(): React.JSX.Element {
+  const { t } = useTranslation()
+  return (
+    <span
+      className="flex-shrink-0 px-1.5 py-px rounded text-[10px] font-medium bg-error/15 text-error"
+      title={t('toolCall.fullAccessHint')}
+      data-full-access
+    >
+      {t('toolCall.fullAccessTag')}
+    </span>
+  )
+}
+
+/**
  * 工具卡摘要行尾的后台任务状态（标签在行首，见 StepRow 的 badge 槽）。
  *
  * 工具卡的 details 是消息树里的静态数据、不会自更新，所以实时态按 tool_call id 从

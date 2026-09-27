@@ -317,7 +317,9 @@ const api = {
     get: (key: string) => ipcRenderer.invoke('settings:get', key),
     set: (params: SettingsSetParams) => ipcRenderer.invoke('settings:set', params),
     /** 获取已知设置 key 的元数据（labelKey + desc） */
-    getKnownKeys: () => ipcRenderer.invoke('settings:getKnownKeys')
+    getKnownKeys: () => ipcRenderer.invoke('settings:getKnownKeys'),
+    /** 命令沙箱的状态（平台支持 / 探测是否可用 / 开关） */
+    sandboxStatus: () => ipcRenderer.invoke('settings:sandboxStatus')
     /** 列出全部内置系统提示词卡片 */
   },
 

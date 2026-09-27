@@ -8,6 +8,7 @@ import { existsSync, statSync } from 'fs'
 import { homedir } from 'os'
 import { projectDao } from '../dao/projectDao'
 import { sessionRecords } from './sessionRecords'
+import { sessionView } from './sandbox'
 import { sessionService } from './sessionService'
 import {
   getTempWorkspace,
@@ -26,6 +27,7 @@ import { shellParser } from './shellParserService'
 import { policyService } from './policyService'
 import {
   createSecurityContext,
+  parseAllowEntry,
   type SecurityContext,
   type SecurityHostProvider,
   type SubAgentModelConfig
@@ -218,6 +220,27 @@ function windowsSystemDirs(): string[] {
 }
 
 /**
+ * 会话「允许并记住」的路径授权（allowList 的 Write(...) / Read(...)）—— 命令沙箱把写授权当作
+ * 可写根、读授权放回可读。与安全模块 buildPolicyVars 同一个解析（历史遗留的 Bash(...) 条目解析为
+ * null，不授予任何东西）。
+ */
+export function getSessionPathGrants(sessionId: string): {
+  grantedWrite: string[]
+  grantedRead: string[]
+} {
+  const grantedWrite: string[] = []
+  const grantedRead: string[] = []
+  const allowList = sessionRecords.pickSettings(sessionId, ['allowList'])?.allowList ?? []
+  for (const entry of allowList) {
+    const parsed = parseAllowEntry(entry)
+    if (!parsed) continue
+    if (parsed.toolType === 'write') grantedWrite.push(parsed.path)
+    else grantedRead.push(parsed.path)
+  }
+  return { grantedWrite, grantedRead }
+}
+
+/**
  * 桌面 SecurityHostProvider —— 把平台细节注入共享安全模块：
  *   - 变量表：workspace / tool_results / skills 目录 / home（策略 match/lets 里的 vars.*）
  *   - 真实路径：realPath（符号链接 / `..` / 盘上大小写）—— 安全模块拿它解析路径客体与 inDir 比较的
@@ -261,7 +284,10 @@ export function makeDesktopSecurityProvider(
         ? getSessionArtifactsDir(ctx.sessionId)
         : '',
       home: homedir(),
-      systemDirs: windowsSystemDirs()
+      systemDirs: windowsSystemDirs(),
+      // 沙箱的那一面（ask-on-write / ask-on-read 读）：与本会话命令实际受的限制同源，
+      // 所以文件工具的免询问范围恰好是命令能碰的范围；沙箱没套上时是一组空值，策略退回老行为
+      ...sessionView(ctx.sessionId, getConfig().workingDirectory)
     }),
     getSessionGrants: () => {
       const s = sessionRecords.pickSettings(ctx.sessionId, ['autoAllow', 'allowList'])

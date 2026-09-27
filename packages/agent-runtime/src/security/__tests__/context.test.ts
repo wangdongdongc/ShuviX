@@ -12,6 +12,7 @@ import type {
   InputResponse
 } from '@shuvix/chat-protocol/types/inputRequest'
 import type {
+  CommandObjectInput,
   MatchContext,
   ParsedPolicyFile,
   PolicyRuleSpec,
@@ -70,6 +71,13 @@ function makeProvider(
       botsDir: '/home/u/.shuvix/bots',
       builtinKnowledgeDir: '/opt/shuvix/Resources/knowledge',
       sessionArtifactsDir: '/home/u/.shuvix/artifacts/sess-1',
+      // 沙箱未套上时宿主给的那一组（桌面 getVars 展开 sandbox.sessionView 的 INACTIVE_VIEW）
+      sandboxActive: false,
+      sandboxWritableRoots: [],
+      sandboxWriteDenied: [],
+      sandboxProtectedPatterns: [],
+      sandboxReadDenied: [],
+      sandboxReadAllowed: [],
       systemDirs: []
     }),
     getSessionGrants: () => grants,
@@ -740,6 +748,172 @@ describe('createSecurityContext — enforceCommand 的 host', () => {
       req.kind === 'ask' ? req.command : `(not an ask: ${req.kind})`
     )
     expect(cards).toEqual(['ssh prod: systemctl restart app', 'ls -la'])
+  })
+})
+
+describe('createSecurityContext — enforceCommand 的 sandboxed 事实与「完全访问」标记', () => {
+  const BASH_OPTS = { toolCallId: 'tc-sbx', toolName: 'bash' }
+
+  /** 截下门面造出的命令客体（静态 allow 层的派生规则，永不命中）、记下询问材料（一律允许） */
+  function sandboxProbe(grants = { autoAllow: false, allowList: [] as string[] }): {
+    provider: SecurityHostProvider
+    requestUserInput: Mock<(req: InputRequest) => Promise<InputResponse>>
+    warn: Mock
+    lastObject: () => MatchContext['object'] | undefined
+  } {
+    const requestUserInput = vi.fn(
+      async (_req: InputRequest): Promise<InputResponse> => ({ kind: 'ask', allowed: true })
+    )
+    const warn = vi.fn()
+    const objects: Array<MatchContext['object']> = []
+    return {
+      provider: makeProvider(grants, {
+        requestUserInput,
+        logger: { info: vi.fn(), warn, error: vi.fn() },
+        derivedRules: () => [
+          {
+            id: 'derived:capture',
+            effect: 'allow' as const,
+            tier: 'static-allow' as const,
+            source: { kind: 'derived' as const },
+            matches: (matchCtx) => {
+              objects.push(matchCtx.object)
+              return false
+            }
+          }
+        ]
+      }),
+      requestUserInput,
+      warn,
+      lastObject: () => objects[objects.length - 1]
+    }
+  }
+
+  /** 唯一一张询问卡片 */
+  const onlyAsk = (probe: ReturnType<typeof sandboxProbe>): AskInputRequest => {
+    expect(probe.requestUserInput).toHaveBeenCalledTimes(1)
+    const request = probe.requestUserInput.mock.calls[0][0]
+    expect(request.kind).toBe('ask')
+    return request as AskInputRequest
+  }
+
+  it('PO-7 sandboxed:true → 客体上 sandboxed === true；放行、不弹卡，日志归因 default:command', async () => {
+    const probe = sandboxProbe()
+    const ctx = createSecurityContext(SUBJECT, ENVIRONMENT, probe.provider)
+    await expect(
+      ctx.enforceCommand({ channel: 'bash', command: 'ls -la', sandboxed: true }, BASH_OPTS)
+    ).resolves.toEqual({ status: 'allowed' })
+
+    expect(probe.lastObject()!.sandboxed).toBe(true)
+    expect(probe.requestUserInput).not.toHaveBeenCalled()
+    const logged = getSessionDecisions(SID)
+    expect(logged).toHaveLength(1)
+    expect([logged[0].effect, logged[0].winning, logged[0].matched]).toEqual([
+      'allow',
+      'default:command',
+      []
+    ])
+    expect(probe.warn).not.toHaveBeenCalled()
+  })
+
+  it.each<[string, Partial<CommandObjectInput>]>([
+    ['省略', {}],
+    ['false', { sandboxed: false }],
+    // 只有字面 true 才算圈住：非布尔的真值归一成 false，而不是原样交给策略去 fail-safe
+    ['非布尔的真值', { sandboxed: 'yes' as never }]
+  ])(
+    'PO-7 sandboxed %s → 客体上恰是布尔 false，走询问（ask-on-command#0），零告警',
+    async (_label, fields) => {
+      const probe = sandboxProbe()
+      const ctx = createSecurityContext(SUBJECT, ENVIRONMENT, probe.provider)
+      await expect(
+        ctx.enforceCommand({ channel: 'bash', command: 'ls -la', ...fields }, BASH_OPTS)
+      ).resolves.toEqual({ status: 'allowed' })
+
+      expect(probe.lastObject()!.sandboxed).toBe(false)
+      expect(onlyAsk(probe).command).toBe('ls -la')
+      const logged = getSessionDecisions(SID)
+      expect([logged[0].effect, logged[0].winning]).toEqual(['ask', 'ask-on-command#0'])
+      expect(probe.warn).not.toHaveBeenCalled()
+    }
+  )
+
+  it('PO-7 ssh（带 host）与 powershell 不传 sandboxed → 客体上都是 false，都问', async () => {
+    const rows: Array<[CommandObjectInput, string]> = [
+      [{ channel: 'ssh', command: 'uptime', host: 'prod' }, 'mcp__ssh__exec'],
+      [{ channel: 'powershell', command: 'Get-Date' }, 'powershell']
+    ]
+    for (const [input, toolName] of rows) {
+      clearSessionDecisions(SID)
+      const probe = sandboxProbe()
+      const ctx = createSecurityContext(SUBJECT, ENVIRONMENT, probe.provider)
+      await expect(ctx.enforceCommand(input, { toolCallId: 'tc-sbx', toolName })).resolves.toEqual({
+        status: 'allowed'
+      })
+
+      const object = probe.lastObject()!
+      expect({ channel: input.channel, sandboxed: object.sandboxed }).toEqual({
+        channel: input.channel,
+        sandboxed: false
+      })
+      onlyAsk(probe)
+      const logged = getSessionDecisions(SID)
+      expect([logged[0].effect, logged[0].winning]).toEqual(['ask', 'ask-on-command#0'])
+    }
+  })
+
+  it('PO-7 opts.unsandboxed:true → 卡片带 unsandboxed:true（background 照带）；不传就没有这个标记', async () => {
+    const escalated = sandboxProbe()
+    await createSecurityContext(SUBJECT, ENVIRONMENT, escalated.provider).enforceCommand(
+      { channel: 'bash', command: 'open -a Safari' },
+      { ...BASH_OPTS, unsandboxed: true, background: true }
+    )
+    const escalatedCard = onlyAsk(escalated)
+    expect(escalatedCard.unsandboxed).toBe(true)
+    expect(escalatedCard.background).toBe(true)
+    expect(escalatedCard.command).toBe('open -a Safari')
+
+    const foreground = sandboxProbe()
+    await createSecurityContext(SUBJECT, ENVIRONMENT, foreground.provider).enforceCommand(
+      { channel: 'bash', command: 'open -a Safari' },
+      { ...BASH_OPTS, unsandboxed: true }
+    )
+    const foregroundCard = onlyAsk(foreground)
+    expect(foregroundCard.unsandboxed).toBe(true)
+    expect(foregroundCard.background).toBeUndefined()
+
+    // 沙箱套不上时的逐条询问不带标记（宿主不传这个 opt）：卡片上没有「完全访问」
+    const plain = sandboxProbe()
+    await createSecurityContext(SUBJECT, ENVIRONMENT, plain.provider).enforceCommand(
+      { channel: 'bash', command: 'ls -la' },
+      BASH_OPTS
+    )
+    expect(onlyAsk(plain).unsandboxed).toBeUndefined()
+  })
+
+  it('PO-7 放行的决策不造询问材料：免询问开着的完全访问申请、以及 opt 与圈住的执行同时出现 —— 都不弹卡', async () => {
+    // 免询问开着：申请完全访问的命令也被 session-grants 放行，卡片（连同标记）根本不存在
+    const autoAllow = sandboxProbe({ autoAllow: true, allowList: [] })
+    await expect(
+      createSecurityContext(SUBJECT, ENVIRONMENT, autoAllow.provider).enforceCommand(
+        { channel: 'bash', command: 'open -a Safari' },
+        { ...BASH_OPTS, unsandboxed: true }
+      )
+    ).resolves.toEqual({ status: 'allowed' })
+    expect(autoAllow.requestUserInput).not.toHaveBeenCalled()
+    expect(getSessionDecisions(SID)[0].winning).toBe('session-grants#0')
+
+    // 标记只是卡片上的装饰：询问与否由客体上的 sandboxed 定，opt 不会把一次放行变成询问
+    clearSessionDecisions(SID)
+    const confined = sandboxProbe()
+    await expect(
+      createSecurityContext(SUBJECT, ENVIRONMENT, confined.provider).enforceCommand(
+        { channel: 'bash', command: 'ls -la', sandboxed: true },
+        { ...BASH_OPTS, unsandboxed: true }
+      )
+    ).resolves.toEqual({ status: 'allowed' })
+    expect(confined.requestUserInput).not.toHaveBeenCalled()
+    expect(getSessionDecisions(SID)[0].winning).toBe('default:command')
   })
 })
 
@@ -1630,7 +1804,8 @@ describe('createSecurityContext — enforceCommand 的结构属性接线', () =>
     )
 
     expect(captured).toBeDefined()
-    expect(Object.keys(captured!)).toEqual(['type', 'command', 'channel'])
+    // sandboxed 是宿主上报的标量事实（恒有值），可枚举；解析层的结构属性仍然不可枚举
+    expect(Object.keys(captured!)).toEqual(['type', 'command', 'channel', 'sandboxed'])
     const serialized = JSON.stringify(captured)
     for (const key of ['parsed', 'commands', 'writes']) {
       expect(serialized).not.toContain(key)
@@ -1866,7 +2041,7 @@ describe('createSecurityContext — enforceCommand 的结构属性接线', () =>
       expect([logged.effect, logged.winning]).toEqual(['ask', 'ask-on-command#0'])
     })
 
-    it('CT-PS2 powershell 的命令客体：只有 type / command / channel 三个可枚举键（没有 host），结构属性来自 PowerShell 扫描器', async () => {
+    it('CT-PS2 powershell 的命令客体：只有 type / command / channel / sandboxed 四个可枚举键（没有 host），结构属性来自 PowerShell 扫描器', async () => {
       const analyze = vi.fn(() => redirectToDiskFacts())
       const ensureReady = vi.fn(async () => {})
       const probe = capturingProvider(analyze, ensureReady)
@@ -1881,7 +2056,7 @@ describe('createSecurityContext — enforceCommand 的结构属性接线', () =>
       ).rejects.toThrow('block-catastrophic-commands#1')
       const object = probe.captured()
       expect(object).toBeDefined()
-      expect(Object.keys(object!)).toEqual(['type', 'command', 'channel'])
+      expect(Object.keys(object!)).toEqual(['type', 'command', 'channel', 'sandboxed'])
       expect(object!.channel).toBe('powershell')
       expect('host' in object!).toBe(false)
       expect(object!.parsed).toBe(true)
@@ -2935,7 +3110,7 @@ describe('createSecurityContext — 真实路径（provider.realPath）', () => 
     await ctx.enforceCommand(COMMAND_INPUT, { toolCallId: 'c1', toolName: 'bash' })
     // 客体还是门面造出来的那一个：枚举面只有三个标量，结构属性仍是非枚举的惰性 getter
     const commandObject = probe.seen()!
-    expect(Object.keys(commandObject)).toEqual(['type', 'command', 'channel'])
+    expect(Object.keys(commandObject)).toEqual(['type', 'command', 'channel', 'sandboxed'])
     expect('requestedPath' in commandObject).toBe(false)
     // 惰性仍在：只有 block-catastrophic-commands 读了它，且记忆化到一次
     expect(analyze).toHaveBeenCalledTimes(1)

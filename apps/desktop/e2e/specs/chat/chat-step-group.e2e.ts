@@ -26,7 +26,8 @@ import {
   seedFakeProvider,
   waitRendererReady,
   type EventRecorder,
-  type RecordedEvent
+  type RecordedEvent,
+  setSandboxEnabled
 } from '../../harness/seed'
 import { chatPane, sidebarPane, type ChatPane, type SidebarPane } from '../../harness/pages'
 
@@ -73,6 +74,8 @@ const reopen = async (title: string): Promise<void> => {
 
 beforeAll(async () => {
   app = await launchApp()
+  // 本组测的是询问卡片本身（项目内写入要问 / 策略说明）；沙箱开着时这些写入不再询问
+  await setSandboxEnabled(app.main, false)
   provider = await startFakeProvider()
   await seedFakeProvider(app.main, { baseUrl: provider.baseUrl, modelId: MODEL })
   await waitRendererReady(app.main)

@@ -287,6 +287,28 @@ export async function seedFakeProvider(
 }
 
 /**
+ * 开关命令沙箱（`sandbox.enabled`，缺省开）。
+ *
+ * macOS 上隔离实例的 bash 默认在沙箱里跑：沙箱内的命令不问，write 工具在沙箱可写范围内也不问——
+ * 而 fake HOME 在 /private/tmp 下，/private/tmp 本身就是可写根，于是整个 fake HOME 都不问了。
+ * **测询问卡片本身**的用例（写入要问、策略说明、PDF 落盘要问）要先关掉它，才测得到原本要测的东西。
+ * 生效单位是会话运行时：在发出会话第一条消息之前设。
+ */
+export async function setSandboxEnabled(main: CdpClient, enabled: boolean): Promise<void> {
+  await main.eval(
+    `window.api.settings.set({ key: 'sandbox.enabled', value: ${JSON.stringify(String(enabled))} })`
+  )
+}
+
+/** 命令沙箱在这个实例里能不能用（新 e2e 据此 skip：例如整组测试本身跑在别的沙箱里） */
+export async function sandboxAvailable(main: CdpClient): Promise<boolean> {
+  const status = await main.eval<{ available: boolean; supported: boolean }>(
+    `window.api.settings.sandboxStatus()`
+  )
+  return status.supported && status.available
+}
+
+/**
  * 自动放行安全询问 —— 扮演那个会点「允许一次」的用户。
  *
  * 隔离实例带着全套内置策略（`ask-on-command` 对每条命令问、`ask-on-sub-session` 对开

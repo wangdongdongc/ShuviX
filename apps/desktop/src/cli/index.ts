@@ -72,6 +72,7 @@ function printUsage(): void {
       '  shuvix widget list [--archived]',
       '  shuvix widget db-init <id> --sql "<DDL>" | --file <path>',
       '  shuvix widget db-query <id> --sql "<SQL>" | --file <path>',
+      '  shuvix task stop <pid>        stop a background task this conversation started',
       ''
     ].join('\n')
   )
@@ -168,10 +169,21 @@ function parseWidget(rest: string[]): ParsedCommand | null {
   }
 }
 
+function parseTask(rest: string[]): ParsedCommand | null {
+  if (rest[0] !== 'stop') return null
+  const pid = rest[1]
+  if (!pid || !/^\d+$/.test(pid)) {
+    process.stderr.write('task stop: <pid> (a number) is required\n')
+    process.exit(1)
+  }
+  return { command: 'task.stop', params: { pid: Number(pid) } }
+}
+
 function parse(argv: string[]): ParsedCommand | null {
   const group = argv[0]
   const rest = argv.slice(1)
   if (group === 'widget') return parseWidget(rest)
+  if (group === 'task') return parseTask(rest)
   return null
 }
 

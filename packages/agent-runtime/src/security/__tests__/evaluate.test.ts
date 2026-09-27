@@ -879,6 +879,13 @@ describe('evaluate — opts.realPath（inDir 按位置比较）', () => {
         botsDir: '/home/u/.shuvix/bots',
         builtinKnowledgeDir: '/opt/shuvix/knowledge',
         sessionArtifactsDir: '/home/u/.shuvix/artifacts/sess-1',
+        // 沙箱未套上时宿主给的那一组（桌面 getVars 展开 sandbox.sessionView 的 INACTIVE_VIEW）
+        sandboxActive: false,
+        sandboxWritableRoots: [],
+        sandboxWriteDenied: [],
+        sandboxProtectedPatterns: [],
+        sandboxReadDenied: [],
+        sandboxReadAllowed: [],
         systemDirs: [],
         dotfiles: '/data'
       }),

@@ -15,6 +15,7 @@ import {
   type TNumber,
   type TObject,
   type TOptional,
+  type TProperties,
   type TString
 } from 'typebox'
 import { BaseTool } from '@shuvix/agent-runtime'
@@ -23,10 +24,12 @@ import type { BashToolDetails } from '@shuvix/chat-protocol/types/chatMessage'
 import { collapseProgressOutput, type ShellKind } from '../utils/toolUtils/shell'
 import {
   getDesktopSecurityContext,
+  getSessionPathGrants,
   resolveProjectConfig,
   TOOL_ABORTED,
   type ToolContext
 } from '../services/toolContext'
+import { planFor, type SandboxPlan } from '../services/sandbox'
 import {
   runCommand,
   listBgTasks,
@@ -44,21 +47,37 @@ export interface ShellCommandParams {
   description: string
   timeout?: number
   run_in_background?: boolean
+  /** 只在本会话启用沙箱时出现在 schema 里（见 shellCommandParamsSchema 的 sandbox 参数） */
+  dangerouslyDisableSandbox?: boolean
 }
 
+/**
+ * `dangerouslyDisableSandbox` 在类型上恒为可选字段；运行时只有沙箱启用的工具实例才真的带它 ——
+ * 提示词绝不能指向 agent 没有的东西。
+ */
 export type ShellCommandParamsSchema = TObject<{
   command: TString
   description: TString
   timeout: TOptional<TNumber>
   run_in_background: TOptional<TBoolean>
+  dangerouslyDisableSandbox: TOptional<TBoolean>
 }>
+
+/**
+ * 越界参数的说明。名字刻意沿用 Claude Code 的 `dangerouslyDisableSandbox`（camelCase，与
+ * `run_in_background` 不一致）：模型对这个名字最熟，不用再学一遍。
+ */
+const DISABLE_SANDBOX_PARAM =
+  "Run this command without the sandbox, with the user's full privileges. Only for commands that cannot work confined (see the tool description) — never as a first attempt, and never just to get past a failure you have not read. The user may be asked to approve."
 
 /** 参数 schema —— 字段两个工具一致，只有 command 与 run_in_background 的说明因 shell 而异 */
 export function shellCommandParamsSchema(text: {
   command: string
   runInBackground: string
+  /** 本工具实例的命令在沙箱里跑：带上越界参数 */
+  sandboxed?: boolean
 }): ShellCommandParamsSchema {
-  return Type.Object({
+  const properties: TProperties = {
     command: Type.String({ description: text.command }),
     description: Type.String({
       description: 'Brief description of what this command does and why.'
@@ -75,7 +94,13 @@ export function shellCommandParamsSchema(text: {
         description: text.runInBackground
       })
     )
-  })
+  }
+  if (text.sandboxed) {
+    properties.dangerouslyDisableSandbox = Type.Optional(
+      Type.Boolean({ description: DISABLE_SANDBOX_PARAM })
+    )
+  }
+  return Type.Object(properties) as unknown as ShellCommandParamsSchema
 }
 
 export interface ShellCommandToolSpec {
@@ -88,6 +113,11 @@ export interface ShellCommandToolSpec {
    * 放在询问之前 —— 不该让用户批准一条注定跑不起来的命令。
    */
   reject?: (command: string) => string | null
+  /**
+   * 本工具实例的命令套沙箱（bash 构造时按会话固定，见 sandbox.pinSession）。为 true 时 schema
+   * 带 `dangerouslyDisableSandbox`、描述写明受限范围；powershell 目前恒为 false（没有后端）。
+   */
+  sandboxed?: boolean
 }
 
 export class ShellCommandTool extends BaseTool<ShellCommandParamsSchema> {
@@ -136,17 +166,37 @@ export class ShellCommandTool extends BaseTool<ShellCommandParamsSchema> {
       }
     }
 
-    // 命令逐条需用户询问 —— 唯一豁免是会话级「免询问」开关（无命令模式匹配）。
-    // 判定与响应处理收敛到安全模块（内置 ask-on-command 策略给出 ask，autoAllow 走 force-allow 层）
+    // 沙箱：本实例启用且模型没申请越界时，这条命令圈进沙箱。plan 为 null（会话的工作区不适合套、
+    // 后端探测失败……）就如实上报「未圈住」—— ask-on-command 照常询问，不会变成不套又不问
+    const escalate = this.spec.sandboxed === true && params.dangerouslyDisableSandbox === true
+    const plan =
+      this.spec.sandboxed === true && !escalate
+        ? planFor({
+            sessionId: this.ctx.sessionId,
+            workingDirectory: config.workingDirectory,
+            ...getSessionPathGrants(this.ctx.sessionId),
+            offerEscalation: true
+          })
+        : null
+
+    // 是否询问由安全模块决定：内置 ask-on-command 只问没被圈住的命令（sandboxed=false），
+    // autoAllow 走 force-allow 层
     const outcome = await getDesktopSecurityContext(this.ctx).enforceCommand(
       // cwd 供安全模块把重定向目标解析成绝对路径
-      { channel: this.spec.shell, command: params.command, cwd: config.workingDirectory },
+      {
+        channel: this.spec.shell,
+        command: params.command,
+        cwd: config.workingDirectory,
+        ...(plan ? { sandboxed: true } : {})
+      },
       {
         toolCallId,
         toolName: this.spec.shell,
         description: params.description,
         // 后台任务的询问卡片要标出来 —— 用户批准的是个不会自动结束的进程
         background: params.run_in_background === true,
+        // 申请了不受限运行：卡片标「完全访问」—— 平时沙箱里的命令不问，出现询问说明它要的更多
+        ...(escalate ? { unsandboxed: true } : {}),
         abortError: TOOL_ABORTED,
         // 用户选择"其它":不执行命令,把反馈文本作为正常 tool result 返回给 AI
         onOther: 'return',
@@ -172,7 +222,7 @@ export class ShellCommandTool extends BaseTool<ShellCommandParamsSchema> {
     const extraEnv = { ...config.envVars, SHUVIX_SESSION_ID: this.ctx.sessionId }
 
     if (params.run_in_background) {
-      return this.runInBackground(toolCallId, params, config.workingDirectory, extraEnv)
+      return this.runInBackground(toolCallId, params, config.workingDirectory, extraEnv, plan)
     }
 
     // 同步形态 —— 与后台形态**同一条 spawn 路径**，只是等待策略不同（见 bgTaskService.runCommand）。
@@ -185,6 +235,7 @@ export class ShellCommandTool extends BaseTool<ShellCommandParamsSchema> {
       description: params.description,
       cwd: config.workingDirectory,
       extraEnv,
+      sandbox: plan ?? undefined,
       background: false,
       timeoutMs: timeout > 0 ? timeout * 1000 : 0,
       signal
@@ -219,7 +270,8 @@ export class ShellCommandTool extends BaseTool<ShellCommandParamsSchema> {
     toolCallId: string,
     params: { command: string; description: string },
     cwd: string,
-    extraEnv: Record<string, string>
+    extraEnv: Record<string, string>,
+    plan: SandboxPlan | null
   ): Promise<AgentToolResult<BashToolDetails>> {
     const sessionId = this.ctx.sessionId
 
@@ -244,6 +296,7 @@ export class ShellCommandTool extends BaseTool<ShellCommandParamsSchema> {
       description: params.description,
       cwd,
       extraEnv,
+      sandbox: plan ?? undefined,
       background: true
     })
 
