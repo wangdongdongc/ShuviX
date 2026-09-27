@@ -42,11 +42,17 @@ export const electronEventSink: RuntimeEventSink = {
   hasUserInputCapability: (sessionId) => chatFrontendRegistry.hasCapability(sessionId, 'userInput')
 }
 
-/** 环境变量注入：写 process.env（pi-ai 内置 provider 凭证） */
+/**
+ * 环境变量注入：桌面端**刻意不写** process.env。
+ *
+ * 每次 LLM 请求的 key 都由 modelsAdapter 经 `getApiKey` 现取、显式传给 pi-ai（内置 provider
+ * 的行 id 就是 pi-ai slug，所以按 `model.provider` 一定取得到），env 这条路早已用不上。
+ * 而写进 process.env 的代价是真实的：buildSpawnEnv / 终端 / TTS 都展开 process.env，
+ * 于是每条 bash 命令、每个 stdio MCP server、ssh 子进程都拿到了用户所有 provider 的 key ——
+ * 沙箱放开网络之后，这就是一条现成的外泄路径。需要 key 的 MCP server 请在它自己的 env 配置里写。
+ */
 export const electronEnv: RuntimeEnv = {
-  setApiKey: (envKey, value) => {
-    process.env[envKey] = value
-  }
+  setApiKey: () => {}
 }
 
 /** 可选 HTTP 日志：委托 httpLogService */

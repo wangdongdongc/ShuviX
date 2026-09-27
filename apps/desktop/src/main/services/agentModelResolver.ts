@@ -1,6 +1,7 @@
 /**
  * 模型解析（桌面 wrapper）：从 providerDao 读取提供商信息，委托 @shuvix/agent-runtime 的
- * 宿主无关 resolveModel 构造 pi-ai Model 对象。env 注入走 electronEnv（process.env）。
+ * 宿主无关 resolveModel 构造 pi-ai Model 对象。electronEnv 刻意不写 process.env（key 由
+ * modelsAdapter 按请求现取，写 env 只会把 key 泄给所有子进程，见 agentRuntimeAdapters）。
  *
  * 保留与既有调用方一致的签名（create / setModel / generateTitle 直接调用）。
  */

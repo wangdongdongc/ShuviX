@@ -269,6 +269,9 @@ class CliServer {
 
     this.handlers.set('widget.export', async (p, sessionId) => {
       const id = String(p.id ?? '')
+      // 先校验再授权：授权是持久写进会话的，而 id 原样拼进路径 —— `../..` 这类 id 会把
+      // 任意目录的读写授权记到会话上（widgetService.build 自己的校验在授权之后才跑）
+      widgetService.validateId(id)
       const targetPath = String(p.targetPath ?? '')
       if (!id) throw new Error('id required')
       if (!targetPath) throw new Error('targetPath required')

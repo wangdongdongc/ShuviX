@@ -102,8 +102,10 @@ export async function rgSearch(input: {
   if (input.include) {
     args.push('--glob', input.include)
   }
-  // 搜索目标：默认整个 cwd（'.'），或指定的单个文件/子路径
-  args.push(input.target ?? '.')
+  // 搜索目标：默认整个 cwd（'.'），或指定的单个文件/子路径。
+  // 前面补 `--`：单文件时 target 是文件名原样，名为 `--pre=sh` 的文件否则会被 rg 读成选项
+  // （--pre 对每个被搜的文件执行一条命令）
+  args.push('--', input.target ?? '.')
 
   const lines: string[] = []
   for await (const line of spawnRgLines(args, input.cwd, input.signal)) {
