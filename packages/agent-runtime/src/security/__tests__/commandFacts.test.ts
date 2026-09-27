@@ -2,7 +2,7 @@
  * projectCommandFacts / projectPowerShellFacts —— 命令客体结构属性的投影层直测（纯函数，不起解析器）。
  *
  * 这一层是 CEL 唯一能看到的命令结构，所以它的契约要独立于任何一条策略被钉住：
- * 事实用手工字面量喂，摆脱 bash 语法细节（那部分由 shell/__tests__ 的 108 条覆盖），
+ * 事实用手工字面量喂，摆脱 bash 语法细节（那部分由 shell/__tests__ 覆盖），
  * 这里只管「解析层的事实怎么变成规则能写的属性」。
  */
 import { describe, it, expect } from 'vitest'
@@ -44,8 +44,6 @@ function facts(overrides: Partial<ShellFacts> = {}): ShellFacts {
     parsed: true,
     reason: 'ok',
     errorSpans: [],
-    wordOnly: false,
-    wordOnlyCommands: [],
     literalCommands: [],
     dynamics: [],
     redirects: [],
@@ -270,13 +268,12 @@ describe('projectCommandFacts — writes 投影', () => {
 
 describe('projectCommandFacts — 暴露面收敛', () => {
   it('CF-14 返回键恰为 parsed/commands/writes；单条命令键恰为 base/argv/wrappers/complete/depth', () => {
-    // 严格轨（wordOnly / wordOnlyCommands）是**唯一可用于放行**的字段，现阶段只落 deny，
-    // 就不暴露给 CEL：一旦漏出去，早晚有人拿它写成 allow 规则，而两轨混用正是本模块
-    // 最主要的误用风险。这条用例就是那道门。
+    // 暴露给 CEL 的每个字段都会被当成契约，而这些字段全都只配拿来拦截或询问：
+    // dynamics / span 之类的解析细节一旦漏出去，早晚有人拿它写成 allow 规则。
+    // 「先证明无害再放行」归 OS 级命令沙箱（原先预留的严格轨 wordOnly 已删除），
+    // 不归这一层。这条用例就是那道门。
     const projected = projectCommandFacts(
       facts({
-        wordOnly: true,
-        wordOnlyCommands: [['rm', '-rf', '/']],
         literalCommands: [literal({ argv: ['rm', '-rf', '/'] })],
         redirects: [redirect('write', '/w.txt')],
         dynamics: ['glob']

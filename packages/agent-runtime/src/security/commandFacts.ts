@@ -8,9 +8,11 @@
  *    ShellFacts 的 argv 用 null 占位动态词（位置必须保留 —— `find . -name $X -delete`
  *    里 `-delete` 的位置决定语义）。投影时把 null 换成空串，另给 `complete` 标志，
  *    解析层保持诚实，CEL 那边保持可求值。
- * 2. **暴露面要小**。ShellFacts 有十来个字段，其中严格轨（wordOnly*）是「唯一可用于
- *    放行」的字段 —— 现阶段只落 deny 策略，不需要它，就不暴露：过早给出一个容易误用
- *    的放行依据，不如等真要做白名单豁免时连同轨道校验一起上。
+ * 2. **暴露面要小**。ShellFacts 的字段只挑规则真用得上的投影出去（parsed / commands /
+ *    writes），span / errorSpans / dynamics 之类的解析细节不外露：暴露给 CEL 的每个字段
+ *    都会被当成契约，而这些字段全都只配拿来拦截或询问，没有一条可以写成放行依据。
+ *    （ShellFacts 原先还有一条预留为放行依据的严格轨 wordOnly，从未暴露；「先证明无害
+ *    再放行」现在由 OS 级命令沙箱承担，严格轨已删除。）
  * 3. **重定向目标要变成绝对路径**才能和 protect-system 那套目录变量（inDir）拼在一起用。
  *
  * 这里的产出全部服务于 deny/ask 判定，属于宽松轨：可能漏（动态词看不出值），
@@ -141,7 +143,7 @@ export function projectCommandFacts(
     parsed: facts.parsed,
     commands: facts.literalCommands.filter(usable).map((c) => {
       // 解包是**宽松轨**的动作：拿不准时倾向于继续往里剥，过度解包对「找危险」是
-      // 安全方向。严格轨（放行依据）绝不能这么做 —— 它现在压根没暴露给 CEL。
+      // 安全方向、对「证明安全」是致命方向 —— 所以这些属性只配写 deny / ask 规则。
       const stripped = stripWrappers(c.argv)
       const argv = stripped.argv.map((a) => a ?? '')
       return {

@@ -4,12 +4,13 @@
  * 这一层的产物是「事实」，不是「判决」：它只回答命令的**语法形状**，
  * 不回答命令做什么。判定留给上层策略。
  *
- * 双轨设计（源自 OpenAI Codex CLI 的同名分工，见 analyze.ts 文件头）：
- *   - 严格轨 wordOnly / wordOnlyCommands —— 只在命令整体落入「字面词 + 安全算子」
- *     子集时才有值，**唯一可用于证明安全（放行）的字段**。
- *   - 宽松轨 literalCommands —— 接受任意复杂语法，尽力抽出字面命令，
- *     **只能用于发现危险（拦截/询问），不能用于放行**。
- * 两轨混用是本模块最主要的误用风险，字段命名与注释都按这条红线组织。
+ * 只有一条轨 —— 宽松轨（literalCommands / dynamics / redirects，见 analyze.ts 文件头）：
+ * 接受任意复杂语法，尽力抽出字面命令，**只能用于发现危险（拦截/询问），不能用于放行**。
+ * 它会漏，而「没看见危险」不等于「无害」—— 把这些字段当成放行依据是本模块最主要的误用风险。
+ *
+ * 曾经还有一条严格轨（wordOnly / wordOnlyCommands：只在命令整体落入「字面词 + 安全算子」
+ * 子集时才有值，预留为唯一可证明安全的字段），但从没有策略或产品代码消费过它；
+ * 「先证明无害再放行」交给了 OS 级命令沙箱，严格轨随之删除。
  */
 
 /**
@@ -94,8 +95,8 @@ export interface ShellFacts {
   /** 原始命令串 */
   source: string
   /**
-   * 解析器就绪且语法无误。**为 false 时，下面所有结构化字段都不可用于放行判定** ——
-   * 它们此时可能是空的（什么都没抽到），空集在「全称判断」下恒真，会静默放行。
+   * 解析器就绪且语法无误。**为 false 时，下面的结构化字段可能是空的**（什么都没抽到）——
+   * 空集在「全称判断」下恒真，任何「所有命令都……」式的判断都必须先看它。
    */
   parsed: boolean
   /** parsed 为 false 的原因；parsed 为 true 时恒为 'ok' */
@@ -103,28 +104,18 @@ export interface ShellFacts {
   /** ERROR / MISSING 节点区间。可用于 span 级判断：错误是否落在关心的那段上 */
   errorSpans: ShellSpan[]
 
-  // ── 严格轨（可用于放行） ─────────────────────────────────
-  /** 整条命令是否只由字面词命令 + `&&` `||` `;` `|` 组成 */
-  wordOnly: boolean
+  // ── 宽松轨（只可用于拦截/询问） ───────────────────────────
   /**
-   * 严格轨的 argv 序列；wordOnly 为 false 时为空数组。
+   * 树中每个命令节点的字面 argv，含递归展开的嵌套 shell 载荷。
    *
-   * ⚠️ 本字段承诺的是「argv 完整且字面」，**不是**「argv[0] 就是真正要跑的程序」。
-   * `time rm x` 会原样给出 `['time','rm','x']` —— 完全符合承诺（`rm` 就在 argv 里），
-   * 但按 argv[0] 去查允许列表查到的是 `time`。所以消费方在按 argv[0] 匹配之前
-   * **必须先过 `stripWrappers`**。
+   * ⚠️ argv[0] **不一定**是真正要跑的程序。`time rm x` 会原样给出一条
+   * `['time','rm','x']`（tree-sitter 的压平点），按 argv[0] 去查表查到的是 `time`。
+   * 所以消费方在按程序名匹配之前**必须先过 `stripWrappers`**（commandFacts 投影层已做）。
    *
    * 这不是本层的缺陷而是分层：解析层只负责「这条命令的字面形状是什么」，
    * 「谁是真正的程序」是 wrappers.ts 的职责，两层合起来才覆盖全部执行路径
    * （`__tests__/bashOracle.test.ts` 的不变式正是按这个并集写的，任一层退化即红）。
-   * 同一取舍见 Claude Code：它在匹配权限规则前剥离
-   * timeout/time/nice/nohup/stdbuf/command/builtin/noglob，
-   * 而对 watch/setsid/flock 这类不剥离的，则一律走询问、永不自动放行。
    */
-  wordOnlyCommands: string[][]
-
-  // ── 宽松轨（只可用于拦截/询问） ───────────────────────────
-  /** 树中每个命令节点的字面 argv，含递归展开的嵌套 shell 载荷 */
   literalCommands: LiteralCommand[]
   /** 出现过的动态构造（去重、按首次出现排序） */
   dynamics: ShellDynamicKind[]

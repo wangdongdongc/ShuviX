@@ -1,20 +1,20 @@
 /**
- * 命令事实抽取 —— 一次解析同时产出严格轨与宽松轨。
+ * 命令事实抽取 —— 一次解析产出宽松轨的结构事实。
  *
- * 双轨的分工直接照搬 OpenAI Codex CLI 的做法（codex-rs/shell-command/src/bash.rs），
+ * 定位照搬 OpenAI Codex CLI 的做法（codex-rs/shell-command/src/bash.rs），
  * 那里把红线写进了函数注释：宽松轨 "is suitable for identifying dangerous literal
  * commands, but **must not be used to prove that a command is safe**"。
  *
- *   严格轨 wordOnly —— 节点种类白名单，凡是名单外的命名节点或算子一律判否。
- *     它回答的是「这条命令能不能被证明只是若干字面命令的安全组合」。
- *     tree-sitter 已知的两个静默压平点（`time cmd` 被拍成普通命令、嵌套反引号只识别
- *     一层）都落在白名单外或被 glob/动态词判据挡掉，因此不影响本轨的可靠性。
- *
  *   宽松轨 literalCommands —— 接受任意语法，尽力抽字面命令，并对 `sh -c` / `eval`
  *     载荷递归再解析（深度上限 8，与 Codex、OpenHands 独立收敛到的常数一致）。
- *     它会漏（上面那两个压平点就漏），所以只配用来触发拦截或询问。
+ *     它会漏（tree-sitter 已知的两个静默压平点：`time cmd` 被拍成普通命令、嵌套反引号
+ *     只识别一层），所以只配用来触发拦截或询问。
  *
- * parsed=false 时两轨都不可信：**空集在全称判断下恒真**，
+ * Codex 另有一条严格轨（节点种类白名单，只认字面词 + `&&` `||` `;` `|`），用来证明一条命令
+ * 只是若干字面命令的安全组合、据此放行。这里也曾照搬（wordOnly），但没有任何策略消费过它；
+ * 「先证明无害再放行」改由 OS 级命令沙箱承担，严格轨已删除 —— 本层不产出任何放行依据。
+ *
+ * parsed=false 时事实不完整：**空集在全称判断下恒真**，
  * `literalCommands.every(危险?)` 对空数组返回 true 会静默放行，这是本模块最容易写错的地方。
  */
 import { isShellParserReady, withTree, MAX_SHELL_SOURCE_LENGTH } from './parser'
@@ -33,28 +33,6 @@ import type { Node } from 'web-tree-sitter'
 
 /** 嵌套 shell 载荷的递归上限 */
 export const MAX_NESTED_SHELL_DEPTH = 8
-
-/** 严格轨允许出现的命名节点 —— 名单外一律判否 */
-const WORD_ONLY_NAMED_KINDS: ReadonlySet<string> = new Set([
-  'program',
-  'list',
-  'pipeline',
-  'command',
-  'command_name',
-  'word',
-  'string',
-  'string_content',
-  'raw_string',
-  'number',
-  'concatenation'
-])
-
-/**
- * 严格轨允许出现的匿名 token。
- * `ansi_c_string`（`$'...'`）刻意**不在**白名单里：它的值我们能正确解码，
- * 但它是 GuardFall 里的绕过载体，多问一次的成本远低于放行一条解码错的命令。
- */
-const WORD_ONLY_TOKENS: ReadonlySet<string> = new Set(['&&', '||', ';', '|', '"', "'"])
 
 const REDIRECT_KINDS: ReadonlySet<string> = new Set([
   'file_redirect',
@@ -115,8 +93,6 @@ function unparsed(
     parsed: false,
     reason,
     errorSpans,
-    wordOnly: false,
-    wordOnlyCommands: [],
     literalCommands: [],
     dynamics: [],
     redirects: [],
@@ -182,56 +158,10 @@ function literalArgv(node: Node): { argv: (string | null)[]; glob: boolean; brac
   return { argv, glob, brace }
 }
 
-/**
- * 严格轨：整棵树是否只由字面词命令与 `&&` `||` `;` `|` 组成。
- * 返回 null 表示不满足；满足时返回各命令的 argv 序列（按源码顺序）。
- */
-function collectWordOnly(root: Node): string[][] | null {
-  const commands: { argv: string[]; start: number }[] = []
-  let ok = true
-
-  walk(root, (n) => {
-    if (!ok) return false
-    if (n.isError || n.isMissing) {
-      ok = false
-      return false
-    }
-    if (n.isNamed) {
-      if (!WORD_ONLY_NAMED_KINDS.has(n.type)) {
-        ok = false
-        return false
-      }
-      if (n.type === 'command') {
-        const { argv, glob, brace } = literalArgv(n)
-        // 任一词动态、含 glob 或含大括号展开 → 不属于可证明子集。
-        // brace 与 glob 同等对待：`cp x {a,/etc/passwd}` 的字面 argv 完全看不出第二个目标，
-        // 而 tree-sitter 把逗号型大括号当普通 word，光看节点种类发现不了。
-        if (glob || brace || argv.some((a) => a === null)) {
-          ok = false
-          return false
-        }
-        commands.push({ argv: argv as string[], start: n.startIndex })
-      }
-      return true
-    }
-    // 匿名 token：只放行安全算子与引号
-    if (n.type.trim() === '') return true
-    if (!WORD_ONLY_TOKENS.has(n.type)) {
-      ok = false
-      return false
-    }
-    return true
-  })
-
-  if (!ok || commands.length === 0) return null
-  return commands.sort((a, b) => a.start - b.start).map((c) => c.argv)
-}
-
 /** 单层（不含递归）的树扫描结果 */
 interface ScanResult {
   errorSpans: ShellSpan[]
   hasError: boolean
-  wordOnlyCommands: string[][] | null
   commands: { argv: (string | null)[]; span: ShellSpan }[]
   dynamics: ShellDynamicKind[]
   redirects: ShellRedirect[]
@@ -282,7 +212,6 @@ function scan(root: Node): ScanResult {
   return {
     errorSpans,
     hasError: root.hasError,
-    wordOnlyCommands: root.hasError ? null : collectWordOnly(root),
     commands,
     dynamics,
     redirects
@@ -361,8 +290,6 @@ function analyzeAtDepth(source: string, depth: number): ShellFacts {
     parsed: true,
     reason: 'ok',
     errorSpans: scanned.errorSpans,
-    wordOnly: scanned.wordOnlyCommands !== null,
-    wordOnlyCommands: scanned.wordOnlyCommands ?? [],
     literalCommands,
     dynamics,
     redirects: scanned.redirects,

@@ -1,10 +1,11 @@
 /**
  * 宽松轨 —— `literalCommands` / `dynamics` / `redirects` 只能用于**发现危险**（拦截/询问），
  * 绝不能用于放行。它接受任意复杂语法、尽力抽字面命令，因此会漏（见 L7 / L28）；
- * 漏的那部分由严格轨兜底：宽松轨没抽到的形状，严格轨一定判否。
+ * 漏的那部分不在这一层兜底：拦截规则没命中的命令落回询问，「先证明无害再放行」
+ * 归 OS 级命令沙箱（原先预留的严格轨 wordOnly 已删除）。
  */
 import { describe, it, expect, beforeAll } from 'vitest'
-import { analyzeShellCommand, initShellParser } from '../index'
+import { analyzeShellCommand, initShellParser, stripWrappers } from '../index'
 import type { LiteralCommand } from '../index'
 import { loadShellParserWasmFromNodeModules } from '../nodeWasm'
 
@@ -76,21 +77,19 @@ describe('宽松轨 — 字面命令抽取', () => {
     expect(bases('r\\m -rf /')).toContain('rm')
   })
 
-  it('L6 ANSI-C 串还原成 rm，同时严格轨判否', () => {
+  it('L6 ANSI-C 串还原成 rm', () => {
     const facts = analyzeShellCommand("$'\\x72\\x6d' -rf /")
     expect(facts.literalCommands.map((c) => c.base)).toContain('rm')
-    expect(facts.wordOnly).toBe(false)
   })
 
-  it('L7 GuardFall B `rm$IFS-rf$IFS/`：宽松轨漏、严格轨兜（设计答复，不是缺陷）', () => {
+  it('L7 GuardFall B `rm$IFS-rf$IFS/`：宽松轨漏、落回询问（设计答复，不是缺陷）', () => {
     const facts = analyzeShellCommand('rm$IFS-rf$IFS/')
     // 命令名整体含展开 → 不可静态确定，抽不到 rm 是**正确**行为：
     // 猜出一个 rm 与猜出别的东西一样没有依据
     expect(facts.literalCommands[0].base).not.toBe('rm')
     expect(facts.literalCommands[0].argv).toEqual([null, 'IFS/'])
     expect(facts.literalCommands[0].complete).toBe(false)
-    // 兜底在这里：有展开 → 严格轨判否 → 上层不会放行
-    expect(facts.wordOnly).toBe(false)
+    // 看不见 ≠ 看错：命令名是动态占位、另有展开标记，拦截规则不命中，命令落回询问
     expect(facts.dynamics).toContain('parameter-expansion')
   })
 
@@ -119,19 +118,15 @@ describe('宽松轨 — 字面命令抽取', () => {
   })
 
   it('L10 `sh -c --` 的载荷照样递归', () => {
-    const facts = analyzeShellCommand('sh -c -- "rm -rf /"')
     expect(atDepth('sh -c -- "rm -rf /"', 1)).toMatchObject([
       { base: 'rm', argv: ['rm', '-rf', '/'] }
     ])
-    // 顶层本身只是三个字面词，严格轨照样放行 —— 危险由宽松轨的 depth1 报出来
-    expect(facts.wordOnly).toBe(true)
   })
 
   it('L11 `sh -- -c "id"`：`--` 之后的 -c 是脚本文件名，不得递归', () => {
     const facts = analyzeShellCommand('sh -- -c "id"')
     expect(atDepth('sh -- -c "id"', 1)).toEqual([])
     expect(facts.dynamics).not.toContain('nested-shell')
-    expect(facts.wordOnly).toBe(true)
   })
 
   it('L12 multicall 二进制的 applet 载荷照样递归', () => {
@@ -174,14 +169,11 @@ describe('宽松轨 — 字面命令抽取', () => {
         src
       ).toEqual([])
     }
-    // nested-shell 只是宽松轨的标记，不影响严格轨：`sh -c` 本身就是两个字面词
-    expect(analyzeShellCommand('sh -c').wordOnly).toBe(true)
   })
 
   it('L17 载荷自身语法错：标记出来，别假装看懂了', () => {
     const facts = analyzeShellCommand('bash -c "if true"')
     expect(facts.parsed).toBe(true)
-    expect(facts.wordOnly).toBe(true)
     expect(facts.dynamics).toContain('nested-shell')
     // 内层抽到的任何东西都不并入 —— 半棵错误树里的「命令」不足为凭
     expect(facts.literalCommands.map((c) => [c.base, c.depth])).toEqual([['bash', 0]])
@@ -308,5 +300,28 @@ describe('宽松轨 — 字面命令抽取', () => {
     }
     // 因此 ShellDynamicKind 的 'extglob' 在当前语法下不可达，保留类型即可
     expect(analyzeShellCommand('ls @(a|b)').dynamics).not.toContain('extglob')
+  })
+
+  it('L30 字面 ≠ 安全：顶层全是字面词的 `bash -c` / `busybox sh -c`，载荷里的 rm 在 depth 1 被看见', () => {
+    // 判「这些名字危不危险」是上层策略的活；这一层只保证载荷里的命令没被漏掉
+    for (const src of ['bash -c "rm -rf /"', 'busybox sh -c "rm -rf /"']) {
+      expect(
+        atDepth(src, 1).map((c) => c.base),
+        src
+      ).toContain('rm')
+    }
+  })
+
+  it('L31 快照：`time cmd` 被 tree-sitter 拍平成一条命令，由 wrapper 层弥补', () => {
+    // 拿到的是一条 argv[0]=time 的命令而不是两条 —— 这是 tree-sitter 的已知压平点
+    expect(analyzeShellCommand('time curl x').literalCommands.map((c) => c.argv)).toEqual([
+      ['time', 'curl', 'x']
+    ])
+    // 需要知道真正执行的是谁时，由上层调 stripWrappers 补上（commandFacts 投影层就是这么做的）
+    expect(stripWrappers(['time', 'curl', 'x']).argv).toEqual(['curl', 'x'])
+  })
+
+  it('L32 `&&` 是独立 token，不得被当成后台执行的 `&`', () => {
+    expect(analyzeShellCommand('a && b').dynamics).not.toContain('background')
   })
 })

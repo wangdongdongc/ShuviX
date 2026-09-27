@@ -61,8 +61,6 @@ function bashFacts(source: string): ShellFacts {
     parsed: true,
     reason: 'ok',
     errorSpans: [],
-    wordOnly: false,
-    wordOnlyCommands: [],
     literalCommands: [],
     dynamics: [],
     redirects: [],

@@ -1471,8 +1471,6 @@ describe('createSecurityContext — enforceCommand 的结构属性接线', () =>
     parsed: true,
     reason: 'ok',
     errorSpans: [],
-    wordOnly: true,
-    wordOnlyCommands: [['rm', '-rf', '/']],
     literalCommands: [
       { name: 'rm', base: 'rm', argv: ['rm', '-rf', '/'], complete: true, span: SPAN, depth: 0 }
     ],
@@ -1487,8 +1485,6 @@ describe('createSecurityContext — enforceCommand 的结构属性接线', () =>
     parsed: false,
     reason: 'not-initialized',
     errorSpans: [],
-    wordOnly: false,
-    wordOnlyCommands: [],
     literalCommands: [],
     dynamics: [],
     redirects: [],
@@ -1778,8 +1774,6 @@ describe('createSecurityContext — enforceCommand 的结构属性接线', () =>
       parsed: true,
       reason: 'ok',
       errorSpans: [],
-      wordOnly: true,
-      wordOnlyCommands: [['format', 'C:']],
       literalCommands: [
         {
           name: 'format',
@@ -1801,8 +1795,6 @@ describe('createSecurityContext — enforceCommand 的结构属性接线', () =>
       parsed: true,
       reason: 'ok',
       errorSpans: [],
-      wordOnly: false,
-      wordOnlyCommands: [],
       literalCommands: [
         { name: 'echo', base: 'echo', argv: ['echo', 'x'], complete: true, span: SPAN, depth: 0 }
       ],
@@ -2792,8 +2784,6 @@ const UNPARSED_FACTS = (source: string): ShellFacts => ({
   parsed: false,
   reason: 'not-initialized',
   errorSpans: [],
-  wordOnly: false,
-  wordOnlyCommands: [],
   literalCommands: [],
   dynamics: [],
   redirects: [],

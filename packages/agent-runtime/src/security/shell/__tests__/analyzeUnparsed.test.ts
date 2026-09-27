@@ -21,8 +21,6 @@ function factsWith(errorSpans: ShellSpan[]): ShellFacts {
     parsed: false,
     reason: 'syntax-error',
     errorSpans,
-    wordOnly: false,
-    wordOnlyCommands: [],
     literalCommands: [],
     dynamics: [],
     redirects: [],
@@ -39,8 +37,6 @@ describe('未解析态', () => {
       parsed: false,
       reason: 'too-long',
       errorSpans: [],
-      wordOnly: false,
-      wordOnlyCommands: [],
       literalCommands: [],
       dynamics: [],
       redirects: [],
@@ -66,14 +62,14 @@ describe('未解析态', () => {
     // 下面这句「所有命令都叫 definitely-not-this」显然荒谬，却返回 true ——
     // 任何形如 literalCommands.every(...) 的放行判据都必须先 guard 住 parsed
     expect(facts.literalCommands.every((c) => c.base === 'definitely-not-this')).toBe(true)
-    expect(facts.wordOnly).toBe(false)
+    expect(facts.parsed).toBe(false)
   })
 
   it('U5 各类语法错都判否；MISSING 是零宽区间', () => {
     for (const src of ['ls |', 'if true', 'echo )(', 'ls;;;']) {
       const facts = analyzeShellCommand(src)
+      expect(facts.parsed, src).toBe(false)
       expect(facts.reason, src).toBe('syntax-error')
-      expect(facts.wordOnly, src).toBe(false)
     }
     const missing = analyzeShellCommand('ls |')
     expect(missing.errorSpans).toEqual([{ start: 4, end: 4 }])

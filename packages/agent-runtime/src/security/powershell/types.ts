@@ -1,9 +1,9 @@
 /**
  * PowerShell 命令解析层 —— 纯数据类型。
  *
- * 与 bash 那一层（`../shell/`）同一条红线，而且更窄：这里**只有宽松轨**。
- * 产出只能用来发现危险（拦截 / 询问），**不能用来证明安全**：没有严格轨，
- * 也就没有任何字段可以拿来放行。理由见 analyze.ts 文件头。
+ * 与 bash 那一层（`../shell/`）同一条红线：这里**只有宽松轨**。
+ * 产出只能用来发现危险（拦截 / 询问），**不能用来证明安全**，
+ * 没有任何字段可以拿来放行。理由见 analyze.ts 文件头。
  */
 import type { ShellFacts, ShellRedirectKind, ShellSpan } from '../shell/types'
 

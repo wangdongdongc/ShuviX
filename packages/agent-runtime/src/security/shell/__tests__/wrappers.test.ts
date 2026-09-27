@@ -2,7 +2,7 @@
  * wrapper 解包与嵌套 shell 载荷提取 —— 纯数组进出，不需要解析器。
  *
  * 两个函数的方向不同，测试也按两种口味写：
- *   stripWrappers   服务「发现危险」，拿不准时倾向继续剥；严格轨绝不调用它。
+ *   stripWrappers   服务「发现危险」，拿不准时倾向继续剥；它的产出绝不能拿来放行。
  *   extractShellPayload 服务递归解析，返回 null（没有载荷）与 { payload: null }
  *     （有载荷位但取不到值）语义完全不同 —— 后者必须让上层 fail-safe，
  *     所以本文件一律用 toEqual 区分二者，不用 toBeFalsy 之类含糊断言。

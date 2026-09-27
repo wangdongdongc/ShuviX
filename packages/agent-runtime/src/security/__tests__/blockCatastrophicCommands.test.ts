@@ -875,7 +875,7 @@ fi`,
       'while (( i < 3 )); do rm -rf /; done',
       'if ! rm -rf /; then echo no; fi',
       '! rm -rf /',
-      // tree-sitter 把 `time cmd` 压平成一条普通命令（严格轨的已知压平点之一）。
+      // tree-sitter 把 `time cmd` 压平成一条普通命令（解析层的已知压平点之一）。
       // 在宽松轨这里恰好无害：压平后 argv 是 `time rm -rf /`，投影层的 wrapper 解包
       // 再把 time 剥掉，判定与裸命令完全一致 —— 压平点落在这条门上不构成漏洞。
       'time rm -rf /'

@@ -34,8 +34,6 @@ describe('解析器生命周期', () => {
       parsed: false,
       reason: 'not-initialized',
       errorSpans: [],
-      wordOnly: false,
-      wordOnlyCommands: [],
       literalCommands: [],
       dynamics: [],
       redirects: [],
@@ -61,13 +59,15 @@ describe('解析器生命周期', () => {
     expect(isShellParserReady()).toBe(false)
     await initShellParser(loadShellParserWasmFromNodeModules())
     expect(isShellParserReady()).toBe(true)
-    expect(analyzeShellCommand('ls').wordOnly).toBe(true)
+    expect(analyzeShellCommand('ls').literalCommands.map((c) => c.base)).toEqual(['ls'])
   })
 
   it('P1-4 已就绪后再喂坏字节：短路返回，不 reject 也不破坏现有解析器', async () => {
     await ensureReady()
     await expect(initShellParser(GARBAGE)).resolves.toBeUndefined()
-    expect(analyzeShellCommand('ls -la').wordOnlyCommands).toEqual([['ls', '-la']])
+    expect(analyzeShellCommand('ls -la').literalCommands.map((c) => c.argv)).toEqual([
+      ['ls', '-la']
+    ])
   })
 
   it('P1-5 上限常量（U1/U2/L18 的锚点）', () => {

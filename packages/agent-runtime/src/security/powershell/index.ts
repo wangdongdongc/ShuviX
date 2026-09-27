@@ -6,7 +6,8 @@
  *   analyze.ts   扫描器与嵌套载荷展开（`powershell -Command` / `-EncodedCommand` /
  *                `cmd /c` / `Invoke-Expression` / `bash -c`）
  *
- * 红线：产出只能用于拦截或询问，不能用于放行 —— 没有严格轨。理由见 analyze.ts 文件头。
+ * 红线：产出只能用于拦截或询问，不能用于放行 —— 没有任何字段可以拿来证明一条命令安全。
+ * 理由见 analyze.ts 文件头。
  */
 export type {
   PowerShellAnalyzeOptions,
