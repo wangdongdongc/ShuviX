@@ -177,7 +177,8 @@ const openInUi = async (title: string): Promise<void> => {
 
 beforeAll(async () => {
   app = await launchApp()
-  // 本组测的是询问卡片本身（项目内写入要问 / 策略说明）；沙箱开着时这些写入不再询问
+  // 沙箱开着时 fake HOME 所在的 /private/tmp 整片是可写根：写入的免询问范围随之变大，询问与
+  // 免询问的边界就不是本组各用例写下的那条（工作区里免询问、工作区外要问）
   await setSandboxEnabled(app.main, false)
   provider = await startFakeProvider()
   await seedFakeProvider(app.main, { baseUrl: provider.baseUrl, modelId: MODEL })
@@ -780,14 +781,20 @@ describe('实例归谁（BRL：A 在项目里，B 不在任何项目里，两条
     ]
     for (const c of cases) {
       provider.reset()
-      const since = await driver.start(c.sid, [
+      const { ends, since } = await driver.run(c.sid, [
         { id: c.id, tool: 'pdf', args: { tabId: counterTab, outputPath: c.out } }
       ])
-      // 出厂的 ask-on-write 对每一次写都问 —— 包括工作区里的
-      const ask = await driver.waitAsk(c.sid, since)
-      expect(ask.command, c.id).toBe(`Write(${c.abs})`)
-      await driver.answer(c.sid, ask.id, true)
-      const { ends } = await driver.finish(c.sid, since)
+      // 出厂的 ask-on-write 对各自的工作目录免询问（项目、临时工作区都是）—— 所以没有卡片；
+      // 写入门照样过了，门看到的就是按这条会话的工作目录解析出来的绝对路径
+      expect(await driver.eventsSince(since, 'input_request', c.sid), c.id).toEqual([])
+      const decision = securityDecisions(app).find((d) => d.toolCallId === c.id)
+      expect(decision, c.id).toMatchObject({
+        sessionId: c.sid,
+        objectKind: 'path',
+        action: 'write',
+        effect: 'allow',
+        objectSummary: c.abs
+      })
       expect(ends[c.id].isError, c.id).toBe(false)
       expect(ends[c.id].result, c.id).toContain(c.abs)
       expect(readFileSync(c.abs).subarray(0, 5).toString(), c.id).toBe('%PDF-')

@@ -71,11 +71,18 @@ let app: E2EApp
 let provider: FakeProvider
 let events: EventRecorder
 let projDir = ''
+/**
+ * 工作目录**之外**的写入落点。ask-on-write 对工作目录免询问（受保护位置除外，沙箱开关都一样），
+ * 所以「撞内置 ask-on-write、卡片带它的提示语」的探针要写到工作区外 —— 那里一直问，与沙箱、
+ * 与受保护位置的清单都无关
+ */
+let outsideDir = ''
 let projectId = ''
 
 beforeAll(async () => {
   app = await launchApp()
-  // 本组测的是询问卡片本身（项目内写入要问 / 策略说明）；沙箱开着时这些写入不再询问
+  // 本组测的是询问卡片本身（工作区外的写入要问 / 策略说明）；沙箱开着时 fake HOME 所在的
+  // /private/tmp 整片是可写根，这些写入不再询问
   await setSandboxEnabled(app.main, false)
   provider = await startFakeProvider()
   await seedFakeProvider(app.main, { baseUrl: provider.baseUrl, modelId: MODEL })
@@ -84,6 +91,8 @@ beforeAll(async () => {
   projDir = join(app.home, 'proj-policy-prompt')
   mkdirSync(projDir, { recursive: true })
   projectId = (await createProject(app.main, { name: 'PolicyPromptProj', path: projDir })).id
+  outsideDir = join(app.home, 'outside-policy-prompt')
+  mkdirSync(outsideDir, { recursive: true })
 
   events = eventRecorder(app.main)
   await events.install()
@@ -187,7 +196,7 @@ describe('policy prompt —— 询问链路（内置 ask-on-write）', () => {
 
     const sid = await newSession('P1-ask')
     await events.clear()
-    scriptWrite('call_p1', join(projDir, 'p1.txt'))
+    scriptWrite('call_p1', join(outsideDir, 'p1.txt'))
     await sendPrompt(sid, 'write a file')
 
     const event = await events.waitFor<AskRequestEvent>('input_request', { sessionId: sid })
@@ -208,7 +217,7 @@ describe('policy prompt —— 询问链路（内置 ask-on-write）', () => {
     const firstSentence = promptText.split(/[.。]/)[0]
     expect(firstSentence.length).toBeGreaterThan(5)
 
-    const target = join(projDir, 'p2.txt')
+    const target = join(outsideDir, 'p2.txt')
     const sid = await newSession('P2-denied')
     await events.clear()
     scriptWrite('call_p2', target)
@@ -317,7 +326,7 @@ describe('policy prompt —— 删光 prompt 的覆盖副本', () => {
     expect(await deletePolicy('ask-on-write')).toMatchObject({ success: true })
     const restoredSid = await newSession('P4-restored')
     await events.clear()
-    scriptWrite('call_p4c', join(projDir, 'p4c.txt'))
+    scriptWrite('call_p4c', join(outsideDir, 'p4c.txt'))
     await sendPrompt(restoredSid, 'write a file')
 
     const restored = await events.waitFor<AskRequestEvent>('input_request', {

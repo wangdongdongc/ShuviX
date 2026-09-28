@@ -17,6 +17,15 @@
  * = getSessionArtifactsDir(ctx.sessionId)，这里是 <ROOT>/artifacts/<id>）免询问。豁免同样按真实去处判：
  * 目录里的链接按它指向哪儿过门（凭据照拒、区外照问），`..` 与链接走出这个目录就不再豁免；
  * artifact store 真正写出来的文件只对自己的会话免询问，也不留下任何授权。
+ *
+ * 工作区写入视图（ask-on-write 的 vars.workspace*，sandbox.workspaceWriteView 给、与沙箱开没开无关）：
+ * sandbox 模块用真实实现 + workspaceWriteView 的透传 spy（照 askPolicy.test.ts），electron 的 app.getPath
+ * 有替身（<ROOT>/userData）。**旧用例在 beforeEach 里显式拿到空视图** —— 它们钉的是询问链本身，「区内写
+ * 要问」只在空视图下成立；过去这一点靠的是没 mock electron 时 app.getPath 抛错被吞掉。RPP-W1 与 RPP-4 /
+ * RPP-5 的后半段换回真实实现：视图算得出来（[真实工作区]），豁免同样按真实去处判。
+ *
+ * RPP-C1：protect-shuvix-config（force-ask）守 vars.shuvixConfigDirs，同样按真实去处判 —— 工作区里指向
+ * <~/.shuvix>/agents 的链接照问（这里 agents 目录是 <ROOT>/agents）。
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -42,6 +51,8 @@ const state = vi.hoisted(() => ({
   root: '',
   /** os.homedir() 给出的家目录（用例可换成 .ssh 本身是链接的那一个） */
   home: '',
+  /** app.getPath('userData') 的替身（工作区写入视图的规格要它；盘上不存在也行） */
+  userData: '/nonexistent-shuvix-rpp-userdata',
   settings: undefined as { autoAllow?: boolean; allowList?: string[] } | undefined,
   /** sessionService.addAllowListPaths 收到的实参 */
   granted: [] as Array<{ sessionId: string; mode: string; paths: string[] }>,
@@ -50,6 +61,12 @@ const state = vi.hoisted(() => ({
   builtinDir: `${__dirname}/../../../../../../packages/agent-runtime/src/security/builtinPolicies/md`
 }))
 
+vi.mock('electron', () => ({ app: { getPath: () => state.userData, isPackaged: false } }))
+// 真实模块 + workspaceWriteView 换成透传 spy：旧用例按用例给空视图，RPP-W1 等回到真实实现
+vi.mock('../sandbox', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../sandbox')>()
+  return { ...actual, workspaceWriteView: vi.fn(actual.workspaceWriteView) }
+})
 vi.mock('os', async (importOriginal) => {
   const actual = await importOriginal<typeof import('os')>()
   return { ...actual, default: actual, homedir: () => state.home || actual.homedir() }
@@ -101,9 +118,11 @@ vi.mock('../../logger', () => ({
 import {
   getDesktopSecurityContext,
   isPathWithinWorkspace,
+  makeDesktopSecurityProvider,
   type ProjectConfig
 } from '../toolContext'
 import { writeArtifact } from '../artifacts/store'
+import { workspaceWriteView } from '../sandbox'
 import type { SecurityContext, SecurityDecision } from '@shuvix/agent-runtime'
 
 /** 抓住一次拒绝的原话 */
@@ -120,6 +139,18 @@ const verdict = (d: SecurityDecision): { effect: string; winning: string } => ({
   effect: d.effect,
   winning: d.winning
 })
+
+const workspaceWriteViewSpy = vi.mocked(workspaceWriteView)
+/** 空的工作区写入视图（Windows、工作区不适合、规格算不出来时 workspaceWriteView 给的就是它） */
+const emptyWorkspaceView = (): ReturnType<typeof workspaceWriteView> => ({
+  workspaceWritable: [],
+  workspaceWriteDenied: [],
+  workspaceProtectedPatterns: []
+})
+/** 回到真实的 workspaceWriteView（vi.fn(impl) 的 mockReset = 透传原实现） */
+const restoreComputedWorkspaceView = (): void => {
+  workspaceWriteViewSpy.mockReset()
+}
 
 describe.skipIf(process.platform === 'win32')('路径策略按真实去处判（桌面端到端）', () => {
   /** 写法（mkdtemp 原样）与真实去处 */
@@ -152,6 +183,9 @@ describe.skipIf(process.platform === 'win32')('路径策略按真实去处判（
     )
   const evaluatePath = (mode: 'read' | 'write', path: string, sessionId = 's1'): SecurityDecision =>
     context(sessionId).evaluate(mode, { type: 'path', path })
+  /** 这一刻的桌面变量表（前提断言用：工作区写入视图是哪一组） */
+  const varsNow = (sessionId = 's1'): Record<string, unknown> =>
+    makeDesktopSecurityProvider({ sessionId }, () => config).getVars() as Record<string, unknown>
 
   /**
    * 目录树（ROOT 下）：
@@ -169,6 +203,9 @@ describe.skipIf(process.platform === 'win32')('路径策略按真实去处判（
    *   artifacts/s1/rc → home/.bashrc          artifacts/s1/key → home/.ssh/id_rsa
    *   artifacts/s1/sshlink → home/.ssh        artifacts/s1/dangling → home/.ssh/authorized_keys（悬空）
    *   artifacts/s1/up → artifacts
+   *   agents/x.md（ShuviX 自己的配置 —— getDefaultAgentsDir 的 mock）；ws/agentlink → agents/x.md
+   *   ws/.vscode/settings.json；outside/nlink → ws/notes.txt；outside/vslink → ws/.vscode/settings.json
+   *   userData（app.getPath 的替身，不建出来）
    */
   beforeAll(() => {
     ROOT = mkdtempSync(join(tmpdir(), 'shuvix-rpp-'))
@@ -209,6 +246,15 @@ describe.skipIf(process.platform === 'win32')('路径策略按真实去处判（
     symlinkSync(join(HOME, '.ssh', 'authorized_keys'), join(ART, 's1', 'dangling'))
     symlinkSync(ART, join(ART, 's1', 'up'))
 
+    mkdirSync(join(ROOT, 'agents'))
+    writeFileSync(join(ROOT, 'agents', 'x.md'), '---\nname: x\n---\n')
+    symlinkSync(join(ROOT, 'agents', 'x.md'), join(WS, 'agentlink'))
+    mkdirSync(join(WS, '.vscode'))
+    writeFileSync(join(WS, '.vscode', 'settings.json'), '{}')
+    symlinkSync(join(WS, 'notes.txt'), join(ROOT, 'outside', 'nlink'))
+    symlinkSync(join(WS, '.vscode', 'settings.json'), join(ROOT, 'outside', 'vslink'))
+    state.userData = join(ROOT, 'userData')
+
     REAL_WS = realpathSync.native(WS)
     REAL_HOME = realpathSync.native(HOME)
   })
@@ -224,6 +270,9 @@ describe.skipIf(process.platform === 'win32')('路径策略按真实去处判（
     config.workingDirectory = WS
     asks.length = 0
     respond = () => ({ kind: 'ask', allowed: false })
+    // 旧用例一律显式拿空视图（见文件头）；要看真实视图的用例自己换回去
+    workspaceWriteViewSpy.mockReset()
+    workspaceWriteViewSpy.mockImplementation(emptyWorkspaceView)
   })
 
   it('RPP-1 旗舰：工作区里的 key → ~/.ssh/id_rsa，路径门把它判成私钥 —— protect-credentials 询问，卡片以私钥领头、注着 key；拒绝则原话（read 工具在门前就拒了链接本身，这里看的是门自己的裁决）', async () => {
@@ -295,8 +344,15 @@ describe.skipIf(process.platform === 'win32')('路径策略按真实去处判（
     })
   })
 
-  it('RPP-4 工作区本身经链接打开：区内读照旧放行、写照旧询问 —— 路径用哪种写法都一样；反过来（工作区写真实路径、交来经链接的写法）也一样', () => {
+  it('RPP-4 工作区本身经链接打开：区内读照旧放行；工作区写入视图为空时写照旧询问 —— 路径用哪种写法都一样；反过来（工作区写真实路径、交来经链接的写法）也一样；换成算出来的视图，两种写法的写一起放行', () => {
     config.workingDirectory = WS_LINK
+    // 显式给空视图（Windows / 工作区不适合 / 规格算不出来时就是它），并确认变量表里确实是空的
+    workspaceWriteViewSpy.mockImplementation(emptyWorkspaceView)
+    expect(varsNow()).toMatchObject({
+      workspaceWritable: [],
+      workspaceWriteDenied: [],
+      workspaceProtectedPatterns: []
+    })
     for (const p of [join(WS, 'notes.txt'), join(WS_LINK, 'notes.txt')]) {
       expect({ p, read: verdict(evaluatePath('read', p)) }).toEqual({
         p,
@@ -313,9 +369,22 @@ describe.skipIf(process.platform === 'win32')('路径策略按真实去处判（
       effect: 'allow',
       winning: 'default:path'
     })
+
+    // 算出来的视图：工作区经链接打开，可写记的是真实工作区 —— 两种写法都落在里面
+    restoreComputedWorkspaceView()
+    config.workingDirectory = WS_LINK
+    expect(varsNow().workspaceWritable).toEqual([REAL_WS])
+    for (const p of [join(WS, 'notes.txt'), join(WS_LINK, 'notes.txt')]) {
+      expect({ p, write: verdict(evaluatePath('write', p)) }).toEqual({
+        p,
+        write: { effect: 'allow', winning: 'default:path' }
+      })
+    }
   })
 
-  it('RPP-5 工作区在 $TMPDIR 底下（macOS 解析后在 /private/var/folders）：写照常询问（ask-on-write#0），不被 protect-system 拒；区内读照旧放行', () => {
+  it('RPP-5 工作区在 $TMPDIR 底下（macOS 解析后在 /private/var/folders）：工作区写入视图为空时写照常询问（ask-on-write#0），不被 protect-system 拒；区内读照旧放行；换成算出来的视图写就放行，同样不被 protect-system 拒', () => {
+    workspaceWriteViewSpy.mockImplementation(emptyWorkspaceView)
+    expect(varsNow().workspaceWritable).toEqual([])
     const p = join(WS, 'new.txt')
     const decision = evaluatePath('write', p)
     expect(verdict(decision)).toEqual({ effect: 'ask', winning: 'ask-on-write#0' })
@@ -329,6 +398,12 @@ describe.skipIf(process.platform === 'win32')('路径策略按真实去处判（
       effect: 'allow',
       winning: 'default:path'
     })
+
+    restoreComputedWorkspaceView()
+    expect(varsNow().workspaceWritable).toEqual([REAL_WS])
+    const allowed = evaluatePath('write', p)
+    expect(verdict(allowed)).toEqual({ effect: 'allow', winning: 'default:path' })
+    expect(allowed.matched).not.toContain('protect-system#0')
   })
 
   it.skipIf(process.platform !== 'darwin')(
@@ -453,6 +528,93 @@ describe.skipIf(process.platform === 'win32')('路径策略按真实去处判（
     ).toBe(true)
     // 写是直接拒，不弹卡
     expect(asks).toHaveLength(1)
+  })
+
+  // ── ShuviX 自己的配置、工作区写入豁免同样按真实去处判 ─────────────────────────────────
+
+  it('RPP-C1 工作区里的链接指向 <~/.shuvix>/agents/x.md：按真实去处归 protect-shuvix-config —— force-ask（工作区视图空着或算出来、免询问开没开都一样）；卡片 command 是真实去处、requestedPath 是链接写法', async () => {
+    const link = join(WS, 'agentlink')
+    const target = join(REAL_ROOT, 'agents', 'x.md')
+
+    for (const view of ['empty', 'computed'] as const) {
+      if (view === 'computed') restoreComputedWorkspaceView()
+      expect(varsNow().workspaceWritable).toEqual(view === 'computed' ? [REAL_WS] : [])
+      for (const autoAllow of [false, true]) {
+        state.settings = { autoAllow }
+        const decision = evaluatePath('write', link)
+        expect({
+          view,
+          autoAllow,
+          effect: decision.effect,
+          tier: decision.tier,
+          winning: decision.winning
+        }).toEqual({
+          view,
+          autoAllow,
+          effect: 'ask',
+          tier: 'force-ask',
+          winning: 'protect-shuvix-config#0'
+        })
+        expect(decision.ask?.command).toBe(`Write(${target})`)
+        expect(decision.ask?.requestedPath).toBe(link)
+      }
+    }
+
+    // 走一遍真的门：卡片上是真实去处，注着链接写法；拒绝的原话用交来的显示名
+    state.settings = { autoAllow: true }
+    expect(
+      await rejectionOf(
+        context().enforcePath('write', link, {
+          toolCallId: 'wc1',
+          toolName: 'write',
+          displayPath: 'agentlink'
+        })
+      )
+    ).toBe('User denied access to agentlink')
+    expect(asks).toHaveLength(1)
+    expect(asks[0]).toMatchObject({
+      kind: 'ask',
+      toolName: 'write',
+      command: `Write(${target})`,
+      requestedPath: link
+    })
+  })
+
+  it('RPP-W1 工作区写入豁免按真实去处判（视图照生产算出来 = [真实工作区]）：区内链接指向区外 → 问；区外链接指向区内普通文件 → 放行、指向区内受保护位置 → 问；链接后的 `..` 走出工作区 → 问', () => {
+    restoreComputedWorkspaceView()
+    const vars = varsNow()
+    expect(vars.workspaceWritable).toEqual([REAL_WS])
+    expect(vars.workspaceWriteDenied).toContain(join(REAL_WS, '.vscode'))
+
+    // 前提：区内普通文件确实被豁免（视图生效，不是整片都在问）
+    expect(verdict(evaluatePath('write', join(WS, 'notes.txt')))).toEqual({
+      effect: 'allow',
+      winning: 'default:path'
+    })
+
+    // 写法在区内、去处在区外
+    const wlink = join(WS, 'wlink')
+    const out = evaluatePath('write', wlink)
+    expect(verdict(out)).toEqual({ effect: 'ask', winning: 'ask-on-write#0' })
+    expect(out.ask?.command).toBe(`Write(${join(REAL_ROOT, 'outside', 'target.txt')})`)
+    expect(out.ask?.requestedPath).toBe(wlink)
+
+    // 写法在区外、去处是区内的普通文件
+    expect(verdict(evaluatePath('write', join(ROOT, 'outside', 'nlink')))).toEqual({
+      effect: 'allow',
+      winning: 'default:path'
+    })
+    // 写法在区外、去处是工作区根上的 .vscode（写入禁区按真实去处比）
+    const vslink = join(ROOT, 'outside', 'vslink')
+    const vs = evaluatePath('write', vslink)
+    expect(verdict(vs)).toEqual({ effect: 'ask', winning: 'ask-on-write#0' })
+    expect(vs.ask?.command).toBe(`Write(${join(REAL_WS, '.vscode', 'settings.json')})`)
+
+    // 字面折叠会说「在区内」（<ws>/notes-x.txt），物理上是 ~/.ssh 的上一级 —— 家目录里的文件
+    const dotdot = `${WS}/sshlink/../notes-x.txt`
+    const escaped = evaluatePath('write', dotdot)
+    expect(verdict(escaped)).toEqual({ effect: 'ask', winning: 'ask-on-write#0' })
+    expect(escaped.ask?.command).toBe(`Write(${join(REAL_HOME, 'notes-x.txt')})`)
   })
 
   // ── 本会话 artifacts 的豁免同样按真实去处判 ─────────────────────────────────────────

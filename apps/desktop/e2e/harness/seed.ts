@@ -12,12 +12,16 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { deflateSync } from 'node:zlib'
 import { expect } from 'vitest'
+import { parse as parseYaml } from 'yaml'
+import type { PermissionRequestPayload } from '@shuvix/agent-runtime'
+import type { PermissionVerdict } from '@shuvix/chat-protocol/types/permissionReview'
 import {
   REGISTRY_NOTE_PROJECT_IDS,
   type RegistryNoteKind
 } from '@shuvix/chat-protocol/registryNotes'
 import type { CdpClient } from './cdp'
 import { sleep, until } from './cdp'
+import type { FakeRequest, FakeTurn } from './fakeProvider'
 import type { E2EApp } from './launch'
 
 export interface AgentMdSeed {
@@ -297,6 +301,16 @@ export async function seedFakeProvider(
 export async function setSandboxEnabled(main: CdpClient, enabled: boolean): Promise<void> {
   await main.eval(
     `window.api.settings.set({ key: 'sandbox.enabled', value: ${JSON.stringify(String(enabled))} })`
+  )
+}
+
+/**
+ * 开关询问点的自动审查（`security.autoReview`；产品缺省开，隔离实例缺省关 —— 见 launch.ts 的
+ * `LaunchOptions.autoReview`）。**现读**：下一次询问就按新值走，不用重建运行时，也不用新会话。
+ */
+export async function setAutoReview(main: CdpClient, on: boolean): Promise<void> {
+  await main.eval(
+    `window.api.settings.set({ key: 'security.autoReview', value: ${JSON.stringify(String(on))} })`
   )
 }
 
@@ -771,6 +785,8 @@ export interface SecurityDecisionEntry {
   sessionId: string
   toolCallId: string
   toolName: string
+  /** 发起者：主体种类 + （桌面 agent）档案名与 root / spawned —— 审查员自己要权限时靠它认出来 */
+  subject?: { kind: string; profileName?: string; agentKind?: 'root' | 'spawned' }
   action: string
   /** 客体 type（'path' / 'url' / 'invocation' / …） */
   objectKind: string
@@ -781,6 +797,17 @@ export interface SecurityDecisionEntry {
   /** 胜出规则 id（`<policy>#<i>`），未命中任何规则时是 `default:<type>` */
   winning: string
   userResponse?: 'allowed' | 'allowed_remember' | 'denied' | 'feedback' | 'cancel'
+  /**
+   * 询问点的自动审查给出的判决 —— **仅当审查给出了结论**（allow / ask / deny）时才有；关着、没有
+   * hook、答不出（超时 / 失败 / 不合格）、被中止都没有这个键。转给人时 userResponse 另记人的回答。
+   * `source` 是给出判决的 hook 名（内置的是 `auto-review`），`ms` 是审查耗时。
+   */
+  review?: {
+    decision: 'allow' | 'ask' | 'deny'
+    risk: 'low' | 'medium' | 'high' | 'critical'
+    source: string
+    ms: number
+  }
 }
 
 /** 此刻主进程日志里的全部安全决策（按写入顺序）；解析不了的行跳过 */
@@ -797,6 +824,88 @@ export function securityDecisions(app: Pick<E2EApp, 'mainLog'>): SecurityDecisio
     }
   }
   return out
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 询问点的自动审查（判定型埋点 permission.request → 内置 hook auto-review → 内置 agent
+// permission-reviewer）
+//
+// 审查是会话当前模型上的**一次派生 agent 运行** —— 在 e2e 里它就是又一个发往假提供商的请求，
+// 与主 agent 的请求交错到达，所以两边的脚本都要按内容认领（`when`），FIFO 必然错位。
+// 认它靠工具表：审查员的档案不带任何工具，派发时带的结果契约给它附上 `next` —— 请求里的工具
+// 恰为 `['next']`；任何会话的 agent 都不会只有这一个工具。
+
+/** 审查员的输入（事件围栏的 YAML）与它交回的判决 —— 契约类型，原样转出给 spec 用 */
+export type { PermissionRequestPayload, PermissionVerdict }
+
+/** 请求里声明的工具名（请求体 `tools[].function.name`，按请求里的顺序） */
+export function requestToolNames(req: FakeRequest): string[] {
+  return ((req.body.tools ?? []) as Array<{ function?: { name?: string } }>).map(
+    (t) => t.function?.name ?? ''
+  )
+}
+
+/** 这是一次审查请求（工具恰为结果契约工具 `next` 一个）—— 给假提供商脚本的 `when` 用 */
+export function isReviewerRequest(req: FakeRequest): boolean {
+  const names = requestToolNames(req)
+  return names.length === 1 && names[0] === 'next'
+}
+
+/** 请求的系统提示词（openai-completions 按模型能力发成 system 或 developer 角色） */
+export function requestSystemText(req: FakeRequest): string {
+  const sys = (req.body.messages ?? []).find((m) => m.role === 'system' || m.role === 'developer')
+  const content = sys?.content
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return ''
+  return content
+    .map((c) =>
+      (c as { type?: string }).type === 'text' ? ((c as { text?: string }).text ?? '') : ''
+    )
+    .join('')
+}
+
+let reviewerCallSeq = 0
+
+/**
+ * 审查员的一轮脚本：认领一次审查请求（缺省 `isReviewerRequest`，`when` 可再收窄），调一次 `next`，
+ * 参数就是判决 JSON。`next` 带 terminate —— 这一轮就是审查 run 的最后一步，不会再有第二个请求。
+ * `holdMs` 让这一轮挂在收尾之前（审查途中停止的用例用）。
+ */
+export function reviewerTurn(
+  verdict: PermissionVerdict,
+  opts: { when?: (req: FakeRequest) => boolean; holdMs?: number; id?: string } = {}
+): FakeTurn {
+  const extra = opts.when
+  return {
+    toolCalls: [
+      {
+        id: opts.id ?? `call_review_${++reviewerCallSeq}`,
+        name: 'next',
+        args: JSON.stringify(verdict)
+      }
+    ],
+    when: (req) => isReviewerRequest(req) && (!extra || extra(req)),
+    ...(opts.holdMs ? { holdMs: opts.holdMs } : {}),
+    usage: { prompt: 60, completion: 8 }
+  }
+}
+
+/** 审查请求任务文本里事件围栏的开标签 */
+export const REVIEW_EVENT_OPEN = '<hook_event trigger="permission.request">'
+
+/**
+ * 审查请求任务文本里 `<hook_event trigger="permission.request">` 围栏的 YAML → 对象 —— 审查员的
+ * **全部输入**。找不到围栏直接抛（断言不在 undefined 上失败得莫名其妙）。
+ */
+export function reviewEventOf(req: FakeRequest): PermissionRequestPayload {
+  const text = req.lastUserText
+  const open = `${REVIEW_EVENT_OPEN}\n`
+  const start = text.indexOf(open)
+  const end = text.indexOf('\n</hook_event>', start)
+  if (start < 0 || end < start) {
+    throw new Error(`no permission.request fence in request: ${text.slice(0, 300)}`)
+  }
+  return parseYaml(text.slice(start + open.length, end)) as PermissionRequestPayload
 }
 
 /**

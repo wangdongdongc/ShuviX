@@ -5,8 +5,9 @@
  *   - 导航到 `file://…` = **读那个文件**（enforcePath('read')）：出厂的 ask-on-read（工作区外问）、
  *     protect-credentials（凭据目录问）照样生效。一个显示本地文件的 tab 上做任何事也按读它过门 ——
  *     页面自己跳过去的也算（BRP-1）；
- *   - 上传给网页的文件 = 读（逐个过门）；pdf 的输出位置 = **写**（出厂 ask-on-write 对每一次写都问，
- *     工作区里的也问 —— 从前是工作区里静默写、工作区外硬拒）；
+ *   - 上传给网页的文件 = 读（逐个过门）；pdf 的输出位置 = **写**，由出厂 ask-on-write 判：工作区外问
+ *     （从前是硬拒），工作区里免询问（沙箱开关都一样），工作区里的受保护位置（项目根的 .vscode 等）
+ *     照旧问 —— 与文件工具同一道门，没有 pdf 自己的特例；
  *   - http(s) 等地址上报 `{type:'url'}` 客体：出厂没有 url 策略（没有策略 = 放行），用户可以自己写。
  *
  * 另有 L1 全工具门：内置 server 的工具 annotations 是可信的，于是用户能写「浏览器里有破坏性的
@@ -146,7 +147,8 @@ const noAsk = async (
 
 beforeAll(async () => {
   app = await launchApp()
-  // 本组测的是询问卡片本身（项目内写入要问 / 策略说明）；沙箱开着时这些写入不再询问
+  // 本组测的是询问卡片本身（工作区外 / 受保护位置的写入要问、策略说明）；沙箱开着时 fake HOME
+  // 所在的 /private/tmp 整片是可写根，这些写入不再询问
   await setSandboxEnabled(app.main, false)
   provider = await startFakeProvider()
   await seedFakeProvider(app.main, { baseUrl: provider.baseUrl, modelId: MODEL })
@@ -486,15 +488,38 @@ describe('upload_file 的每个文件都按读过门', () => {
   // ═════════════════════════════════════════════════════════════════════
 
   describe('pdf 的输出位置按写过门', () => {
-    it('BRG-11 工作区里：出厂的 ask-on-write 也问；允许之后落下一份真 PDF', async () => {
+    it('BRG-11 工作区里也过写入门：普通位置出厂 ask-on-write 免询问（决策照记），受保护位置照旧问；允许之后落下一份真 PDF', async () => {
+      // ① 工作区里的普通位置：不问，但门是过了的 —— 决策日志里有这次写，判的就是解析后的绝对路径
       const abs = join(projDir, 'out', 'page.pdf')
+      const ends = await noAsk([
+        { id: 'brg11_pdf', tool: 'pdf', args: { tabId: formTab, outputPath: 'out/page.pdf' } }
+      ])
+      expect(ends.brg11_pdf.result).toContain(abs)
+      expect(readFileSync(abs).subarray(0, 5).toString()).toBe('%PDF-')
+      expect(decisionsOf('brg11_pdf')).toEqual([
+        expect.objectContaining({
+          sessionId: sid,
+          objectKind: 'path',
+          action: 'write',
+          effect: 'allow',
+          winning: 'default:path',
+          objectSummary: abs
+        })
+      ])
+
+      // ② 工作区里的受保护位置（项目根的 .vscode）：出厂的 ask-on-write 照旧问；允许之后落下一份真 PDF
+      const guarded = join(projDir, '.vscode', 'page.pdf')
       const { end, ask } = await askOnce(
-        { id: 'brg11_pdf', tool: 'pdf', args: { tabId: formTab, outputPath: 'out/page.pdf' } },
+        {
+          id: 'brg11_guarded_pdf',
+          tool: 'pdf',
+          args: { tabId: formTab, outputPath: '.vscode/page.pdf' }
+        },
         true
       )
-      expect(ask.command).toBe(`Write(${abs})`)
-      expect(end.result).toContain(abs)
-      expect(readFileSync(abs).subarray(0, 5).toString()).toBe('%PDF-')
+      expect(ask.command).toBe(`Write(${guarded})`)
+      expect(end.result).toContain(guarded)
+      expect(readFileSync(guarded).subarray(0, 5).toString()).toBe('%PDF-')
     }, 120_000)
 
     it('BRG-12 工作区外：问（从前是不问就拒）；拒了不落文件', async () => {

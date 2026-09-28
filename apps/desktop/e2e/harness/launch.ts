@@ -138,6 +138,18 @@ export interface LaunchOptions {
   args?: string[]
   /** 实例进程的工作目录（缺省 apps/desktop）；相对的 md 参数按它解析 */
   cwd?: string
+  /**
+   * 询问点的自动审查（设置 `security.autoReview`）。**缺省 false**：窗口就绪后写入字面 `'false'`。
+   *
+   * 产品缺省是开：策略判出 ask、弹卡片之前，先派一个审查 agent（`permission-reviewer`）在会话当前
+   * 模型上跑一次 —— 在 e2e 里那就是**又一个发往假提供商的请求**，会吃掉脚本队列里下一个 turn，
+   * 把既有 spec 的 FIFO 脚本整个错位。所以隔离实例缺省关掉它，既有用例的询问照旧直接到卡片。
+   *
+   * 测审查本身的 spec 传 `true`：全新的 HOME 上什么也不写（键缺省 = 开，测的正是产品缺省）；
+   * 复用的 HOME（`home`）上写 `'true'`，免得上一个实例留下的 `'false'` 还在。开关是现读的，
+   * 中途切换用 seed.ts 的 `setAutoReview`。
+   */
+  autoReview?: boolean
 }
 
 export interface MarkdownLaunchOptions extends LaunchOptions {
@@ -273,6 +285,25 @@ function installTargetForensics(port: number): void {
   })
 }
 
+/** 设置键：询问点的自动审查（产品侧 permissionReview.ts 的 AUTO_REVIEW_KEY；现读，只有字面 'false' 才关） */
+export const AUTO_REVIEW_SETTING = 'security.autoReview'
+
+/**
+ * 按 `LaunchOptions.autoReview` 落设置（见那里的说明）：缺省关；开且 HOME 是新建的就不写，
+ * 让产品缺省（键不存在 = 开）自己生效。
+ */
+async function applyAutoReview(
+  client: CdpClient,
+  opts: LaunchOptions,
+  freshHome: boolean
+): Promise<void> {
+  const on = opts.autoReview === true
+  if (on && freshHome) return
+  await client.eval(
+    `window.api.settings.set(${JSON.stringify({ key: AUTO_REVIEW_SETTING, value: String(on) })})`
+  )
+}
+
 export function launchApp(opts?: LaunchOptions): Promise<E2EApp>
 export function launchApp(opts: MarkdownLaunchOptions): Promise<E2EMarkdownApp>
 export async function launchApp(
@@ -405,8 +436,18 @@ export async function launchApp(
       main = await connect(target.webSocketDebuggerUrl)
       await until(() => main!.eval<boolean>('!!window.api'), 'window.api ready')
       await installForensics(main)
+      await applyAutoReview(main, opts, ownsHome)
     } else {
       installTargetForensics(port)
+      // 没有主窗口（带着 md 启动）：设置经任意一个 md 窗口的 window.api 写 —— 同一个 preload、同一条 IPC
+      const md = (await listTargets(port)).find((t) => isMarkdownWindowPage(t, APP_URL))
+      const client = md ? await connectReady(md.webSocketDebuggerUrl) : null
+      if (!client) throw fail('no #markdown-window with window.api to apply security.autoReview')
+      try {
+        await applyAutoReview(client, opts, ownsHome)
+      } finally {
+        client.close()
+      }
     }
 
     const stop = async (stopOpts: { keepHome?: boolean } = {}): Promise<void> => {

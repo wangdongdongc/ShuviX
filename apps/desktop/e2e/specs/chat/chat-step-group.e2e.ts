@@ -10,8 +10,9 @@
  *   - 后台任务跑完 → 自动续跑那一轮的「用户消息」经真实生产链路画成通知行，实时与重开一致；
  *   - 智能体还在跑时任务跑完 → 通知走 steer（pi 自己造 user 消息、没有侧车），靠正文形状认出来。
  *
- * 前置：会话都绑同一个项目，`read` 落在 projDir 内不询问；`write` 撞内置 ask-on-write，
- * 正是 E-2 要的中间态 —— 所以本文件的自动放行**只对 bash 那条后台命令**生效（`only`）。
+ * 前置：会话都绑同一个项目，`read` 落在 projDir 内不询问；`write` 写到工作目录**之外**
+ * （工作目录里的写入不再询问），撞内置 ask-on-write，正是 E-2 要的中间态 —— 所以本文件的
+ * 自动放行**只对 bash 那条后台命令**生效（`only`）。
  */
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -50,6 +51,8 @@ let events: EventRecorder
 let chat: ChatPane
 let sidebar: SidebarPane
 let projDir = ''
+/** 工作目录之外的写入落点 —— ask-on-write 对工作目录免询问，要一张卡就得写到外面 */
+let outsideDir = ''
 const sids: Record<string, string> = {}
 
 const createSession = async (title: string, projectId: string): Promise<string> =>
@@ -74,7 +77,8 @@ const reopen = async (title: string): Promise<void> => {
 
 beforeAll(async () => {
   app = await launchApp()
-  // 本组测的是询问卡片本身（项目内写入要问 / 策略说明）；沙箱开着时这些写入不再询问
+  // 本组测的是询问卡片本身（工作区外的写入要问）；沙箱开着时 fake HOME 所在的 /private/tmp
+  // 整片是可写根，这些写入不再询问
   await setSandboxEnabled(app.main, false)
   provider = await startFakeProvider()
   await seedFakeProvider(app.main, { baseUrl: provider.baseUrl, modelId: MODEL })
@@ -84,6 +88,8 @@ beforeAll(async () => {
   mkdirSync(projDir, { recursive: true })
   writeFileSync(join(projDir, 'alpha.txt'), 'ALPHA CONTENT\n')
   const project = await createProject(app.main, { name: 'FoldProj', path: projDir })
+  outsideDir = join(app.home, 'outside-fold')
+  mkdirSync(outsideDir, { recursive: true })
 
   sids.steer = await createSession('F-steer', project.id)
   sids.split = await createSession('F-split', project.id)
@@ -203,7 +209,7 @@ describe('未落定的调用不进组', () => {
   it('E-2 等审批的 write 把段切开：放行前两行独立可见，落定后才与 read 并成一行', async () => {
     provider.reset()
     await events.clear()
-    const target = join(projDir, 'x.txt')
+    const target = join(outsideDir, 'x.txt')
     provider.script(
       {
         toolCalls: [

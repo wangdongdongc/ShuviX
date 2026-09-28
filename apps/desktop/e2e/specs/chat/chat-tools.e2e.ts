@@ -2,9 +2,10 @@
  * 对话区的工具卡片 —— 单次调用的完整生命周期、并行 batch 的预展示去重与合并行、
  * 出错行的独立呈现、以及询问卡片（工具停在等待 → 应答 → 继续）。
  *
- * 前置：所有会话绑同一个项目，`read`/`write` 的目标一律落在 projDir 内 ——
+ * 前置：所有会话绑同一个项目，`read` 的目标一律落在 projDir 内 ——
  * `ask-on-read` 只对工作区外的路径询问，故读文件不会挂在等人应答上；
- * 而 `ask-on-write` 对任何路径都 ask，正是询问用例（C-10）的被测对象。
+ * 询问用例（C-10）的 `write` 则写到工作目录**之外**：`ask-on-write` 对工作目录免询问
+ * （受保护位置除外），对工作区外的路径照旧 ask，那正是被测对象。
  */
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -56,6 +57,8 @@ let events: EventRecorder
 let chat: ChatPane
 let sidebar: SidebarPane
 let projDir = ''
+/** 工作目录之外的写入落点（询问用例要的那张卡只在这里还会弹） */
+let outsideDir = ''
 const sids: Record<string, string> = {}
 
 const createSession = async (title: string, projectId: string): Promise<string> =>
@@ -77,7 +80,8 @@ const readCall = (id: string, file: string): { id: string; name: string; args: s
 
 beforeAll(async () => {
   app = await launchApp()
-  // 本组测的是询问卡片本身（项目内写入要问 / 策略说明）；沙箱开着时这些写入不再询问
+  // 本组测的是询问卡片本身（工作区外的写入要问）；沙箱开着时 fake HOME 所在的 /private/tmp
+  // 整片是可写根，这些写入不再询问
   await setSandboxEnabled(app.main, false)
   provider = await startFakeProvider()
   await seedFakeProvider(app.main, { baseUrl: provider.baseUrl, modelId: MODEL })
@@ -91,6 +95,8 @@ beforeAll(async () => {
   writePng(join(projDir, 'small.png'), { width: 40, height: 24 })
   writePng(join(projDir, 'big.png'), { width: 1400, height: 1000, incompressible: true })
   const project = await createProject(app.main, { name: 'ToolsProj', path: projDir })
+  outsideDir = join(app.home, 'outside-tools')
+  mkdirSync(outsideDir, { recursive: true })
 
   sids.single = await createSession('T-single', project.id)
   sids.batch = await createSession('T-batch', project.id)
@@ -264,7 +270,7 @@ describe('询问卡片', () => {
   it('write 撞 ask-on-write：工具停在等待，卡片顶格在输入卡片内，应答后继续执行', async () => {
     provider.reset()
     await events.clear()
-    const target = join(projDir, 'written.txt')
+    const target = join(outsideDir, 'written.txt')
     provider.script(
       {
         toolCalls: [

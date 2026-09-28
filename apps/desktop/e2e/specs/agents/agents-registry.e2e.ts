@@ -33,11 +33,12 @@ interface AgentRow {
 const listAgents = (): Promise<AgentRow[]> => app.main.eval('window.api.subAgent.list()')
 
 describe('内置档案', () => {
-  it('十一个内置齐全，上下文注入默认全开（notebook/bot/tab/coedit 只开项目感知、派发专用档案全关），描述非空；无启用开关字段', async () => {
+  it('十二个内置齐全，上下文注入默认全开（notebook/bot/tab/coedit 只开项目感知、派发专用与宿主专用档案全关），描述非空；无启用开关字段', async () => {
     const builtins = (await listAgents()).filter((a) => a.source === 'builtin')
     // bot 是 bot 会话根 Agent 的基座（bot 用 edit 自己维护自己那份 md，没有专职的笔记 agent）；
     // 旧 Bots 的意图门控 bot-intent 随管线一并拆除。tab 是 Chrome 标签页会话（侧边栏）的基座；
-    // coedit 是从系统打开的 markdown 窗口里协作编辑那条会话的基座
+    // coedit 是从系统打开的 markdown 窗口里协作编辑那条会话的基座；permission-reviewer 是询问点
+    // 自动审查（内置 hook auto-review）派出的审查员 —— 只由宿主派发，派发工具与子会话都点不到它
     expect(builtins.map((a) => a.name).sort()).toEqual([
       'bot',
       'chat',
@@ -46,14 +47,16 @@ describe('内置档案', () => {
       'explore',
       'knowledge-writer',
       'notebook',
+      'permission-reviewer',
       'tab',
       'titler',
       'widget',
       'work'
     ])
     // 派发专用的窄档案两样都不要：AGENTS.md/CLAUDE.md 是写代码的工程约定，
-    // 而拟一个标题（titler）不是工程活，项目上下文对它只是噪声
-    const narrow = ['titler']
+    // 而拟一个标题（titler）不是工程活，项目上下文对它只是噪声。审查员（permission-reviewer）
+    // 更严：它的全部输入就是事件围栏，项目里的任何文字都可能是冲它来的注入
+    const narrow = ['titler', 'permission-reviewer']
     for (const a of builtins) {
       // notebook 是笔记本会话根 Agent 的基座：开项目感知（笔记就写在项目里），但不吃指令文件。
       // bot（bot 会话的基座）同一取舍：AGENTS.md/CLAUDE.md 是写代码的工程约定，而真正

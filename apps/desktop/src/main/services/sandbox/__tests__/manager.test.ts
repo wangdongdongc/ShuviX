@@ -5,6 +5,11 @@
  * 替身：electron 的 app.getPath、os.homedir、平台后端（假后端，探测 / 包装 / 启动失败都可控）、
  * fs 里 ensureTmpDir / cleanupSession 用到的几个函数（realpathSync 用真的 —— MG-4 要真符号链接）、
  * logger。模块级缓存（后端、探测结果、固定表、realpath 缓存）每个用例 resetModules 后重新导入。
+ *
+ * MG-9 whyUnconfined（命令没进沙箱的原因：固定那一刻的，或此刻的；从不探测）；
+ * MG-10 workspaceWriteView（ask-on-write 的工作区豁免：与开关 / 固定 / 探测无关，只看规格的适用性判定）。
+ * 两组的期望规格按同一份宿主路径用纯函数 buildSandboxSpec 算（`real` 取恒等：/Users/u 盘上不存在，
+ * 管理器的 realpathLoose 对它也是原样）。
  */
 import { createHash } from 'crypto'
 import { join } from 'path'
@@ -64,6 +69,9 @@ vi.mock('../classify', async (importOriginal) => {
   }
 })
 vi.mock('../../../logger', () => ({ createLogger: () => mocks.log }))
+
+import { buildSandboxSpec, protectedWritePatterns } from '../spec'
+import type { SandboxHostPaths, SandboxSpec } from '../types'
 
 type Manager = typeof import('../index')
 type PlanRequest = import('../index').PlanRequest
@@ -515,5 +523,257 @@ describe('MG-8 cleanupSession', () => {
     const m = await load(() => 'true')
     expect(() => m.cleanupSession('s1')).not.toThrow()
     expect(mocks.rmSync).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('MG-9 whyUnconfined：命令没进沙箱的原因（不触发探测）', () => {
+  type Reader = (() => string | undefined) | undefined
+  const throwing: Reader = () => {
+    throw new Error('db closed')
+  }
+  const DISABLED: Array<[string, Reader]> = [
+    ['读取口没注入', undefined],
+    ["读取口回 'false'", () => 'false'],
+    ["读取口回 ' false '", () => ' false '],
+    ['读取口抛错', throwing]
+  ]
+  const UNAVAILABLE: Array<[string, Reader]> = [
+    ['读取口回 undefined', () => undefined],
+    ["读取口回 'true'", () => 'true'],
+    ["读取口回 'FALSE'", () => 'FALSE']
+  ]
+
+  it.each(['linux', 'win32'] as const)(
+    "MG-9a %s：恒 'unsupported' —— 开关开 / 关 / 读取口没注入，固定前、固定后、解除后都一样",
+    async (platform) => {
+      setPlatform(platform)
+      for (const [label, reader] of [...DISABLED, ...UNAVAILABLE]) {
+        const m = await load(reader)
+        expect({ label, before: m.whyUnconfined('s1') }).toEqual({
+          label,
+          before: 'unsupported'
+        })
+        expect(m.pinSession('s1')).toBe(false)
+        expect({ label, pinned: m.whyUnconfined('s1') }).toEqual({
+          label,
+          pinned: 'unsupported'
+        })
+        m.unpinSession('s1')
+        expect({ label, after: m.whyUnconfined('s1') }).toEqual({ label, after: 'unsupported' })
+      }
+      expect(mocks.probe).not.toHaveBeenCalled()
+    }
+  )
+
+  it.each(DISABLED)("MG-9b darwin、没固定：%s → 'disabled'", async (_label, reader) => {
+    const m = await load(reader)
+    expect(m.whyUnconfined('s1')).toBe('disabled')
+  })
+
+  it.each(UNAVAILABLE)("MG-9b darwin、没固定：%s → 'unavailable'", async (_label, reader) => {
+    const m = await load(reader)
+    expect(m.whyUnconfined('s1')).toBe('unavailable')
+  })
+
+  it('MG-9c 以上各情形反复问、问多条会话，探测一次都不跑（这是每条命令都走的路径）', async () => {
+    for (const [label, reader] of [...DISABLED, ...UNAVAILABLE]) {
+      const m = await load(reader)
+      for (const sid of ['s1', 's2', 's1']) m.whyUnconfined(sid)
+      expect({ label, probes: mocks.probe.mock.calls.length }).toEqual({ label, probes: 0 })
+    }
+  })
+
+  it("MG-9d 设置关着时固定：pin 为假；之后打开设置，这条会话仍是 'disabled'、另一条没固定的是 'unavailable'；unpin 之后回到此刻的状态", async () => {
+    let setting: string | undefined = 'false'
+    const m = await load(() => setting)
+    expect(m.pinSession('s1')).toBe(false)
+    expect(m.whyUnconfined('s1')).toBe('disabled')
+
+    setting = 'true'
+    expect(m.whyUnconfined('s1')).toBe('disabled')
+    expect(m.whyUnconfined('s2')).toBe('unavailable')
+    // 再固定一次拿到的仍是第一次的答案，原因也不改
+    expect(m.pinSession('s1')).toBe(false)
+    expect(m.whyUnconfined('s1')).toBe('disabled')
+
+    m.unpinSession('s1')
+    expect(m.whyUnconfined('s1')).toBe('unavailable')
+    expect(mocks.probe).not.toHaveBeenCalled()
+  })
+
+  it("MG-9d 反方向：探测没过时固定 → 'unavailable'；之后关掉设置仍是 'unavailable'、没固定的会话是 'disabled'；cleanupSession 同样解除", async () => {
+    mocks.probe.mockReturnValue({ available: false, reason: 'nested' })
+    let setting: string | undefined = 'true'
+    const m = await load(() => setting)
+    expect(m.pinSession('s1')).toBe(false)
+    expect(m.whyUnconfined('s1')).toBe('unavailable')
+
+    setting = 'false'
+    expect(m.whyUnconfined('s1')).toBe('unavailable')
+    expect(m.whyUnconfined('s2')).toBe('disabled')
+
+    m.cleanupSession('s1')
+    expect(m.whyUnconfined('s1')).toBe('disabled')
+    // 只有固定那一次探测过
+    expect(mocks.probe).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('MG-10 workspaceWriteView：文件工具在工作区写入免询问的范围（与沙箱开没开无关）', () => {
+  const HOST: SandboxHostPaths = {
+    home: HOME,
+    userData: USER_DATA,
+    shuvixHome: `${HOME}/.shuvix`,
+    uid: UID,
+    cliSocket: `${HOME}/.shuvix/cli.sock`,
+    tmpRoot: TMP_ROOT
+  }
+  const EMPTY = { workspaceWritable: [], workspaceWriteDenied: [], workspaceProtectedPatterns: [] }
+
+  /** 这个会话此刻的沙箱规格（管理器用的同一份宿主路径，不带授权） */
+  function specOf(sessionId: string, workingDirectory: string): SandboxSpec {
+    const built = buildSandboxSpec(
+      HOST,
+      { sessionId, workingDirectory, grantedWrite: [], grantedRead: [] },
+      (p) => p
+    )
+    if (!built.ok) throw new Error(`expected ok, got: ${built.reason}`)
+    return built.spec
+  }
+
+  function expectedView(
+    sessionId: string,
+    workingDirectory: string
+  ): ReturnType<Manager['workspaceWriteView']> {
+    const spec = specOf(sessionId, workingDirectory)
+    return {
+      workspaceWritable: [workingDirectory],
+      workspaceWriteDenied: spec.writeDeniedFinal,
+      workspaceProtectedPatterns: protectedWritePatterns(spec)
+    }
+  }
+
+  it('MG-10a 正常工作区：可写 = [WS]、禁区 = 该会话规格的 writeDeniedFinal、模式 = protectedWritePatterns(spec)；读取口没注入 / 探测失败 / 固定为假 / 沙箱启用 四种情形逐字相同', async () => {
+    const expected = expectedView('s1', WS)
+    // 前提：禁区里有凭据目录与工作区根上的别家配置，模式里有 git 元数据那几条 —— 不是空的
+    expect(expected.workspaceWriteDenied).toContain(`${HOME}/.ssh`)
+    expect(expected.workspaceWriteDenied).toContain(`${WS}/.vscode`)
+    expect(expected.workspaceProtectedPatterns.length).toBeGreaterThan(2)
+
+    const views: Array<[string, ReturnType<Manager['workspaceWriteView']>]> = []
+
+    // ① 读取口没注入（= 关闭）：也不探测
+    {
+      const m = await load()
+      views.push(['读取口没注入', m.workspaceWriteView('s1', WS)])
+      expect(mocks.probe).not.toHaveBeenCalled()
+    }
+    // ② 探测失败：会话固定成不套
+    {
+      mocks.probe.mockReturnValue({ available: false, reason: 'nested' })
+      const m = await load(() => 'true')
+      expect(m.pinSession('s1')).toBe(false)
+      expect(m.sessionView('s1', WS)).toBe(m.INACTIVE_VIEW)
+      views.push(['探测失败', m.workspaceWriteView('s1', WS)])
+      mocks.probe.mockReturnValue({ available: true })
+    }
+    // ③ 设置关着、固定为假
+    {
+      const m = await load(() => 'false')
+      expect(m.pinSession('s1')).toBe(false)
+      views.push(['固定为假', m.workspaceWriteView('s1', WS)])
+    }
+    // ④ 沙箱真的套上：视图同样来自这个会话的规格（与 planFor 拿到的是同一份）
+    {
+      const m = await load(() => 'true')
+      expect(m.pinSession('s1')).toBe(true)
+      const plan = m.planFor(request())
+      expect(plan).not.toBeNull()
+      expect(plan!.spec.writeDeniedFinal).toEqual(expected.workspaceWriteDenied)
+      expect(protectedWritePatterns(plan!.spec)).toEqual(expected.workspaceProtectedPatterns)
+      views.push(['沙箱启用', m.workspaceWriteView('s1', WS)])
+    }
+
+    for (const [label, view] of views) {
+      expect({ label, view }).toEqual({ label, view: expected })
+    }
+  })
+
+  it.each([
+    ['根目录 /', '/'],
+    ['家目录本身', HOME],
+    ['覆盖家目录的 /Users', '/Users'],
+    ['ShuviX 自己的配置 ~/.shuvix/agents', `${HOME}/.shuvix/agents`],
+    ['userData 里的应用数据', `${USER_DATA}/data`],
+    ['userData 里别的会话的临时工作区', `${USER_DATA}/temp_workspace/other`],
+    ['凭据目录 ~/.ssh', `${HOME}/.ssh`],
+    ['严格包含敏感目录的 ~/Library', `${HOME}/Library`]
+  ])(
+    'MG-10b 不适合的工作区（%s）→ 三个空数组，不记警告（这是判定，不是失败）',
+    async (_label, ws) => {
+      const m = await load(() => 'true')
+      expect(m.workspaceWriteView('s1', ws)).toEqual(EMPTY)
+      expect(mocks.log.warn).not.toHaveBeenCalled()
+    }
+  )
+
+  it.each(['', '../x'])(
+    'MG-10b 会话 id 不安全（%j）→ 三个空数组，工作区合适也一样',
+    async (sid) => {
+      const m = await load(() => 'true')
+      expect(m.workspaceWriteView(sid, WS)).toEqual(EMPTY)
+    }
+  )
+
+  it.each([
+    ['本会话的临时工作区', `${USER_DATA}/temp_workspace/s1`],
+    ['知识库 ~/.shuvix/knowledge/<base>', `${HOME}/.shuvix/knowledge/notes`],
+    ['个人资料目录本身 ~/Documents', `${HOME}/Documents`]
+  ])('MG-10c 合适的工作区（%s）→ 非空视图，可写恰为它本身', async (_label, ws) => {
+    const m = await load()
+    const view = m.workspaceWriteView('s1', ws)
+    expect(view).toEqual(expectedView('s1', ws))
+    expect(view.workspaceWritable).toEqual([ws])
+    expect(view.workspaceWriteDenied.length).toBeGreaterThan(0)
+    expect(view.workspaceProtectedPatterns.length).toBeGreaterThan(0)
+  })
+
+  it('MG-10d win32：工作区再合适也给空视图（受保护模式按 / 写，碰上 \\ 路径会静默不匹配），不去算规格', async () => {
+    setPlatform('win32')
+    const m = await load(() => 'true')
+    expect(m.workspaceWriteView('s1', WS)).toEqual(EMPTY)
+    expect(mocks.getPath).not.toHaveBeenCalled()
+    expect(mocks.log.warn).not.toHaveBeenCalled()
+  })
+
+  it('MG-10e 算规格时抛错（app.getPath 抛）→ 空视图、记一行警告、不往外抛', async () => {
+    mocks.getPath.mockImplementation(() => {
+      throw new Error('userData unavailable')
+    })
+    const m = await load(() => 'true')
+    let view: ReturnType<Manager['workspaceWriteView']> | undefined
+    expect(() => {
+      view = m.workspaceWriteView('s1', WS)
+    }).not.toThrow()
+    expect(view).toEqual(EMPTY)
+    expect(mocks.log.warn).toHaveBeenCalledTimes(1)
+    expect(String(mocks.log.warn.mock.calls[0][0])).toContain('userData unavailable')
+  })
+
+  it('MG-10f 工作区是符号链接：可写取它指向的真实路径，根上的受保护名也拼在真实路径上', async () => {
+    const fs = await vi.importActual<typeof import('fs')>('fs')
+    const os = await vi.importActual<typeof import('os')>('os')
+    const base = fs.mkdtempSync(join(fs.realpathSync(os.tmpdir()), 'sbx-mg10-'))
+    scratch.push(base)
+    const target = join(base, 'target')
+    fs.mkdirSync(target)
+    const link = join(base, 'link')
+    fs.symlinkSync(target, link)
+
+    const m = await load()
+    const view = m.workspaceWriteView('s1', link)
+    expect(view.workspaceWritable).toEqual([target])
+    expect(view.workspaceWriteDenied).toContain(join(target, '.vscode'))
+    expect(view.workspaceWriteDenied).not.toContain(join(link, '.vscode'))
   })
 })

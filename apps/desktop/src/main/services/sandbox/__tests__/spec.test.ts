@@ -6,7 +6,8 @@
  *  - SP-5 读的四层与 socket；
  *  - SP-6 `real` 在一切判断之前应用；
  *  - SP-7 策略那一面（toPolicyView）与规格同源；
- *  - SP-8/SP-9 清单守卫与正则语义（JS 方言 = SBPL 文本）。
+ *  - SP-8/SP-9 清单守卫与正则语义（JS 方言 = SBPL 文本）；
+ *  - SP-10 受保护模式（protectedWritePatterns）：沙箱视图与工作区写入视图共用的那一组。
  *
  * 夹具宿主（见测试计划 Conventions）：home=/Users/u，userData 在 ~/Library/Application Support/ShuviX，
  * 工作区 /Users/u/proj；e2e 布局把假 HOME 放在 /private/tmp 下（它本身是可写根，几处结论不同）。
@@ -17,7 +18,13 @@ import { describe, expect, it, vi } from 'vitest'
 // spec.ts → utils/paths 会连带 import electron（只在调用时才用 app）
 vi.mock('electron', () => ({ app: { getPath: () => '/nonexistent', isPackaged: false } }))
 
-import { buildSandboxSpec, isWithin, sessionTmpName, toPolicyView } from '../spec'
+import {
+  buildSandboxSpec,
+  isWithin,
+  protectedWritePatterns,
+  sessionTmpName,
+  toPolicyView
+} from '../spec'
 import {
   CACHE_DIRS_HOME_RELATIVE,
   CREDENTIAL_DIRS_HOME_RELATIVE,
@@ -485,5 +492,43 @@ describe('SP-9 正则语义（JS 方言 = SBPL 文本）', () => {
     expect(isWithin('/a/b/c', '/a/b')).toBe(true)
     expect(isWithin('/a/bc', '/a/b')).toBe(false)
     expect(isWithin('/a/b/c', '/a/b/')).toBe(true)
+  })
+})
+
+describe('SP-10 protectedWritePatterns：两个视图共用的受保护模式', () => {
+  it.each([
+    ['生产布局', PATHS, WS],
+    ['e2e 布局', E2E_PATHS, `${E2E_HOME}/proj`],
+    ['临时工作区', PATHS, TEMP_WS]
+  ] as const)(
+    'SP-10 %s：恰为 [...GIT_PATTERNS.js, GIT_ENTRY_PATTERN.js, ...writeDeniedPatterns.js]，且与 toPolicyView 的 sandboxProtectedPatterns 相同',
+    (_label, paths, ws) => {
+      const spec = specOf({ workingDirectory: ws }, paths)
+      const patterns = protectedWritePatterns(spec)
+      expect(patterns).toEqual([
+        ...GIT_PATTERNS.map((p) => p.js),
+        GIT_ENTRY_PATTERN.js,
+        ...spec.writeDeniedPatterns.map((p) => p.js)
+      ])
+      expect(patterns).toEqual(
+        toPolicyView(spec, `${paths.shuvixHome}/cli-token`).sandboxProtectedPatterns
+      )
+    }
+  )
+
+  it('SP-10 读的是规格自己的 writeDeniedPatterns（取 js 那一面，不是 sbpl），不是写死的 launchd 那一条', () => {
+    const spec = specOf()
+    const extra = { sbpl: '^/sbpl-only', js: '^/js-side' }
+    const widened: SandboxSpec = {
+      ...spec,
+      writeDeniedPatterns: [...spec.writeDeniedPatterns, extra]
+    }
+    const patterns = protectedWritePatterns(widened)
+    expect(patterns.at(-1)).toBe('^/js-side')
+    expect(patterns).not.toContain('^/sbpl-only')
+    expect(patterns).toEqual(toPolicyView(widened, `${SHUVIX}/cli-token`).sandboxProtectedPatterns)
+    // 规格里一条拒写模式都没有时，只剩 git 那几条
+    const none = protectedWritePatterns({ ...spec, writeDeniedPatterns: [] })
+    expect(none).toEqual([...GIT_PATTERNS.map((p) => p.js), GIT_ENTRY_PATTERN.js])
   })
 })

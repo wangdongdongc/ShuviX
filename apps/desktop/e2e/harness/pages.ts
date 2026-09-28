@@ -2,6 +2,8 @@
  * 薄 page-object 层 —— DOM 断言集中在此，选择器坏了只修一处。
  * 约定：断言优先走 IPC（window.api.*）；只有「确实在验证 UI 呈现」时才用这里。
  */
+import { mkdirSync, writeFileSync } from 'node:fs'
+import { dirname } from 'node:path'
 import type { CdpClient } from './cdp'
 import { sleep, until } from './cdp'
 
@@ -107,6 +109,47 @@ export interface PendingAskShot {
   description: string
   /** 预览块的文字：路径类是那条路径，其余是命令原文 */
   preview: string
+}
+
+/**
+ * 询问卡片上的审查意见（chat-ui ReviewOpinion，`data-ask-review`）的快照 —— 审查员看过这次操作、
+ * 决定交给人时附在命令上方的那一块：风险小标签 + 一句话 summary + 「理由」一行。
+ */
+export interface AskReviewShot {
+  /** 容器上的风险等级（`data-ask-review` 的值：low / medium / high / critical） */
+  risk: string
+  /** 风险小标签的文字（随界面语言变） */
+  riskLabel: string
+  /** 审查员写给人看的那句话 */
+  summary: string
+  /** 理由一行去掉前面那个标签之后的正文；没写理由时为空串 */
+  reason: string
+  /** 整块的文字 */
+  text: string
+}
+
+/**
+ * 工具行上的自动审查标记（chat-ui ReviewTag）：状态槽里的「审查中」（`data-tool-reviewing`，
+ * 由 ChatEvent `tool_review` 维护），与行尾的「已审查」盾牌（`data-tool-reviewed="<risk>"`，
+ * 来自工具结果 details 上的保留键 —— 实时与重开会话读的是同一份）。
+ */
+export interface ToolReviewMarkShot {
+  name: string
+  status: string
+  /** 摘要位文本（同名的几行靠它分开） */
+  detail: string
+  /** 状态槽此刻是「审查中」 */
+  reviewing: boolean
+  /** 行尾「已审查」盾牌的风险；没有这枚盾牌时为 null */
+  reviewed: string | null
+}
+
+/** 视口坐标里的一个矩形（CDP `Page.captureScreenshot` 的 clip 用） */
+export interface ViewportRect {
+  x: number
+  y: number
+  width: number
+  height: number
 }
 
 /**
@@ -243,6 +286,22 @@ export interface ChatPane {
    * 模型为这条命令申请了不受限运行（`dangerouslyDisableSandbox`）。没有挂着的询问时为 false
    */
   pendingAskFullAccess(): Promise<boolean>
+  /**
+   * 询问卡片上的审查意见（见 AskReviewShot）；没有挂着的询问、或这张卡没附审查意见（审查关着、
+   * 答不出、force-ask 只问人）时为 null
+   */
+  pendingAskReview(): Promise<AskReviewShot | null>
+  /**
+   * 询问卡片所在的待处理面板在视口里的矩形（截图取证用，见 `screenshotPendingAsk`）；没有时为 null
+   */
+  pendingAskRect(): Promise<ViewportRect | null>
+  /**
+   * 把询问卡片那一块截成 PNG 写到 `filePath`（CDP `Page.captureScreenshot` 带 clip，外扩 `pad` 像素）。
+   * 给人看的证据，不是断言；没有挂着的询问时抛
+   */
+  screenshotPendingAsk(filePath: string, pad?: number): Promise<void>
+  /** 每个工具行上的自动审查标记（DOM 序，与 toolRows 一一对应；见 ToolReviewMarkShot） */
+  toolReviewMarks(): Promise<ToolReviewMarkShot[]>
   /** 展开第 i 个工具行并回其详情区文本（**切换**语义 —— 已展开时会折叠回去） */
   expandToolRow(index: number): Promise<string>
   /** 第 i 个工具行是否展开（展开态在摘要行下方多长出一个详情容器） */
@@ -626,6 +685,74 @@ export function chatPane(main: CdpClient): ChatPane {
     // 标签在询问卡片的标题行里（与后台标签同一个槽），卡片在待处理面板（rounded-t-2xl）里
     pendingAskFullAccess: () =>
       main.eval<boolean>(`!!document.querySelector('.rounded-t-2xl [data-full-access]')`),
+    // 审查意见块（ReviewOpinion）：第一个子节点是「风险标签 + summary」那一行（两个 span），
+    // 有理由时第二个子节点是 <p>：一个标签 span + 理由正文 —— 正文取标签之后的那些节点
+    pendingAskReview: () =>
+      main.eval<AskReviewShot | null>(`(() => {
+        const box = document.querySelector('.rounded-t-2xl [data-ask-review]')
+        if (!box) return null
+        const head = box.firstElementChild
+        const spans = head ? [...head.querySelectorAll(':scope > span')] : []
+        const reasonP = box.querySelector(':scope > p')
+        const reason = reasonP
+          ? [...reasonP.childNodes].slice(1).map((n) => n.textContent ?? '').join('')
+          : ''
+        return {
+          risk: box.getAttribute('data-ask-review') ?? '',
+          riskLabel: (spans[0]?.textContent ?? '').trim(),
+          summary: (spans[1]?.textContent ?? '').trim(),
+          reason: reason.trim(),
+          text: (box.textContent ?? '').trim()
+        }
+      })()`),
+    pendingAskRect: () =>
+      main.eval<ViewportRect | null>(`(() => {
+        const panel = document.querySelector('.rounded-t-2xl')
+        if (!panel) return null
+        const r = panel.getBoundingClientRect()
+        return { x: r.left, y: r.top, width: r.width, height: r.height }
+      })()`),
+    screenshotPendingAsk: async (filePath, pad = 12) => {
+      const rect = await main.eval<ViewportRect | null>(`(() => {
+        const panel = document.querySelector('.rounded-t-2xl')
+        if (!panel) return null
+        panel.scrollIntoView({ block: 'nearest' })
+        const r = panel.getBoundingClientRect()
+        return { x: r.left, y: r.top, width: r.width, height: r.height }
+      })()`)
+      if (!rect) throw new Error('no pending ask card on screen to screenshot')
+      const x = Math.max(0, rect.x - pad)
+      const y = Math.max(0, rect.y - pad)
+      const shot = await main.send<{ data: string }>('Page.captureScreenshot', {
+        format: 'png',
+        clip: {
+          x,
+          y,
+          width: rect.width + (rect.x - x) + pad,
+          height: rect.height + (rect.y - y) + pad,
+          scale: 1
+        }
+      })
+      mkdirSync(dirname(filePath), { recursive: true })
+      writeFileSync(filePath, Buffer.from(shot.data, 'base64'))
+    },
+    toolReviewMarks: () =>
+      main.eval<ToolReviewMarkShot[]>(
+        `(() => {
+          const parts = ${STEP_ROW_PARTS}
+          return ${TOOLS}.map((el) => {
+            const btn = el.querySelector(':scope > button')
+            const mark = btn?.querySelector('[data-tool-reviewed]') ?? null
+            return {
+              name: el.dataset.toolName ?? '',
+              status: el.dataset.toolStatus ?? '',
+              detail: parts(btn).detail,
+              reviewing: !!btn?.querySelector('[data-tool-reviewing]'),
+              reviewed: mark ? mark.getAttribute('data-tool-reviewed') : null
+            }
+          })
+        })()`
+      ),
     expandToolRow: async (index) => {
       await main.eval(`${TOOLS}[${index}]?.querySelector('button')?.click()`)
       await new Promise((r) => setTimeout(r, 250))

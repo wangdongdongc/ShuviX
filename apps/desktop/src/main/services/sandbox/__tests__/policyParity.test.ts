@@ -7,7 +7,10 @@
  *
  *  - PP-1 写的健全性：write 判 allow ⇒ !isWriteBlocked(spec, p)；并钉住已知的「策略比沙箱严」
  *    的方向（安全方向，实现方已接受）；
- *  - PP-2 读的健全性：read 判 allow ⇒ !isReadBlocked(spec, p)。
+ *  - PP-2 读的健全性：read 判 allow ⇒ !isReadBlocked(spec, p)；
+ *  - PP-3 沙箱没套上（INACTIVE_VIEW）、只剩工作区写入视图：免询问的写仍 ⇒ !isWriteBlocked(spec, p)，
+ *    而且只落在工作区或本会话 artifacts 里（工作区豁免绝不放过沙箱会拒写的位置）；
+ *  - PP-4 同一情形下，沙箱视图才放行的临时目录与工具缓存照问。
  *
  * 语料：CL-3 / CL-4 / CL-6 用到的路径 + SP-9 的正则路径，按几种工作区与两种布局（生产 / e2e）各跑一遍。
  */
@@ -22,8 +25,20 @@ import {
 } from '@shuvix/agent-runtime'
 import { createInlinePolicyMdReader } from '@shuvix/agent-runtime/security/builtinPolicies/inlineSources'
 import { isReadBlocked, isWriteBlocked } from '../classify'
-import { buildSandboxSpec, protectedWritePatterns, sessionTmpName, toPolicyView } from '../spec'
-import type { SandboxHostPaths, SandboxSessionInput, SandboxSpec } from '../types'
+import {
+  buildSandboxSpec,
+  isWithin,
+  protectedWritePatterns,
+  sessionTmpName,
+  toPolicyView
+} from '../spec'
+import {
+  INACTIVE_VIEW,
+  type SandboxHostPaths,
+  type SandboxSessionInput,
+  type SandboxSpec,
+  type SessionSandboxView
+} from '../types'
 
 const SID = 'sess-1'
 const READ_MD = createInlinePolicyMdReader()
@@ -63,13 +78,16 @@ function specFor(paths: SandboxHostPaths, over: Partial<SandboxSessionInput>): S
   return result.spec
 }
 
-/** 生产 getVars 的形状：常规桌面变量 + 沙箱视图 */
+/**
+ * 生产 getVars 的形状：常规桌面变量 + 沙箱视图（缺省是套上时的 toPolicyView；PP-3 / PP-4 换成
+ * INACTIVE_VIEW —— 设置关着、探测没过、Linux 上的会话）+ 工作区写入视图
+ */
 function contextFor(
   paths: SandboxHostPaths,
   spec: SandboxSpec,
-  autoAllow = false
+  autoAllow = false,
+  view: SessionSandboxView = toPolicyView(spec, `${paths.shuvixHome}/cli-token`)
 ): SecurityContext {
-  const view = toPolicyView(spec, `${paths.shuvixHome}/cli-token`)
   const provider: SecurityHostProvider = {
     host: 'desktop',
     pathSep: '/',
@@ -275,4 +293,65 @@ describe('PP-2 读的健全性：文件工具免询问的读，受限命令一�
   it('PP-2 策略变量齐全：以上评估没有 fail-safe 告警', () => {
     expect(warnings.filter((w) => /fail-safe|not provided/i.test(w))).toEqual([])
   })
+})
+
+describe('PP-3 / PP-4 沙箱没套上、只剩工作区写入视图', () => {
+  /** 沙箱视图换成 INACTIVE_VIEW；工作区写入视图照生产 workspaceWriteView 从同一份规格算 */
+  const workspaceOnly = (paths: SandboxHostPaths, spec: SandboxSpec): SecurityContext =>
+    contextFor(paths, spec, false, INACTIVE_VIEW)
+
+  it.each(variants)(
+    'PP-3 %s 布局 · %s：免询问的写受限命令一定也写得了，且都在工作区或本会话 artifacts 里',
+    (layout, wsName) => {
+      const paths = LAYOUTS[layout]
+      const ws = WORKSPACES[wsName](paths)
+      const spec = specFor(paths, { workingDirectory: ws })
+      const ctx = workspaceOnly(paths, spec)
+      const artifacts = `${paths.shuvixHome}/artifacts/${SID}`
+      const warningsBefore = warnings.length
+      const blocked: string[] = []
+      const escaped: string[] = []
+      let allowed = 0
+      for (const path of corpus(paths, ws)) {
+        const decision = ctx.evaluate('write', { type: 'path', path })
+        if (decision.effect !== 'allow') continue
+        allowed++
+        if (isWriteBlocked(spec, path)) blocked.push(`${path} (${decision.winning})`)
+        if (!isWithin(path, spec.workingDirectory) && !isWithin(path, artifacts)) {
+          escaped.push(`${path} (${decision.winning})`)
+        }
+      }
+      expect(blocked).toEqual([])
+      expect(escaped).toEqual([])
+      expect(allowed).toBeGreaterThan(0)
+      // 工作区里的普通源码确实走了豁免（不是整片都在问）
+      expect(ctx.evaluate('write', { type: 'path', path: `${ws}/src/a.ts` }).effect).toBe('allow')
+      // 变量齐全：没有 fail-safe 告警
+      expect(
+        warnings.slice(warningsBefore).filter((w) => /fail-safe|not provided/i.test(w))
+      ).toEqual([])
+    }
+  )
+
+  it.each(variants)(
+    'PP-4 %s 布局 · %s：/private/tmp 与 ~/.npm 照问（它们只归沙箱视图豁免，沙箱套上时才放行）',
+    (layout, wsName) => {
+      const paths = LAYOUTS[layout]
+      const ws = WORKSPACES[wsName](paths)
+      const spec = specFor(paths, { workingDirectory: ws })
+      const inactive = workspaceOnly(paths, spec)
+      const active = contextFor(paths, spec)
+      for (const path of ['/private/tmp/x', `${paths.home}/.npm/x`]) {
+        expect({
+          path,
+          inactive: inactive.evaluate('write', { type: 'path', path })
+        }).toMatchObject({ path, inactive: { effect: 'ask', winning: 'ask-on-write#0' } })
+        // 对照：同一份规格、沙箱视图套上时这两处不问 —— 放行它们的只是沙箱视图
+        expect({ path, active: active.evaluate('write', { type: 'path', path }).effect }).toEqual({
+          path,
+          active: 'allow'
+        })
+      }
+    }
+  )
 })
