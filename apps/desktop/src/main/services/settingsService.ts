@@ -80,6 +80,10 @@ export const KNOWN_SETTINGS: Record<string, SettingMeta> = {
   'sandbox.enabled': {
     labelKey: 'settings.sandboxEnabled',
     desc: 'true | false — run agent bash commands confined in the macOS sandbox, without asking (default true; takes effect for new conversations)'
+  },
+  'security.autoReview': {
+    labelKey: 'settings.autoReview',
+    desc: "true | false — before an approval card is shown, a reviewing agent answers it on the user's behalf (default true; takes effect at the next approval)"
   }
 }
 

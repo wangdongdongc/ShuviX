@@ -10,13 +10,16 @@
  *
  * 与决策日志一样只活在内存里：重启即归零，不值得为它建表。
  *
- * 同一处还记着审查的另外两份会话内状态：
+ * 同一处还记着审查的另外几份会话内状态：
  *  - **人在审批卡片上写的反馈**：执行层在收到人的回答时记下。审查员的输入只收人写的东西，而卡片
  *    反馈落进会话树时只是一段工具结果文字 —— 任何命令都能打印出同样的开头，按文字认就是给注入
  *    开门。所以只认这里：只有安全模块自己收到的回答才会进来。
+ *  - **审查放行过的调用**：宿主在工具执行完之后取走，写进工具结果（工具卡上的「已审查」标记）；
  *  - **进行中的审查**：会话被停止时一并中止，并在下一次 prompt 之前不再开始新的 —— 与询问卡片同一
  *    待遇（HarnessSession 的 inputsClosed）。否则一次放行会在用户点了停止之后才落地。
  */
+
+import { PERMISSION_RISKS, type PermissionRisk } from '@shuvix/chat-protocol/types/permissionReview'
 
 export const REVIEW_CONSECUTIVE_DENIAL_LIMIT = 3
 export const REVIEW_TOTAL_DENIAL_LIMIT = 20
@@ -79,6 +82,49 @@ export function humanFeedbackOf(sessionId: string): HumanFeedbackNote[] {
   return [...(feedback.get(sessionId) ?? [])]
 }
 
+// ─── 审查放行过的调用 ───────────────────────────────────
+
+/** 每会话最多记多少条还没被取走的放行（工具抛错时不会被取走 —— 旧的先丢） */
+const ALLOWED_LIMIT = 50
+
+/** 审查员放行一次调用时留下的标记：风险与写给人看的那句话（工具卡上的「已审查」） */
+export interface ReviewAllowedNote {
+  risk: PermissionRisk
+  summary: string
+}
+
+const allowed = new Map<string, Map<string, ReviewAllowedNote>>()
+
+/**
+ * 审查员放行了这次调用（执行层调用）。同一次调用里审查不止一次（先读后写）时留风险最高的那次。
+ */
+export function noteReviewAllowed(
+  sessionId: string,
+  toolCallId: string,
+  note: ReviewAllowedNote
+): void {
+  if (!toolCallId) return
+  const notes = allowed.get(sessionId) ?? new Map<string, ReviewAllowedNote>()
+  const prev = notes.get(toolCallId)
+  if (!prev || PERMISSION_RISKS.indexOf(note.risk) > PERMISSION_RISKS.indexOf(prev.risk)) {
+    notes.delete(toolCallId)
+    notes.set(toolCallId, note)
+  }
+  while (notes.size > ALLOWED_LIMIT) notes.delete(notes.keys().next().value as string)
+  allowed.set(sessionId, notes)
+}
+
+/** 取走这次调用的放行标记（宿主在工具执行完之后调用，写进工具结果）；没有返回 undefined */
+export function takeReviewAllowed(
+  sessionId: string,
+  toolCallId: string
+): ReviewAllowedNote | undefined {
+  const notes = allowed.get(sessionId)
+  const note = notes?.get(toolCallId)
+  if (note) notes!.delete(toolCallId)
+  return note
+}
+
 // ─── 进行中的审查 ─────────────────────────────────────
 
 const inflight = new Map<string, Set<AbortController>>()
@@ -115,10 +161,11 @@ export function reopenSessionReviews(sessionId: string): void {
   closed.delete(sessionId)
 }
 
-/** 会话销毁时清理（与 clearSessionDecisions 同一处调用）：计数、反馈、进行中的审查一并清掉 */
+/** 会话销毁时清理（与 clearSessionDecisions 同一处调用）：计数、反馈、放行标记、进行中的审查一并清掉 */
 export function clearReviewState(sessionId: string): void {
   states.delete(sessionId)
   feedback.delete(sessionId)
+  allowed.delete(sessionId)
   closed.delete(sessionId)
   for (const controller of inflight.get(sessionId) ?? []) controller.abort()
   inflight.delete(sessionId)

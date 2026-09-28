@@ -323,6 +323,11 @@ export function useAgentEvents(): void {
         )
         break
 
+      case 'tool_review':
+        // 自动审查在替用户看这次调用：工具卡显示「审查中」，落定后收掉
+        store.setToolReviewing(sid, event.toolCallId, event.reviewing)
+        break
+
       case 'runtime_event':
         store.setRuntime(sid, event.runtimeId, event.status)
         break

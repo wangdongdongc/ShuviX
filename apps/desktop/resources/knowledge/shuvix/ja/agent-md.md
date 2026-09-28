@@ -144,7 +144,8 @@ frontmatter の後の全部（前後の空白を除く）がシステムプロ�
 会話のルート。`mcp:chrome` —— ユーザー自身の Chrome —— を持つのはこれだけ）、`coedit`（OS から md を
 開いたときの共同編集ウィンドウのルート。`doc_read` / `doc_edit` / `doc_insert` だけでライブドキュメントを
 編集する）—— に加えて、タスク型の
-`coding`、`explore`、`widget`、`titler`、`knowledge-writer`。
+`coding`、`explore`、`widget`、`titler`、`knowledge-writer`、そして `permission-reviewer` —— 自動レビューの
+ために承認リクエストに答えるエージェントで（`policy-md` エントリを参照）、派遣するのは ShuviX だけです。
 
 - **セッションのルート人格はセッションの形から導かれ、決して選ばれません**：共同編集ウィンドウ → `coedit`、ノートブック → `notebook`、
   bot チャット → `bot`、Chrome サイドパネル → `tab`、プロジェクト内 → `work`、それ以外 → `chat`。設定もピッカーもありません。
@@ -156,6 +157,8 @@ frontmatter の後の全部（前後の空白を除く）がシステムプロ�
   組み込みを隠すことはありません。
 - ベースは**決して派遣されず、決して名指されません**：`agent` ツール、hook の `shuvix-hook-agent`、
   サブセッションの `agent_profile` はいずれも `work` / `chat` / `notebook` / `bot` / `tab` / `coedit` を拒否します。
+  `permission-reviewer` も `agent` ツールと `agent_profile` からは拒否されます —— 自分のレビュアーを好きに
+  呼べるエージェントは、通る言い方が見つかるまで言い換えを試せてしまうからです —— が、hook は名指せます。
 
 ## Agent はどう使われるか
 

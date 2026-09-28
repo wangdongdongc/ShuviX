@@ -54,6 +54,8 @@ import { CodeView } from '../code/CodeView'
 import { copyToClipboard } from '../../utils/clipboard'
 import { CODE_MAX_H, DETAIL_PRE_CLASS, STREAM_PRE_CLASS } from './detailViewport'
 import { BackgroundBadge, BgTaskRowState } from './BgTaskTag'
+import { ReviewedMark, ReviewingIcon } from './ReviewTag'
+import { toolReviewOf } from '@shuvix/chat-protocol/types/toolReview'
 import { clipLine } from '../../utils/clipLine'
 
 /** lucide 图标名 → 组件映射（按需扩展） */
@@ -182,6 +184,9 @@ export function ToolCallBlock({
   })
   const status = liveExec?.status || propStatus
   const details = liveExec?.details || propDetails
+  // 自动审查：进行中顶替状态图标；放行过的在行尾留一枚盾牌（标记随 details 落盘，重开照样在）
+  const reviewing = !!liveExec?.reviewing && status === 'running'
+  const reviewNote = status === 'done' ? toolReviewOf(details) : undefined
 
   // 模型收到的那张图（read 到图片时）——details 走的是磁盘路径，不是 base64
   const modelImage = toolResultImage(details)
@@ -213,9 +218,12 @@ export function ToolCallBlock({
     error: <X size={11} className="text-error" />
   }
 
-  // 当存在挂起的用户输入时,覆盖状态展示为"等待用户响应"(优先级高于 running)
+  // 当存在挂起的用户输入时,覆盖状态展示为"等待用户响应"(优先级高于 running)；
+  // 审查员正在看这次调用时显示「审查中」（它答完才轮到询问卡片或执行）
   const statusIcon = hasPendingInput ? (
     <ShieldAlert size={11} className="text-warning" />
+  ) : reviewing ? (
+    <ReviewingIcon />
   ) : (
     statusConfig[status]
   )
@@ -245,7 +253,13 @@ export function ToolCallBlock({
     label: presentation?.label || toolName,
     detail: detail ? <span className="font-mono">{detail}</span> : undefined,
     badge: isBackground ? <BackgroundBadge /> : undefined,
-    trailing: toolCallId ? <BgTaskRowState toolCallId={toolCallId} /> : undefined
+    trailing:
+      reviewNote || toolCallId ? (
+        <>
+          {reviewNote && <ReviewedMark note={reviewNote} />}
+          {toolCallId && <BgTaskRowState toolCallId={toolCallId} />}
+        </>
+      ) : undefined
   }
 
   // `data-tool-name` / `data-tool-status`：工具行在 DOM 上唯一的语义锚点

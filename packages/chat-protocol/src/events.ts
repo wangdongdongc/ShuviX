@@ -124,6 +124,20 @@ export interface ChatToolEndEvent extends ChatEventBase {
   details?: ToolResultDetails
 }
 
+/**
+ * 询问点的自动审查开始 / 落定（设计稿 docs/permission-review-design.md §11）：策略判出要问、
+ * 审查员正在替用户看这次调用。工具卡据此显示「审查中」，免得几秒的等待看起来像工具卡住了。
+ *
+ * 只是过程态，不进会话树：结论另有落点 —— 放行的记在工具结果的 details 上（toolReviewOf），
+ * 拒绝就是那条红行，转给人的是询问卡片（AskInputRequest.review）。
+ */
+export interface ChatToolReviewEvent extends ChatEventBase {
+  type: 'tool_review'
+  toolCallId: string
+  /** true = 审查中；false = 审查落定（不论结论） */
+  reviewing: boolean
+}
+
 // ─── 交互请求(统一) ────────────────────────────────────
 
 /**
@@ -351,6 +365,7 @@ export type ChatEvent =
   | ChatToolCallGeneratingEvent
   | ChatToolStartEvent
   | ChatToolEndEvent
+  | ChatToolReviewEvent
   | ChatInputRequestEvent
   | ChatInputRequestResolvedEvent
   | ChatImageDataEvent

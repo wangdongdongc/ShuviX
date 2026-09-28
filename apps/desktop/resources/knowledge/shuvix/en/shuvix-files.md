@@ -37,8 +37,10 @@ directories are registered), `widgets/`, `tts/`, `cli-token`. The old `memory/`,
 `workflows/` directories are retired formats that are no longer read.
 
 **Builtins live inside the application, not on disk.** ShuviX ships builtin agents (`work`,
-`chat`, `notebook`, `bot`, `coding`, `explore`, `widget`, `titler`, `knowledge-writer`), builtin security policies and one builtin hook
-(`auto-title`). There are no builtin bots and no builtin skills. A builtin cannot be edited, but
+`chat`, `notebook`, `bot`, `tab`, `coedit`, `coding`, `explore`, `widget`, `titler`,
+`knowledge-writer`, `permission-reviewer`), builtin security policies, two builtin hooks
+(`auto-title`, `auto-review`) and the builtin skill `builtin:drawing`. There are no builtin bots.
+A builtin cannot be edited, but
 it can be **overridden**: a user file whose `name` equals the builtin's name replaces it
 completely (the Settings tabs offer "create override copy", which writes the builtin's current
 text into your directory as a starting point).

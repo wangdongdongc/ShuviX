@@ -31,6 +31,7 @@ import {
   type SecurityDecisionRecord
 } from '@shuvix/agent-runtime'
 import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
+import { chatFrontendRegistry } from '../frontend/core'
 import { hookService, hookTriggers } from './hookService'
 import { messageService } from './messageService'
 import { sessionRecords } from './sessionRecords'
@@ -299,6 +300,11 @@ export async function buildPermissionRequestPayload(
   }
 }
 
+/** 工具卡上的「审查中」：开始与落定（不论结论）各发一次，按 toolCallId 更新那张卡 */
+function notifyReviewing(sessionId: string, toolCallId: string, reviewing: boolean): void {
+  chatFrontendRegistry.broadcast({ type: 'tool_review', sessionId, toolCallId, reviewing })
+}
+
 /**
  * 接缝实现：交给判定型 hook，交回最严的结论；答不出交回 null（照旧问人）。绝不抛出。
  */
@@ -309,15 +315,19 @@ export async function reviewPermissionRequest(
   if (!autoReviewEnabled()) return null
   const subject = event.request.subject
   if (subject.kind !== 'agent') return null
+  const reviewers = hookService.agentsBoundTo('permission.request')
   // 防递归：判定型 hook 派出的 agent 自己要权限，不再交给审查 —— 否则审查员的一次询问会再派一个
   // 审查员（它挂在根会话下，深度校验拦不住），一路派下去
   if (
     subject.agentKind === 'spawned' &&
     subject.profileName &&
-    hookService.agentsBoundTo('permission.request').has(subject.profileName)
+    reviewers.has(subject.profileName)
   ) {
     return null
   }
+  // 没有 hook 绑在这个埋点上就不会有审查：也就不报「审查中」，免得卡片闪一下
+  const announce = reviewers.size > 0 && !!event.toolCallId
+  if (announce) notifyReviewing(subject.sessionId, event.toolCallId, true)
   try {
     const payload = await buildPermissionRequestPayload(event)
     const decision = await hookTriggers.decide('permission.request', payload, { signal })
@@ -325,5 +335,7 @@ export async function reviewPermissionRequest(
   } catch (err) {
     log.warn(`permission review failed: ${err instanceof Error ? err.message : String(err)}`)
     return null
+  } finally {
+    if (announce) notifyReviewing(subject.sessionId, event.toolCallId, false)
   }
 }

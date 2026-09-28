@@ -2,6 +2,7 @@ import { getHostApi } from '@shuvix/chat-ui'
 import { FileOutput, FilePen, FileText, FolderOpen, Shield, ShieldAlert } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { BackgroundBadge, FullAccessBadge } from '../BgTaskTag'
+import { ReviewOpinion } from '../ReviewTag'
 import { renderToolIcon } from '../ToolCallBlock'
 import { useChatStore } from '../../../stores/chatStore'
 import { useTranslation } from 'react-i18next'
@@ -156,7 +157,8 @@ export function AskForm({
     preview,
     toolName,
     background,
-    unsandboxed
+    unsandboxed,
+    review
   } = request
   const hostPresentation = useChatStore((s) => s.toolPresentations[toolName])
   // 内置 MCP 能力服务器发起的询问（browser 打开一个地址、读一个本地文件；ssh 执行一条命令）
@@ -254,6 +256,9 @@ export function AskForm({
         {unsandboxed && <FullAccessBadge />}
         {titleAccessory}
       </div>
+
+      {/* 审查员看过、交给你的：它那句大白话放在原文上方 —— 读懂一条命令要懂 shell，读懂它不用 */}
+      {review && <ReviewOpinion review={review} />}
 
       {diffPreview ? (
         // 平常 diff 头上是模型写的路径；写入被链接带去别处时，改为真实去处领头、原写法注在下面

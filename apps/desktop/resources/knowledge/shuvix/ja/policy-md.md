@@ -2,7 +2,7 @@
 shuvix: okf v0.2
 type: Guide
 title: 'セキュリティポリシーファイル（shuvix: policy v1）'
-description: 'ShuviX セキュリティポリシーの完全な仕様 —— 規則が見るリクエスト文書（subject / action / tool / object / env / vars）、五つの条件キー、CEL `match`、効果とその優先順位、`lets`、ファイルが不正になる条件、組み込みポリシー、そしてゲートの緩め方と締め方。'
+description: 'ShuviX セキュリティポリシーの完全な仕様 —— 規則が見るリクエスト文書（subject / action / tool / object / env / vars）、五つの条件キー、CEL `match`、効果とその優先順位、確認に誰が答えるか（まず自動レビュー、次にあなた）、`lets`、ファイルが不正になる条件、組み込みポリシー、そしてゲートの緩め方と締め方。'
 tags: [shuvix, policy, security, format, spec, cel]
 status: stable
 sources:
@@ -27,6 +27,13 @@ ShuviX のデータ、個人フォルダは読めません）。ホストはこ�
 `sandboxed` 属性として報告し、組み込みポリシーがそれで判断します：閉じ込められたコマンドは確認なしで
 実行され、閉じ込められていないもの——サンドボックスがオフまたは使えない、エージェントがフルアクセスを
 求めた、すべての `ssh` コマンド——は確認が出て、許可されるとユーザーの完全な権限で実行されます。
+
+`ask` はすぐにユーザーへ届くわけではありません。**自動レビュー**がオンのとき（設定 → 一般 → セキュリティ、既定で
+オン）、レビューするエージェントがまず答えます —— ユーザーが書いたものと操作そのものだけを見る独立した
+コンテキストで：普段の作業は通し、明らかに有害なものは拒否し、残りは自分の意見をカードに添えてユーザーの
+前に出します。レビュアーはフィルターであって境界ではありません —— 境界はサンドボックスと `deny` 規則です。
+`force-ask` は常にユーザーに届きます。レビュアーの正体は組み込み hook `auto-review` とエージェント
+`permission-reviewer` です。何を見るか、どう変えるかは `hook-md` エントリを参照してください。
 
 - 場所：`~/.shuvix/policies/<name>.md`。
 - マーカー：`shuvix: policy v1`。読み取り時は省略可、書くときは必ず付く。
@@ -93,12 +100,12 @@ The body is documentation only — the engine never reads it.
 deny  >  force-ask  >  force-allow  >  ask  >  allow  >  （何も一致しない = allow）
 ```
 
-- `ask` は呼び出しをユーザーの前に出し、`allow` はそのまま通し、`deny` は拒否します（エージェントは
-  `prompt` を理由として受け取る）。
+- `ask` は呼び出しをまず自動レビューに渡し、それで決まらなければユーザーの前に出します。`allow` は
+  そのまま通し、`deny` は拒否します（エージェントは `prompt` を理由として受け取る）。
 - `force-allow` はあらゆる `ask` にも勝つ許可 —— ShuviX はセッションの許諾（「自動許可」と
-  「許可して記憶」）にこれを使います。
-- `force-ask` は `force-allow` でさえ飛ばせない確認 —— 「このゲートはセッション単位の同意を受け付けない」
-  （bot ファイルのゲートがそれです）。
+  「許可して記憶」）にこれを使います。`force-allow` はレビュアーを通りません。
+- `force-ask` は `force-allow` でさえ飛ばせず、ユーザーだけが答える確認 —— 「このゲートはセッション単位の
+  同意もレビュアーも受け付けない」（bot ファイルと ShuviX の設定のゲートがそれです）。
 - `deny` はすべてに勝ちます。
 
 条件はネイティブな述語にコンパイルされ、CEL の**前**に評価されるので、条件が外れた規則はその `match`
@@ -125,7 +132,7 @@ vars     ホスト変数表（後述）+ セッションの許諾
 | `object.type`  | 発生元                                                       | `action`         | 属性                                                                                                                                                                                                                                                      |
 | -------------- | ------------------------------------------------------------ | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `path`         | `read`、`write`、`edit`、`knowledge` ツール、ファイルプレビュー | `read` / `write` | `path`（パスが実際に行き着く場所：絶対パス。デスクトップではシンボリックリンクを展開し、`..` は実際の親ディレクトリを指す —— OS が開くときと同じ）、`requestedPath`（ツールが要求した時点の絶対パス —— リンクや `..` を挟むと `path` と異なる）、`displayPath`（モデルが書いたまま、メッセージ用） |
-| `command`      | `bash`、`powershell`、`ssh`                                  | `execute`        | `command`（生のテキスト）、`channel`（`bash` / `powershell` / `ssh`）、`sandboxed`（ブール —— ホストがこの実行を本当にコマンドサンドボックスに閉じ込めた；常に存在し、`ssh` とサンドボックスのない環境では `false`）、およびシェルパーサーから遅延で（`powershell` のコマンドは ShuviX 独自の PowerShell スキャナーで読む：`base` は正規化したコマンド名 —— エイリアスは cmdlet 名に解決、パスと `.exe` / `.com` は除去、大文字小文字はそのまま、比較の前に `lowerAscii()` —— `-Name:value` は二項目に分割）：`parsed`（ブール）、`commands`（`{ base, argv, wrappers, complete, depth }` のリスト —— `base` は `sudo` / `env` / `timeout` を剥がした後の本当のプログラム、動的な語は `''`）、`writes`（リダイレクト先の絶対パス） |
+| `command`      | `bash`、`powershell`、`ssh`                                  | `execute`        | `command`（生のテキスト）、`channel`（`bash` / `powershell` / `ssh`）、`sandboxed`（ブール —— ホストがこの実行を本当にコマンドサンドボックスに閉じ込めた；常に存在し、`ssh` とサンドボックスのない環境では `false`）、`unconfinedReason`（閉じ込められなかった理由：閉じ込められたら `''`、`escalated` = エージェントがフルアクセスを求めた、`disabled` = サンドボックスがオフ、`unsupported` = このプラットフォームやシェルにはサンドボックスがない、`unavailable` = 今回はサンドボックスを適用できなかった、`remote` = `ssh`）、およびシェルパーサーから遅延で（`powershell` のコマンドは ShuviX 独自の PowerShell スキャナーで読む：`base` は正規化したコマンド名 —— エイリアスは cmdlet 名に解決、パスと `.exe` / `.com` は除去、大文字小文字はそのまま、比較の前に `lowerAscii()` —— `-Name:value` は二項目に分割）：`parsed`（ブール）、`commands`（`{ base, argv, wrappers, complete, depth }` のリスト —— `base` は `sudo` / `env` / `timeout` を剥がした後の本当のプログラム、動的な語は `''`）、`writes`（リダイレクト先の絶対パス） |
 | `gitTool`      | `git` ツール                                                 | `execute`        | `gitAction`、`command`、`force`（ブール）、`delete`（ブール）                                                                                                                                                                                           |
 | `database`     | 組み込み `database` サーバーの `query` ツール                | `execute`        | `sql`、`credential`、`dbType`、`readonly`（ブール —— 接続が読み取り専用か）                                                                                                                                                                              |
 | `url`          | 組み込み `browser` / `chrome` サーバー：すべてのナビゲーション、`chrome` ではサイトごとの初回利用も | `navigate`       | `url`、`scheme`、`host`（小文字、末尾のドットなし）、`origin`、`browser`（`app` = ShuviX 内のブラウザーパネル、`chrome` = あなた自身の Chrome）。`file://` は url オブジェクトではなく、そのパスの読み取りとして判定 |
@@ -160,6 +167,10 @@ vars     ホスト変数表（後述）+ セッションの許諾
 | `botsDir`                     | string   | `~/.shuvix/bots`                                                              |
 | `builtinKnowledgeDir`         | string   | ShuviX が同梱する読み取り専用のナレッジベース（このベース）                   |
 | `sessionArtifactsDir`         | string   | この会話自身の成果物 `~/.shuvix/artifacts/<セッション>`                        |
+| `shuvixConfigDirs`            | string[] | `~/.shuvix/policies`、`agents`、`hooks`、`skills` —— ShuviX 自身の設定          |
+| `workspaceWritable`           | string[] | 作業ディレクトリ。ファイルツールによる書き込みは確認なし（Windows と、作業ディレクトリが不適切なとき —— `/`、ホームを覆うフォルダ、ShuviX 自身のデータ —— は空） |
+| `workspaceWriteDenied`        | string[] | その中の保護された場所（プロジェクトの `.vscode`、`.claude` など；認証情報ディレクトリ） |
+| `workspaceProtectedPatterns`  | string[] | その中の保護された git メタデータの正規表現 —— `matches` と組み合わせて使う       |
 | `sandboxActive`               | boolean  | このセッションのコマンドはコマンドサンドボックス内で動く                       |
 | `sandboxWritableRoots`        | string[] | 制限付きコマンドが書ける場所（サンドボックスが無効なら空）                     |
 | `sandboxWriteDenied`          | string[] | その中の保護された場所（プロジェクトの `.vscode`、`.claude` など；認証情報ディレクトリ） |
@@ -185,7 +196,7 @@ scope と交差して空になる規則；不正な `lets`（不正な名前、�
 
 ## 組み込みポリシー
 
-アプリケーションに十二本同梱（UI 言語ごとに一つ；**規則は常に英語ファイルから取られ**、翻訳は人が読む
+アプリケーションに十三本同梱（UI 言語ごとに一つ；**規則は常に英語ファイルから取られ**、翻訳は人が読む
 テキストだけを変える）：
 
 | 名前                            | ゲート                                                                                                       |
@@ -194,8 +205,9 @@ scope と交差して空になる規則；不正な `lets`（不正な名前、�
 | `protect-system`                | OS ディレクトリへの書き込みを拒否                                                                             |
 | `block-catastrophic-commands`   | マシンを破壊する少数のコマンドを、解析された構造で判断して拒否（`rm -rf /`、`mkfs`、デバイスへの `dd`、`Format-Volume`……）     |
 | `protect-bot-files`             | `~/.shuvix/bots` 配下のあらゆる書き込みを **force-ask**                                                       |
+| `protect-shuvix-config`         | `~/.shuvix/policies`、`agents`、`hooks`、`skills` 配下のあらゆる書き込みを **force-ask**                      |
 | `ask-on-read`                   | ワークスペース、ツール結果、skill ディレクトリ、本リファレンスの外の読み取りを確認；サンドボックス有効時は制限付きコマンドも読めない場所だけ |
-| `ask-on-write`                  | ファイル書き込みを diff プレビュー付きで確認 —— この会話の成果物と、サンドボックス有効時は制限付きコマンドがもともと書ける場所を除く |
+| `ask-on-write`                  | ファイル書き込みを diff プレビュー付きで確認 —— この会話の成果物、作業ディレクトリ（その中の保護された場所を除く、Windows を除く）、サンドボックス有効時は制限付きコマンドがもともと書ける場所を除く |
 | `ask-on-command`                | サンドボックスに閉じ込められていないコマンドを確認（`object.sandboxed` が false：サンドボックスがオフ／使えない、フルアクセスの要求、`ssh`） |
 | `git-safety`                    | 破壊的な git 操作を確認（`init`、`restore`、強制 checkout、ブランチ削除）                                     |
 | `ask-on-database`               | 書き込み可能なデータベース接続上のすべての文を確認                                                            |
@@ -212,7 +224,9 @@ scope と交差して空になる規則；不正な `lets`（不正な名前、�
 - 組み込みに触れずに**一箇所を確認から免除**：`force-allow` の規則を持つ新しいポリシー
   （`force-allow` は `ask` に勝つ）。例：あるディレクトリ配下の書き込み。
 - **強い停止を加える**：`deny` の規則 —— 自動許可を含むすべてに勝つ。
-- **ゲートを飛ばせなくする**：`force-ask`。
+- **ゲートを飛ばせなくする**：`force-ask` —— 自動許可も自動レビューも答えられません。ある種の操作に
+  レビュアーを関わらせたくないときも同じ書き方です。例：`object.unconfinedReason == 'escalated'` で
+  「エージェントがサンドボックスを出たがるときは必ず私に確認する」。
 - 規則は狭く：deny は呼び出しごとに免除できないので、日常の作業で発火する規則は、見逃す規則より
   悪い。
 

@@ -2,7 +2,7 @@
 shuvix: okf v0.2
 type: Guide
 title: 'Security policy file (shuvix: policy v1)'
-description: 'The complete specification of a ShuviX security policy — the request document a rule sees (subject / action / tool / object / env / vars), the five condition keys, CEL `match`, effects and their precedence, `lets`, what makes a file invalid, the builtin policies, and how to loosen or tighten a gate.'
+description: 'The complete specification of a ShuviX security policy — the request document a rule sees (subject / action / tool / object / env / vars), the five condition keys, CEL `match`, effects and their precedence, who answers an ask (the automatic review, then you), `lets`, what makes a file invalid, the builtin policies, and how to loosen or tighten a gate.'
 tags: [shuvix, policy, security, format, spec, cel]
 status: stable
 sources:
@@ -27,6 +27,14 @@ and cannot read credentials, ShuviX's data or personal folders). The host report
 really confined as the command's `sandboxed` attribute, and the builtin policies decide on it: a
 confined command runs without asking, an unconfined one — sandbox off, not available, the agent
 asking for full access, every `ssh` command — asks, and then runs with the user's full privileges.
+
+An `ask` does not go to the user straight away. With **automatic review** on (Settings → General →
+Security, on by default), a reviewing agent answers it first, in a fresh context that sees only what the
+user wrote and the operation itself: it lets ordinary work through, refuses what is clearly
+harmful, and puts the rest in front of the user with its opinion on the card. The reviewer is
+a filter, not a boundary — the sandbox and the `deny` rules are. `force-ask` always goes to the
+user. The reviewer is the builtin hook `auto-review` and the agent `permission-reviewer`; see the
+`hook-md` entry for what it sees and how to change it.
 
 - Location: `~/.shuvix/policies/<name>.md`.
 - Marker: `shuvix: policy v1`; optional on read, always written.
@@ -93,12 +101,13 @@ Among all matching rules of all policies, the strongest effect wins:
 deny  >  force-ask  >  force-allow  >  ask  >  allow  >  (nothing matched = allow)
 ```
 
-- `ask` puts the call in front of the user; `allow` answers it; `deny` refuses it (the agent
-  gets `prompt` as the reason).
+- `ask` puts the call in front of the automatic reviewer, then — if it does not settle it — the
+  user; `allow` answers it; `deny` refuses it (the agent gets `prompt` as the reason).
 - `force-allow` is an allow that also beats every `ask` — ShuviX uses it for session grants
-  ("auto-allow" and "allow and remember").
-- `force-ask` is an ask that even `force-allow` cannot skip — "this gate does not accept session
-  consent" (the bot-file gate is one).
+  ("auto-allow" and "allow and remember"). A `force-allow` never reaches the reviewer.
+- `force-ask` is an ask that even `force-allow` cannot skip, and that only the user answers —
+  "this gate accepts neither session consent nor the reviewer" (the bot-file and ShuviX-config
+  gates are two).
 - `deny` beats everything.
 
 Conditions compile to native predicates evaluated **before** the CEL, so a rule whose conditions
@@ -125,7 +134,7 @@ why every builtin rule carries `subject.kind: [agent]`.
 | `object.type`  | Raised by                                                   | `action`         | Attributes                                                                                                                                                                                                                                                                                               |
 | -------------- | ----------------------------------------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `path`         | `read`, `write`, `edit`, the `knowledge` tool, file previews | `read` / `write` | `path` (where the path really leads: absolute; on the desktop symlinks are followed and `..` goes to the real parent, as the OS does when it opens the path), `requestedPath` (the absolute path as the tool asked for it — differs from `path` when a link or `..` was in the way), `displayPath` (as the model wrote it, for messages) |
-| `command`      | `bash`, `powershell`, `ssh`                                 | `execute`        | `command` (raw text), `channel` (`bash` / `powershell` / `ssh`), `sandboxed` (bool — the host really confined this run in the OS command sandbox; always present, `false` for `ssh` and wherever there is no sandbox), and lazily from the shell parser (a `powershell` command is read by ShuviX's own PowerShell scanner: `base` is the canonical name — aliases resolved to cmdlets, path and `.exe` / `.com` dropped, case kept, so compare with `lowerAscii()` — and `-Name:value` is split into two items): `parsed` (bool), `commands` (list of `{ base, argv, wrappers, complete, depth }` — `base` is the real program after `sudo` / `env` / `timeout` are stripped, dynamic words are `''`), `writes` (redirect targets as absolute paths) |
+| `command`      | `bash`, `powershell`, `ssh`                                 | `execute`        | `command` (raw text), `channel` (`bash` / `powershell` / `ssh`), `sandboxed` (bool — the host really confined this run in the OS command sandbox; always present, `false` for `ssh` and wherever there is no sandbox), `unconfinedReason` (why not: `''` when confined, `escalated` = the agent asked for full access, `disabled` = the sandbox is switched off, `unsupported` = no sandbox on this platform or for this shell, `unavailable` = the sandbox could not be applied this time, `remote` = `ssh`), and lazily from the shell parser (a `powershell` command is read by ShuviX's own PowerShell scanner: `base` is the canonical name — aliases resolved to cmdlets, path and `.exe` / `.com` dropped, case kept, so compare with `lowerAscii()` — and `-Name:value` is split into two items): `parsed` (bool), `commands` (list of `{ base, argv, wrappers, complete, depth }` — `base` is the real program after `sudo` / `env` / `timeout` are stripped, dynamic words are `''`), `writes` (redirect targets as absolute paths) |
 | `gitTool`      | the `git` tool                                              | `execute`        | `gitAction`, `command`, `force` (bool), `delete` (bool)                                                                                                                                                                                                                                                  |
 | `database`     | the built-in `database` server's `query` tool               | `execute`        | `sql`, `credential`, `dbType`, `readonly` (bool — whether the connection is read-only)                                                                                                                                                                                                                   |
 | `url`          | the built-in `browser` / `chrome` servers: every navigation, and in `chrome` the first use of each site | `navigate`       | `url`, `scheme`, `host` (lower-cased, no trailing dot), `origin`, `browser` (`app` = the browser panel inside ShuviX, `chrome` = your own Chrome); `file://` is not a url object — it is judged as a read of that path |
@@ -160,6 +169,10 @@ matched (with a warning), an allow rule as not matched. Always guard with the ty
 | `botsDir`               | string   | `~/.shuvix/bots`                                                                              |
 | `builtinKnowledgeDir`   | string   | the read-only knowledge base ShuviX ships (this one)                                          |
 | `sessionArtifactsDir`   | string   | this conversation's own artifacts, `~/.shuvix/artifacts/<session>`                            |
+| `shuvixConfigDirs`      | string[] | `~/.shuvix/policies`, `agents`, `hooks` and `skills` — ShuviX's own configuration              |
+| `workspaceWritable`     | string[] | the working directory, where file-tool writes do not ask (empty on Windows, and where the working directory is unsuitable — `/`, a folder covering your home, ShuviX's own data) |
+| `workspaceWriteDenied`  | string[] | protected places inside it (a project's `.vscode`, `.claude`, …; credential dirs)             |
+| `workspaceProtectedPatterns` | string[] | regexes of protected git metadata inside it — use with `matches`                    |
 | `sandboxActive`         | boolean  | this session's commands run in the command sandbox                                            |
 | `sandboxWritableRoots`  | string[] | where a confined command may write (empty when the sandbox is not active)                     |
 | `sandboxWriteDenied`    | string[] | protected places inside those roots (a project's `.vscode`, `.claude`, …; credential dirs)    |
@@ -186,7 +199,7 @@ reads `object.*` without declaring `object.type` is accepted with a warning.
 
 ## Builtin policies
 
-Twelve ship with the application (per UI language; **the rules are always taken from the
+Thirteen ship with the application (per UI language; **the rules are always taken from the
 English file**, translations only change the text people read):
 
 | Name                            | Gate                                                                                                                  |
@@ -195,8 +208,9 @@ English file**, translations only change the text people read):
 | `protect-system`                | deny writes to operating-system directories                                                                            |
 | `block-catastrophic-commands`   | deny a short list of machine-destroying commands, judged on parsed structure (`rm -rf /`, `mkfs`, `dd` to a device, `Format-Volume`…) |
 | `protect-bot-files`             | **force-ask** on any write under `~/.shuvix/bots`                                                                      |
+| `protect-shuvix-config`         | **force-ask** on any write under `~/.shuvix/policies`, `agents`, `hooks` and `skills`                                  |
 | `ask-on-read`                   | ask on reads outside the workspace, tool results, skill directories and this reference base; with the sandbox active, only on the places a confined command cannot read |
-| `ask-on-write`                  | ask on file writes, with a diff preview — except this conversation's artifacts and, with the sandbox active, where a confined command may write anyway |
+| `ask-on-write`                  | ask on file writes, with a diff preview — except this conversation's artifacts, the working directory (minus its protected spots, not on Windows) and, with the sandbox active, where a confined command may write anyway |
 | `ask-on-command`                | ask on every command that is not confined to the sandbox (`object.sandboxed` false: sandbox off or unavailable, full access requested, `ssh`) |
 | `git-safety`                    | ask on destructive git operations (`init`, `restore`, forced checkout, branch delete)                                  |
 | `ask-on-database`               | ask on every statement over a writable database connection                                                             |
@@ -213,7 +227,10 @@ Settings → Policies shows each with its rules; "create override copy" writes t
 - **Exempt one place from an ask** without touching the builtin: a new policy with a
   `force-allow` rule (`force-allow` beats `ask`), e.g. writes under one directory.
 - **Add a hard stop**: a `deny` rule — it beats everything, including auto-allow.
-- **Make a gate un-skippable**: `force-ask`.
+- **Make a gate un-skippable**: `force-ask` — neither auto-allow nor the automatic reviewer can
+  answer it. That is also how to keep the reviewer away from one kind of operation, e.g.
+  `object.unconfinedReason == 'escalated'` for "always ask me when the agent wants to leave the
+  sandbox".
 - Keep rules narrow: a deny cannot be waived per call, so a rule that fires on ordinary work is
   worse than one that misses.
 

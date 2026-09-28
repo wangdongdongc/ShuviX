@@ -145,7 +145,9 @@ project), `notebook` (root of a notebook session), `bot` (root of a bot chat) an
 Chrome side panel conversation, the only one holding `mcp:chrome` — the user's own Chrome) and
 `coedit` (root of the co-editing window a markdown file opens in from the OS, editing the live
 document only through `doc_read` / `doc_edit` / `doc_insert`) — plus
-the task agents `coding`, `explore`, `widget`, `titler` and `knowledge-writer`.
+the task agents `coding`, `explore`, `widget`, `titler` and `knowledge-writer`, and
+`permission-reviewer`, which answers approval requests for the automatic review (see the
+`policy-md` entry) and which only ShuviX dispatches.
 
 - **A session's root persona is derived from the session's form, never chosen**: co-editing
   window → `coedit`, notebook → `notebook`, bot chat → `bot`, Chrome side panel → `tab`, in a project → `work`, otherwise →
@@ -158,7 +160,9 @@ the task agents `coding`, `explore`, `widget`, `titler` and `knowledge-writer`.
   Overridden. A broken override never shadows the builtin.
 - The bases are **never dispatched and never named**: the `agent` tool, a hook's
   `shuvix-hook-agent` and a sub-session's `agent_profile` all refuse `work` / `chat` /
-  `notebook` / `bot` / `tab` / `coedit`.
+  `notebook` / `bot` / `tab` / `coedit`. `permission-reviewer` is refused by the `agent` tool and
+  by `agent_profile` as well — an agent that could call its own reviewer at will could keep trying
+  phrasings until one passed — but a hook may name it.
 
 ## How an agent is put to use
 

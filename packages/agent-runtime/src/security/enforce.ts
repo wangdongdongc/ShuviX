@@ -34,6 +34,7 @@ import type {
 import { recordDecision } from './decisionLog'
 import {
   noteHumanFeedback,
+  noteReviewAllowed,
   noteReviewCleared,
   noteReviewDenied,
   reviewSuspended,
@@ -279,6 +280,11 @@ export async function executeDecision(args: {
   const review = reviewed
   if (review?.verdict.decision === 'allow') {
     noteReviewCleared(sessionId)
+    // 工具卡上的「已审查」：宿主在这次调用执行完之后取走，写进工具结果
+    noteReviewAllowed(sessionId, opts.toolCallId, {
+      risk: review.verdict.risk,
+      summary: review.verdict.summary
+    })
     record(undefined, true, review)
     return { status: 'allowed' }
   }

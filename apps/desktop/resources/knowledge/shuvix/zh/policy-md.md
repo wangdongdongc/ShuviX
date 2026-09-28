@@ -2,7 +2,7 @@
 shuvix: okf v0.2
 type: Guide
 title: '安全策略文件（shuvix: policy v1）'
-description: 'ShuviX 安全策略的完整规范 —— 规则看到的请求文档（subject / action / tool / object / env / vars）、五个条件键、CEL `match`、效力及其优先序、`lets`、什么会让文件非法、内置策略有哪些，以及怎样放宽或收紧一道门。'
+description: 'ShuviX 安全策略的完整规范 —— 规则看到的请求文档（subject / action / tool / object / env / vars）、五个条件键、CEL `match`、效力及其优先序、询问由谁回答（先自动审查、再你）、`lets`、什么会让文件非法、内置策略有哪些，以及怎样放宽或收紧一道门。'
 tags: [shuvix, policy, security, format, spec, cel]
 status: stable
 sources:
@@ -24,6 +24,11 @@ ShuviX 的权限系统是**询问模型，不是沙箱**。每次工具调用都
 ShuviX 的数据和个人资料目录）。宿主把这次执行是否真的被圈住作为命令的 `sandboxed` 属性上报，内置策略
 据此判断：圈住的命令直接运行；没圈住的——沙箱关闭或不可用、智能体申请了完全访问、每条 `ssh`
 命令——要询问，放行后以用户的完整权限运行。
+
+`ask` 并不直接交给用户。开着**自动审查**时（设置 → 通用 → 安全，缺省开），一个审查 agent 先回答它 —— 它在独立
+的上下文里只看用户写的东西和操作本身：放行日常的工作，拒绝明显有害的，其余的摆到用户面前，并把自己的
+意见附在卡片上。审查员是过滤器，不是边界 —— 边界是沙箱与 `deny` 规则。`force-ask` 永远交给用户。审查员
+就是内置 hook `auto-review` 与 agent `permission-reviewer`；它看得到什么、怎么改，见 `hook-md` 条目。
 
 - 位置：`~/.shuvix/policies/<name>.md`。
 - 标记：`shuvix: policy v1`；读取可选，写出恒带。
@@ -89,9 +94,12 @@ The body is documentation only — the engine never reads it.
 deny  >  force-ask  >  force-allow  >  ask  >  allow  >  （什么都没命中 = allow）
 ```
 
-- `ask` 把这次调用摆到用户面前；`allow` 直接放行；`deny` 拒绝（agent 收到 `prompt` 作为原因）。
+- `ask` 先把这次调用交给自动审查，审查答不了才摆到用户面前；`allow` 直接放行；`deny` 拒绝（agent 收到
+  `prompt` 作为原因）。
 - `force-allow` 是压得过一切 `ask` 的放行 —— ShuviX 用它表达会话授权（「免询问」与「允许并记住」）。
-- `force-ask` 是连 `force-allow` 也跳不过的询问 —— 「这道门不接受会话级同意」（bot 文件那道门就是）。
+  `force-allow` 不经过审查员。
+- `force-ask` 是连 `force-allow` 也跳不过、而且只由用户回答的询问 —— 「这道门既不接受会话级同意，也不
+  接受审查员」（bot 文件与 ShuviX 配置那两道门就是）。
 - `deny` 压过一切。
 
 条件编译成原生谓词，在 CEL **之前**求值，所以条件不命中的规则永远不会跑它的 `match`，也不会触发该策略
@@ -118,7 +126,7 @@ vars     宿主变量表（见下）+ 会话授权
 | `object.type`  | 由谁发起                                                   | `action`         | 属性                                                                                                                                                                                                                                                                                |
 | -------------- | ---------------------------------------------------------- | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `path`         | `read`、`write`、`edit`、`knowledge` 工具、文件预览        | `read` / `write` | `path`（路径真正通向的位置：绝对路径；桌面端展开符号链接，`..` 取真实的父目录 —— 与系统打开它时一样）、`requestedPath`（工具请求时的绝对路径 —— 中间隔着链接或 `..` 时与 `path` 不同）、`displayPath`（模型写的原样，用于提示文案） |
-| `command`      | `bash`、`powershell`、`ssh`                                | `execute`        | `command`（原文）、`channel`（`bash` / `powershell` / `ssh`）、`sandboxed`（布尔 —— 宿主真的把这次执行圈进了命令沙箱；恒有值，`ssh` 与没有沙箱的地方为 `false`），以及由 shell 解析器惰性提供的（`powershell` 命令由 ShuviX 自己的 PowerShell 扫描器读：`base` 是规范化的命令名 —— 别名解析成 cmdlet 名、去掉路径与 `.exe` / `.com`、大小写保持原样，比较前先 `lowerAscii()` —— `-Name:value` 拆成两项）：`parsed`（布尔）、`commands`（`{ base, argv, wrappers, complete, depth }` 的列表 —— `base` 是剥掉 `sudo` / `env` / `timeout` 之后真正的程序，动态词是 `''`）、`writes`（重定向目标，绝对路径）              |
+| `command`      | `bash`、`powershell`、`ssh`                                | `execute`        | `command`（原文）、`channel`（`bash` / `powershell` / `ssh`）、`sandboxed`（布尔 —— 宿主真的把这次执行圈进了命令沙箱；恒有值，`ssh` 与没有沙箱的地方为 `false`）、`unconfinedReason`（没圈住的原因：圈住了为 `''`，`escalated` = agent 申请了完全访问，`disabled` = 沙箱被关掉，`unsupported` = 这个平台或这种 shell 没有沙箱，`unavailable` = 这一次沙箱套不上，`remote` = `ssh`），以及由 shell 解析器惰性提供的（`powershell` 命令由 ShuviX 自己的 PowerShell 扫描器读：`base` 是规范化的命令名 —— 别名解析成 cmdlet 名、去掉路径与 `.exe` / `.com`、大小写保持原样，比较前先 `lowerAscii()` —— `-Name:value` 拆成两项）：`parsed`（布尔）、`commands`（`{ base, argv, wrappers, complete, depth }` 的列表 —— `base` 是剥掉 `sudo` / `env` / `timeout` 之后真正的程序，动态词是 `''`）、`writes`（重定向目标，绝对路径）              |
 | `gitTool`      | `git` 工具                                                 | `execute`        | `gitAction`、`command`、`force`（布尔）、`delete`（布尔）                                                                                                                                                                                                                            |
 | `database`     | 内置 `database` 服务器的 `query` 工具                      | `execute`        | `sql`、`credential`、`dbType`、`readonly`（布尔 —— 连接是否只读）                                                                                                                                                                                                                   |
 | `url`          | 内置 `browser` / `chrome` 服务器：每次导航；在 `chrome` 里还有每个站点的第一次使用 | `navigate`       | `url`、`scheme`、`host`（小写、去掉结尾的点）、`origin`、`browser`（`app` = ShuviX 里的浏览器面板，`chrome` = 你自己的 Chrome）；`file://` 不是 url 客体 —— 按读那个路径判定 |
@@ -151,6 +159,10 @@ vars     宿主变量表（见下）+ 会话授权
 | `botsDir`                    | string   | `~/.shuvix/bots`                                                                |
 | `builtinKnowledgeDir`        | string   | ShuviX 随应用发布的只读知识库（就是本库）                                       |
 | `sessionArtifactsDir`        | string   | 本会话自己的产物目录 `~/.shuvix/artifacts/<会话>`                               |
+| `shuvixConfigDirs`           | string[] | `~/.shuvix/policies`、`agents`、`hooks` 与 `skills` —— ShuviX 自己的配置        |
+| `workspaceWritable`          | string[] | 工作目录，文件工具在其中写入不询问（Windows 上、以及工作目录不合适时为空 —— `/`、盖住家目录的目录、ShuviX 自己的数据） |
+| `workspaceWriteDenied`       | string[] | 其中受保护的位置（项目的 `.vscode`、`.claude` 等；凭据目录）                     |
+| `workspaceProtectedPatterns` | string[] | 其中受保护的 git 元数据的正则 —— 配 `matches` 用                                |
 | `sandboxActive`              | boolean  | 本会话的命令在命令沙箱里运行                                                    |
 | `sandboxWritableRoots`       | string[] | 受限命令能写的位置（沙箱未启用时为空）                                          |
 | `sandboxWriteDenied`         | string[] | 这些位置里受保护的地方（项目的 `.vscode`、`.claude` 等；凭据目录）              |
@@ -174,7 +186,7 @@ YAML 语法错 / 不是映射；裸的 `rules` / `lets` / `scope` 键；`shuvix-
 
 ## 内置策略
 
-随应用发布十二份（按界面语言一份；**规则恒取英文文件**，翻译只改人读的文字）：
+随应用发布十三份（按界面语言一份；**规则恒取英文文件**，翻译只改人读的文字）：
 
 | 名字                            | 门                                                                                                           |
 | ------------------------------- | ------------------------------------------------------------------------------------------------------------ |
@@ -182,8 +194,9 @@ YAML 语法错 / 不是映射；裸的 `rules` / `lets` / `scope` 键；`shuvix-
 | `protect-system`                | 拒绝写操作系统目录                                                                                            |
 | `block-catastrophic-commands`   | 拒绝一小撮毁灭整机的命令，按解析结构判（`rm -rf /`、`mkfs`、`dd` 到设备、`Format-Volume`……）                                    |
 | `protect-bot-files`             | `~/.shuvix/bots` 下任何写入 **force-ask**                                                                     |
+| `protect-shuvix-config`         | `~/.shuvix/policies`、`agents`、`hooks`、`skills` 下任何写入 **force-ask**                                    |
 | `ask-on-read`                   | 在工作区、工具结果、skill 目录与本说明书之外的读取询问；沙箱启用时，只在受限命令也读不到的位置询问            |
-| `ask-on-write`                  | 文件写入询问，带 diff 预览 —— 本会话产物除外；沙箱启用时，受限命令本来就能写的位置也除外                      |
+| `ask-on-write`                  | 文件写入询问，带 diff 预览 —— 本会话产物、工作目录（除去其中受保护的位置，Windows 除外）除外；沙箱启用时，受限命令本来就能写的位置也除外 |
 | `ask-on-command`                | 每条没被圈进沙箱的命令询问（`object.sandboxed` 为 false：沙箱关闭或不可用、申请了完全访问、`ssh`）                           |
 | `git-safety`                    | 危险的 git 操作询问（`init`、`restore`、强制 checkout、删分支）                                               |
 | `ask-on-database`               | 可写数据库连接上的每条语句询问                                                                                |
@@ -199,7 +212,8 @@ YAML 语法错 / 不是映射；裸的 `rules` / `lets` / `scope` 键；`shuvix-
 - **给某处免去询问**而不动内置：新建一份策略，写一条 `force-allow` 规则（`force-allow` 压过 `ask`），
   例如某个目录下的写入。
 - **加一道硬停**：一条 `deny` 规则 —— 压过一切，包括免询问。
-- **让一道门跳不过去**：`force-ask`。
+- **让一道门跳不过去**：`force-ask` —— 免询问和自动审查都答不了它。想让审查员不碰某一类操作，也是这样写，
+  例如 `object.unconfinedReason == 'escalated'`，即「agent 想离开沙箱时一律问我」。
 - 规则要窄：deny 无法按次豁免，所以一条在日常工作里误触发的规则，比一条漏掉的更糟。
 
 ## 不在文件里的

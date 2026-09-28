@@ -334,7 +334,17 @@
     "fullAccessHint": "这条命令申请不受平时的限制运行：它可以读取和修改这台电脑上的任何文件。",
     "image": "模型看到的图",
     "imageZoomHint": "点击查看原图",
-    "imageMissing": "该图片文件已不可用"
+    "imageMissing": "该图片文件已不可用",
+    "reviewingHint": "自动审查正在替你看这次调用，看完才执行",
+    "reviewedHint": "自动审查已放行，没有问你（{{risk}}）",
+    "reviewRisk": {
+      "low": "低风险",
+      "medium": "中风险",
+      "high": "高风险",
+      "critical": "严重风险"
+    },
+    "reviewNoSummary": "自动审查把这一次交给你决定",
+    "reviewReasonLabel": "审查员："
   },
   "sessionConfig": {
     "title": "会话配置",
@@ -799,7 +809,10 @@
     "chromeExtRepair": "修复",
     "chromeExtHostPending": "正在登记…",
     "chromeExtHostInstalled": "已登记到",
-    "chromeExtHostNoBrowser": "这台电脑上没找到 Chromium 系浏览器"
+    "chromeExtHostNoBrowser": "这台电脑上没找到 Chromium 系浏览器",
+    "securitySection": "安全",
+    "autoReview": "自动审查审批请求",
+    "autoReviewHint": "弹出审批卡片之前，由一个审查 agent 用会话当前的模型替你回答：日常的工作直接放行，明显有害的操作拒绝，其余的附上它的意见交给你。标明「只问你」的门、免询问和「允许并记住」不受影响。它的规则就是侧栏里的 agent「权限审查员」与 hook「自动审查审批请求」。关掉后，每一次审批都交给你。"
   },
   "about": {
     "description": "您的 AI 助手",

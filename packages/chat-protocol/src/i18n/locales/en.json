@@ -334,7 +334,17 @@
     "fullAccessHint": "This command asks to run without the usual restrictions: it can read and change any file on this computer.",
     "image": "Image the model saw",
     "imageZoomHint": "Click to open at full size",
-    "imageMissing": "This image file is no longer available"
+    "imageMissing": "This image file is no longer available",
+    "reviewingHint": "The automatic review is looking at this call before it runs",
+    "reviewedHint": "Let through by the automatic review without asking you ({{risk}})",
+    "reviewRisk": {
+      "low": "Low risk",
+      "medium": "Medium risk",
+      "high": "High risk",
+      "critical": "Critical risk"
+    },
+    "reviewNoSummary": "The automatic review passed this one to you",
+    "reviewReasonLabel": "Reviewer:"
   },
   "sessionConfig": {
     "title": "Session Config",
@@ -799,7 +809,10 @@
     "chromeExtRepair": "Repair",
     "chromeExtHostPending": "Registering…",
     "chromeExtHostInstalled": "Registered with",
-    "chromeExtHostNoBrowser": "No Chromium browser found on this computer"
+    "chromeExtHostNoBrowser": "No Chromium browser found on this computer",
+    "securitySection": "Security",
+    "autoReview": "Automatic review of approvals",
+    "autoReviewHint": "Before an approval card is shown, a reviewing agent answers it for you, using the conversation's current model: ordinary work goes through, clearly harmful operations are refused, and the rest comes to you with its opinion on the card. Gates marked as always asking you, auto-allow and \"allow and remember\" are unaffected. Its rules are the agent \"Permission Reviewer\" and the hook \"Automatic Review of Approval Requests\" in the sidebar. Turning this off sends every approval to you."
   },
   "about": {
     "description": "Your AI Assistant",

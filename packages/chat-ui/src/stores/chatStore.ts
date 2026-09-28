@@ -42,6 +42,8 @@ export interface ToolExecution {
   /** 工具特定的结构化详情（edit diff 等） */
   details?: ToolResultDetails
   messageId?: string
+  /** 自动审查正在替用户看这次调用（`tool_review` 事件维护；tool_end 时一并收掉） */
+  reviewing?: boolean
 }
 
 /** 重新导出统一的用户输入请求类型,UI 直接消费 */
@@ -421,6 +423,12 @@ interface ChatState {
     execUpdates: Partial<ToolExecution>,
     messageId?: string
   ) => void
+  /**
+   * 自动审查开始 / 落定（`tool_review` 事件）：只改执行记录上的 reviewing，不碰卡片 ——
+   * 审查是工具执行中的一段过程态，结论另有落点（details / 红行 / 询问卡片）。
+   * 找不到执行记录（事件先于 tool_start、或是派生 agent 的调用）时什么也不做。
+   */
+  setToolReviewing: (sessionId: string, toolCallId: string, reviewing: boolean) => void
   /** 原子完成流式：清除流式状态 + 工具执行 + 添加最终消息（单次 set，避免页面闪动） */
   finishStreaming: (sessionId: string, finalMessage?: ChatMessage) => void
 }
@@ -1112,8 +1120,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set((state) => {
       // 1. 更新工具执行状态
       const prevExecs = state.sessionToolExecutions[sessionId] || []
+      // 结束了就不再「审查中」：落定事件万一丢了，也不留一个永远转着的标记
       const newExecs = prevExecs.map((t) =>
-        t.toolCallId === toolCallId ? { ...t, ...execUpdates } : t
+        t.toolCallId === toolCallId ? { ...t, ...execUpdates, reviewing: false } : t
       )
 
       // 2. 结果回填进卡片的工具块
@@ -1124,6 +1133,20 @@ export const useChatStore = create<ChatState>((set, get) => ({
           isError: execUpdates.status === 'error' || undefined,
           details: execUpdates.details
         })
+      }
+    }),
+
+  setToolReviewing: (sessionId, toolCallId, reviewing) =>
+    set((state) => {
+      const prevExecs = state.sessionToolExecutions[sessionId]
+      if (!prevExecs?.some((t) => t.toolCallId === toolCallId && !!t.reviewing !== reviewing)) {
+        return {}
+      }
+      return {
+        sessionToolExecutions: {
+          ...state.sessionToolExecutions,
+          [sessionId]: prevExecs.map((t) => (t.toolCallId === toolCallId ? { ...t, reviewing } : t))
+        }
       }
     }),
 

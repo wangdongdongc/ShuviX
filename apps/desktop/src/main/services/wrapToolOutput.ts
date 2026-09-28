@@ -10,7 +10,12 @@
 
 import type { TSchema } from 'typebox'
 import type { AgentTool } from '@earendil-works/pi-agent-core'
-import type { SecurityContext, McpAgentToolMeta } from '@shuvix/agent-runtime'
+import {
+  takeReviewAllowed,
+  type SecurityContext,
+  type McpAgentToolMeta
+} from '@shuvix/agent-runtime'
+import { withToolReview } from '@shuvix/chat-protocol/types/toolReview'
 import { processToolOutput, type TruncateStrategy } from '../utils/toolUtils/processToolOutput'
 import { TOOL_ABORTED } from './toolContext'
 
@@ -133,7 +138,14 @@ export function wrapToolOutput<P extends TSchema, D>(
     }
 
     const newDetails = mergeTruncatedIntoDetails(result.details, truncated, persisted)
-    return { ...result, content: newContent, details: newDetails }
+    // 自动审查放行了这次调用：在工具结果上留个标记（工具卡上的「已审查」）。写进 details 而不是
+    // 广播一个事件，是为了随 toolResult 落盘 —— 实时与重开会话看到的是同一张卡
+    const reviewed = takeReviewAllowed(sessionId, toolCallId)
+    return {
+      ...result,
+      content: newContent,
+      details: reviewed ? withToolReview(newDetails, reviewed) : newDetails
+    }
   }
 
   // Object.create 保留原型链：name / description / label / parameters / 其它
