@@ -32,7 +32,8 @@ import type { Project, SessionSettings } from '../dao/types'
 
 import {
   DEFAULT_THINKING_LEVEL,
-  type SelectableThinkingLevel
+  type SelectableThinkingLevel,
+  type ThinkingLevel
 } from '@shuvix/chat-protocol/types/thinking'
 import {
   CHAT_PROFILE_NAME,
@@ -733,11 +734,17 @@ export class SessionService {
   }
 
   /**
-   * 会话当前模型配置（hook 派发的模型回落源）。
+   * 会话当前的模型与思考档位（hook 派发的回落源）。
    * 会话不存在或没有可用模型返回 null —— 调用方（run()）报「无可用模型」。
+   *
+   * 档位要带上：hook 派出的 agent 与任何派发一样继承会话的档位，想不思考就在它的 agent md 里
+   * 声明 `shuvix-thinking`。只给模型的话，manager 会补缺省 'off' —— 等于宿主替每个 hook agent
+   * 悄悄关掉了思考，而档案里的声明（titler 的 off）也就无从生效与否。
    */
   async resolveRunModelConfig(sessionId: string): Promise<SubAgentModelConfig | null> {
-    return (await this.resolveRunConfig(sessionId))?.model ?? null
+    const config = await this.resolveRunConfig(sessionId)
+    if (!config?.model) return null
+    return { ...config.model, thinkingLevel: config.thinkingLevel as ThinkingLevel }
   }
 
   /**

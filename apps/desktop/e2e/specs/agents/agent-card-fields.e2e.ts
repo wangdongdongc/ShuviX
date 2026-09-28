@@ -27,6 +27,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { SELECTABLE_THINKING_LEVELS } from '@shuvix/chat-protocol/types/thinking'
 import { launchApp, type E2EApp } from '../../harness/launch'
 import { sleep, until } from '../../harness/cdp'
 import {
@@ -426,6 +427,9 @@ describe('A 组 · 槽位判定（可编辑 vs 退回只读）', () => {
     // 两个占位文案刻意不同：工具用卡片的「未设置」，模型用 ModelSelect 自己的「选择模型」
     expect(await card.triggerText('shuvix-tools')).toMatch(UNSET_RE)
     expect(await card.triggerText('shuvix-model')).toMatch(SELECT_MODEL_RE)
+    // 思考档位的下拉：去掉「未设置」那一项，候选就是共享清单的五档、同序（选择器与解析器同一份）
+    const thinkingOptions = await card.selectOptions('shuvix-thinking')
+    expect(thinkingOptions.filter((v) => v !== '')).toEqual([...SELECTABLE_THINKING_LEVELS])
     expect(read(seed.file)).toBe(A1_OPEN)
   })
 

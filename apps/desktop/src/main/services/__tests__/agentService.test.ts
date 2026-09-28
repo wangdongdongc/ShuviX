@@ -30,7 +30,7 @@ import {
 import { basename, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import i18next from 'i18next'
-import { builtinMdFileNames } from '@shuvix/agent-runtime'
+import { builtinMdFileNames, parseAgentDefinitionFile } from '@shuvix/agent-runtime'
 import type { AgentProfile, ParsedAgentFile } from '@shuvix/agent-runtime'
 
 const state = vi.hoisted(() => ({
@@ -196,6 +196,16 @@ describe('agentService.getSource —— 原文编辑器的数据源', () => {
     // 宿主参数在构建档案时就地替换 —— 用户看到的是真实路径
     expect(widgetText).toContain(state.widgets)
     expect(widgetText).not.toContain('{{widgetsRoot}}')
+  })
+
+  it('AS-35 内置 titler 的回写 md 带 shuvix-thinking: off，且再解析仍是 off（覆盖副本不丢「不思考」这条声明）', () => {
+    // 读的是仓库里真实的内置 md：「起标题不思考」写在 titler 自己的档案里，不是宿主替它关的 ——
+    // 用户点「创建覆盖副本」拿到的初值必须原样带着这一行，否则覆盖一次就悄悄回到跟随派发方
+    const result = agentService.getSource('titler', 'builtin')
+    expect('text' in result).toBe(true)
+    const { text } = result as { text: string }
+    expect(text).toContain('shuvix-thinking: off')
+    expect(parseAgentDefinitionFile(text, 'titler')?.thinkingLevel).toBe('off')
   })
 })
 

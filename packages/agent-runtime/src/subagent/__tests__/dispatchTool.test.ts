@@ -1,6 +1,6 @@
 /**
- * 档案 → 运行投影的纯口径。`model` / 两个注入开关全链路 optional，
- * 搬运断了不会有任何类型错误、只会静默退回「跟随会话模型」—— 故逐字段钉死。
+ * 档案 → 运行投影的纯口径。`model` / `thinkingLevel` / 两个注入开关全链路 optional，
+ * 搬运断了不会有任何类型错误、只会静默退回「跟随派发方」—— 故逐字段钉死。
  *
  * 另钉参数校验的纠错指引：错误文案必须指向真实参数名 `name` 并列出可用 agent ——
  * 旧文案写成缺 "agent" 参数，弱模型照抄传 `agent:`（未知属性被 schema 静默放行）
@@ -40,6 +40,12 @@ describe('toInProcessAgentType', () => {
     expect(toInProcessAgentType(PROFILE).model).toBeUndefined()
   })
 
+  it('thinkingLevel 带到投影：声明 off → off（「不思考」是一种声明，不是没声明）；未声明 → undefined', () => {
+    // 搬运一断，titler 这类声明了 off 的档案就会静默跑在派发方的档位上（深思一个五字标题）
+    expect(toInProcessAgentType({ ...PROFILE, thinkingLevel: 'off' }).thinkingLevel).toBe('off')
+    expect(toInProcessAgentType(PROFILE).thinkingLevel).toBeUndefined()
+  })
+
   it('其余字段原样投影，tools 为副本（不与档案共享数组）', () => {
     const projected = toInProcessAgentType(PROFILE)
     expect(projected).toEqual({
@@ -49,6 +55,7 @@ describe('toInProcessAgentType', () => {
       tools: ['read', 'grep'],
       systemPrompt: 'BODY',
       model: undefined,
+      thinkingLevel: undefined,
       instructionFiles: [],
       projectAwareness: false
     })

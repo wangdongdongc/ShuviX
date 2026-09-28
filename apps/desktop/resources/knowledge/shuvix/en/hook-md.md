@@ -118,8 +118,9 @@ warning) — a hook never fires by accident. Guard optional fields with `has(eve
 
 - A run is one dispatch of the named agent **under the session that emitted the event** — the
   same path as the `agent` tool, so tools, asks, LLM logs and the sub-agent panel all land on that
-  session and every tool call goes through the same security policies. Model = the session's
-  current model, unless the agent file's `shuvix-model` says otherwise; the hook never picks one.
+  session and every tool call goes through the same security policies. Model and thinking level =
+  the session's current ones, unless the agent file's `shuvix-model` / `shuvix-thinking` say
+  otherwise; the hook never picks either.
 - **Dedupe**: while a run of this hook for this session is still going, a new trigger is skipped
   (`busy`). **Timeout**: 5 minutes, then the run is aborted. **Unknown agent / no usable model**:
   skipped with a logged reason (configuration errors, not failed runs).

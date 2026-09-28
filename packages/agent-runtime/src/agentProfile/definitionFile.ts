@@ -142,11 +142,11 @@ function stringField(fields: Record<string, unknown>, key: string): string | und
 }
 
 /**
- * agent 形状字段（displayName / description / tools / model / 两个上下文注入声明）——
- * bot md（`shuvix: bot v1`）是 agent md 的**超集**，这几个键在两种文件里必须逐字同义：
- * 同一套类型纪律、同一句拒绝理由。抽成共享函数而非各写一遍，是为了让 agent md 将来
- * 加键/改纪律时 bot 自动跟上 —— 两份复制品迟早会漂移，而漂移出来的差异没人解释得清。
- * agent md 自己的键只剩 `name` 与正文，形状字段与 bot md 完全重合。
+ * agent 形状字段（displayName / description / tools / model / thinking / 两个上下文注入声明）。
+ *
+ * 抽成独立函数是 bot md v1 时代的遗留：那时 bot md 是 agent md 的超集，这几个键在两种文件里
+ * 必须逐字同义。bot md v2 只剩身份与正文，已不调用它 —— 这里的键如今只属于 agent md，
+ * 加键不会让 bot md 跟着多认一个键。
  */
 export interface AgentSharedFields {
   displayName: string

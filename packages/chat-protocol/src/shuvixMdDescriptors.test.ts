@@ -6,7 +6,7 @@
  * 类型错误，故在此各钉一条。
  */
 import { describe, it, expect } from 'vitest'
-import { SHUVIX_MD_DESCRIPTORS, descriptorForType } from './shuvixMdDescriptors'
+import { AGENT_THINKING_KEY, SHUVIX_MD_DESCRIPTORS, descriptorForType } from './shuvixMdDescriptors'
 import { OKF_STATUS_KEY, OKF_TYPE_KEY } from './knowledge'
 import en from './i18n/locales/en.json'
 
@@ -63,6 +63,18 @@ describe('skill 描述符 ↔ SKILL.md 的两个键', () => {
       ['name', 'mono'],
       ['description', 'text']
     ])
+  })
+})
+
+describe('agent 描述符 ↔ shuvix-thinking', () => {
+  it('SMD-3 思考档位那一行：键名就是解析器读的 shuvix-thinking，走下拉（select），标签复用「思考」文案', () => {
+    // 属性卡按这个常量把槽位分派给档位下拉（FrontmatterFieldPicker）—— 常量与解析器的键名一旦
+    // 不一致，卡上就是一行解析器根本不读的字段；kind 不是 select，就拿不到那几档候选
+    expect(AGENT_THINKING_KEY).toBe('shuvix-thinking')
+    const row = descriptorForType('agent')?.fields.find((f) => f.key === AGENT_THINKING_KEY)
+    expect(row).toBeDefined()
+    expect(row!.kind).toBe('select')
+    expect(row!.labelKey).toBe('tool.subAgentThinking')
   })
 })
 

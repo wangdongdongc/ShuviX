@@ -2730,6 +2730,8 @@ export interface FmCardPane {
   triggerText(key: string): Promise<string>
   /** 槽位内按钮数（模型字段：1 = 仅触发器，2 = 触发器 + 清除入口） */
   slotButtons(key: string): Promise<number>
+  /** 槽位里原生下拉的候选值，按 DOM 顺序（「未设置」那一项是 ''）；槽位里没有下拉为 [] */
+  selectOptions(key: string): Promise<string[]>
 
   /** 工具弹层：开（触发器 mousedown）并等列表拉回 */
   openTools(): Promise<void>
@@ -2789,6 +2791,10 @@ export function fmCardPane(main: CdpClient): FmCardPane {
     triggerText: (key) =>
       main.eval<string>(`(${SLOT(key)}?.querySelector('button')?.textContent ?? '').trim()`),
     slotButtons: (key) => main.eval<number>(`${SLOT(key)}?.querySelectorAll('button').length ?? 0`),
+    selectOptions: (key) =>
+      main.eval<string[]>(
+        `[...(${SLOT(key)}?.querySelectorAll('select option') ?? [])].map((o) => o.value)`
+      ),
 
     openTools: async () => {
       await main.eval(

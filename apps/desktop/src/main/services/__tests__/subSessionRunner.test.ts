@@ -237,7 +237,7 @@ describe('create —— 继承与上限', () => {
     expect(order).toEqual([...order].sort((a, b) => a - b))
   })
 
-  it('SR-3 档案声明压过继承：声明了模型 ⇒ 不再种父级的模型，思考档位仍随父', async () => {
+  it('SR-3 档案声明压过继承：声明了模型 ⇒ 不再种父级的模型；没声明思考档位 ⇒ 档位仍随父', async () => {
     parentConfig()
     mocks.pinAgentProfile.mockResolvedValue({
       success: true,
@@ -245,7 +245,7 @@ describe('create —— 继承与上限', () => {
     })
     await runner.create(PARENT, { agentProfile: 'declared-prof' })
     expect(mocks.appendModelChange).not.toHaveBeenCalled()
-    // 思考档位没有档案声明这一路，恒随父会话
+    // 档案没声明思考档位 ⇒ 随父
     expect(mocks.appendThinkingLevelChange).toHaveBeenCalledWith(CHILD, 'medium')
   })
 
@@ -257,7 +257,7 @@ describe('create —— 继承与上限', () => {
     expect(mocks.appendThinkingLevelChange).toHaveBeenCalledWith(CHILD, 'medium')
   })
 
-  it('SR-5 被拒不失败：会话已建好且可用（落在自己形态的基座上），照常返回 id，模型按父级种，并留一行 warn', async () => {
+  it('SR-5 被拒不失败：会话已建好且可用（落在自己形态的基座上），照常返回 id，模型与思考档位按父级种，并留一行 warn', async () => {
     parentConfig()
     mocks.pinAgentProfile.mockResolvedValue({
       success: false,
@@ -266,8 +266,9 @@ describe('create —— 继承与上限', () => {
     })
     const res = await runner.create(PARENT, { agentProfile: 'work' })
     expect(res).toEqual({ id: CHILD, title: 'Child' })
-    // 拒绝 = 档案没有意见：继承照旧
+    // 拒绝 = 档案没有意见：继承照旧（模型与思考档位都按父会话种）
     expect(mocks.appendModelChange).toHaveBeenCalledWith(CHILD, 'p', 'opus')
+    expect(mocks.appendThinkingLevelChange).toHaveBeenCalledWith(CHILD, 'medium')
     // 日志是「点名没生效」唯一可查的线索：带上点的名字与拒绝理由
     const warned = mocks.warn.mock.calls.map((c) => String(c[0]))
     expect(warned.some((m) => m.includes('work') && m.includes('base profile'))).toBe(true)
@@ -276,6 +277,34 @@ describe('create —— 继承与上限', () => {
   it('SR-6 空白点名视同不点名：pinAgentProfile 不被调用', async () => {
     await runner.create(PARENT, { agentProfile: '   ' })
     expect(mocks.pinAgentProfile).not.toHaveBeenCalled()
+  })
+
+  it('SR-7 档案声明了思考档位（off）⇒ runner 不再种父级的档位（pin 已写过种子），模型仍随父', async () => {
+    // 再写一条父会话的档位会排在档案种子之后、把它盖掉 —— titler 那样声明了 off 的档案
+    // 在子会话里就又跑回父会话的 medium 了
+    parentConfig()
+    mocks.pinAgentProfile.mockResolvedValue({
+      success: true,
+      applied: { thinkingLevel: 'off', tools: [] }
+    })
+    await runner.create(PARENT, { agentProfile: 'quiet-prof' })
+    expect(mocks.appendThinkingLevelChange).not.toHaveBeenCalled()
+    expect(mocks.appendModelChange).toHaveBeenCalledWith(CHILD, 'p', 'opus')
+  })
+
+  it('SR-8 档案模型与思考档位都声明了 ⇒ runner 两个种子都不写（两项都是档案的意见）', async () => {
+    parentConfig()
+    mocks.pinAgentProfile.mockResolvedValue({
+      success: true,
+      applied: {
+        model: { provider: 'p', model: 'declared', capabilities: {} },
+        thinkingLevel: 'xhigh',
+        tools: []
+      }
+    })
+    await runner.create(PARENT, { agentProfile: 'full-prof' })
+    expect(mocks.appendModelChange).not.toHaveBeenCalled()
+    expect(mocks.appendThinkingLevelChange).not.toHaveBeenCalled()
   })
 
   it('总数上限：到顶就拒绝并列出现有子会话（让模型复用而不是继续开）', async () => {

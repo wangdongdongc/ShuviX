@@ -1,10 +1,12 @@
 import { describe, it, expect } from 'vitest'
 import { SHUVIX_MD_DESCRIPTORS } from '@shuvix/chat-protocol/shuvixMdDescriptors'
+import { SELECTABLE_THINKING_LEVELS } from '@shuvix/chat-protocol/types/thinking'
 import {
   parseAgentDefinitionFile,
   serializeAgentDefinitionFile,
   AGENT_FILE_MARKER,
-  AGENT_FILE_MARKER_KEY
+  AGENT_FILE_MARKER_KEY,
+  type ParsedAgentFile
 } from '../definitionFile'
 
 describe('parseAgentDefinitionFile', () => {
@@ -312,7 +314,7 @@ describe('serializeAgentDefinitionFile', () => {
     expect(serializeAgentDefinitionFile({ ...base, model: '   ' })).not.toContain('shuvix-model')
   })
 
-  it('key 顺序固定：shuvix → name → description → tools → model → displayName → 注入开关', () => {
+  it('key 顺序固定：shuvix → name → description → tools → model → thinking → displayName → 注入开关', () => {
     const md = serializeAgentDefinitionFile({
       name: 'ordered',
       displayName: '显示名',
@@ -320,6 +322,7 @@ describe('serializeAgentDefinitionFile', () => {
       systemPrompt: 'body',
       tools: ['read'],
       model: 'openai/gpt-4o',
+      thinkingLevel: 'low',
       instructionFiles: ['AGENTS.md'],
       projectAwareness: true
     })
@@ -334,6 +337,7 @@ describe('serializeAgentDefinitionFile', () => {
       'description',
       'shuvix-tools',
       'shuvix-model',
+      'shuvix-thinking',
       'shuvix-displayName',
       'shuvix-instruction-files',
       'shuvix-project-awareness'
@@ -417,6 +421,110 @@ describe('serializeAgentDefinitionFile', () => {
     expect(parsed).not.toBeNull()
     expect(parsed!.description).toBe(description)
     expect(parsed!.systemPrompt).toBe('')
+  })
+})
+
+/**
+ * TK —— `shuvix-thinking` 的取值纪律。
+ *
+ * 合法值是界面可选的那几档（chat-protocol `SELECTABLE_THINKING_LEVELS` —— 输入框的思考选择器、
+ * 本解析器与属性卡的下拉共用这一份）。用例一律**循环常量**而不手写五个词：清单加一档、去一档，
+ * 这里跟着走，不会把一份过期的清单钉成「正确答案」。
+ *   - 大小写不敏感、首尾空白不计，读出与写回恒小写；
+ *   - 空值（省略 / YAML null / 空串 / 纯空白）等于没写（跟随派发方 / 父会话），文件照常合法；
+ *   - 其余任何值（YAML 布尔、列表、映射、数字、清单外的词）让**整份文件**非法 —— 宁可说清也不猜，
+ *     `shuvix-thinking: false` 想说的多半是「不思考」，但默默按 off 读就是替用户做了一次猜测。
+ */
+describe('TK —— shuvix-thinking 的取值纪律', () => {
+  /** 最小 agent 文件：frontmatter 里只多写一行 shuvix-thinking */
+  const withThinking = (value: string): string =>
+    `---\nname: t\nshuvix-thinking: ${value}\n---\nbody`
+
+  /** 解析并收集诊断（warn 恒注入 —— 合法写法必须零诊断，否则属性卡会亮告警徽章） */
+  const parseWithWarn = (
+    raw: string
+  ): { result: ReturnType<typeof parseAgentDefinitionFile>; messages: string[] } => {
+    const messages: string[] = []
+    const result = parseAgentDefinitionFile(raw, 't', (msg) => messages.push(msg))
+    return { result, messages }
+  }
+
+  /** 序列化的底样：除思考档位外全走缺省（名字与 defaultName 一致，往返才能全等） */
+  const BASE: ParsedAgentFile = {
+    name: 't',
+    displayName: 't',
+    description: '',
+    systemPrompt: 'body',
+    tools: [],
+    instructionFiles: [],
+    projectAwareness: false
+  }
+
+  it('TK-1 五档逐一可读（循环共享常量）：原样读出、零诊断 —— 裸写 off 也读成字符串', () => {
+    // 裸 `off` 在 YAML 1.1 里是布尔 false：解析器若退回 1.1 语义，最常写的这一档会让整份文件
+    // 非法（取值纪律把布尔判非法）。toBe(level) 同时钉住了「是字符串 'off'」
+    for (const level of SELECTABLE_THINKING_LEVELS) {
+      const { result, messages } = parseWithWarn(withThinking(level))
+      expect(result, level).not.toBeNull()
+      expect(result!.thinkingLevel, level).toBe(level)
+      expect(messages, level).toEqual([])
+    }
+  })
+
+  it.each([
+    ['HIGH', 'high'],
+    ['Off', 'off'],
+    ['XHigh', 'xhigh'],
+    // 引号保住首尾空白进 YAML，解析器再 trim
+    ["'  Medium '", 'medium']
+  ])('TK-2 大小写不敏感、首尾空白不计，读出恒小写：%s → %s', (raw, expected) => {
+    const { result, messages } = parseWithWarn(withThinking(raw))
+    expect(result).not.toBeNull()
+    expect(result!.thinkingLevel).toBe(expected)
+    expect(messages).toEqual([])
+  })
+
+  it.each([
+    ['省略该键', '---\nname: t\n---\nbody'],
+    ['留空 = YAML null', '---\nname: t\nshuvix-thinking:\n---\nbody'],
+    ["空串 ''", withThinking("''")],
+    ["纯空白 '   '", withThinking("'   '")]
+  ])('TK-3 空值等于没写（%s）：thinkingLevel 缺省、文件合法、零诊断', (_label, raw) => {
+    const { result, messages } = parseWithWarn(raw)
+    expect(result).not.toBeNull()
+    expect(result!.thinkingLevel).toBeUndefined()
+    expect(messages).toEqual([])
+  })
+
+  it.each([
+    ['YAML 布尔', 'false'],
+    ['YAML 布尔', 'true'],
+    ['YAML 列表', '[off]'],
+    ['YAML 映射', '{level: off}'],
+    ['数字', '0'],
+    ['清单外的词', 'none'],
+    ['清单外的词', 'disabled'],
+    ['协议有、界面从未提供的档', 'minimal'],
+    ['只在协议层承载的档', 'max']
+  ])('TK-4 其它任何值让整份文件非法（%s：%s）', (_label, raw) => {
+    expect(parseAgentDefinitionFile(withThinking(raw), 't')).toBeNull()
+  })
+
+  it('TK-5 序列化往返：五档逐一保真；不声明时产物里根本没有 shuvix-thinking 这个键', () => {
+    for (const level of SELECTABLE_THINKING_LEVELS) {
+      const def: ParsedAgentFile = { ...BASE, thinkingLevel: level }
+      const md = serializeAgentDefinitionFile(def)
+      expect(md, level).toContain(`shuvix-thinking: ${level}`)
+      expect(parseAgentDefinitionFile(md, 't'), level).toEqual(def)
+    }
+    expect(serializeAgentDefinitionFile(BASE)).not.toContain('shuvix-thinking')
+  })
+
+  it('TK-6 写回恒小写：读进来的 XHigh 经 serialize 写出为 xhigh，原写法不留痕', () => {
+    const parsed = parseAgentDefinitionFile(withThinking('XHigh'), 't')!
+    const md = serializeAgentDefinitionFile(parsed)
+    expect(md).toContain('shuvix-thinking: xhigh')
+    expect(md).not.toContain('XHigh')
   })
 })
 
@@ -506,6 +614,18 @@ describe('WU —— parseAgentDefinitionFile 的 warn 诊断通道', () => {
     expect(msg).toContain('relative path')
   })
 
+  it('WU-15 shuvix-thinking 取值不对：点名该键并列出全部合法档位；布尔与清单外的词是同一句', () => {
+    // `false` 是最真实的误写（想说「不思考」）—— 诊断必须把 off 摆在用户眼前
+    const msg = soleWarn('---\nname: quiet\nshuvix-thinking: false\n---\nbody')
+    expect(msg).toContain("agent 'quiet'")
+    expect(msg).toContain("'shuvix-thinking'")
+    // 合法档位取共享常量：清单改了这句跟着改，照着诊断写就一定合法
+    expect(msg).toContain(SELECTABLE_THINKING_LEVELS.join(', '))
+    expect(msg).toMatch(/; the whole file is rejected$/)
+    // 写成 max（协议层有、界面没给的那档）修法一样 —— 照列出的档位写，所以是同一句
+    expect(soleWarn('---\nname: quiet\nshuvix-thinking: max\n---\nbody')).toBe(msg)
+  })
+
   it.each([['WU-7', 'shuvix-project-awareness']])(
     '%s %s 非布尔：点名该键并给出 true / false',
     (_id, key) => {
@@ -568,7 +688,8 @@ describe('WU —— parseAgentDefinitionFile 的 warn 诊断通道', () => {
 
 describe('DG —— 诊断完整性守卫', () => {
   it('DG-1 没有静默拒绝：任何被判非法的输入都恰好产出一条人读原因', () => {
-    // 覆盖解析器的全部拒绝分支（无 frontmatter / YAML 错 / 非映射 / 两个字符串键 / 两个布尔键）
+    // 覆盖解析器的全部拒绝分支（无 frontmatter / YAML 错 / 非映射 / 字符串键 / 档位枚举键 /
+    // 指令文件清单 / 布尔键）
     const rejected = [
       'no frontmatter at all',
       '# Title\n\n---\nname: mid\n---\nbody',
@@ -578,6 +699,8 @@ describe('DG —— 诊断完整性守卫', () => {
       '---\nshuvix-tools: true\n---\nbody',
       '---\nshuvix-model: 4\n---\nbody',
       '---\nshuvix-model: [a]\n---\nbody',
+      '---\nshuvix-thinking: max\n---\nbody',
+      '---\nshuvix-thinking: false\n---\nbody',
       '---\nshuvix-instruction-files: true\n---\nbody',
       '---\nshuvix-instruction-files: ../outside.md\n---\nbody',
       '---\nshuvix-project-awareness: [a]\n---\nbody'

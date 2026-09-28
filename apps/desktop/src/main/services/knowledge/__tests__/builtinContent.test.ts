@@ -38,6 +38,7 @@ import {
   type KnowledgeType,
   type OkfStatus
 } from '@shuvix/chat-protocol/knowledge'
+import { SELECTABLE_THINKING_LEVELS } from '@shuvix/chat-protocol/types/thinking'
 const HERE = dirname(fileURLToPath(import.meta.url))
 /** `…/apps/desktop/src/main/services/knowledge/__tests__` 往上七层 */
 const REPO_ROOT = resolve(HERE, '../../../../../../..')
@@ -162,6 +163,7 @@ describe.each(LANGS)('BK 内置知识库 · %s', (lang) => {
     // 所以这里退而求其次写字面量；改名时这里不会自动红 —— 改 definitionFile 的键请同步这张表。
     'shuvix-tools',
     'shuvix-model',
+    'shuvix-thinking',
     'shuvix-displayName',
     'shuvix-instruction-files',
     'shuvix-project-awareness'
@@ -343,5 +345,20 @@ describe.each(LANGS)('BK 内置知识库 · %s', (lang) => {
     expect(body).toContain('`mcp:ssh`')
     expect(body).toContain('`mcp:browser`')
     expect(body).toContain('`mcp:database`')
+  })
+
+  /**
+   * BK-17 —— `shuvix-thinking` 的合法值是一份共享清单（`SELECTABLE_THINKING_LEVELS`：选择器、解析器、
+   * 属性卡共用）。说明书的字段表抄着这份清单：解析器多收一档而说明书没跟上，用户照着写就写不出来；
+   * 少收一档而说明书还列着，照着写就是一份非法文件。循环常量，清单改了这里跟着红。
+   */
+  it('BK-17 agent-md.md 字段表里 `shuvix-thinking` 那一行逐一列出每个可选档位', () => {
+    const rows = conceptOf('agent-md.md')
+      .body.split('\n')
+      .filter((line) => line.trimStart().startsWith('|') && line.includes('`shuvix-thinking`'))
+    expect(rows, '字段表里应当恰有一行讲 shuvix-thinking').toHaveLength(1)
+    for (const level of SELECTABLE_THINKING_LEVELS) {
+      expect(rows[0], level).toContain(`\`${level}\``)
+    }
   })
 })

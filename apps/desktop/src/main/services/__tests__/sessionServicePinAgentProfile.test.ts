@@ -9,12 +9,15 @@
  *     `shuvix-session-awareness`」随该键退役而消失：其余任何档案都可以被点名；
  *   - 基座拒绝的判据是**名字**：子会话不点名就自然落到自己形态的基座上，点名一个基座
  *     只会得到说不清的组合；
- *   - **成功链顺序**：落库 → invalidateAgent → 种子（模型 / mcp:/skill: 工具）→ 广播。
+ *   - **成功链顺序**：落库 → invalidateAgent → 种子（模型 / 思考档位）→ 广播。
  *     落库在 invalidate 前、种子在 invalidate 后：钉档案与重建之间不能有一个还在写树的旧运行时；
- *   - **工具种子**：声明了 mcp:/skill: 就整份替换扩展能力勾选（`settings.enabledTools`）；
- *     没声明就不写 —— 勾选已在 create 时从父会话抄好，空声明不算意见；
+ *   - **工具不写进勾选**：档案声明的 mcp:/skill: 经 createAgent 的名单归一恒生效，
+ *     扩展能力勾选（`settings.enabledTools`）留着 create 时从父会话抄来的那份；
+ *     `applied.tools` 只回传声明的那截；
  *   - 模型三态：可解析 → 写种子 + `applied.model`；不可解析 → 不写、`modelUnavailable` 回传原值、
- *     其余照常；未声明 → 不去解析。
+ *     其余照常；未声明 → 不去解析；
+ *   - 思考档位（`shuvix-thinking`）两态：声明了 → 写种子 + `applied.thinkingLevel`（档位是枚举值，
+ *     没有「不可用」一说 —— 模型那一行不可解析也照写）；未声明 → 不写（seedRunConfig 会补父会话的）。
  *
  * mock 面照旧（import 图全换假件，只留 chat-protocol / agent-runtime 真件）。`isSessionProfile`
  * 在假件里用**真判据**复算（`!BASE_PROFILE_NAMES.has(name)`，名单常量取真件）
@@ -31,6 +34,7 @@ const mocks = vi.hoisted(() => ({
   getProfile: vi.fn<(name: string) => unknown>(),
   resolveProfileModelSpec: vi.fn(),
   appendModelChange: vi.fn(),
+  appendThinkingLevelChange: vi.fn(),
   broadcastSessionConfigChanged: vi.fn(),
   daoTouchActive: vi.fn()
 }))
@@ -53,7 +57,8 @@ vi.mock('../messageService', () => ({ messageService: {} }))
 vi.mock('../sessionStorage', () => ({
   readSessionRunConfig: vi.fn(),
   addSessionTreePin: vi.fn(),
-  appendModelChange: mocks.appendModelChange
+  appendModelChange: mocks.appendModelChange,
+  appendThinkingLevelChange: mocks.appendThinkingLevelChange
 }))
 vi.mock('../../i18n', () => ({ t: (key: string) => key }))
 vi.mock('../../utils/paths', () => ({ getTempWorkspace: vi.fn(), getToolResultsBase: vi.fn() }))
@@ -106,22 +111,24 @@ const SID = 'child-1'
 /** 一份档案（name 决定基座判定，那是准入唯一看的东西） */
 const profile = (
   name: string,
-  over: Partial<Pick<AgentProfile, 'tools' | 'model'>> = {}
+  over: Partial<Pick<AgentProfile, 'tools' | 'model' | 'thinkingLevel'>> = {}
 ): Partial<AgentProfile> => ({
   name,
   tools: over.tools ?? ['read'],
-  ...(over.model ? { model: over.model } : {})
+  ...(over.model ? { model: over.model } : {}),
+  ...(over.thinkingLevel ? { thinkingLevel: over.thinkingLevel } : {})
 })
 
 type PinResult = Awaited<ReturnType<(typeof sessionService)['pinAgentProfile']>>
 
 const pin = (name: string): Promise<PinResult> => sessionService.pinAgentProfile(SID, name)
 
-/** 拒绝路径的零副作用：落库 / 失效 / 两种种子 / 广播 / 模型解析一个都不许发生 */
+/** 拒绝路径的零副作用：落库 / 失效 / 两种种子（模型 / 思考档位）/ 广播 / 模型解析一个都不许发生 */
 function expectNoSideEffects(): void {
   expect(mocks.daoUpdateSettings).not.toHaveBeenCalled()
   expect(invalidateSpy).not.toHaveBeenCalled()
   expect(mocks.appendModelChange).not.toHaveBeenCalled()
+  expect(mocks.appendThinkingLevelChange).not.toHaveBeenCalled()
   expect(mocks.broadcastSessionConfigChanged).not.toHaveBeenCalled()
   expect(mocks.resolveProfileModelSpec).not.toHaveBeenCalled()
   expect(mocks.daoTouchActive).not.toHaveBeenCalled()
@@ -178,12 +185,17 @@ describe('成功链', () => {
     mocks.getProfile.mockReturnValue(profile('myprof', { tools: ['read', 'skill:x', 'mcp:y'] }))
     const res = await pin('myprof')
 
-    // 返回值全等：applied.tools 是 mcp:/skill: 那一截；未声明模型 → model 缺省、无 modelUnavailable
+    // 返回值全等：applied.tools 是 mcp:/skill: 那一截；未声明模型 → model 缺省、无 modelUnavailable；
+    // 未声明思考档位 → thinkingLevel 缺省
     expect(res).toEqual({
       success: true,
-      applied: { model: undefined, tools: ['skill:x', 'mcp:y'] },
+      applied: { model: undefined, thinkingLevel: undefined, tools: ['skill:x', 'mcp:y'] },
       modelUnavailable: undefined
     })
+    // toEqual 不区分「缺省」与「值为 undefined」，思考档位那一格单独钉：没声明就不写种子、不回传 ——
+    // 写了（哪怕写的是缺省档）就会盖掉 seedRunConfig 随后补上的父会话档位
+    expect(res.applied?.thinkingLevel).toBeUndefined()
+    expect(mocks.appendThinkingLevelChange).not.toHaveBeenCalled()
     // 只落库一次：钉档案。档案声明的 mcp:/skill: 经 createAgent 的名单归一恒生效，
     // 不写进扩展能力勾选 —— 写了只会替换掉从父会话继承来的那份
     expect(mocks.daoUpdateSettings.mock.calls).toEqual([[SID, { agentProfile: 'myprof' }]])
@@ -253,6 +265,42 @@ describe('成功链', () => {
     expect(mocks.daoUpdateSettings.mock.calls).toEqual([[SID, { agentProfile: 'mixed' }]])
     expect(mixed.applied?.tools).toEqual(['skill:a', 'mcp:b'])
   })
+
+  it('PIN-9 档案声明思考档位 off：思考种子恰写一次、applied.thinkingLevel 回传；顺序 invalidate → 种子 → 广播', async () => {
+    // off 是最该钉的一档：它是一个声明（「这个 agent 不思考」），不是「没声明」
+    mocks.getProfile.mockReturnValue(profile('quiet', { thinkingLevel: 'off' }))
+    const res = await pin('quiet')
+
+    expect(res.success).toBe(true)
+    expect(mocks.appendThinkingLevelChange.mock.calls).toEqual([[SID, 'off']])
+    expect(res.applied?.thinkingLevel).toBe('off')
+    // 种子在失效之后（旧运行时已不会再写树）、广播之前（前端收到通知时树上已经是新档位）
+    const order = [
+      invalidateSpy.mock.invocationCallOrder[0],
+      mocks.appendThinkingLevelChange.mock.invocationCallOrder[0],
+      mocks.broadcastSessionConfigChanged.mock.invocationCallOrder[0]
+    ]
+    expect(order).toEqual([...order].sort((a, b) => a - b))
+    // 只声明了档位：模型那一行不动（不解析、不写种子）
+    expect(mocks.resolveProfileModelSpec).not.toHaveBeenCalled()
+    expect(mocks.appendModelChange).not.toHaveBeenCalled()
+  })
+
+  it('PIN-10 模型不可解析 + 声明 low：思考种子照写、applied.thinkingLevel 回传；modelUnavailable 回传原串、不写模型种子', async () => {
+    // 两行各管各的：档位是枚举值，没有「不可用」一说，不该被模型那一行的失败连带丢掉
+    mocks.getProfile.mockReturnValue(
+      profile('lowthink', { model: 'openai/nope', thinkingLevel: 'low' })
+    )
+    mocks.resolveProfileModelSpec.mockReturnValue(null)
+
+    const res = await pin('lowthink')
+    expect(res.success).toBe(true)
+    expect(mocks.appendThinkingLevelChange.mock.calls).toEqual([[SID, 'low']])
+    expect(res.applied?.thinkingLevel).toBe('low')
+    expect(res.modelUnavailable).toBe('openai/nope')
+    expect(res.applied?.model).toBeUndefined()
+    expect(mocks.appendModelChange).not.toHaveBeenCalled()
+  })
 })
 
 describe('PIN-8 拒绝矩阵：拒绝路径不回传半截结果', () => {
@@ -275,7 +323,10 @@ describe('PIN-8 拒绝矩阵：拒绝路径不回传半截结果', () => {
     [
       '基座名',
       (): void => {
-        mocks.getProfile.mockReturnValue(profile('work', { model: 'openai/gpt-x' }))
+        // 带着模型与思考档位两种声明：拒绝必须先于两种种子（expectNoSideEffects 逐一查）
+        mocks.getProfile.mockReturnValue(
+          profile('work', { model: 'openai/gpt-x', thinkingLevel: 'off' })
+        )
       },
       'work'
     ]

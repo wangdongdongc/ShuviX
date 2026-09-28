@@ -1,7 +1,8 @@
 /**
  * `create-sub-session` 的 `agent_profile` —— 父级点名档案的全链路：
  * session 工具 → subSessionRunner.create → sessionService.pinAgentProfile（准入 / 落戳 / 档案
- * 声明的模型与 mcp:/skill: 种子）→ seedRunConfig（档案没意见的部分补回父级）。
+ * 声明的模型与思考档位种子）→ seedRunConfig（档案没意见的部分补回父级）。档案声明的 mcp:/skill:
+ * 不写进勾选，经名单归一恒生效。
  *
  * pinAgentProfile 没有 IPC 面，这条链只能像 sub-session.e2e 那样把模型换成脚本化的假提供商，
  * 让父会话真的调一次工具。每条用例脚本化一次 create-sub-session、按标题认领子会话；只 create
@@ -10,11 +11,13 @@
  * 钉的是：
  *   - 点名 coding：戳落下、body 换成 coding、工具含 bash；
  *   - 点名用户档案：档案声明的模型压过父模型、勾选留着父会话那份、档案声明的 skill 叠加生效、
- *     思考档位仍随父；
+ *     没声明思考档位 ⇒ 随父；
  *   - 点名 coding（声明了内置作图技能）：父级的 skill 勾选原样留着；
  *   - 点名基座 / 只可派发 / 未知名：创建照常成功、不落戳、body 是父形态的基座（项目 → work）；
  *   - 不点名：不落戳、基座 body、工具随父；
- *   - 档案声明了不可用的模型：戳落下、body 生效、模型等于父模型（不写种子、不回落默认）。
+ *   - 档案声明了不可用的模型：戳落下、body 生效、模型等于父模型（不写种子、不回落默认）；
+ *   - 档案声明了 `shuvix-thinking`：子会话以它为初始档位（模型仍随父）；种子只参与一次 ——
+ *     用户之后在子会话里改档，新建的根运行时按会话的选择跑，档案不在重建时把它还原。
  */
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
@@ -61,6 +64,7 @@ interface InitResult {
 
 interface RuntimeInfo {
   systemPrompt: string
+  thinkingLevel: string
   tools: { name: string; description?: string }[]
 }
 
@@ -154,6 +158,13 @@ beforeAll(async () => {
     model: 'openai/nope-not-there',
     body: 'BAD MODEL BODY.'
   })
+  // 只声明思考档位、不声明模型：档位走档案，模型随父 —— 两行各管各的
+  writeAgentMd(app, 'e2e-think-prof', {
+    description: '只声明思考档位的档案',
+    tools: 'read',
+    rawLines: ['shuvix-thinking: low'],
+    body: 'THINK PROF BODY.'
+  })
 
   const projDir = join(app.home, 'proj-sub-profile')
   mkdirSync(projDir, { recursive: true })
@@ -194,7 +205,7 @@ describe('create-sub-session 的 agent_profile 钉档案', () => {
     expect(info.tools.map((t) => t.name)).toContain('bash')
   })
 
-  it('SP-2 点名用户档案：档案模型压过父模型；勾选留着父会话那份，档案声明的 skill 叠加生效；思考档位仍随父', async () => {
+  it('SP-2 点名用户档案：档案模型压过父模型；勾选留着父会话那份，档案声明的 skill 叠加生效；没声明思考档位 ⇒ 随父', async () => {
     const sub = await createSub('prof', { agent_profile: 'e2e-sub-prof' })
     const cfg = await init(sub.id)
     expect({ provider: cfg.provider, model: cfg.model }).toEqual({
@@ -203,7 +214,7 @@ describe('create-sub-session 的 agent_profile 钉档案', () => {
     })
     // 勾选不被替换：父会话勾的 SKILL_PARENT 原样留着，档案声明的那项不写进勾选
     expect(cfg.enabledTools).toEqual(parentCfg.enabledTools)
-    // seedRunConfig 仍跑：思考档位没有档案声明这一路，恒随父
+    // 档案没声明思考档位 ⇒ 随父（seedRunConfig 补上父会话的那一档）
     expect(cfg.modelMetadata.thinkingLevel).toBe(parentCfg.modelMetadata.thinkingLevel)
     const info = await runtimeInfo(sub.id)
     expect(info.systemPrompt.startsWith('SUB PROF BODY.')).toBe(true)
@@ -270,5 +281,34 @@ describe('create-sub-session 的 agent_profile 钉档案', () => {
       provider: parentCfg.provider,
       model: parentCfg.model
     })
+  })
+
+  it('SP-8 档案声明了 shuvix-thinking：子会话以它为初始档位、模型随父；用户改档后新建的根运行时按会话的选择跑', async () => {
+    // 前置自检：父会话的档位有值且不是档案声明的那一档 —— 否则「以档案为准」与「随父」分不开
+    expect(parentCfg.modelMetadata.thinkingLevel).toBeTruthy()
+    expect(parentCfg.modelMetadata.thinkingLevel).not.toBe('low')
+
+    const sub = await createSub('think', { agent_profile: 'e2e-think-prof' })
+    expect(sub.isError).toBe(false)
+    expect((await settingsOf(sub.id)).agentProfile).toBe('e2e-think-prof')
+
+    // 档案的档位是种子：pin 写进子会话的树，seedRunConfig 不再拿父会话的那一档盖掉它
+    const cfg = await init(sub.id)
+    expect(cfg.modelMetadata.thinkingLevel).toBe('low')
+    // 档案没声明模型 ⇒ 模型随父
+    expect({ provider: cfg.provider, model: cfg.model }).toEqual({
+      provider: parentCfg.provider,
+      model: parentCfg.model
+    })
+
+    // 种子只参与一次：用户之后在子会话里改档（此刻还没有运行时，直接落树）
+    await app.main.eval(
+      `window.api.agent.setThinkingLevel({ sessionId: ${JSON.stringify(sub.id)}, level: 'high' })`
+    )
+    expect((await init(sub.id)).modelMetadata.thinkingLevel).toBe('high')
+    // 子会话的根运行时此刻才建，跑的正是那份声明了 low 的档案 —— 档位仍以会话的选择为准
+    const info = await runtimeInfo(sub.id)
+    expect(info.systemPrompt.startsWith('THINK PROF BODY.')).toBe(true)
+    expect(info.thinkingLevel).toBe('high')
   })
 })

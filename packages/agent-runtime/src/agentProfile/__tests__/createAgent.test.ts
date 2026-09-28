@@ -15,6 +15,7 @@ import type { PromptVarsCtx } from '../promptVars'
 import type { InProcessAgentType, SubAgentModelConfig } from '../../subagent/types'
 import type { SpawnContext } from '../../subagent/manager'
 import type { RuntimeNetwork } from '../../types'
+import type { ThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
 
 // ── mock HarnessSession:捕获 deps + 暴露 CreatedAgent 用到的最小方法面 ──
 const constructed: FakeHarness[] = []
@@ -299,13 +300,18 @@ describe('createAgentFactory — spawned 决策列', () => {
   })
 })
 
-describe('createAgentFactory — 档案模型（shuvix-model）', () => {
-  const DECLARED: SubAgentModelConfig = {
-    provider: 'p-declared',
-    model: 'm-declared',
-    capabilities: { reasoning: true }
-  }
+/** 档案声明的模型经宿主解析后的产物（档案模型 / 档案思考档位两组共用） */
+const DECLARED: SubAgentModelConfig = {
+  provider: 'p-declared',
+  model: 'm-declared',
+  capabilities: { reasoning: true }
+}
 
+/** host.buildModel 的首次调用入参（= 传给 HarnessSession 的初始模型） */
+const firstBuildArg = (b: HostBundle): SubAgentModelConfig =>
+  (b.host.buildModel as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0] as SubAgentModelConfig
+
+describe('createAgentFactory — 档案模型（shuvix-model）', () => {
   /** 派生创建的固定形状；profile 由各用例就地覆盖 */
   function spawnWith(
     b: HostBundle,
@@ -324,11 +330,6 @@ describe('createAgentFactory — 档案模型（shuvix-model）', () => {
     })
   }
 
-  /** host.buildModel 的首次调用入参（= 传给 HarnessSession 的初始模型） */
-  const firstBuildArg = (b: HostBundle): SubAgentModelConfig =>
-    (b.host.buildModel as unknown as ReturnType<typeof vi.fn>).mock
-      .calls[0][0] as SubAgentModelConfig
-
   it('spawned + 档案模型可解析：以原样字符串调用一次解析器，初始模型全部来自解析产物', async () => {
     const b = makeHost()
     b.resolveProfileModel.mockResolvedValue(DECLARED)
@@ -341,17 +342,6 @@ describe('createAgentFactory — 档案模型（shuvix-model）', () => {
     expect(arg.model).toBe('m-declared')
     expect(arg.capabilities).toEqual({ reasoning: true })
     expect(b.logger.warn).not.toHaveBeenCalled()
-  })
-
-  it('档案只表达「用哪个模型」：thinkingLevel 仍随派发方，不跟着档案走', async () => {
-    const b = makeHost()
-    b.resolveProfileModel.mockResolvedValue({ ...DECLARED, thinkingLevel: 'high' })
-    await spawnWith(b, { ...PROFILE, model: 'p-declared/m-declared' }, {
-      ...MODEL_CFG,
-      thinkingLevel: 'low'
-    } as SubAgentModelConfig)
-
-    expect(firstBuildArg(b).thinkingLevel).toBe('low')
   })
 
   it('spawned + 档案模型不可用：回落派发方模型、不抛错，且 warn 含档案名与原始声明值', async () => {
@@ -426,6 +416,97 @@ describe('createAgentFactory — 档案模型（shuvix-model）', () => {
     expect(created.runtime).toBeDefined()
     expect(firstBuildArg(b)).toEqual({ ...MODEL_CFG, thinkingLevel: 'low' })
     expect(b.logger.warn).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * 决策表的思考一行（`shuvix-thinking`），与模型一行同一口径：
+ *   - spawned：档案声明压过派发方传入的档位 —— 派生 agent 没有思考选择器，档案是唯一能说话的地方；
+ *     没声明 → 随派发方；
+ *   - root：以传入值为准（会话树）。档案的声明只在钉档案时作为种子写进树 —— 每次重建都按档案覆盖，
+ *     会把用户在会话里手选的档位默默还原。
+ * 断言落在 HarnessSession 收到的 `deps.thinkingLevel`（运行时真正用的档位），不是模型配置上顺带的
+ * thinkingLevel —— 两者各走各的，TH-4b 把它们分开钉。
+ */
+describe('createAgentFactory — 档案思考档位（shuvix-thinking）', () => {
+  /** 派生创建；dispatcherLevel = 派发方传入的 params.thinkingLevel（与模型配置上的档位分开给） */
+  function spawnAt(
+    b: HostBundle,
+    profile: InProcessAgentType,
+    dispatcherLevel: ThinkingLevel,
+    model: SubAgentModelConfig = { ...MODEL_CFG, thinkingLevel: 'low' }
+  ): Promise<Awaited<ReturnType<AgentFactory['createAgent']>>> {
+    return createAgentFactory(b.host).createAgent({
+      kind: 'spawned',
+      sessionId: 'sub-1',
+      profile,
+      model,
+      thinkingLevel: dispatcherLevel,
+      cwd: '',
+      spawn: SPAWN,
+      spawnHelpers: { requestUserInput: vi.fn() }
+    })
+  }
+
+  /** HarnessSession 收到的档位 */
+  const runtimeLevel = (): unknown => constructed[0].deps.thinkingLevel
+
+  it.each<[string, ThinkingLevel, ThinkingLevel]>([
+    ['声明 off / 派发方 high', 'off', 'high'],
+    ['声明 xhigh / 派发方 off', 'xhigh', 'off']
+  ])(
+    'TH-1 spawned 且档案声明（%s）：运行时档位 = 声明值，压过派发方',
+    async (_label, declared, dispatcher) => {
+      // 两个方向都要：只测「往低压」的话，一个「取两者较低者」的实现也能蒙混过去
+      const b = makeHost()
+      await spawnAt(b, { ...PROFILE, thinkingLevel: declared }, dispatcher)
+      expect(runtimeLevel()).toBe(declared)
+    }
+  )
+
+  it('TH-2 spawned 且未声明：运行时档位 = 派发方传入的', async () => {
+    const b = makeHost()
+    await spawnAt(b, PROFILE, 'low')
+    expect(runtimeLevel()).toBe('low')
+  })
+
+  it('TH-3 root：档案声明 off、会话传入 high → high（会话树为准，档案不在重建时覆盖用户的选择）', async () => {
+    const b = makeHost()
+    await createAgentFactory(b.host).createAgent({
+      kind: 'root',
+      sessionId: 's1',
+      profile: { ...PROFILE, thinkingLevel: 'off' },
+      model: MODEL_CFG,
+      thinkingLevel: 'high',
+      cwd: '/w'
+    })
+    expect(runtimeLevel()).toBe('high')
+  })
+
+  it('TH-4a 两行互不牵连：声明的模型不可用（回落派发方模型、恰一条 warn）时，声明的档位照样生效', async () => {
+    const b = makeHost()
+    b.resolveProfileModel.mockResolvedValue(null)
+    await spawnAt(b, { ...PROFILE, model: 'gone/model', thinkingLevel: 'high' }, 'off')
+
+    expect(firstBuildArg(b)).toEqual({ ...MODEL_CFG, thinkingLevel: 'low' })
+    expect(b.logger.warn).toHaveBeenCalledTimes(1)
+    // 档位是枚举值，没有「不可用」一说 —— 模型那一行的回落不该把它一起带回派发方
+    expect(runtimeLevel()).toBe('high')
+  })
+
+  it('TH-4b 只声明可解析的模型、不声明档位：档案模型的解析产物不夹带档位 —— 运行时档位随派发方', async () => {
+    const b = makeHost()
+    // 宿主的解析产物上带着一个档位：它是模型目录那边的事，不是档案的声明
+    b.resolveProfileModel.mockResolvedValue({ ...DECLARED, thinkingLevel: 'high' })
+    await spawnAt(b, { ...PROFILE, model: 'p-declared/m-declared' }, 'low', {
+      ...MODEL_CFG,
+      thinkingLevel: 'medium'
+    })
+
+    expect(runtimeLevel()).toBe('low')
+    // 初始模型配置上的档位同样不取解析产物的，仍是派发方模型配置里那个
+    expect(firstBuildArg(b).provider).toBe('p-declared')
+    expect(firstBuildArg(b).thinkingLevel).toBe('medium')
   })
 })
 
