@@ -100,7 +100,15 @@ export function wrapToolOutput<P extends TSchema, D>(
       }
     }
 
-    const result = await originalExecute(toolCallId, params, signal, onUpdate)
+    let result: Awaited<ReturnType<typeof originalExecute>>
+    try {
+      result = await originalExecute(toolCallId, params, signal, onUpdate)
+    } catch (err) {
+      // 放行之后工具自己失败了：这枚「已审查」标记不会再有人取走，当场丢掉 —— 否则留到上限才被挤掉，
+      // 碰上复用 toolCallId 的 provider 还会挂到一次审查员没看过的调用上
+      takeReviewAllowed(sessionId, toolCallId)
+      throw err
+    }
     let truncated = false
     let persisted = false
     const newContent: typeof result.content = []

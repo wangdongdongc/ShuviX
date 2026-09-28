@@ -1,15 +1,34 @@
 /**
  * executeDecision（PEP 共享内脏）—— 三态处置、询问四分支响应、
  * 「允许并记住」与决策日志。错误文案逐字对齐 enforce.ts 内四个文案函数。
+ * 末尾一组是询问点的自动审查（onPermissionRequest 接缝，EN-RV 系列）。
  */
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { executeDecision } from '../enforce'
 import { clearSessionDecisions, getSessionDecisions } from '../decisionLog'
-import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
+import {
+  abortSessionReviews,
+  clearReviewState,
+  humanFeedbackOf,
+  reopenSessionReviews,
+  reviewSuspended
+} from '../reviewState'
+import type {
+  AskInputRequest,
+  InputRequest,
+  InputResponse
+} from '@shuvix/chat-protocol/types/inputRequest'
+import type {
+  PermissionDecision,
+  PermissionVerdict
+} from '@shuvix/chat-protocol/types/permissionReview'
 import type {
   EnforceOpts,
   EnforceOutcome,
+  PermissionRequestEvent,
+  PermissionReviewAnswer,
   SecurityDecision,
+  SecurityDecisionRecord,
   SecurityHostProvider,
   SecurityObject,
   SecurityRequest
@@ -1022,5 +1041,1087 @@ describe('executeDecision — 请求的写法落到了别处（requestedPath）'
         denyDecision("Denied by security policy rule 'd1'")
       )
     ).toBe("Denied by security policy rule 'd1'")
+  })
+})
+
+/**
+ * 询问点的自动审查（SecurityHostProvider.onPermissionRequest）—— 只有 ask 档的询问先交给审查：
+ * allow 放行不弹卡；deny 以审查理由拒绝；ask / 答不出照旧弹卡（答 ask 时卡片带审查意见）。
+ * 连续 3 / 累计 20 次审查拒绝后本会话直接问人；人回答一次清连续计数（cancel 不算回答）。
+ * 审查与工具调用的 signal、会话的停止（abortSessionReviews）赛跑，中止一律按 abortError 收尾。
+ *
+ * 旧用例的 askDecision() 不带 tier，天然不进审查；这一组的决策都显式写 tier。
+ * reviewState 是进程级的 Map：每条用例用自己的会话 id，afterEach 统一清掉。
+ */
+describe('executeDecision — 询问点的审查', () => {
+  const REVIEW_DENY_TAIL =
+    '\n\nFind a safer way that stays within what the user asked. Do not rephrase, split or ' +
+    'obfuscate the operation to get past the review. If the user needs to decide, ask them.'
+
+  const usedSids = new Set<string>()
+  let sidSeq = 0
+  const newSid = (): string => {
+    const sid = `enforce-review-${++sidSeq}`
+    usedSids.add(sid)
+    return sid
+  }
+  afterEach(() => {
+    for (const sid of usedSids) {
+      clearReviewState(sid)
+      clearSessionDecisions(sid)
+    }
+    usedSids.clear()
+    vi.useRealTimers()
+  })
+
+  type Reviewer = NonNullable<SecurityHostProvider['onPermissionRequest']>
+  type ReviewerMock = ReturnType<typeof vi.fn<Reviewer>>
+
+  const verdict = (
+    decision: PermissionDecision,
+    fields: Partial<PermissionVerdict> = {}
+  ): PermissionVerdict => ({ decision, risk: 'low', summary: 's', reason: 'r', ...fields })
+  const answerOf = (value: unknown, source = 'auto-review'): PermissionReviewAnswer => ({
+    verdict: value as PermissionVerdict,
+    source
+  })
+  /** 固定回答的审查接缝 */
+  const reviewer = (answer: PermissionReviewAnswer | null): ReviewerMock =>
+    vi.fn<Reviewer>(async () => answer)
+  /** 按次序回答的审查接缝（用完之后一律 allow） */
+  const scriptedReviewer = (decisions: PermissionDecision[]): ReviewerMock => {
+    const queue = [...decisions]
+    return vi.fn<Reviewer>(async () => answerOf(verdict(queue.shift() ?? 'allow')))
+  }
+  /** 挂起的审查接缝：答复由用例手动给出（每次调用各一个） */
+  const pendingReviewer = (): {
+    review: ReviewerMock
+    answer: (value: PermissionReviewAnswer | null, call?: number) => void
+    signal: (call?: number) => AbortSignal
+  } => {
+    const resolvers: Array<(value: PermissionReviewAnswer | null) => void> = []
+    const review = vi.fn<Reviewer>(
+      () =>
+        new Promise<PermissionReviewAnswer | null>((resolve) => {
+          resolvers.push(resolve)
+        })
+    )
+    return {
+      review,
+      answer: (value, call = 0) => resolvers[call](value),
+      signal: (call = 0) => review.mock.calls[call][1] as AbortSignal
+    }
+  }
+
+  /** ask 档的决策（执行层据 tier 决定能不能先交给审查） */
+  const reviewAsk = (
+    ask?: SecurityDecision['ask'],
+    prompt?: SecurityDecision['prompt']
+  ): SecurityDecision => ({ ...askDecision(ask, prompt), tier: 'ask' })
+  const RV_PATH_ASK = reviewAsk({
+    command: 'Read(/ws/file.txt)',
+    rememberEntry: 'Read(/ws/file.txt)'
+  })
+  const RV_WRITE_ASK = reviewAsk(
+    { command: 'Write(/ws/file.txt)', rememberEntry: 'Write(/ws/file.txt)' },
+    PROMPT
+  )
+
+  const requestIn = (sid: string, overrides: Partial<SecurityRequest> = {}): SecurityRequest =>
+    makeRequest({ subject: { kind: 'agent', sessionId: sid, agentKind: 'root' }, ...overrides })
+
+  /** 审查接缝 + 固定应答的询问通道 + 可观察的 logger */
+  function reviewProvider(
+    review: Reviewer | undefined,
+    response: InputResponse = { kind: 'ask', allowed: true },
+    overrides: Partial<SecurityHostProvider> = {}
+  ): {
+    provider: SecurityHostProvider
+    requestUserInput: ReturnType<typeof vi.fn<(req: InputRequest) => Promise<InputResponse>>>
+    persistGrant: ReturnType<typeof vi.fn>
+    info: ReturnType<typeof vi.fn>
+    warn: ReturnType<typeof vi.fn>
+  } {
+    const requestUserInput = vi.fn(async (_req: InputRequest): Promise<InputResponse> => response)
+    const persistGrant = vi.fn()
+    const info = vi.fn()
+    const warn = vi.fn()
+    return {
+      provider: makeProvider({
+        requestUserInput,
+        persistGrant,
+        logger: { info, warn, error: vi.fn() },
+        ...(review ? { onPermissionRequest: review } : {}),
+        ...overrides
+      }),
+      requestUserInput,
+      persistGrant,
+      info,
+      warn
+    }
+  }
+
+  const run = (
+    provider: SecurityHostProvider,
+    sid: string,
+    decision: SecurityDecision = RV_PATH_ASK,
+    opts: Partial<EnforceOpts> = {},
+    request: SecurityRequest = requestIn(sid)
+  ): Promise<EnforceOutcome> =>
+    executeDecision({ provider, request, decision, opts: makeOpts(opts), evaluateMs: 0 })
+
+  /** 唯一一张卡片 */
+  const onlyCard = (requestUserInput: ReturnType<typeof vi.fn>): AskInputRequest => {
+    expect(requestUserInput).toHaveBeenCalledTimes(1)
+    return requestUserInput.mock.calls[0][0] as AskInputRequest
+  }
+
+  /** 让已排队的微任务跑完（接缝在执行层的下一个微任务里才被调用） */
+  const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
+
+  /** 审查连拒三次，让本会话进入「直接问人」 */
+  async function suspendByDenials(provider: SecurityHostProvider, sid: string): Promise<void> {
+    for (let i = 0; i < 3; i++) {
+      expect(await rejectionMessage(run(provider, sid))).toMatch(/^Blocked by the reviewer: /)
+    }
+    expect(reviewSuspended(sid)).toBe(true)
+  }
+
+  it('EN-RV1 审查 allow：不弹卡、不记住、直接放行；日志恰 1 条（effect ask、winning a1、无 userResponse），带 review 与 totalMs', async () => {
+    const sid = newSid()
+    const review = reviewer(
+      answerOf(verdict('allow', { risk: 'low', summary: 's', reason: 'r' }), 'auto-review')
+    )
+    // 人要是被问到会勾「记住」—— 审查放行时这条路根本不该走到
+    const { provider, requestUserInput, persistGrant } = reviewProvider(review, {
+      kind: 'ask',
+      allowed: true,
+      extra: { rememberPath: true }
+    })
+    expect(RV_PATH_ASK.ask?.rememberEntry).toBe('Read(/ws/file.txt)')
+
+    await expect(run(provider, sid)).resolves.toEqual({ status: 'allowed' })
+    expect(review).toHaveBeenCalledTimes(1)
+    expect(requestUserInput).not.toHaveBeenCalled()
+    expect(persistGrant).not.toHaveBeenCalled()
+
+    const logs = getSessionDecisions(sid)
+    expect(logs).toHaveLength(1)
+    expect(logs[0]).toMatchObject({ effect: 'ask', winning: 'a1', matched: ['a1'] })
+    expect(logs[0].userResponse).toBeUndefined()
+    expect(logs[0].review).toEqual({
+      decision: 'allow',
+      risk: 'low',
+      source: 'auto-review',
+      ms: expect.any(Number)
+    })
+    expect(logs[0].review!.ms).toBeGreaterThanOrEqual(0)
+    expect(typeof logs[0].totalMs).toBe('number')
+  })
+
+  it('EN-RV2 审查 deny：以审查理由加固定的一句抛出（逐字）；决策带提示语也不拼进去；不弹卡；日志 review deny、无 userResponse', async () => {
+    const sid = newSid()
+    const reason = 'The user asked for a summary; overwriting this file was never requested.'
+    const review = reviewer(answerOf(verdict('deny', { risk: 'high', reason })))
+    const { provider, requestUserInput } = reviewProvider(review)
+
+    const message = await rejectionMessage(
+      run(provider, sid, RV_WRITE_ASK, { toolName: 'write' }, requestIn(sid, { action: 'write' }))
+    )
+    expect(message).toBe(
+      `Blocked by the reviewer: ${reason}\n\n` +
+        'Find a safer way that stays within what the user asked. Do not rephrase, split or obfuscate ' +
+        'the operation to get past the review. If the user needs to decide, ask them.'
+    )
+    expect(message).not.toContain(PROMPT.text)
+    expect(requestUserInput).not.toHaveBeenCalled()
+
+    const logs = getSessionDecisions(sid)
+    expect(logs).toHaveLength(1)
+    expect(logs[0].review).toEqual({
+      decision: 'deny',
+      risk: 'high',
+      source: 'auto-review',
+      ms: expect.any(Number)
+    })
+    expect(logs[0].userResponse).toBeUndefined()
+    expect(logs[0].effect).toBe('ask')
+  })
+
+  it('EN-RV3 审查 ask：弹卡恰 1 次，卡片 review = {risk, summary, reason}（没有 decision）；其余字段与没有接缝时逐字段相同；人允许 → allowed，日志 review ask + userResponse allowed', async () => {
+    const preview = { kind: 'diff' as const, path: 'file.txt', diff: '+new line', isNewFile: false }
+    const opts: Partial<EnforceOpts> = {
+      toolCallId: 'tc-rv3',
+      toolName: 'write',
+      description: 'the desc',
+      preview,
+      background: true,
+      unsandboxed: true
+    }
+
+    // 对照：没有接缝时的那张卡
+    const plainSid = newSid()
+    const plain = reviewProvider(undefined)
+    await run(
+      plain.provider,
+      plainSid,
+      RV_WRITE_ASK,
+      opts,
+      requestIn(plainSid, { action: 'write' })
+    )
+    const plainCard = onlyCard(plain.requestUserInput)
+
+    const sid = newSid()
+    const review = reviewer(
+      answerOf(
+        verdict('ask', {
+          risk: 'medium',
+          summary: 'Overwrites file.txt in the project.',
+          reason: 'The user never mentioned this file.'
+        })
+      )
+    )
+    const reviewed = reviewProvider(review)
+    await expect(
+      run(reviewed.provider, sid, RV_WRITE_ASK, opts, requestIn(sid, { action: 'write' }))
+    ).resolves.toEqual({ status: 'allowed' })
+    const card = onlyCard(reviewed.requestUserInput)
+    expect(card.review).toEqual({
+      risk: 'medium',
+      summary: 'Overwrites file.txt in the project.',
+      reason: 'The user never mentioned this file.'
+    })
+    expect(card.review).not.toHaveProperty('decision')
+
+    const { review: _review, createdAt: _createdAt, ...rest } = card
+    const { review: _plainReview, createdAt: _plainCreatedAt, ...plainRest } = plainCard
+    expect(rest).toStrictEqual(plainRest)
+    // 对照组确实是一张「满的」卡：审查没有挤掉任何一栏
+    expect(plainRest).toMatchObject({
+      id: 'tc-rv3',
+      kind: 'ask',
+      toolName: 'write',
+      command: 'Write(/ws/file.txt)',
+      description: 'the desc',
+      policyPrompt: { text: PROMPT.text, policies: PROMPT.policies },
+      preview,
+      background: true,
+      unsandboxed: true,
+      pathIsDirectory: false
+    })
+
+    const logs = getSessionDecisions(sid)
+    expect(logs).toHaveLength(1)
+    expect(logs[0].review).toEqual({
+      decision: 'ask',
+      risk: 'medium',
+      source: 'auto-review',
+      ms: expect.any(Number)
+    })
+    expect(logs[0].userResponse).toBe('allowed')
+  })
+
+  it('EN-RV4 接缝回 null：照旧弹卡，卡片没有 review；日志没有 review', async () => {
+    const sid = newSid()
+    const review = reviewer(null)
+    const { provider, requestUserInput } = reviewProvider(review)
+
+    await expect(run(provider, sid)).resolves.toEqual({ status: 'allowed' })
+    expect(review).toHaveBeenCalledTimes(1)
+    expect(onlyCard(requestUserInput).review).toBeUndefined()
+    const logs = getSessionDecisions(sid)
+    expect(logs).toHaveLength(1)
+    expect(logs[0].review).toBeUndefined()
+    expect(logs[0].userResponse).toBe('allowed')
+  })
+
+  it.each<[string, unknown]>([
+    ['verdict 是 undefined', answerOf(undefined)],
+    ['verdict 是 null', answerOf(null)],
+    ["verdict 是字符串 'allow'", answerOf('allow')],
+    ["verdict 只有 {decision:'allow'}", answerOf({ decision: 'allow' })],
+    ['verdict 缺 reason', answerOf({ decision: 'allow', risk: 'low', summary: 's' })],
+    ["decision 'ALLOW'", answerOf({ decision: 'ALLOW', risk: 'low', summary: 's', reason: 'r' })],
+    [
+      "decision 'approve'",
+      answerOf({ decision: 'approve', risk: 'low', summary: 's', reason: 'r' })
+    ],
+    ["risk 'none'", answerOf({ decision: 'allow', risk: 'none', summary: 's', reason: 'r' })],
+    ['summary 是数字', answerOf({ decision: 'allow', risk: 'low', summary: 42, reason: 'r' })],
+    ['整个 answer 是 {}', {}],
+    ['整个 answer 是 undefined', undefined]
+  ])(
+    'EN-RV5 不合格的判决绝不放行（%s）：照旧弹卡、卡片与日志都没有 review',
+    async (_label, malformed) => {
+      const sid = newSid()
+      const review = vi.fn<Reviewer>(async () => malformed as PermissionReviewAnswer | null)
+      const { provider, requestUserInput } = reviewProvider(review)
+
+      await expect(run(provider, sid)).resolves.toEqual({ status: 'allowed' })
+      expect(review).toHaveBeenCalledTimes(1)
+      expect(onlyCard(requestUserInput).review).toBeUndefined()
+      const [log] = getSessionDecisions(sid)
+      expect(log.review).toBeUndefined()
+      expect(log.userResponse).toBe('allowed')
+    }
+  )
+
+  it('EN-RV5 连着 3 次不合格的 deny 不计入拒绝：第 4 次照常先问审查（人一直取消，连续计数没人清）', async () => {
+    const sid = newSid()
+    const review = reviewer(answerOf({ decision: 'deny', risk: 'none', summary: 's', reason: 'r' }))
+    const { provider, requestUserInput } = reviewProvider(review, {
+      kind: 'cancel',
+      reason: 'aborted'
+    })
+
+    for (let i = 0; i < 3; i++) expect(await rejectionMessage(run(provider, sid))).toBe('Aborted')
+    expect(reviewSuspended(sid)).toBe(false)
+    expect(await rejectionMessage(run(provider, sid))).toBe('Aborted')
+    expect(review).toHaveBeenCalledTimes(4)
+    expect(requestUserInput).toHaveBeenCalledTimes(4)
+  })
+
+  it.each<[string, Reviewer]>([
+    [
+      '同步 throw',
+      () => {
+        throw new Error('reviewer exploded')
+      }
+    ],
+    ['reject', async () => Promise.reject(new Error('reviewer exploded'))]
+  ])(
+    'EN-RV6 接缝%s → 照旧弹卡、没有 review；logger.warn 恰 1 行，含 permission review failed 与原错误文本',
+    async (_label, impl) => {
+      const sid = newSid()
+      const review = vi.fn<Reviewer>(impl)
+      const { provider, requestUserInput, warn } = reviewProvider(review)
+
+      await expect(run(provider, sid)).resolves.toEqual({ status: 'allowed' })
+      expect(review).toHaveBeenCalledTimes(1)
+      expect(onlyCard(requestUserInput).review).toBeUndefined()
+      expect(warn).toHaveBeenCalledTimes(1)
+      const line = String(warn.mock.calls[0][0])
+      expect(line).toContain('permission review failed')
+      expect(line).toContain('reviewer exploded')
+      expect(getSessionDecisions(sid)[0].review).toBeUndefined()
+    }
+  )
+
+  it('EN-RV6 没有 logger 时接缝抛错也不炸：照旧弹卡', async () => {
+    const sid = newSid()
+    const review = vi.fn<Reviewer>(async () => {
+      throw new Error('reviewer exploded')
+    })
+    const { provider, requestUserInput } = reviewProvider(review, undefined, {
+      logger: undefined
+    })
+
+    await expect(run(provider, sid)).resolves.toEqual({ status: 'allowed' })
+    expect(onlyCard(requestUserInput).review).toBeUndefined()
+  })
+
+  it.each<[string, SecurityDecision, 'card' | 'allowed' | 'denied']>([
+    ['force-ask', { ...askDecision({ command: 'Read(/ws/file.txt)' }), tier: 'force-ask' }, 'card'],
+    [
+      '缺省（手工构造、没有档位的 ask 决策）',
+      askDecision({ command: 'Read(/ws/file.txt)' }),
+      'card'
+    ],
+    ['deny', { ...denyDecision("Denied by security policy rule 'd1'"), tier: 'deny' }, 'denied'],
+    ['force-allow', { ...ALLOW, tier: 'force-allow' }, 'allowed'],
+    ['static-allow', { ...ALLOW, tier: 'static-allow' }, 'allowed'],
+    [
+      'default',
+      { effect: 'allow', tier: 'default', matched: [], winning: 'default:path' },
+      'allowed'
+    ]
+  ])('EN-RV7 只审 ask 档：tier %s → 接缝 0 次', async (_tier, decision, expected) => {
+    const sid = newSid()
+    const review = reviewer(answerOf(verdict('allow')))
+    const { provider, requestUserInput } = reviewProvider(review)
+
+    if (expected === 'denied') {
+      expect(await rejectionMessage(run(provider, sid, decision))).toBe(
+        "Denied by security policy rule 'd1'"
+      )
+      expect(requestUserInput).not.toHaveBeenCalled()
+    } else if (expected === 'allowed') {
+      await expect(run(provider, sid, decision)).resolves.toEqual({ status: 'allowed' })
+      expect(requestUserInput).not.toHaveBeenCalled()
+    } else {
+      await expect(run(provider, sid, decision)).resolves.toEqual({ status: 'allowed' })
+      expect(onlyCard(requestUserInput).review).toBeUndefined()
+    }
+    expect(review).not.toHaveBeenCalled()
+    expect(getSessionDecisions(sid)[0].review).toBeUndefined()
+  })
+
+  it('EN-RV8 provider 不带 onPermissionRequest：ask 档与没有档位的旧决策逐字段一致 —— 结果、卡片、「记住」、日志', async () => {
+    const preview = { kind: 'diff' as const, path: 'file.txt', diff: '+x' }
+    const materials = { command: 'Write(/ws/file.txt)', rememberEntry: 'Write(/ws/file.txt)' }
+    const observe = async (
+      decision: SecurityDecision
+    ): Promise<{
+      outcome: EnforceOutcome
+      card: Record<string, unknown>
+      persisted: unknown[][]
+      log: Record<string, unknown>
+    }> => {
+      const sid = newSid()
+      const requestUserInput = vi.fn(
+        async (_req: InputRequest): Promise<InputResponse> => ({
+          kind: 'ask',
+          allowed: true,
+          extra: { rememberPath: true }
+        })
+      )
+      const persistGrant = vi.fn()
+      const provider = makeProvider({ requestUserInput, persistGrant })
+      expect('onPermissionRequest' in provider).toBe(false)
+      const outcome = await executeDecision({
+        provider,
+        request: requestIn(sid, { action: 'write' }),
+        decision,
+        opts: makeOpts({ toolName: 'write', preview, description: 'd' }),
+        evaluateMs: 0
+      })
+      const { createdAt: _createdAt, ...card } = onlyCard(requestUserInput)
+      const {
+        ts: _ts,
+        totalMs: _totalMs,
+        sessionId: _sessionId,
+        ...log
+      } = getSessionDecisions(sid)[0]
+      return { outcome, card, persisted: persistGrant.mock.calls, log }
+    }
+
+    const legacy = await observe(askDecision(materials, PROMPT))
+    const tiered = await observe({ ...askDecision(materials, PROMPT), tier: 'ask' })
+    expect(tiered).toStrictEqual(legacy)
+    expect(tiered.outcome).toEqual({ status: 'allowed' })
+    expect(tiered.card.review).toBeUndefined()
+    expect(tiered.log.review).toBeUndefined()
+    expect(tiered.log.userResponse).toBe('allowed_remember')
+    expect(tiered.persisted).toEqual([['write', '/ws/file.txt']])
+  })
+
+  it('EN-RV9 连续 3 次审查 deny 之后第 4 次跳过审查（接缝总调用仍 3），直接弹卡、没有 review', async () => {
+    const sid = newSid()
+    const review = reviewer(answerOf(verdict('deny')))
+    const { provider, requestUserInput } = reviewProvider(review)
+
+    await suspendByDenials(provider, sid)
+    expect(review).toHaveBeenCalledTimes(3)
+    expect(requestUserInput).not.toHaveBeenCalled()
+
+    await expect(run(provider, sid)).resolves.toEqual({ status: 'allowed' })
+    expect(review).toHaveBeenCalledTimes(3)
+    expect(onlyCard(requestUserInput).review).toBeUndefined()
+    const [latest] = getSessionDecisions(sid)
+    expect(latest.review).toBeUndefined()
+    expect(latest.userResponse).toBe('allowed')
+  })
+
+  it.each<[string, InputResponse, Partial<EnforceOpts>, 'allowed' | 'denied' | 'feedback']>([
+    ['allowed', { kind: 'ask', allowed: true }, {}, 'allowed'],
+    ['denied', { kind: 'ask', allowed: false }, {}, 'denied'],
+    [
+      'other（onOther:return）',
+      { kind: 'other', text: 'use the docs' },
+      { onOther: 'return' },
+      'feedback'
+    ]
+  ])(
+    'EN-RV10 暂停之后人对第 4 张卡答 %s → 第 5 次重新先问审查',
+    async (_label, response, extraOpts, expected) => {
+      const sid = newSid()
+      const review = scriptedReviewer(['deny', 'deny', 'deny', 'allow'])
+      const { provider, requestUserInput } = reviewProvider(review, response)
+      await suspendByDenials(provider, sid)
+
+      const fourth = run(provider, sid, RV_PATH_ASK, extraOpts)
+      if (expected === 'denied') {
+        expect(await rejectionMessage(fourth)).toBe('User denied access to /ws/file.txt')
+      } else if (expected === 'feedback') {
+        await expect(fourth).resolves.toEqual({ status: 'feedback', text: 'use the docs' })
+      } else {
+        await expect(fourth).resolves.toEqual({ status: 'allowed' })
+      }
+      expect(review).toHaveBeenCalledTimes(3)
+      expect(requestUserInput).toHaveBeenCalledTimes(1)
+      expect(reviewSuspended(sid)).toBe(false)
+
+      await expect(run(provider, sid)).resolves.toEqual({ status: 'allowed' })
+      expect(review).toHaveBeenCalledTimes(4)
+      expect(requestUserInput).toHaveBeenCalledTimes(1)
+    }
+  )
+
+  it('EN-RV11 人 cancel 不清零：暂停之后第 4 张卡被取消 → 抛 abortError；第 5 次仍跳过审查', async () => {
+    const sid = newSid()
+    const review = reviewer(answerOf(verdict('deny')))
+    const { provider, requestUserInput } = reviewProvider(review, {
+      kind: 'cancel',
+      reason: 'aborted'
+    })
+    await suspendByDenials(provider, sid)
+
+    expect(
+      await rejectionMessage(run(provider, sid, RV_PATH_ASK, { abortError: 'TOOL_ABORTED' }))
+    ).toBe('TOOL_ABORTED')
+    expect(reviewSuspended(sid)).toBe(true)
+    expect(await rejectionMessage(run(provider, sid))).toBe('Aborted')
+    expect(review).toHaveBeenCalledTimes(3)
+    expect(requestUserInput).toHaveBeenCalledTimes(2)
+  })
+
+  it('EN-RV12 审查放行也清零：deny, deny, allow, deny, deny → 第 6 次仍经审查', async () => {
+    const sid = newSid()
+    const review = scriptedReviewer(['deny', 'deny', 'allow', 'deny', 'deny', 'allow'])
+    const { provider, requestUserInput } = reviewProvider(review)
+
+    for (const step of ['deny', 'deny', 'allow', 'deny', 'deny'] as const) {
+      if (step === 'deny') {
+        expect(await rejectionMessage(run(provider, sid))).toMatch(/^Blocked by the reviewer: /)
+      } else {
+        await expect(run(provider, sid)).resolves.toEqual({ status: 'allowed' })
+      }
+    }
+    expect(reviewSuspended(sid)).toBe(false)
+    await expect(run(provider, sid)).resolves.toEqual({ status: 'allowed' })
+    expect(review).toHaveBeenCalledTimes(6)
+    expect(requestUserInput).not.toHaveBeenCalled()
+  })
+
+  it('EN-RV13 以 (deny, deny, allow) 交错攒满 20 次 deny（连续从未到 3）→ 之后跳过审查；人回答之后仍跳过（累计不清零）', async () => {
+    const sid = newSid()
+    const plan: PermissionDecision[] = []
+    for (let i = 0; i < 9; i++) plan.push('deny', 'deny', 'allow')
+    plan.push('deny', 'deny')
+    const review = scriptedReviewer(plan)
+    const { provider, requestUserInput } = reviewProvider(review)
+
+    let denials = 0
+    for (const step of plan) {
+      if (step === 'deny') {
+        expect(await rejectionMessage(run(provider, sid))).toMatch(/^Blocked by the reviewer: /)
+        denials += 1
+        expect({ denials, suspended: reviewSuspended(sid) }).toEqual({
+          denials,
+          suspended: denials >= 20
+        })
+      } else {
+        await expect(run(provider, sid)).resolves.toEqual({ status: 'allowed' })
+      }
+    }
+    expect(denials).toBe(20)
+    expect(review).toHaveBeenCalledTimes(29)
+    expect(requestUserInput).not.toHaveBeenCalled()
+
+    // 第 21 次：跳过审查，直接问人（人允许）
+    await expect(run(provider, sid)).resolves.toEqual({ status: 'allowed' })
+    expect(review).toHaveBeenCalledTimes(29)
+    expect(requestUserInput).toHaveBeenCalledTimes(1)
+    // 人回答过了，累计照旧：第 22 次仍跳过
+    await expect(run(provider, sid)).resolves.toEqual({ status: 'allowed' })
+    expect(review).toHaveBeenCalledTimes(29)
+    expect(requestUserInput).toHaveBeenCalledTimes(2)
+  })
+
+  it('EN-RV14 按 subject.sessionId 分桶：A 暂停不影响 B；clearReviewState(A) 之后 A 恢复', async () => {
+    const a = newSid()
+    const b = newSid()
+    const review = scriptedReviewer(['deny', 'deny', 'deny'])
+    const { provider, requestUserInput } = reviewProvider(review)
+    await suspendByDenials(provider, a)
+
+    // B 照常经审查（脚本用完之后回 allow）
+    await expect(run(provider, b)).resolves.toEqual({ status: 'allowed' })
+    expect(review).toHaveBeenCalledTimes(4)
+    expect((review.mock.calls[3][0] as PermissionRequestEvent).request.subject.sessionId).toBe(b)
+
+    // A 直接问人
+    await expect(run(provider, a)).resolves.toEqual({ status: 'allowed' })
+    expect(review).toHaveBeenCalledTimes(4)
+    expect(requestUserInput).toHaveBeenCalledTimes(1)
+
+    // 人的回答清了 A 的连续计数；再让 A 连拒三次暂停，然后整份清掉 —— A 恢复，B 不受牵连
+    await suspendByDenials(reviewProvider(reviewer(answerOf(verdict('deny')))).provider, a)
+    clearReviewState(a)
+    expect(reviewSuspended(a)).toBe(false)
+    const after = reviewer(answerOf(verdict('allow')))
+    await expect(run(reviewProvider(after).provider, a)).resolves.toEqual({ status: 'allowed' })
+    expect(after).toHaveBeenCalledTimes(1)
+  })
+
+  it.each<[string | undefined, string]>([
+    ['TOOL_ABORTED', 'TOOL_ABORTED'],
+    [undefined, 'Aborted']
+  ])(
+    'EN-RV15 调用前 signal 已中止（abortError=%s）：接缝与卡片都不碰，抛 abortError；日志 cancel、有 totalMs、没有 review',
+    async (abortError, expected) => {
+      const sid = newSid()
+      const review = reviewer(answerOf(verdict('allow')))
+      const { provider, requestUserInput } = reviewProvider(review)
+      const ac = new AbortController()
+      ac.abort()
+
+      expect(
+        await rejectionMessage(run(provider, sid, RV_PATH_ASK, { signal: ac.signal, abortError }))
+      ).toBe(expected)
+      expect(review).not.toHaveBeenCalled()
+      expect(requestUserInput).not.toHaveBeenCalled()
+      const logs = getSessionDecisions(sid)
+      expect(logs).toHaveLength(1)
+      expect(logs[0].userResponse).toBe('cancel')
+      expect(typeof logs[0].totalMs).toBe('number')
+      expect(logs[0].review).toBeUndefined()
+    }
+  )
+
+  it('EN-RV16 审查进行中被中止、接缝随后才答 allow：抛 abortError、不放行、不弹卡', async () => {
+    const sid = newSid()
+    const pending = pendingReviewer()
+    const { provider, requestUserInput } = reviewProvider(pending.review)
+    const ac = new AbortController()
+
+    const result = run(provider, sid, RV_PATH_ASK, {
+      signal: ac.signal,
+      abortError: 'TOOL_ABORTED'
+    })
+    await flush()
+    expect(pending.review).toHaveBeenCalledTimes(1)
+    ac.abort()
+    pending.answer(answerOf(verdict('allow')))
+
+    expect(await rejectionMessage(result)).toBe('TOOL_ABORTED')
+    expect(requestUserInput).not.toHaveBeenCalled()
+    const logs = getSessionDecisions(sid)
+    expect(logs).toHaveLength(1)
+    expect(logs[0].userResponse).toBe('cancel')
+    expect(logs[0].review).toBeUndefined()
+  })
+
+  it('EN-RV16 同样的流程接缝随后答 deny：不计入拒绝 —— 三次之后仍不暂停，第 4 次照常经审查', async () => {
+    const sid = newSid()
+    const pending = pendingReviewer()
+    const { provider, requestUserInput } = reviewProvider(pending.review)
+
+    for (let call = 0; call < 3; call++) {
+      const ac = new AbortController()
+      const result = run(provider, sid, RV_PATH_ASK, { signal: ac.signal })
+      await flush()
+      ac.abort()
+      pending.answer(answerOf(verdict('deny')), call)
+      expect(await rejectionMessage(result)).toBe('Aborted')
+    }
+    expect(reviewSuspended(sid)).toBe(false)
+
+    const fourth = run(provider, sid)
+    await flush()
+    expect(pending.review).toHaveBeenCalledTimes(4)
+    pending.answer(answerOf(verdict('allow')), 3)
+    await expect(fourth).resolves.toEqual({ status: 'allowed' })
+    expect(requestUserInput).not.toHaveBeenCalled()
+  })
+
+  it('EN-RV17 接缝收到的第二个参数恒是一个 AbortSignal（不是 opts.signal 本身）：opts.signal 落下它随之 aborted', async () => {
+    const sid = newSid()
+    const pending = pendingReviewer()
+    const { provider } = reviewProvider(pending.review)
+    const ac = new AbortController()
+
+    const result = run(provider, sid, RV_PATH_ASK, { signal: ac.signal })
+    await flush()
+    const seamSignal = pending.signal()
+    expect(seamSignal).toBeInstanceOf(AbortSignal)
+    expect(seamSignal).not.toBe(ac.signal)
+    expect(seamSignal.aborted).toBe(false)
+
+    ac.abort()
+    expect(seamSignal.aborted).toBe(true)
+    expect(await rejectionMessage(result)).toBe('Aborted')
+  })
+
+  it('EN-RV17 没给 opts.signal 时接缝照样收到一个 AbortSignal，审查期间与之后都不 aborted', async () => {
+    const sid = newSid()
+    const seen: boolean[] = []
+    const review = vi.fn<Reviewer>(async (_event, signal) => {
+      seen.push(signal instanceof AbortSignal, signal?.aborted === false)
+      return answerOf(verdict('allow'))
+    })
+    const { provider } = reviewProvider(review)
+
+    await expect(run(provider, sid)).resolves.toEqual({ status: 'allowed' })
+    expect(seen).toEqual([true, true])
+    const signal = review.mock.calls[0][1]
+    expect(signal).toBeInstanceOf(AbortSignal)
+    expect(signal!.aborted).toBe(false)
+  })
+
+  it('EN-RV18 交给接缝的事件恰为 {request, decision, toolCallId, command, preview, background, unsandboxed}：request / decision 是同一对象，command 取决策材料；description 不进事件', async () => {
+    const sid = newSid()
+    const review = reviewer(null)
+    const { provider } = reviewProvider(review)
+    const request = requestIn(sid, { action: 'write' })
+    const preview = { kind: 'diff' as const, path: 'file.txt', diff: '+x', isNewFile: true }
+
+    await executeDecision({
+      provider,
+      request,
+      decision: RV_WRITE_ASK,
+      opts: makeOpts({
+        toolCallId: 'tc-ev',
+        toolName: 'write',
+        description: 'AGENT-RATIONALE',
+        preview,
+        background: true,
+        unsandboxed: true
+      }),
+      evaluateMs: 0
+    })
+
+    expect(review).toHaveBeenCalledTimes(1)
+    const event = review.mock.calls[0][0]
+    expect(Object.keys(event).sort()).toEqual([
+      'background',
+      'command',
+      'decision',
+      'preview',
+      'request',
+      'toolCallId',
+      'unsandboxed'
+    ])
+    expect(event.request).toBe(request)
+    expect(event.decision).toBe(RV_WRITE_ASK)
+    expect(event.decision.tier).toBe('ask')
+    expect(event).toEqual({
+      request,
+      decision: RV_WRITE_ASK,
+      toolCallId: 'tc-ev',
+      command: 'Write(/ws/file.txt)',
+      preview,
+      background: true,
+      unsandboxed: true
+    })
+    // 模型写的理由（description 参数）只上卡片，不进审查员的输入
+    expect(JSON.stringify(event)).not.toContain('AGENT-RATIONALE')
+  })
+
+  it('EN-RV18 决策没带询问材料时 command 回落展示名：命令原文 / displayPath / 路径', async () => {
+    const commandOf = async (
+      request: SecurityRequest,
+      opts: Partial<EnforceOpts> = {}
+    ): Promise<string> => {
+      const review = reviewer(null)
+      await run(
+        reviewProvider(review).provider,
+        request.subject.sessionId,
+        reviewAsk(),
+        opts,
+        request
+      )
+      return review.mock.calls[0][0].command
+    }
+
+    const sid = newSid()
+    expect(await commandOf(requestIn(sid, { action: 'execute', object: COMMAND_OBJECT }))).toBe(
+      'ls -la'
+    )
+    expect(await commandOf(requestIn(sid), { displayPath: 'rel/file.txt' })).toBe('rel/file.txt')
+    expect(await commandOf(requestIn(sid))).toBe('/ws/file.txt')
+  })
+
+  it('EN-RV19 无询问通道：审查 allow 放行、deny 抛审查文案（missingChannel:allow 也一样）；ask / null 之后才按 missingChannel', async () => {
+    const noChannel = (answer: PermissionReviewAnswer | null): SecurityHostProvider =>
+      makeProvider({ onPermissionRequest: reviewer(answer) })
+    const FAIL_CLOSED = 'Access denied: path outside workspace and no way to ask: /ws/file.txt'
+
+    // allow：缺省 missingChannel（deny）也放行 —— 没有人可问，审查就是答案
+    const allowSid = newSid()
+    await expect(run(noChannel(answerOf(verdict('allow'))), allowSid)).resolves.toEqual({
+      status: 'allowed'
+    })
+    expect(getSessionDecisions(allowSid)[0].review?.decision).toBe('allow')
+
+    // deny：即使调用方声明 missingChannel:allow
+    const denySid = newSid()
+    expect(
+      await rejectionMessage(
+        run(noChannel(answerOf(verdict('deny', { reason: 'nope' }))), denySid, RV_PATH_ASK, {
+          missingChannel: 'allow'
+        })
+      )
+    ).toBe(`Blocked by the reviewer: nope${REVIEW_DENY_TAIL}`)
+
+    // ask：按 missingChannel，日志带着审查意见
+    const askDenySid = newSid()
+    expect(await rejectionMessage(run(noChannel(answerOf(verdict('ask'))), askDenySid))).toBe(
+      FAIL_CLOSED
+    )
+    expect(getSessionDecisions(askDenySid)[0].review?.decision).toBe('ask')
+    const askAllowSid = newSid()
+    await expect(
+      run(noChannel(answerOf(verdict('ask'))), askAllowSid, RV_PATH_ASK, {
+        missingChannel: 'allow'
+      })
+    ).resolves.toEqual({ status: 'allowed' })
+    expect(getSessionDecisions(askAllowSid)[0].review?.decision).toBe('ask')
+
+    // null：同 ask，日志没有审查意见
+    const nullDenySid = newSid()
+    expect(await rejectionMessage(run(noChannel(null), nullDenySid))).toBe(FAIL_CLOSED)
+    expect(getSessionDecisions(nullDenySid)[0].review).toBeUndefined()
+    const nullAllowSid = newSid()
+    await expect(
+      run(noChannel(null), nullAllowSid, RV_PATH_ASK, { missingChannel: 'allow' })
+    ).resolves.toEqual({ status: 'allowed' })
+    expect(getSessionDecisions(nullAllowSid)[0].review).toBeUndefined()
+  })
+
+  it.each<[string, InputResponse, NonNullable<SecurityDecisionRecord['userResponse']>]>([
+    ['allowed', { kind: 'ask', allowed: true }, 'allowed'],
+    [
+      'allowed_remember',
+      { kind: 'ask', allowed: true, extra: { rememberPath: true } },
+      'allowed_remember'
+    ],
+    ['denied', { kind: 'ask', allowed: false }, 'denied'],
+    ['feedback', { kind: 'other', text: 'no' }, 'feedback'],
+    ['cancel', { kind: 'cancel', reason: 'aborted' }, 'cancel']
+  ])(
+    'EN-RV20 审查 ask 之后人答 %s：日志照记人的回答，review 是同一份',
+    async (_label, response, userResponse) => {
+      const sid = newSid()
+      const review = reviewer(answerOf(verdict('ask', { risk: 'high' })))
+      const { provider, persistGrant } = reviewProvider(review, response)
+
+      await run(provider, sid).catch(() => undefined)
+      const logs = getSessionDecisions(sid)
+      expect(logs).toHaveLength(1)
+      expect(logs[0].userResponse).toBe(userResponse)
+      expect(logs[0].review).toEqual({
+        decision: 'ask',
+        risk: 'high',
+        source: 'auto-review',
+        ms: expect.any(Number)
+      })
+      // 「记住」照旧：审查只是先看了一眼，人的授权还是人的
+      expect(persistGrant.mock.calls).toEqual(
+        userResponse === 'allowed_remember' ? [['read', '/ws/file.txt']] : []
+      )
+    }
+  )
+
+  it('EN-RV21 security_decision 那一行 JSON 里的 review 只有 {decision, risk, source, ms}：summary / reason 与判决上多余的键都不进日志', async () => {
+    const sid = newSid()
+    const review = reviewer(
+      answerOf({
+        ...verdict('ask', { risk: 'medium', summary: 'SUMMARY-TEXT', reason: 'REASON-TEXT' }),
+        extra: 'EXTRA-TEXT'
+      })
+    )
+    const { provider, info } = reviewProvider(review)
+    await run(provider, sid)
+
+    const lines = info.mock.calls
+      .map((call) => String(call[0]))
+      .filter((line) => line.startsWith('security_decision '))
+    expect(lines).toHaveLength(1)
+    const record = JSON.parse(lines[0].slice('security_decision '.length)) as SecurityDecisionRecord
+    expect(Object.keys(record.review!).sort()).toEqual(['decision', 'ms', 'risk', 'source'])
+    expect(record.review).toMatchObject({ decision: 'ask', risk: 'medium', source: 'auto-review' })
+    for (const text of ['SUMMARY-TEXT', 'REASON-TEXT', 'EXTRA-TEXT']) {
+      expect(lines[0]).not.toContain(text)
+    }
+  })
+
+  it('EN-RV22 接缝耗时 250ms：review.ms 在 250 与 totalMs 之间', async () => {
+    vi.useFakeTimers()
+    const sid = newSid()
+    const review = vi.fn<Reviewer>(
+      () =>
+        new Promise((resolve) => {
+          setTimeout(() => resolve(answerOf(verdict('allow'))), 250)
+        })
+    )
+    const { provider } = reviewProvider(review)
+
+    const result = run(provider, sid)
+    await vi.advanceTimersByTimeAsync(250)
+    await expect(result).resolves.toEqual({ status: 'allowed' })
+    const [log] = getSessionDecisions(sid)
+    expect(log.review!.ms).toBeGreaterThanOrEqual(250)
+    expect(log.review!.ms).toBeLessThanOrEqual(log.totalMs!)
+  })
+
+  it('EN-RV23 判决带多余的键照样被接受；卡片上的 review 只拷 risk / summary / reason', async () => {
+    const extras = { extra: 'x', decisionNote: 'y', risk2: 'z' }
+
+    const askSid = newSid()
+    const asked = reviewProvider(
+      reviewer(
+        answerOf({ ...verdict('ask', { risk: 'critical', summary: 'S', reason: 'R' }), ...extras })
+      )
+    )
+    await expect(run(asked.provider, askSid)).resolves.toEqual({ status: 'allowed' })
+    const card = onlyCard(asked.requestUserInput)
+    expect(Object.keys(card.review!).sort()).toEqual(['reason', 'risk', 'summary'])
+    expect(card.review).toEqual({ risk: 'critical', summary: 'S', reason: 'R' })
+
+    // allow 同样被接受：直接放行、不弹卡
+    const allowSid = newSid()
+    const allowed = reviewProvider(reviewer(answerOf({ ...verdict('allow'), ...extras })))
+    await expect(run(allowed.provider, allowSid)).resolves.toEqual({ status: 'allowed' })
+    expect(allowed.requestUserInput).not.toHaveBeenCalled()
+  })
+
+  it('EN-RV24 审查挂起时会话被停止（abortSessionReviews）：当场抛 abortError、日志 cancel、不弹卡；接缝收到的 signal 被中止', async () => {
+    const sid = newSid()
+    const pending = pendingReviewer()
+    const { provider, requestUserInput } = reviewProvider(pending.review)
+
+    // 没给 opts.signal：会话停止这一条路自己就要能收尾
+    const result = run(provider, sid, RV_PATH_ASK, { abortError: 'TOOL_ABORTED' })
+    await flush()
+    const seamSignal = pending.signal()
+    expect(seamSignal.aborted).toBe(false)
+
+    abortSessionReviews(sid)
+    expect(seamSignal.aborted).toBe(true)
+    expect(await rejectionMessage(result)).toBe('TOOL_ABORTED')
+    // 接缝事后才答：不起作用
+    pending.answer(answerOf(verdict('allow')))
+    await flush()
+
+    expect(requestUserInput).not.toHaveBeenCalled()
+    const logs = getSessionDecisions(sid)
+    expect(logs).toHaveLength(1)
+    expect(logs[0].userResponse).toBe('cancel')
+    expect(typeof logs[0].totalMs).toBe('number')
+    expect(logs[0].review).toBeUndefined()
+  })
+
+  it('EN-RV25 abortSessionReviews 之后新的 ask 档询问：接缝 0 次、抛 abortError（日志 cancel）；reopenSessionReviews 之后恢复；别的会话不受影响', async () => {
+    const sid = newSid()
+    const other = newSid()
+    const review = reviewer(answerOf(verdict('allow')))
+    const { provider, requestUserInput } = reviewProvider(review)
+
+    abortSessionReviews(sid)
+    expect(
+      await rejectionMessage(run(provider, sid, RV_PATH_ASK, { abortError: 'TOOL_ABORTED' }))
+    ).toBe('TOOL_ABORTED')
+    expect(review).not.toHaveBeenCalled()
+    expect(requestUserInput).not.toHaveBeenCalled()
+    expect(getSessionDecisions(sid)[0]).toMatchObject({ userResponse: 'cancel' })
+
+    await expect(run(provider, other)).resolves.toEqual({ status: 'allowed' })
+    expect(review).toHaveBeenCalledTimes(1)
+
+    reopenSessionReviews(sid)
+    await expect(run(provider, sid)).resolves.toEqual({ status: 'allowed' })
+    expect(review).toHaveBeenCalledTimes(2)
+    expect(requestUserInput).not.toHaveBeenCalled()
+  })
+
+  it('EN-RV26 接缝永不落定、也不理 signal：opts.signal 落下之后百毫秒量级内照样 reject abortError', async () => {
+    const sid = newSid()
+    const review = vi.fn<Reviewer>(() => new Promise<PermissionReviewAnswer | null>(() => {}))
+    const { provider, requestUserInput } = reviewProvider(review)
+    const ac = new AbortController()
+
+    const result = run(provider, sid, RV_PATH_ASK, { signal: ac.signal })
+    await flush()
+    expect(review).toHaveBeenCalledTimes(1)
+
+    const t0 = Date.now()
+    ac.abort()
+    const settled = await Promise.race([
+      result.then(
+        () => 'resolved',
+        (err: Error) => err.message
+      ),
+      new Promise<string>((resolve) => setTimeout(() => resolve('still pending'), 300))
+    ])
+    expect(settled).toBe('Aborted')
+    expect(Date.now() - t0).toBeLessThan(300)
+    expect(requestUserInput).not.toHaveBeenCalled()
+  })
+
+  it.each<[string, () => { review: Reviewer; decision: SecurityDecision }]>([
+    [
+      '有审查意见的卡（审查答 ask）',
+      () => ({ review: reviewer(answerOf(verdict('ask'))), decision: RV_WRITE_ASK })
+    ],
+    ['没有审查的卡（接缝回 null）', () => ({ review: reviewer(null), decision: RV_WRITE_ASK })],
+    [
+      'force-ask 的卡',
+      () => ({
+        review: reviewer(answerOf(verdict('allow'))),
+        decision: {
+          ...askDecision({ command: 'Write(/ws/file.txt)' }, PROMPT),
+          tier: 'force-ask'
+        }
+      })
+    ]
+  ])(
+    'EN-RV27 人对%s答「其它」→ humanFeedbackOf 多一条 {ts, target: 卡片主文本, text}',
+    async (_label, setup) => {
+      const sid = newSid()
+      const { review, decision } = setup()
+      const { provider, requestUserInput } = reviewProvider(review, {
+        kind: 'other',
+        text: 'write to notes.md instead'
+      })
+      expect(humanFeedbackOf(sid)).toEqual([])
+
+      expect(
+        await rejectionMessage(
+          run(provider, sid, decision, { toolName: 'write' }, requestIn(sid, { action: 'write' }))
+        )
+      ).toBe(
+        'User declined access to /ws/file.txt and provided feedback instead: write to notes.md instead'
+      )
+      const card = onlyCard(requestUserInput)
+      expect(humanFeedbackOf(sid)).toEqual([
+        { ts: expect.any(Number), target: card.command, text: 'write to notes.md instead' }
+      ])
+      expect(card.command).toBe('Write(/ws/file.txt)')
+    }
+  )
+
+  it('EN-RV27 onOther:return 的命令卡同样记下（目标是命令原文）；allowed / denied / cancel 不记', async () => {
+    const commandSid = newSid()
+    const { provider } = reviewProvider(reviewer(null), { kind: 'other', text: 'run it in /tmp' })
+    await expect(
+      run(
+        provider,
+        commandSid,
+        reviewAsk({ command: 'rm -rf build' }),
+        { toolName: 'bash', onOther: 'return' },
+        requestIn(commandSid, {
+          action: 'execute',
+          object: { ...COMMAND_OBJECT, command: 'rm -rf build' }
+        })
+      )
+    ).resolves.toEqual({ status: 'feedback', text: 'run it in /tmp' })
+    expect(humanFeedbackOf(commandSid)).toEqual([
+      { ts: expect.any(Number), target: 'rm -rf build', text: 'run it in /tmp' }
+    ])
+
+    const answers: InputResponse[] = [
+      { kind: 'ask', allowed: true },
+      { kind: 'ask', allowed: false, reason: 'not now' },
+      { kind: 'cancel', reason: 'aborted' }
+    ]
+    for (const response of answers) {
+      const sid = newSid()
+      await run(reviewProvider(reviewer(null), response).provider, sid).catch(() => undefined)
+      expect({ response: response.kind, notes: humanFeedbackOf(sid) }).toEqual({
+        response: response.kind,
+        notes: []
+      })
+    }
   })
 })

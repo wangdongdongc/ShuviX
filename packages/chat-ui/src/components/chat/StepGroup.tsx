@@ -5,6 +5,9 @@ import { fallbackToolPresentation } from '@shuvix/chat-protocol/builtinMcpPresen
 import { useChatStore } from '../../stores/chatStore'
 import { clipLine } from '../../utils/clipLine'
 import { CountBadge, StepRow } from './StepRow'
+import { ReviewedMark } from './ReviewTag'
+import { toolReviewOf, type ToolReviewNote } from '@shuvix/chat-protocol/types/toolReview'
+import { PERMISSION_RISKS } from '@shuvix/chat-protocol/types/permissionReview'
 import { ThinkingBlock } from './ThinkingBlock'
 import { ToolCallBlock, renderToolIcon } from './ToolCallBlock'
 import { formatStepSequence, summarizeSteps, uniformToolName, type StepBlock } from './stepGrouping'
@@ -63,8 +66,31 @@ export function StepGroup({ blocks }: { blocks: StepBlock[] }): React.JSX.Elemen
         label: sequence,
         detail: detail ? <span className="font-mono">{detail}</span> : undefined
       }
+  // 折起来时，段里审查员放行过的调用也要看得见：挂风险最高的那一枚（展开后各行自己挂）
+  const reviewed = useMemo(() => {
+    let top: ToolReviewNote | undefined
+    for (const b of blocks) {
+      const note = b.type === 'tool' ? toolReviewOf(b.details) : undefined
+      if (
+        note &&
+        (!top || PERMISSION_RISKS.indexOf(note.risk) > PERMISSION_RISKS.indexOf(top.risk))
+      ) {
+        top = note
+      }
+    }
+    return top
+  }, [blocks])
   // `data-group-count`：计数徽章的语义锚点（e2e 据此定位，不认样式类）
-  const trailing = <CountBadge count={blocks.length} data-group-count="" />
+  const count = <CountBadge count={blocks.length} data-group-count="" />
+  const trailing =
+    reviewed && !expanded ? (
+      <>
+        <ReviewedMark note={reviewed} />
+        {count}
+      </>
+    ) : (
+      count
+    )
 
   // `data-step-group` / `data-group-state` / `data-group-count`（根节点）：合并行在 DOM 上的语义锚点
   const rootData = {

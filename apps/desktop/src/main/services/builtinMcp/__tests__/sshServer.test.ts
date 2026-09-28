@@ -26,7 +26,9 @@
  *   161…170  **下发与 sync 独有的两道**：交给 sshCopy / sshSync 的形状、超时钳位、
  *            rsync 远端路径白名单、合成出来的那条 `rsync --server …` 过命令门
  *            （而 upload/download 刻意不过 —— 它们走 SFTP）；
- *   171…177  **传输结果的翻译**：四句 done、255 该不该翻、超时、其余非零、状态条。
+ *   171…177  **传输结果的翻译**：四句 done、255 该不该翻、超时、其余非零、状态条；
+ *   SG1      **交给命令门的中止信号**（exec / sync）：是这次请求自己的 —— 客户端取消它就落下
+ *            （询问点的审查随之收尾），同会话里并发的另一次不受牵连。
  *
  * 另有一条装配期的对账：内置工厂表的键必须与迁移种下的那一行同名 —— 两边一旦对不上，
  * 会话里那台服务器会在建连的一瞬间抛「没注册」。
@@ -987,7 +989,75 @@ describe('ssh 内置服务器 exec 的超时取值', () => {
   })
 })
 
+/**
+ * SSHS-U-SG1 的架子：同一台 server 上并发两次调用、两张卡都挂着，只取消其中一次。
+ *
+ * 交给门的 signal 必须是**这次请求自己的**（询问点的审查随它一起中止）：被取消的那次当场落下，
+ * 另一次纹丝不动。两种写错都在这里现形 —— 交一个谁也不会落下的新 signal（审查只能跑到超时），
+ * 或者交一个整台 server 共用的（取消一次调用，同会话里别的审查被一起掐掉）。
+ */
+async function expectGateSignalIsPerRequest(
+  name: string,
+  args: () => Record<string, unknown>,
+  ran: () => number
+): Promise<void> {
+  writeConfig('Host web\n')
+  const releases: Array<(r: InputResponse) => void> = []
+  const { client, asks } = await open({
+    respond: () => new Promise<InputResponse>((r) => void releases.push(r))
+  })
+
+  const ac = new AbortController()
+  const cancelled = client.callTool(
+    { name, arguments: args(), _meta: { 'shuvix.dev/toolCallId': 'tc-cancelled' } },
+    undefined,
+    { signal: ac.signal }
+  )
+  const kept = client.callTool({
+    name,
+    arguments: args(),
+    _meta: { 'shuvix.dev/toolCallId': 'tc-kept' }
+  })
+  // 两张卡都真的挂起（两次调用都已经在门里等人答）
+  while (asks.length < 2) await new Promise((r) => setTimeout(r, 1))
+
+  const signalOf = (toolCallId: string): AbortSignal => {
+    const hit = gate.calls.find(
+      (c) => (c.opts as { toolCallId?: string }).toolCallId === toolCallId
+    )
+    expect(hit, toolCallId).toBeDefined()
+    const signal = (hit!.opts as { signal?: unknown }).signal
+    expect(signal, toolCallId).toBeInstanceOf(AbortSignal)
+    return signal as AbortSignal
+  }
+  const mine = signalOf('tc-cancelled')
+  const other = signalOf('tc-kept')
+  expect(mine).not.toBe(other)
+  expect([mine.aborted, other.aborted]).toEqual([false, false])
+
+  ac.abort(new Error('user stopped the run'))
+  await expect(cancelled).rejects.toThrow()
+  // 取消经协议（notifications/cancelled）传到 server 那一侧：给它几拍
+  for (let i = 0; i < 100 && !mine.aborted; i++) await new Promise((r) => setTimeout(r, 1))
+  expect(mine.aborted).toBe(true)
+  expect(other.aborted).toBe(false)
+
+  // 两张卡都答「允许」：没被取消的那次照跑，被取消的那次不补跑
+  for (const release of releases) release({ kind: 'ask', allowed: true })
+  await kept
+  await new Promise((r) => setTimeout(r, 5))
+  expect(ran()).toBe(1)
+}
+
 describe('ssh 内置服务器的中止', () => {
+  it('SSHS-U-SG1（exec）: 卡片挂着时客户端取消这次调用 → 门拿到的 signal 当场落下；同时挂着的另一次不受牵连', async () => {
+    await expectGateSignalIsPerRequest(
+      'exec',
+      () => execArgs(),
+      () => control.exec.length
+    )
+  })
+
   it('SSHS-U-121: 用户在卡片上取消 → 这次调用以 Aborted 落定，远端一条没跑', async () => {
     writeConfig('Host web\n')
     const { client } = await open({ respond: async () => ({ kind: 'cancel', reason: 'aborted' }) })
@@ -1874,6 +1944,16 @@ describe('ssh 内置服务器 sync 的命令门', () => {
       'Sync was not performed. User responded with feedback instead:\nsync the other way round'
     )
     expect(control.sync).toEqual([])
+  })
+
+  it('SSHS-U-SG1（sync）: 命令门的卡片挂着时客户端取消 → 门拿到的 signal 当场落下；同时挂着的另一次不受牵连', async () => {
+    // direction up + 工作目录内的本地路径 → 路径门直接放行，两张卡都是命令门那一张
+    await expectGateSignalIsPerRequest(
+      'sync',
+      () => syncArgs({ remotePath: '/srv/app' }),
+      () => control.sync.length
+    )
+    expect(gate.pathCalls).toHaveLength(2)
   })
 
   it('SSHS-U-170: upload / download **不**过命令门 —— 白名单与命令门是 sync 独有的', async () => {

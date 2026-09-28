@@ -17,16 +17,22 @@
  *   - 模型三态：可解析 → 写种子 + `applied.model`；不可解析 → 不写、`modelUnavailable` 回传原值、
  *     其余照常；未声明 → 不去解析；
  *   - 思考档位（`shuvix-thinking`）两态：声明了 → 写种子 + `applied.thinkingLevel`（档位是枚举值，
- *     没有「不可用」一说 —— 模型那一行不可解析也照写）；未声明 → 不写（seedRunConfig 会补父会话的）。
+ *     没有「不可用」一说 —— 模型那一行不可解析也照写）；未声明 → 不写（seedRunConfig 会补父会话的）；
+ *   - **只由宿主派发的档案**（permission-reviewer）当作不存在：与未知名同一句 `Unknown agent "…"`
+ *     （与派发工具同一口径，不给模型「换条路再试」的理由），用户按名覆盖了同名文件也一样（PIN-3b）。
  *
  * mock 面照旧（import 图全换假件，只留 chat-protocol / agent-runtime 真件）。`isSessionProfile`
- * 在假件里用**真判据**复算（`!BASE_PROFILE_NAMES.has(name)`，名单常量取真件）
- * —— 真 agentService 要 electron + 用户目录，本文件够不到；假件退化成「恒 true」会让基座那一拒
- * 失去意义。invalidateAgent 用实例级 spy（经 this. 动态派发可拦截，保留穿透：底层
+ * 在假件里用**真判据**复算（`!BASE_PROFILE_NAMES.has(name) && !HOST_ONLY_PROFILE_NAMES.has(name)`，
+ * 名单常量取真件）—— 真 agentService 要 electron + 用户目录，本文件够不到；假件退化成「恒 true」
+ * 会让基座那一拒失去意义。invalidateAgent 用实例级 spy（经 this. 动态派发可拦截，保留穿透：底层
  * SessionManager.remove 对无运行时的会话直接 resolve）。
  */
 import { describe, it, expect, beforeAll, beforeEach, vi, type MockInstance } from 'vitest'
-import { BASE_PROFILE_NAMES, type AgentProfile } from '@shuvix/agent-runtime'
+import {
+  BASE_PROFILE_NAMES,
+  HOST_ONLY_PROFILE_NAMES,
+  type AgentProfile
+} from '@shuvix/agent-runtime'
 
 const mocks = vi.hoisted(() => ({
   daoPick: vi.fn<(id: string, cols: string[]) => unknown>(),
@@ -71,7 +77,8 @@ vi.mock('../agentService', () => ({
   agentService: {
     getProfile: mocks.getProfile,
     // 与 agentService.isSessionProfile 同一条表达式（名单常量取真件）
-    isSessionProfile: (p: AgentProfile) => !BASE_PROFILE_NAMES.has(p.name)
+    isSessionProfile: (p: AgentProfile) =>
+      !BASE_PROFILE_NAMES.has(p.name) && !HOST_ONLY_PROFILE_NAMES.has(p.name)
   }
 }))
 vi.mock('../agentSession', () => ({ AgentSession: class {} }))
@@ -165,6 +172,25 @@ describe('准入 —— 三种拒绝，都零副作用', () => {
       expect(res.success).toBe(false)
       expect(res.error).toContain('base profile')
       expect(res.error).toContain('omit agent_profile')
+      expectNoSideEffects()
+    }
+  )
+
+  it.each([
+    ['内置', 'builtin'],
+    ['用户按名覆盖的同名文件', 'user']
+  ] as const)(
+    'PIN-3b 权限审查员（%s）当作不存在：Unknown agent "permission-reviewer"（与派发工具同一口径），零副作用',
+    async (_l, source) => {
+      // 带着模型与思考档位两种声明：拒绝必须先于两种种子（expectNoSideEffects 逐一查）
+      mocks.getProfile.mockReturnValue({
+        ...profile('permission-reviewer', { model: 'openai/gpt-x', thinkingLevel: 'off' }),
+        source
+      })
+      const res = await pin('permission-reviewer')
+      // toStrictEqual：只有 success 与 error 两个键 —— 不回传半截结果，也不是「基座」那句
+      // 带下一步提示的拒绝（那句会告诉模型这个名字确实存在）
+      expect(res).toStrictEqual({ success: false, error: 'Unknown agent "permission-reviewer"' })
       expectNoSideEffects()
     }
   )

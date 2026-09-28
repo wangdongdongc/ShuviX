@@ -154,8 +154,10 @@ export const KNOWLEDGE_WRITER_SPEC: BuiltinProfileSpec = {
 /**
  * 权限审查员 —— 询问点自动审查的执行侧（设计稿 docs/permission-review-design.md）：内置判定型 hook
  * `auto-review` 在策略判出 ask、弹卡片之前派发它，它经 `next` 交回 allow / ask / deny。
- * 不声明任何工具（只有结果契约附带的 `next`）、不要注入，`shuvix-thinking: off` —— 系统提示词就是
- * 那段审查规则，一次请求出结论。名字刻意不叫 `reviewer`：用户照着说明书里的示例建一份代码审查
+ * 不声明任何工具（只有结果契约附带的 `next`）、不要注入，`shuvix-thinking: low` —— 系统提示词就是
+ * 那段审查规则，一次请求出结论。思考是 low 而不是 off，出自真模型探针（e2e/live/review.probe.ts）：
+ * kimi-for-coding 一族关掉思考时不调 `next`、把判决写成正文里的 XML，追问也一样；low 档每条都经
+ * `next` 作答、中位 2.8 秒。名字刻意不叫 `reviewer`：用户照着说明书里的示例建一份代码审查
  * agent 就会按名覆盖它。
  */
 export const PERMISSION_REVIEWER_PROFILE_NAME = 'permission-reviewer'

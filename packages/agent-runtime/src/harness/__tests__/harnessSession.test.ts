@@ -22,6 +22,7 @@ import type { AssistantMessage, Models, Model, Api } from '@earendil-works/pi-ai
 import { createAssistantMessageEventStream } from '@earendil-works/pi-ai/compat'
 import { HarnessSession } from '../harnessSession'
 import { createStubExecutionEnv } from '../stubEnv'
+import { clearReviewState, trackReview } from '../../security/reviewState'
 import type { InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 
 /** 假 assistant 的 usage token 数（自动压缩阈值判定取自这里 —— 模拟 provider 真实计量） */
@@ -93,6 +94,10 @@ let piSession: Session
 let hs: HarnessSession
 let events: string[]
 
+/** 询问点自动审查的会话内状态是进程级表：HS-RV1 用自己的会话 id（外加一个旁观会话），用完清掉 */
+const REVIEW_SID = 'hs-rv1'
+const BYSTANDER_SID = 'hs-rv1-bystander'
+
 function makeHarness(autoCompact = false, model: Model<Api> = fakeModel): HarnessSession {
   return new HarnessSession({
     sessionId: 's1',
@@ -124,6 +129,8 @@ beforeEach(async () => {
 
 afterEach(() => {
   rmSync(dir, { recursive: true, force: true })
+  clearReviewState(REVIEW_SID)
+  clearReviewState(BYSTANDER_SID)
 })
 
 describe('HarnessSession', () => {
@@ -174,6 +181,50 @@ describe('HarnessSession', () => {
     void ask('r3').then((r) => (afterPrompt = r))
     await Promise.resolve()
     expect(afterPrompt).toBeUndefined()
+  })
+
+  it('HS-RV1 abort() 连同询问点的自动审查一起停：已登记的审查当场中止、下一次 prompt 之前不再受理新的；prompt() 之后恢复；别的会话不受牵连', async () => {
+    // 与上一条同一个窗口：一次审查放行若在用户点了停止之后才落地，操作就照样执行了
+    const reviewing = new HarnessSession({
+      sessionId: REVIEW_SID,
+      session: piSession,
+      env: createStubExecutionEnv(),
+      models: fakeModels,
+      model: fakeModel,
+      systemPrompt: 'test',
+      tools: [],
+      eventSink: { broadcast: (e) => events.push(e.type), hasUserInputCapability: () => true },
+      autoCompact: false
+    })
+
+    // 中止前：照常受理（登记得上，拿到注销函数）
+    const inflight = new AbortController()
+    const release = trackReview(REVIEW_SID, inflight)
+    expect(release).toBeTypeOf('function')
+    const bystander = new AbortController()
+    const releaseBystander = trackReview(BYSTANDER_SID, bystander)
+    expect(releaseBystander).toBeTypeOf('function')
+
+    await reviewing.abort()
+    // 进行中的那次当场中止；新的不再受理（null = 调用方按「已中止」收尾）
+    expect(inflight.signal.aborted).toBe(true)
+    expect(trackReview(REVIEW_SID, new AbortController())).toBeNull()
+    // 只停这一个会话
+    expect(bystander.signal.aborted).toBe(false)
+    const bystanderNext = trackReview(BYSTANDER_SID, new AbortController())
+    expect(bystanderNext).toBeTypeOf('function')
+    release!()
+    releaseBystander!()
+    bystanderNext!()
+
+    // 下一轮开始后恢复受理
+    const { error } = await reviewing.prompt('继续')
+    expect(error).toBeUndefined()
+    const after = new AbortController()
+    const releaseAfter = trackReview(REVIEW_SID, after)
+    expect(releaseAfter).toBeTypeOf('function')
+    expect(after.signal.aborted).toBe(false)
+    releaseAfter!()
   })
 
   // ─── 自动压缩 ────────────────────────────────────────

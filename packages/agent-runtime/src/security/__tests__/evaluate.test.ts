@@ -184,6 +184,185 @@ describe('evaluate — tier 结算优先序', () => {
   })
 })
 
+/**
+ * decision.tier —— 胜出的那一档（无命中为 'default'）。ask 与 force-ask 的 effect 同为 'ask'，只有
+ * tier 分得开：执行层据此决定一次询问能不能先交给审查接缝（force-ask 的意思就是「只问人」，
+ * deny / force-allow 根本不是询问）。所以这里钉的是「档位」这一个字段，不是再测一遍结算顺序。
+ */
+describe('evaluate — decision.tier（胜出的档位）', () => {
+  // 求值必 throw 的 match（未知顶层名字）
+  const THROWING_MATCH = 'bogusVar == "x"'
+
+  it('EV-TR1 六档各自胜出时 tier 就是那一档（effect 随档位走）；没有规则或一条都没命中 → default', () => {
+    // 从最强一档起逐级拿掉，剩下的最强一档胜出。规则按从弱到强排列：胜出靠档位，不靠装配顺序
+    const ladder: Array<
+      [SecurityRule[], SecurityDecision['tier'], SecurityDecision['effect'], string]
+    > = [
+      [
+        [staticAllow('s1'), ask('a1'), forceAllow('c1'), forceAsk('fa1'), deny('d1')],
+        'deny',
+        'deny',
+        'd1'
+      ],
+      [
+        [staticAllow('s1'), ask('a1'), forceAllow('c1'), forceAsk('fa1')],
+        'force-ask',
+        'ask',
+        'fa1'
+      ],
+      [[staticAllow('s1'), ask('a1'), forceAllow('c1')], 'force-allow', 'allow', 'c1'],
+      [[staticAllow('s1'), ask('a1')], 'ask', 'ask', 'a1'],
+      [[staticAllow('s1')], 'static-allow', 'allow', 's1'],
+      [[], 'default', 'allow', 'default:path']
+    ]
+    for (const [rules, tier, effect, winning] of ladder) {
+      const decision = evaluate(rules, makeRequest())
+      expect({
+        rules: rules.map((r) => r.id),
+        tier: decision.tier,
+        effect: decision.effect,
+        winning: decision.winning
+      }).toEqual({ rules: rules.map((r) => r.id), tier, effect, winning })
+    }
+
+    // 单独一条也带着自己的档位（不是「压过了谁」才有）
+    const alone: Array<[SecurityRule, SecurityDecision['tier']]> = [
+      [deny('d1'), 'deny'],
+      [forceAsk('fa1'), 'force-ask'],
+      [forceAllow('c1'), 'force-allow'],
+      [ask('a1'), 'ask'],
+      [staticAllow('s1'), 'static-allow']
+    ]
+    for (const [rule, tier] of alone) {
+      expect(evaluate([rule], makeRequest()).tier, rule.id).toBe(tier)
+    }
+
+    // 有规则、一条都没命中：与空规则集同为 default；default 与客体类型无关
+    expect(evaluate([deny('d1', 'false'), ask('a1', 'false')], makeRequest()).tier).toBe('default')
+    for (const object of [PATH_OBJECT, COMMAND_OBJECT, GIT_OBJECT]) {
+      const decision = evaluate([], makeRequest({ object }))
+      expect({ type: object.type, tier: decision.tier }).toEqual({
+        type: object.type,
+        tier: 'default'
+      })
+    }
+  })
+
+  it('EV-TR2 force-ask 与 ask 同时命中 → effect ask、tier force-ask（两档 effect 相同，只有 tier 分得开）；只有 ask → tier ask', () => {
+    // 装配顺序正反各一次：胜出的是档位
+    for (const rules of [
+      [ask('a1'), forceAsk('fa1')],
+      [forceAsk('fa1'), ask('a1')]
+    ]) {
+      expect(evaluate(rules, makeRequest()), rules[0].id).toMatchObject({
+        effect: 'ask',
+        tier: 'force-ask',
+        winning: 'fa1',
+        matched: ['fa1', 'a1']
+      })
+    }
+
+    const askOnly = evaluate([ask('a1')], makeRequest())
+    expect(askOnly).toMatchObject({ effect: 'ask', tier: 'ask', winning: 'a1', matched: ['a1'] })
+
+    const forceAskOnly = evaluate([forceAsk('fa1')], makeRequest())
+    expect(forceAskOnly).toMatchObject({ effect: 'ask', tier: 'force-ask', winning: 'fa1' })
+    // 同一个 effect，不同的档位 —— 只看 effect 的调用方分不出「能交给审查」与「只问人」
+    expect(forceAskOnly.effect).toBe(askOnly.effect)
+    expect(forceAskOnly.tier).not.toBe(askOnly.tier)
+  })
+
+  it('EV-TR3 force-allow 压过 ask → tier force-allow；deny 压过一切 → tier deny', () => {
+    expect(evaluate([ask('a1'), forceAllow('c1')], makeRequest())).toMatchObject({
+      effect: 'allow',
+      tier: 'force-allow',
+      winning: 'c1',
+      matched: ['c1', 'a1']
+    })
+
+    // deny 与其余每一档两两同在、与全部同在：都是 deny 档
+    const others = [forceAsk('fa1'), forceAllow('c1'), ask('a1'), staticAllow('s1')]
+    for (const other of others) {
+      expect(evaluate([other, deny('d1')], makeRequest()), other.tier).toMatchObject({
+        effect: 'deny',
+        tier: 'deny',
+        winning: 'd1'
+      })
+    }
+    expect(evaluate([...others, deny('d1')], makeRequest())).toMatchObject({
+      effect: 'deny',
+      tier: 'deny',
+      winning: 'd1',
+      matched: ['d1', 'fa1', 'c1', 'a1', 's1']
+    })
+  })
+
+  it('EV-TR4 includeForceAllow:false：force-allow + ask → tier ask；过滤的只是 force-allow 这一档', () => {
+    const opts = { includeForceAllow: false }
+    expect(evaluate([ask('a1'), forceAllow('c1')], makeRequest(), opts)).toMatchObject({
+      effect: 'ask',
+      tier: 'ask',
+      winning: 'a1',
+      matched: ['a1']
+    })
+    // 只剩被滤掉的那一档 → default
+    expect(evaluate([forceAllow('c1')], makeRequest(), opts).tier).toBe('default')
+    // 同为放行的 static-allow 照常胜出；force-ask 照常在最上面
+    expect(evaluate([forceAllow('c1'), staticAllow('s1')], makeRequest(), opts)).toMatchObject({
+      effect: 'allow',
+      tier: 'static-allow',
+      winning: 's1'
+    })
+    expect(evaluate([forceAllow('c1'), forceAsk('fa1')], makeRequest(), opts)).toMatchObject({
+      effect: 'ask',
+      tier: 'force-ask',
+      winning: 'fa1'
+    })
+  })
+
+  it('EV-TR5 fail-safe 命中不改变档位：抛错的 ask → ask、抛错的 force-ask → force-ask、抛错的 deny → deny；抛错的 allow 两档不命中', () => {
+    const matchedCases: Array<
+      [SecurityRule, SecurityDecision['effect'], SecurityDecision['tier']]
+    > = [
+      [ask('a1', THROWING_MATCH), 'ask', 'ask'],
+      // 一条写坏了的 force-ask 仍是「只问人」：不因为求值报错就变成一条能交给审查的询问
+      [forceAsk('fa1', THROWING_MATCH), 'ask', 'force-ask'],
+      [deny('d1', THROWING_MATCH), 'deny', 'deny']
+    ]
+    for (const [rule, effect, tier] of matchedCases) {
+      const warn = vi.fn()
+      const decision = evaluate([rule], makeRequest(), { warn })
+      expect({
+        rule: rule.id,
+        effect: decision.effect,
+        tier: decision.tier,
+        winning: decision.winning
+      }).toEqual({ rule: rule.id, effect, tier, winning: rule.id })
+      expect(warn, rule.id).toHaveBeenCalledTimes(1)
+      expect(warn.mock.calls[0][0], rule.id).toContain('treating as matched (fail-safe)')
+    }
+    // 询问材料也按档位出：fail-safe 命中的 force-ask 同样不给「允许并记住」
+    expect(evaluate([forceAsk('fa1', THROWING_MATCH)], makeRequest()).ask).toEqual({
+      command: 'Read(/ws/file.txt)'
+    })
+
+    // allow 两档报错即不命中：档位落到实际命中的下一档（没有就是 default）
+    const staticWarn = vi.fn()
+    expect(
+      evaluate([staticAllow('s1', THROWING_MATCH)], makeRequest(), { warn: staticWarn })
+    ).toMatchObject({ effect: 'allow', tier: 'default', winning: 'default:path', matched: [] })
+    expect(staticWarn).toHaveBeenCalledTimes(1)
+    expect(staticWarn.mock.calls[0][0]).toContain('treating as not matched')
+
+    const forceWarn = vi.fn()
+    expect(
+      evaluate([ask('a1'), forceAllow('c1', THROWING_MATCH)], makeRequest(), { warn: forceWarn })
+    ).toMatchObject({ effect: 'ask', tier: 'ask', winning: 'a1', matched: ['a1'] })
+    expect(forceWarn).toHaveBeenCalledTimes(1)
+    expect(forceWarn.mock.calls[0][0]).toContain('treating as not matched')
+  })
+})
+
 describe('evaluate — CEL match 谓词（旧结构化匹配语义的等价表达）', () => {
   it('EV-7 match 省略=恒命中；action 条件不命中时落 default', () => {
     const anyAction = evaluate([deny('d1')], makeRequest({ action: 'write' }))

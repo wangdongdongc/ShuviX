@@ -12,7 +12,8 @@
  *               「本会话已连上」按会话算、每次现读、从不过安全门；
  *   DBSV-11…15  **门之前**：未知连接名 / 必填项在任何询问与建连之前就回绝；
  *   DBSV-16…29  **安全门**：客体与 opts 的契约、询问卡片的路由键与内容（连接名写在 SQL 上方）、
- *               可写问 / 只读放行、五种应答、没有输入面板、免询问、用户策略；
+ *               可写问 / 只读放行、五种应答、没有输入面板、免询问、用户策略；交给门的中止信号是
+ *               这次请求自己的（DBSV-SG1：询问点的审查随调用一起中止，并发的另一次不受牵连）；
  *   DBSV-30…31  **结果**：驱动报错、未知工具；
  *   DBSV-32…35  **状态条与寿命**：状态条跟着连接池的 onChange 走、关闭时断开本会话全部连接、
  *               会话之间互不相干、关两次只断一次。
@@ -798,6 +799,61 @@ describe('database 内置服务器 query 的安全门', () => {
 
     // SDK 对已取消的请求不发响应 —— 可观测的契约只有这一条：那条 SQL 没有补跑
     expect(pool.queries).toEqual([])
+  })
+
+  it('DBSV-SG1 卡片挂着时客户端取消这次调用 → 门拿到的 signal 当场落下（是这次请求自己的）；同时挂着的另一次不受牵连', async () => {
+    saveDefaults()
+    const releases: Array<(r: InputResponse) => void> = []
+    const { client, asks } = await open({
+      respond: () => new Promise<InputResponse>((r) => void releases.push(r))
+    })
+
+    const ac = new AbortController()
+    const cancelled = client.callTool(
+      {
+        name: 'query',
+        arguments: queryArgs({ sql: 'DELETE FROM t' }),
+        _meta: { 'shuvix.dev/toolCallId': 'tc-cancelled' }
+      },
+      undefined,
+      { signal: ac.signal }
+    )
+    const kept = client.callTool({
+      name: 'query',
+      arguments: queryArgs({ sql: 'UPDATE t SET a = 1' }),
+      _meta: { 'shuvix.dev/toolCallId': 'tc-kept' }
+    })
+    // 两张卡都真的挂起（可写连接，两次都在门里等人答）
+    while (asks.length < 2) await new Promise((r) => setTimeout(r, 1))
+
+    const signalOf = (toolCallId: string): AbortSignal => {
+      const hit = gate.calls.find(
+        (c) => (c.opts as { toolCallId?: string }).toolCallId === toolCallId
+      )
+      expect(hit, toolCallId).toBeDefined()
+      const signal = (hit!.opts as { signal?: unknown }).signal
+      expect(signal, toolCallId).toBeInstanceOf(AbortSignal)
+      return signal as AbortSignal
+    }
+    const mine = signalOf('tc-cancelled')
+    const other = signalOf('tc-kept')
+    // 询问点的审查随这次调用一起中止：交一个谁也不会落下的新 signal，审查就只能跑到超时；
+    // 交一个整台 server 共用的，取消一次就掐掉同会话里别的审查
+    expect(mine).not.toBe(other)
+    expect([mine.aborted, other.aborted]).toEqual([false, false])
+
+    ac.abort(new Error('user stopped the run'))
+    await expect(cancelled).rejects.toThrow()
+    // 取消经协议（notifications/cancelled）传到 server 那一侧：给它几拍
+    for (let i = 0; i < 100 && !mine.aborted; i++) await new Promise((r) => setTimeout(r, 1))
+    expect(mine.aborted).toBe(true)
+    expect(other.aborted).toBe(false)
+
+    // 两张卡都答「允许」：没被取消的那条照跑，被取消的那条不补跑
+    for (const release of releases) release({ kind: 'ask', allowed: true })
+    await kept
+    await settle()
+    expect(pool.queries.map((q) => q.sql)).toEqual(['UPDATE t SET a = 1'])
   })
 
   it('DBSV-25 这条会话没有输入面板：可写连接拒绝（fail-closed），只读连接照跑', async () => {

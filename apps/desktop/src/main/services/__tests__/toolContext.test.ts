@@ -16,29 +16,62 @@
  *   getVars 展开 sandbox.sessionView(ctx.sessionId, <工具看到的同一个工作区>) 的六个键 ——
  *     文件工具的免询问范围与命令实际能碰的范围同源。sandbox 模块以「透传真实实现的 spy」替身：
  *     默认走真实 sessionView（未固定 → INACTIVE_VIEW），单条用例可以换成假值。
+ *
+ * 询问点的自动审查带来的桌面接线（设计稿 docs/permission-review-design.md）：
+ *   SEC-9 shuvixConfigDirs —— protect-shuvix-config 守的 policies / agents / hooks / skills 四个目录；
+ *   HG-3 getVars 另展开 sandbox.workspaceWriteView 的三个 workspace* 键（ask-on-write 与沙箱脱钩的
+ *     工作区豁免）—— 与沙箱那一面同一对参数、每次现取；本文件不 mock electron，真实模块取不到
+ *     app.getPath，于是三个键恒为空数组（HG-3b 钉住这条出错路径不抛、不漏键）；
+ *   TC-SUBJ 桌面 subject 带上 ctx.agent 的档案名与 root / spawned（审查员的防递归与用户策略都读它）；
+ *   TC-RV onPermissionRequest 每次现取注入的审查者（setPermissionReviewer），被动判定从不走到它。
+ * 需要真实评估的用例读仓库里那份内置策略 md（同 askPolicy.test）；用户策略由 tc.userPolicies 喂。
+ * reviewState / 决策日志是进程级表：这些用例各用独立 sessionId，afterEach 清掉。
  */
-import { beforeEach, describe, it, expect, vi } from 'vitest'
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 
 const tc = vi.hoisted(() => ({
   getById: vi.fn((_id: string): unknown => undefined),
   projectPick: vi.fn((_id: string, _cols: string[]): unknown => undefined),
   pickSettings: vi.fn((_id: string, _keys: string[]): unknown => undefined),
   getTempWorkspace: vi.fn((_sid: string) => '/tmp/shuvix-actor-ws'),
-  getSessionArtifactsDir: vi.fn((id: string) => `/tmp/shuvix-artifacts/${id}`)
+  getSessionArtifactsDir: vi.fn((id: string) => `/tmp/shuvix-artifacts/${id}`),
+  /** policyService.getUserPolicies 交出的用户策略（TC-SUBJ2 / TC-RV3 换） */
+  userPolicies: [] as UserPolicyFile[],
+  // 内置策略的事实源 —— 运行时读随包发布的目录，这里直接读仓库里那一份（同一批文件）。
+  // src/main/services/__tests__ 往上六级是仓库根
+  builtinDir: `${__dirname}/../../../../../../packages/agent-runtime/src/security/builtinPolicies/md`
 }))
 
 vi.mock('../../dao/projectDao', () => ({ projectDao: { pick: tc.projectPick } }))
 vi.mock('../../dao/sessionDao', () => ({ sessionDao: { pickSettings: tc.pickSettings } }))
-// 真实模块 + sessionView 换成透传 spy：不改行为，只多一个观测点（与可按用例替换的返回值）
+// 真实模块 + sessionView / workspaceWriteView 换成透传 spy：不改行为，只多一个观测点（与可按用例替换的返回值）
 vi.mock('../sandbox', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../sandbox')>()
-  return { ...actual, sessionView: vi.fn(actual.sessionView) }
+  return {
+    ...actual,
+    sessionView: vi.fn(actual.sessionView),
+    workspaceWriteView: vi.fn(actual.workspaceWriteView)
+  }
 })
 vi.mock('../sessionService', () => ({
   sessionService: { getById: tc.getById, addAllowListPaths: () => {} }
 }))
 vi.mock('../skillService', () => ({ skillService: { listExternalDirs: () => [] } }))
-vi.mock('../policyService', () => ({ policyService: { getUserPolicies: () => [] } }))
+vi.mock('../policyService', () => ({
+  policyService: {
+    getUserPolicies: () => tc.userPolicies,
+    // 与 policyService.readBuiltinPolicyMd 同形，只是基准目录直接钉在仓库那份上
+    readBuiltinPolicyMd: (fileName: string) => {
+      try {
+        return readFileSync(join(tc.builtinDir, fileName), 'utf-8')
+      } catch {
+        return null
+      }
+    }
+  }
+}))
 vi.mock('../../utils/paths', () => ({
   getTempWorkspace: tc.getTempWorkspace,
   getToolResultsBase: () => '/tmp/shuvix-actor-tool-results',
@@ -63,11 +96,28 @@ vi.mock('../../logger', () => ({
 
 import {
   agentActorOf,
+  getDesktopSecurityContext,
   getSessionPathGrants,
+  isPathReadAllowed,
+  isPathWriteAllowed,
   makeDesktopSecurityProvider,
-  resolveProjectConfig
+  resolveProjectConfig,
+  setPermissionReviewer,
+  type ProjectConfig,
+  type ToolContext
 } from '../toolContext'
-import { sessionView } from '../sandbox'
+import { sessionView, workspaceWriteView } from '../sandbox'
+import {
+  clearReviewState,
+  clearSessionDecisions,
+  parsePolicyDefinitionFile,
+  type PermissionRequestEvent,
+  type PermissionReviewAnswer,
+  type SecurityDecision,
+  type SecuritySubject,
+  type UserPolicyFile
+} from '@shuvix/agent-runtime'
+import type { AskInputRequest, InputRequest } from '@shuvix/chat-protocol/types/inputRequest'
 
 describe('agentActorOf', () => {
   it('TC-1 `shuvix-<profile>/<model>`：模型惰性取；缺元数据回落 shuvix-agent/unknown；取模型抛错或空白 → unknown；档案名空白归一为 -', () => {
@@ -174,6 +224,17 @@ describe('makeDesktopSecurityProvider —— 变量表', () => {
       expect(vars(id).sessionArtifactsDir).toBe('')
     }
   )
+
+  // shuvixConfigDirs —— protect-shuvix-config（force-ask）守的就是它：漏一项，那一类规矩文件的写入
+  // 就回到普通的 ask-on-write，于是可以被审查员代答，一次注入就能改掉审查员自己
+  it('SEC-9 shuvixConfigDirs 恰为 policies / agents / hooks / skills 四个默认目录（按这个顺序；内置与外部技能目录不在其中）', () => {
+    expect(vars().shuvixConfigDirs).toEqual([
+      '/tmp/shuvix-policies',
+      '/tmp/shuvix-agents',
+      '/tmp/shuvix-hooks',
+      '/tmp/shuvix-actor-skills'
+    ])
+  })
 })
 
 describe('resolveProjectConfig —— 工作目录照抄 getById 的口径', () => {
@@ -369,5 +430,351 @@ describe('HG-1 getVars —— 展开 sandbox.sessionView 的六个键', () => {
     })
     // 六个键一个不少：策略的 vars.sandbox* 指向未设变量会走 fail-safe 并刷告警
     for (const key of SANDBOX_KEYS) expect(vars, key).toHaveProperty(key)
+  })
+})
+
+/**
+ * HG-3 工作区写入视图 —— ask-on-write 的工作区豁免不再依赖沙箱：getVars 另展开
+ * sandbox.workspaceWriteView(ctx.sessionId, 工作区) 的三个键。参数必须与沙箱那一面同一对（同一个会话、
+ * 文件工具看到的同一个工作区），且每次评估现取 —— 会话中途换了工作目录，豁免范围跟着走。
+ */
+describe('HG-3 getVars —— 展开 sandbox.workspaceWriteView 的三个键', () => {
+  const WORKSPACE_KEYS = [
+    'workspaceWritable',
+    'workspaceWriteDenied',
+    'workspaceProtectedPatterns'
+  ] as const
+
+  const pickWorkspaceKeys = (vars: Record<string, unknown>): Record<string, unknown> =>
+    Object.fromEntries(WORKSPACE_KEYS.filter((k) => k in vars).map((k) => [k, vars[k]]))
+
+  const sessionViewSpy = vi.mocked(sessionView)
+  const workspaceWriteViewSpy = vi.mocked(workspaceWriteView)
+
+  beforeEach(() => {
+    // mockReset 回到透传真实实现（vi.fn(impl) 的语义），顺带清掉没用完的 Once 值
+    sessionViewSpy.mockReset()
+    workspaceWriteViewSpy.mockReset()
+  })
+
+  it('HG-3a workspaceWriteView 给什么，三个键就是什么；参数与 sessionView 同一对（ctx.sessionId, getConfig() 的工作区）；同一个 provider 每次评估现取', () => {
+    const first = {
+      workspaceWritable: ['/ws'],
+      workspaceWriteDenied: ['/ws/.vscode', '/Users/u/.ssh'],
+      workspaceProtectedPatterns: ['/\\.[Gg][Ii][Tt]$']
+    }
+    const second = {
+      workspaceWritable: ['/elsewhere'],
+      workspaceWriteDenied: ['/elsewhere/.claude'],
+      workspaceProtectedPatterns: []
+    }
+    workspaceWriteViewSpy.mockReturnValueOnce(first).mockReturnValueOnce(second)
+
+    let workingDirectory = '/ws'
+    const provider = makeDesktopSecurityProvider(
+      { sessionId: 'sess-w', requestUserInput: undefined },
+      () => ({ workingDirectory })
+    )
+
+    const v1 = provider.getVars() as Record<string, unknown>
+    expect(workspaceWriteViewSpy.mock.calls).toEqual([['sess-w', '/ws']])
+    expect(workspaceWriteViewSpy.mock.calls).toEqual(sessionViewSpy.mock.calls)
+    expect(pickWorkspaceKeys(v1)).toEqual(first)
+    // 展开的是多出来的三个键，不是把整张表换掉：工作区与沙箱那一面照旧
+    expect(v1.workspace).toBe('/ws')
+    expect(v1.sandboxActive).toBe(false)
+
+    // 会话换了工作目录：同一个 provider 下一次评估就跟上（两面拿到的都是新目录）
+    workingDirectory = '/elsewhere'
+    const v2 = provider.getVars() as Record<string, unknown>
+    expect(workspaceWriteViewSpy).toHaveBeenCalledTimes(2)
+    expect(workspaceWriteViewSpy.mock.calls.at(-1)).toEqual(['sess-w', '/elsewhere'])
+    expect(sessionViewSpy.mock.calls.at(-1)).toEqual(['sess-w', '/elsewhere'])
+    expect(pickWorkspaceKeys(v2)).toEqual(second)
+    expect(v2.workspace).toBe('/elsewhere')
+  })
+
+  it('HG-3b 真实 sandbox 模块、不 mock electron（取不到 app.getPath，算不出规格）→ getVars 不抛，三个键都在且都是空数组（= 区内写照旧问）', () => {
+    const provider = makeDesktopSecurityProvider(
+      { sessionId: 'sess-real', requestUserInput: undefined },
+      () => ({ workingDirectory: '/ws' })
+    )
+    let vars: Record<string, unknown> = {}
+    expect(() => {
+      vars = provider.getVars() as Record<string, unknown>
+    }).not.toThrow()
+
+    expect(workspaceWriteViewSpy.mock.calls).toEqual([['sess-real', '/ws']])
+    expect(pickWorkspaceKeys(vars)).toEqual({
+      workspaceWritable: [],
+      workspaceWriteDenied: [],
+      workspaceProtectedPatterns: []
+    })
+    // 三个键一个不少：ask-on-write 的 match 引用它们，缺键会走 fail-safe
+    for (const key of WORKSPACE_KEYS) expect(vars, key).toHaveProperty(key)
+  })
+})
+
+/**
+ * 主体（TC-SUBJ）与询问点的审查接缝（TC-RV）。
+ *
+ * subject 从 ctx.agent 来：档案名 + root / spawned（没有 ctx.agent 的调用点按 root 报，且不带档案名键；
+ * 档案名空串同样不带）。审查员的防递归（「审查员自己在要权限」）与用户按主体写的策略都读它。
+ * 观察点就是注入的审查者替身收到的 event.request.subject —— 生产里读它的正是那一个接缝。
+ *
+ * onPermissionRequest 每次调用现取注入的审查者：provider 可整会话复用，注入发生在启动时（index.ts），
+ * 两者谁先谁后都得对。被动判定（evaluate / evaluateReadOnly / 预览面板与笔记本的 user 主体判定）
+ * 只判不执行，从不走到接缝。
+ */
+describe('TC-SUBJ / TC-RV 桌面主体与审查接缝', () => {
+  const WS = '/ws'
+  const ART = '/tmp/shuvix-artifacts'
+  /** 工作区外的普通文件：ask-on-write#0（ask 档 —— 审查接缝只管这一档） */
+  const OUTSIDE = '/tmp/shuvix-tc-review-outside/a.txt'
+  const projectConfig: ProjectConfig = { workingDirectory: WS }
+  const cfg = (): ProjectConfig => projectConfig
+
+  const usedSessions = new Set<string>()
+  const sid = (id: string): string => {
+    usedSessions.add(id)
+    return id
+  }
+
+  const answer = (decision: 'allow' | 'ask' | 'deny'): PermissionReviewAnswer => ({
+    verdict: { decision, risk: 'low', summary: 'Writes a file.', reason: 'test reviewer' },
+    source: 'test-reviewer'
+  })
+
+  type Reviewer = (
+    event: PermissionRequestEvent,
+    signal?: AbortSignal
+  ) => Promise<PermissionReviewAnswer | null>
+
+  const verdictOf = (d: SecurityDecision): { effect: string; winning: string } => ({
+    effect: d.effect,
+    winning: d.winning
+  })
+
+  /** 用户在 ~/.shuvix/policies 里写的一份（与 policyService 一样：解析结果 + 文件名） */
+  function userPolicy(fileName: string, md: string): UserPolicyFile {
+    const parsed = parsePolicyDefinitionFile(md, fileName.replace(/\.md$/, ''))
+    if (!parsed) throw new Error(`fixture policy ${fileName} does not parse`)
+    return { ...parsed, fileName }
+  }
+
+  beforeEach(() => {
+    tc.pickSettings.mockReset()
+    tc.userPolicies = []
+    vi.mocked(sessionView).mockReset()
+    vi.mocked(workspaceWriteView).mockReset()
+  })
+
+  afterEach(() => {
+    setPermissionReviewer(null)
+    for (const id of usedSessions) {
+      clearReviewState(id)
+      clearSessionDecisions(id)
+    }
+    usedSessions.clear()
+  })
+
+  it.each<[string, string, ToolContext['agent'], Partial<SecuritySubject>]>([
+    [
+      '派生的 coding',
+      'tc-subj1-spawned',
+      { profileName: 'coding', kind: 'spawned' },
+      { agentKind: 'spawned', profileName: 'coding' }
+    ],
+    [
+      '会话根 work',
+      'tc-subj1-root',
+      { profileName: 'work', kind: 'root' },
+      { agentKind: 'root', profileName: 'work' }
+    ],
+    [
+      '没有 ctx.agent（MCP 能力服务器等自建 ctx 的调用点）',
+      'tc-subj1-none',
+      undefined,
+      { agentKind: 'root' }
+    ],
+    [
+      '档案名为空串',
+      'tc-subj1-blank',
+      { profileName: '', kind: 'spawned' },
+      { agentKind: 'spawned' }
+    ]
+  ])(
+    'TC-SUBJ1 %s → 审查接缝收到的 subject 恰为 agent + 会话 id + agentKind（+ 有名字时的 profileName）',
+    async (_label, id, agent, expected) => {
+      const sessionId = sid(id)
+      const seen: SecuritySubject[] = []
+      setPermissionReviewer(async (event) => {
+        seen.push(event.request.subject)
+        return answer('allow')
+      })
+
+      const ctx = getDesktopSecurityContext({ sessionId, ...(agent ? { agent } : {}) }, cfg)
+      // 审查员放行 → 不弹卡、直接过门（这里没给询问通道，走到卡片就会被拒）
+      await expect(
+        ctx.enforcePath('write', OUTSIDE, { toolCallId: `${id}-w`, toolName: 'write' })
+      ).resolves.toBeUndefined()
+
+      expect(seen).toHaveLength(1)
+      // toStrictEqual：没有档案名时连 profileName 键都不该有（值为 undefined 的键也算多）
+      expect(seen[0]).toStrictEqual({ kind: 'agent', sessionId, ...expected })
+    }
+  )
+
+  it('TC-SUBJ2 用户策略按主体写（subject.profile == coding && subject.agentKind == spawned 的 deny）：只落在派生的 coding 上', () => {
+    tc.userPolicies = [
+      userPolicy(
+        'no-spawned-coding-writes.md',
+        [
+          '---',
+          'shuvix: policy v1',
+          'name: no-spawned-coding-writes',
+          'description: Spawned coding agents may not write files.',
+          'shuvix-policy-scope:',
+          '  subject.kind: [agent]',
+          '  object.type: [path]',
+          'shuvix-policy-rules:',
+          '  - effect: deny',
+          '    action: [write]',
+          "    match: subject.profile == 'coding' && subject.agentKind == 'spawned'",
+          '---',
+          ''
+        ].join('\n')
+      )
+    ]
+
+    const cases: Array<[ToolContext['agent'], string, string]> = [
+      // [ctx.agent, 本会话 artifacts 里的写, 工作区外的写]
+      [{ profileName: 'coding', kind: 'spawned' }, 'deny', 'deny'],
+      [{ profileName: 'coding', kind: 'root' }, 'allow', 'ask'],
+      [{ profileName: 'work', kind: 'spawned' }, 'allow', 'ask'],
+      [{ profileName: '', kind: 'spawned' }, 'allow', 'ask'],
+      [undefined, 'allow', 'ask']
+    ]
+    const sessionId = sid('tc-subj2')
+    for (const [agent, artifactEffect, outsideEffect] of cases) {
+      const ctx = getDesktopSecurityContext({ sessionId, ...(agent ? { agent } : {}) }, cfg)
+      const own = ctx.evaluate('write', { type: 'path', path: `${ART}/${sessionId}/chart.svg` })
+      const outside = ctx.evaluate('write', { type: 'path', path: OUTSIDE })
+      expect({ agent, own: own.effect, outside: outside.effect }).toEqual({
+        agent,
+        own: artifactEffect,
+        outside: outsideEffect
+      })
+      if (artifactEffect === 'deny') {
+        // 拒绝归因到用户那条规则（deny 压过 ask-on-write，也压过本会话 artifacts 的豁免）
+        expect(verdictOf(own)).toEqual({ effect: 'deny', winning: 'no-spawned-coding-writes#0' })
+        expect(verdictOf(outside)).toEqual({
+          effect: 'deny',
+          winning: 'no-spawned-coding-writes#0'
+        })
+      } else {
+        expect(own.matched, JSON.stringify(agent)).not.toContain('no-spawned-coding-writes#0')
+        expect(outside.winning, JSON.stringify(agent)).toBe('ask-on-write#0')
+      }
+    }
+  })
+
+  it('TC-RV1 没注入审查者：provider.onPermissionRequest 交回 null —— 询问照旧走到卡片（卡上没有审查意见）', async () => {
+    const sessionId = sid('tc-rv1')
+    const provider = makeDesktopSecurityProvider({ sessionId }, cfg)
+    const event = { toolCallId: 'rv1', command: 'Write(/x)' } as unknown as PermissionRequestEvent
+    expect(provider.onPermissionRequest).toBeTypeOf('function')
+    await expect(
+      provider.onPermissionRequest!(event, new AbortController().signal)
+    ).resolves.toBeNull()
+    await expect(provider.onPermissionRequest!(event)).resolves.toBeNull()
+
+    // 端到端：同一次 ask 直接到人
+    const asks: InputRequest[] = []
+    const ctx = getDesktopSecurityContext(
+      {
+        sessionId,
+        requestUserInput: async (req) => {
+          asks.push(req)
+          return { kind: 'ask', allowed: true }
+        }
+      },
+      cfg
+    )
+    await ctx.enforcePath('write', OUTSIDE, { toolCallId: 'rv1-w', toolName: 'write' })
+    expect(asks).toHaveLength(1)
+    expect((asks[0] as AskInputRequest).review).toBeUndefined()
+  })
+
+  it('TC-RV2 注入之前就构造好的 provider，下一次调用也走注入的审查者：(event, signal) 原样交进去、回答原样交回；setPermissionReviewer(null) 之后复原成 null', async () => {
+    const provider = makeDesktopSecurityProvider({ sessionId: sid('tc-rv2') }, cfg)
+    const event = { toolCallId: 'rv2', command: 'Write(/x)' } as unknown as PermissionRequestEvent
+    const signal = new AbortController().signal
+    await expect(provider.onPermissionRequest!(event, signal)).resolves.toBeNull()
+
+    const reply = answer('deny')
+    const reviewer = vi.fn<Reviewer>(async () => reply)
+    setPermissionReviewer(reviewer)
+    const got = await provider.onPermissionRequest!(event, signal)
+    expect(reviewer).toHaveBeenCalledTimes(1)
+    expect(reviewer.mock.calls[0][0]).toBe(event)
+    expect(reviewer.mock.calls[0][1]).toBe(signal)
+    expect(got).toBe(reply)
+
+    // 换一个审查者：同一个 provider 立刻跟上（不是构造时的快照）
+    const other = vi.fn<Reviewer>(async () => null)
+    setPermissionReviewer(other)
+    await expect(provider.onPermissionRequest!(event, signal)).resolves.toBeNull()
+    expect(other).toHaveBeenCalledTimes(1)
+
+    setPermissionReviewer(null)
+    await expect(provider.onPermissionRequest!(event, signal)).resolves.toBeNull()
+    expect(reviewer).toHaveBeenCalledTimes(1)
+    expect(other).toHaveBeenCalledTimes(1)
+  })
+
+  it('TC-RV3 被动判定从不调审查者：user 主体的 isPathReadAllowed / isPathWriteAllowed（连用户自己的 ask 策略判出 ask 时也不调）；agent 主体的 evaluate / evaluateReadOnly 同样只判不问', () => {
+    const reviewer = vi.fn<Reviewer>(async () => answer('allow'))
+    setPermissionReviewer(reviewer)
+
+    // 内置防护只管 agent 主体：用户亲手的 UI 操作默认放行
+    expect(isPathReadAllowed(projectConfig, OUTSIDE)).toBe(true)
+    expect(isPathWriteAllowed(projectConfig, OUTSIDE)).toBe(true)
+
+    // 用户给自己的 UI 面写了一道 ask 门：被动判定给 false（占位），不会去问审查员
+    tc.userPolicies = [
+      userPolicy(
+        'user-ui-ask-outside.md',
+        [
+          '---',
+          'shuvix: policy v1',
+          'name: user-ui-ask-outside',
+          'description: My own notebook writes outside the project ask first.',
+          'shuvix-policy-scope:',
+          '  subject.kind: [user]',
+          '  object.type: [path]',
+          'shuvix-policy-rules:',
+          '  - effect: ask',
+          '    action: [write]',
+          '    match: >-',
+          '      !inDir(object.path, vars.workspace)',
+          '---',
+          ''
+        ].join('\n')
+      )
+    ]
+    expect(isPathWriteAllowed(projectConfig, OUTSIDE)).toBe(false)
+    expect(isPathWriteAllowed(projectConfig, `${WS}/in.txt`)).toBe(true)
+
+    // agent 主体：ask 档，但 evaluate / evaluateReadOnly 只是判定
+    const ctx = getDesktopSecurityContext({ sessionId: sid('tc-rv3') }, cfg)
+    expect(ctx.evaluate('write', { type: 'path', path: OUTSIDE })).toMatchObject({
+      effect: 'ask',
+      tier: 'ask',
+      winning: 'ask-on-write#0'
+    })
+    expect(ctx.evaluateReadOnly('write', { type: 'path', path: OUTSIDE })).toBe(false)
+
+    expect(reviewer).not.toHaveBeenCalled()
   })
 })

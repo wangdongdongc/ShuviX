@@ -60,7 +60,7 @@ export function ReviewedMark({ note }: { note: ToolReviewNote }): React.JSX.Elem
   // 审查员写的那句拼在后面而不是插值：i18next 的 {{…}} 会被值里的占位符劫持
   const hint =
     t('toolCall.reviewedHint', { risk: riskLabel(note.risk) }) +
-    (note.summary ? `\n${note.summary}` : '')
+    (note.summary.trim() ? `\n${note.summary.trim()}` : '')
   return (
     <span
       className={`flex-shrink-0 flex items-center ${RISK_TEXT[note.risk]}`}
@@ -98,10 +98,10 @@ export function ReviewOpinion({ review }: { review: AskReview }): React.JSX.Elem
       <div className="flex items-start gap-1.5 min-w-0">
         <ReviewRiskBadge risk={review.risk} />
         <span className="min-w-0 break-words text-text-primary">
-          {review.summary || t('toolCall.reviewNoSummary')}
+          {review.summary.trim() || t('toolCall.reviewNoSummary')}
         </span>
       </div>
-      {review.reason && (
+      {review.reason.trim() && (
         <p className="mt-0.5 break-words text-text-secondary">
           <span className="text-text-tertiary">{t('toolCall.reviewReasonLabel')}</span>{' '}
           {review.reason}

@@ -60,6 +60,11 @@ export interface RealModel {
   baseUrl?: string
   apiProtocol?: string
   modelId: string
+  /** 以下三项给不起实例、直接在 node 里解析模型的探针用（resolveModel 的 providerInfo / 能力点） */
+  isBuiltin?: boolean
+  metadata?: string
+  /** provider_models.capabilities 原样（JSON 字符串） */
+  capabilities?: string
 }
 
 /**
@@ -73,7 +78,8 @@ export function pickRealModel(preferModel?: string): RealModel {
   // 在普通 node 里加载会报 NODE_MODULE_VERSION 不符。只读一行配置，不值得为它另装依赖。
   const sql =
     `SELECT p.id AS providerId, p.name AS providerName, p.apiKey, p.baseUrl, p.apiProtocol, ` +
-    `m.modelId FROM provider_models m JOIN providers p ON p.id = m.providerId ` +
+    `p.isBuiltin, p.metadata, m.modelId, m.capabilities ` +
+    `FROM provider_models m JOIN providers p ON p.id = m.providerId ` +
     `WHERE m.isEnabled = 1 AND p.isEnabled = 1 AND p.apiKey <> ''`
   const raw = execFileSync('sqlite3', ['-json', 'shuvix.db', sql], {
     cwd: dirname(dbPath),
@@ -92,7 +98,10 @@ export function pickRealModel(preferModel?: string): RealModel {
     apiKey: decrypt(hit.apiKey),
     baseUrl: hit.baseUrl || undefined,
     apiProtocol: hit.apiProtocol || undefined,
-    modelId: hit.modelId
+    modelId: hit.modelId,
+    isBuiltin: Number(hit.isBuiltin) === 1,
+    metadata: hit.metadata || undefined,
+    capabilities: hit.capabilities || undefined
   }
 }
 

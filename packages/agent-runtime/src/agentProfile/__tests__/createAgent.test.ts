@@ -14,6 +14,9 @@ import {
 import type { PromptVarsCtx } from '../promptVars'
 import type { InProcessAgentType, SubAgentModelConfig } from '../../subagent/types'
 import type { SpawnContext } from '../../subagent/manager'
+import { buildBuiltinProfile, PERMISSION_REVIEWER_SPEC } from '../../subagent/builtinAgents'
+import { createInlineMdReader } from '../../subagent/builtinAgents/inlineSources'
+import { toInProcessAgentType } from '../../subagent/dispatchTool'
 import type { RuntimeNetwork } from '../../types'
 import type { ThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
 
@@ -943,6 +946,43 @@ describe('createAgentFactory —— 工具名单归一（TN）', () => {
     const created = await createRoot(b, ['skill:sel'])
     // 谁把它加回来，「运行时存在期间勾选只读」就不再成立
     expect('applyToolOverlay' in created).toBe(false)
+  })
+})
+
+/**
+ * 内置权限审查员（permission-reviewer）走同一条创建管线 —— 判定型 hook `auto-review` 派发它时，
+ * 就是一次普通的 spawned 创建。它的「什么都不要」全由档案表达，这里验的是管线照办：
+ * 宿主的注入 seam 备好了内容也一个都不调、系统提示词就是正文、工具名单为空、档位按档案压到 low。
+ */
+describe('createAgentFactory —— 内置权限审查员（permission-reviewer）', () => {
+  it('PRV-C1 内置 md → toInProcessAgentType → spawned 创建：四个注入 seam 都有内容可给也零调用；系统提示词逐字节等于正文；resolveTools 的名单为空；派发方 high → 运行时 low', async () => {
+    const built = buildBuiltinProfile(PERMISSION_REVIEWER_SPEC, { readMd: createInlineMdReader() })
+    expect(built).not.toBeNull()
+    // makeHost 的四个注入 seam 缺省都答得出内容（INS / PROJ-PROMPT / KB-GUIDE / PROJ-MEMORY）——
+    // 零调用因此只能是档案不要，不是宿主没给
+    const b = makeHost()
+    const created = await createAgentFactory(b.host).createAgent({
+      kind: 'spawned',
+      sessionId: 'sub-reviewer',
+      profile: toInProcessAgentType(built!),
+      model: { ...MODEL_CFG, thinkingLevel: 'high' },
+      thinkingLevel: 'high',
+      cwd: '',
+      spawn: SPAWN,
+      spawnHelpers: { requestUserInput: vi.fn() }
+    })
+
+    expect(b.resolveInstruction).not.toHaveBeenCalled()
+    expect(b.resolveProjectPrompt).not.toHaveBeenCalled()
+    expect(b.resolveKnowledgeBases).not.toHaveBeenCalled()
+    expect(b.resolveProjectMemory).not.toHaveBeenCalled()
+    // 没有占位符、没有注入、没有调用方上下文块：系统提示词就是那段审查规则
+    expect(created.systemPrompt).toBe(built!.systemPrompt)
+    expect(constructed[0].deps.systemPrompt).toBe(built!.systemPrompt)
+    expect(b.resolveTools).toHaveBeenCalledTimes(1)
+    expect((b.resolveTools.mock.calls[0][0] as ToolResolveRequest).names).toEqual([])
+    // 档案的 shuvix-thinking: low 压过派发方的 high
+    expect(constructed[0].deps.thinkingLevel).toBe('low')
   })
 })
 

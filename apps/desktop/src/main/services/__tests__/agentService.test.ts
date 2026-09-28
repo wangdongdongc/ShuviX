@@ -459,9 +459,9 @@ describe('agentService.getProfile —— 一份写坏的同名用户档案不该
 
 /**
  * `isSessionProfile` —— 子会话钉档案（sessionService.pinAgentProfile）准入的唯一判据：
- * 只判名字 —— 基座（work / chat / notebook）恒不算，其余任何档案都算。曾经的第二道门
- * `shuvix-session-awareness` 已退役（解析器把它当未知键忽略）。用真件：内置全集与用户覆盖
- * 都要穿透真注册表。
+ * 只判名字 —— 基座（work / chat / notebook）与只由宿主派发的档案（permission-reviewer）恒不算，
+ * 其余任何档案都算。曾经的第二道门 `shuvix-session-awareness` 已退役（解析器把它当未知键忽略）。
+ * 用真件：内置全集与用户覆盖都要穿透真注册表。
  */
 describe('agentService.isSessionProfile —— 可作子会话档案的判据表', () => {
   const judge = (name: string): boolean => {
@@ -491,6 +491,24 @@ describe('agentService.isSessionProfile —— 可作子会话档案的判据表
     expect(judge('plain')).toBe(true)
     expect(judge('legacy-off')).toBe(true)
     expect(agentService.getProfile('legacy-off')).not.toHaveProperty('sessionAwareness')
+  })
+
+  it('AS-23d 权限审查员（只由宿主派发）：getProfile 解析得到（hook 要点名它），但恒 false —— 用户按名覆盖也一样；permission-reviewer-2 照常 true', () => {
+    // 解析得到是前提：内置 auto-review 正是按名派发它的，这一拒只拦「当子会话档案」
+    const builtin = agentService.getProfile('permission-reviewer')
+    expect(builtin).toBeDefined()
+    expect(builtin!.source).toBe('builtin')
+    expect(judge('permission-reviewer')).toBe(false)
+
+    // 判名字，不判来源：一份同名用户文件（覆盖内置）照样不收 —— 否则被审的 agent 抄一份审查员
+    // 的 md 过来，就能把它开成一条自己驱动的子会话
+    writeAgentFile('permission-reviewer.md', agentMd('permission-reviewer'))
+    expect(agentService.getProfile('permission-reviewer')!.source).toBe('user')
+    expect(judge('permission-reviewer')).toBe(false)
+
+    // 名字全等才算：只是前缀相同的是另一份普通档案
+    writeAgentFile('permission-reviewer-2.md', agentMd('permission-reviewer-2'))
+    expect(judge('permission-reviewer-2')).toBe(true)
   })
 })
 

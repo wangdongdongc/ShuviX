@@ -13,9 +13,12 @@ import {
   buildBuiltinProfile,
   buildBuiltinProfiles,
   CHAT_PROFILE_NAME,
+  HOST_ONLY_PROFILE_NAMES,
   KNOWLEDGE_WRITER_SPEC,
   NOTEBOOK_PROFILE_NAME,
   BOT_PROFILE_NAME,
+  PERMISSION_REVIEWER_PROFILE_NAME,
+  PERMISSION_REVIEWER_SPEC,
   TAB_PROFILE_NAME,
   COEDIT_PROFILE_NAME,
   WIDGET_SPEC,
@@ -23,9 +26,16 @@ import {
   pickLocalizedSource
 } from '../../subagent/builtinAgents'
 import { createInlineMdReader } from '../../subagent/builtinAgents/inlineSources'
+import { NEXT_TOOL_NAME } from '../../subagent/nextTool'
 import { renderVisualCraft } from '../fragments'
 import { KNOWLEDGE_TYPES } from '@shuvix/chat-protocol/knowledge'
+import {
+  PERMISSION_VERDICT_SCHEMA,
+  type PermissionVerdict
+} from '@shuvix/chat-protocol/types/permissionReview'
 import { BOT_CONTEXT_TAG } from '../../bot/botContext'
+import type { PermissionRequestPayload } from '../../hook/triggerPoints'
+import type { CommandObjectInput, UnconfinedReason } from '../../security/types'
 import type { AgentProfile } from '../../subagent/types'
 
 /** 内置 md 的读取口：桌面运行时读随包目录，测试读构建期内联的**同一批文件** */
@@ -616,6 +626,130 @@ describe('titler 档案钉板（auto-title 的执行侧）', () => {
       for (const anchor of ['`session`', 'set-title', '60']) {
         expect(body, `titler.${language} 需含 ${anchor}`).toContain(anchor)
       }
+    }
+  })
+})
+
+/**
+ * permission-reviewer 档案钉板 —— 询问点自动审查的执行侧（docs/permission-review-design.md）：
+ * 内置判定型 hook `auto-review` 在策略判出 ask、弹卡之前派发它，它经 `next` 交回判决。
+ *
+ * 它的全部输入就是那次操作的事件（payload 以 YAML 附在任务末尾），所以结构上什么都不要：没有工具
+ * （只有结果契约附带的 `next`）、没有指令文件与项目注入、不思考。正文就是审查规则本身 —— 它点名的
+ * payload 键与判决字段必须真实存在，否则审查员读的是一份不存在的事件、交的是一份不合格的判决。
+ * 「auto-review 派的就是它」由 hook/__tests__/builtinHooks.test.ts 的 HB-10 / HB-11 钉住
+ * （三语的 `shuvix-hook-agent` 都是 'permission-reviewer'，PRV-1 把常量钉在同一个字面量上）。
+ */
+describe('permission-reviewer 档案钉板（询问点自动审查的执行侧）', () => {
+  /** 正文点名的 payload 顶层键 —— 类型层钉在 PermissionRequestPayload 上：改名 / 删键即编译不过 */
+  const PAYLOAD_KEYS = [
+    'operation',
+    'userMessages',
+    'delegatedTasks',
+    'recentOperations',
+    'policy'
+  ] as const satisfies readonly (keyof PermissionRequestPayload)[]
+  /** 正文点名的 operation 下的键（同上） */
+  const OPERATION_KEYS = [
+    'target',
+    'facts'
+  ] as const satisfies readonly (keyof PermissionRequestPayload['operation'])[]
+  /** 正文点名的判决字段（运行时再对照结果契约的 schema） */
+  const VERDICT_FIELDS = [
+    'decision',
+    'risk',
+    'summary',
+    'reason'
+  ] as const satisfies readonly (keyof PermissionVerdict)[]
+  /**
+   * UnconfinedReason 的五个非空取值 —— 类型层穷尽：类型加 / 删一个取值，这张表就编译不过，
+   * 「正文列出的取值集合」于是有一份跟得上类型的对照
+   */
+  const UNCONFINED_REASONS = {
+    escalated: true,
+    disabled: true,
+    unsupported: true,
+    unavailable: true,
+    remote: true
+  } satisfies Record<Exclude<UnconfinedReason, ''>, true>
+  /** 命令客体上那条事实的名字（正文点名它，它得真是命令客体的属性） */
+  const UNCONFINED_FACT = 'unconfinedReason' satisfies keyof CommandObjectInput
+
+  const reviewerOf = (language: string): AgentProfile => {
+    const built = buildBuiltinProfile(PERMISSION_REVIEWER_SPEC, { language, readMd })
+    expect(built, `permission-reviewer.${language}`).not.toBeNull()
+    return built!
+  }
+
+  it('PRV-1 三语结构钉板：工具为空、不吃指令文件、项目感知关、thinkingLevel low、不声明模型；名字即常量；不依赖任何宿主参数', () => {
+    expect(PERMISSION_REVIEWER_PROFILE_NAME).toBe('permission-reviewer')
+    expect(PERMISSION_REVIEWER_SPEC.name).toBe(PERMISSION_REVIEWER_PROFILE_NAME)
+    // 零参数也建得出来 —— 它不点名宿主的任何目录
+    expect(PERMISSION_REVIEWER_SPEC.requiredParams).toBeUndefined()
+    expect(buildBuiltinProfile(PERMISSION_REVIEWER_SPEC, { readMd })).not.toBeNull()
+    for (const language of LANGS) {
+      const built = reviewerOf(language)
+      expect(built.name, language).toBe(PERMISSION_REVIEWER_PROFILE_NAME)
+      // 一件工具都没有：结论只经结果契约附带的 `next` 交回，读不了文件、跑不了命令
+      expect(built.tools, language).toEqual([])
+      expect(built.instructionFiles, language).toEqual([])
+      expect(built.projectAwareness, language).toBe(false)
+      expect(built.thinkingLevel, language).toBe('low')
+      // 模型随派发方（会话当前模型）；要钉便宜模型就覆盖这份 md
+      expect(built.model, language).toBeUndefined()
+    }
+  })
+
+  it('PRV-2 HOST_ONLY_PROFILE_NAMES 恰为 {permission-reviewer}：与基座名单不相交，且在内置 spec 名单里', () => {
+    expect([...HOST_ONLY_PROFILE_NAMES]).toEqual([PERMISSION_REVIEWER_PROFILE_NAME])
+    const specNames = BUILTIN_PROFILE_SPECS.map((spec) => spec.name)
+    for (const name of HOST_ONLY_PROFILE_NAMES) {
+      // 基座是「不进可用名单」，只由宿主派发是「按名也解析不到」—— 两份名单各管一件事
+      expect(BASE_PROFILE_NAMES.has(name), name).toBe(false)
+      expect(specNames, name).toContain(name)
+    }
+    expect(BUILTIN_PROFILE_SPECS).toContain(PERMISSION_REVIEWER_SPEC)
+  })
+
+  it('PRV-3 三语正文点名的 payload 键、判决字段与 next 都真实存在；列出的 unconfinedReason 取值恰为五个非空值', () => {
+    const schema = PERMISSION_VERDICT_SCHEMA as {
+      required: string[]
+      properties: Record<string, unknown>
+    }
+    // 判决字段：点名的每一个都是 schema 的属性，schema 要求的每一个都在点名之列
+    for (const field of VERDICT_FIELDS) {
+      expect(Object.keys(schema.properties), field).toContain(field)
+    }
+    for (const field of schema.required) {
+      expect(VERDICT_FIELDS as readonly string[], field).toContain(field)
+    }
+
+    const anchors = [
+      ...PAYLOAD_KEYS,
+      ...OPERATION_KEYS,
+      ...VERDICT_FIELDS,
+      NEXT_TOOL_NAME,
+      UNCONFINED_FACT
+    ]
+    for (const language of LANGS) {
+      const body = reviewerOf(language).systemPrompt
+      for (const key of anchors) {
+        expect(body, `${language} 需点名 \`${key}\``).toContain(`\`${key}\``)
+      }
+      // 取值清单写在点名 unconfinedReason 的那一行里：`值` = 说明，并列的写成 `值` / `值`
+      const line = body.split('\n').find((l) => l.includes(`\`${UNCONFINED_FACT}\``))
+      expect(line, `${language} 找不到点名 unconfinedReason 的那一行`).toBeDefined()
+      const tail = line!.slice(line!.indexOf(`\`${UNCONFINED_FACT}\``))
+      const listed = [...tail.matchAll(/`([A-Za-z]+)`\s*[=/]/g)].map((m) => m[1])
+      expect(listed.sort(), language).toEqual(Object.keys(UNCONFINED_REASONS).sort())
+    }
+  })
+
+  it('PRV-4 三语正文没有 {{…}} 占位符 —— 系统提示词就是这段正文本身，创建时没有要替换的东西', () => {
+    for (const language of LANGS) {
+      const body = reviewerOf(language).systemPrompt
+      expect(body, language).not.toContain('{{')
+      expect(body, language).not.toContain('}}')
     }
   })
 })

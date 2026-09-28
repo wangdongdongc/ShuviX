@@ -38,6 +38,7 @@ import {
   noteReviewCleared,
   noteReviewDenied,
   reviewSuspended,
+  takeReviewAllowed,
   trackReview
 } from './reviewState'
 
@@ -118,10 +119,22 @@ function missingChannelMessage(request: SecurityRequest, display: string): strin
   return `Access denied: this needs your confirmation but there is no way to ask: ${display}`
 }
 
+/**
+ * 审查员写给人看的两段话的上限 —— schema 刻意不设 maxLength（超长会被判不合格、逼模型重调），
+ * 所以在这里截：它们要进询问卡片、落进工具结果（「已审查」标记），一段长文不该把卡片撑开。
+ */
+const REVIEW_SUMMARY_MAX_CHARS = 300
+const REVIEW_REASON_MAX_CHARS = 1000
+
+function clipReviewText(text: string, max: number): string {
+  const trimmed = text.trim()
+  return trimmed.length <= max ? trimmed : `${trimmed.slice(0, max)}…`
+}
+
 /** 审查拒绝时抛给 agent 的文案：审查员的理由，加一句固定的「换一条路，别绕过」 */
 function reviewerDeniedMessage(verdict: PermissionVerdict): string {
   return (
-    `Blocked by the reviewer: ${verdict.reason}\n\n` +
+    `Blocked by the reviewer: ${clipReviewText(verdict.reason, REVIEW_REASON_MAX_CHARS)}\n\n` +
     'Find a safer way that stays within what the user asked. Do not rephrase, split or obfuscate ' +
     'the operation to get past the review. If the user needs to decide, ask them.'
   )
@@ -283,7 +296,7 @@ export async function executeDecision(args: {
     // 工具卡上的「已审查」：宿主在这次调用执行完之后取走，写进工具结果
     noteReviewAllowed(sessionId, opts.toolCallId, {
       risk: review.verdict.risk,
-      summary: review.verdict.summary
+      summary: clipReviewText(review.verdict.summary, REVIEW_SUMMARY_MAX_CHARS)
     })
     record(undefined, true, review)
     return { status: 'allowed' }
@@ -328,8 +341,8 @@ export async function executeDecision(args: {
     review: review
       ? {
           risk: review.verdict.risk,
-          summary: review.verdict.summary,
-          reason: review.verdict.reason
+          summary: clipReviewText(review.verdict.summary, REVIEW_SUMMARY_MAX_CHARS),
+          reason: clipReviewText(review.verdict.reason, REVIEW_REASON_MAX_CHARS)
         }
       : undefined,
     createdAt: Date.now()
@@ -341,6 +354,9 @@ export async function executeDecision(args: {
   }
   // 人回答了：审查的连续拒绝计数清零（因连续拒绝而暂停的审查随之恢复）
   noteReviewCleared(sessionId)
+  // 这次调用有人看过了：同一调用先前另一道门留下的「已审查」标记作废（那枚标记说的是「没人看过、
+  // 审查员放行的」）
+  takeReviewAllowed(sessionId, opts.toolCallId)
   if (response.kind === 'other') {
     // 人写的反馈记在安全模块这里 —— 审查员只认这份，不认会话树里那段谁都能打印的工具结果文字
     noteHumanFeedback(sessionId, askCommand, response.text)

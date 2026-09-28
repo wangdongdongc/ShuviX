@@ -9,14 +9,39 @@
  * 说明它指向哪里，门不问、卡不弹、port 一个字节都不读写。链接由假 port 的 `links` 表给出
  * （port 路径 → readLink 的答复），真文件系统上的那一半在桌面的 nodeFileSystemPort.test /
  * writeAskWiring.test。「门没被问」看 enforcePath 的 spy 与决策日志（每次 enforce 都记一条）。
+ *
+ * 组 8（RV-F）是询问点的自动审查：策略判出 ask 时，弹卡之前先问 provider.onPermissionRequest
+ * （makeSuite 的 `review`）。这里只看工具壳这一侧 —— 放行 / 拒绝 / 转给人三种回答落到文件上是什么样，
+ * 以及工具调用的 signal 有没有从三个询问点（write / edit 的 apply 层、read 的 securityCheck）一路
+ * 接到接缝上。审查状态是进程级表，这一组每条用例各用一个会话 id（makeSuite 的 `sessionId`）。
  */
 
-import { describe, it, expect, vi, beforeEach, type Mock, type MockInstance } from 'vitest'
+import {
+  describe,
+  it,
+  expect,
+  vi,
+  beforeEach,
+  afterEach,
+  type Mock,
+  type MockInstance
+} from 'vitest'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
+import type {
+  PermissionDecision,
+  PermissionRisk
+} from '@shuvix/chat-protocol/types/permissionReview'
 import type { FileSystemPort, FileGuards } from '../../fileTools/port'
-import type { AccessMode, SecurityContext, SecurityHostProvider } from '../../security/types'
+import type {
+  AccessMode,
+  PermissionRequestEvent,
+  PermissionReviewAnswer,
+  SecurityContext,
+  SecurityHostProvider
+} from '../../security/types'
 import { createSecurityContext } from '../../security/context'
 import { clearSessionDecisions, getSessionDecisions } from '../../security/decisionLog'
+import { clearReviewState } from '../../security/reviewState'
 import {
   createFileToolSuite,
   type FileToolDeps,
@@ -58,6 +83,10 @@ interface SuiteOptions {
   withReadLink?: boolean
   /** read 的内容解码器（URL / 相似路径建议…）；缺省不注入 */
   decoders?: ReadDecoders
+  /** 安全上下文的会话 id（决策日志、审查状态都按它分桶）；缺省 SID */
+  sessionId?: string
+  /** 询问点的审查接缝（接到 provider.onPermissionRequest）；不传 = 没有审查，ask 直接问人 */
+  review?: SecurityHostProvider['onPermissionRequest']
 }
 
 /** port.readLink 的非 null 答复 */
@@ -181,10 +210,11 @@ function makeSuite(opts: SuiteOptions = {}): SuiteHarness {
     }),
     isDirectory: () => false,
     persistGrant,
-    requestUserInput
+    requestUserInput,
+    ...(opts.review ? { onPermissionRequest: opts.review } : {})
   }
   const security = createSecurityContext(
-    { kind: 'agent', sessionId: SID, agentKind: 'root' },
+    { kind: 'agent', sessionId: opts.sessionId ?? SID, agentKind: 'root' },
     { host: 'desktop' },
     provider
   )
@@ -874,5 +904,214 @@ describe('文件工具套件 — 路径本身是符号链接：不跟（port.rea
 
     expect(h.readLink).toHaveBeenCalledTimes(3)
     expect(h.requestUserInput).not.toHaveBeenCalled()
+  })
+})
+
+// ─── 组 8：询问点的自动审查（provider.onPermissionRequest） ──────────────────────
+
+/** 审查接缝的形状：第二个参数是执行层交来的 signal */
+type ReviewSeam = (
+  event: PermissionRequestEvent,
+  signal?: AbortSignal
+) => Promise<PermissionReviewAnswer | null>
+
+/** 一份审查回答：判决 + 给出它的 hook 名（summary / reason 带上判决词，断言时认得出是哪一份） */
+const reviewAnswer = (
+  decision: PermissionDecision,
+  risk: PermissionRisk = 'low'
+): PermissionReviewAnswer => ({
+  verdict: { decision, risk, summary: `summary: ${decision}`, reason: `reason: ${decision}` },
+  source: 'auto-review'
+})
+
+/**
+ * 挂起的审查接缝：进来时交出它收到的 signal（`entered`），之后一直不回话，直到用例 `answer(...)`。
+ * 它自己不看 signal —— 宿主不理中止时，执行层也得当场收尾。
+ */
+function pendingReview(): {
+  review: Mock<ReviewSeam>
+  entered: Promise<AbortSignal | undefined>
+  answer: (value: PermissionReviewAnswer | null) => void
+} {
+  let onEnter!: (signal: AbortSignal | undefined) => void
+  const entered = new Promise<AbortSignal | undefined>((resolve) => (onEnter = resolve))
+  let reply: ((value: PermissionReviewAnswer | null) => void) | undefined
+  const review = vi.fn<ReviewSeam>((_event, signal) => {
+    onEnter(signal)
+    return new Promise<PermissionReviewAnswer | null>((resolve) => (reply = resolve))
+  })
+  return { review, entered, answer: (value) => reply?.(value) }
+}
+
+describe('文件工具套件 — 询问点的自动审查（provider.onPermissionRequest）', () => {
+  /** 审查状态与决策日志都是进程级表（按会话分桶）：每条用例各用一个会话 id，用完清掉 */
+  const usedSids: string[] = []
+  const sidFor = (name: string): string => {
+    const sid = `review-${name}`
+    usedSids.push(sid)
+    return sid
+  }
+  afterEach(() => {
+    for (const sid of usedSids.splice(0)) {
+      clearReviewState(sid)
+      clearSessionDecisions(sid)
+    }
+  })
+
+  it('RV-F1 write 撞 ask-on-write、审查放行：不弹卡、照常落盘、onFileChange 恰一次；接缝收到的 command 是 Write(/ws/notes.txt)，preview 是这次的 diff（展示路径、isNewFile）', async () => {
+    const review = vi.fn<ReviewSeam>(async () => reviewAnswer('allow'))
+    const h = makeSuite({ sessionId: sidFor('f1'), review, respond: allowed })
+
+    const res = await h.suite.write.execute('rv-f1', { path: INSIDE, content: 'hello\n' })
+
+    expect(h.requestUserInput).not.toHaveBeenCalled()
+    expect(h.files.get(INSIDE_ABS)).toBe('hello\n')
+    expect(h.onFileChange).toHaveBeenCalledTimes(1)
+    expect(h.onFileChange).toHaveBeenCalledWith({ portPath: INSIDE_ABS, kind: 'write' })
+
+    expect(review).toHaveBeenCalledTimes(1)
+    const [event] = review.mock.calls[0]
+    // 交给审查的是 ask-on-write 判出的那一次 ask（ask 档 —— force-ask 不会走到这里）
+    expect(event.decision.tier).toBe('ask')
+    expect(event.decision.matched).toContain('ask-on-write#0')
+    expect(event.toolCallId).toBe('rv-f1')
+    expect(event.command).toBe(allowEntry('write', INSIDE_ABS))
+    // 卡片本会带的那一份预览原样交给审查：展示路径、与 tool result 同一份的 diff、新建标记
+    const details = res.details as { diff: string; isNewFile: boolean }
+    expect(event.preview).toEqual({
+      kind: 'diff',
+      path: INSIDE,
+      diff: details.diff,
+      isNewFile: true
+    })
+  })
+
+  it('RV-F2 审查拒绝：抛 Blocked by the reviewer: <理由> 加换条路的那一句；文件原样、一个字节都没写、onFileChange 零次、不弹卡', async () => {
+    const review = vi.fn<ReviewSeam>(async () => reviewAnswer('deny', 'high'))
+    const h = makeSuite({
+      sessionId: sidFor('f2'),
+      review,
+      files: { [INSIDE_ABS]: 'old\n' },
+      respond: allowed
+    })
+
+    const msg = await messageOf(h.suite.write.execute('rv-f2', { path: INSIDE, content: 'new\n' }))
+
+    expect(msg.startsWith('Blocked by the reviewer: reason: deny\n\nFind a safer way'), msg).toBe(
+      true
+    )
+    expect(review).toHaveBeenCalledTimes(1)
+    expect(h.files.get(INSIDE_ABS)).toBe('old\n')
+    expect(h.spies.writeFile).not.toHaveBeenCalled()
+    expect(h.onFileChange).not.toHaveBeenCalled()
+    expect(h.requestUserInput).not.toHaveBeenCalled()
+  })
+
+  it('RV-F3 工具调用的 signal 落下，接缝手里那个 signal 随之 aborted（是执行层另造的，不是同一个对象）—— write / edit 的询问在 apply 层、read 的在 securityCheck，三处都接上了', async () => {
+    const cases: Array<[string, (h: SuiteHarness, signal: AbortSignal) => Promise<unknown>]> = [
+      [
+        'write',
+        (h, signal) => h.suite.write.execute('rv-f3w', { path: INSIDE, content: 'new\n' }, signal)
+      ],
+      [
+        'edit',
+        (h, signal) =>
+          h.suite.edit.execute(
+            'rv-f3e',
+            { path: INSIDE, oldText: 'alpha', newText: 'ALPHA' },
+            signal
+          )
+      ],
+      // 凭据目录的读取：询问在 securityCheck（门之前没有 apply 层可言）
+      ['read', (h, signal) => h.suite.read.execute('rv-f3r', { path: CREDENTIAL_ABS }, signal)]
+    ]
+    for (const [tool, run] of cases) {
+      const gate = pendingReview()
+      const h = makeSuite({
+        sessionId: sidFor(`f3-${tool}`),
+        review: gate.review,
+        files: { [INSIDE_ABS]: 'alpha\n', [CREDENTIAL_ABS]: 'secret\n' },
+        respond: allowed
+      })
+      const call = new AbortController()
+      const refused = messageOf(run(h, call.signal))
+
+      const seen = await gate.entered
+      expect(seen, tool).toBeInstanceOf(AbortSignal)
+      expect(seen, tool).not.toBe(call.signal)
+      expect(seen?.aborted, tool).toBe(false)
+
+      call.abort()
+      expect(seen?.aborted, tool).toBe(true)
+      // 接缝始终没回话：调用照样以中止收尾，卡也没弹
+      expect(await refused, tool).toBe('Aborted')
+      expect(gate.review, tool).toHaveBeenCalledTimes(1)
+      expect(h.requestUserInput, tool).not.toHaveBeenCalled()
+    }
+  })
+
+  it('RV-F4 审查挂着时调用被中止、接缝随后才回「放行」：迟到的放行不算数 —— 抛注入的 abortError、一个字节都没写、不弹卡，决策日志记的是取消', async () => {
+    const sid = sidFor('f4')
+    const gate = pendingReview()
+    const h = makeSuite({
+      sessionId: sid,
+      review: gate.review,
+      abortError: 'TOOL_ABORTED',
+      files: { [INSIDE_ABS]: 'old\n' },
+      respond: allowed
+    })
+    const call = new AbortController()
+    const refused = messageOf(
+      h.suite.write.execute('rv-f4', { path: INSIDE, content: 'new\n' }, call.signal)
+    )
+
+    await gate.entered
+    call.abort()
+    gate.answer(reviewAnswer('allow'))
+
+    expect(await refused).toBe('TOOL_ABORTED')
+    expect(h.files.get(INSIDE_ABS)).toBe('old\n')
+    expect(h.spies.writeFile).not.toHaveBeenCalled()
+    expect(h.spies.recordRead).not.toHaveBeenCalled()
+    expect(h.onFileChange).not.toHaveBeenCalled()
+    expect(h.requestUserInput).not.toHaveBeenCalled()
+    // 这次 ask 在日志里是一次取消，不是一次审查放行
+    const decisions = getSessionDecisions(sid)
+    expect(decisions).toHaveLength(1)
+    expect(decisions[0].userResponse).toBe('cancel')
+    expect(decisions[0].review).toBeUndefined()
+  })
+
+  it('RV-F5 审查答 ask：照旧问人 —— 一次调用恰一张卡，卡上审查意见（risk / summary / reason）与 diff 预览同在；人允许后落盘（write 与 edit 各一次）', async () => {
+    const review = vi.fn<ReviewSeam>(async () => reviewAnswer('ask', 'medium'))
+    const h = makeSuite({
+      sessionId: sidFor('f5'),
+      review,
+      files: { [INSIDE_ABS]: 'alpha\nbeta\n' },
+      respond: allowed
+    })
+    const opinion = { risk: 'medium', summary: 'summary: ask', reason: 'reason: ask' }
+
+    const res = await h.suite.write.execute('rv-f5w', { path: 'fresh.txt', content: 'hello\n' })
+    expect(review).toHaveBeenCalledTimes(1)
+    expect(h.requestUserInput).toHaveBeenCalledTimes(1)
+    const writeCard = askOf(h.requests[0])
+    expect(writeCard.review).toEqual(opinion)
+    expect(writeCard.preview).toEqual({
+      kind: 'diff',
+      path: 'fresh.txt',
+      diff: (res.details as { diff: string }).diff,
+      isNewFile: true
+    })
+    expect(h.files.get('/ws/fresh.txt')).toBe('hello\n')
+
+    await h.suite.edit.execute('rv-f5e', { path: INSIDE, oldText: 'beta', newText: 'BETA' })
+    expect(review).toHaveBeenCalledTimes(2)
+    expect(h.requestUserInput).toHaveBeenCalledTimes(2)
+    const editCard = askOf(h.requests[1])
+    expect(editCard.review).toEqual(opinion)
+    expect(editCard.preview).toMatchObject({ kind: 'diff', path: INSIDE })
+    expect(editCard.preview?.diff).toContain('BETA')
+    expect(h.files.get(INSIDE_ABS)).toBe('alpha\nBETA\n')
   })
 })

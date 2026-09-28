@@ -144,6 +144,22 @@ describe('wrapToolOutput — L1 全工具门', () => {
     })
   })
 
+  it('W-SG1 工具调用的中止信号原样交给 L1 门：opts.signal 与 execute 收到的是同一个对象', async () => {
+    const { tool, execute } = makeTool('ssh')
+    const { security, enforceInvocation } = makeSecurity()
+    const wrapped = wrapToolOutput(tool, SID, 'middle', undefined, security)
+
+    const ac = new AbortController()
+    await wrapped.execute('tc-sg1', { action: 'connect' } as never, ac.signal)
+
+    expect(enforceInvocation).toHaveBeenCalledTimes(1)
+    // toBe：询问点的审查随这次工具调用一起中止 —— 包装器若另造一个 signal（或丢掉它），
+    // 用户点停止时审查就只能跑到超时
+    expect((enforceInvocation.mock.calls[0][0] as { signal?: AbortSignal }).signal).toBe(ac.signal)
+    // 放行之后，原 execute 拿到的仍是同一个
+    expect(execute.mock.calls[0][2]).toBe(ac.signal)
+  })
+
   it('W-3 时序：enforceInvocation pending 期间原 execute 未调；allowed 后原参数透传', async () => {
     const { tool, execute } = makeTool()
     let release!: (o: EnforceOutcome) => void

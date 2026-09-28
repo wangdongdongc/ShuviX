@@ -9,7 +9,9 @@
  *  - D4 PowerShell 长度上限：按转义后的长度判、在询问之前拒；bash 没有这道；
  *  - D5 PowerShell 描述按版本说语法差异（pwsh 7 / 5.1 / 不在 Windows 上时两种都说）；
  *  - D6 停止命令的提示按 shell 给，不按当前平台 —— 设置页在任何平台上展示两个工具各自真实的描述；
- *    bash 教 `shuvix task stop <pid>`（宿主代停）而不是 `kill -- -<pid>`：沙箱里的命令发不出跨实例的信号。
+ *    bash 教 `shuvix task stop <pid>`（宿主代停）而不是 `kill -- -<pid>`：沙箱里的命令发不出跨实例的信号；
+ *  - SC-SG1 工具调用自己的中止信号原样交给询问（EnforceOpts.signal）—— 询问点的审查随调用一起中止；
+ *    后台形态同样交（spawn 那头照旧不带）。
  *
  * 替身：toolContext（安全门是 spy、项目配置固定）、bgTaskService 的三个执行入口（回执与停止命令
  * 的文案用真的）、i18n。getPowerShellConfig 可按用例换成固定版本（D5）。
@@ -273,6 +275,30 @@ describe.each(['bash', 'powershell'] as const)('%s —— 与另一个命令工�
     expect(r.text).toBe('Command was not executed. User responded with feedback instead:\nno')
     expect(r.details).toMatchObject({ type: shell, exitCode: -1 })
     expect(mocks.runCommand).not.toHaveBeenCalled()
+  })
+
+  it(`SC-SG1 — ${shell}：工具调用的中止信号原样交给询问（同一个对象）；没给就是 undefined；后台形态也照交`, async () => {
+    const tool = makeTool(shell)
+    const ac = new AbortController()
+
+    await tool.execute('tc-sig', params() as never, ac.signal)
+    // toBe 而不是「某个 AbortSignal」：换成一个新造的 signal，用户点停止时审查就不会跟着收尾
+    expect(mocks.enforceCommand.mock.calls[0][1].signal).toBe(ac.signal)
+
+    await tool.execute('tc-nosig', params() as never)
+    expect(mocks.enforceCommand.mock.calls[1][1].signal).toBeUndefined()
+
+    // 后台形态：spawn 刻意不带 signal（停止生成不杀后台任务，见 D2），但询问发生在这次调用之内 ——
+    // 审查照样要随调用一起中止
+    mocks.runCommand.mockResolvedValueOnce({
+      kind: 'background',
+      info: taskInfo({ pid: 9, status: 'running', exitCode: null }),
+      logBytes: 0
+    })
+    await tool.execute('tc-bg', params({ run_in_background: true }) as never, ac.signal)
+    expect(mocks.enforceCommand.mock.calls[2][1]).toMatchObject({ background: true })
+    expect(mocks.enforceCommand.mock.calls[2][1].signal).toBe(ac.signal)
+    expect(mocks.runCommand.mock.calls[2][0].signal).toBeUndefined()
   })
 })
 

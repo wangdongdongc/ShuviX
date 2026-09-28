@@ -16,7 +16,11 @@
  *
  * 命令客体恒带 `unconfinedReason`（没进沙箱的原因，圈住了为 ''）：圈住 ''、计划为 null 'unavailable'、
  * 申请越界 'escalated'、pin 为假的 bash 按此刻的沙箱状态（替身里设置关着 → 'disabled'）、
- * PowerShell 'unsupported'。
+ * PowerShell 'unsupported'。SC-UR 专门钉这一格的来源：
+ *  - SC-UR1 pin 为假的 bash 原样上报 whyUnconfined 的答案（三种都试），而且问的是**本会话自己的 id**；
+ *           PowerShell 恒 'unsupported'，根本不问 whyUnconfined；
+ *  - SC-UR2 pin 为真的实例（计划为 null → 'unavailable'，申请越界 → 'escalated'）不问 whyUnconfined ——
+ *           它答的是「这条会话为什么没固定成套」，而这条会话固定成了套。
  *
  * 替身：sandbox 管理器（pinSession / planFor / sandboxGloballyActive 都是 spy）、toolContext
  * （安全门是 spy，含 getSessionPathGrants）、bgTaskService 的三个执行入口、i18n。
@@ -417,6 +421,64 @@ describe('SC-4 没套沙箱的实例无视越界参数', () => {
     expect(runArgs().sandbox).toBeUndefined()
     expect(text).toBe('out')
   })
+})
+
+describe('SC-UR 没进沙箱的原因（命令客体的 unconfinedReason）', () => {
+  it.each(['unsupported', 'disabled', 'unavailable'] as const)(
+    'SC-UR1 pin 为假的 bash：whyUnconfined 答 %s 就原样上报；问的是本会话自己的 id，不要计划',
+    async (reason) => {
+      mocks.whyUnconfined.mockReturnValue(reason)
+      mocks.pinSession.mockReturnValueOnce(false)
+      // 与文件其余用例不同的会话 id：「按本会话问」要能和「按某个固定 id 问」区分开
+      const tool = new BashTool({ sessionId: 'sess-ur-own' } as ToolContext)
+      await run(tool, params())
+
+      expect(mocks.whyUnconfined.mock.calls).toEqual([['sess-ur-own']])
+      expect(mocks.planFor).not.toHaveBeenCalled()
+      const [object, opts] = enforceArgs()
+      expect(object).toEqual({
+        channel: 'bash',
+        command: 'make build',
+        cwd: '/w',
+        unconfinedReason: reason
+      })
+      expect(opts).not.toHaveProperty('unsandboxed')
+    }
+  )
+
+  it('SC-UR1 PowerShell：恒 unsupported，不问 whyUnconfined（哪怕它此刻会答 disabled）', async () => {
+    mocks.whyUnconfined.mockReturnValue('disabled')
+    const tool = new PowerShellTool(CTX)
+    await run(tool, params())
+
+    expect(mocks.whyUnconfined).not.toHaveBeenCalled()
+    expect(mocks.planFor).not.toHaveBeenCalled()
+    expect(enforceArgs()[0]).toEqual({
+      channel: 'powershell',
+      command: 'make build',
+      cwd: '/w',
+      unconfinedReason: 'unsupported'
+    })
+  })
+
+  it.each([
+    ['计划为 null', {}, 'unavailable', 1],
+    ['申请越界', { dangerouslyDisableSandbox: true }, 'escalated', 0]
+  ] as const)(
+    'SC-UR2 pin 为真、%s：报 %s，不问 whyUnconfined（它此刻答 disabled 也不采信）',
+    async (_label, extra, reason, planCalls) => {
+      mocks.planFor.mockReturnValue(null)
+      mocks.whyUnconfined.mockReturnValue('disabled')
+      const tool = bashWithPin(true)
+      await run(tool, params(extra))
+
+      expect(mocks.planFor).toHaveBeenCalledTimes(planCalls)
+      expect(mocks.whyUnconfined).not.toHaveBeenCalled()
+      const [object] = enforceArgs()
+      expect(object).not.toHaveProperty('sandboxed')
+      expect(object).toMatchObject({ unconfinedReason: reason })
+    }
+  )
 })
 
 describe('SC-5 设置页的 describe() 读全局开关', () => {

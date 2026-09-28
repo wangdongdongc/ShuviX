@@ -1,11 +1,13 @@
 /**
  * createSecurityContext（PEP 门面）全链 —— evaluateReadOnly 的 force-allow 缺省、
  * enforce 的 action/displayPath 转发、禁缓存红线（grants 变化即生效）、
- * L1 全工具门的 allow 即非事件、路径客体经 provider.realPath 换成真实去处（CT-R 系列）。
+ * L1 全工具门的 allow 即非事件、路径客体经 provider.realPath 换成真实去处（CT-R 系列）、
+ * 询问点的自动审查经门面走到接缝（CT-RV / CT-SG / CT-UR 系列）。
  */
 import { describe, it, expect, afterEach, vi, type Mock } from 'vitest'
 import { createSecurityContext } from '../context'
 import { clearSessionDecisions, getSessionDecisions } from '../decisionLog'
+import { clearReviewState } from '../reviewState'
 import type {
   AskInputRequest,
   InputRequest,
@@ -15,7 +17,9 @@ import type {
   CommandObjectInput,
   MatchContext,
   ParsedPolicyFile,
+  PermissionReviewAnswer,
   PolicyRuleSpec,
+  SecurityContext,
   SecurityHostProvider,
   SecurityObject,
   UrlObjectInput
@@ -3374,5 +3378,499 @@ describe('createSecurityContext — 真实路径（provider.realPath）', () => 
     // 已经是真实去处、带着原写法的客体再判一次：幂等
     const again = ctx.evaluate('read', { type: 'path', path: KEY_REAL, requestedPath: KEY_LINK })
     expect(again.ask).toMatchObject({ command: `Read(${KEY_REAL})`, requestedPath: KEY_LINK })
+  })
+})
+
+/**
+ * 询问点的自动审查经门面走到接缝（provider.onPermissionRequest）：只有策略判出 ask 档的那一次
+ * 才先问审查 —— force-ask（protect-shuvix-config / protect-bot-files / 用户写的）、deny、会话授权
+ * 的 force-allow、L1 探测阶段就放行的调用、被动 UI 的判定都碰不到它。接缝看到的客体与策略判的是
+ * 同一个（路径已换成真实去处，命令带着 unconfinedReason）。
+ */
+describe('createSecurityContext — 询问点的审查（onPermissionRequest）', () => {
+  type Reviewer = NonNullable<SecurityHostProvider['onPermissionRequest']>
+
+  const usedSids = new Set<string>()
+  let seq = 0
+  afterEach(() => {
+    for (const sid of usedSids) {
+      clearReviewState(sid)
+      clearSessionDecisions(sid)
+    }
+    usedSids.clear()
+  })
+
+  const ALLOW_ANSWER: PermissionReviewAnswer = {
+    verdict: { decision: 'allow', risk: 'low', summary: 's', reason: 'r' },
+    source: 'auto-review'
+  }
+  const BASH = { toolCallId: 'tc-rv', toolName: 'bash' }
+  const WRITE = { toolCallId: 'tc-rv', toolName: 'write' }
+
+  /** 内置策略的 en 显示名（取自 md，不抄进断言） */
+  const displayNameOf = (name: string): string =>
+    buildBuiltinPolicies({ readMd: INLINE_POLICY_MD }).find((p) => p.name === name)!.displayName
+
+  /** 本条用例自己的会话 + 审查接缝 + 一律允许的询问通道 */
+  function reviewedContext(
+    opts: {
+      review?: ReturnType<typeof vi.fn<Reviewer>>
+      grants?: { autoAllow: boolean; allowList: string[] }
+      overrides?: Partial<SecurityHostProvider>
+    } = {}
+  ): {
+    ctx: SecurityContext
+    sid: string
+    review: ReturnType<typeof vi.fn<Reviewer>>
+    requestUserInput: Mock<(req: InputRequest) => Promise<InputResponse>>
+    warn: Mock
+  } {
+    const sid = `context-review-${++seq}`
+    usedSids.add(sid)
+    const review = opts.review ?? vi.fn<Reviewer>(async () => ALLOW_ANSWER)
+    const requestUserInput = vi.fn(
+      async (_req: InputRequest): Promise<InputResponse> => ({ kind: 'ask', allowed: true })
+    )
+    const warn = vi.fn()
+    const ctx = createSecurityContext(
+      { kind: 'agent', sessionId: sid, agentKind: 'root' },
+      ENVIRONMENT,
+      makeProvider(opts.grants ?? { autoAllow: false, allowList: [] }, {
+        requestUserInput,
+        onPermissionRequest: review,
+        logger: { info: vi.fn(), warn, error: vi.fn() },
+        ...opts.overrides
+      })
+    )
+    return { ctx, sid, review, requestUserInput, warn }
+  }
+
+  const onlyCard = (requestUserInput: Mock): AskInputRequest => {
+    expect(requestUserInput).toHaveBeenCalledTimes(1)
+    return requestUserInput.mock.calls[0][0] as AskInputRequest
+  }
+
+  /** 让已排队的微任务跑完（门面到接缝之间隔着几个 await） */
+  const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
+
+  it('CT-RV1 没圈进沙箱的 bash 命中 ask-on-command：接缝收到 tier ask 的决策、署名含 ask-on-command 的显示名；审查 allow → 放行、不弹卡', async () => {
+    const h = reviewedContext()
+    await expect(
+      h.ctx.enforceCommand({ channel: 'bash', command: 'ls -la', sandboxed: false }, BASH)
+    ).resolves.toEqual({ status: 'allowed' })
+
+    expect(h.review).toHaveBeenCalledTimes(1)
+    const event = h.review.mock.calls[0][0]
+    expect(event.decision).toMatchObject({
+      effect: 'ask',
+      tier: 'ask',
+      winning: 'ask-on-command#0'
+    })
+    expect(event.decision.prompt?.policies).toContain(displayNameOf('ask-on-command'))
+    expect(event.command).toBe('ls -la')
+    expect(event.toolCallId).toBe('tc-rv')
+    expect(event.request.subject).toEqual({ kind: 'agent', sessionId: h.sid, agentKind: 'root' })
+    expect(event.request.tool).toEqual({ name: 'bash', operation: undefined })
+    expect(event.request.object).toMatchObject({
+      type: 'command',
+      command: 'ls -la',
+      channel: 'bash',
+      sandboxed: false,
+      unconfinedReason: 'unavailable'
+    })
+    expect(h.requestUserInput).not.toHaveBeenCalled()
+    const logs = getSessionDecisions(h.sid)
+    expect(logs).toHaveLength(1)
+    expect(logs[0]).toMatchObject({
+      effect: 'ask',
+      winning: 'ask-on-command#0',
+      review: { decision: 'allow', risk: 'low', source: 'auto-review' }
+    })
+    expect(logs[0].userResponse).toBeUndefined()
+  })
+
+  it('CT-RV2 免询问开着：session-grants 的 force-allow 先放行 —— 接缝 0 次、不弹卡，归因 session-grants#0', async () => {
+    const h = reviewedContext({ grants: { autoAllow: true, allowList: [] } })
+    await expect(
+      h.ctx.enforceCommand({ channel: 'bash', command: 'ls -la' }, BASH)
+    ).resolves.toEqual({ status: 'allowed' })
+    await h.ctx.enforcePath('write', '/outside/a.txt', WRITE)
+
+    expect(h.review).not.toHaveBeenCalled()
+    expect(h.requestUserInput).not.toHaveBeenCalled()
+    expect(getSessionDecisions(h.sid).map((l) => [l.effect, l.winning])).toEqual([
+      ['allow', 'session-grants#0'],
+      ['allow', 'session-grants#0']
+    ])
+  })
+
+  it('CT-RV3 allowList 有 Write(/elsewhere)：写 /elsewhere/a 由「允许并记住」放行，接缝 0 次；没授权的地方照旧先问审查', async () => {
+    const h = reviewedContext({ grants: { autoAllow: false, allowList: ['Write(/elsewhere)'] } })
+    await h.ctx.enforcePath('write', '/elsewhere/a', WRITE)
+    expect(h.review).not.toHaveBeenCalled()
+    expect(h.requestUserInput).not.toHaveBeenCalled()
+    expect(getSessionDecisions(h.sid)[0]).toMatchObject({
+      effect: 'allow',
+      winning: 'session-grants#2'
+    })
+
+    await h.ctx.enforcePath('write', '/other/a', WRITE)
+    expect(h.review).toHaveBeenCalledTimes(1)
+  })
+
+  it.each<[string, string, string]>([
+    ['protect-shuvix-config', '/home/u/.shuvix/agents/x.md', 'protect-shuvix-config#0'],
+    ['protect-bot-files', '/home/u/.shuvix/bots/x.md', 'protect-bot-files#0']
+  ])(
+    'CT-RV4 %s（force-ask）：接缝 0 次、照样弹卡、卡片没有 review、不给「允许并记住」；免询问开着结果相同',
+    async (_policy, path, winning) => {
+      for (const autoAllow of [false, true]) {
+        const h = reviewedContext({ grants: { autoAllow, allowList: [] } })
+        const decision = h.ctx.evaluate('write', { type: 'path', path })
+        expect({ autoAllow, effect: decision.effect, tier: decision.tier }).toEqual({
+          autoAllow,
+          effect: 'ask',
+          tier: 'force-ask'
+        })
+        expect(decision.winning).toBe(winning)
+        expect(decision.ask?.rememberEntry).toBeUndefined()
+
+        await h.ctx.enforcePath('write', path, WRITE)
+        expect(h.review).not.toHaveBeenCalled()
+        const card = onlyCard(h.requestUserInput)
+        expect(card.review).toBeUndefined()
+        expect(card.command).toBe(`Write(${path})`)
+        const [log] = getSessionDecisions(h.sid)
+        expect(log).toMatchObject({ effect: 'ask', winning, userResponse: 'allowed' })
+        expect(log.review).toBeUndefined()
+      }
+    }
+  )
+
+  it('CT-RV5 deny 类（rm -rf /、凭据目录写）：接缝 0 次、不弹卡，抛策略拒绝', async () => {
+    const rmRoot: ShellFacts = {
+      source: 'rm -rf /',
+      parsed: true,
+      reason: 'ok',
+      errorSpans: [],
+      literalCommands: [
+        {
+          name: 'rm',
+          base: 'rm',
+          argv: ['rm', '-rf', '/'],
+          complete: true,
+          span: { start: 0, end: 0 },
+          depth: 0
+        }
+      ],
+      dynamics: [],
+      redirects: [],
+      depthExceeded: false
+    }
+    const h = reviewedContext({
+      overrides: { shellParser: { ensureReady: async () => {}, analyze: () => rmRoot } }
+    })
+
+    await expect(
+      h.ctx.enforceCommand({ channel: 'bash', command: 'rm -rf /' }, BASH)
+    ).rejects.toThrow('block-catastrophic-commands#0')
+    await expect(h.ctx.enforcePath('write', '/home/u/.ssh/id_rsa', WRITE)).rejects.toThrow(
+      "Denied by security policy rule 'protect-credentials#0'"
+    )
+    expect(h.review).not.toHaveBeenCalled()
+    expect(h.requestUserInput).not.toHaveBeenCalled()
+    expect(getSessionDecisions(h.sid).map((l) => [l.effect, l.review])).toEqual([
+      ['deny', undefined],
+      ['deny', undefined]
+    ])
+  })
+
+  it('CT-RV6 L1：ask-on-sub-session 命中 → 接缝恰 1 次（command「session: create-sub-session」、客体 invocation）；别的工具在探测阶段放行 → 接缝 0 次、零日志', async () => {
+    const h = reviewedContext()
+    await expect(
+      h.ctx.enforceInvocation({
+        toolCallId: 'tc-sub',
+        toolName: 'session',
+        operation: 'create-sub-session'
+      })
+    ).resolves.toEqual({ status: 'allowed' })
+    expect(h.review).toHaveBeenCalledTimes(1)
+    const event = h.review.mock.calls[0][0]
+    expect(event.command).toBe('session: create-sub-session')
+    expect(event.request.object).toEqual({ type: 'invocation' })
+    expect(event.request.tool).toEqual({ name: 'session', operation: 'create-sub-session' })
+    expect(event.decision).toMatchObject({ tier: 'ask', winning: 'ask-on-sub-session#0' })
+    expect(getSessionDecisions(h.sid)).toHaveLength(1)
+
+    clearSessionDecisions(h.sid)
+    const others: Array<{ toolName: string; operation?: string }> = [
+      { toolName: 'read' },
+      { toolName: 'bash' },
+      { toolName: 'session', operation: 'prompt-sub-session' },
+      { toolName: 'mcp__browser__snapshot' }
+    ]
+    for (const other of others) {
+      await expect(h.ctx.enforceInvocation({ toolCallId: 'tc-x', ...other })).resolves.toEqual({
+        status: 'allowed'
+      })
+    }
+    expect(h.review).toHaveBeenCalledTimes(1)
+    expect(h.requestUserInput).not.toHaveBeenCalled()
+    expect(getSessionDecisions(h.sid)).toHaveLength(0)
+  })
+
+  it('CT-RV7 真实路径：/ws/link 解析到 /outside/f → 接缝里客体 path 是真实去处、requestedPath 是链接写法，command 是 Write(/outside/f)', async () => {
+    const h = reviewedContext({
+      review: vi.fn<Reviewer>(async () => null),
+      overrides: { realPath: tableResolver({ '/ws/link': '/outside/f' }) }
+    })
+    await h.ctx.enforcePath('write', '/ws/link', WRITE)
+
+    expect(h.review).toHaveBeenCalledTimes(1)
+    const event = h.review.mock.calls[0][0]
+    expect(event.request.object).toMatchObject({
+      type: 'path',
+      path: '/outside/f',
+      requestedPath: '/ws/link'
+    })
+    expect(event.command).toBe('Write(/outside/f)')
+    expect(event.decision).toMatchObject({ tier: 'ask', winning: 'ask-on-write#0' })
+    expect(event.decision.ask).toEqual({
+      command: 'Write(/outside/f)',
+      rememberEntry: 'Write(/outside/f)',
+      requestedPath: '/ws/link'
+    })
+    // 审查答不出 → 卡片与接缝说的是同一个位置
+    expect(onlyCard(h.requestUserInput)).toMatchObject({
+      command: 'Write(/outside/f)',
+      requestedPath: '/ws/link'
+    })
+  })
+
+  it('CT-RV8 evaluate / evaluateReadOnly 永不调接缝、不写日志（ask 档也一样）', () => {
+    const h = reviewedContext()
+    const outside: SecurityObject = { type: 'path', path: '/outside/a' }
+    expect(h.ctx.evaluate('write', outside)).toMatchObject({ effect: 'ask', tier: 'ask' })
+    expect(h.ctx.evaluateReadOnly('write', outside)).toBe(false)
+    expect(h.ctx.evaluateReadOnly('read', outside)).toBe(false)
+    expect(
+      h.ctx.evaluate('execute', {
+        type: 'command',
+        channel: 'bash',
+        command: 'ls -la',
+        sandboxed: false,
+        unconfinedReason: 'unavailable',
+        ...NO_SHELL_FACTS
+      })
+    ).toMatchObject({ effect: 'ask', tier: 'ask' })
+
+    expect(h.review).not.toHaveBeenCalled()
+    expect(h.requestUserInput).not.toHaveBeenCalled()
+    expect(getSessionDecisions(h.sid)).toHaveLength(0)
+  })
+
+  it.each<[string, (ctx: SecurityContext, signal: AbortSignal) => Promise<unknown>]>([
+    [
+      'enforcePath',
+      (ctx, signal) => ctx.enforcePath('write', '/outside/a.txt', { ...WRITE, signal })
+    ],
+    [
+      'enforceCommand',
+      (ctx, signal) =>
+        ctx.enforceCommand({ channel: 'bash', command: 'ls -la' }, { ...BASH, signal })
+    ],
+    [
+      'enforceGitOp',
+      (ctx, signal) => ctx.enforceGitOp(GIT_INPUT, { toolCallId: 'tc-rv', toolName: 'git', signal })
+    ],
+    [
+      'enforceDatabase',
+      (ctx, signal) =>
+        ctx.enforceDatabase(DATABASE_INPUT, {
+          toolCallId: 'tc-rv',
+          toolName: 'mcp__database__query',
+          signal
+        })
+    ],
+    ['enforceUrl', (ctx, signal) => ctx.enforceUrl(CHROME_PAGE, { ...CHROME_OPTS, signal })],
+    [
+      'enforceInvocation',
+      (ctx, signal) =>
+        ctx.enforceInvocation({
+          toolCallId: 'tc-rv',
+          toolName: 'session',
+          operation: 'create-sub-session',
+          signal
+        })
+    ]
+  ])(
+    'CT-SG1 %s：PEP 交来的 signal 落下 → 接缝收到的 signal 随之 aborted，门以中止收尾、不弹卡',
+    async (_gate, call) => {
+      const review = vi.fn<Reviewer>(() => new Promise<PermissionReviewAnswer | null>(() => {}))
+      const h = reviewedContext({ review })
+      const ac = new AbortController()
+
+      const result = call(h.ctx, ac.signal)
+      await flush()
+      expect(review).toHaveBeenCalledTimes(1)
+      const seamSignal = review.mock.calls[0][1]!
+      expect(seamSignal).toBeInstanceOf(AbortSignal)
+      expect(seamSignal.aborted).toBe(false)
+
+      ac.abort()
+      expect(seamSignal.aborted).toBe(true)
+      await expect(result).rejects.toThrow('Aborted')
+      expect(h.requestUserInput).not.toHaveBeenCalled()
+      expect(getSessionDecisions(h.sid)[0].userResponse).toBe('cancel')
+    }
+  )
+
+  /** 截下门面造出的命令客体（静态 allow 层的派生规则，永不命中） */
+  function objectOf(input: CommandObjectInput): Promise<MatchContext['object']> {
+    let captured: MatchContext['object'] | undefined
+    const h = reviewedContext({
+      review: vi.fn<Reviewer>(async () => null),
+      overrides: {
+        derivedRules: () => [
+          {
+            id: 'derived:capture',
+            effect: 'allow' as const,
+            tier: 'static-allow' as const,
+            source: { kind: 'derived' as const },
+            matches: (matchCtx) => {
+              captured = matchCtx.object
+              return false
+            }
+          }
+        ]
+      }
+    })
+    const toolName = input.channel === 'ssh' ? 'mcp__ssh__exec' : input.channel
+    return h.ctx.enforceCommand(input, { toolCallId: 'tc-ur', toolName }).then(() => captured!)
+  }
+
+  it.each<[string, CommandObjectInput, string]>([
+    ['bash 没给 → unavailable', { channel: 'bash', command: 'ls' }, 'unavailable'],
+    ['ssh 没给 → remote', { channel: 'ssh', command: 'uptime', host: 'prod' }, 'remote'],
+    [
+      'powershell 没给 → unavailable',
+      { channel: 'powershell', command: 'Get-Date' },
+      'unavailable'
+    ],
+    [
+      '显式 escalated 原样',
+      { channel: 'bash', command: 'ls', unconfinedReason: 'escalated' },
+      'escalated'
+    ],
+    [
+      '显式 disabled 原样',
+      { channel: 'bash', command: 'ls', unconfinedReason: 'disabled' },
+      'disabled'
+    ],
+    [
+      '显式 unsupported 原样',
+      { channel: 'powershell', command: 'Get-Date', unconfinedReason: 'unsupported' },
+      'unsupported'
+    ],
+    [
+      '显式 unavailable 原样',
+      { channel: 'bash', command: 'ls', unconfinedReason: 'unavailable' },
+      'unavailable'
+    ],
+    [
+      '显式 remote 原样',
+      { channel: 'ssh', command: 'uptime', host: 'prod', unconfinedReason: 'remote' },
+      'remote'
+    ],
+    ['sandboxed:true → 空串', { channel: 'bash', command: 'ls', sandboxed: true }, ''],
+    [
+      'sandboxed:true 同时传 escalated → 仍是空串',
+      { channel: 'bash', command: 'ls', sandboxed: true, unconfinedReason: 'escalated' },
+      ''
+    ],
+    // P2：钉现状 —— 宿主显式说「没圈住、原因是空串」时原样交出（不替它回落成 unavailable）
+    [
+      'sandboxed:false 显式传空串 → 今天原样是空串',
+      { channel: 'bash', command: 'ls', sandboxed: false, unconfinedReason: '' },
+      ''
+    ]
+  ])('CT-UR1 命令客体上 unconfinedReason 恒有值：%s', async (_label, input, expected) => {
+    const object = await objectOf(input)
+    expect('unconfinedReason' in object).toBe(true)
+    expect(object.unconfinedReason).toBe(expected)
+    expect(object.sandboxed).toBe(input.sandboxed === true)
+  })
+
+  it('CT-UR2 用户 force-ask 按 unconfinedReason 写：escalated 走 force-ask（接缝 0 次、卡片标完全访问）；disabled 仍是 ask 档（接缝 1 次）', async () => {
+    const h = reviewedContext({
+      review: vi.fn<Reviewer>(async () => null),
+      overrides: {
+        getUserPolicies: () => [
+          userPolicy('ask-on-escalation', [
+            {
+              effect: 'force-ask',
+              match: "object.type == 'command' && object.unconfinedReason == 'escalated'"
+            }
+          ])
+        ]
+      }
+    })
+
+    await h.ctx.enforceCommand(
+      { channel: 'bash', command: 'open -a Safari', unconfinedReason: 'escalated' },
+      { ...BASH, unsandboxed: true }
+    )
+    expect(h.review).not.toHaveBeenCalled()
+    expect(onlyCard(h.requestUserInput)).toMatchObject({
+      command: 'open -a Safari',
+      unsandboxed: true
+    })
+    expect(getSessionDecisions(h.sid)[0]).toMatchObject({
+      effect: 'ask',
+      winning: 'ask-on-escalation#0'
+    })
+
+    await h.ctx.enforceCommand(
+      { channel: 'bash', command: 'ls -la', unconfinedReason: 'disabled' },
+      BASH
+    )
+    expect(h.review).toHaveBeenCalledTimes(1)
+    expect(h.review.mock.calls[0][0].decision).toMatchObject({
+      tier: 'ask',
+      winning: 'ask-on-command#0'
+    })
+    expect(h.review.mock.calls[0][0].request.object.unconfinedReason).toBe('disabled')
+  })
+
+  it('CT-W5 宿主不提供 shuvixConfigDirs：~/.shuvix/agents 下的写落回 ask-on-write（ask 档、照常先问审查），不会每次写都 force-ask；「not provided」恰 1 行、零 fail-safe', async () => {
+    const grants = { autoAllow: false, allowList: [] as string[] }
+    const { shuvixConfigDirs: _dirs, ...varsWithoutConfigDirs } = makeProvider(grants).getVars()
+    const h = reviewedContext({
+      review: vi.fn<Reviewer>(async () => null),
+      grants,
+      overrides: { getVars: () => varsWithoutConfigDirs }
+    })
+    const agentMd: SecurityObject = { type: 'path', path: '/home/u/.shuvix/agents/a.md' }
+
+    for (let i = 0; i < 3; i++) {
+      expect(h.ctx.evaluate('write', agentMd)).toMatchObject({
+        effect: 'ask',
+        tier: 'ask',
+        winning: 'ask-on-write#0'
+      })
+    }
+    await h.ctx.enforcePath('write', '/home/u/.shuvix/agents/a.md', WRITE)
+    expect(h.review).toHaveBeenCalledTimes(1)
+    expect(h.review.mock.calls[0][0].decision).toMatchObject({
+      tier: 'ask',
+      winning: 'ask-on-write#0'
+    })
+
+    const lines = h.warn.mock.calls.map((c) => String(c[0]))
+    const notProvided = lines.filter((m) => m.includes('is not provided by the host'))
+    expect(notProvided).toHaveLength(1)
+    expect(notProvided[0]).toContain("'protect-shuvix-config'")
+    expect(notProvided[0]).toContain('vars.shuvixConfigDirs')
+    expect(lines.filter((m) => m.includes('match evaluation failed'))).toHaveLength(0)
   })
 })

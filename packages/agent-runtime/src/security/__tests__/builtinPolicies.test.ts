@@ -335,6 +335,25 @@ describe('buildBuiltinPolicies', () => {
     expect(policy.lets).toBeUndefined()
   })
 
+  it('BP-3f protect-shuvix-config：force-ask × write × path × vars.shuvixConfigDirs，desktop 限定，恰一条规则', () => {
+    const policy = byName('protect-shuvix-config')
+    expect(policy.scope).toEqual({
+      'subject.kind': ['agent'],
+      'object.type': ['path'],
+      'env.host': ['desktop']
+    })
+    expect(policy.rules).toHaveLength(1)
+    // force-ask = 只问人：免询问、「允许并记住」（都在 force-allow 层）与自动审查（只接 tier 为 ask 的
+    // 询问）都答不了它。目录清单由宿主经 vars 给（~/.shuvix 下 policies / agents / hooks / skills）
+    expect(withoutPrompt(policy.rules[0])).toEqual({
+      effect: 'force-ask',
+      conditions: { action: ['write'] },
+      match: 'inDir(object.path, vars.shuvixConfigDirs)'
+    })
+    expect(policy.rules[0].prompt?.trim()).toBeTruthy()
+    expect(policy.lets).toBeUndefined()
+  })
+
   it('BP-T1 出厂的调用门只有一道，且必须按工具名收窄（别的工具照走 L1 非事件快路）', () => {
     // 原先这条是「出厂一道调用门都没有」。ask-on-sub-session 是刻意加的第一道：
     // 开一条子会话开出去的是**一整场会自己跑的对话**，值得一次询问，而它没有路径/命令
@@ -609,6 +628,47 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
       '/Users/u/.shuvix/cli-token'
     ],
     sandboxReadAllowed: ['/ws', '/Users/u/Library/Application Support/ShuviX/tool_results/sess-1']
+  }
+
+  /** 工作区写入视图三键 —— 桌面 getVars 展开 sandbox.workspaceWriteView 得到的那一组（与沙箱开没开无关） */
+  const WORKSPACE_KEYS = [
+    'workspaceWritable',
+    'workspaceWriteDenied',
+    'workspaceProtectedPatterns'
+  ] as const
+
+  /**
+   * 工作区 /ws 适合豁免时宿主给的工作区写入视图（桌面 workspaceWriteView，家目录 /Users/u）：
+   *   - workspaceWritable：就是工作区本身；
+   *   - workspaceWriteDenied：沙箱规格的 writeDeniedFinal。这里写全了其中的凭据目录与工作区根上的别家
+   *     工具配置（桌面 sandbox/tables.ts 的 CREDENTIAL_DIRS_HOME_RELATIVE / ROOT_PROTECTED_NAMES）；
+   *     同一份清单里另有沙箱外会被执行的家目录文件和两个按 uid 的临时目录，都在工作区之外、豁免之外，略去；
+   *   - workspaceProtectedPatterns：桌面两个视图调的是同一个 protectedWritePatterns（git 模式、`.git` 本身、
+   *     launchd），所以直接取 DESKTOP_VARS_ACTIVE 那四条，不再抄一遍。
+   */
+  const WORKSPACE_VIEW: Record<(typeof WORKSPACE_KEYS)[number], string[]> = {
+    workspaceWritable: ['/ws'],
+    workspaceWriteDenied: [
+      ...[
+        '.ssh',
+        '.aws',
+        '.gnupg',
+        '.config/gh',
+        '.netrc',
+        'AppData/Local/Microsoft/Credentials',
+        'AppData/Roaming/Microsoft/Credentials'
+      ].map((dir) => `/Users/u/${dir}`),
+      ...['.vscode', '.idea', '.claude', '.cursor', '.codex', '.zed', '.mcp.json', '.envrc'].map(
+        (name) => `/ws/${name}`
+      )
+    ],
+    workspaceProtectedPatterns: DESKTOP_VARS_ACTIVE.sandboxProtectedPatterns as string[]
+  }
+
+  /** 沙箱没套上（INACTIVE 视图）、只给了工作区写入视图 —— 沙箱关着、探测没过、Linux 上的会话 */
+  const DESKTOP_VARS_WORKSPACE: Record<string, string | string[] | boolean> = {
+    ...DESKTOP_VARS,
+    ...WORKSPACE_VIEW
   }
 
   /** 从变量表里拿掉若干键（模拟宿主压根没给） */
@@ -1521,6 +1581,345 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
     })
   })
 
+  // ── protect-shuvix-config：ShuviX 自己的规矩（策略 / agent / hook / 技能）写入的 force-ask 内置门 ─────
+  //
+  // 这四个目录里的文件是规矩而不是内容：策略决定 agent 能做什么，agent 文件是系统提示词，hook 会自己
+  // 启动 agent，技能被当作指令读。自动审查本身也由它们构成 —— 审查员是 agents/ 下的一份 md、触发它的
+  // 是 hooks/ 下的一份 md，同名文件覆盖内置 —— 一次没人看见的写入就能把之后的审查全关掉。所以它是
+  // force-ask：免询问、「允许并记住」答不了，自动审查也答不了（审查只接 tier 为 ask 的询问，这一组因此
+  // 连 decision.tier 一起钉）。形状与 protect-bot-files（BP-B）相同，守的是另外四个目录。
+
+  /** DESKTOP_VARS 的 ~/.shuvix（shuvixConfigDirs 是它底下的 policies / agents / hooks / skills） */
+  const SHUVIX_HOME = '/Users/u/.shuvix'
+  /** 四个目录里各一份 —— 技能那份嵌在技能自己的目录里（SKILL.md 从不直接放在 skills/ 下） */
+  const SHUVIX_CONFIG_FILES = [
+    `${SHUVIX_HOME}/policies/x.md`,
+    `${SHUVIX_HOME}/agents/a.md`,
+    `${SHUVIX_HOME}/hooks/h.md`,
+    `${SHUVIX_HOME}/skills/foo/SKILL.md`
+  ]
+
+  it('BP-C1 agent 写四个配置目录 → ask，tier force-ask，归因 protect-shuvix-config#0，不给「允许并记住」', () => {
+    for (const path of SHUVIX_CONFIG_FILES) {
+      const decision = decide('write', at(path))
+      expect({
+        path,
+        effect: decision.effect,
+        tier: decision.tier,
+        winning: decision.winning,
+        matched: decision.matched
+      }).toEqual({
+        path,
+        effect: 'ask',
+        tier: 'force-ask',
+        winning: 'protect-shuvix-config#0',
+        // ask-on-write 同样命中（这些目录不在任何豁免里），只是落在下一档
+        matched: ['protect-shuvix-config#0', 'ask-on-write#0']
+      })
+      // 卡片只展示条目：「记住」的授权落在 force-allow 层、压不过这道门，给按钮就是假承诺
+      expect(decision.ask, path).toEqual({ command: `Write(${path})` })
+      expect(decision.ask?.rememberEntry, path).toBeUndefined()
+    }
+  })
+
+  it('BP-C2 免询问开着照样问 —— force-ask 压过 session-grants#0（它命中了，只是被压过）', () => {
+    const provider = autoAllowProvider()
+    for (const path of SHUVIX_CONFIG_FILES) {
+      const decision = decide('write', at(path), { provider })
+      expect({
+        path,
+        effect: decision.effect,
+        tier: decision.tier,
+        winning: decision.winning,
+        matched: decision.matched
+      }).toEqual({
+        path,
+        effect: 'ask',
+        tier: 'force-ask',
+        winning: 'protect-shuvix-config#0',
+        matched: ['protect-shuvix-config#0', 'session-grants#0', 'ask-on-write#0']
+      })
+    }
+    // 对照：同一开关下工作区里的普通写放行 —— 免询问本身没坏，只是盖不住这一道
+    expect(decide('write', at('/ws/f.txt'), { provider })).toMatchObject({
+      effect: 'allow',
+      tier: 'force-allow',
+      winning: 'session-grants#0'
+    })
+  })
+
+  it('BP-C3 「允许并记住」压不过：授权了 agents 目录、整个 ~/.shuvix 或整个家目录，写 agent 文件都照问；同一份清单里别处的写照常放行', () => {
+    for (const grant of [
+      `Write(${SHUVIX_HOME}/agents)`,
+      `Write(${SHUVIX_HOME})`,
+      'Write(/Users/u)'
+    ]) {
+      const provider = makeProvider({
+        getSessionGrants: () => ({ autoAllow: false, allowList: [grant, 'Write(/Users/u/proj)'] })
+      })
+      const decision = decide('write', at(`${SHUVIX_HOME}/agents/a.md`), { provider })
+      expect({
+        grant,
+        effect: decision.effect,
+        tier: decision.tier,
+        winning: decision.winning
+      }).toEqual({ grant, effect: 'ask', tier: 'force-ask', winning: 'protect-shuvix-config#0' })
+      // 授权确实对上了（是被压过，不是没命中）
+      expect(decision.matched, grant).toContain('session-grants#2')
+      // 对照：授权本身有效
+      expect(decide('write', at('/Users/u/proj/x.ts'), { provider }), grant).toMatchObject({
+        effect: 'allow',
+        winning: 'session-grants#2'
+      })
+    }
+  })
+
+  it('BP-C4 读不归它管：读四个配置目录不命中本门，是 ask-on-read 的普通询问（tier ask），免询问能免', () => {
+    for (const path of SHUVIX_CONFIG_FILES) {
+      const read = decide('read', at(path))
+      expect({
+        path,
+        effect: read.effect,
+        tier: read.tier,
+        winning: read.winning,
+        matched: read.matched
+      }).toEqual({
+        path,
+        effect: 'ask',
+        tier: 'ask',
+        winning: 'ask-on-read#0',
+        matched: ['ask-on-read#0']
+      })
+      expect(decide('read', at(path), { provider: autoAllowProvider() }), path).toMatchObject({
+        effect: 'allow',
+        winning: 'session-grants#0'
+      })
+    }
+  })
+
+  it('BP-C5 按路径段比：四个目录本身命中；同前缀的兄弟（policies-old、agentsX、hooks.bak）与 ~/.shuvix 里别的位置不命中', () => {
+    const table: Array<[string, boolean]> = [
+      // 目录本身（不带尾斜杠）也算在内 —— inDir 的等值分支
+      [`${SHUVIX_HOME}/policies`, true],
+      [`${SHUVIX_HOME}/agents`, true],
+      [`${SHUVIX_HOME}/hooks`, true],
+      [`${SHUVIX_HOME}/skills`, true],
+      [`${SHUVIX_HOME}/policies-old/x`, false],
+      [`${SHUVIX_HOME}/agentsX/a`, false],
+      [`${SHUVIX_HOME}/hooks.bak`, false],
+      // 守的是这四个目录，不是整个 ~/.shuvix
+      [SHUVIX_HOME, false],
+      [`${SHUVIX_HOME}/x.md`, false]
+    ]
+    for (const [path, guarded] of table) {
+      const decision = decide('write', at(path))
+      expect({
+        path,
+        effect: decision.effect,
+        tier: decision.tier,
+        winning: decision.winning
+      }).toEqual({
+        path,
+        effect: 'ask',
+        tier: guarded ? 'force-ask' : 'ask',
+        winning: guarded ? 'protect-shuvix-config#0' : 'ask-on-write#0'
+      })
+      // 没归它的是真没命中，不是被压过
+      if (!guarded) expect(decision.matched, path).toEqual(['ask-on-write#0'])
+    }
+  })
+
+  it('BP-C6 ~/.shuvix 里别的目录各归各的门：bots → protect-bot-files#0；knowledge、widgets → ask-on-write#0（给记住）；本会话 artifacts → 放行', () => {
+    const bot = decide('write', at(`${SHUVIX_HOME}/bots/scout.md`))
+    expect(bot).toMatchObject({ effect: 'ask', tier: 'force-ask', winning: 'protect-bot-files#0' })
+    expect(bot.matched).toEqual(['protect-bot-files#0', 'ask-on-write#0'])
+
+    for (const path of [
+      `${SHUVIX_HOME}/knowledge/notes/a.md`,
+      `${SHUVIX_HOME}/knowledge-shuvix/projects/p1/a.md`,
+      `${SHUVIX_HOME}/widgets/w1/index.html`
+    ]) {
+      const decision = decide('write', at(path))
+      expect({
+        path,
+        effect: decision.effect,
+        tier: decision.tier,
+        winning: decision.winning,
+        matched: decision.matched
+      }).toEqual({
+        path,
+        effect: 'ask',
+        tier: 'ask',
+        winning: 'ask-on-write#0',
+        matched: ['ask-on-write#0']
+      })
+      expect(decision.ask?.rememberEntry, path).toBe(`Write(${path})`)
+    }
+
+    expect(decide('write', at(`${A}/chart.svg`))).toMatchObject({
+      effect: 'allow',
+      tier: 'default',
+      winning: 'default:path',
+      matched: []
+    })
+  })
+
+  it('BP-C7 user 主体不受约束；扩展端不命中且零告警（env.host 守卫在 CEL 之前，连 vars.shuvixConfigDirs 都不读）', () => {
+    for (const path of SHUVIX_CONFIG_FILES) {
+      const asUser = decide('write', at(path), { subjectKind: 'user' })
+      expect({ path, effect: asUser.effect, matched: asUser.matched }).toEqual({
+        path,
+        effect: 'allow',
+        matched: []
+      })
+    }
+
+    // 扩展端的 getVars 刻意不给 shuvixConfigDirs：守卫若被放宽，缺的变量会被 assemble 绑成 null、
+    // 以一行 logger 告警露出来 —— 所以 evaluate 的 warn 与 logger 两个出口都钉成零调用
+    const warn = vi.fn()
+    const logWarn = vi.fn()
+    const provider = makeProvider({
+      host: 'extension',
+      getVars: () => ({
+        workspace: '',
+        toolResultsBase: '',
+        skillsDirs: [],
+        memoryDirs: [],
+        home: '',
+        systemDirs: []
+      }),
+      logger: { info: vi.fn(), warn: logWarn, error: vi.fn() }
+    })
+    for (const path of SHUVIX_CONFIG_FILES) {
+      const decision = decide('write', at(path), { provider, host: 'extension', warn })
+      expect({ path, effect: decision.effect, winning: decision.winning }).toEqual({
+        path,
+        effect: 'allow',
+        winning: 'default:path'
+      })
+    }
+    expect(warn).not.toHaveBeenCalled()
+    expect(logWarn).not.toHaveBeenCalled()
+  })
+
+  it('BP-C8 自动审查自己的零件 —— 覆盖本策略、审查员 agent、auto-review hook 的同名文件 —— 写入全部 force-ask，免询问开着也一样', () => {
+    const parts = [
+      `${SHUVIX_HOME}/policies/protect-shuvix-config.md`,
+      `${SHUVIX_HOME}/agents/permission-reviewer.md`,
+      `${SHUVIX_HOME}/hooks/auto-review.md`
+    ]
+    for (const autoAllow of [false, true]) {
+      const provider = makeProvider({ getSessionGrants: () => ({ autoAllow, allowList: [] }) })
+      for (const path of parts) {
+        const decision = decide('write', at(path), { provider })
+        expect({
+          autoAllow,
+          path,
+          effect: decision.effect,
+          tier: decision.tier,
+          winning: decision.winning
+        }).toEqual({
+          autoAllow,
+          path,
+          effect: 'ask',
+          tier: 'force-ask',
+          winning: 'protect-shuvix-config#0'
+        })
+        expect(decision.ask?.rememberEntry, path).toBeUndefined()
+      }
+    }
+  })
+
+  it('BP-C9 与 ask-on-write 同时命中：卡片只带本策略那段话、署名只有它（ask-on-write 在下一档，不贡献）；zh / ja 换语言，判决一字不变', () => {
+    const path = `${SHUVIX_HOME}/agents/a.md`
+    const en = decide('write', at(path))
+    expect(en.matched).toEqual(['protect-shuvix-config#0', 'ask-on-write#0'])
+    expect(en.prompt).toEqual({
+      text: promptOf('protect-shuvix-config', 0),
+      rules: ['protect-shuvix-config#0'],
+      policies: [displayNameOf('protect-shuvix-config')]
+    })
+    expect(en.prompt!.text).not.toContain(promptOf('ask-on-write', 0))
+
+    for (const language of ['zh', 'ja']) {
+      const decision = decide('write', at(path), {
+        provider: makeProvider({ getLanguage: () => language })
+      })
+      expect(decision.effect, language).toBe(en.effect)
+      expect(decision.tier, language).toBe(en.tier)
+      expect(decision.winning, language).toBe(en.winning)
+      expect(decision.matched, language).toEqual(en.matched)
+      expect(decision.prompt, language).toEqual({
+        text: promptOf('protect-shuvix-config', 0, language),
+        rules: ['protect-shuvix-config#0'],
+        policies: [displayNameOf('protect-shuvix-config', language)]
+      })
+      expect(decision.prompt!.text, language).not.toBe(en.prompt!.text)
+    }
+  })
+
+  it('BP-C10 宿主没供给 shuvixConfigDirs（缺键 / undefined / 空串 / 空数组）：门失效、落回 ask-on-write，而不是每次写都 force-ask；缺键与 undefined 各记恰一行', () => {
+    // 同 BP-B11 的口径：只作 inDir 目录参数的变量缺了，assemble 把它绑成 null（没有这个目录）。不绑的话
+    // 缺键报错被 fail-safe 当成命中 —— 这道 force-ask 就成了对每一次写的 force-ask，审查与免询问都免不掉
+    const notProvided =
+      "security policy 'protect-shuvix-config': vars.shuvixConfigDirs is not provided by the host; inDir treats it as no directory"
+    const variants: Array<[string, Record<string, PolicyVarValue>, string[]]> = [
+      ['缺键', withoutKeys(DESKTOP_VARS, ['shuvixConfigDirs']), [notProvided]],
+      [
+        'undefined',
+        { ...DESKTOP_VARS, shuvixConfigDirs: undefined } as unknown as Record<
+          string,
+          PolicyVarValue
+        >,
+        [notProvided]
+      ],
+      // 空串 / 空数组是宿主明说「没有这些目录」：inDir 恒不命中，无须绑定也无须告警
+      ['空串', { ...DESKTOP_VARS, shuvixConfigDirs: '' }, []],
+      ['空数组', { ...DESKTOP_VARS, shuvixConfigDirs: [] }, []]
+    ]
+    // 普通写与配置文件本身的写
+    const paths = ['/ws/f.txt', `${SHUVIX_HOME}/agents/a.md`]
+
+    for (const [label, vars, expectedLines] of variants) {
+      // 一个变体一个 logger，贯穿开 / 关两个 provider 的全部判定（去重按 logger 键控）
+      const logWarn = vi.fn()
+      const evalWarn = vi.fn()
+      const logger = { info: vi.fn(), warn: logWarn, error: vi.fn() }
+      const off = makeProvider({ getVars: () => vars, logger })
+      const on = makeProvider({
+        getVars: () => vars,
+        logger,
+        getSessionGrants: () => ({ autoAllow: true, allowList: [] })
+      })
+
+      // 评估两轮：「只记一次」要在重复评估下成立
+      for (let round = 0; round < 2; round++) {
+        for (const path of paths) {
+          // 免询问关着：普通询问（tier ask —— 审查答得了），照给「允许并记住」
+          const asked = decide('write', at(path), { provider: off, warn: evalWarn })
+          expect(asked, `${label} ${path}`).toMatchObject({
+            effect: 'ask',
+            tier: 'ask',
+            winning: 'ask-on-write#0',
+            matched: ['ask-on-write#0']
+          })
+          expect(asked.ask?.rememberEntry, `${label} ${path}`).toBeTruthy()
+          // 免询问开着：放行 —— 普通写本来就该如此；配置文件的写跟着放行，是门失效接受的代价
+          expect(
+            decide('write', at(path), { provider: on, warn: evalWarn }),
+            `${label} ${path}`
+          ).toMatchObject({ effect: 'allow', winning: 'session-grants#0' })
+        }
+      }
+
+      expect(evalWarn, label).not.toHaveBeenCalled()
+      expect(
+        logWarn.mock.calls.map((c) => String(c[0])),
+        label
+      ).toEqual(expectedLines)
+    }
+  })
+
   // ── ask-on-new-site：用户自己的 Chrome 里，第一次用到一个站点先问 ─────────────────
   //
   // 客体由宿主经 urlObjectOf 构造（{type:'url', url, scheme, host, origin, browser}）；
@@ -1787,6 +2186,34 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
     expect(failSafe[0]).toContain('treating as matched (fail-safe)')
   })
 
+  /** 沙箱启用时 ask-on-write 放行的写（PO-3；PO-W4 拿同一张表对照「再给工作区视图也逐项不变」） */
+  const SANDBOX_WRITE_ALLOWED: Array<[string, string]> = [
+    ['工作区里的源码', '/ws/src/a.ts'],
+    ['/private/tmp', '/private/tmp/x'],
+    ['本会话的临时根', '/private/tmp/shuvix-501/abcd1234/f'],
+    ['工具缓存', '/Users/u/.npm/x'],
+    // 写入禁区只是工作区**根**上的那几个名字：子目录里的 .vscode 不算
+    ['子目录里的 .vscode', '/ws/sub/.vscode/x'],
+    ['.github 不是受保护的配置目录', '/ws/.github/ci.yml'],
+    // .gitignore 只是以 .git 开头 —— 模式要求 .git 之后是 / 或结尾
+    ['.gitignore', '/ws/.gitignore'],
+    ['本会话的 artifacts', `${A}/chart.svg`]
+  ]
+
+  /** 沙箱启用时 ask-on-write 照问的写（同上） */
+  const SANDBOX_WRITE_ASKED: Array<[string, string]> = [
+    ['git hooks', '/ws/.git/hooks/pre-commit'],
+    ['大小写不同的 .GIT/config', '/ws/.GIT/config'],
+    ['子模块的 config', '/ws/.git/modules/m/config'],
+    ['子目录里的 .git 本身（gitfile）', '/ws/sub/.git'],
+    ['项目根的 .vscode', '/ws/.vscode/settings.json'],
+    ['项目根的 .mcp.json', '/ws/.mcp.json'],
+    ['launchd 的套接字目录', '/private/tmp/com.apple.launchd.x/y'],
+    ['可写根之外', '/Users/u/notes.txt'],
+    // 策略侧的 git 模式是全局的，沙箱只在 git 根里套：这里比沙箱更严（方向安全），刻意钉住
+    ['临时目录里别处克隆的仓库', '/private/tmp/clone/.git/config']
+  ]
+
   it('PO-3 ask-on-write × 沙箱启用：可写根里不问；受保护位置（git 元数据、项目 IDE / agent 配置、launchd 目录）与根外照问；凭据目录照拒', () => {
     const sinks = warnSinks()
     const opts: DecideOpts = {
@@ -1794,19 +2221,7 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
       warn: sinks.evalWarn
     }
 
-    const allowed: Array<[string, string]> = [
-      ['工作区里的源码', '/ws/src/a.ts'],
-      ['/private/tmp', '/private/tmp/x'],
-      ['本会话的临时根', '/private/tmp/shuvix-501/abcd1234/f'],
-      ['工具缓存', '/Users/u/.npm/x'],
-      // 写入禁区只是工作区**根**上的那几个名字：子目录里的 .vscode 不算
-      ['子目录里的 .vscode', '/ws/sub/.vscode/x'],
-      ['.github 不是受保护的配置目录', '/ws/.github/ci.yml'],
-      // .gitignore 只是以 .git 开头 —— 模式要求 .git 之后是 / 或结尾
-      ['.gitignore', '/ws/.gitignore'],
-      ['本会话的 artifacts', `${A}/chart.svg`]
-    ]
-    for (const [label, path] of allowed) {
+    for (const [label, path] of SANDBOX_WRITE_ALLOWED) {
       const decision = decide('write', at(path), opts)
       expect({
         label,
@@ -1816,19 +2231,7 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
       }).toEqual({ label, effect: 'allow', winning: 'default:path', matched: [] })
     }
 
-    const asked: Array<[string, string]> = [
-      ['git hooks', '/ws/.git/hooks/pre-commit'],
-      ['大小写不同的 .GIT/config', '/ws/.GIT/config'],
-      ['子模块的 config', '/ws/.git/modules/m/config'],
-      ['子目录里的 .git 本身（gitfile）', '/ws/sub/.git'],
-      ['项目根的 .vscode', '/ws/.vscode/settings.json'],
-      ['项目根的 .mcp.json', '/ws/.mcp.json'],
-      ['launchd 的套接字目录', '/private/tmp/com.apple.launchd.x/y'],
-      ['可写根之外', '/Users/u/notes.txt'],
-      // 策略侧的 git 模式是全局的，沙箱只在 git 根里套：这里比沙箱更严（方向安全），刻意钉住
-      ['临时目录里别处克隆的仓库', '/private/tmp/clone/.git/config']
-    ]
-    for (const [label, path] of asked) {
+    for (const [label, path] of SANDBOX_WRITE_ASKED) {
       const decision = decide('write', at(path), opts)
       expect({
         label,
@@ -2094,5 +2497,280 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
       "security policy 'ask-on-read': vars.sandboxReadDenied is not provided by the host; inDir treats it as no directory"
     ])
     expect(lines.join('\n')).not.toContain('sandboxActive')
+  })
+
+  // ── 工作区写入视图：ask-on-write 在工作区里的豁免与沙箱脱钩 ─────────────────────────────────────
+  //
+  // 沙箱没套上时（设置关着、探测没过、Linux），命令照样逐条询问（先交给自动审查）；但文件工具知道确切的
+  // 路径，在工作区里改文件又是工作的主体，所以宿主另给一组与沙箱无关的 `vars.workspace*`（桌面
+  // workspaceWriteView）：工作区本身、写入禁区、受保护模式 —— 后两者与沙箱视图同源。这一组钉的是：
+  // 只豁免工作区（减去受保护处），缺信息只会多问，而且指错了也抬不起 deny / force-ask 那几道门。
+
+  it('PO-W1 ask-on-write × 沙箱没套上、只给工作区视图：工作区里不问；受保护位置（git 元数据、.git 本身、项目根的 IDE / agent 配置）与工作区外照问（普通询问，给记住）；零告警', () => {
+    const sinks = warnSinks()
+    const opts: DecideOpts = {
+      provider: makeProvider({ getVars: () => DESKTOP_VARS_WORKSPACE, logger: sinks.logger }),
+      warn: sinks.evalWarn
+    }
+
+    const allowed: Array<[string, string]> = [
+      ['工作区里的源码', '/ws/src/a.ts'],
+      // 写入禁区只是工作区**根**上的那几个名字：子目录里的 .vscode 不算
+      ['子目录里的 .vscode', '/ws/sub/.vscode/x'],
+      ['.github 不是受保护的配置目录', '/ws/.github/ci.yml'],
+      // 模式要求 .git 之后是 / 或结尾
+      ['.gitignore', '/ws/.gitignore'],
+      // .git 里 git 不会自己执行 / 当配置加载的文件
+      ['.git/HEAD', '/ws/.git/HEAD'],
+      // 名叫 config 的分支：模式只认 .git/ 正下方（或子模块 / worktree 自己那一份）的 config
+      ['名为 config 的分支 ref', '/ws/.git/refs/heads/config']
+    ]
+    for (const [label, path] of allowed) {
+      const decision = decide('write', at(path), opts)
+      expect({
+        label,
+        effect: decision.effect,
+        tier: decision.tier,
+        winning: decision.winning,
+        matched: decision.matched
+      }).toEqual({ label, effect: 'allow', tier: 'default', winning: 'default:path', matched: [] })
+    }
+
+    const asked: Array<[string, string]> = [
+      ['git hooks', '/ws/.git/hooks/pre-commit'],
+      ['大小写不同的 .GIT/config', '/ws/.GIT/config'],
+      ['子模块的 config', '/ws/.git/modules/m/config'],
+      ['子目录里的 .git 本身（gitfile）', '/ws/sub/.git'],
+      ['工作区根上的 .git 本身', '/ws/.git'],
+      ['项目根的 .vscode', '/ws/.vscode/settings.json'],
+      ['项目根的 .claude', '/ws/.claude/x'],
+      ['项目根的 .mcp.json', '/ws/.mcp.json'],
+      ['项目根的 .envrc', '/ws/.envrc'],
+      // 这组只豁免工作区：沙箱启用时放行的临时目录与工具缓存（PO-3），沙箱没套上就照问
+      ['工作区外', '/Users/u/notes.txt'],
+      ['/private/tmp', '/private/tmp/x'],
+      ['工具缓存', '/Users/u/.npm/x']
+    ]
+    for (const [label, path] of asked) {
+      const decision = decide('write', at(path), opts)
+      expect({
+        label,
+        effect: decision.effect,
+        tier: decision.tier,
+        winning: decision.winning,
+        matched: decision.matched
+      }).toEqual({
+        label,
+        effect: 'ask',
+        tier: 'ask',
+        winning: 'ask-on-write#0',
+        matched: ['ask-on-write#0']
+      })
+      // 普通询问：照给「允许并记住」（也就是说审查答得了它）
+      expect(decision.ask?.rememberEntry, label).toBe(`Write(${path})`)
+    }
+
+    expect(sinks.evalWarn).not.toHaveBeenCalled()
+    expect(sinks.logWarn).not.toHaveBeenCalled()
+  })
+
+  it('PO-W2 工作区视图空着或缺着都只会多问：空视图照问；三个键都缺照问、可写范围与写入禁区各记一行；只缺受保护模式 → 区内写报错、fail-safe 成 ask 且告警含规则 id', () => {
+    // ① 空视图（DESKTOP_VARS：宿主说「这个工作区不豁免」—— Windows、工作区不适合时给的就是它）
+    const empty = warnSinks()
+    const emptyOpts: DecideOpts = {
+      provider: makeProvider({ logger: empty.logger }),
+      warn: empty.evalWarn
+    }
+    expect(decide('write', at('/ws/a.ts'), emptyOpts)).toMatchObject({
+      effect: 'ask',
+      tier: 'ask',
+      winning: 'ask-on-write#0',
+      matched: ['ask-on-write#0']
+    })
+    expect(empty.evalWarn).not.toHaveBeenCalled()
+    expect(empty.logWarn).not.toHaveBeenCalled()
+
+    // ② 三个键一个都没给：可写范围与写入禁区被绑成 null（inDir 当「没有这个目录」）→ 豁免整个不成立
+    const missing = warnSinks()
+    const missingVars = withoutKeys(DESKTOP_VARS_WORKSPACE, WORKSPACE_KEYS)
+    expect(WORKSPACE_KEYS.filter((key) => key in missingVars)).toEqual([])
+    const off = makeProvider({ getVars: () => missingVars, logger: missing.logger })
+    // 评估两轮：「只记一次」要在重复评估下成立
+    for (let round = 0; round < 2; round++) {
+      for (const path of ['/ws/a.ts', '/ws/.git/config', '/Users/u/notes.txt']) {
+        const decision = decide('write', at(path), { provider: off, warn: missing.evalWarn })
+        expect({
+          round,
+          path,
+          effect: decision.effect,
+          tier: decision.tier,
+          winning: decision.winning
+        }).toEqual({ round, path, effect: 'ask', tier: 'ask', winning: 'ask-on-write#0' })
+      }
+      // 同一条 match 里别的豁免照常
+      expect(
+        decide('write', at(`${A}/x.svg`), { provider: off, warn: missing.evalWarn })
+      ).toMatchObject({ effect: 'allow', winning: 'default:path' })
+    }
+    // 免询问开着：缺键没有变成一张免不掉的询问
+    const on = makeProvider({
+      getVars: () => missingVars,
+      logger: missing.logger,
+      getSessionGrants: () => ({ autoAllow: true, allowList: [] })
+    })
+    expect(decide('write', at('/ws/a.ts'), { provider: on, warn: missing.evalWarn })).toMatchObject(
+      { effect: 'allow', winning: 'session-grants#0' }
+    )
+    // 不是 fail-safe 蒙出来的 ask：可写范围为 null 时 && 短路，模式清单根本没被读
+    expect(missing.evalWarn).not.toHaveBeenCalled()
+    // 告警按「logger × 策略 × 目录变量」各一行；受保护模式不是 inDir 的目录参数，不在其列
+    expect(missing.logWarn.mock.calls.map((c) => String(c[0])).sort()).toEqual([
+      "security policy 'ask-on-write': vars.workspaceWritable is not provided by the host; inDir treats it as no directory",
+      "security policy 'ask-on-write': vars.workspaceWriteDenied is not provided by the host; inDir treats it as no directory"
+    ])
+
+    // ③ 只缺受保护模式（可写范围与禁区照给）：落进工作区、又不在禁区里的写读到缺键 → 求值报错 →
+    // fail-safe 当命中，照问 —— 仍是 ask 档，不会因此变成只问人的询问
+    const partial = warnSinks()
+    const partialOpts: DecideOpts = {
+      provider: makeProvider({
+        getVars: () => withoutKeys(DESKTOP_VARS_WORKSPACE, ['workspaceProtectedPatterns']),
+        logger: partial.logger
+      }),
+      warn: partial.evalWarn
+    }
+    expect(decide('write', at('/ws/src/a.ts'), partialOpts)).toMatchObject({
+      effect: 'ask',
+      tier: 'ask',
+      winning: 'ask-on-write#0'
+    })
+    // 工作区外、写入禁区里的写在读到模式清单之前就定了：照问，但不报错
+    for (const path of ['/Users/u/notes.txt', '/ws/.vscode/settings.json']) {
+      expect(decide('write', at(path), partialOpts), path).toMatchObject({
+        effect: 'ask',
+        tier: 'ask',
+        winning: 'ask-on-write#0'
+      })
+    }
+    const failSafe = partial.evalWarn.mock.calls
+      .map((c) => String(c[0]))
+      .filter((m) => m.includes('match evaluation failed'))
+    expect(failSafe).toHaveLength(1)
+    expect(failSafe[0]).toContain("'ask-on-write#0'")
+    expect(failSafe[0]).toContain('treating as matched (fail-safe)')
+    expect(partial.logWarn).not.toHaveBeenCalled()
+  })
+
+  it('PO-W3 工作区视图指错了（家目录、根目录）也抬不起别的门：凭据写与系统目录写照拒，ShuviX 配置与 bot 文件的写照问（force-ask），免询问开着也一样', () => {
+    const variants: Array<[string, Record<string, string | string[] | boolean>]> = [
+      [
+        '指到家目录，禁区与模式照 PO-W1',
+        { ...DESKTOP_VARS_WORKSPACE, workspaceWritable: ['/Users/u'] }
+      ],
+      [
+        '指到家目录，禁区与模式全空',
+        {
+          ...DESKTOP_VARS,
+          workspaceWritable: ['/Users/u'],
+          workspaceWriteDenied: [],
+          workspaceProtectedPatterns: []
+        }
+      ],
+      [
+        '指到根目录，禁区与模式全空',
+        {
+          ...DESKTOP_VARS,
+          workspaceWritable: ['/'],
+          workspaceWriteDenied: [],
+          workspaceProtectedPatterns: []
+        }
+      ]
+    ]
+    const rows: Array<
+      [string, string, SecurityDecision['effect'], SecurityDecision['tier'], string]
+    > = [
+      ['凭据目录', '/Users/u/.ssh/x', 'deny', 'deny', 'protect-credentials#0'],
+      [
+        'ShuviX 的 agent 文件',
+        `${SHUVIX_HOME}/agents/a.md`,
+        'ask',
+        'force-ask',
+        'protect-shuvix-config#0'
+      ],
+      ['bot 文件', `${SHUVIX_HOME}/bots/scout.md`, 'ask', 'force-ask', 'protect-bot-files#0'],
+      ['系统目录', '/etc/x', 'deny', 'deny', 'protect-system#0']
+    ]
+
+    for (const [label, vars] of variants) {
+      const sinks = warnSinks()
+      for (const autoAllow of [false, true]) {
+        const provider = makeProvider({
+          getVars: () => vars,
+          logger: sinks.logger,
+          getSessionGrants: () => ({ autoAllow, allowList: [] })
+        })
+        for (const [what, path, effect, tier, winning] of rows) {
+          const decision = decide('write', at(path), { provider, warn: sinks.evalWarn })
+          expect({
+            label,
+            autoAllow,
+            what,
+            effect: decision.effect,
+            tier: decision.tier,
+            winning: decision.winning
+          }).toEqual({ label, autoAllow, what, effect, tier, winning })
+        }
+      }
+
+      // 豁免确实给了：两份 force-ask 的写只剩那道门自己命中（ask-on-write 已被豁免），家目录里的普通写
+      // 不再问 —— 指错的后果就是这一格，上面那几道门不受牵连
+      const off = makeProvider({ getVars: () => vars, logger: sinks.logger })
+      const offOpts: DecideOpts = { provider: off, warn: sinks.evalWarn }
+      expect(decide('write', at(`${SHUVIX_HOME}/agents/a.md`), offOpts).matched, label).toEqual([
+        'protect-shuvix-config#0'
+      ])
+      expect(decide('write', at(`${SHUVIX_HOME}/bots/scout.md`), offOpts).matched, label).toEqual([
+        'protect-bot-files#0'
+      ])
+      expect(decide('write', at('/Users/u/notes.txt'), offOpts), label).toMatchObject({
+        effect: 'allow',
+        winning: 'default:path'
+      })
+
+      expect(sinks.evalWarn, label).not.toHaveBeenCalled()
+      expect(sinks.logWarn, label).not.toHaveBeenCalled()
+    }
+  })
+
+  it('PO-W4 沙箱启用视图与工作区视图同时给：PO-3 的放行 / 询问两张表逐项不变（工作区视图不会多放行沙箱照问的位置）', () => {
+    const sinks = warnSinks()
+    const sandboxOnly = makeProvider({ getVars: () => DESKTOP_VARS_ACTIVE, logger: sinks.logger })
+    const both = makeProvider({
+      getVars: () => ({ ...DESKTOP_VARS_ACTIVE, ...WORKSPACE_VIEW }),
+      logger: sinks.logger
+    })
+
+    type Row = [label: string, path: string, effect: SecurityDecision['effect'], winning: string]
+    const rows: Row[] = [
+      ...SANDBOX_WRITE_ALLOWED.map(([label, path]): Row => [label, path, 'allow', 'default:path']),
+      ...SANDBOX_WRITE_ASKED.map(([label, path]): Row => [label, path, 'ask', 'ask-on-write#0']),
+      // deny 一侧也不变：凭据目录（两个视图都把它列在写入禁区里）
+      ['凭据目录', '/Users/u/.ssh/x', 'deny', 'protect-credentials#0']
+    ]
+    for (const [label, path, effect, winning] of rows) {
+      const decision = decide('write', at(path), { provider: both, warn: sinks.evalWarn })
+      expect({ label, effect: decision.effect, winning: decision.winning }).toEqual({
+        label,
+        effect,
+        winning
+      })
+      // 逐字段与只给沙箱视图时是同一个判决（命中清单、档位、询问材料、提示语都算）
+      expect(decision, label).toEqual(
+        decide('write', at(path), { provider: sandboxOnly, warn: sinks.evalWarn })
+      )
+    }
+
+    expect(sinks.evalWarn).not.toHaveBeenCalled()
+    expect(sinks.logWarn).not.toHaveBeenCalled()
   })
 })

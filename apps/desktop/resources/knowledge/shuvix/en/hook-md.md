@@ -197,7 +197,7 @@ event.textMessageCount >= 3`; the titler applies the title with the `session` to
 `set-title`.
 
 `auto-review` names the `permission-reviewer` agent on every `permission.request`. That agent has
-no tools and declares `shuvix-thinking: off`; its file is the review rules. Only ShuviX
+no tools and declares `shuvix-thinking: low` (with thinking off, some models answer in prose instead of calling `next`); its file is the review rules. Only ShuviX
 dispatches it: the `agent` tool cannot, and a sub-session cannot be opened with it.
 
 A user file with the same name replaces a builtin hook entirely: to silence one, an override with

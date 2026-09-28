@@ -16,14 +16,42 @@
  *   B. sessionService 走真实 AgentSession（mock 面沿用 sessionServiceBuiltinMcpLifetime.test），
  *      证明 delete / invalidateAgent 这两条入口真的接到了上面那两个方法与 cleanupSession 上。
  * 所有调用记进同一本流水账 —— 顺序只有它能证明。
+ *
+ * 同一条收尾链上还挂着**询问点自动审查的会话内状态**（agent-runtime reviewState：连续 / 累计拒绝计数、
+ * 卡片反馈、放行标记）—— 它与决策日志同寿：
+ *   - RV-L1 AgentSession.destroy() 在关停**之后**按本会话 id 清它，恰一次（还在收尾的旧 run 可能正要
+ *           落下一次审查结论，先清后落，清理就白做了）；
+ *   - RV-L2 invalidate() 不清（会话还在：拒绝计数与卡片反馈要带进重建后的运行时），别的会话 destroy
+ *           也不清本会话；
+ *   - RV-L3 黑盒：真安全门 + 审查接缝替身连拒 3 次让本会话暂停审查，destroy 之后解除；
+ *   - SS-DEL-RV sessionService.delete 自己也清（决策日志、卡片反馈、审查计数）—— 运行时已先被
+ *           invalidate 掉、或从没建过时 destroy 根本不跑，它是唯一的清理者。
+ * `clearReviewState` 经 agent-runtime 的部分 mock 换成「记进流水账 + 穿透到真件」：流水账证明谁在什么
+ * 时候清的，真状态证明确实清掉了。reviewState 与决策日志都是进程级 Map —— 每条用例一个新会话 id，
+ * afterEach 把用过的 id 清干净。
  */
-import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest'
+import { describe, it, expect, afterEach, beforeAll, beforeEach, vi } from 'vitest'
+import {
+  clearReviewState,
+  clearSessionDecisions,
+  createSecurityContext,
+  getSessionDecisions,
+  humanFeedbackOf,
+  reviewSuspended,
+  type EnforceOutcome,
+  type PermissionReviewAnswer,
+  type SecurityContext
+} from '@shuvix/agent-runtime'
+import { createInlinePolicyMdReader } from '@shuvix/agent-runtime/security/builtinPolicies/inlineSources'
+import type { PermissionDecision } from '@shuvix/chat-protocol/types/permissionReview'
 
 const mocks = vi.hoisted(() => ({
   calls: [] as string[],
   // sandbox 模块（本文件的主角）
   unpinSession: vi.fn<(sessionId: string) => void>(),
   cleanupSession: vi.fn<(sessionId: string) => void>(),
+  // agent-runtime 的审查状态清理（记一笔，真件照清 —— 见下面的部分 mock）
+  clearReviewState: vi.fn<(sessionId: string) => void>(),
   // AgentSession 的依赖
   createAgent: vi.fn<(params: { sessionId: string }) => Promise<unknown>>(),
   getProfile: vi.fn<(name: string) => unknown>(),
@@ -45,6 +73,18 @@ vi.mock('../sandbox', () => ({
   unpinSession: mocks.unpinSession,
   cleanupSession: mocks.cleanupSession
 }))
+
+// agent-runtime 只换 clearReviewState：先记进流水账，再穿透到真件（RV-L3 / SS-DEL-RV 看的是真状态）
+vi.mock('@shuvix/agent-runtime', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@shuvix/agent-runtime')>()
+  return {
+    ...actual,
+    clearReviewState: (sessionId: string): void => {
+      mocks.clearReviewState(sessionId)
+      actual.clearReviewState(sessionId)
+    }
+  }
+})
 
 // ─── AgentSession 的 import 图 ───────────────────────────────────────────
 vi.mock('../settingsService', () => ({ settingsService: { get: () => undefined } }))
@@ -240,6 +280,7 @@ beforeEach(() => {
 
   mocks.unpinSession.mockImplementation((id) => void mocks.calls.push(`unpin:${id}`))
   mocks.cleanupSession.mockImplementation((id) => void mocks.calls.push(`cleanup:${id}`))
+  mocks.clearReviewState.mockImplementation((id) => void mocks.calls.push(`clearReview:${id}`))
   mocks.clearFileTimeSession.mockImplementation(
     (id) => void mocks.calls.push(`clearFileTime:${id}`)
   )
@@ -264,6 +305,96 @@ beforeEach(() => {
   mocks.readSessionRunConfig.mockResolvedValue({})
   mocks.filterAvailableTools.mockImplementation((tools) => tools)
 })
+
+// ─── 真审查状态的造法（RV-L3 / SS-DEL-RV）─────────────────────────────────
+
+/** 内置策略 md 的构建期内联读取口（真装配链要它；测试进程，不进桌面 bundle） */
+const INLINE_POLICY_MD = createInlinePolicyMdReader()
+
+/** 造过真审查状态 / 决策日志的会话 id —— 两者都是进程级 Map，afterEach 逐个清掉 */
+const touched = new Set<string>()
+
+afterEach(() => {
+  for (const id of touched) {
+    clearReviewState(id)
+    clearSessionDecisions(id)
+  }
+  touched.clear()
+})
+
+/**
+ * 一道真安全门：用户策略把每次工具调用都判 ask（tier ask —— 弹卡之前先交给审查接缝）。审查接缝
+ * 按 `answers` 依次作答（答完之后没有意见）；轮到人时，人在卡片上写一句反馈。
+ */
+function reviewedGate(sessionId: string, answers: PermissionDecision[]): SecurityContext {
+  touched.add(sessionId)
+  return createSecurityContext(
+    { kind: 'agent', sessionId, agentKind: 'root' },
+    { host: 'desktop', workspaceDir: '/ws' },
+    {
+      host: 'desktop',
+      pathSep: '/',
+      getVars: () => ({
+        workspace: '/ws',
+        toolResultsBase: '/tool-results',
+        skillsDirs: ['/skills'],
+        memoryDirs: [],
+        knowledgeRoot: '/kb',
+        knowledgeSessionDirs: [],
+        home: '/home/u',
+        systemDirs: []
+      }),
+      getSessionGrants: () => ({ autoAllow: false, allowList: [] }),
+      readBuiltinPolicyMd: INLINE_POLICY_MD,
+      getUserPolicies: () => [
+        {
+          name: 'gate-every-call',
+          displayName: 'gate-every-call',
+          description: '',
+          rules: [{ effect: 'ask', object: { kind: 'invocation' } }],
+          body: ''
+        }
+      ],
+      requestUserInput: async () => ({ kind: 'other', text: 'not like that' }),
+      onPermissionRequest: async (): Promise<PermissionReviewAnswer | null> => {
+        const decision = answers.shift()
+        if (!decision) return null
+        return {
+          verdict: { decision, risk: 'high', summary: 'probe', reason: `reviewer: ${decision}` },
+          source: 'auto-review'
+        }
+      }
+    }
+  )
+}
+
+/** 过一次这道门（一次工具调用的 L1 门） */
+const probeCall = (gate: SecurityContext, i: number): Promise<EnforceOutcome> =>
+  gate.enforceInvocation({ toolCallId: `tc-rv-${i}`, toolName: 'probe', onOther: 'return' })
+
+/** 审查员连拒 3 次 → 本会话的询问从此跳过审查（真状态） */
+async function suspendReview(sessionId: string): Promise<void> {
+  const gate = reviewedGate(sessionId, ['deny', 'deny', 'deny'])
+  for (let i = 0; i < 3; i++) {
+    await expect(probeCall(gate, i)).rejects.toThrow(/Blocked by the reviewer/)
+  }
+  expect(reviewSuspended(sessionId)).toBe(true)
+}
+
+/**
+ * 安全模块的全套会话内存：审查答 ask → 人在卡片上写反馈（卡片反馈 1 条），再连拒 3 次（审查暂停）；
+ * 决策日志因此 4 条。
+ */
+async function seedSecurityMemory(sessionId: string): Promise<void> {
+  const gate = reviewedGate(sessionId, ['ask', 'deny', 'deny', 'deny'])
+  await expect(probeCall(gate, 0)).resolves.toEqual({ status: 'feedback', text: 'not like that' })
+  for (let i = 1; i <= 3; i++) {
+    await expect(probeCall(gate, i)).rejects.toThrow(/Blocked by the reviewer/)
+  }
+  expect(humanFeedbackOf(sessionId)).toHaveLength(1)
+  expect(getSessionDecisions(sessionId)).toHaveLength(4)
+  expect(reviewSuspended(sessionId)).toBe(true)
+}
 
 // ─── 层 A：AgentSession ────────────────────────────────────────────────
 
@@ -319,6 +450,58 @@ describe('HG-2 AgentSession —— 失效 / 销毁都解钉，且排在关停之
     expect(mocks.unpinSession.mock.calls.every(([id]) => id === `${SID}-other`)).toBe(true)
     await mine.destroy()
     expect(mocks.unpinSession.mock.calls.filter(([id]) => id === SID)).toHaveLength(1)
+  })
+})
+
+describe('RV-L AgentSession —— 询问点审查的会话内状态与决策日志同寿', () => {
+  it('RV-L1 destroy()：abort 还挂着时不清；关停之后按本会话 id 清审查状态，恰一次', async () => {
+    const session = await createSession(SID)
+    abortMode = 'hold'
+
+    const pending = session.destroy()
+    await settle()
+    // 旧 run 还没停下：它可能正要落下一次审查结论（计数 +1）—— 先清后落，清理就白做了
+    expect(mocks.calls).toContain(`abort:start:${SID}`)
+    expect(mocks.clearReviewState).not.toHaveBeenCalled()
+
+    abortGate.resolve()
+    await pending
+
+    expect(mocks.clearReviewState.mock.calls).toEqual([[SID]])
+    expect(idx(`abort:end:${SID}`)).toBeGreaterThanOrEqual(0)
+    expect(idx(`abort:end:${SID}`)).toBeLessThan(idx(`clearReview:${SID}`))
+  })
+
+  it('RV-L1 destroy()：abort 抛错也照样清（关停失败只记日志，收尾链路要走完）', async () => {
+    const session = await createSession(SID)
+    abortMode = 'throw'
+
+    await expect(session.destroy()).resolves.toBeUndefined()
+
+    expect(mocks.clearReviewState.mock.calls).toEqual([[SID]])
+    expect(idx(`abort:threw:${SID}`)).toBeLessThan(idx(`clearReview:${SID}`))
+  })
+
+  it('RV-L2 invalidate() 不清（会话还在：拒绝计数与卡片反馈要带进重建后的运行时）；别的会话 destroy 也不清本会话', async () => {
+    const mine = await createSession(SID)
+    const other = await createSession(`${SID}-other`)
+    await suspendReview(SID)
+
+    await mine.invalidate()
+    await other.destroy()
+
+    expect(mocks.clearReviewState.mock.calls).toEqual([[`${SID}-other`]])
+    // 真状态也还在：连拒 3 次换来的「直接问人」没有因为一次回退重建、或别人的销毁被悄悄解除
+    expect(reviewSuspended(SID)).toBe(true)
+  })
+
+  it('RV-L3 黑盒：审查接缝替身经真安全门连拒 3 次 → 本会话暂停审查；destroy 之后 reviewSuspended 回到 false', async () => {
+    const session = await createSession(SID)
+    await suspendReview(SID)
+
+    await session.destroy()
+
+    expect(reviewSuspended(SID)).toBe(false)
   })
 })
 
@@ -381,4 +564,52 @@ describe('HG-2 sessionService —— delete 清临时目录，invalidateAgent �
     expect(idx(`abort:end:${SID}`)).toBeLessThan(idx(`unpin:${SID}`))
     expect(mocks.cleanupSession).not.toHaveBeenCalled()
   })
+})
+
+describe('SS-DEL-RV sessionService.delete —— 安全模块的会话内存随会话一起删', () => {
+  it.each([
+    [
+      // 没有 AgentSession，destroy 不会跑：delete 是唯一的清理者
+      '从没建过运行时',
+      async (): Promise<void> => {},
+      false
+    ],
+    [
+      // SessionManager.remove 没有实例就提前返回，destroy 同样不跑
+      '运行时已先被 invalidate 掉',
+      async (): Promise<void> => {
+        await sessionService.ensureAgentSession(SID)
+        await sessionService.invalidateAgent(SID)
+      },
+      false
+    ],
+    [
+      '运行时还活着',
+      async (): Promise<void> => {
+        await sessionService.ensureAgentSession(SID)
+      },
+      true
+    ]
+  ] as const)(
+    'SS-DEL-RV delete（%s）：决策日志、卡片反馈、审查暂停全部清掉',
+    async (_label, arrange, runtimeAlive) => {
+      seedSession(SID)
+      await arrange()
+      await seedSecurityMemory(SID)
+
+      await sessionService.delete(SID)
+
+      expect(getSessionDecisions(SID)).toEqual([])
+      expect(humanFeedbackOf(SID)).toEqual([])
+      expect(reviewSuspended(SID)).toBe(false)
+      if (runtimeAlive) {
+        // destroy 与 delete 各清一遍也无妨（重复清理无害）—— 只要清的都是这一条
+        expect(mocks.clearReviewState.mock.calls.length).toBeGreaterThanOrEqual(1)
+        expect(mocks.clearReviewState.mock.calls.every(([id]) => id === SID)).toBe(true)
+      } else {
+        // 没有活着的运行时：清掉它的只可能是 delete 自己
+        expect(mocks.clearReviewState.mock.calls).toEqual([[SID]])
+      }
+    }
+  )
 })
