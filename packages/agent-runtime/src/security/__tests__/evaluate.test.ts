@@ -716,6 +716,7 @@ describe('evaluate — 命中提示语（prompt）', () => {
   it('EV-P5 命中规则一条 prompt 都没有 → prompt 缺席，其余字段逐字段照旧', () => {
     expect(evaluate([promptRule('a1', 'ask'), promptRule('a2', 'ask')], makeRequest())).toEqual({
       effect: 'ask',
+      tier: 'ask',
       matched: ['a1', 'a2'],
       winning: 'a1',
       reason: undefined,
@@ -845,7 +846,12 @@ describe('evaluate — 命中提示语（prompt）', () => {
       [promptRule('a1', 'ask', 'never reached', { match: 'false' })],
       makeRequest()
     )
-    expect(decision).toEqual({ effect: 'allow', matched: [], winning: 'default:path' })
+    expect(decision).toEqual({
+      effect: 'allow',
+      tier: 'default',
+      matched: [],
+      winning: 'default:path'
+    })
   })
 })
 
@@ -907,7 +913,12 @@ describe('evaluate — opts.realPath（inDir 按位置比较）', () => {
     expect(realPath).toHaveBeenCalledWith('/ws/link')
 
     const written = evaluate(rules, request)
-    expect(written).toEqual({ effect: 'allow', matched: [], winning: 'default:path' })
+    expect(written).toEqual({
+      effect: 'allow',
+      tier: 'default',
+      matched: [],
+      winning: 'default:path'
+    })
 
     // 分工：evaluate 不改写客体 —— ask 材料照客体上的 path 出（换成真实去处是门面的事）
     const asked = evaluate([ask('a1', "inDir(object.path, '/protected')")], request, { realPath })

@@ -79,7 +79,8 @@ export function wrapToolOutput<P extends TSchema, D>(
         // 让这道门对它们不再只有「有人要调工具」这一句话可说
         mcp: (tool as Partial<McpAgentToolMeta>).mcpMeta,
         abortError: TOOL_ABORTED,
-        onOther: 'return'
+        onOther: 'return',
+        signal
       })
       if (outcome.status === 'feedback') {
         return {

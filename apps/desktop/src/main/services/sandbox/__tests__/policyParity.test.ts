@@ -22,7 +22,7 @@ import {
 } from '@shuvix/agent-runtime'
 import { createInlinePolicyMdReader } from '@shuvix/agent-runtime/security/builtinPolicies/inlineSources'
 import { isReadBlocked, isWriteBlocked } from '../classify'
-import { buildSandboxSpec, sessionTmpName, toPolicyView } from '../spec'
+import { buildSandboxSpec, protectedWritePatterns, sessionTmpName, toPolicyView } from '../spec'
 import type { SandboxHostPaths, SandboxSessionInput, SandboxSpec } from '../types'
 
 const SID = 'sess-1'
@@ -86,6 +86,14 @@ function contextFor(
       sessionArtifactsDir: `${paths.shuvixHome}/artifacts/${SID}`,
       home: paths.home,
       systemDirs: [],
+      // ShuviX 自己的规矩所在（protect-shuvix-config）
+      shuvixConfigDirs: ['policies', 'agents', 'hooks', 'skills'].map(
+        (d) => `${paths.shuvixHome}/${d}`
+      ),
+      // 与沙箱开没开无关的工作区写入视图（生产 workspaceWriteView 在非 Windows 上给的就是这一组）
+      workspaceWritable: [spec.workingDirectory],
+      workspaceWriteDenied: spec.writeDeniedFinal,
+      workspaceProtectedPatterns: protectedWritePatterns(spec),
       ...view
     }),
     getSessionGrants: () => ({ autoAllow, allowList: [] }),
@@ -209,16 +217,15 @@ describe('PP-1 写的健全性：文件工具免询问的写，受限命令一�
     expect(isWriteBlocked(spec, path)).toBe(false)
   })
 
-  it('PP-1 严格方向（钉住）：e2e 布局的临时工作区 —— userData 落在 /private/tmp 根里、列进写拒，write 要问而 bash 能写', () => {
+  it('PP-1 e2e 布局的临时工作区：沙箱视图把 userData 列进写拒（它落在 /private/tmp 根里），但工作区写入视图放行工作区本身 —— write 与 bash 两面一致', () => {
+    // 2026-09-28 之前这条钉的是「write 要问而 bash 能写」的严格方向；与沙箱无关的工作区写入视图
+    // 把工作区本身放回来之后，两面一致了
     const paths = LAYOUTS.e2e
     const ws = `${paths.userData}/temp_workspace/${SID}`
     const spec = specFor(paths, { workingDirectory: ws })
     const ctx = contextFor(paths, spec)
     const path = `${ws}/a.txt`
-    expect(ctx.evaluate('write', { type: 'path', path })).toMatchObject({
-      effect: 'ask',
-      winning: 'ask-on-write#0'
-    })
+    expect(ctx.evaluate('write', { type: 'path', path }).effect).toBe('allow')
     expect(isWriteBlocked(spec, path)).toBe(false)
     // 生产布局下同一种会话两面一致：都放行
     const prod = LAYOUTS.prod

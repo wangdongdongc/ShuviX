@@ -230,6 +230,7 @@ export function evaluate(
     const effect = TIER_EFFECT[tier]
     return {
       effect,
+      tier,
       matched,
       winning: winner.id,
       reason: effect === 'deny' ? `Denied by security policy rule '${winner.id}'` : undefined,
@@ -242,6 +243,7 @@ export function evaluate(
   // 未命中任何规则：放行（无策略 = 自由；防护全部以显式策略表达）
   return {
     effect: 'allow',
+    tier: 'default',
     matched,
     winning: `default:${request.object.type}`
   }

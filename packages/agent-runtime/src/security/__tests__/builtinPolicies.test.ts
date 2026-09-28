@@ -59,12 +59,12 @@ const byName = (name: string): ParsedPolicyFile => {
 }
 
 describe('buildBuiltinPolicies', () => {
-  it('BP-1 不 throw；恰 12 份；名字与 SPECS 一致且互异', () => {
+  it('BP-1 不 throw；恰 13 份；名字与 SPECS 一致且互异', () => {
     expect(() => buildBuiltinPolicies({ readMd: INLINE_POLICY_MD })).not.toThrow()
     const policies = buildBuiltinPolicies({ readMd: INLINE_POLICY_MD })
-    expect(policies).toHaveLength(12)
+    expect(policies).toHaveLength(13)
     expect(policies.map((p) => p.name)).toEqual(BUILTIN_POLICY_SPECS.map((s) => s.name))
-    expect(new Set(policies.map((p) => p.name)).size).toBe(12)
+    expect(new Set(policies.map((p) => p.name)).size).toBe(13)
   })
 
   it('BP-1b 每份语言文件都声明 shuvix-builtin: true（新增内置策略漏写即红）', () => {
@@ -154,7 +154,7 @@ describe('buildBuiltinPolicies', () => {
     expect(rule.match).toContain('!inDir(object.path, vars.sessionArtifactsDir)')
   })
 
-  it('BP-3 ask-on-write：ask × write × path，desktop 限定；收窄是本会话 artifacts 与沙箱可写范围（受保护处除外）', () => {
+  it('BP-3 ask-on-write：ask × write × path，desktop 限定；收窄是本会话 artifacts、沙箱可写范围与工作目录（受保护处除外）', () => {
     const policy = byName('ask-on-write')
     expect(policy.rules).toHaveLength(1)
     expect(policy.scope).toEqual({
@@ -169,7 +169,11 @@ describe('buildBuiltinPolicies', () => {
         '!inDir(object.path, vars.sessionArtifactsDir)' +
         ' && !(inDir(object.path, vars.sandboxWritableRoots)' +
         ' && !inDir(object.path, vars.sandboxWriteDenied)' +
-        ' && !vars.sandboxProtectedPatterns.exists(p, object.path.matches(p)))'
+        ' && !vars.sandboxProtectedPatterns.exists(p, object.path.matches(p)))' +
+        // 与沙箱无关的工作目录豁免（2026-09-28：沙箱没套上时文件工具在工作区里写也不再逐次问）
+        ' && !(inDir(object.path, vars.workspaceWritable)' +
+        ' && !inDir(object.path, vars.workspaceWriteDenied)' +
+        ' && !vars.workspaceProtectedPatterns.exists(p, object.path.matches(p)))'
     })
     expect(policy.rules[0].prompt).toBeTruthy()
     // 两处收窄：本会话自己的 artifacts（认领下来的图与交互块，用户 2026-09-24 裁决免询问），以及
@@ -552,6 +556,17 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
     sandboxProtectedPatterns: [],
     sandboxReadDenied: [],
     sandboxReadAllowed: [],
+    // 与沙箱无关的工作区写入视图（桌面 getVars 展开 sandbox.workspaceWriteView）：这里给「不豁免」的一组
+    workspaceWritable: [],
+    workspaceWriteDenied: [],
+    workspaceProtectedPatterns: [],
+    // ShuviX 自己的规矩所在（protect-shuvix-config）
+    shuvixConfigDirs: [
+      '/Users/u/.shuvix/policies',
+      '/Users/u/.shuvix/agents',
+      '/Users/u/.shuvix/hooks',
+      '/Users/u/.shuvix/skills'
+    ],
     systemDirs: []
   }
 
@@ -1353,14 +1368,17 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
       ['根的上一级（策略目录）', '/Users/u/.shuvix/policies/ask-on-write.md']
     ]
     for (const [label, path] of rows) {
+      // 策略目录还落在 protect-shuvix-config 里：照样问，而且是只问人的 force-ask
+      const shuvixConfig = path.startsWith('/Users/u/.shuvix/policies/')
       const write = decide('write', at(path))
       expect({ label, effect: write.effect, winning: write.winning }).toEqual({
         label,
         effect: 'ask',
-        winning: 'ask-on-write#0'
+        winning: shuvixConfig ? 'protect-shuvix-config#0' : 'ask-on-write#0'
       })
-      // 普通询问的样子：给「允许并记住」（不是 force-ask 那种不给按钮的卡）
-      expect(write.ask?.rememberEntry, label).toBeTruthy()
+      // 普通询问的样子：给「允许并记住」；force-ask 那种卡不给按钮（记下了也压不过它）
+      if (shuvixConfig) expect(write.ask?.rememberEntry, label).toBeUndefined()
+      else expect(write.ask?.rememberEntry, label).toBeTruthy()
 
       const read = decide('read', at(path))
       expect({ label, effect: read.effect, winning: read.winning }).toEqual({

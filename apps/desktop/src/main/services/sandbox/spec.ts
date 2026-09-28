@@ -178,6 +178,19 @@ export function buildSandboxSpec(
  *   - 读：敏感清单里、且不在放回范围里的位置要问；cli-token 额外列入——沙箱为了让
  *     shuvix CLI 能用而放它可读，但没有理由让 read 工具把它读进模型上下文
  */
+/**
+ * 写入要照旧询问的路径模式（JS 方言）：git 自己会执行 / 加载的元数据，`.git` 这一项本身，以及规格里
+ * 的其余拒写模式。沙箱视图与工作区写入视图（workspaceWriteView）共用这一份 —— 两边的「受保护」
+ * 必须是同一组。
+ */
+export function protectedWritePatterns(spec: SandboxSpec): string[] {
+  return [
+    ...GIT_PATTERNS.map((p) => p.js),
+    GIT_ENTRY_PATTERN.js,
+    ...spec.writeDeniedPatterns.map((p) => p.js)
+  ]
+}
+
 export function toPolicyView(spec: SandboxSpec, cliToken: string): SessionSandboxView {
   // 实际可写的根：落在整片拒写里、又没被放回的根（如 ~/.shuvix/policies 里的写授权）不算
   const effectiveRoots = spec.writableRoots.filter(
@@ -190,11 +203,7 @@ export function toPolicyView(spec: SandboxSpec, cliToken: string): SessionSandbo
     sandboxActive: true,
     sandboxWritableRoots: effectiveRoots,
     sandboxWriteDenied: dedupe([...deniedInsideRoots, ...spec.writeDeniedFinal]),
-    sandboxProtectedPatterns: [
-      ...GIT_PATTERNS.map((p) => p.js),
-      GIT_ENTRY_PATTERN.js,
-      ...spec.writeDeniedPatterns.map((p) => p.js)
-    ],
+    sandboxProtectedPatterns: protectedWritePatterns(spec),
     sandboxReadDenied: dedupe([...spec.readDenied, ...spec.readDeniedFinal, cliToken]),
     sandboxReadAllowed: [...spec.readAllowBack]
   }

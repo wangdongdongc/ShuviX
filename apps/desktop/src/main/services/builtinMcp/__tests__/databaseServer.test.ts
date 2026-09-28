@@ -621,7 +621,7 @@ describe('database 内置服务器 query 的安全门', () => {
     })
   })
 
-  it('DBSV-17 opts 恰是那六项', async () => {
+  it('DBSV-17 opts 恰是那七项', async () => {
     saveDefaults()
     const { client } = await open()
 
@@ -635,6 +635,8 @@ describe('database 内置服务器 query 的安全门', () => {
       toolName: 'mcp__database__query',
       description: 'count users',
       abortError: 'Aborted',
+      // 这次调用的中止信号：询问点的审查随它一起中止
+      signal: expect.any(AbortSignal),
       // 用户选「其它」：不执行，反馈作为正常结果带回
       onOther: 'return',
       // 没有输入面板时 fail-closed —— 一条可写 SQL 不能因为「问不着」就自己跑了

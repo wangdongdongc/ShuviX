@@ -21,6 +21,9 @@ has write access, it asks you statement by statement.
 
 - Read-only connections are not gated: the database itself refuses writes.
 - It does not tell reads from writes: this policy does not analyze the SQL.
+- It does not always reach you: with the automatic review on, a reviewing
+  agent answers first — it lets ordinary work through, refuses what is
+  clearly harmful and puts the rest in front of you with its opinion.
 - Once you turn the auto-allow switch on, another builtin policy —
   session-grants — takes over and skips the ask.
 

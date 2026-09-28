@@ -78,6 +78,17 @@ function makeProvider(
       sandboxProtectedPatterns: [],
       sandboxReadDenied: [],
       sandboxReadAllowed: [],
+      // 与沙箱无关的工作区写入视图：这里给「不豁免」的一组
+      workspaceWritable: [],
+      workspaceWriteDenied: [],
+      workspaceProtectedPatterns: [],
+      // ShuviX 自己的规矩所在（protect-shuvix-config）
+      shuvixConfigDirs: [
+        '/home/u/.shuvix/policies',
+        '/home/u/.shuvix/agents',
+        '/home/u/.shuvix/hooks',
+        '/home/u/.shuvix/skills'
+      ],
       systemDirs: []
     }),
     getSessionGrants: () => grants,
@@ -1804,8 +1815,14 @@ describe('createSecurityContext — enforceCommand 的结构属性接线', () =>
     )
 
     expect(captured).toBeDefined()
-    // sandboxed 是宿主上报的标量事实（恒有值），可枚举；解析层的结构属性仍然不可枚举
-    expect(Object.keys(captured!)).toEqual(['type', 'command', 'channel', 'sandboxed'])
+    // sandboxed / unconfinedReason 是宿主上报的标量事实（恒有值），可枚举；解析层的结构属性仍然不可枚举
+    expect(Object.keys(captured!)).toEqual([
+      'type',
+      'command',
+      'channel',
+      'sandboxed',
+      'unconfinedReason'
+    ])
     const serialized = JSON.stringify(captured)
     for (const key of ['parsed', 'commands', 'writes']) {
       expect(serialized).not.toContain(key)
@@ -2041,7 +2058,7 @@ describe('createSecurityContext — enforceCommand 的结构属性接线', () =>
       expect([logged.effect, logged.winning]).toEqual(['ask', 'ask-on-command#0'])
     })
 
-    it('CT-PS2 powershell 的命令客体：只有 type / command / channel / sandboxed 四个可枚举键（没有 host），结构属性来自 PowerShell 扫描器', async () => {
+    it('CT-PS2 powershell 的命令客体：只有 type / command / channel / sandboxed / unconfinedReason 五个可枚举键（没有 host），结构属性来自 PowerShell 扫描器', async () => {
       const analyze = vi.fn(() => redirectToDiskFacts())
       const ensureReady = vi.fn(async () => {})
       const probe = capturingProvider(analyze, ensureReady)
@@ -2056,7 +2073,13 @@ describe('createSecurityContext — enforceCommand 的结构属性接线', () =>
       ).rejects.toThrow('block-catastrophic-commands#1')
       const object = probe.captured()
       expect(object).toBeDefined()
-      expect(Object.keys(object!)).toEqual(['type', 'command', 'channel', 'sandboxed'])
+      expect(Object.keys(object!)).toEqual([
+        'type',
+        'command',
+        'channel',
+        'sandboxed',
+        'unconfinedReason'
+      ])
       expect(object!.channel).toBe('powershell')
       expect('host' in object!).toBe(false)
       expect(object!.parsed).toBe(true)
@@ -3108,9 +3131,15 @@ describe('createSecurityContext — 真实路径（provider.realPath）', () => 
     )
 
     await ctx.enforceCommand(COMMAND_INPUT, { toolCallId: 'c1', toolName: 'bash' })
-    // 客体还是门面造出来的那一个：枚举面只有三个标量，结构属性仍是非枚举的惰性 getter
+    // 客体还是门面造出来的那一个：枚举面只有宿主给的标量，结构属性仍是非枚举的惰性 getter
     const commandObject = probe.seen()!
-    expect(Object.keys(commandObject)).toEqual(['type', 'command', 'channel', 'sandboxed'])
+    expect(Object.keys(commandObject)).toEqual([
+      'type',
+      'command',
+      'channel',
+      'sandboxed',
+      'unconfinedReason'
+    ])
     expect('requestedPath' in commandObject).toBe(false)
     // 惰性仍在：只有 block-catastrophic-commands 读了它，且记忆化到一次
     expect(analyze).toHaveBeenCalledTimes(1)

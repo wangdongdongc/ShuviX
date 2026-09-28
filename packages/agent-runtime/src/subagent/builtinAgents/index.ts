@@ -152,6 +152,18 @@ export const KNOWLEDGE_WRITER_SPEC: BuiltinProfileSpec = {
 }
 
 /**
+ * 权限审查员 —— 询问点自动审查的执行侧（设计稿 docs/permission-review-design.md）：内置判定型 hook
+ * `auto-review` 在策略判出 ask、弹卡片之前派发它，它经 `next` 交回 allow / ask / deny。
+ * 不声明任何工具（只有结果契约附带的 `next`）、不要注入，`shuvix-thinking: off` —— 系统提示词就是
+ * 那段审查规则，一次请求出结论。名字刻意不叫 `reviewer`：用户照着说明书里的示例建一份代码审查
+ * agent 就会按名覆盖它。
+ */
+export const PERMISSION_REVIEWER_PROFILE_NAME = 'permission-reviewer'
+export const PERMISSION_REVIEWER_SPEC: BuiltinProfileSpec = {
+  name: PERMISSION_REVIEWER_PROFILE_NAME
+}
+
+/**
  * 内置 spec 全集（五个基座档案 work / chat / notebook / bot / tab 居首，其后为可派发的具名 agent；
  * widget 依赖宿主根目录参数，缺参自动跳过）
  */
@@ -166,7 +178,8 @@ export const BUILTIN_PROFILE_SPECS: readonly BuiltinProfileSpec[] = [
   EXPLORE_SPEC,
   WIDGET_SPEC,
   TITLER_SPEC,
-  KNOWLEDGE_WRITER_SPEC
+  KNOWLEDGE_WRITER_SPEC,
+  PERMISSION_REVIEWER_SPEC
 ]
 
 /**
@@ -186,6 +199,15 @@ export const BASE_PROFILE_NAMES: ReadonlySet<string> = new Set([
   BOT_PROFILE_NAME,
   TAB_PROFILE_NAME,
   COEDIT_PROFILE_NAME
+])
+
+/**
+ * 只由宿主派发的档案 —— 比基座更严：派发工具**按名也解析不到**（基座只是不进可用名单），子会话的
+ * `agent_profile` 也不收。今天只有权限审查员：被审的 agent 要是能派发它，就能反复拿它试探
+ * 「哪种写法能过审」。hook 仍可点名它（内置 `auto-review` 正是这么派发的）。
+ */
+export const HOST_ONLY_PROFILE_NAMES: ReadonlySet<string> = new Set([
+  PERMISSION_REVIEWER_PROFILE_NAME
 ])
 
 /** 按宿主 deps 现算全部可用内置档案（文案按当前语言解析） */

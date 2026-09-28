@@ -1,5 +1,6 @@
 /**
- * 内置 hook（builtinHooks/）—— 目前只有 auto-title。
+ * 内置 hook（builtinHooks/）—— auto-title，以及判定型的 auto-review（询问点的自动审查）。auto-review
+ * 在这里只钉清单、交付与结构（HB-10…12）；判定型的派发与合并见 hookDecide.test.ts。
  *
  * md 是唯一事实源（随包发布成文件，运行时经宿主注入的 readMd 现读；本测试注入构建期内联
  * 读取口），所以断言打在**解析后的 hook** 与盘上原文上：结构钉板（agent / 绑定 / 条件）、
@@ -8,7 +9,12 @@
  */
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { AUTO_TITLE_HOOK_SPEC, BUILTIN_HOOK_SPECS, buildBuiltinHooks } from '../builtinHooks'
+import {
+  AUTO_REVIEW_HOOK_SPEC,
+  AUTO_TITLE_HOOK_SPEC,
+  BUILTIN_HOOK_SPECS,
+  buildBuiltinHooks
+} from '../builtinHooks'
 import { createInlineHookMdReader, inlinedHookMdFileNames } from '../builtinHooks/inlineSources'
 import { parseHookDefinitionFile, type ParsedHookFile } from '../hookFile'
 import { evaluateWhen } from '../when'
@@ -61,16 +67,23 @@ const parseSource = (raw: string): ParsedHookFile => {
 }
 
 describe('内置 hook 清单与交付', () => {
-  it('HB-1 只有 auto-title；三语言文件与盘上原文逐字一致（经读取口）；buildBuiltinHooks 恰一份', () => {
-    expect(BUILTIN_HOOK_SPECS.map((spec) => spec.name)).toEqual(['auto-title'])
+  it('HB-1 auto-title 与 auto-review 两份（auto-title 居首）；三语言文件与盘上原文逐字一致（经读取口）；buildBuiltinHooks 恰两份', () => {
+    expect(BUILTIN_HOOK_SPECS.map((spec) => spec.name)).toEqual(['auto-title', 'auto-review'])
     expect(BUILTIN_HOOK_SPECS[0]).toBe(AUTO_TITLE_HOOK_SPEC)
-    // 内联表恰好是 auto-title 的三语言三份 —— 孤儿 md 会随包发布但运行时读不到
-    expect(inlinedHookMdFileNames().sort()).toEqual(LANGS.map(mdFileName).sort())
+    expect(BUILTIN_HOOK_SPECS[1]).toBe(AUTO_REVIEW_HOOK_SPEC)
+    // 内联表恰好是两份 hook 的三语言各三份 —— 孤儿 md 会随包发布但运行时读不到
+    const reviewFileName = (lang: string): string =>
+      lang === 'en' ? 'auto-review.md' : `auto-review.${lang}.md`
+    expect(inlinedHookMdFileNames().sort()).toEqual(
+      [...LANGS.map(mdFileName), ...LANGS.map(reviewFileName)].sort()
+    )
     for (const lang of LANGS) expect(INLINE_HOOK_MD(mdFileName(lang))).toBe(DISK[lang])
+    for (const lang of LANGS) {
+      expect(INLINE_HOOK_MD(reviewFileName(lang))).toBe(onDisk(reviewFileName(lang)))
+    }
 
     const built = build()
-    expect(built).toHaveLength(1)
-    expect(built[0].name).toBe('auto-title')
+    expect(built.map((hook) => hook.name)).toEqual(['auto-title', 'auto-review'])
   })
 
   it('HB-2 en 结构钉板：派 titler、两条绑定与条件、显示名与描述、正文点名字段且无模板语法', () => {
@@ -244,5 +257,72 @@ describe('HB-8 端到端：auto-title 经真 runner 派发 titler', () => {
     await h.waitEnd(4)
     expect(h.runTask).toHaveBeenCalledTimes(4)
     expect(h.skips()).toEqual([])
+  })
+})
+
+describe('auto-review（判定型）结构钉板', () => {
+  const reviewFileName = (lang: string): string =>
+    lang === 'en' ? 'auto-review.md' : `auto-review.${lang}.md`
+  const REVIEW_DISK: Record<(typeof LANGS)[number], string> = {
+    en: onDisk(reviewFileName('en')),
+    zh: onDisk(reviewFileName('zh')),
+    ja: onDisk(reviewFileName('ja'))
+  }
+  const reviewOf = (language?: string): ParsedHookFile => {
+    const review = build(language).find((hook) => hook.name === 'auto-review')
+    expect(review, 'auto-review in buildBuiltinHooks').toBeDefined()
+    return review!
+  }
+  const parseReview = (raw: string): ParsedHookFile => {
+    const warns: string[] = []
+    const parsed = parseHookDefinitionFile(raw, 'auto-review', (m) => warns.push(m))
+    expect(warns).toEqual([])
+    expect(parsed).not.toBeNull()
+    return parsed!
+  }
+
+  it('HB-10 en：派 permission-reviewer、恰一条 permission.request 绑定（没有 when）、显示名与描述、正文点名 next 且无模板语法', () => {
+    const review = reviewOf('en')
+    expect(review.agent).toBe('permission-reviewer')
+    expect(review.bindings).toStrictEqual([{ trigger: 'permission.request' }])
+    expect('when' in review.bindings[0]).toBe(false)
+    expect(review.displayName).toBe('Automatic Review of Approval Requests')
+    expect(review.description).toBe(
+      'Before an approval card is shown, the permission reviewer answers it on your behalf — it lets ordinary work through, refuses what is clearly harmful and leaves the rest to you.'
+    )
+    expect(review.prompt).toContain('`next`')
+    expect(review.prompt).not.toContain('{{')
+    expect(review.prompt).not.toContain('}}')
+  })
+
+  it.each(LANGS)('HB-11 %s：零告警解析；带 shuvix-builtin 与 name 行', (lang) => {
+    parseReview(INLINE_HOOK_MD(reviewFileName(lang))!)
+    const lines = REVIEW_DISK[lang].split(/\r?\n/)
+    expect(lines).toContain('shuvix-builtin: true')
+    expect(lines).toContain('name: auto-review')
+  })
+
+  it('HB-11 本地化只动 displayName / description：其余字段（含正文）与 en 深相等；构建按语言挑中对应那份', () => {
+    const en = parseReview(REVIEW_DISK.en)
+    const zh = parseReview(REVIEW_DISK.zh)
+    const ja = parseReview(REVIEW_DISK.ja)
+    expect(unlocalized(zh)).toStrictEqual(unlocalized(en))
+    expect(unlocalized(ja)).toStrictEqual(unlocalized(en))
+    expect(zh.prompt).toBe(en.prompt)
+    expect(ja.prompt).toBe(en.prompt)
+    expect(new Set([en.displayName, zh.displayName, ja.displayName]).size).toBe(3)
+    expect(new Set([en.description, zh.description, ja.description]).size).toBe(3)
+
+    expect(reviewOf('zh-CN')).toStrictEqual(zh)
+    expect(reviewOf('ja')).toStrictEqual(ja)
+    expect(reviewOf('fr')).toStrictEqual(en)
+  })
+
+  it('HB-12 派发的 agent 是内置档案，且不是基座（基座点名不了，hook 必须派得动它）', () => {
+    const review = reviewOf()
+    expect(
+      buildBuiltinProfiles({ readMd: createInlineMdReader() }).map((profile) => profile.name)
+    ).toContain(review.agent)
+    expect(BASE_PROFILE_NAMES.has(review.agent)).toBe(false)
   })
 })

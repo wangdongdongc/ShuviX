@@ -32,6 +32,9 @@ that went on to another site by itself, is not.
   asks again.
 - It does not look inside pages: once a site is allowed, what the agent does
   there in that conversation runs without asking.
+- It does not always reach you: with the automatic review on, a reviewing
+  agent answers first — it lets ordinary work through, refuses what is
+  clearly harmful and puts the rest in front of you with its opinion.
 - Once you turn the auto-allow switch on, another builtin policy —
   session-grants — takes over and skips the ask.
 

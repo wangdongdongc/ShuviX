@@ -18,7 +18,7 @@ import {
   type TProperties,
   type TString
 } from 'typebox'
-import { BaseTool } from '@shuvix/agent-runtime'
+import { BaseTool, type UnconfinedReason } from '@shuvix/agent-runtime'
 import type { AgentToolResult } from '@earendil-works/pi-agent-core'
 import type { BashToolDetails } from '@shuvix/chat-protocol/types/chatMessage'
 import { collapseProgressOutput, type ShellKind } from '../utils/toolUtils/shell'
@@ -29,7 +29,7 @@ import {
   TOOL_ABORTED,
   type ToolContext
 } from '../services/toolContext'
-import { planFor, type SandboxPlan } from '../services/sandbox'
+import { planFor, whyUnconfined, type SandboxPlan } from '../services/sandbox'
 import {
   runCommand,
   listBgTasks,
@@ -101,6 +101,26 @@ export function shellCommandParamsSchema(text: {
     )
   }
   return Type.Object(properties) as unknown as ShellCommandParamsSchema
+}
+
+/**
+ * 这条命令为什么没进沙箱 —— 上报到命令客体（`unconfinedReason`），审查员据此分得清「模型申请越界」
+ * 与「这台机器本来就没有沙箱」。工具实例是否套沙箱在构造时按会话固定（pinSession），「没套」的
+ * 原因也取固定那一刻的（whyUnconfined），信息性质，不参与是否询问的判定（那只看 sandboxed）。
+ */
+function unconfinedReasonOf(
+  spec: ShellCommandToolSpec,
+  sessionId: string,
+  escalate: boolean,
+  plan: SandboxPlan | null
+): UnconfinedReason {
+  if (plan) return ''
+  if (escalate) return 'escalated'
+  // 按会话固定成沙箱模式、这一次却做不出计划：工作区不适合、临时目录建不了、探测失败
+  if (spec.sandboxed === true) return 'unavailable'
+  // PowerShell 没有沙箱后端
+  if (spec.shell !== 'bash') return 'unsupported'
+  return whyUnconfined(sessionId)
 }
 
 export interface ShellCommandToolSpec {
@@ -187,12 +207,15 @@ export class ShellCommandTool extends BaseTool<ShellCommandParamsSchema> {
         channel: this.spec.shell,
         command: params.command,
         cwd: config.workingDirectory,
-        ...(plan ? { sandboxed: true } : {})
+        ...(plan ? { sandboxed: true } : {}),
+        unconfinedReason: unconfinedReasonOf(this.spec, this.ctx.sessionId, escalate, plan)
       },
       {
         toolCallId,
         toolName: this.spec.shell,
         description: params.description,
+        // 询问点的审查随工具调用一起中止（用户点停止时不必等审查超时）
+        signal,
         // 后台任务的询问卡片要标出来 —— 用户批准的是个不会自动结束的进程
         background: params.run_in_background === true,
         // 申请了不受限运行：卡片标「完全访问」—— 平时沙箱里的命令不问，出现询问说明它要的更多

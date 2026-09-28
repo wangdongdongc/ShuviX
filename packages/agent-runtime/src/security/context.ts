@@ -46,12 +46,17 @@ function buildCommandObject(
   input: CommandObjectInput,
   provider: SecurityHostProvider
 ): SecurityObject {
+  const sandboxed = input.sandboxed === true
   const object: SecurityObject = {
     type: 'command',
     command: input.command,
     channel: input.channel,
     // 恒有值：策略读它不必先 has() —— 宿主没说圈住，就是没圈住
-    sandboxed: input.sandboxed === true
+    sandboxed,
+    // 同样恒有值：圈住了为 ''；宿主没说原因时 ssh 记 remote、其余记 unavailable
+    unconfinedReason: sandboxed
+      ? ''
+      : (input.unconfinedReason ?? (input.channel === 'ssh' ? 'remote' : 'unavailable'))
   }
   // 仅 ssh 有；bash / powershell 不写这个键，好让策略用 has(object.host) 区分远端与本地
   if (input.host) object.host = input.host

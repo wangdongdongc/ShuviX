@@ -1,6 +1,7 @@
 import {
   WORK_PROFILE_NAME,
   BOT_PROFILE_NAME,
+  clearReviewState,
   clearSessionDecisions,
   renderBotContext,
   resolveInitialThinkingLevel,
@@ -376,6 +377,8 @@ export class AgentSession {
     this.created.dispose()
     clearFileTimeSession(this.sessionId)
     clearSessionDecisions(this.sessionId)
+    // 询问点审查的拒绝计数（连续 / 累计）与决策日志同寿
+    clearReviewState(this.sessionId)
     unpinSession(this.sessionId)
     log.info(`destroy session=${this.sessionId}`)
   }

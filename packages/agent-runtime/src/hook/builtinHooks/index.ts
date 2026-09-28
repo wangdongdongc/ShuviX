@@ -20,7 +20,19 @@ export const AUTO_TITLE_HOOK_SPEC: BuiltinHookSpec = {
   name: 'auto-title'
 }
 
-export const BUILTIN_HOOK_SPECS: readonly BuiltinHookSpec[] = [AUTO_TITLE_HOOK_SPEC]
+/**
+ * 询问点的自动审查：策略判出 ask（非 force-ask）、弹卡片之前，判定型埋点 `permission.request` 派发
+ * 内置 `permission-reviewer`，它的结论替用户作答（设计稿 docs/permission-review-design.md）。设置里的
+ * `security.autoReview` 关掉时宿主不再问 hook；覆盖这份 md 可以改绑定条件或换审查 agent。
+ */
+export const AUTO_REVIEW_HOOK_SPEC: BuiltinHookSpec = {
+  name: 'auto-review'
+}
+
+export const BUILTIN_HOOK_SPECS: readonly BuiltinHookSpec[] = [
+  AUTO_TITLE_HOOK_SPEC,
+  AUTO_REVIEW_HOOK_SPEC
+]
 
 /** 按宿主 deps 现算全部内置 hook（语言切换自动跟随） */
 export function buildBuiltinHooks(deps: BuiltinHookDeps): ParsedHookFile[] {

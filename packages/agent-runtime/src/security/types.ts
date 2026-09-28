@@ -27,6 +27,11 @@ import type {
   InputRequest,
   InputResponse
 } from '@shuvix/chat-protocol/types/inputRequest'
+import type {
+  PermissionDecision,
+  PermissionRisk,
+  PermissionVerdict
+} from '@shuvix/chat-protocol/types/permissionReview'
 import type { RuntimeLogger } from '../types'
 import type { BuiltinMdReader } from '../subagent/builtinAgents/spec'
 import type { ShellFacts } from './shell/types'
@@ -121,11 +126,13 @@ export type AttrValue = AttrScalar | string[] | Record<string, AttrScalar | stri
  *                                                           符号链接展开、`..` 按物理父目录），requestedPath
  *                                                           是 PEP 交来的原样，displayPath 是报错用
  *                                                           的写法（模型写的相对路径等）
- *   { type:'command', command, channel, sandboxed, parsed, commands, writes }
+ *   { type:'command', command, channel, sandboxed, unconfinedReason, parsed, commands, writes }
  *                                                           本地 / 远端命令（channel: 'bash'|'powershell'
  *                                                           |'ssh'；sandboxed = 宿主**实际**把这次执行圈进了
  *                                                           OS 沙箱（恒有值，缺省 false —— ssh 与沙箱不可用
- *                                                           的平台永远是 false）；后三项是解析层贡献的结构
+ *                                                           的平台永远是 false）；unconfinedReason = 没圈住的
+ *                                                           原因（恒有值，圈住了为 ''，见 UnconfinedReason）；
+ *                                                           后三项是解析层贡献的结构
  *                                                           属性，惰性求值，见 commandFacts.ts —— bash / ssh
  *                                                           由 tree-sitter-bash 读，powershell 由
  *                                                           security/powershell/ 的扫描器读）
@@ -206,6 +213,11 @@ export interface SecurityRule {
 
 export interface SecurityDecision {
   effect: SecurityEffect
+  /**
+   * 胜出的 tier；未命中任何规则为 'default'。effect 相同的两档（ask / force-ask）只有它分得开 ——
+   * 执行层据此决定一次询问能不能先交给审查（force-ask 的意思就是「只问人」）。
+   */
+  tier?: RuleTier | 'default'
   /** 全部命中规则 id（按 tier 序）；空 = 未命中走默认 */
   matched: string[]
   /** 胜出规则 id；未命中默认时为 'default:<objectType>' */
@@ -383,7 +395,44 @@ export interface SecurityHostProvider {
   }
   /** 已共享的挂起/恢复原语；无前端时按 EnforceOpts.missingChannel 处置 */
   requestUserInput?(req: InputRequest): Promise<InputResponse>
+  /**
+   * 询问点的审查接缝（docs/permission-review-design.md）：策略判出 ask（**不含** force-ask）、弹卡片
+   * 之前调用。宿主把它交给判定型 hook（自动审查）：
+   *   - 回 allow → 直接放行，不弹卡；deny → 以审查理由拒绝（agent 读得到理由）；
+   *   - 回 ask 或 null → 照旧问人（回 ask 时卡片附上审查意见）。
+   * 省略 = 没有审查，一律问人（接缝出现之前的行为）。宿主负责：审查者自己的询问不再回到这里
+   * （防递归）、整体开关（设置）；signal 落下时尽快交回 null。抛错 / reject 按 null 处理。
+   * 同一会话被审查连续拒绝 3 次或累计 20 次后，执行层不再调它（见 reviewState.ts）。
+   */
+  onPermissionRequest?(
+    event: PermissionRequestEvent,
+    signal?: AbortSignal
+  ): Promise<PermissionReviewAnswer | null>
   logger?: RuntimeLogger
+}
+
+/** 一次 ask 在弹卡之前交给审查接缝的材料 */
+export interface PermissionRequestEvent {
+  /** 那次请求（路径客体已换成真实去处，与策略判的是同一个位置） */
+  request: SecurityRequest
+  /** 策略的结论：effect 恒为 ask、tier 恒为 ask；prompt 里是要求判断的策略与它们的提示语 */
+  decision: SecurityDecision
+  toolCallId: string
+  /** 询问卡片将展示的主文本（命令原文 / 路径条目 / SQL / URL / 工具名） */
+  command: string
+  /** 写入的 diff 预览（write / edit） */
+  preview?: AskPreview
+  /** 命令将作为后台任务运行 */
+  background?: boolean
+  /** 命令申请了不受限运行（dangerouslyDisableSandbox） */
+  unsandboxed?: boolean
+}
+
+/** 审查接缝的回答：谁（哪个 hook）给出了什么判决 */
+export interface PermissionReviewAnswer {
+  verdict: PermissionVerdict
+  /** 给出判决的来源（hook 名），进决策日志 */
+  source: string
 }
 
 // ─────────────────────────── 执行层（enforce） ───────────────────────────
@@ -405,6 +454,11 @@ export interface EnforceOpts {
   background?: boolean
   /** 命令申请了不受限运行 —— 询问卡片据此标「完全访问」（见 AskInputRequest.unsandboxed） */
   unsandboxed?: boolean
+  /**
+   * 这次工具调用的中止信号。给了它，询问点的审查会随工具调用一起中止（用户点停止时不必等审查
+   * 超时）；不给则审查跑到出结论或超时为止。询问本身的取消另有通道（requestUserInput 的 cancel）。
+   */
+  signal?: AbortSignal
   /**
    * 用户选「其它」（提交反馈文本而非允许/拒绝）时的处置：
    * 'throw'（默认，路径/git 类）或 'return'（bash/ssh：反馈作为正常 tool result 返回）。
@@ -481,7 +535,26 @@ export interface CommandObjectInput {
    * 所以「以为套了其实没套」只会多问，不会少问。
    */
   sandboxed?: boolean
+  /**
+   * 没被圈进沙箱的原因（sandboxed 为 true 时忽略，客体上恒为 ''）。客体上的 `unconfinedReason`
+   * 由它而来：审查员据此分得清「模型申请越界」与「这台机器本来就没有沙箱」，用户也写得出
+   * 「越界申请一律问我」。省略时 ssh 记 remote、其余记 unavailable。
+   */
+  unconfinedReason?: UnconfinedReason
 }
+
+/**
+ * 命令没被圈进沙箱的原因：'' = 圈住了；escalated = 模型申请了 dangerouslyDisableSandbox；
+ * disabled = 设置里关了沙箱；unsupported = 这个平台 / 这个 shell 没有沙箱后端；
+ * unavailable = 有后端但这次套不上（探测失败、工作区不适合、临时目录建不了）；remote = ssh。
+ */
+export type UnconfinedReason =
+  | ''
+  | 'escalated'
+  | 'disabled'
+  | 'unsupported'
+  | 'unavailable'
+  | 'remote'
 
 /** enforceGitOp 的入参（对应 {type:'gitTool'} 客体的属性） */
 export interface GitObjectInput {
@@ -601,6 +674,8 @@ export interface SecurityDecisionRecord {
   matched: string[]
   winning: string
   userResponse?: 'allowed' | 'allowed_remember' | 'denied' | 'feedback' | 'cancel'
+  /** 自动审查的判决（ask 经审查接缝回答了才有；转给人时 userResponse 另记人的回答） */
+  review?: { decision: PermissionDecision; risk: PermissionRisk; source: string; ms: number }
   evaluateMs: number
   /** 含挂起等待的总耗时（仅 ask 路径有意义） */
   totalMs?: number

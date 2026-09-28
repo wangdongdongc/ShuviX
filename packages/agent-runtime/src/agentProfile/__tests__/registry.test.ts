@@ -103,7 +103,7 @@ describe('语言解析 — 精确 → 基础 → en，按文件整体回退', ()
 })
 
 describe('buildBuiltinProfiles — 全集现算', () => {
-  it('全参数 → 十一个内置,六个基座档案居首;缺 widget 根 → 自动跳过', () => {
+  it('全参数 → 十二个内置,六个基座档案居首;缺 widget 根 → 自动跳过', () => {
     // bot-notes 已退役（bot 自己维护自己的正文，没有单独的笔记段）—— 名单里不该再有它
     expect(buildBuiltinProfiles(ALL_PARAMS).map((a) => a.name)).toEqual([
       'work',
@@ -116,9 +116,10 @@ describe('buildBuiltinProfiles — 全集现算', () => {
       'explore',
       'widget',
       'titler',
-      'knowledge-writer'
+      'knowledge-writer',
+      'permission-reviewer'
     ])
-    // titler / knowledge-writer 无宿主参数依赖：缺 widget 根也在
+    // titler / knowledge-writer / permission-reviewer 无宿主参数依赖：缺 widget 根也在
     //（模型走 shuvix-model 通用链路，内置不声明；知识库目标由工具按会话解析，不吃参数）
     expect(buildBuiltinProfiles({ readMd }).map((a) => a.name)).toEqual([
       'work',
@@ -130,7 +131,8 @@ describe('buildBuiltinProfiles — 全集现算', () => {
       'coding',
       'explore',
       'titler',
-      'knowledge-writer'
+      'knowledge-writer',
+      'permission-reviewer'
     ])
   })
 
@@ -355,9 +357,10 @@ describe('work 档案钉板(项目会话基座：工具集/环境段的唯一事
     }
   })
 
-  it('内置档案默认认 AGENTS.md → CLAUDE.md（notebook / bot / tab / coedit / titler 除外）、项目感知默认开（titler 除外）', () => {
+  it('内置档案默认认 AGENTS.md → CLAUDE.md（notebook / bot / tab / coedit / titler / permission-reviewer 除外）、项目感知默认开（titler / permission-reviewer 除外）', () => {
     /** 两样注入都不要的执行型档案（上下文无关的一次性任务，注入整份项目文档纯属浪费 token 且稀释指令） */
-    const NO_INJECTION = ['titler']
+    // 权限审查员同理：它的全部输入就是那次操作的事件，项目文档只会稀释审查规则
+    const NO_INJECTION = ['titler', 'permission-reviewer']
     for (const spec of BUILTIN_PROFILE_SPECS) {
       const built = buildBuiltinProfile(spec, ALL_PARAMS)!
       // 两项注入的开关面不同：

@@ -46,6 +46,10 @@ vi.mock('../../utils/paths', () => ({
   getBuiltinSkillsDir: () => '/tmp/shuvix-actor-builtin-skills',
   getMemoryRootDir: () => '/tmp/shuvix-actor-memory',
   getDefaultBotsDir: () => '/tmp/shuvix-bots',
+  // protect-shuvix-config 的四个目录（getVars 的 shuvixConfigDirs）
+  getDefaultPoliciesDir: () => '/tmp/shuvix-policies',
+  getDefaultAgentsDir: () => '/tmp/shuvix-agents',
+  getDefaultHooksDir: () => '/tmp/shuvix-hooks',
   getBuiltinKnowledgeDir: () => '/tmp/shuvix-builtin-knowledge',
   getSessionArtifactsDir: tc.getSessionArtifactsDir,
   // 与 utils/paths 的真实判定逐字相同（含单独的 '.'）—— SEC-8 判的就是它挡不挡得住

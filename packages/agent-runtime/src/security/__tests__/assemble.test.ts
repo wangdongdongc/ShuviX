@@ -47,6 +47,17 @@ const BUILTIN_VARS: Record<string, string | string[] | boolean> = {
   sandboxProtectedPatterns: [],
   sandboxReadDenied: [],
   sandboxReadAllowed: [],
+  // 与沙箱无关的工作区写入视图（桌面 getVars 展开 sandbox.workspaceWriteView）：这里给「不豁免」的一组
+  workspaceWritable: [],
+  workspaceWriteDenied: [],
+  workspaceProtectedPatterns: [],
+  // ShuviX 自己的规矩所在（protect-shuvix-config）
+  shuvixConfigDirs: [
+    '/home/u/.shuvix/policies',
+    '/home/u/.shuvix/agents',
+    '/home/u/.shuvix/hooks',
+    '/home/u/.shuvix/skills'
+  ],
   systemDirs: []
 }
 

@@ -18,15 +18,27 @@
  * type 只做少数特判），新客体类型自动获得合理的兜底展示。
  * 拒绝文案与迁移前逐字一致（既有询问测试的等价护栏）；无通道文案随 ask 词汇统一改写过。
  */
+import {
+  isPermissionVerdict,
+  type PermissionVerdict
+} from '@shuvix/chat-protocol/types/permissionReview'
 import type {
   EnforceOpts,
   EnforceOutcome,
+  PermissionReviewAnswer,
   SecurityDecision,
   SecurityDecisionRecord,
   SecurityHostProvider,
   SecurityRequest
 } from './types'
 import { recordDecision } from './decisionLog'
+import {
+  noteHumanFeedback,
+  noteReviewCleared,
+  noteReviewDenied,
+  reviewSuspended,
+  trackReview
+} from './reviewState'
 
 /** 客体摘要（决策日志）：路径全量 / 命令与 SQL 截断 200 字符 / 其余回退 type */
 function summarizeObject(request: SecurityRequest): string {
@@ -105,6 +117,89 @@ function missingChannelMessage(request: SecurityRequest, display: string): strin
   return `Access denied: this needs your confirmation but there is no way to ask: ${display}`
 }
 
+/** 审查拒绝时抛给 agent 的文案：审查员的理由，加一句固定的「换一条路，别绕过」 */
+function reviewerDeniedMessage(verdict: PermissionVerdict): string {
+  return (
+    `Blocked by the reviewer: ${verdict.reason}\n\n` +
+    'Find a safer way that stays within what the user asked. Do not rephrase, split or obfuscate ' +
+    'the operation to get past the review. If the user needs to decide, ask them.'
+  )
+}
+
+/** 一次审查的结果（进卡片与决策日志） */
+interface ReviewResult {
+  verdict: PermissionVerdict
+  source: string
+  ms: number
+}
+
+/** 审查期间工具调用被中止 */
+const REVIEW_ABORTED = Symbol('review-aborted')
+
+/**
+ * 询问点的审查：只对 ask 档（force-ask 的意思就是「只问人」），宿主给了接缝、本会话没因为连续 /
+ * 累计拒绝暂停审查时才问。接缝抛错、答不出、答得不成形，一律当没有意见 —— 结构不对的判决永远
+ * 不会变成放行。
+ *
+ * **中止与询问卡片同一待遇**：工具调用的 signal 落下、或会话被停止（abortSessionReviews）时当场
+ * 按中止收尾 —— 与接缝赛跑，不指望宿主及时交回；会话停止之后、下一轮之前也不再开始新的审查。
+ * 交给接缝的 signal 是两者合一的那一个。
+ */
+async function askReviewer(
+  provider: SecurityHostProvider,
+  request: SecurityRequest,
+  decision: SecurityDecision,
+  opts: EnforceOpts,
+  command: string
+): Promise<ReviewResult | typeof REVIEW_ABORTED | null> {
+  const review = provider.onPermissionRequest
+  if (decision.tier !== 'ask' || !review) return null
+  const sessionId = request.subject.sessionId
+  if (reviewSuspended(sessionId)) return null
+  if (opts.signal?.aborted) return REVIEW_ABORTED
+  const controller = new AbortController()
+  const release = trackReview(sessionId, controller)
+  if (!release) return REVIEW_ABORTED
+  const onAbort = (): void => controller.abort()
+  opts.signal?.addEventListener('abort', onAbort, { once: true })
+  const aborted = new Promise<null>((resolve) =>
+    controller.signal.addEventListener('abort', () => resolve(null), { once: true })
+  )
+  const t0 = Date.now()
+  let answer: PermissionReviewAnswer | null = null
+  try {
+    answer = await Promise.race([
+      Promise.resolve().then(() =>
+        review.call(
+          provider,
+          {
+            request,
+            decision,
+            toolCallId: opts.toolCallId,
+            command,
+            preview: opts.preview,
+            background: opts.background,
+            unsandboxed: opts.unsandboxed
+          },
+          controller.signal
+        )
+      ),
+      aborted
+    ])
+  } catch (err) {
+    provider.logger?.warn(
+      `permission review failed, asking the user instead: ${err instanceof Error ? err.message : String(err)}`
+    )
+    answer = null
+  } finally {
+    release()
+    opts.signal?.removeEventListener('abort', onAbort)
+  }
+  if (controller.signal.aborted) return REVIEW_ABORTED
+  if (!answer || !isPermissionVerdict(answer.verdict)) return null
+  return { verdict: answer.verdict, source: answer.source, ms: Date.now() - t0 }
+}
+
 /**
  * 执行一条决策（含决策日志）。返回 allowed / feedback；deny、拒绝、取消 throw。
  */
@@ -120,7 +215,8 @@ export async function executeDecision(args: {
 
   const record = (
     userResponse?: SecurityDecisionRecord['userResponse'],
-    withTotal = false
+    withTotal = false,
+    review?: ReviewResult | null
   ): void => {
     recordDecision(
       {
@@ -142,6 +238,14 @@ export async function executeDecision(args: {
         matched: decision.matched,
         winning: decision.winning,
         userResponse,
+        review: review
+          ? {
+              decision: review.verdict.decision,
+              risk: review.verdict.risk,
+              source: review.source,
+              ms: review.ms
+            }
+          : undefined,
         evaluateMs: args.evaluateMs,
         totalMs: withTotal ? Date.now() - startTs : undefined
       },
@@ -164,13 +268,32 @@ export async function executeDecision(args: {
     throw new Error(decision.prompt ? `${denied}\n\n${decision.prompt.text}` : denied)
   }
 
-  // ask
+  // ask —— 先问审查（只对 ask 档），它答 ask 或答不出才轮到人
+  const sessionId = request.subject.sessionId
+  const askCommand = decision.ask?.command ?? display
+  const reviewed = await askReviewer(provider, request, decision, opts, askCommand)
+  if (reviewed === REVIEW_ABORTED) {
+    record('cancel', true)
+    throw new Error(opts.abortError ?? 'Aborted')
+  }
+  const review = reviewed
+  if (review?.verdict.decision === 'allow') {
+    noteReviewCleared(sessionId)
+    record(undefined, true, review)
+    return { status: 'allowed' }
+  }
+  if (review?.verdict.decision === 'deny') {
+    noteReviewDenied(sessionId)
+    record(undefined, true, review)
+    throw new Error(reviewerDeniedMessage(review.verdict))
+  }
+
   if (!provider.requestUserInput) {
     if (opts.missingChannel === 'allow') {
-      record()
+      record(undefined, false, review)
       return { status: 'allowed' }
     }
-    record()
+    record(undefined, false, review)
     throw new Error(missingChannelMessage(request, display) + resolutionNote(request))
   }
 
@@ -184,7 +307,7 @@ export async function executeDecision(args: {
     id: opts.toolCallId,
     kind: 'ask',
     toolName: opts.toolName,
-    command: decision.ask?.command ?? display,
+    command: askCommand,
     requestedPath: decision.ask?.requestedPath,
     description: opts.description,
     // 询问场景只投递给用户：拒绝/反馈的回话文案保持原样，不把策略文本带进 agent 上下文
@@ -195,20 +318,32 @@ export async function executeDecision(args: {
     preview: opts.preview,
     background: opts.background,
     unsandboxed: opts.unsandboxed,
+    // 审查员看过、决定交给人时附上它的意见 —— summary 是卡片上最该先读的一句
+    review: review
+      ? {
+          risk: review.verdict.risk,
+          summary: review.verdict.summary,
+          reason: review.verdict.reason
+        }
+      : undefined,
     createdAt: Date.now()
   })
 
   if (response.kind === 'cancel') {
-    record('cancel', true)
+    record('cancel', true, review)
     throw new Error(opts.abortError ?? 'Aborted')
   }
+  // 人回答了：审查的连续拒绝计数清零（因连续拒绝而暂停的审查随之恢复）
+  noteReviewCleared(sessionId)
   if (response.kind === 'other') {
-    record('feedback', true)
+    // 人写的反馈记在安全模块这里 —— 审查员只认这份，不认会话树里那段谁都能打印的工具结果文字
+    noteHumanFeedback(sessionId, askCommand, response.text)
+    record('feedback', true, review)
     if (opts.onOther === 'return') return { status: 'feedback', text: response.text }
     throw new Error(otherMessage(request, display, response.text))
   }
   if (response.kind !== 'ask' || !response.allowed) {
-    record('denied', true)
+    record('denied', true, review)
     throw new Error((response.kind === 'ask' && response.reason) || deniedMessage(request, display))
   }
 
@@ -216,6 +351,6 @@ export async function executeDecision(args: {
   if (remember && request.object.type === 'path' && typeof request.object.path === 'string') {
     provider.persistGrant?.(request.action === 'write' ? 'write' : 'read', request.object.path)
   }
-  record(remember ? 'allowed_remember' : 'allowed', true)
+  record(remember ? 'allowed_remember' : 'allowed', true, review)
   return { status: 'allowed' }
 }

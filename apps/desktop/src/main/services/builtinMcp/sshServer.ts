@@ -375,6 +375,8 @@ export async function createSshMcpServer(
         toolName: 'mcp__ssh__exec',
         description: typeof args.description === 'string' ? args.description : undefined,
         abortError: TOOL_ABORTED,
+        // 询问点的审查随这次调用一起中止
+        signal,
         onOther: 'return',
         missingChannel: 'deny'
       }
@@ -539,6 +541,7 @@ export async function createSshMcpServer(
           toolName: 'mcp__ssh__sync',
           description: `Sync ${direction === 'up' ? 'to' : 'from'} "${prepared.alias}": ${prepared.localAbs} <-> ${prepared.remotePath}`,
           abortError: TOOL_ABORTED,
+          signal,
           onOther: 'return',
           missingChannel: 'deny'
         }

@@ -8,13 +8,16 @@ import { existsSync, statSync } from 'fs'
 import { homedir } from 'os'
 import { projectDao } from '../dao/projectDao'
 import { sessionRecords } from './sessionRecords'
-import { sessionView } from './sandbox'
+import { sessionView, workspaceWriteView } from './sandbox'
 import { sessionService } from './sessionService'
 import {
   getTempWorkspace,
   getToolResultsBase,
   getDefaultSkillsDir,
   getDefaultBotsDir,
+  getDefaultPoliciesDir,
+  getDefaultAgentsDir,
+  getDefaultHooksDir,
   getMemoryRootDir,
   getBuiltinSkillsDir,
   getBuiltinKnowledgeDir,
@@ -273,6 +276,14 @@ export function makeDesktopSecurityProvider(
       ],
       memoryDirs: [getMemoryRootDir()],
       botsDir: getDefaultBotsDir(),
+      // ShuviX 自己的规矩所在（protect-shuvix-config 对它们的写入恒问人）：策略、agent、hook、技能 ——
+      // 权限审查员与触发它的 auto-review 就是其中的一份 agent md 与一份 hook md
+      shuvixConfigDirs: [
+        getDefaultPoliciesDir(),
+        getDefaultAgentsDir(),
+        getDefaultHooksDir(),
+        getDefaultSkillsDir()
+      ],
       // 随应用发布的内置知识库目录：ask-on-read 对它免询问（说明书发出来就是给 agent 查的）
       builtinKnowledgeDir: getBuiltinKnowledgeDir(),
       // 本会话自己的 artifacts 目录：ask-on-write / ask-on-read 对它免询问。认领下来的图与交互块是
@@ -287,7 +298,9 @@ export function makeDesktopSecurityProvider(
       systemDirs: windowsSystemDirs(),
       // 沙箱的那一面（ask-on-write / ask-on-read 读）：与本会话命令实际受的限制同源，
       // 所以文件工具的免询问范围恰好是命令能碰的范围；沙箱没套上时是一组空值，策略退回老行为
-      ...sessionView(ctx.sessionId, getConfig().workingDirectory)
+      ...sessionView(ctx.sessionId, getConfig().workingDirectory),
+      // 与沙箱开没开无关的那一半：文件工具在工作区里写入免询问（受保护位置照旧问；Windows 不给）
+      ...workspaceWriteView(ctx.sessionId, getConfig().workingDirectory)
     }),
     getSessionGrants: () => {
       const s = sessionRecords.pickSettings(ctx.sessionId, ['autoAllow', 'allowList'])
@@ -308,23 +321,45 @@ export function makeDesktopSecurityProvider(
     },
     persistGrant: (mode, p) => sessionService.addAllowListPaths(ctx.sessionId, mode, [p]),
     requestUserInput: ctx.requestUserInput,
+    // 每次调用现取注入的审查者（provider 可整会话复用，注入发生在启动时）
+    onPermissionRequest: (event, signal) =>
+      permissionReviewer ? permissionReviewer(event, signal) : Promise.resolve(null),
     logger: securityLog
   }
 }
 
 /**
+ * 询问点的审查者（安全模块 onPermissionRequest 接缝的桌面实现，见 permissionReview.ts）。由 main
+ * 启动时注入：直接 import 会经 hookService → AgentManager → agentHost 绕回本文件。
+ * 没注入 = 没有审查，一律问人（单测默认如此）。
+ */
+type PermissionReviewer = NonNullable<SecurityHostProvider['onPermissionRequest']>
+let permissionReviewer: PermissionReviewer | null = null
+
+export function setPermissionReviewer(reviewer: PermissionReviewer | null): void {
+  permissionReviewer = reviewer
+}
+
+/**
  * 桌面 SecurityContext（PEP 门面，agent 主体）。getConfig 缺省为按 sessionId 动态解析
  * （每次评估现查 —— 会话配置可变）。
- * 主体信息：ToolContext 尚未携带 agent 档案元数据，暂以 root 会话身份上报
- * （profile/agentKind 维度的规则匹配是扩展位，宿主线程化 agent 信息后即可启用）。
+ * 主体信息：ctx.agent 在（resolveTools 线程化进来的工具）就报档案名与 root / spawned —— 询问点
+ * 的审查靠它认出「审查员自己在要权限」（防递归），审查员的输入也要知道是哪个 agent 在做这件事；
+ * 不在（MCP 能力服务器等自建 ctx 的调用点）按 root 上报。sessionId 恒为根会话（派生 agent 的
+ * 工具 ctx 也是），会话授权因此对派生 agent 同样生效。
  */
 export function getDesktopSecurityContext(
-  ctx: Pick<ToolContext, 'sessionId' | 'requestUserInput'>,
+  ctx: Pick<ToolContext, 'sessionId' | 'requestUserInput' | 'agent'>,
   getConfig?: () => ProjectConfig
 ): SecurityContext {
   const cfg = getConfig ?? ((): ProjectConfig => resolveProjectConfig(ctx.sessionId))
   return createSecurityContext(
-    { kind: 'agent', sessionId: ctx.sessionId, agentKind: 'root' },
+    {
+      kind: 'agent',
+      sessionId: ctx.sessionId,
+      agentKind: ctx.agent?.kind ?? 'root',
+      ...(ctx.agent?.profileName ? { profileName: ctx.agent.profileName } : {})
+    },
     {
       host: 'desktop',
       platform: process.platform,

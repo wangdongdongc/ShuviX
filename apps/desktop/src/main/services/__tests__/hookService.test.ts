@@ -11,10 +11,23 @@
  * sessionService / electron shell / logger）全 mock；i18next 用真件（内置 hook 随界面语言）。
  * userDir 在单例构造期捕获 —— 路径先备好、再动态 import。
  *
+ * 判定型埋点（hookTriggers.decide，HS-22…28）：出厂即有内置 auto-review 绑着 permission.request，
+ * 所以任何一次 decide 都至少派发它一次 —— 用户 hook 的用例按 resultContract.sourceLabel 区分两者。
+ *
  * 单例的 runner 跨用例存活，去重键是「hook × 会话」：挂起的 run 必须在用例内收掉（afterEach 兜底中止）。
  * 扫描缓存按「名字:inode:mtime:size」指纹失效，钉 mtime 的用例各用独有文件名，免得跨用例撞指纹。
  */
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  expectTypeOf,
+  it,
+  vi
+} from 'vitest'
 import {
   existsSync,
   mkdirSync,
@@ -33,10 +46,15 @@ import {
   parseHookDefinitionFile,
   toInProcessAgentType,
   type AgentProfile,
+  type HookDecision,
   type RunTaskParams,
   type SubAgentModelConfig,
   type TriggerPayloadMap
 } from '@shuvix/agent-runtime'
+import {
+  PERMISSION_VERDICT_SCHEMA,
+  type PermissionVerdict
+} from '@shuvix/chat-protocol/types/permissionReview'
 
 const state = vi.hoisted(() => ({
   dir: '',
@@ -82,6 +100,10 @@ const BUILTIN_TITLE = 'Automatic Session Titles'
 const BUILTIN_DESCRIPTION =
   'Names a session on its first prompt and refines the title once after the second turn.'
 const BUILTIN_TRIGGERS = ['session.prompt-accepted', 'session.turn-completed']
+/** 第二份内置 hook：询问点的自动审查（判定型，按名字排在 auto-title 之前） */
+const REVIEW_TITLE = 'Automatic Review of Approval Requests'
+const REVIEW_DESCRIPTION =
+  'Before an approval card is shown, the permission reviewer answers it on your behalf — it lets ordinary work through, refuses what is clearly harmful and leaves the rest to you.'
 
 /** 内置 md 原文：直接读包里的文件，不经被测代码 */
 const builtinMd = (file: string): string =>
@@ -268,6 +290,46 @@ const fireTurn = (over: Partial<TriggerPayloadMap['session.turn-completed']> = {
     ...over
   })
 
+/** 判定型埋点的 payload：根会话里一条沙箱外命令（嵌套字段各有一份） */
+const permissionRequest = (
+  over: Partial<TriggerPayloadMap['permission.request']> = {}
+): TriggerPayloadMap['permission.request'] => ({
+  sessionId: 's1',
+  agent: { profile: 'work', kind: 'root' },
+  operation: {
+    tool: 'bash',
+    action: 'execute',
+    objectType: 'command',
+    target: 'rm -rf build',
+    facts: { channel: 'bash', sandboxed: false }
+  },
+  policy: { names: ['ask-on-command'], prompt: 'Commands outside the sandbox can touch anything.' },
+  userMessages: ['clean the build directory'],
+  delegatedTasks: [],
+  recentOperations: [],
+  ...over
+})
+
+const verdictOf = (
+  decision: PermissionVerdict['decision'],
+  over: Partial<PermissionVerdict> = {}
+): PermissionVerdict => ({
+  decision,
+  risk: 'low',
+  summary: `${decision} it`,
+  reason: `because ${decision}`,
+  ...over
+})
+
+/** 挂到 parentAbortSignal 落下为止，然后交回半截结果（真 manager 的收法） */
+const hangUntilAbort = (params: RunTaskParams): Promise<{ result: string }> =>
+  new Promise((resolve) => {
+    if (params.parentAbortSignal?.aborted) return resolve({ result: 'partial' })
+    params.parentAbortSignal?.addEventListener('abort', () => resolve({ result: 'partial' }), {
+      once: true
+    })
+  })
+
 /** 设置页里这个名字的行：[来源, 文件名（内置为空串）, 是否被覆盖, 被谁覆盖] */
 const rowsNamed = (name: string): unknown[][] =>
   hookService
@@ -276,7 +338,7 @@ const rowsNamed = (name: string): unknown[][] =>
     .map((item) => [item.source, basename(item.basePath), !!item.overridden, item.overriddenBy])
 
 describe('hookService — 初始化', () => {
-  it('HS-1 init 之前：fire 不抛、什么都不调用；abortSessionRuns → 0；init 两次后一次 fire 恰一个 run', async () => {
+  it('HS-1 init 之前：fire 不抛、decide 交回 null，什么都不调用；abortSessionRuns → 0；init 两次后一次 fire 恰一个 run', async () => {
     // 必须是本文件第一条：单例尚未 init
     expect(() =>
       hookService.fire('session.prompt-accepted', {
@@ -288,6 +350,8 @@ describe('hookService — 初始化', () => {
       })
     ).not.toThrow()
     expect(() => firePrompt({ isDefaultTitle: true })).not.toThrow()
+    // runner 未就绪时判定型埋点照旧问人：null，而不是挂住或 reject
+    await expect(hookTriggers.decide('permission.request', permissionRequest())).resolves.toBeNull()
     await settle()
     expect(mocks.runTask).not.toHaveBeenCalled()
     expect(mocks.getProfile).not.toHaveBeenCalled()
@@ -322,9 +386,18 @@ describe('hookService — 内置 hook 与运行时装配', () => {
     expect(mocks.runTask).toHaveBeenCalledTimes(1)
   })
 
-  it('HS-2 目录不存在：设置页恰内置一行（无 overridden 键），非法列表为空', () => {
+  it('HS-2 目录不存在：设置页恰内置两行（按名字排，无 overridden 键），非法列表为空', () => {
     expect(existsSync(state.dir)).toBe(false)
     expect(hookService.listForSettings()).toStrictEqual([
+      {
+        name: 'auto-review',
+        displayName: REVIEW_TITLE,
+        description: REVIEW_DESCRIPTION,
+        agent: 'permission-reviewer',
+        triggers: ['permission.request'],
+        source: 'builtin',
+        basePath: join(state.builtinDir, 'auto-review.md')
+      },
       {
         name: 'auto-title',
         displayName: BUILTIN_TITLE,
@@ -383,7 +456,10 @@ describe('hookService — 内置 hook 与运行时装配', () => {
     expect(hookService.listInvalid()).toEqual([
       { fileName: 'picky.md', error: expect.stringContaining("unknown key 'shuvix-hook-model'") }
     ])
-    expect(hookService.listForSettings().map((item) => item.name)).toEqual(['auto-title'])
+    expect(hookService.listForSettings().map((item) => item.name)).toEqual([
+      'auto-review',
+      'auto-title'
+    ])
     firePrompt()
     await settle()
     expect(mocks.runTask).not.toHaveBeenCalled()
@@ -422,7 +498,11 @@ describe('hookService — 用户 hook（纯 md 驱动）', () => {
     await waitRuns(1)
     expect(descriptions()).toEqual(['X Hook'])
     expect(hasLog('hook "x" run=')).toBe(true)
-    expect(hookService.listForSettings().map((item) => item.name)).toEqual(['auto-title', 'x'])
+    expect(hookService.listForSettings().map((item) => item.name)).toEqual([
+      'auto-review',
+      'auto-title',
+      'x'
+    ])
     expect(hookService.listInvalid()).toEqual([])
   })
 
@@ -456,7 +536,10 @@ describe('hookService — 用户 hook（纯 md 驱动）', () => {
     expect(invalid[0].fileName).toBe('bad.md')
     expect(invalid[0].error).toContain("bare 'on' key")
     expect(invalid[0].error).toContain('the whole file is rejected')
-    expect(hookService.listForSettings().map((item) => item.name)).toEqual(['auto-title'])
+    expect(hookService.listForSettings().map((item) => item.name)).toEqual([
+      'auto-review',
+      'auto-title'
+    ])
     firePrompt()
     await settle()
     expect(mocks.runTask).not.toHaveBeenCalled()
@@ -479,7 +562,10 @@ describe('hookService — 用户 hook（纯 md 驱动）', () => {
     expect(hookService.listInvalid()).toEqual([
       { fileName: 'locked.md', error: 'EACCES: permission denied' }
     ])
-    expect(hookService.listForSettings().map((item) => item.name)).toEqual(['auto-title'])
+    expect(hookService.listForSettings().map((item) => item.name)).toEqual([
+      'auto-review',
+      'auto-title'
+    ])
   })
 
   it('HS-8 只绑未知埋点的文件 → 合法、列出 triggers，但永远不跑', async () => {
@@ -515,6 +601,15 @@ describe('hookService — 同名覆盖与同名的几份', () => {
     const text = userHook('auto-title', { displayName: 'Mine', when: 'event.isDefaultTitle' })
     const path = put('auto-title.md', text)
     expect(hookService.listForSettings()).toStrictEqual([
+      {
+        name: 'auto-review',
+        displayName: REVIEW_TITLE,
+        description: REVIEW_DESCRIPTION,
+        agent: 'permission-reviewer',
+        triggers: ['permission.request'],
+        source: 'builtin',
+        basePath: join(state.builtinDir, 'auto-review.md')
+      },
       {
         name: 'auto-title',
         displayName: 'Mine',
@@ -858,7 +953,9 @@ describe('hookService — 界面语言', () => {
       await i18next.changeLanguage(language)
 
       const rows = hookService.listForSettings()
-      expect(rows.find((item) => item.source === 'builtin')?.displayName).toBe(displayName)
+      expect(
+        rows.find((item) => item.source === 'builtin' && item.name === 'auto-title')?.displayName
+      ).toBe(displayName)
       expect(rows.find((item) => item.source === 'user')?.displayName).toBe('Mine')
       expect(hookService.getSource('auto-title', 'builtin')).toEqual({ text: builtinMd(mdFile) })
 
@@ -942,6 +1039,7 @@ describe('hookService — 设置页列表与目录入口', () => {
     const rows = hookService.listForSettings()
     expect(rows.map((item) => [item.name, item.source])).toEqual([
       ['A', 'user'],
+      ['auto-review', 'builtin'],
       ['auto-title', 'user'],
       ['auto-title', 'builtin'],
       ['b', 'user'],
@@ -971,5 +1069,186 @@ describe('hookService — 设置页列表与目录入口', () => {
     expect(existsSync(state.dir)).toBe(true)
     expect(mocks.openPath).toHaveBeenCalledTimes(1)
     expect(mocks.openPath).toHaveBeenCalledWith(state.dir)
+  })
+})
+
+describe('hookService — 判定型埋点（hookTriggers.decide）', () => {
+  beforeEach(() => {
+    hookService.init()
+  })
+
+  /** 这次派发属于哪个 hook（判定型派发带 sourceLabel = hook 名） */
+  const labelOf = (params: RunTaskParams): string | undefined => params.resultContract?.sourceLabel
+
+  it('HS-22 用户 hook 绑 permission.request（when 读嵌套字段）→ 与内置 auto-review 一起跑、取最严的结论；派发入参齐全', async () => {
+    put(
+      'gate.md',
+      userHook('gate', {
+        agent: 'my-reviewer',
+        displayName: 'Gate',
+        trigger: 'permission.request',
+        when: "event.operation.objectType == 'command' && event.agent.kind == 'root'"
+      })
+    )
+    const model: SubAgentModelConfig = {
+      provider: 'openai',
+      model: 'gpt-x',
+      capabilities: {},
+      thinkingLevel: 'high'
+    }
+    mocks.resolveRunModelConfig.mockResolvedValue(model)
+    const deny = verdictOf('deny', { risk: 'high', summary: 'from gate' })
+    const allow = verdictOf('allow', { summary: 'from auto-review' })
+    mocks.runTask.mockImplementation(async (params: RunTaskParams) => ({
+      result: '',
+      structured: labelOf(params) === 'gate' ? deny : allow
+    }))
+
+    const decision = await hookTriggers.decide('permission.request', permissionRequest())
+
+    expect(decision).toEqual({ result: deny, hook: 'gate' })
+    // 内置 auto-review 同时命中：两份各派一次，合并取最严
+    expect(runs().map(labelOf).sort()).toEqual(['auto-review', 'gate'])
+    const params = runs().find((p) => labelOf(p) === 'gate')!
+    expect(params.parentSessionId).toBe('s1')
+    expect(mocks.getProfile).toHaveBeenCalledWith('my-reviewer')
+    expect(params.agentType).toStrictEqual(toInProcessAgentType(profileOf('my-reviewer')))
+    expect(params.description).toBe('Gate')
+    expect(params.resultContract?.schema).toEqual(PERMISSION_VERDICT_SCHEMA)
+    expect(params.resultContract?.sourceLabel).toBe('gate')
+    expect(params.prompt).toContain('<hook_event trigger="permission.request">')
+    expect(params.prompt).toContain('target: rm -rf build')
+    expect(params.modelConfig).toEqual(model)
+    expect(mocks.resolveRunModelConfig).toHaveBeenCalledWith('s1')
+  })
+
+  it('HS-22 when 不成立（嵌套字段不匹配）→ 用户 hook 不派发，只剩内置 auto-review', async () => {
+    put(
+      'gate.md',
+      userHook('gate', {
+        agent: 'my-reviewer',
+        trigger: 'permission.request',
+        when: "event.operation.objectType == 'path'"
+      })
+    )
+    await hookTriggers.decide('permission.request', permissionRequest())
+    expect(runs().map(labelOf)).toEqual(['auto-review'])
+  })
+
+  it('HS-23 出厂状态：内置 auto-review 命中 → 恰一次派发 permission-reviewer，契约是审查判决的 schema；结论经门面交回', async () => {
+    const verdict = verdictOf('ask', { risk: 'medium' })
+    mocks.runTask.mockResolvedValue({ result: '', structured: verdict })
+
+    expect(await hookTriggers.decide('permission.request', permissionRequest())).toEqual({
+      result: verdict,
+      hook: 'auto-review'
+    })
+    expect(mocks.runTask).toHaveBeenCalledTimes(1)
+    const [run] = runs()
+    expect(mocks.getProfile).toHaveBeenCalledWith('permission-reviewer')
+    expect(run.agentType.name).toBe('permission-reviewer')
+    expect(run.resultContract).toEqual({
+      schema: PERMISSION_VERDICT_SCHEMA,
+      sourceLabel: 'auto-review'
+    })
+    expect(run.description).toBe(REVIEW_TITLE)
+    expect(run.parentSessionId).toBe('s1')
+    expect(run.prompt).toContain('<hook_event trigger="permission.request">')
+  })
+
+  it('HS-23 出厂状态、审查员没交出合格结论 → null（照旧问人）', async () => {
+    // beforeEach 的缺省：{result: 'ok'}，没有 structured
+    expect(await hookTriggers.decide('permission.request', permissionRequest())).toBeNull()
+    expect(mocks.runTask).toHaveBeenCalledTimes(1)
+  })
+
+  it('HS-24 opts.signal 穿过门面：落下后 decide 返回 null、派发的 parentAbortSignal 落下、日志记 aborted', async () => {
+    mocks.runTask.mockImplementation(hangUntilAbort)
+    const controller = new AbortController()
+
+    const pending = hookTriggers.decide('permission.request', permissionRequest(), {
+      signal: controller.signal
+    })
+    await waitRuns(1)
+    expect(runs()[0].parentAbortSignal?.aborted).toBe(false)
+    controller.abort()
+
+    expect(await pending).toBeNull()
+    expect(runs()[0].parentAbortSignal?.aborted).toBe(true)
+    expect(logLines().some((line) => /hook "auto-review" run=hkr-\S+ aborted/.test(line))).toBe(
+      true
+    )
+  })
+
+  it('HS-25 abortSessionRuns 中止在跑的判定 run 并计入返回数；decide 返回 null', async () => {
+    mocks.runTask.mockImplementation(hangUntilAbort)
+
+    const pending = hookTriggers.decide('permission.request', permissionRequest())
+    await waitRuns(1)
+    expect(hookService.abortSessionRuns('s2')).toBe(0)
+    expect(hookService.abortSessionRuns('s1')).toBe(1)
+
+    expect(await pending).toBeNull()
+    expect(runs()[0].parentAbortSignal?.aborted).toBe(true)
+    await settle()
+    expect(hookService.abortSessionRuns('s1')).toBe(0)
+  })
+
+  it('HS-26 审查员档案查不到 → null，日志记 unknown-agent', async () => {
+    mocks.getProfile.mockReturnValue(undefined)
+    expect(await hookTriggers.decide('permission.request', permissionRequest())).toBeNull()
+    expect(mocks.runTask).not.toHaveBeenCalled()
+    expect(
+      hasLog(
+        'hook "auto-review" skipped for session s1: unknown-agent (no agent definition named "permission-reviewer")'
+      )
+    ).toBe(true)
+  })
+
+  it('HS-26 会话没有可用模型 → null，日志记 no-model', async () => {
+    mocks.resolveRunModelConfig.mockResolvedValue(null)
+    expect(await hookTriggers.decide('permission.request', permissionRequest())).toBeNull()
+    expect(mocks.runTask).not.toHaveBeenCalled()
+    expect(hasLog('hook "auto-review" skipped for session s1: no-model')).toBe(true)
+  })
+
+  it('HS-27 同一份用户 hook 绑两类埋点：fire 的派发不带契约，decide 的派发带契约', async () => {
+    put(
+      'both.md',
+      userHook('both', {
+        displayName: 'Both',
+        trigger: 'session.prompt-accepted',
+        extra: ['  - trigger: permission.request']
+      })
+    )
+
+    firePrompt()
+    await waitRuns(1)
+    expect(descriptions()).toEqual(['Both'])
+    expect('resultContract' in runs()[0]).toBe(false)
+
+    const verdict = verdictOf('allow')
+    mocks.runTask.mockResolvedValue({ result: '', structured: verdict })
+    expect(await hookTriggers.decide('permission.request', permissionRequest())).toEqual({
+      result: verdict,
+      hook: 'auto-review'
+    })
+    const decided = runs().slice(1)
+    expect(decided.map(labelOf).sort()).toEqual(['auto-review', 'both'])
+    const both = decided.find((p) => labelOf(p) === 'both')!
+    expect(both.description).toBe('Both')
+    expect(both.resultContract?.schema).toEqual(PERMISSION_VERDICT_SCHEMA)
+  })
+
+  it('HS-28 类型：门面的 fire 收不下判定型埋点（误走也只记一笔）；decide 的返回类型按埋点收窄', async () => {
+    // @ts-expect-error 判定型埋点只走 decide —— fire 不等结论，派出去就是白花
+    hookTriggers.fire('permission.request', permissionRequest())
+    await settle()
+    expect(mocks.runTask).not.toHaveBeenCalled()
+    expect(hasLog('a decide trigger goes through decide(), not fire()')).toBe(true)
+
+    const typed = hookTriggers.decide('permission.request', permissionRequest())
+    expectTypeOf(typed).resolves.toEqualTypeOf<HookDecision<PermissionVerdict> | null>()
+    await typed
   })
 })

@@ -47,6 +47,9 @@ sandbox.
 - It gates the file tools only; commands are governed by ask-on-command and
   the sandbox.
 - This policy does not analyze how sensitive a file is beyond those lists.
+- It does not always reach you: with the automatic review on, a reviewing
+  agent answers first — it lets ordinary work through, refuses what is
+  clearly harmful and puts the rest in front of you with its opinion.
 - Once you turn the auto-allow switch on, another builtin policy —
   session-grants — takes over and skips the ask.
 

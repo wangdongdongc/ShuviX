@@ -152,7 +152,14 @@ describe.each(['bash', 'powershell'] as const)('%s —— 与另一个命令工�
 
     expect(mocks.enforceCommand).toHaveBeenCalledTimes(1)
     const [object, opts] = mocks.enforceCommand.mock.calls[0]
-    expect(object).toEqual({ channel: shell, command: 'list-things', cwd: '/w' })
+    // unconfinedReason 取决于这台机器的沙箱状态（有无后端、设置开没开），由 shellCommandSandbox 的
+    // SC-* 在替身下逐一钉住；这里只钉通道与工具名
+    expect(object).toEqual({
+      channel: shell,
+      command: 'list-things',
+      cwd: '/w',
+      unconfinedReason: expect.any(String)
+    })
     expect(opts).toMatchObject({
       toolCallId: 'tc-1',
       toolName: shell,

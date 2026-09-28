@@ -27,6 +27,9 @@ you. That is worth one decision from you up front.
   the decision you already made here.
 - It does not gate what the sub-session then does: every tool call inside it is
   evaluated against these same policies, in that session, as usual.
+- It does not always reach you: with the automatic review on, a reviewing
+  agent answers first — it lets ordinary work through, refuses what is
+  clearly harmful and puts the rest in front of you with its opinion.
 - Once you turn the auto-allow switch on, another builtin policy —
   session-grants — takes over and skips the ask.
 

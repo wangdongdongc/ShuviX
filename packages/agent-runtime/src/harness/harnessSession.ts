@@ -30,6 +30,7 @@ import type { AgentRuntimeInfo } from '@shuvix/chat-protocol/chatApi'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import type { ThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
 import { elideHistoricalThinking, type ThinkingElisionState } from './thinkingElision'
+import { abortSessionReviews, reopenSessionReviews } from '../security/reviewState'
 import { isZeroContentAssistant } from './zeroContent'
 import {
   INLINE_TOKENS_CUSTOM_TYPE,
@@ -273,8 +274,9 @@ export class HarnessSession {
     await this.maintenance
 
     this.onPromptAccepted?.(text)
-    // 新一轮开始：恢复受理用户输入（上一次 abort 关掉的）
+    // 新一轮开始：恢复受理用户输入（上一次 abort 关掉的），询问点的自动审查同此
     this.inputsClosed = false
+    reopenSessionReviews(this.sessionId)
 
     // 发送前判定。轮后那次判定救不了两种情况：
     //  a. 上一轮在**轮内**就把上下文顶爆了（轮内无法压缩，pi 的 compact() 要求 harness 空闲），
@@ -440,11 +442,14 @@ export class HarnessSession {
    *
    * 旧实现要在这里手工把 streamBuffer 落库、把未完成的 tool_use 打成「已中止」；
    * 现在 harness 会把带 stopReason='aborted' 的部分消息正常 append 进 entry 树，
-   * 所以这里只剩「解挂起的用户输入」这一件事。
+   * 所以这里只剩「解挂起的用户输入」这一件事（连同替用户回答询问的自动审查）。
    */
   async abort(): Promise<void> {
     this.logger.info(`中止 session=${this.sessionId}`)
     this.inputsClosed = true
+    // 询问点的自动审查与询问卡片同一待遇：进行中的当场中止，下一轮之前不再开始新的 ——
+    // 否则一次放行会在用户点了停止之后才落地
+    abortSessionReviews(this.sessionId)
     for (const [id, pending] of this.pendingInputs) {
       pending.resolve({ kind: 'cancel', reason: 'aborted' })
       this.eventSink.broadcast({

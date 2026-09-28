@@ -44,7 +44,12 @@ import {
   COEDIT_PROFILE_NAME,
   WORK_PROFILE_NAME
 } from '@shuvix/agent-runtime'
-import type { SubAgentModelConfig } from '@shuvix/agent-runtime'
+import {
+  HOST_ONLY_PROFILE_NAMES,
+  clearReviewState,
+  clearSessionDecisions,
+  type SubAgentModelConfig
+} from '@shuvix/agent-runtime'
 import { isBotSessionSettings } from '@shuvix/chat-protocol/botSession'
 import { chromeTabOf, isChromeTabSessionSettings } from '@shuvix/chat-protocol/chromeTabSession'
 import { agentService } from './agentService'
@@ -422,7 +427,11 @@ export class SessionService {
       return { success: false, error: 'Only a sub-session can be pinned to an agent profile' }
     }
     const profile = agentService.getProfile(name)
-    if (!profile) return { success: false, error: `Unknown agent "${name}"` }
+    // 只由宿主派发的档案（自动审查的 permission-reviewer）与派发工具同一口径：当作不存在，
+    // 不给模型一个「换条路再试」的理由
+    if (!profile || HOST_ONLY_PROFILE_NAMES.has(profile.name)) {
+      return { success: false, error: `Unknown agent "${name}"` }
+    }
     if (!agentService.isSessionProfile(profile)) {
       return {
         success: false,
@@ -564,6 +573,10 @@ export class SessionService {
     // （SessionManager.remove 没有实例就提前返回），连接会变成谁也关不掉的孤儿。
     // 放在 agents.remove 之后：还在跑的 run 可能正调着它的工具。
     await mcpService.closeSession(id)
+    // 安全模块的会话内存（决策日志、审查计数与卡片反馈）：同上，destroy 在运行时已先被
+    // invalidate 掉时不会跑，这里兜住（重复清理无害）
+    clearSessionDecisions(id)
+    clearReviewState(id)
     // 再清理持久化数据
     messageService.clear(id)
     httpLogDao.deleteBySessionId(id)

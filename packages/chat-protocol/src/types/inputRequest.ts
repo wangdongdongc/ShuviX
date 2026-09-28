@@ -12,6 +12,8 @@
  * 3. 工具调用点 + 前端表单组件加一个分支
  */
 
+import type { PermissionRisk } from './permissionReview'
+
 // ─── 请求侧 ──────────────────────────────────────────
 
 export type InputRequestKind = 'ask' | 'choice'
@@ -89,6 +91,20 @@ export interface AskInputRequest extends InputRequestBase {
    * 沙箱没能套上（关闭、不可用、工作区不适合）时的逐条询问**不**带它：那时每条都问，标签只是噪音。
    */
   unsandboxed?: boolean
+  /**
+   * 自动审查的意见 —— 审查员看过这次操作、决定交给人时附上（见 docs/permission-review-design.md）。
+   * summary 用大白话说清操作做什么，这正是卡片上最该先读的一句；缺省 = 没经过审查。
+   */
+  review?: AskReview
+}
+
+/** 询问卡片上的审查意见（PermissionVerdict 里写给人看的那几项） */
+export interface AskReview {
+  risk: PermissionRisk
+  /** 一句话：这次操作做什么（会话的语言） */
+  summary: string
+  /** 为什么交给人 */
+  reason: string
 }
 
 export interface ChoiceInputRequest extends InputRequestBase {

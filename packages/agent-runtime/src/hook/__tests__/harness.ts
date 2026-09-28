@@ -1,15 +1,24 @@
 /**
  * Hook runner 测试的共享夹具（**非 .test.ts —— 不被 vitest 收集**）。
  *
- * hookRunner.test.ts 与 builtinHooks.test.ts 共用同一套 fake deps（照 workflow 引擎测试 harness
- * 的做法，去掉了脚本 / lane / journal 那几块）。观测面 = onRun 事件 + logger 行。
+ * hookRunner.test.ts、hookDecide.test.ts 与 builtinHooks.test.ts 共用同一套 fake deps（照 workflow
+ * 引擎测试 harness 的做法，去掉了脚本 / lane / journal 那几块）。观测面 = onRun 事件 + logger 行。
  *
  * 时序约定（用例据此选「立即断言」还是「等」）：
  *  - 去重判定、unknown-agent 跳过与占坑都在 fire 的**同步段**（launch 首个 await 之前）；
+ *    decide 同理：匹配、unknown-agent 跳过与占坑都在 `decide()` 调用返回之前；
  *  - start 在模型解析之后，end 在 runTask 落定之后 —— 要等（waitEnd / vi.waitFor）；
  *  - 负向断言（「什么都没发生」）先 settle() 一个宏任务，让已排队的微任务链全部落定。
+ *
+ * 判定型的夹具（permissionPayload / verdict / scriptedRunTask）在文件末尾：派发按 hook 名
+ * （`resultContract.sourceLabel`）分派脚本，所以同一次 decide 里几个 hook 可以各给各的结论、
+ * 各自挂起或失败。
  */
 import { expect, vi, type Mock } from 'vitest'
+import type {
+  PermissionDecision,
+  PermissionVerdict
+} from '@shuvix/chat-protocol/types/permissionReview'
 import {
   createHookRunner,
   type HookRegistryEntry,
@@ -92,6 +101,8 @@ export interface RunnerOptions {
   resolveRunModel?: HookRunnerDeps['resolveRunModel']
   env?: HookRunnerDeps['env']
   timeoutMs?: number
+  /** 判定型派发的墙钟上限（缺省走 runner 的 DEFAULT_DECIDE_TIMEOUT_MS） */
+  decideTimeoutMs?: number
   /** 在事件被收集之后调用（HR-21 用它模拟观测回调抛错） */
   onRun?: (event: HookRunEvent) => void
   /** false = 不给 logger（HR-21：无 logger 的 runner 各路径都不抛） */
@@ -143,6 +154,7 @@ export function makeRunner(opts: RunnerOptions = {}): RunnerHarness {
     }
   }
   if (opts.timeoutMs !== undefined) deps.timeoutMs = opts.timeoutMs
+  if (opts.decideTimeoutMs !== undefined) deps.decideTimeoutMs = opts.decideTimeoutMs
   if (opts.logger !== false) {
     deps.logger = {
       info: (msg) => logs.push({ level: 'info', msg }),
@@ -238,4 +250,131 @@ export function rejectOnAbort(message = 'dispatch aborted'): RunTaskFn {
       if (params.parentAbortSignal?.aborted) return fail()
       params.parentAbortSignal?.addEventListener('abort', fail, { once: true })
     })
+}
+
+// ─── 判定型（decide）夹具 ────────────────────────────────────────────────
+
+/** 一份 `permission.request` payload：根会话里的一条沙箱外命令（嵌套字段各有一份） */
+export const permissionPayload = (
+  over: Partial<TriggerPayloadMap['permission.request']> = {}
+): TriggerPayloadMap['permission.request'] => ({
+  sessionId: 's1',
+  agent: { profile: 'work', kind: 'root' },
+  operation: {
+    tool: 'bash',
+    action: 'execute',
+    objectType: 'command',
+    target: 'rm -rf build',
+    facts: { channel: 'bash', sandboxed: false, workingDirectory: '/ws' }
+  },
+  policy: {
+    names: ['ask-on-command'],
+    prompt: 'Commands outside the sandbox can touch anything.'
+  },
+  userMessages: ['clean the build directory'],
+  delegatedTasks: [],
+  recentOperations: [{ target: 'npm test', outcome: 'allowed' }],
+  ...over
+})
+
+/** 一份合格判决；summary / reason 缺省带上 decision，便于区分是谁交的卷 */
+export const verdict = (
+  decision: PermissionDecision = 'allow',
+  over: Partial<PermissionVerdict> = {}
+): PermissionVerdict => ({
+  decision,
+  risk: 'low',
+  summary: `${decision} it`,
+  reason: `because ${decision}`,
+  ...over
+})
+
+/** 契约捕获成功时 runTask 的交回形状（与真 manager 的 finishTurn 同形） */
+export const verdictResult = (value: unknown): RunTaskResult => ({
+  result: JSON.stringify(value, null, 2),
+  structured: value
+})
+
+/**
+ * 一次派发的脚本：
+ *  - RunTaskResult 对象：立即交回它；
+ *  - `{ reject }`：以这句话 reject（manager 抛错收尾）；
+ *  - `'gate'`：挂到 `release(key)`；parentAbortSignal 落下时 resolve 半截结果（真 manager 的收法：
+ *    中止之后交回已产出的文本，不 reject）—— 永远不 release 就是「挂到中止为止」；
+ *  - `'stuck'`：挂到 `release(key)`；中止也不理（不配合中止的派发，如模型请求还在路上）。
+ */
+export type DecideBehavior = RunTaskResult | { reject: string } | 'gate' | 'stuck'
+
+export interface ScriptedRunTask {
+  runTask: RunTaskFn
+  /** 某个键第一次派发的入参（键见 scriptedRunTask） */
+  paramsOf: (key: string) => RunTaskParams
+  /** 放行某个键最早一个还挂着的 gate / stuck 派发 */
+  release: (key: string, value?: RunTaskResult) => void
+  /** 某个键还挂着（没被放行、也没因中止收尾）的派发数 */
+  pending: (key: string) => number
+}
+
+/** 观察型派发（没有结果契约）的键：`observe:<displayName>` */
+export const observeKey = (description: string): string => `observe:${description}`
+
+/**
+ * 按 hook 分派的 runTask。键 = 判定派发的 `resultContract.sourceLabel`（即 hook 名）；没有契约的
+ * 观察型派发键为 `observe:<description>`，一律走 `script.observe`。没写脚本的交回 `{result: 'ok'}`
+ * （没有 structured —— 对判定型而言就是「没有意见」）。
+ */
+export function scriptedRunTask(
+  script: { decide?: Record<string, DecideBehavior>; observe?: DecideBehavior } = {}
+): ScriptedRunTask {
+  const calls: Array<{ key: string; params: RunTaskParams }> = []
+  const waiting: Array<{ key: string; settle: (value: RunTaskResult) => void }> = []
+
+  const behave = (
+    behavior: DecideBehavior,
+    key: string,
+    params: RunTaskParams
+  ): Promise<RunTaskResult> => {
+    if (typeof behavior === 'object' && 'reject' in behavior) {
+      return Promise.reject(new Error(behavior.reject))
+    }
+    if (typeof behavior === 'object') return Promise.resolve(behavior)
+    return new Promise<RunTaskResult>((resolve) => {
+      const entry = {
+        key,
+        settle: (value: RunTaskResult): void => {
+          const index = waiting.indexOf(entry)
+          if (index < 0) return
+          waiting.splice(index, 1)
+          resolve(value)
+        }
+      }
+      waiting.push(entry)
+      if (behavior === 'stuck') return
+      const signal = params.parentAbortSignal
+      const onAbort = (): void => entry.settle({ result: 'partial' })
+      if (signal?.aborted) onAbort()
+      else signal?.addEventListener('abort', onAbort, { once: true })
+    })
+  }
+
+  return {
+    runTask: (params) => {
+      const label = params.resultContract?.sourceLabel
+      const key = label ?? observeKey(params.description)
+      calls.push({ key, params })
+      const behavior = label === undefined ? script.observe : script.decide?.[label]
+      return behave(behavior ?? { result: 'ok' }, key, params)
+    },
+    paramsOf: (key) => {
+      const call = calls.find((c) => c.key === key)
+      expect(call, `runTask call for "${key}"`).toBeDefined()
+      return call!.params
+    },
+    release: (key, value = { result: 'ok' }) => {
+      const entry = waiting.find((w) => w.key === key)
+      expect(entry, `a pending dispatch for "${key}"`).toBeDefined()
+      entry!.settle(value)
+    },
+    pending: (key) => waiting.filter((w) => w.key === key).length
+  }
 }

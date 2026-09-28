@@ -211,17 +211,21 @@ describe('键集纪律', () => {
     expect(warns[0]).toContain("bare 'agent' key is not read — use 'shuvix-hook-agent'")
   })
 
-  it.each(['shuvix-hook-model', 'shuvix-hook-timeout', 'shuvix-hook-concurrency', 'shuvix-hook-'])(
-    'HF-7 未知前缀键 %s → unknown key（消息列出全部合法键）',
-    (key) => {
-      const { parsed, warns } = parse(md(valid(`${key}: x`)))
-      expect(parsed).toBeNull()
-      expect(warns).toHaveLength(1)
-      expect(warns[0]).toContain(
-        `unknown key '${key}' (allowed: shuvix-hook-on, shuvix-hook-agent)`
-      )
-    }
-  )
+  // 判定型埋点没给格式加键：结论的形状、执行方式都由埋点决定，文件里写不出「这是判定型」
+  it.each([
+    'shuvix-hook-model',
+    'shuvix-hook-timeout',
+    'shuvix-hook-concurrency',
+    'shuvix-hook-',
+    'shuvix-hook-kind',
+    'shuvix-hook-schema',
+    'shuvix-hook-result'
+  ])('HF-7 未知前缀键 %s → unknown key（消息列出全部合法键）', (key) => {
+    const { parsed, warns } = parse(md(valid(`${key}: x`)))
+    expect(parsed).toBeNull()
+    expect(warns).toHaveLength(1)
+    expect(warns[0]).toContain(`unknown key '${key}' (allowed: shuvix-hook-on, shuvix-hook-agent)`)
+  })
 
   it('HF-7 无前缀陌生键忽略 → 输出与最小合法文件逐字相同', () => {
     const { parsed, warns } = parse(
@@ -397,6 +401,24 @@ describe('shuvix-hook-on — 绑定容器与条目', () => {
     expect(parsed?.bindings).toStrictEqual([
       { trigger: 'session.prompt-accepted', when: 'event.isDefaultTitle' },
       { trigger: 'session.prompt-accepted', when: 'event.profileName == "work"' }
+    ])
+  })
+
+  it('HF-17 绑判定型埋点 permission.request（when 读嵌套字段）→ 照常解析、零告警、绑定原样保留', () => {
+    const { parsed, warns } = parse(
+      withOn(
+        'shuvix-hook-on:',
+        '  - trigger: permission.request',
+        `    when: "event.operation.objectType == 'command' && 'channel' in event.operation.facts"`
+      )
+    )
+    expect(warns).toEqual([])
+    expect(parsed).not.toBeNull()
+    expect(parsed?.bindings).toStrictEqual([
+      {
+        trigger: 'permission.request',
+        when: "event.operation.objectType == 'command' && 'channel' in event.operation.facts"
+      }
     ])
   })
 })

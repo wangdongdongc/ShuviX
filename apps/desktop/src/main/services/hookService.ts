@@ -36,12 +36,15 @@ import {
   registryFileBase,
   resolveShadowing,
   toInProcessAgentType,
+  type DecideTriggerId,
+  type HookDecision,
   type HookRegistryEntry,
   type HookRunner,
+  type ObserveTriggerId,
   type ParsedHookFile,
   type ShadowResolved,
-  type TriggerId,
-  type TriggerPayloadMap
+  type TriggerPayloadMap,
+  type TriggerResultMap
 } from '@shuvix/agent-runtime'
 import { getBuiltinHooksDir, getDefaultHooksDir } from '../utils/paths'
 import { appEventBus } from '../utils/appEventBus'
@@ -130,9 +133,33 @@ class HookService {
     log.info('hook runner ready')
   }
 
-  /** 业务埋点入口（绝不抛出）。runner 未就绪时静默丢弃。 */
-  fire<K extends TriggerId>(id: K, payload: TriggerPayloadMap[K]): void {
+  /** 观察型埋点入口（绝不抛出）。runner 未就绪时静默丢弃。 */
+  fire<K extends ObserveTriggerId>(id: K, payload: TriggerPayloadMap[K]): void {
     this.runner?.fire(id, payload)
+  }
+
+  /**
+   * 判定型埋点入口（绝不 reject）：命中的 hook 给出的最严结论，没有则 null。runner 未就绪时
+   * 返回 null —— 调用方照旧问人。
+   */
+  decide<K extends DecideTriggerId>(
+    id: K,
+    payload: TriggerPayloadMap[K],
+    opts?: { signal?: AbortSignal }
+  ): Promise<HookDecision<TriggerResultMap[K]> | null> {
+    return this.runner ? this.runner.decide(id, payload, opts) : Promise.resolve(null)
+  }
+
+  /**
+   * 绑在某个判定型埋点上的 hook 派发的 agent 名（生效集）。询问点审查的防递归读它：这些 agent 自己
+   * 要权限时不再交给审查，只问人。
+   */
+  agentsBoundTo(trigger: DecideTriggerId): Set<string> {
+    const names = new Set<string>()
+    for (const entry of this.listForEngine()) {
+      if (entry.file.bindings.some((b) => b.trigger === trigger)) names.add(entry.file.agent)
+    }
+    return names
   }
 
   /** 中止某会话名下的全部 run；runner 未就绪返回 0 */
@@ -459,6 +486,11 @@ export const hookService = new HookService()
  * payload 形状由 TriggerPayloadMap 按 id 收窄（埋点目录见 agent-runtime hook/triggerPoints.ts）。
  */
 export const hookTriggers = {
-  fire: <K extends TriggerId>(id: K, payload: TriggerPayloadMap[K]): void =>
-    hookService.fire(id, payload)
+  fire: <K extends ObserveTriggerId>(id: K, payload: TriggerPayloadMap[K]): void =>
+    hookService.fire(id, payload),
+  decide: <K extends DecideTriggerId>(
+    id: K,
+    payload: TriggerPayloadMap[K],
+    opts?: { signal?: AbortSignal }
+  ): Promise<HookDecision<TriggerResultMap[K]> | null> => hookService.decide(id, payload, opts)
 }

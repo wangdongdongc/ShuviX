@@ -11,6 +11,8 @@
  *   commandFacts.ts   命令客体的结构属性投影（ShellFacts → CEL 可消费的属性）
  *   context.ts        createSecurityContext —— PEP 唯一入口
  *   decisionLog.ts    每会话 ring buffer + RuntimeLogger 结构化输出
+ *   reviewState.ts    询问点自动审查的会话内状态：拒绝计数（连续 3 / 累计 20 次后改为直接问人）、
+ *                     人在卡片上写的反馈、进行中的审查（会话停止时一并中止）
  *   shell/            bash 命令解析层（tree-sitter-bash；宽松轨事实抽取，只用于拒绝 / 询问）
  *   powershell/       PowerShell 命令解析层（手写扫描器；同样只有宽松轨）
  */
@@ -51,5 +53,16 @@ export {
   type CommandFactAttrs
 } from './commandFacts'
 export { recordDecision, getSessionDecisions, clearSessionDecisions } from './decisionLog'
+export {
+  clearReviewState,
+  reviewSuspended,
+  noteHumanFeedback,
+  humanFeedbackOf,
+  abortSessionReviews,
+  reopenSessionReviews,
+  type HumanFeedbackNote,
+  REVIEW_CONSECUTIVE_DENIAL_LIMIT,
+  REVIEW_TOTAL_DENIAL_LIMIT
+} from './reviewState'
 export * from './shell'
 export * from './powershell'

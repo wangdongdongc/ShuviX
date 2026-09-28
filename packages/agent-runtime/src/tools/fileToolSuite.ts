@@ -215,7 +215,8 @@ abstract class FileToolBase<
       toolCallId,
       toolName: this.name,
       displayPath: params.path,
-      abortError: this.abortError
+      abortError: this.abortError,
+      signal
     })
   }
 
@@ -262,14 +263,16 @@ abstract class FileToolBase<
     }
   }
 
-  protected makeAsk(toolCallId: string, portPath: string): WriteAskHook {
+  protected makeAsk(toolCallId: string, portPath: string, signal?: AbortSignal): WriteAskHook {
     return async ({ path, diff, isNewFile }) => {
       await this.deps.security.enforcePath('write', portPath, {
         toolCallId,
         toolName: this.name,
         displayPath: path,
         abortError: this.abortError,
-        preview: { kind: 'diff', path, diff, isNewFile }
+        preview: { kind: 'diff', path, diff, isNewFile },
+        // 询问点的审查随工具调用一起中止
+        signal
       })
     }
   }
@@ -397,7 +400,7 @@ class WriteFileTool extends FileToolBase<typeof WriteParamsSchema> {
       this.deps.guards,
       portPath,
       params,
-      this.makeAsk(toolCallId, portPath)
+      this.makeAsk(toolCallId, portPath, signal)
     )
     // 先审阅（可能回写盖章），再广播变更 —— 让面板刷新读到的是最终内容
     const note = await this.reviewWrittenMd(portPath)
@@ -434,7 +437,7 @@ class EditFileTool extends FileToolBase<typeof EditParamsSchema> {
       this.deps.guards,
       portPath,
       params,
-      this.makeAsk(toolCallId, portPath)
+      this.makeAsk(toolCallId, portPath, signal)
     )
     const note = await this.reviewWrittenMd(portPath)
     this.deps.onFileChange?.({ portPath, kind: 'edit' })

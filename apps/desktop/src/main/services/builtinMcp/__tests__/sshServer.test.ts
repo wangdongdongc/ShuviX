@@ -746,7 +746,7 @@ describe('ssh 内置服务器的别名复核', () => {
 })
 
 describe('ssh 内置服务器的命令安全门', () => {
-  it('SSHS-U-104: 上报的客体恰是 {channel, command, host}，opts 恰是那六项', async () => {
+  it('SSHS-U-104: 上报的客体恰是 {channel, command, host}，opts 恰是那七项', async () => {
     writeConfig('Host web\n')
     const { client } = await open()
 
@@ -766,6 +766,8 @@ describe('ssh 内置服务器的命令安全门', () => {
       toolName: 'mcp__ssh__exec',
       description: 'disk usage',
       abortError: 'Aborted',
+      // 这次调用的中止信号：询问点的审查随它一起中止
+      signal: expect.any(AbortSignal),
       onOther: 'return',
       // 没有输入面板时 fail-closed —— 一条远端命令不能因为「问不着」就自己跑了
       missingChannel: 'deny'
@@ -1807,6 +1809,7 @@ describe('ssh 内置服务器 sync 的命令门', () => {
       toolName: 'mcp__ssh__sync',
       description: 'Sync to "web": /ws/report.txt <-> /srv/app',
       abortError: 'Aborted',
+      signal: expect.any(AbortSignal),
       // exec 那边一样：反馈作为正常结果带回，而不是抛
       onOther: 'return',
       missingChannel: 'deny'

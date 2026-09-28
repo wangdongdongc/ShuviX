@@ -15,7 +15,20 @@
  * 所以每个字段同时也是 agent 读到的事实。
  *
  * 保留键：CEL `when` 看到的 event 在 payload 之上附加 `trigger`（埋点 id）—— payload 不得使用这个键名。
+ *
+ * **两类埋点**（`kind`）：
+ *  - `observe`（观察型）：`fire` 广播，hook 是观察者 —— 不拦截、不等它、结果不读；
+ *  - `decide`（判定型）：`decide` 等所有命中的 hook 给出结论并按严格程度合并。结论的形状由
+ *    DECIDE_SPECS 给出（即派发时的结果契约 schema），hook md 的格式不因此加任何键 —— 绑到判定型
+ *    埋点，就按判定方式执行。判定型埋点只出现在宿主已经决定「这里需要一个判断」的地方，hook 回答的
+ *    是「谁来判断」，不改变那个决定本身（见 docs/permission-review-design.md）。
  */
+import {
+  PERMISSION_VERDICT_SCHEMA,
+  isPermissionVerdict,
+  permissionDecisionSeverity,
+  type PermissionVerdict
+} from '@shuvix/chat-protocol/types/permissionReview'
 
 /** 会话域埋点的公共上下文（emit 侧从会话状态现取） */
 interface SessionTriggerBase {
@@ -27,6 +40,57 @@ interface SessionTriggerBase {
   title: string
   /** 标题是否仍是通用默认值（宿主按当前语言的默认标题判定；笔记本会话不经这些埋点） */
   isDefaultTitle: boolean
+}
+
+/**
+ * `permission.request` 的 payload —— 策略引擎判出「需要判断」（ask 档，不含 force-ask）、弹询问卡片
+ * 之前，宿主从那次安全请求投影出的事实。它就是审查 agent 的**全部输入**（设计里的「独立上下文」）：
+ * 只收人写的意图与操作本身，不收 agent 写的正文、工具输出、命令的 description 参数 —— 那些正是注入
+ * 进来、或能被拿来说服审查者的地方。
+ */
+export interface PermissionRequestPayload {
+  /** 根会话 id —— run 的归属。派生 agent 的操作也挂在根会话下，审查 run 的深度因此恒为 1 */
+  sessionId: string
+  /** 发起这次操作的 agent */
+  agent: {
+    /** 档案名 */
+    profile: string
+    /** 'root' | 'spawned' */
+    kind: string
+  }
+  /** 要判断的操作 */
+  operation: {
+    /** 工具名；多路复用工具带动作（如 `session: create-sub-session`） */
+    tool: string
+    /** read / write / execute / navigate … */
+    action: string
+    /** 客体类型：path / command / gitTool / database / url / invocation */
+    objectType: string
+    /** 客体原文：命令 / 路径 / SQL / URL / 工具名 */
+    target: string
+    /**
+     * 其余事实，按客体类型：命令的 channel / host / sandboxed / unconfinedReason / background，路径的
+     * path / requestedPath / diff 预览，数据库的 connection / dbType / readonly …；各类型都带
+     * workingDirectory / platform
+     */
+    facts: Record<string, string | number | boolean>
+  }
+  /** 要求判断的策略：显示名，与它们写给人看的风险提示（合并后的一段） */
+  policy: { names: string[]; prompt: string }
+  /**
+   * 人写的输入，旧 → 新，逐条截断：人发的消息、人对 agent 提问（ask 工具）的回答、人在审批卡片上
+   * 写的反馈（安全模块收到回答时记下的那份，不是会话树里的工具结果文字）。子会话里人发的消息取
+   * **顶层会话**的 —— 子会话里的「用户消息」是父 agent 写的，见 delegatedTasks；子会话自己的 ask
+   * 回答与卡片反馈照样算。
+   */
+  userMessages: string[]
+  /**
+   * 仅子会话：父 agent 派进来的任务文本（旧 → 新）。是 agent 写的，只能当作「它声称要做什么」，
+   * 不是人的授权。非子会话为空。
+   */
+  delegatedTasks: string[]
+  /** 本会话最近判定过的操作（目标 + 结果），旧 → 新 —— 看得出「先下载再执行」「被拒后换写法」 */
+  recentOperations: Array<{ target: string; outcome: string }>
 }
 
 /**
@@ -54,13 +118,47 @@ export interface TriggerPayloadMap {
     /** 对话末尾文本（`User:`/`Assistant:` 拼接，尾部截断 ~1000 字） */
     recentText: string
   }
+  /**
+   * 判定型：策略引擎判出 ask（不含 force-ask）、弹询问卡片之前。命中的 hook 替用户回答
+   * allow / ask（照旧问人）/ deny；没有 hook 命中或都没给出结论时照旧问人。
+   */
+  'permission.request': PermissionRequestPayload
+}
+
+/** 判定型埋点 → 结论形状（即派发时结果契约的形状，见 DECIDE_SPECS） */
+export interface TriggerResultMap {
+  'permission.request': PermissionVerdict
 }
 
 export type TriggerId = keyof TriggerPayloadMap
+/** 判定型埋点：`decide` 等结论 */
+export type DecideTriggerId = keyof TriggerResultMap
+/** 观察型埋点：`fire` 广播、结果不读 */
+export type ObserveTriggerId = Exclude<TriggerId, DecideTriggerId>
+
+/** 判定型埋点的结论契约 */
+export interface DecideSpec<R> {
+  /** 结果契约的 JSON Schema —— 派发时即 `next` 工具的参数 schema */
+  schema: Record<string, unknown>
+  /** 捕获值 → 结论；认不出的返回 null（按「这个 hook 没有意见」处理） */
+  parse: (value: unknown) => R | null
+  /** 严格程度，数大者更严 —— 多个 hook 都给出结论时取最严的那个 */
+  severity: (result: R) => number
+}
+
+export const DECIDE_SPECS: { [K in DecideTriggerId]: DecideSpec<TriggerResultMap[K]> } = {
+  'permission.request': {
+    schema: PERMISSION_VERDICT_SCHEMA,
+    parse: (value) => (isPermissionVerdict(value) ? value : null),
+    severity: (verdict) => permissionDecisionSeverity(verdict.decision)
+  }
+}
 
 /** 一个埋点的声明（目录条目）—— 解析器/文档/UI 消费；payload 类型在 TriggerPayloadMap */
 export interface TriggerPointDef {
   id: TriggerId
+  /** 观察型（`fire`，结果不读）还是判定型（`decide`，等结论）—— 见文件头 */
+  kind: 'observe' | 'decide'
   /** 业务位置的一句话描述（文档/UI 用，非 LLM 面向） */
   description: string
   /**
@@ -75,12 +173,21 @@ export interface TriggerPointDef {
 export const TRIGGER_POINTS: Record<TriggerId, TriggerPointDef> = {
   'session.prompt-accepted': {
     id: 'session.prompt-accepted',
+    kind: 'observe',
     description: 'A user prompt was accepted and is about to be dispatched to the session agent',
     scope: 'session'
   },
   'session.turn-completed': {
     id: 'session.turn-completed',
+    kind: 'observe',
     description: 'A full prompt turn (including tool calls) finished in a chat session',
+    scope: 'session'
+  },
+  'permission.request': {
+    id: 'permission.request',
+    kind: 'decide',
+    description:
+      'A security policy wants an operation judged; a decide hook may answer before the user is asked',
     scope: 'session'
   }
 }

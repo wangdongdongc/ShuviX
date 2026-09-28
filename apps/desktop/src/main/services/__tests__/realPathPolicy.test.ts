@@ -85,6 +85,10 @@ vi.mock('../../utils/paths', () => ({
   getBuiltinSkillsDir: () => join(state.root, 'builtin-skills'),
   getMemoryRootDir: () => join(state.root, 'memory'),
   getDefaultBotsDir: () => join(state.root, 'bots'),
+  // protect-shuvix-config 的四个目录（getVars 的 shuvixConfigDirs）
+  getDefaultPoliciesDir: () => join(state.root, 'policies'),
+  getDefaultAgentsDir: () => join(state.root, 'agents'),
+  getDefaultHooksDir: () => join(state.root, 'hooks'),
   getBuiltinKnowledgeDir: () => join(state.root, 'builtin-knowledge'),
   getSessionArtifactsDir: (id: string) => join(state.root, 'artifacts', id),
   isSafeSessionId: (id: string) =>

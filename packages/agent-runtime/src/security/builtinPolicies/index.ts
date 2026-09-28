@@ -74,6 +74,7 @@ export const BUILTIN_POLICY_SPECS: readonly BuiltinPolicySpec[] = [
   { name: 'protect-system' },
   { name: 'block-catastrophic-commands' },
   { name: 'protect-bot-files' },
+  { name: 'protect-shuvix-config' },
   { name: 'ask-on-read' },
   { name: 'ask-on-write' },
   { name: 'ask-on-command' },

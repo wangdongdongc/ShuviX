@@ -63,6 +63,10 @@ vi.mock('../../utils/paths', () => ({
   getBuiltinSkillsDir: () => BUILTIN_SKILLS,
   getMemoryRootDir: () => MEMORY_ROOT,
   getDefaultBotsDir: () => '/tmp/shuvix-bots',
+  // protect-shuvix-config 的四个目录（getVars 的 shuvixConfigDirs）
+  getDefaultPoliciesDir: () => '/tmp/shuvix-policies',
+  getDefaultAgentsDir: () => '/tmp/shuvix-agents',
+  getDefaultHooksDir: () => '/tmp/shuvix-hooks',
   getBuiltinKnowledgeDir: () => '/tmp/shuvix-builtin-knowledge',
   getSessionArtifactsDir: (id: string) => `/tmp/shuvix-artifacts/${id}`,
   isSafeSessionId: (id: string) =>

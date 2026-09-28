@@ -58,6 +58,8 @@ import { randomBytes } from 'crypto'
 import { chromeBridgeAddressFile, chromeBridgeSocketPath } from '@shuvix/chat-protocol/chromeBridge'
 import { closeAllWatchers } from './services/filesWatcherService'
 import { hookService } from './services/hookService'
+import { reviewPermissionRequest } from './services/permissionReview'
+import { setPermissionReviewer } from './services/toolContext'
 import { installLlmNetwork } from './services/llmNetwork'
 import {
   registerCustomProtocolHandlers,
@@ -725,6 +727,8 @@ app.whenReady().then(async () => {
 
   // 装配 hook runner（业务埋点在此之前的 fire 静默丢弃）
   measure('hookService.init', () => hookService.init())
+  // 询问点的自动审查：安全模块的 onPermissionRequest 经判定型 hook 回答（注入而非 import —— 见 toolContext）
+  setPermissionReviewer(reviewPermissionRequest)
 
   // 内部事件总线 → 所有窗口的 'app:event' 桥接（AppEvent 通用订阅）
   registerAppEventBridge()

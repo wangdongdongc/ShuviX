@@ -20,7 +20,8 @@ shuvix-policy-rules:
 ---
 
 **What it does**: any file write under your bots directory asks you first, and
-**keeps asking even with auto-allow on**.
+**keeps asking even with auto-allow on**. The automatic review does not answer
+it either: a `force-ask` only ever goes to you.
 
 **Why it is not a refusal**: a bot is a markdown file, and "help me draft a bot"
 is a perfectly good thing to ask for. Refusing outright would block that. Asking

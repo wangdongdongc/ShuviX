@@ -30,6 +30,9 @@ important ones ask first — creating a repo (`init`), discarding changes
   without prompts inside the workspace.
 - Git-tool operations targeting a directory outside the workspace go through
   the normal path ask as well.
+- It does not always reach you: with the automatic review on, a reviewing
+  agent answers first — it lets ordinary work through, refuses what is
+  clearly harmful and puts the rest in front of you with its opinion.
 - Once you turn the auto-allow switch on, another builtin policy —
   session-grants — takes over and skips the ask.
 

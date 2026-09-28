@@ -23,6 +23,7 @@ import {
   resolveShadowing,
   serializeAgentDefinitionFile,
   BASE_PROFILE_NAMES,
+  HOST_ONLY_PROFILE_NAMES,
   type AgentProfile,
   type AgentProfileRegistry,
   type ParsedAgentFile,
@@ -251,7 +252,8 @@ class AgentService implements AgentProfileRegistry {
    * 只剩 LLM 自己，而它被提示词导向 `coding`；为这一种误用留一个要用户在 GUI 里勾的开关不值。
    */
   isSessionProfile(profile: AgentProfile): boolean {
-    return !BASE_PROFILE_NAMES.has(profile.name)
+    // 只由宿主派发的档案（权限审查员）同样不收：它不该成为一场能被 agent 驱动的对话
+    return !BASE_PROFILE_NAMES.has(profile.name) && !HOST_ONLY_PROFILE_NAMES.has(profile.name)
   }
 
   /**

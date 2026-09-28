@@ -38,6 +38,9 @@ run, never by what the command text looks like.
 - A confined command can still change anything inside the project — deleting
   the project is inside the sandbox. block-catastrophic-commands still refuses
   its short list of machine-destroying commands either way.
+- It does not always reach you: with the automatic review on, a reviewing
+  agent answers first — it lets ordinary work through, refuses what is
+  clearly harmful and puts the rest in front of you with its opinion.
 - Once you turn the auto-allow switch on, another builtin policy —
   session-grants — takes over and skips the ask, full-access requests
   included.

@@ -3,7 +3,7 @@ shuvix: policy v1
 shuvix-builtin: true
 name: ask-on-write
 shuvix-displayName: Ask Before Writing a File
-description: File writes and edits ask you first — except this conversation's own artifacts, and, while the sandbox is on, the places a confined command may change anyway.
+description: File writes and edits ask you first — except this conversation's own artifacts, the working directory, and, while the sandbox is on, the other places a confined command may change anyway.
 shuvix-policy-scope:
   subject.kind: [agent]
   object.type: [path]
@@ -16,11 +16,15 @@ shuvix-policy-rules:
       && !(inDir(object.path, vars.sandboxWritableRoots)
       && !inDir(object.path, vars.sandboxWriteDenied)
       && !vars.sandboxProtectedPatterns.exists(p, object.path.matches(p)))
+      && !(inDir(object.path, vars.workspaceWritable)
+      && !inDir(object.path, vars.workspaceWriteDenied)
+      && !vars.workspaceProtectedPatterns.exists(p, object.path.matches(p)))
     prompt: Writing replaces what is on disk. Check the target path and the diff before allowing.
 ---
 
 **What it does**: whenever the agent wants to write or edit a file, it asks
-you first — with two exceptions.
+you first — with three exceptions. With the automatic review on, the reviewer
+answers first and most of what is left never reaches you.
 
 - **This conversation's own artifacts** (`~/.shuvix/artifacts/<session>/`):
   the figures and blocks the agent adopted to revise them. They are files the
@@ -36,10 +40,17 @@ you first — with two exceptions.
   `.vscode`, `.idea`, `.claude`, `.cursor`, `.codex`, `.zed`, `.mcp.json`
   and `.envrc`.
 
+- **The working directory, sandbox or not** (`vars.workspaceWritable`):
+  editing files in the project is most of the work, and the file tools know
+  the exact path, so this holds even where commands run unconfined. The same
+  protected spots still ask. It is withheld where the sandbox would refuse
+  the working directory too — `/`, a folder that covers your home folder or
+  contains credential or personal folders, ShuviX's own configuration or data
+  — and on Windows, where the protected-spot patterns cannot be matched
+  reliably.
+
 The host fills `vars.sandboxWritableRoots` only for a session whose commands
-really run confined; with the sandbox off, on a platform without one, or
-for a working directory inside ShuviX's own data, the list is empty and
-every write outside the artifacts asks, as before.
+really run confined; the working-directory exemption does not depend on it.
 
 **What it does not do**:
 
@@ -49,4 +60,6 @@ every write outside the artifacts asks, as before.
   session-grants — takes over and skips the ask.
 
 **To adjust**: create an override copy and edit it. Keeping only the first
-line of the `match` restores "every write asks, sandbox or not".
+line of the `match` restores "every write asks, sandbox or not"; dropping the
+last clause (the `vars.workspace*` lines) restores "the working directory asks
+when the sandbox is off".

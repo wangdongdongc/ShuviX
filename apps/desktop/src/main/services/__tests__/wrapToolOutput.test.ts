@@ -1,6 +1,6 @@
 /**
  * wrapToolOutput —— 安全模块 L1 全工具门（enforceInvocation）的挂载点，同时也是「工具输出
- * 怎么截 / 落不落盘」这组参数**唯一**的穿线处（W-S*）。
+ * 怎么截 / 落不落盘」这组参数**唯一**的穿线处（W-S*），以及结果上 `terminate` 的保留（W-T*）。
  * mock 惯例照 tools/__tests__/write.test.ts（toolContext/logger mock）；
  * processToolOutput 短文本直通（但把每次调用的 opts 记下来）；security 用手写 stub，
  * W-9 走真 createSecurityContext。
@@ -123,7 +123,7 @@ describe('wrapToolOutput — L1 全工具门', () => {
     expect(result.content).toEqual([{ type: 'text', text: 'ran' }])
   })
 
-  it('W-2 调用形态：opts 恰为 {toolCallId, toolName, operation, mcp, abortError, onOther}（无 missingChannel）', async () => {
+  it('W-2 调用形态：opts 恰为 {toolCallId, toolName, operation, mcp, abortError, onOther, signal}（无 missingChannel）', async () => {
     const { tool } = makeTool('ssh')
     const { security, enforceInvocation } = makeSecurity()
     const wrapped = wrapToolOutput(tool, SID, 'middle', undefined, security)
@@ -138,7 +138,9 @@ describe('wrapToolOutput — L1 全工具门', () => {
       // 内置工具没有 MCP 事实可报 —— 这个键在也是 undefined
       mcp: undefined,
       abortError: 'Aborted',
-      onOther: 'return'
+      onOther: 'return',
+      // 工具调用的中止信号原样交给门（询问点的审查随它一起中止）；这次调用没给，键在也是 undefined
+      signal: undefined
     })
   })
 
@@ -412,5 +414,75 @@ describe('wrapToolOutput — 截断 / 落盘参数的穿线', () => {
     expect(calls[0].spill).toBeUndefined()
     expect(calls[0].maxBytes).toBeUndefined()
     expect(calls[0].maxLines).toBeUndefined()
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// W-T —— `terminate` 的保留。
+//
+// 结果契约的 `next` 靠 `terminate: true` 让 pi 在「这一批只有 next」时直接结束循环（判定型 hook 的
+// 审查 agent 因此一次请求出结论）；它在派生 agent 的工具表里同样过这层包装。包装器用展开重建结果，
+// 这里钉的是每条出口都把它原样带出去 —— 丢了它不会报错，只会让每次审查悄悄多花一次请求。
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** execute 交回给定 content、并带 terminate:true 的工具 */
+function makeTerminatingTool(content: Array<{ type: 'text'; text: string }>): {
+  tool: AgentTool
+  execute: ReturnType<typeof vi.fn>
+} {
+  const execute = vi.fn(async () => ({ content, details: undefined, terminate: true }))
+  const tool = { name: 'next', label: 'next', description: 'test tool', parameters: {}, execute }
+  return { tool: tool as unknown as AgentTool, execute }
+}
+
+const terminateOf = (result: unknown): unknown => (result as { terminate?: unknown }).terminate
+
+describe('wrapToolOutput — terminate 原样带出', () => {
+  it('W-T1 普通文本路径：包装后仍带 terminate:true，文本照常过后处理', async () => {
+    const { tool } = makeTerminatingTool([{ type: 'text', text: 'Result recorded.' }])
+    const wrapped = wrapToolOutput(tool, SID, 'middle')
+
+    const result = await exec(wrapped, 'tc-t1', {})
+
+    expect(terminateOf(result)).toBe(true)
+    expect(result.content).toEqual([{ type: 'text', text: 'Result recorded.' }])
+    expect(processCalls()).toHaveLength(1)
+  })
+
+  it.each([
+    ['空 content', []],
+    ['只有空白文本', [{ type: 'text' as const, text: '   ' }]]
+  ])('W-T1 %s → 补上 (no output) 之后仍带 terminate:true', async (_label, content) => {
+    const { tool } = makeTerminatingTool(content)
+    const wrapped = wrapToolOutput(tool, SID, 'middle')
+
+    const result = await exec(wrapped, 'tc-t1b', {})
+
+    expect(terminateOf(result)).toBe(true)
+    expect(result.content).toEqual([{ type: 'text', text: '(no output)' }])
+  })
+
+  it('W-T1 带 security 且放行：L1 门过了之后结果仍带 terminate:true', async () => {
+    const { tool, execute } = makeTerminatingTool([{ type: 'text', text: 'Result recorded.' }])
+    const { security, enforceInvocation } = makeSecurity()
+    const wrapped = wrapToolOutput(tool, SID, 'middle', undefined, security)
+
+    const result = await exec(wrapped, 'tc-t1c', {})
+
+    expect(enforceInvocation).toHaveBeenCalledTimes(1)
+    expect(execute).toHaveBeenCalledTimes(1)
+    expect(terminateOf(result)).toBe(true)
+  })
+
+  it('W-T2 原结果没有 terminate → 包装后也没有这个键（不凭空多出）', async () => {
+    const { tool } = makeTool()
+    const { security } = makeSecurity()
+    for (const wrapped of [
+      wrapToolOutput(tool, SID, 'middle'),
+      wrapToolOutput(tool, SID, 'middle', undefined, security)
+    ]) {
+      const result = await exec(wrapped, 'tc-t2', {})
+      expect('terminate' in (result as object)).toBe(false)
+    }
   })
 })

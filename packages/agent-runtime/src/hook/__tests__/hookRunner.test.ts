@@ -7,9 +7,10 @@
  *               注册表现取、未知埋点与无会话上下文；
  *   HR-12…16    宿主规则：去重（同步段占坑）、unknown-agent / no-model 跳过、模型透传；
  *   HR-17…20    超时、中止与监控面；
- *   HR-21…27    兜底与边界：观测回调抛错、无 logger、依赖抛错、身份字段、结果不读、outcome.error 判失败。
+ *   HR-21…27    兜底与边界：观测回调抛错、无 logger、依赖抛错、身份字段、结果不读、outcome.error 判失败；
+ *   HR-28       判定型埋点误走 fire（绕过类型）：只记一笔，不派发。
  *
- * 夹具见 ./harness.ts（观测面 = onRun 事件 + logger 行）。
+ * 判定型入口 decide 另见 ./hookDecide.test.ts。夹具见 ./harness.ts（观测面 = onRun 事件 + logger 行）。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_HOOK_TIMEOUT_MS, type HookRegistryEntry } from '../hookRunner'
@@ -25,6 +26,7 @@ import {
   gatedRunTask,
   hangUntilAbort,
   makeRunner,
+  permissionPayload,
   promptPayload,
   rejectOnAbort,
   settle
@@ -37,10 +39,16 @@ afterEach(() => {
 })
 
 describe('埋点目录', () => {
-  it('HR-1 恰两条会话域埋点，id 与键一致；未知 id 查不到', () => {
+  it('HR-1 三条会话域埋点（两条观察型 + 一条判定型），id 与键一致；未知 id 查不到', () => {
     expect(Object.keys(TRIGGER_POINTS)).toEqual([
       'session.prompt-accepted',
-      'session.turn-completed'
+      'session.turn-completed',
+      'permission.request'
+    ])
+    expect(Object.values(TRIGGER_POINTS).map((def) => def.kind)).toEqual([
+      'observe',
+      'observe',
+      'decide'
     ])
     for (const [key, def] of Object.entries(TRIGGER_POINTS)) {
       expect(def.id).toBe(key)
@@ -762,5 +770,35 @@ describe('兜底与边界', () => {
     expect(JSON.stringify(h.logs)).not.toContain(' ok (')
     expect(JSON.stringify(h.events)).not.toContain('partial text')
     expect(h.runner.runningCount()).toBe(0)
+  })
+
+  it('HR-28 判定型埋点误走 fire（绕过类型）且确有 hook 绑它 → 恰一条 warn；不取注册表、无事件、不派发', async () => {
+    const h = makeRunner({
+      entries: [entryOf(fileOf({ bindings: [{ trigger: 'permission.request' }] }))]
+    })
+    expect(() =>
+      h.runner.fire('permission.request' as never, permissionPayload() as never)
+    ).not.toThrow()
+    await settle()
+    expect(h.warns()).toEqual([
+      'hook fire(permission.request): a decide trigger goes through decide(), not fire()'
+    ])
+    expect(h.listHooks).not.toHaveBeenCalled()
+    expect(h.events).toEqual([])
+    expect(h.runTask).not.toHaveBeenCalled()
+    expect(h.runner.runningCount()).toBe(0)
+  })
+
+  it('HR-28b 同时缺 sessionId：warn 仍是判定型那一条（埋点种类先于会话上下文判定）', async () => {
+    const { sessionId: _dropped, ...noSession } = permissionPayload()
+    const h = makeRunner({
+      entries: [entryOf(fileOf({ bindings: [{ trigger: 'permission.request' }] }))]
+    })
+    h.runner.fire('permission.request' as never, noSession as never)
+    await settle()
+    expect(h.warns()).toEqual([
+      'hook fire(permission.request): a decide trigger goes through decide(), not fire()'
+    ])
+    expect(h.runTask).not.toHaveBeenCalled()
   })
 })

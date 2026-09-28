@@ -212,6 +212,8 @@ export async function createDatabaseMcpServer(
         toolName: `mcp__${DATABASE_MCP_SERVER_NAME}__${QUERY_TOOL.name}`,
         description: typeof args.description === 'string' ? args.description : undefined,
         abortError: TOOL_ABORTED,
+        // 询问点的审查随这次调用一起中止
+        signal,
         // 用户选「其它」：不执行，把反馈作为正常结果带回（同 bash / ssh）
         onOther: 'return',
         // fail-closed：该问却没有询问通道 → 拒绝

@@ -21,7 +21,13 @@ import { isSafeSessionId } from '../../utils/paths'
 import type { ShellInvocation } from '../../utils/toolUtils/shell'
 import { createSeatbeltBackend } from './backends/seatbelt'
 import { explainSandboxDenial } from './classify'
-import { buildSandboxSpec, sessionTmpName, toPolicyView, type SpecResult } from './spec'
+import {
+  buildSandboxSpec,
+  protectedWritePatterns,
+  sessionTmpName,
+  toPolicyView,
+  type SpecResult
+} from './spec'
 import {
   INACTIVE_VIEW,
   type ProbeResult,
@@ -169,9 +175,30 @@ export function sandboxGloballyActive(): boolean {
   return isEnabledSetting() && probe().available
 }
 
+type UnpinnedReason = 'unsupported' | 'disabled' | 'unavailable'
+
+/** 此刻没套沙箱的原因（只读已有事实，不触发探测） */
+function reasonNow(): UnpinnedReason {
+  if (!getBackend()) return 'unsupported'
+  if (!isEnabledSetting()) return 'disabled'
+  return 'unavailable'
+}
+
+/**
+ * 一个没套沙箱的 bash 工具实例为什么没套（命令客体的 `unconfinedReason`，给审查员与策略看）：
+ * 这台机器没有后端 → unsupported；设置关着 → disabled；否则就是探测没通过 → unavailable。
+ * 会话固定成不套时取固定那一刻的原因 —— 之后用户打开了沙箱，这条会话的命令仍是因为「当时关着」
+ * 才没套，不该改口成 unavailable。**不触发探测**：这是每条命令都会走的路径，不该为一句说明去起进程。
+ */
+export function whyUnconfined(sessionId: string): UnpinnedReason {
+  return pinReasons.get(sessionId) ?? reasonNow()
+}
+
 // ─── 按会话固定 ────────────────────────────────────────
 
 const pins = new Map<string, boolean>()
+/** 固定成不套的会话，固定那一刻的原因 */
+const pinReasons = new Map<string, UnpinnedReason>()
 
 /**
  * bash 工具构造时调用：第一次记下「本会话此刻是否启用沙箱」，之后同一 runtime 里构造的
@@ -182,6 +209,7 @@ export function pinSession(sessionId: string): boolean {
   if (value === undefined) {
     value = sandboxGloballyActive()
     pins.set(sessionId, value)
+    if (!value) pinReasons.set(sessionId, reasonNow())
   }
   return value
 }
@@ -189,6 +217,7 @@ export function pinSession(sessionId: string): boolean {
 /** 会话 runtime 失效 / 销毁时调用：下一次创建按当时的开关重新决定 */
 export function unpinSession(sessionId: string): void {
   pins.delete(sessionId)
+  pinReasons.delete(sessionId)
 }
 
 // ─── 会话规格 ──────────────────────────────────────────
@@ -211,6 +240,49 @@ export function sessionView(sessionId: string, workingDirectory: string): Sessio
   const built = specFor(sessionId, workingDirectory, { grantedWrite: [], grantedRead: [] })
   if (!built.ok) return INACTIVE_VIEW
   return toPolicyView(built.spec, real(cliTokenPath()))
+}
+
+/**
+ * 文件工具在工作区里写入免询问的范围（ask-on-write 读 `vars.workspace*`）—— **不看沙箱开没开**。
+ *
+ * 沙箱没套上时（设置关着、探测没过、Linux），命令照样逐条交给审查；但文件工具知道确切的路径，而在
+ * 工作区里改文件是编码工作的主体，每一次都审一遍不值。受保护的位置（git 自己会执行的元数据、`.git`
+ * 本身、项目根的 .vscode / .claude 等、shell 启动文件、凭据目录）照旧询问 —— 与沙箱视图同一组。
+ *
+ * 判定用的是沙箱的同一份规格：工作区是 `/`、覆盖家目录、是 ShuviX 自己的配置或应用数据、严格包含
+ * 敏感目录时，一样不给免询问（与「不套沙箱」同一批理由）。**Windows 不给**：受保护模式是按 `/` 写的
+ * 正则，在 `\` 路径上会静默不匹配 —— 宁可每次写入都交给审查，也不能悄悄放过 `.git\hooks`。
+ */
+export interface WorkspaceWriteView {
+  workspaceWritable: string[]
+  workspaceWriteDenied: string[]
+  workspaceProtectedPatterns: string[]
+}
+
+const NO_WORKSPACE_WRITES: WorkspaceWriteView = Object.freeze({
+  workspaceWritable: [],
+  workspaceWriteDenied: [],
+  workspaceProtectedPatterns: []
+}) as WorkspaceWriteView
+
+export function workspaceWriteView(
+  sessionId: string,
+  workingDirectory: string
+): WorkspaceWriteView {
+  if (process.platform === 'win32') return NO_WORKSPACE_WRITES
+  try {
+    const built = specFor(sessionId, workingDirectory, { grantedWrite: [], grantedRead: [] })
+    if (!built.ok) return NO_WORKSPACE_WRITES
+    return {
+      workspaceWritable: [built.spec.workingDirectory],
+      workspaceWriteDenied: built.spec.writeDeniedFinal,
+      workspaceProtectedPatterns: protectedWritePatterns(built.spec)
+    }
+  } catch (err) {
+    // 算不出规格（路径解析失败之类）就不给免询问 —— 照旧问，绝不因此放行
+    log.warn(`workspace write view unavailable: ${(err as Error).message}`)
+    return NO_WORKSPACE_WRITES
+  }
 }
 
 /** 建本会话临时目录：父目录 0700 且属于当前用户（/private/tmp 人人可写，别人可以抢先建同名目录） */

@@ -14,6 +14,10 @@
  *         无视：不要计划、不标任何沙箱字段，命令照旧执行；
  *  - SC-5 设置页的 describe() 读全局开关（sandboxGloballyActive），从不 pin 会话。
  *
+ * 命令客体恒带 `unconfinedReason`（没进沙箱的原因，圈住了为 ''）：圈住 ''、计划为 null 'unavailable'、
+ * 申请越界 'escalated'、pin 为假的 bash 按此刻的沙箱状态（替身里设置关着 → 'disabled'）、
+ * PowerShell 'unsupported'。
+ *
  * 替身：sandbox 管理器（pinSession / planFor / sandboxGloballyActive 都是 spy）、toolContext
  * （安全门是 spy，含 getSessionPathGrants）、bgTaskService 的三个执行入口、i18n。
  */
@@ -29,7 +33,8 @@ const mocks = vi.hoisted(() => ({
   getSessionPathGrants: vi.fn(),
   pinSession: vi.fn(),
   planFor: vi.fn(),
-  sandboxGloballyActive: vi.fn()
+  sandboxGloballyActive: vi.fn(),
+  whyUnconfined: vi.fn()
 }))
 
 vi.mock('electron', () => ({
@@ -44,7 +49,8 @@ vi.mock('../../services/toolContext', () => ({
 vi.mock('../../services/sandbox', () => ({
   pinSession: mocks.pinSession,
   planFor: mocks.planFor,
-  sandboxGloballyActive: mocks.sandboxGloballyActive
+  sandboxGloballyActive: mocks.sandboxGloballyActive,
+  whyUnconfined: mocks.whyUnconfined
 }))
 vi.mock('../../services/bgTaskService', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../services/bgTaskService')>()
@@ -160,6 +166,9 @@ function bashEntry(): BuiltinToolMeta {
 }
 
 beforeEach(() => {
+  // 此刻的沙箱状态：有后端、设置关着 —— pin 为假的 bash 据此报 'disabled'
+  mocks.whyUnconfined.mockReset()
+  mocks.whyUnconfined.mockReturnValue('disabled')
   mocks.enforceCommand.mockReset()
   mocks.enforceCommand.mockResolvedValue({ status: 'allowed' })
   mocks.runCommand.mockReset()
@@ -268,7 +277,13 @@ describe('SC-2 圈住执行', () => {
     })
 
     const [object, opts] = enforceArgs()
-    expect(object).toEqual({ channel: 'bash', command: 'make build', cwd: '/w', sandboxed: true })
+    expect(object).toEqual({
+      channel: 'bash',
+      command: 'make build',
+      cwd: '/w',
+      sandboxed: true,
+      unconfinedReason: ''
+    })
     expect(opts).not.toHaveProperty('unsandboxed')
     expect(opts).toMatchObject({ toolName: 'bash', background: false })
 
@@ -312,7 +327,13 @@ describe('SC-2 圈住执行', () => {
 
       expect(mocks.planFor).toHaveBeenCalledTimes(1)
       const [object, opts] = enforceArgs()
-      expect(object).toEqual({ channel: 'bash', command: 'make build', cwd: '/w' })
+      // 按会话固定成沙箱模式、这一次却做不出计划：原因是 unavailable
+      expect(object).toEqual({
+        channel: 'bash',
+        command: 'make build',
+        cwd: '/w',
+        unconfinedReason: 'unavailable'
+      })
       expect(opts).not.toHaveProperty('unsandboxed')
       expect(opts).toMatchObject({ background })
 
@@ -329,7 +350,12 @@ describe('SC-3 申请越界', () => {
 
     expect(mocks.planFor).not.toHaveBeenCalled()
     const [object, opts] = enforceArgs()
-    expect(object).toEqual({ channel: 'bash', command: 'make build', cwd: '/w' })
+    expect(object).toEqual({
+      channel: 'bash',
+      command: 'make build',
+      cwd: '/w',
+      unconfinedReason: 'escalated'
+    })
     expect(opts).toMatchObject({ unsandboxed: true, background: false })
 
     expect(runArgs().sandbox).toBeUndefined()
@@ -378,7 +404,13 @@ describe('SC-4 没套沙箱的实例无视越界参数', () => {
 
     expect(mocks.planFor).not.toHaveBeenCalled()
     const [object, opts] = enforceArgs()
-    expect(object).toEqual({ channel: tool.name, command: 'make build', cwd: '/w' })
+    // 越界参数被无视，原因如实报这个实例为什么没套：bash 是设置关着，PowerShell 没有后端
+    expect(object).toEqual({
+      channel: tool.name,
+      command: 'make build',
+      cwd: '/w',
+      unconfinedReason: tool.name === 'bash' ? 'disabled' : 'unsupported'
+    })
     expect(opts).not.toHaveProperty('unsandboxed')
 
     expect(runArgs()).toMatchObject({ shell: tool.name, command: 'make build' })

@@ -12,6 +12,7 @@ import {
   AgentParamsSchema,
   BASE_PROFILE_NAMES,
   DISPATCH_TOOL_NAME,
+  HOST_ONLY_PROFILE_NAMES,
   type DispatchAgentTool,
   type SubAgentModelConfig,
   type SubAgentRegistry
@@ -28,10 +29,16 @@ import { registerBuiltinTool } from '../services/toolRegistry'
  * 提示的可用名列表 —— 报出来会诱导 LLM 拿基座档案当一次性任务 agent 使（它们各是某种会话
  * 形态的人格，不是为一次性任务写的；论工具清单它们与 coding 逐字相同，分工全在正文）。
  * 显式按名 get 仍可解析：用户在自己的系统提示词里点名某个基座档案属显式意图，不在这里拦。
+ *
+ * 只由宿主派发的档案（HOST_ONLY_PROFILE_NAMES，今天是权限审查员）更严：按名也解析不到 —— 被审的
+ * agent 能派发它，就能反复拿它试探「哪种写法能过审」。
  */
 const dispatchRegistry: SubAgentRegistry = {
-  list: () => agentService.listAll().filter((a) => !BASE_PROFILE_NAMES.has(a.name)),
-  get: (name) => agentService.getProfile(name)
+  list: () =>
+    agentService
+      .listAll()
+      .filter((a) => !BASE_PROFILE_NAMES.has(a.name) && !HOST_ONLY_PROFILE_NAMES.has(a.name)),
+  get: (name) => (HOST_ONLY_PROFILE_NAMES.has(name) ? undefined : agentService.getProfile(name))
 }
 
 /** 父级注入的构建上下文 */
