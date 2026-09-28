@@ -509,8 +509,10 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
       let llmPrompt = hasTokens ? resolveTokensForAgent(prompt, promptInlineTokens) : prompt
 
       // ── 结果契约：next 工具（extraTools 注入）+ prompt 契约段 + 捕获通道 ──
-      // 捕获即软停止（interrupt 语义）：结果以捕获值为准，树尾部的中止痕迹无关紧要；
-      // queueMicrotask 让 next 的成功 tool result 先返回，再触发停止。
+      // 收尾两层：next 的结果带 `terminate`，只调了 next 的那一批由 pi 直接结束循环、不再发请求
+      // （见 nextTool.ts）；next 与别的工具同批时 terminate 不成立，这里的软停止（interrupt 语义）
+      // 兜底 —— 结果以捕获值为准，树尾部的中止痕迹无关紧要。queueMicrotask 让 next 的成功
+      // tool result 先返回，再触发停止；对已经靠 terminate 结束的那一批，它只中止还没开始的东西。
       const captured: { hit: boolean; value?: unknown } = { hit: false }
       let extraTools: AnyAgentTool[] | undefined
       // 前向引用：捕获回调在 agent 执行期才触发，届时 id 已就位

@@ -1,15 +1,20 @@
 /**
  * NextTool —— 派发结果契约（resultContract）的收口工具。
  *
- * 运行时原语，目前没有生产调用方（workflow 引擎曾是；hook 不读派发结果）。调用方
- * （未来的 dispatch 工具等）声明一份 JSON Schema，协调器据此给派生 agent 临时附加一个名为 `next` 的工具：
+ * 运行时原语，目前没有生产调用方（workflow 引擎曾是；观察型 hook 不读派发结果）。调用方
+ * 声明一份 JSON Schema，协调器据此给派生 agent 临时附加一个名为 `next` 的工具：
  *   - `parameters` 即该 schema 原样（Type.Unsafe 透传，先例 mcpManager 的 MCP schema）；
- *   - LLM 的调用参数**就是结果**：校验通过 → 交给捕获通道并软停止本 agent
- *     （manager.interrupt 语义），step 结果取捕获值而非转写抽取；
+ *   - LLM 的调用参数**就是结果**：校验通过 → 交给捕获通道，step 结果取捕获值而非转写抽取；
  *   - 校验不过 → throw 带字段级指正的错误（harness 记为 tool error，模型同轮重试）——
  *     错误文案纪律同 5250adc：说清哪个字段、期望什么，而不是一句 invalid。
  *
- * 任务 prompt 末尾由协调器追加 <workflow_result_contract> 契约段（buildResultContractNote），
+ * **收尾靠 `terminate: true`**：pi 的循环在一批工具结果**全部**带 terminate 时直接结束，不再发
+ * 下一次请求 —— 于是「只调了 next」的那一批就是这次运行的最后一步，一次请求出结论（判定型 hook
+ * 的审查 agent 靠这一点才只花一次请求）。已记录后的重复调用同样带 terminate，免得同批两次 next
+ * 把循环拖进下一轮。next 与别的工具同批时 terminate 不成立（pi 要求整批都带），那时由 manager 的
+ * 软停止（interrupt）兜底。
+ *
+ * 任务 prompt 末尾由协调器追加 <result_contract> 契约段（buildResultContractNote），
  * 要求以恰好一次 `next` 调用收尾。未调用的补救（nudge）在 manager 侧。
  */
 import { Type, type TSchema } from 'typebox'
@@ -44,14 +49,17 @@ export function validateContractSchema(schema: unknown): string | null {
   return null
 }
 
+/** 契约段的围栏标签（LLM 面向）。workflow 引擎退役后不再自称 workflow —— 调用方现在是判定型 hook 等 */
+export const RESULT_CONTRACT_TAG = 'result_contract'
+
 /** 任务 prompt 末尾追加的契约段（围栏标签风格同 fenceInstructionFile；LLM 面向，仅英文） */
 export function buildResultContractNote(contract: ResultContract): string {
   const source = contract.sourceLabel
-    ? `one step of workflow "${contract.sourceLabel}"`
+    ? `one step of an automated flow ("${contract.sourceLabel}")`
     : 'one step of a larger automated flow'
-  return `<workflow_result_contract>
+  return `<${RESULT_CONTRACT_TAG}>
 You are running as ${source}. When the task is complete, you MUST end by calling the \`next\` tool exactly once — its arguments are your entire result. Text written outside \`next\` is NOT returned to the caller. If the task cannot be completed, still call \`next\` with the closest conforming result you can produce (use the schema's own fields to express failure where available).
-</workflow_result_contract>`
+</${RESULT_CONTRACT_TAG}>`
 }
 
 /** 未调用 next 的一次性补救追问文案（manager 在 run 自然结束后使用） */
@@ -101,7 +109,9 @@ export class NextTool extends BaseTool<TSchema> {
             text: 'Result already recorded — the task is complete. Do not call any more tools.'
           }
         ],
-        details: undefined
+        details: undefined,
+        // 同批两次 next：第二次也得带，否则整批不满足「全部 terminate」，循环会多走一轮
+        terminate: true
       }
     }
 
@@ -126,7 +136,9 @@ export class NextTool extends BaseTool<TSchema> {
           text: 'Result recorded — the task is complete. Do not call any more tools.'
         }
       ],
-      details: undefined
+      details: undefined,
+      // 这一批只有 next 时，pi 就此结束循环、不再发下一次请求（见文件头）
+      terminate: true
     }
   }
 }

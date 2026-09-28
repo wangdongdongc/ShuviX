@@ -40,11 +40,13 @@ describe('validateContractSchema — 派发前的契约自检', () => {
 })
 
 describe('buildResultContractNote — prompt 末尾契约段', () => {
-  it('带 sourceLabel → 点名工作流 + 开闭标签 + exactly once + NOT returned 警示', () => {
+  it('带 sourceLabel → 点名来源 + 开闭标签 + exactly once + NOT returned 警示', () => {
     const note = buildResultContractNote({ schema: TITLE_SCHEMA, sourceLabel: 'wf' })
-    expect(note).toContain('one step of workflow "wf"')
-    expect(note.startsWith('<workflow_result_contract>')).toBe(true)
-    expect(note.endsWith('</workflow_result_contract>')).toBe(true)
+    expect(note).toContain('one step of an automated flow ("wf")')
+    // workflow 引擎退役后不再自称 workflow
+    expect(note).not.toContain('workflow')
+    expect(note.startsWith('<result_contract>')).toBe(true)
+    expect(note.endsWith('</result_contract>')).toBe(true)
     expect(note).toContain('exactly once')
     expect(note).toContain('NOT returned to the caller')
   })
@@ -60,7 +62,7 @@ describe('NextTool — 经 BaseTool 模板 execute 的捕获协议', () => {
   const textOf = (r: { content: Array<{ type: string; text?: string }> }): string =>
     r.content.map((c) => c.text ?? '').join('')
 
-  it('合法参数 → onCapture 收到原参数、返回文本含 Result recorded', async () => {
+  it('合法参数 → onCapture 收到原参数、返回文本含 Result recorded、带 terminate', async () => {
     const onCapture = vi.fn()
     const tool = new NextTool(TITLE_SCHEMA, onCapture)
     const params = { title: 'Fix login bug' }
@@ -68,6 +70,8 @@ describe('NextTool — 经 BaseTool 模板 execute 的捕获协议', () => {
     expect(onCapture).toHaveBeenCalledTimes(1)
     expect(onCapture).toHaveBeenCalledWith(params)
     expect(textOf(out as never)).toContain('Result recorded')
+    // 只调了 next 的那一批，pi 据此结束循环、不再发下一次请求
+    expect((out as { terminate?: boolean }).terminate).toBe(true)
   })
 
   it('缺 required 字段 → throw，消息含字段位置与期望、含 call `next` again', async () => {
@@ -97,6 +101,8 @@ describe('NextTool — 经 BaseTool 模板 execute 的捕获协议', () => {
     const again = await tool.execute('t2', { title: 'second' })
     expect(textOf(again as never)).toContain('already recorded')
     expect(onCapture).toHaveBeenCalledTimes(1)
+    // 同批两次 next：第二次也带 terminate，整批才满足「全部 terminate」
+    expect((again as { terminate?: boolean }).terminate).toBe(true)
   })
 
   it('错误明细上限 8 条（12 处违例 → 恰 8 行明细）', async () => {

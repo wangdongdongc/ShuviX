@@ -133,7 +133,7 @@ describe('结果契约 — next 工具注入与 prompt 契约段', () => {
     await manager.runTask(task())
     expect(h.createCalls[0].extraTools).toBeUndefined()
     expect(h.promptTexts[0]).toBe('Do the thing')
-    expect(h.promptTexts[0]).not.toContain('<workflow_result_contract>')
+    expect(h.promptTexts[0]).not.toContain('<result_contract>')
   })
 
   it('契约 schema 非法 → runTask 直接 reject invalid result contract，createAgent 未被调用', async () => {
