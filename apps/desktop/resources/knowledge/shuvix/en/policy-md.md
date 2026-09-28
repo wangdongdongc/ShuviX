@@ -72,7 +72,7 @@ The body is documentation only — the engine never reads it.
 | ----------------------- | -------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `shuvix`                | `policy v1`                | no       | File-type marker.                                                                                                                                                                                                                             |
 | `name`                  | string                     | no       | Identity (what an override matches on). Defaults to the file's base name.                                                                                                                                                                     |
-| `shuvix-displayName`    | string                     | no       | Label in Settings → Policies and on ask cards. Defaults to `name`.                                                                                                                                                                            |
+| `shuvix-displayName`    | string                     | no       | Label in the sidebar's Security Policies group and on ask cards. Defaults to `name`.                                                                                                                                                                            |
 | `description`           | string                     | no       | One line for the list.                                                                                                                                                                                                                        |
 | `shuvix-policy-scope`   | mapping                    | no       | Conditions shared by **every rule** of this policy (AND-ed into each). Same keys as rule conditions. A rule whose own conditions contradict the scope (intersection empty) makes the file invalid.                                            |
 | `shuvix-policy-lets`    | mapping name → CEL string  | no       | Named values computed once from `{vars}` and injected into every rule's `match` as top-level names. Names must be identifiers and must not be `subject`, `action`, `tool`, `object`, `env`, `vars` or `inDir`. Evaluated lazily, when needed. |
@@ -88,7 +88,7 @@ mean "no rules". Other unprefixed unknown keys are ignored.
 | `effect`                                                       | **required**: `allow`, `force-allow`, `ask`, `force-ask` or `deny`.                                                                                                                                                       |
 | `subject.kind`, `action`, `object.type`, `env.host`, `tool.name` | structured conditions: a string or a list of strings (list = OR, keys = AND); `'*'` = any; an empty list or empty string is invalid. **`subject.kind` is required** on the rule or in the scope — use `'*'` deliberately. |
 | `match`                                                        | optional CEL expression over the request document (below), AND-ed with the conditions. A syntax error invalidates the file.                                                                                               |
-| `prompt`                                                       | optional one-liner. On `ask` it is shown on the ask card; on `deny` it is returned to the agent as the refusal reason; on allow rules it is only shown in Settings. Max 1000 characters. The one key that never invalidates a file. |
+| `prompt`                                                       | optional one-liner. On `ask` it is shown on the ask card; on `deny` it is returned to the agent as the refusal reason; on allow rules it is only shown on the policy's property card. Max 1000 characters. The one key that never invalidates a file. |
 
 Any other key in a rule invalidates the file (the old nested `object:` / `subject:` / `when:`
 matchers included).
@@ -189,7 +189,7 @@ one is true, i.e. the rule asks more). Any other use of a missing var errors int
 
 ## What makes the file invalid
 
-The whole file is rejected (skipped, listed under "cannot be parsed" in Settings → Policies,
+The whole file is rejected (skipped, listed as an amber row in the sidebar's Security Policies group,
 never shadowing a builtin) on: no frontmatter / YAML error / not a mapping; a bare `rules` /
 `lets` / `scope` key; `shuvix-policy-rules` not a list; a rule with an unknown key, an unknown
 `effect`, an invalid condition value, a `match` that does not parse; a rule with no
@@ -218,7 +218,8 @@ English file**, translations only change the text people read):
 | `ask-on-new-site`               | in your own Chrome (the ShuviX side panel), ask the first time a conversation opens or works on a site (`object.browser == 'chrome'`) |
 | `session-grants`                | `force-allow` everything while the session's auto-allow switch is on, and reads / writes under paths the user answered "allow and remember" for |
 
-Settings → Policies shows each with its rules; "create override copy" writes the current text to
+The sidebar's Security Policies group lists each one (a row opens its md, rules on the property
+card); "Create override copy" in a builtin row's menu writes the current text to
 `~/.shuvix/policies/<name>.md`.
 
 ## Loosening and tightening

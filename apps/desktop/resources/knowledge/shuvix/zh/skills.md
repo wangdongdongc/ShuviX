@@ -52,7 +52,7 @@ ShuviX 只读 `SKILL.md`。伴随文件留给 agent 在加载 skill 之后用 `r
 | ---------- | ------------------------------------------- | --------------------- | ------------------------------------------------------------ |
 | 全局       | `~/.shuvix/skills/<dir>/SKILL.md`           | `<name>`              | 缺省开启；可禁用                                             |
 | 项目       | `<project>/.claude/skills/<dir>/SKILL.md`   | `<name>`              | 对该项目里的会话**恒开启**；名字撞车时优先                   |
-| 外部目录   | 设置 → Skills 里注册的任意文件夹            | `<dirName>:<name>`    | 缺省开启；整个目录或单个 skill 都可禁用                      |
+| 外部目录   | 从侧栏「技能」分组添加的任意文件夹          | `<dirName>:<name>`    | 缺省开启；整个目录或单个 skill 都可禁用                      |
 | 内置       | 随应用发布，只读                            | `builtin:<name>`      | 缺省开启；可禁用                                             |
 
 目录名与 `name` 可以不同；ShuviX 按 `name` 匹配。内置 skill 随应用发布（按界面语言一个目录），不能编辑；
@@ -63,7 +63,7 @@ ShuviX 只读 `SKILL.md`。伴随文件留给 agent 在加载 skill 之后用 `r
 { "disabled": ["<name>", "<dirName>:<name>"], "disabledDirs": ["<dirName>"], "dirs": [{ "name": "<dirName>", "path": "/abs/path" }] }
 ```
 
-经设置 → Skills 改它；这份文件是 ShuviX 的，不是手改的地方。
+经侧栏「技能」分组改它（行菜单里的启用 / 停用）；这份文件是 ShuviX 的，不是手改的地方。
 
 ## Skill 怎样到达模型
 
@@ -87,5 +87,5 @@ ShuviX 只读 `SKILL.md`。伴随文件留给 agent 在加载 skill 之后用 `r
 - 触发条件放 `description`，操作步骤放正文。模型在决定加载之前唯一能看到的就是描述。
 - 正文自含、用祈使句；伴随文件用相对路径引用，文本会当斜杠命令用时用 `${CLAUDE_SKILL_DIR}`。
 - 目录名与 skill 同名（`conventional-comments/SKILL.md`），两者永不漂移。
-- 建完告诉用户去设置 → Skills 看（或者输入框里 `/<name>` 已经出现了）；全局 skill 下一次扫描即被读到，
+- 建完告诉用户去侧栏「技能」分组看（或者输入框里 `/<name>` 已经出现了）；全局 skill 下一次扫描即被读到，
   不用重启。

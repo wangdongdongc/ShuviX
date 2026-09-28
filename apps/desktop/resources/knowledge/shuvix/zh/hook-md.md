@@ -56,12 +56,12 @@ in the `project` knowledge base. Otherwise finish without writing.
 | --------------------- | ---------- | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `shuvix`              | `hook v1`  | **是** | 文件类型标记。                                                                                                                                              |
 | `name`                | 字符串     | 否     | 身份；缺省取文件基础名。                                                                                                                                    |
-| `shuvix-displayName`  | 字符串     | 否     | 设置 → Hook 里的标签。缺省 = `name`。                                                                                                                       |
+| `shuvix-displayName`  | 字符串     | 否     | 侧栏「Hooks」分组里的标签。缺省 = `name`。                                                                                                                       |
 | `description`         | 字符串     | 否     | 设置列表里的一句话。                                                                                                                                        |
 | `shuvix-hook-agent`   | 字符串     | **是** | 要派发的 agent，按 `name`：任何内置 agent 或 `~/.shuvix/agents/<name>.md`。**绝不能是基座人格**（`work` / `chat` / `notebook` / `bot`）—— 解析时拒绝。       |
 | `shuvix-hook-on`      | 绑定列表   | **是** | 至少一条 `{ trigger, when? }`。`trigger` 是触发点 id；`when` 是可选的 CEL 表达式。绑定里出现别的键即拒绝。                                                    |
 
-严格性（整份拒绝，原因显示在设置 → Hook）：缺标记、`shuvix-hook-agent` 缺失或为空、agent 是基座人格、
+严格性（整份拒绝，以琥珀色行列在侧栏「Hooks」分组、悬停可见原因）：缺标记、`shuvix-hook-agent` 缺失或为空、agent 是基座人格、
 `shuvix-hook-on` 缺失 / 为空 / 不是列表、某条绑定没有 `trigger` 或带了多余的键、`when` 不是字符串或
 不是合法 CEL、裸的 `on:` / `agent:` 键（只读带前缀的名字 —— 写错的键名不能静默变成「没有绑定」），
 以及任何不是上述两个的 `shuvix-hook-*` 键。**未知的触发点 id 不算错**：绑定保留但惰性化，并记一条警告，

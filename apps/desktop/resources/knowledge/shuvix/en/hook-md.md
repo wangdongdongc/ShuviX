@@ -61,12 +61,13 @@ in the `project` knowledge base. Otherwise finish without writing.
 | --------------------- | --------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `shuvix`              | `hook v1`       | **yes**  | File-type marker.                                                                                                                                                           |
 | `name`                | string          | no       | Identity; defaults to the file's base name.                                                                                                                                 |
-| `shuvix-displayName`  | string          | no       | Label in Settings → Hooks. Defaults to `name`.                                                                                                                              |
+| `shuvix-displayName`  | string          | no       | Label in the sidebar's Hooks group. Defaults to `name`.                                                                                                                              |
 | `description`         | string          | no       | One line for the settings list.                                                                                                                                             |
 | `shuvix-hook-agent`   | string          | **yes**  | The agent to dispatch, by `name`: any builtin agent or `~/.shuvix/agents/<name>.md`. **Never a base persona** (`work` / `chat` / `notebook` / `bot`) — rejected at parse.   |
 | `shuvix-hook-on`      | list of bindings| **yes**  | At least one `{ trigger, when? }`. `trigger` is a trigger-point id; `when` is an optional CEL expression. A binding with any other key is rejected.                          |
 
-Strictness (whole file rejected, with the reason shown in Settings → Hooks): missing marker,
+Strictness (whole file rejected, shown as an amber row in the sidebar's Hooks group with the
+reason as its tooltip): missing marker,
 missing or empty `shuvix-hook-agent`, a base persona as the agent, missing / empty / non-list
 `shuvix-hook-on`, a binding without `trigger` or with an extra key, a `when` that is not a
 string or does not parse as CEL, a bare `on:` / `agent:` key (the prefixed names are the only

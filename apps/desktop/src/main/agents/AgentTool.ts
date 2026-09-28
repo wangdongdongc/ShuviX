@@ -59,9 +59,19 @@ export function createAgentTool(ctx: ToolContext, agentCtx: AgentToolContext): D
     modelConfig: agentCtx.modelConfig,
     parentSessionId: ctx.sessionId,
     abortError: TOOL_ABORTED,
-    // 路径 ref：相对路径以根会话工作目录为基准（惰性解析，跟随会话当前项目配置）
-    resolveAgentFile: (path) =>
-      agentService.loadAgentFromRef(path, resolveProjectConfig(rootSessionId).workingDirectory)
+    // 路径 ref：相对路径以根会话工作目录为基准（惰性解析，跟随会话当前项目配置）。
+    // 只由宿主派发的档案按路径也不收 —— 否则把随包发布的那份 md（或它的副本）按路径一指，
+    // 按名拦下的审查员就又能被派发出来当预言机
+    resolveAgentFile: async (path) => {
+      const def = await agentService.loadAgentFromRef(
+        path,
+        resolveProjectConfig(rootSessionId).workingDirectory
+      )
+      if (def && HOST_ONLY_PROFILE_NAMES.has(def.name)) {
+        throw new Error(`"${def.name}" is run only by ShuviX and cannot be dispatched`)
+      }
+      return def
+    }
   })
 }
 

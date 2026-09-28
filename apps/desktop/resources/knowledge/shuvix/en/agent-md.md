@@ -122,8 +122,9 @@ other template syntax.
 
 ## What makes the file invalid
 
-The parser rejects the **whole file** (it is skipped, listed under "cannot be parsed" in
-Settings → Agents, and never shadows a builtin of the same name) when:
+The parser rejects the **whole file** (it is skipped, listed as an amber row at the bottom of
+the sidebar's Agents group with the reason as its tooltip, and never shadows a builtin of the same
+name) when:
 
 - there is no YAML frontmatter block, or the YAML does not parse, or it is not a mapping;
 - `shuvix-tools` / `shuvix-model` / `shuvix-instruction-files` is not a string (a YAML list is
@@ -153,8 +154,8 @@ the task agents `coding`, `explore`, `widget`, `titler` and `knowledge-writer`, 
   window → `coedit`, notebook → `notebook`, bot chat → `bot`, Chrome side panel → `tab`, in a project → `work`, otherwise →
   `chat`. There is no setting
   and no picker. To change how a main conversation behaves, **override the base by name**:
-  `~/.shuvix/agents/work.md` replaces the builtin `work` completely (Settings → Agents →
-  "create override copy" gives you the current text to start from).
+  `~/.shuvix/agents/work.md` replaces the builtin `work` completely ("Create override copy" in
+  the builtin row's menu in the sidebar's Agents group gives you the current text to start from).
 - Any user file whose `name` equals a builtin's name replaces that builtin. Same-name copies
   among user files are resolved by the rule in the `shuvix-files` entry; losers are listed as
   Overridden. A broken override never shadows the builtin.

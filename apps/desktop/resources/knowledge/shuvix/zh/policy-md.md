@@ -66,7 +66,7 @@ The body is documentation only — the engine never reads it.
 | ----------------------- | --------------------------- | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `shuvix`                | `policy v1`                 | 否     | 文件类型标记。                                                                                                                                                                                           |
 | `name`                  | 字符串                      | 否     | 身份（覆盖按它匹配）。缺省取文件基础名。                                                                                                                                                                 |
-| `shuvix-displayName`    | 字符串                      | 否     | 设置 → 策略与询问卡片上的标签。缺省 = `name`。                                                                                                                                                           |
+| `shuvix-displayName`    | 字符串                      | 否     | 侧栏「安全策略」分组与询问卡片上的标签。缺省 = `name`。                                                                                                                                                           |
 | `description`           | 字符串                      | 否     | 列表里的一句话。                                                                                                                                                                                         |
 | `shuvix-policy-scope`   | 映射                        | 否     | 本策略**每条规则**共用的条件（AND 进每一条）。键与规则条件相同。某条规则自己的条件与 scope 矛盾（交集为空）会让文件非法。                                                                                   |
 | `shuvix-policy-lets`    | 映射 名字 → CEL 字符串      | 否     | 从 `{vars}` 算一次的具名值，以顶层名字注入每条规则的 `match`。名字必须是标识符，且不能是 `subject`、`action`、`tool`、`object`、`env`、`vars` 或 `inDir`。惰性求值，用到才算。                                |
@@ -82,7 +82,7 @@ The body is documentation only — the engine never reads it.
 | `effect`                                                       | **必填**：`allow`、`force-allow`、`ask`、`force-ask` 或 `deny`。                                                                                                               |
 | `subject.kind`、`action`、`object.type`、`env.host`、`tool.name` | 结构化条件：字符串或字符串列表（列表内 OR，键之间 AND）；`'*'` = 任意；空列表或空串非法。**`subject.kind` 必填**，写在规则上或 scope 里 —— 要「任意主体」就有意地写 `'*'`。            |
 | `match`                                                        | 可选的 CEL 表达式，对请求文档（见下）求值，与条件 AND。语法错让文件非法。                                                                                                        |
-| `prompt`                                                       | 可选的一句话。`ask` 时显示在询问卡片上；`deny` 时作为拒绝原因回给 agent；放行类规则只在设置页显示。最长 1000 字符。唯一永远不会让文件非法的键。                                    |
+| `prompt`                                                       | 可选的一句话。`ask` 时显示在询问卡片上；`deny` 时作为拒绝原因回给 agent；放行类规则只在策略的属性卡上显示。最长 1000 字符。唯一永远不会让文件非法的键。                                    |
 
 规则里出现任何别的键都让文件非法（包括旧的嵌套 `object:` / `subject:` / `when:` 匹配器）。
 
@@ -178,7 +178,7 @@ vars     宿主变量表（见下）+ 会话授权
 
 ## 什么会让文件非法
 
-出现下列情况整份拒绝（被跳过、列在设置 → 策略的「无法解析」下、永远不遮蔽内置）：没有 frontmatter /
+出现下列情况整份拒绝（被跳过、以琥珀色行列在侧栏「安全策略」分组、永远不遮蔽内置）：没有 frontmatter /
 YAML 语法错 / 不是映射；裸的 `rules` / `lets` / `scope` 键；`shuvix-policy-rules` 不是列表；某条规则带
 未知键、未知 `effect`、非法的条件值、解析不了的 `match`；某条规则没有 `subject.kind`（规则或 scope）；
 某条规则的条件与 scope 交集为空；非法的 `lets`（名字不合法、保留名、非字符串或解析不了的表达式）。
@@ -204,7 +204,8 @@ YAML 语法错 / 不是映射；裸的 `rules` / `lets` / `scope` 键；`shuvix-
 | `ask-on-new-site`               | 在你自己的 Chrome 里（ShuviX 侧边栏），一场对话第一次打开或操作某个站点时询问（`object.browser == 'chrome'`） |
 | `session-grants`                | 会话的免询问开关打开时 `force-allow` 一切；用户答过「允许并记住」的路径下的读 / 写 `force-allow`               |
 
-设置 → 策略逐份显示其规则；「创建覆盖副本」把当前文本写到 `~/.shuvix/policies/<name>.md`。
+侧栏「安全策略」分组逐份列出（点一行打开那份 md，规则在属性卡上）；内置行菜单的「创建覆盖副本」把当前文本写到
+`~/.shuvix/policies/<name>.md`。
 
 ## 放宽与收紧
 

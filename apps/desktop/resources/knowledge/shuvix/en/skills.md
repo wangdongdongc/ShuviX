@@ -55,7 +55,7 @@ after loading the skill; refer to them by path from the skill's base directory.
 | ---------------- | -------------------------------------------- | ---------------------- | ---------------------------------------------------------------------------- |
 | global           | `~/.shuvix/skills/<dir>/SKILL.md`            | `<name>`               | on by default; can be disabled                                               |
 | project          | `<project>/.claude/skills/<dir>/SKILL.md`    | `<name>`               | **always on** for sessions in that project; preferred when a name clashes    |
-| external directory | any folder registered in Settings → Skills | `<dirName>:<name>`     | on by default; the whole directory or single skills can be disabled          |
+| external directory | any folder added from the sidebar's Skills group | `<dirName>:<name>` | on by default; the whole directory or single skills can be disabled          |
 | builtin          | shipped inside the application, read-only    | `builtin:<name>`       | on by default; can be disabled                                               |
 
 The directory name and `name` may differ; ShuviX matches by `name`. Builtin skills come with the
@@ -68,7 +68,8 @@ Enable state lives in `~/.shuvix/skills/.config.json`:
 { "disabled": ["<name>", "<dirName>:<name>"], "disabledDirs": ["<dirName>"], "dirs": [{ "name": "<dirName>", "path": "/abs/path" }] }
 ```
 
-Edit it through Settings → Skills; the file is ShuviX's, not a place for hand edits.
+Change it through the sidebar's Skills group (the enable / disable item in a row's menu); the
+file is ShuviX's, not a place for hand edits.
 
 ## How a skill reaches the model
 
@@ -101,5 +102,5 @@ Edit it through Settings → Skills; the file is ShuviX's, not a place for hand 
 - Keep the body self-contained and imperative; link companion files by relative path or with
   `${CLAUDE_SKILL_DIR}` when the text will be used as a slash command.
 - Name the directory after the skill (`conventional-comments/SKILL.md`) so the two never drift.
-- After creating one, tell the user to check Settings → Skills (or that `/<name>` now appears in
-  the input box); a global skill is picked up on the next scan without a restart.
+- After creating one, tell the user to look in the sidebar's Skills group (or that `/<name>` now
+  appears in the input box); a global skill is picked up on the next scan without a restart.

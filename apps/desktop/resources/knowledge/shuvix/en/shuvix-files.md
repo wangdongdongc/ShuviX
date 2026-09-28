@@ -42,8 +42,8 @@ directories are registered), `widgets/`, `tts/`, `cli-token`. The old `memory/`,
 (`auto-title`, `auto-review`) and the builtin skill `builtin:drawing`. There are no builtin bots.
 A builtin cannot be edited, but
 it can be **overridden**: a user file whose `name` equals the builtin's name replaces it
-completely (the Settings tabs offer "create override copy", which writes the builtin's current
-text into your directory as a starting point).
+completely (a builtin row's menu in the sidebar group offers "Create override copy", which
+writes the builtin's current text into your directory as a starting point).
 
 ## The `shuvix:` marker
 
@@ -91,8 +91,8 @@ frontmatter, YAML error, frontmatter that is not a mapping, a key of the wrong t
 can never match, …) is **rejected as a whole, never half-applied**. A rejected user file:
 
 - is skipped by the runtime — it never shadows a builtin of the same name;
-- is listed in the corresponding Settings tab under "cannot be parsed" with the parser's reason
-  (the Bots group in the sidebar shows an invalid bot file the same way);
+- is listed in the corresponding sidebar group as an amber row whose tooltip is the parser's
+  reason;
 - shows the same verdict live in its notebook's property card while you edit it.
 
 A knowledge entry is the exception by design ("read wide, write strict"): a note that is not a
@@ -110,8 +110,9 @@ When several files carry the same `name`, exactly one is in effect and the other
 3. then the shorter file name;
 4. then code-point order of the file name (never directory listing order).
 
-The runtime's active set and the Settings list are two views of this one resolution, so a row
-shown as active is the copy actually in use.
+The runtime's active set and the sidebar group's list are two views of this one resolution, so a
+row shown as active is the copy actually in use; the losing copies are struck through with an
+"Overridden" badge.
 
 ## Editing and verifying
 
@@ -125,10 +126,11 @@ When you create or change one of these files on the user's behalf:
 
 - Write the whole file with the `write` tool (or `edit` an existing one) at the exact path in
   the table above; the directory may not exist yet — create it. Use the current text of a
-  builtin (Settings → "create override copy", or the builtin's `md` as quoted in these entries) as
+  builtin ("Create override copy" on the builtin row in the sidebar, or the builtin's `md` as
+  quoted in these entries) as
   the model for an override.
 - The result of a `write` / `edit` on a file that carries a `shuvix:` marker comes back with
   the parser's verdict appended (the file is still written — the verdict is a receipt, not a
   gate). Read it and fix the file rather than reporting success.
-- Point the user at where the file shows up: Settings → Agents / Policies / Hooks, the Bots
-  group, the Knowledge base group, or the Skills tab.
+- Point the user at where the file shows up: the sidebar's Agents, Security Policies, Hooks,
+  Skills, Bots or Knowledge Base group.

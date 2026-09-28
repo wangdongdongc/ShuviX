@@ -115,7 +115,7 @@ frontmatter 之后的全部内容（去首尾空白）就是系统提示词。�
 
 ## 什么会让文件非法
 
-出现下列情况时解析器拒绝**整份文件**（被跳过、列在设置 → Agent 的「无法解析」下、永远不遮蔽同名内置）：
+出现下列情况时解析器拒绝**整份文件**（被跳过、以琥珀色行列在侧栏「智能体」分组末尾、悬停可见原因，永远不遮蔽同名内置）：
 
 - 没有 YAML frontmatter 块，或 YAML 解析不了，或它不是映射；
 - `shuvix-tools` / `shuvix-model` / `shuvix-instruction-files` 不是字符串（写成 YAML 列表是最常见的错）；
@@ -137,7 +137,7 @@ agent `coding`、`explore`、`widget`、`titler`、`knowledge-writer`，以及 `
 
 - **会话的根人格由会话形态推导，从不选择**：协作编辑窗口 → `coedit`，笔记本 → `notebook`，bot 会话 → `bot`，Chrome 侧边栏 →
   `tab`，在项目里 → `work`，否则 → `chat`。没有设置项，没有选择器。想改主对话的行为，**按名字覆盖基座**：
-  `~/.shuvix/agents/work.md` 整个取代内置的 `work`（设置 → Agent → 「创建覆盖副本」给你当前文本作起点）。
+  `~/.shuvix/agents/work.md` 整个取代内置的 `work`（侧栏「智能体」分组里内置行菜单的「创建覆盖副本」给你当前文本作起点）。
 - 任何 `name` 与内置同名的用户文件都取代那个内置。用户文件之间的同名按 `shuvix-files` 条目里的规则
   裁决；输的那几份列为已被覆盖。写坏的覆盖永远不会遮蔽内置。
 - 基座**从不被派发、从不被点名**：`agent` 工具、hook 的 `shuvix-hook-agent`、子会话的 `agent_profile`

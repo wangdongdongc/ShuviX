@@ -8,9 +8,8 @@
  *         （BASE_PROFILE_NAMES 全体）；coding / explore / 用户自己的档案照列；
  *  - AT-3 用户按名覆盖了同名文件（注册表给出 source user 的那份）：照样拒、照样不列；
  *  - AT-4 对照：coding 照常派发；前后带空白的名字去空白后与 AT-1 同一句；
- *  - AT-5 路径形式的 ref（frontmatter name 恰是 permission-reviewer）今天**照样派发** —— 钉现状：
- *         这是已接受的残余（设计稿 §9：那份 md 是 agent 自己能写的内容，不是宿主的审查员，
- *         审查员的真身只从内置与 ~/.shuvix 解析，而写 ~/.shuvix/agents 被 protect-shuvix-config 挡在人面前）。
+ *  - AT-5 路径形式的 ref 解析出的 name 恰是 permission-reviewer（随包那份 md 本身、或它的副本）同样
+ *         拒绝 —— 按名拦下、按路径放行，等于没拦；换个 name 的副本拦不住，那是已接受的残余（设计稿 §9）。
  *
  * 被审的 agent 要是能派发审查员，就能反复拿它试探「哪种写法能过审」—— 这组用例钉的就是那扇门关着。
  *
@@ -198,19 +197,21 @@ describe('派发工具：只由宿主派发的档案对 agent 不存在', () => 
     expect(mocks.runTask).not.toHaveBeenCalled()
   })
 
-  it('AT-5 路径形式 ./reviewer.md（frontmatter name 恰是 permission-reviewer）今天照样派发 —— 钉现状：已接受的残余（那份 md 是 agent 自己写得出的内容，不是宿主的审查员）', async () => {
+  it('AT-5 路径形式 ./reviewer.md 解析出 name 恰是 permission-reviewer → 拒绝、不派发；换个 name 的副本照常派发（已接受的残余）', async () => {
     mocks.loadAgentFromRef.mockReturnValue(profileOf(PERMISSION_REVIEWER_PROFILE_NAME, 'user'))
 
     const text = await dispatch({ name: './reviewer.md' })
 
-    // 路径 ref 走 resolveAgentFile（按根会话的工作目录解析），不经派发面注册表 —— 名单常量在这条路上不起作用
+    // 路径 ref 走 resolveAgentFile（按根会话的工作目录解析），不经派发面注册表
     expect(mocks.loadAgentFromRef.mock.calls).toEqual([['./reviewer.md', '/w']])
     expect(mocks.resolveProjectConfig).toHaveBeenCalledWith(ROOT)
     expect(mocks.getProfile).not.toHaveBeenCalled()
-    expect(text).toBe('done')
+    expect(text).toContain('Cannot load agent definition from "./reviewer.md"')
+    expect(text).toContain('"permission-reviewer" is run only by ShuviX and cannot be dispatched')
+    expect(mocks.runTask).not.toHaveBeenCalled()
+
+    mocks.loadAgentFromRef.mockReturnValue(profileOf('my-reviewer', 'user'))
+    expect(await dispatch({ name: './my-reviewer.md' })).toBe('done')
     expect(mocks.runTask).toHaveBeenCalledTimes(1)
-    expect(mocks.runTask.mock.calls[0][0]).toMatchObject({
-      agentType: expect.objectContaining({ name: PERMISSION_REVIEWER_PROFILE_NAME })
-    })
   })
 })
