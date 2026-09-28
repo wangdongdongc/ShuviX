@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import en from './locales/en.json'
 import zh from './locales/zh.json'
 import ja from './locales/ja.json'
+import { PERMISSION_RISKS } from '../types/permissionReview'
 
 /**
  * 三语键集合齐平 —— UI 文案的唯一真源就是这三份 JSON，缺键的表现是界面上直接
@@ -177,6 +178,54 @@ describe('i18n 语言包', () => {
     ]
     const missingOrEmpty = KNOWLEDGE_GROUP_KEYS.filter((k) => !leaf(en, k)?.trim())
     expect(missingOrEmpty).toEqual([])
+  })
+
+  /**
+   * L-6..8：自动审查在界面上的文案 —— 工具卡的「审查中」/「已审查」、询问卡片上的审查意见、设置里的
+   * 开关。缺键的表现是卡片上露出 `toolCall.reviewRisk.high` 这样的原始键名；`reviewedHint` 漏了
+   * `{{risk}}` 运行期不报错，只是那句悬停提示里少了风险等级；多出一个插值则会露出原始占位符 ——
+   * 其余几句都不该有要填的东西（审查员写的那句是拼在 hint 后面的，不走插值）。
+   * 风险四档的说法一旦撞了（两档同字），盾牌的悬停提示就分不出轻重。
+   */
+  const REVIEW_KEYS = [
+    'toolCall.reviewingHint',
+    'toolCall.reviewedHint',
+    'toolCall.reviewNoSummary',
+    'toolCall.reviewReasonLabel',
+    'toolCall.reviewRisk.low',
+    'toolCall.reviewRisk.medium',
+    'toolCall.reviewRisk.high',
+    'toolCall.reviewRisk.critical',
+    'settings.securitySection',
+    'settings.autoReview',
+    'settings.autoReviewHint'
+  ]
+
+  it('L-6 自动审查的文案三语都有且非空', () => {
+    for (const [lang, bundle] of Object.entries({ en, zh, ja })) {
+      for (const key of REVIEW_KEYS) {
+        expect(leaf(bundle, key)?.trim(), `${lang} ${key}`).toBeTruthy()
+      }
+    }
+  })
+
+  it('L-7 reviewedHint 三语都恰好只插 {{risk}}；其余这些键都不含插值', () => {
+    for (const [lang, bundle] of Object.entries({ en, zh, ja })) {
+      for (const key of REVIEW_KEYS) {
+        const expected = key === 'toolCall.reviewedHint' ? ['risk'] : []
+        expect(placeholders(leaf(bundle, key) ?? ''), `${lang} ${key}`).toEqual(expected)
+      }
+    }
+  })
+
+  it('L-8 toolCall.reviewRisk 的子键三语都与 PERMISSION_RISKS 逐项相等；同一语言四个说法两两不同', () => {
+    for (const [lang, bundle] of Object.entries({ en, zh, ja })) {
+      const risks = (bundle as { toolCall: { reviewRisk: Record<string, string> } }).toolCall
+        .reviewRisk
+      expect(Object.keys(risks), lang).toEqual([...PERMISSION_RISKS])
+      const labels = Object.values(risks)
+      expect(new Set(labels).size, `${lang} ${labels.join(' / ')}`).toBe(labels.length)
+    }
   })
 
   /**
