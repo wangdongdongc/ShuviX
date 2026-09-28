@@ -35,6 +35,7 @@ description: Reads a change set and reports risks without editing anything.
 shuvix-displayName: Code reviewer
 shuvix-tools: read, ls, grep, glob, bash, skill:conventional-comments
 shuvix-model: anthropic/claude-sonnet-4-5
+shuvix-thinking: low
 shuvix-instruction-files: AGENTS.md, CLAUDE.md
 shuvix-project-awareness: true
 ---
@@ -54,6 +55,7 @@ style, each with file and line. Never modify files.
 | `shuvix-displayName`        | 文字列             | いいえ | UI 上のラベル。既定値は `name`。                                                                                                                                                                                                                     |
 | `shuvix-tools`              | カンマ区切り文字列 | いいえ | ツールのホワイトリスト（後述）。**YAML リストではなく文字列** —— リストにするとファイルは不正。省略 = ツールなし。                                                                                                                                    |
 | `shuvix-model`              | 文字列             | いいえ | このエージェントが動くモデル：`<providerId>/<modelId>`（UI が書く形）か、素の `<modelId>`。省略 = 動いているセッション（または派遣元）に従う。設定で有効になっていないモデルは無いものとして扱われる。                                                    |
+| `shuvix-thinking`           | 文字列             | いいえ | このエージェントの思考の深さ：`off` / `low` / `medium` / `high` / `xhigh`（大文字小文字は問わない）。派遣されたエージェントはこのレベルで動く。サブセッションの `agent_profile` で指名されると、そのサブセッションの初期レベルになる（後からセッション内で変えられる）。セッションのルート（ベース）としては無視され、セッションで選ばれているものが使われる。省略 = 派遣元のレベル（サブセッションは親に従う）。それ以外の値はファイルを不正にする。 |
 | `shuvix-instruction-files`  | カンマ区切り文字列 | いいえ | エージェントが読むプロジェクト指示ファイル。**作業ディレクトリからの相対パス**を優先順に並べる：存在して空でない最初の一つが注入され、最大一つ。絶対パス、`..` セグメント、ブール値はファイルを不正にする。省略 = 注入なし。                                  |
 | `shuvix-project-awareness`  | ブール             | いいえ | `true` = エージェントにどのプロジェクトにいるかを伝える：プロジェクトのプロンプトとプロジェクト記憶の索引がシステムプロンプトに追加される（ルートセッションのプロジェクトで解決；プロジェクトが無ければ何も注入されない）。本物の YAML ブール値であること。既定 `false`。 |
 | `shuvix-builtin`            | ブール             | いいえ | ShuviX が同梱するファイルの自己申告マーカー。パーサーは読まない。ユーザーファイルに加えないこと。                                                                                                                                                    |
@@ -126,6 +128,8 @@ frontmatter の後の全部（前後の空白を除く）がシステムプロ�
 - YAML frontmatter ブロックが無い、YAML が解析できない、マッピングでない；
 - `shuvix-tools` / `shuvix-model` / `shuvix-instruction-files` が文字列でない（YAML リストがよくある
   間違い）；
+- `shuvix-thinking` が `off` / `low` / `medium` / `high` / `xhigh` のいずれでもない（`false` も不可 ——
+  `off` と書く）；
 - `shuvix-project-awareness` がブールでない；
 - `shuvix-instruction-files` の項目が絶対パスであるか `..` で作業ディレクトリを抜ける、またはこのキーが
   2026 年より前のブール形式（`shuvix-instruction-files: true` —— 代わりにファイル名を列挙する）。
@@ -157,7 +161,8 @@ frontmatter の後の全部（前後の空白を除く）がシステムプロ�
 
 1. **`agent` ツールでサブエージェントとして派遣**（呼び出し側自身のリストに `agent` が必要）：`name` =
    このファイルの `name`、加えて `prompt` と短い `description`。サブエージェントはルートエージェントと
-   対等にメモリ内で走り、`shuvix-model` が無ければセッションのモデルと思考レベルを継承し、ルート
+   対等にメモリ内で走り、セッションのモデルと思考レベルを継承し（`shuvix-model` / `shuvix-thinking`
+   で宣言されていればそれが優先）、ルート
    セッションのプロジェクトに対して解決された同じ指示ファイル / プロジェクト注入を受け取り、最終テキストを
    返します。このツールは利用可能なエージェントをモデルに列挙**しません** —— 名前はプロンプトか
    ユーザーから知る必要があります。

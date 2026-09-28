@@ -896,6 +896,7 @@
     "subAgentModel": "Model",
     "subAgentModelNone": "Follow the session",
     "subAgentModelUnavailable": "\"{{ref}}\" is not available right now (provider disabled or model removed). The file keeps this value until you pick another.",
+    "subAgentThinking": "Thinking",
     "subAgentTemplateDesc": "What this agent does, in one line",
     "subAgentTemplateBody": "Write the system prompt here.",
     "artifactLabel": "Artifact",

@@ -4,6 +4,7 @@ shuvix-builtin: true
 name: titler
 description: 为当前会话命名 —— 从对话内容提炼简短标题，经 session 工具应用。
 shuvix-tools: session
+shuvix-thinking: off
 shuvix-displayName: 标题生成
 ---
 

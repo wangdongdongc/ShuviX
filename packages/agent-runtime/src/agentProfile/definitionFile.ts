@@ -34,6 +34,12 @@
  *     （跟随会话 / 继承派发方）。本层只做「原样存取」，取值解释（拆前缀 / 对模型目录解析 /
  *     反向写出）是三端共用契约，在 `@shuvix/chat-protocol/agentModelRef`
  *     （渲染进程够不到 agent-runtime，故不放这里）；
+ *   - `shuvix-thinking` 声明该 agent 的思考档位，取值是界面可选的那几档（`SELECTABLE_THINKING_LEVELS`：
+ *     off / low / medium / high / xhigh；大小写不敏感，写出恒小写）；省略 = 不声明（跟随派发方 /
+ *     父会话）。生效口径与 `shuvix-model` 平行：派生 agent 创建时压过派发方的档位；被 `agent_profile`
+ *     点名的子会话把它作为种子写进会话树；会话根（基座）忽略，以会话里选的为准。它是一个键而不是
+ *     宿主规则，是因为「这个 agent 不思考」这类运行方式必须写在档案里、打开就看得见 —— 宿主替某个
+ *     agent 悄悄关掉，用户既看不到，也不知道该去改哪里；
  *   - 正文可内嵌 `{{shuvix:name}}` 占位符（createAgent 时按宿主变量表替换）；
  *   - frontmatter 用完整 YAML 解析（支持多行字符串、引号、注释等）。
  *
@@ -45,12 +51,18 @@
  * `shuvix-prompt-sections`（动态段机制已被 {{shuvix:*}} 变量取代）、被 `shuvix-project-awareness`
  * 合并掉的 `shuvix-project-prompt` / `shuvix-project-memory` 与通用 `tools` key
  * （其他 app 语义，见上）都不再读取（未知 key 忽略）；`shuvix-tools` /
- * `shuvix-instruction-files` / `shuvix-model` 仅接受字符串、布尔 key `shuvix-project-awareness` 仅接受布尔，
+ * `shuvix-instruction-files` / `shuvix-model` 仅接受字符串、`shuvix-thinking` 仅接受那几档之一、
+ * 布尔 key `shuvix-project-awareness` 仅接受布尔，
  * 类型不符视为文件非法（跳过并记警告），宁可整体拒绝也不静默降级 —— 包括
  * `shuvix-instruction-files: true` 这种改制前的写法：布尔已不再是合法取值，
  * 拒绝理由里直说「改列文件名」，比默默按老语义猜一份清单可诊断。
  */
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
+import {
+  SELECTABLE_THINKING_LEVELS,
+  isSelectableThinkingLevel,
+  type SelectableThinkingLevel
+} from '@shuvix/chat-protocol/types/thinking'
 import { splitFrontmatter } from '../markdownFrontmatter'
 
 /**
@@ -69,6 +81,8 @@ export interface ParsedAgentFile {
   tools: string[]
   /** `shuvix-model` 原样字符串（`<modelId>` 或 `<provider>/<modelId>`）；省略 = 不声明 */
   model?: string
+  /** `shuvix-thinking` 声明的思考档位（已归一为小写）；省略 = 不声明 */
+  thinkingLevel?: SelectableThinkingLevel
   /**
    * `shuvix-instruction-files`：该 agent 认的项目指令文件清单（工作目录内的相对路径，
    * 已归一去重保序）。**顺序即优先级** —— 注入侧取第一个存在且非空的，至多一个。
@@ -139,6 +153,7 @@ export interface AgentSharedFields {
   description: string
   tools: string[]
   model?: string
+  thinkingLevel?: SelectableThinkingLevel
   instructionFiles: string[]
   projectAwareness: boolean
   knowledge?: boolean
@@ -158,6 +173,15 @@ export function parseAgentSharedFields(
   const modelRaw = fields['shuvix-model'] ?? null
   if (modelRaw !== null && typeof modelRaw !== 'string') {
     return { error: "'shuvix-model' must be a string (`<modelId>` or `<provider>/<modelId>`)" }
+  }
+  // 空串与省略同义（同 shuvix-model）；其余必须是界面可选的那几档之一 ——
+  // 写成布尔（`shuvix-thinking: false`）或别的词都判非法，宁可说清也不猜
+  const thinkingRaw = fields['shuvix-thinking'] ?? null
+  const thinking = typeof thinkingRaw === 'string' ? thinkingRaw.trim().toLowerCase() : thinkingRaw
+  if (thinking !== null && thinking !== '' && !isSelectableThinkingLevel(thinking)) {
+    return {
+      error: `'shuvix-thinking' must be one of: ${SELECTABLE_THINKING_LEVELS.join(', ')}`
+    }
   }
   const projectAwarenessRaw = fields['shuvix-project-awareness'] ?? null
   if (projectAwarenessRaw !== null && typeof projectAwarenessRaw !== 'boolean') {
@@ -196,6 +220,7 @@ export function parseAgentSharedFields(
       description: stringField(fields, 'description') ?? '',
       tools,
       model: stringField(fields, 'shuvix-model'),
+      ...(isSelectableThinkingLevel(thinking) ? { thinkingLevel: thinking } : {}),
       instructionFiles,
       projectAwareness: projectAwarenessRaw ?? false
       // 只在为真时写出：类型上可选、省略等同 false（既有的档案字面量与往返断言零改动）
@@ -265,6 +290,7 @@ export function serializeAgentDefinitionFile(data: ParsedAgentFile): string {
   if (data.description.trim()) fields.description = data.description.trim()
   if (data.tools.length > 0) fields['shuvix-tools'] = data.tools.join(', ')
   if (data.model?.trim()) fields['shuvix-model'] = data.model.trim()
+  if (data.thinkingLevel) fields['shuvix-thinking'] = data.thinkingLevel
   if (data.displayName.trim() && data.displayName.trim() !== data.name) {
     fields['shuvix-displayName'] = data.displayName.trim()
   }

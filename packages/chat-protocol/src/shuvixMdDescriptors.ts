@@ -76,6 +76,9 @@ export interface ShuvixMdTypeDescriptor {
 /** agent 档案的模型键 —— 属性卡据它把槽位分派给 ModelSelect（唯一走模型选择器的键） */
 export const AGENT_MODEL_KEY = 'shuvix-model'
 
+/** agent 档案的思考档位键 —— 属性卡据它给出 SELECTABLE_THINKING_LEVELS 的下拉 */
+export const AGENT_THINKING_KEY = 'shuvix-thinking'
+
 /** agent 定义文件（agent-runtime definitionFile.ts 的键集；labelKey 复用智能体设置页文案） */
 const AGENT_DESCRIPTOR: ShuvixMdTypeDescriptor = {
   type: 'agent',
@@ -85,6 +88,7 @@ const AGENT_DESCRIPTOR: ShuvixMdTypeDescriptor = {
     { key: 'shuvix-displayName', labelKey: 'tool.subAgentDisplayName', kind: 'text' },
     { key: 'description', labelKey: 'tool.subAgentDescription', kind: 'text' },
     { key: AGENT_MODEL_KEY, labelKey: 'tool.subAgentModel', kind: 'select' },
+    { key: AGENT_THINKING_KEY, labelKey: 'tool.subAgentThinking', kind: 'select' },
     { key: 'shuvix-tools', labelKey: 'tool.subAgentTools', kind: 'csv' },
     { key: 'shuvix-instruction-files', labelKey: 'tool.subAgentInstructionFiles', kind: 'csv' },
     { key: 'shuvix-project-awareness', labelKey: 'tool.subAgentProjectAwareness', kind: 'boolean' }

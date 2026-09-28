@@ -173,7 +173,10 @@ export interface CreateAgentParams {
   profile: InProcessAgentType
   /** 初始模型配置（会话解析值 / 派发方传入） */
   model: SubAgentModelConfig
-  /** 已解析的思考档位（root=resolveInitialThinkingLevel；spawned=modelConfig.thinkingLevel ?? 'off'） */
+  /**
+   * 已解析的思考档位（root=resolveInitialThinkingLevel；spawned=modelConfig.thinkingLevel ?? 'off'）。
+   * spawned 时档案声明的 `shuvix-thinking` 压过它（见 createAgent 决策表的思考一行）。
+   */
   thinkingLevel?: ThinkingLevel
   /** 工作目录（root 必给；spawned 传 '' —— 工具自带执行环境） */
   cwd: string
@@ -296,7 +299,7 @@ export function createAgentFactory(host: AgentHostAdapter): AgentFactory {
     // root：以传入值为准（会话树是唯一事实源；档案模型在「切档案」时作为种子写进树，
     //       否则每次重建都会把用户手选的模型默默还原）。
     // spawned：档案声明优先于派发方继承 —— 派生 agent 既无会话树也无模型选择器。
-    //       思考档位不跟着走，仍随派发方（档案只表达「用哪个模型」）。
+    //       思考档位是独立的一行（见下），档案不声明时仍随派发方。
     // 宿主没注入解析器（resolveProfileModel 可选）时同样回落，但不告警 ——
     // 那是「本端不支持档案模型」，不是「这个模型不可用」，混为一谈会误导排障。
     const canResolveDeclared = kind === 'spawned' && !!profile.model && !!host.resolveProfileModel
@@ -312,13 +315,20 @@ export function createAgentFactory(host: AgentHostAdapter): AgentFactory {
       ? { ...declaredModel, thinkingLevel: params.model.thinkingLevel }
       : params.model
 
+    // ── 思考档位（决策表的思考一行，与模型一行同一口径）──
+    // root：以传入值为准（会话树；档案的 `shuvix-thinking` 只在钉档案时作为种子写进树）。
+    // spawned：档案声明优先于派发方继承。没有可用性问题要处理：档位是个枚举值，模型不支持
+    //       思考时与界面选了档位同一条路径（pi 按模型能力取舍）。
+    const thinkingLevel =
+      kind === 'spawned' && profile.thinkingLevel ? profile.thinkingLevel : params.thinkingLevel
+
     // 派发用当前模型配置（applyModel 时更新；thinkingLevel 惰性读运行时当前档位）
     let currentModelConfig: SubAgentModelConfig = initialModel
     const getModelConfig = (): SubAgentModelConfig => ({
       ...currentModelConfig,
       thinkingLevel: runtime
         ? runtime.getThinkingLevel()
-        : (params.thinkingLevel ?? currentModelConfig.thinkingLevel)
+        : (thinkingLevel ?? currentModelConfig.thinkingLevel)
     })
 
     const requestUserInput =
@@ -398,7 +408,7 @@ export function createAgentFactory(host: AgentHostAdapter): AgentFactory {
           : createStubExecutionEnv(),
       models: createModelsAdapter({ getApiKey: (p) => host.getApiKey(p), network: host.network }),
       model,
-      thinkingLevel: params.thinkingLevel,
+      thinkingLevel,
       systemPrompt,
       tools: tools as AgentTool[],
       eventSink:

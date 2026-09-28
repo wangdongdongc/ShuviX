@@ -234,20 +234,20 @@ describe('frontmatter 属性卡', () => {
   it('契约 md：frontmatter 渲染为属性卡（徽章 / 字段行 / chips / 开关 / 未知键通用行）', async () => {
     await clickSessionByText('card-demo')
     // 槽位内容是宿主异步挂的 React 子树 —— 只等 `.cm-shuvix-fmcard` 存在会读到空串
-    await card.waitReady({ slots: 3 })
+    await card.waitReady({ slots: 4 })
 
     const badge = await app.main.eval<string>(
       `document.querySelector('.cm-shuvix-fmcard-badge')?.textContent ?? ''`
     )
     expect(badge).toBe('ShuviX agent · v1')
 
-    // 可编辑宿主（笔记本注入了 mountField）：model / tools / instruction-files 三行是
-    // **选择器槽位**，由宿主挂载 ModelSelect / ToolSelectList / 清单输入框，卡片自身不再渲染 chips。
+    // 可编辑宿主（笔记本注入了 mountField）：model / thinking / tools / instruction-files 四行是
+    // **选择器槽位**，由宿主挂载 ModelSelect / 档位下拉 / ToolSelectList / 清单输入框，卡片自身不再渲染 chips。
     // 只读宿主（FilePreview）走另一分支，仍是 .cm-shuvix-fmcard-chip 只读展示。
     const slots = await app.main.eval<number>(
       `document.querySelectorAll('.cm-shuvix-fmcard-slot').length`
     )
-    expect(slots).toBe(3)
+    expect(slots).toBe(4)
     const slotText = (key: string): Promise<string> =>
       app.main.eval<string>(
         `(document.querySelector('.cm-shuvix-fmcard-row[data-key=${JSON.stringify(key)}] .cm-shuvix-fmcard-slot')?.textContent ?? '').trim()`

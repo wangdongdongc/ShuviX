@@ -5,6 +5,8 @@
  *   - OKF 条目的 type / status（select）→ EnumField（契约封闭
  *     枚举的原生下拉；状态带生命周期圆点）。候选项直接引契约常量 —— 它们是静态
  *     契约，不像工具/模型那样依赖运行时目录。
+ *   - `shuvix-thinking`（select）→ 同一个 EnumField，候选项是 SELECTABLE_THINKING_LEVELS
+ *     （与输入框思考选择器同一份，解析器也只收这几档）。
  *   - 其余 csv 键（如 `shuvix-instruction-files` 的指令文件清单）→ 纯文本逗号串输入。
  *     刻意不给它挂文件选择器：清单里可以写工作目录下任意相对路径，而属性卡编辑档案时
  *     根本不知道这份档案将来跑在哪个工作目录 —— 一个只能列出「此刻某个目录」的选择器
@@ -21,7 +23,8 @@ import { useTranslation } from 'react-i18next'
 import { ChevronDown } from 'lucide-react'
 import { ModelSelect, useModelCatalogStore, getChatApi } from '@shuvix/chat-ui'
 import { formatModelRef, resolveModelRef } from '@shuvix/chat-protocol/agentModelRef'
-import { AGENT_MODEL_KEY } from '@shuvix/chat-protocol/shuvixMdDescriptors'
+import { AGENT_MODEL_KEY, AGENT_THINKING_KEY } from '@shuvix/chat-protocol/shuvixMdDescriptors'
+import { SELECTABLE_THINKING_LEVELS } from '@shuvix/chat-protocol/types/thinking'
 import {
   KNOWLEDGE_MARKER_TYPE,
   KNOWLEDGE_TYPES,
@@ -349,6 +352,16 @@ export function FrontmatterFieldPicker({
     // 属性卡不认识某个键时，退回自由文本下拉才是诚实的降级。
     if (fieldKey === AGENT_MODEL_KEY) {
       return <ModelField value={value} onChange={onChange} readOnly={readOnly} />
+    }
+    if (fieldKey === AGENT_THINKING_KEY) {
+      return (
+        <EnumField
+          options={SELECTABLE_THINKING_LEVELS}
+          value={value}
+          onChange={onChange}
+          readOnly={readOnly}
+        />
+      )
     }
     // OKF 条目的键名是通用词（type / status），先按标记类型收窄再按键分派 ——
     // 别家契约里的同名键不该拿到知识库的候选项

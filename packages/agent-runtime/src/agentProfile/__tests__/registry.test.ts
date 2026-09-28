@@ -601,6 +601,12 @@ describe('titler 档案钉板（auto-title 的执行侧）', () => {
     expect(profile('titler').model).toBeUndefined()
   })
 
+  it('三语都声明 shuvix-thinking: off —— 起标题用不上思考，关掉写在档案里而不是由宿主替它关', () => {
+    for (const language of LANGS) {
+      expect(profile('titler', language).thinkingLevel, `titler.${language}`).toBe('off')
+    }
+  })
+
   it('三语 body 都含 session / set-title 与 60（工具协议与长度上限不因翻译走样）', () => {
     for (const language of LANGS) {
       const body = profile('titler', language).systemPrompt

@@ -411,15 +411,16 @@ afterAll(async () => {
 })
 
 describe('A 组 · 槽位判定（可编辑 vs 退回只读）', () => {
-  it('AC-1 缺键的 tools/model/instruction-files 都开槽，触发器给占位文案', async () => {
+  it('AC-1 缺键的 tools/model/thinking/instruction-files 都开槽，触发器给占位文案', async () => {
     const seed = byFile('a1-open.md')
     await openNotebook(seed)
     await card.waitReady()
 
-    // 三个可点选字段：tools（csv）/ model（select）/ instruction-files（csv 清单）
-    expect(await count('.cm-shuvix-fmcard-slot')).toBe(3)
+    // 四个可点选字段：tools（csv）/ model（select）/ thinking（select）/ instruction-files（csv 清单）
+    expect(await count('.cm-shuvix-fmcard-slot')).toBe(4)
     expect(await app.main.eval<boolean>(rowHasSlot('shuvix-tools'))).toBe(true)
     expect(await app.main.eval<boolean>(rowHasSlot('shuvix-model'))).toBe(true)
+    expect(await app.main.eval<boolean>(rowHasSlot('shuvix-thinking'))).toBe(true)
     expect(await app.main.eval<boolean>(rowHasSlot('shuvix-instruction-files'))).toBe(true)
 
     // 两个占位文案刻意不同：工具用卡片的「未设置」，模型用 ModelSelect 自己的「选择模型」
@@ -436,7 +437,7 @@ describe('A 组 · 槽位判定（可编辑 vs 退回只读）', () => {
     // 空值若被判成「有值但不可编辑」，留空的字段在 GUI 里就再也改不回来了
     expect(await app.main.eval<boolean>(rowHasSlot('shuvix-model'))).toBe(true)
     expect(await app.main.eval<boolean>(rowHasSlot('shuvix-tools'))).toBe(true)
-    expect(await count('.cm-shuvix-fmcard-slot')).toBe(3)
+    expect(await count('.cm-shuvix-fmcard-slot')).toBe(4)
     expect(read(seed.file)).toBe(A1_EMPTY)
   })
 
@@ -445,8 +446,8 @@ describe('A 组 · 槽位判定（可编辑 vs 退回只读）', () => {
     await openNotebook(seed)
     await card.waitReady()
 
-    // 这两行退回只读；缺键的 instruction-files 照常开槽（同 AC-1），故总数 1
-    expect(await count('.cm-shuvix-fmcard-slot')).toBe(1)
+    // 这两行退回只读；缺键的 thinking / instruction-files 照常开槽（同 AC-1），故总数 2
+    expect(await count('.cm-shuvix-fmcard-slot')).toBe(2)
     expect(await app.main.eval<boolean>(rowHasSlot('shuvix-tools'))).toBe(false)
     expect(await app.main.eval<boolean>(rowHasSlot('shuvix-model'))).toBe(false)
     // 只读不等于不渲染：两行都在，只是没有可编辑槽位
@@ -462,8 +463,8 @@ describe('A 组 · 槽位判定（可编辑 vs 退回只读）', () => {
     await openNotebook(seed)
     await card.waitReady()
 
-    // model + instruction-files 两个缺键字段开槽，折行的 tools 退回只读
-    expect(await count('.cm-shuvix-fmcard-slot')).toBe(2)
+    // model + thinking + instruction-files 三个缺键字段开槽，折行的 tools 退回只读
+    expect(await count('.cm-shuvix-fmcard-slot')).toBe(3)
     expect(await app.main.eval<boolean>(rowHasSlot('shuvix-model'))).toBe(true)
     expect(await app.main.eval<boolean>(rowHasSlot('shuvix-tools'))).toBe(false)
     // 折行值解析出来仍是逗号串 → 只读分支照常拆 chips
@@ -889,11 +890,11 @@ describe('E 组 · 宿主差异', () => {
         ),
       'read-only preview mounted'
     )
-    await card.waitReady({ slots: 3 })
+    await card.waitReady({ slots: 4 })
 
-    // 只读宿主渲染同一套控件（model / tools / instruction-files 三个槽位 + 文本输入框），
+    // 只读宿主渲染同一套控件（model / thinking / tools / instruction-files 四个槽位 + 文本输入框），
     // 只是全部禁用 —— 只读不换长相，只换可否交互
-    expect(await count('.cm-shuvix-fmcard-slot')).toBe(3)
+    expect(await count('.cm-shuvix-fmcard-slot')).toBe(4)
     expect(await slotText('shuvix-tools')).toContain('bash, read')
     // 指令文件清单是普通逗号串输入（刻意不挂文件选择器：档案编辑期不知道将来的工作目录）
     expect(await slotText('shuvix-instruction-files')).toBe('')

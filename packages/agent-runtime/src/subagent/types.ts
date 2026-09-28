@@ -7,7 +7,7 @@
  * SubAgentRegistry：档案来源的端适配接口（桌面=文件系统扫描；扩展=内嵌常量）。
  */
 import type { ModelCapabilities } from '@shuvix/chat-protocol/types/provider'
-import type { ThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
+import type { SelectableThinkingLevel, ThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
 
 /** agent 档案（注册表条目） */
 export interface AgentProfile {
@@ -27,6 +27,11 @@ export interface AgentProfile {
    * 省略 = 不声明，跟随会话 / 继承派发方。
    */
   model?: string
+  /**
+   * `shuvix-thinking`：该档案声明的思考档位。与 `model` 同一口径：派生时压过派发方、
+   * 钉档案的子会话作为种子写进树、会话根忽略。省略 = 不声明，跟随派发方 / 父会话。
+   */
+  thinkingLevel?: SelectableThinkingLevel
   /**
    * `shuvix-instruction-files`：该档案认的项目指令文件清单（工作目录内的相对路径）。
    * 顺序即优先级，注入侧取第一个存在且非空的，至多一个；空数组 = 不注入。
@@ -58,6 +63,11 @@ export interface InProcessAgentType {
    * root 会话不看这里 —— 它的模型以会话树为准（切档案时把档案模型作为种子写进树）。
    */
   model?: string
+  /**
+   * 档案声明的思考档位（`shuvix-thinking`）。与 `model` 同理**仅 spawned 生效**，声明了就
+   * 优先于派发方继承；root 以会话树为准（钉档案时作为种子写进树）。
+   */
+  thinkingLevel?: ThinkingLevel
   /** 项目指令文件清单，顺序即优先级（缺省/空 = 不注入；派生按根会话的项目上下文解析） */
   instructionFiles?: readonly string[]
   /** 项目感知：是否注入项目提示词与项目记忆索引（缺省 false；派生按根会话的项目上下文解析） */

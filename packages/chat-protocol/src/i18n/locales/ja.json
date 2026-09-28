@@ -896,6 +896,7 @@
     "subAgentModel": "モデル",
     "subAgentModelNone": "セッションに従う",
     "subAgentModelUnavailable": "\"{{ref}}\" は現在利用できません（プロバイダーが無効、またはモデルが削除されています）。別のモデルを選ぶまで、ファイルにはこの値が残ります。",
+    "subAgentThinking": "思考",
     "subAgentTemplateDesc": "このエージェントの役割を一行で",
     "subAgentTemplateBody": "ここにシステムプロンプトを書きます。",
     "artifactLabel": "成果物",

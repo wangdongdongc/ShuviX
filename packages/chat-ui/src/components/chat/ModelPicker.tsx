@@ -4,7 +4,20 @@ import { useTranslation } from 'react-i18next'
 import { useChatStore } from '../../stores/chatStore'
 import { useModelCatalogStore } from '../../stores/modelCatalogStore'
 import { ModelSelect } from './ModelSelect'
-import type { ThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
+import {
+  SELECTABLE_THINKING_LEVELS,
+  type SelectableThinkingLevel,
+  type ThinkingLevel
+} from '@shuvix/chat-protocol/types/thinking'
+
+/** 每个可选档位的文案 —— 档位清单本身是共享常量（agent md 的 `shuvix-thinking` 收的就是这几档） */
+const THINKING_LABEL_KEYS: Record<SelectableThinkingLevel, string> = {
+  off: 'input.thinkOff',
+  low: 'input.thinkLow',
+  medium: 'input.thinkMedium',
+  high: 'input.thinkHigh',
+  xhigh: 'input.thinkXHigh'
+}
 
 interface ModelPickerProps {
   /** 只读模式：仅显示当前模型名，不可点击选择 */
@@ -27,13 +40,10 @@ export function ModelPicker({ readonly: isReadonly }: ModelPickerProps = {}): Re
 
   const enabledProviders = useMemo(() => providers.filter((p) => p.isEnabled), [providers])
 
-  const thinkingLevels = [
-    { value: 'off', label: t('input.thinkOff') },
-    { value: 'low', label: t('input.thinkLow') },
-    { value: 'medium', label: t('input.thinkMedium') },
-    { value: 'high', label: t('input.thinkHigh') },
-    { value: 'xhigh', label: t('input.thinkXHigh') }
-  ]
+  const thinkingLevels = SELECTABLE_THINKING_LEVELS.map((value) => ({
+    value,
+    label: t(THINKING_LABEL_KEYS[value])
+  }))
 
   /** 切换思考深度并持久化到会话 */
   const handleSetThinkingLevel = async (level: string): Promise<void> => {

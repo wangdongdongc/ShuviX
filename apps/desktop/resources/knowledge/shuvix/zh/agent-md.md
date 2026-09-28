@@ -33,6 +33,7 @@ description: Reads a change set and reports risks without editing anything.
 shuvix-displayName: Code reviewer
 shuvix-tools: read, ls, grep, glob, bash, skill:conventional-comments
 shuvix-model: anthropic/claude-sonnet-4-5
+shuvix-thinking: low
 shuvix-instruction-files: AGENTS.md, CLAUDE.md
 shuvix-project-awareness: true
 ---
@@ -52,6 +53,7 @@ style, each with file and line. Never modify files.
 | `shuvix-displayName`        | 字符串           | 否   | 界面上的标签。缺省 = `name`。                                                                                                                                                                                                              |
 | `shuvix-tools`              | 逗号分隔的字符串 | 否   | 工具白名单（见下）。**是字符串，不是 YAML 列表** —— 写成列表会让文件非法。省略 = 一个工具都没有。                                                                                                                                          |
 | `shuvix-model`              | 字符串           | 否   | 这个 agent 用哪个模型：`<providerId>/<modelId>`（界面写出的形式）或裸 `<modelId>`。省略 = 跟随所在会话（或派发它的那一方）。设置里未启用的模型按没写处理。                                                                                 |
+| `shuvix-thinking`           | 字符串           | 否   | 这个 agent 的思考深度：`off` / `low` / `medium` / `high` / `xhigh`（大小写不限）。派发出去的 agent 按它跑；被子会话的 `agent_profile` 点名时，它是那条子会话的初始档位（之后可在会话里改）；做会话的根（基座）时忽略，以会话里选的为准。省略 = 跟随派发它的一方（子会话跟随父会话）。别的值让文件非法。 |
 | `shuvix-instruction-files`  | 逗号分隔的字符串 | 否   | 这个 agent 读哪些项目指令文件：**相对工作目录**的路径，按优先级排列 —— 第一个存在且非空的被注入，至多一个。绝对路径、`..` 段或布尔值都让文件非法。省略 = 不注入。                                                                            |
 | `shuvix-project-awareness`  | 布尔             | 否   | `true` = 让 agent 知道自己在哪个项目里：项目提示词与项目记忆索引追加到它的系统提示词（按根会话的项目解析；会话不属于项目时什么也不注入）。必须是真正的 YAML 布尔值。缺省 `false`。                                                       |
 | `shuvix-builtin`            | 布尔             | 否   | ShuviX 自带文件的自述标记。解析器不读；不要加进用户文件。                                                                                                                                                                                  |
@@ -117,6 +119,7 @@ frontmatter 之后的全部内容（去首尾空白）就是系统提示词。�
 
 - 没有 YAML frontmatter 块，或 YAML 解析不了，或它不是映射；
 - `shuvix-tools` / `shuvix-model` / `shuvix-instruction-files` 不是字符串（写成 YAML 列表是最常见的错）；
+- `shuvix-thinking` 不是 `off` / `low` / `medium` / `high` / `xhigh` 之一（写成 `false` 也不行 —— 写 `off`）；
 - `shuvix-project-awareness` 不是布尔；
 - `shuvix-instruction-files` 的某一项是绝对路径或用 `..` 越出工作目录，或这个键写成了 2026 年之前的
   布尔形式（`shuvix-instruction-files: true` —— 改列文件名）。
@@ -142,8 +145,8 @@ agent `coding`、`explore`、`widget`、`titler`、`knowledge-writer`。
 ## 一个 agent 怎样被用起来
 
 1. **经 `agent` 工具派发为子代理**（调用方自己的列表须含 `agent`）：`name` = 本文件的 `name`，外加
-   `prompt` 与一句 `description`。子代理在内存里作为根 agent 的同级运行，除非 `shuvix-model` 另有声明
-   否则继承会话的模型与思考等级，拿到同样的指令文件 / 项目注入（按根会话的项目解析），最后把最终文本
+   `prompt` 与一句 `description`。子代理在内存里作为根 agent 的同级运行，继承会话的模型与思考等级
+   （`shuvix-model` / `shuvix-thinking` 声明了的以声明为准），拿到同样的指令文件 / 项目注入（按根会话的项目解析），最后把最终文本
    返回。这个工具**不会**向模型列举可用的 agent —— 名字得来自提示词或用户。
 2. **作为子会话的人格** —— `session` 工具的 `agent_profile`（任何不是基座的 agent）。子会话保留从
    父会话抄来的扩展能力；该 agent `shuvix-tools` 里的 `mcp:` / `skill:` 条目和列表里的其余各项一样

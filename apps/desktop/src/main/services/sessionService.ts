@@ -4,7 +4,12 @@ import { rmSync, existsSync } from 'fs'
 import { sessionRecords } from './sessionRecords'
 import { sessionDayPromptDao } from '../dao/sessionDayPromptDao'
 import { messageService } from './messageService'
-import { readSessionRunConfig, addSessionTreePin, appendModelChange } from './sessionStorage'
+import {
+  readSessionRunConfig,
+  addSessionTreePin,
+  appendModelChange,
+  appendThinkingLevelChange
+} from './sessionStorage'
 import { httpLogDao } from '../dao/httpLogDao'
 import { providerDao } from '../dao/providerDao'
 import { projectDao } from '../dao/projectDao'
@@ -25,7 +30,10 @@ import type {
 } from '../types'
 import type { Project, SessionSettings } from '../dao/types'
 
-import { DEFAULT_THINKING_LEVEL } from '@shuvix/chat-protocol/types/thinking'
+import {
+  DEFAULT_THINKING_LEVEL,
+  type SelectableThinkingLevel
+} from '@shuvix/chat-protocol/types/thinking'
 import {
   CHAT_PROFILE_NAME,
   NOTEBOOK_PROFILE_NAME,
@@ -383,7 +391,8 @@ export class SessionService {
    * 钉下的同时把档案声明的模型作为**种子**写进会话树（与用户手动改模型同一个落点）：档案只在
    * 这一刻参与一次，之后用户改什么就是什么 —— 若让 createAgent 每次重建都按档案覆盖，用户手选的
    * 会被默默还原。解析成功才写；不可用则保持当前模型，把原始值经 `modelUnavailable` 回传（后端
-   * 日志之外调用方也该看得见）。
+   * 日志之外调用方也该看得见）。档案声明的思考档位（`shuvix-thinking`）同样作为种子写进树，
+   * 经 `applied.thinkingLevel` 回传 —— 之后 seedRunConfig 只补档案没声明的那几项。
    *
    * 工具（`shuvix-tools` 里的 mcp:/skill:）**不写进勾选**：档案声明的每一项经 createAgent 的名单
    * 归一对这条会话恒生效（选择器里画成已勾、锁住），会话勾选只在其上叠加。于是 create 时从父会话
@@ -398,7 +407,11 @@ export class SessionService {
   ): Promise<{
     success: boolean
     error?: string
-    applied?: { model?: SubAgentModelConfig; tools: string[] }
+    applied?: {
+      model?: SubAgentModelConfig
+      thinkingLevel?: SelectableThinkingLevel
+      tools: string[]
+    }
     modelUnavailable?: string
   }> {
     // 只有子会话可钉。守在方法体第一句：拒绝必须先于 getProfile / 落库 / 种子写入 /
@@ -435,12 +448,18 @@ export class SessionService {
         log.warn(`档案 "${name}" 声明的模型 "${profile.model}" 当前不可用，保持会话现有模型`)
       }
     }
+    // 思考档位同理作为种子写进树（之后用户可在子会话里改）；档位是枚举值，没有「不可用」一说
+    const thinkingLevel = profile.thinkingLevel
+    if (thinkingLevel) {
+      await appendThinkingLevelChange(sessionId, thinkingLevel)
+      log.info(`pinAgentProfile 应用档案思考档位 ${thinkingLevel}`)
+    }
 
     // 档案声明的 mcp:/skill: 由名单归一恒生效，不写进勾选：继承来的那份原样留着
     const tools = sessionScopedTools(profile.tools)
 
     broadcastSessionConfigChanged(sessionId)
-    return { success: true, applied: { model, tools }, modelUnavailable }
+    return { success: true, applied: { model, thinkingLevel, tools }, modelUnavailable }
   }
 
   /**

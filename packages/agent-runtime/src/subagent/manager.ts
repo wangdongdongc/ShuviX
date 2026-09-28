@@ -344,7 +344,7 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
       sessionId: agentId,
       profile: agentType,
       model: modelConfig,
-      // 默认 'off'；笔记本/用户直发把会话思考深度经 modelConfig 传入即生效
+      // 派发方的档位（缺省 'off'）；档案声明了 `shuvix-thinking` 时由 createAgent 以档案为准
       thinkingLevel: modelConfig.thinkingLevel ?? 'off',
       cwd: '',
       spawn,

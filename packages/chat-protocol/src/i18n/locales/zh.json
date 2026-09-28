@@ -896,6 +896,7 @@
     "subAgentModel": "模型",
     "subAgentModelNone": "跟随会话",
     "subAgentModelUnavailable": "\"{{ref}}\" 当前不可用（提供商已停用或模型已删除）。在你另选之前，文件里仍保留这个值。",
+    "subAgentThinking": "思考",
     "subAgentTemplateDesc": "一句话说明这个智能体做什么",
     "subAgentTemplateBody": "在这里写系统提示词。",
     "artifactLabel": "产物",

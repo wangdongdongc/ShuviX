@@ -791,6 +791,7 @@ describe('WB —— 属性卡描述符与解析器的键集对齐', () => {
       'shuvix-displayName',
       'description',
       'shuvix-model',
+      'shuvix-thinking',
       'shuvix-tools',
       'shuvix-instruction-files',
       'shuvix-project-awareness'
@@ -807,12 +808,17 @@ describe('WB —— 属性卡描述符与解析器的键集对齐', () => {
       expect(parseAgentDefinitionFile(`---\n${key}: true\n---\nbody`, 'x'), key).not.toBeNull()
     }
 
-    // csv / select（可点选编辑的两类）的键 = 解析器强制字符串的三个
+    // csv / select（可点选编辑的两类）的键 = 解析器强制字符串的四个（shuvix-thinking 还限定取值）
     const stringKeys = agentDescriptor.fields
       .filter((f) => f.kind === 'csv' || f.kind === 'select')
       .map((f) => f.key)
       .sort()
-    expect(stringKeys).toEqual(['shuvix-instruction-files', 'shuvix-model', 'shuvix-tools'])
+    expect(stringKeys).toEqual([
+      'shuvix-instruction-files',
+      'shuvix-model',
+      'shuvix-thinking',
+      'shuvix-tools'
+    ])
     for (const key of stringKeys) {
       expect(parseAgentDefinitionFile(`---\n${key}: [a, b]\n---\nbody`, 'x'), key).toBeNull()
     }

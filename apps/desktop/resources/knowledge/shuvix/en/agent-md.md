@@ -35,6 +35,7 @@ description: Reads a change set and reports risks without editing anything.
 shuvix-displayName: Code reviewer
 shuvix-tools: read, ls, grep, glob, bash, skill:conventional-comments
 shuvix-model: anthropic/claude-sonnet-4-5
+shuvix-thinking: low
 shuvix-instruction-files: AGENTS.md, CLAUDE.md
 shuvix-project-awareness: true
 ---
@@ -54,6 +55,7 @@ style, each with file and line. Never modify files.
 | `shuvix-displayName`        | string                | no       | Label in the UI. Defaults to `name`.                                                                                                                                                                                                                                                                                       |
 | `shuvix-tools`              | comma-separated string| no       | The tool whitelist (see below). **A string, not a YAML list** — a list makes the file invalid. Omitted = no tools at all.                                                                                                                                                                                                  |
 | `shuvix-model`              | string                | no       | Which model this agent runs on: `<providerId>/<modelId>` (what the UI writes) or a bare `<modelId>`. Omitted = the agent follows the session it runs in (or the caller that dispatched it). A model that is not enabled in Settings is treated as absent.                                                                  |
+| `shuvix-thinking`           | string                | no       | How deeply this agent thinks: `off` / `low` / `medium` / `high` / `xhigh` (case-insensitive). A dispatched agent runs at this level; a sub-session that names the agent through `agent_profile` starts at it (and can be changed in that session afterwards); as a session's root (a base) it is ignored in favour of what the session has selected. Omitted = the caller's level (a sub-session follows its parent). Any other value makes the file invalid. |
 | `shuvix-instruction-files`  | comma-separated string| no       | Project instruction files the agent reads, as paths **relative to the working directory**, in priority order: the first one that exists and is non-empty is injected, at most one. An absolute path, a `..` segment, or a boolean value makes the file invalid. Omitted = nothing injected.                              |
 | `shuvix-project-awareness`  | boolean               | no       | `true` = the agent is told which project it is in: the project's prompt and the project's memory index are appended to its system prompt (resolved against the root session's project; nothing when the session has no project). Must be a real YAML boolean. Default `false`.                                        |
 | `shuvix-builtin`            | boolean               | no       | Self-marker of files ShuviX ships. Not read by the parser; do not add it to user files.                                                                                                                                                                                                                                    |
@@ -126,6 +128,8 @@ Settings → Agents, and never shadows a builtin of the same name) when:
 - there is no YAML frontmatter block, or the YAML does not parse, or it is not a mapping;
 - `shuvix-tools` / `shuvix-model` / `shuvix-instruction-files` is not a string (a YAML list is
   the usual mistake);
+- `shuvix-thinking` is not one of `off` / `low` / `medium` / `high` / `xhigh` (`false` is not
+  accepted either — write `off`);
 - `shuvix-project-awareness` is not a boolean;
 - an entry of `shuvix-instruction-files` is absolute or escapes the working directory (`..`), or
   the key holds the pre-2026 boolean form (`shuvix-instruction-files: true` — list file names
@@ -161,7 +165,7 @@ the task agents `coding`, `explore`, `widget`, `titler` and `knowledge-writer`.
 1. **Dispatched as a sub-agent** through the `agent` tool (the caller's own list must include
    `agent`): `name` = this file's `name`, plus a `prompt` and a short `description`. The sub-agent
    runs in memory as a peer of the root agent, inherits the session's model and thinking level
-   unless `shuvix-model` says otherwise, gets the same instruction-file / project injections
+   unless `shuvix-model` / `shuvix-thinking` say otherwise, gets the same instruction-file / project injections
    resolved against the root session's project, and returns its final text. The tool does **not**
    enumerate available agents to the model — a name must be known from the prompt or from the
    user.

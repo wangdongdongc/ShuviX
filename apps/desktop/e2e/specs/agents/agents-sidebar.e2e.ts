@@ -267,7 +267,7 @@ describe('侧栏智能体分组', () => {
     expect(items?.find((i) => i.id === 'create-override')?.enabled).not.toBe(false)
   })
 
-  it('AS-3 用户档案行：点它打开这份文件的笔记本（可编辑：三个槽位、开关可用），一份文件只一条会话，菜单给删除', async () => {
+  it('AS-3 用户档案行：点它打开这份文件的笔记本（可编辑：四个槽位、开关可用），一份文件只一条会话，菜单给删除', async () => {
     await pane.selectUserRow('my-agent.md')
     expect(await pane.activeRow()).toEqual({ row: 'my-agent.md' })
     await note.waitCard()
@@ -285,7 +285,7 @@ describe('侧栏智能体分组', () => {
         disabled: toggles.some((b) => b.disabled)
       }
     })()`)
-    expect(editable.slots).toBe(3) // model + tools + instruction-files 各挂一个真控件
+    expect(editable.slots).toBe(4) // model + thinking + tools + instruction-files 各挂一个真控件
     expect(editable.toggles).toBeGreaterThan(0)
     expect(editable.disabled).toBe(false)
 

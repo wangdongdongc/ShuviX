@@ -24,6 +24,7 @@ import { messageService } from './messageService'
 import { appendModelChange, appendThinkingLevelChange } from './sessionStorage'
 import { sessionRecords } from './sessionRecords'
 import type { SubAgentModelConfig } from '@shuvix/agent-runtime'
+import type { ThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
 import { createLogger } from '../logger'
 
 const log = createLogger('SubSession')
@@ -267,7 +268,9 @@ class SubSessionRunner {
     // resolveAgentProfileName 推导出的基座天然一致。勾选始终是 create 从父会话抄来的那份：
     // 档案声明的 mcp:/skill: 由名单归一恒生效，叠在勾选之上，不替换它
     const requested = params.agentProfile?.trim()
-    let declared: { model?: SubAgentModelConfig; tools: string[] } | undefined
+    let declared:
+      | { model?: SubAgentModelConfig; thinkingLevel?: ThinkingLevel; tools: string[] }
+      | undefined
     if (requested) {
       const applied = await sessionService.pinAgentProfile(session.id, requested)
       if (applied.success) declared = applied.applied
@@ -291,19 +294,22 @@ class SubSessionRunner {
    * 键根本没显式改过，只抄显式值等于什么也没继承。
    *
    * `declared` 是档案声明的那部分（档案切换生效时才有），它压过继承 —— 更具体的意图。
+   * 声明了的那几项 `pinAgentProfile` 已经写过种子，这里只补没声明的；再写一条父会话的值
+   * 会排在档案种子之后，把它盖掉。
    */
   private async seedRunConfig(
     parentId: string,
     childId: string,
-    declared?: { model?: SubAgentModelConfig }
+    declared?: { model?: SubAgentModelConfig; thinkingLevel?: ThinkingLevel }
   ): Promise<void> {
     const parent = await sessionService.resolveRunConfig(parentId)
     if (!parent) return
     if (!declared?.model && parent.model) {
       await appendModelChange(childId, parent.model.provider, parent.model.model)
     }
-    // 思考档位没有档案声明这一路，恒随父会话
-    await appendThinkingLevelChange(childId, parent.thinkingLevel)
+    if (!declared?.thinkingLevel) {
+      await appendThinkingLevelChange(childId, parent.thinkingLevel)
+    }
   }
 
   // ─── 驱动 ──────────────────────────────────────
