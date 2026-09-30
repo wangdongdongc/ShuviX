@@ -5,9 +5,11 @@
  * 替身：electron 的 app.getPath、os.homedir、平台后端（假后端，探测 / 包装 / 启动失败都可控）、
  * fs 里 ensureTmpDir / cleanupSession 用到的几个函数（realpathSync 用真的 —— MG-4 要真符号链接）、
  * logger。模块级缓存（后端、探测结果、固定表、realpath 缓存）每个用例 resetModules 后重新导入。
+ * 凭据清单的读取口（生产里由 main 注入 protect-credentials 的 `credentialDirs`）每次导入都注入出厂那一份。
  *
  * MG-9 whyUnconfined（命令没进沙箱的原因：固定那一刻的，或此刻的；从不探测）；
- * MG-10 workspaceWriteView（ask-on-write 的工作区豁免：与开关 / 固定 / 探测无关，只看规格的适用性判定）。
+ * MG-10 workspaceWriteView（ask-on-write 的工作区豁免：与开关 / 固定 / 探测无关，只看规格的适用性判定）；
+ * MG-11 凭据清单的读取口：没注入 / 抛错 / 去重 / realpath / 工作区就是凭据位置。
  * 两组的期望规格按同一份宿主路径用纯函数 buildSandboxSpec 算（`real` 取恒等：/Users/u 盘上不存在，
  * 管理器的 realpathLoose 对它也是原样）。
  */
@@ -20,6 +22,17 @@ const TMP_ROOT = `/private/tmp/shuvix-${UID}`
 const HOME = '/Users/u'
 const USER_DATA = '/Users/u/Library/Application Support/ShuviX'
 const WS = '/Users/u/proj'
+/** 出厂 protect-credentials 的 `credentialDirs` —— 注入给管理器的凭据清单 */
+const CREDENTIALS = [
+  '.ssh',
+  '.aws',
+  '.gnupg',
+  '.config/gh',
+  '.netrc',
+  '.shuvix/.session-state',
+  'AppData/Local/Microsoft/Credentials',
+  'AppData/Roaming/Microsoft/Credentials'
+].map((d) => `${HOME}/${d}`)
 
 const mocks = vi.hoisted(() => ({
   getPath: vi.fn(),
@@ -81,11 +94,12 @@ function setPlatform(p: NodeJS.Platform): void {
   Object.defineProperty(process, 'platform', { ...REAL_PLATFORM, value: p })
 }
 
-/** 每个用例一份全新的管理器（模块级缓存清零） */
+/** 每个用例一份全新的管理器（模块级缓存清零）；凭据清单的读取口照生产注入 */
 async function load(reader?: () => string | undefined): Promise<Manager> {
   vi.resetModules()
   const m = await import('../index')
   if (reader) m.setSandboxSettingReader(reader)
+  m.setSandboxCredentialReader(() => CREDENTIALS)
   return m
 }
 
@@ -113,7 +127,6 @@ const request = (over: Record<string, unknown> = {}): PlanRequest => ({
   sessionId: 's1',
   workingDirectory: WS,
   grantedWrite: [] as string[],
-  grantedRead: [] as string[],
   offerEscalation: true,
   ...over
 })
@@ -320,9 +333,7 @@ describe('MG-3 按会话固定（契约 5）', () => {
       sandboxActive: false,
       sandboxWritableRoots: [],
       sandboxWriteDenied: [],
-      sandboxProtectedPatterns: [],
-      sandboxReadDenied: [],
-      sandboxReadAllowed: []
+      sandboxProtectedPatterns: []
     })
     expect(mocks.getPath).not.toHaveBeenCalled()
   })
@@ -337,17 +348,15 @@ describe('MG-3 按会话固定（契约 5）', () => {
 })
 
 describe('MG-4 planFor 正常路径', () => {
-  it('MG-4 env = TMPDIR/TMP/TEMP 指向本会话临时目录；wrap 交给后端；规格带上请求里的授权', async () => {
+  it('MG-4 env = TMPDIR/TMP/TEMP 指向本会话临时目录；wrap 交给后端；规格带上请求里的授权与注入的凭据清单', async () => {
     const m = await load(() => 'true')
-    const plan = m.planFor(
-      request({ grantedWrite: ['/Volumes/data/out'], grantedRead: ['/Users/u/Documents/ref'] })
-    )
+    const plan = m.planFor(request({ grantedWrite: ['/Volumes/data/out'] }))
     expect(plan).not.toBeNull()
     const tmpDir = `${TMP_ROOT}/${sha8('s1')}`
     expect(plan!.env).toEqual({ TMPDIR: `${tmpDir}/`, TMP: tmpDir, TEMP: tmpDir })
     expect(plan!.spec.tmpDir).toBe(tmpDir)
     expect(plan!.spec.writableRoots).toContain('/Volumes/data/out')
-    expect(plan!.spec.readAllowBack).toContain('/Users/u/Documents/ref')
+    expect(plan!.spec.readDenied).toEqual(CREDENTIALS)
 
     const inv = { file: '/bin/bash', args: ['-c', 'true'] }
     const wrapped = plan!.wrap(inv)
@@ -466,22 +475,23 @@ describe('MG-6 plan.explain', () => {
 })
 
 describe('MG-7 sessionView', () => {
-  it('MG-7 固定为启用 + 工作区合适 → active；读拒里有 realpath(~/.shuvix/cli-token)；不含授权（授权归 session-grants）', async () => {
+  it('MG-7 固定为启用 + 工作区合适 → active；只有写的变量（没有读的）；不含授权（授权归 session-grants）', async () => {
     const m = await load(() => 'true')
     expect(m.pinSession('s1')).toBe(true)
     const view = m.sessionView('s1', WS)
     expect(view.sandboxActive).toBe(true)
-    expect(view.sandboxReadDenied).toContain(`${HOME}/.shuvix/cli-token`)
+    expect(Object.keys(view).sort()).toEqual([
+      'sandboxActive',
+      'sandboxProtectedPatterns',
+      'sandboxWritableRoots',
+      'sandboxWriteDenied'
+    ])
     expect(view.sandboxWritableRoots[0]).toBe(WS)
+    expect(view.sandboxWriteDenied).toContain(`${HOME}/.ssh`)
 
-    const plan = m.planFor(
-      request({ grantedWrite: ['/Volumes/data/out'], grantedRead: ['/Users/u/Documents/ref'] })
-    )!
+    const plan = m.planFor(request({ grantedWrite: ['/Volumes/data/out'] }))!
     expect(plan.spec.writableRoots).toContain('/Volumes/data/out')
-    expect(plan.spec.readAllowBack).toContain('/Users/u/Documents/ref')
     expect(view.sandboxWritableRoots).not.toContain('/Volumes/data/out')
-    expect(view.sandboxReadAllowed).not.toContain('/Volumes/data/out')
-    expect(view.sandboxReadAllowed).not.toContain('/Users/u/Documents/ref')
   })
 
   it('MG-7 固定为启用但工作区不适合套（覆盖家目录）→ INACTIVE_VIEW', async () => {
@@ -634,7 +644,7 @@ describe('MG-10 workspaceWriteView：文件工具在工作区写入免询问的�
   function specOf(sessionId: string, workingDirectory: string): SandboxSpec {
     const built = buildSandboxSpec(
       HOST,
-      { sessionId, workingDirectory, grantedWrite: [], grantedRead: [] },
+      { sessionId, workingDirectory, grantedWrite: [], credentialPaths: CREDENTIALS },
       (p) => p
     )
     if (!built.ok) throw new Error(`expected ok, got: ${built.reason}`)
@@ -655,9 +665,9 @@ describe('MG-10 workspaceWriteView：文件工具在工作区写入免询问的�
 
   it('MG-10a 正常工作区：可写 = [WS]、禁区 = 该会话规格的 writeDeniedFinal、模式 = protectedWritePatterns(spec)；读取口没注入 / 探测失败 / 固定为假 / 沙箱启用 四种情形逐字相同', async () => {
     const expected = expectedView('s1', WS)
-    // 前提：禁区里有凭据目录与工作区根上的别家配置，模式里有 git 元数据那几条 —— 不是空的
+    // 前提：禁区里有凭据目录（没有工作区根上的别家配置了），模式里有 git 元数据那几条 —— 不是空的
     expect(expected.workspaceWriteDenied).toContain(`${HOME}/.ssh`)
-    expect(expected.workspaceWriteDenied).toContain(`${WS}/.vscode`)
+    expect(expected.workspaceWriteDenied).not.toContain(`${WS}/.vscode`)
     expect(expected.workspaceProtectedPatterns.length).toBeGreaterThan(2)
 
     const views: Array<[string, ReturnType<Manager['workspaceWriteView']>]> = []
@@ -706,8 +716,7 @@ describe('MG-10 workspaceWriteView：文件工具在工作区写入免询问的�
     ['ShuviX 自己的配置 ~/.shuvix/agents', `${HOME}/.shuvix/agents`],
     ['userData 里的应用数据', `${USER_DATA}/data`],
     ['userData 里别的会话的临时工作区', `${USER_DATA}/temp_workspace/other`],
-    ['凭据目录 ~/.ssh', `${HOME}/.ssh`],
-    ['严格包含敏感目录的 ~/Library', `${HOME}/Library`]
+    ['凭据目录 ~/.ssh', `${HOME}/.ssh`]
   ])(
     'MG-10b 不适合的工作区（%s）→ 三个空数组，不记警告（这是判定，不是失败）',
     async (_label, ws) => {
@@ -728,7 +737,8 @@ describe('MG-10 workspaceWriteView：文件工具在工作区写入免询问的�
   it.each([
     ['本会话的临时工作区', `${USER_DATA}/temp_workspace/s1`],
     ['知识库 ~/.shuvix/knowledge/<base>', `${HOME}/.shuvix/knowledge/notes`],
-    ['个人资料目录本身 ~/Documents', `${HOME}/Documents`]
+    ['个人资料目录本身 ~/Documents', `${HOME}/Documents`],
+    ['包含敏感位置的 ~/Library（不再因此不给）', `${HOME}/Library`]
   ])('MG-10c 合适的工作区（%s）→ 非空视图，可写恰为它本身', async (_label, ws) => {
     const m = await load()
     const view = m.workspaceWriteView('s1', ws)
@@ -760,7 +770,7 @@ describe('MG-10 workspaceWriteView：文件工具在工作区写入免询问的�
     expect(String(mocks.log.warn.mock.calls[0][0])).toContain('userData unavailable')
   })
 
-  it('MG-10f 工作区是符号链接：可写取它指向的真实路径，根上的受保护名也拼在真实路径上', async () => {
+  it('MG-10f 工作区是符号链接：可写取它指向的真实路径', async () => {
     const fs = await vi.importActual<typeof import('fs')>('fs')
     const os = await vi.importActual<typeof import('os')>('os')
     const base = fs.mkdtempSync(join(fs.realpathSync(os.tmpdir()), 'sbx-mg10-'))
@@ -773,7 +783,129 @@ describe('MG-10 workspaceWriteView：文件工具在工作区写入免询问的�
     const m = await load()
     const view = m.workspaceWriteView('s1', link)
     expect(view.workspaceWritable).toEqual([target])
-    expect(view.workspaceWriteDenied).toContain(join(target, '.vscode'))
-    expect(view.workspaceWriteDenied).not.toContain(join(link, '.vscode'))
+    expect(view.workspaceWritable).not.toContain(link)
+  })
+})
+
+/**
+ * MG-11 凭据清单的读取口（setSandboxCredentialReader）：沙箱自己不定哪些是凭据，每次算规格都现问注入的
+ * 读取口（生产里是 toolContext.sessionCredentialPaths，读生效的 protect-credentials）。没注入 = 没有凭据清单
+ * （命令照样受限）+ 一次警告；读取口抛错 = 这一次没有清单 + 一行警告，绝不往外抛。
+ */
+describe('MG-11 凭据清单的读取口', () => {
+  const EMPTY = { workspaceWritable: [], workspaceWriteDenied: [], workspaceProtectedPatterns: [] }
+
+  /** 与 load() 相同，只是凭据读取口由用例决定（null = 不注入） */
+  async function loadWith(
+    credentialReader: ((sessionId: string, workingDirectory: string) => string[]) | null
+  ): Promise<Manager> {
+    vi.resetModules()
+    const m = await import('../index')
+    m.setSandboxSettingReader(() => 'true')
+    if (credentialReader) m.setSandboxCredentialReader(credentialReader)
+    return m
+  }
+
+  const warnLines = (): string[] => mocks.log.warn.mock.calls.map((c) => String(c[0]))
+
+  it('MG-11a 从没注入：plan / sessionView / workspaceWriteView 都照常给（没有凭据位置），警告只记一次', async () => {
+    const m = await loadWith(null)
+    expect(m.pinSession('s1')).toBe(true)
+
+    const first = m.planFor(request())
+    expect(first).not.toBeNull()
+    expect(first!.spec.readDenied).toEqual([])
+    expect(first!.spec.writeDeniedFinal).not.toContain(`${HOME}/.ssh`)
+
+    const view = m.sessionView('s1', WS)
+    expect(view.sandboxActive).toBe(true)
+    expect(view.sandboxWriteDenied).not.toContain(`${HOME}/.ssh`)
+
+    const wsView = m.workspaceWriteView('s1', WS)
+    expect(wsView.workspaceWritable).toEqual([WS])
+    expect(wsView.workspaceWriteDenied).not.toContain(`${HOME}/.ssh`)
+
+    const second = m.planFor(request())
+    expect(second).not.toBeNull()
+    expect(second!.spec.readDenied).toEqual([])
+
+    expect(warnLines()).toHaveLength(1)
+    expect(warnLines()[0]).toMatch(/no credential reader/)
+  })
+
+  it('MG-11b 注入的读取口：收到调用方给的 (sessionId, workingDirectory)；readDenied 就是它的输出、writeDeniedFinal 以它开头；每次 planFor 都现问', async () => {
+    let answer = [`${HOME}/.ssh`, `${HOME}/vault`]
+    const reader = vi.fn((_sid: string, _wd: string) => answer)
+    const m = await loadWith(reader)
+
+    const plan1 = m.planFor(request({ sessionId: 's7', workingDirectory: WS }))!
+    expect(reader).toHaveBeenLastCalledWith('s7', WS)
+    expect(plan1.spec.readDenied).toEqual(answer)
+    expect(plan1.spec.writeDeniedFinal.slice(0, answer.length)).toEqual(answer)
+
+    answer = [`${HOME}/.gnupg`]
+    const plan2 = m.planFor(request({ sessionId: 's7', workingDirectory: WS }))!
+    expect(reader).toHaveBeenCalledTimes(2)
+    expect(plan2.spec.readDenied).toEqual([`${HOME}/.gnupg`])
+    expect(plan2.spec.readDenied).not.toEqual(plan1.spec.readDenied)
+    expect(plan2.spec.writeDeniedFinal[0]).toBe(`${HOME}/.gnupg`)
+    expect(plan2.spec.writeDeniedFinal).not.toContain(`${HOME}/vault`)
+
+    // 策略那两面同样按调用方的参数现问
+    expect(m.pinSession('s8')).toBe(true)
+    m.sessionView('s8', '/Volumes/w')
+    expect(reader).toHaveBeenLastCalledWith('s8', '/Volumes/w')
+    m.workspaceWriteView('s9', '/Volumes/x')
+    expect(reader).toHaveBeenLastCalledWith('s9', '/Volumes/x')
+    expect(warnLines()).toEqual([])
+  })
+
+  it('MG-11c 读取口抛错：这一次没有凭据清单、记一行原因；sessionView / workspaceWriteView 不往外抛', async () => {
+    const m = await loadWith(() => {
+      throw new Error('boom')
+    })
+    const plan = m.planFor(request())
+    expect(plan).not.toBeNull()
+    expect(plan!.spec.readDenied).toEqual([])
+    expect(warnLines().some((l) => /credential paths unavailable: boom/.test(l))).toBe(true)
+
+    expect(m.pinSession('s1')).toBe(true)
+    expect(() => m.sessionView('s1', WS)).not.toThrow()
+    expect(m.sessionView('s1', WS).sandboxActive).toBe(true)
+    expect(() => m.workspaceWriteView('s1', WS)).not.toThrow()
+    expect(m.workspaceWriteView('s1', WS).workspaceWritable).toEqual([WS])
+  })
+
+  it('MG-11d 读取口给的空串丢掉、重复的合成一个', async () => {
+    const m = await loadWith(() => ['', `${HOME}/.ssh`, `${HOME}/.ssh`])
+    const plan = m.planFor(request())!
+    expect(plan.spec.readDenied).toEqual([`${HOME}/.ssh`])
+  })
+
+  it('MG-11e 读取口给的是真的符号链接：规格里是它指向的真实路径', async () => {
+    const fs = await vi.importActual<typeof import('fs')>('fs')
+    const os = await vi.importActual<typeof import('os')>('os')
+    const base = fs.mkdtempSync(join(fs.realpathSync(os.tmpdir()), 'sbx-mg11-'))
+    scratch.push(base)
+    const target = join(base, 'keys')
+    fs.mkdirSync(target)
+    const link = join(base, 'keys-link')
+    fs.symlinkSync(target, link)
+
+    const m = await loadWith(() => [link])
+    const plan = m.planFor(request())!
+    expect(plan.spec.readDenied).toEqual([target])
+    expect(plan.spec.readDenied).not.toContain(link)
+  })
+
+  it('MG-11f 工作区本身就在读取口给的清单里：不套沙箱（记原因）；固定为启用的 sessionView 也是 INACTIVE_VIEW；workspaceWriteView 三个空数组', async () => {
+    const m = await loadWith(() => [WS])
+    expect(m.planFor(request())).toBeNull()
+    const infos = mocks.log.info.mock.calls.map((c) => String(c[0])).join('\n')
+    expect(infos).toContain('working directory is a credential directory')
+
+    expect(m.pinSession('s1')).toBe(true)
+    expect(m.sessionView('s1', WS)).toBe(m.INACTIVE_VIEW)
+    expect(m.workspaceWriteView('s1', WS)).toEqual(EMPTY)
   })
 })

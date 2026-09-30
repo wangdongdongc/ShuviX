@@ -120,7 +120,7 @@ vi.mock('../../toolContext', async () => {
         },
         // 与 enforceCommand 同样的包法：抄一份实参，门后仍是本体。
         // 传输类工具的本地那一侧走这道门，而它是否真的与本地读写同一条路
-        // （ask-on-read / protect-credentials / 沙箱照样生效）只有在真引擎后面才答得出来
+        // （protect-credentials / ask-on-write / 沙箱照样生效）只有在真引擎后面才答得出来
         enforcePath: (mode: never, path: never, opts: never) => {
           gate.pathCalls.push({ mode, path, opts })
           return real.enforcePath(mode, path, opts)
@@ -1179,7 +1179,7 @@ describe('ssh 内置服务器的 disconnect 与状态条', () => {
 //
 // 传输类工具比 exec 多一个客体：**本地那个文件**。于是这一组的主线是「本地那一侧走的
 // 是不是和本地读写完全同一条路」—— up 当读、down 当写，`enforcePath` 一次，
-// 于是 ask-on-read / ask-on-write / protect-credentials / protect-system 一条不漏。
+// 于是 ask-on-write / protect-credentials / protect-system 一条不漏。
 // 漏一次的代价很具体：一条 upload 就能把 ~/.ssh/id_rsa 送出本机，而路径策略一次没被问到。
 //
 // sync 还多一道：rsync 把远端路径拼进一条交给远端**登录 shell** 的命令行，所以它
@@ -1285,8 +1285,12 @@ describe('ssh 内置服务器传输类工具的别名复核', () => {
     writeConfig('Host web\n')
     const { client, asks } = await open()
 
-    // 这个本地路径在工作目录外，过得了门就必然弹一张 ask-on-read 的卡
-    const r = await callTool(client, 'upload', xferArgs({ host: 'nope', localPath: '/outside/x' }))
+    // 这个本地路径是凭据位置，过得了门就必然弹一张 protect-credentials 的卡
+    const r = await callTool(
+      client,
+      'upload',
+      xferArgs({ host: 'nope', localPath: '/home/u/.ssh/x' })
+    )
     expect(r.isError).toBe(true)
     expect(textOf(r)).toContain('is not a host alias')
     expect(gate.pathCalls).toEqual([])
@@ -1417,16 +1421,16 @@ describe('ssh 内置服务器传输类工具的本地路径解析', () => {
 
     await callTool(client, 'upload', xferArgs({ localPath: '/ws/../../etc/passwd' }))
 
-    // 策略的匹配是按段前缀比的：不归一化时 `/ws/../../etc/passwd` 会被判成
-    // 「在工作目录内」，于是 ask-on-read 不响、护着凭据的那条也不响
+    // 策略的匹配是按段前缀比的：不归一化时 `/ws/../../etc/passwd` 会被判成「在工作目录内」
     expect(gate.pathCalls[0].path).toBe('/etc/passwd')
-    expect(asks).toHaveLength(1)
+    // 读 /etc/passwd 本身不问（内置策略只对凭据位置问读取）
+    expect(asks).toEqual([])
 
     // 同一道折叠的真正代价面：私钥。不折时这条路径会被判成「在工作目录内」，
     // 于是护着凭据的那条策略一次也不响，id_rsa 就这么送出了本机
     await callTool(client, 'upload', xferArgs({ localPath: '/ws/../home/u/.ssh/id_rsa' }))
     expect(gate.pathCalls[1].path).toBe('/home/u/.ssh/id_rsa')
-    expect(askCards(asks)[1].policyPrompt?.policies).toContain(
+    expect(askCards(asks)[0].policyPrompt?.policies).toContain(
       'Protect Some Credential Directories'
     )
   })
@@ -1496,23 +1500,26 @@ describe('ssh 内置服务器传输类工具的路径门', () => {
     expect('onOther' in pathOptsOf()).toBe(false)
   })
 
-  it('SSHS-U-149: ask-on-read 只对工作目录**外**的 upload 响', async () => {
+  it('SSHS-U-149: upload 的读门只对凭据位置响 —— 工作目录内外的普通文件都不问', async () => {
     writeConfig('Host web\n')
     const { client, asks } = await open()
 
     await callTool(client, 'upload', xferArgs({ localPath: '/ws/inside.txt' }))
+    await callTool(client, 'upload', xferArgs({ localPath: '/outside/notes.txt' }))
     expect(asks).toEqual([])
 
-    await callTool(client, 'upload', xferArgs({ localPath: '/outside/secret.txt' }))
+    await callTool(client, 'upload', xferArgs({ localPath: '/home/u/.ssh/id_rsa' }))
     expect(asks).toHaveLength(1)
     // 卡片上的记忆条目形状 = 本地读写那套（`Read(<abs>)`），一个字都没变
     expect(asks[0]).toMatchObject({
       kind: 'ask',
       toolName: 'mcp__ssh__upload',
-      command: 'Read(/outside/secret.txt)'
+      command: 'Read(/home/u/.ssh/id_rsa)'
     })
     // 卡片上列的是策略的**显示名**（用户在设置里看到的那个），不是内部 id
-    expect(askCards(asks)[0].policyPrompt?.policies).toEqual(['Ask Before Reading a File'])
+    expect(askCards(asks)[0].policyPrompt?.policies).toEqual([
+      'Protect Some Credential Directories'
+    ])
   })
 
   it('SSHS-U-150: ask-on-write 对**每一次** download 都响，工作目录里也一样', async () => {
@@ -1585,11 +1592,11 @@ describe('ssh 内置服务器传输类工具的询问应答', () => {
     writeConfig('Host web\n')
     const { client } = await open({ respond: null })
 
-    const r = await callTool(client, 'upload', xferArgs({ localPath: '/outside/secret.txt' }))
+    const r = await callTool(client, 'upload', xferArgs({ localPath: '/home/u/.ssh/id_rsa' }))
     expect(r.isError).toBe(true)
     // 路径客体的无通道文案（与本地读写同一句）
     expect(textOf(r)).toBe(
-      'Access denied: path outside workspace and no way to ask: /outside/secret.txt'
+      'Access denied: path outside workspace and no way to ask: /home/u/.ssh/id_rsa'
     )
     expect(control.copy).toEqual([])
   })
@@ -1626,17 +1633,17 @@ describe('ssh 内置服务器传输类工具的询问应答', () => {
       respond: async () => ({ kind: 'ask', allowed: true, extra: { rememberPath: true } })
     })
 
-    await callTool(client, 'upload', xferArgs({ localPath: '/outside/secret.txt' }))
+    await callTool(client, 'upload', xferArgs({ localPath: '/home/u/.ssh/config' }))
     await callTool(client, 'download', xferArgs({ localPath: '/outside/out.txt' }))
 
     // 记住的是**本地读写**那套条目（`Read(<abs>)` / `Write(<abs>)`）：于是这颗复选框
     // 不只放开了这次传输，也放开了之后 read / write 工具对同一路径的访问 —— 今天的行为
     expect(askCards(asks).map((a) => a.command)).toEqual([
-      'Read(/outside/secret.txt)',
+      'Read(/home/u/.ssh/config)',
       'Write(/outside/out.txt)'
     ])
     expect(gate.grants).toEqual([
-      { mode: 'read', path: '/outside/secret.txt' },
+      { mode: 'read', path: '/home/u/.ssh/config' },
       { mode: 'write', path: '/outside/out.txt' }
     ])
   })
@@ -1659,11 +1666,11 @@ describe('ssh 内置服务器传输类工具的询问应答', () => {
     writeConfig('Host web\nHost api\n')
     const { client, asks } = await open()
 
-    // upload 的本地路径要在工作目录**外**，否则 ask-on-read 不响、根本没有卡片
+    // upload 的本地路径要是凭据位置，否则读门不响、根本没有卡片
     await callTool(
       client,
       'upload',
-      xferArgs({ host: 'api', localPath: '/outside/a', remotePath: '/srv/a' })
+      xferArgs({ host: 'api', localPath: '/home/u/.ssh/a', remotePath: '/srv/a' })
     )
     await callTool(client, 'download', xferArgs({ host: 'web', remotePath: '/srv/b' }))
     await callTool(

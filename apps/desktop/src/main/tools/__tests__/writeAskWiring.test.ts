@@ -503,7 +503,7 @@ describe.skipIf(process.platform === 'win32')(
       expect(lstatSync(link).isSymbolicLink()).toBe(true)
     })
 
-    it('PERM-R6 指向目录的链接：read 它本身被拒（说出那头的目录）、门不问；经它读里面的文件（链接在中间）照常过门 —— 问一次，卡片是真实去处、注着写法', async () => {
+    it('PERM-R6 指向目录的链接：read 它本身被拒（说出那头的目录）、门不问；经它读里面的文件（链接在中间）照常过门 —— 读区外不问，门看到的是真实去处、注着写法', async () => {
       const link = join(TEST_DIR, 'dirlink')
       const realDir = realpathSync.native(OUTSIDE)
 
@@ -514,10 +514,14 @@ describe.skipIf(process.platform === 'win32')(
 
       const through = join(link, 'doc.txt')
       const res = await makeReadTool(ctx).execute('pr6b', { path: through })
-      expect(state.requests).toHaveLength(1)
-      const req = askOf(state.requests[0])
-      expect(req.command).toBe(`Read(${join(realDir, 'doc.txt')})`)
-      expect(req.requestedPath).toBe(through)
+      // 内置策略只对凭据位置问读取：不弹卡，但门确实过了一次（决策日志），按的是真实去处
+      expect(state.requests).toEqual([])
+      expect(getSessionDecisions(SESSION_ID)).toHaveLength(1)
+      expect(getSessionDecisions(SESSION_ID)[0]).toMatchObject({
+        effect: 'allow',
+        objectSummary: join(realDir, 'doc.txt'),
+        requestedPath: through
+      })
       expect(textOf(res)).toContain('doc')
     })
 
@@ -627,7 +631,7 @@ describe.skipIf(process.platform === 'win32')(
       expect(state.requests).toEqual([])
     })
 
-    it('PERM-R13 经链接目录走到的最后一段本身又是链接：拒（D 照写，R 是它最终的去处，相对原文从它自己的目录起算）；同一目录里的真文件照常过门 —— 问一次，注着写法', async () => {
+    it('PERM-R13 经链接目录走到的最后一段本身又是链接：拒（D 照写，R 是它最终的去处，相对原文从它自己的目录起算）；同一目录里的真文件照常过门 —— 读区外不问，门看到的是真实去处、注着写法', async () => {
       const dirLink = join(TEST_DIR, 'ldirlink')
       const viaLink = join(dirLink, 'innerlink')
       const real = realpathSync.native(join(OUTSIDE, 'ldir', 'real.txt'))
@@ -639,10 +643,13 @@ describe.skipIf(process.platform === 'win32')(
 
       const plain = join(dirLink, 'real.txt')
       const res = await makeReadTool(ctx).execute('pr13b', { path: plain })
-      expect(state.requests).toHaveLength(1)
-      const req = askOf(state.requests[0])
-      expect(req.command).toBe(`Read(${real})`)
-      expect(req.requestedPath).toBe(plain)
+      expect(state.requests).toEqual([])
+      expect(getSessionDecisions(SESSION_ID)).toHaveLength(1)
+      expect(getSessionDecisions(SESSION_ID)[0]).toMatchObject({
+        effect: 'allow',
+        objectSummary: real,
+        requestedPath: plain
+      })
       expect(textOf(res)).toContain('real')
     })
 

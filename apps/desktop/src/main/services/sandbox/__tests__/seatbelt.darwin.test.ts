@@ -2,7 +2,8 @@
  * 命令沙箱 —— 真 Seatbelt（[darwin]）：RS-1..RS-9（RS-7 含 FU-19，RS-8 含 FU-10..FU-12）。
  *
  * 规格由 buildSandboxSpec 从一套**假家目录**算出（fakeHome 建在 realpath(os.tmpdir()) 下，即
- * /private/var/folders/…，不在任何可写根里），命令经 createSeatbeltBackend().wrap 包进真正的
+ * /private/var/folders/…，不在任何可写根里；凭据位置取出厂 protect-credentials 的清单，拼在假家目录上），
+ * 命令经 createSeatbeltBackend().wrap 包进真正的
  * /usr/bin/sandbox-exec 执行。真 HOME、真 ~/.shuvix、真 userData、真 /private/tmp/shuvix-<uid>
  * 一概不碰：uid 用哨兵 99999（/private/tmp/shuvix-ssh-99999、tmux-99999 由本文件自建自删），
  * 每会话临时目录的父目录是本文件独占的 /private/tmp/shuvix-sbxtest-<rand>。
@@ -43,10 +44,15 @@ vi.mock('electron', () => ({
   }
 }))
 
+import {
+  parsePolicyDefinitionFile,
+  resolvePolicyLet,
+  type UserPolicyFile
+} from '@shuvix/agent-runtime'
+import { createInlinePolicyMdReader } from '@shuvix/agent-runtime/security/builtinPolicies/inlineSources'
 import { buildSandboxSpec } from '../spec'
 import { createSeatbeltBackend, SANDBOX_EXEC } from '../backends/seatbelt'
 import { explainSandboxDenial } from '../classify'
-import { ROOT_PROTECTED_NAMES } from '../tables'
 import type { SandboxHostPaths, SandboxSessionInput, SandboxSpec } from '../types'
 
 const SENTINEL_UID = 99999
@@ -60,6 +66,17 @@ const LAUNCHD_DIR = `/private/tmp/com.apple.launchd.sbxtest-${RAND}`
 const SSH_CTL_DIR = `/private/tmp/shuvix-ssh-${SENTINEL_UID}`
 const TMUX_DIR = `/private/tmp/tmux-${SENTINEL_UID}`
 const SYS_PATH = '/usr/bin:/bin:/usr/sbin:/sbin'
+/** 出厂 protect-credentials 的 `credentialDirs`（家目录相对）—— 生产里由 main 注入给沙箱 */
+const CREDENTIALS_HOME_RELATIVE = [
+  '.ssh',
+  '.aws',
+  '.gnupg',
+  '.config/gh',
+  '.netrc',
+  '.shuvix/.session-state',
+  'AppData/Local/Microsoft/Credentials',
+  'AppData/Roaming/Microsoft/Credentials'
+]
 const UI = process.env.SHUVIX_SBX_UI === '1'
 
 const backend = createSeatbeltBackend()
@@ -106,12 +123,18 @@ function put(path: string, content = 'seed\n'): string {
   return path
 }
 
+function inputOf(over: Partial<SandboxSessionInput> = {}): SandboxSessionInput {
+  return {
+    sessionId: SID,
+    workingDirectory: ws,
+    grantedWrite: [],
+    credentialPaths: CREDENTIALS_HOME_RELATIVE.map((d) => join(fakeHome, d)),
+    ...over
+  }
+}
+
 function specOf(over: Partial<SandboxSessionInput> = {}): SandboxSpec {
-  const built = buildSandboxSpec(
-    paths,
-    { sessionId: SID, workingDirectory: ws, grantedWrite: [], grantedRead: [], ...over },
-    realLoose
-  )
+  const built = buildSandboxSpec(paths, inputOf(over), realLoose)
   if (!built.ok) throw new Error(`fixture spec rejected: ${built.reason}`)
   mkdirSync(built.spec.tmpDir, { recursive: true, mode: 0o700 })
   return built.spec
@@ -376,16 +399,18 @@ describe.skipIf(!SANDBOX_OK)('seatbelt (real sandbox-exec) [darwin]', () => {
       expectWriteDenied(spec, join(agents, 'x.plist'))
     })
 
-    it('RS-2 a write grant that strictly contains a protected dir is not sandboxed at all', () => {
-      for (const grant of [join(fakeHome, '.config'), join(fakeHome, 'Library')]) {
-        const built = buildSandboxSpec(
-          paths,
-          { sessionId: SID, workingDirectory: ws, grantedWrite: [grant], grantedRead: [] },
-          realLoose
-        )
-        expect(built.ok, grant).toBe(false)
-        if (!built.ok) expect(built.reason).toMatch(/^a write grant contains /)
-      }
+    it('RS-2 a write grant that contains protected dirs is sandboxed, and the dirs inside stay denied', () => {
+      const config = join(fakeHome, '.config')
+      for (const d of ['gh', 'git']) mkdirSync(join(config, d), { recursive: true })
+      const configSpec = specOf({ grantedWrite: [config] })
+      expectWriteDenied(configSpec, join(config, 'gh', 'hosts.yml'))
+      expectWriteDenied(configSpec, join(config, 'git', 'config'))
+
+      const library = join(fakeHome, 'Library')
+      mkdirSync(join(library, 'LaunchAgents'), { recursive: true })
+      const librarySpec = specOf({ grantedWrite: [library] })
+      expectWriteDenied(librarySpec, join(library, 'LaunchAgents', 'x.plist'))
+      expectWriteDenied(librarySpec, join(userData, 'x'))
     })
 
     it('RS-2 a grant that is the file ~/.zshrc', () => {
@@ -405,6 +430,15 @@ describe.skipIf(!SANDBOX_OK)('seatbelt (real sandbox-exec) [darwin]', () => {
       expectWriteDenied(spec, join(TMUX_DIR, 'x'))
     })
 
+    it('RS-2 the fence: ~/.shuvix/policies, the session-state key and a knowledge base are not writable without a grant', () => {
+      const spec = specOf()
+      mkdirSync(join(shuvixHome, 'policies'), { recursive: true })
+      mkdirSync(join(shuvixHome, 'knowledge', 'b'), { recursive: true })
+      expectWriteDenied(spec, join(shuvixHome, 'policies', 'fence.md'))
+      expectWriteDenied(spec, join(shuvixHome, '.session-state'))
+      expectWriteDenied(spec, join(shuvixHome, 'knowledge', 'b', 'x.md'))
+    })
+
     it('RS-2 creating a launchd socket dir under /private/tmp', () => {
       const spec = specOf()
       expect(existsSync(LAUNCHD_DIR)).toBe(false)
@@ -417,7 +451,18 @@ describe.skipIf(!SANDBOX_OK)('seatbelt (real sandbox-exec) [darwin]', () => {
 
   // ─── RS-3 ─────────────────────────────────────────
 
-  describe('RS-3 root-protected names', () => {
+  // 其他工具的配置（.vscode、.claude、.mcp.json …）不再受保护：没有哪条策略说它们，沙箱也就不管
+  describe("RS-3 other tools' config at a root is writable", () => {
+    const NAMES = [
+      '.vscode',
+      '.idea',
+      '.claude',
+      '.cursor',
+      '.codex',
+      '.zed',
+      '.mcp.json',
+      '.envrc'
+    ]
     const FILE_NAMES = new Set(['.mcp.json', '.envrc'])
     /** 目录类的在根下预先建好（不套沙箱），测的是往里写文件 */
     function targetUnder(root: string, name: string): string {
@@ -426,25 +471,22 @@ describe.skipIf(!SANDBOX_OK)('seatbelt (real sandbox-exec) [darwin]', () => {
       return join(root, name, name === '.claude' ? 'settings.json' : 'x')
     }
 
-    it.each(ROOT_PROTECTED_NAMES.map((n) => [n]))('RS-3 ws/%s is refused', (name) => {
-      expectWriteDenied(specOf(), targetUnder(ws, name))
+    it.each(NAMES.map((n) => [n]))('RS-3 ws/%s is writable', (name) => {
+      expectWriteAllowed(specOf(), targetUnder(ws, name))
     })
 
-    it.each(ROOT_PROTECTED_NAMES.map((n) => [n]))(
-      'RS-3 <write-grant root>/%s is refused',
-      (name) => {
-        const grant = join(fakeHome, 'grant-root')
-        mkdirSync(grant, { recursive: true })
-        expectWriteDenied(specOf({ grantedWrite: [grant] }), targetUnder(grant, name))
-      }
-    )
+    it.each(NAMES.map((n) => [n]))('RS-3 <write-grant root>/%s is writable', (name) => {
+      const grant = join(fakeHome, 'grant-root')
+      mkdirSync(grant, { recursive: true })
+      expectWriteAllowed(specOf({ grantedWrite: [grant] }), targetUnder(grant, name))
+    })
 
-    it('RS-3 the protected entry itself cannot be created at a root', () => {
+    it('RS-3 the entry itself can be created at a root', () => {
       const grant = join(fakeHome, 'grant-fresh')
       mkdirSync(grant, { recursive: true })
       const r = confined(specOf({ grantedWrite: [grant] }), `mkdir ${q(join(grant, '.vscode'))}`)
-      expect(r.status, r.out).not.toBe(0)
-      expect(existsSync(join(grant, '.vscode'))).toBe(false)
+      expect(r.status, r.out).toBe(0)
+      expect(existsSync(join(grant, '.vscode'))).toBe(true)
     })
 
     it('RS-3 the same names deeper in the tree are allowed', () => {
@@ -591,8 +633,6 @@ describe.skipIf(!SANDBOX_OK)('seatbelt (real sandbox-exec) [darwin]', () => {
       docs = join(fakeHome, 'Documents')
       put(join(docs, 'secret.txt'), 'secret\n')
       put(join(docs, 'proj', 'p.txt'), 'proj\n')
-      put(join(docs, 'rg', 'r.txt'), 'read-grant\n')
-      put(join(docs, 'wg', 'w.txt'), 'write-grant\n')
       put(join(fakeHome, '.ssh', 'id_test'), 'key\n')
       put(join(shuvixHome, '.session-state', 'k'), 'state\n')
       put(join(shuvixHome, 'cli-token'), 'token\n')
@@ -621,12 +661,12 @@ describe.skipIf(!SANDBOX_OK)('seatbelt (real sandbox-exec) [darwin]', () => {
       expectReadAllowed(specOf(), 'cat /etc/hosts > /dev/null')
     })
 
-    it('RS-5 personal dirs: contents refused, metadata allowed', () => {
+    it('RS-5 personal dirs are readable, contents and metadata alike', () => {
       const spec = specOf()
       const secret = join(docs, 'secret.txt')
-      expectReadDenied(spec, `cat ${q(secret)}`)
-      expectReadDenied(spec, `ls ${q(docs)}`)
-      expectReadDenied(spec, `xattr -l ${q(secret)}`)
+      expectReadAllowed(spec, `cat ${q(secret)}`, 'secret\n')
+      expectReadAllowed(spec, `ls ${q(docs)} > /dev/null`)
+      expectReadAllowed(spec, `xattr -l ${q(secret)}`)
       expectReadAllowed(spec, `stat ${q(secret)} > /dev/null`)
     })
 
@@ -639,35 +679,69 @@ describe.skipIf(!SANDBOX_OK)('seatbelt (real sandbox-exec) [darwin]', () => {
         join(docs, 'proj')
       )
       expectReadAllowed(spec, '/usr/bin/python3 -c pass')
-      // 放回只到工作区为止
-      expectReadDenied(spec, `cat ${q(join(docs, 'secret.txt'))}`)
     })
 
-    it("RS-5 userData refused, the session's own tool_results readable, another's not", () => {
+    it("RS-5 userData is readable, the session's own tool_results and another's alike", () => {
       const spec = specOf()
-      expectReadDenied(spec, `cat ${q(join(userData, 'x'))}`)
+      expectReadAllowed(spec, `cat ${q(join(userData, 'x'))}`, 'userdata\n')
       expectReadAllowed(spec, `cat ${q(join(userData, 'tool_results', SID, 'r.txt'))}`, 'mine\n')
-      expectReadDenied(spec, `cat ${q(join(userData, 'tool_results', OTHER_SID, 'r.txt'))}`)
+      expectReadAllowed(
+        spec,
+        `cat ${q(join(userData, 'tool_results', OTHER_SID, 'r.txt'))}`,
+        'theirs\n'
+      )
     })
 
-    it('RS-5 credentials, session state and the database are refused even for stat', () => {
+    it('RS-5 credentials and session state are refused even for stat; the database is not on the list', () => {
       const spec = specOf()
       const key = join(fakeHome, '.ssh', 'id_test')
       expectReadDenied(spec, `cat ${q(key)}`)
       expectReadDenied(spec, `stat ${q(key)} > /dev/null`)
       expectReadDenied(spec, `stat ${q(join(shuvixHome, '.session-state', 'k'))} > /dev/null`)
-      expectReadDenied(spec, `stat ${q(join(userData, 'data', 'db'))} > /dev/null`)
+      expectReadAllowed(spec, `stat ${q(join(userData, 'data', 'db'))} > /dev/null`)
     })
 
     it('RS-5 ~/.shuvix/cli-token stays readable (the shuvix CLI needs it)', () => {
       expectReadAllowed(specOf(), `cat ${q(join(shuvixHome, 'cli-token'))}`, 'token\n')
     })
 
-    it('RS-5 a read grant and a write grant under ~/Documents are readable', () => {
-      const spec = specOf({ grantedRead: [join(docs, 'rg')], grantedWrite: [join(docs, 'wg')] })
-      expectReadAllowed(spec, `cat ${q(join(docs, 'rg', 'r.txt'))}`, 'read-grant\n')
-      expectReadAllowed(spec, `cat ${q(join(docs, 'wg', 'w.txt'))}`, 'write-grant\n')
-      expectReadDenied(spec, `cat ${q(join(docs, 'secret.txt'))}`)
+    it('RS-5c with no credential list the sandbox refuses nothing on read: ~/.ssh is readable', () => {
+      const spec = specOf({ credentialPaths: [] })
+      expect(spec.readDenied).toEqual([])
+      expectReadAllowed(spec, `cat ${q(join(fakeHome, '.ssh', 'id_test'))}`, 'key\n')
+    })
+
+    it('RS-5d an override of protect-credentials reaches Seatbelt: without .aws in the list ~/.aws is readable, ~/.ssh still is not', () => {
+      put(join(fakeHome, '.aws', 'credentials'), 'aws\n')
+      const readMd = createInlinePolicyMdReader()
+      const raw = readMd('protect-credentials.md')!.replace("'.aws', ", '')
+      const parsed = parsePolicyDefinitionFile(raw, 'protect-credentials')
+      expect(parsed).not.toBeNull()
+      const override: UserPolicyFile = { ...parsed!, fileName: 'protect-credentials.md' }
+      const provider = { pathSep: '/', readBuiltinPolicyMd: readMd }
+      const lists = [
+        resolvePolicyLet(provider, 'protect-credentials', 'credentialDirs', { home: fakeHome }),
+        resolvePolicyLet(
+          { ...provider, getUserPolicies: () => [override] },
+          'protect-credentials',
+          'credentialDirs',
+          { home: fakeHome }
+        )
+      ] as string[][]
+      expect(lists[0]).toContain(join(fakeHome, '.aws'))
+      expect(lists[1]).not.toContain(join(fakeHome, '.aws'))
+      expect(lists[1]).toContain(join(fakeHome, '.ssh'))
+
+      const aws = `cat ${q(join(fakeHome, '.aws', 'credentials'))}`
+      const ssh = `cat ${q(join(fakeHome, '.ssh', 'id_test'))}`
+      // 出厂清单：两个都拒
+      const builtinSpec = specOf({ credentialPaths: lists[0] })
+      expectReadDenied(builtinSpec, aws)
+      expectReadDenied(builtinSpec, ssh)
+      // 覆盖后的清单：.aws 放了，.ssh 照拒
+      const overriddenSpec = specOf({ credentialPaths: lists[1] })
+      expectReadAllowed(overriddenSpec, aws, 'aws\n')
+      expectReadDenied(overriddenSpec, ssh)
     })
   })
 
@@ -678,7 +752,7 @@ describe.skipIf(!SANDBOX_OK)('seatbelt (real sandbox-exec) [darwin]', () => {
     const servers: Server[] = []
 
     beforeAll(() => {
-      // 放在家目录下一个普通目录里（不在个人资料清单里 → 沙箱里可读）
+      // 放在家目录下一个普通目录里（不在凭据清单里 → 沙箱里可读）
       probeScript = put(
         join(fakeHome, 'bin', 'netprobe.cjs'),
         [

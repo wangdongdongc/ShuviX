@@ -293,7 +293,6 @@ describe('SC-2 圈住执行', () => {
       sessionId: SID,
       workingDirectory: '/w',
       grantedWrite: ['/granted/write'],
-      grantedRead: ['/granted/read'],
       offerEscalation: true
     })
 

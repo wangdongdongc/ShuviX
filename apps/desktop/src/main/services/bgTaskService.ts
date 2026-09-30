@@ -14,8 +14,8 @@
  *     换来的性质：单一事实源（模型 read 与面板轮询读的是同一个文件）、零背压、没人看时成本为零。
  *     代价是 stdout / stderr 合并（等价 shell 的 `2>&1`）、日志上限只能靠定期 fstat 近似卡。
  *
- *  2. **落点选在 `tool_results/` 是有意的**。该目录已在内置策略 ask-on-read 的豁免区
- *     （`!inDir(object.path, vars.toolResultsBase)`），模型 read 它不弹询问；且这是模型
+ *  2. **落点选在 `tool_results/` 是有意的**。读它不弹询问（内置策略只对凭据位置问读取），
+ *     沙箱里的命令也读得到；且这是模型
  *     早已熟悉的约定（任何超长工具输出都落在这里、以 toolCallId 命名）。用 `.log` 而非
  *     `.txt` 从根上排除与 processToolOutput 截断落盘的撞名。
  *

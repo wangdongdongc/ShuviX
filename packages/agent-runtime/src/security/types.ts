@@ -367,7 +367,7 @@ export interface SecurityHostProvider {
   /** 用户策略 md，全部可解析的份数（含同名的几份，谁生效见 resolvePolicyFiles）；无文件系统的宿主省略 */
   getUserPolicies?(): UserPolicyFile[]
   /**
-   * 内置策略 md 的读取口（入参是目录内文件名如 `ask-on-read.zh.md`，没有那一版回 null）——
+   * 内置策略 md 的读取口（入参是目录内文件名如 `ask-on-write.zh.md`，没有那一版回 null）——
    * 内置策略随包发布成文件后运行时现读：桌面注入「`Resources/builtin-policies/` 目录现读」，
    * 扩展注入构建期内联的同一批文件（security/builtinPolicies/inlineSources.ts）。
    * **省略即装配期 throw**：内置策略是出厂防护层，缺席必须响（开发期错误），
@@ -581,7 +581,7 @@ export interface DatabaseObjectInput {
  *
  * 属性拆好了给：策略写 `object.host.endsWith('.example.com')` 比在 CEL 里解析 URL 可靠得多。
  * **file:// 不该走这里**：打开一个本地文件就是读它，宿主应当改走 enforcePath('read') ——
- * 那样 ask-on-read / protect-credentials 这些现成的路径策略自动生效，不必为 URL 再写一套。
+ * 那样 protect-credentials 这些现成的路径策略自动生效，不必为 URL 再写一套。
  */
 export interface UrlObjectInput {
   /** 原始地址（询问卡片展示 + 策略可 matches() 匹配） */

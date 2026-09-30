@@ -10,14 +10,14 @@ shuvix-policy-scope:
   env.host: [desktop]
 shuvix-policy-lets:
   credentialDirs: >-
-    ['.ssh', '.aws', '.gnupg', '.config/gh', '.netrc',
+    ['.ssh', '.aws', '.gnupg', '.config/gh', '.netrc', '.shuvix/.session-state',
     'AppData/Local/Microsoft/Credentials',
     'AppData/Roaming/Microsoft/Credentials'].map(s, vars.home + '/' + s)
 shuvix-policy-rules:
   - effect: deny
     action: [write]
     match: inDir(object.path, credentialDirs)
-    prompt: 書き込みは拒否された。資格情報ディレクトリ（~/.ssh、~/.aws、~/.gnupg、~/.config/gh、~/.netrc）はエージェントに対して閉じている。変更が必要ならユーザー自身に依頼すること。
+    prompt: 書き込みは拒否された。資格情報の場所（~/.ssh、~/.aws、~/.gnupg、~/.config/gh、~/.netrc、~/.shuvix/.session-state）はエージェントに対して閉じている。変更が必要ならユーザー自身に依頼すること。
   - effect: ask
     action: [read]
     match: inDir(object.path, credentialDirs)
@@ -25,17 +25,22 @@ shuvix-policy-rules:
 ---
 
 **このポリシーの役割**：資格情報の保存場所（`~/.ssh`、`~/.aws`、`~/.gnupg`、
-`~/.config/gh`、`~/.netrc`）について：
+`~/.config/gh`、`~/.netrc`、そして ShuviX が保存済みの API キーを暗号化する鍵
+`~/.shuvix/.session-state`）について：
 
 - **書き込みは常に拒否** —— 自動許可がオンでも通らない。
 - **読み取りは事前確認** —— 秘密鍵を読むことは実質的な流出であるため、自動許可を
   オンにしていない限り、エージェントはこれらのパスを読む前に確認する。
+- **サンドボックス内のコマンドは読み書きともできない。** コマンドサンドボックスの
+  一覧はこのポリシーの `credentialDirs` から取るので、上書きコピーで一覧を変えれば
+  コマンド側も変わる。
 
 **カバーしないこと**：
 
 - 対象は上記パスのみ。
-- 制約するのはファイルツールのみ：あなたが許可すれば、エージェントはコマンドを
-  実行して重要な資格情報ファイルを操作できる。
+- サンドボックスの外で動くコマンド（サンドボックスがオフか使えない、または
+  エージェントがフルアクセスを求めた）はパスごとには調べず、コマンド全体として
+  ask-on-command で確認する。
 - 必ずあなたに届くとは限らない：自動レビューがオンのときは、レビューする
   エージェントが先に答える —— 普段の作業は通し、明らかに有害なものは拒否し、
   残りは意見を添えてあなたに回す。

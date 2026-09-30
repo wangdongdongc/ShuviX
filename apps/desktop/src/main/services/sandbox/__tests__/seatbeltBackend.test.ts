@@ -48,7 +48,12 @@ const TMPDIR_REAL = '/private/var/folders/ab/xyz/T'
 function specOf(ws = '/Users/u/proj', grantedWrite: string[] = []): SandboxSpec {
   const result = buildSandboxSpec(
     PATHS,
-    { sessionId: 'sess-1', workingDirectory: ws, grantedWrite, grantedRead: [] },
+    {
+      sessionId: 'sess-1',
+      workingDirectory: ws,
+      grantedWrite,
+      credentialPaths: [`${PATHS.home}/.ssh`]
+    },
     (p) => p
   )
   if (!result.ok) throw new Error(result.reason)
@@ -182,6 +187,22 @@ describe('SB-3 probe', () => {
       .map((d) => d.slice(d.indexOf('=') + 1))
     expect(defines).toContain(TMPDIR_REAL)
     expect(defines).not.toContain(TMPDIR_RAW)
+  })
+
+  it('SB-3b 探测也试一次「拒读」那一层：-p 的 profile 里恰有一行 (deny file-read* (subpath (param "Pk")))，Pk 就是 <home>/.ssh', () => {
+    createSeatbeltBackend().probe(PATHS)
+    const [, args] = mocks.spawnSync.mock.calls[0] as [string, string[]]
+    const profile = args[1]
+    const denyReads = profile.split('\n').filter((l) => l.startsWith('(deny file-read*'))
+    expect(denyReads).toHaveLength(1)
+    const m = /^\(deny file-read\* \(subpath \(param "(P\d+)"\)\)\)$/.exec(denyReads[0])
+    expect(m, denyReads[0]).not.toBeNull()
+    const defines = new Map(
+      args
+        .filter((_, i) => args[i - 1] === '-D')
+        .map((d) => [d.slice(0, d.indexOf('=')), d.slice(d.indexOf('=') + 1)] as const)
+    )
+    expect(defines.get(m![1])).toBe(`${PATHS.home}/.ssh`)
   })
 
   it.each([

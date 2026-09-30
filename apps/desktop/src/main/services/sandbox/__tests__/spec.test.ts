@@ -2,15 +2,18 @@
  * 沙箱规格（spec.ts）—— 纯函数：会话 → 规格、规格 → 策略变量。
  *
  *  - SP-1/SP-2 哪些会话不套沙箱（逐条询问）、哪些套得上（按路径段边界判）；
- *  - SP-3/SP-4 写的四层：可写根 → 整片拒写 → 放回 → 最后一层（凭据 / 沙箱外会执行的位置 / 根顶层的别家配置）；
- *  - SP-5 读的四层与 socket；
+ *  - SP-3/SP-4 写的四层：可写根 → 整片拒写 → 放回 → 最后一层（凭据 / 沙箱外会执行的位置 / ssh、tmux 目录）；
+ *  - SP-5 读只有一层（凭据）与 socket；
  *  - SP-6 `real` 在一切判断之前应用；
  *  - SP-7 策略那一面（toPolicyView）与规格同源；
- *  - SP-8/SP-9 清单守卫与正则语义（JS 方言 = SBPL 文本）；
- *  - SP-10 受保护模式（protectedWritePatterns）：沙箱视图与工作区写入视图共用的那一组。
+ *  - SP-8/SP-9 正则守卫与正则语义（JS 方言 = SBPL 文本）；
+ *  - SP-10 受保护模式（protectedWritePatterns）：沙箱视图与工作区写入视图共用的那一组；
+ *  - SP-1b..SP-6b 凭据清单来自调用方（空清单、自定义清单、realpath、去空串），以及根包含敏感位置时
+ *    后面的层照样拦住它们。
  *
  * 夹具宿主（见测试计划 Conventions）：home=/Users/u，userData 在 ~/Library/Application Support/ShuviX，
  * 工作区 /Users/u/proj；e2e 布局把假 HOME 放在 /private/tmp 下（它本身是可写根，几处结论不同）。
+ * 凭据位置由调用方交进来（生效的 protect-credentials 的 `credentialDirs`），夹具用出厂那一份。
  */
 import { createHash } from 'crypto'
 import { describe, expect, it, vi } from 'vitest'
@@ -18,6 +21,7 @@ import { describe, expect, it, vi } from 'vitest'
 // spec.ts → utils/paths 会连带 import electron（只在调用时才用 app）
 vi.mock('electron', () => ({ app: { getPath: () => '/nonexistent', isPackaged: false } }))
 
+import { isReadBlocked, isWriteBlocked, writeBlockReason } from '../classify'
 import {
   buildSandboxSpec,
   isWithin,
@@ -27,16 +31,12 @@ import {
 } from '../spec'
 import {
   CACHE_DIRS_HOME_RELATIVE,
-  CREDENTIAL_DIRS_HOME_RELATIVE,
   EXECUTED_LATER_HOME_RELATIVE,
   GIT_ENTRY_PATTERN,
   GIT_PATTERNS,
-  LAUNCHD_TMP_PATTERN,
-  PERSONAL_DIRS_HOME_RELATIVE,
-  ROOT_PROTECTED_NAMES
+  LAUNCHD_TMP_PATTERN
 } from '../tables'
 import type { SandboxHostPaths, SandboxSessionInput, SandboxSpec } from '../types'
-import { createInlinePolicyMdReader } from '@shuvix/agent-runtime/security/builtinPolicies/inlineSources'
 
 const HOME = '/Users/u'
 const USER_DATA = '/Users/u/Library/Application Support/ShuviX'
@@ -67,8 +67,26 @@ const E2E_PATHS: SandboxHostPaths = {
 
 const identity = (p: string): string => p
 
+/** 出厂 protect-credentials 的 `credentialDirs`（家目录相对），夹具按它拼出绝对路径 */
+const CREDENTIALS_HOME_RELATIVE = [
+  '.ssh',
+  '.aws',
+  '.gnupg',
+  '.config/gh',
+  '.netrc',
+  '.shuvix/.session-state',
+  'AppData/Local/Microsoft/Credentials',
+  'AppData/Roaming/Microsoft/Credentials'
+]
+
 function input(over: Partial<SandboxSessionInput> = {}): SandboxSessionInput {
-  return { sessionId: SID, workingDirectory: WS, grantedWrite: [], grantedRead: [], ...over }
+  return {
+    sessionId: SID,
+    workingDirectory: WS,
+    grantedWrite: [],
+    credentialPaths: CREDENTIALS_HOME_RELATIVE.map((d) => `${HOME}/${d}`),
+    ...over
+  }
 }
 
 function build(
@@ -131,33 +149,7 @@ describe('SP-1 不套沙箱的会话（契约 4）：一律 {ok:false} 并说明
     ],
     ['工作区是 ~/.ssh', { workingDirectory: h('.ssh') }, 'credential directory'],
     ['工作区在 ~/.ssh 里', { workingDirectory: h('.ssh/k') }, 'credential directory'],
-    ['工作区是 ~/.config/gh', { workingDirectory: h('.config/gh') }, 'credential directory'],
-    // 根**严格包含**敏感目录（实现后改动：放回根会把里面的邮件、钥匙串、ShuviX 数据一起放出来）
-    [
-      '工作区是 ~/Library（包含个人资料目录）',
-      { workingDirectory: h('Library') },
-      `working directory contains ${h('Library/Mobile Documents')}`
-    ],
-    [
-      '工作区是 ~/.config（包含 ~/.config/gh）',
-      { workingDirectory: h('.config') },
-      `working directory contains ${h('.config/gh')}`
-    ],
-    [
-      '工作区是 ~/Library/Application Support（包含 AddressBook 与 userData）',
-      { workingDirectory: h('Library/Application Support') },
-      'working directory contains'
-    ],
-    [
-      '写授权是 ~/Library',
-      { grantedWrite: [h('Library')] },
-      `a write grant contains ${h('Library/Mobile Documents')}`
-    ],
-    [
-      '写授权是 ~/.config',
-      { grantedWrite: [h('.config')] },
-      `a write grant contains ${h('.config/gh')}`
-    ]
+    ['工作区是 ~/.config/gh', { workingDirectory: h('.config/gh') }, 'credential directory']
   ]
   it.each(cases)('%s', (_label, over, reason) => {
     const result = build(over)
@@ -179,13 +171,19 @@ describe('SP-2 套得上的工作区（按路径段边界判）', () => {
     ['本会话临时工作区的子目录', { workingDirectory: `${TEMP_WS}/sub` }],
     ['~/.sshfoo（段边界：不是 ~/.ssh）', { workingDirectory: h('.sshfoo') }],
     ['~/Documents 里的项目', { workingDirectory: h('Documents/proj') }],
-    // 根**等于**个人资料目录不算包含（那是用户选的项目）
     ['工作区就是 ~/Documents', { workingDirectory: h('Documents') }],
     ['外接卷', { workingDirectory: '/Volumes/x' }],
-    ['读授权等于家目录（只有写授权会被拒）', { grantedRead: [HOME] }],
-    ['读授权是 /', { grantedRead: ['/'] }],
-    ['写授权恰好等于凭据目录（等于不算包含）', { grantedWrite: [h('.ssh')] }],
-    ['写授权恰好等于 ~/Library/LaunchAgents', { grantedWrite: [h('Library/LaunchAgents')] }]
+    ['写授权恰好等于凭据目录（只查工作区）', { grantedWrite: [h('.ssh')] }],
+    ['写授权恰好等于 ~/Library/LaunchAgents', { grantedWrite: [h('Library/LaunchAgents')] }],
+    // 根**包含**敏感位置不再拒绝：凭据、ShuviX 自己的文件在更后面的层里拒，放不回来
+    ['工作区是 ~/Library', { workingDirectory: h('Library') }],
+    ['工作区是 ~/.config（包含 ~/.config/gh）', { workingDirectory: h('.config') }],
+    [
+      '工作区是 ~/Library/Application Support（包含 userData）',
+      { workingDirectory: h('Library/Application Support') }
+    ],
+    ['写授权是 ~/Library', { grantedWrite: [h('Library')] }],
+    ['写授权是 ~/.config', { grantedWrite: [h('.config')] }]
   ]
   it.each(accepted)('%s', (_label, over) => {
     const result = build(over)
@@ -252,24 +250,19 @@ describe('SP-4 放回、最后一层、git 根', () => {
     expect(spec.writeAllowBack).not.toContain(USER_DATA)
   })
 
-  it('SP-4 writeDeniedFinal：凭据 7 项 + 沙箱外会执行的 14 项 + ssh/tmux 目录 + 每个 git 根（工作区与写授权）顶层的受保护名', () => {
-    expect(CREDENTIAL_DIRS_HOME_RELATIVE).toHaveLength(7)
+  it('SP-4 writeDeniedFinal：凭据 8 项（调用方给的）+ 沙箱外会执行的 14 项 + ssh/tmux 目录；根顶层的 .vscode 之类不再拦', () => {
     expect(EXECUTED_LATER_HOME_RELATIVE).toHaveLength(14)
     const grant = '/Volumes/data/shared'
     const spec = specOf({ grantedWrite: [grant] })
     expect(spec.writeDeniedFinal).toEqual([
-      ...CREDENTIAL_DIRS_HOME_RELATIVE.map((d) => h(d)),
+      ...CREDENTIALS_HOME_RELATIVE.map((d) => h(d)),
       ...EXECUTED_LATER_HOME_RELATIVE.map((d) => h(d)),
       '/private/tmp/shuvix-ssh-501',
-      '/private/tmp/tmux-501',
-      ...ROOT_PROTECTED_NAMES.map((n) => `${WS}/${n}`),
-      ...ROOT_PROTECTED_NAMES.map((n) => `${grant}/${n}`)
+      '/private/tmp/tmux-501'
     ])
-    // 临时目录 / 缓存 / /private/tmp 不是 git 根：那里不拦 .vscode 之类
-    for (const root of [TMP_DIR, '/private/tmp', h('.npm')]) {
-      for (const n of ROOT_PROTECTED_NAMES) {
-        expect(spec.writeDeniedFinal).not.toContain(`${root}/${n}`)
-      }
+    for (const root of [WS, grant]) {
+      expect(spec.writeDeniedFinal).not.toContain(`${root}/.vscode`)
+      expect(spec.writeDeniedFinal).not.toContain(`${root}/.envrc`)
     }
   })
 
@@ -280,30 +273,14 @@ describe('SP-4 放回、最后一层、git 根', () => {
   })
 })
 
-describe('SP-5 读的四层与 socket', () => {
-  it('SP-5 readDenied = 22 个个人资料目录 + userData', () => {
-    expect(PERSONAL_DIRS_HOME_RELATIVE).toHaveLength(22)
-    expect(specOf().readDenied).toEqual([
-      ...PERSONAL_DIRS_HOME_RELATIVE.map((d) => h(d)),
-      USER_DATA
-    ])
-  })
-
-  it('SP-5 readAllowBack = [ws, 本会话 tool_results, …读授权, …写授权]（去重）', () => {
-    const r = h('Documents/ref')
-    const w = h('Documents/out')
-    const spec = specOf({ grantedRead: [r, WS], grantedWrite: [w, r] })
-    expect(spec.readAllowBack).toEqual([WS, `${USER_DATA}/tool_results/${SID}`, r, w])
-  })
-
-  it('SP-5 readDeniedFinal = 凭据目录 + ~/.shuvix/.session-state + userData/data；cli-token 不在里面（命令要读它）', () => {
-    const spec = specOf()
-    expect(spec.readDeniedFinal).toEqual([
-      ...CREDENTIAL_DIRS_HOME_RELATIVE.map((d) => h(d)),
-      `${SHUVIX}/.session-state`,
-      `${USER_DATA}/data`
-    ])
-    expect(spec.readDeniedFinal).not.toContain(`${SHUVIX}/cli-token`)
+describe('SP-5 读只有一层（凭据）与 socket', () => {
+  it('SP-5 readDenied = 调用方给的凭据位置（去重、丢空串）；个人资料目录与 userData 不在里面', () => {
+    expect(specOf().readDenied).toEqual(CREDENTIALS_HOME_RELATIVE.map((d) => h(d)))
+    const spec = specOf({ credentialPaths: [h('.ssh'), '', h('.ssh'), h('.aws')] })
+    expect(spec.readDenied).toEqual([h('.ssh'), h('.aws')])
+    expect(spec.readDenied).not.toContain(h('Documents'))
+    expect(spec.readDenied).not.toContain(USER_DATA)
+    expect(spec.readDenied).not.toContain(`${SHUVIX}/cli-token`)
   })
 
   it('SP-5 unixSockets = [real(cliSocket), mDNSResponder]；unixSocketDirs = [tmpDir, ws]', () => {
@@ -311,12 +288,6 @@ describe('SP-5 读的四层与 socket', () => {
     const spec = specOf({}, PATHS, real)
     expect(spec.unixSockets).toEqual(['/private/var/cli.sock', '/private/var/run/mDNSResponder'])
     expect(spec.unixSocketDirs).toEqual([TMP_DIR, WS])
-  })
-
-  it('SP-5 工作区 = ~/Library 不再被接受（它严格包含 Mail / Keychains / Containers …）—— 放回它会把这些一起放出来', () => {
-    const result = build({ workingDirectory: h('Library') })
-    expect(result.ok).toBe(false)
-    expect(!result.ok && result.reason).toContain('working directory contains')
   })
 })
 
@@ -351,14 +322,12 @@ describe('SP-6 `real` 在一切判断之前应用', () => {
   it('SP-6 家目录相对的清单拼在**解析后**的家目录上', () => {
     const spec = specOf({}, { ...PATHS, home: '/Users/link' }, real)
     expect(spec.writableRoots).toContain(h('.npm'))
-    expect(spec.writeDeniedFinal).toContain(h('.ssh'))
-    expect(spec.readDenied).toContain(h('Documents'))
+    expect(spec.writeDeniedFinal).toContain(h('.zshrc'))
     expect(JSON.stringify(spec)).not.toContain('/Users/link')
   })
 })
 
 describe('SP-7 toPolicyView：策略那一面与规格同源', () => {
-  const CLI_TOKEN = `${SHUVIX}/cli-token`
   const PROTECTED_JS = [
     '/\\.[Gg][Ii][Tt]/([Hh][Oo][Oo][Kk][Ss](/|$)|[Cc][Oo][Nn][Ff][Ii][Gg]$|[Cc][Oo][Nn][Ff][Ii][Gg]\\.[Ww][Oo][Rr][Kk][Tt][Rr][Ee][Ee]$|[Cc][Oo][Mm][Mm][Oo][Nn][Dd][Ii][Rr]$)',
     '/\\.[Gg][Ii][Tt]/([Mm][Oo][Dd][Uu][Ll][Ee][Ss]|[Ww][Oo][Rr][Kk][Tt][Rr][Ee][Ee][Ss])/.*/([Hh][Oo][Oo][Kk][Ss](/|$)|[Cc][Oo][Nn][Ff][Ii][Gg]$|[Cc][Oo][Nn][Ff][Ii][Gg]\\.[Ww][Oo][Rr][Kk][Tt][Rr][Ee][Ee]$|[Cc][Oo][Mm][Mm][Oo][Nn][Dd][Ii][Rr]$)',
@@ -366,9 +335,9 @@ describe('SP-7 toPolicyView：策略那一面与规格同源', () => {
     '^/private/tmp/com\\.apple\\.launchd\\.'
   ]
 
-  it('SP-7 生产布局：active；可写根 = spec.writableRoots（是副本）；写拒 = writeDeniedFinal；读拒 = 三者并集', () => {
+  it('SP-7 生产布局：active；可写根 = spec.writableRoots（是副本）；写拒 = writeDeniedFinal；没有读的变量', () => {
     const spec = specOf({ grantedWrite: ['/Volumes/data/shared'] })
-    const view = toPolicyView(spec, CLI_TOKEN)
+    const view = toPolicyView(spec)
     expect(view.sandboxActive).toBe(true)
     expect(view.sandboxWritableRoots).toEqual(spec.writableRoots)
     view.sandboxWritableRoots.push('/mutated')
@@ -384,20 +353,19 @@ describe('SP-7 toPolicyView：策略那一面与规格同源', () => {
     ])
     // 与 agent-runtime 的 DESKTOP_VARS_ACTIVE 用的是同一串字面量（那边不能 import 桌面）
     expect(view.sandboxProtectedPatterns).toEqual(PROTECTED_JS)
-    expect(view.sandboxReadDenied).toEqual([
-      ...new Set([...spec.readDenied, ...spec.readDeniedFinal, CLI_TOKEN])
+    expect(Object.keys(view).sort()).toEqual([
+      'sandboxActive',
+      'sandboxProtectedPatterns',
+      'sandboxWritableRoots',
+      'sandboxWriteDenied'
     ])
-    expect(view.sandboxReadDenied).toContain(CLI_TOKEN)
-    expect(view.sandboxReadAllowed).toEqual(spec.readAllowBack)
-    view.sandboxReadAllowed.push('/mutated')
-    expect(spec.readAllowBack).not.toContain('/mutated')
   })
 
   it('SP-7 可写根只列**实际**可写的：~/.shuvix/policies 里的写授权（没放回）不列；内容目录里的列', () => {
     const policies = `${SHUVIX}/policies`
     const widget = `${SHUVIX}/widgets/w`
     const spec = specOf({ grantedWrite: [policies, widget] })
-    const view = toPolicyView(spec, CLI_TOKEN)
+    const view = toPolicyView(spec)
     expect(spec.writableRoots).toContain(policies)
     expect(view.sandboxWritableRoots).not.toContain(policies)
     expect(view.sandboxWritableRoots).toContain(widget)
@@ -407,7 +375,7 @@ describe('SP-7 toPolicyView：策略那一面与规格同源', () => {
 
   it('SP-7 e2e 布局：~/.shuvix 与 userData 都落在 /private/tmp 这个根里 → 列进 sandboxWriteDenied', () => {
     const spec = specOf({ workingDirectory: `${E2E_HOME}/proj` }, E2E_PATHS)
-    const view = toPolicyView(spec, `${E2E_PATHS.shuvixHome}/cli-token`)
+    const view = toPolicyView(spec)
     expect(view.sandboxWriteDenied).toContain(E2E_PATHS.shuvixHome)
     expect(view.sandboxWriteDenied).toContain(E2E_PATHS.userData)
     expect(view.sandboxWriteDenied).toEqual([
@@ -418,23 +386,7 @@ describe('SP-7 toPolicyView：策略那一面与规格同源', () => {
   })
 })
 
-describe('SP-8 清单守卫', () => {
-  it('SP-8 凭据目录清单与内置 protect-credentials 的 credentialDirs let 逐项相同（en / zh / ja）', () => {
-    const read = createInlinePolicyMdReader()
-    for (const file of [
-      'protect-credentials.md',
-      'protect-credentials.zh.md',
-      'protect-credentials.ja.md'
-    ]) {
-      const md = read(file)
-      expect(md, file).toBeTruthy()
-      const let_ = /credentialDirs:\s*>-\s*\n([\s\S]*?)\]\.map\(/.exec(md!)
-      expect(let_, file).not.toBeNull()
-      const items = [...let_![1].matchAll(/'([^']*)'/g)].map((m) => m[1])
-      expect({ file, items }).toEqual({ file, items: [...CREDENTIAL_DIRS_HOME_RELATIVE] })
-    }
-  })
-
+describe('SP-8 正则守卫', () => {
   it('SP-8 每条正则：sbpl === js、不含双引号、能编成 JS RegExp', () => {
     for (const p of [...GIT_PATTERNS, GIT_ENTRY_PATTERN, LAUNCHD_TMP_PATTERN]) {
       expect(p.sbpl).toBe(p.js)
@@ -510,9 +462,7 @@ describe('SP-10 protectedWritePatterns：两个视图共用的受保护模式', 
         GIT_ENTRY_PATTERN.js,
         ...spec.writeDeniedPatterns.map((p) => p.js)
       ])
-      expect(patterns).toEqual(
-        toPolicyView(spec, `${paths.shuvixHome}/cli-token`).sandboxProtectedPatterns
-      )
+      expect(patterns).toEqual(toPolicyView(spec).sandboxProtectedPatterns)
     }
   )
 
@@ -526,9 +476,91 @@ describe('SP-10 protectedWritePatterns：两个视图共用的受保护模式', 
     const patterns = protectedWritePatterns(widened)
     expect(patterns.at(-1)).toBe('^/js-side')
     expect(patterns).not.toContain('^/sbpl-only')
-    expect(patterns).toEqual(toPolicyView(widened, `${SHUVIX}/cli-token`).sandboxProtectedPatterns)
+    expect(patterns).toEqual(toPolicyView(widened).sandboxProtectedPatterns)
     // 规格里一条拒写模式都没有时，只剩 git 那几条
     const none = protectedWritePatterns({ ...spec, writeDeniedPatterns: [] })
     expect(none).toEqual([...GIT_PATTERNS.map((p) => p.js), GIT_ENTRY_PATTERN.js])
+  })
+})
+
+/**
+ * 凭据清单来自调用方（生效的 protect-credentials 的 `credentialDirs`）—— 沙箱自己没有一份：
+ * 清单空了，沙箱就不再把 ~/.ssh 当回事；清单里有什么，拒绝与 realpath 就作用在什么上。
+ * 以及：根「包含」敏感位置不再拒绝之后，那些位置靠后面的层照样拦得住。
+ */
+describe('SP-1b / SP-2b / SP-4b / SP-5b / SP-6b 凭据清单来自调用方', () => {
+  it('SP-1b 「工作区是凭据目录」按传进来的清单判：清单为空时 ~/.ssh 也能套；清单里的任意目录（不在家目录下）同样拒', () => {
+    const empty = build({ workingDirectory: h('.ssh'), credentialPaths: [] })
+    expect(empty.ok).toBe(true)
+    expect(empty.ok && empty.spec.readDenied).toEqual([])
+
+    const custom = build({
+      workingDirectory: '/data/secrets/x',
+      credentialPaths: ['/data/secrets']
+    })
+    expect(custom.ok).toBe(false)
+    expect(!custom.ok && custom.reason).toContain('credential directory')
+  })
+
+  it('SP-2b 根包含敏感位置时，里面的位置照样拦：~/.config 里的 gh（读写都拦）与 git 配置；~/Library 里的 LaunchAgents；Application Support 里的 userData；~/.shuvix 里的 policies —— 旁边的普通位置可写', () => {
+    const config = specOf({ grantedWrite: [h('.config')] })
+    expect(writeBlockReason(config, h('.config/gh/hosts.yml'))).toBe('protected')
+    expect(isReadBlocked(config, h('.config/gh/hosts.yml'))).toBe(true)
+    expect(writeBlockReason(config, h('.config/git/config'))).toBe('protected')
+    expect(writeBlockReason(config, h('.config/other/x'))).toBeNull()
+    expect(isReadBlocked(config, h('.config/other/x'))).toBe(false)
+
+    const appSupport = specOf({ grantedWrite: [h('Library/Application Support')] })
+    expect(writeBlockReason(appSupport, `${USER_DATA}/x`)).toBe('protected')
+    expect(writeBlockReason(appSupport, h('Library/Application Support/Other/x'))).toBeNull()
+
+    const library = specOf({ grantedWrite: [h('Library')] })
+    expect(writeBlockReason(library, h('Library/LaunchAgents/a.plist'))).toBe('protected')
+    expect(writeBlockReason(library, h('Library/Caches/foo/x'))).toBeNull()
+
+    const shuvix = specOf({ grantedWrite: [SHUVIX] })
+    expect(writeBlockReason(shuvix, `${SHUVIX}/policies/p.md`)).toBe('protected')
+  })
+
+  it('SP-4b 清单为空：规格里哪儿都没有 .session-state、它也不再拒读；但写它照样拦（~/.shuvix 不是可写根）', () => {
+    const spec = specOf({ credentialPaths: [] })
+    expect(JSON.stringify(spec)).not.toContain('.session-state')
+    expect(spec.readDenied).toEqual([])
+    const state = `${SHUVIX}/.session-state`
+    expect(isReadBlocked(spec, state)).toBe(false)
+    expect(isWriteBlocked(spec, state)).toBe(true)
+  })
+
+  it('SP-5b 空串在 realpath 之前就丢掉：`real` 从不收到 ""，readDenied 里也没有进程 cwd', () => {
+    const real = vi.fn((p: string) => p)
+    const spec = specOf({ credentialPaths: ['', h('.ssh'), ''] }, PATHS, real)
+    expect(real.mock.calls.map((c) => c[0])).not.toContain('')
+    expect(spec.readDenied).toEqual([h('.ssh')])
+    expect(spec.readDenied).not.toContain(process.cwd())
+  })
+
+  it('SP-6b 清单也先过 `real`：~/.aws 指向外接卷 → 拒读 / 最后一层拒写的是真实位置；工作区在那里面照样不套；两项解析到同一处只留一个', () => {
+    const MAP = new Map<string, string>([
+      [h('.aws'), '/Volumes/keys/aws'],
+      [h('aws-link'), '/Volumes/keys/aws']
+    ])
+    const real = (p: string): string => MAP.get(p) ?? p
+
+    const spec = specOf({ credentialPaths: [h('.ssh'), h('.aws')] }, PATHS, real)
+    expect(spec.readDenied).toEqual([h('.ssh'), '/Volumes/keys/aws'])
+    expect(spec.writeDeniedFinal).toContain('/Volumes/keys/aws')
+    expect(spec.writeDeniedFinal).not.toContain(h('.aws'))
+
+    const inside = build(
+      { workingDirectory: '/Volumes/keys/aws/sub', credentialPaths: [h('.aws')] },
+      PATHS,
+      real
+    )
+    expect(inside.ok).toBe(false)
+    expect(!inside.ok && inside.reason).toContain('credential directory')
+
+    const collapsed = specOf({ credentialPaths: [h('.aws'), h('aws-link')] }, PATHS, real)
+    expect(collapsed.readDenied).toEqual(['/Volumes/keys/aws'])
+    expect(collapsed.writeDeniedFinal.filter((p) => p === '/Volumes/keys/aws')).toHaveLength(1)
   })
 })

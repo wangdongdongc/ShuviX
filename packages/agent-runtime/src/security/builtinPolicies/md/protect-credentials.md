@@ -10,14 +10,14 @@ shuvix-policy-scope:
   env.host: [desktop]
 shuvix-policy-lets:
   credentialDirs: >-
-    ['.ssh', '.aws', '.gnupg', '.config/gh', '.netrc',
+    ['.ssh', '.aws', '.gnupg', '.config/gh', '.netrc', '.shuvix/.session-state',
     'AppData/Local/Microsoft/Credentials',
     'AppData/Roaming/Microsoft/Credentials'].map(s, vars.home + '/' + s)
 shuvix-policy-rules:
   - effect: deny
     action: [write]
     match: inDir(object.path, credentialDirs)
-    prompt: Write refused. Credential directories (~/.ssh, ~/.aws, ~/.gnupg, ~/.config/gh, ~/.netrc) are closed to the agent. Ask the user to make the change themselves.
+    prompt: Write refused. Credential locations (~/.ssh, ~/.aws, ~/.gnupg, ~/.config/gh, ~/.netrc, ~/.shuvix/.session-state) are closed to the agent. Ask the user to make the change themselves.
   - effect: ask
     action: [read]
     match: inDir(object.path, credentialDirs)
@@ -25,17 +25,22 @@ shuvix-policy-rules:
 ---
 
 **What it does**: for your credential locations (`~/.ssh`, `~/.aws`, `~/.gnupg`,
-`~/.config/gh`, `~/.netrc`):
+`~/.config/gh`, `~/.netrc`, and `~/.shuvix/.session-state` — the key ShuviX
+encrypts your saved API keys with):
 
 - **Writing is never allowed** — not even with auto-allow on.
 - **Reading asks first** — reading a private key is effectively leaking it, so
   unless you have auto-allow on, the agent asks before reading these paths.
+- **Sandboxed commands can do neither.** The command sandbox takes its list
+  from this policy's `credentialDirs`, so an override copy that changes the
+  list changes it for commands too.
 
 **What it does not do**:
 
 - Only these paths are covered.
-- It gates the file tools only: if you allow it, the agent can act on important
-  credential files by running commands.
+- A command that runs outside the sandbox (the sandbox is off or unavailable,
+  or the agent asked for full access) is not checked path by path — it asks as
+  a whole, under ask-on-command.
 - It does not always reach you: with the automatic review on, a reviewing
   agent answers first — it lets ordinary work through, refuses what is
   clearly harmful and puts the rest in front of you with its opinion.

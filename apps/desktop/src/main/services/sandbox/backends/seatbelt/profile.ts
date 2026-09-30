@@ -7,9 +7,7 @@
  *
  * 以下行为都在 macOS 26.5.2 上逐项实测过（探针矩阵，结论记在注释里）：
  *  - **放回规则必须写与拒绝规则相同的操作名。**`(deny file-read-data …)` 之后写
- *    `(allow file-read* …)` 放不回来——具体操作压过通配。所以读的放回写 `file-read-data file-read-xattr`。
- *  - 敏感目录只拒读**内容**，不拒元数据：工作区常在 ~/Documents 下，node / python 起步时会
- *    lstat 每一级祖先，拒了元数据它们就起不来。
+ *    `(allow file-read* …)` 放不回来——具体操作压过通配。所以写入的放回与整片拒写同写 `file-write*`。
  *  - `signal (target same-sandbox)` 只覆盖**同一个** sandbox-exec 实例：下一条命令停不掉上一条的
  *    后台任务。**不要**加 `(target others)`：它放行的是「不在发信者自己进程组里的同用户进程」，
  *    而 bgTaskService 每条命令都 detached（自成进程组）—— 实测能杀 ShuviX 主进程、Finder。
@@ -77,11 +75,9 @@ export function compileSeatbeltProfile(spec: SandboxSpec): CompiledProfile {
     '(system-network)'
   )
 
-  // ── 读：全读 → 拒读敏感内容 → 放回 → 最后一层连元数据都拒 ──
+  // ── 读：全读，只拒凭据（连元数据都拒） ──
   lines.push('(allow file-read*)')
-  rule('deny file-read-data file-read-xattr', subpaths(spec.readDenied))
-  rule('allow file-read-data file-read-xattr', subpaths(spec.readAllowBack))
-  rule('deny file-read*', subpaths(spec.readDeniedFinal))
+  rule('deny file-read*', subpaths(spec.readDenied))
 
   // ── 写：可写根 → 整片拒写 → 放回 → 最后一层 ──
   rule('allow file-write*', subpaths(spec.writableRoots))

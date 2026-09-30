@@ -7,14 +7,15 @@
  *   BS-2…6      http(s) 等地址上报 `{type:'url'}` 客体（规整过的写法、opts 的契约）—— 出厂放行，
  *               用户的 deny / ask 策略照样管得到；
  *   BS-7…13     `file://` 就是读那个路径：路径怎么从地址里解出来（大写协议、localhost、`..`、
- *               百分号编码、根本不指本机文件的地址），走的是 ask-on-read / protect-credentials；
+ *               百分号编码、根本不指本机文件的地址），走的是 protect-credentials 等路径策略（读只有凭据
+ *               位置会问）；
  *               显示本地文件的 tab 上做事也一样（BS-7b）；
  *   BS-14…18    upload_file 的读门：相对路径按工作目录解析、先问策略再查存在、绝对路径也 resolve；
  *   BS-19…21    pdf 的写门：工作区里也问（ask-on-write）、区外问而不拒、系统 / 凭据目录拒绝；
  *   BS-22       原生 cdp 里等价的那几个方法不是绕开门的旁路；
  *   BS-23…25    每条会话一台 server（后端与询问通道各归各）、策略不缓存、各会话共用一条 tab 队列；
  *   BS-R1…R3    经符号链接的本地访问按真实去处过门：upload_file 一条指向私钥的链接、file:// 打开
- *               一条指向区外的链接、pdf 输出到一条指向 /etc 的目录链接。
+ *               同一条链接、pdf 输出到一条指向 /etc 的目录链接。
  *
  * mock 掉的只是会拉起 Electron 的两条取用路径：`getDesktopSecurityContext`（换成同形态的真
  * `createSecurityContext`，外面包一层记下 enforcePath / enforceUrl 的实参）与浏览器面板
@@ -30,7 +31,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { basename, dirname, join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import type {
@@ -532,28 +533,27 @@ describe.skipIf(!POSIX)('browser 桌面接线 —— file:// 按读路径过门'
     expect(s.backend.openTab).not.toHaveBeenCalled()
   })
 
-  it('BS-10 file://localhost/etc/hosts → 读 /etc/hosts', async () => {
+  it('BS-10 file://localhost/etc/hosts → 读 /etc/hosts（区外读不问，没有输入面板也照开）', async () => {
     const s = await open({ respond: null })
-    expectFailure(
-      await s.call('open_tab', { url: 'file://localhost/etc/hosts' }),
-      'Access denied: path outside workspace and no way to ask: /etc/hosts'
-    )
+    const url = 'file://localhost/etc/hosts'
+    expect((await s.call('open_tab', { url })).isError).toBeFalsy()
     expect(gate.pathCalls.map((c) => [c.mode, c.path])).toEqual([['read', '/etc/hosts']])
+    expect(s.backend.openTab.mock.calls).toEqual([[{ url }]])
   })
 
   it.each([
     ['%2e%2e', (ws: string) => `file://${ws}/%2e%2e/x.txt`],
     ['..', (ws: string) => `file://${ws}/../x.txt`]
-  ])('BS-11 地址里的 %s 段先折叠：落到工作目录外，没有输入面板就拒绝', async (_l, urlOf) => {
-    const s = await open({ respond: null })
-    const outside = `${dirname(WS())}/x.txt`
-    expectFailure(
-      await s.call('open_tab', { url: urlOf(WS()) }),
-      `Access denied: path outside workspace and no way to ask: ${outside}`
-    )
-    expect(gate.pathCalls.map((c) => [c.mode, c.path])).toEqual([['read', outside]])
-    expect(s.backend.openTab).not.toHaveBeenCalled()
-  })
+  ])(
+    'BS-11 地址里的 %s 段先折叠：过门的是工作目录外的那个路径（读不问，照开）',
+    async (_l, urlOf) => {
+      const s = await open({ respond: null })
+      const outside = `${dirname(WS())}/x.txt`
+      expect((await s.call('open_tab', { url: urlOf(WS()) })).isError).toBeFalsy()
+      expect(gate.pathCalls.map((c) => [c.mode, c.path])).toEqual([['read', outside]])
+      expect(s.backend.openTab).toHaveBeenCalledTimes(1)
+    }
+  )
 
   it('BS-12 百分号编码解开之后才是路径（a%20b → a b）；后端拿的仍是编码过的原地址', async () => {
     const s = await open()
@@ -612,8 +612,8 @@ describe.skipIf(!POSIX)('browser 桌面接线 —— upload_file 的读门', () 
     }
   )
 
-  it('BS-16 工作区外、又不存在的路径：先问策略 —— 用户拒绝就只是拒绝，不先透露它存不存在', async () => {
-    const missing = `../${basename(WS())}-nope.txt`
+  it('BS-16 凭据目录里、又不存在的路径：先问策略 —— 用户拒绝就只是拒绝，不先透露它存不存在', async () => {
+    const missing = '/home/u/.ssh/nope'
     const denying = await open({ respond: async () => ({ kind: 'ask', allowed: false }) })
     expectFailure(
       await denying.call('upload_file', { tabId: 't1', uid: 'e1', paths: [missing] }),
@@ -829,7 +829,7 @@ describe.skipIf(!POSIX)('browser 桌面接线 —— 会话', () => {
 // ─── 经链接的本地访问按真实去处过门 ─────────────────────────────────────
 
 describe.skipIf(!POSIX)('browser 桌面接线 —— 按真实去处过门（桌面的 realPath 打开）', () => {
-  /** 工作区之外的一块临时地：家目录（真有 .ssh/id_rsa）与一个区外文件 */
+  /** 工作区之外的一块临时地：家目录（真有 .ssh/id_rsa） */
   let elsewhere = ''
   const homeKey = (): string => join(elsewhere, 'home', '.ssh', 'id_rsa')
 
@@ -837,10 +837,8 @@ describe.skipIf(!POSIX)('browser 桌面接线 —— 按真实去处过门（桌
     elsewhere = mkdtempSync(join(tmpdir(), 'shuvix-browsersrv-real-'))
     mkdirSync(join(elsewhere, 'home', '.ssh'), { recursive: true })
     writeFileSync(homeKey(), 'PRIVATE KEY')
-    writeFileSync(join(elsewhere, 'page.html'), '<p>x</p>')
-    // 工作区里的三条链接：→ 私钥、→ 区外文件、→ /etc（目录）
+    // 工作区里的两条链接：→ 私钥、→ /etc（目录）
     symlinkSync(homeKey(), join(WS(), 'klink'))
-    symlinkSync(join(elsewhere, 'page.html'), join(WS(), 'plink'))
     symlinkSync('/etc', join(WS(), 'outdir'))
   })
 
@@ -883,10 +881,10 @@ describe.skipIf(!POSIX)('browser 桌面接线 —— 按真实去处过门（桌
     ])
   })
 
-  it('BS-R2 file:// 打开工作区里一条指向区外文件的链接：按读那个文件过门（ask-on-read）；没有输入面板 → 拒绝，文案带着真实去处', async () => {
+  it('BS-R2 file:// 打开工作区里一条指向私钥的链接：按读私钥过门（protect-credentials）；没有输入面板 → 拒绝，文案带着真实去处', async () => {
     const s = await open({ respond: null })
-    const link = `${WS()}/plink`
-    const target = realpathSync.native(join(elsewhere, 'page.html'))
+    const link = `${WS()}/klink`
+    const target = realpathSync.native(homeKey())
     expectFailure(
       await s.call('open_tab', { url: `file://${link}` }),
       `Access denied: path outside workspace and no way to ask: ${link} (${link} resolves to ${target})`

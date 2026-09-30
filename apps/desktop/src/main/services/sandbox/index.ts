@@ -81,6 +81,36 @@ function isEnabledSetting(): boolean {
   }
 }
 
+/**
+ * 凭据清单的口子：沙箱不自己定哪些是凭据，读生效的 protect-credentials 策略的 `credentialDirs`
+ * （策略模块在很多导入链上，由 main 启动时注入，见 toolContext.sessionCredentialPaths）。
+ * 没注入 = 没有凭据清单：命令照样受限，只是不再拒读拒写这几个位置 —— 记一次警告，因为那一定是接线漏了。
+ */
+let readCredentialPaths: ((sessionId: string, workingDirectory: string) => string[]) | null = null
+let warnedNoCredentialReader = false
+
+export function setSandboxCredentialReader(
+  reader: ((sessionId: string, workingDirectory: string) => string[]) | null
+): void {
+  readCredentialPaths = reader
+}
+
+function credentialPathsFor(sessionId: string, workingDirectory: string): string[] {
+  if (!readCredentialPaths) {
+    if (!warnedNoCredentialReader) {
+      warnedNoCredentialReader = true
+      log.warn('no credential reader injected; the sandbox protects no credential paths')
+    }
+    return []
+  }
+  try {
+    return readCredentialPaths(sessionId, workingDirectory)
+  } catch (err) {
+    log.warn(`credential paths unavailable: ${(err as Error).message}`)
+    return []
+  }
+}
+
 // ─── 路径 ─────────────────────────────────────────────
 
 /** realpath；不存在的部分按最近的已存在祖先拼回（授权根、缓存目录常常还不存在） */
@@ -130,10 +160,6 @@ function hostPaths(): SandboxHostPaths {
 }
 
 /** 本机 cli-token 的位置（策略变量用：沙箱放它可读，read 工具不该把它读进上下文） */
-function cliTokenPath(): string {
-  return join(homedir(), '.shuvix', 'cli-token')
-}
-
 // ─── 状态 ─────────────────────────────────────────────
 
 export interface SandboxStatus {
@@ -225,9 +251,18 @@ export function unpinSession(sessionId: string): void {
 function specFor(
   sessionId: string,
   workingDirectory: string,
-  grants: { grantedWrite: readonly string[]; grantedRead: readonly string[] }
+  grantedWrite: readonly string[]
 ): SpecResult {
-  return buildSandboxSpec(hostPaths(), { sessionId, workingDirectory, ...grants }, real)
+  return buildSandboxSpec(
+    hostPaths(),
+    {
+      sessionId,
+      workingDirectory,
+      grantedWrite,
+      credentialPaths: credentialPathsFor(sessionId, workingDirectory)
+    },
+    real
+  )
 }
 
 /**
@@ -237,9 +272,9 @@ function specFor(
  */
 export function sessionView(sessionId: string, workingDirectory: string): SessionSandboxView {
   if (!pins.get(sessionId)) return INACTIVE_VIEW
-  const built = specFor(sessionId, workingDirectory, { grantedWrite: [], grantedRead: [] })
+  const built = specFor(sessionId, workingDirectory, [])
   if (!built.ok) return INACTIVE_VIEW
-  return toPolicyView(built.spec, real(cliTokenPath()))
+  return toPolicyView(built.spec)
 }
 
 /**
@@ -247,10 +282,10 @@ export function sessionView(sessionId: string, workingDirectory: string): Sessio
  *
  * 沙箱没套上时（设置关着、探测没过、Linux），命令照样逐条交给审查；但文件工具知道确切的路径，而在
  * 工作区里改文件是编码工作的主体，每一次都审一遍不值。受保护的位置（git 自己会执行的元数据、`.git`
- * 本身、项目根的 .vscode / .claude 等、shell 启动文件、凭据目录）照旧询问 —— 与沙箱视图同一组。
+ * 本身、凭据位置）照旧询问 —— 与沙箱视图同一组。
  *
- * 判定用的是沙箱的同一份规格：工作区是 `/`、覆盖家目录、是 ShuviX 自己的配置或应用数据、严格包含
- * 敏感目录时，一样不给免询问（与「不套沙箱」同一批理由）。**Windows 不给**：受保护模式是按 `/` 写的
+ * 判定用的是沙箱的同一份规格：工作区是 `/`、覆盖家目录、是凭据位置、是 ShuviX 自己的配置或应用数据时，
+ * 一样不给免询问（与「不套沙箱」同一批理由）。**Windows 不给**：受保护模式是按 `/` 写的
  * 正则，在 `\` 路径上会静默不匹配 —— 宁可每次写入都交给审查，也不能悄悄放过 `.git\hooks`。
  */
 export interface WorkspaceWriteView {
@@ -271,7 +306,7 @@ export function workspaceWriteView(
 ): WorkspaceWriteView {
   if (process.platform === 'win32') return NO_WORKSPACE_WRITES
   try {
-    const built = specFor(sessionId, workingDirectory, { grantedWrite: [], grantedRead: [] })
+    const built = specFor(sessionId, workingDirectory, [])
     if (!built.ok) return NO_WORKSPACE_WRITES
     return {
       workspaceWritable: [built.spec.workingDirectory],
@@ -306,9 +341,8 @@ function ensureTmpDir(tmpRoot: string, dir: string, uid: number): boolean {
 export interface PlanRequest {
   sessionId: string
   workingDirectory: string
-  /** 会话「允许并记住」的写 / 读授权路径（调用方从会话设置里解析好交进来） */
+  /** 会话「允许并记住」的写授权路径（调用方从会话设置里解析好交进来） */
   grantedWrite: readonly string[]
-  grantedRead: readonly string[]
   /** 本工具实例带不带 `dangerouslyDisableSandbox` —— 决定拒绝说明里能不能教模型用它 */
   offerEscalation: boolean
 }
@@ -325,7 +359,7 @@ export function planFor(request: PlanRequest): SandboxPlan | null {
   const { sessionId, workingDirectory, offerEscalation } = request
   const b = getBackend()
   if (!b || !probe().available) return null
-  const built = specFor(sessionId, workingDirectory, request)
+  const built = specFor(sessionId, workingDirectory, request.grantedWrite)
   if (!built.ok) {
     log.info(`session ${sessionId} runs unconfined: ${built.reason}`)
     return null

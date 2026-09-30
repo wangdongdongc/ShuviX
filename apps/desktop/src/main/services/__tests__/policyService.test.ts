@@ -360,3 +360,38 @@ describe('policyService —— 同名的几份：设置页列表与评估是同�
     expect(policyService.listInvalid().map((f) => f.fileName)).toEqual(['broken.md'])
   })
 })
+
+describe('policyService —— ask-on-read 不再是内置', () => {
+  it('PU-AR1 策略目录里一份 ask-on-read.md：列表里恰一行这个名字，来源 user、没被覆盖、没有同名内置行；内置行恰 12 份', () => {
+    writeFileSync(
+      join(state.dir, 'ask-on-read.md'),
+      [
+        '---',
+        'shuvix: policy v1',
+        'name: ask-on-read',
+        'shuvix-policy-scope:',
+        '  subject.kind: [agent]',
+        '  object.type: [path]',
+        'shuvix-policy-rules:',
+        '  - effect: ask',
+        '    action: [read]',
+        `    match: "inDir(object.path, '/data')"`,
+        '---',
+        '',
+        'My own read gate.',
+        ''
+      ].join('\n'),
+      'utf-8'
+    )
+    const rows = policyService.listForSettings()
+    const named = rows.filter((row) => row.name === 'ask-on-read')
+    expect(named).toHaveLength(1)
+    expect(named[0].source).toBe('user')
+    expect(named[0].overridden).toBeFalsy()
+    expect(named[0].overriddenBy).toBeUndefined()
+    expect(basename(named[0].basePath)).toBe('ask-on-read.md')
+    expect(rows.filter((row) => row.source === 'builtin')).toHaveLength(12)
+    expect(rows.some((row) => row.source === 'builtin' && row.name === 'ask-on-read')).toBe(false)
+    expect(policyService.listInvalid()).toEqual([])
+  })
+})

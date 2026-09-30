@@ -92,7 +92,7 @@ beforeAll(async () => {
   await seedFakeProvider(app.main, { baseUrl: provider.baseUrl, modelId: MODEL })
   await waitRendererReady(app.main)
 
-  // 会话一律绑项目：工具用例的 read 目标落在 projDir 内，天然不撞 ask-on-read
+  // 会话一律绑项目：工具用例的 read 目标落在 projDir 内（读只有凭据位置会问）
   const projDir = join(app.home, 'proj-stream')
   mkdirSync(projDir, { recursive: true })
   readFile = join(projDir, 'hello.txt')

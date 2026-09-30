@@ -9,8 +9,7 @@
  * protect-credentials（凭据写 deny + 读 ask）/ protect-system（系统目录写 deny，
  * 原 pathSafety hook 的策略化替身）/ block-catastrophic-commands（毁灭整机的
  * 少数命令写法直接 deny，原 bash-audit 内置 hook 的策略化替身）/ protect-bot-files
- * （bot 文件写 force-ask —— 免询问也照问）/ ask-on-read（工作区外读取门）/
- * ask-on-write（写入询问门）/ ask-on-command（命令询问门）/ git-safety
+ * （bot 文件写 force-ask —— 免询问也照问）/ ask-on-write（写入询问门）/ ask-on-command（命令询问门）/ git-safety
  * （git 危险操作门，含 checkout&&force / branch&&delete 的参数级细化）/
  * ask-on-database（可写数据库连接的逐条查询询问）/ ask-on-sub-session（开子会话前询问 ——
  * 唯一一条走 L1 全工具门的内置策略：客体是 {type:'invocation'}，判据落在工具维度
@@ -68,14 +67,13 @@ export interface BuiltinPolicySpec {
 }
 
 // 装配序 = 决策归因优先序（同 tier 多规则命中时 winning 取先装配者）：
-// 更具体的 protect-credentials 在前，凭据读取归因到它而非泛化的 ask-on-read
+// 更具体的 protect-credentials 在前，凭据写入归因到它而非泛化的 ask-on-write
 export const BUILTIN_POLICY_SPECS: readonly BuiltinPolicySpec[] = [
   { name: 'protect-credentials' },
   { name: 'protect-system' },
   { name: 'block-catastrophic-commands' },
   { name: 'protect-bot-files' },
   { name: 'protect-shuvix-config' },
-  { name: 'ask-on-read' },
   { name: 'ask-on-write' },
   { name: 'ask-on-command' },
   { name: 'git-safety' },

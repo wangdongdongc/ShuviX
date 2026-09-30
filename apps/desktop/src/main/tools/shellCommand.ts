@@ -201,7 +201,8 @@ export class ShellCommandTool extends BaseTool<ShellCommandParamsSchema> {
         ? planFor({
             sessionId: this.ctx.sessionId,
             workingDirectory: config.workingDirectory,
-            ...getSessionPathGrants(this.ctx.sessionId),
+            // 只有写授权影响沙箱（成为可写根）；读没有需要放回的限制，读授权只管文件工具
+            grantedWrite: getSessionPathGrants(this.ctx.sessionId).grantedWrite,
             offerEscalation: true
           })
         : null

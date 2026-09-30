@@ -495,9 +495,8 @@ describe.skipIf(!POSIX)('chrome 桌面接线 —— 本地文件', () => {
         }
       ])
       expect(gate.urlCalls).toEqual([])
-      // 工作区外的读 → ask-on-read 问了一次，允许之后才开
-      expect(s.asks).toHaveLength(1)
-      expect((s.asks[0] as AskInputRequest).command).toBe('Read(/tmp/a.html)')
+      // 工作区外的读不问（内置策略只对凭据位置问读取），照开
+      expect(s.asks).toEqual([])
       expect(s.backend.openTab.mock.calls).toEqual([[{ url }]])
     }
   )
@@ -629,10 +628,10 @@ describe.skipIf(!POSIX)('chrome 桌面接线 —— 用户带上的站点（site
     const s = await open({ respond: null })
     grantSite(s.sessionId, 'localhost')
     expectFailure(
-      await s.call('open_tab', { url: 'file://localhost/tmp/a.html' }),
-      'Access denied: path outside workspace and no way to ask: /tmp/a.html'
+      await s.call('open_tab', { url: 'file://localhost/home/u/.ssh/id_rsa' }),
+      'Access denied: path outside workspace and no way to ask: /home/u/.ssh/id_rsa'
     )
-    expect(gate.pathCalls.map((c) => [c.mode, c.path])).toEqual([['read', '/tmp/a.html']])
+    expect(gate.pathCalls.map((c) => [c.mode, c.path])).toEqual([['read', '/home/u/.ssh/id_rsa']])
   })
 
   it('CS-12 blob: 页属于创建它的那个站点：带上过那个站点就不问', async () => {

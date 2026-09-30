@@ -17,7 +17,7 @@
  * 目录（这里是 POLICIES_DIR / AGENTS_DIR / HOOKS_DIR / DEFAULT_SKILLS）—— 免询问、「允许并记住」与
  * 审查员都答不了它（PERM-C4 真实走一遍 enforcePath，审查者替身经 setPermissionReviewer 注入）。
  *
- * DP-A1：ask-on-write / ask-on-read 对**本会话自己的** artifacts 目录免询问
+ * DP-A1：ask-on-write 对**本会话自己的** artifacts 目录免询问（读哪儿都不问，只有凭据位置例外）
  * （vars.sessionArtifactsDir = getSessionArtifactsDir(ctx.sessionId)）—— 会话之间互不豁免，
  * 父会话在子会话的目录里也照问。mock 的 `/tmp/shuvix-artifacts/<id>` 盘上不存在，且 macOS 上
  * /tmp 是 /private/tmp 的链接：两侧都经 realPath 解析，比的是同一处。
@@ -183,7 +183,7 @@ describe('桌面安全 provider — 默认放行 + 内置写入门（ask-on-writ
     expect(effectOf(context(), 'write', WORKSPACE)).toBe('ask')
   })
 
-  it('PERM-8: tool_results / skills 目录 read 放行（ask-on-read 的 when 放过）、write 一律 ask', () => {
+  it('PERM-8: tool_results / skills 目录 read 放行（读默认放行）、write 一律 ask', () => {
     state.externalDirs = [{ path: EXTERNAL_SKILLS }]
     const readFreePlaces = [
       join(TOOL_RESULTS, 's1', 'out.txt'),
@@ -197,15 +197,16 @@ describe('桌面安全 provider — 默认放行 + 内置写入门（ask-on-writ
     }
   })
 
-  it('PERM-8b: 未登记外部路径 read 经内置 ask-on-read 门 ask（迁移前读取围栏恢复）', () => {
+  it('PERM-8b: 未登记外部路径 read 放行、零命中（内置策略只对凭据位置问读取）；write 照问', () => {
     const p = join(OUTSIDE, 'a.txt')
     const decision = context().evaluate('read', { type: 'path', path: p })
-    expect(decision.effect).toBe('ask')
-    expect(decision.winning).toBe('ask-on-read#0')
+    expect(decision.effect).toBe('allow')
+    expect(decision.winning).toBe('default:path')
+    expect(decision.matched).toEqual([])
     expect(effectOf(context(), 'write', p)).toBe('ask')
   })
 
-  it('PERM-8c: 凭据目录读取 ask 且归因到 protect-credentials（装配序在 ask-on-read 之前）', () => {
+  it('PERM-8c: 凭据目录读取 ask 且归因到 protect-credentials（读只有它一道门）', () => {
     const key = join(homedir(), '.ssh', 'id_rsa')
     const decision = context().evaluate('read', { type: 'path', path: key })
     expect(decision.effect).toBe('ask')
@@ -256,12 +257,12 @@ describe('桌面安全 provider — evaluateReadOnly（被动 UI 判定）', () 
     const credential = join(homedir(), '.ssh', 'known_hosts')
     state.settings = { autoAllow: true, allowList: [`Read(${credential})`] }
     expect(context().evaluateReadOnly('read', { type: 'path', path: credential })).toBe(false)
-    // 工作区内自由；工作区外被内置 ask-on-read 门拦下（被动 UI 面随之收窄）
+    // 读只有凭据位置有门：工作区内外都放行
     expect(context().evaluateReadOnly('read', { type: 'path', path: join(WORKSPACE, 'b') })).toBe(
       true
     )
     expect(context().evaluateReadOnly('read', { type: 'path', path: join(OUTSIDE, 'c') })).toBe(
-      false
+      true
     )
   })
 })
@@ -300,10 +301,33 @@ describe('桌面安全 provider — deny 层压制 force-allow（protect-credent
   })
 })
 
-describe('桌面安全 provider — 本会话 artifacts 免询问（ask-on-write / ask-on-read）', () => {
+describe('桌面安全 provider — ~/.shuvix/.session-state 是凭据位置', () => {
+  it('PERM-S1 加密 API key 的那把密钥：读 → protect-credentials#1 问；写 → 拒（免询问开着、allowList 里有 Write(<它>) 也拒）', () => {
+    const state_ = join(homedir(), '.shuvix', '.session-state')
+    const read = context().evaluate('read', { type: 'path', path: state_ })
+    expect(verdict(read)).toEqual({ effect: 'ask', winning: 'protect-credentials#1' })
+
+    for (const settings of [
+      undefined,
+      { autoAllow: true },
+      { allowList: [`Write(${state_})`] },
+      { autoAllow: true, allowList: [`Write(${state_})`] }
+    ]) {
+      state.settings = settings
+      const write = context().evaluate('write', { type: 'path', path: state_ })
+      expect({ settings, ...verdict(write) }).toEqual({
+        settings,
+        effect: 'deny',
+        winning: 'protect-credentials#0'
+      })
+    }
+  })
+})
+
+describe('桌面安全 provider — 本会话 artifacts 免询问（ask-on-write）', () => {
   const ART = '/tmp/shuvix-artifacts'
 
-  it('DP-A1 会话之间互不豁免：各自目录里读写放行；在对方（含父 → 子）的目录里读写照问', () => {
+  it('DP-A1 会话之间互不豁免：各自目录里写放行；在对方（含父 → 子）的目录里写照问；读哪儿都放行', () => {
     const matrix: Array<[string, string, SecurityEffect]> = [
       ['s1', `${ART}/s1/chart.svg`, 'allow'],
       ['child', `${ART}/child/chart.svg`, 'allow'],
@@ -313,18 +337,16 @@ describe('桌面安全 provider — 本会话 artifacts 免询问（ask-on-write
     ]
     for (const [sessionId, path, expected] of matrix) {
       const ctx = context(sessionId)
-      for (const mode of ['read', 'write'] as const) {
-        expect({ sessionId, path, mode, effect: effectOf(ctx, mode, path) }).toEqual({
-          sessionId,
-          path,
-          mode,
-          effect: expected
-        })
-      }
+      expect({ sessionId, path, effect: effectOf(ctx, 'write', path) }).toEqual({
+        sessionId,
+        path,
+        effect: expected
+      })
+      // 读没有询问门：自己的、别人的目录都一样
+      expect(ctx.evaluate('read', { type: 'path', path }).winning, `${sessionId} ${path}`).toBe(
+        'default:path'
+      )
       if (expected === 'ask') {
-        expect(ctx.evaluate('read', { type: 'path', path }).winning, `${sessionId} ${path}`).toBe(
-          'ask-on-read#0'
-        )
         expect(ctx.evaluate('write', { type: 'path', path }).winning, `${sessionId} ${path}`).toBe(
           'ask-on-write#0'
         )
@@ -340,8 +362,8 @@ describe('桌面安全 provider — 本会话 artifacts 免询问（ask-on-write
 
 /**
  * 工作区写入视图 —— ask-on-write 的工作区豁免与沙箱脱钩（沙箱没固定、INACTIVE 也照样给）。
- * 规格与沙箱同一份：工作区是 `/`、覆盖家目录、是 ShuviX 自己的配置时一样不给；受保护位置（git 元数据、
- * 项目根的 .vscode 等）照旧问；Windows 恒空（受保护模式是按 `/` 写的正则）。
+ * 规格与沙箱同一份：工作区是 `/`、覆盖家目录、是 ShuviX 自己的配置时一样不给；受保护位置（git 元数据）
+ * 照旧问，项目根的 .vscode 等不再受保护；Windows 恒空（受保护模式是按 `/` 写的正则）。
  * 真实平台是 Windows 时整组跳过：那里视图恒空，「算得出来」的一面无从谈起。
  */
 describe.skipIf(process.platform === 'win32')(
@@ -349,25 +371,26 @@ describe.skipIf(process.platform === 'win32')(
   () => {
     const realWorkspace = (): string => join(realpathSync.native(tmpdir()), 'shuvix-policy-ws')
 
-    it('PERM-W1 视图算得出来（app.getPath 有替身、沙箱没固定）：区内写放行；.git/hooks、.vscode 照旧 ask-on-write#0；工作区外照问', () => {
+    it('PERM-W1 视图算得出来（app.getPath 有替身、沙箱没固定）：区内写放行（.vscode 也是）；.git/hooks 照旧 ask-on-write#0；工作区外照问', () => {
       useComputedWorkspaceView()
       // 前提：沙箱那一面没启用（会话没固定），工作区写入视图却算出来了 —— 两者无关
       const vars = varsAt(WORKSPACE)
       expect(vars.sandboxActive).toBe(false)
       expect(vars.workspaceWritable).toEqual([realWorkspace()])
-      expect(vars.workspaceWriteDenied).toContain(join(realWorkspace(), '.vscode'))
+      expect(vars.workspaceWriteDenied).not.toContain(join(realWorkspace(), '.vscode'))
       expect(vars.workspaceProtectedPatterns).not.toEqual([])
 
-      expect(
-        verdict(context().evaluate('write', { type: 'path', path: join(WORKSPACE, 'src', 'a.ts') }))
-      ).toEqual({
-        effect: 'allow',
-        winning: 'default:path'
-      })
       for (const p of [
-        join(WORKSPACE, '.git', 'hooks', 'pre-commit'),
+        join(WORKSPACE, 'src', 'a.ts'),
         join(WORKSPACE, '.vscode', 'settings.json')
       ]) {
+        expect({ p, ...verdict(context().evaluate('write', { type: 'path', path: p })) }).toEqual({
+          p,
+          effect: 'allow',
+          winning: 'default:path'
+        })
+      }
+      for (const p of [join(WORKSPACE, '.git', 'hooks', 'pre-commit')]) {
         expect({ p, ...verdict(context().evaluate('write', { type: 'path', path: p })) }).toEqual({
           p,
           effect: 'ask',

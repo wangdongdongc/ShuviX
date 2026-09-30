@@ -34,6 +34,6 @@ Windows 的系统与程序目录……）—— 开了免询问也不行。
 - 不拦这些位置的读取。
 - 临时目录不算系统位置，哪怕 macOS 把它们放在 `/private/var` 下：你自己的临时目录
   （`$TMPDIR`，在 `/private/var/folders` 下）与 `/private/var/tmp` 照常可写（照常询问）。
-- 不覆盖你自己的文件 —— 那些由 ask-on-read / ask-on-write 负责。
+- 不覆盖你自己的文件 —— 写它们归 ask-on-write 管。
 
 **想调整**：创建覆盖副本后编辑调整 —— 请慎重。

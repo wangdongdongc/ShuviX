@@ -10,14 +10,14 @@ shuvix-policy-scope:
   env.host: [desktop]
 shuvix-policy-lets:
   credentialDirs: >-
-    ['.ssh', '.aws', '.gnupg', '.config/gh', '.netrc',
+    ['.ssh', '.aws', '.gnupg', '.config/gh', '.netrc', '.shuvix/.session-state',
     'AppData/Local/Microsoft/Credentials',
     'AppData/Roaming/Microsoft/Credentials'].map(s, vars.home + '/' + s)
 shuvix-policy-rules:
   - effect: deny
     action: [write]
     match: inDir(object.path, credentialDirs)
-    prompt: 写入被拒绝。凭据目录（~/.ssh、~/.aws、~/.gnupg、~/.config/gh、~/.netrc）对智能体关闭，需要改动请让用户自己操作。
+    prompt: 写入被拒绝。凭据位置（~/.ssh、~/.aws、~/.gnupg、~/.config/gh、~/.netrc、~/.shuvix/.session-state）对智能体关闭，需要改动请让用户自己操作。
   - effect: ask
     action: [read]
     match: inDir(object.path, credentialDirs)
@@ -25,15 +25,18 @@ shuvix-policy-rules:
 ---
 
 **它做什么**：对你的凭据位置（`~/.ssh`、`~/.aws`、`~/.gnupg`、`~/.config/gh`、
-`~/.netrc`）：
+`~/.netrc`，以及 `~/.shuvix/.session-state` —— ShuviX 加密你保存的 API Key 用的密钥）：
 
 - **写入永远拒绝** —— 开了免询问也不行。
 - **读取先询问** —— 但读私钥等于泄露私钥，如果你没有开免询问，智能体读取这些路径前要先问你。
+- **沙箱里的命令读写都不行。** 命令沙箱的清单取自这条策略的 `credentialDirs`，
+  在覆盖副本里改了清单，命令那边跟着变。
 
 **它不做什么**：
 
 - 只覆盖上面列出的路径。
-- 只约束文件工具：如果你允许了，智能体通过执行命令也可以对重要的凭据文件进行操作。
+- 在沙箱外运行的命令（沙箱关着或不可用，或智能体申请了完全访问）不逐个路径检查，
+  而是整条命令按 ask-on-command 询问。
 - 它不一定摆到你面前：开着自动审查时，审查 agent 先回答 —— 放行日常的工作，
   拒绝明显有害的，其余的附上它的意见交给你。
 - 当你打开免询问的开关后，另一条内置的 session-grants 策略将生效并跳过询问。

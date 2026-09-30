@@ -80,7 +80,7 @@ vi.mock('../../services/toolContext', async () => {
           skillsDirs: [],
           memoryDirs: [],
           home: joinPath(state.workspace, '.nonexistent-home'),
-          // 与 getSessionArtifactsDir 的 mock 同一个目录 —— ask-on-write / ask-on-read 对它免询问
+          // 与 getSessionArtifactsDir 的 mock 同一个目录 —— ask-on-write 对它免询问
           sessionArtifactsDir: joinPath(state.root, ctx.sessionId),
           systemDirs: []
         }),

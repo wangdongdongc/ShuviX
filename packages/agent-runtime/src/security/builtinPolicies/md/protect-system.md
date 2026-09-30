@@ -39,7 +39,6 @@ your project that points into `/etc` is refused like `/etc` itself, and on macOS
   under `/private/var`: your own temp directory (`$TMPDIR`, under
   `/private/var/folders`) and `/private/var/tmp` stay writable (with the usual
   ask).
-- Your own files are not covered — see ask-on-read / ask-on-write for
-  those.
+- Your own files are not covered — writing them is ask-on-write's business.
 
 **To adjust**: create an override copy and edit it — do so deliberately.

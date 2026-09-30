@@ -348,7 +348,7 @@
     "sandbox": {
       "confined": "Sandbox",
       "unconfined": "Not sandboxed",
-      "confinedHint": "Ran in the sandbox: it could only write to the working directory, temporary folders and package caches, and could not read your personal folders or credentials.",
+      "confinedHint": "Ran in the sandbox: it could only write to the working directory, temporary folders and package caches, and could not touch your credentials.",
       "escalatedHint": "The agent asked to run this command outside the sandbox: it could read and change any file on this computer.",
       "disabledHint": "Not sandboxed: the command sandbox is turned off in settings.",
       "unsupportedHint": "Not sandboxed: there is no command sandbox for this platform or shell yet.",
@@ -549,7 +549,7 @@
     "httpLogEnabledHint": "Off by default. Each request stores the full payload (system prompt + whole history), which grows the database fast.",
     "httpLogRecord": "Record",
     "sandboxSection": "Sandbox",
-    "sandboxSectionHint": "Confined commands can change files only in the project, temporary folders and package caches, cannot read credentials, ShuviX's data or your personal folders, and run without asking. A command that needs more asks for full access first. Turning this off makes every command ask again.",
+    "sandboxSectionHint": "Confined commands can change files only in the project, temporary folders and package caches, cannot touch your credentials or step outside the sandbox, and run without asking. A command that needs more asks for full access first. Turning this off makes every command ask again.",
     "sandboxEnabled": "Run commands in the sandbox",
     "sandboxEnabledHint": "Takes effect for new conversations; a conversation already running keeps its setting until it restarts.",
     "sandboxAvailable": "Available on this Mac",

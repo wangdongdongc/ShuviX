@@ -1,6 +1,11 @@
 /**
- * 沙箱的清单 —— **唯一定义处**。profile（命令能碰什么）与策略变量（文件工具问不问）都从这里取，
- * 这两面必须说同一句话，否则模型会学会走不问的那条路。
+ * 沙箱自己的清单 —— **只有两类**：放宽（命令能写的包缓存）与围栏（不让受限命令布置好一样东西、
+ * 以后在沙箱外被执行）。管用户数据的清单一律不在这里：沙箱只替内置策略在命令上生效，凭据清单
+ * 取自 protect-credentials 的 `credentialDirs`（见 index.ts 的 setSandboxCredentialReader），
+ * 策略里没写的就不管 —— 个人文件夹、项目里别家工具的配置都曾在这里，按这条原则删了。
+ *
+ * profile（命令能碰什么）与策略变量（文件工具问不问）都从这里取，这两面必须说同一句话，
+ * 否则模型会学会走不问的那条路。
  *
  * 路径分两类写法：相对家目录的（`homeRelative`）与绝对的。凡要进正则的，只放固定文本 ——
  * 用户路径永远以 SBPL `(param …)` 传入，不进正则（Claude Code 曾把目录名里的 `**` 编进正则，
@@ -39,24 +44,12 @@ export const CACHE_DIRS_HOME_RELATIVE: readonly string[] = [
 ]
 
 /**
- * 凭据目录 —— 与内置策略 protect-credentials 的 `credentialDirs` let **逐项相同**
- * （守卫测试钉住）。沙箱里读写都拒，且放在最后一层：任何根、任何授权都放不回来。
- */
-export const CREDENTIAL_DIRS_HOME_RELATIVE: readonly string[] = [
-  '.ssh',
-  '.aws',
-  '.gnupg',
-  '.config/gh',
-  '.netrc',
-  'AppData/Local/Microsoft/Credentials',
-  'AppData/Roaming/Microsoft/Credentials'
-]
-
-/**
- * 沙箱外会被自动执行 / 读作配置的家目录位置 —— 拒写（最后一层）。
+ * 围栏：家目录里会在沙箱外被自动执行 / 读作配置的位置 —— 开终端时的 shell 启动文件、登录时的
+ * LaunchAgents、每次跑 git 都读的全局 git 配置（`core.fsmonitor` 就是一条命令）。它们没有任何
+ * 确认环节，受限命令写进去就等于在沙箱外执行。拒写（最后一层）。
  *
  * 家目录本身从来不是可写根（根等于或覆盖家目录的会话直接不套沙箱），所以这份清单只在
- * 某个授权根恰好覆盖到它们时才起作用；它是纵深防御，不是主防线。
+ * 某个授权根恰好覆盖到它们时才起作用，平时不打扰任何事。
  */
 export const EXECUTED_LATER_HOME_RELATIVE: readonly string[] = [
   '.zshrc',
@@ -73,51 +66,6 @@ export const EXECUTED_LATER_HOME_RELATIVE: readonly string[] = [
   '.gitconfig',
   '.config/git',
   'Library/LaunchAgents'
-]
-
-/**
- * 工作区 / 授权根**顶层**的别家工具配置 —— 它们会被其他程序在沙箱外自动读取执行
- * （IDE 任务、其他 agent 的 hooks、direnv）。只拦根的顶层：monorepo 深处的 `.vscode`
- * 不会被自动执行，拦了只会误伤。
- */
-export const ROOT_PROTECTED_NAMES: readonly string[] = [
-  '.vscode',
-  '.idea',
-  '.claude',
-  '.cursor',
-  '.codex',
-  '.zed',
-  '.mcp.json',
-  '.envrc'
-]
-
-/**
- * 个人资料目录 —— 沙箱里拒读**内容**（`file-read-data`/`xattr`），元数据照常：
- * 工作区常在 ~/Documents 下，node / python 起步时会 lstat 每一级祖先。read 工具读它们要问。
- */
-export const PERSONAL_DIRS_HOME_RELATIVE: readonly string[] = [
-  'Documents',
-  'Desktop',
-  'Downloads',
-  'Pictures',
-  'Movies',
-  'Music',
-  'Library/Mobile Documents',
-  'Library/Mail',
-  'Library/Messages',
-  'Library/Safari',
-  'Library/Cookies',
-  'Library/Keychains',
-  'Library/Containers',
-  'Library/Group Containers',
-  'Library/Calendars',
-  'Library/Accounts',
-  'Library/Application Support/AddressBook',
-  'Library/Application Support/Google/Chrome',
-  'Library/Application Support/Firefox',
-  'Library/Application Support/Arc',
-  'Library/Application Support/BraveSoftware',
-  'Library/Application Support/Microsoft Edge'
 ]
 
 /**

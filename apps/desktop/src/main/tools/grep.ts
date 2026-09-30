@@ -78,7 +78,7 @@ export class GrepTool extends BaseTool<typeof GrepParamsSchema> {
       ? resolve(config.workingDirectory, resolveToCwd(params.path, config.workingDirectory))
       : config.workingDirectory
 
-    // 询问守卫：走统一评估 —— 内置 ask-on-read 豁免工作区与应用只读目录，
+    // 询问守卫：走统一评估 —— 内置策略只对凭据位置问（protect-credentials），
     // 会话授权过的路径由 force-allow 层放行；都不命中则挂起等待用户询问
     await assertReadAllowed(this.ctx, config, toolCallId, 'grep', searchPath, params.path)
   }

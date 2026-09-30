@@ -57,7 +57,7 @@ const POLICIES_PROJECT = REGISTRY_NOTE_PROJECT_IDS.policy
 /** 内置策略（随包发布的 md）的只读载体 —— 与用户策略分属两个项目 */
 const BUILTIN_PROJECT = REGISTRY_NOTE_PROJECT_IDS.policyBuiltin
 /** PS-B1/B2 点开的内置策略：整份 spec 里没人覆盖它（git-safety 归 PS-C3~C5、ask-on-database 归 PS-G1） */
-const BUILTIN_SAMPLE = 'ask-on-read'
+const BUILTIN_SAMPLE = 'protect-system'
 /** PS-C3~C5 覆盖 → 删除的那条内置策略 */
 const OVERRIDE_SAMPLE = 'git-safety'
 /** PS-G1 切语言的那条内置策略（此前从未被点开，en/zh 两条会话才能都是第一手） */

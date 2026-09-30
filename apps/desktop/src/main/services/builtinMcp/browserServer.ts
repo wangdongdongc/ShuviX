@@ -3,8 +3,8 @@
  * 这里只给出两样宿主才知道的东西：后端（主窗口内嵌的浏览器面板）与安全门。
  *
  * 安全门把浏览器的几类本地访问接回现成的路径策略，而不是另起一套：
- *  - 打开 `file://…` 就是读那个文件 → enforcePath('read')。ask-on-read / protect-credentials /
- *    protect-system 于是自动覆盖「用浏览器打开 ~/.ssh/id_rsa」这条路。
+ *  - 打开 `file://…` 就是读那个文件 → enforcePath('read')。protect-credentials 等路径策略
+ *    于是自动覆盖「用浏览器打开 ~/.ssh/id_rsa」这条路。
  *  - 上传给网页的文件是「离开本机」的读 → enforcePath('read')，询问卡片写明要交给网页。
  *  - pdf 的输出位置是写 → enforcePath('write')。今天之前这里是硬编码的「工作区外直接拒绝」
  *    （工作区里则静默写），现在与 write 工具同一套：出厂的 ask-on-write 对每一次写都问，

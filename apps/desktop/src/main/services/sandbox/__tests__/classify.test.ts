@@ -9,9 +9,10 @@
  *  - CL-7 计划时的缺口（带空格的路径、git 打印的相对路径、TCC 拒绝的读）——实现已跟进，这里钉住；
  *  - FU-13..FU-20 跟进（classify 的五处修正）：带空格的裸路径只列完整的那条（B1）、行首的程序名不是
  *    被拒的对象（B2）、系统程序目录里的 EPERM 是 setuid 被拒（B3，读类工具除外）、启动应用 /
- *    AppleScript 的签名（B4）、末尾的 / 不占名额（B5）。
+ *    AppleScript 的签名（B4）、末尾的 / 不占名额（B5）；
+ *  - CL-R / CL-W / CL-T 读只按规格里的凭据清单拦、项目根的 .vscode / .envrc 不拦、说明末尾那句的措辞。
  *
- * 夹具规格：工作区 /Users/u/proj，一个写授权 ~/.shuvix/widgets/w。
+ * 夹具规格：工作区 /Users/u/proj，一个写授权 ~/.shuvix/widgets/w，凭据位置取出厂 protect-credentials 的清单。
  */
 import { describe, expect, it, vi } from 'vitest'
 
@@ -26,6 +27,17 @@ const USER_DATA = '/Users/u/Library/Application Support/ShuviX'
 const SHUVIX = '/Users/u/.shuvix'
 const WS = '/Users/u/proj'
 const WIDGET = `${SHUVIX}/widgets/w`
+/** 出厂 protect-credentials 的 `credentialDirs`（调用方交给沙箱的凭据位置） */
+const CREDENTIALS = [
+  '.ssh',
+  '.aws',
+  '.gnupg',
+  '.config/gh',
+  '.netrc',
+  '.shuvix/.session-state',
+  'AppData/Local/Microsoft/Credentials',
+  'AppData/Roaming/Microsoft/Credentials'
+].map((d) => `${HOME}/${d}`)
 
 const PATHS: SandboxHostPaths = {
   home: HOME,
@@ -46,7 +58,7 @@ function specOf(
       sessionId: 'sess-1',
       workingDirectory: WS,
       grantedWrite: [WIDGET],
-      grantedRead: [],
+      credentialPaths: CREDENTIALS,
       ...over
     },
     (p) => p
@@ -120,11 +132,6 @@ describe('CL-3 各类被拦的位置 + 说明的形状 + 去重 / 封顶', () =>
       'cannot write: /Users/u/other'
     ],
     [
-      '工作区顶层的 .vscode',
-      'cp: /Users/u/proj/.vscode/settings.json: Operation not permitted',
-      'cannot write: /Users/u/proj/.vscode/settings.json'
-    ],
-    [
       // FU-16：只有路径的一行 —— 行首那段后面没有别的 `…: <EPERM 短语>`，它就是被拒的路径，不是程序名
       'git hooks（只有路径的一行）',
       '/Users/u/proj/.git/hooks/pre-commit: Operation not permitted',
@@ -161,19 +168,14 @@ describe('CL-3 各类被拦的位置 + 说明的形状 + 去重 / 封顶', () =>
       'cannot write: /private/tmp/com.apple.launchd.x/y'
     ],
     [
-      '个人资料目录的读',
-      'cat: /Users/u/Documents/a.txt: Operation not permitted',
-      'cannot read: /Users/u/Documents/a.txt'
-    ],
-    [
       '凭据的读',
       'cat: /Users/u/.ssh/id_ed25519: Operation not permitted',
       'cannot read: /Users/u/.ssh/id_ed25519'
     ],
     [
-      "userData/data（node 的 EPERM + '…' 引号）",
+      "userData 里（node 的 EPERM + '…' 引号）",
       "Error: EPERM: operation not permitted, open '/Users/u/Library/Application Support/ShuviX/data/x'",
-      `cannot read: ${USER_DATA}/data/x`
+      `cannot write: ${USER_DATA}/data/x`
     ],
     [
       'Permission denied 措辞',
@@ -187,13 +189,13 @@ describe('CL-3 各类被拦的位置 + 说明的形状 + 去重 / 封顶', () =>
     ],
     [
       '"…" 引号',
-      'error: unable to write "/Users/u/proj/.mcp.json": Operation not permitted',
-      'cannot write: /Users/u/proj/.mcp.json'
+      'error: unable to write "/Users/u/proj/.git/config": Operation not permitted',
+      'cannot write: /Users/u/proj/.git/config'
     ],
     [
       '‘…’ 引号（python PermissionError）',
-      'PermissionError: [Errno 1] Operation not permitted: ‘/Users/u/Library/Application Support/ShuviX/x’',
-      `cannot read: ${USER_DATA}/x`
+      'PermissionError: [Errno 1] Operation not permitted: ‘/Users/u/.aws/credentials’',
+      'cannot read: /Users/u/.aws/credentials'
     ]
   ]
 
@@ -240,8 +242,13 @@ describe('CL-4 不是沙箱拦的 → null', () => {
     ['/private/tmp 里', 'touch: /private/tmp/x: Operation not permitted'],
     ['/tmp 写法', 'rm: /tmp/x: Operation not permitted'],
     [
-      '本会话自己的 tool_results 的读（放回了）',
+      '本会话自己的 tool_results 的读（读只拦凭据）',
       `cat: ${USER_DATA}/tool_results/sess-1/x: Operation not permitted`
+    ],
+    ['个人资料目录的读（读只拦凭据）', 'cat: /Users/u/Documents/a.txt: Operation not permitted'],
+    [
+      '工作区顶层的 .vscode（不再受保护）',
+      'cp: /Users/u/proj/.vscode/settings.json: Operation not permitted'
     ],
     [
       '工作区之外的 clone 里的 .git/config（git 保护只在 git 根里）',
@@ -252,7 +259,7 @@ describe('CL-4 不是沙箱拦的 → null', () => {
     expect(explain(line)).toBeNull()
   })
 
-  it('CL-4 工作区在 ~/Documents/proj：那里的读写都放回了', () => {
+  it('CL-4 工作区在 ~/Documents/proj：那里的读写都不拦', () => {
     const spec = specOf({ workingDirectory: `${HOME}/Documents/proj` })
     expect(
       explain('touch: /Users/u/Documents/proj/x: Operation not permitted', 1, { spec })
@@ -320,10 +327,11 @@ describe('CL-6 isWriteBlocked / isReadBlocked / writeBlockReason 与 profile 的
     expect(writeBlockReason(spec, `${USER_DATA}/x`)).toBe('outside')
   })
 
-  it('CL-6 写授权 ~/.shuvix/widgets/w：里面可写，但根顶层的 .claude 是受保护的位置', () => {
+  it('CL-6 写授权 ~/.shuvix/widgets/w：里面可写（根顶层的 .claude 也不再受保护），根里的 git hooks 是受保护的位置', () => {
     expect(isWriteBlocked(SPEC, `${WIDGET}/f`)).toBe(false)
-    expect(isWriteBlocked(SPEC, `${WIDGET}/.claude/x`)).toBe(true)
-    expect(writeBlockReason(SPEC, `${WIDGET}/.claude/x`)).toBe('protected')
+    expect(isWriteBlocked(SPEC, `${WIDGET}/.claude/x`)).toBe(false)
+    expect(writeBlockReason(SPEC, `${WIDGET}/.claude/x`)).toBeNull()
+    expect(writeBlockReason(SPEC, `${WIDGET}/.git/hooks/x`)).toBe('protected')
   })
 
   it('CL-6 writeBlockReason 的三种答案：在根外 / 根里受保护（最后一层、正则、git、整片拒写）/ 允许', () => {
@@ -354,17 +362,17 @@ describe('CL-6 isWriteBlocked / isReadBlocked / writeBlockReason 与 profile 的
     expect(writeBlockReason(e2e, `${e2eHome}/notes.txt`)).toBeNull()
   })
 
-  it('CL-6 读：最后一层压过放回（读授权 ~/.ssh 也读不到私钥）；个人资料目录经读授权放回', () => {
-    const spec = specOf({ grantedRead: [`${HOME}/.ssh`, `${HOME}/Documents/ref`] })
+  it('CL-6 读：只拦凭据位置（readDenied）；个人资料目录、userData、别的会话的 tool_results 都能读', () => {
+    const spec = SPEC
     expect(isReadBlocked(spec, `${HOME}/.ssh/config`)).toBe(true)
     expect(isReadBlocked(spec, `${HOME}/Documents/ref/a.txt`)).toBe(false)
-    expect(isReadBlocked(spec, `${HOME}/Documents/other.txt`)).toBe(true)
+    expect(isReadBlocked(spec, `${HOME}/Documents/other.txt`)).toBe(false)
     expect(isReadBlocked(spec, '/etc/hosts')).toBe(false)
     expect(isReadBlocked(spec, `${SHUVIX}/.session-state/k`)).toBe(true)
     expect(isReadBlocked(spec, `${SHUVIX}/cli-token`)).toBe(false)
-    expect(isReadBlocked(spec, `${USER_DATA}/data/db`)).toBe(true)
+    expect(isReadBlocked(spec, `${USER_DATA}/data/db`)).toBe(false)
     expect(isReadBlocked(spec, `${USER_DATA}/tool_results/sess-1/r.txt`)).toBe(false)
-    expect(isReadBlocked(spec, `${USER_DATA}/tool_results/other/r.txt`)).toBe(true)
+    expect(isReadBlocked(spec, `${USER_DATA}/tool_results/other/r.txt`)).toBe(false)
   })
 })
 
@@ -574,5 +582,45 @@ describe('FU-20 (B5) 末尾的 /', () => {
 
   it('FU-20 工作区里的 sub/ → 仍然 null', () => {
     expect(explain('touch: /Users/u/proj/sub/: Operation not permitted')).toBeNull()
+  })
+})
+
+describe('CL-R / CL-W / CL-T 读只拦凭据、别家工具的配置不拦、说明的措辞', () => {
+  const READ_LINE = 'cat: /Users/u/.ssh/id: Operation not permitted'
+
+  it('CL-R1 凭据的读被拒 → 说 cannot read', () => {
+    expect(entries(explain(READ_LINE))).toEqual(['cannot read: /Users/u/.ssh/id'])
+  })
+
+  it('CL-R3 同一行、但规格里没有凭据清单（readDenied 为空）→ null（沙箱自己没有一份凭据清单）', () => {
+    const spec = specOf({ credentialPaths: [] })
+    expect(spec.readDenied).toEqual([])
+    expect(explain(READ_LINE, 1, { spec })).toBeNull()
+  })
+
+  it.each([
+    ['工作区顶层的 .vscode', 'cp: /Users/u/proj/.vscode/settings.json: Operation not permitted'],
+    ['工作区顶层的 .envrc', 'bash: /Users/u/proj/.envrc: Operation not permitted'],
+    [
+      '两行一起',
+      'touch: /Users/u/proj/.envrc: Operation not permitted\ncp: /Users/u/proj/.vscode/settings.json: Operation not permitted'
+    ]
+  ])('CL-W1 %s 上的 EPERM 不是沙箱拦的 → null', (_label, out) => {
+    expect(explain(out)).toBeNull()
+  })
+
+  it('CL-T1 说明末尾那句概括：提凭据、git hooks、ShuviX 自己的文件；不再提个人文件夹、Documents / Downloads、ShuviX 自己的数据', () => {
+    for (const offerEscalation of [true, false]) {
+      const note = explain('touch: /Users/u/.shuvix/x: Operation not permitted', 1, {
+        offerEscalation
+      })
+      expect(note).not.toBeNull()
+      const summary = note!.split('\n').find((l) => l.startsWith('Confined commands'))
+      expect(summary, 'summary line').toBeDefined()
+      expect(summary).toContain('credentials')
+      expect(summary).toContain('git hooks')
+      expect(summary).toContain("ShuviX's own files")
+      expect(note).not.toMatch(/personal|Documents|Downloads|ShuviX's own data/)
+    }
   })
 })

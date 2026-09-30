@@ -310,13 +310,10 @@ describe('文件工具套件 — 询问请求的次数与形状', () => {
     expect(req.command).toBe(allowEntry('read', CREDENTIAL_ABS))
   })
 
-  it('PERM-10b: 工作区外读取经内置 ask-on-read 门弹询问；允许后照常读取', async () => {
-    const h = makeSuite({ files: { '/outside/gated.txt': 'hello\n' }, respond: allowed })
-    const res = await h.suite.read.execute('call-6', { path: '/outside/gated.txt' })
-    expect(h.requestUserInput).toHaveBeenCalledTimes(1)
-    const req = h.requests[0]
-    if (req.kind !== 'ask') throw new Error('expected an ask request')
-    expect(req.command).toBe(allowEntry('read', '/outside/gated.txt'))
+  it('PERM-10b: 工作区外读取不问（内置策略只对凭据位置问读取），照常读取', async () => {
+    const h = makeSuite({ files: { '/outside/free.txt': 'hello\n' }, respond: allowed })
+    const res = await h.suite.read.execute('call-6', { path: '/outside/free.txt' })
+    expect(h.requestUserInput).not.toHaveBeenCalled()
     expect((res.content[0] as { text: string }).text).toContain('hello')
   })
 })

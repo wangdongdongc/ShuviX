@@ -4,10 +4,12 @@
  * 相应用例迁到本文件的「会话授权（下沉为 vars + 策略 md）」一节与端到端断言。
  * （lets 求值与 strict fail-safe 的专项用例见 test-designer 清单落地部分）
  * 宿主没供给的目录变量（deny / ask 两档绑定为 null、按 logger 去重告警）见 AS-D 一节；
- * 用户覆盖副本拿掉 ask-on-write 的本会话 artifacts 豁免（用户主权）见文末 AS-A 一节。
+ * 用户覆盖副本拿掉 ask-on-write 的本会话 artifacts 豁免（用户主权）见 AS-A 一节；
+ * 宿主取生效策略集里一个 let 的值（resolvePolicyLet，桌面沙箱的凭据清单）见文末 RPL 一节。
  */
 import { describe, it, expect, vi } from 'vitest'
-import { assembleRules, mergePolicyFiles, resolvePolicyFiles } from '../assemble'
+import { assembleRules, mergePolicyFiles, resolvePolicyFiles, resolvePolicyLet } from '../assemble'
+import { createSecurityContext } from '../context'
 import { parsePolicyDefinitionFile } from '../policyFile'
 import { evaluate } from '../evaluate'
 import { buildPolicyVars } from '../policyVars'
@@ -45,8 +47,6 @@ const BUILTIN_VARS: Record<string, string | string[] | boolean> = {
   sandboxWritableRoots: [],
   sandboxWriteDenied: [],
   sandboxProtectedPatterns: [],
-  sandboxReadDenied: [],
-  sandboxReadAllowed: [],
   // 与沙箱无关的工作区写入视图（桌面 getVars 展开 sandbox.workspaceWriteView）：这里给「不豁免」的一组
   workspaceWritable: [],
   workspaceWriteDenied: [],
@@ -129,11 +129,11 @@ describe('会话授权（下沉为 vars + 策略 md）', () => {
       grantedWrite: ['/data/b.txt']
     })
 
-    // Read 条目：读放行、写仍走询问门
-    expect(decide(provider, 'read', '/data/a.txt').effect).toBe('allow')
+    // Read 条目：读由这条授权放行（读本身没有询问门，所以看归因）、写仍走询问门
+    expect(decide(provider, 'read', '/data/a.txt').winning).toBe('session-grants#1')
     expect(decide(provider, 'write', '/data/a.txt').effect).toBe('ask')
     // Write 条目：读写都放行（写授权隐含读）
-    expect(decide(provider, 'read', '/data/b.txt').effect).toBe('allow')
+    expect(decide(provider, 'read', '/data/b.txt').winning).toBe('session-grants#1')
     expect(decide(provider, 'write', '/data/b.txt').effect).toBe('allow')
     // 归因到内置策略而非从前的 session:allowList:<entry>
     expect(decide(provider, 'write', '/data/b.txt').winning).toMatch(/^session-grants#[12]$/)
@@ -143,10 +143,11 @@ describe('会话授权（下沉为 vars + 策略 md）', () => {
     const provider = makeProvider({
       getSessionGrants: () => ({ autoAllow: false, allowList: ['Read(/data)'] })
     })
-    expect(decide(provider, 'read', '/data').effect).toBe('allow')
-    expect(decide(provider, 'read', '/data/sub/x.txt').effect).toBe('allow')
+    // 读本身没有询问门：看的是放行归不归这条授权
+    expect(decide(provider, 'read', '/data').winning).toBe('session-grants#1')
+    expect(decide(provider, 'read', '/data/sub/x.txt').winning).toBe('session-grants#1')
     // /data 不得命中 /database（inDir 与旧 matchesPathEntry 同一实现）
-    expect(decide(provider, 'read', '/database/x.txt').effect).toBe('ask')
+    expect(decide(provider, 'read', '/database/x.txt').winning).toBe('default:path')
 
     // 非 path 客体：session-grants 两条路径规则的 object.type 条件先短路，CEL 不跑、零告警
     const warn = vi.fn()
@@ -183,7 +184,8 @@ describe('会话授权（下沉为 vars + 策略 md）', () => {
       })
     })
     expect(buildPolicyVars(provider)).toMatchObject({ grantedRead: [], grantedWrite: [] })
-    expect(decide(provider, 'read', '/outside/x.txt').effect).toBe('ask')
+    expect(decide(provider, 'write', '/outside/x.txt').effect).toBe('ask')
+    expect(decide(provider, 'read', '/outside/x.txt').winning).toBe('default:path')
   })
 
   it('AS-3 autoAllow:true → 全域 force-allow 放行（含命令）；false → 照常询问', () => {
@@ -276,7 +278,7 @@ describe('assembleRules × evaluate — 授权 vars 的失效模式守护', () =
   const GRID: Array<[string, string]> = [
     ['write', '/outside/x.txt'], // autoAllow 该放行的
     ['write', '/data/x.txt'], // Write(/data) 授权该放行的
-    ['read', '/data/x.txt'] // 写授权隐含读，该放行的
+    ['read', '/home/u/.ssh/x'] // autoAllow 该放行的（凭据读是 ask 档，压得过）
   ]
 
   it('CV-1 求值侧拿不到授权变量（provider.getVars() / 完全省略）→ 授权全线失效，任何一格都不得 allow', () => {
@@ -1451,7 +1453,7 @@ describe('assembleRules — 宿主没供给的目录变量', () => {
 /**
  * 用户主权 × 本会话 artifacts 豁免 —— 出厂的 ask-on-write 对 `vars.sessionArtifactsDir` 不问；
  * 用户把覆盖副本里那行 `match:` 删掉，就是要回「写哪儿都问」。覆盖按策略整份替换，所以只动写
- * 那一份：ask-on-read 仍是出厂的，读同一个文件照样不问。
+ * 那一份：读同一个文件照样不问（读没有询问门）。
  */
 describe('assembleRules — 用户覆盖拿掉本会话 artifacts 豁免', () => {
   const OWN_ARTIFACT = '/home/u/.shuvix/artifacts/sess-1/x.svg'
@@ -1502,10 +1504,287 @@ describe('assembleRules — 用户覆盖拿掉本会话 artifacts 豁免', () =>
     expect(write.effect).toBe('ask')
     expect(write.winning).toBe('ask-on-write#0')
 
-    // 覆盖按策略整份替换：ask-on-read 仍是出厂那份，豁免还在
+    // 覆盖按策略整份替换：读不受牵连
     expect(decide(overridden, 'read', OWN_ARTIFACT).effect).toBe('allow')
 
     // 对照：没有用户策略时同一次写放行
     expect(decide(makeProvider(), 'write', OWN_ARTIFACT).effect).toBe('allow')
+  })
+})
+
+/**
+ * resolvePolicyLet —— 宿主拿生效策略集里一条策略的一个 let 去做引擎之外的事（桌面命令沙箱的凭据清单读的
+ * 就是 protect-credentials 的 `credentialDirs`）。钉住的是「与装配同一份生效集、同一个求值器」：
+ * 用户同名覆盖整份替换（按 resolvePolicyFiles 的裁决）、覆盖掉 let / 清空规则 = 「策略没说」、
+ * 求值出错 = `undefined` + 一条告警，以及两面（文件工具的判定、沙箱的清单）说同一句话。
+ *
+ * 注意：buildBuiltinPolicies 按语言缓存、不看 readMd —— 模拟「清单变了」只能走用户覆盖。
+ */
+describe('resolvePolicyLet', () => {
+  const VARS: Record<string, PolicyVarValue> = { home: '/h' }
+  const BUILTIN_CREDENTIALS = [
+    '/h/.ssh',
+    '/h/.aws',
+    '/h/.gnupg',
+    '/h/.config/gh',
+    '/h/.netrc',
+    '/h/.shuvix/.session-state',
+    '/h/AppData/Local/Microsoft/Credentials',
+    '/h/AppData/Roaming/Microsoft/Credentials'
+  ]
+
+  const withFile = (policy: ParsedPolicyFile, fileName: string): UserPolicyFile => ({
+    ...policy,
+    fileName
+  })
+
+  /** 出厂 en 文件原样解析 —— 覆盖副本的起点（规则与 let 都照抄） */
+  const builtinCopy = (name: string): ParsedPolicyFile => {
+    const parsed = parsePolicyDefinitionFile(INLINE_POLICY_MD(`${name}.md`)!, name)
+    expect(parsed, `${name}.md parses`).not.toBeNull()
+    return parsed!
+  }
+
+  /** protect-credentials 的一份用户覆盖：规则照抄出厂，let 换成给定表达式（undefined = 删掉整个 lets） */
+  const credentialOverride = (
+    credentialDirs: string | undefined,
+    fileName = 'protect-credentials.md'
+  ): UserPolicyFile => {
+    const { lets: _lets, ...rest } = builtinCopy('protect-credentials')
+    return withFile(
+      credentialDirs === undefined ? rest : { ...rest, lets: { credentialDirs } },
+      fileName
+    )
+  }
+
+  const newLogger = (): {
+    warn: ReturnType<typeof vi.fn>
+    logger: NonNullable<SecurityHostProvider['logger']>
+  } => {
+    const warn = vi.fn()
+    return { warn, logger: { info: vi.fn(), warn, error: vi.fn() } }
+  }
+
+  const resolveCredentials = (
+    provider: Parameters<typeof resolvePolicyLet>[0],
+    vars: Record<string, PolicyVarValue> = VARS
+  ): unknown => resolvePolicyLet(provider, 'protect-credentials', 'credentialDirs', vars)
+
+  it('RPL-1 出厂值：恰为 8 个位置，拼在 vars.home 上（含 ~/.shuvix/.session-state）', () => {
+    const { warn, logger } = newLogger()
+    expect(resolveCredentials(makeProvider({ logger }))).toEqual(BUILTIN_CREDENTIALS)
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it.each(['zh', 'ja', 'zh-CN', 'fr', undefined])(
+    'RPL-2 界面语言 %s：同一个值（let 恒取 en 文件；undefined = 宿主没给 getLanguage）',
+    (language) => {
+      const provider = makeProvider(language === undefined ? {} : { getLanguage: () => language })
+      expect(resolveCredentials(provider)).toEqual(BUILTIN_CREDENTIALS)
+    }
+  )
+
+  it('RPL-3 用户同名覆盖改了清单 → 取覆盖的值（整份替换，不与出厂合并）', () => {
+    const provider = makeProvider({
+      getUserPolicies: () => [credentialOverride("[vars.home + '/.ssh']")]
+    })
+    expect(resolveCredentials(provider)).toEqual(['/h/.ssh'])
+  })
+
+  it('RPL-4 同名的几份用户文件：与装配同一个裁决（文件名即名字的那份胜出，与输入顺序无关）；只有 a.md 时取它', () => {
+    const canonical = credentialOverride("[vars.home + '/A']", 'protect-credentials.md')
+    const copy = credentialOverride("[vars.home + '/B']", 'a.md')
+    for (const users of [
+      [canonical, copy],
+      [copy, canonical]
+    ]) {
+      const label = users.map((p) => p.fileName).join(',')
+      expect(resolveCredentials(makeProvider({ getUserPolicies: () => users })), label).toEqual([
+        '/h/A'
+      ])
+    }
+    expect(resolveCredentials(makeProvider({ getUserPolicies: () => [copy] }))).toEqual(['/h/B'])
+  })
+
+  it('RPL-5 覆盖副本里没有这个 let（缺 lets / lets 为空表）→ undefined，不回落到出厂，不告警', () => {
+    for (const [label, override] of [
+      ['缺 lets', credentialOverride(undefined)],
+      ['lets: {}', withFile({ ...builtinCopy('protect-credentials'), lets: {} }, 'x.md')]
+    ] as const) {
+      const { warn, logger } = newLogger()
+      const provider = makeProvider({ logger, getUserPolicies: () => [override] })
+      expect(resolveCredentials(provider), label).toBeUndefined()
+      expect(warn, label).not.toHaveBeenCalled()
+    }
+  })
+
+  it('RPL-6 清空规则的同名覆盖（shuvix-policy-rules: []）留着出厂的 let → undefined（移除一道门对沙箱同样生效）', () => {
+    const { warn, logger } = newLogger()
+    const cleared = withFile(
+      { ...builtinCopy('protect-credentials'), rules: [] },
+      'protect-credentials.md'
+    )
+    expect(cleared.lets?.credentialDirs).toBeDefined()
+    const provider = makeProvider({ logger, getUserPolicies: () => [cleared] })
+    expect(resolveCredentials(provider)).toBeUndefined()
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('RPL-7 没有这条策略 / 有策略没有这个 let / 策略根本没有 lets / 别名策略里的同名 let 不算 → 全是 undefined、零告警', () => {
+    const { warn, logger } = newLogger()
+    const impostor = withFile(
+      userPolicy('my-credentials', [{ effect: 'ask' }], {
+        credentialDirs: "[vars.home + '/.impostor']"
+      }),
+      'my-credentials.md'
+    )
+    const provider = makeProvider({ logger, getUserPolicies: () => [impostor] })
+    expect(resolvePolicyLet(provider, 'no-such-policy', 'credentialDirs', VARS)).toBeUndefined()
+    expect(resolvePolicyLet(provider, 'protect-credentials', 'noSuchLet', VARS)).toBeUndefined()
+    expect(resolvePolicyLet(provider, 'ask-on-write', 'credentialDirs', VARS)).toBeUndefined()
+    // 名字不同的用户策略定义了同名 let：它不是 protect-credentials，出厂那份照旧生效
+    expect(resolveCredentials(provider)).toEqual(BUILTIN_CREDENTIALS)
+    expect(resolvePolicyLet(provider, 'my-credentials', 'credentialDirs', VARS)).toEqual([
+      '/h/.impostor'
+    ])
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('RPL-8 求值出错（缺 vars.home / 覆盖的 let 类型错）→ undefined + 恰一条点名策略与 let 的告警；没有 logger 也不 throw', () => {
+    const cases: Array<[string, Partial<SecurityHostProvider>, Record<string, PolicyVarValue>]> = [
+      ['vars 缺 home', {}, {}],
+      ['覆盖的 let 类型错', { getUserPolicies: () => [credentialOverride('vars.home + 1')] }, VARS]
+    ]
+    for (const [label, over, vars] of cases) {
+      const { warn, logger } = newLogger()
+      expect(resolveCredentials(makeProvider({ ...over, logger }), vars), label).toBeUndefined()
+      expect(warn, label).toHaveBeenCalledTimes(1)
+      const line = String(warn.mock.calls[0][0])
+      expect(line, label).toContain('protect-credentials')
+      expect(line, label).toContain('credentialDirs')
+
+      // 没有 logger：同样 undefined，不 throw
+      let value: unknown = 'sentinel'
+      expect(() => {
+        value = resolveCredentials(makeProvider(over), vars)
+      }, label).not.toThrow()
+      expect(value, label).toBeUndefined()
+    }
+  })
+
+  it('RPL-8b fallbackToBuiltinOnError：覆盖的 let 写错 → 出厂值 + 告警注明退回；没写 let / 规则清空照旧 undefined；出厂那份自己出错不退回', () => {
+    const opts = { fallbackToBuiltinOnError: true }
+    const builtin = resolveCredentials(makeProvider())
+
+    const { warn, logger } = newLogger()
+    const broken = makeProvider({
+      logger,
+      getUserPolicies: () => [credentialOverride('vars.home + 1')]
+    })
+    expect(resolvePolicyLet(broken, 'protect-credentials', 'credentialDirs', VARS, opts)).toEqual(
+      builtin
+    )
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(String(warn.mock.calls[0][0])).toContain('using the builtin value instead')
+
+    // 「没写」是用户的决定：去掉 let、清空规则都不退回
+    const noLet = makeProvider({ getUserPolicies: () => [credentialOverride(undefined)] })
+    expect(resolvePolicyLet(noLet, 'protect-credentials', 'credentialDirs', VARS, opts)).toBe(
+      undefined
+    )
+
+    // 出厂那份自己求值出错（vars 缺 home）：没有可退回的，照旧 undefined、恰一条告警、不注明退回
+    const bare = newLogger()
+    expect(
+      resolvePolicyLet(
+        makeProvider({ logger: bare.logger }),
+        'protect-credentials',
+        'credentialDirs',
+        {},
+        opts
+      )
+    ).toBeUndefined()
+    expect(bare.warn).toHaveBeenCalledTimes(1)
+    expect(String(bare.warn.mock.calls[0][0])).not.toContain('using the builtin value')
+  })
+
+  it('RPL-9 没有 readBuiltinPolicyMd → throw（就算有用户覆盖也一样：出厂层缺席必须响）', () => {
+    const noReader = makeProvider({ readBuiltinPolicyMd: undefined })
+    expect(() => resolveCredentials(noReader)).toThrow(/readBuiltinPolicyMd/)
+    const withOverride = makeProvider({
+      readBuiltinPolicyMd: undefined,
+      getUserPolicies: () => [credentialOverride("[vars.home + '/.ssh']")]
+    })
+    expect(() => resolveCredentials(withOverride)).toThrow(/readBuiltinPolicyMd/)
+  })
+
+  it('RPL-10 没有 getUserPolicies → 出厂值；覆盖的 let 是个字符串 → 原样交回（不做类型转换）', () => {
+    const provider = makeProvider()
+    expect(provider.getUserPolicies).toBeUndefined()
+    expect(resolveCredentials(provider)).toEqual(BUILTIN_CREDENTIALS)
+    expect(
+      resolveCredentials(makeProvider({ getUserPolicies: () => [credentialOverride("'/x'")] }))
+    ).toBe('/x')
+  })
+
+  it('RPL-11 两面说同一句话：清单里每个位置下的文件，读 → ask（protect-credentials#1）、写 → deny（#0）；覆盖拿掉 .aws 后，两面都不再管它', () => {
+    const vars = { ...BUILTIN_VARS, home: '/h' }
+    const decideWith = (
+      provider: SecurityHostProvider,
+      action: string,
+      path: string
+    ): ReturnType<ReturnType<typeof createSecurityContext>['evaluate']> =>
+      createSecurityContext(
+        { kind: 'agent', sessionId: 's1', agentKind: 'root' },
+        { host: 'desktop', platform: 'darwin' },
+        provider
+      ).evaluate(action, { type: 'path', path })
+
+    const builtin = makeProvider({ getVars: () => vars })
+    const paths = resolveCredentials(builtin, vars) as string[]
+    expect(paths).toEqual(BUILTIN_CREDENTIALS)
+    for (const dir of paths) {
+      const read = decideWith(builtin, 'read', `${dir}/k`)
+      expect({ dir, effect: read.effect, winning: read.winning }).toEqual({
+        dir,
+        effect: 'ask',
+        winning: 'protect-credentials#1'
+      })
+      const write = decideWith(builtin, 'write', `${dir}/k`)
+      expect({ dir, effect: write.effect, winning: write.winning }).toEqual({
+        dir,
+        effect: 'deny',
+        winning: 'protect-credentials#0'
+      })
+    }
+
+    // 覆盖副本 = 出厂 en 文件去掉 `'.aws', ` —— 规则与 let 都来自这一份
+    const withoutAws = parsePolicyDefinitionFile(
+      INLINE_POLICY_MD('protect-credentials.md')!.replace("'.aws', ", ''),
+      'protect-credentials'
+    )!
+    expect(withoutAws.lets!.credentialDirs).not.toContain('.aws')
+    const overridden = makeProvider({
+      getVars: () => vars,
+      getUserPolicies: () => [withFile(withoutAws, 'protect-credentials.md')]
+    })
+    const narrowed = resolveCredentials(overridden, vars) as string[]
+    expect(narrowed).toEqual(BUILTIN_CREDENTIALS.filter((p) => p !== '/h/.aws'))
+    const aws = decideWith(overridden, 'read', '/h/.aws/k')
+    expect({ effect: aws.effect, winning: aws.winning, matched: aws.matched }).toEqual({
+      effect: 'allow',
+      winning: 'default:path',
+      matched: []
+    })
+    // 清单里剩下的照旧：读问、写拒
+    for (const dir of narrowed) {
+      expect(decideWith(overridden, 'read', `${dir}/k`).winning, dir).toBe('protect-credentials#1')
+      expect(decideWith(overridden, 'write', `${dir}/k`).winning, dir).toBe('protect-credentials#0')
+    }
+  })
+
+  it("RPL-12 从 '@shuvix/agent-runtime' 的入口导出的就是它", async () => {
+    const runtime = await import('../../index')
+    expect(runtime.resolvePolicyLet).toBe(resolvePolicyLet)
   })
 })

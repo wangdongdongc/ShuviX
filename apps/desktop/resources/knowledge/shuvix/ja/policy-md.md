@@ -22,8 +22,8 @@ ShuviX の権限システムは**確認モデルであって、サンドボッ�
 操作は自由に実行され、ShuviX が同梱するすべての保護は目に見えるポリシーです。
 ポリシー自体は OS レベルの隔離ではありません。それは別物の**コマンドサンドボックス**です：macOS で
 設定 → LLM ツール → bash → サンドボックスがオンのとき、各 `bash` コマンドは OS によって閉じ込められて
-実行されます（変更できるのはプロジェクト・一時フォルダ・パッケージのキャッシュの中だけで、認証情報や
-ShuviX のデータ、個人フォルダは読めません）。ホストはこの実行が本当に閉じ込められたかをコマンドの
+実行されます（変更できるのはプロジェクト・一時フォルダ・パッケージのキャッシュの中だけで、
+protect-credentials が挙げる認証情報には触れられません）。ホストはこの実行が本当に閉じ込められたかをコマンドの
 `sandboxed` 属性として報告し、組み込みポリシーがそれで判断します：閉じ込められたコマンドは確認なしで
 実行され、閉じ込められていないもの——サンドボックスがオフまたは使えない、エージェントがフルアクセスを
 求めた、すべての `ssh` コマンド——は確認が出て、許可されるとユーザーの完全な権限で実行されます。
@@ -169,14 +169,12 @@ vars     ホスト変数表（後述）+ セッションの許諾
 | `sessionArtifactsDir`         | string   | この会話自身の成果物 `~/.shuvix/artifacts/<セッション>`                        |
 | `shuvixConfigDirs`            | string[] | `~/.shuvix/policies`、`agents`、`hooks`、`skills` —— ShuviX 自身の設定          |
 | `workspaceWritable`           | string[] | 作業ディレクトリ。ファイルツールによる書き込みは確認なし（Windows と、作業ディレクトリが不適切なとき —— `/`、ホームを覆うフォルダ、ShuviX 自身のデータ —— は空） |
-| `workspaceWriteDenied`        | string[] | その中の保護された場所（プロジェクトの `.vscode`、`.claude` など；認証情報ディレクトリ） |
+| `workspaceWriteDenied`        | string[] | その中の保護された場所（認証情報の場所、シェルの起動ファイルなど）                     |
 | `workspaceProtectedPatterns`  | string[] | その中の保護された git メタデータの正規表現 —— `matches` と組み合わせて使う       |
 | `sandboxActive`               | boolean  | このセッションのコマンドはコマンドサンドボックス内で動く                       |
 | `sandboxWritableRoots`        | string[] | 制限付きコマンドが書ける場所（サンドボックスが無効なら空）                     |
-| `sandboxWriteDenied`          | string[] | その中の保護された場所（プロジェクトの `.vscode`、`.claude` など；認証情報ディレクトリ） |
+| `sandboxWriteDenied`          | string[] | その中の保護された場所（ShuviX 自身のファイル、認証情報の場所など）                    |
 | `sandboxProtectedPatterns`    | string[] | 保護された git メタデータの正規表現（`.git/hooks`、`.git/config` など）、`matches` と併用 |
-| `sandboxReadDenied`           | string[] | 制限付きコマンドが読めない場所（個人フォルダ、ShuviX のデータ、認証情報ディレクトリ） |
-| `sandboxReadAllowed`          | string[] | その中で読める例外（ワークスペース、このセッションのツール結果、読み取り許可）   |
 | `systemDirs`                  | string[] | 追加の OS ディレクトリ（Windows のシステム / プログラムディレクトリ）          |
 | `autoAllow`                   | boolean  | セッションの「自動許可」スイッチ                                              |
 | `grantedRead`、`grantedWrite` | string[] | ユーザーがこのセッションで「許可して記憶」と答えたパス（書き込みは読み取りを含意） |
@@ -196,17 +194,16 @@ scope と交差して空になる規則；不正な `lets`（不正な名前、�
 
 ## 組み込みポリシー
 
-アプリケーションに十三本同梱（UI 言語ごとに一つ；**規則は常に英語ファイルから取られ**、翻訳は人が読む
+アプリケーションに十二本同梱（UI 言語ごとに一つ；**規則は常に英語ファイルから取られ**、翻訳は人が読む
 テキストだけを変える）：
 
 | 名前                            | ゲート                                                                                                       |
 | ------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `protect-credentials`           | 認証情報ディレクトリ（`.ssh`、`.aws`……）への書き込みを拒否、読み取りを確認                                    |
+| `protect-credentials`           | 認証情報の場所（`.ssh`、`.aws`……）への書き込みを拒否、読み取りを確認；サンドボックス内のコマンドはどちらも不可 |
 | `protect-system`                | OS ディレクトリへの書き込みを拒否                                                                             |
 | `block-catastrophic-commands`   | マシンを破壊する少数のコマンドを、解析された構造で判断して拒否（`rm -rf /`、`mkfs`、デバイスへの `dd`、`Format-Volume`……）     |
 | `protect-bot-files`             | `~/.shuvix/bots` 配下のあらゆる書き込みを **force-ask**                                                       |
 | `protect-shuvix-config`         | `~/.shuvix/policies`、`agents`、`hooks`、`skills` 配下のあらゆる書き込みを **force-ask**                      |
-| `ask-on-read`                   | ワークスペース、ツール結果、skill ディレクトリ、本リファレンスの外の読み取りを確認；サンドボックス有効時は制限付きコマンドも読めない場所だけ |
 | `ask-on-write`                  | ファイル書き込みを diff プレビュー付きで確認 —— この会話の成果物、作業ディレクトリ（その中の保護された場所を除く、Windows を除く）、サンドボックス有効時は制限付きコマンドがもともと書ける場所を除く |
 | `ask-on-command`                | サンドボックスに閉じ込められていないコマンドを確認（`object.sandboxed` が false：サンドボックスがオフ／使えない、フルアクセスの要求、`ssh`） |
 | `git-safety`                    | 破壊的な git 操作を確認（`init`、`restore`、強制 checkout、ブランチ削除）                                     |

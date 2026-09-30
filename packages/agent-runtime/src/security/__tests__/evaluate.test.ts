@@ -1069,8 +1069,6 @@ describe('evaluate — opts.realPath（inDir 按位置比较）', () => {
         sandboxWritableRoots: [],
         sandboxWriteDenied: [],
         sandboxProtectedPatterns: [],
-        sandboxReadDenied: [],
-        sandboxReadAllowed: [],
         systemDirs: [],
         dotfiles: '/data'
       }),
@@ -1126,7 +1124,7 @@ describe('evaluate — opts.realPath（inDir 按位置比较）', () => {
     })
 
     // 内置 protect-credentials 的 credentialDirs 就是 lets 算出来的：~/.ssh 本身是链接时，
-    // 真实位置上的私钥照样归它管（不给解析器 → 只被 ask-on-read 当成一次普通的区外读）
+    // 真实位置上的私钥照样归它管（不给解析器 → 按写法不在凭据目录里，读放行、零命中）
     const sshIsLinked = resolverOf({ '/home/u/.ssh': '/data/ssh' })
     const key = pathRequest('/data/ssh/id_rsa')
     expect(decideAssembled(key, sshIsLinked)).toMatchObject({
@@ -1134,8 +1132,9 @@ describe('evaluate — opts.realPath（inDir 按位置比较）', () => {
       winning: 'protect-credentials#1'
     })
     expect(decideAssembled(key, undefined)).toMatchObject({
-      effect: 'ask',
-      winning: 'ask-on-read#0'
+      effect: 'allow',
+      winning: 'default:path',
+      matched: []
     })
     expect(decideAssembled(pathRequest('/data/ssh/new_key', 'write'), sshIsLinked)).toMatchObject({
       effect: 'deny',

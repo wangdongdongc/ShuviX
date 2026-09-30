@@ -318,7 +318,7 @@ describe('evaluateMatch — inDir 按位置比较（withRealPaths）', () => {
     const expression = 'inDir(object.path, vars.workspace)'
     const negated = '!inDir(object.path, vars.workspace)'
     const table: Array<[string, Record<string, string>, string, boolean]> = [
-      // 工作区里的链接指向区外：按位置不在区内（ask-on-read 的取反豁免因此不再豁免它）
+      // 工作区里的链接指向区外：按位置不在区内（取反写的豁免因此不再豁免它）
       ['链接带出区外', { '/ws/link': '/elsewhere/f' }, '/ws/link', false],
       // 工作区本身是链接（/ws → /data/ws），交来的是真实位置上的文件：按位置在区内
       ['工作区是链接', { '/ws': '/data/ws' }, '/data/ws/f', true]
@@ -385,8 +385,8 @@ describe('evaluateMatch — inDir 按位置比较（withRealPaths）', () => {
 })
 
 /**
- * 内置 ask-on-read 的 match 原文（md 里 `>-` 折叠后的单行形态）—— 刻意抄录而非从 md 读：
- * 这里钉的是「这种写法」被识别，md 日后改写不该让本用例跟着悄悄改义。
+ * 从前内置 ask-on-read 的 match 原文（md 里 `>-` 折叠后的单行形态；那份策略已删）—— 一串取反的
+ * inDir。刻意抄录而非从 md 读：这里钉的是「这种写法」被识别，与哪份策略用它无关。
  */
 const ASK_ON_READ_MATCH =
   '!inDir(object.path, vars.workspace)' +

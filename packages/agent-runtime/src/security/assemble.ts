@@ -140,6 +140,62 @@ export function mergePolicyFiles(
 }
 
 /**
+ * 生效策略集里一条策略的一个 let 的值 —— 宿主拿策略里的清单去做策略引擎之外的事：桌面命令沙箱
+ * 拒读拒写的凭据清单，读的就是 protect-credentials 的 `credentialDirs`。与装配同一份生效集
+ * （mergePolicyFiles：用户同名覆盖压过内置）、同一个求值器（evaluateLet），所以覆盖副本改了
+ * 清单，文件工具与命令两边一起变；覆盖掉整条策略或删掉这个 let，两边一起不管。
+ *
+ * 策略不在生效集里、没有这个 let → `undefined`（「策略没说」）；**规则被清空的策略同样算没说** ——
+ * 空 rules 的同名覆盖是移除一道门的约定写法，留着 let 不该让另一面照旧拦。求值出错同样返回
+ * `undefined` 并记一条警告 —— 由调用方决定怎么对待「没说」。
+ *
+ * `fallbackToBuiltinOnError`：**用户覆盖**的 let 求值出错时改取出厂那份的值。「没写」是用户的决定，
+ * 「写错了」不是 —— 策略引擎那一面会把出错当作命中（照样问、照样拒），拿清单去做别的事的一面
+ * （命令沙箱的凭据清单）也不该因为一处笔误就什么都不管。
+ */
+export function resolvePolicyLet(
+  provider: Pick<
+    SecurityHostProvider,
+    'readBuiltinPolicyMd' | 'getUserPolicies' | 'getLanguage' | 'pathSep' | 'logger'
+  >,
+  policyName: string,
+  letName: string,
+  vars: Record<string, PolicyVarValue>,
+  options: { fallbackToBuiltinOnError?: boolean } = {}
+): unknown {
+  const readMd = provider.readBuiltinPolicyMd
+  if (!readMd) {
+    throw new Error('SecurityHostProvider.readBuiltinPolicyMd is required to resolve a policy let')
+  }
+  const builtins = buildBuiltinPolicies({ language: provider.getLanguage?.(), readMd })
+  const entry = mergePolicyFiles(builtins, provider.getUserPolicies?.() ?? []).find(
+    ({ policy }) => policy.name === policyName
+  )
+  if (!entry || entry.policy.rules.length === 0) return undefined
+  const expr = entry.policy.lets?.[letName]
+  if (expr === undefined) return undefined
+  try {
+    return evaluateLet(expr, vars, provider.pathSep)
+  } catch (e) {
+    const fallback =
+      options.fallbackToBuiltinOnError && entry.sourceKind === 'user'
+        ? builtins.find((p) => p.name === policyName)?.lets?.[letName]
+        : undefined
+    provider.logger?.warn(
+      `security policy '${policyName}': let '${letName}' evaluation failed ` +
+        `(${e instanceof Error ? e.message : e})` +
+        (fallback !== undefined ? '; using the builtin value instead' : '')
+    )
+    if (fallback === undefined) return undefined
+    try {
+      return evaluateLet(fallback, vars, provider.pathSep)
+    } catch {
+      return undefined
+    }
+  }
+}
+
+/**
  * 装配当前会话此刻的完整规则集（每次评估现装配 —— 决策新鲜度优先，不缓存快照）。
  *
  * `vars` 由调用方传入，好让 match（evaluate 的 opts.vars）与 lets（这里）**用同一份**：

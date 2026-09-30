@@ -12,6 +12,7 @@
 import { spawnSync } from 'child_process'
 import { existsSync, realpathSync } from 'fs'
 import { tmpdir } from 'os'
+import { join } from 'path'
 import type { ShellInvocation } from '../../../../utils/toolUtils/shell'
 import { buildSandboxSpec } from '../../spec'
 import type { ProbeResult, SandboxBackend, SandboxHostPaths, SandboxSpec } from '../../types'
@@ -43,7 +44,12 @@ export function createSeatbeltBackend(): SandboxBackend {
       }
       const built = buildSandboxSpec(
         paths,
-        { sessionId: 'probe', workingDirectory: workspace, grantedWrite: [], grantedRead: [] },
+        {
+          sessionId: 'probe',
+          workingDirectory: workspace,
+          grantedWrite: [],
+          credentialPaths: [join(paths.home, '.ssh')]
+        },
         (p) => p
       )
       if (!built.ok) return { available: false, reason: `probe spec rejected: ${built.reason}` }

@@ -28,6 +28,7 @@ import {
   POLICY_RULES_KEY,
   POLICY_LETS_KEY,
   POLICY_SCOPE_KEY,
+  BUILTIN_POLICY_SPECS,
   type BundleFile,
   type KnowledgeConcept
 } from '@shuvix/agent-runtime'
@@ -39,6 +40,7 @@ import {
   type OkfStatus
 } from '@shuvix/chat-protocol/knowledge'
 import { SELECTABLE_THINKING_LEVELS } from '@shuvix/chat-protocol/types/thinking'
+import { INACTIVE_VIEW } from '../../sandbox/types'
 const HERE = dirname(fileURLToPath(import.meta.url))
 /** `…/apps/desktop/src/main/services/knowledge/__tests__` 往上七层 */
 const REPO_ROOT = resolve(HERE, '../../../../../../..')
@@ -360,5 +362,65 @@ describe.each(LANGS)('BK 内置知识库 · %s', (lang) => {
     for (const level of SELECTABLE_THINKING_LEVELS) {
       expect(rows[0], level).toContain(`\`${level}\``)
     }
+  })
+  /**
+   * BK-18 / BK-19 —— policy-md.md 抄着两份事实：内置策略的清单（名字 + 份数）与宿主变量表里沙箱的那几行。
+   * 策略删了一份（2026-09-30 删了 ask-on-read）、沙箱的策略变量少了两个（sandboxReadDenied /
+   * sandboxReadAllowed）时说明书不跟，就是在教用户去覆盖一份不存在的策略、引用一个永远没值的变量。
+   * 事实源：BUILTIN_POLICY_SPECS 与 sandbox 的 INACTIVE_VIEW（桌面 getVars 恒展开它的键）。
+   */
+  const POLICY_SECTION_HEADING: Record<string, string> = {
+    en: '## Builtin policies',
+    zh: '## 内置策略',
+    ja: '## 組み込みポリシー'
+  }
+  /** 内置策略份数在正文里的写法（份数一变这张表先红，提醒把说明书的那个数一起改） */
+  const POLICY_COUNT_WORD: Record<number, Record<string, string>> = {
+    12: { en: 'Twelve', zh: '十二', ja: '十二' }
+  }
+
+  /** 从某个标题起、到下一个同级或更高标题为止的那一段 */
+  const sectionFrom = (body: string, heading: string): string => {
+    const lines = body.split('\n')
+    const start = lines.findIndex((l) => l.trim() === heading || l.startsWith(`${heading} `))
+    expect(start, `${lang}: 找不到标题 ${heading}`).toBeGreaterThanOrEqual(0)
+    const level = heading.match(/^#+/)![0].length
+    const rest = lines.slice(start + 1)
+    const end = rest.findIndex((l) => {
+      const m = /^(#+) /.exec(l)
+      return m !== null && m[1].length <= level
+    })
+    return (end < 0 ? rest : rest.slice(0, end)).join('\n')
+  }
+
+  /** 表格行第一格里用反引号圈出来的名字（一格里有两个名字的，两个都算） */
+  const firstCellNames = (section: string): string[] =>
+    section
+      .split('\n')
+      .filter((l) => l.startsWith('| `'))
+      .flatMap((l) => [...l.split('|')[1].matchAll(/`([^`]+)`/g)].map((m) => m[1]))
+
+  it('BK-18 policy-md.md「内置策略」那张表列的恰是 BUILTIN_POLICY_SPECS（没有 ask-on-read），开头那句的份数也对', () => {
+    const section = sectionFrom(conceptOf('policy-md.md').body, POLICY_SECTION_HEADING[lang])
+    const listed = firstCellNames(section)
+    const expected = BUILTIN_POLICY_SPECS.map((s) => s.name)
+    expect(new Set(listed).size, `${lang}: 表里有重复的行`).toBe(listed.length)
+    expect([...listed].sort()).toEqual([...expected].sort())
+    expect(listed).not.toContain('ask-on-read')
+
+    const word = POLICY_COUNT_WORD[BUILTIN_POLICY_SPECS.length]?.[lang]
+    expect(
+      word,
+      `份数 ${BUILTIN_POLICY_SPECS.length} 在 ${lang} 里怎么写？补 POLICY_COUNT_WORD`
+    ).toBeDefined()
+    const intro = section.split('\n| ')[0]
+    expect(intro, `${lang}: 表格前那句应当写 ${word}`).toContain(word!)
+  })
+
+  it('BK-19 policy-md.md 变量表里以 sandbox 开头的行 = 桌面沙箱视图的键（没有 sandboxReadDenied / sandboxReadAllowed）', () => {
+    const section = sectionFrom(conceptOf('policy-md.md').body, '### `vars`')
+    const sandboxRows = firstCellNames(section).filter((name) => name.startsWith('sandbox'))
+    expect([...sandboxRows].sort()).toEqual(Object.keys(INACTIVE_VIEW).sort())
+    expect(conceptOf('policy-md.md').body).not.toMatch(/sandboxRead(Denied|Allowed)/)
   })
 })

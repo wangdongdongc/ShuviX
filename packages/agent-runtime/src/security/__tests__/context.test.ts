@@ -22,12 +22,14 @@ import type {
   SecurityContext,
   SecurityHostProvider,
   SecurityObject,
-  UrlObjectInput
+  UrlObjectInput,
+  UserPolicyFile
 } from '../types'
 import type { ShellFacts } from '../shell'
 import { createInlinePolicyMdReader } from '../builtinPolicies/inlineSources'
 import { buildBuiltinPolicies } from '../builtinPolicies'
 import { parsePolicyDefinitionFile } from '../policyFile'
+import { assembleRules, resolvePolicyFiles } from '../assemble'
 
 /** 内置策略 md 的构建期内联读取口（运行时单测的宿主接缝；桌面/扩展各注入自己的） */
 const INLINE_POLICY_MD = createInlinePolicyMdReader()
@@ -80,8 +82,6 @@ function makeProvider(
       sandboxWritableRoots: [],
       sandboxWriteDenied: [],
       sandboxProtectedPatterns: [],
-      sandboxReadDenied: [],
-      sandboxReadAllowed: [],
       // 与沙箱无关的工作区写入视图：这里给「不豁免」的一组
       workspaceWritable: [],
       workspaceWriteDenied: [],
@@ -116,9 +116,9 @@ describe('createSecurityContext', () => {
     expect(ctx.evaluateReadOnly('read', credential, { includeForceAllow: true })).toBe(true)
     expect(typeof ctx.evaluateReadOnly('read', credential)).toBe('boolean')
 
-    // 工作区内读取自由（ask-on-read 的取反放过）；工作区外被内置读取门拦下
+    // 读取只有凭据位置有门：工作区内外都放行
     expect(ctx.evaluateReadOnly('read', { type: 'path', path: '/ws/f.txt' })).toBe(true)
-    expect(ctx.evaluateReadOnly('read', { type: 'path', path: '/outside/f.txt' })).toBe(false)
+    expect(ctx.evaluateReadOnly('read', { type: 'path', path: '/outside/f.txt' })).toBe(true)
   })
 
   it('CT-2 enforcePath 以 mode 为 action、displayPath 进入展示；enforceCommand/enforceGitOp action=execute', async () => {
@@ -194,7 +194,7 @@ describe('createSecurityContext', () => {
   })
 
   it('CT-W1 端到端旗舰：match 取反工作区的 ask 门 —— 工作区内 allow、区外 ask（vars 流入 match 上下文）', () => {
-    // 用户策略同名覆盖内置 ask-on-read（收紧为只看 workspace）——覆盖+match 一并验证
+    // 用户自己的读取门（只放过 workspace）—— vars 流入 match 上下文
     const ctx = createSecurityContext(
       SUBJECT,
       ENVIRONMENT,
@@ -203,8 +203,8 @@ describe('createSecurityContext', () => {
         {
           getUserPolicies: () => [
             {
-              name: 'ask-on-read',
-              displayName: 'ask-on-read',
+              name: 'ask-outside-workspace',
+              displayName: 'ask-outside-workspace',
               description: '',
               rules: [
                 {
@@ -226,8 +226,8 @@ describe('createSecurityContext', () => {
 
     const outside = ctx.evaluate('read', { type: 'path', path: '/outside/f.txt' })
     expect(outside.effect).toBe('ask')
-    expect(outside.winning).toBe('ask-on-read#0')
-    expect(outside.matched.filter((id) => id.startsWith('ask-on-read'))).toEqual(['ask-on-read#0'])
+    expect(outside.winning).toBe('ask-outside-workspace#0')
+    expect(outside.matched).toEqual(['ask-outside-workspace#0'])
   })
 
   it('CT-W2 provider.logger.warn 收到 fail-safe 告警（含 <policy>#<index> 规则 id）', () => {
@@ -1332,33 +1332,33 @@ describe('createSecurityContext — 用户策略的 force-allow（端到端）',
       makeProvider(grants, { getUserPolicies: () => policies })
     )
 
-  it('CU-1 旗舰：用户 force-allow 局部放宽读取门 —— /data 读放行归因用户规则，区外读与 /data 写照旧 ask', () => {
+  it('CU-1 旗舰：用户 force-allow 局部放宽凭据读取门 —— ~/.aws 读放行归因用户规则，别的凭据读与 ~/.aws 写照旧', () => {
     const ctx = contextWith([
-      pathPolicy('trust-data', [
+      pathPolicy('trust-aws', [
         {
           effect: 'force-allow',
           conditions: { action: ['read'] },
-          match: "inDir(object.path, '/data')"
+          match: "inDir(object.path, '/home/u/.aws')"
         }
       ])
     ])
 
-    // /data 读：force-allow 压过内置 ask-on-read → allow，归因到用户规则
-    const granted = ctx.evaluate('read', { type: 'path', path: '/data/x.txt' })
+    // ~/.aws 读：force-allow 压过内置 protect-credentials 的读询问 → allow，归因到用户规则
+    const granted = ctx.evaluate('read', { type: 'path', path: '/home/u/.aws/config' })
     expect(granted.effect).toBe('allow')
-    expect(granted.winning).toBe('trust-data#0')
-    // 门没被拆掉，只是被压过 —— ask-on-read 仍在 matched 里（决策日志据此回链）
-    expect(granted.matched).toContain('ask-on-read#0')
+    expect(granted.winning).toBe('trust-aws#0')
+    // 门没被拆掉，只是被压过 —— protect-credentials#1 仍在 matched 里（决策日志据此回链）
+    expect(granted.matched).toContain('protect-credentials#1')
 
-    // 放宽是局部的：策略没提的路径仍归内置读取门管
-    const elsewhere = ctx.evaluate('read', { type: 'path', path: '/elsewhere/f.txt' })
+    // 放宽是局部的：策略没提的凭据路径仍归内置读取门管
+    const elsewhere = ctx.evaluate('read', { type: 'path', path: '/home/u/.ssh/config' })
     expect(elsewhere.effect).toBe('ask')
-    expect(elsewhere.winning).toBe('ask-on-read#0')
+    expect(elsewhere.winning).toBe('protect-credentials#1')
 
-    // 放宽是按 action 的：同一目录的写入不受这条 read force-allow 影响
-    const write = ctx.evaluate('write', { type: 'path', path: '/data/x.txt' })
-    expect(write.effect).toBe('ask')
-    expect(write.winning).toBe('ask-on-write#0')
+    // 放宽是按 action 的：同一目录的写入不受这条 read force-allow 影响（凭据写照拒）
+    const write = ctx.evaluate('write', { type: 'path', path: '/home/u/.aws/config' })
+    expect(write.effect).toBe('deny')
+    expect(write.winning).toBe('protect-credentials#0')
   })
 
   it('CU-2 用户 force-allow 压不过内置 deny：~/.ssh 写入仍 deny，归因 protect-credentials#0', () => {
@@ -1431,15 +1431,15 @@ describe('createSecurityContext — 用户策略的 force-allow（端到端）',
 
   it('CU-4 evaluateReadOnly 缺省丢弃所有 force-allow（用户策略也不例外）；{includeForceAllow:true} 翻转', () => {
     const ctx = contextWith([
-      pathPolicy('trust-data', [
+      pathPolicy('trust-aws', [
         {
           effect: 'force-allow',
           conditions: { action: ['read'] },
-          match: "inDir(object.path, '/data')"
+          match: "inDir(object.path, '/home/u/.aws')"
         }
       ])
     ])
-    const target: SecurityObject = { type: 'path', path: '/data/x.txt' }
+    const target: SecurityObject = { type: 'path', path: '/home/u/.aws/config' }
 
     // 按 tier 过滤而非按来源：用户 md 里写死的 force-allow 同样被丢弃（EvaluateOpts 的显式契约）
     expect(ctx.evaluateReadOnly('read', target)).toBe(false)
@@ -2919,12 +2919,12 @@ describe('createSecurityContext — 无返回值的门强制 onOther:throw', () 
 
   it('CT-O1 enforcePath：传了 onOther:return，反馈照样抛成「declined access」', async () => {
     const { ctx, requestUserInput } = feedbackContext()
-    // 工作区外的读 → 内置 ask-on-read 问
+    // 工作区外的写 → 内置 ask-on-write 问
     expect(
       await rejectionOf(
-        ctx.enforcePath('read', '/outside/f.txt', {
+        ctx.enforcePath('write', '/outside/f.txt', {
           toolCallId: 'o1',
-          toolName: 'read',
+          toolName: 'write',
           onOther: 'return'
         })
       )
@@ -3101,18 +3101,18 @@ describe('createSecurityContext — 真实路径（provider.realPath）', () => 
       })
     )
 
-    const decision = ctx.evaluate('read', { type: 'path', path: '/outside/f.txt' })
-    expect(decision).toMatchObject({ effect: 'ask', winning: 'ask-on-read#0' })
+    const decision = ctx.evaluate('write', { type: 'path', path: '/outside/f.txt' })
+    expect(decision).toMatchObject({ effect: 'ask', winning: 'ask-on-write#0' })
     expect(decision.ask).toEqual({
-      command: 'Read(/outside/f.txt)',
-      rememberEntry: 'Read(/outside/f.txt)'
+      command: 'Write(/outside/f.txt)',
+      rememberEntry: 'Write(/outside/f.txt)'
     })
     expect(decision.ask).not.toHaveProperty('requestedPath')
     expect(probe.seen()).toMatchObject({ path: '/outside/f.txt', requestedPath: '/outside/f.txt' })
 
-    await ctx.enforcePath('read', '/outside/f.txt', { toolCallId: 'r2', toolName: 'read' })
+    await ctx.enforcePath('write', '/outside/f.txt', { toolCallId: 'r2', toolName: 'write' })
     const request = requestUserInput.mock.calls[0][0] as AskInputRequest
-    expect(request.command).toBe('Read(/outside/f.txt)')
+    expect(request.command).toBe('Write(/outside/f.txt)')
     expect(request.requestedPath).toBeUndefined()
     expect(getSessionDecisions(SID)[0].requestedPath).toBeUndefined()
   })
@@ -3168,20 +3168,21 @@ describe('createSecurityContext — 真实路径（provider.realPath）', () => 
     }
   })
 
-  it('CT-R4 evaluateReadOnly（被动 UI）同样按真实去处判：区内的链接指向凭据 → 不放行；区外的写法实际落在区内 → 放行', () => {
-    const table = { [KEY_LINK]: KEY_REAL, '/elsewhere/alias': '/ws/f.txt' }
+  it('CT-R4 evaluateReadOnly（被动 UI）同样按真实去处判：区内的链接指向凭据 → 不放行；凭据目录里的写法实际落在区内 → 放行', () => {
+    const ALIAS = '/home/u/.ssh/alias'
+    const table = { [KEY_LINK]: KEY_REAL, [ALIAS]: '/ws/f.txt' }
     const located = createSecurityContext(
       SUBJECT,
       ENVIRONMENT,
       makeProvider(NO_GRANTS(), { realPath: tableResolver(table) })
     )
     expect(located.evaluateReadOnly('read', { type: 'path', path: KEY_LINK })).toBe(false)
-    expect(located.evaluateReadOnly('read', { type: 'path', path: '/elsewhere/alias' })).toBe(true)
+    expect(located.evaluateReadOnly('read', { type: 'path', path: ALIAS })).toBe(true)
 
     // 同两条在不给解析器的宿主上按写法：结论正相反
     const written = createSecurityContext(SUBJECT, ENVIRONMENT, makeProvider(NO_GRANTS()))
     expect(written.evaluateReadOnly('read', { type: 'path', path: KEY_LINK })).toBe(true)
-    expect(written.evaluateReadOnly('read', { type: 'path', path: '/elsewhere/alias' })).toBe(false)
+    expect(written.evaluateReadOnly('read', { type: 'path', path: ALIAS })).toBe(false)
   })
 
   it('CT-R5 一次评估里每个参数至多解析一次：客体路径被一串内置规则引用、同一个目录被两条规则引用，都只问一次', () => {
@@ -3285,15 +3286,16 @@ describe('createSecurityContext — 真实路径（provider.realPath）', () => 
       []
     )
 
-    // 目录（vars.workspace）解析不了：那个目录按写法比 —— 区内读照旧放行
+    // 目录（protect-credentials 的 credentialDirs 里的 ~/.ssh）解析不了：那个目录按写法比 ——
+    // 凭据读照旧问
     warn.mockClear()
-    const dirFails = contextFor(failing('/ws'))
-    expect(dirFails.evaluate('read', { type: 'path', path: '/ws/f.txt' })).toMatchObject({
-      effect: 'allow',
-      winning: 'default:path'
+    const dirFails = contextFor(failing('/home/u/.ssh'))
+    expect(dirFails.evaluate('read', { type: 'path', path: '/home/u/.ssh/id_rsa' })).toMatchObject({
+      effect: 'ask',
+      winning: 'protect-credentials#1'
     })
     expect(realPathWarnings()).toHaveLength(1)
-    expect(realPathWarnings()[0]).toContain('/ws')
+    expect(realPathWarnings()[0]).toContain('/home/u/.ssh')
   })
 
   it("CT-R8 解析器给回空串（或非字符串）：当作解析不了、按写法比较 —— 不崩，也不因 '' 前缀命中一切而凭空多出 deny / ask", () => {
@@ -3353,11 +3355,11 @@ describe('createSecurityContext — 真实路径（provider.realPath）', () => 
 
     expect(
       await rejectionOf(
-        ctx.enforcePath('read', '/outside/f.txt', { toolCallId: 'r9', toolName: 'read' })
+        ctx.enforcePath('write', '/outside/f.txt', { toolCallId: 'r9', toolName: 'write' })
       )
     ).toBe('User denied access to /outside/f.txt')
     const request = requestUserInput.mock.calls[0][0] as AskInputRequest
-    expect(request.command).toBe('Read(/outside/f.txt)')
+    expect(request.command).toBe('Write(/outside/f.txt)')
     expect(request.requestedPath).toBeUndefined()
     for (const record of getSessionDecisions(SID)) expect(record.requestedPath).toBeUndefined()
   })
@@ -3652,7 +3654,9 @@ describe('createSecurityContext — 询问点的审查（onPermissionRequest）'
     const outside: SecurityObject = { type: 'path', path: '/outside/a' }
     expect(h.ctx.evaluate('write', outside)).toMatchObject({ effect: 'ask', tier: 'ask' })
     expect(h.ctx.evaluateReadOnly('write', outside)).toBe(false)
-    expect(h.ctx.evaluateReadOnly('read', outside)).toBe(false)
+    expect(h.ctx.evaluateReadOnly('read', { type: 'path', path: '/home/u/.ssh/config' })).toBe(
+      false
+    )
     expect(
       h.ctx.evaluate('execute', {
         type: 'command',
@@ -3872,5 +3876,197 @@ describe('createSecurityContext — 询问点的审查（onPermissionRequest）'
     expect(notProvided[0]).toContain("'protect-shuvix-config'")
     expect(notProvided[0]).toContain('vars.shuvixConfigDirs')
     expect(lines.filter((m) => m.includes('match evaluation failed'))).toHaveLength(0)
+  })
+})
+
+/**
+ * ask-on-read 不再是内置策略：这个名字从此只是用户自己的一份普通策略。
+ *  - CX-U1 用户写了一份叫 ask-on-read 的：它不遮蔽任何东西、也不被任何东西遮蔽，按它自己的规则判；
+ *  - CX-U2 用户手里留着退役前那份出厂文件的原样副本：照样是合法的用户策略；沙箱关着时它的
+ *    「工作区外的读要问」照常生效（归因到用户那份）；沙箱开着时它引用的 sandboxRead* 两个变量
+ *    宿主已不再提供 —— 退化成「不问」，不 throw。缺的变量在装配时就被绑空（两支都绑，与走哪一支
+ *    无关），每个至多记一行。钉住这个退化行为。
+ */
+describe('createSecurityContext — 用户自己的 ask-on-read', () => {
+  const NO_GRANTS = { autoAllow: false, allowList: [] as string[] }
+
+  /** 退役前的出厂 ask-on-read.md 原样（git show HEAD:…/builtinPolicies/md/ask-on-read.md） */
+  const RETIRED_ASK_ON_READ = [
+    '---',
+    'shuvix: policy v1',
+    'shuvix-builtin: true',
+    'name: ask-on-read',
+    'shuvix-displayName: Ask Before Reading a File',
+    "description: Reads outside the workspace and the app's read-only dirs ask first; while the sandbox is on, only the sensitive places a confined command cannot read ask.",
+    'shuvix-policy-scope:',
+    '  subject.kind: [agent]',
+    '  object.type: [path]',
+    '  env.host: [desktop]',
+    'shuvix-policy-rules:',
+    '  - effect: ask',
+    '    action: [read]',
+    '    match: >-',
+    '      has(vars.sandboxActive) && vars.sandboxActive',
+    '      ? inDir(object.path, vars.sandboxReadDenied)',
+    '      && !inDir(object.path, vars.sandboxReadAllowed)',
+    '      : !inDir(object.path, vars.workspace)',
+    '      && !inDir(object.path, vars.toolResultsBase)',
+    '      && !inDir(object.path, vars.skillsDirs)',
+    '      && !inDir(object.path, vars.memoryDirs)',
+    '      && !inDir(object.path, vars.builtinKnowledgeDir)',
+    '      && !inDir(object.path, vars.sessionArtifactsDir)',
+    '    prompt: Reading this file pulls it into the model context, where later turns and tool calls can carry it further.',
+    '---',
+    '',
+    "**What it does** depends on whether this session's commands run in the",
+    'sandbox.',
+    '',
+    '- **Sandbox on**: a confined command can read almost anything, so the file',
+    '  tools do too — asking `read` for a file `cat` gets for free would only',
+    '  push the agent toward `cat`. What still asks is the one list the sandbox',
+    "  refuses to commands: ShuviX's own data (other conversations, the database,",
+    '  the credential key), your personal folders (Documents, Desktop, Downloads,',
+    "  Pictures, Movies, Music, iCloud Drive, Mail, Messages, Safari, other apps'",
+    '  containers) and the credential directories. The working directory and this',
+    "  session's own tool results stay free even when they sit inside one of",
+    '  those folders.',
+    '- **Sandbox off** (or not available here): the agent reads freely inside',
+    "  your working directory and the app's read-only directories — tool results,",
+    "  skills, project memories, ShuviX's own built-in knowledge base (reading",
+    "  that reference is what it is shipped for) and this conversation's own",
+    '  artifacts. Anything outside that range asks first.',
+    '',
+    '**What it does not do**:',
+    '',
+    '- It gates the file tools only; commands are governed by ask-on-command and',
+    '  the sandbox.',
+    '- This policy does not analyze how sensitive a file is beyond those lists.',
+    '- It does not always reach you: with the automatic review on, a reviewing',
+    '  agent answers first — it lets ordinary work through, refuses what is',
+    '  clearly harmful and puts the rest in front of you with its opinion.',
+    '- Once you turn the auto-allow switch on, another builtin policy —',
+    '  session-grants — takes over and skips the ask.',
+    '',
+    '**To adjust**: create an override copy and edit it. Replacing the `match`',
+    'with its part after `:` restores "outside the workspace asks", sandbox or',
+    'not.',
+    ''
+  ].join('\n')
+
+  const loggerSpy = (): {
+    warn: Mock<(msg: string) => void>
+    logger: NonNullable<SecurityHostProvider['logger']>
+  } => {
+    const warn = vi.fn<(msg: string) => void>()
+    return { warn, logger: { info: vi.fn(), warn, error: vi.fn() } }
+  }
+
+  /**
+   * 宿主不再提供 sandboxReadDenied / sandboxReadAllowed：装配时替缺的目录变量绑空并各记一行 ——
+   * 每个至多一行（按 logger 去重）、只点名这两个、没有别的告警（fail-safe 之类）
+   */
+  const expectOnlyRetiredVarWarnings = (warn: Mock<(msg: string) => void>): void => {
+    const lines = warn.mock.calls.map((c) => String(c[0]))
+    const notProvided = lines.filter((m) => m.includes('is not provided by the host'))
+    for (const name of ['sandboxReadDenied', 'sandboxReadAllowed']) {
+      expect(
+        notProvided.filter((m) => m.includes(`vars.${name} `)).length,
+        name
+      ).toBeLessThanOrEqual(1)
+    }
+    for (const line of notProvided) {
+      expect(line).toContain("'ask-on-read'")
+      expect(line).toMatch(/vars\.sandboxRead(Denied|Allowed) /)
+    }
+    expect(lines).toEqual(notProvided)
+  }
+
+  it('CX-U1 用户文件 ask-on-read.md 是一份普通用户策略：裁决里只有它一份（没有同名内置、不被遮蔽）；规则 ask-on-read#0 归用户；/data 里的读问、别处放行', () => {
+    const own: UserPolicyFile = {
+      ...userPolicy('ask-on-read', [
+        {
+          effect: 'ask',
+          conditions: { action: ['read'] },
+          match: "inDir(object.path, '/data')"
+        }
+      ]),
+      fileName: 'ask-on-read.md'
+    }
+    const provider = makeProvider(NO_GRANTS, { getUserPolicies: () => [own] })
+
+    const named = resolvePolicyFiles(
+      buildBuiltinPolicies({ readMd: INLINE_POLICY_MD }),
+      provider.getUserPolicies!()
+    ).filter((entry) => entry.policy.name === 'ask-on-read')
+    expect(named).toHaveLength(1)
+    expect(named[0].sourceKind).toBe('user')
+    expect(named[0].fileName).toBe('ask-on-read.md')
+    expect(named[0].shadowedBy).toBeUndefined()
+
+    const own0 = assembleRules(provider).filter((r) => r.source.policy === 'ask-on-read')
+    expect(own0.map((r) => [r.id, r.source.kind])).toEqual([['ask-on-read#0', 'user']])
+
+    const ctx = createSecurityContext(SUBJECT, ENVIRONMENT, provider)
+    const inside = ctx.evaluate('read', { type: 'path', path: '/data/x' })
+    expect({ effect: inside.effect, winning: inside.winning }).toEqual({
+      effect: 'ask',
+      winning: 'ask-on-read#0'
+    })
+    const outside = ctx.evaluate('read', { type: 'path', path: '/other/x' })
+    expect({ effect: outside.effect, winning: outside.winning, matched: outside.matched }).toEqual({
+      effect: 'allow',
+      winning: 'default:path',
+      matched: []
+    })
+  })
+
+  it('CX-U2 退役前那份出厂文件的原样副本：是合法的用户策略；沙箱关着 → 工作区外的读问（归因用户 ask-on-read#0）；沙箱开着且没有 sandboxRead* → 放行、不 throw、缺的变量各至多一行告警', () => {
+    const parsed = parsePolicyDefinitionFile(RETIRED_ASK_ON_READ, 'ask-on-read')
+    expect(parsed).not.toBeNull()
+    expect(parsed!.name).toBe('ask-on-read')
+    expect(parsed!.rules).toHaveLength(1)
+    const copy: UserPolicyFile = { ...parsed!, fileName: 'ask-on-read.md' }
+
+    // ① 沙箱关着（宿主给 sandboxActive:false、有 workspace）：退役前「工作区外要问」的那一支
+    {
+      const { warn, logger } = loggerSpy()
+      const provider = makeProvider(NO_GRANTS, { logger, getUserPolicies: () => [copy] })
+      const ctx = createSecurityContext(SUBJECT, ENVIRONMENT, provider)
+      const outside = ctx.evaluate('read', { type: 'path', path: '/outside/f.txt' })
+      expect({ effect: outside.effect, winning: outside.winning }).toEqual({
+        effect: 'ask',
+        winning: 'ask-on-read#0'
+      })
+      expect(assembleRules(provider).find((r) => r.id === 'ask-on-read#0')?.source.kind).toBe(
+        'user'
+      )
+      expect(ctx.evaluate('read', { type: 'path', path: '/ws/f.txt' }).effect).toBe('allow')
+      expectOnlyRetiredVarWarnings(warn)
+    }
+
+    // ② 沙箱开着、宿主不再给 sandboxReadDenied / sandboxReadAllowed：退化成不问
+    {
+      const { warn, logger } = loggerSpy()
+      const base = makeProvider(NO_GRANTS)
+      const provider = makeProvider(NO_GRANTS, {
+        logger,
+        getVars: () => ({ ...base.getVars(), sandboxActive: true }),
+        getUserPolicies: () => [copy]
+      })
+      const ctx = createSecurityContext(SUBJECT, ENVIRONMENT, provider)
+      for (const path of ['/outside/f.txt', '/home/u/Documents/a', '/ws/f.txt', '/etc/hosts']) {
+        let decision: ReturnType<SecurityContext['evaluate']> | undefined
+        expect(() => {
+          decision = ctx.evaluate('read', { type: 'path', path })
+        }, path).not.toThrow()
+        expect({ path, effect: decision!.effect, matched: decision!.matched }).toEqual({
+          path,
+          effect: 'allow',
+          matched: []
+        })
+      }
+      expectOnlyRetiredVarWarnings(warn)
+      expect(warn).toHaveBeenCalled()
+    }
   })
 })

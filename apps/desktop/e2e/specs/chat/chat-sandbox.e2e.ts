@@ -4,7 +4,7 @@
  *  - E2E-1 受限命令不问就跑：能写工作区、TMPDIR 指向本会话临时目录；被沙箱拦下的写入
  *    在结果里带一段 `[sandbox]` 说明（点名路径、教模型用 dangerouslyDisableSandbox）；
  *  - E2E-2 申请完全访问的命令要问、卡片上有「完全访问」标签；拒绝 → 没跑；允许 → 真的不受限；
- *  - E2E-3 文件工具跟着沙箱走：工作区里的写不问，工作区顶层的 .vscode 照问；
+ *  - E2E-3 文件工具跟着沙箱走：工作区里的写不问，git 自己的元数据（.git/hooks）照问；
  *  - E2E-4 按会话固定：会话中途关掉开关，已在跑的会话照旧受限；新会话按新值（逐条询问、无标签）；
  *  - E2E-5（FU-8）受限命令停本会话的后台任务：`shuvix task stop <pid>` 整条链路在沙箱里走得通
  *    （读 cli-token、连 cli.sock、Electron 以 node 模式起）；停了不回头通知；别的 pid 找不到、退出 1；
@@ -12,14 +12,22 @@
  *    那份命令（sandbox-exec 包装、TMPDIR 等变量、会话 id、原命令）经 IPC 取得到、坏的会话 id / 调用 id
  *    取不到；卡片展开后才出标记与开关，点开显示的就是 IPC 那份；切走再切回照旧；
  *  - E2E-7 沙箱关着 + 一条没跑起来的命令：拒绝的那条没有记录、落库块没有标记；允许的那条标 disabled，
- *    记录里是裸的 `/bin/bash --norc -c …`（没有 sandbox-exec、没有 TMPDIR）。
+ *    记录里是裸的 `/bin/bash --norc -c …`（没有 sandbox-exec、没有 TMPDIR）；
+ *  - E2E-8 读的那一面：受限命令什么都能读，只有凭据位置（~/.ssh、~/.shuvix/.session-state）读不到、
+ *    结果里带 `cannot read`；read 工具同一个口径 —— 普通文件不问，凭据要问；
+ *  - E2E-9 凭据清单来自生效的 protect-credentials：往 ~/.shuvix/policies 放一份去掉 .aws 的覆盖副本，
+ *    同一会话的下一条命令就能读 ~/.aws（~/.ssh 照拒），read 工具也不问；删掉覆盖又拒回来 ——
+ *    证明 main 的注入（setSandboxCredentialReader）与现读的 policyService 接上了；
+ *  - E2E-10 写的范围两面一致：项目根的 .vscode / .envrc / .claude / .mcp.json 不再受保护 ——
+ *    write 工具不问，受限命令也写得了。
  *
  * 每个用例先看沙箱在这个实例里能不能用（整组测试本身跑在别的沙箱里时 sandbox-exec 嵌套失败），
  * 不能用就 skip。注意 fake HOME 在 /private/tmp 下 —— 它本身是可写根：必须被拒的目标只能挑
  * `~/.shuvix/…` / userData，不能随便挑家目录里的文件。
  */
-import { existsSync, mkdirSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { until } from '../../harness/cdp'
 import { launchApp, type E2EApp } from '../../harness/launch'
@@ -37,6 +45,11 @@ import {
 import { chatPane, sidebarPane, type ChatPane, type SidebarPane } from '../../harness/pages'
 
 const MODEL = 'e2e-model'
+/** 仓库里的内置策略 md（dev 实例读的就是这一份）—— e2e/specs/chat 往上五级是仓库根 */
+const BUILTIN_POLICIES_DIR = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  '../../../../../packages/agent-runtime/src/security/builtinPolicies/md'
+)
 const USAGE = { prompt: 90, completion: 6 }
 
 let app: E2EApp
@@ -106,6 +119,32 @@ const writeCall = (
   args: JSON.stringify({ path, content })
 })
 
+const readCall = (id: string, path: string): { id: string; name: string; args: string } => ({
+  id,
+  name: 'read',
+  args: JSON.stringify({ path })
+})
+
+/** 用户放进 ~/.shuvix/policies 的 protect-credentials 覆盖副本（E2E-9 写、afterEach 兜底删） */
+const credentialOverridePath = (): string =>
+  join(app.home, '.shuvix', 'policies', 'protect-credentials.md')
+
+/** 在会话里发一条消息，脚本化「一串工具调用（一步一个）→ 一句收尾」 */
+async function sendSteps(
+  title: string,
+  calls: Array<{ id: string; name: string; args: string }>,
+  prompt: string
+): Promise<void> {
+  provider.reset()
+  provider.script(...calls.map((call) => ({ toolCalls: [call], usage: USAGE })), {
+    text: 'done',
+    usage: USAGE
+  })
+  expect(await sidebar.openSession(title)).toBe(true)
+  await chat.ready()
+  await chat.typeAndSend(prompt)
+}
+
 /** 在会话里发一条消息，脚本化「一次工具调用 → 一句收尾」 */
 async function sendTurn(
   title: string,
@@ -161,6 +200,9 @@ beforeAll(async () => {
   sids.stop = await createSession('S-stop', project.id)
   sids.inv = await createSession('S-inv', project.id)
   sids.off = await createSession('S-off', project.id)
+  sids.reads = await createSession('S-reads', project.id)
+  sids.override = await createSession('S-override', project.id)
+  sids.parity = await createSession('S-parity', project.id)
 
   chat = chatPane(app.main)
   sidebar = sidebarPane(app.main)
@@ -174,6 +216,8 @@ beforeAll(async () => {
 afterEach(async () => {
   // E2E-4 会关掉开关；无论成败都还原
   await setSandboxEnabled(app.main, true)
+  // E2E-9 会放一份凭据策略的覆盖副本；无论成败都删掉，别让它漏进后面的用例
+  rmSync(credentialOverridePath(), { force: true })
 })
 
 afterAll(async () => {
@@ -271,7 +315,7 @@ describe('E2E-2 申请完全访问：要问，卡片带「完全访问」标签'
 })
 
 describe('E2E-3 文件工具跟着沙箱走', () => {
-  it('E2E-3 工作区里的写不问；工作区顶层的 .vscode 照问，允许后写入', async (ctx) => {
+  it('E2E-3 工作区里的写不问；工作区里的 .git/hooks 照问，允许后写入', async (ctx) => {
     if (!(await sandboxAvailable(app.main))) ctx.skip()
     await events.clear()
 
@@ -283,9 +327,9 @@ describe('E2E-3 文件工具跟着沙箱走', () => {
     expect((await toolEnd(sids.files, 'call_plain')).isError).toBeFalsy()
     expect(readFileSync(plain, 'utf8')).toBe('PLAIN')
 
-    mkdirSync(join(projDir, '.vscode'), { recursive: true })
-    const guarded = join(projDir, '.vscode', 'settings.json')
-    await sendTurn('S-files', writeCall('call_vscode', guarded, '{"x":1}'), 'write settings')
+    mkdirSync(join(projDir, '.git', 'hooks'), { recursive: true })
+    const guarded = join(projDir, '.git', 'hooks', 'pre-commit')
+    await sendTurn('S-files', writeCall('call_hook', guarded, '# hook\n'), 'write hook')
     const ask = await events.waitFor<InputRequestEvent>('input_request', {
       sessionId: sids.files
     })
@@ -294,8 +338,8 @@ describe('E2E-3 文件工具跟着沙箱走', () => {
     await answer(sids.files, ask.request.id, true)
     await events.waitFor('agent_end', { sessionId: sids.files })
     await chat.waitIdle()
-    expect((await toolEnd(sids.files, 'call_vscode')).isError).toBeFalsy()
-    expect(readFileSync(guarded, 'utf8')).toBe('{"x":1}')
+    expect((await toolEnd(sids.files, 'call_hook')).isError).toBeFalsy()
+    expect(readFileSync(guarded, 'utf8')).toBe('# hook\n')
   })
 })
 
@@ -518,5 +562,161 @@ describe('E2E-7 沙箱关着 + 一条没跑起来的命令', () => {
     await chat.setToolRowExpanded(1, true)
     expect(await chat.toolRowSandbox(1)).toBe(expected)
     expect(await chat.openToolRowInvocation(1)).toBe(text)
+  })
+})
+
+describe('E2E-8 读的那一面：只有凭据读不到', () => {
+  it('E2E-8 受限命令读 ~/Downloads 不问、照常读到；读 ~/.ssh 与 ~/.shuvix/.session-state 被拒并说明；read 工具读普通文件不问、读凭据要问', async (ctx) => {
+    if (!(await sandboxAvailable(app.main))) ctx.skip()
+    await events.clear()
+    const sid = sids.reads
+    const note = join(app.home, 'Downloads', 'note.txt')
+    const key = join(app.home, '.ssh', 'id_e2e')
+    const state = join(app.home, '.shuvix', '.session-state')
+    mkdirSync(dirname(note), { recursive: true })
+    writeFileSync(note, 'NOTE-E2E\n')
+    mkdirSync(dirname(key), { recursive: true })
+    writeFileSync(key, 'KEY-E2E\n')
+    // 加密 API key 用的密钥：seedFakeProvider 存了一个 key，它必然已经在了
+    expect(existsSync(state)).toBe(true)
+
+    await sendSteps(
+      'S-reads',
+      [
+        bashCall('call_note', 'cat "$HOME/Downloads/note.txt"'),
+        bashCall('call_key', 'cat "$HOME/.ssh/id_e2e"'),
+        bashCall('call_state', 'wc -c "$HOME/.shuvix/.session-state"'),
+        readCall('call_read_note', note)
+      ],
+      'read around'
+    )
+    await events.waitFor('agent_end', { sessionId: sid })
+    await chat.waitIdle()
+    expect(await askCount(sid)).toBe(0)
+
+    const noteOut = String((await toolEnd(sid, 'call_note')).result)
+    expect(noteOut).toContain('NOTE-E2E')
+    expect(noteOut).not.toContain('[sandbox]')
+
+    const keyOut = String((await toolEnd(sid, 'call_key')).result)
+    expect(keyOut).toContain('[Exit code: 1]')
+    expect(keyOut).toContain(`cannot read: ${key}`)
+    expect(keyOut).not.toContain('KEY-E2E')
+
+    const stateOut = String((await toolEnd(sid, 'call_state')).result)
+    expect(stateOut).toContain('[Exit code: 1]')
+    expect(stateOut).toContain(`cannot read: ${state}`)
+
+    const readNote = await toolEnd(sid, 'call_read_note')
+    expect(readNote.isError).toBeFalsy()
+    expect(String(readNote.result)).toContain('NOTE-E2E')
+
+    // read 工具读凭据：protect-credentials 问（拒绝 → 没读到）
+    await events.clear()
+    await sendTurn('S-reads', readCall('call_read_key', key), 'read the key')
+    const ask = await events.waitFor<InputRequestEvent>('input_request', { sessionId: sid })
+    expect(ask.request.unsandboxed).toBeFalsy()
+    await answer(sid, ask.request.id, false)
+    await events.waitFor('agent_end', { sessionId: sid })
+    await chat.waitIdle()
+    const readKey = await toolEnd(sid, 'call_read_key')
+    expect(readKey.isError).toBe(true)
+    expect(String(readKey.result)).not.toContain('KEY-E2E')
+  })
+})
+
+describe('E2E-9 凭据清单来自生效的 protect-credentials', () => {
+  it('E2E-9 覆盖副本去掉 .aws → 同一会话的下一条命令就读得到 ~/.aws（~/.ssh 照拒），read 工具也不问；删掉覆盖 → 又拒', async (ctx) => {
+    if (!(await sandboxAvailable(app.main))) ctx.skip()
+    await events.clear()
+    const sid = sids.override
+    const aws = join(app.home, '.aws', 'credentials')
+    const key = join(app.home, '.ssh', 'id_e2e')
+    mkdirSync(dirname(aws), { recursive: true })
+    writeFileSync(aws, 'AWS-E2E\n')
+    mkdirSync(dirname(key), { recursive: true })
+    writeFileSync(key, 'KEY-E2E\n')
+
+    // ① 出厂清单：~/.aws 读不到
+    await sendTurn('S-override', bashCall('call_aws_1', 'cat "$HOME/.aws/credentials"'), 'aws 1')
+    await events.waitFor('agent_end', { sessionId: sid })
+    await chat.waitIdle()
+    const before = String((await toolEnd(sid, 'call_aws_1')).result)
+    expect(before).toContain('[Exit code: 1]')
+    expect(before).toContain(`cannot read: ${aws}`)
+
+    // ② 用户放一份覆盖副本：出厂 en 原样，只去掉 `'.aws', `
+    const builtin = readFileSync(join(BUILTIN_POLICIES_DIR, 'protect-credentials.md'), 'utf8')
+    const override = builtin.replace("'.aws', ", '')
+    expect(override).not.toBe(builtin)
+    mkdirSync(dirname(credentialOverridePath()), { recursive: true })
+    writeFileSync(credentialOverridePath(), override)
+
+    await sendSteps(
+      'S-override',
+      [
+        bashCall('call_aws_2', 'cat "$HOME/.aws/credentials"'),
+        bashCall('call_key_2', 'cat "$HOME/.ssh/id_e2e"'),
+        readCall('call_read_aws', aws)
+      ],
+      'aws 2'
+    )
+    await events.waitFor('agent_end', { sessionId: sid })
+    await chat.waitIdle()
+    expect(await askCount(sid)).toBe(0)
+    const after = String((await toolEnd(sid, 'call_aws_2')).result)
+    expect(after).toContain('AWS-E2E')
+    expect(after).not.toContain('[sandbox]')
+    const keyOut = String((await toolEnd(sid, 'call_key_2')).result)
+    expect(keyOut).toContain(`cannot read: ${key}`)
+    const readAws = await toolEnd(sid, 'call_read_aws')
+    expect(readAws.isError).toBeFalsy()
+    expect(String(readAws.result)).toContain('AWS-E2E')
+
+    // ③ 删掉覆盖：同一会话，下一条命令又读不到
+    rmSync(credentialOverridePath(), { force: true })
+    await sendTurn('S-override', bashCall('call_aws_3', 'cat "$HOME/.aws/credentials"'), 'aws 3')
+    await events.waitFor('agent_end', { sessionId: sid })
+    await chat.waitIdle()
+    const reverted = String((await toolEnd(sid, 'call_aws_3')).result)
+    expect(reverted).toContain('[Exit code: 1]')
+    expect(reverted).toContain(`cannot read: ${aws}`)
+    expect(await askCount(sid)).toBe(0)
+  })
+})
+
+describe('E2E-10 写的范围两面一致：项目根里别家工具的配置不再受保护', () => {
+  it('E2E-10 write 工具写 .vscode/settings.json 不问；受限命令写 .envrc / .claude/settings.json / .mcp.json 退出 0、不问', async (ctx) => {
+    if (!(await sandboxAvailable(app.main))) ctx.skip()
+    await events.clear()
+    const sid = sids.parity
+    const vscode = join(projDir, '.vscode', 'settings.json')
+
+    await sendSteps(
+      'S-parity',
+      [
+        writeCall('call_vscode', vscode, '{"e2e": true}\n'),
+        bashCall(
+          'call_rootcfg',
+          'printf x > .envrc && mkdir -p .claude && printf y > .claude/settings.json && printf z > .mcp.json'
+        )
+      ],
+      'touch other tools config'
+    )
+    await events.waitFor('agent_end', { sessionId: sid })
+    await chat.waitIdle()
+    expect(await askCount(sid)).toBe(0)
+
+    expect((await toolEnd(sid, 'call_vscode')).isError).toBeFalsy()
+    expect(readFileSync(vscode, 'utf8')).toBe('{"e2e": true}\n')
+
+    const bash = await toolEnd(sid, 'call_rootcfg')
+    expect(bash.isError).toBeFalsy()
+    expect(String(bash.result)).not.toContain('[Exit code:')
+    expect(String(bash.result)).not.toContain('[sandbox]')
+    expect(bash.details?.sandbox).toBe('confined')
+    expect(readFileSync(join(projDir, '.envrc'), 'utf8')).toBe('x')
+    expect(readFileSync(join(projDir, '.claude', 'settings.json'), 'utf8')).toBe('y')
+    expect(readFileSync(join(projDir, '.mcp.json'), 'utf8')).toBe('z')
   })
 })

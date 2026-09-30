@@ -28,8 +28,11 @@ export interface SandboxSessionInput {
   workingDirectory: string
   /** 会话「允许并记住」的写授权（allowList 里的 Write(...)）—— 沙箱把它们当作可写根 */
   grantedWrite: readonly string[]
-  /** 会话的读授权（Read(...)）—— 敏感目录里被授权的部分放回可读 */
-  grantedRead: readonly string[]
+  /**
+   * 凭据位置（绝对路径，未 realpath）—— 生效的 protect-credentials 策略的 `credentialDirs`。
+   * 命令对它们读写都拒；策略被覆盖掉 / 清单为空，沙箱也就不管
+   */
+  credentialPaths: readonly string[]
 }
 
 /** 需要按正则拒绝的写入：同一条规则的两种方言，由 tables.ts 的段表一处生成 */
@@ -46,10 +49,10 @@ export interface SandboxPattern {
  *
  * 写入按四层求值（后面的层覆盖前面的）：
  *   1. writableRoots 可写
- *   2. writeDenied 拒写（整片：~/.shuvix、userData）
- *   3. writeAllowBack 放回（严格落在第 2 层里的根：本会话临时工作区、本会话 artifacts、授权根）
+ *   2. writeDenied 拒写（围栏，整片：~/.shuvix、userData —— 策略、设置、Chrome 桥的启动器都在里面）
+ *   3. writeAllowBack 放回（严格落在第 2 层里的根：本会话临时工作区、本会话 artifacts、内容目录）
  *   4. writeDeniedFinal / writeDeniedPatterns / gitRoots 上的 .git 规则 —— 最后一层，谁也放不回
- * 读取同理：全读 → readDenied 拒读内容 → readAllowBack 放回 → readDeniedFinal 连元数据都拒。
+ * 读取只有一层：全读，再拒 readDenied（凭据，连元数据都拒）。
  */
 export interface SandboxSpec {
   sessionId: string
@@ -62,8 +65,6 @@ export interface SandboxSpec {
   /** .git 元数据保护只在这些根里生效（工作区 + 授权根），不波及 tmp / 缓存里 clone 下来的依赖 */
   gitRoots: string[]
   readDenied: string[]
-  readAllowBack: string[]
-  readDeniedFinal: string[]
   /** 允许连接的具体 socket 文件 */
   unixSockets: string[]
   /** 允许建立并连接 socket 的目录（本会话临时目录、工作区） */
@@ -81,17 +82,13 @@ export interface SessionSandboxView {
   sandboxWritableRoots: string[]
   sandboxWriteDenied: string[]
   sandboxProtectedPatterns: string[]
-  sandboxReadDenied: string[]
-  sandboxReadAllowed: string[]
 }
 
 export const INACTIVE_VIEW: SessionSandboxView = Object.freeze({
   sandboxActive: false,
   sandboxWritableRoots: [],
   sandboxWriteDenied: [],
-  sandboxProtectedPatterns: [],
-  sandboxReadDenied: [],
-  sandboxReadAllowed: []
+  sandboxProtectedPatterns: []
 }) as SessionSandboxView
 
 /** 探测结果 */

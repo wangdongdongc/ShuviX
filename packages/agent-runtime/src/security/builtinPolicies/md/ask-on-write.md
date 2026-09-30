@@ -34,20 +34,17 @@ answers first and most of what is left never reaches you.
   anyway: the working directory, temporary folders and tool caches. A
   sandboxed `bash` can already write there without asking, so asking the
   file tools for the same file would only push the agent toward
-  `echo > file`. The protected spots inside them still ask, exactly as the
-  sandbox still refuses them to commands: `.git/hooks`, `.git/config` and
-  the other git metadata that git runs on its own, and a project's
-  `.vscode`, `.idea`, `.claude`, `.cursor`, `.codex`, `.zed`, `.mcp.json`
-  and `.envrc`.
+  `echo > file`. The one protected spot inside them still asks, exactly as
+  the sandbox still refuses it to commands: git's own metadata —
+  `.git/hooks`, `.git/config` and the rest that git runs by itself.
 
 - **The working directory, sandbox or not** (`vars.workspaceWritable`):
   editing files in the project is most of the work, and the file tools know
   the exact path, so this holds even where commands run unconfined. The same
-  protected spots still ask. It is withheld where the sandbox would refuse
-  the working directory too — `/`, a folder that covers your home folder or
-  contains credential or personal folders, ShuviX's own configuration or data
-  — and on Windows, where the protected-spot patterns cannot be matched
-  reliably.
+  protected spot still asks. It is withheld where the sandbox would refuse
+  the working directory too — `/`, a folder that covers your home folder, a
+  credential folder, ShuviX's own configuration or data — and on Windows,
+  where the protected-spot patterns cannot be matched reliably.
 
 The host fills `vars.sandboxWritableRoots` only for a session whose commands
 really run confined; the working-directory exemption does not depend on it.

@@ -11,7 +11,7 @@
  */
 import type { BuiltinMdReader } from '../../subagent/builtinAgents/spec'
 
-/** 键形如 './md/ask-on-read.zh.md'（Vite glob 的路径以本模块为基准） */
+/** 键形如 './md/ask-on-write.zh.md'（Vite glob 的路径以本模块为基准） */
 const INLINED_MD = import.meta.glob('./md/*.md', {
   query: '?raw',
   import: 'default',
@@ -23,7 +23,7 @@ export function createInlinePolicyMdReader(): BuiltinMdReader {
   return (fileName) => INLINED_MD[`./md/${fileName}`] ?? null
 }
 
-/** 守护测试枚举语言文件用：内联表里全部 md 的文件名（`ask-on-read.zh.md`） */
+/** 守护测试枚举语言文件用：内联表里全部 md 的文件名（`ask-on-write.zh.md`） */
 export function inlinedPolicyMdFileNames(): string[] {
   return Object.keys(INLINED_MD).map((key) => key.slice('./md/'.length))
 }

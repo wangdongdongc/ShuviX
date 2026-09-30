@@ -13,8 +13,9 @@
  * 解析之后是 /private/var/folders/…（protect-system 的 /private/var 里挖掉了它）。期望一律按
  * realpathSync.native 算，写法一律从 mkdtemp 的原样起算。符号链接在 Windows 上要开发者模式，整份跳过。
  *
- * RPP-A 一组：ask-on-write / ask-on-read 对**本会话自己的** artifacts 目录（vars.sessionArtifactsDir
- * = getSessionArtifactsDir(ctx.sessionId)，这里是 <ROOT>/artifacts/<id>）免询问。豁免同样按真实去处判：
+ * RPP-A 一组：ask-on-write 对**本会话自己的** artifacts 目录（vars.sessionArtifactsDir
+ * = getSessionArtifactsDir(ctx.sessionId)，这里是 <ROOT>/artifacts/<id>）免询问（读哪儿都不问，只有凭据
+ * 位置例外）。豁免同样按真实去处判：
  * 目录里的链接按它指向哪儿过门（凭据照拒、区外照问），`..` 与链接走出这个目录就不再豁免；
  * artifact store 真正写出来的文件只对自己的会话免询问，也不留下任何授权。
  *
@@ -204,7 +205,7 @@ describe.skipIf(process.platform === 'win32')('路径策略按真实去处判（
    *   artifacts/s1/sshlink → home/.ssh        artifacts/s1/dangling → home/.ssh/authorized_keys（悬空）
    *   artifacts/s1/up → artifacts
    *   agents/x.md（ShuviX 自己的配置 —— getDefaultAgentsDir 的 mock）；ws/agentlink → agents/x.md
-   *   ws/.vscode/settings.json；outside/nlink → ws/notes.txt；outside/vslink → ws/.vscode/settings.json
+   *   ws/.git/hooks/pre-commit；outside/nlink → ws/notes.txt；outside/hooklink → ws/.git/hooks/pre-commit
    *   userData（app.getPath 的替身，不建出来）
    */
   beforeAll(() => {
@@ -249,10 +250,10 @@ describe.skipIf(process.platform === 'win32')('路径策略按真实去处判（
     mkdirSync(join(ROOT, 'agents'))
     writeFileSync(join(ROOT, 'agents', 'x.md'), '---\nname: x\n---\n')
     symlinkSync(join(ROOT, 'agents', 'x.md'), join(WS, 'agentlink'))
-    mkdirSync(join(WS, '.vscode'))
-    writeFileSync(join(WS, '.vscode', 'settings.json'), '{}')
+    mkdirSync(join(WS, '.git', 'hooks'), { recursive: true })
+    writeFileSync(join(WS, '.git', 'hooks', 'pre-commit'), '#!/bin/sh\n')
     symlinkSync(join(WS, 'notes.txt'), join(ROOT, 'outside', 'nlink'))
-    symlinkSync(join(WS, '.vscode', 'settings.json'), join(ROOT, 'outside', 'vslink'))
+    symlinkSync(join(WS, '.git', 'hooks', 'pre-commit'), join(ROOT, 'outside', 'hooklink'))
     state.userData = join(ROOT, 'userData')
 
     REAL_WS = realpathSync.native(WS)
@@ -455,8 +456,11 @@ describe.skipIf(process.platform === 'win32')('路径策略按真实去处判（
 
   it('RPP-8 早先按真实去处记下的授权对经链接的写法同样生效；按 tmpdir 原写法（/var/folders）记下的旧授权、目录授权也对得上', () => {
     const link = join(WS, 'rlink')
-    // 没授权：它指向区外 → ask-on-read
-    expect(verdict(evaluatePath('read', link))).toEqual({ effect: 'ask', winning: 'ask-on-read#0' })
+    // 没授权：读没有询问门，放行的是 default —— 下面看的是授权有没有被认出来（归因）
+    expect(verdict(evaluatePath('read', link))).toEqual({
+      effect: 'allow',
+      winning: 'default:path'
+    })
 
     for (const entry of [
       `Read(${join(REAL_ROOT, 'outside', 'doc.txt')})`,
@@ -584,7 +588,7 @@ describe.skipIf(process.platform === 'win32')('路径策略按真实去处判（
     restoreComputedWorkspaceView()
     const vars = varsNow()
     expect(vars.workspaceWritable).toEqual([REAL_WS])
-    expect(vars.workspaceWriteDenied).toContain(join(REAL_WS, '.vscode'))
+    expect(vars.workspaceProtectedPatterns).not.toEqual([])
 
     // 前提：区内普通文件确实被豁免（视图生效，不是整片都在问）
     expect(verdict(evaluatePath('write', join(WS, 'notes.txt')))).toEqual({
@@ -604,11 +608,11 @@ describe.skipIf(process.platform === 'win32')('路径策略按真实去处判（
       effect: 'allow',
       winning: 'default:path'
     })
-    // 写法在区外、去处是工作区根上的 .vscode（写入禁区按真实去处比）
-    const vslink = join(ROOT, 'outside', 'vslink')
-    const vs = evaluatePath('write', vslink)
-    expect(verdict(vs)).toEqual({ effect: 'ask', winning: 'ask-on-write#0' })
-    expect(vs.ask?.command).toBe(`Write(${join(REAL_WS, '.vscode', 'settings.json')})`)
+    // 写法在区外、去处是工作区里 git 的 hooks（受保护模式按真实去处比）
+    const hooklink = join(ROOT, 'outside', 'hooklink')
+    const hook = evaluatePath('write', hooklink)
+    expect(verdict(hook)).toEqual({ effect: 'ask', winning: 'ask-on-write#0' })
+    expect(hook.ask?.command).toBe(`Write(${join(REAL_WS, '.git', 'hooks', 'pre-commit')})`)
 
     // 字面折叠会说「在区内」（<ws>/notes-x.txt），物理上是 ~/.ssh 的上一级 —— 家目录里的文件
     const dotdot = `${WS}/sshlink/../notes-x.txt`
@@ -619,13 +623,13 @@ describe.skipIf(process.platform === 'win32')('路径策略按真实去处判（
 
   // ── 本会话 artifacts 的豁免同样按真实去处判 ─────────────────────────────────────────
 
-  it('RPP-A1 本会话目录里的链接按它真正指向哪儿过门：rc → ~/.bashrc 照问（卡片是真实去处、注着写法）；key / sshlink / 悬空的 authorized_keys 归凭据门 —— 写拒（免询问也拒）、读问', async () => {
+  it('RPP-A1 本会话目录里的链接按它真正指向哪儿过门：rc → ~/.bashrc 写照问（卡片是真实去处、注着写法）、读不问；key / sshlink / 悬空的 authorized_keys 归凭据门 —— 写拒（免询问也拒）、读问', async () => {
     const rc = join(ART, 's1', 'rc')
     const rcWrite = evaluatePath('write', rc)
     expect(verdict(rcWrite)).toEqual({ effect: 'ask', winning: 'ask-on-write#0' })
     expect(rcWrite.ask?.command).toBe(`Write(${REAL_HOME}/.bashrc)`)
     expect(rcWrite.ask?.requestedPath).toBe(rc)
-    expect(verdict(evaluatePath('read', rc))).toEqual({ effect: 'ask', winning: 'ask-on-read#0' })
+    expect(verdict(evaluatePath('read', rc))).toEqual({ effect: 'allow', winning: 'default:path' })
 
     const key = join(ART, 's1', 'key')
     expect(verdict(evaluatePath('write', key))).toEqual({
@@ -691,7 +695,7 @@ describe.skipIf(process.platform === 'win32')('路径策略按真实去处判（
     expect(fresh.matched).not.toContain('protect-system#0')
   })
 
-  it('RPP-A3 artifact store 真写出来的文件只对自己的会话免询问：s1 读写直接过门、不弹卡、不留授权；换成 s2 照问；别处的写照旧问', async () => {
+  it('RPP-A3 artifact store 真写出来的文件只对自己的会话免询问：s1 读写直接过门、不弹卡、不留授权；换成 s2 写照问（读哪儿都不问）；别处的写照旧问', async () => {
     const info = writeArtifact({
       sessionId: 's1',
       title: 'Revenue',
@@ -714,8 +718,8 @@ describe.skipIf(process.platform === 'win32')('路径策略按真实去处判（
       winning: 'ask-on-write#0'
     })
     expect(verdict(evaluatePath('read', info.path, 's2'))).toEqual({
-      effect: 'ask',
-      winning: 'ask-on-read#0'
+      effect: 'allow',
+      winning: 'default:path'
     })
 
     await expect(

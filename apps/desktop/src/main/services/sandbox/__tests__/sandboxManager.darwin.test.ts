@@ -139,7 +139,6 @@ describe.skipIf(process.platform !== 'darwin')('sandbox manager + bgTaskService 
       sessionId: SID,
       workingDirectory: ws,
       grantedWrite: [],
-      grantedRead: [],
       offerEscalation: true
     })
     expect(plan).not.toBeNull()

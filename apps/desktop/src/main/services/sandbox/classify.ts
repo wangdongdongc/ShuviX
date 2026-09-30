@@ -157,13 +157,10 @@ export function isWriteBlocked(spec: SandboxSpec, path: string): boolean {
   return writeBlockReason(spec, path) !== null
 }
 
-/** 这条路径的读取会不会被规格拦下 */
+/** 这条路径的读取会不会被规格拦下（只有凭据位置） */
 export function isReadBlocked(spec: SandboxSpec, path: string): boolean {
   const p = normalize(path)
-  if (spec.readDeniedFinal.some((d) => isWithin(p, d))) return true
-  return (
-    spec.readDenied.some((d) => isWithin(p, d)) && !spec.readAllowBack.some((r) => isWithin(p, r))
-  )
+  return spec.readDenied.some((d) => isWithin(p, d))
 }
 
 export interface ExplainInput {
@@ -219,8 +216,8 @@ export function explainSandboxDenial(input: ExplainInput): string | null {
   for (const what of reasons) out.push(`  - ${what}`)
   out.push(
     'Confined commands may change files only in the working directory, $TMPDIR, /tmp and package-manager caches; ' +
-      "they cannot read credentials, ShuviX's own data or personal folders (Documents, Desktop, Downloads …), " +
-      'and cannot write git hooks or git config.'
+      'they cannot read or write credentials (~/.ssh, ~/.aws …), ' +
+      "and cannot write git hooks, git config or ShuviX's own files."
   )
   out.push(
     input.offerEscalation

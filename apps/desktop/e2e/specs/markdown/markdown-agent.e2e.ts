@@ -7,7 +7,7 @@
  *     glob 看邻居，ask 问用户，skill 装绘图技能 —— 没有 write / edit / bash，也不派活、不开子会话；
  *     会话标题一开始就是文件名（不是缺省标题），所以自动起标题那条 hook 不跑 —— 不多花一次请求；
  *   - 改文档经 doc_edit 在编辑器缓冲上当场执行：不问（改动就在用户眼前落下），编辑器先变，自动保存再写盘；
- *   - 读文件照常过安全策略：在工作目录里读不问、读工作目录之外的问；询问卡片出现在**这个窗口**里
+ *   - 读文件照常过安全策略：在工作目录里读不问、读凭据位置（~/.ssh …）的问；询问卡片出现在**这个窗口**里
  *     （事件经它自己的前端绑定送达，主窗口根本没开）；
  *   - 关窗 = 删会话：跑到一半的一轮被中止（模型那边看得到连接断开）；doc_edit 正在等用户停手、或者
  *     挂着一张 ask 卡片时关窗，删除都在有限时间内完成 —— 等窗口答复的请求随关窗立刻失败，不等超时。
@@ -18,13 +18,13 @@
  *   AG-1 输入卡片发一句 → 回复出现在抽屉里；请求里的系统提示词带着工作目录与 a.md，工具表恰好是 coedit 的；
  *        一轮之后标题还是 a.md，没有任何起标题的请求
  *   AG-2 脚本化 doc_edit a.md → 不问；编辑器里先出现，自动保存再写到盘上（AG-3 读到的就是它）
- *   AG-3 read a.md 不问；read ../outside.txt 问（拒绝之后这一轮照常收场）
+ *   AG-3 read a.md 不问；read ~/.ssh 里的一份文件问（拒绝之后这一轮照常收场）
  *   AG-4 跑到一半关窗（假提供商挂住）→ 模型那边看到中止、会话在有限时间内删掉；
  *        doc_edit 正等用户停手时关窗 → 删除在有限时间内完成、没有「请求超时」、修改没落到文件上；
  *        挂着 ask 卡片时关窗 → 同样在有限时间内删掉，文件没被写
  */
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { sleep, until, type CdpClient } from '../../harness/cdp'
 import type { E2EMarkdownApp } from '../../harness/launch'
@@ -44,7 +44,7 @@ let provider: FakeProvider
 let files: UserDir
 let docs: string
 type Doc = 'a' | 'b' | 'c' | 'd'
-const paths = { a: '', b: '', c: '', d: '', outside: '' }
+const paths = { a: '', b: '', c: '', d: '', key: '' }
 const sids = { a: '', b: '', c: '', d: '' }
 const clients: Partial<Record<Doc, CdpClient>> = {}
 const panes: Partial<Record<Doc, MarkdownWindowPane>> = {}
@@ -57,12 +57,15 @@ beforeAll(async () => {
   paths.b = files.file('docs/b.md', '# Doc B\n\nbravo body\n')
   paths.c = files.file('docs/c.md', '# Doc C\n\ncharlie body\n')
   paths.d = files.file('docs/d.md', '# Doc D\n\ndelta body\n')
-  paths.outside = files.file('outside.txt', 'outside the working directory\n')
   docs = join(files.root, 'docs')
   ;({ app, provider } = await launchMarkdownWithProvider({
     args: [paths.a, paths.b, paths.c, paths.d],
     markdownWindows: 4
   }))
+  // 一份凭据文件（fake HOME 的 ~/.ssh 里）：内置 protect-credentials 读它要问
+  paths.key = join(app.home, '.ssh', 'md-e2e-key')
+  mkdirSync(dirname(paths.key), { recursive: true })
+  writeFileSync(paths.key, 'MD E2E PRIVATE KEY\n')
   const windows = await app.markdownWindows()
   for (const key of ['a', 'b', 'c', 'd'] as const) {
     sids[key] = windows.find((w) => w.path === paths[key])!.sessionId
@@ -164,7 +167,7 @@ describe('md 窗口里的一轮对话', () => {
     expect(result).toContain('Replaced at line 3')
   })
 
-  it('AG-3 read a.md 不问；read ../outside.txt 问（拒绝后这一轮照常收场）', async () => {
+  it('AG-3 read a.md 不问；read ~/.ssh 里的一份文件问（拒绝后这一轮照常收场）', async () => {
     provider.reset()
     provider.script(
       {
@@ -173,7 +176,7 @@ describe('md 窗口里的一轮对话', () => {
       },
       {
         toolCalls: [
-          { id: 'ag3_read_out', name: 'read', args: JSON.stringify({ path: '../outside.txt' }) }
+          { id: 'ag3_read_key', name: 'read', args: JSON.stringify({ path: paths.key }) }
         ],
         usage: USAGE
       },
@@ -182,7 +185,7 @@ describe('md 窗口里的一轮对话', () => {
     await panes.a!.send('ag3: read around')
 
     const ask = await panes.a!.waitAsk(30_000)
-    expect(ask.preview).toContain(paths.outside)
+    expect(ask.preview).toContain(realpathSync(paths.key))
     // 读工作目录里的那一次早已放行，没有问过
     const inside = decisionsOf('ag3_read_in')
     expect(inside.length).toBeGreaterThan(0)
@@ -192,13 +195,13 @@ describe('md 窗口里的一轮对话', () => {
 
     await panes.a!.deny()
     await panes.a!.waitDrawerText('ag3-done', 30_000)
-    const outside = decisionsOf('ag3_read_out')
-    expect(outside.some((d) => d.effect === 'ask' && d.winning.startsWith('ask-on-read'))).toBe(
+    const key = decisionsOf('ag3_read_key')
+    expect(key.some((d) => d.effect === 'ask' && d.winning.startsWith('protect-credentials'))).toBe(
       true
     )
-    expect(outside.some((d) => d.userResponse === 'denied')).toBe(true)
-    // 拒绝了就没读：第三次请求里没有外面那份文件的内容
-    expect(provider.chatRequests()[2]?.raw).not.toContain('outside the working directory')
+    expect(key.some((d) => d.userResponse === 'denied')).toBe(true)
+    // 拒绝了就没读：第三次请求里没有那份凭据文件的内容
+    expect(provider.chatRequests()[2]?.raw).not.toContain('MD E2E PRIVATE KEY')
   })
 })
 

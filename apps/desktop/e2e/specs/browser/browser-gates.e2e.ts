@@ -2,11 +2,12 @@
  * 内置浏览器的安全门 —— 浏览器第一次有了自己的安全客体（假提供商脚本化，询问手工应答）。
  *
  * 桌面宿主给 browser server 装了三道门，全部接回现成的策略，而不是另起一套：
- *   - 导航到 `file://…` = **读那个文件**（enforcePath('read')）：出厂的 ask-on-read（工作区外问）、
- *     protect-credentials（凭据目录问）照样生效。一个显示本地文件的 tab 上做任何事也按读它过门 ——
- *     页面自己跳过去的也算（BRP-1）；
+ *   - 导航到 `file://…` = **读那个文件**（enforcePath('read')）：路径策略照样生效 —— 出厂的
+ *     protect-credentials（凭据目录问），以及用户自己写的（出厂策略只对凭据位置问读取，所以本 spec
+ *     装了一份「工作区外的读要问」的用户策略 READ_FENCE，卡片、路由、拒绝、记住都靠它来测）。
+ *     一个显示本地文件的 tab 上做任何事也按读它过门 —— 页面自己跳过去的也算（BRP-1）；
  *   - 上传给网页的文件 = 读（逐个过门）；pdf 的输出位置 = **写**，由出厂 ask-on-write 判：工作区外问
- *     （从前是硬拒），工作区里免询问（沙箱开关都一样），工作区里的受保护位置（项目根的 .vscode 等）
+ *     （从前是硬拒），工作区里免询问（沙箱开关都一样），工作区里的受保护位置（git 的 .git/hooks 等）
  *     照旧问 —— 与文件工具同一道门，没有 pdf 自己的特例；
  *   - http(s) 等地址上报 `{type:'url'}` 客体：出厂没有 url 策略（没有策略 = 放行），用户可以自己写。
  *
@@ -54,6 +55,8 @@ import {
 } from '../../harness/browserFixtures'
 
 const MODEL = 'e2e-model'
+/** 本 spec 自己装的「工作区外的读要问」用户策略（出厂策略只对凭据位置问读取，见文件头） */
+const READ_FENCE = 'br-e2e-read-fence'
 const BROWSER_ID = 'builtin-mcp-browser'
 const ALL_BROWSER_TOOLS = BROWSER_TOOL_NAMES.map(browserTool).sort()
 const BROWSER_LABELS = ['Browser', '浏览器', 'ブラウザ']
@@ -180,6 +183,24 @@ beforeAll(async () => {
   await app.main.eval(
     `window.api.session.updateEnabledTools(${JSON.stringify({ id: sid, enabledTools: ['mcp:browser'] })})`
   )
+  const fence = await createPolicy(
+    [
+      '---',
+      'shuvix: policy v1',
+      `name: ${READ_FENCE}`,
+      'description: e2e ask before reading outside the workspace',
+      'shuvix-policy-scope:',
+      '  subject.kind: [agent]',
+      '  object.type: [path]',
+      'shuvix-policy-rules:',
+      '  - effect: ask',
+      '    action: [read]',
+      "    match: '!inDir(object.path, vars.workspace)'",
+      '---',
+      'e2e policy body'
+    ].join('\n')
+  )
+  expect(fence.success, fence.error).toBe(true)
   await until(async () => (await sidebar.titles()).includes(TITLE), 'gates session listed')
   expect(await sidebar.openSession(TITLE)).toBe(true)
   await chat.ready()
@@ -507,13 +528,13 @@ describe('upload_file 的每个文件都按读过门', () => {
         })
       ])
 
-      // ② 工作区里的受保护位置（项目根的 .vscode）：出厂的 ask-on-write 照旧问；允许之后落下一份真 PDF
-      const guarded = join(projDir, '.vscode', 'page.pdf')
+      // ② 工作区里的受保护位置（git 的 .git/hooks）：出厂的 ask-on-write 照旧问；允许之后落下一份真 PDF
+      const guarded = join(projDir, '.git', 'hooks', 'page.pdf')
       const { end, ask } = await askOnce(
         {
           id: 'brg11_guarded_pdf',
           tool: 'pdf',
-          args: { tabId: formTab, outputPath: '.vscode/page.pdf' }
+          args: { tabId: formTab, outputPath: '.git/hooks/page.pdf' }
         },
         true
       )

@@ -31,6 +31,7 @@ import { policyService } from './policyService'
 import {
   createSecurityContext,
   parseAllowEntry,
+  resolvePolicyLet,
   type SecurityContext,
   type SecurityHostProvider,
   type SubAgentModelConfig
@@ -244,6 +245,71 @@ export function getSessionPathGrants(sessionId: string): {
 }
 
 /**
+ * 宿主提供的策略变量里与沙箱无关的那部分 —— getVars 的主体。凭据清单也只用它求值：沙箱视图本身
+ * 要用凭据清单（sessionCredentialPaths），不能反过来依赖沙箱视图。
+ */
+function hostPolicyVars(
+  sessionId: string,
+  workingDirectory: string
+): ReturnType<SecurityHostProvider['getVars']> {
+  return {
+    workspace: workingDirectory,
+    toolResultsBase: getToolResultsBase(),
+    skillsDirs: [
+      getDefaultSkillsDir(),
+      getBuiltinSkillsDir(),
+      ...skillService.listExternalDirs().map((d) => d.path)
+    ],
+    memoryDirs: [getMemoryRootDir()],
+    botsDir: getDefaultBotsDir(),
+    // ShuviX 自己的规矩所在（protect-shuvix-config 对它们的写入恒问人）：策略、agent、hook、技能 ——
+    // 权限审查员与触发它的 auto-review 就是其中的一份 agent md 与一份 hook md
+    shuvixConfigDirs: [
+      getDefaultPoliciesDir(),
+      getDefaultAgentsDir(),
+      getDefaultHooksDir(),
+      getDefaultSkillsDir()
+    ],
+    // 随应用发布的内置知识库目录 —— 事实变量，内置策略已不用它，留给用户自写的策略引用
+    builtinKnowledgeDir: getBuiltinKnowledgeDir(),
+    // 本会话自己的 artifacts 目录：ask-on-write 对它免询问。认领下来的图与交互块是
+    // 这场对话自己的文件、不在用户的项目里，改一张刚画的图也逐次询问只会把人训练成闭眼点允许。
+    // 按会话 id 取，与 artifact 工具落盘用的是同一个 id（子会话有自己的目录，见 artifacts/store）。
+    // 坏 id 给空串（inDir 对空串恒不命中 = 不豁免）：空 id 会把豁免放大到所有会话的 artifacts，
+    // `..` 会放大到 ~/.shuvix（里面有 policies/）
+    sessionArtifactsDir: isSafeSessionId(sessionId) ? getSessionArtifactsDir(sessionId) : '',
+    home: homedir(),
+    systemDirs: windowsSystemDirs()
+  }
+}
+
+/**
+ * 本会话生效的凭据清单 —— protect-credentials 的 `credentialDirs`（用户的同名覆盖优先）。命令沙箱对它们
+ * 读写都拒（main 启动时经 setSandboxCredentialReader 注入）：沙箱不自己定哪些是凭据，策略改了清单，
+ * 命令那边跟着变；策略被覆盖掉、规则被清空或没有这个 let，沙箱也就不管 —— 但覆盖里的清单**写错了**
+ * （求值出错）时改用出厂那份，不因一处笔误把凭据放给命令。只留绝对路径：相对路径在
+ * 策略里对不上任何客体路径，沙箱里也不该按主进程的 cwd 去解析它。
+ */
+export function sessionCredentialPaths(sessionId: string, workingDirectory: string): string[] {
+  const value = resolvePolicyLet(
+    {
+      pathSep: sep,
+      getLanguage: () => i18next.language,
+      readBuiltinPolicyMd: (fileName) => policyService.readBuiltinPolicyMd(fileName),
+      getUserPolicies: () => policyService.getUserPolicies(),
+      logger: securityLog
+    },
+    'protect-credentials',
+    'credentialDirs',
+    hostPolicyVars(sessionId, workingDirectory),
+    { fallbackToBuiltinOnError: true }
+  )
+  return Array.isArray(value)
+    ? value.filter((v): v is string => typeof v === 'string' && isAbsolute(v))
+    : []
+}
+
+/**
  * 桌面 SecurityHostProvider —— 把平台细节注入共享安全模块：
  *   - 变量表：workspace / tool_results / skills 目录 / home（策略 match/lets 里的 vars.*）
  *   - 真实路径：realPath（符号链接 / `..` / 盘上大小写）—— 安全模块拿它解析路径客体与 inDir 比较的
@@ -266,42 +332,17 @@ export function makeDesktopSecurityProvider(
     host: 'desktop',
     pathSep: sep,
     realPath: resolveRealPath,
-    getVars: () => ({
-      workspace: getConfig().workingDirectory,
-      toolResultsBase: getToolResultsBase(),
-      skillsDirs: [
-        getDefaultSkillsDir(),
-        getBuiltinSkillsDir(),
-        ...skillService.listExternalDirs().map((d) => d.path)
-      ],
-      memoryDirs: [getMemoryRootDir()],
-      botsDir: getDefaultBotsDir(),
-      // ShuviX 自己的规矩所在（protect-shuvix-config 对它们的写入恒问人）：策略、agent、hook、技能 ——
-      // 权限审查员与触发它的 auto-review 就是其中的一份 agent md 与一份 hook md
-      shuvixConfigDirs: [
-        getDefaultPoliciesDir(),
-        getDefaultAgentsDir(),
-        getDefaultHooksDir(),
-        getDefaultSkillsDir()
-      ],
-      // 随应用发布的内置知识库目录：ask-on-read 对它免询问（说明书发出来就是给 agent 查的）
-      builtinKnowledgeDir: getBuiltinKnowledgeDir(),
-      // 本会话自己的 artifacts 目录：ask-on-write / ask-on-read 对它免询问。认领下来的图与交互块是
-      // 这场对话自己的文件、不在用户的项目里，改一张刚画的图也逐次询问只会把人训练成闭眼点允许。
-      // 按 ctx.sessionId 取，与 artifact 工具落盘用的是同一个 id（子会话有自己的目录，见 artifacts/store）。
-      // 坏 id 给空串（inDir 对空串恒不命中 = 不豁免）：空 id 会把豁免放大到所有会话的 artifacts，
-      // `..` 会放大到 ~/.shuvix（里面有 policies/）
-      sessionArtifactsDir: isSafeSessionId(ctx.sessionId)
-        ? getSessionArtifactsDir(ctx.sessionId)
-        : '',
-      home: homedir(),
-      systemDirs: windowsSystemDirs(),
-      // 沙箱的那一面（ask-on-write / ask-on-read 读）：与本会话命令实际受的限制同源，
-      // 所以文件工具的免询问范围恰好是命令能碰的范围；沙箱没套上时是一组空值，策略退回老行为
-      ...sessionView(ctx.sessionId, getConfig().workingDirectory),
-      // 与沙箱开没开无关的那一半：文件工具在工作区里写入免询问（受保护位置照旧问；Windows 不给）
-      ...workspaceWriteView(ctx.sessionId, getConfig().workingDirectory)
-    }),
+    getVars: () => {
+      const workingDirectory = getConfig().workingDirectory
+      return {
+        ...hostPolicyVars(ctx.sessionId, workingDirectory),
+        // 沙箱的那一面（ask-on-write 读）：与本会话命令实际受的限制同源，所以文件工具的免询问范围
+        // 恰好是命令能写的范围；沙箱没套上时是一组空值，策略退回老行为
+        ...sessionView(ctx.sessionId, workingDirectory),
+        // 与沙箱开没开无关的那一半：文件工具在工作区里写入免询问（受保护位置照旧问；Windows 不给）
+        ...workspaceWriteView(ctx.sessionId, workingDirectory)
+      }
+    },
     getSessionGrants: () => {
       const s = sessionRecords.pickSettings(ctx.sessionId, ['autoAllow', 'allowList'])
       return { autoAllow: !!s?.autoAllow, allowList: s?.allowList ?? [] }

@@ -20,8 +20,8 @@ ShuviX 的权限系统是**询问模型，不是沙箱**。每次工具调用都
 **放行 / 询问 / 拒绝**之一，而规则是用户能读、能覆盖、能删除的 markdown 文件。第一原则是
 **无策略 = 放行**：命中不了任何规则的操作自由执行；ShuviX 自带的每道防护都是一份看得见的策略。
 策略本身不是操作系统级隔离，那是另一样东西——**命令沙箱**：macOS 上开着设置 → LLM 工具 → bash →
-沙箱时，每条 `bash` 命令由操作系统圈住运行（只能改动项目、临时目录和包缓存里的文件，读不到凭据、
-ShuviX 的数据和个人资料目录）。宿主把这次执行是否真的被圈住作为命令的 `sandboxed` 属性上报，内置策略
+沙箱时，每条 `bash` 命令由操作系统圈住运行（只能改动项目、临时目录和包缓存里的文件，碰不到
+protect-credentials 列出的凭据）。宿主把这次执行是否真的被圈住作为命令的 `sandboxed` 属性上报，内置策略
 据此判断：圈住的命令直接运行；没圈住的——沙箱关闭或不可用、智能体申请了完全访问、每条 `ssh`
 命令——要询问，放行后以用户的完整权限运行。
 
@@ -161,14 +161,12 @@ vars     宿主变量表（见下）+ 会话授权
 | `sessionArtifactsDir`        | string   | 本会话自己的产物目录 `~/.shuvix/artifacts/<会话>`                               |
 | `shuvixConfigDirs`           | string[] | `~/.shuvix/policies`、`agents`、`hooks` 与 `skills` —— ShuviX 自己的配置        |
 | `workspaceWritable`          | string[] | 工作目录，文件工具在其中写入不询问（Windows 上、以及工作目录不合适时为空 —— `/`、盖住家目录的目录、ShuviX 自己的数据） |
-| `workspaceWriteDenied`       | string[] | 其中受保护的位置（项目的 `.vscode`、`.claude` 等；凭据目录）                     |
+| `workspaceWriteDenied`       | string[] | 其中受保护的位置（凭据位置、shell 启动文件等）                                    |
 | `workspaceProtectedPatterns` | string[] | 其中受保护的 git 元数据的正则 —— 配 `matches` 用                                |
 | `sandboxActive`              | boolean  | 本会话的命令在命令沙箱里运行                                                    |
 | `sandboxWritableRoots`       | string[] | 受限命令能写的位置（沙箱未启用时为空）                                          |
-| `sandboxWriteDenied`         | string[] | 这些位置里受保护的地方（项目的 `.vscode`、`.claude` 等；凭据目录）              |
+| `sandboxWriteDenied`         | string[] | 这些位置里受保护的地方（ShuviX 自己的文件、凭据位置等）                         |
 | `sandboxProtectedPatterns`   | string[] | 受保护的 git 元数据的正则（`.git/hooks`、`.git/config` 等），配合 `matches` 用 |
-| `sandboxReadDenied`          | string[] | 受限命令读不到的位置（个人资料目录、ShuviX 的数据、凭据目录）                   |
-| `sandboxReadAllowed`         | string[] | 其中可读的例外（工作区、本会话的工具结果、读授权）                              |
 | `systemDirs`                 | string[] | 额外的操作系统目录（Windows 的系统 / 程序目录）                                 |
 | `autoAllow`                  | boolean  | 会话的「免询问」开关                                                            |
 | `grantedRead`、`grantedWrite` | string[] | 用户在本会话里答过「允许并记住」的路径（写授权隐含读）                          |
@@ -186,16 +184,15 @@ YAML 语法错 / 不是映射；裸的 `rules` / `lets` / `scope` 键；`shuvix-
 
 ## 内置策略
 
-随应用发布十三份（按界面语言一份；**规则恒取英文文件**，翻译只改人读的文字）：
+随应用发布十二份（按界面语言一份；**规则恒取英文文件**，翻译只改人读的文字）：
 
 | 名字                            | 门                                                                                                           |
 | ------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `protect-credentials`           | 拒绝写、询问读凭据目录（`.ssh`、`.aws`……）                                                                    |
+| `protect-credentials`           | 拒绝写、询问读凭据位置（`.ssh`、`.aws`……）；沙箱里的命令读写都不行                                            |
 | `protect-system`                | 拒绝写操作系统目录                                                                                            |
 | `block-catastrophic-commands`   | 拒绝一小撮毁灭整机的命令，按解析结构判（`rm -rf /`、`mkfs`、`dd` 到设备、`Format-Volume`……）                                    |
 | `protect-bot-files`             | `~/.shuvix/bots` 下任何写入 **force-ask**                                                                     |
 | `protect-shuvix-config`         | `~/.shuvix/policies`、`agents`、`hooks`、`skills` 下任何写入 **force-ask**                                    |
-| `ask-on-read`                   | 在工作区、工具结果、skill 目录与本说明书之外的读取询问；沙箱启用时，只在受限命令也读不到的位置询问            |
 | `ask-on-write`                  | 文件写入询问，带 diff 预览 —— 本会话产物、工作目录（除去其中受保护的位置，Windows 除外）除外；沙箱启用时，受限命令本来就能写的位置也除外 |
 | `ask-on-command`                | 每条没被圈进沙箱的命令询问（`object.sandboxed` 为 false：沙箱关闭或不可用、申请了完全访问、`ssh`）                           |
 | `git-safety`                    | 危险的 git 操作询问（`init`、`restore`、强制 checkout、删分支）                                               |

@@ -548,11 +548,11 @@ describe('开关与只问人的门', () => {
     expect(decision.review).toBeUndefined()
   })
 
-  it('E2E-R7 [P1] 沙箱关着时工作区照样免询问：普通文件直接写；受保护位置 .vscode 经审查放行后落盘', async () => {
+  it('E2E-R7 [P1] 沙箱关着时工作区照样免询问：普通文件直接写；受保护位置 .git/hooks 经审查放行后落盘', async () => {
     const sid = await newSession('R7-workspace')
     const plain = join(projDir, 'src', 'r7.txt')
-    const guarded = join(projDir, '.vscode', 'r7.json')
-    const guardedContent = '{ "r7": "R7-GUARDED-CONTENT" }\n'
+    const guarded = join(projDir, '.git', 'hooks', 'r7')
+    const guardedContent = '# R7-GUARDED-CONTENT\n'
     provider.reset()
     await events.clear()
     provider.script(
@@ -562,7 +562,7 @@ describe('开关与只问人的门', () => {
       reviewerTurn({
         decision: 'allow',
         risk: 'medium',
-        summary: 'SUMMARY-R7 writes editor settings',
+        summary: 'SUMMARY-R7 writes a git hook',
         reason: 'REASON-R7'
       })
     )

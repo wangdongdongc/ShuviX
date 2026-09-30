@@ -23,7 +23,7 @@ operation that matches no rule runs freely; every protection ShuviX ships is a v
 The policies themselves are not OS-level isolation. That is the separate **command sandbox**: on
 macOS, with Settings → LLM tools → bash → Sandbox on, each `bash` command runs confined by the
 operating system (it can change files only in the project, temporary folders and package caches,
-and cannot read credentials, ShuviX's data or personal folders). The host reports whether a run was
+and cannot touch what protect-credentials lists). The host reports whether a run was
 really confined as the command's `sandboxed` attribute, and the builtin policies decide on it: a
 confined command runs without asking, an unconfined one — sandbox off, not available, the agent
 asking for full access, every `ssh` command — asks, and then runs with the user's full privileges.
@@ -171,14 +171,12 @@ matched (with a warning), an allow rule as not matched. Always guard with the ty
 | `sessionArtifactsDir`   | string   | this conversation's own artifacts, `~/.shuvix/artifacts/<session>`                            |
 | `shuvixConfigDirs`      | string[] | `~/.shuvix/policies`, `agents`, `hooks` and `skills` — ShuviX's own configuration              |
 | `workspaceWritable`     | string[] | the working directory, where file-tool writes do not ask (empty on Windows, and where the working directory is unsuitable — `/`, a folder covering your home, ShuviX's own data) |
-| `workspaceWriteDenied`  | string[] | protected places inside it (a project's `.vscode`, `.claude`, …; credential dirs)             |
+| `workspaceWriteDenied`  | string[] | protected places inside it (credential locations, shell startup files, …)                     |
 | `workspaceProtectedPatterns` | string[] | regexes of protected git metadata inside it — use with `matches`                    |
 | `sandboxActive`         | boolean  | this session's commands run in the command sandbox                                            |
 | `sandboxWritableRoots`  | string[] | where a confined command may write (empty when the sandbox is not active)                     |
-| `sandboxWriteDenied`    | string[] | protected places inside those roots (a project's `.vscode`, `.claude`, …; credential dirs)    |
+| `sandboxWriteDenied`    | string[] | protected places inside those roots (ShuviX's own files, credential locations, …)            |
 | `sandboxProtectedPatterns` | string[] | regexes of protected git metadata (`.git/hooks`, `.git/config`, …) — use with `matches` |
-| `sandboxReadDenied`     | string[] | what a confined command cannot read (personal folders, ShuviX's data, credential dirs)        |
-| `sandboxReadAllowed`    | string[] | readable exceptions inside those (the workspace, this session's tool results, read grants)    |
 | `systemDirs`            | string[] | extra OS directories (Windows system / program directories)                                   |
 | `autoAllow`             | boolean  | the session's "auto-allow" switch                                                             |
 | `grantedRead`, `grantedWrite` | string[] | paths the user answered "allow and remember" for in this session (write implies read) |
@@ -199,17 +197,16 @@ reads `object.*` without declaring `object.type` is accepted with a warning.
 
 ## Builtin policies
 
-Thirteen ship with the application (per UI language; **the rules are always taken from the
+Twelve ship with the application (per UI language; **the rules are always taken from the
 English file**, translations only change the text people read):
 
 | Name                            | Gate                                                                                                                  |
 | ------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `protect-credentials`           | deny writes to and ask on reads of credential directories (`.ssh`, `.aws`, …)                                        |
+| `protect-credentials`           | deny writes to and ask on reads of credential locations (`.ssh`, `.aws`, …); sandboxed commands can do neither       |
 | `protect-system`                | deny writes to operating-system directories                                                                            |
 | `block-catastrophic-commands`   | deny a short list of machine-destroying commands, judged on parsed structure (`rm -rf /`, `mkfs`, `dd` to a device, `Format-Volume`…) |
 | `protect-bot-files`             | **force-ask** on any write under `~/.shuvix/bots`                                                                      |
 | `protect-shuvix-config`         | **force-ask** on any write under `~/.shuvix/policies`, `agents`, `hooks` and `skills`                                  |
-| `ask-on-read`                   | ask on reads outside the workspace, tool results, skill directories and this reference base; with the sandbox active, only on the places a confined command cannot read |
 | `ask-on-write`                  | ask on file writes, with a diff preview — except this conversation's artifacts, the working directory (minus its protected spots, not on Windows) and, with the sandbox active, where a confined command may write anyway |
 | `ask-on-command`                | ask on every command that is not confined to the sandbox (`object.sandboxed` false: sandbox off or unavailable, full access requested, `ssh`) |
 | `git-safety`                    | ask on destructive git operations (`init`, `restore`, forced checkout, branch delete)                                  |

@@ -7,7 +7,9 @@
  *  - PR-3 空清单永远不产出不带过滤器的规则（那会变成该操作的缺省值）；
  *  - PR-4 正则只来自 tables.ts 的固定文本；
  *  - PR-5 各层的先后与操作名（放回必须写与拒绝相同的操作名）；
- *  - PR-6 .git 规则只限定在 git 根里。
+ *  - PR-6 .git 规则只限定在 git 根里；
+ *  - PR-3b 凭据清单为空就没有拒读那一行；PR-7 根顶层的 .vscode 之类不再出现在 profile 里；
+ *    PR-8 围栏（~/.shuvix、userData、凭据、git 全局配置、LaunchAgents、ssh / tmux 目录）都在。
  */
 import { afterAll, describe, expect, it, vi } from 'vitest'
 
@@ -28,12 +30,28 @@ const PATHS: SandboxHostPaths = {
 }
 const WS = '/Users/u/proj'
 const GRANT_W = '/Volumes/data/shared'
-const GRANT_R = '/Users/u/Documents/ref'
+/** 出厂 protect-credentials 的 `credentialDirs`（调用方交给沙箱的凭据位置） */
+const CREDENTIALS = [
+  '.ssh',
+  '.aws',
+  '.gnupg',
+  '.config/gh',
+  '.netrc',
+  '.shuvix/.session-state',
+  'AppData/Local/Microsoft/Credentials',
+  'AppData/Roaming/Microsoft/Credentials'
+].map((d) => `${PATHS.home}/${d}`)
 
 function specOf(over: Partial<SandboxSessionInput> = {}): SandboxSpec {
   const result = buildSandboxSpec(
     PATHS,
-    { sessionId: 'sess-1', workingDirectory: WS, grantedWrite: [], grantedRead: [], ...over },
+    {
+      sessionId: 'sess-1',
+      workingDirectory: WS,
+      grantedWrite: [],
+      credentialPaths: CREDENTIALS,
+      ...over
+    },
     (p) => p
   )
   if (!result.ok) throw new Error(result.reason)
@@ -55,7 +73,7 @@ function paramValues(line: string, params: Record<string, string>): string[] {
   return [...line.matchAll(/\(param "(P\d+)"\)/g)].map((m) => params[m[1]])
 }
 
-const FIXTURE = (): SandboxSpec => specOf({ grantedWrite: [GRANT_W], grantedRead: [GRANT_R] })
+const FIXTURE = (): SandboxSpec => specOf({ grantedWrite: [GRANT_W] })
 
 /** 不带过滤器的 allow / deny 行：只允许这一组固定内容 */
 const FIXED_BARE_LINES = [
@@ -98,7 +116,7 @@ function expectSameSandboxSignalOnly(profile: string): void {
 }
 
 describe('PR-1 golden', () => {
-  it('PR-1 夹具规格（一个写授权 + 一个读授权）的 profile 与参数表', () => {
+  it('PR-1 夹具规格（一个写授权）的 profile 与参数表', () => {
     const { profile, params } = compile(FIXTURE())
     expect(profile).toMatchSnapshot('profile')
     expect(params).toMatchSnapshot('params')
@@ -153,7 +171,7 @@ describe('PR-1 golden', () => {
   })
 
   it.each([
-    ['夹具（一个写授权 + 一个读授权）', FIXTURE],
+    ['夹具（一个写授权）', FIXTURE],
     [
       '临时工作区会话',
       () => specOf({ workingDirectory: `${PATHS.userData}/temp_workspace/sess-1` })
@@ -163,8 +181,7 @@ describe('PR-1 golden', () => {
       '好几个授权',
       () =>
         specOf({
-          grantedWrite: [GRANT_W, '/Users/u/w2', '/Users/u/.shuvix/widgets/w'],
-          grantedRead: [GRANT_R, '/Users/u/Desktop/r2', '/Volumes/data/r3']
+          grantedWrite: [GRANT_W, '/Users/u/w2', '/Users/u/.shuvix/widgets/w']
         })
     ]
   ] as const)(
@@ -193,12 +210,12 @@ describe('PR-2 参数纪律 + 敌意路径（契约 9）', () => {
     const hostile = specOf({
       workingDirectory: hostileWs,
       grantedWrite: [hostileGlob, hostileNewline],
-      grantedRead: [hostileRegex]
+      credentialPaths: [hostileRegex]
     })
     const benign = specOf({
       workingDirectory: '/Users/u/p',
       grantedWrite: ['/Users/u/g1', '/Users/u/g2'],
-      grantedRead: ['/Users/u/r1']
+      credentialPaths: ['/Users/u/c1']
     })
     const h = compile(hostile)
     const b = compile(benign)
@@ -217,8 +234,6 @@ describe('PR-2 参数纪律 + 敌意路径（契约 9）', () => {
       ...hostile.writeDeniedFinal,
       ...hostile.gitRoots,
       ...hostile.readDenied,
-      ...hostile.readAllowBack,
-      ...hostile.readDeniedFinal,
       ...hostile.unixSockets,
       ...hostile.unixSocketDirs
     ])
@@ -240,8 +255,6 @@ describe('PR-3 空清单不产出不带过滤器的规则', () => {
     writeDeniedPatterns: [],
     gitRoots: [],
     readDenied: [],
-    readAllowBack: [],
-    readDeniedFinal: [],
     unixSockets: [],
     unixSocketDirs: [],
     tmpDir: '/t'
@@ -253,8 +266,6 @@ describe('PR-3 空清单不产出不带过滤器的规则', () => {
     for (const bare of [
       '(allow file-write*)',
       '(deny file-write*)',
-      '(deny file-read-data file-read-xattr)',
-      '(allow file-read-data file-read-xattr)',
       '(deny file-read*)',
       '(deny file-write-create file-write-unlink)',
       '(allow network-outbound)',
@@ -295,7 +306,7 @@ describe('PR-4 正则的来源', () => {
 })
 
 describe('PR-5 层序与操作名', () => {
-  it('PR-5 读：全读 < 拒读内容 < 放回内容 < 连元数据都拒；写：根 < 整片拒 < 放回 < 最后一层 < .git 项本身', () => {
+  it('PR-5 读：全读 < 拒读凭据（连元数据都拒）；写：根 < 整片拒 < 放回 < 最后一层 < .git 项本身', () => {
     const spec = FIXTURE()
     const { profile, params } = compile(spec)
     const ls = lines(profile)
@@ -306,21 +317,12 @@ describe('PR-5 层序与操作名', () => {
     }
 
     const readAll = at((l) => l === '(allow file-read*)', 'allow file-read*')
-    const readDeny = at(
-      (l) => l.startsWith('(deny file-read-data file-read-xattr '),
-      'deny read-data'
-    )
-    const readBack = at(
-      (l) => l.startsWith('(allow file-read-data file-read-xattr '),
-      'allow read-data'
-    )
-    const readFinal = at((l) => l.startsWith('(deny file-read* '), 'deny file-read*')
+    const readDeny = at((l) => l.startsWith('(deny file-read* '), 'deny file-read*')
     expect(readAll).toBeLessThan(readDeny)
-    expect(readDeny).toBeLessThan(readBack)
-    expect(readBack).toBeLessThan(readFinal)
     expect(paramValues(ls[readDeny], params)).toEqual(spec.readDenied)
-    expect(paramValues(ls[readBack], params)).toEqual(spec.readAllowBack)
-    expect(paramValues(ls[readFinal], params)).toEqual(spec.readDeniedFinal)
+    expect(spec.readDenied).toEqual(CREDENTIALS)
+    // 读只有这两行：没有 file-read-data 那一层的拒绝与放回
+    expect(ls.filter((l) => l.includes('file-read-data'))).toEqual([])
 
     const writeAllows = ls
       .map((l, i) => [l, i] as const)
@@ -349,7 +351,7 @@ describe('PR-5 层序与操作名', () => {
     )
   })
 
-  it('PR-5 读的放回写 file-read-data file-read-xattr，从不写带过滤器的 allow file-read*（压不过具体操作的拒绝）', () => {
+  it('PR-5 读没有放回：从不写带过滤器的 allow file-read*', () => {
     const { profile } = compile(FIXTURE())
     for (const l of lines(profile)) {
       expect(l, l).not.toMatch(/^\(allow file-read\* \((subpath|literal|regex|require)/)
@@ -399,6 +401,70 @@ describe('PR-6 .git 规则只在 git 根里', () => {
     expect([...gitParamValues].sort()).toEqual([...spec.gitRoots].sort())
     for (const bad of [spec.tmpDir, '/private/tmp', '/Users/u/.npm']) {
       expect(gitParamValues.has(bad)).toBe(false)
+    }
+  })
+})
+
+describe('PR-3b / PR-7 / PR-8 读只有凭据一层；别家工具的配置不再受保护；围栏在', () => {
+  const HOME = PATHS.home
+  const ROOT_NAMES = [
+    '.vscode',
+    '.idea',
+    '.claude',
+    '.cursor',
+    '.codex',
+    '.zed',
+    '.mcp.json',
+    '.envrc'
+  ]
+
+  it('PR-3b 凭据清单为空的真实规格：没有任何 (deny file-read* 行；不带过滤器的行仍恰是固定那一组', () => {
+    const spec = specOf({ grantedWrite: [GRANT_W], credentialPaths: [] })
+    expect(spec.readDenied).toEqual([])
+    const { profile } = compile(spec)
+    const ls = lines(profile)
+    expect(ls.filter((l) => l.startsWith('(deny file-read*'))).toEqual([])
+    expect(ls).toContain('(allow file-read*)')
+    expect(ls.filter(isBare)).toEqual(FIXED_BARE_LINES)
+  })
+
+  it('PR-7 根顶层的 .vscode / .claude / .mcp.json …：没有哪个参数以它们结尾，也没有哪条正则提到它们', () => {
+    const { profile, params } = compile(specOf({ grantedWrite: [GRANT_W, '/Volumes/other'] }))
+    for (const value of Object.values(params)) {
+      for (const name of ROOT_NAMES) {
+        expect(value.endsWith(`/${name}`), `${value} ends with ${name}`).toBe(false)
+      }
+    }
+    const regexes = [...profile.matchAll(/#"([^"]*)"/g)].map((m) => m[1])
+    for (const re of regexes) {
+      for (const name of ROOT_NAMES) {
+        const bare = name.replace(/^\./, '')
+        expect(re.toLowerCase().includes(bare), `${re} mentions ${name}`).toBe(false)
+        // 语义上也不命中（正则是按字母 [Xx] 写的，字面查找之外再实测一遍）
+        for (const path of [`${WS}/${name}`, `${WS}/${name}/x`, `${GRANT_W}/${name}/x`]) {
+          expect(new RegExp(re).test(path), `${re} matches ${path}`).toBe(false)
+        }
+      }
+    }
+  })
+
+  it('PR-8 围栏：整片拒写是 ~/.shuvix 与 userData；最后一层拒写里有每个凭据位置、~/.gitconfig、LaunchAgents、ssh / tmux 目录', () => {
+    const spec = FIXTURE()
+    const { profile, params } = compile(spec)
+    const ls = lines(profile)
+    const denies = ls.filter((l) => l.startsWith('(deny file-write* '))
+    expect(denies).toHaveLength(2)
+    expect(paramValues(denies[0], params)).toEqual([PATHS.shuvixHome, PATHS.userData])
+
+    const finalLayer = paramValues(denies[1], params)
+    for (const expected of [
+      ...CREDENTIALS,
+      `${HOME}/.gitconfig`,
+      `${HOME}/Library/LaunchAgents`,
+      '/private/tmp/shuvix-ssh-501',
+      '/private/tmp/tmux-501'
+    ]) {
+      expect(finalLayer, expected).toContain(expected)
     }
   })
 })

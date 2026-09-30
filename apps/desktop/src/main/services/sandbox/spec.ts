@@ -10,14 +10,11 @@ import { join, sep } from 'path'
 import { isSafeSessionId } from '../../utils/paths'
 import {
   CACHE_DIRS_HOME_RELATIVE,
-  CREDENTIAL_DIRS_HOME_RELATIVE,
   EXECUTED_LATER_HOME_RELATIVE,
   GIT_ENTRY_PATTERN,
   GIT_PATTERNS,
   LAUNCHD_TMP_PATTERN,
   MDNS_RESPONDER_SOCKET,
-  PERSONAL_DIRS_HOME_RELATIVE,
-  ROOT_PROTECTED_NAMES,
   SHUVIX_CONTENT_DIRS
 } from './tables'
 import type {
@@ -66,10 +63,10 @@ export function buildSandboxSpec(
   const userData = real(paths.userData)
   const ws = real(input.workingDirectory)
   const grantsWrite = dedupe(input.grantedWrite.map(real))
-  const grantsRead = dedupe(input.grantedRead.map(real))
+  const credentialDirs = dedupe(input.credentialPaths.filter((p) => p !== '').map(real))
 
-  // 根等于或覆盖家目录：受保护清单会变成打地鼠（rc、LaunchAgents、各家工具配置……数不完），
-  // 不如老老实实逐条询问
+  // 根等于或覆盖家目录：shell 启动文件、LaunchAgents 就在根里，一条命令就能在沙箱外留下会被执行的
+  // 东西 —— 与其在最后一层补一张越来越长的例外表，不如老老实实逐条询问
   for (const root of [ws, ...grantsWrite]) {
     if (root === '/' || isWithin(home, root)) {
       return {
@@ -90,23 +87,10 @@ export function buildSandboxSpec(
   if (isWithin(ws, userData) && !isWithin(ws, tempWorkspace)) {
     return { ok: false, reason: "working directory is inside ShuviX's application data" }
   }
-  const credentialDirs = CREDENTIAL_DIRS_HOME_RELATIVE.map((d) => join(home, d))
+  // 工作区就是凭据位置：命令在里面读写都被拒，沙箱里什么也干不了 —— 逐条询问反而能用。
+  // 根**包含**凭据位置、ShuviX 自己的文件不需要这样处理：它们在更后面的层里拒，放不回来
   if (withinAny(ws, credentialDirs)) {
     return { ok: false, reason: 'working directory is a credential directory' }
-  }
-  // 根**严格包含**敏感目录（工作区是 ~/Library、授权了 ~/Library/Application Support……）：
-  // 放回根会把里面的邮件、钥匙串、ShuviX 自己的数据一起放出来。与其在最后一层补一张越来越长的
-  // 例外表，不如老实逐条询问。根**等于**个人资料目录（工作区就是 ~/Documents）不算 —— 那是用户选的项目
-  const personalDirs = PERSONAL_DIRS_HOME_RELATIVE.map((d) => join(home, d))
-  const sensitive = [...personalDirs, ...credentialDirs, shuvixHome, userData]
-  for (const root of [ws, ...grantsWrite]) {
-    const inside = sensitive.find((d) => d !== root && isWithin(d, root))
-    if (inside) {
-      return {
-        ok: false,
-        reason: `${root === ws ? 'working directory' : 'a write grant'} contains ${inside}`
-      }
-    }
   }
 
   const tmpDir = join(paths.tmpRoot, sessionTmpName(sessionId))
@@ -136,18 +120,9 @@ export function buildSandboxSpec(
   const writeDeniedFinal = dedupe([
     ...credentialDirs,
     ...EXECUTED_LATER_HOME_RELATIVE.map((d) => join(home, d)),
+    // ShuviX 的 ssh 连接复用 socket 与用户的 tmux 会话：换掉或劫持它们就能在沙箱外执行
     `/private/tmp/shuvix-ssh-${paths.uid}`,
-    `/private/tmp/tmux-${paths.uid}`,
-    ...gitRoots.flatMap((root) => ROOT_PROTECTED_NAMES.map((name) => join(root, name)))
-  ])
-
-  const toolResultsDir = join(userData, 'tool_results', sessionId)
-  const readDenied = [...personalDirs, userData]
-  const readAllowBack = dedupe([ws, toolResultsDir, ...grantsRead, ...grantsWrite])
-  const readDeniedFinal = dedupe([
-    ...credentialDirs,
-    join(shuvixHome, '.session-state'),
-    join(userData, 'data')
+    `/private/tmp/tmux-${paths.uid}`
   ])
 
   return {
@@ -161,9 +136,7 @@ export function buildSandboxSpec(
       writeDeniedFinal,
       writeDeniedPatterns: [LAUNCHD_TMP_PATTERN],
       gitRoots,
-      readDenied,
-      readAllowBack,
-      readDeniedFinal,
+      readDenied: credentialDirs,
       unixSockets: dedupe([real(paths.cliSocket), MDNS_RESPONDER_SOCKET]),
       unixSocketDirs: dedupe([tmpDir, ws]),
       tmpDir
@@ -171,13 +144,6 @@ export function buildSandboxSpec(
   }
 }
 
-/**
- * 规格 → 策略变量。与 profile 同源，所以 write/read 工具的免询问范围恰好是命令能碰的范围：
- *   - 写：可写根里、且不在最后一层拒写里的位置免询问；第 2 层整片拒写（~/.shuvix、userData）
- *     只在它落在某个根里面时才需要列出（平常它包着根、根又被放回）
- *   - 读：敏感清单里、且不在放回范围里的位置要问；cli-token 额外列入——沙箱为了让
- *     shuvix CLI 能用而放它可读，但没有理由让 read 工具把它读进模型上下文
- */
 /**
  * 写入要照旧询问的路径模式（JS 方言）：git 自己会执行 / 加载的元数据，`.git` 这一项本身，以及规格里
  * 的其余拒写模式。沙箱视图与工作区写入视图（workspaceWriteView）共用这一份 —— 两边的「受保护」
@@ -191,7 +157,13 @@ export function protectedWritePatterns(spec: SandboxSpec): string[] {
   ]
 }
 
-export function toPolicyView(spec: SandboxSpec, cliToken: string): SessionSandboxView {
+/**
+ * 规格 → 策略变量（ask-on-write 读）。与 profile 同源，所以 write 工具的免询问范围恰好是命令能写的
+ * 范围：可写根里、且不在最后一层拒写里的位置免询问；第 2 层整片拒写（~/.shuvix、userData）只在它
+ * 落在某个根里面时才需要列出（平常它包着根、根又被放回）。读没有对应的变量：命令除凭据外全能读，
+ * 凭据由 protect-credentials 自己问。
+ */
+export function toPolicyView(spec: SandboxSpec): SessionSandboxView {
   // 实际可写的根：落在整片拒写里、又没被放回的根（如 ~/.shuvix/policies 里的写授权）不算
   const effectiveRoots = spec.writableRoots.filter(
     (r) => !spec.writeDenied.some((d) => isWithin(r, d)) || spec.writeAllowBack.includes(r)
@@ -203,8 +175,6 @@ export function toPolicyView(spec: SandboxSpec, cliToken: string): SessionSandbo
     sandboxActive: true,
     sandboxWritableRoots: effectiveRoots,
     sandboxWriteDenied: dedupe([...deniedInsideRoots, ...spec.writeDeniedFinal]),
-    sandboxProtectedPatterns: protectedWritePatterns(spec),
-    sandboxReadDenied: dedupe([...spec.readDenied, ...spec.readDeniedFinal, cliToken]),
-    sandboxReadAllowed: [...spec.readAllowBack]
+    sandboxProtectedPatterns: protectedWritePatterns(spec)
   }
 }

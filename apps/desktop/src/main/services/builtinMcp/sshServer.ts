@@ -423,7 +423,7 @@ export async function createSshMcpServer(
   /**
    * 传输类工具的公共部分：核对别名、把本地路径解析成绝对路径、过**文件访问策略**。
    *
-   * 本地那一侧走 `enforcePath`，与本地读写完全同一条路 —— 于是 `ask-on-read` /
+   * 本地那一侧走 `enforcePath`，与本地读写完全同一条路 —— 于是
    * `ask-on-write` / `protect-credentials` / `protect-system` / 项目沙箱对「下载到哪里」
    * 照样生效。远端那一侧没有可表达的路径词汇，由 L1 门兜着（策略可按 `object.mcpTool` 设门）。
    */
@@ -444,7 +444,7 @@ export async function createSshMcpServer(
 
     const cwd = resolveProjectConfig(scope.sessionId).workingDirectory
     // **绝对路径也要 resolve**：路径策略的匹配是按段前缀比的，不做归一化，于是
-    // `/ws/../../Users/me/.ssh/id_rsa` 会被当成「在工作目录内」—— ask-on-read 不响、
+    // `/ws/../../Users/me/.ssh/id_rsa` 会被当成「在工作目录内」—— ask-on-write 不响、
     // protect-credentials 不响，私钥就这么送出去了。`..` 必须在进策略之前折掉。
     const localAbs = resolvePath(isAbsolute(localPath) ? localPath : resolvePath(cwd, localPath))
 
