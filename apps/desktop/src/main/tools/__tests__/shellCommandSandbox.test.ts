@@ -12,7 +12,10 @@
  *         `unsandboxed`（后台时与 `background` 并存）；用户选「其它」则不执行；
  *  - SC-4 本实例没套沙箱（pin 为假 / PowerShell）时，参数里就算带了 `dangerouslyDisableSandbox` 也
  *         无视：不要计划、不标任何沙箱字段，命令照旧执行；
- *  - SC-5 设置页的 describe() 读全局开关（sandboxGloballyActive），从不 pin 会话。
+ *  - SC-5 设置页的 describe() 读全局开关（sandboxGloballyActive），从不 pin 会话；
+ *  - SC-SB 工具结果 details 的 `sandbox`（工具卡上的沙箱标记）：真的起了进程才有，值就是命令客体
+ *         `unconfinedReason` 的同一个答案（'' → confined）—— 前台落定、转后台、后台预热内落定三种形态
+ *         都带；超时 / 非零退出也带；用户选「其它」（没执行）不带。
  *
  * 命令客体恒带 `unconfinedReason`（没进沙箱的原因，圈住了为 ''）：圈住 ''、计划为 null 'unavailable'、
  * 申请越界 'escalated'、pin 为假的 bash 按此刻的沙箱状态（替身里设置关着 → 'disabled'）、
@@ -28,6 +31,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ToolContext } from '../../services/toolContext'
 import type { SandboxPlan } from '../../services/sandbox'
+import type { BashToolDetails } from '@shuvix/chat-protocol/types/chatMessage'
 
 const mocks = vi.hoisted(() => ({
   enforceCommand: vi.fn(),
@@ -131,6 +135,19 @@ async function run(
 ): Promise<string> {
   const result = await tool.execute(toolCallId, p as never)
   return (result.content[0] as { text: string }).text
+}
+
+/** 同 run，连 details 一起交回 */
+async function runFull(
+  tool: BashTool | PowerShellTool,
+  p: Record<string, unknown>,
+  toolCallId = 'tc-1'
+): Promise<{ text: string; details: BashToolDetails }> {
+  const result = await tool.execute(toolCallId, p as never)
+  return {
+    text: (result.content[0] as { text: string }).text,
+    details: result.details as BashToolDetails
+  }
 }
 
 /** 按 pin 的答案造一个 bash 工具 */
@@ -510,4 +527,128 @@ describe('SC-5 设置页的 describe() 读全局开关', () => {
     expect(described.description).not.toMatch(/sandbox/i)
     expect(described.description).toBe(bashWithPin(false).description)
   })
+})
+
+describe('SC-SB 工具结果 details 的 sandbox（工具卡上的沙箱标记）', () => {
+  type State = 'confined' | 'escalated' | 'disabled' | 'unsupported' | 'unavailable'
+
+  /** 一行状态：怎么造工具 + 额外参数 + 期望的标记 */
+  const STATES: Array<{
+    name: string
+    make: () => BashTool | PowerShellTool
+    extra: Record<string, unknown>
+    expected: State
+  }> = [
+    {
+      name: 'pin 为真 + 有计划',
+      make: () => bashWithPin(true),
+      extra: {},
+      expected: 'confined'
+    },
+    {
+      name: 'pin 为真 + 计划为 null',
+      make: () => {
+        mocks.planFor.mockReturnValue(null)
+        return bashWithPin(true)
+      },
+      extra: {},
+      expected: 'unavailable'
+    },
+    {
+      name: 'pin 为真 + 申请越界',
+      make: () => bashWithPin(true),
+      extra: { dangerouslyDisableSandbox: true },
+      expected: 'escalated'
+    },
+    ...(['disabled', 'unsupported', 'unavailable'] as const).map((reason) => ({
+      name: `pin 为假 + whyUnconfined=${reason}`,
+      make: (): BashTool | PowerShellTool => {
+        mocks.whyUnconfined.mockReturnValue(reason)
+        return bashWithPin(false)
+      },
+      extra: {},
+      expected: reason as State
+    })),
+    {
+      name: 'powershell（pin 为真、whyUnconfined=disabled 也一样）',
+      make: () => {
+        mocks.pinSession.mockReturnValue(true)
+        mocks.whyUnconfined.mockReturnValue('disabled')
+        return new PowerShellTool(CTX)
+      },
+      extra: {},
+      expected: 'unsupported'
+    }
+  ]
+
+  /** 三种形态：前台落定 / 转后台 / 后台但预热窗口内落定 */
+  const SHAPES = [
+    { shape: '前台落定', background: false, outcome: () => settled(0, 'out'), detached: false },
+    { shape: '转后台', background: true, outcome: detached, detached: true },
+    {
+      shape: '后台但预热内落定',
+      background: true,
+      outcome: () => settled(0, 'out'),
+      detached: false
+    }
+  ]
+
+  const ROWS = STATES.flatMap((st) => SHAPES.map((sh) => ({ ...st, ...sh })))
+
+  it.each(ROWS)(
+    'SC-SB1 $name × $shape：details.sandbox = $expected，与命令客体的 unconfinedReason 同一个答案',
+    async ({ make, extra, expected, background, outcome, detached: isDetached }) => {
+      mocks.runCommand.mockResolvedValueOnce(outcome())
+      const tool = make()
+      const r = await runFull(tool, params({ ...extra, run_in_background: background }))
+
+      expect(mocks.runCommand).toHaveBeenCalledTimes(1)
+      expect(r.details.sandbox).toBe(expected)
+      const reason = enforceArgs()[0].unconfinedReason as string
+      expect(r.details.sandbox).toBe(reason === '' ? 'confined' : reason)
+      if (isDetached) expect(r.details.background).toBe(true)
+      else expect(r.details.background).toBeUndefined()
+    }
+  )
+
+  it.each(['confined', 'escalated', 'unavailable'] as const)(
+    'SC-SB2 前台超时（124）与非零退出也带着标记（%s）',
+    async (state) => {
+      const make = (): BashTool => {
+        if (state === 'unavailable') mocks.planFor.mockReturnValue(null)
+        return bashWithPin(true)
+      }
+      const extra = state === 'escalated' ? { dangerouslyDisableSandbox: true } : {}
+
+      mocks.runCommand.mockResolvedValueOnce({
+        kind: 'settled',
+        info: taskInfo({ exitCode: null }),
+        output: 'slow',
+        reason: 'timeout'
+      })
+      const timedOut = await runFull(make(), params({ ...extra, timeout: 5 }))
+      expect(timedOut.text.endsWith('[Command timed out (5s)]')).toBe(true)
+      expect(timedOut.details).toMatchObject({ exitCode: 124, sandbox: state })
+
+      mocks.runCommand.mockResolvedValueOnce(settled(3, 'bad'))
+      const failed = await runFull(make(), params(extra))
+      expect(failed.text.endsWith('[Exit code: 3]')).toBe(true)
+      expect(failed.details).toMatchObject({ exitCode: 3, sandbox: state })
+    }
+  )
+
+  it.each([
+    ['圈住', {}],
+    ['申请越界', { dangerouslyDisableSandbox: true }]
+  ] as const)(
+    'SC-SB3 用户选「其它」（%s）：没执行，details 不带 sandbox',
+    async (_label, extra) => {
+      mocks.enforceCommand.mockResolvedValueOnce({ status: 'feedback', text: 'not now' })
+      const r = await runFull(bashWithPin(true), params(extra))
+
+      expect(mocks.runCommand).not.toHaveBeenCalled()
+      expect(r.text).toContain('Command was not executed')
+      expect(r.details).not.toHaveProperty('sandbox')
+    }
+  )
 })

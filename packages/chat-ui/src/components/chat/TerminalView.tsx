@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { Check, Copy } from 'lucide-react'
+import type { ShellSandboxState } from '@shuvix/chat-protocol/types/chatMessage'
 import { copyToClipboard } from '../../utils/clipboard'
+import { SandboxBadge } from './SandboxTag'
 
 /**
  * 提示符里的 cwd：先折 home，再长则只留末两段 —— 终端提示符本来也不显示全路径。
@@ -29,6 +31,8 @@ interface TerminalViewProps {
   host?: string
   /** 非 0 时在提示符行右侧标出 —— 输出可能很长，退出码不该只躺在末尾等人滚 */
   exitCode?: number
+  /** 这条命令与沙箱的关系（工具卡传；后台任务面板不传，不显示标记） */
+  sandbox?: ShellSandboxState
   running?: boolean
   /**
    * 输出持续增长时自动贴底（后台任务面板用；对话里的历史命令输出是静态的，不传即维持原行为）。
@@ -51,6 +55,7 @@ export function TerminalView({
   cwd,
   host,
   exitCode,
+  sandbox,
   running,
   stickToBottom = false,
   outputMaxHClass = 'max-h-64'
@@ -94,6 +99,7 @@ export function TerminalView({
             {location}
           </span>
         )}
+        {sandbox && <SandboxBadge state={sandbox} />}
         <span className="flex-shrink-0 text-success/70 select-none">❯</span>
         <span className="min-w-0 flex-1 whitespace-pre-wrap break-words text-text-primary">
           {command}

@@ -20,7 +20,7 @@ import {
 } from 'typebox'
 import { BaseTool, type UnconfinedReason } from '@shuvix/agent-runtime'
 import type { AgentToolResult } from '@earendil-works/pi-agent-core'
-import type { BashToolDetails } from '@shuvix/chat-protocol/types/chatMessage'
+import type { BashToolDetails, ShellSandboxState } from '@shuvix/chat-protocol/types/chatMessage'
 import { collapseProgressOutput, type ShellKind } from '../utils/toolUtils/shell'
 import {
   getDesktopSecurityContext,
@@ -123,6 +123,13 @@ function unconfinedReasonOf(
   return whyUnconfined(sessionId)
 }
 
+/** 工具卡上的沙箱标记：圈住了 = confined，否则就是没圈住的原因（ssh 的 remote 走不到这里） */
+function sandboxStateOf(reason: UnconfinedReason): ShellSandboxState {
+  if (reason === '') return 'confined'
+  if (reason === 'remote') return 'unsupported'
+  return reason
+}
+
 export interface ShellCommandToolSpec {
   shell: ShellKind
   label: string
@@ -199,6 +206,9 @@ export class ShellCommandTool extends BaseTool<ShellCommandParamsSchema> {
           })
         : null
 
+    const unconfinedReason = unconfinedReasonOf(this.spec, this.ctx.sessionId, escalate, plan)
+    const sandbox = sandboxStateOf(unconfinedReason)
+
     // 是否询问由安全模块决定：内置 ask-on-command 只问没被圈住的命令（sandboxed=false），
     // autoAllow 走 force-allow 层
     const outcome = await getDesktopSecurityContext(this.ctx).enforceCommand(
@@ -208,7 +218,7 @@ export class ShellCommandTool extends BaseTool<ShellCommandParamsSchema> {
         command: params.command,
         cwd: config.workingDirectory,
         ...(plan ? { sandboxed: true } : {}),
-        unconfinedReason: unconfinedReasonOf(this.spec, this.ctx.sessionId, escalate, plan)
+        unconfinedReason
       },
       {
         toolCallId,
@@ -245,7 +255,14 @@ export class ShellCommandTool extends BaseTool<ShellCommandParamsSchema> {
     const extraEnv = { ...config.envVars, SHUVIX_SESSION_ID: this.ctx.sessionId }
 
     if (params.run_in_background) {
-      return this.runInBackground(toolCallId, params, config.workingDirectory, extraEnv, plan)
+      return this.runInBackground(
+        toolCallId,
+        params,
+        config.workingDirectory,
+        extraEnv,
+        plan,
+        sandbox
+      )
     }
 
     // 同步形态 —— 与后台形态**同一条 spawn 路径**，只是等待策略不同（见 bgTaskService.runCommand）。
@@ -279,7 +296,7 @@ export class ShellCommandTool extends BaseTool<ShellCommandParamsSchema> {
     // 输出长度的截断/落盘统一由 wrapToolOutput 在构建工具时处理
     return {
       content: [{ type: 'text' as const, text }],
-      details: this.details({ exitCode, cwd: config.workingDirectory })
+      details: this.details({ exitCode, cwd: config.workingDirectory, sandbox })
     }
   }
 
@@ -294,7 +311,8 @@ export class ShellCommandTool extends BaseTool<ShellCommandParamsSchema> {
     params: { command: string; description: string },
     cwd: string,
     extraEnv: Record<string, string>,
-    plan: SandboxPlan | null
+    plan: SandboxPlan | null,
+    sandbox: ShellSandboxState
   ): Promise<AgentToolResult<BashToolDetails>> {
     const sessionId = this.ctx.sessionId
 
@@ -330,7 +348,7 @@ export class ShellCommandTool extends BaseTool<ShellCommandParamsSchema> {
       if (exitCode !== 0) text += `\n\n[Exit code: ${exitCode}]`
       return {
         content: [{ type: 'text' as const, text }],
-        details: this.details({ exitCode, cwd })
+        details: this.details({ exitCode, cwd, sandbox })
       }
     }
 
@@ -339,7 +357,7 @@ export class ShellCommandTool extends BaseTool<ShellCommandParamsSchema> {
         { type: 'text' as const, text: formatStartReceipt(started.info, started.logBytes) }
       ],
       // exitCode 0 = 启动成功（非命令结果）；background 标记让 UI 走后台形态
-      details: this.details({ exitCode: 0, cwd, background: true })
+      details: this.details({ exitCode: 0, cwd, background: true, sandbox })
     }
   }
 }

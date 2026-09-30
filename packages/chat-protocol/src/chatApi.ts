@@ -800,6 +800,12 @@ export interface HostApi {
     dismiss: (params: { toolCallId: string }) => Promise<{ success: boolean }>
     /** 清空会话内所有已结束的任务 */
     clearDone: (params: { sessionId: string }) => Promise<{ cleared: number }>
+    /**
+     * 一次 shell 命令调用实际执行的命令（沙箱包装、shell 参数、额外环境变量都在内），
+     * 可直接贴进终端复现；没有记录（旧会话、命令没执行、文件已删）返回 null。
+     * 在 HostApi 而不在渠道面：它暴露本机的沙箱规则与路径，且侧边栏的会话没有 shell 工具。
+     */
+    readInvocation: (params: { sessionId: string; toolCallId: string }) => Promise<string | null>
   }
   /** 文件回写（属管理类，渠道端无权） */
   files: {

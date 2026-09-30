@@ -11,7 +11,9 @@
  *  - D6 停止命令的提示按 shell 给，不按当前平台 —— 设置页在任何平台上展示两个工具各自真实的描述；
  *    bash 教 `shuvix task stop <pid>`（宿主代停）而不是 `kill -- -<pid>`：沙箱里的命令发不出跨实例的信号；
  *  - SC-SG1 工具调用自己的中止信号原样交给询问（EnforceOpts.signal）—— 询问点的审查随调用一起中止；
- *    后台形态同样交（spawn 那头照旧不带）。
+ *    后台形态同样交（spawn 那头照旧不带）；
+ *  - details 的 `sandbox`（工具卡的沙箱标记）只在真的起了进程时才有：命令落定（D1 / D2 预热内退出）带着，
+ *    后台上限、用户选「其它」、PowerShell 超长这三条没 spawn 的路径都不带。
  *
  * 替身：toolContext（安全门是 spy、项目配置固定）、bgTaskService 的三个执行入口（回执与停止命令
  * 的文案用真的）、i18n。getPowerShellConfig 可按用例换成固定版本（D5）。
@@ -67,6 +69,7 @@ import {
   powerShellCommandLineLength
 } from '../../utils/toolUtils/shell'
 import { getBuiltinToolEntries } from '../../services/toolRegistry'
+import { whyUnconfined } from '../../services/sandbox'
 import { isBackgroundCall } from '@shuvix/chat-protocol/types/chatMessage'
 
 type ShellName = 'bash' | 'powershell'
@@ -81,6 +84,15 @@ function setPlatform(platform: NodeJS.Platform): void {
 
 function makeTool(shell: ShellName): BashTool | PowerShellTool {
   return shell === 'bash' ? new BashTool(CTX) : new PowerShellTool(CTX)
+}
+
+/**
+ * 本文件的工具实例都没套沙箱（沙箱管理器是真的，设置读取器没注入 = 开关关着）：bash 的标记就是
+ * 真管理器对本会话的回答（有后端的机器上 'disabled'，没有的 'unsupported'），powershell 恒 'unsupported'。
+ * 必须在工具构造（pin 会话）之后再问
+ */
+function expectedSandbox(shell: ShellName): string {
+  return shell === 'bash' ? whyUnconfined(SID) : 'unsupported'
 }
 
 /** 一份 BgTaskInfo（只填回执 / 停止命令会读到的字段有意义） */
@@ -194,14 +206,23 @@ describe.each(['bash', 'powershell'] as const)('%s —— 与另一个命令工�
   it(`D1 — ${shell} 前台的四种结局：成功只回输出；非零标退出码；超时标 124；中止抛 Aborted`, async () => {
     const tool = makeTool(shell)
 
+    // 测试里的工具实例都没套沙箱：bash 按真管理器此刻的回答，powershell 没有后端
+    const sandbox = expectedSandbox(shell)
+    expect(['disabled', 'unsupported']).toContain(sandbox)
     const ok = await run(tool, params())
     expect(ok.text).toBe('out')
-    expect(ok.details).toEqual({ type: shell, exitCode: 0, truncated: false, cwd: '/w' })
+    expect(ok.details).toEqual({ type: shell, exitCode: 0, truncated: false, cwd: '/w', sandbox })
 
     mocks.runCommand.mockResolvedValueOnce(settled(3, 'bad'))
     const failed = await run(tool, params())
     expect(failed.text.endsWith('[Exit code: 3]')).toBe(true)
-    expect(failed.details).toEqual({ type: shell, exitCode: 3, truncated: false, cwd: '/w' })
+    expect(failed.details).toEqual({
+      type: shell,
+      exitCode: 3,
+      truncated: false,
+      cwd: '/w',
+      sandbox
+    })
 
     mocks.runCommand.mockResolvedValueOnce(settled(null, 'slow', 'timeout'))
     const timedOut = await run(tool, params({ timeout: 5 }))
@@ -226,7 +247,12 @@ describe.each(['bash', 'powershell'] as const)('%s —— 与另一个命令工�
     // 后台形态刻意不传超时与中止信号（停止生成不杀后台任务）
     expect(mocks.runCommand.mock.calls[0][0].signal).toBeUndefined()
 
-    expect(r.details).toMatchObject({ type: shell, background: true, exitCode: 0 })
+    expect(r.details).toMatchObject({
+      type: shell,
+      background: true,
+      exitCode: 0,
+      sandbox: expectedSandbox(shell)
+    })
     expect(isBackgroundCall(r.details)).toBe(true)
     expect(r.text).toContain('pid 777')
   })
@@ -235,7 +261,13 @@ describe.each(['bash', 'powershell'] as const)('%s —— 与另一个命令工�
     mocks.runCommand.mockResolvedValueOnce(settled(2, 'no such command'))
     const r = await run(makeTool(shell), params({ run_in_background: true }))
 
-    expect(r.details).toEqual({ type: shell, exitCode: 2, truncated: false, cwd: '/w' })
+    expect(r.details).toEqual({
+      type: shell,
+      exitCode: 2,
+      truncated: false,
+      cwd: '/w',
+      sandbox: expectedSandbox(shell)
+    })
     expect(isBackgroundCall(r.details)).toBe(false)
     expect(r.text.endsWith('[Exit code: 2]')).toBe(true)
   })
@@ -256,6 +288,8 @@ describe.each(['bash', 'powershell'] as const)('%s —— 与另一个命令工�
     expect(r.text).not.toContain('done one')
     expect(r.details).toMatchObject({ type: shell, exitCode: -1 })
     expect(mocks.runCommand).not.toHaveBeenCalled()
+    // 没起进程：没有沙箱标记（宿主也就没留「实际执行的命令」）
+    expect(r.details).not.toHaveProperty('sandbox')
 
     // FU-6：列出的停止命令就是模型该跑的那一条
     const lines = r.text.split('\n')
@@ -274,6 +308,7 @@ describe.each(['bash', 'powershell'] as const)('%s —— 与另一个命令工�
 
     expect(r.text).toBe('Command was not executed. User responded with feedback instead:\nno')
     expect(r.details).toMatchObject({ type: shell, exitCode: -1 })
+    expect(r.details).not.toHaveProperty('sandbox')
     expect(mocks.runCommand).not.toHaveBeenCalled()
   })
 
@@ -323,6 +358,7 @@ describe('PowerShell 的命令行长度上限（询问之前）', () => {
       expect(mocks.runCommand).not.toHaveBeenCalled()
       expect(r.text).toContain('.ps1')
       expect(r.details).toMatchObject({ type: 'powershell', exitCode: -1 })
+      expect(r.details).not.toHaveProperty('sandbox')
     }
   )
 

@@ -1,6 +1,7 @@
 /**
  * 命令沙箱 —— 管理器 + bgTaskService 端到端，真 Seatbelt（[darwin]）：RS-10（含 FU-7：智能体经宿主
- * 停掉自己那条受限的后台任务 —— 沙箱里的命令自己发不出跨实例的信号）。
+ * 停掉自己那条受限的后台任务 —— 沙箱里的命令自己发不出跨实例的信号）；RS-11：工具卡上「实际执行的
+ * 命令」那份记录贴进终端能复现同一条受限命令（同样的 TMPDIR、同样被拦下、同样能写工作区）。
  *
  * 与 seatbelt.darwin.test.ts 分开放，因为这里要换掉 `os` 与 `electron`：管理器从 `os.homedir()` /
  * `app.getPath('userData')` 现取宿主路径，而家目录必须是假的。fakeHome 建在 realpath(os.tmpdir())
@@ -15,7 +16,16 @@
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { randomBytes } from 'crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'fs'
+import { spawnSync } from 'child_process'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  unlinkSync
+} from 'fs'
 import { join } from 'path'
 
 const state = vi.hoisted(() => ({ home: '', tmp: '', userData: '' }))
@@ -65,6 +75,7 @@ import {
   stopBgTask,
   stopBgTaskByAgent
 } from '../../bgTaskService'
+import { readInvocation } from '../../commandInvocation'
 /* eslint-enable boundaries/dependencies */
 
 const RAND = randomBytes(4).toString('hex')
@@ -282,6 +293,51 @@ describe.skipIf(process.platform !== 'darwin')('sandbox manager + bgTaskService 
       }
     }
   }, 30_000)
+
+  it('RS-11 the recorded invocation, pasted into bash, reruns the same confined command', async (ctx) => {
+    if (!available || !plan) ctx.skip()
+    const toolCallId = nextId()
+    const outcome = await runCommand({
+      sessionId: SID,
+      toolCallId,
+      shell: 'bash',
+      command: 'echo "TMP=$TMPDIR"; touch pasted-ok; touch "$HOME/.shuvix/pasted"; echo rc=$?',
+      description: 'sandbox invocation record',
+      cwd: ws,
+      extraEnv: { HOME: fakeHome, SHUVIX_SESSION_ID: SID },
+      background: false,
+      timeoutMs: 20_000,
+      sandbox: plan!
+    })
+    expect(outcome.kind).toBe('settled')
+    if (outcome.kind !== 'settled') return
+    expect(outcome.output).toContain('rc=1')
+
+    const text = readInvocation(SID, toolCallId)
+    expect(text).not.toBeNull()
+    expect(text).toContain('/usr/bin/sandbox-exec')
+    // HOME 来自调用方的 extraEnv（项目变量那一类）：只列名字，不写成赋值
+    expect(text!.split('\n')[0]).toBe(": 'Also set (values not shown): HOME'")
+    expect(text).not.toMatch(/(^|\s)HOME=/m)
+    expect(text).toContain(`TMPDIR=${plan!.env.TMPDIR} `)
+
+    const okFile = join(ws, 'pasted-ok')
+    const blocked = join(fakeHome, '.shuvix', 'pasted')
+    expect(existsSync(okFile)).toBe(true)
+    unlinkSync(okFile)
+
+    // 用户贴进自己的终端：环境是他自己的（这里 HOME 换成假的家目录，其余照测试进程）
+    const pasted = spawnSync('/bin/bash', ['--norc', '-c', text!], {
+      env: { ...process.env, HOME: fakeHome },
+      encoding: 'utf8',
+      timeout: 20_000
+    })
+    expect(pasted.stdout).toContain(`TMP=${plan!.env.TMPDIR}\n`)
+    expect(pasted.stdout).toContain('rc=1')
+    expect(pasted.stderr).toContain(`touch: ${blocked}: Operation not permitted`)
+    expect(existsSync(okFile)).toBe(true)
+    expect(existsSync(blocked)).toBe(false)
+  })
 
   it('RS-10 cleanupSession removes the session tmp dir', (ctx) => {
     if (!available || !plan) ctx.skip()

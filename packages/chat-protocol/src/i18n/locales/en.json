@@ -344,7 +344,21 @@
       "critical": "Critical risk"
     },
     "reviewNoSummary": "The automatic review passed this one to you",
-    "reviewReasonLabel": "Reviewer:"
+    "reviewReasonLabel": "Reviewer:",
+    "sandbox": {
+      "confined": "Sandbox",
+      "unconfined": "Not sandboxed",
+      "confinedHint": "Ran in the sandbox: it could only write to the working directory, temporary folders and package caches, and could not read your personal folders or credentials.",
+      "escalatedHint": "The agent asked to run this command outside the sandbox: it could read and change any file on this computer.",
+      "disabledHint": "Not sandboxed: the command sandbox is turned off in settings.",
+      "unsupportedHint": "Not sandboxed: there is no command sandbox for this platform or shell yet.",
+      "unavailableHint": "Not sandboxed: the sandbox could not be applied this time (the working directory is not suitable, or the sandbox check failed)."
+    },
+    "invocation": {
+      "show": "Command actually run",
+      "loading": "Loading…",
+      "missing": "No record of how this command was run."
+    }
   },
   "sessionConfig": {
     "title": "Session Config",

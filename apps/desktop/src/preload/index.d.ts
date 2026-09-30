@@ -874,6 +874,8 @@ declare global {
       stop: (params: { toolCallId: string; force?: boolean }) => Promise<{ success: boolean }>
       dismiss: (params: { toolCallId: string }) => Promise<{ success: boolean }>
       clearDone: (params: { sessionId: string }) => Promise<{ cleared: number }>
+      /** 一次 shell 命令调用实际执行的命令（可贴进终端）；没有记录返回 null */
+      readInvocation: (params: { sessionId: string; toolCallId: string }) => Promise<string | null>
     }
     terminal: {
       create: (params: {

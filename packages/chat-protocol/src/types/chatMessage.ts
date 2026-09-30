@@ -138,7 +138,25 @@ export interface BashToolDetails {
    * exitCode 此时是"启动成功"而非命令结果，UI 据此渲染后台形态并按 toolCallId 取实时态。
    */
   background?: boolean
+  /**
+   * 这条命令实际是怎么跑的 —— **有值 = 真的起了进程**，宿主同时在工具结果目录里留了一份
+   * 实际执行命令（HostApi `bgTask.readInvocation` 按需取）；被拒、用户给了反馈、旧记录都没有。
+   */
+  sandbox?: ShellSandboxState
 }
+
+/**
+ * 命令与沙箱的关系：confined = 圈在沙箱里跑；其余是没圈住的原因 ——
+ * escalated = 模型申请了越界（dangerouslyDisableSandbox，用户批准过）；disabled = 设置里关了沙箱；
+ * unsupported = 这个平台 / 这个 shell 没有沙箱后端；unavailable = 有后端但这次套不上。
+ * 与安全模块命令客体的 `unconfinedReason` 同一组原因（ssh 的 remote 不在此列）。
+ */
+export type ShellSandboxState =
+  | 'confined'
+  | 'escalated'
+  | 'disabled'
+  | 'unsupported'
+  | 'unavailable'
 
 /** read 工具详情（目录 / 富文本转换 / 纯文本 / URL 四种场景的扁平超集） */
 /**

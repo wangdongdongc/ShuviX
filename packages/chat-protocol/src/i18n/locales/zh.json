@@ -344,7 +344,21 @@
       "critical": "严重风险"
     },
     "reviewNoSummary": "自动审查把这一次交给你决定",
-    "reviewReasonLabel": "审查员："
+    "reviewReasonLabel": "审查员：",
+    "sandbox": {
+      "confined": "沙箱",
+      "unconfined": "未隔离",
+      "confinedHint": "在沙箱里运行：只能写工作目录、临时目录和包缓存，读不到你的个人文件夹和凭据。",
+      "escalatedHint": "智能体申请在沙箱之外运行这条命令：它可以读取和修改这台电脑上的任何文件。",
+      "disabledHint": "没有进沙箱：设置里关闭了命令沙箱。",
+      "unsupportedHint": "没有进沙箱：这个平台或这个 shell 还没有命令沙箱。",
+      "unavailableHint": "没有进沙箱：这次沙箱没能套上（工作目录不适合，或沙箱检测没通过）。"
+    },
+    "invocation": {
+      "show": "实际执行的命令",
+      "loading": "读取中…",
+      "missing": "没有这条命令的执行记录。"
+    }
   },
   "sessionConfig": {
     "title": "会话配置",

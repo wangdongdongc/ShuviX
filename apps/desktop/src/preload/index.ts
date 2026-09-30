@@ -576,7 +576,9 @@ const api = {
     dismiss: (params: { toolCallId: string }) =>
       ipcRenderer.invoke('bgTask:dismiss', params) as Promise<{ success: boolean }>,
     clearDone: (params: { sessionId: string }) =>
-      ipcRenderer.invoke('bgTask:clearDone', params) as Promise<{ cleared: number }>
+      ipcRenderer.invoke('bgTask:clearDone', params) as Promise<{ cleared: number }>,
+    readInvocation: (params: { sessionId: string; toolCallId: string }) =>
+      ipcRenderer.invoke('bgTask:readInvocation', params) as Promise<string | null>
   },
 
   // ============ Terminal (node-pty) ============

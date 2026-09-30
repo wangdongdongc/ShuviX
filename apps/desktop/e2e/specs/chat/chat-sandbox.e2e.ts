@@ -7,7 +7,12 @@
  *  - E2E-3 文件工具跟着沙箱走：工作区里的写不问，工作区顶层的 .vscode 照问；
  *  - E2E-4 按会话固定：会话中途关掉开关，已在跑的会话照旧受限；新会话按新值（逐条询问、无标签）；
  *  - E2E-5（FU-8）受限命令停本会话的后台任务：`shuvix task stop <pid>` 整条链路在沙箱里走得通
- *    （读 cli-token、连 cli.sock、Electron 以 node 模式起）；停了不回头通知；别的 pid 找不到、退出 1。
+ *    （读 cli-token、连 cli.sock、Electron 以 node 模式起）；停了不回头通知；别的 pid 找不到、退出 1；
+ *  - E2E-6 工具卡上的沙箱标记与「实际执行的命令」：受限命令的 details / 落库块都标 confined；宿主记下的
+ *    那份命令（sandbox-exec 包装、TMPDIR 等变量、会话 id、原命令）经 IPC 取得到、坏的会话 id / 调用 id
+ *    取不到；卡片展开后才出标记与开关，点开显示的就是 IPC 那份；切走再切回照旧；
+ *  - E2E-7 沙箱关着 + 一条没跑起来的命令：拒绝的那条没有记录、落库块没有标记；允许的那条标 disabled，
+ *    记录里是裸的 `/bin/bash --norc -c …`（没有 sandbox-exec、没有 TMPDIR）。
  *
  * 每个用例先看沙箱在这个实例里能不能用（整组测试本身跑在别的沙箱里时 sandbox-exec 嵌套失败），
  * 不能用就 skip。注意 fake HOME 在 /private/tmp 下 —— 它本身是可写根：必须被拒的目标只能挑
@@ -43,12 +48,40 @@ let projDir = ''
 const sids: Record<string, string> = {}
 
 type InputRequestEvent = RecordedEvent & { request: { id: string; unsandboxed?: boolean } }
-type ToolEndEvent = RecordedEvent & { toolCallId: string; result?: unknown; isError?: boolean }
+type ToolEndEvent = RecordedEvent & {
+  toolCallId: string
+  result?: unknown
+  isError?: boolean
+  details?: { sandbox?: string }
+}
+/** message.list 的一条（只取这里读到的字段） */
+interface ListedMessage {
+  blocks?: Array<{ type: string; toolCallId?: string; details?: { sandbox?: string } }>
+}
 
 const createSession = async (title: string, projectId: string): Promise<string> =>
   app.main.eval<string>(
     `window.api.session.create(${JSON.stringify({ title, projectId })}).then((s) => s.id)`
   )
+
+/** 工具卡上「实际执行的命令」走的那条 IPC */
+const readInvocation = (sessionId: string, toolCallId: string): Promise<string | null> =>
+  app.main.eval<string | null>(
+    `window.api.bgTask.readInvocation(${JSON.stringify({ sessionId, toolCallId })})`
+  )
+
+/** 落库的那个工具块（重开会话时界面读的就是它） */
+async function persistedBlock(
+  sid: string,
+  toolCallId: string
+): Promise<NonNullable<ListedMessage['blocks']>[number]> {
+  const messages = await app.main.eval<ListedMessage[]>(
+    `window.api.message.list(${JSON.stringify(sid)})`
+  )
+  const block = messages.flatMap((m) => m.blocks ?? []).find((b) => b.toolCallId === toolCallId)
+  expect(block, `persisted block ${toolCallId}`).toBeDefined()
+  return block!
+}
 
 const sessionEvents = async (sid: string): Promise<RecordedEvent[]> =>
   (await events.all()).filter((e) => e.sessionId === sid)
@@ -126,6 +159,8 @@ beforeAll(async () => {
   sids.pinA = await createSession('S-pin-A', project.id)
   sids.pinB = await createSession('S-pin-B', project.id)
   sids.stop = await createSession('S-stop', project.id)
+  sids.inv = await createSession('S-inv', project.id)
+  sids.off = await createSession('S-off', project.id)
 
   chat = chatPane(app.main)
   sidebar = sidebarPane(app.main)
@@ -225,6 +260,13 @@ describe('E2E-2 申请完全访问：要问，卡片带「完全访问」标签'
     expect(end.isError).toBeFalsy()
     expect(String(end.result)).not.toContain('[sandbox]')
     expect(existsSync(target)).toBe(true)
+
+    // 工具卡：允许的那条标「完全访问」（escalated），记下的命令没有沙箱包装；拒绝的那条没跑，没有记录
+    expect(end.details?.sandbox).toBe('escalated')
+    const allowedInvocation = await readInvocation(sids.full, 'call_allow')
+    expect(allowedInvocation).toContain('/bin/bash --norc -c ')
+    expect(allowedInvocation).not.toContain('sandbox-exec')
+    expect(await readInvocation(sids.full, 'call_deny')).toBeNull()
   })
 })
 
@@ -366,5 +408,115 @@ describe('E2E-5 受限命令经宿主停本会话的后台任务（shuvix task s
     expect(provider.chatRequestCount()).toBe(requestsAfterTurn)
     expect(noticeSent()).toBe(false)
     expect((await sessionEvents(sids.stop)).filter((e) => e.type === 'agent_start')).toHaveLength(1)
+  })
+})
+
+describe('E2E-6 工具卡上的沙箱标记与「实际执行的命令」', () => {
+  it('E2E-6 受限命令：details / 落库都标 confined；IPC 取得到那份命令；卡片展开后标记 + 开关，点开就是那份', async (ctx) => {
+    if (!(await sandboxAvailable(app.main))) ctx.skip()
+    await events.clear()
+    const sid = sids.inv
+    const command = `echo "it's $((1+1))" > inv.txt`
+
+    await sendTurn('S-inv', bashCall('call_inv', command), 'record the invocation')
+    await events.waitFor('agent_end', { sessionId: sid })
+    await chat.waitIdle()
+    expect(await askCount(sid)).toBe(0)
+    expect(readFileSync(join(projDir, 'inv.txt'), 'utf8')).toBe("it's 2\n")
+
+    const end = await toolEnd(sid, 'call_inv')
+    expect(end.details?.sandbox).toBe('confined')
+    expect((await persistedBlock(sid, 'call_inv')).details?.sandbox).toBe('confined')
+
+    const text = await readInvocation(sid, 'call_inv')
+    expect(text).not.toBeNull()
+    const lines = text!.split('\n')
+    expect(lines.pop()).toBe('')
+    expect(lines[0]).toMatch(/^cd .* && \\$/)
+    expect(lines[0]).toContain(projDir)
+    const envLine = new RegExp(
+      `^TMPDIR=/private/tmp/shuvix-\\d+/[0-9a-f]{8}/ .*SHUVIX_SESSION_ID=${sid} \\\\$`
+    )
+    expect(lines.some((l) => envLine.test(l))).toBe(true)
+    expect(lines).toContain('/usr/bin/sandbox-exec \\')
+    expect(lines.some((l) => l.startsWith("  -p '"))).toBe(true)
+    expect(lines.some((l) => l.startsWith('  -D '))).toBe(true)
+    // 最后一行是被包的那条 shell 命令，原命令里的单引号写成 '\''
+    expect(lines[lines.length - 1]).toBe(
+      `  -- /bin/bash --norc -c 'echo "it'\\''s $((1+1))" > inv.txt'`
+    )
+
+    // 坏的会话 id / 调用 id 取不到
+    expect(await readInvocation('..', 'call_inv')).toBeNull()
+    expect(await readInvocation(sid, '../call_inv')).toBeNull()
+
+    // 卡片：折叠时什么都没有，展开才出标记与开关；点开显示的就是 IPC 那份
+    expect(await chat.toolRowSandbox(0)).toBeNull()
+    expect(await chat.toolRowHasInvocationToggle(0)).toBe(false)
+    await chat.setToolRowExpanded(0, true)
+    expect(await chat.toolRowSandbox(0)).toBe('confined')
+    expect(await chat.toolRowHasInvocationToggle(0)).toBe(true)
+    expect(await chat.openToolRowInvocation(0)).toBe(text)
+
+    // 切走再切回：从落库的 details 重画，标记照旧
+    expect(await sidebar.openSession('S-confined')).toBe(true)
+    await chat.ready()
+    expect(await sidebar.openSession('S-inv')).toBe(true)
+    await chat.ready()
+    await until(async () => (await chat.toolRows()).length === 1, 'S-inv tool row back')
+    await chat.setToolRowExpanded(0, true)
+    expect(await chat.toolRowSandbox(0)).toBe('confined')
+  })
+})
+
+describe('E2E-7 沙箱关着 + 一条没跑起来的命令', () => {
+  it('E2E-7 拒绝的那条：没有记录、落库块没有标记；允许的那条：标 disabled，记录是裸的 /bin/bash', async () => {
+    // 在这条会话的第一条消息之前关掉：沙箱按会话固定
+    await setSandboxEnabled(app.main, false)
+    await events.clear()
+    const sid = sids.off
+    const status = await app.main.eval<{ supported: boolean }>(
+      `window.api.settings.sandboxStatus()`
+    )
+    const expected = status.supported ? 'disabled' : 'unsupported'
+
+    // 第一轮：询问 → 拒绝
+    await sendTurn('S-off', bashCall('call_off_deny', 'echo off'), 'deny this one')
+    const denied = await events.waitFor<InputRequestEvent>('input_request', { sessionId: sid })
+    await answer(sid, denied.request.id, false)
+    await events.waitFor('agent_end', { sessionId: sid })
+    await chat.waitIdle()
+    expect((await toolEnd(sid, 'call_off_deny')).isError).toBe(true)
+    expect(await readInvocation(sid, 'call_off_deny')).toBeNull()
+    expect((await persistedBlock(sid, 'call_off_deny')).details?.sandbox).toBeUndefined()
+
+    // 第二轮：询问 → 允许
+    await events.clear()
+    await sendTurn('S-off', bashCall('call_off', 'echo off'), 'allow this one')
+    const allowed = await events.waitFor<InputRequestEvent>('input_request', { sessionId: sid })
+    await answer(sid, allowed.request.id, true)
+    await events.waitFor('agent_end', { sessionId: sid })
+    await chat.waitIdle()
+    const end = await toolEnd(sid, 'call_off')
+    expect(end.isError).toBeFalsy()
+    expect(end.details?.sandbox).toBe(expected)
+    expect((await persistedBlock(sid, 'call_off')).details?.sandbox).toBe(expected)
+
+    const text = await readInvocation(sid, 'call_off')
+    expect(text).not.toBeNull()
+    const lines = text!.split('\n')
+    expect(lines).toContain("/bin/bash --norc -c 'echo off'")
+    expect(text).not.toContain('sandbox-exec')
+    expect(text).not.toContain('TMPDIR=')
+    expect(text).toContain(`SHUVIX_SESSION_ID=${sid}`)
+
+    // 卡片：拒绝的那行（0）展开也没有标记和开关；允许的那行（1）标 disabled，点开就是 IPC 那份
+    await until(async () => (await chat.toolRows()).length === 2, 'two tool rows in S-off')
+    await chat.setToolRowExpanded(0, true)
+    expect(await chat.toolRowSandbox(0)).toBeNull()
+    expect(await chat.toolRowHasInvocationToggle(0)).toBe(false)
+    await chat.setToolRowExpanded(1, true)
+    expect(await chat.toolRowSandbox(1)).toBe(expected)
+    expect(await chat.openToolRowInvocation(1)).toBe(text)
   })
 })

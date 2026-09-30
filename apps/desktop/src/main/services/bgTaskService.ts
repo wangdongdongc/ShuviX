@@ -59,6 +59,7 @@ import {
   type ShellKind
 } from '../utils/toolUtils/shell'
 import { buildSpawnEnv, getToolResultsDir } from '../utils/paths'
+import { recordInvocation } from './commandInvocation'
 import { createLogger } from '../logger'
 import { taskRegistry, toBgTaskInfo, setTaskNotifier, type TaskNotifier } from './taskRegistry'
 import type { SandboxPlan } from './sandbox'
@@ -337,6 +338,21 @@ export async function runCommand(params: RunCommandParams): Promise<CommandOutco
   const logPath = join(getToolResultsDir(sessionId), `${toolCallId}.log`)
   const base = shellInvocation(params.shell, command)
   const invocation = params.sandbox ? params.sandbox.wrap(base) : base
+  // 工具卡上「实际执行命令」的那份记录：写出复现需要的变量（沙箱的 TMPDIR 等、会话 id），
+  // 项目环境变量只列名字（见 commandInvocation.ts）
+  // （与沙箱变量同名的项目变量被沙箱的值盖掉，只按实际生效的那份写一次）
+  const { SHUVIX_SESSION_ID, ...projectEnv } = extraEnv ?? {}
+  const shownEnv: Record<string, string> = {
+    ...(params.sandbox?.env ?? {}),
+    ...(SHUVIX_SESSION_ID !== undefined ? { SHUVIX_SESSION_ID } : {})
+  }
+  recordInvocation(sessionId, toolCallId, {
+    shell: params.shell,
+    invocation,
+    cwd,
+    env: shownEnv,
+    hiddenEnv: Object.keys(projectEnv).filter((key) => !(key in shownEnv))
+  })
 
   // Windows 上不能用 'a'：libuv 以 append-only 访问权（FILE_APPEND_DATA，无 FILE_WRITE_DATA）
   // 打开 O_APPEND 文件，而 MSYS2/cygwin 程序（Git for Windows 带的 ls / grep 等，PowerShell 里

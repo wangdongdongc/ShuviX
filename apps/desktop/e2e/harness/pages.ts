@@ -308,6 +308,18 @@ export interface ChatPane {
   toolRowExpanded(index: number): Promise<boolean>
   /** 把第 i 个工具行设成指定展开态（幂等，供不关心当前状态的用例用） */
   setToolRowExpanded(index: number, expanded: boolean): Promise<void>
+  /**
+   * 第 i 个工具行终端视图提示符行上的沙箱标记（SandboxBadge 的 `data-sandbox` 值：confined / escalated /
+   * disabled / unsupported / unavailable）。只在展开的 shell 命令卡里有；折叠、命令没跑起来、非 shell → null
+   */
+  toolRowSandbox(index: number): Promise<string | null>
+  /** 第 i 个工具行里有没有「实际执行的命令」开关（InvocationView 的 `data-invocation-view`） */
+  toolRowHasInvocationToggle(index: number): Promise<boolean>
+  /**
+   * 点开第 i 个工具行的「实际执行的命令」（已展开则不再点），等到宿主的原文（`data-invocation-text`）
+   * 或「没有执行记录」那句出现，回其文本。行本身须已展开
+   */
+  openToolRowInvocation(index: number, timeoutMs?: number): Promise<string>
   /** 工具子树内的模型图快照（未展开时为空 —— 缩略图只在展开态挂载） */
   toolImages(): Promise<ToolImageShot[]>
   /** 等工具子树内出现 n 张**已解码**的模型图（挂载与解码都是异步的） */
@@ -766,6 +778,38 @@ export function chatPane(main: CdpClient): ChatPane {
       if (now === expanded) return
       await main.eval(`${TOOLS}[${index}]?.querySelector('button')?.click()`)
       await new Promise((r) => setTimeout(r, 250))
+    },
+    toolRowSandbox: (index) =>
+      main.eval<string | null>(
+        `${TOOLS}[${index}]?.querySelector('[data-sandbox]')?.getAttribute('data-sandbox') ?? null`
+      ),
+    toolRowHasInvocationToggle: (index) =>
+      main.eval<boolean>(`!!${TOOLS}[${index}]?.querySelector('[data-invocation-view] button')`),
+    openToolRowInvocation: async (index, timeoutMs = 10_000) => {
+      const view = `${TOOLS}[${index}]?.querySelector('[data-invocation-view]')`
+      const opened = await main.eval<boolean>(`(() => {
+        const btn = ${view}?.querySelector('button')
+        if (!btn) return false
+        if (btn.getAttribute('aria-expanded') !== 'true') btn.click()
+        return true
+      })()`)
+      if (!opened) throw new Error(`tool row ${index} has no invocation toggle`)
+      // 「没有执行记录」随渲染端语言变，按三语兜底认（同 toolImageFallbacks）
+      return until(
+        () =>
+          main.eval<string | null>(`(() => {
+            const v = ${view}
+            const pre = v?.querySelector('[data-invocation-text]')
+            if (pre) return pre.textContent ?? ''
+            const note = [...(v?.querySelectorAll('div') ?? [])]
+              .filter((d) => d.childElementCount === 0)
+              .map((d) => (d.textContent ?? '').trim())
+              .find((t) => /No record of how|没有这条命令的执行记录|実行記録はありません/.test(t))
+            return note ?? null
+          })()`),
+        `invocation text of tool row ${index}`,
+        timeoutMs
+      )
     },
     toolImages: () => main.eval<ToolImageShot[]>(IMG_SHOT(TOOL_IMGS)),
     waitToolImages: (count, timeoutMs = 20_000) =>

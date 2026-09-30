@@ -55,6 +55,7 @@ import { copyToClipboard } from '../../utils/clipboard'
 import { CODE_MAX_H, DETAIL_PRE_CLASS, STREAM_PRE_CLASS } from './detailViewport'
 import { BackgroundBadge, BgTaskRowState } from './BgTaskTag'
 import { ReviewedMark, ReviewingIcon } from './ReviewTag'
+import { InvocationView } from './SandboxTag'
 import { toolReviewOf } from '@shuvix/chat-protocol/types/toolReview'
 import { clipLine } from '../../utils/clipLine'
 
@@ -182,8 +183,11 @@ export function ToolCallBlock({
     if (!toolCallId || !s.activeSessionId) return false
     return (s.sessionPendingInputs[s.activeSessionId] || []).some((r) => r.id === toolCallId)
   })
+  const activeSessionId = useChatStore((s) => s.activeSessionId)
   const status = liveExec?.status || propStatus
   const details = liveExec?.details || propDetails
+  // shell 命令真的起了进程才有 sandbox 标记，宿主也才留了「实际执行的命令」
+  const shellSandbox = isShellCommandDetails(details) ? details.sandbox : undefined
   // 自动审查：进行中顶替状态图标；放行过的在行尾留一枚盾牌（标记随 details 落盘，重开照样在）
   const reviewing = !!liveExec?.reviewing && status === 'running'
   const reviewNote = status === 'done' ? toolReviewOf(details) : undefined
@@ -297,26 +301,32 @@ export function ToolCallBlock({
             !hasPendingInput &&
             (isTerminalView ? (
               /* shell 类工具：命令 + 输出融成一段终端会话，不拆「参数 / 结果」两块 */
-              <TerminalView
-                command={String(args?.command ?? '')}
-                output={result}
-                cwd={isShellCommandDetails(details) ? details.cwd : undefined}
-                host={
-                  details?.type === 'ssh'
-                    ? details.host
-                    : // 内置 ssh server 的 exec：按工具名认，运行中（结果与 details 还没到）也有主机名
-                      parseBuiltinMcpToolName(toolName)?.server === 'ssh' &&
-                        typeof args?.host === 'string'
-                      ? args.host
+              <>
+                <TerminalView
+                  command={String(args?.command ?? '')}
+                  output={result}
+                  cwd={isShellCommandDetails(details) ? details.cwd : undefined}
+                  host={
+                    details?.type === 'ssh'
+                      ? details.host
+                      : // 内置 ssh server 的 exec：按工具名认，运行中（结果与 details 还没到）也有主机名
+                        parseBuiltinMcpToolName(toolName)?.server === 'ssh' &&
+                          typeof args?.host === 'string'
+                        ? args.host
+                        : undefined
+                  }
+                  exitCode={
+                    isShellCommandDetails(details) || details?.type === 'ssh'
+                      ? details.exitCode
                       : undefined
-                }
-                exitCode={
-                  isShellCommandDetails(details) || details?.type === 'ssh'
-                    ? details.exitCode
-                    : undefined
-                }
-                running={status === 'running'}
-              />
+                  }
+                  sandbox={shellSandbox}
+                  running={status === 'running'}
+                />
+                {shellSandbox && toolCallId && activeSessionId && (
+                  <InvocationView sessionId={activeSessionId} toolCallId={toolCallId} />
+                )}
+              </>
             ) : presentation && args ? (
               <ToolFormDetail presentation={presentation} args={args} result={result} />
             ) : (

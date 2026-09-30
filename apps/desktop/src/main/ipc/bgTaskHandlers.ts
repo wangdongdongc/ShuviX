@@ -6,6 +6,7 @@ import {
   dismissBgTask,
   clearFinishedBgTasks
 } from '../services/bgTaskService'
+import { readInvocation } from '../services/commandInvocation'
 
 /**
  * 后台任务 IPC —— `bash({ run_in_background: true })` 起的任务的只读面与管理动作。
@@ -42,4 +43,11 @@ export function registerBgTaskHandlers(): void {
   ipcMain.handle('bgTask:clearDone', (_event, params: { sessionId: string }) => ({
     cleared: clearFinishedBgTasks(params.sessionId)
   }))
+
+  // 工具卡上「实际执行命令」：只读，但暴露本机沙箱规则与路径，归宿主面（渠道端没有 shell 工具）
+  ipcMain.handle(
+    'bgTask:readInvocation',
+    (_event, params: { sessionId: string; toolCallId: string }) =>
+      readInvocation(params.sessionId, params.toolCallId)
+  )
 }
