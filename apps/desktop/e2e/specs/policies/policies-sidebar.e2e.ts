@@ -56,12 +56,15 @@ import {
 const POLICIES_PROJECT = REGISTRY_NOTE_PROJECT_IDS.policy
 /** 内置策略（随包发布的 md）的只读载体 —— 与用户策略分属两个项目 */
 const BUILTIN_PROJECT = REGISTRY_NOTE_PROJECT_IDS.policyBuiltin
-/** PS-B1/B2 点开的内置策略：整份 spec 里没人覆盖它（git-safety 归 PS-C3~C5、ask-on-database 归 PS-G1） */
-const BUILTIN_SAMPLE = 'protect-system'
+/**
+ * PS-B1/B2 点开的内置策略：整份 spec 里没人覆盖它（session-grants 归 PS-C3~C5、ask-on-command
+ * 归 PS-G1，ask-on-write 归非法文件那几条）。出厂只剩四份（2026-10-01），三个样本各占一份
+ */
+const BUILTIN_SAMPLE = 'protect-credentials'
 /** PS-C3~C5 覆盖 → 删除的那条内置策略 */
-const OVERRIDE_SAMPLE = 'git-safety'
+const OVERRIDE_SAMPLE = 'session-grants'
 /** PS-G1 切语言的那条内置策略（此前从未被点开，en/zh 两条会话才能都是第一手） */
-const LANG_SAMPLE = 'ask-on-database'
+const LANG_SAMPLE = 'ask-on-command'
 
 /** policy.list 一行的窄投影（本 spec 用到的字段） */
 interface PolicyListRow {
@@ -215,7 +218,7 @@ describe('侧栏安全策略分组', () => {
     expect(await pane.invalidRows()).toEqual([])
   })
 
-  // 内置行顺序是**产品决定**：按 name 字母序（展示序管查找 —— 用户在 14 份内置策略里按名字
+  // 内置行顺序是**产品决定**：按 name 字母序（展示序管查找 —— 用户在一列内置策略里按名字
   // 找那一道门）。BUILTIN_POLICY_SPECS 的装配序是另一回事：它管同 tier 多规则命中时的归因
   // 优先级（winning 取先装配者），不经这个列表上屏 —— policyService.compareRows 的字典序即意图
   it('PS-A1b 内置行顺序 = 按 name 字母序（localeCompare，与 compareRows 同一比较器）', async () => {

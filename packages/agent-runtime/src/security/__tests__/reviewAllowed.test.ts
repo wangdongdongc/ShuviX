@@ -239,7 +239,7 @@ describe('executeDecision — 「已审查」标记只在审查放行时留下',
         host: 'desktop',
         pathSep: '/',
         getVars: () => ({}),
-        getSessionGrants: () => ({ autoAllow: false, allowList: [] }),
+        getSessionGrants: () => ({ allowList: [] }),
         requestUserInput,
         logger: { info: () => {}, warn: () => {}, error: () => {} },
         ...(review ? { onPermissionRequest: review } : {})

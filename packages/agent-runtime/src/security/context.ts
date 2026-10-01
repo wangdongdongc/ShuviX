@@ -9,7 +9,7 @@
  * 评估，让 inDir 把它比较的目录也按位置比（见 types.ts SecurityHostProvider.realPath）。
  *
  * 实例可整会话复用：内部全是 getter（provider 的 grants/vars/用户策略每次现取），
- * 无任何快照 —— 会话中途开「免询问」或「允许并记住」落库后立即可见（禁缓存红线）。
+ * 无任何快照 —— 会话中途「允许并记住」落库后立即可见（禁缓存红线）。
  * 真实路径同理，每次评估现解析 —— 链接随时可能被改指向。
  */
 import { assembleRules } from './assemble'
@@ -252,9 +252,9 @@ export function createSecurityContext(
       return enforce('execute', buildCommandObject(object, provider), opts)
     },
 
-    // L1 全工具门：**allow 即非事件**（默认放行 / autoAllow force-allow / 静态 allow 同待遇）——
+    // L1 全工具门：**allow 即非事件**（默认放行 / force-allow / 静态 allow 同待遇）——
     // 跳过 executeDecision（不弹窗不记日志）。此门每次工具调用都过，若 allow 也记录，
-    // 免询问会话会以每调用一条的速度刷爆 ring buffer；L1 的日志只留 ask/deny 的真实拦截信号
+    // 会以每调用一条的速度刷爆 ring buffer；L1 的日志只留 ask/deny 的真实拦截信号
     async enforceInvocation(opts): Promise<EnforceOutcome> {
       // MCP 工具带着可判定的事实来（server/tool + 可信 server 的 annotations）；
       // 其余工具在这一刻确实只有「有人要调工具」这一件事可说。

@@ -1,6 +1,5 @@
 ---
 shuvix: policy v1
-shuvix-builtin: true
 name: protect-shuvix-config
 shuvix-displayName: Always Ask Before Changing ShuviX's Own Configuration
 description: Writes to ShuviX's policies, agents, hooks and skills always ask you — neither the automatic review nor the auto-allow switch answers them.

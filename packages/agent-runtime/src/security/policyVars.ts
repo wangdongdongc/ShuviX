@@ -2,7 +2,6 @@
  * 策略变量表 —— 策略 md 里 `vars.*` 看到的东西，**唯一定义处**。
  *
  * = 宿主静态变量（workspace / home / skillsDirs / memoryDirs…）⊕ 会话授权派生变量：
- *   vars.autoAllow     boolean   会话「免询问」开关
  *   vars.grantedRead   string[]  allowList 里的 Read(...) 路径
  *   vars.grantedWrite  string[]  allowList 里的 Write(...) 路径
  *
@@ -21,7 +20,7 @@
 import { parseAllowEntry } from './allowEntries'
 import type { PolicyVarValue, SecurityHostProvider } from './types'
 
-/** 装配/求值当次的完整变量表（每次现取 —— 会话中途改开关或加授权须立即可见） */
+/** 装配/求值当次的完整变量表（每次现取 —— 会话中途加授权须立即可见） */
 export function buildPolicyVars(provider: SecurityHostProvider): Record<string, PolicyVarValue> {
   const grants = provider.getSessionGrants()
   const grantedRead: string[] = []
@@ -36,7 +35,6 @@ export function buildPolicyVars(provider: SecurityHostProvider): Record<string, 
   // 授权变量后置 —— 宿主 getVars 不慎同名定义也劫持不了会话授权
   return {
     ...provider.getVars(),
-    autoAllow: grants.autoAllow,
     grantedRead,
     grantedWrite
   }

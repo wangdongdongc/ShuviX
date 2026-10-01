@@ -14,7 +14,7 @@
  *
  *   S1  create(p, {ephemeral}) 不落库、不广播；isEphemeral；getById 读得到；list() 不含
  *   S2  对照：create(p) 落库一次 + 广播一次
- *   S3  内存父的子会话恒为内存会话（不传 / false / true），继承父的 enabledTools / autoAllow / projectId
+ *   S3  内存父的子会话恒为内存会话（不传 / false / true），继承父的 enabledTools / projectId
  *   S4  持久父的子会话传 {ephemeral:true} 仍是持久会话
  *   S5  delete(内存)：行没了、不碰库、不广播；清理链（消息 / 后台任务 / 运行时 / 内置 MCP）各跑一次
  *   S6  delete(内存父) 连带两条内存子会话：子先于父，什么都不剩，不广播
@@ -269,10 +269,9 @@ describe('S3 / S4 子会话按父会话推定', () => {
     ['不传 options', undefined],
     ['{ ephemeral: false }', { ephemeral: false }],
     ['{ ephemeral: true }', { ephemeral: true }]
-  ])('S3 内存父的子会话（%s）恒为内存会话，继承父的勾选 / 免询问 / 项目', (_label, opt) => {
+  ])('S3 内存父的子会话（%s）恒为内存会话，继承父的勾选 / 项目', (_label, opt) => {
     const parent = create({ projectId: 'p1' }, EPH)
     sessionService.updateEnabledTools(parent.id, ['mcp:ssh', 'skill:x'])
-    sessionService.updateAutoAllow(parent.id, true)
     vi.clearAllMocks()
 
     const child = create({ parentId: parent.id, projectId: 'elsewhere' }, opt)
@@ -283,7 +282,7 @@ describe('S3 / S4 子会话按父会话推定', () => {
     expect(sessionService.getById(child.id)).toMatchObject({
       parentId: parent.id,
       projectId: 'p1',
-      settings: { enabledTools: ['mcp:ssh', 'skill:x'], autoAllow: true }
+      settings: { enabledTools: ['mcp:ssh', 'skill:x'] }
     })
     expect(sessionRecords.findChildren(parent.id).map((s) => s.id)).toEqual([child.id])
   })
@@ -352,12 +351,11 @@ describe('S5 / S6 删除', () => {
 })
 
 describe('S7 写入口落在内存行上', () => {
-  it('S7 标题 / 免询问 / 扩展能力 / 知识库 / 允许列表：不写库，getById 看得见', () => {
+  it('S7 标题 / 扩展能力 / 知识库 / 允许列表：不写库，getById 看得见', () => {
     const s = create({}, EPH)
     vi.clearAllMocks()
 
     sessionService.updateTitle(s.id, '自动标题', 'auto')
-    sessionService.updateAutoAllow(s.id, true)
     expect(sessionService.updateEnabledTools(s.id, ['mcp:ssh', 'bash', 'skill:x'])).toBe(true)
     expect(sessionService.updateKnowledgeBases(s.id, [' notes ', 'notes', 'project'])).toBe(true)
     sessionService.addAllowListPaths(s.id, 'read', ['/a', '/b'])
@@ -366,7 +364,6 @@ describe('S7 写入口落在内存行上', () => {
       title: '自动标题',
       settings: {
         titleOrigin: 'auto',
-        autoAllow: true,
         enabledTools: ['mcp:ssh', 'skill:x'],
         knowledgeBases: ['notes', 'project'],
         allowList: ['read(/a)', 'read(/b)']

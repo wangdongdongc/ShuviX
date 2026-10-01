@@ -97,7 +97,7 @@ const OVERRIDES = {
     const md = BUILTIN_MD().replace("'.aws', ", '')
     const parsed = parsePolicyDefinitionFile(md, 'protect-credentials')!
     expect(parsed.lets?.credentialDirs).not.toContain('.aws')
-    expect(parsed.rules).toHaveLength(2)
+    expect(parsed.rules).toHaveLength(1)
     return md
   },
   /** 删掉整个 shuvix-policy-lets（规则改成不引用它的写法，仍是一份合法、有规则的策略） */
@@ -107,7 +107,7 @@ const OVERRIDES = {
       .replaceAll('inDir(object.path, credentialDirs)', "inDir(object.path, vars.home + '/.never')")
     const parsed = parsePolicyDefinitionFile(md, 'protect-credentials')!
     expect(parsed.lets).toBeUndefined()
-    expect(parsed.rules).toHaveLength(2)
+    expect(parsed.rules).toHaveLength(1)
     return md
   },
   /** 规则清空（移除这道门的约定写法），let 原样留着 */

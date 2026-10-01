@@ -207,8 +207,8 @@ export async function assertWriteAllowed(
 const securityLog = createLogger('Security')
 
 /**
- * Windows 的系统目录（protect-system 策略的 {{systemDirs}} 变量）——
- * 来自环境变量，POSIX 系统返回空（策略里的 POSIX/darwin 前缀是字面量）。
+ * Windows 的系统目录（`vars.systemDirs`）—— 事实变量：出厂的 protect-system 已删除（2026-10-01），
+ * 留给用户自写「系统目录拒写」这类策略引用。来自环境变量，POSIX 系统返回空。
  * 同时给出小写变体近似 Windows 的大小写不敏感匹配（前缀匹配本身不做大小写归一，
  * 见 allowEntries 的红线注释；C:\\WINDOWS 之类的中间大小写变体不在覆盖内 —— 已知弱化）。
  */
@@ -261,9 +261,11 @@ function hostPolicyVars(
       ...skillService.listExternalDirs().map((d) => d.path)
     ],
     memoryDirs: [getMemoryRootDir()],
+    // 以下三个是事实变量：引用它们的出厂策略（protect-bot-files / protect-shuvix-config /
+    // protect-system）已于 2026-10-01 删除，留给用户自写的策略引用 —— 想把「bot 改自己的文件」
+    // 或「改 ShuviX 自己的规矩」（策略、agent、hook、技能；权限审查员与 auto-review 就是其中的
+    // 一份 agent md 与一份 hook md）加回恒询问，写一份 force-ask 引用它们即可
     botsDir: getDefaultBotsDir(),
-    // ShuviX 自己的规矩所在（protect-shuvix-config 对它们的写入恒问人）：策略、agent、hook、技能 ——
-    // 权限审查员与触发它的 auto-review 就是其中的一份 agent md 与一份 hook md
     shuvixConfigDirs: [
       getDefaultPoliciesDir(),
       getDefaultAgentsDir(),
@@ -315,14 +317,14 @@ export function sessionCredentialPaths(sessionId: string, workingDirectory: stri
  *   - 真实路径：realPath（符号链接 / `..` / 盘上大小写）—— 安全模块拿它解析路径客体与 inDir 比较的
  *     每个目录，两边都按位置比。变量表因此照写法给即可：工作区、临时工作区（macOS 的
  *     /var → /private/var 这类系统级链接）由 inDir 现解析，不在这里预先 realpath
- *   - 会话授权：SQLite autoAllow + allowList
+ *   - 会话授权：SQLite allowList（「允许并记住」）
  *   - 内置策略：随包发布的 `builtin-policies/` 目录现读（policyService.readBuiltinPolicyMd）
  *   - 用户策略：~/.shuvix/policies 现扫（policyService）
  *   - persistGrant 写 allowList、statSync 判目录、前端 requestUserInput 透传
  *
  * 全部成员每次评估现读 —— 不跨调用缓存。context 实例在建会话时创建一次、整会话复用
- * （buildTools → makeDesktopFileToolDeps），若在此缓存 autoAllow/allowList，则会话中途
- * 开启「免询问」或「允许并记住」写入 SQLite 后，复用的实例仍持旧快照 → 反复弹询问。
+ * （buildTools → makeDesktopFileToolDeps），若在此缓存 allowList，则会话中途
+ * 「允许并记住」写入 SQLite 后，复用的实例仍持旧快照 → 反复弹询问。
  */
 export function makeDesktopSecurityProvider(
   ctx: Pick<ToolContext, 'sessionId' | 'requestUserInput'>,
@@ -344,8 +346,8 @@ export function makeDesktopSecurityProvider(
       }
     },
     getSessionGrants: () => {
-      const s = sessionRecords.pickSettings(ctx.sessionId, ['autoAllow', 'allowList'])
-      return { autoAllow: !!s?.autoAllow, allowList: s?.allowList ?? [] }
+      const s = sessionRecords.pickSettings(ctx.sessionId, ['allowList'])
+      return { allowList: s?.allowList ?? [] }
     },
     // 仅影响内置策略的人读面（description/body/规则 prompt）；规则的判定字段恒取 en
     getLanguage: () => i18next.language,

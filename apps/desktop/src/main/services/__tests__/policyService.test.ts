@@ -34,6 +34,7 @@ vi.mock('../../logger', () => ({
 }))
 
 import { policyService, type PolicyListItem } from '../policyService'
+import { retiredPolicyMd } from '../../../../../../packages/agent-runtime/src/security/__tests__/fixtures/retiredPolicies'
 
 /** YAML 单引号标量（内部单引号成对转义）—— name 里带 `:`/`"`/emoji 时照样是一个标量 */
 const yamlStr = (value: string): string => `'${value.replace(/'/g, "''")}'`
@@ -241,7 +242,7 @@ describe('policyService —— 同名的几份：设置页列表与评估是同�
       botsDir: '/home/u/.shuvix/bots',
       systemDirs: []
     }),
-    getSessionGrants: () => ({ autoAllow: false, allowList: [] }),
+    getSessionGrants: () => ({ allowList: [] }),
     getLanguage: () => i18next.language,
     readBuiltinPolicyMd: (fileName) => policyService.readBuiltinPolicyMd(fileName),
     getUserPolicies: () => policyService.getUserPolicies()
@@ -362,7 +363,7 @@ describe('policyService —— 同名的几份：设置页列表与评估是同�
 })
 
 describe('policyService —— ask-on-read 不再是内置', () => {
-  it('PU-AR1 策略目录里一份 ask-on-read.md：列表里恰一行这个名字，来源 user、没被覆盖、没有同名内置行；内置行恰 12 份', () => {
+  it('PU-AR1 策略目录里一份 ask-on-read.md：列表里恰一行这个名字，来源 user、没被覆盖、没有同名内置行；内置行恰 4 份', () => {
     writeFileSync(
       join(state.dir, 'ask-on-read.md'),
       [
@@ -390,8 +391,26 @@ describe('policyService —— ask-on-read 不再是内置', () => {
     expect(named[0].overridden).toBeFalsy()
     expect(named[0].overriddenBy).toBeUndefined()
     expect(basename(named[0].basePath)).toBe('ask-on-read.md')
-    expect(rows.filter((row) => row.source === 'builtin')).toHaveLength(12)
+    // 2026-10-01 起出厂只剩这四份
+    expect(
+      rows
+        .filter((row) => row.source === 'builtin')
+        .map((row) => row.name)
+        .sort()
+    ).toEqual(['ask-on-command', 'ask-on-write', 'protect-credentials', 'session-grants'])
     expect(rows.some((row) => row.source === 'builtin' && row.name === 'ask-on-read')).toBe(false)
+    expect(policyService.listInvalid()).toEqual([])
+  })
+})
+
+describe('policyService —— 退役的内置策略照抄进策略目录即生效', () => {
+  it('PU-RT1 git-safety.md 原文放进策略目录：列表里是一行 user（没有同名内置行、没被覆盖），装配出来的规则也来自它', () => {
+    writeFileSync(join(state.dir, 'git-safety.md'), retiredPolicyMd('git-safety'), 'utf-8')
+    const named = policyService.listForSettings().filter((row) => row.name === 'git-safety')
+    expect(named.map((row) => [row.source, !!row.overridden])).toEqual([['user', false]])
+    expect(policyService.getUserPolicies().map((p) => [p.name, p.fileName])).toEqual([
+      ['git-safety', 'git-safety.md']
+    ])
     expect(policyService.listInvalid()).toEqual([])
   })
 })

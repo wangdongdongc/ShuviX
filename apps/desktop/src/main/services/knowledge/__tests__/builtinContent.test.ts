@@ -376,7 +376,7 @@ describe.each(LANGS)('BK 内置知识库 · %s', (lang) => {
   }
   /** 内置策略份数在正文里的写法（份数一变这张表先红，提醒把说明书的那个数一起改） */
   const POLICY_COUNT_WORD: Record<number, Record<string, string>> = {
-    12: { en: 'Twelve', zh: '十二', ja: '十二' }
+    4: { en: 'Four', zh: '四', ja: '四' }
   }
 
   /** 从某个标题起、到下一个同级或更高标题为止的那一段 */

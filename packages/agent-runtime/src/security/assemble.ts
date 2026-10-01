@@ -5,8 +5,8 @@
  *     ⊕ 用户 md（provider.getUserPolicies 现扫；同名裁决见 resolvePolicyFiles）
  *     ⊕ 宿主派生（provider.derivedRules；仅限无法 md 化的特例）
  *
- * 会话授权曾是独立的第四层（allowList / autoAllow 在这里编译成 force-allow 原生谓词），
- * 现已下沉为策略 md：条目经 buildPolicyVars 变成 vars.autoAllow / vars.grantedRead /
+ * 会话授权曾是独立的第四层（allowList 在这里编译成 force-allow 原生谓词），
+ * 现已下沉为策略 md：条目经 buildPolicyVars 变成 vars.grantedRead /
  * vars.grantedWrite，逻辑由内置 session-grants 策略用 `effect: force-allow` 表达 ——
  * 于是它也可覆盖、可移除、在策略页可见。
  *
@@ -25,8 +25,8 @@
  *
  * 宿主没供给的**目录变量**（只作为 inDir 目录参数出现的 `vars.x`，见 celMatch.inDirOnlyVarNames）
  * 在 deny / ask 两档规则里求值前绑定为 null，并按「logger × 策略 × 变量」告警一次：inDir 把它
- * 当「没有这个目录」。不绑的话缺键报错被 fail-safe 当成命中 —— protect-bot-files 这种只守一个
- * 目录的 force-ask 就成了对每一次写的 force-ask。去重按 logger 而不是按 provider：桌面每次工具
+ * 当「没有这个目录」。不绑的话缺键报错被 fail-safe 当成命中 —— 一条只守一个目录的 force-ask
+ * （从前出厂的 protect-bot-files 就是）就成了对每一次写的 force-ask。去重按 logger 而不是按 provider：桌面每次工具
  * 调用都新建一个 provider，logger 才是长命的那一个。allow 两档不绑：它们的 fail-safe 本来就是
  * 「报错即不命中」，缺变量放大不了什么，保持 strict 反而让授权 vars 的接线错误照旧每次告警
  * （assemble.test CV 系列）。其余位置（拼接、比较、has、lets）不绑定，照 CEL 原语义求值。

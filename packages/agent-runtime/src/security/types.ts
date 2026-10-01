@@ -16,8 +16,8 @@
  *   - builtin  内置策略 md（security/builtinPolicies/，随包内联）
  *   - user     用户策略 md（桌面 ~/.shuvix/policies/<name>.md，同名覆盖内置）
  *   - derived  宿主代码级派生规则（仅限无法 md 化的宿主特例；桌面/扩展当前都不供给）
- * 会话授权（免询问开关 / "允许并记住"）不再是独立一层：条目经 buildPolicyVars 变成
- * `vars.autoAllow` / `vars.grantedRead` / `vars.grantedWrite`，由内置的 session-grants
+ * 会话授权（"允许并记住"）不再是独立一层：条目经 buildPolicyVars 变成
+ * `vars.grantedRead` / `vars.grantedWrite`，由内置的 session-grants
  * 策略 md 用 `effect: force-allow` 表达（见 policyVars.ts）。
  *
  * 结算优先序（tier，见 evaluate.ts）：deny → force-ask → force-allow → ask → static-allow → default。
@@ -48,8 +48,8 @@ export type SecurityEffect = 'allow' | 'ask' | 'deny'
  *   3. `deny` 恒在顶 —— 拒绝没有「更强的拒绝」，所以没有 force-deny。
  *
  * 于是梯子是：deny > force-ask > force-allow > ask > allow > 默认放行。
- *   - `force-allow` 效果同 allow，但压得过询问门（出厂用它表达免询问开关与
- *     「允许并记住」这类「用户明示同意」）；
+ *   - `force-allow` 效果同 allow，但压得过询问门（出厂用它表达「允许并记住」
+ *     这类「用户明示同意」）；
  *   - `force-ask` 效果同 ask，但连 force-allow 都压不过它 —— 「这道门不接受
  *     会话级同意」，用于始终要过目的少数对象。
  *
@@ -65,14 +65,14 @@ export type AccessMode = 'read' | 'write'
 
 /**
  * 结算层级 —— 不是简单的 deny→ask→allow：
- * 用户明示同意（force-allow）必须压过静态 ask 规则（否则「免询问」开关失效），
+ * 用户明示同意（force-allow）必须压过静态 ask 规则（否则「允许并记住」对询问门失效），
  * force-ask 又必须压过它（「这道门不接受同意」），而任何 deny 压过全部。
  * 名字与 md 的 effect 一一对应，只有 static-allow 例外（它对应裸 `allow`，
  * 叫 static 是为了和「默认放行」区分开：一个是规则命中，一个是没有规则）。
  */
 export type RuleTier = 'deny' | 'force-ask' | 'force-allow' | 'ask' | 'static-allow'
 
-/** 策略变量表的值类型（vars.*）—— 布尔用于 autoAllow 这类开关 */
+/** 策略变量表的值类型（vars.*）—— 布尔留给宿主的开关类变量 */
 export type PolicyVarValue = string | string[] | boolean
 
 // ─────────────────────────── 请求五要素 ───────────────────────────
@@ -326,8 +326,8 @@ export type UserPolicyFile = ParsedPolicyFile & { fileName?: string }
 
 /**
  * 宿主注入 seam。全部成员按「每次评估现取」设计：桌面的 getSessionGrants 直连 SQLite、
- * getUserPolicies 现扫策略目录 —— 刻意不缓存（会话中途开「免询问」或「允许并记住」
- * 落库后，复用的 context 必须立即看到新值，否则反复弹询问）。
+ * getUserPolicies 现扫策略目录 —— 刻意不缓存（会话中途「允许并记住」落库后，
+ * 复用的 context 必须立即看到新值，否则反复弹询问）。
  */
 export interface SecurityHostProvider {
   host: 'desktop' | 'extension'
@@ -357,7 +357,7 @@ export interface SecurityHostProvider {
    */
   getVars(): Record<string, PolicyVarValue>
   /** 会话授权（force-allow 层来源）。每次评估现读，禁缓存。 */
-  getSessionGrants(): { autoAllow: boolean; allowList: string[] }
+  getSessionGrants(): { allowList: string[] }
   /**
    * 界面语言（i18next.language 形态，如 'zh' / 'zh-CN'）—— 仅影响内置策略的
    * description/body 人读面（决策日志/检视 UI）；规则本体恒取 en（安全语义
@@ -595,7 +595,7 @@ export interface UrlObjectInput {
   /**
    * 哪个浏览器：`app` = 桌面应用内的浏览器面板（独立 cookie，与用户日常浏览器隔离）；
    * `chrome` = 用户真实的 Chrome（带着用户自己的登录态，经扩展操作）。按浏览器区别对待的策略
-   * （如出厂的 ask-on-new-site 只管 chrome）写 `object.browser == 'chrome'`。恒有值。
+   * （如只管用户自己的 Chrome）写 `object.browser == 'chrome'`。恒有值。
    */
   browser: 'app' | 'chrome'
 }
@@ -630,11 +630,11 @@ export interface SecurityContext {
   enforcePath(mode: AccessMode, resolvedPath: string, opts: EnforceOpts): Promise<void>
   /** 命令守卫：'other' 反馈按 onOther 返回 feedback 结果 */
   enforceCommand(object: CommandObjectInput, opts: EnforceOpts): Promise<EnforceOutcome>
-  /** git 逐操作守卫（每个 git 工具操作都会评估；内置 git-safety 只对破坏性组合 ask） */
+  /** git 逐操作守卫（每个 git 工具操作都会评估；出厂没有 git 策略，默认放行） */
   enforceGitOp(object: GitObjectInput, opts: EnforceOpts): Promise<void>
   /**
-   * 数据库查询守卫（每次查询都评估；内置 ask-on-database 对可写连接 ask，
-   * 只读连接放行）。'other' 反馈按 onOther 返回 feedback 结果，同 enforceCommand。
+   * 数据库查询守卫（每次查询都评估；出厂没有数据库策略，默认放行）。
+   * 'other' 反馈按 onOther 返回 feedback 结果，同 enforceCommand。
    */
   enforceDatabase(object: DatabaseObjectInput, opts: EnforceOpts): Promise<EnforceOutcome>
   /**
@@ -646,7 +646,7 @@ export interface SecurityContext {
   /**
    * L1 全工具门守卫（wrapToolOutput 咽喉）：客体 = `{type:'invocation'}`（调用本身），
    * 工具名/动作走 request.tool 维度（取自 opts.toolName / opts.operation）。
-   * **allow 即非事件**：无论默认放行、force-allow（免询问）还是静态 allow，
+   * **allow 即非事件**：无论默认放行、force-allow 还是静态 allow，
    * 放行的调用不弹窗、不记日志 —— 每次工具调用都过此门，记录 allow 会淹没决策日志；
    * 只有 ask/deny 产生记录。
    */

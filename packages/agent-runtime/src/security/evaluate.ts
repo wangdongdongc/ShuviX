@@ -15,19 +15,19 @@
  * 结算优先序（tier）—— md 里的 effect 名字自带强弱（`force-` 压过不带前缀的，
  * 同档按 deny > ask > allow，deny 恒在顶）：
  *   1. deny         任意来源 deny 命中 → deny（不可被任何层覆盖）
- *   2. force-ask    这道门不接受会话级同意 → ask（免询问开着也照问）
+ *   2. force-ask    这道门不接受会话级同意 → ask（「允许并记住」过也照问）
  *   3. force-allow  用户明示同意 → allow（策略 md 里的 `effect: force-allow`；出厂由
- *                   session-grants 表达「免询问」与「允许并记住」，
+ *                   session-grants 表达「允许并记住」，
  *                   用户策略也可声明，用于叠加式地局部放宽某道询问门）
  *   4. ask          显式 ask 规则（内置/用户策略 md）→ ask
  *   5. static-allow 静态 allow 规则 → allow（当前主要供决策日志归因与用户自定义）
  *   6. default      未命中 → **allow**（无策略即放行）
  *
- * 为什么不是朴素的 deny→ask→allow：force-allow 必须压过静态 ask（否则「免询问」开关
- * 对内置 ask-on-command 策略失效），force-ask 又必须压过 force-allow（否则「始终询问」
+ * 为什么不是朴素的 deny→ask→allow：force-allow 必须压过静态 ask（否则「允许并记住」
+ * 对内置 ask-on-write 策略失效），force-ask 又必须压过 force-allow（否则「始终询问」
  * 名不副实），而 deny 压过全部 —— 构成偏序，由 tier 显式表达而非靠规则排列顺序。
  * ask 压过 static-allow：询问门不被宽泛 allow 静默穿透，放宽走 force-allow
- * （免询问/记住）或同名覆盖门策略本身。
+ * （「允许并记住」）或同名覆盖门策略本身。
  */
 import { buildAllowEntry } from './allowEntries'
 import { withRealPaths } from './celMatch'

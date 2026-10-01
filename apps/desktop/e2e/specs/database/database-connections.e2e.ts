@@ -10,8 +10,11 @@
  *   - **连接归谁**（DBE-L）：复用、状态条、断开按钮、清空消息不断、两条会话各一条、子会话自己一条；
  *   - **设置里改了连接**（DBE-B2）：把一条正开着的可写连接改成只读 —— 设置页那条路当场把它断开；
  *     绕过设置页改了库（第二道防线）—— 下一条语句发现模式对不上，重连成只读。两条路上 agent 的
- *     下一条写都不问（它现在是只读的）、也写不进去；
- *   - **用户自己的策略**（DBE-P）：按连接名问、按连接名拒（免询问也拒）、按工具 annotations 问；
+ *     下一条写都写不进去；
+ *   - **用户自己的策略**（DBE-P）：按连接名问、按连接名拒、按工具 annotations 问；
+ *
+ * 出厂策略对数据库一句都不问（可写连接上也不问 —— 2026-10-01 删了 ask-on-database），所以本 spec
+ * 里的查询除了 DBE-P 自己装的策略，一律不该有卡。
  *   - **启用开关**（DBE-L4，放在最后）：停用断开所有会话的实例与连接，新会话勾了也拿不到工具。
  *
  * 「连没连、断没断」一律按 bridge 那一侧的连接数断（`connections()` 只增不减，`open()` 是此刻开着的）；
@@ -92,8 +95,6 @@ const destroyDb = (sid: string): Promise<{ success: boolean }> =>
   )
 const deleteSession = (sid: string): Promise<unknown> =>
   app.main.eval(`window.api.session.delete(${JSON.stringify(sid)})`)
-const setAutoAllow = (sid: string, on: boolean): Promise<unknown> =>
-  app.main.eval(`window.api.session.updateAutoAllow(${JSON.stringify({ id: sid, autoAllow: on })})`)
 const createPolicy = (text: string): Promise<{ success: boolean; error?: string }> =>
   app.main.eval(`window.api.policy.create(${JSON.stringify({ text })})`)
 const deletePolicy = (name: string): Promise<unknown> =>
@@ -141,24 +142,6 @@ const runQuery = async (
   ])
   expect(await driver.eventsSince(since, 'input_request', sid), id).toEqual([])
   return ends[id]
-}
-
-/** 一次可写连接上的查询：等卡、允许、跑完 */
-const allowQuery = async (
-  sid: string,
-  id: string,
-  connection: string,
-  sql: string,
-  description = 'e2e write'
-): Promise<ToolEndEvent> => {
-  provider.reset()
-  const since = await driver.start(sid, [
-    { id, tool: QUERY, args: { connection, sql, description } }
-  ])
-  const ask = await driver.waitAsk(sid, since)
-  expect(ask.id).toBe(id)
-  await driver.answer(sid, ask.id, true)
-  return (await driver.finish(sid, since)).ends[id]
 }
 
 const listConnections = async (sid: string, id: string): Promise<string> => {
@@ -252,7 +235,7 @@ describe('连接归谁（DBE-L）', () => {
 
   it('DBE-L8 同时连着两条：状态条标 +1（名字是先连上的那一条）', async () => {
     const since = await events.mark()
-    const end = await allowQuery(a, 'dbl8_rw', 'e2e-rw', "INSERT INTO items (label) VALUES ('l8')")
+    const end = await runQuery(a, 'dbl8_rw', 'e2e-rw', "INSERT INTO items (label) VALUES ('l8')")
     expect(end.isError).toBe(false)
     expect(end.result).toBe('OK: INSERT, 1 row affected')
     const lit = await until(async () => {
@@ -372,7 +355,7 @@ describe('设置里把正开着的可写连接改成只读（DBE-B2）', () => {
   let f = ''
   let flipId = ''
 
-  it('DBE-B2 设置页那条路：改动当场断开旧连接；agent 的下一条写不问、重连成只读、写不进去', async () => {
+  it('DBE-B2 设置页那条路：改动当场断开旧连接；agent 的下一条写重连成只读、写不进去', async () => {
     f = await tickedSession('DBE-B2 flip')
     flipId = await addDbCredential(app.main, {
       name: 'e2e-flip',
@@ -384,8 +367,8 @@ describe('设置里把正开着的可写连接改成只读（DBE-B2）', () => {
       database: 'e2e_flip_db',
       readonly: false
     })
-    // 可写：连读都要问
-    const counted = await allowQuery(f, 'dbb2_count', 'e2e-flip', COUNT, 'Count items')
+    // 可写连接上的读：出厂不问
+    const counted = await runQuery(f, 'dbb2_count', 'e2e-flip', COUNT, 'Count items')
     expect(counted.isError).toBe(false)
     expect(counted.result).toContain('| 0 |')
     expect(flip.open()).toBe(1)
@@ -403,7 +386,7 @@ describe('设置里把正开着的可写连接改成只读（DBE-B2）', () => {
       'db banner cleared for the flipped session'
     )
 
-    // agent 的下一条写：它现在是只读连接，不问；重新连上的是一条只读连接，写被挡在门外
+    // agent 的下一条写：重新连上的是一条只读连接，写被挡在门外
     const INSERT = "INSERT INTO items (label) VALUES ('b2_sneaky')"
     const write = await runQuery(f, 'dbb2_insert', 'e2e-flip', INSERT, 'Add one')
     expect(write.isError).toBe(true)
@@ -439,7 +422,7 @@ describe('设置里把正开着的可写连接改成只读（DBE-B2）', () => {
     await until(() => flip.open() === 0, 'writable again: the read-only connection closed')
     await flip.query('SET default_transaction_read_only = off')
 
-    const counted = await allowQuery(f, 'dbb2b_count', 'e2e-flip', COUNT, 'Count items')
+    const counted = await runQuery(f, 'dbb2b_count', 'e2e-flip', COUNT, 'Count items')
     expect(counted.isError).toBe(false)
     const held = flip.connections()
     expect(flip.open()).toBe(1)
@@ -540,12 +523,11 @@ describe('用户自己的策略（DBE-P）', () => {
     }
   }, 120_000)
 
-  it('DBE-P2 用户按连接名写的 deny：不问就拒，免询问开着也拒；语句没到库', async () => {
+  it('DBE-P2 用户按连接名写的 deny：不问就拒；语句没到库', async () => {
     const created = await createPolicy(
       policy(DENY_RW, 'database', 'deny', "object.credential == 'e2e-rw'")
     )
     expect(created.success, created.error).toBe(true)
-    await setAutoAllow(s, true)
     try {
       const end = await runQuery(
         s,
@@ -562,7 +544,6 @@ describe('用户自己的策略（DBE-P）', () => {
         winning: `${DENY_RW}#0`
       })
     } finally {
-      await setAutoAllow(s, false)
       await deletePolicy(DENY_RW)
     }
   }, 120_000)

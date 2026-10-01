@@ -223,7 +223,7 @@ abstract class FileToolBase<
   /**
    * 写入前询问钩子 —— 交给 applyWrite/applyEdit 在锁内调用。
    *
-   * 走的仍是统一评估链，所以内置/用户策略、会话免询问、allowList 这几层
+   * 走的仍是统一评估链，所以内置/用户策略、allowList 这几层
    * 一个不少，只是多带了一份 diff 预览；不通过时它自己 throw，写入不会发生。
    */
   /**

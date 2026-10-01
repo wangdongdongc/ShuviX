@@ -23,10 +23,10 @@ side panel (per tab) ─┘                                    (cli.js native-ho
 - **Tabs you ask about ride along.** The chips above the input choose which tabs go with the
   message (this tab by default); the model gets their titles and addresses, and reads page
   content itself when it needs it.
-- **Each other site asks once.** The sites of the tabs you send are allowed — sending a tab is
-  asking about it. The first time a conversation opens or works on any other site (a tab the
-  agent opened, a page that moved on to another site by itself), ShuviX asks (builtin policy
-  `ask-on-new-site`).
+- **Sites are not asked about by default.** The builtin `ask-on-new-site` policy was removed on
+  2026-10-01. The site gate is still there: a policy of your own on `{type:'url', browser:'chrome'}`
+  asks the first time a conversation opens or works on a site, except the sites of the tabs you
+  send — sending a tab is asking about it.
 
 Protocol and contracts: `packages/chat-protocol/src/chromeBridge.ts`. Desktop side:
 `apps/desktop/src/main/services/chromeBridge/` (bridge server, native host installer, the `chrome`

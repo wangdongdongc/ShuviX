@@ -431,7 +431,7 @@ describe('inDirOnlyVarNames — 只作 inDir 目录参数的 vars 名', () => {
       'inDir(object.path, vars[object.type])',
       // 根本不是 vars：lets 注入的顶层名 / 表达式里没有 inDir
       'inDir(object.path, credentialDirs)',
-      'vars.autoAllow'
+      'vars.sandboxActive'
     ]) {
       // 先确认表达式本身合法 —— 否则空结果可能只是语法错分支给的，而不是被规则排除的
       expect(compileMatch(expression), expression).toBeNull()
@@ -481,7 +481,7 @@ describe('evaluateMatch — hasShortFlags', () => {
 
   it('CM-H4 大小写敏感：-Rf 不算 rf 带齐', () => {
     // 钉住当前语义。rm 的 -R 与 -r 等价，但「哪些命令的短选项大小写等价」是命令特定的
-    // 知识，引擎不猜；策略里要覆盖就再写一个 'Rf' 分支（block-catastrophic-commands 正是）。
+    // 知识，引擎不猜；策略里要覆盖就再写一个 'Rf' 分支（退役的 block-catastrophic-commands 正是）。
     expect(flags(['rm', '-Rf', '/'], 'rf')).toBe(false)
   })
 

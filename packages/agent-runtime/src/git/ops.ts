@@ -84,8 +84,8 @@ export interface GitOpSpec {
   /**
    * 该次调用的破坏性原因码，null = 非破坏性。要看参数而不能只看 action：
    * checkout 只有 force、branch 只有 delete 才具破坏性。
-   * 注意：拦不拦由安全策略决定（内置 git-safety 的 match 与此处的判定对齐 ——
-   * gitAction/force/delete 作为客体属性上报）；原因码只供宿主本地化询问文案。
+   * 注意：拦不拦由安全策略决定（gitAction/force/delete 作为客体属性上报，出厂没有
+   * git 策略）；原因码只供宿主本地化询问文案。
    */
   askReason?: (params: GitOpParams) => GitAskReason | null
   /** 预留：将来引入 GitCaps（如 network）时启用；undefined = 恒可用 */

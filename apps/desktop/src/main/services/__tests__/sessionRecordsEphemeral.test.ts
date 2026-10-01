@@ -145,21 +145,21 @@ describe.each([
           enabledTools: ['mcp:ssh', 'skill:x'],
           bot: 'scout',
           count: 42,
-          autoAllow: true,
+          coEdit: true,
           cleared: null
         })
       })
     )
     const picked = sessionRecords.pickSettings(
       's1',
-      looseKeys('chromeTab', 'enabledTools', 'bot', 'count', 'autoAllow', 'cleared', 'agentProfile')
+      looseKeys('chromeTab', 'enabledTools', 'bot', 'count', 'coEdit', 'cleared', 'agentProfile')
     ) as Record<string, unknown>
     expect(picked).toEqual({
       chromeTab: BINDING,
       enabledTools: ['mcp:ssh', 'skill:x'],
       bot: 'scout',
       count: 42,
-      autoAllow: true,
+      coEdit: true,
       cleared: null,
       agentProfile: null
     })
@@ -167,7 +167,7 @@ describe.each([
     expect(typeof picked.chromeTab).toBe('object')
     expect(Array.isArray(picked.enabledTools)).toBe(true)
     expect(typeof picked.count).toBe('number')
-    expect(picked.autoAllow).toBe(true)
+    expect(picked.coEdit).toBe(true)
     expect('cleared' in picked && picked.cleared === null).toBe(true)
     expect('agentProfile' in picked && picked.agentProfile === null).toBe(true)
   })
@@ -204,7 +204,7 @@ describe.each([
       chromeTab: { installId: 'i2', runId: 'r2', tabId: 9 },
       enabledTools: ['c'],
       allowList: undefined,
-      autoAllow: true
+      coEdit: true
     })
     const row = sessionRecords.findById('s1')!
     expect(row.settings).toEqual({
@@ -216,7 +216,7 @@ describe.each([
       enabledTools: ['c'],
       // undefined 跳过：原值还在
       allowList: ['Read(/x)'],
-      autoAllow: true
+      coEdit: true
     })
     expect(row.updatedAt).toBe(LATER)
     expect(row.lastActiveAt).toBe(T0)
@@ -235,7 +235,7 @@ describe.each([
     insert(session('s1', { settings: { bot: 'scout' } }))
     vi.setSystemTime(LATER)
     sessionRecords.updateSettings('s1', {})
-    sessionRecords.updateSettings('s1', { bot: undefined, autoAllow: undefined })
+    sessionRecords.updateSettings('s1', { bot: undefined, coEdit: undefined })
     expect(sessionRecords.findById('s1')).toEqual(session('s1', { settings: { bot: 'scout' } }))
   })
 

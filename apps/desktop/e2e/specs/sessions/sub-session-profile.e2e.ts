@@ -25,6 +25,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { launchApp, type E2EApp } from '../../harness/launch'
 import { startFakeProvider, type FakeProvider } from '../../harness/fakeProvider'
 import {
+  autoAllowed,
   createProject,
   installAutoAllow,
   seedEnabledModel,
@@ -132,6 +133,8 @@ async function createSub(
     .flatMap((m) => (m.blocks ?? []).filter((b) => b.toolName === 'session'))
     .find((b) => (b.result ?? '').includes(row!.id))
   expect(block, 'tool result should carry the sub-session id').toBeDefined()
+  // 开子会话出厂不问：「点允许」的安全网一次都没被用上
+  expect(await autoAllowed(app.main), 'opening a sub-session must not ask').toEqual([])
   return { id: row!.id, result: block!.result ?? '', isError: !!block!.isError }
 }
 
@@ -174,7 +177,8 @@ beforeAll(async () => {
       .create(${JSON.stringify({ title: PARENT_TITLE, projectId: project.id })})
       .then((s) => s.id)`
   )
-  // 内置 ask-on-sub-session 对「开子会话」要问一句 —— 扮演那个点「允许一次」的用户
+  // 开子会话出厂不问（2026-10-01 删了 ask-on-sub-session）。「点允许一次」的桩只当安全网：
+  // 真冒出一张卡也不会挂到超时，createSub 里断言它一次都没被用上
   await installAutoAllow(app.main)
   // 父会话勾选一个 skill：子会话「继承」与「声明」的对照物（父会话还没有运行时，勾选可改）
   const picked = await app.main.eval<{ success: boolean }>(

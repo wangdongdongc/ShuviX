@@ -31,8 +31,6 @@ export interface SessionItemProps {
   isNotebook?: boolean
   /** bot 会话（绑定了 bot）—— 显示 bot 图标；与 isNotebook 互斥（创建时定死） */
   isBot?: boolean
-  /** 会话开着「免询问」（settings.autoAllow）—— 行首图标染琥珀 */
-  autoAllow?: boolean
   /** 子会话行：缩进一级（行内 paddingLeft，同知识库的文件行）。其余与顶层行完全一致 */
   isSub?: boolean
   /** 拥有的子会话数（>0 时行首图标可点折叠 —— 普通会话换成 MessagesSquare；标题后跟一个计数） */
@@ -55,7 +53,6 @@ export function SessionItem({
   dim = false,
   isNotebook = false,
   isBot = false,
-  autoAllow = false,
   isSub = false,
   subCount = 0,
   subCollapsed = false,
@@ -65,24 +62,18 @@ export function SessionItem({
   isPinned = false
 }: SessionItemProps): React.JSX.Element {
   const { t } = useTranslation()
-  /**
-   * 行首图标着色：免询问压过其余一切。工具调用不再逐次询问是会话的常驻状态，而顶栏那枚
-   * 「免询问」胶囊已经撤了 —— 侧栏这枚图标是它在界面上仅剩的常驻痕迹，所以它得压过
-   * accent（选中/流式）而不是被盖掉；流式的 animate-pulse 照旧，仍看得出这条在跑。
-   */
-  const tone = (base: string): string => (autoAllow ? 'text-amber-500' : base)
   const pulse = isStreaming ? 'animate-pulse ' : ''
-  const lit = tone(isStreaming || active ? 'text-accent' : 'text-text-tertiary/40')
+  const lit = isStreaming || active ? 'text-accent' : 'text-text-tertiary/40'
   // 行首图标说的是「这是哪种会话」；有子会话时它外面再包一层折叠钮（见下）
   const icon = isBot ? (
     <Bot size={11} className={`flex-shrink-0 ${pulse}${lit}`} />
   ) : isNotebook ? (
     <FileText
       size={11}
-      className={`flex-shrink-0 ${tone(active ? 'text-accent' : 'text-text-tertiary/40')}`}
+      className={`flex-shrink-0 ${active ? 'text-accent' : 'text-text-tertiary/40'}`}
     />
   ) : isPinned ? (
-    <PictureInPicture2 size={11} className={`flex-shrink-0 ${pulse}${tone('text-accent')}`} />
+    <PictureInPicture2 size={11} className={`flex-shrink-0 ${pulse}text-accent`} />
   ) : subCount > 0 ? (
     <MessagesSquare size={11} className={`flex-shrink-0 ${pulse}${lit}`} />
   ) : (

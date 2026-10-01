@@ -29,7 +29,6 @@ import type {
   SessionUpdateEnabledToolsParams,
   SessionUpdateKnowledgeBasesParams,
   SessionUpdateProjectParams,
-  SessionUpdateAutoAllowParams,
   SessionAllowListRemoveParams,
   SubAgentCreateParams,
   SubAgentSaveParams,
@@ -282,8 +281,6 @@ const api = {
     /** 改这条会话启用的知识库（整份替换）；不锁 —— 改完下一次工具调用就生效 */
     updateKnowledgeBases: (params: SessionUpdateKnowledgeBasesParams) =>
       ipcRenderer.invoke('session:updateKnowledgeBases', params),
-    updateAutoAllow: (params: SessionUpdateAutoAllowParams) =>
-      ipcRenderer.invoke('session:updateAutoAllow', params),
     removeAllowListEntry: (params: SessionAllowListRemoveParams) =>
       ipcRenderer.invoke('session:removeAllowListEntry', params),
     delete: (id: string) => ipcRenderer.invoke('session:delete', id),

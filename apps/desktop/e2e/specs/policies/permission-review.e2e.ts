@@ -24,7 +24,7 @@
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, onTestFinished } from 'vitest'
 import { sleep, until } from '../../harness/cdp'
 import { startFakeProvider, type FakeProvider, type FakeRequest } from '../../harness/fakeProvider'
 import { launchApp, type E2EApp } from '../../harness/launch'
@@ -34,12 +34,14 @@ import {
   createProject,
   eventRecorder,
   isReviewerRequest,
+  removeRetiredPolicy,
   requestSystemText,
   requestToolNames,
   reviewEventOf,
   reviewerTurn,
   securityDecisions,
   seedFakeProvider,
+  seedRetiredPolicy,
   setAutoReview,
   setSandboxEnabled,
   waitRendererReady,
@@ -116,17 +118,10 @@ const mainRequests = (): FakeRequest[] => provider.requests().filter((r) => !isR
 /** 主 agent 的回合：不是审查请求 */
 const notReviewer = (r: FakeRequest): boolean => !isReviewerRequest(r)
 
-const newSession = async (title: string, opts: { autoAllow?: boolean } = {}): Promise<string> => {
-  const sid = await app.main.eval<string>(
+const newSession = (title: string): Promise<string> =>
+  app.main.eval<string>(
     `window.api.session.create(${JSON.stringify({ title, projectId })}).then((s) => s.id)`
   )
-  if (opts.autoAllow) {
-    await app.main.eval(
-      `window.api.session.updateAutoAllow(${JSON.stringify({ id: sid, autoAllow: true })})`
-    )
-  }
-  return sid
-}
 
 /** 在主窗口里打开这条会话（列表由 session.listChanged 广播驱动，IPC 建的会话也会出现） */
 const openInUi = async (title: string): Promise<void> => {
@@ -491,17 +486,19 @@ describe('开关与只问人的门', () => {
     expect(await inputRequests(sid)).toHaveLength(0)
   })
 
-  it('E2E-R5 [P0] protect-shuvix-config：写 ~/.shuvix/agents 只问人、不经审查；[P1] 免询问也跳不过', async () => {
+  it('E2E-R5 [P0] 用户写的 force-ask 只问人、不经审查（照抄退役的 protect-shuvix-config）；[P1] 撤掉它，写 ~/.shuvix/agents 就是普通的 ask-on-write，先经审查', async () => {
     const target = join(app.home, '.shuvix', 'agents', 'e2e-probe.md')
     const content = '---\nshuvix: agent v1\nname: e2e-probe\n---\n\nPROBE BODY.\n'
 
-    const runOnce = async (title: string, callId: string, autoAllow: boolean): Promise<void> => {
-      const sid = await newSession(title, { autoAllow })
+    // 出厂不再有 force-ask（2026-10-01 删了 protect-shuvix-config）：把它原样装成用户策略
+    seedRetiredPolicy(app, 'protect-shuvix-config')
+    try {
+      const sid = await newSession('R5-config')
       provider.reset()
       await events.clear()
       provider.script(
-        { toolCalls: [writeCall(callId, target, content)], when: notReviewer },
-        { text: `${title} done.`, when: notReviewer }
+        { toolCalls: [writeCall('call_r5', target, content)], when: notReviewer },
+        { text: 'R5-config done.', when: notReviewer }
       )
       await sendPrompt(sid, 'Add an agent file for me. USER-INTENT-R5')
 
@@ -513,39 +510,39 @@ describe('开关与只问人的门', () => {
 
       expect(existsSync(target)).toBe(false)
       expect(reviewRequests()).toHaveLength(0)
-      expect(await reviewingTrace(callId)).toEqual([])
+      expect(await reviewingTrace('call_r5')).toEqual([])
       const [decision] = await settledDecisions(sid, 1)
       expect(decision.winning).toBe('protect-shuvix-config#0')
       expect(decision.review).toBeUndefined()
       expect(decision.userResponse).toBe('denied')
+    } finally {
+      removeRetiredPolicy(app, 'protect-shuvix-config')
     }
 
-    await runOnce('R5-config', 'call_r5', false)
-    // P1：会话开着免询问，force-ask 照样弹卡
-    await runOnce('R5-config-auto', 'call_r5_auto', true)
-  })
-
-  it('E2E-R6 [P1] 免询问会话：命令直接跑，不问也不审，session-grants 胜出', async () => {
-    const sid = await newSession('R6-auto', { autoAllow: true })
-    const marker = markerPath('r6')
+    // P1：出厂行为 —— 工作目录之外的一次普通写入，ask-on-write 问，先交给审查员（这里审查员拒）
+    const sid = await newSession('R5-config-default')
     provider.reset()
     await events.clear()
     provider.script(
-      { toolCalls: [touchCall('call_r6', marker)], when: notReviewer },
-      { text: 'R6 done.', when: notReviewer },
-      // 误审时别挂住：审查员放行，靠计数抓出来
-      reviewerTurn({ decision: 'allow', risk: 'low', summary: 'SUMMARY-R6', reason: 'REASON-R6' })
+      { toolCalls: [writeCall('call_r5_default', target, content)], when: notReviewer },
+      { text: 'R5-config-default done.', when: notReviewer },
+      reviewerTurn({
+        decision: 'deny',
+        risk: 'high',
+        summary: 'SUMMARY-R5',
+        reason: 'REASON-R5 changes an agent definition'
+      })
     )
-    await sendPrompt(sid, 'Create the R6 marker. USER-INTENT-R6')
+    await sendPrompt(sid, 'Add an agent file for me. USER-INTENT-R5')
     await events.waitFor('agent_end', { sessionId: sid })
 
-    expect(existsSync(marker)).toBe(true)
+    expect(existsSync(target)).toBe(false)
     expect(await inputRequests(sid)).toHaveLength(0)
-    expect(reviewRequests()).toHaveLength(0)
+    expect(reviewRequests()).toHaveLength(1)
+    expect(reviewEventOf(reviewRequests()[0]).operation.facts.path).toBe(target)
     const [decision] = await settledDecisions(sid, 1)
-    expect(decision.winning).toBe('session-grants#0')
-    expect(decision.effect).toBe('allow')
-    expect(decision.review).toBeUndefined()
+    expect(decision.winning).toBe('ask-on-write#0')
+    expect(decision.review).toMatchObject({ decision: 'deny', source: REVIEW_SOURCE })
   })
 
   it('E2E-R7 [P1] 沙箱关着时工作区照样免询问：普通文件直接写；受保护位置 .git/hooks 经审查放行后落盘', async () => {
@@ -699,7 +696,10 @@ describe('子会话', () => {
       (r: FakeRequest): boolean =>
         notReviewer(r) && r.lastUserText === text
 
-    // ① 父 agent 开子会话：ask-on-sub-session 要问 → 先交给审查员
+    // ① 父 agent 开子会话：出厂不问（2026-10-01 删了 ask-on-sub-session）—— 把它原样装成用户
+    //    策略，开子会话就要问 → 先交给审查员。② 的 prompt-sub-session 不在它的范围里
+    seedRetiredPolicy(app, 'ask-on-sub-session')
+    onTestFinished(() => removeRetiredPolicy(app, 'ask-on-sub-session'))
     provider.reset()
     await events.clear()
     provider.script(

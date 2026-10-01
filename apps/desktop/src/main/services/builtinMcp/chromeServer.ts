@@ -5,7 +5,8 @@
  * 注入：后端经桥转发到扩展（chromeBridge），门按「这是用户自己的、登录着的浏览器」来设：
  *
  *  - **按站点问**（site 门）：在一个显示网页的标签页上做任何事之前，按它此刻所在的站点过
- *    `{type:'url', browser:'chrome'}` 客体 —— 出厂策略 ask-on-new-site 据此每个站点每条会话问一次。
+ *    `{type:'url', browser:'chrome'}` 客体 —— 出厂不再挂策略（2026-10-01 删掉了 ask-on-new-site，
+ *    默认放行）；用户自写一份按站点询问的策略，就是每个站点每条会话问一次。
  *    用户随消息带上的标签页所在的站点不问（见 chromeBridge/siteGrants）：带上它就是在问它。
  *    会话挂着的那一页**不**因为「是它」就放行 —— 它会变：agent 点了个链接、页面自己跳走了，
  *    就已经不是用户打开侧边栏时问的那一页了。
@@ -40,7 +41,7 @@ export const CHROME_MCP_SERVER_NAME = 'chrome'
 
 /** 接在 list_tabs 描述后面：这是谁的浏览器、对话挂在哪一页、操作会留下什么 */
 const CHROME_HOST_NOTE =
-  "These are the user's real Chrome tabs, signed in as the user. This conversation is attached to one of them — the tab the user opened the ShuviX side panel on; it is listed first, and each user message names the tabs the user selected. The sites of the tabs the user sent are already allowed; the first time you open or work on any other site in this conversation, the user is asked. Reading a tab (list_tabs, read_page) leaves no trace; operating one (snapshot, click, type, screenshot, …) attaches a debugger and shows a banner in Chrome until your turn ends. Tabs you open go into this conversation's tab group, in the background. Tab ids are Chrome's numeric tab ids."
+  "These are the user's real Chrome tabs, signed in as the user. This conversation is attached to one of them — the tab the user opened the ShuviX side panel on; it is listed first, and each user message names the tabs the user selected. Reading a tab (list_tabs, read_page) leaves no trace; operating one (snapshot, click, type, screenshot, …) attaches a debugger and shows a banner in Chrome until your turn ends. Tabs you open go into this conversation's tab group, in the background. Tab ids are Chrome's numeric tab ids."
 
 function chromeGates(scope: DesktopBuiltinMcpScope): BrowserMcpGates {
   const security = (): ReturnType<typeof getDesktopSecurityContext> =>

@@ -66,12 +66,6 @@ export interface SessionUpdateKnowledgeBasesParams {
   knowledgeBases: string[]
 }
 
-/** IPC: 更新命令免询问参数 */
-export interface SessionUpdateAutoAllowParams {
-  id: string
-  autoAllow: boolean
-}
-
 /** IPC: 移除允许列表条目（仅路径条目 `Read(...)`/`Write(...)`） */
 export interface SessionAllowListRemoveParams {
   id: string

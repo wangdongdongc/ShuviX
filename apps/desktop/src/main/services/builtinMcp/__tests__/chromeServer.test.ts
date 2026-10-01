@@ -1,12 +1,14 @@
 /**
  * 内置能力服务器 `chrome` 的**桌面接线** —— 隔着真的 MCP 协议看，门后是**真的**安全模块
- * （内置策略一条不少，ask-on-new-site 在其中）。
+ * （内置策略一条不少）。出厂已没有站点策略（2026-10-01 删了 ask-on-new-site：出厂不留硬限制、
+ * 默认尽可能少问）—— 站点门照样上报 url 客体，只是出厂默认放行（CS-6）；要看「按站点问」的用例把
+ * 退役那份的原文（retiredPolicy 夹具）当作**用户策略**装回来（withNewSitePolicy）。
  *
  * server 本体（按站点记账、排队、取消）在 agent-runtime 那边有自己的测试（mcpServer W 系列）；
  * 这里只问桌面给它的东西接得对不对：
  *   CS-1        工具面：按 Chrome 的端能力、list_tabs 后面接「这是用户自己的 Chrome」的说明；
  *   CS-4…8      网页按站点过 `{type:'url', browser:'chrome'}` 客体（规整过的写法、opts 的契约、
- *               ask-on-new-site 的卡片）：允许 / 拒绝 / 免询问 / 没有输入面板；导航同一个客体；
+ *               装回的 ask-on-new-site 的卡片）：允许 / 拒绝 / 出厂不问 / 没有输入面板；导航同一个客体；
  *               放行过的站点这一台实例里不再问；不属于任何站点的页不问；
  *   CS-9…11     本地文件：file:// 按读那个路径（挂着的那一页显示的也一样），不指本机的地址逐字报错；
  *               本地文件交给网页、决定下载落在哪一律拒绝；
@@ -29,21 +31,17 @@ import type {
   InputRequest,
   InputResponse
 } from '@shuvix/chat-protocol/types/inputRequest'
-import {
-  browserToolsForCaps,
-  buildBuiltinPolicies,
-  type BrowserCaps,
-  type BrowserTabQueue
-} from '@shuvix/agent-runtime'
-import { createInlinePolicyMdReader } from '@shuvix/agent-runtime/security/builtinPolicies/inlineSources'
+import { browserToolsForCaps, type BrowserCaps, type BrowserTabQueue } from '@shuvix/agent-runtime'
+import { retiredPolicy } from '../../../../../../../packages/agent-runtime/src/security/__tests__/fixtures/retiredPolicies'
 
 // mock 路径按**测试文件**解析：被测模块在 services/builtinMcp/，测试在其 __tests__/ 下
 
-/** 安全门的现场：记下的实参、免询问开关 */
+/** 安全门的现场：记下的实参、这条会话的用户策略 */
 const gate = vi.hoisted(() => ({
   pathCalls: [] as Array<{ mode: unknown; path: unknown; opts: unknown }>,
   urlCalls: [] as Array<{ object: unknown; opts: unknown }>,
-  autoAllow: false
+  /** 用户策略；空 = 只有内置那套（出厂没有站点策略） */
+  policies: [] as unknown[]
 }))
 
 vi.mock('../../toolContext', async () => {
@@ -76,8 +74,8 @@ vi.mock('../../toolContext', async () => {
             systemDirs: []
           }),
           readBuiltinPolicyMd,
-          getSessionGrants: () => ({ autoAllow: gate.autoAllow, allowList: [] }),
-          getUserPolicies: () => [],
+          getSessionGrants: () => ({ allowList: [] }),
+          getUserPolicies: () => gate.policies as never,
           requestUserInput: ctx.requestUserInput
         }
       )
@@ -194,11 +192,11 @@ import { CHROME_MCP_SERVER_NAME, createChromeMcpServerFactory } from '../chromeS
 
 const POSIX = process.platform !== 'win32'
 
-const policyEn = buildBuiltinPolicies({ readMd: createInlinePolicyMdReader() }).find(
-  (p) => p.name === 'ask-on-new-site'
-)!
-const NEW_SITE_POLICY = policyEn.displayName
-const NEW_SITE_PROMPT = policyEn.rules[0].prompt!
+/** 退役的 ask-on-new-site（按站点询问的那一份），当作用户自己写的策略装回 */
+const newSitePolicy = retiredPolicy('ask-on-new-site')
+const NEW_SITE_POLICY = newSitePolicy.displayName
+const NEW_SITE_PROMPT = newSitePolicy.rules[0].prompt!
+const withNewSitePolicy = (): void => void gate.policies.push(newSitePolicy)
 
 let seq = 0
 const sid = (): string => `cs-session-${++seq}`
@@ -207,7 +205,7 @@ const iid = (): string => `cs-install-${++seq}`
 beforeEach(() => {
   gate.pathCalls.length = 0
   gate.urlCalls.length = 0
-  gate.autoAllow = false
+  gate.policies.length = 0
   chrome.created.length = 0
   ;(chromeBrowserState as unknown as Mock).mockClear()
 })
@@ -326,7 +324,7 @@ const chromeUrl = (
 // ─── 工具面 ──────────────────────────────────────────────────────────────
 
 describe.skipIf(!POSIX)('chrome 桌面接线 —— 工具面', () => {
-  it('CS-1 工具按 Chrome 的端能力列（没有 upload_file / pdf）；只有 list_tabs 带「这是用户自己的 Chrome」的说明，并讲清哪些站点不问', async () => {
+  it('CS-1 工具按 Chrome 的端能力列（没有 upload_file / pdf）；只有 list_tabs 带「这是用户自己的 Chrome」的说明，且不再说新站点会问（出厂已无站点策略）', async () => {
     const s = await open()
     const tools = (await s.client.listTools()).tools
     expect(tools.map((t) => t.name)).toEqual(browserToolsForCaps(CHROME_CAPS).map((t) => t.name))
@@ -337,10 +335,8 @@ describe.skipIf(!POSIX)('chrome 桌面接线 —— 工具面', () => {
       t.description?.includes("These are the user's real Chrome tabs")
     )
     expect(noted.map((t) => t.name)).toEqual(['list_tabs'])
-    expect(noted[0].description).toContain(
-      'The sites of the tabs the user sent are already allowed'
-    )
-    expect(noted[0].description).toContain('the user is asked')
+    expect(noted[0].description).not.toContain('already allowed')
+    expect(noted[0].description).not.toContain('the user is asked')
     expect(s.client.getServerVersion()).toEqual({ name: 'shuvix-chrome', version: '1.0.0' })
     expect(CHROME_MCP_SERVER_NAME).toBe('chrome')
   })
@@ -348,10 +344,11 @@ describe.skipIf(!POSIX)('chrome 桌面接线 —— 工具面', () => {
 
 // ─── 网页：按站点过 url 客体 ─────────────────────────────────────────────
 
-describe.skipIf(!POSIX)('chrome 桌面接线 —— 新站点先问（ask-on-new-site）', () => {
+describe.skipIf(!POSIX)('chrome 桌面接线 —— 新站点先问（装回的 ask-on-new-site）', () => {
   const PAGE = 'https://a.example/p?q=1'
+  beforeEach(withNewSitePolicy)
 
-  it('CS-4 在显示新站点的 tab 上操作：恰好一次 enforceUrl（规整过的客体、browser chrome、opts 契约）→ 一张卡（地址本身 + 出厂策略的话与名字）；允许后才做', async () => {
+  it('CS-4 在显示新站点的 tab 上操作：恰好一次 enforceUrl（规整过的客体、browser chrome、opts 契约）→ 一张卡（地址本身 + 那份策略的话与名字）；允许后才做', async () => {
     const s = await open()
     s.backend.urls['6'] = 'https://A.Example./p?q=1'
     expect(textOf(await s.call('read_page', { tabId: '6' }, TC))).toBe('readPage ok')
@@ -401,13 +398,19 @@ describe.skipIf(!POSIX)('chrome 桌面接线 —— 新站点先问（ask-on-new
     expect(s.asks).toHaveLength(2)
   })
 
-  it('CS-6 免询问开着 → 不问，照做（session-grants 压过 ask-on-new-site）', async () => {
-    gate.autoAllow = true
-    const s = await open()
+  it('CS-6 出厂（没有站点策略）→ 站点门照样上报 url 客体，但不问、照做；没有输入面板也照做', async () => {
+    gate.policies.length = 0
+    const s = await open({ respond: null })
     s.backend.urls['6'] = PAGE
     expect(textOf(await s.call('click', { tabId: '6', uid: 'e1' }))).toBe('click ok')
-    expect(gate.urlCalls).toHaveLength(1)
+    expect((await s.call('open_tab', { url: 'https://b.example/' })).isError).toBeFalsy()
+    expect(gate.urlCalls.map((c) => (c.object as { host: string }).host)).toEqual([
+      'a.example',
+      'b.example'
+    ])
     expect(s.asks).toEqual([])
+    expect(s.backend.click).toHaveBeenCalledTimes(1)
+    expect(s.backend.openTab).toHaveBeenCalledTimes(1)
   })
 
   it('CS-7 没有输入面板 → fail-closed，地址写全，后端不碰', async () => {
@@ -455,7 +458,7 @@ describe.skipIf(!POSIX)('chrome 桌面接线 —— 新站点先问（ask-on-new
   })
 
   it.each(['about:blank', 'data:text/html,x', 'chrome://settings'])(
-    'CS-8b 导航到不属于任何站点的 %s：照样上报 chrome 客体，但出厂策略不问',
+    'CS-8b 导航到不属于任何站点的 %s：照样上报 chrome 客体，但按站点询问的策略不问',
     async (url) => {
       const s = await open({ respond: null })
       expect((await s.call('open_tab', { url })).isError).toBeFalsy()
@@ -564,6 +567,9 @@ describe.skipIf(!POSIX)('chrome 桌面接线 —— 本地文件', () => {
 // ─── 用户随消息带上的站点 ────────────────────────────────────────────────
 
 describe.skipIf(!POSIX)('chrome 桌面接线 —— 用户带上的站点（siteGrants）', () => {
+  // 没带上过的站点要「照样问」，得有一份按站点询问的策略
+  beforeEach(withNewSitePolicy)
+
   it('CS-12 带上过的站点：哪个 tab 上操作、导航过去都不问（不过 url 客体）；写法规整后比', async () => {
     const s = await open({ respond: null })
     grantSite(s.sessionId, 'bank.example')
@@ -648,7 +654,9 @@ describe.skipIf(!POSIX)('chrome 桌面接线 —— 用户带上的站点（site
 describe.skipIf(!POSIX)(
   'chrome 桌面接线 —— blob: / view-source: / filesystem: 按里面那个站点问',
   () => {
-    it('CS-13 blob:https://evil.example/… → 客体按创建它的那个源（scheme blob），出厂策略问', async () => {
+    beforeEach(withNewSitePolicy)
+
+    it('CS-13 blob:https://evil.example/… → 客体按创建它的那个源（scheme blob），按站点询问的策略问', async () => {
       const s = await open()
       s.backend.urls['6'] = 'blob:https://evil.example/u'
       await s.call('read_page', { tabId: '6' })
@@ -724,6 +732,7 @@ describe.skipIf(!POSIX)('chrome 桌面接线 —— 会话', () => {
   })
 
   it('CS-15 后端按会话各造一个（sessionId 原样传进去），询问只到发起那条会话', async () => {
+    withNewSitePolicy()
     const one = await open({ sessionId: 'cs-a' })
     const two = await open({ sessionId: 'cs-b' })
     expect(chrome.created).toEqual(['cs-a', 'cs-b'])

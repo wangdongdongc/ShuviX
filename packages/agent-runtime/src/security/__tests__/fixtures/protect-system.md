@@ -1,6 +1,5 @@
 ---
 shuvix: policy v1
-shuvix-builtin: true
 name: protect-system
 shuvix-displayName: Protect Some System Directories
 description: The agent can never write to operating-system locations.

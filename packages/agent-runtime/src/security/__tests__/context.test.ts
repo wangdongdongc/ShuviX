@@ -30,6 +30,7 @@ import { createInlinePolicyMdReader } from '../builtinPolicies/inlineSources'
 import { buildBuiltinPolicies } from '../builtinPolicies'
 import { parsePolicyDefinitionFile } from '../policyFile'
 import { assembleRules, resolvePolicyFiles } from '../assemble'
+import { retiredPolicy } from './fixtures/retiredPolicies'
 
 /** 内置策略 md 的构建期内联读取口（运行时单测的宿主接缝；桌面/扩展各注入自己的） */
 const INLINE_POLICY_MD = createInlinePolicyMdReader()
@@ -60,7 +61,7 @@ const DATABASE_INPUT = {
 }
 
 function makeProvider(
-  grants: { autoAllow: boolean; allowList: string[] },
+  grants: { allowList: string[] },
   overrides: Partial<SecurityHostProvider> = {}
 ): SecurityHostProvider {
   return {
@@ -86,7 +87,8 @@ function makeProvider(
       workspaceWritable: [],
       workspaceWriteDenied: [],
       workspaceProtectedPatterns: [],
-      // ShuviX 自己的规矩所在（protect-shuvix-config）
+      // 宿主照旧供给的事实变量：出厂已没有策略读它们（protect-shuvix-config / protect-bot-files
+      // 已退役为测试夹具，见 fixtures/retiredPolicies.ts），装上夹具的用例靠它们
       shuvixConfigDirs: [
         '/home/u/.shuvix/policies',
         '/home/u/.shuvix/agents',
@@ -108,9 +110,10 @@ describe('createSecurityContext', () => {
     const ctx = createSecurityContext(
       SUBJECT,
       ENVIRONMENT,
-      makeProvider({ autoAllow: true, allowList: [] })
+      makeProvider({ allowList: ['Read(/home/u/.ssh)'] })
     )
-    // 凭据目录读取有内置 ask 门（protect-credentials）：force-allow 缺省不纳入 → 不放行
+    // 凭据目录读取有内置 ask 门（protect-credentials），「允许并记住」过的 ~/.ssh 由
+    // session-grants 的 force-allow 放行：force-allow 缺省不纳入 → 不放行
     const credential: SecurityObject = { type: 'path', path: '/home/u/.ssh/id_rsa' }
     expect(ctx.evaluateReadOnly('read', credential)).toBe(false)
     expect(ctx.evaluateReadOnly('read', credential, { includeForceAllow: true })).toBe(true)
@@ -122,10 +125,18 @@ describe('createSecurityContext', () => {
   })
 
   it('CT-2 enforcePath 以 mode 为 action、displayPath 进入展示；enforceCommand/enforceGitOp action=execute', async () => {
+    // 询问一律允许：工作区写（这组 vars 不豁免）与没圈住的命令都会问，问完照样各落一条日志
     const ctx = createSecurityContext(
       SUBJECT,
       ENVIRONMENT,
-      makeProvider({ autoAllow: true, allowList: [] })
+      makeProvider(
+        { allowList: [] },
+        {
+          requestUserInput: vi.fn(
+            async (_req: InputRequest): Promise<InputResponse> => ({ kind: 'ask', allowed: true })
+          )
+        }
+      )
     )
 
     await ctx.enforcePath('read', '/ws/a.txt', { toolCallId: 'tc-1', toolName: 'read' })
@@ -145,11 +156,7 @@ describe('createSecurityContext', () => {
     ])
 
     // displayPath：无询问通道 fail-closed 的文案使用展示路径
-    const strict = createSecurityContext(
-      SUBJECT,
-      ENVIRONMENT,
-      makeProvider({ autoAllow: false, allowList: [] })
-    )
+    const strict = createSecurityContext(SUBJECT, ENVIRONMENT, makeProvider({ allowList: [] }))
     await expect(
       strict.enforcePath('write', '/outside/b.txt', {
         toolCallId: 'tc-5',
@@ -159,38 +166,30 @@ describe('createSecurityContext', () => {
     ).rejects.toThrow('Access denied: path outside workspace and no way to ask: rel/b.txt')
   })
 
-  it('CT-3 禁缓存：同一实例下 grants 变化即生效', () => {
-    const grants = { autoAllow: false, allowList: [] as string[] }
+  it('CT-3 禁缓存：同一实例下 grants 变化即生效（加上立即放行、撤掉立即回到询问）', () => {
+    const grants = { allowList: [] as string[] }
     const ctx = createSecurityContext(SUBJECT, ENVIRONMENT, makeProvider(grants))
 
-    // ask-on-command：ask → 开免询问后同一实例立即 allow
-    const commandObject: SecurityObject = {
-      type: 'command',
-      channel: 'bash',
-      command: 'ls -la',
-      ...NO_SHELL_FACTS
-    }
-    expect(ctx.evaluate('execute', commandObject).effect).toBe('ask')
-    grants.autoAllow = true
-    const allowed = ctx.evaluate('execute', commandObject)
-    expect(allowed.effect).toBe('allow')
-    expect(allowed.winning).toBe('session-grants#0')
-    grants.autoAllow = false
-    expect(
-      ctx.evaluate('execute', {
-        type: 'gitTool',
-        gitAction: 'init',
-        command: 'git init',
-        force: false,
-        delete: false
-      }).effect
-    ).toBe('ask')
-
-    // allowList 落库（「允许并记住」）立即可见 —— 用带内置 ask 门的凭据路径验证
+    // allowList 落库（「允许并记住」）立即可见 —— 用带内置 ask 门的凭据读验证
     const credential: SecurityObject = { type: 'path', path: '/home/u/.ssh/config' }
     expect(ctx.evaluate('read', credential).effect).toBe('ask')
     grants.allowList.push('Read(/home/u/.ssh/config)')
-    expect(ctx.evaluate('read', credential).effect).toBe('allow')
+    const read = ctx.evaluate('read', credential)
+    expect(read.effect).toBe('allow')
+    expect(read.winning).toBe('session-grants#0')
+
+    // 写授权同理（ask-on-write：区外写 ask → 记住后同一实例立即 allow）
+    const outside: SecurityObject = { type: 'path', path: '/outside/f.txt' }
+    expect(ctx.evaluate('write', outside).effect).toBe('ask')
+    grants.allowList.push('Write(/outside)')
+    const write = ctx.evaluate('write', outside)
+    expect(write.effect).toBe('allow')
+    expect(write.winning).toBe('session-grants#1')
+
+    // 条目被撤掉（会话配置面板里逐条移除）：同一实例下一次评估就回到询问
+    grants.allowList.length = 0
+    expect(ctx.evaluate('read', credential).effect).toBe('ask')
+    expect(ctx.evaluate('write', outside).effect).toBe('ask')
   })
 
   it('CT-W1 端到端旗舰：match 取反工作区的 ask 门 —— 工作区内 allow、区外 ask（vars 流入 match 上下文）', () => {
@@ -199,7 +198,7 @@ describe('createSecurityContext', () => {
       SUBJECT,
       ENVIRONMENT,
       makeProvider(
-        { autoAllow: false, allowList: [] },
+        { allowList: [] },
         {
           getUserPolicies: () => [
             {
@@ -234,7 +233,7 @@ describe('createSecurityContext', () => {
     const warn = vi.fn()
     const logger = { info: vi.fn(), warn, error: vi.fn() }
     const provider = makeProvider(
-      { autoAllow: false, allowList: [] },
+      { allowList: [] },
       {
         logger,
         getUserPolicies: () => [
@@ -285,7 +284,7 @@ function invocationProvider(
   const requestUserInput = vi.fn(async (_req: InputRequest): Promise<InputResponse> => response)
   return {
     provider: makeProvider(
-      { autoAllow: false, allowList: [] },
+      { allowList: [] },
       { requestUserInput, getUserPolicies: () => [userPolicy('tool-gate', rules)] }
     ),
     requestUserInput
@@ -301,7 +300,7 @@ describe('createSecurityContext — enforceInvocation（L1 全工具门）', () 
     const ctx = createSecurityContext(
       SUBJECT,
       ENVIRONMENT,
-      makeProvider({ autoAllow: false, allowList: [] }, { requestUserInput })
+      makeProvider({ allowList: [] }, { requestUserInput })
     )
     await expect(ctx.enforceInvocation({ ...INVOCATION_OPTS })).resolves.toEqual({
       status: 'allowed'
@@ -310,12 +309,22 @@ describe('createSecurityContext — enforceInvocation（L1 全工具门）', () 
     expect(requestUserInput).not.toHaveBeenCalled()
   })
 
-  it('CT-T1b allow 即非事件：autoAllow=true（force-allow 恒命中）→ 仍 allowed 且无日志、无弹窗', async () => {
+  it('CT-T1b allow 即非事件：用户 force-allow 恒命中 invocation → 仍 allowed 且无日志、无弹窗', async () => {
     const requestUserInput = rejectingChannel()
     const ctx = createSecurityContext(
       SUBJECT,
       ENVIRONMENT,
-      makeProvider({ autoAllow: true, allowList: [] }, { requestUserInput })
+      makeProvider(
+        { allowList: [] },
+        {
+          requestUserInput,
+          getUserPolicies: () => [
+            userPolicy('trust-tools', [
+              { effect: 'force-allow', match: "object.type == 'invocation'" }
+            ])
+          ]
+        }
+      )
     )
     await expect(ctx.enforceInvocation({ ...INVOCATION_OPTS })).resolves.toEqual({
       status: 'allowed'
@@ -424,7 +433,7 @@ describe('createSecurityContext — enforceInvocation（L1 全工具门）', () 
       SUBJECT,
       ENVIRONMENT,
       makeProvider(
-        { autoAllow: false, allowList: [] },
+        { allowList: [] },
         {
           getUserPolicies: () => [
             userPolicy('ask-on-write', [
@@ -699,7 +708,7 @@ describe('createSecurityContext — enforceCommand 的 host', () => {
     const warn = vi.fn()
     return {
       provider: makeProvider(
-        { autoAllow: false, allowList: [] },
+        { allowList: [] },
         {
           requestUserInput,
           logger: { info: vi.fn(), warn, error: vi.fn() },
@@ -770,7 +779,7 @@ describe('createSecurityContext — enforceCommand 的 sandboxed 事实与「完
   const BASH_OPTS = { toolCallId: 'tc-sbx', toolName: 'bash' }
 
   /** 截下门面造出的命令客体（静态 allow 层的派生规则，永不命中）、记下询问材料（一律允许） */
-  function sandboxProbe(grants = { autoAllow: false, allowList: [] as string[] }): {
+  function sandboxProbe(userPolicies: ParsedPolicyFile[] = []): {
     provider: SecurityHostProvider
     requestUserInput: Mock<(req: InputRequest) => Promise<InputResponse>>
     warn: Mock
@@ -782,22 +791,26 @@ describe('createSecurityContext — enforceCommand 的 sandboxed 事实与「完
     const warn = vi.fn()
     const objects: Array<MatchContext['object']> = []
     return {
-      provider: makeProvider(grants, {
-        requestUserInput,
-        logger: { info: vi.fn(), warn, error: vi.fn() },
-        derivedRules: () => [
-          {
-            id: 'derived:capture',
-            effect: 'allow' as const,
-            tier: 'static-allow' as const,
-            source: { kind: 'derived' as const },
-            matches: (matchCtx) => {
-              objects.push(matchCtx.object)
-              return false
+      provider: makeProvider(
+        { allowList: [] },
+        {
+          requestUserInput,
+          logger: { info: vi.fn(), warn, error: vi.fn() },
+          getUserPolicies: () => userPolicies,
+          derivedRules: () => [
+            {
+              id: 'derived:capture',
+              effect: 'allow' as const,
+              tier: 'static-allow' as const,
+              source: { kind: 'derived' as const },
+              matches: (matchCtx) => {
+                objects.push(matchCtx.object)
+                return false
+              }
             }
-          }
-        ]
-      }),
+          ]
+        }
+      ),
       requestUserInput,
       warn,
       lastObject: () => objects[objects.length - 1]
@@ -906,17 +919,19 @@ describe('createSecurityContext — enforceCommand 的 sandboxed 事实与「完
     expect(onlyAsk(plain).unsandboxed).toBeUndefined()
   })
 
-  it('PO-7 放行的决策不造询问材料：免询问开着的完全访问申请、以及 opt 与圈住的执行同时出现 —— 都不弹卡', async () => {
-    // 免询问开着：申请完全访问的命令也被 session-grants 放行，卡片（连同标记）根本不存在
-    const autoAllow = sandboxProbe({ autoAllow: true, allowList: [] })
+  it('PO-7 放行的决策不造询问材料：用户 force-allow 放宽了的完全访问申请、以及 opt 与圈住的执行同时出现 —— 都不弹卡', async () => {
+    // 用户自己的 force-allow 压过 ask-on-command：申请完全访问的命令也被放行，卡片（连同标记）根本不存在
+    const trusted = sandboxProbe([
+      userPolicy('trust-commands', [{ effect: 'force-allow', match: "object.type == 'command'" }])
+    ])
     await expect(
-      createSecurityContext(SUBJECT, ENVIRONMENT, autoAllow.provider).enforceCommand(
+      createSecurityContext(SUBJECT, ENVIRONMENT, trusted.provider).enforceCommand(
         { channel: 'bash', command: 'open -a Safari' },
         { ...BASH_OPTS, unsandboxed: true }
       )
     ).resolves.toEqual({ status: 'allowed' })
-    expect(autoAllow.requestUserInput).not.toHaveBeenCalled()
-    expect(getSessionDecisions(SID)[0].winning).toBe('session-grants#0')
+    expect(trusted.requestUserInput).not.toHaveBeenCalled()
+    expect(getSessionDecisions(SID)[0].winning).toBe('trust-commands#0')
 
     // 标记只是卡片上的装饰：询问与否由客体上的 sandboxed 定，opt 不会把一次放行变成询问
     clearSessionDecisions(SID)
@@ -935,25 +950,31 @@ describe('createSecurityContext — enforceCommand 的 sandboxed 事实与「完
 describe('createSecurityContext — enforceDatabase（数据库查询守卫）', () => {
   const DB_OPTS = { toolCallId: 'tc-db', toolName: 'database', abortError: 'TOOL_ABORTED' }
 
-  /** 固定询问应答的 provider（内置 ask-on-database 对可写连接 ask） */
+  /**
+   * 固定询问应答的 provider —— 出厂没有数据库策略（默认放行），这里装上退役的 ask-on-database
+   * 夹具（按用户策略，对可写连接 ask），好让询问的各个分支走得到
+   */
   function databaseProvider(response: InputResponse): {
     provider: SecurityHostProvider
     requestUserInput: ReturnType<typeof vi.fn>
   } {
     const requestUserInput = vi.fn(async (_req: InputRequest): Promise<InputResponse> => response)
     return {
-      provider: makeProvider({ autoAllow: false, allowList: [] }, { requestUserInput }),
+      provider: makeProvider(
+        { allowList: [] },
+        { requestUserInput, getUserPolicies: () => [retiredPolicy('ask-on-database')] }
+      ),
       requestUserInput
     }
   }
 
   it('CT-4 action/objectKind = execute/database；tool 维度取自 opts.toolName（tool.name 规则可命中）', async () => {
-    // autoAllow 抵消内置 ask-on-database 的 ask，只留用户规则的按工具 deny（deny 压过 force-allow）
+    // 出厂没有数据库策略：只留用户规则的按工具 deny
     const ctx = createSecurityContext(
       SUBJECT,
       ENVIRONMENT,
       makeProvider(
-        { autoAllow: true, allowList: [] },
+        { allowList: [] },
         {
           getUserPolicies: () => [
             userPolicy('db-tool-gate', [
@@ -967,7 +988,7 @@ describe('createSecurityContext — enforceDatabase（数据库查询守卫）',
     await expect(
       ctx.enforceDatabase(DATABASE_INPUT, { ...DB_OPTS, toolCallId: 'tc-db1' })
     ).rejects.toThrow("Denied by security policy rule 'db-tool-gate#0'")
-    // 同一客体换工具名：tool 维度不再命中 → force-allow 放行
+    // 同一客体换工具名：tool 维度不再命中 → 默认放行
     await expect(
       ctx.enforceDatabase(DATABASE_INPUT, { ...DB_OPTS, toolCallId: 'tc-db2', toolName: 'bash' })
     ).resolves.toEqual({ status: 'allowed' })
@@ -1025,7 +1046,7 @@ describe('createSecurityContext — enforceDatabase（数据库查询守卫）',
       SUBJECT,
       ENVIRONMENT,
       makeProvider(
-        { autoAllow: false, allowList: [] },
+        { allowList: [] },
         {
           requestUserInput,
           getUserPolicies: () => [
@@ -1040,12 +1061,13 @@ describe('createSecurityContext — enforceDatabase（数据库查询守卫）',
     expect(requestUserInput).not.toHaveBeenCalled()
   })
 
-  it('CT-6 只读连接的 allow 是事件（与 L1 非事件相反）：放行且落一条 allow 日志、不弹窗；autoAllow 归因 force-allow', async () => {
+  it('CT-6 只读连接的 allow 是事件（与 L1 非事件相反）：放行且落一条 allow 日志、不弹窗；用户 force-allow 放宽的可写连接归因到它', async () => {
+    const askOnDatabase = retiredPolicy('ask-on-database')
     const requestUserInput = rejectingChannel()
     const ctx = createSecurityContext(
       SUBJECT,
       ENVIRONMENT,
-      makeProvider({ autoAllow: false, allowList: [] }, { requestUserInput })
+      makeProvider({ allowList: [] }, { requestUserInput, getUserPolicies: () => [askOnDatabase] })
     )
 
     await expect(
@@ -1063,18 +1085,34 @@ describe('createSecurityContext — enforceDatabase（数据库查询守卫）',
     expect(logs[0].userResponse).toBeUndefined()
     clearSessionDecisions(SID)
 
-    // 可写连接 + 免询问：同样放行，但归因 force-allow
-    const autoCtx = createSecurityContext(
+    // 可写连接 + 用户对这条连接的 force-allow：同样放行，但归因 force-allow 那条
+    // （ask-on-database 仍在 matched 里 —— 门没被拆掉，只是被压过）
+    const trustedCtx = createSecurityContext(
       SUBJECT,
       ENVIRONMENT,
-      makeProvider({ autoAllow: true, allowList: [] }, { requestUserInput: rejectingChannel() })
+      makeProvider(
+        { allowList: [] },
+        {
+          requestUserInput: rejectingChannel(),
+          getUserPolicies: () => [
+            askOnDatabase,
+            userPolicy('trust-prod', [
+              {
+                effect: 'force-allow',
+                match: "object.type == 'database' && object.credential == 'prod-mysql'"
+              }
+            ])
+          ]
+        }
+      )
     )
-    await expect(autoCtx.enforceDatabase(DATABASE_INPUT, { ...DB_OPTS })).resolves.toEqual({
+    await expect(trustedCtx.enforceDatabase(DATABASE_INPUT, { ...DB_OPTS })).resolves.toEqual({
       status: 'allowed'
     })
     expect(getSessionDecisions(SID)[0]).toMatchObject({
       effect: 'allow',
-      winning: 'session-grants#0'
+      winning: 'trust-prod#0',
+      matched: ['trust-prod#0', 'ask-on-database#0']
     })
   })
 })
@@ -1086,7 +1124,7 @@ describe('createSecurityContext — PEP 属性齐全性与 lets 禁缓存', () =
       SUBJECT,
       ENVIRONMENT,
       makeProvider(
-        { autoAllow: false, allowList: [] },
+        { allowList: [] },
         {
           logger: { info: vi.fn(), warn, error: vi.fn() },
           getUserPolicies: () => [
@@ -1132,7 +1170,7 @@ describe('createSecurityContext — PEP 属性齐全性与 lets 禁缓存', () =
       SUBJECT,
       ENVIRONMENT,
       makeProvider(
-        { autoAllow: false, allowList: [] },
+        { allowList: [] },
         {
           logger: { info: vi.fn(), warn, error: vi.fn() },
           getUserPolicies: () => [
@@ -1171,7 +1209,7 @@ describe('createSecurityContext — PEP 属性齐全性与 lets 禁缓存', () =
       SUBJECT,
       ENVIRONMENT,
       makeProvider(
-        { autoAllow: false, allowList: [] },
+        { allowList: [] },
         {
           getVars: () => ({ ...vars }),
           getUserPolicies: () => [
@@ -1224,7 +1262,7 @@ describe('createSecurityContext — 结构化条件 × 策略级 scope（端到�
       SUBJECT,
       ENVIRONMENT,
       makeProvider(
-        { autoAllow: false, allowList: [] },
+        { allowList: [] },
         {
           requestUserInput,
           getUserPolicies: () => [
@@ -1273,10 +1311,7 @@ describe('createSecurityContext — 结构化条件 × 策略级 scope（端到�
       agent: ReturnType<typeof createSecurityContext>
       user: ReturnType<typeof createSecurityContext>
     } => {
-      const provider = makeProvider(
-        { autoAllow: false, allowList: [] },
-        { getUserPolicies: () => [policy(kind)] }
-      )
+      const provider = makeProvider({ allowList: [] }, { getUserPolicies: () => [policy(kind)] })
       return {
         agent: createSecurityContext(SUBJECT, ENVIRONMENT, provider),
         user: createSecurityContext({ kind: 'user', sessionId: SID }, ENVIRONMENT, provider)
@@ -1324,7 +1359,7 @@ describe('createSecurityContext — 用户策略的 force-allow（端到端）',
 
   const contextWith = (
     policies: ParsedPolicyFile[],
-    grants = { autoAllow: false, allowList: [] as string[] }
+    grants = { allowList: [] as string[] }
   ): ReturnType<typeof createSecurityContext> =>
     createSecurityContext(
       SUBJECT,
@@ -1347,22 +1382,31 @@ describe('createSecurityContext — 用户策略的 force-allow（端到端）',
     const granted = ctx.evaluate('read', { type: 'path', path: '/home/u/.aws/config' })
     expect(granted.effect).toBe('allow')
     expect(granted.winning).toBe('trust-aws#0')
-    // 门没被拆掉，只是被压过 —— protect-credentials#1 仍在 matched 里（决策日志据此回链）
-    expect(granted.matched).toContain('protect-credentials#1')
+    // 门没被拆掉，只是被压过 —— protect-credentials#0 仍在 matched 里（决策日志据此回链）
+    expect(granted.matched).toContain('protect-credentials#0')
 
     // 放宽是局部的：策略没提的凭据路径仍归内置读取门管
     const elsewhere = ctx.evaluate('read', { type: 'path', path: '/home/u/.ssh/config' })
     expect(elsewhere.effect).toBe('ask')
-    expect(elsewhere.winning).toBe('protect-credentials#1')
+    expect(elsewhere.winning).toBe('protect-credentials#0')
 
-    // 放宽是按 action 的：同一目录的写入不受这条 read force-allow 影响（凭据写照拒）
+    // 放宽是按 action 的：同一目录的写入不受这条 read force-allow 影响（凭据位置的写照
+    // 普通区外写问 —— protect-credentials 只管读）
     const write = ctx.evaluate('write', { type: 'path', path: '/home/u/.aws/config' })
-    expect(write.effect).toBe('deny')
-    expect(write.winning).toBe('protect-credentials#0')
+    expect(write.effect).toBe('ask')
+    expect(write.winning).toBe('ask-on-write#0')
+    expect(write.matched).toEqual(['ask-on-write#0'])
   })
 
-  it('CU-2 用户 force-allow 压不过内置 deny：~/.ssh 写入仍 deny，归因 protect-credentials#0', () => {
+  it('CU-2 force-allow 压不过 deny：用户自己加回的「凭据目录拒写」照拒，另一份策略里的 force-allow 也救不回', () => {
     const ctx = contextWith([
+      pathPolicy('no-credential-writes', [
+        {
+          effect: 'deny',
+          conditions: { action: ['write'] },
+          match: "inDir(object.path, vars.home + '/.ssh')"
+        }
+      ]),
       pathPolicy('trust-ssh', [
         {
           effect: 'force-allow',
@@ -1374,7 +1418,7 @@ describe('createSecurityContext — 用户策略的 force-allow（端到端）',
 
     const decision = ctx.evaluate('write', { type: 'path', path: '/home/u/.ssh/id_rsa' })
     expect(decision.effect).toBe('deny')
-    expect(decision.winning).toBe('protect-credentials#0')
+    expect(decision.winning).toBe('no-credential-writes#0')
     // force-allow 规则确实命中了（是被 deny 压过，而不是没匹配上）
     expect(decision.matched).toContain('trust-ssh#0')
   })
@@ -1400,33 +1444,41 @@ describe('createSecurityContext — 用户策略的 force-allow（端到端）',
     )
   })
 
-  it('CU-F1 旗舰：用户 force-ask 让特定文件在免询问开着时仍然询问，且不给「允许并记住」', () => {
-    // 需求原型：某些文件始终要过目一次，免询问开关对它不生效
+  it('CU-F1 旗舰：用户 force-ask 让特定文件在 force-allow 放宽、「允许并记住」过时仍然询问，且不给「允许并记住」', () => {
+    // 需求原型：某些文件始终要过目一次，任何会话级同意都对它不生效
     const ctx = contextWith(
       [
+        pathPolicy('trust-data', [{ effect: 'force-allow', match: "inDir(object.path, '/data')" }]),
         pathPolicy('guard-prod', [
-          { effect: 'force-ask', match: "inDir(object.path, '/data/prod')" }
+          { effect: 'force-ask', match: "inDir(object.path, '/data/prod')" },
+          {
+            effect: 'deny',
+            conditions: { action: ['write'] },
+            match: "inDir(object.path, '/data/prod/locked')"
+          }
         ])
       ],
-      { autoAllow: true, allowList: ['Read(/data/prod)'] }
+      { allowList: ['Read(/data/prod)'] }
     )
 
-    // 免询问开着 + 该路径还「允许并记住」过 —— 两条 force-allow 都命中，仍然 ask
+    // 用户的 force-allow + 该路径还「允许并记住」过 —— 两条 force-allow 都命中，仍然 ask
     const guarded = ctx.evaluate('read', { type: 'path', path: '/data/prod/secrets.env' })
     expect(guarded.effect).toBe('ask')
     expect(guarded.winning).toBe('guard-prod#0')
+    expect(guarded.matched).toContain('trust-data#0')
     expect(guarded.matched).toContain('session-grants#0')
-    expect(guarded.matched).toContain('session-grants#1')
     // 记忆入口不给：那条授权落在 force-allow 层，点了也压不过这道门
     expect(guarded.ask?.rememberEntry).toBeUndefined()
 
-    // 对照：策略没覆盖的路径照旧被免询问放行
+    // 对照：策略没覆盖的路径照旧被 force-allow 放行
     const elsewhere = ctx.evaluate('read', { type: 'path', path: '/data/other/x.txt' })
-    expect(elsewhere.effect).toBe('allow')
+    expect(elsewhere).toMatchObject({ effect: 'allow', winning: 'trust-data#0' })
 
-    // 对照：force-ask 压不过 deny —— 凭据目录写入仍是拒绝
-    const denied = ctx.evaluate('write', { type: 'path', path: '/home/u/.ssh/id_rsa' })
+    // 对照：force-ask 压不过 deny —— 两条同时命中时是拒绝
+    const denied = ctx.evaluate('write', { type: 'path', path: '/data/prod/locked/x' })
     expect(denied.effect).toBe('deny')
+    expect(denied.winning).toBe('guard-prod#1')
+    expect(denied.matched).toContain('guard-prod#0')
   })
 
   it('CU-4 evaluateReadOnly 缺省丢弃所有 force-allow（用户策略也不例外）；{includeForceAllow:true} 翻转', () => {
@@ -1448,86 +1500,35 @@ describe('createSecurityContext — 用户策略的 force-allow（端到端）',
     expect(ctx.evaluate('read', target).effect).toBe('allow')
   })
 
-  it('CU-5 照 session-grants 正文的收窄示例同名覆盖：免询问只覆盖读与执行，写仍 ask；路径授权照抄照旧', () => {
-    // 与内置 session-grants 正文「To adjust」示例逐字同构：覆盖是整份替换，路径两条跟着抄
-    const ctx = contextWith(
-      [
-        scopedPolicy('session-grants', { 'subject.kind': ['agent'] }, [
-          {
-            effect: 'force-allow',
-            conditions: { action: ['read', 'execute'] },
-            match: 'vars.autoAllow'
-          },
-          {
-            effect: 'force-allow',
-            conditions: { 'object.type': ['path'], action: ['read'] },
-            match: 'inDir(object.path, vars.grantedRead) || inDir(object.path, vars.grantedWrite)'
-          },
-          {
-            effect: 'force-allow',
-            conditions: { 'object.type': ['path'], action: ['write'] },
-            match: 'inDir(object.path, vars.grantedWrite)'
-          }
-        ])
-      ],
-      { autoAllow: true, allowList: ['Write(/granted)'] }
-    )
-
-    // 命令（execute）：照常被免询问放行
-    const command = ctx.evaluate('execute', {
-      type: 'command',
-      ...NO_SHELL_FACTS,
-      channel: 'bash',
-      command: 'ls -la'
-    })
-    expect(command.effect).toBe('allow')
-    expect(command.winning).toBe('session-grants#0')
-
-    // 区外读取：同样放行
-    expect(ctx.evaluate('read', { type: 'path', path: '/outside/f.txt' })).toMatchObject({
-      effect: 'allow',
-      winning: 'session-grants#0'
-    })
-
-    // 写入：收窄后不再被免询问覆盖 → 内置写入门重新生效
-    expect(ctx.evaluate('write', { type: 'path', path: '/outside/f.txt' })).toMatchObject({
-      effect: 'ask',
-      winning: 'ask-on-write#0'
-    })
-
-    // 抄过来的路径授权照旧：「允许并记住」过的目录写入不问
-    expect(ctx.evaluate('write', { type: 'path', path: '/granted/f.txt' })).toMatchObject({
-      effect: 'allow',
-      winning: 'session-grants#2'
-    })
-  })
-
-  it('CU-6 同名覆盖 session-grants 只留免询问规则 → 已授权路径重新 ask；免询问开关不受影响', () => {
-    const grants = { autoAllow: false, allowList: ['Write(/data)'] }
-    const autoAllowOnly = [
-      scopedPolicy('session-grants', { 'subject.kind': ['agent'] }, [
-        { effect: 'force-allow', match: 'vars.autoAllow' }
+  it('CU-6 同名覆盖 session-grants 只留读那条 → 已授权路径的写重新 ask；读照旧放行', () => {
+    const grants = { allowList: ['Write(/data)'] }
+    const readOnly = [
+      pathPolicy('session-grants', [
+        {
+          effect: 'force-allow',
+          conditions: { action: ['read'] },
+          match: 'inDir(object.path, vars.grantedRead) || inDir(object.path, vars.grantedWrite)'
+        }
       ])
     ]
 
-    // 对照：内置在位时授权生效
+    // 对照：内置在位时写授权生效
     expect(
       contextWith([], grants).evaluate('write', { type: 'path', path: '/data/x.txt' })
-    ).toMatchObject({ effect: 'allow', winning: 'session-grants#2' })
+    ).toMatchObject({ effect: 'allow', winning: 'session-grants#1' })
 
-    // 去掉路径规则：条目还在会话里，但没有规则读它了 → 回到询问
-    const stripped = contextWith(autoAllowOnly, grants)
+    // 去掉写那条：条目还在会话里，但没有规则拿它放行写了 → 回到询问
+    const stripped = contextWith(readOnly, grants)
     expect(stripped.evaluate('write', { type: 'path', path: '/data/x.txt' })).toMatchObject({
       effect: 'ask',
       winning: 'ask-on-write#0'
     })
 
-    // 留下的免询问规则照常放行
-    const autoAllow = contextWith(autoAllowOnly, { autoAllow: true, allowList: [] })
-    expect(autoAllow.evaluate('write', { type: 'path', path: '/data/x.txt' })).toMatchObject({
-      effect: 'allow',
-      winning: 'session-grants#0'
-    })
+    // 留下的读规则照常（写授权含读）—— 凭据位置也一样能被它放宽
+    const credentialGrant = contextWith(readOnly, { allowList: ['Write(/home/u/.aws)'] })
+    expect(
+      credentialGrant.evaluate('read', { type: 'path', path: '/home/u/.aws/config' })
+    ).toMatchObject({ effect: 'allow', winning: 'session-grants#0' })
   })
 })
 
@@ -1535,7 +1536,9 @@ describe('createSecurityContext — 授权快照一次性（回归守护）', ()
   it('CV-3 一次 evaluate 里 getSessionGrants / getVars 各恰好 1 次，决策取第一次快照', () => {
     // 每次调用翻转的 stub：若装配与求值各自 buildPolicyVars，两处会看到不同的授权视图
     let call = 0
-    const getSessionGrants = vi.fn(() => ({ autoAllow: call++ === 0, allowList: [] as string[] }))
+    const getSessionGrants = vi.fn(() => ({
+      allowList: call++ === 0 ? ['Write(/outside)'] : ([] as string[])
+    }))
     const getVars = vi.fn(() => ({
       workspace: '/ws',
       toolResultsBase: '/tool-results',
@@ -1556,25 +1559,15 @@ describe('createSecurityContext — 授权快照一次性（回归守护）', ()
       readBuiltinPolicyMd: INLINE_POLICY_MD
     })
 
-    // 第一次快照 autoAllow=true → 命令被免询问放行
-    const first = ctx.evaluate('execute', {
-      type: 'command',
-      channel: 'bash',
-      command: 'ls -la',
-      ...NO_SHELL_FACTS
-    })
-    expect(first).toMatchObject({ effect: 'allow', winning: 'session-grants#0' })
+    // 第一次快照里有 Write(/outside) → 区外写被「允许并记住」放行
+    const first = ctx.evaluate('write', { type: 'path', path: '/outside/f.txt' })
+    expect(first).toMatchObject({ effect: 'allow', winning: 'session-grants#1' })
     // 丢掉 assembleRules 的第二参（各自 buildPolicyVars）时，这两个计数会变成 2
     expect(getSessionGrants).toHaveBeenCalledTimes(1)
     expect(getVars).toHaveBeenCalledTimes(1)
 
-    // 第二次评估重新取快照（禁缓存），此时 autoAllow 已翻回 false → 询问门回来
-    const second = ctx.evaluate('execute', {
-      type: 'command',
-      channel: 'bash',
-      command: 'ls -la',
-      ...NO_SHELL_FACTS
-    })
+    // 第二次评估重新取快照（禁缓存），此时授权已经没了 → 询问门回来
+    const second = ctx.evaluate('write', { type: 'path', path: '/outside/f.txt' })
     expect(second.effect).toBe('ask')
     expect(getSessionGrants).toHaveBeenCalledTimes(2)
     expect(getVars).toHaveBeenCalledTimes(2)
@@ -1587,7 +1580,7 @@ describe('createSecurityContext — fail-safe 无 logger', () => {
       SUBJECT,
       ENVIRONMENT,
       makeProvider(
-        { autoAllow: false, allowList: [] },
+        { allowList: [] },
         {
           getUserPolicies: () => [
             {
@@ -1609,17 +1602,22 @@ describe('createSecurityContext — fail-safe 无 logger', () => {
 
 describe('createSecurityContext — 宿主没供给的目录变量', () => {
   it('CT-W4 缺 botsDir 的桌面宿主经门面反复评估：只记一行「not provided」、零 fail-safe，普通写照常落回 ask-on-write', () => {
-    // 缺的 botsDir 由 assemble 替 protect-bot-files（force-ask）绑成 null。不绑的话每次写都缺键
-    // 报错、fail-safe 成命中：普通写全变成免不掉的 force-ask，logger 每次评估刷一行 fail-safe。
+    // 用户装了一份只守一个目录的 force-ask（退役的 protect-bot-files 夹具）而宿主没给那个目录：
+    // assemble 替它把 botsDir 绑成 null。不绑的话每次写都缺键报错、fail-safe 成命中：普通写全变成
+    // 免不掉的 force-ask，logger 每次评估刷一行 fail-safe。
     // 门面把两个出口（「not provided」与 evaluate 的 fail-safe）都接到 provider.logger，所以在这里一起数
     const warn = vi.fn()
     const logger = { info: vi.fn(), warn, error: vi.fn() }
-    const grants = { autoAllow: false, allowList: [] as string[] }
+    const grants = { allowList: [] as string[] }
     const { botsDir: _botsDir, ...varsWithoutBotsDir } = makeProvider(grants).getVars()
     const ctx = createSecurityContext(
       SUBJECT,
       ENVIRONMENT,
-      makeProvider(grants, { getVars: () => varsWithoutBotsDir, logger })
+      makeProvider(grants, {
+        getVars: () => varsWithoutBotsDir,
+        logger,
+        getUserPolicies: () => [retiredPolicy('protect-bot-files')]
+      })
     )
 
     for (let i = 0; i < 3; i++) {
@@ -1684,18 +1682,26 @@ describe('createSecurityContext — enforceCommand 的结构属性接线', () =>
   const allowingChannel = (): Mock<(req: InputRequest) => Promise<InputResponse>> =>
     vi.fn(async (_req: InputRequest): Promise<InputResponse> => ({ kind: 'ask', allowed: true }))
 
+  /**
+   * 出厂策略没有一份读结构属性（block-catastrophic-commands 2026-10-01 已退役）；这组测的是
+   * 接线，所以缺省装上它的夹具（按用户策略）当作「引用结构属性的那份策略」。
+   * 传 getUserPolicies 覆盖即换掉它。
+   */
+  const CATASTROPHIC = retiredPolicy('block-catastrophic-commands')
+
   function shellProvider(
     parser: Partial<SecurityHostProvider['shellParser']> & { analyze: Mock },
     overrides: Partial<SecurityHostProvider> = {}
   ): SecurityHostProvider {
     return makeProvider(
-      { autoAllow: false, allowList: [] },
+      { allowList: [] },
       {
         shellParser: {
           ensureReady: parser.ensureReady ?? (async () => {}),
           analyze: parser.analyze as unknown as (command: string) => ShellFacts
         },
         requestUserInput: allowingChannel(),
+        getUserPolicies: () => [CATASTROPHIC],
         ...overrides
       }
     )
@@ -1728,28 +1734,14 @@ describe('createSecurityContext — enforceCommand 的结构属性接线', () =>
     expect(analyze).toHaveBeenCalledTimes(2)
   })
 
-  it('CT-S3 无策略引用结构属性时一次都不解析（惰性）', async () => {
-    // 用户同名覆盖把 block-catastrophic-commands 换成只看原文的版本 —— 于是全部内置
-    // 策略都不碰 object.commands。此时解析器不该被叫醒：命令工具是高频路径，
+  it('CT-S3 无策略引用结构属性时一次都不解析（惰性）—— 只有出厂策略时就是这样', async () => {
+    // 不装夹具：出厂策略全都不碰 object.commands。此时解析器不该被叫醒：命令工具是高频路径，
     // 「用不上也每条都解析一遍」的成本会一直挂在那里。
     const analyze = vi.fn(() => rmRootFacts())
     const ctx = createSecurityContext(
       SHELL_SUBJECT,
       ENVIRONMENT,
-      shellProvider(
-        { analyze },
-        {
-          getUserPolicies: () => [
-            userPolicy('block-catastrophic-commands', [
-              {
-                effect: 'deny' as const,
-                conditions: { 'subject.kind': ['agent'], 'object.type': ['command'] },
-                match: "object.command == 'nope'"
-              }
-            ])
-          ]
-        }
-      )
+      shellProvider({ analyze }, { getUserPolicies: () => [] })
     )
     const outcome = await ctx.enforceCommand(
       { channel: 'bash', command: 'rm -rf /' },
@@ -1832,7 +1824,7 @@ describe('createSecurityContext — enforceCommand 的结构属性接线', () =>
       expect(serialized).not.toContain(key)
     }
     const beforeManualRead = analyze.mock.calls.length
-    // 直接读才触发（本次决策里 block-catastrophic-commands 已读过，故已是 1）
+    // 直接读才触发（本次决策里 block-catastrophic-commands 夹具已读过，故已是 1）
     expect(Array.isArray(captured!.commands)).toBe(true)
     expect(analyze.mock.calls.length).toBe(beforeManualRead)
   })
@@ -1939,7 +1931,7 @@ describe('createSecurityContext — enforceCommand 的结构属性接线', () =>
       SHELL_SUBJECT,
       ENVIRONMENT,
       makeProvider(
-        { autoAllow: false, allowList: [] },
+        { allowList: [] },
         { requestUserInput: allowingChannel(), logger: { info: vi.fn(), warn, error: vi.fn() } }
       )
     )
@@ -1964,7 +1956,7 @@ describe('createSecurityContext — enforceCommand 的结构属性接线', () =>
   describe('powershell 通道：PowerShell 扫描器，bash 解析器只读嵌套载荷', () => {
     const PS_OPTS = { toolCallId: 'ps-1', toolName: 'powershell' }
 
-    /** 一个会触发 Windows 格式化规则（#2）的解析结果 —— 只有 bash 通道会读到它 */
+    /** 一个会触发 Windows 格式化规则（夹具 #2）的解析结果 —— 只有 bash 通道会读到它 */
     const formatFacts = (): ShellFacts => ({
       source: 'format C:',
       parsed: true,
@@ -2178,22 +2170,24 @@ describe('createSecurityContext — enforceCommand 的结构属性接线', () =>
     })
 
     /**
-     * 这条曾经钉的是一个已知缺口（PowerShell 命令不解析，免询问开着时它们前面什么都没有）；
-     * PowerShell 扫描器接上之后，Windows 的格式化规则对两种 shell 一视同仁，deny 压过免询问。
+     * 这条曾经钉的是一个已知缺口（PowerShell 命令不解析，放宽的会话里它们前面什么都没有）；
+     * PowerShell 扫描器接上之后，Windows 的格式化规则对两种 shell 一视同仁，deny 压过 force-allow。
      */
-    it('CT-PS5 `format C:`：bash 与 powershell 都被 Windows 格式化规则拒，免询问也压不过', async () => {
-      const autoAllow = (
+    it('CT-PS5 `format C:`：bash 与 powershell 都被 Windows 格式化规则拒，用户对命令的 force-allow 也压不过', async () => {
+      const trusting = (
         analyze: Mock,
         requestUserInput: SecurityHostProvider['requestUserInput']
       ): SecurityHostProvider =>
-        makeProvider(
-          { autoAllow: true, allowList: [] },
+        shellProvider(
+          { analyze },
           {
-            shellParser: {
-              ensureReady: async () => {},
-              analyze: analyze as unknown as (command: string) => ShellFacts
-            },
-            requestUserInput
+            requestUserInput,
+            getUserPolicies: () => [
+              CATASTROPHIC,
+              userPolicy('trust-commands', [
+                { effect: 'force-allow', match: "object.type == 'command'" }
+              ])
+            ]
           }
         )
 
@@ -2201,7 +2195,7 @@ describe('createSecurityContext — enforceCommand 的结构属性接线', () =>
       const bashCtx = createSecurityContext(
         SHELL_SUBJECT,
         ENVIRONMENT,
-        autoAllow(bashAnalyze, rejectingChannel())
+        trusting(bashAnalyze, rejectingChannel())
       )
       await expect(
         bashCtx.enforceCommand(
@@ -2216,7 +2210,7 @@ describe('createSecurityContext — enforceCommand 的结构属性接线', () =>
       const ctx = createSecurityContext(
         SHELL_SUBJECT,
         ENVIRONMENT,
-        autoAllow(analyze, requestUserInput)
+        trusting(analyze, requestUserInput)
       )
       await expect(
         ctx.enforceCommand({ channel: 'powershell', command: 'format C:' }, PS_OPTS)
@@ -2240,8 +2234,12 @@ describe('createSecurityContext — enforceCommand 的结构属性接线', () =>
         SHELL_SUBJECT,
         ENVIRONMENT,
         makeProvider(
-          { autoAllow: false, allowList: [] },
-          { requestUserInput: rejectingChannel(), logger: quietLogger(warn) }
+          { allowList: [] },
+          {
+            requestUserInput: rejectingChannel(),
+            logger: quietLogger(warn),
+            getUserPolicies: () => [CATASTROPHIC]
+          }
         )
       )
       await expect(
@@ -2307,7 +2305,7 @@ describe('createSecurityContext — enforceCommand 的结构属性接线', () =>
       await ctx.enforceCommand({ channel: 'powershell', command: "bash -c 'ls'" }, PS_OPTS)
       expect(analyze).toHaveBeenCalledTimes(2)
 
-      // 用户同名覆盖把 block-catastrophic-commands 换成只看原文的版本（同 CT-S3）
+      // 不装夹具：只剩出厂策略，没有一份引用结构属性（同 CT-S3）
       const lazyAnalyze = vi.fn(() => rmRootFacts())
       let captured: MatchContext['object'] | undefined
       const lazy = createSecurityContext(
@@ -2316,15 +2314,7 @@ describe('createSecurityContext — enforceCommand 的结构属性接线', () =>
         shellProvider(
           { analyze: lazyAnalyze },
           {
-            getUserPolicies: () => [
-              userPolicy('block-catastrophic-commands', [
-                {
-                  effect: 'deny' as const,
-                  conditions: { 'subject.kind': ['agent'], 'object.type': ['command'] },
-                  match: "object.command == 'nope'"
-                }
-              ])
-            ],
+            getUserPolicies: () => [],
             derivedRules: () => [
               {
                 id: 'derived:capture',
@@ -2438,10 +2428,11 @@ describe('createSecurityContext — enforceCommand 的结构属性接线', () =>
 
 // ─── enforceUrl（浏览器导航守卫）─────────────────────────────────────────
 //
-// 客体 `{type:'url', url, scheme, host, origin, browser}`、action 'navigate'。应用内的浏览器面板
-// （browser app）出厂**没有**任何 url 策略（no policy = allow）—— 这道门的意义是让用户能写
-// 「某个域名要问 / 禁止」；用户自己的 Chrome（browser chrome）有一条出厂的 ask-on-new-site
-// （CT-U9 系列）。file:// 不走这里：宿主把它当成读那个路径，改走 enforcePath('read')
+// 客体 `{type:'url', url, scheme, host, origin, browser}`、action 'navigate'。出厂**没有**任何
+// url 策略（no policy = allow），应用内的浏览器面板（browser app）与用户自己的 Chrome（browser
+// chrome）都一样 —— 这道门的意义是让用户能写「某个域名要问 / 禁止」。Chrome 那条「新站点要问」
+// 从前是出厂的 ask-on-new-site，2026-10-01 退役为测试夹具；CT-U9 系列把它按用户策略装上，继续钉住
+// 站点门的接线。file:// 不走这里：宿主把它当成读那个路径，改走 enforcePath('read')
 // （见两端宿主的接线测试）。
 
 /** 一个普通的导航目标（属性按 urlObjectOf 的写法给齐） */
@@ -2468,7 +2459,7 @@ const OPEN_OPTS = {
   description: 'Open https://a.example/p?q=1'
 }
 
-/** 同一页，在用户自己的 Chrome 里（出厂的 ask-on-new-site 只管它） */
+/** 同一页，在用户自己的 Chrome 里（ask-on-new-site 夹具只管它） */
 const CHROME_PAGE: UrlObjectInput = { ...PAGE, browser: 'chrome' }
 
 /** Chrome 那台 server 的站点门上下文 */
@@ -2478,12 +2469,10 @@ const CHROME_OPTS = {
   description: 'Use a.example in tab 6'
 }
 
-/** 出厂 ask-on-new-site 的 en 显示名与话（取自 md，不抄进断言） */
+/** 退役的 ask-on-new-site（夹具，按用户策略装上）与它的显示名、话（取自 md，不抄进断言） */
 const NEW_SITE = (() => {
-  const policy = buildBuiltinPolicies({ readMd: INLINE_POLICY_MD }).find(
-    (p) => p.name === 'ask-on-new-site'
-  )!
-  return { displayName: policy.displayName, prompt: policy.rules[0].prompt! }
+  const policy = retiredPolicy('ask-on-new-site')
+  return { policy, displayName: policy.displayName, prompt: policy.rules[0].prompt! }
 })()
 
 /** 抓住一次拒绝的原话 —— toThrow 的字符串参数只做子串匹配，逐字对照要拿出来 toBe */
@@ -2509,7 +2498,7 @@ interface UrlHarness {
  */
 function urlContext(
   policies: ParsedPolicyFile[],
-  opts: { response?: InputResponse; channel?: boolean; autoAllow?: boolean } = {}
+  opts: { response?: InputResponse; channel?: boolean } = {}
 ): UrlHarness {
   const requestUserInput = opts.response
     ? vi.fn(async (_req: InputRequest): Promise<InputResponse> => opts.response!)
@@ -2520,7 +2509,7 @@ function urlContext(
     SUBJECT,
     ENVIRONMENT,
     makeProvider(
-      { autoAllow: opts.autoAllow ?? false, allowList: [] },
+      { allowList: [] },
       {
         requestUserInput: opts.channel === false ? undefined : requestUserInput,
         persistGrant,
@@ -2585,7 +2574,7 @@ describe('createSecurityContext — enforceUrl（浏览器导航守卫）', () =
     expect(logs[0].tool).toEqual({ name: 'mcp__browser__navigate' })
   })
 
-  it('CT-U2 出厂没有任何策略管 url：免询问关着，https / 带端口 / data: / about: / chrome: 一律放行、不问、零告警，日志归因 default:url', async () => {
+  it('CT-U2 出厂没有任何策略管 url：https / 带端口 / data: / about: / chrome:、Chrome 里的新站点一律放行、不问、零告警，日志归因 default:url', async () => {
     const targets: UrlObjectInput[] = [
       PAGE,
       {
@@ -2603,7 +2592,9 @@ describe('createSecurityContext — enforceUrl（浏览器导航守卫）', () =
         host: 'settings',
         origin: 'null',
         browser: 'app'
-      }
+      },
+      // 用户自己的 Chrome 也不例外（ask-on-new-site 已不随包发布）
+      CHROME_PAGE
     ]
     const { ctx, requestUserInput, warn } = urlContext([])
 
@@ -2620,16 +2611,6 @@ describe('createSecurityContext — enforceUrl（浏览器导航守卫）', () =
       expect(log).toMatchObject({ effect: 'allow', winning: 'default:url', matched: [] })
     }
     expect(logs.map((l) => l.objectSummary).reverse()).toEqual(targets.map((t) => t.url))
-  })
-
-  it('CT-U2b 免询问开着：照样放行，归因 session-grants#0', async () => {
-    const { ctx, requestUserInput } = urlContext([], { autoAllow: true })
-    await expect(ctx.enforceUrl(PAGE, OPEN_OPTS)).resolves.toBeUndefined()
-    expect(requestUserInput).not.toHaveBeenCalled()
-    expect(getSessionDecisions(SID)[0]).toMatchObject({
-      effect: 'allow',
-      winning: 'session-grants#0'
-    })
   })
 
   it('CT-U3 用户按主机 deny：逐字「Denied by security policy rule …」，有提示语就接在空行后；不弹卡；别的主机照常', async () => {
@@ -2769,21 +2750,22 @@ describe('createSecurityContext — enforceUrl（浏览器导航守卫）', () =
     expect(warn).not.toHaveBeenCalled()
   })
 
-  it('CT-U8 免询问开着：用户的 ask 规则被静默放行；force-ask 规则照样问', async () => {
-    const asking = urlContext([userPolicy('url-gate', [hostRule('ask', 'a.example')])], {
-      autoAllow: true
-    })
+  it('CT-U8 用户对 url 的 force-allow 开着：用户的 ask 规则被静默放行；force-ask 规则照样问', async () => {
+    const trustUrls = userPolicy('trust-urls', [
+      { effect: 'force-allow', match: "object.type == 'url'" }
+    ])
+    const asking = urlContext([trustUrls, userPolicy('url-gate', [hostRule('ask', 'a.example')])])
     await expect(asking.ctx.enforceUrl(PAGE, OPEN_OPTS)).resolves.toBeUndefined()
     expect(asking.requestUserInput).not.toHaveBeenCalled()
     expect(getSessionDecisions(SID)[0]).toMatchObject({
       effect: 'allow',
-      winning: 'session-grants#0'
+      winning: 'trust-urls#0'
     })
 
-    const forced = urlContext([userPolicy('url-gate', [hostRule('force-ask', 'a.example')])], {
-      autoAllow: true,
-      response: { kind: 'ask', allowed: true }
-    })
+    const forced = urlContext(
+      [trustUrls, userPolicy('url-gate', [hostRule('force-ask', 'a.example')])],
+      { response: { kind: 'ask', allowed: true } }
+    )
     await expect(forced.ctx.enforceUrl(PAGE, OPEN_OPTS)).resolves.toBeUndefined()
     expect(forced.requestUserInput).toHaveBeenCalledTimes(1)
     expect(forced.requestUserInput.mock.calls[0][0]).toMatchObject({
@@ -2813,8 +2795,8 @@ describe('createSecurityContext — enforceUrl（浏览器导航守卫）', () =
     expect(getSessionDecisions(SID)[0]).toMatchObject({ effect: 'allow', winning: 'default:url' })
   })
 
-  it('CT-U9 Chrome 里的新站点、只有出厂策略：卡片是地址本身 + 工具的一句说明 + ask-on-new-site 的话与名字；允许 → 放行，日志 ask/allowed', async () => {
-    const { ctx, requestUserInput, warn } = urlContext([], {
+  it('CT-U9 Chrome 里的新站点、装上 ask-on-new-site 夹具：卡片是地址本身 + 工具的一句说明 + 夹具的话与名字；允许 → 放行，日志 ask/allowed', async () => {
+    const { ctx, requestUserInput, warn } = urlContext([NEW_SITE.policy], {
       response: { kind: 'ask', allowed: true }
     })
     await expect(ctx.enforceUrl(CHROME_PAGE, CHROME_OPTS)).resolves.toBeUndefined()
@@ -2846,13 +2828,13 @@ describe('createSecurityContext — enforceUrl（浏览器导航守卫）', () =
   it.each<[string, InputResponse, string]>([
     ['拒绝', { kind: 'ask', allowed: false }, 'User denied opening https://a.example/p?q=1'],
     ['取消', { kind: 'cancel', reason: 'aborted' }, 'Aborted']
-  ])('CT-U9 Chrome 里的新站点，用户%s → 抛出逐字文案', async (_l, response, message) => {
-    const { ctx } = urlContext([], { response })
+  ])('CT-U9 Chrome 里的新站点（夹具），用户%s → 抛出逐字文案', async (_l, response, message) => {
+    const { ctx } = urlContext([NEW_SITE.policy], { response })
     expect(await rejectionOf(ctx.enforceUrl(CHROME_PAGE, CHROME_OPTS))).toBe(message)
   })
 
-  it('CT-U9 Chrome 里的新站点，没有询问通道 → fail-closed（地址写全）', async () => {
-    const { ctx } = urlContext([], { channel: false })
+  it('CT-U9 Chrome 里的新站点（夹具），没有询问通道 → fail-closed（地址写全）', async () => {
+    const { ctx } = urlContext([NEW_SITE.policy], { channel: false })
     expect(
       await rejectionOf(ctx.enforceUrl(CHROME_PAGE, { ...CHROME_OPTS, missingChannel: 'deny' }))
     ).toBe(
@@ -2860,18 +2842,8 @@ describe('createSecurityContext — enforceUrl（浏览器导航守卫）', () =
     )
   })
 
-  it('CT-U9b Chrome 里的新站点，免询问开着 → 不问、放行，日志归因 session-grants#0', async () => {
-    const { ctx, requestUserInput } = urlContext([], { autoAllow: true })
-    await expect(ctx.enforceUrl(CHROME_PAGE, CHROME_OPTS)).resolves.toBeUndefined()
-    expect(requestUserInput).not.toHaveBeenCalled()
-    expect(getSessionDecisions(SID)[0]).toMatchObject({
-      effect: 'allow',
-      winning: 'session-grants#0'
-    })
-  })
-
-  it('CT-U9c Chrome 里不属于任何站点的页（about:blank / data: / chrome:）→ 不问、放行，归因 default:url', async () => {
-    const { ctx, requestUserInput, warn } = urlContext([])
+  it('CT-U9c Chrome 里不属于任何站点的页（about:blank / data: / chrome:），装着夹具也不问、放行，归因 default:url', async () => {
+    const { ctx, requestUserInput, warn } = urlContext([NEW_SITE.policy])
     for (const target of [
       { url: 'about:blank', scheme: 'about', host: '', origin: 'null' },
       { url: 'data:text/html,x', scheme: 'data', host: '', origin: 'null' },
@@ -2908,10 +2880,7 @@ describe('createSecurityContext — 无返回值的门强制 onOther:throw', () 
       ctx: createSecurityContext(
         SUBJECT,
         ENVIRONMENT,
-        makeProvider(
-          { autoAllow: false, allowList: [] },
-          { requestUserInput, getUserPolicies: () => policies }
-        )
+        makeProvider({ allowList: [] }, { requestUserInput, getUserPolicies: () => policies })
       ),
       requestUserInput
     }
@@ -2936,7 +2905,8 @@ describe('createSecurityContext — 无返回值的门强制 onOther:throw', () 
   })
 
   it('CT-O2 enforceGitOp：传了 onOther:return，反馈照样抛', async () => {
-    const { ctx, requestUserInput } = feedbackContext()
+    // 出厂没有 git 策略：装上退役的 git-safety 夹具，让 git init 走到询问
+    const { ctx, requestUserInput } = feedbackContext([retiredPolicy('git-safety')])
     expect(
       await rejectionOf(
         ctx.enforceGitOp(GIT_INPUT, { toolCallId: 'o2', toolName: 'git', onOther: 'return' })
@@ -2956,7 +2926,8 @@ describe('createSecurityContext — 无返回值的门强制 onOther:throw', () 
   })
 
   it('CT-O4 对照：有返回值的门照旧尊重 onOther:return —— 命令与数据库把反馈作为结果交回', async () => {
-    const { ctx } = feedbackContext()
+    // 数据库那道门出厂不问：装上退役的 ask-on-database 夹具
+    const { ctx } = feedbackContext([retiredPolicy('ask-on-database')])
     await expect(
       ctx.enforceCommand(COMMAND_INPUT, { toolCallId: 'o4', toolName: 'bash', onOther: 'return' })
     ).resolves.toEqual({ status: 'feedback', text: 'try the docs first' })
@@ -2996,10 +2967,7 @@ describe('createSecurityContext — 真实路径（provider.realPath）', () => 
   /** 工作区里的一条链接 → 私钥（这组用例的旗舰形态） */
   const KEY_LINK = '/ws/key'
   const KEY_REAL = '/home/u/.ssh/id_rsa'
-  const NO_GRANTS = (): { autoAllow: boolean; allowList: string[] } => ({
-    autoAllow: false,
-    allowList: []
-  })
+  const NO_GRANTS = (): { allowList: string[] } => ({ allowList: [] })
 
   /** 记下每次评估里策略看到的路径客体（derived 规则恒不命中，只当探针） */
   function captureProbe(): {
@@ -3049,7 +3017,7 @@ describe('createSecurityContext — 真实路径（provider.realPath）', () => 
 
     // 按写法这是工作区里的一次普通读；按位置是私钥 —— 凭据门接手
     const decision = ctx.evaluate('read', { type: 'path', path: KEY_LINK })
-    expect(decision).toMatchObject({ effect: 'ask', winning: 'protect-credentials#1' })
+    expect(decision).toMatchObject({ effect: 'ask', winning: 'protect-credentials#0' })
     expect(decision.ask).toEqual({
       command: `Read(${KEY_REAL})`,
       rememberEntry: `Read(${KEY_REAL})`,
@@ -3130,6 +3098,8 @@ describe('createSecurityContext — 真实路径（provider.realPath）', () => 
         requestUserInput: vi.fn(
           async (_req: InputRequest): Promise<InputResponse> => ({ kind: 'ask', allowed: true })
         ),
+        // 出厂策略不读结构属性：装上 block-catastrophic-commands 夹具，好看见惰性 getter 还活着
+        getUserPolicies: () => [retiredPolicy('block-catastrophic-commands')],
         derivedRules: probe.derivedRules
       })
     )
@@ -3145,7 +3115,7 @@ describe('createSecurityContext — 真实路径（provider.realPath）', () => 
       'unconfinedReason'
     ])
     expect('requestedPath' in commandObject).toBe(false)
-    // 惰性仍在：只有 block-catastrophic-commands 读了它，且记忆化到一次
+    // 惰性仍在：只有 block-catastrophic-commands 夹具读了它，且记忆化到一次
     expect(analyze).toHaveBeenCalledTimes(1)
 
     await ctx.enforceGitOp(GIT_INPUT, { toolCallId: 'g1', toolName: 'git' })
@@ -3204,8 +3174,8 @@ describe('createSecurityContext — 真实路径（provider.realPath）', () => 
       })
     )
 
-    // 一次写评估里客体路径被 protect-credentials / protect-system（两次）/ protect-bot-files /
-    // session-grants 的路径规则 / 上面两条引用
+    // 一次写评估里客体路径被 ask-on-write（四处）/ session-grants 的写规则 / 上面两条引用
+    // （protect-credentials 只管读，条件就把它挡在外面）
     expect(ctx.evaluate('write', { type: 'path', path: '/ws/f.txt' })).toMatchObject({
       effect: 'ask',
       winning: 'ask-on-write#0'
@@ -3241,7 +3211,7 @@ describe('createSecurityContext — 真实路径（provider.realPath）', () => 
     table[KEY_LINK] = KEY_REAL
     expect(ctx.evaluate('read', { type: 'path', path: KEY_LINK })).toMatchObject({
       effect: 'ask',
-      winning: 'protect-credentials#1'
+      winning: 'protect-credentials#0'
     })
     expect(realPath.mock.calls.filter(([p]) => p === KEY_LINK)).toHaveLength(2)
   })
@@ -3292,7 +3262,7 @@ describe('createSecurityContext — 真实路径（provider.realPath）', () => 
     const dirFails = contextFor(failing('/home/u/.ssh'))
     expect(dirFails.evaluate('read', { type: 'path', path: '/home/u/.ssh/id_rsa' })).toMatchObject({
       effect: 'ask',
-      winning: 'protect-credentials#1'
+      winning: 'protect-credentials#0'
     })
     expect(realPathWarnings()).toHaveLength(1)
     expect(realPathWarnings()[0]).toContain('/home/u/.ssh')
@@ -3304,6 +3274,7 @@ describe('createSecurityContext — 真实路径（provider.realPath）', () => 
       ['write', { type: 'path', path: '/ws/f.txt' }],
       ['read', { type: 'path', path: '/ws/f.txt' }],
       ['read', { type: 'path', path: '/outside/f.txt' }],
+      ['read', { type: 'path', path: '/home/u/.ssh/id_rsa' }],
       ['write', { type: 'path', path: '/home/u/.ssh/id_rsa' }],
       ['write', { type: 'path', path: '/etc/hosts' }]
     ]
@@ -3322,8 +3293,8 @@ describe('createSecurityContext — 真实路径（provider.realPath）', () => 
       }
     }
     // 对照：真正的保护仍在（上面的「相同」不是「都放行」）
-    expect(written.evaluate('write', { type: 'path', path: '/home/u/.ssh/id_rsa' })).toMatchObject({
-      effect: 'deny',
+    expect(written.evaluate('read', { type: 'path', path: '/home/u/.ssh/id_rsa' })).toMatchObject({
+      effect: 'ask',
       winning: 'protect-credentials#0'
     })
     expect(written.evaluate('write', { type: 'path', path: '/ws/f.txt' }).matched).toEqual([
@@ -3335,10 +3306,14 @@ describe('createSecurityContext — 真实路径（provider.realPath）', () => 
     const requestUserInput = vi.fn(
       async (_req: InputRequest): Promise<InputResponse> => ({ kind: 'ask', allowed: false })
     )
+    // 拒绝文案要有一条 deny 才看得到：出厂没有，装上退役的 protect-system 夹具
     const ctx = createSecurityContext(
       SUBJECT,
       ENVIRONMENT,
-      makeProvider(NO_GRANTS(), { requestUserInput })
+      makeProvider(NO_GRANTS(), {
+        requestUserInput,
+        getUserPolicies: () => [retiredPolicy('protect-system')]
+      })
     )
 
     // /ws/key 按写法就是工作区里的一个文件
@@ -3348,9 +3323,9 @@ describe('createSecurityContext — 真实路径（provider.realPath）', () => 
     })
 
     const denied = await rejectionOf(
-      ctx.enforcePath('write', KEY_REAL, { toolCallId: 'w9', toolName: 'write' })
+      ctx.enforcePath('write', '/etc/hosts', { toolCallId: 'w9', toolName: 'write' })
     )
-    expect(denied).toMatch(/^Denied by security policy rule 'protect-credentials#0'\n\n/)
+    expect(denied).toMatch(/^Denied by security policy rule 'protect-system#0'\n\n/)
     expect(denied).not.toContain('resolves to')
 
     expect(
@@ -3385,9 +3360,10 @@ describe('createSecurityContext — 真实路径（provider.realPath）', () => 
 
 /**
  * 询问点的自动审查经门面走到接缝（provider.onPermissionRequest）：只有策略判出 ask 档的那一次
- * 才先问审查 —— force-ask（protect-shuvix-config / protect-bot-files / 用户写的）、deny、会话授权
- * 的 force-allow、L1 探测阶段就放行的调用、被动 UI 的判定都碰不到它。接缝看到的客体与策略判的是
- * 同一个（路径已换成真实去处，命令带着 unconfinedReason）。
+ * 才先问审查 —— force-ask、deny、force-allow（会话授权或用户写的）、L1 探测阶段就放行的调用、
+ * 被动 UI 的判定都碰不到它。接缝看到的客体与策略判的是同一个（路径已换成真实去处，命令带着
+ * unconfinedReason）。出厂已没有 deny / force-ask，也没有 git / 数据库 / url / L1 的门：这几类
+ * 由退役策略的夹具按用户策略装上（fixtures/retiredPolicies.ts）。
  */
 describe('createSecurityContext — 询问点的审查（onPermissionRequest）', () => {
   type Reviewer = NonNullable<SecurityHostProvider['onPermissionRequest']>
@@ -3417,7 +3393,7 @@ describe('createSecurityContext — 询问点的审查（onPermissionRequest）'
   function reviewedContext(
     opts: {
       review?: ReturnType<typeof vi.fn<Reviewer>>
-      grants?: { autoAllow: boolean; allowList: string[] }
+      grants?: { allowList: string[] }
       overrides?: Partial<SecurityHostProvider>
     } = {}
   ): {
@@ -3437,7 +3413,7 @@ describe('createSecurityContext — 询问点的审查（onPermissionRequest）'
     const ctx = createSecurityContext(
       { kind: 'agent', sessionId: sid, agentKind: 'root' },
       ENVIRONMENT,
-      makeProvider(opts.grants ?? { autoAllow: false, allowList: [] }, {
+      makeProvider(opts.grants ?? { allowList: [] }, {
         requestUserInput,
         onPermissionRequest: review,
         logger: { info: vi.fn(), warn, error: vi.fn() },
@@ -3491,8 +3467,12 @@ describe('createSecurityContext — 询问点的审查（onPermissionRequest）'
     expect(logs[0].userResponse).toBeUndefined()
   })
 
-  it('CT-RV2 免询问开着：session-grants 的 force-allow 先放行 —— 接缝 0 次、不弹卡，归因 session-grants#0', async () => {
-    const h = reviewedContext({ grants: { autoAllow: true, allowList: [] } })
+  it('CT-RV2 用户策略的 force-allow 先放行（命令与写都压过询问门）—— 接缝 0 次、不弹卡，归因用户那条', async () => {
+    const h = reviewedContext({
+      overrides: {
+        getUserPolicies: () => [userPolicy('trust-all', [{ effect: 'force-allow', match: 'true' }])]
+      }
+    })
     await expect(
       h.ctx.enforceCommand({ channel: 'bash', command: 'ls -la' }, BASH)
     ).resolves.toEqual({ status: 'allowed' })
@@ -3501,36 +3481,39 @@ describe('createSecurityContext — 询问点的审查（onPermissionRequest）'
     expect(h.review).not.toHaveBeenCalled()
     expect(h.requestUserInput).not.toHaveBeenCalled()
     expect(getSessionDecisions(h.sid).map((l) => [l.effect, l.winning])).toEqual([
-      ['allow', 'session-grants#0'],
-      ['allow', 'session-grants#0']
+      ['allow', 'trust-all#0'],
+      ['allow', 'trust-all#0']
     ])
   })
 
   it('CT-RV3 allowList 有 Write(/elsewhere)：写 /elsewhere/a 由「允许并记住」放行，接缝 0 次；没授权的地方照旧先问审查', async () => {
-    const h = reviewedContext({ grants: { autoAllow: false, allowList: ['Write(/elsewhere)'] } })
+    const h = reviewedContext({ grants: { allowList: ['Write(/elsewhere)'] } })
     await h.ctx.enforcePath('write', '/elsewhere/a', WRITE)
     expect(h.review).not.toHaveBeenCalled()
     expect(h.requestUserInput).not.toHaveBeenCalled()
     expect(getSessionDecisions(h.sid)[0]).toMatchObject({
       effect: 'allow',
-      winning: 'session-grants#2'
+      winning: 'session-grants#1'
     })
 
     await h.ctx.enforcePath('write', '/other/a', WRITE)
     expect(h.review).toHaveBeenCalledTimes(1)
   })
 
-  it.each<[string, string, string]>([
+  it.each<['protect-shuvix-config' | 'protect-bot-files', string, string]>([
     ['protect-shuvix-config', '/home/u/.shuvix/agents/x.md', 'protect-shuvix-config#0'],
     ['protect-bot-files', '/home/u/.shuvix/bots/x.md', 'protect-bot-files#0']
   ])(
-    'CT-RV4 %s（force-ask）：接缝 0 次、照样弹卡、卡片没有 review、不给「允许并记住」；免询问开着结果相同',
-    async (_policy, path, winning) => {
-      for (const autoAllow of [false, true]) {
-        const h = reviewedContext({ grants: { autoAllow, allowList: [] } })
+    'CT-RV4 %s（退役夹具，force-ask）：接缝 0 次、照样弹卡、卡片没有 review、不给「允许并记住」；「允许并记住」过结果相同',
+    async (policy, path, winning) => {
+      for (const allowList of [[], [`Write(${path})`]]) {
+        const h = reviewedContext({
+          grants: { allowList },
+          overrides: { getUserPolicies: () => [retiredPolicy(policy)] }
+        })
         const decision = h.ctx.evaluate('write', { type: 'path', path })
-        expect({ autoAllow, effect: decision.effect, tier: decision.tier }).toEqual({
-          autoAllow,
+        expect({ allowList, effect: decision.effect, tier: decision.tier }).toEqual({
+          allowList,
           effect: 'ask',
           tier: 'force-ask'
         })
@@ -3549,7 +3532,7 @@ describe('createSecurityContext — 询问点的审查（onPermissionRequest）'
     }
   )
 
-  it('CT-RV5 deny 类（rm -rf /、凭据目录写）：接缝 0 次、不弹卡，抛策略拒绝', async () => {
+  it('CT-RV5 deny 类（rm -rf /、系统目录写 —— 退役夹具按用户策略装上）：接缝 0 次、不弹卡，抛策略拒绝', async () => {
     const rmRoot: ShellFacts = {
       source: 'rm -rf /',
       parsed: true,
@@ -3570,14 +3553,20 @@ describe('createSecurityContext — 询问点的审查（onPermissionRequest）'
       depthExceeded: false
     }
     const h = reviewedContext({
-      overrides: { shellParser: { ensureReady: async () => {}, analyze: () => rmRoot } }
+      overrides: {
+        shellParser: { ensureReady: async () => {}, analyze: () => rmRoot },
+        getUserPolicies: () => [
+          retiredPolicy('block-catastrophic-commands'),
+          retiredPolicy('protect-system')
+        ]
+      }
     })
 
     await expect(
       h.ctx.enforceCommand({ channel: 'bash', command: 'rm -rf /' }, BASH)
     ).rejects.toThrow('block-catastrophic-commands#0')
-    await expect(h.ctx.enforcePath('write', '/home/u/.ssh/id_rsa', WRITE)).rejects.toThrow(
-      "Denied by security policy rule 'protect-credentials#0'"
+    await expect(h.ctx.enforcePath('write', '/etc/hosts', WRITE)).rejects.toThrow(
+      "Denied by security policy rule 'protect-system#0'"
     )
     expect(h.review).not.toHaveBeenCalled()
     expect(h.requestUserInput).not.toHaveBeenCalled()
@@ -3587,8 +3576,10 @@ describe('createSecurityContext — 询问点的审查（onPermissionRequest）'
     ])
   })
 
-  it('CT-RV6 L1：ask-on-sub-session 命中 → 接缝恰 1 次（command「session: create-sub-session」、客体 invocation）；别的工具在探测阶段放行 → 接缝 0 次、零日志', async () => {
-    const h = reviewedContext()
+  it('CT-RV6 L1：ask-on-sub-session（退役夹具）命中 → 接缝恰 1 次（command「session: create-sub-session」、客体 invocation）；别的工具在探测阶段放行 → 接缝 0 次、零日志', async () => {
+    const h = reviewedContext({
+      overrides: { getUserPolicies: () => [retiredPolicy('ask-on-sub-session')] }
+    })
     await expect(
       h.ctx.enforceInvocation({
         toolCallId: 'tc-sub',
@@ -3711,7 +3702,18 @@ describe('createSecurityContext — 询问点的审查（onPermissionRequest）'
     'CT-SG1 %s：PEP 交来的 signal 落下 → 接缝收到的 signal 随之 aborted，门以中止收尾、不弹卡',
     async (_gate, call) => {
       const review = vi.fn<Reviewer>(() => new Promise<PermissionReviewAnswer | null>(() => {}))
-      const h = reviewedContext({ review })
+      // git / 数据库 / Chrome 站点 / 子会话这几道门出厂不问：装上对应的退役夹具，让每道门都走到 ask 档
+      const h = reviewedContext({
+        review,
+        overrides: {
+          getUserPolicies: () => [
+            retiredPolicy('git-safety'),
+            retiredPolicy('ask-on-database'),
+            retiredPolicy('ask-on-new-site'),
+            retiredPolicy('ask-on-sub-session')
+          ]
+        }
+      })
       const ac = new AbortController()
 
       const result = call(h.ctx, ac.signal)
@@ -3846,13 +3848,16 @@ describe('createSecurityContext — 询问点的审查（onPermissionRequest）'
     expect(h.review.mock.calls[0][0].request.object.unconfinedReason).toBe('disabled')
   })
 
-  it('CT-W5 宿主不提供 shuvixConfigDirs：~/.shuvix/agents 下的写落回 ask-on-write（ask 档、照常先问审查），不会每次写都 force-ask；「not provided」恰 1 行、零 fail-safe', async () => {
-    const grants = { autoAllow: false, allowList: [] as string[] }
+  it('CT-W5 装着 protect-shuvix-config 夹具、宿主不提供 shuvixConfigDirs：~/.shuvix/agents 下的写落回 ask-on-write（ask 档、照常先问审查），不会每次写都 force-ask；「not provided」恰 1 行、零 fail-safe', async () => {
+    const grants = { allowList: [] as string[] }
     const { shuvixConfigDirs: _dirs, ...varsWithoutConfigDirs } = makeProvider(grants).getVars()
     const h = reviewedContext({
       review: vi.fn<Reviewer>(async () => null),
       grants,
-      overrides: { getVars: () => varsWithoutConfigDirs }
+      overrides: {
+        getVars: () => varsWithoutConfigDirs,
+        getUserPolicies: () => [retiredPolicy('protect-shuvix-config')]
+      }
     })
     const agentMd: SecurityObject = { type: 'path', path: '/home/u/.shuvix/agents/a.md' }
 
@@ -3888,7 +3893,7 @@ describe('createSecurityContext — 询问点的审查（onPermissionRequest）'
  *    无关），每个至多记一行。钉住这个退化行为。
  */
 describe('createSecurityContext — 用户自己的 ask-on-read', () => {
-  const NO_GRANTS = { autoAllow: false, allowList: [] as string[] }
+  const NO_GRANTS = { allowList: [] as string[] }
 
   /** 退役前的出厂 ask-on-read.md 原样（git show HEAD:…/builtinPolicies/md/ask-on-read.md） */
   const RETIRED_ASK_ON_READ = [

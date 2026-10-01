@@ -2,7 +2,9 @@
  * 内置能力服务器 `database` —— 隔着**真的 MCP 协议**看它（与 sshServer.test 同一个架子）。
  *
  * `InMemoryTransport.createLinkedPair()` + SDK 的 `Client`，安全门后面是**真的**安全模块
- * （内置策略一条不少，ask-on-database / session-grants 都是 md 里那一份）。换成假的只有：
+ * （内置策略一条不少，都是 md 里那一份）。出厂已没有数据库策略（2026-10-01 删了 ask-on-database：
+ * 出厂不留硬限制、默认尽可能少问）—— 「安全门」一组把退役那份的原文（retiredPolicy 夹具）当作
+ * **用户策略**装回来，驱动询问分支；出厂不问的那一面在 DBSV-26。换成假的只有：
  * 连接池（`../dbConnections`，这一组问的是 server 的判断，连接池的行为在 dbConnections.test
  * 对着真 PostgreSQL 问）、凭据 DAO（better-sqlite3 进不了 vitest 的 Node 进程）与日志。
  *
@@ -12,7 +14,7 @@
  *               「本会话已连上」按会话算、每次现读、从不过安全门；
  *   DBSV-11…15  **门之前**：未知连接名 / 必填项在任何询问与建连之前就回绝；
  *   DBSV-16…29  **安全门**：客体与 opts 的契约、询问卡片的路由键与内容（连接名写在 SQL 上方）、
- *               可写问 / 只读放行、五种应答、没有输入面板、免询问、用户策略；交给门的中止信号是
+ *               可写问 / 只读放行、五种应答、没有输入面板、出厂不问、用户策略；交给门的中止信号是
  *               这次请求自己的（DBSV-SG1：询问点的审查随调用一起中止，并发的另一次不受牵连）；
  *   DBSV-30…31  **结果**：驱动报错、未知工具；
  *   DBSV-32…35  **状态条与寿命**：状态条跟着连接池的 onChange 走、关闭时断开本会话全部连接、
@@ -36,9 +38,7 @@ const logged = vi.hoisted(() => ({ lines: [] as string[] }))
 const gate = vi.hoisted(() => ({
   calls: [] as Array<{ object: unknown; opts: unknown }>,
   /** 这条会话的用户策略；空 = 只有内置那套 */
-  policies: [] as unknown[],
-  /** 免询问开关（session-grants 的 force-allow） */
-  autoAllow: false
+  policies: [] as unknown[]
 }))
 
 /**
@@ -92,7 +92,7 @@ vi.mock('../../toolContext', async () => {
             systemDirs: []
           }),
           readBuiltinPolicyMd,
-          getSessionGrants: () => ({ autoAllow: gate.autoAllow, allowList: [] }),
+          getSessionGrants: () => ({ allowList: [] }),
           getUserPolicies: () => gate.policies as never,
           // 询问通道由 scope 注入：缺席就是「这条会话没有输入面板」，fail-closed 用例靠它
           requestUserInput: ctx.requestUserInput
@@ -162,6 +162,7 @@ vi.mock('../../../logger', () => ({
 }))
 
 import { clearSessionDecisions, getSessionDecisions } from '@shuvix/agent-runtime'
+import { retiredPolicy } from '../../../../../../../packages/agent-runtime/src/security/__tests__/fixtures/retiredPolicies'
 import { BUILTIN_MCP_PRESENTATIONS } from '@shuvix/chat-protocol/builtinMcpPresentations'
 import {
   createDatabaseMcpServerFactory,
@@ -316,7 +317,6 @@ beforeEach(() => {
   logged.lines.length = 0
   gate.calls.length = 0
   gate.policies.length = 0
-  gate.autoAllow = false
   saved.rows.length = 0
   saved.fullRows = false
   saved.decrypted.length = 0
@@ -600,6 +600,9 @@ describe('database 内置服务器 query：门之前就回绝的', () => {
 // ─── query：安全门 ───────────────────────────────────────────────────────
 
 describe('database 内置服务器 query 的安全门', () => {
+  // 退役的 ask-on-database 当作用户自己写的策略装回来：可写连接逐条问（DBSV-26 先清掉它看出厂）
+  beforeEach(() => void gate.policies.push(retiredPolicy('ask-on-database')))
+
   it('DBSV-16 客体恰是 {sql, credential, dbType, readonly}：readonly 是真布尔，多行 SQL 原样', async () => {
     saveDefaults()
     const { client } = await open()
@@ -872,9 +875,9 @@ describe('database 内置服务器 query 的安全门', () => {
     expect(pool.queries.map((q) => q.name)).toEqual(['ro-pg'])
   })
 
-  it('DBSV-26 免询问开着：可写连接不弹卡直接执行，决策归到 session-grants', async () => {
+  it('DBSV-26 出厂（只有内置，没有数据库策略）：可写连接不弹卡直接执行，决策是默认放行；没有输入面板也照跑', async () => {
     saveDefaults()
-    gate.autoAllow = true
+    gate.policies.length = 0
     const { client, asks } = await open()
 
     const r = await callTool(client, 'query', queryArgs())
@@ -883,11 +886,16 @@ describe('database 内置服务器 query 的安全门', () => {
     expect(pool.queries).toHaveLength(1)
     expect(getSessionDecisions('s1')[0]).toMatchObject({
       effect: 'allow',
-      winning: 'session-grants#0'
+      winning: 'default:database'
     })
+
+    // missingChannel: 'deny' 只在真要问的时候才起作用 —— 不问就不缺通道
+    const closed = await open({ sessionId: 's2', respond: null })
+    expect((await callTool(closed.client, 'query', queryArgs())).isError).toBeFalsy()
+    expect(pool.queries.map((q) => q.sessionId)).toEqual(['s1', 's2'])
   })
 
-  it('DBSV-27 用户按连接名写的 deny：错误结果带归因，一条没执行；免询问也压不过', async () => {
+  it('DBSV-27 用户按连接名写的 deny：错误结果带归因，一条没执行', async () => {
     saveDefaults()
     gate.policies.push(
       userPolicy('no-prod-writes', [
@@ -896,12 +904,9 @@ describe('database 内置服务器 query 的安全门', () => {
     )
     const { client, asks } = await open()
 
-    for (const autoAllow of [false, true]) {
-      gate.autoAllow = autoAllow
-      const r = await callTool(client, 'query', queryArgs())
-      expect(r.isError).toBe(true)
-      expect(textOf(r)).toContain("Denied by security policy rule 'no-prod-writes#0'")
-    }
+    const r = await callTool(client, 'query', queryArgs())
+    expect(r.isError).toBe(true)
+    expect(textOf(r)).toContain("Denied by security policy rule 'no-prod-writes#0'")
     expect(asks).toEqual([])
     expect(pool.queries).toEqual([])
     // 别的连接不受影响
@@ -1107,6 +1112,8 @@ describe('database 内置服务器的寿命', () => {
 
   it('DBSV-34 关 s1 的实例从不断开 s2；s1 的询问也到不了 s2 的面板', async () => {
     saveDefaults()
+    // 要有一张卡可看：把退役的 ask-on-database 当作用户策略装回
+    gate.policies.push(retiredPolicy('ask-on-database'))
     pool.connected.set('s1', ['rw-my'])
     pool.connected.set('s2', ['rw-my'])
     const s1 = await open({ sessionId: 's1' })

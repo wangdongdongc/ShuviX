@@ -65,7 +65,6 @@ export interface SessionModelMetadata {
 
 /** 会话级配置 */
 export interface SessionSettings {
-  autoAllow?: boolean
   allowList?: string[]
   /** 扩展能力勾选（mcp:/skill:）；只在创建 Agent 时读一次，运行时存在期间只读（见 useSessionTools） */
   enabledTools?: string[]
@@ -101,7 +100,7 @@ export interface Session {
    * **普通会话**，侧栏渲染在父会话下面，其余行为与顶层会话完全一致。
    */
   parentId: string | null
-  /** 会话级配置（SSH 免询问等） */
+  /** 会话级配置（路径授权、扩展能力勾选等） */
   settings: SessionSettings
   createdAt: number
   /** 账本时间：改 title / projectId / settings 就 bump。日历和侧栏不读它。 */

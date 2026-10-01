@@ -167,8 +167,9 @@ export interface Probe {
   /**
    * 自动放行安全询问（扮演那个会点「允许一次」的用户）。
    *
-   * 隔离实例里内置的 `ask-on-command` 对每条命令都问，而探针没人看着 —— 不放行的话
-   * 任何跑 bash 的子会话都会停在 `waiting-input`，探到的全是"卡住"而不是工具面本身。
+   * 隔离实例里出厂的 `ask-on-command` 对每条不在沙箱里的命令都问（沙箱关着 / 用不了时就是每条），
+   * 而探针没人看着 —— 不放行的话这样的子会话都会停在 `waiting-input`，探到的全是"卡住"而不是
+   * 工具面本身。
    * 想**故意**探那条卡住的路径就别开它（或者只放行一部分）。
    */
   autoAllow(opts?: { only?: (command: string) => boolean }): Promise<void>

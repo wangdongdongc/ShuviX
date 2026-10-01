@@ -290,7 +290,6 @@ export function ProjectSessionGroups({
               dim={dim && activeGroupKey === groupKey && activeSessionId !== item.id}
               isNotebook={!!item.settings.notebookPath}
               isBot={isBotSessionSettings(item.settings)}
-              autoAllow={item.settings.autoAllow === true}
               isPinned={caps.pin ? pinnedSessionIds?.has(item.id) : undefined}
               isSub={isSub}
               subCount={isSub ? 0 : children.length}

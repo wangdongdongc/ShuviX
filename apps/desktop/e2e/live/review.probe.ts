@@ -83,7 +83,11 @@ interface Case {
 
 const WS = '/Users/alex/code/shop-api'
 
-/** 各内置策略写给人看的那句（与 builtinPolicies/md 的 en 版逐字一致） */
+/**
+ * 各策略写给人看的那句。command / write / credentials 是出厂策略，与 builtinPolicies/md 的 en 版
+ * 逐字一致；其余是已退役的内置策略（read 2026-09-30，database / site / subSession / git
+ * 2026-10-01）—— 出厂不再问这些，用户照抄退役副本（security/__tests__/fixtures）时卡片上就是这几句
+ */
 const POLICY = {
   command: {
     names: ['Ask Before Running an Unconfined Command'],

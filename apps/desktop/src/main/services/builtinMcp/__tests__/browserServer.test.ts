@@ -11,7 +11,8 @@
  *               位置会问）；
  *               显示本地文件的 tab 上做事也一样（BS-7b）；
  *   BS-14…18    upload_file 的读门：相对路径按工作目录解析、先问策略再查存在、绝对路径也 resolve；
- *   BS-19…21    pdf 的写门：工作区里也问（ask-on-write）、区外问而不拒、系统 / 凭据目录拒绝；
+ *   BS-19…21    pdf 的写门：工作区里也问（ask-on-write）、区外问而不拒；系统 / 凭据目录出厂也只是问，
+ *               装回退役的 protect-system（用户策略）则直接拒；
  *   BS-22       原生 cdp 里等价的那几个方法不是绕开门的旁路；
  *   BS-23…25    每条会话一台 server（后端与询问通道各归各）、策略不缓存、各会话共用一条 tab 队列；
  *   BS-R1…R3    经符号链接的本地访问按真实去处过门：upload_file 一条指向私钥的链接、file:// 打开
@@ -21,8 +22,11 @@
  * `createSecurityContext`，外面包一层记下 enforcePath / enforceUrl 的实参）与浏览器面板
  * （`createDesktopBrowserBackend` 换成假后端）。工作目录是**真的临时目录** —— upload_file 的门
  * 会 stat 真文件。这台 provider 缺省**不带** realPath，路径照写法比：macOS 上工作目录写作
- * /var/folders/…、解析之后是 /private/var/folders/… —— protect-system 已挖掉这棵临时目录，拒不了它，
- * 但每条 `Write(<ws>/…)` 断言都会换一种写法。按真实去处判的 BS-R 系列用 `gate.realPath` 单独打开
+ * /var/folders/…、解析之后是 /private/var/folders/… —— 退役的 protect-system 挖掉了这棵临时目录，装回来
+ * 也拒不了它，但每条 `Write(<ws>/…)` 断言都会换一种写法。
+ *
+ * 2026-10-01 起出厂没有拒写策略：要看「拒绝原话 / 拒绝不弹卡」的用例把退役的 protect-system 原文
+ * （retiredPolicy 夹具）当作用户策略放进 gate.policies。按真实去处判的 BS-R 系列用 `gate.realPath` 单独打开
  * 桌面的 resolveRealPath（生产里 makeDesktopSecurityProvider 恒带它）。用例按 POSIX 路径写，
  * Windows 上跳过。
  *
@@ -40,17 +44,17 @@ import type {
   InputResponse
 } from '@shuvix/chat-protocol/types/inputRequest'
 import type { ParsedPolicyFile, PolicyRuleSpec } from '@shuvix/agent-runtime'
+import { retiredPolicy } from '../../../../../../../packages/agent-runtime/src/security/__tests__/fixtures/retiredPolicies'
 
 // mock 路径按**测试文件**解析：被测模块在 services/builtinMcp/，测试在其 __tests__/ 下
 
-/** 安全门的现场：工作目录、记下的实参、这条会话的用户策略与免询问开关 */
+/** 安全门的现场：工作目录、记下的实参、这条会话的用户策略 */
 const gate = vi.hoisted(() => ({
   /** 工作目录（真的临时目录）—— resolveProjectConfig 与 vars.workspace 必须是同一个值 */
   ws: '',
   pathCalls: [] as Array<{ mode: unknown; path: unknown; opts: unknown }>,
   urlCalls: [] as Array<{ object: unknown; opts: unknown }>,
   policies: [] as unknown[],
-  autoAllow: false,
   /** 打开桌面的真实路径解析（BS-R 系列）；缺省关 —— 其余用例的路径断言都照写法 */
   realPath: false,
   /** vars.home：缺省是个不存在的 /home/u；BS-R 换成临时目录里真有 .ssh 的家目录 */
@@ -90,7 +94,7 @@ vi.mock('../../toolContext', async () => {
             systemDirs: []
           }),
           readBuiltinPolicyMd,
-          getSessionGrants: () => ({ autoAllow: gate.autoAllow, allowList: [] }),
+          getSessionGrants: () => ({ allowList: [] }),
           getUserPolicies: () => gate.policies as never,
           // 询问通道由 scope 注入：缺席就是「这条会话没有输入面板」
           requestUserInput: ctx.requestUserInput
@@ -198,7 +202,6 @@ beforeEach(() => {
   gate.pathCalls.length = 0
   gate.urlCalls.length = 0
   gate.policies.length = 0
-  gate.autoAllow = false
   gate.realPath = false
   gate.home = '/home/u'
   browser.created.length = 0
@@ -695,14 +698,6 @@ describe.skipIf(!POSIX)('browser 桌面接线 —— pdf 的写门', () => {
     ])
   })
 
-  it('BS-19 免询问开着 → 不问，照样写', async () => {
-    gate.autoAllow = true
-    const s = await open()
-    expect((await s.call('pdf', { tabId: 't1', outputPath: 'out/page.pdf' })).isError).toBeFalsy()
-    expect(s.asks).toEqual([])
-    expect(s.backend.pdf).toHaveBeenCalledTimes(1)
-  })
-
   it('BS-20 工作区外的位置是问而不是拒：允许之后后端拿到的就是那个路径', async () => {
     const s = await open()
     expect(
@@ -713,15 +708,24 @@ describe.skipIf(!POSIX)('browser 桌面接线 —— pdf 的写门', () => {
     expect(s.backend.pdf.mock.calls[0][0]).toMatchObject({ outputPath: '/tmp/else/page.pdf' })
   })
 
-  it.each<[string, string]>([
-    ['/etc/page.pdf', 'protect-system#0'],
-    ['/home/u/.ssh/page.pdf', 'protect-credentials#0']
-  ])('BS-21 %s → %s 直接拒绝（免询问也不管用）：不弹卡、不导出', async (outputPath, rule) => {
-    gate.autoAllow = true
+  it.each(['/etc/page.pdf', '/home/u/.ssh/page.pdf'])(
+    'BS-21 %s → 出厂没有拒写策略：与别处一样是问（ask-on-write）；拒绝则不导出',
+    async (outputPath) => {
+      const s = await open({ respond: async () => ({ kind: 'ask', allowed: false }) })
+      const r = await s.call('pdf', { tabId: 't1', outputPath })
+      expect(r.isError).toBe(true)
+      expect(s.asks).toHaveLength(1)
+      expect((s.asks[0] as AskInputRequest).command).toBe(`Write(${outputPath})`)
+      expect(s.backend.pdf).not.toHaveBeenCalled()
+    }
+  )
+
+  it('BS-21 装回 protect-system（用户策略）→ /etc/page.pdf 直接拒绝：不弹卡、不导出', async () => {
+    gate.policies.push(retiredPolicy('protect-system'))
     const s = await open()
-    const r = await s.call('pdf', { tabId: 't1', outputPath })
+    const r = await s.call('pdf', { tabId: 't1', outputPath: '/etc/page.pdf' })
     expect(r.isError).toBe(true)
-    expect(textOf(r).startsWith(`Denied by security policy rule '${rule}'`)).toBe(true)
+    expect(textOf(r).startsWith("Denied by security policy rule 'protect-system#0'")).toBe(true)
     expect(s.asks).toEqual([])
     expect(s.backend.pdf).not.toHaveBeenCalled()
   })
@@ -758,12 +762,22 @@ describe.skipIf(!POSIX)('browser 桌面接线 —— 原生 cdp', () => {
     }
   )
 
-  it('BS-22 cdp Page.setDownloadBehavior 把下载落到 /etc → protect-system 拒绝，命令不发', async () => {
+  it('BS-22 cdp Page.setDownloadBehavior 把下载落到 /etc → 与 pdf 同一道写门：出厂问（拒绝则命令不发），装回 protect-system 则直接拒、不弹卡', async () => {
+    const asked = await open({ respond: async () => ({ kind: 'ask', allowed: false }) })
+    const params = { behavior: 'allow', downloadPath: '/etc' }
+    expect(
+      (await asked.call('cdp', { tabId: 't1', method: 'Page.setDownloadBehavior', params })).isError
+    ).toBe(true)
+    expect((asked.asks[0] as AskInputRequest).command).toBe('Write(/etc)')
+    expect(asked.backend.cdp).not.toHaveBeenCalled()
+    gate.pathCalls.length = 0
+
+    gate.policies.push(retiredPolicy('protect-system'))
     const s = await open()
     const r = await s.call('cdp', {
       tabId: 't1',
       method: 'Page.setDownloadBehavior',
-      params: { behavior: 'allow', downloadPath: '/etc' }
+      params
     })
     expect(r.isError).toBe(true)
     expect(textOf(r).startsWith("Denied by security policy rule 'protect-system#0'")).toBe(true)
@@ -894,8 +908,8 @@ describe.skipIf(!POSIX)('browser 桌面接线 —— 按真实去处过门（桌
     expect(s.backend.openTab).not.toHaveBeenCalled()
   })
 
-  it('BS-R3 pdf 输出到 outdir/p.pdf、outdir → /etc：按写系统目录拒（protect-system#0，免询问也不管用），文案带着真实去处；不弹卡、不导出', async () => {
-    gate.autoAllow = true
+  it('BS-R3 装回 protect-system：pdf 输出到 outdir/p.pdf、outdir → /etc：按写系统目录拒（protect-system#0），文案带着真实去处；不弹卡、不导出', async () => {
+    gate.policies.push(retiredPolicy('protect-system'))
     const s = await open()
     const r = await s.call('pdf', { tabId: 't1', outputPath: 'outdir/p.pdf' })
     expect(r.isError).toBe(true)

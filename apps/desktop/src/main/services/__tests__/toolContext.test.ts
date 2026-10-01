@@ -18,7 +18,8 @@
  *     默认走真实 sessionView（未固定 → INACTIVE_VIEW），单条用例可以换成假值。
  *
  * 询问点的自动审查带来的桌面接线（设计稿 docs/permission-review-design.md）：
- *   SEC-9 shuvixConfigDirs —— protect-shuvix-config 守的 policies / agents / hooks / skills 四个目录；
+ *   SEC-9 shuvixConfigDirs —— policies / agents / hooks / skills 四个目录（事实变量：引用它的出厂
+ *     protect-shuvix-config 已于 2026-10-01 退役，留给用户自写的策略）；
  *   HG-3 getVars 另展开 sandbox.workspaceWriteView 的三个 workspace* 键（ask-on-write 与沙箱脱钩的
  *     工作区豁免）—— 与沙箱那一面同一对参数、每次现取；本文件不 mock electron，真实模块取不到
  *     app.getPath，于是三个键恒为空数组（HG-3b 钉住这条出错路径不抛、不漏键）；
@@ -84,7 +85,7 @@ vi.mock('../../utils/paths', () => ({
   getBuiltinSkillsDir: () => '/tmp/shuvix-actor-builtin-skills',
   getMemoryRootDir: () => '/tmp/shuvix-actor-memory',
   getDefaultBotsDir: () => '/tmp/shuvix-bots',
-  // protect-shuvix-config 的四个目录（getVars 的 shuvixConfigDirs）
+  // getVars 的 shuvixConfigDirs 的四个目录（退役的 protect-shuvix-config 引用它们）
   getDefaultPoliciesDir: () => '/tmp/shuvix-policies',
   getDefaultAgentsDir: () => '/tmp/shuvix-agents',
   getDefaultHooksDir: () => '/tmp/shuvix-hooks',
@@ -194,9 +195,9 @@ describe('makeDesktopSecurityProvider —— 变量表', () => {
   const vars = (sessionId = 's1'): Record<string, string | string[]> =>
     providerFor(sessionId).getVars() as Record<string, string | string[]>
 
-  it('SEC-6 botsDir 由 getDefaultBotsDir() 填 —— protect-bot-files 指的就是它', () => {
-    // 漏填 botsDir 的后果是那份策略静默失效，而它守的是「bot 改写自己那份文件」这条会话中途、
-    // 没人看着的写入
+  it('SEC-6 botsDir 由 getDefaultBotsDir() 填 —— 退役的 protect-bot-files 指的就是它（事实变量，留给用户策略）', () => {
+    // 漏填 botsDir 的后果是引用它的策略静默失效，而那种策略守的是「bot 改写自己那份文件」这条
+    // 会话中途、没人看着的写入
     expect(vars().botsDir).toBe('/tmp/shuvix-bots')
     // 工作区来自 getConfig()（每次评估现读），不是构造时的快照
     expect(vars().workspace).toBe('/ws')
@@ -232,8 +233,8 @@ describe('makeDesktopSecurityProvider —— 变量表', () => {
     }
   )
 
-  // shuvixConfigDirs —— protect-shuvix-config（force-ask）守的就是它：漏一项，那一类规矩文件的写入
-  // 就回到普通的 ask-on-write，于是可以被审查员代答，一次注入就能改掉审查员自己
+  // shuvixConfigDirs —— 事实变量：用户装回 protect-shuvix-config（force-ask）时守的就是它：漏一项，
+  // 那一类规矩文件的写入就回到普通的 ask-on-write，于是可以被审查员代答，一次注入就能改掉审查员自己
   it('SEC-9 shuvixConfigDirs 恰为 policies / agents / hooks / skills 四个默认目录（按这个顺序；内置与外部技能目录不在其中）', () => {
     expect(vars().shuvixConfigDirs).toEqual([
       '/tmp/shuvix-policies',

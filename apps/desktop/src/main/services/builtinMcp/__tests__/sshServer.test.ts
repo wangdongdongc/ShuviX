@@ -68,9 +68,7 @@ const gate = vi.hoisted(() => ({
   /** 「允许并记住」落下来的授权（生产里写进会话 allowList） */
   grants: [] as Array<{ mode: unknown; path: unknown }>,
   /** 这条会话的用户策略；空 = 只有内置那套 */
-  policies: [] as unknown[],
-  /** 免询问开关（session-grants 的 force-allow） */
-  autoAllow: false
+  policies: [] as unknown[]
 }))
 
 vi.mock('../../toolContext', async () => {
@@ -102,7 +100,7 @@ vi.mock('../../toolContext', async () => {
             systemDirs: []
           }),
           readBuiltinPolicyMd: INLINE_POLICY_MD,
-          getSessionGrants: () => ({ autoAllow: gate.autoAllow, allowList: [] }),
+          getSessionGrants: () => ({ allowList: [] }),
           getUserPolicies: () => gate.policies as never,
           // 生产里这是 sessionService.addAllowListPaths —— 「允许并记住」的唯一落点。
           // 抄一份下来，那颗复选框到底记住了**什么形状的条目**才看得见
@@ -245,6 +243,7 @@ import { BUILTIN_MCP_FACTORIES } from '../index'
 import { createSshMcpServerFactory } from '../sshServer'
 import { rsyncAvailable } from '../sshControl'
 import { createInlinePolicyMdReader } from '@shuvix/agent-runtime/security/builtinPolicies/inlineSources'
+import { retiredPolicy } from '../../../../../../../packages/agent-runtime/src/security/__tests__/fixtures/retiredPolicies'
 import { BUILTIN_MCP_PRESENTATIONS } from '@shuvix/chat-protocol/builtinMcpPresentations'
 
 /** 内置策略 md 的构建期内联读取口（真实装配链要它；测试进程，不进桌面 bundle） */
@@ -257,8 +256,8 @@ let sshDir = ''
 let configPath = ''
 
 /**
- * 真 tree-sitter-bash —— block-catastrophic-commands 是唯一读**结构事实**的内置策略，
- * 而「它在 ssh 通道上照样管用」正是这一组要端到端回答的问题。wasm 字节的定位同
+ * 真 tree-sitter-bash —— 退役的 block-catastrophic-commands（SSHS-U-107 把它当作用户策略装回）读的是
+ * **结构事实**，而「它在 ssh 通道上照样管用」正是这一组要端到端回答的问题。wasm 字节的定位同
  * shellParserService 的开发态分支（仓库根 node_modules，workspace hoist 后两个包都在那里）。
  */
 beforeAll(async () => {
@@ -281,7 +280,6 @@ beforeEach(() => {
   gate.pathCalls.length = 0
   gate.grants.length = 0
   gate.policies.length = 0
-  gate.autoAllow = false
   control.exec.length = 0
   control.copy.length = 0
   control.sync.length = 0
@@ -805,15 +803,24 @@ describe('ssh 内置服务器的命令安全门', () => {
     expect(control.exec).toEqual([])
   })
 
-  it('SSHS-U-107: block-catastrophic-commands 在 ssh 通道上照样管用，免询问也压不过', async () => {
+  it('SSHS-U-107: 装回 block-catastrophic-commands（用户策略）—— 它在 ssh 通道上照样管用：直接拒、不弹卡；出厂只是 ask-on-command 的一次询问', async () => {
     writeConfig('Host web\n')
+    // 出厂没有拒绝命令的策略：远端命令不在沙箱里，照常问一次
+    const factory = await open({ respond: async () => ({ kind: 'ask', allowed: false }) })
+    await expect(
+      factory.client.callTool({ name: 'exec', arguments: execArgs({ command: 'rm -rf /' }) })
+    ).rejects.toThrow(/User denied/)
+    expect(factory.asks).toHaveLength(1)
+    expect(control.exec).toEqual([])
+
     // 这条策略读的是**结构事实**（object.commands），所以走的是真解析器
-    gate.autoAllow = true
-    const { client } = await open()
+    gate.policies.push(retiredPolicy('block-catastrophic-commands'))
+    const { client, asks } = await open()
 
     await expect(
       client.callTool({ name: 'exec', arguments: execArgs({ command: 'rm -rf /' }) })
     ).rejects.toThrow(/block-catastrophic-commands#0/)
+    expect(asks).toEqual([])
     expect(control.exec).toEqual([])
   })
 
@@ -1179,7 +1186,7 @@ describe('ssh 内置服务器的 disconnect 与状态条', () => {
 //
 // 传输类工具比 exec 多一个客体：**本地那个文件**。于是这一组的主线是「本地那一侧走的
 // 是不是和本地读写完全同一条路」—— up 当读、down 当写，`enforcePath` 一次，
-// 于是 ask-on-write / protect-credentials / protect-system 一条不漏。
+// 于是 ask-on-write / protect-credentials（以及用户自己写的路径策略）一条不漏。
 // 漏一次的代价很具体：一条 upload 就能把 ~/.ssh/id_rsa 送出本机，而路径策略一次没被问到。
 //
 // sync 还多一道：rsync 把远端路径拼进一条交给远端**登录 shell** 的命令行，所以它
@@ -1538,10 +1545,11 @@ describe('ssh 内置服务器传输类工具的路径门', () => {
     expect(askCards(asks)[0].policyPrompt?.policies).toEqual(['Ask Before Writing a File'])
   })
 
-  it('SSHS-U-151: protect-credentials 拒掉往 ~/.ssh 的 download —— 免询问也压不过', async () => {
+  it('SSHS-U-151: 往 ~/.ssh 的 download 是一次普通的写（protect-credentials 只管读）—— ask-on-write 问，拒绝则一个字节都没拉', async () => {
     writeConfig('Host web\n')
-    gate.autoAllow = true
-    const { client, asks } = await open()
+    const { client, asks } = await open({
+      respond: async () => ({ kind: 'ask', allowed: false })
+    })
 
     const r = await callTool(
       client,
@@ -1549,21 +1557,22 @@ describe('ssh 内置服务器传输类工具的路径门', () => {
       xferArgs({ localPath: '/home/u/.ssh/authorized_keys' })
     )
     expect(r.isError).toBe(true)
-    expect(textOf(r)).toContain("Denied by security policy rule 'protect-credentials#0'")
-    // deny 不弹卡片，它唯一的露出面就是那段文字
-    expect(asks).toEqual([])
-    // 一条 download 往 authorized_keys 里写 = 把这台机器交出去
+    expect(askCards(asks).map((a) => a.command)).toEqual(['Write(/home/u/.ssh/authorized_keys)'])
+    expect(askCards(asks)[0].policyPrompt?.policies).toEqual(['Ask Before Writing a File'])
+    // 一条 download 往 authorized_keys 里写 = 把这台机器交出去：没点允许就什么都没写
     expect(control.copy).toEqual([])
   })
 
-  it('SSHS-U-152: protect-system 拒掉往 /etc 的 download —— 免询问也压不过', async () => {
+  it('SSHS-U-152: 装回 protect-system（用户策略）→ 拒掉往 /etc 的 download：不弹卡，文字是它唯一的露出面', async () => {
     writeConfig('Host web\n')
-    gate.autoAllow = true
-    const { client } = await open()
+    gate.policies.push(retiredPolicy('protect-system'))
+    const { client, asks } = await open()
 
     const r = await callTool(client, 'download', xferArgs({ localPath: '/etc/passwd' }))
     expect(r.isError).toBe(true)
     expect(textOf(r)).toContain("Denied by security policy rule 'protect-system#0'")
+    // deny 不弹卡片，它唯一的露出面就是那段文字
+    expect(asks).toEqual([])
     expect(control.copy).toEqual([])
   })
 })
@@ -1911,8 +1920,8 @@ describe('ssh 内置服务器 sync 的命令门', () => {
 
   it('SSHS-U-168: 合成出来的这条命令过的是**结构**解析，而不只是一个字符串', async () => {
     writeConfig('Host web\n')
-    // block-catastrophic-commands 是唯一读结构事实（object.commands）的内置策略，
-    // 而它的那几条规则要的是 rm / mkfs / dd —— 白名单已经把能写出这些的字符全挡了，
+    // 出厂没有读结构事实（object.commands）的策略；退役的 block-catastrophic-commands 读，
+    // 但它的那几条规则要的是 rm / mkfs / dd —— 白名单已经把能写出这些的字符全挡了，
     // 所以拿一条同样读 object.commands 的用户策略来问「结构事实到底在不在」
     gate.policies.push(
       userPolicy('rsync-structure', [
@@ -1943,7 +1952,7 @@ describe('ssh 内置服务器 sync 的命令门', () => {
     const { client } = await open({
       respond: async () => ({ kind: 'other', text: 'sync the other way round' })
     })
-    // 免询问关着，所以这一跳必然停在 ask-on-command 上（本地路径在工作目录内，路径门放行）
+    // 命令没有会话授权这回事，所以这一跳必然停在 ask-on-command 上（本地路径在工作目录内，路径门放行）
     const r = await callTool(client, 'sync', syncArgs({ remotePath: '/srv/app' }))
 
     expect(r.isError).toBeFalsy()

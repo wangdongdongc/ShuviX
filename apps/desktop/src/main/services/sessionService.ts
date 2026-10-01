@@ -253,8 +253,8 @@ export class SessionService {
    *
    * params.parentId 非空时创建**子会话**：形态仍是普通会话，只是多一个父指针。
    * projectId 恒随父会话（工作目录是会话的地基，跨项目的子会话没有可用语义）——
-   * 调用方传的 projectId 在这种情况下被忽略；免询问开关（autoAllow）与扩展能力勾选同样跟着
-   * 抄一份，它们是 settings 的键所以在这里，而模型 / 思考档位是会话树上的 change entry，
+   * 调用方传的 projectId 在这种情况下被忽略；扩展能力勾选同样跟着抄一份，它是 settings
+   * 的键所以在这里，而模型 / 思考档位是会话树上的 change entry，
    * 由 `subSessionRunner.seedRunConfig` 在建完之后种（见那里的说明）。
    *
    * `options.ephemeral` 为真时建**内存会话**：行只在内存里（sessionRecords）、对话树也只在内存里
@@ -316,12 +316,7 @@ export class SessionService {
         ...(memorySlug ? { memorySlug } : {}),
         // 只在有值时写键：缺省即无键
         ...(bot ? { bot } : {}),
-        // 子会话继承父会话的免询问开关（模型 / 思考档位的种子在 subSessionRunner.create）。
-        // 与「按会话存的授权不可继承」那条原始设计相反，是一次显式裁决：子会话是父级
-        // 派活的地方、同一个工作目录、开它本身还要过一次 ask-on-sub-session ——
-        // 用户为这条对话关掉的询问，不该在它每开一条子会话时原样回来。
-        // 路径授权（allowList）刻意**不**继承：那是一条会长大的记账，快照过去只会漂移。
-        ...(parent?.settings?.autoAllow ? { autoAllow: true } : {}),
+        // 子会话刻意**不**继承父会话的路径授权（allowList）：那是一条会长大的记账，快照过去只会漂移。
         ...(chromeTab ? { chromeTab } : {}),
         // 扩展能力勾选恒写键（见方法注释）
         enabledTools
@@ -488,11 +483,6 @@ export class SessionService {
   updateProjectId(id: string, projectId: string | null): void {
     sessionRecords.updateProjectId(id, projectId)
     if (!sessionRecords.isEphemeral(id)) broadcastSessionListChanged()
-  }
-
-  /** 更新命令免询问（bash + ssh 统一开关） */
-  updateAutoAllow(id: string, autoAllow: boolean): void {
-    sessionRecords.updateSettings(id, { autoAllow })
   }
 
   /**

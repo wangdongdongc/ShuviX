@@ -17,6 +17,7 @@ import { until } from '../../harness/cdp'
 import { launchApp, type E2EApp } from '../../harness/launch'
 import { startFakeProvider, type FakeProvider } from '../../harness/fakeProvider'
 import {
+  autoAllowed,
   createProject,
   installAutoAllow,
   seedFakeProvider,
@@ -89,8 +90,8 @@ beforeAll(async () => {
       .then((s) => s.id)`
   )
   sidebar = sidebarPane(app.main)
-  // 内置 ask-on-sub-session 对「开子会话」要问一句 —— e2e 里没人看着，扮演那个点
-  // 「允许一次」的用户。这条用例测的是子会话机制，不是那道门（门本身在 policies 区）
+  // 开子会话出厂不问（2026-10-01 删了 ask-on-sub-session）。「点允许一次」的桩只当安全网：
+  // 真冒出一张卡也不会把整条 spec 挂到超时 —— 用例里断言它一次都没被用上
   await installAutoAllow(app.main)
 }, 60_000)
 
@@ -127,6 +128,8 @@ describe('create-sub-session', () => {
 
     // 工具结果里带着 id —— 模型后续就是拿它来发消息的
     expect(toolResults(await listMessages(parentSid)).join('\n')).toContain(subSid)
+    // 开子会话不问：安全网一次都没被用上
+    expect(await autoAllowed(app.main)).toEqual([])
   })
 
   it('它就是一条普通会话：既不是笔记本也不是聊天会话，自己有一条空转写', async () => {

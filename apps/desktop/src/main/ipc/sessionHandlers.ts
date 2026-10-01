@@ -5,7 +5,6 @@ import { chatGateway, operationContext, createElectronContext } from '../fronten
 import { isPinned, unpin as unpinPinnedChat } from '../services/pinnedChatService'
 import type {
   SessionUpdateProjectParams,
-  SessionUpdateAutoAllowParams,
   SessionUpdateEnabledToolsParams,
   SessionUpdateKnowledgeBasesParams,
   SessionAllowListRemoveParams,
@@ -63,12 +62,6 @@ export function registerSessionHandlers(): void {
       success: sessionService.updateKnowledgeBases(params.id, params.knowledgeBases)
     })
   )
-
-  /** 更新命令免询问（统一开关） */
-  ipcMain.handle('session:updateAutoAllow', (_event, params: SessionUpdateAutoAllowParams) => {
-    sessionService.updateAutoAllow(params.id, params.autoAllow)
-    return { success: true }
-  })
 
   /** 从统一允许列表（仅路径条目）移除条目 */
   ipcMain.handle('session:removeAllowListEntry', (_event, params: SessionAllowListRemoveParams) => {

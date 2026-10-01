@@ -93,9 +93,8 @@ describe('lastActiveAt', () => {
     expect(row.updatedAt).toBe(row.createdAt)
   })
 
-  it('updateProjectId / updateAutoAllow / addAllowListPaths / removeAllowListEntry 不 touchActive', () => {
+  it('updateProjectId / addAllowListPaths / removeAllowListEntry 不 touchActive', () => {
     sessionService.updateProjectId('s1', 'p2')
-    sessionService.updateAutoAllow('s1', true)
     sessionService.addAllowListPaths('s1', 'read', ['/a'])
     sessionService.removeAllowListEntry('s1', 'Read(/a)')
     expect(mocks.daoTouchActive).not.toHaveBeenCalled()

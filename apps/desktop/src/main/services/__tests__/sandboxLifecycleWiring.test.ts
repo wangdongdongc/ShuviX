@@ -344,7 +344,7 @@ function reviewedGate(sessionId: string, answers: PermissionDecision[]): Securit
         home: '/home/u',
         systemDirs: []
       }),
-      getSessionGrants: () => ({ autoAllow: false, allowList: [] }),
+      getSessionGrants: () => ({ allowList: [] }),
       readBuiltinPolicyMd: INLINE_POLICY_MD,
       getUserPolicies: () => [
         {

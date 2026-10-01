@@ -7,8 +7,9 @@
  *     装了一份「工作区外的读要问」的用户策略 READ_FENCE，卡片、路由、拒绝、记住都靠它来测）。
  *     一个显示本地文件的 tab 上做任何事也按读它过门 —— 页面自己跳过去的也算（BRP-1）；
  *   - 上传给网页的文件 = 读（逐个过门）；pdf 的输出位置 = **写**，由出厂 ask-on-write 判：工作区外问
- *     （从前是硬拒），工作区里免询问（沙箱开关都一样），工作区里的受保护位置（git 的 .git/hooks 等）
- *     照旧问 —— 与文件工具同一道门，没有 pdf 自己的特例；
+ *     （从前是硬拒；系统目录、凭据目录也一样只是问 —— 出厂不再有硬拒，2026-10-01），工作区里免询问
+ *     （沙箱开关都一样），工作区里的受保护位置（git 的 .git/hooks 等）照旧问 —— 与文件工具同一道门，
+ *     没有 pdf 自己的特例；
  *   - http(s) 等地址上报 `{type:'url'}` 客体：出厂没有 url 策略（没有策略 = 放行），用户可以自己写。
  *
  * 另有 L1 全工具门：内置 server 的工具 annotations 是可信的，于是用户能写「浏览器里有破坏性的
@@ -99,8 +100,6 @@ const allowList = (): Promise<string[]> =>
   app.main.eval<string[]>(
     `window.api.session.getById(${JSON.stringify(sid)}).then((s) => (s && s.settings && s.settings.allowList) || [])`
   )
-const setAutoAllow = (on: boolean): Promise<unknown> =>
-  app.main.eval(`window.api.session.updateAutoAllow(${JSON.stringify({ id: sid, autoAllow: on })})`)
 const createPolicy = (text: string): Promise<{ success: boolean; error?: string }> =>
   app.main.eval(`window.api.policy.create(${JSON.stringify({ text })})`)
 const deletePolicy = (name: string): Promise<unknown> =>
@@ -554,16 +553,24 @@ describe('upload_file 的每个文件都按读过门', () => {
       expect(existsSync(abs)).toBe(false)
     }, 120_000)
 
-    it('BRG-13 系统目录：不问就拒，决策记在 protect-system 名下', async () => {
+    it('BRG-13 系统目录：出厂不再硬拒（protect-system 已删）—— 一次普通的工作区外写入询问，记在 ask-on-write 名下；拒了不落文件', async () => {
       const target = '/etc/shuvix-e2e-browser.pdf'
-      const ends = await noAsk([
-        { id: 'brg13_pdf', tool: 'pdf', args: { tabId: formTab, outputPath: target } }
-      ])
-      expect(ends.brg13_pdf.result).toContain("Denied by security policy rule 'protect-system#")
+      const { end, ask } = await askOnce(
+        { id: 'brg13_pdf', tool: 'pdf', args: { tabId: formTab, outputPath: target } },
+        false
+      )
+      // 卡片上是解析后的真实位置（macOS 上 /etc 是 /private/etc 的链接）
+      expect(ask.command).toMatch(/^Write\(.*\/etc\/shuvix-e2e-browser\.pdf\)$/)
+      expect(end.result).toContain('User denied access to')
       expect(existsSync(target)).toBe(false)
       const [decision] = decisionsOf('brg13_pdf')
-      expect(decision).toMatchObject({ objectKind: 'path', action: 'write', effect: 'deny' })
-      expect(decision.winning.startsWith('protect-system#')).toBe(true)
+      expect(decision).toMatchObject({
+        objectKind: 'path',
+        action: 'write',
+        effect: 'ask',
+        winning: 'ask-on-write#0',
+        userResponse: 'denied'
+      })
     }, 120_000)
 
     it('BRP-4 不认识的纸张：过门之前就报错，列出能用的尺寸，一张卡都没有', async () => {
@@ -582,23 +589,24 @@ describe('upload_file 的每个文件都按读过门', () => {
       expect(decisionsOf('brp4_pdf')).toEqual([])
     }, 120_000)
 
-    it('BRG-14 会话开了免询问：工作区里直接写；凭据目录照旧拒绝', async () => {
-      const inside = join(projDir, 'out', 'auto.pdf')
+    it('BRG-14 凭据目录：写不再硬拒（protect-credentials 只管读）—— 一次普通的 ask-on-write 询问；拒了不落文件', async () => {
       const cred = join(app.home, '.ssh', 'x.pdf')
-      await setAutoAllow(true)
-      try {
-        const ends = await noAsk([
-          { id: 'brg14_in', tool: 'pdf', args: { tabId: formTab, outputPath: 'out/auto.pdf' } },
-          { id: 'brg14_cred', tool: 'pdf', args: { tabId: formTab, outputPath: cred } }
-        ])
-        expect(readFileSync(inside).subarray(0, 5).toString()).toBe('%PDF-')
-        expect(ends.brg14_cred.result).toContain(
-          "Denied by security policy rule 'protect-credentials#"
-        )
-        expect(existsSync(cred)).toBe(false)
-      } finally {
-        await setAutoAllow(false)
-      }
+      const { end, ask } = await askOnce(
+        { id: 'brg14_cred', tool: 'pdf', args: { tabId: formTab, outputPath: cred } },
+        false
+      )
+      expect(ask.command).toBe(`Write(${cred})`)
+      expect(end.result).toContain(`User denied access to ${cred}`)
+      expect(existsSync(cred)).toBe(false)
+      expect(decisionsOf('brg14_cred')).toEqual([
+        expect.objectContaining({
+          objectKind: 'path',
+          action: 'write',
+          effect: 'ask',
+          winning: 'ask-on-write#0',
+          userResponse: 'denied'
+        })
+      ])
     }, 120_000)
   })
 })

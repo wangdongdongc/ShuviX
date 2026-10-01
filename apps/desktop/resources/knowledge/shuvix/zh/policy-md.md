@@ -2,7 +2,7 @@
 shuvix: okf v0.2
 type: Guide
 title: '安全策略文件（shuvix: policy v1）'
-description: 'ShuviX 安全策略的完整规范 —— 规则看到的请求文档（subject / action / tool / object / env / vars）、五个条件键、CEL `match`、效力及其优先序、询问由谁回答（先自动审查、再你）、`lets`、什么会让文件非法、内置策略有哪些，以及怎样放宽或收紧一道门。'
+description: 'ShuviX 安全策略的完整规范 —— 规则看到的请求文档（subject / action / tool / object / env / vars）、五个条件键、CEL `match`、效力及其优先序、询问由谁回答（先自动审查、再你）、`lets`、什么会让文件非法、四份内置策略，以及怎样放宽一道门或加一道自己的门。'
 tags: [shuvix, policy, security, format, spec, cel]
 status: stable
 sources:
@@ -27,7 +27,7 @@ protect-credentials 列出的凭据）。宿主把这次执行是否真的被圈
 
 `ask` 并不直接交给用户。开着**自动审查**时（设置 → 通用 → 安全，缺省开），一个审查 agent 先回答它 —— 它在独立
 的上下文里只看用户写的东西和操作本身：放行日常的工作，拒绝明显有害的，其余的摆到用户面前，并把自己的
-意见附在卡片上。审查员是过滤器，不是边界 —— 边界是沙箱与 `deny` 规则。`force-ask` 永远交给用户。审查员
+意见附在卡片上。审查员是过滤器，不是边界 —— 边界是沙箱，以及你自己写的 `deny` 规则。`force-ask` 永远交给用户。审查员
 就是内置 hook `auto-review` 与 agent `permission-reviewer`；它看得到什么、怎么改，见 `hook-md` 条目。
 
 - 位置：`~/.shuvix/policies/<name>.md`。
@@ -41,8 +41,8 @@ protect-credentials 列出的凭据）。宿主把这次执行是否真的被圈
 ---
 shuvix: policy v1
 name: protect-drafts
-shuvix-displayName: Never overwrite my drafts
-description: Files under ~/Documents/drafts can be read but never written by an agent.
+shuvix-displayName: 草稿永不覆盖
+description: agent 对 ~/Documents/drafts 下的文件只能读、不能写。
 shuvix-policy-scope:
   subject.kind: [agent]
   object.type: [path]
@@ -53,11 +53,11 @@ shuvix-policy-rules:
   - effect: deny
     action: [write]
     match: inDir(object.path, drafts)
-    prompt: Write refused — the drafts folder is read-only for agents; ask the user to move the file out first.
+    prompt: 写入被拒 —— 草稿目录对 agent 只读；要改的话，请用户先把文件移出来。
 ---
 
-**What it does**: any write under `~/Documents/drafts` is refused, even with auto-allow on.
-The body is documentation only — the engine never reads it.
+**它做什么**：`~/Documents/drafts` 下的任何写入都被拒绝，即使答过「允许并记住」也一样。
+正文只是写给人看的说明 —— 引擎从不读它。
 ```
 
 ## frontmatter 键
@@ -96,10 +96,10 @@ deny  >  force-ask  >  force-allow  >  ask  >  allow  >  （什么都没命中 =
 
 - `ask` 先把这次调用交给自动审查，审查答不了才摆到用户面前；`allow` 直接放行；`deny` 拒绝（agent 收到
   `prompt` 作为原因）。
-- `force-allow` 是压得过一切 `ask` 的放行 —— ShuviX 用它表达会话授权（「免询问」与「允许并记住」）。
+- `force-allow` 是压得过一切 `ask` 的放行 —— ShuviX 用它表达会话授权（「允许并记住」）。
   `force-allow` 不经过审查员。
 - `force-ask` 是连 `force-allow` 也跳不过、而且只由用户回答的询问 —— 「这道门既不接受会话级同意，也不
-  接受审查员」（bot 文件与 ShuviX 配置那两道门就是）。
+  接受审查员」。
 - `deny` 压过一切。
 
 条件编译成原生谓词，在 CEL **之前**求值，所以条件不命中的规则永远不会跑它的 `match`，也不会触发该策略
@@ -168,7 +168,6 @@ vars     宿主变量表（见下）+ 会话授权
 | `sandboxWriteDenied`         | string[] | 这些位置里受保护的地方（ShuviX 自己的文件、凭据位置等）                         |
 | `sandboxProtectedPatterns`   | string[] | 受保护的 git 元数据的正则（`.git/hooks`、`.git/config` 等），配合 `matches` 用 |
 | `systemDirs`                 | string[] | 额外的操作系统目录（Windows 的系统 / 程序目录）                                 |
-| `autoAllow`                  | boolean  | 会话的「免询问」开关                                                            |
 | `grantedRead`、`grantedWrite` | string[] | 用户在本会话里答过「允许并记住」的路径（写授权隐含读）                          |
 
 宿主没有供给、且某条规则**只**把它当 `inDir` 目录参数用的 `vars.x`，按「没有这个目录」处理（正向的
@@ -184,35 +183,56 @@ YAML 语法错 / 不是映射；裸的 `rules` / `lets` / `scope` 键；`shuvix-
 
 ## 内置策略
 
-随应用发布十二份（按界面语言一份；**规则恒取英文文件**，翻译只改人读的文字）：
+随应用发布四份（按界面语言一份；**规则恒取英文文件**，翻译只改人读的文字）。默认尽可能少问，所以没有
+一份用到 `deny` 或 `force-ask` —— 这两种效力留给你自己的策略：
 
 | 名字                            | 门                                                                                                           |
 | ------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `protect-credentials`           | 拒绝写、询问读凭据位置（`.ssh`、`.aws`……）；沙箱里的命令读写都不行                                            |
-| `protect-system`                | 拒绝写操作系统目录                                                                                            |
-| `block-catastrophic-commands`   | 拒绝一小撮毁灭整机的命令，按解析结构判（`rm -rf /`、`mkfs`、`dd` 到设备、`Format-Volume`……）                                    |
-| `protect-bot-files`             | `~/.shuvix/bots` 下任何写入 **force-ask**                                                                     |
-| `protect-shuvix-config`         | `~/.shuvix/policies`、`agents`、`hooks`、`skills` 下任何写入 **force-ask**                                    |
+| `protect-credentials`           | 读取凭据位置（`.ssh`、`.aws`……）前询问；沙箱里的命令读写都不行。往那里写是一次普通写入（ask-on-write）       |
 | `ask-on-write`                  | 文件写入询问，带 diff 预览 —— 本会话产物、工作目录（除去其中受保护的位置，Windows 除外）除外；沙箱启用时，受限命令本来就能写的位置也除外 |
 | `ask-on-command`                | 每条没被圈进沙箱的命令询问（`object.sandboxed` 为 false：沙箱关闭或不可用、申请了完全访问、`ssh`）                           |
-| `git-safety`                    | 危险的 git 操作询问（`init`、`restore`、强制 checkout、删分支）                                               |
-| `ask-on-database`               | 可写数据库连接上的每条语句询问                                                                                |
-| `ask-on-sub-session`            | 开子会话时询问一次（`tool.name == 'session' && tool.operation == 'create-sub-session'`）                        |
-| `ask-on-new-site`               | 在你自己的 Chrome 里（ShuviX 侧边栏），一场对话第一次打开或操作某个站点时询问（`object.browser == 'chrome'`） |
-| `session-grants`                | 会话的免询问开关打开时 `force-allow` 一切；用户答过「允许并记住」的路径下的读 / 写 `force-allow`               |
+| `session-grants`                | 用户在本会话里答过「允许并记住」的路径下的读 / 写 `force-allow`                                              |
 
 侧栏「安全策略」分组逐份列出（点一行打开那份 md，规则在属性卡上）；内置行菜单的「创建覆盖副本」把当前文本写到
 `~/.shuvix/policies/<name>.md`。
+
+早先的版本出厂带的门更多：拒绝写操作系统目录、拒绝一小撮毁灭整机的命令，写 bot 文件与 ShuviX 自己的
+配置一律问用户，危险的 git 操作、可写数据库连接上的 SQL、开子会话、在你自己的 Chrome 里碰到新站点也都
+要询问。这些是有意删掉的，但每个执行点都还在（就是上面那些客体类型），任何一道都能写成你自己的策略加回来。
 
 ## 放宽与收紧
 
 - **关掉一道门**：按名字覆盖，`shuvix-policy-rules: []`。
 - **给某处免去询问**而不动内置：新建一份策略，写一条 `force-allow` 规则（`force-allow` 压过 `ask`），
   例如某个目录下的写入。
-- **加一道硬停**：一条 `deny` 规则 —— 压过一切，包括免询问。
-- **让一道门跳不过去**：`force-ask` —— 免询问和自动审查都答不了它。想让审查员不碰某一类操作，也是这样写，
-  例如 `object.unconfinedReason == 'escalated'`，即「agent 想离开沙箱时一律问我」。
+- **加一道询问**：新建一份策略，对你在意的客体写一条 `ask` 规则 —— 见下面的示例。
+- **加一道硬停**：一条 `deny` 规则 —— 压过一切，包括「允许并记住」。
+- **让一道门跳不过去**：`force-ask` —— 「允许并记住」的授权和自动审查都答不了它。想让审查员不碰某一类
+  操作，也是这样写，例如 `object.unconfinedReason == 'escalated'`，即「agent 想离开沙箱时一律问我」；
+  或是 `vars.botsDir` / `vars.shuvixConfigDirs` 下的写入，即「agent 改 bot 文件或 ShuviX 自己的配置时
+  一律问我」。
 - 规则要窄：deny 无法按次豁免，所以一条在日常工作里误触发的规则，比一条漏掉的更糟。
+
+例如，可写数据库连接上的每条 SQL 语句都先询问：
+
+```markdown
+---
+shuvix: policy v1
+name: ask-before-sql
+description: 可写数据库连接上的每条语句都先询问。
+shuvix-policy-scope:
+  subject.kind: [agent]
+  object.type: [database]
+shuvix-policy-rules:
+  - effect: ask
+    action: [execute]
+    match: '!object.readonly'
+    prompt: 这条连接可写 —— 这条语句可能改动或删除服务器上的数据。
+---
+```
+
+危险的 git 操作也是同一个形状：`object.type: [gitTool]`，`match` 写成
+`object.gitAction == 'restore' || (object.gitAction == 'checkout' && object.force)` 之类。
 
 ## 不在文件里的
 

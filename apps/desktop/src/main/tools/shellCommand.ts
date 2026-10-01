@@ -210,8 +210,7 @@ export class ShellCommandTool extends BaseTool<ShellCommandParamsSchema> {
     const unconfinedReason = unconfinedReasonOf(this.spec, this.ctx.sessionId, escalate, plan)
     const sandbox = sandboxStateOf(unconfinedReason)
 
-    // 是否询问由安全模块决定：内置 ask-on-command 只问没被圈住的命令（sandboxed=false），
-    // autoAllow 走 force-allow 层
+    // 是否询问由安全模块决定：内置 ask-on-command 只问没被圈住的命令（sandboxed=false）
     const outcome = await getDesktopSecurityContext(this.ctx).enforceCommand(
       // cwd 供安全模块把重定向目标解析成绝对路径
       {

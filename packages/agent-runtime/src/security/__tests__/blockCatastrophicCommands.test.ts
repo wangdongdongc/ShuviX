@@ -1,11 +1,16 @@
 /**
- * block-catastrophic-commands 行为判定 —— 装配真实内置策略 + 真实 tree-sitter 解析器
- * （powershell 通道则是 PowerShell 扫描器，嵌套的 `bash -c` 载荷仍交给真实 bash 解析器），
- * 表驱动跑「命令原文 → 决策」。
+ * block-catastrophic-commands 行为判定 —— 真实内置策略 + 这份策略（按用户策略装上）+ 真实
+ * tree-sitter 解析器（powershell 通道则是 PowerShell 扫描器，嵌套的 `bash -c` 载荷仍交给真实
+ * bash 解析器），表驱动跑「命令原文 → 决策」。
  *
- * 为什么单开一个文件而不是留在 builtinPolicies.test.ts：这条策略是唯一读**结构事实**
- * 而非客体标量的内置策略，用例要起解析器、要断言投影产物，与那边「md 形态守卫 + 各策略
- * 一两条行为抽查」的定位不同；混在一起会让那份文件的 beforeAll 拖着所有策略跑 wasm。
+ * 这份策略 2026-10-01 已不再随包发布（用户裁定：出厂不设硬限制，见 builtinPolicies/index.ts 头注释），
+ * 原文留作测试夹具（fixtures/block-catastrophic-commands.md，经 retiredPolicy() 解析成一份用户策略）。
+ * 本文件因此不再是「一份内置策略的判定表」，而是 bash 解析器 / PowerShell 扫描器 / commandFacts
+ * 投影经 CEL 的**端到端覆盖**：策略只是一份读结构事实的现成规则集，它的每条用例钉的都是解析与
+ * 投影在真实命令上产出了什么。用户照抄这份夹具，就能把这道门装回来 —— 判定与下面的表一字不差。
+ *
+ * 为什么单开一个文件：用例要起解析器、要断言投影产物，与 builtinPolicies.test.ts「md 形态守卫 +
+ * 各策略一两条行为抽查」的定位不同；混在一起会让那份文件的 beforeAll 拖着所有策略跑 wasm。
  *
  * 五条规则的分工（id 在断言里写死，改规则顺序必须同步改这里）：
  *   #0 递归强删根目录   #1 mkfs / dd / 重定向打块设备   #2 Windows format / cipher /w:
@@ -26,9 +31,13 @@ import { analyzePowerShellCommand, MAX_POWERSHELL_PAYLOAD_DEPTH } from '../power
 import { loadShellParserWasmFromNodeModules } from '../shell/nodeWasm'
 import type { SecurityDecision, SecurityHostProvider, SecurityObject } from '../types'
 import { createInlinePolicyMdReader } from '../builtinPolicies/inlineSources'
+import { retiredPolicy } from './fixtures/retiredPolicies'
 
 /** 内置策略 md 的构建期内联读取口（运行时单测的宿主接缝；桌面/扩展各注入自己的） */
 const INLINE_POLICY_MD = createInlinePolicyMdReader()
+
+/** 退役的 block-catastrophic-commands 原文，解析成一份用户策略（规则 id 仍是 `<name>#<i>`） */
+const CATASTROPHIC = retiredPolicy('block-catastrophic-commands')
 
 beforeAll(async () => {
   await initShellParser(loadShellParserWasmFromNodeModules())
@@ -46,13 +55,15 @@ const DESKTOP_VARS: Record<string, string | string[]> = {
   systemDirs: []
 }
 
+/** 内置策略全套 + block-catastrophic-commands 夹具（按用户策略）；传 getUserPolicies 即换掉它 */
 function makeProvider(overrides: Partial<SecurityHostProvider> = {}): SecurityHostProvider {
   return {
     host: 'desktop',
     pathSep: '/',
     getVars: () => DESKTOP_VARS,
-    getSessionGrants: () => ({ autoAllow: false, allowList: [] }),
+    getSessionGrants: () => ({ allowList: [] }),
     readBuiltinPolicyMd: INLINE_POLICY_MD,
+    getUserPolicies: () => [CATASTROPHIC],
     ...overrides
   }
 }
@@ -108,8 +119,8 @@ function commandObject(command: string, opts: DecideOpts = {}): SecurityObject {
 }
 
 /**
- * 仅内置策略的完整装配 + 统一评估（生产路径 context.ts 同款：vars 走 buildPolicyVars，
- * 装配与求值共用同一份 —— 否则 session-* 两份 force-allow 策略会缺键刷告警）。
+ * 内置策略 + 夹具的完整装配 + 统一评估（生产路径 context.ts 同款：vars 走 buildPolicyVars，
+ * 装配与求值共用同一份 —— 否则 session-grants 的 force-allow 规则会缺键刷告警）。
  */
 function decide(command: string, opts: DecideOpts = {}): SecurityDecision {
   const provider = opts.provider ?? makeProvider()
@@ -551,26 +562,41 @@ describe('block-catastrophic-commands — 未解析三态', () => {
   })
 })
 
-describe('block-catastrophic-commands — tier 结算与通道', () => {
-  const autoAllowProvider = makeProvider({
-    getSessionGrants: () => ({ autoAllow: true, allowList: [] })
+/**
+ * 夹具 + 一份对所有命令的用户 force-allow（「免询问」开关已删除，这是用户能写出的最宽的放宽）——
+ * 钉「deny 压过 force-allow」的 tier 结算
+ */
+const trustingProvider = (): SecurityHostProvider =>
+  makeProvider({
+    getUserPolicies: () => [
+      CATASTROPHIC,
+      {
+        name: 'trust-commands',
+        displayName: 'trust-commands',
+        description: '',
+        scope: { 'subject.kind': ['agent'], 'object.type': ['command'] },
+        rules: [{ effect: 'force-allow' }],
+        body: ''
+      }
+    ]
   })
 
-  it('BC-70 deny 压过 force-allow：免询问开关下毁灭命令仍被拒', () => {
-    const decision = expectDeny('rm -rf /', 0, { provider: autoAllowProvider })
+describe('block-catastrophic-commands — tier 结算与通道', () => {
+  it('BC-70 deny 压过 force-allow：对所有命令的用户 force-allow 下毁灭命令仍被拒', () => {
+    const decision = expectDeny('rm -rf /', 0, { provider: trustingProvider() })
     // matched 同时含 force-allow 与 ask 两条：证明是 tier 结算的结果，
-    // 而不是「免询问规则碰巧没命中」——后者会让这条用例失去意义。
+    // 而不是「force-allow 规则碰巧没命中」——后者会让这条用例失去意义。
     expect(decision.matched).toEqual([
       'block-catastrophic-commands#0',
-      'session-grants#0',
+      'trust-commands#0',
       'ask-on-command#0'
     ])
   })
 
-  it('BC-71 同开关下的普通命令照常放行（免询问没被这条策略连坐）', () => {
-    const decision = decide('ls -la', { provider: autoAllowProvider })
+  it('BC-71 同一份 force-allow 下的普通命令照常放行（没被这条策略连坐）', () => {
+    const decision = decide('ls -la', { provider: trustingProvider() })
     expect(decision.effect).toBe('allow')
-    expect(decision.winning).toBe('session-grants#0')
+    expect(decision.winning).toBe('trust-commands#0')
   })
 
   it('BC-72 ssh 渠道同待遇：远端毁灭命令一样 deny', () => {
@@ -594,7 +620,7 @@ describe('block-catastrophic-commands — tier 结算与通道', () => {
     expectDeny('cat img > /dev/sda', 1, { channel: 'ssh', cwd: null })
   })
 
-  it('BC-75 user 主体不受内置防护：scope 限 agent，UI 侧操作不被连坐', () => {
+  it('BC-75 user 主体不受这份策略约束：scope 限 agent，UI 侧操作不被连坐', () => {
     const decision = decide('rm -rf /', { subjectKind: 'user' })
     expect(decision.effect).toBe('allow')
     expect(decision.matched).toEqual([])
@@ -619,7 +645,7 @@ describe('block-catastrophic-commands — tier 结算与通道', () => {
     expectDeny('rm -rf /', 0, { provider: extension, host: 'extension' })
   })
 
-  it('PO-2 圈进沙箱照拒：rm -rf / 与 dd 写块设备在 sandboxed:true 下仍 deny（免询问开着也一样）；同样圈住的普通命令放行', () => {
+  it('PO-2 圈进沙箱照拒：rm -rf / 与 dd 写块设备在 sandboxed:true 下仍 deny（用户 force-allow 开着也一样）；同样圈住的普通命令放行', () => {
     // 沙箱挡不住它们在可写根里的破坏（删掉整个项目就在沙箱之内），而且 deny 不能为单条命令豁免 ——
     // 所以这份清单不看 sandboxed。matched 里没有 ask-on-command#0：拒绝不靠询问门陪着命中
     const cases: Array<[string, 0 | 1]> = [
@@ -633,13 +659,13 @@ describe('block-catastrophic-commands — tier 结算与通道', () => {
         matched: [`block-catastrophic-commands#${ruleIndex}`]
       })
 
-      const autoAllowed = expectDeny(command, ruleIndex, {
+      const trusted = expectDeny(command, ruleIndex, {
         sandboxed: true,
-        provider: autoAllowProvider
+        provider: trustingProvider()
       })
-      expect({ command, matched: autoAllowed.matched }).toEqual({
+      expect({ command, matched: trusted.matched }).toEqual({
         command,
-        matched: [`block-catastrophic-commands#${ruleIndex}`, 'session-grants#0']
+        matched: [`block-catastrophic-commands#${ruleIndex}`, 'trust-commands#0']
       })
     }
 
@@ -1448,23 +1474,19 @@ describe('block-catastrophic-commands — PowerShell 语法错', () => {
 })
 
 describe('block-catastrophic-commands — PowerShell 的 tier 与通道', () => {
-  const autoAllowProvider = makeProvider({
-    getSessionGrants: () => ({ autoAllow: true, allowList: [] })
-  })
-
-  it('BC-PS30 deny 压过免询问；普通命令照常放行；user 主体不受内置防护', () => {
+  it('BC-PS30 deny 压过用户 force-allow；普通命令照常放行；user 主体不受这份策略约束', () => {
     for (const [command, ruleIndex] of [
       ['Remove-Item C:\\ -Recurse', 3],
       ['Format-Volume -DriveLetter D', 4]
     ] as Array<[string, 3 | 4]>) {
-      const decision = psDeny(command, ruleIndex, { provider: autoAllowProvider })
+      const decision = psDeny(command, ruleIndex, { provider: trustingProvider() })
       expect({ command, matched: decision.matched }).toEqual({
         command,
-        matched: expect.arrayContaining(['session-grants#0'])
+        matched: expect.arrayContaining(['trust-commands#0'])
       })
     }
-    const listing = decide('Get-ChildItem', { ...PS, provider: autoAllowProvider })
-    expect([listing.effect, listing.winning]).toEqual(['allow', 'session-grants#0'])
+    const listing = decide('Get-ChildItem', { ...PS, provider: trustingProvider() })
+    expect([listing.effect, listing.winning]).toEqual(['allow', 'trust-commands#0'])
 
     const user = decide('Format-Volume -DriveLetter D', { ...PS, subjectKind: 'user' })
     expect([user.effect, user.matched]).toEqual(['allow', []])

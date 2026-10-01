@@ -1,6 +1,5 @@
 ---
 shuvix: policy v1
-shuvix-builtin: true
 name: git-safety
 shuvix-displayName: Ask Before Important Git Operations
 description: Important operations of the builtin git tool (init / restore / checkout --force / branch -d) ask you before they run.

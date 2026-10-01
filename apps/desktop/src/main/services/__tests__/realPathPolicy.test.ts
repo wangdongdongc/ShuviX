@@ -10,13 +10,14 @@
  * （RPP-7 看「允许并记住」记下的是哪个位置），sessionDao.pickSettings 喂会话授权。
  *
  * macOS 上 tmpdir 在 /var → /private/var 这条系统级链接之下：变量表照写法给（/var/folders/…），
- * 解析之后是 /private/var/folders/…（protect-system 的 /private/var 里挖掉了它）。期望一律按
+ * 解析之后是 /private/var/folders/…（退役的 protect-system 的 /private/var 里挖掉了它 —— RPP-5 / RPP-6 /
+ * RPP-A2 把那一份当作用户策略装回来看）。期望一律按
  * realpathSync.native 算，写法一律从 mkdtemp 的原样起算。符号链接在 Windows 上要开发者模式，整份跳过。
  *
  * RPP-A 一组：ask-on-write 对**本会话自己的** artifacts 目录（vars.sessionArtifactsDir
  * = getSessionArtifactsDir(ctx.sessionId)，这里是 <ROOT>/artifacts/<id>）免询问（读哪儿都不问，只有凭据
  * 位置例外）。豁免同样按真实去处判：
- * 目录里的链接按它指向哪儿过门（凭据照拒、区外照问），`..` 与链接走出这个目录就不再豁免；
+ * 目录里的链接按它指向哪儿过门（凭据位置读照问；写与区外一样照问），`..` 与链接走出这个目录就不再豁免；
  * artifact store 真正写出来的文件只对自己的会话免询问，也不留下任何授权。
  *
  * 工作区写入视图（ask-on-write 的 vars.workspace*，sandbox.workspaceWriteView 给、与沙箱开没开无关）：
@@ -25,8 +26,12 @@
  * 要问」只在空视图下成立；过去这一点靠的是没 mock electron 时 app.getPath 抛错被吞掉。RPP-W1 与 RPP-4 /
  * RPP-5 的后半段换回真实实现：视图算得出来（[真实工作区]），豁免同样按真实去处判。
  *
- * RPP-C1：protect-shuvix-config（force-ask）守 vars.shuvixConfigDirs，同样按真实去处判 —— 工作区里指向
- * <~/.shuvix>/agents 的链接照问（这里 agents 目录是 <ROOT>/agents）。
+ * RPP-C1：vars.shuvixConfigDirs + 退役的 protect-shuvix-config（force-ask，作为用户策略装回），同样按真实
+ * 去处判 —— 工作区里指向 <~/.shuvix>/agents 的链接照问（这里 agents 目录是 <ROOT>/agents）。
+ *
+ * 2026-10-01 起出厂没有硬限制（没有 deny、没有 force-ask）：protect-credentials 只问读，凭据位置的写是
+ * 普通的 ask-on-write；protect-system / protect-shuvix-config 退役。退役那几份的原文是测试夹具
+ * （retiredPolicy），要看「拒绝原话带着真实去处」「force-ask 按真实去处判」的用例把它装进 state.userPolicies。
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -46,6 +51,8 @@ import type {
   InputRequest,
   InputResponse
 } from '@shuvix/chat-protocol/types/inputRequest'
+import type { UserPolicyFile } from '@shuvix/agent-runtime'
+import { retiredPolicy } from '../../../../../../packages/agent-runtime/src/security/__tests__/fixtures/retiredPolicies'
 
 const state = vi.hoisted(() => ({
   /** 本用例的临时根（beforeAll 建）；paths mock 的各目录都挂在它下面 */
@@ -54,7 +61,9 @@ const state = vi.hoisted(() => ({
   home: '',
   /** app.getPath('userData') 的替身（工作区写入视图的规格要它；盘上不存在也行） */
   userData: '/nonexistent-shuvix-rpp-userdata',
-  settings: undefined as { autoAllow?: boolean; allowList?: string[] } | undefined,
+  settings: undefined as { allowList?: string[] } | undefined,
+  /** ~/.shuvix/policies 的替身（policyService.getUserPolicies 现扫的结果） */
+  userPolicies: [] as UserPolicyFile[],
   /** sessionService.addAllowListPaths 收到的实参 */
   granted: [] as Array<{ sessionId: string; mode: string; paths: string[] }>,
   // 内置策略的事实源 —— 运行时读随包发布的目录，这里直接读仓库里那一份（同一批文件）。
@@ -86,7 +95,7 @@ vi.mock('../sessionService', () => ({
 vi.mock('../skillService', () => ({ skillService: { listExternalDirs: () => [] } }))
 vi.mock('../policyService', () => ({
   policyService: {
-    getUserPolicies: () => [],
+    getUserPolicies: () => state.userPolicies,
     readBuiltinPolicyMd: (fileName: string) => {
       try {
         return readFileSync(join(state.builtinDir, fileName), 'utf-8')
@@ -103,7 +112,7 @@ vi.mock('../../utils/paths', () => ({
   getBuiltinSkillsDir: () => join(state.root, 'builtin-skills'),
   getMemoryRootDir: () => join(state.root, 'memory'),
   getDefaultBotsDir: () => join(state.root, 'bots'),
-  // protect-shuvix-config 的四个目录（getVars 的 shuvixConfigDirs）
+  // getVars 的 shuvixConfigDirs（退役的 protect-shuvix-config 引用它们）
   getDefaultPoliciesDir: () => join(state.root, 'policies'),
   getDefaultAgentsDir: () => join(state.root, 'agents'),
   getDefaultHooksDir: () => join(state.root, 'hooks'),
@@ -267,6 +276,7 @@ describe.skipIf(process.platform === 'win32')('路径策略按真实去处判（
   beforeEach(() => {
     state.home = HOME
     state.settings = undefined
+    state.userPolicies = []
     state.granted = []
     config.workingDirectory = WS
     asks.length = 0
@@ -281,8 +291,8 @@ describe.skipIf(process.platform === 'win32')('路径策略按真实去处判（
     const target = join(REAL_HOME, '.ssh', 'id_rsa')
 
     const decision = evaluatePath('read', link)
-    expect(verdict(decision)).toEqual({ effect: 'ask', winning: 'protect-credentials#1' })
-    expect(decision.prompt?.rules).toContain('protect-credentials#1')
+    expect(verdict(decision)).toEqual({ effect: 'ask', winning: 'protect-credentials#0' })
+    expect(decision.prompt?.rules).toContain('protect-credentials#0')
 
     expect(
       await rejectionOf(
@@ -303,45 +313,50 @@ describe.skipIf(process.platform === 'win32')('路径策略按真实去处判（
     expect((asks[0] as AskInputRequest).policyPrompt?.text).toBeTruthy()
   })
 
-  it('RPP-2 同一条链接写入 → protect-credentials#0 直接拒（免询问也不管用）：拒绝文案把写法与真实去处都说出来，不弹卡', async () => {
-    state.settings = { autoAllow: true }
+  it('RPP-2 同一条链接写入 → 普通的区外写（protect-credentials 只管读）：ask-on-write#0 问，卡片以私钥领头、注着 key；「允许并记住」记下的是私钥本身', async () => {
     const link = join(WS, 'key')
     const target = join(REAL_HOME, '.ssh', 'id_rsa')
 
-    expect(verdict(evaluatePath('write', link))).toEqual({
-      effect: 'deny',
-      winning: 'protect-credentials#0'
-    })
-    const message = await rejectionOf(
-      context().enforcePath('write', link, {
-        toolCallId: 'w2',
-        toolName: 'write',
-        displayPath: 'key'
-      })
-    )
+    const decision = evaluatePath('write', link)
+    expect(verdict(decision)).toEqual({ effect: 'ask', winning: 'ask-on-write#0' })
+    expect(decision.matched).not.toContain('protect-credentials#0')
     expect(
-      message.startsWith(
-        `Denied by security policy rule 'protect-credentials#0' (${link} resolves to ${target})\n\n`
+      await rejectionOf(
+        context().enforcePath('write', link, {
+          toolCallId: 'w2',
+          toolName: 'write',
+          displayPath: 'key'
+        })
       )
-    ).toBe(true)
-    expect(asks).toEqual([])
+    ).toBe('User denied access to key')
+    expect(asks).toHaveLength(1)
+    expect(asks[0]).toMatchObject({
+      kind: 'ask',
+      toolName: 'write',
+      command: `Write(${target})`,
+      requestedPath: link
+    })
+
+    respond = () => ({ kind: 'ask', allowed: true, extra: { rememberPath: true } })
+    await context().enforcePath('write', link, { toolCallId: 'w2b', toolName: 'write' })
+    expect(state.granted).toEqual([{ sessionId: 's1', mode: 'write', paths: [target] }])
   })
 
-  it('RPP-3 ~/.ssh 本身是链接（dotfiles 仓库）：真实位置上的私钥照样归凭据门 —— 读问、写拒；经 ~/.ssh 的写法与还不存在的新 key 一样', () => {
+  it('RPP-3 ~/.ssh 本身是链接（dotfiles 仓库）：真实位置上的私钥照样归凭据门 —— 读问（经 ~/.ssh 的写法一样）；写是普通的区外写（ask-on-write），还不存在的新 key 也一样', () => {
     state.home = HOME_B
     for (const p of [join(HOME_B, 'dotfiles', 'ssh', 'id_rsa'), join(HOME_B, '.ssh', 'id_rsa')]) {
       expect({ p, read: verdict(evaluatePath('read', p)) }).toEqual({
         p,
-        read: { effect: 'ask', winning: 'protect-credentials#1' }
+        read: { effect: 'ask', winning: 'protect-credentials#0' }
       })
       expect({ p, write: verdict(evaluatePath('write', p)) }).toEqual({
         p,
-        write: { effect: 'deny', winning: 'protect-credentials#0' }
+        write: { effect: 'ask', winning: 'ask-on-write#0' }
       })
     }
     expect(verdict(evaluatePath('write', join(HOME_B, 'dotfiles', 'ssh', 'new_key')))).toEqual({
-      effect: 'deny',
-      winning: 'protect-credentials#0'
+      effect: 'ask',
+      winning: 'ask-on-write#0'
     })
   })
 
@@ -383,7 +398,8 @@ describe.skipIf(process.platform === 'win32')('路径策略按真实去处判（
     }
   })
 
-  it('RPP-5 工作区在 $TMPDIR 底下（macOS 解析后在 /private/var/folders）：工作区写入视图为空时写照常询问（ask-on-write#0），不被 protect-system 拒；区内读照旧放行；换成算出来的视图写就放行，同样不被 protect-system 拒', () => {
+  it('RPP-5 工作区在 $TMPDIR 底下（macOS 解析后在 /private/var/folders）：工作区写入视图为空时写照常询问（ask-on-write#0），不被（装回的）protect-system 拒；区内读照旧放行；换成算出来的视图写就放行，同样不被 protect-system 拒', () => {
+    state.userPolicies = [retiredPolicy('protect-system')]
     workspaceWriteViewSpy.mockImplementation(emptyWorkspaceView)
     expect(varsNow().workspaceWritable).toEqual([])
     const p = join(WS, 'new.txt')
@@ -408,9 +424,15 @@ describe.skipIf(process.platform === 'win32')('路径策略按真实去处判（
   })
 
   it.skipIf(process.platform !== 'darwin')(
-    'RPP-6 工作区里的 vlink → /var/log/…（macOS：/var 是 /private/var）：写入 → protect-system#0 拒绝，文案带着真实去处',
+    'RPP-6 装回 protect-system：工作区里的 vlink → /var/log/…（macOS：/var 是 /private/var）：写入 → protect-system#0 拒绝，文案带着真实去处；出厂（只有内置）时同一条写只是 ask-on-write#0',
     async () => {
       const link = join(WS, 'vlink')
+      expect(verdict(evaluatePath('write', link))).toEqual({
+        effect: 'ask',
+        winning: 'ask-on-write#0'
+      })
+
+      state.userPolicies = [retiredPolicy('protect-system')]
       const target = join(realpathSync.native('/var/log'), 'shuvix-rpp-never', 'x')
       expect(target.startsWith('/private/var/log/')).toBe(true)
 
@@ -449,7 +471,7 @@ describe.skipIf(process.platform === 'win32')('路径策略按真实去处判（
     for (const p of [link, target, join(ROOT, 'outside', 'target.txt')]) {
       expect({ p, write: verdict(evaluatePath('write', p)) }).toEqual({
         p,
-        write: { effect: 'allow', winning: 'session-grants#2' }
+        write: { effect: 'allow', winning: 'session-grants#1' }
       })
     }
   })
@@ -470,7 +492,7 @@ describe.skipIf(process.platform === 'win32')('路径策略按真实去处判（
       state.settings = { allowList: [entry] }
       expect({ entry, read: verdict(evaluatePath('read', link)) }).toEqual({
         entry,
-        read: { effect: 'allow', winning: 'session-grants#1' }
+        read: { effect: 'allow', winning: 'session-grants#0' }
       })
     }
   })
@@ -501,13 +523,13 @@ describe.skipIf(process.platform === 'win32')('路径策略按真实去处判（
     expect(isPathWithinWorkspace(join(WS, 'notes.txt'), join(ROOT, 'WS'))).toBe(true)
   })
 
-  it('RPP-10 `..` 穿过链接（绝对路径原样交给门）：<ws>/sshlink/../.ssh/id_rsa 物理上就是私钥 —— 读问（卡片是私钥、注着原写法），写一把新 key 直接拒', async () => {
+  it('RPP-10 `..` 穿过链接（绝对路径原样交给门）：<ws>/sshlink/../.ssh/id_rsa 物理上就是私钥 —— 读问（卡片是私钥、注着原写法），写一把新 key 按真实去处问（ask-on-write）', async () => {
     const readPath = `${WS}/sshlink/../.ssh/id_rsa`
     const target = join(REAL_HOME, '.ssh', 'id_rsa')
 
     expect(verdict(evaluatePath('read', readPath))).toEqual({
       effect: 'ask',
-      winning: 'protect-credentials#1'
+      winning: 'protect-credentials#0'
     })
     expect(
       await rejectionOf(
@@ -519,42 +541,52 @@ describe.skipIf(process.platform === 'win32')('路径策略按真实去处判（
 
     const writePath = `${WS}/sshlink/../.ssh/new_key`
     expect(verdict(evaluatePath('write', writePath))).toEqual({
-      effect: 'deny',
-      winning: 'protect-credentials#0'
+      effect: 'ask',
+      winning: 'ask-on-write#0'
     })
-    const message = await rejectionOf(
-      context().enforcePath('write', writePath, { toolCallId: 'w10', toolName: 'write' })
-    )
     expect(
-      message.startsWith(
-        `Denied by security policy rule 'protect-credentials#0' (${writePath} resolves to ${join(REAL_HOME, '.ssh', 'new_key')})\n\n`
+      await rejectionOf(
+        context().enforcePath('write', writePath, { toolCallId: 'w10', toolName: 'write' })
       )
-    ).toBe(true)
-    // 写是直接拒，不弹卡
-    expect(asks).toHaveLength(1)
+    ).toBe(`User denied access to ${writePath}`)
+    // 写也弹卡：卡片是真实去处（家目录里的 new_key），注着原写法
+    expect(asks).toHaveLength(2)
+    expect(asks[1]).toMatchObject({
+      command: `Write(${join(REAL_HOME, '.ssh', 'new_key')})`,
+      requestedPath: writePath
+    })
   })
 
   // ── ShuviX 自己的配置、工作区写入豁免同样按真实去处判 ─────────────────────────────────
 
-  it('RPP-C1 工作区里的链接指向 <~/.shuvix>/agents/x.md：按真实去处归 protect-shuvix-config —— force-ask（工作区视图空着或算出来、免询问开没开都一样）；卡片 command 是真实去处、requestedPath 是链接写法', async () => {
+  it('RPP-C1 装回 protect-shuvix-config：工作区里的链接指向 <~/.shuvix>/agents/x.md，按真实去处归它 —— force-ask（工作区视图空着或算出来、「允许并记住」了真实去处都一样）；卡片 command 是真实去处、requestedPath 是链接写法；出厂时同一条写只是 ask-on-write#0', async () => {
     const link = join(WS, 'agentlink')
     const target = join(REAL_ROOT, 'agents', 'x.md')
 
+    // 出厂（只有内置）：普通的区外写
+    const builtinOnly = evaluatePath('write', link)
+    expect({ ...verdict(builtinOnly), tier: builtinOnly.tier }).toEqual({
+      effect: 'ask',
+      winning: 'ask-on-write#0',
+      tier: 'ask'
+    })
+
+    state.userPolicies = [retiredPolicy('protect-shuvix-config')]
     for (const view of ['empty', 'computed'] as const) {
       if (view === 'computed') restoreComputedWorkspaceView()
       expect(varsNow().workspaceWritable).toEqual(view === 'computed' ? [REAL_WS] : [])
-      for (const autoAllow of [false, true]) {
-        state.settings = { autoAllow }
+      for (const granted of [false, true]) {
+        state.settings = granted ? { allowList: [`Write(${target})`] } : undefined
         const decision = evaluatePath('write', link)
         expect({
           view,
-          autoAllow,
+          granted,
           effect: decision.effect,
           tier: decision.tier,
           winning: decision.winning
         }).toEqual({
           view,
-          autoAllow,
+          granted,
           effect: 'ask',
           tier: 'force-ask',
           winning: 'protect-shuvix-config#0'
@@ -565,7 +597,7 @@ describe.skipIf(process.platform === 'win32')('路径策略按真实去处判（
     }
 
     // 走一遍真的门：卡片上是真实去处，注着链接写法；拒绝的原话用交来的显示名
-    state.settings = { autoAllow: true }
+    state.settings = { allowList: [`Write(${target})`] }
     expect(
       await rejectionOf(
         context().enforcePath('write', link, {
@@ -623,7 +655,7 @@ describe.skipIf(process.platform === 'win32')('路径策略按真实去处判（
 
   // ── 本会话 artifacts 的豁免同样按真实去处判 ─────────────────────────────────────────
 
-  it('RPP-A1 本会话目录里的链接按它真正指向哪儿过门：rc → ~/.bashrc 写照问（卡片是真实去处、注着写法）、读不问；key / sshlink / 悬空的 authorized_keys 归凭据门 —— 写拒（免询问也拒）、读问', async () => {
+  it('RPP-A1 本会话目录里的链接按它真正指向哪儿过门：rc → ~/.bashrc 写照问（卡片是真实去处、注着写法）、读不问；key 读归凭据门问；key / sshlink / 悬空的 authorized_keys 的写不豁免 —— 普通的区外写照问', async () => {
     const rc = join(ART, 's1', 'rc')
     const rcWrite = evaluatePath('write', rc)
     expect(verdict(rcWrite)).toEqual({ effect: 'ask', winning: 'ask-on-write#0' })
@@ -633,37 +665,34 @@ describe.skipIf(process.platform === 'win32')('路径策略按真实去处判（
 
     const key = join(ART, 's1', 'key')
     expect(verdict(evaluatePath('write', key))).toEqual({
-      effect: 'deny',
-      winning: 'protect-credentials#0'
+      effect: 'ask',
+      winning: 'ask-on-write#0'
     })
     expect(verdict(evaluatePath('read', key))).toEqual({
       effect: 'ask',
-      winning: 'protect-credentials#1'
+      winning: 'protect-credentials#0'
     })
     for (const p of [join(ART, 's1', 'sshlink', 'new_key'), join(ART, 's1', 'dangling')]) {
       expect({ p, write: verdict(evaluatePath('write', p)) }).toEqual({
         p,
-        write: { effect: 'deny', winning: 'protect-credentials#0' }
+        write: { effect: 'ask', winning: 'ask-on-write#0' }
       })
     }
 
-    state.settings = { autoAllow: true }
-    expect(verdict(evaluatePath('write', key))).toEqual({
-      effect: 'deny',
-      winning: 'protect-credentials#0'
-    })
-    const message = await rejectionOf(
-      context().enforcePath('write', key, { toolCallId: 'wa1', toolName: 'write' })
-    )
+    // 走一遍真的门：卡片是私钥本身，注着本会话目录里的写法
     expect(
-      message.startsWith(
-        `Denied by security policy rule 'protect-credentials#0' (${key} resolves to ${REAL_HOME}/.ssh/id_rsa)`
+      await rejectionOf(
+        context().enforcePath('write', key, { toolCallId: 'wa1', toolName: 'write' })
       )
-    ).toBe(true)
-    expect(asks).toEqual([])
+    ).toBe(`User denied access to ${key}`)
+    expect(asks).toHaveLength(1)
+    expect(asks[0]).toMatchObject({
+      command: `Write(${REAL_HOME}/.ssh/id_rsa)`,
+      requestedPath: key
+    })
   })
 
-  it('RPP-A2 `..` 与链接走出本会话目录就不再豁免（别的会话、同前缀兄弟、区外、经 up 链接落进 s2）；留在目录里的 `..` 照旧豁免；还没建出来的会话目录同样豁免、不被 protect-system 拒', () => {
+  it('RPP-A2 `..` 与链接走出本会话目录就不再豁免（别的会话、同前缀兄弟、区外、经 up 链接落进 s2）；留在目录里的 `..` 照旧豁免；还没建出来的会话目录同样豁免、不被（装回的）protect-system 拒', () => {
     const toS2 = `${ART}/s1/../s2/x.svg`
     const s2Write = evaluatePath('write', toS2)
     expect(verdict(s2Write)).toEqual({ effect: 'ask', winning: 'ask-on-write#0' })
@@ -687,6 +716,7 @@ describe.skipIf(process.platform === 'win32')('路径策略按真实去处判（
     })
 
     // 会话的目录要等第一件 artifact 才建出来；macOS 上两侧都从 /var/folders 解析成 /private/var/folders
+    state.userPolicies = [retiredPolicy('protect-system')]
     const fresh = context('fresh').evaluate('write', {
       type: 'path',
       path: join(ART, 'fresh', 'new.svg')

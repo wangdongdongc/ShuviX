@@ -2,7 +2,7 @@
  * createFileToolSuite 的询问接线单测 —— 内存 port + 可编程 SecurityHostProvider（requestUserInput 是 spy）。
  *
  * 关注点在「工具壳怎么问」：写类工具把询问推迟到 apply 层（一次调用只弹一张带 diff 预览的卡），
- * 放行短路（工作目录读 / 免询问 / allowList，经统一评估的 force-allow/static-allow 层）逐层生效，
+ * 放行短路（工作目录读 / allowList，经统一评估的 force-allow/static-allow 层）逐层生效，
  * 以及 InputResponse 判别联合的五个分支。
  *
  * 组 7（SYM）问的是门之前的那一步：路径本身是符号链接（port.readLink 答非 null）就不跟 —— 抛一句
@@ -67,7 +67,6 @@ const allowEntry = (mode: AccessMode, p: string): string =>
 
 interface SuiteOptions {
   files?: Record<string, string>
-  autoAllow?: boolean
   /** 会话 allowList 条目（`Read(...)` / `Write(...)` 字面值；默认空） */
   allowList?: string[]
   /** 不传 = 无询问通道（模拟无前端） */
@@ -189,7 +188,7 @@ function makeSuite(opts: SuiteOptions = {}): SuiteHarness {
   const onFileChange = vi.fn<(e: { portPath: string; kind: 'write' | 'edit' }) => void>()
 
   // 桌面口径的 provider：workspace={{ROOT}}（内置 workspace-boundary 策略给出目录内只读放行），
-  // 写入一律走询问链；allowList/autoAllow 进 force-allow 层
+  // 写入一律走询问链；allowList 进 force-allow 层
   const provider: SecurityHostProvider = {
     host: 'desktop',
     pathSep: '/',
@@ -204,10 +203,7 @@ function makeSuite(opts: SuiteOptions = {}): SuiteHarness {
       systemDirs: []
     }),
     readBuiltinPolicyMd: INLINE_POLICY_MD,
-    getSessionGrants: () => ({
-      autoAllow: !!opts.autoAllow,
-      allowList: opts.allowList ?? []
-    }),
+    getSessionGrants: () => ({ allowList: opts.allowList ?? [] }),
     isDirectory: () => false,
     persistGrant,
     requestUserInput,
@@ -331,8 +327,8 @@ describe('文件工具套件 — 放行短路', () => {
     expect(h.requestUserInput).toHaveBeenCalledTimes(1)
   })
 
-  it('PERM-3: 会话免询问 → 不弹窗、照常写入、details.diff 仍完整', async () => {
-    const h = makeSuite({ autoAllow: true, respond: allowed })
+  it('PERM-3: 会话授权（整个工作目录「允许并记住」过）→ 不弹窗、照常写入、details.diff 仍完整', async () => {
+    const h = makeSuite({ allowList: [`Write(${ROOT})`], respond: allowed })
     const res = await h.suite.write.execute('w2', { path: INSIDE, content: 'one\ntwo\n' })
 
     expect(h.requestUserInput).not.toHaveBeenCalled()
@@ -504,9 +500,9 @@ describe('文件工具套件 — OKF 知识库写钩子（deps.knowledge）', ()
 
   it('FS-1 bundle 内的合法概念落盘后盖 generated（actor 惰性、每次写现取）、回执 [OKF] Stamped，onFileChange 恰一次；bundle 外无回执', async () => {
     const actor = vi.fn(() => 'shuvix-work/m1')
-    // 免询问下无需通道即可写（知识库上已无任何内置策略）
+    // 会话授权下无需通道即可写（知识库上已无任何内置策略，写入只有 ask-on-write 一道门）
     const h = makeSuite({
-      autoAllow: true,
+      allowList: ['Write(/kb)', `Write(${ROOT})`],
       knowledgeSessionDirs: ['/kb/sessions'],
       // 宿主答「这份文件属于哪个 bundle、在它里面是什么相对路径」；bundle 外返回 null
       knowledge: { locate: (p) => (p.startsWith('/kb/') ? p.slice('/kb/'.length) : null), actor }
@@ -532,7 +528,7 @@ describe('文件工具套件 — OKF 知识库写钩子（deps.knowledge）', ()
   })
 
   it('FS-2 不注入 deps.knowledge：同一文件只是普通 markdown（不盖章、无回执）', async () => {
-    const h = makeSuite({ autoAllow: true, knowledgeSessionDirs: ['/kb/sessions'] })
+    const h = makeSuite({ allowList: ['Write(/kb)'], knowledgeSessionDirs: ['/kb/sessions'] })
     const res = await h.suite.write.execute('k1', { path: '/kb/sessions/x.md', content: DRAFT })
     expect(h.files.get('/kb/sessions/x.md')).toBe(DRAFT)
     expect(textOf(res)).not.toContain('[OKF]')
@@ -720,10 +716,10 @@ describe('文件工具套件 — 路径本身是符号链接：不跟（port.rea
     expect(suggestSimilar).toHaveBeenCalledTimes(1)
   })
 
-  it('SYM-7 会话授权跳不过这一条：免询问、allowList（链接与 R 的 Read / Write 条目都在）下 read / write / edit 照样拒，一个字节都不动', async () => {
-    const grantCases: Array<Pick<SuiteOptions, 'autoAllow' | 'allowList'>> = [
-      { autoAllow: true },
-      { allowList: ['Read(/ws/key)', 'Write(/ws/key)', `Read(${KEY_REAL})`, `Write(${KEY_REAL})`] }
+  it('SYM-7 会话授权跳不过这一条：allowList（链接与 R 的 Read / Write 条目都在，或两头的整个目录都授权过）下 read / write / edit 照样拒，一个字节都不动', async () => {
+    const grantCases: Array<Pick<SuiteOptions, 'allowList'>> = [
+      { allowList: ['Read(/ws/key)', 'Write(/ws/key)', `Read(${KEY_REAL})`, `Write(${KEY_REAL})`] },
+      { allowList: [`Write(${ROOT})`, 'Write(/fake-home)'] }
     ]
     for (const grants of grantCases) {
       const label = JSON.stringify(grants)
@@ -757,7 +753,7 @@ describe('文件工具套件 — 路径本身是符号链接：不跟（port.rea
     expect(getSessionDecisions(SID)).toEqual([])
   })
 
-  it('SYM-8 照提示改用 R 重发：那一次照常过门 —— read 问一次 Read(R)、允许后读到；凭据目录里的新 key 被 protect-credentials 直接拒；区外文件带 diff 问一次、允许后落盘', async () => {
+  it('SYM-8 照提示改用 R 重发：那一次照常过门 —— read 问一次 Read(R)、允许后读到；凭据目录里的新 key 照普通区外写问一次 Write(R)、允许后落盘；区外文件带 diff 问一次、允许后落盘', async () => {
     // read：R 在凭据目录里 → 询问（链接那一次一张卡都没弹）
     const r = makeSuite({
       files: { [KEY_REAL]: 'PRIVATE KEY\n' },
@@ -773,7 +769,8 @@ describe('文件工具套件 — 路径本身是符号链接：不跟（port.rea
     expect(askOf(r.requests[0]).command).toBe(allowEntry('read', KEY_REAL))
     expect(textOf(read)).toContain('PRIVATE KEY')
 
-    // write 一把还不存在的新 key（悬空链接的那头）：链接那一次被这一条拒；R 那一次被凭据门拒 —— 都不弹卡
+    // write 一把还不存在的新 key（悬空链接的那头）：链接那一次被这一条拒、不弹卡；R 那一次是
+    // 普通的区外写（protect-credentials 只管读）—— 恰一张卡，允许后落盘
     const NEW_KEY = '/fake-home/.ssh/new_key'
     const d = makeSuite({
       links: { '/ws/newkey': { target: NEW_KEY, resolved: NEW_KEY } },
@@ -782,10 +779,11 @@ describe('文件工具套件 — 路径本身是符号链接：不跟（port.rea
     expect(
       await messageOf(d.suite.write.execute('s8c', { path: 'newkey', content: 'k' }))
     ).toContain(`Not written: newkey is a symbolic link to ${NEW_KEY}.`)
-    const denied = await messageOf(d.suite.write.execute('s8d', { path: NEW_KEY, content: 'k' }))
-    expect(denied.startsWith(`Denied by security policy rule 'protect-credentials#0'`)).toBe(true)
     expect(d.requestUserInput).not.toHaveBeenCalled()
-    expect(d.files.size).toBe(0)
+    await d.suite.write.execute('s8d', { path: NEW_KEY, content: 'k' })
+    expect(d.requestUserInput).toHaveBeenCalledTimes(1)
+    expect(askOf(d.requests[0]).command).toBe(allowEntry('write', NEW_KEY))
+    expect([...d.files]).toEqual([[NEW_KEY, 'k']])
 
     // write 区外真文件：链接那一次不弹卡；R 那一次恰一张带 diff 的卡，允许后字节落在 R
     const w = makeSuite({

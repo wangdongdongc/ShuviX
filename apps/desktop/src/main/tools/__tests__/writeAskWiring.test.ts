@@ -50,8 +50,8 @@ const state = vi.hoisted(() => ({
   home: '',
   /** 工作区（resolveProjectConfig 与 vars.workspace 同一个）；空 = TEST_DIR */
   workspace: '',
-  /** 会话授权；缺省 = 不免询问、allowList 空 */
-  grants: undefined as { autoAllow: boolean; allowList: string[] } | undefined
+  /** 会话授权；缺省 = allowList 空 */
+  grants: undefined as { allowList: string[] } | undefined
 }))
 
 // 可编程 provider：桌面口径（内置 workspace-boundary 策略给出工作目录内 read 免询问、
@@ -82,7 +82,7 @@ vi.mock('../../services/toolContext', async () => {
           systemDirs: []
         }),
         readBuiltinPolicyMd: INLINE_POLICY_MD,
-        getSessionGrants: () => state.grants ?? { autoAllow: false, allowList: [] },
+        getSessionGrants: () => state.grants ?? { allowList: [] },
         isDirectory: () => false,
         persistGrant: (mode: string, path: string) => void state.persisted.push({ mode, path }),
         requestUserInput: async (req: InputRequest) => {
@@ -435,7 +435,7 @@ describe.skipIf(process.platform === 'win32')(
       expect(readFileSync(p, 'utf-8')).toBe('x\n')
     })
 
-    it('PERM-R4 `..` 穿过链接的绝对路径（原样交给门，不折叠）：read 按私钥询问、允许后读到的正是私钥而不是字面折叠那头的诱饵；写一把新 key 直接拒、两处都不落盘', async () => {
+    it('PERM-R4 `..` 穿过链接的绝对路径（原样交给门，不折叠）：read 按私钥询问、允许后读到的正是私钥而不是字面折叠那头的诱饵；写一把新 key 按真实去处问（ask-on-write，卡片是真实去处、注着原写法），拒绝则两处都不落盘', async () => {
       const readPath = `${TEST_DIR}/sshlink/../.ssh/id_rsa`
       const realKey = realpathSync.native(join(HOME, '.ssh', 'id_rsa'))
 
@@ -455,15 +455,18 @@ describe.skipIf(process.platform === 'win32')(
       expect(text).toContain('PRIVATE KEY')
       expect(text).not.toContain('DECOY')
 
+      // 凭据位置的写不再被拒（protect-credentials 只管读）：它是一次普通的区外写，按真实去处问
       state.requests = []
+      state.respond = () => ({ kind: 'ask', allowed: false })
       const writePath = `${TEST_DIR}/sshlink/../.ssh/new_key`
       const realNewKey = join(realpathSync.native(HOME), '.ssh', 'new_key')
       await expect(
         makeWriteTool(ctx).execute('pr4c', { path: writePath, content: 'k' })
-      ).rejects.toThrow(
-        `Denied by security policy rule 'protect-credentials#0' (${writePath} resolves to ${realNewKey})`
-      )
-      expect(state.requests).toEqual([])
+      ).rejects.toThrow(/User denied/)
+      expect(state.requests).toHaveLength(1)
+      const writeReq = askOf(state.requests[0])
+      expect(writeReq.command).toBe(`Write(${realNewKey})`)
+      expect(writeReq.requestedPath).toBe(writePath)
       expect(existsSync(join(HOME, '.ssh', 'new_key'))).toBe(false)
       expect(existsSync(join(TEST_DIR, '.ssh', 'new_key'))).toBe(false)
     })
@@ -561,7 +564,7 @@ describe.skipIf(process.platform === 'win32')(
       expect(readFileSync(real, 'utf-8')).toBe('x\n')
     })
 
-    it('PERM-R9 悬空链接指进 ~/.ssh（authorized_keys 还不存在）：write 被这一条拒、不弹卡、门不问；改用 R 重发 → protect-credentials#0 直接拒（R 就是真实去处，文案里没有 resolves to 补注）；两次都什么都没建', async () => {
+    it('PERM-R9 悬空链接指进 ~/.ssh（authorized_keys 还不存在）：write 被这一条拒、不弹卡、门不问；改用 R 重发 → 普通的区外写，问一次 Write(R)（R 就是真实去处，卡片没有 requestedPath）；拒绝则两次都什么都没建', async () => {
       const link = join(TEST_DIR, 'newkey')
       const real = join(realpathSync.native(HOME), '.ssh', 'authorized_keys')
 
@@ -572,14 +575,17 @@ describe.skipIf(process.platform === 'win32')(
       ).toContain(`Not written: ${link} is a symbolic link to ${real}.`)
       expectGateUntouched()
 
-      const denied = await messageOf(
-        makeWriteTool(ctx).execute('pr9b', { path: real, content: 'ssh-ed25519 AAAA\n' })
-      )
-      const head = `Denied by security policy rule 'protect-credentials#0'`
-      expect(denied.slice(0, head.length)).toBe(head)
-      expect(denied).not.toContain('resolves to')
-      expect(state.requests).toEqual([])
-      expect(getSessionDecisions(SESSION_ID).map((d) => d.effect)).toEqual(['deny'])
+      state.respond = () => ({ kind: 'ask', allowed: false })
+      expect(
+        await messageOf(
+          makeWriteTool(ctx).execute('pr9b', { path: real, content: 'ssh-ed25519 AAAA\n' })
+        )
+      ).toMatch(/User denied/)
+      expect(state.requests).toHaveLength(1)
+      const req = askOf(state.requests[0])
+      expect(req.command).toBe(`Write(${real})`)
+      expect(req.requestedPath).toBeUndefined()
+      expect(getSessionDecisions(SESSION_ID).map((d) => d.winning)).toEqual(['ask-on-write#0'])
       expect(existsSync(join(HOME, '.ssh', 'authorized_keys'))).toBe(false)
       expect(lstatSync(link).isSymbolicLink()).toBe(true)
     })
@@ -677,30 +683,21 @@ describe.skipIf(process.platform === 'win32')(
       }
     )
 
-    it('PERM-R15 会话授权跳不过这一条：免询问、allowList 里写着链接与真实去处 —— read / write 照样被拒，门不问，私钥与链接都不动', async () => {
+    it('PERM-R15 会话授权跳不过这一条：allowList 里写着链接与真实去处 —— read / write 照样被拒，门不问，私钥与链接都不动', async () => {
       const link = join(TEST_DIR, 'key')
       const target = join(HOME, '.ssh', 'id_rsa')
       const real = realpathSync.native(target)
       const before = footprint(link, target)
 
-      for (const grants of [
-        { autoAllow: true, allowList: [] },
-        {
-          autoAllow: false,
-          allowList: [`Read(${link})`, `Write(${link})`, `Read(${real})`, `Write(${real})`]
-        }
-      ]) {
-        state.grants = grants
-        const label = grants.autoAllow ? 'autoAllow' : 'allowList'
-        expect(
-          await messageOf(makeReadTool(ctx).execute('pr15a', { path: link })),
-          label
-        ).toContain(`${link} is a symbolic link to ${real}.`)
-        expect(
-          await messageOf(makeWriteTool(ctx).execute('pr15b', { path: link, content: 'x\n' })),
-          label
-        ).toContain(`Not written: ${link} is a symbolic link to ${real}.`)
+      state.grants = {
+        allowList: [`Read(${link})`, `Write(${link})`, `Read(${real})`, `Write(${real})`]
       }
+      expect(await messageOf(makeReadTool(ctx).execute('pr15a', { path: link }))).toContain(
+        `${link} is a symbolic link to ${real}.`
+      )
+      expect(
+        await messageOf(makeWriteTool(ctx).execute('pr15b', { path: link, content: 'x\n' }))
+      ).toContain(`Not written: ${link} is a symbolic link to ${real}.`)
       expectGateUntouched()
       expect(state.persisted).toEqual([])
       expect(footprint(link, target)).toEqual(before)

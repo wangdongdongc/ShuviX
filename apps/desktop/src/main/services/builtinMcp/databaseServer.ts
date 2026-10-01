@@ -8,8 +8,8 @@
  *
  * 为什么值得内置（三项特权都用上了，外加凭据）：
  *  - **专属安全客体**：`query` 走 `enforceDatabase`，客体 `{type:'database', sql, credential, dbType,
- *    readonly}` —— 内置 ask-on-database 对可写连接逐条问、只读连接放行，用户也能按连接名 / 库类型
- *    写自己的策略。一台第三方 MCP server 只过得了 L1 那道「有人要调工具」的门。
+ *    readonly}` —— 出厂没有数据库策略（2026-10-01 删掉了 ask-on-database，默认放行），用户能按
+ *    连接名 / 库类型 / 可写与否写自己的策略。一台第三方 MCP server 只过得了 L1 那道「有人要调工具」的门。
  *  - **进程内询问**：ask 卡片与内置工具同一条路由（toolCallId 经 `_meta` 传进来）。
  *  - **专属渲染**：图标、标签与「连接名 · 说明」的折叠摘要（chat-protocol builtinMcpPresentations）。
  *  - 凭据在进程内直接读 DAO，秘密不出主进程。
@@ -85,7 +85,7 @@ const QUERY_TOOL = {
   name: 'query',
   title: 'Run SQL on a saved connection',
   description:
-    'Run exactly one SQL statement on a saved MySQL or PostgreSQL connection — several statements separated by semicolons are refused, so split them into separate calls. Rows come back as a text table (long results are cut in the middle); a statement without a result set reports how many rows it affected. `connection` is a name from list-connections. Explore a schema with ordinary SQL — information_schema, SHOW TABLES on MySQL, pg_catalog on PostgreSQL. A read-only connection runs every statement inside a read-only transaction enforced by the database server itself, so writes fail there; on a connection with write access every statement is shown to the user, who must confirm it. The connection opens on first use, is reused, and closes after 10 minutes idle.',
+    'Run exactly one SQL statement on a saved MySQL or PostgreSQL connection — several statements separated by semicolons are refused, so split them into separate calls. Rows come back as a text table (long results are cut in the middle); a statement without a result set reports how many rows it affected. `connection` is a name from list-connections. Explore a schema with ordinary SQL — information_schema, SHOW TABLES on MySQL, pg_catalog on PostgreSQL. A read-only connection runs every statement inside a read-only transaction enforced by the database server itself, so writes fail there. The connection opens on first use, is reused, and closes after 10 minutes idle.',
   inputSchema: {
     type: 'object' as const,
     properties: {

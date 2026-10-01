@@ -1,6 +1,6 @@
 /**
  * assembleRules —— 三层来源装配：用户策略同名覆盖内置、tier 标定、match 编译透传。
- * 会话授权已不在这里编译（下沉为 buildPolicyVars + 内置 session-* 两份策略 md），
+ * 会话授权已不在这里编译（下沉为 buildPolicyVars + 内置 session-grants 策略 md），
  * 相应用例迁到本文件的「会话授权（下沉为 vars + 策略 md）」一节与端到端断言。
  * （lets 求值与 strict fail-safe 的专项用例见 test-designer 清单落地部分）
  * 宿主没供给的目录变量（deny / ask 两档绑定为 null、按 logger 去重告警）见 AS-D 一节；
@@ -26,6 +26,7 @@ import type {
   UserPolicyFile
 } from '../types'
 import { createInlinePolicyMdReader } from '../builtinPolicies/inlineSources'
+import { retiredPolicy } from './fixtures/retiredPolicies'
 
 /** 内置策略 md 的构建期内联读取口（运行时单测的宿主接缝；桌面/扩展各注入自己的） */
 const INLINE_POLICY_MD = createInlinePolicyMdReader()
@@ -51,7 +52,7 @@ const BUILTIN_VARS: Record<string, string | string[] | boolean> = {
   workspaceWritable: [],
   workspaceWriteDenied: [],
   workspaceProtectedPatterns: [],
-  // ShuviX 自己的规矩所在（protect-shuvix-config）
+  // 宿主照旧供给的事实变量（出厂已没有策略读它们；退役策略的夹具装上时用得到）
   shuvixConfigDirs: [
     '/home/u/.shuvix/policies',
     '/home/u/.shuvix/agents',
@@ -66,7 +67,7 @@ function makeProvider(overrides: Partial<SecurityHostProvider> = {}): SecurityHo
     host: 'desktop',
     pathSep: '/',
     getVars: () => BUILTIN_VARS,
-    getSessionGrants: () => ({ autoAllow: false, allowList: [] }),
+    getSessionGrants: () => ({ allowList: [] }),
     readBuiltinPolicyMd: INLINE_POLICY_MD,
     ...overrides
   }
@@ -119,37 +120,35 @@ describe('会话授权（下沉为 vars + 策略 md）', () => {
   it('AS-1 allowList → grantedRead/grantedWrite；Write 条目隐含读权限', () => {
     const provider = makeProvider({
       getSessionGrants: () => ({
-        autoAllow: false,
         allowList: ['Read(/data/a.txt)', 'Write(/data/b.txt)']
       })
     })
     expect(buildPolicyVars(provider)).toMatchObject({
-      autoAllow: false,
       grantedRead: ['/data/a.txt'],
       grantedWrite: ['/data/b.txt']
     })
 
     // Read 条目：读由这条授权放行（读本身没有询问门，所以看归因）、写仍走询问门
-    expect(decide(provider, 'read', '/data/a.txt').winning).toBe('session-grants#1')
+    expect(decide(provider, 'read', '/data/a.txt').winning).toBe('session-grants#0')
     expect(decide(provider, 'write', '/data/a.txt').effect).toBe('ask')
     // Write 条目：读写都放行（写授权隐含读）
-    expect(decide(provider, 'read', '/data/b.txt').winning).toBe('session-grants#1')
+    expect(decide(provider, 'read', '/data/b.txt').winning).toBe('session-grants#0')
     expect(decide(provider, 'write', '/data/b.txt').effect).toBe('allow')
     // 归因到内置策略而非从前的 session:allowList:<entry>
-    expect(decide(provider, 'write', '/data/b.txt').winning).toMatch(/^session-grants#[12]$/)
+    expect(decide(provider, 'write', '/data/b.txt').winning).toBe('session-grants#1')
   })
 
   it('AS-1b 授权按路径段边界匹配；非 path 客体不受影响且不告警', () => {
     const provider = makeProvider({
-      getSessionGrants: () => ({ autoAllow: false, allowList: ['Read(/data)'] })
+      getSessionGrants: () => ({ allowList: ['Read(/data)'] })
     })
     // 读本身没有询问门：看的是放行归不归这条授权
-    expect(decide(provider, 'read', '/data').winning).toBe('session-grants#1')
-    expect(decide(provider, 'read', '/data/sub/x.txt').winning).toBe('session-grants#1')
+    expect(decide(provider, 'read', '/data').winning).toBe('session-grants#0')
+    expect(decide(provider, 'read', '/data/sub/x.txt').winning).toBe('session-grants#0')
     // /data 不得命中 /database（inDir 与旧 matchesPathEntry 同一实现）
     expect(decide(provider, 'read', '/database/x.txt').winning).toBe('default:path')
 
-    // 非 path 客体：session-grants 两条路径规则的 object.type 条件先短路，CEL 不跑、零告警
+    // 非 path 客体：session-grants 的 object.type 条件（在 scope 里）先短路，CEL 不跑、零告警
     const warn = vi.fn()
     const vars = buildPolicyVars(provider)
     const decision = evaluate(
@@ -179,7 +178,6 @@ describe('会话授权（下沉为 vars + 策略 md）', () => {
   it('AS-2 历史 Bash(...)/SSH(...)/畸形条目 → 不授予任何权限', () => {
     const provider = makeProvider({
       getSessionGrants: () => ({
-        autoAllow: false,
         allowList: ['Bash(ls -la)', 'SSH(cat /etc/passwd)', 'garbage', 'Read()']
       })
     })
@@ -188,29 +186,52 @@ describe('会话授权（下沉为 vars + 策略 md）', () => {
     expect(decide(provider, 'read', '/outside/x.txt').winning).toBe('default:path')
   })
 
-  it('AS-3 autoAllow:true → 全域 force-allow 放行（含命令）；false → 照常询问', () => {
-    const on = makeProvider({ getSessionGrants: () => ({ autoAllow: true, allowList: [] }) })
-    expect(buildPolicyVars(on).autoAllow).toBe(true)
-    const decision = decide(on, 'write', '/anywhere/x.txt')
-    expect(decision.effect).toBe('allow')
-    expect(decision.winning).toBe('session-grants#0')
+  it('AS-3 「免询问」开关已删除（2026-10-01）：buildPolicyVars 不再产出 vars.autoAllow；宿主 getVars 里残留的同名键也放行不了任何东西', () => {
+    expect(buildPolicyVars(makeProvider())).not.toHaveProperty('autoAllow')
 
-    expect(decide(makeProvider(), 'write', '/anywhere/x.txt').effect).toBe('ask')
+    // 残留的旧键原样进 vars（宿主变量表照抄），但没有一条内置规则读它
+    const leftover = makeProvider({ getVars: () => ({ ...BUILTIN_VARS, autoAllow: true }) })
+    expect(buildPolicyVars(leftover).autoAllow).toBe(true)
+    expect(decide(leftover, 'write', '/anywhere/x.txt')).toMatchObject({
+      effect: 'ask',
+      winning: 'ask-on-write#0'
+    })
+    expect(decide(leftover, 'read', '/home/u/.ssh/id_rsa')).toMatchObject({
+      effect: 'ask',
+      winning: 'protect-credentials#0'
+    })
+    expect(
+      assembleRules(leftover).some((r) => (r.matchExpr ?? '').includes('autoAllow')),
+      '内置规则里还有人读 vars.autoAllow'
+    ).toBe(false)
   })
 
-  it('AS-3b deny 压过 force-allow：免询问开着也拦不住内置 deny', () => {
+  it('AS-3b deny 压过 force-allow：「允许并记住」过的目录也拦不住 deny（用户装上退役的 protect-system 夹具）', () => {
     const on = makeProvider({
       getVars: () => ({ ...BUILTIN_VARS, systemDirs: ['/sysroot'] }),
-      getSessionGrants: () => ({ autoAllow: true, allowList: ['Write(/sysroot)'] })
+      getSessionGrants: () => ({ allowList: ['Write(/sysroot)'] }),
+      getUserPolicies: () => [retiredPolicy('protect-system')]
     })
     const decision = decide(on, 'write', '/sysroot/x.conf')
     expect(decision.effect).toBe('deny')
-    expect(decision.winning).toMatch(/^protect-system#/)
+    expect(decision.winning).toBe('protect-system#0')
+    // 授权确实命中了（是被 deny 压过，而不是没匹配上）
+    expect(decision.matched).toContain('session-grants#1')
+
+    // 对照：不装夹具时，同一次写由授权放行（出厂没有 deny）
+    const bare = makeProvider({
+      getVars: () => ({ ...BUILTIN_VARS, systemDirs: ['/sysroot'] }),
+      getSessionGrants: () => ({ allowList: ['Write(/sysroot)'] })
+    })
+    expect(decide(bare, 'write', '/sysroot/x.conf')).toMatchObject({
+      effect: 'allow',
+      winning: 'session-grants#1'
+    })
   })
 
   it('CA-4 内置 force-allow 与用户 force-allow 同时命中 → winning 取先装配的内置，matched 两条都在', () => {
     const provider = makeProvider({
-      getSessionGrants: () => ({ autoAllow: true, allowList: [] }),
+      getSessionGrants: () => ({ allowList: ['Write(/anywhere)'] }),
       getUserPolicies: () => [
         userPolicy('trust-anywhere', [
           {
@@ -224,8 +245,8 @@ describe('会话授权（下沉为 vars + 策略 md）', () => {
     const decision = decide(provider, 'write', '/anywhere/x.txt')
     expect(decision.effect).toBe('allow')
     // 同 tier 多条 → 装配顺序第一条胜出；内置在用户之前（mergePolicyFiles）
-    expect(decision.winning).toBe('session-grants#0')
-    expect(decision.matched).toContain('session-grants#0')
+    expect(decision.winning).toBe('session-grants#1')
+    expect(decision.matched).toContain('session-grants#1')
     expect(decision.matched).toContain('trust-anywhere#0')
     // 被压过的 ask 门仍在 matched（门没拆，只是没胜出）
     expect(decision.matched).toContain('ask-on-write#0')
@@ -233,10 +254,14 @@ describe('会话授权（下沉为 vars + 策略 md）', () => {
 
   it('AS-3c 宿主 getVars 同名定义劫持不了会话授权', () => {
     const provider = makeProvider({
-      getVars: () => ({ ...BUILTIN_VARS, autoAllow: true, grantedWrite: ['/everything'] }),
-      getSessionGrants: () => ({ autoAllow: false, allowList: [] })
+      getVars: () => ({
+        ...BUILTIN_VARS,
+        grantedRead: ['/everything'],
+        grantedWrite: ['/everything']
+      }),
+      getSessionGrants: () => ({ allowList: [] })
     })
-    expect(buildPolicyVars(provider)).toMatchObject({ autoAllow: false, grantedWrite: [] })
+    expect(buildPolicyVars(provider)).toMatchObject({ grantedRead: [], grantedWrite: [] })
     expect(decide(provider, 'write', '/everything/x.txt').effect).toBe('ask')
   })
 })
@@ -245,17 +270,19 @@ describe('会话授权（下沉为 vars + 策略 md）', () => {
  * 授权变量的失效模式守护 —— 装配（lets）与求值（match）必须共用同一份
  * buildPolicyVars 产物。只在一处注入授权变量，另一处就缺键，strict 语义下报错走
  * fail-safe：force-allow 归一后的 effect 是 allow → **视为不命中**，授权静默失效。
- * 方向偏安全（多问一次），但用户会觉得免询问开关坏了 —— 这几条就是让它响。
+ * 方向偏安全（多问一次），但用户会觉得「允许并记住」坏了 —— 这几条就是让它响。
  */
 describe('assembleRules × evaluate — 授权 vars 的失效模式守护', () => {
-  /** 授权齐备的 provider：免询问开着 + /data 已「允许并记住」为写授权 */
+  /** 授权齐备的 provider：/outside、/data 已「允许并记住」为写授权，~/.ssh 为读授权 */
   const grantedProvider = (warn?: (msg: string) => void): SecurityHostProvider =>
     makeProvider({
       ...(warn ? { logger: { info: vi.fn(), warn, error: vi.fn() } } : {}),
-      getSessionGrants: () => ({ autoAllow: true, allowList: ['Write(/data)'] })
+      getSessionGrants: () => ({
+        allowList: ['Write(/outside)', 'Write(/data)', 'Read(/home/u/.ssh)']
+      })
     })
 
-  /** 装配用完整 vars，求值用「残缺」vars（缺 autoAllow/granted*）—— 待守护的失效形态 */
+  /** 装配用完整 vars，求值用「残缺」vars（缺 granted*）—— 待守护的失效形态 */
   const decideWithVars = (
     provider: SecurityHostProvider,
     action: string,
@@ -276,15 +303,15 @@ describe('assembleRules × evaluate — 授权 vars 的失效模式守护', () =
 
   /** 授权若真的生效，这三格都会是 allow —— 因此三格全 ask 才算守住 */
   const GRID: Array<[string, string]> = [
-    ['write', '/outside/x.txt'], // autoAllow 该放行的
+    ['write', '/outside/x.txt'], // Write(/outside) 授权该放行的
     ['write', '/data/x.txt'], // Write(/data) 授权该放行的
-    ['read', '/home/u/.ssh/x'] // autoAllow 该放行的（凭据读是 ask 档，压得过）
+    ['read', '/home/u/.ssh/x'] // Read(/home/u/.ssh) 授权该放行的（凭据读是 ask 档，压得过）
   ]
 
   it('CV-1 求值侧拿不到授权变量（provider.getVars() / 完全省略）→ 授权全线失效，任何一格都不得 allow', () => {
     const provider = grantedProvider()
 
-    // 形态①：求值侧传的是 provider.getVars()（宿主静态变量，没有 autoAllow/granted*）
+    // 形态①：求值侧传的是 provider.getVars()（宿主静态变量，没有 granted*）
     for (const [action, path] of GRID) {
       const decision = decideWithVars(provider, action, path, provider.getVars(), vi.fn())
       expect(decision.effect, `getVars() × ${action} ${path}`).toBe('ask')
@@ -318,12 +345,13 @@ describe('assembleRules × evaluate — 授权 vars 的失效模式守护', () =
     const provider = grantedProvider()
 
     decideWithVars(provider, 'write', '/data/x.txt', provider.getVars(), warn)
+    decideWithVars(provider, 'read', '/home/u/.ssh/x', provider.getVars(), warn)
     const messages = warn.mock.calls.map((c) => String(c[0]))
     const notMatched = messages.filter((m) => m.includes('treating as not matched'))
     expect(notMatched.length).toBeGreaterThan(0)
-    // 免询问与路径授权两种规则都该报（force-allow 归一为 allow → fail-safe 不命中）
+    // 读、写两条路径授权规则都该报（force-allow 归一为 allow → fail-safe 不命中）
     expect(notMatched.some((m) => m.includes("'session-grants#0'"))).toBe(true)
-    expect(notMatched.some((m) => /'session-grants#[12]'/.test(m))).toBe(true)
+    expect(notMatched.some((m) => m.includes("'session-grants#1'"))).toBe(true)
 
     // 每次评估现装配现求值：告警不被任何缓存/去重吞掉
     const after1 = warn.mock.calls.length
@@ -335,7 +363,7 @@ describe('assembleRules × evaluate — 授权 vars 的失效模式守护', () =
     const warn = vi.fn()
     const provider = makeProvider({
       logger: { info: vi.fn(), warn, error: vi.fn() },
-      getSessionGrants: () => ({ autoAllow: false, allowList: ['Write(/data)'] }),
+      getSessionGrants: () => ({ allowList: ['Write(/data)'] }),
       getUserPolicies: () => [
         userPolicy(
           'granted-echo',
@@ -482,9 +510,8 @@ describe('assembleRules — 策略合并与 tier 标定', () => {
     // 反向：会话授权策略的每条规则都在 force-allow 层（没有半截落回 static-allow 的）
     const sessionRules = rules.filter((r) => SESSION_POLICIES.includes(r.source.policy ?? ''))
     expect(sessionRules.map((r) => r.id)).toEqual([
-      'session-grants#0', // 免询问开关
-      'session-grants#1', // 路径授权：读
-      'session-grants#2' // 路径授权：写
+      'session-grants#0', // 路径授权：读
+      'session-grants#1' // 路径授权：写
     ])
     expect(sessionRules.every((r) => r.tier === 'force-allow')).toBe(true)
   })
@@ -836,12 +863,15 @@ describe('assembleRules — 派生规则与省略容错', () => {
     expect(() => assembleRules(makeProvider())).not.toThrow()
   })
 
-  it('AS-11 省略 getUserPolicies → 仅 builtin 正常装配（含 force-allow 两份）', () => {
+  it('AS-11 省略 getUserPolicies → 仅 builtin 正常装配（含 session-grants 的两条 force-allow）', () => {
     const rules = assembleRules(
-      makeProvider({ getSessionGrants: () => ({ autoAllow: true, allowList: [] }) })
+      makeProvider({ getSessionGrants: () => ({ allowList: ['Write(/data)'] }) })
     )
     expect(rules.some((r) => r.source.kind === 'builtin')).toBe(true)
-    expect(rules.some((r) => r.id === 'session-grants#0')).toBe(true)
+    expect(rules.filter((r) => r.source.policy === 'session-grants').map((r) => r.id)).toEqual([
+      'session-grants#0',
+      'session-grants#1'
+    ])
     expect(rules.some((r) => r.source.kind === 'user')).toBe(false)
   })
 })
@@ -1727,7 +1757,7 @@ describe('resolvePolicyLet', () => {
     ).toBe('/x')
   })
 
-  it('RPL-11 两面说同一句话：清单里每个位置下的文件，读 → ask（protect-credentials#1）、写 → deny（#0）；覆盖拿掉 .aws 后，两面都不再管它', () => {
+  it('RPL-11 两面说同一句话：清单里每个位置下的文件，读 → ask（protect-credentials#0）、写不归它管（照普通区外写，ask-on-write#0）；覆盖拿掉 .aws 后，读也不再管它', () => {
     const vars = { ...BUILTIN_VARS, home: '/h' }
     const decideWith = (
       provider: SecurityHostProvider,
@@ -1748,13 +1778,14 @@ describe('resolvePolicyLet', () => {
       expect({ dir, effect: read.effect, winning: read.winning }).toEqual({
         dir,
         effect: 'ask',
-        winning: 'protect-credentials#1'
-      })
-      const write = decideWith(builtin, 'write', `${dir}/k`)
-      expect({ dir, effect: write.effect, winning: write.winning }).toEqual({
-        dir,
-        effect: 'deny',
         winning: 'protect-credentials#0'
+      })
+      // 2026-10-01 起 protect-credentials 只管读：写这里只有 ask-on-write 一道门
+      const write = decideWith(builtin, 'write', `${dir}/k`)
+      expect({ dir, effect: write.effect, matched: write.matched }).toEqual({
+        dir,
+        effect: 'ask',
+        matched: ['ask-on-write#0']
       })
     }
 
@@ -1776,10 +1807,10 @@ describe('resolvePolicyLet', () => {
       winning: 'default:path',
       matched: []
     })
-    // 清单里剩下的照旧：读问、写拒
+    // 清单里剩下的照旧：读问（写本就只归 ask-on-write）
     for (const dir of narrowed) {
-      expect(decideWith(overridden, 'read', `${dir}/k`).winning, dir).toBe('protect-credentials#1')
-      expect(decideWith(overridden, 'write', `${dir}/k`).winning, dir).toBe('protect-credentials#0')
+      expect(decideWith(overridden, 'read', `${dir}/k`).winning, dir).toBe('protect-credentials#0')
+      expect(decideWith(overridden, 'write', `${dir}/k`).winning, dir).toBe('ask-on-write#0')
     }
   })
 

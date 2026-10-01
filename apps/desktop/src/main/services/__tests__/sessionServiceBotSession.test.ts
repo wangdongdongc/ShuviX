@@ -126,17 +126,17 @@ describe('BSess-1 / 2 / 3 —— create 写了什么', () => {
 
   it('BSess-Sub 子会话不继承 bot —— 干活的那条会话不带人设', () => {
     // 这是「人设影响怎么说话、不影响怎么干活」在创建侧的一半：父会话 settings 里只有
-    // autoAllow（与扩展能力勾选）被抄过去。bot 若跟着传，子会话的根 Agent 会按 bot 基座起来，
+    // 扩展能力勾选被抄过去。bot 若跟着传，子会话的根 Agent 会按 bot 基座起来，
     // 而那条会话恰恰是用来干活的（另一半守卫在 agentSessionBot.test.ts 的 AG-5）
     mocks.daoPick.mockReturnValue({
       projectId: 'p1',
-      settings: { bot: 'scout', autoAllow: true }
+      settings: { bot: 'scout', enabledTools: ['skill:from-parent'] }
     })
     sessionService.create({ parentId: 'P' })
     const settings = inserted().settings
     expect('bot' in settings).toBe(false)
     // 对照组：该继承的那一项确实继承了（否则这条用例可能只是在测一个空 settings）
-    expect(settings.autoAllow).toBe(true)
+    expect(settings.enabledTools).toEqual(['skill:from-parent'])
     expect(inserted().projectId).toBe('p1')
   })
 })

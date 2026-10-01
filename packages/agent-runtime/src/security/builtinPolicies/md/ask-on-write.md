@@ -53,8 +53,6 @@ really run confined; the working-directory exemption does not depend on it.
 
 - It gates the file tools only; commands are governed by ask-on-command and
   the sandbox.
-- Once you turn the auto-allow switch on, another builtin policy —
-  session-grants — takes over and skips the ask.
 
 **To adjust**: create an override copy and edit it. Keeping only the first
 line of the `match` restores "every write asks, sandbox or not"; dropping the

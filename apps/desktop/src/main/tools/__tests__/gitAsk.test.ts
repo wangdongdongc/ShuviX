@@ -1,9 +1,14 @@
 /**
  * 桌面 git 工具的询问接线集成测试 —— 经 registerBuiltinTool 捕获的 factory 拿到真实工具，
- * 真实临时仓库 + mock 掉 toolContext/sessionDao/i18n。
+ * 真实临时仓库 + mock 掉 toolContext/i18n。
  *
  * 覆盖 makeDesktopAskOp 的五条响应分支、makeDesktopResolveDir 的「工作目录内豁免」，
  * 以及三语询问文案键的齐全性。
+ *
+ * 出厂的 git-safety 已删（2026-10-01：出厂不留硬限制、默认尽可能少问）—— 出厂时 git 工具的
+ * 每个操作都默认放行（GIT-9 出厂 / GIT-13）。询问分支与客体属性透传仍是执行点 enforceGitOp
+ * 的接线，所以这些用例把退役的 git-safety 原文当作**用户策略**装回来（state.userPolicies）
+ * 驱动它 —— 也顺带证明：用户照抄那一份，门就回来了。
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import * as nodeFs from 'node:fs'
@@ -12,6 +17,7 @@ import { existsSync } from 'node:fs'
 import { join, resolve, sep } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
+import type { UserPolicyFile } from '@shuvix/agent-runtime'
 import en from '@shuvix/chat-protocol/i18n/locales/en.json'
 import zh from '@shuvix/chat-protocol/i18n/locales/zh.json'
 import ja from '@shuvix/chat-protocol/i18n/locales/ja.json'
@@ -27,7 +33,8 @@ interface Registration {
 
 const state = vi.hoisted(() => ({
   workingDirectory: '',
-  settings: undefined as { autoAllow?: boolean } | undefined,
+  /** ~/.shuvix/policies 的替身（provider.getUserPolicies 现读） */
+  userPolicies: [] as UserPolicyFile[],
   registration: undefined as unknown,
   readGuard: [] as { path: string; displayPath?: string }[],
   writeGuard: [] as { path: string; displayPath?: string }[],
@@ -45,7 +52,7 @@ vi.mock('../../services/toolContext', async () => {
       const base = resolve(workingDirectory)
       return r === base || r.startsWith(base + sep)
     },
-    // 真实评估链（内置 git-safety 策略 + force-allow 层）；grants/挂起通道来自测试状态。
+    // 真实评估链（内置策略 + 测试状态里的用户策略）；挂起通道来自测试状态。
     // enforceGitOp 额外记录客体属性入参（GIT-12 透传断言），再交给真实实现。
     getDesktopSecurityContext: (ctx: {
       sessionId: string
@@ -68,10 +75,8 @@ vi.mock('../../services/toolContext', async () => {
             systemDirs: []
           }),
           readBuiltinPolicyMd: INLINE_POLICY_MD,
-          getSessionGrants: () => ({
-            autoAllow: !!state.settings?.autoAllow,
-            allowList: []
-          }),
+          getUserPolicies: () => state.userPolicies,
+          getSessionGrants: () => ({ allowList: [] }),
           requestUserInput: ctx.requestUserInput
         }
       )
@@ -104,9 +109,6 @@ vi.mock('../../services/toolContext', async () => {
     ) => void state.writeGuard.push({ path, displayPath })
   }
 })
-vi.mock('../../dao/sessionDao', () => ({
-  sessionDao: { pickSettings: () => state.settings }
-}))
 vi.mock('../../services/toolRegistry', () => ({
   registerBuiltinTool: (reg: unknown) => void (state.registration = reg)
 }))
@@ -114,6 +116,7 @@ vi.mock('../../i18n', () => ({ t: (k: string) => k }))
 
 import '../git'
 import { createInlinePolicyMdReader } from '@shuvix/agent-runtime/security/builtinPolicies/inlineSources'
+import { retiredPolicy } from '../../../../../../packages/agent-runtime/src/security/__tests__/fixtures/retiredPolicies'
 
 /** 内置策略 md 的构建期内联读取口（真实装配链要它；测试进程，不进桌面 bundle） */
 const INLINE_POLICY_MD = createInlinePolicyMdReader()
@@ -147,7 +150,7 @@ function makeTool(requestUserInput?: (req: InputRequest) => Promise<InputRespons
 
 beforeEach(() => {
   state.workingDirectory = makeDir()
-  state.settings = undefined
+  state.userPolicies = []
   state.readGuard = []
   state.writeGuard = []
   state.gitOps = []
@@ -157,8 +160,40 @@ afterEach(() => {
   for (const d of dirs.splice(0)) nodeFs.rmSync(d, { recursive: true, force: true })
 })
 
+/** 把退役的 git-safety 当作用户自己写的策略装回来 */
+const withGitSafety = (): void => {
+  state.userPolicies = [retiredPolicy('git-safety')]
+}
+
+/** 工作目录本身建成有一次提交的仓库（a.txt = first） */
+function commitOnce(wd: string): void {
+  execSync('git init -b main', { cwd: wd, stdio: 'ignore' })
+  nodeFs.writeFileSync(join(wd, 'a.txt'), 'first\n')
+  execSync(
+    'git -c user.name=Tester -c user.email=t@example.com -c commit.gpgsign=false add a.txt',
+    { cwd: wd, stdio: 'ignore' }
+  )
+  execSync(
+    'git -c user.name=Tester -c user.email=t@example.com -c commit.gpgsign=false commit -m init',
+    { cwd: wd, stdio: 'ignore' }
+  )
+}
+
 describe('桌面 makeDesktopAskOp', () => {
+  it('GIT-9: 出厂（没有 git 策略）→ init 零弹窗直接执行', async () => {
+    const requestUserInput = vi.fn(
+      async (): Promise<InputResponse> => ({ kind: 'ask', allowed: true })
+    )
+    const tool = makeTool(requestUserInput)
+
+    await tool.execute('a0', { action: 'init' })
+
+    expect(requestUserInput).not.toHaveBeenCalled()
+    expect(existsSync(join(state.workingDirectory, '.git'))).toBe(true)
+  })
+
   it('GIT-9: 弹询问时带上 reason 对应的本地化描述与命令行', async () => {
+    withGitSafety()
     const requests: InputRequest[] = []
     const tool = makeTool(async (req) => {
       requests.push(req)
@@ -177,20 +212,8 @@ describe('桌面 makeDesktopAskOp', () => {
     expect(existsSync(join(state.workingDirectory, '.git'))).toBe(true)
   })
 
-  it('GIT-9: 会话免询问 → 零弹窗直接执行', async () => {
-    state.settings = { autoAllow: true }
-    const requestUserInput = vi.fn(
-      async (): Promise<InputResponse> => ({ kind: 'ask', allowed: true })
-    )
-    const tool = makeTool(requestUserInput)
-
-    await tool.execute('a2', { action: 'init' })
-
-    expect(requestUserInput).not.toHaveBeenCalled()
-    expect(existsSync(join(state.workingDirectory, '.git'))).toBe(true)
-  })
-
   it('GIT-9: 无 requestUserInput 通道 → fail-closed 拒绝（与文件写入链一致；桌面正常运行时恒有通道）', async () => {
+    withGitSafety()
     const tool = makeTool(undefined)
 
     await expect(tool.execute('a3', { action: 'init' })).rejects.toThrow(/no way to ask/)
@@ -198,6 +221,7 @@ describe('桌面 makeDesktopAskOp', () => {
   })
 
   it('GIT-9: cancel → 抛 Aborted，操作不执行', async () => {
+    withGitSafety()
     const tool = makeTool(async () => ({ kind: 'cancel', reason: 'aborted' }))
 
     await expect(tool.execute('a4', { action: 'init' })).rejects.toThrow('Aborted')
@@ -205,6 +229,7 @@ describe('桌面 makeDesktopAskOp', () => {
   })
 
   it('GIT-9: other → 抛含 provided feedback instead 的错误，操作不执行', async () => {
+    withGitSafety()
     const tool = makeTool(async () => ({ kind: 'other', text: '先别建仓库' }))
 
     await expect(tool.execute('a5', { action: 'init' })).rejects.toThrow(
@@ -214,6 +239,7 @@ describe('桌面 makeDesktopAskOp', () => {
   })
 
   it('GIT-9: allowed:false → 抛 User denied git ...（带 reason 时抛 reason）', async () => {
+    withGitSafety()
     const denied = makeTool(async () => ({ kind: 'ask', allowed: false }))
     await expect(denied.execute('a6', { action: 'init' })).rejects.toThrow('User denied git init')
     expect(existsSync(join(state.workingDirectory, '.git'))).toBe(false)
@@ -228,19 +254,9 @@ describe('桌面 makeDesktopAskOp', () => {
 })
 
 describe('桌面 enforceGitOp 透传', () => {
-  it('GIT-12: gitAction/command/force/delete 逐字段透传，force/delete 驱动 git-safety 的弹窗差异', async () => {
-    // 工作目录本身建成有一次提交的仓库
-    const wd = state.workingDirectory
-    execSync('git init -b main', { cwd: wd, stdio: 'ignore' })
-    nodeFs.writeFileSync(join(wd, 'a.txt'), 'first\n')
-    execSync(
-      'git -c user.name=Tester -c user.email=t@example.com -c commit.gpgsign=false add a.txt',
-      { cwd: wd, stdio: 'ignore' }
-    )
-    execSync(
-      'git -c user.name=Tester -c user.email=t@example.com -c commit.gpgsign=false commit -m init',
-      { cwd: wd, stdio: 'ignore' }
-    )
+  it('GIT-12: gitAction/command/force/delete 逐字段透传，force/delete 驱动（装回的）git-safety 的弹窗差异', async () => {
+    withGitSafety()
+    commitOnce(state.workingDirectory)
 
     const requests: InputRequest[] = []
     const tool = makeTool(async (req) => {
@@ -267,6 +283,32 @@ describe('桌面 enforceGitOp 透传', () => {
       'git checkout --force main',
       'git branch -d feat'
     ])
+  })
+
+  it('GIT-13: 出厂（没有 git 策略）→ restore / checkout --force / branch -d 照样上报，但一张卡都不弹、照常执行', async () => {
+    const wd = state.workingDirectory
+    commitOnce(wd)
+    nodeFs.writeFileSync(join(wd, 'a.txt'), 'uncommitted edit\n')
+
+    const requestUserInput = vi.fn(
+      async (): Promise<InputResponse> => ({ kind: 'ask', allowed: true })
+    )
+    const tool = makeTool(requestUserInput)
+
+    await tool.execute('q1', { action: 'restore', paths: ['a.txt'] })
+    expect(nodeFs.readFileSync(join(wd, 'a.txt'), 'utf8')).toBe('first\n')
+    await tool.execute('q2', { action: 'branch', name: 'feat' })
+    await tool.execute('q3', { action: 'checkout', ref: 'main', force: true })
+    await tool.execute('q4', { action: 'branch', name: 'feat', delete: true })
+
+    expect(state.gitOps.map((op) => op.gitAction)).toEqual([
+      'restore',
+      'branch',
+      'checkout',
+      'branch'
+    ])
+    expect(requestUserInput).not.toHaveBeenCalled()
+    expect(execSync('git branch --list feat', { cwd: wd, encoding: 'utf8' })).toBe('')
   })
 })
 

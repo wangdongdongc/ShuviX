@@ -362,7 +362,7 @@ export async function createSshMcpServer(
 
     // 命令级安全门。**这是内置服务器相对第三方 server 的实质特权**：它拿得到会话的
     // SecurityContext，于是远端命令走的是和 bash 同一条命令客体（channel: 'ssh'），
-    // ask-on-command / block-catastrophic-commands 这些策略照常生效 ——
+    // ask-on-command 这类命令策略照常生效 ——
     // 而一台普通 MCP server 只能过 L1 那道「有人要调工具」的门。
     const security = getDesktopSecurityContext({
       sessionId: scope.sessionId,
@@ -424,7 +424,7 @@ export async function createSshMcpServer(
    * 传输类工具的公共部分：核对别名、把本地路径解析成绝对路径、过**文件访问策略**。
    *
    * 本地那一侧走 `enforcePath`，与本地读写完全同一条路 —— 于是
-   * `ask-on-write` / `protect-credentials` / `protect-system` / 项目沙箱对「下载到哪里」
+   * `ask-on-write` / `protect-credentials` / 项目沙箱对「下载到哪里」
    * 照样生效。远端那一侧没有可表达的路径词汇，由 L1 门兜着（策略可按 `object.mcpTool` 设门）。
    */
   const prepareTransfer = async (

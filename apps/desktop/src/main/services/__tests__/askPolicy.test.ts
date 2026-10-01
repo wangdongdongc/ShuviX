@@ -2,8 +2,8 @@
  * 桌面安全 provider 单测 —— makeDesktopSecurityProvider / getDesktopSecurityContext 的
  * 放行范围与 allowList 语义（经真实 createSecurityContext + 内置策略评估链）。
  *
- * 核心收紧点：工作区写入视图为空时，工作目录只对 read 放行，write 一律落到询问链（免询问 /
- * allowList / 弹窗）。dao / sessionService / paths / skillService / policyService 全部 mock
+ * 核心收紧点：工作区写入视图为空时，工作目录只对 read 放行，write 一律落到询问链（allowList /
+ * 弹窗）。dao / sessionService / paths / skillService / policyService 全部 mock
  * （照 sessionStorage.test.ts 的惯例），allowList 条目语义保持真实 ——
  * Read 条目不得隐含写权限这条语义要真的被验证。
  *
@@ -13,9 +13,12 @@
  * 它们钉的是询问链本身，「区内写要问」只在空视图下成立；过去这一点靠的是没 mock electron 时
  * app.getPath 抛错被吞掉，现在写明。PERM-W 一组改回真实实现，看视图算得出来 / 算不出来的两面。
  *
- * PERM-C：protect-shuvix-config（force-ask）守 vars.shuvixConfigDirs = 策略 / agent / hook / 默认技能
- * 目录（这里是 POLICIES_DIR / AGENTS_DIR / HOOKS_DIR / DEFAULT_SKILLS）—— 免询问、「允许并记住」与
- * 审查员都答不了它（PERM-C4 真实走一遍 enforcePath，审查者替身经 setPermissionReviewer 注入）。
+ * PERM-C：出厂的 protect-shuvix-config 已删（2026-10-01：出厂不留硬限制），但它引用的事实变量
+ * vars.shuvixConfigDirs = 策略 / agent / hook / 默认技能目录（这里是 POLICIES_DIR / AGENTS_DIR /
+ * HOOKS_DIR / DEFAULT_SKILLS）照旧由桌面给出。这一组把退役那份原文当作**用户策略**装回来
+ * （state.userPolicies），钉住变量表的接线与 force-ask 的投递：「允许并记住」与审查员都答不了它
+ * （PERM-C4 真实走一遍 enforcePath，审查者替身经 setPermissionReviewer 注入）；只有内置时
+ * 那里的写只是普通的 ask-on-write（PERM-C0）。
  *
  * DP-A1：ask-on-write 对**本会话自己的** artifacts 目录免询问（读哪儿都不问，只有凭据位置例外）
  * （vars.sessionArtifactsDir = getSessionArtifactsDir(ctx.sessionId)）—— 会话之间互不豁免，
@@ -26,6 +29,8 @@ import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
 import { join } from 'node:path'
 import { readFileSync, realpathSync } from 'node:fs'
 import { tmpdir, homedir } from 'node:os'
+import type { UserPolicyFile } from '@shuvix/agent-runtime'
+import { retiredPolicy } from '../../../../../../packages/agent-runtime/src/security/__tests__/fixtures/retiredPolicies'
 
 const WORKSPACE = join(tmpdir(), 'shuvix-policy-ws')
 const TOOL_RESULTS = join(tmpdir(), 'shuvix-policy-tool-results')
@@ -36,14 +41,16 @@ const EXTERNAL_SKILLS = join(tmpdir(), 'shuvix-policy-external-skills')
 const OUTSIDE = join(tmpdir(), 'shuvix-policy-elsewhere')
 /** app.getPath('userData') 的替身（工作区写入视图的规格要它；盘上不存在也行） */
 const USER_DATA = join(tmpdir(), 'shuvix-policy-userdata')
-/** protect-shuvix-config 的另外三个目录（getVars 的 shuvixConfigDirs；第四个是 DEFAULT_SKILLS） */
+/** vars.shuvixConfigDirs 的另外三个目录（第四个是 DEFAULT_SKILLS） */
 const POLICIES_DIR = '/tmp/shuvix-policies'
 const AGENTS_DIR = '/tmp/shuvix-agents'
 const HOOKS_DIR = '/tmp/shuvix-hooks'
 
 const state = vi.hoisted(() => ({
-  settings: undefined as { autoAllow?: boolean; allowList?: string[] } | undefined,
+  settings: undefined as { allowList?: string[] } | undefined,
   externalDirs: [] as { path: string }[],
+  /** ~/.shuvix/policies 的替身（policyService.getUserPolicies 现扫的结果） */
+  userPolicies: [] as UserPolicyFile[],
   // 内置策略的事实源 —— 运行时读随包发布的目录，这里直接读仓库里那一份（同一批文件）。
   // src/main/services/__tests__ 往上六级是仓库根
   builtinDir: `${__dirname}/../../../../../../packages/agent-runtime/src/security/builtinPolicies/md`
@@ -67,7 +74,7 @@ vi.mock('../skillService', () => ({
 }))
 vi.mock('../policyService', () => ({
   policyService: {
-    getUserPolicies: () => [],
+    getUserPolicies: () => state.userPolicies,
     // 与 policyService.readBuiltinPolicyMd 同形，只是基准目录直接钉在仓库那份上
     readBuiltinPolicyMd: (fileName: string) => {
       try {
@@ -85,7 +92,7 @@ vi.mock('../../utils/paths', () => ({
   getBuiltinSkillsDir: () => BUILTIN_SKILLS,
   getMemoryRootDir: () => MEMORY_ROOT,
   getDefaultBotsDir: () => '/tmp/shuvix-bots',
-  // protect-shuvix-config 的四个目录（getVars 的 shuvixConfigDirs）
+  // vars.shuvixConfigDirs 的四个目录（退役的 protect-shuvix-config 引用它们）
   getDefaultPoliciesDir: () => POLICIES_DIR,
   getDefaultAgentsDir: () => AGENTS_DIR,
   getDefaultHooksDir: () => HOOKS_DIR,
@@ -158,6 +165,7 @@ function setPlatform(p: NodeJS.Platform): void {
 beforeEach(() => {
   state.settings = undefined
   state.externalDirs = []
+  state.userPolicies = []
   // 旧用例一律显式拿空视图（见文件头）；要看真实视图的用例自己换回去
   workspaceWriteViewSpy.mockReset()
   workspaceWriteViewSpy.mockImplementation(emptyWorkspaceView)
@@ -253,9 +261,9 @@ describe('桌面安全 provider — allowList 语义（force-allow 层）', () =
 })
 
 describe('桌面安全 provider — evaluateReadOnly（被动 UI 判定）', () => {
-  it('缺省不含 force-allow 层：allowList/autoAllow 不放宽 UI 范围（凭据目录 ask 门仍生效）', () => {
+  it('缺省不含 force-allow 层：allowList 不放宽 UI 范围（凭据目录 ask 门仍生效）', () => {
     const credential = join(homedir(), '.ssh', 'known_hosts')
-    state.settings = { autoAllow: true, allowList: [`Read(${credential})`] }
+    state.settings = { allowList: [`Read(${credential})`] }
     expect(context().evaluateReadOnly('read', { type: 'path', path: credential })).toBe(false)
     // 读只有凭据位置有门：工作区内外都放行
     expect(context().evaluateReadOnly('read', { type: 'path', path: join(WORKSPACE, 'b') })).toBe(
@@ -270,20 +278,16 @@ describe('桌面安全 provider — evaluateReadOnly（被动 UI 判定）', () 
 describe('桌面安全 provider — 不缓存 settings 快照', () => {
   const target = join(WORKSPACE, 'a.txt')
 
-  it('同一个 context 实例在 settings 变化后立即反映新值（会话中途开免询问不该还弹旧快照）', () => {
+  it('同一个 context 实例在 settings 变化后立即反映新值（会话中途「允许并记住」不该还弹旧快照）', () => {
     // context 在建会话时创建一次、整会话复用；每次判定都必须现读 SQLite
     const ctx = context()
 
     expect(effectOf(ctx, 'write', target)).toBe('ask')
 
-    // 会话中途打开「免询问」
-    state.settings = { autoAllow: true }
-    expect(effectOf(ctx, 'write', target)).toBe('allow')
-    expect(ctx.evaluate('write', { type: 'path', path: target }).winning).toBe('session-grants#0')
-
-    // 再关掉，改为对具体路径「允许并记住」
+    // 会话中途对具体路径「允许并记住」
     state.settings = { allowList: [`Write(${target})`] }
     expect(effectOf(ctx, 'write', target)).toBe('allow')
+    expect(ctx.evaluate('write', { type: 'path', path: target }).winning).toBe('session-grants#1')
 
     // 条目被撤掉后同样立刻失效
     state.settings = { allowList: [] }
@@ -291,35 +295,39 @@ describe('桌面安全 provider — 不缓存 settings 快照', () => {
   })
 })
 
-describe('桌面安全 provider — deny 层压制 force-allow（protect-credentials 策略）', () => {
-  it('凭据目录写入即使开了免询问也 deny', () => {
-    state.settings = { autoAllow: true }
+describe('桌面安全 provider — 凭据目录的写入是普通写入（protect-credentials 只管读）', () => {
+  it('凭据目录写入 → ask-on-write#0（不再 deny）；「允许并记住」能盖住它', () => {
     const sshKey = join(homedir(), '.ssh', 'id_rsa')
     const decision = context().evaluate('write', { type: 'path', path: sshKey })
-    expect(decision.effect).toBe('deny')
-    expect(decision.winning).toContain('protect-credentials')
+    expect(verdict(decision)).toEqual({ effect: 'ask', winning: 'ask-on-write#0' })
+    expect(decision.matched).not.toContain('protect-credentials#0')
+    // 卡片给出「记住」—— 记下之后这条写真的不再问
+    expect(decision.ask?.rememberEntry).toBe(decision.ask?.command)
+
+    state.settings = { allowList: [`Write(${sshKey})`] }
+    expect(verdict(context().evaluate('write', { type: 'path', path: sshKey }))).toEqual({
+      effect: 'allow',
+      winning: 'session-grants#1'
+    })
   })
 })
 
 describe('桌面安全 provider — ~/.shuvix/.session-state 是凭据位置', () => {
-  it('PERM-S1 加密 API key 的那把密钥：读 → protect-credentials#1 问；写 → 拒（免询问开着、allowList 里有 Write(<它>) 也拒）', () => {
+  it('PERM-S1 加密 API key 的那把密钥：读 → protect-credentials#0 问；写 → 普通的 ask-on-write#0，「允许并记住」后放行', () => {
     const state_ = join(homedir(), '.shuvix', '.session-state')
     const read = context().evaluate('read', { type: 'path', path: state_ })
-    expect(verdict(read)).toEqual({ effect: 'ask', winning: 'protect-credentials#1' })
+    expect(verdict(read)).toEqual({ effect: 'ask', winning: 'protect-credentials#0' })
 
-    for (const settings of [
-      undefined,
-      { autoAllow: true },
-      { allowList: [`Write(${state_})`] },
-      { autoAllow: true, allowList: [`Write(${state_})`] }
-    ]) {
+    const cases: Array<
+      [{ allowList?: string[] } | undefined, { effect: string; winning: string }]
+    > = [
+      [undefined, { effect: 'ask', winning: 'ask-on-write#0' }],
+      [{ allowList: [`Write(${state_})`] }, { effect: 'allow', winning: 'session-grants#1' }]
+    ]
+    for (const [settings, expected] of cases) {
       state.settings = settings
       const write = context().evaluate('write', { type: 'path', path: state_ })
-      expect({ settings, ...verdict(write) }).toEqual({
-        settings,
-        effect: 'deny',
-        winning: 'protect-credentials#0'
-      })
+      expect({ settings, ...verdict(write) }).toEqual({ settings, ...expected })
     }
   })
 })
@@ -423,8 +431,8 @@ describe.skipIf(process.platform === 'win32')(
         useComputedWorkspaceView()
         const ws = wsOf()
         expect(varsAt(ws)).toMatchObject(emptyWorkspaceView())
-        // 这里 shuvixConfigDirs 是替身目录（/tmp/shuvix-*），真实的 ~/.shuvix/agents 不归 protect-shuvix-config：
-        // 问它的是 ask-on-write —— 恰好说明工作区豁免没给出去
+        // 出厂没有守 ShuviX 配置目录的策略（这里也没装用户策略）：问它的是 ask-on-write ——
+        // 恰好说明工作区豁免没给出去
         expect(
           verdict(contextAt(ws).evaluate('write', { type: 'path', path: targetOf() }))
         ).toEqual({
@@ -455,12 +463,16 @@ describe.skipIf(process.platform === 'win32')(
 )
 
 /**
- * protect-shuvix-config（force-ask）：策略、agent、hook、默认技能目录（~/.shuvix/{policies,agents,hooks,skills}）
- * 里的写入恒问人 —— 免询问、「允许并记住」、自动审查都答不了（审查员与触发它的 hook 本身就是那里的 md）。
- * 外部技能目录与随包的内置技能目录不在其中，照常走 ask-on-write。
+ * vars.shuvixConfigDirs + 退役的 protect-shuvix-config（作为用户策略装回）：策略、agent、hook、默认技能目录
+ * （~/.shuvix/{policies,agents,hooks,skills}）里的写入恒问人 ——「允许并记住」、自动审查都答不了（审查员与
+ * 触发它的 hook 本身就是那里的 md）。外部技能目录与随包的内置技能目录不在变量里，照常走 ask-on-write。
+ * 出厂（只有内置）时这些目录里的写只是普通的 ask-on-write（PERM-C0）。
  */
-describe('桌面安全 provider — ShuviX 自己的配置（protect-shuvix-config）', () => {
+describe('桌面安全 provider — ShuviX 自己的配置（vars.shuvixConfigDirs）', () => {
   const usedSessions = new Set<string>()
+  const withConfigGuard = (): void => {
+    state.userPolicies = [retiredPolicy('protect-shuvix-config')]
+  }
   afterEach(() => {
     for (const id of usedSessions) {
       clearReviewState(id)
@@ -469,7 +481,27 @@ describe('桌面安全 provider — ShuviX 自己的配置（protect-shuvix-conf
     usedSessions.clear()
   })
 
-  it('PERM-C1 写 agents / policies / hooks 目录与 DEFAULT_SKILLS → protect-shuvix-config#0（force-ask），卡片不给「允许并记住」；只管写、按路径段边界判', () => {
+  it('PERM-C0 出厂（只有内置）：这四个目录里的写是普通的 ask-on-write#0，可以记住；读不问', () => {
+    for (const p of [
+      join(AGENTS_DIR, 'permission-reviewer.md'),
+      join(POLICIES_DIR, 'ask-on-write.md'),
+      join(HOOKS_DIR, 'auto-review.md'),
+      join(DEFAULT_SKILLS, 'demo', 'SKILL.md')
+    ]) {
+      const d = context().evaluate('write', { type: 'path', path: p })
+      expect({ p, effect: d.effect, tier: d.tier, winning: d.winning }).toEqual({
+        p,
+        effect: 'ask',
+        tier: 'ask',
+        winning: 'ask-on-write#0'
+      })
+      expect(d.ask?.rememberEntry, p).toBe(d.ask?.command)
+      expect(context().evaluate('read', { type: 'path', path: p }).winning, p).toBe('default:path')
+    }
+  })
+
+  it('PERM-C1 装回 protect-shuvix-config：写 agents / policies / hooks 目录与 DEFAULT_SKILLS → protect-shuvix-config#0（force-ask），卡片不给「允许并记住」；只管写、按路径段边界判', () => {
+    withConfigGuard()
     for (const p of [
       join(AGENTS_DIR, 'permission-reviewer.md'),
       join(POLICIES_DIR, 'ask-on-write.md'),
@@ -497,12 +529,12 @@ describe('桌面安全 provider — ShuviX 自己的配置（protect-shuvix-conf
     expect(sibling.matched).not.toContain('protect-shuvix-config#0')
   })
 
-  it('PERM-C2 免询问开着、或 allowList 里有 Write(<agents 目录>) / Write(<那个文件>) —— 照样问：授权命中了，但压不过 force-ask', () => {
+  it('PERM-C2 装回 protect-shuvix-config：allowList 里有 Write(<agents 目录>) / Write(<那个文件>) —— 照样问：授权命中了，但压不过 force-ask', () => {
+    withConfigGuard()
     const p = join(AGENTS_DIR, 'x.md')
-    const cases: Array<[{ autoAllow?: boolean; allowList?: string[] }, string]> = [
-      [{ autoAllow: true }, 'session-grants#0'],
-      [{ allowList: [`Write(${AGENTS_DIR})`] }, 'session-grants#2'],
-      [{ allowList: [`Write(${p})`] }, 'session-grants#2']
+    const cases: Array<[{ allowList?: string[] }, string]> = [
+      [{ allowList: [`Write(${AGENTS_DIR})`] }, 'session-grants#1'],
+      [{ allowList: [`Write(${p})`] }, 'session-grants#1']
     ]
     for (const [settings, grantRule] of cases) {
       state.settings = settings
@@ -514,12 +546,14 @@ describe('桌面安全 provider — ShuviX 自己的配置（protect-shuvix-conf
       })
       expect(d.matched, JSON.stringify(settings)).toContain(grantRule)
     }
-    // 对照：同样的授权对普通的区外文件是放行
-    state.settings = { autoAllow: true }
-    expect(effectOf(context(), 'write', join(OUTSIDE, 'a.txt'))).toBe('allow')
+    // 对照：同样形状的授权对普通的区外文件是放行
+    const outside = join(OUTSIDE, 'a.txt')
+    state.settings = { allowList: [`Write(${outside})`] }
+    expect(effectOf(context(), 'write', outside)).toBe('allow')
   })
 
-  it('PERM-C3 只守 ~/.shuvix/skills：外部技能目录、随包的内置技能目录里的写是普通的 ask-on-write#0（可以记住）', () => {
+  it('PERM-C3 装回 protect-shuvix-config 也只守 ~/.shuvix/skills：外部技能目录、随包的内置技能目录里的写是普通的 ask-on-write#0（可以记住）', () => {
+    withConfigGuard()
     state.externalDirs = [{ path: EXTERNAL_SKILLS }]
     for (const p of [
       join(EXTERNAL_SKILLS, 'demo', 'SKILL.md'),
@@ -537,7 +571,8 @@ describe('桌面安全 provider — ShuviX 自己的配置（protect-shuvix-conf
     }
   })
 
-  it('PERM-C4 真实 enforcePath + 审查者替身：写 agents 目录 → 审查者 0 次、弹卡 1 次（卡上没有审查意见）；写工作区外的普通文件 → 审查者 1 次（它答不出 → 照旧弹卡）', async () => {
+  it('PERM-C4 装回 protect-shuvix-config + 真实 enforcePath + 审查者替身：写 agents 目录 → 审查者 0 次、弹卡 1 次（卡上没有审查意见）；写工作区外的普通文件 → 审查者 1 次（它答不出 → 照旧弹卡）', async () => {
+    withConfigGuard()
     const sessionId = 'perm-c4'
     usedSessions.add(sessionId)
     const reviewer = vi.fn(

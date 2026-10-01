@@ -37,7 +37,6 @@ import type {
   SessionUpdateEnabledToolsParams,
   SessionUpdateKnowledgeBasesParams,
   SessionUpdateProjectParams,
-  SessionUpdateAutoAllowParams,
   SessionAllowListRemoveParams,
   SubAgentCreateParams,
   SubAgentSaveParams,
@@ -282,7 +281,6 @@ declare global {
 
   /** 会话级配置 */
   interface SessionSettings {
-    autoAllow?: boolean
     allowList?: string[]
     /** 扩展能力勾选（mcp:/skill:）；只在创建 Agent 时读一次，运行时存在期间只读 */
     enabledTools?: string[]
@@ -302,7 +300,7 @@ declare global {
     model: string
     systemPrompt: string
     modelMetadata: SessionModelMetadata
-    /** 会话级配置（SSH 免询问等） */
+    /** 会话级配置（路径授权、扩展能力勾选等） */
     settings: SessionSettings
     createdAt: number
     updatedAt: number
@@ -579,7 +577,6 @@ declare global {
       updateKnowledgeBases: (
         params: SessionUpdateKnowledgeBasesParams
       ) => Promise<{ success: boolean }>
-      updateAutoAllow: (params: SessionUpdateAutoAllowParams) => Promise<{ success: boolean }>
       removeAllowListEntry: (params: SessionAllowListRemoveParams) => Promise<{ success: boolean }>
       delete: (id: string) => Promise<{ success: boolean }>
       /** 获取单个会话（含计算属性） */

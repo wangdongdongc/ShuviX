@@ -1,6 +1,5 @@
 ---
 shuvix: policy v1
-shuvix-builtin: true
 name: ask-on-database
 shuvix-displayName: Ask Before Running SQL
 description: Every SQL statement on a database connection that has write access asks you per statement.

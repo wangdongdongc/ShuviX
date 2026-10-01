@@ -2,7 +2,7 @@
 shuvix: okf v0.2
 type: Guide
 title: 'セキュリティポリシーファイル（shuvix: policy v1）'
-description: 'ShuviX セキュリティポリシーの完全な仕様 —— 規則が見るリクエスト文書（subject / action / tool / object / env / vars）、五つの条件キー、CEL `match`、効果とその優先順位、確認に誰が答えるか（まず自動レビュー、次にあなた）、`lets`、ファイルが不正になる条件、組み込みポリシー、そしてゲートの緩め方と締め方。'
+description: 'ShuviX セキュリティポリシーの完全な仕様 —— 規則が見るリクエスト文書（subject / action / tool / object / env / vars）、五つの条件キー、CEL `match`、効果とその優先順位、確認に誰が答えるか（まず自動レビュー、次にあなた）、`lets`、ファイルが不正になる条件、四つの組み込みポリシー、そしてゲートの緩め方と自分のゲートの足し方。'
 tags: [shuvix, policy, security, format, spec, cel]
 status: stable
 sources:
@@ -31,7 +31,8 @@ protect-credentials が挙げる認証情報には触れられません）。ホ
 `ask` はすぐにユーザーへ届くわけではありません。**自動レビュー**がオンのとき（設定 → 一般 → セキュリティ、既定で
 オン）、レビューするエージェントがまず答えます —— ユーザーが書いたものと操作そのものだけを見る独立した
 コンテキストで：普段の作業は通し、明らかに有害なものは拒否し、残りは自分の意見をカードに添えてユーザーの
-前に出します。レビュアーはフィルターであって境界ではありません —— 境界はサンドボックスと `deny` 規則です。
+前に出します。レビュアーはフィルターであって境界ではありません —— 境界はサンドボックスと、あなたが自分で
+書く `deny` 規則です。
 `force-ask` は常にユーザーに届きます。レビュアーの正体は組み込み hook `auto-review` とエージェント
 `permission-reviewer` です。何を見るか、どう変えるかは `hook-md` エントリを参照してください。
 
@@ -46,8 +47,8 @@ protect-credentials が挙げる認証情報には触れられません）。ホ
 ---
 shuvix: policy v1
 name: protect-drafts
-shuvix-displayName: Never overwrite my drafts
-description: Files under ~/Documents/drafts can be read but never written by an agent.
+shuvix-displayName: 下書きは上書きさせない
+description: ~/Documents/drafts 配下のファイルは、エージェントには読めるが書けない。
 shuvix-policy-scope:
   subject.kind: [agent]
   object.type: [path]
@@ -58,11 +59,11 @@ shuvix-policy-rules:
   - effect: deny
     action: [write]
     match: inDir(object.path, drafts)
-    prompt: Write refused — the drafts folder is read-only for agents; ask the user to move the file out first.
+    prompt: 書き込みは拒否された —— 下書きフォルダはエージェントには読み取り専用。変更が必要なら、先にファイルを外へ移すようユーザーに頼むこと。
 ---
 
-**What it does**: any write under `~/Documents/drafts` is refused, even with auto-allow on.
-The body is documentation only — the engine never reads it.
+**このポリシーの役割**：`~/Documents/drafts` 配下への書き込みはすべて拒否される。「許可して記憶」で
+許可していても同じ。本文は人のための説明で、エンジンは読まない。
 ```
 
 ## frontmatter キー
@@ -102,10 +103,10 @@ deny  >  force-ask  >  force-allow  >  ask  >  allow  >  （何も一致しな�
 
 - `ask` は呼び出しをまず自動レビューに渡し、それで決まらなければユーザーの前に出します。`allow` は
   そのまま通し、`deny` は拒否します（エージェントは `prompt` を理由として受け取る）。
-- `force-allow` はあらゆる `ask` にも勝つ許可 —— ShuviX はセッションの許諾（「自動許可」と
-  「許可して記憶」）にこれを使います。`force-allow` はレビュアーを通りません。
+- `force-allow` はあらゆる `ask` にも勝つ許可 —— ShuviX はセッションの許諾（「許可して記憶」）に
+  これを使います。`force-allow` はレビュアーを通りません。
 - `force-ask` は `force-allow` でさえ飛ばせず、ユーザーだけが答える確認 —— 「このゲートはセッション単位の
-  同意もレビュアーも受け付けない」（bot ファイルと ShuviX の設定のゲートがそれです）。
+  同意もレビュアーも受け付けない」。
 - `deny` はすべてに勝ちます。
 
 条件はネイティブな述語にコンパイルされ、CEL の**前**に評価されるので、条件が外れた規則はその `match`
@@ -176,7 +177,6 @@ vars     ホスト変数表（後述）+ セッションの許諾
 | `sandboxWriteDenied`          | string[] | その中の保護された場所（ShuviX 自身のファイル、認証情報の場所など）                    |
 | `sandboxProtectedPatterns`    | string[] | 保護された git メタデータの正規表現（`.git/hooks`、`.git/config` など）、`matches` と併用 |
 | `systemDirs`                  | string[] | 追加の OS ディレクトリ（Windows のシステム / プログラムディレクトリ）          |
-| `autoAllow`                   | boolean  | セッションの「自動許可」スイッチ                                              |
 | `grantedRead`、`grantedWrite` | string[] | ユーザーがこのセッションで「許可して記憶」と答えたパス（書き込みは読み取りを含意） |
 
 ホストが供給せず、かつ規則が `inDir` のディレクトリ引数として**だけ**使う `vars.x` は「そのような
@@ -194,39 +194,62 @@ scope と交差して空になる規則；不正な `lets`（不正な名前、�
 
 ## 組み込みポリシー
 
-アプリケーションに十二本同梱（UI 言語ごとに一つ；**規則は常に英語ファイルから取られ**、翻訳は人が読む
-テキストだけを変える）：
+アプリケーションに四本同梱（UI 言語ごとに一つ；**規則は常に英語ファイルから取られ**、翻訳は人が読む
+テキストだけを変える）。既定ではできるだけ確認を減らすので、`deny` や `force-ask` を使うものは一本も
+ありません —— この二つはあなた自身のポリシーのためにあります：
 
 | 名前                            | ゲート                                                                                                       |
 | ------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `protect-credentials`           | 認証情報の場所（`.ssh`、`.aws`……）への書き込みを拒否、読み取りを確認；サンドボックス内のコマンドはどちらも不可 |
-| `protect-system`                | OS ディレクトリへの書き込みを拒否                                                                             |
-| `block-catastrophic-commands`   | マシンを破壊する少数のコマンドを、解析された構造で判断して拒否（`rm -rf /`、`mkfs`、デバイスへの `dd`、`Format-Volume`……）     |
-| `protect-bot-files`             | `~/.shuvix/bots` 配下のあらゆる書き込みを **force-ask**                                                       |
-| `protect-shuvix-config`         | `~/.shuvix/policies`、`agents`、`hooks`、`skills` 配下のあらゆる書き込みを **force-ask**                      |
+| `protect-credentials`           | 認証情報の場所（`.ssh`、`.aws`……）を読む前に確認；サンドボックス内のコマンドは読み書きともに不可。そこへの書き込みは普通の書き込み（ask-on-write） |
 | `ask-on-write`                  | ファイル書き込みを diff プレビュー付きで確認 —— この会話の成果物、作業ディレクトリ（その中の保護された場所を除く、Windows を除く）、サンドボックス有効時は制限付きコマンドがもともと書ける場所を除く |
 | `ask-on-command`                | サンドボックスに閉じ込められていないコマンドを確認（`object.sandboxed` が false：サンドボックスがオフ／使えない、フルアクセスの要求、`ssh`） |
-| `git-safety`                    | 破壊的な git 操作を確認（`init`、`restore`、強制 checkout、ブランチ削除）                                     |
-| `ask-on-database`               | 書き込み可能なデータベース接続上のすべての文を確認                                                            |
-| `ask-on-sub-session`            | サブセッションを開くときに一度確認（`tool.name == 'session' && tool.operation == 'create-sub-session'`）       |
-| `ask-on-new-site`               | あなた自身の Chrome（ShuviX サイドパネル）で、会話が初めてあるサイトを開く・操作するときに確認（`object.browser == 'chrome'`） |
-| `session-grants`                | セッションの自動許可スイッチがオンの間はすべてを、ユーザーが「許可して記憶」と答えたパス配下の読み書きを `force-allow` |
+| `session-grants`                | ユーザーがこのセッションで「許可して記憶」と答えたパス配下の読み書きを `force-allow`                           |
 
 サイドバーの「セキュリティポリシー」グループが各ポリシーを一覧します（行を開くとその md、規則はプロパティ
 カードに）。組み込み行のメニューにある「上書きコピーを作成」は現在のテキストを
 `~/.shuvix/policies/<name>.md` に書き出します。
+
+以前のバージョンはもっと多くのゲートを同梱していました：OS ディレクトリへの書き込みと、マシンを破壊する
+少数のコマンドの拒否、bot ファイルと ShuviX 自身の設定への書き込みの常時確認、そして破壊的な git 操作、
+書き込み可能なデータベース接続での SQL、サブセッションを開くこと、あなたの Chrome で新しいサイトに
+触れることの確認です。これらは意図して外されましたが、実行ポイントはすべて残っている（上のオブジェクト
+種別）ので、どれもあなた自身のポリシーとして書き戻せます。
 
 ## 緩める、締める
 
 - **ゲートを外す**：名前で上書きし、`shuvix-policy-rules: []`。
 - 組み込みに触れずに**一箇所を確認から免除**：`force-allow` の規則を持つ新しいポリシー
   （`force-allow` は `ask` に勝つ）。例：あるディレクトリ配下の書き込み。
-- **強い停止を加える**：`deny` の規則 —— 自動許可を含むすべてに勝つ。
-- **ゲートを飛ばせなくする**：`force-ask` —— 自動許可も自動レビューも答えられません。ある種の操作に
-  レビュアーを関わらせたくないときも同じ書き方です。例：`object.unconfinedReason == 'escalated'` で
-  「エージェントがサンドボックスを出たがるときは必ず私に確認する」。
+- **確認を加える**：気にかけるオブジェクトに `ask` の規則を持つ新しいポリシー —— 下の例を参照。
+- **強い停止を加える**：`deny` の規則 —— 「許可して記憶」を含むすべてに勝つ。
+- **ゲートを飛ばせなくする**：`force-ask` —— 「許可して記憶」の許可も自動レビューも答えられません。
+  ある種の操作にレビュアーを関わらせたくないときも同じ書き方です。例：
+  `object.unconfinedReason == 'escalated'` で「エージェントがサンドボックスを出たがるときは必ず私に
+  確認する」、`vars.botsDir` / `vars.shuvixConfigDirs` 配下への書き込みで「エージェントが bot ファイルや
+  ShuviX 自身の設定を変えるときは必ず私に確認する」。
 - 規則は狭く：deny は呼び出しごとに免除できないので、日常の作業で発火する規則は、見逃す規則より
   悪い。
+
+たとえば、書き込み可能なデータベース接続での SQL 文をすべて事前に確認するには：
+
+```markdown
+---
+shuvix: policy v1
+name: ask-before-sql
+description: 書き込み可能なデータベース接続での文は、すべて事前に確認する。
+shuvix-policy-scope:
+  subject.kind: [agent]
+  object.type: [database]
+shuvix-policy-rules:
+  - effect: ask
+    action: [execute]
+    match: '!object.readonly'
+    prompt: この接続には書き込み権限がある —— この文はサーバー上のデータを変更・削除しうる。
+---
+```
+
+破壊的な git 操作も同じ形です：`object.type: [gitTool]` と、
+`object.gitAction == 'restore' || (object.gitAction == 'checkout' && object.force)` のような `match`。
 
 ## ファイルに無いもの
 

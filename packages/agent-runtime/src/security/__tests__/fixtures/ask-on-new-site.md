@@ -1,6 +1,5 @@
 ---
 shuvix: policy v1
-shuvix-builtin: true
 name: ask-on-new-site
 shuvix-displayName: Ask Before Using a New Site in Chrome
 description: In your own Chrome, the agent asks before it opens or works on a site it has not used in this conversation.

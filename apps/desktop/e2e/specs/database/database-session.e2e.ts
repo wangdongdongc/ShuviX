@@ -11,7 +11,9 @@
  *     声明，三条路任一条都给这两个工具，而且发给模型的就是这两个；退役的裸名 `database` 什么也不给；
  *   - **主流程**（DBE-F，一条勾了 database 的会话，开在界面上）：列连接 → 只读连接上读、写不进去
  *     （预检挡一层、库自己挡一层，agent 也改不回可写）→ 可写连接上每条语句都问（卡片写明是哪个
- *     连接）：允许 / 拒绝 / 「其它」/ 中止 / 免询问 → 名字不对、连不上、一次几条语句。
+ *     连接）：允许 / 拒绝 / 「其它」/ 中止 / 撤掉策略就不问 → 名字不对、连不上、一次几条语句。
+ *     出厂策略对数据库一句都不问（2026-10-01 删了 ask-on-database）：这里的询问来自把那份退役策略
+ *     原样装成**用户策略**（`seedRetiredPolicy`）—— 钉住的是数据库门的接线与卡片，不是出厂行为；
  *     「SQL 到没到服务器」一律按 bridge 的语句日志断（含扩展协议的 `P`），行数按库里的真实行数断；
  *   - **呈现**（DBE-R）：两个工具的标签、图标与「连接名 · 说明」；模型还在叫退役的 `database`、
  *     旧会话里的 `database` 调用，都仍有数据库的标签与图标。
@@ -30,8 +32,10 @@ import {
   createPinnedChildSession,
   createProject,
   eventRecorder,
+  removeRetiredPolicy,
   securityDecisions,
   seedFakeProvider,
+  seedRetiredPolicy,
   waitRendererReady,
   writeAgentMd,
   writeBotMd,
@@ -128,7 +132,7 @@ let picker: ToolPickerPane
 let ro: PgBridge
 let rw: PgBridge
 let projectId = ''
-/** ask-on-database 的显示名（随界面语言变 —— 从策略列表里取，不写死） */
+/** 用户策略 ask-on-database（退役内置策略的原样副本）的显示名 —— 从策略列表里取，不写死 */
 let askOnDatabaseName = ''
 
 // ─── IPC 助手 ───
@@ -157,8 +161,6 @@ const listMessages = (sid: string): Promise<ListedMessage[]> =>
   app.main.eval<ListedMessage[]>(`window.api.message.list(${JSON.stringify(sid)})`)
 const runtimeStatuses = (sid: string): Promise<Record<string, unknown>> =>
   app.main.eval(`window.api.runtime.statuses(${JSON.stringify(sid)})`)
-const setAutoAllow = (sid: string, on: boolean): Promise<unknown> =>
-  app.main.eval(`window.api.session.updateAutoAllow(${JSON.stringify({ id: sid, autoAllow: on })})`)
 /** 建一条勾了 mcp:database 的会话，让运行时起来，回会话 id */
 const tickedSession = async (title: string): Promise<string> => {
   const sid = await createSession({ title })
@@ -291,9 +293,14 @@ beforeAll(async () => {
   writeFileSync(join(projDir, 'notes', 'db-note.md'), '# DB note\n')
   projectId = (await createProject(app.main, { name: 'DB-Session-Proj', path: projDir })).id
 
+  // 出厂不再对数据库发问：把退役的 ask-on-database 原样装成用户策略，可写连接上的语句才有卡可测
+  seedRetiredPolicy(app, 'ask-on-database')
   const policies =
-    await app.main.eval<Array<{ name: string; displayName: string }>>(`window.api.policy.list()`)
-  askOnDatabaseName = policies.find((p) => p.name === 'ask-on-database')?.displayName ?? ''
+    await app.main.eval<Array<{ name: string; displayName: string; source: string }>>(
+      `window.api.policy.list()`
+    )
+  askOnDatabaseName =
+    policies.find((p) => p.name === 'ask-on-database' && p.source === 'user')?.displayName ?? ''
   expect(askOnDatabaseName).not.toBe('')
 }, 120_000)
 
@@ -787,9 +794,9 @@ describe('主流程（DBE-F：一条勾了 database 的会话，开在界面上�
     expect(await rw.count('items')).toBe(2)
   }, 120_000)
 
-  it('DBE-F8 会话开了免询问：可写连接上的语句不问就跑，决策记在 session-grants 的免询问规则名下', async () => {
+  it('DBE-F8 出厂不问：撤掉那份用户策略，可写连接上的语句不问就跑、真写进去，决策是缺省放行', async () => {
     const SQL = "INSERT INTO items (label) VALUES ('delta')"
-    await setAutoAllow(sid, true)
+    removeRetiredPolicy(app, 'ask-on-database')
     try {
       provider.reset()
       const { ends, since } = await driver.run(sid, [q('dbf8_insert', 'e2e-rw', SQL, 'Add delta')])
@@ -798,11 +805,16 @@ describe('主流程（DBE-F：一条勾了 database 的会话，开在界面上�
       expect(ends.dbf8_insert.result).toBe('OK: INSERT, 1 row affected')
       expect(rw.saw("'delta'")).toBe(true)
       expect(await rw.count('items')).toBe(3)
-      const decision = await decisionOf('dbf8_insert')
-      expect(decision).toMatchObject({ objectKind: 'database', effect: 'allow' })
-      expect(decision.winning).toBe('session-grants#0')
+      // 门照样过了、照样记账：没有规则命中 → 缺省放行
+      expect(await decisionOf('dbf8_insert')).toMatchObject({
+        objectKind: 'database',
+        action: 'execute',
+        effect: 'allow',
+        winning: 'default:database'
+      })
     } finally {
-      await setAutoAllow(sid, false)
+      // 后面的 DBE-F11 还要一张卡
+      seedRetiredPolicy(app, 'ask-on-database')
     }
   }, 120_000)
 

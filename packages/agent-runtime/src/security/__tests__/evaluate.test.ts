@@ -438,7 +438,7 @@ describe('evaluate — CEL match 谓词（旧结构化匹配语义的等价表�
     expect(evaluate(sshChannel, makeRequest({ object: COMMAND_OBJECT })).matched).toEqual([])
   })
 
-  it('EV-13 gitTool 属性条件：gitAction 收窄 + force/delete 细化（git-safety 的匹配形态）', () => {
+  it('EV-13 gitTool 属性条件：gitAction 收窄 + force/delete 细化（从前出厂 git-safety 的匹配形态）', () => {
     const gitSafety = [
       ask(
         'g1',
@@ -1072,7 +1072,7 @@ describe('evaluate — opts.realPath（inDir 按位置比较）', () => {
         systemDirs: [],
         dotfiles: '/data'
       }),
-      getSessionGrants: () => ({ autoAllow: false, allowList: [] }),
+      getSessionGrants: () => ({ allowList: [] }),
       readBuiltinPolicyMd: INLINE_POLICY_MD,
       getUserPolicies: () => userPolicies
     }
@@ -1129,16 +1129,19 @@ describe('evaluate — opts.realPath（inDir 按位置比较）', () => {
     const key = pathRequest('/data/ssh/id_rsa')
     expect(decideAssembled(key, sshIsLinked)).toMatchObject({
       effect: 'ask',
-      winning: 'protect-credentials#1'
+      winning: 'protect-credentials#0'
     })
     expect(decideAssembled(key, undefined)).toMatchObject({
       effect: 'allow',
       winning: 'default:path',
       matched: []
     })
+    // protect-credentials 只管读（2026-10-01 去掉了写入 deny）：凭据位置的写照普通区外写，
+    // 只有 ask-on-write 一道门
     expect(decideAssembled(pathRequest('/data/ssh/new_key', 'write'), sshIsLinked)).toMatchObject({
-      effect: 'deny',
-      winning: 'protect-credentials#0'
+      effect: 'ask',
+      winning: 'ask-on-write#0',
+      matched: ['ask-on-write#0']
     })
   })
 

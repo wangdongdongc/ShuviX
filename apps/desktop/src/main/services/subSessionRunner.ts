@@ -229,8 +229,8 @@ class SubSessionRunner {
    * 建一条子会话。
    *
    * **子会话继承父会话此刻的整套设置**：projectId（工作目录是会话的地基）、模型、
-   * 思考档位、mcp:/skill: 勾选，以及免询问开关（勾选与免询问在 `sessionService.create`，
-   * 它们是 settings 的键；模型与思考档位是会话树上的 change entry，在这里种）。不继承就会
+   * 思考档位与 mcp:/skill: 勾选（勾选在 `sessionService.create`，它是 settings 的键；
+   * 模型与思考档位是会话树上的 change entry，在这里种）。不继承就会
    * 回落默认 ——「我用 opus 开着这套 MCP 干活、我开的子会话掉回默认模型、
    * 一个 skill 都没有」是纯粹的意外，而它跟父级在同一个目录里干同一件事。
    *

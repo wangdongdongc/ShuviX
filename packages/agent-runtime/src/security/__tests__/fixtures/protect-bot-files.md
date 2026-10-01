@@ -1,6 +1,5 @@
 ---
 shuvix: policy v1
-shuvix-builtin: true
 name: protect-bot-files
 shuvix-displayName: Always Ask Before a Bot Rewrites Itself
 description: Writes to your bot files always ask — the auto-allow switch does not cover them.

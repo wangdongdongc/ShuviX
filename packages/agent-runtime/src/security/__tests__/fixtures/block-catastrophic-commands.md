@@ -1,6 +1,5 @@
 ---
 shuvix: policy v1
-shuvix-builtin: true
 name: block-catastrophic-commands
 shuvix-displayName: Block a Few Catastrophic Commands
 description: A handful of ways to destroy a whole machine — deleting the root directory, formatting or overwriting a disk — are refused outright, on bash, PowerShell and ssh commands alike.

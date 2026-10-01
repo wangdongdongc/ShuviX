@@ -4,8 +4,8 @@
  * 落在某个库里（项目库或用户库）的 md 落盘后盖 `generated`（actor = agentActorOf(ctx)）并进
  * notifyKnowledgeFileChanged（模块按需加载）；不属于任何库的路径（根外、用户根散文件、隐藏目录）一切照旧。
  *
- * 用户库与项目库上**没有任何内置策略**（等整体定型再设计），所以这里免询问开着就不该再弹卡 ——
- * 盖章与变更管线跟安全模块是两件事，这条得分开钉住。
+ * 用户库与项目库上**没有任何内置策略**（等整体定型再设计），所以这里对整个临时目录「允许并记住」了写
+ * （allowList 的 Write(<临时目录>)）就不该再弹卡 —— 盖章与变更管线跟安全模块是两件事，这条得分开钉住。
  *
  * 第三个根是随应用发布的**内置库**（`<内置根>/<库名>/<语言>/…`，只读）：`knowledge.locate` 对它回 null，
  * 所以不盖章、不回执、不进管线（FD-6..FD-8）。它**没有**拒写策略（随包资源的统一裁决，见
@@ -43,9 +43,9 @@ vi.mock('../../services/toolContext', async () => {
           home: joinPath(state.dir, '.nonexistent-home'),
           systemDirs: []
         }),
-        // 免询问开着：库上没有策略，所以知识库写也不问
+        // 整个临时目录「允许并记住」了写：库上没有策略，所以知识库写也不问
         readBuiltinPolicyMd: INLINE_POLICY_MD,
-        getSessionGrants: () => ({ autoAllow: true, allowList: [] }),
+        getSessionGrants: () => ({ allowList: [`Write(${state.dir})`] }),
         isDirectory: () => false,
         persistGrant: () => {},
         requestUserInput: async (req: InputRequest) => {
@@ -137,7 +137,7 @@ describe('桌面文件工具 — 知识库根目录下的写入', () => {
     const p = join(state.kb, 'projects', 'acme', 'x.md')
     const res = await makeWriteTool(ctx).execute('w1', { path: p, content: DRAFT })
 
-    // 库上没有内置策略：免询问开着，知识库写与普通写一样不问
+    // 库上没有内置策略：写授权盖着整个临时目录，知识库写与普通写一样不问
     expect(state.requests).toEqual([])
 
     expect(readFileSync(p, 'utf-8')).toContain('generated: { by: "shuvix-work/gpt-5", at: "')

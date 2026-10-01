@@ -29,14 +29,16 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, onTestFinished } from 'vitest'
 import { CHROME_BRIDGE_HOST_NAME, CHROME_EXTENSION_ID } from '@shuvix/chat-protocol/chromeBridge'
 import { connect, listTargets, sleep, until, type CdpClient } from '../../harness/cdp'
 import { launchApp, type E2EApp } from '../../harness/launch'
 import { startFakeProvider, type FakeProvider, type FakeRequest } from '../../harness/fakeProvider'
 import {
+  removeRetiredPolicy,
   securityDecisions,
   seedFakeProvider,
+  seedRetiredPolicy,
   sqliteJson,
   waitRendererReady
 } from '../../harness/seed'
@@ -359,6 +361,10 @@ describe.skipIf(!CHROME_BIN)('真实浏览器', () => {
   }, 240_000)
 
   it('RCB-5 没带上的新站点要问一次：卡片在侧边栏上，点了允许才开页', async () => {
+    // 出厂不再问新站点（2026-10-01 删了 ask-on-new-site）：把退役的那份原样装成用户策略 ——
+    // 这条测的是真侧边栏上的询问卡片，不是出厂行为
+    seedRetiredPolicy(app, 'ask-on-new-site')
+    onTestFinished(() => removeRetiredPolicy(app, 'ask-on-new-site'))
     // localhost 与 127.0.0.1 是两个站点（站点按 host 算）
     const otherSite = fixture.url('/counter.html').replace('127.0.0.1', 'localhost')
     provider.reset()

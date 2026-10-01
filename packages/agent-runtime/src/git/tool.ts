@@ -122,8 +122,8 @@ export interface CreateGitToolOptions {
   ) => Promise<string>
   /**
    * 逐操作安全评估 —— **每个**操作执行前都会调用（与 dir 参数无关），由宿主交给
-   * 安全策略评估（哪些组合要询问写在策略里 —— 内置 git-safety 只对 init / restore /
-   * checkout force / branch delete 给 ask，其余默认放行）。force / delete 是评估用的
+   * 安全策略评估（哪些组合要询问写在策略里 —— 出厂没有 git 策略，全部默认放行；
+   * 用户策略可按 gitAction / force / delete 自己挂门）。force / delete 是评估用的
    * 参数事实；reason 是破坏性操作的原因码（宿主本地化询问文案用；非破坏性为 null）。
    *
    * 未注入 = 不评估。拒绝时约定 throw（错误文本回流给模型）。

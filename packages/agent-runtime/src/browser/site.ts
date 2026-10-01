@@ -11,7 +11,8 @@
  *  - `filesystem:https://x/…`：x 的沙箱文件系统。
  *
  * 其余地址（about:blank、data:、chrome://、扩展页、file:、没有源的 blob:）没有站点，回 undefined ——
- * 站点门不管它们（本地文件另有路径门）。出厂策略 ask-on-new-site 的匹配条件与这里同一个口径。
+ * 站点门不管它们（本地文件另有路径门）。按站点询问的策略（出厂已不带，2026-10-01 删掉了
+ * ask-on-new-site）应写同一个口径：`object.scheme in ['http','https','blob'] && object.host != ''`。
  */
 import { urlObjectOf } from '../security/urlObject'
 

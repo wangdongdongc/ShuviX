@@ -2,7 +2,7 @@
 shuvix: okf v0.2
 type: Guide
 title: 'Security policy file (shuvix: policy v1)'
-description: 'The complete specification of a ShuviX security policy — the request document a rule sees (subject / action / tool / object / env / vars), the five condition keys, CEL `match`, effects and their precedence, who answers an ask (the automatic review, then you), `lets`, what makes a file invalid, the builtin policies, and how to loosen or tighten a gate.'
+description: 'The complete specification of a ShuviX security policy — the request document a rule sees (subject / action / tool / object / env / vars), the five condition keys, CEL `match`, effects and their precedence, who answers an ask (the automatic review, then you), `lets`, what makes a file invalid, the four builtin policies, and how to loosen a gate or add one of your own.'
 tags: [shuvix, policy, security, format, spec, cel]
 status: stable
 sources:
@@ -32,8 +32,8 @@ An `ask` does not go to the user straight away. With **automatic review** on (Se
 Security, on by default), a reviewing agent answers it first, in a fresh context that sees only what the
 user wrote and the operation itself: it lets ordinary work through, refuses what is clearly
 harmful, and puts the rest in front of the user with its opinion on the card. The reviewer is
-a filter, not a boundary — the sandbox and the `deny` rules are. `force-ask` always goes to the
-user. The reviewer is the builtin hook `auto-review` and the agent `permission-reviewer`; see the
+a filter, not a boundary — the sandbox is, and so is any `deny` rule you write. `force-ask` always
+goes to the user. The reviewer is the builtin hook `auto-review` and the agent `permission-reviewer`; see the
 `hook-md` entry for what it sees and how to change it.
 
 - Location: `~/.shuvix/policies/<name>.md`.
@@ -62,8 +62,8 @@ shuvix-policy-rules:
     prompt: Write refused — the drafts folder is read-only for agents; ask the user to move the file out first.
 ---
 
-**What it does**: any write under `~/Documents/drafts` is refused, even with auto-allow on.
-The body is documentation only — the engine never reads it.
+**What it does**: any write under `~/Documents/drafts` is refused, even under an "allow and
+remember" grant. The body is documentation only — the engine never reads it.
 ```
 
 ## Frontmatter keys
@@ -104,10 +104,9 @@ deny  >  force-ask  >  force-allow  >  ask  >  allow  >  (nothing matched = allo
 - `ask` puts the call in front of the automatic reviewer, then — if it does not settle it — the
   user; `allow` answers it; `deny` refuses it (the agent gets `prompt` as the reason).
 - `force-allow` is an allow that also beats every `ask` — ShuviX uses it for session grants
-  ("auto-allow" and "allow and remember"). A `force-allow` never reaches the reviewer.
+  ("allow and remember"). A `force-allow` never reaches the reviewer.
 - `force-ask` is an ask that even `force-allow` cannot skip, and that only the user answers —
-  "this gate accepts neither session consent nor the reviewer" (the bot-file and ShuviX-config
-  gates are two).
+  "this gate accepts neither session consent nor the reviewer".
 - `deny` beats everything.
 
 Conditions compile to native predicates evaluated **before** the CEL, so a rule whose conditions
@@ -178,7 +177,6 @@ matched (with a warning), an allow rule as not matched. Always guard with the ty
 | `sandboxWriteDenied`    | string[] | protected places inside those roots (ShuviX's own files, credential locations, …)            |
 | `sandboxProtectedPatterns` | string[] | regexes of protected git metadata (`.git/hooks`, `.git/config`, …) — use with `matches` |
 | `systemDirs`            | string[] | extra OS directories (Windows system / program directories)                                   |
-| `autoAllow`             | boolean  | the session's "auto-allow" switch                                                             |
 | `grantedRead`, `grantedWrite` | string[] | paths the user answered "allow and remember" for in this session (write implies read) |
 
 A `vars.x` that the host did not supply and that a rule uses **only** as `inDir`'s directory
@@ -197,40 +195,64 @@ reads `object.*` without declaring `object.type` is accepted with a warning.
 
 ## Builtin policies
 
-Twelve ship with the application (per UI language; **the rules are always taken from the
-English file**, translations only change the text people read):
+Four ship with the application (per UI language; **the rules are always taken from the
+English file**, translations only change the text people read). The default is to ask as little
+as possible, so none of them uses `deny` or `force-ask` — those are for policies of your own:
 
 | Name                            | Gate                                                                                                                  |
 | ------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `protect-credentials`           | deny writes to and ask on reads of credential locations (`.ssh`, `.aws`, …); sandboxed commands can do neither       |
-| `protect-system`                | deny writes to operating-system directories                                                                            |
-| `block-catastrophic-commands`   | deny a short list of machine-destroying commands, judged on parsed structure (`rm -rf /`, `mkfs`, `dd` to a device, `Format-Volume`…) |
-| `protect-bot-files`             | **force-ask** on any write under `~/.shuvix/bots`                                                                      |
-| `protect-shuvix-config`         | **force-ask** on any write under `~/.shuvix/policies`, `agents`, `hooks` and `skills`                                  |
+| `protect-credentials`           | ask before reading a credential location (`.ssh`, `.aws`, …); sandboxed commands can neither read nor write them. A write there is an ordinary write (ask-on-write) |
 | `ask-on-write`                  | ask on file writes, with a diff preview — except this conversation's artifacts, the working directory (minus its protected spots, not on Windows) and, with the sandbox active, where a confined command may write anyway |
 | `ask-on-command`                | ask on every command that is not confined to the sandbox (`object.sandboxed` false: sandbox off or unavailable, full access requested, `ssh`) |
-| `git-safety`                    | ask on destructive git operations (`init`, `restore`, forced checkout, branch delete)                                  |
-| `ask-on-database`               | ask on every statement over a writable database connection                                                             |
-| `ask-on-sub-session`            | ask once when a sub-session is opened (`tool.name == 'session' && tool.operation == 'create-sub-session'`)             |
-| `ask-on-new-site`               | in your own Chrome (the ShuviX side panel), ask the first time a conversation opens or works on a site (`object.browser == 'chrome'`) |
-| `session-grants`                | `force-allow` everything while the session's auto-allow switch is on, and reads / writes under paths the user answered "allow and remember" for |
+| `session-grants`                | `force-allow` reads / writes under paths the user answered "allow and remember" for in this session |
 
 The sidebar's Security Policies group lists each one (a row opens its md, rules on the property
 card); "Create override copy" in a builtin row's menu writes the current text to
 `~/.shuvix/policies/<name>.md`.
+
+Earlier versions shipped more gates: refusing writes to system directories and a short list of
+machine-destroying commands, always asking before writes to bot files and ShuviX's own
+configuration, and asking before destructive git operations, SQL on a writable connection,
+opening a sub-session and each new site in your Chrome. They were removed on purpose, but every
+enforcement point is still there (the object types above), so any of them can come back as a
+policy of your own.
 
 ## Loosening and tightening
 
 - **Remove a gate**: override it by name with `shuvix-policy-rules: []`.
 - **Exempt one place from an ask** without touching the builtin: a new policy with a
   `force-allow` rule (`force-allow` beats `ask`), e.g. writes under one directory.
-- **Add a hard stop**: a `deny` rule — it beats everything, including auto-allow.
-- **Make a gate un-skippable**: `force-ask` — neither auto-allow nor the automatic reviewer can
-  answer it. That is also how to keep the reviewer away from one kind of operation, e.g.
-  `object.unconfinedReason == 'escalated'` for "always ask me when the agent wants to leave the
-  sandbox".
+- **Add an ask**: a new policy with an `ask` rule on the object you care about — see the example
+  below.
+- **Add a hard stop**: a `deny` rule — it beats everything, including "allow and remember".
+- **Make a gate un-skippable**: `force-ask` — neither an "allow and remember" grant nor the
+  automatic reviewer can answer it. That is also how to keep the reviewer away from one kind of
+  operation, e.g. `object.unconfinedReason == 'escalated'` for "always ask me when the agent wants
+  to leave the sandbox", or writes under `vars.botsDir` / `vars.shuvixConfigDirs` for "an agent
+  changing a bot file or ShuviX's own configuration always asks me".
 - Keep rules narrow: a deny cannot be waived per call, so a rule that fires on ordinary work is
   worse than one that misses.
+
+For example, asking before every SQL statement on a writable database connection:
+
+```markdown
+---
+shuvix: policy v1
+name: ask-before-sql
+description: Every statement on a writable database connection asks first.
+shuvix-policy-scope:
+  subject.kind: [agent]
+  object.type: [database]
+shuvix-policy-rules:
+  - effect: ask
+    action: [execute]
+    match: '!object.readonly'
+    prompt: This connection has write access — the statement can change or delete data on the server.
+---
+```
+
+Destructive git operations are the same shape with `object.type: [gitTool]` and a `match` such as
+`object.gitAction == 'restore' || (object.gitAction == 'checkout' && object.force)`.
 
 ## Not in the file
 

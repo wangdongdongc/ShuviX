@@ -414,7 +414,7 @@ describe('policy prompt —— 属性卡与 md 原文', () => {
     expect(await rulePrompts()).toEqual([])
 
     // 内置 protect-credentials：点内置行开的是随包那份 md 的**只读**笔记本（另一个载体项目），
-    // 两条规则各有一句提示语 —— 卡片上的 prompt 行与注册表裁决出的规则逐字一致
+    // 它的规则带着提示语 —— 卡片上的 prompt 行与注册表裁决出的规则逐字一致
     const credentials = await builtinRow('protect-credentials')
     await pane.openBuiltin('protect-credentials')
     await note.waitCard()

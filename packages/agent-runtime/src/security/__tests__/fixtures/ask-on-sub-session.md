@@ -1,6 +1,5 @@
 ---
 shuvix: policy v1
-shuvix-builtin: true
 name: ask-on-sub-session
 shuvix-displayName: Ask Before Opening a Sub-session
 description: Opening a sub-session asks you first — it is a new conversation that spends tokens on its own.

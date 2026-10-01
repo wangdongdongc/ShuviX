@@ -8,8 +8,9 @@
  *     prompt 前的系统提示词组装 / 消息树写入已经发生，断言只看这些副作用。
  */
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { deflateSync } from 'node:zlib'
 import { expect } from 'vitest'
 import { parse as parseYaml } from 'yaml'
@@ -322,11 +323,50 @@ export async function sandboxAvailable(main: CdpClient): Promise<boolean> {
   return status.supported && status.available
 }
 
+/** 退役内置策略的夹具目录（agent-runtime 单测与 e2e 共用的那一份 md，见 seedRetiredPolicy） */
+const RETIRED_POLICIES_DIR = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  '../../../../packages/agent-runtime/src/security/__tests__/fixtures'
+)
+
+/** 2026-10-01 从出厂删掉的八份内置策略 */
+export type RetiredPolicyName =
+  | 'protect-system'
+  | 'block-catastrophic-commands'
+  | 'protect-bot-files'
+  | 'protect-shuvix-config'
+  | 'git-safety'
+  | 'ask-on-sub-session'
+  | 'ask-on-database'
+  | 'ask-on-new-site'
+
+/**
+ * 把一份**退役的内置策略**当作「用户自己写的策略」放进隔离实例的 `~/.shuvix/policies/<name>.md`。
+ *
+ * 用户裁定「出厂不要硬限制、默认尽可能少问」（2026-10-01），这八份不再随包发布；但它们挂靠的
+ * 执行点（数据库门、Chrome 的站点门、L1 调用门、git 门 …）都还在，留给用户自写策略。md 原样
+ * （去掉 `shuvix-builtin: true`）留在 agent-runtime 的单测夹具里 —— 一条 e2e 要测某个执行点的
+ * 询问卡片 / 接线，就装这一份：策略现扫、无缓存，写下即生效（下一次判定就按它走），
+ * `removeRetiredPolicy` 删掉即失效。回写下的文件路径。
+ */
+export function seedRetiredPolicy(app: Pick<E2EApp, 'home'>, name: RetiredPolicyName): string {
+  const dir = join(app.home, '.shuvix', 'policies')
+  mkdirSync(dir, { recursive: true })
+  const file = join(dir, `${name}.md`)
+  writeFileSync(file, readFileSync(join(RETIRED_POLICIES_DIR, `${name}.md`), 'utf8'))
+  return file
+}
+
+/** 撤掉 seedRetiredPolicy 装的那一份（文件不在也不报错） */
+export function removeRetiredPolicy(app: Pick<E2EApp, 'home'>, name: RetiredPolicyName): void {
+  rmSync(join(app.home, '.shuvix', 'policies', `${name}.md`), { force: true })
+}
+
 /**
  * 自动放行安全询问 —— 扮演那个会点「允许一次」的用户。
  *
- * 隔离实例带着全套内置策略（`ask-on-command` 对每条命令问、`ask-on-sub-session` 对开
- * 子会话问），而 e2e 里没人看着：不装它的话，任何触发询问的用例都会挂到超时。
+ * 隔离实例带着全套出厂策略（`ask-on-command` 对每条不在沙箱里的命令问、`ask-on-write` 对
+ * 工作目录之外的写入问），而 e2e 里没人看着：不装它的话，任何触发询问的用例都会挂到超时。
  * 装在渲染端（`agent.onEvent` → `agent.respondToInput`），走的是用户点按钮的同一条 IPC。
  *
  * 想**故意**测「没人回答」的那条路径就别装它（或用 `only` 只放行一部分）。
@@ -355,6 +395,14 @@ export async function installAutoAllow(
       return true
     })()`
   )
+}
+
+/**
+ * installAutoAllow 至今替用户点过「允许」的询问（命令 / 问题文本，按先后；没装过就是空表）——
+ * 把它当安全网装上、再断「这一路本不该问」时用：真冒出一张卡也不会把 spec 挂到超时，而是在这里现形。
+ */
+export function autoAllowed(main: CdpClient): Promise<string[]> {
+  return main.eval<string[]>(`window.__e2eAutoAllow ?? []`)
 }
 
 /** 捕获到的一次「浏览器下载」 */

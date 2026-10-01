@@ -200,8 +200,7 @@
     "startNewChat": "Start New Chat",
     "emptyHint": "Send a message to start the conversation",
     "rollbackConfirm": "Rollback to here",
-    "rollbackWarning": "This will delete all messages after this point. This action cannot be undone.",
-    "autoAllowWarning": "Operations will execute automatically without asking. The AI may perform unexpected actions — use with caution."
+    "rollbackWarning": "This will delete all messages after this point. This action cannot be undone."
   },
   "input": {
     "searchModel": "Search models...",
@@ -363,8 +362,6 @@
   "sessionConfig": {
     "title": "Session Config",
     "sessionTitle": "Session Title",
-    "autoAllow": "Auto-Allow",
-    "autoAllowDesc": "Tool calls run without asking you first (use with caution)",
     "allowListTitle": "Allowed paths",
     "commandGroup": "Ask on Operations",
     "extensionsGroup": "Extensions",
@@ -826,7 +823,7 @@
     "chromeExtHostNoBrowser": "No Chromium browser found on this computer",
     "securitySection": "Security",
     "autoReview": "Automatic review of approvals",
-    "autoReviewHint": "Before an approval card is shown, a reviewing agent answers it for you, using the conversation's current model: ordinary work goes through, clearly harmful operations are refused, and the rest comes to you with its opinion on the card. Gates marked as always asking you, auto-allow and \"allow and remember\" are unaffected. Its rules are the agent \"Permission Reviewer\" and the hook \"Automatic Review of Approval Requests\" in the sidebar. Turning this off sends every approval to you."
+    "autoReviewHint": "Before an approval card is shown, a reviewing agent answers it for you, using the conversation's current model: ordinary work goes through, clearly harmful operations are refused, and the rest comes to you with its opinion on the card. Gates marked as always asking you and \"allow and remember\" are unaffected. Its rules are the agent \"Permission Reviewer\" and the hook \"Automatic Review of Approval Requests\" in the sidebar. Turning this off sends every approval to you."
   },
   "about": {
     "description": "Your AI Assistant",

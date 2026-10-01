@@ -13,8 +13,6 @@ export interface SessionModelMetadata {
 
 /** 会话级配置（DB 中以 JSON 字符串存储，DAO 层负责序列化/反序列化） */
 export interface SessionSettings {
-  /** 命令免询问（bash + ssh 统一开关） */
-  autoAllow?: boolean
   /** 路径允许列表，格式 Read(path) / Write(path)（历史 Bash/SSH 条目不再识别，等同失效） */
   allowList?: string[]
   /**
@@ -95,7 +93,7 @@ export interface Session {
    * 唯一差别是侧栏把它渲染在父会话下面。嵌套只允许一层（子会话不能再开子会话）。
    */
   parentId: string | null
-  /** 会话级配置（SSH 免询问等） */
+  /** 会话级配置（路径授权、扩展能力勾选等） */
   settings: SessionSettings
   createdAt: number
   /**

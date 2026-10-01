@@ -312,7 +312,7 @@ describe('wrapToolOutput — L1 全工具门', () => {
           home: '/home/u',
           systemDirs: []
         }),
-        getSessionGrants: () => ({ autoAllow: false, allowList: [] }),
+        getSessionGrants: () => ({ allowList: [] }),
         readBuiltinPolicyMd: INLINE_POLICY_MD,
         getUserPolicies: () => [
           {

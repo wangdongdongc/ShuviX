@@ -119,11 +119,11 @@ invent one.
 
 ## `permission.request` — answering an approval request
 
-It fires only for rules whose effect is `ask`. A `force-ask` rule means "only the user answers"
-(`protect-bot-files`, `protect-shuvix-config`), a `deny` refuses outright, and auto-allow and
-"allow and remember" (`force-allow`) let the call through — none of those reach a hook. The asks
-of an agent dispatched by a decide hook go straight to the user, so a reviewer never reviews
-itself.
+It fires only for rules whose effect is `ask`. A `force-ask` rule means "only the user answers",
+a `deny` refuses outright, and "allow and remember" (`force-allow`) lets the call through — none
+of those reach a hook (no builtin policy uses `force-ask` or `deny`; a policy of your own may).
+The asks of an agent dispatched by a decide hook go straight to the user, so a reviewer never
+reviews itself.
 
 The payload is everything the reviewing agent gets. It carries what the human wrote and the
 operation itself, never the working agent's own text or tool output:
@@ -203,11 +203,13 @@ dispatches it: the `agent` tool cannot, and a sub-session cannot be opened with 
 
 A user file with the same name replaces a builtin hook entirely: to silence one, an override with
 a `when: false` binding is enough; to review only some operations, give `auto-review` a `when`
-(e.g. `event.operation.objectType != 'database'`). To change how operations are judged, override
-the agent instead: `~/.shuvix/agents/permission-reviewer.md`. An agent's writes under
-`~/.shuvix/hooks`, `agents`, `policies` and `skills` always ask the user (policy
-`protect-shuvix-config`), so an agent cannot quietly rewrite its own reviewer. Same-name copies
-follow the rule in the `shuvix-files` entry.
+(e.g. `event.operation.objectType != 'command'`). To change how operations are judged, override
+the agent instead: `~/.shuvix/agents/permission-reviewer.md`. An agent's write under
+`~/.shuvix/hooks`, `agents`, `policies` and `skills` is an ordinary write (ask-on-write): the
+reviewer is told to refuse rewriting ShuviX's protections, and a sandboxed command cannot write
+there at all. To have every such write reach the user, add a `force-ask` policy on
+`vars.shuvixConfigDirs` (see `policy-md`). Same-name copies follow the rule in the `shuvix-files`
+entry.
 
 ## Deliberately absent
 

@@ -69,7 +69,7 @@ function makeProvider(overrides: Partial<SecurityHostProvider> = {}): SecurityHo
     host: 'desktop',
     pathSep: '/',
     getVars: () => ({}),
-    getSessionGrants: () => ({ autoAllow: false, allowList: [] }),
+    getSessionGrants: () => ({ allowList: [] }),
     ...overrides
   }
 }

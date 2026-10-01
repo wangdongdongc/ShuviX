@@ -8,12 +8,12 @@ import {
 } from '@shuvix/chat-ui'
 import { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { TriangleAlert, X } from 'lucide-react'
+import { X } from 'lucide-react'
 import type { KnowledgeBaseOptionsResult } from '@shuvix/chat-protocol/chatApi'
 import type { ToolItem } from '../common/ToolSelectList'
 import { ExtensionsSection } from '../settings/ExtensionsSection'
 import { KnowledgeBasesSection } from '../settings/KnowledgeBasesSection'
-import { SettingsSection, SettingsRow, Toggle } from '../settings/SettingsPrimitives'
+import { SettingsSection } from '../settings/SettingsPrimitives'
 
 /** Skills 分组标识（tools.list 的 group） */
 const SKILLS_GROUP = '__skills__'
@@ -123,7 +123,8 @@ function SessionKnowledgeBasesSection({
 /**
  * 会话配置面板（除会话标题外的所有配置）。
  *
- * 两节：扩展能力（这条会话的 MCP / Skill 勾选，Agent 创建之前可改）与命令询问。项目指令文件的
+ * 三节：扩展能力（这条会话的 MCP / Skill 勾选，Agent 创建之前可改）、知识库，以及「允许并记住」过的
+ * 路径（有才画）。项目指令文件的
  * 「读哪些」已整体搬进 agent md 的 `shuvix-instruction-files` 清单（那是 agent 的人格设定，
  * 不是每个会话的临时选择），这里不再有对应开关。
  * 既可嵌入到 SessionConfigDialog 弹窗中，也可在空会话时直接居中展示。
@@ -131,21 +132,14 @@ function SessionKnowledgeBasesSection({
  * 视觉：分节标题 + 圆角卡片 + 行式条目（左标题/描述，右控件）。
  *
  * 状态来源：
- * - autoAllow / allowList / enabledTools 从 chatStore 的会话设置派生，
+ * - allowList / enabledTools 从 chatStore 的会话设置派生，
  *   后端通过 `session.configChanged` 事件触发 store 刷新后自动重渲染；
  * - 扩展能力的只读态来自 `agent_created` / `agent_closing` 事件（见 useSessionTools）。
  */
 export function SessionConfigPanel({ sessionId }: SessionConfigPanelProps): React.JSX.Element {
   const { t } = useTranslation()
   const session = useChatStore((s) => s.sessions.find((sess) => sess.id === sessionId))
-  const autoAllow = session?.settings.autoAllow === true
   const allowList = session?.settings.allowList ?? []
-
-  const handleToggleAutoAllow = async (): Promise<void> => {
-    const next = !autoAllow
-    await getChatApi().session.updateAutoAllow({ id: sessionId, autoAllow: next })
-    useChatStore.getState().updateSessionSettings(sessionId, { autoAllow: next })
-  }
 
   /** 允许列表仅含路径条目（`Read(...)`/`Write(...)`）：命令类工具逐条询问，无模式记忆 */
   const handleRemoveAllowEntry = async (entry: string): Promise<void> => {
@@ -162,24 +156,10 @@ export function SessionConfigPanel({ sessionId }: SessionConfigPanelProps): Reac
       {/* 知识库（不随 Agent 上锁） */}
       <SessionKnowledgeBasesSection sessionId={sessionId} />
 
-      {/* 命令询问 */}
-      <SettingsSection title={t('sessionConfig.commandGroup')}>
-        <SettingsRow
-          title={t('sessionConfig.autoAllow')}
-          description={t('sessionConfig.autoAllowDesc')}
-          control={
-            <Toggle on={autoAllow} color="amber" onClick={() => void handleToggleAutoAllow()} />
-          }
-        />
-        {autoAllow && (
-          <div className="flex items-start gap-2 px-4 py-2.5 bg-amber-500/[0.06]">
-            <TriangleAlert size={12} className="text-amber-500 shrink-0 mt-0.5" />
-            <p className="text-[11px] leading-relaxed text-amber-600 dark:text-amber-400">
-              {t('chat.autoAllowWarning')}
-            </p>
-          </div>
-        )}
-        {!autoAllow && allowList.length > 0 && (
+      {/* 操作询问：「允许并记住」过的路径（没有就整节不画 —— 「免询问」开关已删除，
+          这一节只剩这份清单） */}
+      {allowList.length > 0 && (
+        <SettingsSection title={t('sessionConfig.commandGroup')}>
           <div className="px-4 py-3">
             <div className="text-[11px] text-text-tertiary mb-1.5">
               {t('sessionConfig.allowListTitle')}
@@ -204,8 +184,8 @@ export function SessionConfigPanel({ sessionId }: SessionConfigPanelProps): Reac
               ))}
             </div>
           </div>
-        )}
-      </SettingsSection>
+        </SettingsSection>
+      )}
     </div>
   )
 }

@@ -4,7 +4,7 @@
  * 契约：
  *   - `create({chromeTab})` 建的是一条**无项目、无父会话、不是笔记本也不是 bot** 的普通会话：
  *     projectId / parentId 恒 null，调用方传的 projectId / parentId / notebookPath / bot /
- *     memorySlug 一概不认，什么也不继承（扩展能力勾选恒 []，免询问开关不抄），也不去读父会话 /
+ *     memorySlug 一概不认，什么也不继承（扩展能力勾选恒 []），也不去读父会话 /
  *     项目；settings 里只落 `{chromeTab: <三个键>, enabledTools: []}`；
  *   - chromeTab 不合法（字段不全、tabId 不是非负整数）= 没给：照普通会话建、照常继承，
  *     settings 里没有 chromeTab 键；
@@ -151,12 +151,12 @@ beforeEach(() => {
   mocks.findModelsByProvider.mockReturnValue([])
   mocks.filterAvailableTools.mockImplementation((tools) => tools)
 
-  // 一个有扩展能力勾选的项目，一条开着免询问、勾了扩展的父会话 —— 标签页会话一样都不该继承
+  // 一个有扩展能力勾选的项目，一条勾了扩展的父会话 —— 标签页会话一样都不该继承
   projects.set('p1', { id: 'p1', path: '/work/p1', settings: { enabledTools: ['mcp:proj'] } })
   seedSession({
     id: 'parent',
     projectId: 'p1',
-    settings: { enabledTools: ['skill:from-parent'], autoAllow: true }
+    settings: { enabledTools: ['skill:from-parent'] }
   })
 })
 
@@ -210,7 +210,7 @@ describe('SCT-2 chromeTab 不合法 = 没给', () => {
     expect(row.settings.notebookPath).toBe('notes/a.md')
   })
 
-  it('SCT-2 子会话同理：照常抄父会话（项目、勾选、免询问）', () => {
+  it('SCT-2 子会话同理：照常抄父会话（项目、勾选）', () => {
     sessionService.create({
       parentId: 'parent',
       chromeTab: { ...BINDING, tabId: 1.5 }
@@ -218,7 +218,7 @@ describe('SCT-2 chromeTab 不合法 = 没给', () => {
     const row = insertedRow()
     expect(row.parentId).toBe('parent')
     expect(row.projectId).toBe('p1')
-    expect(row.settings).toMatchObject({ enabledTools: ['skill:from-parent'], autoAllow: true })
+    expect(row.settings).toMatchObject({ enabledTools: ['skill:from-parent'] })
     expect('chromeTab' in row.settings).toBe(false)
   })
 })

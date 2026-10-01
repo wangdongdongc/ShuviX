@@ -51,7 +51,6 @@ export interface SessionModelMetadata {
 }
 
 export interface SessionSettings {
-  autoAllow?: boolean
   allowList?: string[]
   /**
    * 这条会话的扩展能力勾选（`mcp:<server>` / `skill:<name>`，只收这两类）。
@@ -399,11 +398,6 @@ export interface SessionUpdateProjectParams {
   projectId: string | null
 }
 
-export interface SessionUpdateAutoAllowParams {
-  id: string
-  autoAllow: boolean
-}
-
 export interface SessionUpdateEnabledToolsParams {
   id: string
   /** 完整勾选（整份替换，不是增量）；只收 mcp:/skill: 条目，其余被丢弃 */
@@ -733,7 +727,6 @@ export interface HostApi {
     create: (params?: SessionCreateParams) => Promise<Session>
     updateTitle: (params: SessionUpdateTitleParams) => Promise<{ success: boolean }>
     updateProject: (params: SessionUpdateProjectParams) => Promise<{ success: boolean }>
-    updateAutoAllow: (params: SessionUpdateAutoAllowParams) => Promise<{ success: boolean }>
     /** 移除允许列表条目（仅路径条目：命令类工具无允许列表，逐条询问） */
     removeAllowListEntry: (params: SessionAllowListRemoveParams) => Promise<{ success: boolean }>
     /**

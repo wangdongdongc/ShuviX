@@ -200,8 +200,7 @@
     "startNewChat": "开始新对话",
     "emptyHint": "发送一条消息开始对话",
     "rollbackConfirm": "回退到此处",
-    "rollbackWarning": "回退将删除该消息之后的所有对话记录，此操作不可恢复。",
-    "autoAllowWarning": "相关操作将自动执行，不再逐条询问。AI 可能产生意外操作，请谨慎使用。"
+    "rollbackWarning": "回退将删除该消息之后的所有对话记录，此操作不可恢复。"
   },
   "input": {
     "searchModel": "搜索模型...",
@@ -363,8 +362,6 @@
   "sessionConfig": {
     "title": "会话配置",
     "sessionTitle": "会话标题",
-    "autoAllow": "免询问",
-    "autoAllowDesc": "AI 执行操作时不再逐条询问（具有一定风险）",
     "allowListTitle": "已允许的路径",
     "commandGroup": "操作询问",
     "extensionsGroup": "扩展能力",
@@ -826,7 +823,7 @@
     "chromeExtHostNoBrowser": "这台电脑上没找到 Chromium 系浏览器",
     "securitySection": "安全",
     "autoReview": "自动审查审批请求",
-    "autoReviewHint": "弹出审批卡片之前，由一个审查 agent 用会话当前的模型替你回答：日常的工作直接放行，明显有害的操作拒绝，其余的附上它的意见交给你。标明「只问你」的门、免询问和「允许并记住」不受影响。它的规则就是侧栏里的 agent「权限审查员」与 hook「自动审查审批请求」。关掉后，每一次审批都交给你。"
+    "autoReviewHint": "弹出审批卡片之前，由一个审查 agent 用会话当前的模型替你回答：日常的工作直接放行，明显有害的操作拒绝，其余的附上它的意见交给你。标明「只问你」的门和「允许并记住」不受影响。它的规则就是侧栏里的 agent「权限审查员」与 hook「自动审查审批请求」。关掉后，每一次审批都交给你。"
   },
   "about": {
     "description": "您的 AI 助手",

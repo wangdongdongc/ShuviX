@@ -167,8 +167,8 @@ export function AskForm({
   const diffPreview = preview?.kind === 'diff' ? preview : null
 
   // 路径类(read/write/edit/...):command 形如 Read(path)/Write(path),可"允许并记住"整条路径。
-  // 命令类(bash/ssh)与简单类(浏览器操作等):不入 allowList —— 命令逐条询问,
-  //   免询问只能由会话级 autoAllow 开关整体打开(不再有命令模式记忆)。
+  // 命令类(bash/ssh)与简单类(浏览器操作等):不入 allowList —— 命令逐条询问
+  //   (不再有命令模式记忆;会话级「免询问」开关也已删除)。
   const pathAsk: { mode: 'read' | 'write'; path: string } | null = useMemo(() => {
     const m = command.match(/^(Read|Write)\((.+)\)$/)
     if (!m) return null

@@ -1,9 +1,9 @@
 /**
  * 认领之后的那次 `edit` —— artifact 工具的 `recordRead` 到底买到了什么。
  * 真实临时目录 + 真实 store/adopt + 真实 fileTime + 真实 edit 内核（安全上下文照
- * writeAskWiring/fileToolDepsKnowledge 的桩，免询问缺省开着）。
+ * writeAskWiring/fileToolDepsKnowledge 的桩，询问通道一律答允许）。
  *
- * AG-8 把免询问关掉，看的是工具这条路上的询问链：认领下来的那件在本会话自己的 artifacts 目录里，
+ * AG-8 看的是工具这条路上的询问链：认领下来的那件在本会话自己的 artifacts 目录里，
  * ask-on-write 对它不问（`vars.sessionArtifactsDir`），别的会话的目录照问。这里的 provider 是桩 ——
  * 真实变量表由 toolContext.test 的 SEC-7 与 realPathPolicy.test 的 RPP-A3 钉。
  *
@@ -15,8 +15,8 @@
  * 模型的 `edit` 会被 assertNotModifiedSinceRead 拦住，而不是闷头覆盖（AG-2）。
  *
  * **tmp 根刻意不走 realpathSync**（本文件独此一例）：macOS 上 realpath 会把 `/var/folders/…`
- * 解成 `/private/var/folders/…`，而内置策略 protect-system 把 `/private/var` 列为操作系统目录、
- * 对写入一律 deny —— 于是测的就变成那条策略了。realpath 的本意是「recordRead 按路径**字符串**
+ * 解成 `/private/var/folders/…`，而当时的内置策略 protect-system 把 `/private/var` 列为操作系统目录、
+ * 对写入一律 deny —— 于是测的就变成那条策略了（它已于 2026-10-01 退役，用户装回来时照样如此）。realpath 的本意是「recordRead 按路径**字符串**
  * 做键，两侧算出不同字符串时测的是符号链接」；这条路上没有任何一步解析符号链接
  * （`resolveToCwd` 对绝对路径原样返回，statSync 只跟随不改写），所以未解析的那个串在两侧
  * 严格相同，需要的同一性照样成立 —— AG-3/AG-5 的成功本身就是那个同一性的证据。
@@ -41,9 +41,7 @@ const state = vi.hoisted(() => ({
   root: '',
   workspace: '',
   messages: [] as ChatMessage[],
-  requests: [] as InputRequest[],
-  /** 会话的免询问开关（缺省开着：AG-1…7 验的是陈旧守卫，不是询问链路） */
-  autoAllow: true
+  requests: [] as InputRequest[]
 }))
 
 vi.mock('../../utils/paths', () => ({
@@ -85,8 +83,8 @@ vi.mock('../../services/toolContext', async () => {
           systemDirs: []
         }),
         readBuiltinPolicyMd: INLINE_POLICY_MD,
-        // 免询问缺省开着：AG-1…7 验的是陈旧守卫，询问链路在 writeAskWiring.test 里；AG-8 关掉它
-        getSessionGrants: () => ({ autoAllow: state.autoAllow, allowList: [] }),
+        // AG-1…7 验的是陈旧守卫，询问链路在 writeAskWiring.test 里（这里的询问通道一律答允许）
+        getSessionGrants: () => ({ allowList: [] }),
         isDirectory: () => false,
         persistGrant: () => {},
         requestUserInput: async (req: InputRequest): Promise<InputResponse> => {
@@ -184,7 +182,6 @@ beforeEach(() => {
   sid = `s${++seq}`
   state.messages = []
   state.requests = []
-  state.autoAllow = true
   _resetAll()
 })
 
@@ -299,8 +296,7 @@ describe('认领 → edit', () => {
     expect(readdirSync(join(state.root, sid)).sort()).toEqual(['bar-chart.svg'])
   })
 
-  it('AG-8 免询问关着：认领之后的 edit 不弹卡（本会话 artifacts 免询问）；对照：别的会话目录里的同样一次 edit 弹一张 ask 卡', async () => {
-    state.autoAllow = false
+  it('AG-8 认领之后的 edit 不弹卡（本会话 artifacts 免询问）；对照：别的会话目录里的同样一次 edit 弹一张 ask 卡', async () => {
     state.messages = [said(['```svg', chart('Sales'), '```'].join('\n'))]
     const path = await adopt()
 
