@@ -306,6 +306,20 @@ jobs:
     needs: [build, build-linux, build-extension]
     runs-on: ubuntu-latest
     steps:
+      # 说明正文要读 tag 之间的提交与带说明的 tag 对象：拉完整历史；checkout 在 tag 事件里会把带说明的
+      # tag 换成轻量 tag（actions/checkout#290），所以再强制 fetch 一次这个 tag
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Fetch annotated tag
+        run: git fetch --force origin "+refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
+
+      # 本项目不走 PR，generate_release_notes 只会给出一条 Full Changelog 链接 ——
+      # 正文改由 tag 说明 + 上一个 tag 以来的提交标题生成，自动生成的链接接在它后面
+      - name: Build release notes
+        run: node .github/scripts/release-notes.mjs "${GITHUB_REF_NAME}" > release-notes.md && cat release-notes.md
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
@@ -320,6 +334,7 @@ jobs:
         with:
           files: dist/*
           prerelease: ${{ contains(github.ref_name, 'beta') || contains(github.ref_name, 'alpha') }}
+          body_path: release-notes.md
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
