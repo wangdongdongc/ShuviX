@@ -1,611 +1,640 @@
 /**
- * 两面说同一句话：沙箱规格（命令实际能碰什么）与策略变量（文件工具问不问）同源，
- * 所以**文件工具免询问的地方，受限命令一定也能碰**——否则模型会学会走不问的那条路。
+ * 两面说同一句话：沙箱规格（受限命令实际能碰什么）与外部目录访问策略（文件工具问不问）出自同一份
+ * 会话目录清单，所以**文件工具要问的，恰好就是受限命令碰不到的** —— 否则模型会学会走不问的那条路
+ * （换成 `cat` / `echo >`，或者反过来）。
  *
- * 规格 buildSandboxSpec → 视图 toPolicyView → 作为 vars（连同常规桌面变量）喂给**真实**的
- * 内置策略（agent-runtime createSecurityContext 的 evaluate，与生产同一条装配 + 求值路径）。
- * 规格的凭据清单也照生产取：内置 protect-credentials 的 `credentialDirs`（resolvePolicyLet）。
+ * 策略那一面走**真实**的桌面安全 provider（toolContext 的 getDesktopSecurityContext /
+ * makeDesktopSecurityProvider：变量表里的 `vars.sessionDirs` / `vars.sessionReadDirs` 由沙箱管理器的
+ * sessionDirsView 现算，extras 由 sessionDirExtras 现算，「允许并记住」来自会话设置的 allowList）+ 真实的
+ * 内置策略 md（ask-on-external-path）。沙箱那一面用 buildSandboxSpec，喂的是 shellCommand 交给 planFor 的
+ * 同一份 extras 与授权。
  *
- *  - PP-1 写的健全性：write 判 allow ⇒ !isWriteBlocked(spec, p)；并钉住已知的「策略比沙箱严」
- *    的方向（安全方向，实现方已接受）；
- *  - PP-2 读的健全性：read 判 allow ⇒ !isReadBlocked(spec, p)；
- *  - PP-3 沙箱没套上（INACTIVE_VIEW）、只剩工作区写入视图：免询问的写仍 ⇒ !isWriteBlocked(spec, p)，
- *    而且只落在工作区或本会话 artifacts 里（工作区豁免绝不放过沙箱会拒写的位置）；
- *  - PP-4 同一情形下，沙箱视图才放行的临时目录与工具缓存照问；
- *  - PP-5 读的精确对偶：文件工具的读要问（且是 protect-credentials#0 问）⇔ 受限命令读不到；
- *  - PP-6 用户覆盖 protect-credentials 的清单，两面一起变；
- *  - PP-7 根顶层的 .vscode / .claude / .mcp.json …：两面都不管；PP-8 git 元数据两面都管；
- *  - PP-9 接受的不对称：会话的读授权（允许并记住）只放行文件工具，命令照样读不到凭据；
- *  - PP-10 接受的不对称：凭据位置的写 —— 文件工具问（ask-on-write，可以记住；2026-10-01 起出厂没有
- *    拒写策略），受限命令写不了（沙箱的凭据清单读写都拦）。
+ *  - PP-0 前提：provider 交给策略的两份清单就是规格里的 sessionDirs / sessionReadDirs；
+ *  - PP-1 写的精确对偶：文件工具的写要问（ask-on-external-path#1）⇔ 受限命令写不了；
+ *  - PP-2 读的精确对偶：文件工具的读要问（ask-on-external-path#0）⇔ 受限命令读不到 —— 两处有意的例外：
+ *  - PP-3 cli-token 与家目录里的 ShuviX 程序目录：受限命令读得到（CLI 在沙箱里必须能用），文件工具的读照问；
+ *  - PP-4 授权：读授权两面都只放读，写授权两面都放读写；
+ *  - PP-5 extras：勾选的知识库两面都可读写；技能目录 / 内置知识库两面都只读（规则 #0 豁免 sessionReadDirs，#1 不）；
+ *  - PP-6 不适合的工作目录（含「包含 userData」的 ~/Library）：两面都不把它当会话目录 —— 沙箱不套
+ *    （命令逐条询问），文件工具在那里照问；PP-6b 不适合的写授权：沙箱不套，文件工具照样凭授权写；
+ *  - PP-7 变量齐全：以上评估没有 fail-safe 告警。
  *
- * 语料：CL-3 / CL-4 / CL-6 用到的路径 + SP-9 的正则路径，按几种工作区与两种布局（生产 / e2e）各跑一遍。
+ * 替身：electron 的 app.getPath（userData）、os.homedir（按布局换家目录）、dao、sessionService、skillService
+ * （外部目录与启用的技能根）、knowledge 的 enabledTargets（勾选的知识库）、policyService（内置策略读仓库里
+ * 那一份，没有用户策略）、logger（收集告警）。sandbox 模块与 utils/paths 用真的。
+ * 两种布局：生产（/Users/u）与 e2e（假家目录在 /private/tmp 下）。
  */
-import { describe, expect, it, vi } from 'vitest'
+import { realpathSync } from 'fs'
+import { basename, dirname, join, resolve } from 'path'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-vi.mock('electron', () => ({ app: { getPath: () => '/nonexistent', isPackaged: false } }))
+const state = vi.hoisted(() => ({
+  home: '/Users/u',
+  userData: '/Users/u/Library/Application Support/ShuviX',
+  /** 会话设置里的 allowList（「允许并记住」） */
+  allowList: [] as string[],
+  /** knowledge 的 enabledTargets：本会话勾选的知识库 */
+  knowledgeTargets: [] as Array<{ name: string; target: { dir: string; readonly?: boolean } }>,
+  /** skillService.enabledSkillRoots */
+  skillRoots: [] as string[],
+  warnings: [] as string[]
+}))
 
+vi.mock('electron', () => ({ app: { getPath: () => state.userData, isPackaged: false } }))
+vi.mock('os', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('os')>()
+  const mocked = { ...actual, homedir: () => state.home }
+  return { ...mocked, default: mocked }
+})
+vi.mock('../../../dao/projectDao', () => ({ projectDao: { pick: () => undefined } }))
+vi.mock('../../../dao/sessionDao', () => ({
+  sessionDao: { pickSettings: () => ({ allowList: state.allowList }) }
+}))
+vi.mock('../../sessionService', () => ({
+  sessionService: { getById: () => undefined, addAllowListPaths: () => {} }
+}))
+vi.mock('../../skillService', () => ({
+  skillService: { listExternalDirs: () => [], enabledSkillRoots: () => state.skillRoots }
+}))
+vi.mock('../../knowledge/sessionBundle', () => ({
+  enabledTargets: () => state.knowledgeTargets
+}))
+vi.mock('../../policyService', async () => {
+  const { createInlinePolicyMdReader } =
+    await import('@shuvix/agent-runtime/security/builtinPolicies/inlineSources')
+  const readMd = createInlinePolicyMdReader()
+  return {
+    policyService: { getUserPolicies: () => [], readBuiltinPolicyMd: (f: string) => readMd(f) }
+  }
+})
+vi.mock('../../../logger', () => ({
+  createLogger: () => ({
+    info: () => {},
+    debug: () => {},
+    error: () => {},
+    warn: (msg: unknown) => void state.warnings.push(String(msg))
+  })
+}))
+
+import type { SecurityContext, SecurityDecision } from '@shuvix/agent-runtime'
 import {
-  createSecurityContext,
-  parsePolicyDefinitionFile,
-  resolvePolicyLet,
-  type SecurityContext,
-  type SecurityHostProvider,
-  type UserPolicyFile
-} from '@shuvix/agent-runtime'
-import { createInlinePolicyMdReader } from '@shuvix/agent-runtime/security/builtinPolicies/inlineSources'
+  getDesktopSecurityContext,
+  makeDesktopSecurityProvider,
+  sessionDirExtras,
+  type ProjectConfig
+} from '../../toolContext'
 import { isReadBlocked, isWriteBlocked } from '../classify'
-import {
-  buildSandboxSpec,
-  isWithin,
-  protectedWritePatterns,
-  sessionTmpName,
-  toPolicyView
-} from '../spec'
-import {
-  INACTIVE_VIEW,
-  type SandboxHostPaths,
-  type SandboxSessionInput,
-  type SandboxSpec,
-  type SessionSandboxView
-} from '../types'
+import { buildSandboxSpec, isWithin, sessionDirsFor, sessionTmpName } from '../spec'
+import type { SandboxHostPaths, SandboxSpec } from '../types'
 
 const SID = 'sess-1'
-const READ_MD = createInlinePolicyMdReader()
+const UID = process.getuid?.() ?? 0
+const TMP_ROOT = `/private/tmp/shuvix-${UID}`
+const TMP_DIR = `${TMP_ROOT}/${sessionTmpName(SID)}`
 
-function hostPaths(home: string): SandboxHostPaths {
+/** 与管理器同义的 realpath：不存在的部分按最近的已存在祖先拼回 */
+function realLoose(p: string): string {
+  const abs = resolve(p)
+  try {
+    return realpathSync.native(abs)
+  } catch {
+    const parent = dirname(abs)
+    if (parent === abs) return abs
+    return join(realLoose(parent), basename(abs))
+  }
+}
+
+interface Layout {
+  home: string
+  userData: string
+  shuvix: string
+  /** 家目录里的 ShuviX 程序目录（开发态：仓库在家目录里） */
+  appPaths: string[]
+  host: SandboxHostPaths
+}
+
+function layoutOf(home: string): Layout {
+  const userData = `${home}/Library/Application Support/ShuviX`
+  const shuvix = `${home}/.shuvix`
+  const appPaths = [`${home}/dev/ShuviX/out/main`, `${home}/dev/ShuviX/resources/cli`]
   return {
     home,
-    userData: `${home}/Library/Application Support/ShuviX`,
-    shuvixHome: `${home}/.shuvix`,
-    uid: 501,
-    cliSocket: `${home}/.shuvix/cli.sock`,
-    tmpRoot: '/private/tmp/shuvix-501'
+    userData,
+    shuvix,
+    appPaths,
+    host: {
+      home,
+      userData,
+      shuvixHome: shuvix,
+      toolResultsBase: `${userData}/tool_results`,
+      uid: UID,
+      cliSocket: `${shuvix}/cli.sock`,
+      cliToken: `${shuvix}/cli-token`,
+      appPaths,
+      tmpRoot: TMP_ROOT
+    }
   }
 }
 
 const LAYOUTS = {
-  prod: hostPaths('/Users/u'),
-  e2e: hostPaths('/private/tmp/shuvix-e2e-x')
+  prod: layoutOf('/Users/u'),
+  e2e: layoutOf('/private/tmp/shuvix-e2e-x')
 } as const
-type Layout = keyof typeof LAYOUTS
+type LayoutName = keyof typeof LAYOUTS
 
-/** 工作区变体（相对家目录；temp = 本会话临时工作区） */
-const WORKSPACES: Record<string, (p: SandboxHostPaths) => string> = {
-  'project ~/proj': (p) => `${p.home}/proj`,
-  'project ~/Documents/proj': (p) => `${p.home}/Documents/proj`,
-  'temp workspace': (p) => `${p.userData}/temp_workspace/${SID}`,
-  'knowledge base ~/.shuvix/knowledge/b': (p) => `${p.shuvixHome}/knowledge/b`
+/** 适合当会话目录的工作目录 */
+const WORKSPACES: Record<string, (l: Layout) => string> = {
+  '~/proj': (l) => `${l.home}/proj`,
+  '~/Documents/a/proj': (l) => `${l.home}/Documents/a/proj`,
+  'temp workspace': (l) => `${l.userData}/temp_workspace/${SID}`,
+  'knowledge base ~/.shuvix/knowledge/b': (l) => `${l.shuvix}/knowledge/b`,
+  'widget ~/.shuvix/widgets/w': (l) => `${l.shuvix}/widgets/w`,
+  '/Volumes/data/proj (outside home)': () => '/Volumes/data/proj'
 }
 
-/** 生产 sessionCredentialPaths 的做法：生效的 protect-credentials 的 `credentialDirs` */
-function credentialPathsOf(paths: SandboxHostPaths): string[] {
-  const value = resolvePolicyLet(
-    { pathSep: '/', readBuiltinPolicyMd: READ_MD },
-    'protect-credentials',
-    'credentialDirs',
-    { home: paths.home }
+/** 「允许并记住」：家目录里一个读授权、家目录里与家目录外各一个写授权 */
+const grantsOf = (l: Layout): string[] => [
+  `Read(${l.home}/ref)`,
+  `Write(${l.home}/w2)`,
+  'Write(/Volumes/data/shared)'
+]
+
+/** 本会话的 extras：一个勾选的知识库（可读写）、只读的内置知识库、两个技能根 */
+function arrangeExtras(l: Layout): void {
+  state.knowledgeTargets = [
+    { name: 'notes', target: { dir: `${l.shuvix}/knowledge/notes` } },
+    {
+      name: 'shuvix',
+      target: { dir: `${l.home}/dev/ShuviX/resources/knowledge/shuvix/en`, readonly: true }
+    }
+  ]
+  state.skillRoots = [`${l.shuvix}/skills`, `${l.home}/my-skills`]
+}
+
+beforeEach(() => {
+  state.allowList = []
+  state.knowledgeTargets = []
+  state.skillRoots = []
+})
+
+function enterLayout(l: Layout, allowList: string[] = []): void {
+  state.home = l.home
+  state.userData = l.userData
+  state.allowList = allowList
+  arrangeExtras(l)
+}
+
+/** 文件工具那一面：真实的桌面安全 context（agent 主体） */
+function contextFor(ws: string): SecurityContext {
+  const config = { workingDirectory: ws } as ProjectConfig
+  return getDesktopSecurityContext(
+    { sessionId: SID, requestUserInput: async () => ({ kind: 'cancel' }) as never },
+    () => config
   )
-  if (!Array.isArray(value)) throw new Error('protect-credentials has no credentialDirs')
-  return value as string[]
 }
 
-function specFor(paths: SandboxHostPaths, over: Partial<SandboxSessionInput>): SandboxSpec {
-  const result = buildSandboxSpec(
-    paths,
+/** provider 交给策略的变量表 */
+function varsFor(ws: string): Record<string, unknown> {
+  const config = { workingDirectory: ws } as ProjectConfig
+  return makeDesktopSecurityProvider({ sessionId: SID }, () => config).getVars() as Record<
+    string,
+    unknown
+  >
+}
+
+/** 沙箱那一面：shellCommand 交给 planFor 的同一份 extras 与授权 */
+function grantsFromAllowList(): { grantedRead: string[]; grantedWrite: string[] } {
+  const grantedRead: string[] = []
+  const grantedWrite: string[] = []
+  for (const entry of state.allowList) {
+    const m = /^(Read|Write)\((.*)\)$/.exec(entry)
+    if (m) (m[1] === 'Write' ? grantedWrite : grantedRead).push(m[2])
+  }
+  return { grantedRead, grantedWrite }
+}
+
+function specFor(l: Layout, ws: string): SandboxSpec {
+  const built = buildSandboxSpec(
+    l.host,
     {
       sessionId: SID,
-      workingDirectory: '',
-      grantedWrite: [],
-      credentialPaths: credentialPathsOf(paths),
-      ...over
+      workingDirectory: ws,
+      extras: sessionDirExtras(SID),
+      ...grantsFromAllowList()
     },
-    (x) => x
+    realLoose
   )
-  if (!result.ok) throw new Error(result.reason)
-  return result.spec
+  if (!built.ok) throw new Error(built.reason)
+  return built.spec
 }
 
-/**
- * 生产 getVars 的形状：常规桌面变量 + 沙箱视图（缺省是套上时的 toPolicyView；PP-3 / PP-4 换成
- * INACTIVE_VIEW —— 设置关着、探测没过、Linux 上的会话）+ 工作区写入视图
- */
-function contextFor(
-  paths: SandboxHostPaths,
-  spec: SandboxSpec,
-  view: SessionSandboxView = toPolicyView(spec),
-  extra: { userPolicies?: UserPolicyFile[]; allowList?: string[] } = {}
-): SecurityContext {
-  const provider: SecurityHostProvider = {
-    host: 'desktop',
-    pathSep: '/',
-    getVars: () => ({
-      workspace: spec.workingDirectory,
-      toolResultsBase: `${paths.userData}/tool_results`,
-      skillsDirs: [
-        `${paths.shuvixHome}/skills`,
-        '/Applications/ShuviX.app/Contents/Resources/skills'
-      ],
-      memoryDirs: [`${paths.shuvixHome}/memory`],
-      botsDir: `${paths.shuvixHome}/bots`,
-      builtinKnowledgeDir: '/Applications/ShuviX.app/Contents/Resources/knowledge',
-      sessionArtifactsDir: `${paths.shuvixHome}/artifacts/${SID}`,
-      home: paths.home,
-      systemDirs: [],
-      // ShuviX 自己的规矩所在（事实变量：出厂已没有策略读它，留给用户自写的策略）
-      shuvixConfigDirs: ['policies', 'agents', 'hooks', 'skills'].map(
-        (d) => `${paths.shuvixHome}/${d}`
-      ),
-      // 与沙箱开没开无关的工作区写入视图（生产 workspaceWriteView 在非 Windows 上给的就是这一组）
-      workspaceWritable: [spec.workingDirectory],
-      workspaceWriteDenied: spec.writeDeniedFinal,
-      workspaceProtectedPatterns: protectedWritePatterns(spec),
-      ...view
-    }),
-    getSessionGrants: () => ({ allowList: extra.allowList ?? [] }),
-    ...(extra.userPolicies ? { getUserPolicies: () => extra.userPolicies! } : {}),
-    readBuiltinPolicyMd: READ_MD,
-    logger: { warn: (msg: string) => warnings.push(msg), info: () => {}, error: () => {} }
-  } as SecurityHostProvider
-  return createSecurityContext(
-    { kind: 'agent', sessionId: SID, agentKind: 'root' },
-    { host: 'desktop', platform: 'darwin' },
-    provider
-  )
-}
-
-const warnings: string[] = []
-
-/** 语料：计划里 CL-3 / CL-4 / CL-6 与 SP-9 用到的路径，按布局与工作区换算 */
-function corpus(p: SandboxHostPaths, ws: string): string[] {
-  const h = p.home
-  const s = p.shuvixHome
-  const u = p.userData
+/** 语料：会话目录、extras、授权、ShuviX 自己的文件、凭据、家目录里的配置与缓存、家目录以外 */
+function corpus(l: Layout, ws: string): string[] {
+  const { home: h, shuvix: s, userData: u } = l
   return [
-    // CL-3
-    `${h}/other`,
-    `${ws}/.vscode/settings.json`,
+    // 工作目录（git 元数据与别家工具的配置不再受保护）
+    `${ws}/src/a.ts`,
     `${ws}/.git/hooks/pre-commit`,
-    `${ws}/.GIT/config`,
-    `${h}/.zshrc`,
-    `/private/tmp/shuvix-ssh-501/x`,
-    `/private/tmp/com.apple.launchd.x/y`,
-    `${h}/Documents/a.txt`,
-    `${h}/.ssh/id_ed25519`,
-    `${u}/data/x`,
-    `${u}/x`,
-    `${ws}/.mcp.json`,
+    `${ws}/.git/config`,
+    `${ws}/.git`,
+    `${ws}/.vscode/settings.json`,
+    // 本会话的其他会话目录，与别的会话的
+    `${TMP_DIR}/x`,
+    `${TMP_ROOT}/0000aaaa/x`,
+    `${s}/artifacts/${SID}/f`,
+    `${s}/artifacts/other/f`,
+    `${u}/tool_results/${SID}/x`,
+    `${u}/tool_results/other/r.txt`,
+    `${u}/temp_workspace/${SID}/a.txt`,
+    `${u}/temp_workspace/OTHER/a.txt`,
+    // extras
+    `${s}/knowledge/notes/a.md`,
+    `${s}/knowledge/other/a.md`,
+    `${s}/skills/s/SKILL.md`,
+    `${h}/my-skills/s/SKILL.md`,
+    `${h}/dev/ShuviX/resources/knowledge/shuvix/en/policy-md.md`,
+    // 授权
+    `${h}/ref/a.txt`,
+    `${h}/w2/x`,
+    '/Volumes/data/shared/x',
+    // ShuviX 自己的文件与数据
     `${s}/x`,
     `${s}/policies/p.md`,
     `${s}/agents/a.md`,
-    // CL-4
-    `${ws}/src/a.ts`,
-    '/private/tmp/x',
-    `${u}/tool_results/${SID}/x`,
-    `${h}/Documents/proj/x`,
-    '/private/tmp/r/.git/config',
-    // CL-6
-    `${s}/artifacts/${SID}/f`,
-    `${s}/artifacts/other/f`,
-    `${u}/temp_workspace/${SID}/a.txt`,
-    `${s}/widgets/w/f`,
-    `${s}/widgets/w/.claude/x`,
-    `${h}/.ssh/config`,
-    `${h}/Documents/ref/a.txt`,
-    `${h}/Documents/other.txt`,
-    '/private/etc/hosts',
-    `${s}/.session-state/k`,
-    `${s}/cli-token`,
+    `${s}/.session-state`,
+    `${s}/cli.sock`,
     `${u}/data/db`,
-    `${u}/tool_results/other/r.txt`,
-    `${ws}/.git`,
-    `${ws}/.git/info/exclude`,
-    `${ws}/sub/.vscode/x`,
-    `${ws}/sub/.mcp.json`,
-    '/private/tmp/clone/.git/config',
+    `${u}/x`,
+    // 凭据、家目录里的配置与缓存
+    `${h}/.ssh/id_ed25519`,
+    `${h}/.ssh/config`,
+    `${h}/.aws/credentials`,
+    `${h}/.config/gh/hosts.yml`,
+    `${h}/.gitconfig`,
+    `${h}/.zshrc`,
     `${h}/.npm/x`,
     `${h}/Library/Caches/pip/x`,
-    `${p.tmpRoot}/${sessionTmpName(SID)}/x`,
-    `${h}/.config/fish/config.fish`,
-    `${h}/.config/gh/hosts.yml`,
     `${h}/Library/LaunchAgents/x.plist`,
-    `${h}/Library/Mail/x`,
-    // SP-9（放到工作区下）
-    `${ws}/.git/hooks`,
-    `${ws}/.git/config.worktree`,
-    `${ws}/.git/commondir`,
-    `${ws}/a/b/.git/config`,
-    `${ws}/.git/modules/m/config`,
-    `${ws}/.git/modules/a/modules/b/hooks/x`,
-    `${ws}/.git/worktrees/wt/config.worktree`,
-    `${ws}/.git/HEAD`,
-    `${ws}/.git/config.lock`,
-    `${ws}/.github/workflows/ci.yml`,
-    `${ws}/.gitignore`,
-    `${ws}/.git/refs/heads/config`,
-    `${ws}/sub/.Git`,
-    '/private/tmp/com.apple.launchd.AbC/Listeners',
-    '/private/tmp/com.apple.launchdX'
+    `${h}/Documents/a.txt`,
+    `${h}/other`,
+    h,
+    // 家目录以外
+    '/etc/hosts',
+    '/private/etc/hosts',
+    '/private/tmp/x',
+    '/tmp/x',
+    '/Volumes/x/y',
+    '/opt/homebrew/bin/node',
+    '/Applications/ShuviX.app/Contents/MacOS/ShuviX'
   ]
 }
 
-const variants = (Object.keys(LAYOUTS) as Layout[]).flatMap((layout) =>
-  Object.keys(WORKSPACES).map((wsName) => [layout, wsName] as const)
+/** 有意的不对称：受限命令读得到、文件工具的读照问 —— cli-token 与家目录里的 ShuviX 程序目录 */
+function readAsymmetry(l: Layout, path: string): boolean {
+  return (
+    path === l.host.cliToken || l.appPaths.some((a) => isWithin(path, a) && isWithin(path, l.home))
+  )
+}
+
+const variants = (Object.keys(LAYOUTS) as LayoutName[]).flatMap((layout) =>
+  Object.keys(WORKSPACES).flatMap((wsName) =>
+    (['no grants', 'with grants'] as const).map((grants) => [layout, wsName, grants] as const)
+  )
 )
 
-describe('PP-1 写的健全性：文件工具免询问的写，受限命令一定也写得了', () => {
-  it.each(variants)('PP-1 %s 布局 · %s', (layout, wsName) => {
-    const paths = LAYOUTS[layout]
-    const ws = WORKSPACES[wsName](paths)
-    const spec = specFor(paths, { workingDirectory: ws })
-    const ctx = contextFor(paths, spec)
-    const violations: string[] = []
+function arrange(
+  layout: LayoutName,
+  wsName: string,
+  grants: 'no grants' | 'with grants'
+): { l: Layout; ws: string; spec: SandboxSpec; ctx: SecurityContext } {
+  const l = LAYOUTS[layout]
+  enterLayout(l, grants === 'with grants' ? grantsOf(l) : [])
+  const ws = WORKSPACES[wsName](l)
+  return { l, ws, spec: specFor(l, ws), ctx: contextFor(ws) }
+}
+
+const brief = (d: SecurityDecision): { effect: string; winning: string; matched: string[] } => ({
+  effect: d.effect,
+  winning: d.winning,
+  matched: d.matched
+})
+
+describe('PP-0 前提：provider 交给策略的会话目录就是规格里那两份', () => {
+  it.each(variants)('PP-0 %s 布局 · %s · %s', (layout, wsName, grants) => {
+    const { ws, spec } = arrange(layout, wsName, grants)
+    const vars = varsFor(ws)
+    expect(vars.sessionDirs).toEqual(spec.sessionDirs)
+    expect(vars.sessionReadDirs).toEqual(spec.sessionReadDirs)
+    expect(vars.home).toBe(spec.home)
+    // extras 确实进来了（不是两份空清单碰巧相等）
+    expect(spec.sessionDirs.length).toBeGreaterThan(4)
+    expect(spec.sessionReadDirs.length).toBeGreaterThanOrEqual(3)
+  })
+})
+
+describe('PP-1 写的精确对偶：文件工具的写要问 ⇔ 受限命令写不了', () => {
+  it.each(variants)('PP-1 %s 布局 · %s · %s', (layout, wsName, grants) => {
+    const { l, ws, spec, ctx } = arrange(layout, wsName, grants)
+    let asked = 0
     let allowed = 0
-    for (const path of corpus(paths, ws)) {
+    for (const path of corpus(l, ws)) {
       const decision = ctx.evaluate('write', { type: 'path', path })
-      if (decision.effect !== 'allow') continue
-      allowed++
-      if (isWriteBlocked(spec, path)) violations.push(`${path} (${decision.winning})`)
-    }
-    expect(violations).toEqual([])
-    // 语料确实覆盖到了免询问的一侧（不是全都在问）
-    expect(allowed).toBeGreaterThan(3)
-  })
-
-  it('PP-1 严格方向（钉住）：git 元数据正则在策略里全局生效 —— 工作区外 clone 的 .git/config 策略要问，沙箱放行', () => {
-    const paths = LAYOUTS.prod
-    const spec = specFor(paths, { workingDirectory: `${paths.home}/proj` })
-    const ctx = contextFor(paths, spec)
-    const path = '/private/tmp/clone/.git/config'
-    expect(ctx.evaluate('write', { type: 'path', path })).toMatchObject({
-      effect: 'ask',
-      winning: 'ask-on-write#0'
-    })
-    expect(isWriteBlocked(spec, path)).toBe(false)
-  })
-
-  it('PP-1 e2e 布局的临时工作区：沙箱视图把 userData 列进写拒（它落在 /private/tmp 根里），但工作区写入视图放行工作区本身 —— write 与 bash 两面一致', () => {
-    // 2026-09-28 之前这条钉的是「write 要问而 bash 能写」的严格方向；与沙箱无关的工作区写入视图
-    // 把工作区本身放回来之后，两面一致了
-    const paths = LAYOUTS.e2e
-    const ws = `${paths.userData}/temp_workspace/${SID}`
-    const spec = specFor(paths, { workingDirectory: ws })
-    const ctx = contextFor(paths, spec)
-    const path = `${ws}/a.txt`
-    expect(ctx.evaluate('write', { type: 'path', path }).effect).toBe('allow')
-    expect(isWriteBlocked(spec, path)).toBe(false)
-    // 生产布局下同一种会话两面一致：都放行
-    const prod = LAYOUTS.prod
-    const prodWs = `${prod.userData}/temp_workspace/${SID}`
-    const prodSpec = specFor(prod, { workingDirectory: prodWs })
-    expect(
-      contextFor(prod, prodSpec).evaluate('write', { type: 'path', path: `${prodWs}/a.txt` }).effect
-    ).toBe('allow')
-    expect(isWriteBlocked(prodSpec, `${prodWs}/a.txt`)).toBe(false)
-  })
-})
-
-describe('PP-2 读的健全性：文件工具免询问的读，受限命令一定也读得到', () => {
-  it.each(variants)('PP-2 %s 布局 · %s', (layout, wsName) => {
-    const paths = LAYOUTS[layout]
-    const ws = WORKSPACES[wsName](paths)
-    const spec = specFor(paths, { workingDirectory: ws })
-    const ctx = contextFor(paths, spec)
-    const violations: string[] = []
-    let allowed = 0
-    for (const path of corpus(paths, ws)) {
-      const decision = ctx.evaluate('read', { type: 'path', path })
-      if (decision.effect !== 'allow') continue
-      allowed++
-      if (isReadBlocked(spec, path)) violations.push(`${path} (${decision.winning})`)
-    }
-    expect(violations).toEqual([])
-    expect(allowed).toBeGreaterThan(3)
-  })
-
-  it('PP-2 凭据目录的读：文件工具由 protect-credentials 询问（没有别的读策略），受限命令读不到 —— 两面用的是同一份清单', () => {
-    const paths = LAYOUTS.prod
-    const spec = specFor(paths, { workingDirectory: `${paths.home}/proj` })
-    const ctx = contextFor(paths, spec)
-    const path = `${paths.home}/.ssh/config`
-    const decision = ctx.evaluate('read', { type: 'path', path })
-    expect(decision.effect).toBe('ask')
-    expect(decision.winning).toBe('protect-credentials#0')
-    expect(decision.matched).toEqual(['protect-credentials#0'])
-    expect(isReadBlocked(spec, path)).toBe(true)
-  })
-
-  it('PP-2 策略变量齐全：以上评估没有 fail-safe 告警', () => {
-    expect(warnings.filter((w) => /fail-safe|not provided/i.test(w))).toEqual([])
-  })
-})
-
-describe('PP-3 / PP-4 沙箱没套上、只剩工作区写入视图', () => {
-  /** 沙箱视图换成 INACTIVE_VIEW；工作区写入视图照生产 workspaceWriteView 从同一份规格算 */
-  const workspaceOnly = (paths: SandboxHostPaths, spec: SandboxSpec): SecurityContext =>
-    contextFor(paths, spec, INACTIVE_VIEW)
-
-  it.each(variants)(
-    'PP-3 %s 布局 · %s：免询问的写受限命令一定也写得了，且都在工作区或本会话 artifacts 里',
-    (layout, wsName) => {
-      const paths = LAYOUTS[layout]
-      const ws = WORKSPACES[wsName](paths)
-      const spec = specFor(paths, { workingDirectory: ws })
-      const ctx = workspaceOnly(paths, spec)
-      const artifacts = `${paths.shuvixHome}/artifacts/${SID}`
-      const warningsBefore = warnings.length
-      const blocked: string[] = []
-      const escaped: string[] = []
-      let allowed = 0
-      for (const path of corpus(paths, ws)) {
-        const decision = ctx.evaluate('write', { type: 'path', path })
-        if (decision.effect !== 'allow') continue
+      const blocked = isWriteBlocked(spec, path)
+      if (blocked) {
+        asked++
+        expect({ path, ...brief(decision) }).toEqual({
+          path,
+          effect: 'ask',
+          winning: 'ask-on-external-path#1',
+          matched: ['ask-on-external-path#1']
+        })
+      } else {
         allowed++
-        if (isWriteBlocked(spec, path)) blocked.push(`${path} (${decision.winning})`)
-        if (!isWithin(path, spec.workingDirectory) && !isWithin(path, artifacts)) {
-          escaped.push(`${path} (${decision.winning})`)
-        }
-      }
-      expect(blocked).toEqual([])
-      expect(escaped).toEqual([])
-      expect(allowed).toBeGreaterThan(0)
-      // 工作区里的普通源码确实走了豁免（不是整片都在问）
-      expect(ctx.evaluate('write', { type: 'path', path: `${ws}/src/a.ts` }).effect).toBe('allow')
-      // 变量齐全：没有 fail-safe 告警
-      expect(
-        warnings.slice(warningsBefore).filter((w) => /fail-safe|not provided/i.test(w))
-      ).toEqual([])
-    }
-  )
-
-  it.each(variants)(
-    'PP-4 %s 布局 · %s：/private/tmp 与 ~/.npm 照问（它们只归沙箱视图豁免，沙箱套上时才放行）',
-    (layout, wsName) => {
-      const paths = LAYOUTS[layout]
-      const ws = WORKSPACES[wsName](paths)
-      const spec = specFor(paths, { workingDirectory: ws })
-      const inactive = workspaceOnly(paths, spec)
-      const active = contextFor(paths, spec)
-      for (const path of ['/private/tmp/x', `${paths.home}/.npm/x`]) {
-        expect({
+        expect({ path, ...brief(decision) }).toEqual({
           path,
-          inactive: inactive.evaluate('write', { type: 'path', path })
-        }).toMatchObject({ path, inactive: { effect: 'ask', winning: 'ask-on-write#0' } })
-        // 对照：同一份规格、沙箱视图套上时这两处不问 —— 放行它们的只是沙箱视图
-        expect({ path, active: active.evaluate('write', { type: 'path', path }).effect }).toEqual({
-          path,
-          active: 'allow'
+          effect: 'allow',
+          winning: expect.any(String),
+          matched: []
         })
       }
     }
-  )
-})
-
-describe('PP-5 读的精确对偶：文件工具的读要问 ⇔ 受限命令读不到', () => {
-  it.each(variants)('PP-5 %s 布局 · %s', (layout, wsName) => {
-    const paths = LAYOUTS[layout]
-    const ws = WORKSPACES[wsName](paths)
-    const spec = specFor(paths, { workingDirectory: ws })
-    const ctx = contextFor(paths, spec)
-    let asked = 0
-    for (const path of corpus(paths, ws)) {
-      const decision = ctx.evaluate('read', { type: 'path', path })
-      const credential = decision.effect === 'ask' && decision.winning === 'protect-credentials#0'
-      expect({ path, credential }).toEqual({ path, credential: isReadBlocked(spec, path) })
-      if (credential) {
-        asked++
-        continue
-      }
-      expect({ path, effect: decision.effect, matched: decision.matched }).toEqual({
-        path,
-        effect: 'allow',
-        matched: []
-      })
-    }
-    // 语料里确实有凭据位置（~/.ssh/…、.session-state、~/.config/gh/…）
-    expect(asked).toBeGreaterThanOrEqual(4)
+    // 语料两边都覆盖到了
+    expect(asked).toBeGreaterThan(10)
+    expect(allowed).toBeGreaterThan(5)
   })
 })
 
-describe('PP-6 用户覆盖凭据清单：文件工具与命令两面一起变', () => {
-  it('PP-6 去掉 .aws、加上工作区里的 secrets：~/.aws 两面都放；~/.ssh 两面照拦；ws/secrets 读要问且命令读不到、写要问（不再拒）且命令写不了 —— 它虽在工作区里，工作区豁免也不放过它', () => {
-    const paths = LAYOUTS.prod
-    const ws = `${paths.home}/proj`
-    const raw = READ_MD('protect-credentials.md')!
-      .replace("'.aws', ", '')
-      .replace(
-        ".map(s, vars.home + '/' + s)",
-        ".map(s, vars.home + '/' + s) + [vars.workspace + '/secrets']"
-      )
-    const parsed = parsePolicyDefinitionFile(raw, 'protect-credentials')
-    expect(parsed).not.toBeNull()
-    expect(parsed!.lets!.credentialDirs).toContain('vars.workspace')
-    const override: UserPolicyFile = { ...parsed!, fileName: 'protect-credentials.md' }
+describe('PP-2 读的精确对偶：文件工具的读要问 ⇔ 受限命令读不到（除 PP-3 的两处）', () => {
+  it.each(variants)('PP-2 %s 布局 · %s · %s', (layout, wsName, grants) => {
+    const { l, ws, spec, ctx } = arrange(layout, wsName, grants)
+    let asked = 0
+    let allowed = 0
+    for (const path of corpus(l, ws)) {
+      const decision = ctx.evaluate('read', { type: 'path', path })
+      const blocked = isReadBlocked(spec, path)
+      const fileToolAsks = blocked || readAsymmetry(l, path)
+      if (fileToolAsks) {
+        asked++
+        expect({ path, ...brief(decision) }).toEqual({
+          path,
+          effect: 'ask',
+          winning: 'ask-on-external-path#0',
+          matched: ['ask-on-external-path#0']
+        })
+      } else {
+        allowed++
+        expect({ path, ...brief(decision) }).toEqual({
+          path,
+          effect: 'allow',
+          winning: expect.any(String),
+          matched: []
+        })
+      }
+    }
+    expect(asked).toBeGreaterThan(10)
+    expect(allowed).toBeGreaterThan(5)
+  })
+})
 
-    // 生产 sessionCredentialPaths 的做法：同一份生效策略集、宿主的非沙箱变量
-    const credentialPaths = resolvePolicyLet(
-      { pathSep: '/', readBuiltinPolicyMd: READ_MD, getUserPolicies: () => [override] },
-      'protect-credentials',
-      'credentialDirs',
-      { home: paths.home, workspace: ws }
-    ) as string[]
-    expect(credentialPaths).toContain(`${ws}/secrets`)
-    expect(credentialPaths).not.toContain(`${paths.home}/.aws`)
+describe('PP-3 有意的不对称：受限命令读得到、文件工具的读照问', () => {
+  it.each(Object.keys(LAYOUTS) as LayoutName[])(
+    'PP-3 %s 布局：cli-token —— 命令读得到（沙箱里的 shuvix CLI 要鉴权）、文件工具的读要问；写两面都不行',
+    (layout) => {
+      const { l, spec, ctx } = arrange(layout, '~/proj', 'no grants')
+      const token = l.host.cliToken
+      expect(isReadBlocked(spec, token)).toBe(false)
+      expect(brief(ctx.evaluate('read', { type: 'path', path: token }))).toMatchObject({
+        effect: 'ask',
+        winning: 'ask-on-external-path#0'
+      })
+      expect(isWriteBlocked(spec, token)).toBe(true)
+      expect(ctx.evaluate('write', { type: 'path', path: token }).effect).toBe('ask')
+      // 只是这一个文件：它旁边的照样两面都拦
+      expect(isReadBlocked(spec, `${l.shuvix}/cli-token2`)).toBe(true)
+    }
+  )
 
-    const spec = specFor(paths, { workingDirectory: ws, credentialPaths })
-    const ctx = contextFor(paths, spec, toPolicyView(spec), { userPolicies: [override] })
+  it.each(Object.keys(LAYOUTS) as LayoutName[])(
+    'PP-3 %s 布局：家目录里的 ShuviX 程序目录（开发态）—— 命令读得到、文件工具的读要问；写两面都不行',
+    (layout) => {
+      const { l, spec, ctx } = arrange(layout, '~/proj', 'no grants')
+      const cliJs = `${l.appPaths[0]}/cli.js`
+      expect(isReadBlocked(spec, cliJs)).toBe(false)
+      expect(ctx.evaluate('read', { type: 'path', path: cliJs }).effect).toBe('ask')
+      expect(isWriteBlocked(spec, cliJs)).toBe(true)
+      expect(ctx.evaluate('write', { type: 'path', path: cliJs }).effect).toBe('ask')
+    }
+  )
 
-    const aws = `${paths.home}/.aws/credentials`
-    const awsRead = ctx.evaluate('read', { type: 'path', path: aws })
-    expect({ effect: awsRead.effect, matched: awsRead.matched }).toEqual({
+  it('PP-3 对照：打包后的程序在家目录以外（应用包里）—— 两面都读得到，没有不对称', () => {
+    const l = LAYOUTS.prod
+    enterLayout(l)
+    const packaged: Layout = {
+      ...l,
+      appPaths: ['/Applications/ShuviX.app'],
+      host: { ...l.host, appPaths: ['/Applications/ShuviX.app'] }
+    }
+    const ws = `${l.home}/proj`
+    const spec = specFor(packaged, ws)
+    const ctx = contextFor(ws)
+    const exe = '/Applications/ShuviX.app/Contents/MacOS/ShuviX'
+    expect(isReadBlocked(spec, exe)).toBe(false)
+    expect(brief(ctx.evaluate('read', { type: 'path', path: exe }))).toMatchObject({
       effect: 'allow',
       matched: []
     })
-    expect(isReadBlocked(spec, aws)).toBe(false)
-
-    const ssh = `${paths.home}/.ssh/id`
-    expect(ctx.evaluate('read', { type: 'path', path: ssh })).toMatchObject({
-      effect: 'ask',
-      winning: 'protect-credentials#0'
-    })
-    expect(isReadBlocked(spec, ssh)).toBe(true)
-
-    const secret = `${ws}/secrets/k`
-    expect(ctx.evaluate('read', { type: 'path', path: secret })).toMatchObject({
-      effect: 'ask',
-      winning: 'protect-credentials#0'
-    })
-    expect(isReadBlocked(spec, secret)).toBe(true)
-    // 凭据位置的写不再被拒：文件工具问（ask-on-write —— 清单里的位置落在沙箱的写拒里，工作区豁免
-    // 因此不覆盖它），命令照样写不了
-    expect(ctx.evaluate('write', { type: 'path', path: secret })).toMatchObject({
-      effect: 'ask',
-      winning: 'ask-on-write#0'
-    })
-    expect(isWriteBlocked(spec, secret)).toBe(true)
-    // 对照：工作区里别的文件照常可写（两面都放）
-    expect(ctx.evaluate('write', { type: 'path', path: `${ws}/src/a.ts` }).effect).toBe('allow')
-    expect(isWriteBlocked(spec, `${ws}/src/a.ts`)).toBe(false)
+    expect(isWriteBlocked(spec, exe)).toBe(true)
+    expect(ctx.evaluate('write', { type: 'path', path: exe }).effect).toBe('ask')
   })
 })
 
-describe('PP-7 / PP-8 根顶层别家工具的配置两面都不管；git 元数据两面都管', () => {
-  const ROOT_NAMES = [
-    '.vscode',
-    '.idea',
-    '.claude',
-    '.cursor',
-    '.codex',
-    '.zed',
-    '.mcp.json',
-    '.envrc'
-  ]
-  const targetsUnder = (root: string): string[] => [
-    ...ROOT_NAMES.map((n) => `${root}/${n}`),
-    ...ROOT_NAMES.map((n) => `${root}/${n}/x`),
-    `${root}/sub/.vscode/x`
-  ]
+describe('PP-4 授权：两面一样', () => {
+  it.each(Object.keys(LAYOUTS) as LayoutName[])(
+    'PP-4 %s 布局：读授权（家目录里）只放读；写授权放读写 —— 家目录里外都一样',
+    (layout) => {
+      const { l, spec, ctx } = arrange(layout, '~/proj', 'with grants')
+      const ref = `${l.home}/ref/a.txt`
+      expect(ctx.evaluate('read', { type: 'path', path: ref }).effect).toBe('allow')
+      expect(isReadBlocked(spec, ref)).toBe(false)
+      expect(ctx.evaluate('write', { type: 'path', path: ref }).effect).toBe('ask')
+      expect(isWriteBlocked(spec, ref)).toBe(true)
 
-  it.each(variants)(
-    'PP-7 %s 布局 · %s：工作区里的写两面都放（沙箱启用视图 / 沙箱没套上 + 工作区视图）',
-    (layout, wsName) => {
-      const paths = LAYOUTS[layout]
-      const ws = WORKSPACES[wsName](paths)
-      const spec = specFor(paths, { workingDirectory: ws })
-      for (const [label, ctx] of [
-        ['active', contextFor(paths, spec)],
-        ['inactive + workspace view', contextFor(paths, spec, INACTIVE_VIEW)]
-      ] as const) {
-        for (const path of targetsUnder(ws)) {
-          const decision = ctx.evaluate('write', { type: 'path', path })
-          expect({ label, path, effect: decision.effect, matched: decision.matched }).toEqual({
-            label,
-            path,
-            effect: 'allow',
-            matched: []
-          })
-          expect(isWriteBlocked(spec, path), path).toBe(false)
-        }
+      for (const w of [`${l.home}/w2/x`, '/Volumes/data/shared/x']) {
+        expect(ctx.evaluate('read', { type: 'path', path: w }).effect, w).toBe('allow')
+        expect(isReadBlocked(spec, w), w).toBe(false)
+        expect(ctx.evaluate('write', { type: 'path', path: w }).effect, w).toBe('allow')
+        expect(isWriteBlocked(spec, w), w).toBe(false)
       }
+
+      // 没有授权时：同样的位置两面都拦
+      const bare = arrange(layout, '~/proj', 'no grants')
+      expect(bare.ctx.evaluate('read', { type: 'path', path: ref }).effect).toBe('ask')
+      expect(isReadBlocked(bare.spec, ref)).toBe(true)
+      expect(
+        bare.ctx.evaluate('write', { type: 'path', path: '/Volumes/data/shared/x' }).effect
+      ).toBe('ask')
+      expect(isWriteBlocked(bare.spec, '/Volumes/data/shared/x')).toBe(true)
     }
   )
+})
 
-  it('PP-7 写授权根下同样两面都放（沙箱启用视图）', () => {
-    const paths = LAYOUTS.prod
-    const grant = '/Volumes/data/shared'
-    const spec = specFor(paths, { workingDirectory: `${paths.home}/proj`, grantedWrite: [grant] })
-    const ctx = contextFor(paths, spec)
-    for (const path of targetsUnder(grant)) {
-      const decision = ctx.evaluate('write', { type: 'path', path })
-      expect({ path, effect: decision.effect, matched: decision.matched }).toEqual({
-        path,
+describe('PP-5 extras：勾选的知识库可读写；技能目录与内置知识库只读', () => {
+  it.each(Object.keys(LAYOUTS) as LayoutName[])('PP-5 %s 布局', (layout) => {
+    const { l, spec, ctx } = arrange(layout, '~/proj', 'no grants')
+    const kb = `${l.shuvix}/knowledge/notes/a.md`
+    expect(ctx.evaluate('read', { type: 'path', path: kb }).effect).toBe('allow')
+    expect(ctx.evaluate('write', { type: 'path', path: kb }).effect).toBe('allow')
+    expect(isReadBlocked(spec, kb)).toBe(false)
+    expect(isWriteBlocked(spec, kb)).toBe(false)
+
+    for (const ro of [
+      `${l.shuvix}/skills/s/SKILL.md`,
+      `${l.home}/my-skills/s/references/x.md`,
+      `${l.home}/dev/ShuviX/resources/knowledge/shuvix/en/policy-md.md`
+    ]) {
+      expect(brief(ctx.evaluate('read', { type: 'path', path: ro })), ro).toMatchObject({
         effect: 'allow',
         matched: []
       })
-      expect(isWriteBlocked(spec, path), path).toBe(false)
+      expect(isReadBlocked(spec, ro), ro).toBe(false)
+      expect(brief(ctx.evaluate('write', { type: 'path', path: ro })), ro).toMatchObject({
+        effect: 'ask',
+        winning: 'ask-on-external-path#1'
+      })
+      expect(isWriteBlocked(spec, ro), ro).toBe(true)
     }
+
+    // 没勾的知识库：两面都拦
+    const other = `${l.shuvix}/knowledge/other/a.md`
+    expect(ctx.evaluate('read', { type: 'path', path: other }).effect).toBe('ask')
+    expect(isReadBlocked(spec, other)).toBe(true)
   })
 
-  it.each(variants)(
-    'PP-8 %s 布局 · %s：.git/config、.git/hooks/…、.git 本身 —— 文件工具问（ask-on-write#0）、命令写不了，两种视图一样',
-    (layout, wsName) => {
-      const paths = LAYOUTS[layout]
-      const ws = WORKSPACES[wsName](paths)
-      const spec = specFor(paths, { workingDirectory: ws })
-      for (const [label, ctx] of [
-        ['active', contextFor(paths, spec)],
-        ['inactive + workspace view', contextFor(paths, spec, INACTIVE_VIEW)]
-      ] as const) {
-        for (const path of [`${ws}/.git/config`, `${ws}/.git/hooks/pre-commit`, `${ws}/.git`]) {
-          const decision = ctx.evaluate('write', { type: 'path', path })
-          expect({ label, path, effect: decision.effect, winning: decision.winning }).toEqual({
-            label,
-            path,
-            effect: 'ask',
-            winning: 'ask-on-write#0'
-          })
-          expect(isWriteBlocked(spec, path), path).toBe(true)
-        }
-      }
-    }
-  )
+  it('PP-5 extras 跟着会话里勾的东西走：取消勾选之后，两面一起收回', () => {
+    const l = LAYOUTS.prod
+    enterLayout(l)
+    const ws = `${l.home}/proj`
+    const kb = `${l.shuvix}/knowledge/notes/a.md`
+    expect(contextFor(ws).evaluate('write', { type: 'path', path: kb }).effect).toBe('allow')
+    expect(isWriteBlocked(specFor(l, ws), kb)).toBe(false)
+
+    state.knowledgeTargets = []
+    state.skillRoots = []
+    expect(contextFor(ws).evaluate('write', { type: 'path', path: kb }).effect).toBe('ask')
+    expect(isWriteBlocked(specFor(l, ws), kb)).toBe(true)
+    expect(contextFor(ws).evaluate('read', { type: 'path', path: kb }).effect).toBe('ask')
+    expect(isReadBlocked(specFor(l, ws), kb)).toBe(true)
+  })
 })
 
-describe('PP-9 接受的不对称：读授权只放行文件工具', () => {
-  it('PP-9 allowList 里有 Read(~/.ssh)：read 工具读 ~/.ssh/config 放行（session-grants），受限命令照样读不到 —— 有意为之：「允许并记住」是给这一个工具的同意，命令的读不逐条问，所以不能被它放开', () => {
-    const paths = LAYOUTS.prod
-    const spec = specFor(paths, { workingDirectory: `${paths.home}/proj` })
-    const ctx = contextFor(paths, spec, toPolicyView(spec), {
-      allowList: [`Read(${paths.home}/.ssh)`]
+describe('PP-6 不适合的工作目录：两面都不把它当会话目录', () => {
+  const UNSUITABLE: Record<string, (l: Layout) => string> = {
+    '/': () => '/',
+    'the home folder': (l) => l.home,
+    'the parent of the home folder': (l) => dirname(l.home),
+    '~/.shuvix': (l) => l.shuvix,
+    '~/.shuvix/agents': (l) => `${l.shuvix}/agents`,
+    userData: (l) => l.userData,
+    "another session's temp workspace": (l) => `${l.userData}/temp_workspace/OTHER`,
+    '~/Library (contains userData)': (l) => `${l.home}/Library`,
+    '~/Library/Application Support (contains userData)': (l) =>
+      `${l.home}/Library/Application Support`
+  }
+  const cases = (Object.keys(LAYOUTS) as LayoutName[]).flatMap((layout) =>
+    Object.keys(UNSUITABLE).map((name) => [layout, name] as const)
+  )
+
+  it.each(cases)('PP-6 %s 布局 · 工作目录是 %s', (layout, name) => {
+    const l = LAYOUTS[layout]
+    enterLayout(l)
+    const ws = UNSUITABLE[name](l)
+
+    // 沙箱那一面：不套（命令逐条询问）
+    const built = buildSandboxSpec(
+      l.host,
+      {
+        sessionId: SID,
+        workingDirectory: ws,
+        extras: sessionDirExtras(SID),
+        grantedRead: [],
+        grantedWrite: []
+      },
+      realLoose
+    )
+    expect(built.ok).toBe(false)
+
+    // 策略那一面：会话目录里没有工作目录，本会话其余的目录与 extras 照旧
+    const vars = varsFor(ws)
+    const expected = sessionDirsFor(
+      l.host,
+      { sessionId: SID, workingDirectory: ws, extras: sessionDirExtras(SID) },
+      realLoose
+    )!
+    expect(expected.workspaceUnsuitable).not.toBeNull()
+    expect(vars.sessionDirs).toEqual(expected.dirs)
+    expect(vars.sessionReadDirs).toEqual(expected.readDirs)
+    expect(vars.sessionDirs).not.toContain(realLoose(ws))
+    expect(vars.sessionDirs).toEqual(
+      expect.arrayContaining([TMP_DIR, `${l.shuvix}/artifacts/${SID}`])
+    )
+
+    // 文件工具在工作目录里照问：写恒问，读在家目录里才问
+    const ctx = contextFor(ws)
+    const inside = `${ws === '/' ? '' : ws}/some-file`
+    expect(brief(ctx.evaluate('write', { type: 'path', path: inside }))).toMatchObject({
+      effect: 'ask',
+      winning: 'ask-on-external-path#1'
     })
-    const path = `${paths.home}/.ssh/config`
-    const decision = ctx.evaluate('read', { type: 'path', path })
-    expect(decision.effect).toBe('allow')
-    expect(decision.winning).toMatch(/^session-grants#/)
-    expect(isReadBlocked(spec, path)).toBe(true)
+    expect(ctx.evaluate('read', { type: 'path', path: inside }).effect).toBe(
+      isWithin(inside, l.home) ? 'ask' : 'allow'
+    )
+    // 本会话临时目录照样不问
+    expect(ctx.evaluate('write', { type: 'path', path: `${TMP_DIR}/x` }).effect).toBe('allow')
   })
 })
 
-describe('PP-10 接受的不对称：凭据位置的写', () => {
-  it.each(variants)(
-    'PP-10 %s 布局 · %s：凭据清单里的位置 —— 文件工具的写要问（ask-on-write#0，没有哪条内置策略拒它），受限命令写不了；「允许并记住」放行文件工具，命令照样写不了',
-    (layout, wsName) => {
-      const paths = LAYOUTS[layout]
-      const ws = WORKSPACES[wsName](paths)
-      const spec = specFor(paths, { workingDirectory: ws })
-      const targets = [
-        `${paths.home}/.ssh/id_ed25519`,
-        `${paths.home}/.ssh/authorized_keys`,
-        `${paths.home}/.config/gh/hosts.yml`,
-        `${paths.shuvixHome}/.session-state`
-      ]
-      for (const [label, ctx] of [
-        ['active', contextFor(paths, spec)],
-        ['inactive + workspace view', contextFor(paths, spec, INACTIVE_VIEW)]
-      ] as const) {
-        for (const path of targets) {
-          const decision = ctx.evaluate('write', { type: 'path', path })
-          expect({ label, path, effect: decision.effect, winning: decision.winning }).toEqual({
-            label,
-            path,
-            effect: 'ask',
-            winning: 'ask-on-write#0'
-          })
-          // 卡片给「记住」：这是一道普通的询问
-          expect(decision.ask?.rememberEntry, path).toBe(decision.ask?.command)
-          expect(isWriteBlocked(spec, path), path).toBe(true)
-        }
+describe('PP-6b 不合适的写授权：沙箱不套，文件工具照样凭授权写', () => {
+  it.each(Object.keys(LAYOUTS) as LayoutName[])(
+    'PP-6b %s 布局：写授权是 ~/Library（包含 userData）或在 ~/.shuvix/policies 里 —— 规格被拒（命令逐条询问）；文件工具在授权里读写不问',
+    (layout) => {
+      const l = LAYOUTS[layout]
+      for (const grant of [`${l.home}/Library`, `${l.shuvix}/policies`]) {
+        enterLayout(l, [`Write(${grant})`])
+        const ws = `${l.home}/proj`
+        const built = buildSandboxSpec(
+          l.host,
+          {
+            sessionId: SID,
+            workingDirectory: ws,
+            extras: sessionDirExtras(SID),
+            ...grantsFromAllowList()
+          },
+          realLoose
+        )
+        expect(built.ok, grant).toBe(false)
+        expect(!built.ok && built.reason, grant).toMatch(/^a write grant /)
+        // 策略那一面：授权照样有效；会话目录里照旧有工作目录（授权不是会话目录）
+        const ctx = contextFor(ws)
+        const target = `${grant}/x`
+        expect(ctx.evaluate('write', { type: 'path', path: target }).effect, grant).toBe('allow')
+        expect(ctx.evaluate('read', { type: 'path', path: target }).effect, grant).toBe('allow')
+        expect(varsFor(ws).sessionDirs).toContain(ws)
+        expect(varsFor(ws).sessionDirs).not.toContain(grant)
       }
-
-      const granted = contextFor(paths, spec, toPolicyView(spec), {
-        allowList: [`Write(${paths.home}/.ssh)`]
-      })
-      const key = `${paths.home}/.ssh/id_ed25519`
-      expect(granted.evaluate('write', { type: 'path', path: key })).toMatchObject({
-        effect: 'allow',
-        winning: 'session-grants#1'
-      })
-      expect(isWriteBlocked(spec, key)).toBe(true)
     }
   )
+})
+
+describe('PP-7 变量齐全', () => {
+  it('PP-7 以上评估没有 fail-safe / 变量缺失的告警', () => {
+    // 本文件的用例按声明顺序跑在同一个 worker 里：此刻告警已经收齐
+    for (const [layout, wsName, grants] of variants) {
+      const { l, ws, ctx } = arrange(layout, wsName, grants)
+      for (const path of corpus(l, ws).slice(0, 5)) {
+        ctx.evaluate('read', { type: 'path', path })
+        ctx.evaluate('write', { type: 'path', path })
+      }
+    }
+    expect(state.warnings.filter((w) => /fail-safe|not provided|unavailable/i.test(w))).toEqual([])
+  })
 })

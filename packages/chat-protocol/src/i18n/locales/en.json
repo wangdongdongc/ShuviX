@@ -347,7 +347,7 @@
     "sandbox": {
       "confined": "Sandbox",
       "unconfined": "Not sandboxed",
-      "confinedHint": "Ran in the sandbox: it could only write to the working directory, temporary folders and package caches, and could not touch your credentials.",
+      "confinedHint": "Ran in the sandbox: it could read and write only this conversation's own folders (the working directory and its temporary folder), and nothing else in your home folder.",
       "escalatedHint": "The agent asked to run this command outside the sandbox: it could read and change any file on this computer.",
       "disabledHint": "Not sandboxed: the command sandbox is turned off in settings.",
       "unsupportedHint": "Not sandboxed: there is no command sandbox for this platform or shell yet.",
@@ -546,7 +546,7 @@
     "httpLogEnabledHint": "Off by default. Each request stores the full payload (system prompt + whole history), which grows the database fast.",
     "httpLogRecord": "Record",
     "sandboxSection": "Sandbox",
-    "sandboxSectionHint": "Confined commands can change files only in the project, temporary folders and package caches, cannot touch your credentials or step outside the sandbox, and run without asking. A command that needs more asks for full access first. Turning this off makes every command ask again.",
+    "sandboxSectionHint": "Simple commands run in the sandbox without asking: they can read and write only this conversation's own folders, nothing else in your home folder, and cannot step outside the sandbox. Anything more — git, installing dependencies, builds — runs outside it, and the automatic review or you decide first. Turning this off makes every command ask.",
     "sandboxEnabled": "Run commands in the sandbox",
     "sandboxEnabledHint": "Takes effect for new conversations; a conversation already running keeps its setting until it restarts.",
     "sandboxAvailable": "Available on this Mac",

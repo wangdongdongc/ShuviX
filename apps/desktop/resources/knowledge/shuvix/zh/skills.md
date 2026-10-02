@@ -65,6 +65,11 @@ ShuviX 只读 `SKILL.md`。伴随文件留给 agent 在加载 skill 之后用 `r
 
 经侧栏「技能」分组改它（行菜单里的启用 / 停用）；这份文件是 ShuviX 的，不是手改的地方。
 
+**读 skill 从不询问，改 skill 要问。** 内置 skill、`~/.shuvix/skills` 以及每个没被禁用的外部目录，都是
+每条会话的只读目录（`policy-md` 条目里的 `vars.sessionReadDirs`）：文件工具读它们不问，沙箱里的命令也能读。
+往那里写要问 —— skill 是智能体自己要遵守的指令 —— 所以替用户新建或修改全局 / 外部 skill 要经过一次审批。
+项目级 skill 在工作目录里，和项目里的其他文件一样对待。
+
 ## Skill 怎样到达模型
 
 1. **斜杠命令** —— 在输入框输入 `/<name>`，skill 作为消息插入：`Base directory for this skill: <abs dir>`

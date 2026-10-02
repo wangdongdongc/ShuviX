@@ -1,6 +1,5 @@
 ---
 shuvix: policy v1
-shuvix-builtin: true
 name: ask-on-write
 shuvix-displayName: Ask Before Writing a File
 description: File writes and edits ask you first — except this conversation's own artifacts, the working directory, and, while the sandbox is on, the other places a confined command may change anyway.

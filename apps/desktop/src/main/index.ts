@@ -50,11 +50,7 @@ import {
 } from './services/externalOpen'
 import { widgetServer } from './services/widget'
 import { cliServer } from './services/cliServer'
-import {
-  SANDBOX_ENABLED_KEY,
-  setSandboxCredentialReader,
-  setSandboxSettingReader
-} from './services/sandbox'
+import { SANDBOX_ENABLED_KEY, setSandboxSettingReader } from './services/sandbox'
 import { chromeBridge } from './services/chromeBridge'
 import { installChromeNativeHost } from './services/chromeExtensionService'
 import { registerChromeFrontend } from './frontend/chrome'
@@ -63,7 +59,7 @@ import { chromeBridgeAddressFile, chromeBridgeSocketPath } from '@shuvix/chat-pr
 import { closeAllWatchers } from './services/filesWatcherService'
 import { hookService } from './services/hookService'
 import { reviewPermissionRequest } from './services/permissionReview'
-import { sessionCredentialPaths, setPermissionReviewer } from './services/toolContext'
+import { setPermissionReviewer } from './services/toolContext'
 import { installLlmNetwork } from './services/llmNetwork'
 import {
   registerCustomProtocolHandlers,
@@ -757,8 +753,6 @@ app.whenReady().then(async () => {
   // 命令沙箱读开关的口子：模块本身不碰设置表（它在很多导入链上），由这里注入。
   // 没注入就是关闭 —— 只有真正起来的应用才套沙箱
   setSandboxSettingReader(() => settingsDao.findByKey(SANDBOX_ENABLED_KEY))
-  // 凭据清单同理：沙箱读生效的 protect-credentials 策略，不自己定哪些是凭据
-  setSandboxCredentialReader(sessionCredentialPaths)
 
   // 启动 CLI IPC 服务 —— 给 shuvix-cli 提供 Unix socket / named pipe
   cliServer.start().catch((err) => {

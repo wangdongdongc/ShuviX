@@ -2,7 +2,7 @@
  * createFileToolSuite 的询问接线单测 —— 内存 port + 可编程 SecurityHostProvider（requestUserInput 是 spy）。
  *
  * 关注点在「工具壳怎么问」：写类工具把询问推迟到 apply 层（一次调用只弹一张带 diff 预览的卡），
- * 放行短路（工作目录读 / allowList，经统一评估的 force-allow/static-allow 层）逐层生效，
+ * 放行短路（家目录外的读 / allowList —— 出厂外部目录门 match 里的豁免，经统一评估）逐层生效，
  * 以及 InputResponse 判别联合的五个分支。
  *
  * 组 7（SYM）问的是门之前的那一步：路径本身是符号链接（port.readLink 答非 null）就不跟 —— 抛一句
@@ -187,8 +187,9 @@ function makeSuite(opts: SuiteOptions = {}): SuiteHarness {
   const persistGrant = vi.fn<(mode: AccessMode, p: string) => void>()
   const onFileChange = vi.fn<(e: { portPath: string; kind: 'write' | 'edit' }) => void>()
 
-  // 桌面口径的 provider：workspace={{ROOT}}（内置 workspace-boundary 策略给出目录内只读放行），
-  // 写入一律走询问链；allowList 进 force-allow 层
+  // 桌面口径的 provider：workspace={{ROOT}}；会话目录刻意给空 —— 出厂外部目录门（ask-on-external-path）
+  // 于是对每一次写都问（#1），家目录 /fake-home 里的读也问（#0），工作区 /ws 在家目录外、读放行；
+  // allowList 是外部目录门 match 里的豁免
   const provider: SecurityHostProvider = {
     host: 'desktop',
     pathSep: '/',
@@ -200,7 +201,9 @@ function makeSuite(opts: SuiteOptions = {}): SuiteHarness {
       knowledgeRoot: '/kb',
       knowledgeSessionDirs: opts.knowledgeSessionDirs ?? [],
       home: '/fake-home',
-      systemDirs: []
+      systemDirs: [],
+      sessionDirs: [],
+      sessionReadDirs: []
     }),
     readBuiltinPolicyMd: INLINE_POLICY_MD,
     getSessionGrants: () => ({ allowList: opts.allowList ?? [] }),
@@ -500,7 +503,7 @@ describe('文件工具套件 — OKF 知识库写钩子（deps.knowledge）', ()
 
   it('FS-1 bundle 内的合法概念落盘后盖 generated（actor 惰性、每次写现取）、回执 [OKF] Stamped，onFileChange 恰一次；bundle 外无回执', async () => {
     const actor = vi.fn(() => 'shuvix-work/m1')
-    // 会话授权下无需通道即可写（知识库上已无任何内置策略，写入只有 ask-on-write 一道门）
+    // 会话授权下无需通道即可写（知识库上已无任何内置策略，写入只有外部目录门一道）
     const h = makeSuite({
       allowList: ['Write(/kb)', `Write(${ROOT})`],
       knowledgeSessionDirs: ['/kb/sessions'],
@@ -770,7 +773,7 @@ describe('文件工具套件 — 路径本身是符号链接：不跟（port.rea
     expect(textOf(read)).toContain('PRIVATE KEY')
 
     // write 一把还不存在的新 key（悬空链接的那头）：链接那一次被这一条拒、不弹卡；R 那一次是
-    // 普通的区外写（protect-credentials 只管读）—— 恰一张卡，允许后落盘
+    // 普通的会话目录外的写（外部目录门 #1）—— 恰一张卡，允许后落盘
     const NEW_KEY = '/fake-home/.ssh/new_key'
     const d = makeSuite({
       links: { '/ws/newkey': { target: NEW_KEY, resolved: NEW_KEY } },
@@ -953,7 +956,7 @@ describe('文件工具套件 — 询问点的自动审查（provider.onPermissio
     }
   })
 
-  it('RV-F1 write 撞 ask-on-write、审查放行：不弹卡、照常落盘、onFileChange 恰一次；接缝收到的 command 是 Write(/ws/notes.txt)，preview 是这次的 diff（展示路径、isNewFile）', async () => {
+  it('RV-F1 write 撞外部目录门（ask-on-external-path#1）、审查放行：不弹卡、照常落盘、onFileChange 恰一次；接缝收到的 command 是 Write(/ws/notes.txt)，preview 是这次的 diff（展示路径、isNewFile）', async () => {
     const review = vi.fn<ReviewSeam>(async () => reviewAnswer('allow'))
     const h = makeSuite({ sessionId: sidFor('f1'), review, respond: allowed })
 
@@ -966,9 +969,9 @@ describe('文件工具套件 — 询问点的自动审查（provider.onPermissio
 
     expect(review).toHaveBeenCalledTimes(1)
     const [event] = review.mock.calls[0]
-    // 交给审查的是 ask-on-write 判出的那一次 ask（ask 档 —— force-ask 不会走到这里）
+    // 交给审查的是外部目录门判出的那一次 ask（ask 档 —— force-ask 不会走到这里）
     expect(event.decision.tier).toBe('ask')
-    expect(event.decision.matched).toContain('ask-on-write#0')
+    expect(event.decision.matched).toContain('ask-on-external-path#1')
     expect(event.toolCallId).toBe('rv-f1')
     expect(event.command).toBe(allowEntry('write', INSIDE_ABS))
     // 卡片本会带的那一份预览原样交给审查：展示路径、与 tool result 同一份的 diff、新建标记

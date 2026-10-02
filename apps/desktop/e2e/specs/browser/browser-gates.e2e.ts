@@ -3,13 +3,12 @@
  *
  * 桌面宿主给 browser server 装了三道门，全部接回现成的策略，而不是另起一套：
  *   - 导航到 `file://…` = **读那个文件**（enforcePath('read')）：路径策略照样生效 —— 出厂的
- *     protect-credentials（凭据目录问），以及用户自己写的（出厂策略只对凭据位置问读取，所以本 spec
- *     装了一份「工作区外的读要问」的用户策略 READ_FENCE，卡片、路由、拒绝、记住都靠它来测）。
- *     一个显示本地文件的 tab 上做任何事也按读它过门 —— 页面自己跳过去的也算（BRP-1）；
- *   - 上传给网页的文件 = 读（逐个过门）；pdf 的输出位置 = **写**，由出厂 ask-on-write 判：工作区外问
- *     （从前是硬拒；系统目录、凭据目录也一样只是问 —— 出厂不再有硬拒，2026-10-01），工作区里免询问
- *     （沙箱开关都一样），工作区里的受保护位置（git 的 .git/hooks 等）照旧问 —— 与文件工具同一道门，
- *     没有 pdf 自己的特例；
+ *     ask-on-external-path 对家目录里、会话目录以外的读问（fake HOME 就是家目录：工作区外的
+ *     outside/ 与凭据目录 ~/.ssh 都落在这条规则上，凭据不再有自己的策略），卡片、路由、拒绝、
+ *     记住都靠它来测。一个显示本地文件的 tab 上做任何事也按读它过门 —— 页面自己跳过去的也算（BRP-1）；
+ *   - 上传给网页的文件 = 读（逐个过门）；pdf 的输出位置 = **写**，由出厂 ask-on-external-path 判：
+ *     会话目录以外问（系统目录、凭据目录也一样只是问 —— 出厂没有硬拒），工作区里免询问（沙箱开关
+ *     都一样，`.git/hooks` 也不例外）—— 与文件工具同一道门，没有 pdf 自己的特例；
  *   - http(s) 等地址上报 `{type:'url'}` 客体：出厂没有 url 策略（没有策略 = 放行），用户可以自己写。
  *
  * 另有 L1 全工具门：内置 server 的工具 annotations 是可信的，于是用户能写「浏览器里有破坏性的
@@ -39,8 +38,7 @@ import {
   securityDecisions,
   seedFakeProvider,
   waitRendererReady,
-  type EventRecorder,
-  setSandboxEnabled
+  type EventRecorder
 } from '../../harness/seed'
 import { chatPane, sidebarPane, type ChatPane, type SidebarPane } from '../../harness/pages'
 import {
@@ -56,8 +54,8 @@ import {
 } from '../../harness/browserFixtures'
 
 const MODEL = 'e2e-model'
-/** 本 spec 自己装的「工作区外的读要问」用户策略（出厂策略只对凭据位置问读取，见文件头） */
-const READ_FENCE = 'br-e2e-read-fence'
+/** 出厂的路径询问门：规则 #0 管家目录里的读，#1 管会话目录以外的写 */
+const PATH_GATE = 'ask-on-external-path'
 const BROWSER_ID = 'builtin-mcp-browser'
 const ALL_BROWSER_TOOLS = BROWSER_TOOL_NAMES.map(browserTool).sort()
 const BROWSER_LABELS = ['Browser', '浏览器', 'ブラウザ']
@@ -149,9 +147,6 @@ const noAsk = async (
 
 beforeAll(async () => {
   app = await launchApp()
-  // 本组测的是询问卡片本身（工作区外 / 受保护位置的写入要问、策略说明）；沙箱开着时 fake HOME
-  // 所在的 /private/tmp 整片是可写根，这些写入不再询问
-  await setSandboxEnabled(app.main, false)
   provider = await startFakeProvider()
   await seedFakeProvider(app.main, { baseUrl: provider.baseUrl, modelId: MODEL })
   await waitRendererReady(app.main)
@@ -182,24 +177,6 @@ beforeAll(async () => {
   await app.main.eval(
     `window.api.session.updateEnabledTools(${JSON.stringify({ id: sid, enabledTools: ['mcp:browser'] })})`
   )
-  const fence = await createPolicy(
-    [
-      '---',
-      'shuvix: policy v1',
-      `name: ${READ_FENCE}`,
-      'description: e2e ask before reading outside the workspace',
-      'shuvix-policy-scope:',
-      '  subject.kind: [agent]',
-      '  object.type: [path]',
-      'shuvix-policy-rules:',
-      '  - effect: ask',
-      '    action: [read]',
-      "    match: '!inDir(object.path, vars.workspace)'",
-      '---',
-      'e2e policy body'
-    ].join('\n')
-  )
-  expect(fence.success, fence.error).toBe(true)
   await until(async () => (await sidebar.titles()).includes(TITLE), 'gates session listed')
   expect(await sidebar.openSession(TITLE)).toBe(true)
   await chat.ready()
@@ -298,18 +275,25 @@ describe('file:// 导航按读文件过门', () => {
     expect((await listTabs()).some((t) => t.url === fileUrl(abs))).toBe(false)
   }, 120_000)
 
-  it('BRG-4 凭据目录：卡片上署了 protect-credentials 的名', async () => {
-    const credentials = (await listPolicies()).find(
-      (p) => p.name === 'protect-credentials' && p.source === 'builtin'
-    )!
+  it('BRG-4 凭据目录不再特殊：~/.ssh 在家目录里、会话目录以外 —— 卡片上署 ask-on-external-path 的名、带它读规则的那句', async () => {
+    const gate = (await listPolicies()).find((p) => p.name === PATH_GATE && p.source === 'builtin')!
     const { end, ask, since } = await askOnce(
       { id: 'brg4_open', tool: 'open_tab', args: { url: fileUrl(keyFile) } },
       false
     )
     expect(ask.command).toBe(`Read(${keyFile})`)
-    expect(ask.policyPrompt?.policies).toContain(credentials.displayName)
+    expect(ask.policyPrompt?.policies).toEqual([gate.displayName])
     expect(end.result).toContain(`User denied access to ${keyFile}`)
     expect(await everythingSince(since)).not.toContain(KEY_MARK)
+    expect(decisionsOf('brg4_open')).toEqual([
+      expect.objectContaining({
+        objectKind: 'path',
+        action: 'read',
+        effect: 'ask',
+        winning: `${PATH_GATE}#0`,
+        userResponse: 'denied'
+      })
+    ])
   }, 120_000)
 
   it('BRG-5 带 .. 的地址：卡片上是归一之后的路径', async () => {
@@ -508,7 +492,7 @@ describe('upload_file 的每个文件都按读过门', () => {
   // ═════════════════════════════════════════════════════════════════════
 
   describe('pdf 的输出位置按写过门', () => {
-    it('BRG-11 工作区里也过写入门：普通位置出厂 ask-on-write 免询问（决策照记），受保护位置照旧问；允许之后落下一份真 PDF', async () => {
+    it('BRG-11 工作区里也过写入门：出厂 ask-on-external-path 免询问（决策照记），git 的 .git/hooks 也不例外；落下的是真 PDF', async () => {
       // ① 工作区里的普通位置：不问，但门是过了的 —— 决策日志里有这次写，判的就是解析后的绝对路径
       const abs = join(projDir, 'out', 'page.pdf')
       const ends = await noAsk([
@@ -527,19 +511,25 @@ describe('upload_file 的每个文件都按读过门', () => {
         })
       ])
 
-      // ② 工作区里的受保护位置（git 的 .git/hooks）：出厂的 ask-on-write 照旧问；允许之后落下一份真 PDF
-      const guarded = join(projDir, '.git', 'hooks', 'page.pdf')
-      const { end, ask } = await askOnce(
+      // ② git 的 .git/hooks 不再是受保护位置（2026-10-01 第二轮）：工作区里一样不问
+      const hook = join(projDir, '.git', 'hooks', 'page.pdf')
+      const hookEnds = await noAsk([
         {
-          id: 'brg11_guarded_pdf',
+          id: 'brg11_hook_pdf',
           tool: 'pdf',
           args: { tabId: formTab, outputPath: '.git/hooks/page.pdf' }
-        },
-        true
-      )
-      expect(ask.command).toBe(`Write(${guarded})`)
-      expect(end.result).toContain(guarded)
-      expect(readFileSync(guarded).subarray(0, 5).toString()).toBe('%PDF-')
+        }
+      ])
+      expect(hookEnds.brg11_hook_pdf.result).toContain(hook)
+      expect(readFileSync(hook).subarray(0, 5).toString()).toBe('%PDF-')
+      expect(decisionsOf('brg11_hook_pdf')).toEqual([
+        expect.objectContaining({
+          action: 'write',
+          effect: 'allow',
+          winning: 'default:path',
+          objectSummary: hook
+        })
+      ])
     }, 120_000)
 
     it('BRG-12 工作区外：问（从前是不问就拒）；拒了不落文件', async () => {
@@ -553,7 +543,7 @@ describe('upload_file 的每个文件都按读过门', () => {
       expect(existsSync(abs)).toBe(false)
     }, 120_000)
 
-    it('BRG-13 系统目录：出厂不再硬拒（protect-system 已删）—— 一次普通的工作区外写入询问，记在 ask-on-write 名下；拒了不落文件', async () => {
+    it('BRG-13 系统目录：出厂不硬拒（protect-system 已删）—— 一次普通的会话目录以外写入询问，记在 ask-on-external-path 名下；拒了不落文件', async () => {
       const target = '/etc/shuvix-e2e-browser.pdf'
       const { end, ask } = await askOnce(
         { id: 'brg13_pdf', tool: 'pdf', args: { tabId: formTab, outputPath: target } },
@@ -568,7 +558,7 @@ describe('upload_file 的每个文件都按读过门', () => {
         objectKind: 'path',
         action: 'write',
         effect: 'ask',
-        winning: 'ask-on-write#0',
+        winning: `${PATH_GATE}#1`,
         userResponse: 'denied'
       })
     }, 120_000)
@@ -589,7 +579,7 @@ describe('upload_file 的每个文件都按读过门', () => {
       expect(decisionsOf('brp4_pdf')).toEqual([])
     }, 120_000)
 
-    it('BRG-14 凭据目录：写不再硬拒（protect-credentials 只管读）—— 一次普通的 ask-on-write 询问；拒了不落文件', async () => {
+    it('BRG-14 凭据目录不再特殊：写 ~/.ssh 是一次普通的 ask-on-external-path 写入询问；拒了不落文件', async () => {
       const cred = join(app.home, '.ssh', 'x.pdf')
       const { end, ask } = await askOnce(
         { id: 'brg14_cred', tool: 'pdf', args: { tabId: formTab, outputPath: cred } },
@@ -603,7 +593,7 @@ describe('upload_file 的每个文件都按读过门', () => {
           objectKind: 'path',
           action: 'write',
           effect: 'ask',
-          winning: 'ask-on-write#0',
+          winning: `${PATH_GATE}#1`,
           userResponse: 'denied'
         })
       ])

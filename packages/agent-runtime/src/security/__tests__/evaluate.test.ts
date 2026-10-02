@@ -18,6 +18,7 @@ import type {
   SecurityRequest,
   SecurityRule
 } from '../types'
+import { retiredPolicy } from './fixtures/retiredPolicies'
 
 const PATH_OBJECT: SecurityObject = {
   type: 'path',
@@ -1064,11 +1065,9 @@ describe('evaluate — opts.realPath（inDir 按位置比较）', () => {
         botsDir: '/home/u/.shuvix/bots',
         builtinKnowledgeDir: '/opt/shuvix/knowledge',
         sessionArtifactsDir: '/home/u/.shuvix/artifacts/sess-1',
-        // 沙箱未套上时宿主给的那一组（桌面 getVars 展开 sandbox.sessionView 的 INACTIVE_VIEW）
-        sandboxActive: false,
-        sandboxWritableRoots: [],
-        sandboxWriteDenied: [],
-        sandboxProtectedPatterns: [],
+        // 会话目录（外部目录门读）：工作目录与本会话的 artifacts；只读的一份是技能目录
+        sessionDirs: ['/ws', '/home/u/.shuvix/artifacts/sess-1'],
+        sessionReadDirs: ['/skills'],
         systemDirs: [],
         dotfiles: '/data'
       }),
@@ -1102,7 +1101,7 @@ describe('evaluate — opts.realPath（inDir 按位置比较）', () => {
     expect(asked.ask).toEqual({ command: 'Read(/ws/link)', rememberEntry: 'Read(/ws/link)' })
   })
 
-  it('EV-R2 惰性求值的 lets 也在解析器的作用域里：let 里的 inDir 按位置算；lets 算出来的凭据目录也按位置比', () => {
+  it('EV-R2 惰性求值的 lets 也在解析器的作用域里：let 里的 inDir 按位置算；lets 算出来的凭据目录（退役的 protect-credentials 夹具）也按位置比；出厂外部目录门的 vars.home 同样按位置比', () => {
     // 一条 let 自己调 inDir：它在规则求值当中才被算（惰性），那时解析器已经生效
     const linkedHome: ParsedPolicyFile = {
       name: 'linked-home',
@@ -1123,25 +1122,43 @@ describe('evaluate — opts.realPath（inDir 按位置比较）', () => {
       winning: 'default:path'
     })
 
-    // 内置 protect-credentials 的 credentialDirs 就是 lets 算出来的：~/.ssh 本身是链接时，
-    // 真实位置上的私钥照样归它管（不给解析器 → 按写法不在凭据目录里，读放行、零命中）
+    // 退役的 protect-credentials（按用户策略装上）的 credentialDirs 就是 lets 算出来的：~/.ssh 本身
+    // 是链接时，真实位置上的私钥照样归它管（不给解析器 → 按写法不在凭据目录里，读放行、零命中）。
+    // 真实位置 /data/ssh 在家目录外，出厂外部目录门不问它 —— 命中的只有夹具
+    const credentials = [retiredPolicy('protect-credentials')]
     const sshIsLinked = resolverOf({ '/home/u/.ssh': '/data/ssh' })
     const key = pathRequest('/data/ssh/id_rsa')
-    expect(decideAssembled(key, sshIsLinked)).toMatchObject({
+    expect(decideAssembled(key, sshIsLinked, credentials)).toMatchObject({
       effect: 'ask',
-      winning: 'protect-credentials#0'
+      winning: 'protect-credentials#0',
+      matched: ['protect-credentials#0']
     })
-    expect(decideAssembled(key, undefined)).toMatchObject({
+    expect(decideAssembled(key, undefined, credentials)).toMatchObject({
       effect: 'allow',
       winning: 'default:path',
       matched: []
     })
-    // protect-credentials 只管读（2026-10-01 去掉了写入 deny）：凭据位置的写照普通区外写，
-    // 只有 ask-on-write 一道门
-    expect(decideAssembled(pathRequest('/data/ssh/new_key', 'write'), sshIsLinked)).toMatchObject({
+    // 夹具只管读：会话目录外的写只有出厂外部目录门一道
+    expect(
+      decideAssembled(pathRequest('/data/ssh/new_key', 'write'), sshIsLinked, credentials)
+    ).toMatchObject({
       effect: 'ask',
-      winning: 'ask-on-write#0',
-      matched: ['ask-on-write#0']
+      winning: 'ask-on-external-path#1',
+      matched: ['ask-on-external-path#1']
+    })
+
+    // 出厂外部目录门的 vars.home 也按位置比：家目录本身是链接（/home/u → /data/u）时，真实位置上的
+    // 文件照样是「家目录里的读」；不给解析器 → 按写法在家目录外，读放行
+    const homeIsLinked = resolverOf({ '/home/u': '/data/u' })
+    const notes = pathRequest('/data/u/notes.txt')
+    expect(decideAssembled(notes, homeIsLinked)).toMatchObject({
+      effect: 'ask',
+      winning: 'ask-on-external-path#0'
+    })
+    expect(decideAssembled(notes, undefined)).toMatchObject({
+      effect: 'allow',
+      winning: 'default:path',
+      matched: []
     })
   })
 

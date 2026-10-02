@@ -2,10 +2,9 @@
  * 对话区的工具卡片 —— 单次调用的完整生命周期、并行 batch 的预展示去重与合并行、
  * 出错行的独立呈现、以及询问卡片（工具停在等待 → 应答 → 继续）。
  *
- * 前置：所有会话绑同一个项目，`read` 的目标一律落在 projDir 内 ——
- * 读文件只有凭据位置会问（protect-credentials），故读文件不会挂在等人应答上；
- * 询问用例（C-10）的 `write` 则写到工作目录**之外**：`ask-on-write` 对工作目录免询问
- * （受保护位置除外），对工作区外的路径照旧 ask，那正是被测对象。
+ * 前置：所有会话绑同一个项目，`read` 的目标一律落在 projDir 内 —— 工作目录是会话目录，
+ * ask-on-external-path 不问，故读文件不会挂在等人应答上；询问用例（C-10）的 `write` 则写到
+ * 会话目录**之外**：ask-on-external-path 对那里的写入 ask，那正是被测对象。
  */
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -20,8 +19,7 @@ import {
   waitRendererReady,
   writePng,
   type EventRecorder,
-  type RecordedEvent,
-  setSandboxEnabled
+  type RecordedEvent
 } from '../../harness/seed'
 import { chatPane, sidebarPane, type ChatPane, type SidebarPane } from '../../harness/pages'
 
@@ -57,7 +55,7 @@ let events: EventRecorder
 let chat: ChatPane
 let sidebar: SidebarPane
 let projDir = ''
-/** 工作目录之外的写入落点（询问用例要的那张卡只在这里还会弹） */
+/** 会话目录之外的写入落点（询问用例要的那张卡只在这里还会弹） */
 let outsideDir = ''
 const sids: Record<string, string> = {}
 
@@ -80,9 +78,6 @@ const readCall = (id: string, file: string): { id: string; name: string; args: s
 
 beforeAll(async () => {
   app = await launchApp()
-  // 本组测的是询问卡片本身（工作区外的写入要问）；沙箱开着时 fake HOME 所在的 /private/tmp
-  // 整片是可写根，这些写入不再询问
-  await setSandboxEnabled(app.main, false)
   provider = await startFakeProvider()
   await seedFakeProvider(app.main, { baseUrl: provider.baseUrl, modelId: MODEL })
   await waitRendererReady(app.main)
@@ -267,7 +262,7 @@ describe('工具报错', () => {
 })
 
 describe('询问卡片', () => {
-  it('write 撞 ask-on-write：工具停在等待，卡片顶格在输入卡片内，应答后继续执行', async () => {
+  it('write 撞 ask-on-external-path：工具停在等待，卡片顶格在输入卡片内，应答后继续执行', async () => {
     provider.reset()
     await events.clear()
     const target = join(outsideDir, 'written.txt')

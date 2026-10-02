@@ -10,8 +10,8 @@ sources:
     title: botFile.ts —— パーサー（真実の源）
   - resource: https://github.com/wangdongdongc/ShuviX/blob/main/packages/agent-runtime/src/subagent/builtinAgents/md/bot.md
     title: bot.md —— bot チャットが動く `bot` ベース人格
-  - resource: https://github.com/wangdongdongc/ShuviX/blob/main/packages/agent-runtime/src/security/builtinPolicies/md/ask-on-write.md
-    title: ask-on-write —— bot が自分のファイルを編集するときに通る書き込み確認
+  - resource: https://github.com/wangdongdongc/ShuviX/blob/main/packages/agent-runtime/src/security/builtinPolicies/md/ask-on-external-path.md
+    title: ask-on-external-path —— bot が自分のファイルを編集するときに通る書き込み確認
 ---
 
 # Bot ファイル
@@ -94,9 +94,10 @@ grep, glob, ask, edit, session, agent, knowledge, artifact, skill:builtin:drawin
 はなく、組み込み機能サーバー `mcp:ssh` / `mcp:browser` / `mcp:database` も宣言していません（このセッションの
 拡張機能でユーザーがオンにすることはでき、それはユーザー自身の選択です）。bot は見ることはできても触れません：変更や実行を伴うことはすべてサブセッションへ
 （プログラミングは `agent_profile: coding`）。`edit` は一つの目的 —— 自分のファイルの維持 —— のために
-あります。`~/.shuvix/bots/` 配下への書き込みは普通の書き込みで、組み込みポリシー **ask-on-write** の
-確認になり、自動レビューがオンならレビュアーが答えることもあります（そうした書き込みを必ずユーザーに
-届けたいなら、`vars.botsDir` に対する `force-ask` のポリシーを書きます —— `policy-md` を参照）。
+あります。`~/.shuvix/bots/` 配下への書き込みはセッションのディレクトリの外への普通の書き込みで、
+組み込みポリシー **ask-on-external-path** の確認になり、自動レビューがオンならレビュアーが答えることも
+あります（そうした書き込みを必ずユーザーに届けたいなら、`vars.botsDir` に対する `force-ask` のポリシーを
+書きます —— `policy-md` を参照）。
 `notebook` と同じく、このベースはプロジェクト認識を宣言しますが指示ファイルは読みません（AGENTS.md /
 CLAUDE.md は実際にコードを書くサブセッションのための約束事です）。
 ベースは他の組み込みエージェントと同じく名前で上書きできます（`~/.shuvix/agents/bot.md`）。

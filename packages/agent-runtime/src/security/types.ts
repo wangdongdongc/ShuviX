@@ -17,8 +17,8 @@
  *   - user     用户策略 md（桌面 ~/.shuvix/policies/<name>.md，同名覆盖内置）
  *   - derived  宿主代码级派生规则（仅限无法 md 化的宿主特例；桌面/扩展当前都不供给）
  * 会话授权（"允许并记住"）不再是独立一层：条目经 buildPolicyVars 变成
- * `vars.grantedRead` / `vars.grantedWrite`，由内置的 session-grants
- * 策略 md 用 `effect: force-allow` 表达（见 policyVars.ts）。
+ * `vars.grantedRead` / `vars.grantedWrite`，由策略 md 引用（出厂的 ask-on-external-path
+ * 把它们排除在询问之外，见 policyVars.ts）。
  *
  * 结算优先序（tier，见 evaluate.ts）：deny → force-ask → force-allow → ask → static-allow → default。
  */
@@ -48,8 +48,8 @@ export type SecurityEffect = 'allow' | 'ask' | 'deny'
  *   3. `deny` 恒在顶 —— 拒绝没有「更强的拒绝」，所以没有 force-deny。
  *
  * 于是梯子是：deny > force-ask > force-allow > ask > allow > 默认放行。
- *   - `force-allow` 效果同 allow，但压得过询问门（出厂用它表达「允许并记住」
- *     这类「用户明示同意」）；
+ *   - `force-allow` 效果同 allow，但压得过询问门（「用户明示同意」这一档；出厂已不用，
+ *     「允许并记住」直接写在 ask-on-external-path 的 match 里）；
  *   - `force-ask` 效果同 ask，但连 force-allow 都压不过它 —— 「这道门不接受
  *     会话级同意」，用于始终要过目的少数对象。
  *
@@ -356,7 +356,7 @@ export interface SecurityHostProvider {
    * 其余情形照 CEL 原语义（缺键报错走 fail-safe）。
    */
   getVars(): Record<string, PolicyVarValue>
-  /** 会话授权（force-allow 层来源）。每次评估现读，禁缓存。 */
+  /** 会话授权（「允许并记住」的 allowList，经 buildPolicyVars 成为 vars.grantedRead / grantedWrite）。每次评估现读，禁缓存。 */
   getSessionGrants(): { allowList: string[] }
   /**
    * 界面语言（i18next.language 形态，如 'zh' / 'zh-CN'）—— 仅影响内置策略的
@@ -367,7 +367,7 @@ export interface SecurityHostProvider {
   /** 用户策略 md，全部可解析的份数（含同名的几份，谁生效见 resolvePolicyFiles）；无文件系统的宿主省略 */
   getUserPolicies?(): UserPolicyFile[]
   /**
-   * 内置策略 md 的读取口（入参是目录内文件名如 `ask-on-write.zh.md`，没有那一版回 null）——
+   * 内置策略 md 的读取口（入参是目录内文件名如 `ask-on-command.zh.md`，没有那一版回 null）——
    * 内置策略随包发布成文件后运行时现读：桌面注入「`Resources/builtin-policies/` 目录现读」，
    * 扩展注入构建期内联的同一批文件（security/builtinPolicies/inlineSources.ts）。
    * **省略即装配期 throw**：内置策略是出厂防护层，缺席必须响（开发期错误），
@@ -581,7 +581,7 @@ export interface DatabaseObjectInput {
  *
  * 属性拆好了给：策略写 `object.host.endsWith('.example.com')` 比在 CEL 里解析 URL 可靠得多。
  * **file:// 不该走这里**：打开一个本地文件就是读它，宿主应当改走 enforcePath('read') ——
- * 那样 protect-credentials 这些现成的路径策略自动生效，不必为 URL 再写一套。
+ * 那样 ask-on-external-path 这些现成的路径策略自动生效，不必为 URL 再写一套。
  */
 export interface UrlObjectInput {
   /** 原始地址（询问卡片展示 + 策略可 matches() 匹配） */
@@ -615,7 +615,9 @@ export interface SecurityContext {
   ): SecurityDecision
   /**
    * 同步只读判定 —— 永不弹询问、不记日志，被动 UI（预览面板等）专用。
-   * includeForceAllow 缺省 **false**（工具级 per-path 授权不应静默放宽 UI 范围）。
+   * includeForceAllow 缺省 **false**（force-allow 规则不应静默放宽 UI 范围）。注意：出厂的「允许并记住」
+   * 已不是 force-allow，而是写在 ask-on-external-path 的 match 里 —— 对 agent 主体它照样放宽；
+   * 今天被动 UI 都以 user 主体评估（内置策略不作用于它），所以没有影响。
    */
   evaluateReadOnly(
     action: string,

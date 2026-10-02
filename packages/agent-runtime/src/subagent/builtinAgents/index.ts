@@ -80,7 +80,7 @@ export const CHAT_SPEC: BuiltinProfileSpec = {
  * 干扰」的结构落点 —— 人格够得到的地方只能看不能动，要动就得开一条子会话，而子会话按自己的
  * 档案生成系统提示词、拿不到那段围栏。靠提示词纪律表达这条分工是不够的：一个握着 bash 的
  * 人格会顺手把活干了，那正是要避免的事。`edit` 留着是为了让 bot 维护自己那份 md（写入是一次
- * 普通的 ask-on-write 询问；恒询问的 `protect-bot-files` 已于 2026-10-01 从出厂删除）。
+ * 普通的外部目录询问（ask-on-external-path）；恒询问的 `protect-bot-files` 已于 2026-10-01 从出厂删除）。
  */
 export const BOT_SPEC: BuiltinProfileSpec = {
   name: BOT_PROFILE_NAME

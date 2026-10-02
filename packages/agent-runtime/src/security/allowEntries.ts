@@ -58,7 +58,7 @@ export function buildAllowEntry(toolType: AllowToolType, path: string): string {
  *
  * Windows(sep '\\')下先做分隔符归一(两侧 '\\' → '/'):内置策略的 let 用 '/'
  * 拼接(如 vars.home + '/' + '.ssh'),用户手写的 allowList 条目也可能混用,
- * 不归一则混合分隔符的 entry 在 Windows 上恒不命中 —— protect-credentials
+ * 不归一则混合分隔符的 entry 在 Windows 上恒不命中 —— 按家目录拼出来的路径门
  * 会整个失效。POSIX 下 '\\' 是合法文件名字符,保持严格不妥协。
  */
 export function matchesPathEntry(entryPath: string, absolutePath: string, sep: string): boolean {

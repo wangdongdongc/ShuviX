@@ -68,8 +68,8 @@ export class ListTool extends BaseTool<typeof LsParamsSchema> {
       ? resolve(config.workingDirectory, resolveToCwd(params.path, config.workingDirectory))
       : config.workingDirectory
 
-    // 询问守卫：走统一评估 —— 内置策略只对凭据位置问（protect-credentials），
-    // 会话授权过的路径由 force-allow 层放行；都不命中则挂起等待用户询问
+    // 询问守卫：走统一评估 —— 内置策略只对家目录里会话目录以外的读询问（ask-on-external-path，
+    // 「允许并记住」过的路径不问）；命中则挂起等待用户回答
     await assertReadAllowed(this.ctx, config, toolCallId, 'ls', searchPath, params.path)
   }
 

@@ -19,6 +19,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
+  buildBuiltinPolicies,
   buildBuiltinProfiles,
   headingsOf,
   validateBundleFiles,
@@ -33,6 +34,7 @@ import {
   type KnowledgeConcept
 } from '@shuvix/agent-runtime'
 import { createInlineMdReader } from '@shuvix/agent-runtime/builtinAgents/inlineSources'
+import { createInlinePolicyMdReader } from '@shuvix/agent-runtime/security/builtinPolicies/inlineSources'
 import {
   KNOWLEDGE_BUILTIN_BASE,
   KNOWLEDGE_MARKER,
@@ -40,7 +42,6 @@ import {
   type OkfStatus
 } from '@shuvix/chat-protocol/knowledge'
 import { SELECTABLE_THINKING_LEVELS } from '@shuvix/chat-protocol/types/thinking'
-import { INACTIVE_VIEW } from '../../sandbox/types'
 const HERE = dirname(fileURLToPath(import.meta.url))
 /** `…/apps/desktop/src/main/services/knowledge/__tests__` 往上七层 */
 const REPO_ROOT = resolve(HERE, '../../../../../../..')
@@ -364,10 +365,11 @@ describe.each(LANGS)('BK 内置知识库 · %s', (lang) => {
     }
   })
   /**
-   * BK-18 / BK-19 —— policy-md.md 抄着两份事实：内置策略的清单（名字 + 份数）与宿主变量表里沙箱的那几行。
-   * 策略删了一份（2026-09-30 删了 ask-on-read）、沙箱的策略变量少了两个（sandboxReadDenied /
-   * sandboxReadAllowed）时说明书不跟，就是在教用户去覆盖一份不存在的策略、引用一个永远没值的变量。
-   * 事实源：BUILTIN_POLICY_SPECS 与 sandbox 的 INACTIVE_VIEW（桌面 getVars 恒展开它的键）。
+   * BK-18 / BK-19 —— policy-md.md 抄着两份事实：内置策略的清单（名字 + 份数）与宿主变量表。
+   * 策略删了几份（2026-09-30 删了 ask-on-read，2026-10-01 只剩 ask-on-external-path / ask-on-command）、
+   * 变量表退役了一批（沙箱的 sandbox* 与工作区的 workspaceWritable 等，换成 sessionDirs）时说明书不跟，
+   * 就是在教用户去覆盖一份不存在的策略、引用一个永远没值的变量。
+   * 事实源：BUILTIN_POLICY_SPECS，以及内置策略自己的规则（它们引用的每个 `vars.x` 都得在表里）。
    */
   const POLICY_SECTION_HEADING: Record<string, string> = {
     en: '## Builtin policies',
@@ -376,7 +378,7 @@ describe.each(LANGS)('BK 内置知识库 · %s', (lang) => {
   }
   /** 内置策略份数在正文里的写法（份数一变这张表先红，提醒把说明书的那个数一起改） */
   const POLICY_COUNT_WORD: Record<number, Record<string, string>> = {
-    4: { en: 'Four', zh: '四', ja: '四' }
+    2: { en: 'Two', zh: '两', ja: '二' }
   }
 
   /** 从某个标题起、到下一个同级或更高标题为止的那一段 */
@@ -417,10 +419,27 @@ describe.each(LANGS)('BK 内置知识库 · %s', (lang) => {
     expect(intro, `${lang}: 表格前那句应当写 ${word}`).toContain(word!)
   })
 
-  it('BK-19 policy-md.md 变量表里以 sandbox 开头的行 = 桌面沙箱视图的键（没有 sandboxReadDenied / sandboxReadAllowed）', () => {
-    const section = sectionFrom(conceptOf('policy-md.md').body, '### `vars`')
-    const sandboxRows = firstCellNames(section).filter((name) => name.startsWith('sandbox'))
-    expect([...sandboxRows].sort()).toEqual(Object.keys(INACTIVE_VIEW).sort())
-    expect(conceptOf('policy-md.md').body).not.toMatch(/sandboxRead(Denied|Allowed)/)
+  /** 2026-10-01 起宿主不再给策略的沙箱 / 工作区派生变量：正文里一个都不该再出现 */
+  const RETIRED_VARS =
+    /\b(sandbox(Active|WritableRoots|WriteDenied|ProtectedPatterns|ReadDenied|ReadAllowed)|workspace(Writable|WriteDenied|ProtectedPatterns))\b/
+
+  it('BK-19 policy-md.md 变量表收齐内置策略引用的每个 vars.x，且没有已退役的 sandbox* / workspace* 派生变量', () => {
+    const body = conceptOf('policy-md.md').body
+    const listed = firstCellNames(sectionFrom(body, '### `vars`'))
+    // 事实源是规则本身（match 与 lets），不是手抄的一张表：内置策略改引用一个新变量，这里先红
+    const referenced = new Set(
+      buildBuiltinPolicies({ language: lang, readMd: createInlinePolicyMdReader() }).flatMap(
+        (policy) =>
+          [...policy.rules.map((rule) => rule.match ?? ''), ...Object.values(policy.lets ?? {})]
+            .flatMap((expr) => [...expr.matchAll(/\bvars\.(\w+)/g)])
+            .map((m) => m[1])
+      )
+    )
+    expect(referenced.size, '语料自检：内置策略应当引用了宿主变量').toBeGreaterThan(0)
+    expect([...referenced].filter((name) => !listed.includes(name))).toEqual([])
+    expect(listed.filter((name) => name.startsWith('sandbox') || /^workspace./.test(name))).toEqual(
+      []
+    )
+    expect(body).not.toMatch(RETIRED_VARS)
   })
 })

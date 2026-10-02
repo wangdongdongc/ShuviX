@@ -108,8 +108,9 @@ recentText: |
 ## `permission.request` —— 回答审批请求
 
 只有 effect 为 `ask` 的规则会触发它。`force-ask` 规则的意思是「只由用户回答」，`deny` 直接拒绝，
-「允许并记住」（`force-allow`）直接放行 —— 这些都不会交给 hook（内置策略不用 `force-ask` 也不用 `deny`，
-你自己的策略可以用）。判定型 hook 派出的 agent 自己的询问直接交给用户，所以审查员永远不会审查它自己。
+`force-allow` 直接放行 —— 这些都不会交给 hook（内置策略一个都不用，你自己的策略可以用）。用户答过
+「允许并记住」的路径根本不会询问：内置的路径规则把它排除在外。判定型 hook 派出的 agent 自己的询问直接
+交给用户，所以审查员永远不会审查它自己。
 
 载荷就是审查 agent 拿到的全部输入。它只装人写的东西和操作本身，从不装干活那个 agent 自己写的正文或
 工具输出：
@@ -179,7 +180,8 @@ agent；titler 用 `session` 工具的 `set-title` 应用标题。
 同名的用户文件整个取代内置 hook：想关掉一个，一条带 `when: false` 绑定的覆盖就够了；只想审查一部分操作，
 给 `auto-review` 加一个 `when`（如 `event.operation.objectType != 'command'`）。想改变判断的方式，覆盖的是
 agent：`~/.shuvix/agents/permission-reviewer.md`。agent 写 `~/.shuvix/hooks`、`agents`、`policies`、`skills`
-是一次普通写入（ask-on-write）：审查员被要求拒绝改写 ShuviX 自己的防护，沙箱里的命令也根本写不了那里。
+是一次要询问的普通写入（ask-on-external-path —— 它们都不是可写的会话目录）：审查员被要求拒绝改写 ShuviX
+自己的防护，沙箱里的命令也根本写不了那里。
 想让每次这样的写入都摆到用户面前，就写一份针对 `vars.shuvixConfigDirs` 的 `force-ask` 策略（见
 `policy-md`）。同名副本按 `shuvix-files` 条目里的规则处理。
 

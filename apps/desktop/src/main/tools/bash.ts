@@ -36,11 +36,11 @@ const BASH_DESCRIPTION =
   'Execute a bash command in the working directory. The command runs in a bash shell with pipe and redirect support. Use this for running scripts, installing packages, git operations, builds, etc. Prefer built-in tools over shell commands where one fits: `ls` instead of `find`/`ls`, `grep` instead of `grep`/`rg`, `glob` instead of `find -name`, `read` instead of `cat`/`head`/`tail`, `write` instead of `echo >`, `edit` instead of `sed`/`awk`. Use bash when no built-in tool can accomplish the task.'
 
 /**
- * 沙箱启用时追加的说明。写给模型：什么能做、什么做不了、做不了的怎么办。
- * 与 services/sandbox/tables.ts 的清单同义 —— 改清单时同步这里。
+ * 沙箱启用时追加的说明。写给模型：沙箱只给简单命令用，稍复杂的直接到沙箱外跑、交给自动审查。
+ * 与 services/sandbox/spec.ts 的范围同义 —— 改范围时同步这里。
  */
 const SANDBOX_DESCRIPTION =
-  "\n\nCommands run confined in a sandbox, without asking the user. Confined commands can read anything except credentials (~/.ssh, ~/.aws …) and can use the network, but can change files only in the working directory, $TMPDIR, /tmp and package-manager caches; git hooks, git config and ShuviX's own files cannot be written. Some things cannot work confined: creating or cloning a git repository, git commands that write .git/config (remote add, push -u, branch tracking, submodules, worktrees), fetching from or pushing to a private remote over SSH or with stored credentials, gh, opening apps (open), osascript, docker, sudo, and tools that sandbox themselves (swift build, xcodebuild, Playwright or Electron test runs). Only for those, set `dangerouslyDisableSandbox: true`: the command then runs with the user's full privileges and the user may be asked to approve it. When a confined command fails because of the sandbox, the result says what was refused — read it before deciding."
+  "\n\nBy default a command runs confined in a sandbox, without asking the user. A confined command can read and write only the working directory and $TMPDIR (it can also read system locations outside the user's home folder, and use the network); it cannot read anything else in the home folder — config such as ~/.gitconfig, caches, other projects — and cannot open apps or reach Docker and other local services. That covers simple work inside the project: listing, searching, inspecting files, running a script that stays in the working directory. For anything more — git, installing dependencies, builds and tools that use caches or config in the home folder, other directories, gh, docker, open, osascript, sudo — set `dangerouslyDisableSandbox: true` from the start rather than trying confined first: the command then runs with the user's full privileges, an automatic reviewer checks it, and the user may be asked to approve. If a confined command fails because of the sandbox, the result says what was refused."
 
 function bashDescription(sandboxed: boolean): string {
   return sandboxed ? BASH_DESCRIPTION + SANDBOX_DESCRIPTION : BASH_DESCRIPTION

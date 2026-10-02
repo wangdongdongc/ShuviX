@@ -25,6 +25,7 @@ import { collapseProgressOutput, type ShellKind } from '../utils/toolUtils/shell
 import {
   getDesktopSecurityContext,
   getSessionPathGrants,
+  sessionDirExtras,
   resolveProjectConfig,
   TOOL_ABORTED,
   type ToolContext
@@ -68,7 +69,7 @@ export type ShellCommandParamsSchema = TObject<{
  * `run_in_background` 不一致）：模型对这个名字最熟，不用再学一遍。
  */
 const DISABLE_SANDBOX_PARAM =
-  "Run this command without the sandbox, with the user's full privileges. Only for commands that cannot work confined (see the tool description) — never as a first attempt, and never just to get past a failure you have not read. The user may be asked to approve."
+  "Run this command outside the sandbox, with the user's full privileges. Use it for anything beyond simple work inside the working directory (see the tool description) — set it on the first attempt rather than trying confined first. An automatic reviewer checks the command, and the user may be asked to approve."
 
 /** 参数 schema —— 字段两个工具一致，只有 command 与 run_in_background 的说明因 shell 而异 */
 export function shellCommandParamsSchema(text: {
@@ -201,8 +202,10 @@ export class ShellCommandTool extends BaseTool<ShellCommandParamsSchema> {
         ? planFor({
             sessionId: this.ctx.sessionId,
             workingDirectory: config.workingDirectory,
-            // 只有写授权影响沙箱（成为可写根）；读没有需要放回的限制，读授权只管文件工具
-            grantedWrite: getSessionPathGrants(this.ctx.sessionId).grantedWrite,
+            // 「允许并记住」的读 / 写授权、会话勾选的知识库与技能目录在沙箱里同样生效
+            // （与外部目录访问策略同一个来源）
+            ...getSessionPathGrants(this.ctx.sessionId),
+            extras: sessionDirExtras(this.ctx.sessionId),
             offerEscalation: true
           })
         : null

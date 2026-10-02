@@ -55,7 +55,7 @@ afterAll(() => {
 })
 
 describe('getBuiltinPoliciesDir —— 两条分支', () => {
-  it('BPD-1 未打包（半桩、连 app 都没有）：不炸，指向仓库里那个 md 目录（`ask-on-write.md` 确在其中）', () => {
+  it('BPD-1 未打包（半桩、连 app 都没有）：不炸，指向仓库里那个 md 目录（`ask-on-external-path.md` 确在其中）', () => {
     // `app?.` 少一个问号就是 TypeError —— 文件工具的单测只桩半个 electron，这条路真会走到
     const dir = getBuiltinPoliciesDir()
     expect(dir).not.toBe(join('/fake/Resources', 'builtin-policies'))
@@ -65,9 +65,10 @@ describe('getBuiltinPoliciesDir —— 两条分支', () => {
     const rel = relative(SRC_BASE, dir)
     expect(rel.startsWith('..'), `未打包分支不是相对 __dirname 的路径：${dir}`).toBe(true)
     expect(resolve(OUT_BASE, rel)).toBe(MD_DIR)
-    expect(existsSync(join(MD_DIR, 'ask-on-write.md')), `${MD_DIR} 里没有 ask-on-write.md`).toBe(
-      true
-    )
+    expect(
+      existsSync(join(MD_DIR, 'ask-on-external-path.md')),
+      `${MD_DIR} 里没有 ask-on-external-path.md`
+    ).toBe(true)
   })
 
   it('BPD-2 打包：`<resourcesPath>/builtin-policies` —— 字面量与 electron-builder 的 `to` 同一个字符串', () => {

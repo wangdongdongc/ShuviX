@@ -71,6 +71,14 @@ Enable state lives in `~/.shuvix/skills/.config.json`:
 Change it through the sidebar's Skills group (the enable / disable item in a row's menu); the
 file is ShuviX's, not a place for hand edits.
 
+**Reading a skill never asks; changing one does.** The builtin skills, `~/.shuvix/skills` and
+every external directory that is not disabled are read-only directories of every session
+(`vars.sessionReadDirs` in the `policy-md` entry): the file tools read them without asking, and a
+sandboxed command may read them too. Writing there asks — a skill is instructions the agent
+itself follows — so creating or editing a global or external skill on the user's behalf goes
+through an approval. Project-level skills sit in the working directory and are treated like any
+other file of the project.
+
 ## How a skill reaches the model
 
 1. **Slash command** — typing `/<name>` in the input box inserts the skill as the message:

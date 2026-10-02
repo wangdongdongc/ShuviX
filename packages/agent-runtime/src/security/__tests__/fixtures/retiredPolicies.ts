@@ -1,5 +1,5 @@
 /**
- * 2026-10-01 从出厂删掉的八份内置策略 —— 原样（去掉 `shuvix-builtin: true`）留作**测试夹具**。
+ * 2026-10-01 从出厂删掉的内置策略 —— 原样（去掉 `shuvix-builtin: true`）留作**测试夹具**。
  *
  * 用户裁定「出厂不要硬限制、默认尽可能少问」，这八份不再随包发布；但它们挂靠的执行点
  * （enforceGitOp / enforceDatabase / enforceUrl 的站点门 / L1 调用门 / 命令结构事实 objects.commands…）
@@ -20,6 +20,9 @@ export type RetiredPolicyName =
   | 'ask-on-sub-session'
   | 'ask-on-database'
   | 'ask-on-new-site'
+  | 'protect-credentials'
+  | 'ask-on-write'
+  | 'session-grants'
 
 const RAW = import.meta.glob('./*.md', {
   query: '?raw',

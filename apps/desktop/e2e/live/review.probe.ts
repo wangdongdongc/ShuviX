@@ -84,9 +84,11 @@ interface Case {
 const WS = '/Users/alex/code/shop-api'
 
 /**
- * 各策略写给人看的那句。command / write / credentials 是出厂策略，与 builtinPolicies/md 的 en 版
- * 逐字一致；其余是已退役的内置策略（read 2026-09-30，database / site / subSession / git
- * 2026-10-01）—— 出厂不再问这些，用户照抄退役副本（security/__tests__/fixtures）时卡片上就是这几句
+ * 各策略写给人看的那句。command 是出厂策略 ask-on-command，与 builtinPolicies/md 的 en 版逐字一致；
+ * 其余是已退役的内置策略（read 2026-09-30，database / site / subSession / git 2026-10-01，
+ * write / credentials 2026-10-01 第二轮 —— 出厂换成了 ask-on-external-path，读规则 #0、写规则 #1
+ * 各有自己的一句，这里的打分载荷仍沿用退役那两份的措辞）—— 用户照抄退役副本
+ * （security/__tests__/fixtures）时卡片上就是这几句
  */
 const POLICY = {
   command: {

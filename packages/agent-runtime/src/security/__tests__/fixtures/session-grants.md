@@ -1,6 +1,5 @@
 ---
 shuvix: policy v1
-shuvix-builtin: true
 name: session-grants
 shuvix-displayName: Session Grants Take Effect
 description: Paths you chose to "allow and remember" in this session are not asked about again.

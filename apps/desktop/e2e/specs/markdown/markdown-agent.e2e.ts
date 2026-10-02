@@ -7,7 +7,7 @@
  *     glob 看邻居，ask 问用户，skill 装绘图技能 —— 没有 write / edit / bash，也不派活、不开子会话；
  *     会话标题一开始就是文件名（不是缺省标题），所以自动起标题那条 hook 不跑 —— 不多花一次请求；
  *   - 改文档经 doc_edit 在编辑器缓冲上当场执行：不问（改动就在用户眼前落下），编辑器先变，自动保存再写盘；
- *   - 读文件照常过安全策略：在工作目录里读不问、读凭据位置（~/.ssh …）的问；询问卡片出现在**这个窗口**里
+ *   - 读文件照常过安全策略：在工作目录里读不问、读家目录里会话目录以外的（如 ~/.ssh）问；询问卡片出现在**这个窗口**里
  *     （事件经它自己的前端绑定送达，主窗口根本没开）；
  *   - 关窗 = 删会话：跑到一半的一轮被中止（模型那边看得到连接断开）；doc_edit 正在等用户停手、或者
  *     挂着一张 ask 卡片时关窗，删除都在有限时间内完成 —— 等窗口答复的请求随关窗立刻失败，不等超时。
@@ -62,7 +62,7 @@ beforeAll(async () => {
     args: [paths.a, paths.b, paths.c, paths.d],
     markdownWindows: 4
   }))
-  // 一份凭据文件（fake HOME 的 ~/.ssh 里）：内置 protect-credentials 读它要问
+  // 一份凭据文件（fake HOME 的 ~/.ssh 里）：家目录里、会话目录以外，内置 ask-on-external-path 读它要问
   paths.key = join(app.home, '.ssh', 'md-e2e-key')
   mkdirSync(dirname(paths.key), { recursive: true })
   writeFileSync(paths.key, 'MD E2E PRIVATE KEY\n')
@@ -196,9 +196,7 @@ describe('md 窗口里的一轮对话', () => {
     await panes.a!.deny()
     await panes.a!.waitDrawerText('ag3-done', 30_000)
     const key = decisionsOf('ag3_read_key')
-    expect(key.some((d) => d.effect === 'ask' && d.winning.startsWith('protect-credentials'))).toBe(
-      true
-    )
+    expect(key.some((d) => d.effect === 'ask' && d.winning === 'ask-on-external-path#0')).toBe(true)
     expect(key.some((d) => d.userResponse === 'denied')).toBe(true)
     // 拒绝了就没读：第三次请求里没有那份凭据文件的内容
     expect(provider.chatRequests()[2]?.raw).not.toContain('MD E2E PRIVATE KEY')

@@ -7,11 +7,11 @@
  *   BS-2…6      http(s) 等地址上报 `{type:'url'}` 客体（规整过的写法、opts 的契约）—— 出厂放行，
  *               用户的 deny / ask 策略照样管得到；
  *   BS-7…13     `file://` 就是读那个路径：路径怎么从地址里解出来（大写协议、localhost、`..`、
- *               百分号编码、根本不指本机文件的地址），走的是 protect-credentials 等路径策略（读只有凭据
- *               位置会问）；
+ *               百分号编码、根本不指本机文件的地址），走的是 ask-on-external-path 等路径策略（读只有家目录里、
+ *               会话目录外会问 —— 凭据位置就在其中）；
  *               显示本地文件的 tab 上做事也一样（BS-7b）；
  *   BS-14…18    upload_file 的读门：相对路径按工作目录解析、先问策略再查存在、绝对路径也 resolve；
- *   BS-19…21    pdf 的写门：工作区里也问（ask-on-write）、区外问而不拒；系统 / 凭据目录出厂也只是问，
+ *   BS-19…21    pdf 的写门：工作区（会话目录）里不问、区外问而不拒（ask-on-external-path）；系统 / 凭据目录出厂也只是问，
  *               装回退役的 protect-system（用户策略）则直接拒；
  *   BS-22       原生 cdp 里等价的那几个方法不是绕开门的旁路；
  *   BS-23…25    每条会话一台 server（后端与询问通道各归各）、策略不缓存、各会话共用一条 tab 队列；
@@ -91,7 +91,11 @@ vi.mock('../../toolContext', async () => {
             home: gate.home,
             botsDir: '/home/u/.shuvix/bots',
             builtinKnowledgeDir: '/opt/shuvix/Resources/knowledge',
-            systemDirs: []
+            systemDirs: [],
+            // 会话目录（生产里由 sandbox.sessionDirsView 算）：工作目录 + 本会话的 tool_results
+            // （还有会话 TMPDIR 与 artifacts，这里用不上）—— ask-on-external-path 在这以外的写才问
+            sessionDirs: [gate.ws, `/tool-results/${ctx.sessionId}`],
+            sessionReadDirs: []
           }),
           readBuiltinPolicyMd,
           getSessionGrants: () => ({ allowList: [] }),
@@ -486,7 +490,7 @@ describe.skipIf(!POSIX)('browser 桌面接线 —— file:// 按读路径过门'
     expect(s.backend.openTab.mock.calls).toEqual([[{ url }]])
   })
 
-  it('BS-7b 在一个显示 ~/.ssh/id_rsa 的 tab 上拍快照 = 读那个文件：凭据询问弹出、写明哪个 tab；拒绝则不拍', async () => {
+  it('BS-7b 在一个显示 ~/.ssh/id_rsa 的 tab 上拍快照 = 读那个文件：家目录里的读询问弹出、写明哪个 tab；拒绝则不拍', async () => {
     const s = await open({ respond: async () => ({ kind: 'ask', allowed: false }) })
     s.backend.urls.t1 = 'file:///home/u/.ssh/id_rsa'
     expectFailure(
@@ -633,7 +637,7 @@ describe.skipIf(!POSIX)('browser 桌面接线 —— upload_file 的读门', () 
     expect(allowing.backend.uploadFile).not.toHaveBeenCalled()
   })
 
-  it('BS-17 绝对路径里的 .. 也折叠：过门的是 /home/u/.ssh/id_rsa（凭据询问弹出）；没有面板时拒绝文案用原话', async () => {
+  it('BS-17 绝对路径里的 .. 也折叠：过门的是 /home/u/.ssh/id_rsa（家目录里的读询问弹出）；没有面板时拒绝文案用原话', async () => {
     const sneaky = `${WS()}/${'../'.repeat(WS().split('/').length)}home/u/.ssh/id_rsa`
 
     const asking = await open({ respond: async () => ({ kind: 'ask', allowed: false }) })
@@ -667,7 +671,7 @@ describe.skipIf(!POSIX)('browser 桌面接线 —— upload_file 的读门', () 
 // ─── pdf 的写门 ─────────────────────────────────────────────────────────
 
 describe.skipIf(!POSIX)('browser 桌面接线 —— pdf 的写门', () => {
-  it('BS-19 输出位置过写门：工作区里也问（ask-on-write 对每一次写都问）；允许后后端拿绝对路径，上级目录不必已存在', async () => {
+  it('BS-19 输出位置过写门（一次 enforcePath(write)）：工作区是会话目录、不问；后端拿绝对路径，上级目录不必已存在', async () => {
     const s = await open()
     expect(
       (await s.call('pdf', { tabId: 't1', outputPath: 'out/page.pdf' }, TC)).isError
@@ -679,12 +683,8 @@ describe.skipIf(!POSIX)('browser 桌面接线 —— pdf 的写门', () => {
         opts: enforceOpts('pdf', 'Save the page as a PDF', 'out/page.pdf')
       }
     ])
-    expect(s.asks).toHaveLength(1)
-    expect(s.asks[0]).toMatchObject({
-      kind: 'ask',
-      toolName: 'mcp__browser__pdf',
-      command: `Write(${WS()}/out/page.pdf)`
-    })
+    // 门确实过了，只是 ask-on-external-path 不管会话目录里的写
+    expect(s.asks).toEqual([])
     expect(s.backend.pdf.mock.calls).toEqual([
       [
         {
@@ -698,18 +698,22 @@ describe.skipIf(!POSIX)('browser 桌面接线 —— pdf 的写门', () => {
     ])
   })
 
-  it('BS-20 工作区外的位置是问而不是拒：允许之后后端拿到的就是那个路径', async () => {
+  it('BS-20 工作区外（会话目录外）的位置是问而不是拒：允许之后后端拿到的就是那个路径', async () => {
     const s = await open()
     expect(
       (await s.call('pdf', { tabId: 't1', outputPath: '/tmp/else/page.pdf' })).isError
     ).toBeFalsy()
     expect(s.asks).toHaveLength(1)
-    expect((s.asks[0] as AskInputRequest).command).toBe('Write(/tmp/else/page.pdf)')
+    expect(s.asks[0]).toMatchObject({
+      kind: 'ask',
+      toolName: 'mcp__browser__pdf',
+      command: 'Write(/tmp/else/page.pdf)'
+    })
     expect(s.backend.pdf.mock.calls[0][0]).toMatchObject({ outputPath: '/tmp/else/page.pdf' })
   })
 
   it.each(['/etc/page.pdf', '/home/u/.ssh/page.pdf'])(
-    'BS-21 %s → 出厂没有拒写策略：与别处一样是问（ask-on-write）；拒绝则不导出',
+    'BS-21 %s → 出厂没有拒写策略：与别处一样是问（ask-on-external-path）；拒绝则不导出',
     async (outputPath) => {
       const s = await open({ respond: async () => ({ kind: 'ask', allowed: false }) })
       const r = await s.call('pdf', { tabId: 't1', outputPath })
@@ -895,7 +899,7 @@ describe.skipIf(!POSIX)('browser 桌面接线 —— 按真实去处过门（桌
     ])
   })
 
-  it('BS-R2 file:// 打开工作区里一条指向私钥的链接：按读私钥过门（protect-credentials）；没有输入面板 → 拒绝，文案带着真实去处', async () => {
+  it('BS-R2 file:// 打开工作区里一条指向私钥的链接：按读私钥过门（家目录里的读 —— ask-on-external-path）；没有输入面板 → 拒绝，文案带着真实去处', async () => {
     const s = await open({ respond: null })
     const link = `${WS()}/klink`
     const target = realpathSync.native(homeKey())

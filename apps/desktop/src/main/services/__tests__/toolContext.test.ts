@@ -13,18 +13,17 @@
  * 命令沙箱的宿主胶水（HG-1）：
  *   getSessionPathGrants —— 会话 allowList 的 Write(...) / Read(...) 拆成写 / 读授权根，
  *     历史遗留的 Bash(...) 与写坏的条目不授予任何东西；
- *   getVars 展开 sandbox.sessionView(ctx.sessionId, <工具看到的同一个工作区>) 的六个键 ——
- *     文件工具的免询问范围与命令实际能碰的范围同源。sandbox 模块以「透传真实实现的 spy」替身：
- *     默认走真实 sessionView（未固定 → INACTIVE_VIEW），单条用例可以换成假值。
+ *   getVars 的 `sessionDirs` / `sessionReadDirs` 来自 sandbox.sessionDirsView(ctx.sessionId,
+ *     <工具看到的同一个工作区>, sessionDirExtras(ctx.sessionId)) —— 外部目录访问策略（ask-on-external-path）
+ *     的免询问范围与命令实际能碰的范围是同一份清单。sandbox 模块以「透传真实实现的 spy」替身：默认走
+ *     真实 sessionDirsView（本文件不 mock electron，取不到 app.getPath → 空清单，HG-1 钉住这条出错路径
+ *     不抛），单条用例可以换成假值；
+ *   HG-2 sessionDirExtras —— 会话设置带来的那部分会话目录：勾选的知识库（非只读 → 可读写，只读的内置库
+ *     → 只读）、技能目录（随包的内置 + skillService.enabledSkillRoots，只读）；任一来源抛错只少给、不抛。
  *
  * 询问点的自动审查带来的桌面接线（设计稿 docs/permission-review-design.md）：
  *   SEC-9 shuvixConfigDirs —— policies / agents / hooks / skills 四个目录（事实变量：引用它的出厂
  *     protect-shuvix-config 已于 2026-10-01 退役，留给用户自写的策略）；
- *   HG-3 getVars 另展开 sandbox.workspaceWriteView 的三个 workspace* 键（ask-on-write 与沙箱脱钩的
- *     工作区豁免）—— 与沙箱那一面同一对参数、每次现取；本文件不 mock electron，真实模块取不到
- *     app.getPath，于是三个键恒为空数组（HG-3b 钉住这条出错路径不抛、不漏键）；
- *   HG-4 sessionCredentialPaths —— 命令沙箱的凭据清单：生效的 protect-credentials 的 `credentialDirs`，
- *     用宿主的非沙箱变量求值、只留绝对路径、每次现读，求值时不碰沙箱视图；
  *   TC-SUBJ 桌面 subject 带上 ctx.agent 的档案名与 root / spawned（审查员的防递归与用户策略都读它）；
  *   TC-RV onPermissionRequest 每次现取注入的审查者（setPermissionReviewer），被动判定从不走到它。
  * 需要真实评估的用例读仓库里那份内置策略 md（同 askPolicy.test）；用户策略由 tc.userPolicies 喂。
@@ -32,7 +31,6 @@
  */
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
-import { homedir } from 'node:os'
 import { join } from 'node:path'
 
 const tc = vi.hoisted(() => ({
@@ -41,8 +39,12 @@ const tc = vi.hoisted(() => ({
   pickSettings: vi.fn((_id: string, _keys: string[]): unknown => undefined),
   getTempWorkspace: vi.fn((_sid: string) => '/tmp/shuvix-actor-ws'),
   getSessionArtifactsDir: vi.fn((id: string) => `/tmp/shuvix-artifacts/${id}`),
-  /** toolContext 的 'Security' 日志（HG-4 看 let 求值失败的那一行） */
-  securityLog: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+  /** knowledge/sessionBundle.enabledTargets：本会话勾选、且这台机器上真有的知识库（HG-2 换） */
+  enabledTargets: vi.fn(
+    (_sid: string): Array<{ name: string; target: { dir: string; readonly?: boolean } }> => []
+  ),
+  /** skillService.enabledSkillRoots：默认技能目录 + 没被停用的外部技能目录（HG-2 换） */
+  enabledSkillRoots: vi.fn((): string[] => []),
   /** policyService.getUserPolicies 交出的用户策略（TC-SUBJ2 / TC-RV3 换） */
   userPolicies: [] as UserPolicyFile[],
   // 内置策略的事实源 —— 运行时读随包发布的目录，这里直接读仓库里那一份（同一批文件）。
@@ -52,19 +54,18 @@ const tc = vi.hoisted(() => ({
 
 vi.mock('../../dao/projectDao', () => ({ projectDao: { pick: tc.projectPick } }))
 vi.mock('../../dao/sessionDao', () => ({ sessionDao: { pickSettings: tc.pickSettings } }))
-// 真实模块 + sessionView / workspaceWriteView 换成透传 spy：不改行为，只多一个观测点（与可按用例替换的返回值）
+// 真实模块 + sessionDirsView 换成透传 spy：不改行为，只多一个观测点（与可按用例替换的返回值）
 vi.mock('../sandbox', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../sandbox')>()
-  return {
-    ...actual,
-    sessionView: vi.fn(actual.sessionView),
-    workspaceWriteView: vi.fn(actual.workspaceWriteView)
-  }
+  return { ...actual, sessionDirsView: vi.fn(actual.sessionDirsView) }
 })
 vi.mock('../sessionService', () => ({
   sessionService: { getById: tc.getById, addAllowListPaths: () => {} }
 }))
-vi.mock('../skillService', () => ({ skillService: { listExternalDirs: () => [] } }))
+vi.mock('../skillService', () => ({
+  skillService: { listExternalDirs: () => [], enabledSkillRoots: tc.enabledSkillRoots }
+}))
+vi.mock('../knowledge/sessionBundle', () => ({ enabledTargets: tc.enabledTargets }))
 vi.mock('../policyService', () => ({
   policyService: {
     getUserPolicies: () => tc.userPolicies,
@@ -97,8 +98,7 @@ vi.mock('../../utils/paths', () => ({
   getShuvixKnowledgeRootDir: () => '/tmp/shuvix-knowledge-shuvix'
 }))
 vi.mock('../../logger', () => ({
-  createLogger: (name?: string) =>
-    name === 'Security' ? tc.securityLog : { info: () => {}, warn: () => {}, error: () => {} }
+  createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {} })
 }))
 
 import {
@@ -109,12 +109,12 @@ import {
   isPathWriteAllowed,
   makeDesktopSecurityProvider,
   resolveProjectConfig,
-  sessionCredentialPaths,
+  sessionDirExtras,
   setPermissionReviewer,
   type ProjectConfig,
   type ToolContext
 } from '../toolContext'
-import { sessionView, workspaceWriteView } from '../sandbox'
+import { sessionDirsView } from '../sandbox'
 import {
   clearReviewState,
   clearSessionDecisions,
@@ -203,9 +203,9 @@ describe('makeDesktopSecurityProvider —— 变量表', () => {
     expect(vars().workspace).toBe('/ws')
   })
 
-  // sessionArtifactsDir —— ask-on-write 对它免询问（本会话认领下来的图与交互块）。
-  // 它是**免询问的范围**，所以两件事都得钉：取的是哪一个会话的目录（SEC-7），以及坏 id 不能把
-  // 这个范围放大（SEC-8：空 id = 所有会话的 artifacts 根，`..` = ~/.shuvix，里面有 policies/）。
+  // sessionArtifactsDir —— 本会话认领下来的图与交互块所在（事实变量；免询问靠的是 vars.sessionDirs
+  // 里同一个目录，见 HG-1）。用户策略拿它当范围时两件事都得钉：取的是哪一个会话的目录（SEC-7），
+  // 以及坏 id 不能把这个范围放大（SEC-8：空 id = 所有会话的 artifacts 根，`..` = ~/.shuvix，里面有 policies/）。
 
   it('SEC-7 sessionArtifactsDir 由 getSessionArtifactsDir(ctx.sessionId) 填：一会话一个目录，子会话不继承父会话的', () => {
     tc.getSessionArtifactsDir.mockClear()
@@ -227,14 +227,15 @@ describe('makeDesktopSecurityProvider —— 变量表', () => {
   })
 
   it.each(['', '.', '..', '../x', 'a/b', 'a\\b'])(
-    'SEC-8 坏会话 id %j 不放大豁免：sessionArtifactsDir 给空串（inDir 恒不命中，两道门照问）',
+    'SEC-8 坏会话 id %j 不放大范围：sessionArtifactsDir 给空串（inDir 恒不命中）',
     (id) => {
       expect(vars(id).sessionArtifactsDir).toBe('')
     }
   )
 
   // shuvixConfigDirs —— 事实变量：用户装回 protect-shuvix-config（force-ask）时守的就是它：漏一项，
-  // 那一类规矩文件的写入就回到普通的 ask-on-write，于是可以被审查员代答，一次注入就能改掉审查员自己
+  // 那一类规矩文件的写入就回到普通的 ask-on-external-path，于是可以被审查员代答，一次注入就能改掉
+  // 审查员自己
   it('SEC-9 shuvixConfigDirs 恰为 policies / agents / hooks / skills 四个默认目录（按这个顺序；内置与外部技能目录不在其中）', () => {
     expect(vars().shuvixConfigDirs).toEqual([
       '/tmp/shuvix-policies',
@@ -304,10 +305,11 @@ describe('resolveProjectConfig —— 工作目录照抄 getById 的口径', () 
 /**
  * HG-1 命令沙箱的宿主胶水 —— 两件事：
  *   - getSessionPathGrants：会话「允许并记住」的路径授权（allowList）拆成写 / 读两组，交给沙箱当
- *     可写根 / 放回可读。与安全模块同一个解析（parseAllowEntry）：Bash(...) 这类命令条目早已不授予
- *     任何东西，写坏的条目同理 —— 它们要是被当成路径，沙箱就会凭空多出一个可写根；
- *   - getVars 的沙箱那一面：六个 `sandbox*` 键来自 sessionView(ctx.sessionId, 工作区)，工作区与
- *     文件工具看到的是同一个（getConfig 现读），所以免询问范围就是命令实际能碰的范围。
+ *     可读写 / 可读的根（也是策略的 vars.grantedWrite / grantedRead）。与安全模块同一个解析
+ *     （parseAllowEntry）：Bash(...) 这类命令条目早已不授予任何东西，写坏的条目同理 —— 它们要是被
+ *     当成路径，沙箱就会凭空多出一个可写根；
+ *   - getVars 的 `sessionDirs`：来自 sessionDirsView(ctx.sessionId, 工作区)，工作区与文件工具看到的是
+ *     同一个（getConfig 现读），所以文件工具的免询问范围就是命令实际能碰的范围。
  */
 describe('HG-1 getSessionPathGrants —— allowList 拆成写 / 读授权根', () => {
   beforeEach(() => {
@@ -345,47 +347,59 @@ describe('HG-1 getSessionPathGrants —— allowList 拆成写 / 读授权根', 
   })
 })
 
-describe('HG-1 getVars —— 展开 sandbox.sessionView 的四个键', () => {
-  const SANDBOX_KEYS = [
-    'sandboxActive',
-    'sandboxWritableRoots',
-    'sandboxWriteDenied',
-    'sandboxProtectedPatterns'
-  ] as const
-
-  const pickSandboxKeys = (vars: Record<string, unknown>): Record<string, unknown> =>
-    Object.fromEntries(SANDBOX_KEYS.filter((k) => k in vars).map((k) => [k, vars[k]]))
-
-  const sessionViewSpy = vi.mocked(sessionView)
+describe('HG-1 getVars —— sessionDirs 来自 sandbox.sessionDirsView', () => {
+  const sessionDirsViewSpy = vi.mocked(sessionDirsView)
 
   beforeEach(() => {
-    sessionViewSpy.mockClear()
+    // mockReset 回到透传真实实现（vi.fn(impl) 的语义），顺带清掉没用完的 Once 值
+    sessionDirsViewSpy.mockReset()
     tc.getById.mockReset()
     tc.projectPick.mockReset()
+    tc.enabledTargets.mockReset()
+    tc.enabledTargets.mockReturnValue([])
+    tc.enabledSkillRoots.mockReset()
+    tc.enabledSkillRoots.mockReturnValue([])
   })
 
-  it('HG-1 sandbox 模块给什么，四个键就是什么；按 ctx.sessionId 与 getConfig() 的工作区去取', () => {
+  it('HG-1 sandbox 模块给什么，sessionDirs / sessionReadDirs 就是什么；按 ctx.sessionId、getConfig() 的工作区与 sessionDirExtras(ctx.sessionId) 去取', () => {
+    tc.enabledTargets.mockReturnValue([{ name: 'notes', target: { dir: '/kb/notes' } }])
+    tc.enabledSkillRoots.mockReturnValue(['/tmp/shuvix-actor-skills'])
     const fake = {
-      sandboxActive: true,
-      sandboxWritableRoots: ['/ws', '/private/tmp/shuvix-501/abcd1234'],
-      sandboxWriteDenied: ['/ws/.git/hooks'],
-      sandboxProtectedPatterns: ['**/.git/config']
+      sessionDirs: [
+        '/ws',
+        '/private/tmp/shuvix-501/abcd1234',
+        '/Users/u/.shuvix/artifacts/sess-1',
+        '/tool-results/sess-1',
+        '/kb/notes'
+      ],
+      sessionReadDirs: ['/tmp/shuvix-actor-builtin-skills', '/tmp/shuvix-actor-skills']
     }
-    sessionViewSpy.mockReturnValueOnce(fake)
+    sessionDirsViewSpy.mockReturnValueOnce(fake)
 
     const vars = makeDesktopSecurityProvider(
       { sessionId: 'sess-1', requestUserInput: undefined },
       () => ({ workingDirectory: '/ws' })
     ).getVars() as Record<string, unknown>
 
-    expect(sessionViewSpy.mock.calls).toEqual([['sess-1', '/ws']])
-    expect(pickSandboxKeys(vars)).toEqual(fake)
-    // 展开的是沙箱那一面，不是把整张表换掉：其余变量照旧
+    expect(sessionDirsViewSpy.mock.calls).toEqual([
+      [
+        'sess-1',
+        '/ws',
+        {
+          readWrite: ['/kb/notes'],
+          readOnly: ['/tmp/shuvix-actor-builtin-skills', '/tmp/shuvix-actor-skills']
+        }
+      ]
+    ])
+    expect(tc.enabledTargets).toHaveBeenCalledWith('sess-1')
+    expect(vars.sessionDirs).toEqual(fake.sessionDirs)
+    expect(vars.sessionReadDirs).toEqual(fake.sessionReadDirs)
+    // 多出来的是这两个键，不是把整张表换掉：其余变量照旧
     expect(vars.workspace).toBe('/ws')
     expect(vars.botsDir).toBe('/tmp/shuvix-bots')
   })
 
-  it('HG-1 工作区与工具同源：getConfig = resolveProjectConfig 时传给 sessionView 的就是项目根，且每次现读', () => {
+  it('HG-1 工作区与工具同源：getConfig = resolveProjectConfig 时传给 sessionDirsView 的就是项目根，且每次现读', () => {
     tc.getById.mockReturnValue({
       id: 's2',
       projectId: 'p1',
@@ -399,8 +413,10 @@ describe('HG-1 getVars —— 展开 sandbox.sessionView 的四个键', () => {
       () => resolveProjectConfig('s2')
     )
     const first = provider.getVars() as Record<string, unknown>
-    expect(sessionViewSpy.mock.calls).toEqual([['s2', '/proj/root']])
-    // 文件工具的 workspace 与沙箱那一面拿的是同一个目录
+    expect(sessionDirsViewSpy.mock.calls.map(([id, ws]) => [id, ws])).toEqual([
+      ['s2', '/proj/root']
+    ])
+    // 文件工具的 workspace 与会话目录拿的是同一个目录
     expect(first.workspace).toBe('/proj/root')
 
     // 会话换了工作目录（例如项目被挪走）：同一个 provider 下一次评估就跟上，不是构造时的快照
@@ -411,92 +427,11 @@ describe('HG-1 getVars —— 展开 sandbox.sessionView 的四个键', () => {
       workingDirectory: '/elsewhere'
     })
     const second = provider.getVars() as Record<string, unknown>
-    expect(sessionViewSpy.mock.calls.at(-1)).toEqual(['s2', '/elsewhere'])
+    expect(sessionDirsViewSpy.mock.calls.at(-1)?.slice(0, 2)).toEqual(['s2', '/elsewhere'])
     expect(second.workspace).toBe('/elsewhere')
   })
 
-  it('HG-1 真实 sandbox 模块、会话未固定 → 四个键都在且全是「未启用」的值（不去碰 electron app）', () => {
-    // 这里没有 mock electron：`app` 在 node 里是 undefined，真实 sessionView 若去取 app.getPath
-    // 就会抛 —— 能拿到结果本身就说明未固定的会话不碰宿主路径
-    const vars = makeDesktopSecurityProvider(
-      { sessionId: 'never-pinned', requestUserInput: undefined },
-      () => ({ workingDirectory: '/ws' })
-    ).getVars() as Record<string, unknown>
-
-    expect(sessionViewSpy).toHaveBeenCalledTimes(1)
-    expect(pickSandboxKeys(vars)).toEqual({
-      sandboxActive: false,
-      sandboxWritableRoots: [],
-      sandboxWriteDenied: [],
-      sandboxProtectedPatterns: []
-    })
-    // 四个键一个不少：策略的 vars.sandbox* 指向未设变量会走 fail-safe 并刷告警
-    for (const key of SANDBOX_KEYS) expect(vars, key).toHaveProperty(key)
-  })
-})
-
-/**
- * HG-3 工作区写入视图 —— ask-on-write 的工作区豁免不再依赖沙箱：getVars 另展开
- * sandbox.workspaceWriteView(ctx.sessionId, 工作区) 的三个键。参数必须与沙箱那一面同一对（同一个会话、
- * 文件工具看到的同一个工作区），且每次评估现取 —— 会话中途换了工作目录，豁免范围跟着走。
- */
-describe('HG-3 getVars —— 展开 sandbox.workspaceWriteView 的三个键', () => {
-  const WORKSPACE_KEYS = [
-    'workspaceWritable',
-    'workspaceWriteDenied',
-    'workspaceProtectedPatterns'
-  ] as const
-
-  const pickWorkspaceKeys = (vars: Record<string, unknown>): Record<string, unknown> =>
-    Object.fromEntries(WORKSPACE_KEYS.filter((k) => k in vars).map((k) => [k, vars[k]]))
-
-  const sessionViewSpy = vi.mocked(sessionView)
-  const workspaceWriteViewSpy = vi.mocked(workspaceWriteView)
-
-  beforeEach(() => {
-    // mockReset 回到透传真实实现（vi.fn(impl) 的语义），顺带清掉没用完的 Once 值
-    sessionViewSpy.mockReset()
-    workspaceWriteViewSpy.mockReset()
-  })
-
-  it('HG-3a workspaceWriteView 给什么，三个键就是什么；参数与 sessionView 同一对（ctx.sessionId, getConfig() 的工作区）；同一个 provider 每次评估现取', () => {
-    const first = {
-      workspaceWritable: ['/ws'],
-      workspaceWriteDenied: ['/ws/.vscode', '/Users/u/.ssh'],
-      workspaceProtectedPatterns: ['/\\.[Gg][Ii][Tt]$']
-    }
-    const second = {
-      workspaceWritable: ['/elsewhere'],
-      workspaceWriteDenied: ['/elsewhere/.claude'],
-      workspaceProtectedPatterns: []
-    }
-    workspaceWriteViewSpy.mockReturnValueOnce(first).mockReturnValueOnce(second)
-
-    let workingDirectory = '/ws'
-    const provider = makeDesktopSecurityProvider(
-      { sessionId: 'sess-w', requestUserInput: undefined },
-      () => ({ workingDirectory })
-    )
-
-    const v1 = provider.getVars() as Record<string, unknown>
-    expect(workspaceWriteViewSpy.mock.calls).toEqual([['sess-w', '/ws']])
-    expect(workspaceWriteViewSpy.mock.calls).toEqual(sessionViewSpy.mock.calls)
-    expect(pickWorkspaceKeys(v1)).toEqual(first)
-    // 展开的是多出来的三个键，不是把整张表换掉：工作区与沙箱那一面照旧
-    expect(v1.workspace).toBe('/ws')
-    expect(v1.sandboxActive).toBe(false)
-
-    // 会话换了工作目录：同一个 provider 下一次评估就跟上（两面拿到的都是新目录）
-    workingDirectory = '/elsewhere'
-    const v2 = provider.getVars() as Record<string, unknown>
-    expect(workspaceWriteViewSpy).toHaveBeenCalledTimes(2)
-    expect(workspaceWriteViewSpy.mock.calls.at(-1)).toEqual(['sess-w', '/elsewhere'])
-    expect(sessionViewSpy.mock.calls.at(-1)).toEqual(['sess-w', '/elsewhere'])
-    expect(pickWorkspaceKeys(v2)).toEqual(second)
-    expect(v2.workspace).toBe('/elsewhere')
-  })
-
-  it('HG-3b 真实 sandbox 模块、不 mock electron（取不到 app.getPath，算不出规格）→ getVars 不抛，三个键都在且都是空数组（= 区内写照旧问）', () => {
+  it('HG-1 真实 sandbox 模块、不 mock electron（取不到 app.getPath，算不出会话目录）→ getVars 不抛，sessionDirs / sessionReadDirs 都是空清单（= 多问，绝不因此放行）；旧的 sandbox* / workspace* 键不再给', () => {
     const provider = makeDesktopSecurityProvider(
       { sessionId: 'sess-real', requestUserInput: undefined },
       () => ({ workingDirectory: '/ws' })
@@ -506,14 +441,83 @@ describe('HG-3 getVars —— 展开 sandbox.workspaceWriteView 的三个键', (
       vars = provider.getVars() as Record<string, unknown>
     }).not.toThrow()
 
-    expect(workspaceWriteViewSpy.mock.calls).toEqual([['sess-real', '/ws']])
-    expect(pickWorkspaceKeys(vars)).toEqual({
-      workspaceWritable: [],
-      workspaceWriteDenied: [],
-      workspaceProtectedPatterns: []
+    expect(sessionDirsViewSpy).toHaveBeenCalledTimes(1)
+    expect(sessionDirsViewSpy.mock.calls[0].slice(0, 2)).toEqual(['sess-real', '/ws'])
+    expect(vars.sessionDirs).toEqual([])
+    expect(vars.sessionReadDirs).toEqual([])
+    for (const key of [
+      'sandboxActive',
+      'sandboxWritableRoots',
+      'sandboxWriteDenied',
+      'sandboxProtectedPatterns',
+      'workspaceWritable',
+      'workspaceWriteDenied',
+      'workspaceProtectedPatterns'
+    ]) {
+      expect(vars, key).not.toHaveProperty(key)
+    }
+  })
+})
+
+/**
+ * HG-2 sessionDirExtras —— 会话设置决定的那部分会话目录，策略与命令沙箱同一个来源：
+ * 勾选的知识库里，非只读的可读写、只读的（内置库）只读；技能目录（随包的内置 + 启用的默认 / 外部目录）
+ * 只读 —— 技能是 agent 自己要遵守的指令，改它照旧询问。来源读不到时少给（多问），不抛。
+ */
+describe('HG-2 sessionDirExtras —— 勾选的知识库与技能目录', () => {
+  beforeEach(() => {
+    tc.enabledTargets.mockReset()
+    tc.enabledSkillRoots.mockReset()
+  })
+
+  it('HG-2 非只读的库 → readWrite；只读的库与技能目录 → readOnly（随包的内置技能目录打头）；按会话 id 去取', () => {
+    tc.enabledTargets.mockReturnValue([
+      { name: 'project', target: { dir: '/kb-shuvix/projects/p1' } },
+      { name: 'shuvix', target: { dir: '/opt/shuvix/knowledge/shuvix/en', readonly: true } },
+      { name: 'notes', target: { dir: '/kb/notes' } }
+    ])
+    tc.enabledSkillRoots.mockReturnValue(['/tmp/shuvix-actor-skills', '/ext/skills'])
+
+    expect(sessionDirExtras('s-kb')).toEqual({
+      readWrite: ['/kb-shuvix/projects/p1', '/kb/notes'],
+      readOnly: [
+        '/tmp/shuvix-actor-builtin-skills',
+        '/opt/shuvix/knowledge/shuvix/en',
+        '/tmp/shuvix-actor-skills',
+        '/ext/skills'
+      ]
     })
-    // 三个键一个不少：ask-on-write 的 match 引用它们，缺键会走 fail-safe
-    for (const key of WORKSPACE_KEYS) expect(vars, key).toHaveProperty(key)
+    expect(tc.enabledTargets).toHaveBeenCalledWith('s-kb')
+  })
+
+  it('HG-2 一个库都没勾、没有启用的技能目录 → 只剩随包的内置技能目录（只读）', () => {
+    tc.enabledTargets.mockReturnValue([])
+    tc.enabledSkillRoots.mockReturnValue([])
+    expect(sessionDirExtras('s-none')).toEqual({
+      readWrite: [],
+      readOnly: ['/tmp/shuvix-actor-builtin-skills']
+    })
+  })
+
+  it('HG-2 知识库或技能目录读不到（抛错）→ 那一部分少给，另一部分照给，整体不抛', () => {
+    tc.enabledTargets.mockImplementation(() => {
+      throw new Error('scan failed')
+    })
+    tc.enabledSkillRoots.mockReturnValue(['/tmp/shuvix-actor-skills'])
+    expect(sessionDirExtras('s-kb-broken')).toEqual({
+      readWrite: [],
+      readOnly: ['/tmp/shuvix-actor-builtin-skills', '/tmp/shuvix-actor-skills']
+    })
+
+    tc.enabledTargets.mockReset()
+    tc.enabledTargets.mockReturnValue([{ name: 'notes', target: { dir: '/kb/notes' } }])
+    tc.enabledSkillRoots.mockImplementation(() => {
+      throw new Error('config unreadable')
+    })
+    expect(sessionDirExtras('s-skills-broken')).toEqual({
+      readWrite: ['/kb/notes'],
+      readOnly: ['/tmp/shuvix-actor-builtin-skills']
+    })
   })
 })
 
@@ -531,7 +535,7 @@ describe('HG-3 getVars —— 展开 sandbox.workspaceWriteView 的三个键', (
 describe('TC-SUBJ / TC-RV 桌面主体与审查接缝', () => {
   const WS = '/ws'
   const ART = '/tmp/shuvix-artifacts'
-  /** 工作区外的普通文件：ask-on-write#0（ask 档 —— 审查接缝只管这一档） */
+  /** 会话目录外的普通文件：ask-on-external-path#1（ask 档 —— 审查接缝只管这一档） */
   const OUTSIDE = '/tmp/shuvix-tc-review-outside/a.txt'
   const projectConfig: ProjectConfig = { workingDirectory: WS }
   const cfg = (): ProjectConfig => projectConfig
@@ -567,8 +571,7 @@ describe('TC-SUBJ / TC-RV 桌面主体与审查接缝', () => {
   beforeEach(() => {
     tc.pickSettings.mockReset()
     tc.userPolicies = []
-    vi.mocked(sessionView).mockReset()
-    vi.mocked(workspaceWriteView).mockReset()
+    vi.mocked(sessionDirsView).mockReset()
   })
 
   afterEach(() => {
@@ -649,8 +652,13 @@ describe('TC-SUBJ / TC-RV 桌面主体与审查接缝', () => {
       )
     ]
 
+    // 会话目录照生产的形状给（工作区 + 本会话 artifacts）：真实模块在这里取不到 app.getPath，算出来是空的
+    vi.mocked(sessionDirsView).mockImplementation((id, ws) => ({
+      sessionDirs: [ws, `${ART}/${id}`],
+      sessionReadDirs: []
+    }))
     const cases: Array<[ToolContext['agent'], string, string]> = [
-      // [ctx.agent, 本会话 artifacts 里的写, 工作区外的写]
+      // [ctx.agent, 本会话 artifacts 里的写, 会话目录外的写]
       [{ profileName: 'coding', kind: 'spawned' }, 'deny', 'deny'],
       [{ profileName: 'coding', kind: 'root' }, 'allow', 'ask'],
       [{ profileName: 'work', kind: 'spawned' }, 'allow', 'ask'],
@@ -668,7 +676,7 @@ describe('TC-SUBJ / TC-RV 桌面主体与审查接缝', () => {
         outside: outsideEffect
       })
       if (artifactEffect === 'deny') {
-        // 拒绝归因到用户那条规则（deny 压过 ask-on-write，也压过本会话 artifacts 的豁免）
+        // 拒绝归因到用户那条规则（deny 压过 ask-on-external-path，也压过本会话 artifacts 的豁免）
         expect(verdictOf(own)).toEqual({ effect: 'deny', winning: 'no-spawned-coding-writes#0' })
         expect(verdictOf(outside)).toEqual({
           effect: 'deny',
@@ -676,7 +684,7 @@ describe('TC-SUBJ / TC-RV 桌面主体与审查接缝', () => {
         })
       } else {
         expect(own.matched, JSON.stringify(agent)).not.toContain('no-spawned-coding-writes#0')
-        expect(outside.winning, JSON.stringify(agent)).toBe('ask-on-write#0')
+        expect(outside.winning, JSON.stringify(agent)).toBe('ask-on-external-path#1')
       }
     }
   })
@@ -773,142 +781,10 @@ describe('TC-SUBJ / TC-RV 桌面主体与审查接缝', () => {
     expect(ctx.evaluate('write', { type: 'path', path: OUTSIDE })).toMatchObject({
       effect: 'ask',
       tier: 'ask',
-      winning: 'ask-on-write#0'
+      winning: 'ask-on-external-path#1'
     })
     expect(ctx.evaluateReadOnly('write', { type: 'path', path: OUTSIDE })).toBe(false)
 
     expect(reviewer).not.toHaveBeenCalled()
-  })
-})
-
-/**
- * HG-4 sessionCredentialPaths —— 命令沙箱的凭据清单（main 启动时经 setSandboxCredentialReader 注入）：
- * 生效的 protect-credentials 的 `credentialDirs`，用宿主的非沙箱变量（hostPolicyVars）求值，只留绝对路径。
- * 沙箱视图本身要用这份清单，所以求值时绝不能反过来去取沙箱视图（sessionView / workspaceWriteView）。
- * 用户策略由 tc.userPolicies 喂（与 policyService.getUserPolicies 同形：解析结果 + 文件名），每次现读。
- */
-describe('HG-4 sessionCredentialPaths', () => {
-  const HOME = homedir()
-  const BUILTIN = [
-    '.ssh',
-    '.aws',
-    '.gnupg',
-    '.config/gh',
-    '.netrc',
-    '.shuvix/.session-state',
-    'AppData/Local/Microsoft/Credentials',
-    'AppData/Roaming/Microsoft/Credentials'
-  ].map((d) => `${HOME}/${d}`)
-
-  /** 出厂 en 那份原样解析 —— 覆盖副本的起点 */
-  const builtinCopy = (): ReturnType<typeof parsePolicyDefinitionFile> & object => {
-    const parsed = parsePolicyDefinitionFile(
-      readFileSync(join(tc.builtinDir, 'protect-credentials.md'), 'utf-8'),
-      'protect-credentials'
-    )
-    if (!parsed) throw new Error('builtin protect-credentials.md does not parse')
-    return parsed
-  }
-
-  /** 用户在 ~/.shuvix/policies 放的同名覆盖：规则照抄出厂，let 换成给定表达式（null = 删掉 lets） */
-  const override = (credentialDirs: string | null, extra: { rules?: [] } = {}): UserPolicyFile => {
-    const { lets: _lets, ...rest } = builtinCopy()
-    return {
-      ...rest,
-      ...(credentialDirs === null ? {} : { lets: { credentialDirs } }),
-      ...extra,
-      fileName: 'protect-credentials.md'
-    }
-  }
-
-  beforeEach(() => {
-    tc.userPolicies = []
-    tc.securityLog.warn.mockClear()
-    vi.mocked(sessionView).mockReset()
-    vi.mocked(workspaceWriteView).mockReset()
-  })
-
-  afterEach(() => {
-    tc.userPolicies = []
-  })
-
-  it('SCP-1 没有用户策略 → 出厂的 8 个位置，拼在真实家目录上', () => {
-    expect(sessionCredentialPaths('s1', '/ws')).toEqual(BUILTIN)
-    expect(tc.securityLog.warn).not.toHaveBeenCalled()
-  })
-
-  it('SCP-2 同名覆盖改了清单 → 恰为覆盖给的那几项（没有 .aws）', () => {
-    tc.userPolicies = [override("[vars.home + '/.ssh', vars.home + '/.gnupg']")]
-    const paths = sessionCredentialPaths('s1', '/ws')
-    expect(paths).toEqual([`${HOME}/.ssh`, `${HOME}/.gnupg`])
-    expect(paths).not.toContain(`${HOME}/.aws`)
-  })
-
-  it('SCP-3 宿主变量流进 let（工作区、bots 目录、本会话 artifacts）；坏会话 id 的 artifacts 是空串、被丢掉', () => {
-    tc.userPolicies = [
-      // CEL 的列表字面量要求元素同类型：裸的 vars.x 是 dyn，与 string 混写会求值失败，故包一层 string()
-      override(
-        "[vars.workspace + '/secrets', string(vars.botsDir), string(vars.sessionArtifactsDir)]"
-      )
-    ]
-    expect(sessionCredentialPaths('s1', '/ws')).toEqual([
-      '/ws/secrets',
-      '/tmp/shuvix-bots',
-      '/tmp/shuvix-artifacts/s1'
-    ])
-    expect(sessionCredentialPaths('..', '/ws')).toEqual(['/ws/secrets', '/tmp/shuvix-bots'])
-  })
-
-  it.each<[string, string, string[]]>([
-    [
-      '混着空串 / 相对路径的列表 → 只留绝对路径',
-      "['/a', '', string(vars.home), '.ssh', 'rel/x']",
-      ['/a', HOME]
-    ],
-    ['数字列表 → 空', '[1, 2]', []],
-    ['单个字符串 → 空（不替它包成列表）', "'/single'", []],
-    ['映射 → 空', "{'a': '/x'}", []]
-  ])('SCP-4 %s', (_label, expr, expected) => {
-    tc.userPolicies = [override(expr)]
-    expect(sessionCredentialPaths('s1', '/ws')).toEqual(expected)
-  })
-
-  it('SCP-5 覆盖里没有这个 let（lets 为空表 / 没有 lets）、或规则清空了（let 还在）→ 空清单', () => {
-    tc.userPolicies = [{ ...override(null), lets: {} }]
-    expect(sessionCredentialPaths('s1', '/ws')).toEqual([])
-    tc.userPolicies = [override(null)]
-    expect(sessionCredentialPaths('s1', '/ws')).toEqual([])
-    const cleared = override("[vars.home + '/.ssh']", { rules: [] })
-    expect(cleared.lets?.credentialDirs).toBeDefined()
-    tc.userPolicies = [cleared]
-    expect(sessionCredentialPaths('s1', '/ws')).toEqual([])
-  })
-
-  it('SCP-6 覆盖里的 let 求值出错（引用了宿主求值时不给的沙箱变量）→ 退回出厂清单 + Security 日志恰一行；求值全程不碰沙箱视图（不递归）', () => {
-    tc.userPolicies = [override('vars.sandboxWritableRoots')]
-    expect(sessionCredentialPaths('s1', '/ws')).toEqual(BUILTIN)
-    expect(tc.securityLog.warn).toHaveBeenCalledTimes(1)
-    const line = String(tc.securityLog.warn.mock.calls[0][0])
-    expect(line).toContain('protect-credentials')
-    expect(line).toContain('credentialDirs')
-    expect(line).toContain('using the builtin value instead')
-
-    // 写错与没写不同：去掉 let 的覆盖照旧是空清单
-    tc.userPolicies = [override(null)]
-    expect(sessionCredentialPaths('s1', '/ws')).toEqual([])
-
-    // 出厂那份求值同样不碰沙箱视图
-    tc.userPolicies = []
-    expect(sessionCredentialPaths('s1', '/ws')).toEqual(BUILTIN)
-    expect(sessionView).not.toHaveBeenCalled()
-    expect(workspaceWriteView).not.toHaveBeenCalled()
-  })
-
-  it('SCP-7 每次现读：两次调用之间换了用户策略，第二次就跟上', () => {
-    expect(sessionCredentialPaths('s1', '/ws')).toEqual(BUILTIN)
-    tc.userPolicies = [override("[vars.home + '/.ssh']")]
-    expect(sessionCredentialPaths('s1', '/ws')).toEqual([`${HOME}/.ssh`])
-    tc.userPolicies = []
-    expect(sessionCredentialPaths('s1', '/ws')).toEqual(BUILTIN)
   })
 })

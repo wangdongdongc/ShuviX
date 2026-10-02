@@ -294,10 +294,10 @@ export async function seedFakeProvider(
 /**
  * 开关命令沙箱（`sandbox.enabled`，缺省开）。
  *
- * macOS 上隔离实例的 bash 默认在沙箱里跑：沙箱内的命令不问，write 工具在沙箱可写范围内也不问——
- * 而 fake HOME 在 /private/tmp 下，/private/tmp 本身就是可写根，于是整个 fake HOME 都不问了。
- * **测询问卡片本身**的用例（写入要问、策略说明、PDF 落盘要问）要先关掉它，才测得到原本要测的东西。
- * 生效单位是会话运行时：在发出会话第一条消息之前设。
+ * macOS 上隔离实例的 bash 默认在沙箱里跑：沙箱内的命令不问（只能读写本会话的目录，家目录里
+ * 其余位置读不到 —— fake HOME 也是家目录）。文件工具问不问与这个开关无关：ask-on-external-path
+ * 读的会话目录清单不看沙箱开没开。**测命令询问本身**的用例（命令要问、自动审查）要先关掉它，
+ * 否则命令在沙箱里跑、轮不到询问。生效单位是会话运行时：在发出会话第一条消息之前设。
  */
 export async function setSandboxEnabled(main: CdpClient, enabled: boolean): Promise<void> {
   await main.eval(
@@ -329,7 +329,10 @@ const RETIRED_POLICIES_DIR = resolve(
   '../../../../packages/agent-runtime/src/security/__tests__/fixtures'
 )
 
-/** 2026-10-01 从出厂删掉的八份内置策略 */
+/**
+ * 2026-10-01 从出厂删掉的内置策略：第一轮八份，第二轮三份（protect-credentials / ask-on-write /
+ * session-grants，换成了 ask-on-external-path）
+ */
 export type RetiredPolicyName =
   | 'protect-system'
   | 'block-catastrophic-commands'
@@ -339,11 +342,14 @@ export type RetiredPolicyName =
   | 'ask-on-sub-session'
   | 'ask-on-database'
   | 'ask-on-new-site'
+  | 'protect-credentials'
+  | 'ask-on-write'
+  | 'session-grants'
 
 /**
  * 把一份**退役的内置策略**当作「用户自己写的策略」放进隔离实例的 `~/.shuvix/policies/<name>.md`。
  *
- * 用户裁定「出厂不要硬限制、默认尽可能少问」（2026-10-01），这八份不再随包发布；但它们挂靠的
+ * 用户裁定「出厂不要硬限制、默认尽可能少问」（2026-10-01），这几份不再随包发布；但它们挂靠的
  * 执行点（数据库门、Chrome 的站点门、L1 调用门、git 门 …）都还在，留给用户自写策略。md 原样
  * （去掉 `shuvix-builtin: true`）留在 agent-runtime 的单测夹具里 —— 一条 e2e 要测某个执行点的
  * 询问卡片 / 接线，就装这一份：策略现扫、无缓存，写下即生效（下一次判定就按它走），
@@ -365,8 +371,9 @@ export function removeRetiredPolicy(app: Pick<E2EApp, 'home'>, name: RetiredPoli
 /**
  * 自动放行安全询问 —— 扮演那个会点「允许一次」的用户。
  *
- * 隔离实例带着全套出厂策略（`ask-on-command` 对每条不在沙箱里的命令问、`ask-on-write` 对
- * 工作目录之外的写入问），而 e2e 里没人看着：不装它的话，任何触发询问的用例都会挂到超时。
+ * 隔离实例带着全套出厂策略（`ask-on-command` 对每条不在沙箱里的命令问、`ask-on-external-path`
+ * 对家目录里会话目录以外的读、会话目录以外的写问），而 e2e 里没人看着：不装它的话，任何触发
+ * 询问的用例都会挂到超时。
  * 装在渲染端（`agent.onEvent` → `agent.respondToInput`），走的是用户点按钮的同一条 IPC。
  *
  * 想**故意**测「没人回答」的那条路径就别装它（或用 `only` 只放行一部分）。

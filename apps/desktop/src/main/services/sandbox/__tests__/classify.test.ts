@@ -1,51 +1,55 @@
 /**
  * 沙箱拒绝的说明（classify.ts）—— 纯函数：命令失败后，输出里的拒绝能对上沙箱规则才说话。
  *
- *  - CL-1 成功 / 被杀的命令什么都不说；
- *  - CL-2/CL-3 对得上规则的拒绝：说明的形状、各类被拦的位置、措辞与引号变体、去重与封顶；
- *  - CL-4 对不上规则的 EPERM（工作区里、tmp 里、放回的位置……）什么都不说；
- *  - CL-5 输出里没有路径、但沙箱一定会拦的几类事（签名）；
- *  - CL-6 isWriteBlocked / isReadBlocked / writeBlockReason 与 profile 的层同义；
- *  - CL-7 计划时的缺口（带空格的路径、git 打印的相对路径、TCC 拒绝的读）——实现已跟进，这里钉住；
- *  - FU-13..FU-20 跟进（classify 的五处修正）：带空格的裸路径只列完整的那条（B1）、行首的程序名不是
- *    被拒的对象（B2）、系统程序目录里的 EPERM 是 setuid 被拒（B3，读类工具除外）、启动应用 /
- *    AppleScript 的签名（B4）、末尾的 / 不占名额（B5）；
- *  - CL-R / CL-W / CL-T 读只按规格里的凭据清单拦、项目根的 .vscode / .envrc 不拦、说明末尾那句的措辞。
+ * 2026-10-01 起沙箱只把命令的文件访问收进本会话的目录：家目录里只有可读根（会话目录、只读会话目录、
+ * 授权、ShuviX 自己的程序）与 cli-token 可读，可写的只有会话目录与写授权。所以：
  *
- * 夹具规格：工作区 /Users/u/proj，一个写授权 ~/.shuvix/widgets/w，凭据位置取出厂 protect-credentials 的清单。
+ *  - CL-1 成功 / 被杀的命令什么都不说；
+ *  - CL-2 说明的形状：开头、条目、末尾两句（能 / 不能越界时各一句）；
+ *  - CL-3 对得上规则的拒绝：带写入迹象、落在可写根以外的 → cannot write（家目录里外都是）；家目录里
+ *    可读根以外、没有写入迹象的 → cannot read（那里既不可读也不可写，看行里的迹象说是哪一样）；
+ *    措辞与引号变体、去重与封顶；
+ *  - CL-4 对不上规则的 EPERM（会话目录里、授权里、家目录以外的读……）什么都不说；
+ *  - CL-5 输出里没有路径、但沙箱一定会拦的几类事（签名）；
+ *  - CL-6 isWriteBlocked / isReadBlocked 与 profile 同义；
+ *  - CL-7 路径抽取的缺口（带空格的路径、相对路径、TCC 拒绝的读）；
+ *  - FU-13..FU-20 classify 的几处修正（行首的程序名、setuid、启动应用 / AppleScript、末尾的 /）；
+ *  - CL-T 说明末尾那句概括的措辞。
+ *
+ * 夹具规格：工作目录 /Users/u/proj，写授权 ~/.shuvix/widgets/w，读授权 ~/ref，勾选的知识库 ~/.shuvix/knowledge/b，
+ * 只读的技能目录 ~/.shuvix/skills，ShuviX 自己的程序在 ~/dev/ShuviX/out/main（开发态：在家目录里）。
  */
 import { describe, expect, it, vi } from 'vitest'
 
 vi.mock('electron', () => ({ app: { getPath: () => '/nonexistent', isPackaged: false } }))
 
-import { explainSandboxDenial, isReadBlocked, isWriteBlocked, writeBlockReason } from '../classify'
-import { buildSandboxSpec } from '../spec'
+import { explainSandboxDenial, isReadBlocked, isWriteBlocked } from '../classify'
+import { buildSandboxSpec, sessionTmpName } from '../spec'
 import type { SandboxHostPaths, SandboxSessionInput, SandboxSpec } from '../types'
 
 const HOME = '/Users/u'
 const USER_DATA = '/Users/u/Library/Application Support/ShuviX'
 const SHUVIX = '/Users/u/.shuvix'
 const WS = '/Users/u/proj'
+const SID = 'sess-1'
 const WIDGET = `${SHUVIX}/widgets/w`
-/** 出厂 protect-credentials 的 `credentialDirs`（调用方交给沙箱的凭据位置） */
-const CREDENTIALS = [
-  '.ssh',
-  '.aws',
-  '.gnupg',
-  '.config/gh',
-  '.netrc',
-  '.shuvix/.session-state',
-  'AppData/Local/Microsoft/Credentials',
-  'AppData/Roaming/Microsoft/Credentials'
-].map((d) => `${HOME}/${d}`)
+const REF = `${HOME}/ref`
+const KB = `${SHUVIX}/knowledge/b`
+const SKILLS = `${SHUVIX}/skills`
+const APP_DIR = `${HOME}/dev/ShuviX/out/main`
+const TMP_ROOT = '/private/tmp/shuvix-501'
+const TMP_DIR = `${TMP_ROOT}/${sessionTmpName(SID)}`
 
 const PATHS: SandboxHostPaths = {
   home: HOME,
   userData: USER_DATA,
   shuvixHome: SHUVIX,
+  toolResultsBase: `${USER_DATA}/tool_results`,
   uid: 501,
   cliSocket: `${SHUVIX}/cli.sock`,
-  tmpRoot: '/private/tmp/shuvix-501'
+  cliToken: `${SHUVIX}/cli-token`,
+  appPaths: [APP_DIR],
+  tmpRoot: TMP_ROOT
 }
 
 function specOf(
@@ -55,10 +59,11 @@ function specOf(
   const result = buildSandboxSpec(
     paths,
     {
-      sessionId: 'sess-1',
+      sessionId: SID,
       workingDirectory: WS,
       grantedWrite: [WIDGET],
-      credentialPaths: CREDENTIALS,
+      grantedRead: [REF],
+      extras: { readWrite: [KB], readOnly: [SKILLS] },
       ...over
     },
     (p) => p
@@ -89,9 +94,18 @@ const entries = (note: string | null): string[] =>
     .filter((l) => l.startsWith('  - '))
     .map((l) => l.slice(4))
 
+const HEAD =
+  '[sandbox] This command runs confined, and the failure looks like the sandbox refusing it:'
+const SUMMARY =
+  'Confined commands can read and write only the working directory and $TMPDIR (they can also read system locations outside the home folder); ' +
+  'nothing else in the home folder — config files such as ~/.gitconfig, caches, other projects — and no apps, Docker or other local services.'
+const ESCALATE =
+  'Rerun it with `dangerouslyDisableSandbox: true` — an automatic reviewer checks the command, and the user may be asked to approve.'
+const NO_ESCALATE = 'Tell the user what the command needs.'
+
 describe('CL-1 成功 / 被杀的命令什么都不说', () => {
   const noisy = [
-    'touch: /Users/u/.shuvix/x: Operation not permitted',
+    'touch: /private/tmp/x: Operation not permitted',
     'cat: /Users/u/.ssh/id_ed25519: Operation not permitted',
     'LSOpenURLsWithRole() failed with error -10827',
     'Cannot connect to the Docker daemon at unix:///var/run/docker.sock',
@@ -104,68 +118,78 @@ describe('CL-1 成功 / 被杀的命令什么都不说', () => {
   })
 })
 
-describe('CL-2 写入被拒的说明', () => {
-  const LINE = 'touch: /Users/u/.shuvix/x: Operation not permitted'
+describe('CL-2 说明的形状', () => {
+  const LINE = 'touch: /private/tmp/x: Operation not permitted'
 
-  it('CL-2 [sandbox] 开头、列出被拦的路径、教模型用 dangerouslyDisableSandbox', () => {
-    const note = explain(LINE)
-    expect(note).not.toBeNull()
-    expect(note!.startsWith('[sandbox]')).toBe(true)
-    expect(entries(note)).toEqual(['cannot write: /Users/u/.shuvix/x'])
-    expect(note).toContain('dangerouslyDisableSandbox')
-    expect(note).not.toContain('tell the user what the command needs')
+  it('CL-2 能越界：开头一行、条目、概括、教模型用 dangerouslyDisableSandbox（逐行钉住）', () => {
+    expect(explain(LINE)).toBe(
+      [HEAD, '  - cannot write: /private/tmp/x', SUMMARY, ESCALATE].join('\n')
+    )
   })
 
-  it('CL-2 offerEscalation=false：不提 dangerouslyDisableSandbox，改说「告诉用户这条命令需要什么」', () => {
+  it('CL-2 不能越界（offerEscalation=false）：末句换成「告诉用户这条命令需要什么」，不提 dangerouslyDisableSandbox', () => {
     const note = explain(LINE, 1, { offerEscalation: false })
-    expect(note).not.toBeNull()
+    expect(note).toBe([HEAD, '  - cannot write: /private/tmp/x', SUMMARY, NO_ESCALATE].join('\n'))
     expect(note).not.toContain('dangerouslyDisableSandbox')
-    expect(note).toContain('tell the user what the command needs')
+    expect(note).not.toContain('reviewer')
   })
 })
 
-describe('CL-3 各类被拦的位置 + 说明的形状 + 去重 / 封顶', () => {
+describe('CL-3 对得上规则的拒绝', () => {
   const cases: Array<[string, string, string]> = [
+    // 家目录以外、可写根以外（带写入迹象）
     [
-      '可写根之外（带写入迹象）',
+      '/private/tmp 不再可写',
+      'touch: /private/tmp/x: Operation not permitted',
+      'cannot write: /private/tmp/x'
+    ],
+    [
+      '/tmp 写法按 /private/tmp 报',
+      'rm: /tmp/x: Operation not permitted',
+      'cannot write: /private/tmp/x'
+    ],
+    [
+      '别的会话的临时目录',
+      `touch: ${TMP_ROOT}/0000aaaa/x: Operation not permitted`,
+      `cannot write: ${TMP_ROOT}/0000aaaa/x`
+    ],
+    ['外接卷', 'cp: /Volumes/data/x: Operation not permitted', 'cannot write: /Volumes/data/x'],
+    [
+      '/usr/local/bin（不是系统程序目录）',
+      'touch: /usr/local/bin/foo: Operation not permitted',
+      'cannot write: /usr/local/bin/foo'
+    ],
+    ['zsh 重定向报错', 'zsh: operation not permitted: /Volumes/x/y', 'cannot write: /Volumes/x/y'],
+    [
+      'Permission denied 措辞',
+      'bash: /Volumes/x/other3: Permission denied',
+      'cannot write: /Volumes/x/other3'
+    ],
+    [
+      'Read-only file system 措辞',
+      'touch: /Volumes/x/other2: Read-only file system',
+      'cannot write: /Volumes/x/other2'
+    ],
+    [
+      '"…" 引号（git 在家目录以外的 clone 里）',
+      'error: unable to write "/private/tmp/r/.git/config": Operation not permitted',
+      'cannot write: /private/tmp/r/.git/config'
+    ],
+    // 家目录里、可读根以外：不可读也不可写 —— 行里有写入的迹象就说写，没有就说读
+    [
+      '家目录里的写（带写入迹象 → 说写）',
       'touch: /Users/u/other: Operation not permitted',
       'cannot write: /Users/u/other'
     ],
     [
-      // FU-16：只有路径的一行 —— 行首那段后面没有别的 `…: <EPERM 短语>`，它就是被拒的路径，不是程序名
-      'git hooks（只有路径的一行）',
-      '/Users/u/proj/.git/hooks/pre-commit: Operation not permitted',
-      'cannot write: /Users/u/proj/.git/hooks/pre-commit'
+      '~/.shuvix 里的写',
+      'touch: /Users/u/.shuvix/x: Operation not permitted',
+      'cannot write: /Users/u/.shuvix/x'
     ],
     [
-      'git hooks（cp 报的）',
-      'cp: /Users/u/proj/.git/hooks/pre-commit: Operation not permitted',
-      'cannot write: /Users/u/proj/.git/hooks/pre-commit'
-    ],
-    [
-      'git hooks（shell 重定向报的相对路径 → 按工作区解析）',
-      '/bin/bash: .git/hooks/pre-commit: Operation not permitted',
-      'cannot write: /Users/u/proj/.git/hooks/pre-commit'
-    ],
-    [
-      '.GIT/config（大小写不敏感）+ EPERM 措辞',
-      'fatal: cannot lock /Users/u/proj/.GIT/config: EPERM',
-      'cannot write: /Users/u/proj/.GIT/config'
-    ],
-    [
-      '~/.zshrc（shell 重定向报错）',
-      'zsh: operation not permitted: /Users/u/.zshrc',
-      'cannot write: /Users/u/.zshrc'
-    ],
-    [
-      'ssh 控制 socket 目录（按 /private/tmp 报）',
-      'mkdir: /tmp/shuvix-ssh-501/x: Operation not permitted',
-      'cannot write: /private/tmp/shuvix-ssh-501/x'
-    ],
-    [
-      'launchd 临时目录',
-      'touch: /private/tmp/com.apple.launchd.x/y: Operation not permitted',
-      'cannot write: /private/tmp/com.apple.launchd.x/y'
+      'shell 重定向写进家目录（bash 前缀算写入迹象）',
+      'bash: /Users/u/notes.txt: Operation not permitted',
+      'cannot write: /Users/u/notes.txt'
     ],
     [
       '凭据的读',
@@ -173,37 +197,69 @@ describe('CL-3 各类被拦的位置 + 说明的形状 + 去重 / 封顶', () =>
       'cannot read: /Users/u/.ssh/id_ed25519'
     ],
     [
-      "userData 里（node 的 EPERM + '…' 引号）",
+      '个人资料目录的读',
+      'cat: /Users/u/Documents/a.txt: Operation not permitted',
+      'cannot read: /Users/u/Documents/a.txt'
+    ],
+    [
+      "git 读 ~/.gitconfig（'…' 引号）",
+      "fatal: unable to access '/Users/u/.gitconfig': Operation not permitted",
+      'cannot read: /Users/u/.gitconfig'
+    ],
+    [
+      '包缓存（npm 的 EPERM）',
+      "npm ERR! Error: EPERM: operation not permitted, mkdir '/Users/u/.npm/_cacache'",
+      'cannot write: /Users/u/.npm/_cacache'
+    ],
+    [
+      // node 的 `EPERM … open` 算写入迹象（看不出是读还是写地打开）
+      "userData 里（node 的 EPERM, open + '…' 引号）",
       "Error: EPERM: operation not permitted, open '/Users/u/Library/Application Support/ShuviX/data/x'",
       `cannot write: ${USER_DATA}/data/x`
     ],
     [
-      'Permission denied 措辞',
-      'bash: /Users/u/other3: Permission denied',
-      'cannot write: /Users/u/other3'
+      'userData 里（node 的 EPERM, scandir —— 不是写入迹象）',
+      "Error: EPERM: operation not permitted, scandir '/Users/u/Library/Application Support/ShuviX/data'",
+      `cannot read: ${USER_DATA}/data`
     ],
     [
-      'Read-only file system 措辞',
-      'touch: /Users/u/other2: Read-only file system',
-      'cannot write: /Users/u/other2'
-    ],
-    [
-      '"…" 引号',
-      'error: unable to write "/Users/u/proj/.git/config": Operation not permitted',
-      'cannot write: /Users/u/proj/.git/config'
+      '别的会话的工具结果',
+      `cat: ${USER_DATA}/tool_results/other/r.txt: Operation not permitted`,
+      `cannot read: ${USER_DATA}/tool_results/other/r.txt`
     ],
     [
       '‘…’ 引号（python PermissionError）',
       'PermissionError: [Errno 1] Operation not permitted: ‘/Users/u/.aws/credentials’',
       'cannot read: /Users/u/.aws/credentials'
+    ],
+    // 家目录里、可读却不可写的：读授权、只读的技能目录、ShuviX 自己的程序、cli-token
+    [
+      '读授权里的写',
+      'touch: /Users/u/ref/x: Operation not permitted',
+      'cannot write: /Users/u/ref/x'
+    ],
+    [
+      '只读技能目录里的写',
+      `cp: ${SKILLS}/s/SKILL.md: Operation not permitted`,
+      `cannot write: ${SKILLS}/s/SKILL.md`
+    ],
+    [
+      'ShuviX 程序目录里的写',
+      `touch: ${APP_DIR}/x: Operation not permitted`,
+      `cannot write: ${APP_DIR}/x`
+    ],
+    [
+      'cli-token 的写',
+      'bash: /Users/u/.shuvix/cli-token: Operation not permitted',
+      'cannot write: /Users/u/.shuvix/cli-token'
     ]
   ]
 
   it.each(cases)('CL-3 %s', (_label, line, entry) => {
     const note = explain(`some output\n${line}\nmore output`)
     expect(note).not.toBeNull()
-    expect(note!.startsWith('[sandbox]')).toBe(true)
-    expect(entries(note)).toContain(entry)
+    expect(note!.startsWith(HEAD)).toBe(true)
+    expect(entries(note)).toEqual([entry])
   })
 
   it('CL-3 同一路径出现三次只列一次；/tmp 与 /private/tmp 写法算同一条', () => {
@@ -212,54 +268,66 @@ describe('CL-3 各类被拦的位置 + 说明的形状 + 去重 / 封顶', () =>
         'touch: /Users/u/other: Operation not permitted',
         'touch: /Users/u/other: Operation not permitted',
         'touch: /Users/u/other: Operation not permitted',
-        'mkdir: /tmp/shuvix-ssh-501/x: Operation not permitted',
-        'mkdir: /private/tmp/shuvix-ssh-501/x: Operation not permitted'
+        'mkdir: /tmp/q/x: Operation not permitted',
+        'mkdir: /private/tmp/q/x: Operation not permitted'
       ].join('\n')
     )
     expect(entries(note)).toEqual([
       'cannot write: /Users/u/other',
-      'cannot write: /private/tmp/shuvix-ssh-501/x'
+      'cannot write: /private/tmp/q/x'
     ])
   })
 
   it('CL-3 末尾的 / 去掉', () => {
-    const note = explain('mkdir: /Users/u/other/: Operation not permitted')
-    expect(entries(note)).toEqual(['cannot write: /Users/u/other'])
+    expect(entries(explain('mkdir: /Volumes/x/other/: Operation not permitted'))).toEqual([
+      'cannot write: /Volumes/x/other'
+    ])
   })
 
   it('CL-3 七个不同的被拦路径 → 只列前五个', () => {
     const lines = [1, 2, 3, 4, 5, 6, 7].map(
-      (i) => `touch: /Users/u/other${i}: Operation not permitted`
+      (i) => `touch: /private/tmp/other${i}: Operation not permitted`
     )
-    const note = explain(lines.join('\n'))
-    expect(entries(note)).toEqual([1, 2, 3, 4, 5].map((i) => `cannot write: /Users/u/other${i}`))
+    expect(entries(explain(lines.join('\n')))).toEqual(
+      [1, 2, 3, 4, 5].map((i) => `cannot write: /private/tmp/other${i}`)
+    )
   })
 })
 
 describe('CL-4 不是沙箱拦的 → null', () => {
   it.each([
-    ['工作区里的文件', 'touch: /Users/u/proj/src/a.ts: Operation not permitted'],
-    ['/private/tmp 里', 'touch: /private/tmp/x: Operation not permitted'],
-    ['/tmp 写法', 'rm: /tmp/x: Operation not permitted'],
+    ['工作目录里的文件', 'touch: /Users/u/proj/src/a.ts: Operation not permitted'],
+    // git 元数据不再受保护：工作目录里的 .git/hooks、.git/config 都可写
+    ['工作目录里的 git hooks', '/Users/u/proj/.git/hooks/pre-commit: Operation not permitted'],
     [
-      '本会话自己的 tool_results 的读（读只拦凭据）',
-      `cat: ${USER_DATA}/tool_results/sess-1/x: Operation not permitted`
-    ],
-    ['个人资料目录的读（读只拦凭据）', 'cat: /Users/u/Documents/a.txt: Operation not permitted'],
-    [
-      '工作区顶层的 .vscode（不再受保护）',
-      'cp: /Users/u/proj/.vscode/settings.json: Operation not permitted'
+      '工作目录里的 .git/config（大小写不同）',
+      'fatal: cannot lock /Users/u/proj/.GIT/config: EPERM'
     ],
     [
-      '工作区之外的 clone 里的 .git/config（git 保护只在 git 根里）',
-      'error: could not lock config file /private/tmp/r/.git/config: Operation not permitted'
+      'git 打印的相对路径（落在工作目录里）',
+      'error: could not lock config file .git/config: Operation not permitted'
     ],
-    ['被拦的路径、但行里没有 EPERM 措辞', 'touch: /Users/u/.shuvix/x: No such file or directory']
+    ['工作目录顶层的 .vscode', 'cp: /Users/u/proj/.vscode/settings.json: Operation not permitted'],
+    ['本会话临时目录', `touch: ${TMP_DIR}/x: Operation not permitted`],
+    ['本会话 artifacts', `touch: ${SHUVIX}/artifacts/${SID}/f: Operation not permitted`],
+    ['本会话工具结果（写）', `touch: ${USER_DATA}/tool_results/${SID}/x: Operation not permitted`],
+    ['本会话工具结果（读）', `cat: ${USER_DATA}/tool_results/${SID}/x: Operation not permitted`],
+    ['勾选的知识库（写）', `touch: ${KB}/a.md: Operation not permitted`],
+    ['写授权里', `touch: ${WIDGET}/f: Operation not permitted`],
+    ['读授权的读', 'cat: /Users/u/ref/a.txt: Operation not permitted'],
+    ['只读技能目录的读', `cat: ${SKILLS}/s/SKILL.md: Operation not permitted`],
+    ['ShuviX 程序目录的读', `cat: ${APP_DIR}/cli.js: Operation not permitted`],
+    ['cli-token 的读', 'cat: /Users/u/.shuvix/cli-token: Operation not permitted'],
+    [
+      '家目录以外的读（TCC 之类，读类工具）',
+      'cat: /Volumes/Ext/notes.txt: Operation not permitted'
+    ],
+    ['被拦的路径、但行里没有 EPERM 措辞', 'touch: /private/tmp/x: No such file or directory']
   ])('CL-4 %s', (_label, line) => {
     expect(explain(line)).toBeNull()
   })
 
-  it('CL-4 工作区在 ~/Documents/proj：那里的读写都不拦', () => {
+  it('CL-4 工作目录在 ~/Documents/proj：那里的读写都不拦', () => {
     const spec = specOf({ workingDirectory: `${HOME}/Documents/proj` })
     expect(
       explain('touch: /Users/u/Documents/proj/x: Operation not permitted', 1, { spec })
@@ -269,9 +337,8 @@ describe('CL-4 不是沙箱拦的 → null', () => {
     ).toBeNull()
   })
 
-  it('CL-4 对照：写本会话的 tool_results 确实会被拦（userData 整片拒写、它不是可写根）→ 带写入迹象时照说', () => {
-    const note = explain(`touch: ${USER_DATA}/tool_results/sess-1/x: Operation not permitted`)
-    expect(entries(note)).toContain(`cannot write: ${USER_DATA}/tool_results/sess-1/x`)
+  it('CL-4 家目录以外、不带写入迹象的 EPERM（cat 一个不可写的位置）不说：读不受限', () => {
+    expect(explain('cat: /private/tmp/x: Operation not permitted')).toBeNull()
   })
 })
 
@@ -293,7 +360,7 @@ describe('CL-5 没有路径的签名', () => {
   ])('CL-5 %s', (line, reason) => {
     const note = explain(line)
     expect(note).not.toBeNull()
-    expect(note!.startsWith('[sandbox]')).toBe(true)
+    expect(note!.startsWith(HEAD)).toBe(true)
     expect(entries(note)).toEqual([expect.stringContaining(reason)])
   })
 
@@ -309,122 +376,148 @@ describe('CL-5 没有路径的签名', () => {
     expect(listed[0]).toContain('opening apps')
     expect(listed[1]).toContain('Docker daemon')
   })
+
+  it('CL-5 签名与路径条目一起出现：路径条目在前、原因在后', () => {
+    const note = explain(
+      [
+        'Cannot connect to the Docker daemon at unix:///var/run/docker.sock',
+        'touch: /private/tmp/x: Operation not permitted'
+      ].join('\n')
+    )
+    expect(entries(note)).toEqual([
+      'cannot write: /private/tmp/x',
+      expect.stringContaining('Docker daemon')
+    ])
+  })
 })
 
-describe('CL-6 isWriteBlocked / isReadBlocked / writeBlockReason 与 profile 的层同义', () => {
-  it('CL-6 本会话 artifacts 可写；别的会话的不可写（不在任何根里）', () => {
-    expect(isWriteBlocked(SPEC, `${SHUVIX}/artifacts/sess-1/f`)).toBe(false)
-    expect(writeBlockReason(SPEC, `${SHUVIX}/artifacts/sess-1/f`)).toBeNull()
-    expect(isWriteBlocked(SPEC, `${SHUVIX}/artifacts/other/f`)).toBe(true)
-    expect(writeBlockReason(SPEC, `${SHUVIX}/artifacts/other/f`)).toBe('outside')
+describe('CL-6 isWriteBlocked / isReadBlocked 与 profile 同义', () => {
+  it.each([
+    // [路径, 写被拦, 读被拦]
+    [`${WS}/src/a.ts`, false, false],
+    [`${WS}/.git/hooks/pre-commit`, false, false],
+    [`${TMP_DIR}/x`, false, false],
+    [`${SHUVIX}/artifacts/${SID}/f`, false, false],
+    [`${USER_DATA}/tool_results/${SID}/x`, false, false],
+    [`${KB}/a.md`, false, false],
+    [`${WIDGET}/f`, false, false],
+    [`${REF}/a.txt`, true, false],
+    [`${SKILLS}/s/SKILL.md`, true, false],
+    [`${APP_DIR}/cli.js`, true, false],
+    [`${SHUVIX}/cli-token`, true, false],
+    // cli-token 是一个文件，不是根：它旁边与它「里面」都不可读
+    [`${SHUVIX}/cli-token2`, true, true],
+    [`${SHUVIX}/cli-token/x`, true, true],
+    [`${SHUVIX}/artifacts/other/f`, true, true],
+    [`${SHUVIX}/knowledge/other/a.md`, true, true],
+    [`${SHUVIX}/policies/p.md`, true, true],
+    [`${USER_DATA}/data/db`, true, true],
+    [`${USER_DATA}/tool_results/other/r.txt`, true, true],
+    [`${HOME}/.ssh/config`, true, true],
+    [`${HOME}/.gitconfig`, true, true],
+    [`${HOME}/.npm/x`, true, true],
+    [`${HOME}/Documents/a.txt`, true, true],
+    // 上级目录只放行元数据：照旧算拦下（输出里出现它只可能是列内容被拒）
+    [HOME, true, true],
+    [SHUVIX, true, true],
+    // 家目录以外：读不受限，写只在会话目录与写授权里
+    ['/etc/hosts', true, false],
+    ['/private/tmp/x', true, false],
+    ['/tmp/x', true, false],
+    [`${TMP_ROOT}/0000aaaa/x`, true, false],
+    ['/Volumes/x', true, false],
+    ['/', true, false]
+  ] as const)('CL-6 %s：写被拦 %s、读被拦 %s', (path, write, read) => {
+    expect(isWriteBlocked(SPEC, path)).toBe(write)
+    expect(isReadBlocked(SPEC, path)).toBe(read)
   })
 
-  it('CL-6 临时工作区会话：工作区里的文件可写（放回），userData 别处不可写', () => {
-    const tempWs = `${USER_DATA}/temp_workspace/sess-1`
-    const spec = specOf({ workingDirectory: tempWs, grantedWrite: [] })
-    expect(isWriteBlocked(spec, `${tempWs}/a.txt`)).toBe(false)
-    expect(isWriteBlocked(spec, `${USER_DATA}/x`)).toBe(true)
-    expect(writeBlockReason(spec, `${USER_DATA}/x`)).toBe('outside')
+  it('CL-6 写法对齐：/tmp、/var、/etc 按真实路径比；末尾的 / 不影响', () => {
+    const spec = specOf({ workingDirectory: '/private/tmp/ws' })
+    expect(isWriteBlocked(spec, '/tmp/ws/a')).toBe(false)
+    expect(isWriteBlocked(spec, '/tmp/ws/')).toBe(false)
+    expect(isWriteBlocked(spec, '/tmp/other')).toBe(true)
+    const varSpec = specOf({ workingDirectory: '/private/var/folders/x/ws' })
+    expect(isWriteBlocked(varSpec, '/var/folders/x/ws/a')).toBe(false)
   })
 
-  it('CL-6 写授权 ~/.shuvix/widgets/w：里面可写（根顶层的 .claude 也不再受保护），根里的 git hooks 是受保护的位置', () => {
-    expect(isWriteBlocked(SPEC, `${WIDGET}/f`)).toBe(false)
-    expect(isWriteBlocked(SPEC, `${WIDGET}/.claude/x`)).toBe(false)
-    expect(writeBlockReason(SPEC, `${WIDGET}/.claude/x`)).toBeNull()
-    expect(writeBlockReason(SPEC, `${WIDGET}/.git/hooks/x`)).toBe('protected')
-  })
-
-  it('CL-6 writeBlockReason 的三种答案：在根外 / 根里受保护（最后一层、正则、git、整片拒写）/ 允许', () => {
-    expect(writeBlockReason(SPEC, '/Users/u/other')).toBe('outside')
-    expect(writeBlockReason(SPEC, `${WS}/.git/config`)).toBe('protected')
-    expect(writeBlockReason(SPEC, `${WS}/.git`)).toBe('protected')
-    expect(writeBlockReason(SPEC, '/tmp/shuvix-ssh-501/x')).toBe('protected')
-    expect(writeBlockReason(SPEC, '/private/tmp/com.apple.launchd.q/Listeners')).toBe('protected')
-    expect(writeBlockReason(SPEC, '/private/tmp/r/.git/config')).toBeNull()
-    expect(writeBlockReason(SPEC, `${WS}/.git/info/exclude`)).toBeNull()
-    expect(writeBlockReason(SPEC, `${WS}/sub/.vscode/x`)).toBeNull()
-    expect(writeBlockReason(SPEC, '/tmp/x')).toBeNull()
-
-    // e2e 布局：家目录落在 /private/tmp 这个根里，~/.shuvix 是「根里的整片拒写」
+  it('CL-6 e2e 布局：家目录在 /private/tmp 里 —— 家目录里的读被拦，/private/tmp 别处的读不拦', () => {
     const e2eHome = '/private/tmp/shuvix-e2e-x'
     const e2e = specOf(
-      { workingDirectory: `${e2eHome}/proj`, grantedWrite: [] },
+      { workingDirectory: `${e2eHome}/proj`, grantedWrite: [], grantedRead: [], extras: undefined },
       {
         ...PATHS,
         home: e2eHome,
         userData: `${e2eHome}/Library/Application Support/ShuviX`,
         shuvixHome: `${e2eHome}/.shuvix`,
-        cliSocket: `${e2eHome}/.shuvix/cli.sock`
+        toolResultsBase: `${e2eHome}/Library/Application Support/ShuviX/tool_results`,
+        cliSocket: `${e2eHome}/.shuvix/cli.sock`,
+        cliToken: `${e2eHome}/.shuvix/cli-token`,
+        appPaths: []
       }
     )
-    expect(writeBlockReason(e2e, `${e2eHome}/.shuvix/x`)).toBe('protected')
-    expect(writeBlockReason(e2e, `${e2eHome}/.shuvix/artifacts/sess-1/f`)).toBeNull()
-    expect(writeBlockReason(e2e, `${e2eHome}/notes.txt`)).toBeNull()
-  })
-
-  it('CL-6 读：只拦凭据位置（readDenied）；个人资料目录、userData、别的会话的 tool_results 都能读', () => {
-    const spec = SPEC
-    expect(isReadBlocked(spec, `${HOME}/.ssh/config`)).toBe(true)
-    expect(isReadBlocked(spec, `${HOME}/Documents/ref/a.txt`)).toBe(false)
-    expect(isReadBlocked(spec, `${HOME}/Documents/other.txt`)).toBe(false)
-    expect(isReadBlocked(spec, '/etc/hosts')).toBe(false)
-    expect(isReadBlocked(spec, `${SHUVIX}/.session-state/k`)).toBe(true)
-    expect(isReadBlocked(spec, `${SHUVIX}/cli-token`)).toBe(false)
-    expect(isReadBlocked(spec, `${USER_DATA}/data/db`)).toBe(false)
-    expect(isReadBlocked(spec, `${USER_DATA}/tool_results/sess-1/r.txt`)).toBe(false)
-    expect(isReadBlocked(spec, `${USER_DATA}/tool_results/other/r.txt`)).toBe(false)
+    expect(isReadBlocked(e2e, `${e2eHome}/notes.txt`)).toBe(true)
+    expect(isReadBlocked(e2e, '/tmp/shuvix-e2e-x/notes.txt')).toBe(true)
+    expect(isReadBlocked(e2e, `${e2eHome}/proj/a`)).toBe(false)
+    expect(isReadBlocked(e2e, '/private/tmp/other')).toBe(false)
+    expect(isWriteBlocked(e2e, `${e2eHome}/.shuvix/x`)).toBe(true)
+    expect(isWriteBlocked(e2e, `${e2eHome}/.shuvix/artifacts/${SID}/f`)).toBe(false)
   })
 })
 
-describe('CL-7 计划时的缺口（实现已跟进）', () => {
-  it('CL-7a BSD 工具不加引号、路径带空格：说明里是完整路径', () => {
-    const note = explain(`touch: ${USER_DATA}/x: Operation not permitted`)
-    expect(note).not.toBeNull()
-    expect(entries(note).some((e) => e.endsWith(`${USER_DATA}/x`))).toBe(true)
-
-    const outside = explain('touch: /Users/u/My Folder/x: Operation not permitted')
-    expect(entries(outside)).toContain('cannot write: /Users/u/My Folder/x')
-  })
-
-  // FU-13（B1）：裸绝对路径在第一个空格处被截出来的前缀（`/Users/u/Library/Application`、
-  // `/Users/u/My`）不再与完整路径并列 —— 只列完整的那条
-  it.each([
-    'touch: /Users/u/My Folder/x: Operation not permitted',
-    '/bin/bash: /Users/u/My Folder/x: Operation not permitted'
-  ])('CL-7a FU-13 带空格的裸路径只列完整的一条：%s', (line) => {
-    expect(entries(explain(line))).toEqual(['cannot write: /Users/u/My Folder/x'])
-  })
-
-  it('CL-7a FU-13 userData（Application Support）下的路径：恰好一条、是完整路径，没有截断的前缀', () => {
-    const listed = entries(explain(`touch: ${USER_DATA}/x: Operation not permitted`))
-    expect(listed).toHaveLength(1)
-    expect(listed[0].endsWith(`${USER_DATA}/x`)).toBe(true)
-    expect(listed.some((e) => e.endsWith('/Users/u/Library/Application'))).toBe(false)
-  })
-
-  it('CL-7a FU-13 截断只按行判断：上一行真被拒的 /Users/u/My 照列，与下一行的完整路径按出现顺序', () => {
-    const note = explain(
-      [
-        'touch: /Users/u/My: Operation not permitted',
-        'touch: /Users/u/My Folder/x: Operation not permitted'
-      ].join('\n')
-    )
-    expect(entries(note)).toEqual([
-      'cannot write: /Users/u/My',
-      'cannot write: /Users/u/My Folder/x'
+describe('CL-7 路径抽取的缺口', () => {
+  it('CL-7a BSD 工具不加引号、路径带空格：说明里是完整路径（家目录里外都一样）', () => {
+    expect(entries(explain(`touch: ${USER_DATA}/x: Operation not permitted`))).toEqual([
+      `cannot write: ${USER_DATA}/x`
+    ])
+    expect(entries(explain(`cat: ${USER_DATA}/x: Operation not permitted`))).toEqual([
+      `cannot read: ${USER_DATA}/x`
+    ])
+    expect(entries(explain('touch: /Volumes/My Disk/x: Operation not permitted'))).toEqual([
+      'cannot write: /Volumes/My Disk/x'
     ])
   })
 
-  it('CL-7b git 打印相对于工作区的路径：按工作区解析', () => {
-    const note = explain('error: could not lock config file .git/config: Operation not permitted')
-    expect(note).not.toBeNull()
-    expect(entries(note)).toEqual(['cannot write: /Users/u/proj/.git/config'])
+  // FU-13（B1）：裸绝对路径在第一个空格处被截出来的前缀（`/Users/u/Library/Application`、
+  // `/Volumes/My`）不再与完整路径并列 —— 只列完整的那条
+  it.each([
+    ['touch: /Volumes/My Disk/x: Operation not permitted', 'cannot write: /Volumes/My Disk/x'],
+    ['/bin/bash: /Volumes/My Disk/x: Operation not permitted', 'cannot write: /Volumes/My Disk/x'],
+    ['touch: /Users/u/My Folder/x: Operation not permitted', 'cannot write: /Users/u/My Folder/x'],
+    ['cat: /Users/u/My Folder/x: Operation not permitted', 'cannot read: /Users/u/My Folder/x']
+  ])('CL-7a FU-13 带空格的裸路径只列完整的一条：%s', (line, entry) => {
+    expect(entries(explain(line))).toEqual([entry])
   })
 
-  it('CL-7c TCC 拒绝的读（可写根之外、读类工具前缀）→ null，不去教模型申请完全访问', () => {
+  it('CL-7a FU-13 截断只按行判断：上一行真被拒的 /Volumes/My 照列，与下一行的完整路径按出现顺序', () => {
+    const note = explain(
+      [
+        'touch: /Volumes/My: Operation not permitted',
+        'touch: /Volumes/My Disk/x: Operation not permitted'
+      ].join('\n')
+    )
+    expect(entries(note)).toEqual(['cannot write: /Volumes/My', 'cannot write: /Volumes/My Disk/x'])
+  })
+
+  it('CL-7b 相对路径按工作目录解析：../sibling/x 落在家目录里（写 → cannot write，读 → cannot read）；工作目录里的相对路径不说', () => {
+    expect(entries(explain('touch: ../sibling/x: Operation not permitted'))).toEqual([
+      'cannot write: /Users/u/sibling/x'
+    ])
+    expect(entries(explain('cat: ../sibling/x: Operation not permitted'))).toEqual([
+      'cannot read: /Users/u/sibling/x'
+    ])
+    expect(explain('/bin/bash: .git/hooks/pre-commit: Operation not permitted')).toBeNull()
+  })
+
+  it('CL-7c TCC 拒绝的读（家目录以外、读类工具前缀）→ null，不去教模型申请完全访问', () => {
     expect(explain('ls: /Volumes/Ext: Operation not permitted')).toBeNull()
-    expect(explain(`ls: ${HOME}/Library/Safari2: Operation not permitted`)).toBeNull()
     expect(explain('cat: /Volumes/Ext/notes.txt: Operation not permitted')).toBeNull()
+  })
+
+  it('CL-7c 家目录里同样的读类报错：现在就是沙箱拦的（家目录里可读根以外都不可读）', () => {
+    expect(entries(explain(`ls: ${HOME}/Library/Safari: Operation not permitted`))).toEqual([
+      `cannot read: ${HOME}/Library/Safari`
+    ])
   })
 })
 
@@ -436,15 +529,14 @@ const APPS_REASON = 'opening apps or sending AppleScript'
 describe('FU-14 (B2) 行首的程序名不是被拒的对象', () => {
   it.each([
     ['/bin/bash: /Users/u/.zshrc: Operation not permitted', 'cannot write: /Users/u/.zshrc'],
+    ['/bin/bash: line 1: /Volumes/x/y: Operation not permitted', 'cannot write: /Volumes/x/y'],
     [
-      '/bin/bash: line 1: /Users/u/.zshrc: Operation not permitted',
-      'cannot write: /Users/u/.zshrc'
-    ],
-    ['/usr/bin/touch: /Users/u/other: Operation not permitted', 'cannot write: /Users/u/other']
+      '/usr/bin/touch: /private/tmp/other: Operation not permitted',
+      'cannot write: /private/tmp/other'
+    ]
   ])('FU-14 %s → 只列被拒的对象', (line, entry) => {
-    const listed = entries(explain(line))
     // 恰好这一条：没有 /bin/bash、/usr/bin/touch，也没有（B3 会给系统程序目录的）setuid 原因
-    expect(listed).toEqual([entry])
+    expect(entries(explain(line))).toEqual([entry])
   })
 
   // bash 的 kill 报错里 EPERM 短语前是 ` - ` 而不是 `: `：行首的 `/bin/bash` 照样是程序名，不能被读成
@@ -472,16 +564,7 @@ describe('FU-15 (B3) 系统程序目录里的 EPERM = setuid 被拒', () => {
     '/bin/bash: /usr/libexec/x: Operation not permitted',
     '/bin/bash: /System/Library/x: Operation not permitted'
   ])('FU-15 %s → 只有 setuid 的原因，不说 cannot write', (line) => {
-    const note = explain(line)
-    expect(note).not.toBeNull()
-    // 恰好这一条原因：没有 `cannot write: /bin/ps` 这类条目
-    expect(entries(note)).toEqual([expect.stringContaining(SETUID_REASON)])
-  })
-
-  it('FU-15 边界：/usr/local/bin 不是系统程序目录 → 照常 cannot write', () => {
-    expect(entries(explain('touch: /usr/local/bin/foo: Operation not permitted'))).toEqual([
-      'cannot write: /usr/local/bin/foo'
-    ])
+    expect(entries(explain(line))).toEqual([expect.stringContaining(SETUID_REASON)])
   })
 
   it('FU-15 sudo 的签名 + 两条系统程序 EPERM → setuid 的原因只说一次', () => {
@@ -516,9 +599,7 @@ describe('FU-18 (B4) 启动应用 / AppleScript 的签名', () => {
   ]
 
   it.each(SIGNATURES)('FU-18 单独一行 %s → 恰好一条「启动应用」的原因', (line) => {
-    const note = explain(line)
-    expect(note).not.toBeNull()
-    expect(entries(note)).toEqual([expect.stringContaining(APPS_REASON)])
+    expect(entries(explain(line))).toEqual([expect.stringContaining(APPS_REASON)])
   })
 
   it('FU-18 四条签名 + LSOpenURLsWithRole → 仍然只有一条', () => {
@@ -557,70 +638,56 @@ describe('FU-20 (B5) 末尾的 /', () => {
   it('FU-20 带 / 与不带 / 的同一路径只列一次（按 /private/tmp 报）', () => {
     const note = explain(
       [
-        'mkdir: /tmp/shuvix-ssh-501/x/: Operation not permitted',
-        'mkdir: /tmp/shuvix-ssh-501/x: Operation not permitted'
+        'mkdir: /tmp/q/x/: Operation not permitted',
+        'mkdir: /tmp/q/x: Operation not permitted'
       ].join('\n')
     )
-    expect(entries(note)).toEqual(['cannot write: /private/tmp/shuvix-ssh-501/x'])
+    expect(entries(note)).toEqual(['cannot write: /private/tmp/q/x'])
   })
 
   it('FU-20 连续好几个 / 也去掉', () => {
-    expect(entries(explain('mkdir: /Users/u/other//: Operation not permitted'))).toEqual([
-      'cannot write: /Users/u/other'
+    expect(entries(explain('mkdir: /Volumes/x/other//: Operation not permitted'))).toEqual([
+      'cannot write: /Volumes/x/other'
     ])
   })
 
   it('FU-20 五个不同的被拦路径、各跟一个带 / 的孪生：五个都列出（孪生不占名额）', () => {
     const lines = [1, 2, 3, 4, 5].flatMap((i) => [
-      `mkdir: /Users/u/other${i}: Operation not permitted`,
-      `mkdir: /Users/u/other${i}/: Operation not permitted`
+      `mkdir: /private/tmp/other${i}: Operation not permitted`,
+      `mkdir: /private/tmp/other${i}/: Operation not permitted`
     ])
     expect(entries(explain(lines.join('\n')))).toEqual(
-      [1, 2, 3, 4, 5].map((i) => `cannot write: /Users/u/other${i}`)
+      [1, 2, 3, 4, 5].map((i) => `cannot write: /private/tmp/other${i}`)
     )
   })
 
-  it('FU-20 工作区里的 sub/ → 仍然 null', () => {
+  it('FU-20 工作目录里的 sub/ → 仍然 null', () => {
     expect(explain('touch: /Users/u/proj/sub/: Operation not permitted')).toBeNull()
   })
 })
 
-describe('CL-R / CL-W / CL-T 读只拦凭据、别家工具的配置不拦、说明的措辞', () => {
-  const READ_LINE = 'cat: /Users/u/.ssh/id: Operation not permitted'
-
-  it('CL-R1 凭据的读被拒 → 说 cannot read', () => {
-    expect(entries(explain(READ_LINE))).toEqual(['cannot read: /Users/u/.ssh/id'])
-  })
-
-  it('CL-R3 同一行、但规格里没有凭据清单（readDenied 为空）→ null（沙箱自己没有一份凭据清单）', () => {
-    const spec = specOf({ credentialPaths: [] })
-    expect(spec.readDenied).toEqual([])
-    expect(explain(READ_LINE, 1, { spec })).toBeNull()
-  })
-
-  it.each([
-    ['工作区顶层的 .vscode', 'cp: /Users/u/proj/.vscode/settings.json: Operation not permitted'],
-    ['工作区顶层的 .envrc', 'bash: /Users/u/proj/.envrc: Operation not permitted'],
-    [
-      '两行一起',
-      'touch: /Users/u/proj/.envrc: Operation not permitted\ncp: /Users/u/proj/.vscode/settings.json: Operation not permitted'
-    ]
-  ])('CL-W1 %s 上的 EPERM 不是沙箱拦的 → null', (_label, out) => {
-    expect(explain(out)).toBeNull()
-  })
-
-  it('CL-T1 说明末尾那句概括：提凭据、git hooks、ShuviX 自己的文件；不再提个人文件夹、Documents / Downloads、ShuviX 自己的数据', () => {
+describe('CL-T 说明末尾那句概括', () => {
+  it('CL-T 概括说范围：只有工作目录与 $TMPDIR、家目录以外可读、家目录里别的都不行（举 ~/.gitconfig、缓存）、没有应用 / Docker', () => {
     for (const offerEscalation of [true, false]) {
-      const note = explain('touch: /Users/u/.shuvix/x: Operation not permitted', 1, {
-        offerEscalation
-      })
-      expect(note).not.toBeNull()
+      const note = explain('touch: /private/tmp/x: Operation not permitted', 1, { offerEscalation })
       const summary = note!.split('\n').find((l) => l.startsWith('Confined commands'))
-      expect(summary, 'summary line').toBeDefined()
-      expect(summary).toContain('credentials')
-      expect(summary).toContain('git hooks')
-      expect(summary).toContain("ShuviX's own files")
-      expect(note).not.toMatch(/personal|Documents|Downloads|ShuviX's own data/)
+      expect(summary).toBe(SUMMARY)
+      expect(summary).toContain('working directory and $TMPDIR')
+      expect(summary).toContain('outside the home folder')
+      expect(summary).toContain('~/.gitconfig')
+    }
+  })
+
+  it('CL-T 不再提已经不成立的东西：凭据清单、git hooks、ShuviX 自己的文件、包缓存可写、「改在工作目录里做」', () => {
+    for (const offerEscalation of [true, false]) {
+      const note = explain(
+        'touch: /private/tmp/x: Operation not permitted\ncat: /Users/u/.ssh/id: Operation not permitted',
+        1,
+        { offerEscalation }
+      )
+      expect(note).not.toMatch(
+        /credential|git hooks|ShuviX's own files|package[- ]manager caches|\/tmp,|inside the working directory instead/i
+      )
     }
   })
 })

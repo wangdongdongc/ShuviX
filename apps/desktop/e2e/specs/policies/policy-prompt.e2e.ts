@@ -6,7 +6,7 @@
  *      这里测的是整条链路，两者都要）；
  *   ② 用户 md 落盘现扫即生效：一份带 prompt 的 deny 策略丢进 ~/.shuvix/policies，
  *      下一次工具调用的错误里就带上它；
- *   ③ 「删光 prompt」的整链回归：同名覆盖一份不写 prompt 的 ask-on-write，
+ *   ③ 「删光 prompt」的整链回归：同名覆盖一份不写 prompt 的 ask-on-external-path，
  *      询问卡片不该多出一栏、拒绝文案不该多出一段。
  *
  * 文案逐字与拼接语义留在 unit（packages/agent-runtime/src/security/__tests__/）。
@@ -24,8 +24,7 @@ import {
   seedFakeProvider,
   waitRendererReady,
   type EventRecorder,
-  type RecordedEvent,
-  setSandboxEnabled
+  type RecordedEvent
 } from '../../harness/seed'
 import { policiesSidebarPane, registryNotePane } from '../../harness/pages'
 
@@ -72,18 +71,15 @@ let provider: FakeProvider
 let events: EventRecorder
 let projDir = ''
 /**
- * 工作目录**之外**的写入落点。ask-on-write 对工作目录免询问（受保护位置除外，沙箱开关都一样），
- * 所以「撞内置 ask-on-write、卡片带它的提示语」的探针要写到工作区外 —— 那里一直问，与沙箱、
- * 与受保护位置的清单都无关
+ * 会话目录**之外**的写入落点。ask-on-external-path 对会话目录（工作目录、本会话临时目录 …）免询问，
+ * 所以「撞内置 ask-on-external-path、卡片带它的提示语」的探针要写到工作区外 —— 那里一直问，
+ * 与沙箱开没开无关（会话目录清单不看沙箱开关）
  */
 let outsideDir = ''
 let projectId = ''
 
 beforeAll(async () => {
   app = await launchApp()
-  // 本组测的是询问卡片本身（工作区外的写入要问 / 策略说明）；沙箱开着时 fake HOME 所在的
-  // /private/tmp 整片是可写根，这些写入不再询问
-  await setSandboxEnabled(app.main, false)
   provider = await startFakeProvider()
   await seedFakeProvider(app.main, { baseUrl: provider.baseUrl, modelId: MODEL })
   await waitRendererReady(app.main)
@@ -119,6 +115,10 @@ const listPolicies = (): Promise<PolicyRow[]> =>
 
 const builtinRow = async (name: string): Promise<PolicyRow> =>
   (await listPolicies()).find((p) => p.name === name && p.source === 'builtin')!
+
+/** 出厂的路径询问门，与它管写入的那条规则（#0 管家目录里的读，#1 管会话目录以外的写） */
+const PATH_GATE = 'ask-on-external-path'
+const WRITE_RULE = 1
 
 const createPolicy = (text: string): Promise<{ success: boolean; error?: string }> =>
   app.main.eval(`window.api.policy.create(${JSON.stringify({ text })})`)
@@ -171,12 +171,12 @@ const scriptWrite = (callId: string, target: string): void => {
   )
 }
 
-/** 覆盖 ask-on-write 的用户 md（不写 prompt）—— effect 由调用方定 */
+/** 覆盖 ask-on-external-path 的用户 md（不写 prompt，只有一条写规则）—— effect 由调用方定 */
 const writeGateOverride = (effect: 'ask' | 'deny'): string =>
   [
     '---',
     'shuvix: policy v1',
-    'name: ask-on-write',
+    `name: ${PATH_GATE}`,
     'description: e2e override without any prompt',
     'shuvix-policy-scope:',
     '  subject.kind: [agent]',
@@ -189,10 +189,13 @@ const writeGateOverride = (effect: 'ask' | 'deny'): string =>
     'override body'
   ].join('\n')
 
-describe('policy prompt —— 询问链路（内置 ask-on-write）', () => {
-  it('E2E-P1 撞 ask-on-write → input_request 的 policyPrompt 逐字等于内置文案，署名为该策略显示名', async () => {
-    const gate = await builtinRow('ask-on-write')
-    expect(gate.rules[0].prompt, '内置 ask-on-write 没写 prompt').toBeTruthy()
+describe('policy prompt —— 询问链路（内置 ask-on-external-path）', () => {
+  it('E2E-P1 撞 ask-on-external-path 的写规则 → input_request 的 policyPrompt 逐字等于内置文案，署名为该策略显示名', async () => {
+    const gate = await builtinRow(PATH_GATE)
+    expect(
+      gate.rules[WRITE_RULE].prompt,
+      '内置 ask-on-external-path 的写规则没写 prompt'
+    ).toBeTruthy()
 
     const sid = await newSession('P1-ask')
     await events.clear()
@@ -200,9 +203,10 @@ describe('policy prompt —— 询问链路（内置 ask-on-write）', () => {
     await sendPrompt(sid, 'write a file')
 
     const event = await events.waitFor<AskRequestEvent>('input_request', { sessionId: sid })
-    // 整条传输链（evaluate → enforce → gateway → preload）都不加工这段文本
+    // 整条传输链（evaluate → enforce → gateway → preload）都不加工这段文本；读规则不命中写，
+    // 卡片上只有写规则那一句
     expect(event.request.policyPrompt).toEqual({
-      text: gate.rules[0].prompt,
+      text: gate.rules[WRITE_RULE].prompt,
       policies: [gate.displayName]
     })
 
@@ -212,8 +216,8 @@ describe('policy prompt —— 询问链路（内置 ask-on-write）', () => {
   })
 
   it('E2E-P2 对该询问回 allowed:false → 工具结果是 User denied access to …，不含 prompt 任何片段', async () => {
-    const gate = await builtinRow('ask-on-write')
-    const promptText = gate.rules[0].prompt!
+    const gate = await builtinRow(PATH_GATE)
+    const promptText = gate.rules[WRITE_RULE].prompt!
     const firstSentence = promptText.split(/[.。]/)[0]
     expect(firstSentence.length).toBeGreaterThan(5)
 
@@ -281,14 +285,14 @@ describe('policy prompt —— 用户 md 落盘现扫即生效', () => {
 })
 
 describe('policy prompt —— 删光 prompt 的覆盖副本', () => {
-  it('E2E-P4 同名覆盖 ask-on-write（不带 prompt）→ 询问无 policyPrompt；换 deny 覆盖文案逐字；删除后立即恢复', async () => {
-    const builtin = await builtinRow('ask-on-write')
-    const builtinPrompt = builtin.rules[0].prompt!
+  it('E2E-P4 同名覆盖 ask-on-external-path（不带 prompt）→ 询问无 policyPrompt；换 deny 覆盖文案逐字；删除后立即恢复', async () => {
+    const builtin = await builtinRow(PATH_GATE)
+    const builtinPrompt = builtin.rules[WRITE_RULE].prompt!
 
     // ① ask 覆盖：询问照常弹，只是不多出提示语那一栏
     expect(await createPolicy(writeGateOverride('ask'))).toMatchObject({ success: true })
     const overridden = (await listPolicies()).find(
-      (p) => p.name === 'ask-on-write' && p.source === 'user'
+      (p) => p.name === PATH_GATE && p.source === 'user'
     )!
     expect(overridden.rules).toEqual([{ effect: 'ask', prompt: null }])
 
@@ -305,10 +309,10 @@ describe('policy prompt —— 删光 prompt 的覆盖副本', () => {
     // ② 把覆盖改成 deny —— 已有策略的编辑是它的笔记本会话（与自动保存同一条写路径）。
     //    错误文案就是光秃秃的归因，没有多余的空行或分隔
     expect(
-      await noteWrite(app.main, 'policy', 'ask-on-write.md', writeGateOverride('deny'))
+      await noteWrite(app.main, 'policy', `${PATH_GATE}.md`, writeGateOverride('deny'))
     ).toEqual({ ok: true })
     expect(
-      (await listPolicies()).find((p) => p.name === 'ask-on-write' && p.source === 'user')!.rules
+      (await listPolicies()).find((p) => p.name === PATH_GATE && p.source === 'user')!.rules
     ).toEqual([{ effect: 'deny', prompt: null }])
     const denySid = await newSession('P4-deny')
     await events.clear()
@@ -318,12 +322,12 @@ describe('policy prompt —— 删光 prompt 的覆盖副本', () => {
 
     const denied = await toolResult(denySid, 'call_p4b')
     expect(denied.isError).toBe(true)
-    expect(denied.result).toContain("Denied by security policy rule 'ask-on-write#0'")
+    expect(denied.result).toContain(`Denied by security policy rule '${PATH_GATE}#0'`)
     expect(denied.result).not.toContain(builtinPrompt)
     expect(denied.result).not.toContain('\n\n')
 
     // ③ 删除覆盖 → 下一次评估现扫目录，内置的提示语立刻回来
-    expect(await deletePolicy('ask-on-write')).toMatchObject({ success: true })
+    expect(await deletePolicy(PATH_GATE)).toMatchObject({ success: true })
     const restoredSid = await newSession('P4-restored')
     await events.clear()
     scriptWrite('call_p4c', join(outsideDir, 'p4c.txt'))
@@ -413,25 +417,26 @@ describe('policy prompt —— 属性卡与 md 原文', () => {
     expect(await effectBadges()).toEqual(['ask'])
     expect(await rulePrompts()).toEqual([])
 
-    // 内置 protect-credentials：点内置行开的是随包那份 md 的**只读**笔记本（另一个载体项目），
-    // 它的规则带着提示语 —— 卡片上的 prompt 行与注册表裁决出的规则逐字一致
-    const credentials = await builtinRow('protect-credentials')
-    await pane.openBuiltin('protect-credentials')
+    // 内置 ask-on-external-path：点内置行开的是随包那份 md 的**只读**笔记本（另一个载体项目），
+    // 它的两条规则都带着提示语 —— 卡片上的 prompt 行与注册表裁决出的规则逐字一致
+    const gate = await builtinRow(PATH_GATE)
+    expect(gate.rules).toHaveLength(2)
+    await pane.openBuiltin(PATH_GATE)
     await note.waitCard()
-    expect(await rulePrompts()).toEqual(credentials.rules.map((r) => r.prompt))
+    expect(await rulePrompts()).toEqual(gate.rules.map((r) => r.prompt))
     // 只读：没有悬浮输入卡，编辑器本身也不接受按键
     expect(await note.hasInputCard()).toBe(false)
     expect(await note.editorEditable()).toBe(false)
   })
 
   it('E2E-P6 policy.getSource(builtin) 回吐的 md 含 prompt: 键，且等于当前界面语言的文案', async () => {
-    const builtin = await builtinRow('ask-on-write')
+    const builtin = await builtinRow(PATH_GATE)
     const source = await app.main.eval<{ text?: string; error?: string }>(
-      `window.api.policy.getSource(${JSON.stringify({ name: 'ask-on-write', source: 'builtin' })})`
+      `window.api.policy.getSource(${JSON.stringify({ name: PATH_GATE, source: 'builtin' })})`
     )
     expect(source.error).toBeUndefined()
     // 「创建覆盖副本」的初值里必须带上提示语，否则复制一份就等于悄悄删掉它
     expect(source.text).toContain('prompt:')
-    expect(source.text).toContain(builtin.rules[0].prompt!)
+    for (const rule of builtin.rules) expect(source.text).toContain(rule.prompt!)
   })
 })

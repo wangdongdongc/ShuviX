@@ -486,7 +486,7 @@ describe('开关与只问人的门', () => {
     expect(await inputRequests(sid)).toHaveLength(0)
   })
 
-  it('E2E-R5 [P0] 用户写的 force-ask 只问人、不经审查（照抄退役的 protect-shuvix-config）；[P1] 撤掉它，写 ~/.shuvix/agents 就是普通的 ask-on-write，先经审查', async () => {
+  it('E2E-R5 [P0] 用户写的 force-ask 只问人、不经审查（照抄退役的 protect-shuvix-config）；[P1] 撤掉它，写 ~/.shuvix/agents 就是普通的 ask-on-external-path，先经审查', async () => {
     const target = join(app.home, '.shuvix', 'agents', 'e2e-probe.md')
     const content = '---\nshuvix: agent v1\nname: e2e-probe\n---\n\nPROBE BODY.\n'
 
@@ -519,7 +519,7 @@ describe('开关与只问人的门', () => {
       removeRetiredPolicy(app, 'protect-shuvix-config')
     }
 
-    // P1：出厂行为 —— 工作目录之外的一次普通写入，ask-on-write 问，先交给审查员（这里审查员拒）
+    // P1：出厂行为 —— 会话目录之外的一次普通写入，ask-on-external-path 的写规则问，先交给审查员（这里审查员拒）
     const sid = await newSession('R5-config-default')
     provider.reset()
     await events.clear()
@@ -541,56 +541,62 @@ describe('开关与只问人的门', () => {
     expect(reviewRequests()).toHaveLength(1)
     expect(reviewEventOf(reviewRequests()[0]).operation.facts.path).toBe(target)
     const [decision] = await settledDecisions(sid, 1)
-    expect(decision.winning).toBe('ask-on-write#0')
+    expect(decision.winning).toBe('ask-on-external-path#1')
     expect(decision.review).toMatchObject({ decision: 'deny', source: REVIEW_SOURCE })
   })
 
-  it('E2E-R7 [P1] 沙箱关着时工作区照样免询问：普通文件直接写；受保护位置 .git/hooks 经审查放行后落盘', async () => {
+  it('E2E-R7 [P1] 沙箱关着时会话目录照样免询问：工作区里的普通文件与 .git/hooks 直接写；会话目录以外的一次写入经审查放行后落盘', async () => {
     const sid = await newSession('R7-workspace')
     const plain = join(projDir, 'src', 'r7.txt')
-    const guarded = join(projDir, '.git', 'hooks', 'r7')
-    const guardedContent = '# R7-GUARDED-CONTENT\n'
+    const hook = join(projDir, '.git', 'hooks', 'r7')
+    const outside = join(app.home, 'outside-review', 'r7.txt')
+    const outsideContent = 'R7-OUTSIDE-CONTENT\n'
     provider.reset()
     await events.clear()
     provider.script(
       { toolCalls: [writeCall('call_r7a', plain, 'R7-PLAIN-CONTENT\n')], when: notReviewer },
-      { toolCalls: [writeCall('call_r7b', guarded, guardedContent)], when: notReviewer },
+      { toolCalls: [writeCall('call_r7b', hook, '# R7-HOOK\n')], when: notReviewer },
+      { toolCalls: [writeCall('call_r7c', outside, outsideContent)], when: notReviewer },
       { text: 'R7 done.', when: notReviewer },
       reviewerTurn({
         decision: 'allow',
         risk: 'medium',
-        summary: 'SUMMARY-R7 writes a git hook',
+        summary: 'SUMMARY-R7 writes a file outside the project',
         reason: 'REASON-R7'
       })
     )
-    await sendPrompt(sid, 'Write the two files. USER-INTENT-R7')
+    await sendPrompt(sid, 'Write the three files. USER-INTENT-R7')
     await events.waitFor('agent_end', { sessionId: sid })
 
     expect(readFileSync(plain, 'utf8')).toBe('R7-PLAIN-CONTENT\n')
-    expect(readFileSync(guarded, 'utf8')).toBe(guardedContent)
+    expect(readFileSync(hook, 'utf8')).toBe('# R7-HOOK\n')
+    expect(readFileSync(outside, 'utf8')).toBe(outsideContent)
     expect(await inputRequests(sid)).toHaveLength(0)
 
-    // 普通文件：没人问、没审查；受保护位置：审查一次
+    // 工作区里（.git/hooks 不再受保护）：没人问、没审查；会话目录以外：审查一次
     const reviews = reviewRequests()
     expect(reviews).toHaveLength(1)
     const payload = reviewEventOf(reviews[0])
     expect(payload.operation.tool).toBe('write')
     expect(payload.operation.objectType).toBe('path')
     expect(payload.operation.action).toBe('write')
-    expect(payload.operation.facts.path).toBe(guarded)
-    expect(String(payload.operation.facts.diff)).toContain('R7-GUARDED-CONTENT')
+    expect(payload.operation.facts.path).toBe(outside)
+    expect(String(payload.operation.facts.diff)).toContain('R7-OUTSIDE-CONTENT')
     expect(payload.operation.facts.isNewFile).toBe(true)
 
-    const decisions = await settledDecisions(sid, 2)
-    expect(decisions).toHaveLength(2)
-    const plainDecision = decisions.find((d) => d.objectSummary === plain)
-    const guardedDecision = decisions.find((d) => d.objectSummary === guarded)
-    expect(plainDecision).toMatchObject({ winning: 'default:path', effect: 'allow' })
-    expect(plainDecision?.review).toBeUndefined()
-    expect(guardedDecision).toMatchObject({ winning: 'ask-on-write#0', effect: 'ask' })
-    expect(guardedDecision?.review).toMatchObject({ decision: 'allow', risk: 'medium' })
+    const decisions = await settledDecisions(sid, 3)
+    expect(decisions).toHaveLength(3)
+    for (const path of [plain, hook]) {
+      const d = decisions.find((x) => x.objectSummary === path)
+      expect(d, path).toMatchObject({ winning: 'default:path', effect: 'allow' })
+      expect(d?.review, path).toBeUndefined()
+    }
+    const outsideDecision = decisions.find((d) => d.objectSummary === outside)
+    expect(outsideDecision).toMatchObject({ winning: 'ask-on-external-path#1', effect: 'ask' })
+    expect(outsideDecision?.review).toMatchObject({ decision: 'allow', risk: 'medium' })
     expect(await reviewingTrace('call_r7a')).toEqual([])
-    expect(await reviewingTrace('call_r7b')).toEqual([true, false])
+    expect(await reviewingTrace('call_r7b')).toEqual([])
+    expect(await reviewingTrace('call_r7c')).toEqual([true, false])
   })
 })
 

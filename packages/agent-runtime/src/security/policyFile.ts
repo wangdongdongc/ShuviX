@@ -22,7 +22,7 @@
  *                                             deny > ask > allow，deny 恒在顶」，即
  *                                             deny > force-ask > force-allow > ask > allow。
  *                                             force-allow 效果同 allow 但压得过询问门
- *                                             （出厂用它表达「允许并记住」）；
+ *                                             （用于叠加式地放宽某道询问门）；
  *                                             force-ask 效果同 ask 且连它都压不过
  *                                             （「这道门不接受会话级同意」）。
  *       结构化条件（可选，扁平键，键即 CEL 路径）：

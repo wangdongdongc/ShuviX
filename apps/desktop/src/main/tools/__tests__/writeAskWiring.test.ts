@@ -46,7 +46,7 @@ const state = vi.hoisted(() => ({
   persisted: [] as { mode: string; path: string }[],
   /** 打开桌面的真实路径解析（PERM-R 系列）；缺省关 */
   realPath: false,
-  /** vars.home；空 = 一个不存在的家目录（凭据门对既有用例无从命中） */
+  /** vars.home；空 = 一个不存在的家目录（家目录里的读取询问对既有用例无从命中） */
   home: '',
   /** 工作区（resolveProjectConfig 与 vars.workspace 同一个）；空 = TEST_DIR */
   workspace: '',
@@ -54,8 +54,8 @@ const state = vi.hoisted(() => ({
   grants: undefined as { allowList: string[] } | undefined
 }))
 
-// 可编程 provider：桌面口径（内置 workspace-boundary 策略给出工作目录内 read 免询问、
-// write 必询问），询问挂起走 spy —— 评估链本身用真实 createSecurityContext
+// 可编程 provider：桌面口径（内置 ask-on-external-path；桩给的会话目录是空清单，所以工作目录里
+// read 免询问（家目录外）、write 必询问），询问挂起走 spy —— 评估链本身用真实 createSecurityContext
 vi.mock('../../services/toolContext', async () => {
   const { createSecurityContext } = await import('@shuvix/agent-runtime')
   const { sep: pathSep } = await import('node:path')
@@ -79,6 +79,9 @@ vi.mock('../../services/toolContext', async () => {
           knowledgeRoot: '/kb',
           knowledgeSessionDirs: [],
           home: state.home || join(TEST_DIR, '.nonexistent-home'),
+          // 会话目录刻意给空：这里测的是询问接线本身，工作目录里的写也要走到卡片上
+          // （会话目录豁免的真实变量表由 askPolicy.test / realPathPolicy.test 钉）
+          sessionDirs: [],
           systemDirs: []
         }),
         readBuiltinPolicyMd: INLINE_POLICY_MD,
@@ -435,7 +438,7 @@ describe.skipIf(process.platform === 'win32')(
       expect(readFileSync(p, 'utf-8')).toBe('x\n')
     })
 
-    it('PERM-R4 `..` 穿过链接的绝对路径（原样交给门，不折叠）：read 按私钥询问、允许后读到的正是私钥而不是字面折叠那头的诱饵；写一把新 key 按真实去处问（ask-on-write，卡片是真实去处、注着原写法），拒绝则两处都不落盘', async () => {
+    it('PERM-R4 `..` 穿过链接的绝对路径（原样交给门，不折叠）：read 按私钥询问、允许后读到的正是私钥而不是字面折叠那头的诱饵；写一把新 key 按真实去处问（ask-on-external-path，卡片是真实去处、注着原写法），拒绝则两处都不落盘', async () => {
       const readPath = `${TEST_DIR}/sshlink/../.ssh/id_rsa`
       const realKey = realpathSync.native(join(HOME, '.ssh', 'id_rsa'))
 
@@ -455,7 +458,7 @@ describe.skipIf(process.platform === 'win32')(
       expect(text).toContain('PRIVATE KEY')
       expect(text).not.toContain('DECOY')
 
-      // 凭据位置的写不再被拒（protect-credentials 只管读）：它是一次普通的区外写，按真实去处问
+      // 凭据位置没有自己的门：它是一次普通的会话目录外的写，按真实去处问
       state.requests = []
       state.respond = () => ({ kind: 'ask', allowed: false })
       const writePath = `${TEST_DIR}/sshlink/../.ssh/new_key`
@@ -517,7 +520,8 @@ describe.skipIf(process.platform === 'win32')(
 
       const through = join(link, 'doc.txt')
       const res = await makeReadTool(ctx).execute('pr6b', { path: through })
-      // 内置策略只对凭据位置问读取：不弹卡，但门确实过了一次（决策日志），按的是真实去处
+      // 内置策略只对家目录里（会话目录外）的读取询问，OUTSIDE 不在家目录里：不弹卡，但门确实过了一次
+      // （决策日志），按的是真实去处
       expect(state.requests).toEqual([])
       expect(getSessionDecisions(SESSION_ID)).toHaveLength(1)
       expect(getSessionDecisions(SESSION_ID)[0]).toMatchObject({
@@ -585,7 +589,9 @@ describe.skipIf(process.platform === 'win32')(
       const req = askOf(state.requests[0])
       expect(req.command).toBe(`Write(${real})`)
       expect(req.requestedPath).toBeUndefined()
-      expect(getSessionDecisions(SESSION_ID).map((d) => d.winning)).toEqual(['ask-on-write#0'])
+      expect(getSessionDecisions(SESSION_ID).map((d) => d.winning)).toEqual([
+        'ask-on-external-path#1'
+      ])
       expect(existsSync(join(HOME, '.ssh', 'authorized_keys'))).toBe(false)
       expect(lstatSync(link).isSymbolicLink()).toBe(true)
     })

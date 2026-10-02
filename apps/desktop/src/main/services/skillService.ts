@@ -456,6 +456,18 @@ class SkillService {
   }
 
   /**
+   * 用户这边启用着的技能根目录：默认目录 + 没被整组关掉的外部目录（内置目录不在这里，见 paths）。
+   * 会话目录的只读那一份用它 —— 技能里会让 agent 去读 `references/*.md`，每读一次都问不值。
+   */
+  enabledSkillRoots(): string[] {
+    const config = this.readConfig()
+    return [
+      this.skillsDir,
+      ...config.dirs.filter((d) => !config.disabledDirs.includes(d.name)).map((d) => d.path)
+    ]
+  }
+
+  /**
    * 添加外部 skill 源目录。
    *
    * 目录名不是装饰：它是组内技能标识的前缀（`<dirName>:<skillName>`）、分组的键、以及笔记本

@@ -21,7 +21,7 @@
  *            三份 annotations 与 schema、以及「工具面枚举确实探一次 rsync，且一个进程只探一次」
  *            —— 96 那句「枚举不起进程」只管主机别名那一侧；
  *   131…160  **传输类工具的门**：别名复核先于路径门、必填项、本地路径怎么解析（`..` 会折、
- *            `~` 不展开）、`enforcePath` 的模式与 opts 契约、四条内置路径策略、
+ *            `~` 不展开）、`enforcePath` 的模式与 opts 契约、内置的外部目录访问策略（会话目录内外）、
  *            询问的五种应答（deny / 无面板 / 取消 / 反馈 / 允许并记住）与卡片形状；
  *   161…170  **下发与 sync 独有的两道**：交给 sshCopy / sshSync 的形状、超时钳位、
  *            rsync 远端路径白名单、合成出来的那条 `rsync --server …` 过命令门
@@ -97,7 +97,10 @@ vi.mock('../../toolContext', async () => {
             home: '/home/u',
             botsDir: '/home/u/.shuvix/bots',
             builtinKnowledgeDir: '/opt/shuvix/Resources/knowledge',
-            systemDirs: []
+            systemDirs: [],
+            // 会话目录（生产里由 sandbox.sessionDirsView 算）：工作目录 + 本会话的 tool_results
+            // （还有会话 TMPDIR 与 artifacts，这里用不上）—— ask-on-external-path 在这以外的写才问
+            sessionDirs: ['/ws', `/tool-results/${ctx.sessionId}`]
           }),
           readBuiltinPolicyMd: INLINE_POLICY_MD,
           getSessionGrants: () => ({ allowList: [] }),
@@ -118,7 +121,7 @@ vi.mock('../../toolContext', async () => {
         },
         // 与 enforceCommand 同样的包法：抄一份实参，门后仍是本体。
         // 传输类工具的本地那一侧走这道门，而它是否真的与本地读写同一条路
-        // （protect-credentials / ask-on-write / 沙箱照样生效）只有在真引擎后面才答得出来
+        // （ask-on-external-path / 沙箱照样生效）只有在真引擎后面才答得出来
         enforcePath: (mode: never, path: never, opts: never) => {
           gate.pathCalls.push({ mode, path, opts })
           return real.enforcePath(mode, path, opts)
@@ -1186,7 +1189,7 @@ describe('ssh 内置服务器的 disconnect 与状态条', () => {
 //
 // 传输类工具比 exec 多一个客体：**本地那个文件**。于是这一组的主线是「本地那一侧走的
 // 是不是和本地读写完全同一条路」—— up 当读、down 当写，`enforcePath` 一次，
-// 于是 ask-on-write / protect-credentials（以及用户自己写的路径策略）一条不漏。
+// 于是 ask-on-external-path（以及用户自己写的路径策略）一条不漏。
 // 漏一次的代价很具体：一条 upload 就能把 ~/.ssh/id_rsa 送出本机，而路径策略一次没被问到。
 //
 // sync 还多一道：rsync 把远端路径拼进一条交给远端**登录 shell** 的命令行，所以它
@@ -1292,7 +1295,7 @@ describe('ssh 内置服务器传输类工具的别名复核', () => {
     writeConfig('Host web\n')
     const { client, asks } = await open()
 
-    // 这个本地路径是凭据位置，过得了门就必然弹一张 protect-credentials 的卡
+    // 这个本地路径在家目录里（会话目录外），过得了门就必然弹一张 ask-on-external-path 的卡
     const r = await callTool(
       client,
       'upload',
@@ -1400,7 +1403,7 @@ describe('ssh 内置服务器传输类工具的本地路径解析', () => {
 
     await callTool(client, 'upload', xferArgs({ localPath: '~/secrets.txt' }))
     // `~` 只是一个普通目录名，于是策略看到的是工作目录里一个叫 `~` 的子目录 ——
-    // 用户以为自己写的是家目录，protect-credentials 却因此一次也不响。
+    // 用户以为自己写的是家目录，家目录的读取询问却因此一次也不响（`/ws/~` 在会话目录里）。
     // 钉的是今天的行为：要修就去共用 resolveToCwd 那条路
     expect(gate.pathCalls[0].path).toBe('/ws/~/secrets.txt')
   })
@@ -1430,15 +1433,15 @@ describe('ssh 内置服务器传输类工具的本地路径解析', () => {
 
     // 策略的匹配是按段前缀比的：不归一化时 `/ws/../../etc/passwd` 会被判成「在工作目录内」
     expect(gate.pathCalls[0].path).toBe('/etc/passwd')
-    // 读 /etc/passwd 本身不问（内置策略只对凭据位置问读取）
+    // 读 /etc/passwd 本身不问（内置策略只对家目录里、会话目录外的读取询问）
     expect(asks).toEqual([])
 
-    // 同一道折叠的真正代价面：私钥。不折时这条路径会被判成「在工作目录内」，
-    // 于是护着凭据的那条策略一次也不响，id_rsa 就这么送出了本机
+    // 同一道折叠的真正代价面：私钥。不折时这条路径会被判成「在工作目录内」（会话目录），
+    // 于是家目录的读取询问一次也不响，id_rsa 就这么送出了本机
     await callTool(client, 'upload', xferArgs({ localPath: '/ws/../home/u/.ssh/id_rsa' }))
     expect(gate.pathCalls[1].path).toBe('/home/u/.ssh/id_rsa')
     expect(askCards(asks)[0].policyPrompt?.policies).toContain(
-      'Protect Some Credential Directories'
+      'Ask Before Touching Files Outside This Session'
     )
   })
 
@@ -1507,7 +1510,7 @@ describe('ssh 内置服务器传输类工具的路径门', () => {
     expect('onOther' in pathOptsOf()).toBe(false)
   })
 
-  it('SSHS-U-149: upload 的读门只对凭据位置响 —— 工作目录内外的普通文件都不问', async () => {
+  it('SSHS-U-149: upload 的读门只对家目录里（会话目录外）的文件响 —— 工作目录里、家目录外的文件都不问；凭据不另算', async () => {
     writeConfig('Host web\n')
     const { client, asks } = await open()
 
@@ -1525,27 +1528,47 @@ describe('ssh 内置服务器传输类工具的路径门', () => {
     })
     // 卡片上列的是策略的**显示名**（用户在设置里看到的那个），不是内部 id
     expect(askCards(asks)[0].policyPrompt?.policies).toEqual([
-      'Protect Some Credential Directories'
+      'Ask Before Touching Files Outside This Session'
+    ])
+
+    // 凭据位置没有自己的门：家目录里一份普通的笔记同样问，问它的是同一条策略
+    await callTool(client, 'upload', xferArgs({ localPath: '/home/u/notes.txt' }))
+    expect(askCards(asks).map((a) => a.command)).toEqual([
+      'Read(/home/u/.ssh/id_rsa)',
+      'Read(/home/u/notes.txt)'
+    ])
+    expect(askCards(asks)[1].policyPrompt?.policies).toEqual([
+      'Ask Before Touching Files Outside This Session'
     ])
   })
 
-  it('SSHS-U-150: ask-on-write 对**每一次** download 都响，工作目录里也一样', async () => {
+  it('SSHS-U-150: ask-on-external-path 对会话目录外的每一次 download 都响（家目录内外一样）；落进工作目录的不问', async () => {
     writeConfig('Host web\n')
     const { client, asks } = await open()
 
     await callTool(client, 'download', xferArgs({ localPath: '/ws/inside.txt' }))
     await callTool(client, 'download', xferArgs({ localPath: '/outside/x.txt' }))
+    await callTool(client, 'download', xferArgs({ localPath: '/home/u/x.txt' }))
 
-    // 写会覆盖盘上的东西，所以这条策略不看位置 —— 一次 download 就能悄悄换掉工作目录里的文件
-    expect(asks).toHaveLength(2)
+    // 工作目录是会话目录：落进去的 download 不问（与本地 write 同一条线）；之外的写不看是不是家目录
     expect(askCards(asks).map((a) => a.command)).toEqual([
-      'Write(/ws/inside.txt)',
-      'Write(/outside/x.txt)'
+      'Write(/outside/x.txt)',
+      'Write(/home/u/x.txt)'
     ])
-    expect(askCards(asks)[0].policyPrompt?.policies).toEqual(['Ask Before Writing a File'])
+    for (const card of askCards(asks)) {
+      expect(card.policyPrompt?.policies).toEqual([
+        'Ask Before Touching Files Outside This Session'
+      ])
+    }
+    // 三次都传了（应答器缺省放行）—— 不问的那一次不是被拒
+    expect(control.copy.map((c) => c.localPath)).toEqual([
+      '/ws/inside.txt',
+      '/outside/x.txt',
+      '/home/u/x.txt'
+    ])
   })
 
-  it('SSHS-U-151: 往 ~/.ssh 的 download 是一次普通的写（protect-credentials 只管读）—— ask-on-write 问，拒绝则一个字节都没拉', async () => {
+  it('SSHS-U-151: 往 ~/.ssh 的 download 是一次普通的会话目录外的写（凭据位置没有自己的门）—— ask-on-external-path 问，拒绝则一个字节都没拉', async () => {
     writeConfig('Host web\n')
     const { client, asks } = await open({
       respond: async () => ({ kind: 'ask', allowed: false })
@@ -1558,7 +1581,9 @@ describe('ssh 内置服务器传输类工具的路径门', () => {
     )
     expect(r.isError).toBe(true)
     expect(askCards(asks).map((a) => a.command)).toEqual(['Write(/home/u/.ssh/authorized_keys)'])
-    expect(askCards(asks)[0].policyPrompt?.policies).toEqual(['Ask Before Writing a File'])
+    expect(askCards(asks)[0].policyPrompt?.policies).toEqual([
+      'Ask Before Touching Files Outside This Session'
+    ])
     // 一条 download 往 authorized_keys 里写 = 把这台机器交出去：没点允许就什么都没写
     expect(control.copy).toEqual([])
   })
@@ -1576,6 +1601,12 @@ describe('ssh 内置服务器传输类工具的路径门', () => {
     expect(control.copy).toEqual([])
   })
 })
+
+/**
+ * 会话目录外的本地路径：download 落到这里才弹路径门的卡。xferArgs 缺省的 `/ws/report.txt`
+ * 在工作目录里 —— 那是会话目录，往里 download 不问（SSHS-U-150），这一组要的是一张卡
+ */
+const OUTSIDE_LOCAL = '/outside/report.txt'
 
 describe('ssh 内置服务器传输类工具的询问应答', () => {
   it('SSHS-U-153: 路径被 deny → 一条 isError 结果（**不是**协议级拒绝），带着归因', async () => {
@@ -1614,7 +1645,7 @@ describe('ssh 内置服务器传输类工具的询问应答', () => {
     writeConfig('Host web\n')
     const { client } = await open({ respond: async () => ({ kind: 'cancel', reason: 'aborted' }) })
 
-    const r = await callTool(client, 'download', xferArgs())
+    const r = await callTool(client, 'download', xferArgs({ localPath: OUTSIDE_LOCAL }))
     expect(r.isError).toBe(true)
     expect(textOf(r)).toBe('Aborted')
     expect(control.copy).toEqual([])
@@ -1626,12 +1657,12 @@ describe('ssh 内置服务器传输类工具的询问应答', () => {
       respond: async () => ({ kind: 'other', text: 'put it in /tmp instead' })
     })
 
-    const r = await callTool(client, 'download', xferArgs())
+    const r = await callTool(client, 'download', xferArgs({ localPath: OUTSIDE_LOCAL }))
     // 因为路径门没给 onOther: 'return'（SSHS-U-148）—— exec 那边同样的应答是一条
     // 非错误结果，这边是 isError。两个工具在同一张卡片上给出两种形态，是今天的行为
     expect(r.isError).toBe(true)
     expect(textOf(r)).toBe(
-      'User declined access to /ws/report.txt and provided feedback instead: put it in /tmp instead'
+      `User declined access to ${OUTSIDE_LOCAL} and provided feedback instead: put it in /tmp instead`
     )
     expect(control.copy).toEqual([])
   })
@@ -1661,11 +1692,13 @@ describe('ssh 内置服务器传输类工具的询问应答', () => {
     writeConfig('Host web\n')
     const { client, asks } = await open()
 
-    await callTool(client, 'download', xferArgs(), { 'shuvix.dev/toolCallId': 'pi-call-3' })
+    await callTool(client, 'download', xferArgs({ localPath: OUTSIDE_LOCAL }), {
+      'shuvix.dev/toolCallId': 'pi-call-3'
+    })
     expect(pathOptsOf(0).toolCallId).toBe('pi-call-3')
     expect(asks[0].id).toBe('pi-call-3')
 
-    await callTool(client, 'download', xferArgs())
+    await callTool(client, 'download', xferArgs({ localPath: OUTSIDE_LOCAL }))
     // 空串会让所有并发的 ask 挤在同一个路由键上 —— 用户答了 A 却放行了 B
     expect(pathOptsOf(1).toolCallId).toMatch(/^ssh-.+$/)
     expect(asks[1].id).toBe(pathOptsOf(1).toolCallId)
@@ -1675,17 +1708,22 @@ describe('ssh 内置服务器传输类工具的询问应答', () => {
     writeConfig('Host web\nHost api\n')
     const { client, asks } = await open()
 
-    // upload 的本地路径要是凭据位置，否则读门不响、根本没有卡片
+    // upload 的本地路径要在家目录里（会话目录外），否则读门不响、根本没有卡片；
+    // download / sync down 同理要落在会话目录外
     await callTool(
       client,
       'upload',
       xferArgs({ host: 'api', localPath: '/home/u/.ssh/a', remotePath: '/srv/a' })
     )
-    await callTool(client, 'download', xferArgs({ host: 'web', remotePath: '/srv/b' }))
+    await callTool(
+      client,
+      'download',
+      xferArgs({ host: 'web', localPath: OUTSIDE_LOCAL, remotePath: '/srv/b' })
+    )
     await callTool(
       client,
       'sync',
-      syncArgs({ host: 'api', direction: 'down', remotePath: '/srv/c' })
+      syncArgs({ host: 'api', direction: 'down', localPath: OUTSIDE_LOCAL, remotePath: '/srv/c' })
     )
 
     // 用户批准的是「这个文件离开本机 / 那台机器上的东西落到这里」，而不是「读一个文件」。
@@ -1695,7 +1733,7 @@ describe('ssh 内置服务器传输类工具的询问应答', () => {
       'Send to "api": /srv/a',
       'Receive from "web": /srv/b',
       'Receive from "api": /srv/c',
-      'Sync from "api": /ws/report.txt <-> /srv/c'
+      `Sync from "api": ${OUTSIDE_LOCAL} <-> /srv/c`
     ])
     // 描述是过门时就定下来的，与策略最终问不问无关
     expect(gate.pathCalls.map((c) => (c.opts as { description: string }).description)).toEqual([
@@ -1713,9 +1751,11 @@ describe('ssh 内置服务器传输类工具的询问应答', () => {
     })
 
     const ac = new AbortController()
-    const pending = client.callTool({ name: 'download', arguments: xferArgs() }, undefined, {
-      signal: ac.signal
-    })
+    const pending = client.callTool(
+      { name: 'download', arguments: xferArgs({ localPath: OUTSIDE_LOCAL }) },
+      undefined,
+      { signal: ac.signal }
+    )
     while (asks.length === 0) await new Promise((r) => setTimeout(r, 1))
 
     ac.abort(new Error('user stopped the run'))

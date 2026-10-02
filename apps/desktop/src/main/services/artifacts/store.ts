@@ -79,7 +79,7 @@ function dedupe(stem: string, ext: string, taken: (n: string) => boolean): strin
 /*
  * 会话 id 的安全判定（isSafeSessionId，utils/paths）：**四个入口都要过它** —— 曾经只挡了
  * listArtifacts / deleteSessionArtifacts，偏偏漏了 findArtifact / readArtifact，也就是渲染端
- * 真正会抵达的那两个。安全策略的免询问范围（toolContext 的 sessionArtifactsDir）用的是同一个判定。
+ * 真正会抵达的那两个。安全策略的会话目录（sandbox/spec 的 sessionDirsFor）用的是同一个判定。
  */
 
 /** 列出这场会话的 artifact（目录不存在 = 空，不创建） */

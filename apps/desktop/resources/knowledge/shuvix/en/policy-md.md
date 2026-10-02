@@ -2,7 +2,7 @@
 shuvix: okf v0.2
 type: Guide
 title: 'Security policy file (shuvix: policy v1)'
-description: 'The complete specification of a ShuviX security policy — the request document a rule sees (subject / action / tool / object / env / vars), the five condition keys, CEL `match`, effects and their precedence, who answers an ask (the automatic review, then you), `lets`, what makes a file invalid, the four builtin policies, and how to loosen a gate or add one of your own.'
+description: 'The complete specification of a ShuviX security policy — the request document a rule sees (subject / action / tool / object / env / vars), the five condition keys, CEL `match`, effects and their precedence, who answers an ask (the automatic review, then you), `lets`, what makes a file invalid, the two builtin policies, and how to loosen a gate or add one of your own.'
 tags: [shuvix, policy, security, format, spec, cel]
 status: stable
 sources:
@@ -22,8 +22,12 @@ files the user can read, override and remove. The first principle is **no policy
 operation that matches no rule runs freely; every protection ShuviX ships is a visible policy.
 The policies themselves are not OS-level isolation. That is the separate **command sandbox**: on
 macOS, with Settings → LLM tools → bash → Sandbox on, each `bash` command runs confined by the
-operating system (it can change files only in the project, temporary folders and package caches,
-and cannot touch what protect-credentials lists). The host reports whether a run was
+operating system. It confines file access to this session's own directories (the working
+directory, its temporary folder, its artifacts and tool results, the knowledge bases ticked for
+it, plus the paths you allowed and remembered): a confined command can read and write there, read
+the skill folders and the ShuviX manual, and read outside your home folder — nothing else. It
+also cannot open apps, signal other processes or connect to local services such as Docker. Git, installing dependencies, builds and other tools that read their configuration or
+caches in your home folder are meant to run outside it. The host reports whether a run was
 really confined as the command's `sandboxed` attribute, and the builtin policies decide on it: a
 confined command runs without asking, an unconfined one — sandbox off, not available, the agent
 asking for full access, every `ssh` command — asks, and then runs with the user's full privileges.
@@ -103,10 +107,10 @@ deny  >  force-ask  >  force-allow  >  ask  >  allow  >  (nothing matched = allo
 
 - `ask` puts the call in front of the automatic reviewer, then — if it does not settle it — the
   user; `allow` answers it; `deny` refuses it (the agent gets `prompt` as the reason).
-- `force-allow` is an allow that also beats every `ask` — ShuviX uses it for session grants
-  ("allow and remember"). A `force-allow` never reaches the reviewer.
-- `force-ask` is an ask that even `force-allow` cannot skip, and that only the user answers —
-  "this gate accepts neither session consent nor the reviewer".
+- `force-allow` is an allow that also beats every `ask` — the way to exempt one place from an ask
+  without touching the policy that asks. A `force-allow` never reaches the reviewer.
+- `force-ask` is an ask that even `force-allow` cannot skip, and that only the user answers — its
+  card offers no "allow and remember": "this gate accepts neither an exemption nor the reviewer".
 - `deny` beats everything.
 
 Conditions compile to native predicates evaluated **before** the CEL, so a rule whose conditions
@@ -132,7 +136,7 @@ why every builtin rule carries `subject.kind: [agent]`.
 
 | `object.type`  | Raised by                                                   | `action`         | Attributes                                                                                                                                                                                                                                                                                               |
 | -------------- | ----------------------------------------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `path`         | `read`, `write`, `edit`, the `knowledge` tool, file previews | `read` / `write` | `path` (where the path really leads: absolute; on the desktop symlinks are followed and `..` goes to the real parent, as the OS does when it opens the path), `requestedPath` (the absolute path as the tool asked for it — differs from `path` when a link or `..` was in the way), `displayPath` (as the model wrote it, for messages) |
+| `path`         | `read`, `write`, `edit`, `ls`, `grep`, `glob`, the `knowledge` tool, file previews | `read` / `write` | `path` (where the path really leads: absolute; on the desktop symlinks are followed and `..` goes to the real parent, as the OS does when it opens the path), `requestedPath` (the absolute path as the tool asked for it — differs from `path` when a link or `..` was in the way), `displayPath` (as the model wrote it, for messages) |
 | `command`      | `bash`, `powershell`, `ssh`                                 | `execute`        | `command` (raw text), `channel` (`bash` / `powershell` / `ssh`), `sandboxed` (bool — the host really confined this run in the OS command sandbox; always present, `false` for `ssh` and wherever there is no sandbox), `unconfinedReason` (why not: `''` when confined, `escalated` = the agent asked for full access, `disabled` = the sandbox is switched off, `unsupported` = no sandbox on this platform or for this shell, `unavailable` = the sandbox could not be applied this time, `remote` = `ssh`), and lazily from the shell parser (a `powershell` command is read by ShuviX's own PowerShell scanner: `base` is the canonical name — aliases resolved to cmdlets, path and `.exe` / `.com` dropped, case kept, so compare with `lowerAscii()` — and `-Name:value` is split into two items): `parsed` (bool), `commands` (list of `{ base, argv, wrappers, complete, depth }` — `base` is the real program after `sudo` / `env` / `timeout` are stripped, dynamic words are `''`), `writes` (redirect targets as absolute paths) |
 | `gitTool`      | the `git` tool                                              | `execute`        | `gitAction`, `command`, `force` (bool), `delete` (bool)                                                                                                                                                                                                                                                  |
 | `database`     | the built-in `database` server's `query` tool               | `execute`        | `sql`, `credential`, `dbType`, `readonly` (bool — whether the connection is read-only)                                                                                                                                                                                                                   |
@@ -161,6 +165,8 @@ matched (with a warning), an allow rule as not matched. Always guard with the ty
 | Name                    | Type     | Meaning                                                                                       |
 | ----------------------- | -------- | --------------------------------------------------------------------------------------------- |
 | `workspace`             | string   | the session's working directory                                                               |
+| `sessionDirs`           | string[] | this session's own read-write directories: the working directory (unless it is `/`, covers your home folder, or is ShuviX's own configuration or app data), its temporary folder, its artifacts, its tool results and the knowledge bases ticked for it (every change to a base is committed to the base's own git). Computed by the host from the session's settings — the same list the command sandbox confines a command to |
+| `sessionReadDirs`       | string[] | this session's read-only directories: the skill folders (builtin, `~/.shuvix/skills` and every enabled external skill directory) and the ShuviX manual when it is ticked. Reading them is free, writing asks — a skill is instructions the agent itself follows. Computed by the host; a confined command may read them too |
 | `home`                  | string   | the user's home directory                                                                     |
 | `toolResultsBase`       | string   | where large tool results are spooled                                                          |
 | `skillsDirs`            | string[] | the skill directories (global, builtin, registered external)                                  |
@@ -169,15 +175,8 @@ matched (with a warning), an allow rule as not matched. Always guard with the ty
 | `builtinKnowledgeDir`   | string   | the read-only knowledge base ShuviX ships (this one)                                          |
 | `sessionArtifactsDir`   | string   | this conversation's own artifacts, `~/.shuvix/artifacts/<session>`                            |
 | `shuvixConfigDirs`      | string[] | `~/.shuvix/policies`, `agents`, `hooks` and `skills` — ShuviX's own configuration              |
-| `workspaceWritable`     | string[] | the working directory, where file-tool writes do not ask (empty on Windows, and where the working directory is unsuitable — `/`, a folder covering your home, ShuviX's own data) |
-| `workspaceWriteDenied`  | string[] | protected places inside it (credential locations, shell startup files, …)                     |
-| `workspaceProtectedPatterns` | string[] | regexes of protected git metadata inside it — use with `matches`                    |
-| `sandboxActive`         | boolean  | this session's commands run in the command sandbox                                            |
-| `sandboxWritableRoots`  | string[] | where a confined command may write (empty when the sandbox is not active)                     |
-| `sandboxWriteDenied`    | string[] | protected places inside those roots (ShuviX's own files, credential locations, …)            |
-| `sandboxProtectedPatterns` | string[] | regexes of protected git metadata (`.git/hooks`, `.git/config`, …) — use with `matches` |
 | `systemDirs`            | string[] | extra OS directories (Windows system / program directories)                                   |
-| `grantedRead`, `grantedWrite` | string[] | paths the user answered "allow and remember" for in this session (write implies read) |
+| `grantedRead`, `grantedWrite` | string[] | paths the user answered "allow and remember" for in this session (write implies read). A grant is not a rule: it only fills these two lists, and a policy honours it by leaving them out of its `match`, as ask-on-external-path does |
 
 A `vars.x` that the host did not supply and that a rule uses **only** as `inDir`'s directory
 argument is treated as "no such directory" (a positive `inDir` cannot match through it; a negated
@@ -195,16 +194,21 @@ reads `object.*` without declaring `object.type` is accepted with a warning.
 
 ## Builtin policies
 
-Four ship with the application (per UI language; **the rules are always taken from the
+Two ship with the application (per UI language; **the rules are always taken from the
 English file**, translations only change the text people read). The default is to ask as little
-as possible, so none of them uses `deny` or `force-ask` — those are for policies of your own:
+as possible, so both are plain `ask` rules — `deny`, `force-ask` and `force-allow` are for
+policies of your own:
 
 | Name                            | Gate                                                                                                                  |
 | ------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `protect-credentials`           | ask before reading a credential location (`.ssh`, `.aws`, …); sandboxed commands can neither read nor write them. A write there is an ordinary write (ask-on-write) |
-| `ask-on-write`                  | ask on file writes, with a diff preview — except this conversation's artifacts, the working directory (minus its protected spots, not on Windows) and, with the sandbox active, where a confined command may write anyway |
+| `ask-on-external-path`          | the file tools ask before reading a file in your home folder outside this session's directories (`vars.sessionDirs`, `vars.sessionReadDirs`), and before writing anywhere outside the read-write ones (`vars.sessionDirs`), with a diff preview; paths answered "allow and remember" are left out (`vars.grantedRead` / `vars.grantedWrite`). Reading outside the home folder does not ask |
 | `ask-on-command`                | ask on every command that is not confined to the sandbox (`object.sandboxed` false: sandbox off or unavailable, full access requested, `ssh`) |
-| `session-grants`                | `force-allow` reads / writes under paths the user answered "allow and remember" for in this session |
+
+The two draw the same line: what the file tools ask about is exactly what a confined command
+cannot reach, so an agent gains nothing by switching from `read` to `cat`. Both lists follow what
+the session has ticked (its knowledge bases, the enabled skill directories); nobody maintains
+them by hand. Credentials such as `~/.ssh` or `~/.aws` are in your home folder, so reading them
+asks like any other file there.
 
 The sidebar's Security Policies group lists each one (a row opens its md, rules on the property
 card); "Create override copy" in a builtin row's menu writes the current text to
@@ -213,23 +217,34 @@ card); "Create override copy" in a builtin row's menu writes the current text to
 Earlier versions shipped more gates: refusing writes to system directories and a short list of
 machine-destroying commands, always asking before writes to bot files and ShuviX's own
 configuration, and asking before destructive git operations, SQL on a writable connection,
-opening a sub-session and each new site in your Chrome. They were removed on purpose, but every
-enforcement point is still there (the object types above), so any of them can come back as a
-policy of your own.
+opening a sub-session and each new site in your Chrome. Later the path gates were folded into
+ask-on-external-path: `protect-credentials` (a list of credential locations — they are now
+covered as files in your home folder), `ask-on-write` (writes outside the working directory) and
+`session-grants` (a `force-allow` for "allow and remember" — the remembered paths are now the
+variables the path rule leaves out). They were removed on purpose, but every enforcement point is
+still there (the object types above), so any of them can come back as a policy of your own.
 
 ## Loosening and tightening
 
 - **Remove a gate**: override it by name with `shuvix-policy-rules: []`.
 - **Exempt one place from an ask** without touching the builtin: a new policy with a
-  `force-allow` rule (`force-allow` beats `ask`), e.g. writes under one directory.
+  `force-allow` rule (`force-allow` beats `ask`), e.g. `action: [read]` with
+  `match: inDir(object.path, vars.home + '/notes')` lets the file tools read `~/notes` without
+  asking. A policy never widens the command sandbox — a confined command still cannot read
+  there; "allow and remember" is what reaches both.
 - **Add an ask**: a new policy with an `ask` rule on the object you care about — see the example
   below.
 - **Add a hard stop**: a `deny` rule — it beats everything, including "allow and remember".
-- **Make a gate un-skippable**: `force-ask` — neither an "allow and remember" grant nor the
-  automatic reviewer can answer it. That is also how to keep the reviewer away from one kind of
-  operation, e.g. `object.unconfinedReason == 'escalated'` for "always ask me when the agent wants
-  to leave the sandbox", or writes under `vars.botsDir` / `vars.shuvixConfigDirs` for "an agent
-  changing a bot file or ShuviX's own configuration always asks me".
+- **Let "allow and remember" silence an ask of your own**: a path `ask` you write keeps asking
+  after "allow and remember" unless its `match` leaves the grants out the way
+  ask-on-external-path does (`&& !inDir(object.path, vars.grantedWrite)`, plus
+  `vars.grantedRead` for reads).
+- **Make a gate un-skippable**: `force-ask` — neither a `force-allow` nor the automatic reviewer
+  can answer it, and its card offers no "allow and remember". That is also how to keep the
+  reviewer away from one kind of operation, e.g. `object.unconfinedReason == 'escalated'` for
+  "always ask me when the agent wants to leave the sandbox", or writes under `vars.botsDir` /
+  `vars.shuvixConfigDirs` for "an agent changing a bot file or ShuviX's own configuration always
+  asks me".
 - Keep rules narrow: a deny cannot be waived per call, so a rule that fires on ordinary work is
   worse than one that misses.
 

@@ -16,15 +16,15 @@
  * 同档按 deny > ask > allow，deny 恒在顶）：
  *   1. deny         任意来源 deny 命中 → deny（不可被任何层覆盖）
  *   2. force-ask    这道门不接受会话级同意 → ask（「允许并记住」过也照问）
- *   3. force-allow  用户明示同意 → allow（策略 md 里的 `effect: force-allow`；出厂由
- *                   session-grants 表达「允许并记住」，
+ *   3. force-allow  用户明示同意 → allow（策略 md 里的 `effect: force-allow`；出厂已不用，
+ *                   「允许并记住」写在 ask-on-external-path 的 match 里，
  *                   用户策略也可声明，用于叠加式地局部放宽某道询问门）
  *   4. ask          显式 ask 规则（内置/用户策略 md）→ ask
  *   5. static-allow 静态 allow 规则 → allow（当前主要供决策日志归因与用户自定义）
  *   6. default      未命中 → **allow**（无策略即放行）
  *
- * 为什么不是朴素的 deny→ask→allow：force-allow 必须压过静态 ask（否则「允许并记住」
- * 对内置 ask-on-write 策略失效），force-ask 又必须压过 force-allow（否则「始终询问」
+ * 为什么不是朴素的 deny→ask→allow：force-allow 必须压过静态 ask（否则一条用户写的
+ * 放宽规则对询问门失效），force-ask 又必须压过 force-allow（否则「始终询问」
  * 名不副实），而 deny 压过全部 —— 构成偏序，由 tier 显式表达而非靠规则排列顺序。
  * ask 压过 static-allow：询问门不被宽泛 allow 静默穿透，放宽走 force-allow
  * （「允许并记住」）或同名覆盖门策略本身。
@@ -131,8 +131,8 @@ function buildAskMaterials(
       typeof object.requestedPath === 'string' && object.requestedPath !== object.path
         ? { requestedPath: object.requestedPath }
         : {}
-    // force-ask 胜出时不给「允许并记住」：那条授权落在 force-allow 层、压不过这道门，
-    // 给出按钮等于给一个点了不生效的假承诺
+    // force-ask 胜出时不给「允许并记住」：force-ask 的含义就是「这道门不接受会话级同意」——
+    // 记下的授权只会被不问它的规则尊重，压不过这道门，给出按钮等于给一个点了不生效的假承诺
     return tier === 'force-ask'
       ? { command: entry, ...requested }
       : { command: entry, rememberEntry: entry, ...requested }
@@ -166,8 +166,8 @@ function buildAskMaterials(
  * 胜出 tier 的提示语汇总 —— 取**该 tier 内全部命中规则**的 prompt，去重后按装配序拼接。
  *
  * 刻意不是「只取 winning」：装配序是内置在前、用户在后（mergePolicyFiles），而 winning
- * 取 tier 内第一条 —— 只认 winner 的话，用户自己写的 ask 规则永远排在内置 ask-on-write
- * 之后，他写的提示语一次也不会出现。非胜出 tier 不收：deny 赢了，ask 规则那句话就无关了。
+ * 取 tier 内第一条 —— 只认 winner 的话，用户自己写的 ask 规则永远排在内置
+ * ask-on-external-path 之后，他写的提示语一次也不会出现。非胜出 tier 不收：deny 赢了，ask 规则那句话就无关了。
  */
 function collectPrompt(rules: SecurityRule[]): SecurityDecision['prompt'] {
   const texts: string[] = []

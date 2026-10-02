@@ -1,7 +1,8 @@
 /**
  * 命令沙箱 —— 管理器 + bgTaskService 端到端，真 Seatbelt（[darwin]）：RS-10（含 FU-7：智能体经宿主
  * 停掉自己那条受限的后台任务 —— 沙箱里的命令自己发不出跨实例的信号）；RS-11：工具卡上「实际执行的
- * 命令」那份记录贴进终端能复现同一条受限命令（同样的 TMPDIR、同样被拦下、同样能写工作区）。
+ * 命令」那份记录贴进终端能复现同一条受限命令（同样的 TMPDIR、同样被拦下、同样能写工作区）；
+ * RS-12：planFor 收到的读写授权与 extras（勾选的知识库、技能目录）真的到了 Seatbelt。
  *
  * 与 seatbelt.darwin.test.ts 分开放，因为这里要换掉 `os` 与 `electron`：管理器从 `os.homedir()` /
  * `app.getPath('userData')` 现取宿主路径，而家目录必须是假的。fakeHome 建在 realpath(os.tmpdir())
@@ -24,7 +25,8 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
-  unlinkSync
+  unlinkSync,
+  writeFileSync
 } from 'fs'
 import { join } from 'path'
 
@@ -138,6 +140,7 @@ describe.skipIf(process.platform !== 'darwin')('sandbox manager + bgTaskService 
     plan = planFor({
       sessionId: SID,
       workingDirectory: ws,
+      grantedRead: [],
       grantedWrite: [],
       offerEscalation: true
     })
@@ -147,54 +150,126 @@ describe.skipIf(process.platform !== 'darwin')('sandbox manager + bgTaskService 
     expect(existsSync(SESSION_TMP)).toBe(true)
   })
 
-  it('RS-10 a refused write exits 1 and the log ends with a [sandbox] note', async (ctx) => {
-    if (!available || !plan) ctx.skip()
+  /** 前台跑一条受限命令，返回退出码与日志 */
+  async function run(
+    command: string,
+    sandbox: SandboxPlan = plan!
+  ): Promise<{ exitCode: number | null; output: string }> {
     const outcome = await runCommand({
       sessionId: SID,
       toolCallId: nextId(),
       shell: 'bash',
-      command: 'echo TMP=$TMPDIR; touch "$HOME/.shuvix/x"',
-      description: 'sandbox denial',
+      command,
+      description: 'sandbox manager',
       cwd: ws,
       extraEnv: { HOME: fakeHome, SHUVIX_SESSION_ID: SID },
       background: false,
       timeoutMs: 20_000,
-      sandbox: plan!
+      sandbox
     })
     expect(outcome.kind).toBe('settled')
-    if (outcome.kind !== 'settled') return
-    expect(outcome.info.exitCode, outcome.output).toBe(1)
-    expect(outcome.output).toContain(`TMP=${plan!.env.TMPDIR}\n`)
-    const blocked = join(fakeHome, '.shuvix', 'x')
-    expect(outcome.output).toContain(`touch: ${blocked}: Operation not permitted`)
-    // 说明是日志的最后一段，在命令自己的输出之后
-    const at = outcome.output.lastIndexOf('\n[sandbox]')
-    expect(at).toBeGreaterThan(outcome.output.indexOf('Operation not permitted'))
-    const note = outcome.output.slice(at + 1)
+    if (outcome.kind !== 'settled') throw new Error('command did not settle')
+    return { exitCode: outcome.info.exitCode, output: outcome.output }
+  }
+
+  /** 日志最后一段的 [sandbox] 说明（在命令自己的输出之后） */
+  function noteOf(output: string): string {
+    const at = output.lastIndexOf('\n[sandbox]')
+    expect(at, output).toBeGreaterThan(output.indexOf('Operation not permitted'))
+    return output.slice(at + 1)
+  }
+
+  it('RS-10 a refused write outside the session dirs (/private/tmp) exits 1 and the log ends with a [sandbox] note', async (ctx) => {
+    if (!available || !plan) ctx.skip()
+    const blocked = join(state.tmp, 'x')
+    const r = await run(`echo TMP=$TMPDIR; touch "${blocked}"`)
+    expect(r.exitCode, r.output).toBe(1)
+    expect(r.output).toContain(`TMP=${plan!.env.TMPDIR}\n`)
+    expect(r.output).toContain(`touch: ${blocked}: Operation not permitted`)
+    const note = noteOf(r.output)
     expect(note).toContain(`cannot write: ${blocked}`)
     expect(note).toContain('dangerouslyDisableSandbox')
+    expect(note).toContain('automatic reviewer')
     expect(existsSync(blocked)).toBe(false)
   })
 
-  it('RS-10 an allowed write in the working directory exits 0 with no note', async (ctx) => {
+  it('RS-10 a refused read in the home folder outside the session dirs: the note says cannot read', async (ctx) => {
     if (!available || !plan) ctx.skip()
-    const outcome = await runCommand({
-      sessionId: SID,
-      toolCallId: nextId(),
-      shell: 'bash',
-      command: 'touch ok',
-      description: 'sandbox allowed',
-      cwd: ws,
-      extraEnv: { HOME: fakeHome, SHUVIX_SESSION_ID: SID },
-      background: false,
-      timeoutMs: 20_000,
-      sandbox: plan!
-    })
-    expect(outcome.kind).toBe('settled')
-    if (outcome.kind !== 'settled') return
-    expect(outcome.info.exitCode, outcome.output).toBe(0)
-    expect(outcome.output).not.toContain('[sandbox]')
+    const secret = join(fakeHome, 'Documents', 'secret.txt')
+    mkdirSync(join(fakeHome, 'Documents'), { recursive: true })
+    writeFileSync(secret, 'SECRET\n')
+    const r = await run(`cat "${secret}"`)
+    expect(r.exitCode, r.output).toBe(1)
+    expect(r.output).not.toContain('SECRET')
+    expect(noteOf(r.output)).toContain(`cannot read: ${secret}`)
+  })
+
+  it('RS-10 an allowed write in the working directory and in $TMPDIR exits 0 with no note', async (ctx) => {
+    if (!available || !plan) ctx.skip()
+    const r = await run('touch ok && touch "$TMPDIR/ok"')
+    expect(r.exitCode, r.output).toBe(0)
+    expect(r.output).not.toContain('[sandbox]')
     expect(existsSync(join(ws, 'ok'))).toBe(true)
+    expect(existsSync(join(SESSION_TMP, 'ok'))).toBe(true)
+  })
+
+  it('RS-12 grants and extras reach Seatbelt: read grant readable only, knowledge base writable, skills readable only', async (ctx) => {
+    if (!available || !plan) ctx.skip()
+    const ref = join(fakeHome, 'ref')
+    const kb = join(fakeHome, '.shuvix', 'knowledge', 'b')
+    const skills = join(fakeHome, '.shuvix', 'skills')
+    for (const [dir, file] of [
+      [ref, 'a.txt'],
+      [kb, 'a.md'],
+      [skills, 'SKILL.md']
+    ]) {
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(join(dir, file), `${file}\n`)
+    }
+    const read = (p: string): string => `cat "${p}" > /dev/null && echo read-ok || echo read-no`
+    const write = (p: string): string =>
+      `touch "${p}" 2>/dev/null && echo write-ok || echo write-no`
+    const script = [
+      read(join(ref, 'a.txt')),
+      write(join(ref, 'b')),
+      read(join(kb, 'a.md')),
+      write(join(kb, 'b.md')),
+      read(join(skills, 'SKILL.md')),
+      write(join(skills, 'b'))
+    ].join('; ')
+
+    // 没有授权与 extras：家目录里这三处都读不到、写不了
+    const bare = await run(script)
+    expect(bare.output.match(/read-(ok|no)|write-(ok|no)/g)).toEqual([
+      'read-no',
+      'write-no',
+      'read-no',
+      'write-no',
+      'read-no',
+      'write-no'
+    ])
+
+    const granted = planFor({
+      sessionId: SID,
+      workingDirectory: ws,
+      grantedRead: [ref],
+      grantedWrite: [],
+      extras: { readWrite: [kb], readOnly: [skills] },
+      offerEscalation: true
+    })
+    expect(granted).not.toBeNull()
+    const r = await run(script, granted!)
+    expect(r.output.match(/read-(ok|no)|write-(ok|no)/g)).toEqual([
+      'read-ok',
+      'write-no',
+      'read-ok',
+      'write-ok',
+      'read-ok',
+      'write-no'
+    ])
+    expect(existsSync(join(kb, 'b.md'))).toBe(true)
+    expect(existsSync(join(ref, 'b'))).toBe(false)
+    expect(existsSync(join(skills, 'b'))).toBe(false)
   })
 
   it('RS-10 a background confined task stopped through the task hub dies as a group', async (ctx) => {

@@ -10,9 +10,9 @@
  *   - 后台任务跑完 → 自动续跑那一轮的「用户消息」经真实生产链路画成通知行，实时与重开一致；
  *   - 智能体还在跑时任务跑完 → 通知走 steer（pi 自己造 user 消息、没有侧车），靠正文形状认出来。
  *
- * 前置：会话都绑同一个项目，`read` 落在 projDir 内不询问；`write` 写到工作目录**之外**
- * （工作目录里的写入不再询问），撞内置 ask-on-write，正是 E-2 要的中间态 —— 所以本文件的
- * 自动放行**只对 bash 那条后台命令**生效（`only`）。
+ * 前置：会话都绑同一个项目，`read` 落在 projDir 内不询问；`write` 写到会话目录**之外**
+ * （工作目录里的写入不询问），撞内置 ask-on-external-path，正是 E-2 要的中间态 —— 所以本文件的
+ * 自动放行**只对 bash 那条后台命令**生效（`only`；沙箱在时它受限运行、本就不问，没有沙箱时才用得上）。
  */
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -27,8 +27,7 @@ import {
   seedFakeProvider,
   waitRendererReady,
   type EventRecorder,
-  type RecordedEvent,
-  setSandboxEnabled
+  type RecordedEvent
 } from '../../harness/seed'
 import { chatPane, sidebarPane, type ChatPane, type SidebarPane } from '../../harness/pages'
 
@@ -51,7 +50,7 @@ let events: EventRecorder
 let chat: ChatPane
 let sidebar: SidebarPane
 let projDir = ''
-/** 工作目录之外的写入落点 —— ask-on-write 对工作目录免询问，要一张卡就得写到外面 */
+/** 会话目录之外的写入落点 —— ask-on-external-path 对会话目录免询问，要一张卡就得写到外面 */
 let outsideDir = ''
 const sids: Record<string, string> = {}
 
@@ -77,9 +76,6 @@ const reopen = async (title: string): Promise<void> => {
 
 beforeAll(async () => {
   app = await launchApp()
-  // 本组测的是询问卡片本身（工作区外的写入要问）；沙箱开着时 fake HOME 所在的 /private/tmp
-  // 整片是可写根，这些写入不再询问
-  await setSandboxEnabled(app.main, false)
   provider = await startFakeProvider()
   await seedFakeProvider(app.main, { baseUrl: provider.baseUrl, modelId: MODEL })
   await waitRendererReady(app.main)
@@ -105,7 +101,7 @@ beforeAll(async () => {
 
   events = eventRecorder(app.main)
   await events.install()
-  // 只放行 E-3 的后台命令：E-2 要的正是 write 停在 ask-on-write 上的中间态
+  // 只放行 E-3 的后台命令：E-2 要的正是 write 停在 ask-on-external-path 上的中间态
   await installAutoAllow(app.main, { only: (command) => command.includes('sleep 3; echo done') })
 })
 

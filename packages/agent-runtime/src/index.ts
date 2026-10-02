@@ -188,7 +188,6 @@ export {
   assembleRules,
   mergePolicyFiles,
   resolvePolicyFiles,
-  resolvePolicyLet,
   executeDecision,
   parsePolicyDefinitionFile,
   serializePolicyDefinitionFile,

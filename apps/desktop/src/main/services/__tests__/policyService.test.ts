@@ -169,15 +169,15 @@ describe('policyService — 拒绝原因与错误文案', () => {
       error: 'Builtin policy "ghost" not found'
     })
     // 只有内置的名字经 user 源查同样 not found（不得回吐内置文本）
-    expect(policyService.getSource('ask-on-write', 'user')).toEqual({
-      error: 'Policy "ask-on-write" not found'
+    expect(policyService.getSource('ask-on-external-path', 'user')).toEqual({
+      error: 'Policy "ask-on-external-path" not found'
     })
   })
 
   it('PU-5b getSource(builtin) 回吐的是随包目录里当前语言那份 md 的逐字原文（注释/键序原样，不是序列化产物）', () => {
     // 测试进程 i18next 未初始化 → en；en 是无后缀那份（规则唯一事实源）
-    const text = readFileSync(join(state.builtinDir, 'ask-on-write.md'), 'utf-8')
-    expect(policyService.getSource('ask-on-write', 'builtin')).toEqual({ text })
+    const text = readFileSync(join(state.builtinDir, 'ask-on-external-path.md'), 'utf-8')
+    expect(policyService.getSource('ask-on-external-path', 'builtin')).toEqual({ text })
   })
 })
 
@@ -188,11 +188,11 @@ describe('policyService — 拒绝原因与错误文案', () => {
  * policyService、getLanguage 取 i18next）；只比判定字段（source.kind / effect / matchExpr），
  * 它们与界面语言无关。
  *
- *   ask-on-write.md  deny  /canon       —— 覆盖内置 ask-on-write，文件名就是名字
- *   a.md             ask   /copy        —— 同名第二份，更短、码点序也更前
- *   gate.md          deny  /gate-canon  —— 纯用户同名两份
- *   g.md             ask   /gate-copy
- *   broken.md        解析不过、写着 name: ask-on-write（不进候选，遮蔽不了任何东西）
+ *   ask-on-external-path.md  deny  /canon       —— 覆盖内置 ask-on-external-path，文件名就是名字
+ *   a.md                     ask   /copy        —— 同名第二份，更短、码点序也更前
+ *   gate.md                  deny  /gate-canon  —— 纯用户同名两份
+ *   g.md                     ask   /gate-copy
+ *   broken.md                解析不过、写着 name: ask-on-external-path（不进候选，遮蔽不了任何东西）
  */
 describe('policyService —— 同名的几份：设置页列表与评估是同一次裁决', () => {
   /** 一条 path 写入规则的策略：scope 限定 agent + path，规则只看 match */
@@ -214,17 +214,17 @@ describe('policyService —— 同名的几份：设置页列表与评估是同�
       ''
     ].join('\n')
 
-  const CANON = pathPolicy('ask-on-write', 'deny', '/canon')
-  const COPY = pathPolicy('ask-on-write', 'ask', '/copy')
+  const CANON = pathPolicy('ask-on-external-path', 'deny', '/canon')
+  const COPY = pathPolicy('ask-on-external-path', 'ask', '/copy')
 
   function seedShadowFixture(): void {
     const put = (fileName: string, text: string): void =>
       writeFileSync(join(state.dir, fileName), text, 'utf-8')
-    put('ask-on-write.md', CANON)
+    put('ask-on-external-path.md', CANON)
     put('a.md', COPY)
     put('gate.md', pathPolicy('gate', 'deny', '/gate-canon'))
     put('g.md', pathPolicy('gate', 'ask', '/gate-copy'))
-    put('broken.md', INVALID_MD.replace('name: foo', 'name: ask-on-write'))
+    put('broken.md', INVALID_MD.replace('name: foo', 'name: ask-on-external-path'))
   }
 
   /** 桌面 provider 的最小同形（变量表给全，免得内置 lets 求值告警） */
@@ -289,8 +289,8 @@ describe('policyService —— 同名的几份：设置页列表与评估是同�
         .map((p) => [p.name, p.fileName])
         .sort()
     ).toEqual([
-      ['ask-on-write', 'a.md'],
-      ['ask-on-write', 'ask-on-write.md'],
+      ['ask-on-external-path', 'a.md'],
+      ['ask-on-external-path', 'ask-on-external-path.md'],
       ['gate', 'g.md'],
       ['gate', 'gate.md']
     ])
@@ -306,10 +306,10 @@ describe('policyService —— 同名的几份：设置页列表与评估是同�
     }
     // 排序口径（compareRows）：名字 → 生效在前 → basePath；内置的 basePath 是随包文件的真实路径
     // （当前语言那一版），不再为空串
-    expect(rowsNamed('ask-on-write')).toEqual([
-      ['user', 'ask-on-write.md', false, undefined],
-      ['builtin', 'ask-on-write.md', true, 'ask-on-write.md'],
-      ['user', 'a.md', true, 'ask-on-write.md']
+    expect(rowsNamed('ask-on-external-path')).toEqual([
+      ['user', 'ask-on-external-path.md', false, undefined],
+      ['builtin', 'ask-on-external-path.md', true, 'ask-on-external-path.md'],
+      ['user', 'a.md', true, 'ask-on-external-path.md']
     ])
     expect(rowsNamed('gate')).toEqual([
       ['user', 'gate.md', false, undefined],
@@ -320,7 +320,9 @@ describe('policyService —— 同名的几份：设置页列表与评估是同�
     for (const name of names) {
       expect(assembledFor(name), name).toEqual(winningRowFor(rows, name))
     }
-    expect(assembledFor('ask-on-write')).toEqual([['user', 'deny', "inDir(object.path, '/canon')"]])
+    expect(assembledFor('ask-on-external-path')).toEqual([
+      ['user', 'deny', "inDir(object.path, '/canon')"]
+    ])
     expect(assembledFor('gate')).toEqual([['user', 'deny', "inDir(object.path, '/gate-canon')"]])
 
     // getUserPolicies 附带的 fileName 只给同名裁决用，不过 IPC（列表项的文件身份是 basePath）
@@ -329,17 +331,19 @@ describe('policyService —— 同名的几份：设置页列表与评估是同�
 
   it('PU-SH2 按名读 / 删只碰生效的那份（另一份接班）；按文件名删输的那份不动胜者；删到只剩内置，内置恢复生效', () => {
     seedShadowFixture()
-    expect(policyService.getSource('ask-on-write', 'user')).toEqual({ text: CANON })
+    expect(policyService.getSource('ask-on-external-path', 'user')).toEqual({ text: CANON })
 
-    // 按名删：删的是 ask-on-write.md —— a.md 接班，评估跟着换成它的规则，内置转而被 a.md 压着
-    expect(policyService.deletePolicy('ask-on-write')).toEqual({ success: true })
+    // 按名删：删的是 ask-on-external-path.md —— a.md 接班，评估跟着换成它的规则，内置转而被 a.md 压着
+    expect(policyService.deletePolicy('ask-on-external-path')).toEqual({ success: true })
     expect(files()).toEqual(['a.md', 'broken.md', 'g.md', 'gate.md'])
-    expect(assembledFor('ask-on-write')).toEqual([['user', 'ask', "inDir(object.path, '/copy')"]])
-    expect(rowsNamed('ask-on-write')).toEqual([
-      ['user', 'a.md', false, undefined],
-      ['builtin', 'ask-on-write.md', true, 'a.md']
+    expect(assembledFor('ask-on-external-path')).toEqual([
+      ['user', 'ask', "inDir(object.path, '/copy')"]
     ])
-    expect(policyService.getSource('ask-on-write', 'user')).toEqual({ text: COPY })
+    expect(rowsNamed('ask-on-external-path')).toEqual([
+      ['user', 'a.md', false, undefined],
+      ['builtin', 'ask-on-external-path.md', true, 'a.md']
+    ])
+    expect(policyService.getSource('ask-on-external-path', 'user')).toEqual({ text: COPY })
 
     // 按文件名删输掉的 g.md：gate 的胜者与规则原样
     const gateBefore = assembledFor('gate')
@@ -350,12 +354,14 @@ describe('policyService —— 同名的几份：设置页列表与评估是同�
 
     // 最后一份同名用户文件也删掉：只剩内置、不再被覆盖，评估里是内置的规则，user 源查不到
     expect(policyService.deleteByFile('a.md')).toEqual({ success: true })
-    expect(rowsNamed('ask-on-write')).toEqual([['builtin', 'ask-on-write.md', false, undefined]])
-    const restored = assembledFor('ask-on-write')
+    expect(rowsNamed('ask-on-external-path')).toEqual([
+      ['builtin', 'ask-on-external-path.md', false, undefined]
+    ])
+    const restored = assembledFor('ask-on-external-path')
     expect(restored.length).toBeGreaterThan(0)
     expect(restored.every(([kind]) => kind === 'builtin')).toBe(true)
-    expect(policyService.getSource('ask-on-write', 'user')).toEqual({
-      error: 'Policy "ask-on-write" not found'
+    expect(policyService.getSource('ask-on-external-path', 'user')).toEqual({
+      error: 'Policy "ask-on-external-path" not found'
     })
     // 写着同一个名字的 broken.md 从头到尾没进过候选
     expect(policyService.listInvalid().map((f) => f.fileName)).toEqual(['broken.md'])
@@ -363,7 +369,7 @@ describe('policyService —— 同名的几份：设置页列表与评估是同�
 })
 
 describe('policyService —— ask-on-read 不再是内置', () => {
-  it('PU-AR1 策略目录里一份 ask-on-read.md：列表里恰一行这个名字，来源 user、没被覆盖、没有同名内置行；内置行恰 4 份', () => {
+  it('PU-AR1 策略目录里一份 ask-on-read.md：列表里恰一行这个名字，来源 user、没被覆盖、没有同名内置行；内置行恰 2 份', () => {
     writeFileSync(
       join(state.dir, 'ask-on-read.md'),
       [
@@ -391,13 +397,13 @@ describe('policyService —— ask-on-read 不再是内置', () => {
     expect(named[0].overridden).toBeFalsy()
     expect(named[0].overriddenBy).toBeUndefined()
     expect(basename(named[0].basePath)).toBe('ask-on-read.md')
-    // 2026-10-01 起出厂只剩这四份
+    // 2026-10-01 起出厂只剩这两份
     expect(
       rows
         .filter((row) => row.source === 'builtin')
         .map((row) => row.name)
         .sort()
-    ).toEqual(['ask-on-command', 'ask-on-write', 'protect-credentials', 'session-grants'])
+    ).toEqual(['ask-on-command', 'ask-on-external-path'])
     expect(rows.some((row) => row.source === 'builtin' && row.name === 'ask-on-read')).toBe(false)
     expect(policyService.listInvalid()).toEqual([])
   })

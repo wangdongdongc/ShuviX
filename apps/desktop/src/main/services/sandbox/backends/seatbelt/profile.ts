@@ -6,19 +6,18 @@
  * profile 引用一个未定义的参数会让整份编译失败（sandbox-exec 以 65 退出）。
  *
  * 以下行为都在 macOS 26.5.2 上逐项实测过（探针矩阵，结论记在注释里）：
- *  - **放回规则必须写与拒绝规则相同的操作名。**`(deny file-read-data …)` 之后写
- *    `(allow file-read* …)` 放不回来——具体操作压过通配。所以写入的放回与整片拒写同写 `file-write*`。
+ *  - **放回规则必须写与拒绝规则相同的操作名（或更具体的）。**`(deny file-read-data …)` 之后写
+ *    `(allow file-read* …)` 放不回来——具体操作压过通配。所以家目录的整片拒读写 `file-read*`，
+ *    放回可读根同写 `file-read*`，上级目录的元数据用更具体的 `file-read-metadata` 放回。
  *  - `signal (target same-sandbox)` 只覆盖**同一个** sandbox-exec 实例：下一条命令停不掉上一条的
  *    后台任务。**不要**加 `(target others)`：它放行的是「不在发信者自己进程组里的同用户进程」，
  *    而 bgTaskService 每条命令都 detached（自成进程组）—— 实测能杀 ShuviX 主进程、Finder。
  *    停上一条命令起的后台任务走宿主：`shuvix task stop <pid>`（bgTaskService.stopBgTaskByAgent）。
  *  - 真正拦住 osascript / open 的是 LaunchServices 的 mach 服务名（-10827）；`(deny appleevent-send)`
  *    单独挡不住。`tell application "X" to get name` 在本地作答，拿它测是假阳性。
- *  - `.git` 规则要限定在工作区 / 授权根里，否则依赖在 tmp、缓存里的 `git init` / clone 全部失败。
  *  - system.sb 是 version 3、Apple SPI，但 version 1 的 profile 可以 import；它放行 trustd、
  *    opendirectory、cfprefsd 与所有 XPC 服务查找，`(system-network)` 是要显式调用的宏。
  */
-import { GIT_ENTRY_PATTERN, GIT_PATTERNS } from '../../tables'
 import type { SandboxSpec } from '../../types'
 
 export interface CompiledProfile {
@@ -34,12 +33,6 @@ const LAUNCH_SERVICES_MACH_NAMES = [
   'com.apple.lsd.mapdb',
   'com.apple.lsd.modifydb'
 ]
-
-function assertRegexSafe(pattern: string): string {
-  // 正则来自 tables.ts 的固定文本；这道检查只防将来有人往里拼了东西
-  if (pattern.includes('"')) throw new Error(`SBPL regex must not contain a quote: ${pattern}`)
-  return pattern
-}
 
 export function compileSeatbeltProfile(spec: SandboxSpec): CompiledProfile {
   const params: Record<string, string> = {}
@@ -75,37 +68,20 @@ export function compileSeatbeltProfile(spec: SandboxSpec): CompiledProfile {
     '(system-network)'
   )
 
-  // ── 读：全读，只拒凭据（连元数据都拒） ──
+  // ── 读：家目录以外全读；家目录里只读会话目录、授权根与 ShuviX 自己的程序 ──
+  // 只放行工作目录是行不通的：bash 连去 /bin、/usr/bin 找命令都会被拒（实测 `ls` 都是 command not found）
   lines.push('(allow file-read*)')
-  rule('deny file-read*', subpaths(spec.readDenied))
-
-  // ── 写：可写根 → 整片拒写 → 放回 → 最后一层 ──
-  rule('allow file-write*', subpaths(spec.writableRoots))
-  rule('deny file-write*', subpaths(spec.writeDenied))
-  rule('allow file-write*', subpaths(spec.writeAllowBack))
-  const gitFilters = spec.gitRoots.flatMap((root) => {
-    const ref = param(root)
-    return GIT_PATTERNS.map(
-      (p) => `(require-all (subpath ${ref}) (regex #"${assertRegexSafe(p.sbpl)}"))`
+  rule('deny file-read*', subpaths([spec.home]))
+  rule('allow file-read-metadata', spec.metadataPaths.map((p) => `(literal ${param(p)})`).join(' '))
+  rule(
+    'allow file-read*',
+    [subpaths(spec.readableRoots), ...spec.readableFiles.map((f) => `(literal ${param(f)})`)].join(
+      ' '
     )
-  })
-  rule(
-    'deny file-write*',
-    [
-      subpaths(spec.writeDeniedFinal),
-      ...spec.writeDeniedPatterns.map((p) => `(regex #"${assertRegexSafe(p.sbpl)}")`),
-      ...gitFilters
-    ].join(' ')
   )
-  rule(
-    'deny file-write-create file-write-unlink',
-    spec.gitRoots
-      .map(
-        (root) =>
-          `(require-all (subpath ${param(root)}) (regex #"${assertRegexSafe(GIT_ENTRY_PATTERN.sbpl)}"))`
-      )
-      .join(' ')
-  )
+
+  // ── 写：只有可写根（会话目录 + 写授权） ──
+  rule('allow file-write*', subpaths(spec.writableRoots))
 
   // ── 网络：IP 出站全开（产品决策），unix socket 只放行 CLI、DNS 与本会话自己的 socket ──
   lines.push(

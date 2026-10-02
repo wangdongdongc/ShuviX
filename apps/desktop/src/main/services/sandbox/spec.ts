@@ -1,28 +1,19 @@
 /**
- * 会话 → 沙箱规格，规格 → 策略变量。纯函数：路径解析由调用方注入（`real`），
+ * 会话 → 会话目录清单 → 沙箱规格。纯函数：路径解析由调用方注入（`real`），
  * 这样单测不碰文件系统，也不依赖 electron。
+ *
+ * **一份清单、两个面**：{@link sessionDirsFor} 算出的会话目录既是沙箱里命令能读写的范围，
+ * 也是文件工具不必询问的范围（外部目录访问策略读 `vars.sessionDirs` / `vars.sessionReadDirs`）。两边各算一份就会漂移，
+ * 模型会学会走不问的那条路。
  *
  * 这里同时回答「这个会话能不能套沙箱」。套不了就返回原因，调用方退回「命令逐条询问」——
  * 永远不会变成「不套沙箱又不问」。
  */
 import { createHash } from 'crypto'
-import { join, sep } from 'path'
+import { dirname, join, sep } from 'path'
 import { isSafeSessionId } from '../../utils/paths'
-import {
-  CACHE_DIRS_HOME_RELATIVE,
-  EXECUTED_LATER_HOME_RELATIVE,
-  GIT_ENTRY_PATTERN,
-  GIT_PATTERNS,
-  LAUNCHD_TMP_PATTERN,
-  MDNS_RESPONDER_SOCKET,
-  SHUVIX_CONTENT_DIRS
-} from './tables'
-import type {
-  SandboxHostPaths,
-  SandboxSessionInput,
-  SandboxSpec,
-  SessionSandboxView
-} from './types'
+import { MDNS_RESPONDER_SOCKET, SHUVIX_CONTENT_DIRS } from './tables'
+import type { SandboxHostPaths, SandboxSessionInput, SandboxSpec } from './types'
 
 export type SpecResult = { ok: true; spec: SandboxSpec } | { ok: false; reason: string }
 
@@ -46,6 +37,114 @@ export function sessionTmpName(sessionId: string): string {
   return createHash('sha256').update(sessionId).digest('hex').slice(0, 8)
 }
 
+/** 根等于或覆盖家目录：沙箱等于没套，文件工具的豁免也等于没有 */
+function coversHome(root: string, home: string): boolean {
+  return root === '/' || isWithin(home, root)
+}
+
+/**
+ * 一个可写根（工作目录或写授权）为什么不适合放进沙箱（适合时返回 null）：
+ *  - 是 `/` 或覆盖家目录 —— 放行它等于放行整个家目录；
+ *  - 落在 ShuviX 自己的配置里（agents / policies / hooks / bots / skills 的 notebook）——
+ *    主进程把那里的文件读作规矩；
+ *  - 落在应用数据里（本会话的临时工作区除外）—— 数据库、其他会话的转写都在那里；
+ *  - **包含** ShuviX 的配置或应用数据（如 `~/Library`）—— 数据库里有沙箱开关与「允许并记住」，
+ *    命令改得到它们就等于出得了沙箱。
+ * 判定只回答一句短语，前缀（「working directory」/「a write grant」）由调用方加。
+ */
+function rootUnsuitable(
+  paths: Pick<SandboxHostPaths, 'home' | 'shuvixHome' | 'userData'>,
+  sessionId: string,
+  root: string
+): string | null {
+  if (coversHome(root, paths.home)) return 'covers the home folder'
+  if (isWithin(root, paths.shuvixHome)) {
+    const content = SHUVIX_CONTENT_DIRS.map((d) => join(paths.shuvixHome, d))
+    if (!withinAny(root, content)) return "is ShuviX's own configuration"
+  }
+  const tempWorkspace = join(paths.userData, 'temp_workspace', sessionId)
+  if (isWithin(root, paths.userData) && !isWithin(root, tempWorkspace)) {
+    return "is inside ShuviX's application data"
+  }
+  if (isWithin(paths.shuvixHome, root) || isWithin(paths.userData, root)) {
+    return "contains ShuviX's own configuration or application data"
+  }
+  return null
+}
+
+/** 工作目录为什么不能当作会话目录（能当作时返回 null）—— 与「不套沙箱」同一批理由，见 rootUnsuitable */
+export function workingDirectoryUnsuitable(
+  paths: Pick<SandboxHostPaths, 'home' | 'shuvixHome' | 'userData'>,
+  sessionId: string,
+  ws: string
+): string | null {
+  const why = rootUnsuitable(paths, sessionId, ws)
+  return why ? `working directory ${why}` : null
+}
+
+export interface SessionDirs {
+  /** 本会话的目录：工作目录（适合时）、本会话临时目录、artifacts、工具结果、勾选的知识库 */
+  dirs: string[]
+  /** 本会话只读的目录：技能目录、只读的内置知识库 */
+  readDirs: string[]
+  /** 工作目录不适合当会话目录的原因（不适合时它不在 dirs 里；沙箱也不套） */
+  workspaceUnsuitable: string | null
+  tmpDir: string
+}
+
+/**
+ * 一个会话的会话目录 —— 沙箱与外部目录访问策略共用的那一份清单。坏会话 id 返回 null
+ * （空 id 会把清单放大到所有会话的 artifacts，`..` 会放大到 `~/.shuvix`）。
+ */
+export function sessionDirsFor(
+  paths: SandboxHostPaths,
+  input: Pick<SandboxSessionInput, 'sessionId' | 'workingDirectory' | 'extras'>,
+  real: (p: string) => string
+): SessionDirs | null {
+  const { sessionId } = input
+  if (!isSafeSessionId(sessionId)) return null
+  const resolved = {
+    home: real(paths.home),
+    shuvixHome: real(paths.shuvixHome),
+    userData: real(paths.userData)
+  }
+  const ws = real(input.workingDirectory)
+  const workspaceUnsuitable = workingDirectoryUnsuitable(resolved, sessionId, ws)
+  const tmpDir = join(paths.tmpRoot, sessionTmpName(sessionId))
+  // 会话设置带来的目录同样不许覆盖家目录（防御：它们都在 ~/.shuvix 或应用包里，正常碰不到）
+  const extra = (list: readonly string[] | undefined): string[] =>
+    (list ?? [])
+      .filter((d) => d !== '')
+      .map(real)
+      .filter((d) => !coversHome(d, resolved.home))
+  const dirs = dedupe([
+    ...(workspaceUnsuitable ? [] : [ws]),
+    tmpDir,
+    // 与 utils/paths 的 getSessionArtifactsDir 同一个位置（那边用 homedir()，这里用注入的 shuvixHome，
+    // 好让单测不碰真家目录）—— 改一边要同步另一边
+    join(resolved.shuvixHome, 'artifacts', sessionId),
+    join(real(paths.toolResultsBase), sessionId),
+    ...extra(input.extras?.readWrite)
+  ])
+  const readDirs = dedupe(extra(input.extras?.readOnly)).filter((d) => !dirs.includes(d))
+  return { dirs, readDirs, workspaceUnsuitable, tmpDir }
+}
+
+/** `p` 在 `home` 里面时，从它的上一级到 `home` 本身的每一级（只放元数据用） */
+function ancestorsWithin(p: string, home: string): string[] {
+  if (!isWithin(p, home) || p === home) return []
+  const out: string[] = []
+  let cur = dirname(p)
+  while (isWithin(cur, home)) {
+    out.push(cur)
+    if (cur === home) break
+    const parent = dirname(cur)
+    if (parent === cur) break
+    cur = parent
+  }
+  return out
+}
+
 /**
  * 算出一个会话的沙箱规格。`real` 把路径解析成它真正指向的位置（realpath，不存在的部分按
  * 最近的已存在祖先拼回）—— Seatbelt 按解析后的路径比对，不解析的话 `/tmp/x` 永远对不上。
@@ -55,126 +154,52 @@ export function buildSandboxSpec(
   input: SandboxSessionInput,
   real: (p: string) => string
 ): SpecResult {
-  const { sessionId } = input
-  if (!isSafeSessionId(sessionId)) return { ok: false, reason: 'unsafe session id' }
+  const session = sessionDirsFor(paths, input, real)
+  if (!session) return { ok: false, reason: 'unsafe session id' }
+  if (session.workspaceUnsuitable) return { ok: false, reason: session.workspaceUnsuitable }
 
   const home = real(paths.home)
-  const shuvixHome = real(paths.shuvixHome)
-  const userData = real(paths.userData)
-  const ws = real(input.workingDirectory)
   const grantsWrite = dedupe(input.grantedWrite.map(real))
-  const credentialDirs = dedupe(input.credentialPaths.filter((p) => p !== '').map(real))
-
-  // 根等于或覆盖家目录：shell 启动文件、LaunchAgents 就在根里，一条命令就能在沙箱外留下会被执行的
-  // 东西 —— 与其在最后一层补一张越来越长的例外表，不如老老实实逐条询问
-  for (const root of [ws, ...grantsWrite]) {
-    if (root === '/' || isWithin(home, root)) {
-      return {
-        ok: false,
-        reason: `${root === ws ? 'working directory' : 'a write grant'} covers the home folder`
-      }
-    }
-  }
-  // 工作区是 ShuviX 自己的配置（agents / policies / hooks / bots / skills 的 notebook）：
-  // 主进程把那里的文件读作规矩，命令不该能改
-  if (isWithin(ws, shuvixHome)) {
-    const content = SHUVIX_CONTENT_DIRS.map((d) => join(shuvixHome, d))
-    if (!withinAny(ws, content)) {
-      return { ok: false, reason: "working directory is ShuviX's own configuration" }
-    }
-  }
-  const tempWorkspace = join(userData, 'temp_workspace', sessionId)
-  if (isWithin(ws, userData) && !isWithin(ws, tempWorkspace)) {
-    return { ok: false, reason: "working directory is inside ShuviX's application data" }
-  }
-  // 工作区就是凭据位置：命令在里面读写都被拒，沙箱里什么也干不了 —— 逐条询问反而能用。
-  // 根**包含**凭据位置、ShuviX 自己的文件不需要这样处理：它们在更后面的层里拒，放不回来
-  if (withinAny(ws, credentialDirs)) {
-    return { ok: false, reason: 'working directory is a credential directory' }
+  const grantsRead = dedupe(input.grantedRead.map(real))
+  // 写授权也是可写根，过同一套判定：覆盖家目录、碰到 ShuviX 的配置或应用数据的授权，命令拿着它
+  // 就能改规矩 / 关沙箱 —— 与其套一个形同虚设的沙箱，不如逐条询问（文件工具照样凭授权写）
+  const resolved = { home, shuvixHome: real(paths.shuvixHome), userData: real(paths.userData) }
+  for (const g of grantsWrite) {
+    const why = rootUnsuitable(resolved, input.sessionId, g)
+    if (why) return { ok: false, reason: `a write grant ${why}` }
   }
 
-  const tmpDir = join(paths.tmpRoot, sessionTmpName(sessionId))
-  const artifactsDir = join(shuvixHome, 'artifacts', sessionId)
-  const caches = CACHE_DIRS_HOME_RELATIVE.map((d) => join(home, d))
-  const writableRoots = dedupe([
-    ws,
-    tmpDir,
-    '/private/tmp',
-    ...caches,
-    artifactsDir,
-    ...grantsWrite
+  const ws = real(input.workingDirectory)
+  const readableRoots = dedupe([
+    ...session.dirs,
+    ...session.readDirs,
+    ...grantsWrite,
+    ...grantsRead,
+    ...paths.appPaths.map(real)
   ])
-  const writeDenied = [shuvixHome, userData]
-  // 放回：落在第 2 层整片拒写里、但本来就归这场对话 / 归用户产出的根 —— 本会话临时工作区、本会话
-  // artifacts、~/.shuvix 内容目录（knowledge / widgets …）里的授权根。~/.shuvix 其余位置（policies、
-  // agents、hooks、bots、skills）里的写授权**不**放回：文件工具凭授权照写，命令不行 —— 那些文件是
-  // 主进程读作规矩的东西，命令改它们等于改 agent 自己的规矩
-  const shuvixContent = SHUVIX_CONTENT_DIRS.map((d) => join(shuvixHome, d))
-  const writeAllowBack = writableRoots.filter(
-    (r) =>
-      r === artifactsDir ||
-      isWithin(r, tempWorkspace) ||
-      (isWithin(r, shuvixHome) && withinAny(r, shuvixContent))
+  const readableFiles = [real(paths.cliToken)]
+  const cliSocket = real(paths.cliSocket)
+  // 家目录里的可读根，它们的上级目录要能 stat（node 的 realpath、shell 的 getcwd 逐级走）；
+  // CLI 的 socket 与 token 在 ~/.shuvix 里，同理
+  const metadataPaths = dedupe(
+    [...readableRoots, ...readableFiles, cliSocket].flatMap((p) => ancestorsWithin(p, home))
   )
-  const gitRoots = dedupe([ws, ...grantsWrite])
-  const writeDeniedFinal = dedupe([
-    ...credentialDirs,
-    ...EXECUTED_LATER_HOME_RELATIVE.map((d) => join(home, d)),
-    // ShuviX 的 ssh 连接复用 socket 与用户的 tmux 会话：换掉或劫持它们就能在沙箱外执行
-    `/private/tmp/shuvix-ssh-${paths.uid}`,
-    `/private/tmp/tmux-${paths.uid}`
-  ])
 
   return {
     ok: true,
     spec: {
-      sessionId,
+      sessionId: input.sessionId,
       workingDirectory: ws,
-      writableRoots,
-      writeDenied,
-      writeAllowBack,
-      writeDeniedFinal,
-      writeDeniedPatterns: [LAUNCHD_TMP_PATTERN],
-      gitRoots,
-      readDenied: credentialDirs,
-      unixSockets: dedupe([real(paths.cliSocket), MDNS_RESPONDER_SOCKET]),
-      unixSocketDirs: dedupe([tmpDir, ws]),
-      tmpDir
+      home,
+      sessionDirs: session.dirs,
+      sessionReadDirs: session.readDirs,
+      readableRoots,
+      readableFiles,
+      metadataPaths,
+      writableRoots: dedupe([...session.dirs, ...grantsWrite]),
+      unixSockets: dedupe([cliSocket, MDNS_RESPONDER_SOCKET]),
+      unixSocketDirs: dedupe([session.tmpDir, ws]),
+      tmpDir: session.tmpDir
     }
-  }
-}
-
-/**
- * 写入要照旧询问的路径模式（JS 方言）：git 自己会执行 / 加载的元数据，`.git` 这一项本身，以及规格里
- * 的其余拒写模式。沙箱视图与工作区写入视图（workspaceWriteView）共用这一份 —— 两边的「受保护」
- * 必须是同一组。
- */
-export function protectedWritePatterns(spec: SandboxSpec): string[] {
-  return [
-    ...GIT_PATTERNS.map((p) => p.js),
-    GIT_ENTRY_PATTERN.js,
-    ...spec.writeDeniedPatterns.map((p) => p.js)
-  ]
-}
-
-/**
- * 规格 → 策略变量（ask-on-write 读）。与 profile 同源，所以 write 工具的免询问范围恰好是命令能写的
- * 范围：可写根里、且不在最后一层拒写里的位置免询问；第 2 层整片拒写（~/.shuvix、userData）只在它
- * 落在某个根里面时才需要列出（平常它包着根、根又被放回）。读没有对应的变量：命令除凭据外全能读，
- * 凭据由 protect-credentials 自己问。
- */
-export function toPolicyView(spec: SandboxSpec): SessionSandboxView {
-  // 实际可写的根：落在整片拒写里、又没被放回的根（如 ~/.shuvix/policies 里的写授权）不算
-  const effectiveRoots = spec.writableRoots.filter(
-    (r) => !spec.writeDenied.some((d) => isWithin(r, d)) || spec.writeAllowBack.includes(r)
-  )
-  const deniedInsideRoots = spec.writeDenied.filter((d) =>
-    effectiveRoots.some((r) => isWithin(d, r) && !spec.writeAllowBack.includes(r))
-  )
-  return {
-    sandboxActive: true,
-    sandboxWritableRoots: effectiveRoots,
-    sandboxWriteDenied: dedupe([...deniedInsideRoots, ...spec.writeDeniedFinal]),
-    sandboxProtectedPatterns: protectedWritePatterns(spec)
   }
 }

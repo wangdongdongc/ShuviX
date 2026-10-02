@@ -37,10 +37,17 @@ repository) with the folder as it was as the baseline, and every later observed 
 committed as `kb(<op>): /path` with `Knowledge-Op` / `Knowledge-Actor` trailers.
 
 **Which bases a session works with is the user's selection** (session config → Knowledge bases;
-project config sets the default for new sessions). Unset, the default is every user base + the
-project's base (in a project) + `shuvix`. The selection is a hard boundary: `bases` lists only the
-enabled ones, and naming any other is refused. The `<knowledge_bases>` fence in the system prompt
-lists the same names.
+project config sets the default for new sessions). Unset, a session follows its parent session,
+then its project's default; when nobody chose, **no base is enabled** — `shuvix` included. The
+selection is a hard boundary: `bases` lists only the enabled ones, and naming any other is
+refused. The `<knowledge_bases>` fence in the system prompt lists the same names.
+
+The selection also decides what the agent may touch without asking. An enabled base is one of
+the session's own **read-write** directories (`vars.sessionDirs` in the `policy-md` entry):
+reading, creating and editing files in it never asks — in the file tools or in a sandboxed
+command — because every change is committed to the base's own git and can be rolled back.
+`shuvix`, when enabled, is a **read-only** session directory: reading is free, writing asks. A
+base that is not enabled is like any other folder in your home: reading it asks.
 
 ## Read wide, write strict
 
@@ -122,8 +129,8 @@ without `base` it covers every enabled base, grouped per base — separate BM25 
 not comparable across bases; Chinese and Japanese text is word-segmented before indexing),
 `list` (every note of one base), `read` (one entry by bundle-relative path, e.g. `/foo.md`),
 `validate` (one note or a whole base). The reference base `shuvix` is read-only: `create` is
-refused there, and a file write into it is not blocked but asks like any other write
-(ask-on-write); an app update restores the shipped files anyway.
+refused there, and a file write into it is not blocked but asks (ask-on-external-path — it is a
+read-only session directory); an app update restores the shipped files anyway.
 
 ## Validation tiers
 

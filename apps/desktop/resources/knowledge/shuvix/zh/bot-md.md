@@ -10,8 +10,8 @@ sources:
     title: botFile.ts —— 解析器（事实源）
   - resource: https://github.com/wangdongdongc/ShuviX/blob/main/packages/agent-runtime/src/subagent/builtinAgents/md/bot.md
     title: bot.md —— bot 会话运行所依据的 `bot` 基座人格
-  - resource: https://github.com/wangdongdongc/ShuviX/blob/main/packages/agent-runtime/src/security/builtinPolicies/md/ask-on-write.md
-    title: ask-on-write —— bot 改自己的文件时经过的写入询问
+  - resource: https://github.com/wangdongdongc/ShuviX/blob/main/packages/agent-runtime/src/security/builtinPolicies/md/ask-on-external-path.md
+    title: ask-on-external-path —— bot 改自己的文件时经过的写入询问
 ---
 
 # Bot 文件
@@ -84,8 +84,9 @@ talking about, and you never pad feedback with praise.
 knowledge, artifact, skill:builtin:drawing` —— 没有 `bash`、`write`，也不声明内置能力服务器
 `mcp:ssh` / `mcp:browser` / `mcp:database`（用户仍可在这条会话的扩展里勾上它们，那是用户自己的选择）。bot 看得见、
 动不了：任何要改动或执行的事都得开一条子会话（编程活 → `agent_profile: coding`）。`edit` 只为一件事留着 —— 维护自己的文件。
-`~/.shuvix/bots/` 下的写入是一次普通写入：按内置策略 **ask-on-write** 询问，开着自动审查时可能由审查员
-回答（想让每次这样的写入都摆到用户面前，就写一份针对 `vars.botsDir` 的 `force-ask` 策略，见 `policy-md`）。
+`~/.shuvix/bots/` 下的写入是一次会话目录以外的普通写入：按内置策略 **ask-on-external-path** 询问，开着
+自动审查时可能由审查员回答（想让每次这样的写入都摆到用户面前，就写一份针对 `vars.botsDir` 的 `force-ask`
+策略，见 `policy-md`）。
 与 `notebook` 一样，这个基座声明项目感知但不读指令文件（AGENTS.md / CLAUDE.md 是给真正写代码的
 子会话看的约定）。基座与任何内置 agent 一样可以按名字覆盖（`~/.shuvix/agents/bot.md`）。
 

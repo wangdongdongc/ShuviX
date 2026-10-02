@@ -120,7 +120,7 @@ function commandObject(command: string, opts: DecideOpts = {}): SecurityObject {
 
 /**
  * 内置策略 + 夹具的完整装配 + 统一评估（生产路径 context.ts 同款：vars 走 buildPolicyVars，
- * 装配与求值共用同一份 —— 否则 session-grants 的 force-allow 规则会缺键刷告警）。
+ * 装配与求值共用同一份 —— 否则外部目录门里的授权变量缺键，「允许并记住」失效）。
  */
 function decide(command: string, opts: DecideOpts = {}): SecurityDecision {
   const provider = opts.provider ?? makeProvider()

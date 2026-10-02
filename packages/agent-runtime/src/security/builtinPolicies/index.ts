@@ -5,31 +5,22 @@
  * 同一批文件，见 inlineSources.ts）：侧栏点开一份内置策略时看到的只读笔记本，读的就是
  * 运行时读的那一份。
  *
- * 原则：无策略 = 放行（evaluate 默认 allow）。出厂只留下四份，且**没有一条是硬限制**
- * （没有 deny，也没有 force-ask）—— 默认就是尽可能少问（2026-10-01 用户裁定）：
- * ask-on-write（写入询问门，工作目录 / 沙箱可写处 / 本会话 artifacts 免问）/
- * ask-on-command（只问没被圈进沙箱的命令）/ protect-credentials（凭据位置的读取询问；
- * 它的 credentialDirs 同时是命令沙箱的凭据清单）/ session-grants（「允许并记住」）。
- * 用户同名覆盖（含空 rules 的"清空"覆盖）即可放宽或移除任何一道门；想要更硬的防护
- * （系统目录拒写、灾难命令拒绝、git / 数据库 / 子会话 / 新站点询问……）写成自己的策略即可，
- * 各个执行点（enforceGitOp / enforceDatabase / enforceUrl / L1 调用门）都还在，只是出厂不再挂门。
+ * 原则：无策略 = 放行（evaluate 默认 allow）。出厂只留两份，都是询问、没有硬限制
+ * （没有 deny，也没有 force-ask）—— 默认尽可能少问，复杂的事交给自动审查（2026-10-01 用户裁定）：
+ *   - ask-on-external-path：文件工具在会话目录（`vars.sessionDirs`，与命令沙箱同一份清单）与
+ *     「允许并记住」的路径以外 —— 读家目录里的文件、往任何地方写 —— 询问。
+ *   - ask-on-command：没被圈进沙箱的命令询问。
+ * 用户同名覆盖（含空 rules 的"清空"覆盖）即可放宽或移除任何一道门；想要更多防护（系统目录拒写、
+ * 灾难命令拒绝、git / 数据库 / 子会话 / 新站点询问……）写成自己的策略即可 —— 各个执行点都还在，
+ * 只是出厂不再挂门。被删掉的出厂策略原文留作测试夹具（`__tests__/fixtures/`）。
  *
- * 2026-10-01 删掉的八份：protect-system、block-catastrophic-commands、protect-bot-files、
- * protect-shuvix-config、git-safety、ask-on-database、ask-on-sub-session、ask-on-new-site；
- * protect-credentials 去掉了写入 deny（凭据位置的写入照普通写入走 ask-on-write）；
- * session-grants 去掉了「免询问」开关那条规则（开关本身一并删除）。
+ * 2026-10-01 分两轮删掉：先是 protect-system、block-catastrophic-commands、protect-bot-files、
+ * protect-shuvix-config、git-safety、ask-on-database、ask-on-sub-session、ask-on-new-site 与「免询问」
+ * 开关；随后沙箱改为只把命令的文件访问收进会话目录，protect-credentials（凭据在家目录里，自然被
+ * 外部目录访问挡住）、ask-on-write（并入 ask-on-external-path）、session-grants（「允许并记住」
+ * 并入 ask-on-external-path 的 match）也删了。
  *
- * 随应用包发布的目录（内置知识库 / skills / agent 档案）**刻意没有**拒写策略：它们本就
- * 不和用户的日常文件在一起，真要改就让它改，版本更新会还原；而一条拒写在开发态会把仓库
- * 源码目录一起锁上（用 ShuviX 开发 ShuviX 时 agent 改不了它们）。只读语义由 UI 与工具
- * 自己承担（只读笔记本、knowledge 工具对内置库拒绝 create）。
- *
- * 出厂内容**不只有防护**：session-grants 用 `effect: force-allow` 表达会话授权 ——
- * 两条规则是「允许并记住」的路径读 / 写。它们曾是引擎里写死的规则来源，下沉成 md 后
- * 同样可见、可覆盖、可移除；授权条目本身仍是会话数据，经 vars.grantedRead /
- * vars.grantedWrite 进来（见 policyVars.ts）。
- *
- * 全部规则的 subject.kind 恒为 [agent]（守护测试钉死）：防护与授权都只作用于智能体，
+ * 全部规则的 subject.kind 恒为 [agent]（守护测试钉死）：防护只作用于智能体，
  * 用户主体（UI 亲手操作）不受内置策略约束 —— 多主体模型见 types.ts SecuritySubject。
  *
  * 多语言：与 builtinAgents 同款「一语言一文件、整文件回退」（精确语言 → 基础语言 → en，
@@ -60,16 +51,10 @@ export interface BuiltinPolicySpec {
   name: string
 }
 
-// 装配序 = 决策归因优先序（同 tier 多规则命中时 winning 取先装配者）：
-// 更具体的 protect-credentials 在前（它现在只管读，与 ask-on-write 不再同时命中，
-// 但用户覆盖里若加回写入规则，归因仍落在更具体的那份上）
+// 装配序 = 决策归因优先序（同 tier 多规则命中时 winning 取先装配者）
 export const BUILTIN_POLICY_SPECS: readonly BuiltinPolicySpec[] = [
-  { name: 'protect-credentials' },
-  { name: 'ask-on-write' },
-  { name: 'ask-on-command' },
-  // force-allow 层放最后：它与上面的防护不在同一 tier，装配序对结算无影响，
-  // 但列表尾部更贴合阅读顺序（先看拦什么，再看什么情况下放行）
-  { name: 'session-grants' }
+  { name: 'ask-on-external-path' },
+  { name: 'ask-on-command' }
 ]
 
 /** 语言 → 解析产物缓存（键为归一化语言码）。readMd 是进程级稳定接缝（桌面 = 随包目录，

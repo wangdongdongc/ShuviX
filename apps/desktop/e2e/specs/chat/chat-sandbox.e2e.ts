@@ -1,10 +1,15 @@
 /**
- * 命令沙箱（macOS Seatbelt）在真实实例里的四件事：
+ * 命令沙箱（macOS Seatbelt）在真实实例里的几件事。2026-10-01 第二轮起沙箱**只收文件访问**：
+ * 受限命令只能读写本会话的目录（工作目录、本会话 TMPDIR、artifacts、工具结果，加「允许并记住」
+ * 的授权），家目录里其余位置读不到，家目录以外照读；文件工具的询问（ask-on-external-path）与它
+ * 用同一份会话目录清单。
  *
- *  - E2E-1 受限命令不问就跑：能写工作区、TMPDIR 指向本会话临时目录；被沙箱拦下的写入
- *    在结果里带一段 `[sandbox]` 说明（点名路径、教模型用 dangerouslyDisableSandbox）；
+ *  - E2E-1 受限命令不问就跑：能写工作区、TMPDIR 指向本会话临时目录；会话目录以外的写入被沙箱拦下，
+ *    结果里带一段 `[sandbox]` 说明（点名路径、教模型用 dangerouslyDisableSandbox）—— `~/.shuvix`
+ *    与 `/private/tmp`（从前是可写根）都一样；
  *  - E2E-2 申请完全访问的命令要问、卡片上有「完全访问」标签；拒绝 → 没跑；允许 → 真的不受限；
- *  - E2E-3 文件工具跟着沙箱走：工作区里的写不问，git 自己的元数据（.git/hooks）照问；
+ *  - E2E-3 文件工具与沙箱同一份会话目录：工作区里的写不问，`.git/hooks` 也不再受保护（受限命令能
+ *    git init 并写它的 hooks）；会话目录以外的写要问（ask-on-external-path#1），路径询问没有「完全访问」；
  *  - E2E-4 按会话固定：会话中途关掉开关，已在跑的会话照旧受限；新会话按新值（逐条询问、无标签）；
  *  - E2E-5（FU-8）受限命令停本会话的后台任务：`shuvix task stop <pid>` 整条链路在沙箱里走得通
  *    （读 cli-token、连 cli.sock、Electron 以 node 模式起）；停了不回头通知；别的 pid 找不到、退出 1；
@@ -13,21 +18,21 @@
  *    取不到；卡片展开后才出标记与开关，点开显示的就是 IPC 那份；切走再切回照旧；
  *  - E2E-7 沙箱关着 + 一条没跑起来的命令：拒绝的那条没有记录、落库块没有标记；允许的那条标 disabled，
  *    记录里是裸的 `/bin/bash --norc -c …`（没有 sandbox-exec、没有 TMPDIR）；
- *  - E2E-8 读的那一面：受限命令什么都能读，只有凭据位置（~/.ssh、~/.shuvix/.session-state）读不到、
- *    结果里带 `cannot read`；read 工具同一个口径 —— 普通文件不问，凭据要问；
- *  - E2E-9 凭据清单来自生效的 protect-credentials：往 ~/.shuvix/policies 放一份去掉 .aws 的覆盖副本，
- *    同一会话的下一条命令就能读 ~/.aws（~/.ssh 照拒），read 工具也不问；删掉覆盖又拒回来 ——
- *    证明 main 的注入（setSandboxCredentialReader）与现读的 policyService 接上了；
- *  - E2E-10 写的范围两面一致：项目根的 .vscode / .envrc / .claude / .mcp.json 不再受保护 ——
+ *  - E2E-8 读的那一面：家目录里会话目录以外的一律读不到（~/Downloads、~/.ssh、~/.shuvix/.session-state
+ *    都一样，凭据不再特殊）、结果里带 `cannot read`；家目录以外照读；read 工具同一个口径 ——
+ *    家目录以外不问，读 ~/.ssh 要问（ask-on-external-path#0）；
+ *  - E2E-9 「允许并记住」两面生效：read 工具上记住的读授权、write 工具上记住的写授权，同一会话的下一条
+ *    受限命令就读得到 / 写得进；在会话配置里撤掉读授权，下一条命令又读不到 —— 证明授权按命令现读、
+ *    与策略同一个来源；
+ *  - E2E-10 写的范围两面一致：项目根的 .vscode / .envrc / .claude / .mcp.json 不受保护 ——
  *    write 工具不问，受限命令也写得了。
  *
  * 每个用例先看沙箱在这个实例里能不能用（整组测试本身跑在别的沙箱里时 sandbox-exec 嵌套失败），
- * 不能用就 skip。注意 fake HOME 在 /private/tmp 下 —— 它本身是可写根：必须被拒的目标只能挑
- * `~/.shuvix/…` / userData，不能随便挑家目录里的文件。
+ * 不能用就 skip。注意 fake HOME 在 /private/tmp 下、它就是沙箱眼里的家目录：项目建在它里面
+ * （工作目录是会话目录，照常读写），家目录以外的位置要另找（mkdtemp 在 /private/tmp 下的兄弟目录）。
  */
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { until } from '../../harness/cdp'
 import { launchApp, type E2EApp } from '../../harness/launch'
@@ -36,6 +41,7 @@ import {
   createProject,
   eventRecorder,
   sandboxAvailable,
+  securityDecisions,
   seedFakeProvider,
   setSandboxEnabled,
   waitRendererReady,
@@ -45,11 +51,6 @@ import {
 import { chatPane, sidebarPane, type ChatPane, type SidebarPane } from '../../harness/pages'
 
 const MODEL = 'e2e-model'
-/** 仓库里的内置策略 md（dev 实例读的就是这一份）—— e2e/specs/chat 往上五级是仓库根 */
-const BUILTIN_POLICIES_DIR = resolve(
-  dirname(fileURLToPath(import.meta.url)),
-  '../../../../../packages/agent-runtime/src/security/builtinPolicies/md'
-)
 const USAGE = { prompt: 90, completion: 6 }
 
 let app: E2EApp
@@ -58,6 +59,8 @@ let events: EventRecorder
 let chat: ChatPane
 let sidebar: SidebarPane
 let projDir = ''
+/** fake HOME **以外**的一个目录（/private/tmp 下的兄弟目录）：沙箱照读、read 工具不问 */
+let outsideHome = ''
 const sids: Record<string, string> = {}
 
 type InputRequestEvent = RecordedEvent & { request: { id: string; unsandboxed?: boolean } }
@@ -125,9 +128,18 @@ const readCall = (id: string, path: string): { id: string; name: string; args: s
   args: JSON.stringify({ path })
 })
 
-/** 用户放进 ~/.shuvix/policies 的 protect-credentials 覆盖副本（E2E-9 写、afterEach 兜底删） */
-const credentialOverridePath = (): string =>
-  join(app.home, '.shuvix', 'policies', 'protect-credentials.md')
+/** E2E-1 试写的 /private/tmp 位置（家目录以外、会话目录以外）：不该被建出来，afterAll 兜底删 */
+const tmpProbe = `/private/tmp/shuvix-e2e-sbx-probe-${process.pid}`
+
+/** 这次调用的安全决策（按 toolCallId 认） */
+const decisionsOf = (toolCallId: string): ReturnType<typeof securityDecisions> =>
+  securityDecisions(app).filter((d) => d.toolCallId === toolCallId)
+
+/** 会话里「允许并记住」的条目（`Read(…)` / `Write(…)`） */
+const allowList = (sid: string): Promise<string[]> =>
+  app.main.eval<string[]>(
+    `window.api.session.getById(${JSON.stringify(sid)}).then((s) => (s && s.settings && s.settings.allowList) || [])`
+  )
 
 /** 在会话里发一条消息，脚本化「一串工具调用（一步一个）→ 一句收尾」 */
 async function sendSteps(
@@ -169,12 +181,17 @@ async function toolEnd(sid: string, toolCallId: string): Promise<ToolEndEvent> {
 const askCount = async (sid: string): Promise<number> =>
   (await sessionEvents(sid)).filter((e) => e.type === 'input_request').length
 
-async function answer(sid: string, requestId: string, allowed: boolean): Promise<void> {
+async function answer(
+  sid: string,
+  requestId: string,
+  allowed: boolean,
+  remember = false
+): Promise<void> {
   await app.main.eval(
     `window.api.agent.respondToInput(${JSON.stringify({
       sessionId: sid,
       requestId,
-      response: { kind: 'ask', allowed }
+      response: { kind: 'ask', allowed, ...(remember ? { extra: { rememberPath: true } } : {}) }
     })})`
   )
   await events.waitFor('input_request_resolved', { sessionId: sid })
@@ -190,6 +207,8 @@ beforeAll(async () => {
 
   projDir = join(app.home, 'proj-sbx')
   mkdirSync(projDir, { recursive: true })
+  outsideHome = mkdtempSync('/private/tmp/shuvix-e2e-outside-')
+  writeFileSync(join(outsideHome, 'world.txt'), 'WORLD-E2E\n')
   const project = await createProject(app.main, { name: 'SandboxProj', path: projDir })
 
   sids.confined = await createSession('S-confined', project.id)
@@ -201,7 +220,7 @@ beforeAll(async () => {
   sids.inv = await createSession('S-inv', project.id)
   sids.off = await createSession('S-off', project.id)
   sids.reads = await createSession('S-reads', project.id)
-  sids.override = await createSession('S-override', project.id)
+  sids.grants = await createSession('S-grants', project.id)
   sids.parity = await createSession('S-parity', project.id)
 
   chat = chatPane(app.main)
@@ -216,17 +235,17 @@ beforeAll(async () => {
 afterEach(async () => {
   // E2E-4 会关掉开关；无论成败都还原
   await setSandboxEnabled(app.main, true)
-  // E2E-9 会放一份凭据策略的覆盖副本；无论成败都删掉，别让它漏进后面的用例
-  rmSync(credentialOverridePath(), { force: true })
 })
 
 afterAll(async () => {
   await provider?.close()
   await app?.stop()
+  if (outsideHome) rmSync(outsideHome, { recursive: true, force: true })
+  rmSync(tmpProbe, { force: true })
 })
 
 describe('E2E-1 受限命令不问就跑', () => {
-  it('E2E-1 写工作区 + TMPDIR 指向本会话临时目录；写 ~/.shuvix 被沙箱拦下并带说明', async (ctx) => {
+  it('E2E-1 写工作区 + TMPDIR 指向本会话临时目录；写 ~/.shuvix、写 /private/tmp 都被沙箱拦下并带说明', async (ctx) => {
     if (!(await sandboxAvailable(app.main))) ctx.skip()
     await events.clear()
 
@@ -243,6 +262,8 @@ describe('E2E-1 受限命令不问就跑', () => {
     expect(readFileSync(join(projDir, 'inside.txt'), 'utf8').trim()).toBe('SBX')
     expect(String(inside.result)).toMatch(/TMP=\/private\/tmp\/shuvix-\d+\/[0-9a-f]{8}\//)
 
+    // 家目录里、会话目录以外：读写都拦。说明里点名这条路径 —— `touch` 带着写入的迹象，所以说
+    // `cannot write`（classify.ts：没有写入迹象时才说 cannot read），整段说明仍是「只能读写工作目录与 $TMPDIR」
     const probe = join(app.home, '.shuvix', 'sbx-probe')
     await sendTurn(
       'S-confined',
@@ -258,6 +279,18 @@ describe('E2E-1 受限命令不问就跑', () => {
     expect(out).toContain(`cannot write: ${probe}`)
     expect(out).toContain('dangerouslyDisableSandbox')
     expect(existsSync(probe)).toBe(false)
+
+    // 家目录以外、会话目录以外：/private/tmp 从前是可写根，现在只有本会话的 TMPDIR 写得进
+    await sendTurn('S-confined', bashCall('call_tmp', `touch ${tmpProbe}`), 'write to /tmp')
+    await events.waitFor('agent_end', { sessionId: sids.confined })
+    await chat.waitIdle()
+    expect(await askCount(sids.confined)).toBe(0)
+    const tmp = String((await toolEnd(sids.confined, 'call_tmp')).result)
+    expect(tmp).toContain('[Exit code: 1]')
+    expect(tmp).toContain(`cannot write: ${tmpProbe}`)
+    expect(tmp).toContain('can read and write only the working directory and $TMPDIR')
+    expect(tmp).toContain('dangerouslyDisableSandbox')
+    expect(existsSync(tmpProbe)).toBe(false)
   })
 })
 
@@ -314,32 +347,63 @@ describe('E2E-2 申请完全访问：要问，卡片带「完全访问」标签'
   })
 })
 
-describe('E2E-3 文件工具跟着沙箱走', () => {
-  it('E2E-3 工作区里的写不问；工作区里的 .git/hooks 照问，允许后写入', async (ctx) => {
+describe('E2E-3 文件工具与沙箱同一份会话目录', () => {
+  it('E2E-3 工作区里的写（含 .git/hooks）不问、受限命令 git init 并写 hooks；会话目录以外的写要问，允许后写入', async (ctx) => {
     if (!(await sandboxAvailable(app.main))) ctx.skip()
     await events.clear()
 
+    // ① 工作区里：普通文件、git 的 hooks 都不问（.git 元数据不再受保护）；受限命令同样写得进
     const plain = join(projDir, 'a.txt')
-    await sendTurn('S-files', writeCall('call_plain', plain, 'PLAIN'), 'write a')
+    mkdirSync(join(projDir, '.git', 'hooks'), { recursive: true })
+    const hook = join(projDir, '.git', 'hooks', 'pre-commit')
+    await sendSteps(
+      'S-files',
+      [
+        writeCall('call_plain', plain, 'PLAIN'),
+        writeCall('call_hook', hook, '# hook\n'),
+        bashCall(
+          'call_git',
+          "git init -q repo-sbx && printf '#!/bin/sh\\n' > repo-sbx/.git/hooks/post-commit && echo GIT-OK"
+        )
+      ],
+      'write in the workspace'
+    )
     await events.waitFor('agent_end', { sessionId: sids.files })
     await chat.waitIdle()
     expect(await askCount(sids.files)).toBe(0)
     expect((await toolEnd(sids.files, 'call_plain')).isError).toBeFalsy()
     expect(readFileSync(plain, 'utf8')).toBe('PLAIN')
+    expect((await toolEnd(sids.files, 'call_hook')).isError).toBeFalsy()
+    expect(readFileSync(hook, 'utf8')).toBe('# hook\n')
+    const git = await toolEnd(sids.files, 'call_git')
+    expect(String(git.result)).toContain('GIT-OK')
+    expect(String(git.result)).not.toContain('[sandbox]')
+    expect(git.details?.sandbox).toBe('confined')
+    expect(readFileSync(join(projDir, 'repo-sbx', '.git', 'hooks', 'post-commit'), 'utf8')).toBe(
+      '#!/bin/sh\n'
+    )
 
-    mkdirSync(join(projDir, '.git', 'hooks'), { recursive: true })
-    const guarded = join(projDir, '.git', 'hooks', 'pre-commit')
-    await sendTurn('S-files', writeCall('call_hook', guarded, '# hook\n'), 'write hook')
+    // ② 会话目录以外：ask-on-external-path 的写规则问；路径询问不是命令，没有「完全访问」这回事
+    const outside = join(app.home, 'outside-sbx', 'x.txt')
+    await events.clear()
+    await sendTurn('S-files', writeCall('call_outside', outside, 'OUT'), 'write outside')
     const ask = await events.waitFor<InputRequestEvent>('input_request', {
       sessionId: sids.files
     })
-    // 路径询问不是命令，没有「完全访问」这回事
     expect(ask.request.unsandboxed).toBeFalsy()
     await answer(sids.files, ask.request.id, true)
     await events.waitFor('agent_end', { sessionId: sids.files })
     await chat.waitIdle()
-    expect((await toolEnd(sids.files, 'call_hook')).isError).toBeFalsy()
-    expect(readFileSync(guarded, 'utf8')).toBe('# hook\n')
+    expect((await toolEnd(sids.files, 'call_outside')).isError).toBeFalsy()
+    expect(readFileSync(outside, 'utf8')).toBe('OUT')
+    expect(decisionsOf('call_outside')).toEqual([
+      expect.objectContaining({
+        action: 'write',
+        effect: 'ask',
+        winning: 'ask-on-external-path#1',
+        userResponse: 'allowed'
+      })
+    ])
   })
 })
 
@@ -565,14 +629,15 @@ describe('E2E-7 沙箱关着 + 一条没跑起来的命令', () => {
   })
 })
 
-describe('E2E-8 读的那一面：只有凭据读不到', () => {
-  it('E2E-8 受限命令读 ~/Downloads 不问、照常读到；读 ~/.ssh 与 ~/.shuvix/.session-state 被拒并说明；read 工具读普通文件不问、读凭据要问', async (ctx) => {
+describe('E2E-8 读的那一面：家目录里只有会话目录读得到', () => {
+  it('E2E-8 受限命令读 ~/Downloads、~/.ssh、~/.shuvix/.session-state 一律被拒并说明，读家目录以外照常；read 工具读家目录以外不问、读 ~/.ssh 要问', async (ctx) => {
     if (!(await sandboxAvailable(app.main))) ctx.skip()
     await events.clear()
     const sid = sids.reads
     const note = join(app.home, 'Downloads', 'note.txt')
     const key = join(app.home, '.ssh', 'id_e2e')
     const state = join(app.home, '.shuvix', '.session-state')
+    const world = join(outsideHome, 'world.txt')
     mkdirSync(dirname(note), { recursive: true })
     writeFileSync(note, 'NOTE-E2E\n')
     mkdirSync(dirname(key), { recursive: true })
@@ -586,7 +651,8 @@ describe('E2E-8 读的那一面：只有凭据读不到', () => {
         bashCall('call_note', 'cat "$HOME/Downloads/note.txt"'),
         bashCall('call_key', 'cat "$HOME/.ssh/id_e2e"'),
         bashCall('call_state', 'wc -c "$HOME/.shuvix/.session-state"'),
-        readCall('call_read_note', note)
+        bashCall('call_world', `cat ${world}`),
+        readCall('call_read_world', world)
       ],
       'read around'
     )
@@ -594,24 +660,27 @@ describe('E2E-8 读的那一面：只有凭据读不到', () => {
     await chat.waitIdle()
     expect(await askCount(sid)).toBe(0)
 
-    const noteOut = String((await toolEnd(sid, 'call_note')).result)
-    expect(noteOut).toContain('NOTE-E2E')
-    expect(noteOut).not.toContain('[sandbox]')
+    // 家目录里、会话目录以外：普通文件与凭据一个待遇（凭据不再有自己的清单）
+    for (const [id, path, mark] of [
+      ['call_note', note, 'NOTE-E2E'],
+      ['call_key', key, 'KEY-E2E'],
+      ['call_state', state, null]
+    ] as const) {
+      const out = String((await toolEnd(sid, id)).result)
+      expect(out, id).toContain('[Exit code: 1]')
+      expect(out, id).toContain(`cannot read: ${path}`)
+      if (mark) expect(out, id).not.toContain(mark)
+    }
 
-    const keyOut = String((await toolEnd(sid, 'call_key')).result)
-    expect(keyOut).toContain('[Exit code: 1]')
-    expect(keyOut).toContain(`cannot read: ${key}`)
-    expect(keyOut).not.toContain('KEY-E2E')
+    // 家目录以外：受限命令照读，read 工具也不问
+    const worldOut = String((await toolEnd(sid, 'call_world')).result)
+    expect(worldOut).toContain('WORLD-E2E')
+    expect(worldOut).not.toContain('[sandbox]')
+    const readWorld = await toolEnd(sid, 'call_read_world')
+    expect(readWorld.isError).toBeFalsy()
+    expect(String(readWorld.result)).toContain('WORLD-E2E')
 
-    const stateOut = String((await toolEnd(sid, 'call_state')).result)
-    expect(stateOut).toContain('[Exit code: 1]')
-    expect(stateOut).toContain(`cannot read: ${state}`)
-
-    const readNote = await toolEnd(sid, 'call_read_note')
-    expect(readNote.isError).toBeFalsy()
-    expect(String(readNote.result)).toContain('NOTE-E2E')
-
-    // read 工具读凭据：protect-credentials 问（拒绝 → 没读到）
+    // read 工具读 ~/.ssh：家目录里、会话目录以外 → ask-on-external-path 的读规则问（拒绝 → 没读到）
     await events.clear()
     await sendTurn('S-reads', readCall('call_read_key', key), 'read the key')
     const ask = await events.waitFor<InputRequestEvent>('input_request', { sessionId: sid })
@@ -622,42 +691,64 @@ describe('E2E-8 读的那一面：只有凭据读不到', () => {
     const readKey = await toolEnd(sid, 'call_read_key')
     expect(readKey.isError).toBe(true)
     expect(String(readKey.result)).not.toContain('KEY-E2E')
+    expect(decisionsOf('call_read_key')).toEqual([
+      expect.objectContaining({
+        action: 'read',
+        effect: 'ask',
+        winning: 'ask-on-external-path#0',
+        userResponse: 'denied'
+      })
+    ])
   })
 })
 
-describe('E2E-9 凭据清单来自生效的 protect-credentials', () => {
-  it('E2E-9 覆盖副本去掉 .aws → 同一会话的下一条命令就读得到 ~/.aws（~/.ssh 照拒），read 工具也不问；删掉覆盖 → 又拒', async (ctx) => {
+describe('E2E-9 「允许并记住」两面生效', () => {
+  it('E2E-9 read 工具上记住 ~/.aws/credentials → 下一条受限命令读得到、read 不再问；write 工具上记住一处写 → 受限命令写得进；撤掉读授权 → 又读不到', async (ctx) => {
     if (!(await sandboxAvailable(app.main))) ctx.skip()
     await events.clear()
-    const sid = sids.override
+    const sid = sids.grants
     const aws = join(app.home, '.aws', 'credentials')
-    const key = join(app.home, '.ssh', 'id_e2e')
+    const out = join(app.home, 'granted-out', 'w.txt')
     mkdirSync(dirname(aws), { recursive: true })
     writeFileSync(aws, 'AWS-E2E\n')
-    mkdirSync(dirname(key), { recursive: true })
-    writeFileSync(key, 'KEY-E2E\n')
+    mkdirSync(dirname(out), { recursive: true })
 
-    // ① 出厂清单：~/.aws 读不到
-    await sendTurn('S-override', bashCall('call_aws_1', 'cat "$HOME/.aws/credentials"'), 'aws 1')
+    // ① 没有授权：受限命令读不到
+    await sendTurn('S-grants', bashCall('call_aws_1', 'cat "$HOME/.aws/credentials"'), 'aws 1')
     await events.waitFor('agent_end', { sessionId: sid })
     await chat.waitIdle()
     const before = String((await toolEnd(sid, 'call_aws_1')).result)
     expect(before).toContain('[Exit code: 1]')
     expect(before).toContain(`cannot read: ${aws}`)
 
-    // ② 用户放一份覆盖副本：出厂 en 原样，只去掉 `'.aws', `
-    const builtin = readFileSync(join(BUILTIN_POLICIES_DIR, 'protect-credentials.md'), 'utf8')
-    const override = builtin.replace("'.aws', ", '')
-    expect(override).not.toBe(builtin)
-    mkdirSync(dirname(credentialOverridePath()), { recursive: true })
-    writeFileSync(credentialOverridePath(), override)
+    // ② read 工具读它 → 问 → 允许并记住：会话里多一条 Read(…)
+    await events.clear()
+    await sendTurn('S-grants', readCall('call_read_aws', aws), 'read aws')
+    const readAsk = await events.waitFor<InputRequestEvent>('input_request', { sessionId: sid })
+    await answer(sid, readAsk.request.id, true, true)
+    await events.waitFor('agent_end', { sessionId: sid })
+    await chat.waitIdle()
+    expect(String((await toolEnd(sid, 'call_read_aws')).result)).toContain('AWS-E2E')
+    expect(await allowList(sid)).toContain(`Read(${aws})`)
 
+    // ③ write 工具写会话目录以外 → 问 → 允许并记住：多一条 Write(…)
+    await events.clear()
+    await sendTurn('S-grants', writeCall('call_write_out', out, 'W1\n'), 'write out')
+    const writeAsk = await events.waitFor<InputRequestEvent>('input_request', { sessionId: sid })
+    await answer(sid, writeAsk.request.id, true, true)
+    await events.waitFor('agent_end', { sessionId: sid })
+    await chat.waitIdle()
+    expect(readFileSync(out, 'utf8')).toBe('W1\n')
+    expect(await allowList(sid)).toContain(`Write(${out})`)
+
+    // ④ 同一会话：受限命令读得到、写得进；read 工具不再问
+    await events.clear()
     await sendSteps(
-      'S-override',
+      'S-grants',
       [
         bashCall('call_aws_2', 'cat "$HOME/.aws/credentials"'),
-        bashCall('call_key_2', 'cat "$HOME/.ssh/id_e2e"'),
-        readCall('call_read_aws', aws)
+        bashCall('call_append', `echo W2 >> ${out}`),
+        readCall('call_read_aws_2', aws)
       ],
       'aws 2'
     )
@@ -667,15 +758,19 @@ describe('E2E-9 凭据清单来自生效的 protect-credentials', () => {
     const after = String((await toolEnd(sid, 'call_aws_2')).result)
     expect(after).toContain('AWS-E2E')
     expect(after).not.toContain('[sandbox]')
-    const keyOut = String((await toolEnd(sid, 'call_key_2')).result)
-    expect(keyOut).toContain(`cannot read: ${key}`)
-    const readAws = await toolEnd(sid, 'call_read_aws')
-    expect(readAws.isError).toBeFalsy()
-    expect(String(readAws.result)).toContain('AWS-E2E')
+    const append = await toolEnd(sid, 'call_append')
+    expect(String(append.result)).not.toContain('[Exit code:')
+    expect(append.details?.sandbox).toBe('confined')
+    expect(readFileSync(out, 'utf8')).toBe('W1\nW2\n')
+    expect(String((await toolEnd(sid, 'call_read_aws_2')).result)).toContain('AWS-E2E')
 
-    // ③ 删掉覆盖：同一会话，下一条命令又读不到
-    rmSync(credentialOverridePath(), { force: true })
-    await sendTurn('S-override', bashCall('call_aws_3', 'cat "$HOME/.aws/credentials"'), 'aws 3')
+    // ⑤ 在会话配置里撤掉读授权：同一会话，下一条命令又读不到（授权按命令现读）
+    await app.main.eval(
+      `window.api.session.removeAllowListEntry(${JSON.stringify({ id: sid, entry: `Read(${aws})` })})`
+    )
+    expect(await allowList(sid)).not.toContain(`Read(${aws})`)
+    await events.clear()
+    await sendTurn('S-grants', bashCall('call_aws_3', 'cat "$HOME/.aws/credentials"'), 'aws 3')
     await events.waitFor('agent_end', { sessionId: sid })
     await chat.waitIdle()
     const reverted = String((await toolEnd(sid, 'call_aws_3')).result)
@@ -685,7 +780,7 @@ describe('E2E-9 凭据清单来自生效的 protect-credentials', () => {
   })
 })
 
-describe('E2E-10 写的范围两面一致：项目根里别家工具的配置不再受保护', () => {
+describe('E2E-10 写的范围两面一致：项目根里别家工具的配置不受保护', () => {
   it('E2E-10 write 工具写 .vscode/settings.json 不问；受限命令写 .envrc / .claude/settings.json / .mcp.json 退出 0、不问', async (ctx) => {
     if (!(await sandboxAvailable(app.main))) ctx.skip()
     await events.clear()

@@ -57,13 +57,21 @@ const POLICIES_PROJECT = REGISTRY_NOTE_PROJECT_IDS.policy
 /** 内置策略（随包发布的 md）的只读载体 —— 与用户策略分属两个项目 */
 const BUILTIN_PROJECT = REGISTRY_NOTE_PROJECT_IDS.policyBuiltin
 /**
- * PS-B1/B2 点开的内置策略：整份 spec 里没人覆盖它（session-grants 归 PS-C3~C5、ask-on-command
- * 归 PS-G1，ask-on-write 归非法文件那几条）。出厂只剩四份（2026-10-01），三个样本各占一份
+ * PS-B1/B2 点开的内置策略：整份 spec 里没人覆盖它（ask-on-command 归 PS-C3~C5 与 PS-G1）。
+ * 出厂只剩两份（2026-10-01 第二轮），样本只好两两共用一份 —— 共用的几组互不相干，见下
  */
-const BUILTIN_SAMPLE = 'protect-credentials'
+const BUILTIN_SAMPLE = 'ask-on-external-path'
+/**
+ * PS-D1 / PS-C6 那份同名的坏文件挂在哪条内置策略上：与 BUILTIN_SAMPLE 共用 —— 坏文件不遮蔽内置，
+ * 那正是 PS-D1 要断的；B 组在它之前跑完，C6 收尾时删掉
+ */
+const INVALID_SAMPLE = 'ask-on-external-path'
 /** PS-C3~C5 覆盖 → 删除的那条内置策略 */
-const OVERRIDE_SAMPLE = 'session-grants'
-/** PS-G1 切语言的那条内置策略（此前从未被点开，en/zh 两条会话才能都是第一手） */
+const OVERRIDE_SAMPLE = 'ask-on-command'
+/**
+ * PS-G1 切语言的那条内置策略：它的**内置**只读笔记此前从未被点开（PS-C3~C5 只走菜单与用户副本的
+ * 笔记，那是另一个载体项目），en/zh 两条会话才能都是第一手
+ */
 const LANG_SAMPLE = 'ask-on-command'
 
 /** policy.list 一行的窄投影（本 spec 用到的字段） */
@@ -458,16 +466,16 @@ describe('侧栏安全策略分组', () => {
   })
 
   it('PS-D1 非法同名不遮蔽内置：name 是内置名但解析不过 → 琥珀行；内置行无划线无徽标，IPC list 仍只有内置且无 overridden（写坏一份 md 不能关掉内置防护）', async () => {
-    writePolicy('ask-on-write.md', invalidPolicy('ask-on-write'))
+    writePolicy(`${INVALID_SAMPLE}.md`, invalidPolicy(INVALID_SAMPLE))
     await pane.refresh()
 
     await until(
-      async () => (await pane.invalidRows()).some((r) => r.fileName === 'ask-on-write.md'),
-      'broken ask-on-write.md listed as invalid'
+      async () => (await pane.invalidRows()).some((r) => r.fileName === `${INVALID_SAMPLE}.md`),
+      `broken ${INVALID_SAMPLE}.md listed as invalid`
     )
-    const row = (await pane.builtinRows()).find((r) => r.name === 'ask-on-write')!
+    const row = (await pane.builtinRows()).find((r) => r.name === INVALID_SAMPLE)!
     expect([row.struck, row.badge, row.locked]).toEqual([false, false, true])
-    const named = (await listPolicies()).filter((p) => p.name === 'ask-on-write')
+    const named = (await listPolicies()).filter((p) => p.name === INVALID_SAMPLE)
     expect(named).toHaveLength(1)
     expect(named[0].source).toBe('builtin')
     expect(named[0].overridden).toBeFalsy()
@@ -541,16 +549,19 @@ describe('侧栏安全策略分组', () => {
     expect(named[0].overridden).toBeFalsy()
 
     // ② 非法文件（PS-D1 种下的那份同名内置的坏文件）—— 删掉后内置照常生效
-    await pane.pickInvalidRowMenu('ask-on-write.md', 'delete-policy-file')
+    await pane.pickInvalidRowMenu(`${INVALID_SAMPLE}.md`, 'delete-policy-file')
     await confirm.waitOpen()
-    expect((await confirm.snapshot()).description).toContain('ask-on-write.md')
+    expect((await confirm.snapshot()).description).toContain(`${INVALID_SAMPLE}.md`)
     await confirm.confirm()
-    await until(() => !existsSync(policyPath('ask-on-write.md')), 'ask-on-write.md deleted')
     await until(
-      async () => !(await pane.invalidRows()).some((r) => r.fileName === 'ask-on-write.md'),
+      () => !existsSync(policyPath(`${INVALID_SAMPLE}.md`)),
+      `${INVALID_SAMPLE}.md deleted`
+    )
+    await until(
+      async () => !(await pane.invalidRows()).some((r) => r.fileName === `${INVALID_SAMPLE}.md`),
       'invalid row gone'
     )
-    const row = (await pane.builtinRows()).find((r) => r.name === 'ask-on-write')!
+    const row = (await pane.builtinRows()).find((r) => r.name === INVALID_SAMPLE)!
     expect([row.struck, row.badge, row.locked]).toEqual([false, false, true])
   })
 

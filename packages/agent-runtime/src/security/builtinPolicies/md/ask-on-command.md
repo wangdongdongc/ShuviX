@@ -16,14 +16,17 @@ shuvix-policy-rules:
 
 **What it does**: a command that would run with your full privileges has to
 ask you first. On macOS, with the sandbox on (Settings → LLM tools → bash),
-ordinary commands are confined — they can change files only where
-ask-on-write would not ask anyway (the project, temporary folders, tool
-caches), cannot touch what protect-credentials lists, and cannot step
-outside the sandbox — so they run without asking. What still asks:
+a command runs confined by default — it can read and write only this
+session's own directories (the working directory, its temporary folder,
+artifacts and tool results, plus the paths you allowed and remembered), read
+system locations outside your home folder, and use the network — so it runs
+without asking. What asks:
 
-- a command the agent explicitly asked to run with full access, because it
-  cannot work confined (opening apps, `osascript`, docker, `sudo`, creating a
-  git repository, pushing to a private remote …);
+- a command the agent ran outside the sandbox (`dangerouslyDisableSandbox`).
+  The sandbox is meant only for simple work inside the project; git,
+  installing dependencies, builds and tools that read their config or caches
+  in your home folder, docker, `open`, `sudo` … are expected to run outside
+  it and come here;
 - every command when the sandbox is off or not available on this computer
   (Windows and Linux today, or ShuviX itself running inside another sandbox);
 - every ssh command — it runs on the remote machine, which no local sandbox
@@ -32,31 +35,19 @@ outside the sandbox — so they run without asking. What still asks:
 The ask is decided by the `sandboxed` attribute the host reports for this
 run, never by what the command text looks like.
 
-**What keeps a confined command confined** — the sandbox's own fence. Without
-it one command could set up something that runs later outside the sandbox,
-and every other check here would be moot:
-
-- it cannot write git's own metadata (`.git/hooks`, `.git/config` …) — git,
-  and every editor that runs `git status` in the background, would execute it;
-- it cannot write ShuviX's own files (`~/.shuvix` apart from knowledge bases,
-  widgets and artifacts, and ShuviX's application data) — they hold these
-  policies, the sandbox switch and the launcher Chrome runs for the extension;
-- it can connect only to ShuviX's own command-line socket and DNS, not to
-  other local services (Docker, ssh-agent …);
-- it cannot open apps, run AppleScript or schedule jobs (`open`,
-  `osascript`, `launchctl`), and can signal only processes it started;
-- a working directory or write grant that covers your home folder is not
-  sandboxed at all — every command there asks.
-
-Everything else is open on purpose: a confined command can read any file
-outside the credential list and use the network.
+**What keeps a confined command confined**, besides the file boundary: it
+cannot open apps, send Apple Events or schedule jobs (`open`, `osascript`,
+`launchctl`), can signal only processes it started, and can connect only to
+ShuviX's own command-line socket and DNS, not to other local services
+(Docker, ssh-agent …). Without these one command could start something
+outside the sandbox and the file boundary would be moot.
 
 **What it does not do**:
 
 - The ask is the gate: once you allow an unconfined command, it runs with
   your full system privileges.
-- A confined command can still change anything inside the project — deleting
-  the project is inside the sandbox.
+- A confined command can still change anything in the working directory,
+  including git's own files there.
 - It does not always reach you: with the automatic review on, a reviewing
   agent answers first — it lets ordinary work through, refuses what is
   clearly harmful and puts the rest in front of you with its opinion.

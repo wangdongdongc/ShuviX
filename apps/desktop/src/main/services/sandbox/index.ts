@@ -2,7 +2,9 @@
  * 命令沙箱 —— 管理器（对外唯一入口）。
  *
  * 平台相关的一切都在本目录：选哪个后端、探测、每会话的临时目录、给 bash 的执行计划、给安全策略的
- * 变量。agent 运行时只知道一件事：命令客体上的 `sandboxed`（这次执行有没有真套上）。
+ * 会话目录清单。agent 运行时只知道一件事：命令客体上的 `sandboxed`（这次执行有没有真套上）。
+ *
+ * 沙箱只把命令的文件访问收进本会话的目录（见 types.ts）；稍复杂的命令直接到沙箱外执行，交给自动审查。
  * 新增一个平台 = 在 backends/ 下实现 SandboxBackend，再在 {@link BACKENDS} 里注册一行。
  *
  * 「未圈住」一律退回今天的「命令逐条询问」，绝不变成「不套沙箱又不问」：没有后端、开关关闭、
@@ -17,28 +19,20 @@ import { homedir } from 'os'
 import { basename, dirname, join, resolve } from 'path'
 import { app } from 'electron'
 import { createLogger } from '../../logger'
-import { isSafeSessionId } from '../../utils/paths'
+import { getShuvixCliEnv, getToolResultsBase, isSafeSessionId } from '../../utils/paths'
 import type { ShellInvocation } from '../../utils/toolUtils/shell'
 import { createSeatbeltBackend } from './backends/seatbelt'
 import { explainSandboxDenial } from './classify'
-import {
-  buildSandboxSpec,
-  protectedWritePatterns,
-  sessionTmpName,
-  toPolicyView,
-  type SpecResult
-} from './spec'
-import {
-  INACTIVE_VIEW,
-  type ProbeResult,
-  type SandboxBackend,
-  type SandboxHostPaths,
-  type SandboxPlan,
-  type SessionSandboxView
+import { buildSandboxSpec, sessionDirsFor, sessionTmpName, type SpecResult } from './spec'
+import type {
+  ProbeResult,
+  SandboxBackend,
+  SandboxHostPaths,
+  SandboxPlan,
+  SessionDirExtras
 } from './types'
 
-export type { SandboxPlan, SessionSandboxView } from './types'
-export { INACTIVE_VIEW } from './types'
+export type { SandboxPlan, SessionDirExtras } from './types'
 
 const log = createLogger('Sandbox')
 
@@ -81,36 +75,6 @@ function isEnabledSetting(): boolean {
   }
 }
 
-/**
- * 凭据清单的口子：沙箱不自己定哪些是凭据，读生效的 protect-credentials 策略的 `credentialDirs`
- * （策略模块在很多导入链上，由 main 启动时注入，见 toolContext.sessionCredentialPaths）。
- * 没注入 = 没有凭据清单：命令照样受限，只是不再拒读拒写这几个位置 —— 记一次警告，因为那一定是接线漏了。
- */
-let readCredentialPaths: ((sessionId: string, workingDirectory: string) => string[]) | null = null
-let warnedNoCredentialReader = false
-
-export function setSandboxCredentialReader(
-  reader: ((sessionId: string, workingDirectory: string) => string[]) | null
-): void {
-  readCredentialPaths = reader
-}
-
-function credentialPathsFor(sessionId: string, workingDirectory: string): string[] {
-  if (!readCredentialPaths) {
-    if (!warnedNoCredentialReader) {
-      warnedNoCredentialReader = true
-      log.warn('no credential reader injected; the sandbox protects no credential paths')
-    }
-    return []
-  }
-  try {
-    return readCredentialPaths(sessionId, workingDirectory)
-  } catch (err) {
-    log.warn(`credential paths unavailable: ${(err as Error).message}`)
-    return []
-  }
-}
-
 // ─── 路径 ─────────────────────────────────────────────
 
 /** realpath；不存在的部分按最近的已存在祖先拼回（授权根、缓存目录常常还不存在） */
@@ -145,6 +109,31 @@ function tmpRootPath(): string {
   return `/private/tmp/shuvix-${currentUid()}`
 }
 
+/** 可执行文件所在的应用包（`…/X.app`）；不在应用包里就取它的目录 —— Electron 要读包里的 Frameworks */
+function appBundleOf(executable: string): string {
+  const at = executable.indexOf('.app/')
+  return at >= 0 ? executable.slice(0, at + '.app'.length) : dirname(executable)
+}
+
+/**
+ * ShuviX 自己的程序：沙箱里的 `shuvix` 命令要读到包装脚本、CLI 入口与 Electron 二进制。
+ * 打包后都在应用包里（家目录以外，本来就可读）；开发态在仓库与 node_modules 里，常在家目录内。
+ */
+function shuvixAppPaths(): string[] {
+  try {
+    const cli = getShuvixCliEnv()
+    return [
+      ...new Set([
+        appBundleOf(cli.SHUVIX_ELECTRON),
+        dirname(cli.SHUVIX_CLI_JS),
+        dirname(cli.SHUVIX_CLI)
+      ])
+    ]
+  } catch {
+    return []
+  }
+}
+
 function hostPaths(): SandboxHostPaths {
   const home = homedir()
   const uid = currentUid()
@@ -152,14 +141,17 @@ function hostPaths(): SandboxHostPaths {
     home,
     userData: app.getPath('userData'),
     shuvixHome: join(home, '.shuvix'),
+    toolResultsBase: getToolResultsBase(),
     uid,
-    // 与 cliServer 的 socketPath 同一个位置（POSIX）；沙箱里 shuvix CLI 要连它
+    // 与 cliServer 的 socketPath / tokenPath 同一个位置（POSIX）；沙箱里 shuvix CLI 要连它、读它。
+    // token 因此对受限命令可读 —— 已知的遗留：CLI 必须能用
     cliSocket: join(home, '.shuvix', 'cli.sock'),
+    cliToken: join(home, '.shuvix', 'cli-token'),
+    appPaths: shuvixAppPaths(),
     tmpRoot: tmpRootPath()
   }
 }
 
-/** 本机 cli-token 的位置（策略变量用：沙箱放它可读，read 工具不该把它读进上下文） */
 // ─── 状态 ─────────────────────────────────────────────
 
 export interface SandboxStatus {
@@ -251,72 +243,34 @@ export function unpinSession(sessionId: string): void {
 function specFor(
   sessionId: string,
   workingDirectory: string,
-  grantedWrite: readonly string[]
+  grants: { grantedRead: readonly string[]; grantedWrite: readonly string[] },
+  extras: SessionDirExtras | undefined
 ): SpecResult {
-  return buildSandboxSpec(
-    hostPaths(),
-    {
-      sessionId,
-      workingDirectory,
-      grantedWrite,
-      credentialPaths: credentialPathsFor(sessionId, workingDirectory)
-    },
-    real
-  )
+  return buildSandboxSpec(hostPaths(), { sessionId, workingDirectory, extras, ...grants }, real)
+}
+
+export interface SessionDirsView {
+  sessionDirs: string[]
+  sessionReadDirs: string[]
 }
 
 /**
- * 策略变量（desktop getVars 展开进 `vars.*`）。只有被固定为启用、且工作区适合套沙箱的会话
- * 才是「启用」—— 与 planFor 同一套判定，所以文件工具的免询问范围就是命令实际能碰的范围。
- * 授权根不进这里：会话授权由 session-grants 策略直接放行，不需要沙箱的免询问来叠加。
+ * 本会话的会话目录（desktop getVars 交给策略的 `vars.sessionDirs` / `vars.sessionReadDirs`）——
+ * 沙箱用的同一份清单，**不看沙箱开没开**：没有沙箱的平台（Windows / Linux）上，文件工具一样只在
+ * 会话目录以外询问。工作目录不适合当会话目录（`/`、覆盖家目录、ShuviX 自己的配置或应用数据）时
+ * 不在清单里。算不出来（坏会话 id、路径解析失败）就给空清单 —— 多问，绝不因此放行。
  */
-export function sessionView(sessionId: string, workingDirectory: string): SessionSandboxView {
-  if (!pins.get(sessionId)) return INACTIVE_VIEW
-  const built = specFor(sessionId, workingDirectory, [])
-  if (!built.ok) return INACTIVE_VIEW
-  return toPolicyView(built.spec)
-}
-
-/**
- * 文件工具在工作区里写入免询问的范围（ask-on-write 读 `vars.workspace*`）—— **不看沙箱开没开**。
- *
- * 沙箱没套上时（设置关着、探测没过、Linux），命令照样逐条交给审查；但文件工具知道确切的路径，而在
- * 工作区里改文件是编码工作的主体，每一次都审一遍不值。受保护的位置（git 自己会执行的元数据、`.git`
- * 本身、凭据位置）照旧询问 —— 与沙箱视图同一组。
- *
- * 判定用的是沙箱的同一份规格：工作区是 `/`、覆盖家目录、是凭据位置、是 ShuviX 自己的配置或应用数据时，
- * 一样不给免询问（与「不套沙箱」同一批理由）。**Windows 不给**：受保护模式是按 `/` 写的
- * 正则，在 `\` 路径上会静默不匹配 —— 宁可每次写入都交给审查，也不能悄悄放过 `.git\hooks`。
- */
-export interface WorkspaceWriteView {
-  workspaceWritable: string[]
-  workspaceWriteDenied: string[]
-  workspaceProtectedPatterns: string[]
-}
-
-const NO_WORKSPACE_WRITES: WorkspaceWriteView = Object.freeze({
-  workspaceWritable: [],
-  workspaceWriteDenied: [],
-  workspaceProtectedPatterns: []
-}) as WorkspaceWriteView
-
-export function workspaceWriteView(
+export function sessionDirsView(
   sessionId: string,
-  workingDirectory: string
-): WorkspaceWriteView {
-  if (process.platform === 'win32') return NO_WORKSPACE_WRITES
+  workingDirectory: string,
+  extras?: SessionDirExtras
+): SessionDirsView {
   try {
-    const built = specFor(sessionId, workingDirectory, [])
-    if (!built.ok) return NO_WORKSPACE_WRITES
-    return {
-      workspaceWritable: [built.spec.workingDirectory],
-      workspaceWriteDenied: built.spec.writeDeniedFinal,
-      workspaceProtectedPatterns: protectedWritePatterns(built.spec)
-    }
+    const dirs = sessionDirsFor(hostPaths(), { sessionId, workingDirectory, extras }, real)
+    return { sessionDirs: dirs?.dirs ?? [], sessionReadDirs: dirs?.readDirs ?? [] }
   } catch (err) {
-    // 算不出规格（路径解析失败之类）就不给免询问 —— 照旧问，绝不因此放行
-    log.warn(`workspace write view unavailable: ${(err as Error).message}`)
-    return NO_WORKSPACE_WRITES
+    log.warn(`session dirs unavailable: ${(err as Error).message}`)
+    return { sessionDirs: [], sessionReadDirs: [] }
   }
 }
 
@@ -341,8 +295,11 @@ function ensureTmpDir(tmpRoot: string, dir: string, uid: number): boolean {
 export interface PlanRequest {
   sessionId: string
   workingDirectory: string
-  /** 会话「允许并记住」的写授权路径（调用方从会话设置里解析好交进来） */
+  /** 会话「允许并记住」的读 / 写授权路径（调用方从会话设置里解析好交进来） */
+  grantedRead: readonly string[]
   grantedWrite: readonly string[]
+  /** 会话设置决定的会话目录（知识库、技能目录 —— 与策略那一面同一个来源，见 toolContext） */
+  extras?: SessionDirExtras
   /** 本工具实例带不带 `dangerouslyDisableSandbox` —— 决定拒绝说明里能不能教模型用它 */
   offerEscalation: boolean
 }
@@ -359,7 +316,7 @@ export function planFor(request: PlanRequest): SandboxPlan | null {
   const { sessionId, workingDirectory, offerEscalation } = request
   const b = getBackend()
   if (!b || !probe().available) return null
-  const built = specFor(sessionId, workingDirectory, request.grantedWrite)
+  const built = specFor(sessionId, workingDirectory, request, request.extras)
   if (!built.ok) {
     log.info(`session ${sessionId} runs unconfined: ${built.reason}`)
     return null

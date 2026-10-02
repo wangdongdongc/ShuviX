@@ -78,15 +78,15 @@ function makeProvider(
       botsDir: '/home/u/.shuvix/bots',
       builtinKnowledgeDir: '/opt/shuvix/Resources/knowledge',
       sessionArtifactsDir: '/home/u/.shuvix/artifacts/sess-1',
-      // 沙箱未套上时宿主给的那一组（桌面 getVars 展开 sandbox.sessionView 的 INACTIVE_VIEW）
-      sandboxActive: false,
-      sandboxWritableRoots: [],
-      sandboxWriteDenied: [],
-      sandboxProtectedPatterns: [],
-      // 与沙箱无关的工作区写入视图：这里给「不豁免」的一组
-      workspaceWritable: [],
-      workspaceWriteDenied: [],
-      workspaceProtectedPatterns: [],
+      // 会话目录（外部目录门读）：工作目录、本会话临时目录、artifacts、工具结果 —— 这里自由读写，
+      // 家目录 /home/u 里别处的读、会话目录外的写都问；只读的一份是技能目录
+      sessionDirs: [
+        '/ws',
+        '/private/tmp/shuvix-501/ctx',
+        '/home/u/.shuvix/artifacts/sess-1',
+        '/tool-results/sess-1'
+      ],
+      sessionReadDirs: ['/skills'],
       // 宿主照旧供给的事实变量：出厂已没有策略读它们（protect-shuvix-config / protect-bot-files
       // 已退役为测试夹具，见 fixtures/retiredPolicies.ts），装上夹具的用例靠它们
       shuvixConfigDirs: [
@@ -106,26 +106,53 @@ function makeProvider(
 afterEach(() => clearSessionDecisions(SID))
 
 describe('createSecurityContext', () => {
-  it('CT-1 evaluateReadOnly 缺省排除 force-allow；{includeForceAllow:true} 翻转；返回 boolean', () => {
+  it('CT-1 evaluateReadOnly 缺省排除 force-allow；{includeForceAllow:true} 翻转；返回 boolean —— 出厂「允许并记住」是询问门 match 里的豁免、不在 force-allow 层，被动 UI 缺省也认它', () => {
+    // 退役的 session-grants 夹具（按用户策略装上）把「允许并记住」放回 force-allow 层：
+    // 一道不认授权的用户询问门 + 夹具的 force-allow → 缺省不纳入 → 不放行
     const ctx = createSecurityContext(
+      SUBJECT,
+      ENVIRONMENT,
+      makeProvider(
+        { allowList: ['Read(/data)'] },
+        {
+          getUserPolicies: () => [
+            userPolicy('ask-data', [
+              { effect: 'ask', match: "object.type == 'path' && inDir(object.path, '/data')" }
+            ]),
+            retiredPolicy('session-grants')
+          ]
+        }
+      )
+    )
+    const data: SecurityObject = { type: 'path', path: '/data/x.txt' }
+    expect(ctx.evaluate('read', data)).toMatchObject({
+      effect: 'allow',
+      winning: 'session-grants#0'
+    })
+    expect(ctx.evaluateReadOnly('read', data)).toBe(false)
+    expect(ctx.evaluateReadOnly('read', data, { includeForceAllow: true })).toBe(true)
+    expect(typeof ctx.evaluateReadOnly('read', data)).toBe('boolean')
+
+    // 出厂：家目录里的读有外部目录门；「允许并记住」过的 ~/.ssh 是门 match 里的豁免 —— 门根本没命中，
+    // 所以缺省（不纳入 force-allow）也放行
+    const credential: SecurityObject = { type: 'path', path: '/home/u/.ssh/id_rsa' }
+    const bare = createSecurityContext(SUBJECT, ENVIRONMENT, makeProvider({ allowList: [] }))
+    expect(bare.evaluateReadOnly('read', credential)).toBe(false)
+    const remembered = createSecurityContext(
       SUBJECT,
       ENVIRONMENT,
       makeProvider({ allowList: ['Read(/home/u/.ssh)'] })
     )
-    // 凭据目录读取有内置 ask 门（protect-credentials），「允许并记住」过的 ~/.ssh 由
-    // session-grants 的 force-allow 放行：force-allow 缺省不纳入 → 不放行
-    const credential: SecurityObject = { type: 'path', path: '/home/u/.ssh/id_rsa' }
-    expect(ctx.evaluateReadOnly('read', credential)).toBe(false)
-    expect(ctx.evaluateReadOnly('read', credential, { includeForceAllow: true })).toBe(true)
-    expect(typeof ctx.evaluateReadOnly('read', credential)).toBe('boolean')
+    expect(remembered.evaluateReadOnly('read', credential)).toBe(true)
 
-    // 读取只有凭据位置有门：工作区内外都放行
-    expect(ctx.evaluateReadOnly('read', { type: 'path', path: '/ws/f.txt' })).toBe(true)
-    expect(ctx.evaluateReadOnly('read', { type: 'path', path: '/outside/f.txt' })).toBe(true)
+    // 家目录外与会话目录里的读都放行
+    expect(bare.evaluateReadOnly('read', { type: 'path', path: '/ws/f.txt' })).toBe(true)
+    expect(bare.evaluateReadOnly('read', { type: 'path', path: '/outside/f.txt' })).toBe(true)
   })
 
   it('CT-2 enforcePath 以 mode 为 action、displayPath 进入展示；enforceCommand/enforceGitOp action=execute', async () => {
-    // 询问一律允许：工作区写（这组 vars 不豁免）与没圈住的命令都会问，问完照样各落一条日志
+    // 询问一律允许：没圈住的命令会问；工作区（会话目录）里的读写与 git（出厂没有 git 策略）放行 ——
+    // 问没问都各落一条日志
     const ctx = createSecurityContext(
       SUBJECT,
       ENVIRONMENT,
@@ -170,21 +197,26 @@ describe('createSecurityContext', () => {
     const grants = { allowList: [] as string[] }
     const ctx = createSecurityContext(SUBJECT, ENVIRONMENT, makeProvider(grants))
 
-    // allowList 落库（「允许并记住」）立即可见 —— 用带内置 ask 门的凭据读验证
+    // allowList 落库（「允许并记住」）立即可见 —— 用外部目录门的家目录读验证
     const credential: SecurityObject = { type: 'path', path: '/home/u/.ssh/config' }
     expect(ctx.evaluate('read', credential).effect).toBe('ask')
     grants.allowList.push('Read(/home/u/.ssh/config)')
-    const read = ctx.evaluate('read', credential)
-    expect(read.effect).toBe('allow')
-    expect(read.winning).toBe('session-grants#0')
+    // 授权是门 match 里的豁免：放行时门根本没命中
+    expect(ctx.evaluate('read', credential)).toMatchObject({
+      effect: 'allow',
+      winning: 'default:path',
+      matched: []
+    })
 
-    // 写授权同理（ask-on-write：区外写 ask → 记住后同一实例立即 allow）
+    // 写授权同理（会话目录外的写 ask → 记住后同一实例立即 allow）
     const outside: SecurityObject = { type: 'path', path: '/outside/f.txt' }
     expect(ctx.evaluate('write', outside).effect).toBe('ask')
     grants.allowList.push('Write(/outside)')
-    const write = ctx.evaluate('write', outside)
-    expect(write.effect).toBe('allow')
-    expect(write.winning).toBe('session-grants#1')
+    expect(ctx.evaluate('write', outside)).toMatchObject({
+      effect: 'allow',
+      winning: 'default:path',
+      matched: []
+    })
 
     // 条目被撤掉（会话配置面板里逐条移除）：同一实例下一次评估就回到询问
     grants.allowList.length = 0
@@ -428,7 +460,7 @@ describe('createSecurityContext — enforceInvocation（L1 全工具门）', () 
   })
 
   it('CT-T7 enforcePath 也带 tool 维度：deny × path × tool.name==write 只拦 write 工具', async () => {
-    // 用户同名覆盖内置 ask-on-write（避免 ask 门弹窗干扰），换成按工具过滤的 deny
+    // 用户同名覆盖内置 ask-on-external-path（避免 ask 门弹窗干扰），换成按工具过滤的 deny
     const ctx = createSecurityContext(
       SUBJECT,
       ENVIRONMENT,
@@ -436,7 +468,7 @@ describe('createSecurityContext — enforceInvocation（L1 全工具门）', () 
         { allowList: [] },
         {
           getUserPolicies: () => [
-            userPolicy('ask-on-write', [
+            userPolicy('ask-on-external-path', [
               {
                 effect: 'deny',
                 match: "action == 'write' && object.type == 'path' && tool.name == 'write'"
@@ -448,10 +480,10 @@ describe('createSecurityContext — enforceInvocation（L1 全工具门）', () 
     )
 
     await expect(
-      ctx.enforcePath('write', '/ws/f.txt', { toolCallId: 'tc-w', toolName: 'write' })
+      ctx.enforcePath('write', '/outside/f.txt', { toolCallId: 'tc-w', toolName: 'write' })
     ).rejects.toThrow(/Denied by security policy rule/)
     await expect(
-      ctx.enforcePath('write', '/ws/f.txt', { toolCallId: 'tc-r', toolName: 'read' })
+      ctx.enforcePath('write', '/outside/f.txt', { toolCallId: 'tc-r', toolName: 'read' })
     ).resolves.toBeUndefined()
 
     // 日志新→旧：allow（read 工具经由）/ deny（write 工具经由），tool 字段正确
@@ -1367,7 +1399,7 @@ describe('createSecurityContext — 用户策略的 force-allow（端到端）',
       makeProvider(grants, { getUserPolicies: () => policies })
     )
 
-  it('CU-1 旗舰：用户 force-allow 局部放宽凭据读取门 —— ~/.aws 读放行归因用户规则，别的凭据读与 ~/.aws 写照旧', () => {
+  it('CU-1 旗舰：用户 force-allow 局部放宽外部目录的读取门 —— ~/.aws 读放行归因用户规则，别的家目录读与 ~/.aws 写照旧', () => {
     const ctx = contextWith([
       pathPolicy('trust-aws', [
         {
@@ -1378,24 +1410,23 @@ describe('createSecurityContext — 用户策略的 force-allow（端到端）',
       ])
     ])
 
-    // ~/.aws 读：force-allow 压过内置 protect-credentials 的读询问 → allow，归因到用户规则
+    // ~/.aws 读：force-allow 压过内置外部目录门的读询问 → allow，归因到用户规则
     const granted = ctx.evaluate('read', { type: 'path', path: '/home/u/.aws/config' })
     expect(granted.effect).toBe('allow')
     expect(granted.winning).toBe('trust-aws#0')
-    // 门没被拆掉，只是被压过 —— protect-credentials#0 仍在 matched 里（决策日志据此回链）
-    expect(granted.matched).toContain('protect-credentials#0')
+    // 门没被拆掉，只是被压过 —— ask-on-external-path#0 仍在 matched 里（决策日志据此回链）
+    expect(granted.matched).toContain('ask-on-external-path#0')
 
-    // 放宽是局部的：策略没提的凭据路径仍归内置读取门管
+    // 放宽是局部的：策略没提的家目录路径仍归内置读取门管
     const elsewhere = ctx.evaluate('read', { type: 'path', path: '/home/u/.ssh/config' })
     expect(elsewhere.effect).toBe('ask')
-    expect(elsewhere.winning).toBe('protect-credentials#0')
+    expect(elsewhere.winning).toBe('ask-on-external-path#0')
 
-    // 放宽是按 action 的：同一目录的写入不受这条 read force-allow 影响（凭据位置的写照
-    // 普通区外写问 —— protect-credentials 只管读）
+    // 放宽是按 action 的：同一目录的写入不受这条 read force-allow 影响，照外部目录门的写规则问
     const write = ctx.evaluate('write', { type: 'path', path: '/home/u/.aws/config' })
     expect(write.effect).toBe('ask')
-    expect(write.winning).toBe('ask-on-write#0')
-    expect(write.matched).toEqual(['ask-on-write#0'])
+    expect(write.winning).toBe('ask-on-external-path#1')
+    expect(write.matched).toEqual(['ask-on-external-path#1'])
   })
 
   it('CU-2 force-allow 压不过 deny：用户自己加回的「凭据目录拒写」照拒，另一份策略里的 force-allow 也救不回', () => {
@@ -1444,10 +1475,12 @@ describe('createSecurityContext — 用户策略的 force-allow（端到端）',
     )
   })
 
-  it('CU-F1 旗舰：用户 force-ask 让特定文件在 force-allow 放宽、「允许并记住」过时仍然询问，且不给「允许并记住」', () => {
-    // 需求原型：某些文件始终要过目一次，任何会话级同意都对它不生效
+  it('CU-F1 旗舰：用户 force-ask 让特定文件在 force-allow 放宽、「允许并记住」过（装着 force-allow 的 session-grants 夹具）时仍然询问，且不给「允许并记住」', () => {
+    // 需求原型：某些文件始终要过目一次，任何会话级同意都对它不生效。出厂的「允许并记住」只是外部
+    // 目录门里的豁免、压不过任何别的门；装上退役的 session-grants 夹具，把它放回 force-allow 层来较量
     const ctx = contextWith(
       [
+        retiredPolicy('session-grants'),
         pathPolicy('trust-data', [{ effect: 'force-allow', match: "inDir(object.path, '/data')" }]),
         pathPolicy('guard-prod', [
           { effect: 'force-ask', match: "inDir(object.path, '/data/prod')" },
@@ -1461,7 +1494,7 @@ describe('createSecurityContext — 用户策略的 force-allow（端到端）',
       { allowList: ['Read(/data/prod)'] }
     )
 
-    // 用户的 force-allow + 该路径还「允许并记住」过 —— 两条 force-allow 都命中，仍然 ask
+    // 用户的 force-allow + 该路径还「允许并记住」过（夹具的 force-allow）—— 两条都命中，仍然 ask
     const guarded = ctx.evaluate('read', { type: 'path', path: '/data/prod/secrets.env' })
     expect(guarded.effect).toBe('ask')
     expect(guarded.winning).toBe('guard-prod#0')
@@ -1500,35 +1533,40 @@ describe('createSecurityContext — 用户策略的 force-allow（端到端）',
     expect(ctx.evaluate('read', target).effect).toBe('allow')
   })
 
-  it('CU-6 同名覆盖 session-grants 只留读那条 → 已授权路径的写重新 ask；读照旧放行', () => {
-    const grants = { allowList: ['Write(/data)'] }
-    const readOnly = [
-      pathPolicy('session-grants', [
-        {
-          effect: 'force-allow',
-          conditions: { action: ['read'] },
-          match: 'inDir(object.path, vars.grantedRead) || inDir(object.path, vars.grantedWrite)'
-        }
-      ])
-    ]
+  it('CU-6 同名覆盖 ask-on-external-path、写规则删掉 vars.grantedWrite 那一截 → 已授权路径的写重新 ask（归因用户那份）；读照旧放行（写授权含读那一截没动）', () => {
+    const grants = { allowList: ['Write(/home/u/data)'] }
+    const target: SecurityObject = { type: 'path', path: '/home/u/data/x.txt' }
 
-    // 对照：内置在位时写授权生效
-    expect(
-      contextWith([], grants).evaluate('write', { type: 'path', path: '/data/x.txt' })
-    ).toMatchObject({ effect: 'allow', winning: 'session-grants#1' })
+    // 覆盖副本 = 出厂 en 文件原样，只把写规则 match 末尾的授权豁免删掉
+    const builtin = parsePolicyDefinitionFile(
+      INLINE_POLICY_MD('ask-on-external-path.md')!,
+      'ask-on-external-path'
+    )!
+    const writeMatch = builtin.rules[1].match!
+    const stripped = writeMatch.replace(/\s*&& !inDir\(object\.path, vars\.grantedWrite\)$/, '')
+    expect(stripped).not.toBe(writeMatch)
+    const noWriteGrants: ParsedPolicyFile = {
+      ...builtin,
+      rules: [builtin.rules[0], { ...builtin.rules[1], match: stripped }]
+    }
 
-    // 去掉写那条：条目还在会话里，但没有规则拿它放行写了 → 回到询问
-    const stripped = contextWith(readOnly, grants)
-    expect(stripped.evaluate('write', { type: 'path', path: '/data/x.txt' })).toMatchObject({
-      effect: 'ask',
-      winning: 'ask-on-write#0'
+    // 对照：内置在位时写授权生效（门 match 里的豁免）
+    expect(contextWith([], grants).evaluate('write', target)).toMatchObject({
+      effect: 'allow',
+      winning: 'default:path'
     })
 
-    // 留下的读规则照常（写授权含读）—— 凭据位置也一样能被它放宽
-    const credentialGrant = contextWith(readOnly, { allowList: ['Write(/home/u/.aws)'] })
-    expect(
-      credentialGrant.evaluate('read', { type: 'path', path: '/home/u/.aws/config' })
-    ).toMatchObject({ effect: 'allow', winning: 'session-grants#0' })
+    // 去掉写那一截：条目还在会话里，但没有规则拿它豁免写了 → 回到询问，归因用户那份
+    const ctx = contextWith([noWriteGrants], grants)
+    const write = ctx.evaluate('write', target)
+    expect(write).toMatchObject({ effect: 'ask', winning: 'ask-on-external-path#1' })
+    expect(write.prompt?.policies).toEqual([builtin.displayName])
+
+    // 读规则原样留着（写授权含读）
+    expect(ctx.evaluate('read', target)).toMatchObject({
+      effect: 'allow',
+      winning: 'default:path'
+    })
   })
 })
 
@@ -1548,7 +1586,8 @@ describe('createSecurityContext — 授权快照一次性（回归守护）', ()
       knowledgeSessionDirs: [],
       home: '/home/u',
       botsDir: '/home/u/.shuvix/bots',
-      systemDirs: [] as string[]
+      systemDirs: [] as string[],
+      sessionDirs: ['/ws']
     }))
 
     const ctx = createSecurityContext(SUBJECT, ENVIRONMENT, {
@@ -1559,9 +1598,9 @@ describe('createSecurityContext — 授权快照一次性（回归守护）', ()
       readBuiltinPolicyMd: INLINE_POLICY_MD
     })
 
-    // 第一次快照里有 Write(/outside) → 区外写被「允许并记住」放行
+    // 第一次快照里有 Write(/outside) → 会话目录外的写被「允许并记住」豁免
     const first = ctx.evaluate('write', { type: 'path', path: '/outside/f.txt' })
-    expect(first).toMatchObject({ effect: 'allow', winning: 'session-grants#1' })
+    expect(first).toMatchObject({ effect: 'allow', winning: 'default:path', matched: [] })
     // 丢掉 assembleRules 的第二参（各自 buildPolicyVars）时，这两个计数会变成 2
     expect(getSessionGrants).toHaveBeenCalledTimes(1)
     expect(getVars).toHaveBeenCalledTimes(1)
@@ -1601,7 +1640,7 @@ describe('createSecurityContext — fail-safe 无 logger', () => {
 })
 
 describe('createSecurityContext — 宿主没供给的目录变量', () => {
-  it('CT-W4 缺 botsDir 的桌面宿主经门面反复评估：只记一行「not provided」、零 fail-safe，普通写照常落回 ask-on-write', () => {
+  it('CT-W4 缺 botsDir 的桌面宿主经门面反复评估：只记一行「not provided」、零 fail-safe，会话目录外的普通写照常落回外部目录门', () => {
     // 用户装了一份只守一个目录的 force-ask（退役的 protect-bot-files 夹具）而宿主没给那个目录：
     // assemble 替它把 botsDir 绑成 null。不绑的话每次写都缺键报错、fail-safe 成命中：普通写全变成
     // 免不掉的 force-ask，logger 每次评估刷一行 fail-safe。
@@ -1621,12 +1660,12 @@ describe('createSecurityContext — 宿主没供给的目录变量', () => {
     )
 
     for (let i = 0; i < 3; i++) {
-      expect(ctx.evaluate('write', { type: 'path', path: '/ws/f.txt' })).toMatchObject({
+      expect(ctx.evaluate('write', { type: 'path', path: '/outside/f.txt' })).toMatchObject({
         effect: 'ask',
-        winning: 'ask-on-write#0'
+        winning: 'ask-on-external-path#1'
       })
     }
-    expect(ctx.evaluateReadOnly('write', { type: 'path', path: '/ws/f.txt' })).toBe(false)
+    expect(ctx.evaluateReadOnly('write', { type: 'path', path: '/outside/f.txt' })).toBe(false)
 
     const lines = warn.mock.calls.map((c) => String(c[0]))
     const notProvided = lines.filter((m) => m.includes('is not provided by the host'))
@@ -2888,7 +2927,7 @@ describe('createSecurityContext — 无返回值的门强制 onOther:throw', () 
 
   it('CT-O1 enforcePath：传了 onOther:return，反馈照样抛成「declined access」', async () => {
     const { ctx, requestUserInput } = feedbackContext()
-    // 工作区外的写 → 内置 ask-on-write 问
+    // 会话目录外的写 → 内置 ask-on-external-path 问
     expect(
       await rejectionOf(
         ctx.enforcePath('write', '/outside/f.txt', {
@@ -3015,9 +3054,9 @@ describe('createSecurityContext — 真实路径（provider.realPath）', () => 
       })
     )
 
-    // 按写法这是工作区里的一次普通读；按位置是私钥 —— 凭据门接手
+    // 按写法这是工作区里的一次普通读；按位置是家目录里的私钥 —— 外部目录门接手
     const decision = ctx.evaluate('read', { type: 'path', path: KEY_LINK })
-    expect(decision).toMatchObject({ effect: 'ask', winning: 'protect-credentials#0' })
+    expect(decision).toMatchObject({ effect: 'ask', winning: 'ask-on-external-path#0' })
     expect(decision.ask).toEqual({
       command: `Read(${KEY_REAL})`,
       rememberEntry: `Read(${KEY_REAL})`,
@@ -3070,7 +3109,7 @@ describe('createSecurityContext — 真实路径（provider.realPath）', () => 
     )
 
     const decision = ctx.evaluate('write', { type: 'path', path: '/outside/f.txt' })
-    expect(decision).toMatchObject({ effect: 'ask', winning: 'ask-on-write#0' })
+    expect(decision).toMatchObject({ effect: 'ask', winning: 'ask-on-external-path#1' })
     expect(decision.ask).toEqual({
       command: 'Write(/outside/f.txt)',
       rememberEntry: 'Write(/outside/f.txt)'
@@ -3138,7 +3177,7 @@ describe('createSecurityContext — 真实路径（provider.realPath）', () => 
     }
   })
 
-  it('CT-R4 evaluateReadOnly（被动 UI）同样按真实去处判：区内的链接指向凭据 → 不放行；凭据目录里的写法实际落在区内 → 放行', () => {
+  it('CT-R4 evaluateReadOnly（被动 UI）同样按真实去处判：区内的链接指向家目录里的私钥 → 不放行；家目录里的写法实际落在区内 → 放行', () => {
     const ALIAS = '/home/u/.ssh/alias'
     const table = { [KEY_LINK]: KEY_REAL, [ALIAS]: '/ws/f.txt' }
     const located = createSecurityContext(
@@ -3174,11 +3213,11 @@ describe('createSecurityContext — 真实路径（provider.realPath）', () => 
       })
     )
 
-    // 一次写评估里客体路径被 ask-on-write（四处）/ session-grants 的写规则 / 上面两条引用
-    // （protect-credentials 只管读，条件就把它挡在外面）
+    // 一次写评估里客体路径被外部目录门的写规则与上面两条引用（读规则的条件把它挡在外面）；
+    // 目录 /ws 既是会话目录的一项、又被上面两条各引用一次 —— /ws 是会话目录，胜出的是上面那条
     expect(ctx.evaluate('write', { type: 'path', path: '/ws/f.txt' })).toMatchObject({
       effect: 'ask',
-      winning: 'ask-on-write#0'
+      winning: 'twice#0'
     })
     const asked = realPath.mock.calls.map(([p]) => p)
     expect(asked).toHaveLength(new Set(asked).size)
@@ -3211,7 +3250,7 @@ describe('createSecurityContext — 真实路径（provider.realPath）', () => 
     table[KEY_LINK] = KEY_REAL
     expect(ctx.evaluate('read', { type: 'path', path: KEY_LINK })).toMatchObject({
       effect: 'ask',
-      winning: 'protect-credentials#0'
+      winning: 'ask-on-external-path#0'
     })
     expect(realPath.mock.calls.filter(([p]) => p === KEY_LINK)).toHaveLength(2)
   })
@@ -3237,35 +3276,34 @@ describe('createSecurityContext — 真实路径（provider.realPath）', () => 
     const realPathWarnings = (): string[] =>
       warn.mock.calls.map((c) => String(c[0])).filter((m) => m.includes('realPath'))
 
-    // 客体路径解析不了：按写法判（写 → ask-on-write），卡片上就是写法本身
-    const decision = contextFor(failing('/ws/broken')).evaluate('write', {
+    // 客体路径解析不了：按写法判（会话目录外的写 → 外部目录门），卡片上就是写法本身
+    const decision = contextFor(failing('/outside/broken')).evaluate('write', {
       type: 'path',
-      path: '/ws/broken'
+      path: '/outside/broken'
     })
-    expect(decision).toMatchObject({ effect: 'ask', winning: 'ask-on-write#0' })
+    expect(decision).toMatchObject({ effect: 'ask', winning: 'ask-on-external-path#1' })
     expect(decision.ask).toEqual({
-      command: 'Write(/ws/broken)',
-      rememberEntry: 'Write(/ws/broken)'
+      command: 'Write(/outside/broken)',
+      rememberEntry: 'Write(/outside/broken)'
     })
-    // 被好几条规则引用，告警也只有一行（记忆表记下了「按写法」这个结论）
+    // 被好几处引用，告警也只有一行（记忆表记下了「按写法」这个结论）
     expect(realPathWarnings()).toHaveLength(1)
-    expect(realPathWarnings()[0]).toContain('/ws/broken')
+    expect(realPathWarnings()[0]).toContain('/outside/broken')
     expect(realPathWarnings()[0]).toContain('EACCES: permission denied')
     // 抛错被门面接住了，没有变成谓词的 fail-safe
     expect(warn.mock.calls.filter((c) => String(c[0]).includes('match evaluation failed'))).toEqual(
       []
     )
 
-    // 目录（protect-credentials 的 credentialDirs 里的 ~/.ssh）解析不了：那个目录按写法比 ——
-    // 凭据读照旧问
+    // 目录（外部目录门的 vars.home）解析不了：那个目录按写法比 —— 家目录里的读照旧问
     warn.mockClear()
-    const dirFails = contextFor(failing('/home/u/.ssh'))
+    const dirFails = contextFor(failing('/home/u'))
     expect(dirFails.evaluate('read', { type: 'path', path: '/home/u/.ssh/id_rsa' })).toMatchObject({
       effect: 'ask',
-      winning: 'protect-credentials#0'
+      winning: 'ask-on-external-path#0'
     })
     expect(realPathWarnings()).toHaveLength(1)
-    expect(realPathWarnings()[0]).toContain('/home/u/.ssh')
+    expect(realPathWarnings()[0]).toContain('/home/u')
   })
 
   it("CT-R8 解析器给回空串（或非字符串）：当作解析不了、按写法比较 —— 不崩，也不因 '' 前缀命中一切而凭空多出 deny / ask", () => {
@@ -3295,10 +3333,10 @@ describe('createSecurityContext — 真实路径（provider.realPath）', () => 
     // 对照：真正的保护仍在（上面的「相同」不是「都放行」）
     expect(written.evaluate('read', { type: 'path', path: '/home/u/.ssh/id_rsa' })).toMatchObject({
       effect: 'ask',
-      winning: 'protect-credentials#0'
+      winning: 'ask-on-external-path#0'
     })
-    expect(written.evaluate('write', { type: 'path', path: '/ws/f.txt' }).matched).toEqual([
-      'ask-on-write#0'
+    expect(written.evaluate('write', { type: 'path', path: '/etc/hosts' }).matched).toEqual([
+      'ask-on-external-path#1'
     ])
   })
 
@@ -3360,7 +3398,7 @@ describe('createSecurityContext — 真实路径（provider.realPath）', () => 
 
 /**
  * 询问点的自动审查经门面走到接缝（provider.onPermissionRequest）：只有策略判出 ask 档的那一次
- * 才先问审查 —— force-ask、deny、force-allow（会话授权或用户写的）、L1 探测阶段就放行的调用、
+ * 才先问审查 —— force-ask、deny、用户写的 force-allow、「允许并记住」豁免掉的路径、L1 探测阶段就放行的调用、
  * 被动 UI 的判定都碰不到它。接缝看到的客体与策略判的是同一个（路径已换成真实去处，命令带着
  * unconfinedReason）。出厂已没有 deny / force-ask，也没有 git / 数据库 / url / L1 的门：这几类
  * 由退役策略的夹具按用户策略装上（fixtures/retiredPolicies.ts）。
@@ -3491,9 +3529,10 @@ describe('createSecurityContext — 询问点的审查（onPermissionRequest）'
     await h.ctx.enforcePath('write', '/elsewhere/a', WRITE)
     expect(h.review).not.toHaveBeenCalled()
     expect(h.requestUserInput).not.toHaveBeenCalled()
+    // 授权是外部目录门 match 里的豁免：放行时门根本没命中
     expect(getSessionDecisions(h.sid)[0]).toMatchObject({
       effect: 'allow',
-      winning: 'session-grants#1'
+      winning: 'default:path'
     })
 
     await h.ctx.enforcePath('write', '/other/a', WRITE)
@@ -3627,7 +3666,7 @@ describe('createSecurityContext — 询问点的审查（onPermissionRequest）'
       requestedPath: '/ws/link'
     })
     expect(event.command).toBe('Write(/outside/f)')
-    expect(event.decision).toMatchObject({ tier: 'ask', winning: 'ask-on-write#0' })
+    expect(event.decision).toMatchObject({ tier: 'ask', winning: 'ask-on-external-path#1' })
     expect(event.decision.ask).toEqual({
       command: 'Write(/outside/f)',
       rememberEntry: 'Write(/outside/f)',
@@ -3848,7 +3887,7 @@ describe('createSecurityContext — 询问点的审查（onPermissionRequest）'
     expect(h.review.mock.calls[0][0].request.object.unconfinedReason).toBe('disabled')
   })
 
-  it('CT-W5 装着 protect-shuvix-config 夹具、宿主不提供 shuvixConfigDirs：~/.shuvix/agents 下的写落回 ask-on-write（ask 档、照常先问审查），不会每次写都 force-ask；「not provided」恰 1 行、零 fail-safe', async () => {
+  it('CT-W5 装着 protect-shuvix-config 夹具、宿主不提供 shuvixConfigDirs：~/.shuvix/agents 下的写落回外部目录门（ask 档、照常先问审查），不会每次写都 force-ask；「not provided」恰 1 行、零 fail-safe', async () => {
     const grants = { allowList: [] as string[] }
     const { shuvixConfigDirs: _dirs, ...varsWithoutConfigDirs } = makeProvider(grants).getVars()
     const h = reviewedContext({
@@ -3865,14 +3904,14 @@ describe('createSecurityContext — 询问点的审查（onPermissionRequest）'
       expect(h.ctx.evaluate('write', agentMd)).toMatchObject({
         effect: 'ask',
         tier: 'ask',
-        winning: 'ask-on-write#0'
+        winning: 'ask-on-external-path#1'
       })
     }
     await h.ctx.enforcePath('write', '/home/u/.shuvix/agents/a.md', WRITE)
     expect(h.review).toHaveBeenCalledTimes(1)
     expect(h.review.mock.calls[0][0].decision).toMatchObject({
       tier: 'ask',
-      winning: 'ask-on-write#0'
+      winning: 'ask-on-external-path#1'
     })
 
     const lines = h.warn.mock.calls.map((c) => String(c[0]))
@@ -3887,8 +3926,8 @@ describe('createSecurityContext — 询问点的审查（onPermissionRequest）'
 /**
  * ask-on-read 不再是内置策略：这个名字从此只是用户自己的一份普通策略。
  *  - CX-U1 用户写了一份叫 ask-on-read 的：它不遮蔽任何东西、也不被任何东西遮蔽，按它自己的规则判；
- *  - CX-U2 用户手里留着退役前那份出厂文件的原样副本：照样是合法的用户策略；沙箱关着时它的
- *    「工作区外的读要问」照常生效（归因到用户那份）；沙箱开着时它引用的 sandboxRead* 两个变量
+ *  - CX-U2 用户手里留着退役前那份出厂文件的原样副本：照样是合法的用户策略；沙箱关着（宿主不给
+ *    sandboxActive 也算）时它的「工作区外的读要问」照常生效（归因到用户那份）；沙箱开着时它引用的 sandboxRead* 两个变量
  *    宿主已不再提供 —— 退化成「不问」，不 throw。缺的变量在装配时就被绑空（两支都绑，与走哪一支
  *    无关），每个至多记一行。钉住这个退化行为。
  */
@@ -4032,7 +4071,8 @@ describe('createSecurityContext — 用户自己的 ask-on-read', () => {
     expect(parsed!.rules).toHaveLength(1)
     const copy: UserPolicyFile = { ...parsed!, fileName: 'ask-on-read.md' }
 
-    // ① 沙箱关着（宿主给 sandboxActive:false、有 workspace）：退役前「工作区外要问」的那一支
+    // ① 宿主不给 sandboxActive（今天的桌面已不提供这个变量，has() 为假）、有 workspace：退役前
+    // 「沙箱关着 → 工作区外要问」的那一支
     {
       const { warn, logger } = loggerSpy()
       const provider = makeProvider(NO_GRANTS, { logger, getUserPolicies: () => [copy] })
@@ -4064,10 +4104,12 @@ describe('createSecurityContext — 用户自己的 ask-on-read', () => {
         expect(() => {
           decision = ctx.evaluate('read', { type: 'path', path })
         }, path).not.toThrow()
+        // 用户那份一条都没命中；家目录里那一格是出厂外部目录门在问，与这份副本无关
+        const inHome = path.startsWith('/home/u/')
         expect({ path, effect: decision!.effect, matched: decision!.matched }).toEqual({
           path,
-          effect: 'allow',
-          matched: []
+          effect: inHome ? 'ask' : 'allow',
+          matched: inHome ? ['ask-on-external-path#0'] : []
         })
       }
       expectOnlyRetiredVarWarnings(warn)

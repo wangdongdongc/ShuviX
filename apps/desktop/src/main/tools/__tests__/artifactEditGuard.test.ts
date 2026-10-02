@@ -3,8 +3,8 @@
  * 真实临时目录 + 真实 store/adopt + 真实 fileTime + 真实 edit 内核（安全上下文照
  * writeAskWiring/fileToolDepsKnowledge 的桩，询问通道一律答允许）。
  *
- * AG-8 看的是工具这条路上的询问链：认领下来的那件在本会话自己的 artifacts 目录里，
- * ask-on-write 对它不问（`vars.sessionArtifactsDir`），别的会话的目录照问。这里的 provider 是桩 ——
+ * AG-8 看的是工具这条路上的询问链：认领下来的那件在本会话自己的 artifacts 目录里 —— 那是会话目录之一，
+ * ask-on-external-path 对它不问（`vars.sessionDirs`），别的会话的目录照问。这里的 provider 是桩 ——
  * 真实变量表由 toolContext.test 的 SEC-7 与 realPathPolicy.test 的 RPP-A3 钉。
  *
  * **先纠正一条常被写反的前提**：`fileTools/edit.ts` 只在「本会话读过」时才校验陈旧，
@@ -78,8 +78,10 @@ vi.mock('../../services/toolContext', async () => {
           skillsDirs: [],
           memoryDirs: [],
           home: joinPath(state.workspace, '.nonexistent-home'),
-          // 与 getSessionArtifactsDir 的 mock 同一个目录 —— ask-on-write 对它免询问
           sessionArtifactsDir: joinPath(state.root, ctx.sessionId),
+          // 会话目录照生产的形状给：工作目录 + 本会话 artifacts（与 getSessionArtifactsDir 的 mock
+          // 同一个目录）—— ask-on-external-path 在这以外的写才问
+          sessionDirs: [state.workspace, joinPath(state.root, ctx.sessionId)],
           systemDirs: []
         }),
         readBuiltinPolicyMd: INLINE_POLICY_MD,
@@ -309,7 +311,7 @@ describe('认领 → edit', () => {
     expect(readFileSync(path, 'utf-8')).toContain('height="35"')
     expect(state.requests).toEqual([])
 
-    // 对照：同一个会话去改别的会话目录里的文件 —— ask-on-write 照问（桩答允许，改动随后落盘）
+    // 对照：同一个会话去改别的会话目录里的文件 —— ask-on-external-path 照问（桩答允许，改动随后落盘）
     const otherDir = join(state.root, 'other-session')
     mkdirSync(otherDir, { recursive: true })
     const other = join(otherDir, 'x.svg')

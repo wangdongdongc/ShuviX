@@ -1,5 +1,6 @@
 /**
  * macOS 后端：每条命令一份运行时生成的 deny-default Seatbelt profile，经 `/usr/bin/sandbox-exec` 加载。
+ * profile 只管文件访问（读写收进会话目录）与几处沙箱外代为执行的入口，见 profile.ts。
  *
  * 为什么是它：Developer ID 分发、不进 App Sandbox 的 Electron 应用，能在用户真实环境里细粒度收窄
  * 子进程权限的只有 Seatbelt（Endpoint Security 要 Apple 批的 entitlement + root，Network Extension
@@ -12,7 +13,6 @@
 import { spawnSync } from 'child_process'
 import { existsSync, realpathSync } from 'fs'
 import { tmpdir } from 'os'
-import { join } from 'path'
 import type { ShellInvocation } from '../../../../utils/toolUtils/shell'
 import { buildSandboxSpec } from '../../spec'
 import type { ProbeResult, SandboxBackend, SandboxHostPaths, SandboxSpec } from '../../types'
@@ -44,12 +44,7 @@ export function createSeatbeltBackend(): SandboxBackend {
       }
       const built = buildSandboxSpec(
         paths,
-        {
-          sessionId: 'probe',
-          workingDirectory: workspace,
-          grantedWrite: [],
-          credentialPaths: [join(paths.home, '.ssh')]
-        },
+        { sessionId: 'probe', workingDirectory: workspace, grantedRead: [], grantedWrite: [] },
         (p) => p
       )
       if (!built.ok) return { available: false, reason: `probe spec rejected: ${built.reason}` }

@@ -3,8 +3,12 @@
  *
  * 分层：spec.ts 把「这个会话是谁、在哪儿」算成一份 {@link SandboxSpec}（纯数据、与平台无关），
  * 各平台后端（backends/<os>/）只负责两件事——把 spec 编译成自己的机制、如实报告能不能用。
- * 策略引擎看到的是 {@link SessionSandboxView}：从**同一份** spec 投影出来的路径清单，
- * 所以文件工具的免询问范围与命令实际能碰的范围不会各自漂移。
+ *
+ * **沙箱只做一件事：把命令的文件访问收进本会话的目录**（2026-10-01 用户裁定，取代此前「尽量把
+ * 功能圈在沙箱里」的方针）。稍复杂的命令 —— 要读家目录里的配置（git 读 ~/.gitconfig）、装依赖、
+ * 用缓存 —— 不再靠一张越来越长的放行清单圈进来，而是直接申请到沙箱外执行，交给自动审查。
+ * 文件工具的询问（外部目录访问策略）与沙箱用**同一份**会话目录清单（{@link sessionDirsFor}），
+ * 所以「沙箱拒绝的」恰好就是「文件工具要问的」。
  */
 import type { ShellInvocation } from '../../utils/toolUtils/shell'
 
@@ -15,56 +19,70 @@ export interface SandboxHostPaths {
   userData: string
   /** ~/.shuvix */
   shuvixHome: string
+  /** 工具大结果 / 后台任务日志的根（userData/tool_results）；本会话的那一格是会话目录 */
+  toolResultsBase: string
   uid: number
   /** shuvix CLI 连主进程的 unix socket（沙箱里唯一放行连接的宿主 socket） */
   cliSocket: string
+  /** shuvix CLI 鉴权读的 token 文件（在家目录里，单独放行可读 —— CLI 在沙箱里必须能用） */
+  cliToken: string
+  /**
+   * ShuviX 自己的程序所在（Electron 应用包、CLI 入口与包装脚本的目录）：沙箱里的 `shuvix` 命令要
+   * 读得到它们。开发态它们在仓库里（常在家目录内），打包后在应用包里。
+   */
+  appPaths: string[]
   /** 每会话临时目录的父目录（短路径：AF_UNIX 路径上限 104 字节） */
   tmpRoot: string
+}
+
+/**
+ * 会话设置决定的那部分会话目录（宿主现算：sandbox 模块读不到知识库选择与技能目录）。
+ * 不是要人维护的白名单 —— 跟着用户在会话里勾的东西走。
+ */
+export interface SessionDirExtras {
+  /** 可读可写：本会话勾选的知识库目录（知识库的改动本来就逐次提交进它自己的 git，可以回退） */
+  readWrite: readonly string[]
+  /** 只读：技能目录（技能是 agent 自己要遵守的指令，改它照旧询问）、只读的内置知识库 */
+  readOnly: readonly string[]
 }
 
 /** 一个会话的输入 */
 export interface SandboxSessionInput {
   sessionId: string
   workingDirectory: string
-  /** 会话「允许并记住」的写授权（allowList 里的 Write(...)）—— 沙箱把它们当作可写根 */
+  /** 会话设置决定的会话目录（缺省 = 没有） */
+  extras?: SessionDirExtras
+  /** 会话「允许并记住」的读授权（allowList 里的 Read(...)）—— 沙箱放它们可读 */
+  grantedRead: readonly string[]
+  /** 会话「允许并记住」的写授权（allowList 里的 Write(...)）—— 沙箱放它们可读可写 */
   grantedWrite: readonly string[]
-  /**
-   * 凭据位置（绝对路径，未 realpath）—— 生效的 protect-credentials 策略的 `credentialDirs`。
-   * 命令对它们读写都拒；策略被覆盖掉 / 清单为空，沙箱也就不管
-   */
-  credentialPaths: readonly string[]
-}
-
-/** 需要按正则拒绝的写入：同一条规则的两种方言，由 tables.ts 的段表一处生成 */
-export interface SandboxPattern {
-  /** SBPL 正则（不含 #"…" 外壳） */
-  sbpl: string
-  /** JS 正则源码（cel-js 的 `matches` 就是 `new RegExp(p).test(s)`） */
-  js: string
 }
 
 /**
  * 一次命令执行的沙箱规格。所有路径都已 realpath（Seatbelt 按解析后的路径比对：
  * `/var` 实为 `/private/var`，`/tmp` 实为 `/private/tmp`）。
  *
- * 写入按四层求值（后面的层覆盖前面的）：
- *   1. writableRoots 可写
- *   2. writeDenied 拒写（围栏，整片：~/.shuvix、userData —— 策略、设置、Chrome 桥的启动器都在里面）
- *   3. writeAllowBack 放回（严格落在第 2 层里的根：本会话临时工作区、本会话 artifacts、内容目录）
- *   4. writeDeniedFinal / writeDeniedPatterns / gitRoots 上的 .git 规则 —— 最后一层，谁也放不回
- * 读取只有一层：全读，再拒 readDenied（凭据，连元数据都拒）。
+ * 读：家目录以外全读（程序要读自己的可执行文件、库与系统配置 —— 只放行工作目录的话连 `ls` 都找不到）；
+ * 家目录里只有 readableRoots 可读，readableRoots 的上级目录只放行元数据（否则路径解析失败）。
+ * 写：只有 writableRoots。
  */
 export interface SandboxSpec {
   sessionId: string
   workingDirectory: string
+  /** 家目录：它里面默认不可读 */
+  home: string
+  /** 本会话的目录（工作目录、本会话临时目录、artifacts、工具结果、勾选的知识库）—— 可读可写 */
+  sessionDirs: string[]
+  /** 本会话只读的目录（技能目录、内置知识库） */
+  sessionReadDirs: string[]
+  /** 可读的根（会话目录 + 只读会话目录 + 读写授权 + ShuviX 自己的程序） */
+  readableRoots: string[]
+  /** 可读的单个文件（cli-token） */
+  readableFiles: string[]
+  /** 可读根里落在家目录内的那些，它们的上级目录（只放行元数据，不能列内容） */
+  metadataPaths: string[]
+  /** 可写的根（会话目录 + 写授权） */
   writableRoots: string[]
-  writeDenied: string[]
-  writeAllowBack: string[]
-  writeDeniedFinal: string[]
-  writeDeniedPatterns: SandboxPattern[]
-  /** .git 元数据保护只在这些根里生效（工作区 + 授权根），不波及 tmp / 缓存里 clone 下来的依赖 */
-  gitRoots: string[]
-  readDenied: string[]
   /** 允许连接的具体 socket 文件 */
   unixSockets: string[]
   /** 允许建立并连接 socket 的目录（本会话临时目录、工作区） */
@@ -72,24 +90,6 @@ export interface SandboxSpec {
   /** 本会话临时目录（经 TMPDIR/TMP/TEMP 交给命令） */
   tmpDir: string
 }
-
-/**
- * 策略引擎看的那一面（desktop getVars 展开进 `vars.*`）。
- * 沙箱没套上时恒为 {@link INACTIVE_VIEW}：内置策略据此退回「每次都问」的老行为。
- */
-export interface SessionSandboxView {
-  sandboxActive: boolean
-  sandboxWritableRoots: string[]
-  sandboxWriteDenied: string[]
-  sandboxProtectedPatterns: string[]
-}
-
-export const INACTIVE_VIEW: SessionSandboxView = Object.freeze({
-  sandboxActive: false,
-  sandboxWritableRoots: [],
-  sandboxWriteDenied: [],
-  sandboxProtectedPatterns: []
-}) as SessionSandboxView
 
 /** 探测结果 */
 export type ProbeResult = { available: true } | { available: false; reason: string }

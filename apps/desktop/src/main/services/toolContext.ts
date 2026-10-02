@@ -8,7 +8,8 @@ import { existsSync, statSync } from 'fs'
 import { homedir } from 'os'
 import { projectDao } from '../dao/projectDao'
 import { sessionRecords } from './sessionRecords'
-import { sessionView, workspaceWriteView } from './sandbox'
+import { sessionDirsView, type SessionDirExtras } from './sandbox'
+import { enabledTargets } from './knowledge/sessionBundle'
 import { sessionService } from './sessionService'
 import {
   getTempWorkspace,
@@ -31,7 +32,6 @@ import { policyService } from './policyService'
 import {
   createSecurityContext,
   parseAllowEntry,
-  resolvePolicyLet,
   type SecurityContext,
   type SecurityHostProvider,
   type SubAgentModelConfig
@@ -172,7 +172,7 @@ export function isPathReadAllowed(config: ProjectConfig, absolutePath: string): 
  * 同步写入准入判定（不弹询问）—— 被动 UI 专用，对应 isPathReadAllowed 的写侧
  * （笔记本「打开 .md 直接编辑 + 自动保存」）。
  *
- * 主体同样是 **user**：内置 agent 门（ask-on-write 等）不生效 → 默认放行
+ * 主体同样是 **user**：内置 agent 门（ask-on-external-path 等）不生效 → 默认放行
  * （较迁移前的 workspace 硬边界放宽 —— 用户主权原则下用户经 UI 写自己的文件无需围栏，
  * 想约束时写 subject.kind: [user] 的策略即可）。
  */
@@ -245,9 +245,31 @@ export function getSessionPathGrants(sessionId: string): {
 }
 
 /**
- * 宿主提供的策略变量里与沙箱无关的那部分 —— getVars 的主体。凭据清单也只用它求值：沙箱视图本身
- * 要用凭据清单（sessionCredentialPaths），不能反过来依赖沙箱视图。
+ * 会话设置决定的那部分会话目录 —— 策略（`vars.sessionDirs` / `vars.sessionReadDirs`）与命令沙箱
+ * （planFor）都从这里取，两面同一个来源：
+ *   - 可读写：本会话勾选的知识库（知识库的每次改动都提交进它自己的 git，可以回退）；
+ *   - 只读：技能目录（内置 + 用户启用的；技能是 agent 自己要遵守的指令，改它照旧询问）、只读的内置知识库。
+ * 跟着会话里勾的东西走，不是要人维护的白名单。读不到（库扫描失败之类）就少给 —— 多问，不放行。
  */
+export function sessionDirExtras(sessionId: string): SessionDirExtras {
+  const readWrite: string[] = []
+  const readOnly: string[] = [getBuiltinSkillsDir()]
+  try {
+    for (const { target } of enabledTargets(sessionId)) {
+      ;(target.readonly ? readOnly : readWrite).push(target.dir)
+    }
+  } catch (err) {
+    securityLog.warn(`knowledge dirs unavailable: ${(err as Error).message}`)
+  }
+  try {
+    readOnly.push(...skillService.enabledSkillRoots())
+  } catch (err) {
+    securityLog.warn(`skill dirs unavailable: ${(err as Error).message}`)
+  }
+  return { readWrite, readOnly }
+}
+
+/** 宿主提供的策略变量里与会话目录无关的那部分（多是留给用户自写策略引用的事实变量） */
 function hostPolicyVars(
   sessionId: string,
   workingDirectory: string
@@ -274,11 +296,9 @@ function hostPolicyVars(
     ],
     // 随应用发布的内置知识库目录 —— 事实变量，内置策略已不用它，留给用户自写的策略引用
     builtinKnowledgeDir: getBuiltinKnowledgeDir(),
-    // 本会话自己的 artifacts 目录：ask-on-write 对它免询问。认领下来的图与交互块是
-    // 这场对话自己的文件、不在用户的项目里，改一张刚画的图也逐次询问只会把人训练成闭眼点允许。
-    // 按会话 id 取，与 artifact 工具落盘用的是同一个 id（子会话有自己的目录，见 artifacts/store）。
-    // 坏 id 给空串（inDir 对空串恒不命中 = 不豁免）：空 id 会把豁免放大到所有会话的 artifacts，
-    // `..` 会放大到 ~/.shuvix（里面有 policies/）
+    // 本会话自己的 artifacts 目录（事实变量；它也是 vars.sessionDirs 的一项）。按会话 id 取，与 artifact
+    // 工具落盘用的是同一个 id。坏 id 给空串（inDir 对空串恒不命中）：空 id 会放大到所有会话的
+    // artifacts，`..` 会放大到 ~/.shuvix（里面有 policies/）
     sessionArtifactsDir: isSafeSessionId(sessionId) ? getSessionArtifactsDir(sessionId) : '',
     home: homedir(),
     systemDirs: windowsSystemDirs()
@@ -286,34 +306,9 @@ function hostPolicyVars(
 }
 
 /**
- * 本会话生效的凭据清单 —— protect-credentials 的 `credentialDirs`（用户的同名覆盖优先）。命令沙箱对它们
- * 读写都拒（main 启动时经 setSandboxCredentialReader 注入）：沙箱不自己定哪些是凭据，策略改了清单，
- * 命令那边跟着变；策略被覆盖掉、规则被清空或没有这个 let，沙箱也就不管 —— 但覆盖里的清单**写错了**
- * （求值出错）时改用出厂那份，不因一处笔误把凭据放给命令。只留绝对路径：相对路径在
- * 策略里对不上任何客体路径，沙箱里也不该按主进程的 cwd 去解析它。
- */
-export function sessionCredentialPaths(sessionId: string, workingDirectory: string): string[] {
-  const value = resolvePolicyLet(
-    {
-      pathSep: sep,
-      getLanguage: () => i18next.language,
-      readBuiltinPolicyMd: (fileName) => policyService.readBuiltinPolicyMd(fileName),
-      getUserPolicies: () => policyService.getUserPolicies(),
-      logger: securityLog
-    },
-    'protect-credentials',
-    'credentialDirs',
-    hostPolicyVars(sessionId, workingDirectory),
-    { fallbackToBuiltinOnError: true }
-  )
-  return Array.isArray(value)
-    ? value.filter((v): v is string => typeof v === 'string' && isAbsolute(v))
-    : []
-}
-
-/**
  * 桌面 SecurityHostProvider —— 把平台细节注入共享安全模块：
- *   - 变量表：workspace / tool_results / skills 目录 / home（策略 match/lets 里的 vars.*）
+ *   - 变量表：会话目录 sessionDirs（与命令沙箱同一份清单）/ home / workspace 等事实变量
+ *     （策略 match/lets 里的 vars.*）
  *   - 真实路径：realPath（符号链接 / `..` / 盘上大小写）—— 安全模块拿它解析路径客体与 inDir 比较的
  *     每个目录，两边都按位置比。变量表因此照写法给即可：工作区、临时工作区（macOS 的
  *     /var → /private/var 这类系统级链接）由 inDir 现解析，不在这里预先 realpath
@@ -338,11 +333,9 @@ export function makeDesktopSecurityProvider(
       const workingDirectory = getConfig().workingDirectory
       return {
         ...hostPolicyVars(ctx.sessionId, workingDirectory),
-        // 沙箱的那一面（ask-on-write 读）：与本会话命令实际受的限制同源，所以文件工具的免询问范围
-        // 恰好是命令能写的范围；沙箱没套上时是一组空值，策略退回老行为
-        ...sessionView(ctx.sessionId, workingDirectory),
-        // 与沙箱开没开无关的那一半：文件工具在工作区里写入免询问（受保护位置照旧问；Windows 不给）
-        ...workspaceWriteView(ctx.sessionId, workingDirectory)
+        // 会话目录（外部目录访问策略读 sessionDirs / sessionReadDirs）：与命令沙箱同一份清单，所以文件
+        // 工具在这以外询问，恰好就是沙箱里的命令读写不到的地方。不看沙箱开没开 —— 没有沙箱的平台一样只在这以外询问
+        ...sessionDirsView(ctx.sessionId, workingDirectory, sessionDirExtras(ctx.sessionId))
       }
     },
     getSessionGrants: () => {

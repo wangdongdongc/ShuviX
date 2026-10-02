@@ -174,7 +174,7 @@ class PolicyService {
   }
 
   /**
-   * 某份内置策略当前语言那一版的文件名（`ask-on-write.zh.md`）—— 侧栏点内置行开只读笔记本
+   * 某份内置策略当前语言那一版的文件名（`ask-on-command.zh.md`）—— 侧栏点内置行开只读笔记本
    * 要按它认。与装配时那次语言回退同一条候选序（精确语言 → 基础语言 → en），UI 不另挑。
    */
   builtinSourceFile(name: string): string | null {

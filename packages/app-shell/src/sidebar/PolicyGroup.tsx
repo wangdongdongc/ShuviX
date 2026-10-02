@@ -41,7 +41,7 @@ export interface PolicyGroupItem {
   source: 'builtin' | 'user'
   /**
    * 这份策略的 md 文件名：用户策略是 policies 目录下的文件名，内置策略是随包发布的那一份
-   * （`ask-on-write.zh.md` —— 由运行时那次语言回退挑中的，UI 不另挑）。
+   * （`ask-on-command.zh.md` —— 由运行时那次语言回退挑中的，UI 不另挑）。
    */
   fileName: string
   /** 同名的另一份压过了它，当前不生效（只展示，不进任何运行时路径） */

@@ -10,8 +10,8 @@ sources:
     title: botFile.ts — the parser (source of truth)
   - resource: https://github.com/wangdongdongc/ShuviX/blob/main/packages/agent-runtime/src/subagent/builtinAgents/md/bot.md
     title: bot.md — the `bot` base persona a bot chat runs on
-  - resource: https://github.com/wangdongdongc/ShuviX/blob/main/packages/agent-runtime/src/security/builtinPolicies/md/ask-on-write.md
-    title: ask-on-write — the write ask a bot's edits to its own file go through
+  - resource: https://github.com/wangdongdongc/ShuviX/blob/main/packages/agent-runtime/src/security/builtinPolicies/md/ask-on-external-path.md
+    title: ask-on-external-path — the write ask a bot's edits to its own file go through
 ---
 
 # Bot file
@@ -96,8 +96,9 @@ no `bash` or `write`, and none of the built-in capability servers `mcp:ssh` / `m
 `mcp:database` is declared (the user can still tick them on in the session's extensions — that
 is the user's own call). The bot can look but not touch: anything that changes or runs must go
 to a sub-session (programming work → `agent_profile: coding`). `edit` is there for one purpose —
-maintaining its own file. A write under `~/.shuvix/bots/` is an ordinary write: it asks under the
-builtin policy **ask-on-write**, and with the automatic review on the reviewer may answer it (a
+maintaining its own file. A write under `~/.shuvix/bots/` is an ordinary write outside the
+session's own directories: it asks under the builtin policy **ask-on-external-path**, and with
+the automatic review on the reviewer may answer it (a
 `force-ask` policy on `vars.botsDir` makes every such write reach the user — see `policy-md`).
 Like `notebook`, the base declares project awareness but reads no instruction files (AGENTS.md /
 CLAUDE.md are conventions for the sub-session that does the coding). The base can be overridden by name

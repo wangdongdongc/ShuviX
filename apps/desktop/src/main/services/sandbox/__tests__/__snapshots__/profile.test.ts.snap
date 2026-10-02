@@ -1,78 +1,40 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`PR-1 golden > PR-1 夹具规格（一个写授权）的 profile 与参数表 > params 1`] = `
+exports[`PR-1 golden > PR-1 夹具规格的 profile 与参数表 > params 1`] = `
 {
-  "P0": "/Users/u/.ssh",
-  "P1": "/Users/u/.aws",
-  "P10": "/private/tmp",
-  "P11": "/Users/u/.npm",
-  "P12": "/Users/u/.cache",
-  "P13": "/Users/u/.yarn/berry/cache",
-  "P14": "/Users/u/.pnpm-store",
-  "P15": "/Users/u/.bun/install/cache",
-  "P16": "/Users/u/.cargo/registry",
-  "P17": "/Users/u/.cargo/git",
-  "P18": "/Users/u/go/pkg/mod",
-  "P19": "/Users/u/.gradle/caches",
-  "P2": "/Users/u/.gnupg",
-  "P20": "/Users/u/.m2/repository",
-  "P21": "/Users/u/Library/pnpm",
-  "P22": "/Users/u/Library/Caches/pip",
-  "P23": "/Users/u/Library/Caches/pnpm",
-  "P24": "/Users/u/Library/Caches/Yarn",
-  "P25": "/Users/u/Library/Caches/go-build",
-  "P26": "/Users/u/Library/Caches/node-gyp",
-  "P27": "/Users/u/Library/Caches/typescript",
-  "P28": "/Users/u/Library/Caches/deno",
-  "P29": "/Users/u/Library/Developer/Xcode/DerivedData",
-  "P3": "/Users/u/.config/gh",
-  "P30": "/Users/u/.shuvix/artifacts/sess-1",
-  "P31": "/Volumes/data/shared",
-  "P32": "/Users/u/.shuvix",
-  "P33": "/Users/u/Library/Application Support/ShuviX",
-  "P34": "/Users/u/.shuvix/artifacts/sess-1",
-  "P35": "/Users/u/proj",
-  "P36": "/Volumes/data/shared",
-  "P37": "/Users/u/.ssh",
-  "P38": "/Users/u/.aws",
-  "P39": "/Users/u/.gnupg",
-  "P4": "/Users/u/.netrc",
-  "P40": "/Users/u/.config/gh",
-  "P41": "/Users/u/.netrc",
-  "P42": "/Users/u/.shuvix/.session-state",
-  "P43": "/Users/u/AppData/Local/Microsoft/Credentials",
-  "P44": "/Users/u/AppData/Roaming/Microsoft/Credentials",
-  "P45": "/Users/u/.zshrc",
-  "P46": "/Users/u/.zshenv",
-  "P47": "/Users/u/.zprofile",
-  "P48": "/Users/u/.zlogin",
-  "P49": "/Users/u/.zlogout",
-  "P5": "/Users/u/.shuvix/.session-state",
-  "P50": "/Users/u/.bashrc",
-  "P51": "/Users/u/.bash_profile",
-  "P52": "/Users/u/.bash_login",
-  "P53": "/Users/u/.bash_logout",
-  "P54": "/Users/u/.profile",
-  "P55": "/Users/u/.config/fish",
-  "P56": "/Users/u/.gitconfig",
-  "P57": "/Users/u/.config/git",
-  "P58": "/Users/u/Library/LaunchAgents",
-  "P59": "/private/tmp/shuvix-ssh-501",
-  "P6": "/Users/u/AppData/Local/Microsoft/Credentials",
-  "P60": "/private/tmp/tmux-501",
-  "P61": "/Users/u/proj",
-  "P62": "/Volumes/data/shared",
-  "P63": "/Users/u/.shuvix/cli.sock",
-  "P64": "/private/var/run/mDNSResponder",
-  "P65": "/private/tmp/shuvix-501/abe633f3",
-  "P66": "/Users/u/proj",
-  "P7": "/Users/u/AppData/Roaming/Microsoft/Credentials",
-  "P8": "/Users/u/proj",
-  "P9": "/private/tmp/shuvix-501/abe633f3",
+  "P0": "/Users/u",
+  "P1": "/Users/u",
+  "P10": "/private/tmp/shuvix-501/abe633f3",
+  "P11": "/Users/u/.shuvix/artifacts/sess-1",
+  "P12": "/Users/u/Library/Application Support/ShuviX/tool_results/sess-1",
+  "P13": "/Users/u/.shuvix/knowledge/b",
+  "P14": "/Users/u/.shuvix/skills",
+  "P15": "/Volumes/data/shared",
+  "P16": "/Users/u/ref",
+  "P17": "/Applications/ShuviX.app",
+  "P18": "/Users/u/.shuvix/cli-token",
+  "P19": "/Users/u/proj",
+  "P2": "/Users/u/.shuvix/artifacts",
+  "P20": "/private/tmp/shuvix-501/abe633f3",
+  "P21": "/Users/u/.shuvix/artifacts/sess-1",
+  "P22": "/Users/u/Library/Application Support/ShuviX/tool_results/sess-1",
+  "P23": "/Users/u/.shuvix/knowledge/b",
+  "P24": "/Volumes/data/shared",
+  "P25": "/Users/u/.shuvix/cli.sock",
+  "P26": "/private/var/run/mDNSResponder",
+  "P27": "/private/tmp/shuvix-501/abe633f3",
+  "P28": "/Users/u/proj",
+  "P3": "/Users/u/.shuvix",
+  "P4": "/Users/u/Library/Application Support/ShuviX/tool_results",
+  "P5": "/Users/u/Library/Application Support/ShuviX",
+  "P6": "/Users/u/Library/Application Support",
+  "P7": "/Users/u/Library",
+  "P8": "/Users/u/.shuvix/knowledge",
+  "P9": "/Users/u/proj",
 }
 `;
 
-exports[`PR-1 golden > PR-1 夹具规格（一个写授权）的 profile 与参数表 > profile 1`] = `
+exports[`PR-1 golden > PR-1 夹具规格的 profile 与参数表 > profile 1`] = `
 "(version 1)
 (deny default)
 (import "system.sb")
@@ -88,16 +50,14 @@ exports[`PR-1 golden > PR-1 夹具规格（一个写授权）的 profile 与参�
 (allow file-map-executable)
 (system-network)
 (allow file-read*)
-(deny file-read* (subpath (param "P0")) (subpath (param "P1")) (subpath (param "P2")) (subpath (param "P3")) (subpath (param "P4")) (subpath (param "P5")) (subpath (param "P6")) (subpath (param "P7")))
-(allow file-write* (subpath (param "P8")) (subpath (param "P9")) (subpath (param "P10")) (subpath (param "P11")) (subpath (param "P12")) (subpath (param "P13")) (subpath (param "P14")) (subpath (param "P15")) (subpath (param "P16")) (subpath (param "P17")) (subpath (param "P18")) (subpath (param "P19")) (subpath (param "P20")) (subpath (param "P21")) (subpath (param "P22")) (subpath (param "P23")) (subpath (param "P24")) (subpath (param "P25")) (subpath (param "P26")) (subpath (param "P27")) (subpath (param "P28")) (subpath (param "P29")) (subpath (param "P30")) (subpath (param "P31")))
-(deny file-write* (subpath (param "P32")) (subpath (param "P33")))
-(allow file-write* (subpath (param "P34")))
-(deny file-write* (subpath (param "P37")) (subpath (param "P38")) (subpath (param "P39")) (subpath (param "P40")) (subpath (param "P41")) (subpath (param "P42")) (subpath (param "P43")) (subpath (param "P44")) (subpath (param "P45")) (subpath (param "P46")) (subpath (param "P47")) (subpath (param "P48")) (subpath (param "P49")) (subpath (param "P50")) (subpath (param "P51")) (subpath (param "P52")) (subpath (param "P53")) (subpath (param "P54")) (subpath (param "P55")) (subpath (param "P56")) (subpath (param "P57")) (subpath (param "P58")) (subpath (param "P59")) (subpath (param "P60")) (regex #"^/private/tmp/com\\.apple\\.launchd\\.") (require-all (subpath (param "P35")) (regex #"/\\.[Gg][Ii][Tt]/([Hh][Oo][Oo][Kk][Ss](/|$)|[Cc][Oo][Nn][Ff][Ii][Gg]$|[Cc][Oo][Nn][Ff][Ii][Gg]\\.[Ww][Oo][Rr][Kk][Tt][Rr][Ee][Ee]$|[Cc][Oo][Mm][Mm][Oo][Nn][Dd][Ii][Rr]$)")) (require-all (subpath (param "P35")) (regex #"/\\.[Gg][Ii][Tt]/([Mm][Oo][Dd][Uu][Ll][Ee][Ss]|[Ww][Oo][Rr][Kk][Tt][Rr][Ee][Ee][Ss])/.*/([Hh][Oo][Oo][Kk][Ss](/|$)|[Cc][Oo][Nn][Ff][Ii][Gg]$|[Cc][Oo][Nn][Ff][Ii][Gg]\\.[Ww][Oo][Rr][Kk][Tt][Rr][Ee][Ee]$|[Cc][Oo][Mm][Mm][Oo][Nn][Dd][Ii][Rr]$)")) (require-all (subpath (param "P36")) (regex #"/\\.[Gg][Ii][Tt]/([Hh][Oo][Oo][Kk][Ss](/|$)|[Cc][Oo][Nn][Ff][Ii][Gg]$|[Cc][Oo][Nn][Ff][Ii][Gg]\\.[Ww][Oo][Rr][Kk][Tt][Rr][Ee][Ee]$|[Cc][Oo][Mm][Mm][Oo][Nn][Dd][Ii][Rr]$)")) (require-all (subpath (param "P36")) (regex #"/\\.[Gg][Ii][Tt]/([Mm][Oo][Dd][Uu][Ll][Ee][Ss]|[Ww][Oo][Rr][Kk][Tt][Rr][Ee][Ee][Ss])/.*/([Hh][Oo][Oo][Kk][Ss](/|$)|[Cc][Oo][Nn][Ff][Ii][Gg]$|[Cc][Oo][Nn][Ff][Ii][Gg]\\.[Ww][Oo][Rr][Kk][Tt][Rr][Ee][Ee]$|[Cc][Oo][Mm][Mm][Oo][Nn][Dd][Ii][Rr]$)")))
-(deny file-write-create file-write-unlink (require-all (subpath (param "P61")) (regex #"/\\.[Gg][Ii][Tt]$")) (require-all (subpath (param "P62")) (regex #"/\\.[Gg][Ii][Tt]$")))
+(deny file-read* (subpath (param "P0")))
+(allow file-read-metadata (literal (param "P1")) (literal (param "P2")) (literal (param "P3")) (literal (param "P4")) (literal (param "P5")) (literal (param "P6")) (literal (param "P7")) (literal (param "P8")))
+(allow file-read* (subpath (param "P9")) (subpath (param "P10")) (subpath (param "P11")) (subpath (param "P12")) (subpath (param "P13")) (subpath (param "P14")) (subpath (param "P15")) (subpath (param "P16")) (subpath (param "P17")) (literal (param "P18")))
+(allow file-write* (subpath (param "P19")) (subpath (param "P20")) (subpath (param "P21")) (subpath (param "P22")) (subpath (param "P23")) (subpath (param "P24")))
 (allow network-outbound (remote ip "*:*"))
 (allow network-bind network-inbound (local ip "*:*"))
-(allow network-outbound (remote unix-socket (path-literal (param "P63"))) (remote unix-socket (path-literal (param "P64"))))
-(allow network-bind network-outbound (local unix-socket (subpath (param "P65"))) (remote unix-socket (subpath (param "P65"))) (local unix-socket (subpath (param "P66"))) (remote unix-socket (subpath (param "P66"))))
+(allow network-outbound (remote unix-socket (path-literal (param "P25"))) (remote unix-socket (path-literal (param "P26"))))
+(allow network-bind network-outbound (local unix-socket (subpath (param "P27"))) (remote unix-socket (subpath (param "P27"))) (local unix-socket (subpath (param "P28"))) (remote unix-socket (subpath (param "P28"))))
 (deny lsopen)
 (deny appleevent-send)
 (deny job-creation)

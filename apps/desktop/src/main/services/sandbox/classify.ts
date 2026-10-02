@@ -10,7 +10,6 @@
  */
 import { isAbsolute, resolve } from 'path'
 import { isWithin } from './spec'
-import { GIT_ENTRY_PATTERN, GIT_PATTERNS } from './tables'
 import type { SandboxSpec } from './types'
 
 /** 最多列几个被拦的路径 —— 多了是噪音，模型看前几个就够判断 */
@@ -123,44 +122,21 @@ function pathsIn(line: string, cwd: string): string[] {
   return all.filter((p) => !all.some((q) => q !== p && q.startsWith(p + ' ')))
 }
 
-function matchesAny(path: string, patterns: readonly string[]): boolean {
-  return patterns.some((p) => new RegExp(p).test(path))
-}
-
-/**
- * 这条路径的写入会不会被规格拦下（与 profile 的四层同义）：
- * 'outside' = 不在任何可写根里；'protected' = 在根里、但落在受保护的位置；null = 允许写。
- */
-export function writeBlockReason(spec: SandboxSpec, path: string): 'outside' | 'protected' | null {
-  const p = normalize(path)
-  const inRoot = spec.writableRoots.some((r) => isWithin(p, r))
-  if (!inRoot) return 'outside'
-  const deniedWhole =
-    spec.writeDenied.some((d) => isWithin(p, d)) && !spec.writeAllowBack.some((r) => isWithin(p, r))
-  if (deniedWhole) return 'protected'
-  if (spec.writeDeniedFinal.some((d) => isWithin(p, d))) return 'protected'
-  if (
-    matchesAny(
-      p,
-      spec.writeDeniedPatterns.map((x) => x.js)
-    )
-  )
-    return 'protected'
-  const inGitRoot = spec.gitRoots.some((r) => isWithin(p, r))
-  if (inGitRoot && matchesAny(p, [...GIT_PATTERNS.map((x) => x.js), GIT_ENTRY_PATTERN.js])) {
-    return 'protected'
-  }
-  return null
-}
-
+/** 这条路径的写入会不会被规格拦下：不在任何可写根（会话目录 + 写授权）里就拦 */
 export function isWriteBlocked(spec: SandboxSpec, path: string): boolean {
-  return writeBlockReason(spec, path) !== null
+  const p = normalize(path)
+  return !spec.writableRoots.some((r) => isWithin(p, r))
 }
 
-/** 这条路径的读取会不会被规格拦下（只有凭据位置） */
+/** 这条路径的读取会不会被规格拦下：家目录里、不在可读根里的都拦（与 profile 同义） */
 export function isReadBlocked(spec: SandboxSpec, path: string): boolean {
   const p = normalize(path)
-  return spec.readDenied.some((d) => isWithin(p, d))
+  if (!isWithin(p, spec.home)) return false
+  if (spec.readableRoots.some((r) => isWithin(p, r))) return false
+  if (spec.readableFiles.includes(p)) return false
+  // 上级目录放行的只是元数据：`ls ~/github_projects` 照样被拒，但 stat 不会报错 —— 输出里出现它
+  // 只可能是列内容被拒，所以照旧算拦下
+  return true
 }
 
 export interface ExplainInput {
@@ -189,7 +165,9 @@ export function explainSandboxDenial(input: ExplainInput): string | null {
       const p = normalize(path)
       if (seen.has(p)) continue
       seen.add(p)
-      if (isReadBlocked(spec, p)) {
+      const readBlocked = isReadBlocked(spec, p)
+      // 家目录里会话目录以外的地方既不可读也不可写：行里有写入的迹象就说「写」，否则说「读」
+      if (readBlocked && !writeCue) {
         blocked.push(`cannot read: ${p}`)
         continue
       }
@@ -200,11 +178,9 @@ export function explainSandboxDenial(input: ExplainInput): string | null {
         reasons.add(SETUID)
         continue
       }
-      const why = writeBlockReason(spec, p)
-      // 受保护的位置很具体，拦下它的几乎只可能是沙箱；「在根外」则要行里有写入的迹象才算
-      if (why === 'protected' || (why === 'outside' && writeCue)) {
-        blocked.push(`cannot write: ${p}`)
-      }
+      // 「在根外」要行里有写入的迹象才算 —— 否则一次 TCC 拒绝的读会被说成写入被拒
+      if (writeCue && isWriteBlocked(spec, p)) blocked.push(`cannot write: ${p}`)
+      else if (readBlocked) blocked.push(`cannot read: ${p}`)
     }
   }
   if (blocked.length === 0 && reasons.size === 0) return null
@@ -215,14 +191,13 @@ export function explainSandboxDenial(input: ExplainInput): string | null {
   for (const b of blocked) out.push(`  - ${b}`)
   for (const what of reasons) out.push(`  - ${what}`)
   out.push(
-    'Confined commands may change files only in the working directory, $TMPDIR, /tmp and package-manager caches; ' +
-      'they cannot read or write credentials (~/.ssh, ~/.aws …), ' +
-      "and cannot write git hooks, git config or ShuviX's own files."
+    'Confined commands can read and write only the working directory and $TMPDIR (they can also read system locations outside the home folder); ' +
+      'nothing else in the home folder — config files such as ~/.gitconfig, caches, other projects — and no apps, Docker or other local services.'
   )
   out.push(
     input.offerEscalation
-      ? 'If you can, do the work inside the working directory instead. If the command cannot work confined, rerun it with `dangerouslyDisableSandbox: true` — the user may be asked to approve.'
-      : 'If you can, do the work inside the working directory instead; otherwise tell the user what the command needs.'
+      ? 'Rerun it with `dangerouslyDisableSandbox: true` — an automatic reviewer checks the command, and the user may be asked to approve.'
+      : 'Tell the user what the command needs.'
   )
   return out.join('\n')
 }

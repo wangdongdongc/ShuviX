@@ -1,6 +1,5 @@
 ---
 shuvix: policy v1
-shuvix-builtin: true
 name: protect-credentials
 shuvix-displayName: Protect Some Credential Directories
 description: Reading a credential store asks you first; sandboxed commands cannot touch them at all.
