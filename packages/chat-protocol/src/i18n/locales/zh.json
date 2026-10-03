@@ -232,6 +232,7 @@
     "imageOnly": "(图片)",
     "selectModel": "选择模型",
     "modelLocked": "智能体已创建，模型只读。要换模型，先在上方的智能体胶囊上移除它",
+    "sendFailed": "发送失败：{{error}}",
     "pasteChipLines": "[粘贴文本 #{{seq}} · {{lines}} 行]",
     "pasteChipChars": "[粘贴文本 #{{seq}} · {{chars}} 字符]",
     "pasteName": "粘贴文本 #{{seq}}"

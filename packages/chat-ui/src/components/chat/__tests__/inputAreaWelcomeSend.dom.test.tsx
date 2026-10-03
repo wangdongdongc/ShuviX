@@ -71,6 +71,8 @@ let timeline: Call[] = []
 let rows: Map<string, Session>
 /** session.create 的行为（可换成 reject） */
 let createImpl: () => Promise<Session>
+/** agent.setModel 的行为（可换成 reject：新会话配到一半失败） */
+let setModelImpl: () => Promise<{ success: boolean }>
 
 const row = (id: string, enabledTools: string[] = []): Session => ({
   id,
@@ -105,10 +107,14 @@ function buildApi(): Record<string, unknown> {
           if (r) r.settings = { ...r.settings, enabledTools: [...params.enabledTools] }
           return { success: true }
         }
-      )
+      ),
+      delete: record('session.delete', async (id: string) => {
+        rows.delete(id)
+        return { success: true }
+      })
     },
     agent: {
-      setModel: record('agent.setModel', async () => ({ success: true })),
+      setModel: record('agent.setModel', () => setModelImpl()),
       setThinkingLevel: record('agent.setThinkingLevel', async () => ({ success: true })),
       init: record('agent.init', async (params: { sessionId: string }) => ({
         success: true,
@@ -192,6 +198,28 @@ async function pressEnter(): Promise<void> {
 
 const store = (): ReturnType<typeof useChatStore.getState> => useChatStore.getState()
 
+/** 卡片里的发送失败提示（不在屏为 null） */
+const sendErrorText = (): string | null =>
+  container.querySelector('[data-send-error]')?.textContent ?? null
+
+/**
+ * 期间冒出来的未处理 rejection。临时接管监听：断言「一条都没有」时，真冒出来的那条不会被测试框架
+ * 当成本文件的错误吞掉，而是落进返回值、让断言如实失败
+ */
+async function collectUnhandled(run: () => Promise<void>): Promise<unknown[]> {
+  const vitestListeners = process.listeners('unhandledRejection')
+  process.removeAllListeners('unhandledRejection')
+  const unhandled: unknown[] = []
+  process.on('unhandledRejection', (reason) => unhandled.push(reason))
+  try {
+    await run()
+  } finally {
+    process.removeAllListeners('unhandledRejection')
+    for (const l of vitestListeners) process.on('unhandledRejection', l)
+  }
+  return unhandled
+}
+
 /** 欢迎页：没有当前会话；显示 P/M、档位、草稿与命令都按给的种 */
 function seedWelcome(opts: {
   draft?: string[]
@@ -267,6 +295,7 @@ beforeEach(() => {
     rows.set(NEW, r)
     return structuredClone(r)
   }
+  setModelImpl = async () => ({ success: true })
   ;(window as unknown as { api: unknown }).api = buildApi()
   useModelCatalogStore.setState({ loaded: true, providers: [PROVIDER], availableModels: [MODEL] })
   container = document.createElement('div')
@@ -357,32 +386,47 @@ describe('欢迎页直接发送：选择在 agent.init 之前落进新会话', (
     expect(store().activeSessionId).toBe('existing')
   })
 
-  it('WS-D-7 session.create reject → 草稿不清、不调 prompt（失败以未处理的 rejection 冒出来）', async () => {
+  it('WS-D-7 session.create reject → 卡片里写明失败原因、没有未处理的 rejection；草稿与输入文本都在、不调 prompt；再敲字提示消失', async () => {
     seedWelcome({ draft: ['skill:a'] })
     createImpl = () => Promise.reject(new Error('create failed'))
     await mount()
     await type('hello')
 
-    // 回车处理不接这个 promise：失败只能以未处理的 rejection 出现。临时接管监听，免得它被
-    // 测试框架当成本文件的错误，同时把它确实发生了钉下来
-    const vitestListeners = process.listeners('unhandledRejection')
-    process.removeAllListeners('unhandledRejection')
-    const unhandled: unknown[] = []
-    process.on('unhandledRejection', (reason) => unhandled.push(reason))
-    try {
+    const unhandled = await collectUnhandled(async () => {
       await pressEnter()
       await flush()
-    } finally {
-      process.removeAllListeners('unhandledRejection')
-      for (const l of vitestListeners) process.on('unhandledRejection', l)
-    }
+    })
 
+    expect(unhandled).toEqual([])
     expect(steps()).toEqual(['session.create'])
     expect(store().welcomeEnabledTools).toEqual(['skill:a'])
     expect(store().activeSessionId).toBeNull()
     expect(store().inputText).toBe('hello')
-    expect(unhandled).toHaveLength(1)
-    expect((unhandled[0] as Error).message).toBe('create failed')
+    expect(sendErrorText()).toBe(i18n.t('input.sendFailed', { error: 'create failed' }))
+
+    await type('hello again')
+    expect(sendErrorText()).toBeNull()
+  })
+
+  it('WS-D-7b 新会话配到一半失败（setModel reject）→ 删掉这条半成品会话；不 init、不 prompt；草稿与输入都在，失败原因写在卡片里', async () => {
+    seedWelcome({ draft: ['skill:a'] })
+    setModelImpl = () => Promise.reject(new Error('set model failed'))
+    await mount()
+    await type('hello')
+
+    const unhandled = await collectUnhandled(async () => {
+      await pressEnter()
+      await flush()
+    })
+
+    expect(unhandled).toEqual([])
+    expect(steps()).toEqual(['session.create', 'agent.setModel', 'session.delete'])
+    expect(callsOf('session.delete')).toEqual([[NEW]])
+    expect(rows.has(NEW)).toBe(false)
+    expect(store().welcomeEnabledTools).toEqual(['skill:a'])
+    expect(store().activeSessionId).toBeNull()
+    expect(store().inputText).toBe('hello')
+    expect(sendErrorText()).toBe(i18n.t('input.sendFailed', { error: 'set model failed' }))
   })
 })
 
@@ -417,6 +461,39 @@ describe('斜杠命令的依赖项落到它被发往的会话', () => {
     ])
     const [prompt] = callsOf('agent.prompt')[0] as [{ sessionId: string }]
     expect(prompt.sessionId).toBe(NEW)
+  })
+
+  it('WS-D-4b 欢迎页键入 /cmd 加空格（转成芯片）→ 依赖项立即进草稿、零 IPC；发送后经第一次 updateEnabledTools 落进新会话', async () => {
+    seedWelcome({ draft: ['skill:a'], slashCommands: [CMD] })
+    await mount()
+    await type('/cmd ')
+
+    expect(store().welcomeEnabledTools).toEqual(['skill:a', 'skill:req'])
+    expect(steps()).toEqual([])
+
+    await type('do it')
+    await pressEnter()
+
+    expect(callsOf('session.updateEnabledTools')).toEqual([
+      [{ id: NEW, enabledTools: ['skill:a', 'skill:req'] }]
+    ])
+    expect(store().welcomeEnabledTools).toEqual([])
+    const [prompt] = callsOf('agent.prompt')[0] as [{ sessionId: string; text: string }]
+    expect(prompt.sessionId).toBe(NEW)
+  })
+
+  it('WS-D-4c 已有会话（还没有 Agent）里键入 /cmd 加空格 → 立即写进这条会话的勾选，草稿不动', async () => {
+    seedWelcome({ draft: ['skill:x'], slashCommands: [CMD] })
+    rows.set('existing', row('existing', ['skill:a']))
+    useChatStore.setState({ sessions: [row('existing', ['skill:a'])] })
+    store().setActiveSessionId('existing')
+    await mount()
+    await type('/cmd ')
+
+    expect(callsOf('session.updateEnabledTools')).toEqual([
+      [{ id: 'existing', enabledTools: ['skill:a', 'skill:req'] }]
+    ])
+    expect(store().welcomeEnabledTools).toEqual(['skill:x'])
   })
 
   it('WS-D-5 欢迎页弹层选命令（芯片）→ 依赖项立即进草稿、零 IPC；发送后经第一次 updateEnabledTools 落进新会话、草稿清空', async () => {

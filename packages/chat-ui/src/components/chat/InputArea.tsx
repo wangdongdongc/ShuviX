@@ -137,9 +137,29 @@ export function InputArea({
     setChipWidth(node?.offsetWidth ?? 0)
   }, [])
 
+  /**
+   * 自动勾上命令依赖的扩展能力（fire-and-forget）。与工具选择器同一个写入口：会话已有 Agent
+   * 运行时（勾选只读）/ 渠道端时什么也不做；`sid` 为 null（欢迎页）时并进草稿。
+   * 目标会话由调用方给：欢迎页直接发送时命令在新会话建好之后才展开，依赖项要落到新会话上。
+   */
+  const autoEnableRequiredTools = useCallback(
+    (requiredTools: string[] | undefined, sid: string | null): void => {
+      if (!requiredTools?.length) return
+      void addSessionTools(sid, requiredTools)
+    },
+    []
+  )
+
+  /**
+   * 发送失败的原因（建会话 / 写配置 / 发出消息任一步抛错）。显示在卡片里，下一次输入或发送时清掉 ——
+   * 失败时输入框文本与欢迎页草稿都还在，原样重试即可。
+   */
+  const [sendError, setSendError] = useState<string | null>(null)
+
   /** 输入变化处理：检测 "/commandId " 模式并自动转为芯片；同步 @ 引用触发态与登记表 */
   const handleInputChange = useCallback(
     (value: string, caret: number) => {
+      setSendError(null)
       if (!slashChip && value.startsWith('/') && value.includes(' ')) {
         const spaceIdx = value.indexOf(' ')
         const cmdId = value.slice(1, spaceIdx)
@@ -153,6 +173,9 @@ export function InputArea({
             kind: cmd.kind
           })
           setInputText(value.slice(spaceIdx + 1))
+          // 与从弹层选中同一处理：转成芯片的那一刻就勾上依赖（欢迎页并进草稿）。发送时芯片分支
+          // 不再解析命令，错过这一刻依赖就永远不会被勾上
+          autoEnableRequiredTools(cmd.requiredTools, useChatStore.getState().activeSessionId)
           return
         }
       }
@@ -161,7 +184,7 @@ export function InputArea({
       paste.prune(value)
       at.refresh(value, caret)
     },
-    [slashChip, slashCommands, setInputText, at, paste]
+    [slashChip, slashCommands, setInputText, at, paste, autoEnableRequiredTools]
   )
 
   // 消息回退：把历史消息重建为可编辑草稿——paste/at 重新登记恢复胶囊，cmd 转 /id 明文（发送时重新解析）。
@@ -245,19 +268,6 @@ export function InputArea({
   }, [onHeightChange])
 
   /**
-   * 自动勾上命令依赖的扩展能力（fire-and-forget）。与工具选择器同一个写入口：会话已有 Agent
-   * 运行时（勾选只读）/ 渠道端时什么也不做；`sid` 为 null（欢迎页）时并进草稿。
-   * 目标会话由调用方给：欢迎页直接发送时命令在新会话建好之后才展开，依赖项要落到新会话上。
-   */
-  const autoEnableRequiredTools = useCallback(
-    (requiredTools: string[] | undefined, sid: string | null): void => {
-      if (!requiredTools?.length) return
-      void addSessionTools(sid, requiredTools)
-    },
-    []
-  )
-
-  /**
    * 构造发送文本 + 内联 Token（slash 命令 / skill 展开 + @ 文件引用 + 粘贴芯片）—— 主会话与笔记本会话共用。
    * - slash 命令：payload 为整条替换，无法与 at token 混用，故先把 @ 引用就地展开为 payload 文本内联进参数；
    *   粘贴芯片保留 {{token}} 标记进参数（resolveTokensForAgent 对 cmd payload 二次替换展开），
@@ -319,20 +329,26 @@ export function InputArea({
     const sid = session.id
     const welcome = useChatStore.getState()
     const { activeProvider, activeModel: pickedModel } = chatHost.models
-    if (activeProvider && pickedModel) {
-      await host.agent.setModel({ sessionId: sid, provider: activeProvider, model: pickedModel })
-    }
-    if (welcome.thinkingLevel) {
-      await host.agent.setThinkingLevel({
-        sessionId: sid,
-        level: welcome.thinkingLevel as ThinkingLevel
-      })
-    }
-    if (welcome.welcomeEnabledTools.length > 0) {
-      await host.session.updateEnabledTools({
-        id: sid,
-        enabledTools: welcome.welcomeEnabledTools
-      })
+    try {
+      if (activeProvider && pickedModel) {
+        await host.agent.setModel({ sessionId: sid, provider: activeProvider, model: pickedModel })
+      }
+      if (welcome.thinkingLevel) {
+        await host.agent.setThinkingLevel({
+          sessionId: sid,
+          level: welcome.thinkingLevel as ThinkingLevel
+        })
+      }
+      if (welcome.welcomeEnabledTools.length > 0) {
+        await host.session.updateEnabledTools({
+          id: sid,
+          enabledTools: welcome.welcomeEnabledTools
+        })
+      }
+    } catch (err) {
+      // 配了一半的会话不留：重试会再建一条，留着它只会在侧栏里多出一条没人要的空会话
+      await host.session.delete(sid).catch(() => undefined)
+      throw err
     }
     welcome.setWelcomeEnabledTools([])
     await getSessionChannelApi().agent.init({ sessionId: sid })
@@ -416,8 +432,20 @@ export function InputArea({
     // 后端 resolve 后广播 input_request_resolved → store 自动移除该 pending
   }
 
-  /** 发送消息（支持图片） */
+  /**
+   * 发送消息（支持图片）。回车与发送按钮都走这里，两处都不 await —— 失败必须在这里接住：
+   * 否则是一条没人处理的 rejection，用户眼里什么也没发生
+   */
   const handleSend = async (): Promise<void> => {
+    setSendError(null)
+    try {
+      await sendMessage()
+    } catch (err) {
+      setSendError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  const sendMessage = async (): Promise<void> => {
     // 待处理请求优先于一切发送路径（普通消息 / steer / 档案切换）：Agent 正等这条输入
     if (activePendingInput) {
       await handleSubmitOther()
@@ -750,6 +778,12 @@ export function InputArea({
                   </button>
                 </div>
               ))}
+            </div>
+          )}
+
+          {sendError && (
+            <div data-send-error className="px-4 pt-2 text-xs text-error break-words">
+              {t('input.sendFailed', { error: sendError })}
             </div>
           )}
 

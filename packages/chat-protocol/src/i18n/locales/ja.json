@@ -232,6 +232,7 @@
     "imageOnly": "(画像)",
     "selectModel": "モデルを選択",
     "modelLocked": "エージェント作成済みのためモデルは読み取り専用です。変更するには上のエージェントチップから削除してください",
+    "sendFailed": "送信できませんでした：{{error}}",
     "pasteChipLines": "[貼り付けテキスト #{{seq}} · {{lines}} 行]",
     "pasteChipChars": "[貼り付けテキスト #{{seq}} · {{chars}} 文字]",
     "pasteName": "貼り付けテキスト #{{seq}}"

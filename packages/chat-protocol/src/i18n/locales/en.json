@@ -232,6 +232,7 @@
     "imageOnly": "(image)",
     "selectModel": "Select a model",
     "modelLocked": "Read-only: the agent has already been created. Remove it from the agent chip above to change the model",
+    "sendFailed": "Couldn't send: {{error}}",
     "pasteChipLines": "[Pasted text #{{seq}} · {{lines}} lines]",
     "pasteChipChars": "[Pasted text #{{seq}} · {{chars}} chars]",
     "pasteName": "Pasted text #{{seq}}"
