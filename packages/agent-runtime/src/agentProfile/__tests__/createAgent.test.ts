@@ -17,6 +17,7 @@ import type { SpawnContext } from '../../subagent/manager'
 import { buildBuiltinProfile, PERMISSION_REVIEWER_SPEC } from '../../subagent/builtinAgents'
 import { createInlineMdReader } from '../../subagent/builtinAgents/inlineSources'
 import { toInProcessAgentType } from '../../subagent/dispatchTool'
+import { agentRuntimeRegistry } from '../../runtimeRegistry'
 import type { RuntimeNetwork } from '../../types'
 import type { ThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
 
@@ -555,6 +556,36 @@ describe('CreatedAgent 运行期操作', () => {
       '<project_memory>\nPROJ-MEMORY\n</project_memory>'
     expect(created.systemPrompt).toBe(expected)
     expect(constructed[constructed.length - 1].deps.systemPrompt).toBe(expected)
+  })
+})
+
+/**
+ * ML-U-10 运行时注册中心里的身份标签：`displayName` 是档案 md 的 `shuvix-displayName`
+ * （会话横幅的 agent 胶囊与监控面板都读这一份），没写回落档案名 —— 显示名不能是空串。
+ */
+describe('createAgentFactory —— 注册中心的 displayName（ML-U-10）', () => {
+  it.each<[string, string, string]>([
+    ['档案写了显示名 → 原样', 'Default', 'Default'],
+    ['显示名为空串 → 回落档案名', '', 'default']
+  ])('ML-U-10 %s', async (_label, displayName, expected) => {
+    const b = makeHost()
+    const sessionId = `ml-u-10-${displayName || 'empty'}`
+    const created = await createAgentFactory(b.host).createAgent({
+      kind: 'root',
+      sessionId,
+      profile: { ...PROFILE, displayName },
+      model: MODEL_CFG,
+      cwd: '/w'
+    })
+    try {
+      const entry = agentRuntimeRegistry.get(sessionId)
+      expect(entry).toBeDefined()
+      expect(entry!.profileName).toBe('default')
+      expect(entry!.displayName).toBe(expected)
+    } finally {
+      created.dispose()
+    }
+    expect(agentRuntimeRegistry.has(sessionId)).toBe(false)
   })
 })
 

@@ -544,3 +544,65 @@ describe('EXT-U-16 运行时区间事件：agent_created / agent_closing', () =>
     ])
   })
 })
+
+// ─── hasAgentRuntime：模型锁与扩展能力锁同一口径 ──────────────────────────────
+
+describe('ML-U-1 hasAgentRuntime 与 initAgent().created / updateEnabledTools 同一口径', () => {
+  /**
+   * 三个面此刻说的是不是同一件事：hasAgentRuntime（agent.setModel 的拒绝条件）、
+   * initAgent().created（前端只读态的打底）、updateEnabledTools 能否写入（扩展能力的拒绝条件）。
+   * 写入探针用的是会话现有的那份勾选 —— 放行时只是原样重写一遍，不改变后续时刻的状态。
+   */
+  async function snapshot(): Promise<{ runtime: boolean; created: boolean; writable: boolean }> {
+    const runtime = sessionService.hasAgentRuntime(SID)
+    const created = (await sessionService.initAgent(SID)).created
+    const writable = sessionService.updateEnabledTools(SID, ['skill:a'])
+    return { runtime, created, writable }
+  }
+  const LOCKED = { runtime: true, created: true, writable: false }
+  const FREE = { runtime: false, created: false, writable: true }
+
+  it('ML-U-1 ensure 前 → 创建中 → 存在 → 关停中 → 关停完：四个时刻三面一致', async () => {
+    seedSession({ id: SID, settings: { enabledTools: ['skill:a'] } })
+    const born = deferred<FakeAgent>()
+    const closed = deferred()
+    mocks.agentCreate.mockImplementationOnce(() => born.promise)
+
+    // ① 还没 ensure：没有运行时，三面都说可改
+    expect(await snapshot()).toEqual(FREE)
+
+    // ② ensure 同步登记创建在途：此刻起模型与勾选都只读（运行时会按此刻的配置建）
+    const p = sessionService.ensureAgentSession(SID)
+    expect(sessionService.hasAgentRuntime(SID)).toBe(true)
+    expect(await snapshot()).toEqual(LOCKED)
+    await vi.waitFor(() => expect(mocks.agentCreate).toHaveBeenCalledTimes(1))
+    expect(await snapshot()).toEqual(LOCKED)
+
+    // ③ 运行时存在
+    born.resolve(makeAgent(SID, () => closed.promise))
+    await p
+    expect(await snapshot()).toEqual(LOCKED)
+
+    // ④ invalidate 之后、dispose 落定之前（关停中）：仍只读
+    const r = sessionService.invalidateAgent(SID)
+    expect(sessionService.hasAgentRuntime(SID)).toBe(true)
+    expect(await snapshot()).toEqual(LOCKED)
+
+    // ⑤ 关停完：解锁
+    closed.resolve()
+    await r
+    expect(await snapshot()).toEqual(FREE)
+  })
+
+  it('ML-U-1 创建失败之后不留锁：hasAgentRuntime false，created false，写入放行', async () => {
+    seedSession({ id: SID, settings: { enabledTools: ['skill:a'] } })
+    mocks.agentCreate.mockRejectedValueOnce(new Error('构造炸了'))
+    await expect(sessionService.ensureAgentSession(SID)).rejects.toThrow('构造炸了')
+
+    expect(await snapshot()).toEqual(FREE)
+  })
+
+  it('ML-U-1 会话不存在 → hasAgentRuntime false（不抛）', () => {
+    expect(sessionService.hasAgentRuntime('no-such-session')).toBe(false)
+  })
+})

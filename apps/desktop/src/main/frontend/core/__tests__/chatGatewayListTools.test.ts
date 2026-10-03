@@ -91,6 +91,9 @@ vi.mock('../../../services/sessionDayPromptService', () => ({
   recordFromUserMessageEvent: vi.fn()
 }))
 
+import { buildBuiltinProfiles } from '@shuvix/agent-runtime'
+import { createInlineMdReader } from '@shuvix/agent-runtime/builtinAgents/inlineSources'
+
 let chatGateway: (typeof import('../DefaultChatGateway'))['chatGateway']
 
 beforeAll(async () => {
@@ -329,4 +332,95 @@ describe('DefaultChatGateway.listTools —— 内置 mcp:chrome 只给声明它�
     mocks.resolveAgentProfileName.mockReturnValue('coding')
     expect(rowOf(chatGateway.listTools(SID), 'mcp:chrome')).toBeUndefined()
   })
+})
+
+/**
+ * 没有会话时调用方可以点名档案（`options.profile`）：欢迎页直接发送新建的是无项目会话（基座
+ * chat），所以它的工具选择器按 chat 画声明项；不点名（项目编辑页）回落 work。有会话时 options
+ * 不作数 —— 档案恒由会话形态推导。
+ */
+describe('DefaultChatGateway.listTools —— 没有会话时按 options.profile 画（ML-U-7）', () => {
+  const CHAT: ProfileShot = {
+    name: 'chat',
+    displayName: 'Chat Persona',
+    tools: ['read', 'skill:builtin:drawing']
+  }
+
+  beforeEach(() => {
+    mocks.getProfile.mockImplementation((name: string) =>
+      name === 'work' ? WORK : name === 'chat' ? CHAT : undefined
+    )
+  })
+
+  it("ML-U-7a 无 sid + {profile:'chat'} → 取 chat 档案、不推导形态；declaredBy 是 chat 的显示名", () => {
+    const rows = chatGateway.listTools(undefined, { profile: 'chat' })
+    expect(mocks.resolveAgentProfileName).not.toHaveBeenCalled()
+    expect(mocks.getProfile).toHaveBeenCalledWith('chat')
+    expect(mocks.getProfile).not.toHaveBeenCalledWith('work')
+    // chat 没声明 mcp:ctx：欢迎页上它不锁
+    expect(declaredOf(rows)).toEqual({ 'skill:builtin:drawing': 'Chat Persona' })
+    expect(rowOf(rows, 'mcp:ctx')).toBeDefined()
+    expect(rowOf(rows, 'mcp:ctx')?.declaredBy).toBeUndefined()
+  })
+
+  it('ML-U-7b 有 sid 时 options 不作数：按会话形态推导（这里推出 work）', () => {
+    mocks.resolveAgentProfileName.mockReturnValue('work')
+    const rows = chatGateway.listTools(SID, { profile: 'chat' })
+    expect(mocks.resolveAgentProfileName).toHaveBeenCalledWith(SID)
+    expect(mocks.getProfile).toHaveBeenCalledWith('work')
+    expect(mocks.getProfile).not.toHaveBeenCalledWith('chat')
+    expect(declaredOf(rows)).toEqual({ 'mcp:ctx': 'Work', 'skill:builtin:drawing': 'Work' })
+  })
+
+  it.each<[string, { profile?: string }]>([
+    ["profile 为 ''", { profile: '' }],
+    ['options 为 {}', {}]
+  ])('ML-U-7c 无 sid、%s → 回落 work', (_label, options) => {
+    const rows = chatGateway.listTools(undefined, options)
+    expect(mocks.resolveAgentProfileName).not.toHaveBeenCalled()
+    expect(mocks.getProfile).toHaveBeenCalledWith('work')
+    expect(declaredOf(rows)).toEqual({ 'mcp:ctx': 'Work', 'skill:builtin:drawing': 'Work' })
+  })
+
+  it('ML-U-7d 无 sid、点名一个不存在的档案 → 不抛、一个条目都不标、列表照常', () => {
+    const baseline = chatGateway.listTools().length
+    let rows: Row[] = []
+    expect(() => {
+      rows = chatGateway.listTools(undefined, { profile: 'no-such-profile' })
+    }).not.toThrow()
+    expect(mocks.getProfile).toHaveBeenCalledWith('no-such-profile')
+    expect(rows).toHaveLength(baseline)
+    expect(declaredOf(rows)).toEqual({})
+    expect(rowOf(rows, 'read')?.defaultEnabled).toBe(false)
+  })
+
+  it.each(['en', 'zh', 'ja'])(
+    "ML-U-7e (%s) 真内置 md：{profile:'chat'} 的 skill:builtin:drawing 由 chat 的显示名声明，且没有 mcp:chrome",
+    (language) => {
+      const profiles = buildBuiltinProfiles({
+        language,
+        widgetsRoot: '/w',
+        readMd: createInlineMdReader()
+      })
+      const chat = profiles.find((p) => p.name === 'chat')
+      const work = profiles.find((p) => p.name === 'work')
+      expect(chat, 'chat 档案存在').toBeDefined()
+      expect(chat!.displayName).toBeTruthy()
+      mocks.getProfile.mockImplementation((name: string) => profiles.find((p) => p.name === name))
+      mocks.mcpInfos = [
+        { name: 'mcp:browser', label: 'browser', group: 'mcp:browser', isBuiltin: true },
+        { name: 'mcp:chrome', label: 'chrome', group: 'mcp:chrome', isBuiltin: true },
+        MCP_CTX
+      ]
+
+      const rows = chatGateway.listTools(undefined, { profile: 'chat' })
+      expect(rowOf(rows, 'skill:builtin:drawing')?.declaredBy).toBe(chat!.displayName)
+      expect(rowOf(rows, 'mcp:chrome')).toBeUndefined()
+      // 与项目编辑页（work）画的不是同一个档案 —— 两个显示名不同，悬停提示才说得清
+      expect(work!.displayName).not.toBe(chat!.displayName)
+      expect(rowOf(chatGateway.listTools(), 'skill:builtin:drawing')?.declaredBy).toBe(
+        work!.displayName
+      )
+    }
+  )
 })

@@ -2656,6 +2656,148 @@ export function toolPickerPane(main: CdpClient): ToolPickerPane {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// 输入框的模型选择器（ModelPicker → ModelSelect inline）—— 会话模型与扩展能力同一条规矩：只在创建
+// Agent 那一刻读一次，会话有运行时（含创建中 / 关停中）时模型只读，思考档位照常可调。
+//
+// 锚点：
+//   - 根 = 输入卡工具行选择器簇的第一个子节点（与 chatPane.modelPickerPresent 同一锚定：textarea
+//     容器的下一个兄弟 → 第一个子节点 → 第一个子节点）。ModelSelect 未锁定时根上没有 data 锚点，
+//     只能这样锚；锁定时根上有 `data-model-locked`，触发钮里有 `[data-model-lock]`；
+//   - 触发钮 = 根下的直接子 button（没有提供商时这里是「去配置」按钮，没有 chevron —— 不算在屏）；
+//   - 面板 = `[data-model-panel]`（portal 到 body，同一时刻只有一个）；模型行 =
+//     `[data-model-item="<providerId>/<modelId>"]`；档位按钮 = `[data-thinking-level="<level>"]`；
+//     搜索框 = 面板里的 `input[type="text"]`（打字会把所有命中的提供商组展开）。
+
+/** 模型面板里的一行 */
+export interface ModelPickerItem {
+  /** `data-model-item` 的值（`<providerId>/<modelId>`） */
+  key: string
+  modelId: string
+  /** 按钮被禁用 = 模型只读 */
+  disabled: boolean
+  /** 画成禁用态（`aria-disabled`） */
+  lockedLook: boolean
+  /** 悬停提示（只读时是「为什么改不了」） */
+  title: string
+}
+
+export interface ModelPickerPane {
+  /** 选择器在屏（有提供商、渲染出带 chevron 的触发钮） */
+  present(): Promise<boolean>
+  /** 只读态（根上的 `data-model-locked`） */
+  locked(): Promise<boolean>
+  /** 触发钮上的锁（`data-model-lock`） */
+  lockIndicatorVisible(): Promise<boolean>
+  /** 触发钮的悬停提示（只读时是原因，否则为空串） */
+  triggerTitle(): Promise<string>
+  /** 触发钮上显示的模型名（没选时是「选择模型」那句） */
+  currentModel(): Promise<string>
+  /** 面板是否展开 */
+  isOpen(): Promise<boolean>
+  /** 展开面板并等它上屏（幂等） */
+  open(): Promise<void>
+  /** 收起面板并等它离开 DOM（幂等） */
+  close(): Promise<void>
+  /** 面板里此刻可见的模型行（DOM 序）；面板没展开时为空 */
+  items(): Promise<ModelPickerItem[]>
+  /**
+   * 选一个模型（先展开面板；行不可见就在搜索框里打它的 id 展开所在组）；行不在返回 false。
+   * `force`：先摘掉 disabled、点完再装回 —— 证明「只读时硬点也不写」靠的是组件自己的判断。
+   */
+  pick(modelId: string, opts?: { force?: boolean }): Promise<boolean>
+  /** 点一个思考档位（先展开面板；面板不会因此收起） */
+  pickThinking(level: string): Promise<void>
+}
+
+export function modelPickerPane(main: CdpClient): ModelPickerPane {
+  const ROOT = `(document.querySelector('textarea')?.parentElement?.nextElementSibling?.firstElementChild?.firstElementChild ?? null)`
+  const TRIGGER = `(${ROOT}?.querySelector(':scope > button') ?? null)`
+  const PANEL = `document.querySelector('[data-model-panel]')`
+  const ITEMS = `[...(${PANEL}?.querySelectorAll('[data-model-item]') ?? [])]`
+  const isOpen = (): Promise<boolean> => main.eval<boolean>(`${PANEL} !== null`)
+  const present = (): Promise<boolean> =>
+    main.eval<boolean>(`!!${TRIGGER}?.querySelector('.lucide-chevron-down')`)
+  const clickTrigger = (): Promise<unknown> => main.eval(`(${TRIGGER}?.click(), true)`)
+  const open = async (): Promise<void> => {
+    await until(present, 'model picker present')
+    if (!(await isOpen())) await clickTrigger()
+    await until(isOpen, 'model picker panel open')
+  }
+  /** 找到并点某一行（force 时摘掉 disabled 再装回）；找不到回 false */
+  const clickItem = (modelId: string, force: boolean): Promise<boolean> =>
+    main.eval<boolean>(`(() => {
+      const btn = ${ITEMS}.find((b) =>
+        (b.getAttribute('data-model-item') ?? '').endsWith('/' + ${JSON.stringify(modelId)})
+      )
+      if (!btn) return false
+      const wasDisabled = btn.disabled
+      if (${force}) btn.disabled = false
+      btn.click()
+      // 装回原样：React 只在 prop 变化时才碰 disabled
+      if (${force}) btn.disabled = wasDisabled
+      return true
+    })()`)
+  return {
+    present,
+    locked: () => main.eval<boolean>(`!!${ROOT}?.hasAttribute('data-model-locked')`),
+    lockIndicatorVisible: () =>
+      main.eval<boolean>(`!!${TRIGGER}?.querySelector('[data-model-lock]')`),
+    triggerTitle: () => main.eval<string>(`${TRIGGER}?.getAttribute('title') ?? ''`),
+    currentModel: () => main.eval<string>(`(${TRIGGER}?.textContent ?? '').trim()`),
+    isOpen,
+    open,
+    close: async () => {
+      if (!(await isOpen())) return
+      await clickTrigger()
+      await until(async () => !(await isOpen()), 'model picker panel closed')
+    },
+    items: () =>
+      main.eval<ModelPickerItem[]>(`${ITEMS}.map((b) => {
+        const key = b.getAttribute('data-model-item') ?? ''
+        return {
+          key,
+          modelId: key.slice(key.indexOf('/') + 1),
+          disabled: !!b.disabled,
+          lockedLook: b.getAttribute('aria-disabled') === 'true',
+          title: b.getAttribute('title') ?? ''
+        }
+      })`),
+    pick: async (modelId, opts = {}) => {
+      await open()
+      const force = opts.force === true
+      if (await clickItem(modelId, force)) return true
+      // 行所在的提供商组没展开（欢迎页还没选过模型时一组都不展开）：搜它的 id，命中的组全展开
+      await main.eval(`(() => {
+        const input = ${PANEL}?.querySelector('input[type="text"]')
+        if (!input) return false
+        const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+        setter.call(input, ${JSON.stringify(modelId)})
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+        return true
+      })()`)
+      await until(
+        () =>
+          main.eval<boolean>(
+            `${ITEMS}.some((b) => (b.getAttribute('data-model-item') ?? '').endsWith('/' + ${JSON.stringify(modelId)}))`
+          ),
+        `model row ${modelId}`
+      ).catch(() => false)
+      return clickItem(modelId, force)
+    },
+    pickThinking: async (level) => {
+      await open()
+      const ok = await main.eval<boolean>(`(() => {
+        const btn = ${PANEL}?.querySelector('[data-thinking-level=' + ${JSON.stringify(JSON.stringify(level))} + ']')
+        if (!btn) return false
+        btn.click()
+        return true
+      })()`)
+      if (!ok) throw new Error(`thinking level ${level} not in the model panel`)
+    }
+  }
+}
+
 export interface HttpLogPane {
   /** 记录开关当前是否打开（读 Toggle 的 on 态背景类） */
   recordOn(): Promise<boolean>
@@ -6156,6 +6298,8 @@ export interface StatusBannerPane {
   chip(): Promise<StatusBannerChipShot | null>
   /** 点标记主体（= 打开右栏 agents tab 并按本会话筛选） */
   clickChip(): Promise<void>
+  /** 点标记上的 X（`[data-agent-chip-destroy]`，= 销毁这条会话的运行时）；标记不在屏回 false */
+  clickChipDestroy(): Promise<boolean>
 }
 
 /** 主窗状态横幅（对话区顶部、顶栏之下） */
@@ -6180,7 +6324,14 @@ export function statusBannerPane(main: CdpClient): StatusBannerPane {
     clickChip: async () => {
       await main.eval(`${CHIP}?.querySelector('button:not([data-agent-chip-destroy])')?.click()`)
       await sleep(300)
-    }
+    },
+    clickChipDestroy: () =>
+      main.eval<boolean>(`(() => {
+        const x = ${CHIP}?.querySelector('[data-agent-chip-destroy]')
+        if (!x) return false
+        x.click()
+        return true
+      })()`)
   }
 }
 

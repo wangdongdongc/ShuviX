@@ -86,7 +86,7 @@ export async function addSessionTools(
   names: readonly string[]
 ): Promise<void> {
   const current = currentTools(sessionId)
-  const missing = names.filter((name) => !current.includes(name))
+  const missing = [...new Set(names)].filter((name) => !current.includes(name))
   if (missing.length === 0) return
   await writeSessionTools(sessionId, [...current, ...missing])
 }

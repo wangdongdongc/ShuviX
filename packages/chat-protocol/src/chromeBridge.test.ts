@@ -967,6 +967,7 @@ describe('Chrome 桥协议：isBridgeMessage / chromeBridgeSocketPath / 侧边�
       'app.openExternal',
       'events.subscribe',
       'agent.setModel',
+      'agent.destroy',
       'session.list',
       'session.create',
       'session.updateEnabledTools'

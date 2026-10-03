@@ -9,7 +9,10 @@
  *     叠加，写进去的永远只有会话自己勾的那些；已经混进勾选里的声明项也不会被顺手抹掉；
  *   - 组件自己挡住对它的切换 —— 禁用的勾选框浏览器根本不派发 click，所以先摘掉 disabled 再点
  *     （与 e2e `toolPickerPane.toggle(…, { force: true })` 同一个办法）才证明得了这一点；
- *   - 运行时已建（sessionAgentCreated）时整排只读，声明项与其它行一样压暗、换成只读的悬停原因。
+ *   - 运行时已建（sessionAgentCreated）时整排只读，声明项与其它行一样压暗、换成只读的悬停原因；
+ *   - 欢迎页（没有会话，TP-10..14）：照样渲染，勾的是新会话的草稿（`welcomeEnabledTools`，不走 IPC），
+ *     条目按欢迎页新建会话将用的档案列（`tools.list(undefined, {profile:'chat'})`）；别的会话有没有
+ *     运行时与它无关；会话一换，晚到的那份条目不上屏。
  *
  * 数据走真的 `useSessionTools` + 真的 chatStore；包入口 `@shuvix/chat-ui` 整个顶掉（同
  * useSessionTools.test.ts 的做法：入口会带上模块加载期就读 window.location 的 useSessionInit），
@@ -335,5 +338,199 @@ describe('回归：没有任何声明项时一切照旧', () => {
     expect(container.querySelector('label[data-declared]')).toBeNull()
     expect(box('mcp:ctx').disabled).toBe(false)
     expect(box('mcp:ctx').checked).toBe(false)
+  })
+})
+
+// ─── 欢迎页：草稿与档案 chat ────────────────────────────────────────────────
+
+describe('欢迎页（没有会话）：勾的是新会话的草稿', () => {
+  const CHAT = 'Chat Persona'
+  /** 欢迎页那份条目：声明项由 chat 档案声明 */
+  const WELCOME_ITEMS: ToolItem[] = ITEMS.map((it) =>
+    it.declaredBy ? { ...it, declaredBy: CHAT } : it
+  )
+  const welcomeDraft = (): string[] => useChatStore.getState().welcomeEnabledTools
+
+  /** 欢迎页：别的会话（SID）有运行时也照样；草稿按给的种 */
+  function seedWelcome(draft: string[] = [], sessionTools: string[] = ['skill:bar']): void {
+    seedSession(sessionTools, true)
+    useChatStore.setState({ welcomeEnabledTools: draft })
+    useChatStore.getState().setActiveSessionId(null)
+  }
+
+  /** 按调用参数分两份：有 sid → 会话那份（Work 声明），没有 → 欢迎页那份（chat 声明） */
+  function listBySid(): void {
+    mocks.list.mockImplementation((sid?: string) => Promise.resolve(sid ? ITEMS : WELCOME_ITEMS))
+  }
+
+  async function mount(): Promise<void> {
+    await act(async () => {
+      root.render(createElement(ToolPicker))
+    })
+    await flush()
+  }
+
+  it("TP-10 渲染；tools.list 的参数正好是 (undefined, {profile:'chat'})；不锁；声明项照常已勾锁住、悬停点 chat", async () => {
+    seedWelcome()
+    listBySid()
+    await mount()
+    expect(mocks.list).toHaveBeenCalled()
+    for (const call of mocks.list.mock.calls) expect(call).toEqual([undefined, { profile: 'chat' }])
+    expect(pickerRoot().hasAttribute('data-locked')).toBe(false)
+    expect(pickerRoot().querySelector('[data-tool-lock]')).toBeNull()
+
+    await openPanel()
+    const hint = i18n.t('sessionConfig.extensionDeclared', { profile: CHAT })
+    expect(hint).toContain(CHAT)
+    for (const name of DECLARED) {
+      expect(row(name).hasAttribute('data-declared'), name).toBe(true)
+      expect(box(name).checked, name).toBe(true)
+      expect(box(name).disabled, name).toBe(true)
+      expect(row(name).title, name).toBe(hint)
+      expect(row(name).className, name).not.toContain('opacity-40')
+    }
+    for (const name of UNDECLARED) expect(box(name).disabled, name).toBe(false)
+  })
+
+  it('TP-11 勾 skill:foo → 草稿 [skill:foo]、零 IPC、计数跟着变；再取消 → []', async () => {
+    seedWelcome()
+    listBySid()
+    await mount()
+    expect(counts()).toEqual({ mcp: '1', skill: '1' })
+    await openPanel()
+
+    await click('skill:foo')
+    expect(welcomeDraft()).toEqual(['skill:foo'])
+    expect(mocks.updateEnabledTools).not.toHaveBeenCalled()
+    expect(box('skill:foo').checked).toBe(true)
+    expect(counts()).toEqual({ mcp: '1', skill: '2' })
+
+    await click('skill:foo')
+    expect(welcomeDraft()).toEqual([])
+    expect(mocks.updateEnabledTools).not.toHaveBeenCalled()
+    expect(counts()).toEqual({ mcp: '1', skill: '1' })
+    // 别的会话的勾选不受影响
+    expect(storedTools()).toEqual(['skill:bar'])
+  })
+
+  it('TP-12 硬点声明项 → 草稿不变', async () => {
+    seedWelcome(['skill:foo'])
+    listBySid()
+    await mount()
+    await openPanel()
+    const before = welcomeDraft()
+    for (const name of DECLARED) await forceClick(name)
+    expect(welcomeDraft()).toBe(before)
+    expect(welcomeDraft()).toEqual(['skill:foo'])
+    expect(mocks.updateEnabledTools).not.toHaveBeenCalled()
+  })
+
+  it('TP-13 欢迎页那份挂着时切到会话，会话那份先回并上屏；欢迎页那份晚到被忽略', async () => {
+    seedWelcome()
+    let resolveWelcome!: (items: ToolItem[]) => void
+    mocks.list.mockImplementation((sid?: string) =>
+      sid
+        ? Promise.resolve(ITEMS)
+        : new Promise<ToolItem[]>((r) => {
+            resolveWelcome = r
+          })
+    )
+    await mount()
+    // 欢迎页那份还没回：没有条目，不渲染
+    expect(container.querySelector('[data-tool-picker]')).toBeNull()
+
+    await act(async () => {
+      useChatStore.getState().setActiveSessionId(SID)
+    })
+    await flush()
+    // 会话那份（Work 声明 mcp:ctx、drawing；会话自己勾 bar）上屏，且是只读的
+    expect(summaryOf('[MCP]')).toBe('ctx')
+    expect(summaryOf('[Skills]')).toBe('drawing, bar')
+    expect(pickerRoot().hasAttribute('data-locked')).toBe(true)
+
+    // 欢迎页那份晚到：带一个只属于它的条目 —— 不能上屏
+    resolveWelcome([...WELCOME_ITEMS, { name: 'skill:late', label: 'late', group: '__skills__' }])
+    await flush()
+    await openPanel()
+    expect(container.querySelector('label[data-tool-item="skill:late"]')).toBeNull()
+    expect(row('mcp:ctx').title).toBe(i18n.t('sessionConfig.extensionsLocked'))
+  })
+
+  it('TP-13 反方向：会话那份挂着时切到欢迎页，欢迎页那份先回并上屏；会话那份晚到被忽略', async () => {
+    seedSession(['skill:bar'], true)
+    useChatStore.setState({ welcomeEnabledTools: [] })
+    let resolveSession!: (items: ToolItem[]) => void
+    mocks.list.mockImplementation((sid?: string) =>
+      sid
+        ? new Promise<ToolItem[]>((r) => {
+            resolveSession = r
+          })
+        : Promise.resolve(WELCOME_ITEMS)
+    )
+    await mount()
+    expect(container.querySelector('[data-tool-picker]')).toBeNull()
+
+    await act(async () => {
+      useChatStore.getState().setActiveSessionId(null)
+    })
+    await flush()
+    // 欢迎页：只有声明项开着（草稿为空），不锁
+    expect(summaryOf('[Skills]')).toBe('drawing')
+    expect(pickerRoot().hasAttribute('data-locked')).toBe(false)
+
+    resolveSession([...ITEMS, { name: 'skill:late', label: 'late', group: '__skills__' }])
+    await flush()
+    expect(summaryOf('[Skills]')).toBe('drawing')
+    // 打开面板会再拉一次（欢迎页那份）；晚到的会话条目始终没上屏
+    await openPanel()
+    expect(container.querySelector('label[data-tool-item="skill:late"]')).toBeNull()
+    expect(row('skill:builtin:drawing').title).toBe(
+      i18n.t('sessionConfig.extensionDeclared', { profile: CHAT })
+    )
+  })
+
+  it('TP-14 草稿与会话勾选互不串：各显示各的，在会话里勾不碰草稿，在欢迎页勾不碰会话', async () => {
+    seedSession(['skill:bar'])
+    useChatStore.setState({ welcomeEnabledTools: ['skill:foo'] })
+    useChatStore.getState().setActiveSessionId(null)
+    listBySid()
+    await mount()
+    await openPanel()
+    expect(box('skill:foo').checked).toBe(true)
+    expect(box('skill:bar').checked).toBe(false)
+
+    // 欢迎页勾 bar：只进草稿
+    await click('skill:bar')
+    expect(welcomeDraft()).toEqual(['skill:foo', 'skill:bar'])
+    expect(storedTools()).toEqual(['skill:bar'])
+    expect(mocks.updateEnabledTools).not.toHaveBeenCalled()
+
+    // 切到会话（没有运行时）：显示会话自己的勾选
+    await act(async () => {
+      useChatStore.getState().setActiveSessionId(SID)
+    })
+    await flush()
+    await openPanel()
+    expect(box('skill:bar').checked).toBe(true)
+    expect(box('skill:foo').checked).toBe(false)
+
+    // 会话里勾 foo：只写会话，草稿不动
+    await click('skill:foo')
+    expect(mocks.updateEnabledTools).toHaveBeenCalledTimes(1)
+    expect(mocks.updateEnabledTools).toHaveBeenCalledWith({
+      id: SID,
+      enabledTools: ['skill:bar', 'skill:foo']
+    })
+    expect(welcomeDraft()).toEqual(['skill:foo', 'skill:bar'])
+
+    // 回到欢迎页：草稿原样
+    await act(async () => {
+      useChatStore.getState().setActiveSessionId(null)
+    })
+    await flush()
+    await openPanel()
+    expect(box('skill:foo').checked).toBe(true)
+    expect(box('skill:bar').checked).toBe(true)
+    expect(welcomeDraft()).toEqual(['skill:foo', 'skill:bar'])
   })
 })

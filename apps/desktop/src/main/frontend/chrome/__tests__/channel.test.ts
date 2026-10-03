@@ -228,6 +228,8 @@ describe('CH-1 白名单之外的路径一律拒绝', () => {
     'session.create',
     'session.updateEnabledTools',
     'agent.setModel',
+    // 销毁运行时属宿主（会话横幅 agent 胶囊上的 X）；侧栏只有单会话的对话面
+    'agent.destroy',
     'agent.subAgentPrompt',
     'files.scan',
     'bgTask.readLog',
