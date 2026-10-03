@@ -10,7 +10,6 @@ import {
   type HarnessSession,
   type InlineTokensSidecar
 } from '@shuvix/agent-runtime'
-import { providerDao } from '../dao/providerDao'
 import { sessionRecords } from './sessionRecords'
 import { agentService } from './agentService'
 import { botService } from './botService'
@@ -66,7 +65,7 @@ export interface AgentSessionCreateParams {
  *
  * 创建/装配（systemPrompt 组装、工具解析、指令注入）已收敛到统一创建管线
  * （agents/agentHost 的 agentFactory + 会话档案）；本类保留桌面特有的
- * 生命周期编排：hook 埋点、setModel 的能力查询、ssh / fileTime 清理。
+ * 生命周期编排：hook 埋点、ssh / fileTime 清理。
  *
  * 自动标题不再是这里的业务：本类只在 prompt 受理与轮结束处 fire 两个**通用埋点**
  * （payload = 会话此刻的事实），标题逻辑整体在内置 auto-title hook + titler agent md。
@@ -267,18 +266,8 @@ export class AgentSession {
     await this.runtime.abort()
   }
 
-  /** 切换模型（查 provider 模型能力 → 统一管线 applyModel，同步更新派发工具的模型配置） */
-  async setModel(
-    provider: string,
-    model: string,
-    baseUrl?: string,
-    apiProtocol?: string
-  ): Promise<void> {
-    const modelRow = providerDao.findModelsByProvider(provider).find((m) => m.modelId === model)
-    const caps: ModelCapabilities = modelRow?.capabilities ? JSON.parse(modelRow.capabilities) : {}
-    // 切模型保留当前思考深度（CreatedAgent.applyModel 内省略档位 → harness 保持不变）
-    await this.created.applyModel({ provider, model, capabilities: caps }, { baseUrl, apiProtocol })
-  }
+  // 没有 setModel：模型只在创建运行时那一刻读一次（会话树），运行期不换 ——
+  // 网关在有运行时的时候拒绝改模型，用户要换就先销毁运行时（sessionService.invalidateAgent）。
 
   /** 设置思考深度 */
   async setThinkingLevel(level: ThinkingLevel): Promise<void> {

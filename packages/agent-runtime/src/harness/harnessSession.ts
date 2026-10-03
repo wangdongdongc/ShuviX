@@ -488,11 +488,7 @@ export class HarnessSession {
 
   // ─── 运行时配置 ────────────────────────────────────
 
-  async applyModel(model: Model<Api>, thinkingLevel?: ThinkingLevel): Promise<void> {
-    await this.harness.setModel(model)
-    if (thinkingLevel !== undefined) await this.harness.setThinkingLevel(thinkingLevel)
-    this.logger.info(`切换模型 session=${this.sessionId} model=${model.id}`)
-  }
+  // 没有 applyModel：模型在创建时定死，运行期不换（宿主要换就销毁运行时、按新模型重建）
 
   /** 当前思考深度（派发工具的惰性模型配置读取用） */
   getThinkingLevel(): ThinkingLevel {
@@ -516,7 +512,7 @@ export class HarnessSession {
    *
    * 给运行时注册中心（`runtimeRegistry.ts`）用 —— 监控数据一律从 pi 自己的读取面与
    * 事件流取，本类不再为监控增设手工快照字段。命名点出"这是 pi 的对象"，提醒调用方
-   * 它是**可变**的：读可以，改运行时配置请走本类的 applyModel / setThinkingLevel 等入口，
+   * 它是**可变**的：读可以，改运行时配置请走本类的 setThinkingLevel 等入口，
    * 否则绕过日志与事件翻译。
    */
   get piHarness(): AgentHarness {

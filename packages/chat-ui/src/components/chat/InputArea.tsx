@@ -11,6 +11,7 @@ import {
   rebuildDraftFromContent
 } from '@shuvix/chat-protocol/utils/inlineTokens'
 import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
+import type { ThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
 import {
   useChatStore,
   selectIsStreaming,
@@ -21,7 +22,7 @@ import {
 import { useImageUpload } from '../../hooks/useImageUpload'
 import { ModelPicker } from './ModelPicker'
 import { ToolPicker } from './ToolPicker'
-import { useSessionTools } from '../../hooks/useSessionTools'
+import { addSessionTools } from '../../hooks/useSessionTools'
 import { SlashCommandPopover } from './SlashCommandPopover'
 import { useSlashCommands } from '../../hooks/useSlashCommands'
 import { AtMentionPopover } from './AtMentionPopover'
@@ -245,19 +246,15 @@ export function InputArea({
 
   /**
    * 自动勾上命令依赖的扩展能力（fire-and-forget）。与工具选择器同一个写入口：会话已有 Agent
-   * 运行时（勾选只读）/ 渠道端 / 没有会话时，setEnabledTools 自己什么也不做。
+   * 运行时（勾选只读）/ 渠道端时什么也不做；`sid` 为 null（欢迎页）时并进草稿。
+   * 目标会话由调用方给：欢迎页直接发送时命令在新会话建好之后才展开，依赖项要落到新会话上。
    */
-  const { enabledTools: sessionTools, setEnabledTools: setSessionTools } =
-    useSessionTools(activeSessionId)
   const autoEnableRequiredTools = useCallback(
-    (requiredTools: string[] | undefined): void => {
+    (requiredTools: string[] | undefined, sid: string | null): void => {
       if (!requiredTools?.length) return
-      const current = new Set(sessionTools)
-      const missing = requiredTools.filter((name) => !current.has(name))
-      if (missing.length === 0) return
-      void setSessionTools([...sessionTools, ...missing])
+      void addSessionTools(sid, requiredTools)
     },
-    [sessionTools, setSessionTools]
+    []
   )
 
   /**
@@ -288,7 +285,7 @@ export function InputArea({
           sessionId: sid ?? undefined
         })
         if (parsed) {
-          autoEnableRequiredTools(parsed.command.requiredTools)
+          autoEnableRequiredTools(parsed.command.requiredTools, sid)
           return {
             contentText: parsed.contentText,
             inlineTokens: { ...parsed.inlineTokens, ...pasteOut.inlineTokens }
@@ -308,12 +305,36 @@ export function InputArea({
     [slashChip, slashCommands, autoEnableRequiredTools, at, paste]
   )
 
-  /** 无会话时自动创建临时会话（欢迎页直接发送时使用）。创建属宿主能力；渠道端总有当前会话，不会触发 */
+  /**
+   * 无会话时自动创建临时会话（欢迎页直接发送时使用）。创建属宿主能力；渠道端总有当前会话，不会触发。
+   *
+   * 欢迎页上的选择要在 Agent 创建之前落进新会话 —— 模型、思考档位与扩展能力都只在创建那一刻读
+   * 一次。写的是选择器**此刻显示的**模型与档位（所见即所得：没动过也是它，而不是让后端回落到
+   * 默认模型、再把界面拨回去），扩展能力写欢迎页的草稿，写完清空草稿。
+   */
   const createSessionForSend = async (): Promise<string | null> => {
     const host = getHostApi()
     if (!host) return null
     const session = await host.session.create()
     const sid = session.id
+    const welcome = useChatStore.getState()
+    const { activeProvider, activeModel: pickedModel } = chatHost.models
+    if (activeProvider && pickedModel) {
+      await host.agent.setModel({ sessionId: sid, provider: activeProvider, model: pickedModel })
+    }
+    if (welcome.thinkingLevel) {
+      await host.agent.setThinkingLevel({
+        sessionId: sid,
+        level: welcome.thinkingLevel as ThinkingLevel
+      })
+    }
+    if (welcome.welcomeEnabledTools.length > 0) {
+      await host.session.updateEnabledTools({
+        id: sid,
+        enabledTools: welcome.welcomeEnabledTools
+      })
+    }
+    welcome.setWelcomeEnabledTools([])
     await getSessionChannelApi().agent.init({ sessionId: sid })
     const sessions = await host.session.list()
     const s = useChatStore.getState()
@@ -486,7 +507,7 @@ export function InputArea({
       })
       setInputText('')
       setTimeout(() => textareaRef.current?.focus(), 0)
-      autoEnableRequiredTools(cmd?.requiredTools)
+      autoEnableRequiredTools(cmd?.requiredTools, useChatStore.getState().activeSessionId)
     },
     [slashCommands, setInputText, autoEnableRequiredTools]
   )

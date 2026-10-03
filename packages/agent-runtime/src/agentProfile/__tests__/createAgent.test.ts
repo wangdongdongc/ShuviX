@@ -26,7 +26,6 @@ const constructed: FakeHarness[] = []
 class FakeHarness {
   deps: Record<string, unknown>
   session: unknown
-  applyModel = vi.fn()
   requestUserInput = vi.fn().mockResolvedValue({ kind: 'ok' })
   getThinkingLevel = vi.fn().mockReturnValue('high')
   broadcast = vi.fn()
@@ -396,20 +395,6 @@ describe('createAgentFactory — 档案模型（shuvix-model）', () => {
     })
   })
 
-  it('档案不粘住运行期：applyModel 之后 getModelConfig() 跟随后者', async () => {
-    const b = makeHost()
-    b.resolveProfileModel.mockResolvedValue(DECLARED)
-    const created = await spawnWith(b, { ...PROFILE, model: 'p-declared/m-declared' })
-
-    await created.applyModel({ provider: 'p9', model: 'm9', capabilities: {} })
-    expect(created.getModelConfig()).toEqual({
-      provider: 'p9',
-      model: 'm9',
-      capabilities: {},
-      thinkingLevel: 'high'
-    })
-  })
-
   it('宿主未注入 resolveProfileModel（可选注入）：不抛错、回落派发方模型、不告警', async () => {
     const b = makeHost()
     // 「本端不支持档案模型」≠「这个模型不可用」——混为一谈会误导排障
@@ -514,7 +499,7 @@ describe('createAgentFactory — 档案思考档位（shuvix-thinking）', () =>
 })
 
 describe('CreatedAgent 运行期操作', () => {
-  it('getModelConfig 惰性:thinkingLevel 读运行时当前档位;applyModel 后 provider/model 跟随', async () => {
+  it('getModelConfig 惰性:thinkingLevel 读运行时当前档位;模型是创建时那份,运行期没有换模型的入口', async () => {
     const b = makeHost()
     const created = await createAgentFactory(b.host).createAgent({
       kind: 'root',
@@ -525,14 +510,8 @@ describe('CreatedAgent 运行期操作', () => {
       cwd: '/w'
     })
     expect(created.getModelConfig()).toEqual({ ...MODEL_CFG, thinkingLevel: 'high' }) // fake 运行时档位
-    await created.applyModel({ provider: 'p2', model: 'm2', capabilities: {} }, { baseUrl: 'u' })
-    expect(constructed[0].applyModel).toHaveBeenCalledTimes(1)
-    expect(created.getModelConfig()).toEqual({
-      provider: 'p2',
-      model: 'm2',
-      capabilities: {},
-      thinkingLevel: 'high'
-    })
+    // 换模型 = 宿主销毁运行时、按新模型重建；CreatedAgent 上不再有热切换
+    expect(created).not.toHaveProperty('applyModel')
   })
 
   it('上下文注入:清单为空/开关关闭 → 不解析、系统提示词纯基座', async () => {

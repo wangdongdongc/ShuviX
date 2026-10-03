@@ -206,7 +206,7 @@ export interface AgentInitResult {
   success: boolean
   /**
    * 此刻有 Agent 运行时（含正在创建 / 正在关停；init 本身不创建）—— 与 `session.updateEnabledTools`
-   * 的拒绝条件同一口径，为真时扩展能力勾选只读
+   * 和 `agent.setModel` 的拒绝条件同一口径，为真时扩展能力勾选与会话模型都只读
    */
   created: boolean
   provider: string
@@ -293,8 +293,6 @@ export interface AgentSetModelParams {
   sessionId: string
   provider: string
   model: string
-  baseUrl?: string
-  apiProtocol?: string
 }
 
 export interface AgentSetThinkingLevelParams {
@@ -588,7 +586,11 @@ export interface SessionChannelApi {
     }) => Promise<BgTaskLogChunk>
   }
   tools: {
-    list: (sessionId?: string) => Promise<ToolInfo[]>
+    /**
+     * 可选的工具与扩展能力。传 sessionId 时 `declaredBy` 按那条会话的根档案画；没有会话时按
+     * `options.profile`（缺省 work）—— 欢迎页传 chat：它直接发送新建的是无项目会话
+     */
+    list: (sessionId?: string, options?: { profile?: string }) => Promise<ToolInfo[]>
     presentations: () => Promise<Record<string, ToolPresentation>>
     /** 所有内置工具的完整定义（name/description/参数），供设置页只读展示工具机制 */
     definitions: () => Promise<BuiltinToolDefinition[]>
@@ -665,7 +667,19 @@ export interface HostApi {
     onNewProject: (callback: () => void) => () => void
   }
   agent: {
+    /**
+     * 改会话模型（往会话树追加 model_change entry）。与扩展能力勾选同一条规矩：模型只在创建
+     * Agent 那一刻读一次，**会话已有运行时（含正在创建 / 正在关停）时返回 `success: false`、
+     * 什么也不写**。要换模型先 `destroy` 掉运行时。
+     */
     setModel: (params: AgentSetModelParams) => Promise<{ success: boolean }>
+    /**
+     * 销毁会话的根 Agent 运行时 —— 会话、历史与会话级资源都在，下一条消息按那时的模型与扩展
+     * 能力勾选重建（正在跑的 run 会被中止）。等关停落定才返回，前后经 `agent_closing` 广播，
+     * 前端据此解除模型 / 扩展能力的只读态。没有运行时则无操作（同样回 `success: true`）。
+     */
+    destroy: (sessionId: string) => Promise<{ success: boolean }>
+    /** 改思考档位：运行时存在期间照样可改（交给 harness），不存在时直接写树 */
     setThinkingLevel: (params: AgentSetThinkingLevelParams) => Promise<{ success: boolean }>
     /**
      * 读取运行时 Agent 对象的实时信息（systemPrompt/工具/模型）；Agent 未创建返回 null。

@@ -3,7 +3,7 @@
  * 宿主无关 resolveModel 构造 pi-ai Model 对象。electronEnv 刻意不写 process.env（key 由
  * modelsAdapter 按请求现取，写 env 只会把 key 泄给所有子进程，见 agentRuntimeAdapters）。
  *
- * 保留与既有调用方一致的签名（create / setModel / generateTitle 直接调用）。
+ * 唯一调用方是 agentHost 的 buildModel（创建运行时那一刻）。
  */
 import type { Model, Api } from '@earendil-works/pi-ai'
 import {
@@ -18,8 +18,6 @@ export interface ResolveModelParams {
   provider: string
   model: string
   capabilities: ModelCapabilities
-  baseUrl?: string // setModel 传入的覆盖值
-  apiProtocol?: string // setModel 传入的覆盖值
 }
 
 /** 统一模型解析逻辑：从 provider + model + capabilities 解析出 pi-ai Model 对象 */

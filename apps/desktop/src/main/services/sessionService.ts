@@ -607,6 +607,14 @@ export class SessionService {
     return this.agents.get(sessionId)
   }
 
+  /**
+   * 这条会话此刻有没有运行时（含正在创建 / 正在关停）。模型与扩展能力勾选都只在创建 Agent
+   * 那一刻读一次，两处写入口（agent.setModel / updateEnabledTools）据这一位拒绝运行期的改动。
+   */
+  hasAgentRuntime(sessionId: string): boolean {
+    return this.agents.tracked(sessionId)
+  }
+
   /** 解析会话的 Agent 上下文元信息（provider/model/能力/工作目录/启用工具/项目），不创建 AgentSession。
    *  供 initAgent（前端同步）与 ensureAgentSession（懒创建）共用。session 不存在返回 null。 */
   private async resolveSessionAgentContext(sessionId: string): Promise<{

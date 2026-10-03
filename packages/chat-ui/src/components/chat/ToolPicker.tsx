@@ -9,6 +9,9 @@ import type { ToolItem } from '../common/ToolSelectList'
 
 const SKILLS_GROUP = '__skills__'
 
+/** 欢迎页直接发送新建的是无项目会话，根档案由形态推导为基座 chat（见 sessionService） */
+const WELCOME_PROFILE = 'chat'
+
 /** 提取 MCP 服务器短名（mcp:context7 → context7） */
 function mcpShortName(name: string): string {
   return name.startsWith('mcp:') ? name.slice(4) : name
@@ -35,8 +38,8 @@ function parseSkillDisplay(name: string): { label: string; builtin: boolean } {
  * （`declaredBy`）：画成已勾、挂锁，悬停说是哪个档案声明的；它们算进计数，勾选写回时不碰它们。
  * 勾选只在创建 Agent 时读一次：会话已有运行时就只读（面板照常能打开看：整排条目按禁用态画、
  * 触发钮挂锁，原因只在悬停时说）。
- * 还没有会话（欢迎页）时不显示 ——
- * 没有可写的地方，而直接发送新建出来的聊天会话本就一个都不勾。
+ * 还没有会话（欢迎页）时勾的是草稿（useSessionTools），直接发送新建会话时写进那条会话；
+ * 声明项按那条会话将会用的档案画 —— 欢迎页新建的是无项目会话，基座 chat。
  */
 export function ToolPicker(): React.JSX.Element | null {
   const { t } = useTranslation()
@@ -53,10 +56,13 @@ export function ToolPicker(): React.JSX.Element | null {
 
   const fetchTools = useCallback(() => {
     const sid = useChatStore.getState().activeSessionId
-    if (!sid) return
-    void getSessionChannelApi()
-      .tools.list(sid)
-      .then((tools) => setAllTools(tools))
+    const api = getSessionChannelApi()
+    void (sid ? api.tools.list(sid) : api.tools.list(undefined, { profile: WELCOME_PROFILE })).then(
+      (tools) => {
+        // 慢请求回来时会话可能已经换了：只收当前会话的那份
+        if (useChatStore.getState().activeSessionId === sid) setAllTools(tools)
+      }
+    )
   }, [])
 
   // 可选项随会话变（项目级 skills 跟着工作目录走）
@@ -72,7 +78,7 @@ export function ToolPicker(): React.JSX.Element | null {
   const mcpTools = allTools.filter((t) => t.group?.startsWith('mcp:'))
   const skillTools = allTools.filter((t) => t.group === SKILLS_GROUP)
 
-  if (!activeSessionId || (mcpTools.length === 0 && skillTools.length === 0)) return null
+  if (mcpTools.length === 0 && skillTools.length === 0) return null
 
   // 档案声明的项恒生效（会话勾选只能在其上叠加），所以它算「已启用」，与会话自己勾没勾无关
   const isOn = (tool: ToolItem): boolean => !!tool.declaredBy || enabledTools.includes(tool.name)

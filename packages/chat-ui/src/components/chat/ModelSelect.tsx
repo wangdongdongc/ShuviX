@@ -4,7 +4,8 @@
  * 单一组件覆盖两处用法：
  *  - variant='boxed'：设置里的下拉框（provider · model + 可选清除图标）
  *  - variant='inline'：输入栏紧凑触发器（模型名 + 可选思考图标 + 悬浮全名 tooltip）
- * 思考深度（thinking）、只读（readonly）、无提供商引导（onConfigureProviders）均为可选配置。
+ * 思考深度（thinking）、只读（readonly）、模型锁定（modelLocked）、无提供商引导（onConfigureProviders）
+ * 均为可选配置。
  * 组件只吃 props 并通过 onChange / thinking.onChange 回调；一切持久化/会话副作用由调用方处理
  * （输入栏用 ModelPicker 包装，设置用 ModelDefaultsSettings 包装）。
  *
@@ -23,7 +24,8 @@ import {
   Image as ImageIcon,
   Mic,
   X,
-  Settings
+  Settings,
+  Lock
 } from 'lucide-react'
 import type { AvailableModel } from '@shuvix/chat-protocol/types/provider'
 import { ProviderIcon } from '../settings/ProviderIcons'
@@ -45,6 +47,12 @@ export interface ModelSelectProps {
   variant?: 'boxed' | 'inline'
   /** 只读：仅显示当前模型名，不可展开 */
   readonly?: boolean
+  /**
+   * 模型锁定（inline 用）：面板照常能展开（思考深度仍可调），模型条目按禁用态画、选了也不回调；
+   * 触发钮挂锁。原因只放在悬停提示里（`modelLockedHint`），与工具选择器的只读态同一套手感
+   */
+  modelLocked?: boolean
+  modelLockedHint?: string
   /** boxed 触发器固定宽度（默认 260px） */
   width?: number
   /**
@@ -81,6 +89,8 @@ export function ModelSelect({
   onChange,
   variant = 'boxed',
   readonly = false,
+  modelLocked = false,
+  modelLockedHint,
   width = 260,
   flat = false,
   placeholder,
@@ -200,6 +210,7 @@ export function ModelSelect({
   }
 
   const pick = (p: string, m: string): void => {
+    if (modelLocked) return
     onChange(p, m)
     setOpen(false)
     setQuery('')
@@ -242,12 +253,15 @@ export function ModelSelect({
         <button
           type="button"
           onClick={toggle}
+          title={modelLocked ? modelLockedHint : undefined}
           className={`inline-flex items-center gap-1 text-[11px] rounded px-1.5 py-0.5 transition-colors border border-transparent ${
             hasSelection
               ? 'text-text-tertiary hover:text-text-secondary hover:border-border-secondary'
               : 'text-amber-500 hover:text-amber-400'
           }`}
         >
+          {/* 锁挂在触发钮上：不用展开面板就知道这条会话的模型已经定了 */}
+          {modelLocked && <Lock size={10} data-model-lock className="flex-shrink-0" />}
           {hasSelection ? (
             <>
               <span className="max-w-[120px] truncate">{model}</span>
@@ -304,11 +318,16 @@ export function ModelSelect({
       : 'relative inline-flex items-center gap-1 text-left'
 
   return (
-    <div ref={ref} className={containerClass} style={variant === 'boxed' ? { width } : undefined}>
+    <div
+      ref={ref}
+      data-model-locked={modelLocked || undefined}
+      className={containerClass}
+      style={variant === 'boxed' ? { width } : undefined}
+    >
       {trigger}
 
-      {/* 悬浮 tooltip：inline 且已选、未展开时显示完整模型名 */}
-      {variant === 'inline' && !open && hasSelection && (
+      {/* 悬浮 tooltip：inline 且已选、未展开时显示完整模型名（锁定时让位给触发钮上的原因） */}
+      {variant === 'inline' && !open && hasSelection && !modelLocked && (
         <div className="pointer-events-none absolute left-0 bottom-6 z-20 hidden rounded-md border border-border-primary bg-bg-secondary px-2 py-1 shadow-xl group-hover:block">
           <div className="text-[11px] text-text-primary whitespace-nowrap">{model}</div>
         </div>
@@ -319,6 +338,7 @@ export function ModelSelect({
         createPortal(
           <div
             ref={panelRef}
+            data-model-panel
             style={panelStyle}
             className="picker-panel rounded-md border border-border-primary bg-bg-secondary shadow-lg overflow-hidden flex flex-col"
           >
@@ -373,11 +393,19 @@ export function ModelSelect({
                               <button
                                 key={m.id}
                                 type="button"
+                                data-model-item={`${p.id}/${m.modelId}`}
                                 onClick={() => pick(p.id, m.modelId)}
-                                className={`w-full text-left pl-5 pr-2.5 py-1 transition-colors flex items-center gap-1.5 hover:bg-bg-hover ${
-                                  isSelected
-                                    ? 'bg-bg-hover text-text-primary font-medium'
-                                    : 'text-text-secondary hover:text-text-primary'
+                                disabled={modelLocked}
+                                aria-disabled={modelLocked || undefined}
+                                title={modelLocked ? modelLockedHint : undefined}
+                                className={`w-full text-left pl-5 pr-2.5 py-1 transition-colors flex items-center gap-1.5 ${
+                                  modelLocked
+                                    ? `cursor-not-allowed ${isSelected ? 'text-text-primary font-medium' : 'text-text-secondary opacity-40'}`
+                                    : `hover:bg-bg-hover ${
+                                        isSelected
+                                          ? 'bg-bg-hover text-text-primary font-medium'
+                                          : 'text-text-secondary hover:text-text-primary'
+                                      }`
                                 }`}
                               >
                                 <span className="text-[11px] truncate flex-1">{m.modelId}</span>
@@ -408,6 +436,7 @@ export function ModelSelect({
                     <button
                       key={l.value}
                       type="button"
+                      data-thinking-level={l.value}
                       onClick={() => thinking!.onChange(l.value)}
                       className={`flex-1 text-[10px] px-1 py-0.5 rounded transition-colors ${
                         thinking!.level === l.value

@@ -2565,7 +2565,7 @@ export interface ToolPickerItem {
 }
 
 export interface ToolPickerPane {
-  /** 选择器在不在（欢迎页没有活动会话、或一个 MCP / skill 条目都没有时不渲染） */
+  /** 选择器在不在（一个 MCP / skill 条目都没有时不渲染；欢迎页也渲染，勾的是新会话的草稿） */
   present(): Promise<boolean>
   /** 只读态（根上的 `data-locked`）：会话此刻有 Agent 运行时（含创建中 / 关停中） */
   locked(): Promise<boolean>
@@ -6123,23 +6123,26 @@ export function rightPanelPane(main: CdpClient): RightPanelPane {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// 主窗对话区顶部的运行时状态横幅（StatusBanner）与最前面的 agent profile 标记
+// 主窗对话区顶部的运行时状态横幅（StatusBanner）与最前面的 agent 标记
 // （AgentProfileChip）。
 //
 // 锚点（按结构认，与右侧面板同一套纪律）：
 //   - 横幅 = `div[class*="bg-bg-secondary/60"][class*="border-b"]`（属性子串写法避开类名
 //     里的 `/`）；无标记且无运行时连接时整条返回 null —— 「banner 元素缺席」本身就是
 //     判据，不接受「banner 在但空」；
-//   - 标记 = 横幅里唯一的 button 胶囊：`button.rounded-full` 且内含 `span.font-mono`
-//     （profileName 的等宽标签是排他特征；SSH/DB 连接胶囊是 span，不会混进来）；
-//   - 相位灯 = 标记内的 `span.rounded-full`（与 AgentMonitorPanel 的 PHASE_DOT 同一套
-//     语义：idle 灰、其余绿脉冲）。
+//   - 标记 = `[data-agent-chip]`（值 = 档案名）：两个并排按钮 —— 主体（相位灯 + 显示名，
+//     点开 agents tab）与 `[data-agent-chip-destroy]`（销毁运行时）；
+//   - 显示名 = `[data-agent-chip-name]`（档案 md 的 shuvix-displayName）；
+//   - 相位灯 = `[data-agent-chip-phase]`（与 AgentMonitorPanel 的 PHASE_DOT 同一套语义：
+//     idle 灰、其余绿脉冲）。
 
-/** agent profile 标记的快照 */
+/** agent 标记的快照 */
 export interface StatusBannerChipShot {
   present: boolean
-  /** profileName 标签文本（如 chat / work） */
+  /** 显示名标签文本（档案 md 的 shuvix-displayName，如 Chat / Work） */
   text: string
+  /** 档案名（`data-agent-chip` 的值，如 chat / work） */
+  profile: string
   /** 相位灯的 className（相位色与 animate-pulse 都在这串里） */
   phaseClass: string
   /** 相位灯在闪（animate-pulse）= 非 idle 相位 */
@@ -6149,33 +6152,33 @@ export interface StatusBannerChipShot {
 export interface StatusBannerPane {
   /** 横幅整条在屏（无内容时组件返回 null，这里即 false） */
   bannerPresent(): Promise<boolean>
-  /** profile 标记快照；不在屏回 null */
+  /** agent 标记快照；不在屏回 null */
   chip(): Promise<StatusBannerChipShot | null>
-  /** 点标记（= 打开右栏 agents tab 并按本会话筛选） */
+  /** 点标记主体（= 打开右栏 agents tab 并按本会话筛选） */
   clickChip(): Promise<void>
 }
 
 /** 主窗状态横幅（对话区顶部、顶栏之下） */
 export function statusBannerPane(main: CdpClient): StatusBannerPane {
   const BANNER = `document.querySelector('div[class*="bg-bg-secondary/60"][class*="border-b"]')`
-  const CHIP = `[...document.querySelectorAll('button.rounded-full')]
-    .find((b) => b.querySelector('span.font-mono'))`
+  const CHIP = `document.querySelector('[data-agent-chip]')`
   return {
     bannerPresent: () => main.eval<boolean>(`${BANNER} !== null`),
     chip: () =>
       main.eval<StatusBannerChipShot | null>(`(() => {
         const chip = ${CHIP}
         if (!chip) return null
-        const dot = chip.querySelector('span.rounded-full')
+        const dot = chip.querySelector('[data-agent-chip-phase]')
         return {
           present: true,
-          text: (chip.querySelector('span.font-mono')?.textContent ?? '').trim(),
+          text: (chip.querySelector('[data-agent-chip-name]')?.textContent ?? '').trim(),
+          profile: chip.getAttribute('data-agent-chip') ?? '',
           phaseClass: dot?.className ?? '',
           pulsing: (dot?.className ?? '').includes('animate-pulse')
         }
       })()`),
     clickChip: async () => {
-      await main.eval(`${CHIP}?.click()`)
+      await main.eval(`${CHIP}?.querySelector('button:not([data-agent-chip-destroy])')?.click()`)
       await sleep(300)
     }
   }

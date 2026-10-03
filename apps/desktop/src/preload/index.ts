@@ -166,8 +166,11 @@ const api = {
     /** 中止指定 session 的生成 */
     abort: (sessionId: string) => ipcRenderer.invoke('agent:abort', sessionId),
 
-    /** 切换模型 */
+    /** 切换模型（会话已有 Agent 运行时则拒绝，success: false） */
     setModel: (params: AgentSetModelParams) => ipcRenderer.invoke('agent:setModel', params),
+
+    /** 销毁会话的根 Agent 运行时（会话与历史都在，下一条消息按那时的模型 / 扩展能力重建） */
+    destroy: (sessionId: string) => ipcRenderer.invoke('agent:destroy', sessionId),
 
     /** 设置思考深度 */
     setThinkingLevel: (params: AgentSetThinkingLevelParams) =>
@@ -420,7 +423,8 @@ const api = {
 
   // ============ 工具 ============
   tools: {
-    list: (sessionId?: string) => ipcRenderer.invoke('tools:list', sessionId),
+    list: (sessionId?: string, options?: { profile?: string }) =>
+      ipcRenderer.invoke('tools:list', sessionId, options),
     presentations: () => ipcRenderer.invoke('tools:presentations'),
     definitions: () => ipcRenderer.invoke('tools:definitions')
   },

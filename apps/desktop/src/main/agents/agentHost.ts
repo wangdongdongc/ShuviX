@@ -345,13 +345,11 @@ export function resolveProfileModelSpec(spec: string): SubAgentModelConfig | nul
 const desktopAgentHost: AgentHostAdapter = {
   resolveTools: resolveDesktopTools,
   promptVars: desktopPromptVars,
-  buildModel: (config, extra) =>
+  buildModel: (config) =>
     resolveModel({
       provider: config.provider,
       model: config.model,
-      capabilities: config.capabilities,
-      baseUrl: extra?.baseUrl,
-      apiProtocol: extra?.apiProtocol
+      capabilities: config.capabilities
     }),
   resolveProfileModel: resolveProfileModelSpec,
   // 订阅登录（OAuth）优先于 API Key —— 与 pi 的「存了凭据就归它管」同义：两者都配了时，

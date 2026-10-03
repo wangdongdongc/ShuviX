@@ -79,6 +79,7 @@ interface MonitorEntry {
   rootSessionId: string
   depth: number
   profileName: string
+  displayName: string
   phase: string
   rootSessionTitle?: string
   rootSessionExists: boolean
@@ -471,7 +472,7 @@ describe('fakeProvider：运行时的上屏、相位、血缘与详情', () => {
     return sid
   }
 
-  it('AM-11 首轮后标记出现：内容 = profileName（chat），idle 灰点不脉冲，横幅在屏', async () => {
+  it('AM-11 首轮后标记出现：内容 = 档案显示名（chat 的 displayName），idle 灰点不脉冲，横幅在屏', async () => {
     const sid = await openAndPrompt('AM-11 banner lane', 'banner-1')
     sids.banner = sid
 
@@ -491,13 +492,14 @@ describe('fakeProvider：运行时的上屏、相位、血缘与详情', () => {
       'profile chip shows the idle dot',
       CHIP_CATCH_UP_MS
     )
-    expect(chip.text).toBe('chat')
-    // 与 IPC 该 root entry 的 profileName 同源
-    expect(chip.text).toBe(entry.profileName)
+    expect(chip.profile).toBe('chat')
+    // 显示名与 IPC 该 root entry 的 displayName 同源（档案 md 的 shuvix-displayName，随界面语言）
+    expect(entry.displayName).toBeTruthy()
+    expect(chip.text).toBe(entry.displayName)
     expect(await banner.bannerPresent()).toBe(true)
   })
 
-  it('AM-12 项目会话的标记显示 work（与 IPC profileName 一致）', async () => {
+  it('AM-12 项目会话的标记属 work，显示它的显示名（与 IPC displayName 一致）', async () => {
     const projDir = join(app.home, 'proj-am12')
     mkdirSync(projDir, { recursive: true })
     const { id: projectId } = await createProject(app.main, { name: 'AM-12 Proj', path: projDir })
@@ -512,9 +514,9 @@ describe('fakeProvider：运行时的上屏、相位、血缘与详情', () => {
     await promptTurn(sid, 'work-1')
 
     const chip = await until(async () => (await banner.chip()) ?? null, 'work chip on screen')
-    expect(chip.text).toBe('work')
+    expect(chip.profile).toBe('work')
     const entry = (await monitorList(app.main)).find((e) => e.kind === 'root' && e.agentId === sid)!
-    expect(chip.text).toBe(entry.profileName)
+    expect(chip.text).toBe(entry.displayName)
   })
 
   it('AM-13 点标记三联动（面板关着时）：面板开 + agents tab 激活 + 按本会话筛选（AM-3 根行与孤儿行被筛掉）', async () => {

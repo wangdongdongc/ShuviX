@@ -50,20 +50,24 @@ export interface ChatGateway {
 
   // ─── 运行时调整 ────────────────────────────────
 
-  /** 切换模型（harness 把变更作为 model_change entry 落在会话树上，故为异步） */
-  setModel(
-    sessionId: string,
-    provider: string,
-    model: string,
-    baseUrl?: string,
-    apiProtocol?: string
-  ): Promise<void>
+  /**
+   * 切换模型：往会话树追加 model_change entry。**只在会话没有 Agent 运行时的时候接受** ——
+   * 模型与扩展能力一样只在创建 Agent 那一刻读一次；运行时已存在 / 正在创建 / 正在关停时
+   * 什么也不写、返回 false。想换模型先 `destroyAgent`。
+   */
+  setModel(sessionId: string, provider: string, model: string): Promise<boolean>
 
   /** 设置思考深度（同上，落 thinking_level_change entry） */
   setThinkingLevel(sessionId: string, level: ThinkingLevel): Promise<void>
 
   // 注：没有 setEnabledTools —— 扩展能力勾选是会话设置，只在 Agent 未创建时可改
   // （sessionService.updateEnabledTools），运行时没有换工具的入口。
+
+  /**
+   * 销毁会话的根 Agent 运行时（会话、历史与内置能力服务器都留着），下一条消息按那时的模型 /
+   * 扩展能力勾选重建。正在跑的 run 会被中止；等关停落定才返回。没有运行时则无操作。
+   */
+  destroyAgent(sessionId: string): Promise<void>
 
   /** 读取运行时 Agent 对象的实时信息（systemPrompt/工具/模型）；Agent 未创建返回 null，
    *  传 { ensure: true } 则先懒创建（不请求 LLM）再取快照 */
@@ -95,8 +99,14 @@ export interface ChatGateway {
 
   // ─── 工具发现 ──────────────────────────────────
 
-  /** 获取所有可用工具列表（传入 sessionId 时包含项目级 skills） */
-  listTools(sessionId?: string): Array<{
+  /**
+   * 获取所有可用工具列表（传入 sessionId 时包含项目级 skills）。
+   * 没有会话时声明项按 `profile` 画（缺省 work —— 项目编辑页画的是项目会话）
+   */
+  listTools(
+    sessionId?: string,
+    options?: { profile?: string }
+  ): Array<{
     name: string
     label: string
     hint?: string

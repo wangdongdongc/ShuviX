@@ -231,6 +231,7 @@
     "send": "Send",
     "imageOnly": "(image)",
     "selectModel": "Select a model",
+    "modelLocked": "Read-only: the agent has already been created. Remove it from the agent chip above to change the model",
     "pasteChipLines": "[Pasted text #{{seq}} · {{lines}} lines]",
     "pasteChipChars": "[Pasted text #{{seq}} · {{chars}} chars]",
     "pasteName": "Pasted text #{{seq}}"
@@ -366,7 +367,7 @@
     "commandGroup": "Ask on Operations",
     "extensionsGroup": "Extensions",
     "extensionsDesc": "Read when the agent is created (on the first message); read-only while it exists",
-    "extensionsLocked": "Read-only: the agent has already been created",
+    "extensionsLocked": "Read-only: the agent has already been created. Remove it from the agent chip above to change extensions",
     "extensionDeclared": "Declared by the {{profile}} agent: every session of that agent has it. To remove it, override that agent's md.",
     "knowledgeGroup": "Knowledge bases",
     "knowledgeDesc": "Which bases this session can search and write to. Changes take effect right away.",
@@ -977,7 +978,8 @@
   "panel": {
     "browser": "Browser",
     "agents": "Agents",
-    "agentChipTitle": "Profile: {{profile}} · Open Agents panel",
+    "agentChipTitle": "Agent: {{name}} ({{profile}}) · Open Agents panel",
+    "agentChipDestroy": "Remove this agent: the conversation stays, and the next message creates a new one with the model and extensions selected then",
     "agentFilterPrefix": "Session: ",
     "agentFilterClear": "Clear session filter",
     "agentFilterEmpty": "Filtering by session — no live agent runtime for this session.",

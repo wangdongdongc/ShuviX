@@ -121,20 +121,22 @@ export class DefaultChatGateway implements ChatGateway {
   /**
    * 以下两个 setter 是模型类运行配置的**唯一写入口**（数据库已无对应列）。
    *
-   * Agent 已创建 → 交给 harness，它自己往会话树追加 change entry；
-   * Agent 未创建（会话是懒创建的，用户可以在没发过消息的会话上先切模型）→
-   * 直接往树上追加，不为了记一次配置而把整个 Agent 拉起来。
+   * 模型只在没有运行时的时候可改（直接往会话树追加 model_change entry）：它与扩展能力勾选
+   * 一样在创建 Agent 那一刻读一次。运行时已存在 / 正在创建 / 正在关停时一律拒绝、什么也
+   * 不写 —— 用户要换模型，先在会话横幅的 agent 胶囊上把运行时销毁（destroyAgent）。
+   *
+   * 思考档位不在此列：Agent 已创建就交给 harness（它自己落 change entry），未创建直接写树。
    */
-  async setModel(
-    sessionId: string,
-    provider: string,
-    model: string,
-    baseUrl?: string,
-    apiProtocol?: string
-  ): Promise<void> {
-    const agent = sessionService.getAgentSession(sessionId)
-    if (agent) await agent.setModel(provider, model, baseUrl, apiProtocol)
-    else await appendModelChange(sessionId, provider, model)
+  async setModel(sessionId: string, provider: string, model: string): Promise<boolean> {
+    if (sessionService.hasAgentRuntime(sessionId)) return false
+    await appendModelChange(sessionId, provider, model)
+    return true
+  }
+
+  async destroyAgent(sessionId: string): Promise<void> {
+    // invalidate 而非 destroy：会话还在，下一条消息照常重建。会话级资源（内置能力服务器、
+    // 决策日志、审查计数、hook 派发）随会话而不随运行时，这里一样都不碰
+    await sessionService.invalidateAgent(sessionId)
   }
 
   async setThinkingLevel(sessionId: string, level: ThinkingLevel): Promise<void> {
@@ -220,7 +222,10 @@ export class DefaultChatGateway implements ChatGateway {
 
   // ─── 工具发现 ──────────────────────────────────
 
-  listTools(sessionId?: string): Array<{
+  listTools(
+    sessionId?: string,
+    options?: { profile?: string }
+  ): Array<{
     name: string
     label: string
     hint?: string
@@ -239,10 +244,11 @@ export class DefaultChatGateway implements ChatGateway {
     }
     // 默认勾选 = 这条会话根 Agent 档案的白名单：档案由会话形态推导（项目 work / 无项目 chat /
     // 笔记本 notebook / bot 会话 bot，子会话可能被父级钉成 coding），含用户 ~/.shuvix/agents/<name>.md
-    // 覆盖 —— 覆盖后会话真的按它创建，UI 的默认勾选就该跟着走。没有会话回落 work
+    // 覆盖 —— 覆盖后会话真的按它创建，UI 的默认勾选就该跟着走。没有会话时按调用方说的档案
+    // （欢迎页：直接发送新建的是无项目会话 → chat），没说回落 work（项目编辑页画的是项目会话）
     const profileName = sessionId
       ? sessionService.resolveAgentProfileName(sessionId)
-      : WORK_PROFILE_NAME
+      : options?.profile || WORK_PROFILE_NAME
     const profile = agentService.getProfile(profileName)
     const defaultProfileTools = profile?.tools ?? []
     // 档案声明的 mcp:/skill: 项对这条会话恒生效（createAgent 的名单归一），选择器据此画成已勾、锁住；

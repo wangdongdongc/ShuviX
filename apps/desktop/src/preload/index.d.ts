@@ -500,7 +500,10 @@ declare global {
       followUp: (params: AgentFollowUpParams) => Promise<{ success: boolean }>
       nextTurn: (params: AgentNextTurnParams) => Promise<{ success: boolean }>
       abort: (sessionId: string) => Promise<{ success: boolean }>
+      /** 切换模型（会话已有 Agent 运行时则拒绝，success: false） */
       setModel: (params: AgentSetModelParams) => Promise<{ success: boolean }>
+      /** 销毁会话的根 Agent 运行时（会话与历史都在，下一条消息重建） */
+      destroy: (sessionId: string) => Promise<{ success: boolean }>
       setThinkingLevel: (params: AgentSetThinkingLevelParams) => Promise<{ success: boolean }>
       /** 读取运行时 Agent 对象的实时信息（systemPrompt/工具/模型）；Agent 未创建返回 null，
        *  传 ensure 则先懒创建（不请求 LLM）再取快照 */
@@ -728,7 +731,10 @@ declare global {
       }) => Promise<ShuvixMdValidation>
     }
     tools: {
-      list: (sessionId?: string) => Promise<
+      list: (
+        sessionId?: string,
+        options?: { profile?: string }
+      ) => Promise<
         Array<{
           name: string
           label: string

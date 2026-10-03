@@ -72,10 +72,7 @@ export interface AgentHostAdapter {
   resolveTools: (req: ToolResolveRequest) => AnyAgentTool[] | Promise<AnyAgentTool[]>
   /** 创建期变量表（md body 经 {{shuvix:name}} 占位符引用；每次 createAgent 现算） */
   promptVars: (ctx: PromptVarsCtx) => PromptVars | Promise<PromptVars>
-  buildModel: (
-    config: SubAgentModelConfig,
-    extra?: { baseUrl?: string; apiProtocol?: string }
-  ) => Model<Api>
+  buildModel: (config: SubAgentModelConfig) => Model<Api>
   /**
    * 解析档案声明的模型（`shuvix-model` 原样值 → provider/model/能力点）。
    * 仅 spawned 调用（root 的模型以会话树为准）。宿主对着自己的模型目录解析
@@ -212,12 +209,10 @@ export interface CreatedAgent {
   readonly profile: InProcessAgentType
   /** 创建时组装的完整系统提示（调试/信息面板用） */
   readonly systemPrompt: string
-  /** 统一切模型：host.buildModel → runtime.applyModel（保留当前思考档位），并更新派发用配置 */
-  applyModel(
-    config: SubAgentModelConfig,
-    extra?: { baseUrl?: string; apiProtocol?: string }
-  ): Promise<void>
-  /** 派发工具惰性读取：{...当前模型配置, thinkingLevel: 当前档位} */
+  /**
+   * 派发工具惰性读取：{...模型配置, thinkingLevel: 当前档位}。模型在创建时定死 —— 运行期没有
+   * 换模型的入口（宿主要换就销毁运行时、按新模型重建），档位可调故现读。
+   */
   getModelConfig(): SubAgentModelConfig
   /**
    * 从运行时注册中心注销。
@@ -322,13 +317,12 @@ export function createAgentFactory(host: AgentHostAdapter): AgentFactory {
     const thinkingLevel =
       kind === 'spawned' && profile.thinkingLevel ? profile.thinkingLevel : params.thinkingLevel
 
-    // 派发用当前模型配置（applyModel 时更新；thinkingLevel 惰性读运行时当前档位）
-    let currentModelConfig: SubAgentModelConfig = initialModel
+    // 派发用模型配置（模型创建时定死；thinkingLevel 惰性读运行时当前档位）
     const getModelConfig = (): SubAgentModelConfig => ({
-      ...currentModelConfig,
+      ...initialModel,
       thinkingLevel: runtime
         ? runtime.getThinkingLevel()
-        : (thinkingLevel ?? currentModelConfig.thinkingLevel)
+        : (thinkingLevel ?? initialModel.thinkingLevel)
     })
 
     const requestUserInput =
@@ -459,14 +453,6 @@ export function createAgentFactory(host: AgentHostAdapter): AgentFactory {
       profile,
       systemPrompt,
       dispose: unregister,
-
-      async applyModel(config, extra): Promise<void> {
-        const resolved = host.buildModel(config, extra)
-        // 保留当前思考档位（省略第二参 → harness 内保持不变）
-        await rt.applyModel(resolved)
-        currentModelConfig = config
-      },
-
       getModelConfig
     }
   }

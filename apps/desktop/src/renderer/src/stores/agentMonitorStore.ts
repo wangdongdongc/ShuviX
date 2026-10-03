@@ -35,21 +35,23 @@ export const useAgentMonitorStore = create<AgentMonitorState>((set) => ({
 
 let subscribers = 0
 let timer: ReturnType<typeof setInterval> | null = null
-/** 在途请求去重：上一轮 IPC 未回时跳过本轮（慢主进程下也不会叠请求） */
-let inFlight = false
+/** 在途请求去重：上一轮 IPC 未回时并入它（慢主进程下也不会叠请求） */
+let inFlight: Promise<void> | null = null
 
-async function fetchOnce(): Promise<void> {
-  if (inFlight) return
-  inFlight = true
-  try {
-    const rows = await window.api.agent.monitorList()
-    useAgentMonitorStore.setState({ entries: rows, loading: false })
-  } catch {
-    // 拉取失败保留旧快照，下一轮再试；loading 必须落地，否则面板永远转圈
-    useAgentMonitorStore.setState({ loading: false })
-  } finally {
-    inFlight = false
-  }
+function fetchOnce(): Promise<void> {
+  if (inFlight) return inFlight
+  inFlight = (async () => {
+    try {
+      const rows = await window.api.agent.monitorList()
+      useAgentMonitorStore.setState({ entries: rows, loading: false })
+    } catch {
+      // 拉取失败保留旧快照，下一轮再试；loading 必须落地，否则面板永远转圈
+      useAgentMonitorStore.setState({ loading: false })
+    } finally {
+      inFlight = null
+    }
+  })()
+  return inFlight
 }
 
 /**
@@ -71,7 +73,11 @@ export function subscribeAgentMonitor(): () => void {
   }
 }
 
-/** 立即拉一次（面板手动刷新按钮），与轮询同源、无订阅者时也可用 */
+/**
+ * 立即拉一次（面板手动刷新按钮、胶囊销毁运行时之后），与轮询同源、无订阅者时也可用。
+ * 在途的那一轮可能发在变更之前：先等它落定再拉，拿到的才是变更之后的快照。
+ */
 export async function refreshAgentMonitor(): Promise<void> {
+  if (inFlight) await inFlight
   await fetchOnce()
 }

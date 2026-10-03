@@ -243,6 +243,11 @@ interface ChatState {
    */
   sessionAgentCreated: Record<string, boolean>
   /**
+   * 欢迎页（还没有会话）上勾的扩展能力（mcp:/skill:）—— 直接发送新建会话时写进那条会话的
+   * `settings.enabledTools`，随后清空。没有会话就没有可写的地方，所以先记在这里。
+   */
+  welcomeEnabledTools: string[]
+  /**
    * 各 session 正在发送、后端还没落库的那条用户消息（乐观占位）。
    *
    * 用户消息由后端持久化后经 `user_message` 事件回到列表；创建运行时（含 MCP 惰性连接）可能
@@ -336,6 +341,8 @@ interface ChatState {
   setAgentClosing: (sessionId: string, closing: boolean) => void
   /** 标记某会话此刻有 / 没有 Agent 运行时（agent.init 与 agent_created / agent_closing 驱动） */
   setAgentCreated: (sessionId: string, created: boolean) => void
+  /** 整份替换欢迎页的扩展能力勾选 */
+  setWelcomeEnabledTools: (tools: string[]) => void
   /** 设 / 撤某会话的乐观占位用户消息（null = 撤） */
   setPendingPrompt: (sessionId: string, message: UserTextMessage | null) => void
   /** 某会话创建运行时期间：某台 MCP 开始连 / 落定（`mcp_connecting` 事件驱动） */
@@ -606,6 +613,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   sessionStreams: {},
   sessionClosing: {},
   sessionAgentCreated: {},
+  welcomeEnabledTools: [],
   sessionPendingPrompt: {},
   sessionMcpConnecting: {},
   sessionToolExecutions: {},
@@ -766,6 +774,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
       else delete next[sessionId]
       return { sessionAgentCreated: next }
     }),
+
+  setWelcomeEnabledTools: (tools) => set({ welcomeEnabledTools: tools }),
 
   setPendingPrompt: (sessionId, message) =>
     set((state) => {

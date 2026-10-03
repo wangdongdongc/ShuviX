@@ -33,46 +33,81 @@ export async function refreshSessionTools(sessionId: string): Promise<void> {
 }
 
 export interface SessionToolsState {
-  /** 这条会话的扩展能力勾选（mcp:/skill:） */
+  /** 这条会话的扩展能力勾选（mcp:/skill:）；没有会话时是欢迎页的草稿 */
   enabledTools: string[]
   /**
    * 只读：会话此刻有 Agent 运行时（或正在关停）。勾选只在创建运行时那一刻读一次，
    * 期间改了也不会生效 —— 后端的写入口同样会拒绝。
    */
   locked: boolean
-  /** 整份替换勾选；只读 / 没有会话 / 渠道端（无 HostApi）时什么也不做 */
+  /** 整份替换勾选；只读 / 渠道端（无 HostApi）时什么也不做。没有会话时写欢迎页的草稿 */
   setEnabledTools: (next: string[]) => Promise<void>
 }
 
+/** 某会话此刻的勾选（null = 欢迎页草稿）—— 现读 store，不经渲染闭包 */
+function currentTools(sessionId: string | null): string[] {
+  const s = useChatStore.getState()
+  return (
+    (sessionId
+      ? s.sessions.find((x) => x.id === sessionId)?.settings.enabledTools
+      : s.welcomeEnabledTools) ?? EMPTY_TOOLS
+  )
+}
+
 /**
- * 会话扩展能力勾选的读写 —— 输入框的工具选择器与会话设置里的扩展能力共用这一份。
+ * 整份替换某会话的扩展能力勾选（null = 欢迎页草稿）。
  *
  * 写入先乐观更新 store 再落库；后端拒绝（运行时抢在这次写入之前创建了）就回拉真实状态，
- * 勾选退回原样、UI 随之变成只读。
+ * 勾选退回原样、UI 随之变成只读。会话已有运行时 / 渠道端（无 HostApi）时什么也不做。
+ * 没有会话时只改 store 里的草稿：直接发送新建会话时由输入框写进新会话（InputArea 的
+ * `createSessionForSend`），之后清空。
+ */
+export async function writeSessionTools(sessionId: string | null, next: string[]): Promise<void> {
+  const host = getHostApi()
+  if (!host) return
+  const store = useChatStore.getState()
+  if (!sessionId) {
+    store.setWelcomeEnabledTools(next)
+    return
+  }
+  if (store.sessionAgentCreated[sessionId] || store.sessionClosing[sessionId]) return
+  store.updateSessionSettings(sessionId, { enabledTools: next })
+  const { success } = await host.session.updateEnabledTools({ id: sessionId, enabledTools: next })
+  if (!success) await refreshSessionTools(sessionId)
+}
+
+/**
+ * 在某会话（null = 欢迎页草稿）此刻的勾选上补上缺的那几项 —— 斜杠命令自动勾上依赖的扩展能力用。
+ * 目标由调用方点名而不是取渲染时的当前会话：欢迎页直接发送时，命令要到新会话建好之后才展开，
+ * 那一刻草稿已经写进新会话并清空了，依赖项该落到新会话上。
+ */
+export async function addSessionTools(
+  sessionId: string | null,
+  names: readonly string[]
+): Promise<void> {
+  const current = currentTools(sessionId)
+  const missing = names.filter((name) => !current.includes(name))
+  if (missing.length === 0) return
+  await writeSessionTools(sessionId, [...current, ...missing])
+}
+
+/**
+ * 会话扩展能力勾选的读写 —— 输入框的工具选择器与会话设置里的扩展能力共用这一份
+ * （写入语义见 `writeSessionTools`；没有会话时读写欢迎页的草稿 `welcomeEnabledTools`）。
  */
 export function useSessionTools(sessionId: string | null): SessionToolsState {
   const enabledTools = useChatStore(
     (s) =>
-      (sessionId ? s.sessions.find((x) => x.id === sessionId)?.settings.enabledTools : undefined) ??
-      EMPTY_TOOLS
+      (sessionId
+        ? s.sessions.find((x) => x.id === sessionId)?.settings.enabledTools
+        : s.welcomeEnabledTools) ?? EMPTY_TOOLS
   )
   const locked = useChatStore(
     (s) => !!sessionId && (!!s.sessionAgentCreated[sessionId] || !!s.sessionClosing[sessionId])
   )
 
   const setEnabledTools = useCallback(
-    async (next: string[]): Promise<void> => {
-      const host = getHostApi()
-      if (!host || !sessionId) return
-      const store = useChatStore.getState()
-      if (store.sessionAgentCreated[sessionId] || store.sessionClosing[sessionId]) return
-      store.updateSessionSettings(sessionId, { enabledTools: next })
-      const { success } = await host.session.updateEnabledTools({
-        id: sessionId,
-        enabledTools: next
-      })
-      if (!success) await refreshSessionTools(sessionId)
-    },
+    (next: string[]): Promise<void> => writeSessionTools(sessionId, next),
     [sessionId]
   )
 

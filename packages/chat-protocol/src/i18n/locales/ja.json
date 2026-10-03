@@ -231,6 +231,7 @@
     "send": "送信",
     "imageOnly": "(画像)",
     "selectModel": "モデルを選択",
+    "modelLocked": "エージェント作成済みのためモデルは読み取り専用です。変更するには上のエージェントチップから削除してください",
     "pasteChipLines": "[貼り付けテキスト #{{seq}} · {{lines}} 行]",
     "pasteChipChars": "[貼り付けテキスト #{{seq}} · {{chars}} 文字]",
     "pasteName": "貼り付けテキスト #{{seq}}"
@@ -366,7 +367,7 @@
     "commandGroup": "操作確認",
     "extensionsGroup": "拡張機能",
     "extensionsDesc": "エージェント作成時（最初の送信時）に読み込まれ、エージェントが存在する間は読み取り専用です",
-    "extensionsLocked": "エージェント作成済みのため読み取り専用です",
+    "extensionsLocked": "エージェント作成済みのため読み取り専用です。変更するには上のエージェントチップから削除してください",
     "extensionDeclared": "エージェント「{{profile}}」が宣言しています：そのエージェントのすべてのセッションで有効です。外すには、そのエージェントの md を上書きしてください。",
     "knowledgeGroup": "ナレッジベース",
     "knowledgeDesc": "このセッションが検索・追記できるベース。変更はすぐに効きます。",
@@ -977,7 +978,8 @@
   "panel": {
     "browser": "ブラウザ",
     "agents": "エージェント",
-    "agentChipTitle": "プロファイル：{{profile}} · エージェントパネルを開く",
+    "agentChipTitle": "エージェント：{{name}}（{{profile}}）· エージェントパネルを開く",
+    "agentChipDestroy": "このエージェントを削除：会話は残り、次のメッセージでその時点のモデルと拡張機能で作り直されます",
     "agentFilterPrefix": "セッション：",
     "agentFilterClear": "セッション絞り込みを解除",
     "agentFilterEmpty": "セッションで絞り込み中 — このセッションに稼働中のエージェントランタイムはありません。",

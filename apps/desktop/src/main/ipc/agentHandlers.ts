@@ -78,21 +78,26 @@ export function registerAgentHandlers(): void {
   )
 
   /**
-   * 切换指定 session 的模型。
+   * 切换指定 session 的模型。会话已有运行时（含创建中 / 关停中）时拒绝：`success: false`、
+   * 什么也不写，前端据此回拉真实状态。
    *
-   * 两个 set* 必须 await 网关：运行配置的落点是会话树（有 Agent 走 harness、没有则直接
-   * 追加 entry），不等待就返回的话，调用方 `await` 完再读 `agent.init` 可能还是旧值，
-   * 网关抛的错也会变成主进程里的 unhandled rejection、前端恒收到 success。
+   * 两个 set* 必须 await 网关：运行配置的落点是会话树，不等待就返回的话，调用方 `await`
+   * 完再读 `agent.init` 可能还是旧值，网关抛的错也会变成主进程里的 unhandled rejection、
+   * 前端恒收到 success。
    */
   ipcMain.handle('agent:setModel', (_event, params: AgentSetModelParams) =>
-    operationContext.run(createElectronContext(params.sessionId), async () => {
-      await chatGateway.setModel(
-        params.sessionId,
-        params.provider,
-        params.model,
-        params.baseUrl,
-        params.apiProtocol
-      )
+    operationContext.run(createElectronContext(params.sessionId), async () => ({
+      success: await chatGateway.setModel(params.sessionId, params.provider, params.model)
+    }))
+  )
+
+  /**
+   * 销毁会话的根 Agent 运行时（会话横幅 agent 胶囊上的 X）：会话与历史都在，下一条消息按
+   * 那时的模型与扩展能力重建。等关停落定才返回；关停前后经 agent_closing 事件广播。
+   */
+  ipcMain.handle('agent:destroy', (_event, sessionId: string) =>
+    operationContext.run(createElectronContext(sessionId), async () => {
+      await chatGateway.destroyAgent(sessionId)
       return { success: true }
     })
   )
@@ -128,8 +133,10 @@ export function registerAgentHandlers(): void {
   )
 
   /** 获取所有可用工具列表（名称 + 标签 + 可选分组，传 sessionId 时包含项目级 skills） */
-  ipcMain.handle('tools:list', (_event, sessionId?: string) =>
-    operationContext.run(createElectronContext(sessionId), () => chatGateway.listTools(sessionId))
+  ipcMain.handle('tools:list', (_event, sessionId?: string, options?: { profile?: string }) =>
+    operationContext.run(createElectronContext(sessionId), () =>
+      chatGateway.listTools(sessionId, options)
+    )
   )
 
   /** 获取所有工具的 UI 渲染配置（图标、摘要字段、表单项等） */
