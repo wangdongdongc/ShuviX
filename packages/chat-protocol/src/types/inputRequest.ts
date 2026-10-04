@@ -150,12 +150,20 @@ export interface OtherResponse extends InputResponseBase {
 }
 
 /**
- * 取消响应:仅由后端在 agent.abort 时主动产生,前端 UI 不暴露此动作。
+ * 取消原因:
+ * - `aborted`:有人中止了会话(agent.abort),或没有前端能展示询问面板;
+ * - `closed`:会话运行时被关停(LRU 回收 / 退出 / 删除),这条询问再也不会有人应答;
+ * - `superseded`:同一个 id 又发起了一次询问,先前那条作废(只有最新的一条能被应答)。
+ */
+export type CancelReason = 'aborted' | 'closed' | 'superseded'
+
+/**
+ * 取消响应:仅由后端产生(中止 / 关停 / 被同 id 新询问顶替),前端 UI 不暴露此动作。
  * 工具收到该响应时通常应 throw,中断当前 turn。
  */
 export interface CancelResponse extends InputResponseBase {
   kind: 'cancel'
-  reason: 'aborted'
+  reason: CancelReason
 }
 
 export type InputResponse = AskResponse | ChoiceResponse | OtherResponse | CancelResponse
