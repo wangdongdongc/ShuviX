@@ -10,6 +10,7 @@ import { messageService } from '../../services/messageService'
 import { appendModelChange, appendThinkingLevelChange } from '../../services/sessionStorage'
 import { respondToUserInput } from '../../services/userInputBroker'
 import { dbManager } from '../../services/builtinMcp/dbConnections'
+import { sshDisconnectRuntime, sshRuntimeStatuses } from '../../services/builtinMcp/sshServer'
 import { mcpService } from '../../services/mcpService'
 import { skillService } from '../../services/skillService'
 import type { ChatMessage, InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
@@ -194,6 +195,9 @@ export class DefaultChatGateway implements ChatGateway {
     const db = dbManager.runtimeStatus(sessionId)
     if (db) result['db'] = db
 
+    // 每台连着的 ssh 主机一枚（`ssh:<alias>`）—— 没有这一份，切走再切回 / 刷新窗口后胶囊就没了
+    Object.assign(result, sshRuntimeStatuses(sessionId))
+
     return result
   }
 
@@ -207,7 +211,11 @@ export class DefaultChatGateway implements ChatGateway {
       })
     }
 
-    if (runtimeId === 'ssh') {
+    // ssh 胶囊（`ssh:<alias>`）：真的断开那一台。本来就没连着（master 空闲到点已自己退出）
+    // 也照样收掉胶囊 —— 它亮着本身就是过时的
+    const sshClosed = sshDisconnectRuntime(sessionId, runtimeId)
+    if (sshClosed) {
+      await sshClosed
       broadcastDestroy()
       return { success: true }
     }

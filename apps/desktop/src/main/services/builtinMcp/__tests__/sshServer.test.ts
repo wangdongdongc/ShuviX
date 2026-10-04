@@ -244,7 +244,7 @@ vi.mock('node:child_process', cp.factory)
 import { migrations } from '../../../dao/migrations'
 import { BUILTIN_MCP_FACTORIES } from '../index'
 import { createSshMcpServerFactory } from '../sshServer'
-import { rsyncAvailable } from '../sshControl'
+import { rsyncAvailable, CONTROL_PERSIST_MS } from '../sshControl'
 import { createInlinePolicyMdReader } from '@shuvix/agent-runtime/security/builtinPolicies/inlineSources'
 import { retiredPolicy } from '../../../../../../../packages/agent-runtime/src/security/__tests__/fixtures/retiredPolicies'
 import { BUILTIN_MCP_PRESENTATIONS } from '@shuvix/chat-protocol/builtinMcpPresentations'
@@ -1121,30 +1121,86 @@ describe('ssh 内置服务器的 disconnect 与状态条', () => {
     expect(control.disconnect.map((d) => d.alias)).toEqual(['web', 'web'])
   })
 
-  it('SSHS-U-124: 状态条 = 最后一条**成功**命令的主机；任何 disconnect 都清掉', async () => {
-    writeConfig('Host web\n')
+  it('SSHS-U-124: 每台连着的主机一枚胶囊（ssh:<alias>）；按 socket 的真实状态点亮 / 熄灭，断开一台不影响别的', async () => {
+    writeConfig('Host web\nHost api\n')
     const { client, events } = await open()
+    const on = (alias: string): Record<string, unknown> => ({
+      type: 'runtime_event',
+      runtimeId: `ssh:${alias}`,
+      status: { label: alias, icon: 'Terminal', color: '#38bdf8' }
+    })
+    const off = (alias: string): Record<string, unknown> => ({
+      type: 'runtime_event',
+      runtimeId: `ssh:${alias}`,
+      status: null
+    })
 
-    await callTool(client, 'exec', execArgs())
-    expect(events).toEqual([
-      {
-        type: 'runtime_event',
-        runtimeId: 'ssh',
-        status: { label: 'web', icon: 'Terminal', color: '#38bdf8' }
-      }
-    ])
-
-    // J11（今天的行为，非缺陷）：非零退出不改状态条 —— 于是它写的是「最后一条跑成了的」，
-    // 而不是「现在连着哪台」。连接本身其实还在（ControlPersist）。
-    events.length = 0
-    control.result = { stdout: 'nope', stderr: '', exitCode: 1, timedOut: false }
+    // 连不上（没有 socket）→ 不点亮
+    control.result = { stdout: '', stderr: 'Connection refused', exitCode: 255, timedOut: false }
     await callTool(client, 'exec', execArgs())
     expect(events).toEqual([])
 
-    // 同样是今天的行为：断开哪一台都把条清空，哪怕本来就没连着
+    // 第一台连上
+    control.result = { stdout: 'ok', stderr: '', exitCode: 0, timedOut: false }
+    control.connected.push('web')
+    await callTool(client, 'exec', execArgs())
+    expect(events).toEqual([on('web')])
+
+    // 第二台连上：只多出它自己那一枚，web 不重发
+    events.length = 0
+    control.connected.push('api')
+    await callTool(client, 'exec', execArgs({ host: 'api' }))
+    expect(events).toEqual([on('api')])
+
+    // 远端命令非零退出：连接照样在，刚用过的那台重发一次点亮（幂等覆盖），什么也不熄
+    events.length = 0
+    control.result = { stdout: 'nope', stderr: '', exitCode: 1, timedOut: false }
+    await callTool(client, 'exec', execArgs())
+    expect(events).toEqual([on('web')])
+
+    // 断开 web：只熄 web，api 留着
+    events.length = 0
+    control.connected.splice(control.connected.indexOf('web'), 1)
+    await callTool(client, 'disconnect', { host: 'web' })
+    expect(events).toEqual([off('web')])
+
+    // 断开一台本来就没亮的：什么也不发
+    events.length = 0
     control.wasConnected = false
     await callTool(client, 'disconnect', { host: 'web' })
-    expect(events).toEqual([{ type: 'runtime_event', runtimeId: 'ssh', status: null }])
+    expect(events).toEqual([])
+
+    // master 空闲到点自己退了（socket 没了、没有任何事件）：下一次调用顺手把它熄掉
+    events.length = 0
+    control.connected.length = 0
+    control.result = { stdout: '', stderr: 'Connection refused', exitCode: 255, timedOut: false }
+    await callTool(client, 'exec', execArgs())
+    expect(events).toEqual([off('api')])
+  })
+
+  it('SSHS-U-124b: master 空闲到点自己退出（没有任何事件）→ 到点复核熄掉那一台；还连着的继续排下一轮', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      writeConfig('Host web\nHost api\n')
+      const { client, events } = await open()
+      control.connected.push('web', 'api')
+      await callTool(client, 'exec', execArgs())
+      await callTool(client, 'exec', execArgs({ host: 'api' }))
+
+      // web 的 master 空闲退出了；api 还连着
+      events.length = 0
+      control.connected.splice(0, control.connected.length, 'api')
+      await vi.advanceTimersByTimeAsync(CONTROL_PERSIST_MS + 5_000)
+      expect(events).toEqual([{ type: 'runtime_event', runtimeId: 'ssh:web', status: null }])
+
+      // 下一轮复核时 api 也退了
+      events.length = 0
+      control.connected.length = 0
+      await vi.advanceTimersByTimeAsync(CONTROL_PERSIST_MS + 5_000)
+      expect(events).toEqual([{ type: 'runtime_event', runtimeId: 'ssh:api', status: null }])
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('SSHS-U-125: exec / disconnect 的 annotations 如实声明', async () => {
@@ -2127,31 +2183,30 @@ describe('ssh 内置服务器传输结果的翻译', () => {
     )
   })
 
-  it('SSHS-U-177: 状态条只在真有 control socket 时点亮，失败的传输不点', async () => {
+  it('SSHS-U-177: 传输按 socket 点亮 —— 没有 control socket 就不亮，传失败但连接还在照样亮', async () => {
     writeConfig('Host web\n')
     const { client, events } = await open()
+    const on = {
+      type: 'runtime_event',
+      runtimeId: 'ssh:web',
+      status: { label: 'web', icon: 'Terminal', color: '#38bdf8' }
+    }
 
     // scp 会在 argv 更靠前的位置塞 `-oControlMaster=no`，而 OpenSSH 先到先得 ——
-    // 于是一次独立的传输会复用已有 master，却从不新建。无条件点亮的话，
+    // 于是一次独立的传输会复用已有 master，却从不新建。按「传成了」点亮的话，
     // 同一个会话里 list-hosts 会给出相反的答案
     await callTool(client, 'upload', xferArgs())
     expect(events).toEqual([])
 
     control.connected.push('web')
     await callTool(client, 'upload', xferArgs())
-    expect(events).toEqual([
-      {
-        type: 'runtime_event',
-        runtimeId: 'ssh',
-        status: { label: 'web', icon: 'Terminal', color: '#38bdf8' }
-      }
-    ])
+    expect(events).toEqual([on])
 
-    // 失败的那次连 socket 都不查 —— 状态条说的是「最后一次传成了的」
+    // 传失败不改变连接本身：socket 还在，胶囊就该亮着
     events.length = 0
     control.transfer = { stdout: '', stderr: 'boom', exitCode: 1, timedOut: false }
     await callTool(client, 'upload', xferArgs())
-    expect(events).toEqual([])
+    expect(events).toEqual([on])
   })
 })
 

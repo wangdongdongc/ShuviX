@@ -6,6 +6,8 @@
  *         「+N」与库名都在那里）；连接池说没有就没有 —— 网关不再自己拿 getConnectionInfo 拼；
  *   GW-2  destroyRuntime(sid, 'db')：没连着 → 什么都不做、答 false；连着 → 先断开、等断开落定，
  *         再广播 `status: null`，答 true；
+ *   GW-1c / GW-2d  ssh：每台连着的主机一条 `ssh:<alias>`，与 db 并列；`ssh:<alias>` 的断开按钮断的是
+ *         那一台，等断开落定再广播 null —— 本来就没连着（master 空闲到点已退出）也照样收掉胶囊；
  *   GW-3  listTools：`mcp:database` 行是内置的（isBuiltin），且没有任何一个基座档案声明它 ——
  *         它是会话里勾的能力，不是谁的默认（档案取真的内置 md，四种形态外加 coding）。
  *
@@ -34,6 +36,9 @@ const mocks = vi.hoisted(() => ({
   appendModelChange: vi.fn<(sessionId: string, provider: string, model: string) => Promise<void>>(),
   appendThinkingLevelChange: vi.fn<(sessionId: string, level: string) => Promise<void>>(),
   messageClear: vi.fn(),
+  sshRuntimeStatuses: vi.fn<(sessionId: string) => Record<string, RuntimeStatus>>(),
+  sshDisconnectRuntime:
+    vi.fn<(sessionId: string, runtimeId: string) => Promise<boolean> | undefined>(),
   mcpInfos: [] as Array<Record<string, unknown>>,
   builtinNames: ['read', 'bash'] as string[]
 }))
@@ -75,6 +80,11 @@ vi.mock('../../../services/builtinMcp/dbConnections', () => ({
     getConnectionInfo: mocks.getConnectionInfo,
     disconnect: mocks.disconnect
   }
+}))
+// 不 mock 的话，状态条快照会去读这台机器真实的 ~/.ssh/config 与 /tmp 下的 control socket
+vi.mock('../../../services/builtinMcp/sshServer', () => ({
+  sshRuntimeStatuses: mocks.sshRuntimeStatuses,
+  sshDisconnectRuntime: mocks.sshDisconnectRuntime
 }))
 vi.mock('../../../services/mcpService', () => ({
   mcpService: { getAllToolInfos: () => mocks.mcpInfos }
@@ -126,10 +136,15 @@ beforeEach(() => {
     mocks.getAgentSession,
     mocks.appendModelChange,
     mocks.appendThinkingLevelChange,
-    mocks.messageClear
+    mocks.messageClear,
+    mocks.sshRuntimeStatuses,
+    mocks.sshDisconnectRuntime
   ]) {
     fn.mockReset()
   }
+  mocks.sshRuntimeStatuses.mockReturnValue({})
+  // 与真件同一口径：不是 `ssh:` 开头的运行时一律答 undefined（不归它管）
+  mocks.sshDisconnectRuntime.mockReturnValue(undefined)
   mocks.disconnect.mockResolvedValue(undefined)
   mocks.hasAgentRuntime.mockReturnValue(false)
   mocks.invalidateAgent.mockResolvedValue(undefined)
@@ -153,6 +168,20 @@ describe('DefaultChatGateway.getRuntimeStatuses —— 状态条上的 db 一条
     mocks.getConnectionInfo.mockReturnValue(INFO)
 
     expect(chatGateway.getRuntimeStatuses(SID)).toEqual({})
+  })
+
+  it('GW-1c 连着的每台 ssh 主机各一条 ssh:<alias>，与 db 并列', () => {
+    const web: RuntimeStatus = { label: 'web', icon: 'Terminal', color: '#38bdf8' }
+    const api: RuntimeStatus = { label: 'api', icon: 'Terminal', color: '#38bdf8' }
+    mocks.runtimeStatus.mockReturnValue(STATUS)
+    mocks.sshRuntimeStatuses.mockReturnValue({ 'ssh:web': web, 'ssh:api': api })
+
+    expect(chatGateway.getRuntimeStatuses(SID)).toEqual({
+      db: STATUS,
+      'ssh:web': web,
+      'ssh:api': api
+    })
+    expect(mocks.sshRuntimeStatuses).toHaveBeenCalledWith(SID)
   })
 })
 
@@ -186,6 +215,31 @@ describe('DefaultChatGateway.destroyRuntime(sid, "db") —— 状态条上的断
       runtimeId: 'db',
       status: null
     })
+  })
+
+  it('GW-2d ssh:<alias> → 断开那一台，等断开落定再广播它的 status:null，答 true；不碰 db 连接池', async () => {
+    let finish!: (wasConnected: boolean) => void
+    mocks.sshDisconnectRuntime.mockImplementation((_sid, id) =>
+      id.startsWith('ssh:') ? new Promise<boolean>((r) => (finish = r)) : undefined
+    )
+
+    const pending = chatGateway.destroyRuntime(SID, 'ssh:web')
+    await Promise.resolve()
+    expect(mocks.sshDisconnectRuntime).toHaveBeenCalledWith(SID, 'ssh:web')
+    expect(mocks.broadcast).not.toHaveBeenCalled()
+
+    // 本来就没连着（master 空闲到点已自己退出）：胶囊照样收掉
+    finish(false)
+    await expect(pending).resolves.toEqual({ success: true })
+    expect(mocks.broadcast).toHaveBeenCalledTimes(1)
+    expect(mocks.broadcast).toHaveBeenCalledWith({
+      type: 'runtime_event',
+      sessionId: SID,
+      runtimeId: 'ssh:web',
+      status: null
+    })
+    expect(mocks.getConnectionInfo).not.toHaveBeenCalled()
+    expect(mocks.disconnect).not.toHaveBeenCalled()
   })
 
   it('GW-2c 不认识的运行时 → 答 false，不碰连接池', async () => {

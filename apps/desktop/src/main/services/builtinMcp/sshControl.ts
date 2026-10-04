@@ -23,8 +23,11 @@ import { createLogger } from '../../logger'
 
 const log = createLogger('ssh:control')
 
-/** master 在最后一条命令之后还活多久 */
-const CONTROL_PERSIST = '10m'
+/** master 在最后一条命令之后还活多久（分钟）—— 到点自己退出、删掉 socket，不发任何通知 */
+const CONTROL_PERSIST_MIN = 10
+const CONTROL_PERSIST = `${CONTROL_PERSIST_MIN}m`
+/** 同一段时长（毫秒）：状态胶囊据它定时复核，免得 master 自己退了胶囊还亮着 */
+export const CONTROL_PERSIST_MS = CONTROL_PERSIST_MIN * 60_000
 /** 建连超时（秒） */
 const CONNECT_TIMEOUT_SEC = 15
 /** 进程退出后再等多久收尾巴输出（毫秒）—— `close` 没来也要落定，见 runProcess */

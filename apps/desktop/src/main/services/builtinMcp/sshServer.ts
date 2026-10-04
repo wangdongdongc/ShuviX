@@ -30,8 +30,10 @@ import {
   classifySshFailure,
   rsyncAvailable,
   unsafeRemotePathReason,
+  CONTROL_PERSIST_MS,
   type TransferDirection
 } from './sshControl'
+import type { RuntimeStatus } from '@shuvix/chat-protocol/events'
 import { getDesktopSecurityContext, resolveProjectConfig, TOOL_ABORTED } from '../toolContext'
 import { isAbsolute, resolve as resolvePath } from 'path'
 import { sanitizeBinaryOutput, collapseProgressOutput } from '../../utils/toolUtils/shell'
@@ -255,6 +257,47 @@ function formatHost(h: { alias: string; hostname?: string; user?: string; port?:
  * 于是「会话结束 → McpManager 关连接 → 这里释放」只有一条路径。本轮没有要释放的东西，
  * 钩子先立好 —— exec 的 control socket 就挂在这里。
  */
+/**
+ * 会话横幅上的连接胶囊：**每台连着的主机一枚**，runtimeId = `ssh:<alias>`，胶囊上的 X 只断那一台。
+ * 「连着」的判据处处是同一个 —— 这条会话为这台主机开的 control socket 还在（`sshConnectedAliases`），
+ * 与 list-hosts、会话快照、实时事件一致。Windows 没有 ControlMaster，也就没有常驻连接，不出胶囊。
+ */
+export const SSH_RUNTIME_PREFIX = 'ssh:'
+
+function sshRuntimeStatus(alias: string): RuntimeStatus {
+  return { label: alias, icon: 'Terminal', color: '#38bdf8' }
+}
+
+/**
+ * 这条会话此刻连着的主机 → 胶囊（会话打开 / 切回时的快照，`runtime.statuses` 用）。
+ * 候选别名现读配置；不在配置里的别名算不出 socket 路径，也就不算连着。
+ */
+export function sshRuntimeStatuses(
+  sessionId: string,
+  configPath?: string
+): Record<string, RuntimeStatus> {
+  const aliases = listSshHosts(configPath ?? defaultSshConfigPath()).map((h) => h.alias)
+  return Object.fromEntries(
+    sshConnectedAliases(sessionId, aliases).map((alias) => [
+      SSH_RUNTIME_PREFIX + alias,
+      sshRuntimeStatus(alias)
+    ])
+  )
+}
+
+/**
+ * 胶囊上的 X：断开 `ssh:<alias>` 那一台。不是 ssh 胶囊返回 undefined；否则返回「本来是否连着」。
+ * 别名来自渲染进程，但它只在**这条会话为它开的 socket 存在**时才会进 ssh 的 argv（路径是
+ * sessionId + 别名的哈希，存在即说明当初是核对过的别名连上的），且排在 `--` 之后。
+ */
+export function sshDisconnectRuntime(
+  sessionId: string,
+  runtimeId: string
+): Promise<boolean> | undefined {
+  if (!runtimeId.startsWith(SSH_RUNTIME_PREFIX)) return undefined
+  return sshDisconnect(sessionId, runtimeId.slice(SSH_RUNTIME_PREFIX.length))
+}
+
 export function createSshMcpServerFactory(opts?: {
   configPath?: string
 }): BuiltinMcpFactory<DesktopBuiltinMcpScope> {
@@ -405,13 +448,15 @@ export async function createSshMcpServer(
       configPath: configPathOverride
     })
 
+    // 胶囊按 socket 的真实状态走，与这条命令的退出码无关：远端命令非零退出时连接照样在
+    publishConnections(alias.alias)
+
     // ssh 自身失败（连不上、主机密钥不认）用 255 报出来，翻译成可操作的说明；
     // 远端命令自己的非零退出码不属于这一类，原样带回去让 agent 自己判断
     if (result.exitCode === 255) {
       const explained = classifySshFailure(alias.alias, result.stderr, result.stdout)
       if (explained) return err(explained)
     }
-    if (result.exitCode === 0) announceConnected(alias.alias)
 
     const raw = [result.stdout, result.stderr].filter(Boolean).join('\n')
     let text = collapseProgressOutput(sanitizeBinaryOutput(raw), command)
@@ -479,6 +524,10 @@ export async function createSshMcpServer(
     what: string,
     timeoutSec: number
   ): CallToolResult => {
+    // 只看 socket 在不在：scp 会在 argv 更靠前的位置塞 `-oControlMaster=no`，而 OpenSSH 是
+    // **先到先得** —— 所以一次独立的传输会复用已有 master，却从不新建。按「传成了」点亮的话，
+    // 同一个会话里 list-hosts 会给出相反的答案
+    publishConnections(alias)
     if (result.exitCode === 255) {
       const explained = classifySshFailure(alias, result.stderr, result.stdout)
       if (explained) return err(explained)
@@ -489,10 +538,6 @@ export async function createSshMcpServer(
         `${what} failed (exit ${result.exitCode}): ${result.stderr.trim() || '(no output)'}`
       )
     }
-    // 只有真的有 control socket 才点亮：scp 会在 argv 更靠前的位置塞 `-oControlMaster=no`，
-    // 而 OpenSSH 是**先到先得** —— 所以一次独立的传输会复用已有 master，却从不新建。
-    // 这里若无条件点亮，同一个会话里 list-hosts 会给出相反的答案。
-    if (sshConnectedAliases(scope.sessionId, [alias]).length > 0) announceConnected(alias)
     const detail = [result.stdout, result.stderr]
       .filter((t) => t.trim())
       .join('\n')
@@ -582,7 +627,7 @@ export async function createSshMcpServer(
     const alias = resolveAlias(args.host)
     if (typeof alias === 'string') return err(alias)
     const wasConnected = await sshDisconnect(scope.sessionId, alias.alias, configPathOverride)
-    announceConnected(undefined)
+    publishConnections()
     return {
       content: [
         {
@@ -595,13 +640,54 @@ export async function createSshMcpServer(
     }
   }
 
-  /** 连接状态条：连上时显示别名，断开时清掉 */
-  const announceConnected = (alias: string | undefined): void => {
-    scope.emitChatEvent?.({
-      type: 'runtime_event',
-      runtimeId: 'ssh',
-      status: alias ? { label: alias, icon: 'Terminal', color: '#38bdf8' } : null
-    })
+  /** 已经发过「点亮」的主机 —— 只用来知道该熄掉哪些，点亮从不因它省略（见 publishConnections） */
+  const shown = new Set<string>()
+  /** 每台亮着的主机一只复核定时器：master 空闲到点会自己退出，那一刻没有任何事件 */
+  const rechecks = new Map<string, ReturnType<typeof setTimeout>>()
+
+  const emitStatus = (alias: string, status: RuntimeStatus | null): void => {
+    scope.emitChatEvent?.({ type: 'runtime_event', runtimeId: SSH_RUNTIME_PREFIX + alias, status })
+  }
+
+  const clearRecheck = (alias: string): void => {
+    const timer = rechecks.get(alias)
+    if (timer) clearTimeout(timer)
+    rechecks.delete(alias)
+  }
+
+  /** 到 master 的空闲寿命（再留一点余量）复核一次；还连着就再排一轮 */
+  const scheduleRecheck = (alias: string): void => {
+    clearRecheck(alias)
+    const timer = setTimeout(() => {
+      rechecks.delete(alias)
+      publishConnections()
+      if (shown.has(alias)) scheduleRecheck(alias)
+    }, CONTROL_PERSIST_MS + 5_000)
+    timer.unref?.()
+    rechecks.set(alias, timer)
+  }
+
+  /**
+   * 把胶囊对齐到 socket 的真实状态：没了的熄掉，新连上的点亮。`touched` 是这次刚用过的主机 ——
+   * 它连着就**总是**重发一次点亮（幂等的覆盖写）并重新起算复核：会话横幅上的 X 走的是网关
+   * （sshDisconnectRuntime），不经过这个实例，`shown` 可能还以为它亮着；靠「已亮就不发」省一条
+   * 事件的话，断开后再连上的那台就再也亮不起来了。
+   */
+  const publishConnections = (touched?: string): void => {
+    const candidates = new Set([...readConfig().hosts.map((h) => h.alias), ...shown])
+    const connected = new Set(sshConnectedAliases(scope.sessionId, [...candidates]))
+    for (const alias of [...shown]) {
+      if (connected.has(alias)) continue
+      shown.delete(alias)
+      clearRecheck(alias)
+      emitStatus(alias, null)
+    }
+    for (const alias of connected) {
+      if (shown.has(alias) && alias !== touched) continue
+      shown.add(alias)
+      emitStatus(alias, sshRuntimeStatus(alias))
+      scheduleRecheck(alias)
+    }
   }
 
   server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
@@ -638,6 +724,7 @@ export async function createSshMcpServer(
   // 这是「寿命绑会话」在资源上的兑现：一次运行时重建（invalidate）不会走到这里，
   // 所以 ssh 连接挺得过重建，而会话删除挺不过。
   transport.onclose = (): void => {
+    for (const alias of [...rechecks.keys()]) clearRecheck(alias)
     const aliases = listSshHosts(configPathOverride ?? defaultSshConfigPath()).map((h) => h.alias)
     void sshCloseSession(scope.sessionId, aliases, configPathOverride)
       .then((n) => log.info(`ssh server closed session=${scope.sessionId} (${n} connection(s))`))
