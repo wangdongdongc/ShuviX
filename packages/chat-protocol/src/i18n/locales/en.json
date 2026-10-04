@@ -708,7 +708,7 @@
     "mcpEnvValuePlaceholder": "value",
     "mcpEnvAdd": "Add variable",
     "mcpUrl": "Server URL",
-    "mcpUrlPlaceholder": "e.g. https://mcp.example.com/sse",
+    "mcpUrlPlaceholder": "e.g. https://mcp.example.com/mcp",
     "mcpHeaders": "Headers",
     "mcpHeadersPlaceholder": "Key: Value format, one per line",
     "mcpStatusConnected": "Connected",

@@ -708,7 +708,7 @@
     "mcpEnvValuePlaceholder": "value",
     "mcpEnvAdd": "添加变量",
     "mcpUrl": "服务地址",
-    "mcpUrlPlaceholder": "如 https://mcp.example.com/sse",
+    "mcpUrlPlaceholder": "如 https://mcp.example.com/mcp",
     "mcpHeaders": "请求头",
     "mcpHeadersPlaceholder": "Key: Value 格式，每行一个",
     "mcpStatusConnected": "已连接",

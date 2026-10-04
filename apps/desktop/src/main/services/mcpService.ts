@@ -3,7 +3,8 @@
  *
  * 桌面只注入两处宿主特定逻辑：
  *  - store：mcpDao（SQLite mcp_servers 表）
- *  - createTransport：stdio（本地子进程，buildSpawnEnv 注入环境）+ http（Streamable HTTP/SSE）
+ *  - createTransport：stdio（本地子进程，buildSpawnEnv 注入环境，见 McpStdioTransport）
+ *    + http（Streamable HTTP）
  *    + inproc（内置能力服务器，进程内、按会话实例化，见 builtinMcpServers）
  * 连接/发现/调用/AgentTool 转换/内置模板替换等全部在共享 McpManager 内（与扩展同一套）。
  */
@@ -11,14 +12,13 @@ import { McpManager, BuiltinMcpRegistry, type BuiltinMcpScope } from '@shuvix/ag
 import { requestUserInputFor } from './userInputBroker'
 import { chatFrontendRegistry } from '../frontend/core/ChatFrontendRegistry'
 import type { DesktopBuiltinMcpScope } from './builtinMcp/types'
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
-import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 import type { McpServer } from '@shuvix/chat-protocol/types/mcp'
 import { mcpDao } from '../dao/mcpDao'
 import { BUILTIN_MCP_FACTORIES } from './builtinMcp'
 import { buildSpawnEnv } from '../utils/paths'
+import { McpStdioTransport } from '../utils/mcpStdioTransport'
 import { createLogger } from '../logger'
 
 const log = createLogger('MCP')
@@ -50,7 +50,7 @@ for (const [name, factory] of Object.entries(BUILTIN_MCP_FACTORIES)) {
   builtinMcpRegistry.register(name, factory)
 }
 
-/** 桌面 transport 工厂：stdio（本地进程）+ http（Streamable HTTP，失败回退 SSE）+ inproc（内置） */
+/** 桌面 transport 工厂：stdio（本地进程）+ http（Streamable HTTP）+ inproc（内置） */
 function createTransport(
   server: McpServer,
   scope?: BuiltinMcpScope
@@ -67,18 +67,16 @@ function createTransport(
     })
   }
   if (server.type === 'stdio') {
-    return new StdioClientTransport({
+    return new McpStdioTransport({
       command: server.command,
       args: parseJsonArray(server.args),
       env: buildSpawnEnv(parseJsonObject(server.env)) as Record<string, string>
     })
   } else if (server.type === 'http') {
+    // 只有 Streamable HTTP。这里曾经 try/catch 回退到旧版 SSE transport，但构造函数从不因为网络
+    // 失败而抛（连接在 start 时才发生），那条回退从来没走到过 —— 只认旧版 SSE 的 server 一直就连不上
     const headers = parseJsonObject(server.headers) as Record<string, string>
-    try {
-      return new StreamableHTTPClientTransport(new URL(server.url), { requestInit: { headers } })
-    } catch {
-      return new SSEClientTransport(new URL(server.url), { requestInit: { headers } })
-    }
+    return new StreamableHTTPClientTransport(new URL(server.url), { requestInit: { headers } })
   }
   throw new Error(`不支持的 MCP transport 类型: ${server.type}`)
 }

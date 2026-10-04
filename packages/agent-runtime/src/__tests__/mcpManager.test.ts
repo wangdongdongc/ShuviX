@@ -15,13 +15,16 @@
  * 所以普通 await 照常推进，只有真超时才需要 advanceTimersByTimeAsync。
  */
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
+import { StreamableHTTPError } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 import type { JSONRPCMessage, JSONRPCRequest } from '@modelcontextprotocol/sdk/types.js'
 import type { McpServer } from '@shuvix/chat-protocol/types/mcp'
 import type { BuiltinMcpScope } from '../builtinMcpRegistry'
 import {
+  LAZY_CONNECT_TIMEOUT_MS,
   MAX_INLINE_IMAGE_BASE64,
   McpManager,
+  STDERR_TAIL_CHARS,
   mcpContentToAgentContent,
   type McpAgentToolMeta,
   type McpDiscoveredTool,
@@ -58,6 +61,58 @@ interface FakeOpts {
    * 会因为错误的理由通过。规范之外的形态只能直接测 mcpContentToAgentContent。
    */
   callResult?: Record<string, unknown> | ((call: FakeCall) => Record<string, unknown>)
+  /**
+   * 应答 initialize 时给自己挂上的会话 id（Streamable HTTP 的 `mcp-session-id`）。
+   *
+   * 只能在应答那一刻挂、不能在构造时：SDK 的 `Client.connect` 见到 transport 已有 sessionId
+   * 就当成「续接旧会话」，整个跳过 initialize。404 会话过期类用例（MCPR-U-11~15）靠它。
+   */
+  sessionId?: string
+  /**
+   * 子进程 stderr 的替身。给了（哪怕是 `''`）实例才有 `stderrTail()`，读的是可变字段
+   * `t.stderr` —— 用例中途改它 = 进程又往 stderr 打了几行；不给就**压根没有**这个方法，
+   * 与 http / inproc transport 一样（McpManager 靠「有没有这个方法」分辨）。
+   */
+  stderr?: string
+  /**
+   * tools/call 发送失败（`n` = 这份实例上第几次 tools/call，从 1 数）。返回 Error 时请求
+   * **已经发出去了**（照样记进 toolCalls），先 onerror 再让 send() 以它拒绝 —— SDK 的
+   * StreamableHTTPClientTransport 就是这个顺序。
+   */
+  failCall?: (call: FakeCall, n: number) => Error | undefined
+  /** tools/call 由 server 作答为 JSON-RPC 错误：请求到了、也答了，连接本身是好的 */
+  callError?: { code: number; message: string }
+  /**
+   * 扣住 tools/call（握手不受影响；调用照样记进 toolCalls）：
+   *  - `'send'`：send() 一直悬着 —— HTTP 的 POST 还在路上
+   *  - `'reply'`：send() 照常落定但不应答 —— stdio server 还在干活
+   * 扣下的每一发进 `heldCalls`，由用例逐个放行 / 判失败。
+   */
+  holdCalls?: 'send' | 'reply'
+  /** close() 里同步跑一下（「进程临死前又往 stderr 打了几行」） */
+  onCloseHook?: (t: FakeTransport) => void
+}
+
+/** 被 `holdCalls` 扣下的一发 tools/call */
+interface HeldCall {
+  /** 放行：（`'send'` 下先让 send() 落定）再按 callResult / callError 作答 */
+  reply(): void
+  /** 让悬着的 send() 以 `err` 拒绝（只对 `'send'` 有意义：`'reply'` 的请求早已发出） */
+  fail(err: Error): void
+}
+
+/** 一条 tools/call 请求在假 server 眼里的样子 */
+function callOf(message: JSONRPCRequest): FakeCall {
+  const params = (message.params ?? {}) as {
+    name?: string
+    arguments?: unknown
+    _meta?: Record<string, unknown>
+  }
+  return {
+    name: params.name ?? '',
+    args: (params.arguments ?? {}) as Record<string, unknown>,
+    meta: params._meta
+  }
 }
 
 /** 手写 JSON-RPC 应答器：只认 initialize / tools/list / tools/call，其余一律空 result */
@@ -65,6 +120,8 @@ class FakeTransport implements Transport {
   onclose?: () => void
   onerror?: (error: Error) => void
   onmessage?: (message: JSONRPCMessage) => void
+  /** 应答 initialize 之后才有（见 FakeOpts.sessionId） */
+  sessionId?: string
   closeCalls = 0
   /** 收到的 tools/call —— 「这次调用落在哪份实例上」只能从这里看出来 */
   toolCalls: Array<{ name: string; args: Record<string, unknown> }> = []
@@ -75,6 +132,12 @@ class FakeTransport implements Transport {
    * 内置能力服务器的询问卡片按 toolCallId 定位，而它只能经这条路进去。
    */
   toolCallMetas: Array<Record<string, unknown> | undefined> = []
+  /** 被 `holdCalls` 扣下的 tools/call，按发出的先后 */
+  heldCalls: HeldCall[] = []
+  /** 子进程 stderr 的替身（见 FakeOpts.stderr）；只有给了那一项，stderrTail 才读得到它 */
+  stderr = ''
+  /** 只在给了 FakeOpts.stderr 时才挂上 —— `declare` 保证没给时连这个属性都没有 */
+  declare stderrTail?: () => string
   private held: JSONRPCRequest[] = []
   private holding: boolean
 
@@ -85,6 +148,10 @@ class FakeTransport implements Transport {
     readonly scope?: BuiltinMcpScope
   ) {
     this.holding = opts.hold === true
+    if (opts.stderr !== undefined) {
+      this.stderr = opts.stderr
+      this.stderrTail = () => this.stderr
+    }
   }
 
   startCalls = 0
@@ -96,6 +163,13 @@ class FakeTransport implements Transport {
 
   async send(message: JSONRPCMessage): Promise<void> {
     if (!isRequest(message)) return // 通知（notifications/initialized 等）无需应答
+    // 一发 tools/call 在 send() 被调到的那一刻就算「发出去了」—— 扣住、失败都照记
+    if (message.method === 'tools/call') {
+      const call = callOf(message)
+      this.toolCalls.push({ name: call.name, args: call.args })
+      this.toolCallMetas.push(call.meta)
+      if (!this.holding) return this.sendCall(message, call)
+    }
     if (this.holding) {
       this.held.push(message)
       return
@@ -103,8 +177,43 @@ class FakeTransport implements Transport {
     this.answer(message)
   }
 
+  /** tools/call 的发送：失败 / 扣住 / 照常作答 */
+  private sendCall(message: JSONRPCRequest, call: FakeCall): Promise<void> | undefined {
+    const failure = this.opts.failCall?.(call, this.toolCalls.length)
+    if (failure) {
+      this.onerror?.(failure)
+      return Promise.reject(failure)
+    }
+    if (this.opts.holdCalls === 'send') {
+      return new Promise<void>((resolve, reject) => {
+        this.heldCalls.push({
+          reply: () => {
+            resolve()
+            this.answer(message)
+          },
+          fail: (err) => {
+            this.onerror?.(err)
+            reject(err)
+          }
+        })
+      })
+    }
+    if (this.opts.holdCalls === 'reply') {
+      this.heldCalls.push({
+        reply: () => this.answer(message),
+        fail: () => {
+          throw new Error('holdCalls: "reply" 的 send() 早已落定，没有可拒绝的发送')
+        }
+      })
+      return undefined
+    }
+    this.answer(message)
+    return undefined
+  }
+
   async close(): Promise<void> {
     this.closeCalls++
+    this.opts.onCloseHook?.(this)
     if (this.opts.throwOnClose) throw new Error('close failed')
     if (this.opts.notifyOnClose) this.onclose?.()
   }
@@ -128,20 +237,16 @@ class FakeTransport implements Transport {
   }
 
   private answer(message: JSONRPCRequest): void {
-    let call: FakeCall | undefined
-    if (message.method === 'tools/call') {
-      const params = (message.params ?? {}) as {
-        name?: string
-        arguments?: unknown
-        _meta?: Record<string, unknown>
-      }
-      call = {
-        name: params.name ?? '',
-        args: (params.arguments ?? {}) as Record<string, unknown>,
-        meta: params._meta
-      }
-      this.toolCalls.push({ name: call.name, args: call.args })
-      this.toolCallMetas.push(params._meta)
+    const isCall = message.method === 'tools/call'
+    const callError = this.opts.callError
+    if (isCall && callError) {
+      queueMicrotask(() =>
+        this.onmessage?.({ jsonrpc: '2.0', id: message.id, error: { ...callError } })
+      )
+      return
+    }
+    if (message.method === 'initialize' && this.opts.sessionId !== undefined) {
+      this.sessionId = this.opts.sessionId
     }
     const result =
       message.method === 'initialize'
@@ -152,8 +257,8 @@ class FakeTransport implements Transport {
           }
         : message.method === 'tools/list'
           ? { tools: this.opts.tools ?? [] }
-          : call
-            ? this.callResultFor(call)
+          : isCall
+            ? this.callResultFor(callOf(message))
             : {}
     queueMicrotask(() => this.onmessage?.({ jsonrpc: '2.0', id: message.id, result }))
   }
@@ -591,25 +696,25 @@ describe('McpManager 可用性与批量装配', () => {
 })
 
 describe('McpManager 连接中途的意外', () => {
-  it('MCPL-U-13: 掉线后状态回落、工具清空，已构建的 AgentTool 以「没连上」失败（抛出 → pi 记成失败）；下次用到重连', async () => {
+  it('MCPL-U-13: 掉线后状态回落、工具清空；已构建的 AgentTool 下一次调用原地重连一次再调', async () => {
     const h = setup([row({ id: 'a-id', name: 'a' })])
     h.plan.set('a', { tools: [tool('search')] })
     expect(await h.mgr.ensureServerByName('a')).toEqual({ ok: true })
 
-    // Agent 手里那份工具是创建那一刻拿到的，掉线之后它还在
+    // Agent 手里那份工具是创建那一刻拿到的，掉线之后它还在（Agent 要等用户销毁才重建）
     const held = h.mgr.serverToAgentTools('a-id')
     expect(held).toHaveLength(1)
 
-    h.last('a').onclose?.()
+    const dropped = h.last('a')
+    dropped.onclose?.()
     expect(h.mgr.getStatus('a-id')).toBe('disconnected')
     expect(h.mgr.serverToAgentTools('a-id')).toEqual([])
 
-    await expect(held[0].execute('call-1', {}, new AbortController().signal)).rejects.toThrow(
-      '[MCP Error] MCP server "a" is not connected'
-    )
-
-    // 下一次创建 Agent 会把它重新连起来
-    expect(await h.mgr.ensureConnected('a-id')).toEqual({ ok: true })
+    const result = await held[0].execute('call-1', {}, new AbortController().signal)
+    expect(onlyText(result.content)).toBe('handled by global')
+    expect(h.made('a')).toHaveLength(2)
+    expect(dropped.toolCalls).toEqual([])
+    expect(h.last('a').toolCalls).toHaveLength(1)
     expect(h.mgr.getStatus('a-id')).toBe('connected')
     expect(h.mgr.serverToAgentTools('a-id')).toHaveLength(1)
   })
@@ -1866,5 +1971,826 @@ describe('McpManager 按会话取工具的范围', () => {
     expect(namesOf(toolsFor(h, 's2'))).toEqual(['mcp__a__search', 'mcp__ssh__list-hosts'])
     expect(namesOf(toolsFor(h, 's3'))).toEqual(['mcp__a__search'])
     expect(namesOf(toolsFor(h, 's4'))).toEqual(['mcp__a__search'])
+  })
+})
+
+// ─── 工具闭包的原地重连 ─────────────────────────────────────────────────────
+//
+// Agent 的工具在创建那一刻就固定了，要等用户在 agent 芯片上销毁它才重建 —— 一台 server 中途掉线
+// 之后，「下次创建 Agent 再连」等于让它的工具在余下的整段对话里一直报错。所以工具闭包在调用时
+// 原地重连一次。这一组钉这条路的四条边：
+//  - A1 重连只发生在**请求发出之前**；一次调用至多等 5 秒、随中止立刻结束，那次连接尝试照常跑完；
+//  - A2 请求发出去之后的失败**一律不重发**（工具有副作用，server 可能已经执行了）—— 唯一的例外
+//    是 HTTP 404 会话过期，按规范那次请求没有被执行；
+//  - A3 不该再存在的（停用、删除、会话已关）不重连；
+//  - A4 报错带上 stdio 进程临死前的 stderr —— 「Connection closed」本身说明不了任何事。
+//
+// 行类型要看清：`row()` 默认是 http，而「传输层失败标 error」「404 换会话重发」只对 http 行生效 ——
+// 要 stdio 语义的用例一律显式 `type: 'stdio'`。
+
+/** 外部服务器 `a`（http，row() 的默认） */
+const httpA = (patch: Partial<McpServer> = {}): McpServer =>
+  row({ id: 'a-id', name: 'a', ...patch })
+/** 同一台 `a`，换成 stdio */
+const stdioA = (patch: Partial<McpServer> = {}): McpServer =>
+  row({ id: 'a-id', name: 'a', type: 'stdio', command: 'node', url: '', ...patch })
+
+/** 只有一段文字的 tools/call 回执 —— 「这一发落在哪份实例上」靠它分辨 */
+const says = (t: string): Record<string, unknown> => ({ content: [text(t)] })
+
+/** server 已经不认这个会话了（规范要求回 404） */
+const http404 = (): StreamableHTTPError =>
+  new StreamableHTTPError(404, 'Error POSTing to endpoint: session not found')
+
+/**
+ * 连上 `name`，取它的工具闭包 —— Agent 创建那一刻拿到、之后一直攥着的那一份。
+ * 外部服务器对 sessionId 视而不见；inproc 靠它找到这条会话自己的实例。
+ */
+async function connectHeld(h: Harness, name: string, sessionId?: string): Promise<McpTool[]> {
+  expect(await h.mgr.ensureServerByName(name, { sessionId })).toEqual({ ok: true })
+  const held = h.mgr.getAgentToolsByServerName(name, sessionId)
+  expect(held.length).toBeGreaterThan(0)
+  return held
+}
+
+/** 掉线：transport 自己报 onclose（stdio 进程退出、inproc 对端关了） */
+const drop = (t: FakeTransport): void => t.onclose?.()
+
+/** 经工具闭包调一次（pi 那边的 toolCallId 固定为 `call-x`） */
+const exec = (
+  t: McpTool,
+  signal: AbortSignal = new AbortController().signal
+): ReturnType<McpTool['execute']> => t.execute('call-x', {}, signal)
+
+type ToolResult = Awaited<ReturnType<McpTool['execute']>>
+type Outcome = { ok: true; r: ToolResult } | { ok: false; msg: string }
+
+/**
+ * 一次调用的落定结果：失败也不冒未捕获拒绝；`settled` 让用例不 await 就能断言「还在等」
+ * （settle() 会把微任务冲干净，所以读它的那一刻是准的）。
+ */
+function outcome(p: Promise<ToolResult>): Promise<Outcome> & { settled: boolean } {
+  const o = Object.assign(
+    p.then(
+      (r): Outcome => ({ ok: true, r }),
+      (e: Error): Outcome => ({ ok: false, msg: e.message })
+    ),
+    { settled: false }
+  )
+  void o.then(() => {
+    o.settled = true
+  })
+  return o
+}
+
+/** 这一发必须成功、且只回一段文字 —— 取那段文字（失败时带着错误文案挂掉） */
+async function okText(p: Promise<Outcome>): Promise<string> {
+  const o = await p
+  if (!o.ok) expect.unreachable(`应当成功，实际失败：${o.msg}`)
+  return onlyText(o.r.content)
+}
+
+/** 这一发必须失败 —— 取完整的错误文案（逐字断言用） */
+async function failText(p: Promise<Outcome>): Promise<string> {
+  const o = await p
+  if (o.ok) expect.unreachable(`应当失败，实际成功：${JSON.stringify(o.r.content)}`)
+  return o.msg
+}
+
+describe('McpManager 工具闭包原地重连：只在请求发出之前（A1）', () => {
+  it('MCPR-U-1: 手动重连失败留下的 error —— 下一次调用原地重连一次再调', async () => {
+    const h = setup([httpA()])
+    h.plan.set('a', { tools: [tool('search')] })
+    const [held] = await connectHeld(h, 'a')
+
+    h.plan.set('a', new Error('spawn ENOENT'))
+    expect(await h.mgr.connect('a-id')).toEqual({ ok: false, error: 'spawn ENOENT' })
+    expect(h.mgr.getStatus('a-id')).toBe('error')
+
+    h.plan.set('a', {})
+    expect(await okText(outcome(exec(held)))).toBe('handled by global')
+    expect(h.createTransport).toHaveBeenCalledTimes(3)
+    expect(h.mgr.getStatus('a-id')).toBe('connected')
+    expect(h.mgr.getError('a-id')).toBeUndefined()
+  })
+
+  it('MCPR-U-2: 设置页改了配置（只断开、行仍启用）—— 调用按**新**配置重连，不留尾巴', async () => {
+    const h = setup([httpA({ url: 'http://old/mcp' })])
+    h.plan.set('a', { tools: [tool('search')] })
+    const [held] = await connectHeld(h, 'a')
+    const old = h.last('a')
+
+    // mcp:update 的语义：改库 + 断开，不重连
+    h.store.rows.get('a-id')!.url = 'http://new/mcp'
+    await h.mgr.disconnect('a-id')
+
+    expect(await okText(outcome(exec(held)))).toBe('handled by global')
+    expect(h.createTransport.mock.calls[1][0]).toMatchObject({ url: 'http://new/mcp' })
+    expect(old.toolCalls).toEqual([])
+    expect(h.last('a').toolCalls).toHaveLength(1)
+    // 走的是与「创建 Agent 时连」同一条路：发现的工具照样写回缓存
+    expect(h.store.updateCachedTools).toHaveBeenCalledTimes(2)
+
+    await settle()
+    expect(vi.getTimerCount()).toBe(0)
+    expect(rejections).toEqual([])
+  })
+
+  it('MCPR-U-3: 掉线后并发的两次调用合用一次重连', async () => {
+    const h = setup([stdioA()])
+    h.plan.set('a', { tools: [tool('search'), tool('ping')] })
+    const [search, ping] = await connectHeld(h, 'a')
+    drop(h.last('a'))
+
+    h.plan.set('a', { tools: [tool('search'), tool('ping')], hold: true })
+    const first = outcome(exec(search))
+    const second = outcome(exec(ping))
+    await settle()
+    // 原来那份 + 唯一一次重连：第二发搭上了第一发发起的那次
+    expect(h.made('a')).toHaveLength(2)
+    expect(h.mgr.getStatus('a-id')).toBe('connecting')
+
+    h.last('a').release()
+    expect(await okText(first)).toBe('handled by global')
+    expect(await okText(second)).toBe('handled by global')
+    expect(h.made('a')).toHaveLength(2)
+    expect(
+      h
+        .last('a')
+        .toolCalls.map((c) => c.name)
+        .sort()
+    ).toEqual(['ping', 'search'])
+  })
+
+  it('MCPR-U-4: 搭上一次不设限的手动连接 —— 这次调用至多等 5 秒；被放弃的那一发事后也不补发', async () => {
+    const h = setup([httpA()])
+    h.plan.set('a', { tools: [tool('search')] })
+    const [held] = await connectHeld(h, 'a')
+
+    h.plan.set('a', { tools: [tool('search')], hold: true })
+    const manual = h.mgr.connect('a-id') // 设置页手点：不设限
+    await settle()
+    const o = outcome(exec(held))
+    await settle(LAZY_CONNECT_TIMEOUT_MS - 1)
+    expect(o.settled).toBe(false)
+
+    await settle(1)
+    expect(await failText(o)).toBe(
+      '[MCP Error] MCP server "a" is not connected (reconnect failed): timed out after 5000ms'
+    )
+    // 结束的只是这次等待：没有第三次尝试，手动连接照常在跑
+    expect(h.made('a')).toHaveLength(2)
+    expect(h.mgr.getStatus('a-id')).toBe('connecting')
+
+    h.last('a').release()
+    expect(await manual).toEqual({ ok: true })
+    await settle()
+    expect(h.mgr.getStatus('a-id')).toBe('connected')
+    // 放弃了的那一发不会在连上之后被悄悄补发 —— 模型已经把它当成失败了
+    expect(h.last('a').toolCalls).toEqual([])
+
+    expect(await okText(outcome(exec(held)))).toBe('handled by global')
+    expect(h.made('a')).toHaveLength(2)
+    expect(rejections).toEqual([])
+  })
+
+  it('MCPR-U-5: 中止立刻结束重连等待；那次连接照常跑完、留给下一次用', async () => {
+    const h = setup([stdioA()])
+    h.plan.set('a', { tools: [tool('search')] })
+    const [held] = await connectHeld(h, 'a')
+    drop(h.last('a'))
+
+    h.plan.set('a', { tools: [tool('search')], hold: true })
+    const ac = new AbortController()
+    const o = outcome(exec(held, ac.signal))
+    await settle(1000)
+    ac.abort()
+    // 不推进时钟：中止本身就该让这次等待落定，而不是等到 5 秒封顶
+    expect(await failText(o)).toBe('[MCP] Aborted')
+    expect(h.mgr.getStatus('a-id')).toBe('connecting')
+    expect(h.made('a')).toHaveLength(2)
+
+    h.last('a').release()
+    await settle()
+    expect(h.mgr.getStatus('a-id')).toBe('connected')
+    expect(h.last('a').toolCalls).toEqual([])
+    expect(await okText(outcome(exec(held)))).toBe('handled by global')
+    expect(h.made('a')).toHaveLength(2)
+    expect(vi.getTimerCount()).toBe(0)
+    expect(rejections).toEqual([])
+  })
+
+  it('MCPR-U-5b: 已经中止的调用连重连都不发起', async () => {
+    const h = setup([stdioA()])
+    h.plan.set('a', { tools: [tool('search')] })
+    const [held] = await connectHeld(h, 'a')
+    drop(h.last('a'))
+
+    const ac = new AbortController()
+    ac.abort()
+    expect(await failText(outcome(exec(held, ac.signal)))).toBe('[MCP] Aborted')
+    expect(h.createTransport).toHaveBeenCalledTimes(1)
+  })
+
+  it('MCPR-U-6: 重连失败 —— 报错逐字、只试一次、事后没有后台重试', async () => {
+    const h = setup([stdioA()])
+    h.plan.set('a', { tools: [tool('search')] })
+    const [held] = await connectHeld(h, 'a')
+    drop(h.last('a'))
+
+    h.plan.set('a', new Error('spawn ENOENT'))
+    expect(await failText(outcome(exec(held)))).toBe(
+      '[MCP Error] MCP server "a" is not connected (reconnect failed): spawn ENOENT'
+    )
+    expect(h.createTransport).toHaveBeenCalledTimes(2)
+    expect(h.mgr.getStatus('a-id')).toBe('error')
+    expect(h.mgr.getError('a-id')).toBe('spawn ENOENT')
+
+    await settle(10 * 60 * 1000)
+    expect(h.createTransport).toHaveBeenCalledTimes(2)
+    expect(vi.getTimerCount()).toBe(0)
+
+    // 下一次调用才再试
+    h.plan.set('a', {})
+    expect(await okText(outcome(exec(held)))).toBe('handled by global')
+    expect(h.createTransport).toHaveBeenCalledTimes(3)
+  })
+
+  it('MCPR-U-7: 调用自己发起的重连握手不落定 —— 5 秒后这次调用失败，那次尝试随自己的超时收尾', async () => {
+    const h = setup([stdioA()])
+    h.plan.set('a', { tools: [tool('search')] })
+    const [held] = await connectHeld(h, 'a')
+    drop(h.last('a'))
+
+    h.plan.set('a', { hold: true }) // 永不放行
+    const o = outcome(exec(held))
+    await settle(LAZY_CONNECT_TIMEOUT_MS)
+    await settle()
+    // 两个 5 秒的计时器同一刻到期：这次调用的等待先登记（尝试自己的超时要等 createTransport
+    // 之后才挂上），所以报的是等待的超时；没给 stderr，后面也就什么都不拼
+    expect(await failText(o)).toBe(
+      '[MCP Error] MCP server "a" is not connected (reconnect failed): timed out after 5000ms'
+    )
+    expect(released(h.made('a')[1])).toBe(true)
+    expect(h.mgr.getStatus('a-id')).toBe('error')
+    expect(h.mgr.getError('a-id')).toMatch(/connect timed out after 5000ms/)
+    expect(rejections).toEqual([])
+
+    // 被放弃的 initialize 还挂着 SDK 自己的 60 秒请求超时：closeConnection 先摘回调再关，连同
+    // Protocol 包在外面的那层 onclose 一起摘掉了，它的在途请求于是没被当场清掉（既有行为）。
+    // 钉住的是它到期之后什么也不发生 —— 不重连、不冒未捕获拒绝、不留别的定时器
+    await settle(60_000)
+    expect(vi.getTimerCount()).toBe(0)
+    expect(h.createTransport).toHaveBeenCalledTimes(2)
+    expect(rejections).toEqual([])
+  })
+})
+
+describe('McpManager 工具调用：请求发出去之后不重发（A2）', () => {
+  it('MCPR-U-8: stdio 进程在调用中途退出 —— 带 stderr 尾巴失败、不重发；下一次调用重连', async () => {
+    const h = setup([stdioA()])
+    h.plan.set('a', { tools: [tool('search')], holdCalls: 'reply', stderr: '' })
+    const [held] = await connectHeld(h, 'a')
+    const t = h.last('a')
+
+    const o = outcome(exec(held))
+    await settle()
+    t.stderr = 'panic: index out of range\n'
+    drop(t)
+    expect(await failText(o)).toBe(
+      '[MCP Error] MCP error -32000: Connection closed\npanic: index out of range'
+    )
+    expect(h.made('a')).toHaveLength(1)
+    expect(t.toolCalls).toHaveLength(1)
+    expect(h.mgr.getStatus('a-id')).toBe('disconnected')
+    expect(h.mgr.getError('a-id')).toBe('Connection closed\npanic: index out of range')
+
+    h.plan.set('a', { tools: [tool('search')] })
+    expect(await okText(outcome(exec(held)))).toBe('handled by global')
+    expect(h.made('a')).toHaveLength(2)
+    expect(h.made('a')[1].toolCalls).toHaveLength(1)
+    expect(t.toolCalls).toHaveLength(1)
+  })
+
+  it.each([
+    ['fetch 本身失败', (): Error => new TypeError('fetch failed')],
+    ['500', (): Error => new StreamableHTTPError(500, 'Error POSTing to endpoint: boom')],
+    [
+      '400 —— server 重启后不按规范回 404',
+      (): Error =>
+        new StreamableHTTPError(400, 'Error POSTing to endpoint: Bad Request: No valid session ID')
+    ]
+  ])(
+    'MCPR-U-9: HTTP 传输层失败（%s）—— 失败一次、不重发、标 error，下一次调用换新会话',
+    async (_label, makeErr) => {
+      const err = makeErr()
+      const h = setup([httpA()])
+      h.plan.set('a', {
+        tools: [tool('search')],
+        sessionId: 'sess-1',
+        failCall: (_, n) => (n === 1 ? err : undefined)
+      })
+      const [held] = await connectHeld(h, 'a')
+      const t = h.last('a')
+
+      expect(await failText(outcome(exec(held)))).toBe(`[MCP Error] ${err.message}`)
+      expect(h.made('a')).toHaveLength(1)
+      expect(t.toolCalls).toHaveLength(1)
+      expect(h.mgr.getStatus('a-id')).toBe('error')
+      expect(h.mgr.getError('a-id')).toBe(err.message)
+
+      h.plan.set('a', { tools: [tool('search')] })
+      expect(await okText(outcome(exec(held)))).toBe('handled by global')
+      expect(h.made('a')).toHaveLength(2)
+      expect(released(t)).toBe(true)
+      expect(h.mgr.getStatus('a-id')).toBe('connected')
+    }
+  )
+
+  it.each([
+    ['http', httpA, 'sess-1'],
+    ['stdio', stdioA, undefined]
+  ] as const)(
+    'MCPR-U-10: server 作答的 JSON-RPC 错误 —— 不碰连接、不拼 stderr（%s）',
+    async (_kind, server, sessionId) => {
+      const h = setup([server()])
+      h.plan.set('a', {
+        tools: [tool('search')],
+        sessionId,
+        callError: { code: -32603, message: 'tool exploded' },
+        stderr: 'some noise'
+      })
+      const [held] = await connectHeld(h, 'a')
+
+      expect(await failText(outcome(exec(held)))).toBe(
+        '[MCP Error] MCP error -32603: tool exploded'
+      )
+      expect(h.mgr.getStatus('a-id')).toBe('connected')
+      expect(h.mgr.getError('a-id')).toBeUndefined()
+      // 连接是好的：下一发还落在同一份实例上
+      expect(await failText(outcome(exec(held)))).toBe(
+        '[MCP Error] MCP error -32603: tool exploded'
+      )
+      expect(h.made('a')).toHaveLength(1)
+      expect(h.last('a').toolCalls).toHaveLength(2)
+    }
+  )
+
+  /** t1：会话 sess-1，第一发 tools/call 回 404 */
+  const expiringOnFirstCall = (h: Harness): void => {
+    h.plan.set('a', {
+      tools: [tool('search')],
+      sessionId: 'sess-1',
+      failCall: (_, n) => (n === 1 ? http404() : undefined),
+      callResult: says('from t1')
+    })
+  }
+
+  it('MCPR-U-11a: 带着会话 id 的请求回 404 —— 换一个新会话恰好重发一次', async () => {
+    const h = setup([httpA()])
+    expiringOnFirstCall(h)
+    const [held] = await connectHeld(h, 'a')
+    const t1 = h.last('a')
+
+    h.plan.set('a', { tools: [tool('search')], sessionId: 'sess-2', callResult: says('from t2') })
+    expect(await okText(outcome(exec(held)))).toBe('from t2')
+    const t2 = h.last('a')
+    expect(h.made('a')).toHaveLength(2)
+    expect(t1.toolCalls).toHaveLength(1)
+    // 重发的是同一发：工具名、参数、toolCallId 都不变
+    expect(t2.toolCalls).toHaveLength(1)
+    expect(t2.toolCalls).toEqual(t1.toolCalls)
+    expect(t2.toolCallMetas[0]?.[TOOL_CALL]).toBe('call-x')
+    expect(released(t1)).toBe(true)
+    expect(h.mgr.getStatus('a-id')).toBe('connected')
+    expect(h.mgr.serverToAgentTools('a-id')).toHaveLength(1)
+  })
+
+  it('MCPR-U-11b: 新会话也回 404 —— 不再重发第二次，标 error', async () => {
+    const h = setup([httpA()])
+    expiringOnFirstCall(h)
+    const [held] = await connectHeld(h, 'a')
+
+    h.plan.set('a', {
+      tools: [tool('search')],
+      sessionId: 'sess-2',
+      failCall: (_, n) => (n === 1 ? http404() : undefined),
+      callResult: says('from t2')
+    })
+    expect(await failText(outcome(exec(held)))).toBe(
+      '[MCP Error] Streamable HTTP error: Error POSTing to endpoint: session not found'
+    )
+    expect(h.made('a')).toHaveLength(2)
+    expect(h.made('a').map((t) => t.toolCalls.length)).toEqual([1, 1])
+    expect(h.mgr.getStatus('a-id')).toBe('error')
+  })
+
+  it('MCPR-U-12: 没带会话 id 的 404 是地址不对、不是会话过期 —— 不重发，标 error', async () => {
+    const h = setup([httpA()])
+    h.plan.set('a', {
+      tools: [tool('search')],
+      failCall: (_, n) => (n === 1 ? http404() : undefined),
+      callResult: says('from t1')
+    })
+    const [held] = await connectHeld(h, 'a')
+    const t1 = h.last('a')
+
+    expect(await failText(outcome(exec(held)))).toBe(
+      '[MCP Error] Streamable HTTP error: Error POSTing to endpoint: session not found'
+    )
+    expect(h.made('a')).toHaveLength(1)
+    expect(t1.toolCalls).toHaveLength(1)
+    expect(h.mgr.getStatus('a-id')).toBe('error')
+
+    h.plan.set('a', { tools: [tool('search')], callResult: says('from t2') })
+    expect(await okText(outcome(exec(held)))).toBe('from t2')
+    expect(h.made('a')).toHaveLength(2)
+  })
+
+  /** t1（会话 sess-1）扣住 tools/call 的发送；连上后发出 A、B 两发，都悬在 t1 上 */
+  async function twoInFlightOnT1(): Promise<{
+    h: Harness
+    held: McpTool
+    t1: FakeTransport
+    a: ReturnType<typeof outcome>
+    b: ReturnType<typeof outcome>
+  }> {
+    const h = setup([httpA()])
+    h.plan.set('a', {
+      tools: [tool('search')],
+      sessionId: 'sess-1',
+      holdCalls: 'send',
+      callResult: says('from t1')
+    })
+    const [held] = await connectHeld(h, 'a')
+    const t1 = h.last('a')
+    const a = outcome(exec(held))
+    const b = outcome(exec(held))
+    await settle()
+    expect(t1.heldCalls).toHaveLength(2)
+    return { h, held, t1, a, b }
+  }
+
+  it('MCPR-U-13: 会话过期时同一条连接上还有调用在途 —— 不掐断它，等它落定再关旧连接', async () => {
+    const { h, held, t1, a, b } = await twoInFlightOnT1()
+
+    h.plan.set('a', { tools: [tool('search')], sessionId: 'sess-2', callResult: says('from t2') })
+    t1.heldCalls[1].fail(http404())
+    await settle()
+    expect(await okText(b)).toBe('from t2')
+    expect(h.made('a')).toHaveLength(2)
+    // A 还在 t1 上跑：此刻关掉 t1 会让它以「连接已关」失败
+    expect(released(t1)).toBe(false)
+    expect(a.settled).toBe(false)
+
+    t1.heldCalls[0].reply()
+    await settle()
+    expect(await okText(a)).toBe('from t1')
+    expect(released(t1)).toBe(true)
+    expect(h.mgr.getStatus('a-id')).toBe('connected')
+    // 之后的调用落在新会话上
+    expect(await okText(outcome(exec(held)))).toBe('from t2')
+    expect(h.made('a')[1].toolCalls).toHaveLength(2)
+  })
+
+  it('MCPR-U-14: 两发同时撞上 404 —— 合用一个新会话，各重发一次', async () => {
+    const { h, t1, a, b } = await twoInFlightOnT1()
+
+    h.plan.set('a', {
+      tools: [tool('search')],
+      sessionId: 'sess-2',
+      callResult: says('from t2'),
+      hold: true
+    })
+    t1.heldCalls[0].fail(http404())
+    t1.heldCalls[1].fail(http404())
+    await settle()
+    expect(h.made('a')).toHaveLength(2)
+
+    const t2 = h.last('a')
+    t2.release()
+    expect(await okText(a)).toBe('from t2')
+    expect(await okText(b)).toBe('from t2')
+    expect(t2.toolCalls).toHaveLength(2)
+    expect(released(t1)).toBe(true)
+  })
+
+  it('MCPR-U-15: 已退役的连接上迟到的传输失败 —— 不标到新连接头上，也不重发', async () => {
+    const { h, t1, a, b } = await twoInFlightOnT1()
+    h.plan.set('a', { tools: [tool('search')], sessionId: 'sess-2', callResult: says('from t2') })
+    t1.heldCalls[1].fail(http404())
+    await settle()
+    expect(await okText(b)).toBe('from t2')
+    const t2 = h.last('a')
+
+    t1.heldCalls[0].fail(new TypeError('fetch failed'))
+    expect(await failText(a)).toBe('[MCP Error] fetch failed')
+    expect(t2.toolCalls).toHaveLength(1)
+    expect(h.mgr.getStatus('a-id')).toBe('connected')
+    expect(h.mgr.getError('a-id')).toBeUndefined()
+    expect(released(t1)).toBe(true)
+  })
+
+  it('MCPR-U-16: HTTP 连接因一发失败被标 error 时另一发还在途 —— 下一次调用的重连不掐断它', async () => {
+    const h = setup([httpA()])
+    h.plan.set('a', { tools: [tool('search')], holdCalls: 'send', callResult: says('from t1') })
+    const [held] = await connectHeld(h, 'a')
+    const t1 = h.last('a')
+    const a = outcome(exec(held))
+    const b = outcome(exec(held))
+    await settle()
+    expect(t1.heldCalls).toHaveLength(2)
+
+    t1.heldCalls[1].fail(new TypeError('fetch failed'))
+    expect(await failText(b)).toBe('[MCP Error] fetch failed')
+    expect(h.mgr.getStatus('a-id')).toBe('error')
+
+    h.plan.set('a', { tools: [tool('search')], callResult: says('from t2') })
+    expect(await okText(outcome(exec(held)))).toBe('from t2')
+    expect(released(t1)).toBe(false)
+
+    t1.heldCalls[0].reply()
+    expect(await okText(a)).toBe('from t1')
+    expect(released(t1)).toBe(true)
+  })
+
+  it('MCPR-U-17: 中止一发在途的调用 —— 报 Aborted，不碰连接、不重发', async () => {
+    const h = setup([httpA()])
+    h.plan.set('a', { tools: [tool('search')], sessionId: 'sess-1', holdCalls: 'send' })
+    const [held] = await connectHeld(h, 'a')
+
+    const ac = new AbortController()
+    const o = outcome(exec(held, ac.signal))
+    await settle()
+    ac.abort()
+    expect(await failText(o)).toBe('[MCP] Aborted')
+    expect(h.mgr.getStatus('a-id')).toBe('connected')
+    expect(h.mgr.getError('a-id')).toBeUndefined()
+    expect(h.made('a')).toHaveLength(1)
+    expect(h.last('a').toolCalls).toHaveLength(1)
+  })
+
+  it.each([
+    ['stdio', stdioA],
+    ['http', httpA]
+  ] as const)('MCPR-U-18: transport 单报 onerror 不等于连接断了（%s）', async (_kind, server) => {
+    const h = setup([server()])
+    h.plan.set('a', { tools: [tool('search')] })
+    const [held] = await connectHeld(h, 'a')
+
+    // stdio server 往 stdout 打了一行不是 JSON 的日志 —— 连接照样能用
+    h.last('a').onerror?.(new SyntaxError('Unexpected token h in JSON'))
+    expect(h.mgr.getStatus('a-id')).toBe('connected')
+    expect(h.mgr.getError('a-id')).toBeUndefined()
+    expect(h.mgr.serverToAgentTools('a-id')).toHaveLength(1)
+    expect(await okText(outcome(exec(held)))).toBe('handled by global')
+    expect(h.made('a')).toHaveLength(1)
+  })
+
+  it('MCPR-U-27: HTTP 上的结果过不了 SDK 的 schema 校验 —— 连接是好的，不标 error、不换连接', async () => {
+    let n = 0
+    const h = setup([httpA()])
+    h.plan.set('a', {
+      tools: [tool('search')],
+      // 缺 data / mimeType 的图片块：整份结果被 CallToolResultSchema 拒掉
+      callResult: () => (++n === 1 ? { content: [{ type: 'image' }] } : says('ok'))
+    })
+    const [held] = await connectHeld(h, 'a')
+
+    expect(await failText(outcome(exec(held)))).toMatch(/^\[MCP Error\] /)
+    expect(h.mgr.getStatus('a-id')).toBe('connected')
+    expect(h.mgr.getError('a-id')).toBeUndefined()
+    expect(await okText(outcome(exec(held)))).toBe('ok')
+    expect(h.made('a')).toHaveLength(1)
+  })
+
+  it('MCPR-U-28: SDK 自己的请求超时 —— 说明的是工具慢、不是连接坏了：不重发、不标 error', async () => {
+    const h = setup([httpA()])
+    h.plan.set('a', { tools: [tool('search')], holdCalls: 'reply' })
+    const [held] = await connectHeld(h, 'a')
+
+    const o = outcome(exec(held))
+    await settle(5 * 60_000)
+    expect(await failText(o)).toBe('[MCP Error] MCP error -32001: Request timed out')
+    expect(h.last('a').toolCalls).toHaveLength(1)
+    expect(h.made('a')).toHaveLength(1)
+    expect(h.mgr.getStatus('a-id')).toBe('connected')
+  })
+})
+
+describe('McpManager 工具闭包：不该再存在的不重连（A3）', () => {
+  it('MCPR-U-19 (i): 掉线之后被停用 —— 报「没连上」，一次尝试都不发起', async () => {
+    const h = setup([stdioA()])
+    h.plan.set('a', { tools: [tool('search')] })
+    const [held] = await connectHeld(h, 'a')
+    drop(h.last('a'))
+    h.store.rows.get('a-id')!.isEnabled = 0
+
+    expect(await failText(outcome(exec(held)))).toBe('[MCP Error] MCP server "a" is not connected')
+    expect(h.createTransport).toHaveBeenCalledTimes(1)
+  })
+
+  it('MCPR-U-19 (ii): 设置页停用（改库 + 断开）', async () => {
+    const h = setup([httpA()])
+    h.plan.set('a', { tools: [tool('search')] })
+    const [held] = await connectHeld(h, 'a')
+    h.store.rows.get('a-id')!.isEnabled = 0
+    await h.mgr.disconnect('a-id')
+
+    expect(await failText(outcome(exec(held)))).toBe('[MCP Error] MCP server "a" is not connected')
+    expect(h.createTransport).toHaveBeenCalledTimes(1)
+  })
+
+  it('MCPR-U-19 (iii): 停用内置服务器 —— 会话还在也不复活它的实例', async () => {
+    const h = setup([sshRow()])
+    h.plan.set('ssh', { tools: [tool('list-hosts')] })
+    const [held] = await connectHeld(h, 'ssh', 's1')
+    h.store.rows.get('ssh-id')!.isEnabled = 0
+    await h.mgr.disconnect('ssh-id')
+
+    expect(await failText(outcome(exec(held)))).toBe(
+      '[MCP Error] MCP server "ssh" is not connected'
+    )
+    expect(h.createTransport).toHaveBeenCalledTimes(1)
+  })
+
+  it('MCPR-U-20 (i): 掉线之后配置行被删 —— 报「没连上」并叫得出名字，不发起尝试', async () => {
+    const h = setup([stdioA()])
+    h.plan.set('a', { tools: [tool('search')] })
+    const [held] = await connectHeld(h, 'a')
+    drop(h.last('a'))
+    h.store.rows.delete('a-id')
+
+    expect(await failText(outcome(exec(held)))).toBe('[MCP Error] MCP server "a" is not connected')
+    expect(h.createTransport).toHaveBeenCalledTimes(1)
+  })
+
+  it('MCPR-U-20 (ii): 真实的 mcp:delete 顺序（先断开、再删行）—— 连接与配置行都没了，名字仍在', async () => {
+    const h = setup([httpA()])
+    h.plan.set('a', { tools: [tool('search')] })
+    const [held] = await connectHeld(h, 'a')
+    await h.mgr.disconnect('a-id')
+    h.store.rows.delete('a-id')
+
+    // 只剩闭包自己记得名字：报连接键 `a-id` 对模型和用户都没有意义
+    expect(await failText(outcome(exec(held)))).toBe('[MCP Error] MCP server "a" is not connected')
+    expect(h.createTransport).toHaveBeenCalledTimes(1)
+  })
+
+  it('MCPR-U-21: 会话还在的内置实例掉线 —— 只重连这条会话自己那份', async () => {
+    const h = setup([sshRow()])
+    h.plan.set('ssh', { tools: [tool('list-hosts')] })
+    const [held1] = await connectHeld(h, 'ssh', 's1')
+    await connectHeld(h, 'ssh', 's2')
+    drop(h.lastFor('ssh', 's1'))
+
+    expect(await okText(outcome(exec(held1)))).toBe('handled by s1')
+    expect(h.madeFor('ssh', 's1')).toHaveLength(2)
+    expect(h.createTransport.mock.calls.at(-1)?.[1]).toEqual({ sessionId: 's1' })
+    expect(h.madeFor('ssh', 's2')).toHaveLength(1)
+    expect(h.lastFor('ssh', 's2').toolCalls).toEqual([])
+    expect(h.mgr.getStatus('ssh-id', 's1')).toBe('connected')
+  })
+
+  it('MCPR-U-22: closeSession 挡住复活 —— 那条会话已没有活条目时也挡，且只挡这一条', async () => {
+    const h = setup([sshRow()])
+    h.plan.set('ssh', { tools: [tool('list-hosts')] })
+    const [held1] = await connectHeld(h, 'ssh', 's1')
+    const [held2] = await connectHeld(h, 'ssh', 's2')
+
+    // 设置页改了配置：全部会话分身摘掉，行仍启用
+    await h.mgr.disconnect('ssh-id')
+    // 随后会话 s1 被删 —— 它名下已经没有条目了（closeSession 提前返回的那条路）
+    await h.mgr.closeSession('s1')
+
+    expect(await failText(outcome(exec(held1)))).toBe(
+      '[MCP Error] MCP server "ssh" is not connected'
+    )
+    expect(h.madeFor('ssh', 's1')).toHaveLength(1)
+
+    expect(await okText(outcome(exec(held2)))).toBe('handled by s2')
+    expect(h.madeFor('ssh', 's2')).toHaveLength(2)
+  })
+
+  it('MCPR-U-23: 闭包的重连还在途时会话被关 —— 连上了也不留，调用报「没连上」', async () => {
+    const h = setup([sshRow()])
+    h.plan.set('ssh', { tools: [tool('list-hosts')] })
+    const [held1] = await connectHeld(h, 'ssh', 's1')
+    drop(h.lastFor('ssh', 's1'))
+
+    h.plan.set('ssh', { tools: [tool('list-hosts')], hold: true })
+    const o = outcome(exec(held1))
+    await settle()
+    expect(h.madeFor('ssh', 's1')).toHaveLength(2)
+    expect(h.mgr.getStatus('ssh-id', 's1')).toBe('connecting')
+
+    await h.mgr.closeSession('s1')
+    const t = h.lastFor('ssh', 's1')
+    t.release()
+    await settle()
+    expect(await failText(o)).toBe('[MCP Error] MCP server "ssh" is not connected')
+    expect(released(t)).toBe(true)
+    expect(h.mgr.getStatus('ssh-id', 's1')).toBe('disconnected')
+    expect(h.mgr.getAgentToolsByServerName('ssh', 's1')).toEqual([])
+    expect(rejections).toEqual([])
+  })
+})
+
+describe('McpManager 报错里的 stderr 尾巴（A4）', () => {
+  /** stdio `a` 的握手扣住、以「Connection closed」失败 —— 连接报的错 */
+  async function connectErrorWith(opts: FakeOpts): Promise<string | undefined> {
+    const h = setup([stdioA()])
+    h.plan.set('a', { hold: true, ...opts })
+    const p = h.mgr.ensureServerByName('a')
+    await settle()
+    h.last('a').releaseWithError('Connection closed')
+    return (await p).error
+  }
+
+  it('MCPR-U-24a: 连接失败 —— 拼上去掉首尾空白的 stderr，隔一个换行', async () => {
+    const h = setup([stdioA()])
+    h.plan.set('a', { hold: true, stderr: "\n  Error: Cannot find module 'foo'\n\n" })
+    const p = h.mgr.ensureServerByName('a')
+    await settle()
+    h.last('a').releaseWithError('Connection closed')
+
+    const expected = "MCP error -32000: Connection closed\nError: Cannot find module 'foo'"
+    expect(await p).toEqual({ ok: false, error: expected })
+    expect(h.mgr.getError('a-id')).toBe(expected)
+  })
+
+  it('MCPR-U-24b: 连接超时 —— 同样拼上', async () => {
+    const h = setup([stdioA()])
+    h.plan.set('a', { hold: true, stderr: 'still starting' })
+    const p = h.mgr.ensureServerByName('a', { timeoutMs: 20 })
+    await settle(20)
+
+    expect((await p).error).toBe('connect timed out after 20ms\nstill starting')
+  })
+
+  it('MCPR-U-25: 尾巴的边界 —— 至多 STDERR_TAIL_CHARS 个字符、取最后那段；全是空白就不拼', async () => {
+    expect(STDERR_TAIL_CHARS).toBe(2000)
+
+    const long = (await connectErrorWith({ stderr: 'HEAD' + 'x'.repeat(5000) + 'END' })) ?? ''
+    const cut = long.indexOf('\n')
+    expect(long.slice(0, cut)).toBe('MCP error -32000: Connection closed')
+    const tail = long.slice(cut + 1)
+    expect(tail).toHaveLength(STDERR_TAIL_CHARS)
+    // 取的是尾部：最后几行才是死因
+    expect(tail.endsWith('END')).toBe(true)
+    expect(tail).not.toContain('HEAD')
+
+    // 空白不算线索：不留一个悬空的换行
+    expect(await connectErrorWith({ stderr: '  \n\t ' })).toBe(
+      'MCP error -32000: Connection closed'
+    )
+  })
+
+  it('MCPR-U-25: stderr 在收掉 transport 之后才读 —— 进程临死前最后打的那几行也在', async () => {
+    const h = setup([stdioA()])
+    h.plan.set('a', {
+      hold: true,
+      stderr: '',
+      // close() 不止一次（client.close() 会再关一遍 transport）：只在第一次时「临死前打一行」
+      onCloseHook: (t) => {
+        if (t.closeCalls === 1) t.stderr += 'last words'
+      }
+    })
+    // 走超时：握手没失败，SDK 自己不会先关 transport —— 第一次 close() 只可能来自管理器的收尾
+    const p = h.mgr.ensureServerByName('a', { timeoutMs: 20 })
+    await settle(20)
+
+    expect((await p).error).toBe('connect timed out after 20ms\nlast words')
+  })
+
+  it('MCPR-U-25: 调用里的重连等满 5 秒 —— 报错带上那次尝试此刻的 stderr', async () => {
+    const h = setup([stdioA()])
+    h.plan.set('a', { tools: [tool('search')] })
+    const [held] = await connectHeld(h, 'a')
+    drop(h.last('a'))
+
+    h.plan.set('a', { hold: true, stderr: 'waiting for db' })
+    const o = outcome(exec(held))
+    await settle(LAZY_CONNECT_TIMEOUT_MS)
+
+    expect(await failText(o)).toBe(
+      '[MCP Error] MCP server "a" is not connected (reconnect failed): timed out after 5000ms\nwaiting for db'
+    )
+  })
+
+  it('MCPR-U-26: 调用里的重连失败 —— 报错带上新进程的 stderr', async () => {
+    const h = setup([stdioA()])
+    h.plan.set('a', { tools: [tool('search')] })
+    const [held] = await connectHeld(h, 'a')
+    drop(h.last('a'))
+
+    h.plan.set('a', { hold: true, stderr: 'fatal: missing API key' })
+    const o = outcome(exec(held))
+    await settle()
+    h.last('a').releaseWithError('Connection closed')
+
+    expect(await failText(o)).toBe(
+      '[MCP Error] MCP server "a" is not connected (reconnect failed): MCP error -32000: Connection closed\nfatal: missing API key'
+    )
   })
 })

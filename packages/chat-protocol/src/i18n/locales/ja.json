@@ -708,7 +708,7 @@
     "mcpEnvValuePlaceholder": "value",
     "mcpEnvAdd": "変数を追加",
     "mcpUrl": "サーバーURL",
-    "mcpUrlPlaceholder": "例: https://mcp.example.com/sse",
+    "mcpUrlPlaceholder": "例: https://mcp.example.com/mcp",
     "mcpHeaders": "ヘッダー",
     "mcpHeadersPlaceholder": "Key: Value 形式、1行に1つ",
     "mcpStatusConnected": "接続済み",

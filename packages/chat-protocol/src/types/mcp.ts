@@ -8,7 +8,7 @@
 /**
  * 传输类型：
  * - `stdio` 本地子进程（仅桌面）
- * - `http` 远程（Streamable HTTP / SSE，桌面+浏览器）
+ * - `http` 远程（Streamable HTTP，桌面+浏览器；不支持旧版 SSE transport）
  * - `inproc` **内置能力服务器**：随产品发布、跑在进程内、**按会话实例化**，不起进程也不走网络
  *   （见 agent-runtime 的 builtinMcpRegistry）。默认不启用，由用户在会话里逐条勾选。
  */

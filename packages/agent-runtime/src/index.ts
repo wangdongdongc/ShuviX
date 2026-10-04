@@ -51,7 +51,10 @@ export { toolResultText, imagePlaceholder } from './toolResultText'
 export {
   McpManager,
   LAZY_CONNECT_TIMEOUT_MS,
+  STDERR_TAIL_CHARS,
   type McpStore,
+  type McpStderrSource,
+  type McpCallMeta,
   type McpManagerOptions,
   type McpAgentToolMeta,
   type McpDiscoveredTool,

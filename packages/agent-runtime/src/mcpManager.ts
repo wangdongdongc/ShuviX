@@ -12,9 +12,14 @@
  * （`LAZY_CONNECT_TIMEOUT_MS`）—— 一台挂掉的服务器不能把整次 Agent 创建拖住；手动连接不带超时，
  * 用户就在旁边看着，首次 npx 冷启动慢是可以等的。
  *
+ * **工具调用也是一次「用到」**：Agent 的工具在创建那一刻就固定了，一直用到用户在 agent 芯片上
+ * 销毁它为止 —— 所以一台 server 中途掉线（stdio 进程退出、HTTP 会话过期），工具闭包在下一次调用时
+ * 原地重连一次，而不是一直报「没连上」直到有人重建 Agent。见 callTool。
+ *
  * stdio transport 依赖 Node child_process，其 import 留在桌面宿主的 createTransport 里。
  */
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
+import { StreamableHTTPError } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 import { Type, type TSchema } from 'typebox'
 import type { AgentTool, AgentToolResult } from '@earendil-works/pi-agent-core'
@@ -73,8 +78,14 @@ interface McpConnection {
   serverId: string
   /** 配置行名（工具名前缀 `mcp__<name>__*` 取它） */
   serverName: string
+  /** 建这条连接时的 transport 类型 —— HTTP 没有「断了」的信号，失败的调用要由它来判（见 callFailed） */
+  kind: McpServer['type']
   /** 仅 `inproc`：这份实例归哪条会话 */
   sessionId?: string
+  /** 正在这条连接上跑的 tools/call 数 —— 退役的连接等它们都落定才关（见 retire） */
+  inflight: number
+  /** 已退役：server 那边的会话没了，后来的调用改走新连接；最后一个在途调用落定时关掉它 */
+  retired: boolean
   /**
    * annotations 可不可信。
    *
@@ -85,6 +96,20 @@ interface McpConnection {
    * 只有跑在进程内、代码随产品发布的那一类才配，这条判据也因此挡住了「再种一台远程内置」。
    */
   trusted: boolean
+}
+
+/** 一次工具调用随 `_meta` 带给 server 的东西（见 callTool） */
+export interface McpCallMeta {
+  /** 本次调用在 pi 那边的 toolCallId —— 经 `_meta` 带给 server（内置服务器用它给询问卡片定位） */
+  toolCallId?: string
+  /**
+   * 发起这次调用的是哪个 agent（root = 会话 id，派生 = agent id）。
+   *
+   * 只给**可信**（内置）server：一份内置实例由根 agent 与它派出的 agent 共用，状态若要
+   * 按调用方分开（浏览器「距上次快照几次操作」、快照差异的基线）只能靠它；第三方 server
+   * 拿到它没有任何用处，也就不必知道 ShuviX 内部的 id。
+   */
+  callerId?: string
 }
 
 /**
@@ -104,6 +129,17 @@ function connKeyOf(server: McpServer, sessionId?: string): string {
 }
 
 /**
+ * 连接键 → (serverId, sessionId)。只在连接已经不在表里、身份没处可读时用（工具闭包重连）：
+ * 配置行 id 是 ShuviX 自己生成的（uuid / `builtin-mcp-*`），不含 `#`。
+ */
+function parseConnKey(key: string): { serverId: string; sessionId?: string } {
+  const hash = key.indexOf('#')
+  return hash < 0
+    ? { serverId: key }
+    : { serverId: key.slice(0, hash), sessionId: key.slice(hash + 1) }
+}
+
+/**
  * 一次连接尝试的结果。
  *
  * `ok:false` 且没有 `error` = 这台服务器压根不该连（名字不存在 / 已停用）—— 不是失败，
@@ -117,8 +153,42 @@ export interface McpConnectResult {
 /**
  * 惰性连接的超时（毫秒）。用到才连意味着这段等待直接压在用户发出的那条消息上，
  * 所以宁可短：连不上就先把 Agent 建起来（少这台的工具），而不是让人干等。
+ * 工具调用发现连接掉了、原地重连时也按它封顶（见 callTool）。
  */
 export const LAZY_CONNECT_TIMEOUT_MS = 5000
+
+/**
+ * transport 的可选能力：子进程 stderr 最近的一段（桌面的 stdio transport 实现它）。
+ *
+ * 「Connection closed」「connect timed out」本身说明不了任何事 —— server 退出前打在 stderr 上的
+ * 那几行（缺依赖、端口被占、key 不对）才说明。连接失败、调用中途进程退出时拼进报错。
+ */
+export interface McpStderrSource {
+  stderrTail(): string
+}
+
+/** 拼进报错的 stderr 至多这么多字符（取尾部：最后几行才是死因） */
+export const STDERR_TAIL_CHARS = 2000
+
+function withStderrTail(message: string, transport: Transport | undefined): string {
+  const source = transport as Partial<McpStderrSource> | undefined
+  const tail =
+    typeof source?.stderrTail === 'function'
+      ? source.stderrTail().trim().slice(-STDERR_TAIL_CHARS)
+      : ''
+  return tail ? `${message}\n${tail}` : message
+}
+
+/**
+ * server 已经不认这个会话了（重启、重新部署、会话过期）。Streamable HTTP 规范要求此时对带着该会话
+ * id 的请求回 404 —— 也就是说这次请求**没有被执行**，这是唯一一种可以把工具调用重发的失败。
+ * 只认带着会话 id 发出去的请求：没有会话 id 的 404 是地址不对，不是会话没了。
+ */
+function isSessionExpired(conn: McpConnection, err: unknown): boolean {
+  return err instanceof StreamableHTTPError && err.code === 404 && !!conn.transport?.sessionId
+}
+
+const errorText = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
 const noopLog = { info: () => {}, warn: () => {}, error: () => {} }
 
@@ -266,6 +336,12 @@ export class McpManager {
   private connections = new Map<string, McpConnection>()
   /** 进行中的连接（按连接键）—— 同一条连接的并发请求合流，不重复拉起进程 */
   private pending = new Map<string, Promise<McpConnectResult>>()
+  /**
+   * 关过的会话（closeSession）。会话删了就是删了：还攥着工具闭包的 agent 不能在一次调用里把它的
+   * 内置实例重新拉起来（ssh 的 control socket、浏览器的 tab 会变成谁也关不掉的孤儿）。
+   * 一条会话一个 id，整个进程寿命里也就几千个短串。
+   */
+  private closedSessions = new Set<string>()
   private store: McpStore
   private createTransport: (
     server: McpServer,
@@ -365,11 +441,13 @@ export class McpManager {
   }
 
   /**
-   * 关掉某条会话名下的全部内置能力服务器实例（会话删除 / 运行时销毁时调用）。
+   * 关掉某条会话名下的全部内置能力服务器实例（会话删除时调用 —— 不是运行时销毁：重建 Agent 时
+   * 实例故意留着）。之后这条会话的工具闭包不再重连（见 closedSessions）。
    *
    * **只关 inproc**：全局服务器是跨会话共享的，一条会话结束不该影响别人。
    */
   async closeSession(sessionId: string): Promise<void> {
+    this.closedSessions.add(sessionId)
     const keys = [...this.connections].filter(([, c]) => c.sessionId === sessionId).map(([k]) => k)
     if (keys.length === 0) return
     await Promise.allSettled(keys.map((key) => this.closeByKey(key)))
@@ -393,7 +471,10 @@ export class McpManager {
       status: 'connecting',
       serverId,
       serverName: server.name,
+      kind: server.type,
       sessionId: server.type === 'inproc' ? sessionId : undefined,
+      inflight: 0,
+      retired: false,
       trusted: server.type === 'inproc' && server.isBuiltin === 1
     }
     this.connections.set(key, conn)
@@ -416,15 +497,20 @@ export class McpManager {
         resolved,
         server.type === 'inproc' && sessionId ? { sessionId } : undefined
       )
-      conn.transport.onclose = () => {
-        this.log.info(`transport closed: ${server.name}`)
+      const transport = conn.transport
+      transport.onclose = () => {
+        // 下一次调用会原地重连（见 callTool）；在那之前留下死因 —— stdio 进程退出前的 stderr
         conn.status = 'disconnected'
         conn.tools = []
+        conn.error = withStderrTail('Connection closed', transport)
+        this.log.info(`transport closed: ${server.name} ${conn.error}`)
       }
-      conn.transport.onerror = (err: Error) => {
-        this.log.error(`transport error: ${server.name} ${err.message}`)
-        conn.status = 'error'
-        conn.error = err.message
+      // transport 报错**不等于**连接断了：stdio 进程往 stdout 打了一行不是 JSON 的日志、HTTP 的 SSE
+      // 监听流没开起来，连接都还能用。真断了 stdio / inproc 会走 onclose；HTTP 没有「断了」这种
+      // 信号，由失败的调用来判（见 callFailed）。握手期间的错误由握手本身的成败决定。
+      // 改制前这里会把状态改成 error —— 于是一行杂音就让这台的工具在 Agent 余生里全部报「没连上」。
+      transport.onerror = (err: Error) => {
+        this.log.warn(`transport error: ${server.name} ${err.message}`)
       }
 
       // 握手 + 工具发现合起来才算「连上」，超时按整段算
@@ -458,9 +544,10 @@ export class McpManager {
       this.log.info(`connected: ${server.name} (${conn.tools.length} tools)`)
       return { ok: true }
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err)
-      // 超时时握手可能还在跑：必须收掉 transport，否则 stdio 会留下一个没人管的子进程
+      // 超时时握手可能还在跑：必须收掉 transport，否则 stdio 会留下一个没人管的子进程。
+      // stderr 在收尾之后再读 —— 进程临死前最后那几行往往就是死因
       await this.closeConnection(conn, server.name)
+      const message = withStderrTail(errorText(err), conn.transport ?? undefined)
       this.log.error(`connect failed: ${server.name} ${message}`)
       return fail(message)
     }
@@ -605,56 +692,212 @@ export class McpManager {
    * `signal` 必须一路透传给 SDK：它会向 server 发 `notifications/cancelled` 并**立即**
    * reject 这次请求。不传的话中止只能等 timeout —— 而 pi 的 `harness.abort()` 会
    * `waitForIdle()` 等工具 promise 落定，于是「中止」按钮要卡到 5～10 分钟后才生效。
+   *
+   * **掉线了就在这里重连一次**（见 usableConnection）：Agent 的工具在创建时就固定了，要等用户在
+   * agent 芯片上销毁它才会重建，所以「等下次创建 Agent 再连」等于让这台的工具在余下的整段对话里
+   * 一直报错。重连只发生在**请求发出之前**；请求发出去之后失败（进程中途退出、网络断开、超时）
+   * 一律不重发 —— 工具调用有副作用，server 可能已经执行了。唯一的例外是 HTTP 的 404 会话过期：
+   * 按规范那次请求没有被执行，换一个新会话重发一次（见 isSessionExpired）。
    */
   async callTool(
     connKey: string,
     toolName: string,
     args: Record<string, unknown>,
     signal?: AbortSignal,
-    meta?: {
-      /** 本次调用在 pi 那边的 toolCallId —— 经 `_meta` 带给 server（内置服务器用它给询问卡片定位） */
-      toolCallId?: string
-      /**
-       * 发起这次调用的是哪个 agent（root = 会话 id，派生 = agent id）。
-       *
-       * 只给**可信**（内置）server：一份内置实例由根 agent 与它派出的 agent 共用，状态若要
-       * 按调用方分开（浏览器「距上次快照几次操作」、快照差异的基线）只能靠它；第三方 server
-       * 拿到它没有任何用处，也就不必知道 ShuviX 内部的 id。
-       */
-      callerId?: string
-    }
+    meta?: McpCallMeta
   ): Promise<{ content: unknown[]; isError?: boolean }> {
-    const conn = this.connections.get(connKey)
-    if (!conn || conn.status !== 'connected') {
-      // 报 server 名而不是连接键：`builtin-mcp-browser#<sessionId>` 是记账用的，对模型和用户都没有意义。
-      // 工具闭包不在调用时重连（重连发生在下一次创建 Agent 时，见 MCPL-U-13）
-      const serverId = connKey.split('#')[0]
-      const name = conn?.serverName ?? this.store.findById(serverId)?.name ?? serverId
-      throw new Error(`MCP server "${name}" is not connected`)
+    return this.callToolOn({ key: connKey }, toolName, args, signal, meta)
+  }
+
+  /**
+   * callTool 的本体。`target.name` 是工具闭包建起来时记下的 server 名 —— 设置页删掉一台 server 时
+   * 连接与配置行都没了，报错里只剩它还叫得出名字。
+   */
+  private async callToolOn(
+    target: { key: string; name?: string },
+    toolName: string,
+    args: Record<string, unknown>,
+    signal: AbortSignal | undefined,
+    meta: McpCallMeta | undefined
+  ): Promise<{ content: unknown[]; isError?: boolean }> {
+    const connKey = target.key
+    const conn = await this.usableConnection(target, signal)
+    try {
+      return await this.sendToolCall(conn, toolName, args, signal, meta)
+    } catch (err: unknown) {
+      if (signal?.aborted || !isSessionExpired(conn, err)) {
+        throw this.callFailed(connKey, conn, err, signal)
+      }
+      this.log.info(`session expired: ${conn.serverName}, retrying once on a new session`)
+      this.retire(connKey, conn)
     }
+    const fresh = await this.usableConnection(target, signal)
+    try {
+      return await this.sendToolCall(fresh, toolName, args, signal, meta)
+    } catch (err: unknown) {
+      throw this.callFailed(connKey, fresh, err, signal)
+    }
+  }
+
+  /**
+   * 拿到一条能发请求的连接：连着就直接用；连接中就等它；断了（disconnected / error / 被摘掉了）
+   * 就经 `ensureConnected` 原地重连**一次** —— 与「下次创建 Agent 时重连」走的是同一条路，所以
+   * 并发合流、在途时被断开、写 cachedTools 这些都不必再写一遍。
+   *
+   * 不该再有这条连接的不重连：配置行删了、停用了，或（inproc）它的会话已经关了。
+   *
+   * 等待按 `LAZY_CONNECT_TIMEOUT_MS` 封顶、随 `signal` 立刻结束 —— 这段等待压在一次工具调用上，
+   * 而搭上的可能是设置页那次不设限的手动连接。只是**这次等待**结束：那次连接尝试照常跑完
+   * （它可能是几条调用共用的；它有自己的超时与收尾），连上了就留给下一次用。
+   */
+  private async usableConnection(
+    target: { key: string; name?: string },
+    signal?: AbortSignal
+  ): Promise<McpConnection> {
+    const connKey = target.key
+    const current = this.connections.get(connKey)
+    if (current?.status === 'connected') return current
+    const { serverId, sessionId } = parseConnKey(connKey)
+    const server = this.store.findById(serverId)
+    // 报 server 名而不是连接键：`builtin-mcp-browser#<sessionId>` 是记账用的，对模型和用户都没有意义
+    const name = current?.serverName ?? server?.name ?? target.name ?? serverId
+    // 重连失败的原因跟在后面（可能是多行：stdio 进程临死前的 stderr）
+    const notConnected = (reconnectError?: string): Error =>
+      new Error(
+        `MCP server "${name}" is not connected` +
+          (reconnectError ? ` (reconnect failed): ${reconnectError}` : '')
+      )
+
+    if (!server || server.isEnabled !== 1) throw notConnected()
+    if (server.type === 'inproc' && (!sessionId || this.closedSessions.has(sessionId))) {
+      throw notConnected()
+    }
+    if (signal?.aborted) throw new Error('Aborted')
+    // 断掉的那条先退役，而不是让 openConnection 当场关掉它：HTTP 上被标成 error 的那条只是某一次
+    // 请求失败了，同一条连接上可能还有别的调用在途 —— 立刻关会把它们一并掐断
+    if (current && current.status !== 'connecting') this.retire(connKey, current)
+
+    const attempt = this.ensureConnected(serverId, {
+      timeoutMs: LAZY_CONNECT_TIMEOUT_MS,
+      sessionId
+    })
+    let result: McpConnectResult
+    try {
+      result = await this.boundedWait(attempt, signal)
+    } catch (err: unknown) {
+      if (signal?.aborted) throw err
+      // 等待超时时那次尝试还没收尾（它自己的超时随后才到）—— 此刻的 stderr 就是能拿到的全部线索
+      throw notConnected(withStderrTail(errorText(err), this.connections.get(connKey)?.transport))
+    }
+    const conn = this.connections.get(connKey)
+    if (!result.ok || conn?.status !== 'connected') throw notConnected(result.error)
+    if (current?.status !== 'connecting') this.log.info(`reconnected on tool call: ${name}`)
+    return conn
+  }
+
+  /** 等一个 promise，但最多等 `LAZY_CONNECT_TIMEOUT_MS`，且 `signal` 一中止就不等了 */
+  private boundedWait<T>(task: Promise<T>, signal?: AbortSignal): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const onAbort = (): void => finish(() => reject(new Error('Aborted')))
+      const timer = setTimeout(
+        () => finish(() => reject(new Error(`timed out after ${LAZY_CONNECT_TIMEOUT_MS}ms`))),
+        LAZY_CONNECT_TIMEOUT_MS
+      )
+      function finish(settle: () => void): void {
+        clearTimeout(timer)
+        signal?.removeEventListener('abort', onAbort)
+        settle()
+      }
+      signal?.addEventListener('abort', onAbort, { once: true })
+      task.then(
+        (value) => finish(() => resolve(value)),
+        (err: unknown) => finish(() => reject(err))
+      )
+    })
+  }
+
+  /** 真正发出一次 tools/call；在途计数供退役的连接判断何时能关 */
+  private async sendToolCall(
+    conn: McpConnection,
+    toolName: string,
+    args: Record<string, unknown>,
+    signal: AbortSignal | undefined,
+    meta: McpCallMeta | undefined
+  ): Promise<{ content: unknown[]; isError?: boolean }> {
     const _meta: Record<string, string> = {}
     if (meta?.toolCallId) _meta['shuvix.dev/toolCallId'] = meta.toolCallId
     if (meta?.callerId && conn.trusted) _meta['shuvix.dev/agentId'] = meta.callerId
-    // SDK 默认 60s 太短；抬到 5 分钟 + progress 刷新计时 + 10 分钟总上限
-    const result = await conn.client.callTool(
-      {
-        name: toolName,
-        arguments: args,
-        // 规范允许在 `_meta` 里带实现自有的数据（键要带前缀）。内置能力服务器要挂询问，
-        // 而询问的路由键按约定就是 toolCallId —— 让它的 ask 卡和别的工具一样对得上调用。
-        // 一个键都没有时整个缺席，而不是一个空对象
-        _meta: Object.keys(_meta).length > 0 ? _meta : undefined
-      },
-      undefined,
-      {
-        timeout: 5 * 60 * 1000,
-        resetTimeoutOnProgress: true,
-        maxTotalTimeout: 10 * 60 * 1000,
-        signal
-      }
-    )
-    const isError = 'isError' in result ? (result.isError as boolean | undefined) : undefined
-    return { content: result.content as unknown[], isError }
+    conn.inflight++
+    try {
+      // SDK 默认 60s 太短；抬到 5 分钟 + progress 刷新计时 + 10 分钟总上限
+      const result = await conn.client.callTool(
+        {
+          name: toolName,
+          arguments: args,
+          // 规范允许在 `_meta` 里带实现自有的数据（键要带前缀）。内置能力服务器要挂询问，
+          // 而询问的路由键按约定就是 toolCallId —— 让它的 ask 卡和别的工具一样对得上调用。
+          // 一个键都没有时整个缺席，而不是一个空对象
+          _meta: Object.keys(_meta).length > 0 ? _meta : undefined
+        },
+        undefined,
+        {
+          timeout: 5 * 60 * 1000,
+          resetTimeoutOnProgress: true,
+          maxTotalTimeout: 10 * 60 * 1000,
+          signal
+        }
+      )
+      const isError = 'isError' in result ? (result.isError as boolean | undefined) : undefined
+      return { content: result.content as unknown[], isError }
+    } finally {
+      conn.inflight--
+      if (conn.retired && conn.inflight === 0) void this.closeConnection(conn, conn.serverName)
+    }
+  }
+
+  /**
+   * 一次调用失败之后：记账，再给出要抛的错误。**不重发**。
+   *
+   *  - HTTP 没有「连接断了」这种信号，失败的请求是唯一的证据（server 挂了、重启后回 400 而不是
+   *    规范要求的 404……）：**传输层**的失败 —— 非 2xx 的应答（StreamableHTTPError）、fetch 本身失败
+   *    （TypeError）—— 把连接标成 error，下一次调用经 usableConnection 换一个新会话。其余的都不算：
+   *    server 作答的 JSON-RPC 错误、格式不对的结果说明连接是好的；SDK 自己的请求超时说明的是那个
+   *    工具慢，不是连接坏了（server 真挂了 fetch 会立刻失败）。
+   *  - 连接在这次调用中途断了（stdio 进程退出）：拼上 stderr 的尾巴 —— 那才是死因。
+   */
+  private callFailed(
+    key: string,
+    conn: McpConnection,
+    err: unknown,
+    signal: AbortSignal | undefined
+  ): unknown {
+    if (signal?.aborted) return err
+    if (
+      conn.kind === 'http' &&
+      (err instanceof StreamableHTTPError || err instanceof TypeError) &&
+      conn.status === 'connected' &&
+      this.connections.get(key) === conn
+    ) {
+      conn.status = 'error'
+      conn.error = errorText(err)
+      this.log.warn(`call failed on ${conn.serverName}, next call reconnects: ${conn.error}`)
+    }
+    if (conn.status === 'connected') return err
+    const message = withStderrTail(errorText(err), conn.transport)
+    return message === errorText(err) ? err : new Error(message)
+  }
+
+  /**
+   * 让一条连接退役：从表里摘下（后来的调用于是新开一条），但**不立刻关** —— 关它会让同一条连接上
+   * 别的在途调用以「连接已关」失败：会话过期时它们本会同样收到 404、同样换新会话重发一次；
+   * 一次请求失败而被标成 error 时，它们多半还在正常跑。最后一个在途调用落定时再关（见 sendToolCall）。
+   */
+  private retire(key: string, conn: McpConnection): void {
+    if (this.connections.get(key) === conn) this.connections.delete(key)
+    if (conn.retired) return
+    conn.retired = true
+    conn.status = 'disconnected'
+    if (conn.inflight === 0) void this.closeConnection(conn, conn.serverName)
   }
 
   // ─── 桥接层：MCP → AgentTool ───
@@ -693,8 +936,8 @@ export class McpManager {
       execute: async (toolCallId, params, signal): Promise<AgentToolResult<McpToolDetails>> => {
         let result: Awaited<ReturnType<McpManager['callTool']>>
         try {
-          result = await this.callTool(
-            connKey,
+          result = await this.callToolOn(
+            { key: connKey, name: serverName },
             mcpTool.name,
             params as Record<string, unknown>,
             signal,
