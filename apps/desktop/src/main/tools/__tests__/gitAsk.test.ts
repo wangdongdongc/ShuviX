@@ -27,7 +27,7 @@ import {
   type InvokableTool
 } from '@shuvix/agent-runtime/tools/testing/invokeTool'
 
-/** 注册项工厂造出来的工具（git 仍是旧形状，P1-05 改 durable；executeTool 两种都收） */
+/** 注册项工厂造出来的工具（durable 注册项） */
 type CapturedTool = InvokableTool
 
 interface Registration {

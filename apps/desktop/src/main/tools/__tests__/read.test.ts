@@ -190,7 +190,7 @@ function getText(result: { content: Array<{ type: string; text?: string }> }): s
   return (item as { type: 'text'; text: string }).text
 }
 
-/** execute 的返回类型是 AgentToolResult<unknown>，details 按 read 详情读 */
+/** 调用结果的 details 是 unknown，按 read 详情读 */
 const detailsOf = (result: { details?: unknown }): ReadToolDetails =>
   result.details as ReadToolDetails
 

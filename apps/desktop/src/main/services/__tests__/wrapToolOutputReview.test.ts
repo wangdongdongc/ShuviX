@@ -9,15 +9,15 @@
  *   - 主体会话与包装器会话不一致 → 不串；
  *   - 放行之后工具自己抛错 → 以失败结果收场（文字即原错误），标记当场丢掉。
  *
- * P1-04（pi-durable）：包装产物是 durable 注册项，经 invokeTool 调；假工具仍是旧形状，包装器经
- * `fromAgentTool` 收下。抛错与门的拒绝从「reject」变成 isError 结果（裁定 Q12，模型看到的文字不变）。
+ * pi-durable：包装器收的、交出的都是 durable 注册项，经 invokeTool 调；假工具也是 durable 形状。
+ * 抛错与门的拒绝从「reject」变成 isError 结果（裁定 Q12，模型看到的文字不变）。
  *
  * mock 惯例同 wrapToolOutput.test.ts（toolContext 只给 TOOL_ABORTED、logger 置空、processToolOutput
  * 原样直通）；安全门面用真 createSecurityContext + 一条让 L1 invocation 走 ask 档的用户策略（用户策略的
  * ask 就是 tier 'ask'，会先交给审查），provider 上挂 onPermissionRequest。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { AgentTool, AnyTool } from '@shuvix/agent-runtime'
+import type { AnyTool } from '@shuvix/agent-runtime'
 import {
   executeTool,
   failureText,
@@ -132,15 +132,22 @@ function makeSecurity(opts: { review?: Reviewer; response?: InputResponse; sessi
 
 /** 一个 execute 可编程的工具（缺省返回单文本块 'ran'，details 由用例给） */
 function makeTool(details?: unknown): {
-  tool: AgentTool
+  tool: AnyTool
   execute: ReturnType<typeof vi.fn>
 } {
   const execute = vi.fn(async () => ({
     content: [{ type: 'text' as const, text: 'ran' }],
     details
   }))
-  const tool = { name: 'ssh', label: 'ssh', description: 'test tool', parameters: {}, execute }
-  return { tool: tool as unknown as AgentTool, execute }
+  const tool = {
+    name: 'ssh',
+    label: 'ssh',
+    description: 'test tool',
+    parameters: {},
+    replay: 'unsafe' as const,
+    execute
+  }
+  return { tool: tool as unknown as AnyTool, execute }
 }
 
 const exec = (

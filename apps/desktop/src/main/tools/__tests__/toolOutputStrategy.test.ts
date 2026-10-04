@@ -143,8 +143,7 @@ function hostWrap(tool: object, spill: boolean): AnyTool {
 
 /**
  * 工具本体换成一个只回 `text` 的探针 —— 原型仍是**真工具**，声明的 outputStrategy / outputMax*
- * 一并继承，于是「声明什么」与「剩下什么」之间没有第二份副本。探针不读参数，所以 durable 形状
- * （真工具做原型）与旧形状（TOS-2 的裸对象，经 fromAgentTool）两种调用约定下都只回这段文字。
+ * 一并继承，于是「声明什么」与「剩下什么」之间没有第二份副本。探针不读参数，只回这段文字。
  */
 async function hostRun(tool: object, text: string, opts: { spill: boolean }): Promise<string> {
   const probe = Object.create(tool) as object
@@ -195,8 +194,8 @@ describe('TOS 声明「保留开头」的工具', () => {
 
 describe('TOS 没声明策略的工具', () => {
   it('TOS-2 走 `?? middle` 兜底：首尾都在，中间没了', async () => {
-    // MCP / skill 工具就是这个形状：一个带 name 的普通对象，没有 outputStrategy
-    const tool = { name: 'mcp__probe__dump' }
+    // MCP 注册项就是这个形状：一个带 name / replay 的普通对象，没有 outputStrategy
+    const tool = { name: 'mcp__probe__dump', replay: 'unsafe' }
 
     const body = bodyOf(await hostRun(tool, BIG, { spill: false }))
 

@@ -27,7 +27,6 @@ import { mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { join, dirname } from 'node:path'
 import { tmpdir } from 'node:os'
-import type { AgentToolResult } from '@shuvix/agent-runtime'
 import type { ToolContext } from '../../services/toolContext'
 import { executeTool } from '@shuvix/agent-runtime/tools/testing/invokeTool'
 
@@ -113,13 +112,13 @@ async function runTool(
   runInBackground = false
 ): Promise<{ text: string; exitCode: number | undefined }> {
   const tool = new BashTool({ sessionId: SESSION_ID } as ToolContext)
-  const result = (await executeTool(tool, `tool-${++bgCall}`, {
+  const result = await executeTool(tool, `tool-${++bgCall}`, {
     command,
     description: 'rc leak test',
     run_in_background: runInBackground
-  })) as AgentToolResult<{ exitCode?: number }>
+  })
   const text = result.content.map((part) => (part.type === 'text' ? part.text : '')).join('')
-  return { text, exitCode: result.details?.exitCode }
+  return { text, exitCode: (result.details as { exitCode?: number } | undefined)?.exitCode }
 }
 
 beforeAll(() => {

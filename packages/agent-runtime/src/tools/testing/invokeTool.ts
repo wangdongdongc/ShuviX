@@ -7,8 +7,9 @@
  * 返回值里的 `result` 按 durable 结算的口径补齐（tool.ts 的 finalResult，不含截断与 afterTool）：
  * 没给 content 就用 output 文本，没给 details 就用最后一次 `details()`，api 记下的诊断排在结果自带的之前。
  *
- * 两种形状都收：旧形状工具（ask / git / MCP 桥接层，P1-05 之前）经 `fromAgentTool` 走同一条路，
- * 抛错照样按裁定 Q12 收成 isError 结果。
+ * 只收 durable 注册项，而且必须**显式**声明 `replay`（ShuviX 的约定，见 toolResult.ts）：pi 0.80 的
+ * 旧形状工具 `execute(toolCallId, params, signal)` 从来没有这个字段，按 durable 签名调它只会把
+ * api 当参数、context 当 signal 塞进去，然后以莫名其妙的方式失败 —— 所以在调用之前就拒收。
  *
  * 假 api 兑现不了的成员（commit / createTask / snapshot …）一调就抛，说清楚要经 `options.api` 自己给；
  * `memo` 是一张进程内的表（先到的候选值胜出，同 durable）；`agent()` 缺省回一个只装着这个工具的
@@ -27,25 +28,15 @@ import {
   type ToolExecutionApi
 } from '@earendil-works/pi-durable'
 import type { Static, TSchema, Usage } from '@earendil-works/pi-ai'
-import {
-  asToolRegistration,
-  type AgentTool,
-  type AnyLegacyAgentTool,
-  type AnyTool,
-  type ToolContent
-} from '../toolResult'
+import type { AnyTool, ToolContent } from '../toolResult'
 
-/** 能交给 invokeTool 的工具：durable 注册项（BaseTool 子类等）或旧形状工具 */
-export type InvokableTool = AnyTool | AnyLegacyAgentTool
+/** 能交给 invokeTool 的工具：durable 注册项（BaseTool 子类、ask / git / MCP 等函数式注册项） */
+export type InvokableTool = AnyTool
 
 /** 工具参数的类型（按它的 parameters 推） */
 export type InvokeArgs<T> = T extends { parameters: infer P extends TSchema }
   ? Static<P>
   : Record<string, unknown>
-
-/** 旧形状工具带着自己的 details 类型；durable 的一律 unknown（与旧 BaseTool.execute 一致） */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- 只为从旧形状里推出 details 类型
-export type InvokeDetails<T> = T extends AgentTool<any, infer D> ? D : unknown
 
 export interface InvokeToolOptions {
   /** provider 的工具调用 id（缺省 `call-<n>`） */
@@ -93,12 +84,24 @@ function unsupported(member: string): never {
   )
 }
 
+/** 不是 durable 注册项（没声明 `replay`，即旧形状工具）就当场拒收 */
+function assertDurableRegistration(tool: InvokableTool): void {
+  if (!('replay' in tool) || (tool.replay !== 'safe' && tool.replay !== 'unsafe')) {
+    throw new TypeError(
+      `invokeTool: tool "${String((tool as { name?: unknown }).name)}" declares no replay policy — ` +
+        "only pi-durable registrations with an explicit replay ('safe' | 'unsafe') are accepted; " +
+        'the legacy execute(toolCallId, params, signal) shape is gone'
+    )
+  }
+}
+
 export async function invokeTool<T extends InvokableTool>(
   tool: T,
   args: InvokeArgs<T>,
   options: InvokeToolOptions = {}
-): Promise<ToolInvocation<InvokeDetails<T>>> {
-  const registration = asToolRegistration(tool)
+): Promise<ToolInvocation> {
+  assertDurableRegistration(tool)
+  const registration = tool
   const callId = options.callId ?? `call-${++callCounter}`
   const context = options.signal
     ? withAbortSignal(options.signal, BACKGROUND_CONTEXT)
@@ -181,7 +184,7 @@ export async function invokeTool<T extends InvokableTool>(
   if (raw.details === undefined && lastDetails !== undefined) result.details = lastDetails
   if (merged.length > 0) result.diagnostics = merged
   return {
-    result: result as InvokedToolResult<InvokeDetails<T>>,
+    result,
     output,
     diagnostics,
     details,
@@ -199,7 +202,7 @@ export async function executeTool<T extends InvokableTool>(
   callId: string,
   args: InvokeArgs<T>,
   signal?: AbortSignal
-): Promise<InvokedToolResult<InvokeDetails<T>>> {
+): Promise<InvokedToolResult> {
   return (await invokeTool(tool, args, { callId, signal })).result
 }
 

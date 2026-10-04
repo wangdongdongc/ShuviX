@@ -55,7 +55,10 @@ export {
   type McpStderrSource,
   type McpCallMeta,
   type McpManagerOptions,
-  type McpAgentToolMeta,
+  type McpToolMeta,
+  type McpToolDeclaration,
+  type McpToolRegistration,
+  type McpRegistrationOptions,
   type McpDiscoveredTool,
   type McpConnectResult
 } from './mcpManager'
@@ -69,6 +72,7 @@ export {
   createAskTool,
   AskParamsSchema,
   ASK_DESCRIPTION,
+  type AskTool,
   type CreateAskToolOptions
 } from './askTool'
 // 工具定义枚举共享机制（各端自举内置工具 → 设置页只读展示）
@@ -167,6 +171,7 @@ export {
   buildGitParamsSchema,
   buildGitToolDescription,
   GIT_TOOL_NAME,
+  type GitTool,
   type CreateGitToolOptions
 } from './git/tool'
 export { buildGitHelp, GIT_HELP_TOPICS, type GitHelpTopic } from './git/help'
@@ -265,8 +270,10 @@ export {
   type DurableOutputLimits,
   type OutputDeclaration
 } from './tools/outputLimits'
-// 工具结果：durable 原生（BaseTool 子类交回 ToolResult，模板收成 durable 结果；抛错按 Q12 收口）
+// 工具结果：durable 原生（BaseTool 子类交回 ToolResult，模板收成 durable 结果；抛错按 Q12 收口，
+// 函数式注册项经 catchToolErrors 走同一口径）
 export {
+  catchToolErrors,
   errorMessageOf,
   toolErrorResult,
   strictJsonDetails,
@@ -275,18 +282,6 @@ export {
   type ToolContent,
   type ToolResult,
   type ToolExecutionMode
-} from './tools/toolResult'
-// 旧形状工具（pi 0.80 的 AgentTool；ask / git / MCP 桥接层还在用）与它到 durable 的桥
-// TODO(pi-durable p1): P1-05 改成 durable 原生之后删除
-export {
-  asToolRegistration,
-  fromAgentTool,
-  fromAgentToolResult,
-  isLegacyAgentTool,
-  type AgentTool,
-  type AgentToolResult,
-  type AgentToolUpdateCallback,
-  type AnyLegacyAgentTool
 } from './tools/toolResult'
 export {
   createFileToolSuite,

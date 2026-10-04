@@ -24,7 +24,7 @@ import type {
   ToolRegistration
 } from '@earendil-works/pi-durable'
 import type { TSchema, Static } from 'typebox'
-import { toExecutionResult, toolErrorResult, type ToolResult } from './toolResult'
+import { catchToolErrors, toExecutionResult, type ToolResult } from './toolResult'
 import type { ToolExecutionMode } from './toolResult'
 import { toolCallScope, type ToolCallScope } from './toolCall'
 import { backstopOutputLimits, type DurableOutputLimits } from './outputLimits'
@@ -92,14 +92,11 @@ export abstract class BaseTool<
     context: Context
   ): Promise<ToolExecutionResult> {
     const call = toolCallScope(api, context)
-    try {
+    return catchToolErrors(context, async () => {
       await this.preExecute(call.callId, args as Record<string, unknown>, call)
       await this.securityCheck(call.callId, args, call.signal, call)
       const result = await this.executeInternal(call.callId, args, call.signal, call)
       return toExecutionResult(result, this.name)
-    } catch (error) {
-      if (call.signal?.aborted) throw error
-      return toolErrorResult(error)
-    }
+    })
   }
 }

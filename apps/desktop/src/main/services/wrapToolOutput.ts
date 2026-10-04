@@ -6,21 +6,18 @@
  *
  * 单一调用点 — 仅由 agentHost 的 resolveTools 使用。工具本体不应再直接调用 processToolOutput。
  *
- * 形状（P1-04 起）：包装的是 pi-durable 的 `ToolRegistration`，执行签名 `execute(args, api, context)`；
- * 旧形状工具（ask / git / MCP 桥接层，`execute(toolCallId, params, signal)`）先经 `asToolRegistration`
- * 转成 durable 注册项再包。
+ * 形状：包装的是 pi-durable 的 `ToolRegistration`，执行签名 `execute(args, api, context)`（P1-05 起
+ * ask / git / MCP 也是 durable 原生，不再有旧形状工具）。
  * TODO(pi-durable p1): P1-06 改写成 durable 原生的包装器（落盘位置走 diagnostics、outputLimits、
- * taskId 穿进安全模块）；P1-05 之后不再有旧形状工具。
+ * taskId 穿进安全模块）。
  */
 
 import {
-  asToolRegistration,
   takeReviewAllowed,
   toolErrorResult,
-  type AnyLegacyAgentTool,
   type AnyTool,
   type SecurityContext,
-  type McpAgentToolMeta,
+  type McpToolMeta,
   type ToolContent
 } from '@shuvix/agent-runtime'
 import type { ToolExecutionResult, ToolRegistration } from '@earendil-works/pi-durable'
@@ -47,8 +44,8 @@ export interface ProcessToolOutputOverrides {
   spill?: boolean
 }
 
-/** 包装器收的工具：durable 注册项，或（P1-05 之前的）旧形状工具 */
-export type WrappableTool = AnyTool | AnyLegacyAgentTool
+/** 包装器收的工具：durable 注册项 */
+export type WrappableTool = AnyTool
 
 /**
  * 包装一个工具 —— execute 返回结果后，把 content 里的文本块过 processToolOutput。
@@ -80,7 +77,7 @@ export function wrapToolOutput(
   /** L1 全工具门的评估门面；缺省 = 不设门（测试/无会话场景） */
   security?: SecurityContext
 ): AnyTool {
-  const inner = asToolRegistration(tool)
+  const inner = tool
   const toolName = inner.name ?? ''
 
   const wrappedExecute: ToolRegistration['execute'] = async (args, api, context) => {
@@ -97,7 +94,7 @@ export function wrapToolOutput(
           operation: typeof rawAction === 'string' ? rawAction : undefined,
           // MCP 工具随身带着 server/tool 与（仅内置 server 才可信的）行为提示，
           // 让这道门对它们不再只有「有人要调工具」这一句话可说
-          mcp: (tool as Partial<McpAgentToolMeta>).mcpMeta,
+          mcp: (tool as Partial<McpToolMeta>).mcpMeta,
           abortError: TOOL_ABORTED,
           onOther: 'return',
           signal
@@ -129,7 +126,7 @@ export function wrapToolOutput(
       return toolErrorResult(err)
     }
     if (result.isError) {
-      // 工具交回的失败（BaseTool 模板 / 旧形状桥按 Q12 收口的抛错）：同上丢掉审查标记，原样交回
+      // 工具交回的失败（BaseTool 模板 / 函数式注册项按 Q12 收口的抛错）：同上丢掉审查标记，原样交回
       takeReviewAllowed(sessionId, toolCallId)
       return result
     }

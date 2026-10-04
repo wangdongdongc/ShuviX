@@ -84,8 +84,14 @@ vi.mock('../../services/mcpService', () => ({
       const spec = mocks.mcp[server]
       return spec?.fails ? { ok: false, error: spec.fails } : { ok: true }
     },
-    getAgentToolsByServerName: (server: string, sessionId: string, opts: unknown) => {
-      mocks.getToolsCalls.push([server, sessionId, opts])
+    getRegistrationsByServerName: (
+      server: string,
+      sessionId: string,
+      opts?: { callerIdOf?: (conversationId: number) => string | undefined }
+    ) => {
+      // 记成捕获时（P1-00，旧取工具接口的 `{ callerId }` 选项）的形状，fixture 才对得上：
+      // P1-05 起调用方 id 按对话现问，这张工具表只属于一个 agent，问根对话（1）就是它
+      mocks.getToolsCalls.push([server, sessionId, { callerId: opts?.callerIdOf?.(1) }])
       return (mocks.mcp[server]?.tools ?? []).map((t) => ({ name: `mcp__${server}__${t}` }))
     }
   }
