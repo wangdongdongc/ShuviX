@@ -29,9 +29,16 @@ import {
   type McpToolMeta,
   type McpDiscoveredTool,
   type McpRegistrationOptions,
-  type McpStore
+  type McpStore,
+  type McpToolDeclaration
 } from '../mcpManager'
-import { executeTool, failureText, type InvokedToolResult } from '../tools/testing/invokeTool'
+import {
+  executeTool,
+  failureText,
+  invokeTool,
+  type InvokedToolResult
+} from '../tools/testing/invokeTool'
+import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from '../fileTools/truncate'
 
 // ─── 假件 ────────────────────────────────────────────────────────────────
 
@@ -2803,5 +2810,336 @@ describe('McpManager 报错里的 stderr 尾巴（A4）', () => {
     expect(await failText(o)).toBe(
       '[MCP Error] MCP server "a" is not connected (reconnect failed): MCP error -32000: Connection closed\nfatal: missing API key'
     )
+  })
+})
+
+// ─── durable 注册项（P1-05）：形状、调用身份、失败口径、声明快照 ─────────────────
+//
+// MCP 工具是 pi-durable 的 `ToolRegistration`：`execute(args, api, context)`。这一组钉迁移带来的契约：
+//  - 注册项本身：`replay: 'unsafe'`（有副作用，中断不重跑）、durable 兜底截断取 2× 缺省；
+//  - 调用身份全从 api 来：toolCallId = `api.callId`，调用方 id 每次按 `api.conversationId` 现问
+//    （`callerIdOf`），taskId = `api.taskId` —— 后两者只给可信 server；
+//  - 失败**交回** isError 结果（裁定 Q12，文字与旧版抛出的相同），只有取消照旧是拒绝；
+//  - 声明快照（`declarationsOf`）是纯 JSON，`registrationsFromDeclarations` 据此建注册项，不要求
+//    连着 —— 第一次调用经「用到才连」原地连上。锁定的 agent 重开时就靠这条路重建 MCP 工具。
+
+const SCHEMA = { type: 'object' as const, properties: { q: { type: 'string' } } }
+
+describe('McpManager 的 durable 注册项：形状', () => {
+  it('MCPD-1: replay unsafe、名字带前缀、label / description、durable 兜底截断（2× 缺省、留头）', async () => {
+    const h = setup([row({ id: 'a-id', name: 'a' })])
+    h.plan.set('a', { tools: [tool('search', 'Search the web'), tool('ping')] })
+    await h.mgr.ensureServerByName('a')
+
+    const [search, ping] = h.mgr.getRegistrationsByServerName('a')
+    expect(search).toMatchObject({
+      name: 'mcp__a__search',
+      label: 'Search the web',
+      description: 'Search the web',
+      replay: 'unsafe',
+      outputLimits: {
+        maxBytes: 2 * DEFAULT_MAX_BYTES,
+        maxLines: 2 * DEFAULT_MAX_LINES,
+        retain: 'head'
+      }
+    })
+    // 没有描述：label 落到工具名，description 是空串（不是 undefined）
+    expect(ping).toMatchObject({ name: 'mcp__a__ping', label: 'ping', description: '' })
+    // inputSchema 原样透传给 LLM
+    expect(search.parameters).toMatchObject(SCHEMA)
+  })
+})
+
+describe('McpManager 的 durable 注册项：调用身份随 api 走', () => {
+  it('MCPD-2: callerIdOf 按每次调用的 api.conversationId 现问 —— 同一个注册项、两条对话各报各的', async () => {
+    const h = await trustedSsh()
+    const callerIdOf = vi.fn((conversationId: number) =>
+      conversationId === 1 ? 's1' : `agent-${conversationId}`
+    )
+    const [exec] = h.mgr.getRegistrationsByServerName('ssh', 's1', { callerIdOf })
+
+    await invokeTool(exec, {}, { callId: 'pi-1', taskId: 11, conversationId: 1 })
+    await invokeTool(exec, {}, { callId: 'pi-2', taskId: 12, conversationId: 5 })
+
+    expect(callerIdOf.mock.calls).toEqual([[1], [5]])
+    expect(h.lastFor('ssh', 's1').toolCallMetas).toStrictEqual([
+      { [TOOL_CALL]: 'pi-1', [AGENT]: 's1', [TASK]: 11 },
+      { [TOOL_CALL]: 'pi-2', [AGENT]: 'agent-5', [TASK]: 12 }
+    ])
+  })
+
+  it('MCPD-3: 不可信 server —— toolCallId 照带，调用方 id 与 taskId 都不带（哪怕给了 callerIdOf）', async () => {
+    const h = setup([row({ id: 'a-id', name: 'a' })])
+    h.plan.set('a', { tools: [tool('search')] })
+    await h.mgr.ensureServerByName('a')
+    const [search] = h.mgr.getRegistrationsByServerName('a', 's1', { callerIdOf: () => 'agent-7' })
+
+    await invokeTool(search, {}, { callId: 'pi-1', taskId: 9, conversationId: 3 })
+    expect(h.last('a').toolCallMetas).toStrictEqual([{ [TOOL_CALL]: 'pi-1' }])
+  })
+
+  it('MCPD-3b: callerIdOf 回 undefined → 可信 server 只带 toolCallId 与 taskId', async () => {
+    const h = await trustedSsh()
+    const [exec] = h.mgr.getRegistrationsByServerName('ssh', 's1', { callerIdOf: () => undefined })
+
+    await invokeTool(exec, {}, { callId: 'pi-1', taskId: 4 })
+    expect(h.lastFor('ssh', 's1').toolCallMetas).toStrictEqual([{ [TOOL_CALL]: 'pi-1', [TASK]: 4 }])
+  })
+})
+
+describe('McpManager 的 durable 注册项：失败交回 isError，取消照旧抛', () => {
+  it('MCPD-4: server 报 isError → 调用 resolve 成 isError 结果，文字 `[MCP Error] …`，不带 details', async () => {
+    const { exec } = await sshExecReturning({ isError: true, content: [text('permission denied')] })
+
+    const { result } = await invokeTool(exec, {})
+    expect(result).toStrictEqual({
+      isError: true,
+      content: [{ type: 'text', text: '[MCP Error] permission denied' }]
+    })
+  })
+
+  it('MCPD-5: 协议层失败（服务器已停用）→ 同样 resolve 成 isError，文字逐字', async () => {
+    const h = await trustedSsh()
+    const [exec] = h.mgr.getRegistrationsByServerName('ssh', 's1')
+    h.store.rows.get('ssh-id')!.isEnabled = 0
+    await h.mgr.disconnect('ssh-id')
+
+    const { result } = await invokeTool(exec, {})
+    expect(result).toStrictEqual({
+      isError: true,
+      content: [{ type: 'text', text: '[MCP Error] MCP server "ssh" is not connected' }]
+    })
+  })
+
+  it('MCPD-6: 在途调用被中止 → 调用以拒绝收场（不是 isError 结果）；请求只发了一次、连接不动', async () => {
+    const h = setup([httpA()])
+    h.plan.set('a', { tools: [tool('search')], sessionId: 'sess-1', holdCalls: 'send' })
+    const [held] = await connectHeld(h, 'a')
+
+    const ac = new AbortController()
+    const call = invokeTool(held, {}, { signal: ac.signal })
+    call.catch(() => {})
+    await settle()
+    ac.abort()
+
+    await expect(call).rejects.toThrow('[MCP] Aborted')
+    expect(h.last('a').toolCalls).toHaveLength(1)
+    expect(h.mgr.getStatus('a-id')).toBe('connected')
+  })
+
+  it('MCPD-6b: 调用前就已中止 → 拒绝，一发请求都没出', async () => {
+    const h = await trustedSsh()
+    const [exec] = h.mgr.getRegistrationsByServerName('ssh', 's1')
+    const ac = new AbortController()
+    ac.abort()
+
+    await expect(invokeTool(exec, {}, { signal: ac.signal })).rejects.toThrow('[MCP] Aborted')
+    expect(h.lastFor('ssh', 's1').toolCalls).toEqual([])
+  })
+})
+
+describe('McpManager.declarationsOf：工具声明快照', () => {
+  it('MCPD-7: 可信 server —— name / description / inputSchema / annotations 原样，trusted:true；顺序同注册项', async () => {
+    const h = setup([sshRow()])
+    h.plan.set('ssh', {
+      tools: [annotated('list-hosts', FULL_HINTS), tool('exec', 'Run a command')]
+    })
+    await h.mgr.ensureServerByName('ssh', { sessionId: 's1' })
+
+    const decls = h.mgr.declarationsOf('ssh', 's1')
+    expect(decls).toStrictEqual([
+      { name: 'list-hosts', inputSchema: SCHEMA, annotations: { ...FULL_HINTS }, trusted: true },
+      { name: 'exec', description: 'Run a command', inputSchema: SCHEMA, trusted: true }
+    ])
+    expect(decls.map((d) => `mcp__ssh__${d.name}`)).toEqual(
+      h.mgr.getRegistrationsByServerName('ssh', 's1').map((t) => t.name)
+    )
+  })
+
+  it('MCPD-8: 不可信 server —— annotations 照原样记，trusted:false；建注册项时才不进安全客体', async () => {
+    const h = setup([row({ id: 'a-id', name: 'a' })])
+    h.plan.set('a', { tools: [annotated('read', FULL_HINTS)] })
+    await h.mgr.ensureServerByName('a')
+
+    const decls = h.mgr.declarationsOf('a')
+    expect(decls).toStrictEqual([
+      { name: 'read', inputSchema: SCHEMA, annotations: { ...FULL_HINTS }, trusted: false }
+    ])
+    const [t] = h.mgr.registrationsFromDeclarations('a', undefined, decls)
+    expect(t.mcpMeta).toStrictEqual({
+      server: 'a',
+      tool: 'read',
+      trusted: false,
+      readOnly: undefined,
+      destructive: undefined,
+      idempotent: undefined,
+      openWorld: undefined
+    })
+  })
+
+  it('MCPD-9: 快照是纯 JSON、与活连接互不牵连 —— JSON 往返相等；改快照不影响之后取的声明与注册项', async () => {
+    const h = setup([sshRow()])
+    h.plan.set('ssh', { tools: [annotated('exec', FULL_HINTS)] })
+    await h.mgr.ensureServerByName('ssh', { sessionId: 's1' })
+
+    const snapshot = h.mgr.declarationsOf('ssh', 's1')
+    expect(JSON.parse(JSON.stringify(snapshot))).toStrictEqual(snapshot)
+
+    snapshot[0].name = 'tampered'
+    snapshot[0].inputSchema.properties = {}
+    snapshot[0].annotations!.readOnlyHint = false
+    const again = h.mgr.declarationsOf('ssh', 's1')
+    expect(again[0]).toMatchObject({ name: 'exec', inputSchema: SCHEMA })
+    expect(again[0].annotations?.readOnlyHint).toBe(true)
+    const [live] = h.mgr.getRegistrationsByServerName('ssh', 's1')
+    expect(live.parameters).toMatchObject(SCHEMA)
+    expect(live.mcpMeta.readOnly).toBe(true)
+  })
+
+  it('MCPD-10: 没连上 / 不是这条会话的实例 / 没这台 → 空表', async () => {
+    const h = setup([sshRow()])
+    h.plan.set('ssh', { tools: [tool('exec')] })
+    expect(h.mgr.declarationsOf('ssh', 's1')).toEqual([])
+
+    await h.mgr.ensureServerByName('ssh', { sessionId: 's1' })
+    expect(h.mgr.declarationsOf('ssh', 's1')).toHaveLength(1)
+    // inproc 按会话分身：别的会话、不带会话都拿不到 s1 那份
+    expect(h.mgr.declarationsOf('ssh', 's2')).toEqual([])
+    expect(h.mgr.declarationsOf('ssh')).toEqual([])
+    expect(h.mgr.declarationsOf('nope', 's1')).toEqual([])
+  })
+})
+
+describe('McpManager.registrationsFromDeclarations：按快照建，用到才连', () => {
+  it('MCPD-11: 与活连接上取的注册项同名、同描述、同参数、同 mcpMeta、同 replay', async () => {
+    const h = setup([sshRow()])
+    h.plan.set('ssh', {
+      tools: [annotated('list-hosts', FULL_HINTS), tool('exec', 'Run a command')]
+    })
+    await h.mgr.ensureServerByName('ssh', { sessionId: 's1' })
+
+    const live = h.mgr.getRegistrationsByServerName('ssh', 's1')
+    const rebuilt = h.mgr.registrationsFromDeclarations(
+      'ssh',
+      's1',
+      h.mgr.declarationsOf('ssh', 's1')
+    )
+    const face = (t: (typeof live)[number]): unknown => ({
+      name: t.name,
+      label: t.label,
+      description: t.description,
+      parameters: t.parameters,
+      replay: t.replay,
+      outputLimits: t.outputLimits,
+      mcpMeta: t.mcpMeta
+    })
+    expect(rebuilt.map(face)).toEqual(live.map(face))
+  })
+
+  it('MCPD-12: 建的时候不连；第一次调用原地连上、落在这条会话自己的实例上，身份照常带', async () => {
+    const h = setup([sshRow()])
+    h.plan.set('ssh', { tools: [tool('exec')] })
+    const decls = [{ name: 'exec', inputSchema: SCHEMA, trusted: true }]
+
+    const [exec] = h.mgr.registrationsFromDeclarations('ssh', 's1', decls, {
+      callerIdOf: () => 's1'
+    })
+    expect(exec.name).toBe('mcp__ssh__exec')
+    expect(h.createTransport).not.toHaveBeenCalled()
+    expect(h.mgr.getStatus('ssh-id', 's1')).toBe('disconnected')
+
+    const { result } = await invokeTool(exec, {}, { callId: 'pi-1', taskId: 3 })
+    expect(result.isError).toBeUndefined()
+    expect(onlyText(result.content)).toBe('handled by s1')
+    expect(result.details).toEqual({ type: 'mcp', server: 'ssh', tool: 'exec' })
+    expect(h.mgr.getStatus('ssh-id', 's1')).toBe('connected')
+    expect(h.madeFor('ssh', 's1')).toHaveLength(1)
+    expect(h.lastFor('ssh', 's1').toolCalls).toEqual([{ name: 'exec', args: {} }])
+    expect(h.lastFor('ssh', 's1').toolCallMetas).toStrictEqual([
+      { [TOOL_CALL]: 'pi-1', [AGENT]: 's1', [TASK]: 3 }
+    ])
+  })
+
+  it('MCPD-13: 外部服务器掉线之后再调 —— 同样原地重连一次再调', async () => {
+    const h = setup([stdioA()])
+    h.plan.set('a', { tools: [tool('search')] })
+    await h.mgr.ensureServerByName('a')
+    const [search] = h.mgr.registrationsFromDeclarations('a', 's1', h.mgr.declarationsOf('a'))
+    drop(h.last('a'))
+
+    const { result } = await invokeTool(search, {})
+    expect(onlyText(result.content)).toBe('handled by global')
+    expect(h.made('a')).toHaveLength(2)
+  })
+
+  it.each([
+    ['配置行删了', (h: Harness): unknown => h.store.rows.delete('a-id')],
+    ['停用了', (h: Harness): unknown => (h.store.rows.get('a-id')!.isEnabled = 0)]
+  ])('MCPD-14: %s → isError「没连上」，不去连', async (_label, change) => {
+    const h = setup([httpA()])
+    h.plan.set('a', { tools: [tool('search')] })
+    const [search] = h.mgr.registrationsFromDeclarations('a', undefined, [
+      { name: 'search', inputSchema: SCHEMA, trusted: false }
+    ])
+    change(h)
+
+    const { result } = await invokeTool(search, {})
+    expect(result).toStrictEqual({
+      isError: true,
+      content: [{ type: 'text', text: '[MCP Error] MCP server "a" is not connected' }]
+    })
+    expect(h.createTransport).not.toHaveBeenCalled()
+  })
+
+  it('MCPD-15: 会话已关 → 不把它的内置实例重新拉起来，报没连上', async () => {
+    const h = setup([sshRow()])
+    h.plan.set('ssh', { tools: [tool('exec')] })
+    const [exec] = h.mgr.registrationsFromDeclarations('ssh', 's1', [
+      { name: 'exec', inputSchema: SCHEMA, trusted: true }
+    ])
+    await h.mgr.closeSession('s1')
+
+    const { result } = await invokeTool(exec, {})
+    expect(result.isError).toBe(true)
+    expect(onlyText(result.content)).toBe('[MCP Error] MCP server "ssh" is not connected')
+    expect(h.createTransport).not.toHaveBeenCalled()
+  })
+
+  it('MCPD-16: 快照说可信、实际连上的那条不可信 → `_meta` 只带 toolCallId（看活连接）；mcpMeta 按快照', async () => {
+    const h = setup([httpA()])
+    h.plan.set('a', { tools: [tool('search')] })
+    const [search] = h.mgr.registrationsFromDeclarations(
+      'a',
+      undefined,
+      [{ name: 'search', inputSchema: SCHEMA, annotations: { readOnlyHint: true }, trusted: true }],
+      { callerIdOf: () => 'agent-7' }
+    )
+    expect(search.mcpMeta).toMatchObject({ trusted: true, readOnly: true })
+
+    await invokeTool(search, {}, { callId: 'pi-1', taskId: 2 })
+    expect(h.last('a').toolCallMetas).toStrictEqual([{ [TOOL_CALL]: 'pi-1' }])
+  })
+
+  it('MCPD-17: 交进来的声明事后被改，不影响已经建好的注册项（建时各拷一份）', async () => {
+    const h = setup([httpA()])
+    h.plan.set('a', { tools: [tool('search')] })
+    // 自己的一份 schema（改它不能连坐模块级的 SCHEMA）
+    const decls: McpToolDeclaration[] = [
+      {
+        name: 'search',
+        description: 'Search',
+        inputSchema: { type: 'object', properties: { q: { type: 'string' } } },
+        trusted: false
+      }
+    ]
+    const [search] = h.mgr.registrationsFromDeclarations('a', undefined, decls)
+
+    decls[0].name = 'other'
+    decls[0].inputSchema.properties = {}
+    expect(search.name).toBe('mcp__a__search')
+    expect(search.parameters).toMatchObject({ properties: { q: { type: 'string' } } })
+
+    await invokeTool(search, { q: 'x' })
+    expect(h.last('a').toolCalls).toEqual([{ name: 'search', args: { q: 'x' } }])
   })
 })
