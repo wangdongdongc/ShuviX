@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest'
 import { backgroundContext as BG } from '../context'
 import { DisplayDoc } from '../docs'
 import { settlementResult, type DurableSession } from '../durableSession'
+import { testProfile } from './support/agentConfig'
 import { answer, callTool, held, modelError, stalled } from './support/faux'
 import { makeHost, primeRoot, registerHostCleanup } from './support/host'
 import { askingTool, holdTool } from './support/tools'
@@ -111,8 +112,8 @@ describe('submitUser', () => {
     expect(await session.submitUser('u1')).toEqual({ error: 'boom', code: 'model_error' })
   })
 
-  it('U-06 no model configured → { error, code: no_model }', async () => {
-    const t = await makeHost()
+  it('U-06 no model configured → { error, code: no_model } (the runtime refuses to create the agent, K4)', async () => {
+    const t = await makeHost({ agentConfig: { profile: testProfile() } })
     const session = await t.open()
     const result = await session.submitUser('u1')
     expect(result.code).toBe('no_model')

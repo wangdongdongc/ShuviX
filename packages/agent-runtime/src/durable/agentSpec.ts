@@ -23,8 +23,9 @@
  * 系统提示词的 durable 形态在 `prompt/`（P1-08）：人设创建时冻结（`prompt/persona.ts`），其余注入各是
  * 一个现解析的段落扩展（`prompt/sections.ts`，选择 = `promptExtensionsFor(spec)`），逐字节对照
  * `__tests__/fixtures/system-prompts/`。这里的 `assembleSystemPrompt` 是一次拼完的旧口径（指令文件不修剪），
- * 只剩 `AgentSpec.systemPrompt` 还在用它。
- * TODO(pi-durable p1): P1-09 用本规格创建根 agent（锁）时改走分段，不再需要 `systemPrompt` 一项。
+ * 只剩 `AgentSpec.systemPrompt` 还在用它 —— 锁（`lock.ts`，P1-09）不用它：根 agent 的名单与思考档位取自
+ * 这里的 `normalizeToolNames` / `resolveThinkingLevel`，提示词走分段。TODO(pi-durable p1): P1-13 删掉
+ * `assembleSystemPrompt` 与 `AgentSpec.systemPrompt`。
  */
 import type { ThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
 import { KNOWLEDGE_TOOL_NAME } from '../knowledge/knowledgeTool'

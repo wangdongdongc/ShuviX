@@ -548,9 +548,9 @@ describe('date notice before a user input (DurableSession wiring)', () => {
 
   it('DW-09 two channels: the date reaches the model as a notice, never through the system prompt', async () => {
     const day = calendar(D1)
-    const t = await makeHost({ today: day.today })
-    const prompt = createPromptExtensions({ resolveProjectPrompt: () => 'Acme.' })
-    for (const extension of prompt.all) t.registry.install(extension)
+    const promptHost = { resolveProjectPrompt: () => 'Acme.' }
+    const t = await makeHost({ today: day.today, promptHost })
+    const prompt = createPromptExtensions(promptHost)
     const session = await t.open()
     const conversation = await session.currentConversation()
     await lockPrompt(

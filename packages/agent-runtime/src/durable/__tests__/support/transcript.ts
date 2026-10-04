@@ -53,3 +53,32 @@ export function requestTexts(kit: FauxKit, n: number): string[] {
     .filter((message) => message.role !== 'system')
     .map((message) => `${message.role}:${messageText(message)}`)
 }
+
+/** 一条 pi.system 条目带来的变化：段落 key（含删除）、加 / 减的工具名 */
+export interface SystemDelta {
+  readonly sections: string[]
+  readonly toolsAdded: string[]
+  readonly toolsRemoved: string[]
+}
+
+/** 一个对话里每条 pi.system 条目的变化，最旧在前 */
+export async function systemDeltas(conversation: Conversation): Promise<SystemDelta[]> {
+  return (await allEntries(conversation))
+    .filter((entry) => entry.kind === 'pi.system')
+    .map((entry) => {
+      const message = entry.model?.[0]
+      if (message?.role !== 'system') return { sections: [], toolsAdded: [], toolsRemoved: [] }
+      return {
+        sections: Object.keys(message.sections ?? {}),
+        toolsAdded: (message.toolsAdded ?? []).map((tool) => tool.name),
+        toolsRemoved: (message.toolsRemoved ?? []).map((tool) => tool.name)
+      }
+    })
+}
+
+/** 带工具增减的 pi.system 条目数（从第 `from` 条 pi.system 起） */
+export async function toolDeltaCount(conversation: Conversation, from = 0): Promise<number> {
+  return (await systemDeltas(conversation))
+    .slice(from)
+    .filter((delta) => delta.toolsAdded.length > 0 || delta.toolsRemoved.length > 0).length
+}

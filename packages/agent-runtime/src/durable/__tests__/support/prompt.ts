@@ -7,6 +7,8 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Message, SystemMessage } from '@earendil-works/pi-ai'
 import type { Conversation, Extension } from '@earendil-works/pi-durable'
+import { SessionStateDoc } from '../../docs'
+import { lockRecordJson, type LockRecord } from '../../lock'
 import type { AgentKind, PromptVars } from '../../../agentProfile/promptVars'
 import type { InProcessAgentType } from '../../../subagent/types'
 import { backgroundContext as BG } from '../../context'
@@ -107,7 +109,34 @@ export function fixturePromptHost(
   return host
 }
 
-/** 冻结人设 + 选择段落扩展 + 配 faux 模型（P1-09 的锁会做同一件事） */
+/**
+ * 手写一条锁记录（不经 `createAgent`）：段落用例自己冻结人设、自己选扩展，再把会话标成「已锁」，
+ * 好让下一次发送不再自动创建 agent（K3）把它们的配置整份覆盖掉。记录形状合法 —— 重开时照常重建。
+ */
+export async function markLocked(
+  conversation: Conversation,
+  kit: FauxKit,
+  extensions: readonly { readonly name: string }[] = [],
+  identity: Pick<FrozenAgentPrompt, 'kind' | 'profileName'> = { kind: 'root', profileName: 'test' }
+): Promise<void> {
+  const record: LockRecord = {
+    conversationId: conversation.id,
+    profileName: identity.profileName,
+    kind: identity.kind,
+    model: { ...kit.model },
+    toolNames: [],
+    extensions: extensions.map((extension) => extension.name),
+    sandboxed: false,
+    mcp: {},
+    skills: [],
+    createdAt: 0
+  }
+  await conversation.commit(async (tx) => {
+    ;(await tx.doc(SessionStateDoc)).lock = lockRecordJson(record)
+  }, BG)
+}
+
+/** 冻结人设 + 选择段落扩展 + 配 faux 模型 + 标成已锁（手工版的 P1-09 锁） */
 export async function lockPrompt(
   conversation: Conversation,
   kit: FauxKit,
@@ -117,6 +146,7 @@ export async function lockPrompt(
 ): Promise<void> {
   await conversation.commit((tx) => freezePersona(tx, conversation.id, frozen), BG)
   await conversation.configure({ model: kit.model, extensions, ...(cwd ? { cwd } : {}) }, BG)
+  await markLocked(conversation, kit, extensions, frozen)
 }
 
 /** 一个最小的待冻结记录（不经变量表） */

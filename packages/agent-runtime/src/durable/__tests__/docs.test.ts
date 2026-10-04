@@ -113,7 +113,10 @@ describe('ShuviX durable docs', () => {
       ;(await tx.doc(AgentStateDoc, ROOT_CONVERSATION_ID)).lastAnnouncedDate = '2026-10-04'
     }, BG)
     const fork = await root.fork(userEntry.id, { ownership: { kind: 'ownerless' } }, BG)
-    expect(await session.harness.snapshot(AgentStateDoc, fork.id, BG)).toEqual({
+    // 上锁时冻结的人设与身份也在 asOf 副本里（primeRoot = createAgent，K15）
+    expect(await session.harness.snapshot(AgentStateDoc, fork.id, BG)).toMatchObject({
+      kind: 'root',
+      profileName: 'test',
       lastAnnouncedDate: '2026-10-01'
     })
   })

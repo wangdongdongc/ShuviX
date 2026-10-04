@@ -15,13 +15,24 @@
  *    算「进行中」）；关之前在同一个同步段里再判一次（不会和刚起跑的一轮赛跑）。
  *  - **全部关闭之后封存**：退出路径上不再接受打开（拒绝并报清楚的错）。
  *  - **删除**：先关（等在途的打开），再删存储；删除期间对同一会话的打开 / 窥视排在它后面。
+ *  - **每会话一个注册表**（K1）：打开时 `createRegistry(sessionId)` 造一个、装上系统提示词的段落扩展
+ *    （K21），会话自己再装 `shuvix.builtin` 与按锁重建的 `shuvix.agent.<对话>`；关闭 / 删除时随会话丢弃。
+ *    根对话 id 在每个存储里都是 1，共享注册表会让两条会话的 `shuvix.agent.1` 互相覆盖。
+ *  - **压缩余量按锁定模型的窗口算**（K14）：settings 的 getter 现读会话的锁、按 `models.getModel` 查
+ *    上下文窗口（未锁 / 查不到 → 32768）。
  */
-import { Harness } from '@earendil-works/pi-durable'
+import {
+  createRegistry,
+  Harness,
+  type Registry,
+  type ToolRegistration
+} from '@earendil-works/pi-durable'
 import { SessionManager } from '../sessionManager'
 import type { RuntimeLogger } from '../types'
 import { backgroundContext as BG, errorText } from './context'
 import { seedConversationDocs } from './docs'
 import { DurableSessionImpl, type DurableSession, type SessionCloseReason } from './durableSession'
+import { createPromptExtensions, type PromptExtensions } from './prompt/sections'
 import {
   DEFAULT_INTERRUPTED_SEND_POLICY,
   DEFAULT_MAX_IDLE_OPEN,
@@ -78,9 +89,12 @@ class SessionHostImpl implements SessionHost {
   private trimScheduled = false
   private sealedFlag = false
   private closingAll: Promise<void> | undefined
+  /** 段落扩展：每个会话的注册表都装同一组对象（它们按 AgentStateDoc.rootSessionId 路由） */
+  private readonly promptExtensions: PromptExtensions
 
   constructor(private readonly deps: SessionHostDeps) {
     this.logger = deps.logger ?? noopLogger
+    this.promptExtensions = createPromptExtensions(deps.promptHost ?? {})
     const max = deps.maxIdleOpen ?? DEFAULT_MAX_IDLE_OPEN
     this.maxIdleOpen = Number.isFinite(max) && max >= 0 ? Math.floor(max) : DEFAULT_MAX_IDLE_OPEN
     this.manager = new SessionManager<DurableSessionImpl>({
@@ -187,17 +201,33 @@ class SessionHostImpl implements SessionHost {
       if (deleting) await deleting.catch(() => undefined)
       if (this.sealedFlag) return undefined
       const storage = await this.deps.openStorage(sessionId)
+      let registry: Registry<ToolRegistration>
+      try {
+        registry = (this.deps.createRegistry ?? (() => createRegistry()))(sessionId)
+        for (const extension of this.promptExtensions.all) registry.install(extension)
+      } catch (error) {
+        await storage.close(BG).catch(() => undefined)
+        throw error
+      }
+      // 压缩窗口按锁定模型现查（K14）：会话出生之前（打开途中）没有锁 → 未知
+      let lockedSession: DurableSessionImpl | undefined
+      const settings = createShuviXSettings({
+        contextWindow: () => {
+          const model = lockedSession?.lock?.model
+          return model === undefined
+            ? undefined
+            : this.deps.models.getModel(model.provider, model.modelId)?.contextWindow
+        },
+        overrides: () => this.deps.settingsOverrides
+      })
       let harness: Harness
       try {
         harness = await Harness.open(
           storage,
           {
             models: this.deps.models,
-            registry: this.deps.registry,
-            settings: createShuviXSettings({
-              contextWindow: () => this.deps.contextWindow?.(sessionId),
-              overrides: () => this.deps.settingsOverrides
-            }),
+            registry,
+            settings,
             ...(this.deps.env === undefined ? {} : { env: this.deps.env }),
             conversationCreated: async (tx, record) => {
               await seedConversationDocs(tx, record)
@@ -230,12 +260,24 @@ class SessionHostImpl implements SessionHost {
           onSettled: () => this.scheduleTrim(),
           logger: this.logger,
           now: this.deps.now ?? Date.now,
-          ...(this.deps.today === undefined ? {} : { today: this.deps.today })
+          ...(this.deps.today === undefined ? {} : { today: this.deps.today }),
+          registry,
+          toolHost: this.deps.toolHost,
+          resolveAgentConfig: this.deps.resolveAgentConfig,
+          modelCatalog: this.deps.modelCatalog,
+          promptExtensions: this.promptExtensions,
+          promptVars: this.deps.promptVars ?? (() => ({})),
+          ...(this.deps.onLockChange === undefined ? {} : { onLockChange: this.deps.onLockChange }),
+          settings
         })
+        lockedSession = session
         if (this.sealedFlag) {
           await session.close('remove')
           return undefined
         }
+        // 打开时总报一次此刻的运行状态（PIN-R，与锁镜像的 K11 同理）：崩溃可能把 DB 里的运行标记留在
+        // busy（后台压缩中、最后一次提交与转闲的微任务之间），空闲重开若不报，那个标记永远好不了
+        this.reportRunState(sessionId, session.runState)
         return session
       } catch (error) {
         await harness.close(BG).catch(() => undefined)
@@ -249,13 +291,17 @@ class SessionHostImpl implements SessionHost {
   // ─── 运行状态 / LRU ─────────────────────────────
 
   private onStateChange(sessionId: string, state: RunState, previous: RunState): void {
+    this.reportRunState(sessionId, state)
+    // 忙 → 闲：可回收的会话多了一个
+    if (previous === 'busy' && state !== 'busy') this.scheduleTrim()
+  }
+
+  private reportRunState(sessionId: string, state: RunState): void {
     try {
       this.deps.onRunStateChange?.(sessionId, state)
     } catch (error) {
       this.logger.warn(`onRunStateChange failed session=${sessionId}: ${errorText(error)}`)
     }
-    // 忙 → 闲：可回收的会话多了一个
-    if (previous === 'busy' && state !== 'busy') this.scheduleTrim()
   }
 
   private touch(sessionId: string): void {

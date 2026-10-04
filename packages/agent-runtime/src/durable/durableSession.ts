@@ -23,6 +23,10 @@
  *  - **日期通知**（Q14，P1-08）：注入了 `today` 时，每次用户输入（submitUser / steer / followUp）之前
  *    先 `maybeAnnounceDate` —— 新的一天里第一次输入之前追加一条 `shuvix.notice`（kind `date`），
  *    排在这次输入之前。没注入 = 不发。失败只记日志，不挡用户的发送。
+ *  - **锁**（P1-09，`lock.ts`）：「这条会话有 agent」。打开时、在任何续跑 / 发送之前按锁记录重建工具；
+ *    没锁时，发送 / steer / followUp / 自动续跑 / 继续都先创建 agent（K3，每会话一把互斥）；模型被拒
+ *    → `{ error, code: 'no_model' }`，什么都不写（K4）。中止与销毁都会取消在途的创建（K13）；销毁算一次
+ *    显式喊停（K10）。
  */
 import { copyJson } from '@earendil-works/chord'
 import {
@@ -41,8 +45,10 @@ import {
   type TaskId,
   type UserInput
 } from '@earendil-works/pi-durable'
+import type { HarnessSettings, Registry, ToolRegistration } from '@earendil-works/pi-durable'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import type { ThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
+import type { PromptVars, PromptVarsCtx } from '../agentProfile/promptVars'
 import type { RuntimeEventSink, RuntimeLogger } from '../types'
 import { backgroundContext as BG, errorText, isClosedError } from './context'
 import {
@@ -53,8 +59,10 @@ import {
   type SessionState
 } from './docs'
 import { PendingInputRequests } from './inputRequests'
+import { AgentCreationError, AgentLock, type CreateAgentOptions, type LockRecord } from './lock'
 import { maybeAnnounceDate } from './prompt/dateNotice'
-import type { InterruptedSendPolicy, RunState } from './seams'
+import type { PromptExtensions } from './prompt/sections'
+import type { AgentConfig, InterruptedSendPolicy, ModelCatalog, RunState, ToolHost } from './seams'
 
 const GENERATION_TASK_KIND = 'pi.generation'
 const LIVE_TASK_STATUSES = ['pending', 'running', 'waiting', 'completing'] as const
@@ -158,6 +166,17 @@ export interface DurableSession {
   readonly pendingInputCount: number
   /** 待答询问的人读摘要 */
   readonly pendingInputSummaries: string[]
+  /** 此刻的锁记录（同步；undefined = 这条会话现在没有 agent） */
+  readonly lock: LockRecord | undefined
+  /**
+   * 创建 agent（上锁）。已锁返回现有记录、不调任何 seam；并发调用合流成一次。模型被拒 / 被取消 /
+   * 附加工具 → 抛 `AgentCreationError`；其余失败原样抛出。从不开启调度器。
+   */
+  createAgent(options?: CreateAgentOptions): Promise<LockRecord>
+  /** 销毁 agent（解锁）：忙 / 被中断先中止；没锁 = 无操作 */
+  destroyAgent(): Promise<void>
+  /** 这个 Harness 实际在用的 settings（同步 getter；压缩余量按锁定模型的窗口算，K14） */
+  readonly effectiveSettings: HarnessSettings
 }
 
 /** 关停原因：destroy = 删除会话（合并窗口里的通知随之丢弃），其余照常保存待送达通知 */
@@ -324,6 +343,16 @@ export interface DurableSessionDeps {
   now: () => number
   /** 今天的本地日期（`YYYY-MM-DD`）；缺省 = 不发日期通知 */
   today?: () => string
+  /** 这条会话自己的注册表（K1；段落扩展已装好） */
+  registry: Registry<ToolRegistration>
+  toolHost: ToolHost
+  resolveAgentConfig: (sessionId: string) => AgentConfig | Promise<AgentConfig>
+  modelCatalog: ModelCatalog
+  promptExtensions: PromptExtensions
+  promptVars: (ctx: PromptVarsCtx) => PromptVars | Promise<PromptVars>
+  onLockChange?: (sessionId: string, locked: boolean) => void
+  /** 传给 Harness.open 的那份 settings（`effectiveSettings` 原样交出） */
+  settings: HarnessSettings
 }
 
 interface LiveTask {
@@ -354,12 +383,29 @@ export class DurableSessionImpl implements DurableSession {
   private pendingNotices: PendingNotice[] = []
   private noticeTimer: ReturnType<typeof setTimeout> | undefined
   private unsubscribe: () => void = () => {}
+  private readonly agentLock: AgentLock
 
   private constructor(private readonly deps: DurableSessionDeps) {
     this.sessionId = deps.sessionId
     this.raw = deps.harness
     this.harness = observeResumes(deps.harness, () => this.markResumed())
     this.inputs = new PendingInputRequests(deps.sessionId, deps.eventSink)
+    this.agentLock = new AgentLock({
+      sessionId: deps.sessionId,
+      harness: deps.harness,
+      registry: deps.registry,
+      toolHost: deps.toolHost,
+      resolveAgentConfig: deps.resolveAgentConfig,
+      modelCatalog: deps.modelCatalog,
+      promptExtensions: deps.promptExtensions,
+      promptVars: deps.promptVars,
+      eventSink: deps.eventSink,
+      ...(deps.onLockChange === undefined ? {} : { onLockChange: deps.onLockChange }),
+      logger: deps.logger,
+      now: deps.now,
+      currentConversation: () => this.currentConversation(),
+      stopForDestroy: () => this.stopForDestroy()
+    })
   }
 
   /** 接管一个刚打开的 Harness：订阅提交、装载活着的任务、解析当前对话 */
@@ -389,7 +435,11 @@ export class DurableSessionImpl implements DurableSession {
       }
     }, BG)
     await this.currentConversation()
-    this.recompute()
+    // 在任何续跑 / 发送之前按锁重建工具（打开从不续跑，所以在这里重建是安全的），再对一次镜像（K11）
+    await this.agentLock.restore()
+    // 初始状态静默设定：宿主在打开完成时统一报一次（PIN-R），这里再排一次通知就会报两遍
+    this.state = this.computeState()
+    this.agentLock.reconcileMirror()
   }
 
   // ─── 运行状态 ───────────────────────────────────
@@ -472,6 +522,8 @@ export class DurableSessionImpl implements DurableSession {
         change.record.kind === SessionStateDoc.definition.kind &&
         change.value !== null
       ) {
+        // 锁缓存：谁写了 SessionStateDoc.lock 都跟着变（同步，读取永远是真值）
+        this.agentLock.observe((change.value as SessionState).lock)
         const pointer = (change.value as SessionState).currentConversation ?? ROOT_CONVERSATION_ID
         if (pointer !== this.current) {
           this.current = pointer
@@ -511,6 +563,9 @@ export class DurableSessionImpl implements DurableSession {
       return await this.op(async () => {
         // 用户又开口了 —— 上一次「显式喊停」的收敛到此为止；合并窗口里的通知随这一轮插话送达
         this.stoppedByUser = false
+        // 没锁先创建 agent（K3）；被拒 / 被取消就到此为止，什么都不写
+        const refused = await this.ensureAgent()
+        if (refused !== undefined) return refused
         const joining = this.takePendingNotices()
         let whenBusy = options.whenBusy ?? 'reject'
         if (this.isInterrupted()) whenBusy = await this.applyInterruptedPolicy(whenBusy)
@@ -564,6 +619,8 @@ export class DurableSessionImpl implements DurableSession {
   ): Promise<AdmitResult> {
     try {
       return await this.op(async () => {
+        const refused = await this.ensureAgent()
+        if (refused !== undefined) return refused
         let whenBusy: 'steer' | 'followUp' | 'reject' = mode
         if (this.isInterrupted()) whenBusy = await this.applyInterruptedPolicy(whenBusy)
         this.reopenInputs()
@@ -597,6 +654,8 @@ export class DurableSessionImpl implements DurableSession {
   async continue(): Promise<SubmitResult> {
     try {
       return await this.op(async () => {
+        const refused = await this.ensureAgent()
+        if (refused !== undefined) return refused
         this.reopenInputs()
         const conversation = await this.currentConversation()
         // 被中断的 run 还在：推迟的通知进收件箱，在它的下一个边界落下
@@ -726,6 +785,11 @@ export class DurableSessionImpl implements DurableSession {
     try {
       await this.op(async () => {
         if (this.isInterrupted() || !this.canAutoResume()) {
+          for (const notice of notices) await this.writeNotice(notice)
+          return
+        }
+        // 没锁先创建 agent（K3）；创建不成（被拒 / 被取消）就退回写通知，通知不丢
+        if ((await this.ensureAgent()) !== undefined) {
           for (const notice of notices) await this.writeNotice(notice)
           return
         }
@@ -871,6 +935,8 @@ export class DurableSessionImpl implements DurableSession {
     const pending = this.takePendingNotices()
     try {
       await this.op(async () => {
+        // 在途的创建一并取消（K13）：它什么都不写，等着它的发送当作被中止
+        await this.agentLock.cancelCreation()
         await this.abortConversation()
         // 推迟的通知被中断 / 残留输入挡着 —— 中止把它们清掉了，现在送达
         await this.flushDeferred(await this.currentConversation(), 'place')
@@ -896,6 +962,64 @@ export class DurableSessionImpl implements DurableSession {
     }
     this.inputs.cancelAll('aborted')
     await conversation.abort(BG)
+  }
+
+  // ─── 锁（P1-09） ─────────────────────────────────
+
+  get lock(): LockRecord | undefined {
+    return this.agentLock.current
+  }
+
+  get effectiveSettings(): HarnessSettings {
+    return this.deps.settings
+  }
+
+  async createAgent(options?: CreateAgentOptions): Promise<LockRecord> {
+    return this.op(() => this.agentLock.ensure(options))
+  }
+
+  async destroyAgent(): Promise<void> {
+    if (this.closedFlag) return
+    try {
+      await this.op(() => this.agentLock.destroy())
+    } catch (error) {
+      if (!(error instanceof SessionClosedError)) throw error
+    }
+  }
+
+  /**
+   * 起跑之前确保有 agent（K3）。成功 = undefined；被拒 → `{ error, code: 'no_model' }`；被取消（中止 /
+   * 销毁打断了创建，K13）→ `{}`；其余失败 → `{ error }`。关停照常向上抛（op 收成 closed）。
+   */
+  private async ensureAgent(): Promise<SubmitResult | undefined> {
+    try {
+      await this.agentLock.ensure()
+      return undefined
+    } catch (error) {
+      if (this.closedFlag || isClosedError(error)) throw error
+      if (error instanceof AgentCreationError) {
+        if (error.code === 'cancelled') return {}
+        if (error.code === 'no_model') return { error: error.message, code: 'no_model' }
+        return { error: error.message }
+      }
+      this.deps.logger.warn(`agent creation failed session=${this.sessionId}: ${errorText(error)}`)
+      return { error: errorText(error) }
+    }
+  }
+
+  /**
+   * 销毁之前让会话停下（K10）：显式喊停（到下一次 submitUser 之前不自动续跑）；忙 / 被中断就中止
+   * （与 abort 同一套：询问取消、审查作废），再送达被中断挡着的推迟通知；空闲不中止 —— 收件箱里
+   * 残留的输入、当前对话、推迟通知都原样留着。合并窗口里的通知改为写入。
+   */
+  private async stopForDestroy(): Promise<void> {
+    this.stoppedByUser = true
+    const pending = this.takePendingNotices()
+    if (this.isBusy() || this.isInterrupted()) {
+      await this.abortConversation()
+      await this.flushDeferred(await this.currentConversation(), 'place')
+    }
+    for (const notice of pending) await this.writeNotice(notice)
   }
 
   // ─── 配置 ───────────────────────────────────────
@@ -960,6 +1084,7 @@ export class DurableSessionImpl implements DurableSession {
       }
     }
     this.closedFlag = true
+    this.agentLock.dispose()
     this.unsubscribe()
     this.inputs.closeInputs('closed')
     this.inputs.cancelAll('closed')

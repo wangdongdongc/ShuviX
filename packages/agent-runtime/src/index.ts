@@ -43,6 +43,13 @@ export {
   type ModelRef
 } from './models/modelRegistry'
 export type { ProviderCredentialPort, ProviderRow, ProviderModelRow } from './models/port'
+export {
+  resolveLockModel,
+  type LockModel,
+  type LockModelRefusalKind,
+  type LockModelResolution,
+  type ModelSelection
+} from './models/lockModel'
 export { resolveInitialThinkingLevel } from './thinkingLevel'
 export { isAssistantMessage, isUserMessage, isToolResultMessage } from './messageGuards'
 // 工具结果的界面文字化（实时广播与重开会话同一份）
@@ -589,14 +596,39 @@ export {
   DEFAULT_INTERRUPTED_SEND_POLICY,
   DEFAULT_MAX_IDLE_OPEN,
   DEFAULT_NOTICE_COALESCE_MS,
+  type AgentConfig,
+  type AgentToolSet,
+  type AgentToolsRequest,
   type BotContextBlocks,
+  type BuiltinToolsRequest,
   type InterruptedSendPolicy,
+  type ModelCatalog,
   type PromptHost,
+  type ResolvedAgentTools,
   type RunState,
-  type SessionHostDeps
+  type SessionHostDeps,
+  type ToolHost
 } from './durable/seams'
+// 锁（P1-09）：「这条会话有 agent」—— 创建 / 销毁 / 重开时按锁重建工具
+export {
+  AGENT_EXTENSION_PREFIX,
+  AgentCreationError,
+  agentExtension,
+  agentExtensionName,
+  agentExtensionTools,
+  builtinExtension,
+  composeAgentTools,
+  lockRecordJson,
+  parseLockRecord,
+  SHUVIX_BUILTIN_EXTENSION,
+  type AgentCreationErrorCode,
+  type ComposedAgentTools,
+  type CreateAgentOptions,
+  type LockRecord
+} from './durable/lock'
 export {
   createShuviXSettings,
+  compactionKeepRecentTokens,
   compactionReserveTokens,
   SHUVIX_KEEP_RECENT_TOKENS,
   SHUVIX_MAX_RESERVE_TOKENS,
