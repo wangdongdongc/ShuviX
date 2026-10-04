@@ -59,7 +59,7 @@ vi.mock('../../services/mcpService', () => ({
   mcpService: {
     statusByName: () => 'disconnected',
     ensureServerByName: async () => ({ ok: true }),
-    getAgentToolsByServerName: () => []
+    getRegistrationsByServerName: () => []
   }
 }))
 vi.mock('../../services/skillTool', () => ({

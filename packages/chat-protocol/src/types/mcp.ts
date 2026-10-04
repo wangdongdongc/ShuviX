@@ -88,4 +88,4 @@ export interface McpToolInfo {
   isBuiltin?: boolean
 }
 
-// McpToolDetails（AgentToolResult.details）复用 types/chatMessage 中的定义，避免重复。
+// McpToolDetails（MCP 工具结果的 details）复用 types/chatMessage 中的定义，避免重复。

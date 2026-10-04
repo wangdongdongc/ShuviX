@@ -617,12 +617,12 @@ describe('McpStdioTransport × McpManager（真子进程）', () => {
     const calls = path.join(dir, 'calls-10b.txt')
     const { mgr, createTransport } = managerWith({ CALLS_FILE: calls })
     expect(await mgr.ensureServerByName('fx')).toEqual({ ok: true })
-    const tools = new Map(mgr.getAgentToolsByServerName('fx').map((t) => [t.name, t]))
+    const tools = new Map(mgr.getRegistrationsByServerName('fx').map((t) => [t.name, t]))
     const firstPid = createTransport.mock.results[0].value.pid
     expect(typeof firstPid).toBe('number')
     const signal = new AbortController().signal
 
-    // P1-04：失败收成 isError 结果（裁定 Q12），文字即原先抛出的消息
+    // 失败收成 isError 结果（裁定 Q12），文字即原先抛出的消息
     const crashed = await failureText(executeTool(tools.get('mcp__fx__crash')!, 'c1', {}, signal))
     expect(crashed.startsWith('[MCP Error] ')).toBe(true)
     expect(crashed.endsWith('\npanic: boom')).toBe(true)

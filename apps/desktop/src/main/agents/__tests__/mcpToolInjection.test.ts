@@ -3,10 +3,10 @@
  * 以及取的时候报上的调用方是谁。
  *
  * 两个 id 各有各的用处，不能互换：
- *  - **实例按根会话取**（`ensureServerByName` 的 sessionId、`getAgentToolsByServerName` 的第二参
+ *  - **实例按根会话取**（`ensureServerByName` 的 sessionId、`getRegistrationsByServerName` 的第二参
  *    都是 rootSessionId）：内置能力服务器按会话实例化，派生 agent 与根 agent 共用同一份
  *    （ssh 的 control socket、浏览器的 tab 都是会话级的）；
- *  - **调用方按这一个 agent 报**（`callerId` = selfSessionId）：一份实例由根 agent 与它派出的
+ *  - **调用方按这一个 agent 报**（`callerIdOf` 回 selfSessionId）：一份实例由根 agent 与它派出的
  *    agent 共用，实例里按调用方分开的状态（浏览器「距上次快照几次操作」、快照差异的基线）只能靠它。
  * 传反了不报错、工具照样能用 —— 只是派生 agent 会拿根 agent 的快照基线做差异，或者干脆连到一份
  * 以 agentId 为「会话」的孤儿实例上。所以钉在注入点这一层。
@@ -22,7 +22,7 @@ const mocks = vi.hoisted(() => ({
   host: { value: undefined as AgentHostAdapter | undefined },
   statusByName: vi.fn(),
   ensureServerByName: vi.fn(),
-  getAgentToolsByServerName: vi.fn(),
+  getRegistrationsByServerName: vi.fn(),
   broadcast: vi.fn()
 }))
 
@@ -41,7 +41,7 @@ vi.mock('../../services/mcpService', () => ({
   mcpService: {
     statusByName: mocks.statusByName,
     ensureServerByName: mocks.ensureServerByName,
-    getAgentToolsByServerName: mocks.getAgentToolsByServerName
+    getRegistrationsByServerName: mocks.getRegistrationsByServerName
   }
 }))
 
@@ -52,7 +52,7 @@ vi.mock('../../services/toolRegistry', () => ({
   getBuiltinToolEntries: () => [],
   getPlatformBuiltinToolEntries: () => []
 }))
-/** 包装器走恒等：工具表里的就是 getAgentToolsByServerName 返回的对象本身 */
+/** 包装器走恒等：工具表里的就是 getRegistrationsByServerName 返回的对象本身 */
 vi.mock('../../services/wrapToolOutput', () => ({
   wrapToolOutput: (tool: object) => tool,
   getOutputStrategy: () => 'middle'
@@ -85,6 +85,21 @@ import '../agentHost'
 /** 桩 server 交出来的那一个工具 —— 断言它原样出现在工具表里 */
 const SSH_TOOL = { name: 'mcp__ssh__exec' }
 
+/**
+ * 取工具的调用：(server, 实例所属会话, 调用方 id)。调用方 id 按每次调用所在的 durable 对话现问
+ * （`callerIdOf(conversationId)`）—— 这张工具表只属于一个 agent，所以哪条对话问都该是它，
+ * 这里拿根对话与一条子对话各问一次，两次必须相同。
+ */
+function registrationCalls(): Array<[string, string, string | undefined]> {
+  return mocks.getRegistrationsByServerName.mock.calls.map(([server, sessionId, opts]) => {
+    const callerIdOf = (opts as { callerIdOf?: (conversationId: number) => string | undefined })
+      ?.callerIdOf
+    const root = callerIdOf?.(1)
+    expect(callerIdOf?.(7)).toBe(root)
+    return [server as string, sessionId as string, root]
+  })
+}
+
 const resolveTools = async (over: Partial<ToolResolveRequest>): Promise<unknown[]> => {
   const host = mocks.host.value
   expect(host, 'agentHost 应把适配面交给 createAgentFactory').toBeDefined()
@@ -107,8 +122,8 @@ beforeEach(() => {
   mocks.statusByName.mockReturnValue('disconnected')
   mocks.ensureServerByName.mockReset()
   mocks.ensureServerByName.mockResolvedValue({ ok: true })
-  mocks.getAgentToolsByServerName.mockReset()
-  mocks.getAgentToolsByServerName.mockReturnValue([SSH_TOOL])
+  mocks.getRegistrationsByServerName.mockReset()
+  mocks.getRegistrationsByServerName.mockReturnValue([SSH_TOOL])
   mocks.broadcast.mockReset()
 })
 
@@ -126,9 +141,7 @@ describe('MTI mcp:<server> 的实例与调用方', () => {
       ['ssh', { timeoutMs: LAZY_CONNECT_TIMEOUT_MS, sessionId: 'sess-1' }]
     ])
     // 取工具：实例仍按根会话找，调用方按这一个 agent 报
-    expect(mocks.getAgentToolsByServerName.mock.calls).toStrictEqual([
-      ['ssh', 'sess-1', { callerId: 'agent-7' }]
-    ])
+    expect(registrationCalls()).toStrictEqual([['ssh', 'sess-1', 'agent-7']])
     expect(tools).toContain(SSH_TOOL)
   })
 
@@ -143,9 +156,7 @@ describe('MTI mcp:<server> 的实例与调用方', () => {
     expect(mocks.ensureServerByName.mock.calls).toStrictEqual([
       ['ssh', { timeoutMs: LAZY_CONNECT_TIMEOUT_MS, sessionId: 'sess-1' }]
     ])
-    expect(mocks.getAgentToolsByServerName.mock.calls).toStrictEqual([
-      ['ssh', 'sess-1', { callerId: 'sess-1' }]
-    ])
+    expect(registrationCalls()).toStrictEqual([['ssh', 'sess-1', 'sess-1']])
     expect(tools).toContain(SSH_TOOL)
   })
 })

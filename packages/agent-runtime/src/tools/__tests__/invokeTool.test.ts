@@ -3,7 +3,7 @@
  *
  * 契约（文件头）：假 api 带调用身份与给定 signal 的 chord context；记下 output() / diagnostic() /
  * details()；结果按 durable 结算口径补齐（缺 content 用 output 文本、缺 details 用最后一次 details()、
- * api 记下的诊断排在结果自带的之前）；旧形状工具经 fromAgentTool 走同一条路（抛错按 Q12 收口）；
+ * api 记下的诊断排在结果自带的之前）；只收显式声明了 replay 的 durable 注册项（旧形状在调用前就拒收）；
  * 兑现不了的 api 成员一调就抛；调用结束后 api 失效。
  *
  *   IT-1 缺省身份：callId 自动生成且每次不同，taskId 1，conversationId 根对话，context 不带 signal
@@ -13,15 +13,17 @@
  *   IT-5 工具抛错（durable 形状 —— 不经 BaseTool 的裸注册项）→ invokeTool 原样 reject
  *   IT-6 调用结算之后再碰 api → 抛
  *   IT-7 兑现不了的成员一调就抛并指路 options.api；options.api 可以补上 / 替换；memo 先到者胜
- *   IT-8 旧形状工具：按旧约定调 execute(callId, args, signal)，terminate → control，抛错 → isError
+ *   IT-8 旧形状工具（没有 replay，`execute(toolCallId, params, signal)`）：类型上不收；运行时在调用
+ *        execute 之前以 TypeError 拒收（P1-05 删掉了 fromAgentTool 桥）
  *   IT-9 守卫：产品代码不 import 这个辅助
  */
 import { describe, expect, it, vi } from 'vitest'
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join, relative, resolve } from 'node:path'
 import { ROOT_CONVERSATION_ID, type ToolExecutionApi } from '@earendil-works/pi-durable'
-import type { AnyTool, AgentTool } from '../toolResult'
-import { executeTool, failureText, invokeTool, resultText } from '../testing/invokeTool'
+import type { TSchema } from 'typebox'
+import type { AnyTool, ToolContent } from '../toolResult'
+import { executeTool, invokeTool, resultText } from '../testing/invokeTool'
 
 /** 一个裸的 durable 注册项（不经 BaseTool）：execute 由用例给 */
 function rawTool(execute: AnyTool['execute']): AnyTool {
@@ -196,52 +198,63 @@ describe('IT 假 api 的边界', () => {
   })
 })
 
-describe('IT 旧形状工具（P1-05 之前的 ask / git / MCP）', () => {
-  function legacy(execute: AgentTool['execute']): AgentTool {
+/** pi 0.80 的旧形状（P1-05 之前 ask / git / MCP 的样子）：没有 replay，execute 按 (toolCallId, params, signal) */
+interface LegacyShapedTool {
+  name: string
+  label: string
+  description: string
+  parameters: TSchema
+  execute(
+    toolCallId: string,
+    params: unknown,
+    signal?: AbortSignal
+  ): Promise<{ content: ToolContent[]; details: unknown; terminate?: boolean }>
+}
+
+describe('IT 旧形状工具不再被收', () => {
+  function legacy(execute: LegacyShapedTool['execute']): LegacyShapedTool {
     return {
       name: 'legacy',
       label: 'Legacy',
       description: 'legacy tool',
-      parameters: {},
+      parameters: {} as TSchema,
       execute
-    } as AgentTool
+    }
   }
 
-  it('IT-8 按旧约定调 execute(callId, args, signal)；terminate → control.terminate、addedToolNames → control.addTools', async () => {
-    const execute = vi.fn(async () => ({
-      content: [{ type: 'text' as const, text: 'old' }],
-      details: { kind: 'old', missing: undefined },
-      terminate: true,
-      addedToolNames: ['extra']
-    }))
-    const ac = new AbortController()
-    const { result } = await invokeTool(
-      legacy(execute),
-      { q: 1 },
-      { callId: 'lc-1', signal: ac.signal }
-    )
-
-    expect(execute).toHaveBeenCalledWith('lc-1', { q: 1 }, ac.signal)
-    expect(result).toStrictEqual({
-      content: [{ type: 'text', text: 'old' }],
-      details: { kind: 'old' },
-      control: { terminate: true, addTools: ['extra'] }
-    })
+  it('IT-8 类型上：旧形状不是 durable 注册项（execute 的第三个参数是 signal，不是 context）', () => {
+    const tool = legacy(async () => ({ content: [], details: undefined }))
+    // @ts-expect-error —— 旧形状交不进来：P1-05 删掉了 fromAgentTool 桥
+    const work = (): unknown => invokeTool(tool, {})
+    expect(typeof work).toBe('function')
   })
 
-  it('IT-8 旧形状工具抛错 → isError + 原话（Q12）；取消时照旧抛', async () => {
-    const failing = legacy(async () => {
-      throw new Error('[MCP Error] boom')
-    })
-    expect(await failureText(executeTool(failing, 'lc-2', {}))).toBe('[MCP Error] boom')
+  it('IT-8 运行时：没声明 replay → 调用 execute 之前就以 TypeError 拒收，并说明原因', async () => {
+    const execute = vi.fn(async () => ({ content: [], details: undefined }))
+    const tool = legacy(execute) as unknown as AnyTool
 
-    const ac = new AbortController()
-    const err = new Error('Aborted')
-    const cancelled = legacy(async () => {
-      ac.abort()
-      throw err
-    })
-    await expect(executeTool(cancelled, 'lc-3', {}, ac.signal)).rejects.toBe(err)
+    await expect(invokeTool(tool, {})).rejects.toThrow(TypeError)
+    await expect(executeTool(tool, 'lc-1', {})).rejects.toThrow(
+      /tool "legacy" declares no replay policy.*legacy execute\(toolCallId, params, signal\) shape is gone/
+    )
+    expect(execute).not.toHaveBeenCalled()
+  })
+
+  it('IT-8 replay 不是 safe / unsafe 也拒收（durable 只认这两个值）', async () => {
+    const execute = vi.fn(async () => ({ content: [] }))
+    const tool = { ...rawTool(execute), replay: 'sometimes' } as unknown as AnyTool
+    await expect(invokeTool(tool, {})).rejects.toThrow(/declares no replay policy/)
+    expect(execute).not.toHaveBeenCalled()
+  })
+
+  it('IT-8 声明了 replay 的裸注册项照常调（safe 与 unsafe 都收）', async () => {
+    for (const replay of ['safe', 'unsafe'] as const) {
+      const tool = {
+        ...rawTool(async () => ({ content: [{ type: 'text', text: replay }] })),
+        replay
+      }
+      expect(resultText((await invokeTool(tool as AnyTool, {})).result)).toBe(replay)
+    }
   })
 })
 
@@ -276,6 +289,17 @@ describe('IT-9 守卫', () => {
       .filter((path) =>
         /tools\/testing\/invokeTool|testing\/invokeTool['"]/.test(readFileSync(path, 'utf8'))
       )
+      .map((path) => relative(REPO_ROOT, path))
+    expect(offenders).toEqual([])
+  })
+
+  it('旧形状桥已删干净：仓库里（本文件之外）没有一处再提 fromAgentTool / asToolRegistration 等名字', () => {
+    const removed =
+      /\b(fromAgentTool|fromAgentToolResult|asToolRegistration|isLegacyAgentTool|AnyLegacyAgentTool|AgentToolResult|AgentToolUpdateCallback|McpAgentToolMeta|getAgentToolsByServerName|serverToAgentTools|mcpContentToAgentContent)\b/
+    const self = resolve(__filename)
+    const offenders = SCANNED.flatMap((dir) => sourceFiles(dir))
+      .filter((path) => resolve(path) !== self)
+      .filter((path) => removed.test(readFileSync(path, 'utf8')))
       .map((path) => relative(REPO_ROOT, path))
     expect(offenders).toEqual([])
   })

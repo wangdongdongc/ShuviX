@@ -5,14 +5,15 @@
  * processToolOutput 短文本直通（但把每次调用的 opts 记下来）；security 用手写 stub，
  * W-9 走真 createSecurityContext。
  *
- * P1-04（pi-durable）：包装产物是 durable 注册项，经 invokeTool 调（`execute(args, api, context)`）；
- * 手写的假工具多数仍是旧形状（`execute(toolCallId, params, signal)`，如 MCP 桥接层），包装器经
- * `fromAgentTool` 收下它们 —— 所以下面对原 execute 入参的断言仍按旧约定写。门拒绝从「抛错」变成
- * isError 结果（裁定 Q12，文字不变）。
+ * pi-durable：包装器收的、交出的都是 durable 注册项（`execute(args, api, context)`），经 invokeTool 调；
+ * 手写的假工具也是 durable 形状（P1-05 删掉了旧形状桥）。门拒绝从「抛错」变成 isError 结果
+ * （裁定 Q12，文字不变）。
  */
 import { describe, it, expect, afterEach, vi } from 'vitest'
-import type { AgentTool, AnyTool } from '@shuvix/agent-runtime'
-import type { EnforceOutcome, McpAgentToolMeta, SecurityContext } from '@shuvix/agent-runtime'
+import type { Context } from '@earendil-works/chord'
+import type { ToolExecutionApi } from '@earendil-works/pi-durable'
+import type { AnyTool } from '@shuvix/agent-runtime'
+import type { EnforceOutcome, McpToolMeta, SecurityContext } from '@shuvix/agent-runtime'
 import {
   executeTool,
   failureText,
@@ -61,18 +62,22 @@ import { wrapToolOutput } from '../wrapToolOutput'
 
 const SID = 'wrap-tool-output-test-session'
 
-/** 最小 AgentTool（execute 为可编程 vi.fn，返回单文本块 'ran'） */
-function makeTool(name = 'ssh'): { tool: AgentTool; execute: ReturnType<typeof vi.fn> } {
-  const execute = vi.fn(async () => ({
-    content: [{ type: 'text' as const, text: 'ran' }],
-    details: undefined
-  }))
-  const tool = { name, label: name, description: 'test tool', parameters: {}, execute }
-  return { tool: tool as unknown as AgentTool, execute }
+/** 最小 durable 工具（execute 为可编程 vi.fn，返回单文本块 'ran'） */
+function makeTool(name = 'ssh'): { tool: AnyTool; execute: ReturnType<typeof vi.fn> } {
+  const execute = vi.fn(async () => ({ content: [{ type: 'text' as const, text: 'ran' }] }))
+  const tool = {
+    name,
+    label: name,
+    description: 'test tool',
+    parameters: {},
+    replay: 'unsafe' as const,
+    execute
+  }
+  return { tool: tool as unknown as AnyTool, execute }
 }
 
 /** 事实的类型走生产那条缝自己的声明，免得测试跟着它的导出面漂 */
-type McpFacts = McpAgentToolMeta['mcpMeta']
+type McpFacts = McpToolMeta['mcpMeta']
 
 /** 一份 MCP 工具事实（内置 ssh 的 exec，四个 hint 齐全） */
 const SSH_EXEC_META: McpFacts = {
@@ -85,9 +90,9 @@ const SSH_EXEC_META: McpFacts = {
   openWorld: true
 }
 
-/** 带 mcpMeta 的工具（桥接层产出的那种形态） */
+/** 带 mcpMeta 的工具（McpManager 的注册项就是这种形态） */
 function makeMcpTool(meta: McpFacts = SSH_EXEC_META): {
-  tool: AgentTool & { mcpMeta: McpFacts }
+  tool: AnyTool & { mcpMeta: McpFacts }
   execute: ReturnType<typeof vi.fn>
 } {
   const { tool, execute } = makeTool('mcp__ssh__exec')
@@ -163,11 +168,11 @@ describe('wrapToolOutput — L1 全工具门', () => {
     // toBe：询问点的审查随这次工具调用一起中止 —— 包装器若另造一个 signal（或丢掉它），
     // 用户点停止时审查就只能跑到超时
     expect((enforceInvocation.mock.calls[0][0] as { signal?: AbortSignal }).signal).toBe(ac.signal)
-    // 放行之后，原 execute 拿到的仍是同一个
-    expect(execute.mock.calls[0][2]).toBe(ac.signal)
+    // 放行之后，原 execute 拿到的 context 带的仍是同一个
+    expect((execute.mock.calls[0][2] as Context).abortSignal).toBe(ac.signal)
   })
 
-  it('W-3 时序：enforceInvocation pending 期间原 execute 未调；allowed 后原参数透传（旧形状桥：恰三个入参）', async () => {
+  it('W-3 时序：enforceInvocation pending 期间原 execute 未调；allowed 后原参数透传（durable 签名：args / api / context）', async () => {
     const { tool, execute } = makeTool()
     let release!: (o: EnforceOutcome) => void
     const { security } = makeSecurity(
@@ -183,8 +188,12 @@ describe('wrapToolOutput — L1 全工具门', () => {
 
     release({ status: 'allowed' })
     const result = await pending
-    // durable 没有 onUpdate（中途汇报走 api.output / api.details）—— 旧形状桥只按旧约定交三个入参
-    expect(execute).toHaveBeenCalledWith('tc-3', params, signal)
+    // 原样交给原 execute：同一份 args、同一次调用的 api 与 context（中途汇报走 api.output / api.details）
+    expect(execute).toHaveBeenCalledTimes(1)
+    const [args, api, context] = execute.mock.calls[0] as [unknown, ToolExecutionApi, Context]
+    expect(args).toBe(params)
+    expect(api.callId).toBe('tc-3')
+    expect(context.abortSignal).toBe(signal)
     expect(result.content).toEqual([{ type: 'text', text: 'ran' }])
   })
 
@@ -270,9 +279,9 @@ describe('wrapToolOutput — L1 全工具门', () => {
 
   it('W-11 原型链上的 mcpMeta 也读得到 —— 包装器自己就是一层 Object.create', async () => {
     const { tool } = makeMcpTool()
-    // 桥接层的工具可能已经被包过一层（子代理工具表就是这么装的），于是 mcpMeta
+    // MCP 注册项可能已经被包过一层（子代理工具表就是这么装的），于是 mcpMeta
     // 不在自身属性上；`{...tool}` 式的读法在这里会读到 undefined
-    const layered = Object.create(Object.create(tool)) as AgentTool
+    const layered = Object.create(Object.create(tool)) as AnyTool
     const { security, enforceInvocation } = makeSecurity()
     const wrapped = wrapToolOutput(layered, SID, 'middle', undefined, security)
 
@@ -388,17 +397,23 @@ describe('wrapToolOutput — L1 全工具门', () => {
 const IMAGE_BLOCK = { type: 'image' as const, data: 'AAAABBBBCCCC', mimeType: 'image/png' }
 
 /** 一次调用回「文本 + 图片 + 文本」—— 图片块不该进后处理 */
-function makeMultiBlockTool(): { tool: AgentTool; execute: ReturnType<typeof vi.fn> } {
+function makeMultiBlockTool(): { tool: AnyTool; execute: ReturnType<typeof vi.fn> } {
   const execute = vi.fn(async () => ({
     content: [
       { type: 'text' as const, text: 'first block' },
       IMAGE_BLOCK,
       { type: 'text' as const, text: 'second block' }
-    ],
-    details: undefined
+    ]
   }))
-  const tool = { name: 'shot', label: 'shot', description: 'test tool', parameters: {}, execute }
-  return { tool: tool as unknown as AgentTool, execute }
+  const tool = {
+    name: 'shot',
+    label: 'shot',
+    description: 'test tool',
+    parameters: {},
+    replay: 'unsafe' as const,
+    execute
+  }
+  return { tool: tool as unknown as AnyTool, execute }
 }
 
 describe('wrapToolOutput — 截断 / 落盘参数的穿线', () => {
@@ -461,7 +476,7 @@ describe('wrapToolOutput — 截断 / 落盘参数的穿线', () => {
 // 结果契约的 `next` 靠 `control: { terminate: true }` 让 durable 在「这一批只有 next」时直接结束循环
 // （判定型 hook 的审查 agent 因此一次请求出结论）；它在派生 agent 的工具表里同样过这层包装。包装器用
 // 展开重建结果，这里钉的是每条出口都把它原样带出去 —— 丢了它不会报错，只会让每次审查悄悄多花一次请求。
-// 假工具是 durable 形状（next 是 BaseTool）；旧形状结果上的 `terminate` 由桥换成 control（见 W-T3）。
+// 假工具是 durable 形状（next 是 BaseTool）。
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** execute 交回给定 content、并带 control.terminate 的 durable 形状工具 */
@@ -532,19 +547,5 @@ describe('wrapToolOutput — control.terminate 原样带出', () => {
       expect('terminate' in (result as object)).toBe(false)
       expect('control' in (result as object)).toBe(false)
     }
-  })
-
-  it('W-T3 旧形状工具结果上的 terminate:true → 桥换成 control.terminate，包装后照样带出', async () => {
-    const execute = vi.fn(async () => ({
-      content: [{ type: 'text' as const, text: 'done' }],
-      details: undefined,
-      terminate: true
-    }))
-    const legacy = { name: 'old', label: 'old', description: 'test tool', parameters: {}, execute }
-    const wrapped = wrapToolOutput(legacy as unknown as AgentTool, SID, 'middle')
-
-    const result = await exec(wrapped, 'tc-t3', {})
-    expect(terminateOf(result)).toBe(true)
-    expect('terminate' in (result as object)).toBe(false)
   })
 })

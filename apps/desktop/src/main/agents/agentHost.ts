@@ -103,8 +103,7 @@ async function resolveDesktopTools(req: ToolResolveRequest): Promise<AnyAgentToo
   // 超长输出落盘后给的是「用 read 取全文」——没有 read 的 agent（如 Chrome 标签页会话的 `tab`）
   // 取不回来，就只在内存里截断：它至少拿到截断上限那么多，而不是一段指向它没有的工具的预览
   const spill = req.names.includes('read')
-  // 工具表里混着 durable 注册项（BaseTool 子类）与旧形状工具（ask / git / MCP，P1-05 之前）——
-  // 包装器两种都收，交出来的一律是 durable 注册项
+  // 工具表里全是 durable 注册项（BaseTool 子类与 ask / git / MCP 这些函数式注册项）
   const wrap = (tool: object): AnyAgentTool =>
     wrapToolOutput(
       tool as WrappableTool,
@@ -205,9 +204,12 @@ async function resolveDesktopTools(req: ToolResolveRequest): Promise<AnyAgentToo
       continue
     }
     // 实例按根会话取（派生 agent 与根 agent 共用一份），调用方身份按**这一个** agent 带：
-    // 内置 server 要靠它把「谁看过哪份快照」之类的状态分开
-    for (const mcpTool of mcpService.getAgentToolsByServerName(server, req.rootSessionId, {
-      callerId: req.selfSessionId
+    // 内置 server 要靠它把「谁看过哪份快照」之类的状态分开。
+    // TODO(pi-durable p1): P1-11 按调用所在的对话（api.conversationId）映射到 agent；
+    // 眼下这张工具表只属于一个 agent，所以不论哪条对话都是它
+    const callerId = req.selfSessionId
+    for (const mcpTool of mcpService.getRegistrationsByServerName(server, req.rootSessionId, {
+      callerIdOf: () => callerId
     })) {
       tools.push(wrap(mcpTool))
     }

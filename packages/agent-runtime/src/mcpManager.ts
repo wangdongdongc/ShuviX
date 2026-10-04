@@ -1,8 +1,8 @@
 /**
  * McpManager —— 宿主无关的 MCP 客户端核心。
  *
- * 承载：连接/断开、工具发现、callTool、MCP 工具 → AgentTool（tools/toolResult 的过渡形状）转换、状态跟踪、
- * 内置 server 的 {{ENV}} 模板替换。「存储」和「transport 创建」经构造参数注入：
+ * 承载：连接/断开、工具发现、callTool、MCP 工具 → pi-durable 注册项（`ToolRegistration`）转换、
+ * 状态跟踪、内置 server 的 {{ENV}} 模板替换。「存储」和「transport 创建」经构造参数注入：
  *  - store：server 配置读取 + cachedTools 持久化（桌面 mcpDao）
  *  - createTransport：按 server.type 造 transport（桌面 stdio + http + inproc）
  *
@@ -16,13 +16,20 @@
  * 销毁它为止 —— 所以一台 server 中途掉线（stdio 进程退出、HTTP 会话过期），工具闭包在下一次调用时
  * 原地重连一次，而不是一直报「没连上」直到有人重建 Agent。见 callTool。
  *
+ * **注册项两种来源**：活连接上的工具（`getRegistrationsByServerName`），或一份工具声明快照
+ * （`declarationsOf` → `registrationsFromDeclarations`）。后者给锁定的 agent 用：会话重开时按锁记录
+ * 重建工具表，用不着先把服务器连起来 —— 第一次调用时经同一条「用到才连」的路原地连上。
+ *
  * stdio transport 依赖 Node child_process，其 import 留在桌面宿主的 createTransport 里。
  */
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPError } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 import { Type, type TSchema } from 'typebox'
-import type { AgentTool, AgentToolResult } from './tools/toolResult'
+import type { ConversationId, ToolRegistration } from '@earendil-works/pi-durable'
+import { catchToolErrors, toExecutionResult, toolErrorResult } from './tools/toolResult'
+import type { ToolContent, ToolResult } from './tools/toolResult'
+import { backstopOutputLimits } from './tools/outputLimits'
 import type { McpServer, McpServerStatus, McpToolInfo } from '@shuvix/chat-protocol/types/mcp'
 import type { McpToolDetails } from '@shuvix/chat-protocol/types/chatMessage'
 import type { BuiltinMcpScope } from './builtinMcpRegistry'
@@ -110,15 +117,52 @@ export interface McpCallMeta {
    * 拿到它没有任何用处，也就不必知道 ShuviX 内部的 id。
    */
   callerId?: string
+  /**
+   * 跑这次调用的 durable tool task（会话内唯一；provider 的 toolCallId 可能重复）。
+   * 同样只给可信 server —— 内置服务器的询问 / 审查归属按 (会话, taskId) 认人（裁定 Q16）。
+   */
+  taskId?: number
 }
 
 /**
- * 挂在 MCP AgentTool 上的元数据，供宿主的 L1 安全门构造客体。
+ * 挂在 MCP 注册项上的元数据，供宿主的 L1 安全门构造客体。
  * 用普通属性而不是 Symbol：`wrapToolOutput` 以 `Object.create(tool)` 包装，原型链取得到。
  */
-export interface McpAgentToolMeta {
+export interface McpToolMeta {
   mcpMeta: McpInvocationFacts
 }
+
+/**
+ * 一个 MCP 工具的声明 —— 建注册项所需的全部数据，而且是纯 JSON：锁定 agent 时把它存进锁记录，
+ * 会话重开时据此重建工具表（`registrationsFromDeclarations`），不必先连上服务器。
+ */
+export interface McpToolDeclaration {
+  /** server 那边的工具名（不带 `mcp__<server>__` 前缀） */
+  name: string
+  description?: string
+  inputSchema: McpDiscoveredTool['inputSchema']
+  /** server 自述的行为提示，原样记下；可不可信看 `trusted`（不可信的不会进安全客体） */
+  annotations?: McpDiscoveredTool['annotations']
+  /** 声明时那条连接可不可信（见 McpConnection.trusted） */
+  trusted: boolean
+}
+
+/** 建 MCP 注册项时宿主给的东西 */
+export interface McpRegistrationOptions {
+  /**
+   * 这次调用来自哪个 agent：durable 对话 → 调用方 id（root = 会话 id，派生 = agent id）。
+   * 每次调用按 `api.conversationId` 现问，经 `_meta['shuvix.dev/agentId']` 只带给可信 server
+   * （见 McpCallMeta.callerId）。缺省或回 undefined = 不带。
+   */
+  callerIdOf?: (conversationId: ConversationId) => string | undefined
+}
+
+/** MCP 工具的 durable 注册项：工具名 `mcp__<server>__<tool>`，带安全门要的 mcpMeta */
+export type McpToolRegistration = ToolRegistration<TSchema> &
+  McpToolMeta & {
+    readonly label: string
+    readonly replay: 'unsafe'
+  }
 
 /**
  * 连接键 —— 全局服务器（stdio/http）就是 serverId；`inproc` 内置能力服务器按会话分身，
@@ -192,6 +236,16 @@ const errorText = (err: unknown): string => (err instanceof Error ? err.message 
 
 const noopLog = { info: () => {}, warn: () => {}, error: () => {} }
 
+/**
+ * 按 `JSON.stringify` 的口径深拷贝（对象属性上的 undefined 丢掉）。工具声明要存进锁记录、又要与
+ * 活连接 / 调用方手里的那份互不牵连。不用 chord 的严格 copyJson：进程内的内置 server 经
+ * InMemoryTransport 交来的是 JS 对象而不是解析过的 JSON，一处不严格（数组里的 undefined）
+ * 不该让整台服务器的工具都装不上。
+ */
+function jsonCopy<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T
+}
+
 /** JSON Schema → TypeBox（Type.Unsafe 原样透传给 LLM） */
 function jsonSchemaToTypebox(schema: McpDiscoveredTool['inputSchema']): TSchema {
   return Type.Unsafe<Record<string, unknown>>(schema as Record<string, unknown>)
@@ -235,8 +289,6 @@ function base64Bytes(b64: string): number {
   return Math.max(0, Math.floor((b64.length * 3) / 4) - padding)
 }
 
-type AgentContentBlock = AgentToolResult<unknown>['content'][number]
-
 /**
  * MCP 的结果 content → pi 的 content。
  *
@@ -247,8 +299,8 @@ type AgentContentBlock = AgentToolResult<unknown>['content'][number]
  *  - 内嵌 `resource`：文本资源给正文，二进制只报大小
  *  - `audio`：pi 没有音频块，说明它被略过了（base64 不进模型上下文）
  */
-export function mcpContentToAgentContent(content: unknown[]): AgentContentBlock[] {
-  const out: AgentContentBlock[] = []
+export function mcpContentToToolContent(content: unknown[]): ToolContent[] {
+  const out: ToolContent[] = []
   let pending: string[] = []
   const flush = (): void => {
     if (pending.length === 0) return
@@ -315,7 +367,7 @@ export function mcpContentToAgentContent(content: unknown[]): AgentContentBlock[
 }
 
 /** 只要文本（错误路径：`[MCP Error]` 前缀后面只接文字，图片没有意义） */
-function textOf(blocks: AgentContentBlock[]): string {
+function textOf(blocks: ToolContent[]): string {
   return blocks.map((b) => (b.type === 'text' ? b.text : `[image: ${b.mimeType}]`)).join('\n')
 }
 
@@ -824,9 +876,10 @@ export class McpManager {
     signal: AbortSignal | undefined,
     meta: McpCallMeta | undefined
   ): Promise<{ content: unknown[]; isError?: boolean }> {
-    const _meta: Record<string, string> = {}
+    const _meta: Record<string, string | number> = {}
     if (meta?.toolCallId) _meta['shuvix.dev/toolCallId'] = meta.toolCallId
     if (meta?.callerId && conn.trusted) _meta['shuvix.dev/agentId'] = meta.callerId
+    if (meta?.taskId !== undefined && conn.trusted) _meta['shuvix.dev/taskId'] = meta.taskId
     conn.inflight++
     try {
       // SDK 默认 60s 太短；抬到 5 分钟 + progress 刷新计时 + 10 分钟总上限
@@ -900,84 +953,131 @@ export class McpManager {
     if (conn.inflight === 0) void this.closeConnection(conn, conn.serverName)
   }
 
-  // ─── 桥接层：MCP → AgentTool ───
+  // ─── 注册项：MCP → durable ToolRegistration ───
 
-  private mcpToolToAgentTool(
-    connKey: string,
+  /**
+   * 一个 MCP 工具 → durable 注册项。
+   *
+   * `route` 每次调用现给连接键（undefined = 这台服务器已经不在配置里了）：活连接上建的注册项
+   * 钉死那条连接的键（服务器被删掉后报错里还叫得出名字），按声明快照建的每次按名现找。
+   * 两者都经 callToolOn 调 —— 掉线了原地重连一次，见 usableConnection。
+   *
+   * - **`replay: 'unsafe'`**：MCP 工具有副作用、server 可能已经执行了，中断的调用不重跑。
+   * - **失败交回 `isError` 结果，不抛**（裁定 Q12）：server 自己报的 isError（被拒的询问、找不到的
+   *   文件……）与协议层的失败（连不上、进程退出、超时）都给 `[MCP Error] …` —— 与旧版抛出的那段文字
+   *   相同，界面照样标红、不并进已完成的步骤组。远端命令非零退出之类的「正常结果」不在其中。
+   * - **取消照旧抛**（context 已 abort）：durable 的中止语义靠这一抛。
+   * - `_meta` 带 toolCallId（= `api.callId`）；调用方 id（`callerIdOf(api.conversationId)`）与
+   *   durable taskId 只带给可信 server（见 sendToolCall）。
+   */
+  private mcpToolToRegistration(
+    route: () => string | undefined,
     serverName: string,
-    mcpTool: McpDiscoveredTool,
-    trusted: boolean,
-    callerId?: string
-  ): AgentTool<TSchema, McpToolDetails> & McpAgentToolMeta {
-    const a = mcpTool.annotations
+    decl: McpToolDeclaration,
+    opts: McpRegistrationOptions | undefined
+  ): McpToolRegistration {
+    const a = decl.annotations
+    const trusted = decl.trusted
+    const toolName = `mcp__${serverName}__${decl.name}`
     return {
       // 不可信 server 的 annotations **一条都不落**：策略于是只能写成 fail-safe 的
       // `has(object.mcpServer) && !(object.mcpTrusted && object.readOnly)`，
       // 而不会把第三方的自述当成保证
       mcpMeta: {
         server: serverName,
-        tool: mcpTool.name,
+        tool: decl.name,
         trusted,
         readOnly: trusted ? a?.readOnlyHint : undefined,
         destructive: trusted ? a?.destructiveHint : undefined,
         idempotent: trusted ? a?.idempotentHint : undefined,
         openWorld: trusted ? a?.openWorldHint : undefined
       },
-      name: `mcp__${serverName}__${mcpTool.name}`,
-      label: mcpTool.description || mcpTool.name,
-      description: mcpTool.description ?? '',
-      parameters: jsonSchemaToTypebox(mcpTool.inputSchema),
-      /**
-       * 失败一律**抛出**，而不是回一个带错误文字的结果：pi 只把抛出的调用记成失败（isError），
-       * 界面据此标红、不把它并进已完成的步骤组，重开会话也一样。模型看到的文字不变 ——
-       * pi 把抛出的消息原样作为这次调用的结果内容。这包括 server 自己报的 isError（被拒的询问、
-       * 找不到的文件……）与协议层的失败；远端命令非零退出之类的「正常结果」不在其中。
-       */
-      execute: async (toolCallId, params, signal): Promise<AgentToolResult<McpToolDetails>> => {
-        let result: Awaited<ReturnType<McpManager['callTool']>>
-        try {
-          result = await this.callToolOn(
-            { key: connKey, name: serverName },
-            mcpTool.name,
-            params as Record<string, unknown>,
-            signal,
-            { toolCallId, callerId }
-          )
-        } catch (err: unknown) {
-          // 中止时 SDK 抛的是 McpError(RequestTimeout, 'AbortError: ...')，文案会误导用户，
-          // 统一按其它工具的约定报成 Aborted。
-          throw new Error(
-            signal?.aborted
-              ? '[MCP] Aborted'
-              : `[MCP Error] ${err instanceof Error ? err.message : String(err)}`
-          )
-        }
-        const blocks = mcpContentToAgentContent(result.content)
-        if (result.isError) throw new Error(`[MCP Error] ${textOf(blocks) || '(no details)'}`)
-        return {
-          // 空结果也给一个文本块：pi 的 content 不接受空数组的语义（宿主包装层再兜底成 "(no output)"）
-          content: blocks.length > 0 ? blocks : [{ type: 'text', text: '' }],
-          details: { type: 'mcp', server: serverName, tool: mcpTool.name }
-        }
-      }
+      name: toolName,
+      label: decl.description || decl.name,
+      description: decl.description ?? '',
+      parameters: jsonSchemaToTypebox(decl.inputSchema),
+      replay: 'unsafe',
+      outputLimits: backstopOutputLimits({}),
+      execute: (args, api, context) =>
+        catchToolErrors(context, async () => {
+          const signal = context.abortSignal
+          let result: Awaited<ReturnType<McpManager['callTool']>>
+          try {
+            const key = route()
+            if (key === undefined) throw new Error(`MCP server "${serverName}" is not connected`)
+            result = await this.callToolOn(
+              { key, name: serverName },
+              decl.name,
+              args as Record<string, unknown>,
+              signal,
+              {
+                toolCallId: api.callId,
+                callerId: opts?.callerIdOf?.(api.conversationId),
+                taskId: api.taskId
+              }
+            )
+          } catch (err: unknown) {
+            // 中止时 SDK 抛的是 McpError(RequestTimeout, 'AbortError: ...')，文案会误导人 ——
+            // 统一按其它工具的约定报成 Aborted（这一抛由 catchToolErrors 原样放行：取消）
+            if (signal?.aborted) throw new Error('[MCP] Aborted')
+            return toolErrorResult(`[MCP Error] ${errorText(err)}`)
+          }
+          const blocks = mcpContentToToolContent(result.content)
+          if (result.isError) {
+            return toolErrorResult(`[MCP Error] ${textOf(blocks) || '(no details)'}`)
+          }
+          const ok: ToolResult<McpToolDetails> = {
+            // 空结果也给一个文本块：工具结果的 content 不接受空数组的语义（宿主包装层再兜底成 "(no output)"）
+            content: blocks.length > 0 ? blocks : [{ type: 'text', text: '' }],
+            details: { type: 'mcp', server: serverName, tool: decl.name }
+          }
+          return toExecutionResult(ok, toolName)
+        })
     }
   }
 
+  /** 发现的工具 → 声明（深拷贝成纯 JSON：快照不与活连接共享对象） */
+  private declarationOf(tool: McpDiscoveredTool, trusted: boolean): McpToolDeclaration {
+    return jsonCopy<McpToolDeclaration>({
+      name: tool.name,
+      description: tool.description,
+      inputSchema: tool.inputSchema,
+      annotations: tool.annotations,
+      trusted
+    })
+  }
+
   /**
-   * 某条连接（连接键）的所有工具转 AgentTool[]。
-   *
-   * `callerId`：这批工具将装进哪个 agent（root = 会话 id，派生 = agent id）—— 每次调用经
-   * `_meta` 带给可信 server，见 callTool。
+   * 某条连接（连接键）的所有工具转 durable 注册项。没连上 = 空表。
+   * 选项见 McpRegistrationOptions（调用方身份按每次调用的对话现问）。
    */
-  serverToAgentTools(
-    connKey: string,
-    opts?: { callerId?: string }
-  ): AgentTool<TSchema, McpToolDetails>[] {
+  serverToRegistrations(connKey: string, opts?: McpRegistrationOptions): McpToolRegistration[] {
     const conn = this.connections.get(connKey)
     if (!conn || conn.status !== 'connected') return []
     return conn.tools.map((t) =>
-      this.mcpToolToAgentTool(connKey, conn.serverName, t, conn.trusted, opts?.callerId)
+      this.mcpToolToRegistration(
+        () => connKey,
+        conn.serverName,
+        this.declarationOf(t, conn.trusted),
+        opts
+      )
     )
+  }
+
+  /**
+   * 按服务器名找这条会话能用的那条活连接的键（没连上 = undefined）。
+   *
+   * `inproc` 的实例按会话分身，所以必须连 sessionId 一起匹配 —— 否则 A 会话会拿到
+   * B 会话那份实例的工具，跨会话操作彼此的资源。
+   */
+  private liveKeyByName(serverName: string, sessionId?: string): string | undefined {
+    for (const [key, conn] of this.connections) {
+      if (conn.status !== 'connected') continue
+      if (conn.serverName !== serverName) continue
+      if (conn.sessionId !== undefined && conn.sessionId !== sessionId) continue
+      return key
+    }
+    return undefined
   }
 
   /**
@@ -991,23 +1091,51 @@ export class McpManager {
   }
 
   /**
-   * 按服务器名获取所有 AgentTool（宿主按服务器级注入）。
-   *
-   * `inproc` 的实例按会话分身，所以必须连 sessionId 一起匹配 —— 否则 A 会话会拿到
-   * B 会话那份实例的工具闭包，跨会话操作彼此的资源。
+   * 按服务器名取这条会话能用的全部注册项（宿主按服务器级注入）。没连上 = 空表（宿主先经
+   * `ensureServerByName` 连起来）。`inproc` 按会话匹配，见 liveKeyByName。
    */
-  getAgentToolsByServerName(
+  getRegistrationsByServerName(
     serverName: string,
     sessionId?: string,
-    opts?: { callerId?: string }
-  ): AgentTool<TSchema, McpToolDetails>[] {
-    for (const [key, conn] of this.connections) {
-      if (conn.status !== 'connected') continue
-      if (conn.serverName !== serverName) continue
-      if (conn.sessionId !== undefined && conn.sessionId !== sessionId) continue
-      return this.serverToAgentTools(key, opts)
+    opts?: McpRegistrationOptions
+  ): McpToolRegistration[] {
+    const key = this.liveKeyByName(serverName, sessionId)
+    return key === undefined ? [] : this.serverToRegistrations(key, opts)
+  }
+
+  /**
+   * 这条会话眼下能用的那台服务器的工具声明（纯 JSON 快照，与 getRegistrationsByServerName 同一组
+   * 工具、同一个顺序）。没连上 = 空表。锁定 agent 时存进锁记录，重开时交给
+   * `registrationsFromDeclarations`。
+   */
+  declarationsOf(serverName: string, sessionId?: string): McpToolDeclaration[] {
+    const key = this.liveKeyByName(serverName, sessionId)
+    const conn = key === undefined ? undefined : this.connections.get(key)
+    if (!conn) return []
+    return conn.tools.map((t) => this.declarationOf(t, conn.trusted))
+  }
+
+  /**
+   * 按一份声明快照建注册项 —— **不要求连着**，也不去连：每次调用按服务器名现找配置行、算出这条
+   * 会话的连接键，经 callToolOn 调（没连上就原地连一次，与活连接上的工具同一条路）。
+   * 配置行删了 / 停用了 / 会话已关，调用就以「没连上」失败（`[MCP Error] …`）。
+   *
+   * 安全客体（mcpMeta）按快照里的 `trusted` / `annotations` 给；`_meta` 带不带调用方 id 与 taskId
+   * 仍看实际连上的那条连接可不可信。
+   */
+  registrationsFromDeclarations(
+    serverName: string,
+    sessionId: string | undefined,
+    declarations: readonly McpToolDeclaration[],
+    opts?: McpRegistrationOptions
+  ): McpToolRegistration[] {
+    const route = (): string | undefined => {
+      const server = this.store.findAll().find((s) => s.name === serverName)
+      return server ? connKeyOf(server, sessionId) : undefined
     }
-    return []
+    return declarations.map((decl) =>
+      this.mcpToolToRegistration(route, serverName, jsonCopy<McpToolDeclaration>(decl), opts)
+    )
   }
 
   // ─── 内部 ───

@@ -21,7 +21,7 @@ export interface DurableOutputLimits {
   readonly retain: 'head' | 'tail'
 }
 
-/** 工具身上可读的截断声明（BaseTool 的字段；旧形状工具上可能一个都没有） */
+/** 工具身上可读的截断声明（BaseTool 的字段；函数式注册项上可能一个都没有） */
 export interface OutputDeclaration {
   readonly outputStrategy?: TruncateStrategy
   readonly outputMaxBytes?: number

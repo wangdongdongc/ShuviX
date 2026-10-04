@@ -4,9 +4,16 @@
  * 形态对照 browser/tool.ts：action 枚举 + 扁平可选参数超集，每个 action 一行描述；
  * 长尾细节走 action:"help"；参数错误只回该 action 的 usage。
  * 两端能力同集 → schema / description 为静态生成（无 caps 裁剪）。
+ *
+ * pi-durable 原生注册项：`execute(args, api, context)`，工具调用 id = `api.callId`，取消跟着
+ * `context.abortSignal`。**`replay: 'unsafe'`** —— 一个工具里混着 commit / checkout / restore 这些
+ * 写操作，而 durable 的重跑策略是按工具、在调用开始前定死的（中断的调用记成「可能已部分执行」，
+ * 不重跑）。失败按裁定 Q12 收成 `isError` 结果（文字与旧版相同），只有取消照旧抛。
  */
 import { Type, type TSchema } from 'typebox'
-import type { AgentTool, AgentToolResult } from '../tools/toolResult'
+import type { ToolRegistration } from '@earendil-works/pi-durable'
+import { catchToolErrors, toExecutionResult, type ToolResult } from '../tools/toolResult'
+import { backstopOutputLimits } from '../tools/outputLimits'
 import type { GitToolDetails } from '@shuvix/chat-protocol/types/chatMessage'
 import type { GitCache, GitEnv, GitOpOutput } from './env'
 import {
@@ -155,7 +162,13 @@ function formatGitCommand(action: GitAction, params: GitOpParams): string {
   return parts.filter(Boolean).join(' ')
 }
 
-type Result = AgentToolResult<GitToolDetails>
+type Result = ToolResult<GitToolDetails>
+
+/** git 工具：durable 注册项 + 界面显示名 */
+export type GitTool = ToolRegistration<TSchema> & {
+  readonly label: string
+  readonly replay: 'unsafe'
+}
 
 function toResult(action: string, out: GitOpOutput): Result {
   return {
@@ -220,7 +233,7 @@ async function dispatch(
   }
 }
 
-export function createGitTool(opts: CreateGitToolOptions): AgentTool<TSchema, GitToolDetails> {
+export function createGitTool(opts: CreateGitToolOptions): GitTool {
   const { getEnv, resolveDir, askOp, abortError = 'Aborted', label = 'Git' } = opts
   const specs = new Map(GIT_OPS.map((s) => [s.name, s]))
   /** isomorphic-git 共享缓存：工具实例（=会话）内按仓库目录隔离复用 */
@@ -234,80 +247,92 @@ export function createGitTool(opts: CreateGitToolOptions): AgentTool<TSchema, Gi
     return cache
   }
 
+  /** 一次调用的本体（旧版的 execute）：失败抛错，由注册项的边界按 Q12 收口 */
+  async function run(
+    toolCallId: string,
+    rawParams: unknown,
+    signal: AbortSignal | undefined
+  ): Promise<Result> {
+    if (signal?.aborted) throw new Error(abortError)
+    const params = rawParams as GitToolParams
+    const action = params.action
+
+    const spec = specs.get(action)
+    if (!spec) {
+      return usageError(
+        String(action),
+        `Unknown action "${String(action)}". Available: ${[...specs.keys()].join(', ')}.`
+      )
+    }
+
+    if (spec.name === 'help') {
+      return toResult('help', { text: buildGitHelp(params.topic) })
+    }
+
+    const missing = missingParams(spec, params)
+    if (missing.length > 0) {
+      return usageError(
+        spec.name,
+        `Missing required parameter${missing.length > 1 ? 's' : ''} ${missing.map((m) => `"${m}"`).join(', ')} for ${spec.name}.`,
+        spec.usage
+      )
+    }
+    // spec 上表达不了的交叉约束：branch(delete:true) 必须带 name
+    if (spec.name === 'branch' && params.delete && !params.name) {
+      return usageError(spec.name, '"name" is required when delete:true.', spec.usage)
+    }
+
+    let env = await getEnv()
+    if (params.dir) {
+      if (!resolveDir) {
+        return usageError(
+          spec.name,
+          'The "dir" parameter is not supported in this environment; omit it to operate on the working directory.'
+        )
+      }
+      try {
+        env = {
+          ...env,
+          dir: await resolveDir(params.dir, {
+            action: spec.name,
+            mutates: spec.mutates,
+            toolCallId
+          })
+        }
+      } catch (err) {
+        if (signal?.aborted || (err instanceof Error && err.message === abortError)) throw err
+        const message = err instanceof Error ? err.message : String(err)
+        return usageError(spec.name, `Cannot access repository dir "${params.dir}": ${message}`)
+      }
+    }
+    // 逐操作安全评估：放在 dir 解析之后、执行之前 —— 此时目标仓库已确定，卡片里的路径才是真的。
+    // 每个操作都上报（gitAction/force/delete 是策略的评估事实）；要不要拦由策略决定
+    if (askOp) {
+      await askOp({
+        action: spec.name,
+        reason: spec.askReason?.(params) ?? null,
+        force: !!params.force,
+        delete: !!params.delete,
+        command: formatGitCommand(spec.name, params),
+        toolCallId
+      })
+    }
+
+    const out = await dispatch(env, cacheFor(env.dir), spec.name, params)
+    if (signal?.aborted) throw new Error(abortError)
+    return toResult(spec.name, out)
+  }
+
   return {
     name: GIT_TOOL_NAME,
     label,
     description: buildGitToolDescription(),
     parameters: buildGitParamsSchema(),
-    async execute(toolCallId: string, rawParams: unknown, signal?: AbortSignal): Promise<Result> {
-      if (signal?.aborted) throw new Error(abortError)
-      const params = rawParams as GitToolParams
-      const action = params.action
-
-      const spec = specs.get(action)
-      if (!spec) {
-        return usageError(
-          String(action),
-          `Unknown action "${String(action)}". Available: ${[...specs.keys()].join(', ')}.`
-        )
-      }
-
-      if (spec.name === 'help') {
-        return toResult('help', { text: buildGitHelp(params.topic) })
-      }
-
-      const missing = missingParams(spec, params)
-      if (missing.length > 0) {
-        return usageError(
-          spec.name,
-          `Missing required parameter${missing.length > 1 ? 's' : ''} ${missing.map((m) => `"${m}"`).join(', ')} for ${spec.name}.`,
-          spec.usage
-        )
-      }
-      // spec 上表达不了的交叉约束：branch(delete:true) 必须带 name
-      if (spec.name === 'branch' && params.delete && !params.name) {
-        return usageError(spec.name, '"name" is required when delete:true.', spec.usage)
-      }
-
-      let env = await getEnv()
-      if (params.dir) {
-        if (!resolveDir) {
-          return usageError(
-            spec.name,
-            'The "dir" parameter is not supported in this environment; omit it to operate on the working directory.'
-          )
-        }
-        try {
-          env = {
-            ...env,
-            dir: await resolveDir(params.dir, {
-              action: spec.name,
-              mutates: spec.mutates,
-              toolCallId
-            })
-          }
-        } catch (err) {
-          if (signal?.aborted || (err instanceof Error && err.message === abortError)) throw err
-          const message = err instanceof Error ? err.message : String(err)
-          return usageError(spec.name, `Cannot access repository dir "${params.dir}": ${message}`)
-        }
-      }
-      // 逐操作安全评估：放在 dir 解析之后、执行之前 —— 此时目标仓库已确定，卡片里的路径才是真的。
-      // 每个操作都上报（gitAction/force/delete 是策略的评估事实）；要不要拦由策略决定
-      if (askOp) {
-        await askOp({
-          action: spec.name,
-          reason: spec.askReason?.(params) ?? null,
-          force: !!params.force,
-          delete: !!params.delete,
-          command: formatGitCommand(spec.name, params),
-          toolCallId
-        })
-      }
-
-      const out = await dispatch(env, cacheFor(env.dir), spec.name, params)
-      if (signal?.aborted) throw new Error(abortError)
-      return toResult(spec.name, out)
-    }
+    replay: 'unsafe',
+    outputLimits: backstopOutputLimits({}),
+    execute: (args, api, context) =>
+      catchToolErrors(context, async () =>
+        toExecutionResult(await run(api.callId, args, context.abortSignal), GIT_TOOL_NAME)
+      )
   }
 }

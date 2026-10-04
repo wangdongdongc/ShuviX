@@ -7,7 +7,7 @@
  *    会盖掉前一段：第一段预览里写的「全文在这里」指向的是第二段的全文，而模型对此毫无察觉。
  */
 import { describe, it, expect, afterAll, vi } from 'vitest'
-import type { AgentTool } from '@shuvix/agent-runtime'
+import type { AnyTool } from '@shuvix/agent-runtime'
 import { executeTool } from '@shuvix/agent-runtime/tools/testing/invokeTool'
 import { existsSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
@@ -35,14 +35,15 @@ const bigText = (tag: string): string =>
 const IMAGE_BLOCK = { type: 'image' as const, data: 'AAAABBBBCCCC', mimeType: 'image/png' }
 
 /** details 声明了 truncated / persisted 的工具 —— 包装器只在声明过时才合并 */
-function makeTool(content: unknown[]): AgentTool {
+function makeTool(content: unknown[]): AnyTool {
   return {
     name: 'probe',
     label: 'probe',
     description: 'test tool',
     parameters: {},
+    replay: 'unsafe',
     execute: async () => ({ content, details: { truncated: false, persisted: false } })
-  } as unknown as AgentTool
+  } as unknown as AnyTool
 }
 
 const textOf = (result: { content: unknown[] }, i: number): string =>
