@@ -1,6 +1,7 @@
 /**
  * Electron 宿主适配器 —— 把 @shuvix/agent-runtime 的注入接口对接到桌面端的具体设施
- * （chatFrontendRegistry / 安全模块 / httpLogService / process.env / i18n）。
+ * （chatFrontendRegistry / 安全模块 / httpLogService / i18n）。provider 凭据不经这里：
+ * 模型层（services/models）每次请求从 DB 凭据库现取，从不写 process.env。
  *
  * 迁移到 AgentHarness 后 **RuntimePersistence 适配器已删除**：消息落盘由 harness
  * 自己经 SessionStorage（SqliteSessionStorage）完成，宿主不再提供 add/addToolUse/
@@ -8,7 +9,6 @@
  */
 import type {
   RuntimeEventSink,
-  RuntimeEnv,
   RuntimeHttpLog,
   RuntimeLogger,
   ToolResultTransform
@@ -40,19 +40,6 @@ export const electronEventSink: RuntimeEventSink = {
     observeChromeTabRun(event)
   },
   hasUserInputCapability: (sessionId) => chatFrontendRegistry.hasCapability(sessionId, 'userInput')
-}
-
-/**
- * 环境变量注入：桌面端**刻意不写** process.env。
- *
- * 每次 LLM 请求的 key 都由 modelsAdapter 经 `getApiKey` 现取、显式传给 pi-ai（内置 provider
- * 的行 id 就是 pi-ai slug，所以按 `model.provider` 一定取得到），env 这条路早已用不上。
- * 而写进 process.env 的代价是真实的：buildSpawnEnv / 终端 / TTS 都展开 process.env，
- * 于是每条 bash 命令、每个 stdio MCP server、ssh 子进程都拿到了用户所有 provider 的 key ——
- * 沙箱放开网络之后，这就是一条现成的外泄路径。需要 key 的 MCP server 请在它自己的 env 配置里写。
- */
-export const electronEnv: RuntimeEnv = {
-  setApiKey: () => {}
 }
 
 /** 可选 HTTP 日志：委托 httpLogService */
