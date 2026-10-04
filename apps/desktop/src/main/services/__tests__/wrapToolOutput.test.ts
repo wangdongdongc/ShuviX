@@ -1,18 +1,19 @@
 /**
- * wrapToolOutput —— 安全模块 L1 全工具门（enforceInvocation）的挂载点，同时也是「工具输出
- * 怎么截 / 落不落盘」这组参数**唯一**的穿线处（W-S*），以及结果上 `control.terminate` 的保留（W-T*）。
- * mock 惯例照 tools/__tests__/write.test.ts（toolContext/logger mock）；
- * processToolOutput 短文本直通（但把每次调用的 opts 记下来）；security 用手写 stub，
+ * wrapToolOutput —— 安全模块 L1 全工具门（enforceInvocation）的挂载点，以及结果上
+ * `control.terminate` 的保留（W-T*）。
+ * mock 惯例照 tools/__tests__/write.test.ts（toolContext/logger mock）；security 用手写 stub，
  * W-9 走真 createSecurityContext。
  *
  * pi-durable：包装器收的、交出的都是 durable 注册项（`execute(args, api, context)`），经 invokeTool 调；
  * 手写的假工具也是 durable 形状（P1-05 删掉了旧形状桥）。门拒绝从「抛错」变成 isError 结果
  * （裁定 Q12，文字不变）。
  *
- * P1-06 的期望变化：L1 门的 opts 多了这次调用的 taskId / conversationId（W-2）；位置参数版
- * `wrapToolOutput` 不传 overrides 时交给后处理的 spill 是 true 而不是 undefined（W-S3，同义）；
- * 每次后处理都带 `locatorInText: false`（W-S1）。落盘 / 截断说明走 diagnostics 的整条链在
- * wrapToolOutputSpill.test.ts 与 wrapDurableTool.test.ts。
+ * P1-06 的期望变化：L1 门的 opts 多了这次调用的 taskId / conversationId（W-2）。
+ *
+ * P1-06b：截断 / 落盘内核搬进 agent-runtime 的 wrapDurableOutput，「交给后处理的参数」那一组
+ * （W-S1..S3）随它搬到 packages/agent-runtime/src/toolOutput/__tests__/wrapDurableOutput.test.ts；
+ * 这里不再桩后处理（短文本本来就原样通过），W-T1 不再数后处理的调用次数。新增 W-14：门的评估门面
+ * 可以按调用现取。
  */
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import type { Context } from '@earendil-works/chord'
@@ -22,6 +23,7 @@ import type { EnforceOutcome, McpToolMeta, SecurityContext } from '@shuvix/agent
 import {
   executeTool,
   failureText,
+  invokeTool,
   type InvokedToolResult
 } from '@shuvix/agent-runtime/tools/testing/invokeTool'
 import {
@@ -35,36 +37,12 @@ import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/in
 /** 内置策略 md 的构建期内联读取口（W-9 走真装配链；测试进程，不进桌面 bundle） */
 const INLINE_POLICY_MD = createInlinePolicyMdReader()
 
-/** 记下每一次后处理调用的入参 —— W-S* 钉的就是「包装器交过去了什么」 */
-interface ProcessCall {
-  sessionId: string
-  toolCallId: string
-  fullText: string
-  strategy: string
-  maxBytes?: number
-  maxLines?: number
-  spill?: boolean | (() => boolean | Promise<boolean>)
-  locatorInText?: boolean
-}
-
-const mocks = vi.hoisted(() => ({
-  processToolOutput: vi.fn(async (opts: { fullText: string }) => ({
-    text: opts.fullText,
-    truncated: false,
-    persisted: false
-  }))
-}))
-
 vi.mock('../toolContext', () => ({ TOOL_ABORTED: 'Aborted' }))
 vi.mock('../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {} })
 }))
-// 截断/落盘内核本身与本测试无关：短文本直通（不截断、不落盘）；只把 opts 留下来
-vi.mock('../../utils/toolUtils/processToolOutput', () => ({
-  processToolOutput: mocks.processToolOutput
-}))
 
-import { wrapToolOutput } from '../wrapToolOutput'
+import { wrapDurableTool, wrapToolOutput } from '../wrapToolOutput'
 
 const SID = 'wrap-tool-output-test-session'
 
@@ -123,13 +101,8 @@ function makeSecurity(impl?: () => Promise<EnforceOutcome>): {
 const exec = (wrapped: AnyTool, toolCallId: string, params: unknown): Promise<InvokedToolResult> =>
   executeTool(wrapped, toolCallId, params as never)
 
-/** 这一次跑下来，后处理收到的全部入参（按调用顺序） */
-const processCalls = (): ProcessCall[] =>
-  mocks.processToolOutput.mock.calls.map(([opts]) => opts as unknown as ProcessCall)
-
 afterEach(() => {
   clearSessionDecisions(SID)
-  mocks.processToolOutput.mockClear()
 })
 
 describe('wrapToolOutput — L1 全工具门', () => {
@@ -329,6 +302,28 @@ describe('wrapToolOutput — L1 全工具门', () => {
     expect(execute).not.toHaveBeenCalled()
   })
 
+  it('W-14 评估门面可以按调用现取：拿到的是这次调用的 api / context，交回 undefined 就这次不设门', async () => {
+    const { tool, execute } = makeTool('ssh')
+    const { security, enforceInvocation } = makeSecurity()
+    const resolve = vi.fn((api: ToolExecutionApi, _context: Context) =>
+      api.conversationId === 1 ? security : undefined
+    )
+    const wrapped = wrapDurableTool(tool, { sessionId: SID, spill: true, security: resolve })
+
+    // 根对话（1）→ 设门
+    await invokeTool(wrapped, { action: 'connect' } as never, { callId: 'tc-14a', taskId: 3 })
+    expect(enforceInvocation).toHaveBeenCalledTimes(1)
+    expect(enforceInvocation.mock.calls[0][0]).toMatchObject({ toolCallId: 'tc-14a', taskId: 3 })
+    // 别的对话 → 解析器交回 undefined，这次不设门，工具照常执行
+    await invokeTool(wrapped, { action: 'connect' } as never, {
+      callId: 'tc-14b',
+      conversationId: 2
+    })
+    expect(enforceInvocation).toHaveBeenCalledTimes(1)
+    expect(execute).toHaveBeenCalledTimes(2)
+    expect(resolve.mock.calls.map(([api]) => api.callId)).toEqual(['tc-14a', 'tc-14b'])
+  })
+
   it('W-9 端到端：真 createSecurityContext + ask×invocation + other 反馈 → feedback 文本结果 + 日志 1 条', async () => {
     const requestUserInput = vi.fn(
       async (_req: InputRequest): Promise<InputResponse> => ({
@@ -396,92 +391,6 @@ describe('wrapToolOutput — L1 全工具门', () => {
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
-// W-S —— 截断 / 落盘参数的穿线。
-//
-// `spill` 是宿主**按 agent** 下的判断（手里有没有 read 取回全文），包装器是它唯一的通道：
-// 这里漏传一次，那个 agent 就会拿到一段指向它没有的工具的预览 —— 而且从结果上看不出异常，
-// 只是正文比它本该拿到的短得多。所以钉的是「每一个文本块都带着同一组参数过去」。
-// ─────────────────────────────────────────────────────────────────────────────
-
-const IMAGE_BLOCK = { type: 'image' as const, data: 'AAAABBBBCCCC', mimeType: 'image/png' }
-
-/** 一次调用回「文本 + 图片 + 文本」—— 图片块不该进后处理 */
-function makeMultiBlockTool(): { tool: AnyTool; execute: ReturnType<typeof vi.fn> } {
-  const execute = vi.fn(async () => ({
-    content: [
-      { type: 'text' as const, text: 'first block' },
-      IMAGE_BLOCK,
-      { type: 'text' as const, text: 'second block' }
-    ]
-  }))
-  const tool = {
-    name: 'shot',
-    label: 'shot',
-    description: 'test tool',
-    parameters: {},
-    replay: 'unsafe' as const,
-    execute
-  }
-  return { tool: tool as unknown as AnyTool, execute }
-}
-
-describe('wrapToolOutput — 截断 / 落盘参数的穿线', () => {
-  it('W-S1 overrides {spill:false} → 每个文本块都带着 spill:false 过去；图片块直通不进后处理', async () => {
-    const { tool } = makeMultiBlockTool()
-    const wrapped = wrapToolOutput(tool, SID, 'middle', { spill: false })
-
-    const result = await exec(wrapped, 'tc-s1', {})
-
-    const calls = processCalls()
-    expect(calls).toHaveLength(2)
-    expect(calls.map((c) => c.fullText)).toEqual(['first block', 'second block'])
-    for (const call of calls) expect(call.spill).toBe(false)
-    // P1-06：落盘位置 / 截断说明一律不进正文（包装器写成 diagnostic）
-    for (const call of calls) expect(call.locatorInText).toBe(false)
-    // 图片原样待在原位
-    expect(result.content[1]).toBe(IMAGE_BLOCK)
-    expect(result.content).toHaveLength(3)
-  })
-
-  it('W-S2 三个覆写原样到达；首个文本块用的就是这一次的 toolCallId 与会话 id', async () => {
-    const { tool } = makeMultiBlockTool()
-    const wrapped = wrapToolOutput(tool, SID, 'keep-start', {
-      maxBytes: 4096,
-      maxLines: 10,
-      spill: false
-    })
-
-    await exec(wrapped, 'tc-s2', {})
-
-    const calls = processCalls()
-    expect(calls).toHaveLength(2)
-    for (const call of calls) {
-      expect(call.maxBytes).toBe(4096)
-      expect(call.maxLines).toBe(10)
-      expect(call.spill).toBe(false)
-      expect(call.sessionId).toBe(SID)
-      expect(call.strategy).toBe('keep-start')
-    }
-    // 第一段用本次调用 id；后面每段各自一个文件名，否则后一段会盖掉前一段的全文
-    expect(calls[0].toolCallId).toBe('tc-s2')
-    expect(calls[1].toolCallId).toBe('tc-s2-2')
-  })
-
-  it('W-S3 不传 overrides → spill 为 true（= 缺省落盘；P1-06 前交的是 undefined，同义），另两个上限也不凭空冒出来', async () => {
-    const { tool } = makeTool()
-    const wrapped = wrapToolOutput(tool, SID, 'middle')
-
-    await exec(wrapped, 'tc-s3', {})
-
-    const calls = processCalls()
-    expect(calls).toHaveLength(1)
-    expect(calls[0].spill).toBe(true)
-    expect(calls[0].maxBytes).toBeUndefined()
-    expect(calls[0].maxLines).toBeUndefined()
-  })
-})
-
-// ─────────────────────────────────────────────────────────────────────────────
 // W-T —— `control.terminate` 的保留。
 //
 // 结果契约的 `next` 靠 `control: { terminate: true }` 让 durable 在「这一批只有 next」时直接结束循环
@@ -511,7 +420,7 @@ const terminateOf = (result: unknown): unknown =>
   (result as { control?: { terminate?: unknown } }).control?.terminate
 
 describe('wrapToolOutput — control.terminate 原样带出', () => {
-  it('W-T1 普通文本路径：包装后仍带 terminate:true，文本照常过后处理', async () => {
+  it('W-T1 普通文本路径：包装后仍带 terminate:true，文本原样', async () => {
     const { tool } = makeTerminatingTool([{ type: 'text', text: 'Result recorded.' }])
     const wrapped = wrapToolOutput(tool, SID, 'middle')
 
@@ -519,7 +428,6 @@ describe('wrapToolOutput — control.terminate 原样带出', () => {
 
     expect(terminateOf(result)).toBe(true)
     expect(result.content).toEqual([{ type: 'text', text: 'Result recorded.' }])
-    expect(processCalls()).toHaveLength(1)
   })
 
   it.each([

@@ -30,7 +30,7 @@ import {
   DEFAULT_MAX_LINES,
   DEFAULT_MAX_BYTES
 } from '@shuvix/agent-runtime'
-import { processToolOutput, spillFileName } from '../processToolOutput'
+import { desktopSpillSink, processToolOutput, spillFileName } from '../processToolOutput'
 
 const byteLen = (s: string): number => new TextEncoder().encode(s).length
 const resultsDir = (sessionId: string): string => join(USER_DATA_DIR, 'tool_results', sessionId)
@@ -263,85 +263,23 @@ describe('SFN spillFileName —— toolCallId 来自模型提供商，不能原�
   })
 })
 
-describe('DPO 惰性的落盘判断（spill 是函数 —— pi-durable 包装器按这次调用的工具表现问）', () => {
-  it('DPO-L1 没超限 → 判断一次都不问，也不建目录', async () => {
-    const sid = 'dpo-l1'
-    const decide = vi.fn(() => true)
-    const r = await processToolOutput({
-      sessionId: sid,
-      toolCallId: 'tc',
-      fullText: 'short',
-      strategy: 'middle',
-      spill: decide
-    })
-    expect(r.text).toBe('short')
-    expect(decide).not.toHaveBeenCalled()
+// DPO-S —— 桌面落盘口本身（durable 工具包装器经它落盘；「要不要落」的惰性判断在 agent-runtime 的
+// wrapDurableOutput 里，由那边的 WD-7 / WD-8 / WD-10 / WD-11 钉 —— 原先这里的 DPO-L1..L3 随判断一起搬走）。
+describe('DPO-S desktopSpillSink', () => {
+  it('DPO-S1 write → 交回 tool_results/<会话>/<id>.txt 的绝对路径，文件里逐字是全文（原 DPO-L4 的落盘一半）', async () => {
+    const sid = 'dpo-s1'
+    const res = await desktopSpillSink(sid).write('tc', BIG)
+    expect(res).toEqual({ locator: join(resultsDir(sid), 'tc.txt') })
+    expect(readFileSync(res!.locator, 'utf-8')).toBe(BIG)
+  })
+
+  it('DPO-S2 只造不写不建目录；provider 给的 id 照 spillFileName 收拾，落点仍在会话目录里', async () => {
+    const sid = 'dpo-s2'
+    const sink = desktopSpillSink(sid)
     expect(existsSync(resultsDir(sid))).toBe(false)
-  })
 
-  it('DPO-L2 超限且答 true（同步或异步）→ 落盘，文件里逐字是全文', async () => {
-    const cases: Array<[string, () => boolean | Promise<boolean>]> = [
-      ['dpo-l2a', () => true],
-      ['dpo-l2b', async () => true]
-    ]
-    for (const [sid, decide] of cases) {
-      const r = await processToolOutput({
-        sessionId: sid,
-        toolCallId: 'tc',
-        fullText: BIG,
-        strategy: 'middle',
-        spill: decide
-      })
-      expect(r.persisted, sid).toBe(true)
-      expect(readFileSync(join(resultsDir(sid), 'tc.txt'), 'utf-8')).toBe(BIG)
-    }
-  })
-
-  it('DPO-L3 超限但答 false、或判断本身抛错 → 与 spill:false 逐字相同（内存截断），目录不建', async () => {
-    const baseline = await processToolOutput({
-      sessionId: 'dpo-l3-base',
-      toolCallId: 'tc',
-      fullText: BIG,
-      strategy: 'middle',
-      spill: false
-    })
-    const cases: Array<[string, () => Promise<boolean>]> = [
-      ['dpo-l3a', async () => false],
-      [
-        'dpo-l3b',
-        async () => {
-          throw new Error('agent unavailable')
-        }
-      ]
-    ]
-    for (const [sid, decide] of cases) {
-      const r = await processToolOutput({
-        sessionId: sid,
-        toolCallId: 'tc',
-        fullText: BIG,
-        strategy: 'middle',
-        spill: decide
-      })
-      expect(r.text, sid).toBe(baseline.text)
-      expect(r.persisted, sid).toBe(false)
-      expect(existsSync(resultsDir(sid)), sid).toBe(false)
-    }
-  })
-
-  it('DPO-L4 locatorInText:false 原样交给内核：正文没有表头与路径，locator 是那份文件的绝对路径', async () => {
-    const sid = 'dpo-l4'
-    const r = await processToolOutput({
-      sessionId: sid,
-      toolCallId: 'tc',
-      fullText: BIG,
-      strategy: 'middle',
-      spill: true,
-      locatorInText: false
-    })
-    expect(r.persisted).toBe(true)
-    expect(r.text).not.toContain('[Output truncated')
-    expect(r.text).not.toContain(resultsDir(sid))
-    expect(r.locator).toBe(join(resultsDir(sid), 'tc.txt'))
-    expect(readFileSync(r.locator!, 'utf-8')).toBe(BIG)
+    const res = await sink.write('../../escape', 'x')
+    expect(resolve(res!.locator).startsWith(resolve(resultsDir(sid)) + sep)).toBe(true)
+    expect(res!.locator.endsWith(spillFileName('../../escape'))).toBe(true)
   })
 })

@@ -15,8 +15,8 @@
  * P1-06：L1 门把这次调用的 durable taskId / conversationId 交给安全模块，审查接缝收到的事件带着它们
  * （W-R11，审查按 (sessionId, taskId) 归属 —— 裁定 Q16）；其余用例的期望不变。
  *
- * mock 惯例同 wrapToolOutput.test.ts（toolContext 只给 TOOL_ABORTED、logger 置空、processToolOutput
- * 原样直通）；安全门面用真 createSecurityContext + 一条让 L1 invocation 走 ask 档的用户策略（用户策略的
+ * mock 惯例同 wrapToolOutput.test.ts（toolContext 只给 TOOL_ABORTED、logger 置空；后处理不桩 ——
+ * 'ran' 这样的短文本本来就原样通过，P1-06b 起后处理在 agent-runtime 的内核里调）；安全门面用真 createSecurityContext + 一条让 L1 invocation 走 ask 档的用户策略（用户策略的
  * ask 就是 tier 'ask'，会先交给审查），provider 上挂 onPermissionRequest。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -51,14 +51,6 @@ vi.mock('../toolContext', () => ({ TOOL_ABORTED: 'Aborted' }))
 vi.mock('../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {} })
 }))
-vi.mock('../../utils/toolUtils/processToolOutput', () => ({
-  processToolOutput: vi.fn(async (opts: { fullText: string }) => ({
-    text: opts.fullText,
-    truncated: false,
-    persisted: false
-  }))
-}))
-
 import { wrapToolOutput } from '../wrapToolOutput'
 
 const SID = 'wrap-tool-output-review-session'

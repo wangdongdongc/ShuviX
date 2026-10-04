@@ -188,6 +188,14 @@ export {
   type ProcessToolOutputOptions,
   type ProcessToolOutputResult
 } from './toolOutput/spill'
+// durable 工具输出包装器的内核（落盘口注入；宿主在上面叠自己的门）
+export {
+  wrapDurableOutput,
+  outputStrategyOf,
+  type SpillMode,
+  type WrapDurableOutputOptions,
+  type OutputStrategyAware
+} from './toolOutput/wrapDurableOutput'
 // 智能体安全模块 —— 统一评估函数（allow/ask/deny）+ 内置策略 md + PEP 门面。
 // 请求按 主体/操作/客体/环境 建模；宿主经 SecurityHostProvider 注入平台细节。
 export {

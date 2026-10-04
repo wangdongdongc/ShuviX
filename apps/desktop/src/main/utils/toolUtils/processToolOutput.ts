@@ -1,6 +1,7 @@
 /**
  * 工具输出后处理（桌面 wrapper）—— 截断/落盘内核已下沉 @shuvix/agent-runtime。
- * 此处仅注入「Node fs 写 tool_results」作为 SpillSink，并保留既有导出签名给调用方。
+ * 此处只注入「Node fs 写 tool_results」作为 SpillSink（`desktopSpillSink`，durable 工具包装器
+ * wrapToolOutput.ts 用的也是它），并保留既有导出签名给调用方。
  */
 import { join } from 'path'
 import { writeFileSync } from 'fs'
@@ -24,14 +25,8 @@ export interface ProcessToolOutputOptions {
   /**
    * 超限时落盘、回预览 + 「用 read 工具取全文」。缺省 true。false = 只在内存里截断：这个 agent
    * 没有 read 工具，落盘的全文它取不回来，那句指引就成了死路（Chrome 标签页会话的 `tab` 档案即如此）。
-   *
-   * 也可以是一个**惰性**判断：只在真超限、要落盘的那一刻才问（pi-durable 的包装器按这次调用的
-   * agent 工具表现问 —— 没超限的调用一次都不问）。答 false（或判断本身抛错）与 `spill: false` 同一结果：
-   * 只在内存里截断，不建目录。
    */
-  spill?: boolean | (() => boolean | Promise<boolean>)
-  /** 超限说明写不写进正文（见共享内核的 `locatorInText`）；缺省 true */
-  locatorInText?: boolean
+  spill?: boolean
 }
 
 /**
@@ -43,18 +38,17 @@ export function spillFileName(toolCallId: string): string {
   return `${safe || 'tool-call'}.txt`
 }
 
-export function processToolOutput(
-  opts: ProcessToolOutputOptions
-): Promise<ProcessToolOutputResult> {
-  // 桌面落盘：写 userData/tool_results/{sessionId}/{toolCallId}.txt（绝对路径即 locator，
-  // read 工具的准入范围已白名单 tool_results 目录，模型可直接 read 取回全文）
-  const decide = opts.spill
-  const sink: SpillSink = {
-    async write(toolCallId, fullText) {
+/**
+ * 桌面落盘口：写 userData/tool_results/{sessionId}/{spillId}.txt（绝对路径即 locator，
+ * read 工具的准入范围已白名单 tool_results 目录，模型可直接 read 取回全文）。
+ * 目录在第一次真写的时候才建（getToolResultsDir 会 mkdir）—— 没落盘的会话不留空目录。
+ * 写失败交回 null：内核据此降级为内存截断。
+ */
+export function desktopSpillSink(sessionId: string): SpillSink {
+  return {
+    async write(spillId, fullText) {
       try {
-        // 惰性判断答「不落」→ 交回 null：内核按「落盘失败」降级为内存截断（与没有 sink 逐字相同）
-        if (typeof decide === 'function' && !(await decide())) return null
-        const filePath = join(getToolResultsDir(opts.sessionId), spillFileName(toolCallId))
+        const filePath = join(getToolResultsDir(sessionId), spillFileName(spillId))
         writeFileSync(filePath, fullText, 'utf-8')
         return { locator: filePath }
       } catch {
@@ -62,13 +56,17 @@ export function processToolOutput(
       }
     }
   }
+}
+
+export function processToolOutput(
+  opts: ProcessToolOutputOptions
+): Promise<ProcessToolOutputResult> {
   return sharedProcessToolOutput({
     toolCallId: opts.toolCallId,
     fullText: opts.fullText,
     strategy: opts.strategy,
     maxLines: opts.maxLines,
     maxBytes: opts.maxBytes,
-    sink: decide === false ? undefined : sink,
-    locatorInText: opts.locatorInText
+    sink: opts.spill === false ? undefined : desktopSpillSink(opts.sessionId)
   })
 }
