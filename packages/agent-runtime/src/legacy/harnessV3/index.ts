@@ -18,6 +18,7 @@ export {
   parseHarnessV3Session,
   readHarnessV3Transcript,
   runConfigOf,
+  type HarnessV3Branch,
   type HarnessV3Issue,
   type HarnessV3RunConfig,
   type HarnessV3Transcript,
