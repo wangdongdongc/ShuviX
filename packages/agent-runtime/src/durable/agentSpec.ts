@@ -20,8 +20,11 @@
  * | 宿主的工具结果变换          | 应用                          | 不应用（现状）                    |
  * | LLM 请求日志归属            | 自身 sessionId               | spawn.rootSessionId              |
  *
- * TODO(pi-durable p1): P1-08 把系统提示词改成 durable 的分段（persona 冻结 + 各注入一段），
- * 逐字节对照 `__tests__/fixtures/system-prompts/`；P1-09 用本规格创建根 agent（锁）。
+ * 系统提示词的 durable 形态在 `prompt/`（P1-08）：人设创建时冻结（`prompt/persona.ts`），其余注入各是
+ * 一个现解析的段落扩展（`prompt/sections.ts`，选择 = `promptExtensionsFor(spec)`），逐字节对照
+ * `__tests__/fixtures/system-prompts/`。这里的 `assembleSystemPrompt` 是一次拼完的旧口径（指令文件不修剪），
+ * 只剩 `AgentSpec.systemPrompt` 还在用它。
+ * TODO(pi-durable p1): P1-09 用本规格创建根 agent（锁）时改走分段，不再需要 `systemPrompt` 一项。
  */
 import type { ThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
 import { KNOWLEDGE_TOOL_NAME } from '../knowledge/knowledgeTool'

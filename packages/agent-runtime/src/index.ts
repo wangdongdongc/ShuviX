@@ -523,6 +523,31 @@ export {
   fenceProjectMemory,
   fenceKnowledgeBases
 } from './durable/prompt/fences'
+// 系统提示词分段（P1-08）：人设创建时冻结、其余五段现解析
+export {
+  computeFrozenAgentPrompt,
+  freezePersona,
+  frozenPersonaOf,
+  renderPersona,
+  type FrozenAgentPrompt,
+  type PersonaHost,
+  type PersonaInput
+} from './durable/prompt/persona'
+export {
+  botSectionText,
+  createPromptExtensions,
+  fencedSectionText,
+  instructionSectionText,
+  PersonaNotFrozenError,
+  PROMPT_EXTENSION,
+  PROMPT_EXTENSION_ORDER,
+  PROMPT_SECTION_KEY,
+  promptExtensionsFor,
+  type PromptExtensionId,
+  type PromptExtensionName,
+  type PromptExtensions,
+  type PromptSelectionSpec
+} from './durable/prompt/sections'
 // 挂起的用户询问（ask / 确认卡片）—— 会话运行时「等人回答」的那一半
 export { PendingInputRequests, type PendingInputHooks } from './durable/inputRequests'
 // pi-durable 会话核心（P1-07）：每会话一个 Harness 的打开 / LRU / 删除，及其上的 ShuviX 运行语义
@@ -549,7 +574,9 @@ export {
   DEFAULT_INTERRUPTED_SEND_POLICY,
   DEFAULT_MAX_IDLE_OPEN,
   DEFAULT_NOTICE_COALESCE_MS,
+  type BotContextBlocks,
   type InterruptedSendPolicy,
+  type PromptHost,
   type RunState,
   type SessionHostDeps
 } from './durable/seams'
