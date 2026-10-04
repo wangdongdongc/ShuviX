@@ -489,12 +489,8 @@ export {
   type HarnessEventContext,
   type HarnessEventDeps,
   type HarnessEventState,
-  type ModelsAdapterDeps,
-  type ToolCallGate
+  type ModelsAdapterDeps
 } from './harness'
-// transcript：AgentMessage → ChatMessage 投影 + 面向 Agent 的转写门面
-// （派生 agent 的内存上下文经这条路径渲染成可读转写 —— 面板/导出共用）
-export { agentMessagesToChatMessages, extractBase64, transcribeAgentMessages } from './transcript'
 // shuvix 契约 md 的解析器级校验（ChatApi shuvixMd.validate 的两端共用实现）
 export { validateShuvixMdText } from './shuvixMdValidate'
 // 契约 md 的写后处理（文件工具末尾：校验回执 + 缺省字段盖章）

@@ -6,7 +6,7 @@
  *  - `forwardHarnessEvent` 取代 `forwardAgentEvent`（纯协议翻译）
  *  - `entriesToChatMessages` 取代 `chatMessagesToAgentMessages` 的反向（且是唯一方向）
  */
-export { HarnessSession, type HarnessSessionDeps, type ToolCallGate } from './harnessSession'
+export { HarnessSession, type HarnessSessionDeps } from './harnessSession'
 export {
   forwardHarnessEvent,
   createHarnessEventState,

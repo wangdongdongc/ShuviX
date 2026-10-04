@@ -19,12 +19,7 @@ import {
   prepareCompaction,
   shouldCompact
 } from '@earendil-works/pi-agent-core'
-import type {
-  AgentTool,
-  ExecutionEnv,
-  Session,
-  SessionTreeEntry
-} from '@earendil-works/pi-agent-core'
+import type { AgentTool, ExecutionEnv, Session } from '@earendil-works/pi-agent-core'
 import type { Api, ImageContent, Model, Models } from '@earendil-works/pi-ai'
 import type { AgentRuntimeInfo } from '@shuvix/chat-protocol/chatApi'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
@@ -87,12 +82,6 @@ const TURN_GROWTH_RESERVE_RATIO = 0.1
  */
 const OUTPUT_RESERVE_CAP = 32768
 
-/** 工具调用拦截结果：block=true 时 harness 不执行该工具，改回一条错误 tool result */
-export type ToolCallGate = (
-  toolName: string,
-  args: Record<string, unknown>
-) => Promise<{ block?: boolean; reason?: string } | undefined>
-
 export interface HarnessSessionDeps {
   sessionId: string
   /** entry 树存储（桌面 = SqliteSessionStorage，扩展 = IndexedDB 实现） */
@@ -108,8 +97,6 @@ export interface HarnessSessionDeps {
   logger?: RuntimeLogger
   httpLog?: RuntimeHttpLog
   transformToolResult?: ToolResultTransform
-  /** 工具执行前拦截（询问）。不注入 = 全部放行。 */
-  toolCallGate?: ToolCallGate
   onPromptAccepted?: (text: string) => void
   /** onPayload 记录 HTTP 日志后回传 logId */
   onPayload?: (payload: unknown, model: Model<Api>) => string | undefined
@@ -198,14 +185,6 @@ export class HarnessSession {
       if (event.type === 'agent_end') this.streaming = false
       await forwardHarnessEvent(eventCtx, event)
     })
-
-    // 询问：工具执行前统一拦截。工具实现不再感知询问的存在。
-    if (deps.toolCallGate) {
-      const gate = deps.toolCallGate
-      this.harness.on('tool_call', async (event) => {
-        return await gate(event.toolName, event.input || {})
-      })
-    }
 
     // payload 发出前：先剥历史 thinking，再记 HTTP 日志。
     //
@@ -501,10 +480,6 @@ export class HarnessSession {
 
   // 没有 applyTools：工具集在创建时定型，运行期不换（见 createAgent 的 toolOverlay）
 
-  setSystemPrompt(prompt: string): void {
-    this.systemPrompt = prompt
-  }
-
   // ─── 读取 ──────────────────────────────────────────
 
   /**
@@ -523,11 +498,6 @@ export class HarnessSession {
   async listChatMessages(): Promise<ChatMessage[]> {
     const entries = await this.session.buildContextEntries()
     return entriesToChatMessages(entries, this.sessionId, this.harness.getModel().id)
-  }
-
-  /** 全部 entry（含被压缩掉的历史）—— 归档查看用 */
-  async listAllEntries(): Promise<SessionTreeEntry[]> {
-    return await this.session.getEntries()
   }
 
   /**
