@@ -4,7 +4,15 @@
  * 从桌面 utils/toolUtils/processToolOutput.ts 逐字搬出：未超限原样返回；超限则尝试经 sink
  * 落盘完整内容、回 preview + locator；落盘失败/无 sink → 降级为内存截断。
  * 落盘介质由各宿主注入（桌面 fs 写 tool_results；扩展 OPFS/FSA 写 .shuvix/tool_results）。
+ *
+ * **说明写在哪**有两种口径（`locatorInText`）：
+ *  - 缺省（true，旧口径）：表头 `[Output truncated: …]`、落盘位置与「用 Read 取全文」写进正文开头；
+ *  - false（pi-durable 的工具包装器用）：正文**只**留预览 / 截断后的文字，表头与 locator 由结果字段
+ *    交回，宿主把它们写成 durable 的 diagnostic（`truncationDiagnostic`）—— durable 把诊断渲染在
+ *    结果末尾的 `<harness>` 段里，正文本身则恰好落在预览 / 截断上限之内，durable 自己那道截断
+ *    （`outputLimits`）不会再砍它一刀。
  */
+import type { ToolDiagnostic } from '@earendil-works/pi-durable'
 import {
   truncateMiddle,
   truncateKeepStart,
@@ -42,6 +50,11 @@ export interface ProcessToolOutputOptions {
   maxBytes?: number
   /** 落盘 sink；不传 → 仅内存截断不落盘 */
   sink?: SpillSink
+  /**
+   * 超限说明（表头、落盘位置、「用 Read 取」）写不写进正文。缺省 true（旧口径）；false = 正文只留
+   * 预览 / 截断后的文字（预览末尾也不再补 `...`），说明经 `header` / `locator` 交回。
+   */
+  locatorInText?: boolean
 }
 
 export interface ProcessToolOutputResult {
@@ -50,6 +63,12 @@ export interface ProcessToolOutputResult {
   persisted: boolean
   originalLines: number
   originalBytes: number
+  /** 超限时的表头 `[Output truncated: N lines / X]`（与旧口径正文第一行同一段字）；未超限为 undefined */
+  header?: string
+  /** 落盘成功时 sink 交回的 locator（模型用 read 工具取回全文的那个位置）；没落盘为 undefined */
+  locator?: string
+  /** 截掉之后留下的是哪一段（= 入参 strategy）；未超限为 undefined */
+  kept?: TruncateStrategy
 }
 
 /** 持久化成功时的 preview 行数/字节上限 */
@@ -68,7 +87,8 @@ export async function processToolOutput(
     strategy,
     maxLines = DEFAULT_MAX_LINES,
     maxBytes = DEFAULT_MAX_BYTES,
-    sink
+    sink,
+    locatorInText = true
   } = opts
 
   const originalLines = fullText.split('\n').length
@@ -80,6 +100,7 @@ export async function processToolOutput(
   }
 
   const header = `[Output truncated: ${originalLines} lines / ${formatSize(originalBytes)}]`
+  const truncatedFields = { truncated: true, originalLines, originalBytes, header, kept: strategy }
 
   // 超限 → 尝试经 sink 落盘完整内容
   if (sink) {
@@ -91,18 +112,52 @@ export async function processToolOutput(
         Math.min(PREVIEW_MAX_LINES, maxLines),
         Math.min(PREVIEW_MAX_BYTES, maxBytes)
       )
-      const text =
-        `${header}\n[Full output saved to: ${res.locator}]\n[IMPORTANT: Use the Read tool (not bash) to view the full output]\n\n` +
-        preview.text +
-        (preview.truncated ? '\n...' : '')
-      return { text, truncated: true, persisted: true, originalLines, originalBytes }
+      const text = locatorInText
+        ? `${header}\n[Full output saved to: ${res.locator}]\n[IMPORTANT: Use the Read tool (not bash) to view the full output]\n\n` +
+          preview.text +
+          (preview.truncated ? '\n...' : '')
+        : preview.text
+      return { ...truncatedFields, text, persisted: true, locator: res.locator }
     }
   }
 
   // 无 sink / 落盘失败 → 降级为纯截断
   const fallback = applyTruncation(fullText, strategy, maxLines, maxBytes)
-  const text = `${header}\n\n${fallback.text}`
-  return { text, truncated: true, persisted: false, originalLines, originalBytes }
+  const text = locatorInText ? `${header}\n\n${fallback.text}` : fallback.text
+  return { ...truncatedFields, text, persisted: false }
+}
+
+/** 截断后留下的那一段，按模型读得懂的说法 */
+const KEPT_PART: Record<TruncateStrategy, string> = {
+  middle: 'beginning and end',
+  'keep-start': 'beginning',
+  'keep-end': 'end'
+}
+
+/**
+ * `locatorInText: false` 时交回的说明 → durable 的工具诊断（模型可见，渲染在结果末尾的 `<harness>`
+ * 段里）。未超限交回 undefined。
+ *  - 落盘成功：code `spilled`，写明落盘位置与「用 read 工具（不是 bash）取」——
+ *    与旧口径正文里的指路同一个意思；
+ *  - 只在内存里截断：code `truncated`，写明留下的是哪一段、全文没有留存 —— 不指路（这个 agent
+ *    取不回来，或落盘失败了）。
+ */
+export function truncationDiagnostic(result: ProcessToolOutputResult): ToolDiagnostic | undefined {
+  if (!result.truncated) return undefined
+  const what = `Output truncated: ${result.originalLines} lines / ${formatSize(result.originalBytes)}`
+  if (result.persisted && result.locator !== undefined) {
+    return {
+      severity: 'info',
+      code: 'spilled',
+      message: `${what}; full output saved to ${result.locator}. Use the read tool (not bash) to view it.`
+    }
+  }
+  const part = KEPT_PART[result.kept ?? 'middle']
+  return {
+    severity: 'info',
+    code: 'truncated',
+    message: `${what}; showing the ${part} only. The full output was not kept.`
+  }
 }
 
 function applyTruncation(

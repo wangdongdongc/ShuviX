@@ -120,10 +120,14 @@ const ctx: ToolContext = { sessionId: SID }
 /** 3000 行、每行唯一 —— 任何一档缺省上限下都必然超行数（同 spill.test.ts 的 BIG） */
 const BIG = Array.from({ length: 3000 }, (_, i) => `L${String(i).padStart(4, '0')}`).join('\n')
 
-/** 表头 / 指路之后的正文（第一个空行之后的全部）—— 同 processToolOutput.test.ts 的写法 */
+/**
+ * read 自己那段外壳（文件头之后的第一个空行）之后的正文 —— 只给 TOS-4 / TOS-5 用：真的 read 没超
+ * 宿主上限，正文原样，跳过的是 read 自己的文件头。P1-06 起宿主截断不再往正文前面加表头 / 指路
+ * （说明进了 diagnostics），TOS-1..3 直接看正文本身。
+ */
 const bodyOf = (text: string): string => text.slice(text.indexOf('\n\n') + 2)
 
-/** 工具结果里交给模型的那段文字 */
+/** 工具结果里交给模型的那段文字（正文；宿主的截断 / 落盘说明在 diagnostics 里，不在这里） */
 function textOf(result: InvokedToolResult): string {
   return resultText(result)
 }
@@ -145,7 +149,11 @@ function hostWrap(tool: object, spill: boolean): AnyTool {
  * 工具本体换成一个只回 `text` 的探针 —— 原型仍是**真工具**，声明的 outputStrategy / outputMax*
  * 一并继承，于是「声明什么」与「剩下什么」之间没有第二份副本。探针不读参数，只回这段文字。
  */
-async function hostRun(tool: object, text: string, opts: { spill: boolean }): Promise<string> {
+async function hostRunResult(
+  tool: object,
+  text: string,
+  opts: { spill: boolean }
+): Promise<InvokedToolResult> {
   const probe = Object.create(tool) as object
   Object.defineProperty(probe, 'execute', {
     value: async () => ({ content: [{ type: 'text' as const, text }], details: undefined }),
@@ -153,7 +161,11 @@ async function hostRun(tool: object, text: string, opts: { spill: boolean }): Pr
     enumerable: true,
     configurable: true
   })
-  return textOf(await executeTool(hostWrap(probe, opts.spill), 'tos-call', {}))
+  return executeTool(hostWrap(probe, opts.spill), 'tos-call', {})
+}
+
+async function hostRun(tool: object, text: string, opts: { spill: boolean }): Promise<string> {
+  return textOf(await hostRunResult(tool, text, opts))
 }
 
 /** 真文件：2500 行、每行唯一 —— 超过 read 自己的 2000 行封顶，于是结果里必带续读提示 */
@@ -185,7 +197,7 @@ describe('TOS 声明「保留开头」的工具', () => {
   ]
 
   it.each(rows)('TOS-1 %s 超限之后模型拿到的是开头', async (_name, make) => {
-    const body = bodyOf(await hostRun(make(), BIG, { spill: false }))
+    const body = await hostRun(make(), BIG, { spill: false })
 
     expect(body.startsWith('L0000'), body.slice(0, 40)).toBe(true)
     expect(body).not.toContain('L2999')
@@ -197,7 +209,7 @@ describe('TOS 没声明策略的工具', () => {
     // MCP 注册项就是这个形状：一个带 name / replay 的普通对象，没有 outputStrategy
     const tool = { name: 'mcp__probe__dump', replay: 'unsafe' }
 
-    const body = bodyOf(await hostRun(tool, BIG, { spill: false }))
+    const body = await hostRun(tool, BIG, { spill: false })
 
     expect(body.startsWith('L0000'), body.slice(0, 40)).toBe(true)
     expect(body).toContain('L2999')
@@ -207,10 +219,12 @@ describe('TOS 没声明策略的工具', () => {
 
 describe('TOS 落盘之后的预览', () => {
   it('TOS-3 read 落盘时，正文里那段预览同样从开头起', async () => {
-    const text = await hostRun(makeReadTool(ctx), BIG, { spill: true })
+    const result = await hostRunResult(makeReadTool(ctx), BIG, { spill: true })
 
-    expect(text).toContain('[Full output saved to: ')
-    const body = bodyOf(text)
+    // 落盘位置在诊断里（P1-06 前在正文开头）
+    expect(result.diagnostics?.map((d) => d.code)).toEqual(['spilled'])
+    const body = textOf(result)
+    expect(body).not.toContain('Full output saved')
     expect(body.startsWith('L0000'), body.slice(0, 40)).toBe(true)
     // 预览封顶 200 行：第 200 行还在
     expect(body).toContain('L0199')

@@ -8,6 +8,11 @@
  * pi-durable：包装器收的、交出的都是 durable 注册项（`execute(args, api, context)`），经 invokeTool 调；
  * 手写的假工具也是 durable 形状（P1-05 删掉了旧形状桥）。门拒绝从「抛错」变成 isError 结果
  * （裁定 Q12，文字不变）。
+ *
+ * P1-06 的期望变化：L1 门的 opts 多了这次调用的 taskId / conversationId（W-2）；位置参数版
+ * `wrapToolOutput` 不传 overrides 时交给后处理的 spill 是 true 而不是 undefined（W-S3，同义）；
+ * 每次后处理都带 `locatorInText: false`（W-S1）。落盘 / 截断说明走 diagnostics 的整条链在
+ * wrapToolOutputSpill.test.ts 与 wrapDurableTool.test.ts。
  */
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import type { Context } from '@earendil-works/chord'
@@ -38,7 +43,8 @@ interface ProcessCall {
   strategy: string
   maxBytes?: number
   maxLines?: number
-  spill?: boolean
+  spill?: boolean | (() => boolean | Promise<boolean>)
+  locatorInText?: boolean
 }
 
 const mocks = vi.hoisted(() => ({
@@ -135,7 +141,7 @@ describe('wrapToolOutput — L1 全工具门', () => {
     expect(result.content).toEqual([{ type: 'text', text: 'ran' }])
   })
 
-  it('W-2 调用形态：opts 恰为 {toolCallId, toolName, operation, mcp, abortError, onOther, signal}（无 missingChannel）', async () => {
+  it('W-2 调用形态：opts 恰为 {toolCallId, taskId, conversationId, toolName, operation, mcp, abortError, onOther, signal}（无 missingChannel）', async () => {
     const { tool } = makeTool('ssh')
     const { security, enforceInvocation } = makeSecurity()
     const wrapped = wrapToolOutput(tool, SID, 'middle', undefined, security)
@@ -145,6 +151,9 @@ describe('wrapToolOutput — L1 全工具门', () => {
     expect(enforceInvocation).toHaveBeenCalledTimes(1)
     expect(enforceInvocation.mock.calls[0][0]).toStrictEqual({
       toolCallId: 'tc-2',
+      // P1-06：这次调用的 durable 归属（invokeTool 的缺省 taskId 1、根对话 1）—— 询问与审查按它认人
+      taskId: 1,
+      conversationId: 1,
       toolName: 'ssh',
       operation: 'connect',
       // 内置工具没有 MCP 事实可报 —— 这个键在也是 undefined
@@ -427,6 +436,8 @@ describe('wrapToolOutput — 截断 / 落盘参数的穿线', () => {
     expect(calls).toHaveLength(2)
     expect(calls.map((c) => c.fullText)).toEqual(['first block', 'second block'])
     for (const call of calls) expect(call.spill).toBe(false)
+    // P1-06：落盘位置 / 截断说明一律不进正文（包装器写成 diagnostic）
+    for (const call of calls) expect(call.locatorInText).toBe(false)
     // 图片原样待在原位
     expect(result.content[1]).toBe(IMAGE_BLOCK)
     expect(result.content).toHaveLength(3)
@@ -456,7 +467,7 @@ describe('wrapToolOutput — 截断 / 落盘参数的穿线', () => {
     expect(calls[1].toolCallId).toBe('tc-s2-2')
   })
 
-  it('W-S3 不传 overrides → spill 为 undefined（= 缺省落盘），另两个上限也不凭空冒出来', async () => {
+  it('W-S3 不传 overrides → spill 为 true（= 缺省落盘；P1-06 前交的是 undefined，同义），另两个上限也不凭空冒出来', async () => {
     const { tool } = makeTool()
     const wrapped = wrapToolOutput(tool, SID, 'middle')
 
@@ -464,7 +475,7 @@ describe('wrapToolOutput — 截断 / 落盘参数的穿线', () => {
 
     const calls = processCalls()
     expect(calls).toHaveLength(1)
-    expect(calls[0].spill).toBeUndefined()
+    expect(calls[0].spill).toBe(true)
     expect(calls[0].maxBytes).toBeUndefined()
     expect(calls[0].maxLines).toBeUndefined()
   })

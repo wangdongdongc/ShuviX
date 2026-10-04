@@ -12,6 +12,9 @@
  * pi-durable：包装器收的、交出的都是 durable 注册项，经 invokeTool 调；假工具也是 durable 形状。
  * 抛错与门的拒绝从「reject」变成 isError 结果（裁定 Q12，模型看到的文字不变）。
  *
+ * P1-06：L1 门把这次调用的 durable taskId / conversationId 交给安全模块，审查接缝收到的事件带着它们
+ * （W-R11，审查按 (sessionId, taskId) 归属 —— 裁定 Q16）；其余用例的期望不变。
+ *
  * mock 惯例同 wrapToolOutput.test.ts（toolContext 只给 TOOL_ABORTED、logger 置空、processToolOutput
  * 原样直通）；安全门面用真 createSecurityContext + 一条让 L1 invocation 走 ask 档的用户策略（用户策略的
  * ask 就是 tier 'ask'，会先交给审查），provider 上挂 onPermissionRequest。
@@ -21,6 +24,7 @@ import type { AnyTool } from '@shuvix/agent-runtime'
 import {
   executeTool,
   failureText,
+  invokeTool,
   type InvokedToolResult
 } from '@shuvix/agent-runtime/tools/testing/invokeTool'
 import {
@@ -300,6 +304,35 @@ describe('wrapToolOutput — 审查放行的调用在结果上留「已审查」
     })
     expect(execute).toHaveBeenCalledTimes(1)
     expect(takeReviewAllowed(SID, 'tc-R10')).toBeUndefined()
+  })
+
+  it('W-R11 L1 门交给审查接缝的事件带着这次调用的 taskId / conversationId（toolCallId 相同的两次调用分得开）', async () => {
+    const review = reviewerOf(
+      answer(verdict('allow', 'low', 'first')),
+      answer(verdict('allow', 'low', 'second'))
+    )
+    const { security } = makeSecurity({ review })
+    const { tool } = makeTool(undefined)
+    const wrapped = wrapToolOutput(tool, SID, 'middle', undefined, security)
+
+    await invokeTool(wrapped, { action: 'connect' } as never, {
+      callId: 'call_0',
+      taskId: 61,
+      conversationId: 5
+    })
+    await invokeTool(wrapped, { action: 'connect' } as never, { callId: 'call_0', taskId: 62 })
+
+    expect(review).toHaveBeenCalledTimes(2)
+    const owners = review.mock.calls.map(([event]) => ({
+      toolCallId: event.toolCallId,
+      taskId: event.taskId,
+      conversationId: event.conversationId
+    }))
+    expect(owners).toEqual([
+      { toolCallId: 'call_0', taskId: 61, conversationId: 5 },
+      // invokeTool 缺省根对话（1）
+      { toolCallId: 'call_0', taskId: 62, conversationId: 1 }
+    ])
   })
 
   it('W-R9 人在 L1 卡上写反馈（other）→ 返回的 feedback 结果不带标记', async () => {

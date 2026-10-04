@@ -182,6 +182,7 @@ export { initOp, addOp, commitOp, statusOp, unstageOp } from './git/gitOps'
 // 工具输出后处理共享内核（截断 + 经注入 SpillSink 落盘）
 export {
   processToolOutput,
+  truncationDiagnostic,
   type SpillSink,
   type TruncateStrategy,
   type ProcessToolOutputOptions,
