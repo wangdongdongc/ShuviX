@@ -20,9 +20,11 @@
  *
  * 二、**成因可见**。fetch 失败后 SDK 一律换成固定文案（连接类 "Connection error."、
  *     被判定为超时的则是 "Request timed out."），真正的 `cause` 链挂在 error 上；
- *     而 pi-ai 的 stream 在自己的 catch 里只留 `error.message`，到 modelsAdapter
- *     时已经没有 cause 可读了。所以在这里、也只能在这里把链子记下来，由
- *     modelsAdapter 贴回错误文案，同时写一条 warn 进主进程日志。
+ *     而 pi-ai 的 stream 在自己的 catch 里只留 `error.message`，到模型层的
+ *     装饰器（agent-runtime models/networkModels 的 withNetwork）时已经没有 cause
+ *     可读了。所以在这里、也只能在这里把链子记下来，由 withNetwork 贴回错误文案
+ *     （流的 error 事件与最终 result() 都贴 —— pi-durable 按 result() 判定重试），
+ *     同时写一条 warn 进主进程日志。
  *
  * 注意 `installLlmNetwork()` 换掉的是全局 fetch，但包装体在作用域外是直接透传的，
  * 代价只有一次 `getStore()`。
@@ -30,7 +32,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { Agent } from 'undici'
 import type { RuntimeNetwork } from '@shuvix/agent-runtime'
-import { createLogger } from '../logger'
+import { createLogger } from '../../logger'
 
 const log = createLogger('LlmNetwork')
 

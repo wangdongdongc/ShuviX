@@ -19,7 +19,7 @@ import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { Agent } from 'undici'
 
-vi.mock('../../logger', () => ({
+vi.mock('../../../logger', () => ({
   createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() })
 }))
 
