@@ -12,7 +12,8 @@
  *     抛出（步骤行红）；答非所问 → 「Unexpected answer」；
  *   - 三个工具都注册在 general 组；折叠行摘要取定位原文 / 插入文字的第一行非空文字，过长截断。
  *
- * 桥换成可捕获的假件（requestLiveDocument）；i18n 原样回 key；工具类直接 new 出来经 BaseTool.execute 驱动。
+ * 桥换成可捕获的假件（requestLiveDocument）；i18n 原样回 key；工具类直接 new 出来经 BaseTool.execute 驱动
+ * （durable 签名，经 invokeTool）。「抛」在 P1-04 起是 isError 结果，文字不变（裁定 Q12）。
  *
  *   T1 schema：doc_read 无属性；doc_edit 必填 find + replace；doc_insert 键序 after, before, text，只 text 必填
  *   T2 doc_read 的结果排版（行号、末尾空行、用户那句话的各分支、diff 块、截断）
@@ -28,6 +29,12 @@ import type {
 } from '@shuvix/chat-protocol/liveDocument'
 import { BUILTIN_TOOL_PRESENTATIONS } from '@shuvix/chat-protocol/builtinToolPresentations'
 import type { ToolContext } from '../../services/toolContext'
+import type { AnyTool } from '@shuvix/agent-runtime'
+import {
+  executeTool,
+  failureText,
+  resultText
+} from '@shuvix/agent-runtime/tools/testing/invokeTool'
 
 const mocks = vi.hoisted(() => ({
   request:
@@ -67,18 +74,27 @@ const readResult = (
   over: Partial<Extract<LiveDocResult, { kind: 'read' }>> = {}
 ): LiveDocResult => ({ ok: true, kind: 'read', text, user: user(), ...over })
 
-/** 工具结果的全文（只有一个文本块） */
+/** 工具结果的全文（只有一个文本块；必须是成功结果） */
 async function run(
-  tool: { execute: (id: string, params: never, signal?: AbortSignal) => Promise<unknown> },
+  tool: AnyTool,
   params: Record<string, unknown>,
   signal?: AbortSignal
 ): Promise<string> {
-  const result = (await tool.execute('tc-1', params as never, signal)) as {
-    content: Array<{ type: string; text: string }>
-  }
+  const result = await executeTool(tool, 'tc-1', params as never, signal)
+  expect(result.isError, resultText(result)).toBeUndefined()
   expect(result.content).toHaveLength(1)
   expect(result.content[0].type).toBe('text')
-  return result.content[0].text
+  return resultText(result)
+}
+
+/**
+ * 失败调用交回的文字。P1-04 起工具抛错由 BaseTool 模板收成 isError 结果（裁定 Q12），
+ * 模型看到的文字就是原先抛出的消息 —— 下面 T4 的「抛」都按这个口径断言。
+ */
+async function failure(tool: AnyTool, params: Record<string, unknown>): Promise<string> {
+  const result = await executeTool(tool, 'tc-1', params as never)
+  expect(result.content).toHaveLength(1)
+  return failureText(Promise.resolve(result))
 }
 
 const readTool = (): InstanceType<DocModule['DocReadTool']> => new mod.DocReadTool(ctx)
@@ -298,19 +314,19 @@ describe('T3 doc_edit / doc_insert 交给桥的东西与结果', () => {
 
 describe('T4 失败', () => {
   it('doc_edit 空 find → 交给桥之前就抛，错误点名 doc_insert', async () => {
-    await expect(run(editTool(), { find: '', replace: 'x' })).rejects.toThrow(/doc_insert/)
+    expect(await failure(editTool(), { find: '', replace: 'x' })).toMatch(/doc_insert/)
     expect(mocks.request).not.toHaveBeenCalled()
   })
 
   it('doc_insert 两个锚点都给 → 抛，没交给桥', async () => {
-    await expect(run(insertTool(), { after: 'a', before: 'b', text: 'x' })).rejects.toThrow(
+    expect(await failure(insertTool(), { after: 'a', before: 'b', text: 'x' })).toContain(
       'Give `after` or `before`, not both.'
     )
     expect(mocks.request).not.toHaveBeenCalled()
   })
 
   it('doc_insert 空 text → 抛，没交给桥', async () => {
-    await expect(run(insertTool(), { text: '' })).rejects.toThrow('`text` is empty.')
+    expect(await failure(insertTool(), { text: '' })).toContain('`text` is empty.')
     expect(mocks.request).not.toHaveBeenCalled()
   })
 
@@ -321,12 +337,12 @@ describe('T4 失败', () => {
   ])('%s：窗口答 {ok:false} → 以它的 error 抛出', async (_label, make, params) => {
     const error = '`find` does not match the current document.'
     mocks.request.mockResolvedValueOnce({ ok: false, error })
-    await expect(run(make(), params)).rejects.toThrow(error)
+    expect(await failure(make(), params)).toContain(error)
   })
 
   it('桥本身失败（没有窗口 / 超时）→ 原样抛', async () => {
     mocks.request.mockRejectedValueOnce(new Error('No document window is open for this session.'))
-    await expect(run(readTool(), {})).rejects.toThrow('No document window is open')
+    expect(await failure(readTool(), {})).toContain('No document window is open')
   })
 
   it('答非所问 → 「Unexpected answer」', async () => {
@@ -337,13 +353,13 @@ describe('T4 失败', () => {
       context: '',
       waitedMs: 0
     })
-    await expect(run(readTool(), {})).rejects.toThrow(/Unexpected answer/)
+    expect(await failure(readTool(), {})).toMatch(/Unexpected answer/)
 
     mocks.request.mockResolvedValueOnce(readResult('x'))
-    await expect(run(editTool(), { find: 'a', replace: 'b' })).rejects.toThrow(/Unexpected answer/)
+    expect(await failure(editTool(), { find: 'a', replace: 'b' })).toMatch(/Unexpected answer/)
 
     mocks.request.mockResolvedValueOnce(readResult('x'))
-    await expect(run(insertTool(), { text: 'x' })).rejects.toThrow(/Unexpected answer/)
+    expect(await failure(insertTool(), { text: 'x' })).toMatch(/Unexpected answer/)
   })
 })
 

@@ -3,7 +3,7 @@
  * 从桌面 edit.ts 的 executeInternal 内层逐字搬出，fs → 注入的 FileSystemPort，
  * fileTime → 注入的 FileGuards。富文本/询问/abort 仍由各宿主在外层编排。
  */
-import type { AgentToolResult } from '../tools/toolResult'
+import type { ToolResult } from '../tools/toolResult'
 import type { EditToolDetails } from '@shuvix/chat-protocol/types/chatMessage'
 import type { FileSystemPort, FileGuards, WriteAskHook } from './port'
 import {
@@ -43,7 +43,7 @@ export async function applyEdit(
   readPath: string,
   params: EditParams,
   ask?: WriteAskHook
-): Promise<AgentToolResult<EditToolDetails>> {
+): Promise<ToolResult<EditToolDetails>> {
   return guards.withFileLock(readPath, async () => {
     // 检查文件是否存在
     const st = await port.stat(readPath)

@@ -1,10 +1,14 @@
 /**
  * NextTool —— 结果契约协议的工具侧：schema 校验挡回、一次性捕获、契约段文案。
  *
- * 这里钉的是「结果即参数」的可信度：校验失败**必须 throw 且不置 captured**（模型同轮
+ * 这里钉的是「结果即参数」的可信度：校验失败**必须交回失败结果且不置 captured**（模型同轮
  * 看到字段级指正后重试，重试的才是结果）；捕获成功后的重复调用**必须温和拒绝**（并联
  * 双发防护）。错误文案遵循 5250adc 的纠正性引导纪律 —— 说清哪个字段、期望什么、
  * 下一步做什么（call `next` again），而不是一句 invalid。
+ *
+ * P1-04（pi-durable）：工具经 durable 的 `execute(args, api, context)` 调（测试里经 invokeTool）；
+ * 校验失败从「抛错」变成 BaseTool 模板收口的 isError 结果（裁定 Q12，模型看到的文字不变），
+ * 收尾从结果上的 `terminate` 变成 `control: { terminate: true }`。
  */
 import { describe, expect, it, vi } from 'vitest'
 import {
@@ -13,6 +17,7 @@ import {
   validateContractSchema,
   NEXT_TOOL_NAME
 } from '../nextTool'
+import { invokeTool, type InvokedToolResult } from '../../tools/testing/invokeTool'
 
 const TITLE_SCHEMA = {
   type: 'object',
@@ -59,50 +64,60 @@ describe('buildResultContractNote — prompt 末尾契约段', () => {
 })
 
 describe('NextTool — 经 BaseTool 模板 execute 的捕获协议', () => {
-  const textOf = (r: { content: Array<{ type: string; text?: string }> }): string =>
-    r.content.map((c) => c.text ?? '').join('')
+  const textOf = (r: InvokedToolResult): string =>
+    r.content.map((c) => (c.type === 'text' ? c.text : '')).join('')
+  const run = async (
+    tool: NextTool,
+    params: Record<string, unknown>,
+    callId = 't1'
+  ): Promise<InvokedToolResult> => (await invokeTool(tool, params, { callId })).result
 
-  it('合法参数 → onCapture 收到原参数、返回文本含 Result recorded、带 terminate', async () => {
+  it('合法参数 → onCapture 收到原参数、返回文本含 Result recorded、带 control.terminate', async () => {
     const onCapture = vi.fn()
     const tool = new NextTool(TITLE_SCHEMA, onCapture)
     const params = { title: 'Fix login bug' }
-    const out = await tool.execute('t1', params)
+    const out = await run(tool, params)
     expect(onCapture).toHaveBeenCalledTimes(1)
     expect(onCapture).toHaveBeenCalledWith(params)
-    expect(textOf(out as never)).toContain('Result recorded')
-    // 只调了 next 的那一批，pi 据此结束循环、不再发下一次请求
-    expect((out as { terminate?: boolean }).terminate).toBe(true)
+    expect(textOf(out)).toContain('Result recorded')
+    expect(out.isError).toBeUndefined()
+    // 只调了 next 的那一批，durable 据此结束循环、不再发下一次请求
+    expect(out.control).toEqual({ terminate: true })
+    // 旧形状的顶层 terminate 不再出现
+    expect('terminate' in out).toBe(false)
   })
 
-  it('缺 required 字段 → throw，消息含字段位置与期望、含 call `next` again', async () => {
+  it('缺 required 字段 → isError 结果（原 throw），文字含字段位置与期望、含 call `next` again', async () => {
     const tool = new NextTool(TITLE_SCHEMA, vi.fn())
-    await expect(tool.execute('t1', {})).rejects.toThrow(/call `next` again/)
-    await expect(tool.execute('t1', {})).rejects.toThrow(
-      /\(root\): must have required properties title/
-    )
+    const out = await run(tool, {})
+    expect(out.isError).toBe(true)
+    expect(textOf(out)).toMatch(/call `next` again/)
+    expect(textOf(out)).toMatch(/\(root\): must have required properties title/)
+    // 失败的一次不收尾：模型还得改了再调
+    expect(out.control).toBeUndefined()
   })
 
-  it('校验失败不置 captured：先非法调用（throw）后合法调用仍能捕获', async () => {
+  it('校验失败不置 captured：先非法调用（isError）后合法调用仍能捕获', async () => {
     const onCapture = vi.fn()
     const tool = new NextTool(TITLE_SCHEMA, onCapture)
-    await expect(tool.execute('t1', { title: 42 })).rejects.toThrow()
+    expect((await run(tool, { title: 42 })).isError).toBe(true)
     expect(onCapture).not.toHaveBeenCalled()
 
-    const out = await tool.execute('t2', { title: 'ok now' })
+    const out = await run(tool, { title: 'ok now' }, 't2')
     expect(onCapture).toHaveBeenCalledTimes(1)
     expect(onCapture).toHaveBeenCalledWith({ title: 'ok now' })
-    expect(textOf(out as never)).toContain('Result recorded')
+    expect(textOf(out)).toContain('Result recorded')
   })
 
   it('重复调用防护：捕获后二次 execute → already recorded 文本、onCapture 恰一次', async () => {
     const onCapture = vi.fn()
     const tool = new NextTool(TITLE_SCHEMA, onCapture)
-    await tool.execute('t1', { title: 'first' })
-    const again = await tool.execute('t2', { title: 'second' })
-    expect(textOf(again as never)).toContain('already recorded')
+    await run(tool, { title: 'first' })
+    const again = await run(tool, { title: 'second' }, 't2')
+    expect(textOf(again)).toContain('already recorded')
     expect(onCapture).toHaveBeenCalledTimes(1)
     // 同批两次 next：第二次也带 terminate，整批才满足「全部 terminate」
-    expect((again as { terminate?: boolean }).terminate).toBe(true)
+    expect(again.control).toEqual({ terminate: true })
   })
 
   it('错误明细上限 8 条（12 处违例 → 恰 8 行明细）', async () => {
@@ -113,12 +128,11 @@ describe('NextTool — 经 BaseTool 模板 execute 的捕获协议', () => {
       bad[`k${i}`] = i
     }
     const tool = new NextTool({ type: 'object', properties }, vi.fn())
-    const err = await tool.execute('t1', bad).then(
-      () => null,
-      (e: Error) => e
-    )
-    expect(err).toBeInstanceOf(Error)
-    const detailLines = err!.message.split('\n').filter((l) => l.startsWith('  - '))
+    const out = await run(tool, bad)
+    expect(out.isError).toBe(true)
+    const detailLines = textOf(out)
+      .split('\n')
+      .filter((l) => l.startsWith('  - '))
     expect(detailLines).toHaveLength(8)
   })
 
@@ -149,12 +163,12 @@ describe('NextTool — 经 BaseTool 模板 execute 的捕获协议', () => {
     }
     const onCapture = vi.fn()
     const tool = new NextTool(schema, onCapture)
-    await expect(tool.execute('t1', { level: 0, kind: 'c' })).rejects.toThrow(
-      /\/level: must be >= 1/
-    )
+    const rejected = await run(tool, { level: 0, kind: 'c' })
+    expect(rejected.isError).toBe(true)
+    expect(textOf(rejected)).toMatch(/\/level: must be >= 1/)
     expect(onCapture).not.toHaveBeenCalled()
 
-    await tool.execute('t2', { level: 3, kind: 'a' })
+    await run(tool, { level: 3, kind: 'a' }, 't2')
     expect(onCapture).toHaveBeenCalledWith({ level: 3, kind: 'a' })
   })
 })

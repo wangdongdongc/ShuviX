@@ -49,6 +49,7 @@ import {
   type ReadDecoders
 } from '../fileToolSuite'
 import { createInlinePolicyMdReader } from '@shuvix/agent-runtime/security/builtinPolicies/inlineSources'
+import { executeTool, failureText, resultText, type InvokedToolResult } from '../testing/invokeTool'
 
 /** 内置策略 md 的构建期内联读取口（真实装配链要它；测试进程，不进桌面 bundle） */
 const INLINE_POLICY_MD = createInlinePolicyMdReader()
@@ -259,19 +260,19 @@ const allowed = (): InputResponse => ({ kind: 'ask', allowed: true })
 describe('文件工具套件 — 询问请求的次数与形状', () => {
   it('CONS-11: 一次 write 只触发一次 requestUserInput（不先弹路径卡再弹预览卡）', async () => {
     const h = makeSuite({ respond: allowed })
-    await h.suite.write.execute('call-1', { path: INSIDE, content: 'hello\n' })
+    await executeTool(h.suite.write, 'call-1', { path: INSIDE, content: 'hello\n' })
     expect(h.requestUserInput).toHaveBeenCalledTimes(1)
   })
 
   it('CONS-11: 一次 edit 只触发一次 requestUserInput', async () => {
     const h = makeSuite({ files: { [INSIDE_ABS]: 'alpha\nbeta\n' }, respond: allowed })
-    await h.suite.edit.execute('call-2', { path: INSIDE, oldText: 'beta', newText: 'BETA' })
+    await executeTool(h.suite.edit, 'call-2', { path: INSIDE, oldText: 'beta', newText: 'BETA' })
     expect(h.requestUserInput).toHaveBeenCalledTimes(1)
   })
 
   it('CONS-12: write 的询问请求形状（id/toolName/command/preview 全对齐）', async () => {
     const h = makeSuite({ respond: allowed })
-    const res = await h.suite.write.execute('call-3', { path: INSIDE, content: 'hello\n' })
+    const res = await executeTool(h.suite.write, 'call-3', { path: INSIDE, content: 'hello\n' })
 
     const req = h.requests[0]
     expect(req.kind).toBe('ask')
@@ -288,7 +289,7 @@ describe('文件工具套件 — 询问请求的次数与形状', () => {
 
   it('CONS-12: edit 的询问请求形状（toolName=edit，预览路径取展示路径）', async () => {
     const h = makeSuite({ files: { [INSIDE_ABS]: 'alpha\nbeta\n' }, respond: allowed })
-    await h.suite.edit.execute('call-4', { path: INSIDE, oldText: 'beta', newText: 'BETA' })
+    await executeTool(h.suite.edit, 'call-4', { path: INSIDE, oldText: 'beta', newText: 'BETA' })
 
     const req = h.requests[0]
     if (req.kind !== 'ask') throw new Error('expected an ask request')
@@ -300,7 +301,7 @@ describe('文件工具套件 — 询问请求的次数与形状', () => {
 
   it('PERM-10: read 的询问请求不带 preview（凭据目录读取门触发）', async () => {
     const h = makeSuite({ files: { [CREDENTIAL_ABS]: 'secret\n' }, respond: allowed })
-    await h.suite.read.execute('call-5', { path: CREDENTIAL_ABS })
+    await executeTool(h.suite.read, 'call-5', { path: CREDENTIAL_ABS })
 
     const req = h.requests[0]
     if (req.kind !== 'ask') throw new Error('expected an ask request')
@@ -311,7 +312,7 @@ describe('文件工具套件 — 询问请求的次数与形状', () => {
 
   it('PERM-10b: 工作区外读取不问（内置策略只对凭据位置问读取），照常读取', async () => {
     const h = makeSuite({ files: { '/outside/free.txt': 'hello\n' }, respond: allowed })
-    const res = await h.suite.read.execute('call-6', { path: '/outside/free.txt' })
+    const res = await executeTool(h.suite.read, 'call-6', { path: '/outside/free.txt' })
     expect(h.requestUserInput).not.toHaveBeenCalled()
     expect((res.content[0] as { text: string }).text).toContain('hello')
   })
@@ -323,16 +324,16 @@ describe('文件工具套件 — 放行短路', () => {
   it('PERM-2: 工作目录内 write 会弹窗，同路径 read 不弹', async () => {
     const h = makeSuite({ files: { [INSIDE_ABS]: 'alpha\n' }, respond: allowed })
 
-    await h.suite.read.execute('r1', { path: INSIDE })
+    await executeTool(h.suite.read, 'r1', { path: INSIDE })
     expect(h.requestUserInput).not.toHaveBeenCalled()
 
-    await h.suite.write.execute('w1', { path: INSIDE, content: 'beta\n' })
+    await executeTool(h.suite.write, 'w1', { path: INSIDE, content: 'beta\n' })
     expect(h.requestUserInput).toHaveBeenCalledTimes(1)
   })
 
   it('PERM-3: 会话授权（整个工作目录「允许并记住」过）→ 不弹窗、照常写入、details.diff 仍完整', async () => {
     const h = makeSuite({ allowList: [`Write(${ROOT})`], respond: allowed })
-    const res = await h.suite.write.execute('w2', { path: INSIDE, content: 'one\ntwo\n' })
+    const res = await executeTool(h.suite.write, 'w2', { path: INSIDE, content: 'one\ntwo\n' })
 
     expect(h.requestUserInput).not.toHaveBeenCalled()
     expect(h.files.get(INSIDE_ABS)).toBe('one\ntwo\n')
@@ -343,7 +344,7 @@ describe('文件工具套件 — 放行短路', () => {
 
   it('PERM-4: allowList 命中 Write(abs) → 不弹窗', async () => {
     const h = makeSuite({ allowList: [`Write(${INSIDE_ABS})`], respond: allowed })
-    await h.suite.write.execute('w3', { path: INSIDE, content: 'hi\n' })
+    await executeTool(h.suite.write, 'w3', { path: INSIDE, content: 'hi\n' })
 
     expect(h.requestUserInput).not.toHaveBeenCalled()
     expect(h.files.get(INSIDE_ABS)).toBe('hi\n')
@@ -351,7 +352,7 @@ describe('文件工具套件 — 放行短路', () => {
 
   it('PERM-4: 只有 Read(abs) 条目时 write 仍弹窗（读权限不隐含写权限）', async () => {
     const h = makeSuite({ allowList: [`Read(${INSIDE_ABS})`], respond: allowed })
-    await h.suite.write.execute('w4', { path: INSIDE, content: 'hi\n' })
+    await executeTool(h.suite.write, 'w4', { path: INSIDE, content: 'hi\n' })
 
     expect(h.requestUserInput).toHaveBeenCalledTimes(1)
   })
@@ -360,28 +361,26 @@ describe('文件工具套件 — 放行短路', () => {
     const remember = makeSuite({
       respond: () => ({ kind: 'ask', allowed: true, extra: { rememberPath: true } })
     })
-    await remember.suite.write.execute('w5', { path: INSIDE, content: 'hi\n' })
+    await executeTool(remember.suite.write, 'w5', { path: INSIDE, content: 'hi\n' })
     expect(remember.persistGrant).toHaveBeenCalledTimes(1)
     expect(remember.persistGrant).toHaveBeenCalledWith('write', INSIDE_ABS)
 
     const denied = makeSuite({
       respond: () => ({ kind: 'ask', allowed: false, extra: { rememberPath: true } })
     })
-    await expect(
-      denied.suite.write.execute('w6', { path: INSIDE, content: 'hi\n' })
-    ).rejects.toThrow()
+    await failureText(executeTool(denied.suite.write, 'w6', { path: INSIDE, content: 'hi\n' }))
     expect(denied.persistGrant).not.toHaveBeenCalled()
   })
 
   it('PERM-7: 无询问通道时目录内 write 被拒，read 仍放行', async () => {
     const h = makeSuite({ files: { [INSIDE_ABS]: 'alpha\n' } })
 
-    await expect(h.suite.write.execute('w7', { path: INSIDE, content: 'x\n' })).rejects.toThrow(
-      `Access denied: path outside workspace and no way to ask: ${INSIDE}`
-    )
+    expect(
+      await failureText(executeTool(h.suite.write, 'w7', { path: INSIDE, content: 'x\n' }))
+    ).toContain(`Access denied: path outside workspace and no way to ask: ${INSIDE}`)
     expect(h.files.get(INSIDE_ABS)).toBe('alpha\n')
 
-    const read = await h.suite.read.execute('r2', { path: INSIDE })
+    const read = await executeTool(h.suite.read, 'r2', { path: INSIDE })
     expect((read.content[0] as { text: string }).text).toContain('alpha')
   })
 })
@@ -391,67 +390,67 @@ describe('文件工具套件 — 放行短路', () => {
 describe('文件工具套件 — InputResponse 分支', () => {
   it('RESP-1: allowed:true → 写入发生', async () => {
     const h = makeSuite({ respond: allowed })
-    await h.suite.write.execute('resp1', { path: INSIDE, content: 'yes\n' })
+    await executeTool(h.suite.write, 'resp1', { path: INSIDE, content: 'yes\n' })
     expect(h.files.get(INSIDE_ABS)).toBe('yes\n')
   })
 
-  it('RESP-2: allowed:false 无 reason → 抛 User denied access to <displayPath>，文件不变', async () => {
+  it('RESP-2: allowed:false 无 reason → 失败结果 User denied access to <displayPath>（Q12：原为抛错），文件不变', async () => {
     const h = makeSuite({
       files: { [INSIDE_ABS]: 'old\n' },
       respond: () => ({ kind: 'ask', allowed: false })
     })
-    await expect(
-      h.suite.write.execute('resp2', { path: INSIDE, content: 'new\n' })
-    ).rejects.toThrow(`User denied access to ${INSIDE}`)
+    expect(
+      await failureText(executeTool(h.suite.write, 'resp2', { path: INSIDE, content: 'new\n' }))
+    ).toContain(`User denied access to ${INSIDE}`)
     expect(h.files.get(INSIDE_ABS)).toBe('old\n')
   })
 
-  it('RESP-3: allowed:false 带 reason → 抛该 reason', async () => {
+  it('RESP-3: allowed:false 带 reason → 失败结果就是该 reason', async () => {
     const h = makeSuite({
       respond: () => ({ kind: 'ask', allowed: false, reason: '这个文件别动' })
     })
-    await expect(
-      h.suite.write.execute('resp3', { path: INSIDE, content: 'new\n' })
-    ).rejects.toThrow('这个文件别动')
+    expect(
+      await failureText(executeTool(h.suite.write, 'resp3', { path: INSIDE, content: 'new\n' }))
+    ).toContain('这个文件别动')
   })
 
-  it('RESP-4: kind:other → 抛含 provided feedback instead 的错误，且无任何副作用', async () => {
+  it('RESP-4: kind:other → 失败结果含 provided feedback instead，且无任何副作用', async () => {
     const h = makeSuite({
       files: { [INSIDE_ABS]: 'old\n' },
       respond: () => ({ kind: 'other', text: '改另一个文件吧' })
     })
 
-    await expect(
-      h.suite.write.execute('resp4', { path: INSIDE, content: 'new\n' })
-    ).rejects.toThrow(/provided feedback instead: 改另一个文件吧/)
+    expect(
+      await failureText(executeTool(h.suite.write, 'resp4', { path: INSIDE, content: 'new\n' }))
+    ).toMatch(/provided feedback instead: 改另一个文件吧/)
     expect(h.files.get(INSIDE_ABS)).toBe('old\n')
     expect(h.persistGrant).not.toHaveBeenCalled()
     expect(h.readTimes.has(INSIDE_ABS)).toBe(false)
   })
 
   it.each([['Aborted'], ['TOOL_ABORTED']])(
-    'RESP-5: kind:cancel → 抛注入的 abortError（%s），写入未发生',
+    'RESP-5: kind:cancel → 失败结果带注入的 abortError（%s）（调用本身没被取消，故不抛 —— Q12），写入未发生',
     async (abortError) => {
       const h = makeSuite({
         files: { [INSIDE_ABS]: 'old\n' },
         abortError,
         respond: () => ({ kind: 'cancel', reason: 'aborted' })
       })
-      await expect(
-        h.suite.write.execute('resp5', { path: INSIDE, content: 'new\n' })
-      ).rejects.toThrow(abortError)
+      expect(
+        await failureText(executeTool(h.suite.write, 'resp5', { path: INSIDE, content: 'new\n' }))
+      ).toContain(abortError)
       expect(h.files.get(INSIDE_ABS)).toBe('old\n')
     }
   )
 
-  it('RESP-6: 非法 kind → 走未允许分支抛错，绝不放行', async () => {
+  it('RESP-6: 非法 kind → 走未允许分支失败，绝不放行', async () => {
     const h = makeSuite({
       files: { [INSIDE_ABS]: 'old\n' },
       respond: () => ({ kind: 'choice', selections: ['yes'] })
     })
-    await expect(
-      h.suite.write.execute('resp6', { path: INSIDE, content: 'new\n' })
-    ).rejects.toThrow(`User denied access to ${INSIDE}`)
+    expect(
+      await failureText(executeTool(h.suite.write, 'resp6', { path: INSIDE, content: 'new\n' }))
+    ).toContain(`User denied access to ${INSIDE}`)
     expect(h.files.get(INSIDE_ABS)).toBe('old\n')
   })
 })
@@ -462,25 +461,23 @@ describe('文件工具套件 — 文件变更回调', () => {
   it('REG-4: write/edit 成功后 onFileChange 带 kind 触发', async () => {
     const h = makeSuite({ files: { [INSIDE_ABS]: 'alpha\nbeta\n' }, respond: allowed })
 
-    await h.suite.edit.execute('c1', { path: INSIDE, oldText: 'beta', newText: 'BETA' })
+    await executeTool(h.suite.edit, 'c1', { path: INSIDE, oldText: 'beta', newText: 'BETA' })
     expect(h.onFileChange).toHaveBeenCalledWith({ portPath: INSIDE_ABS, kind: 'edit' })
 
-    await h.suite.write.execute('c2', { path: INSIDE, content: 'fresh\n' })
+    await executeTool(h.suite.write, 'c2', { path: INSIDE, content: 'fresh\n' })
     expect(h.onFileChange).toHaveBeenCalledWith({ portPath: INSIDE_ABS, kind: 'write' })
     expect(h.onFileChange).toHaveBeenCalledTimes(2)
   })
 
   it('REG-4: 被拒 / 被中止时 onFileChange 不触发', async () => {
     const denied = makeSuite({ respond: () => ({ kind: 'ask', allowed: false }) })
-    await expect(
-      denied.suite.write.execute('c3', { path: INSIDE, content: 'x\n' })
-    ).rejects.toThrow()
+    await failureText(executeTool(denied.suite.write, 'c3', { path: INSIDE, content: 'x\n' }))
     expect(denied.onFileChange).not.toHaveBeenCalled()
 
     const cancelled = makeSuite({ respond: () => ({ kind: 'cancel', reason: 'aborted' }) })
-    await expect(
-      cancelled.suite.write.execute('c4', { path: INSIDE, content: 'x\n' })
-    ).rejects.toThrow('Aborted')
+    expect(
+      await failureText(executeTool(cancelled.suite.write, 'c4', { path: INSIDE, content: 'x\n' }))
+    ).toContain('Aborted')
     expect(cancelled.onFileChange).not.toHaveBeenCalled()
   })
 })
@@ -511,7 +508,10 @@ describe('文件工具套件 — OKF 知识库写钩子（deps.knowledge）', ()
       knowledge: { locate: (p) => (p.startsWith('/kb/') ? p.slice('/kb/'.length) : null), actor }
     })
 
-    const res = await h.suite.write.execute('k1', { path: '/kb/sessions/x.md', content: DRAFT })
+    const res = await executeTool(h.suite.write, 'k1', {
+      path: '/kb/sessions/x.md',
+      content: DRAFT
+    })
     expect(h.files.get('/kb/sessions/x.md')).toContain('generated: { by: "shuvix-work/m1", at: "')
     expect(textOf(res)).toContain('[OKF] Stamped generated')
     expect(actor).toHaveBeenCalledTimes(1)
@@ -521,18 +521,21 @@ describe('文件工具套件 — OKF 知识库写钩子（deps.knowledge）', ()
 
     // 模型中途切换：actor 每次写现取
     actor.mockReturnValue('shuvix-work/m2')
-    await h.suite.write.execute('k2', { path: '/kb/sessions/y.md', content: DRAFT })
+    await executeTool(h.suite.write, 'k2', { path: '/kb/sessions/y.md', content: DRAFT })
     expect(actor).toHaveBeenCalledTimes(2)
     expect(h.files.get('/kb/sessions/y.md')).toContain('generated: { by: "shuvix-work/m2", at: "')
 
-    const outside = await h.suite.write.execute('k3', { path: '/ws/notes.md', content: DRAFT })
+    const outside = await executeTool(h.suite.write, 'k3', { path: '/ws/notes.md', content: DRAFT })
     expect(textOf(outside)).not.toContain('[OKF]')
     expect(h.files.get('/ws/notes.md')).toBe(DRAFT)
   })
 
   it('FS-2 不注入 deps.knowledge：同一文件只是普通 markdown（不盖章、无回执）', async () => {
     const h = makeSuite({ allowList: ['Write(/kb)'], knowledgeSessionDirs: ['/kb/sessions'] })
-    const res = await h.suite.write.execute('k1', { path: '/kb/sessions/x.md', content: DRAFT })
+    const res = await executeTool(h.suite.write, 'k1', {
+      path: '/kb/sessions/x.md',
+      content: DRAFT
+    })
     expect(h.files.get('/kb/sessions/x.md')).toBe(DRAFT)
     expect(textOf(res)).not.toContain('[OKF]')
     expect(h.onFileChange).toHaveBeenCalledTimes(1)
@@ -541,13 +544,18 @@ describe('文件工具套件 — OKF 知识库写钩子（deps.knowledge）', ()
 
 // ─── 组 7：路径本身是符号链接 —— 不跟，只说出它指向哪里 ──────────────────────
 
-/** 抓住一次拒绝的原话（没拒就判红） */
-async function messageOf(work: Promise<unknown>): Promise<string> {
+/**
+ * 抓住一次拒绝的原话（没拒就判红）。P1-04 起拒绝有两种收场：工具抛错由 BaseTool 模板收成
+ * isError 结果（裁定 Q12，文字即原话）；调用本身被取消（signal 已 abort）时照旧抛出。两种都认。
+ */
+async function messageOf(work: Promise<InvokedToolResult>): Promise<string> {
+  let res: InvokedToolResult
   try {
-    await work
+    res = await work
   } catch (err) {
     return err instanceof Error ? err.message : String(err)
   }
+  if (res.isError) return resultText(res)
   throw new Error('expected the call to be refused')
 }
 
@@ -578,7 +586,7 @@ describe('文件工具套件 — 路径本身是符号链接：不跟（port.rea
       respond: allowed
     })
 
-    expect(await messageOf(h.suite.read.execute('s1', { path: 'key' }))).toBe(
+    expect(await messageOf(executeTool(h.suite.read, 's1', { path: 'key' }))).toBe(
       `key is a symbolic link to ${KEY_REAL}. Symbolic links are not followed — read ${KEY_REAL} directly if that is the file you mean.`
     )
     expect(h.readLink?.mock.calls).toEqual([['/ws/key']])
@@ -596,7 +604,9 @@ describe('文件工具套件 — 路径本身是符号链接：不跟（port.rea
       respond: allowed
     })
 
-    expect(await messageOf(h.suite.write.execute('s2', { path: 'wlink', content: 'new\n' }))).toBe(
+    expect(
+      await messageOf(executeTool(h.suite.write, 's2', { path: 'wlink', content: 'new\n' }))
+    ).toBe(
       `Not written: wlink is a symbolic link to ${OUT}. Symbolic links are not followed — write to ${OUT} directly if that is the file you mean.`
     )
     expect([...h.files]).toEqual([[OUT, 'old\n']])
@@ -620,7 +630,7 @@ describe('文件工具套件 — 路径本身是符号链接：不跟（port.rea
 
     expect(
       await messageOf(
-        h.suite.edit.execute('s3', { path: 'elink', oldText: 'beta', newText: 'BETA' })
+        executeTool(h.suite.edit, 's3', { path: 'elink', oldText: 'beta', newText: 'BETA' })
       )
     ).toBe(
       `Not edited: elink is a symbolic link to ${DOC}. Symbolic links are not followed — edit ${DOC} directly if that is the file you mean.`
@@ -655,7 +665,7 @@ describe('文件工具套件 — 路径本身是符号链接：不跟（port.rea
     ]
     for (const [text, quoted] of cases) {
       const h = makeSuite({ links: { '/ws/l': { target: text, resolved: R } } })
-      const msg = await messageOf(h.suite.read.execute('s4', { path: 'l' }))
+      const msg = await messageOf(executeTool(h.suite.read, 's4', { path: 'l' }))
       // 引文紧跟在 R 后面、句号前面；两处说的都是 resolved，原文只出现在引文里
       const said = quoted ? ` (the link says "${text}")` : ''
       expect(msg, text).toContain(
@@ -666,11 +676,11 @@ describe('文件工具套件 — 路径本身是符号链接：不跟（port.rea
 
     // write / edit 的引法与 read 同一条
     const h = makeSuite({ links: { '/ws/l': { target: '../x', resolved: R } } })
-    expect(await messageOf(h.suite.write.execute('s4w', { path: 'l', content: 'x' }))).toContain(
-      `Not written: l is a symbolic link to ${R} (the link says "../x").`
-    )
     expect(
-      await messageOf(h.suite.edit.execute('s4e', { path: 'l', oldText: 'a', newText: 'b' }))
+      await messageOf(executeTool(h.suite.write, 's4w', { path: 'l', content: 'x' }))
+    ).toContain(`Not written: l is a symbolic link to ${R} (the link says "../x").`)
+    expect(
+      await messageOf(executeTool(h.suite.edit, 's4e', { path: 'l', oldText: 'a', newText: 'b' }))
     ).toContain(`Not edited: l is a symbolic link to ${R} (the link says "../x").`)
   })
 
@@ -683,7 +693,7 @@ describe('文件工具套件 — 路径本身是符号链接：不跟（port.rea
       respond: allowed
     })
 
-    const msg = await messageOf(h.suite.read.execute('s5', { path: 'c1' }))
+    const msg = await messageOf(executeTool(h.suite.read, 's5', { path: 'c1' }))
     expect(msg).toContain(`c1 is a symbolic link to ${END} (the link says "c2").`)
     expect(msg).toContain(`read ${END} directly`)
     expect(msg).not.toContain('/ws/c2')
@@ -699,13 +709,15 @@ describe('文件工具套件 — 路径本身是符号链接：不跟（port.rea
       respond: allowed
     })
 
-    const readMsg = await messageOf(h.suite.read.execute('s6r', { path: 'dang' }))
+    const readMsg = await messageOf(executeTool(h.suite.read, 's6r', { path: 'dang' }))
     expect(readMsg).toContain(`dang is a symbolic link to ${GONE}.`)
     expect(readMsg).not.toContain('File not found')
     expect(readMsg).not.toContain('Did you mean')
     expect(suggestSimilar).not.toHaveBeenCalled()
 
-    const writeMsg = await messageOf(h.suite.write.execute('s6w', { path: 'dang', content: 'x\n' }))
+    const writeMsg = await messageOf(
+      executeTool(h.suite.write, 's6w', { path: 'dang', content: 'x\n' })
+    )
     expect(writeMsg).toContain(`Not written: dang is a symbolic link to ${GONE}.`)
     expect(h.files.size).toBe(0)
     expect(h.spies.writeFile).not.toHaveBeenCalled()
@@ -713,7 +725,7 @@ describe('文件工具套件 — 路径本身是符号链接：不跟（port.rea
     expect(getSessionDecisions(SID)).toEqual([])
 
     // 对照：同一个套件里真不存在（不是链接）的路径才走 File not found + 相似路径建议
-    const missing = await messageOf(h.suite.read.execute('s6m', { path: 'dang.tx' }))
+    const missing = await messageOf(executeTool(h.suite.read, 's6m', { path: 'dang.tx' }))
     expect(missing).toContain('File not found: dang.tx')
     expect(missing).toContain('Did you mean')
     expect(suggestSimilar).toHaveBeenCalledTimes(1)
@@ -733,16 +745,16 @@ describe('文件工具套件 — 路径本身是符号链接：不跟（port.rea
         respond: allowed
       })
 
-      expect(await messageOf(h.suite.read.execute('s7r', { path: 'key' })), label).toContain(
+      expect(await messageOf(executeTool(h.suite.read, 's7r', { path: 'key' })), label).toContain(
         `key is a symbolic link to ${KEY_REAL}.`
       )
       expect(
-        await messageOf(h.suite.write.execute('s7w', { path: 'key', content: 'x' })),
+        await messageOf(executeTool(h.suite.write, 's7w', { path: 'key', content: 'x' })),
         label
       ).toContain(`Not written: key is a symbolic link to ${KEY_REAL}.`)
       expect(
         await messageOf(
-          h.suite.edit.execute('s7e', { path: 'key', oldText: 'PRIVATE', newText: 'x' })
+          executeTool(h.suite.edit, 's7e', { path: 'key', oldText: 'PRIVATE', newText: 'x' })
         ),
         label
       ).toContain(`Not edited: key is a symbolic link to ${KEY_REAL}.`)
@@ -763,11 +775,11 @@ describe('文件工具套件 — 路径本身是符号链接：不跟（port.rea
       links: keyLink(),
       respond: allowed
     })
-    expect(await messageOf(r.suite.read.execute('s8a', { path: 'key' }))).toContain(
+    expect(await messageOf(executeTool(r.suite.read, 's8a', { path: 'key' }))).toContain(
       `key is a symbolic link to ${KEY_REAL}.`
     )
     expect(r.requestUserInput).not.toHaveBeenCalled()
-    const read = await r.suite.read.execute('s8b', { path: KEY_REAL })
+    const read = await executeTool(r.suite.read, 's8b', { path: KEY_REAL })
     expect(r.requestUserInput).toHaveBeenCalledTimes(1)
     expect(askOf(r.requests[0]).command).toBe(allowEntry('read', KEY_REAL))
     expect(textOf(read)).toContain('PRIVATE KEY')
@@ -780,10 +792,10 @@ describe('文件工具套件 — 路径本身是符号链接：不跟（port.rea
       respond: allowed
     })
     expect(
-      await messageOf(d.suite.write.execute('s8c', { path: 'newkey', content: 'k' }))
+      await messageOf(executeTool(d.suite.write, 's8c', { path: 'newkey', content: 'k' }))
     ).toContain(`Not written: newkey is a symbolic link to ${NEW_KEY}.`)
     expect(d.requestUserInput).not.toHaveBeenCalled()
-    await d.suite.write.execute('s8d', { path: NEW_KEY, content: 'k' })
+    await executeTool(d.suite.write, 's8d', { path: NEW_KEY, content: 'k' })
     expect(d.requestUserInput).toHaveBeenCalledTimes(1)
     expect(askOf(d.requests[0]).command).toBe(allowEntry('write', NEW_KEY))
     expect([...d.files]).toEqual([[NEW_KEY, 'k']])
@@ -795,10 +807,10 @@ describe('文件工具套件 — 路径本身是符号链接：不跟（port.rea
       respond: allowed
     })
     expect(
-      await messageOf(w.suite.write.execute('s8e', { path: 'wlink', content: 'new\n' }))
+      await messageOf(executeTool(w.suite.write, 's8e', { path: 'wlink', content: 'new\n' }))
     ).toContain(`Not written: wlink is a symbolic link to ${OUT}.`)
     expect(w.requestUserInput).not.toHaveBeenCalled()
-    const res = await w.suite.write.execute('s8f', { path: OUT, content: 'new\n' })
+    const res = await executeTool(w.suite.write, 's8f', { path: OUT, content: 'new\n' })
     expect(w.requestUserInput).toHaveBeenCalledTimes(1)
     const req = askOf(w.requests[0])
     expect(req.command).toBe(allowEntry('write', OUT))
@@ -812,10 +824,10 @@ describe('文件工具套件 — 路径本身是符号链接：不跟（port.rea
   it('SYM-9 readLink 答 null：什么都不变 —— 每次调用拿 port 路径问一次，其后照旧（read 不弹，edit / write 各弹一次并落盘）', async () => {
     const h = makeSuite({ files: { [INSIDE_ABS]: 'alpha\nbeta\n' }, respond: allowed })
 
-    expect(textOf(await h.suite.read.execute('s9r', { path: INSIDE }))).toContain('alpha')
+    expect(textOf(await executeTool(h.suite.read, 's9r', { path: INSIDE }))).toContain('alpha')
     expect(h.requestUserInput).not.toHaveBeenCalled()
-    await h.suite.edit.execute('s9e', { path: INSIDE, oldText: 'beta', newText: 'BETA' })
-    await h.suite.write.execute('s9w', { path: 'fresh.txt', content: 'x\n' })
+    await executeTool(h.suite.edit, 's9e', { path: INSIDE, oldText: 'beta', newText: 'BETA' })
+    await executeTool(h.suite.write, 's9w', { path: 'fresh.txt', content: 'x\n' })
 
     expect(h.requestUserInput).toHaveBeenCalledTimes(2)
     expect(h.readLink?.mock.calls).toEqual([[INSIDE_ABS], [INSIDE_ABS], ['/ws/fresh.txt']])
@@ -832,9 +844,9 @@ describe('文件工具套件 — 路径本身是符号链接：不跟（port.rea
     expect('readLink' in h.port).toBe(false)
     expect(h.readLink).toBeUndefined()
 
-    expect(textOf(await h.suite.read.execute('s10r', { path: INSIDE }))).toContain('alpha')
-    await h.suite.edit.execute('s10e', { path: INSIDE, oldText: 'alpha', newText: 'ALPHA' })
-    await h.suite.write.execute('s10w', { path: 'fresh.txt', content: 'x\n' })
+    expect(textOf(await executeTool(h.suite.read, 's10r', { path: INSIDE }))).toContain('alpha')
+    await executeTool(h.suite.edit, 's10e', { path: INSIDE, oldText: 'alpha', newText: 'ALPHA' })
+    await executeTool(h.suite.write, 's10w', { path: 'fresh.txt', content: 'x\n' })
 
     expect(h.requestUserInput).toHaveBeenCalledTimes(2)
     expect(h.files.get(INSIDE_ABS)).toBe('ALPHA\n')
@@ -848,7 +860,7 @@ describe('文件工具套件 — 路径本身是符号链接：不跟（port.rea
     }))
     const h = makeSuite({ decoders: { readUrl }, respond: allowed })
 
-    const res = await h.suite.read.execute('s11', { path: 'https://example.com/a' })
+    const res = await executeTool(h.suite.read, 's11', { path: 'https://example.com/a' })
     expect(textOf(res)).toBe('page https://example.com/a')
     expect(readUrl).toHaveBeenCalledTimes(1)
     expect(h.readLink).not.toHaveBeenCalled()
@@ -861,10 +873,12 @@ describe('文件工具套件 — 路径本身是符号链接：不跟（port.rea
     const h = makeSuite({ files: { [KEY_REAL]: 'PRIVATE KEY\n' }, links: keyLink() })
     expect(h.requestUserInput).toBeUndefined()
 
-    const readMsg = await messageOf(h.suite.read.execute('s12r', { path: 'key' }))
+    const readMsg = await messageOf(executeTool(h.suite.read, 's12r', { path: 'key' }))
     expect(readMsg).toContain(`key is a symbolic link to ${KEY_REAL}.`)
     expect(readMsg).not.toContain('no way to ask')
-    const writeMsg = await messageOf(h.suite.write.execute('s12w', { path: 'key', content: 'x' }))
+    const writeMsg = await messageOf(
+      executeTool(h.suite.write, 's12w', { path: 'key', content: 'x' })
+    )
     expect(writeMsg).toContain(`Not written: key is a symbolic link to ${KEY_REAL}.`)
     expect(writeMsg).not.toContain('no way to ask')
     expect(getSessionDecisions(SID)).toEqual([])
@@ -875,10 +889,11 @@ describe('文件工具套件 — 路径本身是符号链接：不跟（port.rea
     const ac = new AbortController()
     ac.abort()
 
-    const calls: Array<() => Promise<unknown>> = [
-      () => h.suite.read.execute('s13r', { path: 'key' }, ac.signal),
-      () => h.suite.write.execute('s13w', { path: 'key', content: 'x' }, ac.signal),
-      () => h.suite.edit.execute('s13e', { path: 'key', oldText: 'a', newText: 'b' }, ac.signal)
+    const calls: Array<() => Promise<InvokedToolResult>> = [
+      () => executeTool(h.suite.read, 's13r', { path: 'key' }, ac.signal),
+      () => executeTool(h.suite.write, 's13w', { path: 'key', content: 'x' }, ac.signal),
+      () =>
+        executeTool(h.suite.edit, 's13e', { path: 'key', oldText: 'a', newText: 'b' }, ac.signal)
     ]
     for (const call of calls) expect(await messageOf(call())).toBe('TOOL_ABORTED')
     expect(h.readLink).not.toHaveBeenCalled()
@@ -892,13 +907,17 @@ describe('文件工具套件 — 路径本身是符号链接：不跟（port.rea
     })
     const read = h.suite.read
 
-    expect(await messageOf(read.execute('s14a', { path: 'key' }))).toContain('is a symbolic link')
+    expect(await messageOf(executeTool(read, 's14a', { path: 'key' }))).toContain(
+      'is a symbolic link'
+    )
     // 链接被换成了同名的真文件（区内读：不弹卡）
     delete h.links['/ws/key']
-    expect(textOf(await read.execute('s14b', { path: 'key' }))).toContain('plain')
+    expect(textOf(await executeTool(read, 's14b', { path: 'key' }))).toContain('plain')
     // 又换回链接
     h.links['/ws/key'] = { target: KEY_REAL, resolved: KEY_REAL }
-    expect(await messageOf(read.execute('s14c', { path: 'key' }))).toContain('is a symbolic link')
+    expect(await messageOf(executeTool(read, 's14c', { path: 'key' }))).toContain(
+      'is a symbolic link'
+    )
 
     expect(h.readLink).toHaveBeenCalledTimes(3)
     expect(h.requestUserInput).not.toHaveBeenCalled()
@@ -960,7 +979,7 @@ describe('文件工具套件 — 询问点的自动审查（provider.onPermissio
     const review = vi.fn<ReviewSeam>(async () => reviewAnswer('allow'))
     const h = makeSuite({ sessionId: sidFor('f1'), review, respond: allowed })
 
-    const res = await h.suite.write.execute('rv-f1', { path: INSIDE, content: 'hello\n' })
+    const res = await executeTool(h.suite.write, 'rv-f1', { path: INSIDE, content: 'hello\n' })
 
     expect(h.requestUserInput).not.toHaveBeenCalled()
     expect(h.files.get(INSIDE_ABS)).toBe('hello\n')
@@ -993,7 +1012,9 @@ describe('文件工具套件 — 询问点的自动审查（provider.onPermissio
       respond: allowed
     })
 
-    const msg = await messageOf(h.suite.write.execute('rv-f2', { path: INSIDE, content: 'new\n' }))
+    const msg = await messageOf(
+      executeTool(h.suite.write, 'rv-f2', { path: INSIDE, content: 'new\n' })
+    )
 
     expect(msg.startsWith('Blocked by the reviewer: reason: deny\n\nFind a safer way'), msg).toBe(
       true
@@ -1006,22 +1027,26 @@ describe('文件工具套件 — 询问点的自动审查（provider.onPermissio
   })
 
   it('RV-F3 工具调用的 signal 落下，接缝手里那个 signal 随之 aborted（是执行层另造的，不是同一个对象）—— write / edit 的询问在 apply 层、read 的在 securityCheck，三处都接上了', async () => {
-    const cases: Array<[string, (h: SuiteHarness, signal: AbortSignal) => Promise<unknown>]> = [
+    const cases: Array<
+      [string, (h: SuiteHarness, signal: AbortSignal) => Promise<InvokedToolResult>]
+    > = [
       [
         'write',
-        (h, signal) => h.suite.write.execute('rv-f3w', { path: INSIDE, content: 'new\n' }, signal)
+        (h, signal) =>
+          executeTool(h.suite.write, 'rv-f3w', { path: INSIDE, content: 'new\n' }, signal)
       ],
       [
         'edit',
         (h, signal) =>
-          h.suite.edit.execute(
+          executeTool(
+            h.suite.edit,
             'rv-f3e',
             { path: INSIDE, oldText: 'alpha', newText: 'ALPHA' },
             signal
           )
       ],
       // 凭据目录的读取：询问在 securityCheck（门之前没有 apply 层可言）
-      ['read', (h, signal) => h.suite.read.execute('rv-f3r', { path: CREDENTIAL_ABS }, signal)]
+      ['read', (h, signal) => executeTool(h.suite.read, 'rv-f3r', { path: CREDENTIAL_ABS }, signal)]
     ]
     for (const [tool, run] of cases) {
       const gate = pendingReview()
@@ -1060,7 +1085,7 @@ describe('文件工具套件 — 询问点的自动审查（provider.onPermissio
     })
     const call = new AbortController()
     const refused = messageOf(
-      h.suite.write.execute('rv-f4', { path: INSIDE, content: 'new\n' }, call.signal)
+      executeTool(h.suite.write, 'rv-f4', { path: INSIDE, content: 'new\n' }, call.signal)
     )
 
     await gate.entered
@@ -1090,7 +1115,10 @@ describe('文件工具套件 — 询问点的自动审查（provider.onPermissio
     })
     const opinion = { risk: 'medium', summary: 'summary: ask', reason: 'reason: ask' }
 
-    const res = await h.suite.write.execute('rv-f5w', { path: 'fresh.txt', content: 'hello\n' })
+    const res = await executeTool(h.suite.write, 'rv-f5w', {
+      path: 'fresh.txt',
+      content: 'hello\n'
+    })
     expect(review).toHaveBeenCalledTimes(1)
     expect(h.requestUserInput).toHaveBeenCalledTimes(1)
     const writeCard = askOf(h.requests[0])
@@ -1103,7 +1131,7 @@ describe('文件工具套件 — 询问点的自动审查（provider.onPermissio
     })
     expect(h.files.get('/ws/fresh.txt')).toBe('hello\n')
 
-    await h.suite.edit.execute('rv-f5e', { path: INSIDE, oldText: 'beta', newText: 'BETA' })
+    await executeTool(h.suite.edit, 'rv-f5e', { path: INSIDE, oldText: 'beta', newText: 'BETA' })
     expect(review).toHaveBeenCalledTimes(2)
     expect(h.requestUserInput).toHaveBeenCalledTimes(2)
     const editCard = askOf(h.requests[1])

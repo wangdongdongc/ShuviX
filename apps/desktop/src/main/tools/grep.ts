@@ -13,7 +13,7 @@ import {
   TOOL_ABORTED,
   type ToolContext
 } from '../services/toolContext'
-import type { AgentToolResult } from '@shuvix/agent-runtime'
+import type { ToolResult } from '@shuvix/agent-runtime'
 import type { GrepToolDetails } from '@shuvix/chat-protocol/types/chatMessage'
 import { resolveToCwd } from '../utils/toolUtils/pathUtils'
 import { rgSearch } from '../utils/toolUtils/ripgrep'
@@ -53,6 +53,8 @@ export class GrepTool extends BaseTool<typeof GrepParamsSchema> {
   readonly description = GREP_DESCRIPTION
   readonly parameters = GrepParamsSchema
   readonly outputStrategy = 'keep-start' as const
+  // 只读：中断后恢复时重跑一遍无害（durable replay）
+  readonly replay = 'safe' as const
 
   constructor(private ctx: ToolContext) {
     super()
@@ -87,7 +89,7 @@ export class GrepTool extends BaseTool<typeof GrepParamsSchema> {
     _toolCallId: string,
     params: { pattern: string; path?: string; include?: string },
     signal?: AbortSignal
-  ): Promise<AgentToolResult<GrepToolDetails>> {
+  ): Promise<ToolResult<GrepToolDetails>> {
     if (signal?.aborted) throw new Error(TOOL_ABORTED)
 
     const config = resolveProjectConfig(this.ctx.sessionId)

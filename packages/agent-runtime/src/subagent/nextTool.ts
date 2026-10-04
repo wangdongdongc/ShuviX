@@ -5,13 +5,13 @@
  * 声明一份 JSON Schema，协调器据此给派生 agent 临时附加一个名为 `next` 的工具：
  *   - `parameters` 即该 schema 原样（Type.Unsafe 透传，先例 mcpManager 的 MCP schema）；
  *   - LLM 的调用参数**就是结果**：校验通过 → 交给捕获通道，step 结果取捕获值而非转写抽取；
- *   - 校验不过 → throw 带字段级指正的错误（harness 记为 tool error，模型同轮重试）——
+ *   - 校验不过 → throw 带字段级指正的错误（BaseTool 模板收成 isError 结果，模型同轮看到指正并重试）——
  *     错误文案纪律同 5250adc：说清哪个字段、期望什么，而不是一句 invalid。
  *
- * **收尾靠 `terminate: true`**：pi 的循环在一批工具结果**全部**带 terminate 时直接结束，不再发
- * 下一次请求 —— 于是「只调了 next」的那一批就是这次运行的最后一步，一次请求出结论（判定型 hook
- * 的审查 agent 靠这一点才只花一次请求）。已记录后的重复调用同样带 terminate，免得同批两次 next
- * 把循环拖进下一轮。next 与别的工具同批时 terminate 不成立（pi 要求整批都带），那时由 manager 的
+ * **收尾靠 `control: { terminate: true }`**：durable 在一批工具结果**全部**带 terminate 时直接结束，
+ * 不再发下一次请求 —— 于是「只调了 next」的那一批就是这次运行的最后一步，一次请求出结论（判定型
+ * hook 的审查 agent 靠这一点才只花一次请求）。已记录后的重复调用同样带 terminate，免得同批两次
+ * next 把循环拖进下一轮。next 与别的工具同批时 terminate 不成立（要求整批都带），那时由 manager 的
  * 软停止（interrupt）兜底。
  *
  * 任务 prompt 末尾由协调器追加 <result_contract> 契约段（buildResultContractNote），
@@ -19,7 +19,7 @@
  */
 import { Type, type TSchema } from 'typebox'
 import { Check, Errors } from 'typebox/value'
-import type { AgentToolResult } from '../tools/toolResult'
+import type { ToolResult } from '../tools/toolResult'
 import { BaseTool } from '../tools/baseTool'
 
 /** 结果契约工具名 —— 派生 agent 工具集里的保留名（extraTools 注入，宿主同名去重让位） */
@@ -100,7 +100,7 @@ export class NextTool extends BaseTool<TSchema> {
   protected async executeInternal(
     _toolCallId: string,
     params: Record<string, unknown>
-  ): Promise<AgentToolResult<undefined>> {
+  ): Promise<ToolResult> {
     if (this.captured) {
       return {
         content: [
@@ -111,12 +111,12 @@ export class NextTool extends BaseTool<TSchema> {
         ],
         details: undefined,
         // 同批两次 next：第二次也得带，否则整批不满足「全部 terminate」，循环会多走一轮
-        terminate: true
+        control: { terminate: true }
       }
     }
 
     // 完整 JSON Schema 校验（不依赖上游参数校验层的严格程度）；
-    // 失败 throw —— harness 记为 tool error，模型在同一轮内看到指正并重试
+    // 失败 throw —— BaseTool 模板收成 isError 结果，模型在同一轮内看到指正并重试
     if (!Check(this.parameters, params)) {
       const details = [...Errors(this.parameters, params)]
         .slice(0, 8)
@@ -137,8 +137,8 @@ export class NextTool extends BaseTool<TSchema> {
         }
       ],
       details: undefined,
-      // 这一批只有 next 时，pi 就此结束循环、不再发下一次请求（见文件头）
-      terminate: true
+      // 这一批只有 next 时，durable 就此结束循环、不再发下一次请求（见文件头）
+      control: { terminate: true }
     }
   }
 }

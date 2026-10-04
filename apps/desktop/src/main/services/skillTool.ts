@@ -11,7 +11,7 @@ import { Type } from 'typebox'
 import type { TObject, TString } from 'typebox'
 import { rgFiles } from '../utils/toolUtils/ripgrep'
 import { BaseTool } from '@shuvix/agent-runtime'
-import type { AgentToolResult } from '@shuvix/agent-runtime'
+import type { ToolResult } from '@shuvix/agent-runtime'
 import type { SkillToolDetails } from '@shuvix/chat-protocol/types/chatMessage'
 import { skillService } from './skillService'
 import { t } from '../i18n'
@@ -129,7 +129,7 @@ export class SkillTool extends BaseTool<SkillParams> {
   protected async executeInternal(
     _toolCallId: string,
     params: { name: string }
-  ): Promise<AgentToolResult<SkillToolDetails>> {
+  ): Promise<ToolResult<SkillToolDetails>> {
     const skillName = params.name.trim()
 
     // 从**这一次装配的名单**里取，而不是 findByName（它走 findAll，不看 .config.json 的

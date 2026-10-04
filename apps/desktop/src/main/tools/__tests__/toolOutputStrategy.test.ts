@@ -98,13 +98,21 @@ vi.mock('word-extractor', () => ({
   }
 }))
 
-import type { TSchema } from 'typebox'
-import type { AgentTool, AgentToolResult } from '@shuvix/agent-runtime'
+import type { AnyTool } from '@shuvix/agent-runtime'
+import {
+  executeTool,
+  resultText,
+  type InvokedToolResult
+} from '@shuvix/agent-runtime/tools/testing/invokeTool'
 import { makeReadTool } from '../read'
 import { ListTool } from '../ls'
 import { GlobTool } from '../glob'
 import { GrepTool } from '../grep'
-import { getOutputStrategy, wrapToolOutput } from '../../services/wrapToolOutput'
+import {
+  getOutputStrategy,
+  wrapToolOutput,
+  type WrappableTool
+} from '../../services/wrapToolOutput'
 import type { ToolContext } from '../../services/toolContext'
 
 const ctx: ToolContext = { sessionId: SID }
@@ -116,18 +124,17 @@ const BIG = Array.from({ length: 3000 }, (_, i) => `L${String(i).padStart(4, '0'
 const bodyOf = (text: string): string => text.slice(text.indexOf('\n\n') + 2)
 
 /** 工具结果里交给模型的那段文字 */
-function textOf(result: AgentToolResult<unknown>): string {
-  const block = result.content.find((b) => b.type === 'text')
-  return block?.type === 'text' ? block.text : ''
+function textOf(result: InvokedToolResult): string {
+  return resultText(result)
 }
 
 /**
  * agentHost.resolveTools 给每个工具做的那一层包装，原样重放：策略与上限都取**工具自己的**声明，
  * 其余（processToolOutput → truncate*）全是真的。
  */
-function hostWrap(tool: object, spill: boolean): AgentTool<TSchema, unknown> {
+function hostWrap(tool: object, spill: boolean): AnyTool {
   const caps = tool as { outputMaxBytes?: number; outputMaxLines?: number }
-  return wrapToolOutput(tool as AgentTool<TSchema, unknown>, SID, getOutputStrategy(tool), {
+  return wrapToolOutput(tool as WrappableTool, SID, getOutputStrategy(tool), {
     maxBytes: caps.outputMaxBytes,
     maxLines: caps.outputMaxLines,
     spill
@@ -136,17 +143,18 @@ function hostWrap(tool: object, spill: boolean): AgentTool<TSchema, unknown> {
 
 /**
  * 工具本体换成一个只回 `text` 的探针 —— 原型仍是**真工具**，声明的 outputStrategy / outputMax*
- * 一并继承，于是「声明什么」与「剩下什么」之间没有第二份副本。
+ * 一并继承，于是「声明什么」与「剩下什么」之间没有第二份副本。探针不读参数，所以 durable 形状
+ * （真工具做原型）与旧形状（TOS-2 的裸对象，经 fromAgentTool）两种调用约定下都只回这段文字。
  */
 async function hostRun(tool: object, text: string, opts: { spill: boolean }): Promise<string> {
-  const probe = Object.create(tool) as AgentTool<TSchema, unknown>
+  const probe = Object.create(tool) as object
   Object.defineProperty(probe, 'execute', {
     value: async () => ({ content: [{ type: 'text' as const, text }], details: undefined }),
     writable: true,
     enumerable: true,
     configurable: true
   })
-  return textOf(await hostWrap(probe, opts.spill).execute('tos-call', {}))
+  return textOf(await executeTool(hostWrap(probe, opts.spill), 'tos-call', {}))
 }
 
 /** 真文件：2500 行、每行唯一 —— 超过 read 自己的 2000 行封顶，于是结果里必带续读提示 */
@@ -166,7 +174,7 @@ afterAll(() => {
 /** 真的 read 读真的文件，再过一遍宿主那一层 —— 全链路一处桩都没有 */
 async function realRead(): Promise<string> {
   const read = makeReadTool(ctx)
-  return textOf(await hostWrap(read, false).execute('tos-real-read', { path: REAL_FILE }))
+  return textOf(await executeTool(hostWrap(read, false), 'tos-real-read', { path: REAL_FILE }))
 }
 
 describe('TOS 声明「保留开头」的工具', () => {

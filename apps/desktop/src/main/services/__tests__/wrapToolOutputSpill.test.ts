@@ -8,6 +8,7 @@
  */
 import { describe, it, expect, afterAll, vi } from 'vitest'
 import type { AgentTool } from '@shuvix/agent-runtime'
+import { executeTool } from '@shuvix/agent-runtime/tools/testing/invokeTool'
 import { existsSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -61,7 +62,7 @@ describe('WTS 包装器 + 真 processToolOutput', () => {
       }
     )
 
-    const result = await wrapped.execute('wts-1', {} as never)
+    const result = await executeTool(wrapped, 'wts-1', {} as never)
 
     expect(result.content[1]).toBe(IMAGE_BLOCK)
     const text = textOf(result as { content: unknown[] }, 0)
@@ -86,7 +87,7 @@ describe('WTS 包装器 + 真 processToolOutput', () => {
       { spill: true }
     )
 
-    const result = await wrapped.execute('wts-2', {} as never)
+    const result = await executeTool(wrapped, 'wts-2', {} as never)
 
     const locatorOf = (text: string): string => {
       const m = /\[Full output saved to: (.+)\]/.exec(text)

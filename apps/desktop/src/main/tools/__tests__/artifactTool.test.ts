@@ -26,8 +26,8 @@ import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vites
 import { mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { AgentToolResult } from '@shuvix/agent-runtime'
 import type { AssistantMessage, ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
+import { executeTool, type InvokedToolResult } from '@shuvix/agent-runtime/tools/testing/invokeTool'
 
 const state = vi.hoisted(() => ({
   root: '',
@@ -77,11 +77,9 @@ const entries = (sessionId = sid): string[] | null => {
 
 const ctxFor = (sessionId: string): ToolContext => ({ sessionId }) as ToolContext
 const toolFor = (sessionId: string): ArtifactTool => new ArtifactTool(ctxFor(sessionId))
-const textOf = (res: AgentToolResult<unknown>): string => (res.content[0] as { text: string }).text
-const run = async (
-  params: Record<string, unknown>,
-  sessionId = sid
-): Promise<AgentToolResult<unknown>> => toolFor(sessionId).execute('call-1', params as never)
+const textOf = (res: InvokedToolResult): string => (res.content[0] as { text: string }).text
+const run = async (params: Record<string, unknown>, sessionId = sid): Promise<InvokedToolResult> =>
+  executeTool(toolFor(sessionId), 'call-1', params as never)
 
 /** 一条只有正文的助手消息（投影里 content 就是 text 块的拼接） */
 const said = (text: string, id = 'a'): AssistantMessage => ({
@@ -297,7 +295,7 @@ describe('recordRead / 会话粒度', () => {
     // 认领到的图看不见」
     const child = `${sid}-child`
     state.messages = [said(fenced(svg('Child figure')))]
-    const res = await toolFor(child).execute('c', { action: 'adopt' } as never)
+    const res = await executeTool(toolFor(child), 'c', { action: 'adopt' } as never)
     expect(textOf(res)).toContain(join(state.root, child, 'child-figure.svg'))
     expect(entries(child)).toEqual(['child-figure.svg'])
     expect(entries(sid)).toBeNull()

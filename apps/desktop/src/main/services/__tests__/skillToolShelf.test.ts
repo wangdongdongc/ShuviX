@@ -16,6 +16,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { Skill } from '../../types/skill'
+import { executeTool } from '@shuvix/agent-runtime/tools/testing/invokeTool'
 
 const mocks = vi.hoisted(() => ({ findEnabled: vi.fn(), findByName: vi.fn() }))
 
@@ -126,17 +127,17 @@ describe('STS 按名加载', () => {
 
     const tool = new SkillTool(['builtin:drawing'])
 
-    const hit = (await tool.execute('call-1', { name: 'builtin:drawing' })) as ExecResult
+    const hit = (await executeTool(tool, 'call-1', { name: 'builtin:drawing' })) as ExecResult
     expect(textOf(hit)).toContain('BUILTIN DRAWING BODY')
     expect(hit.details?.error).toBeUndefined()
 
     // foo 启用着、但这个 agent 的名单没点它：货架之外的一律按不存在处理
-    const notNamed = (await tool.execute('call-2', { name: 'foo' })) as ExecResult
+    const notNamed = (await executeTool(tool, 'call-2', { name: 'foo' })) as ExecResult
     expect(textOf(notNamed)).not.toContain('USER FOO BODY')
     expect(textOf(notNamed)).toContain('not found')
     expect(notNamed.details?.error).toBe(true)
 
-    const hidden = (await tool.execute('call-3', { name: 'builtin:hidden' })) as ExecResult
+    const hidden = (await executeTool(tool, 'call-3', { name: 'builtin:hidden' })) as ExecResult
     expect(textOf(hidden)).not.toContain('HIDDEN BODY SHOULD NEVER APPEAR')
     expect(textOf(hidden)).toContain('not found')
     expect(hidden.details?.error).toBe(true)

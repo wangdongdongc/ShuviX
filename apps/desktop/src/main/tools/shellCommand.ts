@@ -19,7 +19,7 @@ import {
   type TString
 } from 'typebox'
 import { BaseTool, type UnconfinedReason } from '@shuvix/agent-runtime'
-import type { AgentToolResult } from '@shuvix/agent-runtime'
+import type { ToolResult } from '@shuvix/agent-runtime'
 import type { BashToolDetails, ShellSandboxState } from '@shuvix/chat-protocol/types/chatMessage'
 import { collapseProgressOutput, type ShellKind } from '../utils/toolUtils/shell'
 import {
@@ -182,7 +182,7 @@ export class ShellCommandTool extends BaseTool<ShellCommandParamsSchema> {
     toolCallId: string,
     params: ShellCommandParams,
     signal?: AbortSignal
-  ): Promise<AgentToolResult<BashToolDetails>> {
+  ): Promise<ToolResult<BashToolDetails>> {
     const timeout = params.timeout ?? DEFAULT_TIMEOUT
     const config = resolveProjectConfig(this.ctx.sessionId)
 
@@ -316,7 +316,7 @@ export class ShellCommandTool extends BaseTool<ShellCommandParamsSchema> {
     extraEnv: Record<string, string>,
     plan: SandboxPlan | null,
     sandbox: ShellSandboxState
-  ): Promise<AgentToolResult<BashToolDetails>> {
+  ): Promise<ToolResult<BashToolDetails>> {
     const sessionId = this.ctx.sessionId
 
     if (runningCount(sessionId) >= MAX_RUNNING_PER_SESSION) {

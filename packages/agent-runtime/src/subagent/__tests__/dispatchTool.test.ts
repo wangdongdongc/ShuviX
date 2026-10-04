@@ -10,6 +10,7 @@ import { describe, it, expect } from 'vitest'
 import { createDispatchAgentTool, toInProcessAgentType } from '../dispatchTool'
 import type { SubAgentManager } from '../manager'
 import type { AgentProfile, SubAgentModelConfig } from '../types'
+import { invokeTool } from '../../tools/testing/invokeTool'
 
 const PROFILE: AgentProfile = {
   name: 'explore',
@@ -78,7 +79,11 @@ describe('DispatchAgentTool — 参数校验错误必须给出纠错指引', () 
     r.content.map((c) => c.text ?? '').join('')
 
   it('缺 name 且无默认 agent → 指名真实参数 `name` 并列出可用名', async () => {
-    const out = await tool.execute('t1', { description: 'd', prompt: 'p' })
+    const { result: out } = await invokeTool(
+      tool,
+      { description: 'd', prompt: 'p' },
+      { callId: 't1' }
+    )
     const text = textOf(out as { content: Array<{ type: string; text?: string }> })
     expect(text).toContain('"name"')
     expect(text).toContain('explore')
@@ -87,7 +92,11 @@ describe('DispatchAgentTool — 参数校验错误必须给出纠错指引', () 
   })
 
   it('未知 name → 列出可用名', async () => {
-    const out = await tool.execute('t2', { description: 'd', name: 'nope', prompt: 'p' })
+    const { result: out } = await invokeTool(
+      tool,
+      { description: 'd', name: 'nope', prompt: 'p' },
+      { callId: 't2' }
+    )
     const text = textOf(out as { content: Array<{ type: string; text?: string }> })
     expect(text).toContain('Unknown agent "nope"')
     expect(text).toContain('explore')

@@ -29,6 +29,7 @@ import { join, dirname } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { AgentToolResult } from '@shuvix/agent-runtime'
 import type { ToolContext } from '../../services/toolContext'
+import { executeTool } from '@shuvix/agent-runtime/tools/testing/invokeTool'
 
 const STAMP = Date.now()
 const FAKE_HOME = join(tmpdir(), `shuvix-bashrc-home-${STAMP}`)
@@ -112,7 +113,7 @@ async function runTool(
   runInBackground = false
 ): Promise<{ text: string; exitCode: number | undefined }> {
   const tool = new BashTool({ sessionId: SESSION_ID } as ToolContext)
-  const result = (await tool.execute(`tool-${++bgCall}`, {
+  const result = (await executeTool(tool, `tool-${++bgCall}`, {
     command,
     description: 'rc leak test',
     run_in_background: runInBackground
