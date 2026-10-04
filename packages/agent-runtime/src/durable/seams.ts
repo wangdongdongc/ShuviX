@@ -4,6 +4,8 @@
  *
  * 桌面（P1-10）：openStorage = 动态 import node:sqlite 打开 `<sessionsDir>/<id>.sqlite`（临时会话给
  * MemoryStorage）；isPinned = 会话有活着 / 在建 / 关停中的运行时；onRunStateChange 写 DB 的运行标记。
+ *
+ * 系统提示词活段落的宿主 seam（`PromptHost`）也在这里定义（P1-08；桌面 P1-11 实现）。
  */
 import type { Models } from '@earendil-works/pi-ai'
 import type {
@@ -88,6 +90,49 @@ export interface SessionHostDeps {
   /** durable 报告的扩展失败（不影响调用本身） */
   onReport?: (sessionId: string, error: unknown) => void
   logger?: RuntimeLogger
-  /** 时钟（durable 的 `now`） */
+  /** 时钟（durable 的 `now`；日期通知里「上一条消息在多久之前」也按它算） */
   now?: () => number
+  /**
+   * 今天的本地日期（`YYYY-MM-DD`，桌面传 `() => localDate()`）。给了才发日期通知：每次用户输入之前，
+   * 对话里已有条目且日期与上次告知的不同 → 先写一条 `shuvix.notice`（kind `date`，裁决 Q14）。
+   * 缺省 = 不发（测试默认关闭，需要的用例自己注入一个确定的日期）。
+   */
+  today?: () => string
+}
+
+/** bot 段落的内容：一块（通常是 `renderBotContext` 的输出）、若干块、或者没有 */
+export type BotContextBlocks = string | readonly string[] | null | undefined
+
+/**
+ * 系统提示词**活段落**的宿主 seam（P1-08；桌面在 P1-11 的 agentHost 里实现）。
+ *
+ * 人设在创建 agent 时冻结进 `AgentStateDoc`，不经这里；其余五段在**每次请求准备时**现调这些 seam
+ * （durable 只把变化了的段落作为 `pi.system` 增量重发，所以内容不变就没有代价）。全部按根会话 id
+ * 解析 —— 派生 agent 用它根会话的项目上下文。返回**原文**，围栏与修剪由段落统一加；
+ * 不实现某个 seam = 那一段恒缺席。抛错时 durable 保留该段上一次的内容并报告。
+ */
+export interface PromptHost {
+  /**
+   * 指令文件：`candidates` 是档案 `shuvix-instruction-files` 的清单（顺序即优先级），宿主按序取第一个
+   * 存在且非空的，至多一个。cwd 是对话 agent 的工作目录（未配置时为空串，宿主按会话兜底）。
+   */
+  resolveInstruction?: (
+    rootSessionId: string,
+    cwd: string,
+    candidates: readonly string[]
+  ) =>
+    | { filename: string; content: string }
+    | null
+    | Promise<{ filename: string; content: string } | null>
+  /** 项目提示词（项目设置里的纯文本；无项目 → null） */
+  resolveProjectPrompt?: (rootSessionId: string) => string | null | Promise<string | null>
+  /** 知识库引导（这条会话勾选的库；一个都没有 → null） */
+  resolveKnowledgeBases?: (rootSessionId: string) => string | null | Promise<string | null>
+  /** 只读的旧项目记忆索引（渲染好的正文；无项目 / 无记忆 → null） */
+  resolveProjectMemory?: (rootSessionId: string) => string | null | Promise<string | null>
+  /**
+   * bot 会话根 agent 的 `<bot_profile>` 块（`renderBotContext` 的输出；绑定的 md 不在了 → null）。
+   * 可以给多块：每块修剪、空白块跳过、块间空一行（旧 `systemContext` 的口径）。
+   */
+  resolveBotContext?: (rootSessionId: string) => BotContextBlocks | Promise<BotContextBlocks>
 }

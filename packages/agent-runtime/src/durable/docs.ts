@@ -5,7 +5,7 @@
  *   回退 fork 之后由它指向新分支）、根 agent 的锁（P1-09 写入）、被推迟送达的系统通知。
  *   **它是锁与当前分支的权威来源**（裁决 Q7），DB 里的镜像只为了界面便宜地读。
  * - `AgentStateDoc`（每个对话，rewindable + asOf）：这个对话的 agent 是什么（种类、档案名、冻结的
- *   人设、指令文件、上次告知模型的日期）。P1-08 / P1-09 填写；fork 拿到 fork 点时的值。
+ *   人设、指令文件、根会话 id、上次告知模型的日期）。P1-08 / P1-09 填写；fork 拿到 fork 点时的值。
  * - `DisplayDoc`（每个对话，rewindable + asOf）：内联 Token 等显示侧车，按 submission 的
  *   requestId 索引（第三阶段再解析到 entry）。回退 fork 保留前缀的显示侧车。
  * - `NoticeEntry`（`shuvix.notice`）：系统写给模型的通知（后台任务完成、日期变更……）。
@@ -55,9 +55,18 @@ export const SessionStateDoc = defineDoc<SessionState>({
 export type AgentStateRecord = {
   kind?: 'root' | 'spawned'
   profileName?: string
-  /** 创建 agent 时冻结的人设正文（P1-08） */
+  /**
+   * 创建 agent 时冻结的人设正文（P1-08，`prompt/persona.ts` 的 `freezePersona`）：档案正文经
+   * promptVars 替换后的那份。`undefined` = 还没冻结（agent 没创建）；`''` = 冻结了但正文为空。
+   */
   persona?: string
+  /** 档案的指令文件清单（顺序即优先级），与人设一起冻结；指令文件段落按它解析 */
   instructionFiles?: string[]
+  /**
+   * 活段落（指令文件 / 项目提示词 / 知识库 / 项目记忆 / bot）解析所对着的根会话 id，与人设一起冻结
+   * （派生 agent 按根会话的项目上下文解析）。
+   */
+  rootSessionId?: string
   /** 上次以日期通知告知模型的日期（YYYY-MM-DD，裁决 Q14） */
   lastAnnouncedDate?: string
 }
