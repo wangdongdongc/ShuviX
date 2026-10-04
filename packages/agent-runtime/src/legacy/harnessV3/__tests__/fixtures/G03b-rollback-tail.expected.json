@@ -1,0 +1,50 @@
+{
+  "sessionId": "sid-G03b-rollback-tail",
+  "leafId": "0d3832da",
+  "branchIds": ["3597294a", "0d3832da"],
+  "contextEntryIds": ["3597294a", "0d3832da"],
+  "runConfig": {
+    "provider": null,
+    "model": null,
+    "thinkingLevel": null
+  },
+  "issues": [],
+  "messages": [
+    {
+      "id": "3597294a",
+      "sessionId": "sid-G03b-rollback-tail",
+      "role": "user",
+      "type": "text",
+      "content": "u1",
+      "model": "",
+      "provider": "",
+      "createdAt": 1791137236714,
+      "metadata": {}
+    },
+    {
+      "id": "0d3832da",
+      "sessionId": "sid-G03b-rollback-tail",
+      "role": "assistant",
+      "type": "message",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "a1"
+        }
+      ],
+      "content": "a1",
+      "model": "test-model",
+      "provider": "test",
+      "createdAt": 1791137236714,
+      "metadata": {
+        "usage": {
+          "input": 10,
+          "output": 5,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "total": 15
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,104 @@
+{
+  "sessionId": "sid-G09-meta-entries",
+  "leafId": "5247837f",
+  "branchIds": [
+    "da2c3de5",
+    "07311e9b",
+    "c6b27e19",
+    "00ba21d6",
+    "36faf539",
+    "a9d5feeb",
+    "c19329a7",
+    "5247837f"
+  ],
+  "contextEntryIds": [
+    "da2c3de5",
+    "07311e9b",
+    "c6b27e19",
+    "00ba21d6",
+    "36faf539",
+    "a9d5feeb",
+    "c19329a7",
+    "5247837f"
+  ],
+  "runConfig": {
+    "provider": null,
+    "model": null,
+    "thinkingLevel": null
+  },
+  "issues": [],
+  "messages": [
+    {
+      "id": "da2c3de5",
+      "sessionId": "sid-G09-meta-entries",
+      "role": "user",
+      "type": "text",
+      "content": "u1",
+      "model": "",
+      "provider": "",
+      "createdAt": 1791137236736,
+      "metadata": {}
+    },
+    {
+      "id": "07311e9b",
+      "sessionId": "sid-G09-meta-entries",
+      "role": "assistant",
+      "type": "message",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "a1"
+        }
+      ],
+      "content": "a1",
+      "model": "test-model",
+      "provider": "test",
+      "createdAt": 1791137236736,
+      "metadata": {
+        "usage": {
+          "input": 10,
+          "output": 5,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "total": 15
+        }
+      }
+    },
+    {
+      "id": "c19329a7",
+      "sessionId": "sid-G09-meta-entries",
+      "role": "user",
+      "type": "text",
+      "content": "u3",
+      "model": "",
+      "provider": "",
+      "createdAt": 1791137236738,
+      "metadata": {}
+    },
+    {
+      "id": "5247837f",
+      "sessionId": "sid-G09-meta-entries",
+      "role": "assistant",
+      "type": "message",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "a3"
+        }
+      ],
+      "content": "a3",
+      "model": "test-model",
+      "provider": "test",
+      "createdAt": 1791137236738,
+      "metadata": {
+        "usage": {
+          "input": 10,
+          "output": 5,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "total": 15
+        }
+      }
+    }
+  ]
+}

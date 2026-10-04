@@ -1,0 +1,13 @@
+{
+  "sessionId": "sid-G04a-rollback-to-root-tail",
+  "leafId": null,
+  "branchIds": [],
+  "contextEntryIds": [],
+  "runConfig": {
+    "provider": null,
+    "model": null,
+    "thinkingLevel": null
+  },
+  "issues": [],
+  "messages": []
+}

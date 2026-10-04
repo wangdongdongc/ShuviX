@@ -1,0 +1,50 @@
+{
+  "sessionId": "sid-G04b-rollback-to-root-continue",
+  "leafId": "bc130cde",
+  "branchIds": ["4ec2633d", "bc130cde"],
+  "contextEntryIds": ["4ec2633d", "bc130cde"],
+  "runConfig": {
+    "provider": null,
+    "model": null,
+    "thinkingLevel": null
+  },
+  "issues": [],
+  "messages": [
+    {
+      "id": "4ec2633d",
+      "sessionId": "sid-G04b-rollback-to-root-continue",
+      "role": "user",
+      "type": "text",
+      "content": "u2",
+      "model": "",
+      "provider": "",
+      "createdAt": 1791137236719,
+      "metadata": {}
+    },
+    {
+      "id": "bc130cde",
+      "sessionId": "sid-G04b-rollback-to-root-continue",
+      "role": "assistant",
+      "type": "message",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "a2"
+        }
+      ],
+      "content": "a2",
+      "model": "test-model",
+      "provider": "test",
+      "createdAt": 1791137236719,
+      "metadata": {
+        "usage": {
+          "input": 10,
+          "output": 5,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "total": 15
+        }
+      }
+    }
+  ]
+}

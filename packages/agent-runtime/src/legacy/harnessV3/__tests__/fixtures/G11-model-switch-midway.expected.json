@@ -1,0 +1,86 @@
+{
+  "sessionId": "sid-G11-model-switch-midway",
+  "leafId": "79978231",
+  "branchIds": ["6177617c", "d0a7566d", "7205c53e", "7b2429f1", "1699c9f0", "79978231"],
+  "contextEntryIds": ["6177617c", "d0a7566d", "7205c53e", "7b2429f1", "1699c9f0", "79978231"],
+  "runConfig": {
+    "provider": "anthropic",
+    "model": "claude-y",
+    "thinkingLevel": null
+  },
+  "issues": [],
+  "messages": [
+    {
+      "id": "d0a7566d",
+      "sessionId": "sid-G11-model-switch-midway",
+      "role": "user",
+      "type": "text",
+      "content": "u1",
+      "model": "gpt-x",
+      "provider": "openai",
+      "createdAt": 1791137236743,
+      "metadata": {}
+    },
+    {
+      "id": "7205c53e",
+      "sessionId": "sid-G11-model-switch-midway",
+      "role": "assistant",
+      "type": "message",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "a1"
+        }
+      ],
+      "content": "a1",
+      "model": "gpt-x",
+      "provider": "openai",
+      "createdAt": 1791137236743,
+      "metadata": {
+        "usage": {
+          "input": 10,
+          "output": 5,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "total": 15
+        }
+      }
+    },
+    {
+      "id": "1699c9f0",
+      "sessionId": "sid-G11-model-switch-midway",
+      "role": "user",
+      "type": "text",
+      "content": "u2",
+      "model": "claude-y",
+      "provider": "anthropic",
+      "createdAt": 1791137236744,
+      "metadata": {}
+    },
+    {
+      "id": "79978231",
+      "sessionId": "sid-G11-model-switch-midway",
+      "role": "assistant",
+      "type": "message",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "a2"
+        }
+      ],
+      "content": "a2",
+      "model": "claude-y",
+      "provider": "anthropic",
+      "createdAt": 1791137236744,
+      "metadata": {
+        "usage": {
+          "input": 10,
+          "output": 5,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "total": 15
+        }
+      }
+    }
+  ]
+}

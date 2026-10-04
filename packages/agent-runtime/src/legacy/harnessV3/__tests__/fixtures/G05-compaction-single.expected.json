@@ -1,0 +1,149 @@
+{
+  "sessionId": "sid-G05-compaction-single",
+  "leafId": "070a3a71",
+  "branchIds": [
+    "afefeb9e",
+    "6b0e0af5",
+    "badd58eb",
+    "a69aa291",
+    "9e152f9c",
+    "42e93264",
+    "a8a0f238",
+    "17143e44",
+    "6f37039b",
+    "070a3a71"
+  ],
+  "contextEntryIds": [
+    "17143e44",
+    "a69aa291",
+    "9e152f9c",
+    "42e93264",
+    "a8a0f238",
+    "6f37039b",
+    "070a3a71"
+  ],
+  "runConfig": {
+    "provider": "openai",
+    "model": "gpt-x",
+    "thinkingLevel": null
+  },
+  "issues": [],
+  "messages": [
+    {
+      "id": "17143e44",
+      "sessionId": "sid-G05-compaction-single",
+      "role": "assistant",
+      "type": "message",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "summary of u1..a1"
+        }
+      ],
+      "content": "summary of u1..a1",
+      "model": "gpt-x",
+      "provider": "openai",
+      "createdAt": 1791137236722,
+      "metadata": {
+        "isCompactionSummary": true
+      }
+    },
+    {
+      "id": "9e152f9c",
+      "sessionId": "sid-G05-compaction-single",
+      "role": "assistant",
+      "type": "message",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "a1 final"
+        }
+      ],
+      "content": "a1 final",
+      "model": "test-model",
+      "provider": "test",
+      "createdAt": 1791137236721,
+      "metadata": {
+        "usage": {
+          "input": 10,
+          "output": 5,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "total": 15
+        }
+      }
+    },
+    {
+      "id": "42e93264",
+      "sessionId": "sid-G05-compaction-single",
+      "role": "user",
+      "type": "text",
+      "content": "u2",
+      "model": "gpt-x",
+      "provider": "openai",
+      "createdAt": 1791137236721,
+      "metadata": {}
+    },
+    {
+      "id": "a8a0f238",
+      "sessionId": "sid-G05-compaction-single",
+      "role": "assistant",
+      "type": "message",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "a2"
+        }
+      ],
+      "content": "a2",
+      "model": "test-model",
+      "provider": "test",
+      "createdAt": 1791137236721,
+      "metadata": {
+        "usage": {
+          "input": 10,
+          "output": 5,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "total": 15
+        }
+      }
+    },
+    {
+      "id": "6f37039b",
+      "sessionId": "sid-G05-compaction-single",
+      "role": "user",
+      "type": "text",
+      "content": "u3",
+      "model": "gpt-x",
+      "provider": "openai",
+      "createdAt": 1791137236722,
+      "metadata": {}
+    },
+    {
+      "id": "070a3a71",
+      "sessionId": "sid-G05-compaction-single",
+      "role": "assistant",
+      "type": "message",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "a3"
+        }
+      ],
+      "content": "a3",
+      "model": "test-model",
+      "provider": "test",
+      "createdAt": 1791137236722,
+      "metadata": {
+        "usage": {
+          "input": 10,
+          "output": 5,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "total": 15
+        }
+      }
+    }
+  ]
+}
