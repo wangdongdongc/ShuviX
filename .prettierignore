@@ -24,3 +24,8 @@ packages/agent-runtime/src/subagent/builtinAgents/md
 # 扩展自己的内置 agent 定义同理：prettier 会把 `mcp__browser__*` 这类工具名里的 `__x__`
 # 改写成粗体，模型读到的工具前缀就错了
 apps/extension/src/runtime/builtinAgents/md
+
+# P1-00 golden fixtures —— 由捕获测试（SHUVIX_CAPTURE_GOLDEN=1）原样写出；prettier 重排之后
+# 重新捕获就会出一堆纯空白的 diff，掩盖真正的输出变化
+packages/agent-runtime/src/durable/__tests__/fixtures
+apps/desktop/src/main/agents/__tests__/fixtures

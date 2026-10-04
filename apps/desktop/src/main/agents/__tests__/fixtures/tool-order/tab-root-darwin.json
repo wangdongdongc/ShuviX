@@ -1,0 +1,149 @@
+{
+  "case": "tab-root-darwin",
+  "description": "Chrome tab session root: profile declares mcp:chrome; no `read`, so tool output is not spilled",
+  "capturedFrom": "apps/desktop agentHost resolveTools (resolveDesktopTools) on @earendil-works/pi-agent-core 0.80.10 (P1-00, before the pi-durable cutover)",
+  "inputs": {
+    "platform": "darwin",
+    "kind": "root",
+    "rootSessionId": "sess-golden-root",
+    "selfSessionId": "sess-golden-root",
+    "canSpawn": null,
+    "profile": "tab",
+    "profileTools": [
+      "mcp:chrome",
+      "ask",
+      "skill:builtin:drawing"
+    ],
+    "toolOverlay": [],
+    "names": [
+      "mcp:chrome",
+      "ask",
+      "skill:builtin:drawing"
+    ],
+    "extraTools": [],
+    "projectPath": null,
+    "skillsAvailable": true,
+    "mcpServers": {
+      "chrome": {
+        "tools": [
+          "list_tabs",
+          "navigate",
+          "snapshot",
+          "read_page",
+          "click"
+        ]
+      }
+    },
+    "registeredBuiltins": [
+      {
+        "name": "bash",
+        "platforms": [
+          "darwin",
+          "linux"
+        ]
+      },
+      {
+        "name": "powershell",
+        "platforms": [
+          "win32"
+        ]
+      },
+      {
+        "name": "read",
+        "platforms": null
+      },
+      {
+        "name": "write",
+        "platforms": null
+      },
+      {
+        "name": "edit",
+        "platforms": null
+      },
+      {
+        "name": "ask",
+        "platforms": null
+      },
+      {
+        "name": "git",
+        "platforms": null
+      },
+      {
+        "name": "artifact",
+        "platforms": null
+      },
+      {
+        "name": "session",
+        "platforms": null
+      },
+      {
+        "name": "knowledge",
+        "platforms": null
+      },
+      {
+        "name": "doc_read",
+        "platforms": null
+      },
+      {
+        "name": "doc_edit",
+        "platforms": null
+      },
+      {
+        "name": "doc_insert",
+        "platforms": null
+      },
+      {
+        "name": "ls",
+        "platforms": null
+      },
+      {
+        "name": "grep",
+        "platforms": null
+      },
+      {
+        "name": "glob",
+        "platforms": null
+      }
+    ]
+  },
+  "observed": {
+    "skillToolConstructed": [
+      {
+        "names": [
+          "builtin:drawing"
+        ]
+      }
+    ],
+    "mcpEnsureCalls": [
+      [
+        "chrome",
+        {
+          "timeoutMs": 5000,
+          "sessionId": "sess-golden-root"
+        }
+      ]
+    ],
+    "mcpGetToolsCalls": [
+      [
+        "chrome",
+        "sess-golden-root",
+        {
+          "callerId": "sess-golden-root"
+        }
+      ]
+    ],
+    "broadcasts": [],
+    "spill": false
+  },
+  "output": {
+    "toolNames": [
+      "ask",
+      "skill",
+      "mcp__chrome__list_tabs",
+      "mcp__chrome__navigate",
+      "mcp__chrome__snapshot",
+      "mcp__chrome__read_page",
+      "mcp__chrome__click"
+    ]
+  }
+}

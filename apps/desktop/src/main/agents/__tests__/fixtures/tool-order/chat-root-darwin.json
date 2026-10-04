@@ -1,0 +1,188 @@
+{
+  "case": "chat-root-darwin",
+  "description": "chat root (no project) with the app browser and a user skill ticked",
+  "capturedFrom": "apps/desktop agentHost resolveTools (resolveDesktopTools) on @earendil-works/pi-agent-core 0.80.10 (P1-00, before the pi-durable cutover)",
+  "inputs": {
+    "platform": "darwin",
+    "kind": "root",
+    "rootSessionId": "sess-golden-root",
+    "selfSessionId": "sess-golden-root",
+    "canSpawn": null,
+    "profile": "chat",
+    "profileTools": [
+      "bash",
+      "powershell",
+      "read",
+      "write",
+      "edit",
+      "ask",
+      "ls",
+      "grep",
+      "glob",
+      "agent",
+      "session",
+      "knowledge",
+      "artifact",
+      "skill:builtin:drawing"
+    ],
+    "toolOverlay": [
+      "mcp:browser",
+      "skill:pdf"
+    ],
+    "names": [
+      "bash",
+      "powershell",
+      "read",
+      "write",
+      "edit",
+      "ask",
+      "ls",
+      "grep",
+      "glob",
+      "agent",
+      "session",
+      "knowledge",
+      "artifact",
+      "skill:builtin:drawing",
+      "mcp:browser",
+      "skill:pdf"
+    ],
+    "extraTools": [],
+    "projectPath": null,
+    "skillsAvailable": true,
+    "mcpServers": {
+      "browser": {
+        "tools": [
+          "list_tabs",
+          "open_tab",
+          "navigate",
+          "snapshot",
+          "click"
+        ]
+      }
+    },
+    "registeredBuiltins": [
+      {
+        "name": "bash",
+        "platforms": [
+          "darwin",
+          "linux"
+        ]
+      },
+      {
+        "name": "powershell",
+        "platforms": [
+          "win32"
+        ]
+      },
+      {
+        "name": "read",
+        "platforms": null
+      },
+      {
+        "name": "write",
+        "platforms": null
+      },
+      {
+        "name": "edit",
+        "platforms": null
+      },
+      {
+        "name": "ask",
+        "platforms": null
+      },
+      {
+        "name": "git",
+        "platforms": null
+      },
+      {
+        "name": "artifact",
+        "platforms": null
+      },
+      {
+        "name": "session",
+        "platforms": null
+      },
+      {
+        "name": "knowledge",
+        "platforms": null
+      },
+      {
+        "name": "doc_read",
+        "platforms": null
+      },
+      {
+        "name": "doc_edit",
+        "platforms": null
+      },
+      {
+        "name": "doc_insert",
+        "platforms": null
+      },
+      {
+        "name": "ls",
+        "platforms": null
+      },
+      {
+        "name": "grep",
+        "platforms": null
+      },
+      {
+        "name": "glob",
+        "platforms": null
+      }
+    ]
+  },
+  "observed": {
+    "skillToolConstructed": [
+      {
+        "names": [
+          "builtin:drawing",
+          "pdf"
+        ]
+      }
+    ],
+    "mcpEnsureCalls": [
+      [
+        "browser",
+        {
+          "timeoutMs": 5000,
+          "sessionId": "sess-golden-root"
+        }
+      ]
+    ],
+    "mcpGetToolsCalls": [
+      [
+        "browser",
+        "sess-golden-root",
+        {
+          "callerId": "sess-golden-root"
+        }
+      ]
+    ],
+    "broadcasts": [],
+    "spill": true
+  },
+  "output": {
+    "toolNames": [
+      "bash",
+      "read",
+      "write",
+      "edit",
+      "ask",
+      "ls",
+      "grep",
+      "glob",
+      "session",
+      "knowledge",
+      "artifact",
+      "agent",
+      "skill",
+      "mcp__browser__list_tabs",
+      "mcp__browser__open_tab",
+      "mcp__browser__navigate",
+      "mcp__browser__snapshot",
+      "mcp__browser__click"
+    ]
+  }
+}
