@@ -14,6 +14,7 @@ import {
   buildGitToolDescription,
   buildGitParamsSchema,
   GIT_TOOL_NAME,
+  type CallOwner,
   type GitAskReason,
   type GitAuthor,
   type GitEnv,
@@ -84,7 +85,7 @@ function createDesktopGitEnv(sessionId: string): GitEnv {
 function makeDesktopResolveDir(ctx: ToolContext) {
   return async (
     requested: string,
-    opts: { action: string; mutates: boolean; toolCallId: string }
+    opts: { action: string; mutates: boolean; toolCallId: string } & CallOwner
   ): Promise<string> => {
     const config = resolveProjectConfig(ctx.sessionId)
     const abs = resolve(config.workingDirectory, requested)
@@ -93,7 +94,10 @@ function makeDesktopResolveDir(ctx: ToolContext) {
     // （见 GIT_OPS 的 askReason 与下面的 askOp）。目录外仍按读/写语义走路径询问。
     if (isPathWithinWorkspace(abs, config.workingDirectory)) return abs
     const guard = opts.mutates ? assertWriteAllowed : assertReadAllowed
-    await guard(ctx, config, opts.toolCallId, GIT_TOOL_NAME, abs, requested)
+    await guard(ctx, config, opts.toolCallId, GIT_TOOL_NAME, abs, requested, {
+      taskId: opts.taskId,
+      conversationId: opts.conversationId
+    })
     return abs
   }
 }
@@ -104,18 +108,22 @@ function makeDesktopResolveDir(ctx: ToolContext) {
  * i18n 询问文案留在桌面 PEP（description 注入，破坏性操作才有原因码）。
  */
 function makeDesktopAskOp(ctx: ToolContext) {
-  return async (info: {
-    action: string
-    reason: GitAskReason | null
-    force: boolean
-    delete: boolean
-    command: string
-    toolCallId: string
-  }): Promise<void> => {
+  return async (
+    info: {
+      action: string
+      reason: GitAskReason | null
+      force: boolean
+      delete: boolean
+      command: string
+      toolCallId: string
+    } & CallOwner
+  ): Promise<void> => {
     await getDesktopSecurityContext(ctx).enforceGitOp(
       { gitAction: info.action, command: info.command, force: info.force, delete: info.delete },
       {
         toolCallId: info.toolCallId,
+        taskId: info.taskId,
+        conversationId: info.conversationId,
         toolName: GIT_TOOL_NAME,
         description: info.reason ? t(`tool.gitAsk.${info.reason}`) : undefined,
         abortError: TOOL_ABORTED,

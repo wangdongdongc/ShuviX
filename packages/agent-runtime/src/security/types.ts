@@ -418,6 +418,10 @@ export interface PermissionRequestEvent {
   /** 策略的结论：effect 恒为 ask、tier 恒为 ask；prompt 里是要求判断的策略与它们的提示语 */
   decision: SecurityDecision
   toolCallId: string
+  /** 发起这次询问的 durable tool task（= EnforceOpts.taskId；不经 durable 工具调用的检查没有） */
+  taskId?: number
+  /** 发起调用的 durable 对话（= EnforceOpts.conversationId） */
+  conversationId?: number
   /** 询问卡片将展示的主文本（命令原文 / 路径条目 / SQL / URL / 工具名） */
   command: string
   /** 写入的 diff 预览（write / edit） */
@@ -439,6 +443,14 @@ export interface PermissionReviewAnswer {
 
 export interface EnforceOpts {
   toolCallId: string
+  /**
+   * 发起这次检查的 durable tool task（会话内唯一）。provider 的 toolCallId 会话内可能重复（有的中转
+   * 每轮从 `call_0` 数起），询问 / 审查的归属按它认人（裁定 Q16：审查员按 (sessionId, taskId) 归属）。
+   * 不经 durable 工具调用的检查（宿主自己的门、测试）省略。
+   */
+  taskId?: number
+  /** 发起调用的 durable 对话（根会话 = 根对话；派生 agent 是它自己的子对话）；同上可省略 */
+  conversationId?: number
   toolName: string
   /** 报错/展示用路径（相对/展示路径） */
   displayPath?: string

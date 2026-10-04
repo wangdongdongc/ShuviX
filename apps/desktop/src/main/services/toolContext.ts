@@ -32,6 +32,7 @@ import { policyService } from './policyService'
 import {
   createSecurityContext,
   parseAllowEntry,
+  type CallOwner,
   type SecurityContext,
   type SecurityHostProvider,
   type SubAgentModelConfig
@@ -142,10 +143,13 @@ export async function assertReadAllowed(
   toolCallId: string,
   toolName: string,
   absolutePath: string,
-  displayPath?: string
+  displayPath?: string,
+  /** 这次调用的 durable 归属（taskId / conversationId，见 callOwnerOf）；询问与审查按它认人 */
+  owner?: CallOwner
 ): Promise<void> {
   await getDesktopSecurityContext(ctx, () => config).enforcePath('read', absolutePath, {
     toolCallId,
+    ...owner,
     toolName,
     displayPath,
     abortError: TOOL_ABORTED
@@ -194,10 +198,13 @@ export async function assertWriteAllowed(
   toolCallId: string,
   toolName: string,
   absolutePath: string,
-  displayPath?: string
+  displayPath?: string,
+  /** 这次调用的 durable 归属（taskId / conversationId，见 callOwnerOf）；询问与审查按它认人 */
+  owner?: CallOwner
 ): Promise<void> {
   await getDesktopSecurityContext(ctx, () => config).enforcePath('write', absolutePath, {
     toolCallId,
+    ...owner,
     toolName,
     displayPath,
     abortError: TOOL_ABORTED

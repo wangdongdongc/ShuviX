@@ -190,6 +190,8 @@ async function askReviewer(
             request,
             decision,
             toolCallId: opts.toolCallId,
+            ...(opts.taskId === undefined ? {} : { taskId: opts.taskId }),
+            ...(opts.conversationId === undefined ? {} : { conversationId: opts.conversationId }),
             command,
             preview: opts.preview,
             background: opts.background,

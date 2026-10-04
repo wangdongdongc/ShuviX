@@ -5,7 +5,8 @@
  * 带来的那一层契约：
  *   GIT-R1 注册项形状：name 'git'、`replay: 'unsafe'`（一个工具里混着写操作，中断不重跑）、
  *          label 缺省 'Git' 可由宿主换、描述 / schema 静态生成、durable 兜底截断取 2× 缺省
- *   GIT-R2 工具调用 id = `api.callId`：resolveDir 与 askOp 拿到的都是它
+ *   GIT-R2 工具调用 id = `api.callId`：resolveDir 与 askOp 拿到的都是它，连同 `api.taskId` /
+ *          `api.conversationId`（P1-06：宿主并进 EnforceOpts，询问与审查按 tool task 认人）
  *   GIT-R3 失败交回 isError（裁定 Q12）：askOp 拒绝 → resolve 成 isError 结果、文字即那条错误；
  *          resolveDir 报出 abortError 而调用并没被取消 → 同样是 isError（文字与旧版一致）
  *   GIT-R4 取消照旧抛：context 已取消 → 拒绝且不碰环境；询问中途被取消 → 拒绝
@@ -65,13 +66,21 @@ describe('GIT-R 调用身份与失败口径', () => {
       { callId: 'call-git-1', taskId: 5 }
     )
 
+    // P1-06：durable 的调用归属（api.taskId / api.conversationId）随 toolCallId 一起交下去
     expect(resolveDir).toHaveBeenCalledWith('other', {
       action: 'commit',
       mutates: true,
-      toolCallId: 'call-git-1'
+      toolCallId: 'call-git-1',
+      taskId: 5,
+      conversationId: 1
     })
     expect(askOp).toHaveBeenCalledWith(
-      expect.objectContaining({ action: 'commit', toolCallId: 'call-git-1' })
+      expect.objectContaining({
+        action: 'commit',
+        toolCallId: 'call-git-1',
+        taskId: 5,
+        conversationId: 1
+      })
     )
     expect(result).toStrictEqual({
       isError: true,

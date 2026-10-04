@@ -8,8 +8,8 @@
  *
  * 为什么要把 taskId 带下去：同一会话里 provider 的 toolCallId 可能重复（有的中转每轮从
  * `call_0` 数起），durable 的 tool task id 才是一次调用在存储里的唯一身份。安全模块的询问 /
- * 审查归属（EnforceOpts / PermissionRequestEvent）要按它认人 ——
- * TODO(pi-durable p1): P1-06 把 `call.taskId` / `call.conversationId` 穿进各 PEP 调用点。
+ * 审查归属（EnforceOpts / PermissionRequestEvent）要按它认人 —— 各 PEP 调用点经 `callOwnerOf(call)`
+ * 把 taskId / conversationId 并进 EnforceOpts。
  */
 import type { Context } from '@earendil-works/chord'
 import type { ConversationId, TaskId, ToolExecutionApi } from '@earendil-works/pi-durable'
@@ -39,4 +39,18 @@ export function toolCallScope(api: ToolExecutionApi, context: Context): ToolCall
     api,
     context
   }
+}
+
+/** 一次调用在安全模块眼里的归属 —— 并进 EnforceOpts 的那两个字段 */
+export interface CallOwner {
+  taskId?: number
+  conversationId?: number
+}
+
+/**
+ * 交给 PEP 的调用归属：`{ taskId, conversationId }`。没有 scope（单测直接调钩子、宿主自己的检查）
+ * 给空对象 —— 展开进 EnforceOpts 时不多出 undefined 键。
+ */
+export function callOwnerOf(call: ToolCallScope | undefined): CallOwner {
+  return call ? { taskId: call.taskId, conversationId: call.conversationId } : {}
 }

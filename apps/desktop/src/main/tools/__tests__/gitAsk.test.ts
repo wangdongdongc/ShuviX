@@ -24,6 +24,7 @@ import ja from '@shuvix/chat-protocol/i18n/locales/ja.json'
 import {
   executeTool,
   failureText,
+  invokeTool,
   type InvokableTool
 } from '@shuvix/agent-runtime/tools/testing/invokeTool'
 
@@ -43,7 +44,14 @@ const state = vi.hoisted(() => ({
   readGuard: [] as { path: string; displayPath?: string }[],
   writeGuard: [] as { path: string; displayPath?: string }[],
   /** 桌面 wiring 透传给 enforceGitOp 的客体属性（GIT-12 断言用） */
-  gitOps: [] as { gitAction: string; command: string; force: boolean; delete: boolean }[]
+  gitOps: [] as { gitAction: string; command: string; force: boolean; delete: boolean }[],
+  /** 交给 enforceGitOp / 路径守卫的调用身份（GIT-14：durable 的 taskId / conversationId 穿到了没有） */
+  owners: [] as {
+    pep: 'gitOp' | 'read' | 'write'
+    toolCallId: string
+    taskId?: number
+    conversationId?: number
+  }[]
 }))
 
 vi.mock('../../services/toolContext', async () => {
@@ -91,6 +99,12 @@ vi.mock('../../services/toolContext', async () => {
           opts: Parameters<typeof real.enforceGitOp>[1]
         ) => {
           state.gitOps.push({ ...object })
+          state.owners.push({
+            pep: 'gitOp',
+            toolCallId: opts.toolCallId,
+            taskId: opts.taskId,
+            conversationId: opts.conversationId
+          })
           return real.enforceGitOp(object, opts)
         }
       }
@@ -98,19 +112,27 @@ vi.mock('../../services/toolContext', async () => {
     assertReadAllowed: (
       _ctx: unknown,
       _config: unknown,
-      _id: string,
+      id: string,
       _tool: string,
       path: string,
-      displayPath?: string
-    ) => void state.readGuard.push({ path, displayPath }),
+      displayPath?: string,
+      owner?: { taskId?: number; conversationId?: number }
+    ) => {
+      state.readGuard.push({ path, displayPath })
+      state.owners.push({ pep: 'read', toolCallId: id, ...owner })
+    },
     assertWriteAllowed: (
       _ctx: unknown,
       _config: unknown,
-      _id: string,
+      id: string,
       _tool: string,
       path: string,
-      displayPath?: string
-    ) => void state.writeGuard.push({ path, displayPath })
+      displayPath?: string,
+      owner?: { taskId?: number; conversationId?: number }
+    ) => {
+      state.writeGuard.push({ path, displayPath })
+      state.owners.push({ pep: 'write', toolCallId: id, ...owner })
+    }
   }
 })
 vi.mock('../../services/toolRegistry', () => ({
@@ -158,6 +180,7 @@ beforeEach(() => {
   state.readGuard = []
   state.writeGuard = []
   state.gitOps = []
+  state.owners = []
 })
 
 afterEach(() => {
@@ -359,6 +382,29 @@ describe('桌面 makeDesktopResolveDir', () => {
 
     expect(state.readGuard).toEqual([{ path: outside, displayPath: outside }])
     expect(state.writeGuard).toEqual([])
+  })
+})
+
+describe('桌面 git 的调用归属', () => {
+  it('GIT-14: durable 的 taskId / conversationId 随 toolCallId 一起交给工作目录外的路径守卫与 enforceGitOp（P1-06）', async () => {
+    const outside = makeRepo()
+    nodeFs.writeFileSync(join(outside, 'a.txt'), 'hi\n')
+    const tool = makeTool(async () => ({ kind: 'ask', allowed: true }))
+
+    await invokeTool(
+      tool,
+      { action: 'add', dir: outside, paths: ['a.txt'] },
+      { callId: 'call_0', taskId: 31, conversationId: 2 }
+    )
+    await invokeTool(tool, { action: 'status', dir: outside }, { callId: 'call_0', taskId: 32 })
+
+    expect(state.owners).toEqual([
+      { pep: 'write', toolCallId: 'call_0', taskId: 31, conversationId: 2 },
+      { pep: 'gitOp', toolCallId: 'call_0', taskId: 31, conversationId: 2 },
+      // invokeTool 缺省根对话（1）
+      { pep: 'read', toolCallId: 'call_0', taskId: 32, conversationId: 1 },
+      { pep: 'gitOp', toolCallId: 'call_0', taskId: 32, conversationId: 1 }
+    ])
   })
 })
 
