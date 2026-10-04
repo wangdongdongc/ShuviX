@@ -22,13 +22,27 @@ export {
   type SessionManagerDeps,
   type SessionDisposeReason
 } from './sessionManager'
+// ── models：provider 行 → pi-ai Models（目录 / DB 凭据库 / 网络装饰器 / 注册表） ──
 export {
-  resolveModel,
-  BUILTIN_ENV_MAP,
-  type ResolveModelParams,
-  type ResolveModelProviderInfo
-} from './modelResolver'
-export { buildCustomProviderCompat } from './providerCompat'
+  buildProviders,
+  buildProviderEntries,
+  piProviderIdOf,
+  type BuildProvidersInput,
+  type BuiltProvider
+} from './models/catalog'
+export { createDbCredentialStore } from './models/credentialStore'
+export {
+  withNetwork,
+  DEFAULT_REQUEST_TIMEOUT_MS,
+  type WithNetworkOptions
+} from './models/networkModels'
+export {
+  createModelRegistry,
+  type ModelRegistry,
+  type ModelRegistryOptions,
+  type ModelRef
+} from './models/modelRegistry'
+export type { ProviderCredentialPort, ProviderRow, ProviderModelRow } from './models/port'
 export { resolveInitialThinkingLevel } from './thinkingLevel'
 export { isAssistantMessage, isUserMessage, isToolResultMessage } from './messageGuards'
 // 工具结果的界面文字化（实时广播与重开会话同一份）
