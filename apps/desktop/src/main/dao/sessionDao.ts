@@ -1,5 +1,6 @@
 import { BaseDao } from './database'
 import { buildJsonPatch } from './utils'
+import { storageKindOf } from '@shuvix/chat-protocol/sessionStorageKind'
 import type { Session, SessionSettings } from './types'
 
 /** DB 原始行类型（JSON 字段在 DB 中为字符串） */
@@ -79,12 +80,13 @@ export class SessionDao extends BaseDao {
   /** 插入会话 */
   insert(session: Session): void {
     this.stmt(
-      'INSERT INTO sessions (id, title, projectId, parentId, settings, createdAt, updatedAt, lastActiveAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+      'INSERT INTO sessions (id, title, projectId, parentId, storageKind, settings, createdAt, updatedAt, lastActiveAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
     ).run(
       session.id,
       session.title,
       session.projectId,
       session.parentId,
+      storageKindOf(session),
       JSON.stringify(session.settings),
       session.createdAt,
       session.updatedAt,

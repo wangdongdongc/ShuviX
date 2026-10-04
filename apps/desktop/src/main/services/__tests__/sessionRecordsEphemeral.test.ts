@@ -77,6 +77,8 @@ function session(id: string, patch: Partial<Session> = {}): Session {
     title: `title ${id}`,
     projectId: null,
     parentId: null,
+    // 表上这一列带默认值，读回恒有；内存行同口径
+    storageKind: 'harness-v3-jsonl',
     settings: {},
     createdAt: T0,
     updatedAt: T0,

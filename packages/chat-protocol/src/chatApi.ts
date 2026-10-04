@@ -119,6 +119,11 @@ export interface Session {
    * 与顶层会话完全一致（见 docs/sub-session-design.md）。
    */
   parentId: string | null
+  /**
+   * 对话内容的存储类型（见 sessionStorageKind.ts）。缺省按 `harness-v3-jsonl` 理解。
+   * 存储换代不迁移旧会话：界面按这一列判断一条会话能做什么（例如旧格式只能查看）。
+   */
+  storageKind?: string
   settings: SessionSettings
   createdAt: number
   /** 账本时间：改 title / projectId / settings 就 bump。日历和侧栏不读它。 */

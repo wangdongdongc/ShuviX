@@ -1,4 +1,5 @@
 import type { ChromeTabBinding } from '@shuvix/chat-protocol/chromeTabSession'
+import type { SessionStorageKind } from '@shuvix/chat-protocol/sessionStorageKind'
 
 /**
  * 模型相关元数据。
@@ -93,6 +94,12 @@ export interface Session {
    * 唯一差别是侧栏把它渲染在父会话下面。嵌套只允许一层（子会话不能再开子会话）。
    */
   parentId: string | null
+  /**
+   * 对话内容的存储类型（见 chat-protocol 的 sessionStorageKind.ts）。表上恒有值（列带默认值）；
+   * 缺省只出现在尚未落库的手工对象上，按 `harness-v3-jsonl` 理解。会话一旦建成就不再改 ——
+   * 存储换代不迁移旧会话，而是按这一列分流到对应的适配器。
+   */
+  storageKind?: SessionStorageKind
   /** 会话级配置（路径授权、扩展能力勾选等） */
   settings: SessionSettings
   createdAt: number

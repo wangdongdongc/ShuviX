@@ -38,6 +38,7 @@ import { createSessionTreeRegistry } from '@shuvix/agent-runtime'
 import { getSessionsDir } from '../utils/paths'
 import { createLogger } from '../logger'
 import { sessionRecords } from './sessionRecords'
+import { HARNESS_V3_JSONL, storageKindOf } from '@shuvix/chat-protocol/sessionStorageKind'
 
 const log = createLogger('SessionStorage')
 
@@ -70,8 +71,24 @@ function isInMemoryTree(sessionId: string): boolean {
   return sessionRecords.isEphemeral(sessionId) || sessionRecords.wasEphemeral(sessionId)
 }
 
+/**
+ * 只认本格式的会话：表上 storageKind 不是 harness-v3-jsonl 的会话（更新版本建的，比如 pi-durable 的
+ * 存储）绝不能拿 v3 JSONL 去开或去建 —— 降级运行时那会在它旁边凭空写出一个 `.jsonl`，两种格式各记一半。
+ * 不迁移、不猜，直接拒绝。
+ */
+function assertHarnessV3(sessionId: string): void {
+  const row = sessionRecords.pick(sessionId, ['storageKind'])
+  const kind = storageKindOf(row ?? {})
+  if (kind !== HARNESS_V3_JSONL) {
+    throw new Error(
+      `session ${sessionId} uses storage "${kind}", which this version cannot open as a v3 JSONL tree`
+    )
+  }
+}
+
 const registry = createSessionTreeRegistry({
   open: async (sessionId) => {
+    assertHarnessV3(sessionId)
     if (isInMemoryTree(sessionId)) {
       throw new Error(`in-memory session ${sessionId} has no stored tree to open`)
     }
@@ -80,6 +97,7 @@ const registry = createSessionTreeRegistry({
   // 注意 pi 的 open() 校验 header cwd 非空而 create() 不校验 —— 空 cwd 会写出一个
   // 再也读不回来的文件，这里统一回落到 sessions 目录兜底。
   create: async (sessionId, cwd) => {
+    assertHarnessV3(sessionId)
     if (sessionRecords.isEphemeral(sessionId)) {
       return new Session(
         new InMemorySessionStorage({

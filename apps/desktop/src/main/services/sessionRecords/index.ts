@@ -21,6 +21,7 @@
  *
  * 会话树（对话内容）的内存化不在这里：sessionStorage 的树注册表按 isEphemeral / wasEphemeral 分流。
  */
+import { storageKindOf } from '@shuvix/chat-protocol/sessionStorageKind'
 import { sessionDao } from '../../dao/sessionDao'
 import type { Session, SessionSettings } from '../../dao/types'
 
@@ -43,6 +44,8 @@ function toRow(session: Session): SessionRow {
     // 表里这两列可空：undefined 落库即 NULL，读回是 null
     projectId: session.projectId ?? null,
     parentId: session.parentId ?? null,
+    // 与表上的列默认值同口径：缺省即 harness-v3-jsonl
+    storageKind: storageKindOf(session) as Session['storageKind'],
     settings: JSON.stringify(session.settings ?? {}),
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,

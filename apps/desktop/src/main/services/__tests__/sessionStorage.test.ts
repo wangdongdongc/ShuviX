@@ -18,8 +18,9 @@ vi.mock('../../utils/paths', () => ({
 vi.mock('../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {} })
 }))
-// 树注册表经 sessionRecords.isEphemeral 分流；持久会话那一侧不碰表，DAO 置空即可（不拉起真库）
-vi.mock('../../dao/sessionDao', () => ({ sessionDao: {} }))
+// 树注册表经 sessionRecords.isEphemeral 分流；持久会话那一侧只读一列 storageKind（查不到行 = 按 v3 处理），
+// DAO 给一个永远查不到的 pick 即可（不拉起真库）
+vi.mock('../../dao/sessionDao', () => ({ sessionDao: { pick: () => undefined } }))
 
 import type { AgentMessage } from '@earendil-works/pi-agent-core'
 import {

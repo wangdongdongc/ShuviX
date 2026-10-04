@@ -52,6 +52,7 @@ import {
 } from '@shuvix/agent-runtime'
 import { isBotSessionSettings } from '@shuvix/chat-protocol/botSession'
 import { chromeTabOf, isChromeTabSessionSettings } from '@shuvix/chat-protocol/chromeTabSession'
+import { CURRENT_SESSION_STORAGE_KIND } from '@shuvix/chat-protocol/sessionStorageKind'
 import { agentService } from './agentService'
 // 仅在方法体内调用：两个模块的构造期都不互相触碰，ESM 活绑定下无初始化环
 import { AgentSession } from './agentSession'
@@ -305,6 +306,8 @@ export class SessionService {
       title: params?.title ?? (notebookPath ? basename(notebookPath) : t('agent.defaultTitle')),
       projectId: pid,
       parentId,
+      // 新会话一律用当前版本的存储；建成后不再改（存储换代不迁移旧会话，见 sessionStorageKind.ts）
+      storageKind: CURRENT_SESSION_STORAGE_KIND,
       // 指令文件不预写配置：留空即「未显式配置」，注入时按 AGENTS.md → CLAUDE.md 优先级自动选
       settings: {
         ...(notebookPath ? { notebookPath } : {}),
