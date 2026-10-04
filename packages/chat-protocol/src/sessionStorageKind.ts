@@ -14,15 +14,19 @@ export const SESSION_STORAGE_KINDS = ['harness-v3-jsonl', 'durable-sqlite-1'] as
 
 export type SessionStorageKind = (typeof SESSION_STORAGE_KINDS)[number]
 
-/** pi 0.80 harness 的 v3 JSONL 会话树 */
+/** pi 0.80 harness 的 v3 JSONL 会话树（只读：P1-01 起不再新建） */
 export const HARNESS_V3_JSONL: SessionStorageKind = 'harness-v3-jsonl'
+
+/** pi-durable 的 SQLite 存储，`sessions/<id>.sqlite` */
+export const DURABLE_SQLITE_1: SessionStorageKind = 'durable-sqlite-1'
 
 /**
  * 当前版本新建会话所用的存储类型。
  *
- * 换存储时只改这一个值：之前建的会话保持原类型，不迁移。
+ * 换存储时只改这一个值：之前建的会话保持原类型，不迁移。pi-durable 切换（P1-01）把它从
+ * `harness-v3-jsonl` 换成了 `durable-sqlite-1`。
  */
-export const CURRENT_SESSION_STORAGE_KIND: SessionStorageKind = HARNESS_V3_JSONL
+export const CURRENT_SESSION_STORAGE_KIND: SessionStorageKind = DURABLE_SQLITE_1
 
 /** 是否是本版本认识的存储类型（更新版本写下的值在旧版本里不认识） */
 export function isKnownStorageKind(value: unknown): value is SessionStorageKind {

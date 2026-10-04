@@ -1,7 +1,7 @@
 {
   "case": "work-root-darwin",
   "description": "work root on macOS with two MCP servers and a user skill ticked (the drawing skill in the overlay dedupes against the profile)",
-  "capturedFrom": "apps/desktop agentHost resolveTools (resolveDesktopTools) on @earendil-works/pi-agent-core 0.80.10 (P1-00, before the pi-durable cutover)",
+  "capturedFrom": "apps/desktop agentHost resolveTools (resolveDesktopTools) on the pi 0.80.10 AgentHarness runtime (P1-00, before the pi-durable cutover)",
   "inputs": {
     "platform": "darwin",
     "kind": "root",

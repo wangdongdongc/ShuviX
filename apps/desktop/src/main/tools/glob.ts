@@ -14,7 +14,7 @@ import {
   TOOL_ABORTED,
   type ToolContext
 } from '../services/toolContext'
-import type { AgentToolResult } from '@earendil-works/pi-agent-core'
+import type { AgentToolResult } from '@shuvix/agent-runtime'
 import type { GlobToolDetails } from '@shuvix/chat-protocol/types/chatMessage'
 import { resolveToCwd } from '../utils/toolUtils/pathUtils'
 import { rgFilesList } from '../utils/toolUtils/ripgrep'

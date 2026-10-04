@@ -6,7 +6,6 @@ import { sessionDayPromptDao } from '../dao/sessionDayPromptDao'
 import { messageService } from './messageService'
 import {
   readSessionRunConfig,
-  addSessionTreePin,
   appendModelChange,
   appendThinkingLevelChange
 } from './sessionStorage'
@@ -145,9 +144,8 @@ export class SessionService {
   })
 
   constructor() {
-    // 会话树共享缓存的逐出保护：有 AgentSession（或创建中）的会话，
-    // 树实例与运行时共享 —— LRU 不得回收，否则读取端会另开分叉实例
-    addSessionTreePin((sessionId) => this.agents.tracked(sessionId))
+    // （旧的会话树缓存钉住随 pi 0.80 一起删除；durable 会话的打开 / LRU / 钉住归 SessionHost ——
+    // TODO(pi-durable p1): P1-07 / P1-10）
 
     // 后台任务结束 → 告知该会话的 Agent。刻意**不懒建 Agent**：没建过 Agent 的会话
     // 说明用户根本没在跟它对话，为一条后台通知把整个运行时拉起来不值当
@@ -637,7 +635,7 @@ export class SessionService {
     // 扩展能力勾选在会话设置里（创建会话时定下，创建 Agent 时读这一次）
     const selectedTools = this.sessionEnabledTools(sessionId)
 
-    // 模型类运行配置的唯一事实源是会话树：model_change / thinking_level_change entry
+    // 模型类运行配置的唯一事实源是会话设置：settings.model / settings.thinkingLevel
     const tree = await readSessionRunConfig(sessionId)
     const provider = tree.provider ?? this.getDefaultProvider()
     const model = tree.model ?? this.getDefaultModel()

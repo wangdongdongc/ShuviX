@@ -33,7 +33,7 @@ import {
 } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { AgentToolResult } from '@earendil-works/pi-agent-core'
+import type { AgentToolResult } from '@shuvix/agent-runtime'
 import type { AssistantMessage, ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 

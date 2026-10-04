@@ -1,7 +1,7 @@
 {
   "case": "coding-spawned-system-context-blocks",
   "description": "coding spawned with caller systemContext blocks: each block is trimmed, a whitespace-only block is skipped",
-  "capturedFrom": "createAgentFactory(fakeHost).createAgent() on @earendil-works/pi-agent-core 0.80.10 (P1-00, before the pi-durable cutover)",
+  "capturedFrom": "createAgentFactory(fakeHost).createAgent() on the pi 0.80.10 AgentHarness runtime (P1-00, before the pi-durable cutover)",
   "inputs": {
     "kind": "spawned",
     "sessionId": "sub-golden-1",

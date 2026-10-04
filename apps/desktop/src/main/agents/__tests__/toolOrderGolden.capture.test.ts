@@ -110,13 +110,8 @@ vi.mock('../../dao/sessionDao', () => ({
 }))
 vi.mock('../../dao/projectDao', () => ({ projectDao: { pick: () => mocks.project } }))
 vi.mock('../../dao/providerDao', () => ({ providerDao: { findAllEnabledModels: () => [] } }))
-vi.mock('../../services/agentModelResolver', () => ({ resolveModel: vi.fn() }))
-vi.mock('../../services/providerOAuthService', () => ({ providerOAuthService: {} }))
-vi.mock('../../services/sessionStorage', () => ({ ensureSessionTree: vi.fn() }))
 vi.mock('../../services/instruction', () => ({ resolveInstructionContent: vi.fn() }))
 vi.mock('../../services/memory', () => ({ resolveProjectMemoryIndex: vi.fn() }))
-vi.mock('../../services/httpLogService', () => ({ httpLogService: {} }))
-vi.mock('../../services/llmNetwork', () => ({ llmNetwork: {} }))
 vi.mock('../../frontend/core', () => ({
   chatFrontendRegistry: { broadcast: (event: unknown) => mocks.broadcasts.push(event) }
 }))
@@ -130,7 +125,6 @@ vi.mock('../../services/toolContext', () => ({
   resolveProjectConfig: vi.fn()
 }))
 vi.mock('../../services/knowledge', () => ({ enabledBaseChoices: () => [] }))
-vi.mock('@earendil-works/pi-agent-core/node', () => ({ NodeExecutionEnv: class {} }))
 
 import { buildBuiltinProfiles } from '@shuvix/agent-runtime'
 import { createInlineMdReader } from '@shuvix/agent-runtime/builtinAgents/inlineSources'
@@ -378,7 +372,7 @@ async function captureCase(c: GoldenCase): Promise<Record<string, unknown>> {
     case: c.name,
     description: c.description,
     capturedFrom:
-      'apps/desktop agentHost resolveTools (resolveDesktopTools) on @earendil-works/pi-agent-core 0.80.10 (P1-00, before the pi-durable cutover)',
+      'apps/desktop agentHost resolveTools (resolveDesktopTools) on the pi 0.80.10 AgentHarness runtime (P1-00, before the pi-durable cutover)',
     inputs: {
       platform: c.platform,
       kind: c.kind,

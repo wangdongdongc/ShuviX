@@ -3,7 +3,7 @@
  * 从桌面 edit.ts 的 executeInternal 内层逐字搬出，fs → 注入的 FileSystemPort，
  * fileTime → 注入的 FileGuards。富文本/询问/abort 仍由各宿主在外层编排。
  */
-import type { AgentToolResult } from '@earendil-works/pi-agent-core'
+import type { AgentToolResult } from '../tools/toolResult'
 import type { EditToolDetails } from '@shuvix/chat-protocol/types/chatMessage'
 import type { FileSystemPort, FileGuards, WriteAskHook } from './port'
 import {

@@ -14,7 +14,7 @@
  * `create` 在动手之前就被拒，读侧一概照常。
  */
 import { describe, it, expect, vi, type Mock } from 'vitest'
-import type { AgentToolResult } from '@earendil-works/pi-agent-core'
+import type { AgentToolResult } from '../../tools/toolResult'
 import { KNOWLEDGE_TYPES } from '@shuvix/chat-protocol/knowledge'
 import type { FileSystemPort } from '../../fileTools/port'
 import type { SecurityContext } from '../../security/types'

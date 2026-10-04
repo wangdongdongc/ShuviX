@@ -31,5 +31,24 @@ export default defineConfig(
       ]
     }
   },
+  // pi-agent-core 已在 pi 1.0 迁移中移除（会话层改用 pi-durable）。worktree 位于主仓库目录内时，
+  // 模块解析会向上找到主仓库 node_modules 里残留的旧版本 —— 误留的 import 照样能编译运行，只能靠这条规则拦住。
+  {
+    files: ['packages/**/*.{ts,tsx}'],
+    rules: {
+      '@typescript-eslint/no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: ['@earendil-works/pi-agent-core', '@earendil-works/pi-agent-core/*'],
+              message:
+                'pi-agent-core was removed in the pi 1.0 migration; use @earendil-works/pi-durable / pi-ai or the local types in @shuvix/agent-runtime.'
+            }
+          ]
+        }
+      ]
+    }
+  },
   eslintConfigPrettier
 )

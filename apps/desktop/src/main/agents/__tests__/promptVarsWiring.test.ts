@@ -69,13 +69,8 @@ vi.mock('../../services/skillService', () => ({
   skillService: { findEnabled: mocks.findEnabled }
 }))
 vi.mock('../../services/mcpService', () => ({ mcpService: {} }))
-vi.mock('../../services/agentModelResolver', () => ({ resolveModel: vi.fn() }))
-vi.mock('../../services/providerOAuthService', () => ({ providerOAuthService: {} }))
-vi.mock('../../services/sessionStorage', () => ({ ensureSessionTree: vi.fn() }))
 vi.mock('../../services/instruction', () => ({ resolveInstructionContent: vi.fn() }))
 vi.mock('../../services/memory', () => ({ resolveProjectMemoryIndex: vi.fn() }))
-vi.mock('../../services/httpLogService', () => ({ httpLogService: {} }))
-vi.mock('../../services/llmNetwork', () => ({ llmNetwork: {} }))
 vi.mock('../../frontend/core', () => ({ chatFrontendRegistry: {} }))
 vi.mock('../../services/wrapToolOutput', () => ({
   wrapToolOutput: vi.fn(),
@@ -91,7 +86,6 @@ vi.mock('../../services/toolContext', () => ({
   resolveProjectConfig: vi.fn()
 }))
 vi.mock('../../services/knowledge', () => ({ enabledBaseChoices: () => [] }))
-vi.mock('@earendil-works/pi-agent-core/node', () => ({ NodeExecutionEnv: class {} }))
 vi.mock('../AgentTool', () => ({ createAgentTool: vi.fn() }))
 vi.mock('../../utils/toolUtils/shell', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../utils/toolUtils/shell')>()

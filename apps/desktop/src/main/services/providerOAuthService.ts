@@ -208,7 +208,7 @@ export class ProviderOAuthService {
       if (!stored) return undefined
       let credential = toPi(stored)
       if (credential.expires <= Date.now()) {
-        credential = await flow.refresh(credential)
+        credential = await flow.refresh(credential, AbortSignal.timeout(15000))
         providerDao.saveOAuth(providerId, toStored(credential))
         log.debug(`${providerId} access token 已刷新`)
       }

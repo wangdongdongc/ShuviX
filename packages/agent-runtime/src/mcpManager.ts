@@ -1,7 +1,7 @@
 /**
  * McpManager —— 宿主无关的 MCP 客户端核心。
  *
- * 承载：连接/断开、工具发现、callTool、MCP 工具 → pi-agent-core AgentTool 转换、状态跟踪、
+ * 承载：连接/断开、工具发现、callTool、MCP 工具 → AgentTool（tools/toolResult 的过渡形状）转换、状态跟踪、
  * 内置 server 的 {{ENV}} 模板替换。「存储」和「transport 创建」经构造参数注入：
  *  - store：server 配置读取 + cachedTools 持久化（桌面 mcpDao）
  *  - createTransport：按 server.type 造 transport（桌面 stdio + http + inproc）
@@ -22,7 +22,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPError } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 import { Type, type TSchema } from 'typebox'
-import type { AgentTool, AgentToolResult } from '@earendil-works/pi-agent-core'
+import type { AgentTool, AgentToolResult } from './tools/toolResult'
 import type { McpServer, McpServerStatus, McpToolInfo } from '@shuvix/chat-protocol/types/mcp'
 import type { McpToolDetails } from '@shuvix/chat-protocol/types/chatMessage'
 import type { BuiltinMcpScope } from './builtinMcpRegistry'

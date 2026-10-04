@@ -1,31 +1,30 @@
 /**
- * 消息服务 —— 会话 entry 树的「UI 视角」读取端。
+ * 消息服务 —— 会话对话内容的「UI 视角」读取端（只读投影）。
  *
- * 迁移到 AgentHarness 之后，这个服务从「消息的写入方 + 读取方」缩成了**只读投影**：
- * 消息的产生与落盘全部由 harness 在 `message_end` / `turn_end` 完成（写进会话的
- * JSONL 转写文件），这里只负责把 entry 树投影成 chat-ui 认识的 ChatMessage。
- *
- * 随之消失的方法（旧调用方需改造）：
- *   add / addUserText / addAssistantText / addToolUse / completeToolUse /
- *   addStepThinking / addStepText / addErrorEvent —— 写入不再经这里。
- *   rollbackToMessage / deleteFromMessage —— 改为树导航（moveTo），见下方新方法。
+ * pi-durable 切换（P1-01）之后按会话的存储类型分流：
+ *  - `harness-v3-jsonl`（切换前的会话）：照旧可看 —— 经 agent-runtime 的 legacy 读取器把 `.jsonl`
+ *    渲染成 ChatMessage（冻结的投影，「旧会话现在怎么显示，以后就怎么显示」）；这种会话只读，
+ *    回退 / 截断一律不做（返回「没有可回退的目标」）。
+ *  - `durable-sqlite-1`（新会话）：durable 存储的投影还没写 —— TODO(pi-durable p3)：列表暂时为空，
+ *    回退 / 截断抛 `PhasePendingError`。
  */
-import { SIDECAR_CUSTOM_TYPES, entriesToChatMessages } from '@shuvix/agent-runtime'
-import { deleteSessionFile, getSessionTree, readSessionRunConfig } from './sessionStorage'
+import { PhasePendingError } from '@shuvix/agent-runtime'
+import { HARNESS_V3_JSONL, storageKindOf } from '@shuvix/chat-protocol/sessionStorageKind'
 import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
+import { deleteSessionFile, readLegacyTranscript } from './sessionStorage'
+import { sessionRecords } from './sessionRecords'
+
+/** 这条会话是不是切换前的旧格式（只读）会话；查不到行按旧格式处理（与 storageKindOf 同口径） */
+function isLegacySession(sessionId: string): boolean {
+  return storageKindOf(sessionRecords.pick(sessionId, ['storageKind']) ?? {}) === HARNESS_V3_JSONL
+}
 
 export class MessageService {
   /** 会话当前上下文对应的消息列表（已应用压缩过滤：被压缩的历史不在其中） */
   async listBySession(sessionId: string): Promise<ChatMessage[]> {
-    const session = await getSessionTree(sessionId)
-    if (!session) return [] // 还没发过消息 → 没有转写文件
-    const entries = await session.buildContextEntries()
-    // fallback 与流式广播同源（都取 readSessionRunConfig）：**「流式所见 = 重开所见」是
-    // 两侧一起兑现的**。这里的 entries 过了压缩过滤，一旦某条 model_change 早于压缩切点，
-    // 不给 fallback 会让重开后所有 user 消息的 model/provider 塌成空串 —— 而流式当时
-    // 显示的是真实模型
-    const cfg = await readSessionRunConfig(sessionId)
-    return entriesToChatMessages(entries, sessionId, cfg.model ?? '', cfg.provider ?? '')
+    if (isLegacySession(sessionId)) return readLegacyTranscript(sessionId)?.messages ?? []
+    // TODO(pi-durable p3): durable 会话的条目投影（entries → ChatMessage）
+    return []
   }
 
   /** 会话最后一条消息 */
@@ -34,49 +33,37 @@ export class MessageService {
     return msgs.length > 0 ? msgs[msgs.length - 1] : undefined
   }
 
-  /** 清空会话（删转写文件，下次发消息会重建） */
+  /**
+   * 清空会话（删存储文件，下次发消息会重建）。
+   * TODO(pi-durable p1): P1-10 改经 sessionHost.delete（先关掉打开着的存储）。
+   */
   clear(sessionId: string): void {
     deleteSessionFile(sessionId)
   }
 
-  // ─── 树导航（取代旧的「删除消息之后的所有消息」） ────────────────
-  //
-  // 旧模型靠 DELETE ... WHERE createdAt > ? 物理删除；entry 树是 append-only，
-  // 对应操作是把 leaf 移到目标 entry 的父节点 —— 历史仍在文件里，可以再切回去。
+  // ─── 回退 / 截断 ────────────────────────────────────────
 
   /**
-   * 解析回退目标：把 leaf 应该移到哪个 entry（**只读，不写树**）。
-   * 消息不在树上返回 undefined；`{ targetId: null }` 表示回退到树根之前。
+   * 解析回退目标（**只读，不写**）。消息不在会话里返回 undefined；`{ targetId: null }` 表示回退到最开头。
    *
-   * 和 `applyRollback` 分成两步，是为了让调用方能在**动叶子之前**先把旧运行时关停 ——
-   * 顺序反过来就是在一个还在写的 run 脚下抽走叶子（见 DefaultChatGateway.rollbackMessage）；
-   * 同时也免得为一个根本不存在的目标白白把正在跑的 Agent 停掉。
+   * 和 `applyRollback` 分成两步，是为了让调用方能在**动会话之前**先把旧运行时关停
+   * （见 DefaultChatGateway.rollbackMessage），也免得为一个不存在的目标白白停掉正在跑的 Agent。
    */
   async resolveRollbackTarget(
     sessionId: string,
-    messageId: string
+    _messageId: string
   ): Promise<{ targetId: string | null } | undefined> {
-    const session = await getSessionTree(sessionId)
-    if (!session) return undefined
-    const entry = await session.getEntry(messageId)
-    if (!entry) return undefined
-    // 消息前若有侧车（内联 Token 的显示态），**逐条**越过 —— 叶子停在一条无主侧车上，
-    // 它就会被下一条到达的消息当成自己的侧车消费掉
-    let targetId = entry.parentId
-    while (targetId) {
-      const parent = await session.getEntry(targetId)
-      if (parent?.type !== 'custom' || !SIDECAR_CUSTOM_TYPES.includes(parent.customType)) break
-      targetId = parent.parentId
-    }
-    return { targetId }
+    // 旧格式会话只读：没有可回退的目标
+    if (isLegacySession(sessionId)) return undefined
+    // TODO(pi-durable p3): durable 会话的回退（按条目定位 + rewind）
+    throw new PhasePendingError('message rollback', 3)
   }
 
-  /** 执行回退：把 leaf 移到 `resolveRollbackTarget` 给出的 entry 上 */
-  async applyRollback(sessionId: string, targetId: string | null): Promise<boolean> {
-    const session = await getSessionTree(sessionId)
-    if (!session) return false
-    await session.moveTo(targetId)
-    return true
+  /** 执行回退：把会话退到 `resolveRollbackTarget` 给出的位置 */
+  async applyRollback(sessionId: string, _targetId: string | null): Promise<boolean> {
+    if (isLegacySession(sessionId)) return false
+    // TODO(pi-durable p3): durable 会话的回退
+    throw new PhasePendingError('message rollback', 3)
   }
 
   /** 回退到指定消息之前（该消息本身也不再在上下文中）。调用方须自行保证此刻没有活跃 run。 */
@@ -87,13 +74,10 @@ export class MessageService {
   }
 
   /** 回退到指定消息之后（保留该消息本身） */
-  async truncateAfterMessage(sessionId: string, messageId: string): Promise<boolean> {
-    const session = await getSessionTree(sessionId)
-    if (!session) return false
-    const entry = await session.getEntry(messageId)
-    if (!entry) return false
-    await session.moveTo(entry.id)
-    return true
+  async truncateAfterMessage(sessionId: string, _messageId: string): Promise<boolean> {
+    if (isLegacySession(sessionId)) return false
+    // TODO(pi-durable p3): durable 会话的截断
+    throw new PhasePendingError('message truncate', 3)
   }
 }
 

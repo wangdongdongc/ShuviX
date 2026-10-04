@@ -1,20 +1,15 @@
 /**
- * entry 树 → ChatMessage 投影的端到端验证。
+ * 旧格式 entry 树 → ChatMessage 投影（冻结副本 `../projection.ts`）的规则用例。
  *
- * 不 mock：真的用 pi 的 `JsonlSessionStorage` 在临时目录里建一个会话文件，
- * 走完整的 append → buildContextEntries → 投影链路。这样同时覆盖了
- * 「JSONL 落盘/回读的保真度」和「投影规则是否符合 chat-ui 的期待」。
+ * 原先这份用例跑在 pi 0.80 的真 `JsonlSessionStorage` 上（append → buildContextEntries → 投影）；
+ * pi-durable 切换（P1-01）把 pi 0.80 删了，这里改用一棵手搭的线性 v3 树（`V3Tree`：每次 append
+ * 以当前位置为父、新条目即新位置，与 pi 的追加语义相同），上下文过滤走本目录读取器的
+ * `contextEntriesOf`，「重新打开」走 JSONL 文本 → `readHarnessV3Transcript`。用例本身逐条照旧。
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, rmSync } from 'fs'
-import { tmpdir } from 'os'
-import { join } from 'path'
-import { JsonlSessionStorage, Session } from '@earendil-works/pi-agent-core'
-import { NodeExecutionEnv } from '@earendil-works/pi-agent-core/node'
-import type { AgentMessage } from '@earendil-works/pi-agent-core'
+import { describe, it, expect, beforeEach } from 'vitest'
 import type { ImageContent, TextContent } from '@earendil-works/pi-ai'
 import type { AssistantMessage, UserTextMeta } from '@shuvix/chat-protocol/types/chatMessage'
-import { imagePlaceholder, toolResultText } from '../../toolResultText'
+import { imagePlaceholder, toolResultText } from '../../../toolResultText'
 import {
   entriesToChatMessages,
   INLINE_TOKENS_CUSTOM_TYPE,
@@ -22,18 +17,85 @@ import {
   INSTRUCTION_CUSTOM_TYPE,
   SIDECAR_CUSTOM_TYPES
 } from '../projection'
+import { contextEntriesOf, readHarnessV3Transcript } from '../reader'
+import type { HarnessV3Entry, HarnessV3Message } from '../types'
 
 const SESSION_ID = 'sess-1'
 
-let dir: string
-let session: Session
+/** 一棵线性的 v3 会话树：append 以当前位置为父，新条目成为新位置（与 pi 的追加语义相同） */
+class V3Tree {
+  readonly entries: HarnessV3Entry[] = []
+  private leafId: string | null = null
+  private seq = 0
+
+  private push(fields: Record<string, unknown>): string {
+    const id = `e${++this.seq}`
+    const entry = {
+      ...fields,
+      id,
+      parentId: this.leafId,
+      timestamp: new Date(Date.parse('2026-01-01T00:00:00.000Z') + this.seq * 1000).toISOString()
+    } as unknown as HarnessV3Entry
+    this.entries.push(entry)
+    this.leafId = id
+    return id
+  }
+
+  async appendMessage(message: HarnessV3Message): Promise<string> {
+    return this.push({ type: 'message', message })
+  }
+
+  async appendCustomEntry(customType: string, data?: unknown): Promise<string> {
+    return this.push({ type: 'custom', customType, data })
+  }
+
+  async appendCustomMessageEntry(
+    customType: string,
+    content: string | (TextContent | ImageContent)[],
+    display: boolean,
+    details?: unknown
+  ): Promise<string> {
+    return this.push({ type: 'custom_message', customType, content, display, details })
+  }
+
+  async appendCompaction(
+    summary: string,
+    firstKeptEntryId: string,
+    tokensBefore: number
+  ): Promise<string> {
+    return this.push({ type: 'compaction', summary, firstKeptEntryId, tokensBefore })
+  }
+
+  async getLeafId(): Promise<string | null> {
+    return this.leafId
+  }
+
+  /** 线性树：分支就是全部条目，按根 → 叶 */
+  async buildContextEntries(): Promise<HarnessV3Entry[]> {
+    return contextEntriesOf(this.entries)
+  }
+
+  /** 落成 `.jsonl` 文本（会话头 + 每条一行） */
+  toJsonl(): string {
+    const header = {
+      type: 'session',
+      version: 3,
+      id: SESSION_ID,
+      timestamp: '2026-01-01T00:00:00.000Z',
+      cwd: '/ws'
+    }
+    return [header, ...this.entries].map((l) => JSON.stringify(l)).join('\n') + '\n'
+  }
+}
+
+let session: V3Tree
 
 /** 造一条 assistant 消息（usage/api 等字段填成最小可用值） */
 function assistant(
   content: unknown[],
   stopReason = 'stop',
   usage = { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 15 }
-): AgentMessage {
+): HarnessV3Message {
   return {
     role: 'assistant',
     content,
@@ -43,21 +105,11 @@ function assistant(
     usage,
     stopReason,
     timestamp: Date.now()
-  } as unknown as AgentMessage
+  } as unknown as HarnessV3Message
 }
 
-beforeEach(async () => {
-  dir = mkdtempSync(join(tmpdir(), 'shuvix-projection-'))
-  const env = new NodeExecutionEnv({ cwd: dir })
-  const storage = await JsonlSessionStorage.create(env, join(dir, `${SESSION_ID}.jsonl`), {
-    cwd: dir,
-    sessionId: SESSION_ID
-  })
-  session = new Session(storage)
-})
-
-afterEach(() => {
-  rmSync(dir, { recursive: true, force: true })
+beforeEach(() => {
+  session = new V3Tree()
 })
 
 async function project(): Promise<ReturnType<typeof entriesToChatMessages>> {
@@ -70,7 +122,7 @@ describe('entriesToChatMessages', () => {
       role: 'user',
       content: [{ type: 'text', text: '你好' }],
       timestamp: Date.now()
-    } as AgentMessage)
+    } as HarnessV3Message)
 
     const msgs = await project()
     expect(msgs).toHaveLength(1)
@@ -113,7 +165,7 @@ describe('entriesToChatMessages', () => {
       content: [{ type: 'text', text: 'ok' }],
       isError: false,
       timestamp: Date.now()
-    } as AgentMessage)
+    } as HarnessV3Message)
     await session.appendMessage(assistant([{ type: 'text', text: '查到了' }]))
 
     const cards = (await project()).filter(
@@ -140,7 +192,7 @@ describe('entriesToChatMessages', () => {
       role: 'user',
       content: [{ type: 'text', text: '换个方向' }],
       timestamp: Date.now()
-    } as AgentMessage)
+    } as HarnessV3Message)
     await session.appendMessage(assistant([{ type: 'text', text: '收到' }]))
 
     const msgs = await project()
@@ -226,7 +278,7 @@ describe('entriesToChatMessages', () => {
       content: [{ type: 'text', text: '文件内容' }],
       isError: false,
       timestamp: Date.now()
-    } as AgentMessage)
+    } as HarnessV3Message)
 
     const msgs = await project()
     expect(msgs).toHaveLength(1)
@@ -265,7 +317,7 @@ describe('entriesToChatMessages', () => {
       content,
       isError: false,
       timestamp: Date.now()
-    } as AgentMessage)
+    } as HarnessV3Message)
 
     const msgs = await project()
     expect(msgs).toHaveLength(1)
@@ -279,7 +331,7 @@ describe('entriesToChatMessages', () => {
   it('stopReason=error 塌成 error_event', async () => {
     const msg = assistant([], 'error') as unknown as Record<string, unknown>
     msg.errorMessage = 'prompt is too long'
-    await session.appendMessage(msg as unknown as AgentMessage)
+    await session.appendMessage(msg as unknown as HarnessV3Message)
 
     const msgs = await project()
     expect(msgs).toHaveLength(1)
@@ -323,7 +375,7 @@ describe('entriesToChatMessages', () => {
       role: 'user',
       content: [{ type: 'text', text: '展开后的完整模板\n\n参数' }],
       timestamp: Date.now()
-    } as AgentMessage)
+    } as HarnessV3Message)
 
     const msgs = await project()
     // 侧车自身不产出消息；user 气泡显示标记态原文，tokens 进 metadata
@@ -338,7 +390,7 @@ describe('entriesToChatMessages', () => {
       role: 'user',
       content: [{ type: 'text', text: '<sub-session id="x" status="finished">…</sub-session>' }],
       timestamp: Date.now()
-    } as AgentMessage)
+    } as HarnessV3Message)
 
     const msgs = await project()
     expect(msgs).toHaveLength(1)
@@ -354,12 +406,12 @@ describe('entriesToChatMessages', () => {
       role: 'user',
       content: [{ type: 'text', text: '通知那一轮' }],
       timestamp: Date.now()
-    } as AgentMessage)
+    } as HarnessV3Message)
     await session.appendMessage({
       role: 'user',
       content: [{ type: 'text', text: '用户真正说的话' }],
       timestamp: Date.now()
-    } as AgentMessage)
+    } as HarnessV3Message)
 
     const msgs = await project()
     expect((msgs[0].metadata as UserTextMeta | undefined)?.isSystemNotice).toBe(true)
@@ -377,7 +429,7 @@ describe('entriesToChatMessages', () => {
       role: 'user',
       content: [{ type: 'text', text: '普通消息' }],
       timestamp: Date.now()
-    } as AgentMessage)
+    } as HarnessV3Message)
 
     const msgs = await project()
     expect(msgs).toHaveLength(2)
@@ -390,19 +442,14 @@ describe('entriesToChatMessages', () => {
       role: 'user',
       content: [{ type: 'text', text: 'hi' }],
       timestamp: Date.now()
-    } as AgentMessage)
+    } as HarnessV3Message)
     const before = (await project()).map((m) => m.id)
 
-    // 重新从磁盘打开同一个会话文件
-    const env = new NodeExecutionEnv({ cwd: dir })
-    const reopened = new Session(
-      await JsonlSessionStorage.open(env, join(dir, `${SESSION_ID}.jsonl`))
+    // 落成 JSONL 文本再经读取器读回（= 重新打开同一个会话文件）
+    const reopened = readHarnessV3Transcript(session.toJsonl())
+    const after = entriesToChatMessages(reopened.contextEntries, SESSION_ID, 'test-model').map(
+      (m) => m.id
     )
-    const after = entriesToChatMessages(
-      await reopened.buildContextEntries(),
-      SESSION_ID,
-      'test-model'
-    ).map((m) => m.id)
 
     expect(after).toEqual(before)
   })
@@ -412,14 +459,14 @@ describe('entriesToChatMessages', () => {
       role: 'user',
       content: [{ type: 'text', text: '第一轮' }],
       timestamp: Date.now()
-    } as AgentMessage)
+    } as HarnessV3Message)
     await session.appendMessage(assistant([{ type: 'text', text: '回复一' }]))
     const keepFrom = (await session.getLeafId()) as string
     await session.appendMessage({
       role: 'user',
       content: [{ type: 'text', text: '第二轮' }],
       timestamp: Date.now()
-    } as AgentMessage)
+    } as HarnessV3Message)
 
     await session.appendCompaction('这是摘要', keepFrom, 1234)
 
@@ -433,7 +480,7 @@ describe('entriesToChatMessages', () => {
 // ─── bot 署名侧车 ──────────────────────────────────────────────
 
 /** 一条 bot 说的 assistant 消息：model/provider 留空，靠 model_change / fallback 兜底 */
-function botSaid(text: string, stopReason = 'stop'): AgentMessage {
+function botSaid(text: string, stopReason = 'stop'): HarnessV3Message {
   return {
     role: 'assistant',
     content: [{ type: 'text', text }],
@@ -443,11 +490,15 @@ function botSaid(text: string, stopReason = 'stop'): AgentMessage {
     usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 },
     stopReason,
     timestamp: Date.now()
-  } as unknown as AgentMessage
+  } as unknown as HarnessV3Message
 }
 
-function user(text: string): AgentMessage {
-  return { role: 'user', content: [{ type: 'text', text }], timestamp: Date.now() } as AgentMessage
+function user(text: string): HarnessV3Message {
+  return {
+    role: 'user',
+    content: [{ type: 'text', text }],
+    timestamp: Date.now()
+  } as HarnessV3Message
 }
 
 describe('未知 customType 对投影是完全透明的', () => {
@@ -479,7 +530,7 @@ describe('未知 customType 对投影是完全透明的', () => {
       content: [{ type: 'text', text: 'ok' }],
       isError: false,
       timestamp: Date.now()
-    } as AgentMessage)
+    } as HarnessV3Message)
     unknown.add(await session.appendCustomEntry('shuvix:unknown-c', { i: 2 }))
     await session.appendCustomEntry(INLINE_TOKENS_CUSTOM_TYPE, {
       content: '{{shuvixInlineToken:t0}}',
@@ -553,7 +604,7 @@ describe('切片投影的 fallback（entriesToChatMessages 的第三/第四参�
       usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 },
       stopReason: 'stop',
       timestamp: Date.now()
-    } as unknown as AgentMessage)
+    } as unknown as HarnessV3Message)
 
     const [msg] = entriesToChatMessages(await session.buildContextEntries(), SESSION_ID, 'fm', 'fp')
     expect(msg).toMatchObject({
@@ -578,7 +629,7 @@ describe('系统通知的形状兜底 —— 没有侧车也认得出 steer / ne
       role: 'user',
       content: [{ type: 'text', text: bgNotice }],
       timestamp: Date.now()
-    } as AgentMessage)
+    } as HarnessV3Message)
 
     const msgs = await project()
     expect(msgs).toHaveLength(1)
@@ -591,7 +642,7 @@ describe('系统通知的形状兜底 —— 没有侧车也认得出 steer / ne
       role: 'user',
       content: [{ type: 'text', text: `${bgNotice}\n顺便看看这个` }],
       timestamp: Date.now()
-    } as AgentMessage)
+    } as HarnessV3Message)
 
     const msgs = await project()
     expect((msgs[0].metadata as UserTextMeta | undefined)?.isSystemNotice).toBeUndefined()
@@ -603,7 +654,7 @@ describe('系统通知的形状兜底 —— 没有侧车也认得出 steer / ne
       role: 'user',
       content: [{ type: 'text', text: bgNotice }],
       timestamp: Date.now()
-    } as AgentMessage)
+    } as HarnessV3Message)
 
     const msgs = await project()
     expect(msgs).toHaveLength(1)

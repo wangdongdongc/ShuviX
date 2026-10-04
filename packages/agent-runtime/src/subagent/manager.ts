@@ -10,7 +10,7 @@
  * 平台相关项全部经注入：agent 创建(createAgent，宿主 factory)、事件广播(broadcast)、
  * 询问/询问通道(requestUserInput，路由到根会话前端)。
  */
-import type { Agent, AgentMessage, AgentToolResult, Session } from '@earendil-works/pi-agent-core'
+import type { Message } from '@earendil-works/pi-ai'
 import { v4 as uuid } from 'uuid'
 import type { AgentRuntimeInfo } from '@shuvix/chat-protocol/chatApi'
 import type { ChatEvent } from '@shuvix/chat-protocol/events'
@@ -19,8 +19,8 @@ import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/in
 import { resolveTokensForAgent } from '@shuvix/chat-protocol/utils/inlineTokens'
 import { isAssistantMessage } from '../messageGuards'
 import { AgentRegistry, agentIdOf } from '../agentRegistry'
-import type { HarnessSession } from '../harness/harnessSession'
 import type { AgentFactory } from '../agentProfile/createAgent'
+import type { AgentToolResult, AnyTool } from '../tools/toolResult'
 import type { InProcessAgentType, SubAgentModelConfig } from './types'
 import type { RuntimeLogger } from '../types'
 import type { TaskRegistry } from '../task/registry'
@@ -32,7 +32,27 @@ import {
   type ResultContract
 } from './nextTool'
 
-type AnyAgentTool = Agent['state']['tools'][number]
+type AnyAgentTool = AnyTool
+
+/**
+ * 派生 agent 的运行时句柄 —— 本协调器只碰这几个面。
+ *
+ * 旧实现直接拿 pi 的 HarnessSession + 内存 Session；pi-durable 切换（P1-01）之后两者都没了，
+ * 先收窄成接口让协调逻辑照常编译、照常可测（用例注入假的）。
+ * TODO(pi-durable p2): 派生 agent 落到 durable 子对话上时，由那边的实现满足这个接口。
+ */
+export interface SpawnedRuntime {
+  /** 跑一轮（prompt → 完成）；发送失败经返回值回报，不抛出 */
+  prompt(text: string): Promise<{ error?: string }>
+  /** 中止当前生成（等 run 真正停下） */
+  abort(): Promise<void>
+  /** 运行时快照（systemPrompt / 模型 / 已装载工具），监控页按需拉取 */
+  getRuntimeInfo(): Promise<AgentRuntimeInfo>
+  /** 模型此刻所见的上下文消息（已应用压缩过滤）—— 结果抽取与成败判定读它 */
+  contextMessages(): Promise<Message[]>
+  /** 在下一轮之前把消息预置进上下文（进 LLM 上下文，不广播任何事件） */
+  appendContext(messages: readonly Message[]): Promise<void>
+}
 
 /**
  * 默认派生层级上限：根会话 depth=0，其派生 agent depth=1，再派生 depth=2。
@@ -41,7 +61,7 @@ type AnyAgentTool = Agent['state']['tools'][number]
 export const DEFAULT_MAX_AGENT_DEPTH = 2
 
 /** 提取一组 Agent 消息的纯文本（用于把注入的 context 消息原样回显到面板卡片） */
-function agentMessagesToText(messages: AgentMessage[]): string {
+function agentMessagesToText(messages: readonly Message[]): string {
   return messages
     .map((m) => {
       const c = 'content' in m ? (m as { content: unknown }).content : undefined
@@ -138,7 +158,7 @@ export interface RunTaskParams {
    * 这些消息进 LLM 上下文。其文本会随 sub_session_register 的 contextNote 广播给面板，
    * 故面板的上下文卡片即这些消息的真实内容（与实际发给 LLM 的 UserMessage 一致，不再另传 raw）。
    */
-  contextMessages?: AgentMessage[]
+  contextMessages?: Message[]
   /**
    * 结果契约（可选）：声明后派生 agent 获得一个按 schema 现造的 `next` 工具（extraTools
    * 注入，经宿主与内置工具同样包装），任务 prompt 末尾追加契约段，要求以恰好一次 `next`
@@ -210,10 +230,9 @@ export interface SubAgentManager {
 interface SpawnedAgent {
   agentId: string
   profile: InProcessAgentType
-  /** 内存态会话树（上下文真理源；随 destroy 消失） */
-  piSession: Session
-  runtime: HarnessSession
-  /** 从运行时注册中心注销（destroy 时调用） */
+  /** 运行时（上下文真理源在它那里；随 destroy 消失） */
+  runtime: SpawnedRuntime
+  /** 释放与创建配套的登记（destroy 时调用） */
   dispose: () => void
   aborted: boolean
   /** 用户主动中断（软停止）：保留部分结果、按「已完成」收尾，区别于 aborted 的失败态 */
@@ -229,7 +248,7 @@ interface SpawnedAgent {
  */
 function turnError(
   session: Pick<SpawnedAgent, 'aborted' | 'interrupted'>,
-  messages: AgentMessage[],
+  messages: readonly Message[],
   execError: string | undefined
 ): string | undefined {
   // 中止优先于软停止：同一轮里既被软停止又被中止（面板先停、父级再中止），按中止算 ——
@@ -253,7 +272,7 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
   const registry = new AgentRegistry()
   const sessions = new Map<string, SpawnedAgent>()
 
-  function extractResult(messages: AgentMessage[], execError?: string): string {
+  function extractResult(messages: readonly Message[], execError?: string): string {
     let lastText = ''
     let lastStopReason = ''
     let lastErrorMessage = ''
@@ -298,7 +317,7 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
     agentType: InProcessAgentType
     description: string
     modelConfig: SubAgentModelConfig
-    contextMessages?: AgentMessage[]
+    contextMessages?: Message[]
     extraTools?: readonly AnyAgentTool[]
     systemContext?: readonly string[]
   }): Promise<SpawnedAgent> {
@@ -352,19 +371,15 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
       extraTools,
       systemContext
     })
-    const runtime = created.runtime
-    const piSession = runtime.session
+    const runtime: SpawnedRuntime = created.runtime
 
-    // 预置上下文（如笔记本正文）直接落 entry —— 进 LLM 上下文，且不触发任何事件广播。
-    // （构造后追加与旧「构造前追加」时序等价：harness 每轮 prompt 时才 buildContext 读树）
-    if (contextMessages) {
-      for (const msg of contextMessages) await piSession.appendMessage(msg)
-    }
+    // 预置上下文（如笔记本正文）直接进上下文 —— 进 LLM 上下文，且不触发任何事件广播。
+    // （构造后追加与「构造前追加」时序等价：每轮 prompt 时才读上下文）
+    if (contextMessages?.length) await runtime.appendContext(contextMessages)
 
     const session: SpawnedAgent = {
       agentId,
       profile: agentType,
-      piSession,
       runtime,
       dispose: () => created.dispose(),
       aborted: false,
@@ -427,8 +442,8 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
       return { result, structured: captured.value }
     }
 
-    // 上下文真理源是内存会话树（含 harness 落进去的失败消息）
-    const messages = (await session.piSession.buildContext()).messages
+    // 上下文真理源在运行时那里（含落进去的失败消息）
+    const messages = await session.runtime.contextMessages()
     const result = session.interrupted
       ? extractResult(messages)
       : session.aborted
@@ -456,7 +471,7 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
   function interrupt(subSessionId: string): void {
     const s = sessions.get(subSessionId)
     if (!s) return
-    // 软停止：标记为「用户中断」，harness.abort 终结在飞工具调用并停止当前生成。
+    // 软停止：标记为「用户中断」，runtime.abort 终结在飞工具调用并停止当前生成。
     // 登记保留 —— runTask/continueTask 的 prompt 解除后照常广播 sub_session_end
     // （isError=false），条目保留在面板供继续追问或显式删除。
     s.interrupted = true
@@ -555,7 +570,7 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
         prompt,
         inlineTokens: hasTokens ? promptInlineTokens : undefined,
         contextNote,
-        // 血缘由 AgentRegistry 唯一维护（HarnessSession 不再承载 depth/parent）
+        // 血缘由 AgentRegistry 唯一维护（运行时不承载 depth/parent）
         depth: registry.depthOf(session.agentId),
         rootSessionId: registry.rootSessionOf(session.agentId)
       })
@@ -587,7 +602,7 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
           i++
         ) {
           // 模型调用报错也是「出错」：它不经 prompt() 返回，只落在会话树尾部（与 finishTurn 同一个判定）
-          const tail = (await session.piSession.buildContext()).messages
+          const tail = await session.runtime.contextMessages()
           if (turnError(session, tail, execError)) break
           // 面板转写连贯：与 continueTask 同形广播这条追问（用户可见自动化的补救动作）
           deps.broadcast({

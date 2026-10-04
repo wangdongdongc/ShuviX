@@ -99,6 +99,19 @@ export interface SessionSettings {
    * 判定经 `chromeTabSession.ts` 的 `chromeTabOf` / `isChromeTabSessionSettings`。
    */
   chromeTab?: ChromeTabBinding
+  /**
+   * 这条会话选定的模型（pi-durable 起的运行配置事实源；旧 v3 会话在树上的 model_change 只读）。
+   * 选择器直接读写它，无需打开会话存储。
+   */
+  model?: SessionModelSelection
+  /** 这条会话选定的思考档位（同上） */
+  thinkingLevel?: ThinkingLevel
+}
+
+/** 会话设置里的模型选择：提供商行 id + 模型 id */
+export interface SessionModelSelection {
+  provider: string
+  modelId: string
 }
 
 /**

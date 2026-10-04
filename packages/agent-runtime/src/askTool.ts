@@ -6,7 +6,7 @@
  * abort 文案、以及本地化 label——都经参数注入。
  */
 import { Type } from 'typebox'
-import type { AgentTool, AgentToolResult } from '@earendil-works/pi-agent-core'
+import type { AgentTool, AgentToolResult } from './tools/toolResult'
 import type { AskToolDetails } from '@shuvix/chat-protocol/types/chatMessage'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 

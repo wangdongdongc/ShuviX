@@ -12,7 +12,7 @@
  *
  * 两条路径各自持有一份字面量，所以阈值用例（A 组）在两条路径上各跑一遍 —— 只测一条挡不住
  * 另一条被单独改回去。注册表能查到的内置模型整个对象直接采用注册表值，不经过这条规则（D 组
- * 对照）。不 mock pi-ai：直接读真 getBuiltinModel，「grok-4.6 不在注册表」用前置断言钉住，
+ * 对照）。不 mock pi-ai：直接读真 getBuiltinModel，「这个型号不在注册表」用前置断言钉住，
  * pi-ai 升级后若收录了会显式炸而不是悄悄换到已知路径。
  */
 import { describe, it, expect } from 'vitest'
@@ -38,8 +38,11 @@ const CUSTOM_PROVIDER: ResolveModelProviderInfo = {
 const XAI_PROVIDER: ResolveModelProviderInfo = { id: 'xai', name: 'xai', isBuiltin: true }
 const OPENAI_PROVIDER: ResolveModelProviderInfo = { id: 'openai', name: 'openai', isBuiltin: true }
 
-/** pi-ai 注册表查不到的 xai 型号（前置断言钉住） */
-const UNKNOWN_XAI_MODEL = 'grok-4.6'
+/**
+ * pi-ai 注册表查不到的 xai 型号（前置断言钉住）。原先用 grok-4.6，pi-ai 1.0 的目录收录了它，
+ * 改用一个不会被收录的虚构 id —— 这组用例要的只是「内置提供商、注册表里没有」这个形状。
+ */
+const UNKNOWN_XAI_MODEL = 'grok-shuvix-unregistered'
 /** 注册表里 maxTokens == contextWindow 的型号（500000 / 500000）—— 正是规则会砍掉的形态；失效换 grok-build-0.1 */
 const KNOWN_XAI_MODEL = 'grok-4.5'
 
@@ -98,7 +101,7 @@ const nullCaps = (caps: Record<string, number | null>): ModelCapabilities =>
   caps as unknown as ModelCapabilities
 
 describe('resolveModel token limits — 前置', () => {
-  it('xai/grok-4.6 不在 pi-ai 注册表（unknown-builtin 形状的前提）', () => {
+  it('xai 的 UNKNOWN_XAI_MODEL 不在 pi-ai 注册表（unknown-builtin 形状的前提）', () => {
     expect(registryEntry('xai', UNKNOWN_XAI_MODEL)).toBeUndefined()
   })
 })

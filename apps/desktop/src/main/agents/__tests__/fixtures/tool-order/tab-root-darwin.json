@@ -1,7 +1,7 @@
 {
   "case": "tab-root-darwin",
   "description": "Chrome tab session root: profile declares mcp:chrome; no `read`, so tool output is not spilled",
-  "capturedFrom": "apps/desktop agentHost resolveTools (resolveDesktopTools) on @earendil-works/pi-agent-core 0.80.10 (P1-00, before the pi-durable cutover)",
+  "capturedFrom": "apps/desktop agentHost resolveTools (resolveDesktopTools) on the pi 0.80.10 AgentHarness runtime (P1-00, before the pi-durable cutover)",
   "inputs": {
     "platform": "darwin",
     "kind": "root",

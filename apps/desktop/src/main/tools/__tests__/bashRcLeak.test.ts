@@ -27,7 +27,7 @@ import { mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { join, dirname } from 'node:path'
 import { tmpdir } from 'node:os'
-import type { AgentToolResult } from '@earendil-works/pi-agent-core'
+import type { AgentToolResult } from '@shuvix/agent-runtime'
 import type { ToolContext } from '../../services/toolContext'
 
 const STAMP = Date.now()

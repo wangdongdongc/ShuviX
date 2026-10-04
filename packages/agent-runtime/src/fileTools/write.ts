@@ -2,7 +2,7 @@
  * 共享 write 内核 —— 读后被改守卫 + 写锁 + 写入（含建父目录，由 port 负责）。
  * 从桌面 write.ts 的 executeInternal 内层逐字搬出，fs → port，fileTime → 注入的 guards。
  */
-import type { AgentToolResult } from '@earendil-works/pi-agent-core'
+import type { AgentToolResult } from '../tools/toolResult'
 import type { WriteToolDetails } from '@shuvix/chat-protocol/types/chatMessage'
 import type { FileSystemPort, FileGuards, WriteAskHook } from './port'
 import { capDiffString, generateDiffString, normalizeToLF } from './editDiff'

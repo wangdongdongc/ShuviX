@@ -79,13 +79,8 @@ vi.mock('../../dao/sessionDao', () => ({
 }))
 vi.mock('../../dao/projectDao', () => ({ projectDao: { pick: () => undefined } }))
 vi.mock('../../dao/providerDao', () => ({ providerDao: { findAllEnabledModels: () => [] } }))
-vi.mock('../../services/agentModelResolver', () => ({ resolveModel: vi.fn() }))
-vi.mock('../../services/providerOAuthService', () => ({ providerOAuthService: {} }))
-vi.mock('../../services/sessionStorage', () => ({ ensureSessionTree: vi.fn() }))
 vi.mock('../../services/instruction', () => ({ resolveInstructionContent: vi.fn() }))
 vi.mock('../../services/memory', () => ({ resolveProjectMemoryIndex: vi.fn() }))
-vi.mock('../../services/httpLogService', () => ({ httpLogService: {} }))
-vi.mock('../../services/llmNetwork', () => ({ llmNetwork: {} }))
 vi.mock('../../frontend/core', () => ({ chatFrontendRegistry: { broadcast: vi.fn() } }))
 vi.mock('../../services/agentRuntimeAdapters', () => ({
   electronEventSink: {},
@@ -97,7 +92,6 @@ vi.mock('../../services/toolContext', () => ({
   resolveProjectConfig: vi.fn()
 }))
 vi.mock('../../services/knowledge', () => ({ enabledBaseChoices: () => [] }))
-vi.mock('@earendil-works/pi-agent-core/node', () => ({ NodeExecutionEnv: class {} }))
 
 import { registerBuiltinTool, unregisterBuiltinTool } from '../../services/toolRegistry'
 import { BASH_PLATFORMS, POWERSHELL_PLATFORMS } from '../../utils/toolUtils/shell'

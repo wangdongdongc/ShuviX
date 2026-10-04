@@ -21,7 +21,7 @@
  * 无专属安全客体 —— 要设门用 L1 全工具门（tool.name == 'session'）。
  */
 import { Type } from 'typebox'
-import type { AgentToolResult } from '@earendil-works/pi-agent-core'
+import type { AgentToolResult } from '@shuvix/agent-runtime'
 import { BaseTool } from '@shuvix/agent-runtime'
 import { BUILTIN_TOOL_PRESENTATIONS } from '@shuvix/chat-protocol/builtinToolPresentations'
 import type { SessionToolDetails } from '@shuvix/chat-protocol/types/chatMessage'

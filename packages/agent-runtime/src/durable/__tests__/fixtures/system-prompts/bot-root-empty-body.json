@@ -1,7 +1,7 @@
 {
   "case": "bot-root-empty-body",
   "description": "bot root; bot md with an empty body and displayName equal to name (fence still present)",
-  "capturedFrom": "createAgentFactory(fakeHost).createAgent() on @earendil-works/pi-agent-core 0.80.10 (P1-00, before the pi-durable cutover)",
+  "capturedFrom": "createAgentFactory(fakeHost).createAgent() on the pi 0.80.10 AgentHarness runtime (P1-00, before the pi-durable cutover)",
   "inputs": {
     "kind": "root",
     "sessionId": "sess-golden-root",

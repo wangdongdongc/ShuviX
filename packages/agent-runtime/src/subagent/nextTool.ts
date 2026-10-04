@@ -19,7 +19,7 @@
  */
 import { Type, type TSchema } from 'typebox'
 import { Check, Errors } from 'typebox/value'
-import type { AgentToolResult } from '@earendil-works/pi-agent-core'
+import type { AgentToolResult } from '../tools/toolResult'
 import { BaseTool } from '../tools/baseTool'
 
 /** 结果契约工具名 —— 派生 agent 工具集里的保留名（extraTools 注入，宿主同名去重让位） */

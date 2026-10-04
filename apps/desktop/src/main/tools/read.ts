@@ -23,7 +23,7 @@ import {
 } from '../utils/toolUtils/binaryDetect'
 import { TOOL_ABORTED, type ToolContext } from '../services/toolContext'
 import { makeDesktopFileToolDeps } from './fileToolDeps'
-import type { AgentToolResult } from '@earendil-works/pi-agent-core'
+import type { AgentToolResult } from '@shuvix/agent-runtime'
 import type { ReadToolDetails } from '@shuvix/chat-protocol/types/chatMessage'
 import { t } from '../i18n'
 import { createLogger } from '../logger'

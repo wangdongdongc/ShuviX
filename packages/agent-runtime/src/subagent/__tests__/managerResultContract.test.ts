@@ -40,7 +40,7 @@ function makeHarness(
   o: {
     /** 每轮 prompt 的编排（round 从 1 起）；缺省自然结束（{}，不捕获） */
     onPrompt?: (text: string, round: number, h: Harness) => Promise<{ error?: string }>
-    /** buildContext 返回的内存树消息（无捕获时 extractResult 的输入） */
+    /** contextMessages 返回的内存树消息（无捕获时 extractResult 的输入） */
     messages?: unknown[]
   } = {}
 ): {
@@ -66,10 +66,8 @@ function makeHarness(
       return o.onPrompt ? await o.onPrompt(text, h.promptTexts.length, h) : {}
     },
     abort: h.abort,
-    session: {
-      appendMessage: vi.fn(async () => {}),
-      buildContext: async () => ({ messages: o.messages ?? [] })
-    }
+    appendContext: vi.fn(async () => {}),
+    contextMessages: async () => o.messages ?? []
   }
   const createAgent = vi.fn(async (params: CreateAgentParams) => {
     h.createCalls.push(params)

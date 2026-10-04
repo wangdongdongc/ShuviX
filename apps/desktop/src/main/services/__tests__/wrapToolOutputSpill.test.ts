@@ -7,7 +7,7 @@
  *    会盖掉前一段：第一段预览里写的「全文在这里」指向的是第二段的全文，而模型对此毫无察觉。
  */
 import { describe, it, expect, afterAll, vi } from 'vitest'
-import type { AgentTool } from '@earendil-works/pi-agent-core'
+import type { AgentTool } from '@shuvix/agent-runtime'
 import { existsSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'

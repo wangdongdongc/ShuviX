@@ -32,7 +32,7 @@
 import { Type } from 'typebox'
 import type { TObject, TString } from 'typebox'
 import { BaseTool } from '@shuvix/agent-runtime'
-import type { AgentToolResult } from '@earendil-works/pi-agent-core'
+import type { AgentToolResult } from '@shuvix/agent-runtime'
 import { listArtifacts, writeArtifact } from '../services/artifacts/store'
 import { adoptFigure, figureArtifactName, listAdoptableFigures } from '../services/artifacts/adopt'
 import { messageService } from '../services/messageService'

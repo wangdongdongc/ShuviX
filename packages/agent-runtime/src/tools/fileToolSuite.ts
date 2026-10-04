@@ -8,7 +8,7 @@
  * ReadDecoders(内容解码器,可选能力函数)。
  */
 import { Type } from 'typebox'
-import type { AgentToolResult } from '@earendil-works/pi-agent-core'
+import type { AgentToolResult } from './toolResult'
 import type {
   ReadToolDetails,
   EditToolDetails,

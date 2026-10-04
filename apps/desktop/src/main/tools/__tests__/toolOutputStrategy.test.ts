@@ -99,7 +99,7 @@ vi.mock('word-extractor', () => ({
 }))
 
 import type { TSchema } from 'typebox'
-import type { AgentTool, AgentToolResult } from '@earendil-works/pi-agent-core'
+import type { AgentTool, AgentToolResult } from '@shuvix/agent-runtime'
 import { makeReadTool } from '../read'
 import { ListTool } from '../ls'
 import { GlobTool } from '../glob'

@@ -35,7 +35,6 @@ vi.mock('../../dao/settingsDao', () => ({ settingsDao: {} }))
 vi.mock('../messageService', () => ({ messageService: {} }))
 vi.mock('../sessionStorage', () => ({
   readSessionRunConfig: vi.fn(),
-  addSessionTreePin: vi.fn(),
   appendModelChange: vi.fn()
 }))
 vi.mock('../../i18n', () => ({ t: (key: string) => key }))

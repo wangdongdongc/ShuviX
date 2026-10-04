@@ -29,21 +29,19 @@ function makeHarness(): {
   manager: ReturnType<typeof createSubAgentManager>
   createCalls: CreateAgentParams[]
   promptTexts: string[]
-  appendMessage: ReturnType<typeof vi.fn>
+  appendContext: ReturnType<typeof vi.fn>
 } {
   const createCalls: CreateAgentParams[] = []
   const promptTexts: string[] = []
-  const appendMessage = vi.fn(async () => {})
+  const appendContext = vi.fn(async () => {})
   const runtime = {
     prompt: async (text: string): Promise<{ error?: string }> => {
       promptTexts.push(text)
       return {}
     },
     abort: vi.fn(async () => {}),
-    session: {
-      appendMessage,
-      buildContext: async () => ({ messages: [] })
-    }
+    appendContext,
+    contextMessages: async () => []
   }
   const createAgent = vi.fn(async (params: CreateAgentParams) => {
     createCalls.push(params)
@@ -54,7 +52,7 @@ function makeHarness(): {
     createAgent: createAgent as unknown as AgentFactory['createAgent'],
     broadcast: (e) => events.push(e)
   })
-  return { manager, createCalls, promptTexts, appendMessage }
+  return { manager, createCalls, promptTexts, appendContext }
 }
 
 const task = (over: Partial<RunTaskParams> = {}): RunTaskParams => ({
@@ -84,10 +82,10 @@ describe('runTask — systemContext 透传给 createAgent', () => {
   it('MS-3 块不进 prompt、不进内存树：它只走系统提示词那一条路', async () => {
     // 上下文块是系统提示词的一部分（createAgent 追加），不是发给模型的用户消息 ——
     // 走 contextMessages / prompt 会让它进对话历史、随压缩被丢，且面板会把它当「用户说的」
-    const { manager, createCalls, promptTexts, appendMessage } = makeHarness()
+    const { manager, createCalls, promptTexts, appendContext } = makeHarness()
     await manager.runTask(task({ systemContext: CTX }))
     expect(promptTexts).toEqual(['Do the thing'])
-    expect(appendMessage).not.toHaveBeenCalled()
+    expect(appendContext).not.toHaveBeenCalled()
     expect(createCalls[0].extraTools).toBeUndefined()
   })
 

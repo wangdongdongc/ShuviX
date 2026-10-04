@@ -6,7 +6,7 @@
  * W-9 走真 createSecurityContext。
  */
 import { describe, it, expect, afterEach, vi } from 'vitest'
-import type { AgentTool } from '@earendil-works/pi-agent-core'
+import type { AgentTool } from '@shuvix/agent-runtime'
 import type { EnforceOutcome, McpAgentToolMeta, SecurityContext } from '@shuvix/agent-runtime'
 import {
   createSecurityContext,

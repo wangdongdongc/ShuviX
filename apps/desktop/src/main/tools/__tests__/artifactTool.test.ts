@@ -26,7 +26,7 @@ import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vites
 import { mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { AgentToolResult } from '@earendil-works/pi-agent-core'
+import type { AgentToolResult } from '@shuvix/agent-runtime'
 import type { AssistantMessage, ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
 
 const state = vi.hoisted(() => ({

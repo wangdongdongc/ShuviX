@@ -1,7 +1,7 @@
 {
   "case": "work-root-knowledge-bases",
   "description": "work root; only the knowledge-base guide resolves (profile carries `knowledge`)",
-  "capturedFrom": "createAgentFactory(fakeHost).createAgent() on @earendil-works/pi-agent-core 0.80.10 (P1-00, before the pi-durable cutover)",
+  "capturedFrom": "createAgentFactory(fakeHost).createAgent() on the pi 0.80.10 AgentHarness runtime (P1-00, before the pi-durable cutover)",
   "inputs": {
     "kind": "root",
     "sessionId": "sess-golden-root",

@@ -11,10 +11,10 @@
  * - SkillTool 带 projectPath：派生 agent 现在能看到项目级 .claude/skills/；
  * - 派发工具 modelConfig 走惰性 getter：跟随会话当前模型/思考档位（原为构造时快照）。
  */
-import type { AgentTool as PiAgentTool } from '@earendil-works/pi-agent-core'
 import type { TSchema } from 'typebox'
 import {
   createAgentFactory,
+  type AgentTool,
   DISPATCH_TOOL_NAME,
   LAZY_CONNECT_TIMEOUT_MS,
   renderKnowledgeGuide,
@@ -44,16 +44,11 @@ import {
 import { SkillTool } from '../services/skillTool'
 import { skillService } from '../services/skillService'
 import { mcpService } from '../services/mcpService'
-import { resolveModel } from '../services/agentModelResolver'
-import { providerOAuthService } from '../services/providerOAuthService'
 import { providerDao } from '../dao/providerDao'
 import { sessionRecords } from '../services/sessionRecords'
 import { projectDao } from '../dao/projectDao'
-import { ensureSessionTree } from '../services/sessionStorage'
 import { resolveInstructionContent } from '../services/instruction'
 import { resolveProjectMemoryIndex } from '../services/memory'
-import { httpLogService } from '../services/httpLogService'
-import { llmNetwork } from '../services/llmNetwork'
 import { chatFrontendRegistry } from '../frontend/core'
 import {
   wrapToolOutput,
@@ -71,7 +66,6 @@ import {
   type ToolContext
 } from '../services/toolContext'
 import type { Project } from '../types'
-import { NodeExecutionEnv } from '@earendil-works/pi-agent-core/node'
 import { createAgentTool } from './AgentTool'
 import { enabledBaseChoices } from '../services/knowledge'
 
@@ -112,7 +106,7 @@ async function resolveDesktopTools(req: ToolResolveRequest): Promise<AnyAgentToo
   const spill = req.names.includes('read')
   const wrap = (tool: object): AnyAgentTool =>
     wrapToolOutput(
-      tool as PiAgentTool<TSchema, unknown>,
+      tool as AgentTool<TSchema, unknown>,
       req.rootSessionId,
       getOutputStrategy(tool),
       { ...pickOverrides(tool), spill },
@@ -342,34 +336,16 @@ export function resolveProfileModelSpec(spec: string): SubAgentModelConfig | nul
 
 // ─── 宿主适配面 + 唯一工厂实例 ──────────────────────────────────
 
+// 旧运行时专属的 seam（buildModel / getApiKey / network / openSessionTree / createExecutionEnv /
+// httpLog）随 pi 0.80 的 agent 包一起删了：模型层与凭据由 P1-02/P1-03 的模型注册表接手
+// （订阅登录优先于 API Key 的规则随之迁过去），会话存储由 P1-07/P1-10 的 SessionHost 接手。
+// TODO(pi-durable p1): P1-11 把本适配面改写成 ToolHost + PromptHost + promptVars。
 const desktopAgentHost: AgentHostAdapter = {
   resolveTools: resolveDesktopTools,
   promptVars: desktopPromptVars,
-  buildModel: (config) =>
-    resolveModel({
-      provider: config.provider,
-      model: config.model,
-      capabilities: config.capabilities
-    }),
   resolveProfileModel: resolveProfileModelSpec,
-  // 订阅登录（OAuth）优先于 API Key —— 与 pi 的「存了凭据就归它管」同义：两者都配了时，
-  // 用户配订阅显然是想用订阅额度。刷新失败这里会抛，不静默回退到 Key：一个「今天走订阅、
-  // 明天悄悄走 API 计费」的降级，比一条要求重新登录的报错难查得多。
-  getApiKey: async (p) => {
-    const token = await providerOAuthService.getAccessToken(p)
-    if (token) return token
-    return providerDao.pick(p, ['apiKey'])?.apiKey || undefined
-  },
-  openSessionTree: (sessionId, cwd) => ensureSessionTree(sessionId, cwd),
-  createExecutionEnv: (cwd) => new NodeExecutionEnv({ cwd }),
   eventSink: electronEventSink,
-  network: llmNetwork,
   transformToolResult: electronToolResultTransform,
-  httpLog: {
-    logRequest: (params) => httpLogService.logRequest(params),
-    updateUsage: (logId, input, output, total, responseJson) =>
-      httpLogService.updateUsage(logId, input, output, total, responseJson)
-  },
   logger: runtimeLogger,
   // 候选清单来自 agent 档案；sessionId 恒为根会话 id（派生按根会话解析），
   // cwd 空串（派生）时按会话项目配置兜底

@@ -6,8 +6,8 @@ import {
   renderBotContext,
   resolveInitialThinkingLevel,
   toInProcessAgentType,
+  type AgentRuntime,
   type CreatedAgent,
-  type HarnessSession,
   type InlineTokensSidecar
 } from '@shuvix/agent-runtime'
 import { sessionRecords } from './sessionRecords'
@@ -71,12 +71,18 @@ export interface AgentSessionCreateParams {
  * （payload = 会话此刻的事实），标题逻辑整体在内置 auto-title hook + titler agent md。
  *
  * 通过 AgentSession.create() 工厂方法创建。
+ *
+ * **现状（pi-durable 切换中）**：公共面原样保留，但 `create()` 里的 `agentFactory.createAgent`
+ * 目前恒抛 `PhasePendingError`（旧运行时已在 P1-01 删除），所以生产路径上建不出实例、prompt 等
+ * 路径随之抛同一个错误。TODO(pi-durable p1): P1-10 把本类改成 DurableSession 的门面
+ * （nextTurn → followUp 垫片直到 phase 3）。通知三岔、续跑合并窗口、埋点这些桌面逻辑不变，
+ * 单测经假运行时照常覆盖。
  */
 export class AgentSession {
   readonly sessionId: string
 
   private created: CreatedAgent
-  private runtime: HarnessSession
+  private runtime: AgentRuntime
   /** 有人显式喊停过（用户按停止 / 级联停子会话），到下一条用户消息为止不自动续跑 */
   private stoppedByUser = false
   /** 合并窗口内待送达的通知 */
@@ -179,7 +185,7 @@ export class AgentSession {
 
     // 轮结束埋点（不 await；payload 组装失败只记日志，绝不影响会话主流程）
     void this.fireTurnCompleted().catch((err) => log.warn(`turn-completed 埋点失败: ${err}`))
-    // 发送失败原样上交（UI 侧已由 HarnessSession 广播 error 事件）：调用方要能区分
+    // 发送失败原样上交（UI 侧已由运行时广播 error 事件）：调用方要能区分
     // 「没发出去」与「发出去了没回话」—— 子会话的驱动方据此报错而不是假装排队
     return result
   }
@@ -200,7 +206,7 @@ export class AgentSession {
    *
    * 「不允许」只有两种：全局设置关掉，或**这条会话刚被显式停过**。后者不是丢通知 ——
    * 它退回排队路径,信息一条不少;要的是「用户喊停之后会话就收敛，直到他再开口」这个
-   * 语义（与 HarnessSession.abort 把 inputsClosed 置真同一条纪律）。刚按完停止两秒后
+   * 语义（与运行时 abort 后拒收新询问同一条纪律）。刚按完停止两秒后
    * agent 又自己说起话来，那是没听懂停止。
    *
    * **刻意不设续跑次数上限**：一个 agent 拿着完整状态决定自己的下一步，那是它的活；

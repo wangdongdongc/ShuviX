@@ -1,7 +1,7 @@
 /**
  * P1-00 工具名顺序 golden fixture 的常驻自检。
  *
- * fixture 由 `toolOrderGolden.capture.test.ts` 在旧依赖（pi-agent-core 0.80.10）上从今天的 agentHost
+ * fixture 由 `toolOrderGolden.capture.test.ts` 在旧依赖（pi 0.80.10 的 AgentHarness 运行时）上从当时的 agentHost
  * 捕获。这里**不 import agentHost / agent-runtime**（P1-11 会重写前者），只读 fixture：
  *  - 目录不空（防止整目录误删后对照测试空转变绿）；
  *  - 每份的 `output.toolNames` 能从它自己的 `inputs` 按今天的顺序规则重算出来 ——

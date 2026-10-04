@@ -1,5 +1,11 @@
 /**
- * SessionTreeEntry[] → ChatMessage[] 投影 —— harness 会话树的「UI 视角」。
+ * 旧格式（`harness-v3-jsonl`）会话树 → ChatMessage[] 投影 —— **冻结副本**。
+ *
+ * 这是 pi 0.80 AgentHarness 时代活路径上 `harness/projection.ts` 的逐行副本（P1-01 切换到
+ * pi-durable 时移入本目录并冻结）：旧会话永不迁移，「旧会话现在怎么显示，以后就怎么显示」
+ * 由这份冻结的投影保证（黄金用例 `__tests__/golden.test.ts` 钉住）。类型改用本目录的
+ * `HarnessV3Entry`（与 pi 0.80 的 `SessionTreeEntry` 逐字段同形），消息载荷沿用 pi-ai 的类型。
+ * 不要在这里加新行为 —— 新存储的投影另起（TODO(pi-durable p3)）。
  *
  * **一条 entry = 一条 ChatMessage = UI 上一项**。这是投影层唯一的结构规则：
  * 会话树里没有「一次 agent 循环」这种东西，所以 UI 也不再有 —— 一次 LLM 调用
@@ -14,14 +20,21 @@
  *   custom(instruction)  → UserTextMessage + isInstructionInjection
  *   custom(inline_tokens)→ 不产出消息；把紧随其后的 user 消息还原成标记文本 + inlineTokens
  *   stopReason==='error' → ErrorEventMessage
+ *   其他角色（pi-ai 1.0 的 system、harness 的 custom 等）→ 跳过
  *
  * id 稳定性：消息 id **就是** entry id（不再有 `:think` / `:text` 派生后缀，工具块也不
  * 单独占 id）。entry 是 append-only 的，所以同一条消息在任何一次重新投影里 id 都不变 ——
  * React key、messages_reloaded、流式增量更新、回退定位都依赖这一点。
  */
-import type { AgentMessage, SessionTreeEntry } from '@earendil-works/pi-agent-core'
-import type { AssistantMessage, ImageContent, TextContent } from '@earendil-works/pi-ai'
-import { toolResultText } from '../toolResultText'
+import type {
+  AssistantMessage,
+  ImageContent,
+  TextContent,
+  ToolResultMessage,
+  UserMessage
+} from '@earendil-works/pi-ai'
+import { toolResultText } from '../../toolResultText'
+import type { HarnessV3Entry } from './types'
 import type {
   AssistantBlock,
   AssistantToolBlock,
@@ -38,7 +51,7 @@ import { isSystemNoticeText } from '@shuvix/chat-protocol/systemNoticeContract'
 export const INSTRUCTION_CUSTOM_TYPE = 'shuvix:instruction'
 
 /**
- * 内联 Token 显示侧车：`HarnessSession.prompt` 在 user 消息 entry **之前**追加的
+ * 内联 Token 显示侧车：旧 `HarnessSession.prompt`（已在 pi-durable 切换中删除）在 user 消息 entry **之前**追加的
  * 纯 custom entry，携带「带 {{shuvixInlineToken:uid}} 标记的原始文本 + tokens 字典」。
  *
  * 动机：harness 落盘的 user 消息是**展开后的全文**（LLM 的真理源 —— 轮次上下文、
@@ -49,7 +62,7 @@ export const INSTRUCTION_CUSTOM_TYPE = 'shuvix:instruction'
  */
 export const INLINE_TOKENS_CUSTOM_TYPE = 'shuvix:inline_tokens'
 
-/** 侧车 entry 的 data 形状（HarnessSession.prompt 写入 / 本投影读取） */
+/** 侧车 entry 的 data 形状（旧 HarnessSession.prompt 写入 / 本投影读取） */
 export interface InlineTokensSidecar {
   /** 带 {{shuvixInlineToken:uid}} 标记的原始展示文本 */
   content: string
@@ -212,14 +225,14 @@ function projectUserMessage(
   state: ProjectionState,
   entryId: string,
   sessionId: string,
-  msg: Extract<AgentMessage, { role: 'user' }>,
+  msg: UserMessage,
   createdAt: number
 ): void {
   // 侧车还原：内容换回标记态原文，tokens 进 metadata（气泡渲染芯片 / 复制 / 草稿重建用）
   const inline = state.pendingInline
   state.pendingInline = null
   // 侧车是主判据；没有侧车时按正文形状兜底 —— steer / nextTurn 路径的通知由 pi 自己造 user
-  // 消息，宿主插不进侧车（见 harnessSession.notify），投影若只认侧车，这些通知就成了用户气泡
+  // 消息，宿主插不进侧车（见旧 harnessSession.notify），投影若只认侧车，这些通知就成了用户气泡
   const text = inline ? inline.content : textOf(msg.content)
   const systemNotice = state.pendingSystemNotice || (!inline && isSystemNoticeText(text))
   state.pendingSystemNotice = false
@@ -314,10 +327,7 @@ function projectAssistantMessage(
   })
 }
 
-function projectToolResult(
-  state: ProjectionState,
-  msg: Extract<AgentMessage, { role: 'toolResult' }>
-): void {
+function projectToolResult(state: ProjectionState, msg: ToolResultMessage): void {
   const target = state.pendingToolBlocks.get(msg.toolCallId)
   if (!target) return // 孤儿结果（历史被压缩截断）——静默丢弃，UI 无处挂载
   // 与实时广播同一份文字化（见 toolResultText）：重开之后的卡片与跑着时一字不差
@@ -338,7 +348,7 @@ function projectToolResult(
  *        不传会让「流式所见」与「重开所见」在 provider 字段上不一致。
  */
 export function entriesToChatMessages(
-  entries: readonly SessionTreeEntry[],
+  entries: readonly HarnessV3Entry[],
   sessionId: string,
   fallbackModel = '',
   fallbackProvider = ''
@@ -422,16 +432,16 @@ export function entriesToChatMessages(
     }
     switch (msg.role) {
       case 'user':
-        projectUserMessage(state, entry.id, sessionId, msg, createdAt)
+        projectUserMessage(state, entry.id, sessionId, msg as UserMessage, createdAt)
         break
       case 'assistant':
         projectAssistantMessage(state, entry.id, sessionId, msg as AssistantMessage, createdAt)
         break
       case 'toolResult':
-        projectToolResult(state, msg as Extract<AgentMessage, { role: 'toolResult' }>)
+        projectToolResult(state, msg as ToolResultMessage)
         break
       default:
-        // bashExecution / branchSummary / compactionSummary 由 entry 层处理或 ShuviX 不产生
+        // system（pi-ai 1.0）/ bashExecution / branchSummary / compactionSummary：ShuviX 的 v3 树里不产生
         break
     }
   }

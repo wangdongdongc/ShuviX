@@ -127,7 +127,7 @@ interface Harness {
   createCalls: CreateAgentParams[]
   promptTexts: string[]
   abort: ReturnType<typeof vi.fn>
-  /** 内存会话树 —— buildContext 按引用交回，onPrompt 可在轮次之间往里 push */
+  /** 内存会话树 —— contextMessages 按引用交回，onPrompt 可在轮次之间往里 push */
   messages: unknown[]
   /** 「模型调 next」：取捕到的 extraTools[0] 走 BaseTool.execute */
   next: (value: Record<string, unknown>) => Promise<unknown>
@@ -173,10 +173,8 @@ function makeHarness(
       return (await o.onPrompt?.(text, promptTexts.length, h)) || {}
     },
     abort: vi.fn(async () => {}),
-    session: {
-      appendMessage: vi.fn(async () => {}),
-      buildContext: async () => ({ messages })
-    }
+    appendContext: vi.fn(async () => {}),
+    contextMessages: async () => messages
   }
   const createAgent = vi.fn(async (params: CreateAgentParams) => {
     createCalls.push(params)

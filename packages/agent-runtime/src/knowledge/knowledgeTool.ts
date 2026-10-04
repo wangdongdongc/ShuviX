@@ -24,7 +24,7 @@
  * 宿主无关：文件经 FileSystemPort，库的解析 / 列举 / 扫描 / 检索全部注入。
  */
 import { Type } from 'typebox'
-import type { AgentToolResult } from '@earendil-works/pi-agent-core'
+import type { AgentToolResult } from '../tools/toolResult'
 import { KNOWLEDGE_TYPES, OKF_STATUSES, type OkfStatus } from '@shuvix/chat-protocol/knowledge'
 import type { FileSystemPort } from '../fileTools/port'
 import { splitFrontmatter } from '../markdownFrontmatter'

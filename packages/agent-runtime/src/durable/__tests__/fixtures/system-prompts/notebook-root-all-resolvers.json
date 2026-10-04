@@ -1,7 +1,7 @@
 {
   "case": "notebook-root-all-resolvers",
   "description": "notebook root; every seam has content, but notebook declares no instruction files and no `knowledge` tool, so only project prompt + memory land",
-  "capturedFrom": "createAgentFactory(fakeHost).createAgent() on @earendil-works/pi-agent-core 0.80.10 (P1-00, before the pi-durable cutover)",
+  "capturedFrom": "createAgentFactory(fakeHost).createAgent() on the pi 0.80.10 AgentHarness runtime (P1-00, before the pi-durable cutover)",
   "inputs": {
     "kind": "root",
     "sessionId": "sess-golden-root",

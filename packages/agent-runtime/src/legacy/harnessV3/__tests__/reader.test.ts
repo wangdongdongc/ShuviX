@@ -1,8 +1,8 @@
 /**
  * v3 JSONL 会话树的只读读取器 —— 手写文本上的契约用例（不引 pi：pi 删掉之后这些用例照样跑）。
  *
- * 语义对齐 pi 0.80.10 的 `JsonlSessionStorage.open` + `Session.buildContextEntries()`（对照由
- * piCrossCheck.test.ts 守着）；这里钉的是规则本身，以及读取器比 pi **宽容**的那一半 —— 它是给人看旧记录的，
+ * 语义对齐 pi 0.80.10 的 `JsonlSessionStorage.open` + `Session.buildContextEntries()`（对照曾由
+ * piCrossCheck.test.ts 守着，P1-01 随 pi 0.80 删除前一直通过）；这里钉的是规则本身，以及读取器比 pi **宽容**的那一半 —— 它是给人看旧记录的，
  * 能看多少看多少：会话头坏了才拒绝，条目行坏了跳过并记 issue（物理行号），父条目缺失时分支停在缺口，
  * leaf 指向一个在它之前没出现过的条目时这条 leaf 不生效。issue 的 `reason` 措辞不是契约，只按片段匹配。
  *
@@ -19,7 +19,8 @@
  *   B3 分支  BB-1 只取祖先  BB-2 parentId "" 视同根  BB-3 重复 id 后一行胜出
  *   B4 压缩过滤  BC-1…BC-7
  *   B5 运行配置  BR-1…BR-5
- *   B6 投影  BE-2 每条消息的 sessionId 是传入的参数（BE-1 引活路径的投影，放在 piCrossCheck.test.ts）
+ *   B6 投影  BE-2 每条消息的 sessionId 是传入的参数（BE-1 曾在 piCrossCheck.test.ts 对照活路径的投影；
+ *            投影冻结进本目录后两者就是同一份）
  *   B7 宽容  BN-1…BN-11
  *   B8 BG-3 包根导出读取器的三个入口；branchOf 是纯函数（两次结果相同、不改 session.issues）
  */

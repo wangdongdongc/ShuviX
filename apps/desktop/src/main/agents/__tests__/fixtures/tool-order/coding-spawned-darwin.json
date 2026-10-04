@@ -1,7 +1,7 @@
 {
   "case": "coding-spawned-darwin",
   "description": "coding spawned through the dispatch tool, still allowed to dispatch",
-  "capturedFrom": "apps/desktop agentHost resolveTools (resolveDesktopTools) on @earendil-works/pi-agent-core 0.80.10 (P1-00, before the pi-durable cutover)",
+  "capturedFrom": "apps/desktop agentHost resolveTools (resolveDesktopTools) on the pi 0.80.10 AgentHarness runtime (P1-00, before the pi-durable cutover)",
   "inputs": {
     "platform": "darwin",
     "kind": "spawned",

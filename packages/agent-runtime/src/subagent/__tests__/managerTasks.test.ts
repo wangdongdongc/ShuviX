@@ -44,10 +44,8 @@ function makeHarness(o: { onPrompt?: (text: string) => Promise<{ error?: string 
     prompt: async (text: string): Promise<{ error?: string }> =>
       o.onPrompt ? await o.onPrompt(text) : {},
     abort,
-    session: {
-      appendMessage: vi.fn(async () => {}),
-      buildContext: async () => ({ messages: [] })
-    }
+    appendContext: vi.fn(async () => {}),
+    contextMessages: async () => []
   }
   const createAgent = vi.fn(async (_params: CreateAgentParams) => {
     return { runtime, dispose: vi.fn() } as unknown as CreatedAgent

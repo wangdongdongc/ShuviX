@@ -1,42 +1,27 @@
 /**
  * @shuvix/agent-runtime —— 宿主无关的 Agent 编排核心。
  *
- * 消费 @earendil-works/pi-agent-core + pi-ai：AgentHarness 承载会话状态（entry 树），
- * harness/ 把 AgentHarnessEvent 转成 @shuvix/chat-protocol 的 ChatEvent，
- * 并通过注入接口（event sink / env）脱离 Node/Electron。
- * 桌面端与 Chrome 扩展共享同一套编排逻辑。
+ * 基于 @earendil-works/pi-durable + pi-ai（pi 1.0）：会话状态与运行时交给 pi-durable，
+ * 本包负责 agent 档案 / 工具 / 安全 / 提示词这些 ShuviX 自己的东西，并通过注入接口
+ * （event sink / env / 存储 / 网络）脱离 Node/Electron。桌面端与 Chrome 扩展共享同一套编排逻辑。
+ *
+ * pi-durable 切换进行中（P1-01 起）：会话运行时尚在重建，未就绪的入口抛 `PhasePendingError`。
  */
 export * from './types'
+// 迁移期「这条路径还没实现」的统一标记（见 errors/phasePending.ts）
+export { PhasePendingError, isPhasePendingError } from './errors/phasePending'
 export {
   AgentRegistry,
   agentIdOf,
   type AgentRegistryEntry,
   type AgentRegistryEntryInput
 } from './agentRegistry'
-// 活跃 pi agent 运行时登记簿（业务无关：只存 AgentHarness/Session + 身份标签）——
-// 登记点是 createAgent 单点，供监控等消费方按 pi 原生读取面取数
-export {
-  AgentRuntimeRegistry,
-  agentRuntimeRegistry,
-  type AgentRuntimeKind,
-  type AgentRuntimePhase,
-  type AgentRuntimeIdentity,
-  type AgentRuntimeCounters,
-  type AgentRuntimeCacheUsage,
-  type AgentRuntimeSnapshot
-} from './runtimeRegistry'
 // 会话运行时生命周期簿记（Map + 懒创建 + 失效/销毁）—— 桌面/扩展共享，构造与清理经注入
 export {
   SessionManager,
   type SessionManagerDeps,
   type SessionDisposeReason
 } from './sessionManager'
-// 进程内共享会话树缓存（单实例 + 在途去重 + LRU/钉住）—— 存储后端经 deps 注入
-export {
-  createSessionTreeRegistry,
-  type SessionTreeRegistry,
-  type SessionTreeRegistryDeps
-} from './sessionTreeRegistry'
 export {
   resolveModel,
   BUILTIN_ENV_MAP,
@@ -259,6 +244,14 @@ export {
 } from './security'
 // 工具基类 + 共享文件工具套件（read/write/edit 整条流程，注入端适配 API）
 export { BaseTool } from './tools/baseTool'
+// 工具形状（过渡期替代 pi 0.80 的 AgentTool / AgentToolResult；P1-04 改成 durable 原生）
+export type {
+  AgentTool,
+  AgentToolResult,
+  AgentToolUpdateCallback,
+  AnyTool,
+  ToolExecutionMode
+} from './tools/toolResult'
 export {
   createFileToolSuite,
   ReadParamsSchema,
@@ -315,7 +308,8 @@ export {
   type SpawnContext,
   type RunTaskParams,
   type RunTaskOutcome,
-  type AnyAgentTool
+  type AnyAgentTool,
+  type SpawnedRuntime
 } from './subagent/manager'
 // 派发结果契约：schema 收口的 next 工具（运行时原语；目前没有生产调用方）
 export {
@@ -469,33 +463,51 @@ export {
   createAgentFactory,
   type AgentFactory,
   type AgentHostAdapter,
+  type AgentRuntime,
   type CreateAgentParams,
   type CreatedAgent,
   type ToolResolveRequest
 } from './agentProfile/createAgent'
-// harness 接入层：会话状态的存储与上下文构建交给 pi AgentHarness。
-// entry 树是唯一真理源，entriesToChatMessages 是它的「UI 视角」（唯一投影方向）。
+// agent 规格的纯派生（初始模型 / 思考档位 / 工具名单 / 系统提示词 / root·spawned 差异）
 export {
-  HarnessSession,
-  forwardHarnessEvent,
-  createHarnessEventState,
-  entriesToChatMessages,
-  createModelsAdapter,
-  INSTRUCTION_CUSTOM_TYPE,
-  INLINE_TOKENS_CUSTOM_TYPE,
-  SIDECAR_CUSTOM_TYPES,
-  type InlineTokensSidecar,
-  type HarnessSessionDeps,
-  type HarnessEventContext,
-  type HarnessEventDeps,
-  type HarnessEventState,
-  type ModelsAdapterDeps
-} from './harness'
-// 旧格式（harness-v3-jsonl）会话的只读读取 + 投影：存储换代不迁移，旧会话靠它继续可看
+  deriveAgentSpec,
+  assembleSystemPrompt,
+  normalizeToolNames,
+  resolveInitialModel,
+  resolveThinkingLevel,
+  runtimeDecisions,
+  type AgentSpec,
+  type AgentSpecHost,
+  type AgentSpecParams,
+  type AgentRuntimeDecisions
+} from './durable/agentSpec'
+export {
+  fenceInstructionFile,
+  fenceProjectPrompt,
+  fenceProjectMemory,
+  fenceKnowledgeBases
+} from './durable/prompt/fences'
+// 挂起的用户询问（ask / 确认卡片）—— 会话运行时「等人回答」的那一半
+export { PendingInputRequests } from './durable/inputRequests'
+// 历史 thinking 剥离（纯函数；pi-durable 切换后暂未接线，见文件头）
+export {
+  elideHistoricalThinking,
+  type ThinkingElisionState,
+  type ThinkingElisionOptions
+} from './context/thinkingElision'
+// 旧格式（harness-v3-jsonl）会话的只读读取 + 冻结投影：存储换代不迁移，旧会话靠它继续可看。
+// 侧车常量随投影一并冻结在这里（旧会话树里写着它们）。
 export {
   HarnessV3FormatError,
   harnessV3TextToChatMessages,
   readHarnessV3Transcript,
+  entriesToChatMessages,
+  INSTRUCTION_CUSTOM_TYPE,
+  INLINE_TOKENS_CUSTOM_TYPE,
+  SYSTEM_NOTICE_CUSTOM_TYPE,
+  SIDECAR_CUSTOM_TYPES,
+  type InlineTokensSidecar,
+  type HarnessV3Entry,
   type HarnessV3Issue,
   type HarnessV3Transcript,
   type LegacyTranscriptView

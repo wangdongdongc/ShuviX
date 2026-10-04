@@ -19,7 +19,7 @@ import {
   type TString
 } from 'typebox'
 import { BaseTool, type UnconfinedReason } from '@shuvix/agent-runtime'
-import type { AgentToolResult } from '@earendil-works/pi-agent-core'
+import type { AgentToolResult } from '@shuvix/agent-runtime'
 import type { BashToolDetails, ShellSandboxState } from '@shuvix/chat-protocol/types/chatMessage'
 import { collapseProgressOutput, type ShellKind } from '../utils/toolUtils/shell'
 import {

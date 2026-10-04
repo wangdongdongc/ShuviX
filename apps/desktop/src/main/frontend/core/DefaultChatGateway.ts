@@ -57,8 +57,8 @@ export class DefaultChatGateway implements ChatGateway {
     // 指令文件/项目提示词已在 createAgent 时 append 进系统提示词（Agent 首次发言时才创建，
     // 所以"发送第一条消息前调整配置"的语义保持不变）。
 
-    // 有根会话的用户消息不由网关落库：harness 在 message_end 把它作为 entry 追加，
-    // 并经 HarnessSession 的事件翻译广播 user_message。
+    // 有根会话的用户消息不由网关落库：会话运行时把它作为条目追加，
+    // 并经事件翻译广播 user_message（TODO(pi-durable p1): P1-10 由 DurableSession 门面接手）。
     // 发送结果原样上交：子会话的驱动方靠它区分「没发出去」与「发出去了没回话」
     return await session.prompt(promptText, images, display)
   }

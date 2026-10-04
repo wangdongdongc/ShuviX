@@ -1,11 +1,12 @@
 /**
  * P1-00 系统提示词 golden fixture 的常驻自检。
  *
- * fixture 由 `agentProfile/__tests__/systemPromptGolden.capture.test.ts` 在旧依赖（pi-agent-core 0.80.10）
- * 上捕获：每份记录 createAgent 的输入、输出与按围栏拆开的 `parts`。pi-durable 之后系统提示词由若干
- * section 以 "\n\n" 拼接，section 渲染器要逐字节复现这些输出（P1-08）。
+ * fixture 由 `agentProfile/__tests__/systemPromptGolden.capture.test.ts` 在旧依赖（pi 0.80.10 的
+ * AgentHarness 运行时）上捕获（捕获完成后那份捕获用例已在 P1-01 删除）：每份记录 createAgent 的输入、
+ * 输出与按围栏拆开的 `parts`。pi-durable 之后系统提示词由若干 section 以 "\n\n" 拼接，section 渲染器
+ * 要逐字节复现这些输出（P1-08）。
  *
- * 这里只验 fixture 自身的一致性，**刻意不 import createAgent / pi-agent-core**：切换依赖之后它仍要能跑。
+ * 这里只验 fixture 自身的一致性，**刻意不 import createAgent / 任何 pi 包**：切换依赖之后它仍要能跑。
  *  - 目录不空（防止 fixture 被整目录误删而对照测试空转变绿）；
  *  - 每份 `parts` 以 "\n\n" 拼回去逐字节等于 `output`；
  *  - 第一段恒为 persona，追加块按 createAgent 的固定次序出现，没有空段、段首尾没有空白。

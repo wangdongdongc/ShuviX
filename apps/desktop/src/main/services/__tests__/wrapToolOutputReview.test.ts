@@ -14,7 +14,7 @@
  * ask 就是 tier 'ask'，会先交给审查），provider 上挂 onPermissionRequest。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { AgentTool } from '@earendil-works/pi-agent-core'
+import type { AgentTool } from '@shuvix/agent-runtime'
 import {
   clearReviewState,
   clearSessionDecisions,

@@ -4,7 +4,7 @@
  *
  * 与 probe.ts 的分工：那边起隔离实例跑一整轮对话；这里**不起 Electron** —— 审查员的全部输入就是
  * `permission.request` 的 payload（设计里的「独立上下文」），所以直接用 agent-runtime 的真 runner →
- * 真 SubAgentManager → 真 createAgentFactory → 真 HarnessSession 跑，读的是随包发布的那几份 md，
+ * 真 SubAgentManager → 真 createAgentFactory → 真运行时跑，读的是随包发布的那几份 md，
  * 走的是与桌面同一条 runTask → createAgent → next 链路。唯一从真实环境借来的是 provider 与模型
  * （pickRealModel：读真实实例 shuvix.db 的一行，key 只在内存里过一手，不打印、不落盘）。
  *
@@ -15,6 +15,9 @@
  * PROBE_CASES（逗号分隔的用例 id 子集）、PROBE_REPEAT（每条跑几遍，缺省 1）、PROBE_DEBUG（每条用例的
  * ChatEvent 流与发给 provider 的原样请求各存一份，看模型到底写了什么）、PROBE_THINKING（临时换掉审查员
  * 声明的思考档位，比较关思考的影响）。
+ *
+ * 暂不可用（pi-durable P1-01 起）：派生 agent 的运行时在 phase 2 重建，在那之前跑这个探针会在第一次
+ * 派发时得到 PhasePendingError（见 buildRunner 里的 TODO）。
  */
 import { readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -28,7 +31,6 @@ import {
   createAgentFactory,
   createHookRunner,
   createSubAgentManager,
-  resolveModel,
   toInProcessAgentType,
   type AgentHostAdapter,
   type HookRunEvent,
@@ -669,56 +671,16 @@ function buildRunner(
   const capabilities = (
     model.capabilities ? JSON.parse(model.capabilities) : {}
   ) as ModelCapabilities
-  const providerInfo = {
-    id: model.providerId,
-    name: model.providerName,
-    isBuiltin: !!model.isBuiltin,
-    apiKey: model.apiKey,
-    baseUrl: model.baseUrl,
-    apiProtocol: model.apiProtocol,
-    metadata: model.metadata
-  }
+  // TODO(pi-durable p2): 派生 agent 落到 pi-durable 之前这个探针跑不起来 —— createAgent 对 spawned 抛
+  // PhasePendingError。旧宿主面里的模型构建 / API key / 请求记录（buildModel / getApiKey / httpLog）随
+  // pi 0.80 一起删了；真模型与发给 provider 的原样请求（PROBE_DEBUG / PROBE_FORCE_TOOL /
+  // PROBE_RENAME_NEXT 那几个旋钮）要经 P1-02 的模型注册表与网络装饰重新接上。`payloads` 先保持为空。
+  void payloads
   const host: AgentHostAdapter = {
     // 审查员不声明工具：请求里只有结果契约的 next（宿主经 extraTools 交进来）
     resolveTools: (req) => [...(req.extraTools ?? [])],
     promptVars: () => ({}),
-    buildModel: (config) =>
-      resolveModel({
-        provider: config.provider,
-        model: config.model,
-        capabilities: config.capabilities ?? capabilities,
-        providerInfo,
-        // key 走 getApiKey（与桌面一样不写 process.env）
-        env: { setApiKey: () => {} }
-      }),
-    getApiKey: () => model.apiKey,
-    openSessionTree: async () => {
-      throw new Error('the review probe opens no root session')
-    },
-    eventSink: { broadcast: (event) => events.push(event), hasUserInputCapability: () => false },
-    // 发给 provider 的原样请求（PROBE_DEBUG 时落盘：看工具表、system、任务文本到底长什么样）
-    httpLog: {
-      logRequest: ({ payload }) => {
-        // 实验旋钮（PROBE_FORCE_TOOL）：原地给请求加 tool_choice，看强制调用能否救回关思考的模型
-        // 诊断旋钮（PROBE_RENAME_NEXT）：请求里把 next 改名，看模型是不是冲着这个名字写文字
-        if (process.env.PROBE_RENAME_NEXT && payload && typeof payload === 'object') {
-          const renamed = JSON.stringify(payload)
-            .replaceAll('"name":"next"', `"name":"${process.env.PROBE_RENAME_NEXT}"`)
-            .replaceAll('`next`', `\`${process.env.PROBE_RENAME_NEXT}\``)
-          Object.assign(payload, JSON.parse(renamed))
-        }
-        if (process.env.PROBE_FORCE_TOOL && payload && typeof payload === 'object') {
-          const body = payload as Record<string, unknown>
-          body.tool_choice =
-            'system' in body
-              ? { type: 'tool', name: 'next' }
-              : { type: 'function', function: { name: 'next' } }
-        }
-        payloads.push(payload)
-        return ''
-      },
-      updateUsage: () => {}
-    }
+    eventSink: { broadcast: (event) => events.push(event), hasUserInputCapability: () => false }
   }
   const manager = createSubAgentManager({
     createAgent: createAgentFactory(host).createAgent,

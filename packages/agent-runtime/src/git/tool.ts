@@ -6,7 +6,7 @@
  * 两端能力同集 → schema / description 为静态生成（无 caps 裁剪）。
  */
 import { Type, type TSchema } from 'typebox'
-import type { AgentTool, AgentToolResult } from '@earendil-works/pi-agent-core'
+import type { AgentTool, AgentToolResult } from '../tools/toolResult'
 import type { GitToolDetails } from '@shuvix/chat-protocol/types/chatMessage'
 import type { GitCache, GitEnv, GitOpOutput } from './env'
 import {

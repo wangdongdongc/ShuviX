@@ -80,6 +80,20 @@ export interface SessionSettings {
    * 判定一律经 chat-protocol `chromeTabSession.ts` 的 `chromeTabOf` / `isChromeTabSessionSettings`。
    */
   chromeTab?: ChromeTabBinding
+  /**
+   * 这条会话选定的模型 —— pi-durable 起运行配置的事实源（旧 v3 会话树上的 model_change 只读不写）。
+   * 写入口：sessionStorage.appendModelChange（选择器 / 子会话继承父会话）。模型选择器直接读它，
+   * 不必为一个下拉框打开会话存储。
+   */
+  model?: SessionModelSelection
+  /** 这条会话选定的思考档位（同上；写入口 sessionStorage.appendThinkingLevelChange） */
+  thinkingLevel?: string
+}
+
+/** 会话设置里的模型选择：提供商行 id + 模型 id */
+export interface SessionModelSelection {
+  provider: string
+  modelId: string
 }
 
 /** 会话数据结构（对应 DB 表 sessions） */

@@ -1,7 +1,7 @@
 {
   "case": "work-root-trim-rules",
   "description": "work root; instruction content keeps its surrounding whitespace verbatim (createAgent does not trim it — the desktop resolver trims before returning), project prompt / memory are trimmed, a whitespace-only knowledge guide is skipped",
-  "capturedFrom": "createAgentFactory(fakeHost).createAgent() on @earendil-works/pi-agent-core 0.80.10 (P1-00, before the pi-durable cutover)",
+  "capturedFrom": "createAgentFactory(fakeHost).createAgent() on the pi 0.80.10 AgentHarness runtime (P1-00, before the pi-durable cutover)",
   "inputs": {
     "kind": "root",
     "sessionId": "sess-golden-root",

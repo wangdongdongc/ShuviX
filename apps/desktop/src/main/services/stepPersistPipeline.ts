@@ -97,7 +97,7 @@ function serializeContent(content: ReadonlyArray<TextContent | ImageContent>): s
  *
  * 防御性：入口对 content 数组做浅拷贝——即使某个 transformer 不小心
  * 对数组本身做了 push/splice/index 赋值，也只会影响管线自己的副本，
- * 不会污染 pi-agent-core 内部的 state.messages（因为 agent 那边仍持有
+ * 不会污染运行时内部持有的消息（因为 agent 那边仍持有
  * 原引用）。**对象字段级的 mutation 仍需要 transformer 作者按契约自守**。
  */
 export function transformToolResultForPersist(

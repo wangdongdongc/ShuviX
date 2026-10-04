@@ -12,7 +12,7 @@
  * 委托 SubAgentManager.runTask，返回最终文本结果。注册表/文件解析/模型配置经注入，宿主无关。
  */
 import { Type } from 'typebox'
-import type { AgentToolResult } from '@earendil-works/pi-agent-core'
+import type { AgentToolResult } from '../tools/toolResult'
 import { BaseTool } from '../tools/baseTool'
 import type {
   AgentProfile,

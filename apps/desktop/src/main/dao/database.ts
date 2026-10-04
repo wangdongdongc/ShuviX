@@ -34,7 +34,7 @@ class DatabaseManager {
 
     // 内置提供商目录来自 @shuvix/chat-protocol（与扩展共用单一来源）。
     // name 与 id 均为 pi-ai 的 provider slug；apiProtocol 对内置 provider 无实际作用（INSERT 用 DB 默认值）；
-    // baseUrl 留空 '' 时 agentModelResolver 不覆盖，pi-ai 使用其 canonical URL。
+    // baseUrl 留空 '' 时模型解析不覆盖，pi-ai 使用其 canonical URL。
     const exists = this.db.prepare('SELECT 1 FROM providers WHERE name = ?')
     const insert = this.db.prepare(
       'INSERT INTO providers (id, name, displayName, baseUrl, isBuiltin, isEnabled, sortOrder, createdAt, updatedAt) VALUES (?, ?, ?, ?, 1, 0, ?, ?, ?)'

@@ -6,7 +6,7 @@
  * 桌面与扩展共用同一份基类，确保工具执行流程两端一致。
  */
 import type { TSchema, Static } from 'typebox'
-import type { AgentToolResult } from '@earendil-works/pi-agent-core'
+import type { AgentToolResult } from './toolResult'
 import type { TruncateStrategy } from '../toolOutput/spill'
 
 export abstract class BaseTool<TParams extends TSchema = TSchema> {
