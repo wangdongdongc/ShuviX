@@ -10,6 +10,7 @@ import { describe, expect, it } from 'vitest'
 import { backgroundContext as BG } from '../context'
 import { SessionStateDoc } from '../docs'
 import { SessionClosedError, type DurableSession } from '../durableSession'
+import type { RunState } from '../seams'
 import { SessionHostSealedError } from '../sessionHost'
 import { answer, callTool, fauxKit, held, stalled } from './support/faux'
 import { makeHost, primeRoot, registerHostCleanup } from './support/host'
@@ -382,8 +383,8 @@ describe('SessionHost LRU', () => {
     const t = await makeHost({
       kit,
       maxIdleOpen: 1,
-      contextWindow: () => 3000,
-      // reserve = background = 750 → 背景压缩从约 1500 tokens 开始；保留 100 tokens 才找得到切点
+      // 窗口来自锁定的 faux 模型（K14）：reserve = background = 750 → 背景压缩从约 1500 tokens 开始；
+      // 保留 100 tokens 才找得到切点
       settingsOverrides: { retry: { enabled: false }, compaction: { keepRecentTokens: 100 } }
     })
     let summarized = false
@@ -435,9 +436,10 @@ describe('SessionHost run state events', () => {
     await waitFor(() => t.statesOf('a').includes('busy'), 3000, 'busy')
     gate.resolve()
     expect(await result).toEqual({})
-    await waitFor(() => t.statesOf('a').length === 2, 3000, 'idle')
+    await waitFor(() => t.statesOf('a').length === 3, 3000, 'idle')
     await sleep(20)
-    expect(t.statesOf('a')).toEqual(['busy', 'idle'])
+    // 打开时报一次 idle（PIN-R），之后一轮恰一对 busy / idle
+    expect(t.statesOf('a')).toEqual(['idle', 'busy', 'idle'])
   })
 
   it('R-02 follow-up runs are reported; the final state is idle', async () => {
@@ -459,10 +461,10 @@ describe('SessionHost run state events', () => {
     )
     await waitFor(() => t.statesOf('a').at(-1) === 'idle', 3000, 'final idle')
     const states = t.statesOf('a')
-    expect(states[0]).toBe('busy')
+    expect(states[0]).toBe('idle')
     expect(states).not.toContain('interrupted')
-    // 结束与起跑在同一提交里：连续 busy
-    expect(states).toEqual(['busy', 'idle'])
+    // 打开时报一次 idle（PIN-R）；结束与起跑在同一提交里：连续 busy
+    expect(states).toEqual(['idle', 'busy', 'idle'])
   })
 
   it('R-03 closeAll during a held run emits nothing more; reopen reports interrupted', async () => {
@@ -484,6 +486,23 @@ describe('SessionHost run state events', () => {
     expect(next.statesOf('a')).toEqual(['interrupted'])
     expect(reopened.isBusy()).toBe(false)
     expect(reopened.isInterrupted()).toBe(true)
+  })
+
+  it('R-05 PIN-R: every open reports the current state once, idle included — a busy marker a crash left behind heals', async () => {
+    const first = await makeHost()
+    const a = await first.open('a')
+    await primeRoot(a, first.kit)
+    first.kit.queue(answer('a1'))
+    expect(await a.submitUser('u1')).toEqual({})
+    // the DB marker as a crash between the final commit and the idle microtask would leave it
+    const marker = new Map<string, RunState>([['a', 'busy']])
+    const t = await first.restart({ onRunStateChange: (id, state) => marker.set(id, state) })
+    const reopened = await t.open('a')
+    expect(reopened.runState).toBe('idle')
+    expect(t.statesOf('a')).toEqual(['idle'])
+    expect(marker.get('a')).toBe('idle')
+    await sleep(30)
+    expect(t.statesOf('a')).toEqual(['idle'])
   })
 
   it('R-04 a throwing listener breaks neither the host nor the run', async () => {

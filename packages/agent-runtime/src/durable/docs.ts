@@ -39,7 +39,10 @@ export type DeferredNotice = {
 export type SessionState = {
   /** 当前对话；缺省 = 根对话。指向不存在的对话时回退到根（并记警告） */
   currentConversation?: ConversationId
-  /** 根 agent 的锁记录（P1-09 定型；这里只占位） */
+  /**
+   * 根 agent 的锁记录（P1-09）：`lock.ts` 的 `LockRecord`，按纯 JSON 存（`lockRecordJson`）、读时校验
+   * （`parseLockRecord`；形状不对 = 写坏了，重开时清掉，K12）。缺省 = 这条会话现在没有 agent。
+   */
   lock?: JsonObject
   /** 待送达的通知，按到达顺序；送达（进收件箱或落条目）的同一提交里移除 */
   deferredNotices: DeferredNotice[]

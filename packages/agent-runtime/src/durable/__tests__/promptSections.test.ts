@@ -34,7 +34,7 @@ import {
 import type { PromptHost } from '../seams'
 import { answer, callTool } from './support/faux'
 import { makeHost, registerHostCleanup, type TestHost } from './support/host'
-import { frozenPrompt, lockPrompt, systemMessages } from './support/prompt'
+import { frozenPrompt, lockPrompt, markLocked, systemMessages } from './support/prompt'
 import { toolsExtension } from './support/tools'
 import { allEntries } from './support/transcript'
 
@@ -243,10 +243,9 @@ async function setup(
   session: DurableSession
   conversation: Conversation
 }> {
-  const t = await makeHost()
   const live = liveHost()
+  const t = await makeHost({ promptHost: live.host })
   const prompt = createPromptExtensions(live.host)
-  for (const extension of prompt.all) t.registry.install(extension)
   const session = await t.open()
   const conversation = await session.currentConversation()
   await lockPrompt(
@@ -366,10 +365,9 @@ describe('sections through a real durable request', () => {
   })
 
   it('PS-16 the persona is frozen: a later promptVars change does not reach the prompt (and promptVars is never consulted while rendering)', async () => {
-    const t = await makeHost()
     const live = liveHost()
+    const t = await makeHost({ promptHost: live.host })
     const prompt = createPromptExtensions(live.host)
-    for (const extension of prompt.all) t.registry.install(extension)
     let date = '2026-10-04'
     let promptVarsCalls = 0
     const personaHost = {
@@ -453,11 +451,10 @@ describe('sections through a real durable request', () => {
   })
 
   it('PS-20 a seam that throws on the very first request leaves the section out', async () => {
-    const t = await makeHost()
     const live = liveHost()
     live.fail.add('knowledge')
+    const t = await makeHost({ promptHost: live.host })
     const prompt = createPromptExtensions(live.host)
-    for (const extension of prompt.all) t.registry.install(extension)
     const session = await t.open()
     const conversation = await session.currentConversation()
     await lockPrompt(
@@ -476,7 +473,6 @@ describe('sections through a real durable request', () => {
   it('PS-21 a host without seams: only the persona renders even when everything is selected', async () => {
     const t = await makeHost()
     const prompt = createPromptExtensions({})
-    for (const extension of prompt.all) t.registry.install(extension)
     const session = await t.open()
     const conversation = await session.currentConversation()
     await lockPrompt(conversation, t.kit, frozenPrompt(), prompt.all)
@@ -497,16 +493,16 @@ describe('sections through a real durable request', () => {
     )
     expect(empty.t.warnings).toEqual([])
 
-    const t = await makeHost()
     const live = liveHost()
+    const t = await makeHost({ promptHost: live.host })
     const prompt = createPromptExtensions(live.host)
-    for (const extension of prompt.all) t.registry.install(extension)
     const session = await t.open()
     const conversation = await session.currentConversation()
     await conversation.configure(
       { model: t.kit.model, extensions: prompt.select(spec({ projectAwareness: true })) },
       BG
     )
+    await markLocked(conversation, t.kit)
     await turn(t, session, 'u1')
     // 没冻结：人设报告，活段落没有根会话 id 可解析 —— 静默缺席，不调 seam
     expect(getCurrentSystemPrompt(t.kit.requests[0]!.messages)).toBe('')
@@ -515,10 +511,9 @@ describe('sections through a real durable request', () => {
   })
 
   it('PS-23 the instructions section reads the frozen file list and passes an empty cwd when the agent has none', async () => {
-    const t = await makeHost()
     const live = liveHost()
+    const t = await makeHost({ promptHost: live.host })
     const prompt = createPromptExtensions(live.host)
-    for (const extension of prompt.all) t.registry.install(extension)
     const session = await t.open()
     const conversation = await session.currentConversation()
     await conversation.commit(
@@ -537,6 +532,7 @@ describe('sections through a real durable request', () => {
       },
       BG
     )
+    await markLocked(conversation, t.kit)
     await turn(t, session, 'u1')
     expect(live.calls).toEqual(['instruction:root-of-s1::CLAUDE.md'])
     const state = await session.harness.snapshot(AgentStateDoc, conversation.id, BG)
@@ -554,12 +550,11 @@ describe('sections through a real durable request', () => {
         return { content: [{ type: 'text', text: 'flipped' }] }
       }
     })
-    const t = await makeHost()
+    const t = await makeHost({ promptHost: live.host })
     const prompt = createPromptExtensions(live.host)
-    for (const extension of prompt.all) t.registry.install(extension)
     const tools = toolsExtension([flip])
-    t.registry.install(tools)
     const session = await t.open()
+    t.registryOf('s1')!.install(tools)
     const conversation = await session.currentConversation()
     await lockPrompt(conversation, t.kit, frozenPrompt(), [
       ...prompt.select(spec({ instructionFiles: ['AGENTS.md'] })),
@@ -584,16 +579,16 @@ describe('sections through a real durable request', () => {
     expect(getCurrentSystemPrompt(t.kit.requests[1]!.messages)).toContain('Use npm.')
   })
 
-  it('PS-26 two sessions share one registry: each resolves against its own frozen root session id', async () => {
-    const t = await makeHost()
+  it('PS-26 two sessions (each with its own registry, K1) share one prompt host: each resolves against its own frozen root session id', async () => {
     const calls: string[] = []
-    const prompt = createPromptExtensions({
-      resolveProjectPrompt: (sessionId) => {
+    const promptHost = {
+      resolveProjectPrompt: (sessionId: string) => {
         calls.push(sessionId)
         return `Project of ${sessionId}.`
       }
-    })
-    for (const extension of prompt.all) t.registry.install(extension)
+    }
+    const t = await makeHost({ promptHost })
+    const prompt = createPromptExtensions(promptHost)
     for (const id of ['s1', 's2']) {
       const session = await t.open(id)
       const conversation = await session.currentConversation()

@@ -81,7 +81,6 @@ describe('persona rendering and freezing', () => {
 
     const t = await makeHost()
     const prompt = createPromptExtensions({})
-    for (const extension of prompt.all) t.registry.install(extension)
     const session = await t.open()
     await lockPrompt(await session.currentConversation(), t.kit, frozen, [
       prompt.get(PROMPT_EXTENSION.persona)
@@ -129,7 +128,6 @@ describe('persona rendering and freezing', () => {
     }
     const t = await makeHost()
     const prompt = createPromptExtensions({})
-    for (const extension of prompt.all) t.registry.install(extension)
     const session = await t.open()
     const frozen = await computeFrozenAgentPrompt(host, INPUT)
     await lockPrompt(await session.currentConversation(), t.kit, frozen, [
@@ -139,8 +137,6 @@ describe('persona rendering and freezing', () => {
     await session.submitUser('u1')
 
     const t2 = await t.restart()
-    const prompt2 = createPromptExtensions({})
-    for (const extension of prompt2.all) t2.registry.install(extension)
     const reopened = await t2.open()
     await reopened
       .currentConversation()
@@ -158,7 +154,6 @@ describe('persona rendering and freezing', () => {
   it('P-06 a fork keeps the persona as of the fork point; a later re-freeze on the parent does not reach it', async () => {
     const t = await makeHost()
     const prompt = createPromptExtensions({})
-    for (const extension of prompt.all) t.registry.install(extension)
     const session = await t.open()
     const root = await session.currentConversation()
     await lockPrompt(root, t.kit, frozenPrompt({ persona: 'P1' }), [

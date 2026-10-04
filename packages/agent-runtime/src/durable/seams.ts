@@ -3,18 +3,30 @@
  * 存储怎么开、在哪、算不算临时会话、钉不钉住，都由宿主回答。
  *
  * 桌面（P1-10）：openStorage = 动态 import node:sqlite 打开 `<sessionsDir>/<id>.sqlite`（临时会话给
- * MemoryStorage）；isPinned = 会话有活着 / 在建 / 关停中的运行时；onRunStateChange 写 DB 的运行标记。
+ * MemoryStorage）；isPinned = 会话有活着 / 在建 / 关停中的运行时；onRunStateChange 写 DB 的运行标记；
+ * onLockChange 写 DB 的锁镜像（`settings.agentLocked`）。
  *
- * 系统提示词活段落的宿主 seam（`PromptHost`）也在这里定义（P1-08；桌面 P1-11 实现）。
+ * 系统提示词活段落的宿主 seam（`PromptHost`）也在这里定义（P1-08；桌面 P1-11 实现），
+ * 以及创建 agent（锁，P1-09）要用的三组 seam：工具（`ToolHost`）、会话配置（`AgentConfig`）、
+ * 模型目录（`ModelCatalog`）。桌面 P1-10 / P1-11 实现。
  */
 import type { Models } from '@earendil-works/pi-ai'
 import type {
+  ConversationId,
   HarnessOptions,
-  RegistryReader,
+  Registry,
   Storage,
   ToolRegistration
 } from '@earendil-works/pi-durable'
+import type { ThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
+import type { AgentKind, PromptVars, PromptVarsCtx } from '../agentProfile/promptVars'
+import type { McpToolDeclaration } from '../mcpManager'
+import type { LockModel, ModelSelection } from '../models/lockModel'
+import type { ModelRegistry } from '../models/modelRegistry'
+import type { ProviderCredentialPort } from '../models/port'
+import type { InProcessAgentType } from '../subagent/types'
 import type { RuntimeEventSink, RuntimeLogger } from '../types'
+import type { LockRecord } from './lock'
 import type { ShuviXSettingsOverrides } from './settings'
 
 /**
@@ -41,10 +53,29 @@ export const DEFAULT_MAX_IDLE_OPEN = 8
 export const DEFAULT_NOTICE_COALESCE_MS = 500
 
 export interface SessionHostDeps {
-  /** pi-ai 模型访问（生成用） */
+  /** pi-ai 模型访问（生成用；压缩窗口也按它查锁定模型的 contextWindow） */
   models: Models
-  /** 扩展注册表（工具 / 段落 / 钩子）；可在运行中变化 */
-  registry: RegistryReader<ToolRegistration>
+  /**
+   * 每会话一个扩展注册表（K1）：打开时调用，关闭 / 删除时丢弃。宿主可以预装别的扩展（不会被选中 ——
+   * 锁总是配置显式的扩展清单）；段落扩展、`shuvix.builtin` 与 `shuvix.agent.<对话>` 由运行时装。
+   * 缺省 = durable 的 `createRegistry()`。根对话的 id 在每个存储里都是 1，所以注册表不能跨会话共享。
+   */
+  createRegistry?: (sessionId: string) => Registry<ToolRegistration>
+  /** 工具的宿主 seam（内置工具 / 按 agent 解析 / 按锁重建） */
+  toolHost: ToolHost
+  /** 创建 agent 那一刻读一次的会话配置（档案、扩展勾选、模型选择、思考档位、工作目录） */
+  resolveAgentConfig: (sessionId: string) => AgentConfig | Promise<AgentConfig>
+  /** 模型选择的解析（K5）：注册表 + provider 行（启用位现读） */
+  modelCatalog: ModelCatalog
+  /** 系统提示词活段落的 seam（缺省 = 都不实现，只有人设段落） */
+  promptHost?: PromptHost
+  /** 人设冻结时的变量表（缺省 = 空表） */
+  promptVars?: (ctx: PromptVarsCtx) => PromptVars | Promise<PromptVars>
+  /**
+   * 锁状态镜像（K11）：创建后 true、销毁 / 打开时自动清锁后 false，**每次打开都调用一次**对账
+   * （治好 DB 与存储之间的漂移）。抛错只记日志，从不影响创建 / 销毁本身。
+   */
+  onLockChange?: (sessionId: string, locked: boolean) => void
   /** 打开（不存在则创建）某会话的存储 */
   openStorage: (sessionId: string) => Promise<Storage>
   /** 该会话的存储是否存在（peek 用它判断「不创建」；临时会话 = 内存存储是否还在） */
@@ -57,11 +88,6 @@ export interface SessionHostDeps {
   isPinned?: (sessionId: string) => boolean
   /** LRU 保留的空闲会话数（只数可回收的那些）；缺省 8 */
   maxIdleOpen?: number
-  /**
-   * 该会话根对话锁定模型的上下文窗口（同步；未知 / 未锁定返回 undefined → 按 32768 留余量）。
-   * P1-09 起由锁记录回答。
-   */
-  contextWindow?: (sessionId: string) => number | undefined
   /** 每个 Harness 的 settings 覆盖（测试关掉重试 / 自动压缩） */
   settingsOverrides?: ShuviXSettingsOverrides
   /** 执行环境构造（durable 的 `HarnessOptions.env`） */
@@ -72,7 +98,8 @@ export interface SessionHostDeps {
   eventSink: RuntimeEventSink
   /**
    * 运行状态变化（idle / busy / interrupted）。关停一个忙碌的会话**不**发事件（DB 里的运行标记
-   * 要能熬过退出）；重新打开一个被中断的会话会报 `interrupted`。抛错只记日志。
+   * 要能熬过退出）；**每次打开都报一次**此刻的状态（PIN-R：空闲重开也报 `idle`，治好崩溃留下的
+   * busy 标记；被中断的会话报 `interrupted`）。抛错只记日志。
    */
   onRunStateChange?: (sessionId: string, state: RunState) => void
   /** 中止时、在中止对话之前调用（桌面：abortSessionReviews —— 进行中的自动审查当场作废） */
@@ -135,4 +162,114 @@ export interface PromptHost {
    * 可以给多块：每块修剪、空白块跳过、块间空一行（旧 `systemContext` 的口径）。
    */
   resolveBotContext?: (rootSessionId: string) => BotContextBlocks | Promise<BotContextBlocks>
+}
+
+// ─────────────────────────── 锁（P1-09）的 seam ───────────────────────────
+
+/** 模型目录：解析会话的模型选择用（`resolveLockModel` 的两个输入） */
+export interface ModelCatalog {
+  /** 模型注册表（`modelRefOf` 把 provider 行 id 译成 pi provider id；`models` 校验模型存在） */
+  registry: Pick<ModelRegistry, 'models' | 'modelRefOf'>
+  /** provider 行（启用位现读） */
+  port: Pick<ProviderCredentialPort, 'listProviders'>
+}
+
+/**
+ * 创建 agent 那一刻读一次的会话配置（桌面 P1-10：sessions.settings + 会话形态派生的基座档案）。
+ * 锁住之后它怎么变都不影响这个 agent —— 要生效就销毁 agent，下一次发送按那时的配置重建。
+ */
+export interface AgentConfig {
+  /** 会话的基座档案（form-derived：work / chat / notebook / bot / tab …） */
+  profile: InProcessAgentType
+  /** 会话的扩展勾选（`settings.enabledTools`，只收 mcp: / skill:） */
+  toolOverlay?: readonly string[]
+  /** 会话的模型选择（provider = provider 行 id）；默认模型由宿主先套上，没有就拒绝创建 */
+  model?: ModelSelection
+  /** 思考档位（锁里只记创建时的值；之后的调整走 `setThinkingLevel`，现读） */
+  thinkingLevel?: ThinkingLevel
+  /** 会话的工作目录（K17：写进 `pi.agent.cwd`；空串 = 不写，段落按会话兜底） */
+  cwd?: string
+}
+
+/** 内置工具（`shuvix.builtin`）的构造请求：打开时 sandboxed 来自锁（没锁 = undefined），创建时来自解析结果 */
+export interface BuiltinToolsRequest {
+  sessionId: string
+  /** 命令沙箱的钉子（K8）；undefined = 还没有 agent，宿主按当前设置给一份占位 */
+  sandboxed?: boolean
+}
+
+/** 按 agent 解析工具的请求（创建那一刻） */
+export interface AgentToolsRequest {
+  /** 会话（存储）id */
+  sessionId: string
+  /** 这个 agent 所在的对话（root = 上锁时的当前对话，K20） */
+  conversationId: ConversationId
+  kind: AgentKind
+  /** 询问 / 项目配置 / 输出落盘的归属会话（root = 自身） */
+  rootSessionId: string
+  /** 这个 agent 自己的 id（派发工具的 parentSessionId；root = 会话 id） */
+  selfSessionId: string
+  profile: InProcessAgentType
+  /** 归一后的工具名单（档案全量 + 会话勾选，保序去重） */
+  names: readonly string[]
+  /** 锁定的模型（派发工具跟随它） */
+  model: LockModel
+  thinkingLevel?: ThinkingLevel
+  /** 工作目录（可为空串） */
+  cwd: string
+  /** 已实例化的附加工具（派生 agent 的 `next` 等，phase 2）；root 的锁拒绝它们 */
+  extraTools?: readonly ToolRegistration[]
+}
+
+/** 一个 agent 的按 agent 工具（装进 `shuvix.agent.<对话>`）；运行时按 K6 的次序拼 */
+export interface AgentToolSet {
+  /** 派发工具（名单含 `agent` 时） */
+  agent?: ToolRegistration
+  /** 技能工具（有技能可给时） */
+  skill?: ToolRegistration
+  /** MCP 工具：服务器一台接一台，台内按工具次序 */
+  mcp?: readonly { readonly server: string; readonly tools: readonly ToolRegistration[] }[]
+  /** 宿主的其它按 agent 工具（排在 MCP 之后） */
+  tools?: readonly ToolRegistration[]
+}
+
+/** 创建时的解析结果：工具 + 要记进锁里的东西 */
+export interface ResolvedAgentTools extends AgentToolSet {
+  /** 只含**连上了**的服务器（K7：连不上的不记，下次创建再试），各带声明快照（纯 JSON） */
+  mcp?: readonly {
+    readonly server: string
+    readonly declarations: readonly McpToolDeclaration[]
+    readonly tools: readonly ToolRegistration[]
+  }[]
+  /** 技能工具列出的技能（记进锁，重建时按它造技能工具） */
+  skills?: readonly string[]
+  /** 命令沙箱钉子（K8），记进锁；`shuvix.builtin` 按它重装 */
+  sandboxed: boolean
+  /** 附加工具（同名者先移除再追加）；root 的锁拒绝 */
+  extraTools?: readonly ToolRegistration[]
+}
+
+/**
+ * 工具的宿主 seam（桌面 P1-11：agentHost 改写）。
+ *
+ *  - `buildBuiltinTools`：平台内置工具（会话级 ToolContext，外面包好输出包装）。打开时装一次
+ *    （有锁按锁的沙箱钉子），创建 agent 时按解析出的钉子重装。
+ *  - `resolveAgentTools`：创建 agent 时按名单解析按 agent 的工具 —— 派发工具、技能工具、MCP（这一刻
+ *    惰性连接；`mcp_connecting` / 连不上的 `error` 由宿主自己广播，K7）。`signal` 在创建被中止 / 销毁
+ *    时触发（K13），要一路透传给 MCP 连接。
+ *  - `rebuildAgentTools`：重开会话时**按锁记录**重建同一组工具 —— 不连服务器（MCP 按声明快照建，
+ *    第一次调用时原地连），不读会话配置。
+ */
+export interface ToolHost {
+  buildBuiltinTools(
+    request: BuiltinToolsRequest
+  ): readonly ToolRegistration[] | Promise<readonly ToolRegistration[]>
+  resolveAgentTools(
+    request: AgentToolsRequest,
+    options: { readonly signal: AbortSignal }
+  ): Promise<ResolvedAgentTools>
+  rebuildAgentTools(
+    lock: LockRecord,
+    context: { readonly sessionId: string }
+  ): AgentToolSet | Promise<AgentToolSet>
 }

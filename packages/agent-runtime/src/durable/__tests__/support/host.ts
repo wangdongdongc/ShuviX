@@ -3,8 +3,12 @@
  * MemoryStorage 不能再开，需要关了再开的用例都用 SQLite）。
  *
  * 事件日志：`open:<id>`（打开存储）、`close:<id>`（存储真正关闭）、`delete:<id>`（删除存储）。
- * `restart()` = closeAll + 同一目录上的新注册表 / 新 faux 套件 / 新宿主 —— 模拟换了一个进程。
- * `primeRoot()` 给当前对话配上 faux 模型（P1-09 之后由锁接手）。
+ * `restart()` = closeAll + 同一目录上的新宿主 / 新 faux 套件 / 新 ToolHost（新的调用记录、新的假 MCP
+ * 服务器）—— 模拟换了一个进程；会话配置、provider 行、人设变量表这些「DB 里的东西」沿用同一份。
+ *
+ * 锁（P1-09）：每会话一个注册表（`registryOf(id)`，K1）；`mirror` 记 onLockChange；缺省配置（K15）
+ * 是空档案 + faux/faux-1，ToolHost 没有内置工具，按 agent 的工具 = `tools`（创建 / 重建那一刻现读）。
+ * `primeRoot()` = `session.createAgent()`。
  */
 import { existsSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
@@ -20,13 +24,23 @@ import {
 import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node'
 import type { ChatEvent } from '@shuvix/chat-protocol/events'
 import { afterEach } from 'vitest'
-import { backgroundContext as BG } from '../../context'
+import type { FakePort } from '../../../models/__tests__/fakePort'
+import type { PromptVars, PromptVarsCtx } from '../../../agentProfile/promptVars'
 import type { DurableSession } from '../../durableSession'
-import type { InterruptedSendPolicy, RunState, SessionHostDeps } from '../../seams'
+import type { Models } from '@earendil-works/pi-ai'
+import type {
+  AgentConfig,
+  InterruptedSendPolicy,
+  ModelCatalog,
+  PromptHost,
+  RunState,
+  SessionHostDeps
+} from '../../seams'
 import { createSessionHost, type SessionHost } from '../../sessionHost'
 import type { ShuviXSettingsOverrides } from '../../settings'
+import { defaultAgentConfig, fauxCatalog, fauxPort } from './agentConfig'
 import { fauxKit, type FauxKit } from './faux'
-import { toolsExtension } from './tools'
+import { makeTestToolHost, type TestToolHost, type TestToolHostOptions } from './toolHost'
 import { withTimeout } from './wait'
 
 export const TEST_SETTINGS_OVERRIDES: ShuviXSettingsOverrides = {
@@ -34,25 +48,42 @@ export const TEST_SETTINGS_OVERRIDES: ShuviXSettingsOverrides = {
   compaction: { enabled: false }
 }
 
+/** 会话配置的来源：一份可变对象（所有会话共用）或按会话给 */
+export type AgentConfigSource = AgentConfig | ((sessionId: string) => AgentConfig)
+
 export interface TestHostOptions {
   /** 复用目录（restart 用）；缺省新建 */
   dir?: string
   kit?: FauxKit
-  /** 每次打开时安装进注册表的工具（同一份数组可在 makeHost 之后再 push） */
+  /** 没给 kit 时每个进程用它造一个（restart 沿用；缺省 `fauxKit()`） */
+  makeKit?: () => FauxKit
+  /** 按 agent 的测试工具（缺省 ToolHost 的 agentTools；同一份数组可在 makeHost 之后再 push） */
   tools?: ToolRegistration[]
+  /** ToolHost 选项（每个进程据此新建一个）；缺省 = 没有内置工具、agentTools = tools */
+  toolHost?: TestToolHostOptions
+  /** 会话配置（缺省 K15：空档案 + faux/faux-1） */
+  agentConfig?: AgentConfigSource
+  /** provider 行（缺省一条内置行 faux） */
+  port?: FakePort
+  /** 整份替换生成用的 Models 与模型目录（缺省 = faux 套件 + `fauxCatalog`）—— 真注册表的集成用例 */
+  models?: Models
+  modelCatalog?: ModelCatalog
+  promptHost?: PromptHost
+  promptVars?: (ctx: PromptVarsCtx) => PromptVars | Promise<PromptVars>
+  /** onLockChange 抛错（LR-09） */
+  onLockChange?: (sessionId: string, locked: boolean) => void
   maxIdleOpen?: number
   /** 临时会话 id（MemoryStorage） */
   ephemeral?: readonly string[]
   /** 整份替换缺省的测试覆盖（关重试 / 关自动压缩） */
   settingsOverrides?: ShuviXSettingsOverrides
-  contextWindow?: (sessionId: string) => number | undefined
   interruptedSendPolicy?: InterruptedSendPolicy
   autoResume?: (sessionId: string) => unknown
   noticeCoalesceMs?: number
   beforeAbort?: (sessionId: string) => void
   onInputsReopened?: (sessionId: string) => void
   onRunStateChange?: (sessionId: string, state: RunState) => void
-  /** durable 的时钟（条目时间戳 / 日期通知的间隔）；缺省 Date.now */
+  /** durable 的时钟（条目时间戳 / 日期通知的间隔 / 锁的 createdAt）；缺省 Date.now */
   now?: () => number
   /** 今天的日期（给了才发日期通知） */
   today?: () => string
@@ -61,15 +92,20 @@ export interface TestHostOptions {
 export interface TestHost {
   readonly host: SessionHost
   readonly kit: FauxKit
-  readonly registry: Registry
   readonly dir: string
   readonly options: TestHostOptions
   /** open:<id> / close:<id> / delete:<id> */
   readonly events: string[]
   /** onRunStateChange 的调用（按顺序） */
   readonly states: [string, RunState][]
+  /** onLockChange 的调用（按顺序） */
+  readonly mirror: [string, boolean][]
+  /** resolveAgentConfig 的调用（会话 id，按顺序；本进程） */
+  readonly configCalls: string[]
+  readonly toolHost: TestToolHost
+  readonly port: FakePort
   readonly pinned: Set<string>
-  /** 广播给前端的 ChatEvent（询问卡片） */
+  /** 广播给前端的 ChatEvent（询问卡片、agent_created / agent_closing、ToolHost 的 MCP 错误） */
   readonly broadcasts: ChatEvent[]
   /** 有没有前端能展示询问面板 */
   capability: boolean
@@ -77,9 +113,15 @@ export interface TestHost {
   readonly failNextOpen: Set<string>
   readonly memory: Map<string, MemoryStorage>
   readonly warnings: string[]
+  /** 这个进程里某会话最近一次打开时造的注册表（K1） */
+  registryOf(sessionId: string): Registry<ToolRegistration> | undefined
+  /** 某会话打开过几次注册表（每次打开一个新的） */
+  registriesOf(sessionId: string): Registry<ToolRegistration>[]
   open(sessionId?: string): Promise<DurableSession>
   file(sessionId: string): string
   statesOf(sessionId: string): RunState[]
+  /** 某类广播（按顺序） */
+  broadcastsOf(type: ChatEvent['type']): ChatEvent[]
   /** closeAll + 新进程（同一目录） */
   restart(options?: Partial<TestHostOptions>): Promise<TestHost>
 }
@@ -101,58 +143,95 @@ export function registerHostCleanup(): void {
   })
 }
 
+/** 深拷贝一份配置（创建那一刻读到的就是那一刻的值，之后改测试对象不影响它） */
+function snapshotConfig(config: AgentConfig): AgentConfig {
+  return structuredClone(config)
+}
+
 export async function makeHost(options: TestHostOptions = {}): Promise<TestHost> {
   const dir = options.dir ?? (await mkdtemp(join(tmpdir(), 'shuvix-durable-')))
   directories.add(dir)
-  const kit = options.kit ?? fauxKit()
-  const registry = createRegistry()
+  const kit = options.kit ?? options.makeKit?.() ?? fauxKit()
   const tools = options.tools ?? []
-  // 工具数组可在宿主建好之后再补（例如需要拿到会话句柄的询问工具）：首次打开时再安装
-  let installed = false
-  const ensureTools = (): void => {
-    if (installed || tools.length === 0) return
-    installed = true
-    registry.install(toolsExtension(tools))
-  }
+  const port = options.port ?? fauxPort()
+  const configSource: AgentConfigSource = options.agentConfig ?? defaultAgentConfig()
   const events: string[] = []
   const states: [string, RunState][] = []
+  const mirror: [string, boolean][] = []
+  const configCalls: string[] = []
   const pinned = new Set<string>()
   const broadcasts: ChatEvent[] = []
   const failNextOpen = new Set<string>()
   const memory = new Map<string, MemoryStorage>()
   const warnings: string[] = []
+  const registries = new Map<string, Registry<ToolRegistration>[]>()
   const ephemeral = new Set(options.ephemeral ?? [])
   const file = (sessionId: string): string => join(dir, `${sessionId}.sqlite`)
+  const toolHost = makeTestToolHost(options.toolHost ?? { agentTools: tools }, (event) =>
+    broadcasts.push(event)
+  )
 
   const testHost: TestHost = {
     host: undefined as unknown as SessionHost,
     kit,
-    registry,
     dir,
     options,
     events,
     states,
+    mirror,
+    configCalls,
+    toolHost,
+    port,
     pinned,
     broadcasts,
     capability: true,
     failNextOpen,
     memory,
     warnings,
+    registryOf: (sessionId) => registries.get(sessionId)?.at(-1),
+    registriesOf: (sessionId) => [...(registries.get(sessionId) ?? [])],
     open: (sessionId = 's1') => testHost.host.open(sessionId),
     file,
     statesOf: (sessionId) => states.filter(([id]) => id === sessionId).map(([, state]) => state),
+    broadcastsOf: (type) => broadcasts.filter((event) => event.type === type),
     restart: async (overrides = {}) => {
       await withTimeout(testHost.host.closeAll(), 15000, 'closeAll in restart')
       liveHosts.delete(testHost)
-      return makeHost({ ...options, kit: undefined, ...overrides, dir })
+      return makeHost({
+        ...options,
+        kit: undefined,
+        port,
+        agentConfig: configSource,
+        ...overrides,
+        dir
+      })
     }
   }
 
   const deps: SessionHostDeps = {
-    models: kit.models,
-    registry,
+    models: options.models ?? kit.models,
+    createRegistry: (sessionId) => {
+      const registry = createRegistry<ToolRegistration>()
+      const list = registries.get(sessionId) ?? []
+      list.push(registry)
+      registries.set(sessionId, list)
+      return registry
+    },
+    toolHost,
+    resolveAgentConfig: (sessionId) => {
+      configCalls.push(sessionId)
+      return snapshotConfig(
+        typeof configSource === 'function' ? configSource(sessionId) : configSource
+      )
+    },
+    modelCatalog: options.modelCatalog ?? fauxCatalog(kit, port),
+    ...(options.promptHost === undefined ? {} : { promptHost: options.promptHost }),
+    ...(options.promptVars === undefined ? {} : { promptVars: options.promptVars }),
+    onLockChange: (sessionId, locked) => {
+      mirror.push([sessionId, locked])
+      options.onLockChange?.(sessionId, locked)
+    },
     openStorage: async (sessionId) => {
-      ensureTools()
       if (failNextOpen.delete(sessionId)) throw new Error(`injected open failure for ${sessionId}`)
       events.push(`open:${sessionId}`)
       let storage: Storage
@@ -188,7 +267,6 @@ export async function makeHost(options: TestHostOptions = {}): Promise<TestHost>
     isEphemeral: (sessionId) => ephemeral.has(sessionId),
     isPinned: (sessionId) => pinned.has(sessionId),
     ...(options.maxIdleOpen === undefined ? {} : { maxIdleOpen: options.maxIdleOpen }),
-    ...(options.contextWindow === undefined ? {} : { contextWindow: options.contextWindow }),
     settingsOverrides: options.settingsOverrides ?? TEST_SETTINGS_OVERRIDES,
     eventSink: {
       broadcast: (event) => broadcasts.push(event),
@@ -222,8 +300,7 @@ export async function makeHost(options: TestHostOptions = {}): Promise<TestHost>
   return testHost
 }
 
-/** 给当前对话配上 faux 模型 */
-export async function primeRoot(session: DurableSession, kit: FauxKit): Promise<void> {
-  const conversation = await session.currentConversation()
-  await conversation.configure({ model: kit.model }, BG)
+/** K15：给会话创建 agent（缺省配置下 = faux 模型 + 测试工具）。`kit` 只为保持旧签名 */
+export async function primeRoot(session: DurableSession, _kit?: FauxKit): Promise<void> {
+  await session.createAgent()
 }

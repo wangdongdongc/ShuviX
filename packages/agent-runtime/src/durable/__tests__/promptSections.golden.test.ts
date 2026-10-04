@@ -71,11 +71,12 @@ describe('system prompt sections reproduce the P1-00 golden fixtures', () => {
     'G-01 %s: byte-identical through a real durable request',
     async (_name, fixture) => {
       const { inputs, observed } = fixture
-      const t = await makeHost({ ephemeral: [inputs.rootSessionId] })
       const calls: SeamCalls = {}
       const counts: Record<string, number> = {}
-      const prompt = createPromptExtensions(fixturePromptHost(fixture, calls, counts))
-      for (const extension of prompt.all) t.registry.install(extension)
+      const promptHost = fixturePromptHost(fixture, calls, counts)
+      // 段落扩展由宿主装进会话自己的注册表（K1/K21）；这里的一份只用来按名选择
+      const t = await makeHost({ ephemeral: [inputs.rootSessionId], promptHost })
+      const prompt = createPromptExtensions(promptHost)
 
       // 名单与变量表上下文与捕获时一致
       const toolNames = normalizeToolNames(inputs.kind, inputs.profile.tools, inputs.toolOverlay)
@@ -138,11 +139,12 @@ describe('system prompt sections reproduce the P1-00 golden fixtures', () => {
     async (name) => {
       const fixture = fixtures.find((candidate) => candidate.case === name)!
       const { inputs } = fixture
-      const t = await makeHost({ ephemeral: [inputs.rootSessionId] })
       const calls: SeamCalls = {}
       const counts: Record<string, number> = {}
-      const prompt = createPromptExtensions(fixturePromptHost(fixture, calls, counts))
-      for (const extension of prompt.all) t.registry.install(extension)
+      const promptHost = fixturePromptHost(fixture, calls, counts)
+      // 段落扩展由宿主装进会话自己的注册表（K1/K21）；这里的一份只用来按名选择
+      const t = await makeHost({ ephemeral: [inputs.rootSessionId], promptHost })
+      const prompt = createPromptExtensions(promptHost)
       const toolNames = normalizeToolNames(inputs.kind, inputs.profile.tools, inputs.toolOverlay)
       let promptVarsCalls = 0
       const frozen = await computeFrozenAgentPrompt(

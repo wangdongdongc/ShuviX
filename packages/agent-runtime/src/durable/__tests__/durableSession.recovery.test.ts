@@ -108,7 +108,8 @@ describe('recovery', () => {
       expect(reopened.isInterrupted()).toBe(false)
       expect(reopened.runState).toBe('idle')
       await sleep(20)
-      expect(t.statesOf('s1')).toEqual([])
+      // 打开时总报一次此刻的状态（PIN-R）：空闲重开报 idle，且只报这一次
+      expect(t.statesOf('s1')).toEqual(['idle'])
     },
     RECOVERY_TIMEOUT
   )

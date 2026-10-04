@@ -11,11 +11,13 @@ import {
   fauxProvider,
   fauxText,
   fauxToolCall,
+  getCurrentSystemPrompt,
+  getCurrentTools,
   type AssistantMessage,
   type FauxProviderHandle,
   type FauxResponseStep,
   type Message,
-  type Models,
+  type MutableModels,
   type SimpleStreamOptions
 } from '@earendil-works/pi-ai'
 import type { JsonObject } from '@earendil-works/pi-durable'
@@ -23,14 +25,33 @@ import { aborted, deferred } from './wait'
 
 export const FAUX_MODEL = { provider: 'faux', modelId: 'faux-1' } as const
 
+/** 一次请求里提供的一个工具（只记模型看得见的那几项） */
+export interface FauxRequestTool {
+  readonly name: string
+  readonly description: string
+  readonly parameters: unknown
+}
+
 export interface FauxRequest {
   readonly messages: Message[]
   readonly options: SimpleStreamOptions | undefined
+  /** 这次请求提供的工具（按次序；由 system 消息的增量重放得出） */
+  readonly tools: FauxRequestTool[]
+  /** 这次请求的完整系统提示词 */
+  readonly systemPrompt: string
+  /** 这次请求用的模型 id */
+  readonly modelId: string
+}
+
+export interface FauxModelSpec {
+  readonly id: string
+  readonly contextWindow?: number
 }
 
 export interface FauxKit {
   readonly faux: FauxProviderHandle
-  readonly models: Models
+  /** 可变的模型集合（用例可以 deleteProvider） */
+  readonly models: MutableModels
   readonly model: typeof FAUX_MODEL
   /** 每个被应答的请求（按顺序） */
   readonly requests: FauxRequest[]
@@ -42,17 +63,29 @@ export interface FauxKit {
   readonly callCount: number
 }
 
+/**
+ * faux 套件。`models` 给出多个模型（第一个应是 faux-1 —— `kit.model` 恒指它）；缺省只有 faux-1
+ * （`contextWindow` 给它的窗口）。
+ */
 export function fauxKit(
-  options: { tokensPerSecond?: number; contextWindow?: number } = {}
+  options: {
+    tokensPerSecond?: number
+    contextWindow?: number
+    models?: readonly FauxModelSpec[]
+  } = {}
 ): FauxKit {
+  const specs: readonly FauxModelSpec[] = options.models ?? [
+    {
+      id: 'faux-1',
+      ...(options.contextWindow === undefined ? {} : { contextWindow: options.contextWindow })
+    }
+  ]
   const faux = fauxProvider({
-    models: [
-      {
-        id: 'faux-1',
-        reasoning: true,
-        ...(options.contextWindow === undefined ? {} : { contextWindow: options.contextWindow })
-      }
-    ],
+    models: specs.map((spec) => ({
+      id: spec.id,
+      reasoning: true,
+      ...(spec.contextWindow === undefined ? {} : { contextWindow: spec.contextWindow })
+    })),
     ...(options.tokensPerSecond === undefined ? {} : { tokensPerSecond: options.tokensPerSecond })
   })
   const models = createModels()
@@ -61,7 +94,18 @@ export function fauxKit(
   const record =
     (step: FauxResponseStep): FauxResponseStep =>
     async (context, streamOptions, state, model) => {
-      requests.push({ messages: [...context.messages], options: streamOptions })
+      const messages = [...context.messages]
+      requests.push({
+        messages,
+        options: streamOptions,
+        tools: getCurrentTools(messages).map((tool) => ({
+          name: tool.name,
+          description: tool.description,
+          parameters: tool.parameters as unknown
+        })),
+        systemPrompt: getCurrentSystemPrompt(messages),
+        modelId: model.id
+      })
       return typeof step === 'function' ? step(context, streamOptions, state, model) : step
     }
   return {
@@ -75,6 +119,13 @@ export function fauxKit(
       return faux.state.callCount
     }
   }
+}
+
+/** 第 n 个请求提供的工具 */
+export function requestTools(kit: FauxKit, n: number): FauxRequestTool[] {
+  const request = kit.requests[n]
+  if (request === undefined) throw new Error(`request ${n} was not made (${kit.requests.length})`)
+  return request.tools
 }
 
 export function answer(text: string): AssistantMessage {

@@ -7,9 +7,10 @@
  * 本文件只剩宿主契约与创建入口。
  *
  * **现状（pi-durable 切换中）**：旧的运行时（pi 0.80 的 AgentHarness + HarnessSession）
- * 已在 P1-01 删除，新的会话运行时还在重建 —— `createAgent()` 先派生规格（校验入参、跑一遍
- * 变量表与注入解析），然后抛 `PhasePendingError`：
- *  - root：TODO(pi-durable p1) P1-09 在 pi-durable 会话上创建根 agent（锁）；
+ * 已在 P1-01 删除 —— `createAgent()` 先派生规格（校验入参、跑一遍变量表与注入解析），然后抛
+ * `PhasePendingError`：
+ *  - root：根 agent 已改由 durable 会话自己创建（锁，P1-09：`DurableSession.createAgent()`，
+ *    `durable/lock.ts`）。TODO(pi-durable p1): 桌面在 P1-10 / P1-11 改走那条路之后删掉这条路径；
  *  - spawned：TODO(pi-durable p2) 派生 agent 落在 durable 子对话上。
  */
 import type { ImageContent } from '@earendil-works/pi-ai'
@@ -171,7 +172,8 @@ export function createAgentFactory(host: AgentHostAdapter): AgentFactory {
     // 先派生规格：入参校验（spawned 缺 spawn 上下文即抛）、变量表与注入解析照常跑一遍
     await deriveAgentSpec(host, params)
     if (params.kind === 'root') {
-      // TODO(pi-durable p1): P1-09 —— 在 pi-durable 会话上创建根 agent（锁），按 spec 装工具与提示词分段
+      // 根 agent 由 durable 会话创建（P1-09 的锁：DurableSession.createAgent）。
+      // TODO(pi-durable p1): P1-10 / P1-11 桌面改走锁之后删掉这条路径
       throw new PhasePendingError('root agent runtime', 1)
     }
     // TODO(pi-durable p2): 派生 agent 落在 durable 子对话上（phase 2）
