@@ -182,6 +182,7 @@ export { initOp, addOp, commitOp, statusOp, unstageOp } from './git/gitOps'
 // 工具输出后处理共享内核（截断 + 经注入 SpillSink 落盘）
 export {
   processToolOutput,
+  truncationDiagnostic,
   type SpillSink,
   type TruncateStrategy,
   type ProcessToolOutputOptions,
@@ -263,7 +264,7 @@ export {
 } from './security'
 // 工具基类 + 共享文件工具套件（read/write/edit 整条流程，注入端适配 API）
 export { BaseTool, type ToolReplay } from './tools/baseTool'
-export { toolCallScope, type ToolCallScope } from './tools/toolCall'
+export { toolCallScope, callOwnerOf, type ToolCallScope, type CallOwner } from './tools/toolCall'
 export {
   backstopOutputLimits,
   OUTPUT_BACKSTOP_FACTOR,

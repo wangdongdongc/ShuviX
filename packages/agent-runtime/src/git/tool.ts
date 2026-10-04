@@ -6,7 +6,8 @@
  * 两端能力同集 → schema / description 为静态生成（无 caps 裁剪）。
  *
  * pi-durable 原生注册项：`execute(args, api, context)`，工具调用 id = `api.callId`，取消跟着
- * `context.abortSignal`。**`replay: 'unsafe'`** —— 一个工具里混着 commit / checkout / restore 这些
+ * `context.abortSignal`；`api.taskId` / `api.conversationId` 随 toolCallId 一起交给 resolveDir / askOp
+ * （宿主并进 EnforceOpts，询问与审查按 tool task 认人）。**`replay: 'unsafe'`** —— 一个工具里混着 commit / checkout / restore 这些
  * 写操作，而 durable 的重跑策略是按工具、在调用开始前定死的（中断的调用记成「可能已部分执行」，
  * 不重跑）。失败按裁定 Q12 收成 `isError` 结果（文字与旧版相同），只有取消照旧抛。
  */
@@ -14,6 +15,7 @@ import { Type, type TSchema } from 'typebox'
 import type { ToolRegistration } from '@earendil-works/pi-durable'
 import { catchToolErrors, toExecutionResult, type ToolResult } from '../tools/toolResult'
 import { backstopOutputLimits } from '../tools/outputLimits'
+import type { CallOwner } from '../tools/toolCall'
 import type { GitToolDetails } from '@shuvix/chat-protocol/types/chatMessage'
 import type { GitCache, GitEnv, GitOpOutput } from './env'
 import {
@@ -125,7 +127,7 @@ export interface CreateGitToolOptions {
    */
   resolveDir?: (
     requested: string,
-    opts: { action: GitAction; mutates: boolean; toolCallId: string }
+    opts: { action: GitAction; mutates: boolean; toolCallId: string } & CallOwner
   ) => Promise<string>
   /**
    * 逐操作安全评估 —— **每个**操作执行前都会调用（与 dir 参数无关），由宿主交给
@@ -142,6 +144,9 @@ export interface CreateGitToolOptions {
     delete: boolean
     command: string
     toolCallId: string
+    /** durable 的调用归属（taskId / conversationId）—— 宿主原样并进 EnforceOpts */
+    taskId?: number
+    conversationId?: number
   }) => Promise<void>
   /** abort 时抛出的错误文案；默认 'Aborted' */
   abortError?: string
@@ -250,6 +255,7 @@ export function createGitTool(opts: CreateGitToolOptions): GitTool {
   /** 一次调用的本体（旧版的 execute）：失败抛错，由注册项的边界按 Q12 收口 */
   async function run(
     toolCallId: string,
+    owner: CallOwner,
     rawParams: unknown,
     signal: AbortSignal | undefined
   ): Promise<Result> {
@@ -296,7 +302,8 @@ export function createGitTool(opts: CreateGitToolOptions): GitTool {
           dir: await resolveDir(params.dir, {
             action: spec.name,
             mutates: spec.mutates,
-            toolCallId
+            toolCallId,
+            ...owner
           })
         }
       } catch (err) {
@@ -314,7 +321,8 @@ export function createGitTool(opts: CreateGitToolOptions): GitTool {
         force: !!params.force,
         delete: !!params.delete,
         command: formatGitCommand(spec.name, params),
-        toolCallId
+        toolCallId,
+        ...owner
       })
     }
 
@@ -332,7 +340,15 @@ export function createGitTool(opts: CreateGitToolOptions): GitTool {
     outputLimits: backstopOutputLimits({}),
     execute: (args, api, context) =>
       catchToolErrors(context, async () =>
-        toExecutionResult(await run(api.callId, args, context.abortSignal), GIT_TOOL_NAME)
+        toExecutionResult(
+          await run(
+            api.callId,
+            { taskId: api.taskId, conversationId: api.conversationId },
+            args,
+            context.abortSignal
+          ),
+          GIT_TOOL_NAME
+        )
       )
   }
 }

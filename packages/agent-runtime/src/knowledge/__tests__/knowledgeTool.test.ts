@@ -421,6 +421,9 @@ describe('KT-6 read', () => {
     expect(h.enforcePath).toHaveBeenCalledTimes(1)
     expect(h.enforcePath).toHaveBeenCalledWith('read', '/kb/projects/acme/a.md', {
       toolCallId: 'c1',
+      // P1-06：durable 的调用归属（invokeTool 缺省 task 1、根对话 1）并进 EnforceOpts
+      taskId: 1,
+      conversationId: 1,
       toolName: 'knowledge',
       displayPath: '/a.md',
       operation: 'read',
@@ -449,6 +452,47 @@ describe('KT-6 read', () => {
  * `status` 按 OKF 办：三值全开、缺省 stable（规范 absent ⇒ stable），由写的人判断生命周期；
  * 「谁核实过」是 `verified` 那根轴，两者各自变动。
  */
+describe('KT-6b 调用归属', () => {
+  it('KT-6b read / create / validate（单条与整库）四个 PEP 都带着这次调用的 taskId / conversationId（P1-06）', async () => {
+    const raw = `${doc(['type: Memory', 'title: A', 'description: da', 'status: draft'])}\n`
+    const h = makeTool({ files: { '/kb/projects/acme/a.md': raw } })
+    const owner = (taskId: number): { callId: string; taskId: number; conversationId: number } => ({
+      callId: 'call_0',
+      taskId,
+      conversationId: 9
+    })
+
+    await invokeTool(h.tool, { action: 'read', base: 'project', path: '/a.md' }, owner(21))
+    await invokeTool(
+      h.tool,
+      {
+        action: 'create',
+        base: 'project',
+        type: 'Memory',
+        title: 'B',
+        description: 'db',
+        body: 'x'
+      },
+      owner(22)
+    )
+    await invokeTool(h.tool, { action: 'validate', base: 'project', path: '/a.md' }, owner(23))
+    await invokeTool(h.tool, { action: 'validate', base: 'project' }, owner(24))
+
+    const seen = h.enforcePath.mock.calls.map(([mode, , opts]) => ({
+      mode,
+      toolCallId: (opts as { toolCallId: string }).toolCallId,
+      taskId: (opts as { taskId?: number }).taskId,
+      conversationId: (opts as { conversationId?: number }).conversationId
+    }))
+    expect(seen).toEqual([
+      { mode: 'read', toolCallId: 'call_0', taskId: 21, conversationId: 9 },
+      { mode: 'write', toolCallId: 'call_0', taskId: 22, conversationId: 9 },
+      { mode: 'read', toolCallId: 'call_0', taskId: 23, conversationId: 9 },
+      { mode: 'read', toolCallId: 'call_0', taskId: 24, conversationId: 9 }
+    ])
+  })
+})
+
 describe('KT-7 create —— 元数据形状与去重', () => {
   it('KT-7 自述行在最前、缺省 status 为 stable（OKF 缺省）、宿主盖 generated；bundle 按名字解析；先过 write PEP 再落盘；afterWrite 带 bundle 相对路径与标题', async () => {
     const h = makeTool()

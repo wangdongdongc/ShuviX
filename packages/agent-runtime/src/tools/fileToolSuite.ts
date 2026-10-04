@@ -15,6 +15,7 @@ import type {
   WriteToolDetails
 } from '@shuvix/chat-protocol/types/chatMessage'
 import { BaseTool } from './baseTool'
+import { callOwnerOf, type ToolCallScope } from './toolCall'
 import type { FileSystemPort, FileGuards, WriteAskHook } from '../fileTools/port'
 import { readTextContent, readDirContent } from '../fileTools/read'
 import { DEFAULT_MAX_LINES } from '../fileTools/truncate'
@@ -203,7 +204,8 @@ abstract class FileToolBase<
   protected async securityCheck(
     toolCallId: string,
     params: { path: string },
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    call?: ToolCallScope
   ): Promise<void> {
     if (signal?.aborted) throw new Error(this.abortError)
     // read 的 URL 分支不走文件系统询问
@@ -213,6 +215,7 @@ abstract class FileToolBase<
     if (this.deferAskToApply) return
     await this.deps.security.enforcePath(this.mode, portPath, {
       toolCallId,
+      ...callOwnerOf(call),
       toolName: this.name,
       displayPath: params.path,
       abortError: this.abortError,
@@ -263,10 +266,16 @@ abstract class FileToolBase<
     }
   }
 
-  protected makeAsk(toolCallId: string, portPath: string, signal?: AbortSignal): WriteAskHook {
+  protected makeAsk(
+    toolCallId: string,
+    portPath: string,
+    signal?: AbortSignal,
+    call?: ToolCallScope
+  ): WriteAskHook {
     return async ({ path, diff, isNewFile }) => {
       await this.deps.security.enforcePath('write', portPath, {
         toolCallId,
+        ...callOwnerOf(call),
         toolName: this.name,
         displayPath: path,
         abortError: this.abortError,
@@ -393,7 +402,8 @@ class WriteFileTool extends FileToolBase<typeof WriteParamsSchema> {
   protected async executeInternal(
     toolCallId: string,
     params: { path: string; content: string },
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    call?: ToolCallScope
   ): Promise<ToolResult<WriteToolDetails>> {
     if (signal?.aborted) throw new Error(this.abortError)
     const portPath = this.deps.resolvePath(params.path, 'write')
@@ -402,7 +412,7 @@ class WriteFileTool extends FileToolBase<typeof WriteParamsSchema> {
       this.deps.guards,
       portPath,
       params,
-      this.makeAsk(toolCallId, portPath, signal)
+      this.makeAsk(toolCallId, portPath, signal, call)
     )
     // 先审阅（可能回写盖章），再广播变更 —— 让面板刷新读到的是最终内容
     const note = await this.reviewWrittenMd(portPath)
@@ -430,7 +440,8 @@ class EditFileTool extends FileToolBase<typeof EditParamsSchema> {
   protected async executeInternal(
     toolCallId: string,
     params: { path: string; oldText: string; newText: string },
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    call?: ToolCallScope
   ): Promise<ToolResult<EditToolDetails>> {
     if (signal?.aborted) throw new Error(this.abortError)
     const portPath = this.deps.resolvePath(params.path, 'write')
@@ -439,7 +450,7 @@ class EditFileTool extends FileToolBase<typeof EditParamsSchema> {
       this.deps.guards,
       portPath,
       params,
-      this.makeAsk(toolCallId, portPath, signal)
+      this.makeAsk(toolCallId, portPath, signal, call)
     )
     const note = await this.reviewWrittenMd(portPath)
     this.deps.onFileChange?.({ portPath, kind: 'edit' })

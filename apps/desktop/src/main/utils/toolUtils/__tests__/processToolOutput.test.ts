@@ -262,3 +262,86 @@ describe('SFN spillFileName —— toolCallId 来自模型提供商，不能原�
     expect(spillFileName('')).toBe('tool-call.txt')
   })
 })
+
+describe('DPO 惰性的落盘判断（spill 是函数 —— pi-durable 包装器按这次调用的工具表现问）', () => {
+  it('DPO-L1 没超限 → 判断一次都不问，也不建目录', async () => {
+    const sid = 'dpo-l1'
+    const decide = vi.fn(() => true)
+    const r = await processToolOutput({
+      sessionId: sid,
+      toolCallId: 'tc',
+      fullText: 'short',
+      strategy: 'middle',
+      spill: decide
+    })
+    expect(r.text).toBe('short')
+    expect(decide).not.toHaveBeenCalled()
+    expect(existsSync(resultsDir(sid))).toBe(false)
+  })
+
+  it('DPO-L2 超限且答 true（同步或异步）→ 落盘，文件里逐字是全文', async () => {
+    const cases: Array<[string, () => boolean | Promise<boolean>]> = [
+      ['dpo-l2a', () => true],
+      ['dpo-l2b', async () => true]
+    ]
+    for (const [sid, decide] of cases) {
+      const r = await processToolOutput({
+        sessionId: sid,
+        toolCallId: 'tc',
+        fullText: BIG,
+        strategy: 'middle',
+        spill: decide
+      })
+      expect(r.persisted, sid).toBe(true)
+      expect(readFileSync(join(resultsDir(sid), 'tc.txt'), 'utf-8')).toBe(BIG)
+    }
+  })
+
+  it('DPO-L3 超限但答 false、或判断本身抛错 → 与 spill:false 逐字相同（内存截断），目录不建', async () => {
+    const baseline = await processToolOutput({
+      sessionId: 'dpo-l3-base',
+      toolCallId: 'tc',
+      fullText: BIG,
+      strategy: 'middle',
+      spill: false
+    })
+    const cases: Array<[string, () => Promise<boolean>]> = [
+      ['dpo-l3a', async () => false],
+      [
+        'dpo-l3b',
+        async () => {
+          throw new Error('agent unavailable')
+        }
+      ]
+    ]
+    for (const [sid, decide] of cases) {
+      const r = await processToolOutput({
+        sessionId: sid,
+        toolCallId: 'tc',
+        fullText: BIG,
+        strategy: 'middle',
+        spill: decide
+      })
+      expect(r.text, sid).toBe(baseline.text)
+      expect(r.persisted, sid).toBe(false)
+      expect(existsSync(resultsDir(sid)), sid).toBe(false)
+    }
+  })
+
+  it('DPO-L4 locatorInText:false 原样交给内核：正文没有表头与路径，locator 是那份文件的绝对路径', async () => {
+    const sid = 'dpo-l4'
+    const r = await processToolOutput({
+      sessionId: sid,
+      toolCallId: 'tc',
+      fullText: BIG,
+      strategy: 'middle',
+      spill: true,
+      locatorInText: false
+    })
+    expect(r.persisted).toBe(true)
+    expect(r.text).not.toContain('[Output truncated')
+    expect(r.text).not.toContain(resultsDir(sid))
+    expect(r.locator).toBe(join(resultsDir(sid), 'tc.txt'))
+    expect(readFileSync(r.locator!, 'utf-8')).toBe(BIG)
+  })
+})

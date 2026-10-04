@@ -18,7 +18,12 @@ import {
   type TProperties,
   type TString
 } from 'typebox'
-import { BaseTool, type UnconfinedReason } from '@shuvix/agent-runtime'
+import {
+  BaseTool,
+  callOwnerOf,
+  type ToolCallScope,
+  type UnconfinedReason
+} from '@shuvix/agent-runtime'
 import type { ToolResult } from '@shuvix/agent-runtime'
 import type { BashToolDetails, ShellSandboxState } from '@shuvix/chat-protocol/types/chatMessage'
 import { collapseProgressOutput, type ShellKind } from '../utils/toolUtils/shell'
@@ -181,7 +186,8 @@ export class ShellCommandTool extends BaseTool<ShellCommandParamsSchema> {
   protected async executeInternal(
     toolCallId: string,
     params: ShellCommandParams,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    call?: ToolCallScope
   ): Promise<ToolResult<BashToolDetails>> {
     const timeout = params.timeout ?? DEFAULT_TIMEOUT
     const config = resolveProjectConfig(this.ctx.sessionId)
@@ -225,6 +231,8 @@ export class ShellCommandTool extends BaseTool<ShellCommandParamsSchema> {
       },
       {
         toolCallId,
+        // 询问与审查按 durable tool task 认人（provider 的 toolCallId 会话内可能重复）
+        ...callOwnerOf(call),
         toolName: this.spec.shell,
         description: params.description,
         // 询问点的审查随工具调用一起中止（用户点停止时不必等审查超时）

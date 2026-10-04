@@ -178,7 +178,10 @@ describe('git 工具 — 需询问的操作', () => {
         force: 'force' in params ? params.force : false,
         delete: 'delete' in params ? params.delete : false,
         command,
-        toolCallId: 'tc-1'
+        toolCallId: 'tc-1',
+        // P1-06：这次调用的 durable 归属随 toolCallId 一起交给 askOp（executeTool 的缺省 task 1、根对话 1）
+        taskId: 1,
+        conversationId: 1
       })
     }
   )

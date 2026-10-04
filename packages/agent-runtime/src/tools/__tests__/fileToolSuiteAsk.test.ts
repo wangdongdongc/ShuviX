@@ -49,7 +49,13 @@ import {
   type ReadDecoders
 } from '../fileToolSuite'
 import { createInlinePolicyMdReader } from '@shuvix/agent-runtime/security/builtinPolicies/inlineSources'
-import { executeTool, failureText, resultText, type InvokedToolResult } from '../testing/invokeTool'
+import {
+  executeTool,
+  failureText,
+  invokeTool,
+  resultText,
+  type InvokedToolResult
+} from '../testing/invokeTool'
 
 /** 内置策略 md 的构建期内联读取口（真实装配链要它；测试进程，不进桌面 bundle） */
 const INLINE_POLICY_MD = createInlinePolicyMdReader()
@@ -1139,5 +1145,41 @@ describe('文件工具套件 — 询问点的自动审查（provider.onPermissio
     expect(editCard.preview).toMatchObject({ kind: 'diff', path: INSIDE })
     expect(editCard.preview?.diff).toContain('BETA')
     expect(h.files.get(INSIDE_ABS)).toBe('alpha\nBETA\n')
+  })
+
+  it('RV-F6 接缝收到的事件带着这次调用的 durable taskId / conversationId —— read 的 securityCheck、write / edit 的 apply 层三个询问点都穿到了（P1-06）', async () => {
+    const review = vi.fn<ReviewSeam>(async () => reviewAnswer('allow'))
+    const h = makeSuite({
+      sessionId: sidFor('f6'),
+      review,
+      files: { [INSIDE_ABS]: 'alpha\n', [CREDENTIAL_ABS]: 'secret\n' },
+      respond: allowed
+    })
+
+    // 三次调用各一个 task；provider 的 toolCallId 故意相同（有的中转每轮从 call_0 数起）
+    await invokeTool(h.suite.read, { path: CREDENTIAL_ABS }, { callId: 'call_0', taskId: 11 })
+    await invokeTool(
+      h.suite.write,
+      { path: 'fresh.txt', content: 'x\n' },
+      { callId: 'call_0', taskId: 12, conversationId: 3 }
+    )
+    await invokeTool(
+      h.suite.edit,
+      { path: INSIDE, oldText: 'alpha', newText: 'ALPHA' },
+      { callId: 'call_0', taskId: 13, conversationId: 4 }
+    )
+
+    expect(review).toHaveBeenCalledTimes(3)
+    const owners = review.mock.calls.map(([event]) => ({
+      toolCallId: event.toolCallId,
+      taskId: event.taskId,
+      conversationId: event.conversationId
+    }))
+    expect(owners).toEqual([
+      // invokeTool 缺省根对话（1）
+      { toolCallId: 'call_0', taskId: 11, conversationId: 1 },
+      { toolCallId: 'call_0', taskId: 12, conversationId: 3 },
+      { toolCallId: 'call_0', taskId: 13, conversationId: 4 }
+    ])
   })
 })

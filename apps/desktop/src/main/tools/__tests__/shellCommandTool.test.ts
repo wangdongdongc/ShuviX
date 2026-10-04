@@ -21,7 +21,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ToolContext } from '../../services/toolContext'
 import type { BashToolDetails } from '@shuvix/chat-protocol/types/chatMessage'
-import { executeTool, resultText } from '@shuvix/agent-runtime/tools/testing/invokeTool'
+import { executeTool, invokeTool, resultText } from '@shuvix/agent-runtime/tools/testing/invokeTool'
 
 const mocks = vi.hoisted(() => ({
   enforceCommand: vi.fn(),
@@ -177,6 +177,9 @@ describe.each(['bash', 'powershell'] as const)('%s —— 与另一个命令工�
     })
     expect(opts).toMatchObject({
       toolCallId: 'tc-1',
+      // P1-06：durable 的调用归属（executeTool 的缺省 task 1、根对话 1）
+      taskId: 1,
+      conversationId: 1,
       toolName: shell,
       description: 'List things',
       background: false,
@@ -197,6 +200,23 @@ describe.each(['bash', 'powershell'] as const)('%s —— 与另一个命令工�
       timeoutMs: 5000,
       extraEnv: { SHUVIX_SESSION_ID: SID }
     })
+  })
+
+  it(`D1b — ${shell} 询问带着这次调用的 durable taskId / conversationId（provider 的 toolCallId 重复也分得开，P1-06）`, async () => {
+    const tool = makeTool(shell)
+    await invokeTool(tool, params() as never, { callId: 'call_0', taskId: 41, conversationId: 6 })
+    await invokeTool(tool, params() as never, { callId: 'call_0', taskId: 42 })
+
+    expect(mocks.enforceCommand).toHaveBeenCalledTimes(2)
+    const owners = mocks.enforceCommand.mock.calls.map(([, opts]) => ({
+      toolCallId: opts.toolCallId,
+      taskId: opts.taskId,
+      conversationId: opts.conversationId
+    }))
+    expect(owners).toEqual([
+      { toolCallId: 'call_0', taskId: 41, conversationId: 6 },
+      { toolCallId: 'call_0', taskId: 42, conversationId: 1 }
+    ])
   })
 
   it(`D1 — ${shell} 前台：timeout 0 = 不限时（timeoutMs 0）`, async () => {
