@@ -229,7 +229,8 @@ class SessionHostImpl implements SessionHost {
           onUse: () => this.touch(sessionId),
           onSettled: () => this.scheduleTrim(),
           logger: this.logger,
-          now: this.deps.now ?? Date.now
+          now: this.deps.now ?? Date.now,
+          ...(this.deps.today === undefined ? {} : { today: this.deps.today })
         })
         if (this.sealedFlag) {
           await session.close('remove')

@@ -20,6 +20,9 @@
  *    不允许 → 写通知；被中断 → 推迟。显式 `abort()` 之后到下一次 `submitUser` 之前不自动续跑。
  *  - **中止顺序**：先关询问窗口 → 宿主的中止前 seam（作废进行中的自动审查）→ 取消挂起的询问 →
  *    中止对话。前三步同步完成后立刻发起对话中止，工具拿到「已取消」时 abort 标记的提交已经排在它前面。
+ *  - **日期通知**（Q14，P1-08）：注入了 `today` 时，每次用户输入（submitUser / steer / followUp）之前
+ *    先 `maybeAnnounceDate` —— 新的一天里第一次输入之前追加一条 `shuvix.notice`（kind `date`），
+ *    排在这次输入之前。没注入 = 不发。失败只记日志，不挡用户的发送。
  */
 import { copyJson } from '@earendil-works/chord'
 import {
@@ -50,6 +53,7 @@ import {
   type SessionState
 } from './docs'
 import { PendingInputRequests } from './inputRequests'
+import { maybeAnnounceDate } from './prompt/dateNotice'
 import type { InterruptedSendPolicy, RunState } from './seams'
 
 const GENERATION_TASK_KIND = 'pi.generation'
@@ -318,6 +322,8 @@ export interface DurableSessionDeps {
   onSettled?: () => void
   logger: RuntimeLogger
   now: () => number
+  /** 今天的本地日期（`YYYY-MM-DD`）；缺省 = 不发日期通知 */
+  today?: () => string
 }
 
 interface LiveTask {
@@ -523,6 +529,7 @@ export class DurableSessionImpl implements DurableSession {
         }
         if (whenBusy !== 'reject' || !this.isBusy()) {
           await this.flushDeferred(conversation, 'beforeSend')
+          await this.announceDate(conversation)
         }
         let submission: Submission
         try {
@@ -562,6 +569,7 @@ export class DurableSessionImpl implements DurableSession {
         this.reopenInputs()
         const conversation = await this.currentConversation()
         await this.flushDeferred(conversation, 'beforeSend')
+        await this.announceDate(conversation)
         const submission = await conversation.submit(
           { type: 'input', content, whenBusy, ...(requestId === undefined ? {} : { requestId }) },
           BG
@@ -599,6 +607,37 @@ export class DurableSessionImpl implements DurableSession {
       })
     } catch (error) {
       return resultOfError(error)
+    }
+  }
+
+  // ─── 日期通知 ───────────────────────────────────
+
+  /**
+   * 用户输入之前的日期通知（Q14）。在送达推迟的通知**之后**调用：之前推迟的通知（发生得更早）先排进
+   * 收件箱，日期通知紧挨着这次输入。它自己被推迟（被中断 / 空闲但留着失败输入）时立刻再送一次，
+   * 好让它同样排在这次输入之前。
+   *
+   * 没注入 `today` 就什么都不做；失败只记日志 —— 日期通知是给模型的背景信息，不值得挡住用户的发送
+   * （没记下日期，下一次输入会再试）。关停照常向上抛。
+   */
+  private async announceDate(conversation: Conversation): Promise<void> {
+    const today = this.deps.today
+    if (today === undefined) return
+    try {
+      const result = await maybeAnnounceDate(this, conversation, {
+        today: today(),
+        now: this.deps.now()
+      })
+      if (result.status === 'deferred') await this.flushDeferred(conversation, 'beforeSend')
+      else if (result.status === 'failed') {
+        this.deps.logger.warn(
+          `date notice failed session=${this.sessionId}: ${result.error ?? 'unknown error'}`
+        )
+      }
+    } catch (error) {
+      if (this.closedFlag || isClosedError(error) || error instanceof SessionClosedError)
+        throw error
+      this.deps.logger.warn(`date notice failed session=${this.sessionId}: ${errorText(error)}`)
     }
   }
 

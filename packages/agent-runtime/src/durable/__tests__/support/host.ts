@@ -52,6 +52,10 @@ export interface TestHostOptions {
   beforeAbort?: (sessionId: string) => void
   onInputsReopened?: (sessionId: string) => void
   onRunStateChange?: (sessionId: string, state: RunState) => void
+  /** durable 的时钟（条目时间戳 / 日期通知的间隔）；缺省 Date.now */
+  now?: () => number
+  /** 今天的日期（给了才发日期通知） */
+  today?: () => string
 }
 
 export interface TestHost {
@@ -205,6 +209,8 @@ export async function makeHost(options: TestHostOptions = {}): Promise<TestHost>
     ...(options.noticeCoalesceMs === undefined
       ? {}
       : { noticeCoalesceMs: options.noticeCoalesceMs }),
+    ...(options.now === undefined ? {} : { now: options.now }),
+    ...(options.today === undefined ? {} : { today: options.today }),
     logger: {
       info: () => {},
       warn: (message) => warnings.push(message),

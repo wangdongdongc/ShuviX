@@ -90,8 +90,14 @@ export interface SessionHostDeps {
   /** durable 报告的扩展失败（不影响调用本身） */
   onReport?: (sessionId: string, error: unknown) => void
   logger?: RuntimeLogger
-  /** 时钟（durable 的 `now`） */
+  /** 时钟（durable 的 `now`；日期通知里「上一条消息在多久之前」也按它算） */
   now?: () => number
+  /**
+   * 今天的本地日期（`YYYY-MM-DD`，桌面传 `() => localDate()`）。给了才发日期通知：每次用户输入之前，
+   * 对话里已有条目且日期与上次告知的不同 → 先写一条 `shuvix.notice`（kind `date`，裁决 Q14）。
+   * 缺省 = 不发（测试默认关闭，需要的用例自己注入一个确定的日期）。
+   */
+  today?: () => string
 }
 
 /** bot 段落的内容：一块（通常是 `renderBotContext` 的输出）、若干块、或者没有 */
