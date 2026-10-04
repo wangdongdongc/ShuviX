@@ -21,7 +21,7 @@
  * 无专属安全客体 —— 要设门用 L1 全工具门（tool.name == 'session'）。
  */
 import { Type } from 'typebox'
-import type { AgentToolResult } from '@shuvix/agent-runtime'
+import type { ToolResult } from '@shuvix/agent-runtime'
 import { BaseTool } from '@shuvix/agent-runtime'
 import { BUILTIN_TOOL_PRESENTATIONS } from '@shuvix/chat-protocol/builtinToolPresentations'
 import type { SessionToolDetails } from '@shuvix/chat-protocol/types/chatMessage'
@@ -143,7 +143,7 @@ const COLLECT_HINT =
   'You do not have to wait here: when the turn ends you are brought back with a notice (at the latest, when the user next speaks). Get on with other work, or tell the user what you started. If you would rather have the answer inside this same turn, collect it with action "wait-for-sub-sessions" — one call that blocks until it is done and hands back the answer. Do NOT sleep and poll.'
 
 /** 结果排版：一段文本，行间空行 —— 与其他工具的多段结果同形 */
-function text(...lines: string[]): AgentToolResult<SessionToolDetails | undefined> {
+function text(...lines: string[]): ToolResult<SessionToolDetails | undefined> {
   return {
     content: [{ type: 'text' as const, text: lines.filter(Boolean).join('\n\n') }],
     details: undefined
@@ -154,7 +154,7 @@ function text(...lines: string[]): AgentToolResult<SessionToolDetails | undefine
  * 后台形态的结果：带上 `details.background`，UI 据此渲染与 bash 后台任务**同一枚**
  * 「后台」标签 —— 对用户而言两者是同一件事：这次调用没有等结果，活还在跑。
  */
-function backgroundText(...lines: string[]): AgentToolResult<SessionToolDetails> {
+function backgroundText(...lines: string[]): ToolResult<SessionToolDetails> {
   return {
     content: [{ type: 'text' as const, text: lines.filter(Boolean).join('\n\n') }],
     details: { type: 'session', background: true }
@@ -247,7 +247,7 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
     toolCallId: string,
     params: SessionToolParams,
     signal?: AbortSignal
-  ): Promise<AgentToolResult<SessionToolDetails | undefined>> {
+  ): Promise<ToolResult<SessionToolDetails | undefined>> {
     switch (params.action) {
       case 'set-title':
         return this.setTitle(params.title)
@@ -277,7 +277,7 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
 
   private async createSubSession(
     params: SessionToolParams
-  ): Promise<AgentToolResult<SessionToolDetails | undefined>> {
+  ): Promise<ToolResult<SessionToolDetails | undefined>> {
     const res = await subSessionRunner.create(this.ctx.sessionId, {
       title: params.title,
       agentProfile: params.agent_profile
@@ -304,7 +304,7 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
     params: SessionToolParams,
     toolCallId: string,
     signal?: AbortSignal
-  ): Promise<AgentToolResult<SessionToolDetails | undefined>> {
+  ): Promise<ToolResult<SessionToolDetails | undefined>> {
     const res = await subSessionRunner.prompt({
       parentId: this.ctx.sessionId,
       childId: (params.sub_session_id ?? '').trim(),
@@ -349,7 +349,7 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
   private async waitForSubSessions(
     params: SessionToolParams,
     signal?: AbortSignal
-  ): Promise<AgentToolResult<SessionToolDetails | undefined>> {
+  ): Promise<ToolResult<SessionToolDetails | undefined>> {
     const id = params.sub_session_id?.trim()
     const res = await subSessionRunner.wait({
       parentId: this.ctx.sessionId,
@@ -380,7 +380,7 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
     return text(`<sub-sessions status="${res.kind}">\n${body}\n</sub-sessions>`, trailer)
   }
 
-  private listSubSessions(): AgentToolResult<SessionToolDetails | undefined> {
+  private listSubSessions(): ToolResult<SessionToolDetails | undefined> {
     const res = subSessionRunner.list(this.ctx.sessionId)
     if ('error' in res) throw new Error(res.error)
     if (res.subSessions.length === 0) {
@@ -392,7 +392,7 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
 
   private async readSubSession(
     params: SessionToolParams
-  ): Promise<AgentToolResult<SessionToolDetails | undefined>> {
+  ): Promise<ToolResult<SessionToolDetails | undefined>> {
     const res = await subSessionRunner.read(
       this.ctx.sessionId,
       (params.sub_session_id ?? '').trim()
@@ -403,7 +403,7 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
 
   private async stopSubSession(
     params: SessionToolParams
-  ): Promise<AgentToolResult<SessionToolDetails | undefined>> {
+  ): Promise<ToolResult<SessionToolDetails | undefined>> {
     const res = await subSessionRunner.stop(
       this.ctx.sessionId,
       (params.sub_session_id ?? '').trim()
@@ -415,7 +415,7 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
   }
 
   /** 重命名本任务所属会话；笔记本会话的标题绑在文件名上，拒绝而不是悄悄改别的 */
-  private setTitle(rawTitle: string | undefined): AgentToolResult<SessionToolDetails | undefined> {
+  private setTitle(rawTitle: string | undefined): ToolResult<SessionToolDetails | undefined> {
     const sessionId = this.ctx.sessionId
     const session = sessionRecords.pick(sessionId, ['title', 'settings'])
     if (!session) {

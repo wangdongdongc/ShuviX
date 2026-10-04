@@ -20,7 +20,7 @@ import { resolveTokensForAgent } from '@shuvix/chat-protocol/utils/inlineTokens'
 import { isAssistantMessage } from '../messageGuards'
 import { AgentRegistry, agentIdOf } from '../agentRegistry'
 import type { AgentFactory } from '../agentProfile/createAgent'
-import type { AgentToolResult, AnyTool } from '../tools/toolResult'
+import type { AnyTool } from '../tools/toolResult'
 import type { InProcessAgentType, SubAgentModelConfig } from './types'
 import type { RuntimeLogger } from '../types'
 import type { TaskRegistry } from '../task/registry'
@@ -32,6 +32,7 @@ import {
   type ResultContract
 } from './nextTool'
 
+/** 工具表里混放的 durable 注册项（派发结果契约的 next 等 extraTools） */
 type AnyAgentTool = AnyTool
 
 /**
@@ -524,7 +525,7 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
       let llmPrompt = hasTokens ? resolveTokensForAgent(prompt, promptInlineTokens) : prompt
 
       // ── 结果契约：next 工具（extraTools 注入）+ prompt 契约段 + 捕获通道 ──
-      // 收尾两层：next 的结果带 `terminate`，只调了 next 的那一批由 pi 直接结束循环、不再发请求
+      // 收尾两层：next 的结果带 `control.terminate`，只调了 next 的那一批由 durable 直接结束循环、不再发请求
       // （见 nextTool.ts）；next 与别的工具同批时 terminate 不成立，这里的软停止（interrupt 语义）
       // 兜底 —— 结果以捕获值为准，树尾部的中止痕迹无关紧要。queueMicrotask 让 next 的成功
       // tool result 先返回，再触发停止；对已经靠 terminate 结束的那一批，它只中止还没开始的东西。
@@ -542,7 +543,7 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
             if (capturedAgentId) interrupt(capturedAgentId)
           })
         })
-        extraTools = [nextTool as unknown as AnyAgentTool]
+        extraTools = [nextTool]
         llmPrompt = `${llmPrompt}\n\n${buildResultContractNote(resultContract)}`
       }
 
@@ -695,4 +696,4 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
   }
 }
 
-export type { AnyAgentTool, AgentToolResult }
+export type { AnyAgentTool }

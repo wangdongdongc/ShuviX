@@ -7,14 +7,22 @@
  *   - 审查放行 → details 带标记（工具自己的 details 原样保留），且标记已被取走（不留给下一次）；
  *   - 审查拒绝 / 转给人 / 根本没有审查 / 人写反馈 → 没有标记；
  *   - 主体会话与包装器会话不一致 → 不串；
- *   - 放行之后工具自己抛错 → 原错误照抛，标记当场丢掉。
+ *   - 放行之后工具自己抛错 → 以失败结果收场（文字即原错误），标记当场丢掉。
+ *
+ * P1-04（pi-durable）：包装产物是 durable 注册项，经 invokeTool 调；假工具仍是旧形状，包装器经
+ * `fromAgentTool` 收下。抛错与门的拒绝从「reject」变成 isError 结果（裁定 Q12，模型看到的文字不变）。
  *
  * mock 惯例同 wrapToolOutput.test.ts（toolContext 只给 TOOL_ABORTED、logger 置空、processToolOutput
  * 原样直通）；安全门面用真 createSecurityContext + 一条让 L1 invocation 走 ask 档的用户策略（用户策略的
  * ask 就是 tier 'ask'，会先交给审查），provider 上挂 onPermissionRequest。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { AgentTool } from '@shuvix/agent-runtime'
+import type { AgentTool, AnyTool } from '@shuvix/agent-runtime'
+import {
+  executeTool,
+  failureText,
+  type InvokedToolResult
+} from '@shuvix/agent-runtime/tools/testing/invokeTool'
 import {
   clearReviewState,
   clearSessionDecisions,
@@ -136,10 +144,10 @@ function makeTool(details?: unknown): {
 }
 
 const exec = (
-  wrapped: AgentTool,
+  wrapped: AnyTool,
   toolCallId: string,
   params: unknown = { action: 'connect' }
-): ReturnType<AgentTool['execute']> => wrapped.execute(toolCallId, params as never)
+): Promise<InvokedToolResult> => executeTool(wrapped, toolCallId, params as never)
 
 describe('wrapToolOutput — 审查放行的调用在结果上留「已审查」标记', () => {
   it('W-R1 审查 allow/medium、工具 details undefined → details 恰为 {shuvixReview: {risk, summary}}；不弹卡；原 execute 恰一次', async () => {
@@ -187,14 +195,16 @@ describe('wrapToolOutput — 审查放行的调用在结果上留「已审查」
     expect(second.details).toBeUndefined()
   })
 
-  it('W-R4 审查 deny → reject「Blocked by the reviewer」；原 execute 未调；没有标记', async () => {
+  it('W-R4 审查 deny → isError「Blocked by the reviewer」（原为 reject，裁定 Q12）；原 execute 未调；没有标记', async () => {
     const { security } = makeSecurity({
       review: reviewerOf(answer(verdict('deny', 'critical')))
     })
     const { tool, execute } = makeTool(undefined)
     const wrapped = wrapToolOutput(tool, SID, 'middle', undefined, security)
 
-    await expect(exec(wrapped, 'tc-R4')).rejects.toThrow(/Blocked by the reviewer/)
+    const result = await exec(wrapped, 'tc-R4')
+    expect(await failureText(Promise.resolve(result))).toMatch(/Blocked by the reviewer/)
+    expect(toolReviewOf(result.details)).toBeUndefined()
     expect(execute).not.toHaveBeenCalled()
     expect(takeReviewAllowed(SID, 'tc-R4')).toBeUndefined()
   })
@@ -255,17 +265,20 @@ describe('wrapToolOutput — 审查放行的调用在结果上留「已审查」
     expect(takeReviewAllowed(SID, 'tc')).toStrictEqual({ risk: 'low', summary: 'other session' })
   })
 
-  it('W-R8 工具 execute 抛错（没有审查）→ reject 原错误', async () => {
+  it('W-R8 工具 execute 抛错（没有审查）→ isError 结果、文字即原错误（原为 reject 原错误，裁定 Q12）', async () => {
     const { security } = makeSecurity({})
     const { tool, execute } = makeTool(undefined)
     const err = new Error('connection refused')
     execute.mockRejectedValueOnce(err)
     const wrapped = wrapToolOutput(tool, SID, 'middle', undefined, security)
 
-    await expect(exec(wrapped, 'tc-R8')).rejects.toBe(err)
+    expect(await exec(wrapped, 'tc-R8')).toEqual({
+      isError: true,
+      content: [{ type: 'text', text: err.message }]
+    })
   })
 
-  it('W-R10 审查放行之后工具 execute 抛错 → reject 原错误，且标记被当场丢掉', async () => {
+  it('W-R10 审查放行之后工具 execute 抛错 → isError 结果（文字即原错误、不带标记），且标记被当场丢掉', async () => {
     const { security } = makeSecurity({
       review: reviewerOf(answer(verdict('allow', 'high', 'will fail')))
     })
@@ -274,7 +287,10 @@ describe('wrapToolOutput — 审查放行的调用在结果上留「已审查」
     execute.mockRejectedValueOnce(err)
     const wrapped = wrapToolOutput(tool, SID, 'middle', undefined, security)
 
-    await expect(exec(wrapped, 'tc-R10')).rejects.toBe(err)
+    expect(await exec(wrapped, 'tc-R10')).toEqual({
+      isError: true,
+      content: [{ type: 'text', text: err.message }]
+    })
     expect(execute).toHaveBeenCalledTimes(1)
     expect(takeReviewAllowed(SID, 'tc-R10')).toBeUndefined()
   })

@@ -30,6 +30,7 @@ import {
   type McpDiscoveredTool,
   type McpStore
 } from '../mcpManager'
+import { executeTool, failureText, type InvokedToolResult } from '../tools/testing/invokeTool'
 
 // ─── 假件 ────────────────────────────────────────────────────────────────
 
@@ -710,7 +711,7 @@ describe('McpManager 连接中途的意外', () => {
     expect(h.mgr.getStatus('a-id')).toBe('disconnected')
     expect(h.mgr.serverToAgentTools('a-id')).toEqual([])
 
-    const result = await held[0].execute('call-1', {}, new AbortController().signal)
+    const result = await executeTool(held[0], 'call-1', {}, new AbortController().signal)
     expect(onlyText(result.content)).toBe('handled by global')
     expect(h.made('a')).toHaveLength(2)
     expect(dropped.toolCalls).toEqual([])
@@ -846,7 +847,7 @@ describe('McpManager 内置能力服务器：一个会话一份实例', () => {
     await h.mgr.ensureServerByName('ssh', { sessionId: 's2' })
 
     const [t1] = h.mgr.getAgentToolsByServerName('ssh', 's1')
-    const result = await t1.execute('call-1', { q: 'x' }, new AbortController().signal)
+    const result = await executeTool(t1, 'call-1', { q: 'x' }, new AbortController().signal)
 
     // 闭包里记的是**连接键**，所以这一发只可能落在 s1 那份实例上
     expect(h.lastFor('ssh', 's1').toolCalls).toEqual([{ name: 'list-hosts', args: { q: 'x' } }])
@@ -1075,9 +1076,10 @@ describe('McpManager 内置实例的释放', () => {
 
     await h.mgr.closeSession('s1')
 
-    await expect(stale.execute('call-1', {}, new AbortController().signal)).rejects.toThrow(
-      '[MCP Error] MCP server "ssh" is not connected'
-    )
+    // P1-04：失败收成 isError 结果（裁定 Q12，原为抛错），文字不变
+    expect(
+      await failureText(executeTool(stale, 'call-1', {}, new AbortController().signal))
+    ).toContain('[MCP Error] MCP server "ssh" is not connected')
     // 闭包记的是 `ssh-id#s1`，s2 那份实例没有理由收到任何东西
     expect(h.lastFor('ssh', 's2').toolCalls).toEqual([])
   })
@@ -1305,7 +1307,7 @@ describe('McpManager 的 MCP → AgentTool 桥接', () => {
     await h.mgr.ensureServerByName('ssh', { sessionId: 's1' })
 
     const [t] = h.mgr.serverToAgentTools('ssh-id#s1')
-    await t.execute('pi-call-42', { q: 'x' }, new AbortController().signal)
+    await executeTool(t, 'pi-call-42', { q: 'x' }, new AbortController().signal)
 
     // 询问卡片的路由键按约定就是 toolCallId —— 少了它，内置服务器的 ask 就对不上这次调用
     expect(h.lastFor('ssh', 's1').toolCallMetas).toEqual([
@@ -1608,7 +1610,7 @@ const run = (
   t: McpTool,
   toolCallId = 'pi-1',
   args: Record<string, unknown> = {}
-): ReturnType<McpTool['execute']> => t.execute(toolCallId, args, new AbortController().signal)
+): Promise<InvokedToolResult> => executeTool(t, toolCallId, args, new AbortController().signal)
 
 /** 成功结果的 details：server 是配置行名、tool 不带前缀，没有 isError 这个键 */
 const OK_DETAILS = { type: 'mcp', server: 'ssh', tool: 'exec' }
@@ -1686,16 +1688,10 @@ describe('McpManager 执行结果：经假 server 的一次 tools/call', () => {
     expect(result.content).toStrictEqual([text('ok')])
   })
 
-  // isError 的结果**抛出**：pi 只把抛出的调用记成失败（界面标红、不并进已完成的步骤组），
-  // 并把抛出的消息原样作为这次调用的结果内容 —— 模型看到的就是这里的文字
-  const failureOf = async (exec: McpTool): Promise<string> => {
-    const err = await run(exec).then(
-      () => undefined,
-      (e: unknown) => e
-    )
-    expect(err, '应当抛出').toBeInstanceOf(Error)
-    return (err as Error).message
-  }
+  // isError 的结果记成失败的调用（界面标红、不并进已完成的步骤组），失败的文字就是模型看到的内容。
+  // P1-04 起桥接层不再靠抛出表达失败：抛出的消息由 durable 桥收成 `{ isError: true, content: [文字] }`
+  // （裁定 Q12），文字与原先抛出的消息逐字相同
+  const failureOf = (exec: McpTool): Promise<string> => failureText(run(exec))
 
   it('MCPB-U-64: isError 的结果只给文字 —— 图片写成 `[image: <mime>]`，base64 不外泄', async () => {
     const { exec } = await sshExecReturning({
@@ -2020,9 +2016,9 @@ const drop = (t: FakeTransport): void => t.onclose?.()
 const exec = (
   t: McpTool,
   signal: AbortSignal = new AbortController().signal
-): ReturnType<McpTool['execute']> => t.execute('call-x', {}, signal)
+): Promise<InvokedToolResult> => executeTool(t, 'call-x', {}, signal)
 
-type ToolResult = Awaited<ReturnType<McpTool['execute']>>
+type ToolResult = InvokedToolResult
 type Outcome = { ok: true; r: ToolResult } | { ok: false; msg: string }
 
 /**
@@ -2032,7 +2028,8 @@ type Outcome = { ok: true; r: ToolResult } | { ok: false; msg: string }
 function outcome(p: Promise<ToolResult>): Promise<Outcome> & { settled: boolean } {
   const o = Object.assign(
     p.then(
-      (r): Outcome => ({ ok: true, r }),
+      // P1-04：工具失败收成 isError 结果（裁定 Q12，文字即原先抛出的消息）；取消照旧是拒绝
+      (r): Outcome => (r.isError ? { ok: false, msg: onlyText(r.content) } : { ok: true, r }),
       (e: Error): Outcome => ({ ok: false, msg: e.message })
     ),
     { settled: false }

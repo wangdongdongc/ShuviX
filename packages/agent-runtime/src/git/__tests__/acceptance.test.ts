@@ -25,6 +25,7 @@ import {
 import { diffOp } from '../diffOps'
 import { createGitTool } from '../tool'
 import { buildGitHelp, GIT_HELP_TOPICS } from '../help'
+import { executeTool } from '../../tools/testing/invokeTool'
 
 // ---------------------------------------------------------------------------
 // fixture 辅助（与既有测试同惯例）
@@ -305,30 +306,30 @@ describe('acceptance - tool 层', () => {
     git(d, 'add .')
     git(d, 'commit -m c1')
     const tool = createGitTool({ getEnv: () => envFor(d) })
-    const result = await tool.execute('t1', { action: 'show' })
+    const result = await executeTool(tool, 't1', { action: 'show' })
     const text = toolTextOf(result)
     expect(text).toContain('show(ref)')
 
-    const result2 = await tool.execute('t2', { action: 'add' })
+    const result2 = await executeTool(tool, 't2', { action: 'add' })
     expect(toolTextOf(result2)).toContain('add(paths: string[])')
   })
 
   it('未知 action → 不抛异常，回错误/用法提示', async () => {
     const d = makeRepo()
     const tool = createGitTool({ getEnv: () => envFor(d) })
-    const result = await tool.execute('t3', { action: 'frobnicate' } as never)
+    const result = await executeTool(tool, 't3', { action: 'frobnicate' } as never)
     expect(toolTextOf(result)).toMatch(/error|unknown|usage|help/i)
   })
 
   it('help：全文含全部主题章节；topic 只回该章节', async () => {
     const d = makeRepo()
     const tool = createGitTool({ getEnv: () => envFor(d) })
-    const full = toolTextOf(await tool.execute('t4', { action: 'help' }))
+    const full = toolTextOf(await executeTool(tool, 't4', { action: 'help' }))
     for (const topic of GIT_HELP_TOPICS) {
       expect(full.toLowerCase()).toContain(topic)
     }
     expect(full).toBe(buildGitHelp())
-    const single = toolTextOf(await tool.execute('t5', { action: 'help', topic: 'diff' }))
+    const single = toolTextOf(await executeTool(tool, 't5', { action: 'help', topic: 'diff' }))
     expect(single).toBe(buildGitHelp('diff'))
     expect(single.length).toBeLessThan(full.length)
   })

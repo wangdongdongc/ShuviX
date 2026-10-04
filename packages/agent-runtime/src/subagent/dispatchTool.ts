@@ -12,7 +12,7 @@
  * 委托 SubAgentManager.runTask，返回最终文本结果。注册表/文件解析/模型配置经注入，宿主无关。
  */
 import { Type } from 'typebox'
-import type { AgentToolResult } from '../tools/toolResult'
+import type { ToolResult } from '../tools/toolResult'
 import { BaseTool } from '../tools/baseTool'
 import type {
   AgentProfile,
@@ -116,7 +116,7 @@ export interface DispatchAgentToolDeps {
   resolveAgentFile?: (path: string) => AgentProfile | undefined | Promise<AgentProfile | undefined>
 }
 
-function errorResult(text: string): AgentToolResult<undefined> {
+function errorResult(text: string): ToolResult<undefined> {
   return { content: [{ type: 'text' as const, text }], details: undefined }
 }
 
@@ -147,7 +147,7 @@ export class DispatchAgentTool extends BaseTool<typeof AgentParamsSchema> {
     toolCallId: string,
     params: { description: string; name?: string; prompt: string },
     signal?: AbortSignal
-  ): Promise<AgentToolResult<undefined>> {
+  ): Promise<ToolResult<undefined>> {
     if (signal?.aborted) throw new Error(this.deps.abortError)
 
     const description = params.description || ''

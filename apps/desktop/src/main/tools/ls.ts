@@ -12,7 +12,7 @@ import {
   TOOL_ABORTED,
   type ToolContext
 } from '../services/toolContext'
-import type { AgentToolResult } from '@shuvix/agent-runtime'
+import type { ToolResult } from '@shuvix/agent-runtime'
 import type { LsToolDetails } from '@shuvix/chat-protocol/types/chatMessage'
 import { BaseTool, buildTree } from '@shuvix/agent-runtime'
 import { resolveToCwd } from '../utils/toolUtils/pathUtils'
@@ -47,6 +47,8 @@ export class ListTool extends BaseTool<typeof LsParamsSchema> {
   readonly description = LS_DESCRIPTION
   readonly parameters = LsParamsSchema
   readonly outputStrategy = 'keep-start' as const
+  // 只读：中断后恢复时重跑一遍无害（durable replay）
+  readonly replay = 'safe' as const
 
   constructor(private ctx: ToolContext) {
     super()
@@ -77,7 +79,7 @@ export class ListTool extends BaseTool<typeof LsParamsSchema> {
     _toolCallId: string,
     params: { path?: string; ignore?: string[] },
     signal?: AbortSignal
-  ): Promise<AgentToolResult<LsToolDetails>> {
+  ): Promise<ToolResult<LsToolDetails>> {
     if (signal?.aborted) throw new Error(TOOL_ABORTED)
 
     const config = resolveProjectConfig(this.ctx.sessionId)

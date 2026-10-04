@@ -24,7 +24,7 @@
  * 宿主无关：文件经 FileSystemPort，库的解析 / 列举 / 扫描 / 检索全部注入。
  */
 import { Type } from 'typebox'
-import type { AgentToolResult } from '../tools/toolResult'
+import type { ToolResult } from '../tools/toolResult'
 import { KNOWLEDGE_TYPES, OKF_STATUSES, type OkfStatus } from '@shuvix/chat-protocol/knowledge'
 import type { FileSystemPort } from '../fileTools/port'
 import { splitFrontmatter } from '../markdownFrontmatter'
@@ -241,7 +241,7 @@ export interface KnowledgeToolDeps {
   label: string
 }
 
-type Result = AgentToolResult<{ action: KnowledgeAction; path?: string } | undefined>
+type Result = ToolResult<{ action: KnowledgeAction; path?: string } | undefined>
 
 const DEFAULT_LIMIT = 20
 
@@ -298,6 +298,9 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
   readonly label: string
   readonly description = KNOWLEDGE_DESCRIPTION
   readonly parameters = KnowledgeParamsSchema
+  // 不能重跑（裁定 Q1）：一个工具兼管只读的 search / read 与会写文件的 create，而 durable 的重跑
+  // 策略是按工具、在调用意图落库时定死的 —— 只能取最保守的那个
+  readonly replay = 'unsafe' as const
 
   constructor(private readonly deps: KnowledgeToolDeps) {
     super()

@@ -14,7 +14,7 @@
  * `create` 在动手之前就被拒，读侧一概照常。
  */
 import { describe, it, expect, vi, type Mock } from 'vitest'
-import type { AgentToolResult } from '../../tools/toolResult'
+import { invokeTool, type InvokedToolResult } from '../../tools/testing/invokeTool'
 import { KNOWLEDGE_TYPES } from '@shuvix/chat-protocol/knowledge'
 import type { FileSystemPort } from '../../fileTools/port'
 import type { SecurityContext } from '../../security/types'
@@ -57,7 +57,7 @@ interface ToolOptions {
   abortError?: string
 }
 
-type Result = AgentToolResult<unknown>
+type Result = InvokedToolResult
 
 interface Harness {
   tool: ReturnType<typeof createKnowledgeTool>
@@ -74,14 +74,16 @@ interface Harness {
 
 const textOf = (res: Result): string => (res.content[0] as { text: string }).text
 
-/** 这次调用 reject 的消息（没 reject 即判失败）—— 要逐字比对时用：`toThrow(string)` 只比子串 */
-const rejectionOf = (p: Promise<unknown>): Promise<string> =>
-  p.then(
-    () => {
-      throw new Error('expected the call to reject')
-    },
-    (e: unknown) => (e instanceof Error ? e.message : String(e))
-  )
+/**
+ * 这次调用失败交回的文字（不是 isError 结果即判失败）。
+ * P1-04 起工具抛错由 BaseTool 模板收成 `{ isError: true, content: [{ type: 'text', text: message }] }`
+ * （裁定 Q12）—— 原先断言「reject 且消息为 X」的用例改为断言「isError 且文字为 X」，模型看到的字不变。
+ */
+const rejectionOf = (p: Promise<Result>): Promise<string> =>
+  p.then((res) => {
+    if (res.isError !== true) throw new Error('expected the call to fail (isError result)')
+    return textOf(res)
+  })
 
 function memoryPort(files: Map<string, string>, calls: string[]): FileSystemPort {
   return {
@@ -171,7 +173,8 @@ function makeTool(opts: ToolOptions = {}): Harness {
     scan,
     afterWrite,
     calls,
-    run: (id, params, signal) => tool.execute(id, params, signal)
+    run: async (id, params, signal) =>
+      (await invokeTool(tool, params, { callId: id, signal })).result
   }
 }
 
@@ -250,7 +253,7 @@ describe('KT-2 路径守卫表', () => {
     const h = makeTool({
       files: { '/kb/projects/acme/log.md': '## 2026-09-09\n', '/kb/projects/acme/index.md': '' }
     })
-    await expect(h.run('c1', params)).rejects.toThrow(message)
+    expect(await rejectionOf(h.run('c1', params))).toContain(message)
     expect(h.calls).toEqual([])
   })
 
@@ -295,9 +298,9 @@ describe('KT-3 search —— 注入的检索（宿主 okf-minisearch）', () => 
       textOf(await h.run('c1', { action: 'search', base: 'project', query: 'q', limit: 5 }))
     ).toBe('No entries match "q".')
     expect(search).toHaveBeenCalledWith('q', { limit: 5, bundleDir: ROOT })
-    await expect(h.run('c2', { action: 'search', base: 'project', query: '  ' })).rejects.toThrow(
-      '"search" needs `query`'
-    )
+    expect(
+      await rejectionOf(h.run('c2', { action: 'search', base: 'project', query: '  ' }))
+    ).toContain('"search" needs `query`')
     // 会话不属于任何项目：检索是软条件，回一句话而不是抛
     const noProject = makeTool({ search, bundle: { error: 'no project here' } })
     const res = await noProject.run('c3', { action: 'search', base: 'project', query: 'q' })
@@ -429,10 +432,10 @@ describe('KT-6 read', () => {
 
   it('KT-6 条目不存在 / 缺 path', async () => {
     const h = makeTool()
-    await expect(h.run('c1', { action: 'read', base: 'project', path: '/x.md' })).rejects.toThrow(
-      'No entry at /x.md'
-    )
-    await expect(h.run('c2', { action: 'read', base: 'project' })).rejects.toThrow(
+    expect(
+      await rejectionOf(h.run('c1', { action: 'read', base: 'project', path: '/x.md' }))
+    ).toContain('No entry at /x.md')
+    expect(await rejectionOf(h.run('c2', { action: 'read', base: 'project' }))).toContain(
       '"read" needs `path`'
     )
   })
@@ -479,9 +482,9 @@ describe('KT-7 create —— 元数据形状与去重', () => {
 
   it('KT-7 缺必填字段一次点全、不落盘；同 slug 撞车退 -2；slugify 撞上保留文件名也让开', async () => {
     const h = makeTool({ files: { '/kb/projects/acme/index.md': '' } })
-    await expect(h.run('c1', { action: 'create', base: 'project', title: 'T' })).rejects.toThrow(
-      'Creating an entry needs: type, description, body'
-    )
+    expect(
+      await rejectionOf(h.run('c1', { action: 'create', base: 'project', title: 'T' }))
+    ).toContain('Creating an entry needs: type, description, body')
     expect(h.calls).toEqual([])
 
     await h.run('c2', {

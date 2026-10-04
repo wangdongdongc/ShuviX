@@ -257,14 +257,36 @@ export {
   type ShellFacts
 } from './security'
 // 工具基类 + 共享文件工具套件（read/write/edit 整条流程，注入端适配 API）
-export { BaseTool } from './tools/baseTool'
-// 工具形状（过渡期替代 pi 0.80 的 AgentTool / AgentToolResult；P1-04 改成 durable 原生）
-export type {
-  AgentTool,
-  AgentToolResult,
-  AgentToolUpdateCallback,
-  AnyTool,
-  ToolExecutionMode
+export { BaseTool, type ToolReplay } from './tools/baseTool'
+export { toolCallScope, type ToolCallScope } from './tools/toolCall'
+export {
+  backstopOutputLimits,
+  OUTPUT_BACKSTOP_FACTOR,
+  type DurableOutputLimits,
+  type OutputDeclaration
+} from './tools/outputLimits'
+// 工具结果：durable 原生（BaseTool 子类交回 ToolResult，模板收成 durable 结果；抛错按 Q12 收口）
+export {
+  errorMessageOf,
+  toolErrorResult,
+  strictJsonDetails,
+  toExecutionResult,
+  type AnyTool,
+  type ToolContent,
+  type ToolResult,
+  type ToolExecutionMode
+} from './tools/toolResult'
+// 旧形状工具（pi 0.80 的 AgentTool；ask / git / MCP 桥接层还在用）与它到 durable 的桥
+// TODO(pi-durable p1): P1-05 改成 durable 原生之后删除
+export {
+  asToolRegistration,
+  fromAgentTool,
+  fromAgentToolResult,
+  isLegacyAgentTool,
+  type AgentTool,
+  type AgentToolResult,
+  type AgentToolUpdateCallback,
+  type AnyLegacyAgentTool
 } from './tools/toolResult'
 export {
   createFileToolSuite,

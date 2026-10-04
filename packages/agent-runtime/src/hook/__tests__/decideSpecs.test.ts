@@ -3,7 +3,8 @@
  *
  * schema 同时是派发时 `next` 工具的参数：runner 把它原样交给结果契约，模型的调用参数就是结论。
  * 所以这里除了钉目录一致（判定型 id 恰好都有 spec、观察型一个都没有），还经**真 NextTool**
- * 把 schema 走一遍：合格判决被捕获且带 terminate（一次请求出结论），不合格的逐字段报错、不捕获。
+ * 把 schema 走一遍：合格判决被捕获且带 control.terminate（一次请求出结论），不合格的逐字段报错
+ * （isError 结果 —— P1-04 起 BaseTool 模板把抛错收成失败结果，裁定 Q12）、不捕获。
  * parse 是交给 runner 之前的最后一道（认不出 = 这个 hook 没有意见），severity 决定多个结论谁胜出。
  */
 import { describe, expect, it, vi } from 'vitest'
@@ -13,6 +14,7 @@ import {
 } from '@shuvix/chat-protocol/types/permissionReview'
 import { DECIDE_SPECS, TRIGGER_POINTS, type TriggerId } from '../triggerPoints'
 import { NextTool, validateContractSchema } from '../../subagent/nextTool'
+import { invokeTool, type InvokedToolResult } from '../../tools/testing/invokeTool'
 
 const SPEC = DECIDE_SPECS['permission.request']
 
@@ -24,20 +26,20 @@ const verdictOf = (over: Partial<PermissionVerdict> = {}): PermissionVerdict => 
   ...over
 })
 
-/** 经 BaseTool.execute 模板调一次 next（与 harness 派发工具调用同一条路径） */
-const callNext = (tool: NextTool, params: unknown): Promise<unknown> =>
-  tool.execute('tc-1', params as Record<string, unknown>)
+/** 经 BaseTool.execute 模板调一次 next（与 durable 派发工具调用同一条路径） */
+const callNext = async (tool: NextTool, params: unknown): Promise<InvokedToolResult> =>
+  (await invokeTool(tool, params as Record<string, unknown>, { callId: 'tc-1' })).result
 
-/** 一次不合格调用抛出的错误（没抛则测试失败） */
+const textOf = (r: InvokedToolResult): string =>
+  r.content.map((c) => (c.type === 'text' ? c.text : '')).join('')
+
+/** 一次不合格调用交回的失败文字（不是失败结果则测试失败） */
 async function rejectionOf(params: unknown): Promise<{ message: string; captured: number }> {
   const onCapture = vi.fn()
   const tool = new NextTool(SPEC.schema, onCapture)
-  const err = await callNext(tool, params).then(
-    () => null,
-    (e: unknown) => e
-  )
-  expect(err, 'next should reject a non-conforming verdict').toBeInstanceOf(Error)
-  return { message: (err as Error).message, captured: onCapture.mock.calls.length }
+  const out = await callNext(tool, params)
+  expect(out.isError, 'next should reject a non-conforming verdict').toBe(true)
+  return { message: textOf(out), captured: onCapture.mock.calls.length }
 }
 
 describe('目录一致', () => {
@@ -59,7 +61,7 @@ describe('目录一致', () => {
 
 describe('schema 经真 NextTool', () => {
   it.each(['allow', 'ask', 'deny'] as const)(
-    'DS-3 合格判决（decision %s）→ 捕获恰一次、原样交回，结果带 terminate',
+    'DS-3 合格判决（decision %s）→ 捕获恰一次、原样交回，结果带 control.terminate',
     async (decision) => {
       const onCapture = vi.fn()
       const tool = new NextTool(SPEC.schema, onCapture)
@@ -67,7 +69,7 @@ describe('schema 经真 NextTool', () => {
       const out = await callNext(tool, verdict)
       expect(onCapture).toHaveBeenCalledTimes(1)
       expect(onCapture).toHaveBeenCalledWith(verdict)
-      expect((out as { terminate?: boolean }).terminate).toBe(true)
+      expect(out.control).toEqual({ terminate: true })
     }
   )
 
@@ -85,7 +87,7 @@ describe('schema 经真 NextTool', () => {
       { ...verdictOf(), confidence: 0.9 },
       /\(root\): must not have additional properties/
     ]
-  ])('DS-3 不合格（%s）→ throw、不捕获、错误点名那个字段', async (_label, params, pattern) => {
+  ])('DS-3 不合格（%s）→ isError、不捕获、错误点名那个字段', async (_label, params, pattern) => {
     const { message, captured } = await rejectionOf(params)
     expect(captured).toBe(0)
     expect(message).toMatch(pattern)
@@ -96,7 +98,7 @@ describe('schema 经真 NextTool', () => {
   it('DS-3 不合格之后改正 → 同一个工具实例照常捕获改正后的值', async () => {
     const onCapture = vi.fn()
     const tool = new NextTool(SPEC.schema, onCapture)
-    await expect(callNext(tool, { ...verdictOf(), decision: 'maybe' })).rejects.toThrow()
+    expect((await callNext(tool, { ...verdictOf(), decision: 'maybe' })).isError).toBe(true)
     expect(onCapture).not.toHaveBeenCalled()
     await callNext(tool, verdictOf({ decision: 'deny' }))
     expect(onCapture).toHaveBeenCalledTimes(1)

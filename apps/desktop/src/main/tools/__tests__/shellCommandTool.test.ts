@@ -21,6 +21,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ToolContext } from '../../services/toolContext'
 import type { BashToolDetails } from '@shuvix/chat-protocol/types/chatMessage'
+import { executeTool, resultText } from '@shuvix/agent-runtime/tools/testing/invokeTool'
 
 const mocks = vi.hoisted(() => ({
   enforceCommand: vi.fn(),
@@ -131,7 +132,7 @@ async function run(
   params: Record<string, unknown>,
   toolCallId = 'tc-1'
 ): Promise<Run> {
-  const result = await tool.execute(toolCallId, params as never)
+  const result = await executeTool(tool, toolCallId, params as never)
   const first = result.content[0] as { type: string; text: string }
   return { text: first.text, details: result.details as BashToolDetails }
 }
@@ -230,8 +231,12 @@ describe.each(['bash', 'powershell'] as const)('%s —— 与另一个命令工�
     expect(timedOut.details.exitCode).toBe(124)
     expect(timedOut.details.type).toBe(shell)
 
+    // runCommand 报 abort 而这次调用本身没被取消（测试没给 signal）：P1-04 起收成 isError 结果
+    // （裁定 Q12，文字即原先抛出的 TOOL_ABORTED）；调用被取消时才照旧抛出
     mocks.runCommand.mockResolvedValueOnce(settled(null, '', 'abort'))
-    await expect(run(tool, params())).rejects.toThrow('Aborted')
+    const aborted = await executeTool(tool, 'tc-1', params() as never)
+    expect(aborted.isError).toBe(true)
+    expect(resultText(aborted)).toBe('Aborted')
   })
 
   it(`D2 — ${shell} 后台：background 两头都带到；转后台 → 后台形态 details（isBackgroundCall 为真）`, async () => {
@@ -316,11 +321,11 @@ describe.each(['bash', 'powershell'] as const)('%s —— 与另一个命令工�
     const tool = makeTool(shell)
     const ac = new AbortController()
 
-    await tool.execute('tc-sig', params() as never, ac.signal)
+    await executeTool(tool, 'tc-sig', params() as never, ac.signal)
     // toBe 而不是「某个 AbortSignal」：换成一个新造的 signal，用户点停止时审查就不会跟着收尾
     expect(mocks.enforceCommand.mock.calls[0][1].signal).toBe(ac.signal)
 
-    await tool.execute('tc-nosig', params() as never)
+    await executeTool(tool, 'tc-nosig', params() as never)
     expect(mocks.enforceCommand.mock.calls[1][1].signal).toBeUndefined()
 
     // 后台形态：spawn 刻意不带 signal（停止生成不杀后台任务，见 D2），但询问发生在这次调用之内 ——
@@ -330,7 +335,7 @@ describe.each(['bash', 'powershell'] as const)('%s —— 与另一个命令工�
       info: taskInfo({ pid: 9, status: 'running', exitCode: null }),
       logBytes: 0
     })
-    await tool.execute('tc-bg', params({ run_in_background: true }) as never, ac.signal)
+    await executeTool(tool, 'tc-bg', params({ run_in_background: true }) as never, ac.signal)
     expect(mocks.enforceCommand.mock.calls[2][1]).toMatchObject({ background: true })
     expect(mocks.enforceCommand.mock.calls[2][1].signal).toBe(ac.signal)
     expect(mocks.runCommand.mock.calls[2][0].signal).toBeUndefined()

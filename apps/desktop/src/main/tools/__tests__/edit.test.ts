@@ -16,6 +16,7 @@ import {
 } from 'node:fs'
 import { join, resolve, sep } from 'node:path'
 import { tmpdir } from 'node:os'
+import { executeTool, failureText } from '@shuvix/agent-runtime/tools/testing/invokeTool'
 
 const TEST_DIR = join(tmpdir(), 'shuvix-edit-test-' + Date.now())
 const SESSION_ID = 'test-session'
@@ -71,7 +72,7 @@ beforeEach(() => _resetAll())
 describe('edit 工具', () => {
   it('精确替换成功 + 返回 diff', async () => {
     const p = seed('a.ts', 'const a = 1\nconst b = 2\n')
-    const result = await makeEditTool(ctx).execute('e1', {
+    const result = await executeTool(makeEditTool(ctx), 'e1', {
       path: p,
       oldText: 'const b = 2',
       newText: 'const b = 3'
@@ -85,13 +86,13 @@ describe('edit 工具', () => {
 
   it('保留 CRLF 行尾', async () => {
     const p = seed('crlf.txt', 'a\r\nb\r\nc\r\n')
-    await makeEditTool(ctx).execute('e2', { path: p, oldText: 'b', newText: 'B' })
+    await executeTool(makeEditTool(ctx), 'e2', { path: p, oldText: 'b', newText: 'B' })
     expect(readFileSync(p, 'utf-8')).toBe('a\r\nB\r\nc\r\n')
   })
 
   it('保留 BOM', async () => {
     const p = seed('bom.txt', '﻿hello world')
-    await makeEditTool(ctx).execute('e3', { path: p, oldText: 'world', newText: 'there' })
+    await executeTool(makeEditTool(ctx), 'e3', { path: p, oldText: 'world', newText: 'there' })
     const out = readFileSync(p, 'utf-8')
     expect(out.startsWith('﻿')).toBe(true)
     expect(out).toBe('﻿hello there')
@@ -100,28 +101,34 @@ describe('edit 工具', () => {
   it('回退匹配：容忍行尾空格差异', async () => {
     // 文件行尾带空格，oldText 不带 → LineTrimmedReplacer 兜底
     const p = seed('fb.txt', 'foo   \nbar\n')
-    await makeEditTool(ctx).execute('e4', { path: p, oldText: 'foo', newText: 'FOO' })
+    await executeTool(makeEditTool(ctx), 'e4', { path: p, oldText: 'foo', newText: 'FOO' })
     expect(readFileSync(p, 'utf-8')).toContain('FOO')
   })
 
   it('oldText 找不到 → 报错', async () => {
     const p = seed('nf.txt', 'hello\n')
-    await expect(
-      makeEditTool(ctx).execute('e5', { path: p, oldText: 'NOPE', newText: 'x' })
-    ).rejects.toThrow()
+    await failureText(
+      executeTool(makeEditTool(ctx), 'e5', { path: p, oldText: 'NOPE', newText: 'x' })
+    )
   })
 
   it('文件不存在 → File not found', async () => {
     const p = join(TEST_DIR, 'missing.txt')
-    await expect(
-      makeEditTool(ctx).execute('e6', { path: p, oldText: 'a', newText: 'b' })
-    ).rejects.toThrow(/File not found/)
+    expect(
+      await failureText(
+        executeTool(makeEditTool(ctx), 'e6', { path: p, oldText: 'a', newText: 'b' })
+      )
+    ).toMatch(/File not found/)
   })
 
   it('未先读取也能编辑（内部整读即基线；与 write 对齐）', async () => {
     const p = join(TEST_DIR, 'unread.txt')
     writeFileSync(p, 'data\n') // 不调用 recordRead
-    const result = await makeEditTool(ctx).execute('e7', { path: p, oldText: 'data', newText: 'x' })
+    const result = await executeTool(makeEditTool(ctx), 'e7', {
+      path: p,
+      oldText: 'data',
+      newText: 'x'
+    })
     expect(readFileSync(p, 'utf-8')).toBe('x\n')
     expect(result.details).toMatchObject({ type: 'edit' })
   })
@@ -130,23 +137,27 @@ describe('edit 工具', () => {
     const p = seed('mod.txt', 'orig\n')
     const future = new Date(Date.now() + 60_000)
     utimesSync(p, future, future)
-    await expect(
-      makeEditTool(ctx).execute('e8', { path: p, oldText: 'orig', newText: 'x' })
-    ).rejects.toThrow(/modified since it was last read/)
+    expect(
+      await failureText(
+        executeTool(makeEditTool(ctx), 'e8', { path: p, oldText: 'orig', newText: 'x' })
+      )
+    ).toMatch(/modified since it was last read/)
   })
 
   it('从未读文件首次 edit 登记基线：之后拨未来 mtime，第二次 edit 被拒绝', async () => {
     const p = join(TEST_DIR, 'unread-baseline.txt')
     writeFileSync(p, 'orig\n') // 不调用 recordRead
-    await makeEditTool(ctx).execute('e9', { path: p, oldText: 'orig', newText: 'one' })
+    await executeTool(makeEditTool(ctx), 'e9', { path: p, oldText: 'orig', newText: 'one' })
     expect(readFileSync(p, 'utf-8')).toBe('one\n')
 
     // 首次 edit 的内部整读/写入已登记基线（墙钟）；把 mtime 拨到基线之后 → 触发守卫
     const future = new Date(Date.now() + 60_000)
     utimesSync(p, future, future)
-    await expect(
-      makeEditTool(ctx).execute('e10', { path: p, oldText: 'one', newText: 'two' })
-    ).rejects.toThrow(/modified since it was last read/)
+    expect(
+      await failureText(
+        executeTool(makeEditTool(ctx), 'e10', { path: p, oldText: 'one', newText: 'two' })
+      )
+    ).toMatch(/modified since it was last read/)
     expect(readFileSync(p, 'utf-8')).toBe('one\n')
   })
 
@@ -154,8 +165,8 @@ describe('edit 工具', () => {
     const p = join(TEST_DIR, 'unread-twice.txt')
     writeFileSync(p, 'a\nb\n') // 不调用 recordRead
     const tool = makeEditTool(ctx)
-    await tool.execute('e11', { path: p, oldText: 'a', newText: 'A' })
-    await tool.execute('e12', { path: p, oldText: 'b', newText: 'B' })
+    await executeTool(tool, 'e11', { path: p, oldText: 'a', newText: 'A' })
+    await executeTool(tool, 'e12', { path: p, oldText: 'b', newText: 'B' })
     expect(readFileSync(p, 'utf-8')).toBe('A\nB\n')
   })
 
@@ -167,9 +178,11 @@ describe('edit 工具', () => {
     writeFileSync(p, 'data\n') // 不调用 recordRead
     const future = new Date(Date.now() + 60_000)
     utimesSync(p, future, future)
-    await expect(
-      makeEditTool(ctx).execute('e13', { path: p, oldText: 'data', newText: 'x' })
-    ).rejects.toThrow(/modified since it was last read/)
+    expect(
+      await failureText(
+        executeTool(makeEditTool(ctx), 'e13', { path: p, oldText: 'data', newText: 'x' })
+      )
+    ).toMatch(/modified since it was last read/)
     expect(readFileSync(p, 'utf-8')).toBe('data\n') // 不落盘
   })
 
@@ -178,10 +191,10 @@ describe('edit 工具', () => {
     const p = seed('concurrent.ts', 'a = 1\nb = 2\nc = 3\nd = 4\n')
     const tool = makeEditTool(ctx)
     const results = await Promise.all([
-      tool.execute('c1', { path: p, oldText: 'a = 1', newText: 'a = 10' }),
-      tool.execute('c2', { path: p, oldText: 'b = 2', newText: 'b = 20' }),
-      tool.execute('c3', { path: p, oldText: 'c = 3', newText: 'c = 30' }),
-      tool.execute('c4', { path: p, oldText: 'd = 4', newText: 'd = 40' })
+      executeTool(tool, 'c1', { path: p, oldText: 'a = 1', newText: 'a = 10' }),
+      executeTool(tool, 'c2', { path: p, oldText: 'b = 2', newText: 'b = 20' }),
+      executeTool(tool, 'c3', { path: p, oldText: 'c = 3', newText: 'c = 30' }),
+      executeTool(tool, 'c4', { path: p, oldText: 'd = 4', newText: 'd = 40' })
     ])
     // 四次都成功
     expect(results).toHaveLength(4)
@@ -214,9 +227,11 @@ describe.skipIf(process.platform === 'win32')('edit 工具 - 符号链接不跟�
     const readAt = getReadTime(SESSION_ID, target)
     const mtimeMs = statSync(target).mtimeMs
 
-    await expect(
-      makeEditTool(ctx).execute('edl1', { path: link, oldText: 'orig', newText: 'x' })
-    ).rejects.toThrow(
+    expect(
+      await failureText(
+        executeTool(makeEditTool(ctx), 'edl1', { path: link, oldText: 'orig', newText: 'x' })
+      )
+    ).toContain(
       `Not edited: ${link} is a symbolic link to ${realpathSync.native(target)} (the link says "etarget.txt"). Symbolic links are not followed`
     )
     expect(readFileSync(target, 'utf-8')).toBe('orig\n')
@@ -230,7 +245,7 @@ describe.skipIf(process.platform === 'win32')('edit 工具 - 符号链接不跟�
   it('ED-L2 链接在中间（经链接目录 edit 那头的文件）：照常改到，门恰问一次、问的是写法那一条', async () => {
     const p = join(L, 'edir', 'f.txt')
 
-    await makeEditTool(ctx).execute('edl2', { path: p, oldText: 'one', newText: 'two' })
+    await executeTool(makeEditTool(ctx), 'edl2', { path: p, oldText: 'one', newText: 'two' })
     expect(readFileSync(join(L, 'ereal', 'f.txt'), 'utf-8')).toBe('two\n')
     expect(enforcePath).toHaveBeenCalledTimes(1)
     expect(enforcePath.mock.calls[0].slice(0, 2)).toEqual(['write', p])

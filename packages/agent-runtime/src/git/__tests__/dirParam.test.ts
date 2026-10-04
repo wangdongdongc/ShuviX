@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os'
 import type { GitEnv, GitFsClient } from '../env'
 import { createGitTool } from '../tool'
 import type { GitAction } from '../ops'
+import { executeTool } from '../../tools/testing/invokeTool'
 
 const dirs: string[] = []
 
@@ -49,7 +50,7 @@ describe('git tool dir 参数', () => {
   it('未注入 resolveDir 时带 dir 的调用被拒绝（不落到工作目录仓库上）', async () => {
     const work = makeRepo()
     const tool = createGitTool({ getEnv: () => envFor(work) })
-    const out = await tool.execute('t1', { action: 'status', dir: '/elsewhere' })
+    const out = await executeTool(tool, 't1', { action: 'status', dir: '/elsewhere' })
     expect(textOf(out)).toContain('"dir" parameter is not supported')
   })
 
@@ -66,9 +67,9 @@ describe('git tool dir 参数', () => {
       }
     })
 
-    const status = await tool.execute('t2', { action: 'status', dir: 'rel/other' })
+    const status = await executeTool(tool, 't2', { action: 'status', dir: 'rel/other' })
     expect(textOf(status)).toContain('a.txt')
-    const add = await tool.execute('t3', { action: 'add', dir: 'rel/other', paths: ['a.txt'] })
+    const add = await executeTool(tool, 't3', { action: 'add', dir: 'rel/other', paths: ['a.txt'] })
     expect(textOf(add)).not.toContain('Error')
 
     expect(calls).toEqual([
@@ -85,7 +86,7 @@ describe('git tool dir 参数', () => {
         throw new Error('User denied access to /secret')
       }
     })
-    const out = await tool.execute('t4', { action: 'init', dir: '/secret' })
+    const out = await executeTool(tool, 't4', { action: 'init', dir: '/secret' })
     expect(textOf(out)).toContain('Cannot access repository dir "/secret"')
     expect(textOf(out)).toContain('User denied access')
   })
@@ -100,11 +101,11 @@ describe('git tool dir 参数', () => {
       resolveDir: async () => other
     })
 
-    const workStatus = textOf(await tool.execute('t5', { action: 'status' }))
+    const workStatus = textOf(await executeTool(tool, 't5', { action: 'status' }))
     expect(workStatus).toContain('work.txt')
     expect(workStatus).not.toContain('other.txt')
 
-    const otherStatus = textOf(await tool.execute('t6', { action: 'status', dir: other }))
+    const otherStatus = textOf(await executeTool(tool, 't6', { action: 'status', dir: other }))
     expect(otherStatus).toContain('other.txt')
     expect(otherStatus).not.toContain('work.txt')
   })

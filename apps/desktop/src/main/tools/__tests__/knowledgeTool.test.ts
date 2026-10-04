@@ -25,6 +25,7 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { executeTool, failureText } from '@shuvix/agent-runtime/tools/testing/invokeTool'
 
 const state = vi.hoisted(() => ({
   root: '',
@@ -153,7 +154,7 @@ describe('knowledge 工具（桌面注册）', () => {
     const tool = makeKnowledgeTool(ctx)
     expect(tool.label).toBe('tool.knowledgeLabel')
 
-    await tool.execute('c1', {
+    await executeTool(tool, 'c1', {
       action: 'create',
       base: 'project',
       type: 'Memory',
@@ -173,7 +174,7 @@ describe('knowledge 工具（桌面注册）', () => {
     })
 
     for (const action of ['list', 'search', 'validate'] as const) {
-      await tool.execute('c2', { action, base: 'project', query: 'q' })
+      await executeTool(tool, 'c2', { action, base: 'project', query: 'q' })
       expect(state.resolveBase, action).toHaveBeenLastCalledWith('s1', 'project')
     }
     expect(state.record).toHaveBeenCalledTimes(1)
@@ -182,13 +183,13 @@ describe('knowledge 工具（桌面注册）', () => {
   it('TK-3 读路径：list / search / validate 都把 bundle 目录反查成 bundle id 再交给扫描 / 检索；解析不出 bundle 的目录 → 空清单、空结果', async () => {
     const tool = makeKnowledgeTool(ctx)
 
-    await tool.execute('c5', { action: 'list', base: 'project' })
+    await executeTool(tool, 'c5', { action: 'list', base: 'project' })
     expect(state.scan).toHaveBeenLastCalledWith(BUNDLE)
 
-    await tool.execute('c6', { action: 'search', base: 'project', query: 'token', limit: 5 })
+    await executeTool(tool, 'c6', { action: 'search', base: 'project', query: 'token', limit: 5 })
     expect(state.search).toHaveBeenLastCalledWith(BUNDLE, 'token', { limit: 5 })
 
-    await tool.execute('c7', { action: 'validate', base: 'project' })
+    await executeTool(tool, 'c7', { action: 'validate', base: 'project' })
     expect(state.scan).toHaveBeenLastCalledWith(BUNDLE)
 
     // 目标目录不在 shuvix 根下（理论上不该发生）：扫描 / 检索不被调用
@@ -198,10 +199,10 @@ describe('knowledge 工具（桌面注册）', () => {
       state.scan.mockClear()
       state.search.mockClear()
 
-      const listed = await tool.execute('c8', { action: 'list', base: 'project' })
+      const listed = await executeTool(tool, 'c8', { action: 'list', base: 'project' })
       expect(state.scan).not.toHaveBeenCalled()
       expect(listed.content[0]).toMatchObject({ text: `No entries in stray — ${stray} yet.` })
-      await tool.execute('c9', { action: 'search', base: 'project', query: 'token' })
+      await executeTool(tool, 'c9', { action: 'search', base: 'project', query: 'token' })
       expect(state.search).not.toHaveBeenCalled()
     } finally {
       rmSync(stray, { recursive: true, force: true })
@@ -218,18 +219,18 @@ describe('knowledge 工具（桌面注册）', () => {
     })
     const tool = makeKnowledgeTool(ctx)
 
-    await tool.execute('u1', { action: 'list', base: 'notes' })
+    await executeTool(tool, 'u1', { action: 'list', base: 'notes' })
     expect(state.resolveBase).toHaveBeenLastCalledWith('s1', 'notes')
     expect(state.scan).toHaveBeenLastCalledWith('knowledge/notes')
 
-    await tool.execute('u2', { action: 'search', base: 'notes', query: 'q', limit: 3 })
+    await executeTool(tool, 'u2', { action: 'search', base: 'notes', query: 'q', limit: 3 })
     expect(state.search).toHaveBeenLastCalledWith('knowledge/notes', 'q', { limit: 3 })
 
     state.scan.mockClear()
-    await tool.execute('u3', { action: 'validate', base: 'notes' })
+    await executeTool(tool, 'u3', { action: 'validate', base: 'notes' })
     expect(state.scan).toHaveBeenLastCalledWith('knowledge/notes')
 
-    await tool.execute('u4', {
+    await executeTool(tool, 'u4', {
       action: 'create',
       base: 'notes',
       type: 'Memory',
@@ -255,7 +256,7 @@ describe('knowledge 工具（桌面注册）', () => {
       { base: 'notes', label: 'knowledge base "notes"', dir: '/u/notes' }
     ])
 
-    const res = await makeKnowledgeTool(ctx).execute('b1', { action: 'bases' })
+    const res = await executeTool(makeKnowledgeTool(ctx), 'b1', { action: 'bases' })
 
     expect(state.listBases).toHaveBeenCalledTimes(1)
     expect(state.listBases).toHaveBeenCalledWith('s1')
@@ -344,17 +345,21 @@ describe('TK-6..TK-10 内置库（语言目录、只读、垫底）', () => {
     )
     const tool = makeKnowledgeTool(ctx)
 
-    const listed = await tool.execute('k1', { action: 'list', base: 'shuvix' })
+    const listed = await executeTool(tool, 'k1', { action: 'list', base: 'shuvix' })
     expect(state.resolveBase).toHaveBeenLastCalledWith('s1', 'shuvix')
     expect(state.scan).toHaveBeenLastCalledWith(BUILTIN_BUNDLE)
     expect(textOf(listed)).toContain(`1 entry in ${BUILTIN_LABEL} — ${builtinDir()}:`)
     expect(textOf(listed)).toContain(`- /${ENTRY}`)
 
-    await tool.execute('k2', { action: 'search', base: 'shuvix', query: 'agent', limit: 5 })
+    await executeTool(tool, 'k2', { action: 'search', base: 'shuvix', query: 'agent', limit: 5 })
     expect(state.search).toHaveBeenLastCalledWith(BUILTIN_BUNDLE, 'agent', { limit: 5 })
 
     // read 不经反查：按 bundle 目录直接读盘 —— 读到的必须是语言目录下那一份
-    const read = await tool.execute('k3', { action: 'read', base: 'shuvix', path: `/${ENTRY}` })
+    const read = await executeTool(tool, 'k3', {
+      action: 'read',
+      base: 'shuvix',
+      path: `/${ENTRY}`
+    })
     expect(textOf(read)).toContain(`${builtinDir()}/${ENTRY}:`)
     expect(textOf(read)).toContain('en body')
 
@@ -362,15 +367,19 @@ describe('TK-6..TK-10 内置库（语言目录、只读、垫底）', () => {
     i18n.language = 'zh-CN'
     state.resolveBase.mockResolvedValue(builtinTarget('zh'))
     state.scan.mockClear()
-    await tool.execute('k4', { action: 'list', base: 'shuvix' })
+    await executeTool(tool, 'k4', { action: 'list', base: 'shuvix' })
     expect(state.scan).toHaveBeenLastCalledWith(BUILTIN_BUNDLE)
-    const readZh = await tool.execute('k5', { action: 'read', base: 'shuvix', path: `/${ENTRY}` })
+    const readZh = await executeTool(tool, 'k5', {
+      action: 'read',
+      base: 'shuvix',
+      path: `/${ENTRY}`
+    })
     expect(textOf(readZh)).toContain('zh body')
 
     // 生效语言是 zh 时，en 那一版不属于任何 bundle：扫描一次都不该被调用（与 TK-3 的界外目录同口径）
     state.scan.mockClear()
     state.resolveBase.mockResolvedValue(builtinTarget('en'))
-    const stale = await tool.execute('k6', { action: 'list', base: 'shuvix' })
+    const stale = await executeTool(tool, 'k6', { action: 'list', base: 'shuvix' })
     expect(state.scan).not.toHaveBeenCalled()
     expect(textOf(stale)).toBe(`No entries in ${BUILTIN_LABEL} — ${builtinDir('en')} yet.`)
 
@@ -384,8 +393,9 @@ describe('TK-6..TK-10 内置库（语言目录、只读、垫底）', () => {
     const before = treeOf(builtinRoot())
     const tool = makeKnowledgeTool(ctx)
 
-    const thrown = await tool
-      .execute('k7', {
+    // P1-04：工具抛错收成 isError 结果（裁定 Q12），文字即原先抛出的消息
+    const message = await failureText(
+      executeTool(tool, 'k7', {
         action: 'create',
         base: 'shuvix',
         type: 'Memory',
@@ -393,12 +403,7 @@ describe('TK-6..TK-10 内置库（语言目录、只读、垫底）', () => {
         description: 'd',
         body: 'b'
       })
-      .then(
-        () => null,
-        (e: unknown) => e
-      )
-    expect(thrown).toBeInstanceOf(Error)
-    const message = (thrown as Error).message
+    )
     expect(message).toContain('"shuvix" is read-only')
     // 只说「不行」模型只会换个写法再试一次：得说清该记到哪里去，以及去哪儿看有哪些库
     expect(message).toMatch(/user's knowledge bases/)
@@ -430,10 +435,12 @@ describe('TK-6..TK-10 内置库（语言目录、只读、垫底）', () => {
       body: 'b'
     }
 
-    await expect(tool.execute('k8', { ...params, base: 'shuvix' })).rejects.toThrow('read-only')
+    expect(await failureText(executeTool(tool, 'k8', { ...params, base: 'shuvix' }))).toContain(
+      'read-only'
+    )
     expect(state.record).not.toHaveBeenCalled()
 
-    const created = await tool.execute('k9', { ...params, base: 'lib' })
+    const created = await executeTool(tool, 'k9', { ...params, base: 'lib' })
     const written = join(userRoot, 'lib', 'auth-notes.md')
     expect(existsSync(written)).toBe(true)
     expect(readFileSync(written, 'utf-8')).toContain('shuvix: okf v0.2')
@@ -455,7 +462,7 @@ describe('TK-6..TK-10 内置库（语言目录、只读、垫底）', () => {
       { base: 'shuvix', label: BUILTIN_LABEL, dir: builtinDir(), note: BUILTIN_NOTE }
     ])
 
-    const res = await makeKnowledgeTool(ctx).execute('k10', { action: 'bases' })
+    const res = await executeTool(makeKnowledgeTool(ctx), 'k10', { action: 'bases' })
     const lines = textOf(res).split('\n')
 
     expect(lines[0]).toBe('Knowledge bases in this session (pass the name as `base`):')
@@ -484,7 +491,10 @@ describe('TK-6..TK-10 内置库（语言目录、只读、垫底）', () => {
       { path: ENTRY, title: 'T', description: `hit in ${bundle}` }
     ])
 
-    const res = await makeKnowledgeTool(ctx).execute('k11', { action: 'search', query: 'token' })
+    const res = await executeTool(makeKnowledgeTool(ctx), 'k11', {
+      action: 'search',
+      query: 'token'
+    })
 
     // 三个库各一次，各自反查出自己的 id —— 内置库那一次的目录里夹着语言层
     expect(state.search.mock.calls.map((c) => c[0])).toEqual([

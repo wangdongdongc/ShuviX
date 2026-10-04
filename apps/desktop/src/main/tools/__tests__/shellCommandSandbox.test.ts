@@ -32,6 +32,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ToolContext } from '../../services/toolContext'
 import type { SandboxPlan } from '../../services/sandbox'
 import type { BashToolDetails } from '@shuvix/chat-protocol/types/chatMessage'
+import { executeTool } from '@shuvix/agent-runtime/tools/testing/invokeTool'
 
 const mocks = vi.hoisted(() => ({
   enforceCommand: vi.fn(),
@@ -137,7 +138,7 @@ async function run(
   p: Record<string, unknown>,
   toolCallId = 'tc-1'
 ): Promise<string> {
-  const result = await tool.execute(toolCallId, p as never)
+  const result = await executeTool(tool, toolCallId, p as never)
   return (result.content[0] as { text: string }).text
 }
 
@@ -147,7 +148,7 @@ async function runFull(
   p: Record<string, unknown>,
   toolCallId = 'tc-1'
 ): Promise<{ text: string; details: BashToolDetails }> {
-  const result = await tool.execute(toolCallId, p as never)
+  const result = await executeTool(tool, toolCallId, p as never)
   return {
     text: (result.content[0] as { text: string }).text,
     details: result.details as BashToolDetails

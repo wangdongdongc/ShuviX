@@ -34,6 +34,12 @@ import {
 import { basename, join, resolve, sep } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
+import {
+  executeTool,
+  failureText,
+  resultText,
+  type InvokedToolResult
+} from '@shuvix/agent-runtime/tools/testing/invokeTool'
 
 const TEST_DIR = join(tmpdir(), 'shuvix-ask-on-write-' + Date.now())
 const SESSION_ID = 'ask-session'
@@ -143,7 +149,7 @@ describe('桌面 write/edit — 工作目录内写入的询问接线', () => {
   it('PERM-2: 工作目录内 write 弹一次带 diff 预览的询问，同路径 read 不弹', async () => {
     const p = join(TEST_DIR, 'perm2.txt')
 
-    await makeWriteTool(ctx).execute('w1', { path: p, content: 'hello\n' })
+    await executeTool(makeWriteTool(ctx), 'w1', { path: p, content: 'hello\n' })
     expect(state.requests).toHaveLength(1)
     const req = state.requests[0]
     if (req.kind !== 'ask') throw new Error('expected an ask request')
@@ -153,7 +159,7 @@ describe('桌面 write/edit — 工作目录内写入的询问接线', () => {
     expect(readFileSync(p, 'utf-8')).toBe('hello\n')
 
     state.requests = []
-    await makeReadTool(ctx).execute('r1', { path: p })
+    await executeTool(makeReadTool(ctx), 'r1', { path: p })
     expect(state.requests).toEqual([])
   })
 
@@ -162,9 +168,11 @@ describe('桌面 write/edit — 工作目录内写入的询问接线', () => {
     writeFileSync(p, 'original\n')
     state.respond = () => ({ kind: 'ask', allowed: false })
 
-    await expect(
-      makeWriteTool(ctx).execute('w2', { path: p, content: 'overwritten\n' })
-    ).rejects.toThrow(/User denied access/)
+    expect(
+      await failureText(
+        executeTool(makeWriteTool(ctx), 'w2', { path: p, content: 'overwritten\n' })
+      )
+    ).toMatch(/User denied access/)
     expect(readFileSync(p, 'utf-8')).toBe('original\n')
   })
 
@@ -173,10 +181,10 @@ describe('桌面 write/edit — 工作目录内写入的询问接线', () => {
     writeFileSync(p, 'a\r\nb\r\nc\r\n')
 
     // edit 要求先读；走真实 read 工具记录读取时间（顺带确认 read 不弹询问）
-    await makeReadTool(ctx).execute('r2', { path: p })
+    await executeTool(makeReadTool(ctx), 'r2', { path: p })
     expect(state.requests).toEqual([])
 
-    const res = await makeEditTool(ctx).execute('e1', { path: p, oldText: 'b', newText: 'B' })
+    const res = await executeTool(makeEditTool(ctx), 'e1', { path: p, oldText: 'b', newText: 'B' })
 
     const req = state.requests[0]
     if (req.kind !== 'ask') throw new Error('expected an ask request')
@@ -201,9 +209,11 @@ describe('桌面 write/edit — 工作目录内写入的询问接线', () => {
       return { kind: 'ask', allowed: true }
     }
 
-    await expect(
-      makeEditTool(ctx).execute('eg13', { path: p, oldText: 'beta', newText: 'BETA' })
-    ).rejects.toThrow(/modified since/)
+    expect(
+      await failureText(
+        executeTool(makeEditTool(ctx), 'eg13', { path: p, oldText: 'beta', newText: 'BETA' })
+      )
+    ).toMatch(/modified since/)
 
     expect(state.requests).toHaveLength(1) // 询问恰一次
     // 落盘内容保持外部改动，未被预览对应的写入覆盖
@@ -214,7 +224,7 @@ describe('桌面 write/edit — 工作目录内写入的询问接线', () => {
     const p = join(TEST_DIR, 'eg14.txt')
     writeFileSync(p, 'alpha\nbeta\ngamma\n') // 不走 read 工具：本会话从未读
 
-    const res = await makeEditTool(ctx).execute('eg14', {
+    const res = await executeTool(makeEditTool(ctx), 'eg14', {
       path: p,
       oldText: 'beta',
       newText: 'BETA'
@@ -233,14 +243,16 @@ describe('桌面 write/edit — 工作目录内写入的询问接线', () => {
     writeFileSync(p, 'alpha\nbeta\n') // 不走 read 工具：本会话从未读
     state.respond = () => ({ kind: 'ask', allowed: false })
 
-    await expect(
-      makeEditTool(ctx).execute('eg15a', { path: p, oldText: 'beta', newText: 'BETA' })
-    ).rejects.toThrow(/User denied/)
+    expect(
+      await failureText(
+        executeTool(makeEditTool(ctx), 'eg15a', { path: p, oldText: 'beta', newText: 'BETA' })
+      )
+    ).toMatch(/User denied/)
     expect(readFileSync(p, 'utf-8')).toBe('alpha\nbeta\n')
 
     // 拒绝时内部整读已登记基线且无外部改动 → 第二次 edit 前置校验放行，批准后成功
     state.respond = () => ({ kind: 'ask', allowed: true })
-    await makeEditTool(ctx).execute('eg15b', { path: p, oldText: 'beta', newText: 'BETA' })
+    await executeTool(makeEditTool(ctx), 'eg15b', { path: p, oldText: 'beta', newText: 'BETA' })
     expect(readFileSync(p, 'utf-8')).toBe('alpha\nBETA\n')
   })
 })
@@ -252,12 +264,15 @@ function askOf(req: InputRequest | undefined): Extract<InputRequest, { kind: 'as
 }
 
 /** 抓住一次拒绝的原话（没拒就判红） */
-async function messageOf(work: Promise<unknown>): Promise<string> {
+async function messageOf(work: Promise<InvokedToolResult>): Promise<string> {
+  // P1-04 起拒绝收成 isError 结果（裁定 Q12，文字即原话）；调用本身被取消时才照旧抛出 —— 两种都认
+  let res: InvokedToolResult
   try {
-    await work
+    res = await work
   } catch (err) {
     return err instanceof Error ? err.message : String(err)
   }
+  if (res.isError) return resultText(res)
   throw new Error('expected the call to be refused')
 }
 
@@ -379,7 +394,7 @@ describe.skipIf(process.platform === 'win32')(
       const real = realpathSync.native(target)
       const before = footprint(link, target)
 
-      expect(await messageOf(makeReadTool(ctx).execute('pr1a', { path: link }))).toBe(
+      expect(await messageOf(executeTool(makeReadTool(ctx), 'pr1a', { path: link }))).toBe(
         `${link} is a symbolic link to ${real}. Symbolic links are not followed — read ${real} directly if that is the file you mean.`
       )
       expectGateUntouched()
@@ -388,7 +403,7 @@ describe.skipIf(process.platform === 'win32')(
       expect(getReadTime(SESSION_ID, link)).toBeUndefined()
       expect(getReadTime(SESSION_ID, real)).toBeUndefined()
 
-      const res = await makeReadTool(ctx).execute('pr1b', { path: real })
+      const res = await executeTool(makeReadTool(ctx), 'pr1b', { path: real })
       expect(state.requests).toHaveLength(1)
       const req = askOf(state.requests[0])
       expect(req.toolName).toBe('read')
@@ -404,14 +419,14 @@ describe.skipIf(process.platform === 'win32')(
       const before = footprint(link, target)
 
       expect(
-        await messageOf(makeWriteTool(ctx).execute('pr2a', { path: link, content: 'new\n' }))
+        await messageOf(executeTool(makeWriteTool(ctx), 'pr2a', { path: link, content: 'new\n' }))
       ).toBe(
         `Not written: ${link} is a symbolic link to ${real}. Symbolic links are not followed — write to ${real} directly if that is the file you mean.`
       )
       expectGateUntouched()
       expect(footprint(link, target)).toEqual(before)
 
-      await makeWriteTool(ctx).execute('pr2b', { path: real, content: 'new\n' })
+      await executeTool(makeWriteTool(ctx), 'pr2b', { path: real, content: 'new\n' })
       expect(state.requests).toHaveLength(1)
       const req = askOf(state.requests[0])
       expect(req.command).toBe(`Write(${real})`)
@@ -429,7 +444,7 @@ describe.skipIf(process.platform === 'win32')(
       // TEST_DIR 在 tmpdir 下，macOS 上 /var 本身就是链接 —— 写法得用解析过的那一个才算「中间没有链接」
       const p = join(realpathSync.native(TEST_DIR), 'plain.txt')
 
-      await makeWriteTool(ctx).execute('pr3', { path: p, content: 'x\n' })
+      await executeTool(makeWriteTool(ctx), 'pr3', { path: p, content: 'x\n' })
       expect(state.requests).toHaveLength(1)
       const req = askOf(state.requests[0])
       expect(req.command).toBe(`Write(${p})`)
@@ -443,9 +458,9 @@ describe.skipIf(process.platform === 'win32')(
       const realKey = realpathSync.native(join(HOME, '.ssh', 'id_rsa'))
 
       state.respond = () => ({ kind: 'ask', allowed: false })
-      await expect(makeReadTool(ctx).execute('pr4a', { path: readPath })).rejects.toThrow(
-        `User denied access to ${readPath}`
-      )
+      expect(
+        await failureText(executeTool(makeReadTool(ctx), 'pr4a', { path: readPath }))
+      ).toContain(`User denied access to ${readPath}`)
       expect(state.requests).toHaveLength(1)
       const req = askOf(state.requests[0])
       expect(req.command).toBe(`Read(${realKey})`)
@@ -453,7 +468,7 @@ describe.skipIf(process.platform === 'win32')(
 
       // 门判的就是内核会打开的那个文件：允许之后读回来的是私钥
       state.respond = () => ({ kind: 'ask', allowed: true })
-      const res = await makeReadTool(ctx).execute('pr4b', { path: readPath })
+      const res = await executeTool(makeReadTool(ctx), 'pr4b', { path: readPath })
       const text = res.content.map((c) => (c.type === 'text' ? c.text : '')).join('')
       expect(text).toContain('PRIVATE KEY')
       expect(text).not.toContain('DECOY')
@@ -463,9 +478,11 @@ describe.skipIf(process.platform === 'win32')(
       state.respond = () => ({ kind: 'ask', allowed: false })
       const writePath = `${TEST_DIR}/sshlink/../.ssh/new_key`
       const realNewKey = join(realpathSync.native(HOME), '.ssh', 'new_key')
-      await expect(
-        makeWriteTool(ctx).execute('pr4c', { path: writePath, content: 'k' })
-      ).rejects.toThrow(/User denied/)
+      expect(
+        await failureText(
+          executeTool(makeWriteTool(ctx), 'pr4c', { path: writePath, content: 'k' })
+        )
+      ).toMatch(/User denied/)
       expect(state.requests).toHaveLength(1)
       const writeReq = askOf(state.requests[0])
       expect(writeReq.command).toBe(`Write(${realNewKey})`)
@@ -480,7 +497,7 @@ describe.skipIf(process.platform === 'win32')(
       const real = realpathSync.native(target)
 
       // 区外文件：读它问一次、放行，读取时间记在 R 上
-      await makeReadTool(ctx).execute('pr5a', { path: real })
+      await executeTool(makeReadTool(ctx), 'pr5a', { path: real })
       const readAt = getReadTime(SESSION_ID, real)
       expect(readAt).toBeDefined()
       state.requests = []
@@ -489,7 +506,11 @@ describe.skipIf(process.platform === 'win32')(
 
       expect(
         await messageOf(
-          makeEditTool(ctx).execute('pr5b', { path: 'elink', oldText: 'beta', newText: 'BETA' })
+          executeTool(makeEditTool(ctx), 'pr5b', {
+            path: 'elink',
+            oldText: 'beta',
+            newText: 'BETA'
+          })
         )
       ).toBe(
         `Not edited: elink is a symbolic link to ${real}. Symbolic links are not followed — edit ${real} directly if that is the file you mean.`
@@ -499,7 +520,7 @@ describe.skipIf(process.platform === 'win32')(
       expect(getReadTime(SESSION_ID, real)).toBe(readAt)
       expect(getReadTime(SESSION_ID, link)).toBeUndefined()
 
-      await makeEditTool(ctx).execute('pr5c', { path: real, oldText: 'beta', newText: 'BETA' })
+      await executeTool(makeEditTool(ctx), 'pr5c', { path: real, oldText: 'beta', newText: 'BETA' })
       expect(state.requests).toHaveLength(1)
       const req = askOf(state.requests[0])
       expect(req.toolName).toBe('edit')
@@ -513,13 +534,13 @@ describe.skipIf(process.platform === 'win32')(
       const link = join(TEST_DIR, 'dirlink')
       const realDir = realpathSync.native(OUTSIDE)
 
-      const msg = await messageOf(makeReadTool(ctx).execute('pr6a', { path: link }))
+      const msg = await messageOf(executeTool(makeReadTool(ctx), 'pr6a', { path: link }))
       expect(msg).toContain(`${link} is a symbolic link to ${realDir}.`)
       expect(msg).toContain(`read ${realDir} directly`)
       expectGateUntouched()
 
       const through = join(link, 'doc.txt')
-      const res = await makeReadTool(ctx).execute('pr6b', { path: through })
+      const res = await executeTool(makeReadTool(ctx), 'pr6b', { path: through })
       // 内置策略只对家目录里（会话目录外）的读取询问，OUTSIDE 不在家目录里：不弹卡，但门确实过了一次
       // （决策日志），按的是真实去处
       expect(state.requests).toEqual([])
@@ -537,7 +558,7 @@ describe.skipIf(process.platform === 'win32')(
       const before = footprint(link, OUTSIDE)
 
       expect(
-        await messageOf(makeWriteTool(ctx).execute('pr7', { path: link, content: 'x\n' }))
+        await messageOf(executeTool(makeWriteTool(ctx), 'pr7', { path: link, content: 'x\n' }))
       ).toContain(`Not written: ${link} is a symbolic link to ${realpathSync.native(OUTSIDE)}.`)
       expectGateUntouched()
       expect(footprint(link, OUTSIDE)).toEqual(before)
@@ -547,12 +568,12 @@ describe.skipIf(process.platform === 'win32')(
       const link = join(TEST_DIR, 'dang')
       const real = join(realpathSync.native(OUTSIDE), 'missing', 'deeper', 'new.txt')
 
-      const readMsg = await messageOf(makeReadTool(ctx).execute('pr8a', { path: link }))
+      const readMsg = await messageOf(executeTool(makeReadTool(ctx), 'pr8a', { path: link }))
       expect(readMsg).toContain(`${link} is a symbolic link to ${real}.`)
       expect(readMsg).not.toContain('File not found')
       expect(readMsg).not.toContain('Did you mean')
       const writeMsg = await messageOf(
-        makeWriteTool(ctx).execute('pr8b', { path: link, content: 'x\n' })
+        executeTool(makeWriteTool(ctx), 'pr8b', { path: link, content: 'x\n' })
       )
       expect(writeMsg).toContain(`Not written: ${link} is a symbolic link to ${real}.`)
       expectGateUntouched()
@@ -560,7 +581,7 @@ describe.skipIf(process.platform === 'win32')(
       expect(lstatSync(link).isSymbolicLink()).toBe(true)
       expect(readlinkSync(link)).toBe(join(OUTSIDE, 'missing', 'deeper', 'new.txt'))
 
-      await makeWriteTool(ctx).execute('pr8c', { path: real, content: 'x\n' })
+      await executeTool(makeWriteTool(ctx), 'pr8c', { path: real, content: 'x\n' })
       expect(state.requests).toHaveLength(1)
       const req = askOf(state.requests[0])
       expect(req.command).toBe(`Write(${real})`)
@@ -574,7 +595,7 @@ describe.skipIf(process.platform === 'win32')(
 
       expect(
         await messageOf(
-          makeWriteTool(ctx).execute('pr9a', { path: link, content: 'ssh-ed25519 AAAA\n' })
+          executeTool(makeWriteTool(ctx), 'pr9a', { path: link, content: 'ssh-ed25519 AAAA\n' })
         )
       ).toContain(`Not written: ${link} is a symbolic link to ${real}.`)
       expectGateUntouched()
@@ -582,7 +603,7 @@ describe.skipIf(process.platform === 'win32')(
       state.respond = () => ({ kind: 'ask', allowed: false })
       expect(
         await messageOf(
-          makeWriteTool(ctx).execute('pr9b', { path: real, content: 'ssh-ed25519 AAAA\n' })
+          executeTool(makeWriteTool(ctx), 'pr9b', { path: real, content: 'ssh-ed25519 AAAA\n' })
         )
       ).toMatch(/User denied/)
       expect(state.requests).toHaveLength(1)
@@ -601,7 +622,7 @@ describe.skipIf(process.platform === 'win32')(
       const real = realpathSync.native(join(HOME, '.ssh', 'id_rsa'))
       expect(readlinkSync(join(TEST_DIR, 'relkey'))).toBe(text)
 
-      expect(await messageOf(makeReadTool(ctx).execute('pr10', { path: 'relkey' }))).toContain(
+      expect(await messageOf(executeTool(makeReadTool(ctx), 'pr10', { path: 'relkey' }))).toContain(
         `relkey is a symbolic link to ${real} (the link says "${text}"). Symbolic links are not followed — read ${real} directly`
       )
       expectGateUntouched()
@@ -610,10 +631,10 @@ describe.skipIf(process.platform === 'win32')(
     it('PERM-R11 链接链（c1 → c2 → 区外文件）：说出的是链的尽头，引出的是第一跳的原文；从 c2 问起就没有引文（原文是绝对的）', async () => {
       const real = realpathSync.native(join(OUTSIDE, 'chain-end.txt'))
 
-      expect(await messageOf(makeReadTool(ctx).execute('pr11a', { path: 'c1' }))).toContain(
+      expect(await messageOf(executeTool(makeReadTool(ctx), 'pr11a', { path: 'c1' }))).toContain(
         `c1 is a symbolic link to ${real} (the link says "c2").`
       )
-      const second = await messageOf(makeReadTool(ctx).execute('pr11b', { path: 'c2' }))
+      const second = await messageOf(executeTool(makeReadTool(ctx), 'pr11b', { path: 'c2' }))
       expect(second).toContain(`c2 is a symbolic link to ${real}.`)
       expect(second).not.toContain('the link says')
       expectGateUntouched()
@@ -625,21 +646,29 @@ describe.skipIf(process.platform === 'win32')(
       const real = realpathSync.native(target)
       const before = footprint(link, target)
 
-      expect(await messageOf(makeReadTool(ctx).execute('pr12a', { path: 'inlink' }))).toContain(
-        `inlink is a symbolic link to ${real}.`
-      )
       expect(
-        await messageOf(makeWriteTool(ctx).execute('pr12b', { path: 'inlink', content: 'x\n' }))
+        await messageOf(executeTool(makeReadTool(ctx), 'pr12a', { path: 'inlink' }))
+      ).toContain(`inlink is a symbolic link to ${real}.`)
+      expect(
+        await messageOf(
+          executeTool(makeWriteTool(ctx), 'pr12b', { path: 'inlink', content: 'x\n' })
+        )
       ).toContain(`Not written: inlink is a symbolic link to ${real}.`)
       expect(
         await messageOf(
-          makeEditTool(ctx).execute('pr12c', { path: 'inlink', oldText: 'inside', newText: 'x' })
+          executeTool(makeEditTool(ctx), 'pr12c', {
+            path: 'inlink',
+            oldText: 'inside',
+            newText: 'x'
+          })
         )
       ).toContain(`Not edited: inlink is a symbolic link to ${real}.`)
       expectGateUntouched()
       expect(footprint(link, target)).toEqual(before)
 
-      expect(textOf(await makeReadTool(ctx).execute('pr12d', { path: real }))).toContain('inside')
+      expect(textOf(await executeTool(makeReadTool(ctx), 'pr12d', { path: real }))).toContain(
+        'inside'
+      )
       expect(state.requests).toEqual([])
     })
 
@@ -648,13 +677,13 @@ describe.skipIf(process.platform === 'win32')(
       const viaLink = join(dirLink, 'innerlink')
       const real = realpathSync.native(join(OUTSIDE, 'ldir', 'real.txt'))
 
-      expect(await messageOf(makeReadTool(ctx).execute('pr13a', { path: viaLink }))).toContain(
+      expect(await messageOf(executeTool(makeReadTool(ctx), 'pr13a', { path: viaLink }))).toContain(
         `${viaLink} is a symbolic link to ${real} (the link says "real.txt").`
       )
       expectGateUntouched()
 
       const plain = join(dirLink, 'real.txt')
-      const res = await makeReadTool(ctx).execute('pr13b', { path: plain })
+      const res = await executeTool(makeReadTool(ctx), 'pr13b', { path: plain })
       expect(state.requests).toEqual([])
       expect(getSessionDecisions(SESSION_ID)).toHaveLength(1)
       expect(getSessionDecisions(SESSION_ID)[0]).toMatchObject({
@@ -673,7 +702,7 @@ describe.skipIf(process.platform === 'win32')(
         expect(realDir).not.toBe(TEST_DIR)
 
         const p = join(TEST_DIR, 'r14.txt')
-        await makeWriteTool(ctx).execute('pr14a', { path: p, content: 'r14\n' })
+        await executeTool(makeWriteTool(ctx), 'pr14a', { path: p, content: 'r14\n' })
         expect(state.requests).toHaveLength(1)
         const req = askOf(state.requests[0])
         expect(req.command).toBe(`Write(${join(realDir, 'r14.txt')})`)
@@ -681,8 +710,8 @@ describe.skipIf(process.platform === 'win32')(
         expect(readFileSync(p, 'utf-8')).toBe('r14\n')
 
         state.requests = []
-        expect(textOf(await makeReadTool(ctx).execute('pr14b', { path: p }))).toContain('r14')
-        expect(textOf(await makeReadTool(ctx).execute('pr14c', { path: TEST_DIR }))).toContain(
+        expect(textOf(await executeTool(makeReadTool(ctx), 'pr14b', { path: p }))).toContain('r14')
+        expect(textOf(await executeTool(makeReadTool(ctx), 'pr14c', { path: TEST_DIR }))).toContain(
           'r14.txt'
         )
         expect(state.requests).toEqual([])
@@ -698,11 +727,11 @@ describe.skipIf(process.platform === 'win32')(
       state.grants = {
         allowList: [`Read(${link})`, `Write(${link})`, `Read(${real})`, `Write(${real})`]
       }
-      expect(await messageOf(makeReadTool(ctx).execute('pr15a', { path: link }))).toContain(
+      expect(await messageOf(executeTool(makeReadTool(ctx), 'pr15a', { path: link }))).toContain(
         `${link} is a symbolic link to ${real}.`
       )
       expect(
-        await messageOf(makeWriteTool(ctx).execute('pr15b', { path: link, content: 'x\n' }))
+        await messageOf(executeTool(makeWriteTool(ctx), 'pr15b', { path: link, content: 'x\n' }))
       ).toContain(`Not written: ${link} is a symbolic link to ${real}.`)
       expectGateUntouched()
       expect(state.persisted).toEqual([])
@@ -714,17 +743,17 @@ describe.skipIf(process.platform === 'win32')(
       const tool = makeReadTool(ctx)
 
       writeFileSync(p, 'plain\n')
-      expect(textOf(await tool.execute('pr16a', { path: p }))).toContain('plain')
+      expect(textOf(await executeTool(tool, 'pr16a', { path: p }))).toContain('plain')
 
       rmSync(p)
       symlinkSync(join(OUTSIDE, 'doc.txt'), p)
-      expect(await messageOf(tool.execute('pr16b', { path: p }))).toContain(
+      expect(await messageOf(executeTool(tool, 'pr16b', { path: p }))).toContain(
         `${p} is a symbolic link to ${realpathSync.native(join(OUTSIDE, 'doc.txt'))}.`
       )
 
       rmSync(p)
       writeFileSync(p, 'plain again\n')
-      expect(textOf(await tool.execute('pr16c', { path: p }))).toContain('plain again')
+      expect(textOf(await executeTool(tool, 'pr16c', { path: p }))).toContain('plain again')
       expect(state.requests).toEqual([])
     })
 
@@ -735,11 +764,11 @@ describe.skipIf(process.platform === 'win32')(
         (named) => `${link} is a symbolic link to ${named}. `
       )
 
-      const readMsg = await messageOf(makeReadTool(ctx).execute('pr17a', { path: link }))
+      const readMsg = await messageOf(executeTool(makeReadTool(ctx), 'pr17a', { path: link }))
       // 以两种说法之一起头；都不是就把原话整句摆出来
       expect(heads.some((h) => readMsg.startsWith(h)) ? 'ok' : readMsg).toBe('ok')
       const writeMsg = await messageOf(
-        makeWriteTool(ctx).execute('pr17b', { path: link, content: 'x\n' })
+        executeTool(makeWriteTool(ctx), 'pr17b', { path: link, content: 'x\n' })
       )
       const writeHead = `Not written: ${link} is a symbolic link to `
       expect(writeMsg.slice(0, writeHead.length)).toBe(writeHead)
@@ -750,7 +779,7 @@ describe.skipIf(process.platform === 'win32')(
     it('PERM-R18 指向目录的链接带结尾 `/` 或 `/.`：相对、绝对两种写法一样被拒（D 照写，R 是 OUTSIDE 的真实位置），不弹卡、门不问', async () => {
       const realDir = realpathSync.native(OUTSIDE)
       for (const D of ['dirlink/', 'dirlink/.', `${TEST_DIR}/dirlink/`, `${TEST_DIR}/dirlink/.`]) {
-        const msg = await messageOf(makeReadTool(ctx).execute('pr18', { path: D }))
+        const msg = await messageOf(executeTool(makeReadTool(ctx), 'pr18', { path: D }))
         const head = `${D} is a symbolic link to ${realDir}. Symbolic links are not followed — read ${realDir} directly`
         expect(msg.slice(0, head.length), D).toBe(head)
       }
@@ -761,16 +790,16 @@ describe.skipIf(process.platform === 'win32')(
       state.workspace = WS_LINK
       const realWs = realpathSync.native(REAL_WS)
 
-      const msg = await messageOf(makeReadTool(ctx).execute('pr19a', { path: '.' }))
+      const msg = await messageOf(executeTool(makeReadTool(ctx), 'pr19a', { path: '.' }))
       const head = `. is a symbolic link to ${realWs}. Symbolic links are not followed — read ${realWs} directly`
       expect(msg.slice(0, head.length)).toBe(head)
       expectGateUntouched()
 
-      expect(textOf(await makeReadTool(ctx).execute('pr19b', { path: realWs }))).toContain(
+      expect(textOf(await executeTool(makeReadTool(ctx), 'pr19b', { path: realWs }))).toContain(
         'plain-target.txt'
       )
       expect(
-        textOf(await makeReadTool(ctx).execute('pr19c', { path: 'plain-target.txt' }))
+        textOf(await executeTool(makeReadTool(ctx), 'pr19c', { path: 'plain-target.txt' }))
       ).toContain('plain')
       expect(state.requests).toEqual([])
     })

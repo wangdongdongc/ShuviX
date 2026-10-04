@@ -3,12 +3,12 @@
  * 从桌面 read.ts 的 readTextFile / readDirectory 逐字搬出，fs → 注入的 FileSystemPort。
  * （富文本转换 / 图片 / URL / 二进制探测等分支仍由各宿主在外层编排。）
  */
-import type { AgentToolResult } from '../tools/toolResult'
+import type { ToolResult } from '../tools/toolResult'
 import type { ReadToolDetails } from '@shuvix/chat-protocol/types/chatMessage'
 import type { FileSystemPort } from './port'
 import { truncateLine, formatSize, DEFAULT_MAX_LINES, DEFAULT_MAX_BYTES } from './truncate'
 
-type ReadResult = AgentToolResult<ReadToolDetails>
+type ReadResult = ToolResult<ReadToolDetails>
 
 const encoder = new TextEncoder()
 const byteLen = (s: string): number => encoder.encode(s).length

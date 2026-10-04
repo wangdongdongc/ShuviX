@@ -18,6 +18,12 @@ export default defineConfig({
         __dirname,
         '../../packages/agent-runtime/src/security/builtinPolicies/inlineSources.ts'
       ),
+      // 工具单测辅助（假 durable api 调一次工具）—— 只给单测用，产品代码不得 import；
+      // 同样得排在下面那条前缀别名之前
+      '@shuvix/agent-runtime/tools/testing/invokeTool': resolvePath(
+        __dirname,
+        '../../packages/agent-runtime/src/tools/testing/invokeTool.ts'
+      ),
       // 扩展的 browserOps 引这个自带子路径（扩展自己的构建也只给它开了这一条别名）；
       // 同样得排在下面那条前缀别名之前
       '@shuvix/agent-runtime/browser/extractPage': resolvePath(

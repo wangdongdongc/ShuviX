@@ -1,13 +1,23 @@
 /**
  * wrapToolOutput —— 安全模块 L1 全工具门（enforceInvocation）的挂载点，同时也是「工具输出
- * 怎么截 / 落不落盘」这组参数**唯一**的穿线处（W-S*），以及结果上 `terminate` 的保留（W-T*）。
+ * 怎么截 / 落不落盘」这组参数**唯一**的穿线处（W-S*），以及结果上 `control.terminate` 的保留（W-T*）。
  * mock 惯例照 tools/__tests__/write.test.ts（toolContext/logger mock）；
  * processToolOutput 短文本直通（但把每次调用的 opts 记下来）；security 用手写 stub，
  * W-9 走真 createSecurityContext。
+ *
+ * P1-04（pi-durable）：包装产物是 durable 注册项，经 invokeTool 调（`execute(args, api, context)`）；
+ * 手写的假工具多数仍是旧形状（`execute(toolCallId, params, signal)`，如 MCP 桥接层），包装器经
+ * `fromAgentTool` 收下它们 —— 所以下面对原 execute 入参的断言仍按旧约定写。门拒绝从「抛错」变成
+ * isError 结果（裁定 Q12，文字不变）。
  */
 import { describe, it, expect, afterEach, vi } from 'vitest'
-import type { AgentTool } from '@shuvix/agent-runtime'
+import type { AgentTool, AnyTool } from '@shuvix/agent-runtime'
 import type { EnforceOutcome, McpAgentToolMeta, SecurityContext } from '@shuvix/agent-runtime'
+import {
+  executeTool,
+  failureText,
+  type InvokedToolResult
+} from '@shuvix/agent-runtime/tools/testing/invokeTool'
 import {
   createSecurityContext,
   clearSessionDecisions,
@@ -99,11 +109,8 @@ function makeSecurity(impl?: () => Promise<EnforceOutcome>): {
   return { security: { enforceInvocation } as unknown as SecurityContext, enforceInvocation }
 }
 
-const exec = (
-  wrapped: AgentTool,
-  toolCallId: string,
-  params: unknown
-): ReturnType<AgentTool['execute']> => wrapped.execute(toolCallId, params as never)
+const exec = (wrapped: AnyTool, toolCallId: string, params: unknown): Promise<InvokedToolResult> =>
+  executeTool(wrapped, toolCallId, params as never)
 
 /** 这一次跑下来，后处理收到的全部入参（按调用顺序） */
 const processCalls = (): ProcessCall[] =>
@@ -150,7 +157,7 @@ describe('wrapToolOutput — L1 全工具门', () => {
     const wrapped = wrapToolOutput(tool, SID, 'middle', undefined, security)
 
     const ac = new AbortController()
-    await wrapped.execute('tc-sg1', { action: 'connect' } as never, ac.signal)
+    await executeTool(wrapped, 'tc-sg1', { action: 'connect' } as never, ac.signal)
 
     expect(enforceInvocation).toHaveBeenCalledTimes(1)
     // toBe：询问点的审查随这次工具调用一起中止 —— 包装器若另造一个 signal（或丢掉它），
@@ -160,7 +167,7 @@ describe('wrapToolOutput — L1 全工具门', () => {
     expect(execute.mock.calls[0][2]).toBe(ac.signal)
   })
 
-  it('W-3 时序：enforceInvocation pending 期间原 execute 未调；allowed 后原参数透传', async () => {
+  it('W-3 时序：enforceInvocation pending 期间原 execute 未调；allowed 后原参数透传（旧形状桥：恰三个入参）', async () => {
     const { tool, execute } = makeTool()
     let release!: (o: EnforceOutcome) => void
     const { security } = makeSecurity(
@@ -170,18 +177,18 @@ describe('wrapToolOutput — L1 全工具门', () => {
 
     const params = { action: 'connect' }
     const signal = new AbortController().signal
-    const onUpdate = vi.fn()
-    const pending = wrapped.execute('tc-3', params as never, signal, onUpdate)
+    const pending = executeTool(wrapped, 'tc-3', params as never, signal)
     await new Promise((r) => setTimeout(r, 0))
     expect(execute).not.toHaveBeenCalled()
 
     release({ status: 'allowed' })
     const result = await pending
-    expect(execute).toHaveBeenCalledWith('tc-3', params, signal, onUpdate)
+    // durable 没有 onUpdate（中途汇报走 api.output / api.details）—— 旧形状桥只按旧约定交三个入参
+    expect(execute).toHaveBeenCalledWith('tc-3', params, signal)
     expect(result.content).toEqual([{ type: 'text', text: 'ran' }])
   })
 
-  it('W-4 enforceInvocation rejects → wrappedExecute rejects 同错误；原 execute 未调', async () => {
+  it('W-4 enforceInvocation rejects → isError 结果、文字即那条错误（原为原样 reject，裁定 Q12）；原 execute 未调', async () => {
     const { tool, execute } = makeTool()
     const err = new Error("Denied by security policy rule 'tool-gate#0'")
     const { security } = makeSecurity(async () => {
@@ -189,7 +196,22 @@ describe('wrapToolOutput — L1 全工具门', () => {
     })
     const wrapped = wrapToolOutput(tool, SID, 'middle', undefined, security)
 
-    await expect(exec(wrapped, 'tc-4', {})).rejects.toBe(err)
+    const result = await exec(wrapped, 'tc-4', {})
+    expect(result).toEqual({ isError: true, content: [{ type: 'text', text: err.message }] })
+    expect(execute).not.toHaveBeenCalled()
+  })
+
+  it('W-4b 调用已被取消时门的拒绝照旧抛出（取消不收成失败结果，durable 的中止语义靠它）', async () => {
+    const { tool, execute } = makeTool()
+    const ac = new AbortController()
+    const err = new Error('Aborted')
+    const { security } = makeSecurity(async () => {
+      ac.abort()
+      throw err
+    })
+    const wrapped = wrapToolOutput(tool, SID, 'middle', undefined, security)
+
+    await expect(executeTool(wrapped, 'tc-4b', {} as never, ac.signal)).rejects.toBe(err)
     expect(execute).not.toHaveBeenCalled()
   })
 
@@ -283,7 +305,7 @@ describe('wrapToolOutput — L1 全工具门', () => {
     })
     const wrapped = wrapToolOutput(tool, SID, 'middle', undefined, security)
 
-    await expect(exec(wrapped, 'tc-13', {})).rejects.toThrow(/Denied by security policy rule/)
+    expect(await failureText(exec(wrapped, 'tc-13', {}))).toMatch(/Denied by security policy rule/)
     // 「按 server 拒绝」要成立，事实必须在判定**之前**就到了门上
     expect(mcpOf(enforceInvocation)).toEqual(SSH_EXEC_META)
     expect(execute).not.toHaveBeenCalled()
@@ -434,26 +456,35 @@ describe('wrapToolOutput — 截断 / 落盘参数的穿线', () => {
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
-// W-T —— `terminate` 的保留。
+// W-T —— `control.terminate` 的保留。
 //
-// 结果契约的 `next` 靠 `terminate: true` 让 pi 在「这一批只有 next」时直接结束循环（判定型 hook 的
-// 审查 agent 因此一次请求出结论）；它在派生 agent 的工具表里同样过这层包装。包装器用展开重建结果，
-// 这里钉的是每条出口都把它原样带出去 —— 丢了它不会报错，只会让每次审查悄悄多花一次请求。
+// 结果契约的 `next` 靠 `control: { terminate: true }` 让 durable 在「这一批只有 next」时直接结束循环
+// （判定型 hook 的审查 agent 因此一次请求出结论）；它在派生 agent 的工具表里同样过这层包装。包装器用
+// 展开重建结果，这里钉的是每条出口都把它原样带出去 —— 丢了它不会报错，只会让每次审查悄悄多花一次请求。
+// 假工具是 durable 形状（next 是 BaseTool）；旧形状结果上的 `terminate` 由桥换成 control（见 W-T3）。
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** execute 交回给定 content、并带 terminate:true 的工具 */
+/** execute 交回给定 content、并带 control.terminate 的 durable 形状工具 */
 function makeTerminatingTool(content: Array<{ type: 'text'; text: string }>): {
-  tool: AgentTool
+  tool: AnyTool
   execute: ReturnType<typeof vi.fn>
 } {
-  const execute = vi.fn(async () => ({ content, details: undefined, terminate: true }))
-  const tool = { name: 'next', label: 'next', description: 'test tool', parameters: {}, execute }
-  return { tool: tool as unknown as AgentTool, execute }
+  const execute = vi.fn(async () => ({ content, control: { terminate: true as const } }))
+  const tool = {
+    name: 'next',
+    label: 'next',
+    description: 'test tool',
+    parameters: {},
+    replay: 'unsafe' as const,
+    execute
+  }
+  return { tool: tool as unknown as AnyTool, execute }
 }
 
-const terminateOf = (result: unknown): unknown => (result as { terminate?: unknown }).terminate
+const terminateOf = (result: unknown): unknown =>
+  (result as { control?: { terminate?: unknown } }).control?.terminate
 
-describe('wrapToolOutput — terminate 原样带出', () => {
+describe('wrapToolOutput — control.terminate 原样带出', () => {
   it('W-T1 普通文本路径：包装后仍带 terminate:true，文本照常过后处理', async () => {
     const { tool } = makeTerminatingTool([{ type: 'text', text: 'Result recorded.' }])
     const wrapped = wrapToolOutput(tool, SID, 'middle')
@@ -490,7 +521,7 @@ describe('wrapToolOutput — terminate 原样带出', () => {
     expect(terminateOf(result)).toBe(true)
   })
 
-  it('W-T2 原结果没有 terminate → 包装后也没有这个键（不凭空多出）', async () => {
+  it('W-T2 原结果没有 terminate → 包装后也没有 control 这个键（不凭空多出）', async () => {
     const { tool } = makeTool()
     const { security } = makeSecurity()
     for (const wrapped of [
@@ -499,6 +530,21 @@ describe('wrapToolOutput — terminate 原样带出', () => {
     ]) {
       const result = await exec(wrapped, 'tc-t2', {})
       expect('terminate' in (result as object)).toBe(false)
+      expect('control' in (result as object)).toBe(false)
     }
+  })
+
+  it('W-T3 旧形状工具结果上的 terminate:true → 桥换成 control.terminate，包装后照样带出', async () => {
+    const execute = vi.fn(async () => ({
+      content: [{ type: 'text' as const, text: 'done' }],
+      details: undefined,
+      terminate: true
+    }))
+    const legacy = { name: 'old', label: 'old', description: 'test tool', parameters: {}, execute }
+    const wrapped = wrapToolOutput(legacy as unknown as AgentTool, SID, 'middle')
+
+    const result = await exec(wrapped, 'tc-t3', {})
+    expect(terminateOf(result)).toBe(true)
+    expect('terminate' in (result as object)).toBe(false)
   })
 })

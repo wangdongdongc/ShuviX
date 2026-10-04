@@ -26,6 +26,7 @@ import {
 import type { AgentFactory, CreateAgentParams, CreatedAgent } from '../../agentProfile/createAgent'
 import type { InProcessAgentType, SubAgentModelConfig } from '../types'
 import { NEXT_NUDGE_TEXT, type ResultContract } from '../nextTool'
+import { invokeTool } from '../../tools/testing/invokeTool'
 
 const TITLE_SCHEMA = {
   type: 'object',
@@ -129,7 +130,7 @@ interface Harness {
   abort: ReturnType<typeof vi.fn>
   /** 内存会话树 —— contextMessages 按引用交回，onPrompt 可在轮次之间往里 push */
   messages: unknown[]
-  /** 「模型调 next」：取捕到的 extraTools[0] 走 BaseTool.execute */
+  /** 「模型调 next」：取捕到的 extraTools[0] 经 invokeTool 走 BaseTool.execute */
   next: (value: Record<string, unknown>) => Promise<unknown>
   /** 这次派生的 agentId（= taskId = 事件频道） */
   agentId: () => string
@@ -198,10 +199,9 @@ function makeHarness(
     abort: runtime.abort,
     messages,
     next: async (value) => {
-      const tool = createCalls[0]?.extraTools?.[0] as unknown as {
-        execute: (id: string, p: Record<string, unknown>) => Promise<unknown>
-      }
-      return tool.execute(`tc-${promptTexts.length}`, value)
+      const tool = createCalls[0]?.extraTools?.[0]
+      if (!tool) throw new Error('no next tool was handed to createAgent')
+      return (await invokeTool(tool, value, { callId: `tc-${promptTexts.length}` })).result
     },
     agentId,
     ends: () => events.filter((e): e is EndEvent => e.type === 'sub_session_end'),

@@ -16,6 +16,7 @@ import {
 } from 'node:fs'
 import { join, resolve, sep } from 'node:path'
 import { tmpdir } from 'node:os'
+import { executeTool, failureText } from '@shuvix/agent-runtime/tools/testing/invokeTool'
 
 const TEST_DIR = join(tmpdir(), 'shuvix-write-test-' + Date.now())
 const SESSION_ID = 'test-session'
@@ -65,7 +66,7 @@ beforeEach(() => _resetAll())
 describe('write 工具', () => {
   it('写入内容（新文件）并返回字节数', async () => {
     const p = join(TEST_DIR, 'a.txt')
-    const result = await makeWriteTool(ctx).execute('w1', { path: p, content: 'hello world' })
+    const result = await executeTool(makeWriteTool(ctx), 'w1', { path: p, content: 'hello world' })
     expect(readFileSync(p, 'utf-8')).toBe('hello world')
     const text = (result.content[0] as { text: string }).text
     expect(text).toContain('11') // "hello world" = 11 字节
@@ -73,7 +74,7 @@ describe('write 工具', () => {
 
   it('自动创建父目录', async () => {
     const p = join(TEST_DIR, 'nested', 'deep', 'b.txt')
-    await makeWriteTool(ctx).execute('w2', { path: p, content: 'x' })
+    await executeTool(makeWriteTool(ctx), 'w2', { path: p, content: 'x' })
     expect(existsSync(p)).toBe(true)
     expect(readFileSync(p, 'utf-8')).toBe('x')
   })
@@ -81,7 +82,7 @@ describe('write 工具', () => {
   it('覆盖已有文件', async () => {
     const p = join(TEST_DIR, 'c.txt')
     writeFileSync(p, 'old')
-    await makeWriteTool(ctx).execute('w3', { path: p, content: 'new' })
+    await executeTool(makeWriteTool(ctx), 'w3', { path: p, content: 'new' })
     expect(readFileSync(p, 'utf-8')).toBe('new')
   })
 
@@ -92,9 +93,9 @@ describe('write 工具', () => {
     // 把 mtime 设到未来，模拟外部修改
     const future = new Date(Date.now() + 60_000)
     utimesSync(p, future, future)
-    await expect(makeWriteTool(ctx).execute('w4', { path: p, content: 'v2' })).rejects.toThrow(
-      /modified since it was last read/
-    )
+    expect(
+      await failureText(executeTool(makeWriteTool(ctx), 'w4', { path: p, content: 'v2' }))
+    ).toMatch(/modified since it was last read/)
   })
 })
 
@@ -117,7 +118,9 @@ describe.skipIf(process.platform === 'win32')('write 工具 - 符号链接不跟
     const link = join(L, 'deep')
     const real = join(realpathSync.native(L), 'missing', 'a', 'b', 'c.txt')
 
-    await expect(makeWriteTool(ctx).execute('wrl1', { path: link, content: 'x' })).rejects.toThrow(
+    expect(
+      await failureText(executeTool(makeWriteTool(ctx), 'wrl1', { path: link, content: 'x' }))
+    ).toContain(
       `Not written: ${link} is a symbolic link to ${real}. Symbolic links are not followed`
     )
     expect(existsSync(join(L, 'missing'))).toBe(false)
@@ -129,7 +132,7 @@ describe.skipIf(process.platform === 'win32')('write 工具 - 符号链接不跟
   it('WR-L2 链接在中间（经链接目录写一个新文件）：照常写进那头，门恰问一次、问的是写法那一条', async () => {
     const p = join(L, 'wdir', 'new.txt')
 
-    await makeWriteTool(ctx).execute('wrl2', { path: p, content: 'hi' })
+    await executeTool(makeWriteTool(ctx), 'wrl2', { path: p, content: 'hi' })
     expect(readFileSync(join(L, 'wreal', 'new.txt'), 'utf-8')).toBe('hi')
     expect(lstatSync(join(L, 'wdir')).isSymbolicLink()).toBe(true)
     expect(enforcePath).toHaveBeenCalledTimes(1)

@@ -11,10 +11,8 @@
  * - SkillTool 带 projectPath：派生 agent 现在能看到项目级 .claude/skills/；
  * - 派发工具 modelConfig 走惰性 getter：跟随会话当前模型/思考档位（原为构造时快照）。
  */
-import type { TSchema } from 'typebox'
 import {
   createAgentFactory,
-  type AgentTool,
   DISPATCH_TOOL_NAME,
   LAZY_CONNECT_TIMEOUT_MS,
   renderKnowledgeGuide,
@@ -53,7 +51,8 @@ import { chatFrontendRegistry } from '../frontend/core'
 import {
   wrapToolOutput,
   getOutputStrategy,
-  type ProcessToolOutputOverrides
+  type ProcessToolOutputOverrides,
+  type WrappableTool
 } from '../services/wrapToolOutput'
 import {
   electronEventSink,
@@ -104,14 +103,16 @@ async function resolveDesktopTools(req: ToolResolveRequest): Promise<AnyAgentToo
   // 超长输出落盘后给的是「用 read 取全文」——没有 read 的 agent（如 Chrome 标签页会话的 `tab`）
   // 取不回来，就只在内存里截断：它至少拿到截断上限那么多，而不是一段指向它没有的工具的预览
   const spill = req.names.includes('read')
+  // 工具表里混着 durable 注册项（BaseTool 子类）与旧形状工具（ask / git / MCP，P1-05 之前）——
+  // 包装器两种都收，交出来的一律是 durable 注册项
   const wrap = (tool: object): AnyAgentTool =>
     wrapToolOutput(
-      tool as AgentTool<TSchema, unknown>,
+      tool as WrappableTool,
       req.rootSessionId,
       getOutputStrategy(tool),
       { ...pickOverrides(tool), spill },
       security
-    ) as unknown as AnyAgentTool
+    )
 
   // 只收当前平台上存在的工具：档案里另一个平台的版本（Windows 上的 bash、macOS 上的
   // powershell）在这里自然缺位，与下面「未知名静默跳过」同一条路

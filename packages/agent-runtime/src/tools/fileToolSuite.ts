@@ -8,7 +8,7 @@
  * ReadDecoders(内容解码器,可选能力函数)。
  */
 import { Type } from 'typebox'
-import type { AgentToolResult } from './toolResult'
+import type { ToolResult } from './toolResult'
 import type {
   ReadToolDetails,
   EditToolDetails,
@@ -23,7 +23,7 @@ import { applyEdit } from '../fileTools/edit'
 import { reviewShuvixMdWrite } from '../shuvixMdWrite'
 import type { AccessMode, SecurityContext } from '../security/types'
 
-type ReadResult = AgentToolResult<ReadToolDetails>
+type ReadResult = ToolResult<ReadToolDetails>
 
 // ─── 参数 schema（两端一致；导出供工具定义枚举复用，无需实例化） ──────────────
 export const ReadParamsSchema = Type.Object({
@@ -65,7 +65,7 @@ function fileNameOf(path: string): string {
 }
 
 /** 把写后处理的回执并进工具结果的文本块（模型面）；结果的 details 不受影响 */
-function withNote<T>(res: AgentToolResult<T>, note: string | null): AgentToolResult<T> {
+function withNote<T>(res: ToolResult<T>, note: string | null): ToolResult<T> {
   if (!note) return res
   const content = [...res.content]
   const i = content.findIndex((c) => c.type === 'text')
@@ -283,6 +283,8 @@ class ReadFileTool extends FileToolBase<typeof ReadParamsSchema> {
   readonly label: string
   readonly description: string
   readonly parameters = ReadParamsSchema
+  // 只读：中断后恢复时重读一遍无害（读到的是那一刻的文件，正是模型要的）
+  readonly replay = 'safe' as const
   // 保留开头：超限的 read 结果里模型该拿到文件的**前**一段，接着用 offset 往下读
   readonly outputStrategy = 'keep-start' as const
   readonly outputMaxBytes = 80 * 1024
@@ -392,7 +394,7 @@ class WriteFileTool extends FileToolBase<typeof WriteParamsSchema> {
     toolCallId: string,
     params: { path: string; content: string },
     signal?: AbortSignal
-  ): Promise<AgentToolResult<WriteToolDetails>> {
+  ): Promise<ToolResult<WriteToolDetails>> {
     if (signal?.aborted) throw new Error(this.abortError)
     const portPath = this.deps.resolvePath(params.path, 'write')
     const res = await applyWrite(
@@ -429,7 +431,7 @@ class EditFileTool extends FileToolBase<typeof EditParamsSchema> {
     toolCallId: string,
     params: { path: string; oldText: string; newText: string },
     signal?: AbortSignal
-  ): Promise<AgentToolResult<EditToolDetails>> {
+  ): Promise<ToolResult<EditToolDetails>> {
     if (signal?.aborted) throw new Error(this.abortError)
     const portPath = this.deps.resolvePath(params.path, 'write')
     const res = await applyEdit(
@@ -451,7 +453,7 @@ export interface FileToolSuite {
   edit: EditFileTool
 }
 
-/** 构建一套 read/write/edit 工具（BaseTool 子类，可直接作为 AgentTool 使用） */
+/** 构建一套 read/write/edit 工具（BaseTool 子类，即 durable 的 ToolRegistration） */
 export function createFileToolSuite(deps: FileToolDeps): FileToolSuite {
   return {
     read: new ReadFileTool(deps),

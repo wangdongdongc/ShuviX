@@ -12,6 +12,7 @@ import { createSubAgentManager, type RunTaskParams } from '../manager'
 import type { AgentFactory, CreateAgentParams, CreatedAgent } from '../../agentProfile/createAgent'
 import type { InProcessAgentType, SubAgentModelConfig } from '../types'
 import { NEXT_NUDGE_TEXT, buildResultContractNote, type ResultContract } from '../nextTool'
+import { invokeTool } from '../../tools/testing/invokeTool'
 
 const TITLE_SCHEMA = {
   type: 'object',
@@ -32,7 +33,7 @@ interface Harness {
   createCalls: CreateAgentParams[]
   promptTexts: string[]
   abort: ReturnType<typeof vi.fn>
-  /** 「模型调 next」：取捕到的 extraTools[0] 走 BaseTool.execute */
+  /** 「模型调 next」：取捕到的 extraTools[0] 经 invokeTool 走 BaseTool.execute */
   next: (value: Record<string, unknown>) => Promise<unknown>
 }
 
@@ -54,10 +55,9 @@ function makeHarness(
     promptTexts: [],
     abort: vi.fn(async () => {}),
     next: async (value) => {
-      const tool = h.createCalls[0]?.extraTools?.[0] as unknown as {
-        execute: (id: string, p: Record<string, unknown>) => Promise<unknown>
-      }
-      return tool.execute(`tc-${h.promptTexts.length}`, value)
+      const tool = h.createCalls[0]?.extraTools?.[0]
+      if (!tool) throw new Error('no next tool was handed to createAgent')
+      return (await invokeTool(tool, value, { callId: `tc-${h.promptTexts.length}` })).result
     }
   }
   const runtime = {

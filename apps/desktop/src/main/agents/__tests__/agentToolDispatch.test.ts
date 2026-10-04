@@ -25,6 +25,7 @@ import {
   type SubAgentModelConfig
 } from '@shuvix/agent-runtime'
 import type { ToolContext } from '../../services/toolContext'
+import { executeTool } from '@shuvix/agent-runtime/tools/testing/invokeTool'
 
 const mocks = vi.hoisted(() => ({
   /** agentService 眼里的档案表（listAll 的结果；getProfile 在其中按名找） */
@@ -105,7 +106,7 @@ async function dispatch(params: { name?: string; prompt?: string }): Promise<str
     modelConfig: MODEL,
     rootSessionId: ROOT
   })
-  const result = await tool.execute('tc-dispatch', {
+  const result = await executeTool(tool, 'tc-dispatch', {
     description: 'do a thing',
     prompt: params.prompt ?? 'the task',
     ...(params.name !== undefined ? { name: params.name } : {})
