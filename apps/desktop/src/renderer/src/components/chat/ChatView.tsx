@@ -27,6 +27,7 @@ import {
 import { EmptySessionHint } from './WelcomeView'
 import { BotBindingChip } from './BotBindingChip'
 import { AgentProfileChip } from './AgentProfileChip'
+import { BrowserWindowButton } from './BrowserWindowButton'
 import { NotebookSessionView } from '../notebook/NotebookSessionView'
 import { subscribeAgentMonitor, useAgentMonitorStore } from '../../stores/agentMonitorStore'
 
@@ -174,6 +175,8 @@ export function ChatView({ pinnedMode }: ChatViewProps = {}): React.JSX.Element 
             <PictureInPicture2 size={14} />
           </button>
         )}
+        {/* 浏览器是独立窗口：这里开 / 聚焦它；agent 开 tab 不会弹窗，这里的计数告诉用户有页面 */}
+        {!isWeb && <BrowserWindowButton />}
         {!isWeb && <PanelToggleButton side="left" open={isSidebarOpen} onClick={toggleSidebar} />}
         {/* 底部栏（终端）—— 宿主能力，缺省则隐藏切换按钮 */}
         {!isWeb && (

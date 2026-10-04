@@ -15,7 +15,7 @@ const isPinnedWindow = window.location.hash.startsWith('#pinned-chat')
  *     usePreviewRequestBridge 落为预览目标，主窗再展开右侧面板并切到 preview tab
  *     （悬浮窗由 PreviewOverlay 按目标自动露出，不动窗口宽度）。
  * （Sub-agent tab 无自动揭示信号 —— 子会话经工具栏胶囊徽标可见，由用户手动打开。）
- * 浏览器不在这里：它是独立窗口，只由用户从侧栏按钮打开；agent 开 tab 不会把它弄出来（见 browserWindowService）。
+ * 浏览器不在这里：它是独立窗口，只由用户从顶栏按钮打开；agent 开 tab 不会把它弄出来（见 browserWindowService）。
  *
  * 服务端项目若有自己的预览面板，会用它自己的等价桥替换本文件。
  */

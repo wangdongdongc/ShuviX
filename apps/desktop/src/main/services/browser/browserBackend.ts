@@ -148,7 +148,7 @@ class DesktopBrowserBackend implements BrowserBackend {
     const uuid = createTab('about:blank', { activate: true })
     const short = shortIdFor(uuid)
     // 不把浏览器窗口弄出来：agent 的动作不能打扰用户在主窗口里打字和操作（showInactive 在
-    // macOS 上会把窗口叠到最前、盖住主窗口）。新 tab 在停放窗口里照常可操作；用户从侧栏按钮
+    // macOS 上会把窗口叠到最前、盖住主窗口）。新 tab 在停放窗口里照常可操作；用户从顶栏按钮
     // （带 tab 计数）自己打开浏览器窗口来看。
     // web 平台（会话镜像 iframe）与旧 CLI 语义仍靠这条广播
     this.broadcast('open')

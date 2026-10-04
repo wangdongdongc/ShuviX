@@ -83,7 +83,7 @@ export interface E2EAppBase {
   output(): string
   /**
    * 浏览器独立窗口（#browser-window）的页面；窗口还没被建出来时回 null（不等待，配合 `until`）。
-   * 窗口是懒创建的，而且**只有用户**能把它建出来（侧栏按钮 / `browserView.openWindow()`）——
+   * 窗口是懒创建的，而且**只有用户**能把它建出来（顶栏按钮 / `browserView.openWindow()`）——
    * agent 的 open_tab 不会（tab 住在从不显示的停放窗口里）；关窗只是隐藏，target 仍在。
    * 调用方用完自己 close()。
    */

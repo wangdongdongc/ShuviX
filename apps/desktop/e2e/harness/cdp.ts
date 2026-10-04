@@ -31,7 +31,7 @@ export async function listTargets(port: number): Promise<CdpTarget[]> {
 
 /**
  * 副窗口的 hash —— 它们与主窗口加载同一个 renderer 入口，只靠 hash 区分。
- * 漏掉任何一个，那个窗口一开着 harness 就可能把它当成主窗口（浏览器窗口由 spec 经侧栏按钮 /
+ * 漏掉任何一个，那个窗口一开着 harness 就可能把它当成主窗口（浏览器窗口由 spec 经顶栏按钮 /
  * openWindow 打开，漏掉它会让 browser 区的 spec 时好时坏）。
  */
 const SECONDARY_WINDOW_HASHES = [

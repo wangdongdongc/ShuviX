@@ -119,7 +119,7 @@ describe('browserViewHandlers：窗口通道', () => {
     expect(state.openBrowserWindow).not.toHaveBeenCalled()
   })
 
-  it('U6 open-window 调 openBrowserWindow（从主窗口发来也照办 —— 那正是侧栏按钮）', async () => {
+  it('U6 open-window 调 openBrowserWindow（从主窗口发来也照办 —— 那正是顶栏按钮）', async () => {
     await invoke('browser-view:open-window', OTHER)
     expect(state.openBrowserWindow).toHaveBeenCalledTimes(1)
     expect(state.setLayout).not.toHaveBeenCalled()

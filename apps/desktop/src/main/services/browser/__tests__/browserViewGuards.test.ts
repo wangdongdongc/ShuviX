@@ -77,7 +77,7 @@ async function load(): Promise<{ views: ViewService; wins: WindowService }> {
   return { views, wins }
 }
 
-/** 用户经侧栏按钮把浏览器窗口建出来（可见、有焦点） */
+/** 用户经顶栏按钮把浏览器窗口建出来（可见、有焦点） */
 function openByUser(wins: WindowService): FakeWindow {
   wins.openBrowserWindow()
   const all = fx.browserWindows()

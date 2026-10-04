@@ -2,19 +2,19 @@
  * 内置浏览器的独立窗口 —— 窗口本身的语义（假提供商脚本化；夹具网站记下每一个请求）。
  *
  * 浏览器从主窗口右侧面板搬进了自己的窗口（`#browser-window`：BrowserWindowShell → BrowserWall
- * 卡片墙）。**agent 的浏览器动作绝不打扰主窗口里的用户**：窗口只由用户打开（侧栏按钮），tab 在一个
+ * 卡片墙）。**agent 的浏览器动作绝不打扰主窗口里的用户**：窗口只由用户打开（顶栏按钮），tab 在一个
  * 从不显示的停放窗口里出生、不在墙上时也住在那里（1280×800、一直可见），agent 照常操作它们；关窗
  * 只隐藏。本 spec 按顺序走一个实例：
  *
  *   ST-E0 新实例、窗口从没开过：agent 开两个 tab（后开的叠在先开的上面），在被盖住的那个上快照 →
  *         打字 → 点（服务器收到提交）→ 读 → 量视口（1280×800）→ 截图（1.6 比例的 PNG），另一个上
- *         照样点；全程浏览器窗口不出现（target 都没有）、右侧面板不开，侧栏按钮上的徽标数着 tab；
- *   E1    侧栏按钮把窗口建出来并显示，墙是空的；
+ *         照样点；全程浏览器窗口不出现（target 都没有）、右侧面板不开，顶栏按钮上的徽标数着 tab；
+ *   E1    顶栏按钮把窗口建出来并显示，墙是空的；
  *   E2    关窗 = 隐藏：`window.close()` 走真的 close → hide 拦截；tab 不动、target 还在；重开是同一张
  *         墙，页面一次都没重载（夹具的请求计数不变，外壳页面上打的标记还在）；
  *   E3    窗口隐藏时 agent 工具照常：快照 → 填 → 点（服务器收到提交）→ 读 → 截图（PNG），全程
  *         窗口仍隐藏；
- *   E4    隐藏时 open_tab：窗口不亮、徽标 +1、右侧面板不开；用户点侧栏按钮后新卡片是唯一激活的那张、
+ *   E4    隐藏时 open_tab：窗口不亮、徽标 +1、右侧面板不开；用户点顶栏按钮后新卡片是唯一激活的那张、
  *         整格露出，页面没有因为上墙而重载；
  *   E5    网格：一张铺满墙、两张并排各占一半、激活标记恰好一个；新 tab 落在视口之外时被滚进来；
  *   ST-E6 墙上两列（页面缩放 < 1）的 tab 被对话框覆盖层请下墙：停放时**保留卡片的页面缩放**（视口 =
@@ -138,8 +138,8 @@ const tickedSession = async (title: string): Promise<string> => {
   return sid
 }
 
-/** 侧栏按钮（带 tab 计数徽标） */
-const sidebarButton = (): ReturnType<typeof openBrowserWindowButton> =>
+/** 顶栏按钮（带 tab 计数徽标） */
+const headerButton = (): ReturnType<typeof openBrowserWindowButton> =>
   openBrowserWindowButton(app.main)
 
 /** 直接（经 DevTools，不经 agent）读某个 tab 的 innerWidth；按页面地址认 tab，找不到回 null */
@@ -240,7 +240,7 @@ describe('agent 在后台用浏览器，窗口从不出现（ST-E0）', () => {
 
   it('ST-E0 两个 tab 在停放窗口里：被盖住的 A 上快照 → 打字 → 点 → 读 → 视口 1280×800 → 截图 1.6；B 上照样点；窗口从不出现，徽标数着 tab；关掉后徽标消失', async () => {
     await expectUndisturbed('fresh instance')
-    expect(await sidebarButton().count()).toBeNull()
+    expect(await headerButton().count()).toBeNull()
 
     // ── 开两个 tab：B 后进停放窗口，叠在 A 上面 ──
     provider.reset()
@@ -263,9 +263,9 @@ describe('agent 在后台用浏览器，窗口从不出现（ST-E0）', () => {
     expect(fixture.hits('/counter.html?st=b')).toBe(1)
     await expectUndisturbed('after open_tab B')
 
-    // 用户知道 agent 开了页面的唯一地方：侧栏按钮的计数
-    await until(async () => (await sidebarButton().count()) === 2, 'sidebar badge counts 2 tabs')
-    expect(await sidebarButton().title()).toContain('2')
+    // 用户知道 agent 开了页面的唯一地方：顶栏按钮的计数
+    await until(async () => (await headerButton().count()) === 2, 'header badge counts 2 tabs')
+    expect(await headerButton().title()).toContain('2')
 
     // ── A（被 B 盖着）：快照 → 打字 → 点 → 读 → 视口 → 截图 ──
     provider.reset()
@@ -336,7 +336,7 @@ describe('agent 在后台用浏览器，窗口从不出现（ST-E0）', () => {
     // 异步冒出来的也算：过一会儿再看一遍
     await sleep(1000)
     await expectUndisturbed('a second later')
-    expect(await sidebarButton().count()).toBe(2)
+    expect(await headerButton().count()).toBe(2)
     // 两个页面都没被重新加载过
     expect(fixture.hits('/form.html?st=a')).toBe(1)
     expect(fixture.hits('/counter.html?st=b')).toBe(1)
@@ -349,23 +349,23 @@ describe('agent 在后台用浏览器，窗口从不出现（ST-E0）', () => {
     ])
     expect(closed.ends.st0_close_a?.isError, closed.ends.st0_close_a?.result).toBe(false)
     expect(closed.ends.st0_close_b?.isError, closed.ends.st0_close_b?.result).toBe(false)
-    await until(async () => (await sidebarButton().count()) === null, 'sidebar badge gone')
+    await until(async () => (await headerButton().count()) === null, 'header badge gone')
     expect(await listTabs()).toEqual([])
     await expectUndisturbed('after closing both tabs')
   }, 180_000)
 })
 
 describe('窗口的生命周期（E1 / E2）', () => {
-  it('E1 ST-E0 之后仍然没有窗口、没有 tab、没有徽标；侧栏按钮把窗口建出来并显示，墙是空的', async () => {
+  it('E1 ST-E0 之后仍然没有窗口、没有 tab、没有徽标；顶栏按钮把窗口建出来并显示，墙是空的', async () => {
     expect(await app.browserWindow()).toBeNull()
     expect(await isWindowOpen()).toBe(false)
     expect(await listTabs()).toEqual([])
-    expect(await sidebarButton().count()).toBeNull()
+    expect(await headerButton().count()).toBeNull()
 
     await openBrowserWindowButton(app.main).click()
-    bw = await until(() => app.browserWindow(), 'browser window page created by the sidebar button')
+    bw = await until(() => app.browserWindow(), 'browser window page created by the header button')
     wall = browserWallPane(bw)
-    await until(() => isWindowOpen(), 'browser window shown by the sidebar button')
+    await until(() => isWindowOpen(), 'browser window shown by the header button')
     await until(() => wall.mounted(), 'browser window shell ([data-browser-window]) mounted')
     expect(await wall.cardIds()).toEqual([])
     expect(await listTabs()).toEqual([])
@@ -496,10 +496,10 @@ describe('隐藏的窗口与 agent（E3 / E4）', () => {
     expect(await isWindowOpen()).toBe(false)
   }, 120_000)
 
-  it('E4 窗口隐藏时 open_tab：窗口不亮、徽标 +1、右侧面板不开；用户点侧栏按钮后新卡片是唯一激活的那张、整格露出，上墙不重载', async () => {
+  it('E4 窗口隐藏时 open_tab：窗口不亮、徽标 +1、右侧面板不开；用户点顶栏按钮后新卡片是唯一激活的那张、整格露出，上墙不重载', async () => {
     expect(await isWindowOpen()).toBe(false)
     expect(await rightPanelPane(app.main).isOpen()).toBe(false)
-    const badgeBefore = (await sidebarButton().count()) ?? 0
+    const badgeBefore = (await headerButton().count()) ?? 0
     expect(badgeBefore).toBe((await listTabs()).length)
 
     provider.reset()
@@ -516,14 +516,14 @@ describe('隐藏的窗口与 agent（E3 / E4）', () => {
     await sleep(1000)
     expect(await isWindowOpen()).toBe(false)
     await until(
-      async () => (await sidebarButton().count()) === badgeBefore + 1,
-      `sidebar badge ${badgeBefore} → ${badgeBefore + 1}`
+      async () => (await headerButton().count()) === badgeBefore + 1,
+      `header badge ${badgeBefore} → ${badgeBefore + 1}`
     )
     expect(await rightPanelPane(app.main).isOpen()).toBe(false)
 
     // 用户自己点开
-    await sidebarButton().click()
-    await until(() => isWindowOpen(), 'browser window shown by the sidebar button')
+    await headerButton().click()
+    await until(() => isWindowOpen(), 'browser window shown by the header button')
     await eventually(
       () => wall.activeCardIds(),
       (ids) => expect(ids).toEqual([tab!.id]),

@@ -5,7 +5,7 @@
  * 窗口上，其余停在停放窗口（stagingWindow.ts）。
  *
  * 语义：
- * - **只有用户能把它弄出来**（侧栏按钮 / widget「在浏览器中打开」）。agent 开 tab 不建、不显示、
+ * - **只有用户能把它弄出来**（顶栏按钮 / widget「在浏览器中打开」）。agent 开 tab 不建、不显示、
  *   不置前 —— tab 在停放窗口里照常可被操作，用户在主窗口里打字和操作不受任何影响
  *   （showInactive 在 macOS 上会把窗口叠到最前、盖住主窗口，2026-09-23 实测）。
  * - **关窗 = 隐藏，不销毁**：tab、页面状态、登录态、CDP 会话都留着，重开即时。
@@ -149,7 +149,7 @@ function create(): BrowserWindow {
   return created
 }
 
-/** 打开（或聚焦）浏览器窗口 —— 只由用户的动作触发（侧栏按钮 / widget 在浏览器中打开） */
+/** 打开（或聚焦）浏览器窗口 —— 只由用户的动作触发（顶栏按钮 / widget 在浏览器中打开） */
 export function openBrowserWindow(): void {
   const target = win && !win.isDestroyed() ? win : create()
   if (target.isMinimized()) target.restore()

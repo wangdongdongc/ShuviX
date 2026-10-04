@@ -6376,8 +6376,8 @@ export async function monitorSettingsPane(settings: CdpClient): Promise<MonitorS
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// 浏览器独立窗口（#browser-window）：BrowserWindowShell → BrowserWall 卡片墙；以及主窗侧栏
-// 底部打开它的那颗按钮。
+// 浏览器独立窗口（#browser-window）：BrowserWindowShell → BrowserWall 卡片墙；以及主窗顶栏
+// 右侧打开它的那颗按钮。
 //
 // 锚点（全是产品代码专门留的 data 属性，不认文案 / 类名）：
 //   - 窗口根 = `[data-browser-window]`；
@@ -6458,7 +6458,7 @@ export function browserWallPane(bw: CdpClient): BrowserWallPane {
 }
 
 export interface OpenBrowserWindowButton {
-  /** 按钮在主窗侧栏里 */
+  /** 按钮在主窗顶栏里 */
   present(): Promise<boolean>
   /** 点它（等它挂载后再点） */
   click(): Promise<void>
@@ -6471,7 +6471,7 @@ export interface OpenBrowserWindowButton {
   title(): Promise<string>
 }
 
-/** 主窗侧栏底部「打开浏览器窗口」按钮 */
+/** 主窗顶栏右侧「打开浏览器窗口」按钮 */
 export function openBrowserWindowButton(main: CdpClient): OpenBrowserWindowButton {
   const BTN = `document.querySelector('[data-open-browser-window]')`
   const present = (): Promise<boolean> => main.eval<boolean>(`!!${BTN}`)

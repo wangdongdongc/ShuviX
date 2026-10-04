@@ -1,7 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ArrowUpCircle } from 'lucide-react'
-import { BrowserWindowButton } from './BrowserWindowButton'
 import { getChatApi, useChatStore } from '@shuvix/chat-ui'
 import { REGISTRY_NOTE_PROJECT_IDS } from '@shuvix/chat-protocol/registryNotes'
 import { isSkillProjectId } from '@shuvix/chat-protocol/skillNotes'
@@ -610,29 +609,26 @@ export function Sidebar(): React.JSX.Element {
       projects={projects}
       pinnedSessionIds={pinnedSessionIds}
       onOpenFolder={handleOpenFolder}
-      onOpenSettings={(tab) => void getChatApi().app.openSettings(tab)}
       onSelectSession={handleSelectSession}
       onDeleteSession={handleDelete}
       onConfigureSession={setConfiguringSessionId}
       onEditProject={setEditingProjectId}
       footerActions={
-        <>
-          {/* 浏览器是独立窗口：这里开 / 聚焦它；agent 开 tab 不会弹窗，这里的计数告诉用户有页面 */}
-          <BrowserWindowButton />
-          {hasUpdate && (
-            <button
-              onClick={() => void getChatApi().app.openSettings('about')}
-              className="flex-shrink-0 p-1.5 rounded-md text-accent/80 hover:bg-accent/10 hover:text-accent transition-colors"
-              title={
-                updateEvent?.type === 'ready'
-                  ? t('sidebar.updateReady')
-                  : t('sidebar.updateAvailable')
-              }
-            >
-              <ArrowUpCircle size={14} />
-            </button>
-          )}
-        </>
+        // 底栏只在有更新时出现：设置入口在菜单（⌘, / Ctrl+,），浏览器按钮在顶栏
+        hasUpdate ? (
+          <button
+            onClick={() => void getChatApi().app.openSettings('about')}
+            className="flex items-center gap-2 flex-1 pl-3 pr-2 py-1.5 rounded-md text-[13px] text-accent/80 hover:bg-accent/10 hover:text-accent transition-colors"
+            data-sidebar-update
+          >
+            <ArrowUpCircle size={14} />
+            <span>
+              {updateEvent?.type === 'ready'
+                ? t('sidebar.updateReady')
+                : t('sidebar.updateAvailable')}
+            </span>
+          </button>
+        ) : undefined
       }
       groupsPrepend={
         <>

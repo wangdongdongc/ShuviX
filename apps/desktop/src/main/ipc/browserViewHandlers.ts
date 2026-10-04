@@ -24,7 +24,7 @@ import {
 export function registerBrowserViewHandlers(): void {
   // ====== 浏览器窗口 ======
 
-  /** 用户从主窗口（侧栏按钮 / widget「在浏览器中打开」）打开或聚焦浏览器窗口 */
+  /** 用户从主窗口（顶栏按钮 / widget「在浏览器中打开」）打开或聚焦浏览器窗口 */
   ipcMain.handle('browser-view:open-window', () => {
     openBrowserWindow()
   })

@@ -277,7 +277,18 @@ function setupApplicationMenu(): void {
           label: t('sidebar.newProject'),
           accelerator: 'CommandOrControl+Shift+N',
           click: () => mainWindow?.webContents.send('app:new-project')
-        }
+        },
+        // Windows / Linux 没有应用菜单：设置放在文件菜单里（侧栏已不再有设置按钮，这里是常驻入口）
+        ...(!isMac
+          ? [
+              { type: 'separator' as const },
+              {
+                label: `${t('settings.title')}…`,
+                accelerator: 'CommandOrControl+,',
+                click: () => openSettingsWindow()
+              }
+            ]
+          : [])
       ]
     },
     // 编辑菜单（系统常用快捷键：撤销、重做、剪切、复制、粘贴、全选、删除）
