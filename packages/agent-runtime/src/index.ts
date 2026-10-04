@@ -491,6 +491,15 @@ export {
   type HarnessEventState,
   type ModelsAdapterDeps
 } from './harness'
+// 旧格式（harness-v3-jsonl）会话的只读读取 + 投影：存储换代不迁移，旧会话靠它继续可看
+export {
+  HarnessV3FormatError,
+  harnessV3TextToChatMessages,
+  readHarnessV3Transcript,
+  type HarnessV3Issue,
+  type HarnessV3Transcript,
+  type LegacyTranscriptView
+} from './legacy/harnessV3'
 // shuvix 契约 md 的解析器级校验（ChatApi shuvixMd.validate 的两端共用实现）
 export { validateShuvixMdText } from './shuvixMdValidate'
 // 契约 md 的写后处理（文件工具末尾：校验回执 + 缺省字段盖章）
