@@ -4,6 +4,30 @@ import eslintConfigPrettier from '@electron-toolkit/eslint-config-prettier'
 import eslintPluginReact from 'eslint-plugin-react'
 import eslintPluginReactHooks from 'eslint-plugin-react-hooks'
 
+const NO_PI_AGENT_CORE = {
+  group: ['@earendil-works/pi-agent-core', '@earendil-works/pi-agent-core/*'],
+  message:
+    'pi-agent-core was removed in the pi 1.0 migration; use @earendil-works/pi-durable / pi-ai or the local types in @shuvix/agent-runtime.'
+}
+const NO_ELECTRON = {
+  name: 'electron',
+  message: '@shuvix/agent-runtime is host-agnostic; Electron is injected by the desktop host.'
+}
+const NO_ELECTRON_SUBPATH = {
+  group: ['electron/*'],
+  message: '@shuvix/agent-runtime is host-agnostic; Electron is injected by the desktop host.'
+}
+const NO_NODE_SQLITE = {
+  name: 'node:sqlite',
+  message:
+    'Session storage is opened by the host (SessionHostDeps.openStorage); only tests may open SQLite directly.'
+}
+const NO_DURABLE_NODE_SQLITE = {
+  group: ['@earendil-works/pi-durable/storage/sqlite/node'],
+  message:
+    'Session storage is opened by the host (SessionHostDeps.openStorage); only tests may open SQLite directly.'
+}
+
 // 工作区根 ESLint —— 覆盖 packages/*（可复用包）。
 // apps/desktop 有自己的 eslint.config.mjs（含进程分层 boundaries 规则），各自独立。
 export default defineConfig(
@@ -36,17 +60,31 @@ export default defineConfig(
   {
     files: ['packages/**/*.{ts,tsx}'],
     rules: {
+      '@typescript-eslint/no-restricted-imports': ['error', { patterns: [NO_PI_AGENT_CORE] }]
+    }
+  },
+  // agent-runtime 宿主无关：Electron 与 node:sqlite 只能由宿主注入（会话存储的打开器是 seam）。
+  // 同一条规则在后面的配置块里会整体替换前面的选项，所以 pi-agent-core 那条在这里要再写一遍。
+  {
+    files: ['packages/agent-runtime/**/*.{ts,tsx}'],
+    ignores: ['packages/agent-runtime/**/__tests__/**'],
+    rules: {
       '@typescript-eslint/no-restricted-imports': [
         'error',
         {
-          patterns: [
-            {
-              group: ['@earendil-works/pi-agent-core', '@earendil-works/pi-agent-core/*'],
-              message:
-                'pi-agent-core was removed in the pi 1.0 migration; use @earendil-works/pi-durable / pi-ai or the local types in @shuvix/agent-runtime.'
-            }
-          ]
+          paths: [NO_ELECTRON, NO_NODE_SQLITE],
+          patterns: [NO_PI_AGENT_CORE, NO_ELECTRON_SUBPATH, NO_DURABLE_NODE_SQLITE]
         }
+      ]
+    }
+  },
+  // 测试可以直接开 SQLite 存储（临时目录里的真文件），Electron 仍然不行
+  {
+    files: ['packages/agent-runtime/**/__tests__/**/*.{ts,tsx}'],
+    rules: {
+      '@typescript-eslint/no-restricted-imports': [
+        'error',
+        { paths: [NO_ELECTRON], patterns: [NO_PI_AGENT_CORE, NO_ELECTRON_SUBPATH] }
       ]
     }
   },

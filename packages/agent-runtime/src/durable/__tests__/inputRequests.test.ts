@@ -1,62 +1,188 @@
 /**
- * 挂起询问的「中止后拒收」窗口 —— 从已删除的 harnessSession.test.ts 搬来的那一条（P1-01）。
+ * 挂起的用户询问：应答 / 取消 / 摘要 / 恰好一次的钩子 / 关闭受理窗口 / 全部取消 / 能力闸门 /
+ * 重复 id 顶替（裁决 R12）。
  *
- * 关停链路是「abort() 等 run 跑完」+「宿主按当前绑定的运行时路由用户应答」。
- * 正在关停的运行时已不在绑定表里，此时若还接受新询问，那条挂起就再也没人应答 ——
- * 双方互等，会话卡死。所以中止之后到下一轮开始之前，一律当作已取消。
+ * 关闭窗口这一条是会话关停链路的命门：宿主按「当前绑定的运行时」路由用户应答，正在关停的运行时
+ * 已不在绑定表里；中止之后若还接受新询问，那条挂起就再也没人应答 —— 双方互等，会话卡死。
  */
 import { describe, expect, it } from 'vitest'
-import type { InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
+import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import { PendingInputRequests } from '../inputRequests'
 
-function makeInputs(hasCapability = true): { inputs: PendingInputRequests; events: string[] } {
+function makeInputs(capability = true): {
+  inputs: PendingInputRequests
+  events: string[]
+  requested: string[]
+  resolved: [string, InputResponse][]
+} {
   const events: string[] = []
-  const inputs = new PendingInputRequests('s1', {
-    broadcast: (e) => events.push(e.type),
-    hasUserInputCapability: () => hasCapability
-  })
-  return { inputs, events }
+  const requested: string[] = []
+  const resolved: [string, InputResponse][] = []
+  const inputs = new PendingInputRequests(
+    's1',
+    {
+      broadcast: (event) =>
+        events.push(
+          event.type === 'input_request'
+            ? `request:${event.request.id}`
+            : event.type === 'input_request_resolved'
+              ? `resolved:${event.requestId}`
+              : event.type
+        ),
+      hasUserInputCapability: () => capability
+    },
+    {
+      onRequest: (request) => requested.push(request.id),
+      onResolved: (id, response) => resolved.push([id, response])
+    }
+  )
+  return { inputs, events, requested, resolved }
 }
 
-describe('PendingInputRequests', () => {
-  it('中止后新到的询问直接判为已取消（否则关停与工具互等，会话永远停在「正在停止」）', async () => {
-    const { inputs, events } = makeInputs()
-    const ask = (id: string): Promise<InputResponse> =>
-      inputs.request({ id, kind: 'ask', toolName: 'bash', command: 'ls', createdAt: 0 })
+const ask = (id: string, command = 'ls'): InputRequest => ({
+  id,
+  kind: 'ask',
+  toolName: 'bash',
+  command,
+  createdAt: 0
+})
 
-    // 中止前：正常挂起，等用户应答
+const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
+
+describe('PendingInputRequests', () => {
+  it('IR-01 request pends; respond resolves it and clears the count', async () => {
+    const { inputs } = makeInputs()
     let settled: InputResponse | undefined
-    void ask('r1').then((r) => (settled = r))
-    await Promise.resolve()
+    void inputs.request(ask('r1')).then((response) => (settled = response))
+    await flush()
     expect(settled).toBeUndefined()
     expect(inputs.count).toBe(1)
-    expect(inputs.summaries).toEqual(['bash: ls'])
-
-    inputs.cancelAll()
-    await Promise.resolve()
-    expect(settled).toEqual({ kind: 'cancel', reason: 'aborted' })
+    const response: InputResponse = { kind: 'ask', allowed: true }
+    expect(inputs.respond('r1', response)).toBe(true)
+    await flush()
+    expect(settled).toEqual(response)
     expect(inputs.count).toBe(0)
-    expect(events).toEqual(['input_request', 'input_request_resolved'])
-
-    // 中止后新到的询问：立刻取消，不再挂起
-    await expect(ask('r2')).resolves.toEqual({ kind: 'cancel', reason: 'aborted' })
-
-    // 下一轮开始后恢复受理
-    inputs.reopen()
-    let afterReopen: InputResponse | undefined
-    void ask('r3').then((r) => (afterReopen = r))
-    await Promise.resolve()
-    expect(afterReopen).toBeUndefined()
-    expect(inputs.respond('r3', { kind: 'cancel', reason: 'aborted' })).toBe(true)
-    expect(inputs.respond('r3', { kind: 'cancel', reason: 'aborted' })).toBe(false)
   })
 
-  it('没有前端能展示询问面板 → 立即取消，不挂起也不广播', async () => {
-    const { inputs, events } = makeInputs(false)
-    await expect(
-      inputs.request({ id: 'r1', kind: 'ask', toolName: 'bash', command: 'ls', createdAt: 0 })
-    ).resolves.toEqual({ kind: 'cancel', reason: 'aborted' })
+  it('IR-02 respond to an unknown id → false; the first respond wins', async () => {
+    const { inputs } = makeInputs()
+    expect(inputs.respond('nope', { kind: 'ask', allowed: true })).toBe(false)
+    const pending = inputs.request(ask('r1'))
+    expect(inputs.respond('r1', { kind: 'ask', allowed: true })).toBe(true)
+    expect(inputs.respond('r1', { kind: 'ask', allowed: false })).toBe(false)
+    await expect(pending).resolves.toEqual({ kind: 'ask', allowed: true })
+  })
+
+  it('IR-03 cancel resolves {kind:cancel, reason}; unknown → false', async () => {
+    const { inputs } = makeInputs()
+    const pending = inputs.request(ask('r1'))
+    expect(inputs.cancel('r1', 'closed')).toBe(true)
+    await expect(pending).resolves.toEqual({ kind: 'cancel', reason: 'closed' })
+    expect(inputs.cancel('r1')).toBe(false)
+    const second = inputs.request(ask('r2'))
+    expect(inputs.cancel('r2')).toBe(true)
+    await expect(second).resolves.toEqual({ kind: 'cancel', reason: 'aborted' })
+  })
+
+  it('IR-04 summaries are `${toolName}: ${command ?? question ?? kind}` with empty parts dropped', () => {
+    const { inputs } = makeInputs()
+    void inputs.request(ask('r1', 'rm -rf build'))
+    void inputs.request({
+      id: 'r2',
+      kind: 'choice',
+      toolName: 'ask',
+      question: 'Which one?',
+      options: [],
+      allowMultiple: false,
+      createdAt: 0
+    })
+    void inputs.request({ id: 'r3', kind: 'ask', toolName: 'write', createdAt: 0 } as InputRequest)
+    void inputs.request({ id: 'r4', kind: 'ask', toolName: '', command: 'pwd', createdAt: 0 })
+    expect(inputs.summaries).toEqual(['bash: rm -rf build', 'ask: Which one?', 'write: ask', 'pwd'])
+  })
+
+  it('IR-05 onRequest / onResolved fire exactly once per id; none for gate-refused asks', async () => {
+    const { inputs, requested, resolved, events } = makeInputs()
+    void inputs.request(ask('a'))
+    void inputs.request(ask('b'))
+    void inputs.request(ask('c'))
+    inputs.respond('a', { kind: 'ask', allowed: true })
+    inputs.respond('a', { kind: 'ask', allowed: true })
+    inputs.cancel('b', 'aborted')
+    inputs.cancel('b', 'aborted')
+    inputs.closeInputs()
+    inputs.cancelAll('aborted')
+    await inputs.request(ask('refused'))
+    expect(requested).toEqual(['a', 'b', 'c'])
+    expect(resolved.map(([id]) => id)).toEqual(['a', 'b', 'c'])
+    expect(events).toEqual([
+      'request:a',
+      'request:b',
+      'request:c',
+      'resolved:a',
+      'resolved:b',
+      'resolved:c'
+    ])
+  })
+
+  it('IR-06 closeInputs: new asks resolve cancelled at once, uncounted, no event; reopenInputs restores', async () => {
+    const { inputs, events, requested } = makeInputs()
+    inputs.closeInputs()
+    expect(inputs.inputsClosed).toBe(true)
+    await expect(inputs.request(ask('r1'))).resolves.toEqual({ kind: 'cancel', reason: 'aborted' })
     expect(inputs.count).toBe(0)
     expect(events).toEqual([])
+    expect(requested).toEqual([])
+    inputs.reopenInputs()
+    let settled: InputResponse | undefined
+    void inputs.request(ask('r2')).then((response) => (settled = response))
+    await flush()
+    expect(settled).toBeUndefined()
+    expect(inputs.count).toBe(1)
+  })
+
+  it('IR-06 a window closed by a session close stays closed (reason closed)', async () => {
+    const { inputs } = makeInputs()
+    inputs.closeInputs('closed')
+    inputs.reopenInputs()
+    await expect(inputs.request(ask('r1'))).resolves.toEqual({ kind: 'cancel', reason: 'closed' })
+  })
+
+  it('IR-07 cancelAll(reason) resolves all, clears, emits each; the window stays open', async () => {
+    const { inputs, events } = makeInputs()
+    const a = inputs.request(ask('a'))
+    const b = inputs.request(ask('b'))
+    inputs.cancelAll('closed')
+    await expect(a).resolves.toEqual({ kind: 'cancel', reason: 'closed' })
+    await expect(b).resolves.toEqual({ kind: 'cancel', reason: 'closed' })
+    expect(inputs.count).toBe(0)
+    expect(events.filter((event) => event.startsWith('resolved:'))).toEqual([
+      'resolved:a',
+      'resolved:b'
+    ])
+    expect(inputs.inputsClosed).toBe(false)
+  })
+
+  it('IR-08 no front end can show the panel → immediate cancel, no event', async () => {
+    const { inputs, events, requested } = makeInputs(false)
+    await expect(inputs.request(ask('r1'))).resolves.toEqual({ kind: 'cancel', reason: 'aborted' })
+    expect(inputs.count).toBe(0)
+    expect(events).toEqual([])
+    expect(requested).toEqual([])
+  })
+
+  it('IR-09 a duplicate pending id supersedes the earlier request (R12)', async () => {
+    const { inputs, resolved } = makeInputs()
+    const first = inputs.request(ask('r1', 'first'))
+    const second = inputs.request(ask('r1', 'second'))
+    await expect(first).resolves.toEqual({ kind: 'cancel', reason: 'superseded' })
+    expect(inputs.count).toBe(1)
+    expect(inputs.summaries).toEqual(['bash: second'])
+    expect(inputs.respond('r1', { kind: 'ask', allowed: true })).toBe(true)
+    await expect(second).resolves.toEqual({ kind: 'ask', allowed: true })
+    expect(resolved.map(([id, response]) => [id, response.kind])).toEqual([
+      ['r1', 'cancel'],
+      ['r1', 'ask']
+    ])
   })
 })
