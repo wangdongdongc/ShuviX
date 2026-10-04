@@ -8,9 +8,11 @@
  *  - retry：最多 10 次（durable 默认 3）。基础退避不写 —— 用 durable 的 2s 指数退避。
  *  - stream：单次请求 10 分钟超时；SDK 内重试 0 次（重试统一由 durable 的持久化重试负责，
  *    两层叠加会把一次失败放大成十几次请求）。
- *  - compaction：reserve = background = min(32768, ⌊窗口/4⌋)，keepRecent 20000（裁决 Q2）。
- *    durable 默认 reserve 16384 / background 32768 —— 对小窗口模型等于一开局就要压缩。
- *    窗口未知（未锁定 / 0 / 负数 / NaN / ∞ / 读取抛错）一律按 32768。
+ *  - compaction：reserve = background = min(32768, ⌊窗口/4⌋)（裁决 Q2），keepRecent = min(20000, ⌊窗口/4⌋)
+ *    （PIN-1）。durable 默认 reserve 16384 / background 32768 —— 对小窗口模型等于一开局就要压缩；
+ *    keepRecent 写死 20000 时，窗口不到「20000 + reserve」的模型（16k / 32k 的本地模型）永远找不到切点，
+ *    溢出只能以 model_error 收场、32k 的模型反复压缩。窗口 ≥ 80k 时两者都与旧值相同。
+ *    窗口未知（未锁定 / 0 / 负数 / NaN / ∞ / 读取抛错）一律按 reserve 32768、keepRecent 20000。
  *  - steering / followUp：'all' —— 队列在输入框里对用户可见，看到几条就该一起走。
  */
 import type {
@@ -35,7 +37,7 @@ export const SHUVIX_STREAM_OPTIONS: Readonly<ConversationStreamOptions> = Object
   maxRetries: 0
 })
 
-/** 压缩后原样保留的近期上下文（约数） */
+/** 压缩后原样保留的近期上下文（约数）的上限，也是窗口未知时的取值 */
 export const SHUVIX_KEEP_RECENT_TOKENS = 20_000
 
 /** reserve / background 的上限，也是窗口未知时的取值 */
@@ -50,6 +52,17 @@ export function compactionReserveTokens(contextWindow: number | undefined): numb
     return SHUVIX_MAX_RESERVE_TOKENS
   }
   return Math.min(SHUVIX_MAX_RESERVE_TOKENS, Math.floor(contextWindow / 4))
+}
+
+/**
+ * 压缩后原样保留的近期上下文：`min(20000, ⌊contextWindow / 4⌋)`；窗口不是有限正数时按 20000（PIN-1）。
+ * 随窗口缩小：小窗口模型也找得到切点。
+ */
+export function compactionKeepRecentTokens(contextWindow: number | undefined): number {
+  if (typeof contextWindow !== 'number' || !Number.isFinite(contextWindow) || contextWindow <= 0) {
+    return SHUVIX_KEEP_RECENT_TOKENS
+  }
+  return Math.min(SHUVIX_KEEP_RECENT_TOKENS, Math.floor(contextWindow / 4))
 }
 
 /** 逐段覆盖（测试与调试用）：给出的字段盖在 ShuviX 默认值之上，没给的保持不变 */
@@ -97,9 +110,10 @@ export function createShuviXSettings(options: ShuviXSettingsOptions = {}): Harne
       return { ...SHUVIX_RETRY_POLICY, ...overrides().retry }
     },
     get compaction() {
-      const reserve = compactionReserveTokens(contextWindow())
+      const window = contextWindow()
+      const reserve = compactionReserveTokens(window)
       return {
-        keepRecentTokens: SHUVIX_KEEP_RECENT_TOKENS,
+        keepRecentTokens: compactionKeepRecentTokens(window),
         reserveTokens: reserve,
         backgroundTokens: reserve,
         ...overrides().compaction

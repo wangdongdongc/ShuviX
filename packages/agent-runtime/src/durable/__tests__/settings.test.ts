@@ -1,6 +1,7 @@
 /**
- * ShuviX 的 HarnessSettings（裁决 Q2 / R6）：显式的重试 / 请求 / 压缩策略，压缩余量随根对话的
- * 窗口现算，未知窗口一律 32768；同步 getter；覆盖逐段合并。后两组用例把它接到真 Harness 上，
+ * ShuviX 的 HarnessSettings（裁决 Q2 / R6 / PIN-1）：显式的重试 / 请求 / 压缩策略，压缩余量与保留的
+ * 近期上下文随根对话的窗口现算（reserve = min(32768, ⌊窗口/4⌋)，keepRecent = min(20000, ⌊窗口/4⌋)），
+ * 未知窗口一律 32768 / 20000；同步 getter；覆盖逐段合并。后两组用例把它接到真 Harness 上，
  * 证明请求选项与持久化重试确实生效。
  */
 import {
@@ -12,6 +13,7 @@ import {
 import { describe, expect, it } from 'vitest'
 import { backgroundContext as BG } from '../context'
 import {
+  compactionKeepRecentTokens,
   compactionReserveTokens,
   createShuviXSettings,
   SHUVIX_RETRY_POLICY,
@@ -40,31 +42,54 @@ describe('ShuviX settings', () => {
   })
 
   it.each([
-    [200000, 32768],
-    [131072, 32768],
-    [131071, 32767],
-    [128000, 32000],
-    [100000, 25000],
-    [8192, 2048],
-    [3000, 750],
-    [1001, 250],
-    [1, 0]
-  ])('S-02 window %i → reserve = background = %i', (window, expected) => {
+    [200000, 32768, 20000],
+    [131072, 32768, 20000],
+    [131071, 32767, 20000],
+    [128000, 32000, 20000],
+    [100000, 25000, 20000],
+    [8192, 2048, 2048],
+    [3000, 750, 750],
+    [1001, 250, 250],
+    [1, 0, 0]
+  ])('S-02 window %i → reserve = background = %i, keepRecent %i', (window, expected, keep) => {
     expect(compactionReserveTokens(window)).toBe(expected)
     const compaction = createShuviXSettings({ contextWindow: () => window }).compaction
     expect(compaction?.reserveTokens).toBe(expected)
     expect(compaction?.backgroundTokens).toBe(expected)
-    expect(compaction?.keepRecentTokens).toBe(20000)
+    expect(compaction?.keepRecentTokens).toBe(keep)
+  })
+
+  it.each([
+    [16000, 4000],
+    [32000, 8000],
+    [80000, 20000],
+    [200000, 20000]
+  ])('S-02b keepRecent scales with the window (PIN-1): %i → %i', (window, expected) => {
+    expect(compactionKeepRecentTokens(window)).toBe(expected)
+    expect(createShuviXSettings({ contextWindow: () => window }).compaction?.keepRecentTokens).toBe(
+      expected
+    )
   })
 
   it.each([undefined, 0, -1, -100000, Number.NaN, Number.POSITIVE_INFINITY])(
-    'S-03 unknown window %s → 32768',
+    'S-03 unknown window %s → reserve 32768, keepRecent 20000',
     (window) => {
+      expect(compactionKeepRecentTokens(window)).toBe(20000)
       const compaction = createShuviXSettings({ contextWindow: () => window }).compaction
       expect(compaction?.reserveTokens).toBe(32768)
       expect(compaction?.backgroundTokens).toBe(32768)
+      expect(compaction?.keepRecentTokens).toBe(20000)
     }
   )
+
+  it('S-03b an override still wins over the scaled keepRecent', () => {
+    const compaction = createShuviXSettings({
+      contextWindow: () => 16000,
+      overrides: { compaction: { keepRecentTokens: 100 } }
+    }).compaction
+    expect(compaction?.keepRecentTokens).toBe(100)
+    expect(compaction?.reserveTokens).toBe(4000)
+  })
 
   it('S-03 no window source at all → 32768', () => {
     expect(createShuviXSettings().compaction?.reserveTokens).toBe(32768)
