@@ -33,7 +33,7 @@ vi.mock('undici', () => {
   }
   return { Agent: FakeAgent }
 })
-vi.mock('../../logger', () => ({
+vi.mock('../../../logger', () => ({
   createLogger: () => ({ info: vi.fn(), warn: mocks.warn, error: vi.fn() })
 }))
 
@@ -306,7 +306,7 @@ describe('llmNetwork —— 成因链的记录与摊平', () => {
     ['undefined', undefined],
     ['0', 0]
   ])('抛的是假值（%s）→ 答 undefined 而不是空串，也不写 warn', async (_label, thrown) => {
-    // 契约只有 string | undefined 两种答案。空串会一路漏到 modelsAdapter 的
+    // 契约只有 string | undefined 两种答案。空串会一路漏到 withNetwork（模型层装饰器）的
     // `if (!detail)` 之外吗？不会 —— 但「有成因」与「没失败过」必须是同一个答案形状，
     // 否则 warn 里会出现一行空的「fetch 失败：」。
     const { detail } = await recordFailure(thrown)

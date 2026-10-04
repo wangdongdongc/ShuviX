@@ -60,7 +60,7 @@ import { closeAllWatchers } from './services/filesWatcherService'
 import { hookService } from './services/hookService'
 import { reviewPermissionRequest } from './services/permissionReview'
 import { setPermissionReviewer } from './services/toolContext'
-import { installLlmNetwork } from './services/llmNetwork'
+import { installLlmNetwork } from './services/models'
 import {
   registerCustomProtocolHandlers,
   registerCustomProtocolSchemes

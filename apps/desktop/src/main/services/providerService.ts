@@ -3,7 +3,7 @@ import { getBuiltinModels } from '@earendil-works/pi-ai/providers/all'
 import { fetchProviderModels } from '@shuvix/chat-protocol/utils/providerModels'
 import { providerDao } from '../dao/providerDao'
 import { litellmService } from './litellmService'
-import { providerOAuthService } from './providerOAuthService'
+import { resolveRequestApiKey } from './models'
 import { appEventBus } from '../utils/appEventBus'
 import { createLogger } from '../logger'
 import type {
@@ -161,10 +161,11 @@ export class ProviderService {
    * 为指定提供商下 capabilities 为空的模型自动补充能力信息
    * 已有 capabilities 的模型不会被覆盖
    */
-  fillMissingCapabilities(providerId: string, providerName: string, baseUrl?: string): void {
-    if (!litellmService.isReady()) return
+  fillMissingCapabilities(providerId: string, providerName: string, baseUrl?: string): number {
+    if (!litellmService.isReady()) return 0
     const slug = providerName.toLowerCase()
     const models = providerDao.findModelsByProvider(providerId)
+    let patched = 0
     for (const m of models) {
       // 跳过已有能力信息的模型
       const existing = m.capabilities ? JSON.parse(m.capabilities) : {}
@@ -173,16 +174,25 @@ export class ProviderService {
       const caps = litellmService.getModelCapabilities(m.modelId, slug, baseUrl)
       if (caps && Object.keys(caps).length > 0) {
         providerDao.patchCapabilities(m.id, caps)
+        patched += 1
       }
     }
+    return patched
   }
 
-  /** 遍历所有提供商，为 capabilities 为空的模型自动补充能力信息（启动时调用） */
+  /**
+   * 遍历所有提供商，为 capabilities 为空的模型自动补充能力信息（启动时调用）。
+   *
+   * 补上了就广播一次：能力决定自定义 / 叠加模型的上下文窗口与输出上限，模型注册表若在
+   * LiteLLM 数据到达之前就建好了，要靠这条 `providers.changed` 才会按新能力重建。
+   */
   fillAllMissingCapabilities(): void {
     const providers = providerDao.findAll()
+    let patched = 0
     for (const p of providers) {
-      this.fillMissingCapabilities(p.id, p.name, p.baseUrl)
+      patched += this.fillMissingCapabilities(p.id, p.name, p.baseUrl)
     }
+    if (patched > 0) this.notifyChanged()
   }
 
   /**
@@ -242,9 +252,10 @@ export class ProviderService {
       throw new Error(`未找到提供商：${providerId}`)
     }
 
-    // 订阅登录优先：登录之后 apiKey 通常就是空的，拉模型列表也该用订阅令牌
-    const apiKey =
-      (await providerOAuthService.getAccessToken(providerId)) || provider.apiKey?.trim()
+    // 凭据按模型层的规则取（与会话请求同一套）：订阅登录优先 —— 登录之后 apiKey 通常就是空的，
+    // 拉模型列表也该用订阅令牌（过期先刷新，刷新在凭据库的串行队列里做）。模型层解析不出来
+    // （行不在注册表里）时退回库里的 key
+    const apiKey = (await resolveRequestApiKey(providerId)) || provider.apiKey?.trim()
     if (!apiKey) {
       throw new Error('请先配置 API Key 或完成订阅登录')
     }

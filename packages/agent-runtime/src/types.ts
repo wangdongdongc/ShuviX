@@ -3,7 +3,6 @@
  *
  * 注入面：
  *  - RuntimeEventSink  事件广播（替代 chatFrontendRegistry.broadcast）
- *  - RuntimeEnv        环境变量注入（替代 process.env；浏览器宿主 no-op）
  *  - RuntimeHttpLog    LLM 请求日志（可选）
  *
  * 注：消息持久化接口（RuntimePersistence）已随 AgentHarness 迁移删除 ——
@@ -34,13 +33,6 @@ export interface RuntimeEventSink {
   broadcast: (event: ChatEvent) => void
   /** 是否有任一前端声明了「能展示用户输入面板」的能力（无则 requestUserInput 立即 cancel） */
   hasUserInputCapability: (sessionId: string) => boolean
-}
-
-// ─────────────────────────── RuntimeEnv ───────────────────────────
-
-export interface RuntimeEnv {
-  /** 把内置 provider 的 apiKey 注入环境变量（桌面端写 process.env；浏览器端 no-op，凭证走 getApiKey） */
-  setApiKey: (envKey: string, value: string) => void
 }
 
 // ─────────────────────────── RuntimeNetwork ───────────────────────────
