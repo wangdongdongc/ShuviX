@@ -488,7 +488,59 @@ export {
   fenceKnowledgeBases
 } from './durable/prompt/fences'
 // 挂起的用户询问（ask / 确认卡片）—— 会话运行时「等人回答」的那一半
-export { PendingInputRequests } from './durable/inputRequests'
+export { PendingInputRequests, type PendingInputHooks } from './durable/inputRequests'
+// pi-durable 会话核心（P1-07）：每会话一个 Harness 的打开 / LRU / 删除，及其上的 ShuviX 运行语义
+export {
+  createSessionHost,
+  autoResumeAllowed,
+  SessionHostSealedError,
+  type SessionHost
+} from './durable/sessionHost'
+export {
+  SessionClosedError,
+  observeResumes,
+  settlementResult,
+  type AdmitResult,
+  type DurableSession,
+  type NoticeInput,
+  type NoticeResult,
+  type SessionCloseReason,
+  type SubmitErrorCode,
+  type SubmitResult,
+  type UserSendOptions
+} from './durable/durableSession'
+export {
+  DEFAULT_INTERRUPTED_SEND_POLICY,
+  DEFAULT_MAX_IDLE_OPEN,
+  DEFAULT_NOTICE_COALESCE_MS,
+  type InterruptedSendPolicy,
+  type RunState,
+  type SessionHostDeps
+} from './durable/seams'
+export {
+  createShuviXSettings,
+  compactionReserveTokens,
+  SHUVIX_KEEP_RECENT_TOKENS,
+  SHUVIX_MAX_RESERVE_TOKENS,
+  SHUVIX_RETRY_POLICY,
+  SHUVIX_STREAM_OPTIONS,
+  type ShuviXSettingsOptions,
+  type ShuviXSettingsOverrides
+} from './durable/settings'
+export {
+  AgentStateDoc,
+  DisplayDoc,
+  NoticeEntry,
+  SessionStateDoc,
+  noticeEntryDraft,
+  seedConversationDocs,
+  type AgentStateRecord,
+  type DeferredNotice,
+  type DisplayState,
+  type NoticeData,
+  type SessionState
+} from './durable/docs'
+export { backgroundContext, contextWithSignal, isClosedError } from './durable/context'
 // 历史 thinking 剥离（纯函数；pi-durable 切换后暂未接线，见文件头）
 export {
   elideHistoricalThinking,
