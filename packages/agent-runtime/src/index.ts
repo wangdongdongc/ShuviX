@@ -555,7 +555,11 @@ export {
   type DateAnnounceOptions
 } from './durable/prompt/dateNotice'
 // 挂起的用户询问（ask / 确认卡片）—— 会话运行时「等人回答」的那一半
-export { PendingInputRequests, type PendingInputHooks } from './durable/inputRequests'
+export {
+  PendingInputRequests,
+  type InputResponseMeta,
+  type PendingInputHooks
+} from './durable/inputRequests'
 // pi-durable 会话核心（P1-07）：每会话一个 Harness 的打开 / LRU / 删除，及其上的 ShuviX 运行语义
 export {
   createSessionHost,

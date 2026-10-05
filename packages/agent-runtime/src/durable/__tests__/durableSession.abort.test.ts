@@ -67,11 +67,10 @@ describe('abort', () => {
     await withTimeout(session.abort(), 2000, 'abort with ask')
     expect(response).toEqual({ kind: 'cancel', reason: 'aborted' })
     expect(session.pendingInputCount).toBe(0)
-    expect(
-      t.broadcasts.some(
-        (event) => event.type === 'input_request_resolved' && event.requestId === 'call-askme'
-      )
-    ).toBe(true)
+    // 落定经钩子（P3-08：不广播）
+    expect(t.asksOf('input_request_resolved').map((event) => event.requestId)).toEqual([
+      'call-askme'
+    ])
     const submission = await session.harness.submission(submissionId as never, BG)
     expect(await submission!.status(BG)).toMatchObject({ status: 'unanswered', reason: 'aborted' })
     expect(await result).toEqual({})
@@ -111,7 +110,7 @@ describe('abort', () => {
     await withTimeout(aborting, 3000, 'abort after late ask')
     expect(response).toEqual({ kind: 'cancel', reason: 'aborted' })
     expect(session.pendingInputCount).toBe(0)
-    expect(t.broadcasts.some((event) => event.type === 'input_request')).toBe(false)
+    expect(t.asksOf('input_request')).toEqual([])
     expect(await result).toEqual({})
   })
 

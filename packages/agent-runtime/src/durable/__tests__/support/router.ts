@@ -75,7 +75,6 @@ export function profileTable(
 
 type SubSessionRegister = Extract<ChatEvent, { type: 'sub_session_register' }>
 type SubSessionEnd = Extract<ChatEvent, { type: 'sub_session_end' }>
-type UserMessage = Extract<ChatEvent, { type: 'user_message' }>
 
 /** 一个进程里路由看到的一切 */
 export interface RouterKit {
@@ -90,7 +89,8 @@ export interface RouterKit {
   readonly peeks: string[]
   registers(): SubSessionRegister[]
   ends(): SubSessionEnd[]
-  userMessages(): UserMessage[]
+  /** 带 `user_message` 类型的广播（P3-08 起不该有：追问不再广播） */
+  userMessages(): ChatEvent[]
   task(agentId: string): TaskInfo | undefined
   /** 某个 agentId 在 taskBroadcasts 里的状态序列 */
   statuses(agentId: string): string[]
@@ -152,7 +152,7 @@ export function routerKit(
     peeks,
     registers: () => byType('sub_session_register'),
     ends: () => byType('sub_session_end'),
-    userMessages: () => byType('user_message'),
+    userMessages: () => events.filter((event) => (event.type as string) === 'user_message'),
     task: (agentId) => real?.get(agentId),
     statuses: (agentId) =>
       taskBroadcasts.filter((task) => task.taskId === agentId).map((task) => task.status)

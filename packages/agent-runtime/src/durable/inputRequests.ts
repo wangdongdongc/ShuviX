@@ -15,6 +15,11 @@
  *  3. **每个 id 的 onRequest / onResolved 恰好各一次**；被闸门拒收（窗口关闭 / 没有前端能展示）的
  *     询问两者都没有。
  *
+ * **不再广播**（P3-08，plan §D / Q-P3-04）：询问经视图（`SessionView.asks`，投影挂的钩子）到达每个前端，
+ * 主进程的消费方（通知、侧栏计数）也挂钩子 —— 前端线路上没有 `input_request` / `_resolved` 了。sink 只剩
+ * `hasUserInputCapability` 这道闸门。应答带上答题方（`{clientId}`，P3-08 PIN-20），原样交给 onResolved
+ * 供审计；不记应答内容。
+ *
  * 钩子可以有多份（P3-03 PIN-02）：构造时的那一份（旧接口）之外，`subscribe()` 再挂任意多份（界面投影、
  * 通知中心……），逐个隔离 —— 一份抛错只记日志，不影响其余几份，也不影响询问本身。`list()` 给出此刻
  * 挂着的询问（按出现次序；同 id 重发的那条排到最后）。
@@ -32,10 +37,18 @@ interface PendingInput {
 }
 
 export interface PendingInputHooks {
-  /** 一条询问开始挂起（广播 input_request 之后） */
+  /** 一条询问开始挂起 */
   onRequest?: (request: InputRequest) => void
-  /** 一条挂起的询问落定（应答 / 取消 / 被顶替；广播 input_request_resolved 之后） */
-  onResolved?: (requestId: string, response: InputResponse) => void
+  /**
+   * 一条挂起的询问落定（应答 / 取消 / 被顶替）。`clientId` = 答题方（`ipc:<id>` / `chrome:<id>`，PIN-20）：
+   * 只有经 `respond(…, {clientId})` 应答的才有；取消、顶替、不带身份的应答都没有。
+   */
+  onResolved?: (requestId: string, response: InputResponse, clientId?: string) => void
+}
+
+/** 应答的附带信息（P3-08 PIN-20）：谁答的，只供审计 */
+export interface InputResponseMeta {
+  readonly clientId?: string
 }
 
 function cancelled(reason: CancelReason): InputResponse {
@@ -83,15 +96,14 @@ export class PendingInputRequests {
     this.settle(request.id, cancelled('superseded'))
     return new Promise<InputResponse>((resolve) => {
       this.pending.set(request.id, { request, resolve })
-      this.sink.broadcast({ type: 'input_request', sessionId: this.sessionId, request })
       this.safely(() => this.hooks.onRequest?.(request))
       for (const hooks of [...this.subscribers]) this.safely(() => hooks.onRequest?.(request))
     })
   }
 
   /** 应答一条挂起的询问；不存在（已应答 / 已取消）时返回 false —— 先到者胜 */
-  respond(requestId: string, response: InputResponse): boolean {
-    return this.settle(requestId, response)
+  respond(requestId: string, response: InputResponse, meta: InputResponseMeta = {}): boolean {
+    return this.settle(requestId, response, meta.clientId)
   }
 
   /** 取消一条挂起的询问；不存在时返回 false */
@@ -99,12 +111,12 @@ export class PendingInputRequests {
     return this.settle(requestId, cancelled(reason))
   }
 
-  /** 取消全部挂起（逐条广播落定）；不改变受理窗口 */
+  /** 取消全部挂起（逐条落定）；不改变受理窗口 */
   cancelAll(reason: CancelReason = 'aborted'): void {
     for (const requestId of [...this.pending.keys()]) this.settle(requestId, cancelled(reason))
   }
 
-  /** 关闭受理窗口：之后的新询问当场以 `reason` 取消（不挂起、不计数、不广播） */
+  /** 关闭受理窗口：之后的新询问当场以 `reason` 取消（不挂起、不计数、不调钩子） */
   closeInputs(reason: CancelReason = 'aborted'): void {
     this.closedReason = reason
   }
@@ -136,16 +148,18 @@ export class PendingInputRequests {
     })
   }
 
-  private settle(requestId: string, response: InputResponse): boolean {
+  private settle(requestId: string, response: InputResponse, clientId?: string): boolean {
     const pending = this.pending.get(requestId)
     if (!pending) return false
     this.pending.delete(requestId)
     pending.resolve(response)
-    this.sink.broadcast({ type: 'input_request_resolved', sessionId: this.sessionId, requestId })
-    this.safely(() => this.hooks.onResolved?.(requestId, response))
-    for (const hooks of [...this.subscribers]) {
-      this.safely(() => hooks.onResolved?.(requestId, response))
+    // 带身份时才多传一个参数：既有的两参钩子（与它们的断言）看到的调用形状不变
+    const resolved = (hooks: PendingInputHooks): void => {
+      if (clientId === undefined) hooks.onResolved?.(requestId, response)
+      else hooks.onResolved?.(requestId, response, clientId)
     }
+    this.safely(() => resolved(this.hooks))
+    for (const hooks of [...this.subscribers]) this.safely(() => resolved(hooks))
     return true
   }
 

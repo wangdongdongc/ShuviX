@@ -227,7 +227,7 @@ describe('P1-12 · lifecycle', () => {
       const read = resultMessage(await resultEntry(session, 'c-r2'))
       expect(read.isError).toBe(false)
       expect(JSON.stringify(read.content)).toContain('line 2500')
-      expect(world.t.broadcastsOf('input_request')).toEqual([])
+      expect(world.t.asksOf('input_request')).toEqual([])
       expect(world.permissions).toEqual([])
     },
     TIMEOUT
