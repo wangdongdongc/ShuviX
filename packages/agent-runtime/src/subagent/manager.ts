@@ -326,9 +326,10 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
       throw error
     }
 
-    const agentId = raw.agentId ?? created
-    // 子 agent 根本没建起来（深度 / 模型 / 解析失败）：没有登记过任何东西，原样交回
-    if (agentId === undefined || created === undefined) {
+    // 子 agent 根本没建起来（深度 / 模型 / 解析失败；或重新挂上时记录坏了）：没有登记过任何东西，原样交回
+    // （不带子对话 id —— 派发工具据此把原因前缀 `Error:`，PIN-04）
+    const agentId = created
+    if (agentId === undefined) {
       const { result, error } = raw
       return error === undefined ? { result } : { result, error }
     }
