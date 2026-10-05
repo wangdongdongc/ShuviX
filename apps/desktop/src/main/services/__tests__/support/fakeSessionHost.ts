@@ -18,6 +18,7 @@ import { vi } from 'vitest'
 import type {
   AdmitResult,
   AgentIdentity,
+  AgentProjector,
   CreateAgentOptions,
   DrivenRun,
   DurableSession,
@@ -26,9 +27,11 @@ import type {
   NoticeInput,
   NoticeResult,
   NotifyOptions,
+  PendingInputHooks,
   RequestState,
   RunState,
   SessionHost,
+  SessionProjector,
   SpawnCoordinator,
   SpawnOutcome,
   SubmitResult,
@@ -217,7 +220,7 @@ export class FakeDurableSession implements DurableSession {
         conversationId: 1 as DrivenRun['conversationId']
       }
     }
-    options.onAdmitted?.()
+    options.onAdmitted?.({})
     if (this.submitGate) await this.submitGate.promise
     return result
   }
@@ -299,6 +302,27 @@ export class FakeDurableSession implements DurableSession {
     if (this.destroyGate) await this.destroyGate.promise
     if (this.destroyError !== undefined) throw this.destroyError
     this.lock = undefined
+  }
+
+  // 界面投影 / 运行状态 / 询问钩子（P3-03）：门面不用它们，桩子
+  projector(): Promise<SessionProjector> {
+    return Promise.reject(new Error('FakeDurableSession has no projector'))
+  }
+
+  async agentProjector(): Promise<AgentProjector | undefined> {
+    return undefined
+  }
+
+  onRunStateChange(): () => void {
+    return () => {}
+  }
+
+  subscribeInputs(_hooks: PendingInputHooks): () => void {
+    return () => {}
+  }
+
+  pendingInputs(): InputRequest[] {
+    return []
   }
 
   /** 某类调用（按顺序） */

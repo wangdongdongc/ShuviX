@@ -22,6 +22,10 @@
  *    根对话 id 在每个存储里都是 1，共享注册表会让两条会话的 `shuvix.agent.1` 互相覆盖。
  *  - **driven 落定**（P2-09，`onDrivenSettled`）：每个进程每条 submission 至多报一次，记账在宿主（会话被
  *    LRU 关了再开也不重报；删除时清掉）。
+ *  - **打开 / 关闭的宿主钩子**（P3-03 PIN-09）：`onSessionOpened` 在每次真正的打开（open 或 peek）接管完成、
+ *    运行状态报过之后调用；`onSessionClosed` 在每次关闭（显式 / LRU / 全部关闭 = `remove`）的 `close` 落定
+ *    之后调用；每次删除都报 `destroy`（会话没开着也报，P3-05 PIN-06），在关闭与删存储之后。SyncHub 据此替换
+ *    视图。
  *  - **压缩余量按锁定模型的窗口算**（K14）：settings 的 getter 现读会话的锁、按 `models.getModel` 查
  *    上下文窗口（未锁 / 查不到 → 32768）。
  */
@@ -106,7 +110,11 @@ class SessionHostImpl implements SessionHost {
     this.maxIdleOpen = Number.isFinite(max) && max >= 0 ? Math.floor(max) : DEFAULT_MAX_IDLE_OPEN
     this.manager = new SessionManager<DurableSessionImpl>({
       create: (sessionId) => this.create(sessionId),
-      dispose: (_sessionId, session, reason: SessionCloseReason) => session.close(reason)
+      dispose: (sessionId, session, reason: SessionCloseReason) =>
+        // 删除由 delete() 自己报（不论会话开没开着，P3-05 PIN-06）
+        session.close(reason).finally(() => {
+          if (reason !== 'destroy') this.notifyClosed(sessionId, reason)
+        })
     })
   }
 
@@ -185,11 +193,16 @@ class SessionHostImpl implements SessionHost {
     const previous = this.deleting.get(sessionId)
     const run = (async () => {
       if (previous) await previous.catch(() => undefined)
-      await this.manager.remove(sessionId, 'destroy')
-      await this.deps.deleteStorage(sessionId)
-      this.recency.delete(sessionId)
-      // 同一 id 重建的会话 submission id 从头数起
-      this.drivenEmitted.delete(sessionId)
+      try {
+        await this.manager.remove(sessionId, 'destroy')
+        await this.deps.deleteStorage(sessionId)
+        this.recency.delete(sessionId)
+        // 同一 id 重建的会话 submission id 从头数起
+        this.drivenEmitted.delete(sessionId)
+      } finally {
+        // 每次删除都报（开着的先关掉；没开过的同样报，P3-05 PIN-06）—— 在关闭与删存储之后
+        this.notifyClosed(sessionId, 'destroy')
+      }
     })()
     const tracked: Promise<void> = run.finally(() => {
       if (this.deleting.get(sessionId) === tracked) this.deleting.delete(sessionId)
@@ -306,6 +319,8 @@ class SessionHostImpl implements SessionHost {
         // 打开时总报一次此刻的运行状态（PIN-R，与锁镜像的 K11 同理）：崩溃可能把 DB 里的运行标记留在
         // busy（后台压缩中、最后一次提交与转闲的微任务之间），空闲重开若不报，那个标记永远好不了
         this.reportRunState(sessionId, session.runState)
+        // 真正打开了一次（PIN-09）：在运行状态报过之后
+        this.notifyOpened(session)
         return session
       } catch (error) {
         await harness.close(BG).catch(() => undefined)
@@ -322,6 +337,24 @@ class SessionHostImpl implements SessionHost {
     this.reportRunState(sessionId, state)
     // 忙 → 闲：可回收的会话多了一个
     if (previous === 'busy' && state !== 'busy') this.scheduleTrim()
+  }
+
+  /** `onSessionOpened`（PIN-09）：抛错只记日志 */
+  private notifyOpened(session: DurableSessionImpl): void {
+    try {
+      this.deps.onSessionOpened?.(session)
+    } catch (error) {
+      this.logger.warn(`onSessionOpened failed session=${session.sessionId}: ${errorText(error)}`)
+    }
+  }
+
+  /** `onSessionClosed`（PIN-09）：`destroy` = 删除，其余都算 `remove`；抛错只记日志 */
+  private notifyClosed(sessionId: string, reason: SessionCloseReason): void {
+    try {
+      this.deps.onSessionClosed?.(sessionId, reason === 'destroy' ? 'destroy' : 'remove')
+    } catch (error) {
+      this.logger.warn(`onSessionClosed failed session=${sessionId}: ${errorText(error)}`)
+    }
   }
 
   private reportRunState(sessionId: string, state: RunState): void {
