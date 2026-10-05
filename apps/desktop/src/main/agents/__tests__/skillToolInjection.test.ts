@@ -100,7 +100,7 @@ const DRAWING = 'skill:builtin:drawing'
 /** bot 基座那份刻意很窄的工具名单（见 STI-6）—— 它自己点了作图技能的名 */
 const BOT_TOOLS = profileOf('bot').tools
 
-const host = createDesktopToolHost({ lockOf: () => undefined })
+const host = createDesktopToolHost({ sessionOf: () => undefined })
 
 const resolve = (names: readonly string[], profile = 'work'): Promise<ResolvedAgentTools> =>
   host.resolveAgentTools(requestD({ names: [...names], profile: inProcess(profileOf(profile)) }), {

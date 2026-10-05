@@ -130,7 +130,7 @@ async function bothSides(
   names: string[]
 ): Promise<{ vars: PromptVars; tools: Array<{ name?: string; description?: string }> }> {
   const vars = await varsOf('root', names)
-  const resolved = await createDesktopToolHost({ lockOf: () => undefined }).resolveAgentTools(
+  const resolved = await createDesktopToolHost({ sessionOf: () => undefined }).resolveAgentTools(
     {
       sessionId: SID,
       conversationId: 1 as never,

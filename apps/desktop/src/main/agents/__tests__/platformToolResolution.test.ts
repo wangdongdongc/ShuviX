@@ -10,8 +10,8 @@
  *
  * 同一份装配顺带钉住**安全主体的来源**（AH-S1）：工具工厂拿到的是会话级 ctx（sessionId = 根会话，
  * 没有固定的 agent，带 agentOf）；L1 门的主体按**这次调用**经同一个 ctx 现取（withCallAgent）——
- * 有锁时就是锁住的根 agent。询问点的审查靠这个主体认出「审查员自己在要权限」（防递归），审查员是
- * 派生 agent，那一行要等 phase 2。
+ * 有锁时就是锁住的根 agent，派生 agent（审查员这样的 hook agent）的对话上就是它自己（P2-06：宿主经
+ * `sessionOf` 问会话的 `agentIdentity(对话)`）。询问点的审查靠这个主体认出「审查员自己在要权限」（防递归）。
  *
  * 注册表用**真的**（过滤的就是 `isToolOnPlatform` 那一条），往里注册的是桩工厂 —— 真工具模块会
  * 拖进 bgTaskService / toolContext。包装器换成记账的恒等桩（记下它收到的 security 解析器）。
@@ -62,8 +62,9 @@ vi.mock('../../services/botService', () => ({ botService: { forSession: () => nu
 vi.mock('../../utils/toolUtils/fileTime', () => ({ recordRead: vi.fn() }))
 vi.mock('../../services/knowledge', () => ({ enabledBaseChoices: () => [] }))
 
-import { composeAgentTools, type LockRecord } from '@shuvix/agent-runtime'
+import { composeAgentTools } from '@shuvix/agent-runtime'
 import type { ToolContext } from '../../services/toolContext'
+import { FakeSessionHost } from '../../services/__tests__/support/fakeSessionHost'
 import { registerBuiltinTool, unregisterBuiltinTool } from '../../services/toolRegistry'
 import { createDesktopToolHost } from '../agentHost'
 import {
@@ -76,8 +77,8 @@ import {
 
 const SID = 'sess-platform-tools'
 
-const locks = new Map<string, LockRecord>()
-const host = createDesktopToolHost({ lockOf: (id) => locks.get(id) })
+let fake = new FakeSessionHost()
+const host = createDesktopToolHost({ sessionOf: (id) => fake.get(id) })
 
 let unregister: () => void
 
@@ -143,7 +144,7 @@ describe('内置工具 —— 工厂的 ctx 与 L1 门的主体', () => {
   beforeEach(() => {
     seen.length = 0
     mocks.wraps.length = 0
-    locks.clear()
+    fake = new FakeSessionHost()
     mocks.getDesktopSecurityContext.mockReset().mockReturnValue(SECURITY)
   })
 
@@ -159,7 +160,7 @@ describe('内置工具 —— 工厂的 ctx 与 L1 门的主体', () => {
     const security = wrap.opts.security as (api: ToolExecutionApi, context: Context) => unknown
     expect(security).toBeTypeOf('function')
 
-    locks.set(SID, lockD())
+    fake.put(SID, { lock: lockD() })
     const gate = security({ conversationId: 1 } as ToolExecutionApi, {} as Context)
     expect(gate).toBe(SECURITY)
     const subjectCtx = mocks.getDesktopSecurityContext.mock.calls[0][0] as ToolContext
@@ -170,7 +171,31 @@ describe('内置工具 —— 工厂的 ctx 与 L1 门的主体', () => {
     expect(subjectCtx.agent).toMatchObject({ profileName: 'work', kind: 'root' })
   })
 
-  it.todo(
-    'AH-S1 spawned（permission-reviewer）：门的主体报审查员自己的档案名与 spawned（防递归）(pi-durable p2)'
-  )
+  it('AH-S1 spawned（permission-reviewer）/ P2-06-19：门的主体报审查员自己的档案名与 spawned（防递归）；根那一行照旧', async () => {
+    fake.put(SID, { lock: lockD() }).identities.set(3, {
+      profileName: 'permission-reviewer',
+      kind: 'spawned',
+      callerId: 'sub-r1',
+      getModelConfig: () => ({ provider: 'anthropic', model: 'claude-haiku-4-5', capabilities: {} })
+    })
+    await host.buildBuiltinTools({ sessionId: SID, sandboxed: false })
+    const [ctx] = seen
+    const wrap = mocks.wraps.find((w) => (w.tool as { name: string }).name === PROBE)!
+    const security = wrap.opts.security as (api: ToolExecutionApi, context: Context) => unknown
+
+    expect(security({ conversationId: 3 } as ToolExecutionApi, {} as Context)).toBe(SECURITY)
+    const reviewerCtx = mocks.getDesktopSecurityContext.mock.calls[0][0] as ToolContext
+    expect(reviewerCtx.sessionId).toBe(SID)
+    expect(reviewerCtx.requestUserInput).toBe(ctx.requestUserInput)
+    expect(reviewerCtx.agentOf).toBe(ctx.agentOf)
+    expect(reviewerCtx.agent).toMatchObject({
+      profileName: 'permission-reviewer',
+      kind: 'spawned',
+      callerId: 'sub-r1'
+    })
+
+    security({ conversationId: 1 } as ToolExecutionApi, {} as Context)
+    const rootCtx = mocks.getDesktopSecurityContext.mock.calls[1][0] as ToolContext
+    expect(rootCtx.agent).toMatchObject({ profileName: 'work', kind: 'root' })
+  })
 })
