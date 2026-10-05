@@ -2,7 +2,7 @@
  * 桌面单测用的假会话运行时：FakeDurableSession（实现 DurableSession）与 FakeSessionHost（实现 SessionHost）。
  *
  *  - FakeDurableSession：可设的 `lock` / busy / interrupted / 挂起询问；submitUser / steer / followUp /
- *    continue 的结果按脚本给（缺省 `{}`）；`destroyAgent` / `abort` 可挂闸门；每次调用记进 `calls`。
+ *    continue / resumeInterrupted 的结果按脚本给（缺省 `{}`），requestState / lastAnswer 也按脚本给；`destroyAgent` / `abort` 可挂闸门；每次调用记进 `calls`。
  *    `lockOnFirstUse` 模拟 K3：第一次 submitUser / steer / followUp / continue / createAgent 时上锁。
  *  - FakeSessionHost：open / peek / get / close / closeAll / delete；`storages` 是「存储在」的会话集合
  *    （peek 只打开它们，open 会建）；`delete` 可挂闸门；调用记进 `calls`。
@@ -16,9 +16,12 @@ import type {
   AgentIdentity,
   CreateAgentOptions,
   DurableSession,
+  LastAnswer,
   LockRecord,
   NoticeInput,
   NoticeResult,
+  NotifyOptions,
+  RequestState,
   RunState,
   SessionHost,
   SubmitResult,
@@ -73,6 +76,10 @@ export class FakeDurableSession implements DurableSession {
   steerResult: AdmitResult = {}
   followUpResult: AdmitResult = {}
   continueResult: SubmitResult = {}
+  resumeResult: SubmitResult = {}
+  /** requestState 的脚本（没设的 requestId = 'none'） */
+  readonly requestStates = new Map<string, RequestState>()
+  answer: LastAnswer | undefined
   /** submitUser 受理之后、落定之前挂着的闸门 */
   submitGate: Gate | undefined
   destroyGate: Gate | undefined
@@ -127,6 +134,26 @@ export class FakeDurableSession implements DurableSession {
     return this.continueResult
   }
 
+  async resumeInterrupted(): Promise<SubmitResult> {
+    this.calls.push(['resumeInterrupted'])
+    if (this.closed) return { error: 'closed', code: 'closed' }
+    if (!this.interrupted) return {}
+    this.use()
+    return this.resumeResult
+  }
+
+  async requestState(requestId: string): Promise<RequestState> {
+    this.calls.push(['requestState', requestId])
+    if (this.closed) throw new Error(`Session ${this.sessionId} is closed`)
+    return this.requestStates.get(requestId) ?? 'none'
+  }
+
+  async lastAnswer(): Promise<LastAnswer | undefined> {
+    this.calls.push(['lastAnswer'])
+    if (this.closed) throw new Error(`Session ${this.sessionId} is closed`)
+    return this.answer
+  }
+
   async submitUser(content: UserInput, options: UserSendOptions = {}): Promise<SubmitResult> {
     this.calls.push(['submitUser', content, options])
     if (this.closed) return { error: `Session ${this.sessionId} is closed`, code: 'closed' }
@@ -160,7 +187,7 @@ export class FakeDurableSession implements DurableSession {
     return { status: 'submitted' }
   }
 
-  async notify(text: string, options?: { kind?: string }): Promise<void> {
+  async notify(text: string, options?: NotifyOptions): Promise<void> {
     this.calls.push(['notify', text, ...(options === undefined ? [] : [options])])
   }
 

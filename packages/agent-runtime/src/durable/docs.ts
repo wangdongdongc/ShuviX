@@ -2,7 +2,8 @@
  * ShuviX 自己的 durable 文档与条目定义（与 pi 的 `pi.*` 文档并列存在会话存储里）。
  *
  * - `SessionStateDoc`（scope session）：整条会话的指针与暂存 —— 当前对话（`currentConversation`，
- *   回退 fork 之后由它指向新分支）、根 agent 的锁（P1-09 写入）、被推迟送达的系统通知。
+ *   回退 fork 之后由它指向新分支）、根 agent 的锁（P1-09 写入）、被推迟送达的系统通知、
+ *   子会话被父会话驱动的那一轮的标记（P2-09）。
  *   **它是锁与当前分支的权威来源**（裁决 Q7），DB 里的镜像只为了界面便宜地读。
  * - `AgentStateDoc`（每个对话，rewindable + asOf）：这个对话的 agent 是什么（种类、档案名、冻结的
  *   人设、指令文件、根会话 id、上次告知模型的日期；派生 agent 的对话还平铺着它的派生 agent 记录，
@@ -49,6 +50,22 @@ export type SessionState = {
   lock?: JsonObject
   /** 待送达的通知，按到达顺序；送达（进收件箱或落条目）的同一提交里移除 */
   deferredNotices: DeferredNotice[]
+  /**
+   * 被父会话驱动的那一轮（P2-09，子会话的 driven-run 标记）：受理之后在它自己的提交里写下，那一轮
+   * 落定、宿主的 `onDrivenSettled` 回调成功之后清掉。一条会话至多一个，后写的替换先写的。缺省 = 没有；
+   * 从不写成 `undefined`（新鲜状态的深相等断言靠它）。
+   */
+  driven?: DrivenRun
+}
+
+/** driven-run 标记（P2-09）：哪条 requestId、谁在驱动、前台还是后台、落在哪个对话 */
+export type DrivenRun = {
+  requestId: string
+  /** 驱动它的父会话 id */
+  parentId: string
+  background: boolean
+  /** 受理时的当前对话（之后指针挪走也不会让标记失主） */
+  conversationId: ConversationId
 }
 
 export const SessionStateDoc = defineDoc<SessionState>({
