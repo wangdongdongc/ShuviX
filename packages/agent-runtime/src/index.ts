@@ -584,9 +584,14 @@ export {
   observeResumes,
   settlementResult,
   type AdmitResult,
+  type DrivenSendOptions,
+  type DrivenSettledEvent,
   type DurableSession,
+  type LastAnswer,
   type NoticeInput,
   type NoticeResult,
+  type NotifyOptions,
+  type RequestState,
   type SessionCloseReason,
   type SubmitErrorCode,
   type SubmitResult,
@@ -659,6 +664,7 @@ export {
   type AgentStateRecord,
   type DeferredNotice,
   type DisplayState,
+  type DrivenRun,
   type NoticeData,
   type SessionState
 } from './durable/docs'

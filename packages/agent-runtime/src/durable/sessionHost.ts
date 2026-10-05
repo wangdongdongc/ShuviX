@@ -19,6 +19,8 @@
  *  - **每会话一个注册表**（K1）：打开时 `createRegistry(sessionId)` 造一个、装上系统提示词的段落扩展
  *    （K21），会话自己再装 `shuvix.builtin` 与按锁重建的 `shuvix.agent.<对话>`；关闭 / 删除时随会话丢弃。
  *    根对话 id 在每个存储里都是 1，共享注册表会让两条会话的 `shuvix.agent.1` 互相覆盖。
+ *  - **driven 落定**（P2-09，`onDrivenSettled`）：每个进程每条 submission 至多报一次，记账在宿主（会话被
+ *    LRU 关了再开也不重报；删除时清掉）。
  *  - **压缩余量按锁定模型的窗口算**（K14）：settings 的 getter 现读会话的锁、按 `models.getModel` 查
  *    上下文窗口（未锁 / 查不到 → 32768）。
  */
@@ -92,6 +94,8 @@ class SessionHostImpl implements SessionHost {
   private closingAll: Promise<void> | undefined
   /** 段落扩展：每个会话的注册表都装同一组对象（它们按 AgentStateDoc.rootSessionId 路由） */
   private readonly promptExtensions: PromptExtensions
+  /** 本进程报过的 driven 落定（P2-09：每个进程至多一次；LRU 关了再开也不重报），按会话 */
+  private readonly drivenEmitted = new Map<string, Set<number>>()
 
   constructor(private readonly deps: SessionHostDeps) {
     this.logger = deps.logger ?? noopLogger
@@ -182,6 +186,8 @@ class SessionHostImpl implements SessionHost {
       await this.manager.remove(sessionId, 'destroy')
       await this.deps.deleteStorage(sessionId)
       this.recency.delete(sessionId)
+      // 同一 id 重建的会话 submission id 从头数起
+      this.drivenEmitted.delete(sessionId)
     })()
     const tracked: Promise<void> = run.finally(() => {
       if (this.deleting.get(sessionId) === tracked) this.deleting.delete(sessionId)
@@ -269,6 +275,12 @@ class SessionHostImpl implements SessionHost {
           promptExtensions: this.promptExtensions,
           promptVars: this.deps.promptVars ?? (() => ({})),
           ...(this.deps.onLockChange === undefined ? {} : { onLockChange: this.deps.onLockChange }),
+          ...(this.deps.onDrivenSettled === undefined
+            ? {}
+            : {
+                onDrivenSettled: this.deps.onDrivenSettled,
+                claimDrivenEmission: (submissionId) => this.claimDriven(sessionId, submissionId)
+              }),
           settings
         })
         lockedSession = session
@@ -344,6 +356,18 @@ class SessionHostImpl implements SessionHost {
       pinned = true
     }
     return !pinned && session.evictable
+  }
+
+  /** driven 落定的进程内记账：第一次返回 true */
+  private claimDriven(sessionId: string, submissionId: number): boolean {
+    let emitted = this.drivenEmitted.get(sessionId)
+    if (emitted === undefined) {
+      emitted = new Set()
+      this.drivenEmitted.set(sessionId, emitted)
+    }
+    if (emitted.has(submissionId)) return false
+    emitted.add(submissionId)
+    return true
   }
 
   private report(sessionId: string, error: unknown): void {

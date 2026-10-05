@@ -26,6 +26,7 @@ import type { ModelRegistry } from '../models/modelRegistry'
 import type { ProviderCredentialPort } from '../models/port'
 import type { InProcessAgentType } from '../subagent/types'
 import type { RuntimeEventSink, RuntimeLogger } from '../types'
+import type { DrivenSettledEvent } from './durableSession'
 import type { LockRecord } from './lock'
 import type { ShuviXSettingsOverrides } from './settings'
 
@@ -125,6 +126,14 @@ export interface SessionHostDeps {
    * 缺省 = 不发（测试默认关闭，需要的用例自己注入一个确定的日期）。
    */
   today?: () => string
+  /**
+   * 子会话被驱动的那一轮落定了（P2-09，`SessionState.driven`）：完成 / 出错 / 被中止都算。进程内由提交
+   * 发布察觉，打开时由扫描察觉（`open()` 落定之后才调用，从不续跑任何东西）。**每个进程至多一次**；
+   * 回调成功后运行时清掉标记，抛错 / 拒绝 = 记警告、留着标记，下次打开（新进程）再来。通知文案、
+   * 前台等待者的去重、打开父会话并 `notify(text, { requestId: e.noticeRequestId })` 都是宿主的事。
+   * 缺省 = 不察觉（标记留着，等接了它的进程打开时再送）。
+   */
+  onDrivenSettled?: (event: DrivenSettledEvent) => void | Promise<void>
 }
 
 /** bot 段落的内容：一块（通常是 `renderBotContext` 的输出）、若干块、或者没有 */
