@@ -247,7 +247,9 @@ describe('P3-08-60 / 61 应答的审计（PIN-20）', () => {
     const response: InputResponse = { kind: 'other', text: 'SECRET-PASSWORD' }
     expect(respondToUserInput('r', response, { clientId: 'ipc:7' })).toBe(true)
     expect(holder.respondToInput.mock.calls).toEqual([['r', response, { clientId: 'ipc:7' }]])
-    const lines = mocks.info.mock.calls.map((c) => String(c[0])).filter((l) => l.startsWith('ask answered'))
+    const lines = mocks.info.mock.calls
+      .map((c) => String(c[0]))
+      .filter((l) => l.startsWith('ask answered'))
     expect(lines).toEqual(['ask answered session=sid-a requestId=r by=ipc:7 kind=other'])
     expect(lines[0]).not.toContain('SECRET')
   })

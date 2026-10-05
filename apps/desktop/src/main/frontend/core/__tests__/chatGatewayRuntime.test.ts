@@ -74,7 +74,9 @@ vi.mock('../../../services/sessionStorage', () => ({
   appendModelChange: mocks.appendModelChange,
   appendThinkingLevelChange: mocks.appendThinkingLevelChange
 }))
-vi.mock('../../../services/userInputBroker', () => ({ respondToUserInput: mocks.respondToUserInput }))
+vi.mock('../../../services/userInputBroker', () => ({
+  respondToUserInput: mocks.respondToUserInput
+}))
 vi.mock('../../../services/builtinMcp/dbConnections', () => ({
   dbManager: {
     runtimeStatus: mocks.runtimeStatus,

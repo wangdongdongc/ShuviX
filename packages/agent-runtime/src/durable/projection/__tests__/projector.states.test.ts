@@ -17,7 +17,14 @@ import type { SessionView } from '@shuvix/chat-protocol/types/sessionView'
 import { describe, expect, it } from 'vitest'
 import { backgroundContext as BG } from '../../context'
 import type { DurableSession } from '../../durableSession'
-import { answer, fauxKit, held, modelError, stalled, type FauxKit } from '../../__tests__/support/faux'
+import {
+  answer,
+  fauxKit,
+  held,
+  modelError,
+  stalled,
+  type FauxKit
+} from '../../__tests__/support/faux'
 import {
   makeHost,
   primeRoot,

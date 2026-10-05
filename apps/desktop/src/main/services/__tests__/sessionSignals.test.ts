@@ -61,7 +61,9 @@ function fanout(): {
   opened: (session: DurableSession) => void
   closed: (sessionId: string, reason: SyncSessionClosedReason) => void
   onSessionOpened(listener: (session: DurableSession) => void): () => void
-  onSessionClosed(listener: (sessionId: string, reason: SyncSessionClosedReason) => void): () => void
+  onSessionClosed(
+    listener: (sessionId: string, reason: SyncSessionClosedReason) => void
+  ): () => void
 } {
   const opened = new Set<(session: DurableSession) => void>()
   const closed = new Set<(sessionId: string, reason: SyncSessionClosedReason) => void>()
@@ -167,7 +169,10 @@ describe('P3-08-47 / 48 根会话的一对与结局', () => {
     'P3-08-48 退避中中止 → aborted（不是 error）',
     async () => {
       const { t, signals } = await rigWith({
-        settingsOverrides: { retry: { enabled: true, baseDelayMs: 2000 }, compaction: { enabled: false } }
+        settingsOverrides: {
+          retry: { enabled: true, baseDelayMs: 2000 },
+          compaction: { enabled: false }
+        }
       })
       const session = await t.open('s1')
       await signals.ready('s1')

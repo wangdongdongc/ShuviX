@@ -235,7 +235,10 @@ describe('P3-08-40 侧栏转圈', () => {
 describe('P3-08-30 agent_end 先于终答帧', () => {
   it('每个记下的状态里卡片都在、正文不空；isStreaming 只在带 a2 的那次（或之后）才翻', () => {
     const u = user('u1', 'go')
-    apply('s1', V('s1', { messages: [u], live: liveCard(2, [text('Hello')]), run: { state: 'busy' } }))
+    apply(
+      's1',
+      V('s1', { messages: [u], live: liveCard(2, [text('Hello')]), run: { state: 'busy' } })
+    )
     const states: Array<{ hasCard: boolean; textOk: boolean; streaming: boolean; hasA2: boolean }> =
       []
     const off = useChatStore.subscribe((s) => {
@@ -305,7 +308,10 @@ describe('P3-08-41 tool_review 先于工具进度', () => {
     apply(
       's1',
       V('s1', {
-        messages: [user('u', 'go'), assistant('a1', [toolBlock('A', 'bash', { command: 'ls' }, { result: 'x' })])],
+        messages: [
+          user('u', 'go'),
+          assistant('a1', [toolBlock('A', 'bash', { command: 'ls' }, { result: 'x' })])
+        ],
         toolRuns: { A: { status: 'done' } },
         run: { state: 'busy' }
       })
@@ -320,15 +326,21 @@ describe('P3-08-42 本地错误行（PIN-02）', () => {
     const a = assistant('a1', [text('one')])
     apply('s1', V('s1', { messages: [u, a], run: { state: 'busy' } }))
     emit({ type: 'error', sessionId: 's1', error: 'boom' })
-    apply('s1', V('s1', { messages: [u, a], live: liveCard(3, [text('x')]), run: { state: 'busy' } }))
-    apply('s1', V('s1', { messages: [u, a], live: liveCard(3, [text('xy')]), run: { state: 'busy' } }))
-    apply('s1', V('s1', { messages: [u, a, assistant('a2', [text('xy')])], run: { state: 'idle' } }))
-    expect(store().messages.map((m) => (m.type === 'error_event' ? `err:${m.content}` : m.id))).toEqual([
-      'u1',
-      'a1',
-      'err:boom',
-      'a2'
-    ])
+    apply(
+      's1',
+      V('s1', { messages: [u, a], live: liveCard(3, [text('x')]), run: { state: 'busy' } })
+    )
+    apply(
+      's1',
+      V('s1', { messages: [u, a], live: liveCard(3, [text('xy')]), run: { state: 'busy' } })
+    )
+    apply(
+      's1',
+      V('s1', { messages: [u, a, assistant('a2', [text('xy')])], run: { state: 'idle' } })
+    )
+    expect(
+      store().messages.map((m) => (m.type === 'error_event' ? `err:${m.content}` : m.id))
+    ).toEqual(['u1', 'a1', 'err:boom', 'a2'])
     emit({ type: 'error', sessionId: 'other', error: 'elsewhere' })
     expect(store().messages.some((m) => m.content === 'elsewhere')).toBe(false)
 
@@ -340,8 +352,16 @@ describe('P3-08-42 本地错误行（PIN-02）', () => {
 
 describe('P3-08-59 TTS（PIN-03）', () => {
   const u = user('u1', 'go')
-  function runTo(final: ReturnType<typeof assistant>, endFirst: boolean, reason: 'ok' | 'aborted' | 'error' = 'ok', sid = 's1'): void {
-    apply(sid, V(sid, { messages: [u], live: liveCard(2, [text(final.content)]), run: { state: 'busy' } }))
+  function runTo(
+    final: ReturnType<typeof assistant>,
+    endFirst: boolean,
+    reason: 'ok' | 'aborted' | 'error' = 'ok',
+    sid = 's1'
+  ): void {
+    apply(
+      sid,
+      V(sid, { messages: [u], live: liveCard(2, [text(final.content)]), run: { state: 'busy' } })
+    )
     if (endFirst) emit({ type: 'agent_end', sessionId: sid, reason })
     apply(sid, V(sid, { messages: [u, final], run: { state: 'idle' } }))
     if (!endFirst) emit({ type: 'agent_end', sessionId: sid, reason })
@@ -350,7 +370,12 @@ describe('P3-08-59 TTS（PIN-03）', () => {
   it('ok 收尾读一次（终答帧先到 / agent_end 先到都一样）；reset、重挂不再读', () => {
     runTo(assistant('41', [text('spoken answer')]), false)
     expect(mocks.tts.speak.mock.calls).toEqual([['spoken answer', '41']])
-    apply('s1', JSON.parse(JSON.stringify(V('s1', { messages: [u, assistant('41', [text('spoken answer')])] }))))
+    apply(
+      's1',
+      JSON.parse(
+        JSON.stringify(V('s1', { messages: [u, assistant('41', [text('spoken answer')])] }))
+      )
+    )
     expect(mocks.tts.speak).toHaveBeenCalledTimes(1)
 
     emit({ type: 'agent_start', sessionId: 's1' })

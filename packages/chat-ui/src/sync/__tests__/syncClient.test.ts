@@ -66,11 +66,9 @@ describe('syncClient', () => {
     expect(logger.warnings).toEqual([])
     const delivered = values(events)
     expect(delivered.map((d) => d.delivery)).toEqual(['hydrate', 'update', 'update'])
-    expect(delivered.map((d) => (d.value.live?.message.blocks[0] as { text: string }).text)).toEqual([
-      'He',
-      'He.',
-      'He..'
-    ])
+    expect(
+      delivered.map((d) => (d.value.live?.message.blocks[0] as { text: string }).text)
+    ).toEqual(['He', 'He.', 'He..'])
     expect(sub.value()).toEqual(server.value(S1))
   })
 
@@ -141,9 +139,9 @@ describe('syncClient', () => {
     const events = record(sub)
     await server.settle()
     expect(sub.state()).toEqual({ status: 'error', code: 'service_not_found' })
-    expect(server.calls.filter((c) => c.startsWith('fail:') || c.startsWith('subscribe:'))).toEqual([
-      expect.stringMatching(/^fail:/)
-    ])
+    expect(server.calls.filter((c) => c.startsWith('fail:') || c.startsWith('subscribe:'))).toEqual(
+      [expect.stringMatching(/^fail:/)]
+    )
     expect(values(events)).toEqual([])
     expect(sub.value()).toBeUndefined()
 

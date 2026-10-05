@@ -1,4 +1,9 @@
-import { useSessionInit, useSessionView, useAgentEvents, useModelCatalogSync } from '@shuvix/chat-ui'
+import {
+  useSessionInit,
+  useSessionView,
+  useAgentEvents,
+  useModelCatalogSync
+} from '@shuvix/chat-ui'
 import { useRightPanelBridge } from './useRightPanelBridge'
 import { useNotificationBridge } from './useNotificationBridge'
 

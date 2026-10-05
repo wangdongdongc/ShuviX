@@ -222,10 +222,7 @@ describe('P2-11 · J4 crash, reopen, continue', () => {
       const t1 = world.t
       await withTimeout(sw.restart(), 10000, 'restart')
       const resolved = t1.asksOf('input_request_resolved')
-      expect(resolved.map((event) => event.requestId).sort()).toEqual([
-        'c-a',
-        'c-w'
-      ])
+      expect(resolved.map((event) => event.requestId).sort()).toEqual(['c-a', 'c-w'])
       const reopened = await sw.open()
       await sleep(150)
       expect(world.t.asksOf('input_request')).toEqual([])

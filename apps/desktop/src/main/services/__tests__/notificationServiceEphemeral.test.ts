@@ -200,8 +200,8 @@ function deliver(sessionId: string): void {
 
 function delivered(sessionId: string): number {
   return (
-    mocks.handleEvent.mock.calls.filter((c) => (c[0] as ChatEvent).sessionId === sessionId)
-      .length + mocks.askRaised.mock.calls.filter((c) => c[0] === sessionId).length
+    mocks.handleEvent.mock.calls.filter((c) => (c[0] as ChatEvent).sessionId === sessionId).length +
+    mocks.askRaised.mock.calls.filter((c) => c[0] === sessionId).length
   )
 }
 

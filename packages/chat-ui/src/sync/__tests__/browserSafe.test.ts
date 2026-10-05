@@ -46,7 +46,11 @@ const ALLOWED = (spec: string): boolean =>
 describe('P3-08-11 视图同步客户端是浏览器安全的', () => {
   it('扫到了文件（不在空集上恒真）', () => {
     expect(SOURCES.map((f) => relative(SRC, f)).sort()).toEqual(
-      expect.arrayContaining(['sync/syncClient.ts', 'hooks/useSessionView.ts', 'hooks/useAgentView.ts'])
+      expect.arrayContaining([
+        'sync/syncClient.ts',
+        'hooks/useSessionView.ts',
+        'hooks/useAgentView.ts'
+      ])
     )
   })
 

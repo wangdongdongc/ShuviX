@@ -18,7 +18,6 @@ import {
   crash,
   insert,
   liveTasksOf,
-  proc,
   rig,
   role,
   setupRig,
@@ -41,7 +40,13 @@ afterEach(async () => {
 
 type Event = Record<string, unknown>
 
-const LIFE = new Set(['agent_created', 'agent_start', 'agent_end', 'sub_session_register', 'sub_session_end'])
+const LIFE = new Set([
+  'agent_created',
+  'agent_start',
+  'agent_end',
+  'sub_session_register',
+  'sub_session_end'
+])
 
 /** 生命周期相关的广播，压成 `type:sessionId[:reason]` */
 function lifeOf(filter: (e: Event) => boolean = () => true): string[] {
@@ -130,7 +135,7 @@ describe('P3-08 会话信号 · 桌面整合', () => {
   it(
     'P3-08-52 打开 + 发送在一次网关调用里、投影挂载慢 50ms（PIN-09）：恰一对',
     async () => {
-      let wiring: typeof import('../../frontend/sync/syncWiring') | undefined
+      const ref: { wiring?: typeof import('../../frontend/sync/syncWiring') } = {}
       const p = await bootProcess({
         deps: {
           onSessionOpened: (session) => {
@@ -138,12 +143,12 @@ describe('P3-08 会话信号 · 桌面整合', () => {
             const original = session.projector.bind(session)
             ;(session as { projector: typeof session.projector }).projector = () =>
               sleep(50).then(original)
-            wiring!.sessionHostHooks.opened(session)
+            ref.wiring!.sessionHostHooks.opened(session)
           },
-          onSessionClosed: (id, reason) => wiring!.sessionHostHooks.closed(id, reason)
+          onSessionClosed: (id, reason) => ref.wiring!.sessionHostHooks.closed(id, reason)
         }
       })
-      wiring = await import('../../frontend/sync/syncWiring')
+      ref.wiring = await import('../../frontend/sync/syncWiring')
       insert('s1')
       p.router.on('root', role('chat'), answer('quick'))
       expect(await withTimeout(p.chatGateway.prompt('s1', 'hi'), 15000, 'prompt')).toEqual({})
@@ -177,12 +182,15 @@ describe('P3-08 会话信号 · 桌面整合', () => {
         'both pairs'
       )
       await sleep(50)
-      const root = lifeOf((e) => e.sessionId === 's1' && (e.type === 'agent_start' || e.type === 'agent_end'))
+      const root = lifeOf(
+        (e) => e.sessionId === 's1' && (e.type === 'agent_start' || e.type === 'agent_end')
+      )
       expect(root).toEqual(['agent_start:s1', 'agent_end:s1:ok'])
       const titler = rig.broadcasts.find((e) => e.type === 'sub_session_register')!
       expect(
         lifeOf(
-          (e) => e.sessionId === titler.sessionId && (e.type === 'agent_start' || e.type === 'agent_end')
+          (e) =>
+            e.sessionId === titler.sessionId && (e.type === 'agent_start' || e.type === 'agent_end')
         )
       ).toEqual([`agent_start:${titler.sessionId}`, `agent_end:${titler.sessionId}:ok`])
     },

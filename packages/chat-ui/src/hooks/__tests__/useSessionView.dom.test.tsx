@@ -159,7 +159,9 @@ describe('useSessionView', () => {
     )
     await settle()
     expect(server.calls.filter((c) => c.startsWith('subscribe:'))).toHaveLength(1)
-    render(createElement('div', null, [createElement(SessionProbe, { key: 'a', id: 's1', tag: 'a' })]))
+    render(
+      createElement('div', null, [createElement(SessionProbe, { key: 'a', id: 's1', tag: 'a' })])
+    )
     await settle()
     expect(server.calls.filter((c) => c.startsWith('unsubscribe:'))).toHaveLength(0)
     expect(store().sessionViews.s1).toBeDefined()

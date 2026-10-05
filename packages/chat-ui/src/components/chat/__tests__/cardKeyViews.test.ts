@@ -127,7 +127,11 @@ describe('P3-08-27 一轮工具', () => {
     const a1 = assistant('a1', [toolBlock('c1', 'read', { path: 'x' })])
     applySessionView(
       's1',
-      V('s1', { messages: [u1, a1], toolRuns: { c1: { status: 'running' } }, run: { state: 'busy' } })
+      V('s1', {
+        messages: [u1, a1],
+        toolRuns: { c1: { status: 'running' } },
+        run: { state: 'busy' }
+      })
     )
     const a1done = assistant('a1', [toolBlock('c1', 'read', { path: 'x' }, { result: 'ok' })])
     applySessionView(
@@ -159,7 +163,10 @@ describe('P3-08-28 重试折叠', () => {
   it('一张卡、key 恒定、任何时候都没有错误行；终答带 retried', () => {
     const u1 = user('u1', 'go')
     const rec = recorder()
-    applySessionView('s1', V('s1', { messages: [u1], live: liveCard(3, [text('att')]), run: { state: 'busy' } }))
+    applySessionView(
+      's1',
+      V('s1', { messages: [u1], live: liveCard(3, [text('att')]), run: { state: 'busy' } })
+    )
     // 第一次尝试失败：投影把错误条目折掉（同一个任务还在跑），退避期间没有实时卡
     applySessionView(
       's1',
@@ -169,11 +176,17 @@ describe('P3-08-28 重试折叠', () => {
         run: { state: 'busy', retry: { attempt: 1, at: 1000, error: '429' } }
       })
     )
-    applySessionView('s1', V('s1', { messages: [u1], live: liveCard(3, [text('try 2')]), run: { state: 'busy' } }))
+    applySessionView(
+      's1',
+      V('s1', { messages: [u1], live: liveCard(3, [text('try 2')]), run: { state: 'busy' } })
+    )
     applySessionView(
       's1',
       V('s1', {
-        messages: [u1, assistant('a', [text('try 2')], 's1', { retried: { count: 1, lastError: '429' } })],
+        messages: [
+          u1,
+          assistant('a', [text('try 2')], 's1', { retried: { count: 1, lastError: '429' } })
+        ],
         run: { state: 'idle' }
       })
     )
@@ -191,7 +204,10 @@ describe('P3-08-29 中止', () => {
   it('key 恒定；卡片一直在、内容是 par', () => {
     const u1 = user('u1', 'go')
     const rec = recorder()
-    applySessionView('s1', V('s1', { messages: [u1], live: liveCard(3, [text('par')]), run: { state: 'busy' } }))
+    applySessionView(
+      's1',
+      V('s1', { messages: [u1], live: liveCard(3, [text('par')]), run: { state: 'busy' } })
+    )
     applySessionView(
       's1',
       V('s1', { messages: [u1, assistant('a-par', [text('par')])], run: { state: 'idle' } })

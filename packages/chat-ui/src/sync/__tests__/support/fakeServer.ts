@@ -171,7 +171,8 @@ export function fakeServer(options: FakeServerOptions = {}): FakeServer {
     invoke: async (rawTarget, rawCall) => {
       const target = json(rawTarget)
       const call = parseServiceCall(json(rawCall))
-      const control = call.serviceId === '$chord.service' ? decodeServiceControlCall(call) : undefined
+      const control =
+        call.serviceId === '$chord.service' ? decodeServiceControlCall(call) : undefined
       const entry = entryOf(target)
       if (control?.type === 'subscribe') {
         const id = control.subscriptionId
@@ -223,9 +224,9 @@ export function fakeServer(options: FakeServerOptions = {}): FakeServer {
         const sub = subscriptions.get(control.subscriptionId)
         if (sub) sub.open = false
         subscriptions.delete(control.subscriptionId)
-        return json(
-          await entry.endpoint.invoke(call, publisher, BACKGROUND_CONTEXT)
-        ) as JsonValue | undefined
+        return json(await entry.endpoint.invoke(call, publisher, BACKGROUND_CONTEXT)) as
+          | JsonValue
+          | undefined
       }
       calls.push(`call:${call.member}`)
       return json(await entry.endpoint.invoke(call, publisher, BACKGROUND_CONTEXT)) as
@@ -289,7 +290,11 @@ export function fakeServer(options: FakeServerOptions = {}): FakeServer {
             ...instance,
             members: instance.members.map((m) =>
               m.kind === 'state'
-                ? { ...m, sequence: sub.sequence, ops: [['r', json(value) as unknown as JsonValue]] }
+                ? {
+                    ...m,
+                    sequence: sub.sequence,
+                    ops: [['r', json(value) as unknown as JsonValue]]
+                  }
                 : m
             )
           }

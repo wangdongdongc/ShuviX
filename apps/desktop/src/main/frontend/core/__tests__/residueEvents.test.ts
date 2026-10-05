@@ -18,10 +18,15 @@ vi.mock('../../../logger', () => ({
 
 import { ChatFrontendRegistry } from '../ChatFrontendRegistry'
 import type { ChatFrontend, ChatFrontendCapabilities } from '../ChatFrontend'
+// eslint-disable-next-line boundaries/dependencies -- 能力删了之后两个具体前端各自的声明，与注册表放在一个用例里核对
 import { ElectronFrontend } from '../../electron/ElectronFrontend'
+// eslint-disable-next-line boundaries/dependencies -- 同上（Chrome 侧边栏的前端）
 import { ChromeFrontend } from '../../chrome/ChromeFrontend'
 
-function fake(id: string, capabilities: ChatFrontendCapabilities): ChatFrontend & {
+function fake(
+  id: string,
+  capabilities: ChatFrontendCapabilities
+): ChatFrontend & {
   sent: ChatEvent[]
 } {
   const sent: ChatEvent[] = []

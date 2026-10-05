@@ -142,7 +142,9 @@ export function deriveStream(
   const generating =
     live && last?.type === 'tool' && !(last.toolCallId in view.toolRuns) ? last : undefined
   const streamingToolCall =
-    live && generating ? { toolName: generating.toolName, argsText: argsTextOf(live, generating) } : null
+    live && generating
+      ? { toolName: generating.toolName, argsText: argsTextOf(live, generating) }
+      : null
   const completedList: SessionStreamState['completedStreamingToolCalls'] = []
   for (const block of blocks) {
     if (block.type !== 'tool' || block === generating || block.toolCallId in view.toolRuns) continue

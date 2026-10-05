@@ -103,12 +103,12 @@ export function createSessionSignals(deps: SessionSignalsDeps = {}): SessionSign
   const hooks = deps.hooks ?? sessionHostHooks
   const broadcast = deps.broadcast ?? ((event: ChatEvent) => electronEventSink.broadcast(event))
   const askRaised =
-    deps.askRaised ?? ((sessionId: string, request: InputRequest) => askObserver?.askRaised(sessionId, request))
+    deps.askRaised ??
+    ((sessionId: string, request: InputRequest) => askObserver?.askRaised(sessionId, request))
   const askResolved =
     deps.askResolved ??
     ((sessionId: string, requestId: string) => askObserver?.askResolved(sessionId, requestId))
-  const isRegisteredAgent =
-    deps.isRegisteredAgent ?? routerKnowsAgent
+  const isRegisteredAgent = deps.isRegisteredAgent ?? routerKnowsAgent
 
   const held = new Map<string, Held>()
   const publishReadiness = deps.publishReadiness ?? true
@@ -117,7 +117,9 @@ export function createSessionSignals(deps: SessionSignalsDeps = {}): SessionSign
     try {
       broadcast(event)
     } catch (error) {
-      log.warn(`会话信号广播失败 type=${event.type} session=${event.sessionId}: ${errorText(error)}`)
+      log.warn(
+        `会话信号广播失败 type=${event.type} session=${event.sessionId}: ${errorText(error)}`
+      )
     }
   }
 

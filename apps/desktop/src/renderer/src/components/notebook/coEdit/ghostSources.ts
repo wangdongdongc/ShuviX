@@ -22,7 +22,8 @@ function hasCommittedResult(messages: readonly ChatMessage[], toolCallId: string
     const message = messages[index]
     if (message.role !== 'assistant' || message.type !== 'message') continue
     for (const block of message.blocks) {
-      if (block.type === 'tool' && block.toolCallId === toolCallId) return block.result !== undefined
+      if (block.type === 'tool' && block.toolCallId === toolCallId)
+        return block.result !== undefined
     }
   }
   return false

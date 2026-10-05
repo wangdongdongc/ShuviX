@@ -17,20 +17,27 @@ const LOADING: ViewBindingState = { status: 'loading' }
  * 返回绑定状态（loading / live / unavailable / error）。`sessionId` 为 null 时什么都不订。
  */
 export function useSessionView(sessionId: string | null): ViewBindingState {
-  const [state, setState] = useState<ViewBindingState>(LOADING)
+  // 状态按目标记：换了目标、新的订阅还没报过状态之前一律是 loading
+  const [entry, setEntry] = useState<{ id: string | null; state: ViewBindingState }>({
+    id: null,
+    state: LOADING
+  })
 
   useEffect(() => {
     if (!sessionId) return
     const client = syncClientFor(getSessionChannelApi().sync)
     const sub = client.acquire<SessionView>({ kind: 'session', sessionId })
     let active = true
-    setState(sub.state())
+    // 共用的订阅可能早就 live 了：把它此刻的状态补报一次（不在 effect 里同步 setState）
+    queueMicrotask(() => {
+      if (active) setEntry({ id: sessionId, state: sub.state() })
+    })
     const stop = sub.subscribe((event) => {
       if (!active) return
       if (event.kind === 'value') applySessionView(sessionId, event.value)
       else {
         if (event.state.status === 'unavailable') applySessionView(sessionId, null)
-        setState(event.state)
+        setEntry({ id: sessionId, state: event.state })
       }
     })
     // 共用的订阅可能早已有值（别处先订了）：先镜像一份
@@ -44,5 +51,5 @@ export function useSessionView(sessionId: string | null): ViewBindingState {
     }
   }, [sessionId])
 
-  return state
+  return entry.id === sessionId ? entry.state : LOADING
 }

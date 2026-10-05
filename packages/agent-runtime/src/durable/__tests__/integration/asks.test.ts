@@ -229,10 +229,7 @@ describe('P1-12 · asks', () => {
       const t1 = world.t
       await withTimeout(world.restart(), 10000, 'restart')
       const resolved = t1.asksOf('input_request_resolved')
-      expect(resolved.map((event) => event.requestId).sort()).toEqual([
-        'c-a',
-        'c-w'
-      ])
+      expect(resolved.map((event) => event.requestId).sort()).toEqual(['c-a', 'c-w'])
       expect(world.fs.writes).toEqual([])
 
       const reopened = await world.open()

@@ -189,7 +189,10 @@ beforeEach(() => {
   })
   applySessionView(
     's1',
-    V('s1', { messages: [user('u1', 'earlier'), assistant('a1', [text('ok')])], run: { state: 'idle' } })
+    V('s1', {
+      messages: [user('u1', 'earlier'), assistant('a1', [text('ok')])],
+      run: { state: 'idle' }
+    })
   )
   container = document.createElement('div')
   document.body.appendChild(container)
@@ -207,8 +210,16 @@ describe('乐观占位：经输入框发送（Q-P3-07）', () => {
     await mount()
     await typeAndSend('hello')
     expect(selectPendingPrompt(store())?.content).toBe('hello')
-    expect(items().slice(-2).map((i) => i.key)).toEqual(['pending-prompt', 'turn:2.0'])
-    expect(items().at(-1)!.msgs!.map((m) => m.id)).toEqual(['streaming-live'])
+    expect(
+      items()
+        .slice(-2)
+        .map((i) => i.key)
+    ).toEqual(['pending-prompt', 'turn:2.0'])
+    expect(
+      items()
+        .at(-1)!
+        .msgs!.map((m) => m.id)
+    ).toEqual(['streaming-live'])
     act(() => store().setMcpConnecting('s1', 'x', true))
     expect(selectMcpConnecting(store())).toEqual(['x'])
     // 收尾：prompt 落定

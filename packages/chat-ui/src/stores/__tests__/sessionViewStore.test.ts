@@ -83,10 +83,15 @@ describe('P3-08-12 / 13 消息', () => {
         }),
         assistant('2', [
           thinking('hmm'),
-          toolBlock('c1', 'read', { path: 'a' }, {
-            result: 'ok',
-            details: { type: 'edit', diff: '--- a\n+++ b' }
-          })
+          toolBlock(
+            'c1',
+            'read',
+            { path: 'a' },
+            {
+              result: 'ok',
+              details: { type: 'edit', diff: '--- a\n+++ b' }
+            }
+          )
         ]),
         user('3', 'notice', 's1', { isSystemNotice: true }),
         errorRow('4', 'rate limited'),
@@ -144,10 +149,18 @@ describe('P3-08-14…17 流式状态、工具、队列', () => {
     )
     expect(selectStreamingToolCall(store())).toBeNull()
     expect(selectToolExecutions(store())).toEqual([
-      expect.objectContaining({ toolCallId: 'A', toolName: 'read', status: 'running', args: { pa: '' } })
+      expect.objectContaining({
+        toolCallId: 'A',
+        toolName: 'read',
+        status: 'running',
+        args: { pa: '' }
+      })
     ])
 
-    const two = liveCard(2, [toolBlock('B', 'write', { path: 'p' }), toolBlock('C', 'read', { path: 'q' })])
+    const two = liveCard(2, [
+      toolBlock('B', 'write', { path: 'p' }),
+      toolBlock('C', 'read', { path: 'q' })
+    ])
     applySessionView('s1', V('s1', { live: two, run: { state: 'busy' } }))
     expect(selectCompletedStreamingToolCalls(store())).toEqual([
       { toolName: 'write', args: { path: 'p' } }
@@ -174,7 +187,13 @@ describe('P3-08-14…17 流式状态、工具、队列', () => {
       })
     )
     const [a, b] = selectToolExecutions(store())
-    expect(a).toMatchObject({ toolCallId: 'A', status: 'done', result: 'ok', details, messageId: 'a1' })
+    expect(a).toMatchObject({
+      toolCallId: 'A',
+      status: 'done',
+      result: 'ok',
+      details,
+      messageId: 'a1'
+    })
     expect(b).toMatchObject({ toolCallId: 'B', status: 'error' })
     applySessionView('s1', V('s1', { run: { state: 'idle' } }))
     expect(selectToolExecutions(store())).toBe(EMPTY_TOOLS)

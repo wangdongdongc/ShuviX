@@ -65,7 +65,10 @@ describe('P3-08-33 什么算「新的用户条目」（PIN-17）', () => {
     const notice = user('n1', 'background done', 's1', { isSystemNotice: true })
     applySessionView(
       's1',
-      V('s1', { messages: [...before, notice, assistant('a1', [text('y')])], run: { state: 'busy' } })
+      V('s1', {
+        messages: [...before, notice, assistant('a1', [text('y')])],
+        run: { state: 'busy' }
+      })
     )
     expect(bubble()).toBe(true)
     // 第一条新的用户条目：撤

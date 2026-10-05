@@ -155,8 +155,7 @@ let clientCount = 0
 export function createSyncClient(options: SyncClientOptions): SyncClient {
   const channel = options.channel
   const logger = options.logger ?? { warn: (message) => console.warn(message) }
-  const prefix =
-    options.idPrefix ?? `c${++clientCount}.${Math.random().toString(36).slice(2, 8)}`
+  const prefix = options.idPrefix ?? `c${++clientCount}.${Math.random().toString(36).slice(2, 8)}`
   let nextSubscription = 0
   const bindings = new Map<string, TargetBinding>()
   const subscriptions = new Map<string, SubscriptionState>()
@@ -223,7 +222,9 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
     const target = binding.target
     return {
       invoke: async (call) =>
-        json(await channel.invoke(json(target), json(call) as unknown as JsonValue)) as JsonValue | undefined,
+        json(await channel.invoke(json(target), json(call) as unknown as JsonValue)) as
+          | JsonValue
+          | undefined,
       subscribe: async (serviceId, mode, listener) => {
         const subscriptionId = `${prefix}#${++nextSubscription}`
         const state: SubscriptionState = {
@@ -242,7 +243,9 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
         try {
           reply = await channel.invoke(
             json(target),
-            json(createServiceSubscribeCall(subscriptionId, serviceId, mode)) as unknown as JsonValue
+            json(
+              createServiceSubscribeCall(subscriptionId, serviceId, mode)
+            ) as unknown as JsonValue
           )
         } catch (error) {
           subscriptions.delete(subscriptionId)

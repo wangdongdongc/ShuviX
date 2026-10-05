@@ -195,7 +195,6 @@ function deriveActive(active: ActiveView): {
   }
 }
 
-
 interface ChatState {
   /** 所有会话 */
   sessions: Session[]
@@ -932,7 +931,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }
       return {
         sessionLocalErrors,
-        messages: displayMessages({ sessionViews: state.sessionViews, sessionLocalErrors }, sessionId)
+        messages: displayMessages(
+          { sessionViews: state.sessionViews, sessionLocalErrors },
+          sessionId
+        )
       }
     }),
 
@@ -1104,7 +1106,9 @@ export function applySessionView(sessionId: string, view: SessionView | null): v
     const prevView = state.sessionViews[sessionId]
     const shared = shareStructure(prevView, incoming)
     if (shared === prevView) return state
-    const patch: Partial<ChatState> = { sessionViews: { ...state.sessionViews, [sessionId]: shared } }
+    const patch: Partial<ChatState> = {
+      sessionViews: { ...state.sessionViews, [sessionId]: shared }
+    }
 
     // 乐观占位：视图里出现发送那一刻还没有的用户消息 → 同一次更新撤下（PIN-17）
     let pending = !!state.sessionPendingPrompt[sessionId]
@@ -1120,7 +1124,8 @@ export function applySessionView(sessionId: string, view: SessionView | null): v
     // 流式状态
     const prevStream = state.sessionStreams[sessionId]
     const stream = deriveStream(shared, pending, prevStream)
-    if (stream !== prevStream) patch.sessionStreams = { ...state.sessionStreams, [sessionId]: stream }
+    if (stream !== prevStream)
+      patch.sessionStreams = { ...state.sessionStreams, [sessionId]: stream }
 
     // 审查叠加：工具做完 / 本轮结束即清（PIN-04）
     let overlay: Record<string, true> | undefined = state.sessionToolReviewing[sessionId]
