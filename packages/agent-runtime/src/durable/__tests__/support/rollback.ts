@@ -88,7 +88,10 @@ export function conversationRecord(
 }
 
 export async function conversationCount(session: DurableSession): Promise<number> {
-  return session.harness.commit(async (tx) => (await tx.scanConversations({}, 256)).items.length, BG)
+  return session.harness.commit(
+    async (tx) => (await tx.scanConversations({}, 256)).items.length,
+    BG
+  )
 }
 
 /** 一个对话（按 id）看得见的全部条目，最旧在前 */

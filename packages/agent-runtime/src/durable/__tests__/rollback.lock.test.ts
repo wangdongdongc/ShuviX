@@ -139,9 +139,7 @@ describe('P3-10a · the agent lock', () => {
     await sleep(30)
     expect(t.kit.callCount).toBe(calls)
     expect(session.lock).toBeUndefined()
-    expect(noticeTexts(await allEntries(await session.currentConversation()))).toEqual([
-      'bg done'
-    ])
+    expect(noticeTexts(await allEntries(await session.currentConversation()))).toEqual(['bg done'])
     expect(session.runState).toBe('idle')
 
     expect(await session.continue()).toEqual({})

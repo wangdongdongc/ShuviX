@@ -105,9 +105,7 @@ describe('P3-10a · fork point', () => {
     const session = await t.open('s1')
     await primeRoot(session)
     // 上一天：一条后台通知（对话从此有条目；日期通知只在有条目的对话里写）
-    expect((await session.writeNotice({ text: 'N0', kind: 'background' })).status).toBe(
-      'submitted'
-    )
+    expect((await session.writeNotice({ text: 'N0', kind: 'background' })).status).toBe('submitted')
     day = '2026-10-05'
     t.kit.queue(answer('A1'))
     expect(await session.submitUser('U1')).toEqual({})
@@ -132,7 +130,9 @@ describe('P3-10a · fork point', () => {
     t.kit.queue(answer('A2'))
     expect(await session.submitUser('again')).toEqual({})
     const onFork = await allEntries(await session.currentConversation())
-    expect(onFork.filter((entry) => entry.data?.kind === 'date')).toHaveLength(1)
+    expect(
+      onFork.filter((entry) => (entry.data as { kind?: string } | undefined)?.kind === 'date')
+    ).toHaveLength(1)
     expect(await transcript(await session.currentConversation())).toEqual([
       'shuvix.notice:N0',
       expect.stringContaining('shuvix.notice:<date-change>Today is 2026-10-05'),
@@ -269,7 +269,10 @@ describe('P3-10a · commit and pointer', () => {
     const creating = recorder.publications.filter((p) => createsConversation(p, F))
     expect(creating).toHaveLength(1)
     const fork = creating[0]!
-    expect((sessionStateChange(fork)?.value as { currentConversation?: number } | null)?.currentConversation).toBe(F)
+    expect(
+      (sessionStateChange(fork)?.value as { currentConversation?: number } | null)
+        ?.currentConversation
+    ).toBe(F)
     // 指针第一次指向 F 的那次发布就是建 F 的那次
     const pointing = recorder.publications.filter(
       (p) =>
@@ -344,7 +347,9 @@ describe('P3-10a · commit and pointer', () => {
   it('P3-10a-09 old branches stay and are hidden; a second rollback from F makes F2 (parent F, 3 conversations); a rollback into F’s inherited prefix works', async () => {
     const { t, session, ids } = await rollbackBase()
     const F = forkedId(await session.rollbackTo(ids.u2))
-    expect(await transcript((await session.harness.conversation(ROOT_CONVERSATION_ID, BG))!)).toEqual([
+    expect(
+      await transcript((await session.harness.conversation(ROOT_CONVERSATION_ID, BG))!)
+    ).toEqual([
       'pi.user:U1',
       'pi.assistant:A1',
       'pi.user:U2',

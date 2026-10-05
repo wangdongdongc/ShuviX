@@ -270,9 +270,7 @@ describe('P3-10a · busy, queued, children and interrupted', () => {
 
   it('P3-10a-17b unlocked, idle, holding only notices: the fork happens with no agent_closing and no onLockChange', async () => {
     const { t, session, ids } = await rollbackBase()
-    expect((await session.writeNotice({ text: 'N', kind: 'background' })).status).toBe(
-      'submitted'
-    )
+    expect((await session.writeNotice({ text: 'N', kind: 'background' })).status).toBe('submitted')
     await session.destroyAgent()
     expect(session.lock).toBeUndefined()
     const closing = t.broadcastsOf('agent_closing').length
