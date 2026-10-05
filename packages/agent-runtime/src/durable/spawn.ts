@@ -48,6 +48,7 @@ import type { Context } from '@earendil-works/chord'
 import type { AssistantMessage, ToolCall } from '@earendil-works/pi-ai'
 import {
   AssistantEntry,
+  CompactionEntry,
   ConversationBusy,
   ToolResultEntry,
   UserEntry,
@@ -243,6 +244,9 @@ function messageParts(message: AssistantMessage): { text: string; toolCalls: num
 /**
  * 从一段转写（最旧在前）的 assistant 条目抽结果文本（旧 `extractResult` 的口径，PIN-02）：最后一条有文本
  * 的消息即回答；停止原因不是 stop / 有报错 / 执行抛错 → `[Note]` 注记；没有文本 → 说明句。
+ *
+ * 压缩条目之前的停止原因与报错不算数（P2-11 J5-02）：溢出 → 阻塞压缩 → 重试成功时，那条报错的 assistant
+ * 条目留在转写里，但它已经被这次压缩收复了 —— 旧运行时里它不在消息表里，回答不该再带一条 `error=` 注记。
  */
 export function extractSpawnResult(entries: readonly EntryRecord[], execError?: string): string {
   let lastText = ''
@@ -251,6 +255,11 @@ export function extractSpawnResult(entries: readonly EntryRecord[], execError?: 
   let assistantCount = 0
   let toolUseCount = 0
   for (const entry of entries) {
+    if (entry.kind === CompactionEntry.kind) {
+      lastStopReason = ''
+      lastErrorMessage = ''
+      continue
+    }
     const message = assistantOf(entry)
     if (message === undefined) continue
     assistantCount++

@@ -36,7 +36,7 @@ import {
   type SdkToolName
 } from './mcpSdk'
 import { memFs, type MemFs } from './memFs'
-import { realToolHost, type RealToolHost } from './realTools'
+import { realToolHost, type RealToolHost, type RealToolHostOptions } from './realTools'
 import { recordCommits, type CommitRecorder } from './recorder'
 import { scriptedModel, type ScriptedModel } from './scriptedModel'
 import { spillLog, type SpillLog } from './spill'
@@ -78,6 +78,14 @@ export interface WorldOptions {
   sessions?: Record<string, SessionSpec>
   /** MCP 服务器 → 工具（缺省 docs = [lookup, slow]、notes = [search]） */
   mcp?: Record<string, SdkToolName[]>
+  /** 可信的内置能力服务器（inproc + isBuiltin；P2-11 的 `ctx`） */
+  trustedMcp?: readonly string[]
+  /** 根档案的人设（缺省 `You are {{shuvix:marker}}`） */
+  persona?: string
+  /** 真 ToolHost 的 P2-11 选项（派发工具、额外内置工具、MCP 调用方、审查接缝）；每个进程现取 */
+  toolHost?: (
+    world: World
+  ) => Pick<RealToolHostOptions, 'extraBuiltins' | 'dispatch' | 'mcpOptions' | 'review'>
   /** 自动续跑开关的初值（现读 `world.autoResume.value`） */
   autoResume?: unknown
   noticeCoalesceMs?: number
@@ -157,7 +165,9 @@ export function registerWorldCleanup(): void {
     }
     for (const world of list) {
       for (const script of world.scripts) {
-        expect(script.exhausted, 'the chat script ran out').toBe(false)
+        expect(script.exhausted, `the chat script ran out (${script.exhaustedBy.join(', ')})`).toBe(
+          false
+        )
       }
       expect(world.mcpLog.errors, 'MCP handler errors').toEqual([])
     }
@@ -193,7 +203,7 @@ export async function makeWorld(options: WorldOptions = {}): Promise<World> {
         name: 'int',
         displayName: 'Int',
         tools: [...(spec.tools ?? options.tools ?? INT_TOOLS)],
-        systemPrompt: 'You are {{shuvix:marker}}'
+        systemPrompt: options.persona ?? 'You are {{shuvix:marker}}'
       }),
       toolOverlay: [...(spec.overlay ?? options.overlay ?? ['mcp:docs'])],
       model: {
@@ -221,7 +231,8 @@ export async function makeWorld(options: WorldOptions = {}): Promise<World> {
       permissionLog: permissions,
       requestUserInput: (sessionId) => (request: InputRequest) =>
         world.t.host.get(sessionId)?.requestUserInput(request) ??
-        Promise.resolve<InputResponse>({ kind: 'cancel', reason: 'closed' })
+        Promise.resolve<InputResponse>({ kind: 'cancel', reason: 'closed' }),
+      ...options.toolHost?.(world)
     })
     return toolHost
   }
@@ -237,7 +248,7 @@ export async function makeWorld(options: WorldOptions = {}): Promise<World> {
     configs,
     autoResume,
     sessionIds,
-    mcp: mcpProcess(mcpServers, mcpLog)
+    mcp: mcpProcess(mcpServers, mcpLog, { trusted: options.trustedMcp ?? [] })
   })
   Object.defineProperty(world, 'toolHost', { get: () => toolHost })
 
@@ -293,7 +304,9 @@ export async function makeWorld(options: WorldOptions = {}): Promise<World> {
     const previous = world.mcp
     for (const recorder of recorders.values()) recorder.stop()
     recorders.clear()
-    world.mcp = mcpProcess(restartOptions.mcp ?? mcpServers, mcpLog)
+    world.mcp = mcpProcess(restartOptions.mcp ?? mcpServers, mcpLog, {
+      trusted: options.trustedMcp ?? []
+    })
     processModels = options.makeModels?.()
     world.t = await world.t.restart(modelOptions())
     await previous.close().catch(() => undefined)

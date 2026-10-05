@@ -14,6 +14,7 @@
 import {
   fauxAssistantMessage,
   fauxToolCall,
+  getCurrentSystemPrompt,
   getCurrentTools,
   type AssistantMessage,
   type FauxProviderHandle,
@@ -37,15 +38,36 @@ export interface ScriptedRequest {
   readonly modelId: string
   /** 请求到达时的世界时钟 */
   readonly at: number
+  /** 这次请求走的车道（没登记车道时恒为 `root`；摘要请求为 `summary`） */
+  readonly lane: string
+  /** 这次请求的完整系统提示词 */
+  readonly systemPrompt: string
+  /** 这次请求的思考档位（`options.reasoning`） */
+  readonly reasoning: string | undefined
 }
+
+/** 车道的匹配：看这次请求的消息与系统提示词 */
+export type LaneMatch = (request: { messages: Message[]; systemPrompt: string }) => boolean
 
 export interface ScriptedModel {
   readonly requests: ScriptedRequest[]
   /** 只看聊天请求 / 只看摘要请求 */
   readonly chats: ScriptedRequest[]
   readonly summaries: ScriptedRequest[]
-  /** 追加聊天步骤 */
+  /** 追加聊天步骤（`root` 车道） */
   chat(...steps: FauxResponseStep[]): void
+  /**
+   * 登记一条车道（P2-11 PIN-01）：聊天请求按登记次序找第一条匹配的车道、从它的队列取步骤。一条车道都没
+   * 登记时一切照旧（全进 `root`）；登记过之后，没有车道匹配的请求立旗 `exhausted`（带「unmatched」）。
+   * 名字 `root` 的车道用 `chat()` 的那条队列。
+   */
+  lane(name: string, match: LaneMatch): void
+  /** 给某条车道追加聊天步骤 */
+  chatIn(lane: string, ...steps: FauxResponseStep[]): void
+  /** 某条车道的请求 */
+  laneRequests(lane: string): ScriptedRequest[]
+  /** 立旗的原因（车道名 / `unmatched`） */
+  readonly exhaustedBy: string[]
   /** 追加摘要步骤（缺省摘要之前先用这些） */
   summary(...steps: FauxResponseStep[]): void
   /** 聊天脚本是否被用完过 */
@@ -69,28 +91,46 @@ export function scriptedModel(faux: FauxProviderHandle, now: () => number): Scri
   const requests: ScriptedRequest[] = []
   const chatQueue: FauxResponseStep[] = []
   const summaryQueue: FauxResponseStep[] = []
-  let exhausted = false
+  const lanes: { name: string; match: LaneMatch }[] = []
+  const queues = new Map<string, FauxResponseStep[]>([['root', chatQueue]])
+  const exhaustedBy: string[] = []
   let summaries = 0
+  const queueOf = (lane: string): FauxResponseStep[] => {
+    let queue = queues.get(lane)
+    if (queue === undefined) {
+      queue = []
+      queues.set(lane, queue)
+    }
+    return queue
+  }
 
   const respond: FauxResponseFactory = async (context, options, state, model) => {
     const messages = [...context.messages]
     const kind = isSummaryRequest(messages) ? 'summary' : 'chat'
+    const systemPrompt = kind === 'chat' ? getCurrentSystemPrompt(messages) : ''
+    let lane = kind === 'summary' ? 'summary' : 'root'
+    if (kind === 'chat' && lanes.length > 0) {
+      lane = lanes.find((candidate) => candidate.match({ messages, systemPrompt }))?.name ?? ''
+    }
     requests.push({
       kind,
       messages,
       options,
       tools: kind === 'chat' ? getCurrentTools(messages).map((tool) => tool.name) : [],
       modelId: model.id,
-      at: now()
+      at: now(),
+      lane: lane === '' ? 'unmatched' : lane,
+      systemPrompt,
+      reasoning: (options as { reasoning?: string } | undefined)?.reasoning
     })
     let step: FauxResponseStep | undefined
     if (kind === 'summary') {
       summaries++
       step = summaryQueue.shift() ?? answer(`## Goal\nsummary #${summaries}`)
     } else {
-      step = chatQueue.shift()
+      step = lane === '' ? undefined : queueOf(lane).shift()
       if (step === undefined) {
-        exhausted = true
+        exhaustedBy.push(lane === '' ? 'unmatched' : lane)
         step = answer('(script exhausted)')
       }
     }
@@ -108,8 +148,15 @@ export function scriptedModel(faux: FauxProviderHandle, now: () => number): Scri
     },
     chat: (...steps) => void chatQueue.push(...steps),
     summary: (...steps) => void summaryQueue.push(...steps),
+    lane: (name, match) => {
+      lanes.push({ name, match })
+      queueOf(name)
+    },
+    chatIn: (lane, ...steps) => void queueOf(lane).push(...steps),
+    laneRequests: (lane) => requests.filter((request) => request.lane === lane),
+    exhaustedBy,
     get exhausted() {
-      return exhausted
+      return exhaustedBy.length > 0
     },
     get pendingChat() {
       return chatQueue.length
