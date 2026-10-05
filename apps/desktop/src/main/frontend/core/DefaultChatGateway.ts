@@ -21,7 +21,7 @@ import type { ChatMessage, InlineToken } from '@shuvix/chat-protocol/types/chatM
 import { resolveTokensForAgent } from '@shuvix/chat-protocol/utils/inlineTokens'
 import { sessionRecords } from '../../services/sessionRecords'
 import { projectDao } from '../../dao/projectDao'
-import { WORK_PROFILE_NAME } from '@shuvix/agent-runtime'
+import { WORK_PROFILE_NAME, type SubmitErrorCode } from '@shuvix/agent-runtime'
 import { agentService } from '../../services/agentService'
 import { chatFrontendRegistry } from './ChatFrontendRegistry'
 import { t } from '../../i18n'
@@ -48,7 +48,7 @@ export class DefaultChatGateway implements ChatGateway {
     text: string,
     images?: Array<{ type: 'image'; data: string; mimeType: string }>,
     inlineTokens?: Record<string, InlineToken>
-  ): Promise<{ error?: string }> {
+  ): Promise<{ error?: string; code?: SubmitErrorCode }> {
     // lastActiveAt 在这条输入被会话受理时入账（门面的 onAdmitted），不在这里 bump：
     // 打不开 / 被拒的发送不会落进会话，却会误记一天。
     // 这里只打开会话；agent 在第一次发送时由运行时创建（打开会话 / 笔记本不创建）

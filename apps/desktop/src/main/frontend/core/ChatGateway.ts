@@ -2,6 +2,7 @@ import type { AgentInitResult, AgentRuntimeInfo, ThinkingLevel } from '../../typ
 import type { InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import type { RuntimeStatus } from '@shuvix/chat-protocol/events'
 import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
+import type { SubmitErrorCode } from '@shuvix/agent-runtime'
 
 /**
  * 会话级上行操作接口 — 前端 → 后端通信的统一入口
@@ -22,13 +23,14 @@ export interface ChatGateway {
   /**
    * 发一条用户消息并等整轮结束。返回 `{error}` = **没发出去**（最典型：会话正忙，
    * pi 拒 busy）——调用方必须能把它与「发出去了但没回话」区分开，子会话的驱动方
-   * 正是靠这个报错而不是假装排队。
+   * 正是靠这个报错而不是假装排队。`code` 是运行时给的分类（busy / no_model / model_error / closed …），
+   * 会话打不开时没有。
    */
   prompt(
     sessionId: string,
     text: string,
     images?: Array<{ type: 'image'; data: string; mimeType: string }>
-  ): Promise<{ error?: string }>
+  ): Promise<{ error?: string; code?: SubmitErrorCode }>
 
   /** 向运行中的 Agent 发送 steer 消息（引导/纠正方向） */
   steer(sessionId: string, text: string): void

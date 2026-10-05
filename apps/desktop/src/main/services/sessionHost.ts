@@ -14,8 +14,8 @@
  *    （最多等 5 秒），再 `app.quit()`。正忙的会话被关停时不报运行状态，DB 里的 busy 标记熬过退出，
  *    下次打开报 interrupted。
  *
- * 工具 / 提示词 seam 暂时来自 `agents/durableHostPlaceholder.ts`（TODO(pi-durable p1)：P1-11 的
- * agentHost 接手，协调方合并时切换 import）。
+ * 工具 / 提示词 seam 来自 `agents/agentHost`：ToolHost（内置工具 / 按 agent 解析 / 按锁重建；调用方身份
+ * 经 `lockOf` 现读这条会话的锁 —— 同步 `get`，从不打开会话）、PromptHost（五个活段落）与人设变量表。
  */
 import {
   abortSessionReviews,
@@ -29,11 +29,7 @@ import {
   type SessionHost,
   type SessionHostDeps
 } from '@shuvix/agent-runtime'
-import {
-  createDesktopToolHost,
-  desktopPromptHost,
-  desktopPromptVars
-} from '../agents/durableHostPlaceholder'
+import { createDesktopToolHost, desktopPromptHost, desktopPromptVars } from '../agents/agentHost'
 import { createLogger } from '../logger'
 import { electronEventSink } from './agentRuntimeAdapters'
 import { getModelRegistry, providerCredentialPort } from './models'

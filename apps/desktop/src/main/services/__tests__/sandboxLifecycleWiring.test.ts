@@ -174,6 +174,7 @@ vi.mock('../../logger', () => ({
 }))
 
 type AgentSessionMod = typeof import('../agentSession')
+type AgentSessionInstance = import('../agentSession').AgentSession
 let AgentSession: AgentSessionMod['AgentSession']
 let sessionService: (typeof import('../sessionService'))['sessionService']
 
@@ -196,7 +197,7 @@ function openSession(sessionId: string): FakeDurableSession {
 }
 
 /** 门面（层 A） */
-function facadeOf(sessionId: string): InstanceType<AgentSessionMod['AgentSession']> {
+function facadeOf(sessionId: string): AgentSessionInstance {
   return AgentSession.of(fakeHost.get(sessionId) ?? openSession(sessionId))
 }
 

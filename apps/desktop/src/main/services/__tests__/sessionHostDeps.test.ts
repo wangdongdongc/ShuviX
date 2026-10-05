@@ -49,7 +49,16 @@ const mocks = vi.hoisted(() => ({
   settingsGet: vi.fn<(key: string) => string | undefined>(),
   registry: { models: { tag: 'models' }, modelRefOf: () => undefined, tag: 'registry' },
   port: { tag: 'port', listProviders: () => [] },
-  sink: { tag: 'sink', broadcast: () => {}, hasUserInputCapability: () => true }
+  sink: { tag: 'sink', broadcast: () => {}, hasUserInputCapability: () => true },
+  toolHost: {
+    tag: 'toolHost',
+    buildBuiltinTools: () => [],
+    resolveAgentTools: async () => ({ sandboxed: false }),
+    rebuildAgentTools: () => ({})
+  },
+  createDesktopToolHost: vi.fn(),
+  promptHost: { tag: 'promptHost' },
+  promptVars: vi.fn(() => ({}))
 }))
 
 vi.mock('@shuvix/agent-runtime', async (importOriginal) => {
@@ -103,6 +112,13 @@ vi.mock('../models', () => ({
   providerCredentialPort: mocks.port
 }))
 vi.mock('../agentRuntimeAdapters', () => ({ electronEventSink: mocks.sink }))
+// 真 agentHost 的依赖图很重（electron、工具注册表、MCP……）：工具 / 提示词 seam 换成可辨认的假件
+vi.mock('../../agents/agentHost', () => ({
+  createDesktopToolHost: mocks.createDesktopToolHost,
+  desktopPromptHost: mocks.promptHost,
+  desktopPromptVars: mocks.promptVars,
+  resolveProfileModelSpec: vi.fn()
+}))
 vi.mock('../settingsService', () => ({ settingsService: { get: mocks.settingsGet } }))
 vi.mock('../agentService', () => ({
   agentService: { getProfile: mocks.getProfile, isSessionProfile: () => true }
@@ -113,7 +129,6 @@ vi.mock('../agentSession', async () =>
   (await import('./support/fakeSessionHost')).agentSessionModuleMock()
 )
 vi.mock('../bgTaskService', () => ({ killBySession: vi.fn(), setBgTaskNotifier: vi.fn() }))
-vi.mock('../../agents/agentHost', () => ({ resolveProfileModelSpec: vi.fn() }))
 vi.mock('../../utils/sessionConfigBroadcast', () => ({
   broadcastSessionConfigChanged: vi.fn(),
   broadcastSessionListChanged: vi.fn(),
@@ -185,19 +200,18 @@ function row(id: string, patch: Partial<Session> = {}): Session {
 }
 
 /** 直接读表上的 settings 与 updatedAt（绕过 sessionRecords，证明「真写了库」） */
-function tableRow(id: string): { settings: Record<string, unknown>; updatedAt: number } | undefined {
+function tableRow(
+  id: string
+): { settings: Record<string, unknown>; updatedAt: number } | undefined {
   const raw = (holder.db as DatabaseSync)
     .prepare('SELECT settings, updatedAt FROM sessions WHERE id = ?')
     .get(id) as { settings: string; updatedAt: number } | undefined
   return raw ? { settings: JSON.parse(raw.settings), updatedAt: raw.updatedAt } : undefined
 }
 
-const deps = buildSessionHostDepsForTests()
-
-/** seam 本身（不建宿主）：模型 / 目录走假的 registry */
-function buildSessionHostDepsForTests(): ReturnType<typeof buildSessionHostDeps> {
-  return buildSessionHostDeps({}, () => undefined)
-}
+mocks.createDesktopToolHost.mockImplementation(() => mocks.toolHost)
+const lockOfForDeps = vi.fn(() => undefined)
+const deps = buildSessionHostDeps({}, lockOfForDeps)
 
 beforeEach(() => {
   const db = new DatabaseSync(':memory:')
@@ -218,7 +232,9 @@ beforeEach(() => {
   }
   mocks.findEnabled.mockReturnValue([])
   mocks.findEnabledModels.mockReturnValue([])
-  mocks.getProfile.mockImplementation((name) => (KNOWN_PROFILES.has(name) ? profile(name) : undefined))
+  mocks.getProfile.mockImplementation((name) =>
+    KNOWN_PROFILES.has(name) ? profile(name) : undefined
+  )
   mocks.filterAvailableTools.mockImplementation((tools) => tools)
 })
 
@@ -233,6 +249,11 @@ describe('D10-13 身份 seam 与单例', () => {
     expect(deps.modelCatalog.registry).toBe(mocks.registry)
     expect(deps.modelCatalog.port).toBe(mocks.port)
     expect(deps.eventSink).toBe(mocks.sink)
+    // 工具 / 提示词 seam 来自 agentHost；ToolHost 拿到的是 lockOf（同步读锁）
+    expect(deps.toolHost).toBe(mocks.toolHost)
+    expect(mocks.createDesktopToolHost).toHaveBeenCalledWith({ lockOf: lockOfForDeps })
+    expect(deps.promptHost).toBe(mocks.promptHost)
+    expect(deps.promptVars).toBe(mocks.promptVars)
     expect(deps.openStorage).toBe(storage.openSessionStorage)
     expect(deps.storageExists).toBe(storage.sessionStorageExists)
     expect(deps.deleteStorage).toBe(storage.deleteSessionStorage)
@@ -260,6 +281,15 @@ describe('D10-13 身份 seam 与单例', () => {
     const second = getSessionHost()
     expect(second).toBe(first)
     expect(holder.createSessionHostCalls - before).toBe(1)
+    // 单例的 ToolHost 读的就是这个宿主的锁：同步 get，从不打开会话
+    const { lockOf } = mocks.createDesktopToolHost.mock.calls.at(-1)![0] as {
+      lockOf: (sessionId: string) => unknown
+    }
+    const getSpy = vi.spyOn(first, 'get')
+    const peekSpy = vi.spyOn(first, 'peek')
+    expect(lockOf('nobody')).toBeUndefined()
+    expect(getSpy).toHaveBeenCalledWith('nobody')
+    expect(peekSpy).not.toHaveBeenCalled()
     await first.closeAll()
     resetSessionHostForTests()
   })
@@ -297,7 +327,10 @@ describe('D10-15 toolOverlay', () => {
   it('D10-15 = filterAvailableTools(勾选去掉 mcp:chrome, 项目路径)；库里的原值不动', async () => {
     holder.projects.set('p1', { path: '/proj', settings: {} })
     sessionRecords.insert(
-      row('s', { projectId: 'p1', settings: { enabledTools: ['mcp:chrome', 'mcp:ssh', 'skill:x'] } })
+      row('s', {
+        projectId: 'p1',
+        settings: { enabledTools: ['mcp:chrome', 'mcp:ssh', 'skill:x'] }
+      })
     )
     mocks.filterAvailableTools.mockImplementation((tools) => tools.filter((t) => t !== 'skill:x'))
     const config = await deps.resolveAgentConfig('s')
@@ -328,7 +361,11 @@ describe('D10-16 model', () => {
   it('D10-16 没有 → 启用中的默认 provider + 默认模型', async () => {
     sessionRecords.insert(row('s'))
     mocks.findByKey.mockImplementation((key) =>
-      key === 'general.defaultProvider' ? 'row-d' : key === 'general.defaultModel' ? 'md' : undefined
+      key === 'general.defaultProvider'
+        ? 'row-d'
+        : key === 'general.defaultModel'
+          ? 'md'
+          : undefined
     )
     mocks.findEnabled.mockReturnValue([{ id: 'row-d' }])
     mocks.findEnabledModels.mockImplementation((id) => (id === 'row-d' ? [{ modelId: 'md' }] : []))
@@ -341,7 +378,11 @@ describe('D10-16 model', () => {
   ])('D10-16 %s → model 不给（运行时拒绝创建）', async (_label, enabled, models) => {
     sessionRecords.insert(row('s'))
     mocks.findByKey.mockImplementation((key) =>
-      key === 'general.defaultProvider' ? 'row-d' : key === 'general.defaultModel' ? 'md' : undefined
+      key === 'general.defaultProvider'
+        ? 'row-d'
+        : key === 'general.defaultModel'
+          ? 'md'
+          : undefined
     )
     mocks.findEnabled.mockReturnValue(enabled)
     mocks.findEnabledModels.mockReturnValue(models)
@@ -397,7 +438,11 @@ describe('D10-20 onLockChange → settings.agentLocked', () => {
   it('D10-20 true / false 落进设置，别的键不动', () => {
     sessionRecords.insert(row('s', { settings: { enabledTools: ['skill:a'], bot: 'x' } }))
     deps.onLockChange?.('s', true)
-    expect(tableRow('s')?.settings).toEqual({ enabledTools: ['skill:a'], bot: 'x', agentLocked: true })
+    expect(tableRow('s')?.settings).toEqual({
+      enabledTools: ['skill:a'],
+      bot: 'x',
+      agentLocked: true
+    })
     deps.onLockChange?.('s', false)
     expect(tableRow('s')?.settings.agentLocked).toBe(false)
     expect(tableRow('s')?.settings.enabledTools).toEqual(['skill:a'])
