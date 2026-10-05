@@ -18,7 +18,9 @@
  *               这次请求自己的（DBSV-SG1：询问点的审查随调用一起中止，并发的另一次不受牵连）；
  *   DBSV-30…31  **结果**：驱动报错、未知工具；
  *   DBSV-32…35  **状态条与寿命**：状态条跟着连接池的 onChange 走、关闭时断开本会话全部连接、
- *               会话之间互不相干、关两次只断一次。
+ *               会话之间互不相干、关两次只断一次；
+ *   P2-07-20…24 **调用身份**：`_meta` 的 taskId / conversationId 并进 opts（没带 = 键不出现），主体经
+ *               scope 的 agentOf 按调用现认；按主体写的策略逐次生效；门之前就回绝的不问身份；取消复查不变。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
@@ -34,11 +36,19 @@ import type { RuntimeStatus } from '@shuvix/chat-protocol/events'
 // mock 路径按**测试文件**解析：被测模块在 services/builtinMcp/，测试在其 __tests__/ 下
 const logged = vi.hoisted(() => ({ lines: [] as string[] }))
 
-/** 安全门：抄下 enforceDatabase 的实参，门后仍是真引擎 */
+/**
+ * 安全门：抄下 enforceDatabase 的实参，门后仍是真引擎。主体按每次 enforce 现认（Fx-MOCK，P2-07）：
+ * 真的 `withCallAgent` 拿 opts 里的 conversationId 经 ctx.agentOf 认人，与生产的 forCall 同一个口径。
+ */
 const gate = vi.hoisted(() => ({
   calls: [] as Array<{ object: unknown; opts: unknown }>,
   /** 这条会话的用户策略；空 = 只有内置那套 */
-  policies: [] as unknown[]
+  policies: [] as unknown[],
+  /** getDesktopSecurityContext 收到的 ctx */
+  ctxs: [] as Array<Record<string, unknown>>,
+  /** 置位 = 审查接缝记下每个询问事件、回 null（不作答，卡片照常给人） */
+  recordEvents: false,
+  events: [] as unknown[]
 }))
 
 /**
@@ -65,6 +75,7 @@ const pool = vi.hoisted(() => ({
 
 vi.mock('../../toolContext', async () => {
   const { createSecurityContext } = await import('@shuvix/agent-runtime')
+  const { withCallAgent } = await import('../../toolAgent')
   const { createInlinePolicyMdReader } =
     await import('@shuvix/agent-runtime/security/builtinPolicies/inlineSources')
   type Ctx = Parameters<typeof import('../../toolContext').getDesktopSecurityContext>[0]
@@ -72,37 +83,56 @@ vi.mock('../../toolContext', async () => {
   return {
     TOOL_ABORTED: 'Aborted',
     getDesktopSecurityContext: (ctx: Ctx) => {
-      const real = createSecurityContext(
-        // 逐字复刻 toolContext 今天上报的主体（同 sshServer.test）
-        { kind: 'agent', sessionId: ctx.sessionId, agentKind: 'root' },
-        { host: 'desktop', platform: process.platform, workspaceDir: '/ws' },
-        {
-          host: 'desktop',
-          pathSep: '/',
-          getVars: () => ({
-            workspace: '/ws',
-            toolResultsBase: '/tool-results',
-            skillsDirs: ['/skills'],
-            memoryDirs: [],
-            knowledgeRoot: '/kb',
-            knowledgeSessionDirs: [],
-            home: '/home/u',
-            botsDir: '/home/u/.shuvix/bots',
-            builtinKnowledgeDir: '/opt/shuvix/Resources/knowledge',
-            systemDirs: []
-          }),
-          readBuiltinPolicyMd,
-          getSessionGrants: () => ({ allowList: [] }),
-          getUserPolicies: () => gate.policies as never,
-          // 询问通道由 scope 注入：缺席就是「这条会话没有输入面板」，fail-closed 用例靠它
-          requestUserInput: ctx.requestUserInput
-        }
-      )
+      gate.ctxs.push(ctx as unknown as Record<string, unknown>)
+      const realFor = (opts?: {
+        conversationId?: number
+      }): ReturnType<typeof createSecurityContext> => {
+        const agent = withCallAgent(ctx, opts).agent ?? ctx.agent
+        return createSecurityContext(
+          {
+            kind: 'agent',
+            sessionId: ctx.sessionId,
+            agentKind: agent?.kind ?? 'root',
+            ...(agent?.profileName ? { profileName: agent.profileName } : {})
+          },
+          { host: 'desktop', platform: process.platform, workspaceDir: '/ws' },
+          {
+            host: 'desktop',
+            pathSep: '/',
+            getVars: () => ({
+              workspace: '/ws',
+              toolResultsBase: '/tool-results',
+              skillsDirs: ['/skills'],
+              memoryDirs: [],
+              knowledgeRoot: '/kb',
+              knowledgeSessionDirs: [],
+              home: '/home/u',
+              botsDir: '/home/u/.shuvix/bots',
+              builtinKnowledgeDir: '/opt/shuvix/Resources/knowledge',
+              systemDirs: []
+            }),
+            readBuiltinPolicyMd,
+            getSessionGrants: () => ({ allowList: [] }),
+            getUserPolicies: () => gate.policies as never,
+            // 询问通道由 scope 注入：缺席就是「这条会话没有输入面板」，fail-closed 用例靠它
+            requestUserInput: ctx.requestUserInput,
+            ...(gate.recordEvents
+              ? {
+                  onPermissionRequest: async (e: unknown) => {
+                    gate.events.push(e)
+                    return null
+                  }
+                }
+              : {})
+          }
+        )
+      }
+      const real = realFor()
       return {
         ...real,
         enforceDatabase: (object: never, opts: never) => {
           gate.calls.push({ object, opts })
-          return real.enforceDatabase(object, opts)
+          return realFor(opts).enforceDatabase(object, opts)
         }
       }
     }
@@ -169,6 +199,16 @@ import {
   DATABASE_MCP_SERVER_NAME,
   DATABASE_TOOLS
 } from '../databaseServer'
+import type { DesktopBuiltinMcpScope } from '../types'
+import {
+  M1,
+  M2,
+  SUBJ_E,
+  SUBJ_ROOT0,
+  SUBJ_WORK,
+  makeAgentOf,
+  subjectOf
+} from './callIdentityFixtures'
 
 // ─── 素材 ────────────────────────────────────────────────────────────────
 
@@ -209,6 +249,8 @@ interface OpenOpts {
   sessionId?: string
   /** 询问应答；`null` = 这条会话没有输入面板 */
   respond?: ((req: InputRequest) => Promise<InputResponse>) | null
+  /** scope 上的 agentOf（P2-07：按对话认调用方）；缺省 = 宿主没接 */
+  agentOf?: DesktopBuiltinMcpScope['agentOf']
 }
 
 const opened: Session[] = []
@@ -231,7 +273,8 @@ async function open(opts: OpenOpts = {}): Promise<Session> {
             return respond(req)
           }
         : undefined,
-      emitChatEvent: (e) => void events.push(e as unknown as Record<string, unknown>)
+      emitChatEvent: (e) => void events.push(e as unknown as Record<string, unknown>),
+      ...(opts.agentOf ? { agentOf: opts.agentOf } : {})
     },
     serverTransport
   )
@@ -317,6 +360,9 @@ beforeEach(() => {
   logged.lines.length = 0
   gate.calls.length = 0
   gate.policies.length = 0
+  gate.ctxs.length = 0
+  gate.events.length = 0
+  gate.recordEvents = false
   saved.rows.length = 0
   saved.fullRows = false
   saved.decrypted.length = 0
@@ -1144,5 +1190,189 @@ describe('database 内置服务器的寿命', () => {
     expect(
       logged.lines.filter((l) => l.includes('database server closed session=s-twice'))
     ).toHaveLength(1)
+  })
+})
+
+// ─── P2-07：调用身份（taskId / conversationId 经 `_meta` → opts 与安全主体） ─────────
+//
+// 一份 database 实例由根 agent 与它派出的 agent 共用。服务器把 `_meta` 里的两个 id 原样并进
+// enforceDatabase 的 opts（没带 / 不合法 = 键不出现），并把 scope 的 agentOf 交给安全门面 ——
+// 主体按每次 enforce 的 conversationId 现认，认不出落回今天的 root。
+
+describe('P2-07 database 的调用身份', () => {
+  // 询问分支同「安全门」一组：退役的 ask-on-database 当作用户策略装回（可写连接逐条问）
+  beforeEach(() => void gate.policies.push(retiredPolicy('ask-on-database')))
+
+  it('P2-07-20 opts 恰是 DBSV-17 那七项再加 taskId / conversationId；客体不变', async () => {
+    saveDefaults()
+    const { client } = await open({ agentOf: makeAgentOf() })
+
+    await callTool(client, 'query', queryArgs({ description: 'count users' }), M2)
+
+    expect(gate.calls).toHaveLength(1)
+    expect(gate.calls[0].object).toStrictEqual({
+      sql: 'INSERT INTO t VALUES (1)',
+      credential: 'rw-my',
+      dbType: 'mysql',
+      readonly: false
+    })
+    expect(gate.calls[0].opts).toStrictEqual({
+      toolCallId: 'tc-2',
+      taskId: 21,
+      conversationId: 2,
+      toolName: 'mcp__database__query',
+      description: 'count users',
+      abortError: 'Aborted',
+      signal: expect.any(AbortSignal),
+      onOther: 'return',
+      missingChannel: 'deny'
+    })
+    expect(gate.ctxs.at(-1)?.agentOf).toBeTypeOf('function')
+  })
+
+  it('P2-07-21 主体、询问事件与卡片：事件带 ids 与派生主体，卡片照旧按 toolCallId、连接名在上，允许后执行', async () => {
+    saveDefaults()
+    gate.recordEvents = true
+    const agentOf = makeAgentOf()
+    const { client, asks } = await open({ agentOf })
+
+    const r = await callTool(client, 'query', queryArgs(), M2)
+
+    expect(gate.events).toHaveLength(1)
+    expect(gate.events[0]).toMatchObject({ toolCallId: 'tc-2', taskId: 21, conversationId: 2 })
+    expect(subjectOf(gate.events[0])).toStrictEqual(SUBJ_E())
+    expect(agentOf).toHaveBeenCalledWith(2)
+    const [card] = askCards(asks)
+    expect(asks).toHaveLength(1)
+    expect(card.id).toBe('tc-2')
+    expect(card.command.startsWith('-- rw-my\n')).toBe(true)
+    expect(r.isError).toBeFalsy()
+    expect(pool.queries).toHaveLength(1)
+  })
+
+  it('P2-07-22 按主体写的 deny：派生 agent 的查询带归因被拒、不建连；同一实例上根 agent 照常（问过、允许后执行）', async () => {
+    saveDefaults()
+    gate.recordEvents = true
+    gate.policies.push(
+      userPolicy('no-spawned-sql', [
+        { effect: 'deny', match: "object.type == 'database' && subject.agentKind == 'spawned'" }
+      ])
+    )
+    const { client, asks } = await open({ agentOf: makeAgentOf() })
+
+    const denied = await callTool(client, 'query', queryArgs(), M2)
+    expect(denied.isError).toBe(true)
+    expect(textOf(denied)).toContain("Denied by security policy rule 'no-spawned-sql#0'")
+    expect(pool.queries).toEqual([])
+    expect(asks).toEqual([])
+
+    const ok = await callTool(client, 'query', queryArgs(), M1)
+    expect(ok.isError).toBeFalsy()
+    expect(asks).toHaveLength(1)
+    expect(subjectOf(gate.events[0])).toStrictEqual(SUBJ_WORK())
+    expect(pool.queries).toHaveLength(1)
+  })
+
+  it('P2-07-23 回落：不带 `_meta` → 没有两个 id 键、主体 root、不问 agentOf', async () => {
+    saveDefaults()
+    gate.recordEvents = true
+    const agentOf = makeAgentOf()
+    const { client } = await open({ agentOf })
+
+    await callTool(client, 'query', queryArgs())
+
+    expect('taskId' in optsOf()).toBe(false)
+    expect('conversationId' in optsOf()).toBe(false)
+    expect(optsOf().toolCallId).toMatch(/^database-.+$/)
+    expect(subjectOf(gate.events[0])).toStrictEqual(SUBJ_ROOT0())
+    expect(agentOf).not.toHaveBeenCalled()
+  })
+
+  it('P2-07-23 门之前就回绝的（未知连接名）与 list-connections：不过门、不问 agentOf', async () => {
+    saveDefaults()
+    const agentOf = makeAgentOf()
+    const { client } = await open({ agentOf })
+
+    const unknown = await callTool(client, 'query', queryArgs({ connection: 'nope' }), M2)
+    expect(unknown.isError).toBe(true)
+    expect(textOf(unknown)).toBe(
+      'No saved connection named "nope". Saved connections: ro-pg, rw-my.'
+    )
+
+    const listed = await callTool(client, 'list-connections', {}, M2)
+    expect(listed.isError).toBeFalsy()
+
+    expect(gate.calls).toEqual([])
+    expect(agentOf).not.toHaveBeenCalled()
+  })
+
+  it('P2-07-24 带着调用身份，卡片挂着时被取消 → 批准来晚了也不执行（DBSV-24 的变体）', async () => {
+    saveDefaults()
+    let release!: (r: InputResponse) => void
+    const { client, asks } = await open({
+      agentOf: makeAgentOf(),
+      respond: () => new Promise<InputResponse>((r) => (release = r))
+    })
+
+    const ac = new AbortController()
+    const pending = client.callTool(
+      { name: 'query', arguments: queryArgs(), _meta: M2 },
+      undefined,
+      { signal: ac.signal }
+    )
+    while (asks.length === 0) await new Promise((r) => setTimeout(r, 1))
+
+    ac.abort(new Error('user stopped the run'))
+    await expect(pending).rejects.toThrow()
+    release({ kind: 'ask', allowed: true })
+    await settle()
+
+    expect(pool.queries).toEqual([])
+  })
+
+  it('P2-07-24 DBSV-SG1 带着调用身份：交给门的 signal 仍按请求各自一份，只有没取消的那条执行', async () => {
+    saveDefaults()
+    const releases: Array<(r: InputResponse) => void> = []
+    const { client, asks } = await open({
+      agentOf: makeAgentOf(),
+      respond: () => new Promise<InputResponse>((r) => void releases.push(r))
+    })
+
+    const ac = new AbortController()
+    const cancelled = client.callTool(
+      {
+        name: 'query',
+        arguments: queryArgs({ sql: 'DELETE FROM t' }),
+        _meta: { ...M2, 'shuvix.dev/toolCallId': 'tc-cancelled' }
+      },
+      undefined,
+      { signal: ac.signal }
+    )
+    const kept = client.callTool({
+      name: 'query',
+      arguments: queryArgs({ sql: 'UPDATE t SET a = 1' }),
+      _meta: { ...M1, 'shuvix.dev/toolCallId': 'tc-kept' }
+    })
+    while (asks.length < 2) await new Promise((r) => setTimeout(r, 1))
+
+    const signalOf = (toolCallId: string): AbortSignal =>
+      (
+        gate.calls.find((c) => (c.opts as { toolCallId?: string }).toolCallId === toolCallId)!
+          .opts as { signal: AbortSignal }
+      ).signal
+    const mine = signalOf('tc-cancelled')
+    const other = signalOf('tc-kept')
+    expect(mine).not.toBe(other)
+
+    ac.abort(new Error('user stopped the run'))
+    await expect(cancelled).rejects.toThrow()
+    for (let i = 0; i < 100 && !mine.aborted; i++) await new Promise((r) => setTimeout(r, 1))
+    expect(mine.aborted).toBe(true)
+    expect(other.aborted).toBe(false)
+
+    for (const release of releases) release({ kind: 'ask', allowed: true })
+    await kept
+    await settle()
+    expect(pool.queries.map((q) => q.sql)).toEqual(['UPDATE t SET a = 1'])
   })
 })
