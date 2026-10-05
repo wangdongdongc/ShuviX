@@ -26,7 +26,7 @@ import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { DurableSession, SessionHostDeps } from '@shuvix/agent-runtime'
-import type { ConversationId, ToolRegistration } from '@earendil-works/pi-durable'
+import type { ConversationId, EntryId, ToolRegistration } from '@earendil-works/pi-durable'
 import { fauxText, fauxToolCall } from '@earendil-works/pi-ai'
 import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
 
@@ -188,6 +188,7 @@ beforeAll(async () => {
   ;({ messageService } = await import('../messageService'))
   ;({ chatGateway } = await import('../../frontend/core/DefaultChatGateway'))
   dayPrompts = await import('../sessionDayPromptService')
+  // eslint-disable-next-line boundaries/dependencies -- S 用例有意让真的 artifact 工具读真的 messageService（产品里是工具引用服务，这里只是从服务的用例里把它构造出来）
   ;({ ArtifactTool } = await import('../../tools/artifact'))
 })
 
@@ -226,11 +227,15 @@ function insert(id: string, patch: Partial<Session> = {}, ephemeral = false): st
 type DayRow = { sessionId: string; entryId: string; day: string; timestamp: number }
 const dayRows = (sessionId: string): DayRow[] =>
   (holder.db as DatabaseSync)
-    .prepare('SELECT sessionId, entryId, day, timestamp FROM session_day_prompts WHERE sessionId = ?')
+    .prepare(
+      'SELECT sessionId, entryId, day, timestamp FROM session_day_prompts WHERE sessionId = ?'
+    )
     .all(sessionId) as DayRow[]
 
 /** 每个会话都带上这些工具（artifact 工具按会话 id 现造） */
-function toolHostWith(extra: (sessionId: string) => ToolRegistration[] = () => []) {
+function toolHostWith(
+  extra: (sessionId: string) => ToolRegistration[] = () => []
+): ReturnType<typeof toolsToolHost> {
   return toolsToolHost((sessionId) => [
     new ArtifactTool({ sessionId } as ToolContext),
     readTool(),
@@ -320,7 +325,7 @@ describe('P3-07 list parity (S)', () => {
       const listed = await messageService.listBySession('s1')
       expect(listed).toStrictEqual((await freshMount(session)).messages)
       const ids = new Set((await allEntries(await session.currentConversation())).map((e) => e.id))
-      for (const message of listed) expect(ids.has(Number(message.id))).toBe(true)
+      for (const message of listed) expect(ids.has(Number(message.id) as EntryId)).toBe(true)
       expect(listed[0]!.content).toBe(D1_TEXT)
       expect(listed[0]!.metadata).toStrictEqual({ inlineTokens: K1 })
       // payload 只在 metadata.inlineTokens 里（P3-03 起的约定），从不进任何 content
@@ -420,7 +425,7 @@ describe('P3-07 list parity (S)', () => {
 
     expect(await messageService.listBySession('ghost')).toEqual([])
 
-    insert('future', { storageKind: 'durable-sqlite-99' })
+    insert('future', { storageKind: 'durable-sqlite-99' as Session['storageKind'] })
     expect(await messageService.listBySession('future')).toEqual([])
     expect(open).not.toHaveBeenCalled()
     expect(peek.mock.calls.map(([id]) => id)).toEqual(['future'])
@@ -477,17 +482,17 @@ describe('P3-07 artifact reads (S)', () => {
       kit.queue(answer(svgFigure('T')))
       expect(await chatGateway.prompt('s1', 'draw T')).toEqual({})
       const tool = new ArtifactTool({ sessionId: 's1' } as ToolContext)
-      const first = textOf(await executeTool(tool, 'c-list', { action: 'list' }))
+      const first = textOf(await executeTool(tool, 'c-list', { action: 'list' } as never))
       expect(first).toContain('Figures in the transcript not yet adopted (1)')
       expect(first).toContain('[1] T')
 
-      const adopted = await executeTool(tool, 'c-adopt', { action: 'adopt', ref: '1' })
+      const adopted = await executeTool(tool, 'c-adopt', { action: 'adopt', ref: '1' } as never)
       expect(textOf(adopted)).toContain('Adopted "T" as t.svg.')
       const path = join(holder.artifacts, 's1', 't.svg')
       expect(existsSync(path)).toBe(true)
       expect(mocks.recordRead).toHaveBeenCalledWith('s1', path)
 
-      const second = textOf(await executeTool(tool, 'c-list', { action: 'list' }))
+      const second = textOf(await executeTool(tool, 'c-list', { action: 'list' } as never))
       expect(second).toContain('Figures in the transcript not yet adopted: none.')
       expect(second).toContain('t.svg')
     },
@@ -533,7 +538,7 @@ describe('P3-07 artifact reads (S)', () => {
         'draw and list'
       ])
       const tool = new ArtifactTool({ sessionId: 's1' } as ToolContext)
-      expect(textOf(await executeTool(tool, 'c-list', { action: 'list' }))).toContain(
+      expect(textOf(await executeTool(tool, 'c-list', { action: 'list' } as never))).toContain(
         'Figures in the transcript not yet adopted: none.'
       )
     },
@@ -578,7 +583,9 @@ describe('P3-07 day prompts by entry id (S)', () => {
       kit.queue(answer('A2'))
       expect(await chatGateway.prompt('s1', 'next day')).toEqual({})
       const listed = await messageService.listBySession('s1')
-      const dateNotice = listed.find((m) => m.metadata?.isSystemNotice === true)!
+      const dateNotice = listed.find(
+        (m) => (m.metadata as { isSystemNotice?: boolean } | null)?.isSystemNotice === true
+      )!
       const second = listed.find((m) => m.role === 'user' && m.content === 'next day')!
       expect(listed.indexOf(dateNotice)).toBe(listed.indexOf(second) - 1)
       const first = listed.find((m) => m.role === 'user' && m.content === 'first day')!

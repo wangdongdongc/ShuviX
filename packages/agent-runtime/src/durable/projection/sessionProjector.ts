@@ -289,7 +289,10 @@ export abstract class ProjectorCore<V extends object> {
    * 一次性投影（P3-07 PIN-13）：给定对话的一帧快照，读它的显示侧车与 submission 落点（一个只读提交），
    * 投影一次。不挂旁路、不取 watch、不建状态 —— 只给从没挂载过的实例用，用完即弃。
    */
-  protected async projectFrame(conversationId: ConversationId, frame: ConversationView): Promise<V> {
+  protected async projectFrame(
+    conversationId: ConversationId,
+    frame: ConversationView
+  ): Promise<V> {
     const snapshot = await this.host.harness.snapshot(DisplayDoc, conversationId, BG)
     const display = this.displayOf(conversationId)
     for (const [requestId, item] of Object.entries(snapshot?.items ?? {})) {
@@ -297,7 +300,10 @@ export abstract class ProjectorCore<V extends object> {
       if (parsed !== undefined) display.set(requestId, parsed)
     }
     const ancestorEntries = await this.lookupRequests(conversationId, frame.entries, display)
-    return this.project({ conversationId, value: frame, ancestorEntries }, this.runStateOf(conversationId))
+    return this.project(
+      { conversationId, value: frame, ancestorEntries },
+      this.runStateOf(conversationId)
+    )
   }
 
   /** 拆掉（幂等）：停 watch、摘旁路与各路订阅；状态保留最后的值 */
@@ -794,7 +800,10 @@ export class SessionProjectorImpl extends ProjectorCore<SessionView> implements 
    * 此刻的视图，前提是它跟上了 `frame`（`valueIfCurrent`），且根运行状态也已经修订进去（运行状态的变化
    * 在微任务里才重算）；否则 undefined（P3-07 PIN-14）。
    */
-  snapshotIfCurrent(conversationId: ConversationId, frame: ConversationView): SessionView | undefined {
+  snapshotIfCurrent(
+    conversationId: ConversationId,
+    frame: ConversationView
+  ): SessionView | undefined {
     const value = this.valueIfCurrent(conversationId, frame)
     if (value === undefined || value.run.state !== this.host.runState) return undefined
     return value

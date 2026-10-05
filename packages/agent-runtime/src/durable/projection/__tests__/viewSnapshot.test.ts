@@ -343,9 +343,7 @@ describe('P3-07 · read-your-writes and the projector (PIN-13 / PIN-14)', () => 
       const listed = await list(session)
       expect(projector).not.toHaveBeenCalled()
       expect(unsubscribes.every((unsubscribe) => unsubscribe.mock.calls.length > 0)).toBe(true)
-      expect(
-        (session as unknown as { projectorEntry: unknown }).projectorEntry
-      ).toBeUndefined()
+      expect((session as unknown as { projectorEntry: unknown }).projectorEntry).toBeUndefined()
       subscribe.mockRestore()
       projector.mockRestore()
 
