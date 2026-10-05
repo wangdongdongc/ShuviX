@@ -193,10 +193,13 @@ describe('resolveRunConfig —— 会话的模型连同思考档位（子会话�
   it.each([
     ['树上只有档位、没有默认模型', { thinkingLevel: 'high' }],
     ['树上只写了提供商、没有模型', { provider: 'p1', thinkingLevel: 'off' }]
-  ])('RC-4 没有可用模型（%s）→ model 为 null：档位写着也不凭空造出模型', async (_label, written) => {
-    tree(written)
-    expect((await sessionService.resolveRunConfig(SID))?.model).toBeNull()
-  })
+  ])(
+    'RC-4 没有可用模型（%s）→ model 为 null：档位写着也不凭空造出模型',
+    async (_label, written) => {
+      tree(written)
+      expect((await sessionService.resolveRunConfig(SID))?.model).toBeNull()
+    }
+  )
 
   it('RC-5 会话不存在 → null，且不去读会话树', async () => {
     mocks.daoPick.mockReturnValue(undefined)

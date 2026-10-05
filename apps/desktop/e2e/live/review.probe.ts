@@ -773,7 +773,12 @@ interface Rig {
  * 每条用例一套：临时 SessionHost（内存存储）+ 真路由 + 真 runner，再打开判定所属的那条会话（hook 派发按
  * `get` 找打开着的会话，从不新建）。会话不建根 agent —— 宿主派发不需要它；没锁时 hook 的模型取会话选择。
  */
-async function buildRig(model: RealModel, events: ChatEvent[], runEvents: HookRunEvent[], tap: Tap): Promise<Rig> {
+async function buildRig(
+  model: RealModel,
+  events: ChatEvent[],
+  runEvents: HookRunEvent[],
+  tap: Tap
+): Promise<Rig> {
   const capabilities = (
     model.capabilities ? JSON.parse(model.capabilities) : {}
   ) as ModelCapabilities
@@ -941,7 +946,10 @@ it(
         const usage = usageOf(tap)
         if (process.env.PROBE_DEBUG) {
           writeFileSync(`${OUT}.${probeCase.id}.events.json`, JSON.stringify(events, null, 2))
-          writeFileSync(`${OUT}.${probeCase.id}.requests.json`, JSON.stringify(tap.payloads, null, 2))
+          writeFileSync(
+            `${OUT}.${probeCase.id}.requests.json`,
+            JSON.stringify(tap.payloads, null, 2)
+          )
         }
         rows.push({
           id: probeCase.id,

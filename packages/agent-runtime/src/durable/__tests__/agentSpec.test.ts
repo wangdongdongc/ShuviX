@@ -48,12 +48,15 @@ describe('resolveThinkingLevel — 档案思考档位（shuvix-thinking）', () 
   it.each<[string, ThinkingLevel, ThinkingLevel]>([
     ['声明 off / 派发方 high', 'off', 'high'],
     ['声明 xhigh / 派发方 off', 'xhigh', 'off']
-  ])('TH-1 spawned 且档案声明（%s）：运行时档位 = 声明值，压过派发方', (_label, declared, dispatcher) => {
-    // 两个方向都要：只测「往低压」的话，一个「取两者较低者」的实现也能蒙混过去
-    expect(resolveThinkingLevel('spawned', { ...PROFILE, thinkingLevel: declared }, dispatcher)).toBe(
-      declared
-    )
-  })
+  ])(
+    'TH-1 spawned 且档案声明（%s）：运行时档位 = 声明值，压过派发方',
+    (_label, declared, dispatcher) => {
+      // 两个方向都要：只测「往低压」的话，一个「取两者较低者」的实现也能蒙混过去
+      expect(
+        resolveThinkingLevel('spawned', { ...PROFILE, thinkingLevel: declared }, dispatcher)
+      ).toBe(declared)
+    }
+  )
 
   it('TH-2 spawned 且未声明：运行时档位 = 派发方传入的', () => {
     expect(resolveThinkingLevel('spawned', PROFILE, 'low')).toBe('low')
