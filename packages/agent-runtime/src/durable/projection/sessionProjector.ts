@@ -153,14 +153,20 @@ export function liveRunTask(live: unknown): TaskId | undefined {
   return typeof taskId === 'number' ? (taskId as TaskId) : undefined
 }
 
-/** 一次挂载：一个对话的 watch 与它挂上时解析出来的祖先侧车落点 */
-export interface ProjectorMount {
+/** 投影一帧要的那几样：哪个对话、这一帧、fork 祖先里的侧车落点（挂载与一次性投影共用） */
+export interface MountFrame {
   readonly conversationId: ConversationId
+  /** 要投影的那一帧 */
+  readonly value: ConversationView
+  /** fork 祖先里的 requestId → 条目（挂载时一次解析；它们之后不会再变） */
+  readonly ancestorEntries: ReadonlyMap<string, EntryId>
+}
+
+/** 一次挂载：一个对话的 watch 与它挂上时解析出来的祖先侧车落点 */
+export interface ProjectorMount extends MountFrame {
   readonly watch: WatchHandle<ConversationView>
   /** 最近处理过的一帧（挂载时 = watch 的初值） */
   value: ConversationView
-  /** fork 祖先里的 requestId → 条目（挂载时一次解析；它们之后不会再变） */
-  readonly ancestorEntries: ReadonlyMap<string, EntryId>
   /** 换挂载之后旧挂载作废（它之后的帧一律丢掉） */
   stale: boolean
 }
@@ -218,7 +224,7 @@ export abstract class ProjectorCore<V extends object> {
   // ─── 子类给出的 ─────────────────────────────
 
   /** 一帧（或刷新）的视图 */
-  protected abstract project(mount: ProjectorMount, runState: RunViewState): V
+  protected abstract project(mount: MountFrame, runState: RunViewState): V
   /** 此刻挂着的对话的运行状态 */
   protected abstract runStateOf(conversationId: ConversationId): RunViewState
   /** 旁路的额外处理（指针变化 → 换挂载等）；在通用记账之后调用 */
@@ -262,6 +268,42 @@ export abstract class ProjectorCore<V extends object> {
     return () => {
       this.lifecycleListeners.delete(entry)
     }
+  }
+
+  /**
+   * 此刻的值，前提是它跟上了 `frame`（P3-07 PIN-14）：挂着同一个对话、处理过的最新一帧就是这一帧（视图
+   * 挂载的值不可变，同一份引用 = 之后没有改动视图的发布）、没有待做的刷新；否则 undefined。
+   */
+  valueIfCurrent(conversationId: ConversationId, frame: ConversationView): V | undefined {
+    const mount = this.mount
+    const state = this.stateRef
+    if (this.disposedFlag || state === undefined || mount === undefined || mount.stale) {
+      return undefined
+    }
+    if (mount.conversationId !== conversationId || mount.value !== frame) return undefined
+    if (this.refreshScheduled) return undefined
+    return state.value
+  }
+
+  /**
+   * 一次性投影（P3-07 PIN-13）：给定对话的一帧快照，读它的显示侧车与 submission 落点（一个只读提交），
+   * 投影一次。不挂旁路、不取 watch、不建状态 —— 只给从没挂载过的实例用，用完即弃。
+   */
+  protected async projectFrame(
+    conversationId: ConversationId,
+    frame: ConversationView
+  ): Promise<V> {
+    const snapshot = await this.host.harness.snapshot(DisplayDoc, conversationId, BG)
+    const display = this.displayOf(conversationId)
+    for (const [requestId, item] of Object.entries(snapshot?.items ?? {})) {
+      const parsed = displayItemOf(item)
+      if (parsed !== undefined) display.set(requestId, parsed)
+    }
+    const ancestorEntries = await this.lookupRequests(conversationId, frame.entries, display)
+    return this.project(
+      { conversationId, value: frame, ancestorEntries },
+      this.runStateOf(conversationId)
+    )
   }
 
   /** 拆掉（幂等）：停 watch、摘旁路与各路订阅；状态保留最后的值 */
@@ -505,7 +547,7 @@ export abstract class ProjectorCore<V extends object> {
   }
 
   /** 条目 id → 显示侧车（投影只看活上下文里的 `pi.user`，多出来的键无害） */
-  protected displayByEntry(mount: ProjectorMount): Map<number, DisplayItem> {
+  protected displayByEntry(mount: MountFrame): Map<number, DisplayItem> {
     const resolved = new Map<number, DisplayItem>()
     const display = this.displayDocs.get(mount.conversationId)
     if (display === undefined) return resolved
@@ -519,7 +561,7 @@ export abstract class ProjectorCore<V extends object> {
 
   /** 排队输入 → 显示侧车（PIN-17 / PIN-22） */
   protected queueDisplay(
-    mount: ProjectorMount,
+    mount: MountFrame,
     inbox: InboxState | undefined
   ): Map<number, DisplayItem> {
     const queued = new Map<number, DisplayItem>()
@@ -754,7 +796,32 @@ export class SessionProjectorImpl extends ProjectorCore<SessionView> implements 
     this.startMount(mount)
   }
 
-  protected project(mount: ProjectorMount, runState: RunViewState): SessionView {
+  /**
+   * 此刻的视图，前提是它跟上了 `frame`（`valueIfCurrent`），且根运行状态也已经修订进去（运行状态的变化
+   * 在微任务里才重算）；否则 undefined（P3-07 PIN-14）。
+   */
+  snapshotIfCurrent(
+    conversationId: ConversationId,
+    frame: ConversationView
+  ): SessionView | undefined {
+    const value = this.valueIfCurrent(conversationId, frame)
+    if (value === undefined || value.run.state !== this.host.runState) return undefined
+    return value
+  }
+
+  /**
+   * 一次性的视图（P3-07 PIN-13）：一个不挂载的实例按给定的一帧投影一次（`DurableSession.viewSnapshot` 在
+   * 没有跟上的投影时用它）。
+   */
+  static snapshot(
+    host: ProjectorHost,
+    conversationId: ConversationId,
+    frame: ConversationView
+  ): Promise<SessionView> {
+    return new SessionProjectorImpl(host).projectFrame(conversationId, frame)
+  }
+
+  protected project(mount: MountFrame, runState: RunViewState): SessionView {
     const { entries, docs } = mount.value
     const inbox = docs['pi.inbox'] as InboxState | undefined
     return projectSessionView(

@@ -87,8 +87,7 @@ vi.mock('../../../services/agentService', () => ({
 }))
 vi.mock('../ChatFrontendRegistry', () => ({ chatFrontendRegistry: { broadcast: vi.fn() } }))
 vi.mock('../../../services/sessionDayPromptService', () => ({
-  recordUserPrompt: vi.fn(),
-  recordFromUserMessageEvent: vi.fn()
+  recordUserEntry: vi.fn()
 }))
 
 import { buildBuiltinProfiles } from '@shuvix/agent-runtime'
