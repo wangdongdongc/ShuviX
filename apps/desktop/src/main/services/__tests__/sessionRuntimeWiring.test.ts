@@ -6,7 +6,7 @@
  *      D10-45..53 网关
  *   F  D10-55 statusOf（P2-10-32：interrupted，开着 / 镜像）· D10-56 被拒的子会话发送 · D10-57 stop（含被中断的）·
  *      D10-58 答复（P2-10-28：lastAnswer）
- *   G  D10-59 列表 · D10-61 回退 / 截断
+ *   G  D10-59 列表（P3-07：新格式 = peek → viewSnapshot().messages）· D10-61 回退 / 截断
  *   H  D10-64 closeAll 之后
  * （D10-54 Chrome 侧栏的 respondToInput：channel.test.ts 的 CH-5 钉路由，D10-35 钉 getAgentSession 只看宿主。）
  *
@@ -20,6 +20,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from 'node:fs
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { AgentCreationError, PhasePendingError } from '@shuvix/agent-runtime'
+import { emptySessionView } from '@shuvix/chat-protocol/types/sessionView'
 
 const holder = vi.hoisted(() => ({
   db: null as unknown,
@@ -35,7 +36,7 @@ const mocks = vi.hoisted(() => ({
   abortSessionRuns: vi.fn<(sessionId: string) => void>(),
   fire: vi.fn(),
   getProfile: vi.fn<(name: string) => unknown>(),
-  recordPromptAdmitted: vi.fn(),
+  recordUserEntry: vi.fn(),
   calls: [] as string[]
 }))
 
@@ -74,8 +75,7 @@ vi.mock('../sessionHost', async () =>
   (await import('./support/fakeSessionHost')).sessionHostModuleMock()
 )
 vi.mock('../sessionDayPromptService', () => ({
-  recordPromptAdmitted: mocks.recordPromptAdmitted,
-  recordFromUserMessageEvent: vi.fn()
+  recordUserEntry: mocks.recordUserEntry
 }))
 vi.mock('../toolAggregator', () => ({ filterAvailableTools: (tools: string[]) => tools }))
 vi.mock('../mcpService', () => ({
@@ -818,12 +818,37 @@ describe('D10-58 新格式子会话的答复（P2-10-28）', () => {
 // ─── G. messageService ─────────────────────────────────────────────────────
 
 describe('D10-59 列表', () => {
-  it('D10-59 新格式会话：[] / undefined，不打开宿主、不建文件', async () => {
+  it('D10-59 / P3-07-01 新格式会话没有存储：[] / undefined，宿主只被窥视（从不 open）、不建文件', async () => {
     insert('s1')
     expect(await messageService.listBySession('s1')).toEqual([])
     expect(await messageService.findLastBySession('s1')).toBeUndefined()
-    expect(fakeHost.calls).toEqual([])
+    expect(fakeHost.calls).toEqual([
+      ['peek', 's1'],
+      ['peek', 's1']
+    ])
+    expect(fakeHost.callsOf('open')).toEqual([])
     expect(readdirSync(holder.sessionsDir)).toEqual([])
+  })
+
+  it('D10-59 新格式会话有存储：列表 = viewSnapshot().messages（peek 打开，不 open）', async () => {
+    insert('s1')
+    const durable = fakeHost.put('s1')
+    const message = {
+      id: '2',
+      sessionId: 's1',
+      role: 'user',
+      type: 'text',
+      content: 'hi',
+      model: '',
+      createdAt: 1,
+      metadata: null
+    } as const
+    durable.view = { ...emptySessionView('s1'), source: 'durable', messages: [message] }
+    expect(await messageService.listBySession('s1')).toEqual([message])
+    expect(await messageService.findLastBySession('s1')).toEqual(message)
+    expect(fakeHost.callsOf('peek')).toEqual(['s1', 's1'])
+    expect(fakeHost.callsOf('open')).toEqual([])
+    expect(durable.callsOf('viewSnapshot')).toHaveLength(2)
   })
 
   it('D10-59 旧格式会话：走读取器，宿主不参与', async () => {

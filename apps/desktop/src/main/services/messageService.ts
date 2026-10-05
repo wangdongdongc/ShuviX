@@ -5,13 +5,14 @@
  *  - `harness-v3-jsonl`（切换前的会话）：照旧可看 —— 经 agent-runtime 的 legacy 读取器把 `.jsonl`
  *    渲染成 ChatMessage（冻结的投影，「旧会话现在怎么显示，以后就怎么显示」）；这种会话只读，
  *    回退 / 截断一律不做（返回「没有可回退的目标」）。
- *  - `durable-sqlite-1`（新会话）：durable 存储的投影还没写 —— TODO(pi-durable p3)：列表暂时为空，
- *    回退 / 截断抛 `PhasePendingError`。
+ *  - `durable-sqlite-1`（新会话）：列表就是界面投影的消息（P3-07）—— `peek`（存储不在就是空，从不打开 /
+ *    创建会话）再 `DurableSession.viewSnapshot().messages`，与 SyncHub 推给界面的 `view.messages` 同一份；
+ *    回退 / 截断抛 `PhasePendingError`（TODO(pi-durable p3)）。
  *
  * 清空（`clear`）两种都做：经 SessionHost 关掉并删掉存储；旧格式会话清空之后换成当前存储类型，
  * 从此是一条全新的新格式会话（PIN-22，什么都不带过去 —— 不是迁移）。
  */
-import { PhasePendingError } from '@shuvix/agent-runtime'
+import { PhasePendingError, SessionClosedError } from '@shuvix/agent-runtime'
 import {
   CURRENT_SESSION_STORAGE_KIND,
   HARNESS_V3_JSONL,
@@ -30,11 +31,24 @@ function isLegacySession(sessionId: string): boolean {
 }
 
 export class MessageService {
-  /** 会话当前上下文对应的消息列表（已应用压缩过滤：被压缩的历史不在其中） */
+  /**
+   * 会话当前上下文对应的消息列表（已应用压缩过滤：被压缩的历史不在其中）。
+   *
+   * 新格式会话 = 界面投影的 `messages`（P3-07）：只 `peek`（没有存储 → `[]`，从不打开 / 创建会话；宿主已封存
+   * → `[]`），再取 `viewSnapshot()`（投影跟上了就用它的值，否则现投影一次，从不挂载）。句柄恰好在两步之间
+   * 被关掉（LRU / 退出）就再窥视一次。不认识的存储类型 `peek` 不打开（存储路由答「不在」）。
+   */
   async listBySession(sessionId: string): Promise<ChatMessage[]> {
     if (isLegacySession(sessionId)) return readLegacyTranscript(sessionId)?.messages ?? []
-    // TODO(pi-durable p3): durable 会话的条目投影（entries → ChatMessage）
-    return []
+    for (let attempt = 0; ; attempt++) {
+      const session = await getSessionHost().peek(sessionId)
+      if (session === undefined) return []
+      try {
+        return (await session.viewSnapshot()).messages
+      } catch (error) {
+        if (!(error instanceof SessionClosedError) || attempt > 0) throw error
+      }
+    }
   }
 
   /** 会话最后一条消息 */
