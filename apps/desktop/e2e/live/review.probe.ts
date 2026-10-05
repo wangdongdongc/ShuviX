@@ -4,8 +4,8 @@
  *
  * 与 probe.ts 的分工：那边起隔离实例跑一整轮对话；这里**不起 Electron** —— 审查员的全部输入就是
  * `permission.request` 的 payload（设计里的「独立上下文」），所以直接用 agent-runtime 的真 runner →
- * 真 SubAgentManager → 真 createAgentFactory → 真运行时跑，读的是随包发布的那几份 md，
- * 走的是与桌面同一条 runTask → createAgent → next 链路。唯一从真实环境借来的是 provider 与模型
+ * 真派生 agent 路由 → 会话的协调器跑，读的是随包发布的那几份 md，
+ * 走的是与桌面同一条 runTask → spawn → next 链路。唯一从真实环境借来的是 provider 与模型
  * （pickRealModel：读真实实例 shuvix.db 的一行，key 只在内存里过一手，不打印、不落盘）。
  *
  * 不断言（真模型不确定），只产出报告：每条用例的期望、实际判决、风险、summary、reason、耗时；
@@ -16,8 +16,8 @@
  * ChatEvent 流与发给 provider 的原样请求各存一份，看模型到底写了什么）、PROBE_THINKING（临时换掉审查员
  * 声明的思考档位，比较关思考的影响）。
  *
- * 暂不可用（pi-durable P1-01 起）：派生 agent 的运行时在 phase 2 重建，在那之前跑这个探针会在第一次
- * 派发时得到 PhasePendingError（见 buildRunner 里的 TODO）。
+ * 暂不可用（pi-durable P1-01 起）：宿主派发的 agent 要到 P2-08 才接上、探针要到 P2-13 才移到临时 SessionHost
+ * 上，在那之前跑这个探针会在第一次派发时得到 PhasePendingError（见 buildRunner 里的 TODO）。
  */
 import { readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -28,11 +28,9 @@ import {
   PERMISSION_REVIEWER_PROFILE_NAME,
   buildBuiltinHooks,
   buildBuiltinProfiles,
-  createAgentFactory,
   createHookRunner,
   createSubAgentManager,
   toInProcessAgentType,
-  type AgentHostAdapter,
   type HookRunEvent,
   type HookRunner,
   type PermissionRequestPayload
@@ -671,19 +669,13 @@ function buildRunner(
   const capabilities = (
     model.capabilities ? JSON.parse(model.capabilities) : {}
   ) as ModelCapabilities
-  // TODO(pi-durable p2): 派生 agent 落到 pi-durable 之前这个探针跑不起来 —— createAgent 对 spawned 抛
-  // PhasePendingError。旧宿主面里的模型构建 / API key / 请求记录（buildModel / getApiKey / httpLog）随
-  // pi 0.80 一起删了；真模型与发给 provider 的原样请求（PROBE_DEBUG / PROBE_FORCE_TOOL /
+  // TODO(pi-durable p2): P2-13 把探针移到一个临时 SessionHost + 路由上。路由的宿主派发（hook 的锚 /
+  // reviewer 的任务拥有者）要到 P2-08 才接上，在那之前每次派发都得到 PhasePendingError；这里先给路由一个
+  // 没有会话的宿主面。真模型与发给 provider 的原样请求（PROBE_DEBUG / PROBE_FORCE_TOOL /
   // PROBE_RENAME_NEXT 那几个旋钮）要经 P1-02 的模型注册表与网络装饰重新接上。`payloads` 先保持为空。
   void payloads
-  const host: AgentHostAdapter = {
-    // 审查员不声明工具：请求里只有结果契约的 next（宿主经 extraTools 交进来）
-    resolveTools: (req) => [...(req.extraTools ?? [])],
-    promptVars: () => ({}),
-    eventSink: { broadcast: (event) => events.push(event), hasUserInputCapability: () => false }
-  }
   const manager = createSubAgentManager({
-    createAgent: createAgentFactory(host).createAgent,
+    sessions: { get: () => undefined, peek: async () => undefined },
     broadcast: (event) => events.push(event)
   })
   const reviewerProfile = buildBuiltinProfiles({

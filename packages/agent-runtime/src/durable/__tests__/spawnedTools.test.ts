@@ -8,7 +8,6 @@
 import { ROOT_CONVERSATION_ID, type ToolRegistration } from '@earendil-works/pi-durable'
 import type { ChatEvent } from '@shuvix/chat-protocol/events'
 import { describe, expect, expectTypeOf, it } from 'vitest'
-import { DEFAULT_MAX_AGENT_DEPTH } from '../../subagent/manager'
 import { NextTool, resultContractTools, type ResultContract } from '../../subagent/nextTool'
 import { invokeTool, resultText } from '../../tools/testing/invokeTool'
 import { canSpawnAt, MAX_AGENT_DEPTH, type SpawnedAgentRecord } from '../agentRecord'
@@ -260,9 +259,8 @@ describe('spawned tools · the canSpawn gate', () => {
     expect(canSpawnAt(depth, max)).toBe(expected)
   })
 
-  it('P2-02-08 the default max is MAX_AGENT_DEPTH = 2 (equal to the legacy DEFAULT_MAX_AGENT_DEPTH)', () => {
+  it('P2-02-08 the default max is MAX_AGENT_DEPTH = 2 (the legacy DEFAULT_MAX_AGENT_DEPTH is gone, P2-05)', () => {
     expect(MAX_AGENT_DEPTH).toBe(2)
-    expect(MAX_AGENT_DEPTH).toBe(DEFAULT_MAX_AGENT_DEPTH)
     expect(canSpawnAt(1)).toBe(true)
     expect(canSpawnAt(2)).toBe(false)
   })

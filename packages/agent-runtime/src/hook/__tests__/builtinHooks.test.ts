@@ -217,7 +217,7 @@ describe('HB-8 端到端：auto-title 经真 runner 派发 titler', () => {
     const quick = h.call(0)
     expect(quick.agentType.name).toBe('titler')
     expect(quick.description).toBe(EN_TITLE)
-    expect(quick.parentSessionId).toBe('s1')
+    expect(quick.sessionId).toBe('s1')
     expect(fence(quick.prompt)).toContain('<hook_event trigger="session.prompt-accepted">')
     expect(fence(quick.prompt)).toContain('promptText: hello')
     expect(fence(quick.prompt)).not.toContain('recentText')

@@ -321,11 +321,11 @@ const verdictOf = (
   ...over
 })
 
-/** 挂到 parentAbortSignal 落下为止，然后交回半截结果（真 manager 的收法） */
+/** 挂到 signal 落下为止，然后交回半截结果（真 manager 的收法） */
 const hangUntilAbort = (params: RunTaskParams): Promise<{ result: string }> =>
   new Promise((resolve) => {
-    if (params.parentAbortSignal?.aborted) return resolve({ result: 'partial' })
-    params.parentAbortSignal?.addEventListener('abort', () => resolve({ result: 'partial' }), {
+    if (params.signal?.aborted) return resolve({ result: 'partial' })
+    params.signal?.addEventListener('abort', () => resolve({ result: 'partial' }), {
       once: true
     })
   })
@@ -377,7 +377,7 @@ describe('hookService — 内置 hook 与运行时装配', () => {
     expect(mocks.runTask).toHaveBeenCalledTimes(1)
     const [run] = runs()
     expect(run.agentType.name).toBe('titler')
-    expect(run.parentSessionId).toBe('s1')
+    expect(run.sessionId).toBe('s1')
     expect(run.description).toBe(BUILTIN_TITLE)
     expect(run.prompt).toContain('<hook_event trigger="session.prompt-accepted">')
 
@@ -986,13 +986,13 @@ describe('hookService — 去重、分会话与中止', () => {
 
     firePrompt({ sessionId: 's2', isDefaultTitle: true })
     await waitRuns(2)
-    expect(runs().map((params) => params.parentSessionId)).toEqual(['s1', 's2'])
+    expect(runs().map((params) => params.sessionId)).toEqual(['s1', 's2'])
 
     for (const release of releases.splice(0)) release()
     await settle()
     firePrompt({ isDefaultTitle: true })
     await waitRuns(3)
-    expect(runs()[2].parentSessionId).toBe('s1')
+    expect(runs()[2].sessionId).toBe('s1')
     for (const release of releases.splice(0)) release()
     await settle()
   })
@@ -1001,16 +1001,14 @@ describe('hookService — 去重、分会话与中止', () => {
     mocks.runTask.mockImplementation(
       (params: RunTaskParams) =>
         new Promise((resolve) => {
-          params.parentAbortSignal?.addEventListener(
-            'abort',
-            () => resolve({ result: 'partial' }),
-            { once: true }
-          )
+          params.signal?.addEventListener('abort', () => resolve({ result: 'partial' }), {
+            once: true
+          })
         })
     )
     firePrompt({ isDefaultTitle: true })
     await waitRuns(1)
-    const signal = runs()[0].parentAbortSignal!
+    const signal = runs()[0].signal!
     expect(signal.aborted).toBe(false)
 
     expect(hookService.abortSessionRuns('nope')).toBe(0)
@@ -1110,7 +1108,7 @@ describe('hookService — 判定型埋点（hookTriggers.decide）', () => {
     // 内置 auto-review 同时命中：两份各派一次，合并取最严
     expect(runs().map(labelOf).sort()).toEqual(['auto-review', 'gate'])
     const params = runs().find((p) => labelOf(p) === 'gate')!
-    expect(params.parentSessionId).toBe('s1')
+    expect(params.sessionId).toBe('s1')
     expect(mocks.getProfile).toHaveBeenCalledWith('my-reviewer')
     expect(params.agentType).toStrictEqual(toInProcessAgentType(profileOf('my-reviewer')))
     expect(params.description).toBe('Gate')
@@ -1152,7 +1150,7 @@ describe('hookService — 判定型埋点（hookTriggers.decide）', () => {
       sourceLabel: 'auto-review'
     })
     expect(run.description).toBe(REVIEW_TITLE)
-    expect(run.parentSessionId).toBe('s1')
+    expect(run.sessionId).toBe('s1')
     expect(run.prompt).toContain('<hook_event trigger="permission.request">')
   })
 
@@ -1162,7 +1160,7 @@ describe('hookService — 判定型埋点（hookTriggers.decide）', () => {
     expect(mocks.runTask).toHaveBeenCalledTimes(1)
   })
 
-  it('HS-24 opts.signal 穿过门面：落下后 decide 返回 null、派发的 parentAbortSignal 落下、日志记 aborted', async () => {
+  it('HS-24 opts.signal 穿过门面：落下后 decide 返回 null、派发的 signal 落下、日志记 aborted', async () => {
     mocks.runTask.mockImplementation(hangUntilAbort)
     const controller = new AbortController()
 
@@ -1170,11 +1168,11 @@ describe('hookService — 判定型埋点（hookTriggers.decide）', () => {
       signal: controller.signal
     })
     await waitRuns(1)
-    expect(runs()[0].parentAbortSignal?.aborted).toBe(false)
+    expect(runs()[0].signal?.aborted).toBe(false)
     controller.abort()
 
     expect(await pending).toBeNull()
-    expect(runs()[0].parentAbortSignal?.aborted).toBe(true)
+    expect(runs()[0].signal?.aborted).toBe(true)
     expect(logLines().some((line) => /hook "auto-review" run=hkr-\S+ aborted/.test(line))).toBe(
       true
     )
@@ -1189,7 +1187,7 @@ describe('hookService — 判定型埋点（hookTriggers.decide）', () => {
     expect(hookService.abortSessionRuns('s1')).toBe(1)
 
     expect(await pending).toBeNull()
-    expect(runs()[0].parentAbortSignal?.aborted).toBe(true)
+    expect(runs()[0].signal?.aborted).toBe(true)
     await settle()
     expect(hookService.abortSessionRuns('s1')).toBe(0)
   })

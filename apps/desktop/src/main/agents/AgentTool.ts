@@ -3,7 +3,8 @@
  *
  * 工具逻辑/静态描述全在共享核心（纯 md 驱动：描述不罗列可用类型，具名派发由用户在
  * 系统提示词里自行引导）；桌面只注入注册表(agentService 扫 ~/.shuvix/agents)、
- * 子代理管理器(agentManager)、abort 文案、父级模型配置。
+ * 派生 agent 路由(agentManager)、会话 id、abort 文案。调用方是谁（对话、现取的模型与思考档位）
+ * 由派发工具从这次调用的 `api` 读，不再注入（P2-05 PIN-16）。
  * 另保留 registerBuiltinTool 的 presentation，供 ToolCallBlock 渲染 `<label> · <type>`。
  */
 import {
@@ -14,7 +15,6 @@ import {
   DISPATCH_TOOL_NAME,
   HOST_ONLY_PROFILE_NAMES,
   type DispatchAgentTool,
-  type SubAgentModelConfig,
   type SubAgentRegistry
 } from '@shuvix/agent-runtime'
 import { BUILTIN_TOOL_PRESENTATIONS } from '@shuvix/chat-protocol/builtinToolPresentations'
@@ -41,31 +41,26 @@ const dispatchRegistry: SubAgentRegistry = {
   get: (name) => (HOST_ONLY_PROFILE_NAMES.has(name) ? undefined : agentService.getProfile(name))
 }
 
-/** 父级注入的构建上下文 */
-export interface AgentToolContext {
-  /** 派生 agent 的模型配置；getter 形态在派发时求值（跟随会话当前模型/思考档位） */
-  modelConfig: SubAgentModelConfig | (() => SubAgentModelConfig)
-  /** 所属根会话 id（路径 ref 的相对路径基准；缺省 ctx.sessionId —— 主 Agent 即根会话） */
-  rootSessionId?: string
-}
-
-/** 创建桌面 agent 派发工具实例（root 与派生统一经 agentHost.resolveTools 注入） */
-export function createAgentTool(ctx: ToolContext, agentCtx: AgentToolContext): DispatchAgentTool {
-  const rootSessionId = agentCtx.rootSessionId ?? ctx.sessionId
+/**
+ * 创建桌面 agent 派发工具实例（root 与派生 agent 统一经 agentHost 的 ToolHost 注入）。`ctx` 是会话级的
+ * ToolContext：`ctx.sessionId` 即会话 id —— 交给路由（派生 agent 的派发也落在这条会话里），也是路径 ref
+ * 的相对路径基准。
+ */
+export function createAgentTool(ctx: ToolContext): DispatchAgentTool {
+  const sessionId = ctx.sessionId
   return createDispatchAgentTool({
     registry: dispatchRegistry,
     manager: agentManager,
     label: t(BUILTIN_TOOL_PRESENTATIONS.agent.labelKey),
-    modelConfig: agentCtx.modelConfig,
-    parentSessionId: ctx.sessionId,
+    sessionId,
     abortError: TOOL_ABORTED,
-    // 路径 ref：相对路径以根会话工作目录为基准（惰性解析，跟随会话当前项目配置）。
+    // 路径 ref：相对路径以会话工作目录为基准（惰性解析，跟随会话当前项目配置）。
     // 只由宿主派发的档案按路径也不收 —— 否则把随包发布的那份 md（或它的副本）按路径一指，
     // 按名拦下的审查员就又能被派发出来当预言机
     resolveAgentFile: async (path) => {
       const def = await agentService.loadAgentFromRef(
         path,
-        resolveProjectConfig(rootSessionId).workingDirectory
+        resolveProjectConfig(sessionId).workingDirectory
       )
       if (def && HOST_ONLY_PROFILE_NAMES.has(def.name)) {
         throw new Error(`"${def.name}" is run only by ShuviX and cannot be dispatched`)

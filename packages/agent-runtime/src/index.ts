@@ -10,12 +10,6 @@
 export * from './types'
 // 迁移期「这条路径还没实现」的统一标记（见 errors/phasePending.ts）
 export { PhasePendingError, isPhasePendingError } from './errors/phasePending'
-export {
-  AgentRegistry,
-  agentIdOf,
-  type AgentRegistryEntry,
-  type AgentRegistryEntryInput
-} from './agentRegistry'
 // 会话运行时生命周期簿记（Map + 懒创建 + 失效/销毁）—— 桌面/扩展共享，构造与清理经注入
 export {
   SessionManager,
@@ -346,18 +340,15 @@ export {
   DEFAULT_MAX_BYTES,
   MAX_LINE_LENGTH
 } from './fileTools/truncate'
-// 派生 agent：spawn 协调器 + 派发工具（注入注册表/工具解析/模型构建/事件广播，端无关）
+// 派生 agent 路由（P2-05）：会话 → 协调器、register/end 广播、'agent' 任务、agentId 索引、面板操作
 export {
   createSubAgentManager,
-  DEFAULT_MAX_AGENT_DEPTH,
   type SubAgentManager,
   type SubAgentManagerDeps,
-  type SubAgentToolHelpers,
-  type SpawnContext,
+  type SubAgentLocation,
+  type RunTaskOwner,
   type RunTaskParams,
-  type RunTaskOutcome,
-  type AnyAgentTool,
-  type SpawnedRuntime
+  type RunTaskOutcome
 } from './subagent/manager'
 // 派发结果契约：schema 收口的 next 工具（结果在 details 里；派生 agent 的附加工具，按契约重建）
 export {
@@ -512,6 +503,7 @@ export * from './knowledge'
 export { splitFrontmatter, type FrontmatterSplit } from './markdownFrontmatter'
 export {
   createAgentFactory,
+  type AnyAgentTool,
   type AgentFactory,
   type AgentHostAdapter,
   type AgentRuntime,

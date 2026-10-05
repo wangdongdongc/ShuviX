@@ -164,6 +164,7 @@ vi.mock('../../logger', () => ({
 }))
 
 import { migrations } from '../../dao/migrations'
+import { resolveProfileModelSpec } from '../../agents/agentHost'
 import type { Session } from '../../dao/types'
 import { sessionRecords } from '../sessionRecords'
 import * as storage from '../sessionStorage'
@@ -340,6 +341,20 @@ describe('D10-13 身份 seam 与单例', () => {
     await own.closeAll()
     await singleton.closeAll()
     resetSessionHostForTests()
+  })
+})
+
+describe('P2-05 派生 agent 档案模型的 seam', () => {
+  it('resolveProfileModel：resolveProfileModelSpec 的命中 → {provider, modelId}；不可用 → null', async () => {
+    const spec = vi.mocked(resolveProfileModelSpec)
+    spec.mockReturnValueOnce({ provider: 'prov-1', model: 'gpt-5', capabilities: {} })
+    expect(await deps.resolveProfileModel?.('prov-1/gpt-5')).toEqual({
+      provider: 'prov-1',
+      modelId: 'gpt-5'
+    })
+    spec.mockReturnValueOnce(null)
+    expect(await deps.resolveProfileModel?.('nope/missing')).toBeNull()
+    expect(spec.mock.calls.map(([value]) => value)).toEqual(['prov-1/gpt-5', 'nope/missing'])
   })
 })
 

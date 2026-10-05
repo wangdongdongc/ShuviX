@@ -8,18 +8,22 @@
  *     （frontmatter: name/description/shuvix-tools + 正文为 system prompt）——支持项目内
  *     检入的定义与运行时动态生成的定义，无需注册表刷新。
  * description 为静态文案（纯 md 驱动：不罗列可用类型——要用具名 agent 由用户在系统
- * 提示词/指令文件里自行引导；未知名的错误里才回报可用名列表）。执行时校验 ref，
- * 委托 SubAgentManager.runTask，返回最终文本结果。注册表/文件解析/模型配置经注入，宿主无关。
+ * 提示词/指令文件里自行引导；未知名的错误里才回报可用名列表）。
+ *
+ * 执行（P2-05）：调用方是谁不靠注入 —— 交给路由的是这次调用的 scope（`api`：调用方对话、任务、现取的
+ * 模型与思考档位都在它身上），路由把派发交给会话的协调器。工具是 **replay safe**：崩溃后继续时重跑，
+ * 协调器按拥有者边找回已建的子对话、以同一 requestId 重新挂上（不会派出第二个）。解析出的运行投影
+ * 记进 `api.memo('agentType')`（PIN-10）：重跑直接用它，档案之后被改 / 被删也不影响这一次派发。
+ *
+ * 模型看到的文本（PIN-04）：子 agent 没建起来（深度 / 解析失败）→ `Error: <原因>`；建起来了 → 路由交回的
+ * 结果文本。从不设 `isError`。自己的 signal 落下 → 抛 `abortError`（durable 的中止语义靠它）。
  */
+import type { JsonValue } from '@earendil-works/chord'
 import { Type } from 'typebox'
 import type { ToolResult } from '../tools/toolResult'
 import { BaseTool } from '../tools/baseTool'
-import type {
-  AgentProfile,
-  SubAgentModelConfig,
-  SubAgentRegistry,
-  InProcessAgentType
-} from './types'
+import type { ToolCallScope } from '../tools/toolCall'
+import type { AgentProfile, SubAgentRegistry, InProcessAgentType } from './types'
 import type { SubAgentManager } from './manager'
 
 /**
@@ -99,12 +103,8 @@ Usage notes:
 export interface DispatchAgentToolDeps {
   registry: SubAgentRegistry
   manager: SubAgentManager
-  /**
-   * 派生 agent 的模型配置。传 getter 则在每次派发时求值 ——
-   * 跟随会话当前模型/思考档位（静态值会在会话中途 setModel 后陈旧）。
-   */
-  modelConfig: SubAgentModelConfig | (() => SubAgentModelConfig)
-  parentSessionId: string
+  /** 这个工具所在的会话（派生 agent 的派发工具也是根会话的 id，从不是 agentId） */
+  sessionId: string
   /** abort 时抛出的错误信息（与平台 TOOL_ABORTED 对齐） */
   abortError: string
   /** 工具显示名（缺省即工具名 'agent'；宿主可注入本地化名） */
@@ -120,11 +120,27 @@ function errorResult(text: string): ToolResult<undefined> {
   return { content: [{ type: 'text' as const, text }], details: undefined }
 }
 
+/** 运行投影收成严格 JSON（去掉 undefined 键），才能进 `api.memo` */
+function memoable(agentType: InProcessAgentType): JsonValue {
+  return JSON.parse(JSON.stringify(agentType)) as JsonValue
+}
+
+/** memo 里读回的运行投影（只认对象形；别的形状 = 没记过） */
+function agentTypeOf(value: JsonValue | undefined): InProcessAgentType | undefined {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? (value as unknown as InProcessAgentType)
+    : undefined
+}
+
+const AGENT_TYPE_MEMO = 'agentType'
+
 /** agent 派发工具 —— 唯一对 LLM 暴露的派发入口 */
 export class DispatchAgentTool extends BaseTool<typeof AgentParamsSchema> {
   readonly name = DISPATCH_TOOL_NAME
   readonly label: string
   readonly parameters = AgentParamsSchema
+  /** 重跑无害：协调器按拥有者边重新挂上已建的子对话（P2-05，RT-1b） */
+  readonly replay = 'safe' as const
 
   constructor(private deps: DispatchAgentToolDeps) {
     super()
@@ -143,70 +159,74 @@ export class DispatchAgentTool extends BaseTool<typeof AgentParamsSchema> {
     /* no-op — 派生 agent 内部工具自带询问 */
   }
 
-  protected async executeInternal(
-    toolCallId: string,
-    params: { description: string; name?: string; prompt: string },
-    signal?: AbortSignal
-  ): Promise<ToolResult<undefined>> {
-    if (signal?.aborted) throw new Error(this.deps.abortError)
-
-    const description = params.description || ''
-    const ref = (params.name || '').trim()
-    const prompt = params.prompt || ''
+  /** 按 ref 解析档案：成功 → 运行投影；失败 → 交给模型的错误文本 */
+  private async resolveRef(ref: string): Promise<InProcessAgentType | string> {
     const names = (): string[] => this.deps.registry.list().map((a) => a.name)
-
-    // ── ref 解析：路径 → resolveAgentFile；具名 → 注册表 ──
     let def: AgentProfile | undefined
     if (ref && isAgentFileRef(ref)) {
       if (!this.deps.resolveAgentFile) {
-        return errorResult(
-          `Path-based agent refs are not supported on this host. Use a named agent type instead: [${names().join(', ')}]`
-        )
+        return `Path-based agent refs are not supported on this host. Use a named agent type instead: [${names().join(', ')}]`
       }
       try {
         def = await this.deps.resolveAgentFile(ref)
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
-        return errorResult(`Cannot load agent definition from "${ref}": ${msg}`)
+        return `Cannot load agent definition from "${ref}": ${msg}`
       }
       if (!def) {
-        return errorResult(
-          `Agent definition file not found or invalid: "${ref}". Expected a markdown file with YAML frontmatter (name/description/shuvix-tools) and the system prompt as body.`
-        )
+        return `Agent definition file not found or invalid: "${ref}". Expected a markdown file with YAML frontmatter (name/description/shuvix-tools) and the system prompt as body.`
       }
     } else if (ref) {
       def = this.deps.registry.get(ref)
       if (!def) {
-        return errorResult(
-          `Unknown agent "${ref}". Available: [${names().join(', ')}]. A path to an agent definition file is also accepted.`
-        )
+        return `Unknown agent "${ref}". Available: [${names().join(', ')}]. A path to an agent definition file is also accepted.`
       }
     }
-
     if (!def) {
-      return errorResult(
-        `Missing "name": \`name\` must select an agent. Available: [${names().join(', ')}]`
-      )
+      return `Missing "name": \`name\` must select an agent. Available: [${names().join(', ')}]`
     }
-    const agentType: InProcessAgentType = toInProcessAgentType(def)
+    return toInProcessAgentType(def)
+  }
+
+  protected async executeInternal(
+    toolCallId: string,
+    params: { description: string; name?: string; prompt: string },
+    signal: AbortSignal | undefined,
+    call: ToolCallScope
+  ): Promise<ToolResult<undefined>> {
+    if (signal?.aborted) throw new Error(this.deps.abortError)
+
+    const description = params.description || ''
+    const prompt = params.prompt || ''
+
+    // 重跑：用第一次解析出的投影（PIN-10）；第一次：解析 ref，记下投影
+    let agentType = agentTypeOf(await call.api.memo<JsonValue>(AGENT_TYPE_MEMO, call.context))
+    if (agentType === undefined) {
+      const resolved = await this.resolveRef((params.name || '').trim())
+      if (typeof resolved === 'string') return errorResult(resolved)
+      agentType =
+        agentTypeOf(await call.api.memo(AGENT_TYPE_MEMO, memoable(resolved), call.context)) ??
+        resolved
+    }
 
     try {
-      // getter 形态在派发时求值：跟随会话当前模型/思考档位
-      const modelConfig =
-        typeof this.deps.modelConfig === 'function'
-          ? this.deps.modelConfig()
-          : this.deps.modelConfig
-      const { result } = await this.deps.manager.runTask({
-        parentSessionId: this.deps.parentSessionId,
+      const outcome = await this.deps.manager.runTask({
+        sessionId: this.deps.sessionId,
+        owner: { tool: call },
         parentToolCallId: toolCallId,
         agentType,
         prompt,
-        description,
-        modelConfig,
-        parentAbortSignal: signal
+        description
       })
-      return { content: [{ type: 'text' as const, text: result }], details: undefined }
+      if (signal?.aborted) throw new Error(this.deps.abortError)
+      // 子 agent 根本没建起来（深度 / 解析失败）：原因前缀 Error:（PIN-04）
+      const text =
+        outcome.error !== undefined && outcome.conversationId === undefined
+          ? `Error: ${outcome.error}`
+          : outcome.result
+      return { content: [{ type: 'text' as const, text }], details: undefined }
     } catch (err) {
+      if (signal?.aborted) throw new Error(this.deps.abortError)
       const msg = err instanceof Error ? err.message : String(err)
       return errorResult(`Error: ${msg}`)
     }
