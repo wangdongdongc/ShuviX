@@ -38,8 +38,6 @@ vi.mock('../../services/sessionDayPromptService', () => ({
   recordFromUserMessageEvent: vi.fn()
 }))
 vi.mock('../../services/chromeBridge', () => ({ observeChromeTabRun: vi.fn() }))
-vi.mock('../../services/stepPersistPipeline', () => ({ transformToolResultForPersist: vi.fn() }))
-vi.mock('../../services/httpLogService', () => ({ httpLogService: { updateUsage: vi.fn() } }))
 vi.mock('../../i18n', () => ({ t: (key: string) => key }))
 vi.mock('../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {} })
