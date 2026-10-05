@@ -838,6 +838,14 @@ export class SessionService {
     else clearAgentScopedState(sessionId)
   }
 
+  /**
+   * 运行时**自己**销毁了 agent 之后（回退 fork：`rollbackTo` 校验过目标才停下、解锁，P3-10b PIN-03），
+   * 补上桌面侧随 agent 的那一份清理（fileTime 的「已读」记录）—— 运行时的销毁不管它。不碰会话、不碰锁。
+   */
+  clearAgentScopedState(sessionId: string): void {
+    clearAgentScopedState(sessionId)
+  }
+
   // ─── 用户输入 ──────────────────────────────────
 
   /**

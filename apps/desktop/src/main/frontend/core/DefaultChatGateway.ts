@@ -3,11 +3,7 @@ import type { RuntimeStatus } from '@shuvix/chat-protocol/events'
 import type { AgentInitResult, AgentRuntimeInfo, ThinkingLevel } from '../../types'
 import type { InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import { sessionService } from '../../services/sessionService'
-import {
-  clearAgentScopedState,
-  type AgentSession,
-  type DriveOptions
-} from '../../services/agentSession'
+import type { AgentSession, DriveOptions } from '../../services/agentSession'
 import '../../tools/allTools'
 import { getPlatformBuiltinToolEntries } from '../../services/toolRegistry'
 import { messageService } from '../../services/messageService'
@@ -233,7 +229,7 @@ export class DefaultChatGateway implements ChatGateway {
    */
   async rollbackMessage(sessionId: string, messageId: string): Promise<boolean> {
     const rolledBack = await messageService.rollbackToMessage(sessionId, messageId)
-    if (rolledBack) clearAgentScopedState(sessionId)
+    if (rolledBack) sessionService.clearAgentScopedState(sessionId)
     return rolledBack
   }
 
