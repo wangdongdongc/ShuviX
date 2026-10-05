@@ -476,6 +476,20 @@ describe('PR —— 接缝：开关、主体、防递归、结论交回', () => 
     expect(mocks.decide.mock.calls[1][2]).toStrictEqual({ signal: undefined })
   })
 
+  it('PR-5 / P2-08-52 事件带 taskId 61 → decide 收到 {signal, ownerTaskId: 61}（审查员归提问的那个工具任务，Q16）', async () => {
+    const sid = newSession()
+    const controller = new AbortController()
+    const event = { ...makeEvent(sid), taskId: 61 }
+    await reviewPermissionRequest(event, controller.signal)
+    expect(mocks.decide).toHaveBeenCalledTimes(1)
+    const [id, payload, opts] = mocks.decide.mock.calls[0]
+    expect(id).toBe('permission.request')
+    expect(opts).toStrictEqual({ signal: controller.signal, ownerTaskId: 61 })
+    expect(opts?.signal).toBe(controller.signal)
+    // ownerTaskId 只进拥有者：payload（审查员的全部输入）里没有它
+    expect(JSON.stringify(payload)).not.toContain('61')
+  })
+
   it.each<[string, () => void, string]>([
     [
       '读会话消息 reject',

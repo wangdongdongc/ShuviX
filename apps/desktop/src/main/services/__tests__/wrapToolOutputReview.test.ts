@@ -181,17 +181,20 @@ describe('wrapToolOutput — 审查放行的调用在结果上留「已审查」
     expect(toolReviewOf(result.details)).toStrictEqual({ risk: 'high', summary: 's' })
   })
 
-  it('W-R3 标记已被取走：跑完之后 take 为 undefined；同一 toolCallId 再跑一次（审查没意见、人批准）→ 没有标记', async () => {
+  it('W-R3 标记已被取走：跑完之后 take 为 undefined；同一 toolCallId 的另一次调用（另一个 task，审查没意见、人批准）→ 没有标记', async () => {
     const review = reviewerOf(answer(verdict('allow', 'low', 'first')), null)
     const { security, requestUserInput } = makeSecurity({ review })
     const { tool, execute } = makeTool(undefined)
     const wrapped = wrapToolOutput(tool, SID, 'middle', undefined, security)
+    const run = async (taskId: number): Promise<InvokedToolResult> =>
+      (await invokeTool(wrapped, { action: 'connect' } as never, { callId: 'tc-R', taskId })).result
 
-    const first = await exec(wrapped, 'tc-R')
+    const first = await run(71)
     expect(toolReviewOf(first.details)).toStrictEqual({ risk: 'low', summary: 'first' })
+    expect(takeReviewAllowed(SID, { toolCallId: 'tc-R', taskId: 71 })).toBeUndefined()
     expect(takeReviewAllowed(SID, 'tc-R')).toBeUndefined()
 
-    const second = await exec(wrapped, 'tc-R')
+    const second = await run(72)
     expect(requestUserInput).toHaveBeenCalledTimes(1)
     expect(execute).toHaveBeenCalledTimes(2)
     expect(toolReviewOf(second.details)).toBeUndefined()
@@ -265,8 +268,43 @@ describe('wrapToolOutput — 审查放行的调用在结果上留「已审查」
 
     const result = await exec(wrapped, 'tc')
     expect(result.details).toBeUndefined()
-    expect(takeReviewAllowed(SID, 'tc')).toStrictEqual({ risk: 'low', summary: 'other session' })
+    // P2-08 PIN-10：标记按这次调用的 taskId 记（executeTool 缺省 task 1）
+    expect(takeReviewAllowed(SID, { toolCallId: 'tc', taskId: 1 })).toStrictEqual({
+      risk: 'low',
+      summary: 'other session'
+    })
   })
+
+  it('P2-08-32 同一个 provider id（call_0）的两次调用：根的 task 61 被放行后还在跑，子的 task 62（人批准）先跑完 → 子的结果没有标记，61 的有；人的回答只清自己那个 task 的标记', async () => {
+    const review = reviewerOf(answer(verdict('allow', 'high', 'root call')), null)
+    const { security, requestUserInput } = makeSecurity({ review })
+    const gate = Promise.withResolvers<void>()
+    const { tool, execute } = makeTool(undefined)
+    // 第一次执行（task 61）扣住，第二次（task 62）立刻跑完
+    execute.mockImplementationOnce(async () => {
+      await gate.promise
+      return { content: [{ type: 'text' as const, text: 'ran' }], details: undefined }
+    })
+    const wrapped = wrapToolOutput(tool, SID, 'middle', undefined, security)
+
+    const root = invokeTool(wrapped, { action: 'connect' } as never, {
+      callId: 'call_0',
+      taskId: 61
+    })
+    await vi.waitFor(() => expect(execute).toHaveBeenCalledTimes(1))
+    const child = await invokeTool(wrapped, { action: 'connect' } as never, {
+      callId: 'call_0',
+      taskId: 62,
+      conversationId: 2
+    })
+    expect(requestUserInput).toHaveBeenCalledTimes(1)
+    expect(child.result.details).toBeUndefined()
+    gate.resolve()
+    expect((await root).result.details).toStrictEqual({
+      shuvixReview: { risk: 'high', summary: 'root call' }
+    })
+  })
+
 
   it('W-R8 工具 execute 抛错（没有审查）→ isError 结果、文字即原错误（原为 reject 原错误，裁定 Q12）', async () => {
     const { security } = makeSecurity({})

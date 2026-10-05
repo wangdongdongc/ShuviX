@@ -66,7 +66,9 @@ const state = vi.hoisted(() => ({
 const mocks = vi.hoisted(() => ({
   runTask: vi.fn(),
   getProfile: vi.fn(),
-  resolveRunModelConfig: vi.fn(),
+  selection: vi.fn(),
+  /** 打开着的会话（按 id）：锁 + 根对话此刻的思考档位（hook 模型锁优先，PIN-06） */
+  sessions: new Map<string, { lock?: { model: { provider: string; modelId: string }; thinkingLevel?: string }; live?: string }>(),
   openPath: vi.fn(),
   info: vi.fn(),
   warn: vi.fn()
@@ -79,9 +81,56 @@ vi.mock('../../utils/paths', () => ({
 }))
 vi.mock('../../agents/AgentManager', () => ({ agentManager: { runTask: mocks.runTask } }))
 vi.mock('../agentService', () => ({ agentService: { getProfile: mocks.getProfile } }))
+// 会话的模型选择（没锁时 hook 用它）：mocks.selection 交回 SubAgentModelConfig 形状，这里摊成 resolveRunConfig 的形状
 vi.mock('../sessionService', () => ({
-  sessionService: { resolveRunModelConfig: mocks.resolveRunModelConfig }
+  sessionService: {
+    resolveRunConfig: async (sessionId: string) => {
+      const model = (await mocks.selection(sessionId)) as SubAgentModelConfig | null
+      if (model === undefined) return null
+      return {
+        model: model
+          ? { provider: model.provider, model: model.model, capabilities: model.capabilities }
+          : null,
+        thinkingLevel: model?.thinkingLevel
+      }
+    }
+  }
 }))
+// 打开着的会话：锁 + 现在的思考档位（锁优先的 hook 模型读它）
+vi.mock('../sessionHost', () => ({
+  getSessionHost: () => ({
+    get: (sessionId: string) => {
+      const fake = mocks.sessions.get(sessionId)
+      if (!fake) return undefined
+      return {
+        lock: fake.lock,
+        isInterrupted: () => false,
+        currentConversation: async () => ({
+          agent: async () => ({ thinkingLevel: fake.live ?? fake.lock?.thinkingLevel ?? 'off' })
+        })
+      }
+    }
+  })
+}))
+// provider 行与模型注册表（没锁时选择经 resolveLockModel 译成 pi provider id）：内置行 p / openai，
+// 停用的 off，模型 'nope' 不存在
+vi.mock('../models', () => {
+  const rows = ['p', 'openai', 'off'].map((name) => ({
+    id: name,
+    name,
+    displayName: '',
+    isBuiltin: true,
+    isEnabled: name !== 'off'
+  }))
+  return {
+    providerCredentialPort: { listProviders: () => rows },
+    getModelRegistry: () => ({
+      models: { getModel: (_provider: string, id: string) => (id === 'nope' ? undefined : { id }) },
+      modelRefOf: (rowId: string, modelId: string) =>
+        rows.some((row) => row.id === rowId) ? { provider: rowId, id: modelId } : undefined
+    })
+  }
+})
 vi.mock('../../logger', () => ({
   createLogger: () => ({ info: mocks.info, warn: mocks.warn, error: () => {} })
 }))
@@ -152,7 +201,8 @@ beforeEach(async () => {
   await i18next.changeLanguage('en')
   mocks.runTask.mockReset().mockResolvedValue({ result: 'ok' })
   mocks.getProfile.mockReset().mockImplementation(profileOf)
-  mocks.resolveRunModelConfig.mockReset().mockResolvedValue(MODEL)
+  mocks.selection.mockReset().mockResolvedValue(MODEL)
+  mocks.sessions.clear()
   mocks.openPath.mockReset().mockResolvedValue('')
   mocks.info.mockClear()
   mocks.warn.mockClear()
@@ -355,7 +405,7 @@ describe('hookService — 初始化', () => {
     await settle()
     expect(mocks.runTask).not.toHaveBeenCalled()
     expect(mocks.getProfile).not.toHaveBeenCalled()
-    expect(mocks.resolveRunModelConfig).not.toHaveBeenCalled()
+    expect(mocks.selection).not.toHaveBeenCalled()
     expect(hookService.abortSessionRuns('s1')).toBe(0)
 
     hookService.init()
@@ -436,19 +486,48 @@ describe('hookService — 内置 hook 与运行时装配', () => {
       capabilities: {},
       thinkingLevel: 'low'
     }
-    mocks.resolveRunModelConfig.mockResolvedValue(model)
+    mocks.selection.mockResolvedValue(model)
     firePrompt({ isDefaultTitle: true })
     await waitRuns(1)
-    expect(mocks.resolveRunModelConfig).toHaveBeenCalledWith('s1')
+    expect(mocks.selection).toHaveBeenCalledWith('s1')
     expect(runs()[0].modelConfig).toEqual(model)
   })
 
   it('HS-4 会话没有可用模型 → 不派发，日志记 no-model', async () => {
-    mocks.resolveRunModelConfig.mockResolvedValue(null)
+    mocks.selection.mockResolvedValue(null)
     firePrompt({ isDefaultTitle: true })
     await settle()
     expect(mocks.runTask).not.toHaveBeenCalled()
     expect(hasLog('skipped for session s1: no-model')).toBe(true)
+  })
+
+  it('HS-4 / P2-08-51 会话锁定了 → 锁的模型（原样）+ 根对话此刻的思考档位；会话选择不读', async () => {
+    mocks.sessions.set('s1', {
+      lock: { model: { provider: 'openai', modelId: 'gpt-lock' }, thinkingLevel: 'low' },
+      live: 'high'
+    })
+    firePrompt({ isDefaultTitle: true })
+    await waitRuns(1)
+    expect(runs()[0].modelConfig).toEqual({
+      provider: 'openai',
+      model: 'gpt-lock',
+      capabilities: {},
+      thinkingLevel: 'high'
+    })
+    expect(mocks.selection).not.toHaveBeenCalled()
+  })
+
+  it('HS-4 / P2-08-51 没锁、选择被拒（provider 停用）→ 失败的 run（start → failed:），不是 skipped；不派发', async () => {
+    mocks.selection.mockResolvedValue({ provider: 'off', model: 'm', capabilities: {} })
+    firePrompt({ isDefaultTitle: true })
+    await vi.waitFor(() => expect(hasLog('failed:')).toBe(true))
+    expect(mocks.runTask).not.toHaveBeenCalled()
+    expect(hasLog('skipped for session s1')).toBe(false)
+    expect(
+      logLines().some((line) =>
+        /^hook "auto-title" run=hkr-\S+ failed: Provider "off" is disabled/.test(line)
+      )
+    ).toBe(true)
   })
 
   it('HS-4 hook 文件不能选模型：带 shuvix-hook-model 的用户文件整份拒绝', async () => {
@@ -1094,7 +1173,7 @@ describe('hookService — 判定型埋点（hookTriggers.decide）', () => {
       capabilities: {},
       thinkingLevel: 'high'
     }
-    mocks.resolveRunModelConfig.mockResolvedValue(model)
+    mocks.selection.mockResolvedValue(model)
     const deny = verdictOf('deny', { risk: 'high', summary: 'from gate' })
     const allow = verdictOf('allow', { summary: 'from auto-review' })
     mocks.runTask.mockImplementation(async (params: RunTaskParams) => ({
@@ -1117,7 +1196,7 @@ describe('hookService — 判定型埋点（hookTriggers.decide）', () => {
     expect(params.prompt).toContain('<hook_event trigger="permission.request">')
     expect(params.prompt).toContain('target: rm -rf build')
     expect(params.modelConfig).toEqual(model)
-    expect(mocks.resolveRunModelConfig).toHaveBeenCalledWith('s1')
+    expect(mocks.selection).toHaveBeenCalledWith('s1')
   })
 
   it('HS-22 when 不成立（嵌套字段不匹配）→ 用户 hook 不派发，只剩内置 auto-review', async () => {
@@ -1178,6 +1257,26 @@ describe('hookService — 判定型埋点（hookTriggers.decide）', () => {
     )
   })
 
+  it('HS-24 / P2-08-51 opts 原样穿过门面（signal 同一个对象、ownerTaskId）；派发的拥有者是那个工具任务', async () => {
+    const verdict = verdictOf('allow')
+    mocks.runTask.mockResolvedValue({ result: '', structured: verdict })
+    const spy = vi.spyOn(hookService, 'decide')
+    const controller = new AbortController()
+    const opts = { signal: controller.signal, ownerTaskId: 9 }
+    try {
+      expect(await hookTriggers.decide('permission.request', permissionRequest(), opts)).toEqual({
+        result: verdict,
+        hook: 'auto-review'
+      })
+      const passed = spy.mock.calls[0]![2]!
+      expect(passed).toBe(opts)
+      expect(passed.signal).toBe(controller.signal)
+      expect(runs()[0].owner).toEqual({ task: 9 })
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
   it('HS-25 abortSessionRuns 中止在跑的判定 run 并计入返回数；decide 返回 null', async () => {
     mocks.runTask.mockImplementation(hangUntilAbort)
 
@@ -1204,7 +1303,7 @@ describe('hookService — 判定型埋点（hookTriggers.decide）', () => {
   })
 
   it('HS-26 会话没有可用模型 → null，日志记 no-model', async () => {
-    mocks.resolveRunModelConfig.mockResolvedValue(null)
+    mocks.selection.mockResolvedValue(null)
     expect(await hookTriggers.decide('permission.request', permissionRequest())).toBeNull()
     expect(mocks.runTask).not.toHaveBeenCalled()
     expect(hasLog('hook "auto-review" skipped for session s1: no-model')).toBe(true)

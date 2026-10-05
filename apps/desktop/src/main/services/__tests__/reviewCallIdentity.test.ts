@@ -234,7 +234,8 @@ describe('P2-06-20 防递归的端到端（真门 + 真审查接缝）', () => {
     expect(rv.decide).toHaveBeenCalledTimes(1)
     const [trigger, , options] = rv.decide.mock.calls[0]
     expect(trigger).toBe('permission.request')
-    expect(options).toEqual({ signal: expect.anything() })
+    // P2-08（Q16）：审查员归提问的那个工具任务（writeFrom 的 taskId 9）
+    expect(options).toEqual({ signal: expect.anything(), ownerTaskId: 9 })
     expect(payloadOf(0).agent).toStrictEqual({ profile: 'work', kind: 'root' })
     expect(payloadOf(0).sessionId).toBe(SID)
     expect(requestUserInput).toHaveBeenCalledTimes(1)
