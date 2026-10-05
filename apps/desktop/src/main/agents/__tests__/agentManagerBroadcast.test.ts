@@ -42,9 +42,6 @@ vi.mock('../../frontend/core', () => ({
   chatFrontendRegistry: { broadcast: mocks.frontendBroadcast, hasCapability: vi.fn(() => false) }
 }))
 vi.mock('../../services/notificationService', () => ({ notifyOnChatEvent: mocks.notify }))
-vi.mock('../../services/sessionDayPromptService', () => ({
-  recordFromUserMessageEvent: vi.fn()
-}))
 vi.mock('../../services/chromeBridge', () => ({ observeChromeTabRun: vi.fn() }))
 vi.mock('../../i18n', () => ({ t: (key: string) => key }))
 vi.mock('../../logger', () => ({

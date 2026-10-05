@@ -8,6 +8,9 @@
  *    受理回调（P2-09 PIN-02）；`resumeInterrupted` 在被中断时把它变成在跑（interrupted=false, busy=true）；
  *    `abort` 把 busy / interrupted 都清掉（被中断的那一轮随之落定）。
  *    `lockOnFirstUse` 模拟 K3：第一次 submitUser / steer / followUp / continue / createAgent 时上锁。
+ *    P3-07：受理回调带 `{entryId}`（`nextEntryId` 起逐次 +1）；`queueAdmissions` = 排进队列（受理不带
+ *    entryId，`placeQueued()` 时才 `onPlaced`）；steer / followUp 同样调受理回调；`viewSnapshot()` 交 `view`
+ *    （缺省空的 durable 视图）。
  *  - FakeSessionHost：open / peek / get / close / closeAll / delete；`storages` 是「存储在」的会话集合
  *    （peek 只打开它们，open 会建）；`delete` 可挂闸门；调用记进 `calls`。
  *
@@ -16,6 +19,7 @@
  */
 import { vi } from 'vitest'
 import type {
+  AdmitOptions,
   AdmitResult,
   AgentIdentity,
   AgentProjector,
@@ -41,6 +45,7 @@ import type {
 import type { UserInput } from '@earendil-works/pi-durable'
 import type { AgentRuntimeInfo } from '@shuvix/chat-protocol/chatApi'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
+import { emptySessionView, type SessionView } from '@shuvix/chat-protocol/types/sessionView'
 import type { ThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
 
 export type Gate = { promise: Promise<void>; release: () => void }
@@ -105,6 +110,14 @@ export class FakeDurableSession implements DurableSession {
   /** false = 下一次 submitUser 不受理就返回脚本结果（模拟创建被取消：`{}` 而没有受理） */
   admit = true
   respondResult = false
+  /** 下一次受理当场落下的 user 条目 id（P3-07：受理回调带 `{entryId}`） */
+  nextEntryId = 1
+  /** true = 受理的发送排进队列：`onAdmitted({})`，`placeQueued()` 时才 `onPlaced` */
+  queueAdmissions = false
+  /** 排着队、还没放下的发送的 `onPlaced` */
+  readonly queued: Array<(info: { entryId: number }) => void> = []
+  /** `viewSnapshot()` 交的视图（缺省空的 durable 视图） */
+  view: SessionView | undefined
 
   constructor(sessionId: string) {
     this.sessionId = sessionId
@@ -221,20 +234,42 @@ export class FakeDurableSession implements DurableSession {
         conversationId: 1 as DrivenRun['conversationId']
       }
     }
-    options.onAdmitted?.({})
+    this.admitWith(options)
     if (this.submitGate) await this.submitGate.promise
     return result
   }
 
-  async steer(content: UserInput): Promise<AdmitResult> {
+  /** 受理回调（P3-07）：当场落下 → `onAdmitted{entryId}`；排进队列 → `onAdmitted{}`，放下时 `onPlaced` */
+  private admitWith(options: Pick<AdmitOptions, 'onAdmitted' | 'onPlaced'>): void {
+    if (this.queueAdmissions) {
+      options.onAdmitted?.({})
+      const onPlaced = options.onPlaced
+      if (onPlaced !== undefined) this.queued.push(onPlaced)
+      return
+    }
+    options.onAdmitted?.({ entryId: this.nextEntryId++ })
+  }
+
+  /** 放下排在最前的那条（`onPlaced{entryId}`）；返回用掉的条目 id */
+  placeQueued(): number | undefined {
+    const onPlaced = this.queued.shift()
+    if (onPlaced === undefined) return undefined
+    const entryId = this.nextEntryId++
+    onPlaced({ entryId })
+    return entryId
+  }
+
+  async steer(content: UserInput, options: AdmitOptions = {}): Promise<AdmitResult> {
     this.calls.push(['steer', content])
     this.use()
+    if (this.steerResult.error === undefined) this.admitWith(options)
     return this.steerResult
   }
 
-  async followUp(content: UserInput): Promise<AdmitResult> {
+  async followUp(content: UserInput, options: AdmitOptions = {}): Promise<AdmitResult> {
     this.calls.push(['followUp', content])
     this.use()
+    if (this.followUpResult.error === undefined) this.admitWith(options)
     return this.followUpResult
   }
 
@@ -321,6 +356,12 @@ export class FakeDurableSession implements DurableSession {
 
   async agentProjector(): Promise<AgentProjector | undefined> {
     return undefined
+  }
+
+  async viewSnapshot(): Promise<SessionView> {
+    this.calls.push(['viewSnapshot'])
+    if (this.closed) throw new Error(`Session ${this.sessionId} is closed`)
+    return this.view ?? emptySessionView(this.sessionId)
   }
 
   onRunStateChange(): () => void {

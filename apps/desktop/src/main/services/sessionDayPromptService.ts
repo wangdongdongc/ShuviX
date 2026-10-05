@@ -1,84 +1,41 @@
 /**
- * 会话按日开口索引 —— 日历读侧 + user_message 入账。
+ * 会话按日开口索引 —— 日历读侧 + 用户条目入账。
  *
- * 写入不走 chatGateway.prompt：ensure 失败不会落树却会误记一天；steer / followUp /
- * nextTurn 会往树里追加用户消息，只认 prompt 会漏。正确时机是用户消息真正落树并广播
- * `user_message` 之后（electronEventSink 旁听）。
+ * 写入按 durable 的 `pi.user` 条目（P3-07）：AgentSession 的 prompt / steer / followUp 在条目落下那一刻
+ * （当场落下 = `onAdmitted{entryId}`；排进队列 = 之后的 `onPlaced`）调 `recordUserEntry`。行的 `entryId`
+ * 就是界面消息 id（`String(entryId)`）—— 日历跳转（`firstEntryOnDay` → `requestScrollToMessage`）靠它
+ * 对上。被拒、被撤回、重新挂上的发送都不入账；日期通知等不是用户条目，从不入账。
+ * 旧的 `user_message` 旁听（electronEventSink）随 P3-07 删掉（PIN-17）。
  */
-import type { ChatEvent } from '@shuvix/chat-protocol/events'
-import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
 import { isHiddenProjectId } from '@shuvix/chat-protocol/hiddenProjects'
 import { isChromeTabSessionSettings } from '@shuvix/chat-protocol/chromeTabSession'
 import type { Session } from '../dao/types'
 import { sessionRecords } from './sessionRecords'
 import { localDayKey, sessionDayPromptDao } from '../dao/sessionDayPromptDao'
-import { createLogger } from '../logger'
-
-const log = createLogger('SessionDayPrompt')
 
 export { localDayKey }
 
-function isUserOpening(message: ChatMessage): boolean {
-  if (message.role !== 'user') return false
-  const meta = message.metadata
-  if (meta?.isSystemNotice || meta?.isInstructionInjection) return false
-  return true
-}
-
 /**
- * 一条真正落树的用户开口入账。同一 entry 重播忽略；只有新行才 bump lastActiveAt。
+ * 一条用户条目落下（P3-07 PIN-15）入账 —— lastActiveAt 与日历索引；`timestamp` 缺省 = 此刻（落下那一刻，
+ * 排队的发送按放下时算哪一天）。同一条目重播忽略；只有新行才 bump lastActiveAt。
  */
-export function recordUserPrompt(sessionId: string, message: ChatMessage): void {
-  if (!isUserOpening(message)) return
-  recordOpening(sessionId, message.id, message.createdAt || Date.now())
-}
-
-/**
- * 一次用户发送被会话受理（pi-durable 会话：`submitUser` 的 `onAdmitted`，裁决 PIN-13）入账 ——
- * lastActiveAt 与日历索引。`key` 是这一次发送的唯一键（同一键重播忽略）。
- *
- * TODO(pi-durable p3)：投影接上之后改按用户条目（entry id）入账，与旧格式会话同一口径。
- */
-export function recordPromptAdmitted(
+export function recordUserEntry(
   sessionId: string,
-  key: string,
+  entryId: number | string,
   timestamp: number = Date.now()
 ): void {
-  recordOpening(sessionId, key, timestamp)
-}
-
-function recordOpening(sessionId: string, entryId: string, timestamp: number): void {
   // 内存会话（只在内存里、宿主一关就没）不记活跃：不进日历，也不动 lastActiveAt。
-  // 删了的也一样 —— 迟到的 user_message 不该给它补一行日历
+  // 删了的也一样 —— 迟到的落下不该给它补一行日历
   if (sessionRecords.isEphemeral(sessionId) || sessionRecords.wasEphemeral(sessionId)) return
   // Chrome 标签页会话不进日历：它是某个标签页的临时对话，标签页一关就删
   if (isChromeTabSessionSettings(sessionRecords.pickSettings(sessionId, ['chromeTab']))) return
   const inserted = sessionDayPromptDao.insert({
     sessionId,
-    entryId,
+    entryId: String(entryId),
     day: localDayKey(timestamp),
     timestamp
   })
   if (inserted) sessionRecords.touchActive(sessionId)
-}
-
-/** electronEventSink 旁路：只认 `user_message`，解析失败静默丢掉（不能挡广播） */
-export function recordFromUserMessageEvent(event: ChatEvent): void {
-  if (event.type !== 'user_message') return
-  let message: ChatMessage
-  try {
-    message = JSON.parse(event.message) as ChatMessage
-  } catch {
-    log.warn(`user_message 载荷不是 JSON，跳过日历入账 session=${event.sessionId}`)
-    return
-  }
-  try {
-    recordUserPrompt(event.sessionId, message)
-  } catch (err) {
-    log.warn(
-      `日历入账失败 session=${event.sessionId}: ${err instanceof Error ? err.message : String(err)}`
-    )
-  }
 }
 
 /** 可见月里有过开口的本地日（YYYY-MM-DD[]）。隐藏项目不占圆点。`month` 为 1–12。 */

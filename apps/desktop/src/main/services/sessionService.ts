@@ -53,6 +53,7 @@ import { agentService } from './agentService'
 // 仅在方法体内调用：几个模块的构造期都不互相触碰，ESM 活绑定下无初始化环
 import { AgentSession, clearAgentScopedState, destroySessionRuntime } from './agentSession'
 import { getSessionHost } from './sessionHost'
+import { peekSyncHub } from '../frontend/sync/syncWiring'
 import { mirroredAgentLocked } from './sessionMirror'
 import { killBySession, setBgTaskNotifier } from './bgTaskService'
 import { resolveProfileModelSpec } from '../agents/agentHost'
@@ -597,6 +598,9 @@ export class SessionService {
     // 也照样删文件），连同桌面侧的会话状态（hook 派发的 run、fileTime、决策日志、审查计数、沙箱钉子）。
     // 等它彻底停下才继续删数据 —— 否则一个还在跑的 run 会往刚被删掉的结果目录里继续写
     await destroySessionRuntime(id)
+    // 视图同步：会话本身没了（不是清空）—— 撤下它的视图（前端收到 unavailable），之后再订阅它 →
+    // service_not_found（P3-05 PIN-07：存储已删、行还在；hub 没建过就没有订阅，不建）
+    peekSyncHub()?.deleteSession(id)
     // 内置能力服务器（inproc MCP）的寿命绑**会话**，不绑 agent —— 销毁 agent（芯片上的 X）时故意留着，
     // ssh 的 control socket / browser 的 tab 不该被一次重建白白掐断。所以释放写在这里。
     // 放在关停运行时之后：还在跑的 run 可能正调着它的工具。

@@ -43,7 +43,7 @@ vi.mock('../sessionTriggerFacts', () => ({
   buildTurnCompletedFacts: vi.fn(async () => null),
   isDefaultTitle: vi.fn(() => false)
 }))
-vi.mock('../sessionDayPromptService', () => ({ recordPromptAdmitted: vi.fn() }))
+vi.mock('../sessionDayPromptService', () => ({ recordUserEntry: vi.fn() }))
 vi.mock('../sessionRecords', () => ({
   sessionRecords: { pick: () => ({ title: 't' }), isEphemeral: () => false }
 }))

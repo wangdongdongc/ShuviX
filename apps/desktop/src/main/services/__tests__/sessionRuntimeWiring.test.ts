@@ -2,11 +2,11 @@
  * sessionService / 网关 / 子会话运行器 / messageService 接到 SessionHost 上（单元：假宿主 + 真门面）。
  *
  *   E  D10-35 getAgentSession · D10-36 ensureAgentSession · D10-37 hasAgentRuntime · D10-38 invalidateAgent ·
- *      D10-39(U) 事件归运行时 · D10-40 删除次序 · D10-42 后台通知 · D10-43 询问参与方 · D10-44 钉档案 ·
+ *      D10-39(U) 事件归运行时 · D10-40 删除次序（P3-05：含 hub.deleteSession）· D10-42 后台通知 · D10-43 询问参与方 · D10-44 钉档案 ·
  *      D10-45..53 网关 · P3-06-30 网关 getAgentInfo（不带 ensure 读门面 / peek；ensure 的次序与拒绝）
  *   F  D10-55 statusOf（P2-10-32：interrupted，开着 / 镜像）· D10-56 被拒的子会话发送 · D10-57 stop（含被中断的）·
  *      D10-58 答复（P2-10-28：lastAnswer）
- *   G  D10-59 列表 · D10-61 回退 / 截断
+ *   G  D10-59 列表（P3-07：新格式 = peek → viewSnapshot().messages）· D10-61 回退 / 截断
  *   H  D10-64 closeAll 之后
  * （D10-54 Chrome 侧栏的 respondToInput：channel.test.ts 的 CH-5 钉路由，D10-35 钉 getAgentSession 只看宿主。）
  *
@@ -21,6 +21,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { AgentCreationError, PhasePendingError } from '@shuvix/agent-runtime'
 import type { AgentRuntimeInfo } from '@shuvix/chat-protocol/chatApi'
+import { emptySessionView } from '@shuvix/chat-protocol/types/sessionView'
 
 const holder = vi.hoisted(() => ({
   db: null as unknown,
@@ -36,7 +37,7 @@ const mocks = vi.hoisted(() => ({
   abortSessionRuns: vi.fn<(sessionId: string) => void>(),
   fire: vi.fn(),
   getProfile: vi.fn<(name: string) => unknown>(),
-  recordPromptAdmitted: vi.fn(),
+  recordUserEntry: vi.fn(),
   calls: [] as string[]
 }))
 
@@ -75,8 +76,7 @@ vi.mock('../sessionHost', async () =>
   (await import('./support/fakeSessionHost')).sessionHostModuleMock()
 )
 vi.mock('../sessionDayPromptService', () => ({
-  recordPromptAdmitted: mocks.recordPromptAdmitted,
-  recordFromUserMessageEvent: vi.fn()
+  recordUserEntry: mocks.recordUserEntry
 }))
 vi.mock('../toolAggregator', () => ({ filterAvailableTools: (tools: string[]) => tools }))
 vi.mock('../mcpService', () => ({
@@ -144,6 +144,7 @@ import {
   lockRecord,
   resetFakeHost
 } from './support/fakeSessionHost'
+import { getSyncHub, resetSyncHubForTests } from '../../frontend/sync/syncWiring'
 
 type Db = Parameters<(typeof migrations)[number]['up']>[0]
 
@@ -345,13 +346,23 @@ describe('D10-40 删除次序', () => {
     ['开着的会话', true],
     ['从没打开过的会话', false]
   ])(
-    'D10-40 %s：先删子会话 → 杀后台任务 → 等宿主 delete（挂着时行与结果目录都还在）→ 其余',
+    'D10-40 %s：先删子会话 → 杀后台任务 → 等宿主 delete（挂着时行与结果目录都还在）→ hub.deleteSession → 删行 → 其余',
     async (_label, open) => {
       insert('P')
       insert('c1', { parentId: 'P' })
       if (open) fakeHost.put('P')
       mkdirSync(join(holder.toolResults, 'P'))
       mocks.killBySession.mockImplementation((id) => void mocks.calls.push(`kill:${id}`))
+      // P3-05 PIN-07：视图同步撤下会话在宿主 delete 之后、删行之前（每个子会话各一次）
+      resetSyncHubForTests()
+      const hub = getSyncHub()
+      const deleteSession = vi.spyOn(hub, 'deleteSession')
+      deleteSession.mockImplementation((id) => void mocks.calls.push(`hub:${id}`))
+      const deleteById = sessionRecords.deleteById.bind(sessionRecords)
+      const rowSpy = vi.spyOn(sessionRecords, 'deleteById').mockImplementation((id) => {
+        mocks.calls.push(`row:${id}`)
+        deleteById(id)
+      })
       const deleteGate = gate()
       const remove = fakeHost.delete.bind(fakeHost)
       fakeHost.delete = async (id) => {
@@ -362,7 +373,15 @@ describe('D10-40 删除次序', () => {
 
       const pending = sessionService.delete('P')
       await vi.waitFor(() => expect(mocks.calls).toContain('delete:P'))
-      expect(mocks.calls).toEqual(['kill:c1', 'delete:c1', 'kill:P', 'delete:P'])
+      expect(mocks.calls).toEqual([
+        'kill:c1',
+        'delete:c1',
+        'hub:c1',
+        'row:c1',
+        'kill:P',
+        'delete:P'
+      ])
+      expect(deleteSession.mock.calls).toEqual([['c1']])
       expect(sessionRecords.findById('P')).toBeDefined()
       expect(existsSync(join(holder.toolResults, 'P'))).toBe(true)
       // 会话没开着也照样中止 hook run（清理不以「开着」为前提）
@@ -370,6 +389,10 @@ describe('D10-40 删除次序', () => {
 
       deleteGate.release()
       await pending
+      expect(mocks.calls.slice(-3)).toEqual(['delete:P', 'hub:P', 'row:P'])
+      expect(deleteSession.mock.calls).toEqual([['c1'], ['P']])
+      rowSpy.mockRestore()
+      resetSyncHubForTests()
       expect(sessionRecords.findById('P')).toBeUndefined()
       expect(existsSync(join(holder.toolResults, 'P'))).toBe(false)
       expect(mocks.closeSession.mock.calls.map(([id]) => id)).toEqual(['c1', 'P'])
@@ -879,12 +902,37 @@ describe('D10-58 新格式子会话的答复（P2-10-28）', () => {
 // ─── G. messageService ─────────────────────────────────────────────────────
 
 describe('D10-59 列表', () => {
-  it('D10-59 新格式会话：[] / undefined，不打开宿主、不建文件', async () => {
+  it('D10-59 / P3-07-01 新格式会话没有存储：[] / undefined，宿主只被窥视（从不 open）、不建文件', async () => {
     insert('s1')
     expect(await messageService.listBySession('s1')).toEqual([])
     expect(await messageService.findLastBySession('s1')).toBeUndefined()
-    expect(fakeHost.calls).toEqual([])
+    expect(fakeHost.calls).toEqual([
+      ['peek', 's1'],
+      ['peek', 's1']
+    ])
+    expect(fakeHost.callsOf('open')).toEqual([])
     expect(readdirSync(holder.sessionsDir)).toEqual([])
+  })
+
+  it('D10-59 新格式会话有存储：列表 = viewSnapshot().messages（peek 打开，不 open）', async () => {
+    insert('s1')
+    const durable = fakeHost.put('s1')
+    const message = {
+      id: '2',
+      sessionId: 's1',
+      role: 'user',
+      type: 'text',
+      content: 'hi',
+      model: '',
+      createdAt: 1,
+      metadata: null
+    } as const
+    durable.view = { ...emptySessionView('s1'), source: 'durable', messages: [message] }
+    expect(await messageService.listBySession('s1')).toEqual([message])
+    expect(await messageService.findLastBySession('s1')).toEqual(message)
+    expect(fakeHost.callsOf('peek')).toEqual(['s1', 's1'])
+    expect(fakeHost.callsOf('open')).toEqual([])
+    expect(durable.callsOf('viewSnapshot')).toHaveLength(2)
   })
 
   it('D10-59 旧格式会话：走读取器，宿主不参与', async () => {
