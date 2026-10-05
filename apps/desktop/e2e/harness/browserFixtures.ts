@@ -9,7 +9,7 @@
  *     主进程会弹 `dialog.showMessageBox`，CDP 关不掉它，整条 spec 会挂死（窗口不在前台时是静默拒绝，
  *     见 browserViewService 的证书处理）。
  *  2. **脚本化运行**：把一串 `mcp__browser__*` 调用排进假提供商（每个元素一轮 LLM 调用），
- *     经 IPC 发一条 prompt，等 `agent_end`，按 toolCallId 取回每个调用的 `tool_end`。
+ *     经 IPC 发一条 prompt，等 `agent_end`，按 toolCallId 取回每个调用落盘的结果（会话视图里的工具块，P3-08）。
  *     元素 id（uid）要从上一步快照的结果里读，所以「打开 → 快照 → 点击」是三次运行，不是一次。
  *
  * 两条会让 spec 挂死的坑，写在这里免得再踩：
@@ -22,6 +22,7 @@ import type { AddressInfo } from 'node:net'
 import { connect, listTargets, until, type CdpClient } from './cdp'
 import type { FakeProvider, FakeTurn } from './fakeProvider'
 import type { EventRecorder, RecordedEvent } from './seed'
+import { syncProbe, toolResultsIn } from './sync'
 
 /** 内置浏览器 server 的全部工具（桌面端能力全开，一个不少） */
 export const BROWSER_TOOL_NAMES = [
@@ -392,7 +393,10 @@ export interface ScriptedCall {
   args: Record<string, unknown>
 }
 
-/** 一次调用落定时的 `tool_end`（只声明断言会读的字段） */
+/**
+ * 一次调用落定时的结果（P3-08 起取自会话视图里落盘的工具块 —— 没有 `tool_end` 事件了；形状沿用旧事件，
+ * 只声明断言会读的字段）
+ */
 export interface ToolEndEvent extends RecordedEvent {
   toolCallId: string
   toolName: string
@@ -402,7 +406,7 @@ export interface ToolEndEvent extends RecordedEvent {
   details?: Record<string, unknown>
 }
 
-/** 询问事件（`input_request`）里的请求 */
+/** 一条询问（会话视图的 `asks` 里的请求） */
 export interface AskRequest {
   id: string
   kind: string
@@ -499,6 +503,9 @@ export function browserDriver(opts: {
     (await events.allSince<T>(since)).filter(
       (e) => e.type === type && (sid === undefined || e.sessionId === sid)
     )
+  const probe = syncProbe(main)
+  /** 每次运行开始时视图里已有的消息 id（这次运行的工具结果只取之后落盘的） */
+  const before = new Map<number, Set<string>>()
   const start = async (
     sid: string,
     turns: Array<ScriptedCall | ScriptedCall[]>,
@@ -506,14 +513,28 @@ export function browserDriver(opts: {
   ): Promise<number> => {
     scriptRun(provider, turns)
     const since = await events.mark()
+    const view = await probe.viewOf(sid)
+    before.set(since, new Set((view?.messages ?? []).map((m) => m.id)))
     await sendPrompt(main, sid, prompt)
     return since
   }
   const finish = async (sid: string, since: number): Promise<RunOutcome> => {
     await events.waitFor('agent_end', { sessionId: sid, since, timeoutMs: 60_000 })
+    const view = await probe.waitView(sid, (v) => v.run.state !== 'busy', 30_000)
+    const known = before.get(since) ?? new Set<string>()
     const ends: Record<string, ToolEndEvent> = {}
-    for (const e of await eventsSince<ToolEndEvent>(since, 'tool_end', sid)) {
-      ends[e.toolCallId] = e
+    for (const r of toolResultsIn(view.messages.filter((m) => !known.has(m.id)))) {
+      ends[r.toolCallId] = {
+        type: 'tool_end',
+        sessionId: sid,
+        toolCallId: r.toolCallId,
+        toolName: r.toolName,
+        result: r.result,
+        isError: r.isError,
+        ...(r.details === undefined
+          ? {}
+          : { details: r.details as unknown as Record<string, unknown> })
+      }
     }
     return { ends, since }
   }
@@ -521,17 +542,17 @@ export function browserDriver(opts: {
     start,
     finish,
     run: async (sid, turns, prompt) => finish(sid, await start(sid, turns, prompt)),
-    waitAsk: async (sid, since) => {
-      const ev = await until(
-        async () =>
-          (await eventsSince<AskEvent>(since, 'input_request', sid)).find(
-            (e) => !taken.has(e.request.id)
-          ),
-        `next ask in session ${sid}`,
-        30_000
+    waitAsk: async (sid) => {
+      // 询问在会话视图里（P3-08）
+      const view = await probe.waitView(
+        sid,
+        (v) => v.asks.some((a) => !taken.has(a.id)),
+        30_000,
+        `next ask in session ${sid}`
       )
-      taken.add(ev.request.id)
-      return ev.request
+      const request = view.asks.find((a) => !taken.has(a.id))! as unknown as AskRequest
+      taken.add(request.id)
+      return request
     },
     answer: async (sid, requestId, allowed, remember = false) => {
       await main.eval(
