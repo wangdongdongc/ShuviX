@@ -15,6 +15,9 @@ import type {
   AgentSetThinkingLevelParams
 } from '../types'
 import type { InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
+import { createLogger } from '../logger'
+
+const log = createLogger('AgentIPC')
 
 /**
  * Agent 相关 IPC 处理器
@@ -36,7 +39,10 @@ export function registerAgentHandlers(): void {
     })
   )
 
-  /** 继续与已存在子代理对话：追加一轮用户消息（fire-and-forget，不 await 整轮） */
+  /**
+   * 继续与已存在的派生 agent 对话（按 agentId 路由到它的会话与子对话）：追加一轮用户消息
+   * （fire-and-forget，不 await 整轮；不认识 / 忙 / 会话没了的拒绝只记日志）
+   */
   ipcMain.handle('agent:subAgentPrompt', (_event, params: AgentSubAgentPromptParams) => {
     void agentManager
       .continueTask({
@@ -44,7 +50,9 @@ export function registerAgentHandlers(): void {
         text: params.text,
         inlineTokens: params.inlineTokens
       })
-      .catch(() => {})
+      .catch((err: unknown) => {
+        log.warn(`派生 agent 追问失败 agent=${params.subSessionId}: ${errorText(err)}`)
+      })
     return { success: true }
   })
 
@@ -158,20 +166,28 @@ export function registerAgentHandlers(): void {
   ipcMain.handle('agentMonitor:detail', (_event, agentId: string) => getAgentRuntimeDetail(agentId))
 
   /**
-   * 销毁指定的派生 agent（用户点关闭按钮触发）。
-   * 中止其生成并级联销毁子树，从登记簿移除。
+   * 销毁指定的派生 agent（用户点关闭按钮触发）：在跑就硬中止、卸掉它的扩展、从索引与任务面板移除
+   * （转写留着）。等路由做完再答；路由报错只记日志，照样答成功（PIN-17）。
    */
-  ipcMain.handle('subSession:destroy', (_event, subSessionId: string) => {
-    agentManager.destroy(subSessionId)
+  ipcMain.handle('subSession:destroy', async (_event, subSessionId: string) => {
+    await agentManager.destroy(subSessionId).catch((err: unknown) => {
+      log.warn(`销毁派生 agent 失败 agent=${subSessionId}: ${errorText(err)}`)
+    })
     return { success: true }
   })
 
   /**
-   * 中断运行中的子会话（用户点中断按钮触发）。
-   * 软停止当前生成、保留已产出内容，子会话以「已完成」收尾并保留在面板。
+   * 中断运行中的派生 agent（用户点中断按钮触发）：软停止当前生成、保留已产出内容，以「已完成」收尾并
+   * 保留在面板。等它停下再答；路由报错只记日志，照样答成功（PIN-17）。
    */
-  ipcMain.handle('subSession:interrupt', (_event, subSessionId: string) => {
-    agentManager.interrupt(subSessionId)
+  ipcMain.handle('subSession:interrupt', async (_event, subSessionId: string) => {
+    await agentManager.interrupt(subSessionId).catch((err: unknown) => {
+      log.warn(`中断派生 agent 失败 agent=${subSessionId}: ${errorText(err)}`)
+    })
     return { success: true }
   })
+}
+
+function errorText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err)
 }

@@ -6,8 +6,8 @@
  *    **绝不抛出**，emit 侧对订阅情况零感知；
  *  - 一次 run = 一次 `manager.runTask`：hook 的正文 + 事件围栏是任务，agent 用自己的工具做事，
  *    **结果文本不读**（只看 `outcome.error` 判这次派发成没成）—— hook 是观察者，不拦截、不改 prompt、不等它；
- *  - 派发与 dispatch 工具走完全同一条创建与执行路径：同一个 runTask → createAgent → 宿主
- *    resolveTools → 同一个安全门。hook 不构成第二套安全机制，也不参与选模型
+ *  - 派发与 dispatch 工具走完全同一条创建与执行路径：同一个 runTask → 会话的派生 agent 协调器 →
+ *    宿主 resolveAgentTools → 同一个安全门。hook 不构成第二套安全机制，也不参与选模型
  *    （基准是归属会话的当前模型，被派发 agent 自己的 `shuvix-model` 优先，与任何派发一样）；
  *  - 会话域埋点：payload.sessionId 即 run 的归属会话（工具/询问/LLM 日志/面板都落到它）。
  *    v1 只在会话域埋点上运行 —— 没有归属会话的 run 授权为空、询问被拒，那是静默降级，宁可不跑。
@@ -259,13 +259,15 @@ export function createHookRunner(deps: HookRunnerDeps): HookRunner {
         timedOut = true
         controller.abort()
       }, timeoutMs)
+      // 观察型 hook 的子对话由一个后台锚任务拥有（P2-08 接上；在那之前路由以 PhasePendingError 拒绝）
       const outcome = await deps.manager.runTask({
-        parentSessionId: sessionId,
+        sessionId,
+        owner: { anchor: true },
         agentType: profile,
         prompt: renderHookPrompt(file.prompt, trigger, payload),
         description: file.displayName,
         modelConfig,
-        parentAbortSignal: controller.signal
+        signal: controller.signal
       })
       const ms = Date.now() - info.startedAt
       if (timedOut) {
@@ -386,13 +388,15 @@ export function createHookRunner(deps: HookRunnerDeps): HookRunner {
       logger?.info(
         `hook "${file.name}" run=${info.runId} start trigger=${trigger} session=${sessionId} agent=${profile.name}`
       )
+      // 拥有者：P2-08 换成提问的工具任务（`{task}`，Q16）；在那之前同观察型一样是锚（路由拒绝）
       const run = deps.manager.runTask({
-        parentSessionId: sessionId,
+        sessionId,
+        owner: { anchor: true },
         agentType: profile,
         prompt: renderHookPrompt(file.prompt, trigger, payload),
         description: file.displayName,
         modelConfig,
-        parentAbortSignal: controller.signal,
+        signal: controller.signal,
         resultContract: { schema: spec.schema, sourceLabel: file.name }
       })
       const raced = await Promise.race([run.then((outcome) => ({ outcome })), abortedNow])

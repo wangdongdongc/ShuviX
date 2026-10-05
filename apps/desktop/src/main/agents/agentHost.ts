@@ -19,9 +19,9 @@
  * 工具的**次序**不在这里拼：运行时的锁（`composeAgentTools`，K6）按「名单序内置 → agent → skill →
  * MCP 逐台逐个 → 其它」拼，这里只交出各段。
  *
- * 另留两样给尚未迁移的调用方：`agentFactory`（派生 agent 的旧创建入口，AgentManager 经它派发，直到
- * P2-05 换成协调器 —— spawned 恒抛 `PhasePendingError('spawned agents', 2)`，它**不**接到 ToolHost 上）与
- * `resolveProfileModelSpec`（切档案种子）。
+ * 另留两样：`agentFactory`（派生 agent 的旧创建入口 —— P2-05 起没有调用方了，派发走会话的协调器；
+ * spawned 恒抛 `PhasePendingError('spawned agents', 2)`，P2-13 删掉）与 `resolveProfileModelSpec`（切档案
+ * 种子）。
  */
 import type { ToolExecutionApi, ToolRegistration } from '@earendil-works/pi-durable'
 import {
@@ -39,7 +39,6 @@ import {
   type AgentToolsRequest,
   type AnyTool,
   type DurableSession,
-  type LockModel,
   type LockRecord,
   type McpRegistrationOptions,
   type McpToolDeclaration,
@@ -55,7 +54,6 @@ import type { ChatEvent } from '@shuvix/chat-protocol/events'
 import { resolveModelRef } from '@shuvix/chat-protocol/agentModelRef'
 import { isChromeTabSessionSettings } from '@shuvix/chat-protocol/chromeTabSession'
 import type { ModelCapabilities } from '@shuvix/chat-protocol/types/provider'
-import type { ThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
 import { existsSync } from 'fs'
 import { join } from 'path'
 import { type as osType, release as osRelease, platform } from 'os'
@@ -183,45 +181,20 @@ function mcpOptions(ctx: ToolContext): McpRegistrationOptions {
 // ─── 按 agent 的工具 ─────────────────────────────────────────
 
 /**
- * 派发工具的模型配置（锁定 / 记录的模型 + 创建时的思考档位）。
- * TODO(pi-durable p2): P2-05 让派发工具改走调用的 `api`（durable 的模型引用），这份配置随之退场。
+ * 派发工具（`offersDispatchTool` 说给时）。`ctx` 是根会话的 ToolContext（会话 id、询问归根会话）；调用方是谁
+ * 由派发工具从调用的 `api` 读（P2-05 PIN-16），这里不再给身份与模型。
  */
-function dispatchModelConfig(model: LockModel, thinkingLevel?: ThinkingLevel): SubAgentModelConfig {
-  return {
-    provider: model.provider,
-    model: model.modelId,
-    capabilities: {},
-    ...(thinkingLevel === undefined ? {} : { thinkingLevel })
-  }
+function dispatchTool(ctx: ToolContext): object {
+  return createAgentTool(ctx)
 }
 
-/**
- * 派发工具（`offersDispatchTool` 说给时）。过渡期的身份（P2-04 PIN-01，P2-05 换成调用的 `api`）：
- * `parentSessionId` 是这个 agent 自己（root = 会话 id，派生 = agentId），询问与 `rootSessionId` 归根会话
- * （ctx 是根会话的）。
- */
-function dispatchTool(
-  ctx: ToolContext,
-  parentSessionId: string,
-  model: LockModel,
-  thinkingLevel: ThinkingLevel | undefined
-): object {
-  return createAgentTool(
-    { sessionId: parentSessionId, requestUserInput: ctx.requestUserInput },
-    { modelConfig: () => dispatchModelConfig(model, thinkingLevel), rootSessionId: ctx.sessionId }
-  )
-}
-
-/** 派生 agent 记录的派生字段（锁记录没有；派生形的锁缺了它们也照样尽力重建，PIN-04） */
+/** 派生 agent 记录的派生字段（锁记录没有；派生形的锁缺了它也照样尽力重建，PIN-04） */
 function spawnedFieldsOf(
   record: LockRecord | SpawnedAgentRecord
-): Partial<Pick<SpawnedAgentRecord, 'agentId' | 'canSpawn'>> {
+): Partial<Pick<SpawnedAgentRecord, 'canSpawn'>> {
   if (record.kind !== 'spawned') return {}
-  const { agentId, canSpawn } = record as Partial<SpawnedAgentRecord>
-  return {
-    ...(typeof agentId === 'string' ? { agentId } : {}),
-    ...(typeof canSpawn === 'boolean' ? { canSpawn } : {})
-  }
+  const { canSpawn } = record as Partial<SpawnedAgentRecord>
+  return typeof canSpawn === 'boolean' ? { canSpawn } : {}
 }
 
 /** 名单里点了名的 skill（去掉 `skill:` 前缀，名单序） */
@@ -342,7 +315,7 @@ export function createDesktopToolHost(deps: DesktopToolHostDeps): ToolHost {
 
       // 派发工具：名单 opt-in；派生 agent 还要 canSpawn（缺省按 false）
       const agent = offersDispatchTool(req)
-        ? wrap(dispatchTool(ctx, req.agentId ?? req.selfSessionId, req.model, req.thinkingLevel))
+        ? wrap(dispatchTool(ctx))
         : undefined
 
       // SkillTool：名单里点了名的 skill 才上架 —— 档案声明的（含内置的 `skill:builtin:drawing`）
@@ -392,11 +365,7 @@ export function createDesktopToolHost(deps: DesktopToolHostDeps): ToolHost {
       })
       return {
         ...(offersAgent
-          ? {
-              agent: wrap(
-                dispatchTool(ctx, spawned.agentId ?? sessionId, lock.model, lock.thinkingLevel)
-              )
-            }
+          ? { agent: wrap(dispatchTool(ctx)) }
           : {}),
         // 锁赢（与 MCP 同一条规则）：锁记着的技能停用了也照样在架（要生效就销毁 agent），磁盘上没了的
         // 才掉出索引；锁里有技能工具就一直挂着（货架空了照实说「没有」）—— 重开不改工具表
@@ -567,15 +536,15 @@ export function resolveProfileModelSpec(spec: string): SubAgentModelConfig | nul
   return { provider: hit.providerId, model: hit.modelId, capabilities }
 }
 
-// ─── 派生 agent 的旧创建入口（P2-05 之前恒抛） ──────────────────
+// ─── 派生 agent 的旧创建入口（恒抛；P2-05 起没有调用方） ──────────────────
 
 /**
- * 派生 agent 的创建入口（AgentManager 经它派发）。根 agent 由 durable 会话自己创建（锁，P1-09），
+ * 派生 agent 的旧创建入口（P2-05 之前 AgentManager 经它派发；现在派发走会话的协调器）。根 agent 由 durable 会话自己创建（锁，P1-09），
  * 这里不再有根路径的适配面；`createAgent` 先照常派生规格（变量表与注入解析跑一遍），然后抛
  * `PhasePendingError`（spawned：'spawned agents', 2）。工具解析因此永远走不到 —— 派生 agent 的工具
  * 已经在 ToolHost 上（`resolveAgentTools` kind 'spawned'，P2-04），由协调器（P2-03）调；这里刻意
  * **不**接过去（PIN-07）。
- * TODO(pi-durable p2): P2-05 让 AgentManager 改走协调器，P2-05 / P2-13 删掉这个入口。
+ * TODO(pi-durable p2): P2-13 删掉这个入口（连同 createAgentFactory）。
  */
 export const agentFactory = createAgentFactory({
   resolveTools: () => {

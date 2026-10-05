@@ -29,7 +29,6 @@ import { createKnowledgeTool } from '../../knowledge/knowledgeTool'
 import { NextTool } from '../../subagent/nextTool'
 import { createDispatchAgentTool } from '../../subagent/dispatchTool'
 import type { SubAgentManager } from '../../subagent/manager'
-import type { SubAgentModelConfig } from '../../subagent/types'
 import type { KnowledgeToolDeps } from '../../knowledge/knowledgeTool'
 
 const Params = Type.Object({ value: Type.Optional(Type.String()) })
@@ -418,15 +417,17 @@ describe('RT 重跑表（agent-runtime）', () => {
     expect(tool.replay).toBe('unsafe')
   })
 
-  it('RT-2 next / agent（派发）是 unsafe', () => {
+  it('RT-2 next 是 unsafe', () => {
     expect(new NextTool({ type: 'object' }).replay).toBe('unsafe')
+  })
+
+  it('RT-1b agent（派发）是 safe（P2-05：重跑按拥有者边重新挂上已建的子对话）', () => {
     const dispatch = createDispatchAgentTool({
       registry: { list: () => [], get: () => undefined },
       manager: {} as SubAgentManager,
-      modelConfig: {} as SubAgentModelConfig,
-      parentSessionId: 's1',
+      sessionId: 's1',
       abortError: 'Aborted'
     })
-    expect(dispatch.replay).toBe('unsafe')
+    expect(dispatch.replay).toBe('safe')
   })
 })

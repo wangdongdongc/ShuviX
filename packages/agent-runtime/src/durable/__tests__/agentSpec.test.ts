@@ -17,7 +17,7 @@ import {
 } from '../agentSpec'
 import type { PromptVarsCtx } from '../../agentProfile/promptVars'
 import type { InProcessAgentType, SubAgentModelConfig } from '../../subagent/types'
-import type { SpawnContext } from '../../subagent/manager'
+import type { SpawnContext } from '../../agentProfile/createAgent'
 import { buildBuiltinProfile, PERMISSION_REVIEWER_SPEC } from '../../subagent/builtinAgents'
 import { createInlineMdReader } from '../../subagent/builtinAgents/inlineSources'
 import { toInProcessAgentType } from '../../subagent/dispatchTool'

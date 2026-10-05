@@ -31,7 +31,7 @@ import type { ThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
 import { KNOWLEDGE_TOOL_NAME } from '../knowledge/knowledgeTool'
 import type { RuntimeLogger } from '../types'
 import type { InProcessAgentType, SubAgentModelConfig } from '../subagent/types'
-import type { SpawnContext } from '../subagent/manager'
+import type { SpawnContext } from '../agentProfile/createAgent'
 import {
   renderProfileSystemPrompt,
   type AgentKind,
