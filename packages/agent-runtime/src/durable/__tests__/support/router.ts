@@ -11,7 +11,9 @@
  *    走，`onCreated` 由脚本按需调用；`fakeScope()` 是一次工具调用的 scope。
  */
 import type { Context } from '@earendil-works/chord'
+import { Type } from '@earendil-works/pi-ai'
 import {
+  defineTool,
   ROOT_CONVERSATION_ID,
   type ConversationId,
   type TaskId,
@@ -22,15 +24,17 @@ import type { ChatEvent } from '@shuvix/chat-protocol/events'
 import type { TaskInfo } from '@shuvix/chat-protocol/types/task'
 import type { SelectableThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
 import { createDispatchAgentTool } from '../../../subagent/dispatchTool'
+import type { ResultContract } from '../../../subagent/nextTool'
 import {
   createSubAgentManager,
+  type RunTaskOutcome,
   type RunTaskParams,
   type SubAgentManager,
   type SubAgentManagerDeps
 } from '../../../subagent/manager'
 import type { AgentProfile, InProcessAgentType } from '../../../subagent/types'
 import { createTaskRegistry, type TaskRegistry } from '../../../task/registry'
-import type { ToolCallScope } from '../../../tools/toolCall'
+import { toolCallScope, type ToolCallScope } from '../../../tools/toolCall'
 import { backgroundContext as BG } from '../../context'
 import type { DurableSession } from '../../durableSession'
 import type { AgentConfig } from '../../seams'
@@ -177,8 +181,8 @@ export interface HostROptions extends RouterKitOptions {
   wrapManager?: (router: SubAgentManager) => SubAgentManager
   /** 档案表（缺省 PROFILES；重启共用同一张） */
   profiles?: Map<string, AgentProfile>
-  /** 额外的按 agent 工具（probe 与 force_agent 之外） */
-  tools?: (sessionId: string) => ToolRegistration[]
+  /** 额外的按 agent 工具（probe 与 force_agent 之外）；`manager` = 派发工具看到的那个路由（跟着进程换） */
+  tools?: (sessionId: string, manager: SubAgentManager) => ToolRegistration[]
   config?: AgentConfig
   host?: Partial<TestHostOptions>
   noPrime?: boolean
@@ -227,7 +231,7 @@ export async function hostR(options: HostROptions = {}): Promise<HostR> {
   const agentTools = (sessionId: string): ToolRegistration[] => [
     probeTool(),
     renamedTool(dispatchFor(sessionId), 'force_agent'),
-    ...(options.tools?.(sessionId) ?? [])
+    ...(options.tools?.(sessionId, proxy) ?? [])
   ]
   const t = await makeHost({
     makeKit: wKit,
@@ -261,6 +265,48 @@ export async function hostR(options: HostROptions = {}): Promise<HostR> {
     }
   }
   return build(t, options)
+}
+
+export interface ContractToolOptions {
+  /** 工具名（缺省 `contract_agent`） */
+  name?: string
+  sessionId?: string
+  contract: ResultContract
+  /** 路由交回的结果 / 拒绝（按完成次序） */
+  outcomes: (RunTaskOutcome | { rejected: string })[]
+  profile?: InProcessAgentType
+}
+
+/**
+ * 带结果契约的派发工具（测试拥有者：真派发工具从不传 resultContract）：参数 `{prompt}`，把
+ * `{sessionId, owner: {tool: scope}, resultContract}` 交给路由；结果文本 = outcome.result，拒绝 = 原话。
+ */
+export function contractTool(manager: SubAgentManager, options: ContractToolOptions): ToolRegistration {
+  return defineTool({
+    name: options.name ?? 'contract_agent',
+    description: 'contract_agent: dispatch a sub-agent with a result contract',
+    parameters: Type.Object({ prompt: Type.String() }),
+    replay: 'safe',
+    execute: async (args, api, context) => {
+      try {
+        const outcome = await manager.runTask({
+          sessionId: options.sessionId ?? 's1',
+          owner: { tool: toolCallScope(api, context) },
+          agentType: options.profile ?? PROFILES.explore,
+          prompt: args.prompt,
+          description: 'contract',
+          parentToolCallId: api.callId,
+          resultContract: options.contract
+        })
+        options.outcomes.push(outcome)
+        return { content: [{ type: 'text', text: outcome.result }] }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        options.outcomes.push({ rejected: message })
+        return { content: [{ type: 'text', text: message }] }
+      }
+    }
+  })
 }
 
 /** 根对话里一次派发调用（缺省 id `call-agent`）的 provider id */
