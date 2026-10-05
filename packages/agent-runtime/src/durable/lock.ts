@@ -469,24 +469,28 @@ export class AgentLock {
 
   // ─── 销毁 ───────────────────────────────────────
 
-  /** 销毁（K10/K13）：并发调用共享同一次；没锁 = 无操作（不发事件、不写、不调镜像） */
-  destroy(): Promise<void> {
+  /**
+   * 销毁（K10/K13）：并发调用共享同一次；没锁 = 无操作（不发事件、不写、不调镜像，`stop` 也不调）。
+   * `stop` 换掉缺省的「销毁之前让会话停下」（回退用不送达的那一版，P3-10a PIN-23）；共享到在途的那一次时
+   * 不起作用。
+   */
+  destroy(stop?: () => Promise<void>): Promise<void> {
     if (this.destroying !== undefined) return this.destroying
-    const tracked: Promise<void> = this.runDestroy().finally(() => {
+    const tracked: Promise<void> = this.runDestroy(stop ?? this.deps.stopForDestroy).finally(() => {
       if (this.destroying === tracked) this.destroying = undefined
     })
     this.destroying = tracked
     return tracked
   }
 
-  private async runDestroy(): Promise<void> {
+  private async runDestroy(stop: () => Promise<void>): Promise<void> {
     await this.cancelCreation()
     const lock = this.record
     if (lock === undefined) return
     const { sessionId } = this.deps
     this.broadcast({ type: 'agent_closing', sessionId, closing: true })
     try {
-      await this.deps.stopForDestroy()
+      await stop()
       await this.clearStoredLock()
       this.record = undefined
       this.deps.registry.uninstall({ name: agentExtensionName(lock.conversationId) })

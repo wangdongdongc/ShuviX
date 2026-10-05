@@ -3,7 +3,8 @@
  *
  *  - FakeDurableSession：可设的 `lock` / busy / interrupted / 挂起询问；submitUser / steer / followUp /
  *    continue / resumeInterrupted 的结果按脚本给（缺省 `{}`），requestState / lastAnswer / drivenRun /
- *    taskLiveness 也按脚本给；`destroyAgent` / `abort` 可挂闸门；每次调用记进 `calls`。
+ *    taskLiveness 也按脚本给；`destroyAgent` / `abort` 可挂闸门；`rollbackTo` 按 `rollbackResult` 给（P3-10a）；
+ *    每次调用记进 `calls`。
  *    P2-10 的脚本：`submitUser` 带一个脚本里认得的 requestId（'pending' / 'settled'）= 重新挂上 —— 不调
  *    受理回调（P2-09 PIN-02）；`resumeInterrupted` 在被中断时把它变成在跑（interrupted=false, busy=true）；
  *    `abort` 把 busy / interrupted 都清掉（被中断的那一轮随之落定）。
@@ -29,6 +30,8 @@ import type {
   NotifyOptions,
   PendingInputHooks,
   RequestState,
+  RollbackOptions,
+  RollbackResult,
   RunState,
   SessionHost,
   SessionProjector,
@@ -302,6 +305,15 @@ export class FakeDurableSession implements DurableSession {
     if (this.destroyGate) await this.destroyGate.promise
     if (this.destroyError !== undefined) throw this.destroyError
     this.lock = undefined
+  }
+
+  /** 回退 fork（P3-10a）的结果脚本；缺省 = 一个新对话 2 */
+  rollbackResult: RollbackResult = { ok: true, conversationId: 2 }
+
+  async rollbackTo(targetEntryId: number, options?: RollbackOptions): Promise<RollbackResult> {
+    this.calls.push(['rollbackTo', targetEntryId, ...(options === undefined ? [] : [options])])
+    if (this.rollbackResult.ok) this.lock = undefined
+    return this.rollbackResult
   }
 
   // 界面投影 / 运行状态 / 询问钩子（P3-03）：门面不用它们，桩子

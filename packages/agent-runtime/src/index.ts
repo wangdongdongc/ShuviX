@@ -587,6 +587,11 @@ export {
   type PlacedInfo
 } from './durable/durableSession'
 export {
+  type RollbackOptions,
+  type RollbackRefusal,
+  type RollbackResult
+} from './durable/rollback'
+export {
   DEFAULT_INTERRUPTED_SEND_POLICY,
   DEFAULT_MAX_IDLE_OPEN,
   DEFAULT_NOTICE_COALESCE_MS,
