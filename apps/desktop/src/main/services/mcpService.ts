@@ -12,6 +12,7 @@ import { McpManager, BuiltinMcpRegistry, type BuiltinMcpScope } from '@shuvix/ag
 import { requestUserInputFor } from './userInputBroker'
 import { chatFrontendRegistry } from '../frontend/core/ChatFrontendRegistry'
 import type { DesktopBuiltinMcpScope } from './builtinMcp/types'
+import type { ToolAgentIdentity } from './toolAgent'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 import type { McpServer } from '@shuvix/chat-protocol/types/mcp'
@@ -50,6 +51,21 @@ for (const [name, factory] of Object.entries(BUILTIN_MCP_FACTORIES)) {
   builtinMcpRegistry.register(name, factory)
 }
 
+/**
+ * 内置服务器认调用方用的解析器：(会话, durable 对话) → 发起调用的 agent。由 main 启动时注册
+ * （`(sid, c) => host.get(sid)?.agentIdentity(c)`，见 sessionHost 的 sessionAgentResolver）——
+ * 直接 import 会话宿主会经 agentHost 绕回本文件。没注册 = 认不出（主体按 root）。
+ */
+export type BuiltinMcpAgentResolver = (
+  sessionId: string,
+  conversationId: number
+) => ToolAgentIdentity | undefined
+let agentResolver: BuiltinMcpAgentResolver | null = null
+
+export function setBuiltinMcpAgentResolver(resolver: BuiltinMcpAgentResolver | null): void {
+  agentResolver = resolver
+}
+
 /** 桌面 transport 工厂：stdio（本地进程）+ http（Streamable HTTP）+ inproc（内置） */
 function createTransport(
   server: McpServer,
@@ -63,7 +79,10 @@ function createTransport(
     return builtinMcpRegistry.createClientTransport(server.name, {
       sessionId,
       requestUserInput: (request) => requestUserInputFor(sessionId, request),
-      emitChatEvent: (event) => chatFrontendRegistry.broadcast({ ...event, sessionId })
+      emitChatEvent: (event) => chatFrontendRegistry.broadcast({ ...event, sessionId }),
+      // 每次调用现问注册着的解析器 —— 连接活得比任何一次调用都久（重连也在调用途中懒发生），
+      // 建连时快照下来的身份会过时
+      agentOf: (conversationId) => agentResolver?.(sessionId, conversationId)
     })
   }
   if (server.type === 'stdio') {

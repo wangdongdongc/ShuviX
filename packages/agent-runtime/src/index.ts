@@ -71,6 +71,7 @@ export {
 } from './mcpManager'
 export {
   BuiltinMcpRegistry,
+  builtinCallOwnerOf,
   type BuiltinMcpScope,
   type BuiltinMcpFactory
 } from './builtinMcpRegistry'
