@@ -571,13 +571,7 @@ export async function createSshMcpServer(
       if (d !== 'up' && d !== 'down') return err('`direction` must be "up" or "down".')
       direction = d
     }
-    const prepared = await prepareTransfer(
-      args,
-      direction,
-      `mcp__ssh__${kind}`,
-      toolCallId,
-      owner
-    )
+    const prepared = await prepareTransfer(args, direction, `mcp__ssh__${kind}`, toolCallId, owner)
     if ('error' in prepared) return err(prepared.error)
 
     if (kind === 'sync') {

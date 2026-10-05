@@ -159,7 +159,8 @@ export interface McpRegistrationOptions {
   /**
    * 这次调用来自哪个 agent：durable 对话 → 调用方 id（root = 会话 id，派生 = agent id）。
    * 每次调用按 `api.conversationId` 现问，经 `_meta['shuvix.dev/agentId']` 只带给可信 server
-   * （见 McpCallMeta.callerId）。缺省或回 undefined = 不带。
+   * （见 McpCallMeta.callerId）。缺省或回 undefined = 不带 —— `api.taskId` / `api.conversationId`
+   * 不看它，照样带给可信 server（见 McpCallMeta.conversationId）。
    */
   callerIdOf?: (conversationId: ConversationId) => string | undefined
 }
