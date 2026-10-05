@@ -1,7 +1,7 @@
 /**
  * 桌面工具 / 提示词宿主 —— durable 会话核心（SessionHost，P1-07 / P1-09）的三块桌面 seam（P1-11）：
  *
- *  - `createDesktopToolHost({ lockOf })` —— `ToolHost`：
+ *  - `createDesktopToolHost({ sessionOf })` —— `ToolHost`：
  *    - `buildBuiltinTools`：平台内置工具（装进 `shuvix.builtin`）。**一个会话级 ToolContext**，每个工具
  *      包一次桌面输出包装器（落盘按每次调用的 agent 工具表定，`spill: 'auto'`；L1 门的主体按调用现取）。
  *      同一会话的每个 agent 共用这一份，所以身份要紧的地方经 `agentOf` + withCallAgent 按调用认人。
@@ -33,6 +33,7 @@ import {
   type AgentToolSet,
   type AgentToolsRequest,
   type AnyTool,
+  type DurableSession,
   type LockModel,
   type LockRecord,
   type McpRegistrationOptions,
@@ -98,39 +99,35 @@ function sessionProject(
     : undefined
 }
 
-// ─── 调用方身份（phase 1：只有锁住的根 agent） ──────────────────
+// ─── 调用方身份（按对话认人） ──────────────────────────────
 
-/** ToolHost 的依赖：会话此刻的锁记录（同步读；没锁 = undefined） */
+/**
+ * ToolHost 的依赖：会话此刻打开着的 durable 会话（同步读，**从不打开**；没开 = undefined）。
+ * 只用它的 `agentIdentity`。经注入拿（sessionHost.ts import 本模块，反过来 import 会成环）。
+ */
 export interface DesktopToolHostDeps {
-  lockOf: (sessionId: string) => LockRecord | undefined
+  sessionOf: (sessionId: string) => Pick<DurableSession, 'agentIdentity'> | undefined
 }
 
 /**
- * 锁住的根 agent 在工具眼里的身份：档案名、root、锁定的模型（溯源章的 `<model>` 取模型 id）。
- * 每次现读锁（锁随时可能被销毁 / 重建）；没锁或读锁抛错 → undefined，用的地方落回各自的兜底。
- * phase 1 一个会话里只有根 agent 在跑，所以不论哪条对话都认成它。
- * TODO(pi-durable p2): 派生 agent 落在子对话上之后按对话认人（kind 'spawned'，callerId = agentId）。
+ * 发起调用的 agent 在工具眼里的身份：按对话问运行时（`DurableSession.agentIdentity`）——
+ * 派生 agent（含 hook agent）的对话认成它自己（kind 'spawned'、callerId = agentId），锁的那条和
+ * 其余对话认成锁住的根 agent。运行时给的对象原样交回，桌面不另推导（同一个来源）。
+ * 每次现问、不缓存（锁 / 记录随时可能变、会话可能重开）；会话没开、没锁或问的过程抛错 → undefined，
+ * 用的地方落回各自的兜底。
  */
 function agentOfSession(
   deps: DesktopToolHostDeps,
   sessionId: string
 ): (conversationId: number) => ToolAgentIdentity | undefined {
-  return () => {
-    let lock: LockRecord | undefined
+  return (conversationId) => {
     try {
-      lock = deps.lockOf(sessionId)
+      return deps.sessionOf(sessionId)?.agentIdentity(conversationId)
     } catch (error) {
       log.warn(
-        `lockOf failed for session ${sessionId}: ${error instanceof Error ? error.message : String(error)}`
+        `agent identity lookup failed for session ${sessionId} conversation ${conversationId}: ${error instanceof Error ? error.message : String(error)}`
       )
       return undefined
-    }
-    if (lock === undefined) return undefined
-    const { provider, modelId } = lock.model
-    return {
-      profileName: lock.profileName,
-      kind: 'root',
-      getModelConfig: () => ({ provider, model: modelId, capabilities: {} })
     }
   }
 }
@@ -166,7 +163,10 @@ function sessionWrapper(sessionId: string, ctx: ToolContext): (tool: object) => 
   return (tool) => wrapDurableTool(tool as AnyTool, { sessionId, spill: 'auto', security })
 }
 
-/** MCP 调用方 id：按这次调用的对话认人；身份不带调用方 id（phase 1 的根 agent）就报会话 id */
+/**
+ * MCP 调用方 id：按这次调用的对话认人（派生 agent = 它的 agentId）；身份不带调用方 id（根 agent）
+ * 或认不出就报会话 id。创建与重建共用 —— 按调用现取，不在注册那一刻定死
+ */
 function mcpOptions(ctx: ToolContext): McpRegistrationOptions {
   return {
     callerIdOf: (conversationId) =>
@@ -291,7 +291,7 @@ async function connectMcpServer(
 }
 
 /**
- * 桌面 ToolHost。`lockOf` 给会话此刻的锁记录：内置工具的调用方身份（agentOf）按它认出根 agent。
+ * 桌面 ToolHost。`sessionOf` 给会话此刻打开着的 durable 会话：调用方身份（agentOf）按对话问它。
  */
 export function createDesktopToolHost(deps: DesktopToolHostDeps): ToolHost {
   return {

@@ -2,6 +2,7 @@
  * 桌面 SessionHost 的 seam（`buildSessionHostDeps`）与退出钩子。
  *
  *   D10-13 身份：模型 / 目录 / 事件 / 存储三件 / isEphemeral / today / 中断发送策略；单例懒建、只建一次
+ *           （P2-06-31：ToolHost 拿到的是 `sessionOf` —— 同步 `get` 打开着的会话，从不打开）
  *   D10-14 resolveAgentConfig 的档案矩阵（形态推导）
  *   D10-15 toolOverlay（滤掉不可用与 mcp:chrome；原值不动；旧行补键一次）
  *   D10-16 model（会话设置 → 原样；没有 → 启用中的默认 provider / 模型；都没有 → 不给）
@@ -154,6 +155,7 @@ import {
   AUTO_RESUME_KEY,
   INTERRUPTED_SEND_POLICY,
   buildSessionHostDeps,
+  createDesktopSessionHost,
   getSessionHost,
   installSessionHostQuitHook,
   resetSessionHostForTests,
@@ -210,8 +212,8 @@ function tableRow(
 }
 
 mocks.createDesktopToolHost.mockImplementation(() => mocks.toolHost)
-const lockOfForDeps = vi.fn(() => undefined)
-const deps = buildSessionHostDeps({}, lockOfForDeps)
+const sessionOfForDeps = vi.fn(() => undefined)
+const deps = buildSessionHostDeps({}, sessionOfForDeps)
 
 beforeEach(() => {
   const db = new DatabaseSync(':memory:')
@@ -249,9 +251,10 @@ describe('D10-13 身份 seam 与单例', () => {
     expect(deps.modelCatalog.registry).toBe(mocks.registry)
     expect(deps.modelCatalog.port).toBe(mocks.port)
     expect(deps.eventSink).toBe(mocks.sink)
-    // 工具 / 提示词 seam 来自 agentHost；ToolHost 拿到的是 lockOf（同步读锁）
+    // 工具 / 提示词 seam 来自 agentHost；ToolHost 拿到的是 sessionOf（同步取打开着的会话），没有 lockOf
     expect(deps.toolHost).toBe(mocks.toolHost)
-    expect(mocks.createDesktopToolHost).toHaveBeenCalledWith({ lockOf: lockOfForDeps })
+    expect(mocks.createDesktopToolHost).toHaveBeenCalledWith({ sessionOf: sessionOfForDeps })
+    expect(mocks.createDesktopToolHost.mock.calls[0][0]).not.toHaveProperty('lockOf')
     expect(deps.promptHost).toBe(mocks.promptHost)
     expect(deps.promptVars).toBe(mocks.promptVars)
     expect(deps.openStorage).toBe(storage.openSessionStorage)
@@ -273,7 +276,7 @@ describe('D10-13 身份 seam 与单例', () => {
     expect(deps.interruptedSendPolicy).toBe(INTERRUPTED_SEND_POLICY)
   })
 
-  it('D10-13 getSessionHost：import 时不建；第一次取才建、只建一次，之后是同一个对象', async () => {
+  it('D10-13 / P2-06-31 getSessionHost：import 时不建；第一次取才建、只建一次，之后是同一个对象', async () => {
     expect(callsAtImport).toBe(0)
     resetSessionHostForTests()
     const before = holder.createSessionHostCalls
@@ -281,16 +284,40 @@ describe('D10-13 身份 seam 与单例', () => {
     const second = getSessionHost()
     expect(second).toBe(first)
     expect(holder.createSessionHostCalls - before).toBe(1)
-    // 单例的 ToolHost 读的就是这个宿主的锁：同步 get，从不打开会话
-    const { lockOf } = mocks.createDesktopToolHost.mock.calls.at(-1)![0] as {
-      lockOf: (sessionId: string) => unknown
+    // 单例的 ToolHost 问的就是这个宿主打开着的会话：同步 get，从不打开会话
+    const { sessionOf } = mocks.createDesktopToolHost.mock.calls.at(-1)![0] as {
+      sessionOf: (sessionId: string) => unknown
     }
     const getSpy = vi.spyOn(first, 'get')
     const peekSpy = vi.spyOn(first, 'peek')
-    expect(lockOf('nobody')).toBeUndefined()
+    const openSpy = vi.spyOn(first, 'open')
+    expect(sessionOf('nobody')).toBeUndefined()
     expect(getSpy).toHaveBeenCalledWith('nobody')
+    // 开着的会话：sessionOf(id) 就是 host.get(id) 交回的那一个
+    const opened = { sessionId: 'open-1' } as unknown as ReturnType<SessionHost['get']>
+    getSpy.mockReturnValueOnce(opened)
+    expect(sessionOf('open-1')).toBe(opened)
+    expect(getSpy).toHaveBeenLastCalledWith('open-1')
     expect(peekSpy).not.toHaveBeenCalled()
+    expect(openSpy).not.toHaveBeenCalled()
     await first.closeAll()
+    resetSessionHostForTests()
+  })
+
+  it('P2-06-31 createDesktopSessionHost(overrides)：ToolHost 的 sessionOf 问的是**这个**宿主，不是单例', async () => {
+    const singleton = getSessionHost()
+    const own = createDesktopSessionHost({})
+    expect(own).not.toBe(singleton)
+    const { sessionOf } = mocks.createDesktopToolHost.mock.calls.at(-1)![0] as {
+      sessionOf: (sessionId: string) => unknown
+    }
+    const ownGet = vi.spyOn(own, 'get')
+    const singletonGet = vi.spyOn(singleton, 'get')
+    expect(sessionOf('x')).toBeUndefined()
+    expect(ownGet).toHaveBeenCalledWith('x')
+    expect(singletonGet).not.toHaveBeenCalled()
+    await own.closeAll()
+    await singleton.closeAll()
     resetSessionHostForTests()
   })
 })

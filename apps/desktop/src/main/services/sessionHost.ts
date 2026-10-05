@@ -15,7 +15,8 @@
  *    下次打开报 interrupted。
  *
  * 工具 / 提示词 seam 来自 `agents/agentHost`：ToolHost（内置工具 / 按 agent 解析 / 按锁重建；调用方身份
- * 经 `lockOf` 现读这条会话的锁 —— 同步 `get`，从不打开会话）、PromptHost（五个活段落）与人设变量表。
+ * 经 `sessionOf` 按对话现问这条会话的 `agentIdentity` —— 同步 `get`，从不打开会话）、PromptHost（五个活
+ * 段落）与人设变量表。
  */
 import {
   abortSessionReviews,
@@ -24,12 +25,16 @@ import {
   localDate,
   reopenSessionReviews,
   type InterruptedSendPolicy,
-  type LockRecord,
   type RuntimeLogger,
   type SessionHost,
   type SessionHostDeps
 } from '@shuvix/agent-runtime'
-import { createDesktopToolHost, desktopPromptHost, desktopPromptVars } from '../agents/agentHost'
+import {
+  createDesktopToolHost,
+  desktopPromptHost,
+  desktopPromptVars,
+  type DesktopToolHostDeps
+} from '../agents/agentHost'
 import { createLogger } from '../logger'
 import { electronEventSink } from './agentRuntimeAdapters'
 import { getModelRegistry, providerCredentialPort } from './models'
@@ -50,8 +55,8 @@ const log = createLogger('SessionHost')
 export const AUTO_RESUME_KEY = 'session.autoResume'
 
 /**
- * 中断会话上收到用户发送时怎么办（裁决 R5，**待用户确认**）：缺省 abort-then-send。
- * 要换成「先续上被中断的那轮、这条排在后面」只改这一行：`'continue-then-queue'`。
+ * 中断会话上收到用户发送时怎么办（裁决 R5，用户 2026-10-04 定为 abort-then-send）：
+ * 先中止被中断的那件事，再发送。另一种策略 `'continue-then-queue'` 仍保留在运行时里，换只改这一行。
  */
 export const INTERRUPTED_SEND_POLICY: InterruptedSendPolicy = DEFAULT_INTERRUPTED_SEND_POLICY
 
@@ -72,19 +77,18 @@ const runtimeLog: RuntimeLogger = {
 
 /**
  * 桌面 seam 拼成的 `SessionHostDeps`。`overrides` 整项替换（测试注入假的 ToolHost / 模型 / 存储）；
- * `lockOf` 给 ToolHost 按会话找锁记录（缺省读单例宿主）。
+ * `sessionOf` 给 ToolHost 按会话找打开着的 durable 会话（调用方身份按对话问它；缺省读单例宿主）。
  */
 export function buildSessionHostDeps(
   overrides: Partial<SessionHostDeps> = {},
-  lockOf: (sessionId: string) => LockRecord | undefined = (sessionId) =>
-    getSessionHost().get(sessionId)?.lock
+  sessionOf: DesktopToolHostDeps['sessionOf'] = (sessionId) => getSessionHost().get(sessionId)
 ): SessionHostDeps {
   const needsRegistry = overrides.models === undefined || overrides.modelCatalog === undefined
   const registry = needsRegistry ? getModelRegistry() : undefined
   return {
     models: registry?.models as SessionHostDeps['models'],
     modelCatalog: { registry: registry!, port: providerCredentialPort },
-    toolHost: createDesktopToolHost({ lockOf }),
+    toolHost: createDesktopToolHost({ sessionOf }),
     promptHost: desktopPromptHost,
     promptVars: desktopPromptVars,
     resolveAgentConfig: (sessionId) => sessionService.resolveAgentConfig(sessionId),
@@ -108,11 +112,11 @@ export function buildSessionHostDeps(
   }
 }
 
-/** 建一个桌面宿主（ToolHost 的 `lockOf` 指向它自己） */
+/** 建一个桌面宿主（ToolHost 的 `sessionOf` 指向它自己） */
 export function createDesktopSessionHost(overrides: Partial<SessionHostDeps> = {}): SessionHost {
-  // lockOf 只在之后的工具调用里读它（构造期不调），所以引用自己的初始化值是安全的
+  // sessionOf 只在之后的工具调用里读它（构造期不调），所以引用自己的初始化值是安全的
   const host: SessionHost = createSessionHost(
-    buildSessionHostDeps(overrides, (sessionId) => host.get(sessionId)?.lock)
+    buildSessionHostDeps(overrides, (sessionId) => host.get(sessionId))
   )
   return host
 }

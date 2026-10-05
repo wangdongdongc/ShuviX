@@ -13,7 +13,9 @@ import { SessionClosedError, type DurableSession } from '../durableSession'
 import type { RunState } from '../seams'
 import { SessionHostSealedError } from '../sessionHost'
 import { answer, callTool, fauxKit, held, stalled } from './support/faux'
-import { makeHost, primeRoot, registerHostCleanup } from './support/host'
+import { makeHost, primeRoot, registerHostCleanup, type TestHost } from './support/host'
+import { wKit } from './support/scenario'
+import { hookRec, seedAgent, startRun, TEST_SPAWN_EXTENSION } from './support/spawn'
 import { askingTool, holdTool } from './support/tools'
 import { allEntries, transcript } from './support/transcript'
 import { aborted, deferred, sleep, waitFor, withTimeout } from './support/wait'
@@ -423,6 +425,68 @@ describe('SessionHost LRU', () => {
     await waitFor(() => summarized && a.runState === 'idle', 5000, 'compaction finished')
     await waitFor(() => t.events.includes('close:a'), 3000, 'a closed once idle')
   })
+})
+
+describe('SessionHost LRU · auxiliary work (P2-01)', () => {
+  /**
+   * a 上一个 titler（ownerless 的 hook 对话：只看分类，不让根里的锚掺进来，PIN-12）在跑并被扣住；
+   * 再开 b、c（maxIdleOpen 1）
+   */
+  async function titlerHeldWhileOthersOpen(): Promise<{
+    t: TestHost
+    a: DurableSession
+    release: () => void
+    done: Promise<unknown>
+  }> {
+    const t = await makeHost({ makeKit: wKit, extensions: [TEST_SPAWN_EXTENSION], maxIdleOpen: 1 })
+    const a = await t.open('a')
+    const seeded = await seedAgent(a, { record: hookRec(), owner: 'none' })
+    const run = held(answer('Title'))
+    t.kit.queue(run.step)
+    const submission = await startRun(a, seeded.conversationId, 'TITLE-ME')
+    await run.reached
+    await t.open('b')
+    await sleep(30)
+    expect(t.events.filter((event) => event.startsWith('close:'))).toEqual([])
+    await t.open('c')
+    await waitFor(() => t.events.includes('close:b'), 3000, 'b closed')
+    return { t, a, release: run.release, done: submission.wait(BG) }
+  }
+
+  it('P2-01-48 running auxiliary work blocks eviction although the session reports idle', async () => {
+    const { t, a, release, done } = await titlerHeldWhileOthersOpen()
+    expect(a.closed).toBe(false)
+    expect(a.runState).toBe('idle')
+    expect(t.events.includes('close:a')).toBe(false)
+    release()
+    await withTimeout(done, 3000, 'titler run')
+  })
+
+  it('P2-01-49 when the auxiliary work ends the host trims again without another open (PIN-07)', async () => {
+    const { t, a, release, done } = await titlerHeldWhileOthersOpen()
+    expect(a.closed).toBe(false)
+    release()
+    await withTimeout(done, 3000, 'titler run')
+    await waitFor(() => t.events.includes('close:a'), 3000, 'a closed after the titler ended')
+    expect(t.host.get('c')).toBeDefined()
+  })
+
+  it('P2-01-50 marked auxiliary work counts as nothing running: the reopened session is evictable', async () => {
+    const first = await makeHost({ makeKit: wKit, extensions: [TEST_SPAWN_EXTENSION] })
+    const a = await first.open('a')
+    const seeded = await seedAgent(a, { record: hookRec() })
+    const stall = stalled()
+    first.kit.queue(stall.step)
+    await startRun(a, seeded.conversationId, 'TITLE-ME')
+    await stall.reached
+    const t = await first.restart({ maxIdleOpen: 1 })
+    const reopened = await t.open('a')
+    expect(reopened.isInterrupted()).toBe(false)
+    expect(reopened.runState).toBe('idle')
+    await t.open('b')
+    await waitFor(() => t.events.includes('close:a'), 3000, 'a closed')
+    expect(t.kit.callCount).toBe(0)
+  }, 15000)
 })
 
 describe('SessionHost run state events', () => {

@@ -28,6 +28,7 @@ import {
   NextTool,
   NEXT_NUDGE_TEXT,
   buildResultContractNote,
+  nextDetailsResult,
   validateContractSchema,
   type ResultContract
 } from './nextTool'
@@ -536,14 +537,29 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
       if (resultContract) {
         const schemaError = validateContractSchema(resultContract.schema)
         if (schemaError) throw new Error(`invalid result contract: ${schemaError}`)
-        const nextTool = new NextTool(resultContract.schema, (value) => {
-          captured.hit = true
-          captured.value = value
-          queueMicrotask(() => {
-            if (capturedAgentId) interrupt(capturedAgentId)
-          })
-        })
-        extraTools = [nextTool]
+        // NextTool 不再回调（结果在 details 里，P2-02）：这里包一层 execute，从非错误结果的
+        // `details.result` 捕获 —— 过渡做法（PIN-05），P2-05 的路由改读转写条目后删掉
+        const nextTool = new NextTool(resultContract.schema)
+        const capturing: AnyAgentTool = {
+          name: nextTool.name,
+          description: nextTool.description,
+          parameters: nextTool.parameters,
+          replay: nextTool.replay,
+          outputLimits: nextTool.outputLimits,
+          execute: async (args, api, context) => {
+            const result = await nextTool.execute(args, api, context)
+            const value = result.isError ? undefined : nextDetailsResult(result.details)
+            if (value !== undefined && !captured.hit) {
+              captured.hit = true
+              captured.value = value
+              queueMicrotask(() => {
+                if (capturedAgentId) interrupt(capturedAgentId)
+              })
+            }
+            return result
+          }
+        }
+        extraTools = [capturing]
         llmPrompt = `${llmPrompt}\n\n${buildResultContractNote(resultContract)}`
       }
 

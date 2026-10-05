@@ -28,7 +28,7 @@
  * 段落扩展（`promptExtensionsFor` 的次序）、`shuvix.agent.<对话>` —— 永远显式（durable 的缺省是
  * 「全部已安装的扩展」）。
  */
-import { copyJson, type JsonValue } from '@earendil-works/chord'
+import type { JsonValue } from '@earendil-works/chord'
 import {
   configure,
   defineExtension,
@@ -36,15 +36,13 @@ import {
   type ConversationId,
   type Extension,
   type Harness,
-  type JsonObject,
   type Registry,
   type ToolRegistration
 } from '@earendil-works/pi-durable'
-import type { ThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
 import type { AgentKind, PromptVars, PromptVarsCtx } from '../agentProfile/promptVars'
-import type { McpToolDeclaration } from '../mcpManager'
-import { resolveLockModel, type LockModel, type LockModelRefusalKind } from '../models/lockModel'
+import { resolveLockModel, type LockModelRefusalKind } from '../models/lockModel'
 import type { RuntimeEventSink, RuntimeLogger } from '../types'
+import { lockRecordJson, parseLockRecord, type LockRecord } from './agentRecord'
 import { normalizeToolNames, resolveThinkingLevel } from './agentSpec'
 import { backgroundContext as BG, errorText } from './context'
 import { SessionStateDoc } from './docs'
@@ -66,30 +64,18 @@ export function agentExtensionName(conversationId: ConversationId): string {
 
 // ─────────────────────────── 锁记录 ───────────────────────────
 
+// 锁记录的类型与校验 / 序列化在 `agentRecord.ts`（与派生 agent 记录共用一个校验器）；这里原样转出
+export { lockRecordJson, parseLockRecord, type LockRecord } from './agentRecord'
+
 /**
- * 锁记录（K2）—— 纯 JSON，存在 `SessionStateDoc.lock`。重开时据它重建工具（`ToolHost.rebuildAgentTools`），
- * 压缩窗口按它的模型算（K14）。
+ * 重开时读 `SessionStateDoc.lock`：只认 root（PIN-08）。`parseLockRecord` 也认 kind `spawned`（派生 agent
+ * 记录的锁字段部分），但派生 agent 从不住在会话锁里 —— 重开时那里出现 spawned 按「写坏了」处理（K12）。
+ * 只在 `restore()` 用：进程内的提交发布（`observe`）照旧按 `parseLockRecord` 读（提示词 golden 用例
+ * 手工写的 spawned 锁靠这一点）。
  */
-export interface LockRecord {
-  /** 上锁时的当前对话（回退 fork 之后可能不是根，K20）；按 agent 的扩展以它命名 */
-  conversationId: ConversationId
-  profileName: string
-  kind: AgentKind
-  /** durable 的 ModelRef 形状（pi provider id + 模型 id） */
-  model: LockModel
-  /** 创建时的思考档位（之后的调整只写 `pi.agent.thinkingLevel`，K9）；配置没给就不记 */
-  thinkingLevel?: ThinkingLevel
-  /** 提供给模型的工具，按次序（= `pi.agent.tools`） */
-  toolNames: string[]
-  /** 选中的扩展，按次序（= `pi.agent.extensions`） */
-  extensions: string[]
-  /** 命令沙箱钉子（K8） */
-  sandboxed: boolean
-  /** 连上了的 MCP 服务器 → 工具声明快照（重开时据此建注册项，不连服务器） */
-  mcp: { [server: string]: McpToolDeclaration[] }
-  /** 技能工具列出的技能 */
-  skills: string[]
-  createdAt: number
+function parseSessionLock(raw: unknown): LockRecord | undefined {
+  const lock = parseLockRecord(raw)
+  return lock?.kind === 'root' ? lock : undefined
 }
 
 /** `createAgent()` 的选项 */
@@ -116,62 +102,6 @@ export class AgentCreationError extends Error {
     super(message)
     this.name = 'AgentCreationError'
   }
-}
-
-function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-function isStringArray(value: unknown): value is string[] {
-  return Array.isArray(value) && value.every((item) => typeof item === 'string')
-}
-
-/**
- * 校验并拷贝一条存储里的锁记录；形状不对 → undefined（重开时按「写坏了」处理，K12）。
- * 拷贝：返回的对象不与文档快照共享任何东西。
- */
-export function parseLockRecord(raw: unknown): LockRecord | undefined {
-  if (!isObject(raw)) return undefined
-  const { conversationId, profileName, kind, model, thinkingLevel, toolNames } = raw
-  const { extensions, sandboxed, mcp, skills, createdAt } = raw
-  if (typeof conversationId !== 'number' || !Number.isInteger(conversationId)) return undefined
-  if (conversationId < 1) return undefined
-  if (typeof profileName !== 'string') return undefined
-  if (kind !== 'root' && kind !== 'spawned') return undefined
-  if (!isObject(model) || typeof model.provider !== 'string' || typeof model.modelId !== 'string') {
-    return undefined
-  }
-  if (thinkingLevel !== undefined && typeof thinkingLevel !== 'string') return undefined
-  if (!isStringArray(toolNames) || !isStringArray(extensions) || !isStringArray(skills)) {
-    return undefined
-  }
-  if (typeof sandboxed !== 'boolean') return undefined
-  if (typeof createdAt !== 'number' || !Number.isFinite(createdAt)) return undefined
-  if (!isObject(mcp)) return undefined
-  for (const declarations of Object.values(mcp)) {
-    if (!Array.isArray(declarations)) return undefined
-    if (!declarations.every((decl) => isObject(decl) && typeof decl.name === 'string')) {
-      return undefined
-    }
-  }
-  return {
-    conversationId: conversationId as ConversationId,
-    profileName,
-    kind,
-    model: { provider: model.provider, modelId: model.modelId },
-    ...(thinkingLevel === undefined ? {} : { thinkingLevel: thinkingLevel as ThinkingLevel }),
-    toolNames: [...toolNames],
-    extensions: [...extensions],
-    sandboxed,
-    mcp: JSON.parse(JSON.stringify(mcp)) as LockRecord['mcp'],
-    skills: [...skills],
-    createdAt
-  }
-}
-
-/** 锁记录 → 严格 JSON（非 JSON 的值 —— 如 MCP 声明里混进的 bigint —— 当场抛错） */
-export function lockRecordJson(record: LockRecord): JsonObject {
-  return copyJson(record as unknown as JsonValue, { omitUndefinedProperties: true }) as JsonObject
 }
 
 // ─────────────────────────── 工具次序（K6，纯函数） ───────────────────────────
@@ -205,7 +135,9 @@ export interface ComposedAgentTools {
 
 /**
  * 拼工具次序（K6）：内置名按归一名单次序（只收 `builtin` 里有的）→ agent → skill → MCP 逐台逐个 →
- * 宿主其它 → 附加工具（先移除同名再追加）。
+ * 宿主其它 → 附加工具（先移除同名再追加；同名的附加工具只留最后一个）。附加工具只看 `extraTools`
+ * 参数，不读 `set.extraTools`（调用方显式传：创建时 `resolved.extraTools`，重建时 `set.extraTools`）。
+ * `agent` 只来自 `set.agent` —— 名单里有 `agent` 不会把它带回来，所以不给 `set.agent` 就足以关掉它。
  */
 export function composeAgentTools(input: {
   names: readonly string[]
@@ -216,8 +148,14 @@ export function composeAgentTools(input: {
   const builtinByName = new Map<string, ToolRegistration>()
   for (const tool of input.builtin)
     if (!builtinByName.has(tool.name)) builtinByName.set(tool.name, tool)
-  const extras = input.extraTools ?? []
-  const extraNames = new Set(extras.map((tool) => tool.name))
+  // 同名的附加工具只留最后一个（PIN-07：与 tools[] 及 durable 的「后者赢」一致，agentTools 里名字唯一）
+  const lastExtra = new Map<string, ToolRegistration>()
+  for (const tool of input.extraTools ?? []) {
+    lastExtra.delete(tool.name)
+    lastExtra.set(tool.name, tool)
+  }
+  const extras = [...lastExtra.values()]
+  const extraNames = new Set(lastExtra.keys())
   const agentTools = [
     ...agentExtensionTools(input.set).filter((tool) => !extraNames.has(tool.name)),
     ...extras
@@ -305,12 +243,13 @@ export class AgentLock {
 
   /**
    * 打开会话时、在任何续跑 / 发送之前：装内置工具（有锁按锁的沙箱钉子），按锁重建按 agent 的扩展。
-   * 锁写坏了 / 重建失败：清锁（一个提交，不续跑）并记警告；会话照样可用。从不写 `pi.agent`。
+   * 锁写坏了（含 kind 不是 root，PIN-08）/ 重建失败：清锁（一个提交，不续跑）并记警告；会话照样可用。
+   * 从不写 `pi.agent`。root 的重建上下文从不带附加工具。
    */
   async restore(): Promise<void> {
     const { sessionId, logger } = this.deps
     const raw = (await this.deps.harness.snapshot(SessionStateDoc, BG))?.lock
-    let lock = raw === undefined ? undefined : parseLockRecord(raw)
+    let lock = raw === undefined ? undefined : parseSessionLock(raw)
     if (raw !== undefined && lock === undefined) {
       logger.warn(`session ${sessionId}: the agent lock is malformed; clearing it`)
       await this.clearStoredLock()

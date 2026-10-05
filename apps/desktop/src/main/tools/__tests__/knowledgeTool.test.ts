@@ -530,12 +530,16 @@ describe('H11-51 knowledge create 的章按调用盖', () => {
   let current: ToolContext['agent']
   const sessionCtx: ToolContext = { sessionId: 's1', agentOf: () => current }
 
-  const createEntry = async (title: string): Promise<string> => {
-    const tool = makeKnowledgeTool(sessionCtx)
+  const createEntry = async (
+    title: string,
+    conversationId = 1,
+    ctx: ToolContext = sessionCtx
+  ): Promise<string> => {
+    const tool = makeKnowledgeTool(ctx)
     await invokeTool(
       tool,
       { action: 'create', base: 'project', type: 'Memory', title, description: 'd', body: 'b' },
-      { callId: `h11-51-${title}`, conversationId: 1 }
+      { callId: `h11-51-${title}`, conversationId }
     )
     return readFileSync(join(state.root, 'projects', 'acme', `${title.toLowerCase()}.md`), 'utf-8')
   }
@@ -567,5 +571,34 @@ describe('H11-51 knowledge create 的章按调用盖', () => {
       'shuvix-work/m1',
       'shuvix-bot/m2'
     ])
+  })
+
+  it('P2-06-14 按对话盖章：对话 2（派生 explore / haiku）→ shuvix-explore/claude-haiku-4-5；对话 1（根）→ shuvix-work/claude-sonnet-4-5', async () => {
+    const ROOT = identity('work', 'claude-sonnet-4-5')
+    const SPAWN_E: ToolContext['agent'] = {
+      profileName: 'explore',
+      kind: 'spawned',
+      callerId: 'sub-a1',
+      getModelConfig: () => ({ provider: 'anthropic', model: 'claude-haiku-4-5', capabilities: {} })
+    }
+    const agentOf = vi.fn((conversationId: number) => (conversationId === 2 ? SPAWN_E : ROOT))
+    const ctx: ToolContext = { sessionId: 's1', agentOf }
+
+    const echo = await createEntry('Echo', 2, ctx)
+    expect(echo).toContain('by: "shuvix-explore/claude-haiku-4-5"')
+    expect(state.record).toHaveBeenLastCalledWith(
+      expect.objectContaining({ op: 'Creation', actor: 'shuvix-explore/claude-haiku-4-5' })
+    )
+
+    const foxtrot = await createEntry('Foxtrot', 1, ctx)
+    expect(foxtrot).toContain('by: "shuvix-work/claude-sonnet-4-5"')
+    expect(state.record).toHaveBeenLastCalledWith(
+      expect.objectContaining({ op: 'Creation', actor: 'shuvix-work/claude-sonnet-4-5' })
+    )
+
+    const asked = agentOf.mock.calls.map(([c]) => c)
+    expect(asked).toContain(2)
+    expect(asked).toContain(1)
+    expect(asked.indexOf(2)).toBeLessThan(asked.indexOf(1))
   })
 })

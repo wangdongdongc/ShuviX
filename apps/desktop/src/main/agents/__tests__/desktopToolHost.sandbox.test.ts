@@ -108,7 +108,7 @@ type Schema = { properties: Record<string, unknown>; required?: string[] }
 let unregister: () => void
 
 async function shellOf(sandboxed: boolean | undefined, name = 'bash'): Promise<ToolRegistration> {
-  const tools = await createDesktopToolHost({ lockOf: () => undefined }).buildBuiltinTools({
+  const tools = await createDesktopToolHost({ sessionOf: () => undefined }).buildBuiltinTools({
     sessionId: 's1',
     ...(sandboxed === undefined ? {} : { sandboxed })
   })

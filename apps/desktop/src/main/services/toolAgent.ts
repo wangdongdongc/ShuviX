@@ -17,8 +17,8 @@ export interface ToolAgentIdentity {
   getModelConfig?: () => SubAgentModelConfig
   /**
    * 调用方 id（派生 = agent id）—— 一份内置 MCP 实例由根 agent 与它派出的 agent 共用，实例里按调用方
-   * 分开的状态（浏览器的快照基线之类）靠它（见 McpCallMeta.callerId）。缺省 = 根 agent（会话 id）。
-   * TODO(pi-durable p2): 派生 agent 的身份带上它。
+   * 分开的状态（浏览器的快照基线之类）靠它（见 McpCallMeta.callerId）。派生 agent 的身份带它
+   * （运行时 `agentIdentity` 给）；缺省 = 根 agent（会话 id）。
    */
   callerId?: string
 }

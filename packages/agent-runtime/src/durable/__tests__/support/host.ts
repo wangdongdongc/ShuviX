@@ -17,6 +17,7 @@ import { join } from 'node:path'
 import {
   createRegistry,
   MemoryStorage,
+  type Extension,
   type Registry,
   type Storage,
   type ToolRegistration
@@ -58,6 +59,11 @@ export interface TestHostOptions {
   kit?: FauxKit
   /** 没给 kit 时每个进程用它造一个（restart 沿用；缺省 `fauxKit()`） */
   makeKit?: () => FauxKit
+  /**
+   * 每次打开（重启也一样）都预装进每个会话注册表的扩展 —— 测试任务定义（`support/spawn.ts` 的
+   * `test.spawn`：锚任务、扣住的任务）要在重开之后照样解析得到
+   */
+  extensions?: readonly Extension[]
   /** 按 agent 的测试工具（缺省 ToolHost 的 agentTools；同一份数组可在 makeHost 之后再 push） */
   tools?: ToolRegistration[]
   /** ToolHost 选项（每个进程据此新建一个）；缺省 = 没有内置工具、agentTools = tools */
@@ -93,6 +99,11 @@ export interface TestHostOptions {
   now?: () => number
   /** 今天的日期（给了才发日期通知） */
   today?: () => string
+  /**
+   * 子会话 driven 落定的 seam（P2-09）。`restart()` 沿用；`restart({ onDrivenSettled: undefined })`
+   * 模拟一个没接它的进程
+   */
+  onDrivenSettled?: SessionHostDeps['onDrivenSettled']
 }
 
 export interface TestHost {
@@ -219,6 +230,7 @@ export async function makeHost(options: TestHostOptions = {}): Promise<TestHost>
     models: options.models ?? kit.models,
     createRegistry: (sessionId) => {
       const registry = createRegistry<ToolRegistration>()
+      for (const extension of options.extensions ?? []) registry.install(extension)
       const list = registries.get(sessionId) ?? []
       list.push(registry)
       registries.set(sessionId, list)
@@ -296,6 +308,7 @@ export async function makeHost(options: TestHostOptions = {}): Promise<TestHost>
       : { noticeCoalesceMs: options.noticeCoalesceMs }),
     ...(options.now === undefined ? {} : { now: options.now }),
     ...(options.today === undefined ? {} : { today: options.today }),
+    ...(options.onDrivenSettled === undefined ? {} : { onDrivenSettled: options.onDrivenSettled }),
     logger: {
       info: () => {},
       warn: (message) => warnings.push(message),

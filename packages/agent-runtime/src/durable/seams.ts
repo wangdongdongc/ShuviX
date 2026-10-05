@@ -26,6 +26,8 @@ import type { ModelRegistry } from '../models/modelRegistry'
 import type { ProviderCredentialPort } from '../models/port'
 import type { InProcessAgentType } from '../subagent/types'
 import type { RuntimeEventSink, RuntimeLogger } from '../types'
+import type { SpawnedAgentRecord } from './agentRecord'
+import type { DrivenSettledEvent } from './durableSession'
 import type { LockRecord } from './lock'
 import type { ShuviXSettingsOverrides } from './settings'
 
@@ -38,7 +40,7 @@ import type { ShuviXSettingsOverrides } from './settings'
 export type RunState = 'idle' | 'busy' | 'interrupted'
 
 /**
- * 中断会话上收到用户发送时怎么办（裁决 R5；**待用户确认**，必须保持是一行就能切换的选项）：
+ * 中断会话上收到用户发送时怎么办（裁决 R5；用户 2026-10-04 定为 abort-then-send，另一种保留为可切换选项）：
  *  - `abort-then-send`（默认）：中止被中断的那件事（上个进程留下的排队输入随之撤回），再发送；
  *  - `continue-then-queue`：先让被中断的 run 跑完，用户的消息作为 follow-up 排在它后面。
  */
@@ -125,6 +127,14 @@ export interface SessionHostDeps {
    * 缺省 = 不发（测试默认关闭，需要的用例自己注入一个确定的日期）。
    */
   today?: () => string
+  /**
+   * 子会话被驱动的那一轮落定了（P2-09，`SessionState.driven`）：完成 / 出错 / 被中止都算。进程内由提交
+   * 发布察觉，打开时由扫描察觉（`open()` 落定之后才调用，从不续跑任何东西）。**每个进程至多一次**；
+   * 回调成功后运行时清掉标记，抛错 / 拒绝 = 记警告、留着标记，下次打开（新进程）再来。通知文案、
+   * 前台等待者的去重、打开父会话并 `notify(text, { requestId: e.noticeRequestId })` 都是宿主的事。
+   * 缺省 = 不察觉（标记留着，等接了它的进程打开时再送）。
+   */
+  onDrivenSettled?: (event: DrivenSettledEvent) => void | Promise<void>
 }
 
 /** bot 段落的内容：一块（通常是 `renderBotContext` 的输出）、若干块、或者没有 */
@@ -198,17 +208,35 @@ export interface BuiltinToolsRequest {
   sandboxed?: boolean
 }
 
-/** 按 agent 解析工具的请求（创建那一刻） */
+/**
+ * 按 agent 解析工具的请求（创建那一刻）。root 与派生 agent 共用这一个形状（平铺的可选字段，PIN-01）：
+ *
+ *  - **root**（锁）：带 `conversationId`；不带 `agentId` / `canSpawn` / `extraTools`（PIN-02）。名单含
+ *    `agent` 就给派发工具 —— root 的派发工具不看 `canSpawn`。
+ *  - **派生**（`kind: 'spawned'`，P2-03 的协调器发起）：**没有** `conversationId`（工具在创建子对话的
+ *    那个提交之前解析，子对话还不存在）；`agentId` 是派生 agent 的 id，`selfSessionId` 暂与它相同
+ *    （P2-05 去掉 selfSessionId）；`canSpawn` 决定给不给派发工具 —— 缺省按 false（失败即关）；
+ *    `extraTools` 是运行时已实例化的附加工具（结果契约的 `next`），宿主包好原样交回。
+ *
+ * 派发工具给不给，宿主统一用 `offersDispatchTool(request)` 判。
+ */
 export interface AgentToolsRequest {
-  /** 会话（存储）id */
+  /** 会话（存储）id —— 宿主资源（MCP、包装器、按 agent 的工具）都按它找，从不按 agentId（PIN-10） */
   sessionId: string
-  /** 这个 agent 所在的对话（root = 上锁时的当前对话，K20） */
-  conversationId: ConversationId
+  /** 这个 agent 所在的对话（root = 上锁时的当前对话，K20）；派生 agent 解析时子对话还不存在 → 缺省 */
+  conversationId?: ConversationId
   kind: AgentKind
   /** 询问 / 项目配置 / 输出落盘的归属会话（root = 自身） */
   rootSessionId: string
-  /** 这个 agent 自己的 id（派发工具的 parentSessionId；root = 会话 id） */
+  /** 这个 agent 自己的 id（派发工具的 parentSessionId；root = 会话 id；派生 = agentId） */
   selfSessionId: string
+  /** 派生 agent 的 id（`sub-<uuid>`）；root 不带 */
+  agentId?: string
+  /**
+   * 派生 agent 还能不能再派生（`canSpawnAt(depth)`）：true 且名单含 `agent` 才给派发工具；缺省 = false。
+   * root 不带，宿主对 root 也不看它（PIN-02）。
+   */
+  canSpawn?: boolean
   profile: InProcessAgentType
   /** 归一后的工具名单（档案全量 + 会话勾选，保序去重） */
   names: readonly string[]
@@ -217,8 +245,23 @@ export interface AgentToolsRequest {
   thinkingLevel?: ThinkingLevel
   /** 工作目录（可为空串） */
   cwd: string
-  /** 已实例化的附加工具（派生 agent 的 `next` 等，phase 2）；root 的锁拒绝它们 */
+  /**
+   * 已实例化的附加工具（派生 agent 的 `next`）：宿主包好放进 `ResolvedAgentTools.extraTools`
+   * （排在宿主自己的附加工具之前）；root 的锁拒绝附加工具
+   */
   extraTools?: readonly ToolRegistration[]
+}
+
+/**
+ * 派发工具（`agent`）给不给：名单含 `agent`，且是 root（root 不看 canSpawn，PIN-02）或 `canSpawn === true`
+ * （派生 agent 缺省按 false，失败即关，PIN-01）。重建时传锁 / 记录的 `toolNames` 作 `names`。
+ */
+export function offersDispatchTool(input: {
+  readonly kind: AgentKind
+  readonly names: readonly string[]
+  readonly canSpawn?: boolean
+}): boolean {
+  return input.names.includes('agent') && (input.kind === 'root' || input.canSpawn === true)
 }
 
 /** 一个 agent 的按 agent 工具（装进 `shuvix.agent.<对话>`）；运行时按 K6 的次序拼 */
@@ -231,6 +274,22 @@ export interface AgentToolSet {
   mcp?: readonly { readonly server: string; readonly tools: readonly ToolRegistration[] }[]
   /** 宿主的其它按 agent 工具（排在 MCP 之后） */
   tools?: readonly ToolRegistration[]
+  /**
+   * 附加工具（同名者先从前面各段移除再追加，K6）：派生 agent 的 `next` —— 解析时来自请求的
+   * `extraTools`，重建时来自重建上下文的 `extraTools`，宿主包好原样交回。root 的锁拒绝附加工具。
+   */
+  extraTools?: readonly ToolRegistration[]
+}
+
+/**
+ * 重建（重开会话 / 派生 agent 复活）时的上下文：
+ *  - `sessionId`：会话（根）id —— 宿主资源按它找，从不按 agentId（PIN-10）；
+ *  - `extraTools`：运行时按记录造好的附加工具（`resultContractTools(record.resultContract)`，PIN-03 R）；
+ *    宿主包好放进 `AgentToolSet.extraTools`。root 的锁重建从不带它。
+ */
+export interface AgentToolsRebuildContext {
+  readonly sessionId: string
+  readonly extraTools?: readonly ToolRegistration[]
 }
 
 /** 创建时的解析结果：工具 + 要记进锁里的东西 */
@@ -245,8 +304,6 @@ export interface ResolvedAgentTools extends AgentToolSet {
   skills?: readonly string[]
   /** 命令沙箱钉子（K8），记进锁；`shuvix.builtin` 按它重装 */
   sandboxed: boolean
-  /** 附加工具（同名者先移除再追加）；root 的锁拒绝 */
-  extraTools?: readonly ToolRegistration[]
 }
 
 /**
@@ -257,8 +314,9 @@ export interface ResolvedAgentTools extends AgentToolSet {
  *  - `resolveAgentTools`：创建 agent 时按名单解析按 agent 的工具 —— 派发工具、技能工具、MCP（这一刻
  *    惰性连接；`mcp_connecting` / 连不上的 `error` 由宿主自己广播，K7）。`signal` 在创建被中止 / 销毁
  *    时触发（K13），要一路透传给 MCP 连接。
- *  - `rebuildAgentTools`：重开会话时**按锁记录**重建同一组工具 —— 不连服务器（MCP 按声明快照建，
- *    第一次调用时原地连），不读会话配置。
+ *  - `rebuildAgentTools`：重开会话时**按记录**重建同一组工具 —— root 按锁记录，派生 agent 按它的
+ *    `SpawnedAgentRecord`（`canSpawn` 决定派发工具；`context.extraTools` 是运行时按结果契约造好的
+ *    `next`）。不连服务器（MCP 按声明快照建，第一次调用时原地连），不读会话配置。
  */
 export interface ToolHost {
   buildBuiltinTools(
@@ -269,7 +327,7 @@ export interface ToolHost {
     options: { readonly signal: AbortSignal }
   ): Promise<ResolvedAgentTools>
   rebuildAgentTools(
-    lock: LockRecord,
-    context: { readonly sessionId: string }
+    record: LockRecord | SpawnedAgentRecord,
+    context: AgentToolsRebuildContext
   ): AgentToolSet | Promise<AgentToolSet>
 }

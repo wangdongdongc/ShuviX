@@ -3,6 +3,11 @@
  * 按锁重建、包装的选项、调用方身份（agentOf），以及留给旧调用方的 agentFactory。编号同设计稿
  * （docs/pi-durable/p1-11-test-design.md，H11-xx）。
  *
+ * P2-06（docs/pi-durable/p2-06-test-design.md，P2-06-xx）：调用方身份按对话认人 —— ToolHost 经注入的
+ * `sessionOf` 拿打开着的会话、问它的 `agentIdentity(对话)`（Fx-SH：FakeSessionHost 上可设的 `identities`）。
+ * 由此喂 MCP 的 callerIdOf、知识库的章与门的主体。P2-06-12 用真 McpManager + SDK 的 InMemoryTransport
+ * 与一台最小的 Server 看 `_meta` 的组成（PIN-07）。
+ *
  * 本文件是「替身模式」：包装器换成记账的恒等桩（Fx-WRAP spy），SkillTool 换成按 findEnabled /
  * findAll 过滤名单的桩（构造实参可查），派发工具换成桩，mcpService 是 Fx-MCP 的 spy；注册表是**真的**
  * （Fx-REG：与真注册项同名、同平台的桩工厂）。真包装器 / 真 SkillTool / 真派发工具那几条在
@@ -11,7 +16,17 @@
  * ⚠️ SkillTool 桩自带过滤（`hasSkills` / `skillNames` 都由 findEnabled 决定）：一个空 `class {}` 会让
  * hasSkills 恒为 undefined、工具永不注入，用例全绿却什么都没测（见 skillToolInjection 的 mock 陷阱）。
  */
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock
+} from 'vitest'
 import type { ToolExecutionApi, ToolRegistration } from '@earendil-works/pi-durable'
 import type { Context } from '@earendil-works/chord'
 
@@ -120,18 +135,28 @@ vi.mock('../../services/wrapToolOutput', () => ({
 }))
 
 import i18next from 'i18next'
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
+import { Server } from '@modelcontextprotocol/sdk/server/index.js'
+import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js'
+import type { McpServer } from '@shuvix/chat-protocol/types/mcp'
 import {
   composeAgentTools,
   isPhasePendingError,
   LAZY_CONNECT_TIMEOUT_MS,
   McpManager,
+  type AgentIdentity,
   type LockRecord,
   type McpRegistrationOptions,
   type McpToolDeclaration,
   type ResolvedAgentTools,
+  type SubAgentModelConfig,
   type ToolHost
 } from '@shuvix/agent-runtime'
 import type { ToolContext } from '../../services/toolContext'
+import {
+  FakeSessionHost,
+  type FakeDurableSession
+} from '../../services/__tests__/support/fakeSessionHost'
 import { agentActorOf, withCallAgent } from '../../services/toolAgent'
 import {
   getPlatformBuiltinToolEntries,
@@ -144,6 +169,7 @@ import {
   D_SSH,
   MCP_DECLS,
   MODEL,
+  decl,
   deferred,
   factoryCalls,
   flush,
@@ -178,9 +204,55 @@ const DARWIN_BUILTINS = [
 
 const skill = (name: string): { name: string } => ({ name })
 
-/** lockOf：可变表上的 spy */
-const locks = new Map<string, LockRecord>()
-const lockOf = vi.fn((sessionId: string) => locks.get(sessionId))
+/**
+ * Fx-SH（身份来源，P2-06）：假的会话宿主；ToolHost 经 `sessionOf`（spy）同步拿打开着的会话，按对话问它的
+ * `agentIdentity`（没设的对话 = 锁的根身份，没锁 = undefined）。
+ */
+let fake: FakeSessionHost
+let sessionOf: Mock<(sessionId: string) => FakeDurableSession | undefined>
+
+/** 打开着的会话（没开就放一个进去） */
+function sessionFor(sessionId = 's1'): FakeDurableSession {
+  return fake.get(sessionId) ?? fake.put(sessionId)
+}
+
+/** 设 / 清这条会话的锁（会话没开就先打开） */
+function setLock(sessionId: string, lock: LockRecord | undefined): FakeDurableSession {
+  const session = sessionFor(sessionId)
+  session.lock = lock
+  return session
+}
+
+/** 一条 MCP 配置行（P2-06-12 的真 McpManager 用） */
+function mcpRow(patch: Partial<McpServer> & { id: string; name: string }): McpServer {
+  return {
+    type: 'http',
+    command: '',
+    args: '[]',
+    env: '{}',
+    url: 'http://127.0.0.1/mcp',
+    headers: '{}',
+    metadata: '{}',
+    isEnabled: 1,
+    isBuiltin: 0,
+    cachedTools: '[]',
+    createdAt: 0,
+    updatedAt: 0,
+    ...patch
+  }
+}
+
+/** 一份惰性模型配置（haiku） */
+const haiku = (): SubAgentModelConfig => ({
+  provider: 'anthropic',
+  model: 'claude-haiku-4-5',
+  capabilities: {}
+})
+
+/** s1 里各对话上的身份（每个用例新建，spy 不串） */
+let SPAWN_E: AgentIdentity
+let HOOK_R: AgentIdentity
+let BARE: AgentIdentity
 
 let host: ToolHost
 let unregister: () => void
@@ -232,8 +304,16 @@ afterAll(() => {
 
 beforeEach(() => {
   setPlatform('darwin')
-  locks.clear()
-  lockOf.mockClear()
+  fake = new FakeSessionHost()
+  sessionOf = vi.fn((sessionId: string) => fake.get(sessionId))
+  SPAWN_E = { profileName: 'explore', kind: 'spawned', callerId: 'sub-a1', getModelConfig: haiku }
+  HOOK_R = {
+    profileName: 'permission-reviewer',
+    kind: 'spawned',
+    callerId: 'sub-r1',
+    getModelConfig: haiku
+  }
+  BARE = { profileName: 'explore', kind: 'spawned', callerId: 'sub-x' }
   factoryCalls.length = 0
   mocks.wrapCalls.length = 0
   mocks.skillToolCalls.length = 0
@@ -278,7 +358,7 @@ beforeEach(() => {
   mocks.getDesktopSecurityContext.mockImplementation(() => ({ sentinel: 'gate' }))
   mocks.findAllEnabledModels.mockReturnValue([])
   mocks.resolveProjectConfig.mockReturnValue({ workingDirectory: '/w/proj' })
-  host = createDesktopToolHost({ lockOf })
+  host = createDesktopToolHost({ sessionOf })
 })
 
 afterEach(() => {
@@ -333,8 +413,10 @@ describe('buildBuiltinTools', () => {
     expect(mocks.requestUserInputFor).toHaveBeenCalledWith('s1', question)
   })
 
-  it('H11-04 打开时那一次是纯本地的：不碰 MCP / 技能 / 锁 / 广播；会话行不存在也照常', async () => {
+  it('H11-04 / P2-06-28 打开时那一次是纯本地的：不碰 MCP / 技能 / 会话宿主 / 广播；会话行不存在也照常', async () => {
     mocks.pick.mockReturnValue(undefined)
+    setLock('s1', lockD())
+    const get = vi.spyOn(fake, 'get')
     const tools = await host.buildBuiltinTools({ sessionId: 's1' })
     expect(names(tools)).toEqual(DARWIN_BUILTINS)
     for (const fn of [
@@ -348,10 +430,11 @@ describe('buildBuiltinTools', () => {
     ]) {
       expect(fn).not.toHaveBeenCalled()
     }
-    expect(lockOf).not.toHaveBeenCalled()
+    expect(sessionOf).not.toHaveBeenCalled()
+    expect(get).not.toHaveBeenCalled()
   })
 
-  it('H11-05 每次都是新实例、会话之间互不相干：s2 的 ctx 归 s2，它的 agentOf 只问 lockOf(s2)', async () => {
+  it('H11-05 / P2-06-28 每次都是新实例、会话之间互不相干：s2 的 ctx 归 s2，它的 agentOf 只问 sessionOf(s2)', async () => {
     const first = await host.buildBuiltinTools({ sessionId: 's1', sandboxed: false })
     const firstCtx = factoryCalls[0].ctx
     factoryCalls.length = 0
@@ -364,9 +447,9 @@ describe('buildBuiltinTools', () => {
     await host.buildBuiltinTools({ sessionId: 's2', sandboxed: false })
     const s2 = factoryCalls[0].ctx
     expect(s2.sessionId).toBe('s2')
-    lockOf.mockClear()
+    expect(sessionOf).not.toHaveBeenCalled()
     s2.agentOf!(1)
-    expect(lockOf.mock.calls).toEqual([['s2']])
+    expect(sessionOf.mock.calls).toEqual([['s2']])
   })
 
   it('H11-06 一个工厂抛错：其余照装、没有它，记一条点名它的警告（PIN-05）', async () => {
@@ -518,7 +601,46 @@ describe('resolveAgentTools', () => {
     expect(mocks.broadcast).not.toHaveBeenCalled()
   })
 
-  it.todo('MTI-1 派生 agent：连接与取工具按根会话、调用方报它自己的 agentId (pi-durable p2)')
+  it('P2-06-28 解析（没有 MCP 调用）不问会话宿主：sessionOf / fake.get 都没调', async () => {
+    setLock('s1', lockD())
+    const get = vi.spyOn(fake, 'get')
+    await host.resolveAgentTools(requestD(), { signal: signal() })
+    expect(sessionOf).not.toHaveBeenCalled()
+    expect(get).not.toHaveBeenCalled()
+  })
+
+  it('MTI-1 / P2-06-22 派生 agent：连接与取工具按根会话、调用方报它自己的 agentId', async () => {
+    setLock('s1', lockD()).identities.set(2, SPAWN_E)
+    mocks.statusByName.mockReturnValue('disconnected')
+    await host.resolveAgentTools(requestD({ names: ['mcp:ssh'] }), { signal: signal() })
+
+    // 连接与工具都按根会话
+    expect(mocks.ensureServerByName.mock.calls).toEqual([
+      ['ssh', { timeoutMs: LAZY_CONNECT_TIMEOUT_MS, sessionId: 's1' }]
+    ])
+    expect(mocks.declarationsOf.mock.calls).toEqual([['ssh', 's1']])
+    expect(mocks.registrationsFromDeclarations.mock.calls[0].slice(0, 2)).toEqual(['ssh', 's1'])
+    expect(mocks.broadcast).toHaveBeenCalled()
+    for (const [event] of mocks.broadcast.mock.calls) expect(event.sessionId).toBe('s1')
+
+    // 调用方报它自己的 agent id
+    const created = callerIdOfCall(0)
+    expect(created(2)).toBe('sub-a1')
+    expect(created(1)).toBe('s1')
+
+    // 重建：同样按根会话建，调用方照样按对话认
+    const lock = lockD()
+    await host.rebuildAgentTools(lock, { sessionId: 's1' })
+    expect(mocks.registrationsFromDeclarations.mock.calls[1].slice(0, 3)).toEqual([
+      'context7',
+      's1',
+      lock.mcp.context7
+    ])
+    expect(callerIdOfCall(1)(2)).toBe('sub-a1')
+
+    expect(sessionOf).toHaveBeenCalled()
+    for (const [id] of sessionOf.mock.calls) expect(id).toBe('s1')
+  })
 })
 
 // ─── MCP 惰性连接 ────────────────────────────────────────────────────────
@@ -584,13 +706,13 @@ describe('MCP 惰性连接', () => {
     expect(mocks.getRegistrationsByServerName).not.toHaveBeenCalled()
   })
 
-  it('H11-25 callerIdOf：根对话与别的对话都报 s1；没有锁也一样', async () => {
-    locks.set('s1', lockD())
+  it('H11-25 / P2-06-29 callerIdOf：根对话与别的（非派生）对话都报 s1；没有锁也一样', async () => {
+    setLock('s1', lockD())
     await host.resolveAgentTools(requestD(ssh), { signal: signal() })
     const callerIdOf = callerIdOfCall(0)
     expect(callerIdOf(1)).toBe('s1')
     expect(callerIdOf(7)).toBe('s1')
-    locks.clear()
+    setLock('s1', undefined)
     expect(callerIdOf(1)).toBe('s1')
     expect(callerIdOf(7)).toBe('s1')
   })
@@ -699,7 +821,9 @@ describe('MCP 惰性连接', () => {
 // ─── rebuildAgentTools ────────────────────────────────────────────────────
 
 describe('rebuildAgentTools', () => {
-  it('H11-32 不碰网络：不问状态、不连、不取声明 / 活注册项、不读锁、不广播；不读会话配置', async () => {
+  it('H11-32 / P2-06-28 不碰网络：不问状态、不连、不取声明 / 活注册项、不问会话宿主、不广播；不读会话配置', async () => {
+    setLock('s1', lockD())
+    const get = vi.spyOn(fake, 'get')
     await host.rebuildAgentTools(lockD(), { sessionId: 's1' })
     for (const fn of [
       mocks.statusByName,
@@ -711,11 +835,13 @@ describe('rebuildAgentTools', () => {
     ]) {
       expect(fn).not.toHaveBeenCalled()
     }
-    expect(lockOf).not.toHaveBeenCalled()
+    expect(sessionOf).not.toHaveBeenCalled()
+    expect(get).not.toHaveBeenCalled()
     for (const [, fields] of mocks.pick.mock.calls) expect(fields).not.toContain('settings')
   })
 
-  it('H11-33 这一组出自锁：agent 在；SkillTool 按（锁里的技能、项目路径、known）造；MCP 按锁里的声明建、callerIdOf(1) = s1；没有 tools / extras', async () => {
+  it('H11-33 / P2-06-29 这一组出自锁：agent 在；SkillTool 按（锁里的技能、项目路径、known）造；MCP 按锁里的声明建、callerIdOf(1) = s1；没有 tools / extras', async () => {
+    setLock('s1', lockD())
     const lock = lockD()
     const set = await host.rebuildAgentTools(lock, { sessionId: 's1' })
     expect(set.agent?.name).toBe('agent')
@@ -783,7 +909,8 @@ describe('rebuildAgentTools', () => {
     expect(JSON.stringify(result.content)).toContain('not connected')
   })
 
-  it('H11-38 fork 上的锁（对话 5）照样重建，callerIdOf(5) = s1', async () => {
+  it('H11-38 / P2-06-29 fork 上的锁（对话 5）照样重建，callerIdOf(5) = s1', async () => {
+    setLock('s1', lockD({ conversationId: 5 as never }))
     const set = await host.rebuildAgentTools(lockD({ conversationId: 5 as never }), {
       sessionId: 's1'
     })
@@ -831,18 +958,23 @@ describe('包装', () => {
     }
   })
 
-  it('H11-44 门的主体按调用现取：有锁 → work / root；没锁 → 没有档案名；锁换成 bot → 下一次报 bot；每种工具同一次调用同一个主体', async () => {
+  /** H11-44 的样本：内置 read、派发、技能、一件 MCP、一条附加的 next */
+  async function sampleTools(): Promise<ToolRegistration[]> {
     const builtin = await host.buildBuiltinTools({ sessionId: 's1', sandboxed: false })
     const resolved = await host.resolveAgentTools(requestD({ extraTools: [stubTool('next')] }), {
       signal: signal()
     })
-    const sample = [
+    return [
       builtin.find((t) => t.name === 'read')!,
       resolved.agent!,
       resolved.skill!,
       resolved.mcp![0].tools[0],
       resolved.extraTools![0]
     ]
+  }
+
+  it('H11-44 / P2-06-25 门的主体按调用现取：有锁 → work / root；没锁 → 没有档案名；锁换成 bot → 下一次报 bot；每种工具同一次调用同一个主体', async () => {
+    const sample = await sampleTools()
     const subjectOf = (tool: object): Record<string, unknown> => {
       const ctx = securityCtxOf(tool)
       return {
@@ -852,35 +984,197 @@ describe('包装', () => {
       }
     }
 
-    locks.set('s1', lockD())
+    setLock('s1', lockD())
     for (const tool of sample) {
       expect(subjectOf(tool)).toEqual({ sessionId: 's1', agentKind: 'root', profileName: 'work' })
     }
-    locks.clear()
+    setLock('s1', undefined)
     for (const tool of sample) {
       expect(subjectOf(tool)).toEqual({ sessionId: 's1', agentKind: 'root' })
     }
-    locks.set('s1', lockD({ profileName: 'bot' }))
+    setLock('s1', lockD({ profileName: 'bot' }))
     for (const tool of sample) {
       expect(subjectOf(tool)).toEqual({ sessionId: 's1', agentKind: 'root', profileName: 'bot' })
     }
   })
+
+  it('P2-06-16 门的主体经宿主按对话认人，每种工具都一样：2 → SPAWN_E、3 → HOOK_R、1 → 根、4 → BARE', async () => {
+    const session = setLock('s1', lockD())
+    session.identities.set(2, SPAWN_E)
+    session.identities.set(3, HOOK_R)
+    session.identities.set(4, BARE)
+    const sample = await sampleTools()
+    // 同一条对话、每种工具都是同一个身份对象（运行时给的那一个，原样交回）
+    for (const tool of sample) {
+      const spawned = securityCtxOf(tool, 2)
+      expect(spawned.agent).toBe(SPAWN_E)
+      expect(spawned.sessionId).toBe('s1')
+      expect(securityCtxOf(tool, 3).agent).toBe(HOOK_R)
+      expect(securityCtxOf(tool, 4).agent).toBe(BARE)
+      const root = securityCtxOf(tool, 1).agent
+      expect(root).toMatchObject({ profileName: 'work', kind: 'root' })
+      expect(root).not.toHaveProperty('callerId')
+    }
+  })
 })
 
-// ─── 调用方身份 ─────────────────────────────────────────────────────────
+// ─── 调用方身份（P2-06：按对话认人） ──────────────────────────────────────
 
-describe('agentOf', () => {
-  async function sessionCtx(sessionId = 's1'): Promise<ToolContext> {
-    factoryCalls.length = 0
-    await host.buildBuiltinTools({ sessionId, sandboxed: false })
-    return factoryCalls[0].ctx
-  }
+/** 会话级装配的那一个 ctx（内置工具工厂拿到的） */
+async function sessionCtx(sessionId = 's1'): Promise<ToolContext> {
+  factoryCalls.length = 0
+  await host.buildBuiltinTools({ sessionId, sandboxed: false })
+  return factoryCalls[0].ctx
+}
 
-  it('H11-45 按锁认出根 agent：work / root / 锁定的模型；actor = shuvix-work/claude-sonnet-4-5（PIN-01）', async () => {
-    locks.set('s1', lockD())
-    const agent = (await sessionCtx()).agentOf!(1)
-    expect(agent?.profileName).toBe('work')
-    expect(agent?.kind).toBe('root')
+describe('agentOf by conversation', () => {
+  it('P2-06-01 派生与根按对话认：agentOf(2) 就是 SPAWN_E；agentOf(1) 就是 agentIdentity(1) 交回的那个对象（根、没有 callerId）；每次现问、不缓存', async () => {
+    const session = setLock('s1', lockD())
+    session.identities.set(2, SPAWN_E)
+    const ctx = await sessionCtx()
+    const lookup = vi.spyOn(session, 'agentIdentity')
+
+    expect(ctx.agentOf!(2)).toBe(SPAWN_E)
+    expect(ctx.agentOf!(2)?.callerId).toBe('sub-a1')
+    lookup.mockClear()
+    sessionOf.mockClear()
+
+    expect(ctx.agentOf!(2)).toBe(SPAWN_E)
+    const root = ctx.agentOf!(1)
+    expect(root).toBe(lookup.mock.results[1].value)
+    expect(root?.profileName).toBe('work')
+    expect(root?.kind).toBe('root')
+    expect('callerId' in root!).toBe(false)
+    expect(lookup.mock.calls).toEqual([[2], [1]])
+    expect(sessionOf.mock.calls).toEqual([['s1'], ['s1']])
+  })
+
+  it('P2-06-02 hook agent：agentOf(3) 就是 HOOK_R（spawned、callerId sub-r1）', async () => {
+    setLock('s1', lockD()).identities.set(3, HOOK_R)
+    const agent = (await sessionCtx()).agentOf!(3)
+    expect(agent).toBe(HOOK_R)
+    expect(agent?.kind).toBe('spawned')
+    expect(agent?.callerId).toBe('sub-r1')
+  })
+
+  it('P2-06-03 不认识的 / 非派生的对话：原样交回 agentIdentity 给的（根身份），对话 id 原样传下去', async () => {
+    const session = setLock('s1', lockD())
+    const ctx = await sessionCtx()
+    const lookup = vi.spyOn(session, 'agentIdentity')
+    const fork = ctx.agentOf!(5)
+    const unknown = ctx.agentOf!(999)
+    expect(lookup.mock.calls).toEqual([[5], [999]])
+    expect(fork).toBe(lookup.mock.results[0].value)
+    expect(unknown).toBe(lookup.mock.results[1].value)
+    expect(fork).toMatchObject({ profileName: 'work', kind: 'root' })
+    expect(unknown).toMatchObject({ profileName: 'work', kind: 'root' })
+  })
+
+  it('P2-06-04 会话开着但没锁：根对话 / 不认识的 → undefined；派生的照认', async () => {
+    setLock('s1', undefined).identities.set(2, SPAWN_E)
+    const ctx = await sessionCtx()
+    expect(ctx.agentOf!(1)).toBeUndefined()
+    expect(ctx.agentOf!(999)).toBeUndefined()
+    expect(ctx.agentOf!(2)).toBe(SPAWN_E)
+    expect(withCallAgent(ctx, { conversationId: 1 }).agent).toBeUndefined()
+    expect(withCallAgent(ctx, { conversationId: 2 }).agent).toBe(SPAWN_E)
+  })
+
+  it('P2-06-05a 会话没开：undefined，不抛；问过 sessionOf(s1)，从不打开 / peek', async () => {
+    const ctx = await sessionCtx()
+    expect(() => ctx.agentOf!(1)).not.toThrow()
+    expect(ctx.agentOf!(1)).toBeUndefined()
+    expect(ctx.agentOf!(2)).toBeUndefined()
+    expect(sessionOf).toHaveBeenCalledWith('s1')
+    expect(fake.calls.filter(([kind]) => kind === 'open' || kind === 'peek')).toEqual([])
+  })
+
+  it('P2-06-05b / P2-06-06 开着时建的 ctx：会话关了 → undefined，旧实例不再被问；重开后跟着新实例走', async () => {
+    const first = setLock('s1', lockD())
+    first.identities.set(2, SPAWN_E)
+    const ctx = await sessionCtx()
+    expect(ctx.agentOf!(2)).toBe(SPAWN_E)
+    const lookup = vi.spyOn(first, 'agentIdentity')
+
+    await fake.close('s1')
+    expect(ctx.agentOf!(2)).toBeUndefined()
+    expect(lookup).not.toHaveBeenCalled()
+
+    // P2-06-06：重开（新实例、新锁、新记录）—— 旧 ctx 认的是新的
+    const SPAWN_E2: AgentIdentity = { ...SPAWN_E, profileName: 'explore2', callerId: 'sub-a2' }
+    const second = fake.put('s1', { lock: lockD({ profileName: 'bot' }) })
+    second.identities.set(2, SPAWN_E2)
+    expect(ctx.agentOf!(2)).toBe(SPAWN_E2)
+    expect(ctx.agentOf!(1)?.profileName).toBe('bot')
+    expect(lookup).not.toHaveBeenCalled()
+  })
+
+  it('P2-06-07 出错不抛（P1-11 PIN-15）：sessionOf 抛 / agentIdentity 抛 → undefined 并 warn（带会话 id）；各处落回兜底', async () => {
+    const session = setLock('s1', lockD())
+    session.identities.set(2, SPAWN_E)
+    const ctx = await sessionCtx()
+
+    // (a) sessionOf 抛
+    sessionOf.mockImplementationOnce(() => {
+      throw new Error('host gone')
+    })
+    expect(ctx.agentOf!(2)).toBeUndefined()
+    expect(mocks.log.warn).toHaveBeenCalledTimes(1)
+    expect(String(mocks.log.warn.mock.calls[0][0])).toContain('s1')
+
+    // (b) agentIdentity 抛
+    mocks.log.warn.mockClear()
+    vi.spyOn(session, 'agentIdentity').mockImplementationOnce(() => {
+      throw new Error('directory broken')
+    })
+    expect(ctx.agentOf!(2)).toBeUndefined()
+    expect(mocks.log.warn).toHaveBeenCalledTimes(1)
+    const warning = String(mocks.log.warn.mock.calls[0][0])
+    expect(warning).toContain('s1')
+    expect(warning).toContain('2')
+
+    // (c) 经用它的地方：章、门的主体、MCP 调用方 id 都落回兜底
+    const builtin = await host.buildBuiltinTools({ sessionId: 's1', sandboxed: false })
+    await host.resolveAgentTools(requestD({ names: ['mcp:ssh'] }), { signal: signal() })
+    sessionOf.mockImplementation(() => {
+      throw new Error('host gone')
+    })
+    expect(agentActorOf(withCallAgent(ctx, { conversationId: 2 }))).toBe('shuvix-agent/unknown')
+    expect(securityCtxOf(builtin.find((t) => t.name === 'read')!, 2).agent).toBeUndefined()
+    expect(callerIdOfCall(0)(2)).toBe('s1')
+  })
+
+  it('P2-06-13 actor 经宿主 ctx 按对话盖章：1 → work/sonnet、2 → explore/haiku、3 → permission-reviewer/haiku、4 → explore/unknown；模型惰性取', async () => {
+    const getModelConfig = vi.fn(haiku)
+    const spawn: AgentIdentity = { ...SPAWN_E, getModelConfig }
+    const session = setLock('s1', lockD())
+    session.identities.set(2, spawn)
+    session.identities.set(3, HOOK_R)
+    session.identities.set(4, BARE)
+    const ctx = await sessionCtx()
+    const actor = (c: number): string => agentActorOf(withCallAgent(ctx, { conversationId: c }))
+
+    expect(ctx.agentOf!(2)).toBe(spawn)
+    expect(getModelConfig).not.toHaveBeenCalled()
+
+    expect(actor(1)).toBe('shuvix-work/claude-sonnet-4-5')
+    expect(actor(2)).toBe('shuvix-explore/claude-haiku-4-5')
+    expect(getModelConfig).toHaveBeenCalledTimes(1)
+    expect(actor(3)).toBe('shuvix-permission-reviewer/claude-haiku-4-5')
+    expect(actor(4)).toBe('shuvix-explore/unknown')
+
+    session.lock = undefined
+    expect(actor(1)).toBe('shuvix-agent/unknown')
+    expect(actor(2)).toBe('shuvix-explore/claude-haiku-4-5')
+  })
+
+  it('P2-06-26（改写 H11-45）根身份就是 agentIdentity(1) 给的对象：没有 callerId；模型配置取锁定的模型；actor = shuvix-work/claude-sonnet-4-5', async () => {
+    const session = setLock('s1', lockD())
+    const ctx = await sessionCtx()
+    const lookup = vi.spyOn(session, 'agentIdentity')
+    const agent = ctx.agentOf!(1)
+    expect(agent).toBe(lookup.mock.results[0].value)
+    expect(agent).not.toHaveProperty('callerId')
     expect(agent?.getModelConfig?.()).toEqual({
       provider: 'anthropic',
       model: 'claude-sonnet-4-5',
@@ -889,67 +1183,259 @@ describe('agentOf', () => {
     expect(agentActorOf({ agent })).toBe('shuvix-work/claude-sonnet-4-5')
   })
 
-  it('H11-46 没有锁 → undefined；lockOf 抛错 → undefined，不抛（PIN-15）', async () => {
-    const ctx = await sessionCtx()
-    expect(ctx.agentOf!(1)).toBeUndefined()
-    lockOf.mockImplementationOnce(() => {
-      throw new Error('storage closed')
-    })
-    expect(() => ctx.agentOf!(1)).not.toThrow()
-    lockOf.mockImplementationOnce(() => {
-      throw new Error('storage closed')
-    })
-    expect(ctx.agentOf!(1)).toBeUndefined()
-  })
-
-  it('H11-47 现读：同一个 ctx，锁 L1 → work/m1；清掉 → undefined；L2 → bot/m2；lockOf 只按 s1 问', async () => {
+  it('P2-06-27（改写 H11-46/47，保留 H11-50）现读：同一个 ctx 跟着锁走；模型那一截取 modelId、从不取 provider；只按 s1 问', async () => {
+    const session = setLock('s1', undefined)
     const ctx = await sessionCtx()
     const actor = (): string => agentActorOf(withCallAgent(ctx, { conversationId: 1 }))
     expect(actor()).toBe('shuvix-agent/unknown')
-    locks.set('s1', lockD({ model: { provider: 'p', modelId: 'm1' } }))
+    session.lock = lockD({ model: { provider: 'p', modelId: 'm1' } })
     expect(actor()).toBe('shuvix-work/m1')
-    locks.clear()
+    session.lock = undefined
     expect(ctx.agentOf!(1)).toBeUndefined()
-    locks.set('s1', lockD({ profileName: 'bot', model: { provider: 'p', modelId: 'm2' } }))
+    session.lock = lockD({ profileName: 'bot', model: { provider: 'p', modelId: 'm2' } })
     expect(actor()).toBe('shuvix-bot/m2')
-    expect(new Set(lockOf.mock.calls.map(([id]) => id))).toEqual(new Set(['s1']))
-  })
-
-  it('H11-48 phase 1 不看对话：锁在对话 5 上，agentOf(5) 与 agentOf(1) 都是根 agent（PIN-14）', async () => {
-    locks.set('s1', lockD({ conversationId: 5 as never }))
-    const ctx = await sessionCtx()
-    expect(ctx.agentOf!(5)?.profileName).toBe('work')
-    expect(ctx.agentOf!(1)?.profileName).toBe('work')
-  })
-
-  it('H11-50 actor 经 withCallAgent：L_D → shuvix-work/claude-sonnet-4-5；没锁 → shuvix-agent/unknown；档案名 my bot → shuvix-my-bot/…；模型那一截取 modelId、从不取 provider', async () => {
-    const ctx = await sessionCtx()
-    const actor = (): string => agentActorOf(withCallAgent(ctx, { conversationId: 1 }))
-    locks.set('s1', lockD())
-    expect(actor()).toBe('shuvix-work/claude-sonnet-4-5')
-    locks.clear()
-    expect(actor()).toBe('shuvix-agent/unknown')
-    locks.set('s1', lockD({ profileName: 'my bot' }))
+    session.lock = lockD({ profileName: 'my bot' })
     expect(actor()).toBe('shuvix-my-bot/claude-sonnet-4-5')
-    locks.set('s1', lockD({ model: { provider: 'provider-x', modelId: 'model-y' } }))
+    session.lock = lockD({ model: { provider: 'provider-x', modelId: 'model-y' } })
     expect(actor()).toBe('shuvix-work/model-y')
     expect(actor()).not.toContain('provider-x')
+    expect(new Set(sessionOf.mock.calls.map(([id]) => id))).toEqual(new Set(['s1']))
+  })
+})
+
+// ─── 调用方 id（MCP `_meta`） ──────────────────────────────────────────
+
+describe('callerId by conversation', () => {
+  it('P2-06-08 创建时的注册项：1 / 5 / 999 → s1；2 → sub-a1；3 → sub-r1', async () => {
+    const session = setLock('s1', lockD())
+    session.identities.set(2, SPAWN_E)
+    session.identities.set(3, HOOK_R)
+    await host.resolveAgentTools(requestD({ names: ['mcp:ssh'] }), { signal: signal() })
+    const callerIdOf = callerIdOfCall(0)
+    expect(callerIdOf(1)).toBe('s1')
+    expect(callerIdOf(2)).toBe('sub-a1')
+    expect(callerIdOf(3)).toBe('sub-r1')
+    expect(callerIdOf(5)).toBe('s1')
+    expect(callerIdOf(999)).toBe('s1')
   })
 
-  it('H11-54 会话之间互不串：s1 锁 work/m1、s2 锁 bot/m2 —— 各自的章与门的主体各说各的', async () => {
-    locks.set('s1', lockD({ model: { provider: 'p', modelId: 'm1' } }))
-    locks.set('s2', lockD({ profileName: 'bot', model: { provider: 'p', modelId: 'm2' } }))
+  it('P2-06-09 重建时的注册项：同一张表；fork 锁上 5 → s1、2 → sub-a1；重建期间不问 sessionOf', async () => {
+    const session = setLock('s1', lockD())
+    session.identities.set(2, SPAWN_E)
+    session.identities.set(3, HOOK_R)
+    await host.rebuildAgentTools(lockD(), { sessionId: 's1' })
+    expect(sessionOf).not.toHaveBeenCalled()
+    const callerIdOf = callerIdOfCall(0)
+    expect(callerIdOf(1)).toBe('s1')
+    expect(callerIdOf(2)).toBe('sub-a1')
+    expect(callerIdOf(3)).toBe('sub-r1')
+    expect(callerIdOf(5)).toBe('s1')
+    expect(callerIdOf(999)).toBe('s1')
+    expect(sessionOf).toHaveBeenCalled()
+
+    sessionOf.mockClear()
+    session.lock = lockD({ conversationId: 5 as never })
+    await host.rebuildAgentTools(lockD({ conversationId: 5 as never }), { sessionId: 's1' })
+    expect(sessionOf).not.toHaveBeenCalled()
+    expect(callerIdOfCall(1)(5)).toBe('s1')
+    expect(callerIdOfCall(1)(2)).toBe('sub-a1')
+  })
+
+  it('P2-06-10 按调用现取，不在注册那一刻定死：记录改了 → 新 id；锁清了 → 根报 s1；会话关了 → 都报 s1', async () => {
+    const session = setLock('s1', lockD())
+    session.identities.set(2, SPAWN_E)
+    await host.rebuildAgentTools(lockD(), { sessionId: 's1' })
+    const callerIdOf = callerIdOfCall(0)
+    expect(callerIdOf(2)).toBe('sub-a1')
+
+    session.identities.set(2, { ...SPAWN_E, callerId: 'sub-a2' })
+    expect(callerIdOf(2)).toBe('sub-a2')
+
+    session.lock = undefined
+    expect(callerIdOf(1)).toBe('s1')
+    expect(callerIdOf(2)).toBe('sub-a2')
+
+    await fake.close('s1')
+    expect(callerIdOf(1)).toBe('s1')
+    expect(callerIdOf(2)).toBe('s1')
+  })
+
+  it('P2-06-11 落回会话 id：根身份没有 callerId；派生身份缺 callerId（PIN-03）；sessionOf 抛错 —— callerIdOf 自己从不抛', async () => {
+    const session = setLock('s1', lockD())
+    session.identities.set(4, { profileName: 'explore', kind: 'spawned' })
+    await host.resolveAgentTools(requestD({ names: ['mcp:ssh'] }), { signal: signal() })
+    const callerIdOf = callerIdOfCall(0)
+    expect(callerIdOf(1)).toBe('s1')
+    expect(callerIdOf(4)).toBe('s1')
+    sessionOf.mockImplementation(() => {
+      throw new Error('host gone')
+    })
+    expect(() => callerIdOf(4)).not.toThrow()
+    expect(callerIdOf(4)).toBe('s1')
+  })
+})
+
+// ─── 会话之间互不串 ─────────────────────────────────────────────────────
+
+describe('cross-session isolation', () => {
+  /** P2-06-23 的布置：s1 有派生 agent，s2 只有根；两边各建内置工具、各解析一次 ssh */
+  async function twoSessions(): Promise<{
+    s1Ctx: ToolContext
+    s2Ctx: ToolContext
+    s1Tools: readonly ToolRegistration[]
+    s2Tools: readonly ToolRegistration[]
+  }> {
+    setLock('s1', lockD({ model: { provider: 'p', modelId: 'm1' } })).identities.set(2, SPAWN_E)
+    setLock('s2', lockD({ profileName: 'bot', model: { provider: 'p', modelId: 'm2' } }))
     const s1Tools = await host.buildBuiltinTools({ sessionId: 's1', sandboxed: false })
     const s1Ctx = factoryCalls.at(-1)!.ctx
     const s2Tools = await host.buildBuiltinTools({ sessionId: 's2', sandboxed: false })
     const s2Ctx = factoryCalls.at(-1)!.ctx
+    await host.resolveAgentTools(requestD({ names: ['mcp:ssh'] }), { signal: signal() })
+    await host.resolveAgentTools(
+      requestD({ names: ['mcp:ssh'], sessionId: 's2', rootSessionId: 's2', selfSessionId: 's2' }),
+      { signal: signal() }
+    )
+    return { s1Ctx, s2Ctx, s1Tools, s2Tools }
+  }
 
-    expect(agentActorOf(withCallAgent(s1Ctx, { conversationId: 1 }))).toBe('shuvix-work/m1')
-    expect(agentActorOf(withCallAgent(s2Ctx, { conversationId: 1 }))).toBe('shuvix-bot/m2')
-    expect(securityCtxOf(s1Tools[0]).agent?.profileName).toBe('work')
-    expect(securityCtxOf(s1Tools[0]).sessionId).toBe('s1')
-    expect(securityCtxOf(s2Tools[0]).agent?.profileName).toBe('bot')
-    expect(securityCtxOf(s2Tools[0]).sessionId).toBe('s2')
+  const actorOf = (ctx: ToolContext, c: number): string =>
+    agentActorOf(withCallAgent(ctx, { conversationId: c }))
+
+  it('P2-06-23（并入 H11-54）两条会话、同一个对话 id：各认各的（身份、章、门的主体、调用方 id）', async () => {
+    const { s1Ctx, s2Ctx, s1Tools, s2Tools } = await twoSessions()
+
+    expect(s1Ctx.agentOf!(2)).toBe(SPAWN_E)
+    const s2Agent = s2Ctx.agentOf!(2)
+    expect(s2Agent).toMatchObject({ profileName: 'bot', kind: 'root' })
+    expect(s2Agent).not.toHaveProperty('callerId')
+
+    expect(actorOf(s1Ctx, 2)).toBe('shuvix-explore/claude-haiku-4-5')
+    expect(actorOf(s1Ctx, 1)).toBe('shuvix-work/m1')
+    expect(actorOf(s2Ctx, 2)).toBe('shuvix-bot/m2')
+
+    const s1Gate = securityCtxOf(s1Tools[0], 2)
+    expect(s1Gate.agent).toBe(SPAWN_E)
+    expect(s1Gate.sessionId).toBe('s1')
+    const s2Gate = securityCtxOf(s2Tools[0], 2)
+    expect(s2Gate.agent).toMatchObject({ profileName: 'bot', kind: 'root' })
+    expect(s2Gate.sessionId).toBe('s2')
+
+    expect(callerIdOfCall(0)(2)).toBe('sub-a1')
+    expect(callerIdOfCall(1)(2)).toBe('s2')
+
+    sessionOf.mockClear()
+    s1Ctx.agentOf!(2)
+    actorOf(s1Ctx, 1)
+    expect(new Set(sessionOf.mock.calls.map(([id]) => id))).toEqual(new Set(['s1']))
+    sessionOf.mockClear()
+    s2Ctx.agentOf!(2)
+    actorOf(s2Ctx, 1)
+    expect(new Set(sessionOf.mock.calls.map(([id]) => id))).toEqual(new Set(['s2']))
+  })
+
+  it('P2-06-24 一条会话关了：它落回兜底，另一条照旧', async () => {
+    const { s1Ctx, s2Ctx } = await twoSessions()
+    await fake.close('s2')
+
+    expect(s2Ctx.agentOf!(2)).toBeUndefined()
+    expect(callerIdOfCall(1)(2)).toBe('s2')
+    expect(actorOf(s2Ctx, 2)).toBe('shuvix-agent/unknown')
+
+    expect(s1Ctx.agentOf!(2)).toBe(SPAWN_E)
+    expect(callerIdOfCall(0)(2)).toBe('sub-a1')
+    expect(actorOf(s1Ctx, 2)).toMatch(/^shuvix-explore\//)
+  })
+})
+
+// ─── `_meta` 端到端（真 McpManager + 真 SDK Server，P2-06-12 / PIN-07） ───────────
+
+describe('MCP _meta end to end', () => {
+  it('P2-06-12 可信（inproc 内置）的带调用方 id 与 taskId，不可信的只带 toolCallId；根与派生共用会话 s1 那一份实例', async () => {
+    const metas: Array<{ server: string; meta: unknown }> = []
+    const scopes: Array<{ server: string; scope: unknown }> = []
+    const store = {
+      findById: (id: string) => rows.find((r) => r.id === id),
+      findEnabled: () => rows,
+      findAll: () => rows,
+      updateCachedTools: () => {}
+    }
+    const rows = [
+      mcpRow({ id: 'ssh-id', name: 'ssh', type: 'inproc', url: '', isBuiltin: 1 }),
+      mcpRow({ id: 'web-id', name: 'web', type: 'http', isBuiltin: 0 })
+    ]
+    const real = new McpManager({
+      store: store as never,
+      createTransport: async (server, scope) => {
+        scopes.push({ server: server.name, scope })
+        const [clientSide, serverSide] = InMemoryTransport.createLinkedPair()
+        const tool = server.name === 'ssh' ? 'exec' : 'search'
+        const mcp = new Server(
+          { name: server.name, version: '0.0.0' },
+          { capabilities: { tools: {} } }
+        )
+        mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
+          tools: [{ name: tool, inputSchema: { type: 'object' as const, properties: {} } }]
+        }))
+        mcp.setRequestHandler(CallToolRequestSchema, async (request) => {
+          metas.push({ server: server.name, meta: request.params._meta })
+          return { content: [{ type: 'text' as const, text: 'ok' }] }
+        })
+        await mcp.connect(serverSide)
+        return clientSide
+      }
+    })
+    mocks.registrationsFromDeclarations.mockImplementation(
+      (
+        server: string,
+        sid: string,
+        decls: readonly McpToolDeclaration[],
+        opts: McpRegistrationOptions
+      ) => real.registrationsFromDeclarations(server, sid, decls, opts)
+    )
+    setLock('s1', lockD()).identities.set(2, SPAWN_E)
+
+    const set = await host.rebuildAgentTools(
+      lockD({ mcp: { ssh: [decl('exec', true)], web: [decl('search', false)] } }),
+      { sessionId: 's1' }
+    )
+    const rawOf = (server: string): ToolRegistration => {
+      const wrapped = set.mcp!.find((m) => m.server === server)!.tools[0]
+      return mocks.wrapCalls.find((c) => c.wrapped === wrapped)!.tool as ToolRegistration
+    }
+    const call = async (server: string, api: Record<string, unknown>): Promise<void> => {
+      const result = await rawOf(server).execute(
+        {},
+        api as unknown as ToolExecutionApi,
+        {} as Context
+      )
+      expect(result.isError).toBeFalsy()
+    }
+
+    try {
+      await call('ssh', { callId: 'pi-2', taskId: 21, conversationId: 2 })
+      await call('ssh', { callId: 'pi-1', taskId: 20, conversationId: 1 })
+      await call('web', { callId: 'pi-3', taskId: 22, conversationId: 2 })
+
+      expect(metas.map((m) => m.server)).toEqual(['ssh', 'ssh', 'web'])
+      expect(metas[0].meta).toStrictEqual({
+        'shuvix.dev/toolCallId': 'pi-2',
+        'shuvix.dev/agentId': 'sub-a1',
+        'shuvix.dev/taskId': 21
+      })
+      expect(metas[1].meta).toStrictEqual({
+        'shuvix.dev/toolCallId': 'pi-1',
+        'shuvix.dev/agentId': 's1',
+        'shuvix.dev/taskId': 20
+      })
+      expect(metas[2].meta).toStrictEqual({ 'shuvix.dev/toolCallId': 'pi-3' })
+      // ssh 只建过一份实例，按会话 s1 —— 根与派生共用
+      expect(scopes.filter((s) => s.server === 'ssh')).toEqual([
+        { server: 'ssh', scope: { sessionId: 's1' } }
+      ])
+    } finally {
+      await real.disconnectAll()
+    }
   })
 })
 

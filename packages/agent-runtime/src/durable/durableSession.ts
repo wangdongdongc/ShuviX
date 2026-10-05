@@ -27,16 +27,43 @@
  *    没锁时，发送 / steer / followUp / 自动续跑 / 继续都先创建 agent（K3，每会话一把互斥）；模型被拒
  *    → `{ error, code: 'no_model' }`，什么都不写（K4）。中止与销毁都会取消在途的创建（K13）；销毁算一次
  *    显式喊停（K10）。
+ *  - **身份**（P2-01，`agentDirectory.ts`）：`agentIdentity(对话)` 同步认人 —— 派生 agent 的对话按它
+ *    `AgentStateDoc` 里的记录，其余对话都认成根（随锁现取，未锁 = undefined）。缓存由提交发布与打开时
+ *    对每个任务拥有的对话的扫描喂养。
+ *  - **辅助工作**（P2-01，`dispatch: 'hook'` 及其名下的对话）：宿主派发的 hook agent（起标题、权限审查）
+ *    **从不续跑** —— 打开时把它们活着的任务逐个打上中止标记（`harness.abortTask`，只提交标记、不开启
+ *    调度器），下一次任何开启调度器的调用让它们以 aborted 收场。它们不算中断、不进运行状态镜像（侧栏
+ *    不会因为在起标题而显示忙）；但在跑时照样挡着 LRU（`evictable` = 什么都没在跑），跑完时宿主据此
+ *    再修剪一次（PIN-07）。
+ *  - **子会话原语**（P2-09）：
+ *    - `submitUser` 带一个当前对话里已有的 requestId = **重新挂上**那条输入：已落定的直接读结果（纯读，
+ *      不建 agent、不开启调度器）；没落定的跳过忙拒绝、中断策略、发送前送达、日期通知、显示侧车与受理
+ *      回调，被中断时按「继续」的准备（建 agent、重开询问、`place` 送达推迟通知、`resume()`）续上但不等
+ *      空闲，然后等那条输入落定；排着队却没有 run 能带走它 → 立刻 `{ code: 'queued' }`，绝不挂住。同一
+ *      requestId 是一条写入 → `{ error }`。
+ *    - `requestState` / `lastAnswer`：当前对话上的只读查询（从不开启调度器）；`resumeInterrupted`：不等
+ *      空闲的「继续」，没被中断就什么都不做。
+ *    - 通知的 requestId：同一 requestId 在当前对话里已有提交 / 在待送达里 / 在合并窗口里 → 不再送；
+ *      合并的一轮单条沿用自己的 id，多条用 `notices:<排序去重的 id>`；各种退回写入 / 关停保存都保留
+ *      每条通知自己的 id。送达推迟通知时同一 requestId 已有提交（不论类型）就跳过 —— 类型不符绝不让
+ *      继续 / 中止 / 送达抛出。
+ *    - driven-run 标记（`SessionState.driven`）：被父会话驱动的发送受理之后写下；那条输入落定时
+ *      （进程内由提交发布察觉，打开时由扫描察觉、`open()` 落定之后再报）调宿主的 `onDrivenSettled`，
+ *      每个进程至多一次，回调成功后清掉标记。
  */
 import { copyJson } from '@earendil-works/chord'
+import type { AssistantMessage } from '@earendil-works/pi-ai'
 import {
+  AssistantEntry,
   ConversationBusy,
   InboxDoc,
   LiveDoc,
   ROOT_CONVERSATION_ID,
+  UserEntry,
   type CommitPublication,
   type Conversation,
   type ConversationId,
+  type ConversationRecord,
   type Harness,
   type JsonObject,
   type Submission,
@@ -50,12 +77,16 @@ import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/in
 import type { ThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
 import type { PromptVars, PromptVarsCtx } from '../agentProfile/promptVars'
 import type { RuntimeEventSink, RuntimeLogger } from '../types'
+import { AgentDirectory } from './agentDirectory'
+import { rootAgentIdentity, type AgentIdentity } from './agentRecord'
 import { backgroundContext as BG, errorText, isClosedError } from './context'
 import {
+  AgentStateDoc,
   DisplayDoc,
   SessionStateDoc,
   noticeEntryDraft,
   type DeferredNotice,
+  type DrivenRun,
   type SessionState
 } from './docs'
 import { PendingInputRequests } from './inputRequests'
@@ -78,6 +109,8 @@ export type SubmitErrorCode =
   | 'no_model'
   | 'faulted'
   | 'orphaned'
+  /** 重新挂上的那条输入还排在收件箱里、却没有 run 会带走它（只有下一次发送会放下它，P2-09 PIN-04） */
+  | 'queued'
 
 /** 发送 / 继续的结果：成功 = `{}`；失败 = `{ error, code? }`（code 缺省 = 未知原因） */
 export interface SubmitResult {
@@ -90,9 +123,22 @@ export interface AdmitResult extends SubmitResult {
   submissionId?: SubmissionId
 }
 
+/** 被父会话驱动的发送（P2-09，子会话）：受理之后写下 driven-run 标记 */
+export interface DrivenSendOptions {
+  /** 驱动它的父会话 id */
+  parentId: string
+  /** 后台提示（父会话不在前台等它） */
+  background: boolean
+}
+
 export interface UserSendOptions {
-  /** 幂等键：同一 requestId 重复发送只落一条、只起一轮 */
+  /**
+   * 幂等键（作用域 = 当前对话）：当前对话里已有这条输入时**重新挂上**它（P2-09）—— 已落定直接返回
+   * 结果；没落定就等它（被中断先续上）。不会再落一条、再起一轮。
+   */
   requestId?: string
+  /** 被父会话驱动（P2-09）：必须同时给 requestId；受理后（`onAdmitted` 之前）写 driven-run 标记 */
+  driven?: DrivenSendOptions
   /** 会话忙时：reject（缺省，Q13）/ followUp / steer */
   whenBusy?: 'reject' | 'followUp' | 'steer'
   /** 显示侧车（内联 Token 等），记在 DisplayDoc[requestId]；没有 requestId 时自动生成一个 */
@@ -122,6 +168,42 @@ export interface NoticeResult {
   error?: string
 }
 
+/** `notify` 的选项（P2-09：requestId 去重） */
+export interface NotifyOptions {
+  /** 通知种类；缺省 `background` */
+  kind?: string
+  /**
+   * 幂等键：当前对话里已有这个 requestId 的提交（任何类型）、或它还在待送达 / 合并窗口里 → 不再送。
+   * 缺省自动生成。
+   */
+  requestId?: string
+}
+
+/** 某个 requestId 在当前对话里的状态（P2-09）：没有 / 未落定（排队或在跑）/ 已落定 */
+export type RequestState = 'none' | 'pending' | 'settled'
+
+/** 当前对话这一轮的回答（P2-09）：文本部分拼起来；模型报错时是错误文案并带 `isError` */
+export interface LastAnswer {
+  text: string
+  isError?: true
+}
+
+/** 子会话被驱动的那一轮落定了（P2-09，`SessionHostDeps.onDrivenSettled` 的参数） */
+export interface DrivenSettledEvent {
+  /** 子会话 id */
+  sessionId: string
+  parentId: string
+  requestId: string
+  background: boolean
+  conversationId: ConversationId
+  submissionId: SubmissionId
+  /** 父会话那条完成通知的 requestId：`subsession-done:<子会话 id>:<submission id>` */
+  noticeRequestId: string
+  /** 与 `submitUser` 同口径的结果 */
+  result: SubmitResult
+  record: { status: 'done' | 'unanswered'; reason?: string }
+}
+
 /** 会话已关停（LRU 回收 / 退出 / 删除）；句柄失效，绝不悄悄重开 */
 export class SessionClosedError extends Error {
   readonly code = 'closed' as const
@@ -146,11 +228,33 @@ export interface DurableSession {
   currentConversation(): Promise<Conversation>
   /** 当前对话有 run 且调度器在跑 */
   isBusy(): boolean
-  /** 存储里有 run 但调度器停着（上个进程中途退出） */
+  /** 存储里有 run 但调度器停着（上个进程中途退出）；辅助工作（hook agent）不算 */
   isInterrupted(): boolean
+  /**
+   * 在这个对话上发起调用的 agent 的身份（同步，从不开启调度器）：派生 agent 的对话 → 它的派生身份
+   * （`callerId` = agentId；记录写坏了也绝不认成根）；其余对话（锁所在的对话、fork、旁支、不认识的 id）
+   * → 根的身份（随锁现取；未锁 = undefined）。句柄已关 → undefined。
+   */
+  agentIdentity(conversationId: number): AgentIdentity | undefined
   /** 继续被中断的工作，等当前对话空闲；空闲且未中断时立刻返回 */
   continue(): Promise<SubmitResult>
-  /** 发送用户输入并等这一轮落定（R3：结果对象，从不抛出） */
+  /**
+   * 不等空闲的「继续」（P2-09）：被中断时建 agent、重开询问、放下推迟的通知、开启调度器就返回；
+   * 没被中断 = 什么都不做、返回 `{}`。和 `continue()` 一样开启的是整个调度器。
+   */
+  resumeInterrupted(): Promise<SubmitResult>
+  /**
+   * 某个 requestId 在当前对话里的状态（P2-09；不分输入 / 写入，只读，从不开启调度器）。
+   * 句柄已关 → 以 `SessionClosedError` 拒绝。
+   */
+  requestState(requestId: string): Promise<RequestState>
+  /**
+   * 当前对话这一轮的回答（P2-09；只读）：从新到旧找，先碰到 `pi.user` = 这一轮还没有回答
+   * （undefined），先碰到 `pi.assistant` = 它（文本部分拼接；`stopReason: 'error'` → 错误文案 +
+   * `isError`）。压缩不会藏起它，也从不返回摘要。句柄已关 → 以 `SessionClosedError` 拒绝。
+   */
+  lastAnswer(): Promise<LastAnswer | undefined>
+  /** 发送用户输入并等这一轮落定（R3：结果对象，从不抛出）；已有的 requestId = 重新挂上（P2-09） */
   submitUser(content: UserInput, options?: UserSendOptions): Promise<SubmitResult>
   /** 运行中插话（空闲时起一轮，R4） */
   steer(content: UserInput, options?: { requestId?: string }): Promise<AdmitResult>
@@ -158,8 +262,8 @@ export interface DurableSession {
   followUp(content: UserInput, options?: { requestId?: string }): Promise<AdmitResult>
   /** 写一条系统通知（`shuvix.notice`），必要时推迟（R1 / Q3） */
   writeNotice(notice: NoticeInput): Promise<NoticeResult>
-  /** 送达后台完成通知（R13 的路由：steer / 自动续跑 / 写入 / 推迟） */
-  notify(text: string, options?: { kind?: string }): Promise<void>
+  /** 送达后台完成通知（R13 的路由：steer / 自动续跑 / 写入 / 推迟；requestId 去重，P2-09） */
+  notify(text: string, options?: NotifyOptions): Promise<void>
   /** 中止当前对话（显式喊停：到下一次 submitUser 之前不自动续跑） */
   abort(): Promise<void>
   /** 设置当前对话的思考档位（下一次请求生效；从不开启调度器） */
@@ -246,6 +350,42 @@ function resultOfError(error: unknown): SubmitResult {
 
 function randomId(): string {
   return globalThis.crypto.randomUUID()
+}
+
+function isSettled(record: SubmissionRecord): boolean {
+  return record.status === 'done' || record.status === 'unanswered'
+}
+
+/** 合并的一轮通知的 requestId（PIN-10）：单条沿用自己的；多条 = `notices:` + 排序去重后以 `,` 连接 */
+function combinedNoticeId(notices: readonly PendingNotice[]): string {
+  const ids = [...new Set(notices.map((notice) => notice.requestId))].sort()
+  return ids.length === 1 ? ids[0]! : `notices:${ids.join(',')}`
+}
+
+/** durable 的模型错误文案（`generation.ts`）：没有 errorMessage 时按停止原因说 */
+function modelErrorText(message: AssistantMessage): string {
+  return message.errorMessage ?? `Model response ended with stop reason ${message.stopReason}`
+}
+
+/** 一条 `pi.assistant` 条目的回答（PIN-07）：文本部分拼接；报错 → 错误文案 + isError */
+function answerOf(message: AssistantMessage | undefined): LastAnswer {
+  if (message === undefined) return { text: '' }
+  if (message.stopReason === 'error') return { text: modelErrorText(message), isError: true }
+  let text = ''
+  for (const part of message.content) if (part.type === 'text') text += part.text
+  return { text }
+}
+
+function liveTaskOf(record: {
+  readonly conversationId: ConversationId
+  readonly kind: string
+  readonly abortRequested: boolean
+}): LiveTask {
+  return {
+    conversationId: record.conversationId,
+    kind: record.kind,
+    abortRequested: record.abortRequested
+  }
 }
 
 // ─────────────────────────── 调度器开启观测（harness 代理） ───────────────────────────
@@ -343,7 +483,10 @@ export interface DurableSessionDeps {
   onStateChange: (state: RunState, previous: RunState) => void
   /** 每次被使用（LRU 新近度） */
   onUse: () => void
-  /** 进行中的调用全部结束（它可能刚变得可回收 —— 宿主据此修剪） */
+  /**
+   * 进行中的调用全部结束，或最后一件在跑的工作结束（辅助工作跑完时运行状态不变，PIN-07）—— 它可能
+   * 刚变得可回收，宿主据此修剪
+   */
   onSettled?: () => void
   logger: RuntimeLogger
   now: () => number
@@ -359,16 +502,26 @@ export interface DurableSessionDeps {
   onLockChange?: (sessionId: string, locked: boolean) => void
   /** 传给 Harness.open 的那份 settings（`effectiveSettings` 原样交出） */
   settings: HarnessSettings
+  /** 被驱动的那一轮落定（P2-09）；缺省 = 不察觉（标记留着） */
+  onDrivenSettled?: (event: DrivenSettledEvent) => void | Promise<void>
+  /**
+   * 这条 submission 的落定在本进程里报过没有：第一次返回 true 并记下（宿主按进程记，LRU 关了再开
+   * 也不重报）。缺省 = 只在这个实例里记。
+   */
+  claimDrivenEmission?: (submissionId: SubmissionId) => boolean
 }
 
 interface LiveTask {
   readonly conversationId: ConversationId
   readonly kind: string
+  readonly abortRequested: boolean
 }
 
 interface PendingNotice {
   readonly text: string
   readonly kind: string
+  /** 每条都有（缺省时进窗口那一刻生成）：退回写入 / 关停保存都沿用它（PIN-11） */
+  readonly requestId: string
 }
 
 export class DurableSessionImpl implements DurableSession {
@@ -390,12 +543,27 @@ export class DurableSessionImpl implements DurableSession {
   private noticeTimer: ReturnType<typeof setTimeout> | undefined
   private unsubscribe: () => void = () => {}
   private readonly agentLock: AgentLock
+  /** 每个对话上的 agent 是谁、哪些对话是辅助工作（P2-01） */
+  private readonly directory: AgentDirectory
+  /** 根身份的缓存：跟着锁记录对象走（锁一变就重算） */
+  private rootIdentity: { lock: LockRecord; identity: AgentIdentity } | undefined
+  /** 上次重算时有没有东西在跑（含辅助工作；PIN-07 的跑完检测） */
+  private wasRunning = false
+  /** 打开扫描期间被提交发布摸过的 AgentStateDoc（扫描读到的旧值不能盖掉它们） */
+  private scanTouched: Set<ConversationId> | undefined
+  /** 打开途中：状态只在打开完成时静默设定一次（打开时的中止标记等提交不触发状态通知） */
+  private initializing = true
+  /** 此刻的 driven-run 标记（P2-09）：由打开时的读取与 SessionStateDoc 的提交发布同步维护 */
+  private drivenMarker: DrivenRun | undefined
+  /** 没有宿主记账时，本实例报过的 driven 落定 */
+  private readonly drivenClaimed = new Set<SubmissionId>()
 
   private constructor(private readonly deps: DurableSessionDeps) {
     this.sessionId = deps.sessionId
     this.raw = deps.harness
     this.harness = observeResumes(deps.harness, () => this.markResumed())
     this.inputs = new PendingInputRequests(deps.sessionId, deps.eventSink)
+    this.directory = new AgentDirectory({ sessionId: deps.sessionId, logger: deps.logger })
     this.agentLock = new AgentLock({
       sessionId: deps.sessionId,
       harness: deps.harness,
@@ -423,10 +591,16 @@ export class DurableSessionImpl implements DurableSession {
 
   private async init(): Promise<void> {
     this.unsubscribe = this.raw.subscribeCommits((publication) => this.observe(publication))
-    // 在串行线上扫一遍活着的任务，并在回调末尾**同步**装载：此前的发布被这次扫描覆盖，
+    this.scanTouched = new Set()
+    // 在串行线上扫一遍活着的任务与全部对话，并在回调末尾**同步**装载：此前的发布被这次扫描覆盖，
     // 此后的发布来自更晚的提交、叠加在它上面 —— 两者之间没有缝。（只读提交不产生发布。）
-    await this.raw.commit(async (tx) => {
-      const records: { id: TaskId; conversationId: ConversationId; kind: string }[] = []
+    const taskOwned = await this.raw.commit(async (tx) => {
+      const records: {
+        id: TaskId
+        conversationId: ConversationId
+        kind: string
+        abortRequested: boolean
+      }[] = []
       for (const status of LIVE_TASK_STATUSES) {
         let cursor: Parameters<typeof tx.scanTasks>[2]
         do {
@@ -435,17 +609,75 @@ export class DurableSessionImpl implements DurableSession {
           cursor = page.next
         } while (cursor !== undefined)
       }
+      const conversations: ConversationRecord[] = []
+      let next: Parameters<typeof tx.scanConversations>[2]
+      do {
+        const page = await tx.scanConversations({}, SCAN_PAGE_SIZE, next)
+        for (const record of page.items) conversations.push(record)
+        next = page.next
+      } while (next !== undefined)
       this.live.clear()
-      for (const record of records) {
-        this.live.set(record.id, { conversationId: record.conversationId, kind: record.kind })
-      }
+      for (const record of records) this.live.set(record.id, liveTaskOf(record))
+      for (const record of conversations) this.directory.observeConversation(record)
+      return conversations.filter((record) => record.owner !== undefined).map(({ id }) => id)
     }, BG)
+    // 身份与辅助分类：每个任务拥有的对话（PIN-03）。扫描之后被发布摸过的以发布为准
+    for (const conversationId of taskOwned) {
+      const value = await this.raw.snapshot(AgentStateDoc, conversationId, BG)
+      if (this.scanTouched.has(conversationId)) continue
+      this.directory.observeAgentState(conversationId, value as JsonObject | undefined)
+    }
+    this.scanTouched = undefined
+    const pointer = await this.raw.snapshot(SessionStateDoc, BG)
+    this.drivenMarker = pointer?.driven
     await this.currentConversation()
     // 在任何续跑 / 发送之前按锁重建工具（打开从不续跑，所以在这里重建是安全的），再对一次镜像（K11）
     await this.agentLock.restore()
+    // 辅助工作从不续跑：活着的任务打上中止标记（只提交标记，不开启调度器）
+    await this.markAuxiliaryWork()
     // 初始状态静默设定：宿主在打开完成时统一报一次（PIN-R），这里再排一次通知就会报两遍
     this.state = this.computeState()
+    this.wasRunning = this.running
+    this.initializing = false
     this.agentLock.reconcileMirror()
+    await this.scanDrivenAtOpen()
+  }
+
+  /**
+   * 打开时的扫描（PIN-13）：标记指着的那条输入已经落定（上个进程没接 seam、回调失败、或崩在清标记
+   * 之前）→ 在 `open()` 落定之后再报（宿主那次打开时的运行状态先报）。只读，从不续跑。还没落定的
+   * 由提交发布在它落定时察觉。
+   */
+  private async scanDrivenAtOpen(): Promise<void> {
+    const marker = this.drivenMarker
+    if (marker === undefined || this.deps.onDrivenSettled === undefined) return
+    const record = await this.findRequest(marker.conversationId, marker.requestId)
+    if (record === undefined || record.type !== 'input' || !isSettled(record)) return
+    setTimeout(() => {
+      if (!this.closedFlag) this.scheduleDriven(marker, record)
+    }, 0)
+  }
+
+  /**
+   * 打开时：辅助对话（hook agent 及其名下）里每个活着、还没打标记的任务，逐个 `abortTask`。
+   * 只提交中止标记 —— 不开启调度器（会话照样停着），下一次开启调度器的调用让它们走中止流程收场。
+   * 失败只记警告、不挡打开（PIN-14）；分类照旧（它们照样不算中断）。
+   */
+  private async markAuxiliaryWork(): Promise<void> {
+    const targets: TaskId[] = []
+    for (const [id, task] of this.live) {
+      if (!task.abortRequested && this.directory.isAuxiliary(task.conversationId)) targets.push(id)
+    }
+    for (const id of targets) {
+      try {
+        await this.raw.abortTask(id, BG)
+      } catch (error) {
+        if (this.closedFlag || isClosedError(error)) throw error
+        this.deps.logger.warn(
+          `session ${this.sessionId}: marking auxiliary task ${id} aborted failed: ${errorText(error)}`
+        )
+      }
+    }
   }
 
   // ─── 运行状态 ───────────────────────────────────
@@ -466,33 +698,76 @@ export class DurableSessionImpl implements DurableSession {
     return !this.schedulerRunning && this.hasRun(undefined)
   }
 
-  /** LRU 能不能关它：不忙、没有挂起的询问、没有进行中的调用、没有待合并的通知 */
+  agentIdentity(conversationId: number): AgentIdentity | undefined {
+    if (this.closedFlag) return undefined
+    const spawned = this.directory.identity(conversationId as ConversationId)
+    if (spawned !== undefined) return spawned
+    const lock = this.agentLock.current
+    if (lock === undefined) return undefined
+    if (this.rootIdentity?.lock !== lock) {
+      this.rootIdentity = { lock, identity: rootAgentIdentity(lock) }
+    }
+    return this.rootIdentity.identity
+  }
+
+  /**
+   * LRU 能不能关它：什么都没在跑（辅助工作在跑也不行）、没有挂起的询问、没有进行中的调用、没有
+   * 待合并的通知。被中断的会话（调度器停着）可以关。
+   */
   get evictable(): boolean {
     return (
       !this.closedFlag &&
-      this.state !== 'busy' &&
+      !this.running &&
       this.inputs.count === 0 &&
       this.activeOps === 0 &&
       this.pendingNotices.length === 0
     )
   }
 
+  /** 有东西在跑：调度器开着且有活着的任务（含辅助工作、后台压缩） */
+  private get running(): boolean {
+    return this.schedulerRunning && this.live.size > 0
+  }
+
+  /** 有 run：指定对话里的；不指定 = 任何非辅助对话里的 */
   private hasRun(conversationId: ConversationId | undefined): boolean {
     for (const task of this.live.values()) {
       if (task.kind !== GENERATION_TASK_KIND) continue
-      if (conversationId === undefined || task.conversationId === conversationId) return true
+      if (conversationId === undefined) {
+        if (!this.directory.isAuxiliary(task.conversationId)) return true
+      } else if (task.conversationId === conversationId) return true
     }
     return false
   }
 
+  /** 有活着的非辅助任务 */
+  private hasPrimaryWork(): boolean {
+    for (const task of this.live.values()) {
+      if (!this.directory.isAuxiliary(task.conversationId)) return true
+    }
+    return false
+  }
+
+  /** 运行状态（R2），辅助工作不算：它在跑不算忙，被打了标记停着也不算中断 */
   private computeState(): RunState {
-    if (this.live.size === 0) return 'idle'
+    if (!this.hasPrimaryWork()) return 'idle'
     if (this.schedulerRunning) return 'busy'
     return this.hasRun(undefined) ? 'interrupted' : 'idle'
   }
 
-  /** 状态即时更新（同步读取永远是真值），通知推迟到微任务（提交监听里不许回调宿主） */
+  /**
+   * 状态即时更新（同步读取永远是真值），通知推迟到微任务（提交监听里不许回调宿主）。最后一件在跑的
+   * 工作结束时也通知宿主（PIN-07）：辅助工作跑完不改运行状态，没有忙→闲可以触发修剪。
+   */
   private recompute(): void {
+    if (this.initializing) return
+    const running = this.running
+    if (this.wasRunning && !running) {
+      queueMicrotask(() => {
+        if (!this.closedFlag) this.deps.onSettled?.()
+      })
+    }
+    this.wasRunning = running
     const next = this.computeState()
     if (next === this.state) return
     const previous = this.state
@@ -508,7 +783,10 @@ export class DurableSessionImpl implements DurableSession {
     this.recompute()
   }
 
-  /** 提交发布监听（同步，在 Session 串行线上）：维护活着的任务与当前对话指针 */
+  /**
+   * 提交发布监听（同步，在 Session 串行线上）：维护活着的任务、当前对话指针、锁缓存，以及 agent 目录
+   * （身份与辅助分类）。一次发布里的变化次序不定，所以分类变化与任务变化都只在末尾统一重算一次。
+   */
   private observe(publication: CommitPublication): void {
     if (this.closedFlag) return
     let changed = false
@@ -519,9 +797,35 @@ export class DurableSessionImpl implements DurableSession {
           if (this.live.delete(record.id)) changed = true
           continue
         }
-        this.live.set(record.id, { conversationId: record.conversationId, kind: record.kind })
+        this.live.set(record.id, liveTaskOf(record))
         // 只有开启了的调度器会把任务置为 running（打开时残留的 running 会被改回 pending）
         if (record.state.status === 'running') this.schedulerRunning = true
+        changed = true
+      } else if (change.type === 'conversation') {
+        this.directory.observeConversation(change.value)
+        changed = true
+      } else if (change.type === 'submission') {
+        // 被驱动的那条输入落定了（P2-09）：回调放到监听之外
+        const record = change.value
+        const marker = this.drivenMarker
+        if (
+          marker !== undefined &&
+          record.type === 'input' &&
+          record.requestId === marker.requestId &&
+          record.conversationId === marker.conversationId &&
+          isSettled(record)
+        ) {
+          this.scheduleDriven(marker, record)
+        }
+      } else if (
+        change.type === 'document' &&
+        change.record.kind === AgentStateDoc.definition.kind &&
+        change.conversationId !== undefined
+      ) {
+        // 身份 / 辅助分类跟着存储变（同步）。`document.copy`（fork 的 asOf 副本）不带值，不在这里处理 ——
+        // fork 派生 agent 的对话不是产品路径（PIN-11），fork 出来的对话按根认人
+        this.directory.observeAgentState(change.conversationId, change.value)
+        this.scanTouched?.add(change.conversationId)
         changed = true
       } else if (
         change.type === 'document' &&
@@ -530,6 +834,7 @@ export class DurableSessionImpl implements DurableSession {
       ) {
         // 锁缓存：谁写了 SessionStateDoc.lock 都跟着变（同步，读取永远是真值）
         this.agentLock.observe((change.value as SessionState).lock)
+        this.drivenMarker = (change.value as SessionState).driven
         const pointer = (change.value as SessionState).currentConversation ?? ROOT_CONVERSATION_ID
         if (pointer !== this.current) {
           this.current = pointer
@@ -567,6 +872,15 @@ export class DurableSessionImpl implements DurableSession {
   async submitUser(content: UserInput, options: UserSendOptions = {}): Promise<SubmitResult> {
     try {
       return await this.op(async () => {
+        if (options.driven !== undefined && options.requestId === undefined) {
+          return { error: 'A driven send needs a requestId' }
+        }
+        // 当前对话里已有这条输入：重新挂上（P2-09），下面的发送规矩一概不碰
+        if (options.requestId !== undefined) {
+          const conversation = await this.currentConversation()
+          const existing = await this.findRequest(conversation.id, options.requestId)
+          if (existing !== undefined) return await this.reattach(conversation, existing, options)
+        }
         // 用户又开口了 —— 上一次「显式喊停」的收敛到此为止；合并窗口里的通知随这一轮插话送达
         this.stoppedByUser = false
         // 没锁先创建 agent（K3）；被拒 / 被取消就到此为止，什么都不写
@@ -602,12 +916,183 @@ export class DurableSessionImpl implements DurableSession {
           if (joining.length > 0) await this.steerNotices(conversation, joining)
           throw error
         }
+        // driven-run 标记在受理之后、受理回调之前（PIN-12）：被拒的发送从不留下标记
+        if (options.driven !== undefined) {
+          await this.armDriven(conversation.id, requestId!, options.driven, submission.id)
+        }
         this.admitted(options.onAdmitted)
         if (joining.length > 0) await this.steerNotices(conversation, joining)
         return settlementResult(await submission.wait(BG))
       })
     } catch (error) {
       return resultOfError(error)
+    }
+  }
+
+  /**
+   * 重新挂上当前对话里已有的那条提交（P2-09，PIN-01..04）。不重置「显式喊停」、不带走合并窗口里的
+   * 通知、不调受理回调、不写显示侧车、不发日期通知、不走中断策略。
+   *  - 是一条写入 → `{ error }`（没有 code）；
+   *  - 已落定 → 它的结果（纯读：不建 agent、不开启调度器）；
+   *  - 排着队却没有 run（也没被中断）→ 立刻 `{ code: 'queued' }`：只有下一次发送会放下它，等就会挂住；
+   *  - 否则（被驱动时先补上缺的标记）被中断就按「继续」的准备续上（不等空闲），然后等它落定。
+   */
+  private async reattach(
+    conversation: Conversation,
+    record: SubmissionRecord,
+    options: UserSendOptions
+  ): Promise<SubmitResult> {
+    const requestId = options.requestId!
+    if (record.type !== 'input') {
+      return {
+        error: `Request ${requestId} already identifies a submission of type ${record.type}`
+      }
+    }
+    if (isSettled(record)) return settlementResult(record)
+    const interrupted = this.isInterrupted()
+    if (!interrupted && record.status === 'queued') {
+      const live = await this.harness.snapshot(LiveDoc, conversation.id, BG)
+      if (live?.run === undefined) {
+        return {
+          error: `Request ${requestId} is still queued; it will be placed with the next message`,
+          code: 'queued'
+        }
+      }
+    }
+    // 受理与写标记之间崩溃过：父会话安全重跑时在这里补上（PIN-12）
+    const marker = this.drivenMarker
+    if (
+      options.driven !== undefined &&
+      (marker?.requestId !== requestId || marker.conversationId !== conversation.id)
+    ) {
+      await this.armDriven(conversation.id, requestId, options.driven, record.id)
+    }
+    if (interrupted) {
+      const refused = await this.resumeWork(conversation)
+      if (refused !== undefined) return refused
+    }
+    const submission = await this.harness.submission(record.id, BG)
+    if (submission === undefined) return { error: `Submission ${record.id} does not exist` }
+    return settlementResult(await submission.wait(BG))
+  }
+
+  /** 某对话里带这个 requestId 的提交（只读提交，不产生发布） */
+  private findRequest(
+    conversationId: ConversationId,
+    requestId: string
+  ): Promise<SubmissionRecord | undefined> {
+    return this.raw.commit((tx) => tx.submissionByRequest(conversationId, requestId), BG)
+  }
+
+  // ─── driven-run 标记（P2-09） ───────────────────
+
+  /**
+   * 写 driven-run 标记（它自己的一个提交；后写的替换先写的）。同一提交里读那条输入：已经落定（应答
+   * 比标记还快）就当场安排报告 —— 否则由提交发布在它落定时察觉。关停照常抛出；其余失败只记警告
+   * （父会话的安全重跑会再补，PIN-12）。
+   */
+  private async armDriven(
+    conversationId: ConversationId,
+    requestId: string,
+    driven: DrivenSendOptions,
+    submissionId: SubmissionId
+  ): Promise<void> {
+    const marker: DrivenRun = {
+      requestId,
+      parentId: driven.parentId,
+      background: driven.background,
+      conversationId
+    }
+    let settled: SubmissionRecord | undefined
+    try {
+      settled = await this.raw.commit(async (tx) => {
+        // 表读先于本提交的第一次写
+        const record = await tx.submissionByRequest(conversationId, requestId)
+        const state = await tx.doc(SessionStateDoc)
+        state.driven = { ...marker }
+        return record?.id === submissionId && isSettled(record) ? record : undefined
+      }, BG)
+    } catch (error) {
+      if (this.closedFlag || isClosedError(error)) throw error
+      this.deps.logger.warn(
+        `driven marker failed session=${this.sessionId} request=${requestId}: ${errorText(error)}`
+      )
+      return
+    }
+    if (settled !== undefined) this.scheduleDriven(marker, settled)
+  }
+
+  /**
+   * 安排一次 `onDrivenSettled`（PIN-13）：每个进程至多一次（宿主记账），回调在提交监听之外调用。
+   * 没接 seam = 什么都不做（标记留着，等接了它的进程打开时再报）。
+   */
+  private scheduleDriven(marker: DrivenRun, record: SubmissionRecord): void {
+    const callback = this.deps.onDrivenSettled
+    if (callback === undefined || this.closedFlag) return
+    const claim = this.deps.claimDrivenEmission
+    if (claim !== undefined) {
+      if (!claim(record.id)) return
+    } else {
+      if (this.drivenClaimed.has(record.id)) return
+      this.drivenClaimed.add(record.id)
+    }
+    const reason = (record as { readonly reason?: string }).reason
+    const event: DrivenSettledEvent = {
+      sessionId: this.sessionId,
+      parentId: marker.parentId,
+      requestId: marker.requestId,
+      background: marker.background,
+      conversationId: marker.conversationId,
+      submissionId: record.id,
+      noticeRequestId: `subsession-done:${this.sessionId}:${record.id}`,
+      result: settlementResult(record),
+      record: {
+        status: record.status as 'done' | 'unanswered',
+        ...(reason === undefined ? {} : { reason })
+      }
+    }
+    queueMicrotask(() => void this.deliverDriven(event, callback))
+  }
+
+  /**
+   * 调宿主的回调；成功后清掉标记（只在它仍指着这条 requestId 时）。回调抛错 / 拒绝 → 记警告、留着
+   * 标记（下次打开再报）。期间计入进行中，LRU 不关它。
+   */
+  private async deliverDriven(
+    event: DrivenSettledEvent,
+    callback: (event: DrivenSettledEvent) => void | Promise<void>
+  ): Promise<void> {
+    this.activeOps++
+    try {
+      try {
+        await callback(event)
+      } catch (error) {
+        this.deps.logger.warn(
+          `onDrivenSettled failed session=${this.sessionId} request=${event.requestId}: ${errorText(error)}`
+        )
+        return
+      }
+      try {
+        await this.raw.commit(async (tx) => {
+          const state = await tx.doc(SessionStateDoc)
+          const driven = state.driven
+          if (
+            driven !== undefined &&
+            driven.requestId === event.requestId &&
+            driven.conversationId === event.conversationId
+          ) {
+            delete state.driven
+          }
+        }, BG)
+      } catch (error) {
+        if (this.closedFlag || isClosedError(error)) return
+        this.deps.logger.warn(
+          `clearing driven marker failed session=${this.sessionId}: ${errorText(error)}`
+        )
+      }
+    } finally {
+      this.activeOps--
+      if (this.activeOps === 0 && !this.closedFlag) this.deps.onSettled?.()
     }
   }
 
@@ -671,19 +1156,71 @@ export class DurableSessionImpl implements DurableSession {
   async continue(): Promise<SubmitResult> {
     try {
       return await this.op(async () => {
-        const refused = await this.ensureAgent()
-        if (refused !== undefined) return refused
-        this.reopenInputs()
         const conversation = await this.currentConversation()
-        // 被中断的 run 还在：推迟的通知进收件箱，在它的下一个边界落下
-        await this.flushDeferred(conversation, 'place')
-        this.harness.resume()
+        const refused = await this.resumeWork(conversation)
+        if (refused !== undefined) return refused
         await conversation.waitForIdle(BG)
         return {}
       })
     } catch (error) {
       return resultOfError(error)
     }
+  }
+
+  async resumeInterrupted(): Promise<SubmitResult> {
+    try {
+      return await this.op(async () => {
+        // 没被中断：严格的无操作（不建 agent、不重开询问、不送达、不开启调度器，PIN-06）
+        if (!this.isInterrupted()) return {}
+        return (await this.resumeWork(await this.currentConversation())) ?? {}
+      })
+    } catch (error) {
+      return resultOfError(error)
+    }
+  }
+
+  /**
+   * 「继续」的准备（continue / resumeInterrupted / 重新挂上被中断的输入共用，PIN-03）：没锁先建 agent
+   * （被拒就交回结果）、重开询问、放下推迟的通知（被中断的 run 还在：进收件箱，在它的下一个边界
+   * 落下）、开启调度器。不等空闲。
+   */
+  private async resumeWork(conversation: Conversation): Promise<SubmitResult | undefined> {
+    const refused = await this.ensureAgent()
+    if (refused !== undefined) return refused
+    this.reopenInputs()
+    await this.flushDeferred(conversation, 'place')
+    this.harness.resume()
+    return undefined
+  }
+
+  // ─── 只读查询（P2-09） ─────────────────────────
+
+  async requestState(requestId: string): Promise<RequestState> {
+    return this.op(async () => {
+      const conversation = await this.currentConversation()
+      const record = await this.findRequest(conversation.id, requestId)
+      if (record === undefined) return 'none'
+      return isSettled(record) ? 'settled' : 'pending'
+    })
+  }
+
+  async lastAnswer(): Promise<LastAnswer | undefined> {
+    return this.op(async () => {
+      const conversation = await this.currentConversation()
+      // 历史（fork 感知、含被压缩越过的条目），从新到旧；碰到这一轮的提问就停（PIN-07 / PIN-08）
+      let cursor: Parameters<Conversation['entries']>[2]
+      do {
+        const page = await conversation.entries({}, SCAN_PAGE_SIZE, cursor, BG)
+        for (const entry of page.items) {
+          if (entry.kind === UserEntry.kind) return undefined
+          if (entry.kind === AssistantEntry.kind) {
+            return answerOf(entry.model?.[0] as AssistantMessage | undefined)
+          }
+        }
+        cursor = page.next
+      } while (cursor !== undefined)
+      return undefined
+    })
   }
 
   // ─── 日期通知 ───────────────────────────────────
@@ -757,25 +1294,29 @@ export class DurableSessionImpl implements DurableSession {
     }
   }
 
-  async notify(text: string, options: { kind?: string } = {}): Promise<void> {
+  async notify(text: string, options: NotifyOptions = {}): Promise<void> {
     if (this.closedFlag) return
     const kind = options.kind ?? 'background'
     try {
       await this.op(async () => {
+        // 去重在路由之前（PIN-09）：送过的、待送达的、窗口里的都不再送；竞态由 durable 的去重兜底
+        if (options.requestId !== undefined && (await this.noticeKnown(options.requestId))) return
+        const notice: PendingNotice = { text, kind, requestId: options.requestId ?? randomId() }
         if (this.isInterrupted()) {
-          await this.writeNotice({ text, kind })
+          await this.writeNotice(notice)
           return
         }
         if (this.isBusy()) {
-          await this.steerNotices(await this.currentConversation(), [{ text, kind }])
+          await this.steerNotices(await this.currentConversation(), [notice])
           return
         }
         if (!this.canAutoResume()) {
-          await this.writeNotice({ text, kind })
+          await this.writeNotice(notice)
           return
         }
         // 合并同一时刻到达的多条：三个子会话同一秒跑完不该起三轮
-        this.pendingNotices.push({ text, kind })
+        if (this.pendingNotices.some((pending) => pending.requestId === notice.requestId)) return
+        this.pendingNotices.push(notice)
         this.noticeTimer ??= setTimeout(() => void this.fireNotices(), this.deps.noticeCoalesceMs)
       })
     } catch (error) {
@@ -794,13 +1335,18 @@ export class DurableSessionImpl implements DurableSession {
     }
   }
 
-  /** 合并窗口到期：起自动续跑那一轮（这期间被中断 / 被关掉开关 / 被喊停就退回写通知） */
+  /**
+   * 合并窗口到期：起自动续跑那一轮（这期间被中断 / 被关掉开关 / 被喊停就退回写通知，各自沿用自己的
+   * requestId）。窗口期间已经送达的先剔掉（PIN-10）；一条都不剩就不起轮。
+   */
   private async fireNotices(): Promise<void> {
     this.noticeTimer = undefined
-    const notices = this.pendingNotices.splice(0)
-    if (notices.length === 0 || this.closedFlag) return
+    const pending = this.pendingNotices.splice(0)
+    if (pending.length === 0 || this.closedFlag) return
     try {
       await this.op(async () => {
+        const notices = await this.undelivered(await this.currentConversation(), pending)
+        if (notices.length === 0) return
         if (this.isInterrupted() || !this.canAutoResume()) {
           for (const notice of notices) await this.writeNotice(notice)
           return
@@ -815,7 +1361,12 @@ export class DurableSessionImpl implements DurableSession {
         await this.flushDeferred(conversation, 'beforeSend')
         // 期间用户先开了一轮 → 作为插话汇入；仍空闲 → 起一轮
         await conversation.submit(
-          { type: 'input', content: notices.map((n) => n.text).join('\n\n'), whenBusy: 'steer' },
+          {
+            type: 'input',
+            content: notices.map((n) => n.text).join('\n\n'),
+            whenBusy: 'steer',
+            requestId: combinedNoticeId(notices)
+          },
           BG
         )
       })
@@ -834,17 +1385,65 @@ export class DurableSessionImpl implements DurableSession {
     return this.pendingNotices.splice(0)
   }
 
-  private async steerNotices(conversation: Conversation, notices: PendingNotice[]): Promise<void> {
+  /** 通知作为插话汇入（requestId = 合并 id，已送达的先剔掉） */
+  private async steerNotices(conversation: Conversation, pending: PendingNotice[]): Promise<void> {
     try {
+      const notices = await this.undelivered(conversation, pending)
+      if (notices.length === 0) return
       this.reopenInputs()
       await conversation.submit(
-        { type: 'input', content: notices.map((n) => n.text).join('\n\n'), whenBusy: 'steer' },
+        {
+          type: 'input',
+          content: notices.map((n) => n.text).join('\n\n'),
+          whenBusy: 'steer',
+          requestId: combinedNoticeId(notices)
+        },
         BG
       )
     } catch (error) {
       if (this.closedFlag || isClosedError(error)) return
       this.deps.logger.warn(`notice steer failed session=${this.sessionId}: ${errorText(error)}`)
     }
+  }
+
+  /** 这些 requestId 里，某对话已有提交（任何类型）的那些（一个只读提交） */
+  private knownRequests(
+    conversationId: ConversationId,
+    requestIds: readonly string[]
+  ): Promise<Set<string>> {
+    return this.raw.commit(async (tx) => {
+      const known = new Set<string>()
+      for (const requestId of new Set(requestIds)) {
+        if ((await tx.submissionByRequest(conversationId, requestId)) !== undefined) {
+          known.add(requestId)
+        }
+      }
+      return known
+    }, BG)
+  }
+
+  /** 剔掉当前对话里已经有提交的通知 */
+  private async undelivered(
+    conversation: Conversation,
+    notices: readonly PendingNotice[]
+  ): Promise<PendingNotice[]> {
+    const known = await this.knownRequests(
+      conversation.id,
+      notices.map((notice) => notice.requestId)
+    )
+    return notices.filter((notice) => !known.has(notice.requestId))
+  }
+
+  /**
+   * 通知去重（PIN-09）：合并窗口里已有、待送达里已有、或当前对话里已有这个 requestId 的提交
+   * （不分类型）。
+   */
+  private async noticeKnown(requestId: string): Promise<boolean> {
+    if (this.pendingNotices.some((notice) => notice.requestId === requestId)) return true
+    const state = await this.harness.snapshot(SessionStateDoc, BG)
+    if (state?.deferredNotices.some((notice) => notice.requestId === requestId)) return true
+    const conversation = await this.currentConversation()
+    return (await this.findRequest(conversation.id, requestId)) !== undefined
   }
 
   /** 存进待送达（同一 requestId 只存一份） */
@@ -879,15 +1478,29 @@ export class DurableSessionImpl implements DurableSession {
     if (live?.run !== undefined || inbox?.items.some((item) => item.mode !== 'write')) {
       return this.enqueueDeferred(conversation.id)
     }
+    // 同一 requestId 已有提交（上次送到一半，或被别的类型占了）：只移除、不再写 —— 类型不符时
+    // durable 的受理会抛错，绝不能让它卡住继续 / 中止（P2-09 PIN-09）
+    const known = await this.knownRequests(
+      conversation.id,
+      deferred.map((notice) => notice.requestId)
+    )
     for (const notice of deferred) {
-      await conversation.submit(
-        {
-          type: 'write',
-          entry: noticeEntryDraft(notice, this.deps.now()),
-          requestId: notice.requestId
-        },
-        BG
-      )
+      if (known.has(notice.requestId)) continue
+      try {
+        await conversation.submit(
+          {
+            type: 'write',
+            entry: noticeEntryDraft(notice, this.deps.now()),
+            requestId: notice.requestId
+          },
+          BG
+        )
+      } catch (error) {
+        if (this.closedFlag || isClosedError(error)) throw error
+        this.deps.logger.warn(
+          `deferred notice ${notice.requestId} failed session=${this.sessionId}: ${errorText(error)}`
+        )
+      }
     }
     const delivered = new Set(deferred.map((notice) => notice.requestId))
     await this.harness.commit(async (tx) => {
@@ -1093,7 +1706,10 @@ export class DurableSessionImpl implements DurableSession {
     const pending = this.takePendingNotices()
     if (pending.length > 0 && reason !== 'destroy') {
       try {
-        await this.deferNotices(pending.map((notice) => ({ ...notice, requestId: randomId() })))
+        // 每条沿用自己的 requestId（PIN-11）：下个进程同一条再到达时能认出来
+        await this.deferNotices(
+          pending.map(({ text, kind, requestId }) => ({ requestId, text, kind }))
+        )
       } catch (error) {
         this.deps.logger.warn(
           `saving notices failed session=${this.sessionId}: ${errorText(error)}`
