@@ -25,6 +25,12 @@ vi.mock('../hookService', () => ({
   hookTriggers: { decide: rv.decide }
 }))
 vi.mock('../messageService', () => ({ messageService: { listBySession: rv.listBySession } }))
+// 会话行不带 storageKind（= 旧格式）：转写走 messageService；碰到 SessionHost 就是路由错了
+vi.mock('../sessionHost', () => ({
+  getSessionHost: () => {
+    throw new Error('legacy-path tests must not reach the session host')
+  }
+}))
 vi.mock('../settingsService', () => ({ settingsService: { get: rv.settingsGet } }))
 vi.mock('../../frontend/core', () => ({ chatFrontendRegistry: { broadcast: rv.broadcast } }))
 vi.mock('../sessionRecords', () => ({
