@@ -16,7 +16,9 @@
  *   BS-22       原生 cdp 里等价的那几个方法不是绕开门的旁路；
  *   BS-23…25    每条会话一台 server（后端与询问通道各归各）、策略不缓存、各会话共用一条 tab 队列；
  *   BS-R1…R3    经符号链接的本地访问按真实去处过门：upload_file 一条指向私钥的链接、file:// 打开
- *               同一条链接、pdf 输出到一条指向 /etc 的目录链接。
+ *               同一条链接、pdf 输出到一条指向 /etc 的目录链接；
+ *   P2-07-40…42 调用身份：`_meta` 的 taskId / conversationId 并进每道门的 opts（没带 = 键不出现），
+ *               主体经 scope 的 agentOf 按调用现认，按主体写的 url 策略逐次生效。
  *
  * mock 掉的只是会拉起 Electron 的两条取用路径：`getDesktopSecurityContext`（换成同形态的真
  * `createSecurityContext`，外面包一层记下 enforcePath / enforceUrl 的实参）与浏览器面板
@@ -58,12 +60,18 @@ const gate = vi.hoisted(() => ({
   /** 打开桌面的真实路径解析（BS-R 系列）；缺省关 —— 其余用例的路径断言都照写法 */
   realPath: false,
   /** vars.home：缺省是个不存在的 /home/u；BS-R 换成临时目录里真有 .ssh 的家目录 */
-  home: '/home/u'
+  home: '/home/u',
+  /** getDesktopSecurityContext 收到的 ctx（服务器有没有把 agentOf 交过来） */
+  ctxs: [] as Array<Record<string, unknown>>,
+  /** 置位 = 审查接缝记下每个询问事件、回 null（不作答，卡片照常给人） */
+  recordEvents: false,
+  events: [] as unknown[]
 }))
 
 vi.mock('../../toolContext', async () => {
   const { createSecurityContext } = await import('@shuvix/agent-runtime')
   const { resolveRealPath } = await import('../../../utils/toolUtils/realPath')
+  const { withCallAgent } = await import('../../toolAgent')
   const { createInlinePolicyMdReader } =
     await import('@shuvix/agent-runtime/security/builtinPolicies/inlineSources')
   const readBuiltinPolicyMd = createInlinePolicyMdReader()
@@ -72,47 +80,66 @@ vi.mock('../../toolContext', async () => {
   return {
     TOOL_ABORTED: 'Aborted',
     resolveProjectConfig: () => ({ workingDirectory: gate.ws }),
-    // 主体 / 环境 / 变量表按 toolContext 的生产形态复刻，内置策略一条不少
+    // 主体 / 环境 / 变量表按 toolContext 的生产形态复刻，内置策略一条不少。主体按每次 enforce 现认
+    // （Fx-MOCK，P2-07）：真的 withCallAgent 拿 opts 里的 conversationId 经 ctx.agentOf 认人
     getDesktopSecurityContext: (ctx: Ctx): Real => {
-      const real = createSecurityContext(
-        { kind: 'agent', sessionId: ctx.sessionId, agentKind: 'root' },
-        { host: 'desktop', platform: process.platform, workspaceDir: gate.ws },
-        {
-          host: 'desktop',
-          pathSep: '/',
-          ...(gate.realPath ? { realPath: resolveRealPath } : {}),
-          getVars: () => ({
-            workspace: gate.ws,
-            toolResultsBase: '/tool-results',
-            skillsDirs: ['/skills'],
-            memoryDirs: [],
-            knowledgeRoot: '/kb',
-            knowledgeSessionDirs: [],
-            home: gate.home,
-            botsDir: '/home/u/.shuvix/bots',
-            builtinKnowledgeDir: '/opt/shuvix/Resources/knowledge',
-            systemDirs: [],
-            // 会话目录（生产里由 sandbox.sessionDirsView 算）：工作目录 + 本会话的 tool_results
-            // （还有会话 TMPDIR 与 artifacts，这里用不上）—— ask-on-external-path 在这以外的写才问
-            sessionDirs: [gate.ws, `/tool-results/${ctx.sessionId}`],
-            sessionReadDirs: []
-          }),
-          readBuiltinPolicyMd,
-          getSessionGrants: () => ({ allowList: [] }),
-          getUserPolicies: () => gate.policies as never,
-          // 询问通道由 scope 注入：缺席就是「这条会话没有输入面板」
-          requestUserInput: ctx.requestUserInput
-        }
-      )
+      gate.ctxs.push(ctx as unknown as Record<string, unknown>)
+      const realFor = (opts?: { conversationId?: number }): Real => {
+        const agent = withCallAgent(ctx, opts).agent ?? ctx.agent
+        return createSecurityContext(
+          {
+            kind: 'agent',
+            sessionId: ctx.sessionId,
+            agentKind: agent?.kind ?? 'root',
+            ...(agent?.profileName ? { profileName: agent.profileName } : {})
+          },
+          { host: 'desktop', platform: process.platform, workspaceDir: gate.ws },
+          {
+            host: 'desktop',
+            pathSep: '/',
+            ...(gate.realPath ? { realPath: resolveRealPath } : {}),
+            getVars: () => ({
+              workspace: gate.ws,
+              toolResultsBase: '/tool-results',
+              skillsDirs: ['/skills'],
+              memoryDirs: [],
+              knowledgeRoot: '/kb',
+              knowledgeSessionDirs: [],
+              home: gate.home,
+              botsDir: '/home/u/.shuvix/bots',
+              builtinKnowledgeDir: '/opt/shuvix/Resources/knowledge',
+              systemDirs: [],
+              // 会话目录（生产里由 sandbox.sessionDirsView 算）：工作目录 + 本会话的 tool_results
+              // （还有会话 TMPDIR 与 artifacts，这里用不上）—— ask-on-external-path 在这以外的写才问
+              sessionDirs: [gate.ws, `/tool-results/${ctx.sessionId}`],
+              sessionReadDirs: []
+            }),
+            readBuiltinPolicyMd,
+            getSessionGrants: () => ({ allowList: [] }),
+            getUserPolicies: () => gate.policies as never,
+            // 询问通道由 scope 注入：缺席就是「这条会话没有输入面板」
+            requestUserInput: ctx.requestUserInput,
+            ...(gate.recordEvents
+              ? {
+                  onPermissionRequest: async (e: unknown) => {
+                    gate.events.push(e)
+                    return null
+                  }
+                }
+              : {})
+          }
+        )
+      }
+      const real = realFor()
       return {
         ...real,
         enforcePath: (mode, path, opts) => {
           gate.pathCalls.push({ mode, path, opts })
-          return real.enforcePath(mode, path, opts)
+          return realFor(opts).enforcePath(mode, path, opts)
         },
         enforceUrl: (object, opts) => {
           gate.urlCalls.push({ object, opts })
-          return real.enforceUrl(object, opts)
+          return realFor(opts).enforceUrl(object, opts)
         }
       }
     }
@@ -186,6 +213,8 @@ vi.mock('../../browser', () => ({
 }))
 
 import { createDesktopBrowserMcpServerFactory } from '../browserServer'
+import type { DesktopBuiltinMcpScope } from '../types'
+import { M1, M2, SUBJ_E, SUBJ_ROOT0, makeAgentOf, subjectOf } from './callIdentityFixtures'
 
 // ─── 素材 ────────────────────────────────────────────────────────────────
 
@@ -208,6 +237,9 @@ beforeEach(() => {
   gate.policies.length = 0
   gate.realPath = false
   gate.home = '/home/u'
+  gate.ctxs.length = 0
+  gate.events.length = 0
+  gate.recordEvents = false
   browser.created.length = 0
 })
 
@@ -238,6 +270,8 @@ interface OpenOpts {
   sessionId?: string
   /** 询问应答；缺省 = 一律允许；`null` = 这条会话没有输入面板（fail-closed 用例） */
   respond?: ((req: InputRequest) => Promise<InputResponse>) | null
+  /** scope 上的 agentOf（P2-07：按对话认调用方）；缺省 = 宿主没接 */
+  agentOf?: DesktopBuiltinMcpScope['agentOf']
 }
 
 /** 把一台桌面 browser server 接到一对真 InMemoryTransport 上，并连一个真 Client */
@@ -256,7 +290,8 @@ async function open(opts: OpenOpts = {}): Promise<Session> {
             asks.push(req)
             return respond(req)
           }
-        : undefined
+        : undefined,
+      ...(opts.agentOf ? { agentOf: opts.agentOf } : {})
     },
     serverTransport
   )
@@ -302,17 +337,22 @@ const hostPolicy = (
 ): ParsedPolicyFile =>
   userPolicy(name, [{ effect, match: `object.type == 'url' && object.host == '${host}'` }])
 
-/** enforce 的 opts 契约（displayPath 不给时就是 undefined —— toEqual 视同缺席） */
+/**
+ * enforce 的 opts 契约（displayPath 不给时就是 undefined —— toEqual 视同缺席）。`ids`（P2-07）：
+ * 客户端带了调用身份时并进 opts 的 taskId / conversationId
+ */
 const enforceOpts = (
   toolName: string,
   description: string,
   displayPath?: string,
-  toolCallId = 'tc-1'
+  toolCallId = 'tc-1',
+  ids?: { taskId: number; conversationId: number }
 ): Record<string, unknown> => ({
   toolCallId,
   toolName: `mcp__browser__${toolName}`,
   description,
   displayPath,
+  ...ids,
   abortError: 'Aborted',
   missingChannel: 'deny'
 })
@@ -926,5 +966,96 @@ describe.skipIf(!POSIX)('browser 桌面接线 —— 按真实去处过门（桌
     expect(gate.pathCalls.map((c) => [c.mode, c.path])).toEqual([['write', `${WS()}/outdir/p.pdf`]])
     expect(s.asks).toEqual([])
     expect(s.backend.pdf).not.toHaveBeenCalled()
+  })
+})
+
+// ─── P2-07：调用身份 ───────────────────────────────────────────────────────
+
+describe.skipIf(!POSIX)('P2-07 browser 桌面接线的调用身份', () => {
+  const IDS = { taskId: 21, conversationId: 2 }
+  const hasIds = (opts: unknown): void => {
+    const o = opts as Record<string, unknown>
+    expect(o.taskId === 21 && o.conversationId === 2).toBe(true)
+  }
+
+  it('P2-07-40 每道门的 opts 都并上两个 id：url / file:// 读 / upload 读 / pdf 写 / 显示本地文件的 tab', async () => {
+    const s = await open({ agentOf: makeAgentOf() })
+
+    await s.call('open_tab', { url: 'https://a.example/p' }, M2)
+    expect(gate.urlCalls[0].opts).toEqual(
+      enforceOpts('open_tab', 'Open https://a.example/p', undefined, 'tc-2', IDS)
+    )
+    hasIds(gate.urlCalls[0].opts)
+
+    const file = `file://${WS()}/page.html`
+    await s.call('open_tab', { url: file }, M2)
+    await s.call('upload_file', { tabId: 't1', uid: 'e1', paths: ['notes/a.txt'] }, M2)
+    await s.call('pdf', { tabId: 't1', outputPath: 'out/page.pdf' }, M2)
+    s.backend.urls.t2 = 'file:///home/u/.ssh/id_rsa'
+    await s.call('snapshot', { tabId: 't2' }, M2)
+
+    expect(gate.pathCalls.map((c) => c.opts)).toEqual([
+      enforceOpts('open_tab', `Open ${file}`, `${WS()}/page.html`, 'tc-2', IDS),
+      enforceOpts('upload_file', 'Upload to the web page in tab t1', 'notes/a.txt', 'tc-2', IDS),
+      enforceOpts('pdf', 'Save the page as a PDF', 'out/page.pdf', 'tc-2', IDS),
+      enforceOpts(
+        'snapshot',
+        'Read the local file shown in tab t2',
+        '/home/u/.ssh/id_rsa',
+        'tc-2',
+        IDS
+      )
+    ])
+    for (const c of gate.pathCalls) hasIds(c.opts)
+    expect(gate.ctxs.at(-1)?.agentOf).toBeTypeOf('function')
+  })
+
+  it('P2-07-41 询问事件的主体是派生 explore、带两个 id；卡片照旧按 toolCallId', async () => {
+    gate.recordEvents = true
+    gate.policies.push(hostPolicy('ask-a', 'ask', 'a.example'))
+    const s = await open({ agentOf: makeAgentOf() })
+
+    expect((await s.call('open_tab', { url: 'https://a.example/' }, M2)).isError).toBeFalsy()
+    expect(gate.events).toHaveLength(1)
+    expect(gate.events[0]).toMatchObject({ toolCallId: 'tc-2', taskId: 21, conversationId: 2 })
+    expect(subjectOf(gate.events[0])).toStrictEqual(SUBJ_E())
+    expect(s.asks).toHaveLength(1)
+    expect(s.asks[0]).toMatchObject({ kind: 'ask', id: 'tc-2' })
+  })
+
+  it('P2-07-41 按主体写的 url deny：派生 agent 打不开、后端不碰；同一实例上根 agent 打得开', async () => {
+    gate.policies.push(
+      userPolicy('no-spawned-web', [
+        { effect: 'deny', match: "object.type == 'url' && subject.agentKind == 'spawned'" }
+      ])
+    )
+    const s = await open({ agentOf: makeAgentOf() })
+
+    const denied = await s.call('open_tab', { url: 'https://a.example/' }, M2)
+    expect(denied.isError).toBe(true)
+    expect(textOf(denied)).toContain("Denied by security policy rule 'no-spawned-web#0'")
+    expect(s.backend.openTab).not.toHaveBeenCalled()
+
+    expect((await s.call('open_tab', { url: 'https://a.example/' }, M1)).isError).toBeFalsy()
+    expect(s.backend.openTab).toHaveBeenCalledTimes(1)
+  })
+
+  it('P2-07-42 只带 toolCallId → BS-2 那份 opts 一字不差（没有两个 id 键），主体 root', async () => {
+    gate.recordEvents = true
+    gate.policies.push(hostPolicy('ask-a', 'ask', 'a.example'))
+    const agentOf = makeAgentOf()
+    const s = await open({ agentOf })
+
+    await s.call('open_tab', { url: 'https://a.example/p?q=1' }, TC)
+    expect(gate.urlCalls[0].opts).toStrictEqual({
+      toolCallId: 'tc-1',
+      toolName: 'mcp__browser__open_tab',
+      description: 'Open https://a.example/p?q=1',
+      displayPath: undefined,
+      abortError: 'Aborted',
+      missingChannel: 'deny'
+    })
+    expect(subjectOf(gate.events[0])).toStrictEqual(SUBJ_ROOT0())
+    expect(agentOf).not.toHaveBeenCalled()
   })
 })
