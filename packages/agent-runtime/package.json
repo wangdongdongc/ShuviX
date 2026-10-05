@@ -1,7 +1,7 @@
 {
   "name": "@shuvix/agent-runtime",
   "version": "0.1.0",
-  "description": "Host-agnostic agent orchestration core for ShuviX — built on @earendil-works/pi-durable + pi-ai, and exposes injection seams (storage / network / event sink / env) so both the Electron desktop and the Chrome extension drive one orchestration codebase.",
+  "description": "Host-agnostic agent orchestration core for ShuviX — durable sessions on @earendil-works/pi-durable + pi-ai; the host injects session storage, tools, prompt sections, network and the event sink. Electron-free and Node-free; the desktop app is its host.",
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
