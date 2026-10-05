@@ -15,6 +15,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import {
   processToolOutput,
+  spillLocatorOf,
   truncationDiagnostic,
   type SpillSink,
   type TruncateStrategy
@@ -258,5 +259,34 @@ describe('SPL 说明交回、不进正文（locatorInText: false —— pi-durab
     }
 
     expect(truncationDiagnostic(await run({ fullText: SMALL }))).toBeUndefined()
+  })
+
+  it('P3-02-17 spillLocatorOf：与 truncationDiagnostic 同一模板 —— 任何 locator 都能原样读回；不是落盘诊断 → undefined', async () => {
+    const locators = [
+      '/Users/a b/.shuvix/tool_results/c1.v2.txt',
+      '/tmp/a; b; c.txt',
+      '/tmp/日本語/ünï ✓.txt',
+      'C:\\Users\\a b\\x.txt',
+      '/tmp/trailing.',
+      '/tmp/full output saved to/x. Use the read tool (not bash) to view it.txt',
+      '/tmp/saved to; saved to.txt'
+    ]
+    for (const locator of locators) {
+      const spilled = await run({ fullText: BIG, sink: okSink(locator).sink, locatorInText: false })
+      expect(spilled.locator).toBe(locator)
+      expect(spillLocatorOf(truncationDiagnostic(spilled))).toBe(locator)
+    }
+    const truncated = truncationDiagnostic(await run({ fullText: BIG, locatorInText: false }))!
+    expect(truncated.code).toBe('truncated')
+    expect(spillLocatorOf(truncated)).toBeUndefined()
+    expect(
+      spillLocatorOf({ severity: 'info', code: 'spilled', message: 'full output saved to /x.txt' })
+    ).toBeUndefined()
+    const spilled = truncationDiagnostic(
+      await run({ fullText: BIG, sink: okSink('/p/a.txt').sink, locatorInText: false })
+    )!
+    expect(spillLocatorOf({ severity: spilled.severity, message: spilled.message })).toBeUndefined()
+    expect(spillLocatorOf(undefined)).toBeUndefined()
+    expect(spillLocatorOf(null)).toBeUndefined()
   })
 })
