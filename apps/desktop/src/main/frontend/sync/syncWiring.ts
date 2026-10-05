@@ -57,7 +57,9 @@ export interface SessionHookFanout<S> {
   /** 登记打开监听器；返回注销（重复注销无事） */
   onSessionOpened(listener: (session: S) => void): () => void
   /** 登记关闭监听器；返回注销（重复注销无事） */
-  onSessionClosed(listener: (sessionId: string, reason: SyncSessionClosedReason) => void): () => void
+  onSessionClosed(
+    listener: (sessionId: string, reason: SyncSessionClosedReason) => void
+  ): () => void
 }
 
 export function createSessionHookFanout<S>(

@@ -24,7 +24,7 @@ import {
 
 export type { TestBinding }
 
-type Listener = (...args: any[]) => void // eslint-disable-line @typescript-eslint/no-explicit-any
+type Listener = (...args: any[]) => void
 
 export class FakeWebContents extends EventEmitter {
   destroyed = false

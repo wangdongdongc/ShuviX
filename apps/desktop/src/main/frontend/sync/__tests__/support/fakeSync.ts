@@ -78,7 +78,9 @@ export class FakeSyncHost implements SyncHubHost {
     return () => this.opened.delete(listener)
   }
 
-  onSessionClosed(listener: (sessionId: string, reason: SyncSessionClosedReason) => void): () => void {
+  onSessionClosed(
+    listener: (sessionId: string, reason: SyncSessionClosedReason) => void
+  ): () => void {
     this.closed.add(listener)
     return () => this.closed.delete(listener)
   }

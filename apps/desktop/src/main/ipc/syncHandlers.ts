@@ -13,10 +13,7 @@ export const SYNC_INVOKE_CHANNEL = 'sync:invoke'
 
 /** 注册要的那一点 ipcMain（测试给假的） */
 export interface SyncIpcMain {
-  handle(
-    channel: string,
-    listener: (event: SyncIpcEvent, ...args: unknown[]) => unknown
-  ): void
+  handle(channel: string, listener: (event: SyncIpcEvent, ...args: unknown[]) => unknown): void
 }
 
 export interface SyncHandlerOptions {

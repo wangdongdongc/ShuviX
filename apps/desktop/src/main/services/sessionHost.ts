@@ -145,7 +145,8 @@ export function buildSessionHostDeps(
     // 还有活着的后台任务，或有前端正看着它（视图同步的订阅，P3-05）；hub 没建过就只数任务（不建 hub）。
     // hasSubscribers 抛错照样抛出去 —— 宿主的 evictable 把它当钉住
     isPinned: (sessionId) =>
-      taskRegistry.runningCount(sessionId) > 0 || (peekSyncHub()?.hasSubscribers(sessionId) ?? false),
+      taskRegistry.runningCount(sessionId) > 0 ||
+      (peekSyncHub()?.hasSubscribers(sessionId) ?? false),
     eventSink: electronEventSink,
     beforeAbort: beforeSessionAbort,
     onDrivenSettled: onSubSessionDrivenSettled,

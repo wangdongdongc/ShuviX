@@ -37,7 +37,13 @@ export function syncTargetKey(target: SyncTarget): string {
 // ─────────────────────────── 渠道上的调用（P3-05） ───────────────────────────
 
 /** 线上的严格 JSON 值（与 chord 的 `JsonValue` 同形；本包不依赖 chord） */
-export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
+export type JsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | JsonValue[]
+  | { [key: string]: JsonValue }
 
 /**
  * 一次同步调用跨进程回来的信封（P3-05 PIN-01）：Electron 的 `ipcMain.handle` 拒绝时只带 `message`，

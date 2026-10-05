@@ -42,7 +42,9 @@ vi.mock('../../../services/sessionRecords', () => ({
   sessionRecords: {
     pick: (id: string, fields: string[]) => {
       const row = holder.rows.get(id)
-      return row ? Object.fromEntries(fields.map((f) => [f, row[f as keyof typeof row]])) : undefined
+      return row
+        ? Object.fromEntries(fields.map((f) => [f, row[f as keyof typeof row]]))
+        : undefined
     }
   }
 }))
@@ -66,6 +68,7 @@ import {
   resolveAgentOf,
   sessionHostHooks
 } from '../syncWiring'
+// eslint-disable-next-line boundaries/dependencies -- 同步通道的两半（frontend/sync 的 hub 与 ipc 的 sync:invoke 处理器）在一个用例里接起来
 import { registerSyncHandlers } from '../../../ipc/syncHandlers'
 import { FakeSessionHost } from '../../../services/__tests__/support/fakeSessionHost'
 import { FakeIpcMain, FakeWebContents, settle } from './support/ipcRig'
@@ -261,7 +264,12 @@ describe('P3-05-21 resolveAgent 经路由', () => {
     const sub = (id: string): JsonValue =>
       createServiceSubscribeCall(id, CHAT_VIEW_SERVICE_ID, 'singleton') as unknown as JsonValue
 
-    const reply = await ipc.invokeAs(wc, 'sync:invoke', { kind: 'agent', agentId: 'ghost' }, sub('a'))
+    const reply = await ipc.invokeAs(
+      wc,
+      'sync:invoke',
+      { kind: 'agent', agentId: 'ghost' },
+      sub('a')
+    )
     expect(reply).toMatchObject({ ok: false, error: { code: 'service_not_found' } })
     expect(holder.locate).toHaveBeenCalledTimes(1)
     expect(peekSyncHub()!.hasSubscribers('s1')).toBe(false)

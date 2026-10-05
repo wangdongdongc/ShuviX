@@ -72,6 +72,7 @@ interface Wired {
 async function wire(): Promise<Wired> {
   const p = proc()
   const wiring = await import('../syncWiring')
+  // eslint-disable-next-line boundaries/dependencies -- 同步通道的两半（frontend/sync 的 hub 与 ipc 的 sync:invoke 处理器）在一个用例里接起来
   const { registerSyncHandlers } = await import('../../../ipc/syncHandlers')
   const ipc = new FakeIpcMain()
   const table = new Map<number, FakeWebContents>()

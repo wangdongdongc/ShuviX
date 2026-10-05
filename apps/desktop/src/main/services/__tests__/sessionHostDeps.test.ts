@@ -725,26 +725,25 @@ describe('D10-24 / P3-05-17 isPinned（PIN-04；P3-05：再数视图同步的订
     [1, 'none', true],
     [0, 'some', true],
     [1, 'some', true]
-  ] as const)(
-    'P3-05-17 后台任务 %i 个、hub 订阅 %s → %s',
-    (tasks, subscribers, pinned) => {
-      const hasSubscribers = vi.fn((sessionId: string) => subscribers === 'some' && sessionId === 'm1')
-      holder.syncHub = { hasSubscribers }
-      const taskIds = Array.from({ length: tasks }, () =>
-        taskRegistry.create({
-          kind: 'bash',
-          sessionId: 'm1',
-          title: 'sleep',
-          subject: { kind: 'bash', command: 'sleep 9', cwd: '/', logPath: '/tmp/x.log' } as never,
-          announceAfter: Infinity
-        })
-      )
-      expect(deps.isPinned?.('m1')).toBe(pinned)
-      expect(deps.isPinned?.('m2')).toBe(false)
-      for (const taskId of taskIds) taskRegistry.settle(taskId, { status: 'done' })
-      taskRegistry.killBySession('m1')
-    }
-  )
+  ] as const)('P3-05-17 后台任务 %i 个、hub 订阅 %s → %s', (tasks, subscribers, pinned) => {
+    const hasSubscribers = vi.fn(
+      (sessionId: string) => subscribers === 'some' && sessionId === 'm1'
+    )
+    holder.syncHub = { hasSubscribers }
+    const taskIds = Array.from({ length: tasks }, () =>
+      taskRegistry.create({
+        kind: 'bash',
+        sessionId: 'm1',
+        title: 'sleep',
+        subject: { kind: 'bash', command: 'sleep 9', cwd: '/', logPath: '/tmp/x.log' } as never,
+        announceAfter: Infinity
+      })
+    )
+    expect(deps.isPinned?.('m1')).toBe(pinned)
+    expect(deps.isPinned?.('m2')).toBe(false)
+    for (const taskId of taskIds) taskRegistry.settle(taskId, { status: 'done' })
+    taskRegistry.killBySession('m1')
+  })
 
   it('P3-05-17 hub 还没建：只数后台任务，也不建 hub', () => {
     holder.syncHub = undefined

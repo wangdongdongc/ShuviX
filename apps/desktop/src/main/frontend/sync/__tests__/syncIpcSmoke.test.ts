@@ -38,6 +38,7 @@ vi.mock('../../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {}, debug: () => {} })
 }))
 
+// eslint-disable-next-line boundaries/dependencies -- 同步通道的两半（frontend/sync 的 hub 与 ipc 的 sync:invoke 处理器）在一个用例里接起来
 import { registerSyncHandlers } from '../../../ipc/syncHandlers'
 import { peekSyncHub, resetSyncHubForTests, sessionHostHooks } from '../syncWiring'
 import {
