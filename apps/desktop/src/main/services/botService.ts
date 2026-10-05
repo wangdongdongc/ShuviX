@@ -5,8 +5,8 @@
  * **纯 md 驱动**，与 agent / hook / policy 同一条纪律 —— 文件存在且解析得过就是活的，没有
  * 启用开关、没有旁路配置、没有数据库表，也**不内置任何 bot**。
  *
- * 本服务**只管文件**：怎么把正文喂给会话是 agentSession 那一侧的事（`renderBotContext` →
- * `CreateAgentParams.systemContext`，只给根 Agent）。bot 会话是一条普通有根会话，所以这里没有
+ * 本服务**只管文件**：怎么把正文喂给会话是提示词那一侧的事（`renderBotContext` → 系统提示词的
+ * bot 段落，`PromptHost.resolveBotContext`，只给根 Agent）。bot 会话是一条普通有根会话，所以这里没有
  * 派发、没有 mailbox、没有管线 —— 那些由会话与子会话机制原样承担。
  *
  * **编辑不经过本服务**：打开一份 bot 就是打开它的笔记本会话（registryNotes），自动保存经

@@ -85,7 +85,7 @@ export const PROMPT_EXTENSION_ORDER: readonly PromptExtensionName[] = [
 
 // ─────────────────────────── 选择 ───────────────────────────
 
-/** 选择段落要看的那几项（`AgentSpec` 满足它） */
+/** 选择段落要看的那几项 */
 export interface PromptSelectionSpec {
   kind: AgentKind
   profile: Pick<InProcessAgentType, 'name' | 'instructionFiles' | 'projectAwareness'>

@@ -97,6 +97,17 @@ export interface AssistantMeta {
   usage?: UsageInfo
   /** 这条消息是压缩摘要（compaction entry 投影而来） */
   isCompactionSummary?: boolean
+  /**
+   * 这张卡之前被折叠掉的失败尝试（同一次运行里的自动重试，Q-P3-06）：失败的尝试不再各占一行，
+   * 由随后的这张卡带一个「重试 ×N」的小提示。`count` = 自上一张带提示的卡以来折叠的尝试数。
+   */
+  retried?: RetriedInfo
+}
+
+/** 折叠掉的重试：次数与最后一次的错误文案 */
+export interface RetriedInfo {
+  count: number
+  lastError: string
 }
 
 // ---- 工具结构化详情（按工具 type 判别） ----
@@ -382,6 +393,8 @@ export interface AssistantToolBlock {
   result?: string
   isError?: boolean
   details?: ToolResultDetails
+  /** 完整输出已落盘（durable 的 `spilled` 诊断）：模型可用 read 工具取回的那个位置 */
+  spill?: { path: string }
 }
 
 /**
@@ -397,7 +410,13 @@ export type AssistantBlock =
   | { type: 'text'; text: string }
   | AssistantToolBlock
 
-// error_event 无 metadata
+/**
+ * error_event 的元数据：只有一项 —— 最终失败之前被折叠掉的重试（Q-P3-06「一行错误带次数」）。
+ * 没有折叠任何尝试时 metadata 仍是 null（与旧会话的冻结投影一致）。
+ */
+export interface ErrorEventMeta {
+  retried?: RetriedInfo
+}
 
 // ---- 判别联合基础 ----
 
@@ -437,7 +456,7 @@ export interface AssistantMessage extends MessageBase {
 export interface ErrorEventMessage extends MessageBase {
   role: 'system_notify'
   type: 'error_event'
-  metadata: null
+  metadata: ErrorEventMeta | null
 }
 
 /** 判别联合：所有消息类型 */
