@@ -290,3 +290,10 @@ describe('router · continue broadcasts', () => {
     })
   })
 })
+
+describe('router · monitor display name', () => {
+  // 从 createAgent.test.ts 搬来（P2-13 删了旧创建管线）：监控面板的事件投影在 phase 3
+  it.todo(
+    'ML-U-10 监控里的 displayName：档案写了显示名 → 原样；显示名为空串 → 回落档案名 (pi-durable p3)'
+  )
+})

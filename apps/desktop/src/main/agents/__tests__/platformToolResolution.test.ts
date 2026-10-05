@@ -49,8 +49,7 @@ vi.mock('../../services/instruction', () => ({ resolveInstructionContent: vi.fn(
 vi.mock('../../services/memory', () => ({ resolveProjectMemoryIndex: vi.fn() }))
 vi.mock('../../frontend/core', () => ({ chatFrontendRegistry: { broadcast: vi.fn() } }))
 vi.mock('../../services/agentRuntimeAdapters', () => ({
-  electronEventSink: {},
-  runtimeLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
+  electronEventSink: {}
 }))
 vi.mock('../../services/toolContext', () => ({
   getDesktopSecurityContext: mocks.getDesktopSecurityContext,

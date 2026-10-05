@@ -10,6 +10,10 @@
  *  - MCP 工具来自真 `McpManager`：创建时按名惰性连接、取注册项与声明快照；重开时按锁里的声明建注册项，
  *    **不连**（第一次调用时原地连）。
  *
+ * P2-11 的派生路径（选项全部可选）：`kind: 'spawned'` 的解析与按记录的重建 —— MCP 恒按 `sessionId`
+ * （与根共用一个实例），`agent` 按 `offersDispatchTool`，结果契约的 `next` 等附加工具包好原样交回；
+ * MCP 注册项可带 `callerIdOf`（`_meta` 的调用方身份）；额外的内置工具；审查接缝。
+ *
  * 询问通道是**晚绑定**的：`requestUserInput(sessionId)` 每次现找那条会话此刻打开着的实例（重启之后
  * 是新进程的那个）；找不到就当关停取消。审查接缝（`onPermissionRequest`）只记下事件、回 null（照旧问人）。
  */
@@ -21,20 +25,24 @@ import { createInlinePolicyMdReader } from '../../../../security/builtinPolicies
 import { createSecurityContext } from '../../../../security/context'
 import type {
   PermissionRequestEvent,
+  PermissionReviewAnswer,
   SecurityContext,
   SecurityHostProvider
 } from '../../../../security/types'
+import type { McpRegistrationOptions } from '../../../../mcpManager'
+import type { SpawnedAgentRecord } from '../../../agentRecord'
 import { BaseTool } from '../../../../tools/baseTool'
 import { createFileToolSuite, type FileToolSuite } from '../../../../tools/fileToolSuite'
 import type { ToolResult } from '../../../../tools/toolResult'
 import { wrapDurableOutput } from '../../../../toolOutput/wrapDurableOutput'
 import type { LockRecord } from '../../../lock'
-import type {
-  AgentToolSet,
-  AgentToolsRequest,
-  BuiltinToolsRequest,
-  ResolvedAgentTools,
-  ToolHost
+import {
+  offersDispatchTool,
+  type AgentToolSet,
+  type AgentToolsRequest,
+  type BuiltinToolsRequest,
+  type ResolvedAgentTools,
+  type ToolHost
 } from '../../../seams'
 import type { McpProcess } from './mcpSdk'
 import type { MemFs } from './memFs'
@@ -47,11 +55,18 @@ const INLINE_POLICY_MD = createInlinePolicyMdReader()
 
 export type RequestUserInput = (request: InputRequest) => Promise<InputResponse>
 
+/** 审查接缝的实现（P2-11 的 reviewBridge；缺省只记事件、回 null） */
+export type ReviewSeam = (
+  event: PermissionRequestEvent,
+  signal?: AbortSignal
+) => Promise<PermissionReviewAnswer | null>
+
 /** 桌面口径的安全上下文（见文件头）。`permissionLog` 给了就接上审查接缝（记事件、回 null） */
 export function securityFor(
   sessionId: string,
   requestUserInput: RequestUserInput | undefined,
-  permissionLog?: PermissionRequestEvent[]
+  permissionLog?: PermissionRequestEvent[],
+  review?: ReviewSeam
 ): SecurityContext {
   const provider: SecurityHostProvider = {
     host: 'desktop',
@@ -75,9 +90,9 @@ export function securityFor(
     ...(permissionLog === undefined
       ? {}
       : {
-          onPermissionRequest: async (event: PermissionRequestEvent) => {
+          onPermissionRequest: async (event: PermissionRequestEvent, signal?: AbortSignal) => {
             permissionLog.push(event)
-            return null
+            return review === undefined ? null : review(event, signal)
           }
         })
   }
@@ -169,12 +184,21 @@ export interface RealToolHostOptions {
   readonly requestUserInput: (sessionId: string) => RequestUserInput
   /** 审查接缝收到的事件（跨会话） */
   readonly permissionLog: PermissionRequestEvent[]
+  // ─── P2-11 的派生路径（全部可选：缺省世界 W 不受影响，PIN-05） ───
+  /** 额外的内置工具（`hold` / `probe` / `session` 桩），排在 W 的那六个之后；只按名单提供 */
+  readonly extraBuiltins?: (sessionId: string) => ToolRegistration[]
+  /** 派发工具（`agent`）：名单含 `agent` 且 `offersDispatchTool` 时给（真 `createDispatchAgentTool`） */
+  readonly dispatch?: (sessionId: string) => ToolRegistration
+  /** MCP 注册项的调用方 id（桌面口径：`host.get(sid)?.agentIdentity(c)?.callerId ?? sid`） */
+  readonly mcpOptions?: (sessionId: string) => McpRegistrationOptions
+  /** 审查接缝（缺省只记事件、回 null —— 照旧问人） */
+  readonly review?: ReviewSeam
 }
 
 export interface RealToolHost extends ToolHost {
   readonly builtinCalls: BuiltinToolsRequest[]
   readonly resolveCalls: AgentToolsRequest[]
-  readonly rebuildCalls: LockRecord[]
+  readonly rebuildCalls: (LockRecord | SpawnedAgentRecord)[]
 }
 
 /** 真工具的 ToolHost（每个「进程」一个；MemFs / 落盘记录 / 审查记录是世界级的） */
@@ -185,7 +209,7 @@ export function realToolHost(options: RealToolHostOptions): RealToolHost {
     let security = securities.get(sessionId)
     if (security === undefined) {
       const ask: RequestUserInput = (request) => options.requestUserInput(sessionId)(request)
-      security = securityFor(sessionId, ask, options.permissionLog)
+      security = securityFor(sessionId, ask, options.permissionLog, options.review)
       securities.set(sessionId, security)
     }
     return security
@@ -204,13 +228,21 @@ export function realToolHost(options: RealToolHostOptions): RealToolHost {
       const ask = createAskTool({
         requestUserInput: (input) => options.requestUserInput(sessionId)(input)
       })
-      return [suite.read, suite.write, suite.edit, ask, new DumpTool(), new BoomTool()].map(
-        (tool) => wrap(sessionId, tool)
-      )
+      return [
+        suite.read,
+        suite.write,
+        suite.edit,
+        ask,
+        new DumpTool(),
+        new BoomTool(),
+        ...(options.extraBuiltins?.(sessionId) ?? [])
+      ].map((tool) => wrap(sessionId, tool))
     },
     resolveAgentTools: async (request): Promise<ResolvedAgentTools> => {
       host.resolveCalls.push(request)
+      // 资源（MCP、包装器、派发工具）恒按会话 id 找，从不按 agentId（PIN-10）
       const { sessionId } = request
+      const mcpOptions = options.mcpOptions?.(sessionId)
       const entries: NonNullable<ResolvedAgentTools['mcp']>[number][] = []
       for (const name of request.names) {
         if (!name.startsWith('mcp:')) continue
@@ -221,21 +253,45 @@ export function realToolHost(options: RealToolHostOptions): RealToolHost {
           server,
           declarations: mcp.manager.declarationsOf(server, sessionId),
           tools: mcp.manager
-            .getRegistrationsByServerName(server, sessionId)
+            .getRegistrationsByServerName(server, sessionId, mcpOptions)
             .map((tool) => wrap(sessionId, tool))
         })
       }
-      return { mcp: entries, skills: [], sandboxed: false }
-    },
-    rebuildAgentTools: (lock, { sessionId }): AgentToolSet => {
-      host.rebuildCalls.push(lock)
+      const agent =
+        options.dispatch !== undefined && offersDispatchTool(request)
+          ? wrap(sessionId, options.dispatch(sessionId))
+          : undefined
       return {
+        ...(agent === undefined ? {} : { agent }),
+        mcp: entries,
+        skills: [],
+        sandboxed: false,
+        ...(request.extraTools?.length
+          ? { extraTools: request.extraTools.map((tool) => wrap(sessionId, tool)) }
+          : {})
+      }
+    },
+    rebuildAgentTools: (lock, { sessionId, extraTools }): AgentToolSet => {
+      host.rebuildCalls.push(lock)
+      const mcpOptions = options.mcpOptions?.(sessionId)
+      const offersAgent =
+        options.dispatch !== undefined &&
+        offersDispatchTool({
+          kind: lock.kind,
+          names: lock.toolNames,
+          ...('canSpawn' in lock ? { canSpawn: lock.canSpawn } : {})
+        })
+      return {
+        ...(offersAgent ? { agent: wrap(sessionId, options.dispatch!(sessionId)) } : {}),
         mcp: Object.entries(lock.mcp).map(([server, declarations]) => ({
           server,
           tools: mcp.manager
-            .registrationsFromDeclarations(server, sessionId, declarations)
+            .registrationsFromDeclarations(server, sessionId, declarations, mcpOptions)
             .map((tool) => wrap(sessionId, tool))
-        }))
+        })),
+        ...(extraTools?.length
+          ? { extraTools: extraTools.map((tool) => wrap(sessionId, tool)) }
+          : {})
       }
     }
   }
