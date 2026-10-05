@@ -45,6 +45,7 @@ import { createLogger } from '../logger'
 import { peekSyncHub, sessionHostHooks } from '../frontend/sync/syncWiring'
 import type { ToolAgentIdentity } from './toolAgent'
 import { electronEventSink } from './agentRuntimeAdapters'
+import { installSessionSignals } from './sessionSignals'
 import { getModelRegistry, providerCredentialPort } from './models'
 import { writeSessionMirror } from './sessionMirror'
 import { sessionRecords } from './sessionRecords'
@@ -178,9 +179,12 @@ export function createDesktopSessionHost(overrides: Partial<SessionHostDeps> = {
 let singleton: SessionHost | undefined
 let testOverrides: Partial<SessionHostDeps> | undefined
 
-/** 主进程唯一的 SessionHost（懒建） */
+/** 主进程唯一的 SessionHost（懒建）；建出来之前先装上会话信号接线（P3-08：生命周期 / 询问钩子） */
 export function getSessionHost(): SessionHost {
-  singleton ??= createDesktopSessionHost(testOverrides)
+  if (singleton === undefined) {
+    installSessionSignals()
+    singleton = createDesktopSessionHost(testOverrides)
+  }
   return singleton
 }
 

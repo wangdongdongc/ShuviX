@@ -19,6 +19,7 @@
  */
 import {
   createSyncHub,
+  type DurableSession,
   type LegacyTranscript,
   type RuntimeLogger,
   type SessionHost,
@@ -103,8 +104,11 @@ export function createSessionHookFanout<S>(
   }
 }
 
-/** 主进程唯一的扇出：`buildSessionHostDeps` 接它的 `opened` / `closed`，hub 经宿主适配登记 */
-export const sessionHostHooks: SessionHookFanout<SyncSession> = createSessionHookFanout()
+/**
+ * 主进程唯一的扇出：`buildSessionHostDeps` 接它的 `opened` / `closed`，hub 经宿主适配登记；会话信号
+ * （`services/sessionSignals`，P3-08：投影句柄 + 生命周期 + 询问钩子）也登记在这里
+ */
+export const sessionHostHooks: SessionHookFanout<DurableSession> = createSessionHookFanout()
 
 // ─── 宿主适配 ───────────────────────────────────────────
 

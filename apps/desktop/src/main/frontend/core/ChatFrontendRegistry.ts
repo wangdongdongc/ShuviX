@@ -4,16 +4,6 @@ import { createLogger } from '../../logger'
 
 const log = createLogger('ChatFrontend')
 
-/** 需要 streaming 能力的事件类型 */
-const STREAMING_EVENT_TYPES = new Set(['text_delta', 'thinking_delta', 'image_data'])
-
-/** 事件类型 → 所需能力映射 */
-const INTERACTION_CAPABILITY_MAP: Partial<
-  Record<ChatEvent['type'], keyof ChatFrontendCapabilities>
-> = {
-  input_request: 'userInput'
-}
-
 /**
  * 聊天前端注册中心 — 会话级绑定 + 能力感知广播
  *
@@ -87,19 +77,15 @@ export class ChatFrontendRegistry {
   }
 
   /**
-   * 能力感知广播：发给该会话的所有绑定前端，按能力过滤
-   *
-   * 路由规则：
-   * - text_delta / thinking_delta / image_data → 仅 streaming=true 的前端
-   * - input_request → 仅 userInput=true 的前端
-   * - 其他事件 → 所有绑定前端
+   * 广播：发给该会话的所有存活绑定前端（P3-08 起不再按能力过滤 —— 剩下的都是余项事件，内容与询问
+   * 走视图同步，每个前端都该收到全部余项）。
    */
   broadcast(event: ChatEvent): void {
     const frontends = this.getFrontends(event.sessionId)
 
     // 子会话事件统一带 sessionId=subSessionId；会话级绑定的前端（只绑父会话）据此收不到。
     // 故额外把子会话事件送达「父会话」绑定的前端：register/end 自带 parentSessionId（并维护 sub→parent
-    // 映射），其余流式事件经该映射回溯。默认前端（Electron 主窗）本就收全部，去重后不重复发。
+    // 映射），其余事件（生命周期等）经该映射回溯。默认前端（Electron 主窗）本就收全部，去重后不重复发。
     const parentSessionId = this.resolveSubSessionParent(event)
     if (parentSessionId) {
       for (const pf of this.getFrontends(parentSessionId)) {
@@ -107,20 +93,12 @@ export class ChatFrontendRegistry {
       }
     }
 
-    const isStreaming = STREAMING_EVENT_TYPES.has(event.type)
-    const requiredCap = INTERACTION_CAPABILITY_MAP[event.type]
-
     for (const frontend of frontends) {
       // 清理已断开的前端
       if (!frontend.isAlive()) {
         this.pruneDeadFrontend(frontend.id)
         continue
       }
-      // streaming 事件过滤
-      if (isStreaming && !frontend.capabilities.streaming) continue
-      // 交互请求能力过滤
-      if (requiredCap && !frontend.capabilities[requiredCap]) continue
-
       try {
         frontend.sendEvent(event)
       } catch (err) {

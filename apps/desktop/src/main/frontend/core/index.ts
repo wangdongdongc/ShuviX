@@ -1,21 +1,13 @@
 export type {
   ChatEvent,
   ChatAgentStartEvent,
-  ChatTextDeltaEvent,
-  ChatThinkingDeltaEvent,
-  ChatTextEndEvent,
   ChatAgentEndEvent,
-  ChatToolStartEvent,
-  ChatToolEndEvent,
-  ChatInputRequestEvent,
-  ChatInputRequestResolvedEvent,
-  ChatImageDataEvent,
+  ChatAskCountEvent,
   ChatRuntimeEvent,
   RuntimeStatus,
   ChatSubSessionRegisterEvent,
   ChatSubSessionEndEvent,
-  ChatErrorEvent,
-  ChatTokenUsage
+  ChatErrorEvent
 } from '@shuvix/chat-protocol/events'
 
 export type { ChatFrontend, ChatFrontendCapabilities } from './ChatFrontend'

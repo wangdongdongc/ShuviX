@@ -19,6 +19,7 @@ import { join } from 'path'
 import { createNotificationCenter, type NotificationCenter } from '@shuvix/agent-runtime'
 import type { AgentNotification } from '@shuvix/chat-protocol/notification'
 import type { ChatEvent } from '@shuvix/chat-protocol/events'
+import type { InputRequest } from '@shuvix/chat-protocol/types/inputRequest'
 import { isChromeTabSessionSettings } from '@shuvix/chat-protocol/chromeTabSession'
 import { sessionRecords } from './sessionRecords'
 import { settingsDao } from '../dao/settingsDao'
@@ -40,6 +41,15 @@ export interface NotificationServiceDeps {
 
 let deps: NotificationServiceDeps | null = null
 let center: NotificationCenter | null = null
+/** 失败通知正文的来源（PIN-08）：会话信号接线装上时登记（从投影读最后一条错误行） */
+let runErrorTextSource: ((sessionId: string) => string | undefined) | null = null
+
+/** 会话信号接线登记失败文本的来源（`services/sessionSignals`） */
+export function setRunErrorTextSource(
+  source: ((sessionId: string) => string | undefined) | null
+): void {
+  runErrorTextSource = source
+}
 
 /** 活体通知：key → Notification，用于「同 key 覆盖」与撤回 */
 const live = new Map<string, Notification>()
@@ -146,12 +156,12 @@ export function initNotificationService(injected: NotificationServiceDeps): void
     isForeground,
     sessionTitle: (sessionId) => sessionRecords.findById(sessionId)?.title,
     enabled: notificationsEnabled,
+    runErrorText: (sessionId) => runErrorTextSource?.(sessionId),
     t: (key, vars) => t(key, vars),
     logger: { warn: (message) => log.warn(message) }
   })
 }
 
-/** ChatEvent 流的旁路入口（electronEventSink 广播时顺带喂一份）—— 未初始化时静默丢弃 */
 /**
  * 会话是不是 Chrome 标签页会话（记一次就够：`chromeTab` 创建那一刻定死，会话 id 不复用）。
  * 事件是逐 token 来的，不能每条都读一次库。
@@ -170,15 +180,35 @@ function isChromeTabSession(sessionId: string): boolean {
   return known
 }
 
+/**
+ * 这条会话的事 / 询问该不该进桌面通知：Chrome 标签页会话的对话在 Chrome 侧边栏里 —— 用户在那边看着、
+ * 在那边答询问；桌面通知的点击只会把人拽进一个根本不列这条会话的窗口。内存会话（从系统打开的 md
+ * 窗口）同理：对话在它自己的窗口里，主窗口的列表里没有它；删掉之后迟到的事件也一样。
+ */
+function notifiable(sessionId: string): boolean {
+  if (isChromeTabSession(sessionId)) return false
+  if (sessionRecords.isEphemeral(sessionId) || sessionRecords.wasEphemeral(sessionId)) return false
+  return true
+}
+
 export function notifyOnChatEvent(event: ChatEvent): void {
-  // Chrome 标签页会话的对话在 Chrome 侧边栏里 —— 用户在那边看着、在那边答询问；桌面通知的点击
-  // 只会把人拽进一个根本不列这条会话的窗口
-  if (isChromeTabSession(event.sessionId)) return
-  // 内存会话（从系统打开的 md 窗口）同理：对话在它自己的窗口里，主窗口的列表里没有它。
-  // 删掉之后迟到的事件也一样 —— 那条会话已经不存在了
-  if (sessionRecords.isEphemeral(event.sessionId) || sessionRecords.wasEphemeral(event.sessionId))
-    return
+  if (!notifiable(event.sessionId)) return
   center?.handleEvent(event)
+}
+
+/**
+ * 询问的入口（P3-08：询问不再是 ChatEvent，会话信号接线从 `subscribeInputs` 喂进来）。与事件那一路
+ * 同一道过滤 —— 绕开它，Chrome 标签页会话的询问就会弹到桌面上（F7）
+ */
+export function notifyAskRaised(sessionId: string, request: InputRequest): void {
+  if (!notifiable(sessionId)) return
+  center?.askRaised(sessionId, request)
+}
+
+/** 询问落定（答了 / 取消 / 会话关了）→ 撤回它的通知 */
+export function notifyAskResolved(sessionId: string, requestId: string): void {
+  if (!notifiable(sessionId)) return
+  center?.askResolved(sessionId, requestId)
 }
 
 /** 渲染进程上报：该窗口当前展示的会话（null = 无会话，如设置窗口） */

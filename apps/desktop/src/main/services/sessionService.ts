@@ -901,11 +901,21 @@ registerUserInputParticipant({
     if (!agent) return Promise.reject(new Error(`Session ${sessionId} is not active`))
     return agent.requestUserInput(request)
   },
-  respond: (requestId, response) => {
+  respond: (requestId, response, meta) => {
     // 遍历而不是按 sessionId 索引：requestId 才是全局唯一的那个 —— 拿调用方以为的
     // sessionId 去选会话，等于把前端的判断当成真相
     for (const session of sessionService.liveAgentSessions()) {
-      if (session.respondToInput(requestId, response)) return true
+      const claimed =
+        meta === undefined
+          ? session.respondToInput(requestId, response)
+          : session.respondToInput(requestId, response, meta)
+      if (claimed) {
+        // 审计（PIN-20）：谁答了哪条、答的是哪一类 —— 从不记应答内容（文本 / 凭证）
+        log.info(
+          `ask answered session=${session.sessionId} requestId=${requestId} by=${meta?.clientId ?? 'unknown'} kind=${response.kind}`
+        )
+        return true
+      }
     }
     return false
   }

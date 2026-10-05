@@ -8,6 +8,7 @@ import {
   type DrivenSendOptions,
   type DurableSession,
   type InlineTokensSidecar,
+  type InputResponseMeta,
   type LastAnswer,
   type NotifyOptions,
   type RequestState,
@@ -26,6 +27,7 @@ import { hookService, hookTriggers } from './hookService'
 import { recordUserEntry } from './sessionDayPromptService'
 import { getSessionHost } from './sessionHost'
 import { sessionRecords } from './sessionRecords'
+import { sessionSignalsReady } from './sessionSignals'
 // 仅在方法体内调用：sessionService 也 import 本模块，ESM 活绑定下无初始化环
 import { sessionService } from './sessionService'
 import { buildTurnCompletedFacts, isDefaultTitle } from './sessionTriggerFacts'
@@ -128,6 +130,8 @@ export class AgentSession {
     )
     const content: UserInput =
       images && images.length > 0 ? [{ type: 'text', text }, ...images] : text
+    // 会话信号先就绪（PIN-09）：投影句柄挂上之前开跑的一轮没有 agent_start / agent_end
+    await sessionSignalsReady(this.sessionId)
     let admitted = false
     const dayPrompt = this.dayPromptCallbacks()
     // 重新挂上（已有的 requestId）时运行时不调受理回调（P2-09 PIN-02）：埋点 / 入账都不会重复
@@ -171,6 +175,7 @@ export class AgentSession {
 
   /** 继续被中断的工作（上个进程中途退出留下的 run）；空闲且没被中断时立刻返回 `{}` */
   async continue(): Promise<SubmitResult> {
+    await sessionSignalsReady(this.sessionId)
     const result = await this.durable.continue()
     if (!result.error) {
       void this.fireTurnCompleted().catch((err) => log.warn(`turn-completed 埋点失败: ${err}`))
@@ -277,8 +282,11 @@ export class AgentSession {
     return this.durable.requestUserInput(request)
   }
 
-  respondToInput(requestId: string, response: InputResponse): boolean {
-    return this.durable.respondToInput(requestId, response)
+  /** 应答一条挂起的询问（先到者胜）；`meta.clientId` = 答题方，交给运行时供审计（P3-08 PIN-20） */
+  respondToInput(requestId: string, response: InputResponse, meta?: InputResponseMeta): boolean {
+    return meta === undefined
+      ? this.durable.respondToInput(requestId, response)
+      : this.durable.respondToInput(requestId, response, meta)
   }
 
   // ─── 生命周期 ──────────────────────────────────

@@ -52,8 +52,15 @@ export interface ChatGateway {
   /**
    * 统一的"用户输入响应"入口。
    * 命令询问 / 选择题 / SSH 凭证 / 用户取消都通过该方法路由到对应的挂起 Promise。
+   * 返回是否有人认领（先到者胜）；没人认领什么也不广播 —— 询问的卡片跟着视图走（P3-08）。
+   * `meta.clientId` = 答题方（审计用，PIN-20）。
    */
-  respondToInput(sessionId: string, requestId: string, response: InputResponse): void
+  respondToInput(
+    sessionId: string,
+    requestId: string,
+    response: InputResponse,
+    meta?: { clientId?: string }
+  ): boolean
 
   // ─── 运行时调整 ────────────────────────────────
 
