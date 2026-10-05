@@ -21,7 +21,7 @@ import {
   type AgentView,
   type SessionView
 } from '@shuvix/chat-protocol/types/sessionView'
-import type { DurableSession } from '../../../durable/durableSession'
+import type { DurableSession, SessionCloseReason } from '../../../durable/durableSession'
 import type { TestHost } from '../../../durable/__tests__/support/host'
 import type { LegacyTranscript, SyncView } from '../../services'
 import {
@@ -223,7 +223,8 @@ export class LoopbackTransport implements SyncServerTransport {
     }
     this.sent.push(entry)
     queueMicrotask(() => this.#receivers.get(clientId)?.(json(copy)))
-    if (this.rejectFor.has(clientId)) return Promise.reject(new Error(`async send failed for ${clientId}`))
+    if (this.rejectFor.has(clientId))
+      return Promise.reject(new Error(`async send failed for ${clientId}`))
   }
 
   onClientGone(clientId: string, callback: () => void): () => void {
@@ -375,8 +376,10 @@ export function makeRig(t: TestHost, options: RigOptions = {}): Rig {
     const adapter = adapt(session)
     if (seen.has(session)) return adapter
     seen.add(session)
-    const close = session.close.bind(session)
-    ;(session as { close: DurableSession['close'] }).close = async (reason) => {
+    // 实现类的 close（SessionManager 关会话时调它）；DurableSession 接口不暴露
+    const closable = session as unknown as { close(reason?: SessionCloseReason): Promise<void> }
+    const close = closable.close.bind(session)
+    closable.close = async (reason) => {
       await close(reason)
       if (reason === 'destroy') {
         destroyed.add(session)
@@ -450,7 +453,8 @@ export function makeRig(t: TestHost, options: RigOptions = {}): Rig {
     agentProjectorOf: (agentId) => {
       const ref = options.agents?.get(agentId)
       const session = ref === undefined ? undefined : t.host.get(ref.sessionId)
-      const projector = session === undefined ? undefined : agentProjectors.get(session)?.get(agentId)
+      const projector =
+        session === undefined ? undefined : agentProjectors.get(session)?.get(agentId)
       return projector === undefined || projector.disposed ? undefined : projector
     },
     hookListeners: () => openedListeners.size + closedListeners.size

@@ -262,7 +262,9 @@ class SyncHubImpl implements SyncHub {
     this.#transport = deps.transport
     this.#logger = deps.logger ?? noopLogger
     this.#unhook.push(
-      this.#host.onSessionOpened((session) => this.#guard('onSessionOpened', () => this.#opened(session))),
+      this.#host.onSessionOpened((session) =>
+        this.#guard('onSessionOpened', () => this.#opened(session))
+      ),
       this.#host.onSessionClosed((sessionId, reason) =>
         this.#guard('onSessionClosed', () => this.#closed(sessionId, reason))
       )
@@ -613,10 +615,7 @@ class SyncHubImpl implements SyncHub {
         // hub 自己的 peek 打开会话时钩子也会报，那时算出的正是它，不必重算
         const opened = entry.openedDuringInit
         entry.openedDuringInit = undefined
-        if (
-          generation === entry.generation &&
-          (opened === undefined || opened === impl.session)
-        ) {
+        if (generation === entry.generation && (opened === undefined || opened === impl.session)) {
           this.#install(entry, impl, 'provide')
           return
         }
@@ -660,7 +659,10 @@ class SyncHubImpl implements SyncHub {
     return this.#liveImpl(projector.acquire(), session)
   }
 
-  #liveImpl(acquired: ViewLease<SessionView> | ViewLease<AgentView>, session: SyncSession): ViewImpl {
+  #liveImpl(
+    acquired: ViewLease<SessionView> | ViewLease<AgentView>,
+    session: SyncSession
+  ): ViewImpl {
     const lease = acquired as unknown as ViewLease<SyncView>
     return { mode: 'live', state: lease.state, lease, session }
   }

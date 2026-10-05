@@ -52,7 +52,8 @@ function json<T>(value: T): T {
 let nextSubscription = 0
 
 interface SubscriptionState {
-  readonly binding: TestBinding
+  /** 解码失败记到所属绑定的 errors */
+  readonly errors: Error[]
   readonly decoder: ServiceStateDecoder
   listener: ((update: ServiceProviderUpdate) => void) | undefined
   readonly buffer: SyncFrame<WireServiceProviderUpdate>[]
@@ -98,37 +99,35 @@ export class TestClient {
 
   /** 为一个目标建一个 chord 绑定，并立刻 `use` 视图服务（订阅随之开始） */
   bind(target: SyncTarget): TestBinding {
-    const client = this
     const subscriptionIds: string[] = []
     const updates: ServiceProviderUpdate[] = []
     const snapshots: TestBinding['snapshots'] = []
     const errors: Error[] = []
     const controlCalls: string[] = []
-    let self: TestBinding
     const transport: RemoteServiceTransport = {
       invoke: async (call) =>
-        json(await client.hub.invoke(client.id, json(target), json(call))) as JsonValue | undefined,
+        json(await this.hub.invoke(this.id, json(target), json(call))) as JsonValue | undefined,
       subscribe: async (serviceId, mode, listener) => {
-        const subscriptionId = `${client.id}#${++nextSubscription}`
+        const subscriptionId = `${this.id}#${++nextSubscription}`
         const state: SubscriptionState = {
-          binding: self,
+          errors,
           decoder: createServiceStateDecoder(),
           listener: undefined,
           buffer: [],
           active: false
         }
-        client.#subscriptions.set(subscriptionId, state)
+        this.#subscriptions.set(subscriptionId, state)
         subscriptionIds.push(subscriptionId)
         controlCalls.push(`subscribe:${subscriptionId}`)
         try {
           const reply = json(
-            await client.hub.invoke(
-              client.id,
+            await this.hub.invoke(
+              this.id,
               json(target),
               json(createServiceSubscribeCall(subscriptionId, serviceId, mode))
             )
           )
-          client.events.push(`reply:${subscriptionId}`)
+          this.events.push(`reply:${subscriptionId}`)
           const snapshot = state.decoder.decodeSnapshot(parseWireServiceSubscriptionSnapshot(reply))
           const member = snapshot.instances[0]?.members.find((entry) => entry.kind === 'state')
           if (member !== undefined && member.kind === 'state') {
@@ -146,20 +145,20 @@ export class TestClient {
             snapshot,
             activate: () => {
               state.active = true
-              for (const frame of state.buffer.splice(0)) client.#deliver(state, frame)
+              for (const frame of state.buffer.splice(0)) this.#deliver(state, frame)
             },
             close: async () => {
-              client.#subscriptions.delete(subscriptionId)
+              this.#subscriptions.delete(subscriptionId)
               controlCalls.push(`unsubscribe:${subscriptionId}`)
-              await client.hub.invoke(
-                client.id,
+              await this.hub.invoke(
+                this.id,
                 json(target),
                 json(createServiceUnsubscribeCall(subscriptionId))
               )
             }
           }
         } catch (error) {
-          client.#subscriptions.delete(subscriptionId)
+          this.#subscriptions.delete(subscriptionId)
           throw error
         }
       }
@@ -169,7 +168,7 @@ export class TestClient {
       transport,
       onError: (error) => errors.push(error)
     })
-    self = {
+    const self: TestBinding = {
       target,
       binding,
       subscriptionIds,
@@ -206,7 +205,7 @@ export class TestClient {
     try {
       update = state.decoder.decodeUpdate(parseWireServiceProviderUpdate(frame.update))
     } catch (error) {
-      state.binding.errors.push(error instanceof Error ? error : new Error(String(error)))
+      state.errors.push(error instanceof Error ? error : new Error(String(error)))
       return
     }
     state.listener?.(update)

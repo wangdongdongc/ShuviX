@@ -22,7 +22,10 @@ import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
 import { emptySessionView } from '@shuvix/chat-protocol/types/sessionView'
 import { isJsonOnly } from '@shuvix/chat-protocol/utils/jsonOnly'
 import { describe, expect, it, vi } from 'vitest'
-import { recordPublications, type PublicationRecorder } from '../../durable/__tests__/support/commits'
+import {
+  recordPublications,
+  type PublicationRecorder
+} from '../../durable/__tests__/support/commits'
 import { crashWith } from '../../durable/__tests__/support/crash'
 import { answer } from '../../durable/__tests__/support/faux'
 import {
@@ -73,7 +76,11 @@ function types(updates: readonly ServiceProviderUpdate[]): string[] {
 }
 
 /** 某个客户端某个订阅收到的帧 */
-function framesOf(rig: Rig, clientId: string, subscriptionId?: string): ReturnType<Rig['transport']['sentTo']> {
+function framesOf(
+  rig: Rig,
+  clientId: string,
+  subscriptionId?: string
+): ReturnType<Rig['transport']['sentTo']> {
   return rig.transport
     .sentTo(clientId)
     .filter((frame) => subscriptionId === undefined || frame.subscriptionId === subscriptionId)
@@ -135,8 +142,12 @@ describe('P3-04 · SyncHub', () => {
     expect(defines('B')).toContainEqual(['live', 'message', 'content'])
 
     // 一个客户端只收到自己订阅的帧
-    expect(clientA.frames.every((frame) => frame.subscriptionId === a.subscriptionIds[0])).toBe(true)
-    expect(clientB.frames.every((frame) => frame.subscriptionId === b.subscriptionIds[0])).toBe(true)
+    expect(clientA.frames.every((frame) => frame.subscriptionId === a.subscriptionIds[0])).toBe(
+      true
+    )
+    expect(clientB.frames.every((frame) => frame.subscriptionId === b.subscriptionIds[0])).toBe(
+      true
+    )
     expect(clientA.orphans).toEqual([])
     expect(clientB.orphans).toEqual([])
   })
@@ -228,10 +239,12 @@ describe('P3-04 · SyncHub', () => {
     const spy = vi.spyOn(rig.hub, 'invoke')
     await a.dispose()
     expect(a.controlCalls).toContain(`unsubscribe:${a.subscriptionIds[0]}`)
-    expect(spy.mock.calls.some(([clientId, , call]) => {
-      const c = call as { serviceId: string; member: string }
-      return clientId === 'A' && c.serviceId === '$chord.service' && c.member === 'unsubscribe'
-    })).toBe(true)
+    expect(
+      spy.mock.calls.some(([clientId, , call]) => {
+        const c = call as { serviceId: string; member: string }
+        return clientId === 'A' && c.serviceId === '$chord.service' && c.member === 'unsubscribe'
+      })
+    ).toBe(true)
     spy.mockRestore()
     const before = framesOf(rig, 'A').length
     stream.answer(projector.state, ['x', 'y'], 2)
@@ -263,7 +276,11 @@ describe('P3-04 · SyncHub', () => {
     const view = facade.view
 
     await rig.open('s2')
-    await waitFor(() => (a.value() as { source?: string } | undefined)?.source === 'durable', 3000, 'durable')
+    await waitFor(
+      () => (a.value() as { source?: string } | undefined)?.source === 'durable',
+      3000,
+      'durable'
+    )
     expect(types(a.updates)).toContain('replaced')
     const projector = rig.projectorOf('s2')!
     expect(a.value()).toEqual(projector.state.value)
@@ -294,7 +311,11 @@ describe('P3-04 · SyncHub', () => {
     expect((a.value() as { run: unknown }).run).toEqual({ state: 'busy' })
 
     await rig.open('s1')
-    await waitFor(() => a.updates.filter((update) => update.type === 'replaced').length === 2, 3000, 'second replace')
+    await waitFor(
+      () => a.updates.filter((update) => update.type === 'replaced').length === 2,
+      3000,
+      'second replace'
+    )
     const reopened = rig.projectorOf('s1')!
     expect(reopened).not.toBe(projector)
     expect(a.value()).toEqual(reopened.state.value)
@@ -303,6 +324,48 @@ describe('P3-04 · SyncHub', () => {
     await settle()
     expect(a.value()).toEqual(reopened.state.value)
     expect(types(a.updates)).not.toContain('unavailable')
+  })
+
+  it('P3-04-07 (race) · an open racing the first subscribe ends live', async () => {
+    for (let delay = 0; delay < 6; delay++) {
+      const rig = await rigWith()
+      const sessionId = `r${delay}`
+      const binding = clientOf(rig, 'A').bind({ kind: 'session', sessionId })
+      for (let tick = 0; tick < delay; tick++) await Promise.resolve()
+      await rig.open(sessionId)
+      await withTimeout(binding.ready(), 5000, 'ready')
+      await waitFor(
+        () => (binding.value() as { source?: string } | undefined)?.source === 'durable',
+        3000,
+        `durable after racing open (delay ${delay})`
+      )
+      const projector = rig.projectorOf(sessionId)!
+      stream.answer(projector.state, ['raced'], 2)
+      await settle()
+      expect(binding.value()).toEqual(projector.state.value)
+      expect(binding.errors).toEqual([])
+    }
+  })
+
+  it('P3-04-08 (race) · a close racing the first subscribe never leaves a dead live view', async () => {
+    for (let delay = 0; delay < 6; delay++) {
+      const rig = await rigWith()
+      await rig.open('s1')
+      const binding = clientOf(rig, 'A').bind(S1)
+      for (let tick = 0; tick < delay; tick++) await Promise.resolve()
+      await rig.t.host.close('s1')
+      await withTimeout(binding.ready(), 5000, 'ready')
+      await settle()
+      // 订阅可能把会话重新 peek 开（它钉着），也可能停在静态视图；再打开之后一定是活的
+      await rig.open('s1')
+      await settle()
+      const projector = rig.projectorOf('s1')!
+      expect(projector).toBeDefined()
+      stream.answer(projector.state, ['after race'], 3)
+      await settle()
+      expect(binding.value()).toEqual(projector.state.value)
+      expect(binding.errors).toEqual([])
+    }
   })
 
   it('P3-04-09 · replace on clear (host.delete = destroy): the none view, then live again', async () => {
@@ -321,7 +384,11 @@ describe('P3-04 · SyncHub', () => {
     expect(rig.hub.hasSubscribers('s1')).toBe(true)
 
     await rig.open('s1')
-    await waitFor(() => (a.value() as { source?: string }).source === 'durable', 3000, 'durable again')
+    await waitFor(
+      () => (a.value() as { source?: string }).source === 'durable',
+      3000,
+      'durable again'
+    )
     const fresh = rig.projectorOf('s1')!
     expect(fresh.state.value.messages).toEqual([])
     expect(a.value()).toEqual(fresh.state.value)
@@ -456,7 +523,11 @@ describe('P3-04 · SyncHub', () => {
       await primeRoot(await rig.open(sessionId))
       rig.t.pinned.delete(sessionId)
       await rig.open('s0')
-      await waitFor(() => rig.t.host.get(sessionId) === undefined, 3000, `idle ${sessionId} closed by LRU`)
+      await waitFor(
+        () => rig.t.host.get(sessionId) === undefined,
+        3000,
+        `idle ${sessionId} closed by LRU`
+      )
     }
     await prime('s1')
 
@@ -551,7 +622,9 @@ describe('P3-04 · SyncHub', () => {
     const subscriptionId = a.subscriptionIds[0]!
     expect(await rig.hub.resync('A', subscriptionId)).toBe(true)
     await settle()
-    const resets = framesOf(rig, 'A', subscriptionId).filter((frame) => frame.update.type === 'reset')
+    const resets = framesOf(rig, 'A', subscriptionId).filter(
+      (frame) => frame.update.type === 'reset'
+    )
     expect(resets).toHaveLength(1)
     expect(a.value()).toEqual(projector.state.value)
     expect(a.subscriptionIds).toEqual([subscriptionId])
@@ -582,7 +655,17 @@ describe('P3-04 · SyncHub', () => {
     const child = rig.agentProjectorOf('a1')!
     expect(a.value()).toEqual(child.state.value)
     expect(Object.keys(a.value()!).sort()).toEqual(
-      ['agentId', 'context', 'conversationId', 'live', 'messages', 'run', 'sessionId', 'toolRuns', 'v'].sort()
+      [
+        'agentId',
+        'context',
+        'conversationId',
+        'live',
+        'messages',
+        'run',
+        'sessionId',
+        'toolRuns',
+        'v'
+      ].sort()
     )
     stream.start(child.state)
     stream.append(child.state, 'child ')
@@ -642,17 +725,25 @@ describe('P3-04 · SyncHub', () => {
   it('P3-04-18 · invalid calls', async () => {
     const rig = await rigWith()
     const catalogue = createServiceCatalogueCall()
-    await expect(rig.hub.invoke('A', { kind: 'monitor', id: 'x' }, catalogue)).rejects.toThrow(TypeError)
-    await expect(rig.hub.invoke('A', { kind: 'session', sessionId: '' }, catalogue)).rejects.toThrow(
+    await expect(rig.hub.invoke('A', { kind: 'monitor', id: 'x' }, catalogue)).rejects.toThrow(
       TypeError
     )
+    await expect(
+      rig.hub.invoke('A', { kind: 'session', sessionId: '' }, catalogue)
+    ).rejects.toThrow(TypeError)
     await expect(rig.hub.invoke('', S1, catalogue)).rejects.toThrow(TypeError)
     await expect(rig.hub.invoke('A', S1, { serviceId: 'x' })).rejects.toThrow(TypeError)
 
-    const member = (name: string): unknown => ({ serviceId: CHAT_VIEW_SERVICE_ID, member: name, args: [] })
+    const member = (name: string): unknown => ({
+      serviceId: CHAT_VIEW_SERVICE_ID,
+      member: name,
+      args: []
+    })
     const viewError = await rig.hub.invoke('A', S1, member('view')).catch((error: unknown) => error)
     expect(codeOf(viewError)).toBe('service_member_mismatch')
-    const unknownError = await rig.hub.invoke('A', S1, member('nope')).catch((error: unknown) => error)
+    const unknownError = await rig.hub
+      .invoke('A', S1, member('nope'))
+      .catch((error: unknown) => error)
     expect(codeOf(unknownError)).toBe('service_member_not_found')
     const otherService = await rig.hub
       .invoke('A', S1, createServiceSubscribeCall('x1', 'other.service', 'singleton'))
