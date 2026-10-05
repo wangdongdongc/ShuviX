@@ -187,6 +187,8 @@ interface TargetEntry {
   session: SyncSession | undefined
   /** 每次开始一次换装就 +1；异步换装在每个 await 之后核对，过期就丢掉结果 */
   generation: number
+  /** 首装途中报过打开的会话（首装算出的不是它的活投影 → 重算） */
+  openedDuringInit: SyncSession | undefined
   ready: Promise<void>
   readonly records: Set<SubscriptionRecord>
   readonly endpoints: Map<string, RemoteServiceEndpoint>
@@ -574,6 +576,7 @@ class SyncHubImpl implements SyncHub {
       lease: undefined,
       session: undefined,
       generation: 0,
+      openedDuringInit: undefined,
       ready: Promise.resolve(),
       records: new Set(),
       endpoints: new Map(),
@@ -600,12 +603,20 @@ class SyncHubImpl implements SyncHub {
     try {
       for (;;) {
         const generation = entry.generation
+        entry.openedDuringInit = undefined
         const impl = await this.#compute(entry)
         if (entry.dropped) {
           this.#release(impl.lease)
           throw notFound(`Sync target ${entry.key} is no longer available`)
         }
-        if (generation === entry.generation) {
+        // 途中有关闭（generation 变了），或报打开的会话不是算出来的那个（peek 早于它的存储出生）→ 重算。
+        // hub 自己的 peek 打开会话时钩子也会报，那时算出的正是它，不必重算
+        const opened = entry.openedDuringInit
+        entry.openedDuringInit = undefined
+        if (
+          generation === entry.generation &&
+          (opened === undefined || opened === impl.session)
+        ) {
           this.#install(entry, impl, 'provide')
           return
         }
@@ -734,7 +745,7 @@ class SyncHubImpl implements SyncHub {
     for (const entry of [...this.#entries.values()]) {
       if (entry.rootSessionId !== session.sessionId || entry.dropped) continue
       if (entry.mode === 'init') {
-        entry.generation++
+        entry.openedDuringInit = session
         continue
       }
       if (entry.mode === 'sealed') continue
