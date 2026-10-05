@@ -135,6 +135,36 @@ const KEPT_PART: Record<TruncateStrategy, string> = {
 }
 
 /**
+ * 落盘诊断的模板（`truncationDiagnostic` 写、`spillLocatorOf` 读 —— 同一组常量，解析不会和写法走散）：
+ * `Output truncated: <N> lines / <size>; full output saved to <locator>. Use the read tool (not bash) to view it.`
+ */
+const SPILLED_CODE = 'spilled'
+const TRUNCATED_LEAD = 'Output truncated: '
+const SPILL_SAVED_TO = '; full output saved to '
+const SPILL_READ_HINT = '. Use the read tool (not bash) to view it.'
+
+/** 落盘诊断的整句：表头（行数 / 大小，不含分号）、固定连接语、locator（任意文字）、固定尾句 */
+const SPILL_MESSAGE_RE = new RegExp(
+  `^${escapeRegExp(TRUNCATED_LEAD)}\\d+ lines / [^;]*${escapeRegExp(SPILL_SAVED_TO)}([\\s\\S]*)${escapeRegExp(SPILL_READ_HINT)}$`
+)
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/**
+ * `truncationDiagnostic` 写下的落盘诊断 → 落盘位置（界面的工具块据此标出「全文在哪」）。code 不是
+ * `spilled`、或文案对不上模板 → undefined。locator 可以含任何文字（空格、`; `、`saved to`、结尾的点）：
+ * 表头里没有分号，尾句锚在结尾。
+ */
+export function spillLocatorOf(diagnostic: unknown): string | undefined {
+  if (typeof diagnostic !== 'object' || diagnostic === null) return undefined
+  const { code, message } = diagnostic as { code?: unknown; message?: unknown }
+  if (code !== SPILLED_CODE || typeof message !== 'string') return undefined
+  return SPILL_MESSAGE_RE.exec(message)?.[1]
+}
+
+/**
  * `locatorInText: false` 时交回的说明 → durable 的工具诊断（模型可见，渲染在结果末尾的 `<harness>`
  * 段里）。未超限交回 undefined。
  *  - 落盘成功：code `spilled`，写明落盘位置与「用 read 工具（不是 bash）取」——
@@ -144,12 +174,12 @@ const KEPT_PART: Record<TruncateStrategy, string> = {
  */
 export function truncationDiagnostic(result: ProcessToolOutputResult): ToolDiagnostic | undefined {
   if (!result.truncated) return undefined
-  const what = `Output truncated: ${result.originalLines} lines / ${formatSize(result.originalBytes)}`
+  const what = `${TRUNCATED_LEAD}${result.originalLines} lines / ${formatSize(result.originalBytes)}`
   if (result.persisted && result.locator !== undefined) {
     return {
       severity: 'info',
-      code: 'spilled',
-      message: `${what}; full output saved to ${result.locator}. Use the read tool (not bash) to view it.`
+      code: SPILLED_CODE,
+      message: `${what}${SPILL_SAVED_TO}${result.locator}${SPILL_READ_HINT}`
     }
   }
   const part = KEPT_PART[result.kept ?? 'middle']

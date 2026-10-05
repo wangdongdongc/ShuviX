@@ -27,6 +27,8 @@ import { imagePlaceholder } from '../../toolResultText'
 import { backgroundContext as BG } from '../context'
 import { DisplayDoc, noticeEntryDraft } from '../docs'
 import { SessionClosedError, type DurableSession } from '../durableSession'
+import * as display from '../projection/display'
+import * as entryText from '../projection/entryText'
 import { digestEntries, readTranscriptDigest, type TranscriptDigestItem } from '../transcriptDigest'
 import {
   A,
@@ -365,18 +367,29 @@ describe('P2-14 · transcript digest extraction', () => {
     expect(t.host.openSessionIds()).toEqual(open)
   })
 
-  it('P2-14-17 Node-free source, exported from @shuvix/agent-runtime', () => {
+  it('P2-14-17 Node-free source (and the shared projection helpers it uses), exported from @shuvix/agent-runtime', () => {
     const here = dirname(fileURLToPath(import.meta.url))
-    const source = readFileSync(resolve(here, '../transcriptDigest.ts'), 'utf8')
-    const specifiers = [...source.matchAll(/(?:from|import)\s+'([^']+)'/g)].map(
-      (match) => match[1]!
-    )
-    expect(specifiers.length).toBeGreaterThan(0)
-    for (const specifier of specifiers) {
-      expect(specifier).not.toMatch(/^node:/)
-      expect(specifier).not.toMatch(/^(fs|path|os|electron)(\/|$)/)
-      expect(specifier).not.toMatch(/^@earendil-works\/pi-durable\/(storage|env\/node)/)
+    // phase 3 moved the display / compaction-wrapper helpers to projection/ (P3-02-52 / 54)
+    for (const file of [
+      '../transcriptDigest.ts',
+      '../projection/display.ts',
+      '../projection/entryText.ts'
+    ]) {
+      const source = readFileSync(resolve(here, file), 'utf8')
+      const specifiers = [...source.matchAll(/(?:from|import)\s+'([^']+)'/g)].map(
+        (match) => match[1]!
+      )
+      expect(specifiers.length).toBeGreaterThan(0)
+      for (const specifier of specifiers) {
+        expect(specifier).not.toMatch(/^node:/)
+        expect(specifier).not.toMatch(/^(fs|path|os|electron)(\/|$)/)
+        expect(specifier).not.toMatch(/^@earendil-works\/pi-durable\/(storage|env\/node)/)
+      }
     }
     expect(runtime.readTranscriptDigest).toBe(readTranscriptDigest)
+    expect(runtime.unwrapCompactionSummary).toBe(entryText.unwrapCompactionSummary)
+    expect(runtime.COMPACTION_SUMMARY_PREFIX).toBe(entryText.COMPACTION_SUMMARY_PREFIX)
+    expect(runtime.COMPACTION_SUMMARY_SUFFIX).toBe(entryText.COMPACTION_SUMMARY_SUFFIX)
+    expect(runtime.displayContentOf).toBe(display.displayContentOf)
   })
 })
