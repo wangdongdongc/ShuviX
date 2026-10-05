@@ -22,7 +22,7 @@ import ja from '@shuvix/chat-protocol/i18n/locales/ja.json'
 import zh from '@shuvix/chat-protocol/i18n/locales/zh.json'
 import { until } from '../../harness/cdp'
 import { launchApp, type E2EApp } from '../../harness/launch'
-import { createProject, waitRendererReady } from '../../harness/seed'
+import { createProject, ensureDefaultModel, waitRendererReady } from '../../harness/seed'
 import {
   projectEditPane,
   sessionConfigPane,
@@ -143,6 +143,7 @@ function projectDir(name: string): string {
 
 beforeAll(async () => {
   app = await launchApp()
+  await ensureDefaultModel(app.main)
   await waitRendererReady(app.main)
   sidebar = sidebarPane(app.main)
   sessionConfig = sessionConfigPane(app.main)

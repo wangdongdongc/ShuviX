@@ -291,6 +291,27 @@ export async function seedFakeProvider(
   )
 }
 
+/** `ensureDefaultModel` 种的占位提供商指向这里：discard 端口，从不被连 —— ensure 不发任何请求 */
+export const PLACEHOLDER_PROVIDER_URL = 'http://127.0.0.1:9/v1'
+export const PLACEHOLDER_MODEL = 'e2e-placeholder-model'
+
+/**
+ * 隔离实例里要有一个默认模型（P3-06 PIN-01）：durable 的锁在**没有可用模型时拒绝创建 agent**（K4），所以
+ * `agent.getInfo(sid, { ensure: true })` 在一个什么提供商都没种的全新实例上答 null。幂等：已经有默认提供商
+ * （`seedFakeProvider` 种过、或之前调过它）就什么都不做；否则经 `seedFakeProvider` 种一个指向
+ * `PLACEHOLDER_PROVIDER_URL` 的占位提供商并设为默认。只给「建 agent、读快照、不发消息」的用例用：
+ * 真要发消息的用例照旧先 `seedFakeProvider` 接上 `startFakeProvider()`。
+ */
+export async function ensureDefaultModel(main: CdpClient): Promise<void> {
+  const current = await main.eval<unknown>(`window.api.settings.get('general.defaultProvider')`)
+  if (typeof current === 'string' && current.trim() !== '') return
+  await seedFakeProvider(main, {
+    baseUrl: PLACEHOLDER_PROVIDER_URL,
+    modelId: PLACEHOLDER_MODEL,
+    name: 'E2E Placeholder'
+  })
+}
+
 /**
  * 开关命令沙箱（`sandbox.enabled`，缺省开）。
  *
@@ -726,6 +747,8 @@ export async function createAgentSession(
     knowledgeBases?: string[]
   } = {}
 ): Promise<{ sid: string; systemPrompt: string }> {
+  // 没有默认模型时 ensure 建不出 agent（PIN-01）
+  await ensureDefaultModel(main)
   return main.eval(
     `(async () => {
       const s = await window.api.session.create(${JSON.stringify({

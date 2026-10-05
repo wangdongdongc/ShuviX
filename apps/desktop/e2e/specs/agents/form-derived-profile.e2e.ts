@@ -22,6 +22,7 @@ import {
   createBotSession,
   createPinnedChildSession,
   createProject,
+  ensureDefaultModel,
   stampAgentProfile,
   writeAgentMd,
   writeBotMd
@@ -40,6 +41,7 @@ const NOTE_REL = 'notes/fd-note.md'
 
 beforeAll(async () => {
   app = await launchApp()
+  await ensureDefaultModel(app.main)
   // 任何非基座档案都可作子会话的档案（没有开关要写）
   writeAgentMd(app, PINNED, { description: '可作子会话档案', tools: 'read', body: PINNED_BODY })
   const projDir = join(app.home, 'fd-proj')

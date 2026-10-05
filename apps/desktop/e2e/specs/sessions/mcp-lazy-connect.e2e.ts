@@ -31,6 +31,7 @@ import { sleep, until } from '../../harness/cdp'
 import { launchApp, type E2EApp } from '../../harness/launch'
 import {
   createProject,
+  ensureDefaultModel,
   eventRecorder,
   waitRendererReady,
   type EventRecorder,
@@ -146,6 +147,7 @@ const pickerItem = async (
 
 beforeAll(async () => {
   app = await launchApp()
+  await ensureDefaultModel(app.main)
   await waitRendererReady(app.main)
   recorder = eventRecorder(app.main)
   await recorder.install()
