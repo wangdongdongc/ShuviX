@@ -46,7 +46,14 @@ import type { FauxKit } from './faux'
 import { makeHost, primeRoot, type TestHost, type TestHostOptions } from './host'
 import { routerKit, type RouterKit } from './router'
 import { W_NOW, wKit } from './scenario'
-import { configD, fakeRpm, probeTool, TEST_SPAWN_EXTENSION, type FakeRpm } from './spawn'
+import {
+  configD,
+  dispatch,
+  fakeRpm,
+  probeTool,
+  TEST_SPAWN_EXTENSION,
+  type FakeRpm
+} from './spawn'
 import { messageText } from './transcript'
 
 // ─────────────────────────── 档案与 hook ───────────────────────────
@@ -163,8 +170,10 @@ export interface HookRigOptions {
   rpm?: FakeRpm
   /** 不给 s1 建 agent */
   noPrime?: boolean
-  /** 额外的按 agent 工具 */
+  /** 额外的按 agent 工具（名字要在档案里：`rigConfig(..., [名字])`） */
   tools?: (sessionId: string, rig: () => HookRig) => ToolRegistration[]
+  /** 给一个真派发工具（`agent`，交给 `session.agents.spawn`）；档案表缺省 `{asker}` */
+  dispatchProfiles?: Record<string, InProcessAgentType>
 }
 
 export interface HookRig {
@@ -202,17 +211,28 @@ function sessionConfig(source: TestHostOptions['agentConfig'], sessionId: string
   return config ?? rigConfig()
 }
 
-/** 宿主 H 的会话配置：work 档案（agent / probe / askOp / titleProbe）、faux-1、思考 low */
-export function rigConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
+/** 宿主 H 的会话配置：work 档案（agent / probe / askOp / titleProbe + `extraTools`）、faux-1、思考 low */
+export function rigConfig(
+  overrides: Partial<AgentConfig> = {},
+  extraTools: readonly string[] = []
+): AgentConfig {
   return configD({
     profile: testProfile({
       name: 'work',
       displayName: 'Work',
-      tools: ['agent', 'probe', 'askOp', 'titleProbe']
+      tools: ['agent', 'probe', 'askOp', 'titleProbe', ...extraTools]
     }),
     ...overrides
   })
 }
+
+/** 派发工具用的档案：asker 只有 askOp（-23 / -33：派生 agent 里的询问） */
+export const ASKER = testProfile({
+  name: 'asker',
+  displayName: 'Asker',
+  tools: ['askOp'],
+  systemPrompt: 'You are an asker'
+})
 
 export async function hookRig(options: HookRigOptions = {}): Promise<HookRig> {
   const profiles = options.profiles ?? { ...HOOK_PROFILES }
@@ -264,12 +284,20 @@ export async function hookRig(options: HookRigOptions = {}): Promise<HookRig> {
       ...(options.tools?.(sessionId, rig) ?? [])
     ].filter((tool) => names.includes(tool.name))
 
+  const dispatchTool =
+    options.dispatchProfiles === undefined
+      ? undefined
+      : dispatch({
+          getSession: () => rig().session,
+          profiles: options.dispatchProfiles,
+          outcomes: []
+        })
   const first = await makeHost({
     makeKit: wKit,
     extensions: [TEST_SPAWN_EXTENSION],
     now: () => W_NOW,
     resolveProfileModel: rpm.resolve,
-    toolHost: { agentTools },
+    toolHost: { agentTools, ...(dispatchTool === undefined ? {} : { dispatchTool }) },
     agentConfig: config,
     ...options.host
   })
