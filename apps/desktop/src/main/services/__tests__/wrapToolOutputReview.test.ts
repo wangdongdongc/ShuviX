@@ -286,7 +286,7 @@ describe('wrapToolOutput — 审查放行的调用在结果上留「已审查」
       await gate.promise
       return { content: [{ type: 'text' as const, text: 'ran' }], details: undefined }
     })
-    const wrapped = wrapToolOutput(tool, SID, 'middle', undefined, security)
+    const wrapped = wrapDurableTool(tool, { sessionId: SID, spill: true, security })
 
     const root = invokeTool(wrapped, { action: 'connect' } as never, {
       callId: 'call_0',
