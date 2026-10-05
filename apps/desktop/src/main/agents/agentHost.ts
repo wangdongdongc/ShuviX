@@ -314,9 +314,7 @@ export function createDesktopToolHost(deps: DesktopToolHostDeps): ToolHost {
       const wrap = sessionWrapper(req.rootSessionId, ctx)
 
       // 派发工具：名单 opt-in；派生 agent 还要 canSpawn（缺省按 false）
-      const agent = offersDispatchTool(req)
-        ? wrap(dispatchTool(ctx))
-        : undefined
+      const agent = offersDispatchTool(req) ? wrap(dispatchTool(ctx)) : undefined
 
       // SkillTool：名单里点了名的 skill 才上架 —— 档案声明的（含内置的 `skill:builtin:drawing`）
       // 与会话勾选的一视同仁（派生 agent 的名单就是它全部的勾选：不读会话配置）；带根会话项目的
@@ -364,9 +362,7 @@ export function createDesktopToolHost(deps: DesktopToolHostDeps): ToolHost {
         canSpawn: spawned.canSpawn
       })
       return {
-        ...(offersAgent
-          ? { agent: wrap(dispatchTool(ctx)) }
-          : {}),
+        ...(offersAgent ? { agent: wrap(dispatchTool(ctx)) } : {}),
         // 锁赢（与 MCP 同一条规则）：锁记着的技能停用了也照样在架（要生效就销毁 agent），磁盘上没了的
         // 才掉出索引；锁里有技能工具就一直挂着（货架空了照实说「没有」）—— 重开不改工具表
         ...(lock.skills.length > 0

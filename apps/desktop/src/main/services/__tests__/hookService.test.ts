@@ -1001,11 +1001,9 @@ describe('hookService — 去重、分会话与中止', () => {
     mocks.runTask.mockImplementation(
       (params: RunTaskParams) =>
         new Promise((resolve) => {
-          params.signal?.addEventListener(
-            'abort',
-            () => resolve({ result: 'partial' }),
-            { once: true }
-          )
+          params.signal?.addEventListener('abort', () => resolve({ result: 'partial' }), {
+            once: true
+          })
         })
     )
     firePrompt({ isDefaultTitle: true })

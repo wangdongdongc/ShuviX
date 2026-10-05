@@ -80,7 +80,10 @@ async function failHost(
 const explorerRequests = (r: HostR): number => requestsOf(r.t.kit, 'explorer').length
 
 /** 一次派发、子 agent 以 `child` 收尾、根答 done */
-async function dispatchOnce(r: HostR, child: Parameters<HostR['t']['kit']['queue']>[0]) {
+async function dispatchOnce(
+  r: HostR,
+  child: Parameters<HostR['t']['kit']['queue']>[0]
+): Promise<void> {
   r.t.kit.queue(callAgent('explore', 'find X'), child, answer('done'))
   expect(await r.session.submitUser('go')).toEqual({})
   await waitFor(() => r.ends().length > 0, 3000, 'end')

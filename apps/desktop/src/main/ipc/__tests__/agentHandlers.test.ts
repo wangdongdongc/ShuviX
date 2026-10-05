@@ -197,30 +197,36 @@ describe('P2-05-39 派生 agent 面板 IPC 按 agentId 交给路由', () => {
   it.each([
     ['subSession:interrupt', 'interrupt'],
     ['subSession:destroy', 'destroy']
-  ] as const)('%s 把 agentId 交给路由一次、等它做完再答 {success:true}', async (channel, method) => {
-    let settle!: () => void
-    state.router[method].mockReturnValue(new Promise<void>((resolve) => (settle = resolve)))
-    let answered = false
-    const pending = Promise.resolve(invoke(channel, 'sub-1')).then((value) => {
-      answered = true
-      return value
-    })
-    await flush()
-    expect(state.router[method]).toHaveBeenCalledTimes(1)
-    expect(state.router[method]).toHaveBeenCalledWith('sub-1')
-    expect(answered).toBe(false)
-    settle()
-    expect(await pending).toEqual({ success: true })
-  })
+  ] as const)(
+    '%s 把 agentId 交给路由一次、等它做完再答 {success:true}',
+    async (channel, method) => {
+      let settle!: () => void
+      state.router[method].mockReturnValue(new Promise<void>((resolve) => (settle = resolve)))
+      let answered = false
+      const pending = Promise.resolve(invoke(channel, 'sub-1')).then((value) => {
+        answered = true
+        return value
+      })
+      await flush()
+      expect(state.router[method]).toHaveBeenCalledTimes(1)
+      expect(state.router[method]).toHaveBeenCalledWith('sub-1')
+      expect(answered).toBe(false)
+      settle()
+      expect(await pending).toEqual({ success: true })
+    }
+  )
 
   it.each([
     ['subSession:interrupt', 'interrupt'],
     ['subSession:destroy', 'destroy']
-  ] as const)('%s 路由拒绝 → 照样答 {success:true}（PIN-17），记一条日志', async (channel, method) => {
-    state.router[method].mockRejectedValue(new Error('boom'))
-    expect(await invoke(channel, 'sub-1')).toEqual({ success: true })
-    expect(state.warn).toHaveBeenCalledTimes(1)
-  })
+  ] as const)(
+    '%s 路由拒绝 → 照样答 {success:true}（PIN-17），记一条日志',
+    async (channel, method) => {
+      state.router[method].mockRejectedValue(new Error('boom'))
+      expect(await invoke(channel, 'sub-1')).toEqual({ success: true })
+      expect(state.warn).toHaveBeenCalledTimes(1)
+    }
+  )
 
   it('三个处理函数都不打开会话、不碰网关', async () => {
     invoke('agent:subAgentPrompt', { subSessionId: 'sub-1', text: 't' })

@@ -42,14 +42,7 @@ import type { SpawnCreatedInfo, SpawnOutcome, SpawnParams } from '../../spawn'
 import { markerVars, type MarkerVars } from './agentConfig'
 import { makeHost, primeRoot, type TestHost, type TestHostOptions } from './host'
 import { W_NOW, wKit } from './scenario'
-import {
-  configD,
-  fakeRpm,
-  probeTool,
-  PROFILES,
-  TEST_SPAWN_EXTENSION,
-  type FakeRpm
-} from './spawn'
+import { configD, fakeRpm, probeTool, PROFILES, TEST_SPAWN_EXTENSION, type FakeRpm } from './spawn'
 
 export const ABORTED_NOTE = 'ABORTED_NOTE'
 
@@ -281,7 +274,10 @@ export interface ContractToolOptions {
  * 带结果契约的派发工具（测试拥有者：真派发工具从不传 resultContract）：参数 `{prompt}`，把
  * `{sessionId, owner: {tool: scope}, resultContract}` 交给路由；结果文本 = outcome.result，拒绝 = 原话。
  */
-export function contractTool(manager: SubAgentManager, options: ContractToolOptions): ToolRegistration {
+export function contractTool(
+  manager: SubAgentManager,
+  options: ContractToolOptions
+): ToolRegistration {
   return defineTool({
     name: options.name ?? 'contract_agent',
     description: 'contract_agent: dispatch a sub-agent with a result contract',

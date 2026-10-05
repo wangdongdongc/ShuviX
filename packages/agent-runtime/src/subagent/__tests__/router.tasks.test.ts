@@ -67,7 +67,8 @@ describe('router · agent task entries', () => {
       callAgent('explore', 'find X'),
       async (context, options, state, model) => {
         seen = structuredClone(r.taskBroadcasts)
-        return step.step(context, options, state, model)
+        const inner = step.step
+        return typeof inner === 'function' ? inner(context, options, state, model) : inner
       },
       answer('done')
     )
@@ -192,7 +193,13 @@ describe('router · agent task entries', () => {
     const kit = routerKit({ get: () => fc.session, peek: async () => fc.session })
     await expect(kit.router.runTask(toolParams())).rejects.toThrow('x')
     expect(kit.ends()).toEqual([
-      { type: 'sub_session_end', sessionId: 'sub-a1', parentSessionId: 's1', result: 'x', isError: true }
+      {
+        type: 'sub_session_end',
+        sessionId: 'sub-a1',
+        parentSessionId: 's1',
+        result: 'x',
+        isError: true
+      }
     ])
     expect(kit.task('sub-a1')?.status).toBe('error')
     expect(kit.tasks!.runningCount('s1', 'agent')).toBe(0)

@@ -141,10 +141,7 @@ describe('router · register and end broadcasts', () => {
     expect(outcomes).toEqual([
       expect.objectContaining({ structured: { title: 'X' }, result: '{\n  "title": "X"\n}' })
     ])
-    expect(r.events.map((event) => event.type)).toEqual([
-      'sub_session_register',
-      'sub_session_end'
-    ])
+    expect(r.events.map((event) => event.type)).toEqual(['sub_session_register', 'sub_session_end'])
   })
 
   it.each<[Row, boolean, string | null]>([
@@ -186,8 +183,8 @@ describe('router · register and end broadcasts', () => {
       answer('done')
     )
     expect(await failing.session.submitUser('go')).toEqual({})
-    const results = (await transcript(await failing.session.currentConversation())).filter(
-      (line) => line.startsWith('pi.tool-result:')
+    const results = (await transcript(await failing.session.currentConversation())).filter((line) =>
+      line.startsWith('pi.tool-result:')
     )
     expect(results).toHaveLength(3)
     expect(results[1]).toContain('Unknown agent "nope"')

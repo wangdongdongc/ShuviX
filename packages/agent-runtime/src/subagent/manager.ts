@@ -199,7 +199,13 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
     result: string,
     isError: boolean
   ): void {
-    deps.broadcast({ type: 'sub_session_end', sessionId: agentId, parentSessionId, result, isError })
+    deps.broadcast({
+      type: 'sub_session_end',
+      sessionId: agentId,
+      parentSessionId,
+      result,
+      isError
+    })
   }
 
   /** 任务条目：没有就建、落定了就重开、在跑就复用（PIN-14） */
@@ -417,7 +423,10 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
         const raw = await session.agents.continue(entry.conversationId, promptText)
         verdict = settleOf(raw, false, soft.has(agentId))
       } catch (error) {
-        verdict = { status: 'error', outcome: { result: errorText(error), error: errorText(error) } }
+        verdict = {
+          status: 'error',
+          outcome: { result: errorText(error), error: errorText(error) }
+        }
       }
       running.delete(agentId)
       soft.delete(agentId)

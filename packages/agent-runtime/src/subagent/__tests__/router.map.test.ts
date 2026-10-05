@@ -11,12 +11,7 @@ import { backgroundContext as BG } from '../../durable/context'
 import { spawnedAgentRecordOf } from '../../durable/agentRecord'
 import { answer } from '../../durable/__tests__/support/faux'
 import { registerHostCleanup } from '../../durable/__tests__/support/host'
-import {
-  callAgent,
-  childOf,
-  dispatchTask,
-  PROFILES
-} from '../../durable/__tests__/support/spawn'
+import { callAgent, childOf, dispatchTask, PROFILES } from '../../durable/__tests__/support/spawn'
 import {
   CALL,
   fakeSession,
@@ -71,7 +66,13 @@ describe('router · mapping and the index', () => {
     expect('inlineTokens' in register!).toBe(false)
     expect('contextNote' in register!).toBe(false)
     expect(r.ends()).toEqual([
-      { type: 'sub_session_end', sessionId: A, parentSessionId: 's1', result: 'found', isError: false }
+      {
+        type: 'sub_session_end',
+        sessionId: A,
+        parentSessionId: 's1',
+        result: 'found',
+        isError: false
+      }
     ])
     const record = await spawnedAgentRecordOf(r.session.harness, C as never, BG)
     expect(record?.agentId).toBe(A)
@@ -83,10 +84,14 @@ describe('router · mapping and the index', () => {
   it('P2-05-02 register precedes the child run; no end before it answers', async () => {
     const r = await hostR()
     let snapshot: string[] | undefined
-    r.t.kit.queue(callAgent('explore', 'find X'), async () => {
-      snapshot = r.events.map((event) => event.type)
-      return answer('found')
-    }, answer('done'))
+    r.t.kit.queue(
+      callAgent('explore', 'find X'),
+      async () => {
+        snapshot = r.events.map((event) => event.type)
+        return answer('found')
+      },
+      answer('done')
+    )
     expect(await r.session.submitUser('go')).toEqual({})
     expect(snapshot).toEqual(['sub_session_register'])
   })

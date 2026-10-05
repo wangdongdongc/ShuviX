@@ -140,7 +140,7 @@ describe('router · the dispatch tool on real durable', () => {
       const outcomes: RunTaskOutcome[] = []
       const r = await hostR({ wrapManager: outcomesOf(outcomes) })
       if (row === 'the resolve fails') r.t.toolHost.failResolve = new Error('boom')
-      else r.vars.state.fail = new Error('vars exploded')
+      else r.vars.state.fail = 'vars exploded'
       r.t.kit.queue(callAgent('explore', 'find X'), answer('done'))
       expect(await r.session.submitUser('go')).toEqual({})
       const [result] = await toolResults(r.session)
@@ -292,8 +292,7 @@ describe('router · replay safe: the rerun re-attaches [SQLite]', () => {
           ...router,
           runTask: async (params: RunTaskParams) => {
             const outcome = await router.runTask(params)
-            const scope = (params.owner as Extract<RunTaskParams['owner'], { tool: unknown }>)
-              .tool
+            const scope = (params.owner as Extract<RunTaskParams['owner'], { tool: unknown }>).tool
             held.resolve()
             await aborted(scope.signal!)
             return outcome

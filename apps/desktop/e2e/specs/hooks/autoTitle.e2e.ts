@@ -3,7 +3,8 @@
  * 加上用户 hook 的整条链路 —— 任务文本组装、CEL 过滤、去重、归属会话、删会话即中止。
  *
  * 观测面：
- *   - 一次 hook run 就是一次 `agentManager.runTask`，在主窗口表现为一条 `sub_session_register`
+ *   - 一次 hook run 就是一次 `agentManager.runTask`（拥有者 `{anchor: true}`；路由在 P2-08 接上宿主派发之前
+ *     以 PhasePendingError 拒绝，这几条用例在那之前跑不通），在主窗口表现为一条 `sub_session_register`
  *     （parentSessionId = 归属会话、parentToolCallId 缺省、subAgentName = agent、description = hook
  *     显示名、prompt = 渲染后的任务文本）+ 随后的 `sub_session_end`。register 的 sessionId 是派生
  *     agent 自己的 id —— 所以按 parentSessionId 过滤 `events.all()`，`waitFor` 的 sessionId 用不上；

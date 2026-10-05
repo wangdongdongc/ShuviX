@@ -560,8 +560,7 @@ describe('超时、中止与监控面', () => {
     const signalOf = (description: string, sessionId: string): AbortSignal | undefined =>
       h.runTask.mock.calls
         .map(([p]) => p)
-        .find((p) => p.description === description && p.sessionId === sessionId)
-        ?.signal
+        .find((p) => p.description === description && p.sessionId === sessionId)?.signal
 
     expect(h.runner.abortSession('s1')).toBe(2)
     expect(signalOf('A', 's1')?.aborted).toBe(true)
