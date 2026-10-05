@@ -8,7 +8,8 @@
  *     审查员自己要权限）时一次都不发 —— 否则卡片会闪一下「审查中」；
  *   - 子会话的广播落在子会话自己的 id 上（卡片在那里），不是顶层会话。
  *
- * 替身：hookService / messageService / sessionRecords / settingsService / logger / frontend/core；
+ * 替身：hookService / messageService / sessionRecords / settingsService / logger / frontend/core / sessionHost
+ * （会话行不带 storageKind = 旧格式路径，转写经 messageService；碰到 SessionHost 即路由错了）；
  * @shuvix/agent-runtime 用真的（决策日志与卡片反馈是进程级 Map —— 每条用例用自己的会话 id，afterEach 清掉）。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -46,6 +47,13 @@ vi.mock('../hookService', () => ({
 }))
 vi.mock('../messageService', () => ({
   messageService: { listBySession: mocks.listBySession }
+}))
+// 这里的会话行都不带 storageKind（= 旧格式）：转写走 messageService。durable 路径另有用例
+// （permissionReviewDurable / sessionTriggerFactsDurable），这里碰到 SessionHost 就是路由错了
+vi.mock('../sessionHost', () => ({
+  getSessionHost: () => {
+    throw new Error('legacy-path tests must not reach the session host')
+  }
 }))
 vi.mock('../sessionRecords', () => ({ sessionRecords: { pick: mocks.pick } }))
 vi.mock('../settingsService', () => ({ settingsService: { get: mocks.settingsGet } }))

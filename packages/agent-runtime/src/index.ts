@@ -663,6 +663,21 @@ export {
   type SessionState
 } from './durable/docs'
 export { backgroundContext, contextWithSignal, isClosedError } from './durable/context'
+// 转写摘要（P2-14）：当前对话里人写的话 / agent 的正文 / ask 的回答 —— 自动审查与起标题的输入（只读）
+export {
+  COMPACTION_SUMMARY_PREFIX,
+  COMPACTION_SUMMARY_SUFFIX,
+  digestEntries,
+  displayContentOf,
+  readTranscriptDigest,
+  unwrapCompactionSummary,
+  type TranscriptAskItem,
+  type TranscriptAssistantItem,
+  type TranscriptDigest,
+  type TranscriptDigestItem,
+  type TranscriptDigestSession,
+  type TranscriptUserItem
+} from './durable/transcriptDigest'
 // 历史 thinking 剥离（纯函数；pi-durable 切换后暂未接线，见文件头）
 export {
   elideHistoricalThinking,

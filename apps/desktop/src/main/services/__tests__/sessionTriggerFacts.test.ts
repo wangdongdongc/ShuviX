@@ -9,6 +9,9 @@
  *
  * 这里只答「会话此刻是什么样」。谁订阅、订阅去做什么，都不是埋点该知道的事 —— 所以
  * 这份用例里一个 hook 的名字都不该出现。
+ *
+ * **钉的是旧格式（harness-v3-jsonl）路径**：会话行不带 storageKind，消息经 messageService 读冻结投影。
+ * durable 会话（P2-14 的转写摘要，通知不算）见 sessionTriggerFactsDurable / transcriptParity。
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
@@ -21,6 +24,13 @@ const mocks = vi.hoisted(() => ({
 vi.mock('../../dao/sessionDao', () => ({ sessionDao: { pick: mocks.pick } }))
 vi.mock('../messageService', () => ({
   messageService: { listBySession: mocks.listBySession }
+}))
+// 这里的会话行都不带 storageKind（= 旧格式）：转写走 messageService。durable 路径另有用例
+// （permissionReviewDurable / sessionTriggerFactsDurable），这里碰到 SessionHost 就是路由错了
+vi.mock('../sessionHost', () => ({
+  getSessionHost: () => {
+    throw new Error('legacy-path tests must not reach the session host')
+  }
 }))
 vi.mock('../../i18n', () => ({ t: mocks.t }))
 
