@@ -626,6 +626,18 @@ export {
   type CreateAgentOptions,
   type LockRecord
 } from './durable/lock'
+// 派生 agent 记录与身份（P2-01）：平铺在子对话 AgentStateDoc 里的锁形记录；`DurableSession.agentIdentity`
+export {
+  parseSpawnedAgentRecord,
+  rootAgentIdentity,
+  spawnedAgentIdentity,
+  spawnedAgentRecordJson,
+  spawnedAgentRecordOf,
+  writeSpawnedAgentRecord,
+  type AgentDispatch,
+  type AgentIdentity,
+  type SpawnedAgentRecord
+} from './durable/agentRecord'
 export {
   createShuviXSettings,
   compactionKeepRecentTokens,

@@ -27,6 +27,14 @@
  *    没锁时，发送 / steer / followUp / 自动续跑 / 继续都先创建 agent（K3，每会话一把互斥）；模型被拒
  *    → `{ error, code: 'no_model' }`，什么都不写（K4）。中止与销毁都会取消在途的创建（K13）；销毁算一次
  *    显式喊停（K10）。
+ *  - **身份**（P2-01，`agentDirectory.ts`）：`agentIdentity(对话)` 同步认人 —— 派生 agent 的对话按它
+ *    `AgentStateDoc` 里的记录，其余对话都认成根（随锁现取，未锁 = undefined）。缓存由提交发布与打开时
+ *    对每个任务拥有的对话的扫描喂养。
+ *  - **辅助工作**（P2-01，`dispatch: 'hook'` 及其名下的对话）：宿主派发的 hook agent（起标题、权限审查）
+ *    **从不续跑** —— 打开时把它们活着的任务逐个打上中止标记（`harness.abortTask`，只提交标记、不开启
+ *    调度器），下一次任何开启调度器的调用让它们以 aborted 收场。它们不算中断、不进运行状态镜像（侧栏
+ *    不会因为在起标题而显示忙）；但在跑时照样挡着 LRU（`evictable` = 什么都没在跑），跑完时宿主据此
+ *    再修剪一次（PIN-07）。
  */
 import { copyJson } from '@earendil-works/chord'
 import {
@@ -37,6 +45,7 @@ import {
   type CommitPublication,
   type Conversation,
   type ConversationId,
+  type ConversationRecord,
   type Harness,
   type JsonObject,
   type Submission,
@@ -50,8 +59,11 @@ import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/in
 import type { ThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
 import type { PromptVars, PromptVarsCtx } from '../agentProfile/promptVars'
 import type { RuntimeEventSink, RuntimeLogger } from '../types'
+import { AgentDirectory } from './agentDirectory'
+import { rootAgentIdentity, type AgentIdentity } from './agentRecord'
 import { backgroundContext as BG, errorText, isClosedError } from './context'
 import {
+  AgentStateDoc,
   DisplayDoc,
   SessionStateDoc,
   noticeEntryDraft,
@@ -146,8 +158,14 @@ export interface DurableSession {
   currentConversation(): Promise<Conversation>
   /** 当前对话有 run 且调度器在跑 */
   isBusy(): boolean
-  /** 存储里有 run 但调度器停着（上个进程中途退出） */
+  /** 存储里有 run 但调度器停着（上个进程中途退出）；辅助工作（hook agent）不算 */
   isInterrupted(): boolean
+  /**
+   * 在这个对话上发起调用的 agent 的身份（同步，从不开启调度器）：派生 agent 的对话 → 它的派生身份
+   * （`callerId` = agentId；记录写坏了也绝不认成根）；其余对话（锁所在的对话、fork、旁支、不认识的 id）
+   * → 根的身份（随锁现取；未锁 = undefined）。句柄已关 → undefined。
+   */
+  agentIdentity(conversationId: number): AgentIdentity | undefined
   /** 继续被中断的工作，等当前对话空闲；空闲且未中断时立刻返回 */
   continue(): Promise<SubmitResult>
   /** 发送用户输入并等这一轮落定（R3：结果对象，从不抛出） */
@@ -248,6 +266,18 @@ function randomId(): string {
   return globalThis.crypto.randomUUID()
 }
 
+function liveTaskOf(record: {
+  readonly conversationId: ConversationId
+  readonly kind: string
+  readonly abortRequested: boolean
+}): LiveTask {
+  return {
+    conversationId: record.conversationId,
+    kind: record.kind,
+    abortRequested: record.abortRequested
+  }
+}
+
 // ─────────────────────────── 调度器开启观测（harness 代理） ───────────────────────────
 
 /** 会开启调度器的 Harness 方法（durable 文档列出的那几个） */
@@ -343,7 +373,10 @@ export interface DurableSessionDeps {
   onStateChange: (state: RunState, previous: RunState) => void
   /** 每次被使用（LRU 新近度） */
   onUse: () => void
-  /** 进行中的调用全部结束（它可能刚变得可回收 —— 宿主据此修剪） */
+  /**
+   * 进行中的调用全部结束，或最后一件在跑的工作结束（辅助工作跑完时运行状态不变，PIN-07）—— 它可能
+   * 刚变得可回收，宿主据此修剪
+   */
   onSettled?: () => void
   logger: RuntimeLogger
   now: () => number
@@ -364,6 +397,7 @@ export interface DurableSessionDeps {
 interface LiveTask {
   readonly conversationId: ConversationId
   readonly kind: string
+  readonly abortRequested: boolean
 }
 
 interface PendingNotice {
@@ -390,12 +424,23 @@ export class DurableSessionImpl implements DurableSession {
   private noticeTimer: ReturnType<typeof setTimeout> | undefined
   private unsubscribe: () => void = () => {}
   private readonly agentLock: AgentLock
+  /** 每个对话上的 agent 是谁、哪些对话是辅助工作（P2-01） */
+  private readonly directory: AgentDirectory
+  /** 根身份的缓存：跟着锁记录对象走（锁一变就重算） */
+  private rootIdentity: { lock: LockRecord; identity: AgentIdentity } | undefined
+  /** 上次重算时有没有东西在跑（含辅助工作；PIN-07 的跑完检测） */
+  private wasRunning = false
+  /** 打开扫描期间被提交发布摸过的 AgentStateDoc（扫描读到的旧值不能盖掉它们） */
+  private scanTouched: Set<ConversationId> | undefined
+  /** 打开途中：状态只在打开完成时静默设定一次（打开时的中止标记等提交不触发状态通知） */
+  private initializing = true
 
   private constructor(private readonly deps: DurableSessionDeps) {
     this.sessionId = deps.sessionId
     this.raw = deps.harness
     this.harness = observeResumes(deps.harness, () => this.markResumed())
     this.inputs = new PendingInputRequests(deps.sessionId, deps.eventSink)
+    this.directory = new AgentDirectory({ sessionId: deps.sessionId, logger: deps.logger })
     this.agentLock = new AgentLock({
       sessionId: deps.sessionId,
       harness: deps.harness,
@@ -423,10 +468,16 @@ export class DurableSessionImpl implements DurableSession {
 
   private async init(): Promise<void> {
     this.unsubscribe = this.raw.subscribeCommits((publication) => this.observe(publication))
-    // 在串行线上扫一遍活着的任务，并在回调末尾**同步**装载：此前的发布被这次扫描覆盖，
+    this.scanTouched = new Set()
+    // 在串行线上扫一遍活着的任务与全部对话，并在回调末尾**同步**装载：此前的发布被这次扫描覆盖，
     // 此后的发布来自更晚的提交、叠加在它上面 —— 两者之间没有缝。（只读提交不产生发布。）
-    await this.raw.commit(async (tx) => {
-      const records: { id: TaskId; conversationId: ConversationId; kind: string }[] = []
+    const taskOwned = await this.raw.commit(async (tx) => {
+      const records: {
+        id: TaskId
+        conversationId: ConversationId
+        kind: string
+        abortRequested: boolean
+      }[] = []
       for (const status of LIVE_TASK_STATUSES) {
         let cursor: Parameters<typeof tx.scanTasks>[2]
         do {
@@ -435,17 +486,57 @@ export class DurableSessionImpl implements DurableSession {
           cursor = page.next
         } while (cursor !== undefined)
       }
+      const conversations: ConversationRecord[] = []
+      let next: Parameters<typeof tx.scanConversations>[2]
+      do {
+        const page = await tx.scanConversations({}, SCAN_PAGE_SIZE, next)
+        for (const record of page.items) conversations.push(record)
+        next = page.next
+      } while (next !== undefined)
       this.live.clear()
-      for (const record of records) {
-        this.live.set(record.id, { conversationId: record.conversationId, kind: record.kind })
-      }
+      for (const record of records) this.live.set(record.id, liveTaskOf(record))
+      for (const record of conversations) this.directory.observeConversation(record)
+      return conversations.filter((record) => record.owner !== undefined).map(({ id }) => id)
     }, BG)
+    // 身份与辅助分类：每个任务拥有的对话（PIN-03）。扫描之后被发布摸过的以发布为准
+    for (const conversationId of taskOwned) {
+      const value = await this.raw.snapshot(AgentStateDoc, conversationId, BG)
+      if (this.scanTouched.has(conversationId)) continue
+      this.directory.observeAgentState(conversationId, value as JsonObject | undefined)
+    }
+    this.scanTouched = undefined
     await this.currentConversation()
     // 在任何续跑 / 发送之前按锁重建工具（打开从不续跑，所以在这里重建是安全的），再对一次镜像（K11）
     await this.agentLock.restore()
+    // 辅助工作从不续跑：活着的任务打上中止标记（只提交标记，不开启调度器）
+    await this.markAuxiliaryWork()
     // 初始状态静默设定：宿主在打开完成时统一报一次（PIN-R），这里再排一次通知就会报两遍
     this.state = this.computeState()
+    this.wasRunning = this.running
+    this.initializing = false
     this.agentLock.reconcileMirror()
+  }
+
+  /**
+   * 打开时：辅助对话（hook agent 及其名下）里每个活着、还没打标记的任务，逐个 `abortTask`。
+   * 只提交中止标记 —— 不开启调度器（会话照样停着），下一次开启调度器的调用让它们走中止流程收场。
+   * 失败只记警告、不挡打开（PIN-14）；分类照旧（它们照样不算中断）。
+   */
+  private async markAuxiliaryWork(): Promise<void> {
+    const targets: TaskId[] = []
+    for (const [id, task] of this.live) {
+      if (!task.abortRequested && this.directory.isAuxiliary(task.conversationId)) targets.push(id)
+    }
+    for (const id of targets) {
+      try {
+        await this.raw.abortTask(id, BG)
+      } catch (error) {
+        if (this.closedFlag || isClosedError(error)) throw error
+        this.deps.logger.warn(
+          `session ${this.sessionId}: marking auxiliary task ${id} aborted failed: ${errorText(error)}`
+        )
+      }
+    }
   }
 
   // ─── 运行状态 ───────────────────────────────────
@@ -466,33 +557,76 @@ export class DurableSessionImpl implements DurableSession {
     return !this.schedulerRunning && this.hasRun(undefined)
   }
 
-  /** LRU 能不能关它：不忙、没有挂起的询问、没有进行中的调用、没有待合并的通知 */
+  agentIdentity(conversationId: number): AgentIdentity | undefined {
+    if (this.closedFlag) return undefined
+    const spawned = this.directory.identity(conversationId as ConversationId)
+    if (spawned !== undefined) return spawned
+    const lock = this.agentLock.current
+    if (lock === undefined) return undefined
+    if (this.rootIdentity?.lock !== lock) {
+      this.rootIdentity = { lock, identity: rootAgentIdentity(lock) }
+    }
+    return this.rootIdentity.identity
+  }
+
+  /**
+   * LRU 能不能关它：什么都没在跑（辅助工作在跑也不行）、没有挂起的询问、没有进行中的调用、没有
+   * 待合并的通知。被中断的会话（调度器停着）可以关。
+   */
   get evictable(): boolean {
     return (
       !this.closedFlag &&
-      this.state !== 'busy' &&
+      !this.running &&
       this.inputs.count === 0 &&
       this.activeOps === 0 &&
       this.pendingNotices.length === 0
     )
   }
 
+  /** 有东西在跑：调度器开着且有活着的任务（含辅助工作、后台压缩） */
+  private get running(): boolean {
+    return this.schedulerRunning && this.live.size > 0
+  }
+
+  /** 有 run：指定对话里的；不指定 = 任何非辅助对话里的 */
   private hasRun(conversationId: ConversationId | undefined): boolean {
     for (const task of this.live.values()) {
       if (task.kind !== GENERATION_TASK_KIND) continue
-      if (conversationId === undefined || task.conversationId === conversationId) return true
+      if (conversationId === undefined) {
+        if (!this.directory.isAuxiliary(task.conversationId)) return true
+      } else if (task.conversationId === conversationId) return true
     }
     return false
   }
 
+  /** 有活着的非辅助任务 */
+  private hasPrimaryWork(): boolean {
+    for (const task of this.live.values()) {
+      if (!this.directory.isAuxiliary(task.conversationId)) return true
+    }
+    return false
+  }
+
+  /** 运行状态（R2），辅助工作不算：它在跑不算忙，被打了标记停着也不算中断 */
   private computeState(): RunState {
-    if (this.live.size === 0) return 'idle'
+    if (!this.hasPrimaryWork()) return 'idle'
     if (this.schedulerRunning) return 'busy'
     return this.hasRun(undefined) ? 'interrupted' : 'idle'
   }
 
-  /** 状态即时更新（同步读取永远是真值），通知推迟到微任务（提交监听里不许回调宿主） */
+  /**
+   * 状态即时更新（同步读取永远是真值），通知推迟到微任务（提交监听里不许回调宿主）。最后一件在跑的
+   * 工作结束时也通知宿主（PIN-07）：辅助工作跑完不改运行状态，没有忙→闲可以触发修剪。
+   */
   private recompute(): void {
+    if (this.initializing) return
+    const running = this.running
+    if (this.wasRunning && !running) {
+      queueMicrotask(() => {
+        if (!this.closedFlag) this.deps.onSettled?.()
+      })
+    }
+    this.wasRunning = running
     const next = this.computeState()
     if (next === this.state) return
     const previous = this.state
@@ -508,7 +642,10 @@ export class DurableSessionImpl implements DurableSession {
     this.recompute()
   }
 
-  /** 提交发布监听（同步，在 Session 串行线上）：维护活着的任务与当前对话指针 */
+  /**
+   * 提交发布监听（同步，在 Session 串行线上）：维护活着的任务、当前对话指针、锁缓存，以及 agent 目录
+   * （身份与辅助分类）。一次发布里的变化次序不定，所以分类变化与任务变化都只在末尾统一重算一次。
+   */
   private observe(publication: CommitPublication): void {
     if (this.closedFlag) return
     let changed = false
@@ -519,9 +656,22 @@ export class DurableSessionImpl implements DurableSession {
           if (this.live.delete(record.id)) changed = true
           continue
         }
-        this.live.set(record.id, { conversationId: record.conversationId, kind: record.kind })
+        this.live.set(record.id, liveTaskOf(record))
         // 只有开启了的调度器会把任务置为 running（打开时残留的 running 会被改回 pending）
         if (record.state.status === 'running') this.schedulerRunning = true
+        changed = true
+      } else if (change.type === 'conversation') {
+        this.directory.observeConversation(change.value)
+        changed = true
+      } else if (
+        change.type === 'document' &&
+        change.record.kind === AgentStateDoc.definition.kind &&
+        change.conversationId !== undefined
+      ) {
+        // 身份 / 辅助分类跟着存储变（同步）。`document.copy`（fork 的 asOf 副本）不带值，不在这里处理 ——
+        // fork 派生 agent 的对话不是产品路径（PIN-11），fork 出来的对话按根认人
+        this.directory.observeAgentState(change.conversationId, change.value)
+        this.scanTouched?.add(change.conversationId)
         changed = true
       } else if (
         change.type === 'document' &&
