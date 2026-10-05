@@ -139,7 +139,7 @@ vi.mock('../../frontend/core/ChatFrontendRegistry', () => ({
 }))
 vi.mock('../userInputBroker', () => ({ registerUserInputParticipant: vi.fn() }))
 vi.mock('../artifacts/store', () => ({ deleteSessionArtifacts: vi.fn() }))
-vi.mock('../sandbox', () => ({ cleanupSession: vi.fn(), unpinSession: vi.fn() }))
+vi.mock('../sandbox', () => ({ cleanupSession: vi.fn() }))
 vi.mock('../../i18n', () => ({ t: (key: string) => key }))
 vi.mock('../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {}, debug: () => {} })

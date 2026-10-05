@@ -93,7 +93,7 @@ function makeTool(shell: ShellName): BashTool | PowerShellTool {
  * 必须在工具构造（pin 会话）之后再问
  */
 function expectedSandbox(shell: ShellName): string {
-  return shell === 'bash' ? whyUnconfined(SID) : 'unsupported'
+  return shell === 'bash' ? whyUnconfined() : 'unsupported'
 }
 
 /** 一份 BgTaskInfo（只填回执 / 停止命令会读到的字段有意义） */

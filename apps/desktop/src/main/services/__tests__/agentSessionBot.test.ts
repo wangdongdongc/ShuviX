@@ -45,7 +45,6 @@ vi.mock('../sessionDayPromptService', () => ({ recordPromptAdmitted: vi.fn() }))
 vi.mock('../sessionRecords', () => ({
   sessionRecords: { pick: () => ({ title: 't' }), isEphemeral: () => false }
 }))
-vi.mock('../sandbox', () => ({ unpinSession: vi.fn() }))
 vi.mock('../../frontend/core/ChatFrontendRegistry', () => ({
   chatFrontendRegistry: { broadcast: vi.fn() }
 }))

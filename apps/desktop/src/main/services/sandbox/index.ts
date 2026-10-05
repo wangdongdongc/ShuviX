@@ -10,9 +10,10 @@
  * 「未圈住」一律退回今天的「命令逐条询问」，绝不变成「不套沙箱又不问」：没有后端、开关关闭、
  * 探测失败（例如 ShuviX 自己跑在别的沙箱里）、会话的工作区或授权根不适合套（见 spec.ts）。
  *
- * **按会话固定**：bash 工具构造时 {@link pinSession} 记下「本会话是否启用」，planFor 与策略变量
- * 都读这个固定值，运行时销毁时 {@link unpinSession}。否则会话中途切开关，同一个 runtime 里
- * 工具参数说有 `dangerouslyDisableSandbox`、说明里写着受限，实际执行却不受限（或反过来）。
+ * **按会话固定**：创建 agent（上锁）时 agentHost 读一次 {@link sandboxGloballyActive}，记进锁记录；
+ * bash 工具构造时经 `ToolContext.sandboxed` 拿到这个固定值（锁熬得过重启，钉子也跟着它）。否则会话
+ * 中途切开关，同一个 agent 的工具参数说有 `dangerouslyDisableSandbox`、说明里写着受限，实际执行却
+ * 不受限（或反过来）。本模块不再按会话登记钉子。
  */
 import { mkdirSync, lstatSync, chmodSync, realpathSync, rmSync } from 'fs'
 import { homedir } from 'os'
@@ -205,40 +206,11 @@ function reasonNow(): UnpinnedReason {
 /**
  * 一个没套沙箱的 bash 工具实例为什么没套（命令客体的 `unconfinedReason`，给审查员与策略看）：
  * 这台机器没有后端 → unsupported；设置关着 → disabled；否则就是探测没通过 → unavailable。
- * 会话固定成不套时取固定那一刻的原因 —— 之后用户打开了沙箱，这条会话的命令仍是因为「当时关着」
- * 才没套，不该改口成 unavailable。**不触发探测**：这是每条命令都会走的路径，不该为一句说明去起进程。
+ * 取的是**此刻**的原因（钉子在锁记录里，不记当时为什么没套）。**不触发探测**：这是每条命令都会走的
+ * 路径，不该为一句说明去起进程。
  */
-export function whyUnconfined(sessionId: string): UnpinnedReason {
-  return pinReasons.get(sessionId) ?? reasonNow()
-}
-
-// ─── 按会话固定 ────────────────────────────────────────
-
-const pins = new Map<string, boolean>()
-/** 固定成不套的会话，固定那一刻的原因 */
-const pinReasons = new Map<string, UnpinnedReason>()
-
-/**
- * 第一次记下「本会话此刻是否启用沙箱」，之后都拿到同一个答案。
- *
- * pi-durable 之后 bash 不再调它：钉子记在会话的锁记录里，构造时经 `ToolContext.sandboxed` 交进来
- * （agentHost）。留着是给还在调 unpinSession 的旧生命周期接线。TODO(pi-durable p1): P1-13 删掉
- * pinSession / unpinSession 与按会话的钉子表。
- */
-export function pinSession(sessionId: string): boolean {
-  let value = pins.get(sessionId)
-  if (value === undefined) {
-    value = sandboxGloballyActive()
-    pins.set(sessionId, value)
-    if (!value) pinReasons.set(sessionId, reasonNow())
-  }
-  return value
-}
-
-/** 会话 runtime 失效 / 销毁时调用：下一次创建按当时的开关重新决定 */
-export function unpinSession(sessionId: string): void {
-  pins.delete(sessionId)
-  pinReasons.delete(sessionId)
+export function whyUnconfined(): UnpinnedReason {
+  return reasonNow()
 }
 
 // ─── 会话规格 ──────────────────────────────────────────
@@ -311,8 +283,8 @@ export interface PlanRequest {
  * 一条命令的执行计划；null = 这条命令不套沙箱（调用方据此上报 `sandboxed: false`，
  * ask-on-command 照常询问）。
  *
- * 只有**被固定为沙箱模式的工具实例**会来要计划（见 shellCommand），所以这里不再查会话的 pin：
- * 运行时失效后 pin 已清，但还在收尾的旧工具实例的说明写的是「受限」，就该继续受限 ——
+ * 只有**被固定为沙箱模式的工具实例**会来要计划（见 shellCommand），所以这里不再看开关：
+ * 会话中途关了沙箱，还在用的旧工具实例的说明写的是「受限」，就该继续受限 ——
  * 而不是悄悄变成逐条询问、与它自己的说明对不上。
  */
 export function planFor(request: PlanRequest): SandboxPlan | null {
@@ -344,7 +316,6 @@ export function planFor(request: PlanRequest): SandboxPlan | null {
 
 /** 会话删除时清掉它的临时目录 */
 export function cleanupSession(sessionId: string): void {
-  unpinSession(sessionId)
   if (!isSafeSessionId(sessionId) || !getBackend()) return
   try {
     rmSync(join(tmpRootPath(), sessionTmpName(sessionId)), { recursive: true, force: true })
