@@ -10,6 +10,7 @@
  *           与会话里的 `(sid)` 都一样；
  *   P2-05-39 派生 agent 的三个面板 IPC 按 agentId 交给路由：追问 fire-and-forget、中断 / 销毁等路由做完，
  *           路由的拒绝都只记日志（PIN-17）。
+ *   P3-13-19 `agentMonitor:list` 把服务的结果原样交回（每行都是纯 JSON）。
  *   P3-06-31 `agent:getInfo` 在 `createElectronContext(sessionId)` 的请求上下文里把 `(sessionId, options)` 原样交给
  *           网关；网关的 null 原样交回。
  *
@@ -74,6 +75,8 @@ vi.mock('../../services/agentMonitorService', () => ({
   listAgentRuntimes: vi.fn(async () => [])
 }))
 
+import type { AgentMonitorEntry } from '@shuvix/chat-protocol/types/agentMonitor'
+import { listAgentRuntimes } from '../../services/agentMonitorService'
 import { registerAgentHandlers } from '../agentHandlers'
 
 registerAgentHandlers()
@@ -283,5 +286,54 @@ describe('P2-05-39 派生 agent 面板 IPC 按 agentId 交给路由', () => {
     expect(state.gateway.destroyAgent).not.toHaveBeenCalled()
     expect(state.gateway.listTools).not.toHaveBeenCalled()
     expect(state.contexts).toEqual([])
+  })
+})
+
+describe('P3-13-19 agentMonitor:list', () => {
+  it('P3-13-19 returns the service result unchanged; every row survives structuredClone and a JSON round trip', async () => {
+    const entry: AgentMonitorEntry = {
+      agentId: SID,
+      kind: 'root',
+      rootSessionId: SID,
+      depth: 0,
+      profileName: 'work',
+      displayName: 'Work',
+      phase: 'interrupted',
+      startedAt: 1,
+      lastActivityAt: 2,
+      queue: { steer: 1, followUp: 2 },
+      model: { provider: 'faux', id: 'faux-1', contextWindow: 1000 },
+      thinkingLevel: 'low',
+      toolCount: 3,
+      contextTokens: 40,
+      cache: {
+        input: 10,
+        cacheRead: 5,
+        cacheWrite: 0,
+        reported: true,
+        last: { input: 1, cacheRead: 0, cacheWrite: 0 }
+      },
+      cost: { total: 0.25 },
+      sessionCost: 0.5,
+      rootSessionTitle: 'T'
+    }
+    const spawned: AgentMonitorEntry = {
+      ...entry,
+      agentId: 'sub-1',
+      kind: 'spawned',
+      parentAgentId: SID,
+      depth: 1,
+      dispatch: 'hook',
+      phase: 'turn',
+      activeToolName: 'read'
+    }
+    const result = [entry, spawned]
+    vi.mocked(listAgentRuntimes).mockResolvedValueOnce(result)
+    const listed = (await invoke('agentMonitor:list')) as AgentMonitorEntry[]
+    expect(listed).toBe(result)
+    for (const row of listed) {
+      expect(structuredClone(row)).toEqual(row)
+      expect(JSON.parse(JSON.stringify(row))).toEqual(row)
+    }
   })
 })
