@@ -50,7 +50,6 @@ export {
   type LockModelResolution,
   type ModelSelection
 } from './models/lockModel'
-export { resolveInitialThinkingLevel } from './thinkingLevel'
 export { isAssistantMessage, isUserMessage, isToolResultMessage } from './messageGuards'
 // 工具结果的界面文字化（实时广播与重开会话同一份）
 export { toolResultText, imagePlaceholder } from './toolResultText'
@@ -515,18 +514,15 @@ export {
   type CreatedAgent,
   type ToolResolveRequest
 } from './agentProfile/createAgent'
-// agent 规格的纯派生（初始模型 / 思考档位 / 工具名单 / 系统提示词 / root·spawned 差异）
+// agent 规格的纯派生（初始模型 / 思考档位 / 工具名单的 root·spawned 决策表）
 export {
   deriveAgentSpec,
-  assembleSystemPrompt,
   normalizeToolNames,
   resolveInitialModel,
   resolveThinkingLevel,
-  runtimeDecisions,
   type AgentSpec,
   type AgentSpecHost,
-  type AgentSpecParams,
-  type AgentRuntimeDecisions
+  type AgentSpecParams
 } from './durable/agentSpec'
 export {
   fenceInstructionFile,
@@ -650,7 +646,7 @@ export {
   type NoticeData,
   type SessionState
 } from './durable/docs'
-export { backgroundContext, contextWithSignal, isClosedError } from './durable/context'
+export { backgroundContext, isClosedError } from './durable/context'
 // 历史 thinking 剥离（纯函数；pi-durable 切换后暂未接线，见文件头）
 export {
   elideHistoricalThinking,

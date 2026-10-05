@@ -33,7 +33,6 @@ const SPAWN: SpawnContext = {
 function makeHost(): AgentHostAdapter & { resolveTools: ReturnType<typeof vi.fn> } {
   return {
     resolveTools: vi.fn().mockResolvedValue([]),
-    promptVars: () => ({ persona: 'PERSONA' }),
     eventSink: { broadcast: vi.fn(), hasUserInputCapability: () => true }
   }
 }

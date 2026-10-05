@@ -679,7 +679,6 @@ function buildRunner(
   const host: AgentHostAdapter = {
     // 审查员不声明工具：请求里只有结果契约的 next（宿主经 extraTools 交进来）
     resolveTools: (req) => [...(req.extraTools ?? [])],
-    promptVars: () => ({}),
     eventSink: { broadcast: (event) => events.push(event), hasUserInputCapability: () => false }
   }
   const manager = createSubAgentManager({

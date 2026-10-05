@@ -539,7 +539,7 @@ export function resolveProfileModelSpec(spec: string): SubAgentModelConfig | nul
 
 /**
  * 派生 agent 的创建入口（AgentManager 经它派发）。根 agent 由 durable 会话自己创建（锁，P1-09），
- * 这里不再有根路径的适配面；`createAgent` 先照常派生规格（变量表与注入解析跑一遍），然后抛
+ * 这里不再有根路径的适配面；`createAgent` 先照常派生规格（校验入参、解析档案模型），然后抛
  * `PhasePendingError`（spawned：'spawned agents', 2）。工具解析因此永远走不到 —— 它在 phase 2
  * 换成 ToolHost 的按 agent 解析（kind 'spawned'）。
  * TODO(pi-durable p2): 派生 agent 落在 durable 子对话上（工具走 createDesktopToolHost）。
@@ -548,12 +548,7 @@ export const agentFactory = createAgentFactory({
   resolveTools: () => {
     throw new PhasePendingError('spawned agents', 2)
   },
-  promptVars: desktopPromptVars,
   resolveProfileModel: resolveProfileModelSpec,
   eventSink: electronEventSink,
-  logger: runtimeLogger,
-  resolveInstruction: desktopPromptHost.resolveInstruction,
-  resolveProjectPrompt: desktopPromptHost.resolveProjectPrompt,
-  resolveProjectMemory: desktopPromptHost.resolveProjectMemory,
-  resolveKnowledgeBases: desktopPromptHost.resolveKnowledgeBases
+  logger: runtimeLogger
 })
