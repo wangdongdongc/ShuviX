@@ -1,10 +1,10 @@
 /**
- * electronEventSink（agentRuntimeAdapters.ts）的一条旁路：每条 ChatEvent 除了发给聊天前端、通知决策器、
- * 日历入账，还要交给 Chrome 桥的 `observeChromeTabRun` —— 标签页会话一轮的起止就是那个浏览器的调试
+ * electronEventSink（agentRuntimeAdapters.ts）的一条旁路：每条 ChatEvent 除了发给聊天前端、通知决策器，
+ * 还要交给 Chrome 桥的 `observeChromeTabRun`（日历入账不再旁听事件流，P3-07 PIN-17） —— 标签页会话一轮的起止就是那个浏览器的调试
  * 租约（一轮跑完释放 Chrome 里的调试横幅）。租约**不经侧边栏**记：侧边栏关着、连接断过，一轮照样
  * 有始有终。
  *
- * 前三个出口换成 spy；`observeChromeTabRun` 是**穿透到真实现**的 spy（sessionDao 是一张
+ * 前两个出口换成 spy；`observeChromeTabRun` 是**穿透到真实现**的 spy（sessionDao 是一张
  * pickSettings 的内存表），所以同一条链路也验到了租约真的记在那个浏览器的状态上。
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -13,7 +13,6 @@ import type { ChatEvent } from '@shuvix/chat-protocol/events'
 const mocks = vi.hoisted(() => ({
   frontendBroadcast: vi.fn(),
   notify: vi.fn(),
-  record: vi.fn(),
   settings: new Map<string, Record<string, unknown>>(),
   pickSettings: vi.fn()
 }))
@@ -22,7 +21,6 @@ vi.mock('../../frontend/core', () => ({
   chatFrontendRegistry: { broadcast: mocks.frontendBroadcast, hasCapability: vi.fn(() => false) }
 }))
 vi.mock('../notificationService', () => ({ notifyOnChatEvent: mocks.notify }))
-vi.mock('../sessionDayPromptService', () => ({ recordFromUserMessageEvent: mocks.record }))
 vi.mock('../../i18n', () => ({ t: (key: string) => key }))
 vi.mock('../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {} })
@@ -42,7 +40,7 @@ import {
 import { ChromeBrowserState } from '../chromeBridge/browserState'
 
 beforeEach(() => {
-  for (const m of [mocks.frontendBroadcast, mocks.notify, mocks.record]) m.mockReset()
+  for (const m of [mocks.frontendBroadcast, mocks.notify]) m.mockReset()
   vi.mocked(observeChromeTabRun).mockClear()
   mocks.settings.clear()
   mocks.pickSettings.mockReset()
@@ -52,16 +50,16 @@ beforeEach(() => {
   })
 })
 
-describe('ES-1 每条事件都交给四个出口', () => {
+describe('ES-1 每条事件都交给三个出口', () => {
   it.each<ChatEvent>([
     { type: 'agent_start', sessionId: 's1' },
     { type: 'text_delta', sessionId: 's1', delta: 'x' },
     { type: 'user_message', sessionId: 's1', message: '{}' },
     { type: 'input_request_resolved', sessionId: 's1', requestId: 'r' },
     { type: 'agent_end', sessionId: 's1' }
-  ])('ES-1 $type → 前端、通知、日历、Chrome 租约各收到同一个事件一次', (event) => {
+  ])('ES-1 $type → 前端、通知、Chrome 租约各收到同一个事件一次', (event) => {
     electronEventSink.broadcast(event)
-    for (const spy of [mocks.frontendBroadcast, mocks.notify, mocks.record]) {
+    for (const spy of [mocks.frontendBroadcast, mocks.notify]) {
       expect(spy.mock.calls).toEqual([[event]])
       expect(spy.mock.calls[0][0]).toBe(event)
     }

@@ -1,6 +1,7 @@
 import {
   clearReviewState,
   clearSessionDecisions,
+  type AdmitOptions,
   type AdmitResult,
   type DrivenRun,
   type DrivenSendOptions,
@@ -21,7 +22,7 @@ import { createLogger } from '../logger'
 import type { AgentRuntimeInfo, ThinkingLevel } from '../types'
 import { clearSession as clearFileTimeSession } from '../utils/toolUtils/fileTime'
 import { hookService, hookTriggers } from './hookService'
-import { recordPromptAdmitted } from './sessionDayPromptService'
+import { recordUserEntry } from './sessionDayPromptService'
 import { getSessionHost } from './sessionHost'
 import { sessionRecords } from './sessionRecords'
 // 仅在方法体内调用：sessionService 也 import 本模块，ESM 活绑定下无初始化环
@@ -78,7 +79,9 @@ const facades = new WeakMap<DurableSession, AgentSession>()
  * 门面只留桌面自己的事：
  *  - hook 埋点：`session.prompt-accepted`（输入被受理那一刻，`onAdmitted`）与 `session.turn-completed`
  *    （受理过的发送 / `continue()` 落定之后；被拒的不发，自动续跑不发 —— PIN-19），payload 是会话事实；
- *  - 受理即入账活跃时间与日历（PIN-13）；
+ *  - 用户条目落下即入账活跃时间与日历（P3-07 PIN-15/16）：按 `pi.user` 条目 id（= 界面消息 id）记 ——
+ *    当场落下的在 `onAdmitted{entryId}`，排进队列的在 `onPlaced`（被撤回的从不记）；prompt / steer /
+ *    followUp 都记；
  *  - 发送失败报给界面（PIN-15；运行时不广播）；
  *  - 销毁 agent / 删除会话时的桌面清理：fileTime、（删除时）决策日志与审查状态、
  *    hook 派发出去的 run。ssh / MCP 等内置能力服务器的寿命归会话，由 sessionService.delete 经
@@ -125,14 +128,17 @@ export class AgentSession {
     const content: UserInput =
       images && images.length > 0 ? [{ type: 'text', text }, ...images] : text
     let admitted = false
+    const dayPrompt = this.dayPromptCallbacks()
     // 重新挂上（已有的 requestId）时运行时不调受理回调（P2-09 PIN-02）：埋点 / 入账都不会重复
     const result = await this.durable.submitUser(content, {
       ...(display === undefined ? {} : { display: display as unknown as JsonObject }),
       ...(drive === undefined ? {} : { requestId: drive.requestId, driven: drive.driven }),
-      onAdmitted: () => {
+      onAdmitted: (info) => {
         admitted = true
+        dayPrompt.onAdmitted(info)
         this.onPromptAdmitted(text)
-      }
+      },
+      onPlaced: dayPrompt.onPlaced
     })
     // 轮结束埋点只给受理过的发送（不 await；payload 组装失败只记日志，绝不影响会话主流程）
     if (admitted) {
@@ -144,13 +150,13 @@ export class AgentSession {
 
   /** 运行中插话（空闲时起一轮）。被拒 → reject（调用方把文案报给界面） */
   async steer(text: string): Promise<void> {
-    const result = await this.durable.steer(text)
+    const result = await this.durable.steer(text, this.dayPromptCallbacks())
     if (result.error) throw new Error(admissionErrorText(result))
   }
 
   /** 本轮结束后接着说（空闲时起一轮）。被拒 → reject */
   async followUp(text: string): Promise<void> {
-    const result = await this.durable.followUp(text)
+    const result = await this.durable.followUp(text, this.dayPromptCallbacks())
     if (result.error) throw new Error(admissionErrorText(result))
   }
 
@@ -217,9 +223,9 @@ export class AgentSession {
     await this.durable.setThinkingLevel(level)
   }
 
-  /** 当前上下文对应的 UI 消息列表。TODO(pi-durable p3): durable 条目的投影 */
+  /** 当前上下文对应的 UI 消息列表：界面投影的 `messages`（P3-07，与 `messageService.listBySession` 同一份） */
   async listChatMessages(): Promise<ChatMessage[]> {
-    return []
+    return (await this.durable.viewSnapshot()).messages
   }
 
   /**
@@ -283,13 +289,29 @@ export class AgentSession {
 
   // ─── 业务埋点（hook 触发；payload = 会话此刻的事实，与任何具体 hook 无关） ───
 
-  /** 受理那一刻：活跃时间与日历入账，再 fire prompt-accepted（fire 绝不抛出） */
-  private onPromptAdmitted(promptText: string): void {
-    try {
-      recordPromptAdmitted(this.sessionId, globalThis.crypto.randomUUID())
-    } catch (err) {
-      log.warn(`活跃时间入账失败 session=${this.sessionId}: ${err}`)
+  /**
+   * 一次发送的日历入账回调（P3-07 PIN-15/16）：用户条目当场落下（`onAdmitted{entryId}`）或排队之后被放下
+   * （`onPlaced`）时按条目 id 入账一次；没落下（排着队、被撤回）不记。同一次发送至多一行。
+   */
+  private dayPromptCallbacks(): Required<Pick<AdmitOptions, 'onAdmitted' | 'onPlaced'>> {
+    let recorded = false
+    const record = (entryId: number | undefined): void => {
+      if (entryId === undefined || recorded) return
+      recorded = true
+      try {
+        recordUserEntry(this.sessionId, entryId)
+      } catch (err) {
+        log.warn(`活跃时间入账失败 session=${this.sessionId}: ${err}`)
+      }
     }
+    return {
+      onAdmitted: (info) => record(info.entryId),
+      onPlaced: (info) => record(info.entryId)
+    }
+  }
+
+  /** 受理那一刻：fire prompt-accepted（fire 绝不抛出） */
+  private onPromptAdmitted(promptText: string): void {
     const title = sessionRecords.pick(this.sessionId, ['title'])?.title ?? ''
     hookTriggers.fire('session.prompt-accepted', {
       sessionId: this.sessionId,

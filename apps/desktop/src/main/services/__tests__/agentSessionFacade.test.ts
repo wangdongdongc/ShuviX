@@ -2,7 +2,8 @@
  * AgentSession —— DurableSession 之上的桌面门面（假 DurableSession，单元）。
  *
  *   D10-25 prompt 的映射：文本 / 图文 / 显示侧车；结果原样上交
- *   D10-26 session.prompt-accepted：受理那一刻（onAdmitted）恰发一次；被拒从不发
+ *   D10-26 session.prompt-accepted：受理那一刻（onAdmitted）恰发一次；被拒从不发；日历按 onAdmitted 的
+ *          entryId 入账（P3-07，不再是随机键）
  *   D10-27 session.turn-completed：受理过的发送落定之后发；被拒不发；facts 为空不发、抛错不影响结果
  *   D10-28 steer / followUp 委托；nextTurn 垫成 followUp；被拒 → 带原文的 reject
  *   D10-29 notify 只委托一次（门面没有自己的合并定时器）
@@ -18,7 +19,7 @@ const mocks = vi.hoisted(() => ({
   fire: vi.fn<(trigger: string, payload: Record<string, unknown>) => void>(),
   abortSessionRuns: vi.fn<(sessionId: string) => void>(),
   facts: vi.fn<(sessionId: string) => Promise<Record<string, unknown> | null>>(),
-  recordPromptAdmitted: vi.fn<(sessionId: string, key: string) => void>(),
+  recordUserEntry: vi.fn<(sessionId: string, entryId: number | string) => void>(),
   resolveAgentProfileName: vi.fn<(sessionId: string) => string>(),
   clearFileTime: vi.fn<(sessionId: string) => void>(),
   clearReviewState: vi.fn<(sessionId: string) => void>(),
@@ -44,7 +45,7 @@ vi.mock('../sessionTriggerFacts', () => ({
   buildTurnCompletedFacts: mocks.facts,
   isDefaultTitle: (title: string) => title === 'New chat'
 }))
-vi.mock('../sessionDayPromptService', () => ({ recordPromptAdmitted: mocks.recordPromptAdmitted }))
+vi.mock('../sessionDayPromptService', () => ({ recordUserEntry: mocks.recordUserEntry }))
 vi.mock('../sessionRecords', () => ({
   sessionRecords: { pick: () => ({ title: 'New chat' }) }
 }))
@@ -145,9 +146,8 @@ describe('D10-26 session.prompt-accepted', () => {
       isDefaultTitle: true,
       promptText: 'hello'
     })
-    // 受理即入账活跃时间（PIN-13）
-    expect(mocks.recordPromptAdmitted).toHaveBeenCalledTimes(1)
-    expect(mocks.recordPromptAdmitted.mock.calls[0]![0]).toBe(SID)
+    // 受理即按当场落下的用户条目入账（P3-07 PIN-15：onAdmitted 的 entryId，不是随机键）
+    expect(mocks.recordUserEntry.mock.calls).toEqual([[SID, 1]])
     submitGate.release()
     expect(await pending).toEqual({})
     expect(fired('session.prompt-accepted')).toHaveLength(1)
@@ -172,7 +172,7 @@ describe('D10-26 session.prompt-accepted', () => {
     await session.prompt('x')
     await flush()
     expect(fired('session.prompt-accepted')).toEqual([])
-    expect(mocks.recordPromptAdmitted).not.toHaveBeenCalled()
+    expect(mocks.recordUserEntry).not.toHaveBeenCalled()
   })
 })
 

@@ -99,7 +99,7 @@ vi.mock('../sessionTriggerFacts', () => ({
   buildTurnCompletedFacts: vi.fn(async () => null),
   isDefaultTitle: vi.fn()
 }))
-vi.mock('../sessionDayPromptService', () => ({ recordPromptAdmitted: vi.fn() }))
+vi.mock('../sessionDayPromptService', () => ({ recordUserEntry: vi.fn() }))
 vi.mock('../../utils/toolUtils/fileTime', () => ({
   clearSession: mocks.clearFileTimeSession,
   recordRead: vi.fn()

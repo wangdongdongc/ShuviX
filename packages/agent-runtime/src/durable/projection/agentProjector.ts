@@ -22,8 +22,8 @@ import {
   ProjectorCore,
   type ProjectorCoreOptions,
   type ProjectorHandle,
-  type ProjectorHost,
-  type ProjectorMount
+  type MountFrame,
+  type ProjectorHost
 } from './sessionProjector'
 
 /** 一个派生 agent 对话的界面投影（`DurableSession.agentProjector(agentId)`） */
@@ -68,7 +68,7 @@ export class AgentProjectorImpl extends ProjectorCore<AgentView> implements Agen
     this.startMount(mount)
   }
 
-  protected project(mount: ProjectorMount, runState: RunViewState): AgentView {
+  protected project(mount: MountFrame, runState: RunViewState): AgentView {
     const { entries, docs } = mount.value
     return projectAgentView(
       { agentId: this.agentId, sessionId: this.sessionId, conversationId: mount.conversationId },
