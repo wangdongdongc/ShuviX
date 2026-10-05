@@ -111,7 +111,10 @@ describe('AG-4 / D10-33 —— 门面从不授予「已读」', () => {
   })
 
   it('D10-33 静态：agentSession.ts 不调 recordRead、不引 botService', () => {
-    const source = readFileSync(fileURLToPath(new URL('../agentSession.ts', import.meta.url)), 'utf-8')
+    const source = readFileSync(
+      fileURLToPath(new URL('../agentSession.ts', import.meta.url)),
+      'utf-8'
+    )
     expect(source).not.toMatch(/recordRead\s*\(/)
     expect(source).not.toMatch(/import\s*\{[^}]*\brecordRead\b/)
     expect(source).not.toMatch(/from '\.\/botService'/)

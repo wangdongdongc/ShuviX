@@ -80,7 +80,9 @@ function retainedView(storage: MemoryStorage): Storage {
     get(target, prop) {
       if (prop === 'close') return async () => {}
       const value: unknown = Reflect.get(target, prop, target)
-      return typeof value === 'function' ? (value as (...a: unknown[]) => unknown).bind(target) : value
+      return typeof value === 'function'
+        ? (value as (...a: unknown[]) => unknown).bind(target)
+        : value
     }
   })
 }
@@ -124,7 +126,8 @@ export function storageRefusalOf(sessionId: string): SessionStorageRefusal | und
  */
 export async function openSessionStorage(sessionId: string): Promise<Storage> {
   const route = storageRoute(sessionId)
-  if (route.kind === 'unavailable') throw new SessionStorageUnavailableError(sessionId, route.reason)
+  if (route.kind === 'unavailable')
+    throw new SessionStorageUnavailableError(sessionId, route.reason)
   if (route.kind === 'memory') {
     let storage = memoryStorages.get(sessionId)
     if (!storage) {

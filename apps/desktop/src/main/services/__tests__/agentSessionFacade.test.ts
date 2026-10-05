@@ -182,21 +182,24 @@ describe('D10-27 session.turn-completed', () => {
   it.each([
     ['done', {}],
     ['model_error', { error: 'boom', code: 'model_error' }]
-  ] as const)('D10-27 %s：落定之后发，payload = {sessionId, profileName, ...facts}，排在 prompt-accepted 之后', async (_label, result) => {
-    const submitGate = gate()
-    const { durable, session } = facade({ submitGate })
-    durable.submitResults = [{ ...result }]
-    const pending = session.prompt('hi')
-    await vi.waitFor(() => expect(fired('session.prompt-accepted')).toHaveLength(1))
-    expect(fired('session.turn-completed')).toEqual([])
-    submitGate.release()
-    await pending
-    await flush()
-    expect(fired('session.turn-completed')).toEqual([
-      { sessionId: SID, profileName: 'chat', title: 'New chat', turns: 1 }
-    ])
-    expect(mocks.calls).toEqual(['fire:session.prompt-accepted', 'fire:session.turn-completed'])
-  })
+  ] as const)(
+    'D10-27 %s：落定之后发，payload = {sessionId, profileName, ...facts}，排在 prompt-accepted 之后',
+    async (_label, result) => {
+      const submitGate = gate()
+      const { durable, session } = facade({ submitGate })
+      durable.submitResults = [{ ...result }]
+      const pending = session.prompt('hi')
+      await vi.waitFor(() => expect(fired('session.prompt-accepted')).toHaveLength(1))
+      expect(fired('session.turn-completed')).toEqual([])
+      submitGate.release()
+      await pending
+      await flush()
+      expect(fired('session.turn-completed')).toEqual([
+        { sessionId: SID, profileName: 'chat', title: 'New chat', turns: 1 }
+      ])
+      expect(mocks.calls).toEqual(['fire:session.prompt-accepted', 'fire:session.turn-completed'])
+    }
+  )
 
   it('D10-27 被拒的发送不发', async () => {
     const { durable, session } = facade()
@@ -218,7 +221,9 @@ describe('D10-27 session.turn-completed', () => {
     expect(await session.prompt('b')).toEqual({})
     await flush()
     expect(fired('session.turn-completed')).toEqual([])
-    expect(mocks.warn.mock.calls.some(([line]) => String(line).includes('facts exploded'))).toBe(true)
+    expect(mocks.warn.mock.calls.some(([line]) => String(line).includes('facts exploded'))).toBe(
+      true
+    )
   })
 
   it('D10-27 continue() 落定之后同样发（PIN-19），结果原样上交', async () => {

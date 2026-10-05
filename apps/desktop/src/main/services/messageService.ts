@@ -58,7 +58,8 @@ export class MessageService {
     await getSessionHost().delete(sessionId)
     if (legacy) sessionRecords.updateStorageKind(sessionId, CURRENT_SESSION_STORAGE_KIND)
     writeSessionMirror(sessionId, { agentLocked: false, runState: 'idle' })
-    if (wasLocked) chatFrontendRegistry.broadcast({ type: 'agent_closing', sessionId, closing: false })
+    if (wasLocked)
+      chatFrontendRegistry.broadcast({ type: 'agent_closing', sessionId, closing: false })
   }
 
   // ─── 回退 / 截断 ────────────────────────────────────────

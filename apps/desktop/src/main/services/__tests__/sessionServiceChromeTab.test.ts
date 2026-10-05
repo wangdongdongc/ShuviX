@@ -266,7 +266,12 @@ describe('SCT-4 标签页会话不能同时是 bot 会话 / 项目记忆笔记�
 describe('SCT-5 标签页会话跑起来：tab 基座、临时工作区、没有会话勾选', () => {
   it('SCT-5 resolveAgentConfig 给出档案 tab、临时目录、没有会话勾选', async () => {
     const { id } = sessionService.create({ title: 'Chrome', chromeTab: BINDING })
-    mocks.getProfile.mockImplementation((name: string) => ({ name, tools: [], instructionFiles: [], projectAwareness: false }))
+    mocks.getProfile.mockImplementation((name: string) => ({
+      name,
+      tools: [],
+      instructionFiles: [],
+      projectAwareness: false
+    }))
     const config = await sessionService.resolveAgentConfig(id)
     expect(config.profile.name).toBe('tab')
     expect(config.cwd).toBe(`/nonexistent/shuvix-unit/tmp/${id}`)

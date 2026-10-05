@@ -104,6 +104,8 @@ describe('D10-08 动态加载与过滤器的先后', () => {
     expect(source).not.toMatch(/^import[^\n]*['"]node:sqlite['"]/m)
     expect(source).not.toMatch(/^import[^\n]*storage\/sqlite\/node['"]/m)
     expect(source).not.toMatch(/from\s+['"]@earendil-works\/pi-durable\/storage\/sqlite\/node['"]/)
-    expect(source).toMatch(/await import\(\s*['"]@earendil-works\/pi-durable\/storage\/sqlite\/node['"]\s*\)/)
+    expect(source).toMatch(
+      /await import\(\s*['"]@earendil-works\/pi-durable\/storage\/sqlite\/node['"]\s*\)/
+    )
   })
 })

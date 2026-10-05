@@ -79,7 +79,14 @@ vi.mock('../mcpService', () => ({ mcpService: { closeSession: vi.fn() } }))
 vi.mock('../toolAggregator', () => ({ filterAvailableTools: mocks.filterAvailableTools }))
 vi.mock('../../utils/toolUtils/allowList', () => ({ buildAllowEntry: vi.fn() }))
 vi.mock('../agentService', () => ({
-  agentService: { getProfile: vi.fn((name: string) => ({ name, tools: [], instructionFiles: [], projectAwareness: false })) }
+  agentService: {
+    getProfile: vi.fn((name: string) => ({
+      name,
+      tools: [],
+      instructionFiles: [],
+      projectAwareness: false
+    }))
+  }
 }))
 // 会话运行时换成假宿主 / 假门面（真模块的依赖图带模型注册表、事件适配器）
 vi.mock('../sessionHost', async () =>

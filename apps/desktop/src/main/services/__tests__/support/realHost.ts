@@ -13,7 +13,10 @@ import {
   type SessionHostDeps,
   type ToolHost
 } from '@shuvix/agent-runtime'
-import { fauxKit, type FauxKit } from '../../../../../../../packages/agent-runtime/src/durable/__tests__/support/faux'
+import {
+  fauxKit,
+  type FauxKit
+} from '../../../../../../../packages/agent-runtime/src/durable/__tests__/support/faux'
 import {
   defaultAgentConfig,
   fauxCatalog,

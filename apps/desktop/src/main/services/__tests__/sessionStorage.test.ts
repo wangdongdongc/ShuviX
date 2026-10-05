@@ -104,8 +104,7 @@ function realHost(): ReturnType<typeof makeRealHost> {
   return made
 }
 
-const touch = (name: string, dir = holder.sessionsDir): void =>
-  writeFileSync(join(dir, name), 'x')
+const touch = (name: string, dir = holder.sessionsDir): void => writeFileSync(join(dir, name), 'x')
 
 /** 一份最小的合法 v3 转写 */
 function legacyJsonl(id: string): string {
@@ -341,7 +340,10 @@ describe('D10-06 打不开的会话', () => {
   })
 
   it.each([
-    ['unknown_kind', (): void => sessionRecords.insert(session('k', { storageKind: 'future-x' as never }))],
+    [
+      'unknown_kind',
+      (): void => sessionRecords.insert(session('k', { storageKind: 'future-x' as never }))
+    ],
     ['no_row', (): void => {}],
     [
       'retired_ephemeral',

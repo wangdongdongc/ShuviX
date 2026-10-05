@@ -87,7 +87,8 @@ export class FakeDurableSession implements DurableSession {
   }
 
   private use(): void {
-    if (this.lock === undefined && this.lockOnFirstUse !== undefined) this.lock = this.lockOnFirstUse
+    if (this.lock === undefined && this.lockOnFirstUse !== undefined)
+      this.lock = this.lockOnFirstUse
   }
 
   async currentConversation(): Promise<never> {

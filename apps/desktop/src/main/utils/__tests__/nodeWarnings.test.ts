@@ -64,14 +64,14 @@ describe('D10-10 别的警告原样送达', () => {
     process.emitWarning('plain warning')
     process.emitWarning('SQLite option x is deprecated', 'DeprecationWarning')
     await tick()
-    expect(
-      received.map((w) => [w.name, w.message, (w as Error & { code?: string }).code])
-    ).toEqual([
-      ['ExperimentalWarning', 'The Fetch API is an experimental feature', undefined],
-      ['DeprecationWarning', 'Buffer() is deprecated', 'DEP0005'],
-      ['Warning', 'plain warning', undefined],
-      ['DeprecationWarning', 'SQLite option x is deprecated', undefined]
-    ])
+    expect(received.map((w) => [w.name, w.message, (w as Error & { code?: string }).code])).toEqual(
+      [
+        ['ExperimentalWarning', 'The Fetch API is an experimental feature', undefined],
+        ['DeprecationWarning', 'Buffer() is deprecated', 'DEP0005'],
+        ['Warning', 'plain warning', undefined],
+        ['DeprecationWarning', 'SQLite option x is deprecated', undefined]
+      ]
+    )
   })
 })
 

@@ -134,7 +134,12 @@ vi.mock('../../utils/toolUtils/allowList', () => ({
 }))
 vi.mock('../agentService', () => ({
   agentService: {
-    getProfile: vi.fn((name: string) => ({ name, tools: [], instructionFiles: [], projectAwareness: false })),
+    getProfile: vi.fn((name: string) => ({
+      name,
+      tools: [],
+      instructionFiles: [],
+      projectAwareness: false
+    })),
     isSessionProfile: vi.fn()
   }
 }))

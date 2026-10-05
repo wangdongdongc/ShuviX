@@ -50,7 +50,11 @@ vi.mock('../../dao/database', () => {
   return { BaseDao, databaseManager: { getDb: () => holder.db } }
 })
 vi.mock('../../dao/providerDao', () => ({
-  providerDao: { findModelsByProvider: () => [], findEnabled: () => [], findEnabledModels: () => [] }
+  providerDao: {
+    findModelsByProvider: () => [],
+    findEnabled: () => [],
+    findEnabledModels: () => []
+  }
 }))
 vi.mock('../../dao/settingsDao', () => ({ settingsDao: { findByKey: () => undefined } }))
 vi.mock('../../dao/projectDao', () => ({ projectDao: { pick: () => undefined } }))
@@ -338,34 +342,37 @@ describe('D10-40 删除次序', () => {
   it.each([
     ['开着的会话', true],
     ['从没打开过的会话', false]
-  ])('D10-40 %s：先删子会话 → 杀后台任务 → 等宿主 delete（挂着时行与结果目录都还在）→ 其余', async (_label, open) => {
-    insert('P')
-    insert('c1', { parentId: 'P' })
-    if (open) fakeHost.put('P')
-    mkdirSync(join(holder.toolResults, 'P'))
-    mocks.killBySession.mockImplementation((id) => void mocks.calls.push(`kill:${id}`))
-    const deleteGate = gate()
-    const remove = fakeHost.delete.bind(fakeHost)
-    fakeHost.delete = async (id) => {
-      mocks.calls.push(`delete:${id}`)
-      if (id === 'P') await deleteGate.promise
-      await remove(id)
+  ])(
+    'D10-40 %s：先删子会话 → 杀后台任务 → 等宿主 delete（挂着时行与结果目录都还在）→ 其余',
+    async (_label, open) => {
+      insert('P')
+      insert('c1', { parentId: 'P' })
+      if (open) fakeHost.put('P')
+      mkdirSync(join(holder.toolResults, 'P'))
+      mocks.killBySession.mockImplementation((id) => void mocks.calls.push(`kill:${id}`))
+      const deleteGate = gate()
+      const remove = fakeHost.delete.bind(fakeHost)
+      fakeHost.delete = async (id) => {
+        mocks.calls.push(`delete:${id}`)
+        if (id === 'P') await deleteGate.promise
+        await remove(id)
+      }
+
+      const pending = sessionService.delete('P')
+      await vi.waitFor(() => expect(mocks.calls).toContain('delete:P'))
+      expect(mocks.calls).toEqual(['kill:c1', 'delete:c1', 'kill:P', 'delete:P'])
+      expect(sessionRecords.findById('P')).toBeDefined()
+      expect(existsSync(join(holder.toolResults, 'P'))).toBe(true)
+      // 会话没开着也照样中止 hook run（清理不以「开着」为前提）
+      expect(mocks.abortSessionRuns.mock.calls.map(([id]) => id)).toEqual(['c1', 'P'])
+
+      deleteGate.release()
+      await pending
+      expect(sessionRecords.findById('P')).toBeUndefined()
+      expect(existsSync(join(holder.toolResults, 'P'))).toBe(false)
+      expect(mocks.closeSession.mock.calls.map(([id]) => id)).toEqual(['c1', 'P'])
     }
-
-    const pending = sessionService.delete('P')
-    await vi.waitFor(() => expect(mocks.calls).toContain('delete:P'))
-    expect(mocks.calls).toEqual(['kill:c1', 'delete:c1', 'kill:P', 'delete:P'])
-    expect(sessionRecords.findById('P')).toBeDefined()
-    expect(existsSync(join(holder.toolResults, 'P'))).toBe(true)
-    // 会话没开着也照样中止 hook run（清理不以「开着」为前提）
-    expect(mocks.abortSessionRuns.mock.calls.map(([id]) => id)).toEqual(['c1', 'P'])
-
-    deleteGate.release()
-    await pending
-    expect(sessionRecords.findById('P')).toBeUndefined()
-    expect(existsSync(join(holder.toolResults, 'P'))).toBe(false)
-    expect(mocks.closeSession.mock.calls.map(([id]) => id)).toEqual(['c1', 'P'])
-  })
+  )
 })
 
 describe('D10-42 后台通知（PIN-05）', () => {
@@ -431,7 +438,9 @@ describe('D10-43 询问参与方', () => {
 
 describe('D10-44 新子会话上钉档案', () => {
   it('D10-44 invalidateAgent 不打开宿主、不建存储；种子落进 settings.model / thinkingLevel', async () => {
-    insert('P', { settings: { enabledTools: [], model: { provider: 'row', modelId: 'm' }, thinkingLevel: 'low' } })
+    insert('P', {
+      settings: { enabledTools: [], model: { provider: 'row', modelId: 'm' }, thinkingLevel: 'low' }
+    })
     const child = sessionService.create({ parentId: 'P' })
     mocks.getProfile.mockImplementation((name) =>
       name === 'coding' ? { ...profile('coding'), thinkingLevel: 'high' } : profile(name)
@@ -526,7 +535,11 @@ describe('D10-46 gateway.prompt 模型被拒（PIN-15）', () => {
 describe('D10-47 gateway.prompt 打不开的会话', () => {
   it.each([
     ['没有这一行', (): void => {}, 'Agent 未初始化'],
-    ['旧格式（只读）', (): void => void insert('s1', { storageKind: 'harness-v3-jsonl' }), 'chat.legacySessionReadOnly'],
+    [
+      '旧格式（只读）',
+      (): void => void insert('s1', { storageKind: 'harness-v3-jsonl' }),
+      'chat.legacySessionReadOnly'
+    ],
     [
       '宿主已封存',
       (): void => {
@@ -744,9 +757,13 @@ describe('D10-61 回退 / 截断', () => {
   it('D10-61 新格式 → PhasePendingError(3)；旧格式 → undefined / false', async () => {
     insert('s1')
     insert('old', { storageKind: 'harness-v3-jsonl' })
-    await expect(messageService.resolveRollbackTarget('s1', 'm')).rejects.toBeInstanceOf(PhasePendingError)
+    await expect(messageService.resolveRollbackTarget('s1', 'm')).rejects.toBeInstanceOf(
+      PhasePendingError
+    )
     await expect(messageService.applyRollback('s1', null)).rejects.toBeInstanceOf(PhasePendingError)
-    await expect(messageService.truncateAfterMessage('s1', 'm')).rejects.toBeInstanceOf(PhasePendingError)
+    await expect(messageService.truncateAfterMessage('s1', 'm')).rejects.toBeInstanceOf(
+      PhasePendingError
+    )
     expect(await messageService.resolveRollbackTarget('old', 'm')).toBeUndefined()
     expect(await messageService.rollbackToMessage('old', 'm')).toBe(false)
     expect(await messageService.truncateAfterMessage('old', 'm')).toBe(false)

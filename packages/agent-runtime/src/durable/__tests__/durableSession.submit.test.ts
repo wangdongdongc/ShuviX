@@ -334,9 +334,9 @@ describe('submitUser', () => {
     const refused = await makeHost({ agentConfig: { profile: testProfile() } })
     const unconfigured = await refused.open()
     let noModelCalls = 0
-    expect(
-      await unconfigured.submitUser('u1', { onAdmitted: () => noModelCalls++ })
-    ).toMatchObject({ code: 'no_model' })
+    expect(await unconfigured.submitUser('u1', { onAdmitted: () => noModelCalls++ })).toMatchObject(
+      { code: 'no_model' }
+    )
     expect(noModelCalls).toBe(0)
 
     await t.host.close(session.sessionId)
