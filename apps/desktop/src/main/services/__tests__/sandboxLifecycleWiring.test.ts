@@ -1,31 +1,30 @@
 /**
  * 命令沙箱的生命周期接线（HG-2）—— sandbox 模块整个替身，只看「谁在什么时候调了它」。
  *
- * 契约：
- *   - 「本会话套不套沙箱」按运行时固定（pinSession）。运行时**失效**（回退重建 / 钉档案）或**销毁**
- *     时必须 unpinSession —— 否则下一个运行时沿用旧决定：设置里刚关掉的沙箱照样套着，或者刚打开的
- *     照样不套，而新工具的参数与说明却按新开关生成，两边对不上；
- *   - 解钉排在关停**之后**：还在收尾的旧 run 的工具说明写的是「受限」，关停完之前不该改口；
- *     关停失败（abort 抛错）也照样解钉 —— abortQuietly 只记日志，清理链路的其余步骤要走完；
- *   - 删会话（sessionService.delete）才清它的临时目录（cleanupSession）；回退重建不清 —— 会话还在，
+ * 契约（pi-durable 之后）：
+ *   - agent **销毁**（agent 芯片的 X / 钉档案 → `AgentSession.invalidate` → 运行时的 destroyAgent）与
+ *     **删会话**（`destroySessionRuntime` → SessionHost.delete）都调一次 unpinSession。命令沙箱的钉子如今
+ *     记在锁里（P1-11 起 BashTool 不再 pin），unpinSession 只是旧登记的收尾，所以这里**只**断言它按本会话
+ *     id 恰调一次，不断言它与 destroyAgent 的先后；
+ *   - 关停失败（destroyAgent / delete 抛错）也照样解钉 —— 只记日志，收尾链路要走完；
+ *   - 删会话（sessionService.delete）才清它的临时目录（cleanupSession）；销毁 agent 不清 —— 会话还在，
  *     它的 TMPDIR 里可能正放着后台命令的中间文件。子会话各自清自己的那份。
  *
  * 两层：
- *   A. AgentSession 直接构造（agentFactory.createAgent 替身，同 agentSessionBot.test），用一个可控
- *      的 abort 证明「先关停、再解钉」；
- *   B. sessionService 走真实 AgentSession（mock 面沿用 sessionServiceBuiltinMcpLifetime.test），
- *      证明 delete / invalidateAgent 这两条入口真的接到了上面那两个方法与 cleanupSession 上。
+ *   A. AgentSession 门面直接构造（假 DurableSession / 假 SessionHost），用可控的 destroyAgent / delete
+ *      闸门证明收尾的时机；
+ *   B. sessionService 走真实门面（会话运行时是假宿主），证明 delete / invalidateAgent 这两条入口真的接到
+ *      上面那两个方法与 cleanupSession 上。
  * 所有调用记进同一本流水账 —— 顺序只有它能证明。
  *
  * 同一条收尾链上还挂着**询问点自动审查的会话内状态**（agent-runtime reviewState：连续 / 累计拒绝计数、
  * 卡片反馈、放行标记）—— 它与决策日志同寿：
- *   - RV-L1 AgentSession.destroy() 在关停**之后**按本会话 id 清它，恰一次（还在收尾的旧 run 可能正要
+ *   - RV-L1 删会话（destroy）在关停**之后**按本会话 id 清它，恰一次（还在收尾的旧 run 可能正要
  *           落下一次审查结论，先清后落，清理就白做了）；
- *   - RV-L2 invalidate() 不清（会话还在：拒绝计数与卡片反馈要带进重建后的运行时），别的会话 destroy
+ *   - RV-L2 invalidate() 不清（会话还在：拒绝计数与卡片反馈要带进重建后的 agent），别的会话 destroy
  *           也不清本会话；
  *   - RV-L3 黑盒：真安全门 + 审查接缝替身连拒 3 次让本会话暂停审查，destroy 之后解除；
- *   - SS-DEL-RV sessionService.delete 自己也清（决策日志、卡片反馈、审查计数）—— 运行时已先被
- *           invalidate 掉、或从没建过时 destroy 根本不跑，它是唯一的清理者。
+ *   - SS-DEL-RV sessionService.delete 清（决策日志、卡片反馈、审查计数）—— 会话开没开过都一样。
  * `clearReviewState` 经 agent-runtime 的部分 mock 换成「记进流水账 + 穿透到真件」：流水账证明谁在什么
  * 时候清的，真状态证明确实清掉了。reviewState 与决策日志都是进程级 Map —— 每条用例一个新会话 id，
  * afterEach 把用过的 id 清干净。
@@ -44,6 +43,15 @@ import {
 } from '@shuvix/agent-runtime'
 import { createInlinePolicyMdReader } from '@shuvix/agent-runtime/security/builtinPolicies/inlineSources'
 import type { PermissionDecision } from '@shuvix/chat-protocol/types/permissionReview'
+import {
+  fakeHost,
+  gate,
+  lockRecord,
+  resetFakeHost,
+  type FakeDurableSession,
+  type FakeSessionHost,
+  type Gate
+} from './support/fakeSessionHost'
 
 const mocks = vi.hoisted(() => ({
   calls: [] as string[],
@@ -53,7 +61,6 @@ const mocks = vi.hoisted(() => ({
   // agent-runtime 的审查状态清理（记一笔，真件照清 —— 见下面的部分 mock）
   clearReviewState: vi.fn<(sessionId: string) => void>(),
   // AgentSession 的依赖
-  createAgent: vi.fn<(params: { sessionId: string }) => Promise<unknown>>(),
   getProfile: vi.fn<(name: string) => unknown>(),
   isSessionProfile: vi.fn<(profile: unknown) => boolean>(),
   clearFileTimeSession: vi.fn<(sessionId: string) => void>(),
@@ -88,26 +95,27 @@ vi.mock('@shuvix/agent-runtime', async (importOriginal) => {
 
 // ─── AgentSession 的 import 图 ───────────────────────────────────────────
 vi.mock('../settingsService', () => ({ settingsService: { get: () => undefined } }))
-vi.mock('../botService', () => ({ botService: { forSession: () => null } }))
 vi.mock('../hookService', () => ({
   hookTriggers: { fire: vi.fn() },
   hookService: { abortSessionRuns: mocks.abortSessionRuns }
 }))
 vi.mock('../sessionTriggerFacts', () => ({
-  buildTurnCompletedFacts: vi.fn(),
+  buildTurnCompletedFacts: vi.fn(async () => null),
   isDefaultTitle: vi.fn()
 }))
+vi.mock('../sessionDayPromptService', () => ({ recordPromptAdmitted: vi.fn() }))
 vi.mock('../../utils/toolUtils/fileTime', () => ({
   clearSession: mocks.clearFileTimeSession,
   recordRead: vi.fn()
 }))
-vi.mock('../../agents/agentHost', () => ({
-  agentFactory: { createAgent: mocks.createAgent },
-  resolveProfileModelSpec: vi.fn()
-}))
+vi.mock('../../agents/agentHost', () => ({ resolveProfileModelSpec: vi.fn() }))
 vi.mock('../agentService', () => ({
   agentService: { getProfile: mocks.getProfile, isSessionProfile: mocks.isSessionProfile }
 }))
+// 会话运行时是假宿主（门面与 sessionService 都是真的）
+vi.mock('../sessionHost', async () =>
+  (await import('./support/fakeSessionHost')).sessionHostModuleMock()
+)
 
 // ─── sessionService 的 import 图（同 sessionServiceBuiltinMcpLifetime.test） ─────────
 vi.mock('../../dao/sessionDao', () => ({
@@ -132,8 +140,8 @@ vi.mock('../../dao/providerDao', () => ({
 }))
 vi.mock('../../dao/projectDao', () => ({ projectDao: { pick: vi.fn() } }))
 vi.mock('../../dao/settingsDao', () => ({ settingsDao: { findByKey: vi.fn() } }))
-vi.mock('../messageService', () => ({ messageService: { clear: vi.fn() } }))
 vi.mock('../sessionStorage', () => ({
+  isDurableSession: () => true,
   readSessionRunConfig: mocks.readSessionRunConfig,
   appendModelChange: vi.fn()
 }))
@@ -174,42 +182,49 @@ beforeAll(async () => {
   ;({ sessionService } = await import('../sessionService'))
 })
 
-// ─── 假运行时：abort 可控（挂起 / 抛错），每一步都记流水账 ───────────────────────
+// ─── 假会话运行时：destroyAgent / delete 可控（挂起 / 抛错），每一步都记流水账 ─────────────
 
-type AbortMode = 'ok' | 'throw' | 'hold'
+type StopMode = 'ok' | 'throw' | 'hold'
 
-interface Deferred {
-  promise: Promise<void>
-  resolve: () => void
+let stopMode: StopMode = 'ok'
+/** stopMode === 'hold' 时，destroyAgent / delete 等它放行 */
+let stopGate: Gate = gate()
+
+/** 一个打开着、锁着的会话（层 A 直接拿它的门面） */
+function openSession(sessionId: string): FakeDurableSession {
+  return fakeHost.put(sessionId, { lock: lockRecord() })
 }
 
-function deferred(): Deferred {
-  let resolve!: () => void
-  const promise = new Promise<void>((r) => {
-    resolve = r
-  })
-  return { promise, resolve }
+/** 门面（层 A） */
+function facadeOf(sessionId: string): InstanceType<AgentSessionMod['AgentSession']> {
+  return AgentSession.of(fakeHost.get(sessionId) ?? openSession(sessionId))
 }
 
-let abortMode: AbortMode = 'ok'
-/** abortMode === 'hold' 时，abort 等它放行 */
-let abortGate: Deferred = deferred()
-
-function fakeCreated(sessionId: string): Record<string, unknown> {
-  return {
-    profile: { name: 'work' },
-    runtime: {
-      abort: vi.fn(async () => {
-        mocks.calls.push(`abort:start:${sessionId}`)
-        if (abortMode === 'hold') await abortGate.promise
-        if (abortMode === 'throw') {
-          mocks.calls.push(`abort:threw:${sessionId}`)
-          throw new Error('abort failed')
-        }
-        mocks.calls.push(`abort:end:${sessionId}`)
-      })
-    },
-    dispose: vi.fn(() => void mocks.calls.push(`dispose:${sessionId}`))
+/** 每个新打开的假会话：destroyAgent 记流水账、受 stopMode 控制 */
+function instrument(host: FakeSessionHost): void {
+  host.configure = (session) => {
+    session.destroyAgent = async () => {
+      session.calls.push(['destroyAgent'])
+      mocks.calls.push(`destroyAgent:start:${session.sessionId}`)
+      if (stopMode === 'hold') await stopGate.promise
+      if (stopMode === 'throw') {
+        mocks.calls.push(`destroyAgent:threw:${session.sessionId}`)
+        throw new Error('destroy failed')
+      }
+      session.lock = undefined
+      mocks.calls.push(`destroyAgent:end:${session.sessionId}`)
+    }
+  }
+  const remove = host.delete.bind(host)
+  host.delete = async (sessionId) => {
+    mocks.calls.push(`delete:start:${sessionId}`)
+    if (stopMode === 'hold') await stopGate.promise
+    await remove(sessionId)
+    if (stopMode === 'throw') {
+      mocks.calls.push(`delete:threw:${sessionId}`)
+      throw new Error('delete failed')
+    }
+    mocks.calls.push(`delete:end:${sessionId}`)
   }
 }
 
@@ -223,25 +238,13 @@ const profileOf = (name: string): Record<string, unknown> => ({
   projectAwareness: false
 })
 
-/** 直接造一个根会话的 AgentSession（层 A） */
-async function createSession(
-  sessionId: string
-): Promise<Awaited<ReturnType<AgentSessionMod['AgentSession']['create']>>> {
-  return AgentSession.create({
-    sessionId,
-    provider: 'p',
-    model: 'm',
-    capabilities: {},
-    workingDirectory: '/proj',
-    enabledTools: [],
-    profileName: 'work'
-  })
-}
-
-/** 让已排队的微任务 / 定时器回调跑完（abort 挂起时，后面的步骤不该偷跑） */
+/** 让已排队的微任务 / 定时器回调跑完（关停挂起时，后面的步骤不该偷跑） */
 const settle = (): Promise<void> => new Promise((r) => setTimeout(r, 0))
 
 const idx = (entry: string): number => mocks.calls.indexOf(entry)
+
+/** 某方法的关停闸门对应的流水账前缀：invalidate 等 destroyAgent，destroy 等宿主 delete */
+const stopOf = { invalidate: 'destroyAgent', destroy: 'delete' } as const
 
 // ─── 层 B 的内存行表 ─────────────────────────────────────────────────────
 
@@ -274,8 +277,9 @@ beforeEach(() => {
   sessions.clear()
   mocks.calls.length = 0
   for (const m of Object.values(mocks)) if (!Array.isArray(m)) m.mockReset()
-  abortMode = 'ok'
-  abortGate = deferred()
+  stopMode = 'ok'
+  stopGate = gate()
+  instrument(resetFakeHost())
 
   mocks.unpinSession.mockImplementation((id) => void mocks.calls.push(`unpin:${id}`))
   mocks.cleanupSession.mockImplementation((id) => void mocks.calls.push(`cleanup:${id}`))
@@ -285,7 +289,6 @@ beforeEach(() => {
   )
   mocks.killBySession.mockImplementation((id) => void mocks.calls.push(`kill:${id}`))
   mocks.closeSession.mockImplementation(async (id) => void mocks.calls.push(`closeSession:${id}`))
-  mocks.createAgent.mockImplementation(async (params) => fakeCreated(params.sessionId))
   mocks.getProfile.mockImplementation((name) => profileOf(name))
 
   mocks.daoPick.mockImplementation((id, cols) => {
@@ -397,53 +400,48 @@ async function seedSecurityMemory(sessionId: string): Promise<void> {
 
 // ─── 层 A：AgentSession ────────────────────────────────────────────────
 
-describe('HG-2 AgentSession —— 失效 / 销毁都解钉，且排在关停之后', () => {
+describe('HG-2 AgentSession —— 销毁 agent / 删会话都解钉，恰一次', () => {
   it.each(['invalidate', 'destroy'] as const)(
-    'HG-2 %s()：abort 还挂着时不解钉；放行后恰解钉一次、按本会话 id',
+    'HG-2 %s()：关停落定之后恰解钉一次、按本会话 id（不断言与关停的先后）',
     async (method) => {
-      const session = await createSession(SID)
-      abortMode = 'hold'
+      const session = facadeOf(SID)
+      stopMode = 'hold'
 
       const pending = session[method]()
       await settle()
-      // 旧 run 还没停下：它的工具说明仍写着「受限」，此刻改口就是说明与执行对不上
-      expect(mocks.calls).toContain(`abort:start:${SID}`)
-      expect(mocks.unpinSession).not.toHaveBeenCalled()
+      expect(mocks.calls).toContain(`${stopOf[method]}:start:${SID}`)
 
-      abortGate.resolve()
+      stopGate.release()
       await pending
 
       expect(mocks.unpinSession.mock.calls).toEqual([[SID]])
-      expect(idx(`abort:end:${SID}`)).toBeGreaterThanOrEqual(0)
-      expect(idx(`abort:end:${SID}`)).toBeLessThan(idx(`unpin:${SID}`))
-      // 运行时的清理（dispose）也在解钉之前走完 —— 解钉是这一串收尾的最后一环之一
-      expect(idx(`dispose:${SID}`)).toBeLessThan(idx(`unpin:${SID}`))
+      expect(idx(`${stopOf[method]}:end:${SID}`)).toBeGreaterThanOrEqual(0)
     }
   )
 
   it.each(['invalidate', 'destroy'] as const)(
-    'HG-2 %s()：abort 抛错也照样解钉（关停失败只记日志，收尾链路要走完）',
+    'HG-2 %s()：关停抛错也照样解钉（只记日志，收尾链路要走完）',
     async (method) => {
-      const session = await createSession(SID)
-      abortMode = 'throw'
+      const session = facadeOf(SID)
+      stopMode = 'throw'
 
       await expect(session[method]()).resolves.toBeUndefined()
 
       expect(mocks.unpinSession.mock.calls).toEqual([[SID]])
-      expect(idx(`abort:threw:${SID}`)).toBeLessThan(idx(`unpin:${SID}`))
+      expect(idx(`${stopOf[method]}:threw:${SID}`)).toBeGreaterThanOrEqual(0)
     }
   )
 
-  it('HG-2 invalidate() 只解钉、不清临时目录：会话还在，它的 TMPDIR 不能随一次回退重建被删', async () => {
-    const session = await createSession(SID)
-    await session.invalidate()
+  it('HG-2 invalidate() 只解钉、不清临时目录：会话还在，它的 TMPDIR 不能随一次销毁 agent 被删', async () => {
+    await facadeOf(SID).invalidate()
     expect(mocks.unpinSession.mock.calls).toEqual([[SID]])
     expect(mocks.cleanupSession).not.toHaveBeenCalled()
+    expect(fakeHost.callsOf('delete')).toEqual([])
   })
 
   it('HG-2 只动自己这一条：另一条会话的 invalidate / destroy 不解本会话的钉', async () => {
-    const mine = await createSession(SID)
-    const other = await createSession(`${SID}-other`)
+    const mine = facadeOf(SID)
+    const other = facadeOf(`${SID}-other`)
     await other.invalidate()
     await other.destroy()
     expect(mocks.unpinSession.mock.calls.every(([id]) => id === `${SID}-other`)).toBe(true)
@@ -453,49 +451,49 @@ describe('HG-2 AgentSession —— 失效 / 销毁都解钉，且排在关停之
 })
 
 describe('RV-L AgentSession —— 询问点审查的会话内状态与决策日志同寿', () => {
-  it('RV-L1 destroy()：abort 还挂着时不清；关停之后按本会话 id 清审查状态，恰一次', async () => {
-    const session = await createSession(SID)
-    abortMode = 'hold'
+  it('RV-L1 destroy()：宿主 delete 还挂着时不清；关停之后按本会话 id 清审查状态，恰一次', async () => {
+    const session = facadeOf(SID)
+    stopMode = 'hold'
 
     const pending = session.destroy()
     await settle()
     // 旧 run 还没停下：它可能正要落下一次审查结论（计数 +1）—— 先清后落，清理就白做了
-    expect(mocks.calls).toContain(`abort:start:${SID}`)
+    expect(mocks.calls).toContain(`delete:start:${SID}`)
     expect(mocks.clearReviewState).not.toHaveBeenCalled()
 
-    abortGate.resolve()
+    stopGate.release()
     await pending
 
     expect(mocks.clearReviewState.mock.calls).toEqual([[SID]])
-    expect(idx(`abort:end:${SID}`)).toBeGreaterThanOrEqual(0)
-    expect(idx(`abort:end:${SID}`)).toBeLessThan(idx(`clearReview:${SID}`))
+    expect(idx(`delete:end:${SID}`)).toBeGreaterThanOrEqual(0)
+    expect(idx(`delete:end:${SID}`)).toBeLessThan(idx(`clearReview:${SID}`))
   })
 
-  it('RV-L1 destroy()：abort 抛错也照样清（关停失败只记日志，收尾链路要走完）', async () => {
-    const session = await createSession(SID)
-    abortMode = 'throw'
+  it('RV-L1 destroy()：delete 抛错也照样清（关停失败只记日志，收尾链路要走完）', async () => {
+    const session = facadeOf(SID)
+    stopMode = 'throw'
 
     await expect(session.destroy()).resolves.toBeUndefined()
 
     expect(mocks.clearReviewState.mock.calls).toEqual([[SID]])
-    expect(idx(`abort:threw:${SID}`)).toBeLessThan(idx(`clearReview:${SID}`))
+    expect(idx(`delete:threw:${SID}`)).toBeLessThan(idx(`clearReview:${SID}`))
   })
 
-  it('RV-L2 invalidate() 不清（会话还在：拒绝计数与卡片反馈要带进重建后的运行时）；别的会话 destroy 也不清本会话', async () => {
-    const mine = await createSession(SID)
-    const other = await createSession(`${SID}-other`)
+  it('RV-L2 invalidate() 不清（会话还在：拒绝计数与卡片反馈要带进重建后的 agent）；别的会话 destroy 也不清本会话', async () => {
+    const mine = facadeOf(SID)
+    const other = facadeOf(`${SID}-other`)
     await suspendReview(SID)
 
     await mine.invalidate()
     await other.destroy()
 
     expect(mocks.clearReviewState.mock.calls).toEqual([[`${SID}-other`]])
-    // 真状态也还在：连拒 3 次换来的「直接问人」没有因为一次回退重建、或别人的销毁被悄悄解除
+    // 真状态也还在：连拒 3 次换来的「直接问人」没有因为一次销毁 agent、或别人的删除被悄悄解除
     expect(reviewSuspended(SID)).toBe(true)
   })
 
   it('RV-L3 黑盒：审查接缝替身经真安全门连拒 3 次 → 本会话暂停审查；destroy 之后 reviewSuspended 回到 false', async () => {
-    const session = await createSession(SID)
+    const session = facadeOf(SID)
     await suspendReview(SID)
 
     await session.destroy()
@@ -507,29 +505,29 @@ describe('RV-L AgentSession —— 询问点审查的会话内状态与决策日
 // ─── 层 B：sessionService 的两个入口 ───────────────────────────────────────
 
 describe('HG-2 sessionService —— delete 清临时目录，invalidateAgent 只解钉', () => {
-  it('HG-2 delete(有运行时)：先关停运行时（解钉），再清临时目录；cleanupSession 按本会话 id 恰一次', async () => {
+  it('HG-2 delete(会话开着)：先关停运行时（宿主 delete，解钉），再清临时目录；cleanupSession 按本会话 id 恰一次', async () => {
     seedSession(SID)
     await sessionService.ensureAgentSession(SID)
-    expect(mocks.createAgent).toHaveBeenCalledTimes(1)
+    expect(fakeHost.callsOf('open')).toEqual([SID])
 
     await sessionService.delete(SID)
 
     expect(mocks.cleanupSession.mock.calls).toEqual([[SID]])
-    // 销毁路径本身就解钉（AgentSession.destroy）
-    expect(mocks.unpinSession.mock.calls).toContainEqual([SID])
+    // 删除路径本身就解钉（destroySessionRuntime）
+    expect(mocks.unpinSession.mock.calls).toEqual([[SID]])
     // 删目录之前：后台任务已被杀、运行时已停 —— 否则还活着的命令会往一个刚删掉的 TMPDIR 里写
     expect(idx(`kill:${SID}`)).toBeLessThan(idx(`cleanup:${SID}`))
-    expect(idx(`abort:end:${SID}`)).toBeLessThan(idx(`cleanup:${SID}`))
-    expect(idx(`unpin:${SID}`)).toBeLessThan(idx(`cleanup:${SID}`))
+    expect(idx(`delete:end:${SID}`)).toBeLessThan(idx(`cleanup:${SID}`))
   })
 
-  it('HG-2 delete(从没建过运行时)：照样清临时目录', async () => {
+  it('HG-2 delete(从没打开过)：照样关停（宿主 delete 删存储）并清临时目录', async () => {
     seedSession(SID)
 
     await expect(sessionService.delete(SID)).resolves.toBeUndefined()
 
     // 「有没有运行时」与「有没有临时目录」是两件事：后台命令、窗口刷新都会留下没运行时的会话
-    expect(mocks.createAgent).not.toHaveBeenCalled()
+    expect(fakeHost.callsOf('open')).toEqual([])
+    expect(fakeHost.callsOf('delete')).toEqual([SID])
     expect(mocks.cleanupSession.mock.calls).toEqual([[SID]])
   })
 
@@ -553,45 +551,37 @@ describe('HG-2 sessionService —— delete 清临时目录，invalidateAgent �
     expect(mocks.cleanupSession.mock.calls).toEqual([[c1], [c2], [parent]])
   })
 
-  it('HG-2 invalidateAgent：经真实 AgentSession.invalidate 解钉，不清临时目录', async () => {
+  it('HG-2 invalidateAgent：经真实门面的 invalidate（运行时 destroyAgent）解钉，不清临时目录', async () => {
     seedSession(SID)
     await sessionService.ensureAgentSession(SID)
 
     await sessionService.invalidateAgent(SID)
 
     expect(mocks.unpinSession.mock.calls).toEqual([[SID]])
-    expect(idx(`abort:end:${SID}`)).toBeLessThan(idx(`unpin:${SID}`))
+    expect(idx(`destroyAgent:end:${SID}`)).toBeGreaterThanOrEqual(0)
     expect(mocks.cleanupSession).not.toHaveBeenCalled()
   })
 })
 
 describe('SS-DEL-RV sessionService.delete —— 安全模块的会话内存随会话一起删', () => {
   it.each([
+    ['从没打开过', async (): Promise<void> => {}],
     [
-      // 没有 AgentSession，destroy 不会跑：delete 是唯一的清理者
-      '从没建过运行时',
-      async (): Promise<void> => {},
-      false
-    ],
-    [
-      // SessionManager.remove 没有实例就提前返回，destroy 同样不跑
-      '运行时已先被 invalidate 掉',
+      'agent 已先被销毁',
       async (): Promise<void> => {
         await sessionService.ensureAgentSession(SID)
         await sessionService.invalidateAgent(SID)
-      },
-      false
+      }
     ],
     [
-      '运行时还活着',
+      '会话开着',
       async (): Promise<void> => {
         await sessionService.ensureAgentSession(SID)
-      },
-      true
+      }
     ]
   ] as const)(
-    'SS-DEL-RV delete（%s）：决策日志、卡片反馈、审查暂停全部清掉',
-    async (_label, arrange, runtimeAlive) => {
+    'SS-DEL-RV delete（%s）：决策日志、卡片反馈、审查暂停全部清掉，按本会话 id 恰清一次',
+    async (_label, arrange) => {
       seedSession(SID)
       await arrange()
       await seedSecurityMemory(SID)
@@ -601,14 +591,8 @@ describe('SS-DEL-RV sessionService.delete —— 安全模块的会话内存随�
       expect(getSessionDecisions(SID)).toEqual([])
       expect(humanFeedbackOf(SID)).toEqual([])
       expect(reviewSuspended(SID)).toBe(false)
-      if (runtimeAlive) {
-        // destroy 与 delete 各清一遍也无妨（重复清理无害）—— 只要清的都是这一条
-        expect(mocks.clearReviewState.mock.calls.length).toBeGreaterThanOrEqual(1)
-        expect(mocks.clearReviewState.mock.calls.every(([id]) => id === SID)).toBe(true)
-      } else {
-        // 没有活着的运行时：清掉它的只可能是 delete 自己
-        expect(mocks.clearReviewState.mock.calls).toEqual([[SID]])
-      }
+      // 会话开没开过都走同一条收尾（destroySessionRuntime），恰清一次
+      expect(mocks.clearReviewState.mock.calls).toEqual([[SID]])
     }
   )
 })

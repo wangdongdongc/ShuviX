@@ -30,15 +30,32 @@ function isUserOpening(message: ChatMessage): boolean {
  */
 export function recordUserPrompt(sessionId: string, message: ChatMessage): void {
   if (!isUserOpening(message)) return
+  recordOpening(sessionId, message.id, message.createdAt || Date.now())
+}
+
+/**
+ * 一次用户发送被会话受理（pi-durable 会话：`submitUser` 的 `onAdmitted`，裁决 PIN-13）入账 ——
+ * lastActiveAt 与日历索引。`key` 是这一次发送的唯一键（同一键重播忽略）。
+ *
+ * TODO(pi-durable p3)：投影接上之后改按用户条目（entry id）入账，与旧格式会话同一口径。
+ */
+export function recordPromptAdmitted(
+  sessionId: string,
+  key: string,
+  timestamp: number = Date.now()
+): void {
+  recordOpening(sessionId, key, timestamp)
+}
+
+function recordOpening(sessionId: string, entryId: string, timestamp: number): void {
   // 内存会话（只在内存里、宿主一关就没）不记活跃：不进日历，也不动 lastActiveAt。
   // 删了的也一样 —— 迟到的 user_message 不该给它补一行日历
   if (sessionRecords.isEphemeral(sessionId) || sessionRecords.wasEphemeral(sessionId)) return
   // Chrome 标签页会话不进日历：它是某个标签页的临时对话，标签页一关就删
   if (isChromeTabSessionSettings(sessionRecords.pickSettings(sessionId, ['chromeTab']))) return
-  const timestamp = message.createdAt || Date.now()
   const inserted = sessionDayPromptDao.insert({
     sessionId,
-    entryId: message.id,
+    entryId,
     day: localDayKey(timestamp),
     timestamp
   })

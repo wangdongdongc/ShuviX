@@ -19,8 +19,8 @@
  *   3. 「创建时定型」曾经存在过（`settings.agentProfile` 在 create 落显式值）——
  *      RP-11 守的就是它不被加回来。
  *
- * mock 面沿用 sessionServiceUserInput.test.ts（import 图全换假件，`AgentSession.create`
- * 可捕获，logger 的 warn 可捕获）。
+ * mock 面沿用 sessionServiceUserInput.test.ts（import 图全换假件，会话运行时换成假宿主，
+ * logger 的 warn 可捕获）。
  */
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest'
 import type { AgentProfile } from '@shuvix/agent-runtime'
@@ -35,7 +35,6 @@ const mocks = vi.hoisted(() => ({
   findModelsByProvider: vi.fn(() => []),
   findByKey: vi.fn<(key: string) => string | undefined>(),
   projectPick: vi.fn(),
-  agentCreate: vi.fn(),
   warn: vi.fn()
 }))
 
@@ -66,6 +65,7 @@ vi.mock('../../dao/projectDao', () => ({ projectDao: { pick: mocks.projectPick }
 vi.mock('../../dao/settingsDao', () => ({ settingsDao: { findByKey: mocks.findByKey } }))
 vi.mock('../messageService', () => ({ messageService: { clear: vi.fn() } }))
 vi.mock('../sessionStorage', () => ({
+  isDurableSession: () => true,
   readSessionRunConfig: mocks.readSessionRunConfig,
   appendModelChange: vi.fn()
 }))
@@ -80,7 +80,13 @@ vi.mock('../toolAggregator', () => ({
 }))
 vi.mock('../../utils/toolUtils/allowList', () => ({ buildAllowEntry: vi.fn() }))
 vi.mock('../agentService', () => ({ agentService: { getProfile: mocks.getProfile } }))
-vi.mock('../agentSession', () => ({ AgentSession: { create: mocks.agentCreate } }))
+// 会话运行时换成假宿主 / 假门面（真模块的依赖图带模型注册表、事件适配器）
+vi.mock('../sessionHost', async () =>
+  (await import('./support/fakeSessionHost')).sessionHostModuleMock()
+)
+vi.mock('../agentSession', async () =>
+  (await import('./support/fakeSessionHost')).agentSessionModuleMock()
+)
 vi.mock('../bgTaskService', () => ({ killBySession: vi.fn(), setBgTaskNotifier: vi.fn() }))
 vi.mock('../../agents/agentHost', () => ({ resolveProfileModelSpec: vi.fn() }))
 vi.mock('../../utils/sessionConfigBroadcast', () => ({
@@ -139,7 +145,9 @@ function world(shape: Shape): void {
 /** 一份真存在的档案（getProfile 有值即可，resolve 只看「在不在」） */
 const existing = (name: string): Partial<AgentProfile> => ({
   name,
-  tools: []
+  tools: [],
+  instructionFiles: [],
+  projectAwareness: false
 })
 
 const resolve = (): string => sessionService.resolveAgentProfileName(SID)
@@ -262,30 +270,22 @@ describe('RP-8 / RP-9 边界', () => {
   })
 })
 
-describe('RP-10 推导结果真的送进了运行时（resolveAgentProfileName → SessionManager → AgentSession.create）', () => {
-  const fakeAgent = { name: 'fake' }
-
-  it("项目根会话：AgentSession.create 收到 profileName 'work'", async () => {
+describe('RP-10 推导结果真的送进了运行时（resolveAgentProfileName → resolveAgentConfig → 锁的创建）', () => {
+  it("项目根会话：resolveAgentConfig 给出档案 'work'、工作目录项目根", async () => {
     world({ projectId: 'p1', parentId: null, settings: {} })
     mocks.projectPick.mockReturnValue({ path: '/proj', settings: {} })
-    mocks.agentCreate.mockResolvedValue(fakeAgent)
+    mocks.getProfile.mockImplementation((name: string) => existing(name))
 
-    expect(await sessionService.ensureAgentSession(SID)).toBe(fakeAgent)
-    expect(mocks.agentCreate).toHaveBeenCalledTimes(1)
-    expect(mocks.agentCreate.mock.calls[0][0]).toMatchObject({
-      sessionId: SID,
-      profileName: 'work',
-      workingDirectory: '/proj'
-    })
+    const config = await sessionService.resolveAgentConfig(SID)
+    expect(config.profile.name).toBe('work')
+    expect(config.cwd).toBe('/proj')
   })
 
-  it('带戳子会话：profileName 是戳的档案名', async () => {
+  it('带戳子会话：档案是戳的档案名', async () => {
     world({ projectId: 'p1', parentId: 'P', settings: { agentProfile: 'coding' } })
-    mocks.getProfile.mockReturnValue(existing('coding'))
-    mocks.agentCreate.mockResolvedValue(fakeAgent)
+    mocks.getProfile.mockImplementation((name: string) => existing(name))
 
-    await sessionService.ensureAgentSession(SID)
-    expect(mocks.agentCreate.mock.calls[0][0]).toMatchObject({ profileName: 'coding' })
+    expect((await sessionService.resolveAgentConfig(SID)).profile.name).toBe('coding')
   })
 })
 
@@ -355,21 +355,17 @@ describe('RP-14 / RP-15 边角', () => {
   })
 })
 
-describe('RP-16 形态推导确实被消费：AgentSession.create 收到 bot', () => {
-  it("bot 会话：profileName 是 'bot'（不是 work，哪怕它归属项目）", async () => {
-    // 与 RP-10 同一条链路（resolveAgentProfileName → SessionManager → AgentSession.create）。
-    // 断言它到底送进去了：注入侧的判据就是这个 profileName（见 agentSessionBot.test.ts）
+describe('RP-16 形态推导确实被消费：resolveAgentConfig 给出 bot', () => {
+  it("bot 会话：档案是 'bot'（不是 work，哪怕它归属项目）", async () => {
+    // 与 RP-10 同一条链路（resolveAgentProfileName → resolveAgentConfig → 锁的创建）。
+    // 断言它到底送进去了：bot 段落按根档案名选（运行时 promptExtensionsFor）
     world({ projectId: 'p1', parentId: null, settings: { bot: 'scout' } })
     mocks.projectPick.mockReturnValue({ path: '/proj', settings: {} })
-    mocks.agentCreate.mockResolvedValue({ name: 'fake' })
+    mocks.getProfile.mockImplementation((name: string) => existing(name))
 
-    await sessionService.ensureAgentSession(SID)
-    expect(mocks.agentCreate).toHaveBeenCalledTimes(1)
-    expect(mocks.agentCreate.mock.calls[0][0]).toMatchObject({
-      sessionId: SID,
-      profileName: 'bot',
-      workingDirectory: '/proj'
-    })
+    const config = await sessionService.resolveAgentConfig(SID)
+    expect(config.profile.name).toBe('bot')
+    expect(config.cwd).toBe('/proj')
   })
 })
 
@@ -456,21 +452,17 @@ describe('RP-T2 分支次序：chromeTab 先于笔记本与 bot；不合法的�
   })
 })
 
-describe('RP-T3 推导结果送进了运行时：AgentSession.create 收到 tab', () => {
-  it("标签页会话：profileName 'tab'，工作目录是临时工作区", async () => {
+describe('RP-T3 推导结果送进了运行时：resolveAgentConfig 给出 tab', () => {
+  it("标签页会话：档案 'tab'，工作目录是临时工作区", async () => {
     world({
       projectId: null,
       parentId: null,
       settings: { chromeTab: { installId: 'i1', runId: 'r1', tabId: 5 } }
     })
-    mocks.agentCreate.mockResolvedValue({ name: 'fake' })
+    mocks.getProfile.mockImplementation((name: string) => existing(name))
 
-    await sessionService.ensureAgentSession(SID)
-    expect(mocks.agentCreate).toHaveBeenCalledTimes(1)
-    expect(mocks.agentCreate.mock.calls[0][0]).toMatchObject({
-      sessionId: SID,
-      profileName: 'tab',
-      workingDirectory: `/nonexistent/shuvix-unit/tmp/${SID}`
-    })
+    const config = await sessionService.resolveAgentConfig(SID)
+    expect(config.profile.name).toBe('tab')
+    expect(config.cwd).toBe(`/nonexistent/shuvix-unit/tmp/${SID}`)
   })
 })

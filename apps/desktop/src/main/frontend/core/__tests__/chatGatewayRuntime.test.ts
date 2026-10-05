@@ -15,7 +15,7 @@
  *   ML-U-2/3/4  setModel：没有运行时 → 往会话树追加 model_change（恰一次、只三个参数）、答 true；
  *               有运行时（含创建中 / 关停中，即 hasAgentRuntime）→ 什么也不写、不碰运行时、不广播、
  *               答 false；追加失败 → reject；
- *   ML-U-5      setThinkingLevel：有活运行时交给它（不写树），没有直接写树；
+ *   ML-U-5      setThinkingLevel：会话设置恒写；会话开着再现场交给它（锁着但没开着 → peek 再给，D10-50）；
  *   ML-U-6      destroyAgent：invalidateAgent 恰一次、等它落定才 resolve；不清消息、不断 db、不广播。
  *
  * mock 骨架照抄 chatGatewayListTools.test.ts（网关的 import 图带 SQLite / electron / 全部工具）。
@@ -333,7 +333,7 @@ describe('DefaultChatGateway.setModel —— 只在没有运行时的时候写',
 })
 
 describe('DefaultChatGateway.setThinkingLevel —— 运行期照样可改', () => {
-  it('ML-U-5 有活运行时 → 交给它的 setThinkingLevel，不直接写树', async () => {
+  it('ML-U-5 会话开着 → 设置照写，并现场交给它的 setThinkingLevel', async () => {
     const agent = { setThinkingLevel: vi.fn().mockResolvedValue(undefined) }
     mocks.getAgentSession.mockReturnValue(agent)
     mocks.hasAgentRuntime.mockReturnValue(true)
@@ -342,10 +342,11 @@ describe('DefaultChatGateway.setThinkingLevel —— 运行期照样可改', () 
     expect(mocks.getAgentSession).toHaveBeenCalledWith(SID)
     expect(agent.setThinkingLevel).toHaveBeenCalledTimes(1)
     expect(agent.setThinkingLevel).toHaveBeenCalledWith('high')
-    expect(mocks.appendThinkingLevelChange).not.toHaveBeenCalled()
+    // 会话设置是事实源：下一次创建 agent、选择器都读它
+    expect(mocks.appendThinkingLevelChange.mock.calls).toEqual([[SID, 'high']])
   })
 
-  it('ML-U-5 没有运行时 → 直接往会话树追加 thinking_level_change', async () => {
+  it('ML-U-5 没有运行时 → 只写会话设置', async () => {
     mocks.getAgentSession.mockReturnValue(undefined)
 
     await chatGateway.setThinkingLevel(SID, 'low')

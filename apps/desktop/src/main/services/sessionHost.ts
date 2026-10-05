@@ -1,0 +1,204 @@
+/**
+ * 桌面的 SessionHost —— 打开着的会话存储（每会话一个 pi-durable Harness）的唯一簿记者，外加桌面 seam。
+ *
+ * 运行时（agent-runtime 的 `createSessionHost`）不认识 Electron、不认识 node:sqlite、不认识 DB：
+ * 存储怎么开（sessionStorage 的路由）、模型从哪来（services/models 的注册表）、会话配置怎么读
+ * （sessionService 的形态推导 + 会话设置）、事件往哪发（electronEventSink）、锁与运行状态的镜像写到哪
+ * （`sessions.settings.agentLocked` / `.runState`，经 sessionRecords —— 内存会话就写在内存里），都由这里回答。
+ *
+ *  - **懒建**：第一次 `getSessionHost()` 才建（模型注册表、DB 此刻都已就绪）；import 本模块什么都不做。
+ *  - **钉住**（PIN-04）：会话还有活着的后台任务（bg bash、被驱动的子会话）就不被 LRU 关掉 ——
+ *    完成通知回来时它还开着。忙碌的会话本来就不会被关。
+ *  - **镜像**（PIN-06）：值没变就不写（每次写都会 bump `updatedAt`），也不发会话配置变更广播。
+ *  - **退出**（PIN-11）：`installSessionHostQuitHook` —— 第一次 `before-quit` 先拦下，`closeAll()`
+ *    （最多等 5 秒），再 `app.quit()`。正忙的会话被关停时不报运行状态，DB 里的 busy 标记熬过退出，
+ *    下次打开报 interrupted。
+ *
+ * 工具 / 提示词 seam 暂时来自 `agents/durableHostPlaceholder.ts`（TODO(pi-durable p1)：P1-11 的
+ * agentHost 接手，协调方合并时切换 import）。
+ */
+import {
+  abortSessionReviews,
+  createSessionHost,
+  DEFAULT_INTERRUPTED_SEND_POLICY,
+  localDate,
+  reopenSessionReviews,
+  type InterruptedSendPolicy,
+  type LockRecord,
+  type RuntimeLogger,
+  type SessionHost,
+  type SessionHostDeps
+} from '@shuvix/agent-runtime'
+import {
+  createDesktopToolHost,
+  desktopPromptHost,
+  desktopPromptVars
+} from '../agents/durableHostPlaceholder'
+import { createLogger } from '../logger'
+import { electronEventSink } from './agentRuntimeAdapters'
+import { getModelRegistry, providerCredentialPort } from './models'
+import { writeSessionMirror } from './sessionMirror'
+import { sessionRecords } from './sessionRecords'
+// 仅在函数体内调用（resolveAgentConfig）：sessionService 也 import 本模块，ESM 活绑定下无初始化环
+import { sessionService } from './sessionService'
+import { deleteSessionStorage, openSessionStorage, sessionStorageExists } from './sessionStorage'
+import { settingsService } from './settingsService'
+import { taskRegistry } from './taskRegistry'
+
+const log = createLogger('SessionHost')
+
+/**
+ * 自动续跑开关（现读，改了立刻生效）。**缺省开** —— 只有修剪后字面量 'false' 才关（口径在运行时的
+ * `autoResumeAllowed`）：设置项是纯文本键值，一个写坏的值不该把能力关掉。
+ */
+export const AUTO_RESUME_KEY = 'session.autoResume'
+
+/**
+ * 中断会话上收到用户发送时怎么办（裁决 R5，**待用户确认**）：缺省 abort-then-send。
+ * 要换成「先续上被中断的那轮、这条排在后面」只改这一行：`'continue-then-queue'`。
+ */
+export const INTERRUPTED_SEND_POLICY: InterruptedSendPolicy = DEFAULT_INTERRUPTED_SEND_POLICY
+
+/** 退出时等会话关停的上限 */
+export const QUIT_CLOSE_CAP_MS = 5000
+
+// ─── 依赖 ───────────────────────────────────────────────
+
+function errorText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err)
+}
+
+const runtimeLog: RuntimeLogger = {
+  info: (message) => log.info(message),
+  warn: (message) => log.warn(message),
+  error: (message) => log.error(message)
+}
+
+/**
+ * 桌面 seam 拼成的 `SessionHostDeps`。`overrides` 整项替换（测试注入假的 ToolHost / 模型 / 存储）；
+ * `lockOf` 给 ToolHost 按会话找锁记录（缺省读单例宿主）。
+ */
+export function buildSessionHostDeps(
+  overrides: Partial<SessionHostDeps> = {},
+  lockOf: (sessionId: string) => LockRecord | undefined = (sessionId) =>
+    getSessionHost().get(sessionId)?.lock
+): SessionHostDeps {
+  const needsRegistry = overrides.models === undefined || overrides.modelCatalog === undefined
+  const registry = needsRegistry ? getModelRegistry() : undefined
+  return {
+    models: registry?.models as SessionHostDeps['models'],
+    modelCatalog: { registry: registry!, port: providerCredentialPort },
+    toolHost: createDesktopToolHost({ lockOf }),
+    promptHost: desktopPromptHost,
+    promptVars: desktopPromptVars,
+    resolveAgentConfig: (sessionId) => sessionService.resolveAgentConfig(sessionId),
+    onLockChange: (sessionId, locked) => writeSessionMirror(sessionId, { agentLocked: locked }),
+    onRunStateChange: (sessionId, state) => writeSessionMirror(sessionId, { runState: state }),
+    openStorage: openSessionStorage,
+    storageExists: sessionStorageExists,
+    deleteStorage: deleteSessionStorage,
+    isEphemeral: (sessionId) => sessionRecords.isEphemeral(sessionId),
+    isPinned: (sessionId) => taskRegistry.runningCount(sessionId) > 0,
+    eventSink: electronEventSink,
+    beforeAbort: (sessionId) => abortSessionReviews(sessionId),
+    onInputsReopened: (sessionId) => reopenSessionReviews(sessionId),
+    interruptedSendPolicy: INTERRUPTED_SEND_POLICY,
+    autoResume: () => settingsService.get(AUTO_RESUME_KEY),
+    today: () => localDate(),
+    onReport: (sessionId, error) =>
+      log.warn(`durable report session=${sessionId}: ${errorText(error)}`),
+    logger: runtimeLog,
+    ...overrides
+  }
+}
+
+/** 建一个桌面宿主（ToolHost 的 `lockOf` 指向它自己） */
+export function createDesktopSessionHost(overrides: Partial<SessionHostDeps> = {}): SessionHost {
+  // lockOf 只在之后的工具调用里读它（构造期不调），所以引用自己的初始化值是安全的
+  const host: SessionHost = createSessionHost(
+    buildSessionHostDeps(overrides, (sessionId) => host.get(sessionId)?.lock)
+  )
+  return host
+}
+
+// ─── 单例 ───────────────────────────────────────────────
+
+let singleton: SessionHost | undefined
+let testOverrides: Partial<SessionHostDeps> | undefined
+
+/** 主进程唯一的 SessionHost（懒建） */
+export function getSessionHost(): SessionHost {
+  singleton ??= createDesktopSessionHost(testOverrides)
+  return singleton
+}
+
+/** 单例建了没有（退出钩子据此判断有没有要关的东西）；不建 */
+export function peekSessionHost(): SessionHost | undefined {
+  return singleton
+}
+
+/**
+ * 丢掉单例；下一次 `getSessionHost()` 按 `overrides` 新建 —— 仅供单测。不关旧的（测试自己 closeAll）。
+ */
+export function resetSessionHostForTests(overrides?: Partial<SessionHostDeps>): void {
+  singleton = undefined
+  testOverrides = overrides
+}
+
+// ─── 退出 ───────────────────────────────────────────────
+
+/** 退出钩子要用到的那一点 Electron app 面（测试给假的） */
+export interface QuitHookApp {
+  on(event: 'before-quit', listener: (event: { preventDefault(): void }) => void): unknown
+  quit(): void
+}
+
+/**
+ * 第一次 `before-quit`：拦下这次退出，`closeAll()`（最多等 `capMs`，关不完也照样退），再 `app.quit()`。
+ * 之后的 `before-quit` 直接放行。从没建过宿主就什么都不拦。
+ *
+ * 返回的 `ready` 在会话都关完（或不必关）之后为 true —— 其余退出清理（断 MCP、杀后台任务……）据此
+ * 等到第二次 `before-quit` 再做：关停中的 run 还可能在用它们。
+ */
+export function installSessionHostQuitHook(
+  app: QuitHookApp,
+  options: { capMs?: number; host?: () => SessionHost | undefined } = {}
+): { readonly ready: boolean } {
+  const capMs = options.capMs ?? QUIT_CLOSE_CAP_MS
+  const hostOf = options.host ?? peekSessionHost
+  let state: 'idle' | 'closing' | 'done' = 'idle'
+  app.on('before-quit', (event) => {
+    if (state === 'done') return
+    if (state === 'closing') {
+      event.preventDefault()
+      return
+    }
+    const host = hostOf()
+    if (!host) {
+      state = 'done'
+      return
+    }
+    event.preventDefault()
+    state = 'closing'
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const capped = new Promise<void>((resolve) => {
+      timer = setTimeout(() => {
+        log.warn(`退出时会话 ${capMs}ms 内没有全部关停，照样退出`)
+        resolve()
+      }, capMs)
+    })
+    const closing = host.closeAll().catch((err: unknown) => {
+      log.warn(`退出时关停会话失败: ${errorText(err)}`)
+    })
+    void Promise.race([closing, capped]).finally(() => {
+      clearTimeout(timer)
+      state = 'done'
+      app.quit()
+    })
+  })
+  return {
+    get ready() {
+      return state === 'done'
+    }
+  }
+}

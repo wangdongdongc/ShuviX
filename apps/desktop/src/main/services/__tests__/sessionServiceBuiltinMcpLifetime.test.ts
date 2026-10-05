@@ -2,21 +2,21 @@
  * sessionService —— 内置能力服务器（inproc MCP）实例的**寿命绑谁**。
  *
  * 契约一句话：**绑会话，不绑运行时**。
- *   - `invalidateAgent`（回退重建 / 钉档案）只换运行时，实例留着 —— ssh 的 control socket、
- *     browser 的 tab 不该被一次重建白白掐断；
- *   - `delete`（删会话）才释放，且顺序是**先关停运行时、再释放实例**：还在跑的 run 可能正调着
- *     它的工具；
+ *   - `invalidateAgent`（agent 芯片的 X / 钉档案）只销毁 agent（运行时的 destroyAgent），实例留着 ——
+ *     ssh 的 control socket、browser 的 tab 不该被一次重建白白掐断；
+ *   - `delete`（删会话）才释放，且顺序是**先关停运行时（SessionHost.delete）、再释放实例**：还在跑的
+ *     run 可能正调着它的工具；
  *   - 子会话随父会话一起删，于是每一条都要各自释放自己那份。
  *
  * 为什么单独钉：释放曾经挂在 agent 的 dispose 钩子上，而那个钩子在「运行时已先被 invalidate 掉」
  * 时**根本不跑**（SessionManager.remove 没有实例就提前返回）—— 于是一条先切过档案、再被删掉的
  * 会话会留下一份谁也关不掉的 inproc 连接。这种泄漏在 UI 上完全看不见，只有这一层能拦。
  *
- * mock 面沿用 sessionServiceEnabledTools.test.ts（import 图全换假件、真 SessionManager、
- * `AgentSession.create` 可捕获），另加一本流水账：destroy / invalidate / closeSession 共用它，
- * 「先关停再释放」这条只有顺序能证明。
+ * mock 面沿用 sessionServiceEnabledTools.test.ts（import 图全换假件、会话运行时换成假宿主），
+ * 另加一本流水账：destroyAgent / 宿主 delete / closeSession 共用它，「先关停再释放」这条只有顺序能证明。
  */
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest'
+import { fakeHost, resetFakeHost, type FakeDurableSession } from './support/fakeSessionHost'
 
 const mocks = vi.hoisted(() => ({
   daoPick: vi.fn<(id: string, cols: string[]) => unknown>(),
@@ -25,7 +25,6 @@ const mocks = vi.hoisted(() => ({
   daoDeleteById: vi.fn(),
   readSessionRunConfig: vi.fn(),
   filterAvailableTools: vi.fn<(tools: string[]) => string[]>(),
-  agentCreate: vi.fn<(params: { sessionId: string }) => Promise<unknown>>(),
   closeSession: vi.fn<(sessionId: string) => Promise<void>>(),
   getProfile: vi.fn<(name: string) => unknown>(),
   isSessionProfile: vi.fn<(profile: unknown) => boolean>(),
@@ -56,6 +55,7 @@ vi.mock('../../dao/projectDao', () => ({ projectDao: { pick: vi.fn() } }))
 vi.mock('../../dao/settingsDao', () => ({ settingsDao: { findByKey: vi.fn() } }))
 vi.mock('../messageService', () => ({ messageService: { clear: vi.fn() } }))
 vi.mock('../sessionStorage', () => ({
+  isDurableSession: () => true,
   readSessionRunConfig: mocks.readSessionRunConfig,
   appendModelChange: vi.fn()
 }))
@@ -75,7 +75,13 @@ vi.mock('../../utils/toolUtils/allowList', () => ({ buildAllowEntry: vi.fn() }))
 vi.mock('../agentService', () => ({
   agentService: { getProfile: mocks.getProfile, isSessionProfile: mocks.isSessionProfile }
 }))
-vi.mock('../agentSession', () => ({ AgentSession: { create: mocks.agentCreate } }))
+// 会话运行时换成假宿主 / 假门面（真模块的依赖图带模型注册表、事件适配器）
+vi.mock('../sessionHost', async () =>
+  (await import('./support/fakeSessionHost')).sessionHostModuleMock()
+)
+vi.mock('../agentSession', async () =>
+  (await import('./support/fakeSessionHost')).agentSessionModuleMock()
+)
 vi.mock('../bgTaskService', () => ({ killBySession: vi.fn(), setBgTaskNotifier: vi.fn() }))
 vi.mock('../../agents/agentHost', () => ({ resolveProfileModelSpec: vi.fn() }))
 vi.mock('../../utils/sessionConfigBroadcast', () => ({
@@ -118,28 +124,11 @@ function seedSession(id: string, patch: Partial<MemSession> = {}): string {
   return id
 }
 
-interface FakeAgent {
-  invalidate: () => Promise<void>
-  destroy: () => Promise<void>
-}
-
-const agents = new Map<string, FakeAgent>()
-
-/** 假 AgentSession：SessionManager 的 dispose 只碰 invalidate / destroy，两者都记流水账 */
-function makeAgent(sessionId: string): FakeAgent {
-  const agent: FakeAgent = {
-    invalidate: vi.fn(async () => void mocks.calls.push(`invalidate:${sessionId}`)),
-    destroy: vi.fn(async () => void mocks.calls.push(`destroy:${sessionId}`))
-  }
-  agents.set(sessionId, agent)
-  return agent
-}
-
-/** 某条会话此刻的假 Agent（create 造出来的那一份） */
-const agentOf = (sessionId: string): FakeAgent => {
-  const agent = agents.get(sessionId)
-  if (!agent) throw new Error(`no agent was created for "${sessionId}"`)
-  return agent
+/** 某条会话打开过的那个假 DurableSession */
+const durableOf = (sessionId: string): FakeDurableSession => {
+  const session = fakeHost.instances.get(sessionId)?.at(-1)
+  if (!session) throw new Error(`session "${sessionId}" was never opened`)
+  return session
 }
 
 const closedSessions = (): string[] => mocks.closeSession.mock.calls.map((c) => c[0])
@@ -152,8 +141,21 @@ beforeEach(() => {
   // 每条用例一个新 id：sessionService 是模块单例，前面用例建出的运行时不回收
   SID = `mcplife-${seq}`
   sessions.clear()
-  agents.clear()
   mocks.calls.length = 0
+  // 假宿主：destroyAgent 与 delete 都记流水账
+  const host = resetFakeHost()
+  host.configure = (session) => {
+    const destroy = session.destroyAgent.bind(session)
+    session.destroyAgent = async () => {
+      mocks.calls.push(`destroyAgent:${session.sessionId}`)
+      await destroy()
+    }
+  }
+  const remove = host.delete.bind(host)
+  host.delete = async (sessionId) => {
+    mocks.calls.push(`delete:${sessionId}`)
+    await remove(sessionId)
+  }
   for (const m of Object.values(mocks)) if (!Array.isArray(m)) m.mockReset()
 
   mocks.daoPick.mockImplementation((id, cols) => {
@@ -171,7 +173,6 @@ beforeEach(() => {
   )
   mocks.readSessionRunConfig.mockResolvedValue({})
   mocks.filterAvailableTools.mockImplementation((tools) => tools)
-  mocks.agentCreate.mockImplementation(async (params) => makeAgent(params.sessionId))
   mocks.closeSession.mockImplementation(async (sessionId) => {
     mocks.calls.push(`closeSession:${sessionId}`)
   })
@@ -180,27 +181,29 @@ beforeEach(() => {
 // ─── 用例 ────────────────────────────────────────────────────────────────
 
 describe('内置能力服务器实例的寿命绑会话，不绑运行时', () => {
-  it('BMCPL-U-98: invalidateAgent 只换运行时，实例留着', async () => {
+  it('BMCPL-U-98: invalidateAgent 只销毁 agent，实例留着', async () => {
     seedSession(SID)
     await sessionService.ensureAgentSession(SID)
 
     await sessionService.invalidateAgent(SID)
 
-    expect(agentOf(SID).invalidate).toHaveBeenCalledTimes(1)
+    expect(durableOf(SID).callsOf('destroyAgent')).toHaveLength(1)
+    expect(fakeHost.callsOf('delete')).toEqual([])
     // 回退重建是家常便饭（改配置、钉档案）—— 每次都掐断 ssh 的 control socket 没有道理
     expect(mocks.closeSession).not.toHaveBeenCalled()
   })
 
-  it('BMCPL-U-99 / 100: delete 先关停运行时（destroy）再释放实例，且只释放一次', async () => {
+  it('BMCPL-U-99 / 100: delete 先关停运行时（宿主 delete）再释放实例，且只释放一次', async () => {
     seedSession(SID)
     await sessionService.ensureAgentSession(SID)
 
     await sessionService.delete(SID)
 
-    expect(agentOf(SID).destroy).toHaveBeenCalledTimes(1)
+    expect(fakeHost.callsOf('delete')).toEqual([SID])
+    expect(durableOf(SID).closed).toBe(true)
     expect(closedSessions()).toEqual([SID])
     // 顺序是实打实的：还在跑的 run 可能正调着这台服务器的工具
-    expect(mocks.calls).toEqual([`destroy:${SID}`, `closeSession:${SID}`])
+    expect(mocks.calls).toEqual([`delete:${SID}`, `closeSession:${SID}`])
   })
 
   it('BMCPL-U-101: 先 invalidate 再 delete —— 实例照样被释放', async () => {
@@ -210,20 +213,21 @@ describe('内置能力服务器实例的寿命绑会话，不绑运行时', () =
 
     await sessionService.delete(SID)
 
-    // 曾经的洞：释放挂在 agent 的 dispose 钩子上，而此刻已经没有实例可 dispose 了
-    // （SessionManager.remove 提前返回），于是这条会话的 inproc 连接永远没人关
+    // 曾经的洞：释放挂在 agent 的 dispose 钩子上，而此刻已经没有 agent 可 dispose 了，
+    // 于是这条会话的 inproc 连接永远没人关
     expect(closedSessions()).toEqual([SID])
-    expect(mocks.calls).toEqual([`invalidate:${SID}`, `closeSession:${SID}`])
+    expect(mocks.calls).toEqual([`destroyAgent:${SID}`, `delete:${SID}`, `closeSession:${SID}`])
   })
 
-  it('BMCPL-U-102: 从没建过运行时的会话，delete 不抛且照样释放', async () => {
+  it('BMCPL-U-102: 从没打开过的会话，delete 不抛且照样释放', async () => {
     seedSession(SID)
 
     await expect(sessionService.delete(SID)).resolves.toBeUndefined()
 
     // 「有没有建过 Agent」与「有没有 inproc 连接」是两件事：工具装配失败、
     // 窗口刷新过，都会留下一条有连接没运行时的会话
-    expect(mocks.agentCreate).not.toHaveBeenCalled()
+    expect(fakeHost.callsOf('open')).toEqual([])
+    expect(fakeHost.callsOf('delete')).toEqual([SID])
     expect(closedSessions()).toEqual([SID])
   })
 
@@ -248,7 +252,7 @@ describe('内置能力服务器实例的寿命绑会话，不绑运行时', () =
     const result = await sessionService.pinAgentProfile(SID, 'coding')
 
     expect(result.success).toBe(true)
-    expect(agentOf(SID).invalidate).toHaveBeenCalledTimes(1)
+    expect(durableOf(SID).callsOf('destroyAgent')).toHaveLength(1)
     // 钉档案发生在子会话刚建好、还没说第一句话的时候：它与「这条会话结束了」无关
     expect(mocks.closeSession).not.toHaveBeenCalled()
   })

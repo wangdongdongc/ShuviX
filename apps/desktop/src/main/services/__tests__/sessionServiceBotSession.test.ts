@@ -44,6 +44,7 @@ vi.mock('../../dao/projectDao', () => ({ projectDao: { pick: vi.fn() } }))
 vi.mock('../../dao/settingsDao', () => ({ settingsDao: { findByKey: vi.fn() } }))
 vi.mock('../messageService', () => ({ messageService: { clear: vi.fn() } }))
 vi.mock('../sessionStorage', () => ({
+  isDurableSession: () => true,
   readSessionRunConfig: vi.fn(),
   appendModelChange: vi.fn()
 }))
@@ -58,7 +59,13 @@ vi.mock('../toolAggregator', () => ({
 }))
 vi.mock('../../utils/toolUtils/allowList', () => ({ buildAllowEntry: vi.fn() }))
 vi.mock('../agentService', () => ({ agentService: { getProfile: mocks.getProfile } }))
-vi.mock('../agentSession', () => ({ AgentSession: { create: vi.fn() } }))
+// 会话运行时换成假宿主 / 假门面（真模块的依赖图带模型注册表、事件适配器）
+vi.mock('../sessionHost', async () =>
+  (await import('./support/fakeSessionHost')).sessionHostModuleMock()
+)
+vi.mock('../agentSession', async () =>
+  (await import('./support/fakeSessionHost')).agentSessionModuleMock()
+)
 vi.mock('../bgTaskService', () => ({ killBySession: vi.fn(), setBgTaskNotifier: vi.fn() }))
 vi.mock('../../agents/agentHost', () => ({ resolveProfileModelSpec: vi.fn() }))
 vi.mock('../../utils/sessionConfigBroadcast', () => ({

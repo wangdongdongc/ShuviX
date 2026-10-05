@@ -61,6 +61,7 @@ import { hookService } from './services/hookService'
 import { reviewPermissionRequest } from './services/permissionReview'
 import { setPermissionReviewer } from './services/toolContext'
 import { installLlmNetwork } from './services/models'
+import { installSessionHostQuitHook } from './services/sessionHost'
 import {
   registerCustomProtocolHandlers,
   registerCustomProtocolSchemes
@@ -812,8 +813,15 @@ app.whenReady().then(async () => {
   })
 })
 
+// 应用退出前：先关停所有打开着的会话（每会话一个 durable Harness；第一次 before-quit 被拦下，
+// closeAll 最多等 5 秒，再重新 quit）。正忙的会话被关停时不改运行标记，下次打开报 interrupted。
+// 必须注册在下面的清理之前：清理要等会话都关完（第二次 before-quit）再做 —— 关停中的 run 还可能
+// 在用 MCP / 后台任务 / 浏览器
+const sessionHostQuit = installSessionHostQuitHook(app)
+
 // 应用退出前清理
 app.on('before-quit', () => {
+  if (!sessionHostQuit.ready) return
   destroyBrowserWindow()
   destroyAllTabs()
   killAllBgTasks()

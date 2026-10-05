@@ -56,6 +56,8 @@ vi.mock('../../services/messageService', () => ({
   messageService: { findLastBySession: mocks.findLastBySession }
 }))
 vi.mock('../../services/sessionStorage', () => ({
+  // 这组用例的子会话按旧口径「末条消息」答复（新格式会话读不出答复的那一支见 D10-58）
+  isDurableSession: () => false,
   appendModelChange: mocks.appendModelChange,
   appendThinkingLevelChange: mocks.appendThinkingLevelChange
 }))

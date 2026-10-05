@@ -1,0 +1,349 @@
+/**
+ * 桌面单测用的假会话运行时：FakeDurableSession（实现 DurableSession）与 FakeSessionHost（实现 SessionHost）。
+ *
+ *  - FakeDurableSession：可设的 `lock` / busy / interrupted / 挂起询问；submitUser / steer / followUp /
+ *    continue 的结果按脚本给（缺省 `{}`）；`destroyAgent` / `abort` 可挂闸门；每次调用记进 `calls`。
+ *    `lockOnFirstUse` 模拟 K3：第一次 submitUser / steer / followUp / continue / createAgent 时上锁。
+ *  - FakeSessionHost：open / peek / get / close / closeAll / delete；`storages` 是「存储在」的会话集合
+ *    （peek 只打开它们，open 会建）；`delete` 可挂闸门；调用记进 `calls`。
+ *
+ * 模块级的 `fakeHost` 给 `vi.mock('../sessionHost')` 用（`sessionHostModuleMock()`）；`resetFakeHost()`
+ * 每个用例前换一个新的。
+ */
+import { vi } from 'vitest'
+import type {
+  AdmitResult,
+  CreateAgentOptions,
+  DurableSession,
+  LockRecord,
+  NoticeInput,
+  NoticeResult,
+  RunState,
+  SessionHost,
+  SubmitResult,
+  UserSendOptions
+} from '@shuvix/agent-runtime'
+import type { UserInput } from '@earendil-works/pi-durable'
+import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
+import type { ThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
+
+export type Gate = { promise: Promise<void>; release: () => void }
+
+export function gate(): Gate {
+  let release!: () => void
+  const promise = new Promise<void>((resolve) => (release = resolve))
+  return { promise, release }
+}
+
+/** 一条最小的锁记录 */
+export function lockRecord(patch: Partial<LockRecord> = {}): LockRecord {
+  return {
+    conversationId: 1 as LockRecord['conversationId'],
+    profileName: 'work',
+    kind: 'root',
+    model: { provider: 'faux', modelId: 'faux-1' },
+    toolNames: [],
+    extensions: [],
+    sandboxed: false,
+    mcp: {},
+    skills: [],
+    createdAt: 0,
+    ...patch
+  }
+}
+
+const REFUSALS = new Set(['busy', 'no_model', 'closed'])
+
+export class FakeDurableSession implements DurableSession {
+  readonly sessionId: string
+  readonly harness = undefined as never
+  readonly effectiveSettings = undefined as never
+  closed = false
+  lock: LockRecord | undefined
+  runState: RunState = 'idle'
+  busy = false
+  interrupted = false
+  pendingInputCount = 0
+  pendingInputSummaries: string[] = []
+  /** 第一次起跑类调用时上的锁（模拟 K3） */
+  lockOnFirstUse: LockRecord | undefined
+  readonly calls: unknown[][] = []
+  submitResults: SubmitResult[] = []
+  steerResult: AdmitResult = {}
+  followUpResult: AdmitResult = {}
+  continueResult: SubmitResult = {}
+  /** submitUser 受理之后、落定之前挂着的闸门 */
+  submitGate: Gate | undefined
+  destroyGate: Gate | undefined
+  abortGate: Gate | undefined
+  createAgentError: unknown
+  destroyError: unknown
+  /** false = 下一次 submitUser 不受理就返回脚本结果（模拟创建被取消：`{}` 而没有受理） */
+  admit = true
+  respondResult = false
+
+  constructor(sessionId: string) {
+    this.sessionId = sessionId
+  }
+
+  private use(): void {
+    if (this.lock === undefined && this.lockOnFirstUse !== undefined) this.lock = this.lockOnFirstUse
+  }
+
+  async currentConversation(): Promise<never> {
+    throw new Error('FakeDurableSession has no conversations')
+  }
+
+  isBusy(): boolean {
+    return this.busy
+  }
+
+  isInterrupted(): boolean {
+    return this.interrupted
+  }
+
+  async continue(): Promise<SubmitResult> {
+    this.calls.push(['continue'])
+    if (this.closed) return { error: 'closed', code: 'closed' }
+    this.use()
+    return this.continueResult
+  }
+
+  async submitUser(content: UserInput, options: UserSendOptions = {}): Promise<SubmitResult> {
+    this.calls.push(['submitUser', content, options])
+    if (this.closed) return { error: `Session ${this.sessionId} is closed`, code: 'closed' }
+    const result = this.submitResults.shift() ?? {}
+    if (!this.admit) {
+      this.admit = true
+      return result
+    }
+    if (result.code === 'no_model') return result
+    this.use()
+    if (result.code !== undefined && REFUSALS.has(result.code)) return result
+    options.onAdmitted?.()
+    if (this.submitGate) await this.submitGate.promise
+    return result
+  }
+
+  async steer(content: UserInput): Promise<AdmitResult> {
+    this.calls.push(['steer', content])
+    this.use()
+    return this.steerResult
+  }
+
+  async followUp(content: UserInput): Promise<AdmitResult> {
+    this.calls.push(['followUp', content])
+    this.use()
+    return this.followUpResult
+  }
+
+  async writeNotice(notice: NoticeInput): Promise<NoticeResult> {
+    this.calls.push(['writeNotice', notice])
+    return { status: 'submitted' }
+  }
+
+  async notify(text: string, options?: { kind?: string }): Promise<void> {
+    this.calls.push(['notify', text, ...(options === undefined ? [] : [options])])
+  }
+
+  async abort(): Promise<void> {
+    this.calls.push(['abort'])
+    if (this.abortGate) await this.abortGate.promise
+    this.busy = false
+  }
+
+  async setThinkingLevel(level: ThinkingLevel): Promise<void> {
+    this.calls.push(['setThinkingLevel', level])
+  }
+
+  requestUserInput(request: InputRequest): Promise<InputResponse> {
+    this.calls.push(['requestUserInput', request])
+    return Promise.resolve({ kind: 'cancel', reason: 'fake' } as unknown as InputResponse)
+  }
+
+  respondToInput(requestId: string, response: InputResponse): boolean {
+    this.calls.push(['respondToInput', requestId, response])
+    return this.respondResult
+  }
+
+  async createAgent(options?: CreateAgentOptions): Promise<LockRecord> {
+    this.calls.push(['createAgent', ...(options === undefined ? [] : [options])])
+    if (this.createAgentError !== undefined) throw this.createAgentError
+    this.use()
+    this.lock ??= lockRecord()
+    return this.lock
+  }
+
+  async destroyAgent(): Promise<void> {
+    this.calls.push(['destroyAgent'])
+    if (this.destroyGate) await this.destroyGate.promise
+    if (this.destroyError !== undefined) throw this.destroyError
+    this.lock = undefined
+  }
+
+  /** 某类调用（按顺序） */
+  callsOf(name: string): unknown[][] {
+    return this.calls.filter((call) => call[0] === name)
+  }
+}
+
+export class FakeSessionHost implements SessionHost {
+  readonly sessions = new Map<string, FakeDurableSession>()
+  /** 存储存在的会话（peek 只打开这些） */
+  readonly storages = new Set<string>()
+  readonly calls: [string, string][] = []
+  sealed = false
+  deleteGate: Gate | undefined
+  deleteError: unknown
+  /** 新建的会话怎么配（打开时调用） */
+  configure: ((session: FakeDurableSession) => void) | undefined
+  /** 每个会话打开过的全部实例（重开 = 新实例） */
+  readonly instances = new Map<string, FakeDurableSession[]>()
+
+  private spawn(sessionId: string): FakeDurableSession {
+    const session = new FakeDurableSession(sessionId)
+    this.configure?.(session)
+    this.sessions.set(sessionId, session)
+    this.instances.set(sessionId, [...(this.instances.get(sessionId) ?? []), session])
+    return session
+  }
+
+  /** 直接放一个打开着的会话进来（不记调用） */
+  put(sessionId: string, patch: Partial<FakeDurableSession> = {}): FakeDurableSession {
+    this.storages.add(sessionId)
+    const session = this.spawn(sessionId)
+    Object.assign(session, patch)
+    return session
+  }
+
+  async open(sessionId: string): Promise<DurableSession> {
+    this.calls.push(['open', sessionId])
+    if (this.sealed) throw new Error(`Session host is closed; cannot open session ${sessionId}`)
+    const existing = this.sessions.get(sessionId)
+    if (existing) return existing
+    this.storages.add(sessionId)
+    return this.spawn(sessionId)
+  }
+
+  async peek(sessionId: string): Promise<DurableSession | undefined> {
+    this.calls.push(['peek', sessionId])
+    if (this.sealed) return undefined
+    const existing = this.sessions.get(sessionId)
+    if (existing) return existing
+    if (!this.storages.has(sessionId)) return undefined
+    return this.spawn(sessionId)
+  }
+
+  get(sessionId: string): FakeDurableSession | undefined {
+    return this.sessions.get(sessionId)
+  }
+
+  async close(sessionId: string): Promise<void> {
+    this.calls.push(['close', sessionId])
+    const session = this.sessions.get(sessionId)
+    if (session) session.closed = true
+    this.sessions.delete(sessionId)
+  }
+
+  async closeAll(): Promise<void> {
+    this.calls.push(['closeAll', ''])
+    this.sealed = true
+    for (const session of this.sessions.values()) session.closed = true
+    this.sessions.clear()
+  }
+
+  async delete(sessionId: string): Promise<void> {
+    this.calls.push(['delete', sessionId])
+    if (this.deleteGate) await this.deleteGate.promise
+    const session = this.sessions.get(sessionId)
+    if (session) session.closed = true
+    this.sessions.delete(sessionId)
+    this.storages.delete(sessionId)
+    if (this.deleteError !== undefined) throw this.deleteError
+  }
+
+  openSessionIds(): string[] {
+    return [...this.sessions.keys()]
+  }
+
+  /** 某类调用的会话 id（按顺序） */
+  callsOf(name: string): string[] {
+    return this.calls.filter(([kind]) => kind === name).map(([, id]) => id)
+  }
+}
+
+/** `vi.mock('../sessionHost')` 用的那个宿主（每个用例前 `resetFakeHost()`） */
+export let fakeHost = new FakeSessionHost()
+
+export function resetFakeHost(): FakeSessionHost {
+  fakeHost = new FakeSessionHost()
+  return fakeHost
+}
+
+/**
+ * `vi.mock('../sessionHost', async () => (await import('./support/fakeSessionHost')).sessionHostModuleMock())`
+ * —— 真模块的依赖图很重（模型注册表、事件适配器……），单测换成假的宿主。
+ */
+export function sessionHostModuleMock(): Record<string, unknown> {
+  return {
+    AUTO_RESUME_KEY: 'session.autoResume',
+    INTERRUPTED_SEND_POLICY: 'abort-then-send',
+    QUIT_CLOSE_CAP_MS: 5000,
+    getSessionHost: () => fakeHost,
+    peekSessionHost: () => fakeHost,
+    resetSessionHostForTests: vi.fn(),
+    installSessionHostQuitHook: vi.fn(() => ({ ready: true }))
+  }
+}
+
+/** sessionService 单测用的假门面模块：`AgentSession.of` 包一层假会话，清理函数是 spy */
+export const agentSessionSpies = {
+  clearAgentScopedState: vi.fn<(sessionId: string) => void>(),
+  /** 与真件同一形状：经宿主 delete（关掉并删存储） */
+  destroySessionRuntime: vi.fn<(sessionId: string) => Promise<void>>(async (sessionId) => {
+    await fakeHost.delete(sessionId)
+  })
+}
+
+const facades = new WeakMap<DurableSession, Record<string, unknown>>()
+
+/** 假门面：只转发 sessionService 会碰到的那几样 */
+function facadeOf(durable: DurableSession): Record<string, unknown> {
+  let facade = facades.get(durable)
+  if (!facade) {
+    facade = {
+      sessionId: durable.sessionId,
+      durable,
+      notify: (text: string) => durable.notify(text),
+      invalidate: async () => {
+        await durable.destroyAgent()
+        agentSessionSpies.clearAgentScopedState(durable.sessionId)
+      },
+      requestUserInput: (request: InputRequest) => durable.requestUserInput(request),
+      respondToInput: (requestId: string, response: InputResponse) =>
+        durable.respondToInput(requestId, response),
+      setThinkingLevel: (level: ThinkingLevel) => durable.setThinkingLevel(level),
+      abort: () => durable.abort(),
+      get isStreaming() {
+        return durable.isBusy()
+      },
+      get pendingInputCount() {
+        return durable.pendingInputCount
+      },
+      get pendingInputSummaries() {
+        return durable.pendingInputSummaries
+      }
+    }
+    facades.set(durable, facade)
+  }
+  return facade
+}
+
+/** `vi.mock('../agentSession', async () => (await import('./support/fakeSessionHost')).agentSessionModuleMock())` */
+export function agentSessionModuleMock(): Record<string, unknown> {
+  return {
+    AgentSession: { of: facadeOf },
+    clearAgentScopedState: agentSessionSpies.clearAgentScopedState,
+    destroySessionRuntime: agentSessionSpies.destroySessionRuntime
+  }
+}

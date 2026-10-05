@@ -1,398 +1,297 @@
 import {
-  WORK_PROFILE_NAME,
-  BOT_PROFILE_NAME,
   clearReviewState,
   clearSessionDecisions,
-  renderBotContext,
-  resolveInitialThinkingLevel,
-  toInProcessAgentType,
-  type AgentRuntime,
-  type CreatedAgent,
-  type InlineTokensSidecar
+  type AdmitResult,
+  type DurableSession,
+  type InlineTokensSidecar,
+  type SubmitResult
 } from '@shuvix/agent-runtime'
-import { sessionRecords } from './sessionRecords'
-import { agentService } from './agentService'
-import { botService } from './botService'
-import { agentFactory } from '../agents/agentHost'
-import { hookService, hookTriggers } from './hookService'
-import { buildTurnCompletedFacts, isDefaultTitle } from './sessionTriggerFacts'
-import { clearSession as clearFileTimeSession, recordRead } from '../utils/toolUtils/fileTime'
-import type { ModelCapabilities, ThinkingLevel, AgentRuntimeInfo } from '../types'
+import type { JsonObject, UserInput } from '@earendil-works/pi-durable'
 import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
-import type { SessionModelMetadata } from '../dao/types'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
-import { settingsService } from './settingsService'
-import { unpinSession } from './sandbox'
+import { chatFrontendRegistry } from '../frontend/core/ChatFrontendRegistry'
+import { t } from '../i18n'
 import { createLogger } from '../logger'
+import type { AgentRuntimeInfo, ThinkingLevel } from '../types'
+import { clearSession as clearFileTimeSession } from '../utils/toolUtils/fileTime'
+import { hookService, hookTriggers } from './hookService'
+import { unpinSession } from './sandbox'
+import { recordPromptAdmitted } from './sessionDayPromptService'
+import { getSessionHost } from './sessionHost'
+import { sessionRecords } from './sessionRecords'
+// 仅在方法体内调用：sessionService 也 import 本模块，ESM 活绑定下无初始化环
+import { sessionService } from './sessionService'
+import { buildTurnCompletedFacts, isDefaultTitle } from './sessionTriggerFacts'
 
 const log = createLogger('AgentSession')
 
-/**
- * 自动续跑开关（现读，同 `httpLog.enabled` 的口径：改了立刻生效）。
- * **缺省开** —— 只有明确写 'false' 才关：设置项是纯文本键值，一个写坏的值不该把能力关掉。
- */
-export const AUTO_RESUME_KEY = 'session.autoResume'
-
-/**
- * 通知合并窗口。几条后台任务同一时刻跑完时只起一轮 —— 这不是给 agent 设限，
- * 是别把一次「三件事都好了」拆成三轮各花一次上下文。
- */
-const RESUME_COALESCE_MS = 500
-
-// 注：原 buildSystemPrompt 已收敛到统一创建管线 —— persona/workspace/project 三个
-// 具名段 provider 见 agents/agentHost.ts；笔记本复用见 renderDefaultSystemPrompt。
-
-/** AgentSession.create 工厂参数 */
-export interface AgentSessionCreateParams {
-  sessionId: string
-  provider: string
-  model: string
-  capabilities: ModelCapabilities
-  workingDirectory: string
-  /** 扩展能力勾选（mcp:/skill:）—— 只在这里读一次，运行时没有换工具的入口 */
-  enabledTools: string[]
-  modelMetadata?: SessionModelMetadata
-  /**
-   * 会话根 Agent 的档案名（sessionService.resolveAgentProfileName 按会话形态推导：
-   * 项目会话 work / 无项目 chat / 笔记本 notebook，子会话可被父级钉成具名档案）。
-   * 解析侧已确认存在，这里仍保留 getProfile 的 work 兜底。
-   */
-  profileName: string
+/** 模型被拒（K4）的界面文案：运行时的原因（点名 provider 显示名与模型 id）套一层本地化 */
+export function noModelErrorText(reason: string): string {
+  return t('chat.agentNoModel', { reason })
 }
 
 /**
- * AgentSession — 封装单个 session 的所有 Agent 状态和操作（桌面宿主）。
+ * 发送失败要不要报给界面（裁决 PIN-15）：模型被拒、模型请求失败、run 意外失败 / 接不上、未知原因 →
+ * 报（投影还没接上，不报用户就什么都看不见）；忙、会话已关 → 不报（调用方自己知道）。
+ * 被中止 / 创建被取消本来就是 `{}`，不是错误。返回要广播的文案，undefined = 不报。
+ */
+export function reportableError(result: SubmitResult): string | undefined {
+  if (!result.error) return undefined
+  if (result.code === 'busy' || result.code === 'closed') return undefined
+  if (result.code === 'no_model') return noModelErrorText(result.error)
+  return result.error
+}
+
+/** steer / followUp 被拒时交给调用方的错误文案（模型被拒同样本地化） */
+function admissionErrorText(result: AdmitResult): string {
+  return result.code === 'no_model' ? noModelErrorText(result.error!) : result.error!
+}
+
+/** 门面缓存：同一个 DurableSession 实例永远拿到同一个门面（会话被关掉重开 = 新实例 = 新门面） */
+const facades = new WeakMap<DurableSession, AgentSession>()
+
+/**
+ * AgentSession —— 一条会话（pi-durable 存储 + Harness）的桌面门面，公共面与切换前一致。
  *
- * 创建/装配（systemPrompt 组装、工具解析、指令注入）已收敛到统一创建管线
- * （agents/agentHost 的 agentFactory + 会话档案）；本类保留桌面特有的
- * 生命周期编排：hook 埋点、ssh / fileTime 清理。
+ * 会话语义都在运行时的 DurableSession 里：锁（「有没有 agent」，没锁时第一次发送先创建，K3）、
+ * 通知路由（运行中 steer / 空闲自动续跑 + 500ms 合并窗口 / 显式喊停之后只写不跑 / 被中断推迟）、
+ * 中断会话上的发送策略、询问的挂起与中止顺序。这里**不再**有第二份。
  *
- * 自动标题不再是这里的业务：本类只在 prompt 受理与轮结束处 fire 两个**通用埋点**
- * （payload = 会话此刻的事实），标题逻辑整体在内置 auto-title hook + titler agent md。
+ * 门面只留桌面自己的事：
+ *  - hook 埋点：`session.prompt-accepted`（输入被受理那一刻，`onAdmitted`）与 `session.turn-completed`
+ *    （受理过的发送 / `continue()` 落定之后；被拒的不发，自动续跑不发 —— PIN-19），payload 是会话事实；
+ *  - 受理即入账活跃时间与日历（PIN-13）；
+ *  - 发送失败报给界面（PIN-15；运行时不广播）；
+ *  - 销毁 agent / 删除会话时的桌面清理：fileTime、命令沙箱钉子、（删除时）决策日志与审查状态、
+ *    hook 派发出去的 run。ssh / MCP 等内置能力服务器的寿命归会话，由 sessionService.delete 经
+ *    `mcpService.closeSession` 释放（PIN-23）。
  *
- * 通过 AgentSession.create() 工厂方法创建。
+ * bot 会话的「正文视同已读」（`recordRead`）不在这里：P1-11 的 `PromptHost.resolveBotContext` 每次
+ * 解析出 bot 段落时授予，是唯一的授予点。
  *
- * **现状（pi-durable 切换中）**：公共面原样保留，但 `create()` 里的 `agentFactory.createAgent`
- * 目前恒抛 `PhasePendingError`（旧运行时已在 P1-01 删除），所以生产路径上建不出实例、prompt 等
- * 路径随之抛同一个错误。TODO(pi-durable p1): P1-10 把本类改成 DurableSession 的门面
- * （nextTurn → followUp 垫片直到 phase 3）。通知三岔、续跑合并窗口、埋点这些桌面逻辑不变，
- * 单测经假运行时照常覆盖。
+ * 只经 `AgentSession.of(durable)` 取得；会话由 SessionHost 打开 / 关闭（sessionService 的
+ * getAgentSession / ensureAgentSession）。
  */
 export class AgentSession {
   readonly sessionId: string
 
-  private created: CreatedAgent
-  private runtime: AgentRuntime
-  /** 有人显式喊停过（用户按停止 / 级联停子会话），到下一条用户消息为止不自动续跑 */
-  private stoppedByUser = false
-  /** 合并窗口内待送达的通知 */
-  private pendingNotices: string[] = []
-  private resumeTimer: ReturnType<typeof setTimeout> | null = null
-
-  private constructor(sessionId: string, created: CreatedAgent) {
-    this.sessionId = sessionId
-    this.created = created
-    this.runtime = created.runtime
+  private constructor(readonly durable: DurableSession) {
+    this.sessionId = durable.sessionId
   }
 
-  /** 工厂方法：经统一创建管线（agentFactory + 会话档案）构建完整的 AgentSession */
-  static async create(params: AgentSessionCreateParams): Promise<AgentSession> {
-    const {
-      sessionId,
-      provider,
-      model,
-      capabilities,
-      workingDirectory,
-      enabledTools,
-      modelMetadata,
-      profileName
-    } = params
-
-    // 会话档案由形态推导（见 AgentSessionCreateParams.profileName）。三个基座都可被用户
-    // ~/.shuvix/agents/<name>.md 覆盖，而内置兜底恒存在（getProfile 对写坏的覆盖文件视而不见）
-    const profile = toInProcessAgentType(
-      agentService.getProfile(profileName) ?? agentService.getProfile(WORK_PROFILE_NAME)!
-    )
-
-    // 前向引用：onPromptAccepted 在 agent 执行期才触发，构造期不会调用
-    // eslint-disable-next-line prefer-const
-    let session: AgentSession
-
-    // bot 会话：把绑定的那份 bot md 的正文围栏后交给根 Agent。
-    //
-    // **只有 root 拿得到这段。** 子会话按自己的档案生成系统提示词、派发出去的子代理同理 ——
-    // 「人格决定怎么说话，不决定怎么干活」因此是结构保证而不是一句提示词纪律。
-    // 绑定的 md 被删则注入缺席，会话照常跑在基座 `bot` 上（见 botService.forSession）。
-    // 判据是**解析出来的根档案**而不是「settings 里有没有这个键」：形态推导是唯一的决定点
-    // （见 sessionService.resolveAgentProfileName 的次序）。按键判会让 `notebookPath + bot` 这种
-    // 畸形组合跑出「notebook 基座 + 人设围栏」的第三种东西 —— 那不是一种形态，只是没人裁决过的组合。
-    const bot = profileName === BOT_PROFILE_NAME ? botService.forSession(sessionId) : null
-    const systemContext = bot
-      ? [
-          renderBotContext({
-            name: bot.file.name,
-            displayName: bot.file.displayName,
-            file: bot.basePath,
-            body: bot.file.body
-          })
-        ]
-      : undefined
-    // 正文就在系统提示词里 = 视同「已读」：bot 用 `edit` 改自己这份文件时不必先 `read`
-    // （读后被改的检测仍然有效 —— 注入之后被别人改过，edit 照样拒绝）。派生 agent 的
-    // fileTime 归根会话，所以这里按 sessionId 记。
-    if (bot) recordRead(sessionId, bot.basePath)
-
-    const created = await agentFactory.createAgent({
-      kind: 'root',
-      sessionId,
-      profile,
-      systemContext,
-      model: { provider, model, capabilities },
-      thinkingLevel: resolveInitialThinkingLevel({
-        persisted: modelMetadata?.thinkingLevel,
-        reasoning: capabilities.reasoning
-      }),
-      cwd: workingDirectory,
-      // 扩展能力勾选（mcp:/skill:）作为 overlay 叠加在档案工具白名单上；运行期不再变
-      toolOverlay: enabledTools,
-      // UserPromptSubmit 通过、正式派发前的业务埋点（auto-title 的 quick 阶段订阅在此）
-      onPromptAccepted: (text) => session.firePromptAccepted(text)
-    })
-
-    session = new AgentSession(sessionId, created)
-    return session
+  /** 某个打开着的 DurableSession 的门面（缓存） */
+  static of(durable: DurableSession): AgentSession {
+    let facade = facades.get(durable)
+    if (!facade) {
+      facade = new AgentSession(durable)
+      facades.set(durable, facade)
+    }
+    return facade
   }
 
-  // ─── Public API ──────────────────────────────────────
+  // ─── 发送 ──────────────────────────────────────
 
   /**
-   * 向 Agent 发送消息（支持附带图片）。
-   *
-   * 派发前的埋点经注入的 `onPromptAccepted` 触发；轮结束后 fire `session.turn-completed`。
+   * 发送一条用户消息（可附图）并等这一轮落定。结果原样上交（`{}` 或 `{ error, code }`）：调用方要能区分
+   * 「没发出去」与「发出去了没回话」—— 子会话的驱动方据此报错而不是假装排队。
    */
   async prompt(
     text: string,
     images?: Array<{ type: 'image'; data: string; mimeType: string }>,
     display?: InlineTokensSidecar
-  ): Promise<{ error?: string }> {
+  ): Promise<SubmitResult> {
     log.info(
       `prompt session=${this.sessionId} text=${text.slice(0, 50)}... images=${images?.length || 0}`
     )
-    // 用户又开口了 —— 上一次「显式喊停」的收敛到此为止
-    this.stoppedByUser = false
-
-    const result = await this.runtime.prompt(text, images, display)
-
-    // 轮结束埋点（不 await；payload 组装失败只记日志，绝不影响会话主流程）
-    void this.fireTurnCompleted().catch((err) => log.warn(`turn-completed 埋点失败: ${err}`))
-    // 发送失败原样上交（UI 侧已由运行时广播 error 事件）：调用方要能区分
-    // 「没发出去」与「发出去了没回话」—— 子会话的驱动方据此报错而不是假装排队
+    const content: UserInput =
+      images && images.length > 0 ? [{ type: 'text', text }, ...images] : text
+    let admitted = false
+    const result = await this.durable.submitUser(content, {
+      ...(display === undefined ? {} : { display: display as unknown as JsonObject }),
+      onAdmitted: () => {
+        admitted = true
+        this.onPromptAdmitted(text)
+      }
+    })
+    // 轮结束埋点只给受理过的发送（不 await；payload 组装失败只记日志，绝不影响会话主流程）
+    if (admitted) {
+      void this.fireTurnCompleted().catch((err) => log.warn(`turn-completed 埋点失败: ${err}`))
+    }
+    this.reportFailure(result)
     return result
   }
 
-  // 注：指令文件/项目提示词随 createAgent 直接 append 进系统提示词（不再有懒注入步骤）。
-
-  /** 向运行中的 Agent 注入 steer 消息 */
+  /** 运行中插话（空闲时起一轮）。被拒 → reject（调用方把文案报给界面） */
   async steer(text: string): Promise<void> {
-    await this.runtime.steer(text)
+    const result = await this.durable.steer(text)
+    if (result.error) throw new Error(admissionErrorText(result))
+  }
+
+  /** 本轮结束后接着说（空闲时起一轮）。被拒 → reject */
+  async followUp(text: string): Promise<void> {
+    const result = await this.durable.followUp(text)
+    if (result.error) throw new Error(admissionErrorText(result))
   }
 
   /**
-   * 送达系统侧通知（后台任务 / 子会话跑完）。三岔：
-   *
-   *   运行中          → steer，插进当前 run（runtime.notify 内部处理）
-   *   空闲 + 允许续跑 → **自己起一轮**（resume）—— agent 因此能接着干，不必等用户开口
-   *   空闲 + 不允许   → nextTurn 排队，搭下一条用户消息的便车（改制前的行为）
-   *
-   * 「不允许」只有两种：全局设置关掉，或**这条会话刚被显式停过**。后者不是丢通知 ——
-   * 它退回排队路径,信息一条不少;要的是「用户喊停之后会话就收敛，直到他再开口」这个
-   * 语义（与运行时 abort 后拒收新询问同一条纪律）。刚按完停止两秒后
-   * agent 又自己说起话来，那是没听懂停止。
-   *
-   * **刻意不设续跑次数上限**：一个 agent 拿着完整状态决定自己的下一步，那是它的活；
-   * 该防的是「工具让它看不见真实状态」（那会让它空转），不是它的判断力。代价如实记：
-   * 无人值守时的花费没有上界，兜底是可见 + 可随时停。
+   * 「下一轮再说」—— 用户可见的 nextTurn 队列已决定去掉（Mapping #7），在 phase 3 的界面改完之前
+   * 先垫成 followUp。TODO(pi-durable p3): 界面去掉 nextTurn 之后删掉这个垫片。
+   */
+  async nextTurn(text: string): Promise<void> {
+    await this.followUp(text)
+  }
+
+  /** 继续被中断的工作（上个进程中途退出留下的 run）；空闲且没被中断时立刻返回 `{}` */
+  async continue(): Promise<SubmitResult> {
+    const result = await this.durable.continue()
+    if (!result.error) {
+      void this.fireTurnCompleted().catch((err) => log.warn(`turn-completed 埋点失败: ${err}`))
+    }
+    this.reportFailure(result)
+    return result
+  }
+
+  /**
+   * 送达系统侧通知（后台任务 / 子会话跑完）。路由全在运行时：运行中 steer、空闲且允许自动续跑 →
+   * 合并窗口内攒起来起一轮、显式喊停之后 / 开关关掉 → 写成通知条目、被中断 → 推迟到继续 / 下一次发送。
    */
   async notify(text: string): Promise<void> {
-    if (this.runtime.isStreaming || !this.canAutoResume()) {
-      await this.runtime.notify(text)
-      return
-    }
-    // 合并同一时刻到达的多条：3 条子会话同一秒跑完不该起 3 轮
-    this.pendingNotices.push(text)
-    if (this.resumeTimer) return
-    this.resumeTimer = setTimeout(() => {
-      this.resumeTimer = null
-      const notices = this.pendingNotices.splice(0)
-      if (notices.length === 0) return
-      void this.flushNotices(notices)
-    }, RESUME_COALESCE_MS)
+    await this.durable.notify(text)
   }
 
-  /** 起自动续跑那一轮；起不成（用户抢先发话 / 设置刚被关）就退回排队路径 */
-  private async flushNotices(notices: string[]): Promise<void> {
-    const text = notices.join('\n\n')
-    try {
-      if (!this.runtime.isStreaming && this.canAutoResume()) {
-        if (await this.runtime.resume(text)) return
-      }
-    } catch (err) {
-      log.warn(`自动续跑异常 session=${this.sessionId}: ${err}`)
-    }
-    await this.runtime.notify(text).catch((err) => log.warn(`通知排队失败: ${err}`))
+  /** 中止当前 run（显式喊停：到下一条用户消息之前不自动续跑） */
+  async abort(): Promise<void> {
+    await this.durable.abort()
   }
 
-  /** 全局开关（现读，同 bot 那两道护栏的口径）+ 「刚被显式停过」 */
-  private canAutoResume(): boolean {
-    if (this.stoppedByUser) return false
-    const raw = settingsService.get(AUTO_RESUME_KEY)
-    // 缺省开：没有这个键、或值写坏了，都按开处理；只有明确的 'false' 才关
-    return raw?.trim() !== 'false'
+  /** 设置思考深度（下一次请求生效；锁住期间照样可改） */
+  async setThinkingLevel(level: ThinkingLevel): Promise<void> {
+    await this.durable.setThinkingLevel(level)
   }
 
-  /** 本轮结束前追加消息，继续同一次运行（harness 新增能力） */
-  async followUp(text: string): Promise<void> {
-    await this.runtime.followUp(text)
-  }
-
-  /** 排队到下一次 prompt 之前（harness 新增能力；不被 abort 清空） */
-  async nextTurn(text: string): Promise<void> {
-    await this.runtime.nextTurn(text)
+  /** 当前上下文对应的 UI 消息列表。TODO(pi-durable p3): durable 条目的投影 */
+  async listChatMessages(): Promise<ChatMessage[]> {
+    return []
   }
 
   /**
-   * 中止生成（用户按停止、父会话级联停子会话、stop-sub-session）。
-   *
-   * 置 `stoppedByUser`：这三种都是「有人**显式**要它停下」，此后到下一条用户消息之前
-   * 不再自动续跑（见 notify）。内部清理路径（invalidate / destroy）走 abortQuietly，
-   * 不经这里 —— 那不是「有人喊停」，而是运行时被换掉。
+   * 运行时信息快照（设置页「监视器 → 智能体」）。durable 的请求是现解析的，没有一个「内存里的 Agent
+   * 对象」可读 —— 在 phase 3 的视图接上之前如实答 null（PIN-14）。TODO(pi-durable p3)
    */
-  async abort(): Promise<void> {
-    this.stoppedByUser = true
-    await this.runtime.abort()
+  async getRuntimeInfo(): Promise<AgentRuntimeInfo | null> {
+    return null
   }
 
-  // 没有 setModel：模型只在创建运行时那一刻读一次（会话树），运行期不换 ——
-  // 网关在有运行时的时候拒绝改模型，用户要换就先销毁运行时（sessionService.invalidateAgent）。
-
-  /** 设置思考深度 */
-  async setThinkingLevel(level: ThinkingLevel): Promise<void> {
-    await this.runtime.setThinkingLevel(level)
-  }
-
-  /** 当前上下文对应的 UI 消息列表 */
-  async listChatMessages(): Promise<ChatMessage[]> {
-    return await this.runtime.listChatMessages()
-  }
-
-  /** 运行时信息快照（读 harness 状态 + session 上下文，供设置页「监视器 → 智能体」展开时展示） */
-  async getRuntimeInfo(): Promise<AgentRuntimeInfo> {
-    return await this.runtime.getRuntimeInfo()
-  }
-
-  /** 当前是否有 run 在跑（零成本布尔；子会话状态查询用） */
+  /** 当前对话有 run 在跑（被中断的会话不算：什么都没在跑） */
   get isStreaming(): boolean {
-    return this.runtime.isStreaming
+    return this.durable.isBusy()
   }
 
   /** 挂起中的用户询问数（>0 = 卡在 ask 上等人回答） */
   get pendingInputCount(): number {
-    return this.runtime.pendingInputCount
+    return this.durable.pendingInputCount
   }
 
   /** 待答询问的人读摘要（父会话据此把问题转告用户） */
   get pendingInputSummaries(): string[] {
-    return this.runtime.pendingInputSummaries
+    return this.durable.pendingInputSummaries
+  }
+
+  requestUserInput(request: InputRequest): Promise<InputResponse> {
+    return this.durable.requestUserInput(request)
+  }
+
+  respondToInput(requestId: string, response: InputResponse): boolean {
+    return this.durable.respondToInput(requestId, response)
+  }
+
+  // ─── 生命周期 ──────────────────────────────────
+
+  /**
+   * 销毁 agent（agent 芯片上的 X、钉档案、清空之前）：运行时解锁（忙 / 被中断先中止，广播
+   * agent_closing 一对），会话照常开着，下一次发送按那时的配置重建。之后清掉桌面侧随 agent 的东西：
+   * fileTime 的「已读」记录、命令沙箱钉子。销毁失败只记日志，清理照做。
+   * 决策日志 / 审查状态 / 存储都不碰 —— 它们随会话而不随 agent。
+   */
+  async invalidate(): Promise<void> {
+    try {
+      await this.durable.destroyAgent()
+    } catch (err) {
+      log.warn(`销毁 agent 失败 session=${this.sessionId}: ${err}`)
+    }
+    clearAgentScopedState(this.sessionId)
+    log.info(`invalidate session=${this.sessionId}`)
+  }
+
+  /** 删除会话时的整套关停（见 `destroySessionRuntime`） */
+  destroy(): Promise<void> {
+    return destroySessionRuntime(this.sessionId)
   }
 
   // ─── 业务埋点（hook 触发；payload = 会话此刻的事实，与任何具体 hook 无关） ───
 
-  /** prompt 受理埋点：派发前同步取会话事实，fire 后立即返回（fire 绝不抛出） */
-  private firePromptAccepted(promptText: string): void {
+  /** 受理那一刻：活跃时间与日历入账，再 fire prompt-accepted（fire 绝不抛出） */
+  private onPromptAdmitted(promptText: string): void {
+    try {
+      recordPromptAdmitted(this.sessionId, globalThis.crypto.randomUUID())
+    } catch (err) {
+      log.warn(`活跃时间入账失败 session=${this.sessionId}: ${err}`)
+    }
     const title = sessionRecords.pick(this.sessionId, ['title'])?.title ?? ''
     hookTriggers.fire('session.prompt-accepted', {
       sessionId: this.sessionId,
-      profileName: this.created.profile.name,
+      profileName: this.profileName(),
       title,
       isDefaultTitle: isDefaultTitle(title),
       promptText
     })
   }
 
-  /** 轮结束埋点：事实由共用的构造器现算（聊天会话那一侧用的是同一个） */
+  /** 轮结束埋点：事实由共用的构造器现算 */
   private async fireTurnCompleted(): Promise<void> {
     const facts = await buildTurnCompletedFacts(this.sessionId)
     if (!facts) return
     hookTriggers.fire('session.turn-completed', {
       sessionId: this.sessionId,
-      profileName: this.created.profile.name,
+      profileName: this.profileName(),
       ...facts
     })
   }
 
-  // ─── 用户输入挂起 / 响应（委托 runtime） ────────────────
-
-  requestUserInput(request: InputRequest): Promise<InputResponse> {
-    return this.runtime.requestUserInput(request)
+  /** 这条会话 agent 的档案名：锁里记的那个（受理时必然已锁），否则按会话形态推导 */
+  private profileName(): string {
+    return this.durable.lock?.profileName ?? sessionService.resolveAgentProfileName(this.sessionId)
   }
 
-  respondToInput(requestId: string, response: InputResponse): boolean {
-    return this.runtime.respondToInput(requestId, response)
+  private reportFailure(result: SubmitResult): void {
+    const error = reportableError(result)
+    if (error === undefined) return
+    chatFrontendRegistry.broadcast({ type: 'error', sessionId: this.sessionId, error })
   }
+}
 
-  // ─── 生命周期 ──────────────────────────────────────
+/** 随 agent 一起作废的桌面侧状态（销毁 agent / 清空 / 删除会话共用） */
+export function clearAgentScopedState(sessionId: string): void {
+  clearFileTimeSession(sessionId)
+  // 下一个 agent 按那时的开关重新决定套不套沙箱（锁里记着它自己的钉子，这里只是旧登记的收尾）
+  unpinSession(sessionId)
+}
 
-  /**
-   * 使 Agent 失效（回退时使用，下次 init 会重建）。
-   *
-   * 这里的运行时**被弃用**（下次 ensure 重建一个新的），故必须从运行时注册中心注销 ——
-   * 漏注销会在监控页留下一个指向死 harness 的条目。派生 agent 不受影响：它们不随
-   * 根运行时重建而失效。
-   *
-   * **必须 await**：`abort()` 内部要等当前 run 真正跑完（pi 的 waitForIdle）。以前这里是
-   * fire-and-forget，运行时被立刻解绑，下一条消息就会造出第二个运行时 —— 两个 run 往同一棵
-   * 会话树上交叉写，`tool_use`/`tool_result` 配对作废，之后每一发请求都被 provider 打回。
-   * 关不掉就一直等（会话呈现「正在停止」），绝不让第二个运行时出生。
-   */
-  async invalidate(): Promise<void> {
-    await this.abortQuietly()
-    this.created.dispose()
-    clearFileTimeSession(this.sessionId)
-    // 下一个运行时按那时的开关重新决定套不套沙箱（工具参数与说明随之重建）
-    unpinSession(this.sessionId)
-    log.info(`invalidate session=${this.sessionId}`)
+/**
+ * 删除会话时的整套关停（会话打开与否都走一遍）：先中止 hook 派发出去的 run（titler 之类不该再往一条
+ * 正在删的会话上写）→ SessionHost 关掉并删除存储（忙就中止，等它彻底停下）→ 清掉桌面侧的会话状态
+ * （fileTime、决策日志、审查计数与卡片反馈、沙箱钉子）。删存储失败只记日志，清理照做。
+ */
+export async function destroySessionRuntime(sessionId: string): Promise<void> {
+  hookService.abortSessionRuns(sessionId)
+  try {
+    await getSessionHost().delete(sessionId)
+  } catch (err) {
+    log.warn(`关停并删除会话存储失败 session=${sessionId}: ${err}`)
   }
-
-  /** 完全销毁（删除会话时调用）。不 cascade 到子智能体。 */
-  async destroy(): Promise<void> {
-    // hook 派发的 agent 是会话资源（parentSessionId 就是本会话）：随会话销毁一并中止，
-    // 免得一个 titler 之类还在往刚被删掉的会话上写标题
-    hookService.abortSessionRuns(this.sessionId)
-    await this.abortQuietly()
-    this.created.dispose()
-    clearFileTimeSession(this.sessionId)
-    clearSessionDecisions(this.sessionId)
-    // 询问点审查的拒绝计数（连续 / 累计）与决策日志同寿
-    clearReviewState(this.sessionId)
-    unpinSession(this.sessionId)
-    log.info(`destroy session=${this.sessionId}`)
-  }
-
-  /**
-   * 关停当前 run。abort 抛错只记日志：清理链路的其余步骤仍要走完，
-   * 而「run 已停」这个保证由 abort 自身的 waitForIdle 提供，抛错时它已经不在跑了。
-   */
-  private async abortQuietly(): Promise<void> {
-    // 待起的自动续跑随运行时一起作废 —— 否则它会在一个已经被换掉/销毁的会话上起一轮
-    if (this.resumeTimer) {
-      clearTimeout(this.resumeTimer)
-      this.resumeTimer = null
-    }
-    this.pendingNotices.length = 0
-    try {
-      await this.runtime.abort()
-    } catch (err) {
-      log.warn(`中止运行时失败 session=${this.sessionId}: ${err}`)
-    }
-  }
+  clearFileTimeSession(sessionId)
+  clearSessionDecisions(sessionId)
+  clearReviewState(sessionId)
+  unpinSession(sessionId)
+  log.info(`destroy session=${sessionId}`)
 }

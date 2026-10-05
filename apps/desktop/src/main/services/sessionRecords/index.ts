@@ -21,7 +21,7 @@
  *
  * 会话树（对话内容）的内存化不在这里：sessionStorage 的树注册表按 isEphemeral / wasEphemeral 分流。
  */
-import { storageKindOf } from '@shuvix/chat-protocol/sessionStorageKind'
+import { storageKindOf, type SessionStorageKind } from '@shuvix/chat-protocol/sessionStorageKind'
 import { sessionDao } from '../../dao/sessionDao'
 import type { Session, SessionSettings } from '../../dao/types'
 
@@ -179,6 +179,17 @@ export class SessionRecords {
     const row = this.ephemeral.get(id)
     if (!row) return sessionDao.updateProjectId(id, projectId)
     row.projectId = projectId
+    row.updatedAt = Date.now()
+  }
+
+  /**
+   * 换存储类型 —— 只给「清空一条旧格式会话」用（旧转写已删，会话从此是一条全新的新格式会话；
+   * 什么都不带过去，不是迁移，见 messageService.clear）
+   */
+  updateStorageKind(id: string, storageKind: SessionStorageKind): void {
+    const row = this.ephemeral.get(id)
+    if (!row) return sessionDao.updateStorageKind(id, storageKind)
+    row.storageKind = storageKind
     row.updatedAt = Date.now()
   }
 

@@ -16,6 +16,7 @@
  * `AgentSession.create` 可捕获、sessionDao / projectDao 是一张内存行表）。
  */
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest'
+import { fakeHost, gate, lockRecord, resetFakeHost } from './support/fakeSessionHost'
 
 const mocks = vi.hoisted(() => ({
   daoPick: vi.fn<(id: string, cols: string[]) => unknown>(),
@@ -28,7 +29,6 @@ const mocks = vi.hoisted(() => ({
   findModelsByProvider: vi.fn(() => []),
   findByKey: vi.fn<(key: string) => string | undefined>(),
   filterAvailableTools: vi.fn<(tools: string[], projectPath?: string) => string[]>(),
-  agentCreate: vi.fn<(params: { sessionId: string; enabledTools: string[] }) => Promise<unknown>>(),
   broadcast: vi.fn<(event: Record<string, unknown>) => void>(),
   broadcastSessionConfigChanged: vi.fn<(sessionId: string) => void>(),
   daoTouchActive: vi.fn<(id: string) => void>()
@@ -63,6 +63,7 @@ vi.mock('../../dao/projectDao', () => ({ projectDao: { pick: mocks.projectPick }
 vi.mock('../../dao/settingsDao', () => ({ settingsDao: { findByKey: mocks.findByKey } }))
 vi.mock('../messageService', () => ({ messageService: { clear: vi.fn() } }))
 vi.mock('../sessionStorage', () => ({
+  isDurableSession: () => true,
   readSessionRunConfig: mocks.readSessionRunConfig,
   appendModelChange: vi.fn()
 }))
@@ -75,7 +76,13 @@ vi.mock('../mcpService', () => ({ mcpService: { closeSession: vi.fn() } }))
 vi.mock('../toolAggregator', () => ({ filterAvailableTools: mocks.filterAvailableTools }))
 vi.mock('../../utils/toolUtils/allowList', () => ({ buildAllowEntry: vi.fn() }))
 vi.mock('../agentService', () => ({ agentService: { getProfile: vi.fn() } }))
-vi.mock('../agentSession', () => ({ AgentSession: { create: mocks.agentCreate } }))
+// 会话运行时换成假宿主 / 假门面（真模块的依赖图带模型注册表、事件适配器）
+vi.mock('../sessionHost', async () =>
+  (await import('./support/fakeSessionHost')).sessionHostModuleMock()
+)
+vi.mock('../agentSession', async () =>
+  (await import('./support/fakeSessionHost')).agentSessionModuleMock()
+)
 vi.mock('../bgTaskService', () => ({ killBySession: vi.fn(), setBgTaskNotifier: vi.fn() }))
 vi.mock('../../agents/agentHost', () => ({ resolveProfileModelSpec: vi.fn() }))
 vi.mock('../../utils/sessionConfigBroadcast', () => ({
@@ -152,26 +159,6 @@ const writesOf = (id: string, key: string): unknown[] =>
     .filter((c) => c[0] === id && key in (c[1] as Record<string, unknown>))
     .map((c) => (c[1] as Record<string, unknown>)[key])
 
-/** 手动控制落定时机的 Promise —— 模拟「创建 / 关停在途」 */
-function deferred<T = void>(): { promise: Promise<T>; resolve: (v: T) => void } {
-  let resolve!: (v: T) => void
-  const promise = new Promise<T>((r) => {
-    resolve = r
-  })
-  return { promise, resolve }
-}
-
-interface FakeAgent {
-  sessionId: string
-  invalidate: () => Promise<void>
-  destroy: () => Promise<void>
-}
-
-/** 假 AgentSession：SessionManager 的 dispose 只碰 invalidate / destroy */
-function makeAgent(sessionId: string, invalidate: () => Promise<void> = async () => {}): FakeAgent {
-  return { sessionId, invalidate: vi.fn(invalidate), destroy: vi.fn(async () => {}) }
-}
-
 let seq = 0
 let SID = ''
 
@@ -198,17 +185,14 @@ beforeEach(() => {
   mocks.findModelsByProvider.mockReturnValue([])
   mocks.findByKey.mockReturnValue(undefined)
   mocks.filterAvailableTools.mockImplementation((tools) => tools)
-  mocks.agentCreate.mockImplementation(async (params) => makeAgent(params.sessionId))
+  resetFakeHost()
 })
 
 // ─── 写入口不上锁 ───────────────────────────────────────────────────────────
 
 describe('SKB-1 写入口不上锁（与扩展能力同一时刻对照）', () => {
-  it('SKB-1 创建在途 / 运行时存在 / 关停在途：知识库都写得进去，扩展能力同一时刻一律被拒', async () => {
+  it('SKB-1 锁着（会话开着 / 没开但锁镜像为真）/ 销毁在途：知识库都写得进去，扩展能力同一时刻一律被拒', async () => {
     seedSession({ id: SID, settings: { enabledTools: [] } })
-    const born = deferred<FakeAgent>()
-    const closed = deferred()
-    mocks.agentCreate.mockImplementationOnce(() => born.promise)
 
     /** 在当前这一刻同时打两个写入口：知识库该过，扩展能力该被拒且零写入 */
     const bothAt = (moment: string, base: string): void => {
@@ -217,22 +201,23 @@ describe('SKB-1 写入口不上锁（与扩展能力同一时刻对照）', () =
       expect(sessionService.updateEnabledTools(SID, ['skill:a']), moment).toBe(false)
     }
 
-    // ① 创建在途（ensure 同步登记）
-    const p = sessionService.ensureAgentSession(SID)
-    bothAt('creating', 'm1')
-    await vi.waitFor(() => expect(mocks.agentCreate).toHaveBeenCalledTimes(1))
+    // ① 没开着，但锁镜像说有 agent（上一次进程里建的）
+    sessions.get(SID)!.settings.agentLocked = true
+    bothAt('closed-locked', 'm1')
 
-    // ② 运行时存在
-    born.resolve(makeAgent(SID, () => closed.promise))
-    await p
+    // ② 开着、锁着（锁以运行时为准）
+    const session = fakeHost.put(SID, { lock: lockRecord() })
     expect((await sessionService.initAgent(SID)).created).toBe(true)
     bothAt('alive', 'm2')
 
-    // ③ 关停在途
+    // ③ 销毁在途（锁还在，直到运行时把它清掉）
+    const release = gate()
+    session.destroyGate = release
     const r = sessionService.invalidateAgent(SID)
     bothAt('closing', 'm3')
-    closed.resolve()
+    release.release()
     await r
+    expect(session.lock).toBeUndefined()
 
     // 三次都落库、各广播一次；扩展能力那三次一个字都没写
     expect(writesOf(SID, 'knowledgeBases')).toEqual([['m1'], ['m2'], ['m3']])

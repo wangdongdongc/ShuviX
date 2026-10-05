@@ -61,6 +61,7 @@ vi.mock('../../dao/projectDao', () => ({ projectDao: {} }))
 vi.mock('../../dao/settingsDao', () => ({ settingsDao: {} }))
 vi.mock('../messageService', () => ({ messageService: {} }))
 vi.mock('../sessionStorage', () => ({
+  isDurableSession: () => true,
   readSessionRunConfig: vi.fn(),
   appendModelChange: mocks.appendModelChange,
   appendThinkingLevelChange: mocks.appendThinkingLevelChange
@@ -80,7 +81,13 @@ vi.mock('../agentService', () => ({
       !BASE_PROFILE_NAMES.has(p.name) && !HOST_ONLY_PROFILE_NAMES.has(p.name)
   }
 }))
-vi.mock('../agentSession', () => ({ AgentSession: class {} }))
+// 会话运行时换成假宿主 / 假门面（真模块的依赖图带模型注册表、事件适配器）
+vi.mock('../sessionHost', async () =>
+  (await import('./support/fakeSessionHost')).sessionHostModuleMock()
+)
+vi.mock('../agentSession', async () =>
+  (await import('./support/fakeSessionHost')).agentSessionModuleMock()
+)
 vi.mock('../bgTaskService', () => ({ killBySession: vi.fn(), setBgTaskNotifier: vi.fn() }))
 vi.mock('../../agents/agentHost', () => ({
   resolveProfileModelSpec: mocks.resolveProfileModelSpec

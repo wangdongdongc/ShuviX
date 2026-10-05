@@ -88,7 +88,20 @@ export interface SessionSettings {
   model?: SessionModelSelection
   /** 这条会话选定的思考档位（同上；写入口 sessionStorage.appendThinkingLevelChange） */
   thinkingLevel?: string
+  /**
+   * 锁镜像：这条会话此刻有没有 agent（pi-durable 的锁记录在会话存储里，这里只是给界面便宜地读的一份
+   * 副本，裁决 Q7）。由 SessionHost 的 onLockChange 写（创建 / 销毁 / 每次打开都对账），清空会话时归 false。
+   */
+  agentLocked?: boolean
+  /**
+   * 运行标记：会话存储此刻的运行状态（idle / busy / interrupted）。由 SessionHost 的 onRunStateChange 写，
+   * 每次打开都对账；退出时正忙的会话**不改**（留着 busy，下次打开报 interrupted）。
+   */
+  runState?: SessionRunState
 }
+
+/** 会话存储的运行状态（与 agent-runtime 的 RunState 同值） */
+export type SessionRunState = 'idle' | 'busy' | 'interrupted'
 
 /** 会话设置里的模型选择：提供商行 id + 模型 id */
 export interface SessionModelSelection {

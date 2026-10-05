@@ -26,7 +26,6 @@ const mocks = vi.hoisted(() => ({
   findModelsByProvider: vi.fn(() => []),
   findByKey: vi.fn<(key: string) => string | undefined>(),
   filterAvailableTools: vi.fn<(tools: string[], projectPath?: string) => string[]>(),
-  agentCreate: vi.fn(),
   getProfile: vi.fn()
 }))
 
@@ -60,6 +59,7 @@ vi.mock('../../dao/projectDao', () => ({ projectDao: { pick: mocks.projectPick }
 vi.mock('../../dao/settingsDao', () => ({ settingsDao: { findByKey: mocks.findByKey } }))
 vi.mock('../messageService', () => ({ messageService: { clear: vi.fn() } }))
 vi.mock('../sessionStorage', () => ({
+  isDurableSession: () => true,
   readSessionRunConfig: mocks.readSessionRunConfig,
   appendModelChange: vi.fn()
 }))
@@ -72,7 +72,13 @@ vi.mock('../mcpService', () => ({ mcpService: { closeSession: vi.fn() } }))
 vi.mock('../toolAggregator', () => ({ filterAvailableTools: mocks.filterAvailableTools }))
 vi.mock('../../utils/toolUtils/allowList', () => ({ buildAllowEntry: vi.fn() }))
 vi.mock('../agentService', () => ({ agentService: { getProfile: mocks.getProfile } }))
-vi.mock('../agentSession', () => ({ AgentSession: { create: mocks.agentCreate } }))
+// 会话运行时换成假宿主 / 假门面（真模块的依赖图带模型注册表、事件适配器）
+vi.mock('../sessionHost', async () =>
+  (await import('./support/fakeSessionHost')).sessionHostModuleMock()
+)
+vi.mock('../agentSession', async () =>
+  (await import('./support/fakeSessionHost')).agentSessionModuleMock()
+)
 vi.mock('../bgTaskService', () => ({ killBySession: vi.fn(), setBgTaskNotifier: vi.fn() }))
 vi.mock('../../agents/agentHost', () => ({ resolveProfileModelSpec: vi.fn() }))
 vi.mock('../../utils/sessionConfigBroadcast', () => ({
@@ -258,17 +264,14 @@ describe('SCT-4 标签页会话不能同时是 bot 会话 / 项目记忆笔记�
 })
 
 describe('SCT-5 标签页会话跑起来：tab 基座、临时工作区、没有会话勾选', () => {
-  it('SCT-5 AgentSession.create 收到 profileName tab、临时目录、enabledTools []', async () => {
+  it('SCT-5 resolveAgentConfig 给出档案 tab、临时目录、没有会话勾选', async () => {
     const { id } = sessionService.create({ title: 'Chrome', chromeTab: BINDING })
-    mocks.agentCreate.mockResolvedValue({ invalidate: vi.fn(), destroy: vi.fn() })
-    await sessionService.ensureAgentSession(id)
-    expect(mocks.agentCreate).toHaveBeenCalledTimes(1)
-    expect(mocks.agentCreate.mock.calls[0][0]).toMatchObject({
-      sessionId: id,
-      profileName: 'tab',
-      workingDirectory: `/nonexistent/shuvix-unit/tmp/${id}`,
-      enabledTools: []
-    })
-    expect(mocks.getProfile).not.toHaveBeenCalled()
+    mocks.getProfile.mockImplementation((name: string) => ({ name, tools: [], instructionFiles: [], projectAwareness: false }))
+    const config = await sessionService.resolveAgentConfig(id)
+    expect(config.profile.name).toBe('tab')
+    expect(config.cwd).toBe(`/nonexistent/shuvix-unit/tmp/${id}`)
+    expect(config.toolOverlay).toEqual([])
+    // 只按形态推出的那一个名字取档案（没有别的档案参与）
+    expect(mocks.getProfile.mock.calls).toEqual([['tab']])
   })
 })

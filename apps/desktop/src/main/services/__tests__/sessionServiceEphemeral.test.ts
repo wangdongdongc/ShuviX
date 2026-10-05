@@ -16,7 +16,7 @@
  *   S2  对照：create(p) 落库一次 + 广播一次
  *   S3  内存父的子会话恒为内存会话（不传 / false / true），继承父的 enabledTools / projectId
  *   S4  持久父的子会话传 {ephemeral:true} 仍是持久会话
- *   S5  delete(内存)：行没了、不碰库、不广播；清理链（消息 / 后台任务 / 运行时 / 内置 MCP）各跑一次
+ *   S5  delete(内存)：行没了、不碰库、不广播；清理链（后台任务 / 运行时与存储（宿主 delete）/ 内置 MCP）各跑一次
  *   S6  delete(内存父) 连带两条内存子会话：子先于父，什么都不剩，不广播
  *   S7  写入口落在内存行上、不写库，getById 看得见
  *   S8  形态推导读内存行：bot → bot，笔记本 → notebook，无项目 → chat（有项目 → work）
@@ -83,7 +83,6 @@ const mocks = vi.hoisted(() => {
     broadcastTitleChanged: vi.fn(),
     broadcastConfigChanged: vi.fn(),
     readSessionRunConfig: vi.fn(),
-    agentCreate: vi.fn<(params: { sessionId: string }) => Promise<unknown>>(),
     closeSession: vi.fn<(sessionId: string) => Promise<void>>(),
     messageClear: vi.fn(),
     killBySession: vi.fn(),
@@ -124,6 +123,7 @@ vi.mock('../../dao/projectDao', () => ({ projectDao: { pick: mocks.projectPick }
 vi.mock('../../dao/settingsDao', () => ({ settingsDao: { findByKey: vi.fn() } }))
 vi.mock('../messageService', () => ({ messageService: { clear: mocks.messageClear } }))
 vi.mock('../sessionStorage', () => ({
+  isDurableSession: () => true,
   readSessionRunConfig: mocks.readSessionRunConfig,
   appendModelChange: vi.fn()
 }))
@@ -145,7 +145,13 @@ vi.mock('../../utils/toolUtils/allowList', () => ({
 vi.mock('../agentService', () => ({
   agentService: { getProfile: vi.fn(), isSessionProfile: vi.fn() }
 }))
-vi.mock('../agentSession', () => ({ AgentSession: { create: mocks.agentCreate } }))
+// 会话运行时换成假宿主 / 假门面（真模块的依赖图带模型注册表、事件适配器）
+vi.mock('../sessionHost', async () =>
+  (await import('./support/fakeSessionHost')).sessionHostModuleMock()
+)
+vi.mock('../agentSession', async () =>
+  (await import('./support/fakeSessionHost')).agentSessionModuleMock()
+)
 vi.mock('../bgTaskService', () => ({
   killBySession: mocks.killBySession,
   setBgTaskNotifier: vi.fn()
@@ -165,20 +171,13 @@ vi.mock('../../logger', () => ({
 }))
 
 import { sessionRecords } from '../sessionRecords'
+import { agentSessionSpies, fakeHost, resetFakeHost } from './support/fakeSessionHost'
 
 let sessionService: (typeof import('../sessionService'))['sessionService']
 
 beforeAll(async () => {
   ;({ sessionService } = await import('../sessionService'))
 })
-
-// ─── 假 AgentSession：SessionManager 的 dispose 只碰 invalidate / destroy ─────
-
-interface FakeAgent {
-  invalidate: ReturnType<typeof vi.fn>
-  destroy: ReturnType<typeof vi.fn>
-}
-const agents = new Map<string, FakeAgent>()
 
 /** 所有「写库」的 DAO spy —— 内存会话的任何操作都不该碰到其中任何一个 */
 const daoWrites = (): Array<ReturnType<typeof vi.fn>> => [
@@ -198,7 +197,7 @@ let clock = 1_000_000
 
 beforeEach(() => {
   table.clear()
-  agents.clear()
+  resetFakeHost()
   sessionRecords.clearEphemeralForTests()
   vi.clearAllMocks()
   // 子会话按 createdAt 排序：每次 create 拨一下时钟，顺序才是确定的
@@ -207,11 +206,6 @@ beforeEach(() => {
   mocks.readSessionRunConfig.mockResolvedValue({})
   mocks.projectPick.mockReturnValue(undefined)
   mocks.closeSession.mockResolvedValue(undefined)
-  mocks.agentCreate.mockImplementation(async (params) => {
-    const agent: FakeAgent = { invalidate: vi.fn(async () => {}), destroy: vi.fn(async () => {}) }
-    agents.set(params.sessionId, agent)
-    return agent
-  })
 })
 
 afterEach(() => {
@@ -306,9 +300,9 @@ describe('S3 / S4 子会话按父会话推定', () => {
 describe('S5 / S6 删除', () => {
   it('S5 delete(内存)：行没了、不碰库、不广播；清理链各跑一次', async () => {
     const s = create({}, EPH)
-    // 让它有一个运行时：删除要先关停它（destroy）
+    // 让它开着：删除要先经宿主关掉并删存储
     await sessionService.ensureAgentSession(s.id)
-    expect(agents.has(s.id)).toBe(true)
+    expect(fakeHost.get(s.id)).toBeDefined()
     vi.clearAllMocks()
 
     await sessionService.delete(s.id)
@@ -320,9 +314,11 @@ describe('S5 / S6 删除', () => {
     expect(mocks.broadcastListChanged).not.toHaveBeenCalled()
     expectNoDaoWrites()
 
-    expect(mocks.messageClear.mock.calls).toEqual([[s.id]])
+    // 清理链：后台任务 → 关停运行时并删存储（宿主 delete）→ 内置 MCP
     expect(mocks.killBySession.mock.calls).toEqual([[s.id]])
-    expect(agents.get(s.id)!.destroy).toHaveBeenCalledTimes(1)
+    expect(agentSessionSpies.destroySessionRuntime.mock.calls).toEqual([[s.id]])
+    expect(fakeHost.callsOf('delete')).toEqual([s.id])
+    expect(fakeHost.get(s.id)).toBeUndefined()
     expect(mocks.closeSession.mock.calls).toEqual([[s.id]])
   })
 
@@ -337,7 +333,7 @@ describe('S5 / S6 删除', () => {
 
     const order = [c1.id, c2.id, parent.id]
     expect(mocks.killBySession.mock.calls.map((c) => c[0])).toEqual(order)
-    expect(mocks.messageClear.mock.calls.map((c) => c[0])).toEqual(order)
+    expect(fakeHost.callsOf('delete')).toEqual(order)
     expect(mocks.closeSession.mock.calls.map((c) => c[0])).toEqual(order)
     for (const id of order) {
       expect(sessionService.getById(id)).toBeUndefined()

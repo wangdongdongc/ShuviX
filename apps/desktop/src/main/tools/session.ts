@@ -32,6 +32,7 @@ import { sessionService } from '../services/sessionService'
 import {
   subSessionRunner,
   DEFAULT_PROMPT_TIMEOUT_SEC,
+  type AnswerFields,
   type SubSessionInfo
 } from '../services/subSessionRunner'
 import { t } from '../i18n'
@@ -204,7 +205,7 @@ function blockedBlock(asked?: string[]): string {
   ].join('\n')
 }
 
-function renderChild(info: SubSessionInfo & { answer?: string; isError?: boolean }): string {
+function renderChild(info: SubSessionInfo & AnswerFields): string {
   // waiting-input 优先于「有没有答复」：它此刻停着这件事，比它上一轮说过什么更要紧
   if (info.status === 'waiting-input') {
     return [
@@ -220,7 +221,9 @@ function renderChild(info: SubSessionInfo & { answer?: string; isError?: boolean
       : `<reply>\n${info.answer}\n</reply>`
     : info.status === 'running'
       ? '<note>Still running. It was NOT cancelled.</note>'
-      : '<note>No reply yet.</note>'
+      : info.answerUnavailable
+        ? '<note>Its reply cannot be read back here yet (this version does not show new conversations to tools). The user can read it in that sub-session.</note>'
+        : '<note>No reply yet.</note>'
   return `${openTag(info)}\n${body}\n</sub-session>`
 }
 
@@ -343,7 +346,14 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
       driven: false,
       updatedAt: 0
     }
-    return text(renderChild({ ...info, answer: res.answer, isError: res.isError }))
+    return text(
+      renderChild({
+        ...info,
+        answer: res.answer,
+        isError: res.isError,
+        answerUnavailable: res.answerUnavailable
+      })
+    )
   }
 
   private async waitForSubSessions(
@@ -398,7 +408,14 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
       (params.sub_session_id ?? '').trim()
     )
     if ('error' in res) throw new Error(res.error)
-    return text(renderChild({ ...res.info, answer: res.answer, isError: res.isError }))
+    return text(
+      renderChild({
+        ...res.info,
+        answer: res.answer,
+        isError: res.isError,
+        answerUnavailable: res.answerUnavailable
+      })
+    )
   }
 
   private async stopSubSession(
