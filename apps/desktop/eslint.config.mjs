@@ -165,6 +165,10 @@ export default defineConfig(
         },
         // main-frontend-core：frontend/core 的运行时编排（Gateway / Registry / OperationContext）
         { type: 'main-frontend-core', pattern: 'src/main/frontend/core' },
+        // frontend/sync：视图同步的分发核（SyncHub 单例、钩子扇出、按前缀路由的传输），与 Registry 同层 ——
+        // sessionHost 的钉住 / 开关钩子与 sessionService 的删除要引它。它不碰 Electron：IPC 传输的
+        // webContents 由 ipc/syncHandlers 注册时注入
+        { type: 'main-frontend-core', pattern: 'src/main/frontend/sync' },
         // frontend 里非 core 的都是具体后端（electron / telegram / web）
         { type: 'main-frontend-impl', pattern: 'src/main/frontend' },
         { type: 'main-subagent', pattern: 'src/main/subagent' },

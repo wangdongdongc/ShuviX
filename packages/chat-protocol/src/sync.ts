@@ -33,3 +33,36 @@ export function isSyncTarget(value: unknown): value is SyncTarget {
 export function syncTargetKey(target: SyncTarget): string {
   return target.kind === 'session' ? `session:${target.sessionId}` : `agent:${target.agentId}`
 }
+
+// ─────────────────────────── 渠道上的调用（P3-05） ───────────────────────────
+
+/** 线上的严格 JSON 值（与 chord 的 `JsonValue` 同形；本包不依赖 chord） */
+export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
+
+/**
+ * 一次同步调用跨进程回来的信封（P3-05 PIN-01）：Electron 的 `ipcMain.handle` 拒绝时只带 `message`，
+ * chord 的 `RemoteServiceError.code`（如 `service_not_found`）会丢 —— 所以服务端总是 resolve 这个信封，
+ * 客户端遇到 `ok:false` 再抛一个带 `.code` 的 Error。
+ */
+export type SyncInvokeResult =
+  | { ok: true; value: JsonValue | undefined }
+  | { ok: false; error: { code?: string; message: string } }
+
+/**
+ * 渠道的视图同步面（`SessionChannelApi.sync`）：`invoke` 把一次 chord 服务调用发给某个目标，
+ * `onFrame` 收服务端推来的帧（每个订阅一个解码器，见 chat-ui 的 syncClient）。失败的调用以带 `code` 的
+ * Error 拒绝。
+ */
+export interface SyncChannel {
+  invoke(target: SyncTarget, call: JsonValue): Promise<JsonValue | undefined>
+  onFrame(callback: (frame: SyncFrame) => void): () => void
+}
+
+/** `SyncInvokeResult` 的失败分支 → 带 `.code` 的 Error（preload 与扩展共用一个口径） */
+export function syncInvokeError(error: { code?: string; message: string }): Error & {
+  code?: string
+} {
+  const thrown = new Error(error.message) as Error & { code?: string }
+  if (typeof error.code === 'string') thrown.code = error.code
+  return thrown
+}

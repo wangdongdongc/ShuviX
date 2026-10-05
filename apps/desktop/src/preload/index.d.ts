@@ -1126,6 +1126,8 @@ declare global {
         callback: (event: import('@shuvix/chat-protocol/appEvents').AppEvent) => void
       ) => () => void
     }
+    /** 视图同步（P3-05）：失败的调用以带 `code` 的 Error 拒绝 */
+    sync: import('@shuvix/chat-protocol/sync').SyncChannel
     pinChat: {
       /** 把指定 session 提到悬浮窗口（已悬浮则 focus） */
       pin: (sessionId: string) => Promise<{ success: boolean }>

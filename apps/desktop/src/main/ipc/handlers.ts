@@ -33,6 +33,7 @@ import { registerPinChatHandlers } from './pinChatHandlers'
 import { registerNotificationHandlers } from './notificationHandlers'
 import { registerLiveDocumentHandlers } from './liveDocumentHandlers'
 import { registerChromeExtensionHandlers } from './chromeExtensionHandlers'
+import { registerSyncHandlers } from './syncHandlers'
 
 /**
  * 统一注册所有 IPC 处理器
@@ -74,4 +75,5 @@ export function registerIpcHandlers(): void {
   registerNotificationHandlers()
   registerLiveDocumentHandlers()
   registerChromeExtensionHandlers()
+  registerSyncHandlers()
 }

@@ -8,7 +8,10 @@
  *
  *  - **懒建**：第一次 `getSessionHost()` 才建（模型注册表、DB 此刻都已就绪）；import 本模块什么都不做。
  *  - **钉住**（PIN-04）：会话还有活着的后台任务（bg bash、被驱动的子会话）就不被 LRU 关掉 ——
- *    完成通知回来时它还开着。忙碌的会话本来就不会被关。
+ *    完成通知回来时它还开着。忙碌的会话本来就不会被关。有前端正订阅着它的视图（SyncHub 的
+ *    `hasSubscribers`，P3-05）同样钉住。
+ *  - **开 / 关钩子**（P3-05）：`onSessionOpened` / `onSessionClosed` 接 `frontend/sync/syncWiring` 的扇出，
+ *    SyncHub 经它登记监听器。
  *  - **镜像**（PIN-06）：值没变就不写（每次写都会 bump `updatedAt`），也不发会话配置变更广播。
  *  - **退出**（PIN-11）：`installSessionHostQuitHook` —— 第一次 `before-quit` 先拦下，`closeAll()`
  *    （最多等 5 秒），再 `app.quit()`。正忙的会话被关停时不报运行状态，DB 里的 busy 标记熬过退出，
@@ -38,6 +41,8 @@ import {
   type DesktopToolHostDeps
 } from '../agents/agentHost'
 import { createLogger } from '../logger'
+// 仅在函数体内读（buildSessionHostDeps / isPinned）：syncWiring 也 import 本模块，ESM 活绑定下无初始化环
+import { peekSyncHub, sessionHostHooks } from '../frontend/sync/syncWiring'
 import type { ToolAgentIdentity } from './toolAgent'
 import { electronEventSink } from './agentRuntimeAdapters'
 import { getModelRegistry, providerCredentialPort } from './models'
@@ -137,11 +142,17 @@ export function buildSessionHostDeps(
     storageExists: sessionStorageExists,
     deleteStorage: deleteSessionStorage,
     isEphemeral: (sessionId) => sessionRecords.isEphemeral(sessionId),
-    isPinned: (sessionId) => taskRegistry.runningCount(sessionId) > 0,
+    // 还有活着的后台任务，或有前端正看着它（视图同步的订阅，P3-05）；hub 没建过就只数任务（不建 hub）。
+    // hasSubscribers 抛错照样抛出去 —— 宿主的 evictable 把它当钉住
+    isPinned: (sessionId) =>
+      taskRegistry.runningCount(sessionId) > 0 || (peekSyncHub()?.hasSubscribers(sessionId) ?? false),
     eventSink: electronEventSink,
     beforeAbort: beforeSessionAbort,
     onDrivenSettled: onSubSessionDrivenSettled,
     onInputsReopened: (sessionId) => reopenSessionReviews(sessionId),
+    // 开 / 关钩子经扇出交给 SyncHub（P3-05）：hub 换视图实现
+    onSessionOpened: sessionHostHooks.opened,
+    onSessionClosed: sessionHostHooks.closed,
     interruptedSendPolicy: INTERRUPTED_SEND_POLICY,
     autoResume: () => settingsService.get(AUTO_RESUME_KEY),
     today: () => localDate(),

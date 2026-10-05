@@ -43,6 +43,7 @@ import type {
   ImportResult,
   ImportSelection
 } from './types/configShare'
+import type { SyncChannel } from './sync'
 
 // ─────────────────────────── 前端 IPC 视图数据形状 ───────────────────────────
 
@@ -668,6 +669,12 @@ export interface SessionChannelApi {
     abortTts: () => Promise<void>
     onChunk: (callback: (data: { filePath: string; index: number }) => void) => () => void
   }
+  /**
+   * 视图同步（phase 3，P3-05）：会话 / 派生 agent 的视图经 chord 的复制状态推过来（见 `./sync`）。
+   * 失败的调用以带 `code` 的 Error 拒绝（如 `service_not_found`）；还没接上的端（Chrome 侧边栏，P3-09
+   * 之前）一律以 `unsupported` 拒绝。
+   */
+  sync: SyncChannel
 }
 
 /**
