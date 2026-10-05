@@ -6,6 +6,10 @@
  *
  * hookService / messageService / settingsService / 前端注册表是替身；toolContext 的 dao / paths / policy /
  * sandbox / skill / knowledge 依赖照 toolContext.test 的做法替身（内置策略读仓库里那一份 md）。
+ *
+ * P2-07-53（p2-07-test-design.md，PIN-09）—— 同一个防递归经一台**内置 MCP 服务器**走一遍：真 database
+ * server（凭据 DAO 与连接池是替身）隔着真 MCP 协议，scope 带 `agentOf`；调用身份经 `_meta` 进来，
+ * 服务器把它并进 opts、把 agentOf 交给真 getDesktopSecurityContext，审查接缝据此认出审查员。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
@@ -17,7 +21,11 @@ const rv = vi.hoisted(() => ({
   listBySession: vi.fn(async (_sessionId: string): Promise<unknown[]> => []),
   settingsGet: vi.fn((_key: string): string | undefined => undefined),
   broadcast: vi.fn((_event: Record<string, unknown>) => {}),
-  builtinDir: `${__dirname}/../../../../../../packages/agent-runtime/src/security/builtinPolicies/md`
+  builtinDir: `${__dirname}/../../../../../../packages/agent-runtime/src/security/builtinPolicies/md`,
+  /** 用户策略（P2-07-53 装回退役的 ask-on-database）；缺省没有 */
+  userPolicies: [] as unknown[],
+  /** P2-07-53 的连接池替身记下的查询 */
+  queries: [] as string[]
 }))
 
 vi.mock('../hookService', () => ({
@@ -48,7 +56,7 @@ vi.mock('../skillService', () => ({
 vi.mock('../knowledge/sessionBundle', () => ({ enabledTargets: () => [] }))
 vi.mock('../policyService', () => ({
   policyService: {
-    getUserPolicies: () => [],
+    getUserPolicies: () => rv.userPolicies,
     readBuiltinPolicyMd: (fileName: string) => {
       try {
         return readFileSync(join(rv.builtinDir, fileName), 'utf-8')
@@ -74,6 +82,24 @@ vi.mock('../../utils/paths', () => ({
     !!id && !/[/\\]/.test(id) && id !== '.' && id !== '..' && !id.includes('..'),
   getShuvixKnowledgeRootDir: () => '/tmp/shuvix-rv-knowledge-shuvix'
 }))
+// P2-07-53：database 服务器的凭据 DAO 与连接池（只要一条可写连接、查询回 OK）
+vi.mock('../../dao/dbCredentialDao', () => ({
+  dbCredentialDao: {
+    findAllNamesWithType: () => [{ name: 'rw-pg', dbType: 'postgresql', readonly: false }]
+  }
+}))
+vi.mock('../builtinMcp/dbConnections', () => ({
+  dbManager: {
+    connectedNames: () => [],
+    connectAndQuery: async (_sid: string, _name: string, sql: string) => {
+      rv.queries.push(sql)
+      return 'OK'
+    },
+    disconnect: async () => {},
+    runtimeStatus: () => undefined,
+    onChange: () => () => {}
+  }
+}))
 vi.mock('../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {}, debug: () => {} })
 }))
@@ -91,6 +117,11 @@ import {
 } from '../toolContext'
 import type { ToolAgentIdentity } from '../toolAgent'
 import { reviewPermissionRequest } from '../permissionReview'
+import { Client } from '@modelcontextprotocol/sdk/client/index.js'
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
+import type { PermissionRequestEvent } from '@shuvix/agent-runtime'
+import { createDatabaseMcpServerFactory } from '../builtinMcp/databaseServer'
+import { retiredPolicy } from '../../../../../../packages/agent-runtime/src/security/__tests__/fixtures/retiredPolicies'
 
 const SID = 'rv-s1'
 /** 会话目录外的普通文件：ask-on-external-path#1（ask 档，审查接缝只管这一档） */
@@ -181,6 +212,8 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  rv.userPolicies.length = 0
+  rv.queries.length = 0
   setPermissionReviewer(null)
   clearReviewState(SID)
   clearSessionDecisions(SID)
@@ -230,5 +263,67 @@ describe('P2-06-21 只有绑在埋点上的派生档案才跳过，绑定集合�
     expect(rv.decide).toHaveBeenCalledTimes(2)
     expect(requestUserInput).toHaveBeenCalledTimes(1)
     expect((asks[0] as AskInputRequest).review).toBeUndefined()
+  })
+})
+
+describe('P2-07-53 经内置 MCP 服务器的防递归（真 database server + 真门 + 真审查接缝）', () => {
+  it('P2-07-53 审查员（对话 3）经 database 查询：不交审查、问人一次；根（对话 1）交审查，payload 主体是 work，事件带 taskId / conversationId', async () => {
+    rv.userPolicies.push(retiredPolicy('ask-on-database'))
+    const events: PermissionRequestEvent[] = []
+    setPermissionReviewer((event, signal) => {
+      events.push(event)
+      return reviewPermissionRequest(event, signal)
+    })
+
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+    await createDatabaseMcpServerFactory()(
+      {
+        sessionId: SID,
+        requestUserInput: requestUserInput as never,
+        agentOf: (conversationId) => IDENTITIES[conversationId]
+      },
+      serverTransport
+    )
+    const client = new Client({ name: 'test', version: '0.0.0' })
+    await client.connect(clientTransport)
+    const query = (meta: Record<string, unknown>): Promise<unknown> =>
+      client.callTool({
+        name: 'query',
+        arguments: { connection: 'rw-pg', sql: 'DELETE FROM t', description: 'clean up' },
+        _meta: meta
+      })
+
+    try {
+      // 1. 审查员自己要权限：不交审查，人被问一次、卡片上没有审查标记
+      const asReviewer = (await query({
+        'shuvix.dev/toolCallId': 'tc-3',
+        'shuvix.dev/agentId': 'sub-r1',
+        'shuvix.dev/taskId': 22,
+        'shuvix.dev/conversationId': 3
+      })) as { isError?: boolean }
+      expect(asReviewer.isError).toBeFalsy()
+      expect(rv.decide).not.toHaveBeenCalled()
+      expect(requestUserInput).toHaveBeenCalledTimes(1)
+      expect((asks[0] as AskInputRequest).id).toBe('tc-3')
+      expect((asks[0] as AskInputRequest).review).toBeUndefined()
+
+      // 2. 根 agent：交审查（放行），不再问人
+      const asRoot = (await query({
+        'shuvix.dev/toolCallId': 'tc-1',
+        'shuvix.dev/agentId': SID,
+        'shuvix.dev/taskId': 20,
+        'shuvix.dev/conversationId': 1
+      })) as { isError?: boolean }
+      expect(asRoot.isError).toBeFalsy()
+      expect(rv.decide).toHaveBeenCalledTimes(1)
+      expect(payloadOf(0).agent).toStrictEqual({ profile: 'work', kind: 'root' })
+      expect(requestUserInput).toHaveBeenCalledTimes(1)
+
+      const rootEvent = events.find((e) => e.toolCallId === 'tc-1')
+      expect(rootEvent).toMatchObject({ taskId: 20, conversationId: 1 })
+      expect(rv.queries).toEqual(['DELETE FROM t', 'DELETE FROM t'])
+    } finally {
+      await client.close()
+    }
   })
 })
