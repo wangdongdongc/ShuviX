@@ -29,10 +29,10 @@ import { Type, getCurrentSystemPrompt, type FauxResponseStep } from '@earendil-w
 import {
   defineTool,
   type ConversationId,
-  type JsonValue,
   type TaskRecord,
   type ToolRegistration
 } from '@earendil-works/pi-durable'
+import type { JsonValue } from '@earendil-works/chord'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import type {
   DurableSession,
@@ -42,13 +42,7 @@ import type {
 } from '@shuvix/agent-runtime'
 import type { Session } from '../../../dao/types'
 import type { ToolAgentIdentity } from '../../toolAgent'
-import {
-  fauxKit,
-  testDepsOverrides,
-  transcript,
-  withTimeout,
-  type FauxKit
-} from './realHost'
+import { fauxKit, testDepsOverrides, transcript, withTimeout, type FauxKit } from './realHost'
 import { messageText } from '../../../../../../../packages/agent-runtime/src/durable/__tests__/support/transcript'
 
 // ─────────────────────────── 跨进程的状态（hoisted） ───────────────────────────
@@ -501,6 +495,7 @@ export async function bootProcess(options: BootOptions = {}): Promise<Proc> {
   const { registerBuiltinTool } = await import('../../toolRegistry')
   const { setBuiltinMcpAgentResolver } = await import('../../mcpService')
   // 真 session 工具 import 即自注册；派发工具的展示项同理（工厂不在内置表里 —— 它按 agent 解析）
+  // eslint-disable-next-line boundaries/dependencies -- 整合夹具有意让真的 session 工具进内置表、驱动真的运行器（产品里由 allTools 引入；这里 allTools 是空的替身）
   await import('../../../tools/session')
   await import('../../../agents/AgentTool')
 
@@ -827,9 +822,7 @@ export function sqliteFiles(): string[] {
 
 /** 只看会话 id：`<id>.sqlite` 及 -wal / -shm 归一成 id */
 export function storageIds(): string[] {
-  return [
-    ...new Set(sqliteFiles().map((name) => name.replace(/\.sqlite(-wal|-shm)?$/, '')))
-  ].sort()
+  return [...new Set(sqliteFiles().map((name) => name.replace(/\.sqlite(-wal|-shm)?$/, '')))].sort()
 }
 
 /** 子会话通知（pi.user 或写入的通知条目里带 `<sub-session` 围栏） */
@@ -876,6 +869,7 @@ export function sleep(ms: number): Promise<void> {
 
 interface ProbeCtx {
   sessionId: string
+  agent?: ToolAgentIdentity
   agentOf?: (conversationId: number) => ToolAgentIdentity | undefined
 }
 
