@@ -15,7 +15,7 @@
  *    中断会话上的发送按 `interruptedSendPolicy` 处理（一行切换）。
  *  - **系统通知**（R1/Q3）：会话被中断、或空闲但收件箱里留着上次失败的输入时，通知不能直接写
  *    （任何提交都会开启调度器 / 把残留输入带着起一轮），先存进 `SessionStateDoc.deferredNotices`，
- *    在下一次发送之前、继续、中止时送达。
+ *    在下一次发送之前、继续（被中断时；空闲时 continue 是无操作，P3-10a）、中止时送达。
  *  - **自动续跑**（R13，`notify`）：运行中 → steer；空闲且允许 → 合并窗口内攒起来起一轮；空闲但
  *    不允许 → 写通知；被中断 → 推迟。显式 `abort()` 之后到下一次 `submitUser` 之前不自动续跑。
  *  - **中止顺序**：先关询问窗口 → 宿主的中止前 seam（作废进行中的自动审查）→ 取消挂起的询问 →
@@ -315,7 +315,10 @@ export interface DurableSession {
    * → 根的身份（随锁现取；未锁 = undefined）。句柄已关 → undefined。
    */
   agentIdentity(conversationId: number): AgentIdentity | undefined
-  /** 继续被中断的工作，等当前对话空闲；空闲且未中断时立刻返回 */
+  /**
+   * 继续被中断的工作，等当前对话空闲。空闲且未中断时立刻返回 `{}`，什么都不做（不建 agent、不写、不开启
+   * 调度器）；只有要续上被中断的工作时才没锁先建 agent（K3）
+   */
   continue(): Promise<SubmitResult>
   /**
    * 不等空闲的「继续」（P2-09）：被中断时建 agent、重开询问、放下推迟的通知、开启调度器就返回；
@@ -1480,12 +1483,18 @@ export class DurableSessionImpl implements DurableSession {
       return await this.op(async () => {
         // 续上的准备在回退区段里（PIN-22）；等空闲不在
         const resumed = await this.inSection(
-          async (): Promise<{ conversation: Conversation } | { refused: SubmitResult }> => {
+          async (): Promise<
+            { conversation: Conversation } | { refused: SubmitResult } | { idle: true }
+          > => {
+            // 空闲且没被中断：严格的无操作（不建 agent、不重开询问、不送达、不开启调度器 —— 与
+            // resumeInterrupted 同口径，P3-10a 裁定）。在区段里判定：回退之后 fork 上没有可续的工作
+            if (!this.isInterrupted() && this.state === 'idle') return { idle: true }
             const conversation = await this.currentConversation()
             const refused = await this.resumeWork(conversation)
             return refused === undefined ? { conversation } : { refused }
           }
         )
+        if ('idle' in resumed) return {}
         if ('refused' in resumed) return resumed.refused
         await resumed.conversation.waitForIdle(BG)
         return {}

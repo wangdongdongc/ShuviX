@@ -6,11 +6,10 @@
  *   11 下一次发送按此刻的设置在 F 上重建锁：配置换成 faux-2 + `mcp:x` + 思考 high → 配置读一次、
  *      lock.conversationId = F、F 的 pi.agent 是 faux-2 / high、回退后的第一个请求用 faux-2 且带 X、
  *      agent_created 一次、人设冻结在 F 上
- *   12 没有发送就没有锁：后台通知写成通知（显式喊停）、不起 run；显式 createAgent() 锁在 F 上
- *
- * 12 的偏差（报给协调者）：设计稿写「`continue()` 返回 `{}` 且不建锁」，但 K3 的既有规矩是 `continue()`
- * 没锁先建 agent（`resumeWork` → `ensureAgent`，RC-07 等用例都依赖它）。这里照实断言：`continue()` 返回
- * `{}`、不发请求，它建的锁落在 F 上（锁永远在当前对话上这一条不变式照样成立）。
+ *   12 没有发送就没有锁：后台通知写成通知（显式喊停）、不起 run；`continue()` 返回 `{}`、不建锁、不发布
+ *      （协调者裁定：空闲且没被中断的 continue 是严格的无操作，与 resumeInterrupted 同口径）；显式
+ *      createAgent() 锁在 F 上
+ *   12b 补充：从没跑过、没锁的空闲会话上 `continue()` 同样返回 `{}`、不建锁
  */
 import { AgentDoc } from '@earendil-works/pi-durable'
 import { describe, expect, it } from 'vitest'
@@ -129,7 +128,7 @@ describe('P3-10a · the agent lock', () => {
     TIMEOUT
   )
 
-  it('P3-10a-12 no lock without a send: a background notify is written (stopped by the user), no run; continue() makes no request (K3: its lock lands on F); an explicit createAgent() locks on F', async () => {
+  it('P3-10a-12 no lock without a send: a background notify is written (stopped by the user), no run; continue() returns {} with no lock and no publication; an explicit createAgent() locks on F', async () => {
     const { t, session, ids } = await rollbackBase()
     const F = forkedId(await session.rollbackTo(ids.u2))
     expect(session.lock).toBeUndefined()
@@ -142,16 +141,31 @@ describe('P3-10a · the agent lock', () => {
     expect(noticeTexts(await allEntries(await session.currentConversation()))).toEqual(['bg done'])
     expect(session.runState).toBe('idle')
 
+    const recorder = rawPublications(session)
+    const configCalls = t.configCalls.length
     expect(await session.continue()).toEqual({})
-    expect(t.kit.callCount).toBe(calls)
-    // K3（见文件头）：continue 没锁先建 agent —— 建在 F 上
-    expect(session.lock?.conversationId).toBe(F)
-
-    await session.destroyAgent()
+    recorder.stop()
+    expect(recorder.publications).toEqual([])
     expect(session.lock).toBeUndefined()
+    expect(t.configCalls.length).toBe(configCalls)
+    expect(t.kit.callCount).toBe(calls)
+
     const lock = await session.createAgent()
     expect(lock.conversationId).toBe(F)
     expect(session.lock?.conversationId).toBe(F)
     expect(t.kit.callCount).toBe(calls)
+  })
+
+  it('P3-10a-12b continue() on an idle, unlocked, never-run session returns {} with no lock and no publication', async () => {
+    const t = await makeHost()
+    const session = await t.open('s1')
+    const recorder = rawPublications(session)
+    expect(await session.continue()).toEqual({})
+    recorder.stop()
+    expect(recorder.publications).toEqual([])
+    expect(session.lock).toBeUndefined()
+    expect(t.configCalls).toEqual([])
+    expect(t.mirror.filter(([, locked]) => locked)).toEqual([])
+    expect(t.kit.callCount).toBe(0)
   })
 })
