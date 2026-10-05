@@ -594,7 +594,7 @@ declare global {
     message: {
       list: (sessionId: string) => Promise<ChatMessage[]>
       clear: (sessionId: string) => Promise<{ success: boolean }>
-      /** 回退到指定消息之前（entry 树 leaf 移到其父节点，使 Agent 失效） */
+      /** 回退到指定消息之前（fork 到它之前、销毁 agent）；`success:false` = 没有可回退的目标，什么都没动 */
       rollback: (params: { sessionId: string; messageId: string }) => Promise<{ success: boolean }>
     }
     settings: {

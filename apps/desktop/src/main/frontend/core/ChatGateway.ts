@@ -89,12 +89,11 @@ export interface ChatGateway {
   clearMessages(sessionId: string): Promise<void>
 
   /**
-   * 回退到指定消息之前，使 Agent 失效。
-   *
-   * entry 树是 append-only：这里做的是把 leaf 移到目标 entry 的父节点，
-   * 被"删掉"的分支仍在树上。旧的 deleteFromMessage 与之语义重合，已合并掉。
+   * 回退到指定消息之前（P3-10b）：运行时把当前对话换成目标之前的 fork（旧分支留在存储里、不再可见），
+   * 合格时顺带销毁 agent。真的回退了 → true；没有可回退的目标（旧格式会话、id 不是条目 id、目标不在当前
+   * 对话里 / 不是用户消息）→ false，什么都不动（在跑的 run 照常跑）。
    */
-  rollbackMessage(sessionId: string, messageId: string): Promise<void>
+  rollbackMessage(sessionId: string, messageId: string): Promise<boolean>
 
   // ─── 资源操作 ──────────────────────────────────
 

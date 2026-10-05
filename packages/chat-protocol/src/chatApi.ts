@@ -794,7 +794,9 @@ export interface HostApi {
    * 消息写入口已全部移除（AgentHarness 迁移）：消息只能由 harness 在运行中产生并
    * 落成 entry，外部不再能凭空 add / 删单条。剩下的两个都是**结构性**操作：
    *  - clear    清空整棵 entry 树
-   *  - rollback 把会话树的 leaf 移到目标消息的父节点（原 deleteFrom 与之语义重合，已并入）
+   *  - rollback 把当前对话换成目标那条用户消息之前的 fork（旧分支留在存储里、不再可见；原 deleteFrom
+   *    与之语义重合，已并入）。`success` = 真的回退了：没有可回退的目标（旧格式会话、id 不是条目 id、
+   *    目标不在当前对话里）是 `false`，什么都没动 —— 调用方据此不回填草稿、不重发（P3-10b PIN-02）
    */
   message: {
     clear: (sessionId: string) => Promise<{ success: boolean }>
