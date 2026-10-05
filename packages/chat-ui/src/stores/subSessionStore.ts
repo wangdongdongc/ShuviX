@@ -1,17 +1,26 @@
 /**
  * 子智能体临时会话 store
  *
- * 右侧 Sub-agent Tab 使用的纯内存状态管理。
- * 每个子智能体运行对应一个 SubSessionState，携带与主会话相同结构的
- * messages / streamingContent / streamingThinking / toolExecutions。
+ * 后台任务面板里派生 agent 的那一条使用的纯内存状态。每个派生 agent 一个 SubSessionState：
+ *  - **元信息**（展示名、系统提示词、初始 prompt、状态、结果）来自 `sub_session_register` /
+ *    `sub_session_end` 余项；
+ *  - **转写与实时态**（messages / 流式正文 / 工具执行）只由 **`applyAgentView`** 写（P3-08）：订阅那个派生
+ *    agent 的视图（`useAgentView`）时镜像进来，形状与主会话同一套推导。没登记过的 agent 不建条目
+ *    （PIN-07；面板接上视图在 P3-14）。
  *
  * 全局（不按父会话过滤）：跨主会话切换仍保留；用户点 × 才移除。
  */
 
 import { create } from 'zustand'
 import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
+import type { AgentView } from '@shuvix/chat-protocol/types/sessionView'
 import type { ChatMessage, ToolExecution } from './chatStore'
-import { fillToolResult, upsertMessage } from './messageOps'
+import {
+  EMPTY_TOOLS,
+  deriveStream,
+  deriveToolExecutions,
+  shareStructure
+} from './viewDerivation'
 
 /** 子智能体运行时状态 */
 export type SubSessionStatus = 'running' | 'done' | 'error'
@@ -38,7 +47,7 @@ export interface SubSessionState {
   endedAt?: number
   /** 最终返回给父 Agent 的 result 文本（仅在 end 后有值） */
   result?: string
-  /** 子会话消息列表（事件驱动累积，不持久化） */
+  /** 子会话消息列表（agent 视图的 `messages`，不持久化） */
   messages: ChatMessage[]
   /** 流式状态 */
   streamingContent: string
@@ -49,6 +58,8 @@ export interface SubSessionState {
   completedStreamingToolCalls: Array<{ toolName: string; args?: Record<string, unknown> }>
   /** 工具执行状态（按 toolCallId 匹配） */
   toolExecutions: ToolExecution[]
+  /** 最近一次镜像进来的 agent 视图（结构共享用；没订阅过 → undefined，运行标记由余项维护） */
+  view?: AgentView
 }
 
 const EMPTY_TOOL_EXECUTIONS: ToolExecution[] = []
@@ -72,31 +83,12 @@ interface SubSessionStore {
     contextNote?: string
   }): void
   markEnded(params: { subSessionId: string; result: string; isError?: boolean }): void
-  /** 用户后续追问：内联一条 user 消息到转写，并把子会话标记回运行态 */
-  appendUserMessage(subSessionId: string, message: ChatMessage): void
   /** 用户显式关闭：移除 store 条目（同时应触发 IPC subSession:destroy） */
   close(subSessionId: string): void
-
-  // ─── 事件处理（镜像主会话事件语义） ──
-  handleAgentStart(subSessionId: string): void
-  appendTextDelta(subSessionId: string, delta: string): void
-  appendThinkingDelta(subSessionId: string, delta: string): void
-  setStreamingToolCall(
-    subSessionId: string,
-    toolCall: { toolName: string; argsText: string } | null
-  ): void
-  appendStreamingToolCallDelta(subSessionId: string, delta: string): void
-  finalizeStreamingToolCall(subSessionId: string): void
-  /** 一条 assistant 卡已落盘：清流式缓冲 + 按 id upsert（与主会话同语义） */
-  handleAssistantMessage(subSessionId: string, message: ChatMessage): void
-  handleToolStart(subSessionId: string, exec: ToolExecution): void
-  handleToolEnd(
-    subSessionId: string,
-    toolCallId: string,
-    execUpdates: Partial<ToolExecution>,
-    messageId?: string
-  ): void
-  handleAgentEnd(subSessionId: string, finalMessage?: ChatMessage): void
+  /**
+   * `agent_start` / `agent_end` 余项：没订阅视图时据此显示「在跑」；订阅着视图就以视图为准（不动）
+   */
+  setRunning(subSessionId: string, running: boolean): void
 }
 
 function createEmpty(params: {
@@ -157,26 +149,8 @@ export const useSubSessionStore = create<SubSessionStore>((set) => ({
             status: isError ? 'error' : 'done',
             endedAt: Date.now(),
             result,
-            isStreaming: false
-          }
-        }
-      }
-    }),
-
-  appendUserMessage: (subSessionId, message) =>
-    set((state) => {
-      const prev = state.subSessions[subSessionId]
-      if (!prev) return {}
-      return {
-        subSessions: {
-          ...state.subSessions,
-          [subSessionId]: {
-            ...prev,
-            messages: [...prev.messages, message],
-            // 追问即重回运行态（紧随其后会到来 agent_start / 流式事件）
-            status: 'running',
-            endedAt: undefined,
-            result: undefined
+            // 订阅着视图：运行状态以视图为准
+            isStreaming: prev.view ? prev.isStreaming : false
           }
         }
       }
@@ -189,167 +163,61 @@ export const useSubSessionStore = create<SubSessionStore>((set) => ({
       return { subSessions: rest }
     }),
 
-  handleAgentStart: (subSessionId) =>
+  setRunning: (subSessionId, running) =>
     set((state) => {
       const prev = state.subSessions[subSessionId]
-      if (!prev) return {}
+      if (!prev || prev.view !== undefined) return {}
+      if (prev.isStreaming === running && (!running || prev.status === 'running')) return {}
       return {
         subSessions: {
           ...state.subSessions,
           [subSessionId]: {
             ...prev,
-            status: 'running',
-            isStreaming: true,
-            streamingContent: '',
-            streamingThinking: '',
-            streamingToolCall: null,
-            completedStreamingToolCalls: []
+            isStreaming: running,
+            ...(running ? { status: 'running' as const, endedAt: undefined, result: undefined } : {})
           }
         }
       }
-    }),
-
-  appendTextDelta: (subSessionId, delta) =>
-    set((state) => {
-      const prev = state.subSessions[subSessionId]
-      if (!prev) return {}
-      return {
-        subSessions: {
-          ...state.subSessions,
-          [subSessionId]: { ...prev, streamingContent: prev.streamingContent + delta }
-        }
-      }
-    }),
-
-  appendThinkingDelta: (subSessionId, delta) =>
-    set((state) => {
-      const prev = state.subSessions[subSessionId]
-      if (!prev) return {}
-      return {
-        subSessions: {
-          ...state.subSessions,
-          [subSessionId]: { ...prev, streamingThinking: prev.streamingThinking + delta }
-        }
-      }
-    }),
-
-  setStreamingToolCall: (subSessionId, toolCall) =>
-    set((state) => {
-      const prev = state.subSessions[subSessionId]
-      if (!prev) return {}
-      const updated = toolCall
-        ? { ...prev, streamingToolCall: toolCall }
-        : { ...prev, streamingToolCall: null, completedStreamingToolCalls: [] }
-      return { subSessions: { ...state.subSessions, [subSessionId]: updated } }
-    }),
-
-  appendStreamingToolCallDelta: (subSessionId, delta) =>
-    set((state) => {
-      const prev = state.subSessions[subSessionId]
-      if (!prev?.streamingToolCall) return {}
-      return {
-        subSessions: {
-          ...state.subSessions,
-          [subSessionId]: {
-            ...prev,
-            streamingToolCall: {
-              ...prev.streamingToolCall,
-              argsText: prev.streamingToolCall.argsText + delta
-            }
-          }
-        }
-      }
-    }),
-
-  finalizeStreamingToolCall: (subSessionId) =>
-    set((state) => {
-      const prev = state.subSessions[subSessionId]
-      if (!prev?.streamingToolCall) return {}
-      let parsedArgs: Record<string, unknown> | undefined
-      try {
-        parsedArgs = JSON.parse(prev.streamingToolCall.argsText)
-      } catch {
-        /* ignore */
-      }
-      const completed = { toolName: prev.streamingToolCall.toolName, args: parsedArgs }
-      return {
-        subSessions: {
-          ...state.subSessions,
-          [subSessionId]: {
-            ...prev,
-            streamingToolCall: null,
-            completedStreamingToolCalls: [...prev.completedStreamingToolCalls, completed]
-          }
-        }
-      }
-    }),
-
-  handleAssistantMessage: (subSessionId, message) =>
-    set((state) => {
-      const prev = state.subSessions[subSessionId]
-      if (!prev) return {}
-      // 正文已经落进这张卡，流式缓冲清空（下一次调用重新累积）
-      const updated: SubSessionState = {
-        ...prev,
-        streamingContent: '',
-        streamingThinking: '',
-        messages: upsertMessage(prev.messages, message)
-      }
-      return { subSessions: { ...state.subSessions, [subSessionId]: updated } }
-    }),
-
-  handleToolStart: (subSessionId, exec) =>
-    set((state) => {
-      const prev = state.subSessions[subSessionId]
-      if (!prev) return {}
-      // 工具块已随 assistant 卡到达，这里只记执行状态 + 清流式工具调用占位
-      const updated: SubSessionState = {
-        ...prev,
-        streamingToolCall: null,
-        completedStreamingToolCalls: [],
-        toolExecutions: [...prev.toolExecutions, exec]
-      }
-      return { subSessions: { ...state.subSessions, [subSessionId]: updated } }
-    }),
-
-  handleToolEnd: (subSessionId, toolCallId, execUpdates, messageId) =>
-    set((state) => {
-      const prev = state.subSessions[subSessionId]
-      if (!prev) return {}
-      const newExecs = prev.toolExecutions.map((t) =>
-        t.toolCallId === toolCallId ? { ...t, ...execUpdates } : t
-      )
-      const messages = fillToolResult(prev.messages, toolCallId, messageId, {
-        result: execUpdates.result ?? '',
-        isError: execUpdates.status === 'error' || undefined,
-        details: execUpdates.details
-      })
-      return {
-        subSessions: {
-          ...state.subSessions,
-          [subSessionId]: { ...prev, toolExecutions: newExecs, messages }
-        }
-      }
-    }),
-
-  handleAgentEnd: (subSessionId, finalMessage) =>
-    set((state) => {
-      const prev = state.subSessions[subSessionId]
-      if (!prev) return {}
-      // 终答卡在 message_end 时已 upsert 过，这里同 id 覆盖兜底
-      const updated: SubSessionState = {
-        ...prev,
-        isStreaming: false,
-        streamingContent: '',
-        streamingThinking: '',
-        streamingToolCall: null,
-        completedStreamingToolCalls: [],
-        toolExecutions: [],
-        messages: finalMessage ? upsertMessage(prev.messages, finalMessage) : prev.messages
-      }
-      return { subSessions: { ...state.subSessions, [subSessionId]: updated } }
     })
 }))
+
+/**
+ * 把一份派生 agent 的视图镜像进它的条目 —— 转写与实时态的**唯一写入口**（P3-08）。元信息（展示名、
+ * 提示词、状态）不动；没登记过的 agent 不建条目（PIN-07）。与上一份逐项共享，没变就不写。
+ */
+export function applyAgentView(agentId: string, view: AgentView): void {
+  useSubSessionStore.setState((state) => {
+    const prev = state.subSessions[agentId]
+    if (!prev) return state
+    const shared = shareStructure(prev.view, view)
+    if (shared === prev.view) return state
+    const stream = deriveStream(shared, false, {
+      content: prev.streamingContent,
+      thinking: prev.streamingThinking,
+      isStreaming: prev.isStreaming,
+      images: [],
+      streamingToolCall: prev.streamingToolCall,
+      completedStreamingToolCalls: prev.completedStreamingToolCalls
+    })
+    const tools = deriveToolExecutions(shared, undefined, prev.toolExecutions)
+    return {
+      subSessions: {
+        ...state.subSessions,
+        [agentId]: {
+          ...prev,
+          view: shared,
+          messages: shared.messages,
+          streamingContent: stream.content,
+          streamingThinking: stream.thinking,
+          isStreaming: stream.isStreaming,
+          streamingToolCall: stream.streamingToolCall,
+          completedStreamingToolCalls: stream.completedStreamingToolCalls,
+          toolExecutions: tools === EMPTY_TOOLS ? EMPTY_TOOL_EXECUTIONS : tools
+        }
+      }
+    }
+  })
+}
 
 // ─── 选择器 ──────────────────────────────────────────────
 

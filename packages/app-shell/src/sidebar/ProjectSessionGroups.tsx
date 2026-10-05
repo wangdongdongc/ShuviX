@@ -1,7 +1,12 @@
 import { isBotSessionSettings } from '@shuvix/chat-protocol/botSession'
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useChatStore, selectAllPendingCounts, type Session } from '@shuvix/chat-ui'
+import {
+  useChatStore,
+  selectAllPendingCounts,
+  selectStreamingSessions,
+  type Session
+} from '@shuvix/chat-ui'
 import type { ContextMenuItem } from '@shuvix/chat-protocol/types/contextMenu'
 import { SessionGroup } from './SessionGroup'
 import { SessionItem } from './SessionItem'
@@ -95,7 +100,7 @@ export function ProjectSessionGroups({
   const sessions = sessionsOverride ?? storeSessions
   const activeSessionId = useChatStore((s) => s.activeSessionId)
   const setActiveSessionId = useChatStore((s) => s.setActiveSessionId)
-  const sessionStreams = useChatStore((s) => s.sessionStreams)
+  const streamingSessions = useChatStore(selectStreamingSessions)
   const pendingCounts = useChatStore(selectAllPendingCounts)
   const { dim } = useFocusDim()
   const handleSelect = onSelect ?? setActiveSessionId
@@ -285,7 +290,7 @@ export function ProjectSessionGroups({
               key={item.id}
               session={item}
               active={activeSessionId === item.id}
-              isStreaming={sessionStreams[item.id]?.isStreaming}
+              isStreaming={streamingSessions[item.id]}
               pendingCount={pendingCounts[item.id]}
               dim={dim && activeGroupKey === groupKey && activeSessionId !== item.id}
               isNotebook={!!item.settings.notebookPath}

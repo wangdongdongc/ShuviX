@@ -10,6 +10,7 @@ import {
   TerminalView,
   useBgTaskStatus,
   useChatStore,
+  selectSessionAskCount,
   useSubSessionStore
 } from '@shuvix/chat-ui'
 import type { TaskInfo } from '@shuvix/chat-protocol/types/task'
@@ -43,13 +44,14 @@ const TAIL_WINDOW_BYTES = 200 * 1024
 /**
  * 这条子会话此刻是不是卡在等用户批准。
  *
- * 问渲染端自己：待答询问按会话 id 记在 chatStore 里（会话列表上那个标记同一个源）。
+ * 问渲染端自己：待答询问的条数按会话 id 记在 chatStore 里（会话列表上那个标记同一个源：订阅着视图的
+ * 会话看视图，其余看 `ask_count` 余项，P3-08 PIN-01）。
  * 这是**面板存在的一个主要理由** —— 一个卡在询问上的后台活不会自己好起来，
  * 而在此之前它只在那条子会话自己的界面里才看得见。
  */
 function useBlockedOnUser(task: TaskInfo): boolean {
   const childId = task.subject.kind === 'sub-session' ? task.subject.childSessionId : ''
-  return useChatStore((s) => (childId ? (s.sessionPendingInputs[childId]?.length ?? 0) > 0 : false))
+  return useChatStore((s) => (childId ? selectSessionAskCount(childId)(s) > 0 : false))
 }
 
 /** 类别文案 —— 行尾那句「Bash · 运行中 · 4m02s」的第一段 */

@@ -8,6 +8,7 @@ import {
   useChatStore,
   useModelCatalogSync,
   useSessionInit,
+  useSessionView,
   type ChatHostValue
 } from '@shuvix/chat-ui'
 import { ContextMenuProvider } from '@shuvix/app-shell/contextmenu/ContextMenuProvider'
@@ -33,6 +34,7 @@ function useLinkState(link: PanelLink): PanelLinkState {
 
 /** 会话级 hook 的宿主（须在 ChatHostProvider 之下）。渠道模式：模型目录留空但放行初始化时序 */
 function SessionRuntime({ sessionId }: { sessionId: string }): null {
+  useSessionView(sessionId)
   useSessionInit(sessionId)
   useAgentEvents()
   useModelCatalogSync()

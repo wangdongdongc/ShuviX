@@ -14,8 +14,7 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ChevronDown, ChevronUp, CornerDownLeft, CornerRightDown, Layers, Zap } from 'lucide-react'
-import type { ChatQueuedMessage } from '@shuvix/chat-protocol/events'
-import { useChatStore, selectSessionQueue } from '../../stores/chatStore'
+import { useChatStore, selectSessionQueue, type QueuedMessage } from '../../stores/chatStore'
 
 type Tier = 'steer' | 'followUp' | 'nextTurn'
 
@@ -39,7 +38,7 @@ export function QueuePanel(): React.JSX.Element | null {
   const total = queue.steer.length + queue.followUp.length + queue.nextTurn.length
   if (total === 0) return null
 
-  const rows: Array<{ tier: Tier; msg: ChatQueuedMessage; key: string }> = []
+  const rows: Array<{ tier: Tier; msg: QueuedMessage; key: string }> = []
   for (const { tier } of TIERS) {
     queue[tier].forEach((msg, i) => rows.push({ tier, msg, key: `${tier}-${i}` }))
   }
