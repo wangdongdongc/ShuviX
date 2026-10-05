@@ -8,6 +8,10 @@
  * 由此喂 MCP 的 callerIdOf、知识库的章与门的主体。P2-06-12 用真 McpManager + SDK 的 InMemoryTransport
  * 与一台最小的 Server 看 `_meta` 的组成（PIN-07）。
  *
+ * P2-04（docs/pi-durable/p2-04-test-design.md，P2-04-xx）：派生 agent 的解析与重建（SR_D / SP_D）——
+ * 资源一律按根会话、技能只看派生名单、canSpawn 门、附加工具（next）包装与 L1 门；H11-20 / 39 / 67 改写为
+ * P2-04-01 / 14 / 38。
+ *
  * 本文件是「替身模式」：包装器换成记账的恒等桩（Fx-WRAP spy），SkillTool 换成按 findEnabled /
  * findAll 过滤名单的桩（构造实参可查），派发工具换成桩，mcpService 是 Fx-MCP 的 spy；注册表是**真的**
  * （Fx-REG：与真注册项同名、同平台的桩工厂）。真包装器 / 真 SkillTool / 真派发工具那几条在
@@ -79,7 +83,9 @@ vi.mock('../../services/agentRuntimeAdapters', () => ({
 }))
 vi.mock('../../services/toolContext', () => ({
   getDesktopSecurityContext: mocks.getDesktopSecurityContext,
-  resolveProjectConfig: mocks.resolveProjectConfig
+  resolveProjectConfig: mocks.resolveProjectConfig,
+  // P2-04-23 拿真包装器（vi.importActual）包一次：它从这里读取消文案
+  TOOL_ABORTED: 'Aborted'
 }))
 vi.mock('../../services/userInputBroker', () => ({
   requestUserInputFor: mocks.requestUserInputFor
@@ -139,6 +145,7 @@ vi.mock('../../services/wrapToolOutput', () => ({
 }))
 
 import i18next from 'i18next'
+import { invokeTool } from '@shuvix/agent-runtime/tools/testing/invokeTool'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js'
@@ -148,7 +155,9 @@ import {
   isPhasePendingError,
   LAZY_CONNECT_TIMEOUT_MS,
   McpManager,
+  normalizeToolNames,
   type AgentIdentity,
+  type AgentToolSet,
   type LockRecord,
   type McpRegistrationOptions,
   type McpToolDeclaration,
@@ -184,8 +193,12 @@ import {
   registerStubBuiltins,
   requestD,
   restorePlatform,
+  rctx,
   setPlatform,
-  stubTool
+  SP_D,
+  SR_D,
+  stubTool,
+  NX
 } from './support/toolHostFixtures'
 
 const DARWIN_BUILTINS = [
@@ -583,18 +596,20 @@ describe('resolveAgentTools', () => {
     expect(others.map((t) => t?.name)).not.toContain('next')
   })
 
-  it('H11-20 派生请求：PhasePendingError（phase 2），不连 MCP、不造 SkillTool / 派发工具（PIN-07）', async () => {
-    const error = await host
-      .resolveAgentTools(requestD({ kind: 'spawned', selfSessionId: 'agent-7' }), {
-        signal: signal()
-      })
-      .catch((e: unknown) => e)
-    expect(isPhasePendingError(error)).toBe(true)
-    expect((error as { phase: number }).phase).toBe(2)
-    expect(mocks.statusByName).not.toHaveBeenCalled()
-    expect(mocks.ensureServerByName).not.toHaveBeenCalled()
-    expect(mocks.skillToolCalls).toEqual([])
+  it('P2-04-01（改写 H11-20）派生请求照常解析：没有 canSpawn → 不给 agent（失败即关）；skill / skills / 两台 MCP 都在', async () => {
+    const resolving = host.resolveAgentTools(
+      requestD({ kind: 'spawned', selfSessionId: 'agent-7' }),
+      { signal: signal() }
+    )
+    const resolved = await resolving.catch((e: unknown) => {
+      expect(isPhasePendingError(e), 'no PhasePendingError any more').toBe(false)
+      throw e
+    })
+    expect('agent' in resolved).toBe(false)
     expect(mocks.createAgentTool).not.toHaveBeenCalled()
+    expect(resolved.skill?.name).toBe('skill')
+    expect(resolved.skills).toEqual(['builtin:drawing', 'pdf'])
+    expect(resolved.mcp?.map((m) => m.server)).toEqual(['context7', 'ssh'])
   })
 
   it('H11-21 调用前 signal 已落：拒绝；statusByName / ensure 都没调，什么都没广播', async () => {
@@ -925,12 +940,20 @@ describe('rebuildAgentTools', () => {
     expect(callerIdOfCall(0)(5)).toBe('s1')
   })
 
-  it('H11-39 派生 agent 的锁：PhasePendingError（phase 2）（PIN-07）', async () => {
-    const error = await Promise.resolve()
-      .then(() => host.rebuildAgentTools(lockD({ kind: 'spawned' }), { sessionId: 's1' }))
-      .catch((e: unknown) => e)
-    expect(isPhasePendingError(error)).toBe(true)
-    expect((error as { phase: number }).phase).toBe(2)
+  it('P2-04-14（改写 H11-39）派生形的锁、没有记录字段：尽力重建 —— 没有 agent（无 canSpawn，失败即关）；skill 按锁造；MCP 在；没有 extraTools', async () => {
+    const lock = lockD({ kind: 'spawned' })
+    const set = await Promise.resolve()
+      .then(() => host.rebuildAgentTools(lock, { sessionId: 's1' }))
+      .catch((e: unknown) => {
+        expect(isPhasePendingError(e), 'no PhasePendingError any more').toBe(false)
+        throw e
+      })
+    expect(set.agent).toBeUndefined()
+    expect(mocks.createAgentTool).not.toHaveBeenCalled()
+    expect(set.skill?.name).toBe('skill')
+    expect(mocks.skillToolCalls).toEqual([{ args: [lock.skills, '/w/proj', 'known'] }])
+    expect(set.mcp?.map((m) => m.server)).toEqual(['context7'])
+    expect('extraTools' in set).toBe(false)
   })
 })
 
@@ -1450,7 +1473,7 @@ describe('MCP _meta end to end', () => {
 // ─── 旧入口 ────────────────────────────────────────────────────────────
 
 describe('旧入口', () => {
-  it('H11-67 agentFactory：派生 → PhasePendingError(phase 2)，根 → 拒绝（锁创建根 agent）；都不碰 MCP / SkillTool / 派发工具；resolveProfileModelSpec 还在', async () => {
+  it('P2-04-38（改写 H11-67）agentFactory 仍是旧入口（PIN-07）：派生 → PhasePendingError(phase 2)，根 → 拒绝；都不碰 MCP / SkillTool / 派发工具；resolveProfileModelSpec 还在；对照：ToolHost 的派生解析已经走得通', async () => {
     const profile = inProcess(profileOf('coding'))
     const model = { provider: MODEL.provider, model: MODEL.modelId, capabilities: {} }
     const spawned = await agentFactory
@@ -1499,6 +1522,10 @@ describe('旧入口', () => {
       capabilities: { reasoning: true }
     })
     expect(resolveProfileModelSpec('nope/missing')).toBeNull()
+
+    // 对照：同一份 coding 档案经 ToolHost 的派生解析照常解析（工厂没接过去）
+    const resolved = await host.resolveAgentTools(SR_D({ profile }), { signal: signal() })
+    expect(resolved.agent?.name).toBe('agent')
   })
 })
 
@@ -1517,3 +1544,478 @@ describe('与运行时的拼法', () => {
 })
 
 const N_W_WITHOUT_SSH = requestD().names.filter((n) => n !== 'mcp:ssh')
+
+// ─── 派生 agent（P2-04：docs/pi-durable/p2-04-test-design.md，P2-04-xx） ───────────────
+
+/** 根会话 s1 属于项目 p1，别的 id（agentId）什么都查不到 —— 按 agentId 查项目就会露馅 */
+function keyedProjectLookup(): void {
+  mocks.pick.mockImplementation((id: string) => (id === 's1' ? { projectId: 'p1' } : undefined))
+}
+
+/** 一组按 agent 工具里交出的全部工具 */
+function allTools(set: AgentToolSet): ToolRegistration[] {
+  return [
+    ...(set.agent ? [set.agent] : []),
+    ...(set.skill ? [set.skill] : []),
+    ...(set.mcp ?? []).flatMap((m) => m.tools),
+    ...(set.tools ?? []),
+    ...(set.extraTools ?? [])
+  ]
+}
+
+/** 派发工具的两份实参（ctx、agentCtx）与求值后的模型配置 */
+function dispatchArgs(i = 0): { ctx: ToolContext; rootSessionId: string; config: unknown } {
+  const [ctx, agentCtx] = mocks.createAgentTool.mock.calls[i] as [
+    ToolContext,
+    { rootSessionId: string; modelConfig: unknown }
+  ]
+  const config =
+    typeof agentCtx.modelConfig === 'function'
+      ? (agentCtx.modelConfig as () => unknown)()
+      : agentCtx.modelConfig
+  return { ctx, rootSessionId: agentCtx.rootSessionId, config }
+}
+
+const HAIKU_DISPATCH = {
+  provider: 'anthropic',
+  model: 'claude-haiku-4-5',
+  capabilities: {},
+  thinkingLevel: 'off'
+}
+
+describe('resolveAgentTools (spawned)', () => {
+  it('P2-04-02 每样资源都按根会话找：状态 / 连接 / 声明 / 注册 / SkillTool 的项目 / 包装；除派发工具的 ctx 外没有一处收到 sub-a1；解析不问会话宿主', async () => {
+    keyedProjectLookup()
+    const resolved = await host.resolveAgentTools(
+      SR_D({ names: ['read', 'agent', 'skill:pdf', 'mcp:ssh'] }),
+      { signal: signal() }
+    )
+    expect(mocks.statusByName.mock.calls).toEqual([['ssh', 's1']])
+    expect(mocks.ensureServerByName.mock.calls).toEqual([
+      ['ssh', { timeoutMs: LAZY_CONNECT_TIMEOUT_MS, sessionId: 's1' }]
+    ])
+    expect(mocks.declarationsOf.mock.calls).toEqual([['ssh', 's1']])
+    expect(mocks.registrationsFromDeclarations.mock.calls[0].slice(0, 2)).toEqual(['ssh', 's1'])
+    expect(mocks.skillToolCalls).toEqual([{ args: [['pdf'], '/w/proj'] }])
+    expect(mocks.pick.mock.calls.length).toBeGreaterThan(0)
+    for (const [id] of mocks.pick.mock.calls) expect(id).toBe('s1')
+
+    const tools = allTools(resolved)
+    expect(tools.length).toBeGreaterThan(0)
+    for (const tool of tools) {
+      const opts = wrapOf(tool)
+      expect(Object.keys(opts).sort()).toEqual(['security', 'sessionId', 'spill'])
+      expect(opts).toMatchObject({ sessionId: 's1', spill: 'auto' })
+      expect(opts.security).toBeTypeOf('function')
+    }
+
+    // sub-a1 只出现在派发工具的 ctx.sessionId 上（PIN-01）
+    expect(dispatchArgs().ctx.sessionId).toBe('sub-a1')
+    const recorded = JSON.stringify([
+      mocks.statusByName.mock.calls,
+      mocks.ensureServerByName.mock.calls,
+      mocks.declarationsOf.mock.calls,
+      mocks.registrationsFromDeclarations.mock.calls.map((c) => c.slice(0, 3)),
+      mocks.skillToolCalls,
+      mocks.pick.mock.calls,
+      mocks.projectPick.mock.calls,
+      mocks.broadcast.mock.calls,
+      mocks.wrapCalls.map((c) => c.opts),
+      dispatchArgs().rootSessionId
+    ])
+    expect(recorded).not.toContain('sub-a1')
+    expect(sessionOf).not.toHaveBeenCalled()
+  })
+
+  it('P2-04-03 技能只看派生名单：会话勾选（pickSettings）一眼不看；coding 归一名单 → SkillTool 一次、只拿 builtin:drawing；没有 MCP', async () => {
+    mocks.pickSettings.mockReturnValue({ enabledTools: ['skill:other', 'mcp:ssh'] })
+    const names = normalizeToolNames('spawned', profileOf('coding').tools, undefined)
+    const resolved = await host.resolveAgentTools(SR_D({ names }), { signal: signal() })
+    expect(mocks.skillToolCalls).toHaveLength(1)
+    expect(mocks.skillToolCalls[0].args[0]).toEqual(['builtin:drawing'])
+    expect(resolved.skills).toEqual(['builtin:drawing'])
+    expect(resolved.mcp).toEqual([])
+    expect(mocks.ensureServerByName).not.toHaveBeenCalled()
+    expect(mocks.pickSettings).not.toHaveBeenCalled()
+  })
+
+  it('P2-04-04 点了名的技能上架规则同根：名单 ∩ findEnabled（两个实参、不按 known、不查 findAll）；一个都不在架 → 构造一次、不挂、skills 为空', async () => {
+    const names = ['skill:builtin:drawing', 'skill:pdf', 'skill:ghost']
+    mocks.findEnabled.mockReturnValue([skill('builtin:drawing'), skill('other')])
+    mocks.findAll.mockReturnValue([skill('builtin:drawing'), skill('pdf'), skill('other')])
+    const resolved = await host.resolveAgentTools(SR_D({ names }), { signal: signal() })
+    expect(resolved.skills).toEqual(['builtin:drawing'])
+    expect(mocks.skillToolCalls).toHaveLength(1)
+    expect(mocks.skillToolCalls[0].args).toHaveLength(2)
+    expect(mocks.skillToolCalls[0].args).not.toContain('known')
+    expect(mocks.findAll).not.toHaveBeenCalled()
+
+    mocks.skillToolCalls.length = 0
+    mocks.findEnabled.mockReturnValue([])
+    const none = await host.resolveAgentTools(SR_D({ names }), { signal: signal() })
+    expect(mocks.skillToolCalls).toHaveLength(1)
+    expect('skill' in none).toBe(false)
+    expect(none.skills).toEqual([])
+  })
+
+  it('P2-04-05 MCP 惰性连接与失败，广播都落到根会话：只剩 ssh；两对 connecting + 一条点名 broken 的 error（解析完成之前）；不为 broken 取声明 / 建工具（PIN-03）', async () => {
+    mocks.ensureServerByName.mockImplementation(async (server: string) =>
+      server === 'broken' ? { ok: false, error: 'spawn npx ENOENT' } : { ok: true }
+    )
+    let atResolve = -1
+    const resolved = await host
+      .resolveAgentTools(SR_D({ names: ['mcp:broken', 'mcp:ssh'] }), { signal: signal() })
+      .then((r) => {
+        atResolve = mocks.broadcast.mock.calls.length
+        return r
+      })
+    expect(resolved.mcp?.map((m) => m.server)).toEqual(['ssh'])
+    const events = mocks.broadcast.mock.calls.map(([e]) => e)
+    expect(events).toHaveLength(5)
+    expect(atResolve).toBe(5)
+    for (const event of events) expect(event.sessionId).toBe('s1')
+    for (const server of ['broken', 'ssh']) {
+      expect(
+        events
+          .filter((e) => e.type === 'mcp_connecting' && e.server === server)
+          .map((e) => e.connecting)
+      ).toEqual([true, false])
+    }
+    expect(events.filter((e) => e.type === 'error')).toEqual([
+      {
+        type: 'error',
+        sessionId: 's1',
+        error: i18next.t('chat.mcpConnectFailed', { name: 'broken', error: 'spawn npx ENOENT' })
+      }
+    ])
+    expect(mocks.declarationsOf.mock.calls.map(([s]) => s)).toEqual(['ssh'])
+    expect(mocks.registrationsFromDeclarations.mock.calls.map(([s]) => s)).toEqual(['ssh'])
+  })
+
+  it('P2-04-06 每个根会话一份实例：根先连上，派生再解析 → 不广播；两次 ensure 实参相同（s1）；两次注册都按 s1', async () => {
+    await host.resolveAgentTools(requestD({ names: ['mcp:ssh'] }), { signal: signal() })
+    mocks.statusByName.mockReturnValue('connected')
+    mocks.broadcast.mockClear()
+    await host.resolveAgentTools(SR_D({ names: ['mcp:ssh'] }), { signal: signal() })
+    expect(mocks.broadcast).not.toHaveBeenCalled()
+    const ensure = ['ssh', { timeoutMs: LAZY_CONNECT_TIMEOUT_MS, sessionId: 's1' }]
+    expect(mocks.ensureServerByName.mock.calls).toEqual([ensure, ensure])
+    expect(mocks.registrationsFromDeclarations.mock.calls.map((c) => c[1])).toEqual(['s1', 's1'])
+  })
+
+  it('P2-04-06 并发：根与派生同时等同一次连接 —— 两次 ensure 都在落定之前发出、都按 s1；它落定后两边都解析完', async () => {
+    const pending = deferred<{ ok: boolean }>()
+    mocks.ensureServerByName.mockReturnValue(pending.promise)
+    const root = host.resolveAgentTools(requestD({ names: ['mcp:ssh'] }), { signal: signal() })
+    const spawned = host.resolveAgentTools(SR_D({ names: ['mcp:ssh'] }), { signal: signal() })
+    await flush()
+    const ensure = ['ssh', { timeoutMs: LAZY_CONNECT_TIMEOUT_MS, sessionId: 's1' }]
+    expect(mocks.ensureServerByName.mock.calls).toEqual([ensure, ensure])
+    pending.resolve({ ok: true })
+    const [a, b] = await Promise.all([root, spawned])
+    expect(a.mcp?.map((m) => m.server)).toEqual(['ssh'])
+    expect(b.mcp?.map((m) => m.server)).toEqual(['ssh'])
+  })
+
+  it('P2-04-07 派生创建的注册项的 callerIdOf（PIN-06，P2-06 已合）：1 → s1、2 → sub-a1；身份只按 s1 问；按调用现取（记录改了跟着变）', async () => {
+    const session = setLock('s1', lockD())
+    session.identities.set(2, SPAWN_E)
+    await host.resolveAgentTools(SR_D({ names: ['mcp:ssh'] }), { signal: signal() })
+    const callerIdOf = callerIdOfCall(0)
+    expect(callerIdOf(1)).toBe('s1')
+    expect(callerIdOf(2)).toBe('sub-a1')
+    expect(sessionOf).toHaveBeenCalled()
+    for (const [id] of sessionOf.mock.calls) expect(id).toBe('s1')
+
+    // 不是从 req.selfSessionId / agentId 抄来的常量
+    session.identities.set(2, { ...SPAWN_E, callerId: 'sub-a9' })
+    expect(callerIdOf(2)).toBe('sub-a9')
+  })
+
+  it('P2-04-08 连接途中被中止：当场拒绝（ensure 未定）；最后一条广播是根会话的 connecting:false、没有 error；之后连上也不再广播、不取声明', async () => {
+    const pending = deferred<{ ok: boolean }>()
+    mocks.ensureServerByName.mockReturnValue(pending.promise)
+    const controller = new AbortController()
+    const resolving = host.resolveAgentTools(SR_D({ names: ['mcp:ssh'] }), {
+      signal: controller.signal
+    })
+    await flush()
+    controller.abort(new Error('spawn cancelled'))
+    await expect(resolving).rejects.toThrow('spawn cancelled')
+    expect(mocks.broadcast.mock.calls.at(-1)?.[0]).toEqual({
+      type: 'mcp_connecting',
+      sessionId: 's1',
+      server: 'ssh',
+      connecting: false
+    })
+    expect(mocks.broadcast.mock.calls.filter(([e]) => e.type === 'error')).toEqual([])
+
+    const before = mocks.broadcast.mock.calls.length
+    pending.resolve({ ok: true })
+    await flush(10)
+    expect(mocks.broadcast.mock.calls.length).toBe(before)
+    expect(mocks.declarationsOf).not.toHaveBeenCalled()
+  })
+
+  it('P2-04-09 附加工具：各包一次（按 s1）、原样交回、不混进别的段；空数组 → 没有 extraTools 键（PIN-11）', async () => {
+    const n1 = stubTool('next')
+    const n2 = stubTool('x2')
+    const resolved = await host.resolveAgentTools(SR_D({ extraTools: [n1, n2] }), {
+      signal: signal()
+    })
+    expect(names(resolved.extraTools ?? [])).toEqual(['next', 'x2'])
+    ;[n1, n2].forEach((raw, i) => {
+      const wraps = mocks.wrapCalls.filter((c) => c.tool === raw)
+      expect(wraps).toHaveLength(1)
+      expect(Object.keys(wraps[0].opts).sort()).toEqual(['security', 'sessionId', 'spill'])
+      expect(wraps[0].opts.sessionId).toBe('s1')
+      expect(resolved.extraTools![i]).toBe(wraps[0].wrapped)
+    })
+    const others = [resolved.agent, resolved.skill, ...(resolved.mcp ?? []).flatMap((m) => m.tools)]
+    for (const name of ['next', 'x2']) expect(others.map((t) => t?.name)).not.toContain(name)
+
+    const empty = await host.resolveAgentTools(SR_D({ extraTools: [] }), { signal: signal() })
+    expect('extraTools' in empty).toBe(false)
+  })
+
+  it('P2-04-10 canSpawn 门与派发工具（PIN-01）：true → 派发工具（ctx 是 sub-a1、询问归 s1、rootSessionId s1、haiku/off）；false / 缺省 → 没有；名单没有 agent → 没有', async () => {
+    const yes = await host.resolveAgentTools(SR_D(), { signal: signal() })
+    expect(yes.agent?.name).toBe('agent')
+    expect(mocks.createAgentTool).toHaveBeenCalledTimes(1)
+    const { ctx, rootSessionId, config } = dispatchArgs()
+    expect(ctx.sessionId).toBe('sub-a1')
+    const question = { kind: 'ask', requestId: 'q-sp' } as never
+    ctx.requestUserInput!(question)
+    expect(mocks.requestUserInputFor).toHaveBeenCalledWith('s1', question)
+    expect(rootSessionId).toBe('s1')
+    expect(config).toEqual(HAIKU_DISPATCH)
+
+    const absentReq = SR_D()
+    delete absentReq.canSpawn
+    for (const req of [SR_D({ canSpawn: false }), absentReq]) {
+      mocks.createAgentTool.mockClear()
+      const resolved = await host.resolveAgentTools(req, { signal: signal() })
+      expect('agent' in resolved).toBe(false)
+      expect(mocks.createAgentTool).not.toHaveBeenCalled()
+    }
+
+    const noName = await host.resolveAgentTools(SR_D({ names: ['read'], canSpawn: true }), {
+      signal: signal()
+    })
+    expect('agent' in noName).toBe(false)
+    expect(mocks.createAgentTool).not.toHaveBeenCalled()
+  })
+
+  it('P2-04-11 根不看 canSpawn（P2-02 PIN-02）：requestD({canSpawn:false}) 照样有派发工具', async () => {
+    const resolved = await host.resolveAgentTools(requestD({ canSpawn: false }), {
+      signal: signal()
+    })
+    expect(resolved.agent).toBeDefined()
+    expect(mocks.createAgentTool).toHaveBeenCalledTimes(1)
+  })
+
+  it('P2-04-12 沙箱（PIN-02）：派生解析照此刻的全局开关答；不跑内置工厂、不 pinSession', async () => {
+    mocks.sandboxGloballyActive.mockReturnValue(true)
+    expect((await host.resolveAgentTools(SR_D(), { signal: signal() })).sandboxed).toBe(true)
+    mocks.sandboxGloballyActive.mockReturnValue(false)
+    expect((await host.resolveAgentTools(SR_D(), { signal: signal() })).sandboxed).toBe(false)
+    expect(factoryCalls).toEqual([])
+    expect(mocks.pinSession).not.toHaveBeenCalled()
+  })
+
+  it('P2-04-13 派生工具的门按调用认人：agent / skill / MCP / next 在对话 2 上都是 s1 + SPAWN_E（经 agentIdentity(2)），每种工具同一个身份', async () => {
+    const session = setLock('s1', lockD())
+    session.identities.set(2, SPAWN_E)
+    const resolved = await host.resolveAgentTools(SR_D({ extraTools: [stubTool('next')] }), {
+      signal: signal()
+    })
+    const sample = [
+      resolved.agent!,
+      resolved.skill!,
+      resolved.mcp![0].tools[0],
+      resolved.extraTools![0]
+    ]
+    const lookup = vi.spyOn(session, 'agentIdentity')
+    const agents = sample.map((tool) => {
+      lookup.mockClear()
+      const ctx = securityCtxOf(tool, 2)
+      expect(ctx.sessionId).toBe('s1')
+      expect(lookup.mock.calls).toEqual([[2]])
+      return ctx.agent
+    })
+    for (const agent of agents) expect(agent).toBe(SPAWN_E)
+  })
+
+  it('P2-04-37 MTI-1 的派生请求版（PIN-06）：按 s1 连接；身份只按 s1 问、从不按 sub-a1；callerIdOf(2) = sub-a1', async () => {
+    setLock('s1', lockD()).identities.set(2, SPAWN_E)
+    await host.resolveAgentTools(SR_D({ names: ['mcp:ssh'] }), { signal: signal() })
+    expect(mocks.ensureServerByName.mock.calls).toEqual([
+      ['ssh', { timeoutMs: LAZY_CONNECT_TIMEOUT_MS, sessionId: 's1' }]
+    ])
+    expect(callerIdOfCall(0)(2)).toBe('sub-a1')
+    expect(sessionOf.mock.calls.length).toBeGreaterThan(0)
+    for (const [id] of sessionOf.mock.calls) expect(id).toBe('s1')
+    expect(sessionOf).not.toHaveBeenCalledWith('sub-a1')
+  })
+})
+
+describe('rebuildAgentTools (spawned)', () => {
+  it('P2-04-15 不碰网络、按根会话建：不问状态 / 不连 / 不取声明与活注册项 / 不广播 / 不读会话配置 / 不问身份；注册按记录次序、s1', async () => {
+    const record = SP_D({ mcp: { context7: [...D_C7], gone: [decl('x', false)] } })
+    const set = await host.rebuildAgentTools(record, rctx(SP_D()))
+    for (const fn of [
+      mocks.statusByName,
+      mocks.ensureServerByName,
+      mocks.declarationsOf,
+      mocks.getRegistrationsByServerName,
+      mocks.broadcast,
+      mocks.pickSettings
+    ]) {
+      expect(fn).not.toHaveBeenCalled()
+    }
+    expect(sessionOf).not.toHaveBeenCalled()
+    const callerIdOf = { callerIdOf: expect.any(Function) }
+    expect(mocks.registrationsFromDeclarations.mock.calls).toEqual([
+      ['context7', 's1', [...D_C7], callerIdOf],
+      ['gone', 's1', [decl('x', false)], callerIdOf]
+    ])
+    expect(set.mcp?.map((m) => m.server)).toEqual(['context7', 'gone'])
+  })
+
+  it.each([
+    [true, true, true],
+    [true, false, false],
+    [false, true, false],
+    [false, false, false]
+  ])(
+    'P2-04-16 重建的派发工具门：canSpawn=%s × 记录有 agent=%s → agent 在=%s',
+    async (canSpawn, named, expected) => {
+      const toolNames = named
+        ? SP_D().toolNames
+        : SP_D().toolNames.filter((name) => name !== 'agent')
+      const set = await host.rebuildAgentTools(SP_D({ canSpawn, toolNames }), rctx(SP_D()))
+      expect('agent' in set).toBe(expected)
+      if (!expected) {
+        expect(mocks.createAgentTool).not.toHaveBeenCalled()
+        return
+      }
+      expect(set.agent?.name).toBe('agent')
+      const { ctx, rootSessionId, config } = dispatchArgs()
+      expect(ctx.sessionId).toBe('sub-a1')
+      expect(rootSessionId).toBe('s1')
+      expect(config).toEqual(HAIKU_DISPATCH)
+    }
+  )
+
+  it('P2-04-17 重建的技能：按（记录的技能、根会话项目、known）造，描述出自 findAll；没有技能 → 不造、没有 skill；项目只按 s1 查', async () => {
+    keyedProjectLookup()
+    const set = await host.rebuildAgentTools(SP_D(), rctx(SP_D()))
+    expect(mocks.skillToolCalls).toEqual([
+      { args: [['builtin:drawing', 'pdf'], '/w/proj', 'known'] }
+    ])
+    expect(set.skill?.description).toBe('skill: builtin:drawing, pdf')
+
+    mocks.skillToolCalls.length = 0
+    const none = await host.rebuildAgentTools(SP_D({ skills: [] }), rctx(SP_D()))
+    expect(mocks.skillToolCalls).toEqual([])
+    expect('skill' in none).toBe(false)
+    expect(mocks.pick.mock.calls.length).toBeGreaterThan(0)
+    for (const [id] of mocks.pick.mock.calls) expect(id).toBe('s1')
+  })
+
+  it('P2-04-18 next 只来自重建上下文：一条 next（unsafe），包一次（s1 / auto / security），原型链连到传入的那一个；只给 sessionId → 没有 extraTools（宿主从不自己造）', async () => {
+    const context = rctx(SP_D())
+    const raw = context.extraTools![0]
+    const set = await host.rebuildAgentTools(SP_D(), context)
+    expect(set.extraTools).toHaveLength(1)
+    const next = set.extraTools![0]
+    expect(next.name).toBe('next')
+    expect(next.replay).toBe('unsafe')
+    const wraps = mocks.wrapCalls.filter((c) => c.tool === raw)
+    expect(wraps).toHaveLength(1)
+    expect(wraps[0].wrapped).toBe(next)
+    expect(Object.keys(wraps[0].opts).sort()).toEqual(['security', 'sessionId', 'spill'])
+    expect(wraps[0].opts).toMatchObject({ sessionId: 's1', spill: 'auto' })
+    expect(wraps[0].opts.security).toBeTypeOf('function')
+    expect(Object.prototype.isPrototypeOf.call(raw, next)).toBe(true)
+
+    const bare = await host.rebuildAgentTools(SP_D(), { sessionId: 's1' })
+    expect('extraTools' in bare).toBe(false)
+  })
+
+  it('P2-04-19 hook 派出的记录（titler）：没有 agent / skill，mcp 为空，附加工具只有 next；派发工具 / SkillTool / 注册都没调', async () => {
+    const record = SP_D({
+      profileName: 'titler',
+      dispatch: 'hook',
+      hook: 'auto-title',
+      canSpawn: false,
+      toolNames: ['session', 'next'],
+      skills: [],
+      mcp: {}
+    })
+    const set = await host.rebuildAgentTools(record, rctx(record))
+    expect('agent' in set).toBe(false)
+    expect('skill' in set).toBe(false)
+    expect(set.mcp).toEqual([])
+    expect(names(set.extraTools ?? [])).toEqual(['next'])
+    expect(mocks.createAgentTool).not.toHaveBeenCalled()
+    expect(mocks.skillToolCalls).toEqual([])
+    expect(mocks.registrationsFromDeclarations).not.toHaveBeenCalled()
+  })
+})
+
+describe('spawned wrapping and the L1 gate', () => {
+  it('P2-04-23 next 也过 L1 门：真包装器按宿主给的选项包真 NextTool —— enforceInvocation 一次（n-2 / 21 / 2 / next）；结果仍带 details {result} 与 terminate', async () => {
+    const enforceInvocation = vi.fn(async (_request: unknown) => ({ status: 'allow' as const }))
+    mocks.getDesktopSecurityContext.mockImplementation(() => ({ enforceInvocation }))
+    const raw = NX()
+    await host.resolveAgentTools(SR_D({ names: ['read'], extraTools: [raw] }), {
+      signal: signal()
+    })
+    const call = mocks.wrapCalls.find((c) => c.tool === raw)!
+    const actual = await vi.importActual<typeof import('../../services/wrapToolOutput')>(
+      '../../services/wrapToolOutput'
+    )
+    const wrapped = actual.wrapDurableTool(raw, call.opts as never)
+    const { result } = await invokeTool(wrapped, { title: 'Gate me' } as never, {
+      callId: 'n-2',
+      taskId: 21,
+      conversationId: 2
+    })
+    expect(enforceInvocation).toHaveBeenCalledTimes(1)
+    expect(enforceInvocation.mock.calls[0]).toEqual([
+      expect.objectContaining({
+        toolCallId: 'n-2',
+        taskId: 21,
+        conversationId: 2,
+        toolName: 'next',
+        operation: undefined,
+        mcp: undefined,
+        onOther: 'return'
+      })
+    ])
+    expect(result.details).toStrictEqual({ result: { title: 'Gate me' } })
+    expect(result.control).toStrictEqual({ terminate: true })
+  })
+
+  it('P2-04-40（H11-40 延伸到派生路径）派生解析 + 派生重建：每个交出的工具恰好包一次，选项恰为 {s1, auto, security}；不问 getOutputStrategy', async () => {
+    const resolved = await host.resolveAgentTools(SR_D({ extraTools: [stubTool('next')] }), {
+      signal: signal()
+    })
+    const rebuilt = await host.rebuildAgentTools(SP_D(), rctx(SP_D()))
+    const returned = [...allTools(resolved), ...allTools(rebuilt)]
+    expect(resolved.agent && resolved.skill && rebuilt.agent && rebuilt.skill).toBeTruthy()
+    expect(resolved.extraTools).toHaveLength(1)
+    expect(rebuilt.extraTools).toHaveLength(1)
+    expect(mocks.wrapCalls).toHaveLength(returned.length)
+    expect(new Set(mocks.wrapCalls.map((c) => c.tool)).size).toBe(returned.length)
+    for (const tool of returned) {
+      const opts = wrapOf(tool)
+      expect(Object.keys(opts).sort()).toEqual(['security', 'sessionId', 'spill'])
+      expect(opts.sessionId).toBe('s1')
+      expect(opts.spill).toBe('auto')
+      expect(opts.security).toBeTypeOf('function')
+    }
+    expect(mocks.getOutputStrategy).not.toHaveBeenCalled()
+  })
+})
