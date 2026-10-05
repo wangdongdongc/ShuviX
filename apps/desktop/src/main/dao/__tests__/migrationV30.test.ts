@@ -8,6 +8,7 @@
  *   MV30-1  新库跑到 v30：列形状 = TEXT NOT NULL，默认值是 v3 的那个字面量
  *   MV30-2  v30 之前已有的会话（含子会话、settings 有内容的）全部补成 v3，其余列逐字节不变
  *   MV30-3  v30 之后：不点名 → v3；点名 durable-sqlite-1 → 原样；显式 NULL → NOT NULL 拒绝
+ *   MV30-4  user_version 被拨回去、v30 再跑一遍（e2e 迁移用例重跑 v27 / v28 时如此）：不抛错，已有的值不动
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DatabaseSync } from 'node:sqlite'
@@ -116,5 +117,14 @@ describe('迁移 v30：sessions.storageKind', () => {
 
     const kinds = Object.fromEntries(allRows(db).map((r) => [r.id, r.storageKind]))
     expect(kinds).toEqual({ implicit: HARNESS_V3_JSONL, durable: 'durable-sqlite-1' })
+  })
+
+  it('MV30-4 列已在时再跑一遍 v30：不抛错（不重复加列），已有会话的类型原样', () => {
+    const db = new DatabaseSync(':memory:')
+    migrate(db)
+    insert(db, { ...v29Session('d'), storageKind: 'durable-sqlite-1' })
+    const v30 = migrations.find((m) => m.version === 30)!
+    expect(() => v30.up(db as unknown as Db)).not.toThrow()
+    expect(allRows(db).map((r) => r.storageKind)).toEqual(['durable-sqlite-1'])
   })
 })
