@@ -8,7 +8,7 @@
  *   D10-14 resolveAgentConfig 的档案矩阵（形态推导）
  *   D10-15 toolOverlay（滤掉不可用与 mcp:chrome；原值不动；旧行补键一次）
  *   D10-16 model（会话设置 → 原样；没有 → 启用中的默认 provider / 模型；都没有 → 不给）
- *   D10-17 thinkingLevel（合法值原样，含 off；没有 / 写坏 → 缺省）
+ *   D10-17 thinkingLevel（合法值原样，含 off；没有 / 写坏 → 按模型能力：reasoning → 缺省档，否则 off）
  *   D10-18 cwd（项目根 → 自带目录 → 临时工作区；与 getById 同一口径）
  *   D10-19 现读；会话不存在 → 拒绝、什么都不写
  *   D10-20 onLockChange → settings.agentLocked；内存会话写内存；删掉的会话不复活
@@ -44,7 +44,9 @@ const holder = vi.hoisted(() => ({
   projects: new Map<string, { path: string; settings: Record<string, unknown> }>(),
   createSessionHostCalls: 0,
   /** 子会话运行器模块被加载了几次（P2-10-06：import sessionHost 时应为 0） */
-  runnerLoads: 0
+  runnerLoads: 0,
+  /** providerDao.findModelsByProvider 交回的模型行（D10-17 按它给缺省档位；缺省空表） */
+  models: [] as Array<{ modelId: string; capabilities: string }>
 }))
 
 const mocks = vi.hoisted(() => ({
@@ -93,7 +95,7 @@ vi.mock('../../dao/database', () => {
 })
 vi.mock('../../dao/providerDao', () => ({
   providerDao: {
-    findModelsByProvider: () => [],
+    findModelsByProvider: () => holder.models,
     findEnabled: mocks.findEnabled,
     findEnabledModels: mocks.findEnabledModels
   }
@@ -501,14 +503,28 @@ describe('D10-16 model', () => {
 })
 
 describe('D10-17 thinkingLevel（PIN-03）', () => {
+  afterEach(() => {
+    holder.models = []
+  })
+
   it.each([
-    ['off', 'off'],
-    ['high', 'high'],
-    [undefined, DEFAULT_THINKING_LEVEL],
-    ['ultra', DEFAULT_THINKING_LEVEL]
-  ])('D10-17 设置 %s → %s', async (stored, expected) => {
+    ['off', false, 'off'],
+    ['high', false, 'high'],
+    ['off', true, 'off'],
+    [undefined, false, 'off'],
+    ['ultra', false, 'off'],
+    [undefined, true, DEFAULT_THINKING_LEVEL],
+    ['ultra', true, DEFAULT_THINKING_LEVEL]
+  ])('D10-17 设置 %s、模型 reasoning=%s → %s', async (stored, reasoning, expected) => {
+    holder.models = [{ modelId: 'm1', capabilities: JSON.stringify({ reasoning }) }]
     sessionRecords.insert(
-      row('s', { settings: { enabledTools: [], ...(stored ? { thinkingLevel: stored } : {}) } })
+      row('s', {
+        settings: {
+          enabledTools: [],
+          model: { provider: 'row-1', modelId: 'm1' },
+          ...(stored ? { thinkingLevel: stored } : {})
+        }
+      })
     )
     expect((await deps.resolveAgentConfig('s')).thinkingLevel).toBe(expected)
   })

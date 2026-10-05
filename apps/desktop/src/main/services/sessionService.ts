@@ -79,11 +79,14 @@ const THINKING_LEVELS: readonly string[] = [
   'max'
 ] satisfies readonly ThinkingLevel[]
 
-/** 会话设置里的思考档位 → 合法档位：没设过 / 写坏了 → DEFAULT_THINKING_LEVEL */
-function sessionThinkingLevel(raw: unknown): ThinkingLevel {
-  return typeof raw === 'string' && THINKING_LEVELS.includes(raw)
-    ? (raw as ThinkingLevel)
-    : DEFAULT_THINKING_LEVEL
+/**
+ * 会话设置里的思考档位 → 合法档位。没设过 / 写坏了 → 按模型能力给缺省：声明了 reasoning 的模型
+ * DEFAULT_THINKING_LEVEL，否则 'off'（与 pi-durable 之前的 resolveInitialThinkingLevel、以及界面
+ * useSessionInit 的口径一致；显式存下的值含 'off' 一律照用）。
+ */
+function sessionThinkingLevel(raw: unknown, reasoning: boolean | undefined): ThinkingLevel {
+  if (typeof raw === 'string' && THINKING_LEVELS.includes(raw)) return raw as ThinkingLevel
+  return reasoning ? DEFAULT_THINKING_LEVEL : 'off'
 }
 
 /**
@@ -667,7 +670,10 @@ export class SessionService {
       ...(ctx.provider && ctx.model
         ? { model: { provider: ctx.provider, modelId: ctx.model } }
         : {}),
-      thinkingLevel: sessionThinkingLevel(ctx.modelMetadata.thinkingLevel),
+      thinkingLevel: sessionThinkingLevel(
+        ctx.modelMetadata.thinkingLevel,
+        ctx.capabilities.reasoning
+      ),
       cwd: ctx.workingDirectory
     }
   }
@@ -695,12 +701,11 @@ export class SessionService {
     const tree = await readSessionRunConfig(sessionId)
     const provider = tree.provider ?? this.getDefaultProvider()
     const model = tree.model ?? this.getDefaultModel()
-    const thinkingLevel = sessionThinkingLevel(tree.thinkingLevel)
-
     const modelRow = providerDao.findModelsByProvider(provider).find((m) => m.modelId === model)
     const capabilities: ModelCapabilities = modelRow?.capabilities
       ? JSON.parse(modelRow.capabilities)
       : {}
+    const thinkingLevel = sessionThinkingLevel(tree.thinkingLevel, capabilities.reasoning)
     const project = session.projectId
       ? projectDao.pick(session.projectId, ['path', 'settings'])
       : undefined
