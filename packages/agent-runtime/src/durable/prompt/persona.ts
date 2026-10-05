@@ -34,13 +34,13 @@ export function renderPersona(
   return renderProfileSystemPrompt(profile, vars, logger)
 }
 
-/** 冻结时要用到的宿主 seam（`AgentSpecHost` 的子集） */
+/** 冻结时要用到的宿主 seam */
 export interface PersonaHost {
   promptVars: (ctx: PromptVarsCtx) => PromptVars | Promise<PromptVars>
   logger?: RuntimeLogger
 }
 
-/** 冻结的输入：这个 agent 是谁（`AgentSpec` + 创建参数里的 cwd 就够） */
+/** 冻结的输入：这个 agent 是谁（身份、归一名单与变量表的 cwd 就够） */
 export interface PersonaInput {
   kind: AgentKind
   /** root = 会话 id；spawned = agentId */

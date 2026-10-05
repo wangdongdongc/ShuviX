@@ -1,9 +1,7 @@
 /**
- * P2-05-51（PIN-18）：派发不再经旧的派生创建管线。源码扫描（产品代码，排除 __tests__），直到 P2-13 删掉
- * `agentFactory` / `createAgentFactory` —— 那时去掉第一、二条：
+ * P2-05-51（PIN-18）：派发不再经旧的派生创建管线。源码扫描（产品代码，排除 __tests__）。旧管线
+ *（`agentFactory` / `createAgentFactory`，agentProfile/createAgent.ts）已由 P2-13 删掉，关于它们的前两条随之去掉：
  *
- *  - `agentFactory` 只在 agents/agentHost.ts 里出现（定义它的地方；AgentManager 不再引它）；
- *  - `createAgentFactory(` 只在它的定义（agentProfile/createAgent.ts）与 agentHost.ts 里；
  *  - subagent/manager.ts 里没有 `TODO(pi-durable p2)`；
  *  - agentHost.ts 里没有 `dispatchModelConfig`（派发工具的调用方从 api 读，PIN-16）。
  */
@@ -47,17 +45,6 @@ describe('P2-05-51 no callers of the old spawned path', () => {
     expect(filesContaining('createSubAgentManager')).toEqual(
       expect.arrayContaining(['main/agents/AgentManager.ts', 'runtime/subagent/manager.ts'])
     )
-  })
-
-  it('agentFactory is referenced only in agents/agentHost.ts', () => {
-    expect(filesContaining('agentFactory')).toEqual(['main/agents/agentHost.ts'])
-  })
-
-  it('createAgentFactory( appears only in its definition and agentHost.ts', () => {
-    expect(filesContaining('createAgentFactory(')).toEqual([
-      'main/agents/agentHost.ts',
-      'runtime/agentProfile/createAgent.ts'
-    ])
   })
 
   it('subagent/manager.ts carries no TODO(pi-durable p2); agentHost.ts has no dispatchModelConfig', () => {

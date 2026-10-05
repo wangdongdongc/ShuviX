@@ -509,26 +509,8 @@ export { renderMemoryIndex } from './memory/memoryIndex'
 // 知识库 v2（OKF）：编解码 / 概念与笔记 / 校验 / knowledge 工具 / 引导
 export * from './knowledge'
 export { splitFrontmatter, type FrontmatterSplit } from './markdownFrontmatter'
-export {
-  createAgentFactory,
-  type AnyAgentTool,
-  type AgentFactory,
-  type AgentHostAdapter,
-  type AgentRuntime,
-  type CreateAgentParams,
-  type CreatedAgent,
-  type ToolResolveRequest
-} from './agentProfile/createAgent'
-// agent 规格的纯派生（初始模型 / 思考档位 / 工具名单的 root·spawned 决策表）
-export {
-  deriveAgentSpec,
-  normalizeToolNames,
-  resolveInitialModel,
-  resolveThinkingLevel,
-  type AgentSpec,
-  type AgentSpecHost,
-  type AgentSpecParams
-} from './durable/agentSpec'
+// agent 规格的纯派生（思考档位 / 工具名单的 root·spawned 决策表）
+export { normalizeToolNames, resolveThinkingLevel } from './durable/agentSpec'
 export {
   fenceInstructionFile,
   fenceProjectPrompt,

@@ -26,7 +26,7 @@
  * 「空串」）；新增 PVW-16（引用处在空串下收敛干净）与 PVW-17（组装出的提示里没有契约）。
  *
  * P1-11 起变量表是 agentHost 直接导出的 `desktopPromptVars`（会话核心在冻结人设时调它），这里直接
- * 调它，不再顶掉 `createAgentFactory` 去接适配面。其余 mock 只为让模块能加载（dao 会开 SQLite，
+ * 调它（旧的创建工厂已由 P2-13 删掉）。其余 mock 只为让模块能加载（dao 会开 SQLite，
  * electron / mcp 在 node 下起不来）；skillService 必须桩成可控的 findEnabled —— 真服务的构造函数会去碰
  * 真实 HOME 下的 `~/.shuvix/skills`。
  */
@@ -67,8 +67,7 @@ vi.mock('../../services/sandbox', () => ({ sandboxGloballyActive: () => false })
 vi.mock('../../services/botService', () => ({ botService: { forSession: () => null } }))
 vi.mock('../../utils/toolUtils/fileTime', () => ({ recordRead: vi.fn() }))
 vi.mock('../../services/agentRuntimeAdapters', () => ({
-  electronEventSink: {},
-  runtimeLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
+  electronEventSink: {}
 }))
 vi.mock('../../services/toolContext', () => ({
   getDesktopSecurityContext: vi.fn(),

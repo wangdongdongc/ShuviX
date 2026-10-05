@@ -19,17 +19,14 @@
  * 工具的**次序**不在这里拼：运行时的锁（`composeAgentTools`，K6）按「名单序内置 → agent → skill →
  * MCP 逐台逐个 → 其它」拼，这里只交出各段。
  *
- * 另留两样：`agentFactory`（派生 agent 的旧创建入口 —— P2-05 起没有调用方了，派发走会话的协调器；
- * 恒抛 `PhasePendingError('spawned agents', 2)`，P2-13 删掉）与 `resolveProfileModelSpec`（切档案
- * 种子）。
+ * 另留 `resolveProfileModelSpec`：档案 `shuvix-model` 的解析（切档案种子；派生 agent 经
+ * `SessionHostDeps.resolveProfileModel` 接到协调器）。
  */
 import type { ToolExecutionApi, ToolRegistration } from '@earendil-works/pi-durable'
 import {
-  createAgentFactory,
   formatLanguageDisplay,
   LAZY_CONNECT_TIMEOUT_MS,
   offersDispatchTool,
-  PhasePendingError,
   renderBotContext,
   renderKnowledgeGuide,
   renderVisualCraft,
@@ -77,7 +74,6 @@ import { resolveInstructionContent } from '../services/instruction'
 import { resolveProjectMemoryIndex } from '../services/memory'
 import { chatFrontendRegistry } from '../frontend/core'
 import { wrapDurableTool } from '../services/wrapToolOutput'
-import { electronEventSink, runtimeLogger } from '../services/agentRuntimeAdapters'
 import { sandboxGloballyActive } from '../services/sandbox'
 import { requestUserInputFor } from '../services/userInputBroker'
 import {
@@ -518,7 +514,7 @@ export const desktopPromptHost: PromptHost = {
  *
  * 目录只取「已启用提供商的已启用模型」：档案指向一个被停用的模型时视为不可用，
  * 由调用方回落（spawned 回落派发方模型 / 切档案时不写种子），而不是在这里硬拉起
- * 一个用户已经关掉的模型。派生创建（agentFactory）与切档案种子共用此函数。
+ * 一个用户已经关掉的模型。派生创建（协调器的 resolveProfileModel）与切档案种子共用此函数。
  */
 export function resolveProfileModelSpec(spec: string): SubAgentModelConfig | null {
   const hit = resolveModelRef(spec, providerDao.findAllEnabledModels())
@@ -531,22 +527,3 @@ export function resolveProfileModelSpec(spec: string): SubAgentModelConfig | nul
   }
   return { provider: hit.providerId, model: hit.modelId, capabilities }
 }
-
-// ─── 派生 agent 的旧创建入口（恒抛；P2-05 起没有调用方） ──────────────────
-
-/**
- * 派生 agent 的旧创建入口（P2-05 之前 AgentManager 经它派发；现在派发走会话的协调器）。根 agent 由 durable
- * 会话自己创建（锁，P1-09），工厂的参数类型只收 spawned；`createAgent` 先照常派生规格（校验入参、解析档案
- * 模型），然后抛 `PhasePendingError`（spawned：'spawned agents', 2）。工具解析因此永远走不到 —— 派生 agent
- * 的工具已经在 ToolHost 上（`resolveAgentTools` kind 'spawned'，P2-04），由协调器（P2-03）调；这里刻意
- * **不**接过去（PIN-07）。
- * TODO(pi-durable p2): P2-13 删掉这个入口（连同 createAgentFactory）。
- */
-export const agentFactory = createAgentFactory({
-  resolveTools: () => {
-    throw new PhasePendingError('spawned agents', 2)
-  },
-  resolveProfileModel: resolveProfileModelSpec,
-  eventSink: electronEventSink,
-  logger: runtimeLogger
-})

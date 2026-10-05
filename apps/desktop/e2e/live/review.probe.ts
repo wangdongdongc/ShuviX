@@ -4,9 +4,12 @@
  *
  * 与 probe.ts 的分工：那边起隔离实例跑一整轮对话；这里**不起 Electron** —— 审查员的全部输入就是
  * `permission.request` 的 payload（设计里的「独立上下文」），所以直接用 agent-runtime 的真 runner →
- * 真派生 agent 路由 → 会话的协调器跑，读的是随包发布的那几份 md，
- * 走的是与桌面同一条 runTask → spawn → next 链路。唯一从真实环境借来的是 provider 与模型
- * （pickRealModel：读真实实例 shuvix.db 的一行，key 只在内存里过一手，不打印、不落盘）。
+ * 真派生 agent 路由（`createSubAgentManager`）→ 一个临时 SessionHost（内存存储）上的 durable 会话 →
+ * 协调器的宿主派发（没有 taskId 的判定 = 后台锚任务拥有子对话）→ 结果契约的 `next`，读的是随包发布的
+ * 那几份 md，走的是与桌面同一条 decide → runTask → spawn → next 链路。模型经 agent-runtime 的真模型注册表
+ *（`createModelRegistry`），hook 的模型按桌面同一条锁优先规则解析（`resolveHookRunModel`，会话没锁 → 会话
+ * 选择）。唯一从真实环境借来的是 provider 与模型（pickRealModel：读真实实例 shuvix.db 的一行，key 只在
+ * 内存里过一手，不打印、不落盘）。
  *
  * 不断言（真模型不确定），只产出报告：每条用例的期望、实际判决、风险、summary、reason、耗时；
  * 末尾汇总良性误拒率、有害漏放率、转人率与 p50 / p90。设计稿 docs/permission-review-design.md §13。
@@ -16,24 +19,35 @@
  * ChatEvent 流与发给 provider 的原样请求各存一份，看模型到底写了什么）、PROBE_THINKING（临时换掉审查员
  * 声明的思考档位，比较关思考的影响）。
  *
- * 暂不可用（pi-durable P1-01 起）：宿主派发的 agent 要到 P2-08 才接上、探针要到 P2-13 才移到临时 SessionHost
- * 上，在那之前跑这个探针会在第一次派发时得到 PhasePendingError（见 buildRunner 里的 TODO）。
+ * token 数与 PROBE_DEBUG 的原样请求取自模型层的一个旁听（`tapModels`：注册表的 `Models` 外面包一层，
+ * onPayload 记请求、每次生成的 `result()` 记 usage）—— durable 会话的事件投影在 phase 3，ChatEvent 流里
+ * 只有路由的 register / end。
  */
 import { readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { it } from 'vitest'
+import type { AssistantMessage, AssistantMessageEventStream, Models } from '@earendil-works/pi-ai'
+import { MemoryStorage } from '@earendil-works/pi-durable'
 import {
   PERMISSION_REVIEWER_PROFILE_NAME,
   buildBuiltinHooks,
   buildBuiltinProfiles,
   createHookRunner,
+  createModelRegistry,
+  createSessionHost,
   createSubAgentManager,
+  resolveHookRunModel,
   toInProcessAgentType,
   type HookRunEvent,
   type HookRunner,
-  type PermissionRequestPayload
+  type ModelSelection,
+  type PermissionRequestPayload,
+  type ProviderCredentialPort,
+  type RuntimeLogger,
+  type SessionHost,
+  type ToolHost
 } from '@shuvix/agent-runtime'
 import type { ChatEvent } from '@shuvix/chat-protocol/events'
 import type { ModelCapabilities } from '@shuvix/chat-protocol/types/provider'
@@ -82,6 +96,8 @@ interface Case {
 }
 
 const WS = '/Users/alex/code/shop-api'
+/** 判定所属的会话（临时 SessionHost 上的一条内存会话） */
+const PROBE_SESSION = 'probe-session'
 
 /**
  * 各策略写给人看的那句。command 是出厂策略 ask-on-command，与 builtinPolicies/md 的 en 版逐字一致；
@@ -148,7 +164,7 @@ function payloadOf(
   policy: PermissionRequestPayload['policy']
 ): PermissionRequestPayload {
   return {
-    sessionId: 'probe-session',
+    sessionId: PROBE_SESSION,
     agent: ctx.agent ?? { profile: 'work', kind: 'root' },
     operation: {
       ...operation,
@@ -660,24 +676,112 @@ interface Row {
   error?: string
 }
 
-function buildRunner(
-  model: RealModel,
-  events: ChatEvent[],
-  runEvents: HookRunEvent[],
+/** 模型层旁听到的东西：发给 provider 的原样请求、每次生成的 usage */
+interface Tap {
   payloads: unknown[]
-): HookRunner {
+  usage: AssistantMessage['usage'][]
+}
+
+/**
+ * 注册表的 `Models` 外面包一层旁听：生成（`stream` / `streamSimple`）的 onPayload 记原样请求（再交给调用方
+ * 自己的 onPayload），每次生成的 `result()` 记 usage。其余方法原样转发。
+ */
+function tapModels(models: Models, tap: Tap): Models {
+  type OnPayload = (payload: unknown, model: unknown) => unknown
+  return new Proxy(models, {
+    get(target, key, receiver) {
+      const value: unknown = Reflect.get(target, key, receiver)
+      if ((key !== 'stream' && key !== 'streamSimple') || typeof value !== 'function') return value
+      return (model: unknown, context: unknown, options?: { onPayload?: OnPayload }) => {
+        const stream = (value as (...args: unknown[]) => AssistantMessageEventStream).call(
+          target,
+          model,
+          context,
+          {
+            ...options,
+            onPayload: (payload: unknown, m: unknown) => {
+              tap.payloads.push(payload)
+              return options?.onPayload?.(payload, m)
+            }
+          }
+        )
+        void stream.result().then(
+          (message) => tap.usage.push(message.usage),
+          () => {}
+        )
+        return stream
+      }
+    }
+  })
+}
+
+/** 真实实例的那一行 provider / 模型，作为模型层的端口（只读；OAuth 不经这里，探针只挑带 key 的行） */
+function realPort(model: RealModel): ProviderCredentialPort {
+  return {
+    listProviders: () => [
+      {
+        id: model.providerId,
+        name: model.providerName,
+        isBuiltin: model.isBuiltin === true,
+        isEnabled: true,
+        apiKey: model.apiKey,
+        baseUrl: model.baseUrl ?? '',
+        apiProtocol: model.apiProtocol ?? '',
+        metadata: model.metadata ?? '{}'
+      }
+    ],
+    listModels: () => [
+      {
+        providerId: model.providerId,
+        modelId: model.modelId,
+        isEnabled: true,
+        capabilities: model.capabilities ?? '{}'
+      }
+    ],
+    readOAuth: () => undefined,
+    saveOAuth: () => {},
+    clearOAuth: () => {}
+  }
+}
+
+/**
+ * 审查员没有工具（档案的 `shuvix-tools` 为空）：内置工具一个不给，按 agent 的工具只交回运行时造好的附加工具
+ *（结果契约的 `next`）—— 与桌面 ToolHost 对派生 agent 的口径一致，只是不套输出包装。
+ */
+const reviewerToolHost: ToolHost = {
+  buildBuiltinTools: () => [],
+  resolveAgentTools: async (request) => ({
+    sandboxed: false,
+    ...(request.extraTools === undefined ? {} : { extraTools: request.extraTools })
+  }),
+  rebuildAgentTools: (_record, context) =>
+    context.extraTools === undefined ? {} : { extraTools: context.extraTools }
+}
+
+const probeLogger: RuntimeLogger = {
+  info: () => {},
+  warn: (m) => console.warn(m),
+  error: (m) => console.error(m)
+}
+
+interface Rig {
+  runner: HookRunner
+  host: SessionHost
+}
+
+/**
+ * 每条用例一套：临时 SessionHost（内存存储）+ 真路由 + 真 runner，再打开判定所属的那条会话（hook 派发按
+ * `get` 找打开着的会话，从不新建）。会话不建根 agent —— 宿主派发不需要它；没锁时 hook 的模型取会话选择。
+ */
+async function buildRig(model: RealModel, events: ChatEvent[], runEvents: HookRunEvent[], tap: Tap): Promise<Rig> {
   const capabilities = (
     model.capabilities ? JSON.parse(model.capabilities) : {}
   ) as ModelCapabilities
-  // TODO(pi-durable p2): P2-13 把探针移到一个临时 SessionHost + 路由上。路由的宿主派发（hook 的锚 /
-  // reviewer 的任务拥有者）要到 P2-08 才接上，在那之前每次派发都得到 PhasePendingError；这里先给路由一个
-  // 没有会话的宿主面。真模型与发给 provider 的原样请求（PROBE_DEBUG / PROBE_FORCE_TOOL /
-  // PROBE_RENAME_NEXT 那几个旋钮）要经 P1-02 的模型注册表与网络装饰重新接上。`payloads` 先保持为空。
-  void payloads
-  const manager = createSubAgentManager({
-    sessions: { get: () => undefined, peek: async () => undefined },
-    broadcast: (event) => events.push(event)
-  })
+  const port = realPort(model)
+  const registry = createModelRegistry({ port })
+  const catalog = { registry, port }
+  const selection: ModelSelection = { provider: model.providerId, modelId: model.modelId }
+
   const reviewerProfile = buildBuiltinProfiles({
     language: LANG,
     readMd: mdReader(AGENTS_MD_DIR)
@@ -693,38 +797,66 @@ function buildRunner(
     ...toInProcessAgentType(reviewerProfile),
     ...(thinking ? { thinkingLevel: thinking } : {})
   }
-  return createHookRunner({
+
+  const storages = new Map<string, MemoryStorage>()
+  const host = createSessionHost({
+    models: tapModels(registry.models, tap),
+    modelCatalog: catalog,
+    toolHost: reviewerToolHost,
+    // 宿主派发从不建根 agent；给一份照样说得通的配置（审查员档案 + 会话选择）
+    resolveAgentConfig: () => ({ profile: reviewer, model: selection, thinkingLevel: 'medium' }),
+    openStorage: async (sessionId) => {
+      let storage = storages.get(sessionId)
+      if (storage === undefined) {
+        storage = new MemoryStorage()
+        storages.set(sessionId, storage)
+      }
+      return storage
+    },
+    storageExists: (sessionId) => storages.has(sessionId),
+    deleteStorage: async (sessionId) => {
+      storages.delete(sessionId)
+    },
+    isEphemeral: () => true,
+    eventSink: { broadcast: (event) => events.push(event), hasUserInputCapability: () => false },
+    logger: probeLogger
+  })
+  await host.open(PROBE_SESSION)
+
+  const manager = createSubAgentManager({
+    sessions: host,
+    broadcast: (event) => events.push(event),
+    logger: probeLogger
+  })
+  const runner = createHookRunner({
     manager,
     listHooks: () => [{ source: 'builtin', file: hook }],
     resolveAgentProfile: (name) => (name === reviewer.name ? reviewer : null),
-    // 会话档位随派发走；审查员 md 声明的 shuvix-thinking 压过它（与桌面同一条规则）
-    resolveRunModel: async () => ({
-      provider: model.providerId,
-      model: model.modelId,
-      capabilities,
-      thinkingLevel: 'medium'
-    }),
+    // 与桌面同一条锁优先规则：会话没锁 → 会话选择（provider 行 id + 模型 id）经 resolveLockModel；
+    // 会话档位随派发走，审查员 md 声明的 shuvix-thinking 压过它
+    resolveRunModel: ({ sessionId }) =>
+      resolveHookRunModel({
+        session: host.get(sessionId),
+        selection: () => ({ model: selection, thinkingLevel: 'medium', capabilities }),
+        catalog
+      }),
+    isInterrupted: ({ sessionId }) => host.get(sessionId)?.isInterrupted() === true,
     env: { host: 'desktop', platform: process.platform },
     onRun: (event) => runEvents.push(event),
-    logger: {
-      info: () => {},
-      warn: (m) => console.warn(m),
-      error: (m) => console.error(m)
-    }
+    logger: probeLogger
   })
+  return { runner, host }
 }
 
-function usageOf(events: ChatEvent[]): { input?: number; output?: number } {
+function usageOf(tap: Tap): { input?: number; output?: number } {
+  if (tap.usage.length === 0) return {}
   let input = 0
   let output = 0
-  let seen = false
-  for (const event of events) {
-    if (event.type !== 'agent_end' || !event.usage) continue
-    seen = true
-    input += event.usage.input + event.usage.cacheRead + event.usage.cacheWrite
-    output += event.usage.output
+  for (const usage of tap.usage) {
+    input += usage.input + usage.cacheRead + usage.cacheWrite
+    output += usage.output
   }
-  return seen ? { input, output } : {}
+  return { input, output }
 }
 
 const percentile = (values: number[], p: number): number => {
@@ -793,32 +925,36 @@ it(
       for (const probeCase of cases) {
         const events: ChatEvent[] = []
         const runEvents: HookRunEvent[] = []
-        const payloads: unknown[] = []
-        const runner = buildRunner(model, events, runEvents, payloads)
+        const tap: Tap = { payloads: [], usage: [] }
+        const { runner, host } = await buildRig(model, events, runEvents, tap)
         const t0 = Date.now()
-        const decision = await runner.decide('permission.request', probeCase.payload)
+        let ms = 0
+        const decision = await runner
+          .decide('permission.request', probeCase.payload)
+          .finally(() => {
+            ms = Date.now() - t0
+            return host.closeAll()
+          })
         const end = runEvents.find(
           (e): e is Extract<HookRunEvent, { type: 'end' }> => e.type === 'end'
         )
-        const usage = usageOf(events)
+        const usage = usageOf(tap)
         if (process.env.PROBE_DEBUG) {
           writeFileSync(`${OUT}.${probeCase.id}.events.json`, JSON.stringify(events, null, 2))
-          writeFileSync(`${OUT}.${probeCase.id}.requests.json`, JSON.stringify(payloads, null, 2))
+          writeFileSync(`${OUT}.${probeCase.id}.requests.json`, JSON.stringify(tap.payloads, null, 2))
         }
         rows.push({
           id: probeCase.id,
           group: probeCase.group,
           expect: probeCase.expect,
           verdict: decision?.result ?? null,
-          ms: Date.now() - t0,
+          ms,
           inputTokens: usage.input,
           outputTokens: usage.output,
           error: end && !end.ok ? end.error : undefined
         })
         console.log(
-          `${probeCase.id} ${probeCase.expect} → ${decision?.result.decision ?? 'no answer'} (${
-            Date.now() - t0
-          } ms)`
+          `${probeCase.id} ${probeCase.expect} → ${decision?.result.decision ?? 'no answer'} (${ms} ms)`
         )
       }
     }

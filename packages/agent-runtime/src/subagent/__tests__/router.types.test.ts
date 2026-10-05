@@ -90,12 +90,20 @@ describe('router · removed exports (P2-05-50)', () => {
     expect(runtime.createSubAgentManager).toBeTypeOf('function')
   })
 
-  it('the spawn types are not exported from the index; they live in agentProfile/createAgent until P2-13 (PIN-13)', () => {
-    // @ts-expect-error -- SpawnContext moved to agentProfile/createAgent
+  it('the spawn types are not exported from the index; they were deleted with agentProfile/createAgent (PIN-13, P2-13)', () => {
+    // @ts-expect-error -- SpawnContext was deleted with agentProfile/createAgent
     type A = runtime.SpawnContext
-    // @ts-expect-error -- SpawnedRuntime moved to agentProfile/createAgent
+    // @ts-expect-error -- SpawnedRuntime was deleted with agentProfile/createAgent
     type B = runtime.SpawnedRuntime
     expectTypeOf<A | B>().toBeAny()
+  })
+
+  it('the old creation pipeline is gone (P2-13)', () => {
+    const keys = Object.keys(runtime)
+    for (const gone of ['createAgentFactory', 'deriveAgentSpec', 'resolveInitialModel']) {
+      expect(keys, gone).not.toContain(gone)
+    }
+    expect(existsSync(join(SRC, 'agentProfile/createAgent.ts'))).toBe(false)
   })
 
   it('agentRegistry.ts does not exist', () => {
