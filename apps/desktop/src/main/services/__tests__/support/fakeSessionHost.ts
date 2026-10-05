@@ -13,6 +13,7 @@
 import { vi } from 'vitest'
 import type {
   AdmitResult,
+  AgentIdentity,
   CreateAgentOptions,
   DurableSession,
   LockRecord,
@@ -101,6 +102,22 @@ export class FakeDurableSession implements DurableSession {
 
   isInterrupted(): boolean {
     return this.interrupted
+  }
+
+  /** 按对话可设的身份（派生 agent 等）；没设的对话 = 锁的根身份，没锁 = undefined（与真实现同口径） */
+  readonly identities = new Map<number, AgentIdentity>()
+
+  agentIdentity(conversationId: number): AgentIdentity | undefined {
+    if (this.closed) return undefined
+    const set = this.identities.get(conversationId)
+    if (set !== undefined) return set
+    if (this.lock === undefined) return undefined
+    const { profileName, model } = this.lock
+    return {
+      profileName,
+      kind: 'root',
+      getModelConfig: () => ({ provider: model.provider, model: model.modelId, capabilities: {} })
+    }
   }
 
   async continue(): Promise<SubmitResult> {
