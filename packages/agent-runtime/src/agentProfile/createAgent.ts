@@ -6,12 +6,10 @@
  * 工具名单、系统提示词、root / spawned 的运行期差异）是纯派生，住在 `durable/agentSpec.ts`；
  * 本文件只剩宿主契约与创建入口。
  *
- * **现状（pi-durable 切换中）**：旧的运行时（pi 0.80 的 AgentHarness + HarnessSession）
- * 已在 P1-01 删除 —— `createAgent()` 先派生规格（校验入参、跑一遍变量表与注入解析），然后抛
- * `PhasePendingError`：
- *  - root：根 agent 已改由 durable 会话自己创建（锁，P1-09：`DurableSession.createAgent()`，
- *    `durable/lock.ts`）。TODO(pi-durable p1): 桌面在 P1-10 / P1-11 改走那条路之后删掉这条路径；
- *  - spawned：TODO(pi-durable p2) 派生 agent 落在 durable 子对话上。
+ * **现状（pi-durable 切换中）**：本工厂只剩**派生 agent** 一条路。会话的根 agent 由它的 durable 会话
+ * 自己创建（锁：`DurableSession.createAgent()`，`durable/lock.ts`；桌面经 SessionHost 接线），这里收到
+ * `kind: 'root'` 直接拒绝。派生：先派生规格（校验入参、跑一遍变量表与注入解析），然后抛
+ * `PhasePendingError` —— TODO(pi-durable p2) 派生 agent 落在 durable 子对话上。
  */
 import type { ImageContent } from '@earendil-works/pi-ai'
 import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
@@ -107,15 +105,13 @@ export interface CreateAgentParams {
    * 经 `RunTaskParams.systemContext` 透传。manager 只透传，不解释内容。
    */
   systemContext?: readonly string[]
-  /** 仅 root：UserPromptSubmit 通过后的首轮快速标题钩子 */
-  onPromptAccepted?: (text: string) => void
 }
 
 /**
  * agent 运行时句柄（过渡形状）—— 旧 HarnessSession 的公共面去掉 pi 专有的部分。
  *
- * 派生协调器只用 `SpawnedRuntime` 那一截；桌面 AgentSession 用全部。
- * TODO(pi-durable p1): P1-07/P1-09 由 DurableSession 取代（根会话）；派生 agent 见 phase 2。
+ * 派生协调器只用 `SpawnedRuntime` 那一截（会话的根 agent 已是 DurableSession，不经这里）。
+ * TODO(pi-durable p2): 派生 agent 落在 durable 子对话上时换掉这个形状。
  */
 export interface AgentRuntime extends SpawnedRuntime {
   /** 发送一轮 prompt；`display` 是内联 Token 显示侧车（TODO(pi-durable p3)：DisplayDoc） */
@@ -169,13 +165,14 @@ export interface AgentFactory {
 
 export function createAgentFactory(host: AgentHostAdapter): AgentFactory {
   async function createAgent(params: CreateAgentParams): Promise<CreatedAgent> {
-    // 先派生规格：入参校验（spawned 缺 spawn 上下文即抛）、变量表与注入解析照常跑一遍
-    await deriveAgentSpec(host, params)
+    // 会话的根 agent 由它的 durable 会话创建（锁），不经本工厂
     if (params.kind === 'root') {
-      // 根 agent 由 durable 会话创建（P1-09 的锁：DurableSession.createAgent）。
-      // TODO(pi-durable p1): P1-10 / P1-11 桌面改走锁之后删掉这条路径
-      throw new PhasePendingError('root agent runtime', 1)
+      throw new Error(
+        'createAgent builds spawned agents only; a session root agent is created by its durable session (DurableSession.createAgent)'
+      )
     }
+    // 先派生规格：入参校验（缺 spawn 上下文即抛）、变量表与注入解析照常跑一遍
+    await deriveAgentSpec(host, params)
     // TODO(pi-durable p2): 派生 agent 落在 durable 子对话上（phase 2）
     throw new PhasePendingError('spawned agents', 2)
   }

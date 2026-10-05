@@ -97,6 +97,12 @@ export interface UserSendOptions {
   whenBusy?: 'reject' | 'followUp' | 'steer'
   /** 显示侧车（内联 Token 等），记在 DisplayDoc[requestId]；没有 requestId 时自动生成一个 */
   display?: JsonObject
+  /**
+   * 这条输入被受理的那一刻（durable 已接下这次提交，run 还没落定）调用一次。被拒（忙 / 模型被拒 /
+   * 会话已关 / 创建被取消）时从不调用。抛错只记日志，不影响发送本身（桌面：`session.prompt-accepted`
+   * 埋点与活跃时间入账在这里）。
+   */
+  onAdmitted?: () => void
 }
 
 export interface NoticeInput {
@@ -596,11 +602,22 @@ export class DurableSessionImpl implements DurableSession {
           if (joining.length > 0) await this.steerNotices(conversation, joining)
           throw error
         }
+        this.admitted(options.onAdmitted)
         if (joining.length > 0) await this.steerNotices(conversation, joining)
         return settlementResult(await submission.wait(BG))
       })
     } catch (error) {
       return resultOfError(error)
+    }
+  }
+
+  /** 受理回调（`UserSendOptions.onAdmitted`）：抛错只记日志 */
+  private admitted(callback: (() => void) | undefined): void {
+    if (callback === undefined) return
+    try {
+      callback()
+    } catch (error) {
+      this.deps.logger.warn(`onAdmitted failed session=${this.sessionId}: ${errorText(error)}`)
     }
   }
 

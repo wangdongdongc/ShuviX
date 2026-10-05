@@ -7,16 +7,19 @@
  *     （MCP 的可用 = 此刻已连接，过滤后落库就是永久丢项）；
  *   - 缺键的旧行在首次解析时按同一条规则补一次并落库（子会话抄父会话、不替父会话落库），
  *     之后是快照，不随项目配置漂移；
- *   - 勾选**只在创建根 Agent 时读一次**，此刻才按可用性过滤；`agent.init().enabledTools` 回原值；
- *   - 唯一写入口 `updateEnabledTools` 在 `tracked`（运行时存在 / 创建中 / 关停中）期间拒绝、零写入，
- *     `initAgent().created` 与它同一口径；
- *   - 运行时出生广播 `agent_created`，关停广播 `agent_closing` true → false（前端的只读区间）。
+ *   - 勾选**只在创建根 Agent 时读一次**（运行时创建 agent 时调 `resolveAgentConfig`），此刻才按可用性
+ *     过滤；`agent.init().enabledTools` 回原值；
+ *   - 唯一写入口 `updateEnabledTools` 在锁住期间（会话开着看运行时的锁，没开着看锁镜像
+ *     `settings.agentLocked`；销毁在途锁还在）拒绝、零写入，`initAgent().created` 与它同一口径；
+ *     创建在途的窗口里照样接受（PIN-12）；
+ *   - agent_created / agent_closing 归运行时的锁广播，sessionService 不发（见 sessionHostWiring 的 D10-39）。
  *
- * mock 面沿用 sessionServiceProfileResolution.test.ts（import 图全换假件、真 SessionManager、
- * `AgentSession.create` 可捕获），只把 sessionDao / projectDao 换成一张**内存行表**：补键用例
- * 要能读回自己刚写的值，`pick(id, cols)` 按列返回。
+ * mock 面沿用 sessionServiceProfileResolution.test.ts（import 图全换假件、会话运行时换成假宿主），
+ * 只把 sessionDao / projectDao 换成一张**内存行表**：补键用例要能读回自己刚写的值，
+ * `pick(id, cols)` 按列返回。
  */
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest'
+import { fakeHost, gate, lockRecord, resetFakeHost } from './support/fakeSessionHost'
 
 const mocks = vi.hoisted(() => ({
   daoPick: vi.fn<(id: string, cols: string[]) => unknown>(),
@@ -29,7 +32,6 @@ const mocks = vi.hoisted(() => ({
   findModelsByProvider: vi.fn(() => []),
   findByKey: vi.fn<(key: string) => string | undefined>(),
   filterAvailableTools: vi.fn<(tools: string[], projectPath?: string) => string[]>(),
-  agentCreate: vi.fn<(params: { sessionId: string; enabledTools: string[] }) => Promise<unknown>>(),
   broadcast: vi.fn<(event: Record<string, unknown>) => void>(),
   broadcastSessionConfigChanged: vi.fn<(sessionId: string) => void>(),
   daoTouchActive: vi.fn<(id: string) => void>()
@@ -64,6 +66,7 @@ vi.mock('../../dao/projectDao', () => ({ projectDao: { pick: mocks.projectPick }
 vi.mock('../../dao/settingsDao', () => ({ settingsDao: { findByKey: mocks.findByKey } }))
 vi.mock('../messageService', () => ({ messageService: { clear: vi.fn() } }))
 vi.mock('../sessionStorage', () => ({
+  isDurableSession: () => true,
   readSessionRunConfig: mocks.readSessionRunConfig,
   appendModelChange: vi.fn()
 }))
@@ -75,8 +78,23 @@ vi.mock('../../utils/paths', () => ({
 vi.mock('../mcpService', () => ({ mcpService: { closeSession: vi.fn() } }))
 vi.mock('../toolAggregator', () => ({ filterAvailableTools: mocks.filterAvailableTools }))
 vi.mock('../../utils/toolUtils/allowList', () => ({ buildAllowEntry: vi.fn() }))
-vi.mock('../agentService', () => ({ agentService: { getProfile: vi.fn() } }))
-vi.mock('../agentSession', () => ({ AgentSession: { create: mocks.agentCreate } }))
+vi.mock('../agentService', () => ({
+  agentService: {
+    getProfile: vi.fn((name: string) => ({
+      name,
+      tools: [],
+      instructionFiles: [],
+      projectAwareness: false
+    }))
+  }
+}))
+// 会话运行时换成假宿主 / 假门面（真模块的依赖图带模型注册表、事件适配器）
+vi.mock('../sessionHost', async () =>
+  (await import('./support/fakeSessionHost')).sessionHostModuleMock()
+)
+vi.mock('../agentSession', async () =>
+  (await import('./support/fakeSessionHost')).agentSessionModuleMock()
+)
 vi.mock('../bgTaskService', () => ({ killBySession: vi.fn(), setBgTaskNotifier: vi.fn() }))
 vi.mock('../../agents/agentHost', () => ({ resolveProfileModelSpec: vi.fn() }))
 vi.mock('../../utils/sessionConfigBroadcast', () => ({
@@ -157,26 +175,6 @@ const insertedSettings = (): Record<string, unknown> =>
 const writesTo = (id: string): unknown[][] =>
   mocks.daoUpdateSettings.mock.calls.filter((c) => c[0] === id)
 
-/** 手动控制落定时机的 Promise —— 模拟「创建 / 关停在途」 */
-function deferred<T = void>(): { promise: Promise<T>; resolve: (v: T) => void } {
-  let resolve!: (v: T) => void
-  const promise = new Promise<T>((r) => {
-    resolve = r
-  })
-  return { promise, resolve }
-}
-
-interface FakeAgent {
-  sessionId: string
-  invalidate: () => Promise<void>
-  destroy: () => Promise<void>
-}
-
-/** 假 AgentSession：SessionManager 的 dispose 只碰 invalidate / destroy */
-function makeAgent(sessionId: string, invalidate: () => Promise<void> = async () => {}): FakeAgent {
-  return { sessionId, invalidate: vi.fn(invalidate), destroy: vi.fn(async () => {}) }
-}
-
 let seq = 0
 let SID = ''
 
@@ -204,7 +202,7 @@ beforeEach(() => {
   mocks.findModelsByProvider.mockReturnValue([])
   mocks.findByKey.mockReturnValue(undefined)
   mocks.filterAvailableTools.mockImplementation((tools) => tools)
-  mocks.agentCreate.mockImplementation(async (params) => makeAgent(params.sessionId))
+  resetFakeHost()
 })
 
 // ─── create：恒写键 + 继承 ──────────────────────────────────────────────────
@@ -322,14 +320,13 @@ describe('EXT-U-11 缺键的旧根会话：首次解析按同一条规则补一�
     expect(sessions.get(SID)!.settings.enabledTools).toEqual([])
   })
 
-  it('EXT-U-11 首次解析走 ensureAgentSession 同样补键，AgentSession.create 收到补上的值', async () => {
+  it('EXT-U-11 首次解析走 resolveAgentConfig（创建 agent 时）同样补键，toolOverlay 就是补上的值', async () => {
     seedProject('p1', { enabledTools: ['skill:x'] })
     seedSession({ id: SID, projectId: 'p1', settings: {} })
 
-    await sessionService.ensureAgentSession(SID)
+    const config = await sessionService.resolveAgentConfig(SID)
     expect(writesTo(SID)).toEqual([[SID, { enabledTools: ['skill:x'] }]])
-    expect(mocks.agentCreate).toHaveBeenCalledTimes(1)
-    expect(mocks.agentCreate.mock.calls[0][0].enabledTools).toEqual(['skill:x'])
+    expect(config.toolOverlay).toEqual(['skill:x'])
   })
 
   it('EXT-U-11 补键同样不按可用性过滤：此刻离线的 MCP 照样补进去', async () => {
@@ -376,7 +373,7 @@ describe('EXT-U-11b 缺键的旧子会话：补键抄父会话，不替父会话
 // ─── 只在创建 Agent 时读一次 ────────────────────────────────────────────────
 
 describe('EXT-U-12 勾选只在创建根 Agent 时读一次，此刻才按可用性过滤', () => {
-  it('EXT-U-12 init 回原值、AgentSession.create 收到过滤后的；不写库；运行期改库不会被读到', async () => {
+  it('EXT-U-12 init 回原值、创建 agent 时读到过滤后的；不写库；每次创建现读', async () => {
     seedProject('p1')
     seedSession({
       id: SID,
@@ -390,17 +387,17 @@ describe('EXT-U-12 勾选只在创建根 Agent 时读一次，此刻才按可用
     // UI 要的是原值：离线的 MCP 显示为已勾，整份替换写入时才不会被抹掉
     expect((await sessionService.initAgent(SID)).enabledTools).toEqual(['skill:ok', 'mcp:offline'])
 
-    const agent = await sessionService.ensureAgentSession(SID)
-    expect(mocks.agentCreate).toHaveBeenCalledTimes(1)
-    expect(mocks.agentCreate.mock.calls[0][0].enabledTools).toEqual(['skill:ok'])
-    // 过滤只作用于这一次创建：设置里的原值不动（服务器下次连上、重建运行时就又回来了）
+    expect((await sessionService.resolveAgentConfig(SID)).toolOverlay).toEqual(['skill:ok'])
+    // 过滤只作用于这一次创建：设置里的原值不动（服务器下次连上、重建 agent 就又回来了）
     expect(mocks.daoUpdateSettings).not.toHaveBeenCalled()
     expect(sessions.get(SID)!.settings.enabledTools).toEqual(['skill:ok', 'mcp:offline'])
 
-    // 运行时活着时绕过写入口直接改库：运行时不重读，也不因此重建
+    // 只打开会话不读配置（创建 agent 才读，锁住之后运行时不再读 —— 见运行时的 LS-03）
+    await sessionService.ensureAgentSession(SID)
+    expect(fakeHost.callsOf('open')).toEqual([SID])
+    // 下一次创建现读：库里改了就是改了的那份
     sessions.get(SID)!.settings.enabledTools = ['skill:changed']
-    expect(await sessionService.ensureAgentSession(SID)).toBe(agent)
-    expect(mocks.agentCreate).toHaveBeenCalledTimes(1)
+    expect((await sessionService.resolveAgentConfig(SID)).toolOverlay).toEqual(['skill:changed'])
   })
 
   it('EXT-U-12c 勾选里的 mcp:chrome 不作数：过滤与创建都见不到它；init 回原值；不写库', async () => {
@@ -418,11 +415,11 @@ describe('EXT-U-12 勾选只在创建根 Agent 时读一次，此刻才按可用
       'mcp:ssh',
       'skill:x'
     ])
-    await sessionService.ensureAgentSession(SID)
+    const config = await sessionService.resolveAgentConfig(SID)
     const filtered = mocks.filterAvailableTools.mock.calls.map(([tools]) => tools)
     expect(filtered.length).toBeGreaterThan(0)
     for (const tools of filtered) expect(tools).toEqual(['mcp:ssh', 'skill:x'])
-    expect(mocks.agentCreate.mock.calls[0][0].enabledTools).toEqual(['mcp:ssh', 'skill:x'])
+    expect(config.toolOverlay).toEqual(['mcp:ssh', 'skill:x'])
     expect(mocks.daoUpdateSettings).not.toHaveBeenCalled()
     expect(sessions.get(SID)!.settings.enabledTools).toEqual(['mcp:chrome', 'mcp:ssh', 'skill:x'])
   })
@@ -459,35 +456,33 @@ describe('EXT-U-13 / 14 / 15 写入口 updateEnabledTools', () => {
     expect(mocks.broadcastSessionConfigChanged.mock.calls).toEqual([[SID], [SID]])
   })
 
-  it('EXT-U-14 创建在途 / 运行时存在 / 关停在途都拒绝且零副作用，关停完毕才放行；initAgent().created 同一口径', async () => {
+  it('EXT-U-14 锁着（开着看运行时的锁 / 没开看锁镜像）/ 销毁在途都拒绝且零副作用，解锁才放行；initAgent().created 同一口径', async () => {
     seedSession({ id: SID, settings: { enabledTools: [] } })
-    const born = deferred<FakeAgent>()
-    const closed = deferred()
-    mocks.agentCreate.mockImplementationOnce(() => born.promise)
 
-    // ① 创建在途：ensure 同步登记 —— 在它之后到来的写入一律拒绝，不会出现
-    //    「勾选落库了、运行时却是按旧勾选建的」
-    const p = sessionService.ensureAgentSession(SID)
+    // ① 没开着、锁镜像说有 agent（上一次进程里建的）：拒绝
+    sessions.get(SID)!.settings.agentLocked = true
     expect(sessionService.updateEnabledTools(SID, ['skill:a'])).toBe(false)
     expect((await sessionService.initAgent(SID)).created).toBe(true)
-    await vi.waitFor(() => expect(mocks.agentCreate).toHaveBeenCalledTimes(1))
-    expect(sessionService.updateEnabledTools(SID, ['skill:a'])).toBe(false)
 
-    // ② 运行时存在，随后关停在途
-    born.resolve(makeAgent(SID, () => closed.promise))
-    await p
+    // ② 开着、锁着：以运行时的锁为准
+    const session = fakeHost.put(SID, { lock: lockRecord() })
     expect(sessionService.updateEnabledTools(SID, ['skill:a'])).toBe(false)
     expect((await sessionService.initAgent(SID)).created).toBe(true)
+
+    // ③ 销毁在途：锁还在 → 仍拒绝
+    const release = gate()
+    session.destroyGate = release
     const r = sessionService.invalidateAgent(SID)
     expect(sessionService.updateEnabledTools(SID, ['skill:a'])).toBe(false)
-    // 关停可能卡很久：窗口刷新时事件早已错过，前端的只读态只能靠 created 这一位打底
+    // 销毁可能卡很久：窗口刷新时事件早已错过，前端的只读态只能靠 created 这一位打底
     expect((await sessionService.initAgent(SID)).created).toBe(true)
-    expect(mocks.daoUpdateSettings).not.toHaveBeenCalled()
+    // 拒绝零写入（锁镜像那一格是种子数据，不算写入口的写入）
+    expect(writesTo(SID)).toEqual([])
     expect(mocks.broadcastSessionConfigChanged).not.toHaveBeenCalled()
     expect(mocks.daoTouchActive).not.toHaveBeenCalled()
 
-    // ③ 关停完毕：重新可改（下一个运行时创建时读）
-    closed.resolve()
+    // ④ 解锁：重新可改（下一次创建时读）—— 开着的会话以运行时的锁为准，不看过时的镜像
+    release.release()
     await r
     expect((await sessionService.initAgent(SID)).created).toBe(false)
     expect(sessionService.updateEnabledTools(SID, ['skill:a'])).toBe(true)
@@ -501,46 +496,16 @@ describe('EXT-U-13 / 14 / 15 写入口 updateEnabledTools', () => {
     expect(mocks.broadcastSessionConfigChanged).not.toHaveBeenCalled()
   })
 
-  it('EXT-U-15 (b) 创建失败之后不会永久锁死：写入照常放行', async () => {
+  it('EXT-U-15 (b) 创建被拒之后不会锁死：没有锁，写入照常放行', async () => {
     seedSession({ id: SID, settings: { enabledTools: [] } })
-    mocks.agentCreate.mockRejectedValueOnce(new Error('构造炸了'))
-    await expect(sessionService.ensureAgentSession(SID)).rejects.toThrow('构造炸了')
+    // 打开着、第一次发送的创建被拒（模型被拒）—— 运行时什么都不写，锁始终没有
+    const session = fakeHost.put(SID)
+    session.submitResults = [{ error: 'no model', code: 'no_model' }]
+    await session.submitUser('hi')
+    expect(session.lock).toBeUndefined()
 
     expect(sessionService.updateEnabledTools(SID, ['skill:a'])).toBe(true)
     expect(writesTo(SID)).toEqual([[SID, { enabledTools: ['skill:a'] }]])
-  })
-})
-
-// ─── 运行时区间事件 ─────────────────────────────────────────────────────────
-
-describe('EXT-U-16 运行时区间事件：agent_created / agent_closing', () => {
-  /** broadcast 里属于本会话的运行时生命周期事件（按到达顺序） */
-  const lifecycle = (): Array<Record<string, unknown>> =>
-    mocks.broadcast.mock.calls
-      .map((c) => c[0])
-      .filter(
-        (e) => e.sessionId === SID && (e.type === 'agent_created' || e.type === 'agent_closing')
-      )
-
-  it('EXT-U-16 init 不发；ensure 恰发一次 agent_created；再 ensure 不发；invalidate 依次发 closing true / false', async () => {
-    seedSession({ id: SID, settings: { enabledTools: [] } })
-
-    // init 只解析不创建：这里发了 agent_created，前端会把一条根本没有运行时的会话锁成只读
-    await sessionService.initAgent(SID)
-    expect(lifecycle()).toEqual([])
-
-    await sessionService.ensureAgentSession(SID)
-    expect(lifecycle()).toEqual([{ type: 'agent_created', sessionId: SID }])
-
-    await sessionService.ensureAgentSession(SID)
-    expect(lifecycle()).toHaveLength(1)
-
-    await sessionService.invalidateAgent(SID)
-    expect(lifecycle()).toEqual([
-      { type: 'agent_created', sessionId: SID },
-      { type: 'agent_closing', sessionId: SID, closing: true },
-      { type: 'agent_closing', sessionId: SID, closing: false }
-    ])
   })
 })
 
@@ -561,43 +526,44 @@ describe('ML-U-1 hasAgentRuntime 与 initAgent().created / updateEnabledTools �
   const LOCKED = { runtime: true, created: true, writable: false }
   const FREE = { runtime: false, created: false, writable: true }
 
-  it('ML-U-1 ensure 前 → 创建中 → 存在 → 关停中 → 关停完：四个时刻三面一致', async () => {
+  it('ML-U-1 没开 / 开着没锁 / 锁着 / 销毁中 / 销毁完 / 没开但镜像为真：每个时刻三面一致', async () => {
     seedSession({ id: SID, settings: { enabledTools: ['skill:a'] } })
-    const born = deferred<FakeAgent>()
-    const closed = deferred()
-    mocks.agentCreate.mockImplementationOnce(() => born.promise)
 
-    // ① 还没 ensure：没有运行时，三面都说可改
+    // ① 没开、没有镜像：三面都说可改
     expect(await snapshot()).toEqual(FREE)
 
-    // ② ensure 同步登记创建在途：此刻起模型与勾选都只读（运行时会按此刻的配置建）
-    const p = sessionService.ensureAgentSession(SID)
-    expect(sessionService.hasAgentRuntime(SID)).toBe(true)
-    expect(await snapshot()).toEqual(LOCKED)
-    await vi.waitFor(() => expect(mocks.agentCreate).toHaveBeenCalledTimes(1))
+    // ② 打开但还没创建 agent（创建在途的窗口同样可改，PIN-12）
+    await sessionService.ensureAgentSession(SID)
+    const session = fakeHost.get(SID)!
+    expect(await snapshot()).toEqual(FREE)
+
+    // ③ 锁着：模型与勾选都只读
+    session.lock = lockRecord()
     expect(await snapshot()).toEqual(LOCKED)
 
-    // ③ 运行时存在
-    born.resolve(makeAgent(SID, () => closed.promise))
-    await p
-    expect(await snapshot()).toEqual(LOCKED)
-
-    // ④ invalidate 之后、dispose 落定之前（关停中）：仍只读
+    // ④ 销毁在途（锁还在）：仍只读
+    const release = gate()
+    session.destroyGate = release
     const r = sessionService.invalidateAgent(SID)
     expect(sessionService.hasAgentRuntime(SID)).toBe(true)
     expect(await snapshot()).toEqual(LOCKED)
 
-    // ⑤ 关停完：解锁
-    closed.resolve()
+    // ⑤ 销毁完：解锁
+    release.release()
     await r
+    expect(await snapshot()).toEqual(FREE)
+
+    // ⑥ 会话没开着、镜像为真（重启之后）：只读；镜像为假：可改
+    await fakeHost.close(SID)
+    sessions.get(SID)!.settings.agentLocked = true
+    expect(await snapshot()).toEqual(LOCKED)
+    sessions.get(SID)!.settings.agentLocked = false
     expect(await snapshot()).toEqual(FREE)
   })
 
-  it('ML-U-1 创建失败之后不留锁：hasAgentRuntime false，created false，写入放行', async () => {
-    seedSession({ id: SID, settings: { enabledTools: ['skill:a'] } })
-    mocks.agentCreate.mockRejectedValueOnce(new Error('构造炸了'))
-    await expect(sessionService.ensureAgentSession(SID)).rejects.toThrow('构造炸了')
-
+  it('ML-U-1 开着但没锁、镜像过时说有 → 以运行时为准：可改', async () => {
+    seedSession({ id: SID, settings: { enabledTools: ['skill:a'], agentLocked: true } })
+    fakeHost.put(SID)
     expect(await snapshot()).toEqual(FREE)
   })
 

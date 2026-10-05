@@ -1,6 +1,7 @@
 /**
  * DefaultChatGateway.prompt 不入账：ensure 失败不会落树，网关本身也不 touchActive。
- * 日历入账只旁听 eventSink 的 user_message（见 sessionDayPrompt.test.ts）。
+ * 新格式会话的入账在门面里、输入被受理那一刻（onAdmitted，见 agentSessionFacade.test.ts）；
+ * 旧格式会话的日历入账旁听 eventSink 的 user_message（见 sessionDayPrompt.test.ts）。
  */
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest'
 
@@ -25,6 +26,7 @@ vi.mock('../../../services/sessionService', () => ({
 }))
 vi.mock('../../../services/messageService', () => ({ messageService: {} }))
 vi.mock('../../../services/sessionStorage', () => ({
+  storageRefusalOf: () => undefined,
   appendModelChange: vi.fn(),
   appendThinkingLevelChange: vi.fn()
 }))

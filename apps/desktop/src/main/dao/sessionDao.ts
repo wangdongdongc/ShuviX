@@ -1,6 +1,6 @@
 import { BaseDao } from './database'
 import { buildJsonPatch } from './utils'
-import { storageKindOf } from '@shuvix/chat-protocol/sessionStorageKind'
+import { storageKindOf, type SessionStorageKind } from '@shuvix/chat-protocol/sessionStorageKind'
 import type { Session, SessionSettings } from './types'
 
 /** DB 原始行类型（JSON 字段在 DB 中为字符串） */
@@ -117,6 +117,18 @@ export class SessionDao extends BaseDao {
   updateProjectId(id: string, projectId: string | null): void {
     this.stmt('UPDATE sessions SET projectId = ?, updatedAt = ? WHERE id = ?').run(
       projectId,
+      Date.now(),
+      id
+    )
+  }
+
+  /**
+   * 换这条会话的存储类型。唯一的调用方是「清空一条旧格式会话」（裁决 PIN-22）：旧转写已删、
+   * 什么都不带过去，会话从此是一条全新的新格式会话 —— 不是迁移。
+   */
+  updateStorageKind(id: string, storageKind: SessionStorageKind): void {
+    this.stmt('UPDATE sessions SET storageKind = ?, updatedAt = ? WHERE id = ?').run(
+      storageKind,
       Date.now(),
       id
     )

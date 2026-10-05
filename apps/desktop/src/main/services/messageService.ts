@@ -7,11 +7,21 @@
  *    回退 / 截断一律不做（返回「没有可回退的目标」）。
  *  - `durable-sqlite-1`（新会话）：durable 存储的投影还没写 —— TODO(pi-durable p3)：列表暂时为空，
  *    回退 / 截断抛 `PhasePendingError`。
+ *
+ * 清空（`clear`）两种都做：经 SessionHost 关掉并删掉存储；旧格式会话清空之后换成当前存储类型，
+ * 从此是一条全新的新格式会话（PIN-22，什么都不带过去 —— 不是迁移）。
  */
 import { PhasePendingError } from '@shuvix/agent-runtime'
-import { HARNESS_V3_JSONL, storageKindOf } from '@shuvix/chat-protocol/sessionStorageKind'
+import {
+  CURRENT_SESSION_STORAGE_KIND,
+  HARNESS_V3_JSONL,
+  storageKindOf
+} from '@shuvix/chat-protocol/sessionStorageKind'
 import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
-import { deleteSessionFile, readLegacyTranscript } from './sessionStorage'
+import { chatFrontendRegistry } from '../frontend/core/ChatFrontendRegistry'
+import { readLegacyTranscript } from './sessionStorage'
+import { getSessionHost } from './sessionHost'
+import { mirroredAgentLocked, writeSessionMirror } from './sessionMirror'
 import { sessionRecords } from './sessionRecords'
 
 /** 这条会话是不是切换前的旧格式（只读）会话；查不到行按旧格式处理（与 storageKindOf 同口径） */
@@ -34,11 +44,22 @@ export class MessageService {
   }
 
   /**
-   * 清空会话（删存储文件，下次发消息会重建）。
-   * TODO(pi-durable p1): P1-10 改经 sessionHost.delete（先关掉打开着的存储）。
+   * 清空会话（裁决 PIN-08）：SessionHost 关掉存储（还在跑的 run 被中止、等它停下）并删掉文件，下一次
+   * 发消息从一个只有根对话的新存储开始。之后镜像归位 —— `agentLocked:false`、`runState:'idle'` —— 镜像
+   * 原先说有 agent 的，再给界面补一个 `agent_closing{false}`（存储连同锁一起没了，运行时不会再报）。
+   * 销毁 agent 不在这里：调用方（网关的 clearMessages）先 `invalidateAgent`，那一步会广播 agent_closing 一对。
+   *
+   * 旧格式（只读）会话：删掉 `.jsonl`，并把存储类型换成当前类型 —— 清空之后它是一条可以接着用的
+   * 新格式会话（PIN-22）。
    */
-  clear(sessionId: string): void {
-    deleteSessionFile(sessionId)
+  async clear(sessionId: string): Promise<void> {
+    const legacy = isLegacySession(sessionId) && !!sessionRecords.pick(sessionId, ['id'])
+    const wasLocked = mirroredAgentLocked(sessionId)
+    await getSessionHost().delete(sessionId)
+    if (legacy) sessionRecords.updateStorageKind(sessionId, CURRENT_SESSION_STORAGE_KIND)
+    writeSessionMirror(sessionId, { agentLocked: false, runState: 'idle' })
+    if (wasLocked)
+      chatFrontendRegistry.broadcast({ type: 'agent_closing', sessionId, closing: false })
   }
 
   // ─── 回退 / 截断 ────────────────────────────────────────

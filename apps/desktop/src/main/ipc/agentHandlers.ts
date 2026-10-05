@@ -124,8 +124,8 @@ export function registerAgentHandlers(): void {
       })
   )
 
-  /** 读取运行时 Agent 对象的实时信息（systemPrompt/工具/模型）；Agent 未创建返回 null，
-   *  传 { ensure: true } 则先懒创建（不请求 LLM）再取快照 */
+  /** 读取运行时 Agent 的实时信息（systemPrompt/工具/模型）。pi-durable 会话的请求是现解析的，phase 3
+   *  的视图接上之前恒为 null；`ensure` 不再为它打开会话 / 创建 agent。TODO(pi-durable p3) */
   ipcMain.handle('agent:getInfo', (_event, sessionId: string, options?: { ensure?: boolean }) =>
     operationContext.run(createElectronContext(sessionId), () =>
       chatGateway.getAgentInfo(sessionId, options)

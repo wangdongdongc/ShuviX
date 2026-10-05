@@ -192,6 +192,8 @@
   "chat": {
     "mcpConnecting": "正在连接 MCP：{{names}}",
     "mcpConnectFailed": "[MCP] {{name}} 连接失败：{{error}}",
+    "agentNoModel": "无法创建智能体：{{reason}}",
+    "legacySessionReadOnly": "这条会话由旧版本 ShuviX 创建，只能查看。清空它或新建一条会话即可继续。",
     "welcomePrompt": "我们今天聊点什么？",
     "welcomeCreateProject": "创建项目",
     "welcomeConfigureProviders": "配置模型提供商",

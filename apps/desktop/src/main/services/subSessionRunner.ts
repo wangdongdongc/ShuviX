@@ -21,7 +21,7 @@ import { chatGateway } from '../frontend/core'
 import { sessionService } from './sessionService'
 import { taskRegistry } from './taskRegistry'
 import { messageService } from './messageService'
-import { appendModelChange, appendThinkingLevelChange } from './sessionStorage'
+import { appendModelChange, appendThinkingLevelChange, isDurableSession } from './sessionStorage'
 import { sessionRecords } from './sessionRecords'
 import type { SubAgentModelConfig } from '@shuvix/agent-runtime'
 import type { ThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
@@ -65,6 +65,14 @@ export interface SubSessionInfo {
   blockedOn?: string[]
 }
 
+/** 子会话最新答复的那几个字段（read / wait / 前台 prompt 共用） */
+export interface AnswerFields {
+  answer?: string
+  isError?: boolean
+  /** 答复此刻读不出来（新格式会话的投影还没接上，TODO(pi-durable p3)） */
+  answerUnavailable?: boolean
+}
+
 export interface WaitOutcome {
   /**
    * 'settled' = 全部跑完；'blocked' = 有人卡在**等用户批准**上（不是"完成"，
@@ -73,7 +81,7 @@ export interface WaitOutcome {
    */
   kind: 'settled' | 'blocked' | 'timeout' | 'aborted'
   /** 等待期间关注的每条子会话（含最终状态与最新答复） */
-  results: Array<SubSessionInfo & { answer?: string; isError?: boolean }>
+  results: Array<SubSessionInfo & AnswerFields>
 }
 
 export interface PromptOutcome {
@@ -85,6 +93,8 @@ export interface PromptOutcome {
   answer?: string
   /** 末条消息是错误事件 */
   isError?: boolean
+  /** 答复此刻读不出来（新格式会话的投影还没接上，TODO(pi-durable p3)）—— 回执如实说，而不是说「没回复」 */
+  answerUnavailable?: boolean
   /**
    * kind==='answered' 时子会话的快照。顺带带回来是为了省掉调用方「再 read 一次」——
    * 那会把整棵转写重新投影一遍，只为拿一个标题和状态。
@@ -201,7 +211,7 @@ class SubSessionRunner {
   async read(
     parentId: string,
     rawChildId: string
-  ): Promise<{ error: string } | { info: SubSessionInfo; answer?: string; isError?: boolean }> {
+  ): Promise<{ error: string } | ({ info: SubSessionInfo } & AnswerFields)> {
     const rejected = this.rejectIfNotNormal(parentId)
     if (rejected) return { error: rejected }
     const resolved = this.resolveChild(parentId, rawChildId)
@@ -535,7 +545,7 @@ class SubSessionRunner {
   private async infoWithAnswers(
     parentId: string,
     ids?: string[]
-  ): Promise<Array<SubSessionInfo & { answer?: string; isError?: boolean }>> {
+  ): Promise<Array<SubSessionInfo & AnswerFields>> {
     const children = sessionRecords.findChildren(parentId).filter((s) => !ids || ids.includes(s.id))
     return Promise.all(
       children.map(async (s) => ({
@@ -620,10 +630,14 @@ class SubSessionRunner {
 
   // ─── 结果抽取 ──────────────────────────────────
 
-  /** 末条消息的正文（错误事件也在同一条路径上 —— 父级要看到的是同一份事实） */
-  private async lastAnswer(childId: string): Promise<{ answer?: string; isError?: boolean }> {
+  /**
+   * 末条消息的正文（错误事件也在同一条路径上 —— 父级要看到的是同一份事实）。
+   * 新格式（durable）会话的消息投影还没接上（phase 3）：读不出来就如实标出 `answerUnavailable`。
+   */
+  private async lastAnswer(childId: string): Promise<AnswerFields> {
     const last = await messageService.findLastBySession(childId)
-    if (!last) return {}
+    // TODO(pi-durable p3): durable 会话的条目投影接上之后这里就读得到答复
+    if (!last) return isDurableSession(childId) ? { answerUnavailable: true } : {}
     if (last.role === 'system_notify') return { answer: last.content, isError: true }
     if (last.role !== 'assistant') return {}
     return { answer: last.content }

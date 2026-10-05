@@ -106,6 +106,10 @@ export interface SessionSettings {
   model?: SessionModelSelection
   /** 这条会话选定的思考档位（同上） */
   thinkingLevel?: ThinkingLevel
+  /** 锁镜像：这条会话此刻有没有 agent（权威在会话存储里，这是给界面便宜地读的副本） */
+  agentLocked?: boolean
+  /** 运行标记：会话存储此刻的运行状态（退出时正忙的会话留着 busy，下次打开报 interrupted） */
+  runState?: 'idle' | 'busy' | 'interrupted'
 }
 
 /** 会话设置里的模型选择：提供商行 id + 模型 id */

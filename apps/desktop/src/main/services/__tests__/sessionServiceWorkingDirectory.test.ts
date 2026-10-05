@@ -76,8 +76,6 @@ const mocks = vi.hoisted(() => {
       rows().delete(id)
     }),
     readSessionRunConfig: vi.fn(),
-    agentCreate:
-      vi.fn<(params: { sessionId: string; workingDirectory: string }) => Promise<unknown>>(),
     closeSession: vi.fn<(sessionId: string) => Promise<void>>(),
     projectPick: vi.fn()
   }
@@ -116,6 +114,7 @@ vi.mock('../../dao/projectDao', () => ({ projectDao: { pick: mocks.projectPick }
 vi.mock('../../dao/settingsDao', () => ({ settingsDao: { findByKey: vi.fn() } }))
 vi.mock('../messageService', () => ({ messageService: { clear: vi.fn() } }))
 vi.mock('../sessionStorage', () => ({
+  isDurableSession: () => true,
   readSessionRunConfig: mocks.readSessionRunConfig,
   appendModelChange: vi.fn()
 }))
@@ -135,9 +134,23 @@ vi.mock('../../utils/toolUtils/allowList', () => ({
   buildAllowEntry: (type: string, path: string) => `${type}(${path})`
 }))
 vi.mock('../agentService', () => ({
-  agentService: { getProfile: vi.fn(), isSessionProfile: vi.fn() }
+  agentService: {
+    getProfile: vi.fn((name: string) => ({
+      name,
+      tools: [],
+      instructionFiles: [],
+      projectAwareness: false
+    })),
+    isSessionProfile: vi.fn()
+  }
 }))
-vi.mock('../agentSession', () => ({ AgentSession: { create: mocks.agentCreate } }))
+// 会话运行时换成假宿主 / 假门面（真模块的依赖图带模型注册表、事件适配器）
+vi.mock('../sessionHost', async () =>
+  (await import('./support/fakeSessionHost')).sessionHostModuleMock()
+)
+vi.mock('../agentSession', async () =>
+  (await import('./support/fakeSessionHost')).agentSessionModuleMock()
+)
 vi.mock('../bgTaskService', () => ({
   killBySession: vi.fn(),
   setBgTaskNotifier: vi.fn()
@@ -191,10 +204,6 @@ beforeEach(() => {
   mocks.projectPick.mockImplementation((id: string) =>
     id === 'p1' ? { path: PROJECT_ROOT, settings: {} } : undefined
   )
-  mocks.agentCreate.mockImplementation(async () => ({
-    invalidate: vi.fn(async () => {}),
-    destroy: vi.fn(async () => {})
-  }))
 })
 
 afterEach(() => {
@@ -203,7 +212,7 @@ afterEach(() => {
 
 const tempOf = (sid: string): string => join(mocks.tempRoot.dir, 'temp_workspace', sid)
 
-/** 三处读工作目录的地方一起取（getById / initAgent / 建运行时时交给 AgentSession 的那个） */
+/** 三处读工作目录的地方一起取（getById / initAgent / 创建 agent 时读的会话配置） */
 async function workingDirectories(sid: string): Promise<{
   getById: string | null | undefined
   initAgent: string
@@ -212,9 +221,7 @@ async function workingDirectories(sid: string): Promise<{
   const getById = sessionService.getById(sid)?.workingDirectory
   const init = await sessionService.initAgent(sid)
   expect(init.success).toBe(true)
-  await sessionService.ensureAgentSession(sid)
-  const runtime = mocks.agentCreate.mock.calls.find((c) => c[0].sessionId === sid)?.[0]
-    .workingDirectory
+  const runtime = (await sessionService.resolveAgentConfig(sid)).cwd
   return { getById, initAgent: init.workingDirectory, runtime }
 }
 

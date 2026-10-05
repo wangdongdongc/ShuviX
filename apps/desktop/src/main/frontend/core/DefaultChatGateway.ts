@@ -7,7 +7,11 @@ import type { AgentSession } from '../../services/agentSession'
 import '../../tools/allTools'
 import { getPlatformBuiltinToolEntries } from '../../services/toolRegistry'
 import { messageService } from '../../services/messageService'
-import { appendModelChange, appendThinkingLevelChange } from '../../services/sessionStorage'
+import {
+  appendModelChange,
+  appendThinkingLevelChange,
+  storageRefusalOf
+} from '../../services/sessionStorage'
 import { respondToUserInput } from '../../services/userInputBroker'
 import { dbManager } from '../../services/builtinMcp/dbConnections'
 import { sshDisconnectRuntime, sshRuntimeStatuses } from '../../services/builtinMcp/sshServer'
@@ -17,9 +21,17 @@ import type { ChatMessage, InlineToken } from '@shuvix/chat-protocol/types/chatM
 import { resolveTokensForAgent } from '@shuvix/chat-protocol/utils/inlineTokens'
 import { sessionRecords } from '../../services/sessionRecords'
 import { projectDao } from '../../dao/projectDao'
-import { WORK_PROFILE_NAME } from '@shuvix/agent-runtime'
+import { WORK_PROFILE_NAME, type SubmitErrorCode } from '@shuvix/agent-runtime'
 import { agentService } from '../../services/agentService'
 import { chatFrontendRegistry } from './ChatFrontendRegistry'
+import { t } from '../../i18n'
+
+/** 会话打不开时报给界面的文案：旧格式会话只读；其余（会话不存在、退出中）沿用原来的那句 */
+function unavailableSessionError(sessionId: string): string {
+  return storageRefusalOf(sessionId) === 'legacy'
+    ? t('chat.legacySessionReadOnly')
+    : 'Agent 未初始化'
+}
 
 /**
  * ChatGateway 默认实现 — 聚合 Service 层，提供统一的会话级操作入口
@@ -36,13 +48,13 @@ export class DefaultChatGateway implements ChatGateway {
     text: string,
     images?: Array<{ type: 'image'; data: string; mimeType: string }>,
     inlineTokens?: Record<string, InlineToken>
-  ): Promise<{ error?: string }> {
-    // lastActiveAt 在用户消息真正落树并广播 user_message 时入账（electronEventSink），
-    // 不在这里 bump：ensure 失败不会落树，却会误记一天。
-    // 首次发送消息时才创建 Agent（打开会话/笔记本不创建）
+  ): Promise<{ error?: string; code?: SubmitErrorCode }> {
+    // lastActiveAt 在这条输入被会话受理时入账（门面的 onAdmitted），不在这里 bump：
+    // 打不开 / 被拒的发送不会落进会话，却会误记一天。
+    // 这里只打开会话；agent 在第一次发送时由运行时创建（打开会话 / 笔记本不创建）
     const session = await sessionService.ensureAgentSession(sessionId)
     if (!session) {
-      const error = 'Agent 未初始化'
+      const error = unavailableSessionError(sessionId)
       chatFrontendRegistry.broadcast({ type: 'error', sessionId, error })
       return { error }
     }
@@ -54,11 +66,11 @@ export class DefaultChatGateway implements ChatGateway {
     const promptText = hasTokens ? resolveTokensForAgent(text, inlineTokens) : text
     const display = hasTokens ? { content: text, tokens: inlineTokens } : undefined
 
-    // 指令文件/项目提示词已在 createAgent 时 append 进系统提示词（Agent 首次发言时才创建，
-    // 所以"发送第一条消息前调整配置"的语义保持不变）。
+    // 会话配置（档案、扩展能力、模型）在第一次发送创建 agent 时才读，所以「发送第一条消息前
+    // 调整配置」的语义保持不变。
 
-    // 有根会话的用户消息不由网关落库：会话运行时把它作为条目追加，
-    // 并经事件翻译广播 user_message（TODO(pi-durable p1): P1-10 由 DurableSession 门面接手）。
+    // 用户消息不由网关落库：会话运行时把它作为条目追加。发送失败由门面报给界面。
+    // TODO(pi-durable p3): 其它前端看到这条用户消息靠投影（durable 不发 user_message 事件）。
     // 发送结果原样上交：子会话的驱动方靠它区分「没发出去」与「发出去了没回话」
     return await session.prompt(promptText, images, display)
   }
@@ -76,10 +88,10 @@ export class DefaultChatGateway implements ChatGateway {
   }
 
   /**
-   * 三条队列共用的入队骨架。
+   * 三条队列共用的入队骨架（nextTurn 在门面里垫成 followUp，直到 phase 3）。
    *
-   * 只入队：消息在 pi 队列里等着，被 drain 时才由 harness 落盘，
-   * 落盘与广播都在 message_end 事件里发生，网关不碰。
+   * 只交给打开着的会话：插话 / 追加只对一条正在用的会话有意义，网关不为它打开会话。
+   * 被拒（模型被拒、会话已关……）的文案报给界面。
    */
   private enqueue(sessionId: string, push: (session: AgentSession) => Promise<void>): void {
     const session = sessionService.getAgentSession(sessionId)
@@ -120,13 +132,14 @@ export class DefaultChatGateway implements ChatGateway {
   // ─── 运行时调整 ────────────────────────────────
 
   /**
-   * 以下两个 setter 是模型类运行配置的**唯一写入口**（数据库已无对应列）。
+   * 以下两个 setter 是模型类运行配置的**唯一写入口**（会话设置 `settings.model` / `.thinkingLevel`）。
    *
-   * 模型只在没有运行时的时候可改（直接往会话树追加 model_change entry）：它与扩展能力勾选
-   * 一样在创建 Agent 那一刻读一次。运行时已存在 / 正在创建 / 正在关停时一律拒绝、什么也
-   * 不写 —— 用户要换模型，先在会话横幅的 agent 胶囊上把运行时销毁（destroyAgent）。
+   * 模型只在没有 agent 的时候可改：它与扩展能力勾选一样在创建 agent 那一刻读一次。锁住期间
+   * （打开着看运行时的锁，没开着看锁镜像）一律拒绝、什么也不写 —— 用户要换模型，先在会话横幅的
+   * agent 胶囊上把 agent 销毁（destroyAgent）。
    *
-   * 思考档位不在此列：Agent 已创建就交给 harness（它自己落 change entry），未创建直接写树。
+   * 思考档位不在此列：设置恒写；有 agent 时再现场交给它（下一次请求生效）—— 会话开着直接给，
+   * 没开着但锁着就 peek 打开再给（PIN-07），没锁就等下一次创建时读设置。
    */
   async setModel(sessionId: string, provider: string, model: string): Promise<boolean> {
     if (sessionService.hasAgentRuntime(sessionId)) return false
@@ -141,23 +154,24 @@ export class DefaultChatGateway implements ChatGateway {
   }
 
   async setThinkingLevel(sessionId: string, level: ThinkingLevel): Promise<void> {
-    const agent = sessionService.getAgentSession(sessionId)
+    await appendThinkingLevelChange(sessionId, level)
+    const agent =
+      sessionService.getAgentSession(sessionId) ??
+      (sessionService.hasAgentRuntime(sessionId)
+        ? await sessionService.peekAgentSession(sessionId)
+        : undefined)
     if (agent) await agent.setThinkingLevel(level)
-    else await appendThinkingLevelChange(sessionId, level)
   }
 
   /**
-   * Agent 运行时快照。默认只读已存在的 Agent（未创建返回 null）；
-   * ensure=true 走懒创建路径（没发过消息也要看到真实配置的调用方用）—— 构造运行时不请求 LLM。
+   * Agent 运行时快照。durable 的请求是现解析的，没有一个「内存里的 Agent 对象」可读 —— 在 phase 3 的
+   * 视图接上之前恒为 null，`ensure` 也不再为它打开会话 / 创建 agent（PIN-14）。TODO(pi-durable p3)
    */
   async getAgentInfo(
     sessionId: string,
-    options?: { ensure?: boolean }
+    _options?: { ensure?: boolean }
   ): Promise<AgentRuntimeInfo | null> {
-    const agent = options?.ensure
-      ? await sessionService.ensureAgentSession(sessionId)
-      : sessionService.getAgentSession(sessionId)
-    return (await agent?.getRuntimeInfo()) ?? null
+    return (await sessionService.getAgentSession(sessionId)?.getRuntimeInfo()) ?? null
   }
 
   // ─── 消息操作 ─────────────────────────────────
@@ -167,17 +181,17 @@ export class DefaultChatGateway implements ChatGateway {
   }
 
   async clearMessages(sessionId: string): Promise<void> {
-    // 先关停写者再删文件：还在跑的 run 会往刚删掉的会话树里接着写
+    // PIN-08：先销毁 agent（中止还在跑的 run、广播 agent_closing 一对），再关掉并删掉存储、镜像归位
     await sessionService.invalidateAgent(sessionId)
-    messageService.clear(sessionId)
+    await messageService.clear(sessionId)
   }
 
   /**
-   * 回退到某条消息之前：entry 树上把 leaf 移到它的父节点（历史保留，可再切回）。
+   * 回退到某条消息之前（durable 会话：phase 3，`resolveRollbackTarget` 抛 PhasePendingError；
+   * 旧格式会话只读，没有可回退的目标）。
    *
-   * **顺序是关键**：先把旧运行时彻底关停并解绑，再动叶子。反过来（旧实现）等于在一个
-   * 还在写的 run 脚下抽走叶子 —— 它接下来的消息会挂到回退后的分支上，和新 run 交叉，
-   * 把 tool_use/tool_result 的配对写坏，之后每一发请求都被 provider 打回。
+   * **顺序是关键**：先把 agent 彻底停下并解锁，再动会话。反过来等于在一个还在写的 run 脚下
+   * 改历史 —— 它接下来的消息会挂到回退后的分支上，和新 run 交叉。
    */
   async rollbackMessage(sessionId: string, messageId: string): Promise<void> {
     // 先只读地解析目标：目标不存在就什么都不做 —— 不值得为一次无效回退把正在跑的 Agent 停掉

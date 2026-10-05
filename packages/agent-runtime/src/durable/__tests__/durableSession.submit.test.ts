@@ -285,6 +285,85 @@ describe('submitUser', () => {
       (await session.harness.snapshot(DisplayDoc, ROOT_CONVERSATION_ID, BG))!.items.mine
     ).toEqual({ text: 'again' })
   })
+
+  it('U-14 onAdmitted is called once, after the input is admitted and before the run settles', async () => {
+    const t = await makeHost()
+    const session = await t.open()
+    await primeRoot(session, t.kit)
+    const run = held(answer('a1'))
+    t.kit.queue(run.step)
+    let calls = 0
+    let settledAtCall: boolean | undefined
+    let settled = false
+    const result = session
+      .submitUser('u1', {
+        onAdmitted: () => {
+          calls++
+          settledAtCall = settled
+        }
+      })
+      .then((value) => {
+        settled = true
+        return value
+      })
+    await run.reached
+    await waitFor(() => calls === 1, 3000, 'admitted')
+    expect(settledAtCall).toBe(false)
+    expect(settled).toBe(false)
+    run.release()
+    expect(await result).toEqual({})
+    expect(calls).toBe(1)
+  })
+
+  it('U-15 onAdmitted is never called for a refusal (busy, no model, closed)', async () => {
+    const t = await makeHost()
+    const session = await t.open()
+    await primeRoot(session, t.kit)
+    const run = held(answer('a1'))
+    t.kit.queue(run.step)
+    const first = session.submitUser('u1')
+    await run.reached
+    let busyCalls = 0
+    expect(await session.submitUser('u2', { onAdmitted: () => busyCalls++ })).toMatchObject({
+      code: 'busy'
+    })
+    expect(busyCalls).toBe(0)
+    run.release()
+    expect(await first).toEqual({})
+
+    const refused = await makeHost({ agentConfig: { profile: testProfile() } })
+    const unconfigured = await refused.open()
+    let noModelCalls = 0
+    expect(await unconfigured.submitUser('u1', { onAdmitted: () => noModelCalls++ })).toMatchObject(
+      { code: 'no_model' }
+    )
+    expect(noModelCalls).toBe(0)
+
+    await t.host.close(session.sessionId)
+    let closedCalls = 0
+    expect(await session.submitUser('u3', { onAdmitted: () => closedCalls++ })).toMatchObject({
+      code: 'closed'
+    })
+    expect(closedCalls).toBe(0)
+  })
+
+  it('U-16 a throwing onAdmitted is logged and does not change the result', async () => {
+    const t = await makeHost()
+    const session = await t.open()
+    await primeRoot(session, t.kit)
+    t.kit.queue(answer('a1'))
+    const result = await session.submitUser('u1', {
+      onAdmitted: () => {
+        throw new Error('hook exploded')
+      }
+    })
+    expect(result).toEqual({})
+    expect(t.warnings.some((line) => line.includes('hook exploded'))).toBe(true)
+    expect(await transcript(await session.currentConversation())).toEqual([
+      'pi.user:u1',
+      'pi.assistant:a1'
+    ])
+  })
 })
 
 describe('steer', () => {
