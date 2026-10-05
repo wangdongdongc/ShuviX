@@ -355,4 +355,71 @@ describe('H11-52 文件工具的章按调用盖', () => {
     await vi.waitFor(() => expect(state.notify).toHaveBeenCalledTimes(2))
     expect(state.notify).toHaveBeenLastCalledWith(p, { kind: 'edit', actor: 'shuvix-bot/m2' })
   })
+
+  it('P2-06-15 按对话盖章：对话 2（派生 explore / haiku）写、对话 1（根）改、对话 4（派生但没有模型配置）写 → 各盖各的', async () => {
+    const ROOT: ToolContext['agent'] = {
+      profileName: 'work',
+      kind: 'root',
+      getModelConfig: () => ({
+        provider: 'anthropic',
+        model: 'claude-sonnet-4-5',
+        capabilities: {}
+      })
+    }
+    const SPAWN_E: ToolContext['agent'] = {
+      profileName: 'explore',
+      kind: 'spawned',
+      callerId: 'sub-a1',
+      getModelConfig: () => ({ provider: 'anthropic', model: 'claude-haiku-4-5', capabilities: {} })
+    }
+    const BARE: ToolContext['agent'] = {
+      profileName: 'explore',
+      kind: 'spawned',
+      callerId: 'sub-x'
+    }
+    const identities: Record<number, ToolContext['agent']> = { 1: ROOT, 2: SPAWN_E, 4: BARE }
+    const sessionCtx: ToolContext = {
+      sessionId: 'kb-session',
+      agentOf: (conversationId) => identities[conversationId]
+    }
+    const p = join(state.kb, 'projects', 'acme', 'p2-06-15.md')
+    const second = join(state.kb, 'projects', 'acme', 'p2-06-15-b.md')
+    const before = state.notify.mock.calls.length
+
+    await invokeTool(
+      makeWriteTool(sessionCtx),
+      { path: p, content: DRAFT },
+      { callId: 'p2-06-15-w', conversationId: 2 }
+    )
+    expect(readFileSync(p, 'utf-8')).toContain('by: "shuvix-explore/claude-haiku-4-5"')
+    await vi.waitFor(() => expect(state.notify).toHaveBeenCalledTimes(before + 1))
+    expect(state.notify).toHaveBeenLastCalledWith(p, {
+      kind: 'write',
+      actor: 'shuvix-explore/claude-haiku-4-5'
+    })
+
+    await invokeTool(
+      makeEditTool(sessionCtx),
+      { path: p, oldText: 'body', newText: 'body two' },
+      { callId: 'p2-06-15-e', conversationId: 1 }
+    )
+    expect(readFileSync(p, 'utf-8')).toContain('by: "shuvix-work/claude-sonnet-4-5"')
+    await vi.waitFor(() => expect(state.notify).toHaveBeenCalledTimes(before + 2))
+    expect(state.notify).toHaveBeenLastCalledWith(p, {
+      kind: 'edit',
+      actor: 'shuvix-work/claude-sonnet-4-5'
+    })
+
+    await invokeTool(
+      makeWriteTool(sessionCtx),
+      { path: second, content: DRAFT },
+      { callId: 'p2-06-15-w4', conversationId: 4 }
+    )
+    expect(readFileSync(second, 'utf-8')).toContain('by: "shuvix-explore/unknown"')
+    await vi.waitFor(() => expect(state.notify).toHaveBeenCalledTimes(before + 3))
+    expect(state.notify).toHaveBeenLastCalledWith(second, {
+      kind: 'write',
+      actor: 'shuvix-explore/unknown'
+    })
+  })
 })
