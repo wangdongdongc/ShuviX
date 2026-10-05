@@ -15,12 +15,8 @@ import {
   KnowledgeParamsSchema
 } from '@shuvix/agent-runtime'
 import { BUILTIN_TOOL_PRESENTATIONS } from '@shuvix/chat-protocol/builtinToolPresentations'
-import {
-  agentActorOf,
-  getDesktopSecurityContext,
-  TOOL_ABORTED,
-  type ToolContext
-} from '../services/toolContext'
+import { getDesktopSecurityContext, TOOL_ABORTED, type ToolContext } from '../services/toolContext'
+import { agentActorOf, withCallAgent } from '../services/toolAgent'
 import { registerBuiltinTool } from '../services/toolRegistry'
 import {
   listBases,
@@ -58,17 +54,18 @@ export const makeKnowledgeTool = (ctx: ToolContext): ReturnType<typeof createKno
       const located = bundleIdOf(opts.bundleDir)
       return located ? searchBundle(located, query, { limit: opts.limit }) : Promise.resolve([])
     },
-    actor: () => agentActorOf(ctx),
+    // 章盖成发起这次调用的 agent（会话级装配的工具被同一会话的每个 agent 共用）
+    actor: (call) => agentActorOf(withCallAgent(ctx, call)),
     now: () => new Date(),
     // 工具自己落盘（不经文件工具），所以变更管线要自己记一笔；`edit` 那条路由 onFileChange 接
-    afterWrite: (e) => {
+    afterWrite: (e, call) => {
       const located = bundleIdOf(e.bundleDir)
       if (!located) return
       recordKnowledgeChange({
         bundle: located,
         path: e.path,
         op: 'Creation',
-        actor: agentActorOf(ctx)
+        actor: agentActorOf(withCallAgent(ctx, call))
       })
     },
     abortError: TOOL_ABORTED,
