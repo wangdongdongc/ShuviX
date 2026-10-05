@@ -769,3 +769,25 @@ export {
   type JoinOutcome,
   type SettlePatch
 } from './task/registry'
+// 视图同步（phase 3，P3-04）：每目标一个 chord provider、每（客户端，目标）一个端点；传输与会话由宿主接
+export {
+  createSyncHub,
+  type SyncAgentRef,
+  type SyncHub,
+  type SyncHubDeps,
+  type SyncHubHost,
+  type SyncServerTransport,
+  type SyncSession,
+  type SyncSessionClosedReason,
+  type SyncWireFrame,
+  type ViewLease,
+  type ViewProjector
+} from './sync/syncHub'
+export {
+  chatViewService,
+  legacySessionView,
+  staticViewState,
+  type ChatViewService,
+  type LegacyTranscript,
+  type SyncView
+} from './sync/services'
