@@ -16,6 +16,7 @@ import {
   createAgentSession,
   createPinnedChildSession,
   createProject,
+  ensureDefaultModel,
   promptAndListMessages,
   writeAgentMd
 } from '../../harness/seed'
@@ -26,6 +27,7 @@ let projDir: string
 
 beforeAll(async () => {
   app = await launchApp()
+  await ensureDefaultModel(app.main)
   projDir = join(app.home, 'proj-inject')
   mkdirSync(join(projDir, 'docs'), { recursive: true })
   writeFileSync(join(projDir, 'AGENTS.md'), 'AGENT RULES CONTENT.')

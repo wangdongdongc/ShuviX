@@ -3,7 +3,7 @@
  *
  *  - FakeDurableSession：可设的 `lock` / busy / interrupted / 挂起询问；submitUser / steer / followUp /
  *    continue / resumeInterrupted 的结果按脚本给（缺省 `{}`），requestState / lastAnswer / drivenRun /
- *    taskLiveness 也按脚本给；`destroyAgent` / `abort` 可挂闸门；每次调用记进 `calls`。
+ *    taskLiveness / agentInfo（按对话，`infos`）也按脚本给；`destroyAgent` / `abort` 可挂闸门；每次调用记进 `calls`。
  *    P2-10 的脚本：`submitUser` 带一个脚本里认得的 requestId（'pending' / 'settled'）= 重新挂上 —— 不调
  *    受理回调（P2-09 PIN-02）；`resumeInterrupted` 在被中断时把它变成在跑（interrupted=false, busy=true）；
  *    `abort` 把 busy / interrupted 都清掉（被中断的那一轮随之落定）。
@@ -43,6 +43,7 @@ import type {
   UserSendOptions
 } from '@shuvix/agent-runtime'
 import type { UserInput } from '@earendil-works/pi-durable'
+import type { AgentRuntimeInfo } from '@shuvix/chat-protocol/chatApi'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import { emptySessionView, type SessionView } from '@shuvix/chat-protocol/types/sessionView'
 import type { ThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
@@ -330,6 +331,15 @@ export class FakeDurableSession implements DurableSession {
     this.use()
     this.lock ??= lockRecord()
     return this.lock
+  }
+
+  /** agentInfo 的脚本（按对话；没设的对话 = undefined） */
+  readonly infos = new Map<number, AgentRuntimeInfo>()
+
+  async agentInfo(conversationId: number): Promise<AgentRuntimeInfo | undefined> {
+    this.calls.push(['agentInfo', conversationId])
+    if (this.closed) throw new Error(`Session ${this.sessionId} is closed`)
+    return this.infos.get(conversationId)
   }
 
   async destroyAgent(): Promise<void> {

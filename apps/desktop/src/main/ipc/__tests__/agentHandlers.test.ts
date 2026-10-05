@@ -10,6 +10,8 @@
  *           与会话里的 `(sid)` 都一样；
  *   P2-05-39 派生 agent 的三个面板 IPC 按 agentId 交给路由：追问 fire-and-forget、中断 / 销毁等路由做完，
  *           路由的拒绝都只记日志（PIN-17）。
+ *   P3-06-31 `agent:getInfo` 在 `createElectronContext(sessionId)` 的请求上下文里把 `(sessionId, options)` 原样交给
+ *           网关；网关的 null 原样交回。
  *
  * electron 是替身（handle 收进 Map）；`../frontend` 只替到网关与 operationContext 那一层，handler
  * import 的其余重模块（工具注册表、工具定义、AgentManager、监控）整个换成空壳。
@@ -23,9 +25,12 @@ const state = vi.hoisted(() => ({
   gateway: {
     setModel: vi.fn<(sessionId: string, ...rest: unknown[]) => Promise<boolean>>(),
     destroyAgent: vi.fn<(sessionId: string) => Promise<void>>(),
-    listTools: vi.fn<(sessionId?: string, options?: { profile?: string }) => unknown[]>()
+    listTools: vi.fn<(sessionId?: string, options?: { profile?: string }) => unknown[]>(),
+    getAgentInfo: vi.fn<(sessionId: string, options?: { ensure?: boolean }) => Promise<unknown>>()
   },
   contexts: [] as unknown[],
+  /** operationContext.run 的嵌套深度（>0 = 在请求上下文里） */
+  runDepth: 0,
   router: {
     continueTask: vi.fn<(params: unknown) => Promise<void>>(),
     interrupt: vi.fn<(agentId: string) => Promise<void>>(),
@@ -43,7 +48,16 @@ vi.mock('electron', () => ({
 }))
 vi.mock('../../frontend', () => ({
   chatGateway: state.gateway,
-  operationContext: { run: (_ctx: unknown, fn: () => unknown) => fn() },
+  operationContext: {
+    run: (_ctx: unknown, fn: () => unknown) => {
+      state.runDepth++
+      try {
+        return fn()
+      } finally {
+        state.runDepth--
+      }
+    }
+  },
   createElectronContext: (sessionId?: string) => {
     state.contexts.push(sessionId)
     return { sessionId }
@@ -143,6 +157,39 @@ describe('ML-U-8d tools:list', () => {
     await invoke('tools:list', SID)
     expect(state.gateway.listTools.mock.calls[0]).toEqual([SID, undefined])
     expect(state.contexts).toEqual([SID])
+  })
+})
+
+describe('P3-06-31 agent:getInfo', () => {
+  const INFO = { systemPrompt: 'p', tools: [], messageCount: 0, isStreaming: false }
+
+  beforeEach(() => {
+    state.gateway.getAgentInfo.mockReset()
+  })
+
+  it('P3-06-31 (sessionId, options) 原样交给网关，且在 createElectronContext(sessionId) 的上下文里', async () => {
+    const depths: number[] = []
+    state.gateway.getAgentInfo.mockImplementation(async () => {
+      depths.push(state.runDepth)
+      return INFO
+    })
+    await expect(invoke('agent:getInfo', SID, { ensure: true })).resolves.toEqual(INFO)
+    await expect(invoke('agent:getInfo', SID)).resolves.toEqual(INFO)
+    expect(state.gateway.getAgentInfo.mock.calls).toEqual([
+      [SID, { ensure: true }],
+      [SID, undefined]
+    ])
+    expect(depths).toEqual([1, 1])
+    expect(state.contexts).toEqual([SID, SID])
+  })
+
+  it('P3-06-31 网关答 null → null；网关 reject → handler reject', async () => {
+    state.gateway.getAgentInfo.mockResolvedValue(null)
+    await expect(invoke('agent:getInfo', SID, { ensure: true })).resolves.toBeNull()
+    state.gateway.getAgentInfo.mockRejectedValue(new Error('tool host exploded'))
+    await expect(invoke('agent:getInfo', SID, { ensure: true })).rejects.toThrow(
+      'tool host exploded'
+    )
   })
 })
 

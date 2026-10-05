@@ -151,7 +151,7 @@ export interface SubAgentManager {
   has: (agentId: string) => boolean
   /** agentId 在哪条会话的哪个子对话（同步；不打开会话） */
   locate: (agentId: string) => SubAgentLocation | undefined
-  /** 派生 agent 的运行时快照 —— phase 3 之前恒为 null */
+  /** 派生 agent 的运行时快照（会话的 `agentInfo`）。不认识 / 已销毁 / 会话关着 → null（从不打开会话） */
   getRuntimeInfo: (agentId: string) => Promise<AgentRuntimeInfo | null>
 }
 
@@ -526,8 +526,13 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
         : { sessionId: entry.sessionId, conversationId: entry.conversationId }
     },
 
-    async getRuntimeInfo(): Promise<AgentRuntimeInfo | null> {
-      return null
+    async getRuntimeInfo(agentId: string): Promise<AgentRuntimeInfo | null> {
+      const entry = index.get(agentId)
+      if (entry === undefined) return null
+      // 会话关着 = 没有在内存里的 agent（从不为查询打开会话，PIN-11；也不 peek）
+      const session = deps.sessions.get(entry.sessionId)
+      if (session === undefined || session.closed) return null
+      return (await session.agentInfo(entry.conversationId)) ?? null
     }
   }
 }

@@ -6,12 +6,18 @@ import { readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { launchApp, type E2EApp } from '../../harness/launch'
-import { createAgentSession, createPinnedChildSession, writeAgentMd } from '../../harness/seed'
+import {
+  createAgentSession,
+  createPinnedChildSession,
+  ensureDefaultModel,
+  writeAgentMd
+} from '../../harness/seed'
 
 let app: E2EApp
 
 beforeAll(async () => {
   app = await launchApp()
+  await ensureDefaultModel(app.main)
   writeAgentMd(app, 'new-key', { description: 'uses shuvix-tools', tools: 'read, grep' })
   writeAgentMd(app, 'legacy-key', {
     description: 'uses legacy tools',

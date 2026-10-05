@@ -21,10 +21,18 @@ import type { ChatMessage, InlineToken } from '@shuvix/chat-protocol/types/chatM
 import { resolveTokensForAgent } from '@shuvix/chat-protocol/utils/inlineTokens'
 import { sessionRecords } from '../../services/sessionRecords'
 import { projectDao } from '../../dao/projectDao'
-import { WORK_PROFILE_NAME, type SubmitErrorCode } from '@shuvix/agent-runtime'
+import {
+  AgentCreationError,
+  SessionClosedError,
+  WORK_PROFILE_NAME,
+  type SubmitErrorCode
+} from '@shuvix/agent-runtime'
 import { agentService } from '../../services/agentService'
 import { chatFrontendRegistry } from './ChatFrontendRegistry'
 import { t } from '../../i18n'
+import { createLogger } from '../../logger'
+
+const log = createLogger('ChatGateway')
 
 /** 会话打不开时报给界面的文案：旧格式会话只读；其余（会话不存在、退出中）沿用原来的那句 */
 function unavailableSessionError(sessionId: string): string {
@@ -166,14 +174,39 @@ export class DefaultChatGateway implements ChatGateway {
   }
 
   /**
-   * Agent 运行时快照。durable 的请求是现解析的，没有一个「内存里的 Agent 对象」可读 —— 在 phase 3 的
-   * 视图接上之前恒为 null，`ensure` 也不再为它打开会话 / 创建 agent（PIN-14）。TODO(pi-durable p3)
+   * 根 agent 的运行时快照（P3-06）：系统提示词与下一次请求逐字节相同、工具按请求次序、模型、活的思考档位。
+   *
+   *  - 不带 `ensure`：只读已有的 agent —— 会话开着读门面；没开着但锁着（LRU 关掉了）就 peek 打开再读
+   *    （PIN-03，与 setThinkingLevel 同一口径；从不新建存储、从不续跑）；没锁 → null。
+   *  - 带 `ensure`：打开会话（必要时建存储）→ 创建 agent（上锁，**不请求 LLM**、不续跑被中断的 run）→ 读。
+   *    没有可用模型 / 创建被取消 → null 并记警告（PIN-01：这不是一次发送，不报 error 事件）；会话不存在 /
+   *    旧格式 / 退出中 → null；其余创建失败原样上抛（IPC 拒绝）。
    */
   async getAgentInfo(
     sessionId: string,
-    _options?: { ensure?: boolean }
+    options?: { ensure?: boolean }
   ): Promise<AgentRuntimeInfo | null> {
-    return (await sessionService.getAgentSession(sessionId)?.getRuntimeInfo()) ?? null
+    if (options?.ensure) {
+      const session = await sessionService.ensureAgentSession(sessionId)
+      if (!session) return null
+      try {
+        await session.createAgent()
+      } catch (error) {
+        if (error instanceof AgentCreationError && error.code !== 'extra_tools') {
+          log.warn(`getInfo ensure: agent not created session=${sessionId}: ${error.message}`)
+          return null
+        }
+        if (error instanceof SessionClosedError) return null
+        throw error
+      }
+      return await session.getRuntimeInfo()
+    }
+    const session =
+      sessionService.getAgentSession(sessionId) ??
+      (sessionService.hasAgentRuntime(sessionId)
+        ? await sessionService.peekAgentSession(sessionId)
+        : undefined)
+    return (await session?.getRuntimeInfo()) ?? null
   }
 
   // ─── 消息操作 ─────────────────────────────────

@@ -5,11 +5,13 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { launchApp, type E2EApp } from '../../harness/launch'
+import { ensureDefaultModel } from '../../harness/seed'
 
 let app: E2EApp
 
 beforeAll(async () => {
   app = await launchApp()
+  await ensureDefaultModel(app.main)
 })
 afterAll(async () => {
   await app.stop()
@@ -56,7 +58,7 @@ describe('agent.getInfo ensure', () => {
     expect(result.ensured).not.toBeNull()
     expect(result.ensured!.systemPrompt).toContain('Working directory:')
     expect(result.ensured!.toolCount).toBeGreaterThan(0)
-    // 模型字段来自内存中的 agent.state；隔离实例未配置任何供应商，故只断言形状不断言取值
+    // 模型字段来自锁定模型（注册表现查）；beforeAll 种的是占位提供商（PIN-01），故只断言形状不断言取值
     expect(typeof result.ensured!.model.provider).toBe('string')
     expect(typeof result.ensured!.model.id).toBe('string')
     expect(typeof result.ensured!.model.contextWindow).toBe('number')
