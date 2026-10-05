@@ -114,6 +114,26 @@ export function opsOf<V extends object>(
   }
 }
 
+/**
+ * 一个每次更新都抛错的服务订阅（SyncHub 的发送同步抛错的角色，PIN-03 / PIN-12）：chord 把它收集起来
+ * 重抛给调用 `state.change` 的人 —— 也就是投影。返回退订函数。
+ */
+export function throwingSubscriber<V extends object>(
+  state: ReplicatedState<V> | MutableReplicatedState<V>
+): () => void {
+  const service = defineService<{ view: ReplicatedState<V> }>('t')
+  const provider = new RemoteServiceProvider([{ id: 't' }])
+  provider.provide(service, { view: state as ReplicatedState<V> } as never)
+  const subscription = provider.subscribe('t', 'singleton', () => {
+    throw new Error('downstream boom')
+  })
+  subscription.activate()
+  return () => {
+    void subscription.close()
+    provider.dispose()
+  }
+}
+
 /** 一条操作的路径（`r` 没有路径 → []） */
 export function opPath(op: Op): readonly (string | number)[] {
   return op[0] === 'r' ? [] : (op[1] as readonly (string | number)[])
