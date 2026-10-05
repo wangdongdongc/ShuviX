@@ -75,17 +75,16 @@ function entry(over: Partial<AgentMonitorEntry> = {}): AgentMonitorEntry {
     phase: 'idle',
     startedAt: 0,
     lastActivityAt: 0,
-    queue: { steer: 0, followUp: 0, nextTurn: 0 },
-    counters: { turns: 0, toolCalls: 0, providerRequests: 0, aborts: 0, compactions: 0 },
+    queue: { steer: 0, followUp: 0 },
     model: { provider: 'p', id: 'm', contextWindow: 1000 },
     thinkingLevel: 'medium',
     toolCount: 0,
-    activeToolCount: 0,
     contextTokens: 0,
-    cache: { calls: 0, input: 0, cacheRead: 0, cacheWrite: 0, reported: false },
-    rootSessionExists: true,
+    cache: { input: 0, cacheRead: 0, cacheWrite: 0, reported: false },
+    cost: { total: 0 },
+    sessionCost: 0,
     ...over
-  } as AgentMonitorEntry
+  }
 }
 
 /** 手动落定的 Promise */
@@ -187,7 +186,20 @@ describe('渲染：跟着本会话的 root 运行时走', () => {
       '只有本会话派生出来的 spawned',
       [entry({ agentId: 'sub-1', kind: 'spawned', depth: 1, parentAgentId: SID })]
     ],
-    ['只有别的会话的 root', [entry({ agentId: 'other', rootSessionId: 'other' })]]
+    ['只有别的会话的 root', [entry({ agentId: 'other', rootSessionId: 'other' })]],
+    [
+      '只有本会话的 hook agent（parentAgentId = 本会话）',
+      [
+        entry({
+          agentId: 'sub-h',
+          kind: 'spawned',
+          depth: 1,
+          parentAgentId: SID,
+          dispatch: 'hook',
+          profileName: 'titler'
+        })
+      ]
+    ]
   ])('AC-D-1 %s → 不渲染', async (_label, entries) => {
     seed(entries)
     await mount()
@@ -215,7 +227,7 @@ describe('渲染：跟着本会话的 root 运行时走', () => {
     expect(mainButton().title).toBe(tr('panel.agentChipTitle', { name: 'work', profile: 'work' }))
   })
 
-  it('AC-D-3 idle 相位灯不脉冲；turn 相位脉冲', async () => {
+  it('AC-D-3 idle 相位灯不脉冲；turn 相位脉冲；interrupted 不脉冲（P3-13-24）', async () => {
     seed([entry({ phase: 'idle' })])
     await mount()
     expect(phaseDot().className).not.toContain('animate-pulse')
@@ -224,6 +236,11 @@ describe('渲染：跟着本会话的 root 运行时走', () => {
       seed([entry({ phase: 'turn' })])
     })
     expect(phaseDot().className).toContain('animate-pulse')
+
+    await act(async () => {
+      seed([entry({ phase: 'interrupted' })])
+    })
+    expect(phaseDot().className).not.toContain('animate-pulse')
   })
 })
 
