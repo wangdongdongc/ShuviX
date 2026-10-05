@@ -28,7 +28,9 @@ vi.mock('../SettingsPrimitives', async () => {
 })
 vi.mock('../PayloadViewer', async () => {
   const { createElement: h } = await import('react')
-  return { PayloadViewer: ({ payload }: { payload: string }) => h('pre', { 'data-payload': '' }, payload) }
+  return {
+    PayloadViewer: ({ payload }: { payload: string }) => h('pre', { 'data-payload': '' }, payload)
+  }
 })
 vi.mock('../../common/SessionPicker', async () => {
   const { createElement: h } = await import('react')

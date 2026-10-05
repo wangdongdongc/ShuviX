@@ -115,7 +115,7 @@ describe('P3-13 runtime · root row', () => {
     expect(gone.model).toEqual({ provider: 'faux', id: 'faux-1', contextWindow: 0 })
   })
 
-  it("P3-13-03 phase and active tool: held → turn; a running tool → turn + its name; an ask → turn; compaction → compaction; settled → idle; never branch_summary", async () => {
+  it('P3-13-03 phase and active tool: held → turn; a running tool → turn + its name; an ask → turn; compaction → compaction; settled → idle; never branch_summary', async () => {
     const ref: { session?: DurableSession } = {}
     const toolGate = deferred()
     const t = await makeHost({
@@ -359,7 +359,9 @@ describe('P3-13 runtime · usage, cost and context', () => {
     stamp.price((context) => ({ input: 10, cost: prices[roleOf(context.messages)] }))
     queueRoles(rig.kit, {
       root: [callTool('askOp'), answer('root done')],
-      reviewer: [callTool('next', { decision: 'allow', risk: 'low', summary: 's', reason: 'r' }, 'call-next')],
+      reviewer: [
+        callTool('next', { decision: 'allow', risk: 'low', summary: 's', reason: 'r' }, 'call-next')
+      ],
       titler: [answer('A Title')]
     })
     expect(await rig.session.submitUser('clean the build directory')).toEqual({})

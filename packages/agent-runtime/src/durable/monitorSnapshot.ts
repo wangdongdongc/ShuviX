@@ -108,12 +108,7 @@ export async function collectMonitorRows(host: MonitorSnapshotHost): Promise<Age
     })
   }
   for (const record of listed) {
-    const shared = await conversationFigures(
-      host,
-      record.conversationId,
-      record,
-      record.createdAt
-    )
+    const shared = await conversationFigures(host, record.conversationId, record, record.createdAt)
     rows.push({
       agentId: record.agentId,
       kind: 'spawned',

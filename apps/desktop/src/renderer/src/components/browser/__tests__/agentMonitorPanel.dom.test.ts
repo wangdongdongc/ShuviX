@@ -128,7 +128,8 @@ const rows = (): HTMLButtonElement[] => [
 const rowBox = (i: number): HTMLElement => rows()[i]!.parentElement!
 const detailOf = (i: number): HTMLElement | null =>
   (rowBox(i).children[1] as HTMLElement | undefined) ?? null
-const costCell = (i: number): HTMLElement => rows()[i]!.querySelector<HTMLElement>('[data-agent-cost]')!
+const costCell = (i: number): HTMLElement =>
+  rows()[i]!.querySelector<HTMLElement>('[data-agent-cost]')!
 const phaseDot = (i: number): HTMLElement =>
   rows()[i]!.querySelector<HTMLElement>('[data-agent-phase]')!
 
@@ -216,9 +217,7 @@ describe('P3-13-21 detail', () => {
     expect(rootDetail.querySelector('[data-agent-field="queue"]')!.textContent).toBe('1 / 2')
     expect(rootDetail.querySelector('[data-agent-field="cost"]')!.textContent).toContain('$1.23')
     expect(rootDetail.textContent).toContain(tr('settings.agentMonitorFieldCost'))
-    expect(rootDetail.querySelector('[data-agent-field="session-cost"]')!.textContent).toBe(
-      '$2.50'
-    )
+    expect(rootDetail.querySelector('[data-agent-field="session-cost"]')!.textContent).toBe('$2.50')
     expect(rootDetail.textContent).toContain(tr('settings.agentMonitorFieldSessionCost'))
     expect(rootDetail.textContent).toContain(tr('settings.agentMonitorFieldTools'))
 

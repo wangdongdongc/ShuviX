@@ -1709,8 +1709,7 @@ export class DurableSessionImpl implements DurableSession {
         spawnedRecords: this.directory.spawnedRecords(),
         record: (conversationId) => this.directory.record(conversationId),
         installed: (conversationId) =>
-          this.deps.registry.snapshot().extension(agentExtensionName(conversationId)) !==
-          undefined,
+          this.deps.registry.snapshot().extension(agentExtensionName(conversationId)) !== undefined,
         liveTasks: [...this.live.values()],
         schedulerRunning: this.schedulerRunning,
         contextWindowOf: (ref) => this.modelInfo(ref).contextWindow,

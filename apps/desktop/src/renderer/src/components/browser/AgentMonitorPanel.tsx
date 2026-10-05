@@ -505,9 +505,9 @@ function CacheHitFields({ cache }: { cache: AgentMonitorCacheUsage }): React.JSX
   const { t } = useTranslation()
   const unknown = noCacheData(cache)
     ? t('settings.agentMonitorCacheNone')
-      : !cache.reported
-        ? t('settings.agentMonitorCacheUnreported')
-        : null
+    : !cache.reported
+      ? t('settings.agentMonitorCacheUnreported')
+      : null
   const total = cacheHitRate(cache)
   const last = cache.last ? cacheHitRate(cache.last) : null
   return (

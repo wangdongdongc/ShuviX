@@ -97,9 +97,11 @@ function spawnedRow(agentId: string, patch: Partial<AgentMonitorRow> = {}): Agen
 }
 
 function entry(patch: Partial<AgentMonitorEntry> = {}): AgentMonitorEntry {
-  const { conversationId: _conversationId, displayName, ...rest } = row(
-    patch as Partial<AgentMonitorRow>
-  )
+  const {
+    conversationId: _conversationId,
+    displayName,
+    ...rest
+  } = row(patch as Partial<AgentMonitorRow>)
   return { ...rest, displayName: displayName ?? 'x', ...patch } as AgentMonitorEntry
 }
 
@@ -193,9 +195,21 @@ describe('P3-13 listAgentRuntimes', () => {
 describe('P3-13-16 orderByLineage', () => {
   it('P3-13-16 groups by root session, parent before children, siblings by attention', () => {
     const ordered = orderByLineage([
-      entry({ agentId: 'b-old', kind: 'spawned', parentAgentId: 's1', depth: 1, lastActivityAt: 5 }),
+      entry({
+        agentId: 'b-old',
+        kind: 'spawned',
+        parentAgentId: 's1',
+        depth: 1,
+        lastActivityAt: 5
+      }),
       entry({ agentId: 's2', rootSessionId: 's2', lastActivityAt: 50 }),
-      entry({ agentId: 'b-new', kind: 'spawned', parentAgentId: 's1', depth: 1, lastActivityAt: 9 }),
+      entry({
+        agentId: 'b-new',
+        kind: 'spawned',
+        parentAgentId: 's1',
+        depth: 1,
+        lastActivityAt: 9
+      }),
       entry({ agentId: 'c', kind: 'spawned', parentAgentId: 'b-old', depth: 2, lastActivityAt: 1 }),
       entry({ agentId: 's1', lastActivityAt: 10 })
     ])

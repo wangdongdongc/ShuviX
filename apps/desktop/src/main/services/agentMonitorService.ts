@@ -60,7 +60,8 @@ export async function listAgentRuntimes(): Promise<AgentMonitorEntry[]> {
   if (host === undefined) return []
   const titles = new Map<string, string | undefined>()
   const titleOf = (sessionId: string): string | undefined => {
-    if (!titles.has(sessionId)) titles.set(sessionId, sessionRecords.pick(sessionId, ['title'])?.title)
+    if (!titles.has(sessionId))
+      titles.set(sessionId, sessionRecords.pick(sessionId, ['title'])?.title)
     return titles.get(sessionId)
   }
   // 内置 provider 的 pi id 本就是可读的 slug；自定义 provider 的是行 id（UUID）—— 换成行名
@@ -82,7 +83,8 @@ export async function listAgentRuntimes(): Promise<AgentMonitorEntry[]> {
       const title = titleOf(row.rootSessionId)
       entries.push({
         ...rest,
-        displayName: row.kind === 'root' ? profileDisplayName(row.profileName) : (displayName ?? ''),
+        displayName:
+          row.kind === 'root' ? profileDisplayName(row.profileName) : (displayName ?? ''),
         model: { ...row.model, provider: providerName(row.model.provider) },
         ...(title === undefined ? {} : { rootSessionTitle: title })
       })

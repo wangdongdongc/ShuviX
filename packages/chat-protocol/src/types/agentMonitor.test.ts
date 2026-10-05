@@ -66,6 +66,11 @@ describe('P3-13-19 AgentMonitorEntry shape', () => {
     ]
     expect(removed).toHaveLength(6)
     expect(null as Counters | null).toBeNull()
-    expect([interrupted, toolDispatch, cost.total, sessionCost]).toEqual(['interrupted', 'tool', 0, 0])
+    expect([interrupted, toolDispatch, cost.total, sessionCost]).toEqual([
+      'interrupted',
+      'tool',
+      0,
+      0
+    ])
   })
 })
