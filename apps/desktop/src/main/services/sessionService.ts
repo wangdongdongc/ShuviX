@@ -789,6 +789,9 @@ export class SessionService {
    * 要复制的是父会话跑起来是什么样，而父会话大多数键根本没显式改过 —— 只抄显式值，
    * 一条从没切过模型的父会话就会把「继承」变成「什么也没继承」。
    * 扩展能力勾选不在这里：它是 settings 的键，子会话在 create 里直接抄父会话的。
+   *
+   * 也是 hook run 没锁时的模型选择（hookService 的 `hookRunModel`）：档位要带上 —— hook 派出的 agent 与任何
+   * 派发一样继承会话的档位，想不思考就在它的 agent md 里声明 `shuvix-thinking`。
    */
   async resolveRunConfig(sessionId: string): Promise<{
     model: SubAgentModelConfig | null
@@ -803,20 +806,6 @@ export class SessionService {
           : null,
       thinkingLevel: ctx.modelMetadata.thinkingLevel ?? DEFAULT_THINKING_LEVEL
     }
-  }
-
-  /**
-   * 会话当前的模型与思考档位（hook 派发的回落源）。
-   * 会话不存在或没有可用模型返回 null —— 调用方（run()）报「无可用模型」。
-   *
-   * 档位要带上：hook 派出的 agent 与任何派发一样继承会话的档位，想不思考就在它的 agent md 里
-   * 声明 `shuvix-thinking`。只给模型的话，manager 会补缺省 'off' —— 等于宿主替每个 hook agent
-   * 悄悄关掉了思考，而档案里的声明（titler 的 off）也就无从生效与否。
-   */
-  async resolveRunModelConfig(sessionId: string): Promise<SubAgentModelConfig | null> {
-    const config = await this.resolveRunConfig(sessionId)
-    if (!config?.model) return null
-    return { ...config.model, thinkingLevel: config.thinkingLevel as ThinkingLevel }
   }
 
   /**

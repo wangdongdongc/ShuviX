@@ -46,8 +46,7 @@ vi.mock('../../services/memory', () => ({ resolveProjectMemoryIndex: vi.fn() }))
 vi.mock('../../services/knowledge', () => ({ enabledBaseChoices: () => [] }))
 vi.mock('../../frontend/core', () => ({ chatFrontendRegistry: { broadcast: vi.fn() } }))
 vi.mock('../../services/agentRuntimeAdapters', () => ({
-  electronEventSink: { broadcast: vi.fn() },
-  runtimeLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
+  electronEventSink: { broadcast: vi.fn() }
 }))
 vi.mock('../../services/toolContext', () => ({
   getDesktopSecurityContext: () => undefined,
