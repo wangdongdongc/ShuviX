@@ -188,7 +188,7 @@ beforeEach(() => {
   mocks.findAll.mockReset().mockReturnValue(shelf)
   mocks.pick.mockReset().mockReturnValue({ projectId: 'p1' })
   mocks.sandboxGloballyActive.mockReset().mockReturnValue(false)
-  host = createDesktopToolHost({ lockOf: () => undefined })
+  host = createDesktopToolHost({ sessionOf: () => undefined })
 })
 
 /** 从一份解析结果派生锁记录（运行时的拼法 + 解析出来的声明 / 技能） */

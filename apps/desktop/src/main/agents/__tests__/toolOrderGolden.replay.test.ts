@@ -199,7 +199,7 @@ afterEach(() => {
   restorePlatform()
 })
 
-const host = createDesktopToolHost({ lockOf: () => undefined })
+const host = createDesktopToolHost({ sessionOf: () => undefined })
 
 async function replay(fixture: ToolOrderFixture): Promise<{
   toolNames: string[]

@@ -93,7 +93,7 @@ async function load(platform: string, available = true): Promise<Loaded> {
   await import('../../tools/bash')
   const { createDesktopToolHost } = await import('../agentHost')
   return {
-    host: createDesktopToolHost({ lockOf: () => undefined }),
+    host: createDesktopToolHost({ sessionOf: () => undefined }),
     setSetting: (value) => {
       mocks.setting = value
     }

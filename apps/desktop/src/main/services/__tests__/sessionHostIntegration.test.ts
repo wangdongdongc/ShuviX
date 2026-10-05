@@ -12,6 +12,8 @@
  *   D10-63 退出留下的标记：进程 1 正忙时 closeAll → runState 留 busy、agentLocked 留 true；进程 2 打开 →
  *          interrupted、锁对账为 true；空闲重开写 idle
  *   D10-65 中断发送策略的接线（两种策略各一遍）：进程 2 的 gateway.prompt
+ *   P2-06-32 ToolHost 的 `sessionOf` 接的是真宿主：开着的会话就是 `getSessionHost().get(id)`，按对话认出
+ *            根 agent 与派生 agent（P2-01 的 `seedAgent` 种一个）；关了 → undefined
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DatabaseSync } from 'node:sqlite'
@@ -19,6 +21,8 @@ import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { InterruptedSendPolicy } from '@shuvix/agent-runtime'
+import { createRegistry, type ToolRegistration } from '@earendil-works/pi-durable'
+import type { DesktopToolHostDeps } from '../../agents/agentHost'
 
 const holder = vi.hoisted(() => ({
   db: null as unknown,
@@ -28,7 +32,9 @@ const holder = vi.hoisted(() => ({
 
 const mocks = vi.hoisted(() => ({
   broadcast: vi.fn<(event: Record<string, unknown>) => void>(),
-  getProfile: vi.fn<(name: string) => unknown>()
+  getProfile: vi.fn<(name: string) => unknown>(),
+  /** createDesktopToolHost 每次收到的依赖（P2-06-32） */
+  toolHostDeps: [] as unknown[]
 }))
 
 vi.mock('../../dao/database', () => {
@@ -69,11 +75,14 @@ vi.mock('../models', () => ({
   providerCredentialPort: { listProviders: () => [] }
 }))
 vi.mock('../../agents/agentHost', () => ({
-  createDesktopToolHost: () => ({
-    buildBuiltinTools: () => [],
-    resolveAgentTools: async () => ({ sandboxed: false }),
-    rebuildAgentTools: () => ({})
-  }),
+  createDesktopToolHost: (deps: unknown) => {
+    mocks.toolHostDeps.push(deps)
+    return {
+      buildBuiltinTools: () => [],
+      resolveAgentTools: async () => ({ sandboxed: false }),
+      rebuildAgentTools: () => ({})
+    }
+  },
   desktopPromptHost: {},
   desktopPromptVars: () => ({}),
   resolveProfileModelSpec: () => null
@@ -153,6 +162,12 @@ import {
   withTimeout,
   type FauxKit
 } from './support/realHost'
+// P2-01 的派生 agent 夹具（相对路径，与 realHost 同一做法）
+import {
+  rec,
+  seedAgent,
+  TEST_SPAWN_EXTENSION
+} from '../../../../../../packages/agent-runtime/src/durable/__tests__/support/spawn'
 
 type Db = Parameters<(typeof migrations)[number]['up']>[0]
 
@@ -403,3 +418,44 @@ describe.each(['abort-then-send', 'continue-then-queue'] as const)(
     })
   }
 )
+
+describe('P2-06-32 ToolHost 的 sessionOf 接真宿主', () => {
+  it('P2-06-32 开着的会话 = getSessionHost().get(id)；根对话认成锁住的根 agent，派生对话认成它自己；关了 → undefined', async () => {
+    // seedAgent 的锚任务要 test.spawn 扩展：经宿主的 createRegistry 预装（与运行时测试同一做法）
+    mocks.toolHostDeps.length = 0
+    resetSessionHostForTests(
+      testDepsOverrides(kit, {
+        createRegistry: () => {
+          const registry = createRegistry<ToolRegistration>()
+          registry.install(TEST_SPAWN_EXTENSION)
+          return registry
+        }
+      })
+    )
+    const host = getSessionHost()
+    const { sessionOf } = mocks.toolHostDeps.at(-1) as DesktopToolHostDeps
+
+    insert('s1')
+    kit.queue(answer('a1'))
+    expect(await chatGateway.prompt('s1', 'hi')).toEqual({})
+    const session = host.get('s1')!
+    expect(session).toBeDefined()
+    expect(sessionOf('s1')).toBe(session)
+
+    // 无项目会话推导出 chat 档案（D10-14）：根身份跟着锁走
+    expect(session.lock!.profileName).toBe('chat')
+    const root = sessionOf('s1')!.agentIdentity(1)
+    expect(root).toMatchObject({ profileName: 'chat', kind: 'root' })
+    expect(root).not.toHaveProperty('callerId')
+
+    const child = await seedAgent(session, { record: rec() })
+    expect(sessionOf('s1')!.agentIdentity(child.conversationId)).toMatchObject({
+      profileName: 'explore',
+      kind: 'spawned',
+      callerId: 'sub-a1'
+    })
+
+    await host.close('s1')
+    expect(sessionOf('s1')).toBeUndefined()
+  })
+})
