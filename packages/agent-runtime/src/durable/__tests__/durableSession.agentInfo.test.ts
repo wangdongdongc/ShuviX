@@ -14,6 +14,7 @@ import { Type } from '@earendil-works/pi-ai'
 import {
   defineTool,
   ROOT_CONVERSATION_ID,
+  type Conversation,
   type ConversationId,
   type ToolRegistration
 } from '@earendil-works/pi-durable'
@@ -69,7 +70,7 @@ function stable(info: AgentRuntimeInfo | undefined): Partial<AgentRuntimeInfo> {
 const sectionWarnings = (warnings: readonly string[]): string[] =>
   warnings.filter((warning) => warning.includes('rendering system prompt section'))
 
-async function rootOf(session: DurableSession) {
+async function rootOf(session: DurableSession): Promise<Conversation> {
   return (await session.harness.conversation(ROOT, BG))!
 }
 
@@ -96,7 +97,11 @@ describe('P3-06 A · agentInfo content', () => {
           profile: inputs.profile
         }
       )
-      const selected = promptExtensionsFor({ kind: inputs.kind, profile: inputs.profile, toolNames })
+      const selected = promptExtensionsFor({
+        kind: inputs.kind,
+        profile: inputs.profile,
+        toolNames
+      })
       // 调用方上下文块只有 bot 段落承载（与 G-01 同样补选）
       if (inputs.systemContext.length > 0 && !selected.includes(PROMPT_EXTENSION.bot)) {
         selected.push(PROMPT_EXTENSION.bot)
@@ -235,7 +240,9 @@ describe('P3-06 A · agentInfo content', () => {
 
     expect(names(info.tools)).toEqual(session.lock!.toolNames)
     expect(names(info.tools)).toEqual(names(request.tools))
-    expect(names(info.tools)).toEqual(expect.arrayContaining(['agent', 'skill', 'mcp__ctx__resolve']))
+    expect(names(info.tools)).toEqual(
+      expect.arrayContaining(['agent', 'skill', 'mcp__ctx__resolve'])
+    )
     expect(names(info.tools).slice(-2)).toEqual(['labeled', 'schemaless'])
     for (const [index, tool] of info.tools.entries()) {
       const offered = request.tools[index]!

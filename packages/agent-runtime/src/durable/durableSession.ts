@@ -104,11 +104,7 @@ import {
   type LockRecord
 } from './lock'
 import { maybeAnnounceDate } from './prompt/dateNotice'
-import {
-  renderSystemPrompt,
-  replaySections,
-  type PromptExtensions
-} from './prompt/sections'
+import { renderSystemPrompt, replaySections, type PromptExtensions } from './prompt/sections'
 import type { AgentConfig, InterruptedSendPolicy, ModelCatalog, RunState, ToolHost } from './seams'
 import { SpawnCoordinatorImpl, type SpawnCoordinator } from './spawn'
 import type { LockModel, ModelSelection } from '../models/lockModel'
@@ -1384,7 +1380,13 @@ export class DurableSessionImpl implements DurableSession {
       // 与 durable 准备请求时同样的输入；执行环境不建（ShuviX 的段落不读它，建它可能有副作用）
       const systemPrompt = await renderSystemPrompt(
         agent.sections,
-        { conversationId: id, agent, env: undefined, shown: Object.fromEntries(shown), read: this.raw },
+        {
+          conversationId: id,
+          agent,
+          env: undefined,
+          shown: Object.fromEntries(shown),
+          read: this.raw
+        },
         shown,
         (key, error) =>
           this.deps.logger.warn(
@@ -1413,7 +1415,9 @@ export class DurableSessionImpl implements DurableSession {
   }
 
   /** 模型快照：注册表现查；查不到 → provider / id 之外全是零值（PIN-05） */
-  private modelInfo(ref: { provider: string; modelId: string } | undefined): AgentRuntimeInfo['model'] {
+  private modelInfo(
+    ref: { provider: string; modelId: string } | undefined
+  ): AgentRuntimeInfo['model'] {
     const provider = ref?.provider ?? ''
     const id = ref?.modelId ?? ''
     const model =

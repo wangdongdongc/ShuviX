@@ -515,7 +515,9 @@ describe('P3-06 D · facade and gateway against the real host', () => {
     expect(await facade.getRuntimeInfo()).toBeNull()
     await facade.createAgent()
     const lock = facade.durable.lock!
-    expect(await facade.getRuntimeInfo()).toEqual(await facade.durable.agentInfo(lock.conversationId))
+    expect(await facade.getRuntimeInfo()).toEqual(
+      await facade.durable.agentInfo(lock.conversationId)
+    )
     expect(eventsOf('agent_created')).toHaveLength(1)
   })
 

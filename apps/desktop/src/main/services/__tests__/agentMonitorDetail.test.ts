@@ -70,7 +70,10 @@ function info(systemPrompt: string): AgentRuntimeInfo {
 }
 
 /** 一条打开着的会话（真门面 + 假会话） */
-function openSession(sessionId: string, patch: Partial<FakeDurableSession> = {}): FakeDurableSession {
+function openSession(
+  sessionId: string,
+  patch: Partial<FakeDurableSession> = {}
+): FakeDurableSession {
   const durable = Object.assign(new FakeDurableSession(sessionId), patch)
   state.open.set(sessionId, AgentSession.of(durable))
   return durable
