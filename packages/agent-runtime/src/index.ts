@@ -580,7 +580,11 @@ export {
   type SubmitErrorCode,
   type SubmitResult,
   type TaskLiveness,
-  type UserSendOptions
+  type UserSendOptions,
+  type AdmitOptions,
+  type AdmittedInfo,
+  type AgentRef,
+  type PlacedInfo
 } from './durable/durableSession'
 export {
   DEFAULT_INTERRUPTED_SEND_POLICY,
@@ -703,6 +707,16 @@ export {
   type QueueDisplay,
   type SessionProjectionMeta
 } from './durable/projection/project'
+// 界面投影的有状态一半（P3-03）：`DurableSession.projector()` / `agentProjector()` 的类型与运行生命周期信号
+export { type AgentProjector } from './durable/projection/agentProjector'
+export {
+  type ProjectorHandle,
+  type RunEndReason,
+  type RunLifecycleListener,
+  type RunLifecycleSignal,
+  type SessionProjector
+} from './durable/projection/sessionProjector'
+export { reconcile } from './durable/projection/reconcile'
 export {
   displayContentOf,
   displayItemOf,
@@ -769,3 +783,25 @@ export {
   type JoinOutcome,
   type SettlePatch
 } from './task/registry'
+// 视图同步（phase 3，P3-04）：每目标一个 chord provider、每（客户端，目标）一个端点；传输与会话由宿主接
+export {
+  createSyncHub,
+  type SyncAgentRef,
+  type SyncHub,
+  type SyncHubDeps,
+  type SyncHubHost,
+  type SyncServerTransport,
+  type SyncSession,
+  type SyncSessionClosedReason,
+  type SyncWireFrame,
+  type ViewLease,
+  type ViewProjector
+} from './sync/syncHub'
+export {
+  chatViewService,
+  legacySessionView,
+  staticViewState,
+  type ChatViewService,
+  type LegacyTranscript,
+  type SyncView
+} from './sync/services'
