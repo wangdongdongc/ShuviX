@@ -3,8 +3,9 @@
  *
  * 决策表、档案模型 / 思考档位、注入次序、工具名单归一这些纯派生的用例已搬到
  * `durable/__tests__/agentSpec.test.ts`（断言落在 `deriveAgentSpec` 的规格上）。这里只剩入口本身：
- * 会话的根 agent 由 durable 会话自己创建（锁），本工厂收到 root 直接拒绝；派生 agent 的 durable 版在
- * phase 2，所以 spawned 以 `PhasePendingError` 收尾，入参校验照旧先行。依赖运行时本身的旧用例列在下面作 it.todo。
+ * 会话的根 agent 由 durable 会话自己创建（锁），本工厂的参数类型只收 spawned（根路径编译期就进不来）；
+ * 派生 agent 的 durable 版在 phase 2，所以 spawned 以 `PhasePendingError` 收尾，入参校验照旧先行。
+ * 依赖运行时本身的旧用例列在下面作 it.todo。
  */
 import { describe, it, expect, vi } from 'vitest'
 import { createAgentFactory, type AgentHostAdapter } from '../createAgent'
@@ -38,17 +39,6 @@ function makeHost(): AgentHostAdapter & { resolveTools: ReturnType<typeof vi.fn>
 }
 
 describe('createAgentFactory —— 切换期入口', () => {
-  it('root → 拒绝（根 agent 由 durable 会话的锁创建，不经本工厂）；不是「未实现」，不解析工具', async () => {
-    const host = makeHost()
-    const err = await createAgentFactory(host)
-      .createAgent({ kind: 'root', sessionId: 's1', profile: PROFILE, model: MODEL_CFG, cwd: '/w' })
-      .catch((e: unknown) => e)
-    expect(err).toBeInstanceOf(Error)
-    expect(err).not.toBeInstanceOf(PhasePendingError)
-    expect((err as Error).message).toMatch(/DurableSession\.createAgent/)
-    expect(host.resolveTools).not.toHaveBeenCalled()
-  })
-
   it('spawned → PhasePendingError（phase 2）', async () => {
     const err = await createAgentFactory(makeHost())
       .createAgent({

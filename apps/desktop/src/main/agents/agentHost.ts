@@ -17,7 +17,7 @@
  * MCP 逐台逐个 → 其它」拼，这里只交出各段。
  *
  * 另留两样给尚未迁移的调用方：`agentFactory`（派生 agent 的旧创建入口，AgentManager 经它派发 ——
- * spawned 恒抛 `PhasePendingError('spawned agents', 2)`）与 `resolveProfileModelSpec`（切档案种子）。
+ * 恒抛 `PhasePendingError('spawned agents', 2)`）与 `resolveProfileModelSpec`（切档案种子）。
  */
 import type { ToolExecutionApi, ToolRegistration } from '@earendil-works/pi-durable'
 import {
@@ -539,7 +539,7 @@ export function resolveProfileModelSpec(spec: string): SubAgentModelConfig | nul
 
 /**
  * 派生 agent 的创建入口（AgentManager 经它派发）。根 agent 由 durable 会话自己创建（锁，P1-09），
- * 这里不再有根路径的适配面；`createAgent` 先照常派生规格（校验入参、解析档案模型），然后抛
+ * 工厂的参数类型只收 spawned；`createAgent` 先照常派生规格（校验入参、解析档案模型），然后抛
  * `PhasePendingError`（spawned：'spawned agents', 2）。工具解析因此永远走不到 —— 它在 phase 2
  * 换成 ToolHost 的按 agent 解析（kind 'spawned'）。
  * TODO(pi-durable p2): 派生 agent 落在 durable 子对话上（工具走 createDesktopToolHost）。

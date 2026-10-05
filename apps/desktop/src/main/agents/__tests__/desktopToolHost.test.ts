@@ -956,7 +956,7 @@ describe('agentOf', () => {
 // ─── 旧入口 ────────────────────────────────────────────────────────────
 
 describe('旧入口', () => {
-  it('H11-67 agentFactory：派生 → PhasePendingError(phase 2)，根 → 拒绝（锁创建根 agent）；都不碰 MCP / SkillTool / 派发工具；resolveProfileModelSpec 还在', async () => {
+  it('H11-67 agentFactory：派生 → PhasePendingError(phase 2)（根 agent 由锁创建，工厂的参数类型只收 spawned）；不碰 MCP / SkillTool / 派发工具；resolveProfileModelSpec 还在', async () => {
     const profile = inProcess(profileOf('coding'))
     const model = { provider: MODEL.provider, model: MODEL.modelId, capabilities: {} }
     const spawned = await agentFactory
@@ -978,19 +978,6 @@ describe('旧入口', () => {
       .catch((e: unknown) => e)
     expect(isPhasePendingError(spawned)).toBe(true)
     expect((spawned as { phase: number }).phase).toBe(2)
-
-    const root = await agentFactory
-      .createAgent({
-        kind: 'root',
-        sessionId: 's1',
-        profile: inProcess(profileOf('work')),
-        model,
-        cwd: '/w/proj'
-      })
-      .catch((e: unknown) => e)
-    // 根 agent 由 durable 会话的锁创建（P1-10 接线之后工厂不再有根路径）：拒绝，且不是「未实现」
-    expect(root).toBeInstanceOf(Error)
-    expect(isPhasePendingError(root)).toBe(false)
 
     expect(mocks.ensureServerByName).not.toHaveBeenCalled()
     expect(mocks.skillToolCalls).toEqual([])

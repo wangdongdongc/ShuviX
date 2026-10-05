@@ -6,9 +6,10 @@
  * `durable/agentSpec.ts`；本文件只剩宿主契约与创建入口。
  *
  * **现状（pi-durable 切换中）**：本工厂只剩**派生 agent** 一条路。会话的根 agent 由它的 durable 会话
- * 自己创建（锁：`DurableSession.createAgent()`，`durable/lock.ts`；桌面经 SessionHost 接线），这里收到
- * `kind: 'root'` 直接拒绝。派生：先派生规格（校验入参、解析档案模型），然后抛
- * `PhasePendingError` —— TODO(pi-durable p2) 派生 agent 落在 durable 子对话上。
+ * 自己创建（锁：`DurableSession.createAgent()`，`durable/lock.ts`；桌面经 SessionHost 接线），所以
+ * `CreateAgentParams.kind` 只收 `'spawned'` —— 根路径是编译期就进不来的（P1-13 起不再是运行期拒绝）。
+ * 派生：先派生规格（校验入参、解析档案模型），然后抛 `PhasePendingError` —— TODO(pi-durable p2)
+ * 派生 agent 落在 durable 子对话上。
  */
 import type { ImageContent } from '@earendil-works/pi-ai'
 import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
@@ -70,8 +71,9 @@ export interface AgentHostAdapter extends AgentSpecHost {
 }
 
 export interface CreateAgentParams {
-  kind: AgentKind
-  /** root=会话 id；spawned=agentId（sub-<uuid>） */
+  /** 只有派生 agent 经本工厂创建（根 agent 由 durable 会话的锁创建） */
+  kind: Extract<AgentKind, 'spawned'>
+  /** 派生 agent 的 agentId（sub-<uuid>） */
   sessionId: string
   /** 运行投影（getAgentProfile(...) 经 toInProcessAgentType 投影，或宿主就地组装） */
   profile: InProcessAgentType
@@ -164,12 +166,6 @@ export interface AgentFactory {
 
 export function createAgentFactory(host: AgentHostAdapter): AgentFactory {
   async function createAgent(params: CreateAgentParams): Promise<CreatedAgent> {
-    // 会话的根 agent 由它的 durable 会话创建（锁），不经本工厂
-    if (params.kind === 'root') {
-      throw new Error(
-        'createAgent builds spawned agents only; a session root agent is created by its durable session (DurableSession.createAgent)'
-      )
-    }
     // 先派生规格：入参校验（缺 spawn 上下文即抛）、档案模型照常解析一遍
     await deriveAgentSpec(host, params)
     // TODO(pi-durable p2): 派生 agent 落在 durable 子对话上（phase 2）
