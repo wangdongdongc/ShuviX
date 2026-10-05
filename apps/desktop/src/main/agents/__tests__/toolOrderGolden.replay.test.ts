@@ -252,7 +252,10 @@ async function replaySpawned(fixture: ToolOrderFixture): Promise<{
   record: SpawnedAgentRecord
 }> {
   const { inputs } = fixture
-  const builtin = await host.buildBuiltinTools({ sessionId: inputs.rootSessionId, sandboxed: false })
+  const builtin = await host.buildBuiltinTools({
+    sessionId: inputs.rootSessionId,
+    sandboxed: false
+  })
   const withNext = inputs.extraTools.includes('next')
   const resolved = await host.resolveAgentTools(
     requestD({

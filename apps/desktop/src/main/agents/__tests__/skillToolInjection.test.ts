@@ -173,7 +173,10 @@ describe('STI 根 agent', () => {
 
 describe('STI 派生 agent', () => {
   /** 派生 agent（根会话 s1、agent sub-a1）按名单解析 */
-  const resolveSpawned = (names: readonly string[], profile = 'coding'): Promise<ResolvedAgentTools> =>
+  const resolveSpawned = (
+    names: readonly string[],
+    profile = 'coding'
+  ): Promise<ResolvedAgentTools> =>
     host.resolveAgentTools(
       SR_D({ names: [...names], profile: inProcess(profileOf(profile)), canSpawn: false }),
       { signal: new AbortController().signal }
@@ -187,7 +190,9 @@ describe('STI 派生 agent', () => {
   })
 
   it('P2-04-33 STI-5 派生档案点名 `skill:foo` → 只拿它点的那个，内置不顺带加进来；projectPath 是根会话的项目（只按 s1 查）', async () => {
-    mocks.pick.mockImplementation((id: string) => (id === SID ? { projectId: 'proj-1' } : undefined))
+    mocks.pick.mockImplementation((id: string) =>
+      id === SID ? { projectId: 'proj-1' } : undefined
+    )
     mocks.projectPick.mockReturnValue({ name: 'Proj', path: '/w/proj' })
     const resolved = await resolveSpawned(['skill:foo'])
     expect(mocks.skillToolCalls).toEqual([{ names: ['foo'], projectPath: '/w/proj', argc: 2 }])
@@ -202,7 +207,10 @@ describe('STI 派生 agent', () => {
     expect(mocks.skillToolCalls[0].names).toEqual(['builtin:drawing', 'foo'])
     expect(agentToolNames(resolved).filter((n) => n === 'skill')).toHaveLength(1)
     const builtin = await host.buildBuiltinTools({ sessionId: SID, sandboxed: false })
-    expect(composeAgentTools({ names, builtin, set: resolved }).toolNames).toEqual(['read', 'skill'])
+    expect(composeAgentTools({ names, builtin, set: resolved }).toolNames).toEqual([
+      'read',
+      'skill'
+    ])
   })
 })
 
