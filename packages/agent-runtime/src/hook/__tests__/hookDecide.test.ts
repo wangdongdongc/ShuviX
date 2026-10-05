@@ -143,6 +143,7 @@ describe('入口、匹配与派发形状', () => {
     expect(Object.keys(params).sort()).toEqual([
       'agentType',
       'description',
+      'hook',
       'modelConfig',
       'owner',
       'prompt',
@@ -150,6 +151,9 @@ describe('入口、匹配与派发形状', () => {
       'sessionId',
       'signal'
     ])
+    // P2-08：没给 ownerTaskId → 锚；hook 名 + 这次 run 的 runId
+    expect(params.owner).toEqual({ anchor: true })
+    expect(params.hook).toEqual({ name: 'hk', runId: expect.stringMatching(/^hkr-/) })
     expect(params.resultContract).toStrictEqual({
       schema: PERMISSION_VERDICT_SCHEMA,
       sourceLabel: 'hk'

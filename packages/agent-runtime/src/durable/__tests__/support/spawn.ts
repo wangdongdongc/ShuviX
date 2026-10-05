@@ -149,8 +149,9 @@ export interface SeedOptions {
   record?: SpawnedAgentRecord
   /**
    * 拥有者：缺省（`'anchor'`）= 同一提交里在 `parent` 建一个后台锚任务；给 TaskId 就用它；`'none'` =
-   * ownerless 对话（只给进程内的运行状态用例：锚在根里以 completing 陪着子对话的工作活着，会让运行状态
-   * 跟着忙 —— 那是 P2-08 的 PIN-12；ownerless 的对话重开时不在扫描范围里）
+   * ownerless 对话（P2-01 的进程内运行状态用例当时用它绕开根里的锚；P2-08 起「后台、且拥有的对话全是辅助
+   * 工作」的锚不进运行状态（PIN-02），锚拥有的变体期望相同 —— 见 hosted.regressions.test.ts；ownerless 的
+   * 对话重开时不在扫描范围里）
    */
   owner?: 'anchor' | 'none' | TaskId
   /** 锚任务建好就让它跑完（开启调度器；锚完成时父对话的运行状态会闪一下忙） */
@@ -234,7 +235,7 @@ export async function seedAgent(
 
 /**
  * 让锚任务先跑完（开启调度器、等它终态）：锚没跑完时它在父对话里以 completing 挂着、陪着子对话的
- * 工作一起活着（P2-08 才把这种「拥有辅助对话的任务」排除出运行状态，PIN-12）。
+ * 工作一起活着。拥有辅助对话的锚从 P2-08 起不进运行状态（PIN-02）；拥有 `tool` 子对话的锚照样算。
  */
 export async function settleAnchor(session: DurableSession, anchor: TaskId): Promise<void> {
   await session.harness.waitForTask(anchor, BG)

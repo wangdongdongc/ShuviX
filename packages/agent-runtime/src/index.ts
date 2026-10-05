@@ -222,6 +222,8 @@ export {
   abortSessionReviews,
   reopenSessionReviews,
   takeReviewAllowed,
+  reviewCallKey,
+  type ReviewCall,
   type HumanFeedbackNote,
   type ReviewAllowedNote,
   REVIEW_CONSECUTIVE_DENIAL_LIMIT,
@@ -394,8 +396,16 @@ export {
   type HookRegistryEntry,
   type HookRunInfo,
   type HookRunEvent,
-  type HookSkipReason
+  type HookSkipReason,
+  type HookRunModel,
+  type HookModelRefusal,
+  type HookDecideOptions
 } from './hook/hookRunner'
+export {
+  resolveHookRunModel,
+  type HookModelSelection,
+  type HookRunModelInput
+} from './hook/runModel'
 export {
   buildBuiltinHooks,
   BUILTIN_HOOK_SPECS,
@@ -644,13 +654,24 @@ export {
   agentDepthLimitText,
   extractSpawnResult,
   NO_CALLER_MODEL_TEXT,
+  HOSTED_INTERRUPTED_TEXT,
   type SpawnCoordinator,
   type SpawnCreatedInfo,
   type SpawnOutcome,
   type SpawnOwner,
   type SpawnParams,
-  type SpawnToolOwner
+  type SpawnToolOwner,
+  type SpawnTaskOwner,
+  type SpawnAnchorOwner,
+  type SpawnHostedOptions
 } from './durable/spawn'
+// 宿主派发的锚任务扩展（P2-08）：每条会话的注册表在打开时装上
+export {
+  SHUVIX_SPAWN_EXTENSION,
+  SPAWN_ANCHOR_TASK,
+  SpawnAnchor,
+  spawnExtension
+} from './durable/anchor'
 export {
   createShuviXSettings,
   compactionKeepRecentTokens,

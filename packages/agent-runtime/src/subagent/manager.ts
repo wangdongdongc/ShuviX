@@ -19,17 +19,23 @@
  * 交回 `error: 'aborted'` → 任务 `killed`、`isError: true`、文本换成 `getAbortedNote()`（软停止标记在时保留
  * 部分结果）；模型报错 → `error`；其余 → `done`。
  *
- * 拥有者：`{tool}` = 模型调派发工具（派发工具把自己这次调用的 scope 交进来）。宿主派发的 `{task}` /
- * `{anchor}` 归 P2-08，在那之前以 `PhasePendingError('host-dispatched agents', 2)` 拒绝（PIN-03）。
+ * 拥有者（P2-08 接上宿主派发）：
+ *  - `{tool}` = 模型调派发工具（派发工具把自己这次调用的 scope 交进来），会话按 `get` 找（派发工具总在打开的
+ *    会话里跑）；
+ *  - `{task}` = 判定型 hook（权限审查，Q16）：子对话归提问的那个工具任务；`{anchor}` = 观察型 hook（起标题）
+ *    与没有 taskId 的判定：子对话归一个后台锚任务。宿主派发按 `get`、退而 `peek` 找会话，**从不 open**
+ *    （存储没了 = 一个带原因的失败，PIN-08）；模型取 `modelConfig`（hook 的运行模型），取消在 `signal` 上 ——
+ *    落下时协调器中止子对话（PIN-05）。登记 / 广播 / 任务条目与工具派发同一套，只是没有 `parentToolCallId`。
  */
+import type { Context } from '@earendil-works/chord'
 import type { AgentRuntimeInfo } from '@shuvix/chat-protocol/chatApi'
 import type { ChatEvent } from '@shuvix/chat-protocol/events'
 import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
 import { resolveTokensForAgent } from '@shuvix/chat-protocol/utils/inlineTokens'
 import type { DurableSession } from '../durable/durableSession'
 import type { SessionHost } from '../durable/sessionHost'
-import type { SpawnCreatedInfo, SpawnOutcome } from '../durable/spawn'
-import { PhasePendingError } from '../errors/phasePending'
+import { BACKGROUND_CONTEXT, withAbortSignal } from '@earendil-works/chord/context'
+import type { SpawnCreatedInfo, SpawnOutcome, SpawnOwner, SpawnParams } from '../durable/spawn'
 import type { TaskRegistry } from '../task/registry'
 import type { ToolCallScope } from '../tools/toolCall'
 import type { RuntimeLogger } from '../types'
@@ -59,14 +65,20 @@ export interface RunTaskToolOwner {
   readonly tool: ToolCallScope
 }
 
-/** 宿主派发（reviewer）：子对话由提问的工具任务拥有 —— P2-08 */
+/** 宿主派发（reviewer）：子对话由提问的工具任务拥有（durable taskId，Q16） */
 export interface RunTaskTaskOwner {
   readonly task: number
 }
 
-/** 宿主派发（观察型 hook）：子对话由一个后台锚任务拥有 —— P2-08 */
+/** 宿主派发（观察型 hook，或没有 taskId 的判定）：子对话由一个后台锚任务拥有 */
 export interface RunTaskAnchorOwner {
   readonly anchor: true
+}
+
+/** 宿主派发的 hook 身份：名字进派生 agent 记录（`hook`），runId 定任务提交的 requestId（`hook:<runId>`） */
+export interface RunTaskHook {
+  readonly name: string
+  readonly runId: string
 }
 
 export type RunTaskOwner = RunTaskToolOwner | RunTaskTaskOwner | RunTaskAnchorOwner
@@ -79,8 +91,13 @@ export interface RunTaskParams {
   agentType: InProcessAgentType
   prompt: string
   description: string
-  /** 宿主派发的模型（hook 的会话模型；P2-08 用）。工具派发从不给 —— 调用方模型现取自 `api.agent()` */
+  /**
+   * 宿主派发的基准模型（hook 的运行模型：`provider` 是 pi provider id，PIN-06）与思考档位；缺省会话锁的。
+   * 工具派发从不给 —— 调用方模型现取自 `api.agent()`
+   */
   modelConfig?: SubAgentModelConfig
+  /** 宿主派发的 hook（工具派发没有） */
+  hook?: RunTaskHook
   /**
    * 结果契约（可选）：子 agent 多一个按 schema 现造的 `next` 工具，任务 prompt 末尾追加契约段；捕获即成功，
    * `structured` 为捕获对象。schema 不合法 → `runTask` 以 `invalid result contract: …` 拒绝。见 subagent/nextTool.ts。
@@ -88,7 +105,7 @@ export interface RunTaskParams {
   resultContract?: ResultContract
   /** 派发它的那次工具调用的 provider id（面板把子 agent 内联到那张工具卡片里） */
   parentToolCallId?: string
-  /** 宿主派发的取消信号（P2-08）。工具派发的取消在 `owner.tool.signal` 上 */
+  /** 宿主派发的取消信号：落下即中止子对话（PIN-05）。工具派发的取消在 `owner.tool.signal` 上 */
   signal?: AbortSignal
 }
 
@@ -114,7 +131,7 @@ export interface SubAgentLocation {
 }
 
 export interface SubAgentManager {
-  /** 跑一次派发并等它的回答（被拒 / 失败都在结果里；schema 不合法与非工具拥有者以拒绝报告） */
+  /** 跑一次派发并等它的回答（被拒 / 失败都在结果里；只有 schema 不合法以拒绝报告） */
   runTask: (params: RunTaskParams) => Promise<RunTaskOutcome>
   /**
    * 面板追问一个已有的子 agent（agent:subAgentPrompt）：不认识 → `Sub-session not found`；正在跑 →
@@ -242,14 +259,68 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
     return identity?.kind === 'spawned' && identity.callerId ? identity.callerId : sessionId
   }
 
-  async function runToolTask(params: RunTaskParams, scope: ToolCallScope): Promise<RunTaskOutcome> {
-    const { sessionId, agentType, prompt, description, parentToolCallId, resultContract } = params
-    const session = deps.sessions.get(sessionId)
+  /** 一次派发怎么落进会话：协调器的拥有者、它的 Context、宿主派发的参数、「被中止了吗」 */
+  interface Dispatch {
+    session: DurableSession
+    owner: SpawnOwner
+    context: Context
+    hosted?: SpawnParams['hosted']
+    aborted: () => boolean
+  }
+
+  async function toolDispatch(
+    params: RunTaskParams,
+    scope: ToolCallScope
+  ): Promise<Dispatch | RunTaskOutcome> {
+    const session = deps.sessions.get(params.sessionId)
     if (session === undefined) {
-      const text = `Session is not open: ${sessionId}`
+      const text = `Session is not open: ${params.sessionId}`
       return { result: text, error: text }
     }
-    const parentSessionId = parentOf(session, scope.conversationId, sessionId)
+    return {
+      session,
+      owner: { tool: scope.api },
+      context: scope.context,
+      aborted: () => scope.signal?.aborted === true || params.signal?.aborted === true
+    }
+  }
+
+  async function hostDispatch(
+    params: RunTaskParams,
+    owner: RunTaskTaskOwner | RunTaskAnchorOwner
+  ): Promise<Dispatch | RunTaskOutcome> {
+    const { sessionId, modelConfig, hook, signal } = params
+    // 打开着的优先；关着就 peek（存储在才打开，从不创建，PIN-08）
+    const session = deps.sessions.get(sessionId) ?? (await deps.sessions.peek(sessionId))
+    if (session === undefined) {
+      const text = `Session not found: ${sessionId}`
+      return { result: text, error: text }
+    }
+    const hosted: NonNullable<SpawnParams['hosted']> = {
+      ...(modelConfig === undefined
+        ? {}
+        : { model: { provider: modelConfig.provider, modelId: modelConfig.model } }),
+      ...(modelConfig?.thinkingLevel === undefined
+        ? {}
+        : { thinkingLevel: modelConfig.thinkingLevel }),
+      ...(hook === undefined ? {} : { hook: hook.name, requestId: `hook:${hook.runId}` })
+    }
+    return {
+      session,
+      owner: 'task' in owner ? { task: owner.task } : { anchor: true },
+      // 宿主的取消信号绑进 Context：落下时协调器的等待被打断、随即中止子对话（PIN-05）
+      context:
+        signal === undefined ? BACKGROUND_CONTEXT : withAbortSignal(signal, BACKGROUND_CONTEXT),
+      hosted,
+      aborted: () => signal?.aborted === true
+    }
+  }
+
+  async function run(params: RunTaskParams, dispatch: Dispatch): Promise<RunTaskOutcome> {
+    const { sessionId, agentType, prompt, description, parentToolCallId, resultContract } = params
+    const { session } = dispatch
+    /** register 里的父：派生调用方 = 它的 agentId，根 = 会话 id（建好时按子对话的父对话认） */
+    let parentSessionId = sessionId
 
     /** 这一次 runTask 里已登记的 agentId（onCreated 可能来两次：重新挂上，PIN-14） */
     let created: string | undefined
@@ -257,6 +328,7 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
 
     const onCreated = (info: SpawnCreatedInfo): void => {
       const { agentId } = info
+      parentSessionId = parentOf(session, info.parentConversationId, sessionId)
       index.set(agentId, {
         sessionId,
         conversationId: info.conversationId,
@@ -270,7 +342,7 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
         type: 'sub_session_register',
         sessionId: agentId,
         parentSessionId,
-        parentToolCallId,
+        ...(parentToolCallId === undefined ? {} : { parentToolCallId }),
         subAgentName: agentType.name,
         displayName: info.displayName,
         description: info.description,
@@ -282,7 +354,7 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
       ensureTask(agentId, sessionId, info.displayName, {
         profileName: agentType.name,
         depth: info.depth,
-        parentToolCallId
+        ...(parentToolCallId === undefined ? {} : { parentToolCallId })
       })
       if (created !== agentId) {
         created = agentId
@@ -290,7 +362,7 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
         joined = deps.tasks?.join(agentId)
       }
       deps.logger?.info(
-        `${info.reattached ? 'Re-attached' : 'Spawned'} agent=${agentId} profile=${agentType.name} session=${sessionId} conversation=${info.conversationId} depth=${info.depth}`
+        `${info.reattached ? 'Re-attached' : 'Spawned'} agent=${agentId} profile=${agentType.name} session=${sessionId} conversation=${info.conversationId} depth=${info.depth}${params.hook === undefined ? '' : ` hook=${params.hook.name}`}`
       )
     }
 
@@ -311,14 +383,15 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
     try {
       raw = await session.agents.spawn(
         {
-          owner: { tool: scope.api },
+          owner: dispatch.owner,
           profile: agentType,
           prompt,
           description,
           ...(resultContract === undefined ? {} : { resultContract }),
+          ...(dispatch.hosted === undefined ? {} : { hosted: dispatch.hosted }),
           onCreated
         },
-        scope.context
+        dispatch.context
       )
     } catch (error) {
       // 子 agent 已建好之后协调器抛了（不该发生；兜底）：照样落定、照样收尾，再原样抛出
@@ -333,8 +406,7 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
       const { result, error } = raw
       return error === undefined ? { result } : { result, error }
     }
-    const aborted = scope.signal?.aborted === true || params.signal?.aborted === true
-    const verdict = settleOf(raw, aborted, soft.has(agentId))
+    const verdict = settleOf(raw, dispatch.aborted(), soft.has(agentId))
     await finish(agentId, verdict.status, verdict.outcome.result, verdict.status !== 'done')
     return verdict.outcome
   }
@@ -368,11 +440,10 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
   return {
     async runTask(params: RunTaskParams): Promise<RunTaskOutcome> {
       const { owner } = params
-      if (!('tool' in owner)) {
-        // 宿主派发（hook 的锚 / reviewer 的任务拥有者）在 P2-08 接上；在那之前如实报「还没有」
-        throw new PhasePendingError('host-dispatched agents', 2)
-      }
-      return runToolTask(params, owner.tool)
+      const dispatch =
+        'tool' in owner ? await toolDispatch(params, owner.tool) : await hostDispatch(params, owner)
+      if (!('session' in dispatch)) return dispatch
+      return run(params, dispatch)
     },
 
     async continueTask(params): Promise<void> {

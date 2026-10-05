@@ -99,6 +99,8 @@ export interface RunnerOptions {
   runTask?: RunTaskFn
   resolveAgentProfile?: HookRunnerDeps['resolveAgentProfile']
   resolveRunModel?: HookRunnerDeps['resolveRunModel']
+  /** 会话是否被中断（P2-08 PIN-07）；缺省不给 */
+  isInterrupted?: HookRunnerDeps['isInterrupted']
   env?: HookRunnerDeps['env']
   timeoutMs?: number
   /** 判定型派发的墙钟上限（缺省走 runner 的 DEFAULT_DECIDE_TIMEOUT_MS） */
@@ -153,6 +155,7 @@ export function makeRunner(opts: RunnerOptions = {}): RunnerHarness {
       opts.onRun?.(event)
     }
   }
+  if (opts.isInterrupted !== undefined) deps.isInterrupted = opts.isInterrupted
   if (opts.timeoutMs !== undefined) deps.timeoutMs = opts.timeoutMs
   if (opts.decideTimeoutMs !== undefined) deps.decideTimeoutMs = opts.decideTimeoutMs
   if (opts.logger !== false) {

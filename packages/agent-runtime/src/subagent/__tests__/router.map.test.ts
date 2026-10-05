@@ -1,12 +1,11 @@
 /**
  * 派生 agent 路由 · 会话映射与 agentId 索引（P2-05 A 段，01–07）：runTask 按会话找到协调器；子 agent 建好的那一刻
  * 广播 register、登记任务、记下索引；索引在完成与 LRU 关闭之后仍在、从不为查询打开会话；非工具拥有者在 P2-08
- * 之前以 PhasePendingError 拒绝（PIN-03）。
+ * 起交给协调器（`{anchor}` / `{task}`，宿主派发的参数随之）。
  */
 import type { JsonValue } from '@earendil-works/chord'
 import type { DurableSession } from '../../durable/durableSession'
 import { describe, expect, it, vi } from 'vitest'
-import { isPhasePendingError } from '../../errors/phasePending'
 import { backgroundContext as BG } from '../../durable/context'
 import { spawnedAgentRecordOf } from '../../durable/agentRecord'
 import { answer } from '../../durable/__tests__/support/faux'
@@ -20,6 +19,7 @@ import {
   toolParams,
   type HostR
 } from '../../durable/__tests__/support/router'
+import type { SpawnToolOwner } from '../../durable/spawn'
 import type { RunTaskParams, SubAgentManager } from '../manager'
 
 registerHostCleanup()
@@ -107,7 +107,7 @@ describe('router · mapping and the index', () => {
     const sessions: DurableSession[] = [r.session, s2]
     for (const [index, spy] of spies.entries()) {
       expect(spy).toHaveBeenCalledTimes(1)
-      const owner = spy.mock.calls[0]![0].owner.tool
+      const owner = (spy.mock.calls[0]![0].owner as SpawnToolOwner).tool
       expect(owner.taskId).toBe(await dispatchTask(sessions[index]!))
       expect(owner.conversationId).toBe(1)
     }
@@ -181,20 +181,50 @@ describe('router · mapping and the index', () => {
     expect(fc.spawnCalls).toEqual([])
   })
 
-  it('P2-05-07 non-tool owners reject with PhasePendingError(phase 2) until P2-08 (PIN-03)', async () => {
+  it('P2-05-07 (flipped by P2-08) non-tool owners reach the coordinator as {anchor} / {task} with hosted params', async () => {
     const fc = fakeSession()
     const kit = routerKit({ get: () => fc.session, peek: async () => fc.session })
     await kit.router.runTask(toolParams())
-    const before = { events: kit.events.length, tasks: kit.taskBroadcasts.length }
-    for (const owner of [{ anchor: true as const }, { task: 5 }]) {
-      const error = await kit.router.runTask(toolParams({ owner })).catch((e: unknown) => e)
-      expect(isPhasePendingError(error) && error.phase === 2).toBe(true)
+    const modelConfig = {
+      provider: 'faux',
+      model: 'faux-1',
+      capabilities: {},
+      thinkingLevel: 'low' as const
     }
-    expect(kit.events).toHaveLength(before.events)
-    expect(kit.taskBroadcasts).toHaveLength(before.tasks)
-    expect(fc.spawnCalls).toHaveLength(1)
+    for (const owner of [{ anchor: true as const }, { task: 5 }]) {
+      const outcome = await kit.router.runTask(
+        toolParams({ owner, modelConfig, hook: { name: 'auto-title', runId: 'hkr-1' } })
+      )
+      expect(outcome).toEqual({ result: 'found', conversationId: 2, agentId: 'sub-a1' })
+    }
+    expect(fc.spawnCalls.map((call) => call.owner).slice(1)).toEqual([
+      { anchor: true },
+      { task: 5 }
+    ])
+    for (const call of fc.spawnCalls.slice(1)) {
+      expect(call.hosted).toEqual({
+        model: { provider: 'faux', modelId: 'faux-1' },
+        thinkingLevel: 'low',
+        hook: 'auto-title',
+        requestId: 'hook:hkr-1'
+      })
+    }
+    expect(kit.ends()).toHaveLength(3)
     expect(await kit.router.getRuntimeInfo('sub-a1')).toBeNull()
     expect(await kit.router.getRuntimeInfo('sub-x')).toBeNull()
+  })
+
+  it('P2-08-21 a host owner on a closed session peeks (never opens); no storage → a failure text, nothing registered', async () => {
+    const fc = fakeSession()
+    const open = routerKit({ get: () => undefined, peek: async () => fc.session })
+    await open.router.runTask(toolParams({ owner: { anchor: true } }))
+    expect(open.peeks).toEqual(['s1'])
+    expect(fc.spawnCalls).toHaveLength(1)
+    const gone = routerKit({ get: () => undefined, peek: async () => undefined })
+    const outcome = await gone.router.runTask(toolParams({ sessionId: 's9', owner: { task: 3 } }))
+    expect(outcome).toEqual({ result: 'Session not found: s9', error: 'Session not found: s9' })
+    expect(gone.events).toEqual([])
+    expect(gone.taskBroadcasts).toEqual([])
   })
 
   it('P2-05-07 a tool owner is still the default path (control): one spawn call with the scope api', async () => {
@@ -203,6 +233,6 @@ describe('router · mapping and the index', () => {
     const params = toolParams()
     await kit.router.runTask(params)
     const scope = (params.owner as Extract<RunTaskParams['owner'], { tool: unknown }>).tool
-    expect(fc.spawnCalls[0]!.owner.tool).toBe(scope.api)
+    expect((fc.spawnCalls[0]!.owner as SpawnToolOwner).tool).toBe(scope.api)
   })
 })

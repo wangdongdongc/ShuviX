@@ -89,6 +89,7 @@ describe('匹配与派发', () => {
     expect(Object.keys(params).sort()).toEqual([
       'agentType',
       'description',
+      'hook',
       'modelConfig',
       'owner',
       'prompt',
@@ -96,6 +97,9 @@ describe('匹配与派发', () => {
       'signal'
     ])
     expect(params.sessionId).toBe('s1')
+    // P2-08：观察型恒为锚；hook 名进派生 agent 记录、runId 定 requestId（`hook:<runId>`，PIN-04）
+    expect(params.owner).toEqual({ anchor: true })
+    expect(params.hook).toEqual({ name: 'hk', runId: start.run.runId })
     expect(params.agentType).toBe(PROFILE)
     expect(params.description).toBe('Hook K')
     expect(params.modelConfig).toBe(MODEL)

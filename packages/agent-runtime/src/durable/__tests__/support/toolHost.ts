@@ -47,7 +47,9 @@ export interface TestToolHostOptions {
   /** 假 MCP 服务器：名字 → 工具声明 */
   mcp?: Readonly<Record<string, readonly McpToolDeclaration[]>>
   /** 每个 agent 都带的工具（按会话给，或同一份；每次解析 / 重建现读） */
-  agentTools?: readonly ToolRegistration[] | ((sessionId: string) => readonly ToolRegistration[])
+  agentTools?:
+    | readonly ToolRegistration[]
+    | ((sessionId: string, names: readonly string[]) => readonly ToolRegistration[])
   /** 解析时交回的附加工具（排在请求自带的之后） */
   extraTools?: readonly ToolRegistration[]
   /** 解析时报的沙箱钉子（缺省 false） */
@@ -174,10 +176,14 @@ export function makeTestToolHost(
     if (source === undefined) return dispatchTool()
     return typeof source === 'function' ? source(sessionId) : source
   }
-  const agentToolsOf = (sessionId: string): readonly ToolRegistration[] => {
+  /** 函数形式拿到这次解析 / 重建的名单（请求的 names / 记录的 toolNames），可以按名单筛 */
+  const agentToolsOf = (
+    sessionId: string,
+    names: readonly string[]
+  ): readonly ToolRegistration[] => {
     const source = options.agentTools
     if (source === undefined) return []
-    return typeof source === 'function' ? source(sessionId) : source
+    return typeof source === 'function' ? source(sessionId, names) : source
   }
   const host: TestToolHost = {
     options,
@@ -244,7 +250,7 @@ export function makeTestToolHost(
         ...(skills.length > 0 ? { skill: skillTool(skills) } : {}),
         skills,
         mcp,
-        tools: [...agentToolsOf(request.sessionId)],
+        tools: [...agentToolsOf(request.sessionId, request.names)],
         ...(extras === undefined ? {} : { extraTools: extras }),
         sandboxed: host.sandbox
       }
@@ -270,7 +276,7 @@ export function makeTestToolHost(
           const server = servers.get(name) ?? fakeMcpServer(name, [])
           return { server: name, tools: declarations.map((decl) => mcpTool(server, decl)) }
         }),
-        tools: [...agentToolsOf(sessionId)]
+        tools: [...agentToolsOf(sessionId, record.toolNames)]
       }
       const extras = (context.extraTools ?? []).filter(keep)
       return {

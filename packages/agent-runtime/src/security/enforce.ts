@@ -39,8 +39,16 @@ import {
   noteReviewDenied,
   reviewSuspended,
   takeReviewAllowed,
-  trackReview
+  trackReview,
+  type ReviewCall
 } from './reviewState'
+
+/** 这次调用在「已审查」标记里的身份（有 durable taskId 就按它，PIN-10） */
+function reviewCallOf(opts: EnforceOpts): ReviewCall {
+  return opts.taskId === undefined
+    ? { toolCallId: opts.toolCallId }
+    : { toolCallId: opts.toolCallId, taskId: opts.taskId }
+}
 
 /** 客体摘要（决策日志）：路径全量 / 命令与 SQL 截断 200 字符 / 其余回退 type */
 function summarizeObject(request: SecurityRequest): string {
@@ -296,7 +304,7 @@ export async function executeDecision(args: {
   if (review?.verdict.decision === 'allow') {
     noteReviewCleared(sessionId)
     // 工具卡上的「已审查」：宿主在这次调用执行完之后取走，写进工具结果
-    noteReviewAllowed(sessionId, opts.toolCallId, {
+    noteReviewAllowed(sessionId, reviewCallOf(opts), {
       risk: review.verdict.risk,
       summary: clipReviewText(review.verdict.summary, REVIEW_SUMMARY_MAX_CHARS)
     })
@@ -358,7 +366,7 @@ export async function executeDecision(args: {
   noteReviewCleared(sessionId)
   // 这次调用有人看过了：同一调用先前另一道门留下的「已审查」标记作废（那枚标记说的是「没人看过、
   // 审查员放行的」）
-  takeReviewAllowed(sessionId, opts.toolCallId)
+  takeReviewAllowed(sessionId, reviewCallOf(opts))
   if (response.kind === 'other') {
     // 人写的反馈记在安全模块这里 —— 审查员只认这份，不认会话树里那段谁都能打印的工具结果文字
     noteHumanFeedback(sessionId, askCommand, response.text)

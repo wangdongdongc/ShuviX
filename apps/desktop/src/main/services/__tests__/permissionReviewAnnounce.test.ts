@@ -126,10 +126,11 @@ function makeEvent(
   }
 }
 
-const reviewEvent = (sessionId: string, reviewing: boolean): unknown => ({
+const reviewEvent = (sessionId: string, reviewing: boolean, taskId?: number): unknown => ({
   type: 'tool_review',
   sessionId,
   toolCallId: 'tc-1',
+  ...(taskId === undefined ? {} : { taskId }),
   reviewing
 })
 
@@ -249,6 +250,47 @@ describe('reviewPermissionRequest — 「审查中」的一对广播', () => {
       reviewEvent('SUB', true),
       reviewEvent('SUB', false)
     ])
+  })
+
+  it('P2-08-31 事件带 taskId 61 → 两条广播都带 taskId（toolCallId 照旧）', async () => {
+    mocks.decide.mockResolvedValue(null)
+    await reviewPermissionRequest({ ...makeEvent(), toolCallId: 'call_0', taskId: 61 })
+    expect(mocks.broadcast.mock.calls.map(([e]) => e)).toStrictEqual([
+      { type: 'tool_review', sessionId: 'S', toolCallId: 'call_0', taskId: 61, reviewing: true },
+      { type: 'tool_review', sessionId: 'S', toolCallId: 'call_0', taskId: 61, reviewing: false }
+    ])
+  })
+
+  it('P2-08-31 两个并发的审查、都是 call_0、taskId 61 与 62 → 两对广播，各带各的 taskId', async () => {
+    const pending: Array<(value: DecideResult) => void> = []
+    mocks.decide.mockImplementation(
+      () => new Promise<DecideResult>((resolve) => pending.push(resolve))
+    )
+    const first = reviewPermissionRequest({ ...makeEvent(), toolCallId: 'call_0', taskId: 61 })
+    const second = reviewPermissionRequest({ ...makeEvent(), toolCallId: 'call_0', taskId: 62 })
+    await flush()
+    expect(pending).toHaveLength(2)
+    pending[1]!(null)
+    await second
+    pending[0]!(null)
+    await first
+    const events = mocks.broadcast.mock.calls.map(
+      ([e]) => e as { taskId?: number; reviewing: boolean }
+    )
+    expect(events.map((e) => [e.taskId, e.reviewing])).toEqual([
+      [61, true],
+      [62, true],
+      [62, false],
+      [61, false]
+    ])
+  })
+
+  it('P2-08-31 没有 taskId → 事件里没有 taskId 这个键（RV-1 的形状不变）', async () => {
+    mocks.decide.mockResolvedValue(null)
+    await reviewPermissionRequest(makeEvent())
+    for (const [event] of mocks.broadcast.mock.calls) {
+      expect('taskId' in (event as object)).toBe(false)
+    }
   })
 
   it('RV-9 传入的 signal 原样交给 decide；abort 之后 decide reject，false 照发', async () => {

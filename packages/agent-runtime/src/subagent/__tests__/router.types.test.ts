@@ -1,6 +1,6 @@
 /**
  * 派生 agent 路由 · 类型契约与删掉的东西（P2-05 G 段，46 / 49 / 50；48 在 baseTool.test.ts RT-1b，51 的源码扫描在
- * 桌面 spawnedPathGuard.test.ts）：RunTaskParams 恰九个键、旧字段一个不剩；路由没有 abortAll / destroyAll /
+ * 桌面 spawnedPathGuard.test.ts）：RunTaskParams 恰十个键（P2-08 加了 hook）、旧字段一个不剩；路由没有 abortAll / destroyAll /
  * registry；依赖里没有 createAgent / requestUserInput；包入口不再导出旧的血缘登记簿与 spawn 类型。
  */
 import { existsSync } from 'node:fs'
@@ -20,7 +20,7 @@ import type {
 const SRC = join(dirname(fileURLToPath(import.meta.url)), '../..')
 
 describe('router · type contract', () => {
-  it('P2-05-49 RunTaskParams has exactly the nine keys; the owner is tool | task | anchor', () => {
+  it('P2-05-49 RunTaskParams has exactly the ten keys (P2-08 adds hook); the owner is tool | task | anchor', () => {
     expectTypeOf<keyof RunTaskParams>().toEqualTypeOf<
       | 'sessionId'
       | 'owner'
@@ -28,6 +28,7 @@ describe('router · type contract', () => {
       | 'prompt'
       | 'description'
       | 'modelConfig'
+      | 'hook'
       | 'resultContract'
       | 'parentToolCallId'
       | 'signal'

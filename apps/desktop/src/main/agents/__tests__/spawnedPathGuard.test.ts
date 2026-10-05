@@ -68,4 +68,15 @@ describe('P2-05-51 no callers of the old spawned path', () => {
       'dispatchModelConfig'
     )
   })
+
+  it('P2-08-52 the Q16 debt is paid: permissionReview.ts and the hook runner carry no p2 marker; nothing throws PhasePendingError for host dispatch', () => {
+    for (const path of [
+      join(MAIN, 'services/permissionReview.ts'),
+      join(RUNTIME, 'hook/hookRunner.ts'),
+      join(RUNTIME, 'durable/spawn.ts')
+    ]) {
+      expect(readFileSync(path, 'utf8')).not.toContain('TODO(pi-durable p2)')
+    }
+    expect(filesContaining("'host-dispatched agents'")).toEqual([])
+  })
 })

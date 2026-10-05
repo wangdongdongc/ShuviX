@@ -17,7 +17,8 @@
  *  - **全部关闭之后封存**：退出路径上不再接受打开（拒绝并报清楚的错）。
  *  - **删除**：先关（等在途的打开），再删存储；删除期间对同一会话的打开 / 窥视排在它后面。
  *  - **每会话一个注册表**（K1）：打开时 `createRegistry(sessionId)` 造一个、装上系统提示词的段落扩展
- *    （K21），会话自己再装 `shuvix.builtin` 与按锁重建的 `shuvix.agent.<对话>`；关闭 / 删除时随会话丢弃。
+ *    （K21）与宿主派发的锚任务扩展 `shuvix.spawn`（P2-08），会话自己再装 `shuvix.builtin` 与按锁重建的
+ *    `shuvix.agent.<对话>`；关闭 / 删除时随会话丢弃。
  *    根对话 id 在每个存储里都是 1，共享注册表会让两条会话的 `shuvix.agent.1` 互相覆盖。
  *  - **driven 落定**（P2-09，`onDrivenSettled`）：每个进程每条 submission 至多报一次，记账在宿主（会话被
  *    LRU 关了再开也不重报；删除时清掉）。
@@ -32,6 +33,7 @@ import {
 } from '@earendil-works/pi-durable'
 import { SessionManager } from '../sessionManager'
 import type { RuntimeLogger } from '../types'
+import { spawnExtension } from './anchor'
 import { backgroundContext as BG, errorText } from './context'
 import { seedConversationDocs } from './docs'
 import { DurableSessionImpl, type DurableSession, type SessionCloseReason } from './durableSession'
@@ -212,6 +214,8 @@ class SessionHostImpl implements SessionHost {
       try {
         registry = (this.deps.createRegistry ?? (() => createRegistry()))(sessionId)
         for (const extension of this.promptExtensions.all) registry.install(extension)
+        // 宿主派发的锚任务（P2-08）：重开时 durable 要按名解析存储里残留的锚
+        registry.install(spawnExtension)
       } catch (error) {
         await storage.close(BG).catch(() => undefined)
         throw error

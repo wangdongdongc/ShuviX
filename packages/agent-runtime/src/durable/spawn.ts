@@ -84,6 +84,7 @@ import {
 import type { InProcessAgentType } from '../subagent/types'
 import type { RuntimeLogger } from '../types'
 import type { AgentDirectory } from './agentDirectory'
+import { SpawnAnchor } from './anchor'
 import {
   MAX_AGENT_DEPTH,
   canSpawnAt,
@@ -110,6 +111,13 @@ const GENERATION_TASK_KIND = 'pi.generation'
 /** 调用方没有模型时的错误文案（PIN-07） */
 export const NO_CALLER_MODEL_TEXT = 'No model is configured for the calling agent'
 
+/**
+ * 被中断的会话上拒绝宿主派发的文案（P2-08 PIN-07）：任何提交都会开启整个调度器、把被中断的工作续上，
+ * 而宿主派发的 agent 从不替用户「继续」。
+ */
+export const HOSTED_INTERRUPTED_TEXT =
+  'The session is interrupted; a host-dispatched agent would resume its interrupted work, so none was started'
+
 /** 深度超限的文案（沿用旧 manager，逐字） */
 export function agentDepthLimitText(max: number, callerDepth: number): string {
   return `Agent depth limit reached (max ${max}): this agent is already at depth ${callerDepth} and cannot spawn further agents. Complete the task directly instead.`
@@ -117,16 +125,42 @@ export function agentDepthLimitText(max: number, callerDepth: number): string {
 
 // ─────────────────────────── 公共类型 ───────────────────────────
 
-/**
- * 派发的拥有者：`{tool}` = 模型调派发工具（子对话由这次工具调用的任务拥有）。宿主派发的 `{task}` /
- * `{anchor}` 归 P2-08。
- */
+/** 派发的拥有者：`{tool}` = 模型调派发工具（子对话由这次工具调用的任务拥有） */
 export interface SpawnToolOwner {
   /** 派发工具这次调用的 durable API（可以是包了一层的拷贝） */
   readonly tool: ToolExecutionApi
 }
 
-export type SpawnOwner = SpawnToolOwner
+/**
+ * 宿主派发（判定型 hook：权限审查，Q16，P2-08）：子对话由**提问的那个工具任务**拥有。那个任务必须活着
+ * （不是 completing、没终结、没打中止标记），否则创建提交被 durable 拒绝 —— 什么都不建、交回错误
+ * （PIN-13，没有锚回落）。
+ */
+export interface SpawnTaskOwner {
+  readonly task: number
+}
+
+/**
+ * 宿主派发（观察型 hook：起标题；以及没有 taskId 的判定，P2-08）：同一个提交里在会话的当前对话建一个
+ * 后台锚任务（`shuvix.spawn.anchor`），子对话归它。
+ */
+export interface SpawnAnchorOwner {
+  readonly anchor: true
+}
+
+export type SpawnOwner = SpawnToolOwner | SpawnTaskOwner | SpawnAnchorOwner
+
+/** 宿主派发才读的参数（`{task}` / `{anchor}` 拥有者） */
+export interface SpawnHostedOptions {
+  /** 基准模型（hook 的运行模型：锁定时 = 锁的模型，PIN-06）；缺省根锁的模型。档案 `shuvix-model` 优先 */
+  model?: LockModel
+  /** 基准思考档位（缺省根锁的）；档案 `shuvix-thinking` 优先 */
+  thinkingLevel?: ThinkingLevel
+  /** hook 文件名（进记录的 `hook`） */
+  hook?: string
+  /** 任务提交的 requestId（PIN-04：`hook:<runId>`）；缺省 `hook:<agentId>` */
+  requestId?: string
+}
 
 /** 子 agent 刚建好（或重跑时重新挂上）的那一刻交给调用方的信息（P2-05 的路由据此登记、广播） */
 export interface SpawnCreatedInfo {
@@ -152,6 +186,8 @@ export interface SpawnParams {
    * 被拒（深度 / 没有模型）或提交之前就失败时从不调用。抛错只记警告，不影响派发本身。
    */
   onCreated?: (info: SpawnCreatedInfo) => void
+  /** 宿主派发的参数（工具派发不读） */
+  hosted?: SpawnHostedOptions
 }
 
 /**
@@ -314,12 +350,39 @@ export interface SpawnHost {
   ): readonly { id: TaskId; kind: string; abortRequested: boolean }[]
   /** 此刻有活任务的对话 */
   liveConversationIds(): ConversationId[]
+  /** 会话被中断（存储里有非辅助的 run、调度器停着）—— 宿主派发拒绝（P2-08 PIN-07） */
+  isInterrupted(): boolean
+  /** 句柄已关停 */
+  isClosed(): boolean
+  /** 会话的当前对话（锚建在它里面，P2-08 PIN-01） */
+  currentConversation(): Promise<Conversation>
   /** 会话的中止次序作用在一个子对话上（关询问窗口 → 中止前 seam → 取消询问 → 中止对话 → 重开询问） */
   stopConversation(conversationId: ConversationId): Promise<void>
   /** 起跑路径的重开询问（含 `onInputsReopened`） */
   reopenInputs(): void
   /** 一次会话调用（关停后拒绝、计入进行中） */
   op<T>(work: () => Promise<T>): Promise<T>
+}
+
+/** 驱动一次派发要用的那几样（工具派发经工具 API，宿主派发经 Harness） */
+interface DriveAccess {
+  /** 任务提交的 requestId（工具：`agent:<taskId>`；宿主：`hook:<runId>`） */
+  requestId: string
+  /** 发布 details（只有工具派发有调用槽） */
+  details?: (value: { conversationId: ConversationId; agentId: string }) => Promise<void>
+  conversation(child: ConversationId): Promise<ConversationHandle | undefined>
+  /** 宿主派发：调用方的 signal 落下时要自己中止子对话 */
+  hosted: boolean
+}
+
+/** 提交之前那几步的产物 */
+interface Prepared {
+  builtin: Extension | undefined
+  composed: ReturnType<typeof composeAgentTools>
+  promptExtensions: Extension[]
+  mcp: SpawnedAgentRecord['mcp']
+  resolved: Awaited<ReturnType<ToolHost['resolveAgentTools']>>
+  frozen: Awaited<ReturnType<typeof computeFrozenAgentPrompt>>
 }
 
 /** 一个带结果契约的子对话的捕获观察（提交发布里同步维护，PIN-10） */
@@ -355,11 +418,24 @@ export class SpawnCoordinatorImpl implements SpawnCoordinator {
       const reason = validateContractSchema(contract.schema)
       if (reason !== null) throw new Error(`invalid result contract: ${reason}`)
     }
-    const api = params.owner.tool
+    const owner = params.owner
+    // 宿主派发（P2-08）：每次一条新的子对话，从不重新挂上（PIN-04）
+    if (!('tool' in owner)) return this.createHosted(params, owner, context)
+    const api = owner.tool
     // 重跑：这次工具调用已经建过子对话（PIN-06）
     const existing = await this.discover(api, context)
     if (existing !== undefined) return this.reattach(params, existing, context)
-    return this.create(params, context)
+    return this.create(params, api, context)
+  }
+
+  /** 工具派发的驱动入口：requestId `agent:<taskId>`、details、经工具 API 拿子对话句柄 */
+  private toolAccess(api: ToolExecutionApi, context: Context): DriveAccess {
+    return {
+      requestId: `agent:${api.taskId}`,
+      details: (value) => api.details(value, context),
+      conversation: (child) => api.conversation(child, context),
+      hosted: false
+    }
   }
 
   /** 这个派发工具任务名下已建的 `tool` 派发子对话（宽松读 dispatch） */
@@ -384,9 +460,12 @@ export class SpawnCoordinatorImpl implements SpawnCoordinator {
     return undefined
   }
 
-  private async create(params: SpawnParams, context: Context): Promise<SpawnOutcome> {
+  private async create(
+    params: SpawnParams,
+    api: ToolExecutionApi,
+    context: Context
+  ): Promise<SpawnOutcome> {
     const { profile, description, resultContract: contract } = params
-    const api = params.owner.tool
     const host = this.host
     const { sessionId, logger } = host
 
@@ -412,59 +491,12 @@ export class SpawnCoordinatorImpl implements SpawnCoordinator {
     // agentId：这次派发的第一个持久步骤（PIN-13），重跑拿回同一个
     const agentId = await api.memo<string>('agentId', randomAgentId(), context)
 
-    let resolved: Awaited<ReturnType<ToolHost['resolveAgentTools']>>
-    let frozen: Awaited<ReturnType<typeof computeFrozenAgentPrompt>>
-    const extraTools = resultContractTools(contract)
-    try {
-      resolved = await host.toolHost.resolveAgentTools(
-        {
-          sessionId,
-          kind: 'spawned',
-          rootSessionId: sessionId,
-          selfSessionId: agentId,
-          agentId,
-          canSpawn,
-          profile,
-          names,
-          model: { provider: model.provider, modelId: model.modelId },
-          thinkingLevel,
-          cwd: '',
-          ...(extraTools.length > 0 ? { extraTools } : {})
-        },
-        { signal: context.abortSignal ?? new AbortController().signal }
-      )
-      frozen = await computeFrozenAgentPrompt(
-        { promptVars: host.promptVars, logger },
-        {
-          kind: 'spawned',
-          sessionId: agentId,
-          rootSessionId: sessionId,
-          cwd: '',
-          toolNames: names,
-          profile
-        }
-      )
-    } catch (error) {
-      if (context.abortSignal?.aborted) return { result: 'Aborted.', error: 'aborted' }
-      const message = errorText(error)
-      logger.warn(`session ${sessionId}: spawning agent "${profile.name}" failed: ${message}`)
-      return { result: `Failed to start agent "${profile.name}": ${message}`, error: message }
-    }
-
-    const builtin = host.registry.snapshot().extension(SHUVIX_BUILTIN_EXTENSION)
-    const composed = composeAgentTools({
-      names,
-      builtin: builtin?.tools ?? [],
-      set: resolved,
-      extraTools: resolved.extraTools
-    })
-    const promptExtensions = host.promptExtensions.select({
-      kind: 'spawned',
-      profile,
-      toolNames: names
-    })
-    const mcp: SpawnedAgentRecord['mcp'] = {}
-    for (const entry of resolved.mcp ?? []) mcp[entry.server] = [...entry.declarations]
+    const prepared = await this.prepare(
+      { profile, names, model, thinkingLevel, agentId, canSpawn, contract },
+      context
+    )
+    if ('failure' in prepared) return prepared.failure
+    const { builtin, composed, promptExtensions, mcp, resolved, frozen } = prepared
     const lockPin = host.rootLock()?.sandboxed
 
     // 一个提交：子对话 + pi.agent + 人设 + 记录
@@ -525,7 +557,214 @@ export class SpawnCoordinatorImpl implements SpawnCoordinator {
     logger.info(
       `session ${sessionId}: spawned agent=${agentId} profile=${profile.name} conversation=${child} depth=${depth}`
     )
-    return this.drive(params, record, false, context)
+    return this.drive(params, record, false, context, this.toolAccess(api, context))
+  }
+
+  /**
+   * 提交之前的那几步（工具派发与宿主派发共用）：解析工具（`canSpawn` / `agentId` / 结果契约的 `next`）→
+   * 冻结人设（变量表按 agentId、cwd 为空）→ 拼工具清单与段落扩展。失败交回结果（被中止 → `'aborted'`）。
+   */
+  private async prepare(
+    input: {
+      profile: InProcessAgentType
+      names: string[]
+      model: LockModel
+      thinkingLevel: ThinkingLevel
+      agentId: string
+      canSpawn: boolean
+      contract: ResultContract | undefined
+    },
+    context: Context
+  ): Promise<Prepared | { failure: SpawnOutcome }> {
+    const { profile, names, model, thinkingLevel, agentId, canSpawn, contract } = input
+    const host = this.host
+    const { sessionId, logger } = host
+    let resolved: Awaited<ReturnType<ToolHost['resolveAgentTools']>>
+    let frozen: Awaited<ReturnType<typeof computeFrozenAgentPrompt>>
+    const extraTools = resultContractTools(contract)
+    try {
+      resolved = await host.toolHost.resolveAgentTools(
+        {
+          sessionId,
+          kind: 'spawned',
+          rootSessionId: sessionId,
+          selfSessionId: agentId,
+          agentId,
+          canSpawn,
+          profile,
+          names,
+          model: { provider: model.provider, modelId: model.modelId },
+          thinkingLevel,
+          cwd: '',
+          ...(extraTools.length > 0 ? { extraTools } : {})
+        },
+        { signal: context.abortSignal ?? new AbortController().signal }
+      )
+      frozen = await computeFrozenAgentPrompt(
+        { promptVars: host.promptVars, logger },
+        {
+          kind: 'spawned',
+          sessionId: agentId,
+          rootSessionId: sessionId,
+          cwd: '',
+          toolNames: names,
+          profile
+        }
+      )
+    } catch (error) {
+      if (context.abortSignal?.aborted) {
+        return { failure: { result: 'Aborted.', error: 'aborted' } }
+      }
+      const message = errorText(error)
+      logger.warn(`session ${sessionId}: spawning agent "${profile.name}" failed: ${message}`)
+      return {
+        failure: { result: `Failed to start agent "${profile.name}": ${message}`, error: message }
+      }
+    }
+
+    const builtin = host.registry.snapshot().extension(SHUVIX_BUILTIN_EXTENSION)
+    const composed = composeAgentTools({
+      names,
+      builtin: builtin?.tools ?? [],
+      set: resolved,
+      extraTools: resolved.extraTools
+    })
+    const promptExtensions = host.promptExtensions.select({
+      kind: 'spawned',
+      profile,
+      toolNames: names
+    })
+    const mcp: SpawnedAgentRecord['mcp'] = {}
+    for (const entry of resolved.mcp ?? []) mcp[entry.server] = [...entry.declarations]
+    return { builtin, composed, promptExtensions, mcp, resolved, frozen }
+  }
+
+  /**
+   * 宿主派发（P2-08）：hook 派出的 agent。与工具派发同一套模型 / 工具 / 人设 / 记录，只差几条宿主规矩：
+   *  - 被中断的会话上拒绝（任何提交都会续上被中断的工作，PIN-07）；
+   *  - 深度恒为 1、`canSpawn: false`、从不被深度上限拒绝（PIN-03）；记录 `dispatch: 'hook'`、`hook` = hook 名，
+   *    父对话 = 拥有者任务所在的对话（锚 = 当前对话）；
+   *  - 一个提交（未包装的 Harness，不开启调度器）：`{anchor}` 先在当前对话建后台锚任务，`{task}` 读那个
+   *    工具任务（它必须活着，否则 durable 拒绝这个提交 —— PIN-13）；
+   *  - 每次一条新的子对话（PIN-04），requestId `hook:<runId>`；
+   *  - 调用方的 signal 落下（超时 / 中止）→ **中止子对话**再交回 `'aborted'`（PIN-05）：它不在任何会被原生
+   *    级联到的范围里（锚是后台的；工具任务的 signal 与这条 signal 不是一回事）。
+   */
+  private async createHosted(
+    params: SpawnParams,
+    owner: SpawnTaskOwner | SpawnAnchorOwner,
+    context: Context
+  ): Promise<SpawnOutcome> {
+    const { profile, description, resultContract: contract } = params
+    const hosted = params.hosted ?? {}
+    const host = this.host
+    const { sessionId, logger } = host
+    if (host.isClosed()) {
+      const text = `Session ${sessionId} is closed`
+      return { result: text, error: text }
+    }
+    if (host.isInterrupted()) {
+      logger.info(`session ${sessionId}: host dispatch of "${profile.name}" refused: interrupted`)
+      return { result: HOSTED_INTERRUPTED_TEXT, error: HOSTED_INTERRUPTED_TEXT }
+    }
+    if (context.abortSignal?.aborted) return { result: 'Aborted.', error: 'aborted' }
+
+    const lock = host.rootLock()
+    const model = (await this.profileModel(profile)) ?? hosted.model ?? lock?.model
+    if (model === undefined) return { result: NO_CALLER_MODEL_TEXT, error: NO_CALLER_MODEL_TEXT }
+    const base = hosted.thinkingLevel ?? (lock?.thinkingLevel as ThinkingLevel | undefined)
+    const thinkingLevel = resolveThinkingLevel('spawned', profile, base) ?? 'off'
+    const names = normalizeToolNames('spawned', profile.tools, undefined)
+    const agentId = randomAgentId()
+    const depth = 1
+    const canSpawn = false
+
+    const prepared = await this.prepare(
+      { profile, names, model, thinkingLevel, agentId, canSpawn, contract },
+      context
+    )
+    if ('failure' in prepared) return prepared.failure
+    const { builtin, composed, promptExtensions, mcp, resolved, frozen } = prepared
+    const lockPin = lock?.sandboxed
+
+    let record: SpawnedAgentRecord
+    try {
+      const anchorParent = 'anchor' in owner ? (await host.currentConversation()).id : undefined
+      record = await host.raw.commit(async (tx) => {
+        let ownerTaskId: TaskId
+        let parent: ConversationId
+        if ('task' in owner) {
+          // 表读先于本提交的第一次写；拥有者活不活由 durable 的创建校验裁决
+          const ownerTask = await tx.task(owner.task as TaskId)
+          if (ownerTask === undefined) throw new Error(`owner task ${owner.task} does not exist`)
+          ownerTaskId = ownerTask.id as TaskId
+          parent = ownerTask.conversationId
+        } else {
+          parent = anchorParent!
+          ownerTaskId = await tx.createTask(SpawnAnchor, null, {
+            ownership: { kind: 'conversation' },
+            conversationId: parent,
+            background: true
+          })
+        }
+        const child = await tx.createConversation({
+          ownership: { kind: 'task', taskId: ownerTaskId }
+        })
+        const extensions: Extension[] = [
+          builtin ?? { name: SHUVIX_BUILTIN_EXTENSION },
+          ...promptExtensions,
+          { name: agentExtensionName(child.id) }
+        ]
+        const built: SpawnedAgentRecord = {
+          conversationId: child.id,
+          profileName: profile.name,
+          kind: 'spawned',
+          model: { provider: model.provider, modelId: model.modelId },
+          thinkingLevel,
+          toolNames: composed.toolNames,
+          extensions: extensions.map((extension) => extension.name),
+          sandboxed: lockPin ?? resolved.sandboxed,
+          mcp,
+          skills: [...(resolved.skills ?? [])],
+          createdAt: host.now(),
+          agentId,
+          depth,
+          canSpawn,
+          dispatch: 'hook',
+          parentConversationId: parent,
+          ownerTaskId,
+          displayName: profile.displayName,
+          description,
+          ...(hosted.hook === undefined ? {} : { hook: hosted.hook }),
+          ...(contract === undefined ? {} : { resultContract: contract })
+        }
+        await writeSpawnedAgentRecord(tx, child.id, built)
+        await configure(tx, child.id, {
+          model: built.model,
+          thinkingLevel,
+          extensions,
+          tools: composed.tools,
+          instructions: null,
+          cwd: null
+        })
+        await freezePersona(tx, child.id, frozen)
+        return built
+      }, BG)
+    } catch (error) {
+      const message = errorText(error)
+      logger.warn(`session ${sessionId}: creating hook agent "${profile.name}" failed: ${message}`)
+      return { result: `Failed to start agent "${profile.name}": ${message}`, error: message }
+    }
+    const child = record.conversationId
+    host.registry.install(agentExtension(child, composed.agentTools))
+    logger.info(
+      `session ${sessionId}: host-dispatched agent=${agentId} profile=${profile.name} hook=${hosted.hook ?? ''} conversation=${child} owner=${'task' in owner ? 'task' : 'anchor'}:${record.ownerTaskId}`
+    )
+    return this.drive(params, record, false, context, {
+      requestId: hosted.requestId ?? `hook:${agentId}`,
+      conversation: (id) => host.harness.conversation(id, BG),
+      hosted: true
+    })
   }
 
   private async reattach(
@@ -546,7 +785,8 @@ export class SpawnCoordinatorImpl implements SpawnCoordinator {
       await this.abortQuietly(child)
       return { result: message, error: message, conversationId: child, agentId: record.agentId }
     }
-    return this.drive(params, record, true, context)
+    const api = (params.owner as SpawnToolOwner).tool
+    return this.drive(params, record, true, context, this.toolAccess(api, context))
   }
 
   /**
@@ -557,16 +797,16 @@ export class SpawnCoordinatorImpl implements SpawnCoordinator {
     params: SpawnParams,
     record: SpawnedAgentRecord,
     reattached: boolean,
-    context: Context
+    context: Context,
+    access: DriveAccess
   ): Promise<SpawnOutcome> {
-    const api = params.owner.tool
     const contract = record.resultContract
     const child = record.conversationId
     const ids = { conversationId: child, agentId: record.agentId }
-    const requestId = `agent:${api.taskId}`
+    const requestId = access.requestId
     let firstEntry: EntryId | undefined
     try {
-      await api.details({ conversationId: child, agentId: record.agentId }, context)
+      await access.details?.({ conversationId: child, agentId: record.agentId })
       this.notifyCreated(params, record, reattached)
       // 崩溃前已经捕获过（混批里的 next 落了、协调器还没来得及中止）：直接以它收尾
       if (reattached && contract !== undefined) {
@@ -577,7 +817,7 @@ export class SpawnCoordinatorImpl implements SpawnCoordinator {
           return capturedOutcome(captured, ids)
         }
       }
-      const handle = await api.conversation(child, context)
+      const handle = await access.conversation(child)
       if (handle === undefined) throw new Error(`conversation ${child} does not exist`)
       const content =
         contract === undefined
@@ -611,6 +851,8 @@ export class SpawnCoordinatorImpl implements SpawnCoordinator {
         .catch(() => undefined)
       if (context.abortSignal?.aborted || isClosedError(error)) {
         this.soft.delete(child)
+        // 宿主派发的子对话不在任何原生级联的范围里：调用方不再等了，就得自己停下它（PIN-05）
+        if (access.hosted && !isClosedError(error)) await this.abortQuietly(child)
         const entries = await this.entriesSince(child, firstEntry).catch(() => [])
         const captured = firstCapture(entries)
         if (captured !== undefined) return capturedOutcome(captured, ids)

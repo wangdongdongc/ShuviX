@@ -7,9 +7,9 @@
  *  - 进程内的 hook 工作照常跑；分类只在打开时动手（中止标记），状态排除在任何时候都生效。
  *  - 回归：K10/K11/K12、RC-05、R5 在旁边有辅助工作时照旧（G 段）。
  *
- * 锚任务的说明：titler 的锚任务在根对话里，子对话有活任务时它以 completing 陪着活着，会让运行状态
- * 跟着忙 —— 排除它是 P2-08 的事（PIN-12）。所以进程内看运行状态的用例要么用 ownerless 的 hook 对话
- * （分类只看 AgentStateDoc），要么先让锚跑完（`settle`）再从那之后开始数。
+ * 锚任务的说明：titler 的锚任务在根对话里，子对话有活任务时它以 completing 陪着活着。P2-01 时它会让运行
+ * 状态跟着忙，所以这里进程内看运行状态的用例用 ownerless 的 hook 对话、或先让锚跑完（`settle`）；P2-08 起
+ * 这种锚不进运行状态（PIN-02），锚拥有的同形用例在 hosted.regressions.test.ts（期望相同）。
  * 重启用例都用 SQLite、真实计时器、约 15 秒的超时。
  */
 import { Type } from '@earendil-works/pi-ai'

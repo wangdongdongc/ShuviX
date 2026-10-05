@@ -34,7 +34,8 @@
  *    **从不续跑** —— 打开时把它们活着的任务逐个打上中止标记（`harness.abortTask`，只提交标记、不开启
  *    调度器），下一次任何开启调度器的调用让它们以 aborted 收场。它们不算中断、不进运行状态镜像（侧栏
  *    不会因为在起标题而显示忙）；但在跑时照样挡着 LRU（`evictable` = 什么都没在跑），跑完时宿主据此
- *    再修剪一次（PIN-07）。
+ *    再修剪一次（PIN-07）。宿主派发的后台锚任务（`shuvix.spawn.anchor`，P2-08）在根里，但它拥有的对话全是
+ *    辅助工作时同样不算（PIN-02）；拥有 `tool` 子对话的后台任务与拥有审查员的工具任务照样算。
  *  - **派生 agent**（P2-03，`spawn.ts`）：`agents` 是这条会话的派生 agent 协调器 —— 子 agent 是派发工具任务
  *    拥有的子对话。打开时（锁重建之后、任何续跑之前）有活任务的非辅助子对话按记录重建；`destroyAgent`
  *    对任何非辅助的 run（含面板追问、只剩被中断的子 agent）都先中止，并卸掉所有 `shuvix.agent.*`；压缩
@@ -431,11 +432,13 @@ function liveTaskOf(record: {
   readonly conversationId: ConversationId
   readonly kind: string
   readonly abortRequested: boolean
+  readonly background: boolean
 }): LiveTask {
   return {
     conversationId: record.conversationId,
     kind: record.kind,
-    abortRequested: record.abortRequested
+    abortRequested: record.abortRequested,
+    background: record.background
   }
 }
 
@@ -572,6 +575,8 @@ interface LiveTask {
   readonly conversationId: ConversationId
   readonly kind: string
   readonly abortRequested: boolean
+  /** 对话拥有的后台任务（锚、后台压缩） */
+  readonly background: boolean
 }
 
 interface PendingNotice {
@@ -658,6 +663,9 @@ export class DurableSessionImpl implements DurableSession {
       rootLock: () => this.agentLock.current,
       liveTasksOf: (conversationId) => this.liveTasksOf(conversationId),
       liveConversationIds: () => [...new Set([...this.live.values()].map((t) => t.conversationId))],
+      isInterrupted: () => this.isInterrupted(),
+      isClosed: () => this.closedFlag,
+      currentConversation: () => this.currentConversation(),
       stopConversation: (conversationId) => this.stopConversation(conversationId),
       reopenInputs: () => this.reopenInputs(),
       op: (work) => this.op(work)
@@ -686,6 +694,7 @@ export class DurableSessionImpl implements DurableSession {
         conversationId: ConversationId
         kind: string
         abortRequested: boolean
+        background: boolean
       }[] = []
       for (const status of LIVE_TASK_STATUSES) {
         let cursor: Parameters<typeof tx.scanTasks>[2]
@@ -828,10 +837,19 @@ export class DurableSessionImpl implements DurableSession {
     return false
   }
 
+  /**
+   * 一个活任务算不算辅助工作：它在辅助对话里，或者它是后台任务、且它拥有的对话全是辅助工作（宿主派发的
+   * 锚，P2-08 PIN-02）。拥有审查员的工具任务不是后台任务，从不排除。
+   */
+  private isAuxiliaryTask(id: TaskId, task: LiveTask): boolean {
+    if (this.directory.isAuxiliary(task.conversationId)) return true
+    return task.background && this.directory.ownsOnlyAuxiliary(id)
+  }
+
   /** 有活着的非辅助任务 */
   private hasPrimaryWork(): boolean {
-    for (const task of this.live.values()) {
-      if (!this.directory.isAuxiliary(task.conversationId)) return true
+    for (const [id, task] of this.live) {
+      if (!this.isAuxiliaryTask(id, task)) return true
     }
     return false
   }
@@ -1779,8 +1797,8 @@ export class DurableSessionImpl implements DurableSession {
   /** 有活着的非辅助任务的对话 */
   private primaryConversationsWithWork(): ConversationId[] {
     const found = new Set<ConversationId>()
-    for (const task of this.live.values()) {
-      if (!this.directory.isAuxiliary(task.conversationId)) found.add(task.conversationId)
+    for (const [id, task] of this.live) {
+      if (!this.isAuxiliaryTask(id, task)) found.add(task.conversationId)
     }
     return [...found]
   }

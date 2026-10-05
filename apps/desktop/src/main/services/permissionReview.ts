@@ -288,18 +288,31 @@ export async function buildPermissionRequestPayload(
   }
 }
 
-/** 工具卡上的「审查中」：开始与落定（不论结论）各发一次，按 toolCallId 更新那张卡 */
-function notifyReviewing(sessionId: string, toolCallId: string, reviewing: boolean): void {
-  chatFrontendRegistry.broadcast({ type: 'tool_review', sessionId, toolCallId, reviewing })
+/**
+ * 工具卡上的「审查中」：开始与落定（不论结论）各发一次。前端按 toolCallId 找那张卡；带 durable taskId 时
+ * 一并带上（PIN-09）—— provider 的 toolCallId 会话内可能重复（根与派生 agent 都可能是 `call_0`），taskId 不会。
+ */
+function notifyReviewing(
+  sessionId: string,
+  toolCallId: string,
+  taskId: number | undefined,
+  reviewing: boolean
+): void {
+  chatFrontendRegistry.broadcast({
+    type: 'tool_review',
+    sessionId,
+    toolCallId,
+    ...(taskId === undefined ? {} : { taskId }),
+    reviewing
+  })
 }
 
 /**
  * 接缝实现：交给判定型 hook，交回最严的结论；答不出交回 null（照旧问人）。绝不抛出。
  *
- * TODO(pi-durable p2): 裁定 Q16 —— 审查员那条对话归发起询问的那次工具调用所有，按
- * (sessionId, event.taskId) 认人（`event.taskId` / `conversationId` 已经穿到这里；provider 的
- * toolCallId 会话内可能重复）。宿主派出的 agent（hook 的 runTask）落进所属会话的存储是 phase 2 的事，
- * 届时这里的「审查中」标记与审查状态（reviewState 仍按 toolCallId）一并改键。
+ * 审查员那条对话归**发起询问的那个工具任务**所有（Q16）：`event.taskId` 经 `ownerTaskId` 一路穿到路由，
+ * 按 (sessionId, taskId) 认人 —— 它随那次工具调用的中止原生级联、拖住那次调用直到审查收场。durable 调用
+ * 之外的询问点没有 taskId，审查员归一个后台锚任务。
  */
 export async function reviewPermissionRequest(
   event: PermissionRequestEvent,
@@ -320,15 +333,19 @@ export async function reviewPermissionRequest(
   }
   // 没有 hook 绑在这个埋点上就不会有审查：也就不报「审查中」，免得卡片闪一下
   const announce = reviewers.size > 0 && !!event.toolCallId
-  if (announce) notifyReviewing(subject.sessionId, event.toolCallId, true)
+  if (announce) notifyReviewing(subject.sessionId, event.toolCallId, event.taskId, true)
   try {
     const payload = await buildPermissionRequestPayload(event)
-    const decision = await hookTriggers.decide('permission.request', payload, { signal })
+    const decision = await hookTriggers.decide(
+      'permission.request',
+      payload,
+      event.taskId === undefined ? { signal } : { signal, ownerTaskId: event.taskId }
+    )
     return decision ? { verdict: decision.result, source: decision.hook } : null
   } catch (err) {
     log.warn(`permission review failed: ${err instanceof Error ? err.message : String(err)}`)
     return null
   } finally {
-    if (announce) notifyReviewing(subject.sessionId, event.toolCallId, false)
+    if (announce) notifyReviewing(subject.sessionId, event.toolCallId, event.taskId, false)
   }
 }

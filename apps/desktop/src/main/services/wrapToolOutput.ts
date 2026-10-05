@@ -123,19 +123,21 @@ export function wrapDurableTool(tool: WrappableTool, opts: WrapDurableToolOption
       }
     }
 
+    // 「已审查」标记按这次调用的 durable taskId 认（PIN-10）：toolCallId 会话内可能重复
+    const reviewCall = { toolCallId, taskId: api.taskId }
     let result: ToolExecutionResult
     try {
       // 内核已按 Q12 收口抛错（只有取消会抛到这里）
       result = await core.execute(args, api, context)
     } catch (err) {
-      takeReviewAllowed(sessionId, toolCallId)
+      takeReviewAllowed(sessionId, reviewCall)
       throw err
     }
     if (result.isError) {
-      takeReviewAllowed(sessionId, toolCallId)
+      takeReviewAllowed(sessionId, reviewCall)
       return result
     }
-    const reviewed = takeReviewAllowed(sessionId, toolCallId)
+    const reviewed = takeReviewAllowed(sessionId, reviewCall)
     if (!reviewed) return result
     return {
       ...result,
