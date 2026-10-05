@@ -3,13 +3,17 @@
  *
  *  - `buildBuiltinTools`：内置工具集（缺省为空；`scenario: 'w'` = 场景 W 的那套，darwin 有 bash、
  *    win32 有 powershell）。bash 的描述带 `sandboxed=<钉子>`，好在请求里看出沙箱钉子。
- *  - `resolveAgentTools`：名单含 `agent` → 派发工具；点了名且宿主有的技能 → 一个技能工具（描述列出
- *    技能）；`mcp:<s>` → 连假服务器（连不上就广播一条 error 并跳过，K7），工具名 `mcp__<s>__<t>`，
- *    replay unsafe，调用经 `fake.call`（掉线原地重连）。外加 `agentTools`（总在）与 `extraTools`。
- *  - `rebuildAgentTools`：只按锁记录（`lock.skills` / `lock.mcp` / `lock.toolNames`）重建，不连服务器。
+ *  - `resolveAgentTools`：派发工具按 `offersDispatchTool`（名单含 `agent`，且 root 或 `canSpawn`）；
+ *    点了名且宿主有的技能 → 一个技能工具（描述列出技能）；`mcp:<s>` → 连假服务器（连不上就广播一条
+ *    error 并跳过，K7），工具名 `mcp__<s>__<t>`，replay unsafe，调用经 `fake.call`（掉线原地重连）。
+ *    外加 `agentTools`（总在）与附加工具：请求的 `extraTools` 在前、选项的 `extraTools` 在后（PIN-12），
+ *    原样（同一对象）交回。
+ *  - `rebuildAgentTools`：只按记录（`skills` / `mcp` / `toolNames`，派生的再看 `canSpawn`）重建，
+ *    不连服务器；重建上下文的 `extraTools` 原样放进 `extraTools`（PIN-03 R）。资源按上下文的
+ *    `sessionId` 找（PIN-10）。
  *
  * 旋钮：`sandbox`（解析时报的钉子）、`failResolve` / `failRebuild`、`omitOnRebuild`（重建时故意漏掉的
- * 工具名）、`platform`。
+ * 工具名，附加工具也算）、`platform`。`rebuildContexts` 记每次重建的上下文。
  */
 import { Type } from '@earendil-works/pi-ai'
 import {
@@ -19,13 +23,16 @@ import {
 } from '@earendil-works/pi-durable'
 import type { ChatEvent } from '@shuvix/chat-protocol/events'
 import type { McpToolDeclaration } from '../../../mcpManager'
+import type { SpawnedAgentRecord } from '../../agentRecord'
 import type { LockRecord } from '../../lock'
-import type {
-  AgentToolSet,
-  AgentToolsRequest,
-  BuiltinToolsRequest,
-  ResolvedAgentTools,
-  ToolHost
+import {
+  offersDispatchTool,
+  type AgentToolSet,
+  type AgentToolsRebuildContext,
+  type AgentToolsRequest,
+  type BuiltinToolsRequest,
+  type ResolvedAgentTools,
+  type ToolHost
 } from '../../seams'
 import { fakeMcpServer, type FakeMcpServer } from './mcpFake'
 
@@ -41,7 +48,7 @@ export interface TestToolHostOptions {
   mcp?: Readonly<Record<string, readonly McpToolDeclaration[]>>
   /** 每个 agent 都带的工具（按会话给，或同一份；每次解析 / 重建现读） */
   agentTools?: readonly ToolRegistration[] | ((sessionId: string) => readonly ToolRegistration[])
-  /** 解析时交回的附加工具 */
+  /** 解析时交回的附加工具（排在请求自带的之后） */
   extraTools?: readonly ToolRegistration[]
   /** 解析时报的沙箱钉子（缺省 false） */
   sandbox?: boolean
@@ -51,7 +58,9 @@ export interface TestToolHost extends ToolHost {
   readonly options: TestToolHostOptions
   readonly builtinCalls: BuiltinToolsRequest[]
   readonly resolveCalls: AgentToolsRequest[]
-  readonly rebuildCalls: LockRecord[]
+  readonly rebuildCalls: (LockRecord | SpawnedAgentRecord)[]
+  /** 每次重建的上下文（与 rebuildCalls 一一对应） */
+  readonly rebuildContexts: AgentToolsRebuildContext[]
   /** 解析时报的沙箱钉子（可改） */
   sandbox: boolean
   platform: TestPlatform
@@ -163,6 +172,7 @@ export function makeTestToolHost(
     builtinCalls: [],
     resolveCalls: [],
     rebuildCalls: [],
+    rebuildContexts: [],
     sandbox: options.sandbox ?? false,
     platform: options.platform ?? 'darwin',
     failResolve: undefined,
@@ -212,30 +222,42 @@ export function makeTestToolHost(
           tools: declarations.map((decl) => mcpTool(server, decl))
         })
       }
+      const extras =
+        request.extraTools === undefined && options.extraTools === undefined
+          ? undefined
+          : [...(request.extraTools ?? []), ...(options.extraTools ?? [])]
       const resolved: ResolvedAgentTools = {
-        ...(request.names.includes('agent') ? { agent: dispatchTool() } : {}),
+        ...(offersDispatchTool(request) ? { agent: dispatchTool() } : {}),
         ...(skills.length > 0 ? { skill: skillTool(skills) } : {}),
         skills,
         mcp,
         tools: [...agentToolsOf(request.sessionId)],
-        ...(options.extraTools === undefined ? {} : { extraTools: options.extraTools }),
+        ...(extras === undefined ? {} : { extraTools: extras }),
         sandboxed: host.sandbox
       }
       return host.transformResolved ? host.transformResolved(resolved) : resolved
     },
-    rebuildAgentTools: (lock, { sessionId }) => {
-      host.rebuildCalls.push(lock)
+    rebuildAgentTools: (record, context) => {
+      host.rebuildCalls.push(record)
+      host.rebuildContexts.push({ ...context })
       if (host.failRebuild !== undefined) throw host.failRebuild
+      const { sessionId } = context
       const keep = (tool: ToolRegistration): boolean => !host.omitOnRebuild.has(tool.name)
+      const dispatch = offersDispatchTool({
+        kind: record.kind,
+        names: record.toolNames,
+        ...('canSpawn' in record ? { canSpawn: record.canSpawn } : {})
+      })
       const set: AgentToolSet = {
-        ...(lock.toolNames.includes('agent') ? { agent: dispatchTool() } : {}),
-        ...(lock.skills.length > 0 ? { skill: skillTool(lock.skills) } : {}),
-        mcp: Object.entries(lock.mcp).map(([name, declarations]) => {
+        ...(dispatch ? { agent: dispatchTool() } : {}),
+        ...(record.skills.length > 0 ? { skill: skillTool(record.skills) } : {}),
+        mcp: Object.entries(record.mcp).map(([name, declarations]) => {
           const server = servers.get(name) ?? fakeMcpServer(name, [])
           return { server: name, tools: declarations.map((decl) => mcpTool(server, decl)) }
         }),
         tools: [...agentToolsOf(sessionId)]
       }
+      const extras = (context.extraTools ?? []).filter(keep)
       return {
         ...(set.agent !== undefined && keep(set.agent) ? { agent: set.agent } : {}),
         ...(set.skill !== undefined && keep(set.skill) ? { skill: set.skill } : {}),
@@ -243,7 +265,8 @@ export function makeTestToolHost(
           server: entry.server,
           tools: entry.tools.filter(keep)
         })),
-        tools: (set.tools ?? []).filter(keep)
+        tools: (set.tools ?? []).filter(keep),
+        ...(extras.length > 0 ? { extraTools: extras } : {})
       }
     }
   }

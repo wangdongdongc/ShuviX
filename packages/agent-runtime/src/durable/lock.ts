@@ -67,6 +67,17 @@ export function agentExtensionName(conversationId: ConversationId): string {
 // 锁记录的类型与校验 / 序列化在 `agentRecord.ts`（与派生 agent 记录共用一个校验器）；这里原样转出
 export { lockRecordJson, parseLockRecord, type LockRecord } from './agentRecord'
 
+/**
+ * 重开时读 `SessionStateDoc.lock`：只认 root（PIN-08）。`parseLockRecord` 也认 kind `spawned`（派生 agent
+ * 记录的锁字段部分），但派生 agent 从不住在会话锁里 —— 重开时那里出现 spawned 按「写坏了」处理（K12）。
+ * 只在 `restore()` 用：进程内的提交发布（`observe`）照旧按 `parseLockRecord` 读（提示词 golden 用例
+ * 手工写的 spawned 锁靠这一点）。
+ */
+function parseSessionLock(raw: unknown): LockRecord | undefined {
+  const lock = parseLockRecord(raw)
+  return lock?.kind === 'root' ? lock : undefined
+}
+
 /** `createAgent()` 的选项 */
 export interface CreateAgentOptions {
   /** 附加工具：root 的锁拒绝（K6；派生 agent 的 `next` 等属于 phase 2） */
@@ -124,7 +135,9 @@ export interface ComposedAgentTools {
 
 /**
  * 拼工具次序（K6）：内置名按归一名单次序（只收 `builtin` 里有的）→ agent → skill → MCP 逐台逐个 →
- * 宿主其它 → 附加工具（先移除同名再追加）。
+ * 宿主其它 → 附加工具（先移除同名再追加；同名的附加工具只留最后一个）。附加工具只看 `extraTools`
+ * 参数，不读 `set.extraTools`（调用方显式传：创建时 `resolved.extraTools`，重建时 `set.extraTools`）。
+ * `agent` 只来自 `set.agent` —— 名单里有 `agent` 不会把它带回来，所以不给 `set.agent` 就足以关掉它。
  */
 export function composeAgentTools(input: {
   names: readonly string[]
@@ -135,8 +148,14 @@ export function composeAgentTools(input: {
   const builtinByName = new Map<string, ToolRegistration>()
   for (const tool of input.builtin)
     if (!builtinByName.has(tool.name)) builtinByName.set(tool.name, tool)
-  const extras = input.extraTools ?? []
-  const extraNames = new Set(extras.map((tool) => tool.name))
+  // 同名的附加工具只留最后一个（PIN-07：与 tools[] 及 durable 的「后者赢」一致，agentTools 里名字唯一）
+  const lastExtra = new Map<string, ToolRegistration>()
+  for (const tool of input.extraTools ?? []) {
+    lastExtra.delete(tool.name)
+    lastExtra.set(tool.name, tool)
+  }
+  const extras = [...lastExtra.values()]
+  const extraNames = new Set(lastExtra.keys())
   const agentTools = [
     ...agentExtensionTools(input.set).filter((tool) => !extraNames.has(tool.name)),
     ...extras
@@ -224,12 +243,13 @@ export class AgentLock {
 
   /**
    * 打开会话时、在任何续跑 / 发送之前：装内置工具（有锁按锁的沙箱钉子），按锁重建按 agent 的扩展。
-   * 锁写坏了 / 重建失败：清锁（一个提交，不续跑）并记警告；会话照样可用。从不写 `pi.agent`。
+   * 锁写坏了（含 kind 不是 root，PIN-08）/ 重建失败：清锁（一个提交，不续跑）并记警告；会话照样可用。
+   * 从不写 `pi.agent`。root 的重建上下文从不带附加工具。
    */
   async restore(): Promise<void> {
     const { sessionId, logger } = this.deps
     const raw = (await this.deps.harness.snapshot(SessionStateDoc, BG))?.lock
-    let lock = raw === undefined ? undefined : parseLockRecord(raw)
+    let lock = raw === undefined ? undefined : parseSessionLock(raw)
     if (raw !== undefined && lock === undefined) {
       logger.warn(`session ${sessionId}: the agent lock is malformed; clearing it`)
       await this.clearStoredLock()
