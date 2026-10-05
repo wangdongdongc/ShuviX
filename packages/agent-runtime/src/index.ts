@@ -183,6 +183,7 @@ export { initOp, addOp, commitOp, statusOp, unstageOp } from './git/gitOps'
 // 工具输出后处理共享内核（截断 + 经注入 SpillSink 落盘）
 export {
   processToolOutput,
+  spillLocatorOf,
   truncationDiagnostic,
   type SpillSink,
   type TruncateStrategy,
@@ -700,12 +701,8 @@ export {
 export { backgroundContext, isClosedError } from './durable/context'
 // 转写摘要（P2-14）：当前对话里人写的话 / agent 的正文 / ask 的回答 —— 自动审查与起标题的输入（只读）
 export {
-  COMPACTION_SUMMARY_PREFIX,
-  COMPACTION_SUMMARY_SUFFIX,
   digestEntries,
-  displayContentOf,
   readTranscriptDigest,
-  unwrapCompactionSummary,
   type TranscriptAskItem,
   type TranscriptAssistantItem,
   type TranscriptDigest,
@@ -713,6 +710,28 @@ export {
   type TranscriptDigestSession,
   type TranscriptUserItem
 } from './durable/transcriptDigest'
+// 界面投影（phase 3，纯函数）：活上下文 + pi.live / pi.inbox + 显示侧车 + 询问 + 运行状态 → SessionView /
+// AgentView；与转写摘要共用的显示侧车解析与压缩外壳也在这里导出
+export {
+  projectAgentView,
+  projectSessionView,
+  renderHarnessDiagnostics,
+  type AgentProjectionMeta,
+  type DisplayByEntry,
+  type QueueDisplay,
+  type SessionProjectionMeta
+} from './durable/projection/project'
+export {
+  displayContentOf,
+  displayItemOf,
+  resolveDisplayItems,
+  type DisplayItem
+} from './durable/projection/display'
+export {
+  COMPACTION_SUMMARY_PREFIX,
+  COMPACTION_SUMMARY_SUFFIX,
+  unwrapCompactionSummary
+} from './durable/projection/entryText'
 // 历史 thinking 剥离（纯函数；pi-durable 切换后暂未接线，见文件头）
 export {
   elideHistoricalThinking,

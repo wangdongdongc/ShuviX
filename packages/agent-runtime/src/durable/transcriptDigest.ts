@@ -40,27 +40,32 @@
 import type {
   AssistantMessage,
   ImageContent,
-  Message,
   TextContent,
-  ToolResultMessage,
-  UserMessage
+  ToolResultMessage
 } from '@earendil-works/pi-ai'
 import {
   AssistantEntry,
   CompactionEntry,
   ToolResultEntry,
   UserEntry,
-  type ConversationId,
   type EntryId,
-  type EntryRecord,
-  type Harness
+  type EntryRecord
 } from '@earendil-works/pi-durable'
 import { isSystemNoticeText } from '@shuvix/chat-protocol/systemNoticeContract'
 import { hasThinkingContent } from '@shuvix/chat-protocol/utils/thinking'
 import { toolResultText } from '../toolResultText'
 import { backgroundContext as BG, isClosedError } from './context'
-import { DisplayDoc } from './docs'
 import { SessionClosedError, type DurableSession } from './durableSession'
+import { resolveDisplayItems } from './projection/display'
+import { firstMessage, tsOf, unwrapCompactionSummary, userText } from './projection/entryText'
+
+// 显示侧车与压缩外壳的小工具搬到了 projection/（界面投影与本摘要共用）；这里原样再导出，旧引用不断
+export { displayContentOf } from './projection/display'
+export {
+  COMPACTION_SUMMARY_PREFIX,
+  COMPACTION_SUMMARY_SUFFIX,
+  unwrapCompactionSummary
+} from './projection/entryText'
 
 // ─────────────────────────── 公共类型 ───────────────────────────
 
@@ -105,67 +110,7 @@ export type TranscriptDigestSession = Pick<
 /** 内置 ask 工具的名字（第三方工具恒带 `mcp__` 前缀，撞不上） */
 const ASK_TOOL_NAME = 'ask'
 
-/**
- * pi 的压缩摘要外壳（pi-durable `harness/compaction.js` 的 SUMMARY_PREFIX / SUFFIX，未导出）：
- * `pi.compaction` 的 user 文本 = 前缀 + 摘要 + 后缀。
- */
-export const COMPACTION_SUMMARY_PREFIX =
-  'The conversation history before this point was compacted into the following summary:\n\n<summary>\n'
-export const COMPACTION_SUMMARY_SUFFIX = '\n</summary>'
-
 // ─────────────────────────── 纯核心 ───────────────────────────
-
-/** 不是有限数的时间戳 → 0 */
-function tsOf(message: { readonly timestamp?: unknown } | undefined): number {
-  const ts = message?.timestamp
-  return typeof ts === 'number' && Number.isFinite(ts) ? ts : 0
-}
-
-/** user 内容 → 纯文本（文本块按 '' 拼接，图片丢掉） */
-function userText(content: UserMessage['content'] | undefined): string {
-  if (typeof content === 'string') return content
-  if (!Array.isArray(content)) return ''
-  return content
-    .filter((part): part is TextContent => part?.type === 'text')
-    .map((part) => part.text ?? '')
-    .join('')
-}
-
-/** 条目的第一条模型消息（角色对不上 → undefined） */
-function firstMessage<R extends Message['role']>(
-  entry: EntryRecord,
-  role: R
-): Extract<Message, { role: R }> | undefined {
-  const message = entry.model?.[0]
-  return message?.role === role ? (message as Extract<Message, { role: R }>) : undefined
-}
-
-/** 压缩摘要去壳：前后缀都对得上才剥，否则原样交出 */
-export function unwrapCompactionSummary(text: string): string {
-  if (
-    text.length >= COMPACTION_SUMMARY_PREFIX.length + COMPACTION_SUMMARY_SUFFIX.length &&
-    text.startsWith(COMPACTION_SUMMARY_PREFIX) &&
-    text.endsWith(COMPACTION_SUMMARY_SUFFIX)
-  ) {
-    return text.slice(
-      COMPACTION_SUMMARY_PREFIX.length,
-      text.length - COMPACTION_SUMMARY_SUFFIX.length
-    )
-  }
-  return text
-}
-
-/**
- * 显示侧车（`DisplayDoc.items[requestId]`）的标记态原文；形状不对（content 不是字符串 / 没有 tokens 字典）
- * → undefined，调用方退回模型文本。判据与冻结投影的 `asInlineTokensSidecar` 相同。
- */
-export function displayContentOf(item: unknown): string | undefined {
-  if (typeof item !== 'object' || item === null) return undefined
-  const { content, tokens } = item as { content?: unknown; tokens?: unknown }
-  if (typeof content !== 'string') return undefined
-  if (typeof tokens !== 'object' || tokens === null) return undefined
-  return content
-}
 
 /** 一次还在等结果的 ask 调用：先占住它在输出里的位置（提问那条 assistant 之后、按调用次序） */
 interface PendingAsk {
@@ -294,51 +239,6 @@ function settleCall(calls: Map<string, PendingAsk | null>, message: ToolResultMe
 // ─────────────────────────── 读会话 ───────────────────────────
 
 /**
- * 显示侧车 → 它落到的条目（PIN-04）：当前对话的 `DisplayDoc`（fork 带着 fork 点时的副本，继承的前缀里
- * 那几份侧车也在）逐项按 requestId 找 submission —— submission 归它提交时所在的对话，所以在活上下文里
- * 每个出现过 `pi.user` 的对话（fork 的祖先链）里各找一次，`record.entry` 正是活上下文里的那条 user 条目
- * 才算数。没有 submission / 还没放下的 / 放下的条目不在活上下文里（压缩切点之前、别的分支）→ 忽略；
- * 侧车形状不对 → 忽略（那条条目退回模型文本）。按 requestId 找只能在提交里做：这是一个只读提交。
- */
-async function resolveDisplayTexts(
-  harness: Harness,
-  conversationId: ConversationId,
-  entries: readonly EntryRecord[]
-): Promise<Map<EntryId, string>> {
-  const resolved = new Map<EntryId, string>()
-  const doc = await harness.snapshot(DisplayDoc, conversationId, BG)
-  const items: [string, string][] = []
-  for (const [requestId, item] of Object.entries(doc?.items ?? {})) {
-    const content = displayContentOf(item)
-    if (content !== undefined) items.push([requestId, content])
-  }
-  if (items.length === 0) return resolved
-  const users = new Map<ConversationId, Set<EntryId>>()
-  for (const entry of entries) {
-    if (entry.kind !== UserEntry.kind) continue
-    let ids = users.get(entry.conversationId)
-    if (ids === undefined) {
-      ids = new Set()
-      users.set(entry.conversationId, ids)
-    }
-    ids.add(entry.id)
-  }
-  if (users.size === 0) return resolved
-  await harness.commit(async (tx) => {
-    for (const [requestId, content] of items) {
-      for (const [owner, ids] of users) {
-        const record = await tx.submissionByRequest(owner, requestId)
-        if (record?.entry !== undefined && ids.has(record.entry)) {
-          resolved.set(record.entry, content)
-          break
-        }
-      }
-    }
-  }, BG)
-  return resolved
-}
-
-/**
  * 读一条打开着的 durable 会话的转写摘要（当前对话的活上下文）。只读：不开启调度器、不建 agent、不写。
  * 句柄已关停 → `SessionClosedError`（从不悄悄重开）；其余失败原样抛出。
  */
@@ -348,7 +248,9 @@ export async function readTranscriptDigest(
   try {
     const conversation = await session.currentConversation()
     const view = await conversation.context(BG)
-    const displayTexts = await resolveDisplayTexts(session.harness, conversation.id, view.entries)
+    const displays = await resolveDisplayItems(session.harness, conversation.id, view.entries)
+    const displayTexts = new Map<EntryId, string>()
+    for (const [entryId, display] of displays) displayTexts.set(entryId, display.content)
     return { items: digestEntries(view.entries, displayTexts) }
   } catch (error) {
     if (isClosedError(error)) throw new SessionClosedError(session.sessionId)
