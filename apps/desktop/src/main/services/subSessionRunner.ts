@@ -648,11 +648,11 @@ class SubSessionRunner {
     }
 
     let blockOn: string[]
+    /** 重跑时要先续上的那几条（被中断的） */
+    let resume: string[] = []
     if (params.rerunTargets) {
       blockOn = params.rerunTargets.filter((id) => this.ownChild(parentId, id) !== null)
-      for (const id of blockOn) {
-        if (this.statusOf(id) === 'interrupted') await this.resumeChild(id)
-      }
+      resume = blockOn.filter((id) => this.statusOf(id) === 'interrupted')
     } else {
       const candidates = childId
         ? [childId]
@@ -667,9 +667,12 @@ class SubSessionRunner {
       return { kind: blocked ? 'blocked' : 'settled', results }
     }
 
+    // 先登记成「被 wait 握着」、再续上：先续上的那一条可能在后一条还在打开时就落定了 —— 那次落定要在同一轮里
+    // 交回（不通知父会话），所以握着它这件事必须早于它被续上（P2-12 K1-05）
     for (const id of targets) this.waiters.set(id, (this.waiters.get(id) ?? 0) + 1)
     let kind: 'settled' | 'timeout' | 'aborted'
     try {
+      for (const id of resume) await this.resumeChild(id)
       const settled = (): boolean => targets.every((id) => this.statusOf(id) !== 'running')
       kind = await new Promise<'settled' | 'timeout' | 'aborted'>((resolve) => {
         let done = false

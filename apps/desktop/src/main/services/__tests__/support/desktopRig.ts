@@ -460,6 +460,8 @@ export interface BootOptions {
    * 宿主），只是每次 resolve / rebuild 记下入参
    */
   spyToolHost?: boolean
+  /** 每次打开会话存储（真 `openSessionStorage`）之前记一笔（K1-02：C 只被打开一次） */
+  onOpenStorage?: (sessionId: string) => void
 }
 
 /** 真 ToolHost 收到的调用（`spyToolHost`） */
@@ -544,6 +546,18 @@ export async function bootProcess(options: BootOptions = {}): Promise<Proc> {
           return real.rebuildAgentTools(record, context)
         }
       }
+    }
+  }
+
+  if (options.onOpenStorage) {
+    const storage = await import('../../sessionStorage')
+    const record = options.onOpenStorage
+    spied = {
+      ...spied,
+      openStorage: (async (sessionId: string, ...rest: unknown[]) => {
+        record(sessionId)
+        return (storage.openSessionStorage as (...args: unknown[]) => unknown)(sessionId, ...rest)
+      }) as SessionHostDeps['openStorage']
     }
   }
 

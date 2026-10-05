@@ -582,6 +582,17 @@ export class SessionService {
     // 后台任务是会话资源：必须在下面 rm tool_results 之前杀掉，否则进程还活着写一个已删目录。
     // 放在关停运行时**之前**：run 可能正等着某个后台任务，先杀掉才不会把关停一直吊着
     killBySession(id)
+    // 父会话驱动着、此刻正在跑的那一轮：先照常中止（落定为用户停掉的 aborted），再删 —— 关停中的会话不报
+    // driven 落定，直接删的话父会话永远等不到这一轮的结果（P2-12 PIN-06：删除 = 中止，通知照常走一条）。
+    // 前台驱动的那次调用自己会收到落定，通知照旧被抑制
+    const driven = this.getAgentSession(id)
+    if (driven?.drivenRun && driven.isStreaming) {
+      try {
+        await driven.abort()
+      } catch (err) {
+        log.warn(`删除前中止被驱动的那一轮失败 session=${id}: ${err}`)
+      }
+    }
     // 再关停运行时并删掉会话存储（SessionHost 关它 —— 忙就中止、等它彻底停下 —— 再删文件；会话没开过
     // 也照样删文件），连同桌面侧的会话状态（hook 派发的 run、fileTime、决策日志、审查计数、沙箱钉子）。
     // 等它彻底停下才继续删数据 —— 否则一个还在跑的 run 会往刚被删掉的结果目录里继续写

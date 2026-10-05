@@ -420,8 +420,8 @@ describe('K5 spawned agents through the real desktop ToolHost', () => {
     const before = await submissionOf('s1', `agent:${dispatchTask}`, explore!.id)
     expect(before).toBeDefined()
 
-    rig.broadcasts.length = 0
     const p2 = await crash({ spyToolHost: true })
+    rig.broadcasts.length = 0
     const facade = await p2.sessionService.ensureAgentSession('s1')
     const spawnedRebuilds = p2.toolHostCalls.rebuild.filter((c) => c.record.kind === 'spawned')
     expect(spawnedRebuilds).toHaveLength(1)
