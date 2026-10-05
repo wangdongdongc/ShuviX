@@ -30,7 +30,11 @@ function child(path: string, key: string): string {
     : `${path}[${JSON.stringify(key)}]`
 }
 
-function check(value: unknown, path: string, ancestors: Set<object>): JsonOnlyViolation | undefined {
+function check(
+  value: unknown,
+  path: string,
+  ancestors: Set<object>
+): JsonOnlyViolation | undefined {
   if (value === null || typeof value === 'string' || typeof value === 'boolean') return undefined
   if (typeof value === 'number') {
     return Number.isFinite(value) ? undefined : { path, reason: `non-finite number ${value}` }

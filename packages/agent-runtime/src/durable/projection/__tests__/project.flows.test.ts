@@ -33,7 +33,12 @@ import type { DurableSession } from '../../durableSession'
 import { readTranscriptDigest } from '../../transcriptDigest'
 import { appendEntries, compactionDraft, userDraft } from '../../__tests__/support/digest'
 import { answer, callTool, fauxKit, held, modelError, stalled } from '../../__tests__/support/faux'
-import { makeHost, primeRoot, registerHostCleanup, type TestHost } from '../../__tests__/support/host'
+import {
+  makeHost,
+  primeRoot,
+  registerHostCleanup,
+  type TestHost
+} from '../../__tests__/support/host'
 import { allEntries } from '../../__tests__/support/transcript'
 import { sleep, waitFor, withTimeout } from '../../__tests__/support/wait'
 import { makeWorld, registerWorldCleanup } from '../../__tests__/integration/support/world'
@@ -56,10 +61,14 @@ function digestDisplayContentOf(item: unknown): string | undefined {
   return content
 }
 
-const K = (n: number) => ({
+type Tokens = Record<string, { type: string; id: string; displayText: string; payload: string }>
+const K = (n: number): Tokens => ({
   [`k${n}`]: { type: 'cmd', id: `cmd${n}`, displayText: `/cmd${n}`, payload: `PAYLOAD-K${n}` }
 })
-const D = (n: number) => ({ content: `d${n} {{shuvixInlineToken:k${n}}}`, tokens: K(n) })
+const D = (n: number): { content: string; tokens: Tokens } => ({
+  content: `d${n} {{shuvixInlineToken:k${n}}}`,
+  tokens: K(n)
+})
 
 interface ViewOptions {
   display?: boolean
@@ -135,7 +144,7 @@ describe('P3-02 · projector over real flows', () => {
       userDraft('model-n', 5)
     ])
     await session.harness.commit(async (tx) => {
-      const placed = (requestId: string, entry: EntryRecord) =>
+      const placed = (requestId: string, entry: EntryRecord): Promise<unknown> =>
         tx.createSubmission({
           conversationId: conversation.id,
           requestId,
@@ -286,7 +295,9 @@ describe('P3-02 · projector over real flows', () => {
             m.role === 'user' &&
             !(m.metadata as { isSystemNotice?: boolean } | null)?.isSystemNotice
         )
-        expect(plain.map((m) => m.content)).not.toContain(expect.stringContaining('background-task'))
+        expect(plain.map((m) => m.content)).not.toContain(
+          expect.stringContaining('background-task')
+        )
       }
     },
     TIMEOUT
@@ -335,7 +346,10 @@ describe('P3-02 · projector over real flows', () => {
   describe('P3-02-25 interrupted runs: the host closes during the backoff after two errors', () => {
     async function interruptedInBackoff(): Promise<{ t: TestHost; session: DurableSession }> {
       const first = await makeHost({
-        settingsOverrides: { retry: { enabled: true, baseDelayMs: 300 }, compaction: { enabled: false } }
+        settingsOverrides: {
+          retry: { enabled: true, baseDelayMs: 300 },
+          compaction: { enabled: false }
+        }
       })
       const original = await first.open()
       await primeRoot(original)
@@ -401,7 +415,10 @@ describe('P3-02 · projector over real flows', () => {
       await waitFor(
         async () => {
           const message = (await liveDoc(original))?.generation?.message
-          return (message?.content?.length ?? 0) > 0 && (message?.content[0] as { text?: string }).text !== ''
+          return (
+            (message?.content?.length ?? 0) > 0 &&
+            (message?.content[0] as { text?: string }).text !== ''
+          )
         },
         5000,
         'a committed partial'
@@ -441,7 +458,10 @@ describe('P3-02 · projector over real flows', () => {
         {
           ...live,
           run: { taskId, inputs: [] },
-          generation: { attempt: 1, message: { role: 'assistant', content: [{ type: 'thinking', thinking: ' \n' }] } }
+          generation: {
+            attempt: 1,
+            message: { role: 'assistant', content: [{ type: 'thinking', thinking: ' \n' }] }
+          }
         } as never,
         undefined,
         new Map(),
@@ -457,7 +477,10 @@ describe('P3-02 · projector over real flows', () => {
     'P3-02-31 real compaction: pre-head entries are gone, two compactions leave only the newest summary, the summary carries no usage or retried',
     async () => {
       const world = await makeWorld({
-        settings: { retry: { enabled: false }, compaction: { enabled: false, keepRecentTokens: 200 } },
+        settings: {
+          retry: { enabled: false },
+          compaction: { enabled: false, keepRecentTokens: 200 }
+        },
         tools: [],
         overlay: []
       })
@@ -537,7 +560,9 @@ describe('P3-02 · projector over real flows', () => {
       expect(inbox?.items.map((item) => item.mode)).toEqual(['followUp', 'steer', 'write'])
 
       const queued = await viewOf(session)
-      expect(queued.queue.map(({ mode, text, imageCount }) => ({ mode, text, imageCount }))).toEqual([
+      expect(
+        queued.queue.map(({ mode, text, imageCount }) => ({ mode, text, imageCount }))
+      ).toEqual([
         { mode: 'followUp', text: 'F later', imageCount: 0 },
         { mode: 'steer', text: 'S now', imageCount: 0 }
       ])
@@ -550,7 +575,8 @@ describe('P3-02 · projector over real flows', () => {
       await waitFor(
         async () =>
           session.runState === 'idle' &&
-          ((await session.harness.snapshot(InboxDoc, conversation.id, BG))?.items.length ?? 0) === 0,
+          ((await session.harness.snapshot(InboxDoc, conversation.id, BG))?.items.length ?? 0) ===
+            0,
         8000,
         'queue drained'
       )
@@ -559,7 +585,8 @@ describe('P3-02 · projector over real flows', () => {
       const entries = await allEntries(conversation)
       for (const text of ['F later', 'S now']) {
         const entry = entries.find(
-          (e) => e.kind === 'pi.user' && e.model?.[0]?.role === 'user' && e.model[0].content === text
+          (e) =>
+            e.kind === 'pi.user' && e.model?.[0]?.role === 'user' && e.model[0].content === text
         )
         expect(entry, text).toBeDefined()
         const message = after.messages.find((m) => m.content === text)
@@ -689,7 +716,10 @@ describe('P3-02 · projector over real flows', () => {
         first.kit.queue(fauxAssistantMessage([fauxText(`gamma ${'delta '.repeat(600)}`)]))
         void session.submitUser('go')
         await waitFor(
-          () => recorder.views.some((view) => view.live !== null && view.live.message.content.length > 0),
+          () =>
+            recorder.views.some(
+              (view) => view.live !== null && view.live.message.content.length > 0
+            ),
           5000,
           'a publication with a partial'
         )

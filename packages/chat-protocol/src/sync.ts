@@ -9,9 +9,7 @@
 export const CHAT_VIEW_SERVICE_ID = 'shuvix.chat.view'
 
 /** 同步目标：一条会话（根对话的 SessionView），或一个派生 agent（它对话的 AgentView） */
-export type SyncTarget =
-  | { kind: 'session'; sessionId: string }
-  | { kind: 'agent'; agentId: string }
+export type SyncTarget = { kind: 'session'; sessionId: string } | { kind: 'agent'; agentId: string }
 
 /** 服务端推给某个前端的一帧：哪个目标、哪个订阅、编码后的更新 */
 export interface SyncFrame<U = unknown> {

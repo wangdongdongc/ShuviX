@@ -14,7 +14,13 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { EntryRecord, ToolDiagnostic } from '@earendil-works/pi-durable'
 import type { InputRequest } from '@shuvix/chat-protocol/types/inputRequest'
-import type { AssistantMessage, ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
+import type {
+  AssistantMessage,
+  AssistantToolBlock,
+  ChatMessage
+} from '@shuvix/chat-protocol/types/chatMessage'
+import type { SessionView } from '@shuvix/chat-protocol/types/sessionView'
+import type { DisplayItem } from '../display'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import * as runtime from '../../../index'
 import { truncationDiagnostic, type ProcessToolOutputResult } from '../../../toolOutput/spill'
@@ -55,10 +61,12 @@ const assistant = (view: { messages: ChatMessage[] }, id: string): AssistantMess
   return message
 }
 
-const toolBlock = (view: { messages: ChatMessage[] }, id: string, callId: string) => {
-  const block = assistant(view, id).blocks.find(
-    (b) => b.type === 'tool' && b.toolCallId === callId
-  )
+const toolBlock = (
+  view: { messages: ChatMessage[] },
+  id: string,
+  callId: string
+): AssistantToolBlock => {
+  const block = assistant(view, id).blocks.find((b) => b.type === 'tool' && b.toolCallId === callId)
   if (block?.type !== 'tool') throw new Error(`no tool block ${callId}`)
   return block
 }
@@ -245,7 +253,11 @@ describe('P3-02 · pure projector: assistant blocks and usage', () => {
 })
 
 describe('P3-02 · pure projector: tool fill, harness strip, spill', () => {
-  const diag = (severity: ToolDiagnostic['severity'], message: string, code?: string) =>
+  const diag = (
+    severity: ToolDiagnostic['severity'],
+    message: string,
+    code?: string
+  ): ToolDiagnostic =>
     ({ severity, message, ...(code === undefined ? {} : { code }) }) as ToolDiagnostic
 
   it('P3-02-12 result fill: text, details, isError only when true, images as placeholders', () => {
@@ -260,9 +272,9 @@ describe('P3-02 · pure projector: tool fill, harness strip, spill', () => {
       result: 'ok',
       details
     })
-    expect(toolBlock(P([base, R(2, 'c1', [text('no')], { isError: true })]), '1', 'c1').isError).toBe(
-      true
-    )
+    expect(
+      toolBlock(P([base, R(2, 'c1', [text('no')], { isError: true })]), '1', 'c1').isError
+    ).toBe(true)
     const mixed = P([base, R(2, 'c1', [text('a'), IMAGE, text('b')])])
     expect(toolBlock(mixed, '1', 'c1').result).toBe(`a\n${imagePlaceholder('image/png')}\nb`)
   })
@@ -275,7 +287,9 @@ describe('P3-02 · pure projector: tool fill, harness strip, spill', () => {
         diagnostics
       })
     ])
-    expect(renderHarnessDiagnostics(diagnostics)).toBe('<harness>\n[info] M1\n[warn] M2\n</harness>')
+    expect(renderHarnessDiagnostics(diagnostics)).toBe(
+      '<harness>\n[info] M1\n[warn] M2\n</harness>'
+    )
     expect(toolBlock(view, '1', 'c1').result).toBe('preview')
   })
 
@@ -283,12 +297,24 @@ describe('P3-02 · pure projector: tool fill, harness strip, spill', () => {
     const diagnostics = [diag('info', 'M1'), diag('warn', 'M2')]
     const harness = '<harness>\n[info] M1\n[warn] M2\n</harness>'
     const cases: [string, Parameters<typeof R>[2], Parameters<typeof R>[3]][] = [
-      ['(a) other severity', [text('p'), text('<harness>\n[warn] M1\n[warn] M2\n</harness>')], { diagnostics }],
+      [
+        '(a) other severity',
+        [text('p'), text('<harness>\n[warn] M1\n[warn] M2\n</harness>')],
+        { diagnostics }
+      ],
       ['(a) trailing whitespace', [text('p'), text(`${harness}\n`)], { diagnostics }],
-      ['(a) reordered', [text('p'), text('<harness>\n[warn] M2\n[info] M1\n</harness>')], { diagnostics }],
+      [
+        '(a) reordered',
+        [text('p'), text('<harness>\n[warn] M2\n[info] M1\n</harness>')],
+        { diagnostics }
+      ],
       ['(b) no diagnostics', [text('p'), text(harness)], { diagnostics: [] }],
       ['(c) data missing', [text('p'), text(harness)], { data: null }],
-      ['(c) data malformed', [text('p'), text(harness)], { data: { diagnostics: [{ severity: 'loud', message: 'M1' }] } }],
+      [
+        '(c) data malformed',
+        [text('p'), text(harness)],
+        { data: { diagnostics: [{ severity: 'loud', message: 'M1' }] } }
+      ],
       ['(c) diagnostics not an array', [text('p'), text(harness)], { data: { diagnostics: 'M1' } }],
       ['(d) trailing image', [text('p'), text(harness), IMAGE], { diagnostics }]
     ]
@@ -341,7 +367,7 @@ describe('P3-02 · pure projector: tool fill, harness strip, spill', () => {
     const spilled = truncationDiagnostic(result(L))!
     const inMemory = truncationDiagnostic(result())!
     const piTruncated = diag('warn', 'Output truncated to 2000 lines', 'truncated')
-    const run = (diagnostics: ToolDiagnostic[], content = [text('preview')]) =>
+    const run = (diagnostics: ToolDiagnostic[], content = [text('preview')]): AssistantToolBlock =>
       toolBlock(
         P([
           A(1, [call('bash', {}, 'c1')], 0, { stopReason: 'toolUse' }),
@@ -417,7 +443,10 @@ describe('P3-02 · pure projector: retry folding', () => {
   })
 
   it('P3-02-21 live, during the backoff: nothing rendered, no live card, run.retry while busy', () => {
-    const live = { run: { taskId: 7, inputs: [9] }, generation: { attempt: 2, retry: { at: 9000, error: '503' } } }
+    const live = {
+      run: { taskId: 7, inputs: [9] },
+      generation: { attempt: 2, retry: { at: 9000, error: '503' } }
+    }
     const view = P([U(1, 'hi'), E(2, '429', 7), E(3, '503', 7)], { live, runState: 'busy' })
     expect(view.messages.map((m) => m.id)).toEqual(['1'])
     expect(view.live).toBeNull()
@@ -445,10 +474,10 @@ describe('P3-02 · pure projector: retry folding', () => {
     })
     expect('retry' in streaming.run).toBe(false)
 
-    const committed = P(
-      [E(1, '429', 7), E(2, '503', 7), A(3, [text('par')], 50, { task: 7 })],
-      { live: {}, runState: 'idle' }
-    )
+    const committed = P([E(1, '429', 7), E(2, '503', 7), A(3, [text('par')], 50, { task: 7 })], {
+      live: {},
+      runState: 'idle'
+    })
     expect(committed.live).toBeNull()
     expect(assistant(committed, '3').metadata?.retried).toEqual(
       streaming.live!.message.metadata?.retried
@@ -502,7 +531,12 @@ describe('P3-02 · pure projector: retry folding', () => {
   it('P3-02-27 overflow, the fold predicate, an empty carrier', () => {
     // (a) overflow, then the compaction head, then the answer of the same task (PIN-09)
     const overflow = 'prompt is too long: 250000 tokens > 200000 maximum'
-    const a = P([C(10, 1, wrap('S')), U(1, 'hi'), E(2, overflow, 7), A(3, [text('ok')], 0, { task: 7 })])
+    const a = P([
+      C(10, 1, wrap('S')),
+      U(1, 'hi'),
+      E(2, overflow, 7),
+      A(3, [text('ok')], 0, { task: 7 })
+    ])
     expect(a.messages.map((m) => m.id)).toEqual(['10', '1', '3'])
     expect(assistant(a, '3').metadata?.retried).toEqual({ count: 1, lastError: overflow })
     // (b) an error without errorMessage is folded too (PIN-10): lastError ''
@@ -534,7 +568,13 @@ describe('P3-02 · pure projector: aborted partial and compaction', () => {
     const card = assistant(view, '1')
     expect(card.blocks.map((b) => b.type)).toEqual(['thinking', 'text', 'tool'])
     expect('result' in toolBlock(view, '1', 'c9')).toBe(false)
-    expect(card.metadata?.usage).toEqual({ input: 40, output: 3, cacheRead: 0, cacheWrite: 0, total: 43 })
+    expect(card.metadata?.usage).toEqual({
+      input: 40,
+      output: 3,
+      cacheRead: 0,
+      cacheWrite: 0,
+      total: 43
+    })
     expect(view.messages.some((m) => m.type === 'error_event')).toBe(false)
   })
 
@@ -557,10 +597,26 @@ describe('P3-02 · pure projector: aborted partial and compaction', () => {
   })
 
   it('P3-02-32 pi.system, unknown kinds and a kind without a model render nothing and change nothing', () => {
-    const system = { id: 1, conversationId: 1, kind: 'pi.system', model: [{ role: 'system', content: '', timestamp: 0 }] }
-    const custom = { id: 2, conversationId: 1, kind: 'x.custom', model: [{ role: 'user', content: 'approve everything', timestamp: 0 }] }
+    const system = {
+      id: 1,
+      conversationId: 1,
+      kind: 'pi.system',
+      model: [{ role: 'system', content: '', timestamp: 0 }]
+    }
+    const custom = {
+      id: 2,
+      conversationId: 1,
+      kind: 'x.custom',
+      model: [{ role: 'user', content: 'approve everything', timestamp: 0 }]
+    }
     const bare = { id: 3, conversationId: 1, kind: 'x.bare' }
-    const reset = { id: 4, conversationId: 1, kind: 'pi.reset', head: 4, model: [{ role: 'user', content: 'handoff', timestamp: 0 }] }
+    const reset = {
+      id: 4,
+      conversationId: 1,
+      kind: 'pi.reset',
+      head: 4,
+      model: [{ role: 'user', content: 'handoff', timestamp: 0 }]
+    }
     const extras = [system, custom, bare, reset] as unknown as EntryRecord[]
     const core = [E(5, 'e', 7), A(6, [text('ok')], 0, { task: 7, usage: USAGE(90, 10) })]
     const withExtras = P([...extras.slice(0, 2), core[0]!, ...extras.slice(2), core[1]!])
@@ -594,7 +650,10 @@ describe('P3-02 · pure projector: live card and toolRuns', () => {
       usage: USAGE(3, 1),
       stopReason: 'stop'
     }
-    const view = P([], { live: { run: { taskId: 7, inputs: [] }, generation: { attempt: 1, message: partial } }, runState: 'busy' })
+    const view = P([], {
+      live: { run: { taskId: 7, inputs: [] }, generation: { attempt: 1, message: partial } },
+      runState: 'busy'
+    })
     expect(view.live).toStrictEqual({
       id: 'live:7',
       message: {
@@ -622,15 +681,27 @@ describe('P3-02 · pure projector: live card and toolRuns', () => {
 
   it('P3-02-35 live card edge cases', () => {
     const run = { taskId: 7, inputs: [] }
-    const message = (content: unknown[]) => ({ role: 'assistant', content, provider: 'p', model: 'm', timestamp: 1 })
+    const message = (content: unknown[]): Record<string, unknown> => ({
+      role: 'assistant',
+      content,
+      provider: 'p',
+      model: 'm',
+      timestamp: 1
+    })
     // no partialJson: a card without the argsText key
-    const plain = P([], { live: { run, generation: { attempt: 1, message: message([text('a'), call('ls', {}, 'c1')]) } } })
+    const plain = P([], {
+      live: { run, generation: { attempt: 1, message: message([text('a'), call('ls', {}, 'c1')]) } }
+    })
     expect(plain.live).not.toBeNull()
     expect('argsText' in plain.live!).toBe(false)
     // null for: generation without message, whitespace-only thinking, a partial without live.run (PIN-13)
     expect(P([], { live: { run, generation: { attempt: 1 } } }).live).toBeNull()
-    expect(P([], { live: { run, generation: { attempt: 1, message: message([thinking('\n')]) } } }).live).toBeNull()
-    expect(P([], { live: { generation: { attempt: 1, message: message([text('a')]) } } }).live).toBeNull()
+    expect(
+      P([], { live: { run, generation: { attempt: 1, message: message([thinking('\n')]) } } }).live
+    ).toBeNull()
+    expect(
+      P([], { live: { generation: { attempt: 1, message: message([text('a')]) } } }).live
+    ).toBeNull()
     // no pi.live doc at all
     const none = P([], { live: undefined, runState: 'busy' })
     expect([none.live, none.toolRuns, none.run]).toStrictEqual([null, {}, { state: 'busy' }])
@@ -659,7 +730,9 @@ describe('P3-02 · pure projector: live card and toolRuns', () => {
       c2: { status: 'pending' },
       c3: { status: 'done' }
     })
-    const dup = P([], { live: { tools: [...tools, { callId: 'c1', name: 'bash', status: 'done', entry: 13 }] } })
+    const dup = P([], {
+      live: { tools: [...tools, { callId: 'c1', name: 'bash', status: 'done', entry: 13 }] }
+    })
     expect(dup.toolRuns.c1).toStrictEqual({ status: 'done' })
   })
 })
@@ -672,22 +745,26 @@ describe('P3-02 · pure projector: run.retry and run.compacting', () => {
       compacting: { reason: 'threshold', blocking: false, attempt: 1 }
     })
     const retrying = { ...one, retry: { at: 500, error: 'x' } }
-    expect(P([], { live: { compactions: [retrying] }, runState: 'busy' }).run.compacting).toStrictEqual({
+    expect(
+      P([], { live: { compactions: [retrying] }, runState: 'busy' }).run.compacting
+    ).toStrictEqual({
       reason: 'threshold',
       blocking: false,
       attempt: 1,
       retryAt: 500
     })
     const blocking = { taskId: 6, reason: 'overflow', blocking: true, attempt: 2 }
-    expect(P([], { live: { compactions: [one, blocking] }, runState: 'busy' }).run.compacting).toStrictEqual({
+    expect(
+      P([], { live: { compactions: [one, blocking] }, runState: 'busy' }).run.compacting
+    ).toStrictEqual({
       reason: 'overflow',
       blocking: true,
       attempt: 2
     })
     const twoPlain = { ...one, taskId: 8, reason: 'manual' }
-    expect(P([], { live: { compactions: [one, twoPlain] }, runState: 'busy' }).run.compacting?.reason).toBe(
-      'threshold'
-    )
+    expect(
+      P([], { live: { compactions: [one, twoPlain] }, runState: 'busy' }).run.compacting?.reason
+    ).toBe('threshold')
   })
 
   it('P3-02-38 gating and pass-through: compacting / retry only while busy; run.state is the input', () => {
@@ -711,7 +788,15 @@ describe('P3-02 · pure projector: queue and asks', () => {
     const inbox = {
       items: [
         { id: 11, mode: 'steer', content: 'fix it' },
-        { id: 12, mode: 'write', entry: { kind: 'shuvix.notice', model: [{ role: 'user', content: 'n', timestamp: 0 }], data: { kind: 'background' } } },
+        {
+          id: 12,
+          mode: 'write',
+          entry: {
+            kind: 'shuvix.notice',
+            model: [{ role: 'user', content: 'n', timestamp: 0 }],
+            data: { kind: 'background' }
+          }
+        },
         { id: 13, mode: 'followUp', content: [text('a'), IMAGE, text('b'), IMAGE] },
         { id: 14, mode: 'steer', content: bg('t', 'done') }
       ]
@@ -730,12 +815,22 @@ describe('P3-02 · pure projector: queue and asks', () => {
     // without the map, or with a marker that has no token: the model text
     expect(P([], { inbox: sent }).queue[0]!.text).toBe('run PAYLOAD-K1 please')
     const broken = new Map([[21, display('run {{shuvixInlineToken:zz}}', K1)]])
-    expect(P([], { inbox: sent, queueDisplay: broken }).queue[0]!.text).toBe('run PAYLOAD-K1 please')
+    expect(P([], { inbox: sent, queueDisplay: broken }).queue[0]!.text).toBe(
+      'run PAYLOAD-K1 please'
+    )
   })
 
   it('P3-02-41 asks: same order, a normalized deep copy without undefined keys, unaffected by later mutation', () => {
     const asks: InputRequest[] = [
-      { id: 'a1', kind: 'ask', toolName: 'bash', createdAt: 1, command: 'rm -rf x', description: undefined, preview: undefined },
+      {
+        id: 'a1',
+        kind: 'ask',
+        toolName: 'bash',
+        createdAt: 1,
+        command: 'rm -rf x',
+        description: undefined,
+        preview: undefined
+      },
       {
         id: 'a2',
         kind: 'choice',
@@ -760,7 +855,10 @@ describe('P3-02 · pure projector: context.usedTokens', () => {
   it('P3-02-42 the last non-error assistant entry: errors, folded errors and the live partial are ignored', () => {
     const live = {
       run: { taskId: 9, inputs: [] },
-      generation: { attempt: 2, message: { role: 'assistant', content: [text('p')], usage: USAGE(5000, 10), timestamp: 0 } }
+      generation: {
+        attempt: 2,
+        message: { role: 'assistant', content: [text('p')], usage: USAGE(5000, 10), timestamp: 0 }
+      }
     }
     const view = P(
       [
@@ -778,46 +876,88 @@ describe('P3-02 · pure projector: context.usedTokens', () => {
     expect(P([U(1, 'u')]).context.usedTokens).toBeNull()
     expect(P([C(10, 1, wrap('S'))]).context.usedTokens).toBeNull()
     expect(
-      P([A(1, [text('a')], 0, { usage: USAGE(500, 5) }), A(2, [text('b')], 0, { usage: null })]).context
-        .usedTokens
+      P([A(1, [text('a')], 0, { usage: USAGE(500, 5) }), A(2, [text('b')], 0, { usage: null })])
+        .context.usedTokens
     ).toBeNull()
     expect(P([A(1, [text('a')], 0, { usage: USAGE(0, 5) })]).context.usedTokens).toBeNull()
     expect(
-      P([A(1, [text('half')], 0, { stopReason: 'aborted', usage: USAGE(321, 4) })]).context.usedTokens
+      P([A(1, [text('half')], 0, { stopReason: 'aborted', usage: USAGE(321, 4) })]).context
+        .usedTokens
     ).toBe(321)
   })
 })
 
 describe('P3-02 · pure projector: purity, determinism, JSON, envelope', () => {
   /** 覆盖几乎每条规则的输入 */
-  function richInputs() {
+  interface RichInputs {
+    entries: EntryRecord[]
+    live: Record<string, unknown>
+    inbox: Record<string, unknown>
+    displayMap: Map<number, DisplayItem>
+    asks: InputRequest[]
+  }
+
+  function richInputs(): RichInputs {
     const entries = [
       C(10, 1, wrap('S'), 1),
       U(1, [text('run PAYLOAD please'), IMAGE], 2),
       E(2, '503', 7),
-      A(3, [thinking('t'), text('a'), call('bash', { command: 'ls', nested: { deep: [1, 2] } }, 'c1')], 3, {
-        stopReason: 'toolUse',
-        task: 7,
-        images: [{ data: 'AAAA', mimeType: 'image/png' }]
+      A(
+        3,
+        [thinking('t'), text('a'), call('bash', { command: 'ls', nested: { deep: [1, 2] } }, 'c1')],
+        3,
+        {
+          stopReason: 'toolUse',
+          task: 7,
+          images: [{ data: 'AAAA', mimeType: 'image/png' }]
+        }
+      ),
+      R(4, 'c1', [text('out')], {
+        details: { type: 'bash', exitCode: 0, truncated: false, cwd: '/w' }
       }),
-      R(4, 'c1', [text('out')], { details: { type: 'bash', exitCode: 0, truncated: false, cwd: '/w' } }),
       N(5, bg('t', 'done'))
     ]
     const live = {
       run: { taskId: 7, inputs: [1] },
-      generation: { attempt: 3, message: { role: 'assistant', content: [call('write', { path: 'p' }, 'c2')], provider: 'p', model: 'm', timestamp: 4 } },
-      tools: [{ callId: 'c2', name: 'write', status: 'running', output: 'x', details: { type: 'write', diff: '@@' } }],
+      generation: {
+        attempt: 3,
+        message: {
+          role: 'assistant',
+          content: [call('write', { path: 'p' }, 'c2')],
+          provider: 'p',
+          model: 'm',
+          timestamp: 4
+        }
+      },
+      tools: [
+        {
+          callId: 'c2',
+          name: 'write',
+          status: 'running',
+          output: 'x',
+          details: { type: 'write', diff: '@@' }
+        }
+      ],
       compactions: [{ taskId: 9, reason: 'threshold', blocking: false, attempt: 1 }]
     }
     const inbox = { items: [{ id: 30, mode: 'steer', content: [text('more'), IMAGE] }] }
-    const displayMap = new Map([[1, display('run {{shuvixInlineToken:k1}} please', structuredClone(K1))]])
+    const displayMap = new Map([
+      [1, display('run {{shuvixInlineToken:k1}} please', structuredClone(K1))]
+    ])
     const asks: InputRequest[] = [
-      { id: 'a', kind: 'ask', toolName: 'write', createdAt: 1, command: 'w', preview: { kind: 'diff', path: 'p', diff: '@@' } }
+      {
+        id: 'a',
+        kind: 'ask',
+        toolName: 'write',
+        createdAt: 1,
+        command: 'w',
+        preview: { kind: 'diff', path: 'p', diff: '@@' }
+      }
     ]
     return { entries, live, inbox, displayMap, asks }
   }
 
-  const project = (inputs: ReturnType<typeof richInputs>) =>
+  const project = (inputs: RichInputs): SessionView =>
     projectSessionView(
       META,
       inputs.entries,
@@ -844,7 +984,13 @@ describe('P3-02 · pure projector: purity, determinism, JSON, envelope', () => {
     const inputs = richInputs()
     const before = structuredClone({ ...inputs, displayMap: [...inputs.displayMap] })
     const view = expectJsonView(project(inputs))
-    const inputObjects = objectsOf([inputs.entries, inputs.live, inputs.inbox, [...inputs.displayMap.values()], inputs.asks])
+    const inputObjects = objectsOf([
+      inputs.entries,
+      inputs.live,
+      inputs.inbox,
+      [...inputs.displayMap.values()],
+      inputs.asks
+    ])
     for (const object of objectsOf(view)) expect(inputObjects.has(object)).toBe(false)
 
     const card = assistant(view, '3')
@@ -853,7 +999,9 @@ describe('P3-02 · pure projector: purity, determinism, JSON, envelope', () => {
     ;(tool.details as { cwd: string }).cwd = '/elsewhere'
     card.metadata!.images![0]!.data = 'ZZZZ'
     const user = view.messages.find((m) => m.id === '1')!
-    ;(user.metadata as { inlineTokens: Record<string, { payload: string }> }).inlineTokens.k1!.payload = 'X'
+    ;(
+      user.metadata as { inlineTokens: Record<string, { payload: string }> }
+    ).inlineTokens.k1!.payload = 'X'
     ;(user.metadata as { images: { data: string }[] }).images[0]!.data = 'Y'
     ;(view.asks[0] as { command: string }).command = 'changed'
     ;(view.toolRuns.c2!.details as { diff: string }).diff = 'changed'
@@ -875,7 +1023,11 @@ describe('P3-02 · pure projector: purity, determinism, JSON, envelope', () => {
 
   it('P3-02-50 the envelope: v, identity from meta, durable capabilities (PIN-02), ids are String(entryId), fork-prefix ids kept', () => {
     const view = P(
-      [U(3, 'from the parent', 1, 1), A(4, [text('a')], 2, { conversationId: 1 }), U(9, 'in the fork', 3, 5)],
+      [
+        U(3, 'from the parent', 1, 1),
+        A(4, [text('a')], 2, { conversationId: 1 }),
+        U(9, 'in the fork', 3, 5)
+      ],
       { meta: { sessionId: 'sx', conversationId: 5 } }
     )
     expect(view.v).toBe(1)
@@ -887,24 +1039,66 @@ describe('P3-02 · pure projector: purity, determinism, JSON, envelope', () => {
     expect(new Set(view.messages.map((m) => m.id)).size).toBe(view.messages.length)
     expect(view.messages.every((m) => m.sessionId === 'sx')).toBe(true)
     expect(Object.keys(view).sort()).toEqual(
-      ['v', 'sessionId', 'source', 'capabilities', 'conversationId', 'messages', 'live', 'toolRuns', 'run', 'queue', 'asks', 'context'].sort()
+      [
+        'v',
+        'sessionId',
+        'source',
+        'capabilities',
+        'conversationId',
+        'messages',
+        'live',
+        'toolRuns',
+        'run',
+        'queue',
+        'asks',
+        'context'
+      ].sort()
     )
   })
 
   it('P3-02-51 AgentView: the same messages / live / toolRuns / run / context; exactly the PIN-24 keys', () => {
-    const partial = { role: 'assistant', content: [text('par')], provider: 'p', model: 'm', timestamp: 50 }
+    const partial = {
+      role: 'assistant',
+      content: [text('par')],
+      provider: 'p',
+      model: 'm',
+      timestamp: 50
+    }
     const tools = [{ callId: 'c1', name: 'bash', status: 'running', output: 'l1\n' }]
-    const live = { run: { taskId: 7, inputs: [9] }, generation: { attempt: 3, message: partial }, tools }
+    const live = {
+      run: { taskId: 7, inputs: [9] },
+      generation: { attempt: 3, message: partial },
+      tools
+    }
     const entries = [E(1, '429', 7), E(2, '503', 7)]
     const session = P(entries, { live, runState: 'busy' })
-    const agent = PA(entries, { live, runState: 'busy', meta: { sessionId: SID, conversationId: 4 } })
+    const agent = PA(entries, {
+      live,
+      runState: 'busy',
+      meta: { sessionId: SID, conversationId: 4 }
+    })
     for (const key of ['messages', 'live', 'toolRuns', 'run', 'context'] as const) {
       expect(agent[key]).toEqual(session[key])
     }
     expect(Object.keys(agent).sort()).toEqual(
-      ['v', 'agentId', 'sessionId', 'conversationId', 'messages', 'live', 'toolRuns', 'run', 'context'].sort()
+      [
+        'v',
+        'agentId',
+        'sessionId',
+        'conversationId',
+        'messages',
+        'live',
+        'toolRuns',
+        'run',
+        'context'
+      ].sort()
     )
-    expect([agent.v, agent.agentId, agent.sessionId, agent.conversationId]).toEqual([1, 'a1', SID, 4])
+    expect([agent.v, agent.agentId, agent.sessionId, agent.conversationId]).toEqual([
+      1,
+      'a1',
+      SID,
+      4
+    ])
     expect(projectAgentView).toBe(runtime.projectAgentView)
   })
 
@@ -939,7 +1133,11 @@ describe('P3-02 · pure projector: purity, determinism, JSON, envelope', () => {
   it('P3-02-49 JSON-only output: every view produced in this file went through the shared check', () => {
     // P() / PA() route every output through expectJsonView (strict JSON + a lossless JSON round trip)
     expect(checked.views).toBeGreaterThan(50)
-    const view = P(richInputs().entries, { live: richInputs().live, inbox: richInputs().inbox, runState: 'busy' })
+    const view = P(richInputs().entries, {
+      live: richInputs().live,
+      inbox: richInputs().inbox,
+      runState: 'busy'
+    })
     expect(JSON.parse(JSON.stringify(view))).toStrictEqual(view)
   })
 })

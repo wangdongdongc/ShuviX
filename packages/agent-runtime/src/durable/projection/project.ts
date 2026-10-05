@@ -294,9 +294,7 @@ function projectCore(
         const images = imagesOf(message.content)
         const content = resolved !== undefined ? resolved.content : userText(message.content)
         const tokens =
-          resolved !== undefined
-            ? jsonCopy<Record<string, never>>(resolved.tokens)
-            : undefined
+          resolved !== undefined ? jsonCopy<Record<string, never>>(resolved.tokens) : undefined
         const notice = resolved === undefined && isSystemNoticeText(content)
         messages.push({
           id,

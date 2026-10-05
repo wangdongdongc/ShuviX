@@ -101,7 +101,9 @@ function convert(context: readonly HarnessV3Entry[]): Converted {
         if (entry.customType === INLINE_TOKENS_CUSTOM_TYPE) {
           const data = entry.data as { content?: unknown; tokens?: unknown }
           pendingInline =
-            typeof data?.content === 'string' && typeof data.tokens === 'object' && data.tokens !== null
+            typeof data?.content === 'string' &&
+            typeof data.tokens === 'object' &&
+            data.tokens !== null
               ? ({ content: data.content, tokens: data.tokens } as DisplayItem)
               : null
           continue
@@ -124,7 +126,9 @@ function convert(context: readonly HarnessV3Entry[]): Converted {
         push({
           kind: 'pi.compaction',
           head: nextId + 1,
-          model: [{ role: 'user', content: [{ type: 'text', text: wrap(entry.summary) }], timestamp: ts }],
+          model: [
+            { role: 'user', content: [{ type: 'text', text: wrap(entry.summary) }], timestamp: ts }
+          ],
           data: { reason: 'threshold' }
         })
         continue
@@ -163,15 +167,17 @@ function convert(context: readonly HarnessV3Entry[]): Converted {
 
 /** 归一化：过 JSON，id 换成位置，去掉 createdAt，user / 压缩摘要去掉 model / provider */
 function normalize(messages: readonly ChatMessage[]): unknown[] {
-  return (JSON.parse(JSON.stringify(messages)) as Record<string, unknown>[]).map((message, index) => {
-    const { createdAt: _createdAt, id: _id, ...rest } = message
-    const metadata = rest.metadata as { isCompactionSummary?: boolean } | null
-    if (rest.role === 'user' || metadata?.isCompactionSummary === true) {
-      delete rest.model
-      delete rest.provider
+  return (JSON.parse(JSON.stringify(messages)) as Record<string, unknown>[]).map(
+    (message, index) => {
+      const { createdAt: _createdAt, id: _id, ...rest } = message
+      const metadata = rest.metadata as { isCompactionSummary?: boolean } | null
+      if (rest.role === 'user' || metadata?.isCompactionSummary === true) {
+        delete rest.model
+        delete rest.provider
+      }
+      return { at: index, ...rest }
     }
-    return { at: index, ...rest }
-  })
+  )
 }
 
 function legacyOf(context: readonly HarnessV3Entry[], sessionId: string): ChatMessage[] {
@@ -187,9 +193,17 @@ function durableOf(context: readonly HarnessV3Entry[], sessionId: string): ChatM
 
 let serial = 0
 const TS = '2026-10-05T00:00:00.000Z'
-const base = () => ({ id: `e${++serial}`, parentId: null, timestamp: TS })
+const base = (): { id: string; parentId: null; timestamp: string } => ({
+  id: `e${++serial}`,
+  parentId: null,
+  timestamp: TS
+})
 const lUser = (content: unknown): HarnessV3Entry =>
-  ({ ...base(), type: 'message', message: { role: 'user', content, timestamp: 1 } }) as HarnessV3Entry
+  ({
+    ...base(),
+    type: 'message',
+    message: { role: 'user', content, timestamp: 1 }
+  }) as HarnessV3Entry
 const lAssistant = (content: unknown[], extra: Record<string, unknown> = {}): HarnessV3Entry =>
   ({
     ...base(),
@@ -221,7 +235,12 @@ const lResult = (toolCallId: string, text: string, isError = false): HarnessV3En
   }) as HarnessV3Entry
 const lCustom = (customType: string, data: unknown): HarnessV3Entry =>
   ({ ...base(), type: 'custom', customType, data }) as HarnessV3Entry
-const lCall = (id: string) => ({ type: 'toolCall', id, name: 'ls', arguments: { path: '.' } })
+const lCall = (id: string): Record<string, unknown> => ({
+  type: 'toolCall',
+  id,
+  name: 'ls',
+  arguments: { path: '.' }
+})
 const IMG = { type: 'image', data: 'iVBORw0KGgo=', mimeType: 'image/png' }
 
 function expectEquivalent(context: HarnessV3Entry[]): void {
@@ -254,7 +273,8 @@ describe('P3-02-44 · golden parity with the legacy fixtures', () => {
     const removedCount = all.reduce((n, f) => n + convert(f.contextEntries).removed.size, 0)
     expect(removedCount).toBeGreaterThan(0)
     const messages = all.flatMap((f) => f.messages)
-    const meta = (m: ChatMessage) => (m.metadata ?? {}) as Record<string, unknown>
+    const meta = (m: ChatMessage): Record<string, unknown> =>
+      (m.metadata ?? {}) as Record<string, unknown>
     expect(messages.some((m) => 'inlineTokens' in meta(m))).toBe(true)
     expect(messages.some((m) => meta(m).isSystemNotice === true)).toBe(true)
     expect(messages.some((m) => meta(m).isCompactionSummary === true)).toBe(true)
@@ -288,7 +308,10 @@ describe('P3-02-45 · per-rule equivalence and intended differences', () => {
   it('whitespace-thinking drop and empty-card drop', () => {
     expectEquivalent([
       lUser('hi'),
-      lAssistant([{ type: 'thinking', thinking: '\n' }, { type: 'text', text: 'a' }]),
+      lAssistant([
+        { type: 'thinking', thinking: '\n' },
+        { type: 'text', text: 'a' }
+      ]),
       lUser('again'),
       lAssistant([{ type: 'thinking', thinking: '  ' }], { stopReason: 'aborted' }),
       lUser('third'),
@@ -346,7 +369,9 @@ describe('P3-02-45 · per-rule equivalence and intended differences', () => {
       ['text', 'hi', {}],
       ['error_event', '503 b', { retried: { count: 1, lastError: '503 a' } }]
     ])
-    expect(legacyOf(context.slice(0, 3), 's').filter((m) => m.type === 'error_event')).toHaveLength(2)
+    expect(legacyOf(context.slice(0, 3), 's').filter((m) => m.type === 'error_event')).toHaveLength(
+      2
+    )
   })
 
   it('intended difference: instruction injection has no durable counterpart', () => {

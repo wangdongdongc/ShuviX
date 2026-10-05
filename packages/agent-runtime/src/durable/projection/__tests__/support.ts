@@ -11,11 +11,7 @@ import type {
   ToolDiagnostic
 } from '@earendil-works/pi-durable'
 import type { InputRequest } from '@shuvix/chat-protocol/types/inputRequest'
-import type {
-  AgentView,
-  RunViewState,
-  SessionView
-} from '@shuvix/chat-protocol/types/sessionView'
+import type { AgentView, RunViewState, SessionView } from '@shuvix/chat-protocol/types/sessionView'
 import { isJsonOnly } from '@shuvix/chat-protocol/utils/jsonOnly'
 import { expect } from 'vitest'
 import type { DisplayItem } from '../display'
@@ -46,7 +42,16 @@ export const call = (name: string, args: JsonObject, id: string): ToolCall => ({
   arguments: args
 })
 
-export const USAGE = (input: number, output: number, totalTokens = input + output) => ({
+export interface TestUsage {
+  input: number
+  output: number
+  cacheRead: number
+  cacheWrite: number
+  totalTokens: number
+  cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number }
+}
+
+export const USAGE = (input: number, output: number, totalTokens = input + output): TestUsage => ({
   input,
   output,
   cacheRead: 0,
@@ -76,7 +81,7 @@ export interface AssistantOptions {
   stopReason?: 'stop' | 'length' | 'toolUse' | 'error' | 'aborted'
   errorMessage?: string
   task?: number
-  usage?: ReturnType<typeof USAGE> | null
+  usage?: TestUsage | null
   provider?: string
   model?: string
   images?: unknown
@@ -137,7 +142,8 @@ export function R(
   content: (TextContent | ImageContent)[],
   options: ResultOptions = {}
 ): EntryRecord {
-  const data = options.data === undefined ? { diagnostics: options.diagnostics ?? [] } : options.data
+  const data =
+    options.data === undefined ? { diagnostics: options.diagnostics ?? [] } : options.data
   return record({
     id,
     conversationId: 1,
@@ -257,7 +263,8 @@ export function PA(
 export function deepFreeze<T>(value: T): T {
   if (typeof value === 'object' && value !== null && !Object.isFrozen(value)) {
     Object.freeze(value)
-    for (const key of Reflect.ownKeys(value)) deepFreeze((value as Record<PropertyKey, unknown>)[key])
+    for (const key of Reflect.ownKeys(value))
+      deepFreeze((value as Record<PropertyKey, unknown>)[key])
   }
   return value
 }

@@ -148,7 +148,11 @@ function fullView(): SessionView {
     ],
     live,
     toolRuns: {
-      c1: { status: 'running', output: 'l1\n', details: { type: 'bash', exitCode: 0, truncated: false } },
+      c1: {
+        status: 'running',
+        output: 'l1\n',
+        details: { type: 'bash', exitCode: 0, truncated: false }
+      },
       c2: { status: 'pending' },
       c3: { status: 'done' }
     },
