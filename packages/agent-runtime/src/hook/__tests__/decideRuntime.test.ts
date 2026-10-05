@@ -47,7 +47,10 @@ const V: PermissionVerdict = {
   reason: 'The user asked for it'
 }
 
-function next(value: Record<string, unknown> = { ...V }, id = 'call-next'): ReturnType<typeof callTool> {
+function next(
+  value: Record<string, unknown> = { ...V },
+  id = 'call-next'
+): ReturnType<typeof callTool> {
   return callTool('next', value as never, id)
 }
 

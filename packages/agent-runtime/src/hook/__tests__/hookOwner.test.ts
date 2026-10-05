@@ -33,7 +33,11 @@ describe('P2-08-50 hook runner · owners', () => {
     expect(h.runTask).toHaveBeenCalledTimes(2)
     expect(h.runTask.mock.calls.map(([params]) => params.owner)).toEqual([{ task: 9 }, { task: 9 }])
     const runIds = h.starts().map((start) => start.run.runId)
-    expect(h.runTask.mock.calls.map(([params]) => params.hook).sort((x, y) => x!.name.localeCompare(y!.name))).toEqual([
+    expect(
+      h.runTask.mock.calls
+        .map(([params]) => params.hook)
+        .sort((x, y) => x!.name.localeCompare(y!.name))
+    ).toEqual([
       { name: 'a', runId: expect.any(String) },
       { name: 'b', runId: expect.any(String) }
     ])

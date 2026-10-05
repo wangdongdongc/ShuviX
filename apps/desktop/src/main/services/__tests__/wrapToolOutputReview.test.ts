@@ -278,7 +278,8 @@ describe('wrapToolOutput — 审查放行的调用在结果上留「已审查」
   it('P2-08-32 同一个 provider id（call_0）的两次调用：根的 task 61 被放行后还在跑，子的 task 62（人批准）先跑完 → 子的结果没有标记，61 的有；人的回答只清自己那个 task 的标记', async () => {
     const review = reviewerOf(answer(verdict('allow', 'high', 'root call')), null)
     const { security, requestUserInput } = makeSecurity({ review })
-    const gate = Promise.withResolvers<void>()
+    let release!: () => void
+    const gate = { promise: new Promise<void>((resolve) => (release = resolve)) }
     const { tool, execute } = makeTool(undefined)
     // 第一次执行（task 61）扣住，第二次（task 62）立刻跑完
     execute.mockImplementationOnce(async () => {
@@ -299,12 +300,11 @@ describe('wrapToolOutput — 审查放行的调用在结果上留「已审查」
     })
     expect(requestUserInput).toHaveBeenCalledTimes(1)
     expect(child.result.details).toBeUndefined()
-    gate.resolve()
+    release()
     expect((await root).result.details).toStrictEqual({
       shuvixReview: { risk: 'high', summary: 'root call' }
     })
   })
-
 
   it('W-R8 工具 execute 抛错（没有审查）→ isError 结果、文字即原错误（原为 reject 原错误，裁定 Q12）', async () => {
     const { security } = makeSecurity({})

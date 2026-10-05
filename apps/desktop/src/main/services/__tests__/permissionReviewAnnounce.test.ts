@@ -274,7 +274,9 @@ describe('reviewPermissionRequest — 「审查中」的一对广播', () => {
     await second
     pending[0]!(null)
     await first
-    const events = mocks.broadcast.mock.calls.map(([e]) => e as { taskId?: number; reviewing: boolean })
+    const events = mocks.broadcast.mock.calls.map(
+      ([e]) => e as { taskId?: number; reviewing: boolean }
+    )
     expect(events.map((e) => [e.taskId, e.reviewing])).toEqual([
       [61, true],
       [62, true],

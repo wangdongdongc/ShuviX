@@ -46,14 +46,7 @@ import type { FauxKit } from './faux'
 import { makeHost, primeRoot, type TestHost, type TestHostOptions } from './host'
 import { routerKit, type RouterKit } from './router'
 import { W_NOW, wKit } from './scenario'
-import {
-  configD,
-  dispatch,
-  fakeRpm,
-  probeTool,
-  TEST_SPAWN_EXTENSION,
-  type FakeRpm
-} from './spawn'
+import { configD, dispatch, fakeRpm, probeTool, TEST_SPAWN_EXTENSION, type FakeRpm } from './spawn'
 import { messageText } from './transcript'
 
 // ─────────────────────────── 档案与 hook ───────────────────────────
@@ -336,9 +329,7 @@ export async function hookRig(options: HookRigOptions = {}): Promise<HookRig> {
         error: (msg) => logs.push({ level: 'warn', msg })
       },
       ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
-      ...(options.decideTimeoutMs === undefined
-        ? {}
-        : { decideTimeoutMs: options.decideTimeoutMs })
+      ...(options.decideTimeoutMs === undefined ? {} : { decideTimeoutMs: options.decideTimeoutMs })
     }
     const runner = createHookRunner(deps)
     const built: HookRig = {
@@ -436,4 +427,3 @@ export async function reviewerOf(
     return page.items.map((record) => record.id)
   }, BG)
 }
-

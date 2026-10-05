@@ -514,7 +514,9 @@ export function hookRunModel(sessionId: string): Promise<HookRunModel> {
       const config = await sessionService.resolveRunConfig(sessionId)
       if (!config) return null
       return {
-        model: config.model ? { provider: config.model.provider, modelId: config.model.model } : null,
+        model: config.model
+          ? { provider: config.model.provider, modelId: config.model.model }
+          : null,
         capabilities: config.model?.capabilities ?? {},
         thinkingLevel: config.thinkingLevel as ThinkingLevel
       }

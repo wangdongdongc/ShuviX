@@ -47,7 +47,10 @@ async function hookConversations(session: DurableSession): Promise<ConversationI
 }
 
 async function conversationCount(session: DurableSession): Promise<number> {
-  return session.harness.commit(async (tx) => (await tx.scanConversations({}, 256)).items.length, BG)
+  return session.harness.commit(
+    async (tx) => (await tx.scanConversations({}, 256)).items.length,
+    BG
+  )
 }
 
 describe('P2-08 D · hook models (PIN-06)', () => {

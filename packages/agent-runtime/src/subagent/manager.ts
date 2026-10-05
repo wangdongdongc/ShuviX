@@ -309,7 +309,8 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
       session,
       owner: 'task' in owner ? { task: owner.task } : { anchor: true },
       // 宿主的取消信号绑进 Context：落下时协调器的等待被打断、随即中止子对话（PIN-05）
-      context: signal === undefined ? BACKGROUND_CONTEXT : withAbortSignal(signal, BACKGROUND_CONTEXT),
+      context:
+        signal === undefined ? BACKGROUND_CONTEXT : withAbortSignal(signal, BACKGROUND_CONTEXT),
       hosted,
       aborted: () => signal?.aborted === true
     }

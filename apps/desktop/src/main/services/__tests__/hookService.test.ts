@@ -68,7 +68,13 @@ const mocks = vi.hoisted(() => ({
   getProfile: vi.fn(),
   selection: vi.fn(),
   /** 打开着的会话（按 id）：锁 + 根对话此刻的思考档位（hook 模型锁优先，PIN-06） */
-  sessions: new Map<string, { lock?: { model: { provider: string; modelId: string }; thinkingLevel?: string }; live?: string }>(),
+  sessions: new Map<
+    string,
+    {
+      lock?: { model: { provider: string; modelId: string }; thinkingLevel?: string }
+      live?: string
+    }
+  >(),
   openPath: vi.fn(),
   info: vi.fn(),
   warn: vi.fn()

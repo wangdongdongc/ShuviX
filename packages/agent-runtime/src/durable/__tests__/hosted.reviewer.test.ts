@@ -103,7 +103,10 @@ function watchedStall(): {
 
 /** 全部对话数 */
 async function conversationCount(session: DurableSession): Promise<number> {
-  return session.harness.commit(async (tx) => (await tx.scanConversations({}, 256)).items.length, BG)
+  return session.harness.commit(
+    async (tx) => (await tx.scanConversations({}, 256)).items.length,
+    BG
+  )
 }
 
 /** askOp 那次调用的任务（根里，callId `call-askOp`） */
@@ -459,7 +462,7 @@ describe('P2-08 C · reviewer dispatch (decide)', () => {
               // 人把卡片关掉（取消）：不算「人回答了」，连续拒绝计数不清零
               requestUserInput: async (request: InputRequest): Promise<InputResponse> => {
                 cards.push(request)
-                return { kind: 'cancel' }
+                return { kind: 'cancel', reason: 'aborted' }
               },
               logger: { info: () => {}, warn: () => {}, error: () => {} },
               onPermissionRequest: async (event, signal) => {
@@ -501,7 +504,9 @@ describe('P2-08 C · reviewer dispatch (decide)', () => {
               return { content: [{ type: 'text', text: 'ran' }] }
             } catch (error) {
               return {
-                content: [{ type: 'text', text: error instanceof Error ? error.message : String(error) }],
+                content: [
+                  { type: 'text', text: error instanceof Error ? error.message : String(error) }
+                ],
                 isError: true
               }
             }
@@ -542,9 +547,9 @@ describe('P2-08 C · reviewer dispatch (decide)', () => {
         expect(reviewSuspended('s1')).toBe(true)
         // 没有任何文档多出字段
         const reopened = rig.t.host.get('s1')!
-        expect(Object.keys((await reopened.harness.snapshot(SessionStateDoc, BG)) ?? {}).sort()).toEqual(
-          Object.keys(stateBefore ?? {}).sort()
-        )
+        expect(
+          Object.keys((await reopened.harness.snapshot(SessionStateDoc, BG)) ?? {}).sort()
+        ).toEqual(Object.keys(stateBefore ?? {}).sort())
         for (const id of await reopened.harness.commit(
           async (tx) => (await tx.scanConversations({}, 256)).items.map((c) => c.id),
           BG

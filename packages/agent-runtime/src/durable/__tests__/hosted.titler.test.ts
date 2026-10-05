@@ -85,7 +85,11 @@ async function kindsOf(session: DurableSession, id: ConversationId): Promise<str
 }
 
 /** 一个看得见 signal 落下的 stalled（-18） */
-function watchedStall(): { step: FauxResponseStep; reached: Promise<void>; abortedSeen: () => boolean } {
+function watchedStall(): {
+  step: FauxResponseStep
+  reached: Promise<void>
+  abortedSeen: () => boolean
+} {
   const reached = deferred()
   let seen = false
   const step: FauxResponseStep = async (_context, options) => {
@@ -233,7 +237,9 @@ describe('P2-08 B · titler dispatch (observe)', () => {
     expect(rig.router.ends()).toEqual([
       expect.objectContaining({ sessionId: record!.agentId, isError: false })
     ])
-    expect(rig.titleCalls).toEqual([{ sessionId: 's1', conversationId: T, taskId: expect.any(Number) }])
+    expect(rig.titleCalls).toEqual([
+      { sessionId: 's1', conversationId: T, taskId: expect.any(Number) }
+    ])
   })
 
   it('P2-08-08 every run is fresh: two fires → two anchors, two conversations, two agentIds; no history carried; distinct requestIds hook:<runId>', async () => {
