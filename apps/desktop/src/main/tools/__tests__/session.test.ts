@@ -17,6 +17,7 @@ import type { ToolContext } from '../../services/toolContext'
 import {
   executeTool,
   failureText,
+  invokeTool,
   type InvokedToolResult
 } from '@shuvix/agent-runtime/tools/testing/invokeTool'
 
@@ -186,7 +187,7 @@ const textOf = (r: unknown): string =>
 const info = (
   id: string,
   title: string,
-  status: 'idle' | 'running' | 'waiting-input'
+  status: 'idle' | 'running' | 'waiting-input' | 'interrupted'
 ): { id: string; title: string; status: typeof status; driven: boolean; updatedAt: number } => ({
   id,
   title,
@@ -196,7 +197,7 @@ const info = (
 })
 
 describe('SessionTool — 子会话 action', () => {
-  it('create-sub-session：转调 runner（title/agent_profile 原样），回话含 id', async () => {
+  it('create-sub-session：转调 runner（title/agent_profile 原样，外加 memo 里的 id），回话含 id', async () => {
     mocks.runnerCreate.mockResolvedValue({ id: 'sub-1', title: '重构 parser' })
     const res = await executeTool(tool, 'tc-1', {
       action: 'create-sub-session',
@@ -205,7 +206,9 @@ describe('SessionTool — 子会话 action', () => {
     })
     expect(mocks.runnerCreate).toHaveBeenCalledWith('s1', {
       title: '重构 parser',
-      agentProfile: 'coding'
+      agentProfile: 'coding',
+      // P2-10-07：新会话的 id 由工具先记进 memo 再交给 runner
+      id: expect.any(String)
     })
     expect(textOf(res)).toContain('sub-1')
     expect(textOf(res)).toContain('重构 parser')
@@ -239,6 +242,80 @@ describe('SessionTool — 子会话 action', () => {
     expect(
       await failureText(executeTool(tool, 'tc-1', { action: 'create-sub-session' }))
     ).toContain('Chat sessions cannot have sub-sessions.')
+  })
+
+  it('P2-10-01 发送的幂等键是 subsession:<本会话>:<工具任务 id>，不再是 tool_call id', async () => {
+    mocks.runnerPrompt.mockResolvedValue({
+      kind: 'answered',
+      id: 'c1',
+      answer: 'ok',
+      info: info('c1', 'C', 'idle')
+    })
+    await invokeTool(
+      tool,
+      { action: 'prompt-sub-session', sub_session_id: 'c1', message: 'm' },
+      { callId: 'call_0', taskId: 7 }
+    )
+    const args = mocks.runnerPrompt.mock.calls[0][0] as Record<string, unknown>
+    expect(args).toMatchObject({
+      parentId: 's1',
+      childId: 'c1',
+      message: 'm',
+      requestId: 'subsession:s1:7',
+      background: false,
+      timeoutSeconds: 300
+    })
+    expect(args).not.toHaveProperty('toolCallId')
+    expect(JSON.stringify(args)).not.toContain('call_0')
+  })
+
+  it('P2-10-28 / P2-10-33 渲染：答复在 <reply> 里；被中断的一块是 <note>，从不说「还在跑」或「还没回话」；描述里列出 interrupted', async () => {
+    mocks.runnerPrompt.mockResolvedValue({
+      kind: 'answered',
+      id: 'c1',
+      answer: 'DONE.',
+      info: info('c1', 'C', 'idle')
+    })
+    const answered = textOf(
+      await executeTool(tool, 'tc-1', {
+        action: 'prompt-sub-session',
+        sub_session_id: 'c1',
+        message: 'go'
+      })
+    )
+    expect(answered).toContain('<reply>\nDONE.\n</reply>')
+
+    mocks.runnerRead.mockResolvedValue({ info: info('c1', 'C', 'interrupted') })
+    const read = textOf(
+      await executeTool(tool, 'tc-1', { action: 'read-sub-session', sub_session_id: 'c1' })
+    )
+    expect(read).toContain('status="interrupted"')
+    expect(read).toMatch(/<note>Interrupted when the app stopped/)
+    expect(read).not.toContain('Still running')
+    expect(read).not.toContain('No reply yet')
+
+    mocks.runnerWait.mockResolvedValue({
+      kind: 'settled',
+      results: [{ ...info('c1', 'C', 'interrupted') }]
+    })
+    const waited = textOf(await executeTool(tool, 'tc-1', { action: 'wait-for-sub-sessions' }))
+    expect(waited).toMatch(/<note>Interrupted when the app stopped/)
+    expect(waited).not.toContain('Still running')
+
+    mocks.runnerList.mockReturnValue({ subSessions: [info('c1', 'C', 'interrupted')] })
+    expect(textOf(await executeTool(tool, 'tc-1', { action: 'list-sub-sessions' }))).toContain(
+      '<sub-session id="c1" title="C" status="interrupted"/>'
+    )
+    expect(mod.SESSION_DESCRIPTION).toContain('idle / running / waiting-input / interrupted')
+    expect(mod.SESSION_DESCRIPTION).toContain('status="interrupted"')
+  })
+
+  it('P2-10-28 「读不出答复」那一句已经不存在了', async () => {
+    const { readFileSync } = await import('node:fs')
+    const { join } = await import('node:path')
+    const source = readFileSync(join(__dirname, '..', 'session.ts'), 'utf8')
+    expect(source).not.toContain('cannot be read back')
+    expect(source).not.toContain('answerUnavailable')
   })
 
   it('prompt-sub-session 前台：parentId 取 ToolContext，缺省超时 300s，答复在 <reply> 围栏内', async () => {

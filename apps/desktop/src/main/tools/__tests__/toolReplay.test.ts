@@ -3,8 +3,10 @@
  *
  * durable 在一次工具调用开始前把 `replay` 记进意图；进程中断后恢复时，只有记下的与当前的都是
  * 'safe' 才重跑，否则这次调用记为「中断，可能已部分执行」交给模型（P1-04，Verified fact 1）。
- * 规则一句话：只读、重跑无害的才 'safe' —— read / ls / grep / glob；其余一律 'unsafe'（BaseTool 缺省）。
- * 把 'safe' 写到一个有副作用的工具上，恢复时它就会把那个副作用再做一遍，所以逐个钉。
+ * 规则一句话：只读、**或按构造幂等**、重跑无害的才 'safe' —— read / ls / grep / glob 只读；session 的每个
+ * 动作都幂等（create 的 id 记在 memo 里、prompt 按幂等键重新挂上、wait 记下目标，P2-10 / Q-P2-01）；
+ * 其余一律 'unsafe'（BaseTool 缺省）。把 'safe' 写到一个有副作用、又不幂等的工具上，恢复时它就会把那个
+ * 副作用再做一遍，所以逐个钉。
  *
  * agent-runtime 那一半（read / write / edit / knowledge / next / agent）在 packages/agent-runtime 的
  * tools/__tests__/baseTool.test.ts。这里只造实例看字段，不执行 —— 模块在 import 期碰到的东西全部桩掉。
@@ -88,13 +90,18 @@ describe('RT 桌面内置工具的重跑策略', () => {
     expect(tool.replay).toBe('safe')
   })
 
+  it('RT-1 / P2-10-22 session 每个动作都幂等 → safe', () => {
+    const tool = new SessionTool(ctx)
+    expect(tool.name).toBe('session')
+    expect(tool.replay).toBe('safe')
+  })
+
   it.each([
     ['write', () => makeWriteTool(ctx)],
     ['edit', () => makeEditTool(ctx)],
     ['doc_read', () => new DocReadTool(ctx)],
     ['doc_edit', () => new DocEditTool(ctx)],
     ['doc_insert', () => new DocInsertTool(ctx)],
-    ['session', () => new SessionTool(ctx)],
     ['artifact', () => new ArtifactTool(ctx)],
     ['bash', () => new BashTool(ctx)],
     ['powershell', () => new PowerShellTool(ctx)],

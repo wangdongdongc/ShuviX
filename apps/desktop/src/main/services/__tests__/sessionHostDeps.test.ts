@@ -14,6 +14,8 @@
  *   D10-22 审查 seam（真 reviewState）
  *   D10-23 autoResume 每次现读设置
  *   D10-24 isPinned = 会话还有活着的后台任务（PIN-04）
+ *   P2-10-06 onDrivenSettled 接到子会话运行器的处理器（overrides 可整项替换）；beforeAbort 同时把中断父会话的
+ *            级联交给运行器；import sessionHost 不加载运行器（按需动态加载，加载期无环）
  *   D10-62 退出钩子：第一次 before-quit 拦下、closeAll（封顶）、再 quit；之后放行
  *
  * sessions 表是真的（node:sqlite 内存库 + 迁移，sessionRecords 真件）；sessionService / sessionHost /
@@ -38,7 +40,9 @@ const holder = vi.hoisted(() => ({
   db: null as unknown,
   sessionsDir: '',
   projects: new Map<string, { path: string; settings: Record<string, unknown> }>(),
-  createSessionHostCalls: 0
+  createSessionHostCalls: 0,
+  /** 子会话运行器模块被加载了几次（P2-10-06：import sessionHost 时应为 0） */
+  runnerLoads: 0
 }))
 
 const mocks = vi.hoisted(() => ({
@@ -59,7 +63,9 @@ const mocks = vi.hoisted(() => ({
   },
   createDesktopToolHost: vi.fn(),
   promptHost: { tag: 'promptHost' },
-  promptVars: vi.fn(() => ({}))
+  promptVars: vi.fn(() => ({})),
+  onDrivenSettled: vi.fn(async () => {}),
+  cascadeParentAbort: vi.fn(async () => {})
 }))
 
 vi.mock('@shuvix/agent-runtime', async (importOriginal) => {
@@ -121,6 +127,15 @@ vi.mock('../../agents/agentHost', () => ({
   resolveProfileModelSpec: vi.fn()
 }))
 vi.mock('../settingsService', () => ({ settingsService: { get: mocks.settingsGet } }))
+vi.mock('../subSessionRunner', () => {
+  holder.runnerLoads++
+  return {
+    subSessionRunner: {
+      onDrivenSettled: mocks.onDrivenSettled,
+      cascadeParentAbort: mocks.cascadeParentAbort
+    }
+  }
+})
 vi.mock('../agentService', () => ({
   agentService: { getProfile: mocks.getProfile, isSessionProfile: () => true }
 }))
@@ -167,9 +182,12 @@ type Db = Parameters<(typeof migrations)[number]['up']>[0]
 let sessionService: (typeof import('../sessionService'))['sessionService']
 /** 刚 import 完 sessionHost 时 createSessionHost 被调了几次（应为 0：懒建） */
 let callsAtImport = -1
+/** 刚 import 完 sessionHost 时子会话运行器加载了几次（应为 0：按需动态加载） */
+let runnerLoadsAtImport = -1
 
 beforeAll(async () => {
   callsAtImport = holder.createSessionHostCalls
+  runnerLoadsAtImport = holder.runnerLoads
   ;({ sessionService } = await import('../sessionService'))
 })
 
@@ -534,6 +552,29 @@ describe('D10-22 审查 seam（真 reviewState）', () => {
     again?.()
     untrackB?.()
     untrackA?.()
+  })
+})
+
+describe('P2-10-06 子会话 seam', () => {
+  it('P2-10-06 onDrivenSettled 把事件原样交给运行器的处理器，并等它落定（拒绝原样上抛）', async () => {
+    expect(runnerLoadsAtImport).toBe(0)
+    const event = { sessionId: 'c1', parentId: 'P', requestId: 'subsession:P:5' } as never
+    await deps.onDrivenSettled?.(event)
+    expect(mocks.onDrivenSettled).toHaveBeenCalledWith(event)
+    mocks.onDrivenSettled.mockRejectedValueOnce(new Error('parent unreachable'))
+    await expect(deps.onDrivenSettled?.(event)).rejects.toThrow('parent unreachable')
+  })
+
+  it('P2-10-06 overrides.onDrivenSettled 整项替换', () => {
+    const own = vi.fn()
+    expect(buildSessionHostDeps({ onDrivenSettled: own }, sessionOfForDeps).onDrivenSettled).toBe(
+      own
+    )
+  })
+
+  it('P2-10-06 beforeAbort 把中断父会话的级联交给运行器（不等它）', async () => {
+    deps.beforeAbort?.('parent-x')
+    await vi.waitFor(() => expect(mocks.cascadeParentAbort).toHaveBeenCalledWith('parent-x'))
   })
 })
 

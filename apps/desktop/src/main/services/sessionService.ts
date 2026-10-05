@@ -132,13 +132,32 @@ export class SessionService {
    */
   private async deliverNotice(sessionId: string, text: string): Promise<void> {
     try {
-      const session = await this.peekDurableSession(sessionId)
-      if (!session) return
-      if (session.lock) await AgentSession.of(session).notify(text)
-      else await session.writeNotice({ text, kind: 'background' })
+      await this.deliverNoticeOrThrow(sessionId, text)
     } catch (err) {
       log.warn(`后台任务通知失败 session=${sessionId}: ${err}`)
     }
+  }
+
+  /**
+   * 子会话完成通知送达父会话（P2-10，PIN-13）：与后台通知同一条路（开着的直接用、没开就 peek，
+   * **从不创建**；锁着走门面的 notify，没锁只写一条通知条目），只是带上种类与 requestId
+   * （`subsession-done:<子会话>:<submission>`，重复送达按它去重）。父会话的行已经没了 → 什么都不做。
+   * 送达失败**抛出**：运行时据此留着子会话的 driven-run 标记，下次打开再报。
+   */
+  async deliverSubSessionNotice(parentId: string, text: string, requestId: string): Promise<void> {
+    if (!sessionRecords.pick(parentId, ['id'])) return
+    await this.deliverNoticeOrThrow(parentId, text, { kind: 'sub-session', requestId })
+  }
+
+  private async deliverNoticeOrThrow(
+    sessionId: string,
+    text: string,
+    options?: { kind: string; requestId: string }
+  ): Promise<void> {
+    const session = await this.peekDurableSession(sessionId)
+    if (!session) return
+    if (session.lock) await AgentSession.of(session).notify(text, options)
+    else await session.writeNotice({ text, kind: 'background', ...options })
   }
 
   /** 打开着的会话；没开就 peek（存储存在才打开，从不创建；旧格式 / 宿主已封存 → undefined） */
@@ -259,12 +278,26 @@ export class SessionService {
    *
    * `options.coEdit` 标记**协作编辑会话**（须同时给 notebookPath）：根档案由形态推出基座 `coedit`，
    * 文档经 doc_* 工具在编辑窗口的活缓冲上修改。只给根会话；子会话、Chrome 标签页会话忽略。
+   *
+   * `options.id` 由调用方定 id（P2-10 PIN-05，子会话 create 动作的重跑幂等）：同一父会话下已有这一行 →
+   * 原样交回、什么都不写；这个 id 落在别的父会话（或根上）→ 抛错。同样只有主进程能给。
    */
   create(
     params?: SessionCreateParams,
-    options?: { ephemeral?: boolean; workingDirectory?: string; coEdit?: boolean }
+    options?: { ephemeral?: boolean; workingDirectory?: string; coEdit?: boolean; id?: string }
   ): Session {
-    const id = uuidv7()
+    // 调用方给定 id（子会话的 create 动作把它记在工具的 memo 里，崩溃后重跑拿到同一个，P2-10 PIN-05）：
+    // 幂等 —— 同一父会话下已有这一行就原样交回（不再插入、不再广播、勾选不再抄一遍）；落在别处就拒绝
+    if (options?.id !== undefined) {
+      const existing = sessionRecords.findById(options.id)
+      if (existing) {
+        if (existing.parentId !== (params?.parentId ?? null)) {
+          throw new Error(`Session ${options.id} already exists under a different parent`)
+        }
+        return existing
+      }
+    }
+    const id = options?.id ?? uuidv7()
     // Chrome 标签页会话：无项目、无父会话、不是笔记本也不是 bot、不继承任何扩展能力勾选 ——
     // 它的工具全由基座档案 `tab` 声明（含 mcp:chrome），形态推导见 resolveAgentProfileName
     const chromeTab = chromeTabOf(params)

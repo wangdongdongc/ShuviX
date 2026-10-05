@@ -194,6 +194,7 @@
     "mcpConnectFailed": "[MCP] {{name}} failed to connect: {{error}}",
     "agentNoModel": "Couldn't create the agent: {{reason}}",
     "legacySessionReadOnly": "This conversation was created by an earlier version of ShuviX and is read-only. Clear it or start a new session to continue.",
+    "requestStillQueued": "A message sent here earlier is still queued. It goes out with the next message.",
     "welcomePrompt": "What should we work on today?",
     "welcomeCreateProject": "Create Project",
     "welcomeConfigureProviders": "Configure Providers",
