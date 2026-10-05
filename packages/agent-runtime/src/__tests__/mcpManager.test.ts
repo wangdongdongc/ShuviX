@@ -1318,9 +1318,13 @@ describe('McpManager 的 MCP → durable 注册项', () => {
     await executeTool(t, 'pi-call-42', { q: 'x' }, new AbortController().signal)
 
     // 询问卡片的路由键按约定就是 toolCallId —— 少了它，内置服务器的 ask 就对不上这次调用。
-    // （可信 server 另收 durable taskId：executeTool 缺省 taskId 1）
+    // （可信 server 另收 durable taskId 与 conversationId：executeTool 缺省 taskId 1、根对话 1）
     expect(h.lastFor('ssh', 's1').toolCallMetas).toEqual([
-      { 'shuvix.dev/toolCallId': 'pi-call-42', 'shuvix.dev/taskId': 1 }
+      {
+        'shuvix.dev/toolCallId': 'pi-call-42',
+        'shuvix.dev/taskId': 1,
+        'shuvix.dev/conversationId': 1
+      }
     ])
   })
 
@@ -1752,7 +1756,8 @@ describe('McpManager 执行结果：经假 server 的一次 tools/call', () => {
 // （浏览器「距上次快照几次操作」、快照差异的基线）只能靠每次调用带上的 `shuvix.dev/agentId`。
 // 第三方 server 拿到它毫无用处，也就不该知道 ShuviX 内部的 id —— 可信的判据与 annotations
 // 同一条：`type: 'inproc'` 且 isBuiltin。durable 的 tool task id（`shuvix.dev/taskId`，询问 /
-// 审查归属按 (会话, taskId) 认人，裁定 Q16）走同一条规则。
+// 审查归属按 (会话, taskId) 认人，裁定 Q16）与发起调用的对话（`shuvix.dev/conversationId`，内置
+// 服务器经宿主的 agentOf 认出调用方 agent 作安全主体，P2-07）走同一条规则：只给可信的、有才带。
 //
 // 断言一律对整个 `_meta` 用 toStrictEqual：`toHaveProperty('shuvix.dev/agentId')` 会把点号
 // 当成路径，`toEqual` 又会放过值为 undefined 的键。
@@ -1761,6 +1766,8 @@ const TOOL_CALL = 'shuvix.dev/toolCallId'
 const AGENT = 'shuvix.dev/agentId'
 /** durable tool task id —— 与调用方 id 同一条规则，只给可信 server（run / executeTool 缺省 taskId 1） */
 const TASK = 'shuvix.dev/taskId'
+/** 发起调用的 durable 对话 —— 同一条规则（run / executeTool 缺省根对话 1） */
+const CONV = 'shuvix.dev/conversationId'
 
 /** 连上一份内置 ssh（会话 s1，工具 `exec`） */
 async function trustedSsh(): Promise<Harness> {
@@ -1776,7 +1783,7 @@ describe('McpManager 的 `_meta`：调用方 id 只给可信 server', () => {
     const [exec] = h.mgr.getRegistrationsByServerName('ssh', 's1', { callerIdOf: () => 's1' })
     await run(exec, 'pi-1')
     expect(h.lastFor('ssh', 's1').toolCallMetas).toStrictEqual([
-      { [TOOL_CALL]: 'pi-1', [AGENT]: 's1', [TASK]: 1 }
+      { [TOOL_CALL]: 'pi-1', [AGENT]: 's1', [TASK]: 1, [CONV]: 1 }
     ])
   })
 
@@ -1858,8 +1865,8 @@ describe('McpManager 的 `_meta`：调用方 id 只给可信 server', () => {
     await run(byName, 'pi-1')
     await run(fromAll, 'pi-2')
     expect(h.lastFor('ssh', 's1').toolCallMetas).toStrictEqual([
-      { [TOOL_CALL]: 'pi-1', [TASK]: 1 },
-      { [TOOL_CALL]: 'pi-2', [TASK]: 1 }
+      { [TOOL_CALL]: 'pi-1', [TASK]: 1, [CONV]: 1 },
+      { [TOOL_CALL]: 'pi-2', [TASK]: 1, [CONV]: 1 }
     ])
   })
 })
@@ -1875,9 +1882,9 @@ describe('McpManager 取工具的三条路都把调用方 id 带到调用上', (
     await run(viaName, 'pi-2')
     await run(viaAll, 'pi-3')
     expect(h.lastFor('ssh', 's1').toolCallMetas).toStrictEqual([
-      { [TOOL_CALL]: 'pi-1', [AGENT]: 'c1', [TASK]: 1 },
-      { [TOOL_CALL]: 'pi-2', [AGENT]: 'c2', [TASK]: 1 },
-      { [TOOL_CALL]: 'pi-3', [AGENT]: 'c3', [TASK]: 1 }
+      { [TOOL_CALL]: 'pi-1', [AGENT]: 'c1', [TASK]: 1, [CONV]: 1 },
+      { [TOOL_CALL]: 'pi-2', [AGENT]: 'c2', [TASK]: 1, [CONV]: 1 },
+      { [TOOL_CALL]: 'pi-3', [AGENT]: 'c3', [TASK]: 1, [CONV]: 1 }
     ])
   })
 
@@ -1896,9 +1903,88 @@ describe('McpManager 取工具的三条路都把调用方 id 带到调用上', (
     await run(byName.get('mcp__a__search')!, 'pi-2')
 
     expect(h.lastFor('ssh', 's1').toolCallMetas).toStrictEqual([
-      { [TOOL_CALL]: 'pi-1', [AGENT]: 'agent-7', [TASK]: 1 }
+      { [TOOL_CALL]: 'pi-1', [AGENT]: 'agent-7', [TASK]: 1, [CONV]: 1 }
     ])
+    // P2-07-03：不可信的那台连 conversationId 也收不到
     expect(h.last('a').toolCallMetas).toStrictEqual([{ [TOOL_CALL]: 'pi-2' }])
+  })
+})
+
+describe('P2-07 McpManager 的 `_meta`：conversationId 只给可信 server', () => {
+  it('P2-07-01 可信 server：四个键都带，conversationId 是数字', async () => {
+    const h = await trustedSsh()
+    const [exec] = h.mgr.getRegistrationsByServerName('ssh', 's1', {
+      callerIdOf: (c) => (c === 1 ? 's1' : `sub-${c}`)
+    })
+
+    await invokeTool(exec, {}, { callId: 'pi-2', taskId: 21, conversationId: 2 })
+    await invokeTool(exec, {}, { callId: 'pi-1', taskId: 20, conversationId: 1 })
+
+    const metas = h.lastFor('ssh', 's1').toolCallMetas
+    expect(metas).toStrictEqual([
+      { [TOOL_CALL]: 'pi-2', [AGENT]: 'sub-2', [TASK]: 21, [CONV]: 2 },
+      { [TOOL_CALL]: 'pi-1', [AGENT]: 's1', [TASK]: 20, [CONV]: 1 }
+    ])
+    expect(typeof metas[0]?.[CONV]).toBe('number')
+  })
+
+  it('P2-07-04b 快照说不可信、实际连上的那条可信 → 四个键照带（看活连接）；mcpMeta 按快照', async () => {
+    const h = setup([sshRow()])
+    h.plan.set('ssh', { tools: [tool('exec')] })
+    const [exec] = h.mgr.registrationsFromDeclarations(
+      'ssh',
+      's1',
+      [{ name: 'exec', inputSchema: SCHEMA, trusted: false }],
+      { callerIdOf: () => 's1' }
+    )
+    expect(exec.mcpMeta.trusted).toBe(false)
+
+    await invokeTool(exec, {}, { callId: 'pi-1', taskId: 3, conversationId: 4 })
+    expect(h.lastFor('ssh', 's1').toolCallMetas).toStrictEqual([
+      { [TOOL_CALL]: 'pi-1', [AGENT]: 's1', [TASK]: 3, [CONV]: 4 }
+    ])
+  })
+
+  it('P2-07-06a 直接 callTool：可信 server 带上 McpCallMeta 的四样', async () => {
+    const h = await trustedSsh()
+    await h.mgr.callTool('ssh-id#s1', 'exec', {}, undefined, {
+      toolCallId: 'pi-1',
+      callerId: 'x',
+      taskId: 7,
+      conversationId: 2
+    })
+    expect(h.lastFor('ssh', 's1').toolCallMetas).toStrictEqual([
+      { [TOOL_CALL]: 'pi-1', [AGENT]: 'x', [TASK]: 7, [CONV]: 2 }
+    ])
+  })
+
+  it('P2-07-06b 可信 server 只给了 conversationId → `_meta` 里恰好只有它', async () => {
+    const h = await trustedSsh()
+    await h.mgr.callTool('ssh-id#s1', 'exec', {}, undefined, { conversationId: 2 })
+    expect(h.lastFor('ssh', 's1').toolCallMetas).toStrictEqual([{ [CONV]: 2 }])
+  })
+
+  it('P2-07-06c 不可信 server 给了四样 → 只带 toolCallId', async () => {
+    const h = setup([row({ id: 'a-id', name: 'a' })])
+    h.plan.set('a', { tools: [tool('search')] })
+    await h.mgr.ensureServerByName('a')
+
+    await h.mgr.callTool('a-id', 'search', {}, undefined, {
+      toolCallId: 'pi-1',
+      callerId: 'x',
+      taskId: 7,
+      conversationId: 2
+    })
+    expect(h.last('a').toolCallMetas).toStrictEqual([{ [TOOL_CALL]: 'pi-1' }])
+  })
+
+  it('P2-07-06d conversationId 显式为 undefined → 不出这个键', async () => {
+    const h = await trustedSsh()
+    await h.mgr.callTool('ssh-id#s1', 'exec', {}, undefined, {
+      toolCallId: 'pi-1',
+      conversationId: undefined
+    })
+    expect(h.lastFor('ssh', 's1').toolCallMetas).toStrictEqual([{ [TOOL_CALL]: 'pi-1' }])
   })
 })
 
@@ -2862,13 +2948,14 @@ describe('McpManager 的 durable 注册项：调用身份随 api 走', () => {
     await invokeTool(exec, {}, { callId: 'pi-2', taskId: 12, conversationId: 5 })
 
     expect(callerIdOf.mock.calls).toEqual([[1], [5]])
+    // P2-07-02：conversationId 同样按每次调用各报各的
     expect(h.lastFor('ssh', 's1').toolCallMetas).toStrictEqual([
-      { [TOOL_CALL]: 'pi-1', [AGENT]: 's1', [TASK]: 11 },
-      { [TOOL_CALL]: 'pi-2', [AGENT]: 'agent-5', [TASK]: 12 }
+      { [TOOL_CALL]: 'pi-1', [AGENT]: 's1', [TASK]: 11, [CONV]: 1 },
+      { [TOOL_CALL]: 'pi-2', [AGENT]: 'agent-5', [TASK]: 12, [CONV]: 5 }
     ])
   })
 
-  it('MCPD-3: 不可信 server —— toolCallId 照带，调用方 id 与 taskId 都不带（哪怕给了 callerIdOf）', async () => {
+  it('MCPD-3: 不可信 server —— toolCallId 照带，调用方 id、taskId 与 conversationId 都不带（哪怕给了 callerIdOf）', async () => {
     const h = setup([row({ id: 'a-id', name: 'a' })])
     h.plan.set('a', { tools: [tool('search')] })
     await h.mgr.ensureServerByName('a')
@@ -2878,12 +2965,16 @@ describe('McpManager 的 durable 注册项：调用身份随 api 走', () => {
     expect(h.last('a').toolCallMetas).toStrictEqual([{ [TOOL_CALL]: 'pi-1' }])
   })
 
-  it('MCPD-3b: callerIdOf 回 undefined → 可信 server 只带 toolCallId 与 taskId', async () => {
+  it('MCPD-3b / P2-07-05: callerIdOf 回 undefined → 可信 server 带 toolCallId、taskId 与 conversationId（与调用方 id 互不依赖）', async () => {
     const h = await trustedSsh()
     const [exec] = h.mgr.getRegistrationsByServerName('ssh', 's1', { callerIdOf: () => undefined })
 
     await invokeTool(exec, {}, { callId: 'pi-1', taskId: 4 })
-    expect(h.lastFor('ssh', 's1').toolCallMetas).toStrictEqual([{ [TOOL_CALL]: 'pi-1', [TASK]: 4 }])
+    await invokeTool(exec, {}, { callId: 'pi-2', taskId: 5, conversationId: 3 })
+    expect(h.lastFor('ssh', 's1').toolCallMetas).toStrictEqual([
+      { [TOOL_CALL]: 'pi-1', [TASK]: 4, [CONV]: 1 },
+      { [TOOL_CALL]: 'pi-2', [TASK]: 5, [CONV]: 3 }
+    ])
   })
 })
 
@@ -3056,8 +3147,23 @@ describe('McpManager.registrationsFromDeclarations：按快照建，用到才连
     expect(h.madeFor('ssh', 's1')).toHaveLength(1)
     expect(h.lastFor('ssh', 's1').toolCalls).toEqual([{ name: 'exec', args: {} }])
     expect(h.lastFor('ssh', 's1').toolCallMetas).toStrictEqual([
-      { [TOOL_CALL]: 'pi-1', [AGENT]: 's1', [TASK]: 3 }
+      { [TOOL_CALL]: 'pi-1', [AGENT]: 's1', [TASK]: 3, [CONV]: 1 }
     ])
+  })
+
+  it('P2-07-07b 掉线后再调：原地重连一次，新连接上的调用带这次的 conversationId', async () => {
+    const h = await trustedSsh()
+    const [exec] = h.mgr.getRegistrationsByServerName('ssh', 's1', { callerIdOf: () => 'sub-2' })
+    drop(h.lastFor('ssh', 's1'))
+
+    await invokeTool(exec, {}, { callId: 'pi-2', taskId: 8, conversationId: 2 })
+    expect(h.madeFor('ssh', 's1')).toHaveLength(2)
+    expect(h.lastFor('ssh', 's1').toolCallMetas.at(-1)).toStrictEqual({
+      [TOOL_CALL]: 'pi-2',
+      [AGENT]: 'sub-2',
+      [TASK]: 8,
+      [CONV]: 2
+    })
   })
 
   it('MCPD-13: 外部服务器掉线之后再调 —— 同样原地重连一次再调', async () => {
