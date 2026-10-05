@@ -11,7 +11,7 @@ import {
   durableView
 } from '../../../../../../../../packages/agent-runtime/src/sync/__tests__/support/rig'
 
-export { BG, FakeProjector, durableView }
+export { BG, FakeProjector, durableView, agentView as agentViewOf }
 
 export class FakeSyncSession implements SyncSession {
   #root: FakeProjector<SessionView> | undefined
