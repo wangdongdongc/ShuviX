@@ -138,9 +138,7 @@ function settled(
     noticeRequestId: `subsession-done:${sessionId}:42`,
     result: {},
     record:
-      over.reason === undefined
-        ? { status: 'done' }
-        : { status: 'unanswered', reason: over.reason }
+      over.reason === undefined ? { status: 'done' } : { status: 'unanswered', reason: over.reason }
   }
 }
 
@@ -683,7 +681,9 @@ describe('完成通知 —— 说实话，且不重复', () => {
   it('自己停掉的那次**不通知**（停它的就是父级，它早就知道）', async () => {
     // 派活时子会话必须是空闲的（否则命中忙碌拒绝，压根不会有 run）
     const childAgent = fakeAgent()
-    mocks.getAgentSession.mockImplementation((id: string) => (id === CHILD ? childAgent : undefined))
+    mocks.getAgentSession.mockImplementation((id: string) =>
+      id === CHILD ? childAgent : undefined
+    )
     let release!: () => void
     mocks.gatewayPrompt.mockReturnValue(
       new Promise<{ error?: string }>((r) => {
@@ -708,7 +708,9 @@ describe('完成通知 —— 说实话，且不重复', () => {
 
   it('卡在等批准时跑完的通知：说清在等批准并带出问题，而不是「跑完了」', async () => {
     const childAgent = fakeAgent()
-    mocks.getAgentSession.mockImplementation((id: string) => (id === CHILD ? childAgent : undefined))
+    mocks.getAgentSession.mockImplementation((id: string) =>
+      id === CHILD ? childAgent : undefined
+    )
     let release!: () => void
     mocks.gatewayPrompt.mockReturnValue(
       new Promise<{ error?: string }>((r) => {

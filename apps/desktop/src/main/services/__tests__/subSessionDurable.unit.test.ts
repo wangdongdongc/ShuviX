@@ -155,6 +155,7 @@ beforeAll(async () => {
   ;({ sessionService } = await import('../sessionService'))
   ;({ chatGateway } = await import('../../frontend/core/DefaultChatGateway'))
   ;({ subSessionRunner: runner } = await import('../subSessionRunner'))
+  // eslint-disable-next-line boundaries/dependencies -- 用例有意让真的 session 工具驱动真的运行器（产品里是工具引用服务，这里只是从服务的用例里把它构造出来）
   ;({ SessionTool } = await import('../../tools/session'))
 })
 
@@ -257,9 +258,7 @@ function settledEvent(
     noticeRequestId: `subsession-done:${childId}:42`,
     result: {},
     record:
-      over.reason === undefined
-        ? { status: 'done' }
-        : { status: 'unanswered', reason: over.reason }
+      over.reason === undefined ? { status: 'done' } : { status: 'unanswered', reason: over.reason }
   }
 }
 
@@ -354,14 +353,30 @@ describe('A. requestId plumbing', () => {
   it('P2-10-04 provider 的 call_0 重复不再撞：两次发送各自一个键、各自一条任务，第二次走正常路径', async () => {
     family('c1')
     const c1 = fakeHost.put('c1')
-    expect((await call({ action: 'prompt-sub-session', sub_session_id: 'c1', message: 'a' }, { taskId: 7 })).isError).toBe(false)
-    expect((await call({ action: 'prompt-sub-session', sub_session_id: 'c1', message: 'b' }, { taskId: 8 })).isError).toBe(false)
+    expect(
+      (
+        await call(
+          { action: 'prompt-sub-session', sub_session_id: 'c1', message: 'a' },
+          { taskId: 7 }
+        )
+      ).isError
+    ).toBe(false)
+    expect(
+      (
+        await call(
+          { action: 'prompt-sub-session', sub_session_id: 'c1', message: 'b' },
+          { taskId: 8 }
+        )
+      ).isError
+    ).toBe(false)
     expect(submitsOf(c1).map((o) => o.requestId)).toEqual([R(7), R(8)])
     expect(taskRegistry.get(R(7))).toBeDefined()
     expect(taskRegistry.get(R(8))).toBeDefined()
     expect(c1.callsOf('requestState')).toContainEqual(['requestState', R(8)])
     // 正常路径 = 受理（受理回调触发了 prompt-accepted 埋点）
-    expect(mocks.fire.mock.calls.filter(([name]) => name === 'session.prompt-accepted')).toHaveLength(2)
+    expect(
+      mocks.fire.mock.calls.filter(([name]) => name === 'session.prompt-accepted')
+    ).toHaveLength(2)
 
     // 两个父会话、同一个 taskId、并发 → 两个不同的键，两条都跑
     insert('P1')
@@ -370,8 +385,14 @@ describe('A. requestId plumbing', () => {
     insert('d2', { parentId: 'P2' })
     const d1 = fakeHost.put('d1', { submitGate: gate() })
     const d2 = fakeHost.put('d2', { submitGate: gate() })
-    const a = call({ action: 'prompt-sub-session', sub_session_id: 'd1', message: 'x' }, { taskId: 5, sessionId: 'P1' })
-    const b = call({ action: 'prompt-sub-session', sub_session_id: 'd2', message: 'y' }, { taskId: 5, sessionId: 'P2' })
+    const a = call(
+      { action: 'prompt-sub-session', sub_session_id: 'd1', message: 'x' },
+      { taskId: 5, sessionId: 'P1' }
+    )
+    const b = call(
+      { action: 'prompt-sub-session', sub_session_id: 'd2', message: 'y' },
+      { taskId: 5, sessionId: 'P2' }
+    )
     await vi.waitFor(() => {
       expect(submitsOf(d1).map((o) => o.requestId)).toEqual([R(5, 'P1')])
       expect(submitsOf(d2).map((o) => o.requestId)).toEqual([R(5, 'P2')])
@@ -490,13 +511,23 @@ describe('B. session tool idempotency', () => {
     // 本进程里已有 4 条在跑（并发上限顶满）—— 重新挂上不看它
     for (const id of ['b1', 'b2', 'b3', 'b4']) {
       fakeHost.put(id, { submitGate: gate() })
-      await runner.prompt({ parentId: 'P', childId: id, message: 'x', background: true, timeoutSeconds: 5, requestId: R(`bg-${id}`) })
+      await runner.prompt({
+        parentId: 'P',
+        childId: id,
+        message: 'x',
+        background: true,
+        timeoutSeconds: 5,
+        requestId: R(`bg-${id}`)
+      })
       fakeHost.get(id)!.busy = true
     }
     const c1 = fakeHost.put('c1', { interrupted: true, answer: { text: 'A9' } })
     c1.requestStates.set(R(9), 'pending')
     mocks.fire.mockClear()
-    const res = await call({ action: 'prompt-sub-session', sub_session_id: 'c1', message: 'task' }, { taskId: 9 })
+    const res = await call(
+      { action: 'prompt-sub-session', sub_session_id: 'c1', message: 'task' },
+      { taskId: 9 }
+    )
     expect(res.isError).toBe(false)
     expect(res.text).toContain('<reply>\nA9\n</reply>')
     const [options] = submitsOf(c1)
@@ -511,7 +542,10 @@ describe('B. session tool idempotency', () => {
     family('c1')
     const c1 = fakeHost.put('c1', { busy: true, submitGate: gate(), answer: { text: 'later' } })
     c1.requestStates.set(R(9), 'pending')
-    const pending = call({ action: 'prompt-sub-session', sub_session_id: 'c1', message: 'task' }, { taskId: 9 })
+    const pending = call(
+      { action: 'prompt-sub-session', sub_session_id: 'c1', message: 'task' },
+      { taskId: 9 }
+    )
     await vi.waitFor(() => expect(submitsOf(c1)).toHaveLength(1))
     c1.submitGate!.release()
     const res = await pending
@@ -523,7 +557,10 @@ describe('B. session tool idempotency', () => {
     family('c1')
     const c1 = fakeHost.put('c1', { answer: { text: 'A' } })
     c1.requestStates.set(R(9), 'settled')
-    const res = await call({ action: 'prompt-sub-session', sub_session_id: 'c1', message: 'task' }, { taskId: 9 })
+    const res = await call(
+      { action: 'prompt-sub-session', sub_session_id: 'c1', message: 'task' },
+      { taskId: 9 }
+    )
     expect(res.text).toContain('<reply>\nA\n</reply>')
     expect(c1.callsOf('submitUser')).toEqual([])
     expect(mocks.broadcast.mock.calls.filter(([e]) => e.sessionId === 'c1')).toEqual([])
@@ -533,7 +570,10 @@ describe('B. session tool idempotency', () => {
   it("P2-10-13 键 'none'：正常路径 —— 在跑的子会话照旧被拒", async () => {
     family('c1')
     fakeHost.put('c1', { busy: true })
-    const res = await call({ action: 'prompt-sub-session', sub_session_id: 'c1', message: 'task' }, { taskId: 9 })
+    const res = await call(
+      { action: 'prompt-sub-session', sub_session_id: 'c1', message: 'task' },
+      { taskId: 9 }
+    )
     expect(res.isError).toBe(true)
     expect(res.text).toMatch(/is running/)
   })
@@ -543,7 +583,12 @@ describe('B. session tool idempotency', () => {
     const c1 = fakeHost.put('c1', { submitGate: gate() })
     c1.requestStates.set(R(9), 'pending')
     const res = await call(
-      { action: 'prompt-sub-session', sub_session_id: 'c1', message: 'task', run_in_background: true },
+      {
+        action: 'prompt-sub-session',
+        sub_session_id: 'c1',
+        message: 'task',
+        run_in_background: true
+      },
       { taskId: 9 }
     )
     expect(res.text).toContain('Started in the background')
@@ -632,7 +677,9 @@ describe('B. session tool idempotency', () => {
       interrupted: true,
       drivenRun: { requestId: R(21), parentId: 'P', background: true, conversationId: 1 as never }
     })
-    expect((await call({ action: 'stop-sub-session', sub_session_id: 'c2' })).text).toContain('Stopped')
+    expect((await call({ action: 'stop-sub-session', sub_session_id: 'c2' })).text).toContain(
+      'Stopped'
+    )
     expect(c2.callsOf('abort')).toHaveLength(1)
 
     sessionRecords.updateSettings('c3', { runState: 'interrupted' })
@@ -640,14 +687,25 @@ describe('B. session tool idempotency', () => {
     fakeHost.configure = (session) => {
       if (session.sessionId !== 'c3') return
       session.interrupted = true
-      session.drivenRun = { requestId: R(22), parentId: 'P', background: true, conversationId: 1 as never }
+      session.drivenRun = {
+        requestId: R(22),
+        parentId: 'P',
+        background: true,
+        conversationId: 1 as never
+      }
     }
-    expect((await call({ action: 'stop-sub-session', sub_session_id: 'c3' })).text).toContain('Stopped')
+    expect((await call({ action: 'stop-sub-session', sub_session_id: 'c3' })).text).toContain(
+      'Stopped'
+    )
     expect(fakeHost.callsOf('peek')).toEqual(['c3'])
     expect(fakeHost.get('c3')!.callsOf('abort')).toHaveLength(1)
 
-    await runner.onDrivenSettled(settledEvent({ childId: 'c2', requestId: R(21), reason: 'aborted' }))
-    await runner.onDrivenSettled(settledEvent({ childId: 'c3', requestId: R(22), reason: 'aborted' }))
+    await runner.onDrivenSettled(
+      settledEvent({ childId: 'c2', requestId: R(21), reason: 'aborted' })
+    )
+    await runner.onDrivenSettled(
+      settledEvent({ childId: 'c3', requestId: R(22), reason: 'aborted' })
+    )
     expect(noticesTo(parent)).toEqual([])
   })
 
@@ -695,7 +753,10 @@ describe('D. continue cascade (unit)', () => {
     family('c1')
     fakeHost.put('c1', { submitGate: gate() })
     const memo = sharedMemo()
-    void call({ action: 'prompt-sub-session', sub_session_id: 'c1', message: 'task' }, { taskId: 9, memo })
+    void call(
+      { action: 'prompt-sub-session', sub_session_id: 'c1', message: 'task' },
+      { taskId: 9, memo }
+    )
     await vi.waitFor(() => expect(submitsOf(fakeHost.get('c1')!)).toHaveLength(1))
 
     newProcess()
@@ -703,7 +764,10 @@ describe('D. continue cascade (unit)', () => {
     const c1 = fakeHost.put('c1', { interrupted: true, answer: { text: 'C9' } })
     c1.requestStates.set(R(9), 'pending')
     mocks.fire.mockClear()
-    const res = await call({ action: 'prompt-sub-session', sub_session_id: 'c1', message: 'task' }, { taskId: 9, memo })
+    const res = await call(
+      { action: 'prompt-sub-session', sub_session_id: 'c1', message: 'task' },
+      { taskId: 9, memo }
+    )
     expect(res.text).toContain('<reply>\nC9\n</reply>')
     expect(submitsOf(c1).map((o) => o.requestId)).toEqual([R(9)])
     expect(mocks.fire.mock.calls.filter(([name]) => name === 'session.prompt-accepted')).toEqual([])
@@ -713,7 +777,10 @@ describe('D. continue cascade (unit)', () => {
     family('c1')
     const c1 = fakeHost.put('c1', { answer: { text: 'C-done' } })
     c1.requestStates.set(R(9), 'settled')
-    const res = await call({ action: 'prompt-sub-session', sub_session_id: 'c1', message: 'task' }, { taskId: 9 })
+    const res = await call(
+      { action: 'prompt-sub-session', sub_session_id: 'c1', message: 'task' },
+      { taskId: 9 }
+    )
     expect(res.text).toContain('<reply>\nC-done\n</reply>')
     expect(c1.callsOf('submitUser')).toEqual([])
   })
@@ -749,36 +816,39 @@ describe('E. answers via lastAnswer', () => {
     ['model_error', true],
     ['faulted', true],
     ['orphaned', true]
-  ] as const)('P2-10-31 网关结果 %s → %s 时算答复（带 isError），否则 NOT delivered', async (code, answered) => {
-    family('c1')
-    const c1 = fakeHost.put('c1', { submitResults: [{ error: `${code} text`, code }] })
-    const res = await runner.prompt({
-      parentId: 'P',
-      childId: 'c1',
-      message: 'go',
-      background: false,
-      timeoutSeconds: 5,
-      requestId: R(31)
-    })
-    if (answered) {
-      // lastAnswer 读不到错误条目时退回结果里的错误原文
-      expect(res).toMatchObject({ kind: 'answered', answer: `${code} text`, isError: true })
-      c1.answer = { text: `${code} from transcript`, isError: true }
-      const again = await runner.prompt({
+  ] as const)(
+    'P2-10-31 网关结果 %s → %s 时算答复（带 isError），否则 NOT delivered',
+    async (code, answered) => {
+      family('c1')
+      const c1 = fakeHost.put('c1', { submitResults: [{ error: `${code} text`, code }] })
+      const res = await runner.prompt({
         parentId: 'P',
         childId: 'c1',
         message: 'go',
         background: false,
         timeoutSeconds: 5,
-        requestId: R(32)
+        requestId: R(31)
       })
-      expect(again).toMatchObject({ answer: `${code} from transcript`, isError: true })
-    } else {
-      expect((res as { error: string }).error).toContain('NOT delivered')
+      if (answered) {
+        // lastAnswer 读不到错误条目时退回结果里的错误原文
+        expect(res).toMatchObject({ kind: 'answered', answer: `${code} text`, isError: true })
+        c1.answer = { text: `${code} from transcript`, isError: true }
+        const again = await runner.prompt({
+          parentId: 'P',
+          childId: 'c1',
+          message: 'go',
+          background: false,
+          timeoutSeconds: 5,
+          requestId: R(32)
+        })
+        expect(again).toMatchObject({ answer: `${code} from transcript`, isError: true })
+      } else {
+        expect((res as { error: string }).error).toContain('NOT delivered')
+      }
+      expect(taskRegistry.get(R(31))!.status).toBe('error')
+      expect(taskRegistry.runningCount('P')).toBe(0)
     }
-    expect(taskRegistry.get(R(31))!.status).toBe('error')
-    expect(taskRegistry.runningCount('P')).toBe(0)
-  })
+  )
 })
 
 // ─── F. wait 与被中断的子会话 ───────────────────────────────────────────────
@@ -811,7 +881,14 @@ describe('G. completion notices', () => {
   it('P2-10-35 进程内后台跑完：父会话恰一次 notify(text, {kind, requestId})；文案点名、给收法、不带内容；没有不带 requestId 的通知', async () => {
     const parent = family('c1')
     fakeHost.put('c1', { answer: { text: 'SECRET ANSWER' } })
-    await runner.prompt({ parentId: 'P', childId: 'c1', message: 'go', background: true, timeoutSeconds: 5, requestId: R(5) })
+    await runner.prompt({
+      parentId: 'P',
+      childId: 'c1',
+      message: 'go',
+      background: true,
+      timeoutSeconds: 5,
+      requestId: R(5)
+    })
     await sleep(300)
     await runner.onDrivenSettled(settledEvent({ requestId: R(5) }))
     const notices = parent.callsOf('notify')
@@ -827,7 +904,14 @@ describe('G. completion notices', () => {
   it('P2-10-36 前台答完 → 不通知，两种先后都一样', async () => {
     const parent = family('c1')
     const c1 = fakeHost.put('c1', { submitGate: gate(), answer: { text: 'A' } })
-    const pending = runner.prompt({ parentId: 'P', childId: 'c1', message: 'go', background: false, timeoutSeconds: 5, requestId: R(1) })
+    const pending = runner.prompt({
+      parentId: 'P',
+      childId: 'c1',
+      message: 'go',
+      background: false,
+      timeoutSeconds: 5,
+      requestId: R(1)
+    })
     await vi.waitFor(() => expect(submitsOf(c1)).toHaveLength(1))
     // (a) 落定先报来、前台还在等
     await runner.onDrivenSettled(settledEvent({ requestId: R(1), background: false }))
@@ -836,7 +920,14 @@ describe('G. completion notices', () => {
     // (b) 前台先交回了，落定后报来
     c1.submitGate = undefined
     expect(
-      await runner.prompt({ parentId: 'P', childId: 'c1', message: 'go', background: false, timeoutSeconds: 5, requestId: R(2) })
+      await runner.prompt({
+        parentId: 'P',
+        childId: 'c1',
+        message: 'go',
+        background: false,
+        timeoutSeconds: 5,
+        requestId: R(2)
+      })
     ).toMatchObject({ kind: 'answered' })
     await runner.onDrivenSettled(settledEvent({ requestId: R(2), background: false }))
     expect(noticesTo(parent)).toEqual([])
@@ -846,7 +937,14 @@ describe('G. completion notices', () => {
     const parent = family('c1')
     const c1 = fakeHost.put('c1', { submitGate: gate() })
     expect(
-      await runner.prompt({ parentId: 'P', childId: 'c1', message: 'go', background: false, timeoutSeconds: 1, requestId: R(3) })
+      await runner.prompt({
+        parentId: 'P',
+        childId: 'c1',
+        message: 'go',
+        background: false,
+        timeoutSeconds: 1,
+        requestId: R(3)
+      })
     ).toEqual({ kind: 'timeout', id: 'c1' })
     c1.submitGate!.release()
     await runner.onDrivenSettled(settledEvent({ requestId: R(3), background: false }))
@@ -857,7 +955,14 @@ describe('G. completion notices', () => {
     const parent = family('c1', 'c2')
     // (a) 握着的时候报来
     const c1 = fakeHost.put('c1', { submitGate: gate() })
-    await runner.prompt({ parentId: 'P', childId: 'c1', message: 'go', background: true, timeoutSeconds: 5, requestId: R(1) })
+    await runner.prompt({
+      parentId: 'P',
+      childId: 'c1',
+      message: 'go',
+      background: true,
+      timeoutSeconds: 5,
+      requestId: R(1)
+    })
     c1.busy = true
     const waiting = runner.wait({ parentId: 'P', childId: 'c1', timeoutSeconds: 5 })
     await sleep(20)
@@ -868,7 +973,14 @@ describe('G. completion notices', () => {
 
     // (b) wait 先交回、报来在后（标记还在、那条已落定）
     const c2 = fakeHost.put('c2', { submitGate: gate() })
-    await runner.prompt({ parentId: 'P', childId: 'c2', message: 'go', background: true, timeoutSeconds: 5, requestId: R(2) })
+    await runner.prompt({
+      parentId: 'P',
+      childId: 'c2',
+      message: 'go',
+      background: true,
+      timeoutSeconds: 5,
+      requestId: R(2)
+    })
     c2.busy = true
     const waiting2 = runner.wait({ parentId: 'P', childId: 'c2', timeoutSeconds: 5 })
     await sleep(20)
@@ -884,7 +996,14 @@ describe('G. completion notices', () => {
     const parent = family('c1', 'c2', 'c3', 'c4')
     // stop-sub-session
     const c1 = fakeHost.put('c1', { submitGate: gate() })
-    await runner.prompt({ parentId: 'P', childId: 'c1', message: 'go', background: true, timeoutSeconds: 5, requestId: R(1) })
+    await runner.prompt({
+      parentId: 'P',
+      childId: 'c1',
+      message: 'go',
+      background: true,
+      timeoutSeconds: 5,
+      requestId: R(1)
+    })
     c1.busy = true
     await runner.stop('P', 'c1')
     c1.submitGate!.release()
@@ -892,28 +1011,56 @@ describe('G. completion notices', () => {
     // 前台信号级联
     const c2 = fakeHost.put('c2', { submitGate: gate() })
     const ac = new AbortController()
-    const fg = runner.prompt({ parentId: 'P', childId: 'c2', message: 'go', background: false, timeoutSeconds: 5, signal: ac.signal, requestId: R(2) })
+    const fg = runner.prompt({
+      parentId: 'P',
+      childId: 'c2',
+      message: 'go',
+      background: false,
+      timeoutSeconds: 5,
+      signal: ac.signal,
+      requestId: R(2)
+    })
     await vi.waitFor(() => expect(submitsOf(c2)).toHaveLength(1))
     ac.abort()
     await vi.waitFor(() => expect(c2.callsOf('abort')).toHaveLength(1))
-    await runner.onDrivenSettled(settledEvent({ childId: 'c2', requestId: R(2), background: false, reason: 'aborted' }))
+    await runner.onDrivenSettled(
+      settledEvent({ childId: 'c2', requestId: R(2), background: false, reason: 'aborted' })
+    )
     c2.submitGate!.release()
     await fg
     expect(noticesTo(parent)).toEqual([])
 
     // 用户从面板停
     const c3 = fakeHost.put('c3', { submitGate: gate() })
-    await runner.prompt({ parentId: 'P', childId: 'c3', message: 'go', background: true, timeoutSeconds: 5, requestId: R(3) })
+    await runner.prompt({
+      parentId: 'P',
+      childId: 'c3',
+      message: 'go',
+      background: true,
+      timeoutSeconds: 5,
+      requestId: R(3)
+    })
     expect(taskRegistry.stop(R(3), { by: 'user' })).toBe(true)
     c3.submitGate!.release()
-    await runner.onDrivenSettled(settledEvent({ childId: 'c3', requestId: R(3), reason: 'aborted' }))
+    await runner.onDrivenSettled(
+      settledEvent({ childId: 'c3', requestId: R(3), reason: 'aborted' })
+    )
     expect(parent.callsOf('notify')).toHaveLength(1)
     expect(String(parent.callsOf('notify')[0]![1])).toContain('stopped by the user')
     // 用户在子会话里自己停
     const c4 = fakeHost.put('c4', { submitGate: gate() })
-    await runner.prompt({ parentId: 'P', childId: 'c4', message: 'go', background: true, timeoutSeconds: 5, requestId: R(4) })
+    await runner.prompt({
+      parentId: 'P',
+      childId: 'c4',
+      message: 'go',
+      background: true,
+      timeoutSeconds: 5,
+      requestId: R(4)
+    })
     c4.submitGate!.release()
-    await runner.onDrivenSettled(settledEvent({ childId: 'c4', requestId: R(4), reason: 'aborted' }))
+    await runner.onDrivenSettled(
+      settledEvent({ childId: 'c4', requestId: R(4), reason: 'aborted' })
+    )
     expect(parent.callsOf('notify')).toHaveLength(2)
   })
 
@@ -932,7 +1079,11 @@ describe('G. completion notices', () => {
     expect(reopened.callsOf('writeNotice')).toEqual([
       [
         'writeNotice',
-        { text: expect.stringContaining('id="c1"'), kind: 'sub-session', requestId: 'subsession-done:c1:42' }
+        {
+          text: expect.stringContaining('id="c1"'),
+          kind: 'sub-session',
+          requestId: 'subsession-done:c1:42'
+        }
       ]
     ])
     expect(reopened.callsOf('createAgent')).toEqual([])
@@ -942,7 +1093,9 @@ describe('G. completion notices', () => {
     reopened.notify = async () => {
       throw new Error('parent write failed')
     }
-    await expect(runner.onDrivenSettled(settledEvent({ requestId: R(3) }))).rejects.toThrow('parent write failed')
+    await expect(runner.onDrivenSettled(settledEvent({ requestId: R(3) }))).rejects.toThrow(
+      'parent write failed'
+    )
 
     // peek 抛 → 拒绝
     await fakeHost.close('P')
@@ -950,7 +1103,9 @@ describe('G. completion notices', () => {
     fakeHost.peek = async () => {
       throw new Error('storage unavailable')
     }
-    await expect(runner.onDrivenSettled(settledEvent({ requestId: R(4) }))).rejects.toThrow('storage unavailable')
+    await expect(runner.onDrivenSettled(settledEvent({ requestId: R(4) }))).rejects.toThrow(
+      'storage unavailable'
+    )
     fakeHost.peek = peek
 
     // 被抑制 → 正常落定
@@ -968,7 +1123,10 @@ describe('G. completion notices', () => {
     const parent = family('c1', 'c2')
     const c1 = fakeHost.put('c1', { interrupted: true, submitGate: gate(), answer: { text: 'A' } })
     c1.requestStates.set(R(9), 'pending')
-    const pending = call({ action: 'prompt-sub-session', sub_session_id: 'c1', message: 'task' }, { taskId: 9 })
+    const pending = call(
+      { action: 'prompt-sub-session', sub_session_id: 'c1', message: 'task' },
+      { taskId: 9 }
+    )
     await vi.waitFor(() => expect(submitsOf(c1)).toHaveLength(1))
     await runner.onDrivenSettled(settledEvent({ requestId: R(9), background: false }))
     c1.submitGate!.release()
@@ -995,7 +1153,9 @@ describe('G. completion notices', () => {
       'subsession-done:c1:42',
       'subsession-done:c2:42'
     ])
-    expect(notices.every((n) => !String(n[1]).includes('id="c1"') || !String(n[1]).includes('id="c2"'))).toBe(true)
+    expect(
+      notices.every((n) => !String(n[1]).includes('id="c1"') || !String(n[1]).includes('id="c2"'))
+    ).toBe(true)
   })
 
   it('PIN-14 的裁定：本进程不认得的前台落定 —— 驱动它的父会话工具任务还活着 → 不通知；已终结 → 通知', async () => {
@@ -1016,7 +1176,15 @@ describe('H. abort semantics', () => {
     const parent = family('c1', 'c2', 'c3', 'c4')
     const c1 = fakeHost.put('c1', { submitGate: gate() })
     const ac1 = new AbortController()
-    const fg = runner.prompt({ parentId: 'P', childId: 'c1', message: 'go', background: false, timeoutSeconds: 5, signal: ac1.signal, requestId: R(1) })
+    const fg = runner.prompt({
+      parentId: 'P',
+      childId: 'c1',
+      message: 'go',
+      background: false,
+      timeoutSeconds: 5,
+      signal: ac1.signal,
+      requestId: R(1)
+    })
     await vi.waitFor(() => expect(submitsOf(c1)).toHaveLength(1))
     ac1.abort()
     await vi.waitFor(() => expect(c1.callsOf('abort')).toHaveLength(1))
@@ -1025,11 +1193,24 @@ describe('H. abort semantics', () => {
 
     const c2 = fakeHost.put('c2', { submitGate: gate() })
     const ac2 = new AbortController()
-    await runner.prompt({ parentId: 'P', childId: 'c2', message: 'go', background: true, timeoutSeconds: 5, signal: ac2.signal, requestId: R(2) })
+    await runner.prompt({
+      parentId: 'P',
+      childId: 'c2',
+      message: 'go',
+      background: true,
+      timeoutSeconds: 5,
+      signal: ac2.signal,
+      requestId: R(2)
+    })
     ac2.abort()
     c2.busy = true
     const ac3 = new AbortController()
-    const waiting = runner.wait({ parentId: 'P', childId: 'c2', timeoutSeconds: 5, signal: ac3.signal })
+    const waiting = runner.wait({
+      parentId: 'P',
+      childId: 'c2',
+      timeoutSeconds: 5,
+      signal: ac3.signal
+    })
     ac3.abort()
     expect(await waiting).toMatchObject({ kind: 'aborted' })
     expect(c2.callsOf('abort')).toEqual([])
@@ -1039,7 +1220,10 @@ describe('H. abort semantics', () => {
     const c3 = fakeHost.put('c3', { interrupted: true, submitGate: gate() })
     c3.requestStates.set(R(3), 'pending')
     const ac4 = new AbortController()
-    const rerun = call({ action: 'prompt-sub-session', sub_session_id: 'c3', message: 'task' }, { taskId: 3, signal: ac4.signal })
+    const rerun = call(
+      { action: 'prompt-sub-session', sub_session_id: 'c3', message: 'task' },
+      { taskId: 3, signal: ac4.signal }
+    )
     await vi.waitFor(() => expect(submitsOf(c3)).toHaveLength(1))
     ac4.abort()
     await vi.waitFor(() => expect(c3.callsOf('abort')).toHaveLength(1))
@@ -1090,7 +1274,9 @@ describe('H. abort semantics', () => {
     expect(degraded.callsOf('abort')).toEqual([])
     expect(bg.interrupted).toBe(true)
     // 级联中止的那一轮落定时不通知
-    await runner.onDrivenSettled(settledEvent({ childId: 'fg', requestId: R(7), background: false, reason: 'aborted' }))
+    await runner.onDrivenSettled(
+      settledEvent({ childId: 'fg', requestId: R(7), background: false, reason: 'aborted' })
+    )
     expect(noticesTo(parent)).toEqual([])
     // 幂等：再来一遍什么都不多做
     await runner.cascadeParentAbort('P')
@@ -1104,7 +1290,10 @@ describe('I. fresh prompt into an interrupted child', () => {
   it('P2-10-48 开着的被中断子会话、没开着但镜像说被中断的 → 都不拒；带新键发送，没开着的由网关打开', async () => {
     family('c1', 'c2')
     const c1 = fakeHost.put('c1', { interrupted: true })
-    const a = await call({ action: 'prompt-sub-session', sub_session_id: 'c1', message: 'new' }, { taskId: 21 })
+    const a = await call(
+      { action: 'prompt-sub-session', sub_session_id: 'c1', message: 'new' },
+      { taskId: 21 }
+    )
     expect(a.isError).toBe(false)
     expect(submitsOf(c1).map((o) => o.requestId)).toEqual([R(21)])
 
@@ -1113,7 +1302,10 @@ describe('I. fresh prompt into an interrupted child', () => {
     fakeHost.configure = (session) => {
       if (session.sessionId === 'c2') session.interrupted = true
     }
-    const b = await call({ action: 'prompt-sub-session', sub_session_id: 'c2', message: 'new' }, { taskId: 22 })
+    const b = await call(
+      { action: 'prompt-sub-session', sub_session_id: 'c2', message: 'new' },
+      { taskId: 22 }
+    )
     expect(b.isError).toBe(false)
     expect(fakeHost.callsOf('open')).toContain('c2')
     expect(submitsOf(fakeHost.get('c2')!).map((o) => o.requestId)).toEqual([R(22)])
@@ -1125,7 +1317,10 @@ describe('I. fresh prompt into an interrupted child', () => {
       interrupted: true,
       drivenRun: { requestId: R(1), parentId: 'P', background: true, conversationId: 1 as never }
     })
-    await call({ action: 'prompt-sub-session', sub_session_id: 'c1', message: 'new' }, { taskId: 2 })
+    await call(
+      { action: 'prompt-sub-session', sub_session_id: 'c1', message: 'new' },
+      { taskId: 2 }
+    )
     await runner.onDrivenSettled(settledEvent({ requestId: R(1), reason: 'aborted' }))
     expect(noticesTo(parent)).toEqual([])
   })

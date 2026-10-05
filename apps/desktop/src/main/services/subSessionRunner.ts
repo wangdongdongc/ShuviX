@@ -243,7 +243,8 @@ class SubSessionRunner {
   /** 开着的门面；没开就 peek（存储在才打开，从不创建） */
   private async peekFacade(sessionId: string): Promise<AgentSession | undefined> {
     return (
-      sessionService.getAgentSession(sessionId) ?? (await sessionService.peekAgentSession(sessionId))
+      sessionService.getAgentSession(sessionId) ??
+      (await sessionService.peekAgentSession(sessionId))
     )
   }
 
@@ -448,7 +449,8 @@ class SubSessionRunner {
 
     let run: DrivenRun
     try {
-      const known = params.requestId === undefined ? 'none' : await this.requestStateOf(childId, requestId)
+      const known =
+        params.requestId === undefined ? 'none' : await this.requestStateOf(childId, requestId)
 
       if (known === 'settled') {
         // 崩溃之前就落定了：不再发送，答复就在子会话里（PIN-03）
@@ -652,7 +654,9 @@ class SubSessionRunner {
         if (this.statusOf(id) === 'interrupted') await this.resumeChild(id)
       }
     } else {
-      const candidates = childId ? [childId] : sessionRecords.findChildren(parentId).map((s) => s.id)
+      const candidates = childId
+        ? [childId]
+        : sessionRecords.findChildren(parentId).map((s) => s.id)
       blockOn = candidates.filter((id) => this.statusOf(id) === 'running')
       await params.onTargets?.(blockOn)
     }

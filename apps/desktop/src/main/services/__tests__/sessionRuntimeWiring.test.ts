@@ -424,10 +424,7 @@ describe('D10-42 后台通知（PIN-05）', () => {
     const unlocked = fakeHost.put('s2')
     await sessionService.deliverSubSessionNotice('s2', 'sub done', 'subsession-done:c2:8')
     expect(unlocked.callsOf('writeNotice')).toEqual([
-      [
-        'writeNotice',
-        { text: 'sub done', kind: 'sub-session', requestId: 'subsession-done:c2:8' }
-      ]
+      ['writeNotice', { text: 'sub done', kind: 'sub-session', requestId: 'subsession-done:c2:8' }]
     ])
     expect(unlocked.callsOf('createAgent')).toEqual([])
     // P2-10-51：bash 的后台通知仍是 notify(text)，没有选项

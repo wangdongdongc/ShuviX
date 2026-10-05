@@ -179,6 +179,7 @@ beforeAll(async () => {
   ;({ sessionService } = await import('../sessionService'))
   ;({ chatGateway } = await import('../../frontend/core/DefaultChatGateway'))
   ;({ subSessionRunner: runner } = await import('../subSessionRunner'))
+  // eslint-disable-next-line boundaries/dependencies -- S+T 用例有意让真的 session 工具驱动真的运行器（产品里是工具引用服务，这里只是从服务的用例里把它构造出来）
   ;({ SessionTool } = await import('../../tools/session'))
 })
 
@@ -231,9 +232,7 @@ function overrides(kit: FauxKit, options: ProcessOptions): Partial<SessionHostDe
     },
     ...(options.sessionTool
       ? {
-          toolHost: toolsToolHost((sessionId) => [
-            new SessionTool({ sessionId } as ToolContext)
-          ])
+          toolHost: toolsToolHost((sessionId) => [new SessionTool({ sessionId } as ToolContext)])
         }
       : {}),
     ...(options.policy ? { interruptedSendPolicy: options.policy } : {}),
@@ -262,7 +261,8 @@ async function transcriptOf(sessionId: string): Promise<string[]> {
 /** 父会话里的子会话通知（steer / 自动续跑的 pi.user，或写入的 shuvix.notice） */
 const noticesIn = (entries: string[]): string[] =>
   entries.filter(
-    (e) => (e.startsWith('pi.user:') || e.startsWith('shuvix.notice:')) && e.includes('<sub-session')
+    (e) =>
+      (e.startsWith('pi.user:') || e.startsWith('shuvix.notice:')) && e.includes('<sub-session')
   )
 
 const userTexts = (entries: string[]): string[] => entries.filter((e) => e.startsWith('pi.user:'))
@@ -299,7 +299,9 @@ afterEach(async () => {
 
 /** 自动续跑关掉（父会话收到的通知只写成 shuvix.notice，不起轮） */
 function autoResumeOff(): void {
-  mocks.settingsGet.mockImplementation((key) => (key === 'session.autoResume' ? 'false' : undefined))
+  mocks.settingsGet.mockImplementation((key) =>
+    key === 'session.autoResume' ? 'false' : undefined
+  )
 }
 
 /**
@@ -352,7 +354,11 @@ describe('S+T continue cascade', () => {
     await waitFor(() => settingsOf('P').runState === 'idle', 5000, 'P idle')
     await waitFor(() => settingsOf('C').runState === 'idle', 5000, 'C idle')
     // 标记处理完了（被抑制的那次落定照样清标记）
-    await waitFor(() => getSessionHost().get('C')?.drivenRun === undefined, 5000, 'C marker cleared')
+    await waitFor(
+      () => getSessionHost().get('C')?.drivenRun === undefined,
+      5000,
+      'C marker cleared'
+    )
     expect(noticesIn(await transcriptOf('P'))).toEqual([])
   }, 30000)
 
@@ -388,10 +394,14 @@ describe('S+T continue cascade', () => {
 
     expect(await transcriptOf('C')).toEqual(['pi.user:bg task', 'pi.assistant:C-done'])
     const p = await transcriptOf('P')
-    expect(p.some((e) => e.includes('<sub-sessions status="settled">') && e.includes('C-done'))).toBe(
-      true
+    expect(
+      p.some((e) => e.includes('<sub-sessions status="settled">') && e.includes('C-done'))
+    ).toBe(true)
+    await waitFor(
+      () => getSessionHost().get('C')?.drivenRun === undefined,
+      5000,
+      'C marker cleared'
     )
-    await waitFor(() => getSessionHost().get('C')?.drivenRun === undefined, 5000, 'C marker cleared')
     expect(noticesIn(await transcriptOf('P'))).toEqual([])
   }, 30000)
 })
@@ -404,10 +414,24 @@ describe('S answers and status', () => {
     insert('C', { parentId: 'P' })
     kit.queue(answer('a1'))
     expect(
-      await runner.prompt({ parentId: 'P', childId: 'C', message: 'q1', background: false, timeoutSeconds: 10, requestId: 'subsession:P:1' })
+      await runner.prompt({
+        parentId: 'P',
+        childId: 'C',
+        message: 'q1',
+        background: false,
+        timeoutSeconds: 10,
+        requestId: 'subsession:P:1'
+      })
     ).toMatchObject({ kind: 'answered', answer: 'a1' })
     kit.queue(modelError('boom'))
-    const failed = await runner.prompt({ parentId: 'P', childId: 'C', message: 'q2', background: false, timeoutSeconds: 10, requestId: 'subsession:P:2' })
+    const failed = await runner.prompt({
+      parentId: 'P',
+      childId: 'C',
+      message: 'q2',
+      background: false,
+      timeoutSeconds: 10,
+      requestId: 'subsession:P:2'
+    })
     expect(failed).toMatchObject({ kind: 'answered', answer: 'boom', isError: true })
     expect(failed).not.toHaveProperty('error')
   }, 20000)
@@ -447,7 +471,14 @@ describe('S completion notices across restarts', () => {
     const stall = stalled()
     kit.queue(stall.step)
     expect(
-      await runner.prompt({ parentId: 'P', childId: 'C', message: 'bg', background: true, timeoutSeconds: 10, requestId: 'subsession:P:5' })
+      await runner.prompt({
+        parentId: 'P',
+        childId: 'C',
+        message: 'bg',
+        background: true,
+        timeoutSeconds: 10,
+        requestId: 'subsession:P:5'
+      })
     ).toEqual({ kind: 'started', id: 'C' })
     await withTimeout(stall.reached, 10000, 'C request')
 
@@ -468,7 +499,11 @@ describe('S completion notices across restarts', () => {
     const noticeRequestId = deliver.mock.calls[0]![2]
     expect(noticeRequestId).toMatch(/^subsession-done:C:\d+$/)
     expect(await getSessionHost().get('P')!.requestState(noticeRequestId)).not.toBe('none')
-    await waitFor(() => getSessionHost().get('C')?.drivenRun === undefined, 5000, 'C marker cleared')
+    await waitFor(
+      () => getSessionHost().get('C')?.drivenRun === undefined,
+      5000,
+      'C marker cleared'
+    )
     await waitFor(() => settingsOf('P').runState === 'idle', 10000, 'P idle')
     deliver.mockRestore()
 
@@ -497,8 +532,19 @@ describe('S completion notices across restarts', () => {
     kit.queue(answer('a0'))
     expect(await chatGateway.prompt('P', 'hi')).toEqual({})
     kit.queue(answer('done'))
-    await runner.prompt({ parentId: 'P', childId: 'C', message: 'bg', background: true, timeoutSeconds: 10, requestId: 'subsession:P:7' })
-    await waitFor(async () => noticesIn(await transcriptOf('P')).length === 1, 10000, 'first delivery')
+    await runner.prompt({
+      parentId: 'P',
+      childId: 'C',
+      message: 'bg',
+      background: true,
+      timeoutSeconds: 10,
+      requestId: 'subsession:P:7'
+    })
+    await waitFor(
+      async () => noticesIn(await transcriptOf('P')).length === 1,
+      10000,
+      'first delivery'
+    )
     await new Promise((resolve) => setTimeout(resolve, 200))
     expect(getSessionHost().get('C')!.drivenRun).toBeDefined()
 
@@ -506,7 +552,11 @@ describe('S completion notices across restarts', () => {
     const deliver = vi.spyOn(sessionService, 'deliverSubSessionNotice')
     await sessionService.ensureAgentSession('C')
     await waitFor(() => deliver.mock.calls.length === 1, 5000, 'redelivery')
-    await waitFor(() => getSessionHost().get('C')?.drivenRun === undefined, 5000, 'C marker cleared')
+    await waitFor(
+      () => getSessionHost().get('C')?.drivenRun === undefined,
+      5000,
+      'C marker cleared'
+    )
     expect(noticesIn(await transcriptOf('P'))).toHaveLength(1)
     deliver.mockRestore()
   }, 30000)
@@ -529,7 +579,11 @@ describe('S+T interrupted parent abort cascade (PIN-08)', () => {
     await waitFor(() => settingsOf('C').runState === 'idle', 5000, 'C idle mirror')
     expect(open.mock.calls.filter(([id]) => id === 'C')).toEqual([])
     expect(await transcriptOf('C')).toEqual(['pi.user:do it'])
-    await waitFor(() => getSessionHost().get('C')?.drivenRun === undefined, 5000, 'C marker handled')
+    await waitFor(
+      () => getSessionHost().get('C')?.drivenRun === undefined,
+      5000,
+      'C marker handled'
+    )
     expect(noticesIn(await transcriptOf('P'))).toEqual([])
   }, 30000)
 
@@ -543,7 +597,11 @@ describe('S+T interrupted parent abort cascade (PIN-08)', () => {
     const p = await transcriptOf('P')
     expect(p.at(-2)).toBe('pi.user:new')
     expect(p.at(-1)).toBe('pi.assistant:fresh')
-    await waitFor(() => getSessionHost().get('C')?.drivenRun === undefined, 5000, 'C marker handled')
+    await waitFor(
+      () => getSessionHost().get('C')?.drivenRun === undefined,
+      5000,
+      'C marker handled'
+    )
     expect(noticesIn(await transcriptOf('P'))).toEqual([])
   }, 30000)
 })
@@ -563,7 +621,14 @@ describe('S fresh prompt into an interrupted child', () => {
     const kit2 = await newProcess()
     kit2.queue(answer('fresh'))
     const outcome = await withTimeout(
-      runner.prompt({ parentId: 'P', childId: 'C', message: 'new task', background: false, timeoutSeconds: 10, requestId: 'subsession:P:3' }),
+      runner.prompt({
+        parentId: 'P',
+        childId: 'C',
+        message: 'new task',
+        background: false,
+        timeoutSeconds: 10,
+        requestId: 'subsession:P:3'
+      }),
       15000,
       'prompt'
     )
@@ -572,9 +637,9 @@ describe('S fresh prompt into an interrupted child', () => {
     expect(kit2.requests).toHaveLength(1)
     const users = kit2.requests[0]!.messages.filter((m) => m.role === 'user')
     const last = users.at(-1)!
-    expect(typeof last.content === 'string' ? last.content : JSON.stringify(last.content)).toContain(
-      'new task'
-    )
+    expect(
+      typeof last.content === 'string' ? last.content : JSON.stringify(last.content)
+    ).toContain('new task')
     expect(userTexts(await transcriptOf('C'))).toEqual(['pi.user:old', 'pi.user:new task'])
   }, 30000)
 
@@ -586,20 +651,38 @@ describe('S fresh prompt into an interrupted child', () => {
     expect(await chatGateway.prompt('P', 'hi')).toEqual({})
     const stall = stalled()
     kit.queue(stall.step)
-    await runner.prompt({ parentId: 'P', childId: 'C', message: 'r1', background: true, timeoutSeconds: 10, requestId: 'subsession:P:1' })
+    await runner.prompt({
+      parentId: 'P',
+      childId: 'C',
+      message: 'r1',
+      background: true,
+      timeoutSeconds: 10,
+      requestId: 'subsession:P:1'
+    })
     await withTimeout(stall.reached, 10000, 'C request')
 
     const kit2 = await newProcess()
     await sessionService.ensureAgentSession('P')
     kit2.queue(held2(kit2))
     const outcome = await withTimeout(
-      runner.prompt({ parentId: 'P', childId: 'C', message: 'r2', background: false, timeoutSeconds: 10, requestId: 'subsession:P:2' }),
+      runner.prompt({
+        parentId: 'P',
+        childId: 'C',
+        message: 'r2',
+        background: false,
+        timeoutSeconds: 10,
+        requestId: 'subsession:P:2'
+      }),
       15000,
       'prompt r2'
     )
     expect(outcome).toMatchObject({ kind: 'answered', answer: 'r2 answer' })
     expect(markerSeen).toBe('subsession:P:2')
-    await waitFor(() => getSessionHost().get('C')?.drivenRun === undefined, 5000, 'C marker handled')
+    await waitFor(
+      () => getSessionHost().get('C')?.drivenRun === undefined,
+      5000,
+      'C marker handled'
+    )
     await new Promise((resolve) => setTimeout(resolve, 200))
     expect(noticesIn(await transcriptOf('P'))).toEqual([])
   }, 30000)
@@ -612,7 +695,14 @@ describe('S fresh prompt into an interrupted child', () => {
     expect(await chatGateway.prompt('P', 'hi')).toEqual({})
     const stall = stalled()
     kit.queue(stall.step)
-    await runner.prompt({ parentId: 'P', childId: 'C', message: 'r1', background: true, timeoutSeconds: 10, requestId: 'subsession:P:1' })
+    await runner.prompt({
+      parentId: 'P',
+      childId: 'C',
+      message: 'r1',
+      background: true,
+      timeoutSeconds: 10,
+      requestId: 'subsession:P:1'
+    })
     await withTimeout(stall.reached, 10000, 'C request')
 
     const kit2 = await newProcess()
