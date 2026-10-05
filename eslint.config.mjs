@@ -9,6 +9,36 @@ const NO_PI_AGENT_CORE = {
   message:
     'pi-agent-core was removed in the pi 1.0 migration; use @earendil-works/pi-durable / pi-ai or the local types in @shuvix/agent-runtime.'
 }
+// pi-ai 的 compat 入口保留的是 0.80 时代的全局 API（getModel / stream / complete + 环境变量注入的 key、
+// api 注册表）—— 迁移把模型层换成了活的 createModels() 注册表（agent-runtime 的 src/models）。
+const NO_PI_AI_COMPAT = {
+  group: ['@earendil-works/pi-ai/compat', '@earendil-works/pi-ai/compat/*'],
+  message:
+    "pi-ai's compat entry is the old global API (getModel / stream / complete, env-injected keys); use the createModels() registry in @shuvix/agent-runtime (src/models)."
+}
+// pi 1.0 迁移（P1-01）删掉的旧运行时：harness/（HarnessSession / eventHandler / modelsAdapter / stubEnv /
+// zeroContent）、运行时登记簿、会话树缓存、旧模型解析与 OpenAI 兼容层（已并入 src/models/catalog.ts）。
+// 按模块名拦，不按目录：相对路径从哪一层引进来都一样拦得住。
+const NO_DELETED_RUNTIME = {
+  group: [
+    '@shuvix/agent-runtime/harness',
+    '@shuvix/agent-runtime/harness/*',
+    '**/harness/index',
+    '**/harness/eventHandler',
+    '**/harnessSession',
+    '**/modelsAdapter',
+    '**/stubEnv',
+    '**/zeroContent',
+    '**/runtimeRegistry',
+    '**/sessionTreeRegistry',
+    '**/modelResolver',
+    '**/agentModelResolver',
+    '**/providerCompat'
+  ],
+  message:
+    'This module was deleted in the pi-durable migration. Sessions run on DurableSession / SessionHost (agent-runtime src/durable); models on src/models.'
+}
+const MIGRATION_BANS = [NO_PI_AGENT_CORE, NO_PI_AI_COMPAT, NO_DELETED_RUNTIME]
 const NO_ELECTRON = {
   name: 'electron',
   message: '@shuvix/agent-runtime is host-agnostic; Electron is injected by the desktop host.'
@@ -57,14 +87,15 @@ export default defineConfig(
   },
   // pi-agent-core 已在 pi 1.0 迁移中移除（会话层改用 pi-durable）。worktree 位于主仓库目录内时，
   // 模块解析会向上找到主仓库 node_modules 里残留的旧版本 —— 误留的 import 照样能编译运行，只能靠这条规则拦住。
+  // 同一组还拦 pi-ai 的 compat 入口与迁移删掉的旧运行时模块（P1-13），免得它们被原样请回来。
   {
     files: ['packages/**/*.{ts,tsx}'],
     rules: {
-      '@typescript-eslint/no-restricted-imports': ['error', { patterns: [NO_PI_AGENT_CORE] }]
+      '@typescript-eslint/no-restricted-imports': ['error', { patterns: MIGRATION_BANS }]
     }
   },
   // agent-runtime 宿主无关：Electron 与 node:sqlite 只能由宿主注入（会话存储的打开器是 seam）。
-  // 同一条规则在后面的配置块里会整体替换前面的选项，所以 pi-agent-core 那条在这里要再写一遍。
+  // 同一条规则在后面的配置块里会整体替换前面的选项，所以迁移那一组在这里要再写一遍。
   {
     files: ['packages/agent-runtime/**/*.{ts,tsx}'],
     ignores: ['packages/agent-runtime/**/__tests__/**'],
@@ -73,7 +104,7 @@ export default defineConfig(
         'error',
         {
           paths: [NO_ELECTRON, NO_NODE_SQLITE],
-          patterns: [NO_PI_AGENT_CORE, NO_ELECTRON_SUBPATH, NO_DURABLE_NODE_SQLITE]
+          patterns: [...MIGRATION_BANS, NO_ELECTRON_SUBPATH, NO_DURABLE_NODE_SQLITE]
         }
       ]
     }
@@ -84,7 +115,7 @@ export default defineConfig(
     rules: {
       '@typescript-eslint/no-restricted-imports': [
         'error',
-        { paths: [NO_ELECTRON], patterns: [NO_PI_AGENT_CORE, NO_ELECTRON_SUBPATH] }
+        { paths: [NO_ELECTRON], patterns: [...MIGRATION_BANS, NO_ELECTRON_SUBPATH] }
       ]
     }
   },
