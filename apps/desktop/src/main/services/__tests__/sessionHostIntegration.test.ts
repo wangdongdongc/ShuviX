@@ -6,7 +6,7 @@
  *             锁镜像 true → false
  *   D10-41 删一条正忙的会话：限时落定、文件没了、在途的发送不挂；删行之后没有镜像写回
  *   D10-52 clearMessages（PIN-08）：正忙的 run 先关停；之后没有 agent、镜像 false / idle、界面收到
- *          agent_closing{false}；下一次发送从全新的存储开始
+ *          agent_closing{false}；下一次发送从全新的存储开始；从不调 hub.deleteSession（P3-05）
  *   D10-60 messageService.clear：等宿主 delete；旧格式会话的 .jsonl 经 deleteStorage 删掉，存储类型
  *          换成当前类型（PIN-22）
  *   D10-63 退出留下的标记：进程 1 正忙时 closeAll → runState 留 busy、agentLocked 留 true；进程 2 打开 →
@@ -152,6 +152,7 @@ import type { Session } from '../../dao/types'
 import { sessionRecords } from '../sessionRecords'
 import { clearMemoryStoragesForTests } from '../sessionStorage'
 import { getSessionHost, resetSessionHostForTests } from '../sessionHost'
+import { getSyncHub, resetSyncHubForTests } from '../../frontend/sync/syncWiring'
 import {
   answer,
   fauxKit,
@@ -306,8 +307,13 @@ describe('D10-52 clearMessages（PIN-08）', () => {
     await stall.reached
     expect(settingsOf('s1').agentLocked).toBe(true)
 
+    // P3-05：清空从不撤下会话的视图（那是删除的事；清空经宿主的 destroy 钩子换成 none 视图）
+    resetSyncHubForTests()
+    const deleteSession = vi.spyOn(getSyncHub(), 'deleteSession')
     await withTimeout(chatGateway.clearMessages('s1'), 10000, 'clearMessages')
     await withTimeout(pending, 5000, 'pending prompt')
+    expect(deleteSession).not.toHaveBeenCalled()
+    resetSyncHubForTests()
     expect(sessionService.hasAgentRuntime('s1')).toBe(false)
     expect(settingsOf('s1').agentLocked).toBe(false)
     expect(settingsOf('s1').runState).toBe('idle')
