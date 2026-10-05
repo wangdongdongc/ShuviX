@@ -14,14 +14,15 @@
  * P1-11 起两边是 agentHost 直接导出的 `desktopPromptVars` 与 `createDesktopToolHost(...).resolveAgentTools`。
  * 这里用**真的 SkillTool** —— 要比的正是它装配出的货架；于是桩 skillService（可控的 findEnabled）、
  * `../../i18n`（顶层 import electron）与 ripgrep（真二进制），注册表桩要带 `registerBuiltinTool`
- * （skillTool.ts 加载即自注册）。派生 agent 的工具一侧要等 phase 2（resolveAgentTools 对 spawned 抛
- * PhasePendingError）：那几格先 it.todo，变量表一侧照旧按派生身份查。
+ * （skillTool.ts 加载即自注册）。派生 agent 的四格（P2-04-35）：工具一侧解析一个派生请求（根会话 SID、
+ * agent AGENT_ID、不能再派生、coding），变量表一侧照旧按派生身份查（`varsOf('spawned')`）—— 两边仍是
+ * 同一个判断；派生 agent 的回复不是一条对话，所以它的提示里没有交互段。
  *
  * 2026-09-24 DSC-1 同号改写：从前「不指路时手艺范例常驻」，如今不指路时两个值都是空串，
  * 指路时恰好一次、不带范例。
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import type { PromptVars } from '@shuvix/agent-runtime'
+import type { AgentToolsRequest, PromptVars } from '@shuvix/agent-runtime'
 import type { Skill } from '../../types/skill'
 
 const mocks = vi.hoisted(() => ({
@@ -125,23 +126,39 @@ async function varsOf(kind: Kind, names: string[]): Promise<PromptVars> {
   })
 }
 
-/** 同一组输入下的两边：变量表与根 agent 的工具解析（名单同一份） */
+/** 同一组输入下的两边：变量表与这个 agent 的工具解析（名单同一份；root 或派生） */
 async function bothSides(
+  kind: Kind,
   names: string[]
 ): Promise<{ vars: PromptVars; tools: Array<{ name?: string; description?: string }> }> {
-  const vars = await varsOf('root', names)
+  const vars = await varsOf(kind, names)
+  const request: AgentToolsRequest =
+    kind === 'root'
+      ? {
+          sessionId: SID,
+          conversationId: 1 as never,
+          kind: 'root',
+          rootSessionId: SID,
+          selfSessionId: SID,
+          profile: inProcess(profileOf('work')),
+          names,
+          model: { provider: 'p', modelId: 'm' },
+          cwd: '/w/proj'
+        }
+      : {
+          sessionId: SID,
+          kind: 'spawned',
+          rootSessionId: SID,
+          selfSessionId: AGENT_ID,
+          agentId: AGENT_ID,
+          canSpawn: false,
+          profile: inProcess(profileOf('coding')),
+          names,
+          model: { provider: 'p', modelId: 'm' },
+          cwd: ''
+        }
   const resolved = await createDesktopToolHost({ sessionOf: () => undefined }).resolveAgentTools(
-    {
-      sessionId: SID,
-      conversationId: 1 as never,
-      kind: 'root',
-      rootSessionId: SID,
-      selfSessionId: SID,
-      profile: inProcess(profileOf('work')),
-      names,
-      model: { provider: 'p', modelId: 'm' },
-      cwd: '/w/proj'
-    },
+    request,
     { signal: new AbortController().signal }
   )
   const tools = [resolved.agent, resolved.skill].filter((t) => t !== undefined)
@@ -158,11 +175,12 @@ beforeEach(() => {
 })
 
 describe('DSC 指路与货架同一个判断', () => {
-  const MATRIX: Array<[kind: Kind, named: boolean, enabled: boolean]> = (['root'] as const).flatMap(
-    (kind) =>
-      [true, false].flatMap((named) =>
-        [true, false].map((enabled): [Kind, boolean, boolean] => [kind, named, enabled])
-      )
+  const MATRIX: Array<[kind: Kind, named: boolean, enabled: boolean]> = (
+    ['root', 'spawned'] as const
+  ).flatMap((kind) =>
+    [true, false].flatMap((named) =>
+      [true, false].map((enabled): [Kind, boolean, boolean] => [kind, named, enabled])
+    )
   )
 
   it.each(MATRIX)(
@@ -170,7 +188,7 @@ describe('DSC 指路与货架同一个判断', () => {
     async (kind, named, enabled) => {
       mocks.findEnabled.mockReturnValue(enabled ? [BUILTIN] : [])
       const names = named ? ['read', DRAWING] : ['read']
-      const { vars, tools } = await bothSides(names)
+      const { vars, tools } = await bothSides(kind, names)
 
       // (a) 两个出口都指了路
       const pointed = vars.visualGuide.includes(POINTER) && vars.visualCraft.includes(POINTER)
@@ -197,19 +215,19 @@ describe('DSC 指路与货架同一个判断', () => {
       // 根会话（不是 Chrome 标签页）连交互段一起给：交互段也指向技能 —— 上面的「恰好一次」
       // 因此覆盖了它不重复点名这一点
       if (expected && kind === 'root') expect(vars.visualGuide).toContain('```interactive')
+      // 派生 agent 的回复交回父 agent（不是一条对话）：没有交互段（P2-04-35）
+      if (kind === 'spawned') expect(vars.visualGuide).not.toContain('```interactive')
     }
-  )
-
-  it.todo(
-    'DSC-1 kind=spawned（名单点名 × 技能在架）：派生 agent 的货架与它的提示同一个判断 (pi-durable p2)'
   )
 
   it('DSC-2 点了名但被停用、名单里又没有别的 skill → 连 skill 工具都不挂（空手的工具是噪音）', async () => {
     mocks.findEnabled.mockReturnValue([])
-    const { vars, tools } = await bothSides(['read', DRAWING])
+    const { vars, tools } = await bothSides('root', ['read', DRAWING])
     expect(tools.map((tool) => tool.name)).not.toContain('skill')
-    // 对照：同一次提示里也没有指路；派生身份的变量表同样不指路（工具一侧是 phase 2）
+    // 对照：同一次提示里也没有指路；派生 agent 两边同样（P2-04-35：工具一侧也不挂 skill）
     expect(vars.visualGuide).not.toContain(POINTER)
-    expect((await varsOf('spawned', ['read', DRAWING])).visualGuide).not.toContain(POINTER)
+    const spawned = await bothSides('spawned', ['read', DRAWING])
+    expect(spawned.tools.map((tool) => tool.name)).not.toContain('skill')
+    expect(spawned.vars.visualGuide).not.toContain(POINTER)
   })
 })
