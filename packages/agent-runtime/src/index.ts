@@ -197,7 +197,6 @@ export {
 // durable 工具输出包装器的内核（落盘口注入；宿主在上面叠自己的门）
 export {
   wrapDurableOutput,
-  outputStrategyOf,
   type SpillMode,
   type WrapDurableOutputOptions,
   type OutputStrategyAware
