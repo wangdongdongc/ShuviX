@@ -90,8 +90,7 @@ vi.mock('../agentRuntimeAdapters', () => ({
 }))
 vi.mock('../settingsService', () => ({ settingsService: { get: mocks.settingsGet } }))
 vi.mock('../sessionDayPromptService', () => ({
-  recordPromptAdmitted: vi.fn(),
-  recordFromUserMessageEvent: vi.fn()
+  recordUserEntry: vi.fn()
 }))
 vi.mock('../toolAggregator', () => ({ filterAvailableTools: (tools: string[]) => tools }))
 vi.mock('../mcpService', () => ({

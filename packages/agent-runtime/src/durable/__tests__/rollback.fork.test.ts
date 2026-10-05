@@ -68,6 +68,8 @@ describe('P3-10a · fork point', () => {
     expect(view.conversationId).toBe(F)
     expect(messageIds(view)).toEqual([String(ids.u1), String(ids.a1)])
     expect(view.messages).toStrictEqual(before.messages.slice(0, 2))
+    // P3-07 的 viewSnapshot()（没挂投影：一次性的纯投影）反映 fork
+    expect(await session.viewSnapshot()).toStrictEqual(view)
   })
 
   it('P3-10a-02 keep:true forks at the target itself: view [U1, A1, U2]; idle, no run starts', async () => {

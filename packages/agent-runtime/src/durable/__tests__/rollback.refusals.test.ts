@@ -232,6 +232,8 @@ describe('P3-10a · refusals, races and remount', () => {
       expect(replaced[0]!.value.conversationId).toBe(F)
       expect(h.state.value).toStrictEqual(await freshMount(session))
       expect(h.state.value.conversationId).toBe(F)
+      // 挂着且追上了的投影：viewSnapshot() 交它的值（P3-07），也就是 fork 的视图
+      expect(await session.viewSnapshot()).toStrictEqual(h.state.value)
 
       const types = binding.updates.map((update: ServiceProviderUpdate) => update.type)
       expect(types).not.toContain('replaced')

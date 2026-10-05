@@ -91,6 +91,7 @@ import {
 } from '@earendil-works/pi-durable'
 import type { HarnessSettings, Registry, ToolRegistration } from '@earendil-works/pi-durable'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
+import type { SessionView } from '@shuvix/chat-protocol/types/sessionView'
 import type { ThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
 import type { PromptVars, PromptVarsCtx } from '../agentProfile/promptVars'
 import type { RuntimeEventSink, RuntimeLogger } from '../types'
@@ -414,6 +415,12 @@ export interface DurableSession {
    * 对话正是这个 agent 的，就挂它；否则按 agentId 在 agent 目录里找。
    */
   agentProjector(agent: string | AgentRef): Promise<AgentProjector | undefined>
+  /**
+   * 此刻的界面视图（P3-07 PIN-13 / PIN-14；`message.list`、artifact 等只读读取用）：挂着的投影跟上了最新
+   * 的发布（同一帧、运行状态已修订）就用它的值；否则按当前对话此刻的一帧快照现投影一次（纯投影，与挂载
+   * 同一判据）。从不挂载投影、不留任何订阅、不开启调度器。句柄已关 → 以 `SessionClosedError` 拒绝。
+   */
+  viewSnapshot(): Promise<SessionView>
   /**
    * 运行状态变化（PIN-23）：每次 `runState` 变了都在微任务里调用（含没有提交发布的转变 —— 继续 / 中止
    * 开启调度器的那一刻），读 `runState` 得到的就是新值。关停之后不再调用。监听器抛错只记日志。
@@ -2284,6 +2291,19 @@ export class DurableSessionImpl implements DurableSession {
     const ready = this.mountProjector(instance)
     this.agentProjectors.set(agentId, { instance, ready })
     return ready
+  }
+
+  viewSnapshot(): Promise<SessionView> {
+    return this.op(async () => {
+      const conversation = await this.currentConversation()
+      // 视图挂载此刻的一帧（与投影的 watch 同一个挂载：值不可变，跟上了就是同一份引用）；读完即放
+      const state = await conversation.viewState(BG)
+      const frame = state.value
+      state.dispose()
+      const current = this.projectorEntry?.instance.snapshotIfCurrent(conversation.id, frame)
+      if (current !== undefined) return current
+      return SessionProjectorImpl.snapshot(this.projectorHost(), conversation.id, frame)
+    })
   }
 
   /** 挂载一个投影；失败（含挂载途中关停）→ 拆掉它、关停统一成 SessionClosedError */
