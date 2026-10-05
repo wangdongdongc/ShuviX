@@ -20,7 +20,7 @@
  * MCP 逐台逐个 → 其它」拼，这里只交出各段。
  *
  * 另留两样：`agentFactory`（派生 agent 的旧创建入口 —— P2-05 起没有调用方了，派发走会话的协调器；
- * spawned 恒抛 `PhasePendingError('spawned agents', 2)`，P2-13 删掉）与 `resolveProfileModelSpec`（切档案
+ * 恒抛 `PhasePendingError('spawned agents', 2)`，P2-13 删掉）与 `resolveProfileModelSpec`（切档案
  * 种子）。
  */
 import type { ToolExecutionApi, ToolRegistration } from '@earendil-works/pi-durable'
@@ -535,10 +535,10 @@ export function resolveProfileModelSpec(spec: string): SubAgentModelConfig | nul
 // ─── 派生 agent 的旧创建入口（恒抛；P2-05 起没有调用方） ──────────────────
 
 /**
- * 派生 agent 的旧创建入口（P2-05 之前 AgentManager 经它派发；现在派发走会话的协调器）。根 agent 由 durable 会话自己创建（锁，P1-09），
- * 这里不再有根路径的适配面；`createAgent` 先照常派生规格（变量表与注入解析跑一遍），然后抛
- * `PhasePendingError`（spawned：'spawned agents', 2）。工具解析因此永远走不到 —— 派生 agent 的工具
- * 已经在 ToolHost 上（`resolveAgentTools` kind 'spawned'，P2-04），由协调器（P2-03）调；这里刻意
+ * 派生 agent 的旧创建入口（P2-05 之前 AgentManager 经它派发；现在派发走会话的协调器）。根 agent 由 durable
+ * 会话自己创建（锁，P1-09），工厂的参数类型只收 spawned；`createAgent` 先照常派生规格（校验入参、解析档案
+ * 模型），然后抛 `PhasePendingError`（spawned：'spawned agents', 2）。工具解析因此永远走不到 —— 派生 agent
+ * 的工具已经在 ToolHost 上（`resolveAgentTools` kind 'spawned'，P2-04），由协调器（P2-03）调；这里刻意
  * **不**接过去（PIN-07）。
  * TODO(pi-durable p2): P2-13 删掉这个入口（连同 createAgentFactory）。
  */
@@ -546,12 +546,7 @@ export const agentFactory = createAgentFactory({
   resolveTools: () => {
     throw new PhasePendingError('spawned agents', 2)
   },
-  promptVars: desktopPromptVars,
   resolveProfileModel: resolveProfileModelSpec,
   eventSink: electronEventSink,
-  logger: runtimeLogger,
-  resolveInstruction: desktopPromptHost.resolveInstruction,
-  resolveProjectPrompt: desktopPromptHost.resolveProjectPrompt,
-  resolveProjectMemory: desktopPromptHost.resolveProjectMemory,
-  resolveKnowledgeBases: desktopPromptHost.resolveKnowledgeBases
+  logger: runtimeLogger
 })

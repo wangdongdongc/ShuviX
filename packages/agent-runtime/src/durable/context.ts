@@ -4,15 +4,10 @@
  * 从不取消已经提交的工作（durable 的语义），所以没有理由在这里传播调用方的 signal。
  */
 import type { Context } from '@earendil-works/chord'
-import { BACKGROUND_CONTEXT, withAbortSignal } from '@earendil-works/chord/context'
+import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 
 /** 永不取消的后台 Context */
 export const backgroundContext: Context = BACKGROUND_CONTEXT
-
-/** 绑定一个 AbortSignal 的 Context（signal 缺省 = 后台 Context） */
-export function contextWithSignal(signal: AbortSignal | undefined): Context {
-  return signal === undefined ? BACKGROUND_CONTEXT : withAbortSignal(signal, BACKGROUND_CONTEXT)
-}
 
 /** 关停后的错误：durable 的 Harness / Session 关停后一律以这两种文案拒绝 */
 export function isClosedError(error: unknown): boolean {

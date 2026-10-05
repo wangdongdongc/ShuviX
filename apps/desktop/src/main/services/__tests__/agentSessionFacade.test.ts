@@ -7,8 +7,8 @@
  *   D10-28 steer / followUp 委托；nextTurn 垫成 followUp；被拒 → 带原文的 reject
  *   D10-29 notify 只委托一次（门面没有自己的合并定时器）
  *   D10-30 其余委托：abort / setThinkingLevel / continue / 询问；isStreaming / 挂起询问现读
- *   D10-31 invalidate：destroyAgent 之后清 fileTime、解钉（恰一次）；销毁失败照样清；不碰审查 / 决策 / 存储
- *   D10-32 destroy：先中止 hook run → 等宿主 delete → 清 fileTime / 决策 / 审查 / 解钉；delete 失败照样清
+ *   D10-31 invalidate：destroyAgent 之后清 fileTime（恰一次）；销毁失败照样清；不碰审查 / 决策 / 存储
+ *   D10-32 destroy：先中止 hook run → 等宿主 delete → 清 fileTime / 决策 / 审查；delete 失败照样清
  *   D10-34 失效的句柄：会话已关 → `{ error, code: 'closed' }`，从不悄悄重开
  * （D10-33「门面从不授予已读」在 agentSessionBot.test.ts。）
  */
@@ -21,7 +21,6 @@ const mocks = vi.hoisted(() => ({
   recordPromptAdmitted: vi.fn<(sessionId: string, key: string) => void>(),
   resolveAgentProfileName: vi.fn<(sessionId: string) => string>(),
   clearFileTime: vi.fn<(sessionId: string) => void>(),
-  unpinSession: vi.fn<(sessionId: string) => void>(),
   clearReviewState: vi.fn<(sessionId: string) => void>(),
   clearSessionDecisions: vi.fn<(sessionId: string) => void>(),
   broadcast: vi.fn<(event: Record<string, unknown>) => void>(),
@@ -52,7 +51,6 @@ vi.mock('../sessionRecords', () => ({
 vi.mock('../sessionService', () => ({
   sessionService: { resolveAgentProfileName: mocks.resolveAgentProfileName }
 }))
-vi.mock('../sandbox', () => ({ unpinSession: mocks.unpinSession }))
 vi.mock('../../utils/toolUtils/fileTime', () => ({ clearSession: mocks.clearFileTime }))
 vi.mock('../../frontend/core/ChatFrontendRegistry', () => ({
   chatFrontendRegistry: { broadcast: mocks.broadcast }
@@ -315,7 +313,7 @@ describe('D10-30 其余委托', () => {
 })
 
 describe('D10-31 invalidate', () => {
-  it('D10-31 destroyAgent 挂着时还没清 fileTime；放行后 fileTime 与解钉各恰一次；不碰审查 / 决策 / 存储', async () => {
+  it('D10-31 destroyAgent 挂着时还没清 fileTime；放行后 fileTime 恰一次；不碰审查 / 决策 / 存储', async () => {
     const destroyGate = gate()
     const { durable, session } = facade({ destroyGate, lock: lockRecord() })
     const pending = session.invalidate()
@@ -325,7 +323,6 @@ describe('D10-31 invalidate', () => {
     destroyGate.release()
     await pending
     expect(mocks.clearFileTime.mock.calls).toEqual([[SID]])
-    expect(mocks.unpinSession.mock.calls).toEqual([[SID]])
     expect(mocks.clearReviewState).not.toHaveBeenCalled()
     expect(mocks.clearSessionDecisions).not.toHaveBeenCalled()
     expect(fakeHost.callsOf('delete')).toEqual([])
@@ -335,12 +332,11 @@ describe('D10-31 invalidate', () => {
     const { session } = facade({ destroyError: new Error('stuck') })
     await expect(session.invalidate()).resolves.toBeUndefined()
     expect(mocks.clearFileTime.mock.calls).toEqual([[SID]])
-    expect(mocks.unpinSession.mock.calls).toEqual([[SID]])
   })
 })
 
 describe('D10-32 destroy', () => {
-  it('D10-32 先中止 hook run → 等宿主 delete（挂着时不清）→ fileTime / 决策 / 审查 / 解钉各恰一次', async () => {
+  it('D10-32 先中止 hook run → 等宿主 delete（挂着时不清）→ fileTime / 决策 / 审查各恰一次', async () => {
     const { session } = facade()
     fakeHost.deleteGate = gate()
     const pending = session.destroy()
@@ -351,12 +347,7 @@ describe('D10-32 destroy', () => {
     expect(mocks.clearReviewState).not.toHaveBeenCalled()
     fakeHost.deleteGate.release()
     await pending
-    for (const spy of [
-      mocks.clearFileTime,
-      mocks.clearSessionDecisions,
-      mocks.clearReviewState,
-      mocks.unpinSession
-    ]) {
+    for (const spy of [mocks.clearFileTime, mocks.clearSessionDecisions, mocks.clearReviewState]) {
       expect(spy.mock.calls).toEqual([[SID]])
     }
   })
@@ -366,7 +357,6 @@ describe('D10-32 destroy', () => {
     fakeHost.deleteError = new Error('locked file')
     await expect(session.destroy()).resolves.toBeUndefined()
     expect(mocks.clearReviewState.mock.calls).toEqual([[SID]])
-    expect(mocks.unpinSession.mock.calls).toEqual([[SID]])
   })
 })
 

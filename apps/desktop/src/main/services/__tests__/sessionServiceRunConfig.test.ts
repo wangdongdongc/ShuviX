@@ -168,9 +168,11 @@ describe('resolveRunModelConfig —— hook 派发的回落源：会话的模型
     }
   )
 
-  it('RC-3a 树上没写档位：带的是回落后的默认档，与 initAgent 给前端的那一格相同', async () => {
+  it('RC-3a 树上没写档位：带的是回落后的默认档（推理模型 → 缺省档，否则 off），与 initAgent 给前端的那一格相同', async () => {
     tree({ provider: 'p1', model: 'm1' })
+    expect((await sessionService.resolveRunModelConfig(SID))?.thinkingLevel).toBe('off')
 
+    catalog('p1', 'm1', { reasoning: true })
     const cfg = await sessionService.resolveRunModelConfig(SID)
     expect(cfg?.thinkingLevel).toBe(DEFAULT_THINKING_LEVEL)
     // 用户在选择器里看到的档位 = hook agent 继承的档位

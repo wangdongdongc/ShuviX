@@ -2,13 +2,11 @@
  * 命令沙箱的生命周期接线（HG-2）—— sandbox 模块整个替身，只看「谁在什么时候调了它」。
  *
  * 契约（pi-durable 之后）：
- *   - agent **销毁**（agent 芯片的 X / 钉档案 → `AgentSession.invalidate` → 运行时的 destroyAgent）与
- *     **删会话**（`destroySessionRuntime` → SessionHost.delete）都调一次 unpinSession。命令沙箱的钉子如今
- *     记在锁里（P1-11 起 BashTool 不再 pin），unpinSession 只是旧登记的收尾，所以这里**只**断言它按本会话
- *     id 恰调一次，不断言它与 destroyAgent 的先后；
- *   - 关停失败（destroyAgent / delete 抛错）也照样解钉 —— 只记日志，收尾链路要走完；
- *   - 删会话（sessionService.delete）才清它的临时目录（cleanupSession）；销毁 agent 不清 —— 会话还在，
- *     它的 TMPDIR 里可能正放着后台命令的中间文件。子会话各自清自己的那份。
+ *   - 命令沙箱的钉子记在锁记录里（随解锁一起没了），sandbox 模块不再按会话登记，销毁 agent / 删会话
+ *     都没有要解的钉；
+ *   - 删会话（sessionService.delete）才清它的临时目录（cleanupSession）；销毁 agent（agent 芯片的 X /
+ *     钉档案 → `AgentSession.invalidate` → 运行时的 destroyAgent）不清 —— 会话还在，它的 TMPDIR 里可能
+ *     正放着后台命令的中间文件。子会话各自清自己的那份。
  *
  * 两层：
  *   A. AgentSession 门面直接构造（假 DurableSession / 假 SessionHost），用可控的 destroyAgent / delete
@@ -56,7 +54,6 @@ import {
 const mocks = vi.hoisted(() => ({
   calls: [] as string[],
   // sandbox 模块（本文件的主角）
-  unpinSession: vi.fn<(sessionId: string) => void>(),
   cleanupSession: vi.fn<(sessionId: string) => void>(),
   // agent-runtime 的审查状态清理（记一笔，真件照清 —— 见下面的部分 mock）
   clearReviewState: vi.fn<(sessionId: string) => void>(),
@@ -77,7 +74,6 @@ const mocks = vi.hoisted(() => ({
 }))
 
 vi.mock('../sandbox', () => ({
-  unpinSession: mocks.unpinSession,
   cleanupSession: mocks.cleanupSession
 }))
 
@@ -244,9 +240,6 @@ const settle = (): Promise<void> => new Promise((r) => setTimeout(r, 0))
 
 const idx = (entry: string): number => mocks.calls.indexOf(entry)
 
-/** 某方法的关停闸门对应的流水账前缀：invalidate 等 destroyAgent，destroy 等宿主 delete */
-const stopOf = { invalidate: 'destroyAgent', destroy: 'delete' } as const
-
 // ─── 层 B 的内存行表 ─────────────────────────────────────────────────────
 
 interface MemSession {
@@ -282,7 +275,6 @@ beforeEach(() => {
   stopGate = gate()
   instrument(resetFakeHost())
 
-  mocks.unpinSession.mockImplementation((id) => void mocks.calls.push(`unpin:${id}`))
   mocks.cleanupSession.mockImplementation((id) => void mocks.calls.push(`cleanup:${id}`))
   mocks.clearReviewState.mockImplementation((id) => void mocks.calls.push(`clearReview:${id}`))
   mocks.clearFileTimeSession.mockImplementation(
@@ -401,53 +393,11 @@ async function seedSecurityMemory(sessionId: string): Promise<void> {
 
 // ─── 层 A：AgentSession ────────────────────────────────────────────────
 
-describe('HG-2 AgentSession —— 销毁 agent / 删会话都解钉，恰一次', () => {
-  it.each(['invalidate', 'destroy'] as const)(
-    'HG-2 %s()：关停落定之后恰解钉一次、按本会话 id（不断言与关停的先后）',
-    async (method) => {
-      const session = facadeOf(SID)
-      stopMode = 'hold'
-
-      const pending = session[method]()
-      await settle()
-      expect(mocks.calls).toContain(`${stopOf[method]}:start:${SID}`)
-
-      stopGate.release()
-      await pending
-
-      expect(mocks.unpinSession.mock.calls).toEqual([[SID]])
-      expect(idx(`${stopOf[method]}:end:${SID}`)).toBeGreaterThanOrEqual(0)
-    }
-  )
-
-  it.each(['invalidate', 'destroy'] as const)(
-    'HG-2 %s()：关停抛错也照样解钉（只记日志，收尾链路要走完）',
-    async (method) => {
-      const session = facadeOf(SID)
-      stopMode = 'throw'
-
-      await expect(session[method]()).resolves.toBeUndefined()
-
-      expect(mocks.unpinSession.mock.calls).toEqual([[SID]])
-      expect(idx(`${stopOf[method]}:threw:${SID}`)).toBeGreaterThanOrEqual(0)
-    }
-  )
-
-  it('HG-2 invalidate() 只解钉、不清临时目录：会话还在，它的 TMPDIR 不能随一次销毁 agent 被删', async () => {
+describe('HG-2 AgentSession —— 销毁 agent 不清临时目录', () => {
+  it('HG-2 invalidate() 不清临时目录：会话还在，它的 TMPDIR 不能随一次销毁 agent 被删', async () => {
     await facadeOf(SID).invalidate()
-    expect(mocks.unpinSession.mock.calls).toEqual([[SID]])
     expect(mocks.cleanupSession).not.toHaveBeenCalled()
     expect(fakeHost.callsOf('delete')).toEqual([])
-  })
-
-  it('HG-2 只动自己这一条：另一条会话的 invalidate / destroy 不解本会话的钉', async () => {
-    const mine = facadeOf(SID)
-    const other = facadeOf(`${SID}-other`)
-    await other.invalidate()
-    await other.destroy()
-    expect(mocks.unpinSession.mock.calls.every(([id]) => id === `${SID}-other`)).toBe(true)
-    await mine.destroy()
-    expect(mocks.unpinSession.mock.calls.filter(([id]) => id === SID)).toHaveLength(1)
   })
 })
 
@@ -505,8 +455,8 @@ describe('RV-L AgentSession —— 询问点审查的会话内状态与决策日
 
 // ─── 层 B：sessionService 的两个入口 ───────────────────────────────────────
 
-describe('HG-2 sessionService —— delete 清临时目录，invalidateAgent 只解钉', () => {
-  it('HG-2 delete(会话开着)：先关停运行时（宿主 delete，解钉），再清临时目录；cleanupSession 按本会话 id 恰一次', async () => {
+describe('HG-2 sessionService —— delete 清临时目录，invalidateAgent 不清', () => {
+  it('HG-2 delete(会话开着)：先关停运行时（宿主 delete），再清临时目录；cleanupSession 按本会话 id 恰一次', async () => {
     seedSession(SID)
     await sessionService.ensureAgentSession(SID)
     expect(fakeHost.callsOf('open')).toEqual([SID])
@@ -514,8 +464,6 @@ describe('HG-2 sessionService —— delete 清临时目录，invalidateAgent �
     await sessionService.delete(SID)
 
     expect(mocks.cleanupSession.mock.calls).toEqual([[SID]])
-    // 删除路径本身就解钉（destroySessionRuntime）
-    expect(mocks.unpinSession.mock.calls).toEqual([[SID]])
     // 删目录之前：后台任务已被杀、运行时已停 —— 否则还活着的命令会往一个刚删掉的 TMPDIR 里写
     expect(idx(`kill:${SID}`)).toBeLessThan(idx(`cleanup:${SID}`))
     expect(idx(`delete:end:${SID}`)).toBeLessThan(idx(`cleanup:${SID}`))
@@ -552,13 +500,12 @@ describe('HG-2 sessionService —— delete 清临时目录，invalidateAgent �
     expect(mocks.cleanupSession.mock.calls).toEqual([[c1], [c2], [parent]])
   })
 
-  it('HG-2 invalidateAgent：经真实门面的 invalidate（运行时 destroyAgent）解钉，不清临时目录', async () => {
+  it('HG-2 invalidateAgent：经真实门面的 invalidate（运行时 destroyAgent），不清临时目录', async () => {
     seedSession(SID)
     await sessionService.ensureAgentSession(SID)
 
     await sessionService.invalidateAgent(SID)
 
-    expect(mocks.unpinSession.mock.calls).toEqual([[SID]])
     expect(idx(`destroyAgent:end:${SID}`)).toBeGreaterThanOrEqual(0)
     expect(mocks.cleanupSession).not.toHaveBeenCalled()
   })

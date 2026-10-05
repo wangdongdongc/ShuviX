@@ -21,7 +21,6 @@ import { createLogger } from '../logger'
 import type { AgentRuntimeInfo, ThinkingLevel } from '../types'
 import { clearSession as clearFileTimeSession } from '../utils/toolUtils/fileTime'
 import { hookService, hookTriggers } from './hookService'
-import { unpinSession } from './sandbox'
 import { recordPromptAdmitted } from './sessionDayPromptService'
 import { getSessionHost } from './sessionHost'
 import { sessionRecords } from './sessionRecords'
@@ -81,7 +80,7 @@ const facades = new WeakMap<DurableSession, AgentSession>()
  *    （受理过的发送 / `continue()` 落定之后；被拒的不发，自动续跑不发 —— PIN-19），payload 是会话事实；
  *  - 受理即入账活跃时间与日历（PIN-13）；
  *  - 发送失败报给界面（PIN-15；运行时不广播）；
- *  - 销毁 agent / 删除会话时的桌面清理：fileTime、命令沙箱钉子、（删除时）决策日志与审查状态、
+ *  - 销毁 agent / 删除会话时的桌面清理：fileTime、（删除时）决策日志与审查状态、
  *    hook 派发出去的 run。ssh / MCP 等内置能力服务器的寿命归会话，由 sessionService.delete 经
  *    `mcpService.closeSession` 释放（PIN-23）。
  *
@@ -264,7 +263,7 @@ export class AgentSession {
   /**
    * 销毁 agent（agent 芯片上的 X、钉档案、清空之前）：运行时解锁（忙 / 被中断先中止，广播
    * agent_closing 一对），会话照常开着，下一次发送按那时的配置重建。之后清掉桌面侧随 agent 的东西：
-   * fileTime 的「已读」记录、命令沙箱钉子。销毁失败只记日志，清理照做。
+   * fileTime 的「已读」记录（命令沙箱的钉子在锁记录里，随解锁一起没了）。销毁失败只记日志，清理照做。
    * 决策日志 / 审查状态 / 存储都不碰 —— 它们随会话而不随 agent。
    */
   async invalidate(): Promise<void> {
@@ -326,15 +325,14 @@ export class AgentSession {
 
 /** 随 agent 一起作废的桌面侧状态（销毁 agent / 清空 / 删除会话共用） */
 export function clearAgentScopedState(sessionId: string): void {
+  // 命令沙箱的钉子在锁记录里：下一个 agent 上锁时按那时的开关重新决定，这里没有要收尾的登记
   clearFileTimeSession(sessionId)
-  // 下一个 agent 按那时的开关重新决定套不套沙箱（锁里记着它自己的钉子，这里只是旧登记的收尾）
-  unpinSession(sessionId)
 }
 
 /**
  * 删除会话时的整套关停（会话打开与否都走一遍）：先中止 hook 派发出去的 run（titler 之类不该再往一条
  * 正在删的会话上写）→ SessionHost 关掉并删除存储（忙就中止，等它彻底停下）→ 清掉桌面侧的会话状态
- * （fileTime、决策日志、审查计数与卡片反馈、沙箱钉子）。删存储失败只记日志，清理照做。
+ * （fileTime、决策日志、审查计数与卡片反馈）。删存储失败只记日志，清理照做。
  */
 export async function destroySessionRuntime(sessionId: string): Promise<void> {
   hookService.abortSessionRuns(sessionId)
@@ -346,6 +344,5 @@ export async function destroySessionRuntime(sessionId: string): Promise<void> {
   clearFileTimeSession(sessionId)
   clearSessionDecisions(sessionId)
   clearReviewState(sessionId)
-  unpinSession(sessionId)
   log.info(`destroy session=${sessionId}`)
 }

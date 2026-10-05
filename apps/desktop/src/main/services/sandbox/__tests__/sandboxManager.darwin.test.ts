@@ -60,8 +60,8 @@ vi.mock('../../../logger', () => ({
 
 import {
   cleanupSession,
-  pinSession,
   planFor,
+  sandboxGloballyActive,
   sandboxStatus,
   setSandboxSettingReader,
   type SandboxPlan
@@ -133,10 +133,10 @@ describe.skipIf(process.platform !== 'darwin')('sandbox manager + bgTaskService 
     for (const dir of [fakeHome, state.tmp]) if (dir) rmSync(dir, { recursive: true, force: true })
   })
 
-  it('RS-10 pinSession → planFor gives a plan with the session TMPDIR', (ctx) => {
+  it('RS-10 sandbox active → planFor gives a plan with the session TMPDIR', (ctx) => {
     if (!available) ctx.skip()
     expect(existsSync(SESSION_TMP)).toBe(false)
-    expect(pinSession(SID)).toBe(true)
+    expect(sandboxGloballyActive()).toBe(true)
     plan = planFor({
       sessionId: SID,
       workingDirectory: ws,

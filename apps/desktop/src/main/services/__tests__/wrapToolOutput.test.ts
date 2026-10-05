@@ -42,7 +42,7 @@ vi.mock('../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {} })
 }))
 
-import { wrapDurableTool, wrapToolOutput } from '../wrapToolOutput'
+import { wrapDurableTool } from '../wrapToolOutput'
 
 const SID = 'wrap-tool-output-test-session'
 
@@ -108,7 +108,7 @@ afterEach(() => {
 describe('wrapToolOutput — L1 全工具门', () => {
   it('W-1 不传 security → 不设门，原 execute 正常', async () => {
     const { tool, execute } = makeTool()
-    const wrapped = wrapToolOutput(tool, SID, 'middle')
+    const wrapped = wrapDurableTool(tool, { sessionId: SID, spill: true })
     const result = await exec(wrapped, 'tc-1', { action: 'connect' })
     expect(execute).toHaveBeenCalledTimes(1)
     expect(result.content).toEqual([{ type: 'text', text: 'ran' }])
@@ -117,7 +117,7 @@ describe('wrapToolOutput — L1 全工具门', () => {
   it('W-2 调用形态：opts 恰为 {toolCallId, taskId, conversationId, toolName, operation, mcp, abortError, onOther, signal}（无 missingChannel）', async () => {
     const { tool } = makeTool('ssh')
     const { security, enforceInvocation } = makeSecurity()
-    const wrapped = wrapToolOutput(tool, SID, 'middle', undefined, security)
+    const wrapped = wrapDurableTool(tool, { sessionId: SID, spill: true, security })
 
     await exec(wrapped, 'tc-2', { action: 'connect' })
 
@@ -141,7 +141,7 @@ describe('wrapToolOutput — L1 全工具门', () => {
   it('W-SG1 工具调用的中止信号原样交给 L1 门：opts.signal 与 execute 收到的是同一个对象', async () => {
     const { tool, execute } = makeTool('ssh')
     const { security, enforceInvocation } = makeSecurity()
-    const wrapped = wrapToolOutput(tool, SID, 'middle', undefined, security)
+    const wrapped = wrapDurableTool(tool, { sessionId: SID, spill: true, security })
 
     const ac = new AbortController()
     await executeTool(wrapped, 'tc-sg1', { action: 'connect' } as never, ac.signal)
@@ -160,7 +160,7 @@ describe('wrapToolOutput — L1 全工具门', () => {
     const { security } = makeSecurity(
       () => new Promise<EnforceOutcome>((resolve) => (release = resolve))
     )
-    const wrapped = wrapToolOutput(tool, SID, 'middle', undefined, security)
+    const wrapped = wrapDurableTool(tool, { sessionId: SID, spill: true, security })
 
     const params = { action: 'connect' }
     const signal = new AbortController().signal
@@ -185,7 +185,7 @@ describe('wrapToolOutput — L1 全工具门', () => {
     const { security } = makeSecurity(async () => {
       throw err
     })
-    const wrapped = wrapToolOutput(tool, SID, 'middle', undefined, security)
+    const wrapped = wrapDurableTool(tool, { sessionId: SID, spill: true, security })
 
     const result = await exec(wrapped, 'tc-4', {})
     expect(result).toEqual({ isError: true, content: [{ type: 'text', text: err.message }] })
@@ -200,7 +200,7 @@ describe('wrapToolOutput — L1 全工具门', () => {
       ac.abort()
       throw err
     })
-    const wrapped = wrapToolOutput(tool, SID, 'middle', undefined, security)
+    const wrapped = wrapDurableTool(tool, { sessionId: SID, spill: true, security })
 
     await expect(executeTool(wrapped, 'tc-4b', {} as never, ac.signal)).rejects.toBe(err)
     expect(execute).not.toHaveBeenCalled()
@@ -212,7 +212,7 @@ describe('wrapToolOutput — L1 全工具门', () => {
       status: 'feedback',
       text: 'try the browser tool'
     }))
-    const wrapped = wrapToolOutput(tool, SID, 'middle', undefined, security)
+    const wrapped = wrapDurableTool(tool, { sessionId: SID, spill: true, security })
 
     const result = await exec(wrapped, 'tc-5', { action: 'connect' })
     expect(execute).not.toHaveBeenCalled()
@@ -228,7 +228,7 @@ describe('wrapToolOutput — L1 全工具门', () => {
   it('W-6 operation 提取：action 为数字/对象/缺失 → operation undefined', async () => {
     const { tool } = makeTool()
     const { security, enforceInvocation } = makeSecurity()
-    const wrapped = wrapToolOutput(tool, SID, 'middle', undefined, security)
+    const wrapped = wrapDurableTool(tool, { sessionId: SID, spill: true, security })
 
     await exec(wrapped, 'tc-6a', { action: 42 })
     await exec(wrapped, 'tc-6b', { action: { nested: true } })
@@ -249,7 +249,7 @@ describe('wrapToolOutput — L1 全工具门', () => {
   it('W-10 MCP 工具的 mcpMeta 原样成为 opts.mcp（同一个对象，不复制不改写）', async () => {
     const { tool } = makeMcpTool()
     const { security, enforceInvocation } = makeSecurity()
-    const wrapped = wrapToolOutput(tool, SID, 'middle', undefined, security)
+    const wrapped = wrapDurableTool(tool, { sessionId: SID, spill: true, security })
 
     await exec(wrapped, 'tc-10', { q: 'x' })
 
@@ -265,7 +265,7 @@ describe('wrapToolOutput — L1 全工具门', () => {
     // 不在自身属性上；`{...tool}` 式的读法在这里会读到 undefined
     const layered = Object.create(Object.create(tool)) as AnyTool
     const { security, enforceInvocation } = makeSecurity()
-    const wrapped = wrapToolOutput(layered, SID, 'middle', undefined, security)
+    const wrapped = wrapDurableTool(layered, { sessionId: SID, spill: true, security })
 
     await exec(wrapped, 'tc-11', {})
     expect(mcpOf(enforceInvocation)).toBe(tool.mcpMeta)
@@ -274,7 +274,7 @@ describe('wrapToolOutput — L1 全工具门', () => {
   it('W-12 每次调用现读，不是包装那一刻抄一份', async () => {
     const { tool } = makeMcpTool()
     const { security, enforceInvocation } = makeSecurity()
-    const wrapped = wrapToolOutput(tool, SID, 'middle', undefined, security)
+    const wrapped = wrapDurableTool(tool, { sessionId: SID, spill: true, security })
 
     await exec(wrapped, 'tc-12a', {})
     // tools/list 重新发现之后事实会换（server 改了 annotations、或换成另一台）
@@ -294,7 +294,7 @@ describe('wrapToolOutput — L1 全工具门', () => {
     const { security, enforceInvocation } = makeSecurity(async () => {
       throw new Error("Denied by security policy rule 'no-evil#0'")
     })
-    const wrapped = wrapToolOutput(tool, SID, 'middle', undefined, security)
+    const wrapped = wrapDurableTool(tool, { sessionId: SID, spill: true, security })
 
     expect(await failureText(exec(wrapped, 'tc-13', {}))).toMatch(/Denied by security policy rule/)
     // 「按 server 拒绝」要成立，事实必须在判定**之前**就到了门上
@@ -362,7 +362,7 @@ describe('wrapToolOutput — L1 全工具门', () => {
       }
     )
     const { tool, execute } = makeTool('ssh')
-    const wrapped = wrapToolOutput(tool, SID, 'middle', undefined, security)
+    const wrapped = wrapDurableTool(tool, { sessionId: SID, spill: true, security })
 
     const result = await exec(wrapped, 'tc-9', { action: 'connect' })
     expect(execute).not.toHaveBeenCalled()
@@ -422,7 +422,7 @@ const terminateOf = (result: unknown): unknown =>
 describe('wrapToolOutput — control.terminate 原样带出', () => {
   it('W-T1 普通文本路径：包装后仍带 terminate:true，文本原样', async () => {
     const { tool } = makeTerminatingTool([{ type: 'text', text: 'Result recorded.' }])
-    const wrapped = wrapToolOutput(tool, SID, 'middle')
+    const wrapped = wrapDurableTool(tool, { sessionId: SID, spill: true })
 
     const result = await exec(wrapped, 'tc-t1', {})
 
@@ -435,7 +435,7 @@ describe('wrapToolOutput — control.terminate 原样带出', () => {
     ['只有空白文本', [{ type: 'text' as const, text: '   ' }]]
   ])('W-T1 %s → 补上 (no output) 之后仍带 terminate:true', async (_label, content) => {
     const { tool } = makeTerminatingTool(content)
-    const wrapped = wrapToolOutput(tool, SID, 'middle')
+    const wrapped = wrapDurableTool(tool, { sessionId: SID, spill: true })
 
     const result = await exec(wrapped, 'tc-t1b', {})
 
@@ -446,7 +446,7 @@ describe('wrapToolOutput — control.terminate 原样带出', () => {
   it('W-T1 带 security 且放行：L1 门过了之后结果仍带 terminate:true', async () => {
     const { tool, execute } = makeTerminatingTool([{ type: 'text', text: 'Result recorded.' }])
     const { security, enforceInvocation } = makeSecurity()
-    const wrapped = wrapToolOutput(tool, SID, 'middle', undefined, security)
+    const wrapped = wrapDurableTool(tool, { sessionId: SID, spill: true, security })
 
     const result = await exec(wrapped, 'tc-t1c', {})
 
@@ -459,8 +459,8 @@ describe('wrapToolOutput — control.terminate 原样带出', () => {
     const { tool } = makeTool()
     const { security } = makeSecurity()
     for (const wrapped of [
-      wrapToolOutput(tool, SID, 'middle'),
-      wrapToolOutput(tool, SID, 'middle', undefined, security)
+      wrapDurableTool(tool, { sessionId: SID, spill: true }),
+      wrapDurableTool(tool, { sessionId: SID, spill: true, security })
     ]) {
       const result = await exec(wrapped, 'tc-t2', {})
       expect('terminate' in (result as object)).toBe(false)

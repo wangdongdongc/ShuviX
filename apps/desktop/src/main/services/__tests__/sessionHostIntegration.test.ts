@@ -116,7 +116,7 @@ vi.mock('../../frontend/core/ChatFrontendRegistry', () => ({
   chatFrontendRegistry: { broadcast: mocks.broadcast }
 }))
 vi.mock('../artifacts/store', () => ({ deleteSessionArtifacts: vi.fn() }))
-vi.mock('../sandbox', () => ({ cleanupSession: vi.fn(), unpinSession: vi.fn() }))
+vi.mock('../sandbox', () => ({ cleanupSession: vi.fn() }))
 vi.mock('../hookService', () => ({
   hookTriggers: { fire: vi.fn() },
   hookService: { abortSessionRuns: vi.fn() }

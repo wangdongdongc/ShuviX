@@ -1,33 +1,12 @@
 /**
- * 工具输出后处理（桌面 wrapper）—— 截断/落盘内核已下沉 @shuvix/agent-runtime。
- * 此处只注入「Node fs 写 tool_results」作为 SpillSink（`desktopSpillSink`，durable 工具包装器
- * wrapToolOutput.ts 用的也是它），并保留既有导出签名给调用方。
+ * 工具输出落盘口（桌面）—— 截断 / 落盘的内核在 @shuvix/agent-runtime（`processToolOutput` /
+ * `wrapDurableOutput`）。此处只提供「Node fs 写 tool_results」这个 SpillSink（`desktopSpillSink`），
+ * 由 durable 工具包装器 wrapToolOutput.ts 注入内核。
  */
 import { join } from 'path'
 import { writeFileSync } from 'fs'
-import {
-  processToolOutput as sharedProcessToolOutput,
-  type SpillSink,
-  type TruncateStrategy,
-  type ProcessToolOutputResult
-} from '@shuvix/agent-runtime'
+import type { SpillSink } from '@shuvix/agent-runtime'
 import { getToolResultsDir } from '../paths'
-
-export type { TruncateStrategy, ProcessToolOutputResult }
-
-export interface ProcessToolOutputOptions {
-  sessionId: string
-  toolCallId: string
-  fullText: string
-  strategy: TruncateStrategy
-  maxLines?: number
-  maxBytes?: number
-  /**
-   * 超限时落盘、回预览 + 「用 read 工具取全文」。缺省 true。false = 只在内存里截断：这个 agent
-   * 没有 read 工具，落盘的全文它取不回来，那句指引就成了死路（Chrome 标签页会话的 `tab` 档案即如此）。
-   */
-  spill?: boolean
-}
 
 /**
  * 落盘文件名。toolCallId 来自模型提供商（自定义的 OpenAI 兼容中转也算），不能原样拼进路径 ——
@@ -56,17 +35,4 @@ export function desktopSpillSink(sessionId: string): SpillSink {
       }
     }
   }
-}
-
-export function processToolOutput(
-  opts: ProcessToolOutputOptions
-): Promise<ProcessToolOutputResult> {
-  return sharedProcessToolOutput({
-    toolCallId: opts.toolCallId,
-    fullText: opts.fullText,
-    strategy: opts.strategy,
-    maxLines: opts.maxLines,
-    maxBytes: opts.maxBytes,
-    sink: opts.spill === false ? undefined : desktopSpillSink(opts.sessionId)
-  })
 }

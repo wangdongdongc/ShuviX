@@ -54,7 +54,6 @@ vi.mock('../../services/artifacts/adopt', () => ({
 }))
 vi.mock('../../services/messageService', () => ({ messageService: {} }))
 vi.mock('../../services/sandbox', () => ({
-  pinSession: () => false,
   sandboxGloballyActive: () => false,
   planFor: () => null,
   whyUnconfined: () => 'disabled'

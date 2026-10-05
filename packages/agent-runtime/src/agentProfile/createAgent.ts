@@ -1,15 +1,15 @@
 /**
  * 统一 agent 创建管线 —— 宿主适配面 + 创建入口。
  *
- * `createAgentFactory(host)` 接收宿主一次性注入的端适配面（工具解析 / 变量表 / 事件汇 /
- * 指令解析…），返回 `createAgent(params)`。「这个 agent 是什么」（初始模型、思考档位、
- * 工具名单、系统提示词、root / spawned 的运行期差异）是纯派生，住在 `durable/agentSpec.ts`；
- * 本文件只剩宿主契约与创建入口。
+ * `createAgentFactory(host)` 接收宿主一次性注入的端适配面（工具解析 / 事件汇 / 档案模型解析…），
+ * 返回 `createAgent(params)`。「这个 agent 是什么」（初始模型、思考档位、工具名单）是纯派生，住在
+ * `durable/agentSpec.ts`；本文件只剩宿主契约与创建入口。
  *
  * **现状（pi-durable 切换中）**：本工厂只剩**派生 agent** 一条路。会话的根 agent 由它的 durable 会话
- * 自己创建（锁：`DurableSession.createAgent()`，`durable/lock.ts`；桌面经 SessionHost 接线），这里收到
- * `kind: 'root'` 直接拒绝。派生：先派生规格（校验入参、跑一遍变量表与注入解析），然后抛
- * `PhasePendingError` —— TODO(pi-durable p2) 派生 agent 落在 durable 子对话上。
+ * 自己创建（锁：`DurableSession.createAgent()`，`durable/lock.ts`；桌面经 SessionHost 接线），所以
+ * `CreateAgentParams.kind` 只收 `'spawned'` —— 根路径是编译期就进不来的（P1-13 起不再是运行期拒绝）。
+ * 派生：先派生规格（校验入参、解析档案模型），然后抛 `PhasePendingError` —— TODO(pi-durable p2)
+ * 派生 agent 落在 durable 子对话上。
  */
 import type { ImageContent, Message } from '@earendil-works/pi-ai'
 import type { AgentRuntimeInfo } from '@shuvix/chat-protocol/chatApi'
@@ -19,7 +19,7 @@ import type { ThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
 import { PhasePendingError } from '../errors/phasePending'
 import { deriveAgentSpec, type AgentSpecHost } from '../durable/agentSpec'
 import type { InlineTokensSidecar } from '../legacy/harnessV3/projection'
-import type { RuntimeEventSink, ToolResultTransform } from '../types'
+import type { RuntimeEventSink } from '../types'
 import type { InProcessAgentType, SubAgentModelConfig } from '../subagent/types'
 import type { AnyTool } from '../tools/toolResult'
 import type { AgentKind } from './promptVars'
@@ -99,27 +99,28 @@ export interface ToolResolveRequest {
 /**
  * 宿主一次性注入的端适配面。
  *
- * 规格派生要用的 seam（变量表 / 档案模型 / 各注入解析 / 日志）见 `AgentSpecHost`。旧运行时专属的
- * seam（buildModel / getApiKey / network / openSessionTree / createExecutionEnv / httpLog）随
+ * 规格派生要用的 seam（档案模型 / 日志）见 `AgentSpecHost`。旧运行时专属的 seam（buildModel /
+ * getApiKey / network / openSessionTree / createExecutionEnv / httpLog / transformToolResult）随
  * pi 0.80 的 agent 包一起删掉了：模型层由 P1-02/P1-03 重建，会话存储由 P1-07/P1-10 重建。
+ * 系统提示词的变量表与各注入解析也不在这里：durable 的人设冻结与段落扩展各有自己的 seam
+ * （`PromptHost` / promptVars，见 `durable/seams.ts`）。
  */
 export interface AgentHostAdapter extends AgentSpecHost {
   resolveTools: (req: ToolResolveRequest) => AnyAgentTool[] | Promise<AnyAgentTool[]>
   eventSink: RuntimeEventSink
-  /** 仅 root 应用（派生 agent 维持默认 passthrough，现状） */
-  transformToolResult?: ToolResultTransform
 }
 
 export interface CreateAgentParams {
-  kind: AgentKind
-  /** root=会话 id；spawned=agentId（sub-<uuid>） */
+  /** 只有派生 agent 经本工厂创建（根 agent 由 durable 会话的锁创建） */
+  kind: Extract<AgentKind, 'spawned'>
+  /** 派生 agent 的 agentId（sub-<uuid>） */
   sessionId: string
   /** 运行投影（getAgentProfile(...) 经 toInProcessAgentType 投影，或宿主就地组装） */
   profile: InProcessAgentType
   /** 初始模型配置（会话解析值 / 派发方传入） */
   model: SubAgentModelConfig
   /**
-   * 已解析的思考档位（root=resolveInitialThinkingLevel；spawned=modelConfig.thinkingLevel ?? 'off'）。
+   * 已解析的思考档位（root=会话设置；spawned=modelConfig.thinkingLevel ?? 'off'）。
    * spawned 时档案声明的 `shuvix-thinking` 压过它（见 agentSpec 决策表的思考一行）。
    */
   thinkingLevel?: ThinkingLevel
@@ -205,13 +206,7 @@ export interface AgentFactory {
 
 export function createAgentFactory(host: AgentHostAdapter): AgentFactory {
   async function createAgent(params: CreateAgentParams): Promise<CreatedAgent> {
-    // 会话的根 agent 由它的 durable 会话创建（锁），不经本工厂
-    if (params.kind === 'root') {
-      throw new Error(
-        'createAgent builds spawned agents only; a session root agent is created by its durable session (DurableSession.createAgent)'
-      )
-    }
-    // 先派生规格：入参校验（缺 spawn 上下文即抛）、变量表与注入解析照常跑一遍
+    // 先派生规格：入参校验（缺 spawn 上下文即抛）、档案模型照常解析一遍
     await deriveAgentSpec(host, params)
     // TODO(pi-durable p2): 派生 agent 落在 durable 子对话上（phase 2）
     throw new PhasePendingError('spawned agents', 2)

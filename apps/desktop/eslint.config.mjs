@@ -6,6 +6,39 @@ import eslintPluginReactHooks from 'eslint-plugin-react-hooks'
 import eslintPluginReactRefresh from 'eslint-plugin-react-refresh'
 import eslintPluginBoundaries from 'eslint-plugin-boundaries'
 
+// pi 1.0 迁移的禁区 —— 与工作区根 eslint.config.mjs 里的同名常量一致（两份配置各自独立，各写一遍）。
+const NO_PI_AGENT_CORE = {
+  group: ['@earendil-works/pi-agent-core', '@earendil-works/pi-agent-core/*'],
+  message:
+    'pi-agent-core was removed in the pi 1.0 migration; use @earendil-works/pi-durable / pi-ai or the local types in @shuvix/agent-runtime.'
+}
+// pi-ai 的 compat 入口保留的是 0.80 时代的全局 API；模型层走 services/models 的活注册表
+const NO_PI_AI_COMPAT = {
+  group: ['@earendil-works/pi-ai/compat', '@earendil-works/pi-ai/compat/*'],
+  message:
+    "pi-ai's compat entry is the old global API (getModel / stream / complete, env-injected keys); use the model registry in services/models."
+}
+// 迁移（P1-01）删掉的旧运行时与旧模型解析：按模块名拦，相对路径从哪一层引进来都一样拦得住
+const NO_DELETED_RUNTIME = {
+  group: [
+    '@shuvix/agent-runtime/harness',
+    '@shuvix/agent-runtime/harness/*',
+    '**/harness/index',
+    '**/harness/eventHandler',
+    '**/harnessSession',
+    '**/modelsAdapter',
+    '**/stubEnv',
+    '**/zeroContent',
+    '**/runtimeRegistry',
+    '**/sessionTreeRegistry',
+    '**/modelResolver',
+    '**/agentModelResolver',
+    '**/providerCompat'
+  ],
+  message:
+    'This module was deleted in the pi-durable migration. Sessions run on the durable SessionHost (services/sessionHost, agent-runtime src/durable); models on services/models.'
+}
+
 export default defineConfig(
   {
     ignores: [
@@ -79,20 +112,13 @@ export default defineConfig(
   },
   // pi-agent-core 已在 pi 1.0 迁移中移除（会话层改用 pi-durable）。worktree 位于主仓库目录内时，
   // 模块解析会向上找到主仓库 node_modules 里残留的旧版本 —— 误留的 import 照样能编译运行，只能靠这条规则拦住。
+  // 同一组还拦 pi-ai 的 compat 入口与迁移删掉的旧运行时模块（P1-13），免得它们被原样请回来。
   {
     files: ['src/**/*.{ts,tsx}', 'e2e/**/*.ts'],
     rules: {
       '@typescript-eslint/no-restricted-imports': [
         'error',
-        {
-          patterns: [
-            {
-              group: ['@earendil-works/pi-agent-core', '@earendil-works/pi-agent-core/*'],
-              message:
-                'pi-agent-core was removed in the pi 1.0 migration; use @earendil-works/pi-durable / pi-ai or the local types in @shuvix/agent-runtime.'
-            }
-          ]
-        }
+        { patterns: [NO_PI_AGENT_CORE, NO_PI_AI_COMPAT, NO_DELETED_RUNTIME] }
       ]
     }
   },

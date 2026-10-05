@@ -27,6 +27,8 @@ export default defineConfig({
     build: {
       // pi-ai / pi-durable / chord 1.0 是纯 ESM（exports 无 require 条件），
       // 必须内联打包，否则 Electron CJS require 会报 ERR_PACKAGE_PATH_NOT_EXPORTED。
+      // pi-durable / chord 因此记为 devDependencies（裁决 Q19）：生产依赖会被 electron-builder 连同
+      // 依赖树抄进 asar，而 chord 依赖的 esbuild（带原生二进制，只给 chord/bundler 用）运行时根本用不到。
       // @shuvix/agent-runtime 经别名解析为源码内联，无需在此列出。
       externalizeDeps: {
         exclude: [

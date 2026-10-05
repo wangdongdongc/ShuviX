@@ -116,7 +116,6 @@ export function shellCommandParamsSchema(text: {
  */
 function unconfinedReasonOf(
   spec: ShellCommandToolSpec,
-  sessionId: string,
   escalate: boolean,
   plan: SandboxPlan | null
 ): UnconfinedReason {
@@ -126,7 +125,7 @@ function unconfinedReasonOf(
   if (spec.sandboxed === true) return 'unavailable'
   // PowerShell 没有沙箱后端
   if (spec.shell !== 'bash') return 'unsupported'
-  return whyUnconfined(sessionId)
+  return whyUnconfined()
 }
 
 /** 工具卡上的沙箱标记：圈住了 = confined，否则就是没圈住的原因（ssh 的 remote 走不到这里） */
@@ -216,7 +215,7 @@ export class ShellCommandTool extends BaseTool<ShellCommandParamsSchema> {
           })
         : null
 
-    const unconfinedReason = unconfinedReasonOf(this.spec, this.ctx.sessionId, escalate, plan)
+    const unconfinedReason = unconfinedReasonOf(this.spec, escalate, plan)
     const sandbox = sandboxStateOf(unconfinedReason)
 
     // 是否询问由安全模块决定：内置 ask-on-command 只问没被圈住的命令（sandboxed=false）

@@ -52,8 +52,6 @@ vi.mock('../../frontend/core', () => ({
   chatFrontendRegistry: { broadcast: mocks.frontendBroadcast, hasCapability: vi.fn(() => false) }
 }))
 vi.mock('../notificationService', () => ({ notifyOnChatEvent: mocks.notify }))
-vi.mock('../stepPersistPipeline', () => ({ transformToolResultForPersist: vi.fn() }))
-vi.mock('../httpLogService', () => ({ httpLogService: { updateUsage: vi.fn() } }))
 vi.mock('../../i18n', () => ({ t: (key: string) => key }))
 vi.mock('../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {} })

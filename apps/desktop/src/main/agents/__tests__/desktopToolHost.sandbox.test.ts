@@ -1,11 +1,11 @@
 /**
- * P1-11 —— 命令沙箱的钉子经 `buildBuiltinTools({ sandboxed })` 交给**真的** BashTool（PIN-03：bash 不再
- * 调 pinSession，钉子随会话级 ToolContext 交进去）。沙箱管理器是 spy（planFor / whyUnconfined /
+ * P1-11 —— 命令沙箱的钉子经 `buildBuiltinTools({ sandboxed })` 交给**真的** BashTool（PIN-03：钉子随
+ * 会话级 ToolContext 交进去，bash 自己不 pin）。沙箱管理器是 spy（planFor / whyUnconfined /
  * sandboxGloballyActive），命令执行（bgTaskService.runCommand）与安全门是桩，包装器走恒等。
  *
  *  - H11-07 钉成套：全局开关关着也套 —— 描述多受限一段、schema 多越界参数，执行要计划、客体 sandboxed；
  *  - H11-08 钉成不套：全局开关开着也不套 —— 没有越界参数、描述不提沙箱，带越界参数也不要计划；
- *  - H11-13 「没套」的原因：钉成不套的 bash 报 whyUnconfined(s1) 的答案；钉成套的报 unavailable /
+ *  - H11-13 「没套」的原因：钉成不套的 bash 报 whyUnconfined 的答案；钉成套的报 unavailable /
  *    escalated、不问 whyUnconfined；win32 的 powershell 恒 unsupported（PIN-04）。
  * H11-09..12（占位与解析规则）用真的沙箱管理器，在 desktopToolHost.sandboxRule.test.ts。
  */
@@ -17,8 +17,7 @@ const mocks = vi.hoisted(() => ({
   runCommand: vi.fn(),
   planFor: vi.fn(),
   whyUnconfined: vi.fn(),
-  sandboxGloballyActive: vi.fn(),
-  pinSession: vi.fn()
+  sandboxGloballyActive: vi.fn()
 }))
 
 vi.mock('electron', () => ({
@@ -51,7 +50,6 @@ vi.mock('../../services/toolContext', () => ({
 vi.mock('../../services/userInputBroker', () => ({ requestUserInputFor: vi.fn() }))
 vi.mock('../../services/sandbox', () => ({
   sandboxGloballyActive: mocks.sandboxGloballyActive,
-  pinSession: mocks.pinSession,
   planFor: mocks.planFor,
   whyUnconfined: mocks.whyUnconfined
 }))
@@ -149,7 +147,6 @@ beforeEach(() => {
   mocks.planFor.mockReset().mockReturnValue(PLAN)
   mocks.whyUnconfined.mockReset().mockReturnValue('disabled')
   mocks.sandboxGloballyActive.mockReset().mockReturnValue(false)
-  mocks.pinSession.mockReset().mockReturnValue(false)
 })
 
 afterEach(() => restorePlatform())
@@ -166,7 +163,6 @@ describe('沙箱钉子 → 真 BashTool', () => {
     const object = await commandObjectOf(bash)
     expect(mocks.planFor).toHaveBeenCalledTimes(1)
     expect(object.sandboxed).toBe(true)
-    expect(mocks.pinSession).not.toHaveBeenCalled()
   })
 
   it('H11-08 钉成不套赢过全局开关（开着）：没有越界参数、描述不提沙箱；带着越界参数执行也不要计划、不标 unsandboxed', async () => {
@@ -181,16 +177,15 @@ describe('沙箱钉子 → 真 BashTool', () => {
     expect(object.sandboxed).toBeUndefined()
     const opts = mocks.enforceCommand.mock.calls[0][1] as Record<string, unknown>
     expect(opts.unsandboxed).toBeUndefined()
-    expect(mocks.pinSession).not.toHaveBeenCalled()
   })
 
   it.each(['unsupported', 'disabled', 'unavailable'] as const)(
-    'H11-13 钉成不套的 bash 报 whyUnconfined(s1) 的答案（%s）',
+    'H11-13 钉成不套的 bash 报 whyUnconfined 的答案（%s）',
     async (reason) => {
       mocks.whyUnconfined.mockReturnValue(reason)
       const object = await commandObjectOf(await shellOf(false))
       expect(object.unconfinedReason).toBe(reason)
-      expect(mocks.whyUnconfined.mock.calls).toEqual([['s1']])
+      expect(mocks.whyUnconfined).toHaveBeenCalledTimes(1)
     }
   )
 

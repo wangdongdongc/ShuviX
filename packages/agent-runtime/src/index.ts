@@ -44,7 +44,6 @@ export {
   type LockModelResolution,
   type ModelSelection
 } from './models/lockModel'
-export { resolveInitialThinkingLevel } from './thinkingLevel'
 export { isAssistantMessage, isUserMessage, isToolResultMessage } from './messageGuards'
 // 工具结果的界面文字化（实时广播与重开会话同一份）
 export { toolResultText, imagePlaceholder } from './toolResultText'
@@ -193,7 +192,6 @@ export {
 // durable 工具输出包装器的内核（落盘口注入；宿主在上面叠自己的门）
 export {
   wrapDurableOutput,
-  outputStrategyOf,
   type SpillMode,
   type WrapDurableOutputOptions,
   type OutputStrategyAware
@@ -511,18 +509,15 @@ export {
   type CreatedAgent,
   type ToolResolveRequest
 } from './agentProfile/createAgent'
-// agent 规格的纯派生（初始模型 / 思考档位 / 工具名单 / 系统提示词 / root·spawned 差异）
+// agent 规格的纯派生（初始模型 / 思考档位 / 工具名单的 root·spawned 决策表）
 export {
   deriveAgentSpec,
-  assembleSystemPrompt,
   normalizeToolNames,
   resolveInitialModel,
   resolveThinkingLevel,
-  runtimeDecisions,
   type AgentSpec,
   type AgentSpecHost,
-  type AgentSpecParams,
-  type AgentRuntimeDecisions
+  type AgentSpecParams
 } from './durable/agentSpec'
 export {
   fenceInstructionFile,
@@ -681,7 +676,7 @@ export {
   type NoticeData,
   type SessionState
 } from './durable/docs'
-export { backgroundContext, contextWithSignal, isClosedError } from './durable/context'
+export { backgroundContext, isClosedError } from './durable/context'
 // 转写摘要（P2-14）：当前对话里人写的话 / agent 的正文 / ask 的回答 —— 自动审查与起标题的输入（只读）
 export {
   COMPACTION_SUMMARY_PREFIX,

@@ -51,9 +51,7 @@ const mocks = vi.hoisted(() => ({
   skillToolCalls: [] as SkillToolCall[],
   createAgentTool: vi.fn(),
   wrapCalls: [] as Array<{ tool: object; opts: Record<string, unknown>; wrapped: object }>,
-  getOutputStrategy: vi.fn(),
   sandboxGloballyActive: vi.fn(),
-  pinSession: vi.fn(),
   pick: vi.fn(),
   pickSettings: vi.fn(),
   projectPick: vi.fn(),
@@ -91,8 +89,7 @@ vi.mock('../../services/userInputBroker', () => ({
   requestUserInputFor: mocks.requestUserInputFor
 }))
 vi.mock('../../services/sandbox', () => ({
-  sandboxGloballyActive: mocks.sandboxGloballyActive,
-  pinSession: mocks.pinSession
+  sandboxGloballyActive: mocks.sandboxGloballyActive
 }))
 vi.mock('../../services/botService', () => ({ botService: { forSession: mocks.forSession } }))
 vi.mock('../../utils/toolUtils/fileTime', () => ({ recordRead: vi.fn() }))
@@ -136,7 +133,6 @@ vi.mock('../../services/skillTool', () => ({
 vi.mock('../AgentTool', () => ({ createAgentTool: mocks.createAgentTool }))
 /** Fx-WRAP spy：记下每一次包装（原工具、选项），交回一个叠在原工具上的新对象 */
 vi.mock('../../services/wrapToolOutput', () => ({
-  getOutputStrategy: mocks.getOutputStrategy,
   wrapDurableTool: (tool: object, opts: Record<string, unknown>) => {
     const wrapped = Object.create(tool) as object
     mocks.wrapCalls.push({ tool, opts, wrapped })
@@ -345,9 +341,7 @@ beforeEach(() => {
     mocks.findEnabled,
     mocks.findAll,
     mocks.createAgentTool,
-    mocks.getOutputStrategy,
     mocks.sandboxGloballyActive,
-    mocks.pinSession,
     mocks.pick,
     mocks.pickSettings,
     mocks.projectPick,
@@ -432,7 +426,7 @@ describe('buildBuiltinTools', () => {
     expect(mocks.requestUserInputFor).toHaveBeenCalledWith('s1', question)
   })
 
-  it('H11-04 / P2-06-28 打开时那一次是纯本地的：不碰 MCP / 技能 / 会话宿主 / 广播 / pinSession；会话行不存在也照常', async () => {
+  it('H11-04 / P2-06-28 打开时那一次是纯本地的：不碰 MCP / 技能 / 会话宿主 / 广播；会话行不存在也照常', async () => {
     mocks.pick.mockReturnValue(undefined)
     setLock('s1', lockD())
     const get = vi.spyOn(fake, 'get')
@@ -445,8 +439,7 @@ describe('buildBuiltinTools', () => {
       mocks.registrationsFromDeclarations,
       mocks.getRegistrationsByServerName,
       mocks.findEnabled,
-      mocks.broadcast,
-      mocks.pinSession
+      mocks.broadcast
     ]) {
       expect(fn).not.toHaveBeenCalled()
     }
@@ -951,7 +944,7 @@ describe('rebuildAgentTools', () => {
 // ─── 包装 ──────────────────────────────────────────────────────────────
 
 describe('包装', () => {
-  it('H11-40 每条路上的每个工具恰好包一次；选项恰为 {sessionId s1, spill auto, security 函数}，不带策略 / 上限；交出的是包装器的返回值；不问 getOutputStrategy', async () => {
+  it('H11-40 每条路上的每个工具恰好包一次；选项恰为 {sessionId s1, spill auto, security 函数}，不带策略 / 上限；交出的是包装器的返回值', async () => {
     const builtin = await host.buildBuiltinTools({ sessionId: 's1', sandboxed: false })
     const next = stubTool('next')
     const resolved = await host.resolveAgentTools(requestD({ extraTools: [next] }), {
@@ -977,7 +970,6 @@ describe('包装', () => {
       expect(opts.spill).toBe('auto')
       expect(opts.security).toBeTypeOf('function')
     }
-    expect(mocks.getOutputStrategy).not.toHaveBeenCalled()
   })
 
   /** H11-44 的样本：内置 read、派发、技能、一件 MCP、一条附加的 next */
@@ -1467,7 +1459,7 @@ describe('MCP _meta end to end', () => {
 // ─── 旧入口 ────────────────────────────────────────────────────────────
 
 describe('旧入口', () => {
-  it('P2-04-38（改写 H11-67）agentFactory 仍是旧入口（PIN-07）：派生 → PhasePendingError(phase 2)，根 → 拒绝；都不碰 MCP / SkillTool / 派发工具；resolveProfileModelSpec 还在；对照：ToolHost 的派生解析已经走得通', async () => {
+  it('P2-04-38（改写 H11-67）agentFactory 仍是旧入口（PIN-07）：派生 → PhasePendingError(phase 2)（根 agent 由锁创建，工厂的参数类型只收 spawned）；都不碰 MCP / SkillTool / 派发工具；resolveProfileModelSpec 还在；对照：ToolHost 的派生解析已经走得通', async () => {
     const profile = inProcess(profileOf('coding'))
     const model = { provider: MODEL.provider, model: MODEL.modelId, capabilities: {} }
     const spawned = await agentFactory
@@ -1489,19 +1481,6 @@ describe('旧入口', () => {
       .catch((e: unknown) => e)
     expect(isPhasePendingError(spawned)).toBe(true)
     expect((spawned as { phase: number }).phase).toBe(2)
-
-    const root = await agentFactory
-      .createAgent({
-        kind: 'root',
-        sessionId: 's1',
-        profile: inProcess(profileOf('work')),
-        model,
-        cwd: '/w/proj'
-      })
-      .catch((e: unknown) => e)
-    // 根 agent 由 durable 会话的锁创建（P1-10 接线之后工厂不再有根路径）：拒绝，且不是「未实现」
-    expect(root).toBeInstanceOf(Error)
-    expect(isPhasePendingError(root)).toBe(false)
 
     expect(mocks.ensureServerByName).not.toHaveBeenCalled()
     expect(mocks.skillToolCalls).toEqual([])
@@ -1793,13 +1772,12 @@ describe('resolveAgentTools (spawned)', () => {
     expect(mocks.createAgentTool).toHaveBeenCalledTimes(1)
   })
 
-  it('P2-04-12 沙箱（PIN-02）：派生解析照此刻的全局开关答；不跑内置工厂、不 pinSession', async () => {
+  it('P2-04-12 沙箱（PIN-02）：派生解析照此刻的全局开关答；不跑内置工厂', async () => {
     mocks.sandboxGloballyActive.mockReturnValue(true)
     expect((await host.resolveAgentTools(SR_D(), { signal: signal() })).sandboxed).toBe(true)
     mocks.sandboxGloballyActive.mockReturnValue(false)
     expect((await host.resolveAgentTools(SR_D(), { signal: signal() })).sandboxed).toBe(false)
     expect(factoryCalls).toEqual([])
-    expect(mocks.pinSession).not.toHaveBeenCalled()
   })
 
   it('P2-04-13 派生工具的门按调用认人：agent / skill / MCP / next 在对话 2 上都是 s1 + SPAWN_E（经 agentIdentity(2)），每种工具同一个身份', async () => {
@@ -1976,7 +1954,7 @@ describe('spawned wrapping and the L1 gate', () => {
     expect(result.control).toStrictEqual({ terminate: true })
   })
 
-  it('P2-04-40（H11-40 延伸到派生路径）派生解析 + 派生重建：每个交出的工具恰好包一次，选项恰为 {s1, auto, security}；不问 getOutputStrategy', async () => {
+  it('P2-04-40（H11-40 延伸到派生路径）派生解析 + 派生重建：每个交出的工具恰好包一次，选项恰为 {s1, auto, security}', async () => {
     const resolved = await host.resolveAgentTools(SR_D({ extraTools: [stubTool('next')] }), {
       signal: signal()
     })
@@ -1994,6 +1972,5 @@ describe('spawned wrapping and the L1 gate', () => {
       expect(opts.spill).toBe('auto')
       expect(opts.security).toBeTypeOf('function')
     }
-    expect(mocks.getOutputStrategy).not.toHaveBeenCalled()
   })
 })

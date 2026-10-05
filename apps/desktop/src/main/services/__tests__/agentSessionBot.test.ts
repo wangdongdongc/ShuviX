@@ -5,7 +5,9 @@
  * `renderBotContext` 围栏后成为系统提示词的一个活段落（`shuvix.prompt.bot`，只选给 bot 档案上的根
  * agent —— agent-runtime 的 `promptExtensionsFor`）。段落内容由桌面的 `PromptHost.resolveBotContext`
  * 每次请求现解析；它也是「正文视同已读」（fileTime `recordRead`）的**唯一**授予点 —— P1-11 的 agentHost
- * 实现它，那边的单测钉注入面（AG-1/2/3/5 在这里暂记 todo）。
+ * 实现它。注入面（旧编号 AG-1/2/3/5）由别处钉：段落内容、已读授予与 md 被删时缺席在
+ * `agents/__tests__/desktopPromptHost.test.ts`（H11-60）；只选给 bot 档案上的根 agent（非 bot 会话、
+ * 子会话 / 派生 agent 都没有这一段）在 agent-runtime 的 `promptSections.test.ts`（PS-05）。
  *
  * 这一份留下的两条：
  *  - AG-4（D10-33 的否定面）：会话门面（AgentSession）**从不**调 `recordRead`；
@@ -45,7 +47,6 @@ vi.mock('../sessionDayPromptService', () => ({ recordPromptAdmitted: vi.fn() }))
 vi.mock('../sessionRecords', () => ({
   sessionRecords: { pick: () => ({ title: 't' }), isEphemeral: () => false }
 }))
-vi.mock('../sandbox', () => ({ unpinSession: vi.fn() }))
 vi.mock('../../frontend/core/ChatFrontendRegistry', () => ({
   chatFrontendRegistry: { broadcast: vi.fn() }
 }))
@@ -66,21 +67,6 @@ beforeEach(() => {
   mocks.recordRead.mockReset()
   mocks.forSession.mockReset()
   mocks.forSession.mockReturnValue(SCOUT)
-})
-
-describe('AG-1 / AG-2 / AG-3 / AG-5 —— 注入面（P1-11）', () => {
-  it.todo(
-    'AG-1 bot 会话 → bot 段落恰含一块围栏（名字 / 绝对路径 / 正文）(pi-durable P1-11: PromptHost.resolveBotContext)'
-  )
-  it.todo(
-    'AG-2 非 bot 会话（work / chat / notebook / coding）→ 没有 bot 段落 (pi-durable P1-11: PromptHost.resolveBotContext)'
-  )
-  it.todo(
-    'AG-3 绑定的 md 被删 → 段落缺席，会话仍建在 bot 基座上 (pi-durable P1-11: PromptHost.resolveBotContext)'
-  )
-  it.todo(
-    'AG-5 子会话 / 派发出去的子代理拿不到人设 (pi-durable P1-11: PromptHost.resolveBotContext)'
-  )
 })
 
 describe('AG-4 / D10-33 —— 门面从不授予「已读」', () => {
