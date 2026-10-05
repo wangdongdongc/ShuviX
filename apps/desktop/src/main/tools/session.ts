@@ -345,7 +345,8 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
       timeoutSeconds: params.timeout_seconds ?? DEFAULT_PROMPT_TIMEOUT_SEC,
       signal,
       // 发送的身份是这次调用的 durable 工具任务（会话内唯一，崩溃后重跑不变），不是 provider 的
-      // tool_call id —— 有的中转每轮从 call_0 数起，会撞（fact 20）
+      // tool_call id —— 有的中转每轮从 call_0 数起，会撞（fact 20）。派生 agent 调它时 ctx.sessionId 同样是
+      // 根会话（工具上下文恒按根会话建）：子会话挂在根会话下，任务 id 在同一个存储里唯一，不会撞（P2-12 PIN-10）
       requestId: `subsession:${this.ctx.sessionId}:${call.taskId}`
     })
     if ('error' in res) throw new Error(res.error)

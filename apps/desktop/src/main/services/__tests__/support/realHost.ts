@@ -13,6 +13,7 @@ import {
   type SessionHostDeps,
   type ToolHost
 } from '@shuvix/agent-runtime'
+import type { ToolRegistration } from '@earendil-works/pi-durable'
 import {
   fauxKit,
   type FauxKit
@@ -27,6 +28,7 @@ import { TEST_SETTINGS_OVERRIDES } from '../../../../../../../packages/agent-run
 export { fauxKit, type FauxKit }
 export {
   answer,
+  callTool,
   held,
   modelError,
   stalled
@@ -47,6 +49,18 @@ export const emptyToolHost: ToolHost = {
   buildBuiltinTools: () => [],
   resolveAgentTools: async () => ({ sandboxed: false }),
   rebuildAgentTools: () => ({})
+}
+
+/**
+ * 每个 agent 都带上 `make(会话 id)` 给的工具的 ToolHost（S+T 用例：父会话拿到真的 `SessionTool`）。
+ * 创建与重开时的重建都现造一份，资源按会话 id 找（与桌面 ToolHost 同一口径）。
+ */
+export function toolsToolHost(make: (sessionId: string) => readonly ToolRegistration[]): ToolHost {
+  return {
+    buildBuiltinTools: () => [],
+    resolveAgentTools: async (request) => ({ sandboxed: false, tools: make(request.sessionId) }),
+    rebuildAgentTools: (_record, context) => ({ tools: make(context.sessionId) })
+  }
 }
 
 export interface RecordingSink {

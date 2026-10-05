@@ -521,3 +521,46 @@ describe('lastAnswer', () => {
     RESTART_TIMEOUT
   )
 })
+
+describe('P2-10 helpers (drivenRun / taskLiveness)', () => {
+  it('P2-10 drivenRun mirrors the marker as a copy; taskLiveness reports live, then terminal with the abort mark; unknown → undefined; closed handle → undefined / SessionClosedError', async () => {
+    const t = await makeHost()
+    const session = await t.open()
+    await primeRoot(session)
+    expect(session.drivenRun).toBeUndefined()
+    const run = held(answer('a'))
+    t.kit.queue(run.step)
+    const pending = session.submitUser('u', {
+      requestId: 'R',
+      driven: { parentId: 'P', background: false }
+    })
+    await run.reached
+    const marker = session.drivenRun
+    expect(marker).toEqual({
+      requestId: 'R',
+      parentId: 'P',
+      background: false,
+      conversationId: ROOT
+    })
+    marker!.requestId = 'mutated'
+    expect(session.drivenRun!.requestId).toBe('R')
+
+    const taskId = (await session.harness.inspect(BG)).tasks.find(
+      (task) => task.record.conversationId === ROOT
+    )!.record.id
+    expect(await session.taskLiveness(taskId)).toEqual({ live: true, abortRequested: false })
+    await session.abort()
+    await pending
+    await waitFor(
+      async () => (await session.taskLiveness(taskId))?.live === false,
+      3000,
+      'task terminal'
+    )
+    expect(await session.taskLiveness(taskId)).toEqual({ live: false, abortRequested: true })
+    expect(await session.taskLiveness(99999)).toBeUndefined()
+
+    await withTimeout(t.host.close('s1'), 5000, 'close')
+    expect(session.drivenRun).toBeUndefined()
+    await expect(session.taskLiveness(taskId)).rejects.toBeInstanceOf(SessionClosedError)
+  })
+})
