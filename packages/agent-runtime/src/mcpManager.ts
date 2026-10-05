@@ -122,6 +122,13 @@ export interface McpCallMeta {
    * 同样只给可信 server —— 内置服务器的询问 / 审查归属按 (会话, taskId) 认人（裁定 Q16）。
    */
   taskId?: number
+  /**
+   * 发起这次调用的 durable 对话（`api.conversationId`）。同样只给可信 server，经
+   * `_meta['shuvix.dev/conversationId']`：内置服务器拿它经宿主的 `agentOf` 认出调用方 agent，
+   * 作安全主体（档案名 / root / spawned）与询问事件的归属。与 callerId 互不依赖 —— callerId
+   * 认不出时它照带。
+   */
+  conversationId?: number
 }
 
 /**
@@ -152,7 +159,8 @@ export interface McpRegistrationOptions {
   /**
    * 这次调用来自哪个 agent：durable 对话 → 调用方 id（root = 会话 id，派生 = agent id）。
    * 每次调用按 `api.conversationId` 现问，经 `_meta['shuvix.dev/agentId']` 只带给可信 server
-   * （见 McpCallMeta.callerId）。缺省或回 undefined = 不带。
+   * （见 McpCallMeta.callerId）。缺省或回 undefined = 不带 —— `api.taskId` / `api.conversationId`
+   * 不看它，照样带给可信 server（见 McpCallMeta.conversationId）。
    */
   callerIdOf?: (conversationId: ConversationId) => string | undefined
 }
@@ -880,6 +888,9 @@ export class McpManager {
     if (meta?.toolCallId) _meta['shuvix.dev/toolCallId'] = meta.toolCallId
     if (meta?.callerId && conn.trusted) _meta['shuvix.dev/agentId'] = meta.callerId
     if (meta?.taskId !== undefined && conn.trusted) _meta['shuvix.dev/taskId'] = meta.taskId
+    if (meta?.conversationId !== undefined && conn.trusted) {
+      _meta['shuvix.dev/conversationId'] = meta.conversationId
+    }
     conn.inflight++
     try {
       // SDK 默认 60s 太短；抬到 5 分钟 + progress 刷新计时 + 10 分钟总上限
@@ -967,8 +978,8 @@ export class McpManager {
    *   文件……）与协议层的失败（连不上、进程退出、超时）都给 `[MCP Error] …` —— 与旧版抛出的那段文字
    *   相同，界面照样标红、不并进已完成的步骤组。远端命令非零退出之类的「正常结果」不在其中。
    * - **取消照旧抛**（context 已 abort）：durable 的中止语义靠这一抛。
-   * - `_meta` 带 toolCallId（= `api.callId`）；调用方 id（`callerIdOf(api.conversationId)`）与
-   *   durable taskId 只带给可信 server（见 sendToolCall）。
+   * - `_meta` 带 toolCallId（= `api.callId`）；调用方 id（`callerIdOf(api.conversationId)`）、
+   *   durable taskId 与 conversationId 只带给可信 server（见 sendToolCall）。
    */
   private mcpToolToRegistration(
     route: () => string | undefined,
@@ -1013,7 +1024,8 @@ export class McpManager {
               {
                 toolCallId: api.callId,
                 callerId: opts?.callerIdOf?.(api.conversationId),
-                taskId: api.taskId
+                taskId: api.taskId,
+                conversationId: api.conversationId
               }
             )
           } catch (err: unknown) {
@@ -1120,8 +1132,8 @@ export class McpManager {
    * 会话的连接键，经 callToolOn 调（没连上就原地连一次，与活连接上的工具同一条路）。
    * 配置行删了 / 停用了 / 会话已关，调用就以「没连上」失败（`[MCP Error] …`）。
    *
-   * 安全客体（mcpMeta）按快照里的 `trusted` / `annotations` 给；`_meta` 带不带调用方 id 与 taskId
-   * 仍看实际连上的那条连接可不可信。
+   * 安全客体（mcpMeta）按快照里的 `trusted` / `annotations` 给；`_meta` 带不带调用方 id、taskId 与
+   * conversationId 仍看实际连上的那条连接可不可信。
    */
   registrationsFromDeclarations(
     serverName: string,

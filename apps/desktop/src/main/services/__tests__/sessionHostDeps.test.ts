@@ -3,6 +3,8 @@
  *
  *   D10-13 身份：模型 / 目录 / 事件 / 存储三件 / isEphemeral / today / 中断发送策略；单例懒建、只建一次
  *           （P2-06-31：ToolHost 拿到的是 `sessionOf` —— 同步 `get` 打开着的会话，从不打开）
+ *   P2-07-51 内置 MCP 服务器认调用方的解析器：(会话, 对话) → host.get(会话)?.agentIdentity(对话)，
+ *           同步 get、从不 open / peek；缺省问单例
  *   D10-14 resolveAgentConfig 的档案矩阵（形态推导）
  *   D10-15 toolOverlay（滤掉不可用与 mcp:chrome；原值不动；旧行补键一次）
  *   D10-16 model（会话设置 → 原样；没有 → 启用中的默认 provider / 模型；都没有 → 不给）
@@ -159,6 +161,7 @@ import {
   getSessionHost,
   installSessionHostQuitHook,
   resetSessionHostForTests,
+  sessionAgentResolver,
   type QuitHookApp
 } from '../sessionHost'
 
@@ -318,6 +321,51 @@ describe('D10-13 身份 seam 与单例', () => {
     expect(singletonGet).not.toHaveBeenCalled()
     await own.closeAll()
     await singleton.closeAll()
+    resetSessionHostForTests()
+  })
+})
+
+describe('P2-07-51 内置 MCP 服务器的调用方解析器', () => {
+  it('P2-07-51 (sid, c) => host.get(sid)?.agentIdentity(c)：没开的会话 → undefined；从不 open / peek', () => {
+    const EXPLORE = { profileName: 'explore', kind: 'spawned' as const, callerId: 'sub-a1' }
+    const agentIdentity = vi.fn((c: number) => (c === 2 ? EXPLORE : undefined))
+    const host = {
+      get: vi.fn((sid: string) => (sid === 'open-1' ? { agentIdentity } : undefined)),
+      open: vi.fn(),
+      peek: vi.fn()
+    }
+    const resolve = sessionAgentResolver(() => host as unknown as SessionHost)
+
+    expect(resolve('nobody', 2)).toBeUndefined()
+    expect(host.get).toHaveBeenLastCalledWith('nobody')
+    expect(agentIdentity).not.toHaveBeenCalled()
+
+    expect(resolve('open-1', 2)).toBe(EXPLORE)
+    expect(agentIdentity).toHaveBeenLastCalledWith(2)
+    expect(resolve('open-1', 9)).toBeUndefined()
+    expect(host.open).not.toHaveBeenCalled()
+    expect(host.peek).not.toHaveBeenCalled()
+  })
+
+  it('P2-07-51 缺省问单例宿主（每次现取）：同步 get，从不打开会话', async () => {
+    resetSessionHostForTests()
+    const resolve = sessionAgentResolver()
+    const host = getSessionHost()
+    const getSpy = vi.spyOn(host, 'get')
+    const openSpy = vi.spyOn(host, 'open')
+    const peekSpy = vi.spyOn(host, 'peek')
+
+    expect(resolve('nobody', 1)).toBeUndefined()
+    expect(getSpy).toHaveBeenCalledWith('nobody')
+
+    const WORK = { profileName: 'work', kind: 'root' as const }
+    getSpy.mockReturnValueOnce({ agentIdentity: () => WORK } as unknown as ReturnType<
+      SessionHost['get']
+    >)
+    expect(resolve('open-1', 1)).toBe(WORK)
+    expect(openSpy).not.toHaveBeenCalled()
+    expect(peekSpy).not.toHaveBeenCalled()
+    await host.closeAll()
     resetSessionHostForTests()
   })
 })

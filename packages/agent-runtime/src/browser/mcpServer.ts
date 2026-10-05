@@ -21,6 +21,11 @@
  *  - **按调用方分账**：一份实例由根 agent 与它派出的 agent 共用；「距上次快照几次操作」与
  *    快照差异的基线都按调用方（`_meta['shuvix.dev/agentId']`）分开 —— 差异的前提是上一份
  *    快照还在**这个模型**的上下文里。
+ *
+ * 调用归属（`_meta['shuvix.dev/taskId']` / `shuvix.dev/conversationId`，见 builtinCallOwnerOf）
+ * 只原样并进每道门的上下文（BrowserGateContext），由宿主拿去认安全主体、填询问事件的归属；
+ * server 自己不按它记任何账 —— 分账只认 agentId，站点 / 本地文件的放行仍按实例记（根 agent 放行过的
+ * 站点，同一会话里派出的 agent 也不再问；并发首用共用的那一次过门带的是第一个调用方的归属）。
  */
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import {
@@ -29,7 +34,11 @@ import {
   type CallToolResult
 } from '@modelcontextprotocol/sdk/types.js'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
-import type { BuiltinMcpFactory, BuiltinMcpScope } from '../builtinMcpRegistry'
+import {
+  builtinCallOwnerOf,
+  type BuiltinMcpFactory,
+  type BuiltinMcpScope
+} from '../builtinMcpRegistry'
 import {
   PDF_PAGE_SIZES,
   PDF_SCALE_RANGE,
@@ -65,6 +74,10 @@ export interface BrowserGateContext {
   toolName: string
   /** 给询问卡片的一句话：这次访问是去做什么 */
   description?: string
+  /** 跑这次调用的 durable tool task（客户端经 `_meta` 带来；没带 = 键不出现） */
+  taskId?: number
+  /** 发起这次调用的 durable 对话 —— 宿主据此认出调用方 agent（没带 = 键不出现） */
+  conversationId?: number
 }
 
 /** 站点门的上下文：多一个 tab —— 宿主可能按「是哪个 tab」区别对待（例如会话挂着的那个页） */
@@ -345,6 +358,8 @@ export async function connectBrowserMcpServer(
         : `browser-${String(extra.requestId)}`
     const caller =
       typeof meta?.['shuvix.dev/agentId'] === 'string' ? (meta['shuvix.dev/agentId'] as string) : ''
+    // 调用归属：只并进门的上下文（宿主认主体、填询问事件），不参与分账
+    const owner = builtinCallOwnerOf(meta)
 
     const spec = browserToolSpec(name, caps)
     if (!spec) return fail(`Unknown tool "${name}".`)
@@ -362,7 +377,8 @@ export async function connectBrowserMcpServer(
     const gateCtx = (description?: string): BrowserGateContext => ({
       toolCallId,
       toolName: `mcp__${serverName}__${tool}`,
-      description
+      description,
+      ...owner
     })
     /**
      * 过一道门，并在放行之后复查取消：一张询问卡片可能挂很久，调用方早已放弃 ——

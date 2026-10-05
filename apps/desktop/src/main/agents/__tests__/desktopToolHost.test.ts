@@ -1382,7 +1382,7 @@ describe('cross-session isolation', () => {
 // ─── `_meta` 端到端（真 McpManager + 真 SDK Server，P2-06-12 / PIN-07） ───────────
 
 describe('MCP _meta end to end', () => {
-  it('P2-06-12 可信（inproc 内置）的带调用方 id 与 taskId，不可信的只带 toolCallId；根与派生共用会话 s1 那一份实例', async () => {
+  it('P2-06-12 / P2-07-08 可信（inproc 内置）的带调用方 id、taskId 与 conversationId，不可信的只带 toolCallId；根与派生共用会话 s1 那一份实例', async () => {
     const metas: Array<{ server: string; meta: unknown }> = []
     const scopes: Array<{ server: string; scope: unknown }> = []
     const store = {
@@ -1449,15 +1449,18 @@ describe('MCP _meta end to end', () => {
       await call('web', { callId: 'pi-3', taskId: 22, conversationId: 2 })
 
       expect(metas.map((m) => m.server)).toEqual(['ssh', 'ssh', 'web'])
+      // P2-07-08：可信的另带发起调用的对话（内置服务器经 agentOf 认主体）
       expect(metas[0].meta).toStrictEqual({
         'shuvix.dev/toolCallId': 'pi-2',
         'shuvix.dev/agentId': 'sub-a1',
-        'shuvix.dev/taskId': 21
+        'shuvix.dev/taskId': 21,
+        'shuvix.dev/conversationId': 2
       })
       expect(metas[1].meta).toStrictEqual({
         'shuvix.dev/toolCallId': 'pi-1',
         'shuvix.dev/agentId': 's1',
-        'shuvix.dev/taskId': 20
+        'shuvix.dev/taskId': 20,
+        'shuvix.dev/conversationId': 1
       })
       expect(metas[2].meta).toStrictEqual({ 'shuvix.dev/toolCallId': 'pi-3' })
       // ssh 只建过一份实例，按会话 s1 —— 根与派生共用

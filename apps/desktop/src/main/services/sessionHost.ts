@@ -36,6 +36,7 @@ import {
   type DesktopToolHostDeps
 } from '../agents/agentHost'
 import { createLogger } from '../logger'
+import type { ToolAgentIdentity } from './toolAgent'
 import { electronEventSink } from './agentRuntimeAdapters'
 import { getModelRegistry, providerCredentialPort } from './models'
 import { writeSessionMirror } from './sessionMirror'
@@ -130,6 +131,17 @@ let testOverrides: Partial<SessionHostDeps> | undefined
 export function getSessionHost(): SessionHost {
   singleton ??= createDesktopSessionHost(testOverrides)
   return singleton
+}
+
+/**
+ * 内置 MCP 服务器认调用方用的解析器（main 启动时交给 `setBuiltinMcpAgentResolver`）：按会话**同步**
+ * 取打开着的 durable 会话（`get`，从不 open / peek —— 没开的会话认不出，主体按 root），再按对话问它的
+ * `agentIdentity`。宿主每次调用现取（缺省 = 单例，第一次真用时才建）。
+ */
+export function sessionAgentResolver(
+  hostOf: () => Pick<SessionHost, 'get'> = getSessionHost
+): (sessionId: string, conversationId: number) => ToolAgentIdentity | undefined {
+  return (sessionId, conversationId) => hostOf().get(sessionId)?.agentIdentity(conversationId)
 }
 
 /** 单例建了没有（退出钩子据此判断有没有要关的东西）；不建 */

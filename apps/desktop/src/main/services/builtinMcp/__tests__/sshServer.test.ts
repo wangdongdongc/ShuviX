@@ -29,6 +29,9 @@
  *   171…177  **传输结果的翻译**：四句 done、255 该不该翻、超时、其余非零、状态条；
  *   SG1      **交给命令门的中止信号**（exec / sync）：是这次请求自己的 —— 客户端取消它就落下
  *            （询问点的审查随之收尾），同会话里并发的另一次不受牵连。
+ *   P2-07-10…19, 52  **调用身份**：`_meta` 的 taskId / conversationId 原样并进每道门的 opts（没带 / 不合法
+ *            = 键不出现），主体经 scope 的 agentOf 按调用现认（认不出 = root）；按主体写的策略在同一份
+ *            实例上逐次生效；不过门的工具不问身份；取消复查不变；两条会话各认各的。
  *
  * 另有一条装配期的对账：内置工厂表的键必须与迁移种下的那一行同名 —— 两边一旦对不上，
  * 会话里那台服务器会在建连的一瞬间抛「没注册」。
@@ -57,7 +60,9 @@ const logged = vi.hoisted(() => ({ lines: [] as string[] }))
  *
  * mock 掉的只是 `getDesktopSecurityContext` 那条会拉起 Electron app 与整个 service 图的
  * 取用路径；门后仍是 `createSecurityContext` 本体，主体/环境/变量表按 toolContext 的生产
- * 形态复刻，内置策略一条不少。换成「永远放行」的 stub 就等于在测那个 stub —— 而这一组问的
+ * 形态复刻，内置策略一条不少。主体按每次 enforce 现认（Fx-MOCK，P2-07）：真的 `withCallAgent`
+ * 拿 opts 里的 conversationId 经 ctx.agentOf 认人 —— 与生产 getDesktopSecurityContext 的 forCall
+ * 同一个口径；认不出（没带、没接 agentOf、agentOf 回 undefined 或抛错）= root、没有档案名。换成「永远放行」的 stub 就等于在测那个 stub —— 而这一组问的
  * 恰恰是 exec 到底过没过那道门：**内置能力服务器相对第三方 server 的实质特权就是这一句**。
  */
 const gate = vi.hoisted(() => ({
@@ -68,11 +73,17 @@ const gate = vi.hoisted(() => ({
   /** 「允许并记住」落下来的授权（生产里写进会话 allowList） */
   grants: [] as Array<{ mode: unknown; path: unknown }>,
   /** 这条会话的用户策略；空 = 只有内置那套 */
-  policies: [] as unknown[]
+  policies: [] as unknown[],
+  /** getDesktopSecurityContext 收到的 ctx（服务器有没有把 agentOf 交过来） */
+  ctxs: [] as Array<Record<string, unknown>>,
+  /** 置位 = 审查接缝记下每个询问事件、回 null（不作答，卡片照常给人） */
+  recordEvents: false,
+  events: [] as unknown[]
 }))
 
 vi.mock('../../toolContext', async () => {
   const { createSecurityContext, analyzeShellCommand } = await import('@shuvix/agent-runtime')
+  const { withCallAgent } = await import('../../toolAgent')
   type Ctx = Parameters<typeof import('../../toolContext').getDesktopSecurityContext>[0]
   return {
     TOOL_ABORTED: 'Aborted',
@@ -80,51 +91,70 @@ vi.mock('../../toolContext', async () => {
     // 「工作目录内的读不询问」这类断言就变成了在测两个不相干的常量
     resolveProjectConfig: () => ({ workingDirectory: '/ws' }),
     getDesktopSecurityContext: (ctx: Ctx) => {
-      const real = createSecurityContext(
-        // J10：这里逐字复刻 toolContext 今天上报的主体 —— 固定 root，档案维度还没接线
-        { kind: 'agent', sessionId: ctx.sessionId, agentKind: 'root' },
-        { host: 'desktop', platform: process.platform, workspaceDir: '/ws' },
-        {
-          host: 'desktop',
-          pathSep: '/',
-          getVars: () => ({
-            workspace: '/ws',
-            toolResultsBase: '/tool-results',
-            skillsDirs: ['/skills'],
-            memoryDirs: [],
-            knowledgeRoot: '/kb',
-            knowledgeSessionDirs: [],
-            home: '/home/u',
-            botsDir: '/home/u/.shuvix/bots',
-            builtinKnowledgeDir: '/opt/shuvix/Resources/knowledge',
-            systemDirs: [],
-            // 会话目录（生产里由 sandbox.sessionDirsView 算）：工作目录 + 本会话的 tool_results
-            // （还有会话 TMPDIR 与 artifacts，这里用不上）—— ask-on-external-path 在这以外的写才问
-            sessionDirs: ['/ws', `/tool-results/${ctx.sessionId}`]
-          }),
-          readBuiltinPolicyMd: INLINE_POLICY_MD,
-          getSessionGrants: () => ({ allowList: [] }),
-          getUserPolicies: () => gate.policies as never,
-          // 生产里这是 sessionService.addAllowListPaths —— 「允许并记住」的唯一落点。
-          // 抄一份下来，那颗复选框到底记住了**什么形状的条目**才看得见
-          persistGrant: (mode: never, p: never) => void gate.grants.push({ mode, path: p }),
-          shellParser: { ensureReady: async () => {}, analyze: analyzeShellCommand },
-          // 询问通道由 scope 注入：缺席就是「这条会话没有输入面板」，fail-closed 用例靠它
-          requestUserInput: ctx.requestUserInput
-        }
-      )
+      gate.ctxs.push(ctx as unknown as Record<string, unknown>)
+      const realFor = (opts?: {
+        conversationId?: number
+      }): ReturnType<typeof createSecurityContext> => {
+        const agent = withCallAgent(ctx, opts).agent ?? ctx.agent
+        return createSecurityContext(
+          {
+            kind: 'agent',
+            sessionId: ctx.sessionId,
+            agentKind: agent?.kind ?? 'root',
+            ...(agent?.profileName ? { profileName: agent.profileName } : {})
+          },
+          { host: 'desktop', platform: process.platform, workspaceDir: '/ws' },
+          {
+            host: 'desktop',
+            pathSep: '/',
+            getVars: () => ({
+              workspace: '/ws',
+              toolResultsBase: '/tool-results',
+              skillsDirs: ['/skills'],
+              memoryDirs: [],
+              knowledgeRoot: '/kb',
+              knowledgeSessionDirs: [],
+              home: '/home/u',
+              botsDir: '/home/u/.shuvix/bots',
+              builtinKnowledgeDir: '/opt/shuvix/Resources/knowledge',
+              systemDirs: [],
+              // 会话目录（生产里由 sandbox.sessionDirsView 算）：工作目录 + 本会话的 tool_results
+              // （还有会话 TMPDIR 与 artifacts，这里用不上）—— ask-on-external-path 在这以外的写才问
+              sessionDirs: ['/ws', `/tool-results/${ctx.sessionId}`]
+            }),
+            readBuiltinPolicyMd: INLINE_POLICY_MD,
+            getSessionGrants: () => ({ allowList: [] }),
+            getUserPolicies: () => gate.policies as never,
+            // 生产里这是 sessionService.addAllowListPaths —— 「允许并记住」的唯一落点。
+            // 抄一份下来，那颗复选框到底记住了**什么形状的条目**才看得见
+            persistGrant: (mode: never, p: never) => void gate.grants.push({ mode, path: p }),
+            shellParser: { ensureReady: async () => {}, analyze: analyzeShellCommand },
+            // 询问通道由 scope 注入：缺席就是「这条会话没有输入面板」，fail-closed 用例靠它
+            requestUserInput: ctx.requestUserInput,
+            ...(gate.recordEvents
+              ? {
+                  onPermissionRequest: async (e: unknown) => {
+                    gate.events.push(e)
+                    return null
+                  }
+                }
+              : {})
+          }
+        )
+      }
+      const real = realFor()
       return {
         ...real,
         enforceCommand: (object: never, opts: never) => {
           gate.calls.push({ object, opts })
-          return real.enforceCommand(object, opts)
+          return realFor(opts).enforceCommand(object, opts)
         },
         // 与 enforceCommand 同样的包法：抄一份实参，门后仍是本体。
         // 传输类工具的本地那一侧走这道门，而它是否真的与本地读写同一条路
         // （ask-on-external-path / 沙箱照样生效）只有在真引擎后面才答得出来
         enforcePath: (mode: never, path: never, opts: never) => {
           gate.pathCalls.push({ mode, path, opts })
-          return real.enforcePath(mode, path, opts)
+          return realFor(opts).enforcePath(mode, path, opts)
         }
       }
     }
@@ -244,6 +274,20 @@ vi.mock('node:child_process', cp.factory)
 import { migrations } from '../../../dao/migrations'
 import { BUILTIN_MCP_FACTORIES } from '../index'
 import { createSshMcpServerFactory } from '../sshServer'
+import type { DesktopBuiltinMcpScope } from '../types'
+import {
+  M1,
+  M2,
+  M3,
+  SPAWN_E,
+  SUBJ_E,
+  SUBJ_R,
+  SUBJ_ROOT0,
+  SUBJ_WORK,
+  makeAgentOf,
+  metaOf,
+  subjectOf
+} from './callIdentityFixtures'
 import { rsyncAvailable, CONTROL_PERSIST_MS } from '../sshControl'
 import { createInlinePolicyMdReader } from '@shuvix/agent-runtime/security/builtinPolicies/inlineSources'
 import { retiredPolicy } from '../../../../../../../packages/agent-runtime/src/security/__tests__/fixtures/retiredPolicies'
@@ -283,6 +327,9 @@ beforeEach(() => {
   gate.pathCalls.length = 0
   gate.grants.length = 0
   gate.policies.length = 0
+  gate.ctxs.length = 0
+  gate.events.length = 0
+  gate.recordEvents = false
   control.exec.length = 0
   control.copy.length = 0
   control.sync.length = 0
@@ -312,6 +359,8 @@ interface OpenOpts {
   sessionId?: string
   /** 询问应答；`null` = 这条会话没有输入面板（fail-closed 用例） */
   respond?: ((req: InputRequest) => Promise<InputResponse>) | null
+  /** scope 上的 agentOf（P2-07：按对话认调用方）；缺省 = 宿主没接 */
+  agentOf?: DesktopBuiltinMcpScope['agentOf']
 }
 
 /** 把一台 ssh server 接到一对真 InMemoryTransport 上，并连一个真 Client */
@@ -332,7 +381,8 @@ async function open(opts: OpenOpts = {}): Promise<Session> {
             return respond(req)
           }
         : undefined,
-      emitChatEvent: (e) => void events.push(e as unknown as Record<string, unknown>)
+      emitChatEvent: (e) => void events.push(e as unknown as Record<string, unknown>),
+      ...(opts.agentOf ? { agentOf: opts.agentOf } : {})
     },
     serverTransport
   )
@@ -1009,24 +1059,31 @@ describe('ssh 内置服务器 exec 的超时取值', () => {
 async function expectGateSignalIsPerRequest(
   name: string,
   args: () => Record<string, unknown>,
-  ran: () => number
+  ran: () => number,
+  /** P2-07-19：两次调用带上完整的调用身份（缺省只带 toolCallId） */
+  identity?: { cancelled: Record<string, unknown>; kept: Record<string, unknown> }
 ): Promise<void> {
   writeConfig('Host web\n')
   const releases: Array<(r: InputResponse) => void> = []
   const { client, asks } = await open({
-    respond: () => new Promise<InputResponse>((r) => void releases.push(r))
+    respond: () => new Promise<InputResponse>((r) => void releases.push(r)),
+    ...(identity ? { agentOf: makeAgentOf() } : {})
   })
 
   const ac = new AbortController()
   const cancelled = client.callTool(
-    { name, arguments: args(), _meta: { 'shuvix.dev/toolCallId': 'tc-cancelled' } },
+    {
+      name,
+      arguments: args(),
+      _meta: { ...identity?.cancelled, 'shuvix.dev/toolCallId': 'tc-cancelled' }
+    },
     undefined,
     { signal: ac.signal }
   )
   const kept = client.callTool({
     name,
     arguments: args(),
-    _meta: { 'shuvix.dev/toolCallId': 'tc-kept' }
+    _meta: { ...identity?.kept, 'shuvix.dev/toolCallId': 'tc-kept' }
   })
   // 两张卡都真的挂起（两次调用都已经在门里等人答）
   while (asks.length < 2) await new Promise((r) => setTimeout(r, 1))
@@ -2240,5 +2297,323 @@ describe('内置能力服务器的清单', () => {
 
     expect([...seeded].sort()).toEqual(['browser', 'chrome', 'database', 'ssh'])
     expect(Object.keys(BUILTIN_MCP_FACTORIES).sort()).toEqual([...seeded].sort())
+  })
+})
+
+// ─── P2-07：调用身份（taskId / conversationId 经 `_meta` → opts 与安全主体） ─────────
+//
+// 一份 ssh 实例由根 agent 与它派出的 agent 共用。客户端（McpManager）只给可信 server 带
+// `shuvix.dev/taskId` / `shuvix.dev/conversationId`；服务器把它们原样并进每道门的 opts（没带 / 不合法
+// = 键不出现），并把 scope 的 agentOf 交给 getDesktopSecurityContext —— 主体按每次 enforce 的
+// conversationId 现认。认不出一律落回今天的 root。
+
+/** exec 一次，带上给定的 `_meta`（可无） */
+const execWith = (
+  client: Client,
+  meta?: Record<string, unknown>,
+  patch: Record<string, unknown> = {}
+): Promise<ListHostsResult> => callTool(client, 'exec', execArgs(patch), meta)
+
+describe('P2-07 ssh 的调用身份', () => {
+  it('P2-07-10 exec 的 opts 恰是 SSHS-U-104 那七项再加 taskId / conversationId；客体不变', async () => {
+    writeConfig('Host web\n')
+    const { client } = await open({ agentOf: makeAgentOf() })
+
+    await execWith(client, M2, { command: 'df -h', description: 'disk usage' })
+
+    expect(gate.calls).toHaveLength(1)
+    expect(gate.calls[0].object).toStrictEqual({ channel: 'ssh', command: 'df -h', host: 'web' })
+    expect(gate.calls[0].opts).toStrictEqual({
+      toolCallId: 'tc-2',
+      taskId: 21,
+      conversationId: 2,
+      toolName: 'mcp__ssh__exec',
+      description: 'disk usage',
+      abortError: 'Aborted',
+      signal: expect.any(AbortSignal),
+      onOther: 'return',
+      missingChannel: 'deny'
+    })
+    // 服务器把 scope 的 agentOf 原样交给了安全门面
+    expect(gate.ctxs.at(-1)?.agentOf).toBeTypeOf('function')
+  })
+
+  it.each([
+    ['派生 explore', M2, SUBJ_E(), 21, 2, 'tc-2'],
+    ['权限审查员', M3, SUBJ_R(), 22, 3, 'tc-3']
+  ])(
+    'P2-07-11 主体与询问事件跟着调用方走（%s）；卡片照旧按 toolCallId 路由，放行后才跑',
+    async (_label, meta, subject, taskId, conversationId, toolCallId) => {
+      writeConfig('Host web\n')
+      gate.recordEvents = true
+      const agentOf = makeAgentOf()
+      const { client, asks } = await open({ agentOf })
+
+      // 出厂的 ask-on-command 对远端命令问一次
+      await execWith(client, meta)
+
+      expect(gate.events).toHaveLength(1)
+      expect(gate.events[0]).toMatchObject({ toolCallId, taskId, conversationId })
+      expect(subjectOf(gate.events[0])).toStrictEqual(subject)
+      expect(agentOf).toHaveBeenCalledWith(conversationId)
+      expect(asks).toHaveLength(1)
+      expect(asks[0]).toMatchObject({ id: toolCallId, command: 'ssh web: uptime' })
+      expect(control.exec).toHaveLength(1)
+    }
+  )
+
+  it('P2-07-12 按主体写的用户策略在同一份实例上逐次生效：派生 explore 被拒，根 agent 照常问', async () => {
+    writeConfig('Host web\n')
+    gate.recordEvents = true
+    gate.policies.push(
+      userPolicy('no-explore-ssh', [
+        {
+          effect: 'deny',
+          match:
+            "object.type == 'command' && subject.agentKind == 'spawned' && subject.profile == 'explore'"
+        }
+      ])
+    )
+    const { client, asks } = await open({ agentOf: makeAgentOf() })
+
+    await expect(execWith(client, M2)).rejects.toThrow(/Denied by security policy rule/)
+    expect(asks).toEqual([])
+    expect(control.exec).toEqual([])
+
+    await execWith(client, M1)
+    expect(asks).toHaveLength(1)
+    expect(gate.events).toHaveLength(1)
+    expect(subjectOf(gate.events[0])).toStrictEqual(SUBJ_WORK())
+    expect(control.exec).toHaveLength(1)
+  })
+
+  it('P2-07-13 传输：路径门与 sync 的命令门都带上调用身份；路径门仍然没有 onOther / signal', async () => {
+    writeConfig('Host web\n')
+    gate.recordEvents = true
+    const { client } = await open({ agentOf: makeAgentOf() })
+
+    await callTool(client, 'upload', xferArgs(), M2)
+    expect(gate.pathCalls[0].opts).toStrictEqual({
+      toolCallId: 'tc-2',
+      taskId: 21,
+      conversationId: 2,
+      toolName: 'mcp__ssh__upload',
+      displayPath: '/ws/report.txt',
+      description: 'Send to "web": /srv/report.txt',
+      abortError: 'Aborted',
+      missingChannel: 'deny'
+    })
+    expect('onOther' in pathOptsOf(0)).toBe(false)
+    expect('signal' in pathOptsOf(0)).toBe(false)
+
+    await callTool(client, 'download', xferArgs(), M2)
+    expect(pathOptsOf(1)).toMatchObject({ toolCallId: 'tc-2', taskId: 21, conversationId: 2 })
+
+    await callTool(client, 'sync', syncArgs({ remotePath: '/srv/app' }), M3)
+    expect(pathOptsOf(2)).toMatchObject({ toolCallId: 'tc-3', taskId: 22, conversationId: 3 })
+    expect(gate.calls).toHaveLength(1)
+    expect(optsOf(0)).toMatchObject({ toolCallId: 'tc-3', taskId: 22, conversationId: 3 })
+    // 工作目录里的本地路径不问；sync 的命令门问一次 —— 每个事件的主体都是审查员
+    expect(gate.events.length).toBeGreaterThan(0)
+    for (const e of gate.events) expect(subjectOf(e)).toStrictEqual(SUBJ_R())
+  })
+
+  it.each([
+    ['没有 `_meta`', undefined],
+    ['只有 toolCallId', { 'shuvix.dev/toolCallId': 'tc-7' }]
+  ])(
+    'P2-07-14 %s → 回落到今天：opts 里没有两个 id 键，主体 root，不问 agentOf',
+    async (_label, meta) => {
+      writeConfig('Host web\n')
+      gate.recordEvents = true
+      const agentOf = makeAgentOf()
+      const { client } = await open({ agentOf })
+
+      await execWith(client, meta)
+
+      const opts = optsOf()
+      expect('taskId' in opts).toBe(false)
+      expect('conversationId' in opts).toBe(false)
+      expect(opts.toolCallId).toMatch(meta ? /^tc-7$/ : /^ssh-.+$/)
+      expect(gate.events).toHaveLength(1)
+      expect(subjectOf(gate.events[0])).toStrictEqual(SUBJ_ROOT0())
+      expect(agentOf).not.toHaveBeenCalled()
+    }
+  )
+
+  const BAD_IDS: Array<[string, unknown]> = [
+    ["'21'", '21'],
+    ['2.5', 2.5],
+    ['NaN', NaN],
+    ['null', null],
+    ['true', true],
+    ['{}', {}]
+  ]
+
+  it.each(BAD_IDS)('P2-07-15 taskId = %s → 当没带；conversationId 照常认人', async (_l, bad) => {
+    writeConfig('Host web\n')
+    gate.recordEvents = true
+    const { client } = await open({ agentOf: makeAgentOf() })
+
+    await execWith(client, metaOf('tc-9', 'sub-a1', bad, 2))
+
+    expect('taskId' in optsOf()).toBe(false)
+    expect(optsOf().conversationId).toBe(2)
+    expect(subjectOf(gate.events[0])).toStrictEqual(SUBJ_E())
+  })
+
+  it.each(BAD_IDS)(
+    'P2-07-15 conversationId = %s → 当没带：不问 agentOf，主体 root；taskId 照带',
+    async (_l, bad) => {
+      writeConfig('Host web\n')
+      gate.recordEvents = true
+      const agentOf = makeAgentOf()
+      const { client } = await open({ agentOf })
+
+      await execWith(client, metaOf('tc-9', 'sub-a1', 21, bad))
+
+      expect('conversationId' in optsOf()).toBe(false)
+      expect(optsOf().taskId).toBe(21)
+      expect(agentOf).not.toHaveBeenCalled()
+      expect(subjectOf(gate.events[0])).toStrictEqual(SUBJ_ROOT0())
+    }
+  )
+
+  it('P2-07-15 只带一半：只有 taskId → 没有 conversationId、主体 root；只有 conversationId → 没有 taskId、认出调用方', async () => {
+    writeConfig('Host web\n')
+    gate.recordEvents = true
+    const { client } = await open({ agentOf: makeAgentOf() })
+
+    await execWith(client, { 'shuvix.dev/toolCallId': 'tc-9', 'shuvix.dev/taskId': 5 })
+    expect(optsOf(0)).toMatchObject({ toolCallId: 'tc-9', taskId: 5 })
+    expect('conversationId' in optsOf(0)).toBe(false)
+    expect(subjectOf(gate.events[0])).toStrictEqual(SUBJ_ROOT0())
+
+    await execWith(client, { 'shuvix.dev/conversationId': 2 })
+    expect(optsOf(1).conversationId).toBe(2)
+    expect('taskId' in optsOf(1)).toBe(false)
+    expect(subjectOf(gate.events[1])).toStrictEqual(SUBJ_E())
+  })
+
+  it('P2-07-16a 认不出的对话（agentOf 回 undefined）→ opts 照带 999，主体 root', async () => {
+    writeConfig('Host web\n')
+    gate.recordEvents = true
+    const { client } = await open({ agentOf: makeAgentOf() })
+
+    await execWith(client, metaOf('tc-9', undefined, 30, 999))
+
+    expect(optsOf().conversationId).toBe(999)
+    expect(subjectOf(gate.events[0])).toStrictEqual(SUBJ_ROOT0())
+  })
+
+  it('P2-07-16b agentOf 抛错 → 这次调用不因此失败：主体 root，放行后照跑', async () => {
+    writeConfig('Host web\n')
+    gate.recordEvents = true
+    const { client } = await open({
+      agentOf: () => {
+        throw new Error('gone')
+      }
+    })
+
+    const r = await execWith(client, M2)
+
+    expect(r.isError).toBeFalsy()
+    expect(subjectOf(gate.events[0])).toStrictEqual(SUBJ_ROOT0())
+    expect(control.exec).toHaveLength(1)
+  })
+
+  it('P2-07-17 宿主没接 agentOf → opts 照带两个 id，主体 root', async () => {
+    writeConfig('Host web\n')
+    gate.recordEvents = true
+    const { client } = await open()
+
+    await execWith(client, M2)
+
+    expect(optsOf()).toMatchObject({ taskId: 21, conversationId: 2 })
+    expect(subjectOf(gate.events[0])).toStrictEqual(SUBJ_ROOT0())
+  })
+
+  it('P2-07-18 不过门的工具（list-hosts / disconnect）：不碰任何门、不问 agentOf，产出与不带 `_meta` 时一字不差', async () => {
+    writeConfig('Host web\nHost api\n')
+    const agentOf = makeAgentOf()
+    const { client } = await open({ agentOf })
+
+    const plainHosts = await callTool(client, 'list-hosts', {})
+    const metaHosts = await callTool(client, 'list-hosts', {}, M2)
+    expect(metaHosts).toStrictEqual(plainHosts)
+
+    const plainDisc = await callTool(client, 'disconnect', { host: 'web' })
+    const metaDisc = await callTool(client, 'disconnect', { host: 'web' }, M2)
+    expect(metaDisc).toStrictEqual(plainDisc)
+
+    expect(gate.calls).toEqual([])
+    expect(gate.pathCalls).toEqual([])
+    expect(agentOf).not.toHaveBeenCalled()
+  })
+
+  it('P2-07-19 带着调用身份，卡片挂着时被取消 → 放行来晚了也不跑（SSHS-U-122 的变体）', async () => {
+    writeConfig('Host web\n')
+    let release!: (r: InputResponse) => void
+    const { client, asks } = await open({
+      agentOf: makeAgentOf(),
+      respond: () => new Promise<InputResponse>((r) => (release = r))
+    })
+
+    const ac = new AbortController()
+    const pending = client.callTool({ name: 'exec', arguments: execArgs(), _meta: M2 }, undefined, {
+      signal: ac.signal
+    })
+    while (asks.length === 0) await new Promise((r) => setTimeout(r, 1))
+
+    ac.abort(new Error('user stopped the run'))
+    await expect(pending).rejects.toThrow()
+    release({ kind: 'ask', allowed: true })
+    await new Promise((r) => setTimeout(r, 5))
+
+    expect(control.exec).toEqual([])
+  })
+
+  it('P2-07-19 SSHS-U-SG1（exec）带着调用身份：signal 仍按请求各自一份', async () => {
+    await expectGateSignalIsPerRequest(
+      'exec',
+      () => execArgs(),
+      () => control.exec.length,
+      { cancelled: M2, kept: M1 }
+    )
+  })
+
+  it('P2-07-19 SSHS-U-SG1（sync）带着调用身份：signal 仍按请求各自一份', async () => {
+    await expectGateSignalIsPerRequest(
+      'sync',
+      () => syncArgs({ remotePath: '/srv/app' }),
+      () => control.sync.length,
+      { cancelled: M2, kept: M1 }
+    )
+  })
+
+  it('P2-07-52 两条会话各一份实例：同一个对话号各按自己会话的 agentOf 认人，卡片只进自己的面板', async () => {
+    writeConfig('Host web\n')
+    gate.recordEvents = true
+    const agentOf1 = vi.fn((c: number) => (c === 2 ? SPAWN_E : undefined))
+    const agentOf2 = vi.fn((c: number) =>
+      c === 2 ? { profileName: 'bot', kind: 'root' as const } : undefined
+    )
+    const s1 = await open({ sessionId: 's1', agentOf: agentOf1 })
+    const s2 = await open({ sessionId: 's2', agentOf: agentOf2 })
+
+    await execWith(s1.client, metaOf('tc-a', 'sub-a1', 21, 2))
+    expect(agentOf1).toHaveBeenCalledTimes(1)
+    expect(agentOf2).not.toHaveBeenCalled()
+
+    await execWith(s2.client, metaOf('tc-b', 's2', 31, 2))
+    expect(agentOf1).toHaveBeenCalledTimes(1)
+    expect(agentOf2).toHaveBeenCalledTimes(1)
+
+    expect(gate.events.map(subjectOf)).toStrictEqual([
+      { kind: 'agent', sessionId: 's1', agentKind: 'spawned', profileName: 'explore' },
+      { kind: 'agent', sessionId: 's2', agentKind: 'root', profileName: 'bot' }
+    ])
+    expect(s1.asks.map((a) => a.id)).toEqual(['tc-a'])
+    expect(s2.asks.map((a) => a.id)).toEqual(['tc-b'])
   })
 })
