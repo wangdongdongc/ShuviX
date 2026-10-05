@@ -565,7 +565,7 @@ describe('D10-46 gateway.prompt 模型被拒（PIN-15）', () => {
     expect(eventsOf('error')).toEqual([])
   })
 
-  it('D10-46 模型请求失败（model_error）→ 报一条原文 error；忙 → 不报', async () => {
+  it('D10-46 模型请求失败（model_error）→ 不报 error（失败是会话里的错误条目，经视图上屏，P3-08）；忙 → 不报', async () => {
     insert('s1')
     fakeHost.configure = (session) => {
       session.submitResults = [
@@ -575,7 +575,7 @@ describe('D10-46 gateway.prompt 模型被拒（PIN-15）', () => {
     }
     expect((await chatGateway.prompt('s1', 'a')).code).toBe('model_error')
     expect((await chatGateway.prompt('s1', 'b')).code).toBe('busy')
-    expect(eventsOf('error')).toEqual([{ type: 'error', sessionId: 's1', error: 'overloaded' }])
+    expect(eventsOf('error')).toEqual([])
   })
 })
 

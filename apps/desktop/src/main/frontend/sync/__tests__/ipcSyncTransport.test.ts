@@ -60,7 +60,7 @@ function rig(): {
 const goneListeners = (wc: FakeWebContents): number =>
   wc.listenerCount('destroyed') +
   wc.listenerCount('render-process-gone') +
-  wc.listenerCount('did-start-navigation')
+  wc.listenerCount('did-navigate')
 
 describe('P3-05-02 send 只发给一个 webContents', () => {
   it("P3-05-02 send('ipc:7', frame) → wcA.send 恰一次 ('sync:frame', frame)；wcB 从没被调", () => {
@@ -195,43 +195,25 @@ describe('P3-05-06 渲染进程重载（PIN-02）', () => {
     expect(goneListeners(wcA)).toBe(0)
   })
 
-  it('P3-05-06 主框架跨文档导航 → cb 一次；页内导航 / 子框架导航 → 不调', () => {
+  it('P3-05-06 主框架跨文档导航落定（did-navigate）→ cb 一次；只是开始了（被拦下的导航）、页内导航 → 不调', () => {
     const { wcA, transport } = rig()
     const cb = vi.fn()
     transport.onClientGone('ipc:7', cb)
+    // 导航开始了、却被 will-navigate 拦下（外部链接闸）：页面还是那个页面（P3-08 改）
+    wcA.emit(
+      'did-start-navigation',
+      { url: 'app://x', isSameDocument: false, isMainFrame: true },
+      'app://x',
+      false,
+      true
+    )
     // 页内（同文档）导航
-    wcA.emit(
-      'did-start-navigation',
-      { url: 'app://x#a', isSameDocument: true, isMainFrame: true },
-      'app://x#a',
-      true,
-      true
-    )
-    // 子框架的跨文档导航
-    wcA.emit(
-      'did-start-navigation',
-      { url: 'https://frame', isSameDocument: false, isMainFrame: false },
-      'https://frame',
-      false,
-      false
-    )
+    wcA.emit('did-navigate-in-page', {}, 'app://x#a', true)
     expect(cb).not.toHaveBeenCalled()
-    // 主框架跨文档（重载 / 换页）
-    wcA.emit(
-      'did-start-navigation',
-      { url: 'app://x', isSameDocument: false, isMainFrame: true },
-      'app://x',
-      false,
-      true
-    )
+    // 主框架跨文档导航落定（重载 / 换页）
+    wcA.emit('did-navigate', {}, 'app://x', 200, 'OK')
     expect(cb).toHaveBeenCalledTimes(1)
-    wcA.emit(
-      'did-start-navigation',
-      { url: 'app://x', isSameDocument: false, isMainFrame: true },
-      'app://x',
-      false,
-      true
-    )
+    wcA.emit('did-navigate', {}, 'app://x', 200, 'OK')
     expect(cb).toHaveBeenCalledTimes(1)
   })
 })

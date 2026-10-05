@@ -50,6 +50,9 @@ export function noModelErrorText(reason: string): string {
 export function reportableError(result: SubmitResult): string | undefined {
   if (!result.error) return undefined
   if (result.code === 'busy' || result.code === 'closed') return undefined
+  // 模型侧的失败是会话里的一条错误条目（投影成 error_event，经视图上屏）：再发一条 `error` 事件，界面上
+  // 就是两行同一个错误（本地错误行 + 视图里那行，P3-08 PIN-02 / F8）。只报没有条目的错误
+  if (result.code === 'model_error') return undefined
   if (result.code === 'no_model') return noModelErrorText(result.error)
   if (result.code === 'queued') return t('chat.requestStillQueued')
   return result.error

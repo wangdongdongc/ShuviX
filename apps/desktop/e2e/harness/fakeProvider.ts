@@ -308,9 +308,10 @@ export async function startFakeProvider(): Promise<FakeProvider> {
         at >= 0 ? queue.splice(at, 1)[0] : ({ text: 'OK', finishReason: 'stop' } as FakeTurn)
       if (turn.httpStatus) {
         res.writeHead(turn.httpStatus, { 'Content-Type': 'application/json' })
-        res.end(
-          JSON.stringify({ error: { message: 'e2e injected failure', type: 'server_error' } })
-        )
+        // 4xx 报成请求错误：错误文本里带 `server_error` 会被 pi-ai 认成暂时性失败、durable 按退避重试
+        // （P3-08：durable 的重试是开着的）；5xx 才是 server_error
+        const type = turn.httpStatus >= 500 ? 'server_error' : 'invalid_request_error'
+        res.end(JSON.stringify({ error: { message: 'e2e injected failure', type } }))
         return
       }
       await streamTurn(res, model, turn)
