@@ -14,7 +14,8 @@
  *  - **人在审批卡片上写的反馈**：执行层在收到人的回答时记下。审查员的输入只收人写的东西，而卡片
  *    反馈落进会话树时只是一段工具结果文字 —— 任何命令都能打印出同样的开头，按文字认就是给注入
  *    开门。所以只认这里：只有安全模块自己收到的回答才会进来。
- *  - **审查放行过的调用**：宿主在工具执行完之后取走，写进工具结果（工具卡上的「已审查」标记）；
+ *  - **审查放行过的调用**：宿主在工具执行完之后取走，写进工具结果（工具卡上的「已审查」标记）；按
+ *    durable taskId 记（有的话，P2-08 PIN-10），否则按 toolCallId；
  *  - **进行中的审查**：会话被停止时一并中止，并在下一次 prompt 之前不再开始新的 —— 与询问卡片同一
  *    待遇（HarnessSession 的 inputsClosed）。否则一次放行会在用户点了停止之后才落地。
  */
@@ -95,20 +96,41 @@ export interface ReviewAllowedNote {
 
 const allowed = new Map<string, Map<string, ReviewAllowedNote>>()
 
+/** 一次调用的身份：provider 的 toolCallId，以及（durable 工具调用里）它的 taskId */
+export interface ReviewCall {
+  toolCallId: string
+  taskId?: number
+}
+
+/**
+ * 放行标记的键（P2-08 PIN-10）：有 durable taskId 就按它（`task:<id>`）—— provider 的 toolCallId 会话内
+ * 可能重复（根与派生 agent 同时各有一个 `call_0`，先跑完的那个会拿走另一个的标记）；没有才按 toolCallId。
+ * 空 toolCallId 且没有 taskId → ''（不记）。
+ */
+export function reviewCallKey(call: ReviewCall): string {
+  return call.taskId === undefined ? call.toolCallId : `task:${call.taskId}`
+}
+
+function keyOf(call: string | ReviewCall): string {
+  return typeof call === 'string' ? call : reviewCallKey(call)
+}
+
 /**
  * 审查员放行了这次调用（执行层调用）。同一次调用里审查不止一次（先读后写）时留风险最高的那次。
+ * `call` 给字符串 = 旧口径（按 toolCallId）。
  */
 export function noteReviewAllowed(
   sessionId: string,
-  toolCallId: string,
+  call: string | ReviewCall,
   note: ReviewAllowedNote
 ): void {
-  if (!toolCallId) return
+  const key = keyOf(call)
+  if (!key) return
   const notes = allowed.get(sessionId) ?? new Map<string, ReviewAllowedNote>()
-  const prev = notes.get(toolCallId)
+  const prev = notes.get(key)
   if (!prev || PERMISSION_RISKS.indexOf(note.risk) > PERMISSION_RISKS.indexOf(prev.risk)) {
-    notes.delete(toolCallId)
-    notes.set(toolCallId, note)
+    notes.delete(key)
+    notes.set(key, note)
   }
   while (notes.size > ALLOWED_LIMIT) notes.delete(notes.keys().next().value as string)
   allowed.set(sessionId, notes)
@@ -117,11 +139,12 @@ export function noteReviewAllowed(
 /** 取走这次调用的放行标记（宿主在工具执行完之后调用，写进工具结果）；没有返回 undefined */
 export function takeReviewAllowed(
   sessionId: string,
-  toolCallId: string
+  call: string | ReviewCall
 ): ReviewAllowedNote | undefined {
+  const key = keyOf(call)
   const notes = allowed.get(sessionId)
-  const note = notes?.get(toolCallId)
-  if (note) notes!.delete(toolCallId)
+  const note = notes?.get(key)
+  if (note) notes!.delete(key)
   return note
 }
 

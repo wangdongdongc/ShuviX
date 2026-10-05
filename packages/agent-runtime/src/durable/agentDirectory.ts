@@ -15,10 +15,18 @@
  * **宽松**地读（记录写坏了照样算，PIN-04），并按拥有者边向上继承（PIN-08）—— 辅助对话里的任务派出的
  * 对话同样是辅助工作。它们从不续跑、不算中断、不进运行状态镜像（见 DurableSession）。
  *
+ * 拥有者边也按任务记一份（任务 → 它拥有的对话，P2-08 PIN-02）：宿主派发的后台锚任务本身住在根里，但它
+ * 拥有的对话全是辅助工作时，DurableSession 同样不把它算进运行状态。
+ *
  * fork 出来的对话（`document.copy`，没有值）不在这里处理：fork 派生 agent 的对话不是产品路径（回退只
  * fork 根 / 用户的当前对话，PIN-11），它们按根认人。
  */
-import type { ConversationId, ConversationRecord, JsonObject } from '@earendil-works/pi-durable'
+import type {
+  ConversationId,
+  ConversationRecord,
+  JsonObject,
+  TaskId
+} from '@earendil-works/pi-durable'
 import type { RuntimeLogger } from '../types'
 import {
   parseSpawnedAgentRecord,
@@ -73,12 +81,34 @@ export class AgentDirectory {
   private readonly hooks = new Set<ConversationId>()
   /** 任务拥有的对话 → 拥有它的任务所在的对话 */
   private readonly owners = new Map<ConversationId, ConversationId>()
+  /** 任务 → 它拥有的对话（P2-08 PIN-02：锚任务的运行状态排除） */
+  private readonly owned = new Map<TaskId, Set<ConversationId>>()
 
   constructor(private readonly deps: AgentDirectoryDeps) {}
 
   /** 一个对话的记录（创建它的提交、或打开时的扫描）：记下它的拥有者边 */
   observeConversation(record: ConversationRecord): void {
-    if (record.owner !== undefined) this.owners.set(record.id, record.owner.conversationId)
+    if (record.owner === undefined) return
+    this.owners.set(record.id, record.owner.conversationId)
+    let conversations = this.owned.get(record.owner.taskId)
+    if (conversations === undefined) {
+      conversations = new Set()
+      this.owned.set(record.owner.taskId, conversations)
+    }
+    conversations.add(record.id)
+  }
+
+  /**
+   * 一个任务拥有的对话是不是**全都**是辅助工作（至少一条）—— 宿主派发的锚（P2-08 PIN-02）。一条对话都
+   * 不拥有的任务（后台压缩之类）不算：它们照样让会话忙。
+   */
+  ownsOnlyAuxiliary(taskId: TaskId): boolean {
+    const conversations = this.owned.get(taskId)
+    if (conversations === undefined || conversations.size === 0) return false
+    for (const conversationId of conversations) {
+      if (!this.isAuxiliary(conversationId)) return false
+    }
+    return true
   }
 
   /** 一个对话的 `AgentStateDoc` 此刻的值（null / undefined = 文档没了） */

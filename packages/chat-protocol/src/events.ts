@@ -134,6 +134,11 @@ export interface ChatToolEndEvent extends ChatEventBase {
 export interface ChatToolReviewEvent extends ChatEventBase {
   type: 'tool_review'
   toolCallId: string
+  /**
+   * 发起询问的 durable 工具任务（P2-08 PIN-09）：provider 的 toolCallId 会话内可能重复（根与派生 agent
+   * 都可能是 `call_0`），taskId 不会。不经 durable 工具调用的询问点没有。前端仍按 toolCallId 找卡。
+   */
+  taskId?: number
   /** true = 审查中；false = 审查落定（不论结论） */
   reviewing: boolean
 }

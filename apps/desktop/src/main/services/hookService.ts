@@ -11,7 +11,8 @@
  *    否与它无关；runner 未初始化（启动早期）时静默丢弃。
  *
  * 没有 run journal：一次 run 就是一次派发，派生 agent 在归属会话的面板里可见，起止与跳过
- * 原因进主进程日志（`hook "<name>" run=… start/ok/failed`、`skipped …: busy | unknown-agent | no-model`）。
+ * 原因进主进程日志（`hook "<name>" run=… start/ok/failed`、`skipped …: busy | unknown-agent | no-model |
+ * interrupted`）。hook 的模型锁优先（`hookRunModel`，PIN-06）；被中断的会话上从不派发（PIN-07）。
  *
  * runner 在 init() 里装配（main/index.ts 调用）而非模块顶层 —— 依赖 agentManager /
  * agentService / sessionService 的运行时状态，顶层装配会踩 ESM 初始化环。
@@ -33,11 +34,14 @@ import {
   builtinMdFileNames,
   createHookRunner,
   parseHookDefinitionFile,
+  resolveHookRunModel,
   registryFileBase,
   resolveShadowing,
   toInProcessAgentType,
   type DecideTriggerId,
+  type HookDecideOptions,
   type HookDecision,
+  type HookRunModel,
   type HookRegistryEntry,
   type HookRunner,
   type ObserveTriggerId,
@@ -50,8 +54,11 @@ import { getBuiltinHooksDir, getDefaultHooksDir } from '../utils/paths'
 import { appEventBus } from '../utils/appEventBus'
 import { agentManager } from '../agents/AgentManager'
 import { agentService } from './agentService'
+import { getModelRegistry, providerCredentialPort } from './models'
+import { getSessionHost } from './sessionHost'
 import { sessionService } from './sessionService'
 import { createLogger } from '../logger'
+import type { ThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
 
 const log = createLogger('Hook')
 
@@ -124,9 +131,10 @@ class HookService {
         const profile = agentService.getProfile(name)
         return profile ? toInProcessAgentType(profile) : null
       },
-      // 基准模型 = 归属会话的当前模型；被派发 agent 的 shuvix-model 声明优先于它
-      // （统一创建管线的 spawned 路径本就如此）—— hook 自己不参与选模型
-      resolveRunModel: ({ sessionId }) => sessionService.resolveRunModelConfig(sessionId),
+      // 基准模型锁优先（Q-P2-18）；被派发 agent 的 shuvix-model 声明优先于它 —— hook 自己不参与选模型
+      resolveRunModel: ({ sessionId }) => hookRunModel(sessionId),
+      // 被中断的会话：派发的第一次提交就会把被中断的工作续上（PIN-07）—— 只看打开着的（关着的没有调度器）
+      isInterrupted: ({ sessionId }) => getSessionHost().get(sessionId)?.isInterrupted() === true,
       env: { host: 'desktop', platform: process.platform },
       logger: { info: (m) => log.info(m), warn: (m) => log.warn(m), error: (m) => log.error(m) }
     })
@@ -145,7 +153,7 @@ class HookService {
   decide<K extends DecideTriggerId>(
     id: K,
     payload: TriggerPayloadMap[K],
-    opts?: { signal?: AbortSignal }
+    opts?: HookDecideOptions
   ): Promise<HookDecision<TriggerResultMap[K]> | null> {
     return this.runner ? this.runner.decide(id, payload, opts) : Promise.resolve(null)
   }
@@ -491,6 +499,26 @@ export const hookTriggers = {
   decide: <K extends DecideTriggerId>(
     id: K,
     payload: TriggerPayloadMap[K],
-    opts?: { signal?: AbortSignal }
+    opts?: HookDecideOptions
   ): Promise<HookDecision<TriggerResultMap[K]> | null> => hookService.decide(id, payload, opts)
+}
+
+/**
+ * 一次 hook run 的模型（PIN-06，锁优先）：会话打开着且锁定了 → 锁的模型 + 根对话此刻的思考档位；否则 →
+ * 会话的模型选择经 resolveLockModel（没有选择 = null，跳过；行没了 / 停用 / 模型不存在 = 失败的 run）。
+ */
+export function hookRunModel(sessionId: string): Promise<HookRunModel> {
+  return resolveHookRunModel({
+    session: getSessionHost().get(sessionId),
+    selection: async () => {
+      const config = await sessionService.resolveRunConfig(sessionId)
+      if (!config) return null
+      return {
+        model: config.model ? { provider: config.model.provider, modelId: config.model.model } : null,
+        capabilities: config.model?.capabilities ?? {},
+        thinkingLevel: config.thinkingLevel as ThinkingLevel
+      }
+    },
+    catalog: { registry: getModelRegistry(), port: providerCredentialPort }
+  })
 }

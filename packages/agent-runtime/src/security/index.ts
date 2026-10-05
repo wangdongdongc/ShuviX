@@ -61,6 +61,8 @@ export {
   abortSessionReviews,
   reopenSessionReviews,
   takeReviewAllowed,
+  reviewCallKey,
+  type ReviewCall,
   type HumanFeedbackNote,
   type ReviewAllowedNote,
   REVIEW_CONSECUTIVE_DENIAL_LIMIT,

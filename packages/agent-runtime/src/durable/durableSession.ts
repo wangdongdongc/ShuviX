@@ -431,11 +431,13 @@ function liveTaskOf(record: {
   readonly conversationId: ConversationId
   readonly kind: string
   readonly abortRequested: boolean
+  readonly background: boolean
 }): LiveTask {
   return {
     conversationId: record.conversationId,
     kind: record.kind,
-    abortRequested: record.abortRequested
+    abortRequested: record.abortRequested,
+    background: record.background
   }
 }
 
@@ -572,6 +574,8 @@ interface LiveTask {
   readonly conversationId: ConversationId
   readonly kind: string
   readonly abortRequested: boolean
+  /** 对话拥有的后台任务（锚、后台压缩） */
+  readonly background: boolean
 }
 
 interface PendingNotice {
@@ -658,6 +662,9 @@ export class DurableSessionImpl implements DurableSession {
       rootLock: () => this.agentLock.current,
       liveTasksOf: (conversationId) => this.liveTasksOf(conversationId),
       liveConversationIds: () => [...new Set([...this.live.values()].map((t) => t.conversationId))],
+      isInterrupted: () => this.isInterrupted(),
+      isClosed: () => this.closedFlag,
+      currentConversation: () => this.currentConversation(),
       stopConversation: (conversationId) => this.stopConversation(conversationId),
       reopenInputs: () => this.reopenInputs(),
       op: (work) => this.op(work)
@@ -686,6 +693,7 @@ export class DurableSessionImpl implements DurableSession {
         conversationId: ConversationId
         kind: string
         abortRequested: boolean
+        background: boolean
       }[] = []
       for (const status of LIVE_TASK_STATUSES) {
         let cursor: Parameters<typeof tx.scanTasks>[2]
@@ -828,10 +836,19 @@ export class DurableSessionImpl implements DurableSession {
     return false
   }
 
+  /**
+   * 一个活任务算不算辅助工作：它在辅助对话里，或者它是后台任务、且它拥有的对话全是辅助工作（宿主派发的
+   * 锚，P2-08 PIN-02）。拥有审查员的工具任务不是后台任务，从不排除。
+   */
+  private isAuxiliaryTask(id: TaskId, task: LiveTask): boolean {
+    if (this.directory.isAuxiliary(task.conversationId)) return true
+    return task.background && this.directory.ownsOnlyAuxiliary(id)
+  }
+
   /** 有活着的非辅助任务 */
   private hasPrimaryWork(): boolean {
-    for (const task of this.live.values()) {
-      if (!this.directory.isAuxiliary(task.conversationId)) return true
+    for (const [id, task] of this.live) {
+      if (!this.isAuxiliaryTask(id, task)) return true
     }
     return false
   }
@@ -1779,8 +1796,8 @@ export class DurableSessionImpl implements DurableSession {
   /** 有活着的非辅助任务的对话 */
   private primaryConversationsWithWork(): ConversationId[] {
     const found = new Set<ConversationId>()
-    for (const task of this.live.values()) {
-      if (!this.directory.isAuxiliary(task.conversationId)) found.add(task.conversationId)
+    for (const [id, task] of this.live) {
+      if (!this.isAuxiliaryTask(id, task)) found.add(task.conversationId)
     }
     return [...found]
   }
