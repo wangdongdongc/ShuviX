@@ -514,11 +514,15 @@ describe('KT-7 create —— 元数据形状与去重', () => {
     expect(written.startsWith('---\nshuvix: okf v0.2\ntype: Memory\n')).toBe(true)
     expect(written).toContain('\nstatus: stable\n')
     expect(written).toContain(`\ngenerated: { by: ${JSON.stringify(ACTOR)}, at:`)
-    expect(h.afterWrite).toHaveBeenCalledWith({
-      bundleDir: ROOT,
-      path: 'token-refresh.md',
-      title: 'Token refresh'
-    })
+    expect(h.afterWrite).toHaveBeenCalledWith(
+      {
+        bundleDir: ROOT,
+        path: 'token-refresh.md',
+        title: 'Token refresh'
+      },
+      // 第二个参数是这次调用的 scope：宿主按它认出发起写入的 agent（actor）
+      expect.objectContaining({ conversationId: 1, taskId: 1 })
+    )
     // 回执给绝对路径 —— 同一轮里紧接着要 edit 它
     expect(textOf(res)).toContain(abs)
     expect(res.details).toEqual({ action: 'create', path: 'token-refresh.md' })
@@ -755,11 +759,15 @@ describe('KT-10 工具不关心 base 是哪种库', () => {
     expect(h.resolveBase.mock.calls).toEqual([['读书笔记']])
     expect(h.calls).toEqual([`enforce:write:${abs}`, `write:${abs}`])
     expect(textOf(res)).toContain(abs)
-    expect(h.afterWrite).toHaveBeenCalledWith({
-      bundleDir: DIR,
-      path: 'reading-list.md',
-      title: 'Reading list'
-    })
+    expect(h.afterWrite).toHaveBeenCalledWith(
+      {
+        bundleDir: DIR,
+        path: 'reading-list.md',
+        title: 'Reading list'
+      },
+      // 第二个参数是这次调用的 scope：宿主按它认出发起写入的 agent（actor）
+      expect.objectContaining({ conversationId: 1, taskId: 1 })
+    )
   })
 })
 

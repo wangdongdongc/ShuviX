@@ -16,7 +16,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
-import { executeTool } from '@shuvix/agent-runtime/tools/testing/invokeTool'
+import { executeTool, invokeTool } from '@shuvix/agent-runtime/tools/testing/invokeTool'
 
 const state = vi.hoisted(() => ({
   dir: '',
@@ -58,10 +58,6 @@ vi.mock('../../services/toolContext', async () => {
   return {
     resolveProjectConfig: () => ({ workingDirectory: state.dir }),
     getDesktopSecurityContext: makeContext,
-    agentActorOf: (ctx: {
-      agent?: { profileName?: string; getModelConfig?: () => { model?: string } }
-    }): string =>
-      `shuvix-${ctx.agent?.profileName ?? 'agent'}/${ctx.agent?.getModelConfig?.().model ?? 'unknown'}`,
     TOOL_ABORTED: 'Aborted'
   }
 })
@@ -309,5 +305,54 @@ describe('桌面文件工具 — 知识库根目录下的写入', () => {
     await new Promise((resolve) => setTimeout(resolve, 30))
     expect(state.notify).toHaveBeenCalledTimes(1)
     expect(state.requests).toEqual([])
+  })
+})
+
+/**
+ * H11-52（P1-11）—— 会话级装配的文件工具（ctx 带 agentOf、没有固定的 agent）：write / edit 落在库里时，
+ * `generated.by` 与变更管线（notifyKnowledgeFileChanged）的 actor 都按**这次调用**的对话认人。
+ */
+describe('H11-52 文件工具的章按调用盖', () => {
+  it('H11-52 对话 1 是 work / claude-sonnet-4-5、之后换成 bot / m2：write 与 edit 的章和管线 actor 各按自己那次调用', async () => {
+    let current: ToolContext['agent'] = {
+      profileName: 'work',
+      kind: 'root',
+      getModelConfig: () => ({
+        provider: 'anthropic',
+        model: 'claude-sonnet-4-5',
+        capabilities: {}
+      })
+    }
+    const sessionCtx: ToolContext = { sessionId: 'kb-session', agentOf: () => current }
+    const p = join(state.kb, 'projects', 'acme', 'h11-52.md')
+
+    await invokeTool(
+      makeWriteTool(sessionCtx),
+      { path: p, content: DRAFT },
+      {
+        callId: 'h11-52-w',
+        conversationId: 1
+      }
+    )
+    expect(readFileSync(p, 'utf-8')).toContain('by: "shuvix-work/claude-sonnet-4-5"')
+    await vi.waitFor(() => expect(state.notify).toHaveBeenCalledTimes(1))
+    expect(state.notify).toHaveBeenLastCalledWith(p, {
+      kind: 'write',
+      actor: 'shuvix-work/claude-sonnet-4-5'
+    })
+
+    current = {
+      profileName: 'bot',
+      kind: 'root',
+      getModelConfig: () => ({ provider: 'anthropic', model: 'm2', capabilities: {} })
+    }
+    await invokeTool(
+      makeEditTool(sessionCtx),
+      { path: p, oldText: 'body', newText: 'body two' },
+      { callId: 'h11-52-e', conversationId: 1 }
+    )
+    expect(readFileSync(p, 'utf-8')).toContain('by: "shuvix-bot/m2"')
+    await vi.waitFor(() => expect(state.notify).toHaveBeenCalledTimes(2))
+    expect(state.notify).toHaveBeenLastCalledWith(p, { kind: 'edit', actor: 'shuvix-bot/m2' })
   })
 })
