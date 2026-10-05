@@ -55,6 +55,11 @@
  *    - driven-run 标记（`SessionState.driven`）：被父会话驱动的发送受理之后写下；那条输入落定时
  *      （进程内由提交发布察觉，打开时由扫描察觉、`open()` 落定之后再报）调宿主的 `onDrivenSettled`，
  *      每个进程至多一次，回调成功后清掉标记。
+ *  - **界面投影**（P3-03，`projection/`）：`projector()` 惰性建一个 SessionProjector（计数共享，最后一个
+ *    句柄归还时拆掉，关停时一并拆掉），`agentProjector(agentId)` 同理按 agentId；它们经 `ProjectorHost`
+ *    读这里的运行状态（`onRunStateChange`，含没有发布的 `markResumed`）、询问（`subscribeInputs` /
+ *    `pendingInputs`，多钩子 PIN-02）与 agent 目录。受理回调带上落下的条目 id（`onAdmitted({entryId?})`，
+ *    排队的发送没有，落下时另调 `onPlaced({entryId})`，PIN-08）。
  */
 import { copyJson } from '@earendil-works/chord'
 import type { AssistantMessage } from '@earendil-works/pi-ai'
@@ -69,6 +74,7 @@ import {
   type Conversation,
   type ConversationId,
   type ConversationRecord,
+  type EntryId,
   type Harness,
   type JsonObject,
   type Submission,
@@ -82,6 +88,12 @@ import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/in
 import type { ThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
 import type { PromptVars, PromptVarsCtx } from '../agentProfile/promptVars'
 import type { RuntimeEventSink, RuntimeLogger } from '../types'
+import { AgentProjectorImpl, type AgentProjector } from './projection/agentProjector'
+import {
+  SessionProjectorImpl,
+  type ProjectorHost,
+  type SessionProjector
+} from './projection/sessionProjector'
 import { AgentDirectory } from './agentDirectory'
 import { rootAgentIdentity, type AgentIdentity } from './agentRecord'
 import { backgroundContext as BG, errorText, isClosedError } from './context'
@@ -94,7 +106,7 @@ import {
   type DrivenRun,
   type SessionState
 } from './docs'
-import { PendingInputRequests } from './inputRequests'
+import { PendingInputRequests, type PendingInputHooks } from './inputRequests'
 import {
   AGENT_EXTENSION_PREFIX,
   AgentCreationError,
@@ -111,6 +123,8 @@ import type { LockModel, ModelSelection } from '../models/lockModel'
 const GENERATION_TASK_KIND = 'pi.generation'
 const LIVE_TASK_STATUSES = ['pending', 'running', 'waiting', 'completing'] as const
 const SCAN_PAGE_SIZE = 256
+/** 受理记录的上限（PIN-08：`submitUser` 受理之后马上取走，留着的只是没人要的） */
+const ADMISSION_LIMIT = 256
 
 // ─────────────────────────── 公共类型 ───────────────────────────
 
@@ -158,10 +172,27 @@ export interface UserSendOptions {
   display?: JsonObject
   /**
    * 这条输入被受理的那一刻（durable 已接下这次提交，run 还没落定）调用一次。被拒（忙 / 模型被拒 /
-   * 会话已关 / 创建被取消）时从不调用。抛错只记日志，不影响发送本身（桌面：`session.prompt-accepted`
-   * 埋点与活跃时间入账在这里）。
+   * 会话已关 / 创建被取消）时从不调用；重新挂上也不调用。抛错只记日志，不影响发送本身（桌面：
+   * `session.prompt-accepted` 埋点与活跃时间入账在这里）。`entryId` = 受理的那个提交当场落下的 `pi.user`
+   * 条目（空闲时；`String(entryId)` 就是界面里那条消息的 id）；排进队列的发送没有（PIN-08，见 `onPlaced`）。
    */
-  onAdmitted?: () => void
+  onAdmitted?: (info: AdmittedInfo) => void
+  /**
+   * 排进队列的这条输入在某个边界被放下、成了 `pi.user` 条目时调用一次（微任务里；PIN-08）。受理当场
+   * 就落下的不调（`onAdmitted` 已经带着 entryId）；被撤回 / 中止、从没放下的不调。抛错只记日志。
+   */
+  onPlaced?: (info: PlacedInfo) => void
+}
+
+/** `onAdmitted` 的参数（PIN-08） */
+export interface AdmittedInfo {
+  /** 受理的提交当场落下的 user 条目；排队的发送没有这个键 */
+  entryId?: number
+}
+
+/** `onPlaced` 的参数（PIN-08） */
+export interface PlacedInfo {
+  entryId: number
 }
 
 export interface NoticeInput {
@@ -329,6 +360,29 @@ export interface DurableSession {
    * 窗口算，K14 / Q-P2-08）
    */
   readonly effectiveSettings: HarnessSettings
+  /**
+   * 界面投影（P3-03）：惰性建立、同一时刻只有一个（两次调用 `===`），挂载完（显示侧车解析完）才落定
+   * （PIN-01）。`acquire()` / `release()` 计数，最后一个归还时拆掉，之后再调这里得到新挂载的一个；会话
+   * 关停时拆掉。挂载只读（不开启调度器、不产生发布）。句柄已关 → 以 `SessionClosedError` 拒绝。
+   */
+  projector(): Promise<SessionProjector>
+  /**
+   * 一个派生 agent 对话的界面投影（P3-03，子 agent 面板）：按 agentId 共享、计数回收（同 `projector()`）。
+   * 不认识的 agentId → undefined（不挂载）；宿主派发的 hook agent 也能看（只读，PIN-20）。
+   */
+  agentProjector(agentId: string): Promise<AgentProjector | undefined>
+  /**
+   * 运行状态变化（PIN-23）：每次 `runState` 变了都在微任务里调用（含没有提交发布的转变 —— 继续 / 中止
+   * 开启调度器的那一刻），读 `runState` 得到的就是新值。关停之后不再调用。监听器抛错只记日志。
+   */
+  onRunStateChange(listener: (state: RunState, previous: RunState) => void): () => void
+  /**
+   * 询问的钩子（PIN-02，可以挂很多份，各自隔离）：每条询问开始挂起 / 落定时各调一次。返回退订函数。
+   * 已经挂着的不补发（先读 `pendingInputs()`）。
+   */
+  subscribeInputs(hooks: PendingInputHooks): () => void
+  /** 此刻挂着的询问（按出现次序） */
+  pendingInputs(): InputRequest[]
 }
 
 /** 关停原因：destroy = 删除会话（合并窗口里的通知随之丢弃），其余照常保存待送达通知 */
@@ -621,12 +675,33 @@ export class DurableSessionImpl implements DurableSession {
   private readonly drivenClaimed = new Set<SubmissionId>()
   /** 派生 agent 协调器（P2-03） */
   private readonly spawner: SpawnCoordinatorImpl
+  /** 运行状态监听（PIN-23，`onRunStateChange`） */
+  private readonly runStateListeners = new Set<(state: RunState, previous: RunState) => void>()
+  /** 界面投影（P3-03）：此刻的那一个（拆掉时自己摘掉） */
+  private projectorEntry:
+    | { readonly instance: SessionProjectorImpl; readonly ready: Promise<SessionProjectorImpl> }
+    | undefined
+  /** 派生 agent 的界面投影，按 agentId */
+  private readonly agentProjectors = new Map<
+    string,
+    { readonly instance: AgentProjectorImpl; readonly ready: Promise<AgentProjectorImpl> }
+  >()
+  /**
+   * 输入的受理记录（PIN-08）：submission 第一次出现在提交发布里时带没带条目（空闲受理当场落下）、之后
+   * 何时被放下。`submitUser` 在受理之后取走；有界（最旧的先丢）
+   */
+  private readonly admissions = new Map<
+    SubmissionId,
+    { readonly admittedEntry: EntryId | undefined; placedEntry: EntryId | undefined }
+  >()
+  /** 等着被放下的排队发送（`onPlaced`） */
+  private readonly placementWaiters = new Map<SubmissionId, (entryId: EntryId) => void>()
 
   private constructor(private readonly deps: DurableSessionDeps) {
     this.sessionId = deps.sessionId
     this.raw = deps.harness
     this.harness = observeResumes(deps.harness, () => this.markResumed())
-    this.inputs = new PendingInputRequests(deps.sessionId, deps.eventSink)
+    this.inputs = new PendingInputRequests(deps.sessionId, deps.eventSink, {}, deps.logger)
     this.directory = new AgentDirectory({ sessionId: deps.sessionId, logger: deps.logger })
     this.agentLock = new AgentLock({
       sessionId: deps.sessionId,
@@ -879,7 +954,17 @@ export class DurableSessionImpl implements DurableSession {
     const previous = this.state
     this.state = next
     queueMicrotask(() => {
-      if (!this.closedFlag) this.deps.onStateChange(next, previous)
+      if (this.closedFlag) return
+      this.deps.onStateChange(next, previous)
+      for (const listener of [...this.runStateListeners]) {
+        try {
+          listener(next, previous)
+        } catch (error) {
+          this.deps.logger.warn(
+            `run state listener failed session=${this.sessionId}: ${errorText(error)}`
+          )
+        }
+      }
     })
   }
 
@@ -913,6 +998,7 @@ export class DurableSessionImpl implements DurableSession {
         this.directory.observeConversation(change.value)
         changed = true
       } else if (change.type === 'submission') {
+        if (change.value.type === 'input') this.trackAdmission(change.value)
         // 被驱动的那条输入落定了（P2-09）：回调放到监听之外
         const record = change.value
         const marker = this.drivenMarker
@@ -1030,7 +1116,7 @@ export class DurableSessionImpl implements DurableSession {
         if (options.driven !== undefined) {
           await this.armDriven(conversation.id, requestId!, options.driven, submission.id)
         }
-        this.admitted(options.onAdmitted)
+        this.admitted(submission.id, options)
         if (joining.length > 0) await this.steerNotices(conversation, joining)
         return settlementResult(await submission.wait(BG))
       })
@@ -1206,13 +1292,60 @@ export class DurableSessionImpl implements DurableSession {
     }
   }
 
-  /** 受理回调（`UserSendOptions.onAdmitted`）：抛错只记日志 */
-  private admitted(callback: (() => void) | undefined): void {
-    if (callback === undefined) return
-    try {
-      callback()
-    } catch (error) {
-      this.deps.logger.warn(`onAdmitted failed session=${this.sessionId}: ${errorText(error)}`)
+  /**
+   * 受理回调（`UserSendOptions.onAdmitted` / `onPlaced`，PIN-08）：受理的提交当场落下了条目 → 带上它；
+   * 排进了队列 → 不带，放下时再调 `onPlaced`（受理之后、登记之前就已经放下的当场补上）。抛错只记日志。
+   */
+  private admitted(submissionId: SubmissionId, options: UserSendOptions): void {
+    const admission = this.admissions.get(submissionId)
+    this.admissions.delete(submissionId)
+    const entryId = admission?.admittedEntry
+    if (options.onAdmitted !== undefined) {
+      try {
+        options.onAdmitted(entryId === undefined ? {} : { entryId })
+      } catch (error) {
+        this.deps.logger.warn(`onAdmitted failed session=${this.sessionId}: ${errorText(error)}`)
+      }
+    }
+    const onPlaced = options.onPlaced
+    if (entryId !== undefined || onPlaced === undefined) return
+    const deliver = (placed: EntryId): void => {
+      queueMicrotask(() => {
+        try {
+          onPlaced({ entryId: placed })
+        } catch (error) {
+          this.deps.logger.warn(`onPlaced failed session=${this.sessionId}: ${errorText(error)}`)
+        }
+      })
+    }
+    if (admission?.placedEntry !== undefined) deliver(admission.placedEntry)
+    else this.placementWaiters.set(submissionId, deliver)
+  }
+
+  /**
+   * 提交发布里的一条输入 submission（同步）：第一次见到时记下它带没带条目（= 受理当场落下）；之后带上
+   * 条目 = 被放下，等着的 `onPlaced` 在这里送出；落定而没放下的不再等。
+   */
+  private trackAdmission(record: SubmissionRecord): void {
+    const waiter = this.placementWaiters.get(record.id)
+    if (waiter !== undefined) {
+      if (record.entry !== undefined) {
+        this.placementWaiters.delete(record.id)
+        waiter(record.entry)
+      } else if (isSettled(record)) {
+        this.placementWaiters.delete(record.id)
+      }
+    }
+    const known = this.admissions.get(record.id)
+    if (known === undefined) {
+      this.admissions.set(record.id, { admittedEntry: record.entry, placedEntry: record.entry })
+      // 有界：没人取走的（steer / followUp / 通知 / 子对话的输入）最旧的先丢
+      if (this.admissions.size > ADMISSION_LIMIT) {
+        const oldest = this.admissions.keys().next().value
+        if (oldest !== undefined) this.admissions.delete(oldest)
+      }
+    } else if (known.placedEntry === undefined && record.entry !== undefined) {
+      known.placedEntry = record.entry
     }
   }
 
@@ -1881,6 +2014,112 @@ export class DurableSessionImpl implements DurableSession {
     return this.inputs.summaries
   }
 
+  subscribeInputs(hooks: PendingInputHooks): () => void {
+    return this.inputs.subscribe(hooks)
+  }
+
+  pendingInputs(): InputRequest[] {
+    return this.inputs.list()
+  }
+
+  onRunStateChange(listener: (state: RunState, previous: RunState) => void): () => void {
+    const entry = (state: RunState, previous: RunState): void => listener(state, previous)
+    this.runStateListeners.add(entry)
+    return () => {
+      this.runStateListeners.delete(entry)
+    }
+  }
+
+  // ─── 界面投影（P3-03） ───────────────────────────
+
+  projector(): Promise<SessionProjector> {
+    if (this.closedFlag) return Promise.reject(new SessionClosedError(this.sessionId))
+    const current = this.projectorEntry
+    if (current !== undefined && !current.instance.disposed) return current.ready
+    const instance: SessionProjectorImpl = new SessionProjectorImpl(this.projectorHost(), {
+      onDispose: () => {
+        if (this.projectorEntry?.instance === instance) this.projectorEntry = undefined
+      }
+    })
+    const ready = this.mountProjector(instance)
+    this.projectorEntry = { instance, ready }
+    return ready
+  }
+
+  agentProjector(agentId: string): Promise<AgentProjector | undefined> {
+    if (this.closedFlag) return Promise.reject(new SessionClosedError(this.sessionId))
+    const current = this.agentProjectors.get(agentId)
+    if (current !== undefined && !current.instance.disposed) return current.ready
+    const conversationId = this.directory.conversationOf(agentId)
+    if (conversationId === undefined) return Promise.resolve(undefined)
+    const instance: AgentProjectorImpl = new AgentProjectorImpl(
+      this.projectorHost(),
+      agentId,
+      conversationId,
+      {
+        onDispose: () => {
+          if (this.agentProjectors.get(agentId)?.instance === instance) {
+            this.agentProjectors.delete(agentId)
+          }
+        }
+      }
+    )
+    const ready = this.mountProjector(instance)
+    this.agentProjectors.set(agentId, { instance, ready })
+    return ready
+  }
+
+  /** 挂载一个投影；失败（含挂载途中关停）→ 拆掉它、关停统一成 SessionClosedError */
+  private async mountProjector<P extends SessionProjectorImpl | AgentProjectorImpl>(
+    instance: P
+  ): Promise<P> {
+    try {
+      await instance.start()
+      return instance
+    } catch (error) {
+      instance.dispose()
+      if (this.closedFlag || isClosedError(error)) throw new SessionClosedError(this.sessionId)
+      throw error
+    }
+  }
+
+  /** 投影向会话要的那几样（`ProjectorHost`；原始 Harness —— 投影只读，不经开启调度器的观测） */
+  private projectorHost(): ProjectorHost {
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    const session = this
+    return {
+      sessionId: this.sessionId,
+      harness: this.raw,
+      logger: this.deps.logger,
+      get closed() {
+        return session.closedFlag
+      },
+      get runState() {
+        return session.state
+      },
+      currentConversationId: async () => (await session.currentConversation()).id,
+      conversationRunState: (conversationId) => session.conversationRunState(conversationId),
+      onRunStateChange: (listener) => session.onRunStateChange(() => listener()),
+      subscribeInputs: (hooks) => session.inputs.subscribe(hooks),
+      pendingInputs: () => session.inputs.list(),
+      agentIdOf: (conversationId) => session.directory.identity(conversationId)?.callerId
+    }
+  }
+
+  /** 一个对话自己的运行状态（AgentProjector）：有生成任务 → 调度器开着 busy / 停着 interrupted */
+  private conversationRunState(conversationId: ConversationId): RunState {
+    if (!this.hasRun(conversationId)) return 'idle'
+    return this.schedulerRunning ? 'busy' : 'interrupted'
+  }
+
+  /** 关停时拆掉全部投影（状态保留最后的值；之后的询问取消不再修订它们） */
+  private disposeProjectors(): void {
+    this.projectorEntry?.instance.dispose()
+    this.projectorEntry = undefined
+    for (const { instance } of [...this.agentProjectors.values()]) instance.dispose()
+    this.agentProjectors.clear()
+  }
+
   private reopenInputs(): void {
     this.inputs.reopenInputs()
     try {
@@ -1919,6 +2158,9 @@ export class DurableSessionImpl implements DurableSession {
       }
     }
     this.closedFlag = true
+    this.disposeProjectors()
+    this.placementWaiters.clear()
+    this.runStateListeners.clear()
     this.agentLock.dispose()
     this.unsubscribe()
     this.inputs.closeInputs('closed')

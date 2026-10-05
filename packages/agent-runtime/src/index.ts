@@ -580,7 +580,9 @@ export {
   type SubmitErrorCode,
   type SubmitResult,
   type TaskLiveness,
-  type UserSendOptions
+  type UserSendOptions,
+  type AdmittedInfo,
+  type PlacedInfo
 } from './durable/durableSession'
 export {
   DEFAULT_INTERRUPTED_SEND_POLICY,
@@ -703,6 +705,18 @@ export {
   type QueueDisplay,
   type SessionProjectionMeta
 } from './durable/projection/project'
+// 界面投影的有状态一半（P3-03）：`DurableSession.projector()` / `agentProjector()` 的类型与运行生命周期信号
+export {
+  type AgentProjector
+} from './durable/projection/agentProjector'
+export {
+  type ProjectorHandle,
+  type RunEndReason,
+  type RunLifecycleListener,
+  type RunLifecycleSignal,
+  type SessionProjector
+} from './durable/projection/sessionProjector'
+export { reconcile } from './durable/projection/reconcile'
 export {
   displayContentOf,
   displayItemOf,

@@ -151,6 +151,14 @@ export class AgentDirectory {
     return this.spawned.get(conversationId)?.identity
   }
 
+  /** agentId → 它的对话（P3-03 的 AgentProjector；不认识 → undefined） */
+  conversationOf(agentId: string): ConversationId | undefined {
+    for (const [conversationId, entry] of this.spawned) {
+      if (entry.identity.callerId === agentId) return conversationId
+    }
+    return undefined
+  }
+
   /** 派生 agent 的记录（不是派生 / 写坏了 → undefined） */
   record(conversationId: ConversationId): SpawnedAgentRecord | undefined {
     return this.spawned.get(conversationId)?.record

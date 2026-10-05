@@ -27,7 +27,7 @@ import type { ProviderCredentialPort } from '../models/port'
 import type { InProcessAgentType } from '../subagent/types'
 import type { RuntimeEventSink, RuntimeLogger } from '../types'
 import type { SpawnedAgentRecord } from './agentRecord'
-import type { DrivenSettledEvent } from './durableSession'
+import type { DrivenSettledEvent, DurableSession } from './durableSession'
 import type { LockRecord } from './lock'
 import type { ShuviXSettingsOverrides } from './settings'
 
@@ -118,6 +118,17 @@ export interface SessionHostDeps {
   noticeCoalesceMs?: number
   /** durable 报告的扩展失败（不影响调用本身） */
   onReport?: (sessionId: string, error: unknown) => void
+  /**
+   * 一条会话真正打开了（P3-03 PIN-09）：`open` 与 `peek` 都算，复用已打开的不算；在接管完成、打开时那次
+   * 运行状态报过之后调用（`open()` 落定之前）。SyncHub 据此把 none / 静态视图换成活的投影。抛错只记日志，
+   * 不影响打开。
+   */
+  onSessionOpened?: (session: DurableSession) => void
+  /**
+   * 一条会话关掉了（P3-03 PIN-09）：显式关闭、LRU、全部关闭（`remove`）与删除（`destroy`）都算，在
+   * `DurableSession.close` 落定之后调用（删除时在删存储之前）。抛错只记日志。
+   */
+  onSessionClosed?: (sessionId: string, reason: 'remove' | 'destroy') => void
   logger?: RuntimeLogger
   /** 时钟（durable 的 `now`；日期通知里「上一条消息在多久之前」也按它算） */
   now?: () => number

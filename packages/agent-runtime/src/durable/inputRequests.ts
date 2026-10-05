@@ -14,13 +14,17 @@
  *     绝不让它变成永远没人应答的孤儿。
  *  3. **每个 id 的 onRequest / onResolved 恰好各一次**；被闸门拒收（窗口关闭 / 没有前端能展示）的
  *     询问两者都没有。
+ *
+ * 钩子可以有多份（P3-03 PIN-02）：构造时的那一份（旧接口）之外，`subscribe()` 再挂任意多份（界面投影、
+ * 通知中心……），逐个隔离 —— 一份抛错只记日志，不影响其余几份，也不影响询问本身。`list()` 给出此刻
+ * 挂着的询问（按出现次序；同 id 重发的那条排到最后）。
  */
 import type {
   CancelReason,
   InputRequest,
   InputResponse
 } from '@shuvix/chat-protocol/types/inputRequest'
-import type { RuntimeEventSink } from '../types'
+import type { RuntimeEventSink, RuntimeLogger } from '../types'
 
 interface PendingInput {
   request: InputRequest
@@ -42,12 +46,32 @@ export class PendingInputRequests {
   private readonly pending = new Map<string, PendingInput>()
   /** 受理窗口关闭时的取消原因；undefined = 窗口开着 */
   private closedReason: CancelReason | undefined
+  /** `subscribe()` 挂上的钩子（构造时的那一份之后逐个调用） */
+  private readonly subscribers = new Set<PendingInputHooks>()
 
   constructor(
     private readonly sessionId: string,
     private readonly sink: RuntimeEventSink,
-    private readonly hooks: PendingInputHooks = {}
+    private readonly hooks: PendingInputHooks = {},
+    private readonly logger?: RuntimeLogger
   ) {}
+
+  /**
+   * 再挂一份钩子（PIN-02）：之后每条询问的 onRequest / onResolved 都会调到它（构造时那一份之后、按挂上
+   * 的次序）。返回的函数摘掉它（幂等）。已经挂着的询问不补发 —— 需要时先读 `list()`。
+   */
+  subscribe(hooks: PendingInputHooks): () => void {
+    const entry: PendingInputHooks = { ...hooks }
+    this.subscribers.add(entry)
+    return () => {
+      this.subscribers.delete(entry)
+    }
+  }
+
+  /** 此刻挂着的询问（按出现次序；同 id 重发的那条排到最后）。返回新数组，询问对象本身不拷贝 */
+  list(): InputRequest[] {
+    return [...this.pending.values()].map(({ request }) => request)
+  }
 
   /** 发起一条询问并挂起，直到被应答、取消或被同 id 的新询问顶替 */
   request(request: InputRequest): Promise<InputResponse> {
@@ -61,6 +85,7 @@ export class PendingInputRequests {
       this.pending.set(request.id, { request, resolve })
       this.sink.broadcast({ type: 'input_request', sessionId: this.sessionId, request })
       this.safely(() => this.hooks.onRequest?.(request))
+      for (const hooks of [...this.subscribers]) this.safely(() => hooks.onRequest?.(request))
     })
   }
 
@@ -118,15 +143,20 @@ export class PendingInputRequests {
     pending.resolve(response)
     this.sink.broadcast({ type: 'input_request_resolved', sessionId: this.sessionId, requestId })
     this.safely(() => this.hooks.onResolved?.(requestId, response))
+    for (const hooks of [...this.subscribers]) {
+      this.safely(() => hooks.onResolved?.(requestId, response))
+    }
     return true
   }
 
-  /** 钩子抛错只当通知失败：询问本身的落定不受影响 */
+  /** 钩子抛错只当通知失败：询问本身的落定、其余钩子都不受影响（有日志就记一笔） */
   private safely(call: () => void): void {
     try {
       call()
-    } catch {
-      /* 宿主钩子自己记日志 */
+    } catch (error) {
+      this.logger?.warn(
+        `input request hook failed session=${this.sessionId}: ${error instanceof Error ? error.message : String(error)}`
+      )
     }
   }
 }
