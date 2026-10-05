@@ -3,11 +3,12 @@
  *
  * schema 同时是派发时 `next` 工具的参数：runner 把它原样交给结果契约，模型的调用参数就是结论。
  * 所以这里除了钉目录一致（判定型 id 恰好都有 spec、观察型一个都没有），还经**真 NextTool**
- * 把 schema 走一遍：合格判决被捕获且带 control.terminate（一次请求出结论），不合格的逐字段报错
- * （isError 结果 —— P1-04 起 BaseTool 模板把抛错收成失败结果，裁定 Q12）、不捕获。
+ * 把 schema 走一遍：合格判决被捕获（P2-02 起结果在 `details: {result}` 里，没有回调）且带
+ * control.terminate（一次请求出结论），不合格的逐字段报错（isError 结果 —— P1-04 起 BaseTool 模板把
+ * 抛错收成失败结果，裁定 Q12）、不带 details。
  * parse 是交给 runner 之前的最后一道（认不出 = 这个 hook 没有意见），severity 决定多个结论谁胜出。
  */
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import {
   PERMISSION_VERDICT_SCHEMA,
   type PermissionVerdict
@@ -34,12 +35,11 @@ const textOf = (r: InvokedToolResult): string =>
   r.content.map((c) => (c.type === 'text' ? c.text : '')).join('')
 
 /** 一次不合格调用交回的失败文字（不是失败结果则测试失败） */
-async function rejectionOf(params: unknown): Promise<{ message: string; captured: number }> {
-  const onCapture = vi.fn()
-  const tool = new NextTool(SPEC.schema, onCapture)
+async function rejectionOf(params: unknown): Promise<{ message: string; captured: boolean }> {
+  const tool = new NextTool(SPEC.schema)
   const out = await callNext(tool, params)
   expect(out.isError, 'next should reject a non-conforming verdict').toBe(true)
-  return { message: textOf(out), captured: onCapture.mock.calls.length }
+  return { message: textOf(out), captured: out.details !== undefined }
 }
 
 describe('目录一致', () => {
@@ -61,14 +61,12 @@ describe('目录一致', () => {
 
 describe('schema 经真 NextTool', () => {
   it.each(['allow', 'ask', 'deny'] as const)(
-    'DS-3 合格判决（decision %s）→ 捕获恰一次、原样交回，结果带 control.terminate',
+    'DS-3 合格判决（decision %s）→ 结果原样在 details.result 里，结果带 control.terminate',
     async (decision) => {
-      const onCapture = vi.fn()
-      const tool = new NextTool(SPEC.schema, onCapture)
+      const tool = new NextTool(SPEC.schema)
       const verdict = verdictOf({ decision, risk: 'medium' })
       const out = await callNext(tool, verdict)
-      expect(onCapture).toHaveBeenCalledTimes(1)
-      expect(onCapture).toHaveBeenCalledWith(verdict)
+      expect(out.details).toEqual({ result: verdict })
       expect(out.control).toEqual({ terminate: true })
     }
   )
@@ -87,31 +85,31 @@ describe('schema 经真 NextTool', () => {
       { ...verdictOf(), confidence: 0.9 },
       /\(root\): must not have additional properties/
     ]
-  ])('DS-3 不合格（%s）→ isError、不捕获、错误点名那个字段', async (_label, params, pattern) => {
-    const { message, captured } = await rejectionOf(params)
-    expect(captured).toBe(0)
-    expect(message).toMatch(pattern)
-    // 纠正性引导：告诉模型改哪里、再调一次
-    expect(message).toContain('call `next` again')
-  })
+  ])(
+    'DS-3 不合格（%s）→ isError、不带 details、错误点名那个字段',
+    async (_label, params, pattern) => {
+      const { message, captured } = await rejectionOf(params)
+      expect(captured).toBe(false)
+      expect(message).toMatch(pattern)
+      // 纠正性引导：告诉模型改哪里、再调一次
+      expect(message).toContain('call `next` again')
+    }
+  )
 
   it('DS-3 不合格之后改正 → 同一个工具实例照常捕获改正后的值', async () => {
-    const onCapture = vi.fn()
-    const tool = new NextTool(SPEC.schema, onCapture)
-    expect((await callNext(tool, { ...verdictOf(), decision: 'maybe' })).isError).toBe(true)
-    expect(onCapture).not.toHaveBeenCalled()
-    await callNext(tool, verdictOf({ decision: 'deny' }))
-    expect(onCapture).toHaveBeenCalledTimes(1)
-    expect(onCapture).toHaveBeenCalledWith(verdictOf({ decision: 'deny' }))
+    const tool = new NextTool(SPEC.schema)
+    const rejected = await callNext(tool, { ...verdictOf(), decision: 'maybe' })
+    expect(rejected.isError).toBe(true)
+    expect(rejected.details).toBeUndefined()
+    const corrected = await callNext(tool, verdictOf({ decision: 'deny' }))
+    expect(corrected.details).toEqual({ result: verdictOf({ decision: 'deny' }) })
   })
 
   it('DS-4 5000 字的 summary / reason 照样捕获（schema 刻意不设长度上限）', async () => {
-    const onCapture = vi.fn()
-    const tool = new NextTool(SPEC.schema, onCapture)
+    const tool = new NextTool(SPEC.schema)
     const long = verdictOf({ summary: 's'.repeat(5000), reason: 'r'.repeat(5000) })
-    await callNext(tool, long)
-    expect(onCapture).toHaveBeenCalledTimes(1)
-    expect(onCapture).toHaveBeenCalledWith(long)
+    const out = await callNext(tool, long)
+    expect(out.details).toEqual({ result: long })
   })
 })
 
