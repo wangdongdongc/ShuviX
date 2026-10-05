@@ -50,8 +50,8 @@ const log = createLogger('SessionHost')
 export const AUTO_RESUME_KEY = 'session.autoResume'
 
 /**
- * 中断会话上收到用户发送时怎么办（裁决 R5，**待用户确认**）：缺省 abort-then-send。
- * 要换成「先续上被中断的那轮、这条排在后面」只改这一行：`'continue-then-queue'`。
+ * 中断会话上收到用户发送时怎么办（裁决 R5，用户 2026-10-04 定为 abort-then-send）：
+ * 先中止被中断的那件事，再发送。另一种策略 `'continue-then-queue'` 仍保留在运行时里，换只改这一行。
  */
 export const INTERRUPTED_SEND_POLICY: InterruptedSendPolicy = DEFAULT_INTERRUPTED_SEND_POLICY
 

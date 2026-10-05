@@ -38,7 +38,7 @@ import type { ShuviXSettingsOverrides } from './settings'
 export type RunState = 'idle' | 'busy' | 'interrupted'
 
 /**
- * 中断会话上收到用户发送时怎么办（裁决 R5；**待用户确认**，必须保持是一行就能切换的选项）：
+ * 中断会话上收到用户发送时怎么办（裁决 R5；用户 2026-10-04 定为 abort-then-send，另一种保留为可切换选项）：
  *  - `abort-then-send`（默认）：中止被中断的那件事（上个进程留下的排队输入随之撤回），再发送；
  *  - `continue-then-queue`：先让被中断的 run 跑完，用户的消息作为 follow-up 排在它后面。
  */
