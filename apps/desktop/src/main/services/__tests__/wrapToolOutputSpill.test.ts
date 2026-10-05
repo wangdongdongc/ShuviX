@@ -29,7 +29,7 @@ vi.mock('../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {} })
 }))
 
-import { wrapToolOutput } from '../wrapToolOutput'
+import { wrapDurableTool } from '../wrapToolOutput'
 
 const SID = 'wts-session'
 const resultsDir = (sessionId: string): string => join(USER_DATA_DIR, 'tool_results', sessionId)
@@ -59,14 +59,10 @@ afterAll(() => rmSync(USER_DATA_DIR, { recursive: true, force: true }))
 describe('WTS 包装器 + 真 processToolOutput', () => {
   it('WTS-1 spill:false：图片原样、正文是截断后的文字（不带表头）、一条 truncated 诊断、目录不建、details 合并出 truncated', async () => {
     const full = bigText('one')
-    const wrapped = wrapToolOutput(
-      makeTool([{ type: 'text', text: full }, IMAGE_BLOCK]),
-      SID,
-      'middle',
-      {
-        spill: false
-      }
-    )
+    const wrapped = wrapDurableTool(makeTool([{ type: 'text', text: full }, IMAGE_BLOCK]), {
+      sessionId: SID,
+      spill: false
+    })
 
     const result = await executeTool(wrapped, 'wts-1', {} as never)
 
@@ -92,14 +88,12 @@ describe('WTS 包装器 + 真 processToolOutput', () => {
     const sid = 'wts-2-session'
     const first = bigText('alpha')
     const second = bigText('beta')
-    const wrapped = wrapToolOutput(
+    const wrapped = wrapDurableTool(
       makeTool([
         { type: 'text', text: first },
         { type: 'text', text: second }
       ]),
-      sid,
-      'middle',
-      { spill: true }
+      { sessionId: sid, spill: true }
     )
 
     const result = await executeTool(wrapped, 'wts-2', {} as never)

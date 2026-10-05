@@ -32,9 +32,7 @@ const mocks = vi.hoisted(() => ({
   skillToolCalls: [] as SkillToolCall[],
   createAgentTool: vi.fn(),
   wrapCalls: [] as Array<{ tool: object; opts: Record<string, unknown>; wrapped: object }>,
-  getOutputStrategy: vi.fn(),
   sandboxGloballyActive: vi.fn(),
-  pinSession: vi.fn(),
   pick: vi.fn(),
   pickSettings: vi.fn(),
   projectPick: vi.fn(),
@@ -70,8 +68,7 @@ vi.mock('../../services/userInputBroker', () => ({
   requestUserInputFor: mocks.requestUserInputFor
 }))
 vi.mock('../../services/sandbox', () => ({
-  sandboxGloballyActive: mocks.sandboxGloballyActive,
-  pinSession: mocks.pinSession
+  sandboxGloballyActive: mocks.sandboxGloballyActive
 }))
 vi.mock('../../services/botService', () => ({ botService: { forSession: mocks.forSession } }))
 vi.mock('../../utils/toolUtils/fileTime', () => ({ recordRead: vi.fn() }))
@@ -115,7 +112,6 @@ vi.mock('../../services/skillTool', () => ({
 vi.mock('../AgentTool', () => ({ createAgentTool: mocks.createAgentTool }))
 /** Fx-WRAP spy：记下每一次包装（原工具、选项），交回一个叠在原工具上的新对象 */
 vi.mock('../../services/wrapToolOutput', () => ({
-  getOutputStrategy: mocks.getOutputStrategy,
   wrapDurableTool: (tool: object, opts: Record<string, unknown>) => {
     const wrapped = Object.create(tool) as object
     mocks.wrapCalls.push({ tool, opts, wrapped })
@@ -252,9 +248,7 @@ beforeEach(() => {
     mocks.findEnabled,
     mocks.findAll,
     mocks.createAgentTool,
-    mocks.getOutputStrategy,
     mocks.sandboxGloballyActive,
-    mocks.pinSession,
     mocks.pick,
     mocks.pickSettings,
     mocks.projectPick,
@@ -339,7 +333,7 @@ describe('buildBuiltinTools', () => {
     expect(mocks.requestUserInputFor).toHaveBeenCalledWith('s1', question)
   })
 
-  it('H11-04 打开时那一次是纯本地的：不碰 MCP / 技能 / 锁 / 广播 / pinSession；会话行不存在也照常', async () => {
+  it('H11-04 打开时那一次是纯本地的：不碰 MCP / 技能 / 锁 / 广播；会话行不存在也照常', async () => {
     mocks.pick.mockReturnValue(undefined)
     const tools = await host.buildBuiltinTools({ sessionId: 's1' })
     expect(names(tools)).toEqual(DARWIN_BUILTINS)
@@ -350,8 +344,7 @@ describe('buildBuiltinTools', () => {
       mocks.registrationsFromDeclarations,
       mocks.getRegistrationsByServerName,
       mocks.findEnabled,
-      mocks.broadcast,
-      mocks.pinSession
+      mocks.broadcast
     ]) {
       expect(fn).not.toHaveBeenCalled()
     }
@@ -810,7 +803,7 @@ describe('rebuildAgentTools', () => {
 // ─── 包装 ──────────────────────────────────────────────────────────────
 
 describe('包装', () => {
-  it('H11-40 每条路上的每个工具恰好包一次；选项恰为 {sessionId s1, spill auto, security 函数}，不带策略 / 上限；交出的是包装器的返回值；不问 getOutputStrategy', async () => {
+  it('H11-40 每条路上的每个工具恰好包一次；选项恰为 {sessionId s1, spill auto, security 函数}，不带策略 / 上限；交出的是包装器的返回值', async () => {
     const builtin = await host.buildBuiltinTools({ sessionId: 's1', sandboxed: false })
     const next = stubTool('next')
     const resolved = await host.resolveAgentTools(requestD({ extraTools: [next] }), {
@@ -836,7 +829,6 @@ describe('包装', () => {
       expect(opts.spill).toBe('auto')
       expect(opts.security).toBeTypeOf('function')
     }
-    expect(mocks.getOutputStrategy).not.toHaveBeenCalled()
   })
 
   it('H11-44 门的主体按调用现取：有锁 → work / root；没锁 → 没有档案名；锁换成 bot → 下一次报 bot；每种工具同一次调用同一个主体', async () => {

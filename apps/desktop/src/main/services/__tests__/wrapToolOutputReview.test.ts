@@ -51,7 +51,7 @@ vi.mock('../toolContext', () => ({ TOOL_ABORTED: 'Aborted' }))
 vi.mock('../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {} })
 }))
-import { wrapToolOutput } from '../wrapToolOutput'
+import { wrapDurableTool } from '../wrapToolOutput'
 
 const SID = 'wrap-tool-output-review-session'
 const SID2 = 'wrap-tool-output-review-session-2'
@@ -157,7 +157,7 @@ describe('wrapToolOutput — 审查放行的调用在结果上留「已审查」
     const review = reviewerOf(answer(verdict('allow', 'medium', 'Connects to the build host')))
     const { security, requestUserInput } = makeSecurity({ review })
     const { tool, execute } = makeTool(undefined)
-    const wrapped = wrapToolOutput(tool, SID, 'middle', undefined, security)
+    const wrapped = wrapDurableTool(tool, { sessionId: SID, spill: true, security })
 
     const result = await exec(wrapped, 'tc-R')
 
@@ -173,7 +173,7 @@ describe('wrapToolOutput — 审查放行的调用在结果上留「已审查」
     const own = { type: 'bash', exitCode: 0, truncated: false, cwd: '/w' }
     const { security } = makeSecurity({ review: reviewerOf(answer(verdict('allow', 'high', 's'))) })
     const { tool } = makeTool(own)
-    const wrapped = wrapToolOutput(tool, SID, 'middle', undefined, security)
+    const wrapped = wrapDurableTool(tool, { sessionId: SID, spill: true, security })
 
     const result = await exec(wrapped, 'tc-R2')
 
@@ -185,7 +185,7 @@ describe('wrapToolOutput — 审查放行的调用在结果上留「已审查」
     const review = reviewerOf(answer(verdict('allow', 'low', 'first')), null)
     const { security, requestUserInput } = makeSecurity({ review })
     const { tool, execute } = makeTool(undefined)
-    const wrapped = wrapToolOutput(tool, SID, 'middle', undefined, security)
+    const wrapped = wrapDurableTool(tool, { sessionId: SID, spill: true, security })
 
     const first = await exec(wrapped, 'tc-R')
     expect(toolReviewOf(first.details)).toStrictEqual({ risk: 'low', summary: 'first' })
@@ -203,7 +203,7 @@ describe('wrapToolOutput — 审查放行的调用在结果上留「已审查」
       review: reviewerOf(answer(verdict('deny', 'critical')))
     })
     const { tool, execute } = makeTool(undefined)
-    const wrapped = wrapToolOutput(tool, SID, 'middle', undefined, security)
+    const wrapped = wrapDurableTool(tool, { sessionId: SID, spill: true, security })
 
     const result = await exec(wrapped, 'tc-R4')
     expect(await failureText(Promise.resolve(result))).toMatch(/Blocked by the reviewer/)
@@ -218,7 +218,7 @@ describe('wrapToolOutput — 审查放行的调用在结果上留「已审查」
     })
     const own = { type: 'bash', exitCode: 0, truncated: false, cwd: '/w' }
     const { tool, execute } = makeTool(own)
-    const wrapped = wrapToolOutput(tool, SID, 'middle', undefined, security)
+    const wrapped = wrapDurableTool(tool, { sessionId: SID, spill: true, security })
 
     const result = await exec(wrapped, 'tc-R5')
 
@@ -236,7 +236,7 @@ describe('wrapToolOutput — 审查放行的调用在结果上留「已审查」
   it('W-R6 没有审查接缝、人批准 → 没有标记，details undefined 仍 undefined', async () => {
     const { security, requestUserInput } = makeSecurity({})
     const { tool } = makeTool(undefined)
-    const wrapped = wrapToolOutput(tool, SID, 'middle', undefined, security)
+    const wrapped = wrapDurableTool(tool, { sessionId: SID, spill: true, security })
 
     const result = await exec(wrapped, 'tc-R6')
     expect(requestUserInput).toHaveBeenCalledTimes(1)
@@ -246,12 +246,12 @@ describe('wrapToolOutput — 审查放行的调用在结果上留「已审查」
   it('W-R6 不传 security（不设门）→ 没有标记，details 原样', async () => {
     const own = { type: 'bash', exitCode: 0, truncated: false, cwd: '/w' }
     const { tool } = makeTool(own)
-    const wrapped = wrapToolOutput(tool, SID, 'middle')
+    const wrapped = wrapDurableTool(tool, { sessionId: SID, spill: true })
 
     const result = await exec(wrapped, 'tc-R6b')
     expect(result.details).toStrictEqual(own)
 
-    const bare = wrapToolOutput(makeTool(undefined).tool, SID, 'middle')
+    const bare = wrapDurableTool(makeTool(undefined).tool, { sessionId: SID, spill: true })
     expect((await exec(bare, 'tc-R6c')).details).toBeUndefined()
   })
 
@@ -261,7 +261,7 @@ describe('wrapToolOutput — 审查放行的调用在结果上留「已审查」
       sessionId: SID
     })
     const { tool } = makeTool(undefined)
-    const wrapped = wrapToolOutput(tool, SID2, 'middle', undefined, security)
+    const wrapped = wrapDurableTool(tool, { sessionId: SID2, spill: true, security })
 
     const result = await exec(wrapped, 'tc')
     expect(result.details).toBeUndefined()
@@ -273,7 +273,7 @@ describe('wrapToolOutput — 审查放行的调用在结果上留「已审查」
     const { tool, execute } = makeTool(undefined)
     const err = new Error('connection refused')
     execute.mockRejectedValueOnce(err)
-    const wrapped = wrapToolOutput(tool, SID, 'middle', undefined, security)
+    const wrapped = wrapDurableTool(tool, { sessionId: SID, spill: true, security })
 
     expect(await exec(wrapped, 'tc-R8')).toEqual({
       isError: true,
@@ -288,7 +288,7 @@ describe('wrapToolOutput — 审查放行的调用在结果上留「已审查」
     const { tool, execute } = makeTool(undefined)
     const err = new Error('connection refused')
     execute.mockRejectedValueOnce(err)
-    const wrapped = wrapToolOutput(tool, SID, 'middle', undefined, security)
+    const wrapped = wrapDurableTool(tool, { sessionId: SID, spill: true, security })
 
     expect(await exec(wrapped, 'tc-R10')).toEqual({
       isError: true,
@@ -305,7 +305,7 @@ describe('wrapToolOutput — 审查放行的调用在结果上留「已审查」
     )
     const { security } = makeSecurity({ review })
     const { tool } = makeTool(undefined)
-    const wrapped = wrapToolOutput(tool, SID, 'middle', undefined, security)
+    const wrapped = wrapDurableTool(tool, { sessionId: SID, spill: true, security })
 
     await invokeTool(wrapped, { action: 'connect' } as never, {
       callId: 'call_0',
@@ -333,7 +333,7 @@ describe('wrapToolOutput — 审查放行的调用在结果上留「已审查」
       response: { kind: 'other', text: 'use the staging host' }
     })
     const { tool, execute } = makeTool(undefined)
-    const wrapped = wrapToolOutput(tool, SID, 'middle', undefined, security)
+    const wrapped = wrapDurableTool(tool, { sessionId: SID, spill: true, security })
 
     const result = await exec(wrapped, 'tc-R9')
 

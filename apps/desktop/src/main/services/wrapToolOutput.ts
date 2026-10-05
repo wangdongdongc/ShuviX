@@ -7,7 +7,7 @@
  *  - 安全模块 **L1 全工具门**：工具执行（含 preExecute）之前；
  *  - 自动审查放行的「已审查」标记：写进成功结果的 details。
  *
- * 单一调用点 — 仅由 agentHost 的工具装配使用。工具本体不应再直接调用 processToolOutput。
+ * 单一调用点 — 仅由 agentHost 的工具装配使用。工具本体不自己截断 / 落盘。
  *
  * 形状：包装的、交出的都是 pi-durable 的 `ToolRegistration`，执行签名 `execute(args, api, context)`。
  * 两层都用 Object.create 叠在原工具上（门这一层在外，内核那一层在里），工具元数据经原型链透出。
@@ -17,7 +17,6 @@ import {
   takeReviewAllowed,
   toolErrorResult,
   wrapDurableOutput,
-  outputStrategyOf,
   type AnyTool,
   type SecurityContext,
   type McpToolMeta,
@@ -34,13 +33,6 @@ import { withToolReview } from '@shuvix/chat-protocol/types/toolReview'
 import { desktopSpillSink } from '../utils/toolUtils/processToolOutput'
 import { TOOL_ABORTED } from './toolContext'
 
-export type { OutputStrategyAware, SpillMode } from '@shuvix/agent-runtime'
-
-/** 把 tool 上的 outputStrategy 抽出来（如果有的话；缺省 'middle'） */
-export function getOutputStrategy(tool: object): TruncateStrategy {
-  return outputStrategyOf(tool)
-}
-
 /**
  * L1 全工具门的评估门面：固定一个，或按这次调用现取（会话级装配的工具被不同 agent 共用时，
  * 门的主体要是**发起这次调用的** agent —— `api.conversationId` 认得出是谁）。交回 undefined = 这次不设门。
@@ -54,22 +46,14 @@ export interface WrapDurableToolOptions {
   sessionId: string
   /** 截断策略；缺省取工具自己的 `outputStrategy`（再缺省 'middle'） */
   strategy?: TruncateStrategy
-  /** 字节上限；缺省取工具自己的 `outputMaxBytes`（再缺省 processToolOutput 的默认值） */
+  /** 字节上限；缺省取工具自己的 `outputMaxBytes`（再缺省内核的默认值） */
   maxBytes?: number
-  /** 行数上限；缺省取工具自己的 `outputMaxLines`（再缺省 processToolOutput 的默认值） */
+  /** 行数上限；缺省取工具自己的 `outputMaxLines`（再缺省内核的默认值） */
   maxLines?: number
   /** L1 全工具门的评估门面（或按调用现取）；缺省 = 不设门（测试/无会话场景） */
   security?: SecurityResolver
   /** 落不落盘（见 SpillMode：`'auto'` = 这次调用的 agent 工具表里有 read 才落） */
   spill: SpillMode
-}
-
-/** 工具可以传入的截断阈值覆写；`spill` 由宿主按 agent 给（见 processToolOutput） */
-export interface ProcessToolOutputOverrides {
-  maxBytes?: number
-  maxLines?: number
-  /** false = 超限只在内存里截断、不落盘（agent 没有 read 工具取回全文）；缺省 true */
-  spill?: boolean
 }
 
 /** 包装器收的工具：durable 注册项 */
@@ -168,28 +152,4 @@ export function wrapDurableTool(tool: WrappableTool, opts: WrapDurableToolOption
     configurable: true
   })
   return wrapped
-}
-
-/**
- * 旧调用形状：位置参数版的 `wrapDurableTool`。`overrides.spill` 缺省 true（= processToolOutput 的缺省：
- * 超限就落盘）。P1-11 起 agentHost 只用 `wrapDurableTool(tool, { sessionId, spill: 'auto', security })`，
- * 这里与 getOutputStrategy / ProcessToolOutputOverrides 只剩单测在用。TODO(pi-durable p1): P1-13 删掉，
- * 单测改调 wrapDurableTool。
- */
-export function wrapToolOutput(
-  tool: WrappableTool,
-  sessionId: string,
-  strategy: TruncateStrategy,
-  overrides?: ProcessToolOutputOverrides,
-  /** L1 全工具门的评估门面；缺省 = 不设门（测试/无会话场景） */
-  security?: SecurityContext
-): AnyTool {
-  return wrapDurableTool(tool, {
-    sessionId,
-    strategy,
-    maxBytes: overrides?.maxBytes,
-    maxLines: overrides?.maxLines,
-    spill: overrides?.spill ?? true,
-    security
-  })
 }

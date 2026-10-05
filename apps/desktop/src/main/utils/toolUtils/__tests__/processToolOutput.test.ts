@@ -1,6 +1,7 @@
 /**
  * DPO —— 桌面这一层给共享内核注入的那个落盘口（fs 写 `<userData>/tool_results/<会话>/<调用>.txt`），
- * 以及**要不要注入**这个开关（`spill`）。
+ * 以及**要不要注入**这个开关（`spill`）。内核是 agent-runtime 的 `processToolOutput`；下面的
+ * `processToolOutput` 辅助按 `spill` 决定给不给它这个落盘口（P1-13 之前它是本模块导出的桌面包装）。
  *
  * 分界只有一条，但它决定模型看到的是指路还是死路：落盘之后正文里写的是「全文在这个路径，用 read
  * 取」—— 手里没有 read 的 agent 取不回来，于是宿主可以按 agent 关掉落盘，让它至少拿到截断上限
@@ -27,10 +28,33 @@ import {
   truncateKeepStart,
   truncateKeepEnd,
   formatSize,
+  processToolOutput as sharedProcessToolOutput,
   DEFAULT_MAX_LINES,
-  DEFAULT_MAX_BYTES
+  DEFAULT_MAX_BYTES,
+  type ProcessToolOutputResult,
+  type TruncateStrategy
 } from '@shuvix/agent-runtime'
-import { desktopSpillSink, processToolOutput, spillFileName } from '../processToolOutput'
+import { desktopSpillSink, spillFileName } from '../processToolOutput'
+
+/** 内核 + 本层的落盘口；`spill: false` 不给落盘口（只在内存里截断），缺省给 */
+function processToolOutput(opts: {
+  sessionId: string
+  toolCallId: string
+  fullText: string
+  strategy: TruncateStrategy
+  maxLines?: number
+  maxBytes?: number
+  spill?: boolean
+}): Promise<ProcessToolOutputResult> {
+  return sharedProcessToolOutput({
+    toolCallId: opts.toolCallId,
+    fullText: opts.fullText,
+    strategy: opts.strategy,
+    maxLines: opts.maxLines,
+    maxBytes: opts.maxBytes,
+    sink: opts.spill === false ? undefined : desktopSpillSink(opts.sessionId)
+  })
+}
 
 const byteLen = (s: string): number => new TextEncoder().encode(s).length
 const resultsDir = (sessionId: string): string => join(USER_DATA_DIR, 'tool_results', sessionId)
