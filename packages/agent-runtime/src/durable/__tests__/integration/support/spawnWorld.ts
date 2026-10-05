@@ -22,6 +22,7 @@ import type { Message } from '@earendil-works/pi-ai'
 import {
   defineTool,
   type ConversationId,
+  type SubmissionRecord,
   type TaskId,
   type TaskRecord,
   type ToolRegistration
@@ -702,6 +703,23 @@ export async function resultOf(
   const message = entry?.model?.[0]
   if (message?.role !== 'toolResult') throw new Error(`no tool result for ${callId}`)
   return { text: messageText(message), isError: message.isError, details: message.details }
+}
+
+/** 任务的结局：终态 = outcome 的状态（completed / failed / aborted），否则 = 当前状态 */
+export function fate(task: { state: { status: string; outcome?: { status: string } } }): string {
+  return task.state.status === 'terminal' ? task.state.outcome!.status : task.state.status
+}
+
+/** 某对话里按 requestId 的提交 */
+export async function submissionOf(
+  session: DurableSession,
+  conversationId: number,
+  requestId: string
+): Promise<SubmissionRecord | undefined> {
+  return session.harness.commit(
+    (tx) => tx.submissionByRequest(conversationId as ConversationId, requestId),
+    BG
+  )
 }
 
 export const V_ALLOW = { decision: 'allow', risk: 'low', summary: 'Writes a file', reason: 'ok' }
