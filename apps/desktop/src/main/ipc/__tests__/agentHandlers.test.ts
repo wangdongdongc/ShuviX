@@ -12,6 +12,7 @@
  *           路由的拒绝都只记日志（PIN-17）。
  *   P3-06-31 `agent:getInfo` 在 `createElectronContext(sessionId)` 的请求上下文里把 `(sessionId, options)` 原样交给
  *           网关；网关的 null 原样交回。
+ *   P3-08-60 `agent:respondToInput` 带上答题方 `ipc:<webContentsId>`（PIN-20），只交给网关，回 {success:true}。
  *
  * electron 是替身（handle 收进 Map）；`../frontend` 只替到网关与 operationContext 那一层，handler
  * import 的其余重模块（工具注册表、工具定义、AgentManager、监控）整个换成空壳。
@@ -26,7 +27,8 @@ const state = vi.hoisted(() => ({
     setModel: vi.fn<(sessionId: string, ...rest: unknown[]) => Promise<boolean>>(),
     destroyAgent: vi.fn<(sessionId: string) => Promise<void>>(),
     listTools: vi.fn<(sessionId?: string, options?: { profile?: string }) => unknown[]>(),
-    getAgentInfo: vi.fn<(sessionId: string, options?: { ensure?: boolean }) => Promise<unknown>>()
+    getAgentInfo: vi.fn<(sessionId: string, options?: { ensure?: boolean }) => Promise<unknown>>(),
+    respondToInput: vi.fn()
   },
   contexts: [] as unknown[],
   /** operationContext.run 的嵌套深度（>0 = 在请求上下文里） */
@@ -283,5 +285,19 @@ describe('P2-05-39 派生 agent 面板 IPC 按 agentId 交给路由', () => {
     expect(state.gateway.destroyAgent).not.toHaveBeenCalled()
     expect(state.gateway.listTools).not.toHaveBeenCalled()
     expect(state.contexts).toEqual([])
+  })
+})
+
+describe('P3-08-60 agent:respondToInput 带上答题方', () => {
+  it('webContents 7 的应答 → 网关收到 clientId ipc:7；在请求上下文里；回 {success:true}', async () => {
+    const handler = state.handlers.get('agent:respondToInput')!
+    const response = { kind: 'ask', allowed: true }
+    await expect(
+      Promise.resolve(handler({ sender: { id: 7 } }, { sessionId: SID, requestId: 'r', response }))
+    ).resolves.toEqual({ success: true })
+    expect(state.gateway.respondToInput.mock.calls).toEqual([
+      [SID, 'r', response, { clientId: 'ipc:7' }]
+    ])
+    expect(state.contexts.at(-1)).toBe(SID)
   })
 })

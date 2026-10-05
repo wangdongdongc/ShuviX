@@ -178,6 +178,8 @@ interface TrackedRun {
   emitted: boolean
   /** 被中断时挂上的：之后第一帧在跑且没被中止 → 补发 started（继续，PIN-04） */
   resumable: boolean
+  /** 被中断时挂上的这一轮，根运行状态在帧之外变成过 busy（继续的 `markResumed`，P3-08-51） */
+  resumedBusy?: boolean
   /** 派生 agent 的 id（根对话没有） */
   readonly agentId?: string
 }
@@ -646,6 +648,16 @@ export abstract class ProjectorCore<V extends object> {
       if (run === undefined) return
       this.rootRun = undefined
       if (run.emitted) this.emitEnded(conversationId, run)
+      else if (
+        run.resumable &&
+        run.resumedBusy &&
+        !this.abortedTasks.has(run.taskId) &&
+        this.endReason(run.taskId) !== 'aborted'
+      ) {
+        // 继续之后一帧之内跑完的那一轮：补一对（见 noteResumed）
+        this.emitStarted(conversationId, run.taskId, undefined)
+        this.emitEnded(conversationId, run)
+      }
       return
     }
     if (run === undefined) {
@@ -663,6 +675,20 @@ export abstract class ProjectorCore<V extends object> {
       run.resumable = false
       this.emitStarted(conversationId, after, undefined)
     }
+  }
+
+  /**
+   * 根运行状态变成 busy 的那一刻（运行状态的旁路，P3-08-51）：挂载时被中断的那一轮若此刻被继续（`markResumed`
+   * 没有发布），记下来。继续之后的那一轮可能在**一帧之内**跑完（实时文档节流，`live.run` 从头到尾没变过、只在
+   * 最后一帧消失）—— 那样帧里的继续分支一次都没机会补发 started，消失时也就没有 ended。消失那一帧据这个记号
+   * 补一对（被中止的不补：abort-then-send 里被中止的旧那轮也会先让运行状态变成 busy）。
+   */
+  protected noteResumed(): void {
+    const run = this.rootRun
+    const mount = this.mount
+    if (run === undefined || mount === undefined || this.disposedFlag) return
+    if (run.emitted || !run.resumable) return
+    if (this.runStateOf(mount.conversationId) === 'busy') run.resumedBusy = true
   }
 
   /**
@@ -786,7 +812,12 @@ export class SessionProjectorImpl extends ProjectorCore<SessionView> implements 
         onResolved: () => this.reviseNow()
       })
     )
-    this.own(this.host.onRunStateChange(() => this.scheduleRefresh()))
+    this.own(
+      this.host.onRunStateChange(() => {
+        this.noteResumed()
+        this.scheduleRefresh()
+      })
+    )
     const conversationId = await this.host.currentConversationId()
     const mount = await this.attachConversation(conversationId)
     if (this.disposed) {

@@ -289,7 +289,7 @@ export function fakeServer(options: FakeServerOptions = {}): FakeServer {
             ...instance,
             members: instance.members.map((m) =>
               m.kind === 'state'
-                ? { ...m, sequence: sub.sequence, ops: [['r', json(value) as JsonValue]] }
+                ? { ...m, sequence: sub.sequence, ops: [['r', json(value) as unknown as JsonValue]] }
                 : m
             )
           }

@@ -196,8 +196,9 @@ describe('P3-08-39 留下来的处理', () => {
     expect(store().sessionResources.s1.runtimes.ssh).toEqual({ label: 'SSH' })
 
     const upsert = vi.spyOn(useBgTaskStore.getState(), 'upsert')
-    emit({ type: 'bg_task', sessionId: 's1', task: { taskId: 't1' } })
+    emit({ type: 'bg_task', sessionId: 's1', task: { taskId: 't1' } } as unknown as ChatEvent)
     expect(upsert).toHaveBeenCalledWith({ taskId: 't1' })
+    // （任务快照只取了 taskId —— 处理器原样转交，不看其余字段）
     upsert.mockRestore()
 
     const before = useChatStore.getState()

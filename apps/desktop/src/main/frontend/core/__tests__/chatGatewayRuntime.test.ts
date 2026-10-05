@@ -39,6 +39,7 @@ const mocks = vi.hoisted(() => ({
   sshRuntimeStatuses: vi.fn<(sessionId: string) => Record<string, RuntimeStatus>>(),
   sshDisconnectRuntime:
     vi.fn<(sessionId: string, runtimeId: string) => Promise<boolean> | undefined>(),
+  respondToUserInput: vi.fn<(requestId: string, response: unknown, meta?: unknown) => boolean>(),
   mcpInfos: [] as Array<Record<string, unknown>>,
   builtinNames: ['read', 'bash'] as string[]
 }))
@@ -73,7 +74,7 @@ vi.mock('../../../services/sessionStorage', () => ({
   appendModelChange: mocks.appendModelChange,
   appendThinkingLevelChange: mocks.appendThinkingLevelChange
 }))
-vi.mock('../../../services/userInputBroker', () => ({ respondToUserInput: vi.fn() }))
+vi.mock('../../../services/userInputBroker', () => ({ respondToUserInput: mocks.respondToUserInput }))
 vi.mock('../../../services/builtinMcp/dbConnections', () => ({
   dbManager: {
     runtimeStatus: mocks.runtimeStatus,
@@ -376,6 +377,20 @@ describe('DefaultChatGateway.destroyAgent —— 销毁运行时，会话与会�
     expect(mocks.invalidateAgent).toHaveBeenCalledTimes(1)
     expect(mocks.messageClear).not.toHaveBeenCalled()
     expect(mocks.disconnect).not.toHaveBeenCalled()
+    expect(mocks.broadcast).not.toHaveBeenCalled()
+  })
+})
+
+describe('P3-08-45 DefaultChatGateway.respondToInput —— 没人认领什么都不广播', () => {
+  it('broker 认领 → true；没人认领 → false；两种都不广播，答题方原样交给 broker', () => {
+    const response = { kind: 'ask' as const, allowed: true }
+    mocks.respondToUserInput.mockReset().mockReturnValueOnce(true).mockReturnValueOnce(false)
+    expect(chatGateway.respondToInput(SID, 'r1', response, { clientId: 'ipc:3' })).toBe(true)
+    expect(chatGateway.respondToInput(SID, 'r2', response)).toBe(false)
+    expect(mocks.respondToUserInput.mock.calls).toEqual([
+      ['r1', response, { clientId: 'ipc:3' }],
+      ['r2', response, undefined]
+    ])
     expect(mocks.broadcast).not.toHaveBeenCalled()
   })
 })
