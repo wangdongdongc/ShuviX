@@ -80,16 +80,18 @@ export function recordingSink(): RecordingSink {
 
 /**
  * 测试用的宿主依赖覆盖：faux 模型与目录、空 ToolHost、关重试 / 自动压缩。`sessionHost.buildSessionHostDeps`
- * 的 overrides 与直接 `createSessionHost` 都能用。
+ * 的 overrides 与直接 `createSessionHost` 都能用。`realToolHost`（P2-12）：不带 `toolHost` 键 ——
+ * `buildSessionHostDeps` 因此留着真的 `createDesktopToolHost`。
  */
 export function testDepsOverrides(
   kit: FauxKit,
-  extra: Partial<SessionHostDeps> = {}
+  extra: Partial<SessionHostDeps> = {},
+  options: { realToolHost?: boolean } = {}
 ): Partial<SessionHostDeps> {
   return {
     models: kit.models,
     modelCatalog: fauxCatalog(kit, fauxPort()),
-    toolHost: emptyToolHost,
+    ...(options.realToolHost ? {} : { toolHost: emptyToolHost }),
     promptHost: {},
     promptVars: () => ({}),
     settingsOverrides: TEST_SETTINGS_OVERRIDES,
