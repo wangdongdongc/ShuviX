@@ -351,7 +351,7 @@ describe('lastAnswer', () => {
     expect(await session.lastAnswer()).toStrictEqual({ text: 'partial' })
   })
 
-  it("P2-09-26 errors: the model's error text with isError (equal to submitUser's error); durable's detail text when errorMessage is absent or empty; during a retry wait", async () => {
+  it("P2-09-26 errors: the model's error text with isError (equal to submitUser's error); durable's detail text when errorMessage is absent, submitUser's fallback when it is empty; during a retry wait", async () => {
     const t = await makeHost()
     const session = await t.open()
     await primeRoot(session)
@@ -371,12 +371,24 @@ describe('lastAnswer', () => {
     })
     expect(absentAnswer!.text).toBe(absent.error)
 
-    // errorMessage 为空串：durable 的细节同样是 ''（`errorMessage ?? …`，PIN-07 的公式）
+    // errorMessage 为空串：durable 的细节是 ''，发送结果换成兜底文案 —— lastAnswer 与它逐字相同
+    // （P2-10 的裁定：`errorMessage || …`，不是 `??`）
+    t.kit.queue(fauxAssistantMessage([], { stopReason: 'error', errorMessage: '' }))
+    const empty = await session.submitUser('u3')
+    expect(empty).toEqual({ error: 'The model request failed', code: 'model_error' })
+    expect(await session.lastAnswer()).toStrictEqual({
+      text: 'The model request failed',
+      isError: true
+    })
+    // 手写的同形条目（不经发送）读出来也一样
     await appendAssistant(
       session,
       fauxAssistantMessage([], { stopReason: 'error', errorMessage: '' })
     )
-    expect(await session.lastAnswer()).toStrictEqual({ text: '', isError: true })
+    expect(await session.lastAnswer()).toStrictEqual({
+      text: 'The model request failed',
+      isError: true
+    })
 
     // 重试等待中：最新的错误条目
     const retrying = await makeHost({
