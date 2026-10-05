@@ -582,6 +582,7 @@ export {
   type TaskLiveness,
   type UserSendOptions,
   type AdmittedInfo,
+  type AgentRef,
   type PlacedInfo
 } from './durable/durableSession'
 export {

@@ -184,6 +184,12 @@ export interface UserSendOptions {
   onPlaced?: (info: PlacedInfo) => void
 }
 
+/** 一个派生 agent 的引用（与 SyncHub 的 `SyncAgentRef` 同形；对话 id 可省） */
+export interface AgentRef {
+  readonly agentId: string
+  readonly conversationId?: number
+}
+
 /** `onAdmitted` 的参数（PIN-08） */
 export interface AdmittedInfo {
   /** 受理的提交当场落下的 user 条目；排队的发送没有这个键 */
@@ -368,9 +374,11 @@ export interface DurableSession {
   projector(): Promise<SessionProjector>
   /**
    * 一个派生 agent 对话的界面投影（P3-03，子 agent 面板）：按 agentId 共享、计数回收（同 `projector()`）。
-   * 不认识的 agentId → undefined（不挂载）；宿主派发的 hook agent 也能看（只读，PIN-20）。
+   * 不认识的 agentId → undefined（不挂载）；宿主派发的 hook agent 也能看（只读，PIN-20）。参数可以是
+   * agentId，也可以是 SyncHub 的 `{agentId, conversationId}`（P3-04 的 `SyncAgentRef`）：给了对话 id 且那个
+   * 对话正是这个 agent 的，就挂它；否则按 agentId 在 agent 目录里找。
    */
-  agentProjector(agentId: string): Promise<AgentProjector | undefined>
+  agentProjector(agent: string | AgentRef): Promise<AgentProjector | undefined>
   /**
    * 运行状态变化（PIN-23）：每次 `runState` 变了都在微任务里调用（含没有提交发布的转变 —— 继续 / 中止
    * 开启调度器的那一刻），读 `runState` 得到的就是新值。关停之后不再调用。监听器抛错只记日志。
@@ -2046,11 +2054,17 @@ export class DurableSessionImpl implements DurableSession {
     return ready
   }
 
-  agentProjector(agentId: string): Promise<AgentProjector | undefined> {
+  agentProjector(agent: string | AgentRef): Promise<AgentProjector | undefined> {
     if (this.closedFlag) return Promise.reject(new SessionClosedError(this.sessionId))
+    const agentId = typeof agent === 'string' ? agent : agent.agentId
     const current = this.agentProjectors.get(agentId)
     if (current !== undefined && !current.instance.disposed) return current.ready
-    const conversationId = this.directory.conversationOf(agentId)
+    const hinted = typeof agent === 'string' ? undefined : agent.conversationId
+    const conversationId =
+      hinted !== undefined &&
+      this.directory.identity(hinted as ConversationId)?.callerId === agentId
+        ? (hinted as ConversationId)
+        : this.directory.conversationOf(agentId)
     if (conversationId === undefined) return Promise.resolve(undefined)
     const instance: AgentProjectorImpl = new AgentProjectorImpl(
       this.projectorHost(),
