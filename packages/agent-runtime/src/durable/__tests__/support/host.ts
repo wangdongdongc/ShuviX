@@ -99,6 +99,11 @@ export interface TestHostOptions {
   now?: () => number
   /** 今天的日期（给了才发日期通知） */
   today?: () => string
+  /**
+   * 子会话 driven 落定的 seam（P2-09）。`restart()` 沿用；`restart({ onDrivenSettled: undefined })`
+   * 模拟一个没接它的进程
+   */
+  onDrivenSettled?: SessionHostDeps['onDrivenSettled']
 }
 
 export interface TestHost {
@@ -303,6 +308,7 @@ export async function makeHost(options: TestHostOptions = {}): Promise<TestHost>
       : { noticeCoalesceMs: options.noticeCoalesceMs }),
     ...(options.now === undefined ? {} : { now: options.now }),
     ...(options.today === undefined ? {} : { today: options.today }),
+    ...(options.onDrivenSettled === undefined ? {} : { onDrivenSettled: options.onDrivenSettled }),
     logger: {
       info: () => {},
       warn: (message) => warnings.push(message),
