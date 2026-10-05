@@ -47,7 +47,11 @@ async function userEntryIds(session: DurableSession): Promise<Map<string, number
   const ids = new Map<string, number>()
   for (const entry of await allEntries(await session.currentConversation())) {
     const message = entry.model?.[0]
-    if (entry.kind === 'pi.user' && message?.role === 'user' && typeof message.content === 'string') {
+    if (
+      entry.kind === 'pi.user' &&
+      message?.role === 'user' &&
+      typeof message.content === 'string'
+    ) {
       ids.set(message.content, entry.id)
     }
   }

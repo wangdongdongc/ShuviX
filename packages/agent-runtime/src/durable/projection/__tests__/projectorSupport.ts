@@ -17,7 +17,8 @@ import {
   RemoteServiceProvider,
   defineService,
   type MutableReplicatedState,
-  type ReplicatedState
+  type ReplicatedState,
+  type Service
 } from '@earendil-works/chord'
 import { applyImmutable, type Op } from '@earendil-works/chord/delta'
 import { Type } from '@earendil-works/pi-ai'
@@ -32,11 +33,7 @@ import {
   type WatchHandle
 } from '@earendil-works/pi-durable'
 import type { InputRequest } from '@shuvix/chat-protocol/types/inputRequest'
-import type {
-  AgentView,
-  RunViewState,
-  SessionView
-} from '@shuvix/chat-protocol/types/sessionView'
+import type { AgentView, RunViewState, SessionView } from '@shuvix/chat-protocol/types/sessionView'
 import { isJsonOnly } from '@shuvix/chat-protocol/utils/jsonOnly'
 import { expect } from 'vitest'
 import { truncationDiagnostic } from '../../../toolOutput/spill'
@@ -50,6 +47,7 @@ import { displayItemOf, resolveDisplayItems, type DisplayItem } from '../display
 import { projectSessionView } from '../project'
 import {
   SessionProjectorImpl,
+  type ProjectorHandle,
   type ProjectorHost,
   type ProjectorMount,
   type RunLifecycleSignal,
@@ -57,6 +55,11 @@ import {
 } from '../sessionProjector'
 
 // ─────────────────────────── 操作流 ───────────────────────────
+
+/** 一次性的视图服务 `t`（`{view: state}`） */
+function viewService<V>(): Service<{ view: ReplicatedState<V> }> {
+  return (defineService as (id: string) => Service<{ view: ReplicatedState<V> }>)('t')
+}
 
 export interface Revision<V> {
   readonly sequence: number
@@ -79,7 +82,7 @@ export function opsOf<V extends object>(
   state: ReplicatedState<V> | MutableReplicatedState<V>,
   onRevision?: (revision: Revision<V>) => void
 ): OpsRecorder<V> {
-  const service = defineService<{ view: ReplicatedState<V> }>('t')
+  const service = viewService<V>()
   const provider = new RemoteServiceProvider([{ id: 't' }])
   provider.provide(service, { view: state as ReplicatedState<V> } as never)
   const revisions: Revision<V>[] = []
@@ -93,6 +96,7 @@ export function opsOf<V extends object>(
     }
   })
   const member = subscription.snapshot.instances[0]!.members[0]!
+  if (member.kind !== 'state') throw new Error('expected a state member')
   const root = member.ops[0] as Op
   const snapshot = { sequence: member.sequence, value: (root as ['r', V])[1] }
   subscription.activate()
@@ -121,7 +125,7 @@ export function opsOf<V extends object>(
 export function throwingSubscriber<V extends object>(
   state: ReplicatedState<V> | MutableReplicatedState<V>
 ): () => void {
-  const service = defineService<{ view: ReplicatedState<V> }>('t')
+  const service = viewService<V>()
   const provider = new RemoteServiceProvider([{ id: 't' }])
   provider.provide(service, { view: state as ReplicatedState<V> } as never)
   const subscription = provider.subscribe('t', 'singleton', () => {
@@ -199,6 +203,14 @@ export class SpyProjector extends SessionProjectorImpl {
     this.spy(mount.value, view)
     return view
   }
+}
+
+/** 用例里「开一个会话 + 它的投影 + 一个句柄」的那一组 */
+export interface OpenedProjector {
+  readonly t: TestHost
+  readonly session: DurableSession
+  readonly proj: SessionProjector
+  readonly h: ProjectorHandle<SessionView>
 }
 
 /** `host.close` → `host.open` → freshMount */
@@ -343,6 +355,9 @@ export async function queueDisplayOf(
 
 export type LifecycleRecord = RunLifecycleSignal & { readonly view?: SessionView }
 
+/** 信号去掉 view 之后（按 kind 分开，`reason` 只在 ended 上） */
+export type BareSignal = RunLifecycleSignal
+
 export function recordLifecycle(
   projector: SessionProjector,
   state?: MutableReplicatedState<SessionView>
@@ -355,8 +370,8 @@ export function recordLifecycle(
 }
 
 /** 信号去掉 view，只留设计稿记录的那几项 */
-export function bare(records: readonly LifecycleRecord[]): Omit<LifecycleRecord, 'view'>[] {
-  return records.map(({ view: _view, ...signal }) => signal)
+export function bare(records: readonly LifecycleRecord[]): BareSignal[] {
+  return records.map(({ view: _view, ...signal }) => signal as BareSignal)
 }
 
 // ─────────────────────────── 直接写 pi.live ───────────────────────────

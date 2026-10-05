@@ -8,7 +8,7 @@
  *   30 没有前缀的新对话：messages 为空、新的 conversationId、一条 `r`
  *   31 指针指向不存在的对话（R11）：视图留在对话 1，不抛错，记警告
  */
-import type { ConversationId } from '@earendil-works/pi-durable'
+import type { ConversationId, EntryRecord } from '@earendil-works/pi-durable'
 import { describe, expect, it } from 'vitest'
 import { backgroundContext as BG } from '../../context'
 import { SessionStateDoc, noticeEntryDraft } from '../../docs'
@@ -23,7 +23,10 @@ registerHostCleanup()
 
 const TIMEOUT = 20000
 
-async function rootTwoTurns(session: DurableSession, t: Awaited<ReturnType<typeof makeHost>>) {
+async function rootTwoTurns(
+  session: DurableSession,
+  t: Awaited<ReturnType<typeof makeHost>>
+): Promise<{ u1: EntryRecord; a1: EntryRecord }> {
   t.kit.queue(answer('A1'), answer('A2'))
   expect(await session.submitUser('U1')).toEqual({})
   expect(await session.submitUser('U2')).toEqual({})

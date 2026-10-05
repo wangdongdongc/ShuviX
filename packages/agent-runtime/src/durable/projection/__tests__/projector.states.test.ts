@@ -54,7 +54,10 @@ describe('P3-03 · retry and compaction states', () => {
     async () => {
       const t = await makeHost({
         ephemeral: ['s1'],
-        settingsOverrides: { retry: { enabled: true, baseDelayMs: 400 }, compaction: { enabled: false } }
+        settingsOverrides: {
+          retry: { enabled: true, baseDelayMs: 400 },
+          compaction: { enabled: false }
+        }
       })
       const session = await t.open('s1')
       await primeRoot(session)
@@ -107,7 +110,8 @@ describe('P3-03 · retry and compaction states', () => {
       expect(rows).toHaveLength(1)
       expect(rows[0]!.metadata).toStrictEqual({ retried: { count: 2, lastError: '503 b' } })
       const firstWithRow = ops.revisions.findIndex((r) => errorRows(r.value).length > 0)
-      for (const revision of ops.revisions) expect(errorRows(revision.value).length).toBeLessThanOrEqual(1)
+      for (const revision of ops.revisions)
+        expect(errorRows(revision.value).length).toBeLessThanOrEqual(1)
       for (const revision of ops.revisions.slice(0, firstWithRow)) {
         expect(errorRows(revision.value)).toEqual([])
       }
@@ -213,7 +217,10 @@ async function crashMidStream(): Promise<{ t: TestHost; session: DurableSession 
     5000,
     'a committed partial'
   )
-  const t = await first.restart({ kit: undefined, makeKit: (): FauxKit => fauxKit({ tokensPerSecond: 80 }) })
+  const t = await first.restart({
+    kit: undefined,
+    makeKit: (): FauxKit => fauxKit({ tokensPerSecond: 80 })
+  })
   const session = await t.open()
   expect(session.isInterrupted()).toBe(true)
   return { t, session }
@@ -260,17 +267,21 @@ describe('P3-03 · reopen of an interrupted session', () => {
       expect(card.type === 'message' && card.blocks).toEqual(stale.message.blocks)
       // 新的尝试：live 出现之后到落盘之前是追加
       const start = ops.revisions.findIndex(
-        (r, i) => i > abortedAt && r.ops.some((op) => op[0] === 's' && under(op, 'live') && op[2] !== null)
+        (r, i) =>
+          i > abortedAt && r.ops.some((op) => op[0] === 's' && under(op, 'live') && op[2] !== null)
       )
       const end = ops.revisions.findIndex(
-        (r, i) => i > start && r.ops.some((op) => op[0] === 's' && under(op, 'live') && op[2] === null)
+        (r, i) =>
+          i > start && r.ops.some((op) => op[0] === 's' && under(op, 'live') && op[2] === null)
       )
       for (const revision of ops.revisions.slice(start + 1, end)) {
         for (const op of revision.ops) if (under(op, 'live')) expect(['a', 't']).toContain(op[0])
       }
       expect(h.state.value.run).toStrictEqual({ state: 'idle' })
       expect(h.state.value.messages.at(-1)!.content.startsWith('gamma')).toBe(true)
-      expect(bare(lc.signals).map(({ kind, reason }) => [kind, reason])).toEqual([
+      expect(
+        bare(lc.signals).map((s) => [s.kind, s.kind === 'ended' ? s.reason : undefined])
+      ).toEqual([
         ['started', undefined],
         ['ended', 'ok']
       ])
@@ -298,7 +309,9 @@ describe('P3-03 · reopen of an interrupted session', () => {
         ['assistant', 'message']
       ])
       expect(h.state.value.messages.slice(2).map((m) => m.content)).toEqual(['again', 'fresh'])
-      expect(bare(lc.signals).map(({ kind, reason }) => [kind, reason])).toEqual([
+      expect(
+        bare(lc.signals).map((s) => [s.kind, s.kind === 'ended' ? s.reason : undefined])
+      ).toEqual([
         ['started', undefined],
         ['ended', 'ok']
       ])

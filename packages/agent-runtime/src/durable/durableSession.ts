@@ -190,6 +190,13 @@ export interface AgentRef {
   readonly conversationId?: number
 }
 
+/** steer / followUp 的选项：幂等键与受理回调（与 `UserSendOptions` 同义，PIN-08） */
+export interface AdmitOptions {
+  requestId?: string
+  onAdmitted?: (info: AdmittedInfo) => void
+  onPlaced?: (info: PlacedInfo) => void
+}
+
 /** `onAdmitted` 的参数（PIN-08） */
 export interface AdmittedInfo {
   /** 受理的提交当场落下的 user 条目；排队的发送没有这个键 */
@@ -324,10 +331,14 @@ export interface DurableSession {
   taskLiveness(taskId: number): Promise<TaskLiveness | undefined>
   /** 发送用户输入并等这一轮落定（R3：结果对象，从不抛出）；已有的 requestId = 重新挂上（P2-09） */
   submitUser(content: UserInput, options?: UserSendOptions): Promise<SubmitResult>
-  /** 运行中插话（空闲时起一轮，R4） */
-  steer(content: UserInput, options?: { requestId?: string }): Promise<AdmitResult>
-  /** 本轮结束后接着说（空闲时起一轮） */
-  followUp(content: UserInput, options?: { requestId?: string }): Promise<AdmitResult>
+  /**
+   * 运行中插话（空闲时起一轮，R4）。`onAdmitted` / `onPlaced` 与 `submitUser` 同义（PIN-08，P3-07
+   * PIN-15/16）：空闲时受理当场落下 → `onAdmitted({entryId})`；排进队列 → `onAdmitted({})`，放下时
+   * `onPlaced({entryId})`；撤回 / 中止、从没放下的不调 `onPlaced`。
+   */
+  steer(content: UserInput, options?: AdmitOptions): Promise<AdmitResult>
+  /** 本轮结束后接着说（空闲时起一轮）；受理回调同 `steer` */
+  followUp(content: UserInput, options?: AdmitOptions): Promise<AdmitResult>
   /** 写一条系统通知（`shuvix.notice`），必要时推迟（R1 / Q3） */
   writeNotice(notice: NoticeInput): Promise<NoticeResult>
   /** 送达后台完成通知（R13 的路由：steer / 自动续跑 / 写入 / 推迟；requestId 去重，P2-09） */
@@ -1304,7 +1315,10 @@ export class DurableSessionImpl implements DurableSession {
    * 受理回调（`UserSendOptions.onAdmitted` / `onPlaced`，PIN-08）：受理的提交当场落下了条目 → 带上它；
    * 排进了队列 → 不带，放下时再调 `onPlaced`（受理之后、登记之前就已经放下的当场补上）。抛错只记日志。
    */
-  private admitted(submissionId: SubmissionId, options: UserSendOptions): void {
+  private admitted(
+    submissionId: SubmissionId,
+    options: Pick<UserSendOptions, 'onAdmitted' | 'onPlaced'>
+  ): void {
     const admission = this.admissions.get(submissionId)
     this.admissions.delete(submissionId)
     const entryId = admission?.admittedEntry
@@ -1357,19 +1371,20 @@ export class DurableSessionImpl implements DurableSession {
     }
   }
 
-  steer(content: UserInput, options: { requestId?: string } = {}): Promise<AdmitResult> {
-    return this.admitUser(content, 'steer', options.requestId)
+  steer(content: UserInput, options: AdmitOptions = {}): Promise<AdmitResult> {
+    return this.admitUser(content, 'steer', options)
   }
 
-  followUp(content: UserInput, options: { requestId?: string } = {}): Promise<AdmitResult> {
-    return this.admitUser(content, 'followUp', options.requestId)
+  followUp(content: UserInput, options: AdmitOptions = {}): Promise<AdmitResult> {
+    return this.admitUser(content, 'followUp', options)
   }
 
   private async admitUser(
     content: UserInput,
     mode: 'steer' | 'followUp',
-    requestId: string | undefined
+    options: AdmitOptions
   ): Promise<AdmitResult> {
+    const requestId = options.requestId
     try {
       return await this.op(async () => {
         const refused = await this.ensureAgent()
@@ -1384,6 +1399,7 @@ export class DurableSessionImpl implements DurableSession {
           { type: 'input', content, whenBusy, ...(requestId === undefined ? {} : { requestId }) },
           BG
         )
+        this.admitted(submission.id, options)
         return { submissionId: submission.id }
       })
     } catch (error) {

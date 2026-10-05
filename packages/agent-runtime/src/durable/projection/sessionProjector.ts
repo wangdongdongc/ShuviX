@@ -222,7 +222,9 @@ export abstract class ProjectorCore<V extends object> {
   /** 此刻挂着的对话的运行状态 */
   protected abstract runStateOf(conversationId: ConversationId): RunViewState
   /** 旁路的额外处理（指针变化 → 换挂载等）；在通用记账之后调用 */
-  protected onPublication(_publication: CommitPublication): void {}
+  protected onPublication(_publication: CommitPublication): void {
+    // 缺省：没有额外处理
+  }
   /** 是否跟踪别的对话（派生 agent）的运行生命周期 */
   protected get tracksOtherRuns(): boolean {
     return false
@@ -516,7 +518,10 @@ export abstract class ProjectorCore<V extends object> {
   }
 
   /** 排队输入 → 显示侧车（PIN-17 / PIN-22） */
-  protected queueDisplay(mount: ProjectorMount, inbox: InboxState | undefined): Map<number, DisplayItem> {
+  protected queueDisplay(
+    mount: ProjectorMount,
+    inbox: InboxState | undefined
+  ): Map<number, DisplayItem> {
     const queued = new Map<number, DisplayItem>()
     const display = this.displayDocs.get(mount.conversationId)
     if (display === undefined || !Array.isArray(inbox?.items)) return queued
@@ -554,7 +559,8 @@ export abstract class ProjectorCore<V extends object> {
           const entry = change.value
           if (entry.kind === AssistantEntry.kind && entry.byTaskId !== undefined) {
             const message = entry.model?.[0]
-            if (message?.role === 'assistant') this.stopReasons.set(entry.byTaskId, message.stopReason)
+            if (message?.role === 'assistant')
+              this.stopReasons.set(entry.byTaskId, message.stopReason)
           }
         } else if (change.type === 'document' && change.conversationId !== undefined) {
           if (change.record.key !== undefined) continue
@@ -709,7 +715,6 @@ export abstract class ProjectorCore<V extends object> {
     })
   }
 }
-
 
 // ─────────────────────────── SessionProjector ───────────────────────────
 

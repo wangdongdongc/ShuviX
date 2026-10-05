@@ -44,7 +44,9 @@ registerHostCleanup()
 const TIMEOUT = 20000
 
 type Tokens = Record<string, { type: string; id: string; displayText: string; payload: string }>
-const K1: Tokens = { k1: { type: 'cmd', id: 'deploy', displayText: '/deploy', payload: 'PAYLOAD-K1' } }
+const K1: Tokens = {
+  k1: { type: 'cmd', id: 'deploy', displayText: '/deploy', payload: 'PAYLOAD-K1' }
+}
 const D1 = { content: 'run {{shuvixInlineToken:k1}} please', tokens: K1 }
 
 async function entriesOf(session: DurableSession): Promise<EntryRecord[]> {
@@ -269,8 +271,7 @@ describe('P3-03 · mount', () => {
           await withTimeout(stall.reached, 5000, 'request reached')
           await waitFor(
             async () =>
-              (await session.harness.snapshot(LiveDoc, 1 as ConversationId, BG))?.run !==
-              undefined,
+              (await session.harness.snapshot(LiveDoc, 1 as ConversationId, BG))?.run !== undefined,
             3000,
             'run started'
           )

@@ -19,13 +19,7 @@ import { answer, fauxKit, held, type FauxKit } from '../../__tests__/support/fau
 import { registerHostCleanup } from '../../__tests__/support/host'
 import { callAgent, hookRec, hostD, seedAgent } from '../../__tests__/support/spawn'
 import { waitFor, withTimeout } from '../../__tests__/support/wait'
-import {
-  freshAgentMount,
-  opsOf,
-  recordLifecycle,
-  settleFrames,
-  under
-} from './projectorSupport'
+import { freshAgentMount, opsOf, recordLifecycle, settleFrames, under } from './projectorSupport'
 
 registerHostCleanup()
 
@@ -74,7 +68,17 @@ describe('P3-03 · spawned AgentProjector', () => {
       const childOps = opsOf(ha.state)
       const rootOps = opsOf(h.state)
       expect(Object.keys(ha.state.value).sort()).toEqual(
-        ['v', 'agentId', 'sessionId', 'conversationId', 'messages', 'live', 'toolRuns', 'run', 'context'].sort()
+        [
+          'v',
+          'agentId',
+          'sessionId',
+          'conversationId',
+          'messages',
+          'live',
+          'toolRuns',
+          'run',
+          'context'
+        ].sort()
       )
       expect(ha.state.value).toMatchObject({
         v: 1,

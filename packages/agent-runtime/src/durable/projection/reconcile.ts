@@ -87,4 +87,3 @@ function reconcileArray(draft: unknown[], next: readonly unknown[]): void {
 export function reconcile(draft: object, next: object): void {
   reconcileRecord(draft as JsonRecord, next as JsonRecord)
 }
-

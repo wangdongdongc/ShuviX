@@ -61,7 +61,13 @@ const display = (n: number): { content: string; tokens: Tokens } => ({
   tokens: { [`k${n}`]: { type: 'cmd', id: `c${n}`, displayText: `/c${n}`, payload: `P${n}` } }
 })
 const ask = (id: string): InputRequest =>
-  ({ id, kind: 'ask', toolName: 'ask', question: `${id}?`, createdAt: 0 }) as unknown as InputRequest
+  ({
+    id,
+    kind: 'ask',
+    toolName: 'ask',
+    question: `${id}?`,
+    createdAt: 0
+  }) as unknown as InputRequest
 
 // ─────────────────────────── 场景框架 ───────────────────────────
 
@@ -174,8 +180,7 @@ function streamingOnly(previous: SessionView, next: SessionView): boolean {
   }
   if (JSON.stringify(a.argsText ?? null) !== JSON.stringify(b.argsText ?? null)) return false
   if (JSON.stringify(a.message.metadata) !== JSON.stringify(b.message.metadata)) return false
-  const rest = (view: SessionView): string =>
-    JSON.stringify({ ...view, live: null })
+  const rest = (view: SessionView): string => JSON.stringify({ ...view, live: null })
   return rest(previous) === rest(next)
 }
 
@@ -207,7 +212,11 @@ describe('P3-03-53/54/55 · identity over the recorded faux scenarios', () => {
       'S2 two tool rounds',
       {},
       async (r) => {
-        r.t.kit.queue(callTool('bash', {}, 'c1'), callTool('read', { path: 'p' }, 'c2'), answer('a'))
+        r.t.kit.queue(
+          callTool('bash', {}, 'c1'),
+          callTool('read', { path: 'p' }, 'c2'),
+          answer('a')
+        )
         expect(await r.session.submitUser('u')).toEqual({})
       }
     ],
@@ -255,7 +264,12 @@ describe('P3-03-53/54/55 · identity over the recorded faux scenarios', () => {
     ],
     [
       'S7 abort during the backoff',
-      { settingsOverrides: { retry: { enabled: true, baseDelayMs: 2000 }, compaction: { enabled: false } } },
+      {
+        settingsOverrides: {
+          retry: { enabled: true, baseDelayMs: 2000 },
+          compaction: { enabled: false }
+        }
+      },
       async (r) => {
         r.t.kit.queue(modelError('503 x'))
         const sending = r.session.submitUser('u')
@@ -407,7 +421,9 @@ describe('P3-03-53/54/55 · identity over the recorded faux scenarios', () => {
 async function forkAt(session: DurableSession, at: number): Promise<number> {
   const current = (await session.currentConversation()).id
   return session.harness.commit(async (tx) => {
-    const fork = await tx.forkConversation(current, at as never, { ownership: { kind: 'ownerless' } })
+    const fork = await tx.forkConversation(current, at as never, {
+      ownership: { kind: 'ownerless' }
+    })
     ;(await tx.doc(SessionStateDoc)).currentConversation = fork.id
     return fork.id
   }, BG)
@@ -481,7 +497,10 @@ async function runStep(r: Rig, step: Step, n: number, random: () => number): Pro
       return
     }
     case 'tool':
-      t.kit.queue(callTool(random() < 0.5 ? 'read' : 'dump', { path: `p${n}` }, `c${n}`), answer(`a${n}`))
+      t.kit.queue(
+        callTool(random() < 0.5 ? 'read' : 'dump', { path: `p${n}` }, `c${n}`),
+        answer(`a${n}`)
+      )
       expect(await session.submitUser(`u${n}`)).toEqual({})
       return
     case 'modelError':
@@ -555,4 +574,3 @@ describe('P3-03-53/54/55 · seeded fuzz (200 seeds)', () => {
     )
   }
 })
-

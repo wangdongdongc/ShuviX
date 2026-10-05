@@ -20,13 +20,22 @@ import { makeHost, primeRoot, registerHostCleanup } from '../../__tests__/suppor
 import { hookRec, hostD, seedAgent, startRun, tasksOf } from '../../__tests__/support/spawn'
 import { allEntries } from '../../__tests__/support/transcript'
 import { sleep, waitFor, withTimeout } from '../../__tests__/support/wait'
-import { bare, readTool, recordLifecycle, settleFrames, streamTool } from './projectorSupport'
+import {
+  bare,
+  type OpenedProjector,
+  readTool,
+  recordLifecycle,
+  settleFrames,
+  streamTool
+} from './projectorSupport'
 
 registerHostCleanup()
 
 const TIMEOUT = 25000
 
-async function openWith(options: Parameters<typeof makeHost>[0] = {}) {
+async function openWith(
+  options: Parameters<typeof makeHost>[0] = {}
+): Promise<OpenedProjector & { lc: ReturnType<typeof recordLifecycle> }> {
   const t = await makeHost({ ephemeral: ['s1'], ...options })
   const session = await t.open('s1')
   await primeRoot(session)
@@ -103,7 +112,10 @@ describe('P3-03 · lifecycle reasons', () => {
     'P3-03-37 aborted during the retry backoff (PIN-05): no aborted entry, the last assistant entry is an error → ended{aborted}',
     async () => {
       const { t, session, h, lc } = await openWith({
-        settingsOverrides: { retry: { enabled: true, baseDelayMs: 2000 }, compaction: { enabled: false } }
+        settingsOverrides: {
+          retry: { enabled: true, baseDelayMs: 2000 },
+          compaction: { enabled: false }
+        }
       })
       t.kit.queue(modelError('503 x'))
       const sending = session.submitUser('go')
@@ -153,7 +165,10 @@ describe('P3-03 · lifecycle reasons', () => {
       const gate = held(callTool('read', { path: 'a' }, 'c1'))
       const { t, session, h, lc } = await openWith({
         tools: [readTool(), streamTool(['x\n'], 50)],
-        settingsOverrides: { retry: { enabled: true, baseDelayMs: 5 }, compaction: { enabled: false } }
+        settingsOverrides: {
+          retry: { enabled: true, baseDelayMs: 5 },
+          compaction: { enabled: false }
+        }
       })
       t.kit.queue(gate.step, modelError('503 once'), callTool('bash', {}, 'c2'), answer('done'))
       const sending = session.submitUser('work')

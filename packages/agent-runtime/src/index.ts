@@ -581,6 +581,7 @@ export {
   type SubmitResult,
   type TaskLiveness,
   type UserSendOptions,
+  type AdmitOptions,
   type AdmittedInfo,
   type AgentRef,
   type PlacedInfo
@@ -707,9 +708,7 @@ export {
   type SessionProjectionMeta
 } from './durable/projection/project'
 // 界面投影的有状态一半（P3-03）：`DurableSession.projector()` / `agentProjector()` 的类型与运行生命周期信号
-export {
-  type AgentProjector
-} from './durable/projection/agentProjector'
+export { type AgentProjector } from './durable/projection/agentProjector'
 export {
   type ProjectorHandle,
   type RunEndReason,

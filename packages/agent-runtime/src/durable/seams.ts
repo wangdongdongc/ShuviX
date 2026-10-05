@@ -125,8 +125,9 @@ export interface SessionHostDeps {
    */
   onSessionOpened?: (session: DurableSession) => void
   /**
-   * 一条会话关掉了（P3-03 PIN-09）：显式关闭、LRU、全部关闭（`remove`）与删除（`destroy`）都算，在
-   * `DurableSession.close` 落定之后调用（删除时在删存储之前）。抛错只记日志。
+   * 一条会话关掉了（P3-03 PIN-09）：显式关闭、LRU、全部关闭（`remove`）在 `DurableSession.close` 落定
+   * 之后调用；**每次** `host.delete` 都报 `destroy`（会话没开着也报，P3-05 PIN-06），在关闭与删存储之后
+   * （删存储失败照样报）。抛错只记日志。
    */
   onSessionClosed?: (sessionId: string, reason: 'remove' | 'destroy') => void
   logger?: RuntimeLogger

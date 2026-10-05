@@ -13,6 +13,7 @@
  *   52 下游失败被兜住（PIN-03）：订阅方每次都抛 → 提交照常、运行状态对、之后照常修订、逐帧身份、记日志
  */
 import { describe, expect, it } from 'vitest'
+import { backgroundContext as BG } from '../../context'
 import { SessionClosedError, type DurableSession } from '../../durableSession'
 import { testProfile } from '../../__tests__/support/agentConfig'
 import { answer, held, stalled } from '../../__tests__/support/faux'
@@ -130,6 +131,14 @@ describe('P3-03 · ref-counting and dispose', () => {
       sessions.set('s1', again)
       await t.host.delete('s1')
       expect(closed.at(-1)).toEqual(['s1', 'destroy', true])
+      expect(closed.filter(([, reason]) => reason === 'destroy')).toHaveLength(1)
+      // 没开着的会话被删除同样报 destroy（P3-05 PIN-06），在删存储之后
+      expect(t.host.get('s1')).toBeUndefined()
+      await t.host.delete('s1')
+      expect(closed.at(-1)).toEqual(['s1', 'destroy', true])
+      await t.host.delete('never-opened')
+      expect(closed.at(-1)).toEqual(['never-opened', 'destroy', false])
+      expect(t.events.at(-1)).toBe('delete:never-opened')
 
       // LRU（maxIdleOpen 0：打开之后的修剪就关掉它）：remove
       const lruHost = await makeHost({ maxIdleOpen: 0, onSessionClosed })
@@ -144,17 +153,18 @@ describe('P3-03 · ref-counting and dispose', () => {
 
   it('P3-03-48 onSessionOpened: once per real open (open and peek), after the run-state report; not on reuse; a throwing hook does not fail open', async () => {
     const opened: [string, number][] = []
-    let t: Awaited<ReturnType<typeof makeHost>> | undefined
+    const holder: { t?: Awaited<ReturnType<typeof makeHost>> } = {}
     let throwOnce = true
-    t = await makeHost({
+    const t = await makeHost({
       onSessionOpened: (session) => {
-        opened.push([session.sessionId, t!.statesOf(session.sessionId).length])
+        opened.push([session.sessionId, holder.t!.statesOf(session.sessionId).length])
         if (throwOnce && session.sessionId === 's3') {
           throwOnce = false
           throw new Error('opened boom')
         }
       }
     })
+    holder.t = t
     const s1 = await t.open('s1')
     expect(opened).toEqual([['s1', 1]])
     expect(await t.open('s1')).toBe(s1)
@@ -215,9 +225,9 @@ describe('P3-03 · ref-counting and dispose', () => {
       expect(queued).toEqual([['admitted', {}]])
       // 忙时被拒：不调
       const rejected: unknown[] = []
-      expect(
-        (await session.submitUser('nope', { onAdmitted: (i) => rejected.push(i) })).code
-      ).toBe('busy')
+      expect((await session.submitUser('nope', { onAdmitted: (i) => rejected.push(i) })).code).toBe(
+        'busy'
+      )
       expect(rejected).toEqual([])
       run.release()
       expect(await withTimeout(sending, 8000, 'busy run')).toEqual({})
@@ -237,6 +247,62 @@ describe('P3-03 · ref-counting and dispose', () => {
       const result = await s2.submitUser('x', { onAdmitted: (i) => never.push(i) })
       expect(result.code).toBe('no_model')
       expect(never).toEqual([])
+    },
+    TIMEOUT
+  )
+
+  it(
+    'P3-03-49b steer / followUp take onAdmitted({entryId?}) and onPlaced (PIN-08; P3-07 PIN-15/16): idle → entryId at admission; queued → none, then onPlaced; withdrawn → never placed',
+    async () => {
+      const t = await makeHost({ ephemeral: ['s1'] })
+      const session = await t.open('s1')
+      await primeRoot(session)
+      // 空闲的 followUp / steer：起一轮，受理当场落下
+      for (const mode of ['followUp', 'steer'] as const) {
+        const seen: unknown[] = []
+        t.kit.queue(answer(`${mode} answer`))
+        const result = await session[mode](`idle ${mode}`, {
+          onAdmitted: (info) => seen.push(['admitted', info]),
+          onPlaced: (info) => seen.push(['placed', info])
+        })
+        expect(result.submissionId).toBeDefined()
+        await waitFor(() => session.runState === 'idle', 5000, 'idle')
+        const ids = await userIds(session)
+        expect(seen).toEqual([['admitted', { entryId: ids.at(-1) }]])
+      }
+      // 忙时排队：不带 entryId，放下时 onPlaced；撤回的从不 onPlaced
+      const run = held(answer('busy answer'))
+      t.kit.queue(run.step, answer('after'))
+      const sending = session.submitUser('busy run')
+      await withTimeout(run.reached, 5000, 'held')
+      const steered: unknown[] = []
+      const withdrawn: unknown[] = []
+      await session.steer('steered', {
+        onAdmitted: (info) => steered.push(['admitted', info]),
+        onPlaced: (info) => steered.push(['placed', info])
+      })
+      const { submissionId } = await session.followUp('withdrawn', {
+        onAdmitted: (info) => withdrawn.push(['admitted', info]),
+        onPlaced: (info) => withdrawn.push(['placed', info])
+      })
+      expect(steered).toEqual([['admitted', {}]])
+      expect(withdrawn).toEqual([['admitted', {}]])
+      const conversation = await session.currentConversation()
+      expect(
+        await session.harness.abortSubmission(submissionId as never, BG, conversation.id)
+      ).toBe('aborted')
+      run.release()
+      expect(await withTimeout(sending, 8000, 'busy run')).toEqual({})
+      await waitFor(() => steered.length === 2, 5000, 'steer placed')
+      await waitFor(() => session.runState === 'idle', 5000, 'idle')
+      await settleFrames()
+      const entries = await allEntries(conversation)
+      const steeredEntry = entries.find(
+        (e) =>
+          e.kind === 'pi.user' && e.model?.[0]?.role === 'user' && e.model[0].content === 'steered'
+      )!
+      expect(steered[1]).toEqual(['placed', { entryId: steeredEntry.id }])
+      expect(withdrawn).toEqual([['admitted', {}]])
     },
     TIMEOUT
   )

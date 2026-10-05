@@ -23,8 +23,9 @@
  *  - **driven 落定**（P2-09，`onDrivenSettled`）：每个进程每条 submission 至多报一次，记账在宿主（会话被
  *    LRU 关了再开也不重报；删除时清掉）。
  *  - **打开 / 关闭的宿主钩子**（P3-03 PIN-09）：`onSessionOpened` 在每次真正的打开（open 或 peek）接管完成、
- *    运行状态报过之后调用；`onSessionClosed` 在每次关闭（显式 / LRU / 全部关闭 = `remove`，删除 = `destroy`）
- *    的 `close` 落定之后调用。SyncHub 据此替换视图。
+ *    运行状态报过之后调用；`onSessionClosed` 在每次关闭（显式 / LRU / 全部关闭 = `remove`）的 `close` 落定
+ *    之后调用；每次删除都报 `destroy`（会话没开着也报，P3-05 PIN-06），在关闭与删存储之后。SyncHub 据此替换
+ *    视图。
  *  - **压缩余量按锁定模型的窗口算**（K14）：settings 的 getter 现读会话的锁、按 `models.getModel` 查
  *    上下文窗口（未锁 / 查不到 → 32768）。
  */
@@ -110,7 +111,10 @@ class SessionHostImpl implements SessionHost {
     this.manager = new SessionManager<DurableSessionImpl>({
       create: (sessionId) => this.create(sessionId),
       dispose: (sessionId, session, reason: SessionCloseReason) =>
-        session.close(reason).finally(() => this.notifyClosed(sessionId, reason))
+        // 删除由 delete() 自己报（不论会话开没开着，P3-05 PIN-06）
+        session.close(reason).finally(() => {
+          if (reason !== 'destroy') this.notifyClosed(sessionId, reason)
+        })
     })
   }
 
@@ -189,11 +193,16 @@ class SessionHostImpl implements SessionHost {
     const previous = this.deleting.get(sessionId)
     const run = (async () => {
       if (previous) await previous.catch(() => undefined)
-      await this.manager.remove(sessionId, 'destroy')
-      await this.deps.deleteStorage(sessionId)
-      this.recency.delete(sessionId)
-      // 同一 id 重建的会话 submission id 从头数起
-      this.drivenEmitted.delete(sessionId)
+      try {
+        await this.manager.remove(sessionId, 'destroy')
+        await this.deps.deleteStorage(sessionId)
+        this.recency.delete(sessionId)
+        // 同一 id 重建的会话 submission id 从头数起
+        this.drivenEmitted.delete(sessionId)
+      } finally {
+        // 每次删除都报（开着的先关掉；没开过的同样报，P3-05 PIN-06）—— 在关闭与删存储之后
+        this.notifyClosed(sessionId, 'destroy')
+      }
     })()
     const tracked: Promise<void> = run.finally(() => {
       if (this.deleting.get(sessionId) === tracked) this.deleting.delete(sessionId)

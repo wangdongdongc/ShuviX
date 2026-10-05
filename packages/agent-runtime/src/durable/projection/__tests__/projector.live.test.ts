@@ -33,6 +33,7 @@ import {
   attachOracle,
   freshMount,
   liveCommit,
+  type OpenedProjector,
   opsOf,
   readTool,
   settleFrames,
@@ -86,7 +87,7 @@ async function setPartial(
 const text = (value: string): unknown => ({ type: 'text', text: value })
 const thinking = (value: string): unknown => ({ type: 'thinking', thinking: value })
 
-async function open(options: Parameters<typeof makeHost>[0] = {}) {
+async function open(options: Parameters<typeof makeHost>[0] = {}): Promise<OpenedProjector> {
   const t = await makeHost({ ephemeral: ['s1'], ...options })
   const session = await t.open('s1')
   const proj = await session.projector()
@@ -122,7 +123,9 @@ describe('P3-03 · live streaming → append ops', () => {
       )
     }
     for (const { op } of ops.allOps().slice(1)) {
-      expect(op[0] === 's' && under(op, 'live') && (op[1] as unknown[]).length === 1).toBe(false)
+      expect(
+        op[0] === 's' && under(op, 'live') && (op[1] as unknown as unknown[]).length === 1
+      ).toBe(false)
       expect(op[0]).not.toBe('r')
       expect(under(op, 'messages')).toBe(false)
     }
@@ -144,8 +147,8 @@ describe('P3-03 · live streaming → append ops', () => {
       const liveStart = ops.revisions.findIndex((revision) =>
         revision.ops.some((op) => op[0] === 's' && opPathEq(op, ['live']) && op[2] !== null)
       )
-      const liveEnd = ops.revisions.findIndex(
-        (revision) => revision.ops.some((op) => op[0] === 's' && opPathEq(op, ['live']) && op[2] === null)
+      const liveEnd = ops.revisions.findIndex((revision) =>
+        revision.ops.some((op) => op[0] === 's' && opPathEq(op, ['live']) && op[2] === null)
       )
       expect(liveStart).toBeGreaterThanOrEqual(0)
       expect(liveEnd).toBeGreaterThan(liveStart + 1)
