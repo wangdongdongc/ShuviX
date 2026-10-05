@@ -174,7 +174,8 @@ describe('notify requestIds · routes', () => {
     ])
     expect(noticeWarnings(t)).toEqual([])
 
-    // (b) 待送达里的通知占了一条 input 的 id：continue / abort 照常，通知被移除、不落条目
+    // (b) 待送达里的通知占了一条 input 的 id：abort 照常，通知被移除、不落条目（空闲时 continue 是无操作，
+    //     P3-10a 裁定：不碰待送达）
     t.kit.queue(answer('a1'))
     expect(await session.submitUser('u1', { requestId: 'in1' })).toEqual({})
     const pushDeferred = (): Promise<void> =>
@@ -188,10 +189,9 @@ describe('notify requestIds · routes', () => {
     const before = await lines(session)
     await pushDeferred()
     expect(await withTimeout(session.continue(), 5000, 'continue')).toEqual({})
-    expect(await deferredIds(session)).toEqual([])
+    expect(await deferredIds(session)).toEqual(['in1'])
     expect(await lines(session)).toEqual(before)
 
-    await pushDeferred()
     await withTimeout(session.abort(), 5000, 'abort')
     expect(await deferredIds(session)).toEqual([])
     expect(await lines(session)).toEqual(before)
@@ -280,7 +280,8 @@ describe('notify requestIds · coalescing', () => {
       expect(await deferredIds(reopened)).toEqual(['n1', 'n2'])
       await reopened.notify('N1', { requestId: 'n1' })
       await sleep(250)
-      expect(await withTimeout(reopened.continue(), 5000, 'continue')).toEqual({})
+      // 空闲时 continue 是无操作（P3-10a 裁定）：由 abort 送达
+      await withTimeout(reopened.abort(), 5000, 'abort')
       const all = await lines(reopened)
       expect(all.filter((line) => line === 'shuvix.notice:N1')).toHaveLength(1)
       expect(all).toEqual(['shuvix.notice:N1', 'shuvix.notice:N2'])

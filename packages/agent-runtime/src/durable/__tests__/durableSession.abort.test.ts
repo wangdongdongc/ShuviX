@@ -170,7 +170,7 @@ describe('abort', () => {
     expect((await withTimeout(submission.wait(BG), 3000, 'side run')).status).toBe('done')
   })
 
-  it('AB-07 every run-starting path reopens inputs (followUp, steer, continue, submitUser)', async () => {
+  it('AB-07 every run-starting path reopens inputs (followUp, steer, submitUser); continue on an idle session is a no-op', async () => {
     const t = await makeHost()
     const session = await t.open()
     await primeRoot(session, t.kit)
@@ -191,8 +191,9 @@ describe('abort', () => {
 
     await session.abort()
     await expectInputsClosed(session, 'c3')
+    // P3-10a 裁定：空闲且没被中断的 continue 什么都不做 —— 不起 run，也不重开询问
     expect(await session.continue()).toEqual({})
-    await expectInputsOpen(session, 'o3')
+    await expectInputsClosed(session, 'c3b')
 
     await session.abort()
     await expectInputsClosed(session, 'c4')

@@ -233,7 +233,8 @@ describe('notices', () => {
         { requestId: 'r2', text: 'N2', kind: 'background' }
       )
     }, BG)
-    expect(await withTimeout(session.continue(), 5000, 'continue')).toEqual({})
+    // 「放下」那条路径（abort 送达；空闲时 continue 是无操作，P3-10a 裁定）
+    await withTimeout(session.abort(), 5000, 'abort')
     expect(await noticeLines(session)).toEqual(['shuvix.notice:N1', 'shuvix.notice:N2'])
     expect(await deferredNotices(session)).toEqual([])
 

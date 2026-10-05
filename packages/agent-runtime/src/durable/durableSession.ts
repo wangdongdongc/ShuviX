@@ -15,7 +15,7 @@
  *    中断会话上的发送按 `interruptedSendPolicy` 处理（一行切换）。
  *  - **系统通知**（R1/Q3）：会话被中断、或空闲但收件箱里留着上次失败的输入时，通知不能直接写
  *    （任何提交都会开启调度器 / 把残留输入带着起一轮），先存进 `SessionStateDoc.deferredNotices`，
- *    在下一次发送之前、继续、中止时送达。
+ *    在下一次发送之前、继续（被中断时；空闲时 continue 是无操作，P3-10a）、中止时送达。
  *  - **自动续跑**（R13，`notify`）：运行中 → steer；空闲且允许 → 合并窗口内攒起来起一轮；空闲但
  *    不允许 → 写通知；被中断 → 推迟。显式 `abort()` 之后到下一次 `submitUser` 之前不自动续跑。
  *  - **中止顺序**：先关询问窗口 → 宿主的中止前 seam（作废进行中的自动审查）→ 取消挂起的询问 →
@@ -60,6 +60,12 @@
  *    读这里的运行状态（`onRunStateChange`，含没有发布的 `markResumed`）、询问（`subscribeInputs` /
  *    `pendingInputs`，多钩子 PIN-02）与 agent 目录。受理回调带上落下的条目 id（`onAdmitted({entryId?})`，
  *    排队的发送没有，落下时另调 `onPlaced({entryId})`，PIN-08）。
+ *  - **回退 fork**（P3-10a，`rollbackTo`，`rollback.ts`）：只读校验目标（当前对话里看得见的 `pi.user`）→
+ *    回退区段独占（PIN-22：会建锁 / 受理输入的入口在受理阶段持共享）→ 停下（有锁走 `destroyAgent` 那一套，
+ *    没锁也中止任何非辅助的工作，PIN-21；派生的子 agent 一并中止）→ 算 fork 点 → **一个提交**里
+ *    `forkConversation`（没有前缀 = `createConversation`）并把 `SessionStateDoc.currentConversation` 指过去
+ *    （fork 空闲、收件箱为空，PIN-25）→ 停下时排干的通知（推迟的、合并窗口里的）送到 fork 上（PIN-23）。
+ *    投影按指针变化换挂载；下一次发送按此刻的设置在 fork 上重建锁；旧分支留在存储里。
  */
 import { copyJson } from '@earendil-works/chord'
 import type { AssistantMessage } from '@earendil-works/pi-ai'
@@ -118,6 +124,13 @@ import {
 } from './lock'
 import { maybeAnnounceDate } from './prompt/dateNotice'
 import { renderSystemPrompt, replaySections, type PromptExtensions } from './prompt/sections'
+import {
+  RollbackSection,
+  rollbackForkPoint,
+  rollbackTargetRefusal,
+  type RollbackOptions,
+  type RollbackResult
+} from './rollback'
 import type { AgentConfig, InterruptedSendPolicy, ModelCatalog, RunState, ToolHost } from './seams'
 import { SpawnCoordinatorImpl, type SpawnCoordinator } from './spawn'
 import type { LockModel, ModelSelection } from '../models/lockModel'
@@ -303,7 +316,10 @@ export interface DurableSession {
    * → 根的身份（随锁现取；未锁 = undefined）。句柄已关 → undefined。
    */
   agentIdentity(conversationId: number): AgentIdentity | undefined
-  /** 继续被中断的工作，等当前对话空闲；空闲且未中断时立刻返回 */
+  /**
+   * 继续被中断的工作，等当前对话空闲。空闲且未中断时立刻返回 `{}`，什么都不做（不建 agent、不写、不开启
+   * 调度器）；只有要续上被中断的工作时才没锁先建 agent（K3）
+   */
   continue(): Promise<SubmitResult>
   /**
    * 不等空闲的「继续」（P2-09）：被中断时建 agent、重开询问、放下推迟的通知、开启调度器就返回；
@@ -387,6 +403,17 @@ export interface DurableSession {
    * `shuvix.agent.*`（派生 agent 的记录留着，按需重建）。没锁 = 无操作
    */
   destroyAgent(): Promise<void>
+  /**
+   * 回退 / 截断（P3-10a，Mapping #2）：把当前对话换成一个 fork —— `keep: false`（缺省）= 回到目标那条
+   * 用户消息**之前**（它和它之后的都不在了），`keep: true`（截断）= 保留到目标为止。目标必须是当前对话
+   * 里看得见的 `pi.user` 条目（PIN-20）；不合格 / 会话已关 → `{ ok: false, reason }`，拒绝之前只读、什么都
+   * 不动（不销毁、不中止、不写）。成功时：任何非辅助的工作都被中止（含派生的子 agent、被中断的 run，没锁
+   * 也一样），锁被销毁（`agent_closing` 一对），一个提交里建 fork（没有前缀则建新对话）并移动
+   * `currentConversation`；fork 空闲、队列为空；停下时排干的通知落在 fork 上。前缀条目的 id 不变，旧分支
+   * 留在存储里但不再可见。不建锁 —— 下一次发送按此刻的设置在 fork 上建。并发的回退按到达次序串行，
+   * 回退在途时开始的发送等它做完（PIN-22）。
+   */
+  rollbackTo(targetEntryId: number, options?: RollbackOptions): Promise<RollbackResult>
   /**
    * 这个 Harness 实际在用的 settings（同步 getter；压缩余量按锁定模型与在跑的派生 agent 模型里最小的
    * 窗口算，K14 / Q-P2-08）
@@ -736,6 +763,8 @@ export class DurableSessionImpl implements DurableSession {
   >()
   /** 等着被放下的排队发送（`onPlaced`） */
   private readonly placementWaiters = new Map<SubmissionId, (entryId: EntryId) => void>()
+  /** 回退区段（P3-10a PIN-22）：回退独占；建锁 / 受理输入的入口在受理阶段持共享 */
+  private readonly section = new RollbackSection()
 
   private constructor(private readonly deps: DurableSessionDeps) {
     this.sessionId = deps.sessionId
@@ -1111,58 +1140,76 @@ export class DurableSessionImpl implements DurableSession {
         if (options.driven !== undefined && options.requestId === undefined) {
           return { error: 'A driven send needs a requestId' }
         }
-        // 当前对话里已有这条输入：重新挂上（P2-09），下面的发送规矩一概不碰
-        if (options.requestId !== undefined) {
-          const conversation = await this.currentConversation()
-          const existing = await this.findRequest(conversation.id, options.requestId)
-          if (existing !== undefined) return await this.reattach(conversation, existing, options)
-        }
-        // 用户又开口了 —— 上一次「显式喊停」的收敛到此为止；合并窗口里的通知随这一轮插话送达
-        this.stoppedByUser = false
-        // 没锁先创建 agent（K3）；被拒 / 被取消就到此为止，什么都不写
-        const refused = await this.ensureAgent()
-        if (refused !== undefined) return refused
-        const joining = this.takePendingNotices()
-        let whenBusy = options.whenBusy ?? 'reject'
-        if (this.isInterrupted()) whenBusy = await this.applyInterruptedPolicy(whenBusy)
-        // 明摆着会被拒（忙且不是同一 requestId 的重发）：别先写显示侧车、别动待送达通知。
-        // 竞态下仍由 durable 的受理兜底（ConversationBusy）
-        if (whenBusy === 'reject' && options.requestId === undefined && this.isBusy()) {
-          if (joining.length > 0) await this.steerNotices(await this.currentConversation(), joining)
-          return { error: 'The conversation is busy', code: 'busy' }
-        }
-        this.reopenInputs()
-        const conversation = await this.currentConversation()
-        let requestId = options.requestId
-        if (options.display !== undefined) {
-          requestId ??= randomId()
-          await this.recordDisplay(conversation, requestId, options.display)
-        }
-        if (whenBusy !== 'reject' || !this.isBusy()) {
-          await this.flushDeferred(conversation, 'beforeSend')
-          await this.announceDate(conversation)
-        }
-        let submission: Submission
+        // 受理阶段在回退区段里（PIN-22）；等 run 落定之前释放
+        const release = await this.section.enter()
         try {
-          submission = await conversation.submit(
-            { type: 'input', content, whenBusy, ...(requestId === undefined ? {} : { requestId }) },
-            BG
-          )
-        } catch (error) {
-          if (joining.length > 0) await this.steerNotices(conversation, joining)
-          throw error
+          return await this.submitAdmitted(content, options, release)
+        } finally {
+          release()
         }
-        // driven-run 标记在受理之后、受理回调之前（PIN-12）：被拒的发送从不留下标记
-        if (options.driven !== undefined) {
-          await this.armDriven(conversation.id, requestId!, options.driven, submission.id)
-        }
-        this.admitted(submission.id, options)
-        if (joining.length > 0) await this.steerNotices(conversation, joining)
-        return settlementResult(await submission.wait(BG))
       })
     } catch (error) {
       return resultOfError(error)
     }
+  }
+
+  /** `submitUser` 的受理与等待（在回退区段的共享里进来；`release` 在等落定之前调用） */
+  private async submitAdmitted(
+    content: UserInput,
+    options: UserSendOptions,
+    release: () => void
+  ): Promise<SubmitResult> {
+    // 当前对话里已有这条输入：重新挂上（P2-09），下面的发送规矩一概不碰
+    if (options.requestId !== undefined) {
+      const conversation = await this.currentConversation()
+      const existing = await this.findRequest(conversation.id, options.requestId)
+      if (existing !== undefined) {
+        return await this.reattach(conversation, existing, options, release)
+      }
+    }
+    // 用户又开口了 —— 上一次「显式喊停」的收敛到此为止；合并窗口里的通知随这一轮插话送达
+    this.stoppedByUser = false
+    // 没锁先创建 agent（K3）；被拒 / 被取消就到此为止，什么都不写
+    const refused = await this.ensureAgent()
+    if (refused !== undefined) return refused
+    const joining = this.takePendingNotices()
+    let whenBusy = options.whenBusy ?? 'reject'
+    if (this.isInterrupted()) whenBusy = await this.applyInterruptedPolicy(whenBusy)
+    // 明摆着会被拒（忙且不是同一 requestId 的重发）：别先写显示侧车、别动待送达通知。
+    // 竞态下仍由 durable 的受理兜底（ConversationBusy）
+    if (whenBusy === 'reject' && options.requestId === undefined && this.isBusy()) {
+      if (joining.length > 0) await this.steerNotices(await this.currentConversation(), joining)
+      return { error: 'The conversation is busy', code: 'busy' }
+    }
+    this.reopenInputs()
+    const conversation = await this.currentConversation()
+    let requestId = options.requestId
+    if (options.display !== undefined) {
+      requestId ??= randomId()
+      await this.recordDisplay(conversation, requestId, options.display)
+    }
+    if (whenBusy !== 'reject' || !this.isBusy()) {
+      await this.flushDeferred(conversation, 'beforeSend')
+      await this.announceDate(conversation)
+    }
+    let submission: Submission
+    try {
+      submission = await conversation.submit(
+        { type: 'input', content, whenBusy, ...(requestId === undefined ? {} : { requestId }) },
+        BG
+      )
+    } catch (error) {
+      if (joining.length > 0) await this.steerNotices(conversation, joining)
+      throw error
+    }
+    // driven-run 标记在受理之后、受理回调之前（PIN-12）：被拒的发送从不留下标记
+    if (options.driven !== undefined) {
+      await this.armDriven(conversation.id, requestId!, options.driven, submission.id)
+    }
+    this.admitted(submission.id, options)
+    if (joining.length > 0) await this.steerNotices(conversation, joining)
+    release()
+    return settlementResult(await submission.wait(BG))
   }
 
   /**
@@ -1176,7 +1223,8 @@ export class DurableSessionImpl implements DurableSession {
   private async reattach(
     conversation: Conversation,
     record: SubmissionRecord,
-    options: UserSendOptions
+    options: UserSendOptions,
+    release: () => void
   ): Promise<SubmitResult> {
     const requestId = options.requestId!
     if (record.type !== 'input') {
@@ -1209,6 +1257,7 @@ export class DurableSessionImpl implements DurableSession {
     }
     const submission = await this.harness.submission(record.id, BG)
     if (submission === undefined) return { error: `Submission ${record.id} does not exist` }
+    release()
     return settlementResult(await submission.wait(BG))
   }
 
@@ -1407,22 +1456,24 @@ export class DurableSessionImpl implements DurableSession {
   ): Promise<AdmitResult> {
     const requestId = options.requestId
     try {
-      return await this.op(async () => {
-        const refused = await this.ensureAgent()
-        if (refused !== undefined) return refused
-        let whenBusy: 'steer' | 'followUp' | 'reject' = mode
-        if (this.isInterrupted()) whenBusy = await this.applyInterruptedPolicy(whenBusy)
-        this.reopenInputs()
-        const conversation = await this.currentConversation()
-        await this.flushDeferred(conversation, 'beforeSend')
-        await this.announceDate(conversation)
-        const submission = await conversation.submit(
-          { type: 'input', content, whenBusy, ...(requestId === undefined ? {} : { requestId }) },
-          BG
-        )
-        this.admitted(submission.id, options)
-        return { submissionId: submission.id }
-      })
+      return await this.op(() =>
+        this.inSection(async () => {
+          const refused = await this.ensureAgent()
+          if (refused !== undefined) return refused
+          let whenBusy: 'steer' | 'followUp' | 'reject' = mode
+          if (this.isInterrupted()) whenBusy = await this.applyInterruptedPolicy(whenBusy)
+          this.reopenInputs()
+          const conversation = await this.currentConversation()
+          await this.flushDeferred(conversation, 'beforeSend')
+          await this.announceDate(conversation)
+          const submission = await conversation.submit(
+            { type: 'input', content, whenBusy, ...(requestId === undefined ? {} : { requestId }) },
+            BG
+          )
+          this.admitted(submission.id, options)
+          return { submissionId: submission.id }
+        })
+      )
     } catch (error) {
       return resultOfError(error)
     }
@@ -1444,10 +1495,22 @@ export class DurableSessionImpl implements DurableSession {
   async continue(): Promise<SubmitResult> {
     try {
       return await this.op(async () => {
-        const conversation = await this.currentConversation()
-        const refused = await this.resumeWork(conversation)
-        if (refused !== undefined) return refused
-        await conversation.waitForIdle(BG)
+        // 续上的准备在回退区段里（PIN-22）；等空闲不在
+        const resumed = await this.inSection(
+          async (): Promise<
+            { conversation: Conversation } | { refused: SubmitResult } | { idle: true }
+          > => {
+            // 空闲且没被中断：严格的无操作（不建 agent、不重开询问、不送达、不开启调度器 —— 与
+            // resumeInterrupted 同口径，P3-10a 裁定）。在区段里判定：回退之后 fork 上没有可续的工作
+            if (!this.isInterrupted() && this.state === 'idle') return { idle: true }
+            const conversation = await this.currentConversation()
+            const refused = await this.resumeWork(conversation)
+            return refused === undefined ? { conversation } : { refused }
+          }
+        )
+        if ('idle' in resumed) return {}
+        if ('refused' in resumed) return resumed.refused
+        await resumed.conversation.waitForIdle(BG)
         return {}
       })
     } catch (error) {
@@ -1457,11 +1520,13 @@ export class DurableSessionImpl implements DurableSession {
 
   async resumeInterrupted(): Promise<SubmitResult> {
     try {
-      return await this.op(async () => {
-        // 没被中断：严格的无操作（不建 agent、不重开询问、不送达、不开启调度器，PIN-06）
-        if (!this.isInterrupted()) return {}
-        return (await this.resumeWork(await this.currentConversation())) ?? {}
-      })
+      return await this.op(() =>
+        this.inSection(async () => {
+          // 没被中断：严格的无操作（不建 agent、不重开询问、不送达、不开启调度器，PIN-06）
+          if (!this.isInterrupted()) return {}
+          return (await this.resumeWork(await this.currentConversation())) ?? {}
+        })
+      )
     } catch (error) {
       return resultOfError(error)
     }
@@ -1624,7 +1689,13 @@ export class DurableSessionImpl implements DurableSession {
     const today = this.deps.today
     if (today === undefined) return
     try {
-      const result = await maybeAnnounceDate(this, conversation, {
+      // 写通知走不经回退区段的那一份：这里已经在发送的共享区段里（嵌套 enter 会和排着的回退死锁）
+      const notices = {
+        harness: this.harness,
+        currentConversation: () => this.currentConversation(),
+        writeNotice: (notice: NoticeInput) => this.writeNoticeNow(notice)
+      }
+      const result = await maybeAnnounceDate(notices, conversation, {
         today: today(),
         now: this.deps.now()
       })
@@ -1643,35 +1714,24 @@ export class DurableSessionImpl implements DurableSession {
 
   // ─── 系统通知 ───────────────────────────────────
 
-  async writeNotice(notice: NoticeInput): Promise<NoticeResult> {
+  writeNotice(notice: NoticeInput): Promise<NoticeResult> {
+    return this.writeNoticeNow(notice, true)
+  }
+
+  /**
+   * 写一条通知（必要时推迟）。`gated` = 外部入口：在回退区段的共享里写（回退在途就等它做完，通知落在
+   * fork 上，PIN-22/23）；会话内部的调用（已经在某个区段里、或就是回退自己）不经区段。
+   */
+  private async writeNoticeNow(notice: NoticeInput, gated = false): Promise<NoticeResult> {
     const requestId = notice.requestId ?? randomId()
     try {
       return await this.op(async () => {
-        const deferred: DeferredNotice = {
-          requestId,
-          text: notice.text,
-          kind: notice.kind,
-          ...(notice.data === undefined ? {} : { data: notice.data })
+        const release = gated ? await this.section.enter() : undefined
+        try {
+          return await this.writeNoticeInner(notice, requestId)
+        } finally {
+          release?.()
         }
-        // 被中断：任何提交都会开启调度器、把被中断的 run 续上（Q3）
-        if (this.isInterrupted()) {
-          await this.deferNotices([deferred])
-          return { status: 'deferred', requestId }
-        }
-        const conversation = await this.currentConversation()
-        if (!this.isBusy()) {
-          // 空闲但收件箱里留着上次失败的输入：写入会让 durable 带着它们起一轮（R1）
-          const inbox = await this.harness.snapshot(InboxDoc, conversation.id, BG)
-          if (inbox?.items.some((item) => item.mode !== 'write')) {
-            await this.deferNotices([deferred])
-            return { status: 'deferred', requestId }
-          }
-        }
-        const submission = await conversation.submit(
-          { type: 'write', entry: noticeEntryDraft(deferred, this.deps.now()), requestId },
-          BG
-        )
-        return { status: 'submitted', submissionId: submission.id, requestId }
       })
     } catch (error) {
       if (error instanceof SessionClosedError) {
@@ -1681,31 +1741,61 @@ export class DurableSessionImpl implements DurableSession {
     }
   }
 
+  private async writeNoticeInner(notice: NoticeInput, requestId: string): Promise<NoticeResult> {
+    const deferred: DeferredNotice = {
+      requestId,
+      text: notice.text,
+      kind: notice.kind,
+      ...(notice.data === undefined ? {} : { data: notice.data })
+    }
+    // 被中断：任何提交都会开启调度器、把被中断的 run 续上（Q3）
+    if (this.isInterrupted()) {
+      await this.deferNotices([deferred])
+      return { status: 'deferred', requestId }
+    }
+    const conversation = await this.currentConversation()
+    if (!this.isBusy()) {
+      // 空闲但收件箱里留着上次失败的输入：写入会让 durable 带着它们起一轮（R1）
+      const inbox = await this.harness.snapshot(InboxDoc, conversation.id, BG)
+      if (inbox?.items.some((item) => item.mode !== 'write')) {
+        await this.deferNotices([deferred])
+        return { status: 'deferred', requestId }
+      }
+    }
+    const submission = await conversation.submit(
+      { type: 'write', entry: noticeEntryDraft(deferred, this.deps.now()), requestId },
+      BG
+    )
+    return { status: 'submitted', submissionId: submission.id, requestId }
+  }
+
   async notify(text: string, options: NotifyOptions = {}): Promise<void> {
     if (this.closedFlag) return
     const kind = options.kind ?? 'background'
     try {
-      await this.op(async () => {
-        // 去重在路由之前（PIN-09）：送过的、待送达的、窗口里的都不再送；竞态由 durable 的去重兜底
-        if (options.requestId !== undefined && (await this.noticeKnown(options.requestId))) return
-        const notice: PendingNotice = { text, kind, requestId: options.requestId ?? randomId() }
-        if (this.isInterrupted()) {
-          await this.writeNotice(notice)
-          return
-        }
-        if (this.isBusy()) {
-          await this.steerNotices(await this.currentConversation(), [notice])
-          return
-        }
-        if (!this.canAutoResume()) {
-          await this.writeNotice(notice)
-          return
-        }
-        // 合并同一时刻到达的多条：三个子会话同一秒跑完不该起三轮
-        if (this.pendingNotices.some((pending) => pending.requestId === notice.requestId)) return
-        this.pendingNotices.push(notice)
-        this.noticeTimer ??= setTimeout(() => void this.fireNotices(), this.deps.noticeCoalesceMs)
-      })
+      await this.op(() =>
+        this.inSection(async () => {
+          // 去重在路由之前（PIN-09）：送过的、待送达的、窗口里的都不再送；竞态由 durable 的去重兜底
+          if (options.requestId !== undefined && (await this.noticeKnown(options.requestId))) return
+          const notice: PendingNotice = { text, kind, requestId: options.requestId ?? randomId() }
+          if (this.isInterrupted()) {
+            await this.writeNoticeNow(notice)
+            return
+          }
+          if (this.isBusy()) {
+            await this.steerNotices(await this.currentConversation(), [notice])
+            return
+          }
+          if (!this.canAutoResume()) {
+            await this.writeNoticeNow(notice)
+            return
+          }
+          // 合并同一时刻到达的多条：三个子会话同一秒跑完不该起三轮
+          if (this.pendingNotices.some((pending) => pending.requestId === notice.requestId)) return
+          this.pendingNotices.push(notice)
+          this.noticeTimer ??= setTimeout(() => void this.fireNotices(), this.deps.noticeCoalesceMs)
+        })
+      )
     } catch (error) {
       if (!(error instanceof SessionClosedError)) {
         this.deps.logger.warn(`notify failed session=${this.sessionId}: ${errorText(error)}`)
@@ -1731,32 +1821,34 @@ export class DurableSessionImpl implements DurableSession {
     const pending = this.pendingNotices.splice(0)
     if (pending.length === 0 || this.closedFlag) return
     try {
-      await this.op(async () => {
-        const notices = await this.undelivered(await this.currentConversation(), pending)
-        if (notices.length === 0) return
-        if (this.isInterrupted() || !this.canAutoResume()) {
-          for (const notice of notices) await this.writeNotice(notice)
-          return
-        }
-        // 没锁先创建 agent（K3）；创建不成（被拒 / 被取消）就退回写通知，通知不丢
-        if ((await this.ensureAgent()) !== undefined) {
-          for (const notice of notices) await this.writeNotice(notice)
-          return
-        }
-        this.reopenInputs()
-        const conversation = await this.currentConversation()
-        await this.flushDeferred(conversation, 'beforeSend')
-        // 期间用户先开了一轮 → 作为插话汇入；仍空闲 → 起一轮
-        await conversation.submit(
-          {
-            type: 'input',
-            content: notices.map((n) => n.text).join('\n\n'),
-            whenBusy: 'steer',
-            requestId: combinedNoticeId(notices)
-          },
-          BG
-        )
-      })
+      await this.op(() =>
+        this.inSection(async () => {
+          const notices = await this.undelivered(await this.currentConversation(), pending)
+          if (notices.length === 0) return
+          if (this.isInterrupted() || !this.canAutoResume()) {
+            for (const notice of notices) await this.writeNoticeNow(notice)
+            return
+          }
+          // 没锁先创建 agent（K3）；创建不成（被拒 / 被取消）就退回写通知，通知不丢
+          if ((await this.ensureAgent()) !== undefined) {
+            for (const notice of notices) await this.writeNoticeNow(notice)
+            return
+          }
+          this.reopenInputs()
+          const conversation = await this.currentConversation()
+          await this.flushDeferred(conversation, 'beforeSend')
+          // 期间用户先开了一轮 → 作为插话汇入；仍空闲 → 起一轮
+          await conversation.submit(
+            {
+              type: 'input',
+              content: notices.map((n) => n.text).join('\n\n'),
+              whenBusy: 'steer',
+              requestId: combinedNoticeId(notices)
+            },
+            BG
+          )
+        })
+      )
     } catch (error) {
       if (!(error instanceof SessionClosedError)) {
         this.deps.logger.warn(`auto-resume failed session=${this.sessionId}: ${errorText(error)}`)
@@ -1951,15 +2043,18 @@ export class DurableSessionImpl implements DurableSession {
     this.stoppedByUser = true
     const pending = this.takePendingNotices()
     try {
-      await this.op(async () => {
-        // 在途的创建一并取消（K13）：它什么都不写，等着它的发送当作被中止
-        await this.agentLock.cancelCreation()
-        await this.abortConversation()
-        // 推迟的通知被中断 / 残留输入挡着 —— 中止把它们清掉了，现在送达
-        await this.flushDeferred(await this.currentConversation(), 'place')
-        // 合并窗口里的通知不再起轮，改为写入
-        for (const notice of pending) await this.writeNotice(notice)
-      })
+      // 在回退区段里（PIN-22）：回退在途时等它做完，送达的通知落在 fork 上
+      await this.op(() =>
+        this.inSection(async () => {
+          // 在途的创建一并取消（K13）：它什么都不写，等着它的发送当作被中止
+          await this.agentLock.cancelCreation()
+          await this.abortConversation()
+          // 推迟的通知被中断 / 残留输入挡着 —— 中止把它们清掉了，现在送达
+          await this.flushDeferred(await this.currentConversation(), 'place')
+          // 合并窗口里的通知不再起轮，改为写入
+          for (const notice of pending) await this.writeNoticeNow(notice)
+        })
+      )
     } catch (error) {
       if (!(error instanceof SessionClosedError)) throw error
     }
@@ -1992,7 +2087,8 @@ export class DurableSessionImpl implements DurableSession {
   }
 
   async createAgent(options?: CreateAgentOptions): Promise<LockRecord> {
-    return this.op(() => this.agentLock.ensure(options))
+    // 建锁在回退区段里（PIN-22）：锁永远建在当前对话上
+    return this.op(() => this.inSection(() => this.agentLock.ensure(options)))
   }
 
   async destroyAgent(): Promise<void> {
@@ -2030,20 +2126,33 @@ export class DurableSessionImpl implements DurableSession {
    * 残留的输入、当前对话、推迟通知都原样留着。合并窗口里的通知改为写入。
    */
   private async stopForDestroy(): Promise<void> {
+    const { pending, aborted } = await this.haltWork()
+    if (aborted) await this.flushDeferred(await this.currentConversation(), 'place')
+    for (const notice of pending) await this.writeNoticeNow(notice)
+    this.uninstallSpawnedExtensions()
+  }
+
+  /**
+   * 停下（销毁与回退共用）：记一次显式喊停、取走合并窗口里的通知；任何非辅助的 run（当前对话的、被中断
+   * 的、面板追问的子 agent 的，P2-03）都中止 —— 当前对话的中止范围之外还活着的非辅助工作（不在根的
+   * 拥有者链上的子对话）逐个中止。送达留给调用方（回退要送到 fork 上，PIN-23）。
+   */
+  private async haltWork(): Promise<{ pending: PendingNotice[]; aborted: boolean }> {
     this.stoppedByUser = true
     const pending = this.takePendingNotices()
-    // 任何非辅助的 run（当前对话的、被中断的、面板追问的子 agent 的，P2-03）都算
-    if (this.isBusy() || this.isInterrupted() || this.hasRun(undefined)) {
-      await this.abortConversation()
-      // 当前对话的中止范围之外还活着的非辅助工作（不在根的拥有者链上的子对话）逐个中止
-      for (const conversationId of this.primaryConversationsWithWork()) {
-        const conversation = await this.harness.conversation(conversationId, BG)
-        await conversation?.abort(BG)
-      }
-      await this.flushDeferred(await this.currentConversation(), 'place')
+    if (!(this.isBusy() || this.isInterrupted() || this.hasRun(undefined))) {
+      return { pending, aborted: false }
     }
-    for (const notice of pending) await this.writeNotice(notice)
-    // 派生 agent 的按 agent 扩展一并卸掉（记录留着，下次用到时按需重建）
+    await this.abortConversation()
+    for (const conversationId of this.primaryConversationsWithWork()) {
+      const conversation = await this.harness.conversation(conversationId, BG)
+      await conversation?.abort(BG)
+    }
+    return { pending, aborted: true }
+  }
+
+  /** 派生 agent 的按 agent 扩展一并卸掉（记录留着，下次用到时按需重建） */
+  private uninstallSpawnedExtensions(): void {
     for (const extension of this.deps.registry.snapshot().installed()) {
       if (
         extension.name.startsWith(AGENT_EXTENSION_PREFIX) &&
@@ -2053,6 +2162,91 @@ export class DurableSessionImpl implements DurableSession {
       ) {
         this.deps.registry.uninstall(extension)
       }
+    }
+  }
+
+  // ─── 回退 fork（P3-10a） ─────────────────────────
+
+  async rollbackTo(targetEntryId: number, options: RollbackOptions = {}): Promise<RollbackResult> {
+    if (this.closedFlag) return { ok: false, reason: 'closed' }
+    const keep = options.keep === true
+    try {
+      return await this.op(() =>
+        this.section.exclusive(async (drain): Promise<RollbackResult> => {
+          this.assertOpen()
+          // 只读校验（PIN-19/20）：拒绝之前什么都不动 —— 不销毁、不中止、不写
+          const conversation = await this.currentConversation()
+          const refusal = await rollbackTargetRefusal(conversation, targetEntryId)
+          if (refusal !== undefined) return { ok: false, reason: refusal }
+          // 在途的建锁会把锁建在旧对话上：先取消（K13），再等已经进来的受理走完（PIN-22）
+          await this.agentLock.cancelCreation()
+          await drain()
+          const pending = await this.stopForRollback()
+          // 停下写的条目（中止的助手消息……）都比目标新，fork 点不受影响
+          const at = await rollbackForkPoint(conversation, targetEntryId, keep)
+          const forkId = await this.commitRollback(conversation.id, at)
+          await this.deliverAfterRollback(pending)
+          return { ok: true, conversationId: forkId }
+        })
+      )
+    } catch (error) {
+      if (error instanceof SessionClosedError) return { ok: false, reason: 'closed' }
+      throw error
+    }
+  }
+
+  /**
+   * 回退的停下（PIN-21）：有锁走销毁那一套（`agent_closing` 一对、删锁、卸扩展、镜像），停下这一步换成
+   * 不送达的版本；没锁（或销毁已经在途、由它停下了）也照样停一遍 —— 销毁在没锁时什么都不做（F2）。
+   * 交回取走的合并窗口通知（送到 fork 上）。
+   */
+  private async stopForRollback(): Promise<PendingNotice[]> {
+    const halted: { pending?: PendingNotice[] } = {}
+    const stop = async (): Promise<void> => {
+      halted.pending = (await this.haltWork()).pending
+      this.uninstallSpawnedExtensions()
+    }
+    await this.agentLock.destroy(stop)
+    if (halted.pending === undefined) await stop()
+    return halted.pending ?? []
+  }
+
+  /**
+   * 回退的那一个提交：fork（没有前缀 = 新对话；都是 ownerless）+ 指针。fork 空闲、队列为空（PIN-25）：
+   * pi 的 `pi.live` / `pi.inbox` 是 `fork: 'initial'`（创建钩子写空文档）—— 这里只是兜底，万一带过来了
+   * 什么，同一个提交里清掉。`SessionStateDoc` 只动 `currentConversation`。
+   */
+  private commitRollback(from: ConversationId, at: EntryId | undefined): Promise<ConversationId> {
+    return this.raw.commit(async (tx) => {
+      const ownership = { kind: 'ownerless' } as const
+      const record =
+        at === undefined
+          ? await tx.createConversation({ ownership })
+          : await tx.forkConversation(from, at, { ownership })
+      const live = (await tx.doc(LiveDoc, record.id)) as Record<string, unknown>
+      for (const key of Object.keys(live)) delete live[key]
+      const inbox = await tx.doc(InboxDoc, record.id)
+      if (inbox.items.length > 0) inbox.items.splice(0)
+      const state = await tx.doc(SessionStateDoc)
+      state.currentConversation = record.id
+      return record.id
+    }, BG)
+  }
+
+  /** 停下时排干的通知送到 fork 上（PIN-23）：推迟的（fork 空闲 → 当场落条目）、合并窗口里的（写入） */
+  private async deliverAfterRollback(pending: readonly PendingNotice[]): Promise<void> {
+    const fork = await this.currentConversation()
+    await this.flushDeferred(fork, 'place')
+    for (const notice of pending) await this.writeNoticeNow(notice)
+  }
+
+  /** 在回退区段的共享里做一件事（PIN-22；受理阶段，绝不包住等 run 落定） */
+  private async inSection<T>(work: () => Promise<T>): Promise<T> {
+    const release = await this.section.enter()
+    try {
+      return await work()
+    } finally {
+      release()
     }
   }
 
@@ -2119,10 +2313,12 @@ export class DurableSessionImpl implements DurableSession {
   // ─── 配置 ───────────────────────────────────────
 
   async setThinkingLevel(level: ThinkingLevel): Promise<void> {
-    await this.op(async () => {
-      const conversation = await this.currentConversation()
-      await conversation.configure({ thinkingLevel: level }, BG)
-    })
+    await this.op(() =>
+      this.inSection(async () => {
+        const conversation = await this.currentConversation()
+        await conversation.configure({ thinkingLevel: level }, BG)
+      })
+    )
   }
 
   // ─── 用户询问 ───────────────────────────────────

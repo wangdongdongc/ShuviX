@@ -6,7 +6,8 @@
  *      D10-45..53 网关 · P3-06-30 网关 getAgentInfo（不带 ensure 读门面 / peek；ensure 的次序与拒绝）
  *   F  D10-55 statusOf（P2-10-32：interrupted，开着 / 镜像）· D10-56 被拒的子会话发送 · D10-57 stop（含被中断的）·
  *      D10-58 答复（P2-10-28：lastAnswer）
- *   G  D10-59 列表（P3-07：新格式 = peek → viewSnapshot().messages）· D10-61 回退 / 截断
+ *   G  D10-59 列表（P3-07：新格式 = peek → viewSnapshot().messages）· D10-61 回退 / 截断 ·
+ *      P3-10a-23 旧格式的回退拒绝（桌面守卫）
  *   H  D10-64 closeAll 之后
  * （D10-54 Chrome 侧栏的 respondToInput：channel.test.ts 的 CH-5 钉路由，D10-35 钉 getAgentSession 只看宿主。）
  *
@@ -956,6 +957,19 @@ describe('D10-61 回退 / 截断', () => {
     expect(await messageService.resolveRollbackTarget('old', 'm')).toBeUndefined()
     expect(await messageService.rollbackToMessage('old', 'm')).toBe(false)
     expect(await messageService.truncateAfterMessage('old', 'm')).toBe(false)
+  })
+
+  it('P3-10a-23 旧格式会话的拒绝留在桌面守卫里：undefined / false；宿主从不打开、rollbackTo 从不调用', async () => {
+    insert('old', { storageKind: 'harness-v3-jsonl' })
+    // 即便宿主里恰好有一个同 id 的实例，守卫也不碰它
+    const durable = fakeHost.put('old')
+    const before = fakeHost.calls.length
+    expect(await messageService.resolveRollbackTarget('old', '7')).toBeUndefined()
+    expect(await messageService.rollbackToMessage('old', '7')).toBe(false)
+    expect(await messageService.truncateAfterMessage('old', '7')).toBe(false)
+    expect(fakeHost.calls.slice(before)).toEqual([])
+    expect(durable.callsOf('rollbackTo')).toEqual([])
+    expect(durable.calls).toEqual([])
   })
 })
 
