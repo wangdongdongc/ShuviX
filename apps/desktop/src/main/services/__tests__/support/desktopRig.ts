@@ -6,7 +6,7 @@
  *
  *  - **替身**只到外部为止：DB 换成内存里的 node:sqlite（跑真迁移）、目录换成临时目录、electron、模型注册表
  *    （= 这个进程的 faux 目录）、MCP（没有服务器）、技能（空）、沙箱（不启用）、bot（没有）、档案表
- *    （`PROFILES`：每份档案的正文带 `ROLE:<名字>` 标记，faux 路由据此认人）、用户策略（每例给 md 原文）、
+ *    （`defaultProfiles()`：每份档案的正文带 `ROLE:<名字>` 标记，faux 路由据此认人）、用户策略（每例给 md 原文）、
  *    询问通道（`userInputBroker.requestUserInputFor`：记下询问、按脚本答）、设置（可变表）、日志（全记下）。
  *    `tools/allTools` 仍是空的：内置工具只有 `session`（真 SessionTool，import 即自注册）与本夹具经真
  *    `registerBuiltinTool` 注册的 `probe`（safe，记下调用方身份）、`askOp`（unsafe，空身体，由策略设门）。
@@ -21,7 +21,7 @@
  * 替身登记在本模块里（vi.mock 在 import 它的测试文件之前生效）：测试文件**第一个** import 它。
  */
 import { vi } from 'vitest'
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -852,13 +852,6 @@ export function lastUserText(request: FauxKit['requests'][number]): string {
 /** 一个请求的全部用户消息文本 */
 export function userTexts(request: FauxKit['requests'][number]): string[] {
   return request.messages.filter((m) => m.role === 'user').map((m) => messageText(m))
-}
-
-/** 调试：把值写进草稿目录（仅开发时用） */
-export function dump(value: unknown, name = 'dbg'): void {
-  const dir = process.env.P212_DUMP_DIR
-  if (!dir) return
-  writeFileSync(join(dir, `${name}.json`), JSON.stringify(value, null, 1))
 }
 
 export function sleep(ms: number): Promise<void> {
