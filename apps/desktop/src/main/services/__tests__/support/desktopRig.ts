@@ -21,7 +21,7 @@
  * 替身登记在本模块里（vi.mock 在 import 它的测试文件之前生效）：测试文件**第一个** import 它。
  */
 import { vi } from 'vitest'
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -360,6 +360,8 @@ export interface Router {
   readonly unmatched: string[]
   /** 某条路由还剩几个应答 */
   left(name: string): number
+  /** 某条路由应答过的请求（按次序） */
+  requests(name: string): FauxKit['requests']
 }
 
 /** 系统提示词里的 `ROLE:<档案>`（可选：再按对话第一条用户消息区分同档案的两条会话） */
@@ -377,6 +379,7 @@ export function routedSteps(kit: FauxKit): Router {
   }> = []
   const served: string[] = []
   const unmatched: string[] = []
+  const indices: Array<{ name: string; index: number }> = []
   const dispatcher: FauxResponseStep = async (context, options, state, model) => {
     const users = context.messages.filter((m) => m.role === 'user')
     const request: RoutedRequest = {
@@ -393,6 +396,7 @@ export function routedSteps(kit: FauxKit): Router {
       )
     }
     served.push(route.name)
+    indices.push({ name: route.name, index: kit.requests.length - 1 })
     const step = route.steps.shift()!
     return typeof step === 'function' ? step(context, options, state, model) : step
   }
@@ -410,7 +414,9 @@ export function routedSteps(kit: FauxKit): Router {
     push: (name, ...steps) => push(name, steps),
     served,
     unmatched,
-    left: (name) => routes.find((r) => r.name === name)?.steps.length ?? 0
+    left: (name) => routes.find((r) => r.name === name)?.steps.length ?? 0,
+    requests: (name) =>
+      indices.filter((entry) => entry.name === name).map((entry) => kit.requests[entry.index]!)
   }
 }
 
@@ -435,6 +441,9 @@ export interface Proc {
   readonly permissionReview: typeof import('../../permissionReview')
   readonly sessionTriggerFacts: typeof import('../../sessionTriggerFacts')
   readonly agentSessionModule: typeof import('../../agentSession')
+  readonly transcriptSource: typeof import('../../transcriptSource')
+  /** `spyToolHost` 时真 ToolHost 收到的调用 */
+  readonly toolHostCalls: ToolHostCalls
   /** onRunStateChange 的记录（会话 id → 依次报出的状态） */
   readonly states: Map<string, string[]>
   /** beforeAbort 的记录（会话 id，按次序） */
@@ -446,6 +455,17 @@ export interface Proc {
 export interface BootOptions {
   /** 额外的宿主依赖覆盖（从不覆盖 toolHost / onDrivenSettled） */
   deps?: Partial<SessionHostDeps>
+  /**
+   * 给真桌面 ToolHost 套一层记录（K5-04）：仍是 `createDesktopToolHost` 造的那一个（sessionOf 同样读单例
+   * 宿主），只是每次 resolve / rebuild 记下入参
+   */
+  spyToolHost?: boolean
+}
+
+/** 真 ToolHost 收到的调用（`spyToolHost`） */
+export interface ToolHostCalls {
+  resolve: unknown[]
+  rebuild: Array<{ record: { kind: string; agentId?: string }; context: { sessionId: string } }>
 }
 
 let current: Proc | undefined
@@ -475,6 +495,7 @@ export async function bootProcess(options: BootOptions = {}): Promise<Proc> {
   const sessionTriggerFacts = await import('../../sessionTriggerFacts')
   const agentSessionModule = await import('../../agentSession')
   const toolContext = await import('../../toolContext')
+  const transcriptSource = await import('../../transcriptSource')
   const { registerBuiltinTool } = await import('../../toolRegistry')
   const { setBuiltinMcpAgentResolver } = await import('../../mcpService')
   // 真 session 工具 import 即自注册；派发工具的展示项同理（工厂不在内置表里 —— 它按 agent 解析）
@@ -501,6 +522,31 @@ export async function bootProcess(options: BootOptions = {}): Promise<Proc> {
   toolContext.setPermissionReviewer(permissionReview.reviewPermissionRequest)
   setBuiltinMcpAgentResolver(sessionHostModule.sessionAgentResolver())
 
+  const toolHostCalls: ToolHostCalls = { resolve: [], rebuild: [] }
+  let spied: Partial<SessionHostDeps> = {}
+  if (options.spyToolHost) {
+    const { createDesktopToolHost } = await import('../../../agents/agentHost')
+    const real = createDesktopToolHost({
+      sessionOf: (sessionId) => sessionHostModule.getSessionHost().get(sessionId)
+    })
+    spied = {
+      toolHost: {
+        buildBuiltinTools: (request) => real.buildBuiltinTools(request),
+        resolveAgentTools: (request, opts) => {
+          toolHostCalls.resolve.push(request)
+          return real.resolveAgentTools(request, opts)
+        },
+        rebuildAgentTools: (record, context) => {
+          toolHostCalls.rebuild.push({
+            record: record as ToolHostCalls['rebuild'][number]['record'],
+            context
+          })
+          return real.rebuildAgentTools(record, context)
+        }
+      }
+    }
+  }
+
   const kit = fauxKit()
   const states = new Map<string, string[]>()
   const aborts: string[] = []
@@ -515,7 +561,8 @@ export async function bootProcess(options: BootOptions = {}): Promise<Proc> {
         aborts.push(sessionId)
         sessionHostModule.beforeSessionAbort(sessionId)
       },
-      ...options.deps
+      ...options.deps,
+      ...spied
     },
     { realToolHost: true }
   )
@@ -540,6 +587,8 @@ export async function bootProcess(options: BootOptions = {}): Promise<Proc> {
     permissionReview,
     sessionTriggerFacts,
     agentSessionModule,
+    transcriptSource,
+    toolHostCalls,
     states,
     aborts,
     track: <T>(promise: Promise<T>): Promise<T> => {
@@ -796,6 +845,13 @@ export function lastUserText(request: FauxKit['requests'][number]): string {
 /** 一个请求的全部用户消息文本 */
 export function userTexts(request: FauxKit['requests'][number]): string[] {
   return request.messages.filter((m) => m.role === 'user').map((m) => messageText(m))
+}
+
+/** 调试：把值写进草稿目录（仅开发时用） */
+export function dump(value: unknown, name = 'dbg'): void {
+  const dir = process.env.P212_DUMP_DIR
+  if (!dir) return
+  writeFileSync(join(dir, `${name}.json`), JSON.stringify(value, null, 1))
 }
 
 export function sleep(ms: number): Promise<void> {
