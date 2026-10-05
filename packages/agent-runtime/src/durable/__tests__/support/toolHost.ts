@@ -53,10 +53,10 @@ export interface TestToolHostOptions {
   /** 解析时报的沙箱钉子（缺省 false） */
   sandbox?: boolean
   /**
-   * 派发工具（`set.agent`）的实现（P2-03）：缺省一个只回 `agent ok` 的占位。给不给照旧按
-   * `offersDispatchTool`（名单含 `agent`，且 root 或 `canSpawn`）
+   * 派发工具（`set.agent`）的实现（P2-03）：缺省一个只回 `agent ok` 的占位；可按会话给（P2-05：真派发工具
+   * 带着会话 id）。给不给照旧按 `offersDispatchTool`（名单含 `agent`，且 root 或 `canSpawn`）
    */
-  dispatchTool?: ToolRegistration
+  dispatchTool?: ToolRegistration | ((sessionId: string) => ToolRegistration)
 }
 
 export interface TestToolHost extends ToolHost {
@@ -169,6 +169,11 @@ export function makeTestToolHost(
   for (const [name, decls] of Object.entries(options.mcp ?? {})) {
     servers.set(name, fakeMcpServer(name, decls))
   }
+  const dispatchOf = (sessionId: string): ToolRegistration => {
+    const source = options.dispatchTool
+    if (source === undefined) return dispatchTool()
+    return typeof source === 'function' ? source(sessionId) : source
+  }
   const agentToolsOf = (sessionId: string): readonly ToolRegistration[] => {
     const source = options.agentTools
     if (source === undefined) return []
@@ -235,7 +240,7 @@ export function makeTestToolHost(
           ? undefined
           : [...(request.extraTools ?? []), ...(options.extraTools ?? [])]
       const resolved: ResolvedAgentTools = {
-        ...(offersDispatchTool(request) ? { agent: options.dispatchTool ?? dispatchTool() } : {}),
+        ...(offersDispatchTool(request) ? { agent: dispatchOf(request.sessionId) } : {}),
         ...(skills.length > 0 ? { skill: skillTool(skills) } : {}),
         skills,
         mcp,
@@ -259,7 +264,7 @@ export function makeTestToolHost(
         ...('canSpawn' in record ? { canSpawn: record.canSpawn } : {})
       })
       const set: AgentToolSet = {
-        ...(dispatch ? { agent: options.dispatchTool ?? dispatchTool() } : {}),
+        ...(dispatch ? { agent: dispatchOf(sessionId) } : {}),
         ...(record.skills.length > 0 ? { skill: skillTool(record.skills) } : {}),
         mcp: Object.entries(record.mcp).map(([name, declarations]) => {
           const server = servers.get(name) ?? fakeMcpServer(name, [])
