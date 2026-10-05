@@ -132,8 +132,8 @@ export function registerAgentHandlers(): void {
       })
   )
 
-  /** 读取运行时 Agent 的实时信息（systemPrompt/工具/模型）。pi-durable 会话的请求是现解析的，phase 3
-   *  的视图接上之前恒为 null；`ensure` 不再为它打开会话 / 创建 agent。TODO(pi-durable p3) */
+  /** 读取根 agent 的运行时快照（systemPrompt / 工具 / 模型 / 思考档位）；`ensure` 先创建 agent（不请求
+   *  LLM），没有可用模型时答 null（见 DefaultChatGateway.getAgentInfo） */
   ipcMain.handle('agent:getInfo', (_event, sessionId: string, options?: { ensure?: boolean }) =>
     operationContext.run(createElectronContext(sessionId), () =>
       chatGateway.getAgentInfo(sessionId, options)

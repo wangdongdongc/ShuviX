@@ -1,6 +1,7 @@
 import {
   clearReviewState,
   clearSessionDecisions,
+  SessionClosedError,
   type AdmitResult,
   type DrivenRun,
   type DrivenSendOptions,
@@ -223,11 +224,27 @@ export class AgentSession {
   }
 
   /**
-   * 运行时信息快照（设置页「监视器 → 智能体」）。durable 的请求是现解析的，没有一个「内存里的 Agent
-   * 对象」可读 —— 在 phase 3 的视图接上之前如实答 null（PIN-14）。TODO(pi-durable p3)
+   * 创建 agent（上锁）而不发任何请求 —— `agent.getInfo(…, {ensure})` 用（P3-06）。已锁 = 无操作；
+   * 模型被拒 / 被取消 → `AgentCreationError`，其余失败原样上抛。
+   */
+  async createAgent(): Promise<void> {
+    await this.durable.createAgent()
+  }
+
+  /**
+   * 根 agent 的运行时快照（P3-06；设置页「监视器 → 智能体」、`agent.getInfo`）：锁所在对话的
+   * `agentInfo`（PIN-09：锁的对话，不重读当前对话）—— 系统提示词与下一次请求逐字节相同。没锁 → null；
+   * 会话在读的途中被关掉（LRU）→ null。纯读：不创建 agent、不开启调度器。
    */
   async getRuntimeInfo(): Promise<AgentRuntimeInfo | null> {
-    return null
+    const lock = this.durable.lock
+    if (lock === undefined) return null
+    try {
+      return (await this.durable.agentInfo(lock.conversationId)) ?? null
+    } catch (err) {
+      if (err instanceof SessionClosedError) return null
+      throw err
+    }
   }
 
   /** 当前对话有 run 在跑（被中断的会话不算：什么都没在跑） */

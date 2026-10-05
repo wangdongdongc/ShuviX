@@ -36,6 +36,7 @@ import type {
   UserSendOptions
 } from '@shuvix/agent-runtime'
 import type { UserInput } from '@earendil-works/pi-durable'
+import type { AgentRuntimeInfo } from '@shuvix/chat-protocol/chatApi'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import type { ThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
 
@@ -292,6 +293,15 @@ export class FakeDurableSession implements DurableSession {
     this.use()
     this.lock ??= lockRecord()
     return this.lock
+  }
+
+  /** agentInfo 的脚本（按对话；没设的对话 = undefined） */
+  readonly infos = new Map<number, AgentRuntimeInfo>()
+
+  async agentInfo(conversationId: number): Promise<AgentRuntimeInfo | undefined> {
+    this.calls.push(['agentInfo', conversationId])
+    if (this.closed) throw new Error(`Session ${this.sessionId} is closed`)
+    return this.infos.get(conversationId)
   }
 
   async destroyAgent(): Promise<void> {

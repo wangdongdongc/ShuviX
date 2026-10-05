@@ -78,6 +78,7 @@ import {
   type UserInput
 } from '@earendil-works/pi-durable'
 import type { HarnessSettings, Registry, ToolRegistration } from '@earendil-works/pi-durable'
+import type { AgentRuntimeInfo } from '@shuvix/chat-protocol/chatApi'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import type { ThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
 import type { PromptVars, PromptVarsCtx } from '../agentProfile/promptVars'
@@ -103,7 +104,11 @@ import {
   type LockRecord
 } from './lock'
 import { maybeAnnounceDate } from './prompt/dateNotice'
-import type { PromptExtensions } from './prompt/sections'
+import {
+  renderSystemPrompt,
+  replaySections,
+  type PromptExtensions
+} from './prompt/sections'
 import type { AgentConfig, InterruptedSendPolicy, ModelCatalog, RunState, ToolHost } from './seams'
 import { SpawnCoordinatorImpl, type SpawnCoordinator } from './spawn'
 import type { LockModel, ModelSelection } from '../models/lockModel'
@@ -309,6 +314,19 @@ export interface DurableSession {
   readonly pendingInputSummaries: string[]
   /** 此刻的锁记录（同步；undefined = 这条会话现在没有 agent） */
   readonly lock: LockRecord | undefined
+  /**
+   * 一个对话上 agent 的运行时快照（P3-06；纯读：不写、不开启调度器、不调任何创建 seam、不连 MCP）：
+   *  - `systemPrompt`：现渲染的段落（PIN-07）—— 与**下一次请求**逐字节相同；一段抛错保留它已显示的文本、
+   *    记一条警告，从不拒绝；
+   *  - `tools`：对话的 agent 此刻提供的工具，按请求次序（锁的 K6 次序），带 label 与参数名；
+   *  - `model`：按注册表现查；查不到（provider 被删）→ 只有 provider / id 的兜底（PIN-05），从不抛；
+   *  - `thinkingLevel`：活的（`setThinkingLevel` 之后立刻可见）；
+   *  - `messageCount`：上下文里非 system 的消息数（PIN-04）；
+   *  - `isStreaming`：这个对话有 run 且调度器在跑（被中断 = false）。
+   * 锁所在的对话与派生 agent（含宿主派发的 hook agent）的对话有快照；没锁的根、不认识的对话 → undefined
+   * （PIN-02）。句柄已关 → 以 `SessionClosedError` 拒绝。
+   */
+  agentInfo(conversationId: number): Promise<AgentRuntimeInfo | undefined>
   /**
    * 派生 agent 协调器（P2-03）：派发工具经它建子对话、等回答；面板的追问 / 软停止 / 销毁也走它。
    * 不发 ChatEvent（那是 P2-05 的路由）。
@@ -1346,6 +1364,82 @@ export class DurableSessionImpl implements DurableSession {
       const status = record.state.status
       return { live: status !== 'terminal', abortRequested: record.abortRequested }
     })
+  }
+
+  // ─── 运行时快照（P3-06） ─────────────────────────
+
+  async agentInfo(conversationId: number): Promise<AgentRuntimeInfo | undefined> {
+    return this.op(async () => {
+      const id = conversationId as ConversationId
+      const lock = this.agentLock.current
+      const spawned = this.directory.identity(id) !== undefined
+      // 有 agent 的对话才有快照：派生 agent（含 hook agent）的对话，或锁所在的那个（PIN-02 / PIN-09）
+      if (!spawned && lock?.conversationId !== id) return undefined
+      // 原始 Harness 上的读：解析 agent、读上下文都不开启调度器
+      const conversation = await this.raw.conversation(id, BG)
+      if (conversation === undefined) return undefined
+      const agent = await conversation.agent(BG)
+      const view = await conversation.context(BG)
+      const shown = replaySections(view.messages)
+      // 与 durable 准备请求时同样的输入；执行环境不建（ShuviX 的段落不读它，建它可能有副作用）
+      const systemPrompt = await renderSystemPrompt(
+        agent.sections,
+        { conversationId: id, agent, env: undefined, shown: Object.fromEntries(shown), read: this.raw },
+        shown,
+        (key, error) =>
+          this.deps.logger.warn(
+            `session ${this.sessionId}: rendering system prompt section "${key}" of conversation ${id} failed; keeping its shown text: ${errorText(error)}`
+          ),
+        BG
+      )
+      const ref = agent.model ?? (spawned ? this.directory.record(id)?.model : lock?.model)
+      return {
+        systemPrompt,
+        model: this.modelInfo(ref),
+        thinkingLevel: agent.thinkingLevel as ThinkingLevel,
+        tools: agent.tools.map((tool) => ({
+          name: tool.name,
+          label: (tool as { label?: string }).label ?? tool.name,
+          description: tool.description,
+          parameters: Object.keys(
+            (tool.parameters as { properties?: Record<string, unknown> } | undefined)?.properties ??
+              {}
+          )
+        })),
+        messageCount: view.messages.filter((message) => message.role !== 'system').length,
+        isStreaming: this.schedulerRunning && this.hasRun(id)
+      }
+    })
+  }
+
+  /** 模型快照：注册表现查；查不到 → provider / id 之外全是零值（PIN-05） */
+  private modelInfo(ref: { provider: string; modelId: string } | undefined): AgentRuntimeInfo['model'] {
+    const provider = ref?.provider ?? ''
+    const id = ref?.modelId ?? ''
+    const model =
+      ref === undefined ? undefined : this.deps.modelCatalog.registry.models.getModel(provider, id)
+    if (model === undefined) {
+      return {
+        provider,
+        id,
+        name: id,
+        api: '',
+        contextWindow: 0,
+        maxTokens: 0,
+        reasoning: false,
+        input: []
+      }
+    }
+    return {
+      provider: model.provider,
+      id: model.id,
+      name: model.name,
+      api: model.api,
+      contextWindow: model.contextWindow,
+      maxTokens: model.maxTokens,
+      reasoning: model.reasoning,
+      input: [...model.input]
+    }
   }
 
   // ─── 日期通知 ───────────────────────────────────

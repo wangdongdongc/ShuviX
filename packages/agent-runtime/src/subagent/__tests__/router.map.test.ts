@@ -13,6 +13,7 @@ import { registerHostCleanup } from '../../durable/__tests__/support/host'
 import { callAgent, childOf, dispatchTask, PROFILES } from '../../durable/__tests__/support/spawn'
 import {
   CALL,
+  fakeAgentInfo,
   fakeSession,
   hostR,
   routerKit,
@@ -210,7 +211,8 @@ describe('router · mapping and the index', () => {
       })
     }
     expect(kit.ends()).toHaveLength(3)
-    expect(await kit.router.getRuntimeInfo('sub-a1')).toBeNull()
+    // P3-06：认识的 agentId 读它会话里那个子对话的快照；不认识的仍是 null
+    expect(await kit.router.getRuntimeInfo('sub-a1')).toEqual(fakeAgentInfo(2))
     expect(await kit.router.getRuntimeInfo('sub-x')).toBeNull()
   })
 

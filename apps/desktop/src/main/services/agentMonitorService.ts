@@ -2,13 +2,15 @@
  * 智能体监控服务（桌面宿主）—— 设置页「监视器 → 智能体」的数据源。
  *
  * 旧实现读 agent-runtime 的 `agentRuntimeRegistry`（pi 0.80 AgentHarness 的事件影子），那个登记簿
- * 随 pi-durable 切换（P1-01）一起删除了。在 durable 会话的监控数据接上之前两个入口都答「没有」：
- * 列表为空、详情为 null。TODO(pi-durable p3): 从 SessionHost / durable 的 LiveDoc / UsageDoc 取数。
+ * 随 pi-durable 切换（P1-01）一起删除了。详情（P3-06）读 durable 会话的 `agentInfo`；列表在 durable 的
+ * 运行时数据接上之前答「没有」。TODO(pi-durable p3): 列表从 SessionHost / durable 的 LiveDoc / UsageDoc 取数。
  *
  * 血缘排序（orderByLineage）是纯函数，原样保留 —— 数据源换了，分组与注意力排序的规则不变。
  */
 import type { AgentMonitorEntry } from '@shuvix/chat-protocol/types/agentMonitor'
 import type { AgentRuntimeInfo } from '@shuvix/chat-protocol/chatApi'
+import { agentManager } from '../agents/AgentManager'
+import { sessionService } from './sessionService'
 
 /**
  * 全部活跃 agent 运行时，按血缘分组、组间按"最该被注意"排序。
@@ -89,9 +91,16 @@ function orderGroup(members: AgentMonitorEntry[]): AgentMonitorEntry[] {
 }
 
 /**
- * 单个 agent 运行时的**完整**快照（展开某条时按需拉一次）。
- * TODO(pi-durable p3): 接 durable 的运行时数据；现在列表恒空，没有可展开的条目。
+ * 单个 agent 运行时的**完整**快照（展开某条时按需拉一次；P3-06）：系统提示词与下一次请求逐字节相同。
+ *
+ * 两类 agent 住在不同地方，按 agentId 分派：根 agent 的 agentId 即会话 id（打开着的会话，读它锁所在的
+ * 对话）；派生 agent（含 hook agent）在路由的索引里（路由按它的会话与子对话读）。**只读已有的**：从不
+ * 打开会话、从不创建 agent —— 没开着、没锁、不认识 / 已销毁的 agentId 都答 null（轮询与点击之间的
+ * 正常竞态）。
  */
-export async function getAgentRuntimeDetail(_agentId: string): Promise<AgentRuntimeInfo | null> {
+export async function getAgentRuntimeDetail(agentId: string): Promise<AgentRuntimeInfo | null> {
+  const session = sessionService.getAgentSession(agentId)
+  if (session) return await session.getRuntimeInfo()
+  if (agentManager.has(agentId)) return await agentManager.getRuntimeInfo(agentId)
   return null
 }

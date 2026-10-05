@@ -20,6 +20,7 @@ import {
   type ToolExecutionApi,
   type ToolRegistration
 } from '@earendil-works/pi-durable'
+import type { AgentRuntimeInfo } from '@shuvix/chat-protocol/chatApi'
 import type { ChatEvent } from '@shuvix/chat-protocol/events'
 import type { TaskInfo } from '@shuvix/chat-protocol/types/task'
 import type { SelectableThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
@@ -314,6 +315,8 @@ export interface FakeSpawnScript {
   /** 派发：拿到参数自己决定何时 onCreated、交回什么（缺省：建好就答 'found'） */
   spawn?: (params: SpawnParams, context: Context) => Promise<SpawnOutcome>
   continue?: (conversationId: number, text: string) => Promise<SpawnOutcome>
+  /** `agentInfo` 的快照（缺省 `fakeAgentInfo`；返回 undefined = 那个对话没有 agent） */
+  info?: (conversationId: number) => AgentRuntimeInfo | undefined
 }
 
 export interface FakeSession {
@@ -322,6 +325,8 @@ export interface FakeSession {
   readonly continueCalls: [number, string][]
   readonly interruptCalls: number[]
   readonly destroyCalls: number[]
+  /** `agentInfo` 被问过的对话（P3-06） */
+  readonly infoCalls: number[]
 }
 
 /** 建好的信息（缺省 agentId sub-a1、对话 2、深度 1） */
@@ -360,12 +365,39 @@ export function fakeSession(script: FakeSpawnScript = {}): FakeSession {
     destroy: async (conversationId: number) => void destroyCalls.push(conversationId),
     ensureInstalled: async () => {}
   }
+  const infoCalls: number[] = []
   const session = {
     sessionId: 's1',
+    closed: false,
     agents,
-    agentIdentity: () => undefined
+    agentIdentity: () => undefined,
+    agentInfo: async (conversationId: number) => {
+      infoCalls.push(conversationId)
+      return script.info?.(conversationId) ?? fakeAgentInfo(conversationId)
+    }
   } as unknown as DurableSession
-  return { session, spawnCalls, continueCalls, interruptCalls, destroyCalls }
+  return { session, spawnCalls, continueCalls, interruptCalls, destroyCalls, infoCalls }
+}
+
+/** 会话桩 `agentInfo` 的缺省快照（P3-06：对话 id 写进系统提示词，好认出路由读的是哪个对话） */
+export function fakeAgentInfo(conversationId: number): AgentRuntimeInfo {
+  return {
+    systemPrompt: `fake info of conversation ${conversationId}`,
+    model: {
+      provider: 'faux',
+      id: 'faux-1',
+      name: 'faux-1',
+      api: 'faux',
+      contextWindow: 1000,
+      maxTokens: 100,
+      reasoning: false,
+      input: ['text']
+    },
+    thinkingLevel: 'off',
+    tools: [],
+    messageCount: 0,
+    isStreaming: false
+  }
 }
 
 /** 一次工具调用的 scope（api 只是个占位对象） */

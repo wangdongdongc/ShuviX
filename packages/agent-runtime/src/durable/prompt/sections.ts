@@ -25,13 +25,15 @@
  *    `Updated system prompt section "project_prompt": …`，key 对模型可见。避开 durable 保留的 `instructions`。
  */
 import type { Context } from '@earendil-works/chord'
+import type { Message } from '@earendil-works/pi-ai'
 import {
   defineExtension,
   section,
   type ConversationId,
   type DocumentReader,
   type Extension,
-  type PromptInput
+  type PromptInput,
+  type PromptSection
 } from '@earendil-works/pi-durable'
 import type { AgentKind } from '../../agentProfile/promptVars'
 import { KNOWLEDGE_TOOL_NAME } from '../../knowledge/knowledgeTool'
@@ -296,4 +298,53 @@ export function createPromptExtensions(host: PromptHost): PromptExtensions {
     get,
     select: (spec) => promptExtensionsFor(spec).map(get)
   }
+}
+
+// ─────────────────────────── 只读渲染（P3-06，agentInfo） ───────────────────────────
+
+/**
+ * 重放 system 消息里的段落（durable `replaySections` 的同一口径，它不从包根导出）：按次序原地设值、
+ * `null` 删掉、删了再加排到末尾。
+ */
+export function replaySections(messages: readonly Message[]): Map<string, string> {
+  const shown = new Map<string, string>()
+  for (const message of messages) {
+    if (message.role !== 'system' || message.sections === undefined) continue
+    for (const [key, value] of Object.entries(message.sections)) {
+      if (value === null) shown.delete(key)
+      else shown.set(key, value)
+    }
+  }
+  return shown
+}
+
+/**
+ * 按 durable 准备请求时的同一口径渲染一个 agent 的系统提示词（P3-06 PIN-07：**下一次请求**会带的那份）：
+ * 逐段渲染（`undefined` 缺席；`tag: false` 原样，否则 `<key>\n…\n</key>`）；一段抛错 → 保留它此刻已显示
+ * 的文本（没有就缺席）并 `report`，从不拒绝。段落之间以 "\n\n" 拼接、跳过空段 —— 正是 durable 补上增量
+ * 之后 pi-ai `getCurrentSystemPrompt` 读到的那份（ShuviX 的 system 消息 `content` 恒为空）。
+ * 纯读：只经 `input.read` 读文档，不写任何东西。
+ */
+export async function renderSystemPrompt(
+  sections: readonly PromptSection[],
+  input: PromptInput,
+  shown: ReadonlyMap<string, string>,
+  report: (key: string, error: unknown) => void,
+  context: Context
+): Promise<string> {
+  const desired = new Map<string, string>()
+  for (const entry of sections) {
+    let text: string | undefined
+    try {
+      text = await entry.render(input, context)
+    } catch (error) {
+      report(entry.key, error)
+      const kept = shown.get(entry.key)
+      if (kept !== undefined) desired.set(entry.key, kept)
+      continue
+    }
+    if (text === undefined) continue
+    desired.set(entry.key, entry.tag === false ? text : `<${entry.key}>\n${text}\n</${entry.key}>`)
+  }
+  return [...desired.values()].filter((part) => part.length > 0).join('\n\n')
 }
