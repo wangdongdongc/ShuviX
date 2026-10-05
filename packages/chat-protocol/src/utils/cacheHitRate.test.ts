@@ -6,7 +6,7 @@
  *    面板靠这一点把「尚无调用」画成空占位，而不是 0%。
  *  - **写入进分母、不进分子**：只有写入（Anthropic 首次调用的形状）是 0%，不是 null，也不是
  *    被忽略；三项都进分母，分母既不是 input + cacheRead，也不是只有 input。
- *  - **只做算术**：传入完整的 `AgentMonitorCacheUsage` 时不看 `reported` / `calls`
+ *  - **只做算术**：传入完整的 `AgentMonitorCacheUsage` 时不看 `reported` / `last`
  *    （「provider 从不上报」由调用方用 reported 门掉），也不修改入参。
  *
  * 负数 / NaN 入参不钉：上游注册中心已按 `|| 0` 归零，这里的行为不是契约。
@@ -18,7 +18,7 @@
  *   C-5  三项都有 → cacheRead / 三项之和
  *   C-6  三项各 1 → 1/3
  *   C-7  超大数不溢出
- *   C-8  完整的 AgentMonitorCacheUsage：reported=false / calls=0 不影响算术
+ *   C-8  完整的 AgentMonitorCacheUsage：reported=false / last 不影响算术
  *   C-9  不修改入参（冻结对象不抛、前后深比较相等）
  */
 import { describe, expect, it } from 'vitest'
@@ -61,9 +61,8 @@ describe('cacheHitRate', () => {
     expect(Number.isFinite(rate)).toBe(true)
   })
 
-  it('C-8 完整的 AgentMonitorCacheUsage：只用三项做算术，不看 reported 与 calls', () => {
+  it('C-8 完整的 AgentMonitorCacheUsage：只用三项做算术，不看 reported 与 last', () => {
     const usage: AgentMonitorCacheUsage = {
-      calls: 0,
       input: 100,
       cacheRead: 100,
       cacheWrite: 0,

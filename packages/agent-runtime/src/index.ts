@@ -587,6 +587,8 @@ export {
   type PlacedInfo
 } from './durable/durableSession'
 export { type RollbackOptions, type RollbackRefusal, type RollbackResult } from './durable/rollback'
+// 监控快照（P3-13）：`DurableSession.monitorSnapshot()` 的一行（宿主补标题 / 根显示名即 AgentMonitorEntry）
+export { type AgentMonitorRow } from './durable/monitorSnapshot'
 export {
   DEFAULT_INTERRUPTED_SEND_POLICY,
   DEFAULT_MAX_IDLE_OPEN,

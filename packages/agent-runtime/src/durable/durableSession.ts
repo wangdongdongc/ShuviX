@@ -75,6 +75,7 @@ import {
   InboxDoc,
   LiveDoc,
   ROOT_CONVERSATION_ID,
+  UsageDoc,
   UserEntry,
   type CommitPublication,
   type Conversation,
@@ -103,7 +104,7 @@ import {
   type SessionProjector
 } from './projection/sessionProjector'
 import { AgentDirectory } from './agentDirectory'
-import { rootAgentIdentity, type AgentIdentity } from './agentRecord'
+import { rootAgentIdentity, type AgentIdentity, type SpawnedAgentRecord } from './agentRecord'
 import { backgroundContext as BG, errorText, isClosedError } from './context'
 import {
   AgentStateDoc,
@@ -119,9 +120,11 @@ import {
   AGENT_EXTENSION_PREFIX,
   AgentCreationError,
   AgentLock,
+  agentExtensionName,
   type CreateAgentOptions,
   type LockRecord
 } from './lock'
+import { collectMonitorRows, totalCost, type AgentMonitorRow } from './monitorSnapshot'
 import { maybeAnnounceDate } from './prompt/dateNotice'
 import { renderSystemPrompt, replaySections, type PromptExtensions } from './prompt/sections'
 import {
@@ -388,6 +391,18 @@ export interface DurableSession {
    * （PIN-02）。句柄已关 → 以 `SessionClosedError` 拒绝。
    */
   agentInfo(conversationId: number): Promise<AgentRuntimeInfo | undefined>
+  /**
+   * 监控快照（P3-13，`monitorSnapshot.ts`）：锁着时的根 agent，加上加载在这个 Harness 里的派生 / hook agent
+   * （按 agent 扩展装着，或对话上有活任务；PIN-02）各一行 —— 相位、模型、上下文占用、缓存、花费、队列。
+   * 没锁也没有加载着的派生 agent → `[]`。纯读且廉价：不提交、不开启调度器、不挂投影、不调任何创建 /
+   * 重建 seam，也**不**刷新 LRU 新近度（宿主每秒轮询它）。句柄已关 → 以 `SessionClosedError` 拒绝（从不同步抛）。
+   */
+  monitorSnapshot(): Promise<AgentMonitorRow[]>
+  /**
+   * 全部解析得了的派生 agent 记录（含 hook agent，按对话 id 升序；同步、只读）。监控详情按 agentId 找对话、
+   * 路由的索引重建（P3-14）都用它。句柄已关 → `[]`。
+   */
+  spawnedRecords(): SpawnedAgentRecord[]
   /**
    * 派生 agent 协调器（P2-03）：派发工具经它建子对话、等回答；面板的追问 / 软停止 / 销毁也走它。
    * 不发 ChatEvent（那是 P2-05 的路由）。
@@ -765,6 +780,9 @@ export class DurableSessionImpl implements DurableSession {
   private readonly placementWaiters = new Map<SubmissionId, (entryId: EntryId) => void>()
   /** 回退区段（P3-10a PIN-22）：回退独占；建锁 / 受理输入的入口在受理阶段持共享 */
   private readonly section = new RollbackSection()
+  /** `pi.usage` 的修订号（提交发布里每摸到一次加一）与按它缓存的会话花费（P3-13，监控每秒轮询） */
+  private usageRevision = 0
+  private sessionCostCache: { readonly revision: number; readonly cost: number } | undefined
 
   private constructor(private readonly deps: DurableSessionDeps) {
     this.sessionId = deps.sessionId
@@ -1080,6 +1098,8 @@ export class DurableSessionImpl implements DurableSession {
         ) {
           this.scheduleDriven(marker, record)
         }
+      } else if (change.type === 'document' && change.record.kind === UsageDoc.definition.kind) {
+        this.usageRevision++
       } else if (
         change.type === 'document' &&
         change.record.kind === AgentStateDoc.definition.kind &&
@@ -1673,6 +1693,46 @@ export class DurableSessionImpl implements DurableSession {
       reasoning: model.reasoning,
       input: [...model.input]
     }
+  }
+
+  // ─── 监控快照（P3-13） ───────────────────────────
+
+  async monitorSnapshot(): Promise<AgentMonitorRow[]> {
+    // 不走 op()：那会刷新 LRU 新近度、计入进行中（轮询会让每条会话都显得刚用过、修剪时机也跟着变）
+    this.assertOpen()
+    try {
+      return await collectMonitorRows({
+        sessionId: this.sessionId,
+        harness: this.raw,
+        now: this.deps.now,
+        lock: this.agentLock.current,
+        spawnedRecords: this.directory.spawnedRecords(),
+        record: (conversationId) => this.directory.record(conversationId),
+        installed: (conversationId) =>
+          this.deps.registry.snapshot().extension(agentExtensionName(conversationId)) !==
+          undefined,
+        liveTasks: [...this.live.values()],
+        schedulerRunning: this.schedulerRunning,
+        contextWindowOf: (ref) => this.modelInfo(ref).contextWindow,
+        sessionCost: () => this.sessionCost()
+      })
+    } catch (error) {
+      if (this.closedFlag || isClosedError(error)) throw new SessionClosedError(this.sessionId)
+      throw error
+    }
+  }
+
+  spawnedRecords(): SpawnedAgentRecord[] {
+    return this.closedFlag ? [] : this.directory.spawnedRecords()
+  }
+
+  /** 会话花费（`harness.usage()`）：`pi.usage` 没变就用上次的 */
+  private async sessionCost(): Promise<number> {
+    const revision = this.usageRevision
+    if (this.sessionCostCache?.revision === revision) return this.sessionCostCache.cost
+    const cost = totalCost(await this.raw.usage(BG))
+    this.sessionCostCache = { revision, cost }
+    return cost
   }
 
   // ─── 日期通知 ───────────────────────────────────
