@@ -1,6 +1,6 @@
 /**
  * P1-11 —— 桌面 ToolHost（`createDesktopToolHost`）：内置工具、按 agent 解析（派发 / 技能 / MCP 惰性连接）、
- * 按锁重建、包装的选项、调用方身份（agentOf），以及留给旧调用方的 agentFactory。编号同设计稿
+ * 按锁重建、包装的选项、调用方身份（agentOf），以及档案模型解析（resolveProfileModelSpec）。编号同设计稿
  * （docs/pi-durable/p1-11-test-design.md，H11-xx）。
  *
  * P2-06（docs/pi-durable/p2-06-test-design.md，P2-06-xx）：调用方身份按对话认人 —— ToolHost 经注入的
@@ -76,8 +76,7 @@ vi.mock('../../services/memory', () => ({ resolveProjectMemoryIndex: vi.fn() }))
 vi.mock('../../services/knowledge', () => ({ enabledBaseChoices: () => [] }))
 vi.mock('../../frontend/core', () => ({ chatFrontendRegistry: { broadcast: mocks.broadcast } }))
 vi.mock('../../services/agentRuntimeAdapters', () => ({
-  electronEventSink: { broadcast: vi.fn() },
-  runtimeLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
+  electronEventSink: { broadcast: vi.fn() }
 }))
 vi.mock('../../services/toolContext', () => ({
   getDesktopSecurityContext: mocks.getDesktopSecurityContext,
@@ -172,12 +171,11 @@ import {
   registerBuiltinTool,
   unregisterBuiltinTool
 } from '../../services/toolRegistry'
-import { agentFactory, createDesktopToolHost, resolveProfileModelSpec } from '../agentHost'
+import { createDesktopToolHost, resolveProfileModelSpec } from '../agentHost'
 import {
   D_C7,
   D_SSH,
   MCP_DECLS,
-  MODEL,
   decl,
   deferred,
   factoryCalls,
@@ -1456,36 +1454,10 @@ describe('MCP _meta end to end', () => {
   })
 })
 
-// ─── 旧入口 ────────────────────────────────────────────────────────────
+// ─── 档案模型解析 ─────────────────────────────────────────────────────
 
-describe('旧入口', () => {
-  it('P2-04-38（改写 H11-67）agentFactory 仍是旧入口（PIN-07）：派生 → PhasePendingError(phase 2)（根 agent 由锁创建，工厂的参数类型只收 spawned）；都不碰 MCP / SkillTool / 派发工具；resolveProfileModelSpec 还在；对照：ToolHost 的派生解析已经走得通', async () => {
-    const profile = inProcess(profileOf('coding'))
-    const model = { provider: MODEL.provider, model: MODEL.modelId, capabilities: {} }
-    const spawned = await agentFactory
-      .createAgent({
-        kind: 'spawned',
-        sessionId: 'sub-1',
-        profile,
-        model,
-        cwd: '',
-        spawn: {
-          agentId: 'sub-1',
-          depth: 1,
-          parentAgentId: 's1',
-          rootSessionId: 's1',
-          modelConfig: model,
-          canSpawn: true
-        }
-      })
-      .catch((e: unknown) => e)
-    expect(isPhasePendingError(spawned)).toBe(true)
-    expect((spawned as { phase: number }).phase).toBe(2)
-
-    expect(mocks.ensureServerByName).not.toHaveBeenCalled()
-    expect(mocks.skillToolCalls).toEqual([])
-    expect(mocks.createAgentTool).not.toHaveBeenCalled()
-
+describe('档案模型解析', () => {
+  it('P2-04-38（改写 H11-67；P2-13 删了旧的 agentFactory 那半）resolveProfileModelSpec 还在：可用 → 模型配置含能力点，不可用 → null；ToolHost 的派生解析走得通', async () => {
     mocks.findAllEnabledModels.mockReturnValue([
       { providerId: 'prov-1', modelId: 'gpt-5', capabilities: '{"reasoning":true}' }
     ])
@@ -1496,7 +1468,8 @@ describe('旧入口', () => {
     })
     expect(resolveProfileModelSpec('nope/missing')).toBeNull()
 
-    // 对照：同一份 coding 档案经 ToolHost 的派生解析照常解析（工厂没接过去）
+    // 同一份 coding 档案经 ToolHost 的派生解析照常解析
+    const profile = inProcess(profileOf('coding'))
     const resolved = await host.resolveAgentTools(SR_D({ profile }), { signal: signal() })
     expect(resolved.agent?.name).toBe('agent')
   })
