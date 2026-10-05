@@ -7,7 +7,9 @@
  *   ML-U-8b 网关 reject → handler reject（不吞成 success，否则前端永远以为写进去了）；
  *   ML-U-8c `agent:destroy` 调 `destroyAgent(sid)`，等它落定才回 `{ success: true }`；
  *   ML-U-8d `tools:list` 原样转发 `(sessionId, options)` —— 欢迎页的 `(undefined, {profile:'chat'})`
- *           与会话里的 `(sid)` 都一样。
+ *           与会话里的 `(sid)` 都一样；
+ *   P2-05-39 派生 agent 的三个面板 IPC 按 agentId 交给路由：追问 fire-and-forget、中断 / 销毁等路由做完，
+ *           路由的拒绝都只记日志（PIN-17）。
  *
  * electron 是替身（handle 收进 Map）；`../frontend` 只替到网关与 operationContext 那一层，handler
  * import 的其余重模块（工具注册表、工具定义、AgentManager、监控）整个换成空壳。
@@ -23,7 +25,13 @@ const state = vi.hoisted(() => ({
     destroyAgent: vi.fn<(sessionId: string) => Promise<void>>(),
     listTools: vi.fn<(sessionId?: string, options?: { profile?: string }) => unknown[]>()
   },
-  contexts: [] as unknown[]
+  contexts: [] as unknown[],
+  router: {
+    continueTask: vi.fn<(params: unknown) => Promise<void>>(),
+    interrupt: vi.fn<(agentId: string) => Promise<void>>(),
+    destroy: vi.fn<(agentId: string) => Promise<void>>()
+  },
+  warn: vi.fn()
 }))
 
 vi.mock('electron', () => ({
@@ -43,8 +51,9 @@ vi.mock('../../frontend', () => ({
 }))
 vi.mock('../../services/toolRegistry', () => ({ getBuiltinToolPresentations: vi.fn(() => ({})) }))
 vi.mock('../../services/agentToolBuilder', () => ({ getBuiltinToolDefinitions: vi.fn(() => []) }))
-vi.mock('../../agents/AgentManager', () => ({
-  agentManager: { continueTask: vi.fn(), destroy: vi.fn(), interrupt: vi.fn() }
+vi.mock('../../agents/AgentManager', () => ({ agentManager: state.router }))
+vi.mock('../../logger', () => ({
+  createLogger: () => ({ info: () => {}, warn: state.warn, error: () => {} })
 }))
 vi.mock('../../services/agentMonitorService', () => ({
   getAgentRuntimeDetail: vi.fn(),
@@ -134,5 +143,92 @@ describe('ML-U-8d tools:list', () => {
     await invoke('tools:list', SID)
     expect(state.gateway.listTools.mock.calls[0]).toEqual([SID, undefined])
     expect(state.contexts).toEqual([SID])
+  })
+})
+
+describe('P2-05-39 派生 agent 面板 IPC 按 agentId 交给路由', () => {
+  const TOKENS = { t1: { kind: 'skill', name: 'pdf' } }
+
+  beforeEach(() => {
+    state.router.continueTask.mockReset().mockResolvedValue(undefined)
+    state.router.interrupt.mockReset().mockResolvedValue(undefined)
+    state.router.destroy.mockReset().mockResolvedValue(undefined)
+    state.warn.mockReset()
+  })
+
+  const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
+
+  it('agent:subAgentPrompt 同步答 {success:true}，continueTask 恰一次、参数原样', async () => {
+    let settle!: () => void
+    state.router.continueTask.mockReturnValue(new Promise<void>((resolve) => (settle = resolve)))
+    const answer = invoke('agent:subAgentPrompt', {
+      subSessionId: 'sub-1',
+      text: 't',
+      inlineTokens: TOKENS
+    })
+    // 不 await 整轮：处理函数直接交回结果对象，不是 Promise
+    expect(answer).toEqual({ success: true })
+    expect(state.router.continueTask).toHaveBeenCalledTimes(1)
+    expect(state.router.continueTask).toHaveBeenCalledWith({
+      subSessionId: 'sub-1',
+      text: 't',
+      inlineTokens: TOKENS
+    })
+    settle()
+  })
+
+  it('agent:subAgentPrompt 的 continueTask 拒绝：不成为未处理的拒绝，只记一条日志', async () => {
+    const unhandled = vi.fn()
+    process.on('unhandledRejection', unhandled)
+    try {
+      state.router.continueTask.mockRejectedValue(new Error('Sub-session is busy: sub-1'))
+      expect(invoke('agent:subAgentPrompt', { subSessionId: 'sub-1', text: 't' })).toEqual({
+        success: true
+      })
+      await flush()
+      await flush()
+      expect(unhandled).not.toHaveBeenCalled()
+      expect(state.warn).toHaveBeenCalledTimes(1)
+    } finally {
+      process.off('unhandledRejection', unhandled)
+    }
+  })
+
+  it.each([
+    ['subSession:interrupt', 'interrupt'],
+    ['subSession:destroy', 'destroy']
+  ] as const)('%s 把 agentId 交给路由一次、等它做完再答 {success:true}', async (channel, method) => {
+    let settle!: () => void
+    state.router[method].mockReturnValue(new Promise<void>((resolve) => (settle = resolve)))
+    let answered = false
+    const pending = Promise.resolve(invoke(channel, 'sub-1')).then((value) => {
+      answered = true
+      return value
+    })
+    await flush()
+    expect(state.router[method]).toHaveBeenCalledTimes(1)
+    expect(state.router[method]).toHaveBeenCalledWith('sub-1')
+    expect(answered).toBe(false)
+    settle()
+    expect(await pending).toEqual({ success: true })
+  })
+
+  it.each([
+    ['subSession:interrupt', 'interrupt'],
+    ['subSession:destroy', 'destroy']
+  ] as const)('%s 路由拒绝 → 照样答 {success:true}（PIN-17），记一条日志', async (channel, method) => {
+    state.router[method].mockRejectedValue(new Error('boom'))
+    expect(await invoke(channel, 'sub-1')).toEqual({ success: true })
+    expect(state.warn).toHaveBeenCalledTimes(1)
+  })
+
+  it('三个处理函数都不打开会话、不碰网关', async () => {
+    invoke('agent:subAgentPrompt', { subSessionId: 'sub-1', text: 't' })
+    await invoke('subSession:interrupt', 'sub-1')
+    await invoke('subSession:destroy', 'sub-1')
+    expect(state.gateway.setModel).not.toHaveBeenCalled()
+    expect(state.gateway.destroyAgent).not.toHaveBeenCalled()
+    expect(state.gateway.listTools).not.toHaveBeenCalled()
+    expect(state.contexts).toEqual([])
   })
 })

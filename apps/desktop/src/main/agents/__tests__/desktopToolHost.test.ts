@@ -520,27 +520,18 @@ describe('resolveAgentTools', () => {
     for (const builtin of DARWIN_BUILTINS) expect(names(all)).not.toContain(builtin)
   })
 
-  it('H11-15 派发工具：名单含 agent → createAgentTool 一次（ctx 归 s1、询问经 broker），模型配置取锁定的模型 + 思考档位；不含 → 不造（PIN-08）', async () => {
+  it('H11-15 派发工具：名单含 agent → createAgentTool 一次、只有 ctx（归 s1、询问经 broker）—— 没有第二个参数、没有模型配置（P2-05-52）；不含 → 不造（PIN-08）', async () => {
     const resolved = await host.resolveAgentTools(requestD(), { signal: signal() })
     expect(resolved.agent).toBeDefined()
     expect(mocks.createAgentTool).toHaveBeenCalledTimes(1)
-    const [ctx, agentCtx] = mocks.createAgentTool.mock.calls[0] as [
-      ToolContext,
-      { rootSessionId: string; modelConfig: unknown }
-    ]
+    const call = mocks.createAgentTool.mock.calls[0] as unknown[]
+    expect(call).toHaveLength(1)
+    const ctx = call[0] as ToolContext
     expect(ctx.sessionId).toBe('s1')
+    expect('modelConfig' in ctx).toBe(false)
     const question = { kind: 'ask', requestId: 'q2' } as never
     ctx.requestUserInput!(question)
     expect(mocks.requestUserInputFor).toHaveBeenCalledWith('s1', question)
-    expect(agentCtx.rootSessionId).toBe('s1')
-    const config =
-      typeof agentCtx.modelConfig === 'function' ? agentCtx.modelConfig() : agentCtx.modelConfig
-    expect(config).toEqual({
-      provider: 'anthropic',
-      model: 'claude-sonnet-4-5',
-      capabilities: {},
-      thinkingLevel: 'low'
-    })
 
     mocks.createAgentTool.mockClear()
     const without = await host.resolveAgentTools(requestD({ names: ['read', 'skill:pdf'] }), {
@@ -1566,28 +1557,14 @@ function allTools(set: AgentToolSet): ToolRegistration[] {
   ]
 }
 
-/** 派发工具的两份实参（ctx、agentCtx）与求值后的模型配置 */
-function dispatchArgs(i = 0): { ctx: ToolContext; rootSessionId: string; config: unknown } {
-  const [ctx, agentCtx] = mocks.createAgentTool.mock.calls[i] as [
-    ToolContext,
-    { rootSessionId: string; modelConfig: unknown }
-  ]
-  const config =
-    typeof agentCtx.modelConfig === 'function'
-      ? (agentCtx.modelConfig as () => unknown)()
-      : agentCtx.modelConfig
-  return { ctx, rootSessionId: agentCtx.rootSessionId, config }
-}
-
-const HAIKU_DISPATCH = {
-  provider: 'anthropic',
-  model: 'claude-haiku-4-5',
-  capabilities: {},
-  thinkingLevel: 'off'
+/** 派发工具的实参（P2-05 PIN-16：只有会话级的 ctx，调用方由工具从 api 读）与实参个数 */
+function dispatchArgs(i = 0): { ctx: ToolContext; argCount: number } {
+  const call = mocks.createAgentTool.mock.calls[i] as unknown[]
+  return { ctx: call[0] as ToolContext, argCount: call.length }
 }
 
 describe('resolveAgentTools (spawned)', () => {
-  it('P2-04-02 每样资源都按根会话找：状态 / 连接 / 声明 / 注册 / SkillTool 的项目 / 包装；除派发工具的 ctx 外没有一处收到 sub-a1；解析不问会话宿主', async () => {
+  it('P2-04-02 每样资源都按根会话找：状态 / 连接 / 声明 / 注册 / SkillTool 的项目 / 包装 / 派发工具的 ctx（P2-05-52）；没有一处收到 sub-a1；解析不问会话宿主', async () => {
     keyedProjectLookup()
     const resolved = await host.resolveAgentTools(
       SR_D({ names: ['read', 'agent', 'skill:pdf', 'mcp:ssh'] }),
@@ -1612,8 +1589,8 @@ describe('resolveAgentTools (spawned)', () => {
       expect(opts.security).toBeTypeOf('function')
     }
 
-    // sub-a1 只出现在派发工具的 ctx.sessionId 上（PIN-01）
-    expect(dispatchArgs().ctx.sessionId).toBe('sub-a1')
+    // 派发工具的 ctx 也归根会话（P2-05-52：调用方由工具从 api 读，不再是 agentId）
+    expect(dispatchArgs().ctx.sessionId).toBe('s1')
     const recorded = JSON.stringify([
       mocks.statusByName.mock.calls,
       mocks.ensureServerByName.mock.calls,
@@ -1624,7 +1601,7 @@ describe('resolveAgentTools (spawned)', () => {
       mocks.projectPick.mock.calls,
       mocks.broadcast.mock.calls,
       mocks.wrapCalls.map((c) => c.opts),
-      dispatchArgs().rootSessionId
+      dispatchArgs().ctx.sessionId
     ])
     expect(recorded).not.toContain('sub-a1')
     expect(sessionOf).not.toHaveBeenCalled()
@@ -1781,17 +1758,16 @@ describe('resolveAgentTools (spawned)', () => {
     expect('extraTools' in empty).toBe(false)
   })
 
-  it('P2-04-10 canSpawn 门与派发工具（PIN-01）：true → 派发工具（ctx 是 sub-a1、询问归 s1、rootSessionId s1、haiku/off）；false / 缺省 → 没有；名单没有 agent → 没有', async () => {
+  it('P2-04-10 canSpawn 门与派发工具：true → 派发工具（ctx 归 s1、询问归 s1、只有 ctx 一个实参，P2-05-52）；false / 缺省 → 没有；名单没有 agent → 没有', async () => {
     const yes = await host.resolveAgentTools(SR_D(), { signal: signal() })
     expect(yes.agent?.name).toBe('agent')
     expect(mocks.createAgentTool).toHaveBeenCalledTimes(1)
-    const { ctx, rootSessionId, config } = dispatchArgs()
-    expect(ctx.sessionId).toBe('sub-a1')
+    const { ctx, argCount } = dispatchArgs()
+    expect(ctx.sessionId).toBe('s1')
+    expect(argCount).toBe(1)
     const question = { kind: 'ask', requestId: 'q-sp' } as never
     ctx.requestUserInput!(question)
     expect(mocks.requestUserInputFor).toHaveBeenCalledWith('s1', question)
-    expect(rootSessionId).toBe('s1')
-    expect(config).toEqual(HAIKU_DISPATCH)
 
     const absentReq = SR_D()
     delete absentReq.canSpawn
@@ -1903,10 +1879,9 @@ describe('rebuildAgentTools (spawned)', () => {
         return
       }
       expect(set.agent?.name).toBe('agent')
-      const { ctx, rootSessionId, config } = dispatchArgs()
-      expect(ctx.sessionId).toBe('sub-a1')
-      expect(rootSessionId).toBe('s1')
-      expect(config).toEqual(HAIKU_DISPATCH)
+      const { ctx, argCount } = dispatchArgs()
+      expect(ctx.sessionId).toBe('s1')
+      expect(argCount).toBe(1)
     }
   )
 
