@@ -199,7 +199,19 @@ export interface HookRig {
 
 function sessionConfig(source: TestHostOptions['agentConfig'], sessionId: string): AgentConfig {
   const config = typeof source === 'function' ? source(sessionId) : source
-  return config ?? configD()
+  return config ?? rigConfig()
+}
+
+/** 宿主 H 的会话配置：work 档案（agent / probe / askOp / titleProbe）、faux-1、思考 low */
+export function rigConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
+  return configD({
+    profile: testProfile({
+      name: 'work',
+      displayName: 'Work',
+      tools: ['agent', 'probe', 'askOp', 'titleProbe']
+    }),
+    ...overrides
+  })
 }
 
 export async function hookRig(options: HookRigOptions = {}): Promise<HookRig> {
@@ -209,7 +221,7 @@ export async function hookRig(options: HookRigOptions = {}): Promise<HookRig> {
   const askCalls: AskOpCall[] = []
   const current: { rig: HookRig | undefined } = { rig: undefined }
   const rig = (): HookRig => current.rig!
-  const config = options.config ?? configD()
+  const config = options.config ?? rigConfig()
 
   const askOp = (sessionId: string): ToolRegistration =>
     defineTool({
@@ -243,12 +255,14 @@ export async function hookRig(options: HookRigOptions = {}): Promise<HookRig> {
       }
     })
 
-  const agentTools = (sessionId: string): ToolRegistration[] => [
-    probeTool(),
-    askOp(sessionId),
-    titleProbe(sessionId),
-    ...(options.tools?.(sessionId, rig) ?? [])
-  ]
+  /** 按名单筛（档案点了谁才给谁：titler 的请求恰 [titleProbe]、审查员一个都没有） */
+  const agentTools = (sessionId: string, names: readonly string[]): ToolRegistration[] =>
+    [
+      probeTool(),
+      askOp(sessionId),
+      titleProbe(sessionId),
+      ...(options.tools?.(sessionId, rig) ?? [])
+    ].filter((tool) => names.includes(tool.name))
 
   const first = await makeHost({
     makeKit: wKit,
