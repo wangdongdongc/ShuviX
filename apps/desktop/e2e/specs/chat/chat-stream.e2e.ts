@@ -22,6 +22,7 @@ import {
   type RecordedEvent
 } from '../../harness/seed'
 import { chatPane, sidebarPane, type ChatPane, type SidebarPane } from '../../harness/pages'
+import { syncProbe } from '../../harness/sync'
 
 const MODEL = 'e2e-model'
 
@@ -74,10 +75,6 @@ const listMessages = (sid: string): Promise<ListedMessage[]> =>
 const sessionEvents = async (sid: string): Promise<RecordedEvent[]> =>
   (await events.all()).filter((e) => e.sessionId === sid)
 
-/** 事件里的消息载荷（user_message / step_end / agent_end 的 message 字段） */
-const payloadOf = (event: RecordedEvent | undefined): ListedMessage | null =>
-  event && typeof event.message === 'string' ? (JSON.parse(event.message) as ListedMessage) : null
-
 /** 只比投影契约关心的 4 个字段（model/createdAt 两条路径语义不同，见清单） */
 const identityOf = (m: ListedMessage): [string, string, string, string] => [
   m.id,
@@ -127,7 +124,7 @@ describe('流式发送与重开一致性', () => {
   let liveUser: ListedMessage | null = null
   let liveAssistant: ListedMessage | null = null
 
-  it('输入框发送：用户气泡 + 助手卡片，事件序列 agent_created → agent_start → text_delta* → text_end → agent_end', async () => {
+  it('输入框发送：用户气泡 + 助手卡片，事件序列 agent_created → agent_start → agent_end（内容走视图）', async () => {
     provider.reset()
     await events.clear()
     provider.script({
@@ -151,15 +148,17 @@ describe('流式发送与重开一致性', () => {
     // 运行时是懒建的：本会话的首次发送才把它建出来。agent_created（SessionManager 的 onCreated，
     // 见 sessionService 的 broadcastAgentCreated）标的是「这条会话有运行时」区间的起点 ——
     // ensure() 交出实例之前就发了，所以必然排在本轮 agent_start 之前，不属于本轮流式事件。
-    expect(types[0]).toBe('agent_created')
-    expect(types.indexOf('agent_start')).toBe(1)
-    expect(types.filter((t) => t === 'text_delta').length).toBe(3)
-    expect(types.indexOf('text_end')).toBeGreaterThan(types.lastIndexOf('text_delta'))
-    expect(types.at(-1)).toBe('agent_end')
+    // P3-08：内容（流式正文、落盘的消息）都走视图，事件只剩生命周期余项
+    expect(types.filter((t) => ['agent_created', 'agent_start', 'agent_end'].includes(t))).toEqual([
+      'agent_created',
+      'agent_start',
+      'agent_end'
+    ])
 
-    // C-02：气泡完全来自 user_message 事件回环（sendToMainAgent 只置流式态，不做乐观插入）
-    liveUser = payloadOf(all.find((e) => e.type === 'user_message'))
-    liveAssistant = payloadOf(all.find((e) => e.type === 'agent_end'))
+    // C-02：气泡与卡片来自会话视图（发送方的乐观占位在用户条目出现时换成真的）
+    const view = await syncProbe(app.main).waitRunEnded(sids.stream)
+    liveUser = view.messages.find((m) => m.role === 'user') as unknown as ListedMessage
+    liveAssistant = view.messages.find((m) => m.role === 'assistant') as unknown as ListedMessage
     expect(liveUser?.content).toBe('ping one')
 
     const listed = await listMessages(sids.stream)
@@ -174,7 +173,7 @@ describe('流式发送与重开一致性', () => {
     expect(await chat.isBusy()).toBe(false)
   })
 
-  it('重开：message.list 的 [id, role, type, content] 与流式事件逐条一致，DOM 不变', async () => {
+  it('重开：message.list 的 [id, role, type, content] 与视图里的逐条一致，DOM 不变', async () => {
     const listed = await listMessages(sids.stream)
     expect(listed.map(identityOf)).toEqual(
       [liveUser, liveAssistant].map((m) => identityOf(m as ListedMessage))
@@ -194,7 +193,7 @@ describe('流式发送与重开一致性', () => {
 })
 
 describe('用量', () => {
-  it('每条助手卡片只记自己那次调用；整轮聚合留在 agent_end 事件里', async () => {
+  it('每条助手卡片只记自己那次调用；整轮聚合 = 这一轮各条的和', async () => {
     provider.reset()
     await events.clear()
     provider.script(
@@ -222,10 +221,17 @@ describe('用量', () => {
     expect(final).toMatchObject({ role: 'assistant', type: 'message', content: 'done' })
     expect(final.metadata?.usage).toMatchObject({ input: 120, output: 8, total: 128 })
 
-    // 整轮聚合（上下文占用指示器的来源）只在 agent_end 事件上
+    // 整轮聚合不再随 agent_end 发（P3-08：它不带载荷）—— 就是这一轮各条用量的和
+    const assistants = listed.filter((m) => m.role === 'assistant')
+    const sum = (key: 'input' | 'output' | 'total'): number =>
+      assistants.reduce((acc, m) => acc + (m.metadata?.usage?.[key] ?? 0), 0)
+    expect({ input: sum('input'), output: sum('output'), total: sum('total') }).toEqual({
+      input: 220,
+      output: 18,
+      total: 238
+    })
+    expect(assistants).toHaveLength(2)
     const end = (await sessionEvents(sids.usage)).find((e) => e.type === 'agent_end')!
-    expect(end.usage).toMatchObject({ input: 220, output: 18, total: 238 })
-    expect((end.usage as { details: unknown[] }).details).toHaveLength(2)
 
     // 本轮结局：通知层按它分「完成 / 失败」文案，正常跑完必须是 'ok'
     // （跨进程字段，改动只会在这里露出来）

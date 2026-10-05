@@ -18,10 +18,10 @@ import {
   seedFakeProvider,
   waitRendererReady,
   writePng,
-  type EventRecorder,
-  type RecordedEvent
+  type EventRecorder
 } from '../../harness/seed'
 import { chatPane, sidebarPane, type ChatPane, type SidebarPane } from '../../harness/pages'
+import { syncProbe, type SyncProbe } from '../../harness/sync'
 
 const MODEL = 'e2e-model'
 
@@ -52,6 +52,8 @@ const toolBlocksOf = (msgs: ListedMessage[]): NonNullable<ListedMessage['blocks'
 let app: E2EApp
 let provider: FakeProvider
 let events: EventRecorder
+/** 视图探针：工具结果 / 询问从会话视图读（P3-08：没有 tool_* / input_request 事件了） */
+let probe: SyncProbe
 let chat: ChatPane
 let sidebar: SidebarPane
 let projDir = ''
@@ -66,9 +68,6 @@ const createSession = async (title: string, projectId: string): Promise<string> 
 
 const listMessages = (sid: string): Promise<ListedMessage[]> =>
   app.main.eval<ListedMessage[]>(`window.api.message.list(${JSON.stringify(sid)})`)
-
-const sessionEvents = async (sid: string): Promise<RecordedEvent[]> =>
-  (await events.all()).filter((e) => e.sessionId === sid)
 
 const readCall = (id: string, file: string): { id: string; name: string; args: string } => ({
   id,
@@ -110,6 +109,8 @@ beforeAll(async () => {
 
   events = eventRecorder(app.main)
   await events.install()
+  probe = syncProbe(app.main)
+  await probe.install()
 })
 
 afterAll(async () => {
@@ -118,7 +119,7 @@ afterAll(async () => {
 })
 
 describe('单次工具调用', () => {
-  it('事件走完 生成中 → 执行中 → 完成，结构化 details 落进消息并在重开后仍在', async () => {
+  it('一轮走完：视图里的工具块带结果与结构化 details，落进消息并在重开后仍在', async () => {
     provider.reset()
     await events.clear()
     provider.script(
@@ -132,22 +133,16 @@ describe('单次工具调用', () => {
     await events.waitFor('agent_end', { sessionId: sids.single })
     await chat.waitIdle()
 
-    const all = await sessionEvents(sids.single)
-    const types = all.map((e) => e.type)
-    expect(types.filter((t) => t === 'toolcall_generating').length).toBeGreaterThan(0)
-    expect(types.indexOf('tool_start')).toBeGreaterThan(types.indexOf('toolcall_generating'))
-    expect(types.indexOf('tool_end')).toBeGreaterThan(types.indexOf('tool_start'))
-
-    const start = all.find((e) => e.type === 'tool_start')!
-    const end = all.find((e) => e.type === 'tool_end')!
-    expect(start.toolCallId).toBe('call_1')
-    expect(start.toolName).toBe('read')
-    expect(end.toolCallId).toBe('call_1')
-    expect(String(end.result)).toContain('ALPHA CONTENT')
+    // 工具事件没了（P3-08）：视图里的工具块就是它的结局 —— 工具名、结果、details、所属的卡
+    const results = await probe.toolResults(sids.single)
+    expect(results.map((r) => [r.toolCallId, r.toolName])).toEqual([['call_1', 'read']])
+    const end = results[0]
+    expect(end.result).toContain('ALPHA CONTENT')
     expect(end.details).toMatchObject({ type: 'read' })
+    expect((await probe.viewOf(sids.single))!.toolRuns).toEqual({})
     // messageId 指向承载这次调用的那张卡（= assistant entry id）
     const listed = await listMessages(sids.single)
-    const card = listed.find((m) => m.id === start.messageId)!
+    const card = listed.find((m) => m.id === end.messageId)!
     expect(card.role).toBe('assistant')
 
     // 投影契约：工具调用是卡内的块，按 toolCallId 认；结果回填在块上
@@ -193,10 +188,9 @@ describe('一条消息里的多个同名调用', () => {
     await events.waitFor('agent_end', { sessionId: sids.batch })
     await chat.waitIdle()
 
-    // 预展示（≥2 个调用）与 tool_execution_start 靠 preEmittedToolCalls 去重：各只发一次
-    const all = await sessionEvents(sids.batch)
-    const starts = all.filter((e) => e.type === 'tool_start')
-    expect(starts.map((e) => e.toolCallId).sort()).toEqual(['call_a', 'call_b'])
+    // 每个调用在视图里恰一个带结果的工具块（不重复）
+    const results = await probe.toolResults(sids.batch)
+    expect(results.map((r) => r.toolCallId).sort()).toEqual(['call_a', 'call_b'])
 
     // 两次调用同处一条 assistant entry —— 一张卡两个工具块，顺序即模型输出顺序
     const listed = await listMessages(sids.batch)
@@ -237,8 +231,7 @@ describe('工具报错', () => {
     await events.waitFor('agent_end', { sessionId: sids.error })
     await chat.waitIdle()
 
-    const all = await sessionEvents(sids.error)
-    const bad = all.find((e) => e.type === 'tool_end' && e.toolCallId === 'call_bad')!
+    const bad = (await probe.toolResults(sids.error)).find((r) => r.toolCallId === 'call_bad')!
     expect(bad.isError).toBe(true)
 
     const blocks = toolBlocksOf(await listMessages(sids.error))
@@ -280,10 +273,8 @@ describe('询问卡片', () => {
     await chat.ready()
     await chat.typeAndSend('write a file')
 
-    const request = await events.waitFor<RecordedEvent & { request: { id: string } }>(
-      'input_request',
-      { sessionId: sids.ask }
-    )
+    const request = { request: await probe.nextAsk(sids.ask) }
+    await until(async () => (await chat.pendingPanel()).open, 'pending panel open')
     expect(await chat.pendingPanel()).toEqual({ open: true, firstInCard: true })
 
     await app.main.eval(
@@ -294,12 +285,11 @@ describe('询问卡片', () => {
       })})`
     )
 
-    await events.waitFor('input_request_resolved', { sessionId: sids.ask })
+    await probe.waitAskGone(sids.ask, request.request.id)
     await events.waitFor('agent_end', { sessionId: sids.ask })
     await chat.waitIdle()
 
-    const all = await sessionEvents(sids.ask)
-    const end = all.find((e) => e.type === 'tool_end' && e.toolCallId === 'call_write')!
+    const end = await probe.waitToolResult(sids.ask, 'call_write')
     expect(end.isError).toBeFalsy()
     expect(readFileSync(target, 'utf8')).toContain('W1')
 
@@ -355,9 +345,9 @@ describe('模型收到的那张图', () => {
     })
 
     it('details.image 指原文件，展开后 <img> 按原尺寸解码', async () => {
-      const end = (await sessionEvents(sids.img)).find((e) => e.type === 'tool_end')!
-      const eventImage = (end.details as { image?: { path: string } }).image
-      expect(eventImage?.path).toBe(smallPng())
+      const end = await probe.waitToolResult(sids.img, 'call_img')
+      const viewImage = (end.details as { image?: { path: string } }).image
+      expect(viewImage?.path).toBe(smallPng())
 
       const block = await firstToolBlock(sids.img)
       expect(block.details?.image).toMatchObject({ path: smallPng(), width: 40, height: 24 })
@@ -369,12 +359,14 @@ describe('模型收到的那张图', () => {
       expect(shot.complete).toBe(true)
     })
 
-    it('base64 不进渲染进程：事件与消息里都只有占位文本', async () => {
+    it('base64 不进渲染进程：视图与消息里都只有占位文本', async () => {
       const head = readFileSync(smallPng()).toString('base64').slice(0, 200)
 
-      const end = (await sessionEvents(sids.img)).find((e) => e.type === 'tool_end')!
-      expect(String(end.result)).toContain('[image (image/png)')
-      expect(JSON.stringify(end)).not.toContain(head)
+      // 交给渲染进程的是视图（P3-08）：整份视图里都没有这张图的 base64
+      const view = await probe.viewOf(sids.img)
+      expect(JSON.stringify(view)).not.toContain(head)
+      const end = await probe.waitToolResult(sids.img, 'call_img')
+      expect(end.result).not.toContain(head)
 
       // 投影是另一套代码（textOf 直接丢掉图片块），与广播管线各钉一次
       const block = await firstToolBlock(sids.img)

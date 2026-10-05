@@ -68,6 +68,29 @@ describe('P3-08-46 streaming 能力删了', () => {
     expect(registry.hasCapability('s2', 'userInput')).toBe(false)
   })
 
+  it('P3-08-49 绑在根会话上的前端经 sub→parent 映射收到派生 agent 的那一对（end 之前）', () => {
+    const registry = new ChatFrontendRegistry()
+    const chrome = fake('chrome:c1:s1', { userInput: true })
+    registry.bind('s1', chrome)
+    const sequence: ChatEvent[] = [
+      {
+        type: 'sub_session_register',
+        sessionId: 'a1',
+        parentSessionId: 's1',
+        subAgentName: 'explore',
+        displayName: 'E',
+        description: '',
+        systemPrompt: '',
+        prompt: ''
+      },
+      { type: 'agent_start', sessionId: 'a1' },
+      { type: 'agent_end', sessionId: 'a1', reason: 'ok' },
+      { type: 'sub_session_end', sessionId: 'a1', parentSessionId: 's1', result: 'r' }
+    ]
+    for (const event of sequence) registry.broadcast(event)
+    expect(chrome.sent).toEqual(sequence)
+  })
+
   it('STREAMING_EVENT_TYPES 与 input_request 的能力表都删了', () => {
     const source = readFileSync(
       join(dirname(fileURLToPath(import.meta.url)), '..', 'ChatFrontendRegistry.ts'),
@@ -107,6 +130,7 @@ describe('P3-08-45 静态：产品源码里没有已删除事件的字面量', (
   ]
   const LITERAL = new RegExp(`type:\\s*['"](${DELETED.join('|')})['"]`)
   const COMPARE = new RegExp(`type\\s*===\\s*['"](${DELETED.join('|')})['"]`)
+  const CASE = new RegExp(`case\\s+['"](${DELETED.join('|')})['"]\\s*:`)
 
   function walk(dir: string): string[] {
     return readdirSync(dir).flatMap((name) => {
@@ -127,7 +151,7 @@ describe('P3-08-45 静态：产品源码里没有已删除事件的字面量', (
       const lines = readFileSync(file, 'utf8').split('\n')
       return lines
         .map((line, index) => ({ line, index }))
-        .filter(({ line }) => LITERAL.test(line) || COMPARE.test(line))
+        .filter(({ line }) => LITERAL.test(line) || COMPARE.test(line) || CASE.test(line))
         .map(({ line, index }) => `${relative(REPO, file)}:${index + 1}: ${line.trim()}`)
     })
     expect(offenders).toEqual([])

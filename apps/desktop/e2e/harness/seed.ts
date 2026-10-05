@@ -22,6 +22,7 @@ import {
 } from '@shuvix/chat-protocol/registryNotes'
 import type { CdpClient } from './cdp'
 import { sleep, until } from './cdp'
+import { syncProbe } from './sync'
 import type { FakeRequest, FakeTurn } from './fakeProvider'
 import type { E2EApp } from './launch'
 
@@ -395,34 +396,74 @@ export function removeRetiredPolicy(app: Pick<E2EApp, 'home'>, name: RetiredPoli
  * 隔离实例带着全套出厂策略（`ask-on-command` 对每条不在沙箱里的命令问、`ask-on-external-path`
  * 对家目录里会话目录以外的读、会话目录以外的写问），而 e2e 里没人看着：不装它的话，任何触发
  * 询问的用例都会挂到超时。
- * 装在渲染端（`agent.onEvent` → `agent.respondToInput`），走的是用户点按钮的同一条 IPC。
+ *
+ * P3-08 起询问不再是 ChatEvent：它在会话视图的 `asks` 里（PIN-21）。放行器在 spec 进程里轮询视图
+ * （`harness/sync.ts` 的探针），答复走用户点按钮的同一条 IPC（`agent.respondToInput`）。盯哪些会话：
+ *  - `sessions` 里给的；
+ *  - 页面收到 `ask_count > 0` 的会话（任何会话 —— 子会话、没在界面上打开的会话都算，PIN-01 的计数余项）。
+ * 派生 agent 的询问挂在它的根会话上，跟着根会话一起盯到。
  *
  * 想**故意**测「没人回答」的那条路径就别装它（或用 `only` 只放行一部分）。
  */
 export async function installAutoAllow(
   main: CdpClient,
-  opts?: { only?: (command: string) => boolean }
+  opts?: { only?: (command: string) => boolean; sessions?: string[] }
 ): Promise<void> {
-  const filter = opts?.only ? `(${opts.only.toString()})` : '(() => true)'
-  await main.eval(
+  const fresh = await main.eval<boolean>(
     `(() => {
-      if (window.__e2eAutoAllow) return true
+      if (window.__e2eAutoAllow) return false
       window.__e2eAutoAllow = []
+      window.__e2eAskSessions = []
       window.api.agent.onEvent((ev) => {
-        if (ev.type !== 'input_request') return
-        const req = ev.request
-        const command = req.command ?? req.question ?? ''
-        if (!${filter}(command)) return
-        window.__e2eAutoAllow.push(command)
-        window.api.agent.respondToInput({
-          sessionId: ev.sessionId,
-          requestId: req.id,
-          response: { kind: req.kind, allowed: true, selections: [] }
-        })
+        if (ev.type === 'ask_count' && ev.count > 0) window.__e2eAskSessions.push(ev.sessionId)
       })
       return true
     })()`
   )
+  if (!fresh) return
+  const only = opts?.only ?? (() => true)
+  const probe = syncProbe(main)
+  await probe.install()
+  const watched = new Set(opts?.sessions ?? [])
+  const answered = new Set<string>()
+  let stopped = false
+  const tick = async (): Promise<void> => {
+    const pending = await main.eval<string[]>(`(window.__e2eAskSessions ?? []).splice(0)`)
+    for (const id of pending) watched.add(id)
+    for (const sessionId of watched) {
+      const view = await probe.viewOf(sessionId).catch(() => undefined)
+      for (const req of view?.asks ?? []) {
+        if (answered.has(req.id)) continue
+        const command =
+          (req as { command?: string }).command ?? (req as { question?: string }).question ?? ''
+        if (!only(command)) continue
+        answered.add(req.id)
+        await main.eval(
+          `(() => {
+            window.__e2eAutoAllow.push(${JSON.stringify(command)})
+            return window.api.agent.respondToInput(${JSON.stringify({
+              sessionId,
+              requestId: req.id,
+              response: { kind: req.kind, allowed: true, selections: [] }
+            })})
+          })()`
+        )
+      }
+    }
+  }
+  const loop = async (): Promise<void> => {
+    while (!stopped) {
+      try {
+        await tick()
+      } catch {
+        // 实例停了（CDP 断开）：放行器跟着停
+        stopped = true
+        return
+      }
+      await sleep(60)
+    }
+  }
+  void loop()
 }
 
 /**
@@ -652,6 +693,23 @@ export function eventRecorder(main: CdpClient): EventRecorder {
       return hit.e
     }
   }
+}
+
+/**
+ * 某会话录到的询问**挂起次数**（P3-08：询问不再是 ChatEvent —— 从 `ask_count` 余项的**上升**里数：
+ * 计数从 n 涨到 m 就是挂起了 m − n 条）。只数 recorder 缓冲里的（`clear()` 之后重新数）。
+ */
+export async function asksRaisedIn(events: EventRecorder, sessionId: string): Promise<number> {
+  const counts = (await events.all<RecordedEvent & { count?: number }>())
+    .filter((e) => e.type === 'ask_count' && e.sessionId === sessionId)
+    .map((e) => e.count ?? 0)
+  let previous = 0
+  let raised = 0
+  for (const count of counts) {
+    if (count > previous) raised += count - previous
+    previous = count
+  }
+  return raised
 }
 
 export interface ProjectSeed {
