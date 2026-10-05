@@ -17,7 +17,12 @@ export interface CommitRecorder {
   readonly inbox: DocValue<InboxState>[]
   readonly usage: DocValue<UsageState>[]
   /** 追加的条目：[种类, 条目 id]，按发布次序 */
-  readonly entries: { readonly seq: number; readonly kind: string; readonly id: number }[]
+  readonly entries: {
+    readonly seq: number
+    readonly kind: string
+    readonly id: number
+    readonly conversationId: number
+  }[]
   /** 某对话的 LiveDoc 值序列（缺省根对话） */
   livesOf(conversationId?: number): LiveState[]
   inboxesOf(conversationId?: number): InboxState[]
@@ -44,7 +49,8 @@ export function recordCommits(harness: Pick<Harness, 'subscribeCommits'>): Commi
         recorder.entries.push({
           seq,
           kind: change.value.kind,
-          id: change.value.id as unknown as number
+          id: change.value.id as unknown as number,
+          conversationId: change.value.conversationId as unknown as number
         })
         continue
       }
