@@ -34,7 +34,7 @@ import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
 import { resolveTokensForAgent } from '@shuvix/chat-protocol/utils/inlineTokens'
 import type { DurableSession } from '../durable/durableSession'
 import type { SessionHost } from '../durable/sessionHost'
-import { contextWithSignal } from '../durable/context'
+import { BACKGROUND_CONTEXT, withAbortSignal } from '@earendil-works/chord/context'
 import type { SpawnCreatedInfo, SpawnOutcome, SpawnOwner, SpawnParams } from '../durable/spawn'
 import type { TaskRegistry } from '../task/registry'
 import type { ToolCallScope } from '../tools/toolCall'
@@ -308,7 +308,8 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
     return {
       session,
       owner: 'task' in owner ? { task: owner.task } : { anchor: true },
-      context: contextWithSignal(signal),
+      // 宿主的取消信号绑进 Context：落下时协调器的等待被打断、随即中止子对话（PIN-05）
+      context: signal === undefined ? BACKGROUND_CONTEXT : withAbortSignal(signal, BACKGROUND_CONTEXT),
       hosted,
       aborted: () => signal?.aborted === true
     }
