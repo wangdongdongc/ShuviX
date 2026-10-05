@@ -8,7 +8,8 @@
  *  - retry：最多 10 次（durable 默认 3）。基础退避不写 —— 用 durable 的 2s 指数退避。
  *  - stream：单次请求 10 分钟超时；SDK 内重试 0 次（重试统一由 durable 的持久化重试负责，
  *    两层叠加会把一次失败放大成十几次请求）。
- *  - compaction：reserve = background = min(32768, ⌊窗口/4⌋)（裁决 Q2），keepRecent = min(20000, ⌊窗口/4⌋)
+ *  - compaction：reserve = background = min(32768, ⌊窗口/4⌋)（裁决 Q2；窗口 = 锁定模型与在跑的派生 agent
+ *    模型里最小的那个，Q-P2-08），keepRecent = min(20000, ⌊窗口/4⌋)
  *    （PIN-1）。durable 默认 reserve 16384 / background 32768 —— 对小窗口模型等于一开局就要压缩；
  *    keepRecent 写死 20000 时，窗口不到「20000 + reserve」的模型（16k / 32k 的本地模型）永远找不到切点，
  *    溢出只能以 model_error 收场、32k 的模型反复压缩。窗口 ≥ 80k 时两者都与旧值相同。
@@ -82,6 +83,11 @@ export interface ShuviXSettingsOptions {
    * 每次读取 `compaction` 都会现调一次（抛错按未知处理）。
    */
   readonly contextWindow?: () => number | undefined
+  /**
+   * 此刻在跑的派生 agent 模型的上下文窗口（Q-P2-08，PIN-08）：压缩余量按「锁定模型 + 这些」里最小的
+   * 那个算。同步读取；未知的项（undefined / 非有限正数）忽略；读取抛错 = 都未知。
+   */
+  readonly liveContextWindows?: () => readonly (number | undefined)[]
   /** 逐段覆盖；每次读取时现读，改了下一次判定就生效 */
   readonly overrides?: ShuviXSettingsOverrides | (() => ShuviXSettingsOverrides | undefined)
 }
@@ -92,12 +98,23 @@ export function createShuviXSettings(options: ShuviXSettingsOptions = {}): Harne
     const source = options.overrides
     return (typeof source === 'function' ? source() : source) ?? {}
   }
+  const known = (value: unknown): value is number =>
+    typeof value === 'number' && Number.isFinite(value) && value > 0
   const contextWindow = (): number | undefined => {
+    let lock: number | undefined
     try {
-      return options.contextWindow?.()
+      lock = options.contextWindow?.()
     } catch {
-      return undefined
+      lock = undefined
     }
+    let live: readonly (number | undefined)[] = []
+    try {
+      live = options.liveContextWindows?.() ?? []
+    } catch {
+      live = []
+    }
+    const windows = [lock, ...live].filter(known)
+    return windows.length === 0 ? lock : Math.min(...windows)
   }
   return {
     get extensions() {
