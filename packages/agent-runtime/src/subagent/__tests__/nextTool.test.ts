@@ -1,7 +1,7 @@
 /**
- * NextTool —— 结果契约协议的工具侧：schema 校验挡回、一次性捕获、契约段文案。
+ * NextTool —— 结果契约协议的工具侧：schema 校验挡回、一次性捕获、契约段文案、结果读回。
  *
- * 这里钉的是「结果即参数」的可信度：校验失败**必须交回失败结果且不置 captured**（模型同轮
+ * 这里钉的是「结果即参数」的可信度：校验失败**必须交回失败结果且不带 details**（模型同轮
  * 看到字段级指正后重试，重试的才是结果）；捕获成功后的重复调用**必须温和拒绝**（并联
  * 双发防护）。错误文案遵循 5250adc 的纠正性引导纪律 —— 说清哪个字段、期望什么、
  * 下一步做什么（call `next` again），而不是一句 invalid。
@@ -9,11 +9,17 @@
  * P1-04（pi-durable）：工具经 durable 的 `execute(args, api, context)` 调（测试里经 invokeTool）；
  * 校验失败从「抛错」变成 BaseTool 模板收口的 isError 结果（裁定 Q12，模型看到的文字不变），
  * 收尾从结果上的 `terminate` 变成 `control: { terminate: true }`。
+ *
+ * P2-02：没有回调了 —— 结果只在返回值的 `details: {result}` 里（从不经 `api.details()`，PIN-04），
+ * 转写条目经 `nextResultOf` 读回。用例编号 P2-02-16…20。
  */
-import { describe, expect, it, vi } from 'vitest'
+import type { JsonValue } from '@earendil-works/chord'
+import type { ConversationId, EntryId, EntryRecord } from '@earendil-works/pi-durable'
+import { describe, expect, it } from 'vitest'
 import {
   NextTool,
   buildResultContractNote,
+  nextResultOf,
   validateContractSchema,
   NEXT_TOOL_NAME
 } from '../nextTool'
@@ -24,6 +30,10 @@ const TITLE_SCHEMA = {
   required: ['title'],
   properties: { title: { type: 'string' } }
 }
+
+const RECORDED = 'Result recorded — the task is complete. Do not call any more tools.'
+const ALREADY_RECORDED =
+  'Result already recorded — the task is complete. Do not call any more tools.'
 
 describe('validateContractSchema — 派发前的契约自检', () => {
   it.each([
@@ -63,7 +73,7 @@ describe('buildResultContractNote — prompt 末尾契约段', () => {
   })
 })
 
-describe('NextTool — 经 BaseTool 模板 execute 的捕获协议', () => {
+describe('NextTool — 结果在 details 里（P2-02）', () => {
   const textOf = (r: InvokedToolResult): string =>
     r.content.map((c) => (c.type === 'text' ? c.text : '')).join('')
   const run = async (
@@ -71,88 +81,57 @@ describe('NextTool — 经 BaseTool 模板 execute 的捕获协议', () => {
     params: Record<string, unknown>,
     callId = 't1'
   ): Promise<InvokedToolResult> => (await invokeTool(tool, params, { callId })).result
+  /** durable 会为这次结果写下的 `pi.tool-result` 条目（appendToolResult 的形状） */
+  const entryOf = (result: InvokedToolResult, toolName = NEXT_TOOL_NAME): EntryRecord => ({
+    id: 7 as EntryId,
+    conversationId: 2 as ConversationId,
+    kind: 'pi.tool-result',
+    model: [
+      {
+        role: 'toolResult',
+        toolCallId: 'c1',
+        toolName,
+        content: result.content,
+        ...(result.details === undefined ? {} : { details: result.details as JsonValue }),
+        isError: result.isError ?? false,
+        timestamp: 0
+      }
+    ],
+    data: { diagnostics: [] }
+  })
 
-  it('合法参数 → onCapture 收到原参数、返回文本含 Result recorded、带 control.terminate', async () => {
-    const onCapture = vi.fn()
-    const tool = new NextTool(TITLE_SCHEMA, onCapture)
+  it('P2-02-16 success → details {result: 参数的拷贝}、control.terminate、确认文案；从不经 api.details()', async () => {
     const params = { title: 'Fix login bug' }
-    const out = await run(tool, params)
-    expect(onCapture).toHaveBeenCalledTimes(1)
-    expect(onCapture).toHaveBeenCalledWith(params)
-    expect(textOf(out)).toContain('Result recorded')
-    expect(out.isError).toBeUndefined()
+    const inv = await invokeTool(new NextTool(TITLE_SCHEMA), params, { callId: 't1' })
+    expect(inv.result.details).toEqual({ result: { title: 'Fix login bug' } })
     // 只调了 next 的那一批，durable 据此结束循环、不再发下一次请求
-    expect(out.control).toEqual({ terminate: true })
+    expect(inv.result.control).toEqual({ terminate: true })
+    expect(textOf(inv.result)).toBe(RECORDED)
+    expect(inv.result.isError).toBeUndefined()
     // 旧形状的顶层 terminate 不再出现
-    expect('terminate' in out).toBe(false)
+    expect('terminate' in inv.result).toBe(false)
+    // 被中断的调用由 durable 按槽位里的 details 结算 —— 结果绝不早早进槽位
+    expect(inv.details).toEqual([])
+    params.title = 'mutated'
+    expect((inv.result.details as { result: { title: string } }).result.title).toBe('Fix login bug')
   })
 
-  it('缺 required 字段 → isError 结果（原 throw），文字含字段位置与期望、含 call `next` again', async () => {
-    const tool = new NextTool(TITLE_SCHEMA, vi.fn())
-    const out = await run(tool, {})
-    expect(out.isError).toBe(true)
-    expect(textOf(out)).toMatch(/call `next` again/)
-    expect(textOf(out)).toMatch(/\(root\): must have required properties title/)
+  it('P2-02-17 schema violation → isError、字段级指正、不带 details / control；同一实例改正后照常捕获', async () => {
+    const tool = new NextTool(TITLE_SCHEMA)
+    const bad = await run(tool, {})
+    expect(bad.isError).toBe(true)
+    expect(textOf(bad)).toMatch(/\(root\): must have required properties title/)
+    expect(textOf(bad)).toMatch(/call `next` again/)
+    expect('details' in bad).toBe(false)
     // 失败的一次不收尾：模型还得改了再调
-    expect(out.control).toBeUndefined()
+    expect(bad.control).toBeUndefined()
+
+    const ok = await run(tool, { title: 'ok now' }, 't2')
+    expect(ok.details).toEqual({ result: { title: 'ok now' } })
+    expect(textOf(ok)).toBe(RECORDED)
   })
 
-  it('校验失败不置 captured：先非法调用（isError）后合法调用仍能捕获', async () => {
-    const onCapture = vi.fn()
-    const tool = new NextTool(TITLE_SCHEMA, onCapture)
-    expect((await run(tool, { title: 42 })).isError).toBe(true)
-    expect(onCapture).not.toHaveBeenCalled()
-
-    const out = await run(tool, { title: 'ok now' }, 't2')
-    expect(onCapture).toHaveBeenCalledTimes(1)
-    expect(onCapture).toHaveBeenCalledWith({ title: 'ok now' })
-    expect(textOf(out)).toContain('Result recorded')
-  })
-
-  it('重复调用防护：捕获后二次 execute → already recorded 文本、onCapture 恰一次', async () => {
-    const onCapture = vi.fn()
-    const tool = new NextTool(TITLE_SCHEMA, onCapture)
-    await run(tool, { title: 'first' })
-    const again = await run(tool, { title: 'second' }, 't2')
-    expect(textOf(again)).toContain('already recorded')
-    expect(onCapture).toHaveBeenCalledTimes(1)
-    // 同批两次 next：第二次也带 terminate，整批才满足「全部 terminate」
-    expect(again.control).toEqual({ terminate: true })
-  })
-
-  it('错误明细上限 8 条（12 处违例 → 恰 8 行明细）', async () => {
-    const properties: Record<string, unknown> = {}
-    const bad: Record<string, unknown> = {}
-    for (let i = 0; i < 12; i++) {
-      properties[`k${i}`] = { type: 'string' }
-      bad[`k${i}`] = i
-    }
-    const tool = new NextTool({ type: 'object', properties }, vi.fn())
-    const out = await run(tool, bad)
-    expect(out.isError).toBe(true)
-    const detailLines = textOf(out)
-      .split('\n')
-      .filter((l) => l.startsWith('  - '))
-    expect(detailLines).toHaveLength(8)
-  })
-
-  it('parameters 即传入 schema 原样透传（required/properties 可从 tool.parameters 读回）', () => {
-    const tool = new NextTool(TITLE_SCHEMA, vi.fn())
-    const p = tool.parameters as unknown as Record<string, unknown>
-    expect(p.type).toBe('object')
-    expect(p.required).toEqual(['title'])
-    expect(p.properties).toEqual({ title: { type: 'string' } })
-  })
-
-  it('name/label 恒 next、description 含 exactly once', () => {
-    const tool = new NextTool(TITLE_SCHEMA, vi.fn())
-    expect(tool.name).toBe(NEXT_TOOL_NAME)
-    expect(tool.name).toBe('next')
-    expect(tool.label).toBe('next')
-    expect(tool.description).toContain('exactly once')
-  })
-
-  it('嵌套约束生效（properties 内 minimum/enum 违例也被完整校验拦下）', async () => {
+  it('P2-02-17 nested constraints (minimum / enum) are checked in full; the rejection carries no details', async () => {
     const schema = {
       type: 'object',
       required: ['level'],
@@ -161,14 +140,115 @@ describe('NextTool — 经 BaseTool 模板 execute 的捕获协议', () => {
         kind: { enum: ['a', 'b'] }
       }
     }
-    const onCapture = vi.fn()
-    const tool = new NextTool(schema, onCapture)
+    const tool = new NextTool(schema)
     const rejected = await run(tool, { level: 0, kind: 'c' })
     expect(rejected.isError).toBe(true)
     expect(textOf(rejected)).toMatch(/\/level: must be >= 1/)
-    expect(onCapture).not.toHaveBeenCalled()
+    expect('details' in rejected).toBe(false)
 
-    await run(tool, { level: 3, kind: 'a' }, 't2')
-    expect(onCapture).toHaveBeenCalledWith({ level: 3, kind: 'a' })
+    const ok = await run(tool, { level: 3, kind: 'a' }, 't2')
+    expect(ok.details).toEqual({ result: { level: 3, kind: 'a' } })
+  })
+
+  it('P2-02-17 at most 8 detail lines (12 violations → exactly 8)', async () => {
+    const properties: Record<string, unknown> = {}
+    const bad: Record<string, unknown> = {}
+    for (let i = 0; i < 12; i++) {
+      properties[`k${i}`] = { type: 'string' }
+      bad[`k${i}`] = i
+    }
+    const out = await run(new NextTool({ type: 'object', properties }), bad)
+    expect(out.isError).toBe(true)
+    const detailLines = textOf(out)
+      .split('\n')
+      .filter((l) => l.startsWith('  - '))
+    expect(detailLines).toHaveLength(8)
+  })
+
+  it('P2-02-18 duplicate after a capture → already recorded、terminate、没有 details 键；新实例照常捕获（守卫按实例）', async () => {
+    const tool = new NextTool(TITLE_SCHEMA)
+    await run(tool, { title: 'first' })
+    const again = await run(tool, { title: 'second' }, 't2')
+    expect(textOf(again)).toContain('already recorded')
+    expect(textOf(again)).toBe(ALREADY_RECORDED)
+    // 同批两次 next：第二次也带 terminate，整批才满足「全部 terminate」
+    expect(again.control).toEqual({ terminate: true })
+    expect('details' in again).toBe(false)
+    expect(nextResultOf(entryOf(again))).toBeUndefined()
+
+    const fresh = await run(new NextTool(TITLE_SCHEMA), { title: 'third' }, 't3')
+    expect(fresh.details).toEqual({ result: { title: 'third' } })
+  })
+
+  it('P2-02-19 one-argument constructor; replay unsafe; name / label next; parameters pass the schema through; description says exactly once', () => {
+    const tool = new NextTool(TITLE_SCHEMA)
+    // @ts-expect-error —— 捕获回调没有了：结果在 details 里
+    void new NextTool(TITLE_SCHEMA, () => {})
+    expect(tool.replay).toBe('unsafe')
+    expect(tool.name).toBe(NEXT_TOOL_NAME)
+    expect(tool.name).toBe('next')
+    expect(tool.label).toBe('next')
+    const p = tool.parameters as unknown as Record<string, unknown>
+    expect(p.type).toBe('object')
+    expect(p.required).toEqual(['title'])
+    expect(p.properties).toEqual({ title: { type: 'string' } })
+    expect(tool.description).toContain('exactly once')
+  })
+
+  describe('P2-02-20 nextResultOf(entry)', () => {
+    const entry = (message: Record<string, unknown>, kind = 'pi.tool-result'): EntryRecord =>
+      ({
+        id: 3 as EntryId,
+        conversationId: 2 as ConversationId,
+        kind,
+        model: [
+          {
+            role: 'toolResult',
+            toolCallId: 'c1',
+            toolName: 'next',
+            content: [{ type: 'text', text: RECORDED }],
+            isError: false,
+            timestamp: 0,
+            ...message
+          }
+        ]
+      }) as EntryRecord
+
+    it('a successful next result → its result object', () => {
+      expect(nextResultOf(entry({ details: { result: { title: 'a' } } }))).toEqual({ title: 'a' })
+    })
+
+    it('extra keys next to result are tolerated (a host review may add them)', () => {
+      expect(
+        nextResultOf(entry({ details: { result: { title: 'a' }, review: { decision: 'allow' } } }))
+      ).toEqual({ title: 'a' })
+    })
+
+    it.each([
+      [
+        'isError with details.result (interrupted / fromSlot)',
+        { isError: true, details: { result: { title: 'a' } } }
+      ],
+      ["another tool ('probe')", { toolName: 'probe', details: { result: { title: 'a' } } }],
+      ['no details', {}],
+      ["details.result 'x'", { details: { result: 'x' } }],
+      ['details.result null', { details: { result: null } }],
+      ['details.result [1]', { details: { result: [1] } }]
+    ])('%s → undefined', (_label, message) => {
+      expect(nextResultOf(entry(message))).toBeUndefined()
+    })
+
+    it('an entry of another kind (pi.assistant) → undefined', () => {
+      expect(
+        nextResultOf(entry({ details: { result: { title: 'a' } } }, 'pi.assistant'))
+      ).toBeUndefined()
+    })
+
+    it('the value is a copy, not shared with the entry', () => {
+      const e = entry({ details: { result: { title: 'a' } } })
+      const value = nextResultOf(e)!
+      value.title = 'changed'
+      expect(nextResultOf(e)).toEqual({ title: 'a' })
+    })
   })
 })

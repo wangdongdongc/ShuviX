@@ -419,7 +419,7 @@ describe('RT 重跑表（agent-runtime）', () => {
   })
 
   it('RT-2 next / agent（派发）是 unsafe', () => {
-    expect(new NextTool({ type: 'object' }, () => {}).replay).toBe('unsafe')
+    expect(new NextTool({ type: 'object' }).replay).toBe('unsafe')
     const dispatch = createDispatchAgentTool({
       registry: { list: () => [], get: () => undefined },
       manager: {} as SubAgentManager,

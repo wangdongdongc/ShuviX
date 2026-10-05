@@ -160,6 +160,20 @@ export interface SpawnedAgentRecord extends LockRecord {
   resultContract?: ResultContract
 }
 
+/**
+ * 派生层级上限的缺省值：根 agent 深度 0，它的直接子 agent 深度 1，再派生深度 2（与旧 manager 的
+ * `DEFAULT_MAX_AGENT_DEPTH` 相同；宿主覆盖经 `SessionHostDeps.maxAgentDepth`，P2-05）。
+ */
+export const MAX_AGENT_DEPTH = 2
+
+/**
+ * 深度为 `depth` 的 agent 还能不能再派生（= 记录里的 `canSpawn`，决定工具清单里给不给 `agent`）：
+ * 它的子 agent 深度 `depth + 1` 不超过上限，即 `depth < max`。
+ */
+export function canSpawnAt(depth: number, max: number = MAX_AGENT_DEPTH): boolean {
+  return depth < max
+}
+
 function parseResultContract(raw: unknown): ResultContract | undefined {
   if (!isObject(raw) || !isObject(raw.schema)) return undefined
   const { nudges, sourceLabel } = raw

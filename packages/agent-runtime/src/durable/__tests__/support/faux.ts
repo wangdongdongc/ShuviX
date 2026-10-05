@@ -143,6 +143,16 @@ export function callTool(
   return fauxAssistantMessage([fauxToolCall(name, args, { id })], { stopReason: 'toolUse' })
 }
 
+/** 一条助手消息里同时发出几个工具调用（`[名字, 参数, 调用 id]`，按次序），stopReason 'toolUse' */
+export function callTools(
+  calls: readonly (readonly [name: string, args: JsonObject, id: string])[]
+): AssistantMessage {
+  return fauxAssistantMessage(
+    calls.map(([name, args, id]) => fauxToolCall(name, args, { id })),
+    { stopReason: 'toolUse' }
+  )
+}
+
 /** provider 错误（stopReason 'error'）；文案含 'overloaded' 时可重试 */
 export function modelError(message: string): AssistantMessage {
   return fauxAssistantMessage([], { stopReason: 'error', errorMessage: message })

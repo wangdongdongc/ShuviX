@@ -358,13 +358,16 @@ export {
   type AnyAgentTool,
   type SpawnedRuntime
 } from './subagent/manager'
-// 派发结果契约：schema 收口的 next 工具（运行时原语；目前没有生产调用方）
+// 派发结果契约：schema 收口的 next 工具（结果在 details 里；派生 agent 的附加工具，按契约重建）
 export {
   NextTool,
   NEXT_TOOL_NAME,
   NEXT_NUDGE_TEXT,
   buildResultContractNote,
+  nextResultOf,
+  resultContractTools,
   validateContractSchema,
+  type NextToolDetails,
   type ResultContract
 } from './subagent/nextTool'
 // Hook：md 格式解析 / 类型化埋点注册表 / runner（设计见 docs/hook-design.md）
@@ -596,8 +599,10 @@ export {
   DEFAULT_INTERRUPTED_SEND_POLICY,
   DEFAULT_MAX_IDLE_OPEN,
   DEFAULT_NOTICE_COALESCE_MS,
+  offersDispatchTool,
   type AgentConfig,
   type AgentToolSet,
+  type AgentToolsRebuildContext,
   type AgentToolsRequest,
   type BotContextBlocks,
   type BuiltinToolsRequest,
@@ -628,6 +633,8 @@ export {
 } from './durable/lock'
 // 派生 agent 记录与身份（P2-01）：平铺在子对话 AgentStateDoc 里的锁形记录；`DurableSession.agentIdentity`
 export {
+  canSpawnAt,
+  MAX_AGENT_DEPTH,
   parseSpawnedAgentRecord,
   rootAgentIdentity,
   spawnedAgentIdentity,
