@@ -233,14 +233,22 @@ export interface KnowledgeToolDeps {
     query: string,
     opts: { limit: number; bundleDir: string }
   ) => Promise<KnowledgeSearchHit[]>
-  /** 写入者 actor 字符串（OKF §5.2：`shuvix-<profile>/<model>`）—— create 盖 `generated` 用 */
-  actor: () => string
+  /**
+   * 写入者 actor 字符串（OKF §5.2：`shuvix-<profile>/<model>`）—— create 盖 `generated` 用。
+   * 收这次调用的 scope（`call.conversationId` 认得出发起调用的 agent；单测直接调钩子时为 undefined）：
+   * 会话级装配的工具被同一会话的每个 agent 共用，章要盖成**发起这次写入的** agent。
+   */
+  actor: (call: ToolCallScope | undefined) => string
   now: () => Date
   /**
    * 新建之后（提交 / 事件由宿主完成）；`path` 是 `bundleDir` 内的相对路径。
    * 只有 create 这一条路要它 —— `edit` 走文件工具，那边自有 onFileChange 接同一条管线。
    */
-  afterWrite?: (e: { bundleDir: string; path: string; title: string }) => void | Promise<void>
+  afterWrite?: (
+    e: { bundleDir: string; path: string; title: string },
+    /** 这次调用的 scope（同 `actor` 的入参） */
+    call: ToolCallScope | undefined
+  ) => void | Promise<void>
   abortError?: string
   label: string
 }
@@ -338,7 +346,7 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
       case 'read':
         return this.read(pep, params)
       case 'create':
-        return this.create(pep, params)
+        return this.create(pep, params, call)
       case 'validate':
         return this.validate(pep, params)
       default:
@@ -588,7 +596,11 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
    *
    * 本期新条目一律落在 bundle 根 —— 没有 agent 可选的子目录层级。
    */
-  private async create(pep: PepCall, params: KnowledgeToolParams): Promise<Result> {
+  private async create(
+    pep: PepCall,
+    params: KnowledgeToolParams,
+    call: ToolCallScope | undefined
+  ): Promise<Result> {
     const type = params.type?.trim()
     const title = params.title?.trim()
     const description = params.description?.trim()
@@ -640,12 +652,12 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
         status: params.status ?? 'stable',
         staleAfter: params.stale_after,
         sources,
-        generated: { by: this.deps.actor(), at: this.deps.now().toISOString() }
+        generated: { by: this.deps.actor(call), at: this.deps.now().toISOString() }
       },
       body!
     )
     await this.deps.port.writeFile(joinRoot(target.dir, rel), content)
-    await this.deps.afterWrite?.({ bundleDir: target.dir, path: rel, title: title! })
+    await this.deps.afterWrite?.({ bundleDir: target.dir, path: rel, title: title! }, call)
 
     const warnings = validateConceptText(content, rel)
       .filter((d) => d.level === 'warning')

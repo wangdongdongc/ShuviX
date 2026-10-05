@@ -128,8 +128,13 @@ export interface FileToolDeps {
   /**
    * write/edit 成功后回调 —— 端用于发布文件变更事件（AppEvent 'files.changed'）。
    * portPath 为该端 port 路径；端闭包负责归一到 UI 路径空间并 publish。见 docs/internal-events.md。
+   * `call` 是这次调用的 scope（单测直接调钩子时为 undefined）—— 会话级装配的工具被同一会话的每个
+   * agent 共用，宿主要认出「谁写的」（知识库提交的 actor）只能靠它。
    */
-  onFileChange?(e: { portPath: string; kind: 'write' | 'edit' }): void
+  onFileChange?(
+    e: { portPath: string; kind: 'write' | 'edit' },
+    call: ToolCallScope | undefined
+  ): void
   /**
    * 写入方（根）会话 id —— 只用于契约 md 的溯源字段（`shuvix-memory-session`）。
    * 不注入则该字段不写，写后校验与其余盖章照常。
@@ -142,8 +147,14 @@ export interface FileToolDeps {
    * 给的是 **bundle 相对**而不是某个根相对：诊断规则按 bundle 判（`index.md` 是不是根 index），
    * 容器相对的路径会让每个 bundle 的根 index 都被误判成子目录 index。不注入（扩展端）则
    * 知识库目录下的 md 与普通 md 无异。
+   *
+   * `actor(call)` 收这次调用的 scope（`call.conversationId` 认得出发起调用的 agent）：会话级装配的
+   * 工具被同一会话的每个 agent 共用，章要盖成**发起这次写入的** agent。
    */
-  knowledge?: { locate: (portPath: string) => string | null; actor: () => string }
+  knowledge?: {
+    locate: (portPath: string) => string | null
+    actor: (call: ToolCallScope | undefined) => string
+  }
 }
 
 const UNSUPPORTED_SUFFIX = '. Supported: text files, PDF, DOC, DOCX, XLSX, PPTX, HTML, IPYNB.'
@@ -237,7 +248,7 @@ abstract class FileToolBase<
    * 否则宿主自己盖的这一章会让 agent 的下一次 edit 撞上「读后被改」。
    * 整段 try/catch：这一步出任何问题都不该把一次成功的写入变成失败。
    */
-  protected async reviewWrittenMd(portPath: string): Promise<string | null> {
+  protected async reviewWrittenMd(portPath: string, call?: ToolCallScope): Promise<string | null> {
     if (!/\.(md|markdown|mdx)$/i.test(portPath)) return null
     const { port, guards } = this.deps
     try {
@@ -251,7 +262,7 @@ abstract class FileToolBase<
           today: now.toISOString().slice(0, 10),
           knowledge:
             knowledge && rel !== null
-              ? { rel, actor: knowledge.actor(), now: now.toISOString() }
+              ? { rel, actor: knowledge.actor(call), now: now.toISOString() }
               : undefined
         })
         if (!outcome) return null
@@ -415,8 +426,8 @@ class WriteFileTool extends FileToolBase<typeof WriteParamsSchema> {
       this.makeAsk(toolCallId, portPath, signal, call)
     )
     // 先审阅（可能回写盖章），再广播变更 —— 让面板刷新读到的是最终内容
-    const note = await this.reviewWrittenMd(portPath)
-    this.deps.onFileChange?.({ portPath, kind: 'write' })
+    const note = await this.reviewWrittenMd(portPath, call)
+    this.deps.onFileChange?.({ portPath, kind: 'write' }, call)
     return withNote(res, note)
   }
 }
@@ -452,8 +463,8 @@ class EditFileTool extends FileToolBase<typeof EditParamsSchema> {
       params,
       this.makeAsk(toolCallId, portPath, signal, call)
     )
-    const note = await this.reviewWrittenMd(portPath)
-    this.deps.onFileChange?.({ portPath, kind: 'edit' })
+    const note = await this.reviewWrittenMd(portPath, call)
+    this.deps.onFileChange?.({ portPath, kind: 'edit' }, call)
     return withNote(res, note)
   }
 }

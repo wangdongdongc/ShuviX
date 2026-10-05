@@ -171,8 +171,10 @@ export function wrapDurableTool(tool: WrappableTool, opts: WrapDurableToolOption
 }
 
 /**
- * 旧调用形状（P1-11 改写 agentHost 之前的调用方）：位置参数版的 `wrapDurableTool`。
- * `overrides.spill` 缺省 true（= processToolOutput 的缺省：超限就落盘）。
+ * 旧调用形状：位置参数版的 `wrapDurableTool`。`overrides.spill` 缺省 true（= processToolOutput 的缺省：
+ * 超限就落盘）。P1-11 起 agentHost 只用 `wrapDurableTool(tool, { sessionId, spill: 'auto', security })`，
+ * 这里与 getOutputStrategy / ProcessToolOutputOverrides 只剩单测在用。TODO(pi-durable p1): P1-13 删掉，
+ * 单测改调 wrapDurableTool。
  */
 export function wrapToolOutput(
   tool: WrappableTool,

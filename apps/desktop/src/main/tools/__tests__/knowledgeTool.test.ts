@@ -25,7 +25,11 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { executeTool, failureText } from '@shuvix/agent-runtime/tools/testing/invokeTool'
+import {
+  executeTool,
+  failureText,
+  invokeTool
+} from '@shuvix/agent-runtime/tools/testing/invokeTool'
 
 const state = vi.hoisted(() => ({
   root: '',
@@ -63,10 +67,6 @@ vi.mock('../../services/toolRegistry', () => ({
   }
 }))
 vi.mock('../../services/toolContext', () => ({
-  agentActorOf: (ctx: {
-    agent?: { profileName?: string; getModelConfig?: () => { model?: string } }
-  }): string =>
-    `shuvix-${ctx.agent?.profileName ?? 'agent'}/${ctx.agent?.getModelConfig?.().model ?? 'unknown'}`,
   getDesktopSecurityContext: () => ({ enforcePath: vi.fn() }),
   TOOL_ABORTED: 'Aborted'
 }))
@@ -513,5 +513,59 @@ describe('TK-6..TK-10 内置库（语言目录、只读、垫底）', () => {
     expect(out).toContain(`hit in ${BUILTIN_BUNDLE}`)
     // 省略 base 的检索不解析任何 base：范围就是 listBases 给的那一份
     expect(state.resolveBase).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * H11-51（P1-11）—— 会话级装配的 knowledge 工具（ctx 带 agentOf、没有固定的 agent）：溯源章与变更管线的
+ * actor 按**这次调用**的对话认人（withCallAgent）。
+ */
+describe('H11-51 knowledge create 的章按调用盖', () => {
+  const identity = (profileName: string, model: string): ToolContext['agent'] => ({
+    profileName,
+    kind: 'root',
+    getModelConfig: () => ({ provider: 'anthropic', model, capabilities: {} })
+  })
+
+  let current: ToolContext['agent']
+  const sessionCtx: ToolContext = { sessionId: 's1', agentOf: () => current }
+
+  const createEntry = async (title: string): Promise<string> => {
+    const tool = makeKnowledgeTool(sessionCtx)
+    await invokeTool(
+      tool,
+      { action: 'create', base: 'project', type: 'Memory', title, description: 'd', body: 'b' },
+      { callId: `h11-51-${title}`, conversationId: 1 }
+    )
+    return readFileSync(join(state.root, 'projects', 'acme', `${title.toLowerCase()}.md`), 'utf-8')
+  }
+
+  it('H11-51 对话 1 是 work / claude-sonnet-4-5 → generated.by 与变更管线的 actor 都是 shuvix-work/claude-sonnet-4-5', async () => {
+    current = identity('work', 'claude-sonnet-4-5')
+    const text = await createEntry('Alpha')
+    expect(text).toContain('by: "shuvix-work/claude-sonnet-4-5"')
+    expect(state.record).toHaveBeenLastCalledWith(
+      expect.objectContaining({ op: 'Creation', actor: 'shuvix-work/claude-sonnet-4-5' })
+    )
+  })
+
+  it('H11-51 认不出（没有锁）→ shuvix-agent/unknown', async () => {
+    current = undefined
+    const text = await createEntry('Beta')
+    expect(text).toContain('by: "shuvix-agent/unknown"')
+    expect(state.record).toHaveBeenLastCalledWith(
+      expect.objectContaining({ actor: 'shuvix-agent/unknown' })
+    )
+  })
+
+  it('H11-51 两次 create 之间身份变了：各盖各的', async () => {
+    current = identity('work', 'm1')
+    expect(await createEntry('Gamma')).toContain('by: "shuvix-work/m1"')
+    current = identity('bot', 'm2')
+    expect(await createEntry('Delta')).toContain('by: "shuvix-bot/m2"')
+    expect(state.record.mock.calls.slice(-2).map(([e]) => e.actor)).toEqual([
+      'shuvix-work/m1',
+      'shuvix-bot/m2'
+    ])
   })
 })

@@ -307,6 +307,11 @@ function notifyReviewing(sessionId: string, toolCallId: string, reviewing: boole
 
 /**
  * 接缝实现：交给判定型 hook，交回最严的结论；答不出交回 null（照旧问人）。绝不抛出。
+ *
+ * TODO(pi-durable p2): 裁定 Q16 —— 审查员那条对话归发起询问的那次工具调用所有，按
+ * (sessionId, event.taskId) 认人（`event.taskId` / `conversationId` 已经穿到这里；provider 的
+ * toolCallId 会话内可能重复）。宿主派出的 agent（hook 的 runTask）落进所属会话的存储是 phase 2 的事，
+ * 届时这里的「审查中」标记与审查状态（reviewState 仍按 toolCallId）一并改键。
  */
 export async function reviewPermissionRequest(
   event: PermissionRequestEvent,

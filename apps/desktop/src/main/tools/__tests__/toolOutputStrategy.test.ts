@@ -108,11 +108,7 @@ import { makeReadTool } from '../read'
 import { ListTool } from '../ls'
 import { GlobTool } from '../glob'
 import { GrepTool } from '../grep'
-import {
-  getOutputStrategy,
-  wrapToolOutput,
-  type WrappableTool
-} from '../../services/wrapToolOutput'
+import { wrapDurableTool, type WrappableTool } from '../../services/wrapToolOutput'
 import type { ToolContext } from '../../services/toolContext'
 
 const ctx: ToolContext = { sessionId: SID }
@@ -133,16 +129,11 @@ function textOf(result: InvokedToolResult): string {
 }
 
 /**
- * agentHost.resolveTools 给每个工具做的那一层包装，原样重放：策略与上限都取**工具自己的**声明，
- * 其余（processToolOutput → truncate*）全是真的。
+ * agentHost（P1-11 的 ToolHost）给每个工具做的那一层包装，原样重放：宿主只给会话与 spill，策略与
+ * 上限由包装器从**工具自己的**声明里读，其余（processToolOutput → truncate*）全是真的。
  */
 function hostWrap(tool: object, spill: boolean): AnyTool {
-  const caps = tool as { outputMaxBytes?: number; outputMaxLines?: number }
-  return wrapToolOutput(tool as WrappableTool, SID, getOutputStrategy(tool), {
-    maxBytes: caps.outputMaxBytes,
-    maxLines: caps.outputMaxLines,
-    spill
-  })
+  return wrapDurableTool(tool as WrappableTool, { sessionId: SID, spill })
 }
 
 /**
