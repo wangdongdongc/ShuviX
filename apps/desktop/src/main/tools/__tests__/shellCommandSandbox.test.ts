@@ -2,9 +2,10 @@
  * bash 工具与命令沙箱的接线 —— 沙箱本身（规格、profile、探测、拒绝说明）另有单测，这里只钉
  * 「工具怎么用它」：
  *
- *  - SC-1 schema 与描述跟着**构造时**的 pin 走：pin 为真 → 多一个可选的 `dangerouslyDisableSandbox`、
- *         描述 = 基础描述 + 受限范围一段；为假 → 两样都没有。构造之后全局开关再变，已造好的实例
- *         不变（照旧要计划）。PowerShell 工具永远没有这个参数；
+ *  - SC-1 schema 与描述跟着**构造时交进来的** pin 走（`ctx.sandboxed` —— agentHost 装内置工具时按锁给，
+ *         P1-11 起 bash 不再调 pinSession）：pin 为真 → 多一个可选的 `dangerouslyDisableSandbox`、
+ *         描述 = 基础描述 + 受限范围一段；为假 → 两样都没有；没给 → 按此刻的全局开关给一份占位。
+ *         构造之后全局开关再变，已造好的实例不变（照旧要计划）。PowerShell 工具永远没有这个参数；
  *  - SC-2 圈住执行：planFor 的入参（工作区 + 会话授权 + offerEscalation），命令客体带 `sandboxed`、
  *         询问选项不带 `unsandboxed`，计划前台 / 后台都交给 runCommand；计划为 null → 如实上报
  *         「未圈住」（照常询问，卡片不标完全访问），runCommand 不带沙箱；
@@ -25,7 +26,8 @@
  *  - SC-UR2 pin 为真的实例（计划为 null → 'unavailable'，申请越界 → 'escalated'）不问 whyUnconfined ——
  *           它答的是「这条会话为什么没固定成套」，而这条会话固定成了套。
  *
- * 替身：sandbox 管理器（pinSession / planFor / sandboxGloballyActive 都是 spy）、toolContext
+ * 替身：sandbox 管理器（pinSession / planFor / sandboxGloballyActive 都是 spy —— pinSession 只为
+ * 断言「没人调它」）、toolContext
  * （安全门是 spy，含 getSessionPathGrants 与 sessionDirExtras）、bgTaskService 的三个执行入口、i18n。
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -155,10 +157,9 @@ async function runFull(
   }
 }
 
-/** 按 pin 的答案造一个 bash 工具 */
+/** 按 pin 造一个 bash 工具：钉子经 ctx.sandboxed 交进去（agentHost 装内置工具时就是这么给的） */
 function bashWithPin(pinned: boolean): BashTool {
-  mocks.pinSession.mockReturnValueOnce(pinned)
-  return new BashTool(CTX)
+  return new BashTool({ ...CTX, sandboxed: pinned })
 }
 
 /** enforceCommand 第一次调用的 [命令客体, 询问选项] */
@@ -251,13 +252,26 @@ describe('SC-1 schema 与描述跟着构造时的 pin 走', () => {
     expect(tool.description).not.toMatch(/sandbox/i)
   })
 
-  it('SC-1 每次构造恰好 pin 一次，按 ctx.sessionId；执行时不再 pin', async () => {
-    const tool = new BashTool(CTX)
-    new BashTool({ sessionId: 'sess-other' } as ToolContext)
-    expect(mocks.pinSession.mock.calls).toEqual([[SID], ['sess-other']])
-
-    mocks.pinSession.mockClear()
+  it('SC-1 从不调 pinSession（构造、执行都不）：schema 跟着交进来的 ctx.sandboxed 走，pin 怎么答都不算', async () => {
+    mocks.pinSession.mockReturnValue(true)
+    mocks.sandboxGloballyActive.mockReturnValue(true)
+    const tool = new BashTool({ ...CTX, sandboxed: false })
+    expect('dangerouslyDisableSandbox' in schemaOf(tool).properties).toBe(false)
     await run(tool, params())
+    expect(mocks.pinSession).not.toHaveBeenCalled()
+    expect(mocks.planFor).not.toHaveBeenCalled()
+  })
+
+  it('SC-1 没交钉子（还没有 agent 时的占位）：按此刻的全局开关，不 pin 会话', () => {
+    mocks.sandboxGloballyActive.mockReturnValue(true)
+    const on = new BashTool(CTX)
+    expect(schemaOf(on).properties.dangerouslyDisableSandbox).toBeDefined()
+    expect(on.description).toBe(bashWithPin(true).description)
+
+    mocks.sandboxGloballyActive.mockReturnValue(false)
+    const off = new BashTool(CTX)
+    expect('dangerouslyDisableSandbox' in schemaOf(off).properties).toBe(false)
+    expect(off.description).toBe(bashWithPin(false).description)
     expect(mocks.pinSession).not.toHaveBeenCalled()
   })
 
@@ -455,9 +469,8 @@ describe('SC-UR 没进沙箱的原因（命令客体的 unconfinedReason）', ()
     'SC-UR1 pin 为假的 bash：whyUnconfined 答 %s 就原样上报；问的是本会话自己的 id，不要计划',
     async (reason) => {
       mocks.whyUnconfined.mockReturnValue(reason)
-      mocks.pinSession.mockReturnValueOnce(false)
       // 与文件其余用例不同的会话 id：「按本会话问」要能和「按某个固定 id 问」区分开
-      const tool = new BashTool({ sessionId: 'sess-ur-own' } as ToolContext)
+      const tool = new BashTool({ sessionId: 'sess-ur-own', sandboxed: false } as ToolContext)
       await run(tool, params())
 
       expect(mocks.whyUnconfined.mock.calls).toEqual([['sess-ur-own']])

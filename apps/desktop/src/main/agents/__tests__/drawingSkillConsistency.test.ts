@@ -5,25 +5,26 @@
  *  - 变量表（`desktopPromptVars`）：名单点了 `skill:builtin:drawing` 且 findEnabled 里有它 →
  *    visualGuide / visualCraft 带一句「先加载 `builtin:drawing`」的指路；否则两个值都是空串
  *    （2026-09-24 起契约、预算与范例只在技能里，整份作图说明都挂在「技能在架」上）；
- *  - 工具解析（`resolveTools` → 真的 `SkillTool`）：名单点了名的 ∩ findEnabled → 技能进货架索引。
- * 两边读的是同一份名单（createAgent 先算好名单，再分别交给两处）。这一组把两边放在同一组输入下
+ *  - 工具解析（ToolHost 的 `resolveAgentTools` → 真的 `SkillTool`）：名单点了名的 ∩ findEnabled →
+ *    技能进货架索引。
+ * 两边读的是同一份名单（锁先算好名单，冻结人设与解析工具各拿一份）。这一组把两边放在同一组输入下
  * 逐格比对：指路出现的地方技能一定加载得到，加载得到的地方提示一定指了路 —— 任何一边自己改了
  * 判断（例如又给 root 恒挂一个 SkillTool、或变量表按宿主而不是按名单判），矩阵里就会有一格对不上。
  *
- * 取 host 适配面的办法同 skillToolInjection：顶掉 `createAgentFactory`，接住 agentHost 交出来的
- * 那个对象。与那边不同的是这里用**真的 SkillTool** —— 要比的正是它装配出的货架；于是桩
- * skillService（可控的 findEnabled）、`../../i18n`（顶层 import electron）与 ripgrep（真二进制），
- * 注册表桩要带 `registerBuiltinTool`（skillTool.ts 加载即自注册）。
+ * P1-11 起两边是 agentHost 直接导出的 `desktopPromptVars` 与 `createDesktopToolHost(...).resolveAgentTools`。
+ * 这里用**真的 SkillTool** —— 要比的正是它装配出的货架；于是桩 skillService（可控的 findEnabled）、
+ * `../../i18n`（顶层 import electron）与 ripgrep（真二进制），注册表桩要带 `registerBuiltinTool`
+ * （skillTool.ts 加载即自注册）。派生 agent 的工具一侧要等 phase 2（resolveAgentTools 对 spawned 抛
+ * PhasePendingError）：那几格先 it.todo，变量表一侧照旧按派生身份查。
  *
  * 2026-09-24 DSC-1 同号改写：从前「不指路时手艺范例常驻」，如今不指路时两个值都是空串，
  * 指路时恰好一次、不带范例。
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import type { AgentHostAdapter, PromptVars, ToolResolveRequest } from '@shuvix/agent-runtime'
+import type { PromptVars } from '@shuvix/agent-runtime'
 import type { Skill } from '../../types/skill'
 
 const mocks = vi.hoisted(() => ({
-  host: { value: undefined as AgentHostAdapter | undefined },
   findEnabled: vi.fn(),
   findByName: vi.fn(),
   pick: vi.fn(),
@@ -31,19 +32,12 @@ const mocks = vi.hoisted(() => ({
   projectPick: vi.fn()
 }))
 
-vi.mock('@shuvix/agent-runtime', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@shuvix/agent-runtime')>()
-  return {
-    ...actual,
-    createAgentFactory: (host: AgentHostAdapter) => {
-      mocks.host.value = host
-      return { createAgent: vi.fn() }
-    }
-  }
-})
-
 vi.mock('../../services/skillService', () => ({
-  skillService: { findEnabled: mocks.findEnabled, findByName: mocks.findByName }
+  skillService: {
+    findEnabled: mocks.findEnabled,
+    findAll: mocks.findEnabled,
+    findByName: mocks.findByName
+  }
 }))
 vi.mock('../../i18n', () => ({ t: (key: string) => key }))
 vi.mock('../../utils/toolUtils/ripgrep', () => ({
@@ -71,10 +65,11 @@ vi.mock('../../services/toolRegistry', () => {
 })
 
 /** 包装器走恒等：拿到的就是真 SkillTool 实例本身，description 即货架索引 */
-vi.mock('../../services/wrapToolOutput', () => ({
-  wrapToolOutput: (tool: object) => tool,
-  getOutputStrategy: () => 'middle'
-}))
+vi.mock('../../services/wrapToolOutput', () => ({ wrapDurableTool: (tool: object) => tool }))
+vi.mock('../../services/userInputBroker', () => ({ requestUserInputFor: vi.fn() }))
+vi.mock('../../services/sandbox', () => ({ sandboxGloballyActive: () => false }))
+vi.mock('../../services/botService', () => ({ botService: { forSession: () => null } }))
+vi.mock('../../utils/toolUtils/fileTime', () => ({ recordRead: vi.fn() }))
 vi.mock('../AgentTool', () => ({ createAgentTool: () => ({ name: 'agent' }) }))
 
 vi.mock('electron', () => ({ app: { getVersion: () => '9.9.9', getPath: () => '/tmp/x' } }))
@@ -89,7 +84,6 @@ vi.mock('../../services/memory', () => ({ resolveProjectMemoryIndex: vi.fn() }))
 vi.mock('../../frontend/core', () => ({ chatFrontendRegistry: { broadcast: vi.fn() } }))
 vi.mock('../../services/agentRuntimeAdapters', () => ({
   electronEventSink: {},
-  electronToolResultTransform: vi.fn(),
   runtimeLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
 }))
 vi.mock('../../services/toolContext', () => ({
@@ -98,7 +92,8 @@ vi.mock('../../services/toolContext', () => ({
 }))
 vi.mock('../../services/knowledge', () => ({ enabledBaseChoices: () => [] }))
 
-import '../agentHost'
+import { createDesktopToolHost, desktopPromptVars } from '../agentHost'
+import { inProcess, profileOf } from './support/toolHostFixtures'
 
 const SID = 'sess-drawing-consistency'
 const AGENT_ID = 'agent-dsc-1'
@@ -120,31 +115,36 @@ const BUILTIN: Skill = {
 
 type Kind = 'root' | 'spawned'
 
-/** 同一组输入下的两边：变量表（按 agent 自己的身份）与工具解析（名单同一份） */
-async function bothSides(
-  kind: Kind,
-  names: string[]
-): Promise<{ vars: PromptVars; tools: Array<{ name?: string; description?: string }> }> {
-  const host = mocks.host.value
-  expect(host, 'agentHost 应把适配面交给 createAgentFactory').toBeDefined()
-  const selfId = kind === 'root' ? SID : AGENT_ID
-  const vars = await host!.promptVars({
-    sessionId: selfId,
+/** 变量表一侧（按 agent 自己的身份） */
+async function varsOf(kind: Kind, names: string[]): Promise<PromptVars> {
+  return await desktopPromptVars({
+    sessionId: kind === 'root' ? SID : AGENT_ID,
     kind,
     cwd: kind === 'root' ? '/w/proj' : '',
     toolNames: names
   })
-  const tools = await host!.resolveTools({
-    kind,
-    rootSessionId: SID,
-    selfSessionId: selfId,
-    profile: { name: kind === 'root' ? 'work' : 'coding' } as ToolResolveRequest['profile'],
-    names,
-    getModelConfig: () =>
-      ({ provider: 'p', model: 'm', capabilities: {} }) as ReturnType<
-        ToolResolveRequest['getModelConfig']
-      >
-  })
+}
+
+/** 同一组输入下的两边：变量表与根 agent 的工具解析（名单同一份） */
+async function bothSides(
+  names: string[]
+): Promise<{ vars: PromptVars; tools: Array<{ name?: string; description?: string }> }> {
+  const vars = await varsOf('root', names)
+  const resolved = await createDesktopToolHost({ lockOf: () => undefined }).resolveAgentTools(
+    {
+      sessionId: SID,
+      conversationId: 1 as never,
+      kind: 'root',
+      rootSessionId: SID,
+      selfSessionId: SID,
+      profile: inProcess(profileOf('work')),
+      names,
+      model: { provider: 'p', modelId: 'm' },
+      cwd: '/w/proj'
+    },
+    { signal: new AbortController().signal }
+  )
+  const tools = [resolved.agent, resolved.skill].filter((t) => t !== undefined)
   return { vars, tools: tools as Array<{ name?: string; description?: string }> }
 }
 
@@ -158,12 +158,11 @@ beforeEach(() => {
 })
 
 describe('DSC 指路与货架同一个判断', () => {
-  const MATRIX: Array<[kind: Kind, named: boolean, enabled: boolean]> = (
-    ['root', 'spawned'] as const
-  ).flatMap((kind) =>
-    [true, false].flatMap((named) =>
-      [true, false].map((enabled): [Kind, boolean, boolean] => [kind, named, enabled])
-    )
+  const MATRIX: Array<[kind: Kind, named: boolean, enabled: boolean]> = (['root'] as const).flatMap(
+    (kind) =>
+      [true, false].flatMap((named) =>
+        [true, false].map((enabled): [Kind, boolean, boolean] => [kind, named, enabled])
+      )
   )
 
   it.each(MATRIX)(
@@ -171,7 +170,7 @@ describe('DSC 指路与货架同一个判断', () => {
     async (kind, named, enabled) => {
       mocks.findEnabled.mockReturnValue(enabled ? [BUILTIN] : [])
       const names = named ? ['read', DRAWING] : ['read']
-      const { vars, tools } = await bothSides(kind, names)
+      const { vars, tools } = await bothSides(names)
 
       // (a) 两个出口都指了路
       const pointed = vars.visualGuide.includes(POINTER) && vars.visualCraft.includes(POINTER)
@@ -201,16 +200,16 @@ describe('DSC 指路与货架同一个判断', () => {
     }
   )
 
+  it.todo(
+    'DSC-1 kind=spawned（名单点名 × 技能在架）：派生 agent 的货架与它的提示同一个判断 (pi-durable p2)'
+  )
+
   it('DSC-2 点了名但被停用、名单里又没有别的 skill → 连 skill 工具都不挂（空手的工具是噪音）', async () => {
     mocks.findEnabled.mockReturnValue([])
-    for (const kind of ['root', 'spawned'] as const) {
-      const { vars, tools } = await bothSides(kind, ['read', DRAWING])
-      expect(
-        tools.map((tool) => tool.name),
-        kind
-      ).not.toContain('skill')
-      // 对照：同一次提示里也没有指路
-      expect(vars.visualGuide, kind).not.toContain(POINTER)
-    }
+    const { vars, tools } = await bothSides(['read', DRAWING])
+    expect(tools.map((tool) => tool.name)).not.toContain('skill')
+    // 对照：同一次提示里也没有指路；派生身份的变量表同样不指路（工具一侧是 phase 2）
+    expect(vars.visualGuide).not.toContain(POINTER)
+    expect((await varsOf('spawned', ['read', DRAWING])).visualGuide).not.toContain(POINTER)
   })
 })

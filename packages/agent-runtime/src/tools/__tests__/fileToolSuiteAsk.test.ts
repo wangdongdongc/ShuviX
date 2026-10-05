@@ -56,9 +56,16 @@ import {
   resultText,
   type InvokedToolResult
 } from '../testing/invokeTool'
+import type { ToolCallScope } from '../toolCall'
 
 /** 内置策略 md 的构建期内联读取口（真实装配链要它；测试进程，不进桌面 bundle） */
 const INLINE_POLICY_MD = createInlinePolicyMdReader()
+
+/**
+ * onFileChange 的第二个参数：这次调用的 scope（宿主按它认出发起写入的 agent）。executeTool 的
+ * 假 api 缺省在根对话、tool task 1 上
+ */
+const CALL = expect.objectContaining({ conversationId: 1, taskId: 1 })
 
 /** 套件的会话 id（决策日志按它分桶） */
 const SID = 'test-session'
@@ -107,7 +114,9 @@ interface SuiteHarness {
   requests: InputRequest[]
   requestUserInput?: Mock<(req: InputRequest) => Promise<InputResponse>>
   persistGrant: Mock<(mode: AccessMode, p: string) => void>
-  onFileChange: Mock<(e: { portPath: string; kind: 'write' | 'edit' }) => void>
+  onFileChange: Mock<
+    (e: { portPath: string; kind: 'write' | 'edit' }, call: ToolCallScope | undefined) => void
+  >
   readTimes: Set<string>
   /** 与 opts.links 同一个对象（用例改它 = 改盘上的链接） */
   links: Record<string, LinkInfo>
@@ -192,7 +201,10 @@ function makeSuite(opts: SuiteOptions = {}): SuiteHarness {
     : undefined
 
   const persistGrant = vi.fn<(mode: AccessMode, p: string) => void>()
-  const onFileChange = vi.fn<(e: { portPath: string; kind: 'write' | 'edit' }) => void>()
+  const onFileChange =
+    vi.fn<
+      (e: { portPath: string; kind: 'write' | 'edit' }, call: ToolCallScope | undefined) => void
+    >()
 
   // 桌面口径的 provider：workspace={{ROOT}}；会话目录刻意给空 —— 出厂外部目录门（ask-on-external-path）
   // 于是对每一次写都问（#1），家目录 /fake-home 里的读也问（#0），工作区 /ws 在家目录外、读放行；
@@ -468,10 +480,10 @@ describe('文件工具套件 — 文件变更回调', () => {
     const h = makeSuite({ files: { [INSIDE_ABS]: 'alpha\nbeta\n' }, respond: allowed })
 
     await executeTool(h.suite.edit, 'c1', { path: INSIDE, oldText: 'beta', newText: 'BETA' })
-    expect(h.onFileChange).toHaveBeenCalledWith({ portPath: INSIDE_ABS, kind: 'edit' })
+    expect(h.onFileChange).toHaveBeenCalledWith({ portPath: INSIDE_ABS, kind: 'edit' }, CALL)
 
     await executeTool(h.suite.write, 'c2', { path: INSIDE, content: 'fresh\n' })
-    expect(h.onFileChange).toHaveBeenCalledWith({ portPath: INSIDE_ABS, kind: 'write' })
+    expect(h.onFileChange).toHaveBeenCalledWith({ portPath: INSIDE_ABS, kind: 'write' }, CALL)
     expect(h.onFileChange).toHaveBeenCalledTimes(2)
   })
 
@@ -523,7 +535,10 @@ describe('文件工具套件 — OKF 知识库写钩子（deps.knowledge）', ()
     expect(actor).toHaveBeenCalledTimes(1)
     // 广播在盖章回写之后、且只有一次 —— 面板刷新读到的是最终内容
     expect(h.onFileChange).toHaveBeenCalledTimes(1)
-    expect(h.onFileChange).toHaveBeenCalledWith({ portPath: '/kb/sessions/x.md', kind: 'write' })
+    expect(h.onFileChange).toHaveBeenCalledWith(
+      { portPath: '/kb/sessions/x.md', kind: 'write' },
+      CALL
+    )
 
     // 模型中途切换：actor 每次写现取
     actor.mockReturnValue('shuvix-work/m2')
@@ -990,7 +1005,7 @@ describe('文件工具套件 — 询问点的自动审查（provider.onPermissio
     expect(h.requestUserInput).not.toHaveBeenCalled()
     expect(h.files.get(INSIDE_ABS)).toBe('hello\n')
     expect(h.onFileChange).toHaveBeenCalledTimes(1)
-    expect(h.onFileChange).toHaveBeenCalledWith({ portPath: INSIDE_ABS, kind: 'write' })
+    expect(h.onFileChange).toHaveBeenCalledWith({ portPath: INSIDE_ABS, kind: 'write' }, CALL)
 
     expect(review).toHaveBeenCalledTimes(1)
     const [event] = review.mock.calls[0]

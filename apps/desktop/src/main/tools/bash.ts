@@ -2,14 +2,15 @@
  * Bash 工具 — 在指定工作目录中执行 shell 命令（仅 macOS / Linux；Windows 上是 powershell 工具）
  * 从 pi-coding-agent 移植，支持输出截断、超时控制、abort。执行路径与 powershell 共用，见 shellCommand.ts
  *
- * 沙箱：构造时按会话固定「本会话的命令套不套沙箱」（sandbox.pinSession）。套的话 schema 多一个
- * `dangerouslyDisableSandbox`、描述多一段受限范围说明；不套就两样都没有 —— 提示词绝不指向
- * agent 没有的东西。设置页的 describe() 读全局开关。
+ * 沙箱：「本会话的命令套不套沙箱」是构造时交进来的钉子（`ctx.sandboxed` —— agentHost 装内置工具时
+ * 按锁记录给；锁熬得过重启，钉子也跟着它）。没给（还没有 agent 时的那份占位）就按此刻的全局开关。
+ * 套的话 schema 多一个 `dangerouslyDisableSandbox`、描述多一段受限范围说明；不套就两样都没有 ——
+ * 提示词绝不指向 agent 没有的东西。设置页的 describe() 读全局开关。
  */
 
 import { t } from '../i18n'
 import { stopCommandHint } from '../services/bgTaskService'
-import { pinSession, sandboxGloballyActive } from '../services/sandbox'
+import { sandboxGloballyActive } from '../services/sandbox'
 import { BASH_PLATFORMS } from '../utils/toolUtils/shell'
 import type { ToolContext } from '../services/toolContext'
 import {
@@ -48,7 +49,7 @@ function bashDescription(sandboxed: boolean): string {
 
 export class BashTool extends ShellCommandTool {
   constructor(ctx: ToolContext) {
-    const sandboxed = pinSession(ctx.sessionId)
+    const sandboxed = ctx.sandboxed ?? sandboxGloballyActive()
     super(ctx, {
       shell: 'bash',
       label: t('tool.bashLabel'),

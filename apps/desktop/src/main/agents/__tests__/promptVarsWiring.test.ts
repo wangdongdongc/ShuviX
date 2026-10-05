@@ -25,16 +25,16 @@
  * 编号变动（2026-09-24）：PVW-3 / 5 / 6 / 7 / 8 同号改写（技能不在架时的期望从「手艺常驻」变成
  * 「空串」）；新增 PVW-16（引用处在空串下收敛干净）与 PVW-17（组装出的提示里没有契约）。
  *
- * 取 host 适配面的办法：顶掉 `createAgentFactory`，把 agentHost 传进去的那个对象接住。
- * 其余 mock 只为让模块能加载（dao 会开 SQLite，electron / mcp 在 node 下起不来）；skillService
- * 必须桩成可控的 findEnabled —— 真服务的构造函数会去碰真实 HOME 下的 `~/.shuvix/skills`。
+ * P1-11 起变量表是 agentHost 直接导出的 `desktopPromptVars`（会话核心在冻结人设时调它），这里直接
+ * 调它，不再顶掉 `createAgentFactory` 去接适配面。其余 mock 只为让模块能加载（dao 会开 SQLite，
+ * electron / mcp 在 node 下起不来）；skillService 必须桩成可控的 findEnabled —— 真服务的构造函数会去碰
+ * 真实 HOME 下的 `~/.shuvix/skills`。
  */
 import { describe, it, expect, vi, beforeAll, beforeEach, afterAll, afterEach } from 'vitest'
-import type { AgentHostAdapter, PromptVars, PromptVarsCtx } from '@shuvix/agent-runtime'
+import type { PromptVars, PromptVarsCtx } from '@shuvix/agent-runtime'
 import type { Skill } from '../../types/skill'
 
 const mocks = vi.hoisted(() => ({
-  host: { value: undefined as AgentHostAdapter | undefined },
   pick: vi.fn(),
   pickSettings: vi.fn(),
   projectPick: vi.fn(),
@@ -42,17 +42,6 @@ const mocks = vi.hoisted(() => ({
   /** Windows 上解析出的 PowerShell 版本（PVW-S*）；null = 用真的 getPowerShellConfig */
   psConfig: null as null | { exe: string; edition: 'pwsh' | 'windows-powershell' }
 }))
-
-vi.mock('@shuvix/agent-runtime', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@shuvix/agent-runtime')>()
-  return {
-    ...actual,
-    createAgentFactory: (host: AgentHostAdapter) => {
-      mocks.host.value = host
-      return { createAgent: vi.fn() }
-    }
-  }
-})
 
 vi.mock('electron', () => ({ app: { getVersion: () => '9.9.9', getPath: () => '/tmp/x' } }))
 vi.mock('../../dao/sessionDao', () => ({
@@ -72,13 +61,13 @@ vi.mock('../../services/mcpService', () => ({ mcpService: {} }))
 vi.mock('../../services/instruction', () => ({ resolveInstructionContent: vi.fn() }))
 vi.mock('../../services/memory', () => ({ resolveProjectMemoryIndex: vi.fn() }))
 vi.mock('../../frontend/core', () => ({ chatFrontendRegistry: {} }))
-vi.mock('../../services/wrapToolOutput', () => ({
-  wrapToolOutput: vi.fn(),
-  getOutputStrategy: vi.fn()
-}))
+vi.mock('../../services/wrapToolOutput', () => ({ wrapDurableTool: vi.fn() }))
+vi.mock('../../services/userInputBroker', () => ({ requestUserInputFor: vi.fn() }))
+vi.mock('../../services/sandbox', () => ({ sandboxGloballyActive: () => false }))
+vi.mock('../../services/botService', () => ({ botService: { forSession: () => null } }))
+vi.mock('../../utils/toolUtils/fileTime', () => ({ recordRead: vi.fn() }))
 vi.mock('../../services/agentRuntimeAdapters', () => ({
   electronEventSink: {},
-  electronToolResultTransform: vi.fn(),
   runtimeLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
 }))
 vi.mock('../../services/toolContext', () => ({
@@ -98,11 +87,12 @@ vi.mock('../../utils/toolUtils/shell', async (importOriginal) => {
 import i18next from 'i18next'
 import {
   buildBuiltinProfiles,
+  normalizeToolNames,
   renderProfileSystemPrompt,
   type AgentProfile
 } from '@shuvix/agent-runtime'
 import { createInlineMdReader } from '@shuvix/agent-runtime/builtinAgents/inlineSources'
-import '../agentHost'
+import { desktopPromptVars } from '../agentHost'
 
 const LANGUAGES = ['en', 'zh', 'ja']
 const SID = 'sess-desktop-1'
@@ -140,9 +130,7 @@ const builtins = (language: string): AgentProfile[] =>
   buildBuiltinProfiles({ language, widgetsRoot: '/w/widgets', readMd: createInlineMdReader() })
 
 const varsFor = async (ctx: Partial<PromptVarsCtx> = {}): Promise<PromptVars> => {
-  const host = mocks.host.value
-  expect(host, 'agentHost 应把适配面交给 createAgentFactory').toBeDefined()
-  return await host!.promptVars({
+  return await desktopPromptVars({
     sessionId: SID,
     kind: 'root',
     cwd: '/w/proj',
@@ -585,5 +573,32 @@ describe('desktopPromptVars —— shell / shellTool 按平台给（PVW-S1…S5�
     const onMac = renderProfileSystemPrompt(work, await varsFor({ toolNames: work.tools }))
     expect(onMac).toContain('over bash')
     expect(onMac).not.toMatch(/\bpowershell\b/i)
+  })
+})
+
+/**
+ * H11-62（P1-11）—— 锁在冻结人设时交给变量表的名单，是 `normalizeToolNames('root', 档案, 会话勾选)`
+ * 这一份（与 resolveAgentTools 收到的同一份）。按这个形态喂进去，作图指路 / adopt / 交互块与 notebookPath
+ * 都照旧。
+ */
+describe('desktopPromptVars —— 锁的名单形态（H11-62）', () => {
+  it('H11-62 work 名单 + 勾选 [mcp:ssh, skill:pdf]：指路恰一次、教 adopt、根会话教交互块；notebookPath 按会话给，派生不给', async () => {
+    const work = builtins('en').find((p) => p.name === 'work')!
+    const toolNames = normalizeToolNames('root', work.tools, ['mcp:ssh', 'skill:pdf'])
+    expect(toolNames).toContain('mcp:ssh')
+    expect(toolNames).toContain(DRAWING)
+
+    mocks.pickSettings.mockReturnValue({})
+    const root = await varsFor({ kind: 'root', toolNames })
+    expect(countOf(root.visualGuide, POINTER)).toBe(1)
+    expect(root.visualGuide).toContain(ADOPT)
+    expect(root.visualGuide).toContain('```interactive')
+    expect(root.notebookPath).toBe('')
+
+    mocks.pickSettings.mockReturnValue({ notebookPath: 'notes/a.md' })
+    expect((await varsFor({ kind: 'root', toolNames })).notebookPath).toBe('notes/a.md')
+
+    const spawned = await varsFor({ kind: 'spawned', sessionId: 'agent-1', cwd: '', toolNames })
+    expect('notebookPath' in spawned).toBe(false)
   })
 })

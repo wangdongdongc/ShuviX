@@ -111,8 +111,8 @@ export function shellCommandParamsSchema(text: {
 
 /**
  * 这条命令为什么没进沙箱 —— 上报到命令客体（`unconfinedReason`），审查员据此分得清「模型申请越界」
- * 与「这台机器本来就没有沙箱」。工具实例是否套沙箱在构造时按会话固定（pinSession），「没套」的
- * 原因也取固定那一刻的（whyUnconfined），信息性质，不参与是否询问的判定（那只看 sandboxed）。
+ * 与「这台机器本来就没有沙箱」。工具实例是否套沙箱在构造时固定（锁里的钉子，见 bash.ts），「没套」
+ * 的原因取 whyUnconfined 的答案，信息性质，不参与是否询问的判定（那只看 sandboxed）。
  */
 function unconfinedReasonOf(
   spec: ShellCommandToolSpec,
@@ -147,7 +147,7 @@ export interface ShellCommandToolSpec {
    */
   reject?: (command: string) => string | null
   /**
-   * 本工具实例的命令套沙箱（bash 构造时按会话固定，见 sandbox.pinSession）。为 true 时 schema
+   * 本工具实例的命令套沙箱（bash 构造时固定，见 bash.ts 的 ctx.sandboxed）。为 true 时 schema
    * 带 `dangerouslyDisableSandbox`、描述写明受限范围；powershell 目前恒为 false（没有后端）。
    */
   sandboxed?: boolean

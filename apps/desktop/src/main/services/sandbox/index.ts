@@ -219,8 +219,11 @@ const pins = new Map<string, boolean>()
 const pinReasons = new Map<string, UnpinnedReason>()
 
 /**
- * bash 工具构造时调用：第一次记下「本会话此刻是否启用沙箱」，之后同一 runtime 里构造的
- * 工具（派生 agent 用的也是根会话 id）都拿到同一个答案。
+ * 第一次记下「本会话此刻是否启用沙箱」，之后都拿到同一个答案。
+ *
+ * pi-durable 之后 bash 不再调它：钉子记在会话的锁记录里，构造时经 `ToolContext.sandboxed` 交进来
+ * （agentHost）。留着是给还在调 unpinSession 的旧生命周期接线。TODO(pi-durable p1): P1-13 删掉
+ * pinSession / unpinSession 与按会话的钉子表。
  */
 export function pinSession(sessionId: string): boolean {
   let value = pins.get(sessionId)
