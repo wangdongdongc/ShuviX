@@ -228,6 +228,10 @@ export interface SpawnWorldOptions {
   sessions?: WorldOptions['sessions']
   maxAgentDepth?: number
   host?: WorldOptions['host']
+  /** 现成的档案对象（黄金世界的 coding 档案取自 fixture） */
+  profileObjects?: readonly AgentProfile[]
+  /** 每个进程在缺省车道之后再登记的车道（黄金世界按 fixture 输出路由） */
+  lanes?: (model: ScriptedModel) => void
 }
 
 export interface SpawnWorld {
@@ -276,6 +280,7 @@ export async function spawnWorld(options: SpawnWorldOptions = {}): Promise<Spawn
   for (const [name, md] of Object.entries({ ...PROFILE_MDS, ...options.profiles })) {
     profiles.set(name, profileFromMd(md, name))
   }
+  for (const profile of options.profileObjects ?? []) profiles.set(profile.name, profile)
   for (const name of ['titler', 'permission-reviewer']) {
     if (!profiles.has(name)) profiles.set(name, builtinProfile(name))
   }
@@ -501,6 +506,7 @@ export async function spawnWorld(options: SpawnWorldOptions = {}): Promise<Spawn
       }
     })
     registerLanes(world.model)
+    options.lanes?.(world.model)
   }
   newProcess()
 
