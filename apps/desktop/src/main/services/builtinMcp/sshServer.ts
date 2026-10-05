@@ -18,7 +18,7 @@ import {
   type CallToolResult
 } from '@modelcontextprotocol/sdk/types.js'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
-import type { BuiltinMcpFactory } from '@shuvix/agent-runtime'
+import { builtinCallOwnerOf, type BuiltinMcpFactory, type CallOwner } from '@shuvix/agent-runtime'
 import { listSshHosts, defaultSshConfigPath, type SshHostEntry } from './sshConfig'
 import {
   sshExec,
@@ -327,6 +327,17 @@ export async function createSshMcpServer(
     ]
   }))
 
+  /**
+   * 这条会话的安全门面。一份实例由根 agent 与它派出的 agent 共用，所以交上 `agentOf`：每次 enforce
+   * 按 opts 里这次调用的 conversationId 现认主体（认不出 / 没带 = root，见 getDesktopSecurityContext）
+   */
+  const security = (): ReturnType<typeof getDesktopSecurityContext> =>
+    getDesktopSecurityContext({
+      sessionId: scope.sessionId,
+      requestUserInput: scope.requestUserInput,
+      agentOf: scope.agentOf
+    })
+
   /** 每次调用现读配置：用户可能刚改过 ~/.ssh/config，缓存在实例上只会让人困惑 */
   const readConfig = (): { configPath: string; hosts: SshHostEntry[] } => {
     const configPath = configPathOverride ?? defaultSshConfigPath()
@@ -395,6 +406,7 @@ export async function createSshMcpServer(
   const handleExec = async (
     args: Record<string, unknown>,
     toolCallId: string,
+    owner: CallOwner,
     signal?: AbortSignal
   ): Promise<CallToolResult> => {
     const alias = resolveAlias(args.host)
@@ -407,14 +419,11 @@ export async function createSshMcpServer(
     // SecurityContext，于是远端命令走的是和 bash 同一条命令客体（channel: 'ssh'），
     // ask-on-command 这类命令策略照常生效 ——
     // 而一台普通 MCP server 只能过 L1 那道「有人要调工具」的门。
-    const security = getDesktopSecurityContext({
-      sessionId: scope.sessionId,
-      requestUserInput: scope.requestUserInput
-    })
-    const outcome = await security.enforceCommand(
+    const outcome = await security().enforceCommand(
       { channel: 'ssh', command, host: alias.alias },
       {
         toolCallId,
+        ...owner,
         toolName: 'mcp__ssh__exec',
         description: typeof args.description === 'string' ? args.description : undefined,
         abortError: TOOL_ABORTED,
@@ -476,7 +485,8 @@ export async function createSshMcpServer(
     args: Record<string, unknown>,
     direction: TransferDirection,
     toolName: string,
-    toolCallId: string
+    toolCallId: string,
+    owner: CallOwner
   ): Promise<
     { error: string } | { alias: string; localAbs: string; remotePath: string; timeoutSec: number }
   > => {
@@ -493,14 +503,11 @@ export async function createSshMcpServer(
     // 私钥就这么送出去了。`..` 必须在进策略之前折掉。
     const localAbs = resolvePath(isAbsolute(localPath) ? localPath : resolvePath(cwd, localPath))
 
-    const security = getDesktopSecurityContext({
-      sessionId: scope.sessionId,
-      requestUserInput: scope.requestUserInput
-    })
     try {
       // up = 本地当源（读），down = 本地当目标（写）
-      await security.enforcePath(direction === 'up' ? 'read' : 'write', localAbs, {
+      await security().enforcePath(direction === 'up' ? 'read' : 'write', localAbs, {
         toolCallId,
+        ...owner,
         toolName,
         displayPath: localPath,
         // 不写这句，卡片就和一次本地读文件长得一模一样 —— 用户看不出这个文件正要离开本机
@@ -553,6 +560,7 @@ export async function createSshMcpServer(
     args: Record<string, unknown>,
     kind: 'upload' | 'download' | 'sync',
     toolCallId: string,
+    owner: CallOwner,
     signal?: AbortSignal
   ): Promise<CallToolResult> => {
     let direction: TransferDirection
@@ -563,7 +571,7 @@ export async function createSshMcpServer(
       if (d !== 'up' && d !== 'down') return err('`direction` must be "up" or "down".')
       direction = d
     }
-    const prepared = await prepareTransfer(args, direction, `mcp__ssh__${kind}`, toolCallId)
+    const prepared = await prepareTransfer(args, direction, `mcp__ssh__${kind}`, toolCallId, owner)
     if ('error' in prepared) return err(prepared.error)
 
     if (kind === 'sync') {
@@ -575,14 +583,11 @@ export async function createSshMcpServer(
       // 上传可能把 ~/.ssh 整个送出去，下载可能往里写 authorized_keys，而这两件事
       // 路径策略一次也没被问到。这条命令是远端真的会执行的那一条，原样交给策略与卡片。
       const remoteCmd = `rsync --server ${direction === 'up' ? '' : '--sender '}-logDtpre.iLsfxCIvu . ${prepared.remotePath}`
-      const security = getDesktopSecurityContext({
-        sessionId: scope.sessionId,
-        requestUserInput: scope.requestUserInput
-      })
-      const outcome = await security.enforceCommand(
+      const outcome = await security().enforceCommand(
         { channel: 'ssh', command: remoteCmd, host: prepared.alias },
         {
           toolCallId,
+          ...owner,
           toolName: 'mcp__ssh__sync',
           description: `Sync ${direction === 'up' ? 'to' : 'from'} "${prepared.alias}": ${prepared.localAbs} <-> ${prepared.remotePath}`,
           abortError: TOOL_ABORTED,
@@ -699,19 +704,21 @@ export async function createSshMcpServer(
       typeof meta?.['shuvix.dev/toolCallId'] === 'string'
         ? (meta['shuvix.dev/toolCallId'] as string)
         : `ssh-${String(extra.requestId)}`
+    // taskId / conversationId（可信 server 才收得到；不合法 = 没带）：并进每道门的 opts
+    const owner = builtinCallOwnerOf(meta)
 
     switch (request.params.name) {
       case LIST_HOSTS_TOOL.name:
         return handleListHosts()
       case EXEC_TOOL.name:
-        return handleExec(args, toolCallId, extra.signal)
+        return handleExec(args, toolCallId, owner, extra.signal)
       case UPLOAD_TOOL.name:
-        return handleTransfer(args, 'upload', toolCallId, extra.signal)
+        return handleTransfer(args, 'upload', toolCallId, owner, extra.signal)
       case DOWNLOAD_TOOL.name:
-        return handleTransfer(args, 'download', toolCallId, extra.signal)
+        return handleTransfer(args, 'download', toolCallId, owner, extra.signal)
       case SYNC_TOOL.name:
         return (await rsyncAvailable())
-          ? handleTransfer(args, 'sync', toolCallId, extra.signal)
+          ? handleTransfer(args, 'sync', toolCallId, owner, extra.signal)
           : err('rsync is not installed on this machine, so directory sync is unavailable.')
       case DISCONNECT_TOOL.name:
         return handleDisconnect(args)

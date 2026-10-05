@@ -375,8 +375,9 @@ export function setPermissionReviewer(reviewer: PermissionReviewer | null): void
  * 桌面 SecurityContext（PEP 门面，agent 主体）。getConfig 缺省为按 sessionId 动态解析
  * （每次评估现查 —— 会话配置可变）。
  * 主体信息：报这个 agent 的档案名与 root / spawned —— 询问点的审查靠它认出「审查员自己在要权限」
- * （防递归），审查员的输入也要知道是哪个 agent 在做这件事。认不出（MCP 能力服务器等自建 ctx 的
- * 调用点、还没有锁）按 root 上报。sessionId 恒为根会话（派生 agent 的工具 ctx 也是），会话授权
+ * （防递归），审查员的输入也要知道是哪个 agent 在做这件事。认不出（调用没带对话、宿主没接 agentOf、
+ * 还没有锁）按 root 上报。内置 MCP 能力服务器同样交上 scope 的 agentOf，并把 `_meta` 里的
+ * taskId / conversationId 并进 opts（P2-07）。sessionId 恒为根会话（派生 agent 的工具 ctx 也是），会话授权
  * 因此对派生 agent 同样生效。
  *
  * ctx 带 `agentOf`（会话级装配的工具，同一会话的每个 agent 共用一份）：每次 enforce 按 opts 里这次

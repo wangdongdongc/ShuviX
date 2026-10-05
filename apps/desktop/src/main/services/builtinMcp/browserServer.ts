@@ -39,7 +39,9 @@ function desktopGates(scope: DesktopBuiltinMcpScope): BrowserMcpGates {
   const security = (): ReturnType<typeof getDesktopSecurityContext> =>
     getDesktopSecurityContext({
       sessionId: scope.sessionId,
-      requestUserInput: scope.requestUserInput
+      requestUserInput: scope.requestUserInput,
+      // 一份实例由根 agent 与它派出的 agent 共用：主体按 opts 里这次调用的 conversationId 现认
+      agentOf: scope.agentOf
     })
   const toAbsolute = (p: string): string => {
     const cwd = resolveProjectConfig(scope.sessionId).workingDirectory
@@ -50,6 +52,9 @@ function desktopGates(scope: DesktopBuiltinMcpScope): BrowserMcpGates {
     toolName: ctx.toolName,
     description: ctx.description,
     displayPath,
+    // 调用归属（server 只在客户端带了时给）：认主体、填询问事件；没带就不出现这两个键
+    ...(ctx.taskId !== undefined ? { taskId: ctx.taskId } : {}),
+    ...(ctx.conversationId !== undefined ? { conversationId: ctx.conversationId } : {}),
     abortError: TOOL_ABORTED,
     missingChannel: 'deny'
   })

@@ -6,7 +6,11 @@
  *     === fixture.output.toolNames
  *
  * 以及旁证：SkillTool 的构造实参、MCP 的连接实参、调用方 id、错误广播都与捕获时一致（H11-64）；按派生出的
- * 锁重建再拼一次，工具名一字不差、一次都不连（H11-65）。两份派生 agent 的 fixture 要等 phase 2（H11-66）。
+ * 锁重建再拼一次，工具名一字不差、一次都不连（H11-65）。
+ *
+ * 两份派生 agent 的 fixture（H11-66）在 P2-04 接上（docs/pi-durable/p2-04-test-design.md，P2-04-28…31）：
+ * 派生请求（根会话 + agentId + canSpawn）经同一个 ToolHost 解析，`next` 用运行时真造的那一个
+ * （`resultContractTools`，PIN-08），拼的时候显式带上附加工具；再按派生出的记录重建，工具名不变、一次都不连。
  *
  * 只读 fixture 的常驻自检 `toolOrderGolden.test.ts` 照旧（H11-63）；捕获脚本已删（frozen：0.80 的依赖上才
  * 抓得出来）。
@@ -96,19 +100,25 @@ vi.mock('../../services/knowledge', () => ({ enabledBaseChoices: () => [] }))
 
 import {
   composeAgentTools,
+  type AgentToolSet,
   type LockRecord,
   type McpRegistrationOptions,
-  type McpToolDeclaration
+  type McpToolDeclaration,
+  type SpawnedAgentRecord
 } from '@shuvix/agent-runtime'
 import type { ToolPlatform } from '@shuvix/chat-protocol/chatApi'
 import { registerBuiltinTool, unregisterBuiltinTool } from '../../services/toolRegistry'
 import { createDesktopToolHost } from '../agentHost'
 import {
+  NX,
+  S,
+  SP_D,
   decl,
   inProcess,
   lockD,
   mcpRegistration,
   profileOf,
+  rctx,
   requestD,
   restorePlatform,
   setPlatform,
@@ -127,6 +137,8 @@ interface ToolOrderFixture {
     kind: 'root' | 'spawned'
     rootSessionId: string
     selfSessionId: string
+    /** 派生 agent 还能不能再派生（只有 spawned 的 fixture 带） */
+    canSpawn?: boolean
     profile: string
     names: string[]
     extraTools: string[]
@@ -233,11 +245,70 @@ async function replay(fixture: ToolOrderFixture): Promise<{
   return { toolNames: composed.toolNames, lock }
 }
 
+/** 派生 agent 的重放：派生请求解析 → 显式带附加工具拼 → 派生出记录（P2-04-28…30） */
+async function replaySpawned(fixture: ToolOrderFixture): Promise<{
+  toolNames: string[]
+  resolved: AgentToolSet
+  record: SpawnedAgentRecord
+}> {
+  const { inputs } = fixture
+  const builtin = await host.buildBuiltinTools({
+    sessionId: inputs.rootSessionId,
+    sandboxed: false
+  })
+  const withNext = inputs.extraTools.includes('next')
+  const resolved = await host.resolveAgentTools(
+    requestD({
+      kind: 'spawned',
+      sessionId: inputs.rootSessionId,
+      rootSessionId: inputs.rootSessionId,
+      selfSessionId: inputs.selfSessionId,
+      agentId: inputs.selfSessionId,
+      canSpawn: inputs.canSpawn,
+      profile: inProcess(profileOf(inputs.profile)),
+      names: inputs.names,
+      // fixture 只记了名字：`next` 用运行时真造的那一个（PIN-08）
+      extraTools: inputs.extraTools.map((name) => (name === 'next' ? NX() : stubTool(name)))
+    }),
+    { signal: new AbortController().signal }
+  )
+  const composed = composeAgentTools({
+    names: inputs.names,
+    builtin,
+    set: resolved,
+    extraTools: resolved.extraTools
+  })
+  const mcp: LockRecord['mcp'] = {}
+  for (const entry of resolved.mcp ?? []) mcp[entry.server] = [...entry.declarations]
+  const record = SP_D({
+    profileName: inputs.profile,
+    toolNames: composed.toolNames,
+    skills: [...(resolved.skills ?? [])],
+    mcp,
+    sandboxed: resolved.sandboxed,
+    agentId: inputs.selfSessionId,
+    canSpawn: inputs.canSpawn === true,
+    ...(withNext ? { resultContract: { schema: S } } : {})
+  })
+  if (!withNext) delete record.resultContract
+  return { toolNames: composed.toolNames, resolved, record }
+}
+
+/** 两份派生 fixture 的用例编号 */
+const SPAWNED_IDS: Record<string, string> = {
+  'coding-spawned-darwin': 'P2-04-28',
+  'coding-spawned-depth-limit-with-next': 'P2-04-29'
+}
+
 describe('tool-order golden fixtures —— 经新 ToolHost 重放（P1-11）', () => {
-  it('H11-66 覆盖：重放的根 agent + 待 phase 2 的派生 agent = 全部 fixture（≥ 10）', () => {
+  it('P2-04-31（改写 H11-66 覆盖）：重放的根 agent（8）+ 重放的派生 agent（2）= 全部 fixture（≥ 10）；本文件不再留 todo', () => {
     expect(fixtures.length).toBeGreaterThanOrEqual(MIN_FIXTURES)
-    expect(roots.length + spawned.length).toBe(fixtures.length)
     expect(roots.length).toBe(8)
+    expect(spawned.length).toBe(2)
+    expect(roots.length + spawned.length).toBe(fixtures.length)
+    expect(Object.keys(SPAWNED_IDS).sort()).toEqual(spawned.map((f) => f.case).sort())
+    const source = readFileSync(fileURLToPath(import.meta.url), 'utf-8')
+    expect(source).not.toContain(['it', 'todo('].join('.'))
   })
 
   it.each(roots.map((f) => [f.case, f] as const))(
@@ -295,7 +366,52 @@ describe('tool-order golden fixtures —— 经新 ToolHost 重放（P1-11）', 
     }
   )
 
-  for (const fixture of spawned) {
-    it.todo(`H11-66 ${fixture.case}：派生 agent 的工具顺序（canSpawn / next）(pi-durable p2)`)
-  }
+  it.each(spawned.map((f) => [SPAWNED_IDS[f.case], f.case, f] as const))(
+    '%s H11-66 %s：派生 agent 拼出来的工具名 = 捕获的（agent 看 canSpawn、next 排最后）；SkillTool / MCP / 广播与捕获时一致',
+    async (_id, _name, fixture) => {
+      arrange(fixture)
+      const { toolNames, resolved } = await replaySpawned(fixture)
+      expect(toolNames).toEqual(fixture.output.toolNames)
+      expect('agent' in resolved).toBe(fixture.inputs.canSpawn === true)
+      expect(mocks.skillToolCalls).toEqual(
+        fixture.observed.skillToolConstructed.map((c) => ({
+          names: c.names,
+          projectPath: c.projectPath ?? undefined
+        }))
+      )
+      expect(mocks.ensure.mock.calls).toEqual(fixture.observed.mcpEnsureCalls)
+      expect(mocks.registrationsFromDeclarations.mock.calls).toHaveLength(
+        fixture.observed.mcpGetToolsCalls.length
+      )
+      expect(
+        mocks.broadcast.mock.calls.map(([e]) => ({ type: e.type, sessionId: e.sessionId }))
+      ).toEqual(fixture.observed.broadcasts)
+    }
+  )
+
+  it.each(spawned.map((f) => [f.case, f] as const))(
+    'P2-04-30 %s：按派生出的记录重建再拼（附加工具来自 rctx），工具名一字不差，一次都不连',
+    async (_name, fixture) => {
+      arrange(fixture)
+      const { toolNames, record } = await replaySpawned(fixture)
+      mocks.ensure.mockClear()
+      const builtin = await host.buildBuiltinTools({
+        sessionId: fixture.inputs.rootSessionId,
+        sandboxed: record.sandboxed
+      })
+      const rebuilt = await host.rebuildAgentTools(record, {
+        ...rctx(record),
+        sessionId: fixture.inputs.rootSessionId
+      })
+      expect(
+        composeAgentTools({
+          names: fixture.inputs.names,
+          builtin,
+          set: rebuilt,
+          extraTools: rebuilt.extraTools
+        }).toolNames
+      ).toEqual(toolNames)
+      expect(mocks.ensure).not.toHaveBeenCalled()
+    }
+  )
 })

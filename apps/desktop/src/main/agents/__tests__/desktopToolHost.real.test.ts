@@ -9,6 +9,12 @@
  *  - H11-41 元数据经原型链透出（从不展开包好的工具）；
  *  - H11-42 落不落盘按每次调用定，同一个实例；
  *  - H11-43 工具自己的上限与策略照用，宿主不覆写。
+ *
+ * P2-04（docs/pi-durable/p2-04-test-design.md）派生 agent 的真件：
+ *  - P2-04-20 派生的创建与重建交出同一组（H11-35 的派生版，含 `next`）；
+ *  - P2-04-21 / 22 真 NextTool 经真包装器：details {result} 与 terminate 原样透出，重复 / 不合 schema 的调用；
+ *  - P2-04-36（AHS-3）同一根会话下的派生 agent 落不落盘各按自己的工具表，落盘都在根会话目录下；
+ *  - 派生记录的技能漂移（H11-37 的派生版）。
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { existsSync, readFileSync, rmSync } from 'node:fs'
@@ -96,6 +102,7 @@ vi.mock('../AgentManager', () => ({ agentManager: { runTask: vi.fn() } }))
 
 import {
   composeAgentTools,
+  type AgentToolSet,
   type AnyTool,
   type LockRecord,
   type McpToolDeclaration,
@@ -108,8 +115,15 @@ import { registerBuiltinTool, unregisterBuiltinTool } from '../../services/toolR
 import { createDesktopToolHost } from '../agentHost'
 import {
   MCP_DECLS,
+  NX,
+  RECORDED,
+  SP_D,
+  SR_D,
+  inProcess,
   lockD,
   mcpRegistration,
+  profileOf,
+  rctx,
   registerStubBuiltins,
   requestD,
   stubTool
@@ -365,9 +379,70 @@ describe('包装：元数据与落盘', () => {
     }
   })
 
-  it.todo(
-    'AHS-3 同一根会话下派生的 titler（只有 session）不落盘、explore（有 read）落盘 —— 各按自己的工具表 (pi-durable p2)'
-  )
+  it('P2-04-36（AHS-3）同一根会话下派生的 titler（只有 session）不落盘、explore（有 read）落盘 —— 各按自己的工具表，落盘都在根会话 s1 下；共用的内置 probe 也是同一个分法', async () => {
+    const signal = new AbortController().signal
+    const titler = await host.resolveAgentTools(
+      SR_D({
+        profile: inProcess(profileOf('titler')),
+        names: ['session'],
+        canSpawn: false,
+        selfSessionId: 'sub-t1',
+        agentId: 'sub-t1',
+        extraTools: [probe()]
+      }),
+      { signal }
+    )
+    const explore = await host.resolveAgentTools(
+      SR_D({
+        profile: inProcess(profileOf('explore')),
+        names: ['read', 'ls', 'grep', 'glob'],
+        canSpawn: false,
+        selfSessionId: 'sub-e1',
+        agentId: 'sub-e1',
+        extraTools: [probe()]
+      }),
+      { signal }
+    )
+    const TITLER_TABLE = ['session', 'probe']
+    const EXPLORE_TABLE = ['read', 'ls', 'grep', 'glob', 'probe']
+
+    const t = await invokeTool(titler.extraTools![0], {} as never, {
+      callId: 'ahs3-t',
+      api: { agent: agentWith(TITLER_TABLE) }
+    })
+    expect(codes(t.result.diagnostics)).toEqual(['truncated'])
+    expect(existsSync(join(resultsDir('s1'), 'ahs3-t.txt'))).toBe(false)
+    expect(existsSync(resultsDir('sub-t1'))).toBe(false)
+
+    const e = await invokeTool(explore.extraTools![0], {} as never, {
+      callId: 'ahs3-e',
+      api: { agent: agentWith(EXPLORE_TABLE) }
+    })
+    expect(codes(e.result.diagnostics)).toEqual(['spilled'])
+    expect(readFileSync(join(resultsDir('s1'), 'ahs3-e.txt'), 'utf-8')).toBe(BIG)
+    expect(existsSync(resultsDir('sub-e1'))).toBe(false)
+
+    // 会话级装配的内置 probe：同一个实例在两张表下分得一样
+    const unregisterProbe = registerProbe()
+    try {
+      const builtin = await host.buildBuiltinTools({ sessionId: 's1', sandboxed: false })
+      const shared = builtin.find((tool) => tool.name === 'probe')!
+      const bt = await invokeTool(shared, {} as never, {
+        callId: 'ahs3-bt',
+        api: { agent: agentWith(TITLER_TABLE) }
+      })
+      const be = await invokeTool(shared, {} as never, {
+        callId: 'ahs3-be',
+        api: { agent: agentWith(EXPLORE_TABLE) }
+      })
+      expect(codes(bt.result.diagnostics)).toEqual(['truncated'])
+      expect(codes(be.result.diagnostics)).toEqual(['spilled'])
+      expect(existsSync(join(resultsDir('s1'), 'ahs3-bt.txt'))).toBe(false)
+      expect(existsSync(join(resultsDir('s1'), 'ahs3-be.txt'))).toBe(true)
+    } finally {
+      unregisterProbe()
+    }
+  })
 
   it('H11-43 工具自己的上限与策略照用（宿主不覆写）：保留开头、至多 10 行；没声明的拿缺省上限与 middle', async () => {
     const unregisterProbe = registerProbe()
@@ -416,3 +491,133 @@ function registerProbe(): () => void {
     unregisterBuiltinTool('capped')
   }
 }
+
+// ─── 派生 agent（P2-04） ─────────────────────────────────────────────────
+
+/** 一个工具在模型眼里的样子（名字、描述、参数 JSON、replay） */
+const shapeOf = (tool: ToolRegistration | undefined): unknown =>
+  tool === undefined
+    ? undefined
+    : {
+        name: tool.name,
+        description: tool.description,
+        parameters: JSON.parse(JSON.stringify(tool.parameters)),
+        replay: tool.replay
+      }
+
+describe('派生 agent：创建与重建', () => {
+  it('P2-04-20 派生的创建与重建交出同一组（H11-35 的派生版）：agent / skill / 每件 MCP / next 的样子相同、MCP 次序相同；重建拼出的工具名 = 记录的；重建不连', async () => {
+    const signal = new AbortController().signal
+    const request = SR_D({ extraTools: [NX()] })
+    const resolved = await host.resolveAgentTools(request, { signal })
+    const builtin = await host.buildBuiltinTools({ sessionId: 's1', sandboxed: resolved.sandboxed })
+    const composed = composeAgentTools({
+      names: request.names,
+      builtin,
+      set: resolved,
+      extraTools: resolved.extraTools
+    })
+    const record = SP_D({
+      toolNames: composed.toolNames,
+      skills: [...(resolved.skills ?? [])],
+      mcp: { context7: [...resolved.mcp![0].declarations] }
+    })
+    const ensureCalls = mocks.ensureServerByName.mock.calls.length
+    const rebuilt: AgentToolSet = await host.rebuildAgentTools(record, rctx(record))
+
+    for (const pick of [
+      (set: AgentToolSet) => set.agent,
+      (set: AgentToolSet) => set.skill,
+      (set: AgentToolSet) => set.extraTools?.[0]
+    ]) {
+      expect(shapeOf(pick(rebuilt))).toBeDefined()
+      expect(shapeOf(pick(rebuilt))).toEqual(shapeOf(pick(resolved)))
+    }
+    expect(rebuilt.extraTools?.[0].name).toBe('next')
+    expect(rebuilt.mcp?.map((m) => m.server)).toEqual(resolved.mcp?.map((m) => m.server))
+    expect(rebuilt.mcp!.flatMap((m) => m.tools).map(shapeOf)).toEqual(
+      resolved.mcp!.flatMap((m) => m.tools).map(shapeOf)
+    )
+    expect(
+      composeAgentTools({
+        names: request.names,
+        builtin,
+        set: rebuilt,
+        extraTools: rebuilt.extraTools
+      }).toolNames
+    ).toEqual(record.toolNames)
+    expect(mocks.ensureServerByName.mock.calls.length).toBe(ensureCalls)
+  })
+
+  it('派生记录的技能漂移（H11-37 的派生版，锁赢）：停用了的照列；磁盘上没了的掉出去；技能工具一直在，空了照实说没有', async () => {
+    const record = SP_D({ skills: ['builtin:drawing', 'pdf'] })
+
+    mocks.findEnabled.mockReturnValue([skill('builtin:drawing')])
+    const disabled = (await host.rebuildAgentTools(record, rctx(record))).skill!
+    expect(disabled.description).toContain('<name>builtin:drawing</name>')
+    expect(disabled.description).toContain('<name>pdf</name>')
+
+    mocks.findAll.mockReturnValue([skill('builtin:drawing')])
+    const deleted = (await host.rebuildAgentTools(record, rctx(record))).skill!
+    expect(deleted.description).toContain('<name>builtin:drawing</name>')
+    expect(deleted.description).not.toContain('<name>pdf</name>')
+
+    mocks.findAll.mockReturnValue([])
+    const empty = (await host.rebuildAgentTools(record, rctx(record))).skill
+    expect(empty?.name).toBe('skill')
+    expect(empty?.description).toContain('No skills are currently available')
+  })
+})
+
+describe('派生 agent：next 经真包装器', () => {
+  /** 创建（解析时的 extraTools）与重建（rctx）两条路上包好的 next */
+  async function wrappedNext(): Promise<{ resolved: ToolRegistration; rebuilt: ToolRegistration }> {
+    const resolved = await host.resolveAgentTools(SR_D({ extraTools: [NX()] }), {
+      signal: new AbortController().signal
+    })
+    const rebuilt = await host.rebuildAgentTools(SP_D(), rctx(SP_D()))
+    return { resolved: resolved.extraTools![0], rebuilt: rebuilt.extraTools![0] }
+  }
+
+  it('P2-04-21 两条路上都成功：details 恰为 {result}、control {terminate}、文字 RECORDED；不是错误、没有诊断、不落盘', async () => {
+    const { resolved, rebuilt } = await wrappedNext()
+    for (const next of [resolved, rebuilt]) {
+      const { result } = await invokeTool(next, { title: 'Fix login bug' } as never, {
+        callId: 'n-1',
+        api: { agent: agentWith(['read', 'next']) }
+      })
+      expect(result.details).toStrictEqual({ result: { title: 'Fix login bug' } })
+      expect(result.control).toStrictEqual({ terminate: true })
+      expect(resultText(result)).toBe(RECORDED)
+      expect(result.isError).toBeUndefined()
+      expect(result.diagnostics).toBeUndefined()
+      expect(existsSync(join(resultsDir('s1'), 'n-1.txt'))).toBe(false)
+    }
+  })
+
+  it('P2-04-22 重复与不合 schema：同一实例第二次 → already recorded + terminate、没有 details；新实例传 {} → isError、没有 details / control；之后合规的那次照常捕获', async () => {
+    const api = { agent: agentWith(['read', 'next']) }
+    const { resolved: first } = await wrappedNext()
+    await invokeTool(first, { title: 'first' } as never, { callId: 'n-d1', api })
+    const { result: again } = await invokeTool(first, { title: 'second' } as never, {
+      callId: 'n-d2',
+      api
+    })
+    expect(resultText(again)).toContain('already recorded')
+    expect(again.control).toStrictEqual({ terminate: true })
+    expect(again.details).toBeUndefined()
+    expect('details' in again).toBe(false)
+
+    const { resolved: fresh } = await wrappedNext()
+    const { result: invalid } = await invokeTool(fresh, {} as never, { callId: 'n-i1', api })
+    expect(invalid.isError).toBe(true)
+    expect('details' in invalid).toBe(false)
+    expect('control' in invalid).toBe(false)
+
+    const { result: ok } = await invokeTool(fresh, { title: 'ok' } as never, {
+      callId: 'n-i2',
+      api
+    })
+    expect(ok.details).toStrictEqual({ result: { title: 'ok' } })
+  })
+})

@@ -15,7 +15,8 @@
  * 恒为 `undefined`（falsy），于是工具**永不注入** —— 照抄过来这一组会全绿且什么都没测。
  * 这里的桩必须自带可控的 `hasSkills`（与 `skillNames`）。
  *
- * 派生 agent 的三条（STI-4 / 5 / 5b）要等 phase 2：resolveAgentTools 对 spawned 抛 PhasePendingError。
+ * 派生 agent 的三条（STI-4 / 5 / 5b，P2-04-32…34）：同一条规则，名单是派生 agent 自己的；SkillTool 的
+ * projectPath 取**根会话**的项目（按 agentId 查不到项目）。
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -92,7 +93,13 @@ vi.mock('../../services/knowledge', () => ({ enabledBaseChoices: () => [] }))
 
 import { composeAgentTools, type ResolvedAgentTools } from '@shuvix/agent-runtime'
 import { createDesktopToolHost } from '../agentHost'
-import { inProcess, profileOf, registerStubBuiltins, requestD } from './support/toolHostFixtures'
+import {
+  SR_D,
+  inProcess,
+  profileOf,
+  registerStubBuiltins,
+  requestD
+} from './support/toolHostFixtures'
 
 const SID = 's1'
 const DRAWING = 'skill:builtin:drawing'
@@ -165,9 +172,46 @@ describe('STI 根 agent', () => {
 })
 
 describe('STI 派生 agent', () => {
-  it.todo('STI-4 派生档案没点名任何 `skill:` → 不构造 SkillTool (pi-durable p2)')
-  it.todo('STI-5 派生档案点名 `skill:foo` → 只拿它点的那个，内置不顺带加进来 (pi-durable p2)')
-  it.todo('STI-5b 派生档案同时点了内置与用户 skill → 一次构造拿到两者 (pi-durable p2)')
+  /** 派生 agent（根会话 s1、agent sub-a1）按名单解析 */
+  const resolveSpawned = (
+    names: readonly string[],
+    profile = 'coding'
+  ): Promise<ResolvedAgentTools> =>
+    host.resolveAgentTools(
+      SR_D({ names: [...names], profile: inProcess(profileOf(profile)), canSpawn: false }),
+      { signal: new AbortController().signal }
+    )
+
+  it('P2-04-32 STI-4 派生档案没点名任何 `skill:`（titler 只有 session）→ 不构造 SkillTool，没有 skill，skills 为空', async () => {
+    const resolved = await resolveSpawned(['session'], 'titler')
+    expect(mocks.skillToolCalls).toEqual([])
+    expect(agentToolNames(resolved)).not.toContain('skill')
+    expect(resolved.skills ?? []).toEqual([])
+  })
+
+  it('P2-04-33 STI-5 派生档案点名 `skill:foo` → 只拿它点的那个，内置不顺带加进来；projectPath 是根会话的项目（只按 s1 查）', async () => {
+    mocks.pick.mockImplementation((id: string) =>
+      id === SID ? { projectId: 'proj-1' } : undefined
+    )
+    mocks.projectPick.mockReturnValue({ name: 'Proj', path: '/w/proj' })
+    const resolved = await resolveSpawned(['skill:foo'])
+    expect(mocks.skillToolCalls).toEqual([{ names: ['foo'], projectPath: '/w/proj', argc: 2 }])
+    expect(resolved.skills).toEqual(['foo'])
+    expect(mocks.pick.mock.calls.map(([id]) => id)).toEqual([SID])
+  })
+
+  it('P2-04-34 STI-5b 派生档案同时点了内置与用户 skill → 一次构造拿到两者；恰好一个 skill；拼出来是 read + skill', async () => {
+    const names = ['read', DRAWING, 'skill:foo']
+    const resolved = await resolveSpawned(names)
+    expect(mocks.skillToolCalls).toHaveLength(1)
+    expect(mocks.skillToolCalls[0].names).toEqual(['builtin:drawing', 'foo'])
+    expect(agentToolNames(resolved).filter((n) => n === 'skill')).toHaveLength(1)
+    const builtin = await host.buildBuiltinTools({ sessionId: SID, sandboxed: false })
+    expect(composeAgentTools({ names, builtin, set: resolved }).toolNames).toEqual([
+      'read',
+      'skill'
+    ])
+  })
 })
 
 describe('STI 名单即全部：宿主不在名单之外另挂工具', () => {
