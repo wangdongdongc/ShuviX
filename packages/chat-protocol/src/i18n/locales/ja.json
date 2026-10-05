@@ -194,6 +194,7 @@
     "mcpConnectFailed": "[MCP] {{name}} への接続に失敗しました: {{error}}",
     "agentNoModel": "エージェントを作成できません: {{reason}}",
     "legacySessionReadOnly": "この会話は以前のバージョンの ShuviX で作成されたため、閲覧のみ可能です。続けるには会話をクリアするか、新しいセッションを開始してください。",
+    "requestStillQueued": "先に送ったメッセージはまだキューに残っています。次のメッセージと一緒に送信されます。",
     "welcomePrompt": "今日は何をしましょうか？",
     "welcomeCreateProject": "プロジェクト作成",
     "welcomeConfigureProviders": "プロバイダー設定",

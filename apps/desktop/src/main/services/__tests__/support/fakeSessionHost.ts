@@ -2,7 +2,11 @@
  * 桌面单测用的假会话运行时：FakeDurableSession（实现 DurableSession）与 FakeSessionHost（实现 SessionHost）。
  *
  *  - FakeDurableSession：可设的 `lock` / busy / interrupted / 挂起询问；submitUser / steer / followUp /
- *    continue / resumeInterrupted 的结果按脚本给（缺省 `{}`），requestState / lastAnswer 也按脚本给；`destroyAgent` / `abort` 可挂闸门；每次调用记进 `calls`。
+ *    continue / resumeInterrupted 的结果按脚本给（缺省 `{}`），requestState / lastAnswer / drivenRun /
+ *    taskLiveness 也按脚本给；`destroyAgent` / `abort` 可挂闸门；每次调用记进 `calls`。
+ *    P2-10 的脚本：`submitUser` 带一个脚本里认得的 requestId（'pending' / 'settled'）= 重新挂上 —— 不调
+ *    受理回调（P2-09 PIN-02）；`resumeInterrupted` 在被中断时把它变成在跑（interrupted=false, busy=true）；
+ *    `abort` 把 busy / interrupted 都清掉（被中断的那一轮随之落定）。
  *    `lockOnFirstUse` 模拟 K3：第一次 submitUser / steer / followUp / continue / createAgent 时上锁。
  *  - FakeSessionHost：open / peek / get / close / closeAll / delete；`storages` 是「存储在」的会话集合
  *    （peek 只打开它们，open 会建）；`delete` 可挂闸门；调用记进 `calls`。
@@ -15,6 +19,7 @@ import type {
   AdmitResult,
   AgentIdentity,
   CreateAgentOptions,
+  DrivenRun,
   DurableSession,
   LastAnswer,
   LockRecord,
@@ -25,6 +30,7 @@ import type {
   RunState,
   SessionHost,
   SubmitResult,
+  TaskLiveness,
   UserSendOptions
 } from '@shuvix/agent-runtime'
 import type { UserInput } from '@earendil-works/pi-durable'
@@ -80,6 +86,10 @@ export class FakeDurableSession implements DurableSession {
   /** requestState 的脚本（没设的 requestId = 'none'） */
   readonly requestStates = new Map<string, RequestState>()
   answer: LastAnswer | undefined
+  /** 此刻的 driven-run 标记（P2-10） */
+  drivenRun: DrivenRun | undefined
+  /** taskLiveness 的脚本（没设的任务 = undefined，即不存在） */
+  readonly taskStates = new Map<number, TaskLiveness>()
   /** submitUser 受理之后、落定之前挂着的闸门 */
   submitGate: Gate | undefined
   destroyGate: Gate | undefined
@@ -139,7 +149,17 @@ export class FakeDurableSession implements DurableSession {
     if (this.closed) return { error: 'closed', code: 'closed' }
     if (!this.interrupted) return {}
     this.use()
+    if (this.resumeResult.error === undefined) {
+      this.interrupted = false
+      this.busy = true
+    }
     return this.resumeResult
+  }
+
+  async taskLiveness(taskId: number): Promise<TaskLiveness | undefined> {
+    this.calls.push(['taskLiveness', taskId])
+    if (this.closed) throw new Error(`Session ${this.sessionId} is closed`)
+    return this.taskStates.get(taskId)
   }
 
   async requestState(requestId: string): Promise<RequestState> {
@@ -158,6 +178,29 @@ export class FakeDurableSession implements DurableSession {
     this.calls.push(['submitUser', content, options])
     if (this.closed) return { error: `Session ${this.sessionId} is closed`, code: 'closed' }
     const result = this.submitResults.shift() ?? {}
+    // 认得的 requestId = 重新挂上：不再受理，不调受理回调（P2-09 PIN-02）
+    const known =
+      options.requestId !== undefined &&
+      (this.requestStates.get(options.requestId) ?? 'none') !== 'none'
+    if (known) {
+      if (options.driven !== undefined && options.requestId !== undefined) {
+        this.drivenRun = {
+          requestId: options.requestId,
+          ...options.driven,
+          conversationId: 1 as DrivenRun['conversationId']
+        }
+      }
+      if (this.requestStates.get(options.requestId!) === 'settled') return result
+      if (this.interrupted) {
+        this.interrupted = false
+        this.busy = true
+      }
+      if (this.submitGate) await this.submitGate.promise
+      // 挂上的那一条落定了
+      this.busy = false
+      this.requestStates.set(options.requestId!, 'settled')
+      return result
+    }
     if (!this.admit) {
       this.admit = true
       return result
@@ -165,6 +208,13 @@ export class FakeDurableSession implements DurableSession {
     if (result.code === 'no_model') return result
     this.use()
     if (result.code !== undefined && REFUSALS.has(result.code)) return result
+    if (options.driven !== undefined && options.requestId !== undefined) {
+      this.drivenRun = {
+        requestId: options.requestId,
+        ...options.driven,
+        conversationId: 1 as DrivenRun['conversationId']
+      }
+    }
     options.onAdmitted?.()
     if (this.submitGate) await this.submitGate.promise
     return result
@@ -195,6 +245,7 @@ export class FakeDurableSession implements DurableSession {
     this.calls.push(['abort'])
     if (this.abortGate) await this.abortGate.promise
     this.busy = false
+    this.interrupted = false
   }
 
   async setThinkingLevel(level: ThinkingLevel): Promise<void> {
@@ -359,7 +410,8 @@ function facadeOf(durable: DurableSession): Record<string, unknown> {
     facade = {
       sessionId: durable.sessionId,
       durable,
-      notify: (text: string) => durable.notify(text),
+      notify: (text: string, options?: NotifyOptions) =>
+        options === undefined ? durable.notify(text) : durable.notify(text, options),
       invalidate: async () => {
         await durable.destroyAgent()
         agentSessionSpies.clearAgentScopedState(durable.sessionId)

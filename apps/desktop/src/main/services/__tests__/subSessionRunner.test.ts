@@ -15,6 +15,10 @@
  * mock 手法照 sessionServicePinAgentProfile.test.ts：vi.mock + 动态 import；
  * dao / sessionService / gateway / messageService 全部换假件。
  *
+ * P2-10：答复取自子会话门面的 `lastAnswer`（新格式会话；旧格式子会话的「末条消息」只留一条用例，
+ * PIN-12）；完成通知不再经后台任务枢纽，而是由运行时的 `onDrivenSettled` 喂给 runner 的处理器
+ * （这里直接调它，送达是 `sessionService.deliverSubSessionNotice`）；发送带幂等键与 driven 标记。
+ *
  * 两处刻意**不给**的成员：`sessionDao.pickSettings`（runner 不再读子会话的戳 —— 留着会让
  * 「又开始比对戳」的回归静默通过）与 `sessionService.resolveAgentProfileName`（不点名就什么
  * 也不写，父子形态天然一致，runner 不需要知道父会话跑的是哪个基座）。
@@ -29,11 +33,15 @@ const mocks = vi.hoisted(() => ({
   pinAgentProfile: vi.fn(),
   resolveRunConfig: vi.fn(),
   getAgentSession: vi.fn(),
+  peekAgentSession: vi.fn(),
+  ensureAgentSession: vi.fn(),
+  deliver: vi.fn(),
   gatewayPrompt: vi.fn(),
   appendModelChange: vi.fn(),
   appendThinkingLevelChange: vi.fn(),
   findLastBySession: vi.fn(),
-  warn: vi.fn()
+  warn: vi.fn(),
+  durable: { value: true }
 }))
 
 vi.mock('../../dao/sessionDao', () => ({
@@ -48,7 +56,10 @@ vi.mock('../../services/sessionService', () => ({
     updateTitle: mocks.updateTitle,
     pinAgentProfile: mocks.pinAgentProfile,
     resolveRunConfig: mocks.resolveRunConfig,
-    getAgentSession: mocks.getAgentSession
+    getAgentSession: mocks.getAgentSession,
+    peekAgentSession: mocks.peekAgentSession,
+    ensureAgentSession: mocks.ensureAgentSession,
+    deliverSubSessionNotice: mocks.deliver
   }
 }))
 vi.mock('../../frontend/core', () => ({ chatGateway: { prompt: mocks.gatewayPrompt } }))
@@ -56,8 +67,8 @@ vi.mock('../../services/messageService', () => ({
   messageService: { findLastBySession: mocks.findLastBySession }
 }))
 vi.mock('../../services/sessionStorage', () => ({
-  // 这组用例的子会话按旧口径「末条消息」答复（新格式会话读不出答复的那一支见 D10-58）
-  isDurableSession: () => false,
+  // 缺省都是新格式会话（答复问门面的 lastAnswer）；旧格式那一条用例把它关掉（PIN-12）
+  isDurableSession: () => mocks.durable.value,
   appendModelChange: mocks.appendModelChange,
   appendThinkingLevelChange: mocks.appendThinkingLevelChange
 }))
@@ -73,22 +84,67 @@ let registry: typeof import('../taskRegistry')
 const PARENT = 'parent-1'
 const CHILD = 'child-1'
 
-/** 一个假的子会话运行时（AgentSession 的最小面：状态两个 getter + abort/notify） */
-function fakeAgent(over: Partial<{ isStreaming: boolean; pendingInputCount: number }> = {}): {
+/** 一个假的子会话运行时（AgentSession 的最小面：状态 getter + abort/notify + P2-10 的读路径） */
+function fakeAgent(
+  over: Partial<{ isStreaming: boolean; pendingInputCount: number; isInterrupted: boolean }> = {}
+): {
   isStreaming: boolean
+  isInterrupted: boolean
   pendingInputCount: number
   pendingInputSummaries: string[]
+  drivenRun: unknown
   abort: ReturnType<typeof vi.fn>
   notify: ReturnType<typeof vi.fn>
+  lastAnswer: ReturnType<typeof vi.fn>
+  requestState: ReturnType<typeof vi.fn>
+  resumeInterrupted: ReturnType<typeof vi.fn>
+  taskLiveness: ReturnType<typeof vi.fn>
 } {
   return {
     isStreaming: over.isStreaming ?? false,
+    isInterrupted: over.isInterrupted ?? false,
     pendingInputCount: over.pendingInputCount ?? 0,
     pendingInputSummaries: [],
+    drivenRun: undefined,
     abort: vi.fn().mockResolvedValue(undefined),
-    notify: vi.fn().mockResolvedValue(undefined)
+    notify: vi.fn().mockResolvedValue(undefined),
+    lastAnswer: vi.fn().mockResolvedValue(undefined),
+    requestState: vi.fn().mockResolvedValue('none'),
+    resumeInterrupted: vi.fn().mockResolvedValue({}),
+    taskLiveness: vi.fn().mockResolvedValue(undefined)
   }
 }
+
+/** 没开着的子会话被 peek 打开之后的那个门面（lastAnswer / requestState 从它读） */
+let closedChild: ReturnType<typeof fakeAgent>
+
+/** 运行时报来的一次 driven 落定（P2-09 的 DrivenSettledEvent） */
+function settled(
+  over: Partial<{
+    sessionId: string
+    requestId: string
+    background: boolean
+    reason: string
+  }> = {}
+): Parameters<Mod['subSessionRunner']['onDrivenSettled']>[0] {
+  const sessionId = over.sessionId ?? CHILD
+  return {
+    sessionId,
+    parentId: PARENT,
+    requestId: over.requestId ?? 'subsession:parent-1:1',
+    background: over.background ?? true,
+    conversationId: 1 as never,
+    submissionId: 42 as never,
+    noticeRequestId: `subsession-done:${sessionId}:42`,
+    result: {},
+    record:
+      over.reason === undefined ? { status: 'done' } : { status: 'unanswered', reason: over.reason }
+  }
+}
+
+/** 上一次 gatewayPrompt 的幂等键 */
+const lastRequestId = (): string =>
+  (mocks.gatewayPrompt.mock.calls.at(-1)![4] as { requestId: string }).requestId
 
 /** 缺省世界：父会话是普通会话、子会话是它的孩子、都没有活跃运行时 */
 function defaultWorld(): void {
@@ -99,6 +155,13 @@ function defaultWorld(): void {
   })
   mocks.findChildren.mockReturnValue([])
   mocks.getAgentSession.mockReturnValue(undefined)
+  closedChild = fakeAgent()
+  mocks.peekAgentSession.mockImplementation(
+    async (id: string) => mocks.getAgentSession(id) ?? (id === CHILD ? closedChild : undefined)
+  )
+  mocks.ensureAgentSession.mockImplementation(async (id: string) => mocks.getAgentSession(id))
+  mocks.deliver.mockResolvedValue(undefined)
+  mocks.durable.value = true
   // 发送成功 = 落定为 {}；带 error 才是「没发出去」
   mocks.gatewayPrompt.mockResolvedValue({})
   mocks.findLastBySession.mockResolvedValue(undefined)
@@ -111,19 +174,15 @@ function defaultWorld(): void {
 beforeAll(async () => {
   mod = await import('../subSessionRunner')
   runner = mod.subSessionRunner
-  // 完成通知归后台任务枢纽，投递实现由 sessionService 在生产启动时注入（避免与它成环）。
-  // 这里把那一根线照原样接上 —— 断了它，测的就不是通知规则而是"没人接线"。
   registry = await import('../taskRegistry')
-  registry.setTaskNotifier((sessionId, text) => {
-    void mocks.getAgentSession(sessionId)?.notify(text)
-  })
 })
 
 beforeEach(() => {
   vi.useRealTimers()
-  // 枢纽是进程内单例，上一条用例的残留任务不该漏进下一条
+  // 枢纽与 runner 的记账都是进程内单例，上一条用例的残留不该漏进下一条
   registry.taskRegistry.killAll()
-  for (const fn of Object.values(mocks)) fn.mockReset()
+  runner.resetForTests()
+  for (const fn of Object.values(mocks)) if (typeof fn === 'function') fn.mockReset()
   defaultWorld()
 })
 
@@ -333,9 +392,13 @@ describe('prompt —— 前台 / 后台 / 超时 / 中止', () => {
       signal: over.signal
     })
 
-  it('走 chatGateway.prompt（IPC agent:prompt 的同一个函数），不自建发送路径', async () => {
+  it('走 chatGateway.prompt（IPC agent:prompt 的同一个函数），不自建发送路径；带幂等键与 driven 标记', async () => {
     await send()
-    expect(mocks.gatewayPrompt).toHaveBeenCalledWith(CHILD, '干活')
+    expect(mocks.gatewayPrompt).toHaveBeenCalledWith(CHILD, '干活', undefined, undefined, {
+      // 没有工具任务的调用方：一个从不重新挂上的临时键（PIN-18）
+      requestId: expect.stringMatching(/^subsession:parent-1:adhoc-/),
+      driven: { parentId: PARENT, background: false }
+    })
   })
 
   it('空消息拒绝（一条空的用户消息不是「代替用户发送」）', async () => {
@@ -350,14 +413,21 @@ describe('prompt —— 前台 / 后台 / 超时 / 中止', () => {
     expect(mocks.gatewayPrompt).not.toHaveBeenCalled()
   })
 
-  it('前台：等整轮结束，返回末条消息正文', async () => {
-    mocks.findLastBySession.mockResolvedValue({ role: 'assistant', content: 'DONE.' })
+  it('前台：等整轮结束，返回子会话这一轮的回答（lastAnswer）', async () => {
+    closedChild.lastAnswer.mockResolvedValue({ text: 'DONE.' })
     expect(await send()).toEqual({ kind: 'answered', id: CHILD, answer: 'DONE.' })
   })
 
-  it('末条是错误事件 ⇒ 照样回，并标 isError（父级要看到同一份事实）', async () => {
-    mocks.findLastBySession.mockResolvedValue({ role: 'system_notify', content: 'boom' })
+  it('这一轮以错误收场 ⇒ 照样回，并标 isError（父级要看到同一份事实）', async () => {
+    closedChild.lastAnswer.mockResolvedValue({ text: 'boom', isError: true })
     expect(await send()).toEqual({ kind: 'answered', id: CHILD, answer: 'boom', isError: true })
+  })
+
+  it('旧格式子会话（PIN-12）：照旧读末条消息', async () => {
+    mocks.durable.value = false
+    mocks.findLastBySession.mockResolvedValue({ role: 'system_notify', content: 'old boom' })
+    expect(await send()).toEqual({ kind: 'answered', id: CHILD, answer: 'old boom', isError: true })
+    expect(closedChild.lastAnswer).not.toHaveBeenCalled()
   })
 
   it('忙就拒绝、不排队：一个忙着的子会话是父级该知道的状态', async () => {
@@ -389,10 +459,7 @@ describe('prompt —— 前台 / 后台 / 超时 / 中止', () => {
   })
 
   it('后台跑完向**父会话**回报，且回执不带内容（内容会被每一步重发）', async () => {
-    const parentAgent = fakeAgent()
-    mocks.getAgentSession.mockImplementation((id: string) =>
-      id === PARENT ? parentAgent : undefined
-    )
+    closedChild.lastAnswer.mockResolvedValue({ text: 'DONE.' })
     let release!: () => void
     mocks.gatewayPrompt.mockReturnValue(
       new Promise<{ error?: string }>((r) => {
@@ -401,9 +468,11 @@ describe('prompt —— 前台 / 后台 / 超时 / 中止', () => {
     )
     await send({ background: true })
     release()
-    await vi.waitFor(() => expect(parentAgent.notify).toHaveBeenCalled())
-
-    const notice = parentAgent.notify.mock.calls[0][0] as string
+    await runner.onDrivenSettled(settled({ requestId: lastRequestId() }))
+    expect(mocks.deliver).toHaveBeenCalledTimes(1)
+    const [parentId, notice, noticeId] = mocks.deliver.mock.calls[0] as [string, string, string]
+    expect(parentId).toBe(PARENT)
+    expect(noticeId).toBe(`subsession-done:${CHILD}:42`)
     expect(notice).toContain(CHILD)
     expect(notice).toContain('wait-for-sub-sessions')
     // 回执里不该出现子会话的答复正文
@@ -451,10 +520,6 @@ describe('prompt —— 前台 / 后台 / 超时 / 中止', () => {
   })
 
   it('降级之后那一轮跑完照样回报（否则父级永远等不到「它好了」）', async () => {
-    const parentAgent = fakeAgent()
-    mocks.getAgentSession.mockImplementation((id: string) =>
-      id === PARENT ? parentAgent : undefined
-    )
     let release!: () => void
     mocks.gatewayPrompt.mockReturnValue(
       new Promise<{ error?: string }>((r) => {
@@ -463,7 +528,8 @@ describe('prompt —— 前台 / 后台 / 超时 / 中止', () => {
     )
     await send({ timeoutSeconds: 1 })
     release()
-    await vi.waitFor(() => expect(parentAgent.notify).toHaveBeenCalled())
+    await runner.onDrivenSettled(settled({ requestId: lastRequestId(), background: false }))
+    expect(mocks.deliver).toHaveBeenCalledTimes(1)
   })
 
   it('父会话被停止（signal）⇒ 级联中止子会话当前 run', async () => {
@@ -613,11 +679,10 @@ describe('并发与失败 —— 实测里那条错误链的两个断点', () =>
 
 describe('完成通知 —— 说实话，且不重复', () => {
   it('自己停掉的那次**不通知**（停它的就是父级，它早就知道）', async () => {
-    const parentAgent = fakeAgent()
     // 派活时子会话必须是空闲的（否则命中忙碌拒绝，压根不会有 run）
     const childAgent = fakeAgent()
     mocks.getAgentSession.mockImplementation((id: string) =>
-      id === PARENT ? parentAgent : childAgent
+      id === CHILD ? childAgent : undefined
     )
     let release!: () => void
     mocks.gatewayPrompt.mockReturnValue(
@@ -632,19 +697,19 @@ describe('完成通知 —— 说实话，且不重复', () => {
       background: true,
       timeoutSeconds: 60
     })
+    const requestId = lastRequestId()
     childAgent.isStreaming = true
     await runner.stop(PARENT, CHILD)
     release()
     // 实测里这条通知反而把父级叫醒去「收」一个它刚亲手停掉的东西，白烧一轮
-    await new Promise((r) => setTimeout(r, 300))
-    expect(parentAgent.notify).not.toHaveBeenCalled()
+    await runner.onDrivenSettled(settled({ requestId, reason: 'aborted' }))
+    expect(mocks.deliver).not.toHaveBeenCalled()
   })
 
   it('卡在等批准时跑完的通知：说清在等批准并带出问题，而不是「跑完了」', async () => {
-    const parentAgent = fakeAgent()
     const childAgent = fakeAgent()
     mocks.getAgentSession.mockImplementation((id: string) =>
-      id === PARENT ? parentAgent : childAgent
+      id === CHILD ? childAgent : undefined
     )
     let release!: () => void
     mocks.gatewayPrompt.mockReturnValue(
@@ -662,17 +727,16 @@ describe('完成通知 —— 说实话，且不重复', () => {
     childAgent.pendingInputCount = 1
     childAgent.pendingInputSummaries = ['bash: rm -rf build']
     release()
-    await vi.waitFor(() => expect(parentAgent.notify).toHaveBeenCalled())
-    const notice = parentAgent.notify.mock.calls[0][0] as string
+    await runner.onDrivenSettled(settled({ requestId: lastRequestId() }))
+    const notice = mocks.deliver.mock.calls[0][1] as string
     expect(notice).toContain('ask the user for approval')
     expect(notice).toContain('rm -rf build')
     expect(notice).not.toContain('has finished')
   })
 
   it('已经有人在 wait 它 ⇒ 不再补一条通知（否则父级把刚拿到的又读一遍）', async () => {
-    const parentAgent = fakeAgent()
     const busy = fakeAgent()
-    mocks.getAgentSession.mockImplementation((id: string) => (id === PARENT ? parentAgent : busy))
+    mocks.getAgentSession.mockImplementation((id: string) => (id === CHILD ? busy : undefined))
     mocks.findChildren.mockReturnValue([{ id: CHILD, title: 'Child', updatedAt: 1 }])
     let release!: () => void
     mocks.gatewayPrompt.mockReturnValue(
@@ -687,13 +751,16 @@ describe('完成通知 —— 说实话，且不重复', () => {
       background: true,
       timeoutSeconds: 60
     })
+    const requestId = lastRequestId()
     busy.isStreaming = true
     const waiting = runner.wait({ parentId: PARENT, childId: CHILD, timeoutSeconds: 30 })
+    // 落定报来时 wait 正握着它（让 wait 先走到挂住那一步）
+    await new Promise((r) => setTimeout(r, 20))
+    await runner.onDrivenSettled(settled({ requestId }))
     busy.isStreaming = false
     release()
     await waiting
-    await new Promise((r) => setTimeout(r, 300))
-    expect(parentAgent.notify).not.toHaveBeenCalled()
+    expect(mocks.deliver).not.toHaveBeenCalled()
   })
 })
 
@@ -711,7 +778,7 @@ describe('wait —— 替掉 sleep 轮询的那个原语', () => {
 
   it('全部空闲时立刻返回（不为一个已经跑完的任务空等）', async () => {
     mocks.findChildren.mockReturnValue([{ id: CHILD, title: 'Child', updatedAt: 1 }])
-    mocks.findLastBySession.mockResolvedValue({ role: 'assistant', content: 'DONE.' })
+    closedChild.lastAnswer.mockResolvedValue({ text: 'DONE.' })
     const res = (await runner.wait({ parentId: PARENT, timeoutSeconds: 5 })) as {
       kind: string
       results: Array<{ answer?: string }>
@@ -740,7 +807,7 @@ describe('wait —— 替掉 sleep 轮询的那个原语', () => {
     await new Promise((r) => setTimeout(r, 300))
     expect(resolved).toBe(false)
 
-    mocks.findLastBySession.mockResolvedValue({ role: 'assistant', content: 'LATE ANSWER.' })
+    busy.lastAnswer.mockResolvedValue({ text: 'LATE ANSWER.' })
     busy.isStreaming = false
     release()
     const res = (await pending) as { kind: string; results: Array<{ answer?: string }> }

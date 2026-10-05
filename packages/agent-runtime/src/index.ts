@@ -599,6 +599,7 @@ export {
   type SessionCloseReason,
   type SubmitErrorCode,
   type SubmitResult,
+  type TaskLiveness,
   type UserSendOptions
 } from './durable/durableSession'
 export {

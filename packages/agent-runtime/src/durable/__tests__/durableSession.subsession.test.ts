@@ -351,7 +351,7 @@ describe('lastAnswer', () => {
     expect(await session.lastAnswer()).toStrictEqual({ text: 'partial' })
   })
 
-  it("P2-09-26 errors: the model's error text with isError (equal to submitUser's error); durable's detail text when errorMessage is absent or empty; during a retry wait", async () => {
+  it("P2-09-26 errors: the model's error text with isError (equal to submitUser's error); durable's detail text when errorMessage is absent, submitUser's fallback when it is empty; during a retry wait", async () => {
     const t = await makeHost()
     const session = await t.open()
     await primeRoot(session)
@@ -371,12 +371,24 @@ describe('lastAnswer', () => {
     })
     expect(absentAnswer!.text).toBe(absent.error)
 
-    // errorMessage 为空串：durable 的细节同样是 ''（`errorMessage ?? …`，PIN-07 的公式）
+    // errorMessage 为空串：durable 的细节是 ''，发送结果换成兜底文案 —— lastAnswer 与它逐字相同
+    // （P2-10 的裁定：`errorMessage || …`，不是 `??`）
+    t.kit.queue(fauxAssistantMessage([], { stopReason: 'error', errorMessage: '' }))
+    const empty = await session.submitUser('u3')
+    expect(empty).toEqual({ error: 'The model request failed', code: 'model_error' })
+    expect(await session.lastAnswer()).toStrictEqual({
+      text: 'The model request failed',
+      isError: true
+    })
+    // 手写的同形条目（不经发送）读出来也一样
     await appendAssistant(
       session,
       fauxAssistantMessage([], { stopReason: 'error', errorMessage: '' })
     )
-    expect(await session.lastAnswer()).toStrictEqual({ text: '', isError: true })
+    expect(await session.lastAnswer()).toStrictEqual({
+      text: 'The model request failed',
+      isError: true
+    })
 
     // 重试等待中：最新的错误条目
     const retrying = await makeHost({
@@ -508,4 +520,47 @@ describe('lastAnswer', () => {
     },
     RESTART_TIMEOUT
   )
+})
+
+describe('P2-10 helpers (drivenRun / taskLiveness)', () => {
+  it('P2-10 drivenRun mirrors the marker as a copy; taskLiveness reports live, then terminal with the abort mark; unknown → undefined; closed handle → undefined / SessionClosedError', async () => {
+    const t = await makeHost()
+    const session = await t.open()
+    await primeRoot(session)
+    expect(session.drivenRun).toBeUndefined()
+    const run = held(answer('a'))
+    t.kit.queue(run.step)
+    const pending = session.submitUser('u', {
+      requestId: 'R',
+      driven: { parentId: 'P', background: false }
+    })
+    await run.reached
+    const marker = session.drivenRun
+    expect(marker).toEqual({
+      requestId: 'R',
+      parentId: 'P',
+      background: false,
+      conversationId: ROOT
+    })
+    marker!.requestId = 'mutated'
+    expect(session.drivenRun!.requestId).toBe('R')
+
+    const taskId = (await session.harness.inspect(BG)).tasks.find(
+      (task) => task.record.conversationId === ROOT
+    )!.record.id
+    expect(await session.taskLiveness(taskId)).toEqual({ live: true, abortRequested: false })
+    await session.abort()
+    await pending
+    await waitFor(
+      async () => (await session.taskLiveness(taskId))?.live === false,
+      3000,
+      'task terminal'
+    )
+    expect(await session.taskLiveness(taskId)).toEqual({ live: false, abortRequested: true })
+    expect(await session.taskLiveness(99999)).toBeUndefined()
+
+    await withTimeout(t.host.close('s1'), 5000, 'close')
+    expect(session.drivenRun).toBeUndefined()
+    await expect(session.taskLiveness(taskId)).rejects.toBeInstanceOf(SessionClosedError)
+  })
 })

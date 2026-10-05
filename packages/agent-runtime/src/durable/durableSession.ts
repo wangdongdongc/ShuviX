@@ -182,6 +182,14 @@ export interface NotifyOptions {
 /** 某个 requestId 在当前对话里的状态（P2-09）：没有 / 未落定（排队或在跑）/ 已落定 */
 export type RequestState = 'none' | 'pending' | 'settled'
 
+/** 某个任务的存活情况（P2-10，`taskLiveness`） */
+export interface TaskLiveness {
+  /** 还没终结（pending / running / waiting / completing） */
+  live: boolean
+  /** 带着中止标记（终结之后也保留：被中止收场的任务据此认得出来） */
+  abortRequested: boolean
+}
+
 /** 当前对话这一轮的回答（P2-09）：文本部分拼起来；模型报错时是错误文案并带 `isError` */
 export interface LastAnswer {
   text: string
@@ -254,6 +262,16 @@ export interface DurableSession {
    * `isError`）。压缩不会藏起它，也从不返回摘要。句柄已关 → 以 `SessionClosedError` 拒绝。
    */
   lastAnswer(): Promise<LastAnswer | undefined>
+  /**
+   * 此刻的 driven-run 标记（P2-10；同步，从不开启调度器）：被父会话驱动、还没报过落定的那一轮。
+   * 没有 / 句柄已关 → undefined。宿主据此认出「被中断的这件事是谁驱动的」（父会话中止的级联、停止）。
+   */
+  readonly drivenRun: DrivenRun | undefined
+  /**
+   * 某个任务的存活情况（P2-10；只读，从不开启调度器）：`live` = 还没终结；`abortRequested` = 带着中止
+   * 标记（终结了也保留）。不存在 → undefined。句柄已关 → 以 `SessionClosedError` 拒绝。
+   */
+  taskLiveness(taskId: number): Promise<TaskLiveness | undefined>
   /** 发送用户输入并等这一轮落定（R3：结果对象，从不抛出）；已有的 requestId = 重新挂上（P2-09） */
   submitUser(content: UserInput, options?: UserSendOptions): Promise<SubmitResult>
   /** 运行中插话（空闲时起一轮，R4） */
@@ -294,6 +312,9 @@ export type SessionCloseReason = 'remove' | 'invalidate' | 'destroy'
 
 // ─────────────────────────── 结算映射（R3，纯函数） ───────────────────────────
 
+/** `settlementResult` 在 model_error 没有细节时的文案 */
+const MODEL_ERROR_FALLBACK = 'The model request failed'
+
 function detailText(detail: unknown): string | undefined {
   if (detail === undefined || detail === null) return undefined
   if (typeof detail === 'string') return detail.length > 0 ? detail : undefined
@@ -327,7 +348,7 @@ export function settlementResult(
     case 'reset':
       return {}
     case 'model_error':
-      return { error: detail ?? 'The model request failed', code: 'model_error' }
+      return { error: detail ?? MODEL_ERROR_FALLBACK, code: 'model_error' }
     case 'no_model':
       return { error: detail ?? 'No model is configured for this conversation', code: 'no_model' }
     case 'faulted':
@@ -362,9 +383,16 @@ function combinedNoticeId(notices: readonly PendingNotice[]): string {
   return ids.length === 1 ? ids[0]! : `notices:${ids.join(',')}`
 }
 
-/** durable 的模型错误文案（`generation.ts`）：没有 errorMessage 时按停止原因说 */
+/**
+ * 模型错误文案，与 `submitUser` 的 `error` 逐字相同（P2-09 PIN-07，P2-10 的裁定）：durable 把
+ * `errorMessage ?? 'Model response ended with stop reason …'` 记作运行细节，`settlementResult` 再把空细节
+ * 换成兜底文案 —— 所以缺省时按停止原因说，空串时是兜底文案。
+ */
 function modelErrorText(message: AssistantMessage): string {
-  return message.errorMessage ?? `Model response ended with stop reason ${message.stopReason}`
+  if (message.errorMessage === undefined) {
+    return `Model response ended with stop reason ${message.stopReason}`
+  }
+  return message.errorMessage || MODEL_ERROR_FALLBACK
 }
 
 /** 一条 `pi.assistant` 条目的回答（PIN-07）：文本部分拼接；报错 → 错误文案 + isError */
@@ -1220,6 +1248,21 @@ export class DurableSessionImpl implements DurableSession {
         cursor = page.next
       } while (cursor !== undefined)
       return undefined
+    })
+  }
+
+  get drivenRun(): DrivenRun | undefined {
+    if (this.closedFlag) return undefined
+    const marker = this.drivenMarker
+    return marker === undefined ? undefined : { ...marker }
+  }
+
+  async taskLiveness(taskId: number): Promise<TaskLiveness | undefined> {
+    return this.op(async () => {
+      const record = await this.raw.getTask(taskId as TaskId, BG)
+      if (record === undefined) return undefined
+      const status = record.state.status
+      return { live: status !== 'terminal', abortRequested: record.abortRequested }
     })
   }
 

@@ -24,6 +24,7 @@ import {
   DEFAULT_INTERRUPTED_SEND_POLICY,
   localDate,
   reopenSessionReviews,
+  type DrivenSettledEvent,
   type InterruptedSendPolicy,
   type RuntimeLogger,
   type SessionHost,
@@ -70,6 +71,37 @@ function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
 
+/**
+ * 子会话运行器按需加载（P2-10）：它经网关 import 了整套工具与服务，本模块又被 sessionService /
+ * agentSession 静态 import —— 静态 import 它会在加载期成环，而且 import 本模块就会把运行器建出来。
+ * 两处 seam 都只在运行时（会话已经开着）才走到这里。
+ */
+function subSessionRunnerModule(): Promise<typeof import('./subSessionRunner')> {
+  return import('./subSessionRunner')
+}
+
+/**
+ * 子会话被驱动的那一轮落定（P2-09 的 seam）→ 运行器决定通不通知父会话、怎么送达（P2-10 PIN-01：
+ * 完成通知只走这一条路）。拒绝 = 送达失败，运行时留着标记下次打开再报。
+ */
+export async function onSubSessionDrivenSettled(event: DrivenSettledEvent): Promise<void> {
+  const { subSessionRunner } = await subSessionRunnerModule()
+  await subSessionRunner.onDrivenSettled(event)
+}
+
+/**
+ * 会话的中止前 seam（同步，在中止标记提交之前）：作废这条会话进行中的自动审查；再把父会话的中止级联给
+ * 它前台驱动着、此刻被中断的子会话（P2-10 PIN-08；不等、幂等，失败只记日志）。
+ */
+export function beforeSessionAbort(sessionId: string): void {
+  abortSessionReviews(sessionId)
+  void subSessionRunnerModule()
+    .then(({ subSessionRunner }) => subSessionRunner.cascadeParentAbort(sessionId))
+    .catch((err: unknown) =>
+      log.warn(`父会话中止的级联失败 session=${sessionId}: ${errorText(err)}`)
+    )
+}
+
 const runtimeLog: RuntimeLogger = {
   info: (message) => log.info(message),
   warn: (message) => log.warn(message),
@@ -101,7 +133,8 @@ export function buildSessionHostDeps(
     isEphemeral: (sessionId) => sessionRecords.isEphemeral(sessionId),
     isPinned: (sessionId) => taskRegistry.runningCount(sessionId) > 0,
     eventSink: electronEventSink,
-    beforeAbort: (sessionId) => abortSessionReviews(sessionId),
+    beforeAbort: beforeSessionAbort,
+    onDrivenSettled: onSubSessionDrivenSettled,
     onInputsReopened: (sessionId) => reopenSessionReviews(sessionId),
     interruptedSendPolicy: INTERRUPTED_SEND_POLICY,
     autoResume: () => settingsService.get(AUTO_RESUME_KEY),
