@@ -10,7 +10,7 @@
  *    经生产写入器写记录 —— 也就是 P2-03 将来的创建提交的形状。
  *  - `startRun()`、`liveTasks()`、`requestsWith()`、`mentions()`：起一轮 / 看活任务 / 看请求。
  */
-import { Type } from '@earendil-works/pi-ai'
+import { Type, type AssistantMessage, type FauxResponseStep } from '@earendil-works/pi-ai'
 import {
   configure,
   defineExtension,
@@ -19,20 +19,29 @@ import {
   ROOT_CONVERSATION_ID,
   type ConversationId,
   type Submission,
+  type SubmissionRecord,
   type TaskId,
   type TaskRecord,
+  type ToolExecutionApi,
   type ToolRegistration
 } from '@earendil-works/pi-durable'
-import type { JsonValue } from '@earendil-works/chord'
+import type { Context, JsonValue } from '@earendil-works/chord'
+import type { ModelSelection } from '../../../models/lockModel'
+import type { ResultContract } from '../../../subagent/nextTool'
+import type { InProcessAgentType } from '../../../subagent/types'
 import { backgroundContext as BG } from '../../context'
 import { writeSpawnedAgentRecord, type SpawnedAgentRecord } from '../../agentRecord'
 import type { DurableSession } from '../../durableSession'
 import { agentExtensionName } from '../../lock'
 import { freezePersona } from '../../prompt/persona'
-import type { FauxKit } from './faux'
-import { W_NOW } from './scenario'
+import type { AgentConfig } from '../../seams'
+import type { SpawnCreatedInfo, SpawnOutcome } from '../../spawn'
+import { markerVars, testProfile, type MarkerVars } from './agentConfig'
+import { callTool, type FauxKit } from './faux'
+import { makeHost, primeRoot, type TestHost, type TestHostOptions } from './host'
+import { W_NOW, wKit } from './scenario'
 import { messageText } from './transcript'
-import { aborted, deferred, type Deferred } from './wait'
+import { aborted, deferred, waitFor, type Deferred } from './wait'
 
 // ─────────────────────────── 任务定义 ───────────────────────────
 
@@ -303,4 +312,317 @@ export function identityProbe(
       return { content: [{ type: 'text', text: `${name} done` }] }
     }
   })
+}
+
+// ─────────────────────────── 派发（P2-03） ───────────────────────────
+
+/** 测试派发工具的选项 */
+export interface DispatchOptions {
+  getSession: () => DurableSession
+  profiles: Readonly<Record<string, InProcessAgentType>>
+  /** 每次派发的结果（按完成次序） */
+  outcomes: SpawnOutcome[]
+  contract?: ResultContract
+  /** 包一层工具 API（注入失败用） */
+  wrapApi?: (api: ToolExecutionApi) => ToolExecutionApi
+  /** 拿到结果之后、返回之前（扣住测试工具用；扣住时要观察工具的 signal，否则关停会等下去） */
+  afterSpawn?: (context: Context) => Promise<void>
+  onCreated?: (info: SpawnCreatedInfo) => void
+  /** 缺省 `agent`；`force_agent` = 不受 canSpawn 门控的那份 */
+  name?: string
+  /** 缺省 safe */
+  replay?: 'safe' | 'unsafe'
+}
+
+/**
+ * 测试派发工具：参数 `{name, prompt, description}`，把派发交给 `session.agents.spawn`，结果推进
+ * `outcomes`，以 `o.result` 作结果文本（不带 details）。
+ */
+export function dispatch(options: DispatchOptions): ToolRegistration {
+  const name = options.name ?? 'agent'
+  return defineTool({
+    name,
+    description: `${name}: dispatch a sub-agent`,
+    parameters: Type.Object({
+      name: Type.String(),
+      prompt: Type.String(),
+      description: Type.String()
+    }),
+    replay: options.replay ?? 'safe',
+    execute: async (args, api, context) => {
+      const profile = options.profiles[args.name]
+      if (profile === undefined) throw new Error(`unknown profile ${args.name}`)
+      const outcome = await options.getSession().agents.spawn(
+        {
+          owner: { tool: options.wrapApi?.(api) ?? api },
+          profile,
+          prompt: args.prompt,
+          description: args.description,
+          ...(options.contract === undefined ? {} : { resultContract: options.contract }),
+          ...(options.onCreated === undefined ? {} : { onCreated: options.onCreated })
+        },
+        context
+      )
+      options.outcomes.push(outcome)
+      await options.afterSpawn?.(context)
+      return { content: [{ type: 'text', text: outcome.result }] }
+    }
+  })
+}
+
+/** 派发调用 `agent({name, prompt, description})` */
+export function callAgent(
+  name: string,
+  prompt: string,
+  options: { description?: string; id?: string; tool?: string } = {}
+): AssistantMessage {
+  return callTool(
+    options.tool ?? 'agent',
+    { name, prompt, description: options.description ?? 'look' },
+    options.id ?? 'call-agent'
+  )
+}
+
+export const PROFILES = {
+  explore: testProfile({
+    name: 'explore',
+    displayName: 'Explorer',
+    tools: ['probe'],
+    systemPrompt: 'You are {{shuvix:marker}} explorer'
+  }),
+  nester: testProfile({
+    name: 'nester',
+    displayName: 'Nester',
+    tools: ['probe', 'agent'],
+    systemPrompt: 'You are {{shuvix:marker}} nester'
+  }),
+  modeled: testProfile({
+    name: 'modeled',
+    displayName: 'Modeled',
+    tools: ['probe', 'agent'],
+    systemPrompt: 'You are modeled',
+    model: 'spec:faux-2'
+  }),
+  thinker: testProfile({
+    name: 'thinker',
+    displayName: 'Thinker',
+    tools: ['probe'],
+    thinkingLevel: 'high'
+  }),
+  aware: testProfile({
+    name: 'aware',
+    displayName: 'Aware',
+    tools: ['probe', 'knowledge'],
+    systemPrompt: 'You are {{shuvix:marker}} aware',
+    instructionFiles: ['AGENTS.md'],
+    projectAwareness: true
+  })
+} satisfies Record<string, InProcessAgentType>
+
+/** fakeRPM：`spec:faux-2` → faux-2；`spec:nope` → 不存在的模型；其余 → null。调用记进 `calls` */
+export interface FakeRpm {
+  readonly calls: string[]
+  /** 给了就抛它 */
+  fail?: Error
+  readonly resolve: (spec: string) => ModelSelection | null
+}
+
+export function fakeRpm(): FakeRpm {
+  const rpm: FakeRpm = {
+    calls: [],
+    resolve: (spec) => {
+      rpm.calls.push(spec)
+      if (rpm.fail !== undefined) throw rpm.fail
+      if (spec === 'spec:faux-2') return { provider: 'faux', modelId: 'faux-2' }
+      if (spec === 'spec:nope') return { provider: 'faux', modelId: 'nope' }
+      return null
+    }
+  }
+  return rpm
+}
+
+/** 一个简单的 probe 工具（`probe done`） */
+export function probeTool(name = 'probe'): ToolRegistration {
+  return defineTool({
+    name,
+    description: `${name}: probes`,
+    parameters: Type.Object({}),
+    execute: async () => ({ content: [{ type: 'text', text: `${name} done` }] })
+  })
+}
+
+/** 宿主 D 的会话配置：work 档案（agent + probe）、faux-1、思考 low */
+export function configD(overrides: Partial<AgentConfig> = {}): AgentConfig {
+  return {
+    profile: testProfile({ name: 'work', displayName: 'Work', tools: ['agent', 'probe'] }),
+    model: { provider: 'faux', modelId: 'faux-1' },
+    thinkingLevel: 'low',
+    ...overrides
+  }
+}
+
+export interface HostD {
+  readonly t: TestHost
+  readonly session: DurableSession
+  readonly vars: MarkerVars
+  readonly rpm: FakeRpm
+  readonly outcomes: SpawnOutcome[]
+  /** 按 agent 的测试工具（同一份数组） */
+  readonly tools: ToolRegistration[]
+  readonly getSession: () => DurableSession
+  /**
+   * 换一个进程（`t.restart()` 沿用全部宿主选项，包括派发工具；结果数组、变量表、fakeRPM 共用）再打开会话。
+   * `before` 在新宿主建好、会话打开之前调用（设 ToolHost 旋钮用）。
+   */
+  readonly reopen: (before?: (t: TestHost) => void) => Promise<HostD>
+}
+
+export interface HostDOptions {
+  /** 额外的按 agent 工具（probe 之外；派发工具经 ToolHost 的 dispatchTool 给） */
+  tools?: (getSession: () => DurableSession, outcomes: SpawnOutcome[]) => ToolRegistration[]
+  /** 派发工具的额外选项 */
+  dispatch?: Partial<Omit<DispatchOptions, 'getSession' | 'outcomes'>>
+  config?: AgentConfig
+  host?: Partial<TestHostOptions>
+  /** 不建根 agent */
+  noPrime?: boolean
+  /** 自带变量表 / fakeRPM（重启共用） */
+  vars?: MarkerVars
+  rpm?: FakeRpm
+}
+
+/** 宿主 D：faux 两个模型、test.spawn 扩展、marker 变量表、固定时钟、fakeRPM、派发工具 + probe */
+export async function hostD(options: HostDOptions = {}): Promise<HostD> {
+  const vars = options.vars ?? markerVars('M1')
+  const rpm = options.rpm ?? fakeRpm()
+  const outcomes: SpawnOutcome[] = []
+  let current: DurableSession | undefined
+  const getSession = (): DurableSession => current!
+  const dispatchTool = dispatch({
+    getSession,
+    profiles: PROFILES,
+    outcomes,
+    ...options.dispatch
+  })
+  const tools: ToolRegistration[] = [probeTool(), ...(options.tools?.(getSession, outcomes) ?? [])]
+  const t = await makeHost({
+    makeKit: wKit,
+    extensions: [TEST_SPAWN_EXTENSION],
+    promptVars: vars.promptVars,
+    now: () => W_NOW,
+    resolveProfileModel: rpm.resolve,
+    toolHost: { agentTools: tools, dispatchTool },
+    agentConfig: options.config ?? configD(),
+    ...options.host
+  })
+  current = await t.open()
+  if (options.noPrime !== true) await primeRoot(current)
+  const build = (host: TestHost): HostD => ({
+    t: host,
+    session: current!,
+    vars,
+    rpm,
+    outcomes,
+    tools,
+    getSession,
+    reopen: async (before) => {
+      const next = await host.restart()
+      before?.(next)
+      current = await next.open()
+      return build(next)
+    }
+  })
+  return build(t)
+}
+
+/** 某个任务拥有的对话（`scanConversations({ownerTaskId})`） */
+export async function childOf(session: DurableSession, taskId: TaskId): Promise<ConversationId[]> {
+  return session.harness.commit(async (tx) => {
+    const page = await tx.scanConversations({ ownerTaskId: taskId }, 256)
+    return page.items.map((record) => record.id)
+  }, BG)
+}
+
+/** 某对话里某次工具调用（按 callId，缺省 `call-agent`）的 `pi.tool` 任务 */
+export async function dispatchTask(
+  session: DurableSession,
+  callId = 'call-agent',
+  conversationId: ConversationId = ROOT_CONVERSATION_ID
+): Promise<TaskId> {
+  const tasks = await tasksOf(session, conversationId, 'pi.tool')
+  const found = tasks.find((task) => (task.input as { callId?: string }).callId === callId)
+  if (found === undefined) throw new Error(`no pi.tool task for ${callId} in ${conversationId}`)
+  return found.id
+}
+
+/** 全部对话的 id（升序） */
+export async function conversationIds(session: DurableSession): Promise<ConversationId[]> {
+  return session.harness.commit(async (tx) => {
+    const page = await tx.scanConversations({}, 256)
+    return page.items.map((record) => record.id).sort((a, b) => a - b)
+  }, BG)
+}
+
+/**
+ * 按请求的最后一条用户消息挑应答的 faux 步骤（同时跑着两个对话时用）：`routes[文本]` 按次序取一个，
+ * 应答可以是消息或步骤（held / stalled）。
+ */
+export function routed(
+  routes: Record<string, (AssistantMessage | FauxResponseStep)[]>
+): FauxResponseStep {
+  return async (context, streamOptions, state, model) => {
+    const user = [...context.messages].reverse().find((message) => message.role === 'user')
+    const text = messageText(user)
+    const next = routes[text]?.shift()
+    if (next === undefined) throw new Error(`no faux route for "${text}"`)
+    return typeof next === 'function' ? next(context, streamOptions, state, model) : next
+  }
+}
+
+/** 按路由表里的应答总数排同一个路由步骤 */
+export function queueRouted(
+  kit: FauxKit,
+  routes: Record<string, (AssistantMessage | FauxResponseStep)[]>
+): void {
+  const step = routed(routes)
+  const count = Object.values(routes).reduce((sum, list) => sum + list.length, 0)
+  for (let index = 0; index < count; index++) kit.queue(step)
+}
+
+/** 某对话的提交（按 requestId） */
+export async function submissionByRequest(
+  session: DurableSession,
+  conversationId: ConversationId,
+  requestId: string
+): Promise<SubmissionRecord | undefined> {
+  return session.harness.commit((tx) => tx.submissionByRequest(conversationId, requestId), BG)
+}
+
+/** 系统提示词含 `marker` 的请求（子 agent 的请求：它的人设带 marker，根的没有） */
+export function requestsOf(kit: FauxKit, marker: string): FauxKit['requests'] {
+  return kit.requests.filter((request) => request.systemPrompt.includes(marker))
+}
+
+/** 等某对话（缺省根）里第一个派发工具任务建好它的子对话，返回子对话 id */
+export async function firstChild(
+  session: DurableSession,
+  conversationId: ConversationId = ROOT_CONVERSATION_ID,
+  timeoutMs = 3000
+): Promise<ConversationId> {
+  let found: ConversationId | undefined
+  await waitFor(
+    async () => {
+      for (const task of await tasksOf(session, conversationId, 'pi.tool')) {
+        const [child] = await childOf(session, task.id)
+        if (child !== undefined) {
+          found = child
+          return true
+        }
+      }
+      return false
+    },
+    timeoutMs,
+    `a child of conversation ${conversationId}`
+  )
+  return found!
 }

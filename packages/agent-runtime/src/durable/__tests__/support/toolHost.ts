@@ -12,7 +12,7 @@
  *    不连服务器；重建上下文的 `extraTools` 原样放进 `extraTools`（PIN-03 R）。资源按上下文的
  *    `sessionId` 找（PIN-10）。
  *
- * 旋钮：`sandbox`（解析时报的钉子）、`failResolve` / `failRebuild`、`omitOnRebuild`（重建时故意漏掉的
+ * 旋钮：`sandbox`（解析时报的钉子）、`failResolve` / `failRebuild` / `failRebuildFor`（按 agentId / 'root'）、`omitOnRebuild`（重建时故意漏掉的
  * 工具名，附加工具也算）、`platform`。`rebuildContexts` 记每次重建的上下文。
  */
 import { Type } from '@earendil-works/pi-ai'
@@ -52,6 +52,11 @@ export interface TestToolHostOptions {
   extraTools?: readonly ToolRegistration[]
   /** 解析时报的沙箱钉子（缺省 false） */
   sandbox?: boolean
+  /**
+   * 派发工具（`set.agent`）的实现（P2-03）：缺省一个只回 `agent ok` 的占位。给不给照旧按
+   * `offersDispatchTool`（名单含 `agent`，且 root 或 `canSpawn`）
+   */
+  dispatchTool?: ToolRegistration
 }
 
 export interface TestToolHost extends ToolHost {
@@ -66,6 +71,8 @@ export interface TestToolHost extends ToolHost {
   platform: TestPlatform
   failResolve: Error | undefined
   failRebuild: Error | undefined
+  /** 按记录的重建失败（P2-03）：键 = 派生 agent 的 agentId，或 `'root'`（锁） */
+  readonly failRebuildFor: Map<string, Error>
   readonly omitOnRebuild: Set<string>
   /** 解析结果交出之前的最后一道改写（注入坏数据用） */
   transformResolved: ((resolved: ResolvedAgentTools) => ResolvedAgentTools) | undefined
@@ -177,6 +184,7 @@ export function makeTestToolHost(
     platform: options.platform ?? 'darwin',
     failResolve: undefined,
     failRebuild: undefined,
+    failRebuildFor: new Map(),
     omitOnRebuild: new Set(),
     transformResolved: undefined,
     beforeResolve: undefined,
@@ -227,7 +235,7 @@ export function makeTestToolHost(
           ? undefined
           : [...(request.extraTools ?? []), ...(options.extraTools ?? [])]
       const resolved: ResolvedAgentTools = {
-        ...(offersDispatchTool(request) ? { agent: dispatchTool() } : {}),
+        ...(offersDispatchTool(request) ? { agent: options.dispatchTool ?? dispatchTool() } : {}),
         ...(skills.length > 0 ? { skill: skillTool(skills) } : {}),
         skills,
         mcp,
@@ -241,6 +249,8 @@ export function makeTestToolHost(
       host.rebuildCalls.push(record)
       host.rebuildContexts.push({ ...context })
       if (host.failRebuild !== undefined) throw host.failRebuild
+      const keyed = host.failRebuildFor.get('agentId' in record ? record.agentId : 'root')
+      if (keyed !== undefined) throw keyed
       const { sessionId } = context
       const keep = (tool: ToolRegistration): boolean => !host.omitOnRebuild.has(tool.name)
       const dispatch = offersDispatchTool({
@@ -249,7 +259,7 @@ export function makeTestToolHost(
         ...('canSpawn' in record ? { canSpawn: record.canSpawn } : {})
       })
       const set: AgentToolSet = {
-        ...(dispatch ? { agent: dispatchTool() } : {}),
+        ...(dispatch ? { agent: options.dispatchTool ?? dispatchTool() } : {}),
         ...(record.skills.length > 0 ? { skill: skillTool(record.skills) } : {}),
         mcp: Object.entries(record.mcp).map(([name, declarations]) => {
           const server = servers.get(name) ?? fakeMcpServer(name, [])

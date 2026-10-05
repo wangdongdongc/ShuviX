@@ -225,6 +225,11 @@ class SessionHostImpl implements SessionHost {
             ? undefined
             : this.deps.models.getModel(model.provider, model.modelId)?.contextWindow
         },
+        // 在跑的派生 agent（Q-P2-08）：查不到的模型按未知
+        liveContextWindows: () =>
+          (lockedSession?.liveAgentModels() ?? []).map(
+            (model) => this.deps.models.getModel(model.provider, model.modelId)?.contextWindow
+          ),
         overrides: () => this.deps.settingsOverrides
       })
       let harness: Harness
@@ -281,6 +286,12 @@ class SessionHostImpl implements SessionHost {
                 onDrivenSettled: this.deps.onDrivenSettled,
                 claimDrivenEmission: (submissionId) => this.claimDriven(sessionId, submissionId)
               }),
+          ...(this.deps.resolveProfileModel === undefined
+            ? {}
+            : { resolveProfileModel: this.deps.resolveProfileModel }),
+          ...(this.deps.maxAgentDepth === undefined
+            ? {}
+            : { maxAgentDepth: this.deps.maxAgentDepth }),
           settings
         })
         lockedSession = session

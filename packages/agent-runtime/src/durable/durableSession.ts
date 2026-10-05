@@ -35,6 +35,10 @@
  *    调度器），下一次任何开启调度器的调用让它们以 aborted 收场。它们不算中断、不进运行状态镜像（侧栏
  *    不会因为在起标题而显示忙）；但在跑时照样挡着 LRU（`evictable` = 什么都没在跑），跑完时宿主据此
  *    再修剪一次（PIN-07）。
+ *  - **派生 agent**（P2-03，`spawn.ts`）：`agents` 是这条会话的派生 agent 协调器 —— 子 agent 是派发工具任务
+ *    拥有的子对话。打开时（锁重建之后、任何续跑之前）有活任务的非辅助子对话按记录重建；`destroyAgent`
+ *    对任何非辅助的 run（含面板追问、只剩被中断的子 agent）都先中止，并卸掉所有 `shuvix.agent.*`；压缩
+ *    余量取锁定模型与在跑的派生 agent 模型里最小的窗口（Q-P2-08）。
  *  - **子会话原语**（P2-09）：
  *    - `submitUser` 带一个当前对话里已有的 requestId = **重新挂上**那条输入：已落定的直接读结果（纯读，
  *      不建 agent、不开启调度器）；没落定的跳过忙拒绝、中断策略、发送前送达、日期通知、显示侧车与受理
@@ -90,10 +94,18 @@ import {
   type SessionState
 } from './docs'
 import { PendingInputRequests } from './inputRequests'
-import { AgentCreationError, AgentLock, type CreateAgentOptions, type LockRecord } from './lock'
+import {
+  AGENT_EXTENSION_PREFIX,
+  AgentCreationError,
+  AgentLock,
+  type CreateAgentOptions,
+  type LockRecord
+} from './lock'
 import { maybeAnnounceDate } from './prompt/dateNotice'
 import type { PromptExtensions } from './prompt/sections'
 import type { AgentConfig, InterruptedSendPolicy, ModelCatalog, RunState, ToolHost } from './seams'
+import { SpawnCoordinatorImpl, type SpawnCoordinator } from './spawn'
+import type { LockModel, ModelSelection } from '../models/lockModel'
 
 const GENERATION_TASK_KIND = 'pi.generation'
 const LIVE_TASK_STATUSES = ['pending', 'running', 'waiting', 'completing'] as const
@@ -297,13 +309,24 @@ export interface DurableSession {
   /** 此刻的锁记录（同步；undefined = 这条会话现在没有 agent） */
   readonly lock: LockRecord | undefined
   /**
+   * 派生 agent 协调器（P2-03）：派发工具经它建子对话、等回答；面板的追问 / 软停止 / 销毁也走它。
+   * 不发 ChatEvent（那是 P2-05 的路由）。
+   */
+  readonly agents: SpawnCoordinator
+  /**
    * 创建 agent（上锁）。已锁返回现有记录、不调任何 seam；并发调用合流成一次。模型被拒 / 被取消 /
    * 附加工具 → 抛 `AgentCreationError`；其余失败原样抛出。从不开启调度器。
    */
   createAgent(options?: CreateAgentOptions): Promise<LockRecord>
-  /** 销毁 agent（解锁）：忙 / 被中断先中止；没锁 = 无操作 */
+  /**
+   * 销毁 agent（解锁）：任何非辅助的 run 在跑 / 被中断（含面板追问的子 agent）先中止；卸掉所有
+   * `shuvix.agent.*`（派生 agent 的记录留着，按需重建）。没锁 = 无操作
+   */
   destroyAgent(): Promise<void>
-  /** 这个 Harness 实际在用的 settings（同步 getter；压缩余量按锁定模型的窗口算，K14） */
+  /**
+   * 这个 Harness 实际在用的 settings（同步 getter；压缩余量按锁定模型与在跑的派生 agent 模型里最小的
+   * 窗口算，K14 / Q-P2-08）
+   */
   readonly effectiveSettings: HarnessSettings
 }
 
@@ -532,6 +555,12 @@ export interface DurableSessionDeps {
   settings: HarnessSettings
   /** 被驱动的那一轮落定（P2-09）；缺省 = 不察觉（标记留着） */
   onDrivenSettled?: (event: DrivenSettledEvent) => void | Promise<void>
+  /** 派生 agent 档案的 `shuvix-model` → 模型选择（P2-03；缺省 = 不支持档案模型，回落调用方的模型） */
+  resolveProfileModel?: (
+    spec: string
+  ) => ModelSelection | null | undefined | Promise<ModelSelection | null | undefined>
+  /** 派生层级上限（缺省 `MAX_AGENT_DEPTH`） */
+  maxAgentDepth?: number
   /**
    * 这条 submission 的落定在本进程里报过没有：第一次返回 true 并记下（宿主按进程记，LRU 关了再开
    * 也不重报）。缺省 = 只在这个实例里记。
@@ -585,6 +614,8 @@ export class DurableSessionImpl implements DurableSession {
   private drivenMarker: DrivenRun | undefined
   /** 没有宿主记账时，本实例报过的 driven 落定 */
   private readonly drivenClaimed = new Set<SubmissionId>()
+  /** 派生 agent 协调器（P2-03） */
+  private readonly spawner: SpawnCoordinatorImpl
 
   private constructor(private readonly deps: DurableSessionDeps) {
     this.sessionId = deps.sessionId
@@ -608,6 +639,33 @@ export class DurableSessionImpl implements DurableSession {
       currentConversation: () => this.currentConversation(),
       stopForDestroy: () => this.stopForDestroy()
     })
+    this.spawner = new SpawnCoordinatorImpl({
+      sessionId: deps.sessionId,
+      harness: this.harness,
+      raw: deps.harness,
+      registry: deps.registry,
+      toolHost: deps.toolHost,
+      modelCatalog: deps.modelCatalog,
+      promptExtensions: deps.promptExtensions,
+      promptVars: deps.promptVars,
+      ...(deps.resolveProfileModel === undefined
+        ? {}
+        : { resolveProfileModel: deps.resolveProfileModel }),
+      ...(deps.maxAgentDepth === undefined ? {} : { maxAgentDepth: deps.maxAgentDepth }),
+      logger: deps.logger,
+      now: deps.now,
+      directory: this.directory,
+      rootLock: () => this.agentLock.current,
+      liveTasksOf: (conversationId) => this.liveTasksOf(conversationId),
+      liveConversationIds: () => [...new Set([...this.live.values()].map((t) => t.conversationId))],
+      stopConversation: (conversationId) => this.stopConversation(conversationId),
+      reopenInputs: () => this.reopenInputs(),
+      op: (work) => this.op(work)
+    })
+  }
+
+  get agents(): SpawnCoordinator {
+    return this.spawner
   }
 
   /** 接管一个刚打开的 Harness：订阅提交、装载活着的任务、解析当前对话 */
@@ -661,6 +719,8 @@ export class DurableSessionImpl implements DurableSession {
     await this.currentConversation()
     // 在任何续跑 / 发送之前按锁重建工具（打开从不续跑，所以在这里重建是安全的），再对一次镜像（K11）
     await this.agentLock.restore()
+    // 派生 agent：有活任务的非辅助子对话按记录重建（失败 → 打中止标记，PIN-05）；同样在任何续跑之前
+    await this.spawner.restoreAtOpen()
     // 辅助工作从不续跑：活着的任务打上中止标记（只提交标记，不开启调度器）
     await this.markAuxiliaryWork()
     // 初始状态静默设定：宿主在打开完成时统一报一次（PIN-R），这里再排一次通知就会报两遍
@@ -818,7 +878,9 @@ export class DurableSessionImpl implements DurableSession {
   private observe(publication: CommitPublication): void {
     if (this.closedFlag) return
     let changed = false
+    let forward: CommitPublication['changes'][number][] | undefined
     for (const change of publication.changes) {
+      if (change.type === 'entry' || change.type === 'task') (forward ??= []).push(change)
       if (change.type === 'task') {
         const record = change.value
         if (record.state.status === 'terminal') {
@@ -871,6 +933,8 @@ export class DurableSessionImpl implements DurableSession {
         }
       }
     }
+    // 派生 agent 的捕获观察（P2-03）：放在末尾，目录已经按这次发布更新过
+    if (forward !== undefined) this.spawner.observe(forward)
     if (changed) this.recompute()
   }
 
@@ -1688,11 +1752,88 @@ export class DurableSessionImpl implements DurableSession {
   private async stopForDestroy(): Promise<void> {
     this.stoppedByUser = true
     const pending = this.takePendingNotices()
-    if (this.isBusy() || this.isInterrupted()) {
+    // 任何非辅助的 run（当前对话的、被中断的、面板追问的子 agent 的，P2-03）都算
+    if (this.isBusy() || this.isInterrupted() || this.hasRun(undefined)) {
       await this.abortConversation()
+      // 当前对话的中止范围之外还活着的非辅助工作（不在根的拥有者链上的子对话）逐个中止
+      for (const conversationId of this.primaryConversationsWithWork()) {
+        const conversation = await this.harness.conversation(conversationId, BG)
+        await conversation?.abort(BG)
+      }
       await this.flushDeferred(await this.currentConversation(), 'place')
     }
     for (const notice of pending) await this.writeNotice(notice)
+    // 派生 agent 的按 agent 扩展一并卸掉（记录留着，下次用到时按需重建）
+    for (const extension of this.deps.registry.snapshot().installed()) {
+      if (
+        extension.name.startsWith(AGENT_EXTENSION_PREFIX) &&
+        this.directory.identity(
+          Number(extension.name.slice(AGENT_EXTENSION_PREFIX.length)) as ConversationId
+        ) !== undefined
+      ) {
+        this.deps.registry.uninstall(extension)
+      }
+    }
+  }
+
+  /** 有活着的非辅助任务的对话 */
+  private primaryConversationsWithWork(): ConversationId[] {
+    const found = new Set<ConversationId>()
+    for (const task of this.live.values()) {
+      if (!this.directory.isAuxiliary(task.conversationId)) found.add(task.conversationId)
+    }
+    return [...found]
+  }
+
+  /** 某对话此刻活着的任务（协调器用） */
+  private liveTasksOf(
+    conversationId: ConversationId
+  ): { id: TaskId; kind: string; abortRequested: boolean }[] {
+    const tasks: { id: TaskId; kind: string; abortRequested: boolean }[] = []
+    for (const [id, task] of this.live) {
+      if (task.conversationId === conversationId) {
+        tasks.push({ id, kind: task.kind, abortRequested: task.abortRequested })
+      }
+    }
+    return tasks
+  }
+
+  /**
+   * 中止一个子对话（面板的软停止 / 销毁，P2-03 PIN-04）：与会话中止同一套次序（关询问窗口 → 中止前
+   * seam → 取消挂起的询问 → 中止对话），不记「显式喊停」；子对话停下之后重开询问窗口 —— 根的 run
+   * 可能还在跑，它之后的询问不该被一直挡着。
+   */
+  private async stopConversation(conversationId: ConversationId): Promise<void> {
+    const conversation = await this.harness.conversation(conversationId, BG)
+    if (conversation === undefined) return
+    this.inputs.closeInputs('aborted')
+    try {
+      this.deps.beforeAbort?.()
+    } catch (error) {
+      this.deps.logger.warn(`beforeAbort failed session=${this.sessionId}: ${errorText(error)}`)
+    }
+    this.inputs.cancelAll('aborted')
+    try {
+      await conversation.abort(BG)
+    } finally {
+      if (!this.closedFlag) this.reopenInputs()
+    }
+  }
+
+  /**
+   * 此刻有在跑的生成的派生 agent 的模型（辅助工作也算；记录写坏了的不算）—— 压缩余量取最小窗口用
+   * （Q-P2-08，PIN-08）。同步。
+   */
+  liveAgentModels(): LockModel[] {
+    const seen = new Set<ConversationId>()
+    const models: LockModel[] = []
+    for (const task of this.live.values()) {
+      if (task.kind !== GENERATION_TASK_KIND || seen.has(task.conversationId)) continue
+      seen.add(task.conversationId)
+      const record = this.directory.record(task.conversationId)
+      if (record !== undefined) models.push(record.model)
+    }
+    return models
   }
 
   // ─── 配置 ───────────────────────────────────────

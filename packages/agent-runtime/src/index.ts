@@ -652,6 +652,18 @@ export {
   type AgentIdentity,
   type SpawnedAgentRecord
 } from './durable/agentRecord'
+// 派生 agent 协调器（P2-03）：`session.agents` —— 子对话的创建 / 等待 / 追问 / 软停止 / 销毁
+export {
+  agentDepthLimitText,
+  extractSpawnResult,
+  NO_CALLER_MODEL_TEXT,
+  type SpawnCoordinator,
+  type SpawnCreatedInfo,
+  type SpawnOutcome,
+  type SpawnOwner,
+  type SpawnParams,
+  type SpawnToolOwner
+} from './durable/spawn'
 export {
   createShuviXSettings,
   compactionKeepRecentTokens,

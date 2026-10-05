@@ -29,6 +29,8 @@ import type {
   RequestState,
   RunState,
   SessionHost,
+  SpawnCoordinator,
+  SpawnOutcome,
   SubmitResult,
   TaskLiveness,
   UserSendOptions
@@ -260,6 +262,28 @@ export class FakeDurableSession implements DurableSession {
   respondToInput(requestId: string, response: InputResponse): boolean {
     this.calls.push(['respondToInput', requestId, response])
     return this.respondResult
+  }
+
+  /** 派生 agent 协调器的桩（P2-03）：每次调用记进 `calls`，派发 / 追问给脚本结果 */
+  spawnOutcome: SpawnOutcome = { result: '' }
+  readonly agents: SpawnCoordinator = {
+    spawn: async (params) => {
+      this.calls.push(['agents.spawn', params.profile.name, params.prompt])
+      return this.spawnOutcome
+    },
+    interrupt: async (conversationId) => {
+      this.calls.push(['agents.interrupt', conversationId])
+    },
+    destroy: async (conversationId) => {
+      this.calls.push(['agents.destroy', conversationId])
+    },
+    continue: async (conversationId, text) => {
+      this.calls.push(['agents.continue', conversationId, text])
+      return this.spawnOutcome
+    },
+    ensureInstalled: async (conversationId) => {
+      this.calls.push(['agents.ensureInstalled', conversationId])
+    }
   }
 
   async createAgent(options?: CreateAgentOptions): Promise<LockRecord> {

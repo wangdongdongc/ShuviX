@@ -104,6 +104,10 @@ export interface TestHostOptions {
    * 模拟一个没接它的进程
    */
   onDrivenSettled?: SessionHostDeps['onDrivenSettled']
+  /** 派生 agent 档案模型的 seam（P2-03；`restart()` 沿用） */
+  resolveProfileModel?: SessionHostDeps['resolveProfileModel']
+  /** 派生层级上限（P2-03；`restart()` 沿用） */
+  maxAgentDepth?: number
 }
 
 export interface TestHost {
@@ -309,6 +313,10 @@ export async function makeHost(options: TestHostOptions = {}): Promise<TestHost>
     ...(options.now === undefined ? {} : { now: options.now }),
     ...(options.today === undefined ? {} : { today: options.today }),
     ...(options.onDrivenSettled === undefined ? {} : { onDrivenSettled: options.onDrivenSettled }),
+    ...(options.resolveProfileModel === undefined
+      ? {}
+      : { resolveProfileModel: options.resolveProfileModel }),
+    ...(options.maxAgentDepth === undefined ? {} : { maxAgentDepth: options.maxAgentDepth }),
     logger: {
       info: () => {},
       warn: (message) => warnings.push(message),
