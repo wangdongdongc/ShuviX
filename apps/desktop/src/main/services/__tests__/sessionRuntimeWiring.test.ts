@@ -3,7 +3,7 @@
  *
  *   E  D10-35 getAgentSession · D10-36 ensureAgentSession · D10-37 hasAgentRuntime · D10-38 invalidateAgent ·
  *      D10-39(U) 事件归运行时 · D10-40 删除次序 · D10-42 后台通知 · D10-43 询问参与方 · D10-44 钉档案 ·
- *      D10-45..53 网关
+ *      D10-45..53 网关 · P3-06-30 网关 getAgentInfo（不带 ensure 读门面 / peek；ensure 的次序与拒绝）
  *   F  D10-55 statusOf（P2-10-32：interrupted，开着 / 镜像）· D10-56 被拒的子会话发送 · D10-57 stop（含被中断的）·
  *      D10-58 答复（P2-10-28：lastAnswer）
  *   G  D10-59 列表 · D10-61 回退 / 截断
@@ -20,6 +20,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from 'node:fs
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { AgentCreationError, PhasePendingError } from '@shuvix/agent-runtime'
+import type { AgentRuntimeInfo } from '@shuvix/chat-protocol/chatApi'
 
 const holder = vi.hoisted(() => ({
   db: null as unknown,
@@ -676,6 +677,89 @@ describe('D10-53 rollbackMessage', () => {
     const session = fakeHost.put('s1', { lock: lockRecord() })
     await expect(chatGateway.rollbackMessage('s1', 'm1')).rejects.toBeInstanceOf(PhasePendingError)
     expect(session.callsOf('destroyAgent')).toEqual([])
+  })
+})
+
+describe('P3-06-30 gateway.getAgentInfo', () => {
+  const info = (systemPrompt: string): AgentRuntimeInfo => ({
+    systemPrompt,
+    model: {
+      provider: 'faux',
+      id: 'faux-1',
+      name: 'faux-1',
+      api: 'faux',
+      contextWindow: 1,
+      maxTokens: 1,
+      reasoning: false,
+      input: []
+    },
+    thinkingLevel: 'low',
+    tools: [],
+    messageCount: 0,
+    isStreaming: false
+  })
+  const RUNS = ['submitUser', 'continue', 'resumeInterrupted', 'steer', 'followUp']
+
+  it('P3-06-30 no ensure, open: reads the facade (the lock conversation, PIN-09); unlocked → null; never opens', async () => {
+    insert('s1')
+    const session = fakeHost.put('s1', { lock: lockRecord({ conversationId: 3 as never }) })
+    session.infos.set(3, info('lock conversation'))
+    session.infos.set(1, info('root conversation'))
+    expect(await chatGateway.getAgentInfo('s1')).toEqual(info('lock conversation'))
+    expect(session.callsOf('agentInfo')).toEqual([['agentInfo', 3]])
+    session.lock = undefined
+    expect(await chatGateway.getAgentInfo('s1')).toBeNull()
+    expect(session.callsOf('agentInfo')).toHaveLength(1)
+    expect(fakeHost.callsOf('open')).toEqual([])
+    expect(fakeHost.callsOf('peek')).toEqual([])
+  })
+
+  it('P3-06-30 no ensure, closed but locked (mirror): peek, never open; nothing runs (PIN-03); not locked → no peek', async () => {
+    insert('s1', { settings: { enabledTools: [], agentLocked: true } })
+    insert('s2')
+    fakeHost.storages.add('s1')
+    fakeHost.storages.add('s2')
+    fakeHost.configure = (session) => {
+      session.lock = lockRecord()
+      session.infos.set(1, info('peeked'))
+    }
+    expect(await chatGateway.getAgentInfo('s1')).toEqual(info('peeked'))
+    expect(fakeHost.callsOf('peek')).toEqual(['s1'])
+    expect(fakeHost.callsOf('open')).toEqual([])
+    const session = fakeHost.get('s1')!
+    for (const name of [...RUNS, 'createAgent']) expect(session.callsOf(name)).toEqual([])
+
+    expect(await chatGateway.getAgentInfo('s2')).toBeNull()
+    expect(fakeHost.callsOf('peek')).toEqual(['s1'])
+  })
+
+  it('P3-06-30 ensure: ensureAgentSession → createAgent() → getRuntimeInfo(); no send / continue / resume', async () => {
+    insert('s1')
+    fakeHost.configure = (session) => {
+      session.lockOnFirstUse = lockRecord()
+      session.infos.set(1, info('ensured'))
+    }
+    expect(await chatGateway.getAgentInfo('s1', { ensure: true })).toEqual(info('ensured'))
+    expect(fakeHost.callsOf('open')).toEqual(['s1'])
+    const session = fakeHost.get('s1')!
+    expect(session.calls.map(([name]) => name)).toEqual(['createAgent', 'agentInfo'])
+    for (const name of RUNS) expect(session.callsOf(name)).toEqual([])
+  })
+
+  it('P3-06-30 ensure: no_model / cancelled → null without an error event; any other failure rejects', async () => {
+    insert('s1')
+    const session = fakeHost.put('s1')
+    for (const code of ['no_model', 'cancelled'] as const) {
+      session.createAgentError = new AgentCreationError(code, `refused: ${code}`)
+      expect(await chatGateway.getAgentInfo('s1', { ensure: true })).toBeNull()
+    }
+    expect(session.callsOf('agentInfo')).toEqual([])
+    expect(mocks.broadcast).not.toHaveBeenCalled()
+    session.createAgentError = new Error('tool host exploded')
+    await expect(chatGateway.getAgentInfo('s1', { ensure: true })).rejects.toThrow(
+      'tool host exploded'
+    )
+    expect(await chatGateway.getAgentInfo('nope', { ensure: true })).toBeNull()
   })
 })
 
