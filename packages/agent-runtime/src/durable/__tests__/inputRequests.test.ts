@@ -185,4 +185,53 @@ describe('PendingInputRequests', () => {
       ['r1', 'ask']
     ])
   })
+
+  it('IR-10 list(): the pending requests in arrival order; a superseding request moves to the end (P3-03 PIN-02)', async () => {
+    const { inputs } = makeInputs()
+    const a = inputs.request(ask('a'))
+    void inputs.request(ask('b'))
+    expect(inputs.list().map((r) => r.id)).toEqual(['a', 'b'])
+    void inputs.request(ask('a', 'again'))
+    await a
+    expect(inputs.list().map((r) => [r.id, (r as { command?: string }).command])).toEqual([
+      ['b', 'ls'],
+      ['a', 'again']
+    ])
+    inputs.cancelAll()
+    expect(inputs.list()).toEqual([])
+  })
+
+  it('IR-11 subscribe(): every hook set sees each request / resolution once, in order; a throwing one is logged and isolated; unsubscribe is idempotent', async () => {
+    const warnings: string[] = []
+    const inputs = new PendingInputRequests(
+      's1',
+      { broadcast: () => {}, hasUserInputCapability: () => true },
+      {},
+      { info: () => {}, warn: (m) => warnings.push(m), error: () => {} }
+    )
+    const seen: string[] = []
+    const stopThrowing = inputs.subscribe({
+      onRequest: () => {
+        throw new Error('hook boom')
+      },
+      onResolved: () => {
+        throw new Error('hook boom')
+      }
+    })
+    const stop = inputs.subscribe({
+      onRequest: (request) => seen.push(`request:${request.id}:${inputs.list().length}`),
+      onResolved: (id) => seen.push(`resolved:${id}:${inputs.list().length}`)
+    })
+    const pending = inputs.request(ask('r1'))
+    expect(inputs.respond('r1', { kind: 'ask', allowed: true })).toBe(true)
+    await expect(pending).resolves.toEqual({ kind: 'ask', allowed: true })
+    expect(seen).toEqual(['request:r1:1', 'resolved:r1:0'])
+    expect(warnings.filter((w) => w.includes('hook boom'))).toHaveLength(2)
+    stop()
+    stop()
+    stopThrowing()
+    void inputs.request(ask('r2'))
+    expect(seen).toHaveLength(2)
+    inputs.cancelAll()
+  })
 })

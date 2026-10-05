@@ -87,6 +87,9 @@ export interface TestHostOptions {
   maxIdleOpen?: number
   /** 额外的钉住判断（与 `pinned` 集合取或；视图同步的 `hub.hasSubscribers`） */
   isPinned?: (sessionId: string) => boolean
+  /** 会话真正打开 / 关掉时（P3-03 PIN-09；`restart()` 沿用） */
+  onSessionOpened?: SessionHostDeps['onSessionOpened']
+  onSessionClosed?: SessionHostDeps['onSessionClosed']
   /** 临时会话 id（MemoryStorage） */
   ephemeral?: readonly string[]
   /** 整份替换缺省的测试覆盖（关重试 / 关自动压缩） */
@@ -291,6 +294,8 @@ export async function makeHost(options: TestHostOptions = {}): Promise<TestHost>
     },
     isEphemeral: (sessionId) => ephemeral.has(sessionId),
     isPinned: (sessionId) => pinned.has(sessionId) || (options.isPinned?.(sessionId) ?? false),
+    ...(options.onSessionOpened === undefined ? {} : { onSessionOpened: options.onSessionOpened }),
+    ...(options.onSessionClosed === undefined ? {} : { onSessionClosed: options.onSessionClosed }),
     ...(options.maxIdleOpen === undefined ? {} : { maxIdleOpen: options.maxIdleOpen }),
     settingsOverrides: options.settingsOverrides ?? TEST_SETTINGS_OVERRIDES,
     eventSink: {
