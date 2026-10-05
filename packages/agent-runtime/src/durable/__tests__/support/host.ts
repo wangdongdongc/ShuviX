@@ -34,7 +34,8 @@ import type {
   ModelCatalog,
   PromptHost,
   RunState,
-  SessionHostDeps
+  SessionHostDeps,
+  ToolHost
 } from '../../seams'
 import { createSessionHost, type SessionHost } from '../../sessionHost'
 import type { ShuviXSettingsOverrides } from '../../settings'
@@ -61,6 +62,11 @@ export interface TestHostOptions {
   tools?: ToolRegistration[]
   /** ToolHost 选项（每个进程据此新建一个）；缺省 = 没有内置工具、agentTools = tools */
   toolHost?: TestToolHostOptions
+  /**
+   * 整份替换会话宿主用的 ToolHost（集成用例：真工具 + 真 McpManager）；每个进程调用一次。
+   * 给了它，`toolHost` 选项造的测试 ToolHost 照样建（`TestHost.toolHost`），只是不接给宿主。
+   */
+  makeToolHost?: () => ToolHost
   /** 会话配置（缺省 K15：空档案 + faux/faux-1） */
   agentConfig?: AgentConfigSource
   /** provider 行（缺省一条内置行 faux） */
@@ -170,6 +176,7 @@ export async function makeHost(options: TestHostOptions = {}): Promise<TestHost>
   const toolHost = makeTestToolHost(options.toolHost ?? { agentTools: tools }, (event) =>
     broadcasts.push(event)
   )
+  const hostToolHost: ToolHost = options.makeToolHost?.() ?? toolHost
 
   const testHost: TestHost = {
     host: undefined as unknown as SessionHost,
@@ -217,7 +224,7 @@ export async function makeHost(options: TestHostOptions = {}): Promise<TestHost>
       registries.set(sessionId, list)
       return registry
     },
-    toolHost,
+    toolHost: hostToolHost,
     resolveAgentConfig: (sessionId) => {
       configCalls.push(sessionId)
       return snapshotConfig(

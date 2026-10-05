@@ -46,6 +46,8 @@ export interface FauxRequest {
 export interface FauxModelSpec {
   readonly id: string
   readonly contextWindow?: number
+  /** 模型的输出上限（压缩的摘要请求取 min(⌊0.8·reserve⌋, maxTokens)） */
+  readonly maxTokens?: number
 }
 
 export interface FauxKit {
@@ -84,7 +86,8 @@ export function fauxKit(
     models: specs.map((spec) => ({
       id: spec.id,
       reasoning: true,
-      ...(spec.contextWindow === undefined ? {} : { contextWindow: spec.contextWindow })
+      ...(spec.contextWindow === undefined ? {} : { contextWindow: spec.contextWindow }),
+      ...(spec.maxTokens === undefined ? {} : { maxTokens: spec.maxTokens })
     })),
     ...(options.tokensPerSecond === undefined ? {} : { tokensPerSecond: options.tokensPerSecond })
   })
