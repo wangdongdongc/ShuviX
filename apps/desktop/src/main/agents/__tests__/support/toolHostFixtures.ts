@@ -6,11 +6,14 @@ import { Type } from '@earendil-works/pi-ai'
 import type { ToolRegistration } from '@earendil-works/pi-durable'
 import {
   buildBuiltinProfiles,
+  resultContractTools,
   type AgentProfile,
+  type AgentToolsRebuildContext,
   type AgentToolsRequest,
   type InProcessAgentType,
   type LockRecord,
-  type McpToolDeclaration
+  type McpToolDeclaration,
+  type SpawnedAgentRecord
 } from '@shuvix/agent-runtime'
 import { createInlineMdReader } from '@shuvix/agent-runtime/builtinAgents/inlineSources'
 import type { ToolPlatform } from '@shuvix/chat-protocol/chatApi'
@@ -252,6 +255,87 @@ export function lockD(over: Partial<LockRecord> = {}): LockRecord {
     createdAt: 1,
     ...over
   }
+}
+
+// ─── 派生 agent（P2-04：S / NX / SR_D / SP_D / rctx） ─────────────────────
+
+/** 结果契约的 schema（`next` 的参数） */
+export const S: Record<string, unknown> = {
+  type: 'object',
+  required: ['title'],
+  properties: { title: { type: 'string' } }
+}
+
+/** 真 NextTool（运行时按契约造的那一个，P2-02） */
+export function NX(): ToolRegistration {
+  return resultContractTools({ schema: S })[0]
+}
+
+/** NextTool 成功捕获那一次的文字 */
+export const RECORDED = 'Result recorded — the task is complete. Do not call any more tools.'
+
+export const HAIKU = { provider: 'anthropic', modelId: 'claude-haiku-4-5' } as const
+
+/**
+ * SR_D：派生 agent（coding）的创建请求 —— 根会话 s1、agent sub-a1、canSpawn；**没有** conversationId
+ * （工具在子对话创建之前解析）。
+ */
+export function SR_D(over: Partial<AgentToolsRequest> = {}): AgentToolsRequest {
+  return {
+    sessionId: 's1',
+    kind: 'spawned',
+    rootSessionId: 's1',
+    selfSessionId: 'sub-a1',
+    agentId: 'sub-a1',
+    canSpawn: true,
+    profile: inProcess(profileOf('coding')),
+    names: ['read', 'ls', 'grep', 'agent', 'skill:builtin:drawing', 'skill:pdf', 'mcp:context7'],
+    model: { ...HAIKU },
+    thinkingLevel: 'off',
+    cwd: '',
+    ...over
+  }
+}
+
+/** SP_D：与 SR_D 配套的派生 agent 记录（explore 档名、带结果契约） */
+export function SP_D(over: Partial<SpawnedAgentRecord> = {}): SpawnedAgentRecord {
+  return {
+    conversationId: 2 as SpawnedAgentRecord['conversationId'],
+    profileName: 'explore',
+    kind: 'spawned',
+    model: { ...HAIKU },
+    thinkingLevel: 'off',
+    toolNames: [
+      'read',
+      'ls',
+      'grep',
+      'agent',
+      'skill',
+      'mcp__context7__resolve-library-id',
+      'mcp__context7__get-library-docs',
+      'next'
+    ],
+    extensions: ['shuvix.builtin', 'shuvix.agent.2'],
+    sandboxed: true,
+    mcp: { context7: D_C7.map((d) => ({ ...d })) },
+    skills: ['builtin:drawing', 'pdf'],
+    createdAt: 1,
+    agentId: 'sub-a1',
+    depth: 1,
+    canSpawn: true,
+    dispatch: 'tool',
+    parentConversationId: 1 as SpawnedAgentRecord['parentConversationId'],
+    ownerTaskId: 7 as SpawnedAgentRecord['ownerTaskId'],
+    displayName: 'Explore',
+    description: 'look around',
+    resultContract: { schema: S },
+    ...over
+  }
+}
+
+/** 运行时给派生 agent 重建的上下文：根会话 + 按记录的结果契约造好的附加工具 */
+export function rctx(record: SpawnedAgentRecord): AgentToolsRebuildContext {
+  return { sessionId: 's1', extraTools: resultContractTools(record.resultContract) }
 }
 
 /** 一个可控的 deferred */

@@ -6,19 +6,22 @@
  *    而且**造它不起进程** —— 进程在 McpManager 握手时的 start() 里才起，超时 / 断开才收得到它；
  *  - http 只有 Streamable HTTP：曾经的「构造失败回退 SSE」从来走不到（构造函数不会因网络失败而抛），
  *    已删掉，不该悄悄回来；
- *  - 不认识的类型、没有会话的内置服务器直接抛，而不是造出一个半成品。
+ *  - 不认识的类型、没有会话的内置服务器直接抛，而不是造出一个半成品；
+ *  - 内置服务器的 scope 带 `agentOf`（P2-07-50）：每次调用现问启动时注册的解析器
+ *    （会话, 对话）→ 调用方 agent，不在建连时快照；没注册 = 认不出、不抛。
  *
  * 工厂是模块私有的，只经单例 McpManager 的私有字段取得到（白盒）；import 图里的 DB / 内置服务器 /
  * 日志一律换成假件，只留 agent-runtime 与 SDK 是真的。
  */
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 import type { McpServer } from '@shuvix/chat-protocol/types/mcp'
 import type { BuiltinMcpScope } from '@shuvix/agent-runtime'
 import { McpStdioTransport } from '../../utils/mcpStdioTransport'
-import { mcpService } from '../mcpService'
+import { builtinMcpRegistry, mcpService, setBuiltinMcpAgentResolver } from '../mcpService'
+import type { DesktopBuiltinMcpScope } from '../builtinMcp/types'
 
 const mocks = vi.hoisted(() => ({
   buildSpawnEnv: vi.fn((extra?: Record<string, string>) => ({ PATH: '/usr/bin', ...extra }))
@@ -98,5 +101,67 @@ describe('mcpService.createTransport', () => {
     expect(() =>
       createTransport(row({ id: 'builtin-mcp-ssh', name: 'ssh', type: 'inproc', isBuiltin: 1 }))
     ).toThrow(/需要会话上下文/)
+  })
+})
+
+describe('P2-07-50 内置服务器的 scope：agentOf 每次现问注册着的解析器', () => {
+  afterEach(() => {
+    setBuiltinMcpAgentResolver(null)
+    vi.restoreAllMocks()
+  })
+
+  /** 造一次 inproc transport，交回内置注册表收到的 scope */
+  async function scopeOf(sessionId = 's1'): Promise<DesktopBuiltinMcpScope> {
+    const spy = vi
+      .spyOn(builtinMcpRegistry, 'createClientTransport')
+      .mockResolvedValue({} as unknown as Transport)
+    await createTransport(
+      row({ id: 'builtin-mcp-ssh', name: 'ssh', type: 'inproc', isBuiltin: 1 }),
+      { sessionId }
+    )
+    expect(spy).toHaveBeenCalledTimes(1)
+    expect(spy.mock.calls[0][0]).toBe('ssh')
+    return spy.mock.calls[0][1]
+  }
+
+  it('P2-07-50 scope 带 sessionId / requestUserInput / emitChatEvent / agentOf；agentOf(c) = 解析器(会话, c)', async () => {
+    const WORK = { profileName: 'work', kind: 'root' as const }
+    const r = vi.fn((_sid: string, c: number) => (c === 2 ? WORK : undefined))
+    setBuiltinMcpAgentResolver(r)
+
+    const scope = await scopeOf('s1')
+    expect(scope.sessionId).toBe('s1')
+    expect(scope.requestUserInput).toBeTypeOf('function')
+    expect(scope.emitChatEvent).toBeTypeOf('function')
+    expect(scope.agentOf).toBeTypeOf('function')
+    // 建连时不问
+    expect(r).not.toHaveBeenCalled()
+
+    expect(scope.agentOf!(2)).toBe(WORK)
+    expect(r).toHaveBeenCalledWith('s1', 2)
+    expect(scope.agentOf!(7)).toBeUndefined()
+  })
+
+  it('P2-07-50 每次调用现问：解析器换了 / 答案变了，同一份 scope 交回新值', async () => {
+    const first = { profileName: 'work', kind: 'root' as const }
+    const second = { profileName: 'explore', kind: 'spawned' as const, callerId: 'sub-a1' }
+    let answer: typeof first | typeof second = first
+    setBuiltinMcpAgentResolver(() => answer)
+
+    const scope = await scopeOf()
+    expect(scope.agentOf!(2)).toBe(first)
+    answer = second
+    expect(scope.agentOf!(2)).toBe(second)
+
+    const replaced = { profileName: 'bot', kind: 'root' as const }
+    setBuiltinMcpAgentResolver(() => replaced)
+    expect(scope.agentOf!(2)).toBe(replaced)
+  })
+
+  it('P2-07-50 没注册解析器 → agentOf 交回 undefined，不抛', async () => {
+    setBuiltinMcpAgentResolver(null)
+    const scope = await scopeOf()
+    expect(() => scope.agentOf!(2)).not.toThrow()
+    expect(scope.agentOf!(2)).toBeUndefined()
   })
 })

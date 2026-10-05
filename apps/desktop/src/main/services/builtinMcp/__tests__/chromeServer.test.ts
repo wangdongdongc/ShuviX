@@ -16,7 +16,9 @@
  *               按会话记；授权现读；挂着的那一页**不**因为「是它」就放行；file:// 从不因授权放行；
  *   CS-13       「看上去不是网页、其实是某个站点」的页（blob: / view-source: / filesystem:）按里面那个站点问；
  *   CS-14…15    按会话实例化：后端每会话一个；同一浏览器的会话共用那个浏览器的 tab 队列；
- *               不是标签页会话的根本不碰浏览器状态。
+ *               不是标签页会话的根本不碰浏览器状态；
+ *   P2-07-45…49 调用身份：`_meta` 的 taskId / conversationId 并进站点门 / 导航门 / file:// 读门的 opts，
+ *               主体经 scope 的 agentOf 按调用现认；带上过的站点与恒拒的文件门根本不问身份。
  *
  * mock 掉的：`getDesktopSecurityContext`（换成同形态的真 `createSecurityContext`，外面包一层记下
  * enforcePath / enforceUrl 的实参）、会话设置（sessionDao 的替身）、Chrome 桥（后端换成假的，
@@ -41,11 +43,17 @@ const gate = vi.hoisted(() => ({
   pathCalls: [] as Array<{ mode: unknown; path: unknown; opts: unknown }>,
   urlCalls: [] as Array<{ object: unknown; opts: unknown }>,
   /** 用户策略；空 = 只有内置那套（出厂没有站点策略） */
-  policies: [] as unknown[]
+  policies: [] as unknown[],
+  /** getDesktopSecurityContext 收到的 ctx（服务器有没有把 agentOf 交过来） */
+  ctxs: [] as Array<Record<string, unknown>>,
+  /** 置位 = 审查接缝记下每个询问事件、回 null（不作答，卡片照常给人） */
+  recordEvents: false,
+  events: [] as unknown[]
 }))
 
 vi.mock('../../toolContext', async () => {
   const { createSecurityContext } = await import('@shuvix/agent-runtime')
+  const { withCallAgent } = await import('../../toolAgent')
   const { createInlinePolicyMdReader: reader } =
     await import('@shuvix/agent-runtime/security/builtinPolicies/inlineSources')
   const readBuiltinPolicyMd = reader()
@@ -53,41 +61,60 @@ vi.mock('../../toolContext', async () => {
   type Real = ReturnType<typeof createSecurityContext>
   return {
     TOOL_ABORTED: 'Aborted',
-    // 主体 / 环境 / 变量表按 toolContext 的生产形态复刻，内置策略一条不少
+    // 主体 / 环境 / 变量表按 toolContext 的生产形态复刻，内置策略一条不少。主体按每次 enforce 现认
+    // （Fx-MOCK，P2-07）：真的 withCallAgent 拿 opts 里的 conversationId 经 ctx.agentOf 认人
     getDesktopSecurityContext: (ctx: Ctx): Real => {
-      const real = createSecurityContext(
-        { kind: 'agent', sessionId: ctx.sessionId, agentKind: 'root' },
-        { host: 'desktop', platform: process.platform, workspaceDir: '/ws' },
-        {
-          host: 'desktop',
-          pathSep: '/',
-          getVars: () => ({
-            workspace: '/ws',
-            toolResultsBase: '/tool-results',
-            skillsDirs: ['/skills'],
-            memoryDirs: [],
-            knowledgeRoot: '/kb',
-            knowledgeSessionDirs: [],
-            home: '/home/u',
-            botsDir: '/home/u/.shuvix/bots',
-            builtinKnowledgeDir: '/opt/shuvix/Resources/knowledge',
-            systemDirs: []
-          }),
-          readBuiltinPolicyMd,
-          getSessionGrants: () => ({ allowList: [] }),
-          getUserPolicies: () => gate.policies as never,
-          requestUserInput: ctx.requestUserInput
-        }
-      )
+      gate.ctxs.push(ctx as unknown as Record<string, unknown>)
+      const realFor = (opts?: { conversationId?: number }): Real => {
+        const agent = withCallAgent(ctx, opts).agent ?? ctx.agent
+        return createSecurityContext(
+          {
+            kind: 'agent',
+            sessionId: ctx.sessionId,
+            agentKind: agent?.kind ?? 'root',
+            ...(agent?.profileName ? { profileName: agent.profileName } : {})
+          },
+          { host: 'desktop', platform: process.platform, workspaceDir: '/ws' },
+          {
+            host: 'desktop',
+            pathSep: '/',
+            getVars: () => ({
+              workspace: '/ws',
+              toolResultsBase: '/tool-results',
+              skillsDirs: ['/skills'],
+              memoryDirs: [],
+              knowledgeRoot: '/kb',
+              knowledgeSessionDirs: [],
+              home: '/home/u',
+              botsDir: '/home/u/.shuvix/bots',
+              builtinKnowledgeDir: '/opt/shuvix/Resources/knowledge',
+              systemDirs: []
+            }),
+            readBuiltinPolicyMd,
+            getSessionGrants: () => ({ allowList: [] }),
+            getUserPolicies: () => gate.policies as never,
+            requestUserInput: ctx.requestUserInput,
+            ...(gate.recordEvents
+              ? {
+                  onPermissionRequest: async (e: unknown) => {
+                    gate.events.push(e)
+                    return null
+                  }
+                }
+              : {})
+          }
+        )
+      }
+      const real = realFor()
       return {
         ...real,
         enforcePath: (mode, path, opts) => {
           gate.pathCalls.push({ mode, path, opts })
-          return real.enforcePath(mode, path, opts)
+          return realFor(opts).enforcePath(mode, path, opts)
         },
         enforceUrl: (object, opts) => {
           gate.urlCalls.push({ object, opts })
-          return real.enforceUrl(object, opts)
+          return realFor(opts).enforceUrl(object, opts)
         }
       }
     }
@@ -187,6 +214,8 @@ vi.mock('../../chromeBridge', async () => {
 
 import { chromeBrowserState, forgetSiteGrants, grantSite } from '../../chromeBridge'
 import { CHROME_MCP_SERVER_NAME, createChromeMcpServerFactory } from '../chromeServer'
+import type { DesktopBuiltinMcpScope } from '../types'
+import { M1, M2, M3, SUBJ_R, SUBJ_ROOT0, makeAgentOf, subjectOf } from './callIdentityFixtures'
 
 // ─── 素材 ────────────────────────────────────────────────────────────────
 
@@ -206,6 +235,9 @@ beforeEach(() => {
   gate.pathCalls.length = 0
   gate.urlCalls.length = 0
   gate.policies.length = 0
+  gate.ctxs.length = 0
+  gate.events.length = 0
+  gate.recordEvents = false
   chrome.created.length = 0
   ;(chromeBrowserState as unknown as Mock).mockClear()
 })
@@ -244,6 +276,8 @@ interface OpenOpts {
   binding?: { installId: string; runId: string; tabId: number } | null
   /** 询问应答；缺省 = 一律允许；`null` = 这条会话没有输入面板 */
   respond?: ((req: InputRequest) => Promise<InputResponse>) | null
+  /** scope 上的 agentOf（P2-07：按对话认调用方）；缺省 = 宿主没接 */
+  agentOf?: DesktopBuiltinMcpScope['agentOf']
 }
 
 /** 把一台桌面 chrome server 接到一对真 InMemoryTransport 上，并连一个真 Client */
@@ -266,7 +300,8 @@ async function open(opts: OpenOpts = {}): Promise<Session> {
             asks.push(req)
             return respond(req)
           }
-        : undefined
+        : undefined,
+      ...(opts.agentOf ? { agentOf: opts.agentOf } : {})
     },
     serverTransport
   )
@@ -298,17 +333,22 @@ function expectFailure(r: ToolResult, message: string): void {
   expect(textOf(r)).toBe(message)
 }
 
-/** enforce 的 opts 契约（displayPath 不给时就是 undefined —— toEqual 视同缺席） */
+/**
+ * enforce 的 opts 契约（displayPath 不给时就是 undefined —— toEqual 视同缺席）。`ids`（P2-07）：
+ * 客户端带了调用身份时并进 opts 的 taskId / conversationId
+ */
 const enforceOpts = (
   toolName: string,
   description: string,
   displayPath?: string,
-  toolCallId = 'tc-1'
+  toolCallId = 'tc-1',
+  ids?: { taskId: number; conversationId: number }
 ): Record<string, unknown> => ({
   toolCallId,
   toolName: `mcp__chrome__${toolName}`,
   description,
   displayPath,
+  ...ids,
   abortError: 'Aborted',
   missingChannel: 'deny'
 })
@@ -743,5 +783,115 @@ describe.skipIf(!POSIX)('chrome 桌面接线 —— 会话', () => {
     expect(two.asks).toHaveLength(1)
     expect(one.asks).toEqual([])
     expect(one.backend.readPage).not.toHaveBeenCalled()
+  })
+})
+
+// ─── P2-07：调用身份 ───────────────────────────────────────────────────────
+
+describe.skipIf(!POSIX)('P2-07 chrome 桌面接线的调用身份', () => {
+  const IDS = { taskId: 21, conversationId: 2 }
+
+  it('P2-07-45 站点门、三条导航入口与 file:// 读门的 opts 都并上两个 id', async () => {
+    const s = await open({ agentOf: makeAgentOf() })
+    s.backend.urls['6'] = 'https://A.Example./p?q=1'
+
+    await s.call('read_page', { tabId: '6' }, M2)
+    await s.call('open_tab', { url: 'https://x.example/' }, M2)
+    await s.call('navigate', { tabId: '7', url: 'https://y.example/a' }, M2)
+    await s.call(
+      'cdp',
+      { tabId: '8', method: 'Page.navigate', params: { url: 'https://z.example/' } },
+      M2
+    )
+    expect(gate.urlCalls.map((c) => c.opts)).toEqual([
+      enforceOpts('read_page', 'Use a.example in tab 6', undefined, 'tc-2', IDS),
+      enforceOpts('open_tab', 'Open https://x.example/', undefined, 'tc-2', IDS),
+      enforceOpts('navigate', 'Open https://y.example/a', undefined, 'tc-2', IDS),
+      enforceOpts('cdp', 'Open https://z.example/', undefined, 'tc-2', IDS)
+    ])
+
+    await s.call('open_tab', { url: 'file:///tmp/a.html' }, M2)
+    expect(gate.pathCalls.map((c) => c.opts)).toEqual([
+      enforceOpts('open_tab', 'Open file:///tmp/a.html', '/tmp/a.html', 'tc-2', IDS)
+    ])
+    for (const c of [...gate.urlCalls, ...gate.pathCalls]) {
+      expect(c.opts).toMatchObject(IDS)
+    }
+    expect(gate.ctxs.at(-1)?.agentOf).toBeTypeOf('function')
+  })
+
+  it('P2-07-46 按站点询问的用户策略：事件主体是权限审查员、带 22 / 3；卡片只有一张，按 toolCallId', async () => {
+    withNewSitePolicy()
+    gate.recordEvents = true
+    const s = await open({ agentOf: makeAgentOf() })
+    s.backend.urls['6'] = 'https://a.example/'
+
+    expect((await s.call('read_page', { tabId: '6' }, M3)).isError).toBeFalsy()
+    expect(gate.events).toHaveLength(1)
+    expect(gate.events[0]).toMatchObject({ toolCallId: 'tc-3', taskId: 22, conversationId: 3 })
+    expect(subjectOf(gate.events[0])).toStrictEqual(SUBJ_R(s.sessionId))
+    expect(s.asks).toHaveLength(1)
+    expect(s.asks[0]).toMatchObject({ kind: 'ask', id: 'tc-3' })
+  })
+
+  it('P2-07-47 用户带上过的站点整个绕开：不过 url 客体、没有事件、不问 agentOf', async () => {
+    withNewSitePolicy()
+    gate.recordEvents = true
+    const agentOf = makeAgentOf()
+    const s = await open({ agentOf })
+    grantSite(s.sessionId, 'bank.example')
+    s.backend.urls['6'] = 'https://bank.example/acct'
+
+    expect(textOf(await s.call('click', { tabId: '6', uid: 'e1' }, M2))).toBe('click ok')
+    expect((await s.call('open_tab', { url: 'https://bank.example/x' }, M2)).isError).toBeFalsy()
+    expect(gate.urlCalls).toEqual([])
+    expect(gate.events).toEqual([])
+    expect(agentOf).not.toHaveBeenCalled()
+  })
+
+  it.each<[string, Record<string, unknown>, string]>([
+    [
+      'DOM.setFileInputFiles',
+      { files: ['/tmp/a'], backendNodeId: 3 },
+      'Local files cannot be handed to a page in the user’s Chrome.'
+    ],
+    [
+      'Page.setDownloadBehavior',
+      { behavior: 'allow', downloadPath: '/tmp' },
+      'ShuviX does not choose where the user’s Chrome saves files.'
+    ]
+  ])(
+    'P2-07-48 cdp %s：根 agent 与派生 agent 一样被拒（同一句），不过任何策略、不问 agentOf',
+    async (method, params, message) => {
+      const agentOf = makeAgentOf()
+      const s = await open({ agentOf })
+      for (const meta of [M1, M2]) {
+        expectFailure(await s.call('cdp', { tabId: '6', method, params }, meta), message)
+      }
+      expect(s.backend.cdp).not.toHaveBeenCalled()
+      expect(gate.pathCalls).toEqual([])
+      expect(gate.urlCalls).toEqual([])
+      expect(agentOf).not.toHaveBeenCalled()
+    }
+  )
+
+  it('P2-07-49 只带 toolCallId → CS-4 那份 opts 一字不差（没有两个 id 键），主体 root', async () => {
+    withNewSitePolicy()
+    gate.recordEvents = true
+    const agentOf = makeAgentOf()
+    const s = await open({ agentOf })
+    s.backend.urls['6'] = 'https://A.Example./p?q=1'
+
+    await s.call('read_page', { tabId: '6' }, TC)
+    expect(gate.urlCalls[0].opts).toStrictEqual({
+      toolCallId: 'tc-1',
+      toolName: 'mcp__chrome__read_page',
+      description: 'Use a.example in tab 6',
+      displayPath: undefined,
+      abortError: 'Aborted',
+      missingChannel: 'deny'
+    })
+    expect(subjectOf(gate.events[0])).toStrictEqual(SUBJ_ROOT0(s.sessionId))
+    expect(agentOf).not.toHaveBeenCalled()
   })
 })

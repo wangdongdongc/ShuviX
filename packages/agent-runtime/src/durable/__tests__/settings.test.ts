@@ -199,3 +199,55 @@ describe('ShuviX settings wired into a Harness', () => {
     expect(t.kit.callCount).toBe(11)
   })
 })
+
+describe('ShuviX settings · live spawned windows (P2-03, Q-P2-08 / PIN-08)', () => {
+  const window = (settings: HarnessSettings): number[] => [
+    settings.compaction!.reserveTokens!,
+    settings.compaction!.backgroundTokens!,
+    settings.compaction!.keepRecentTokens!
+  ]
+
+  it('P2-03-71 the min over the lock window and the live windows', () => {
+    expect(
+      window(createShuviXSettings({ contextWindow: () => 40000, liveContextWindows: () => [8000] }))
+    ).toEqual([2000, 2000, 2000])
+    expect(
+      window(
+        createShuviXSettings({ contextWindow: () => undefined, liveContextWindows: () => [8000] })
+      )
+    ).toEqual([2000, 2000, 2000])
+  })
+
+  it('P2-03-71 unknown live windows are ignored; nothing known → the defaults', () => {
+    expect(
+      window(
+        createShuviXSettings({
+          contextWindow: () => 40000,
+          liveContextWindows: () => [undefined, Number.NaN, 0]
+        })
+      )
+    ).toEqual([10000, 10000, 10000])
+    expect(
+      window(createShuviXSettings({ contextWindow: () => undefined, liveContextWindows: () => [] }))
+    ).toEqual([32768, 32768, 20000])
+  })
+
+  it('P2-03-71 a throwing live source counts as unknown; overrides still win', () => {
+    expect(
+      window(
+        createShuviXSettings({
+          contextWindow: () => 40000,
+          liveContextWindows: () => {
+            throw new Error('boom')
+          }
+        })
+      )
+    ).toEqual([10000, 10000, 10000])
+    const settings = createShuviXSettings({
+      contextWindow: () => 40000,
+      liveContextWindows: () => [8000],
+      overrides: { compaction: { reserveTokens: 123 } }
+    })
+    expect(window(settings)).toEqual([123, 2000, 2000])
+  })
+})

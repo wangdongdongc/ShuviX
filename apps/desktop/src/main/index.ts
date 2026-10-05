@@ -17,7 +17,7 @@ import { litellmService } from './services/litellmService'
 import { providerService } from './services/providerService'
 import { initI18n, t } from './i18n'
 import { settingsDao } from './dao/settingsDao'
-import { mcpService } from './services/mcpService'
+import { mcpService, setBuiltinMcpAgentResolver } from './services/mcpService'
 import { chatFrontendRegistry, ElectronFrontend } from './frontend'
 // 触发所有内置工具的 registerBuiltinTool() 副作用
 // services / frontend 层消费注册表前必须由 main-entry 先注册
@@ -61,7 +61,7 @@ import { hookService } from './services/hookService'
 import { reviewPermissionRequest } from './services/permissionReview'
 import { setPermissionReviewer } from './services/toolContext'
 import { installLlmNetwork } from './services/models'
-import { installSessionHostQuitHook } from './services/sessionHost'
+import { installSessionHostQuitHook, sessionAgentResolver } from './services/sessionHost'
 import {
   registerCustomProtocolHandlers,
   registerCustomProtocolSchemes
@@ -741,6 +741,8 @@ app.whenReady().then(async () => {
   measure('hookService.init', () => hookService.init())
   // 询问点的自动审查：安全模块的 onPermissionRequest 经判定型 hook 回答（注入而非 import —— 见 toolContext）
   setPermissionReviewer(reviewPermissionRequest)
+  // 内置 MCP 服务器按 `_meta` 里的对话认调用方（安全主体）：同样注入而非 import（见 mcpService）
+  setBuiltinMcpAgentResolver(sessionAgentResolver())
 
   // 内部事件总线 → 所有窗口的 'app:event' 桥接（AppEvent 通用订阅）
   registerAppEventBridge()

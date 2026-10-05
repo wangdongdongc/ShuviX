@@ -21,7 +21,7 @@
 import type { ThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
 import type { RuntimeLogger } from '../types'
 import type { InProcessAgentType, SubAgentModelConfig } from '../subagent/types'
-import type { SpawnContext } from '../subagent/manager'
+import type { SpawnContext } from '../agentProfile/createAgent'
 import type { AgentKind } from '../agentProfile/promptVars'
 
 /** 派生规格要用到的宿主 seam（AgentHostAdapter 的子集） */

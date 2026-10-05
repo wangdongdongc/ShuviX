@@ -2,9 +2,15 @@ import {
   clearReviewState,
   clearSessionDecisions,
   type AdmitResult,
+  type DrivenRun,
+  type DrivenSendOptions,
   type DurableSession,
   type InlineTokensSidecar,
-  type SubmitResult
+  type LastAnswer,
+  type NotifyOptions,
+  type RequestState,
+  type SubmitResult,
+  type TaskLiveness
 } from '@shuvix/agent-runtime'
 import type { JsonObject, UserInput } from '@earendil-works/pi-durable'
 import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
@@ -33,12 +39,25 @@ export function noModelErrorText(reason: string): string {
  * 发送失败要不要报给界面（裁决 PIN-15）：模型被拒、模型请求失败、run 意外失败 / 接不上、未知原因 →
  * 报（投影还没接上，不报用户就什么都看不见）；忙、会话已关 → 不报（调用方自己知道）。
  * 被中止 / 创建被取消本来就是 `{}`，不是错误。返回要广播的文案，undefined = 不报。
+ *
+ * `queued`（P2-09 PIN-04，P2-10）：重新挂上的那条输入还排在收件箱里，没有 run 会带走它 —— 它没丢，
+ * 跟着下一条消息出去。运行时的原文只说 requestId，换成用户读得懂的那句。
  */
 export function reportableError(result: SubmitResult): string | undefined {
   if (!result.error) return undefined
   if (result.code === 'busy' || result.code === 'closed') return undefined
   if (result.code === 'no_model') return noModelErrorText(result.error)
+  if (result.code === 'queued') return t('chat.requestStillQueued')
   return result.error
+}
+
+/**
+ * 被父会话驱动的发送（子会话，P2-10）：幂等键 `subsession:<父会话>:<任务>` + driven-run 标记。
+ * 只有主进程（subSessionRunner）给 —— IPC 的 `agent:prompt` 从不带它。
+ */
+export interface DriveOptions {
+  requestId: string
+  driven: DrivenSendOptions
 }
 
 /** steer / followUp 被拒时交给调用方的错误文案（模型被拒同样本地化） */
@@ -97,7 +116,8 @@ export class AgentSession {
   async prompt(
     text: string,
     images?: Array<{ type: 'image'; data: string; mimeType: string }>,
-    display?: InlineTokensSidecar
+    display?: InlineTokensSidecar,
+    drive?: DriveOptions
   ): Promise<SubmitResult> {
     log.info(
       `prompt session=${this.sessionId} text=${text.slice(0, 50)}... images=${images?.length || 0}`
@@ -105,8 +125,10 @@ export class AgentSession {
     const content: UserInput =
       images && images.length > 0 ? [{ type: 'text', text }, ...images] : text
     let admitted = false
+    // 重新挂上（已有的 requestId）时运行时不调受理回调（P2-09 PIN-02）：埋点 / 入账都不会重复
     const result = await this.durable.submitUser(content, {
       ...(display === undefined ? {} : { display: display as unknown as JsonObject }),
+      ...(drive === undefined ? {} : { requestId: drive.requestId, driven: drive.driven }),
       onAdmitted: () => {
         admitted = true
         this.onPromptAdmitted(text)
@@ -154,8 +176,35 @@ export class AgentSession {
    * 送达系统侧通知（后台任务 / 子会话跑完）。路由全在运行时：运行中 steer、空闲且允许自动续跑 →
    * 合并窗口内攒起来起一轮、显式喊停之后 / 开关关掉 → 写成通知条目、被中断 → 推迟到继续 / 下一次发送。
    */
-  async notify(text: string): Promise<void> {
-    await this.durable.notify(text)
+  async notify(text: string, options?: NotifyOptions): Promise<void> {
+    // 不带选项时原样只传正文（bash 的后台通知走这条，契约不变）
+    if (options === undefined) await this.durable.notify(text)
+    else await this.durable.notify(text, options)
+  }
+
+  /** 不等空闲的「继续」：被中断就续上（子会话的 wait 重跑，P2-10）；没被中断 = 无操作 */
+  resumeInterrupted(): Promise<SubmitResult> {
+    return this.durable.resumeInterrupted()
+  }
+
+  /** 某个 requestId 在当前对话里的状态（子会话 prompt 的重新挂上判定，P2-10） */
+  requestState(requestId: string): Promise<RequestState> {
+    return this.durable.requestState(requestId)
+  }
+
+  /** 当前对话这一轮的回答（子会话的答复，P2-10；这一轮还没回答 → undefined） */
+  lastAnswer(): Promise<LastAnswer | undefined> {
+    return this.durable.lastAnswer()
+  }
+
+  /** 此刻的 driven-run 标记（被父会话驱动、还没报过落定的那一轮） */
+  get drivenRun(): DrivenRun | undefined {
+    return this.durable.drivenRun
+  }
+
+  /** 某个任务的存活情况（父会话中止的级联与完成通知的抑制，P2-10） */
+  taskLiveness(taskId: number): Promise<TaskLiveness | undefined> {
+    return this.durable.taskLiveness(taskId)
   }
 
   /** 中止当前 run（显式喊停：到下一条用户消息之前不自动续跑） */
@@ -184,6 +233,11 @@ export class AgentSession {
   /** 当前对话有 run 在跑（被中断的会话不算：什么都没在跑） */
   get isStreaming(): boolean {
     return this.durable.isBusy()
+  }
+
+  /** 存储里有 run 但调度器停着（上个进程中途退出留下的） */
+  get isInterrupted(): boolean {
+    return this.durable.isInterrupted()
   }
 
   /** 挂起中的用户询问数（>0 = 卡在 ask 上等人回答） */

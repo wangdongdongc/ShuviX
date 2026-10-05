@@ -28,6 +28,9 @@
  *           filesystem: 按里面的站点算）；导航过了门的站点也记下、被拒的不记、没有门可过的不记；
  *           并发的同站点操作共用一次询问；站点门也占着这个 tab 的队列；取消；
  *           读不到 tab 地址时宁可建不出来 / 这一次失败（fail closed）。
+ *   I1–I5   调用身份（P2-07）：`_meta` 的 taskId / conversationId 原样并进每道门的上下文（三家门、
+ *           本地文件、站点门；没带 / 不合法 = 键不出现）；分账只认 agentId；站点放行按实例记、并发首用
+ *           带第一个调用方的身份；取消复查不变（I5 在 A / W 两组里）。
  */
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
@@ -1912,6 +1915,29 @@ describe('A 中止', () => {
     }
   )
 
+  it.each(PENDING_GATE)(
+    'I5 / P2-07-34 %s 带着调用身份：卡片挂着时被取消、门随后放行 → 照样不补跑，没有未处理的拒绝',
+    async (_l, c) => {
+      const gates = spyGates()
+      const gate = deferred<string | undefined>()
+      ;(gates[c.gate] as unknown as Mock<() => Promise<string | undefined>>).mockImplementationOnce(
+        () => gate.promise
+      )
+      const h = await open({ gates })
+      const ac = new AbortController()
+      const pending = h.call(c.tool, c.args, MB, ac.signal)
+      await vi.waitFor(() => expect(gates[c.gate]).toHaveBeenCalledTimes(1))
+      ac.abort()
+      await expect(pending).rejects.toThrow()
+
+      gate.resolve(c.allow)
+      await settle()
+      expect(h.backend[c.backend]).not.toHaveBeenCalled()
+      expect(gateCalls(gates)).toBe(1)
+      await expectNoUnhandled()
+    }
+  )
+
   it('A3 门在取消之后才拒绝 → 同样安静地结束', async () => {
     const gates = spyGates()
     const gate = deferred<void>()
@@ -3143,6 +3169,27 @@ describe('W 按站点过门', () => {
     await expectNoUnhandled()
   })
 
+  it('I5 / P2-07-34 W16 带着调用身份：站点门挂着时被取消、随后放行 → 不往下做，同一 tab 不被卡住', async () => {
+    const gates = siteGates()
+    const ask = deferred<void>()
+    gates.site.mockImplementationOnce(() => ask.promise)
+    const backend = docBackend({ t1: 'https://a.com/' })
+    const h = await open({ backend, gates })
+
+    const ac = new AbortController()
+    const pending = h.call('click', { tabId: 't1', uid: 'e1' }, MB, ac.signal)
+    await vi.waitFor(() => expect(gates.site).toHaveBeenCalledTimes(1))
+    expect(gates.site.mock.calls[0][1]).toMatchObject({ taskId: 21, conversationId: 2 })
+    ac.abort()
+    await expect(pending).rejects.toThrow()
+
+    ask.resolve()
+    await settle()
+    expect(backend.click).not.toHaveBeenCalled()
+    expect(textOf(await within(h.call('scroll', { tabId: 't1' }, MB)))).toBe('scroll ok')
+    await expectNoUnhandled()
+  })
+
   it('W16 站点门在取消之后才拒绝 → 同样安静地结束', async () => {
     const gates = siteGates()
     const ask = deferred<void>()
@@ -3361,5 +3408,288 @@ describe('W 按站点过门', () => {
     expect(textOf(await within(clicking))).toBe('click ok')
     expect(gates.site).not.toHaveBeenCalled()
     expect(gates.navigate).toHaveBeenCalledTimes(1)
+  })
+})
+
+// ─── I 调用身份（P2-07）────────────────────────────────────────────────────
+//
+// 客户端只给可信 server 带 `shuvix.dev/taskId` / `shuvix.dev/conversationId`。server 自己不按它们记任何账：
+// 只原样并进每道门的上下文（宿主拿去认安全主体、填询问事件的归属），没带 / 不合法 = 键不出现。
+// 分账仍只认 agentId；站点放行仍按实例记，并发首用共用的那次过门带第一个调用方的身份。
+
+/** 一次带齐身份的调用（toolCallId / agentId / taskId / conversationId） */
+const MB = {
+  'shuvix.dev/toolCallId': 'tc-7',
+  'shuvix.dev/agentId': 'agent-A',
+  'shuvix.dev/taskId': 21,
+  'shuvix.dev/conversationId': 2
+}
+const IDS = { taskId: 21, conversationId: 2 }
+
+/** 今天的门上下文（toolCallId tc-7）；`ids` 给了就并上 */
+const gateCtx = (
+  tool: string,
+  description: string,
+  ids?: Record<string, number>
+): Record<string, unknown> => ({
+  toolCallId: 'tc-7',
+  toolName: `mcp__browser__${tool}`,
+  description,
+  ...ids
+})
+
+/** 每道门收到的上下文，按门分开 */
+const ctxsOf = (g: GateSpies): Record<string, unknown[]> => ({
+  navigate: g.navigate.mock.calls.map((c) => c[1]),
+  fileRead: g.fileRead.mock.calls.map((c) => c[1]),
+  fileWrite: g.fileWrite.mock.calls.map((c) => c[1])
+})
+
+/** [标签, 工具, 实参, 门, 期望的上下文（不含两个 id）] —— 三家门（导航 / 读 / 写）的每个入口 */
+const IDENTITY_GATES: Array<[string, string, OpParams, keyof GateSpies, Record<string, unknown>]> =
+  [
+    [
+      'open_tab',
+      'open_tab',
+      { url: 'file:///tmp/r.html' },
+      'navigate',
+      gateCtx('open_tab', 'Open file:///tmp/r.html')
+    ],
+    [
+      'navigate goto',
+      'navigate',
+      { tabId: 't1', url: 'https://a.com/' },
+      'navigate',
+      gateCtx('navigate', 'Open https://a.com/')
+    ],
+    [
+      'cdp Page.navigate',
+      'cdp',
+      { tabId: 't1', method: 'Page.navigate', params: { url: 'https://a.com/' } },
+      'navigate',
+      gateCtx('cdp', 'Open https://a.com/')
+    ],
+    [
+      'cdp Network.loadNetworkResource',
+      'cdp',
+      {
+        tabId: 't1',
+        method: 'Network.loadNetworkResource',
+        params: { frameId: 'F', url: 'https://a.com/', options: {} }
+      },
+      'navigate',
+      gateCtx('cdp', 'Open https://a.com/')
+    ],
+    [
+      'upload_file',
+      'upload_file',
+      { tabId: 't1', uid: 'e1', paths: ['a.txt', 'b.txt'] },
+      'fileRead',
+      gateCtx('upload_file', 'Upload to the web page in tab t1')
+    ],
+    [
+      'cdp DOM.setFileInputFiles',
+      'cdp',
+      { tabId: 't1', method: 'DOM.setFileInputFiles', params: { files: ['a.txt'], nodeId: 3 } },
+      'fileRead',
+      gateCtx('cdp', 'Upload to the web page')
+    ],
+    [
+      'cdp Input.dispatchDragEvent',
+      'cdp',
+      {
+        tabId: 't1',
+        method: 'Input.dispatchDragEvent',
+        params: { type: 'drop', x: 1, y: 2, data: { items: [], files: ['a.txt'] } }
+      },
+      'fileRead',
+      gateCtx('cdp', 'Upload to the web page')
+    ],
+    [
+      'pdf',
+      'pdf',
+      { tabId: 't1', outputPath: 'o.pdf' },
+      'fileWrite',
+      gateCtx('pdf', 'Save the page as a PDF')
+    ],
+    [
+      'cdp Page.setDownloadBehavior',
+      'cdp',
+      {
+        tabId: 't1',
+        method: 'Page.setDownloadBehavior',
+        params: { behavior: 'allow', downloadPath: 'dl' }
+      },
+      'fileWrite',
+      gateCtx('cdp', 'Save downloads here')
+    ]
+  ]
+
+describe('I 调用身份：taskId / conversationId 只进门的上下文', () => {
+  it.each(IDENTITY_GATES)(
+    'I1 / P2-07-30 %s：门上下文恰是今天那几项再加 taskId / conversationId',
+    async (_l, tool, args, gate, expected) => {
+      const gates = spyGates()
+      const h = await open({ gates })
+      expect((await h.call(tool, args, MB)).isError).toBeFalsy()
+
+      const ctxs = ctxsOf(gates)[gate]
+      expect(ctxs.length).toBeGreaterThan(0)
+      // 一次调用里过的每道门（两个文件就两次）带的是同一对 id
+      for (const ctx of ctxs) expect(ctx).toStrictEqual({ ...expected, ...IDS })
+      expect(gateCalls(gates)).toBe(ctxs.length)
+    }
+  )
+
+  it('I1 / P2-07-30 显示本地文件的 tab：读那个文件的导航门也带上两个 id', async () => {
+    const gates = spyGates()
+    const h = await open({ backend: docBackend({ t1: 'file:///tmp/a.html' }), gates })
+    await h.call('read_page', { tabId: 't1' }, MB)
+    expect(gates.navigate.mock.calls.map((c) => c[1])).toStrictEqual([
+      gateCtx('read_page', DOC_GATE(), IDS)
+    ])
+  })
+
+  it('I1 / P2-07-30 站点门（W2 的形状）带上两个 id；一次调用里站点门与导航门带的是同一对', async () => {
+    const gates = siteGates()
+    const h = await open({ backend: docBackend({ t1: 'https://a.com/x' }), gates })
+
+    await h.call('click', { tabId: 't1', uid: 'e1' }, MB)
+    expect(gates.site.mock.calls).toStrictEqual([
+      ['https://a.com/x', { ...gateCtx('click', SITE_GATE('a.com'), IDS), tabId: 't1' }]
+    ])
+
+    // cdp Page.navigate 去一个新站点：先过 tab 所在站点（已放行，不再问），再按目标过导航门
+    await h.call(
+      'cdp',
+      { tabId: 't1', method: 'Page.navigate', params: { url: 'https://b.com/' } },
+      { ...MB, 'shuvix.dev/taskId': 22 }
+    )
+    expect(gates.navigate.mock.calls.map((c) => c[1])).toStrictEqual([
+      gateCtx('cdp', 'Open https://b.com/', { taskId: 22, conversationId: 2 })
+    ])
+  })
+
+  it('I2 / P2-07-31 只带 toolCallId → 每道门的上下文恰是今天那几项（没有两个 id 键）', async () => {
+    const gates = spyGates()
+    const h = await open({ gates })
+    await h.call('open_tab', { url: 'https://a.com/' }, TC)
+    await h.call('upload_file', { tabId: 't1', uid: 'e1', paths: ['a.txt'] }, TC)
+    await h.call('pdf', { tabId: 't1', outputPath: 'o.pdf' }, TC)
+    expect(ctxsOf(gates)).toStrictEqual({
+      navigate: [gateCtx('open_tab', 'Open https://a.com/')],
+      fileRead: [gateCtx('upload_file', 'Upload to the web page in tab t1')],
+      fileWrite: [gateCtx('pdf', 'Save the page as a PDF')]
+    })
+
+    const site = siteGates()
+    const s = await open({ backend: docBackend({ t1: 'https://a.com/' }), gates: site })
+    await s.call('click', { tabId: 't1', uid: 'e1' }, TC)
+    expect(site.site.mock.calls[0][1]).toStrictEqual({
+      ...gateCtx('click', SITE_GATE('a.com')),
+      tabId: 't1'
+    })
+  })
+
+  it.each<[string, unknown]>([
+    ["'21'", '21'],
+    ['2.5', 2.5],
+    ['null', null]
+  ])('I2 / P2-07-31 不合法的值（%s）→ 当没带', async (_l, bad) => {
+    const gates = spyGates()
+    const h = await open({ gates })
+    await h.call(
+      'open_tab',
+      { url: 'https://a.com/' },
+      { ...TC, 'shuvix.dev/taskId': bad, 'shuvix.dev/conversationId': bad }
+    )
+    expect(gates.navigate.mock.calls[0][1]).toStrictEqual(
+      gateCtx('open_tab', 'Open https://a.com/')
+    )
+  })
+
+  it('I2 / P2-07-31 没带 toolCallId 时照旧回落成 browser-…，两个 id 照带', async () => {
+    const gates = spyGates()
+    const h = await open({ gates })
+    await h.call(
+      'open_tab',
+      { url: 'https://a.com/' },
+      { 'shuvix.dev/taskId': 21, 'shuvix.dev/conversationId': 2 }
+    )
+    const ctx = gates.navigate.mock.calls[0][1]
+    expect(ctx.toolCallId).toMatch(/^browser-.+$/)
+    expect(ctx).toMatchObject(IDS)
+  })
+
+  it('I3 / P2-07-32a 分账只认 agentId：同一个调用方换了 taskId，第二次快照照样是差异', async () => {
+    const h = await open()
+    const as = (taskId: number): Meta => ({ ...MB, 'shuvix.dev/taskId': taskId })
+    expect(await snapFull(h, 't1', as(1))).toBe(true)
+    await h.call('click', { tabId: 't1', uid: 'e1' }, as(2))
+    expect(await snapFull(h, 't1', as(3))).toBe(false)
+    expect(lastSnapshot(h).viewer).toBe('agent-A')
+  })
+
+  it('I3 / P2-07-32b 同一个对话、两个调用方：各自第一次都是全量，B 的操作不记到 A 头上', async () => {
+    const h = await open()
+    const A = { 'shuvix.dev/agentId': 'agent-A', 'shuvix.dev/conversationId': 2 }
+    const B = { 'shuvix.dev/agentId': 'agent-B', 'shuvix.dev/conversationId': 2 }
+    expect(await snapFull(h, 't1', A)).toBe(true)
+    expect(await snapFull(h, 't1', B)).toBe(true)
+    await scrolls(h, 9, 't1', B)
+    expect(await snapFull(h, 't1', A)).toBe(false)
+    expect(lastSnapshot(h).viewer).toBe('agent-A')
+  })
+
+  it('I3 / P2-07-32c 只带 conversationId、没有 agentId → viewer 是空串（与不带身份同一本账），绝不是对话号', async () => {
+    const h = await open()
+    expect(await snapFull(h, 't1', { 'shuvix.dev/conversationId': 2 })).toBe(true)
+    expect(lastSnapshot(h).viewer).toBe('')
+    expect(await snapFull(h)).toBe(false)
+    expect(h.backend.snapshot.mock.calls.every(([p]) => p.viewer !== '2')).toBe(true)
+  })
+
+  it('I4 / P2-07-33 站点放行按实例记：两个调用方并发首用同一站点共用一次过门，带的是第一个的身份；之后 B 也不再问', async () => {
+    const gates = siteGates()
+    const ask = deferred<void>()
+    gates.site.mockImplementationOnce(() => ask.promise)
+    const backend = docBackend({ t1: 'https://a.com/', t2: 'https://a.com/other' })
+    const h = await open({ backend, gates })
+
+    const metaA = {
+      'shuvix.dev/toolCallId': 'tc-a',
+      'shuvix.dev/agentId': 'agent-A',
+      'shuvix.dev/taskId': 21,
+      'shuvix.dev/conversationId': 2
+    }
+    const metaB = {
+      'shuvix.dev/toolCallId': 'tc-b',
+      'shuvix.dev/agentId': 'agent-B',
+      'shuvix.dev/taskId': 30,
+      'shuvix.dev/conversationId': 1
+    }
+    const a = h.call('click', { tabId: 't1', uid: 'e1' }, metaA)
+    await vi.waitFor(() => expect(gates.site).toHaveBeenCalledTimes(1))
+    const b = h.call('click', { tabId: 't2', uid: 'e2' }, metaB)
+    await vi.waitFor(() => expect(backend.tabUrl).toHaveBeenCalledTimes(2))
+    await settle()
+    expect(gates.site).toHaveBeenCalledTimes(1)
+    expect(gates.site.mock.calls[0][1]).toStrictEqual({
+      toolCallId: 'tc-a',
+      toolName: 'mcp__browser__click',
+      description: SITE_GATE('a.com'),
+      taskId: 21,
+      conversationId: 2,
+      tabId: 't1'
+    })
+    expect(backend.click).not.toHaveBeenCalled()
+
+    ask.resolve()
+    expect((await a).isError).toBeFalsy()
+    expect((await b).isError).toBeFalsy()
+    expect(backend.click).toHaveBeenCalledTimes(2)
+
+    await h.call('read_page', { tabId: 't2' }, metaB)
+    expect(gates.site).toHaveBeenCalledTimes(1)
   })
 })

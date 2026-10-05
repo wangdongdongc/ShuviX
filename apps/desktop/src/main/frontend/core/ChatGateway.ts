@@ -3,6 +3,8 @@ import type { InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import type { RuntimeStatus } from '@shuvix/chat-protocol/events'
 import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
 import type { SubmitErrorCode } from '@shuvix/agent-runtime'
+import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
+import type { DriveOptions } from '../../services/agentSession'
 
 /**
  * 会话级上行操作接口 — 前端 → 后端通信的统一入口
@@ -29,7 +31,10 @@ export interface ChatGateway {
   prompt(
     sessionId: string,
     text: string,
-    images?: Array<{ type: 'image'; data: string; mimeType: string }>
+    images?: Array<{ type: 'image'; data: string; mimeType: string }>,
+    inlineTokens?: Record<string, InlineToken>,
+    /** 子会话的驱动方（主进程内）专用：幂等键 + driven-run 标记（P2-10）；IPC 从不带它 */
+    drive?: DriveOptions
   ): Promise<{ error?: string; code?: SubmitErrorCode }>
 
   /** 向运行中的 Agent 发送 steer 消息（引导/纠正方向） */

@@ -11,7 +11,8 @@
  * 派生：先派生规格（校验入参、解析档案模型），然后抛 `PhasePendingError` —— TODO(pi-durable p2)
  * 派生 agent 落在 durable 子对话上。
  */
-import type { ImageContent } from '@earendil-works/pi-ai'
+import type { ImageContent, Message } from '@earendil-works/pi-ai'
+import type { AgentRuntimeInfo } from '@shuvix/chat-protocol/chatApi'
 import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import type { ThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
@@ -20,13 +21,52 @@ import { deriveAgentSpec, type AgentSpecHost } from '../durable/agentSpec'
 import type { InlineTokensSidecar } from '../legacy/harnessV3/projection'
 import type { RuntimeEventSink } from '../types'
 import type { InProcessAgentType, SubAgentModelConfig } from '../subagent/types'
-import type {
-  AnyAgentTool,
-  SpawnContext,
-  SpawnedRuntime,
-  SubAgentToolHelpers
-} from '../subagent/manager'
+import type { AnyTool } from '../tools/toolResult'
 import type { AgentKind } from './promptVars'
+
+/** 工具表里混放的 durable 注册项（派发结果契约的 next 等 extraTools） */
+export type AnyAgentTool = AnyTool
+
+/**
+ * 派生 agent 的运行时句柄（旧创建管线的过渡形状；P2-05 从 subagent/manager 搬来，PIN-13）。
+ * 派生 agent 已落在 durable 子对话上（durable/spawn.ts），这条管线与它一起由 P2-13 删掉。
+ */
+export interface SpawnedRuntime {
+  /** 跑一轮（prompt → 完成）；发送失败经返回值回报，不抛出 */
+  prompt(text: string): Promise<{ error?: string }>
+  /** 中止当前生成（等 run 真正停下） */
+  abort(): Promise<void>
+  /** 运行时快照（systemPrompt / 模型 / 已装载工具） */
+  getRuntimeInfo(): Promise<AgentRuntimeInfo>
+  /** 模型此刻所见的上下文消息 */
+  contextMessages(): Promise<Message[]>
+  /** 在下一轮之前把消息预置进上下文 */
+  appendContext(messages: readonly Message[]): Promise<void>
+}
+
+/**
+ * spawn 上下文 —— 传给 resolveTools 的本次派生身份信息（旧创建管线；P2-05 从 subagent/manager 搬来，
+ * PIN-13，P2-13 删掉）。
+ */
+export interface SpawnContext {
+  /** 本次派生 agent 的事件频道 id */
+  agentId: string
+  /** 本次派生 agent 的层级（根会话的直接派生 = 1） */
+  depth: number
+  /** 派生来源 agent 的 id */
+  parentAgentId: string
+  /** 所属根会话 id */
+  rootSessionId: string
+  /** 本次派生使用的模型配置 */
+  modelConfig: SubAgentModelConfig
+  /** 本 agent 是否还允许继续派发 */
+  canSpawn: boolean
+}
+
+/** 传给 resolveTools 的运行期辅助能力（旧创建管线；P2-13 删掉） */
+export interface SubAgentToolHelpers {
+  requestUserInput?: (req: InputRequest) => Promise<InputResponse>
+}
 
 /** 工具解析请求 —— 宿主 resolveTools 的唯一入参（合并旧 buildTools 与 buildSubAgentTools 两条路径） */
 export interface ToolResolveRequest {
@@ -103,7 +143,7 @@ export interface CreateAgentParams {
    *
    * 与项目上下文同一机制、不同来源：项目注入按会话解析，这些块由**调用方**随本次创建给 ——
    * bot 会话把绑定的那份 bot md 的正文（`renderBotContext`）交给它的**根** Agent；派发路径
-   * 经 `RunTaskParams.systemContext` 透传。manager 只透传，不解释内容。
+   * （旧派发路径的 `systemContext` 已随 P2-05 删掉）。
    */
   systemContext?: readonly string[]
 }

@@ -162,7 +162,7 @@ export interface SpawnedAgentRecord extends LockRecord {
 
 /**
  * 派生层级上限的缺省值：根 agent 深度 0，它的直接子 agent 深度 1，再派生深度 2（与旧 manager 的
- * `DEFAULT_MAX_AGENT_DEPTH` 相同；宿主覆盖经 `SessionHostDeps.maxAgentDepth`，P2-05）。
+ * `DEFAULT_MAX_AGENT_DEPTH` 相同，那个常量已随 P2-05 删掉；宿主覆盖经 `SessionHostDeps.maxAgentDepth`）。
  */
 export const MAX_AGENT_DEPTH = 2
 

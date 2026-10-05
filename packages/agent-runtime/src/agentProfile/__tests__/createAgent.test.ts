@@ -8,10 +8,9 @@
  * 依赖运行时本身的旧用例列在下面作 it.todo。
  */
 import { describe, it, expect, vi } from 'vitest'
-import { createAgentFactory, type AgentHostAdapter } from '../createAgent'
+import { createAgentFactory, type AgentHostAdapter, type SpawnContext } from '../createAgent'
 import { PhasePendingError } from '../../errors/phasePending'
 import type { InProcessAgentType, SubAgentModelConfig } from '../../subagent/types'
-import type { SpawnContext } from '../../subagent/manager'
 
 const PROFILE: InProcessAgentType = {
   name: 'default',

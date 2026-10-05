@@ -3,7 +3,7 @@ import type { RuntimeStatus } from '@shuvix/chat-protocol/events'
 import type { AgentInitResult, AgentRuntimeInfo, ThinkingLevel } from '../../types'
 import type { InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import { sessionService } from '../../services/sessionService'
-import type { AgentSession } from '../../services/agentSession'
+import type { AgentSession, DriveOptions } from '../../services/agentSession'
 import '../../tools/allTools'
 import { getPlatformBuiltinToolEntries } from '../../services/toolRegistry'
 import { messageService } from '../../services/messageService'
@@ -47,7 +47,8 @@ export class DefaultChatGateway implements ChatGateway {
     sessionId: string,
     text: string,
     images?: Array<{ type: 'image'; data: string; mimeType: string }>,
-    inlineTokens?: Record<string, InlineToken>
+    inlineTokens?: Record<string, InlineToken>,
+    drive?: DriveOptions
   ): Promise<{ error?: string; code?: SubmitErrorCode }> {
     // lastActiveAt 在这条输入被会话受理时入账（门面的 onAdmitted），不在这里 bump：
     // 打不开 / 被拒的发送不会落进会话，却会误记一天。
@@ -71,8 +72,9 @@ export class DefaultChatGateway implements ChatGateway {
 
     // 用户消息不由网关落库：会话运行时把它作为条目追加。发送失败由门面报给界面。
     // TODO(pi-durable p3): 其它前端看到这条用户消息靠投影（durable 不发 user_message 事件）。
-    // 发送结果原样上交：子会话的驱动方靠它区分「没发出去」与「发出去了没回话」
-    return await session.prompt(promptText, images, display)
+    // 发送结果原样上交：子会话的驱动方靠它区分「没发出去」与「发出去了没回话」。
+    // `drive` 只有子会话的驱动方（subSessionRunner，主进程内）给：幂等键 + driven-run 标记（P2-10）
+    return await session.prompt(promptText, images, display, drive)
   }
 
   steer(sessionId: string, text: string): void {

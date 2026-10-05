@@ -7,8 +7,11 @@
  *      同一会话的每个 agent 共用这一份，所以身份要紧的地方经 `agentOf` + withCallAgent 按调用认人。
  *      命令沙箱的钉子按 `sandboxed`（锁里的那一个）定。
  *    - `resolveAgentTools`：创建 agent 那一刻按名单解析按 agent 的工具（装进 `shuvix.agent.<对话>`）——
- *      派发工具、技能工具、MCP（这一刻惰性连接，连不上的广播一条错误、照常创建）。
- *    - `rebuildAgentTools`：重开会话时按锁记录重建同一组 —— 不读会话配置、不连服务器。
+ *      派发工具、技能工具、MCP（这一刻惰性连接，连不上的广播一条错误、照常创建）、附加工具（`next`）。
+ *      root 与派生 agent（P2-04）同一条路：资源（询问、项目、MCP 实例、广播、落盘）一律按根会话找；
+ *      技能只看派生名单里点了名的；派发工具按 `offersDispatchTool`（派生 agent 看 canSpawn）。
+ *    - `rebuildAgentTools`：重开会话时按锁记录 / 派生 agent 记录重建同一组 —— 不读会话配置、不连服务器；
+ *      `next` 只来自运行时给的重建上下文（宿主从不自己造）。
  *  - `desktopPromptHost` —— `PromptHost`：系统提示词五个活段落（指令文件 / 项目提示词 / 知识库 /
  *    项目记忆 / bot 人设）的数据源，每次请求准备时现调。
  *  - `desktopPromptVars` —— 人设冻结时的变量表（`{{shuvix:*}}` 占位符的取值）。
@@ -16,25 +19,26 @@
  * 工具的**次序**不在这里拼：运行时的锁（`composeAgentTools`，K6）按「名单序内置 → agent → skill →
  * MCP 逐台逐个 → 其它」拼，这里只交出各段。
  *
- * 另留两样给尚未迁移的调用方：`agentFactory`（派生 agent 的旧创建入口，AgentManager 经它派发 ——
- * 恒抛 `PhasePendingError('spawned agents', 2)`）与 `resolveProfileModelSpec`（切档案种子）。
+ * 另留两样：`agentFactory`（派生 agent 的旧创建入口 —— P2-05 起没有调用方了，派发走会话的协调器；
+ * 恒抛 `PhasePendingError('spawned agents', 2)`，P2-13 删掉）与 `resolveProfileModelSpec`（切档案
+ * 种子）。
  */
 import type { ToolExecutionApi, ToolRegistration } from '@earendil-works/pi-durable'
 import {
   createAgentFactory,
-  DISPATCH_TOOL_NAME,
   formatLanguageDisplay,
   LAZY_CONNECT_TIMEOUT_MS,
+  offersDispatchTool,
   PhasePendingError,
   renderBotContext,
   renderKnowledgeGuide,
   renderVisualCraft,
   renderVisualGuide,
   type AgentToolSet,
+  type AgentToolsRebuildContext,
   type AgentToolsRequest,
   type AnyTool,
   type DurableSession,
-  type LockModel,
   type LockRecord,
   type McpRegistrationOptions,
   type McpToolDeclaration,
@@ -42,6 +46,7 @@ import {
   type PromptVars,
   type PromptVarsCtx,
   type ResolvedAgentTools,
+  type SpawnedAgentRecord,
   type SubAgentModelConfig,
   type ToolHost
 } from '@shuvix/agent-runtime'
@@ -49,7 +54,6 @@ import type { ChatEvent } from '@shuvix/chat-protocol/events'
 import { resolveModelRef } from '@shuvix/chat-protocol/agentModelRef'
 import { isChromeTabSessionSettings } from '@shuvix/chat-protocol/chromeTabSession'
 import type { ModelCapabilities } from '@shuvix/chat-protocol/types/provider'
-import type { ThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
 import { existsSync } from 'fs'
 import { join } from 'path'
 import { type as osType, release as osRelease, platform } from 'os'
@@ -177,35 +181,20 @@ function mcpOptions(ctx: ToolContext): McpRegistrationOptions {
 // ─── 按 agent 的工具 ─────────────────────────────────────────
 
 /**
- * 派发工具的模型配置（锁定的模型 + 创建时的思考档位）。
- * TODO(pi-durable p2): 派生 agent 落在 durable 子对话上之后改成 durable 的模型引用（今天派发路径
- * 恒抛 PhasePendingError，这份配置走不到模型层）。
+ * 派发工具（`offersDispatchTool` 说给时）。`ctx` 是根会话的 ToolContext（会话 id、询问归根会话）；调用方是谁
+ * 由派发工具从调用的 `api` 读（P2-05 PIN-16），这里不再给身份与模型。
  */
-function dispatchModelConfig(model: LockModel, thinkingLevel?: ThinkingLevel): SubAgentModelConfig {
-  return {
-    provider: model.provider,
-    model: model.modelId,
-    capabilities: {},
-    ...(thinkingLevel === undefined ? {} : { thinkingLevel })
-  }
+function dispatchTool(ctx: ToolContext): object {
+  return createAgentTool(ctx)
 }
 
-/** 派发工具（名单含 `agent` 时）—— 派生路径到 phase 2 之前恒报 PhasePendingError，但留在工具表里 */
-function dispatchTool(
-  ctx: ToolContext,
-  selfSessionId: string,
-  model: LockModel,
-  thinkingLevel: ThinkingLevel | undefined
-): object {
-  return createAgentTool(
-    { sessionId: selfSessionId, requestUserInput: ctx.requestUserInput },
-    { modelConfig: () => dispatchModelConfig(model, thinkingLevel), rootSessionId: ctx.sessionId }
-  )
-}
-
-/** 派生 agent（AgentToolsRequest 没有 canSpawn，锁也只锁根 agent）—— phase 2 */
-function spawnedPending(): PhasePendingError {
-  return new PhasePendingError('spawned agents', 2)
+/** 派生 agent 记录的派生字段（锁记录没有；派生形的锁缺了它也照样尽力重建，PIN-04） */
+function spawnedFieldsOf(
+  record: LockRecord | SpawnedAgentRecord
+): Partial<Pick<SpawnedAgentRecord, 'canSpawn'>> {
+  if (record.kind !== 'spawned') return {}
+  const { canSpawn } = record as Partial<SpawnedAgentRecord>
+  return typeof canSpawn === 'boolean' ? { canSpawn } : {}
 }
 
 /** 名单里点了名的 skill（去掉 `skill:` 前缀，名单序） */
@@ -319,20 +308,18 @@ export function createDesktopToolHost(deps: DesktopToolHostDeps): ToolHost {
     },
 
     async resolveAgentTools(req: AgentToolsRequest, { signal }): Promise<ResolvedAgentTools> {
-      if (req.kind !== 'root') throw spawnedPending()
       if (signal.aborted) throw signal.reason
-      // 询问 / 项目配置 / 输出落盘的归属：root = 自身，派生 = 根会话
+      // 询问 / 项目配置 / MCP 实例 / 广播 / 输出落盘的归属：root = 自身，派生 = 根会话（从不按 agentId）
       const ctx = sessionToolContext(deps, req.rootSessionId)
       const wrap = sessionWrapper(req.rootSessionId, ctx)
 
-      // 派发工具：名单 opt-in
-      const agent = req.names.includes(DISPATCH_TOOL_NAME)
-        ? wrap(dispatchTool(ctx, req.selfSessionId, req.model, req.thinkingLevel))
-        : undefined
+      // 派发工具：名单 opt-in；派生 agent 还要 canSpawn（缺省按 false）
+      const agent = offersDispatchTool(req) ? wrap(dispatchTool(ctx)) : undefined
 
       // SkillTool：名单里点了名的 skill 才上架 —— 档案声明的（含内置的 `skill:builtin:drawing`）
-      // 与会话勾选的一视同仁；带 projectPath（项目级 skills 可见）。只有这一次真有 skill 可给时才挂：
-      // 空手的工具只是噪音。记进锁的是真上架的那几个（重开时按它重建同一个货架）
+      // 与会话勾选的一视同仁（派生 agent 的名单就是它全部的勾选：不读会话配置）；带根会话项目的
+      // projectPath（项目级 skills 可见）。只有这一次真有 skill 可给时才挂：空手的工具只是噪音。
+      // 记进锁 / 记录的是真上架的那几个（重开时按它重建同一个货架）
       const skillNames = skillNamesOf(req.names)
       const skillTool =
         skillNames.length > 0
@@ -340,7 +327,7 @@ export function createDesktopToolHost(deps: DesktopToolHostDeps): ToolHost {
           : undefined
       const skills = skillTool?.hasSkills ? skillTool.skillNames : []
 
-      // MCP：并发连；连上的按名单序排
+      // MCP：并发连（实例按根会话：派生 agent 与根 agent 共用一份）；连上的按名单序排
       const attempts = await Promise.all(
         mcpServersOf(req.names).map((server) => connectMcpServer(server, ctx, wrap, signal))
       )
@@ -352,22 +339,30 @@ export function createDesktopToolHost(deps: DesktopToolHostDeps): ToolHost {
         skills,
         mcp,
         // 命令沙箱钉子（记进锁）：每次创建按此刻的开关重新决定（与旧运行时「销毁即解钉、下次创建
-        // 重定」同一结果）；与名单里有没有 bash 无关
+        // 重定」同一结果）；与名单里有没有 bash 无关。派生 agent 同样照此刻的开关答（宿主看不到根锁的
+        // 钉子 —— 协调器记的是根锁那一个，不用这个值，PIN-02）
         sandboxed: sandboxGloballyActive(),
-        // 附加工具（派生 agent 的 next 等）：与其余工具同样包装、原样交回；root 的锁拒收
+        // 附加工具（派生 agent 的 next 等）：与其余工具同样包装（L1 门照过；details / control 原样
+        // 透出）、原样交回；root 的锁拒收
         ...(req.extraTools?.length ? { extraTools: req.extraTools.map(wrap) } : {})
       }
     },
 
-    async rebuildAgentTools(lock: LockRecord, { sessionId }): Promise<AgentToolSet> {
-      if (lock.kind !== 'root') throw spawnedPending()
+    async rebuildAgentTools(
+      lock: LockRecord | SpawnedAgentRecord,
+      { sessionId, extraTools }: AgentToolsRebuildContext
+    ): Promise<AgentToolSet> {
       const ctx = sessionToolContext(deps, sessionId)
       const wrap = sessionWrapper(sessionId, ctx)
       const options = mcpOptions(ctx)
+      const spawned = spawnedFieldsOf(lock)
+      const offersAgent = offersDispatchTool({
+        kind: lock.kind,
+        names: lock.toolNames,
+        canSpawn: spawned.canSpawn
+      })
       return {
-        ...(lock.toolNames.includes(DISPATCH_TOOL_NAME)
-          ? { agent: wrap(dispatchTool(ctx, sessionId, lock.model, lock.thinkingLevel)) }
-          : {}),
+        ...(offersAgent ? { agent: wrap(dispatchTool(ctx)) } : {}),
         // 锁赢（与 MCP 同一条规则）：锁记着的技能停用了也照样在架（要生效就销毁 agent），磁盘上没了的
         // 才掉出索引；锁里有技能工具就一直挂着（货架空了照实说「没有」）—— 重开不改工具表
         ...(lock.skills.length > 0
@@ -381,7 +376,9 @@ export function createDesktopToolHost(deps: DesktopToolHostDeps): ToolHost {
           tools: mcpService
             .registrationsFromDeclarations(server, sessionId, declarations, options)
             .map(wrap)
-        }))
+        })),
+        // 附加工具（派生 agent 的 next）：运行时按记录的结果契约造好交来（PIN-03 R），宿主只包装
+        ...(extraTools?.length ? { extraTools: extraTools.map(wrap) } : {})
       }
     }
   }
@@ -401,8 +398,8 @@ const ARTIFACT_TOOL_NAME = 'artifact'
  * 这个 agent 的货架上真有作图技能：名单点了它的名，且没在侧栏停用。与 SkillTool 上架是同一个
  * 判断（名单 ∩ findEnabled）—— 提示里的「先加载 builtin:drawing」因此只出现在加载得到的地方。
  *
- * 差一处，写明而不穿线：这里不带项目路径（派生 agent 的 ctx.sessionId 是 agentId，解析不出根会话的
- * 项目），SkillTool 带。两边只在「某个项目级 skill 的 frontmatter 自称 `builtin:drawing`、在那个
+ * 差一处，写明而不穿线：这里不带项目路径（派生 agent 的变量表 ctx.sessionId 是 agentId，解析不出根会话
+ * 的项目），SkillTool 带（按根会话的项目，PIN-09）。两边只在「某个项目级 skill 的 frontmatter 自称 `builtin:drawing`、在那个
  * 项目里顶替了内置那份」时才可能分岔 —— 那是有人故意撞内置命名空间，不值得为它改变量表的入参。
  *
  * 名单里没点名时不去扫技能目录：大多数 agent（titler、explore…）走的是这条短路。
@@ -535,14 +532,15 @@ export function resolveProfileModelSpec(spec: string): SubAgentModelConfig | nul
   return { provider: hit.providerId, model: hit.modelId, capabilities }
 }
 
-// ─── 派生 agent 的旧创建入口（phase 2 之前恒抛） ──────────────────
+// ─── 派生 agent 的旧创建入口（恒抛；P2-05 起没有调用方） ──────────────────
 
 /**
- * 派生 agent 的创建入口（AgentManager 经它派发）。根 agent 由 durable 会话自己创建（锁，P1-09），
- * 工厂的参数类型只收 spawned；`createAgent` 先照常派生规格（校验入参、解析档案模型），然后抛
- * `PhasePendingError`（spawned：'spawned agents', 2）。工具解析因此永远走不到 —— 它在 phase 2
- * 换成 ToolHost 的按 agent 解析（kind 'spawned'）。
- * TODO(pi-durable p2): 派生 agent 落在 durable 子对话上（工具走 createDesktopToolHost）。
+ * 派生 agent 的旧创建入口（P2-05 之前 AgentManager 经它派发；现在派发走会话的协调器）。根 agent 由 durable
+ * 会话自己创建（锁，P1-09），工厂的参数类型只收 spawned；`createAgent` 先照常派生规格（校验入参、解析档案
+ * 模型），然后抛 `PhasePendingError`（spawned：'spawned agents', 2）。工具解析因此永远走不到 —— 派生 agent
+ * 的工具已经在 ToolHost 上（`resolveAgentTools` kind 'spawned'，P2-04），由协调器（P2-03）调；这里刻意
+ * **不**接过去（PIN-07）。
+ * TODO(pi-durable p2): P2-13 删掉这个入口（连同 createAgentFactory）。
  */
 export const agentFactory = createAgentFactory({
   resolveTools: () => {

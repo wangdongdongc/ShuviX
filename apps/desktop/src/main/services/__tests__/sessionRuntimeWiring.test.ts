@@ -4,7 +4,8 @@
  *   E  D10-35 getAgentSession · D10-36 ensureAgentSession · D10-37 hasAgentRuntime · D10-38 invalidateAgent ·
  *      D10-39(U) 事件归运行时 · D10-40 删除次序 · D10-42 后台通知 · D10-43 询问参与方 · D10-44 钉档案 ·
  *      D10-45..53 网关
- *   F  D10-55 statusOf · D10-56 被拒的子会话发送 · D10-57 stop · D10-58 答复读不出（todo + 回执）
+ *   F  D10-55 statusOf（P2-10-32：interrupted，开着 / 镜像）· D10-56 被拒的子会话发送 · D10-57 stop（含被中断的）·
+ *      D10-58 答复（P2-10-28：lastAnswer）
  *   G  D10-59 列表 · D10-61 回退 / 截断
  *   H  D10-64 closeAll 之后
  * （D10-54 Chrome 侧栏的 respondToInput：channel.test.ts 的 CH-5 钉路由，D10-35 钉 getAgentSession 只看宿主。）
@@ -410,6 +411,27 @@ describe('D10-42 后台通知（PIN-05）', () => {
     expect(fakeHost.callsOf('open')).toEqual([])
     expect(readdirSync(holder.sessionsDir)).toEqual([])
   })
+
+  it('D10-42 / P2-10-40 子会话完成通知走同一条路，带种类与 requestId；bash 那条照旧只有正文', async () => {
+    insert('s1')
+    const session = fakeHost.put('s1', { lock: lockRecord() })
+    await sessionService.deliverSubSessionNotice('s1', 'sub done', 'subsession-done:c1:7')
+    expect(session.callsOf('notify')).toEqual([
+      ['notify', 'sub done', { kind: 'sub-session', requestId: 'subsession-done:c1:7' }]
+    ])
+    // 没锁：只写一条通知条目，不为它创建 agent
+    insert('s2')
+    const unlocked = fakeHost.put('s2')
+    await sessionService.deliverSubSessionNotice('s2', 'sub done', 'subsession-done:c2:8')
+    expect(unlocked.callsOf('writeNotice')).toEqual([
+      ['writeNotice', { text: 'sub done', kind: 'sub-session', requestId: 'subsession-done:c2:8' }]
+    ])
+    expect(unlocked.callsOf('createAgent')).toEqual([])
+    // P2-10-51：bash 的后台通知仍是 notify(text)，没有选项
+    holder.notifier!('s1', 'bg done')
+    await vi.waitFor(() => expect(session.callsOf('notify')).toHaveLength(2))
+    expect(session.callsOf('notify')[1]).toEqual(['notify', 'bg done'])
+  })
 })
 
 describe('D10-43 询问参与方', () => {
@@ -659,25 +681,41 @@ describe('D10-53 rollbackMessage', () => {
 
 // ─── F. 子会话运行器 ─────────────────────────────────────────────────────────
 
-describe('D10-55 statusOf 经门面', () => {
-  it('D10-55 忙 → running；挂着询问 → waiting-input（blockedOn 取摘要）；没开 → idle；被中断 → idle', () => {
+describe('D10-55 statusOf 经门面 / 镜像（P2-10-32）', () => {
+  it('D10-55 / P2-10-32 开着：waiting-input > running > interrupted > idle；没开着读镜像：interrupted 与过时的 busy → interrupted，idle / 没有 → idle；从不 open / peek', () => {
     insert('P')
     insert('busy', { parentId: 'P' })
     insert('ask', { parentId: 'P' })
-    insert('closed', { parentId: 'P' })
+    insert('askInterrupted', { parentId: 'P' })
     insert('interrupted', { parentId: 'P' })
+    insert('openIdle', { parentId: 'P' })
+    insert('closedInterrupted', {
+      parentId: 'P',
+      settings: { enabledTools: [], runState: 'interrupted' }
+    })
+    insert('closedBusy', { parentId: 'P', settings: { enabledTools: [], runState: 'busy' } })
+    insert('closedIdle', { parentId: 'P', settings: { enabledTools: [], runState: 'idle' } })
+    insert('closed', { parentId: 'P' })
     fakeHost.put('busy', { busy: true })
     fakeHost.put('ask', { pendingInputCount: 1, pendingInputSummaries: ['bash: rm -rf x'] })
+    fakeHost.put('askInterrupted', { pendingInputCount: 1, interrupted: true })
     fakeHost.put('interrupted', { interrupted: true, busy: false })
+    fakeHost.put('openIdle')
     const listed = subSessionRunner.list('P')
     if ('error' in listed) throw new Error(listed.error)
     const byId = Object.fromEntries(listed.subSessions.map((s) => [s.id, s]))
     expect(byId.busy!.status).toBe('running')
     expect(byId.ask!.status).toBe('waiting-input')
     expect(byId.ask!.blockedOn).toEqual(['bash: rm -rf x'])
+    expect(byId.askInterrupted!.status).toBe('waiting-input')
+    expect(byId.interrupted!.status).toBe('interrupted')
+    expect(byId.openIdle!.status).toBe('idle')
+    expect(byId.closedInterrupted!.status).toBe('interrupted')
+    expect(byId.closedBusy!.status).toBe('interrupted')
+    expect(byId.closedIdle!.status).toBe('idle')
     expect(byId.closed!.status).toBe('idle')
-    expect(byId.interrupted!.status).toBe('idle')
     expect(fakeHost.callsOf('open')).toEqual([])
+    expect(fakeHost.callsOf('peek')).toEqual([])
   })
 })
 
@@ -694,7 +732,7 @@ describe('D10-56 子会话发送被拒（模型被拒）', () => {
       message: 'go',
       background: false,
       timeoutSeconds: 5,
-      toolCallId: 'tc-56'
+      requestId: 'subsession:P:56'
     })
     expect('error' in outcome).toBe(true)
     const text = (outcome as { error: string }).error
@@ -717,21 +755,40 @@ describe('D10-57 stop', () => {
     expect(session.callsOf('abort')).toHaveLength(1)
     expect(await subSessionRunner.stop('P', 'c2')).toEqual({ stopped: false, id: 'c2' })
     expect(fakeHost.callsOf('open')).toEqual([])
+    expect(fakeHost.callsOf('peek')).toEqual([])
+  })
+
+  it('D10-57 / P2-10-19b 没开着、镜像说被中断 → peek（不 open）再 abort，{stopped:true}', async () => {
+    insert('P')
+    insert('c3', { parentId: 'P', settings: { enabledTools: [], runState: 'interrupted' } })
+    fakeHost.storages.add('c3')
+    fakeHost.configure = (session) => (session.interrupted = true)
+    expect(await subSessionRunner.stop('P', 'c3')).toEqual({ stopped: true, id: 'c3' })
+    expect(fakeHost.callsOf('peek')).toEqual(['c3'])
+    expect(fakeHost.callsOf('open')).toEqual([])
+    expect(fakeHost.get('c3')!.callsOf('abort')).toHaveLength(1)
   })
 })
 
-describe('D10-58 新格式子会话的答复（phase 3）', () => {
-  it.todo(
-    "D10-58 前台 prompt 跑完 kind:'answered' 带回答复正文 (pi-durable p3: durable 会话的条目投影)"
-  )
-
-  it('D10-58 读不出答复时如实标出 answerUnavailable（回执据此说「暂时读不到」，而不是「没回复」）', async () => {
+describe('D10-58 新格式子会话的答复（P2-10-28）', () => {
+  it("D10-58 / P2-10-28 前台 prompt 跑完 kind:'answered'，答复取自子会话的 lastAnswer", async () => {
     insert('P')
     insert('c1', { parentId: 'P' })
-    const read = await subSessionRunner.read('P', 'c1')
-    if ('error' in read) throw new Error(read.error)
-    expect(read.answer).toBeUndefined()
-    expect(read.answerUnavailable).toBe(true)
+    fakeHost.configure = (session) => (session.answer = { text: 'DONE.' })
+    const outcome = await subSessionRunner.prompt({
+      parentId: 'P',
+      childId: 'c1',
+      message: 'go',
+      background: false,
+      timeoutSeconds: 5,
+      requestId: 'subsession:P:58'
+    })
+    expect(outcome).toEqual({
+      kind: 'answered',
+      id: 'c1',
+      answer: 'DONE.',
+      info: expect.objectContaining({ id: 'c1', status: 'idle' })
+    })
   })
 })
 

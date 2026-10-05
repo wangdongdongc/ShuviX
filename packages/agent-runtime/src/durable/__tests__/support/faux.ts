@@ -153,6 +153,14 @@ export function callTools(
   )
 }
 
+/** 任意内容的助手消息（多段文本 / 思考 / 工具调用混排；P2-03 的抽取用例），缺省 stopReason 'stop' */
+export function assistantWith(
+  content: Parameters<typeof fauxAssistantMessage>[0],
+  options: Parameters<typeof fauxAssistantMessage>[1] = {}
+): AssistantMessage {
+  return fauxAssistantMessage(content, options)
+}
+
 /** provider 错误（stopReason 'error'）；文案含 'overloaded' 时可重试 */
 export function modelError(message: string): AssistantMessage {
   return fauxAssistantMessage([], { stopReason: 'error', errorMessage: message })

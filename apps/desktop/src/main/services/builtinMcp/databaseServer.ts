@@ -27,7 +27,7 @@ import {
   type CallToolResult
 } from '@modelcontextprotocol/sdk/types.js'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
-import type { BuiltinMcpFactory } from '@shuvix/agent-runtime'
+import { builtinCallOwnerOf, type BuiltinMcpFactory, type CallOwner } from '@shuvix/agent-runtime'
 import { dbCredentialDao } from '../../dao/dbCredentialDao'
 import { getDesktopSecurityContext, TOOL_ABORTED } from '../toolContext'
 import { dbManager } from './dbConnections'
@@ -183,6 +183,7 @@ export async function createDatabaseMcpServer(
   const handleQuery = async (
     args: Record<string, unknown>,
     toolCallId: string,
+    owner: CallOwner,
     signal: AbortSignal
   ): Promise<CallToolResult> => {
     const name = typeof args.connection === 'string' ? args.connection.trim() : ''
@@ -202,13 +203,17 @@ export async function createDatabaseMcpServer(
     }
 
     // 语句级安全门 —— 与旧 database 工具同一个客体、同一组选项
+    // 一份实例由根 agent 与它派出的 agent 共用：主体按 opts 里这次调用的 conversationId 现认（agentOf）
     const outcome = await getDesktopSecurityContext({
       sessionId: scope.sessionId,
-      requestUserInput: scope.requestUserInput
+      requestUserInput: scope.requestUserInput,
+      agentOf: scope.agentOf
     }).enforceDatabase(
       { sql, credential: name, dbType: credential.dbType, readonly: credential.readonly },
       {
         toolCallId,
+        // 调用归属（客户端带了才有）：认主体、填询问事件
+        ...owner,
         toolName: `mcp__${DATABASE_MCP_SERVER_NAME}__${QUERY_TOOL.name}`,
         description: typeof args.description === 'string' ? args.description : undefined,
         abortError: TOOL_ABORTED,
@@ -255,13 +260,15 @@ export async function createDatabaseMcpServer(
       typeof meta?.['shuvix.dev/toolCallId'] === 'string'
         ? (meta['shuvix.dev/toolCallId'] as string)
         : `database-${String(extra.requestId)}`
+    // taskId / conversationId（可信 server 才收得到；不合法 = 没带）
+    const owner = builtinCallOwnerOf(meta)
 
     try {
       switch (request.params.name) {
         case LIST_CONNECTIONS_TOOL.name:
           return handleListConnections()
         case QUERY_TOOL.name:
-          return await handleQuery(args, toolCallId, extra.signal)
+          return await handleQuery(args, toolCallId, owner, extra.signal)
         default:
           return err(`Unknown tool: ${request.params.name}`)
       }

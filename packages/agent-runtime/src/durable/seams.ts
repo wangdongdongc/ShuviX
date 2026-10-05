@@ -135,6 +135,16 @@ export interface SessionHostDeps {
    * 缺省 = 不察觉（标记留着，等接了它的进程打开时再送）。
    */
   onDrivenSettled?: (event: DrivenSettledEvent) => void | Promise<void>
+  /**
+   * 派生 agent 档案的 `shuvix-model`（原样值）→ 模型选择（provider = provider 行 id，P2-03；桌面
+   * `resolveProfileModelSpec`）。选择再经 `resolveLockModel` 校验；返回 null / 抛错 / 被拒都回落调用方的
+   * 模型并记一次警告。缺省 = 不支持档案模型（静默回落）。
+   */
+  resolveProfileModel?: (
+    spec: string
+  ) => ModelSelection | null | undefined | Promise<ModelSelection | null | undefined>
+  /** 派生层级上限（缺省 `MAX_AGENT_DEPTH` = 2；根 = 0，它的子 agent = 1） */
+  maxAgentDepth?: number
 }
 
 /** bot 段落的内容：一块（通常是 `renderBotContext` 的输出）、若干块、或者没有 */
