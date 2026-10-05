@@ -11,6 +11,9 @@
  *     都造新对象，输入框与整条对话流会跟着白白重渲染（连接态每台服务器一收一放两次）。
  *
  * 不起 jsdom：这几样都是纯 store 读写，`getState()/setState()` 直接驱动即可（同 useSessionTools）。
+ *
+ * 占位的**撤下规则**（视图里出现发送时没有的用户条目即撤、残余事件不撤……）在 P3-08 之后由视图驱动，
+ * 用例在 `pendingBubble.test.ts`（P3-08-31…37）；这里只管 store 自身的语义。
  */
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
@@ -56,8 +59,8 @@ describe('乐观占位（sessionPendingPrompt）', () => {
     expect(selectPendingPrompt(state())).toBeNull()
     expect(state().sessionPendingPrompt[B]).toBe(msgB)
 
-    // ③ 对没有占位的会话再撤一次：不换引用（user_message / agent_end / finally 三处都会撤，
-    //    正常路径上后两次都是空撤 —— 每次都造新对象就是每条消息末尾白白重渲染一次）
+    // ③ 对没有占位的会话再撤一次：不换引用（视图里出现用户条目、发送方的 finally 两处都会撤，
+    //    正常路径上后一次是空撤 —— 每次都造新对象就是每条消息末尾白白重渲染一次）
     const before = state().sessionPendingPrompt
     state().setPendingPrompt(A, null)
     expect(state().sessionPendingPrompt).toBe(before)

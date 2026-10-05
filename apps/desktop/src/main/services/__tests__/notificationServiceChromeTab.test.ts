@@ -2,8 +2,9 @@
  * notificationService —— Chrome 标签页会话的事件不进桌面通知。
  *
  * 契约：
- *   - 标签页会话的对话在 Chrome 侧边栏里（用户在那边看、在那边答询问）：它的 ChatEvent 一条都不交给
- *     决策器；普通会话照旧交；
+ *   - 标签页会话的对话在 Chrome 侧边栏里（用户在那边看、在那边答询问）：它的 ChatEvent 与询问
+ *     （`notifyAskRaised` / `notifyAskResolved`，P3-08 起询问走钩子，P3-08-55）一条都不交给决策器；
+ *     普通会话照旧交；
  *   - 判定是「这条会话是不是标签页会话」，记一次就够（chromeTab 创建时定死、会话 id 不复用）——
  *     事件逐 token 来，不能每条都读库：同一条会话只按 `(sid, ['chromeTab'])` 查一次；
  *   - 记忆表有上限：记满 1000 条就整个清掉重记（清掉之后早先那条会话会再查一次）；
@@ -16,6 +17,8 @@ import type { ChatEvent } from '@shuvix/chat-protocol/events'
 
 const mocks = vi.hoisted(() => ({
   handleEvent: vi.fn(),
+  askRaised: vi.fn(),
+  askResolved: vi.fn(),
   createNotificationCenter: vi.fn(),
   pickSettings: vi.fn<(id: string, keys: string[]) => Record<string, unknown> | undefined>(),
   tabSessions: new Set<string>()
@@ -50,9 +53,14 @@ const deps = { getMainWindow: () => null, ensureMainWindow: () => {} }
 
 beforeEach(async () => {
   mocks.handleEvent.mockReset()
+  mocks.askRaised.mockReset()
+  mocks.askResolved.mockReset()
   mocks.createNotificationCenter.mockReset()
   mocks.createNotificationCenter.mockReturnValue({
     handleEvent: mocks.handleEvent,
+    askRaised: mocks.askRaised,
+    askResolved: mocks.askResolved,
+    runEnded: vi.fn(),
     sessionOpened: vi.fn()
   })
   mocks.tabSessions.clear()
@@ -66,25 +74,34 @@ beforeEach(async () => {
   service = await import('../notificationService')
 })
 
-const delta = (sessionId: string): ChatEvent => ({ type: 'text_delta', sessionId, delta: 'x' })
-const end = (sessionId: string): ChatEvent => ({ type: 'agent_end', sessionId })
+const delta = (sessionId: string): ChatEvent => ({ type: 'ask_count', sessionId, count: 1 })
+const end = (sessionId: string): ChatEvent => ({ type: 'agent_end', sessionId, reason: 'ok' })
+const askReq = {
+  id: 'tc-1',
+  kind: 'ask',
+  toolName: 'mcp__chrome__click',
+  command: 'click',
+  createdAt: 1
+} as const
 
 describe('NT-1 标签页会话的事件不交给决策器', () => {
-  it('NT-1 标签页会话 → 不交；普通会话 → 原样交', () => {
+  it('NT-1 / P3-08-55 标签页会话的一轮结束与询问 → 不交；普通会话 → 原样交', () => {
     service.initNotificationService(deps)
     mocks.tabSessions.add('tab-1')
-    const ask = {
-      type: 'input_request',
-      sessionId: 'tab-1',
-      request: { id: 'tc-1', kind: 'ask', toolName: 'mcp__chrome__click', createdAt: 1 }
-    } as unknown as ChatEvent
     service.notifyOnChatEvent(end('tab-1'))
-    service.notifyOnChatEvent(ask)
+    service.notifyAskRaised('tab-1', askReq)
+    service.notifyAskResolved('tab-1', 'tc-1')
     expect(mocks.handleEvent).not.toHaveBeenCalled()
+    expect(mocks.askRaised).not.toHaveBeenCalled()
+    expect(mocks.askResolved).not.toHaveBeenCalled()
 
     const desktopEnd = end('desk-1')
     service.notifyOnChatEvent(desktopEnd)
+    service.notifyAskRaised('desk-1', askReq)
+    service.notifyAskResolved('desk-1', 'tc-1')
     expect(mocks.handleEvent.mock.calls).toEqual([[desktopEnd]])
+    expect(mocks.askRaised.mock.calls).toEqual([['desk-1', askReq]])
+    expect(mocks.askResolved.mock.calls).toEqual([['desk-1', 'tc-1']])
   })
 
   it('NT-1 绑定不合法的会话算普通会话，照交', () => {

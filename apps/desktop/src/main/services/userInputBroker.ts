@@ -70,16 +70,21 @@ export function requestUserInputFor(
 export function respondToUserInput(
   requestId: string,
   response: InputResponse,
-  meta?: UserInputResponseMeta
+  // 带缺省值：形参个数仍是 2 —— 签名里没有 sessionId（见单测）
+  meta: UserInputResponseMeta = {}
 ): boolean {
   for (const p of participants) {
-    if (p.respond(requestId, response, meta)) return true
+    const claimed =
+      meta.clientId === undefined
+        ? p.respond(requestId, response)
+        : p.respond(requestId, response, meta)
+    if (claimed) return true
   }
   // 无人认领：请求早已被取消（中止 / 会话拆了），或别的前端先答了（先到者胜）。静默丢弃会让人
   // 对着一个「点了没反应」的按钮查半天，留一行日志把它变成一句话就能查清的事。只记身份与种类，
   // 从不记应答内容（PIN-20）
   log.warn(
-    `ask not claimed requestId=${requestId} by=${meta?.clientId ?? 'unknown'} kind=${response.kind}（请求可能已被取消或已被别处答过）`
+    `ask not claimed requestId=${requestId} by=${meta.clientId ?? 'unknown'} kind=${response.kind}（请求可能已被取消或已被别处答过）`
   )
   return false
 }

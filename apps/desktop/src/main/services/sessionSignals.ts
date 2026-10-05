@@ -8,15 +8,16 @@
  *     的 `electronEventSink` 发出去（前端注册表、通知、Chrome 调试租约都从那里拿）。派生 agent 的那一对用
  *     agentId 当 sessionId；没登记过的派生对话（路由不认识）什么都不发，也就从不通知、从不碰租约。
  *  2. **询问的钩子**（`subscribeInputs`）：询问不再上前端线路（Q-P3-04），主进程的两个消费方挂在这里 ——
- *     通知（`askRaised` / `askResolved`，过滤与 ChatEvent 那一路同口径，在 notificationService 里）与
- *     只带数字的 `ask_count`（PIN-01：侧栏徽标、后台任务面板的「卡在等人」读它）。
+ *     通知（询问观察者 `setSessionAskObserver`：main 入口把 notificationService 的 `notifyAskRaised` /
+ *     `notifyAskResolved` 接上，过滤与 ChatEvent 那一路同口径）与只带数字的 `ask_count`（PIN-01：侧栏
+ *     徽标、后台任务面板的「卡在等人」读它）。本模块不 import 通知服务（它拖进 Electron）。
  *
  * **就绪**（PIN-09）：投影的挂载是异步的（显示侧车要先解析，P3-03 PIN-01），挂载本身从不发信号（P3-03
  * PIN-04）—— 一轮在挂载完成前就开跑，就既没有 `agent_start` 也没有 `agent_end`。所以打开时登记一个就绪
- * promise，发送 / 继续在提交之前等它（`sessionSignalsReady`，AgentSession 里调）。
+ * promise（登记进 `sessionSignalSeams` 那张小表），发送 / 继续在提交之前等它（AgentSession 里调）。
  *
  * **失败文本**（PIN-08）：模型侧的失败是一条错误条目（投影成 `error_event`），不再另发 `error` 事件；失败
- * 通知的正文由这里从投影里现读最后一条错误行（`runErrorTextOf`，notificationService 的 seam）。
+ * 通知的正文由这里从投影里现读最后一条错误行（`sessionRunErrorText`；main 入口交给 notificationService）。
  *
  * 关闭：先摘生命周期监听、还句柄、摘询问钩子（关闭时取消询问的落定在 `onSessionClosed` 之前，所以计数
  * 落回 0 的那一条已经发过）。关闭之后不再有任何生命周期事件；忙着被关的那一轮不补 `agent_end`（投影在
@@ -34,7 +35,11 @@ import type { SyncSessionClosedReason } from '@shuvix/agent-runtime'
 import { sessionHostHooks, type SessionHookFanout } from '../frontend/sync/syncWiring'
 import { createLogger } from '../logger'
 import { electronEventSink } from './agentRuntimeAdapters'
-import { notifyAskRaised, notifyAskResolved, setRunErrorTextSource } from './notificationService'
+import {
+  clearSessionReadiness,
+  isRegisteredAgent as routerKnowsAgent,
+  setSessionReadiness
+} from './sessionSignalSeams'
 
 const log = createLogger('SessionSignals')
 
@@ -60,14 +65,16 @@ export interface SessionSignalsDeps {
   readonly hooks?: Pick<SessionHookFanout<DurableSession>, 'onSessionOpened' | 'onSessionClosed'>
   /** 余项事件的出口（缺省 `electronEventSink.broadcast`） */
   readonly broadcast?: (event: ChatEvent) => void
-  /** 询问挂起 / 落定的通知（缺省 notificationService） */
+  /** 询问挂起 / 落定的通知（缺省 = 登记过的询问观察者，`setSessionAskObserver`） */
   readonly askRaised?: (sessionId: string, request: InputRequest) => void
   readonly askResolved?: (sessionId: string, requestId: string) => void
   /**
-   * 这个派生 agent 是不是登记过的（路由认识它，PIN-19）。缺省问派生 agent 路由（按需加载）；路由还没加载
-   * → 当没登记
+   * 这个派生 agent 是不是登记过的（路由认识它，PIN-19）。缺省问路由自己登记的检查
+   * （`sessionSignalSeams.setRegisteredAgentCheck`）；没登记过 → 当不认识
    */
   readonly isRegisteredAgent?: (agentId: string) => boolean
+  /** 把就绪 promise 登记进进程的就绪表（`sessionSignalSeams`，发送前等它）；缺省 true */
+  readonly publishReadiness?: boolean
 }
 
 export interface SessionSignals {
@@ -79,22 +86,6 @@ export interface SessionSignals {
   heldSessions(): string[]
   /** 摘掉钩子、还掉所有句柄（测试用；幂等） */
   dispose(): void
-}
-
-/** 派生 agent 路由按需加载（它拖进一大片模块；本模块被 sessionHost / agentSession 静态 import） */
-let router: { has(agentId: string): boolean } | undefined
-let routerLoading = false
-function loadRouter(): void {
-  if (router !== undefined || routerLoading) return
-  routerLoading = true
-  void import('../agents/AgentManager')
-    .then(({ agentManager }) => {
-      router = agentManager
-    })
-    .catch((error: unknown) => log.warn(`派生 agent 路由加载失败: ${errorText(error)}`))
-    .finally(() => {
-      routerLoading = false
-    })
 }
 
 /** 一份视图消息列表里最后一条错误行的正文 */
@@ -111,17 +102,16 @@ function lastErrorText(projector: SessionProjector | undefined): string | undefi
 export function createSessionSignals(deps: SessionSignalsDeps = {}): SessionSignals {
   const hooks = deps.hooks ?? sessionHostHooks
   const broadcast = deps.broadcast ?? ((event: ChatEvent) => electronEventSink.broadcast(event))
-  const askRaised = deps.askRaised ?? notifyAskRaised
-  const askResolved = deps.askResolved ?? notifyAskResolved
+  const askRaised =
+    deps.askRaised ?? ((sessionId: string, request: InputRequest) => askObserver?.askRaised(sessionId, request))
+  const askResolved =
+    deps.askResolved ??
+    ((sessionId: string, requestId: string) => askObserver?.askResolved(sessionId, requestId))
   const isRegisteredAgent =
-    deps.isRegisteredAgent ??
-    ((agentId: string) => {
-      loadRouter()
-      return router?.has(agentId) ?? false
-    })
-  if (deps.isRegisteredAgent === undefined) loadRouter()
+    deps.isRegisteredAgent ?? routerKnowsAgent
 
   const held = new Map<string, Held>()
+  const publishReadiness = deps.publishReadiness ?? true
 
   function send(event: ChatEvent): void {
     try {
@@ -205,12 +195,14 @@ export function createSessionSignals(deps: SessionSignalsDeps = {}): SessionSign
       .catch((error: unknown) => {
         log.warn(`会话 ${sessionId} 的投影没能挂上（没有运行生命周期）: ${errorText(error)}`)
       })
+    if (publishReadiness) setSessionReadiness(sessionId, entry.ready)
   }
 
   function closed(sessionId: string, _reason: SyncSessionClosedReason): void {
     const entry = held.get(sessionId)
     if (entry === undefined) return
     held.delete(sessionId)
+    if (publishReadiness) clearSessionReadiness(sessionId)
     release(entry)
   }
 
@@ -232,28 +224,41 @@ export function createSessionSignals(deps: SessionSignalsDeps = {}): SessionSign
 
 // ─── 主进程单例 ─────────────────────────────────────────
 
+/** 询问的观察者（通知）：main 入口登记；没登记 → 询问只发 `ask_count` */
+export interface SessionAskObserver {
+  askRaised(sessionId: string, request: InputRequest): void
+  askResolved(sessionId: string, requestId: string): void
+}
+
+let askObserver: SessionAskObserver | null = null
+
+/** 登记询问的观察者（main 入口接 notificationService；null = 摘掉） */
+export function setSessionAskObserver(observer: SessionAskObserver | null): void {
+  askObserver = observer
+}
+
 let installed: SessionSignals | undefined
 
 /** 装上主进程唯一的会话信号接线（幂等；宿主第一次建出来时调） */
 export function installSessionSignals(): SessionSignals {
-  if (installed === undefined) {
-    installed = createSessionSignals()
-    const signals = installed
-    setRunErrorTextSource((sessionId) => signals.runErrorText(sessionId))
-  }
+  installed ??= createSessionSignals()
   return installed
+}
+
+/** 某打开着的会话最后一条错误行（PIN-08；失败通知的正文） */
+export function sessionRunErrorText(sessionId: string): string | undefined {
+  return installed?.runErrorText(sessionId)
 }
 
 /**
  * 某会话的信号就绪（PIN-09）：发送 / 继续在提交之前等它，好让这一轮的 `agent_start` 一定有人发。没装过 /
- * 不是打开着的会话 → 立刻落定
+ * 不是打开着的会话 → 立刻落定（读的是 `sessionSignalSeams` 那张表 —— AgentSession 直接引它）
  */
-export function sessionSignalsReady(sessionId: string): Promise<void> {
-  return installed?.ready(sessionId) ?? Promise.resolve()
-}
+export { sessionSignalsReady, setRegisteredAgentCheck } from './sessionSignalSeams'
 
-/** 丢掉单例（先 dispose）—— 仅供单测 */
+/** 丢掉单例（先 dispose）与观察者 —— 仅供单测 */
 export function resetSessionSignalsForTests(): void {
   installed?.dispose()
   installed = undefined
+  askObserver = null
 }

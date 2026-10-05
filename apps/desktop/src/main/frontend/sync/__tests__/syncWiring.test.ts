@@ -100,7 +100,8 @@ describe('P3-05-13 扇出派发', () => {
       seen.push(s)
     })
     const s = session('s1')
-    sessionHostHooks.opened(s)
+    // 主进程的扇出按 DurableSession 定型（P3-08：会话信号也登记在它上面）；hub 只用 SyncSession 那一面
+    sessionHostHooks.opened(s as unknown as Parameters<typeof sessionHostHooks.opened>[0])
     expect(order).toEqual(['L1', 'L2'])
     expect(seen).toHaveLength(2)
     expect(seen[0]).toBe(s)

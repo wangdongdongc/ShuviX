@@ -27,7 +27,7 @@ import { hookService, hookTriggers } from './hookService'
 import { recordUserEntry } from './sessionDayPromptService'
 import { getSessionHost } from './sessionHost'
 import { sessionRecords } from './sessionRecords'
-import { sessionSignalsReady } from './sessionSignals'
+import { sessionSignalsReady } from './sessionSignalSeams'
 // 仅在方法体内调用：sessionService 也 import 本模块，ESM 活绑定下无初始化环
 import { sessionService } from './sessionService'
 import { buildTurnCompletedFacts, isDefaultTitle } from './sessionTriggerFacts'
