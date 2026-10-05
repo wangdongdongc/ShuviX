@@ -11,7 +11,6 @@
  */
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai'
 import type { ConversationId, EntryRecord } from '@earendil-works/pi-durable'
-import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
 import { describe, expect, it } from 'vitest'
 import { backgroundContext as BG } from '../context'
 import { SessionStateDoc, type DeferredNotice } from '../docs'
@@ -31,7 +30,8 @@ registerWorldCleanup()
 const TIMEOUT = 15000
 const SID = 'digest'
 
-const K1: Record<string, InlineToken> = {
+/** 内联 Token 字典（InlineToken 的形状；不加接口注解好让它当 JSON 用） */
+const K1 = {
   k1: { type: 'cmd', id: 'deploy', displayText: '/deploy', payload: 'PAYLOAD-K1' }
 }
 const DISPLAY_K1 = { content: 'run {{shuvixInlineToken:k1}} please', tokens: K1 }

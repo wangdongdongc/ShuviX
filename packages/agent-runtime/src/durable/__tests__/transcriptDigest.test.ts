@@ -59,7 +59,10 @@ async function digest(session: DurableSession): Promise<TranscriptDigestItem[]> 
   return (await readTranscriptDigest(session)).items
 }
 
-const SYSTEM = { kind: 'pi.system', model: [{ role: 'system' as const, content: '' }] }
+const SYSTEM = {
+  kind: 'pi.system',
+  model: [{ role: 'system' as const, content: '', timestamp: 0 }]
+}
 
 describe('P2-14 · transcript digest extraction', () => {
   it('P2-14-01 human words: order, verbatim untrimmed text, text parts joined with "", pi.system adds nothing', async () => {
