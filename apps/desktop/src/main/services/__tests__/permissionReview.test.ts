@@ -17,7 +17,9 @@
  *   - PR-18     recentOperations 取自真的决策日志；
  *   - PR-W1     main/index.ts 把审查者注入 toolContext（读源码）。
  *
- * 替身：hookService / messageService / sessionRecords / settingsService / logger / frontend/core。
+ * 替身：hookService / messageService / sessionRecords / settingsService / logger / frontend/core / sessionHost。
+ * **钉的是旧格式（harness-v3-jsonl）路径**：会话行不带 storageKind，转写经 messageService 读冻结投影；
+ * durable 会话（P2-14 的转写摘要）见 permissionReviewDurable / transcriptParity。
  * 决策日志与卡片反馈用 agent-runtime 真的实现 —— 都是进程级 Map，所以每条用例用自己的会话 id，
  * afterEach 清掉。「审查中」广播（tool_review）不在这份用例的范围里：只替身掉，不断言。
  */
@@ -78,6 +80,13 @@ vi.mock('../hookService', () => ({
 }))
 vi.mock('../messageService', () => ({
   messageService: { listBySession: mocks.listBySession }
+}))
+// 这里的会话行都不带 storageKind（= 旧格式）：转写走 messageService。durable 路径另有用例
+// （permissionReviewDurable / sessionTriggerFactsDurable），这里碰到 SessionHost 就是路由错了
+vi.mock('../sessionHost', () => ({
+  getSessionHost: () => {
+    throw new Error('legacy-path tests must not reach the session host')
+  }
 }))
 vi.mock('../sessionRecords', () => ({ sessionRecords: { pick: mocks.pick } }))
 vi.mock('../settingsService', () => ({ settingsService: { get: mocks.settingsGet } }))
