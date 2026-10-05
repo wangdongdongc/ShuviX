@@ -10,6 +10,7 @@
  */
 import type { SessionChannelApi } from '@shuvix/chat-protocol/chatApi'
 import type { ChromePanelChannelPath } from '@shuvix/chat-protocol/chromeBridge'
+import { syncInvokeError } from '@shuvix/chat-protocol/sync'
 import type { PanelLink } from './panelLink'
 import { resolveSelectedTabs, withTabTokens } from './tabSelection'
 
@@ -98,6 +99,16 @@ export function createPanelChannelApi(link: PanelLink): SessionChannelApi {
       speakOnce: async () => {},
       abortTts: async () => {},
       onChunk: () => () => {}
+    },
+    // 视图同步要等桥上的传输（P3-09）：在那之前一律以 `unsupported` 拒绝，帧永远不来
+    sync: {
+      invoke: async () => {
+        throw syncInvokeError({
+          code: 'unsupported',
+          message: 'View sync is not available in the Chrome side panel yet'
+        })
+      },
+      onFrame: () => () => {}
     }
   }
 }

@@ -2,7 +2,7 @@
  * sessionService / 网关 / 子会话运行器 / messageService 接到 SessionHost 上（单元：假宿主 + 真门面）。
  *
  *   E  D10-35 getAgentSession · D10-36 ensureAgentSession · D10-37 hasAgentRuntime · D10-38 invalidateAgent ·
- *      D10-39(U) 事件归运行时 · D10-40 删除次序 · D10-42 后台通知 · D10-43 询问参与方 · D10-44 钉档案 ·
+ *      D10-39(U) 事件归运行时 · D10-40 删除次序（P3-05：含 hub.deleteSession）· D10-42 后台通知 · D10-43 询问参与方 · D10-44 钉档案 ·
  *      D10-45..53 网关
  *   F  D10-55 statusOf（P2-10-32：interrupted，开着 / 镜像）· D10-56 被拒的子会话发送 · D10-57 stop（含被中断的）·
  *      D10-58 答复（P2-10-28：lastAnswer）
@@ -144,6 +144,7 @@ import {
   lockRecord,
   resetFakeHost
 } from './support/fakeSessionHost'
+import { getSyncHub, resetSyncHubForTests } from '../../frontend/sync/syncWiring'
 
 type Db = Parameters<(typeof migrations)[number]['up']>[0]
 
@@ -345,13 +346,23 @@ describe('D10-40 删除次序', () => {
     ['开着的会话', true],
     ['从没打开过的会话', false]
   ])(
-    'D10-40 %s：先删子会话 → 杀后台任务 → 等宿主 delete（挂着时行与结果目录都还在）→ 其余',
+    'D10-40 %s：先删子会话 → 杀后台任务 → 等宿主 delete（挂着时行与结果目录都还在）→ hub.deleteSession → 删行 → 其余',
     async (_label, open) => {
       insert('P')
       insert('c1', { parentId: 'P' })
       if (open) fakeHost.put('P')
       mkdirSync(join(holder.toolResults, 'P'))
       mocks.killBySession.mockImplementation((id) => void mocks.calls.push(`kill:${id}`))
+      // P3-05 PIN-07：视图同步撤下会话在宿主 delete 之后、删行之前（每个子会话各一次）
+      resetSyncHubForTests()
+      const hub = getSyncHub()
+      const deleteSession = vi.spyOn(hub, 'deleteSession')
+      deleteSession.mockImplementation((id) => void mocks.calls.push(`hub:${id}`))
+      const deleteById = sessionRecords.deleteById.bind(sessionRecords)
+      const rowSpy = vi.spyOn(sessionRecords, 'deleteById').mockImplementation((id) => {
+        mocks.calls.push(`row:${id}`)
+        deleteById(id)
+      })
       const deleteGate = gate()
       const remove = fakeHost.delete.bind(fakeHost)
       fakeHost.delete = async (id) => {
@@ -362,7 +373,15 @@ describe('D10-40 删除次序', () => {
 
       const pending = sessionService.delete('P')
       await vi.waitFor(() => expect(mocks.calls).toContain('delete:P'))
-      expect(mocks.calls).toEqual(['kill:c1', 'delete:c1', 'kill:P', 'delete:P'])
+      expect(mocks.calls).toEqual([
+        'kill:c1',
+        'delete:c1',
+        'hub:c1',
+        'row:c1',
+        'kill:P',
+        'delete:P'
+      ])
+      expect(deleteSession.mock.calls).toEqual([['c1']])
       expect(sessionRecords.findById('P')).toBeDefined()
       expect(existsSync(join(holder.toolResults, 'P'))).toBe(true)
       // 会话没开着也照样中止 hook run（清理不以「开着」为前提）
@@ -370,6 +389,10 @@ describe('D10-40 删除次序', () => {
 
       deleteGate.release()
       await pending
+      expect(mocks.calls.slice(-3)).toEqual(['delete:P', 'hub:P', 'row:P'])
+      expect(deleteSession.mock.calls).toEqual([['c1'], ['P']])
+      rowSpy.mockRestore()
+      resetSyncHubForTests()
       expect(sessionRecords.findById('P')).toBeUndefined()
       expect(existsSync(join(holder.toolResults, 'P'))).toBe(false)
       expect(mocks.closeSession.mock.calls.map(([id]) => id)).toEqual(['c1', 'P'])

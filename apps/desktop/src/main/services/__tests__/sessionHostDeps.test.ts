@@ -16,6 +16,8 @@
  *   D10-22 审查 seam（真 reviewState）
  *   D10-23 autoResume 每次现读设置
  *   D10-24 isPinned = 会话还有活着的后台任务（PIN-04）
+ *   P3-05-15 onSessionOpened / onSessionClosed 接 syncWiring 的扇出（D10-13 的延伸）
+ *   P3-05-17 isPinned 再数 hub 的订阅（D10-24 的延伸：矩阵、hub 没建不建、hasSubscribers 抛错 = 钉住）
  *   P2-10-06 onDrivenSettled 接到子会话运行器的处理器（overrides 可整项替换）；beforeAbort 同时把中断父会话的
  *            级联交给运行器；import sessionHost 不加载运行器（按需动态加载，加载期无环）
  *   D10-62 退出钩子：第一次 before-quit 拦下、closeAll（封顶）、再 quit；之后放行
@@ -46,7 +48,10 @@ const holder = vi.hoisted(() => ({
   /** 子会话运行器模块被加载了几次（P2-10-06：import sessionHost 时应为 0） */
   runnerLoads: 0,
   /** providerDao.findModelsByProvider 交回的模型行（D10-17 按它给缺省档位；缺省空表） */
-  models: [] as Array<{ modelId: string; capabilities: string }>
+  models: [] as Array<{ modelId: string; capabilities: string }>,
+  /** syncWiring 的 `peekSyncHub()` 交回的 hub（P3-05-17；缺省没有 hub） */
+  syncHub: undefined as undefined | { hasSubscribers: (sessionId: string) => boolean },
+  getSyncHub: null as unknown as (...args: unknown[]) => unknown
 }))
 
 const mocks = vi.hoisted(() => ({
@@ -80,6 +85,18 @@ vi.mock('@shuvix/agent-runtime', async (importOriginal) => {
       holder.createSessionHostCalls++
       return actual.createSessionHost(...args)
     }
+  }
+})
+// P3-05-17：钉住再数 hub 的订阅 —— 只换「已建的 hub」这一口（扇出、宿主适配照用真的）
+vi.mock('../../frontend/sync/syncWiring', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../frontend/sync/syncWiring')>()
+  holder.getSyncHub = vi.fn(() => {
+    throw new Error('isPinned must not create the sync hub')
+  })
+  return {
+    ...actual,
+    peekSyncHub: () => holder.syncHub,
+    getSyncHub: (...args: unknown[]) => holder.getSyncHub(...args)
   }
 })
 vi.mock('../../dao/database', () => {
@@ -182,6 +199,8 @@ import {
   sessionAgentResolver,
   type QuitHookApp
 } from '../sessionHost'
+// 排在 sessionHost 之后：syncWiring 与 sessionHost 互相 import，先进 sessionHost 才拿得到替身里的 peekSyncHub
+import { createSyncHubHost, sessionHostHooks } from '../../frontend/sync/syncWiring'
 
 type Db = Parameters<(typeof migrations)[number]['up']>[0]
 
@@ -326,6 +345,35 @@ describe('D10-13 身份 seam 与单例', () => {
     expect(openSpy).not.toHaveBeenCalled()
     await first.closeAll()
     resetSessionHostForTests()
+  })
+
+  it('D10-13 / P3-05-15 onSessionOpened / onSessionClosed 是 syncWiring 的扇出：经 hub 宿主适配登记的监听器收得到；overrides 仍整项替换', () => {
+    expect(deps.onSessionOpened).toBe(sessionHostHooks.opened)
+    expect(deps.onSessionClosed).toBe(sessionHostHooks.closed)
+    const opened = vi.fn()
+    const closed = vi.fn()
+    const adapter = createSyncHubHost()
+    const offOpened = adapter.onSessionOpened(opened)
+    const offClosed = adapter.onSessionClosed(closed)
+    const session = { sessionId: 'x' } as unknown as Parameters<
+      NonNullable<typeof deps.onSessionOpened>
+    >[0]
+    deps.onSessionOpened?.(session)
+    deps.onSessionClosed?.('x', 'destroy')
+    expect(opened).toHaveBeenCalledTimes(1)
+    expect(opened.mock.calls[0]![0]).toBe(session)
+    expect(closed).toHaveBeenCalledWith('x', 'destroy')
+    offOpened()
+    offClosed()
+
+    const mineOpened = vi.fn()
+    const mineClosed = vi.fn()
+    const replaced = buildSessionHostDeps(
+      { onSessionOpened: mineOpened, onSessionClosed: mineClosed },
+      sessionOfForDeps
+    )
+    expect(replaced.onSessionOpened).toBe(mineOpened)
+    expect(replaced.onSessionClosed).toBe(mineClosed)
   })
 
   it('P2-06-31 createDesktopSessionHost(overrides)：ToolHost 的 sessionOf 问的是**这个**宿主，不是单例', async () => {
@@ -664,6 +712,72 @@ describe('D10-23 autoResume', () => {
     mocks.settingsGet.mockImplementation((key) => (key === AUTO_RESUME_KEY ? 'false' : undefined))
     expect(deps.autoResume?.('s')).toBe('false')
     expect(mocks.settingsGet).toHaveBeenCalledWith('session.autoResume')
+  })
+})
+
+describe('D10-24 / P3-05-17 isPinned（PIN-04；P3-05：再数视图同步的订阅）', () => {
+  afterEach(() => {
+    holder.syncHub = undefined
+  })
+
+  it.each([
+    [0, 'none', false],
+    [1, 'none', true],
+    [0, 'some', true],
+    [1, 'some', true]
+  ] as const)('P3-05-17 后台任务 %i 个、hub 订阅 %s → %s', (tasks, subscribers, pinned) => {
+    const hasSubscribers = vi.fn(
+      (sessionId: string) => subscribers === 'some' && sessionId === 'm1'
+    )
+    holder.syncHub = { hasSubscribers }
+    const taskIds = Array.from({ length: tasks }, () =>
+      taskRegistry.create({
+        kind: 'bash',
+        sessionId: 'm1',
+        title: 'sleep',
+        subject: { kind: 'bash', command: 'sleep 9', cwd: '/', logPath: '/tmp/x.log' } as never,
+        announceAfter: Infinity
+      })
+    )
+    expect(deps.isPinned?.('m1')).toBe(pinned)
+    expect(deps.isPinned?.('m2')).toBe(false)
+    for (const taskId of taskIds) taskRegistry.settle(taskId, { status: 'done' })
+    taskRegistry.killBySession('m1')
+  })
+
+  it('P3-05-17 hub 还没建：只数后台任务，也不建 hub', () => {
+    holder.syncHub = undefined
+    expect(deps.isPinned?.('m1')).toBe(false)
+    const taskId = taskRegistry.create({
+      kind: 'bash',
+      sessionId: 'm1',
+      title: 'sleep',
+      subject: { kind: 'bash', command: 'sleep 9', cwd: '/', logPath: '/tmp/x.log' } as never,
+      announceAfter: Infinity
+    })
+    expect(deps.isPinned?.('m1')).toBe(true)
+    taskRegistry.settle(taskId, { status: 'done' })
+    taskRegistry.killBySession('m1')
+    expect(holder.getSyncHub).not.toHaveBeenCalled()
+  })
+
+  it('P3-05-17 hasSubscribers 抛错 → 宿主的 evictable 当它钉住：maxIdleOpen 0 的空闲会话照样开着', async () => {
+    sessionRecords.insert(row('thrower'))
+    sessionRecords.insert(row('idle'))
+    holder.syncHub = {
+      hasSubscribers: (sessionId) => {
+        if (sessionId === 'thrower') throw new Error('hub broken')
+        return false
+      }
+    }
+    const host = createDesktopSessionHost({ maxIdleOpen: 0 })
+    await host.open('thrower')
+    await host.open('idle')
+    for (let i = 0; i < 5; i++) await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(host.get('thrower')).toBeDefined()
+    // 对照：不钉住的空闲会话被 LRU 关掉
+    expect(host.get('idle')).toBeUndefined()
+    await host.closeAll()
   })
 })
 
