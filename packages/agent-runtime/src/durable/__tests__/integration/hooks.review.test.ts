@@ -6,8 +6,9 @@
 import type { CommitPublication } from '@earendil-works/pi-durable'
 import { PERMISSION_VERDICT_SCHEMA } from '@shuvix/chat-protocol/types/permissionReview'
 import type { InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
-import { afterEach, describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { NEXT_NUDGE_TEXT, nextResultOf } from '../../../subagent/nextTool'
+import { backgroundContext as BG } from '../../context'
 import { executeTool, failureText } from '../../../tools/testing/invokeTool'
 import type { DurableSession } from '../../durableSession'
 import { answer, callTool } from '../support/faux'
@@ -24,7 +25,7 @@ import {
   ownedBy,
   ownerOf,
   recordOf,
-  releaseHolds,
+  registerSpawnCleanup,
   resultOf,
   reviewerOverrideMd,
   REVIEW_FENCE,
@@ -40,16 +41,13 @@ import { allow, NOTES_TXT, nextInput, registerWorldCleanup } from './support/wor
 
 registerHostCleanup()
 registerWorldCleanup()
-afterEach(() => releaseHolds())
+registerSpawnCleanup()
 
 const TIMEOUT = 15000
 const WRITE_ARGS = { path: 'out.txt', content: 'X' }
 
 /** 直接调一次真 write（干净的磁盘、另一个安全上下文），卡片 / 审查按给定的回答 */
-function directWrite(
-  response: InputResponse,
-  review?: ReviewSeam
-): ReturnType<typeof executeTool> {
+function directWrite(response: InputResponse, review?: ReviewSeam): ReturnType<typeof executeTool> {
   const suite = fileSuite(
     memFs({ '/ws/notes.txt': NOTES_TXT }),
     securityFor('direct-review', async () => response, [], review)
@@ -148,11 +146,7 @@ describe('P2-11 · J7 reviewer owner edge and cascade', () => {
         callTool('agent', { name: 'explore', prompt: 'write', description: 'w' }, 'r-agent'),
         answer('done')
       )
-      world.model.chatIn(
-        'explore',
-        callTool('write', WRITE_ARGS, 'c-w'),
-        answer('could not write')
-      )
+      world.model.chatIn('explore', callTool('write', WRITE_ARGS, 'c-w'), answer('could not write'))
       world.model.chatIn('reviewer', callTool('next', V_DENY('too risky'), 'v1'))
       expect(await withTimeout(session.submitUser('go'), 8000, 'go')).toEqual({})
 
@@ -263,13 +257,15 @@ describe('P2-11 · J7 reviewer owner edge and cascade', () => {
       await waitFor(async () => (await liveTasks(session)).length === 0, 2000, 'no live tasks')
       expect((await tasksIn(session, R!, 'pi.generation')).map(fate)).toEqual(['aborted'])
       expect(world.model.laneRequests('reviewer').length).toBeLessThanOrEqual(1)
-      const conversation = await session.harness.conversation(R!, (await import('../../context')).backgroundContext)
+      const conversation = await session.harness.conversation(R!, BG)
       const entries = await allEntries(conversation!)
       expect(
         entries.filter((entry) => entry.kind === 'pi.user').map((entry) => textOf(entry.model?.[0]))
       ).not.toContain(NEXT_NUDGE_TEXT)
       expect(
-        entries.filter((entry) => entry.kind === 'pi.tool-result' && nextResultOf(entry) !== undefined)
+        entries.filter(
+          (entry) => entry.kind === 'pi.tool-result' && nextResultOf(entry) !== undefined
+        )
       ).toHaveLength(1)
       await sleep(0)
     },

@@ -4,7 +4,7 @@
  * fixture 值），活段落按根会话 id 现调宿主 seam（子 agent 的 cwd 为空）；bot 段落只给 bot 档案的根。
  */
 import type { PromptVars, PromptVarsCtx } from '../../../agentProfile/promptVars'
-import { afterEach, describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { PROMPT_SECTION_KEY } from '../../prompt/sections'
 import type { PromptHost } from '../../seams'
 import type { AgentProfile } from '../../../subagent/types'
@@ -21,7 +21,7 @@ import { withTimeout } from '../support/wait'
 import {
   childOfCall,
   recordOf,
-  releaseHolds,
+  registerSpawnCleanup,
   resultOf,
   spawnWorld,
   type SpawnWorld
@@ -30,7 +30,7 @@ import { registerWorldCleanup } from './support/world'
 
 registerHostCleanup()
 registerWorldCleanup()
-afterEach(() => releaseHolds())
+registerSpawnCleanup()
 
 const TIMEOUT = 15000
 const RECOVERY_TIMEOUT = 20000
@@ -84,11 +84,11 @@ async function goldenWorld(rootCase: string): Promise<GoldenWorld> {
       return (seam as (...a: unknown[]) => unknown)(...args)
     }
   }
-  const coding: AgentProfile = {
+  const coding = {
     ...structuredClone(SPAWNED.inputs.profile),
     source: 'builtin',
     basePath: ''
-  }
+  } as AgentProfile
   const sw = await spawnWorld({
     profileObjects: [coding],
     host: {

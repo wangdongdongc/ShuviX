@@ -165,10 +165,9 @@ export function registerWorldCleanup(): void {
     }
     for (const world of list) {
       for (const script of world.scripts) {
-        expect(
-          script.exhausted,
-          `the chat script ran out (${script.exhaustedBy.join(', ')})`
-        ).toBe(false)
+        expect(script.exhausted, `the chat script ran out (${script.exhaustedBy.join(', ')})`).toBe(
+          false
+        )
       }
       expect(world.mcpLog.errors, 'MCP handler errors').toEqual([])
     }

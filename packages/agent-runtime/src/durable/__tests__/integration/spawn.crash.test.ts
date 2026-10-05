@@ -3,7 +3,7 @@
  * 继续时派发工具（replay safe）重跑、按拥有者边找回子对话、以同一 requestId 重新挂上；不安全的工具记
  * 「中断，可能已部分执行」。宿主派发的辅助工作（titler、审查员）打开时打中止标记、从不续跑。
  */
-import { afterEach, describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { answer, callTool, stalled } from '../support/faux'
 import { registerHostCleanup } from '../support/host'
 import { conversationIds } from '../support/spawn'
@@ -17,7 +17,7 @@ import {
   liveTasks,
   ownedBy,
   recordOf,
-  releaseHolds,
+  registerSpawnCleanup,
   resultOf,
   spawnWorld,
   submissionOf,
@@ -30,7 +30,7 @@ import { choose, nextInput, registerWorldCleanup } from './support/world'
 
 registerHostCleanup()
 registerWorldCleanup()
-afterEach(() => releaseHolds())
+registerSpawnCleanup()
 
 const TIMEOUT = 20000
 const INTERRUPTED = (tool: string): string =>
@@ -61,7 +61,9 @@ describe('P2-11 · J4 crash, reopen, continue', () => {
       const { world } = sw
       const session = await sw.open()
       const rootLock = structuredClone(session.lock)
-      world.chat(callTool('agent', { name: 'explore', prompt: 'find X', description: 'look' }, 'r-agent'))
+      world.chat(
+        callTool('agent', { name: 'explore', prompt: 'find X', description: 'look' }, 'r-agent')
+      )
       world.model.chatIn('explore', callTool('mcp__docs__slow', {}, 'c-slow'))
       void session.submitUser('go')
       await waitFor(() => world.mcpLog.callsOf('slow').length === 1, 3000, 'slow call reached')
@@ -132,7 +134,9 @@ describe('P2-11 · J4 crash, reopen, continue', () => {
       const reviewing = stalled()
       world.model.chatIn('titler', titling.step)
       world.model.chatIn('reviewer', reviewing.step)
-      world.chat(callTool('agent', { name: 'explore', prompt: 'write', description: 'w' }, 'r-agent'))
+      world.chat(
+        callTool('agent', { name: 'explore', prompt: 'write', description: 'w' }, 'r-agent')
+      )
       world.model.chatIn('explore', callTool('write', { path: 'out.txt', content: 'X' }, 'c-w'))
       sw.fireTitle('go')
       void session.submitUser('go')
@@ -207,10 +211,7 @@ describe('P2-11 · J4 crash, reopen, continue', () => {
       world.chat(callTool('agent', { name: 'explore', prompt: 'ask', description: 'a' }, 'r-agent'))
       world.model.chatIn(
         'explore',
-        callTools(
-          ['ask', ASK_ARGS, 'c-a'],
-          ['write', { path: 'out.txt', content: 'X' }, 'c-w']
-        )
+        callTools(['ask', ASK_ARGS, 'c-a'], ['write', { path: 'out.txt', content: 'X' }, 'c-w'])
       )
       void session.submitUser('go')
       await nextInput(world, 'c-a')

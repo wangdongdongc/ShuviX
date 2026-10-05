@@ -10,7 +10,7 @@ import {
   type CompactionStatus,
   type EntryRecord
 } from '@earendil-works/pi-durable'
-import { afterEach, describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { backgroundContext as BG } from '../../context'
 import type { DurableSession } from '../../durableSession'
 import { answer, callTool, held, modelError } from '../support/faux'
@@ -21,7 +21,7 @@ import { lines, textOf, when } from './support/scriptedModel'
 import {
   childOfCall,
   fate,
-  releaseHolds,
+  registerSpawnCleanup,
   resultOf,
   spawnWorld,
   toolTaskOf,
@@ -31,7 +31,7 @@ import { registerWorldCleanup } from './support/world'
 
 registerHostCleanup()
 registerWorldCleanup()
-afterEach(() => releaseHolds())
+registerSpawnCleanup()
 
 const TIMEOUT = 20000
 const SETTINGS = { retry: { enabled: false } }
@@ -60,7 +60,9 @@ function compactionsSeen(sw: SpawnWorld, conversationId?: number): CompactionSta
   const seen = new Map<number, CompactionStatus>()
   for (const doc of sw.world.recorder().live) {
     const matches =
-      conversationId === undefined ? doc.conversationId !== 1 : doc.conversationId === conversationId
+      conversationId === undefined
+        ? doc.conversationId !== 1
+        : doc.conversationId === conversationId
     if (!matches) continue
     for (const status of doc.value.compactions ?? []) {
       if (!seen.has(status.taskId as number)) seen.set(status.taskId as number, status)
@@ -102,13 +104,11 @@ describe('P2-11 · J5 small-window compaction of a spawned agent', () => {
       expect(request.modelId).toBe('tiny')
       expect(request.options?.maxTokens).toBe(600)
       expect(request.options?.cacheRetention).toBe('none')
-      expect(request.messages.map((message) => textOf(message)).join('\n')).not.toContain(
-        ROOT_TEXT
-      )
+      expect(request.messages.map((message) => textOf(message)).join('\n')).not.toContain(ROOT_TEXT)
       const C = await childOfCall(session, 'r-agent')
-      expect(
-        compactionsSeen(sw, C).map(({ reason, blocking }) => ({ reason, blocking }))
-      ).toEqual([{ reason: 'threshold', blocking: false }])
+      expect(compactionsSeen(sw, C).map(({ reason, blocking }) => ({ reason, blocking }))).toEqual([
+        { reason: 'threshold', blocking: false }
+      ])
       expect(compactionsSeen(sw, 1)).toEqual([])
 
       // 摘要还扣着：根照样拿到回答、发送落定；运行状态在摘要落定之前仍是忙
@@ -127,7 +127,8 @@ describe('P2-11 · J5 small-window compaction of a spawned agent', () => {
       expect((await entriesOf(session, 1)).some((entry) => CompactionEntry.is(entry))).toBe(false)
       await waitFor(() => session.runState === 'idle', 3000, 'idle')
       await waitFor(
-        async () => (await session.harness.snapshot(LiveDoc, C as never, BG))?.compactions === undefined,
+        async () =>
+          (await session.harness.snapshot(LiveDoc, C as never, BG))?.compactions === undefined,
         2000,
         'child status removed'
       )
@@ -162,15 +163,17 @@ describe('P2-11 · J5 small-window compaction of a spawned agent', () => {
       expect(await withTimeout(session.submitUser('go'), 8000, 'send')).toEqual({})
 
       const C = await childOfCall(session, 'r-agent')
-      expect(
-        compactionsSeen(sw, C).map(({ reason, blocking }) => ({ reason, blocking }))
-      ).toEqual([{ reason: 'overflow', blocking: true }])
+      expect(compactionsSeen(sw, C).map(({ reason, blocking }) => ({ reason, blocking }))).toEqual([
+        { reason: 'overflow', blocking: true }
+      ])
       const kinds = world.model.requests
         .filter((request) => request.lane === 'smallctx' || request.kind === 'summary')
         .map((request) => request.kind)
       expect(kinds.slice(-3)).toEqual(['chat', 'summary', 'chat'])
       expect(world.model.summaries).toHaveLength(1)
-      const tail = (await entriesOf(session, C)).filter((entry) => entry.kind !== 'pi.system').slice(-3)
+      const tail = (await entriesOf(session, C))
+        .filter((entry) => entry.kind !== 'pi.system')
+        .slice(-3)
       expect(tail.map((entry) => entry.kind)).toEqual([
         'pi.assistant',
         CompactionEntry.kind,
@@ -182,11 +185,9 @@ describe('P2-11 · J5 small-window compaction of a spawned agent', () => {
       expect(messageText(tail[2]!.model?.[0])).toBe('child ok')
       const retried = world.model.laneRequests('smallctx').at(-1)!
       expect(lines(retried)[0]!.startsWith(`user:${SUMMARY_PREFIX}`)).toBe(true)
-      expect(
-        world
-          .recorder()
-          .live.some((doc) => doc.value.generation?.retry !== undefined)
-      ).toBe(false)
+      expect(world.recorder().live.some((doc) => doc.value.generation?.retry !== undefined)).toBe(
+        false
+      )
       expect((await resultOf(session, 1, 'r-agent')).text).toBe('child ok')
       expect(sw.router.ends()).toEqual([expect.objectContaining({ isError: false })])
       expect(fate((await toolTaskOf(session, 1, 'r-agent')) as never)).toBe('completed')

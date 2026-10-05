@@ -19,6 +19,7 @@
  *    `review.enabled` 开关（缺省关）。
  */
 import type { Message } from '@earendil-works/pi-ai'
+import { afterEach, expect } from 'vitest'
 import {
   defineTool,
   type ConversationId,
@@ -268,11 +269,36 @@ export interface SpawnWorld {
 }
 
 const holdGates = new Map<string, Deferred>()
+const spawnWorlds = new Set<SpawnWorld>()
 
-/** 关掉某个世界剩下的 hold 闸门（afterEach 卫生） */
+/** 关掉剩下的 hold 闸门 */
 export function releaseHolds(): void {
   for (const gate of holdGates.values()) gate.resolve()
   holdGates.clear()
+}
+
+/**
+ * 在测试文件顶层、`registerWorldCleanup()` **之后**调用（afterEach 按栈序，于是它先跑、在 closeAll 之前）：
+ * 每个进程的路由里没有还在跑的 agent 任务（设计 §3），然后放掉全部 hold 闸门。
+ */
+export function registerSpawnCleanup(): void {
+  afterEach(() => {
+    const list = [...spawnWorlds]
+    spawnWorlds.clear()
+    try {
+      for (const sw of list) {
+        const router = sw.router
+        for (const sessionId of sw.world.sessionIds) {
+          expect(
+            router.tasks?.runningCount(sessionId, 'agent') ?? 0,
+            `running agent tasks in ${sessionId}`
+          ).toBe(0)
+        }
+      }
+    } finally {
+      releaseHolds()
+    }
+  })
 }
 
 export async function spawnWorld(options: SpawnWorldOptions = {}): Promise<SpawnWorld> {
@@ -553,6 +579,7 @@ export async function spawnWorld(options: SpawnWorldOptions = {}): Promise<Spawn
           event.type === 'end' && (hook === undefined || event.run.hook === hook)
       )
   }
+  spawnWorlds.add(sw)
   return sw
 }
 

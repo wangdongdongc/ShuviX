@@ -2,7 +2,7 @@
  * P2-11 · J2：嵌套深度 —— 根 → C（nester）→ G（nester）。拥有者链、记录的深度与 canSpawn、派发工具的门控、
  * 每层自己的调用方身份、路由的父子关系与收尾次序。
  */
-import { afterEach, describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { answer, callTool } from '../support/faux'
 import { registerHostCleanup } from '../support/host'
 import { conversationIds } from '../support/spawn'
@@ -11,7 +11,7 @@ import {
   childOfCall,
   ownerOf,
   recordOf,
-  releaseHolds,
+  registerSpawnCleanup,
   resultOf,
   spawnWorld,
   toolTaskOf
@@ -20,7 +20,7 @@ import { registerWorldCleanup } from './support/world'
 
 registerHostCleanup()
 registerWorldCleanup()
-afterEach(() => releaseHolds())
+registerSpawnCleanup()
 
 const TIMEOUT = 10000
 
@@ -38,7 +38,11 @@ describe('P2-11 · J2 nested depth', () => {
       world.model.chatIn(
         'nester',
         callTool('mcp__ctx__whoami', {}, 'c-who'),
-        callTool('agent', { name: 'nester', prompt: 'dig deeper', description: 'deeper' }, 'c-agent'),
+        callTool(
+          'agent',
+          { name: 'nester', prompt: 'dig deeper', description: 'deeper' },
+          'c-agent'
+        ),
         answer('c-done')
       )
       world.model.chatIn('g', callTool('mcp__ctx__whoami', {}, 'g-who'), answer('g-found'))

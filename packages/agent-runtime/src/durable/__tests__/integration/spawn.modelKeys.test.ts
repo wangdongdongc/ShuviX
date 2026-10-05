@@ -3,17 +3,23 @@
  * 的模型行）落到子 agent 的请求、记录、身份、用量与压缩余量上；点了停用模型的档案回落调用方的模型并警告一次。
  */
 import { UsageDoc } from '@earendil-works/pi-durable'
-import { afterEach, describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { backgroundContext as BG } from '../../context'
 import { answer, callTool, held } from '../support/faux'
 import { registerHostCleanup } from '../support/host'
 import { withTimeout } from '../support/wait'
-import { childOfCall, recordOf, releaseHolds, resultOf, spawnWorld } from './support/spawnWorld'
+import {
+  childOfCall,
+  recordOf,
+  registerSpawnCleanup,
+  resultOf,
+  spawnWorld
+} from './support/spawnWorld'
 import { registerWorldCleanup } from './support/world'
 
 registerHostCleanup()
 registerWorldCleanup()
-afterEach(() => releaseHolds())
+registerSpawnCleanup()
 
 const TIMEOUT = 10000
 
@@ -46,7 +52,8 @@ describe('P2-11 · J6 model and thinking md keys', () => {
       ])
       const root = world.model.laneRequests('root')
       expect(root.length).toBeGreaterThanOrEqual(4)
-      for (const request of root) expect([request.modelId, request.reasoning]).toEqual(['faux-1', 'low'])
+      for (const request of root)
+        expect([request.modelId, request.reasoning]).toEqual(['faux-1', 'low'])
 
       const C = await childOfCall(session, 'r-agent')
       expect(await recordOf(session, C)).toMatchObject({
@@ -57,9 +64,9 @@ describe('P2-11 · J6 model and thinking md keys', () => {
       expect(Object.keys((await session.harness.snapshot(UsageDoc, C, BG))!.models)).toEqual([
         'faux/faux-2'
       ])
-      expect(Object.keys((await session.harness.snapshot(UsageDoc, 1 as never, BG))!.models)).toEqual(
-        ['faux/faux-1']
-      )
+      expect(
+        Object.keys((await session.harness.snapshot(UsageDoc, 1 as never, BG))!.models)
+      ).toEqual(['faux/faux-1'])
       expect(session.effectiveSettings.compaction?.reserveTokens).toBe(10000)
       expect(world.t.warnings).toEqual([])
       expect((await resultOf(session, 1, 'r-agent')).text).toBe('tuned ok')

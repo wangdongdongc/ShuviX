@@ -2,7 +2,7 @@
  * P2-11 · J3：Esc 级联。根 Esc 原生地中止派发工具任务与它拥有的一切（子对话、审查员、孙子里的 MCP 调用），
  * 但碰不到后台锚拥有的 titler（辅助工作）。中止文本按 PIN-09 取确定的那一份，跑三遍看它不变。
  */
-import { afterEach, describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { answer, callTool, held, stalled } from '../support/faux'
 import { registerHostCleanup } from '../support/host'
 import { waitFor, withTimeout } from '../support/wait'
@@ -13,7 +13,7 @@ import {
   liveTasks,
   ownedBy,
   recordOf,
-  releaseHolds,
+  registerSpawnCleanup,
   resultOf,
   spawnWorld,
   submissionOf,
@@ -26,7 +26,7 @@ import { nextInput, registerWorldCleanup, resolvedCount } from './support/world'
 
 registerHostCleanup()
 registerWorldCleanup()
-afterEach(() => releaseHolds())
+registerSpawnCleanup()
 
 const TIMEOUT = 20000
 const ROUNDS = 3
@@ -172,7 +172,9 @@ describe('P2-11 · J3 Esc cascade', () => {
       const sw = await spawnWorld()
       const { world } = sw
       const session = await sw.open()
-      world.chat(callTool('agent', { name: 'nester', prompt: 'find X', description: 'n' }, 'r-agent'))
+      world.chat(
+        callTool('agent', { name: 'nester', prompt: 'find X', description: 'n' }, 'r-agent')
+      )
       world.model.chatIn(
         'nester',
         callTool('agent', { name: 'explore', prompt: 'slow', description: 's' }, 'c-agent')

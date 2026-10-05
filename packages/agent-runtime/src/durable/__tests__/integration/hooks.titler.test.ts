@@ -3,7 +3,7 @@
  * 真协调器派出内置 titler：它的对话归会话当前对话里一个后台锚任务（Q-P2-07），不进运行状态、不算中断、
  * 不进根的转写与摘要。
  */
-import { afterEach, describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { readTranscriptDigest } from '../../transcriptDigest'
 import { answer, callTool, held } from '../support/faux'
 import { registerHostCleanup } from '../support/host'
@@ -15,7 +15,7 @@ import {
   ownedBy,
   ownerOf,
   recordOf,
-  releaseHolds,
+  registerSpawnCleanup,
   spawnWorld,
   transcriptOf
 } from './support/spawnWorld'
@@ -23,7 +23,7 @@ import { registerWorldCleanup } from './support/world'
 
 registerHostCleanup()
 registerWorldCleanup()
-afterEach(() => releaseHolds())
+registerSpawnCleanup()
 
 const TIMEOUT = 15000
 

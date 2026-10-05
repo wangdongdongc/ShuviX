@@ -4,7 +4,7 @@
  */
 import { InboxDoc, LiveDoc, UsageDoc, type EntryRecord } from '@earendil-works/pi-durable'
 import { isSystemNoticeText } from '@shuvix/chat-protocol/systemNoticeContract'
-import { afterEach, describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { backgroundContext as BG } from '../../context'
 import type { DurableSession } from '../../durableSession'
 import { answer, callTool, held, stalled } from '../support/faux'
@@ -20,7 +20,7 @@ import {
   liveTasks,
   ownedBy,
   recordOf,
-  releaseHolds,
+  registerSpawnCleanup,
   resultOf,
   spawnWorld,
   transcriptOf,
@@ -30,15 +30,14 @@ import { registerWorldCleanup } from './support/world'
 
 registerHostCleanup()
 registerWorldCleanup()
-afterEach(() => releaseHolds())
+registerSpawnCleanup()
 
 const TIMEOUT = 15000
 const RECOVERY_TIMEOUT = 20000
 
-function extensionNames(sw: SpawnWorld): string[] {
-  return (sw.world.t.registryOf('s1')?.snapshot().extensions ?? []).map(
-    (extension) => extension.name
-  )
+/** 当前进程里 s1 的注册表装没装某个扩展 */
+function hasExtension(sw: SpawnWorld, name: string): boolean {
+  return sw.world.t.registryOf('s1')?.snapshot().extension(name) !== undefined
 }
 
 async function entriesOf(session: DurableSession, id: number): Promise<EntryRecord[]> {
@@ -127,6 +126,7 @@ describe('P2-11 · J10 phase-1 invariants with spawned agents present', () => {
       world.model.chatIn('explore', answer('found'))
       expect(await withTimeout(session.submitUser('go'), 8000, 'go')).toEqual({})
       const C = await childOfCall(session, 'r-agent')
+      expect(hasExtension(sw, `shuvix.agent.${C}`)).toBe(true)
       const preCrashTools = world.model.laneRequests('root').at(-1)!.tools
       const stall = stalled()
       world.chat(stall.step)
@@ -136,7 +136,7 @@ describe('P2-11 · J10 phase-1 invariants with spawned agents present', () => {
 
       const reopened = await sw.open()
       expect(world.toolHost.rebuildCalls).toEqual([rootLock])
-      expect(extensionNames(sw)).not.toContain(`shuvix.agent.${C}`)
+      expect(hasExtension(sw, `shuvix.agent.${C}`)).toBe(false)
       expect(reopened.agentIdentity(C)).toMatchObject({ kind: 'spawned', profileName: 'explore' })
       expect(reopened.isInterrupted()).toBe(true)
       expect([...world.mcp.connects.values()].reduce((sum, n) => sum + n, 0)).toBe(0)
@@ -152,7 +152,7 @@ describe('P2-11 · J10 phase-1 invariants with spawned agents present', () => {
       world.chat(answer('more'))
       expect(await withTimeout(third.submitUser('more'), 5000, 'send')).toEqual({})
       expect(world.toolHost.rebuildCalls).toEqual([rootLock])
-      expect(extensionNames(sw)).not.toContain(`shuvix.agent.${C}`)
+      expect(hasExtension(sw, `shuvix.agent.${C}`)).toBe(false)
     },
     RECOVERY_TIMEOUT
   )
@@ -193,7 +193,9 @@ describe('P2-11 · J10 phase-1 invariants with spawned agents present', () => {
       expect(users.at(-1)).toBe(`pi.user:${t1}`)
       expect(isSystemNoticeText(t1)).toBe(true)
       await waitFor(() => world.t.statesOf('s1').at(-1) === 'idle', 1000, 'idle')
-      expect(world.t.statesOf('s1').filter((state) => state === 'busy').length - rootRunsBefore).toBe(1)
+      expect(
+        world.t.statesOf('s1').filter((state) => state === 'busy').length - rootRunsBefore
+      ).toBe(1)
     },
     TIMEOUT
   )
@@ -215,18 +217,24 @@ describe('P2-11 · J10 phase-1 invariants with spawned agents present', () => {
       const C = await childOfCall(session, 'r-agent')
       const recordC = (await recordOf(session, C))!
       const stateBefore = await agentStateOf(session, C)
+      expect(hasExtension(sw, 'shuvix.agent.1')).toBe(true)
+      expect(hasExtension(sw, `shuvix.agent.${C}`)).toBe(true)
 
       await withTimeout(session.destroyAgent(), 3000, 'destroy')
       expect(await withTimeout(sending, 2000, 'send settles')).toEqual({})
       expect(beforeAbort).toBe(1)
       await waitFor(() => sw.router.ends().length === 1, 2000, 'router end')
       expect(sw.router.ends()).toEqual([
-        expect.objectContaining({ sessionId: recordC.agentId, result: 'ABORTED_NOTE', isError: true })
+        expect.objectContaining({
+          sessionId: recordC.agentId,
+          result: 'ABORTED_NOTE',
+          isError: true
+        })
       ])
       expect(sw.router.task(recordC.agentId)?.status).toBe('killed')
       expect(session.lock).toBeUndefined()
-      expect(extensionNames(sw)).not.toContain('shuvix.agent.1')
-      expect(extensionNames(sw)).not.toContain(`shuvix.agent.${C}`)
+      expect(hasExtension(sw, 'shuvix.agent.1')).toBe(false)
+      expect(hasExtension(sw, `shuvix.agent.${C}`)).toBe(false)
       expect(
         world.t
           .broadcastsOf('agent_closing')

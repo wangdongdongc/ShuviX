@@ -6,26 +6,27 @@ import { describe, expect, it } from 'vitest'
 import { executeTool } from '../../../tools/testing/invokeTool'
 import { answer, callTool } from '../support/faux'
 import { registerHostCleanup } from '../support/host'
+import { conversationIds } from '../support/spawn'
+import { systemDeltas } from '../support/transcript'
 import { waitFor, withTimeout } from '../support/wait'
-import { callTools } from './support/scriptedModel'
+import { memFs } from './support/memFs'
 import { fileSuite, securityFor } from './support/realTools'
+import { callTools, lastToolResult, when } from './support/scriptedModel'
 import {
   childOfCall,
   recordOf,
-  releaseHolds,
+  registerSpawnCleanup,
   resultOf,
   spawnWorld,
   toolTaskOf,
+  transcriptOf,
   type SpawnWorld
 } from './support/spawnWorld'
-import { allow, nextInput, registerWorldCleanup, resolvedCount } from './support/world'
-import { afterEach } from 'vitest'
-import { memFs } from './support/memFs'
-import { NOTES_TXT } from './support/world'
+import { allow, nextInput, NOTES_TXT, registerWorldCleanup, resolvedCount } from './support/world'
 
 registerHostCleanup()
 registerWorldCleanup()
-afterEach(() => releaseHolds())
+registerSpawnCleanup()
 
 const TIMEOUT = 10000
 
@@ -41,6 +42,10 @@ const EXPLORE_TOOLS = [
 
 const meta = (fields: Record<string, unknown>): Record<string, unknown> =>
   Object.fromEntries(Object.entries(fields).map(([key, value]) => [`shuvix.dev/${key}`, value]))
+
+async function transcriptOfRoot(session: Parameters<typeof transcriptOf>[0]): Promise<string[]> {
+  return transcriptOf(session, 1)
+}
 
 function afterEachHygiene(sw: SpawnWorld, sessionId = 's1'): void {
   expect(sw.router.tasks?.runningCount(sessionId, 'agent') ?? 0).toBe(0)
@@ -78,7 +83,7 @@ describe('P2-11 · J1 dispatch through the whole chain', () => {
       const rAgent = await resultOf(session, 1, 'r-agent')
       expect(rAgent.text).toBe('found')
       expect(rAgent.details).toEqual({ conversationId: C, agentId: A })
-      expect(world.model.laneRequests('root').at(-1)!.messages.at(-1)).toBeDefined()
+      expect((await transcriptOfRoot(session)).at(-1)).toBe('pi.assistant:done')
       const explore = world.model.laneRequests('explore')
       expect(explore).toHaveLength(2)
       expect(explore[0]!.modelId).toBe('faux-1')
@@ -124,7 +129,6 @@ describe('P2-11 · J1 dispatch through the whole chain', () => {
       expect(world.toolHost.builtinCalls).toHaveLength(builtinBefore)
       expect(session.lock).toEqual(lockBefore)
       const rootConversation = await session.currentConversation()
-      const { systemDeltas } = await import('../support/transcript')
       expect(await systemDeltas(rootConversation)).toHaveLength(1)
 
       // 路由
@@ -209,7 +213,6 @@ describe('P2-11 · J1 dispatch through the whole chain', () => {
       const { world } = sw
       const s1 = await sw.open('s1')
       const s2 = await sw.open('s2')
-      const { when, lastToolResult } = await import('./support/scriptedModel')
       // 两条会话的根与子各走同一条车道：步骤按上下文作答，谁先到都一样
       const rootStep = when((messages) =>
         lastToolResult(messages, 'agent') === undefined
@@ -245,7 +248,6 @@ describe('P2-11 · J1 dispatch through the whole chain', () => {
       expect(await recordOf(s1, C1)).toMatchObject({ agentId: A1 })
       expect(await recordOf(s2, C2)).toMatchObject({ agentId: A2 })
       // 各自的存储里没有对方的子 agent
-      const { conversationIds } = await import('../support/spawn')
       for (const [session, own, other] of [
         [s1, A1, A2],
         [s2, A2, A1]
