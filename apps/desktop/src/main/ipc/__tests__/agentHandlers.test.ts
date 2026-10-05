@@ -71,7 +71,7 @@ vi.mock('../../logger', () => ({
 }))
 vi.mock('../../services/agentMonitorService', () => ({
   getAgentRuntimeDetail: vi.fn(),
-  listAgentRuntimes: vi.fn(() => [])
+  listAgentRuntimes: vi.fn(async () => [])
 }))
 
 import { registerAgentHandlers } from '../agentHandlers'

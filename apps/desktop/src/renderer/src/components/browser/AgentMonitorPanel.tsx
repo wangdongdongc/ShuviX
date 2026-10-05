@@ -1,25 +1,19 @@
 /**
- * 智能体监控面板（主窗口右侧面板 RightPanel 的「智能体」tab）—— 进程内还活着的全部 agent 运行时。
+ * 智能体监控面板（主窗口右侧面板 RightPanel 的「智能体」tab）—— 打开着的会话里的 agent（P3-13）。
  *
- * 定位是**资源占用诊断**，不是"谁在跑"。派生 agent 跑完并不销毁（面板要支持继续追问），
- * 桌面端关闭会话时又不级联清理，于是一批早已 idle、却仍完整持有 harness 与内存会话树的
- * agent 会一直堆到进程退出。这个页就是用来把它们指出来的：相位灯区分"在跑"与"赖着"、
- * 「孤儿」徽章标出根会话都没了的、上下文占用条回答"它占着多大一块"，缓存命中率回答
- * "那一块里多少是复用的"。刻意不显示 token 花费与跨 agent 合计 —— 那是成本视角，这页只看
- * 单个 agent 占着什么；命中率是比例不是花费，所以它的原料（累计 token）也不上屏。
+ * 一行一个 agent：根 agent（会话锁着时）与加载在会话 Harness 里的派生 / hook agent，按血缘分组。相位灯区分
+ * 「在跑」（turn / compaction，脉冲）、「上个进程留下、停在原地」（interrupted，不脉冲、单独配色）与闲着；
+ * 上下文占用条回答「它占着多大一块、离压缩多远」，缓存命中率回答「那一块里多少是复用的」，花费格是这个
+ * agent 自己的花费（durable `pi.usage`，含重试与压缩）—— 自定义 provider 的模型没有价格，显示「—」并悬停
+ * 说明「未定价」。展开根 agent 的详情另有整条会话的总花费（含起标题、权限审查与回退丢下的分支）。
  *
- * 列表取数**不含任何遍历**：注册中心的快照全是字段读与事件影子，上下文占用直接来自 pi 判定
- * 自动压缩的那个数。所以每秒轮询的代价与 agent 的历史长度无关。
+ * 列表数据来自 `agentMonitorStore`（全局引用计数轮询：横幅上的 profile 标记也消费同一份快照，同一时刻只有
+ * 一个 1s 轮询器）。本面板仅在 `active === true` 时订阅 —— RightPanel 常驻挂载所有 tab，不可见时不占轮询
+ * 份额。工具栏支持按会话筛选（`sessionFilter`，面板级不持久化）：只显示 rootSessionId 匹配的条目，root 与
+ * 派生 agent 都入选。
  *
- * 列表数据来自 `agentMonitorStore`（全局引用计数轮询：横幅上的 profile 标记也消费同一份
- * 快照，同一时刻只有一个 1s 轮询器）。本面板仅在 `active === true` 时订阅 —— RightPanel
- * 常驻挂载所有 tab，不可见时不占轮询份额。工具栏支持按会话筛选（`sessionFilter`，面板级
- * 不持久化）：只显示 rootSessionId 匹配的条目，root 与派生 agent 都入选。
- *
- * 展开一条才拉「详情」（`AgentDetail`）—— 系统提示词全文、工具定义、模型细节，
- * 全部读自内存里的运行时对象，与实际下发给 LLM 的零漂移（这半边原先住在会话面板的
- * Agent 页，那页已撤；此处是它唯一的去处，故连派生 agent 也一并覆盖）。它要重建一次
- * 上下文，绝不能并进每秒轮询的列表。
+ * 展开一条才拉「详情」（`AgentDetail`）—— 系统提示词全文、工具定义、模型细节，与实际下发给 LLM 的零漂移。
+ * 它要读一次上下文，绝不能并进每秒轮询的列表。
  *
  * 沿用 MCP 调用日志的单列流 + 就地展开（手风琴），没有第二个可滚动区。
  */
@@ -39,12 +33,27 @@ import {
   useAgentMonitorStore
 } from '../../stores/agentMonitorStore'
 
-/** 相位灯配色：只有 idle 是"静止"，其余都在占用 CPU/网络 */
+/** 相位灯配色：turn / compaction 在占用 CPU / 网络（脉冲）；interrupted 停着但留着一轮，与 idle 分开画 */
 const PHASE_DOT: Record<AgentMonitorPhase, string> = {
   idle: 'bg-text-tertiary/40',
   turn: 'bg-emerald-500',
   compaction: 'bg-amber-500',
-  branch_summary: 'bg-sky-500'
+  interrupted: 'bg-sky-500/70'
+}
+
+/** 在跑 = 脉冲、算「活跃」；interrupted 与 idle 一样不在跑（PIN-05） */
+function isRunning(phase: AgentMonitorPhase): boolean {
+  return phase === 'turn' || phase === 'compaction'
+}
+
+/**
+ * 花费的文本（PIN-09）：0 → 「—」（模型没有价格：自定义 provider 恒为 0，不说成 $0.00）；
+ * 不到一分钱 → `<$0.01`；其余两位小数。
+ */
+function formatCost(total: number): string {
+  if (!(total > 0)) return '—'
+  if (total < 0.01) return '<$0.01'
+  return `$${total.toFixed(2)}`
 }
 
 function formatCount(n: number): string {
@@ -91,7 +100,7 @@ export function AgentMonitorPanel({ active }: { active: boolean }): React.JSX.El
 
   // 会话筛选：rootSessionId 匹配即入选（root 与派生 agent 都算）
   const visible = sessionFilter ? entries.filter((e) => e.rootSessionId === sessionFilter) : entries
-  const idleCount = visible.filter((a) => a.phase === 'idle').length
+  const idleCount = visible.filter((a) => !isRunning(a.phase)).length
   // 筛选 chip 的标签：优先会话标题，取不到（条目已消失）用 id 截断
   const filterLabel = sessionFilter
     ? entries.find((e) => e.rootSessionId === sessionFilter)?.rootSessionTitle ||
@@ -133,7 +142,7 @@ export function AgentMonitorPanel({ active }: { active: boolean }): React.JSX.El
 
       {/* 单列流。面板宽度可拖（320–960px），行与详情按**这个容器**的宽度排版（容器查询），
           不按窗口：窄时一行拆两行、详情改单列；够宽时行回到一行一条的表格式（≥ @xl），
-          详情回到两栏（≥ @lg）—— 行多一列定宽的命中率，所以比详情晚一档才并成一行 */}
+          详情回到两栏（≥ @lg）—— 行多两列定宽的命中率与花费，所以比详情晚一档才并成一行 */}
       <div className="@container flex-1 min-h-0 overflow-y-auto">
         {loading ? (
           <div className="flex items-center justify-center gap-2 py-10 text-text-tertiary">
@@ -161,8 +170,9 @@ export function AgentMonitorPanel({ active }: { active: boolean }): React.JSX.El
                 >
                   <span className="flex items-center gap-2 @xl:contents">
                     <span
+                      data-agent-phase={a.phase}
                       className={`w-1.5 h-1.5 rounded-full shrink-0 ${PHASE_DOT[a.phase]} ${
-                        a.phase === 'idle' ? '' : 'animate-pulse'
+                        isRunning(a.phase) ? 'animate-pulse' : ''
                       }`}
                     />
                     {/* 派生 agent 用箭头 + 缩进标记血缘：列表按血缘分组排序（父在上、子紧随），
@@ -180,11 +190,6 @@ export function AgentMonitorPanel({ active }: { active: boolean }): React.JSX.El
                     <span className="text-text-primary truncate min-w-0 text-left @xl:max-w-[11rem]">
                       {a.kind === 'root' ? a.rootSessionTitle || a.displayName : a.displayName}
                     </span>
-                    {!a.rootSessionExists && (
-                      <span className="shrink-0 px-1 py-px rounded bg-error/10 text-error text-[9px]">
-                        {t('settings.agentMonitorOrphan')}
-                      </span>
-                    )}
                     <span className="ml-auto text-text-tertiary text-[10px] text-right shrink-0 tabular-nums @xl:order-last @xl:ml-0 @xl:w-20">
                       {t(sinceParts(a.lastActivityAt).key, { n: sinceParts(a.lastActivityAt).n })}
                     </span>
@@ -195,6 +200,7 @@ export function AgentMonitorPanel({ active }: { active: boolean }): React.JSX.El
                     </span>
                     <ContextGauge tokens={a.contextTokens} window={a.model.contextWindow} />
                     <CacheHitCell cache={a.cache} />
+                    <CostCell total={a.cost.total} />
                   </span>
                 </button>
 
@@ -244,9 +250,14 @@ function formatRate(rate: number, digits: 0 | 1): string {
   return (rate * 100).toFixed(digits)
 }
 
+/** 缓存三项全 0 = 还没有用量（账本里一点输入都没记过） */
+function noCacheData(cache: AgentMonitorCacheUsage): boolean {
+  return cache.input + cache.cacheRead + cache.cacheWrite === 0
+}
+
 /**
- * 行里的缓存命中率（自登记起累计）。三种状态要分开画，因为它们回答的是不同的事：
- *  - 还没有完成的调用 → 空占位（与占用条一样，没有数据就不画）；
+ * 行里的缓存命中率（这个对话累计）。三种状态要分开画，因为它们回答的是不同的事：
+ *  - 还没有用量 → 空占位（与占用条一样，没有数据就不画）；
  *  - 有调用、provider 却从没报过缓存 → 「—」：「上报了 0」与「不上报」在 usage 里都读作 0，
  *    这里不能替它说成 0%，悬停说明两种可能；
  *  - 报过 → 百分数，悬停说明口径。
@@ -254,7 +265,7 @@ function formatRate(rate: number, digits: 0 | 1): string {
  */
 function CacheHitCell({ cache }: { cache: AgentMonitorCacheUsage }): React.JSX.Element {
   const { t } = useTranslation()
-  if (cache.calls === 0) return <span className="shrink-0 @xl:w-12" />
+  if (noCacheData(cache)) return <span className="shrink-0 @xl:w-12" />
   const rate = cache.reported ? cacheHitRate(cache) : null
   return (
     <span
@@ -263,6 +274,24 @@ function CacheHitCell({ cache }: { cache: AgentMonitorCacheUsage }): React.JSX.E
     >
       <DatabaseZap size={10} className="text-text-tertiary shrink-0" />
       {rate === null ? '—' : `${formatRate(rate, 0)}%`}
+    </span>
+  )
+}
+
+/**
+ * 行里的花费格（这个 agent 自己的，PIN-09）。0 画「—」并悬停说明「未定价」—— 自定义 provider 的模型没有
+ * 价格，`pi.usage` 里的花费恒为 0，说成 $0.00 会误导。定宽只在单行排版（@xl）里要，窄时按内容宽。
+ */
+function CostCell({ total }: { total: number }): React.JSX.Element {
+  const { t } = useTranslation()
+  const priced = total > 0
+  return (
+    <span
+      data-agent-cost
+      title={priced ? t('panel.agentCostTitle') : t('panel.agentCostUnpricedTitle')}
+      className="shrink-0 text-right text-text-secondary text-[10px] tabular-nums @xl:w-14"
+    >
+      {formatCost(total)}
     </span>
   )
 }
@@ -363,9 +392,7 @@ function AgentDetail({
       <Field label={t('settings.agentMonitorFieldInput')}>
         {info ? info.model.input.join(' + ') : pending}
       </Field>
-      <Field label={t('settings.agentMonitorFieldTools')}>
-        {a.activeToolCount} / {a.toolCount}
-      </Field>
+      <Field label={t('settings.agentMonitorFieldTools')}>{a.toolCount}</Field>
       <Field label={t('settings.agentMonitorFieldContext')}>
         {a.contextTokens > 0
           ? t('settings.agentMonitorContext', {
@@ -380,26 +407,33 @@ function AgentDetail({
       </Field>
       <CacheHitFields cache={a.cache} />
       <Field label={t('settings.agentMonitorFieldQueue')}>
-        {a.queue.steer} / {a.queue.followUp} / {a.queue.nextTurn}
+        <span data-agent-field="queue">
+          {a.queue.steer} / {a.queue.followUp}
+        </span>
       </Field>
-      <Field label={t('settings.agentMonitorFieldCounters')}>
-        {t('settings.agentMonitorCounters', {
-          turns: a.counters.turns,
-          tools: a.counters.toolCalls,
-          requests: a.counters.providerRequests
-        })}
+      <Field label={t('settings.agentMonitorFieldCost')}>
+        <span data-agent-field="cost">
+          {formatCost(a.cost.total)}
+          {!(a.cost.total > 0) && (
+            <span className="text-text-tertiary ml-1">
+              （{t('settings.agentMonitorCostUnpriced')}）
+            </span>
+          )}
+        </span>
       </Field>
+      {/* 会话总花费只在根的详情里：派生 agent 的那份与根相同，重复列出只是噪音 */}
+      {a.kind === 'root' && (
+        <Field label={t('settings.agentMonitorFieldSessionCost')}>
+          <span data-agent-field="session-cost">{formatCost(a.sessionCost)}</span>
+        </Field>
+      )}
       <Field label={t('settings.agentMonitorFieldStarted')}>
         {new Date(a.startedAt).toLocaleString()}
       </Field>
-      {/* 所属会话只对派生 agent 有信息量：根 agent 的行标题就是会话标题，孤儿也已由行内徽章说明 */}
+      {/* 所属会话只对派生 agent 有信息量：根 agent 的行标题就是会话标题 */}
       {a.kind === 'spawned' && (
         <Field label={t('settings.agentMonitorFieldSession')}>
-          {a.rootSessionExists ? (
-            a.rootSessionTitle || a.rootSessionId
-          ) : (
-            <span className="text-error">{t('settings.agentMonitorOrphanHint')}</span>
-          )}
+          {a.rootSessionTitle || a.rootSessionId}
         </Field>
       )}
 
@@ -464,14 +498,13 @@ function AgentDetail({
 }
 
 /**
- * 详情里的两格命中率：累计（附计入的调用次数）与最近一次。
+ * 详情里的两格命中率：累计与最近一条带用量的回复。
  * 「—」规则与行里一致：provider 从没报过缓存时两格都说「未上报」，不说 0%。
  */
 function CacheHitFields({ cache }: { cache: AgentMonitorCacheUsage }): React.JSX.Element {
   const { t } = useTranslation()
-  const unknown =
-    cache.calls === 0
-      ? t('settings.agentMonitorCacheNone')
+  const unknown = noCacheData(cache)
+    ? t('settings.agentMonitorCacheNone')
       : !cache.reported
         ? t('settings.agentMonitorCacheUnreported')
         : null
@@ -484,10 +517,7 @@ function CacheHitFields({ cache }: { cache: AgentMonitorCacheUsage }): React.JSX
           {unknown ??
             (total === null
               ? '—'
-              : t('settings.agentMonitorCacheHit', {
-                  percent: formatRate(total, 1),
-                  calls: cache.calls
-                }))}
+              : t('settings.agentMonitorCacheHit', { percent: formatRate(total, 1) }))}
         </span>
       </Field>
       <Field label={t('settings.agentMonitorFieldCacheLast')}>
