@@ -1,7 +1,7 @@
 import { getSessionChannelApi, getHostApi, useChatHost } from '@shuvix/chat-ui'
 import { useRef, useEffect, useLayoutEffect, useState, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Send, Square, X, Zap, CornerDownLeft, CirclePause } from 'lucide-react'
+import { Send, Square, X, Zap, CornerDownLeft, CirclePause, Lock } from 'lucide-react'
 import { TokenChip } from './TokenChip'
 import { QueuePanel } from './QueuePanel'
 import {
@@ -109,7 +109,12 @@ export function InputArea({
   const source = useChatStore(selectSessionSource)
   const isInterrupted = !!activeSessionId && source === 'durable' && run.state === 'interrupted'
   /**
-   * 这条会话不能发消息（旧格式只读，Q-P3-21：phase 3 用 `capabilities.send` 禁用输入框，横幅是 phase 4 的事）。
+   * 旧格式会话（P4-01，§2A）：输入卡片顶上一条只读横幅 + [新建对话]（只在有宿主时出现）。只看视图的
+   * `source`，不看能力位 —— 与上面的中断横幅互斥（那条只认 durable），两条永远不会同时出现
+   */
+  const isLegacy = !!activeSessionId && source === 'legacy'
+  /**
+   * 这条会话不能发消息（`capabilities.send:false`，Q-P3-21：旧格式会话即如此）。
    * 还没收到视图时按新会话的口径（能发）
    */
   const canSendInSession = useChatStore((s) => selectSessionCapabilities(s).send)
@@ -198,6 +203,36 @@ export function InputArea({
       continuingRef.current = false
       setContinuingFor(null)
       setSendError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  /**
+   * 旧格式横幅的 [新建对话]（PIN-03）：在当前这条会话所属的项目里建一条普通会话 → 刷新列表 → 选中它。
+   * 不带欢迎页的模型 / 工具、不预建 Agent（与侧栏「新建对话」同口径）。ref 挡连点，失败走发送错误行（PIN-04）
+   */
+  const [creatingNewChat, setCreatingNewChat] = useState(false)
+  const creatingNewChatRef = useRef(false)
+  const handleLegacyNewChat = async (): Promise<void> => {
+    const host = getHostApi()
+    if (!host || creatingNewChatRef.current) return
+    const { sessions, activeSessionId: sid } = useChatStore.getState()
+    const projectId = sessions.find((s) => s.id === sid)?.projectId ?? null
+    creatingNewChatRef.current = true
+    setCreatingNewChat(true)
+    setSendError(null)
+    try {
+      const session = await host.session.create({ projectId })
+      const list = await host.session.list()
+      const store = useChatStore.getState()
+      store.setSessions(list)
+      store.setActiveSessionId(session.id)
+    } catch (err) {
+      if (useChatStore.getState().activeSessionId === sid) {
+        setSendError(err instanceof Error ? err.message : String(err))
+      }
+    } finally {
+      creatingNewChatRef.current = false
+      setCreatingNewChat(false)
     }
   }
 
@@ -840,6 +875,36 @@ export function InputArea({
             </div>
           )}
 
+          {/* 旧格式会话（P4-01）：只读横幅；有宿主时附 [新建对话]（渠道端没有建会话的能力） */}
+          {isLegacy && (
+            <div
+              data-legacy-banner=""
+              className="px-3 pt-2.5 pb-2 border-b border-border-secondary/40"
+            >
+              <div className="flex items-center gap-2">
+                <Lock size={14} className="flex-shrink-0 text-text-tertiary" />
+                <span data-legacy-text="" className="flex-1 min-w-0 text-xs text-text-primary">
+                  {t('chat.legacySessionReadOnly')}
+                </span>
+                {hasHost && (
+                  <button
+                    type="button"
+                    data-legacy-new-chat=""
+                    onClick={handleLegacyNewChat}
+                    disabled={creatingNewChat}
+                    className={`flex-shrink-0 px-2.5 py-1 rounded-lg text-[11px] transition-colors ${
+                      creatingNewChat
+                        ? 'bg-bg-hover text-text-tertiary cursor-not-allowed'
+                        : 'bg-accent text-white hover:bg-accent-hover'
+                    }`}
+                  >
+                    {t('sidebar.newChat')}
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* 图片预览条 */}
           {pendingImages.length > 0 && (
             <div className="flex gap-2 px-3 pt-3 pb-1 overflow-x-auto">
@@ -929,8 +994,11 @@ export function InputArea({
               }}
               disabled={sendBlocked}
               placeholder={
-                sendBlocked
-                  ? t('chat.legacySessionReadOnly')
+                // 旧格式会话的说明在横幅里，占位留空免得同一句话出现两遍（PIN-02）
+                isLegacy
+                  ? ''
+                  : sendBlocked
+                    ? t('chat.legacySessionReadOnly')
                   : isAgentClosing
                     ? t('input.placeholderClosing')
                     : activePendingInput
