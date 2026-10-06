@@ -12,7 +12,7 @@
  *  - **点查点改**（findById / pick / pickSettings / update* / deleteById）与持久会话一模一样。
  *    内存里存的是与表行同形的 `SessionRow`（settings 是 JSON 文本），读出时照表行的解析口径走，
  *    所以「缺键回 null」「每次读到的都是新对象」这些细节两边一致；重复 id 的 insert 同样抛错；
- *  - **列表查询看不见它**（findAll / findByProjectId / findByProjectAndNotebookPath）：侧栏、清扫、
+ *  - **列表查询看不见它**（findAll / findByProjectId / findByProjectAndNotebookPath / findLegacy*）：侧栏、清扫、
  *    按笔记本路径找会话都不该碰到一条内存会话 —— 它归开它的那个宿主（窗口）自己记账。唯一例外是
  *    findChildren：内存会话的子会话也是内存会话（sessionService.create 按父会话推定），删父会话要级联；
  *  - **不记活跃**：touchActive 对它是空操作；日历索引（sessionDayPromptService）跳过它；
@@ -21,7 +21,11 @@
  *
  * 会话树（对话内容）的内存化不在这里：sessionStorage 的树注册表按 isEphemeral / wasEphemeral 分流。
  */
-import { storageKindOf, type SessionStorageKind } from '@shuvix/chat-protocol/sessionStorageKind'
+import {
+  HARNESS_V3_JSONL,
+  storageKindOf,
+  type SessionStorageKind
+} from '@shuvix/chat-protocol/sessionStorageKind'
 import { sessionDao } from '../../dao/sessionDao'
 import type { Session, SessionSettings } from '../../dao/types'
 
@@ -88,6 +92,22 @@ export class SessionRecords {
   /** 项目内绑定了指定 md 文件的持久笔记本会话。内存会话不在其中 */
   findByProjectAndNotebookPath(projectId: string, notebookPath: string): Session | undefined {
     return sessionDao.findByProjectAndNotebookPath(projectId, notebookPath)
+  }
+
+  /**
+   * 绑着文件的旧格式会话：`harness-v3-jsonl`、`settings.notebookPath` 非空（创建序）。只给启动切换用
+   * （services/legacySwitchover）。内存会话不在其中 —— 它从不是旧格式，也从不落库
+   */
+  findLegacyWithNotebookPath(): Session[] {
+    return sessionDao.findByStorageKindWithNotebookPath(HARNESS_V3_JSONL)
+  }
+
+  /**
+   * 旧格式的 Chrome 标签页会话**候选**：`harness-v3-jsonl`、`settings.chromeTab` 是个对象（创建序）。
+   * 绑定合不合法由调用方经 `chromeTabOf` 判。只给启动切换用；内存会话不在其中
+   */
+  findLegacyWithChromeTab(): Session[] {
+    return sessionDao.findByStorageKindWithChromeTab(HARNESS_V3_JSONL)
   }
 
   /**
@@ -183,8 +203,9 @@ export class SessionRecords {
   }
 
   /**
-   * 换存储类型 —— 只给「清空一条旧格式会话」用（旧转写已删，会话从此是一条全新的新格式会话；
-   * 什么都不带过去，不是迁移，见 messageService.clear）
+   * 换存储类型 —— 会话从此是一条全新的新格式会话，什么都不带过去，不是迁移。两处调用方：
+   *  - 「清空一条旧格式会话」（旧转写已删，见 messageService.clear）；
+   *  - 启动切换（services/legacySwitchover）：绑着文件的旧格式会话原地重置，`.jsonl` 留在盘上不再读。
    */
   updateStorageKind(id: string, storageKind: SessionStorageKind): void {
     const row = this.ephemeral.get(id)

@@ -13,6 +13,10 @@
  *
  * 清空（`clear`）两种都做：经 SessionHost 关掉并删掉存储；旧格式会话清空之后换成当前存储类型，
  * 从此是一条全新的新格式会话（PIN-22，什么都不带过去 —— 不是迁移）。
+ *
+ * 走到这里的旧格式会话只剩不绑文件的那些（普通对话、bot 对话、子会话）：绑着文件的（`notebookPath`）
+ * 启动时已被原地重置成新格式、旧格式的 Chrome 标签页会话已被删掉（services/legacySwitchover）。重置留下的
+ * `.jsonl` 不再读 —— 行已是新格式，这里按新格式走；删除 / 清空时随 deleteSessionStorage 一起删。
  */
 import { SessionClosedError } from '@shuvix/agent-runtime'
 import {
