@@ -65,8 +65,8 @@ vi.mock('../../../services/sessionService', () => ({
 }))
 vi.mock('../../../services/messageService', () => ({ messageService: {} }))
 vi.mock('../../../services/sessionStorage', () => ({
-  appendModelChange: vi.fn(),
-  appendThinkingLevelChange: vi.fn()
+  recordSessionModel: vi.fn(),
+  recordSessionThinkingLevel: vi.fn()
 }))
 vi.mock('../../../services/userInputBroker', () => ({ respondToUserInput: vi.fn() }))
 vi.mock('../../../services/builtinMcp/dbConnections', () => ({

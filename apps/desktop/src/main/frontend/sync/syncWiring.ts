@@ -28,10 +28,9 @@ import {
   type SyncSession,
   type SyncSessionClosedReason
 } from '@shuvix/agent-runtime'
-import { HARNESS_V3_JSONL, storageKindOf } from '@shuvix/chat-protocol/sessionStorageKind'
 import { createLogger } from '../../logger'
 import { getSessionHost, peekSessionHost } from '../../services/sessionHost'
-import { sessionRecords } from '../../services/sessionRecords'
+import { isLegacySession } from '../../services/legacySession'
 import { readLegacyTranscript } from '../../services/sessionStorage'
 import { forgetClosedSession, indexOpenedSession } from '../../services/sessionSignalSeams'
 import { createRoutingSyncTransport, type RoutingSyncTransport } from './ipcSyncTransport'
@@ -147,9 +146,7 @@ export function createSyncHubHost(deps: SyncHubHostDeps = {}): SyncHubHost {
  * 仍是只读的旧格式视图，不落到会去 peek 的 none 视图）；新格式行、不认识的存储类型、查不到行 → undefined。
  */
 export function legacyViewOf(sessionId: string): LegacyTranscript | undefined {
-  const row = sessionRecords.pick(sessionId, ['id', 'storageKind'])
-  if (row === undefined) return undefined
-  if (storageKindOf(row) !== HARNESS_V3_JSONL) return undefined
+  if (!isLegacySession(sessionId, { rowRequired: true })) return undefined
   try {
     const view = readLegacyTranscript(sessionId)
     return { messages: view?.messages ?? [] }

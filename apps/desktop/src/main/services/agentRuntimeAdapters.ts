@@ -5,7 +5,8 @@
  * 现取，从不写 process.env。
  *
  * 会话存储由 durable 自己落盘（SessionHost 打开），宿主不提供消息写入口。旧运行时的工具结果变换与
- * 请求日志两个适配器随 HarnessSession 一起删了（请求日志的写路径留在 httpLogService，见那里的说明）。
+ * 请求日志两个适配器随旧运行时（pi 0.80 harness）一起删了（请求日志的写路径留在 httpLogService，
+ * 见那里的说明）。
  */
 import type { RuntimeEventSink } from '@shuvix/agent-runtime'
 import { chatFrontendRegistry } from '../frontend/core'

@@ -196,8 +196,8 @@ diff 有个结构性弱点 —— 它依赖模型上下文里还留着上一份�
 ### 未做：压缩纪元
 
 更彻底的解法是把「压缩纪元」透到工具侧，纪元一变就作废缓存，那样连模型自省都不需要。
-`ToolContext` 现在只有 `sessionId` / `requestUserInput` / `emitChatEvent`，没有这个
-信号，而压缩发生在 `harnessSession.maybeAutoCompact()` —— 要打通一条跨层管线。
+工具侧（`browser/mcpServer.ts` 的 MCP 服务器）现在拿不到这个信号，而压缩由 pi-durable
+在会话运行时里自动完成（宿主只在会话视图的 `run.compacting` 里看见它）—— 要打通一条跨层管线。
 已明确押后。
 
 ## 测试策略

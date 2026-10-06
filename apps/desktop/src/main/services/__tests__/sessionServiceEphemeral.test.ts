@@ -7,8 +7,7 @@
  * 父会话是一条**已删掉的内存会话**时拒绝建子会话 —— 那是宿主刚把它删掉，建出来的要么是库里的孤儿，
  * 要么是谁也不会去删的内存会话。
  *
- * mock 面沿用 sessionServiceBuiltinMcpLifetime.test.ts（import 图全换假件、真 SessionManager、
- * `AgentSession.create` 可捕获）。差别在于 **sessionRecords 是真的**：只替掉它底下的
+ * mock 面沿用 sessionServiceBuiltinMcpLifetime.test.ts（import 图全换假件、会话运行时换成假宿主）。差别在于 **sessionRecords 是真的**：只替掉它底下的
  * `dao/sessionDao`，而且 DAO 的每个方法都是 spy、背后是一张内存表 —— 「没碰库」就是
  * 「这张表的 spy 没被调」，而持久会话那一侧照样有行可读。
  *
@@ -125,7 +124,7 @@ vi.mock('../messageService', () => ({ messageService: { clear: mocks.messageClea
 vi.mock('../sessionStorage', () => ({
   isDurableSession: () => true,
   readSessionRunConfig: mocks.readSessionRunConfig,
-  appendModelChange: vi.fn()
+  recordSessionModel: vi.fn()
 }))
 vi.mock('../../i18n', () => ({ t: (key: string) => key }))
 vi.mock('../../utils/paths', () => ({

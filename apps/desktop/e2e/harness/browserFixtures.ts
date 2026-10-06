@@ -395,10 +395,10 @@ export interface ScriptedCall {
 }
 
 /**
- * 一次调用落定时的结果（P3-08 起取自会话视图里落盘的工具块 —— 没有 `tool_end` 事件了；形状沿用旧事件，
- * 只声明断言会读的字段）
+ * 一次调用落定时的结果：取自会话视图里落盘的工具块（P3-08 起工具结果不再是事件）。只声明断言会读的字段
  */
-export interface ToolEndEvent extends RecordedEvent {
+export interface ToolResultRecord {
+  sessionId: string
   toolCallId: string
   toolName: string
   /** 广播给界面的结果文字（图片已换成占位） */
@@ -421,9 +421,9 @@ export interface AskEvent extends RecordedEvent {
   request: AskRequest
 }
 
-/** 一次运行的产出：按 toolCallId 的 `tool_end`，以及这次运行开始时的事件序号 */
+/** 一次运行的产出：按 toolCallId 的工具结果，以及这次运行开始时的事件序号 */
 export interface RunOutcome {
-  ends: Record<string, ToolEndEvent>
+  ends: Record<string, ToolResultRecord>
   since: number
 }
 
@@ -465,7 +465,7 @@ export async function sendPrompt(main: CdpClient, sid: string, text: string): Pr
 export interface BrowserDriver {
   /** 排好脚本、发 prompt，回这次运行的起点序号（询问用例：随后 waitAsk / answer / finish） */
   start(sid: string, turns: Array<ScriptedCall | ScriptedCall[]>, prompt?: string): Promise<number>
-  /** 等这次运行的 `agent_end`，回按 toolCallId 的 `tool_end` */
+  /** 等这次运行的 `agent_end`，回按 toolCallId 的工具结果 */
   finish(sid: string, since: number): Promise<RunOutcome>
   /** start + finish：一次不需要人应答的运行 */
   run(
@@ -496,7 +496,7 @@ export interface BrowserDriver {
    */
   asksSince(since: number, sid?: string): Promise<number>
   /** 这次运行（`start` 交回的起点）之后这条会话里落盘的工具结果（视图里起点之后的消息） */
-  resultsSince(sid: string, since: number): Promise<ToolEndEvent[]>
+  resultsSince(sid: string, since: number): Promise<ToolResultRecord[]>
 }
 
 /** P3-08 起删掉的内容类事件 —— 等它 / 断它「没有」都是空跑 */
@@ -566,11 +566,10 @@ export function browserDriver(opts: {
     await sendPrompt(main, sid, prompt)
     return since
   }
-  /** 视图里起点之后落盘的工具结果（形状沿用旧 `tool_end`） */
-  const resultsIn = (sid: string, since: number, messages: ChatMessage[]): ToolEndEvent[] => {
+  /** 视图里起点之后落盘的工具结果 */
+  const resultsIn = (sid: string, since: number, messages: ChatMessage[]): ToolResultRecord[] => {
     const known = before.get(since) ?? new Set<string>()
     return toolResultsIn(messages.filter((m) => !known.has(m.id))).map((r) => ({
-      type: 'tool_end',
       sessionId: sid,
       toolCallId: r.toolCallId,
       toolName: r.toolName,
@@ -584,7 +583,7 @@ export function browserDriver(opts: {
   const finish = async (sid: string, since: number): Promise<RunOutcome> => {
     await events.waitFor('agent_end', { sessionId: sid, since, timeoutMs: 60_000 })
     const view = await probe.waitView(sid, (v) => v.run.state !== 'busy', 30_000)
-    const ends: Record<string, ToolEndEvent> = {}
+    const ends: Record<string, ToolResultRecord> = {}
     for (const end of resultsIn(sid, since, view.messages)) ends[end.toolCallId] = end
     return { ends, since }
   }

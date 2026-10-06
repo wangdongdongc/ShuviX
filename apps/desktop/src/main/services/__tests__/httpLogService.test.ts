@@ -3,7 +3,8 @@
  *
  * 关键约定：关闭时 logRequest 返回空串且**不序列化 payload** —— payload 是整段上下文
  * 快照（含 base64 图片可达数 MB），agent 循环每步都会调用，序列化本身就是成本。
- * 返回空串又让上游的 `if (logId)` 守卫跳过用量回填（harnessSession / eventHandler）。
+ * 返回空串又让上游的 `if (logId)` 守卫跳过用量回填（写路径自 pi-durable 切换起暂无调用方，
+ * 见 httpLogService 头注释的 TODO）。
  *
  *   H1 内存会话（sessionRecords.isEphemeral）开着记录也不记：一行日志就是整段对话的快照，
  *      记下来它就不再只在内存里了。持久会话对照照常记。

@@ -7,7 +7,7 @@
  *  - RuntimeLogger     日志（可选）
  *
  * 会话存储由宿主经 SessionHostDeps 打开（durable 自己落盘），宿主不提供消息写入口。旧运行时的
- * 工具结果变换（ToolResultTransform）与请求日志（RuntimeHttpLog）两个 seam 随 HarnessSession 退场。
+ * 工具结果变换（ToolResultTransform）与请求日志（RuntimeHttpLog）两个 seam 随旧运行时（pi 0.80 harness）退场。
  */
 import type { ChatEvent, RuntimeStatus } from '@shuvix/chat-protocol/events'
 import type {

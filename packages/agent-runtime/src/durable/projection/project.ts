@@ -73,6 +73,10 @@ import type {
   SessionView,
   ToolRunView
 } from '@shuvix/chat-protocol/types/sessionView'
+import {
+  capabilitiesOfStorageKind,
+  DURABLE_SQLITE_1
+} from '@shuvix/chat-protocol/sessionStorageKind'
 import { isSystemNoticeText } from '@shuvix/chat-protocol/systemNoticeContract'
 import { hasThinkingContent } from '@shuvix/chat-protocol/utils/thinking'
 import { spillLocatorOf } from '../../toolOutput/spill'
@@ -647,7 +651,7 @@ export function projectSessionView(
     v: 1,
     sessionId: meta.sessionId,
     source: 'durable',
-    capabilities: { send: true, rollback: true, continue: true },
+    capabilities: capabilitiesOfStorageKind(DURABLE_SQLITE_1),
     conversationId: meta.conversationId,
     messages: core.messages,
     live: core.live,

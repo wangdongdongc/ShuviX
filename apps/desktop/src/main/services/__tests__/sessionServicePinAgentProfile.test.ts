@@ -25,7 +25,7 @@
  * 在假件里用**真判据**复算（`!BASE_PROFILE_NAMES.has(name) && !HOST_ONLY_PROFILE_NAMES.has(name)`，
  * 名单常量取真件）—— 真 agentService 要 electron + 用户目录，本文件够不到；假件退化成「恒 true」
  * 会让基座那一拒失去意义。invalidateAgent 用实例级 spy（经 this. 动态派发可拦截，保留穿透：底层
- * SessionManager.remove 对无运行时的会话直接 resolve）。
+ * 对无运行时的会话直接 resolve）。
  */
 import { describe, it, expect, beforeAll, beforeEach, vi, type MockInstance } from 'vitest'
 import {
@@ -39,8 +39,8 @@ const mocks = vi.hoisted(() => ({
   daoUpdateSettings: vi.fn(),
   getProfile: vi.fn<(name: string) => unknown>(),
   resolveProfileModelSpec: vi.fn(),
-  appendModelChange: vi.fn(),
-  appendThinkingLevelChange: vi.fn(),
+  recordSessionModel: vi.fn(),
+  recordSessionThinkingLevel: vi.fn(),
   broadcastSessionConfigChanged: vi.fn(),
   daoTouchActive: vi.fn()
 }))
@@ -63,8 +63,8 @@ vi.mock('../messageService', () => ({ messageService: {} }))
 vi.mock('../sessionStorage', () => ({
   isDurableSession: () => true,
   readSessionRunConfig: vi.fn(),
-  appendModelChange: mocks.appendModelChange,
-  appendThinkingLevelChange: mocks.appendThinkingLevelChange
+  recordSessionModel: mocks.recordSessionModel,
+  recordSessionThinkingLevel: mocks.recordSessionThinkingLevel
 }))
 vi.mock('../../i18n', () => ({ t: (key: string) => key }))
 vi.mock('../../utils/paths', () => ({ getTempWorkspace: vi.fn(), getToolResultsBase: vi.fn() }))
@@ -140,8 +140,8 @@ const pin = (name: string): Promise<PinResult> => sessionService.pinAgentProfile
 function expectNoSideEffects(): void {
   expect(mocks.daoUpdateSettings).not.toHaveBeenCalled()
   expect(invalidateSpy).not.toHaveBeenCalled()
-  expect(mocks.appendModelChange).not.toHaveBeenCalled()
-  expect(mocks.appendThinkingLevelChange).not.toHaveBeenCalled()
+  expect(mocks.recordSessionModel).not.toHaveBeenCalled()
+  expect(mocks.recordSessionThinkingLevel).not.toHaveBeenCalled()
   expect(mocks.broadcastSessionConfigChanged).not.toHaveBeenCalled()
   expect(mocks.resolveProfileModelSpec).not.toHaveBeenCalled()
   expect(mocks.daoTouchActive).not.toHaveBeenCalled()
@@ -227,7 +227,7 @@ describe('成功链', () => {
     // toEqual 不区分「缺省」与「值为 undefined」，思考档位那一格单独钉：没声明就不写种子、不回传 ——
     // 写了（哪怕写的是缺省档）就会盖掉 seedRunConfig 随后补上的父会话档位
     expect(res.applied?.thinkingLevel).toBeUndefined()
-    expect(mocks.appendThinkingLevelChange).not.toHaveBeenCalled()
+    expect(mocks.recordSessionThinkingLevel).not.toHaveBeenCalled()
     // 只落库一次：钉档案。档案声明的 mcp:/skill: 经 createAgent 的名单归一恒生效，
     // 不写进扩展能力勾选 —— 写了只会替换掉从父会话继承来的那份
     expect(mocks.daoUpdateSettings.mock.calls).toEqual([[SID, { agentProfile: 'myprof' }]])
@@ -256,7 +256,7 @@ describe('成功链', () => {
 
     const res = await pin('withmodel')
     expect(mocks.resolveProfileModelSpec).toHaveBeenCalledWith('openai/gpt-x')
-    expect(mocks.appendModelChange).toHaveBeenCalledWith(SID, 'openai', 'gpt-x')
+    expect(mocks.recordSessionModel).toHaveBeenCalledWith(SID, 'openai', 'gpt-x')
     expect(res.success).toBe(true)
     expect(res.applied?.model).toEqual(resolved)
     expect(res.modelUnavailable).toBeUndefined()
@@ -272,7 +272,7 @@ describe('成功链', () => {
     expect(res.success).toBe(true)
     expect(res.applied?.model).toBeUndefined()
     expect(res.modelUnavailable).toBe('openai/nope')
-    expect(mocks.appendModelChange).not.toHaveBeenCalled()
+    expect(mocks.recordSessionModel).not.toHaveBeenCalled()
     expect(res.applied?.tools).toEqual(['skill:x'])
     expect(mocks.broadcastSessionConfigChanged).toHaveBeenCalledWith(SID)
     // 档案本身照常生效（落库 + 失效重建）—— 模型不可用不阻断钉档案
@@ -304,18 +304,18 @@ describe('成功链', () => {
     const res = await pin('quiet')
 
     expect(res.success).toBe(true)
-    expect(mocks.appendThinkingLevelChange.mock.calls).toEqual([[SID, 'off']])
+    expect(mocks.recordSessionThinkingLevel.mock.calls).toEqual([[SID, 'off']])
     expect(res.applied?.thinkingLevel).toBe('off')
     // 种子在失效之后（旧运行时已不会再写树）、广播之前（前端收到通知时树上已经是新档位）
     const order = [
       invalidateSpy.mock.invocationCallOrder[0],
-      mocks.appendThinkingLevelChange.mock.invocationCallOrder[0],
+      mocks.recordSessionThinkingLevel.mock.invocationCallOrder[0],
       mocks.broadcastSessionConfigChanged.mock.invocationCallOrder[0]
     ]
     expect(order).toEqual([...order].sort((a, b) => a - b))
     // 只声明了档位：模型那一行不动（不解析、不写种子）
     expect(mocks.resolveProfileModelSpec).not.toHaveBeenCalled()
-    expect(mocks.appendModelChange).not.toHaveBeenCalled()
+    expect(mocks.recordSessionModel).not.toHaveBeenCalled()
   })
 
   it('PIN-10 模型不可解析 + 声明 low：思考种子照写、applied.thinkingLevel 回传；modelUnavailable 回传原串、不写模型种子', async () => {
@@ -327,11 +327,11 @@ describe('成功链', () => {
 
     const res = await pin('lowthink')
     expect(res.success).toBe(true)
-    expect(mocks.appendThinkingLevelChange.mock.calls).toEqual([[SID, 'low']])
+    expect(mocks.recordSessionThinkingLevel.mock.calls).toEqual([[SID, 'low']])
     expect(res.applied?.thinkingLevel).toBe('low')
     expect(res.modelUnavailable).toBe('openai/nope')
     expect(res.applied?.model).toBeUndefined()
-    expect(mocks.appendModelChange).not.toHaveBeenCalled()
+    expect(mocks.recordSessionModel).not.toHaveBeenCalled()
   })
 })
 

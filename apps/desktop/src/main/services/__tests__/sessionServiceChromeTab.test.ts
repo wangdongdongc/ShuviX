@@ -10,7 +10,7 @@
  *     settings 里没有 chromeTab 键；
  *   - `list()`（侧栏）不含绑定合法的标签页会话，其余按原顺序保留（绑定不合法的旧行照列）。
  *
- * mock 面沿用 sessionServiceEnabledTools.test.ts（内存行表 + 真 SessionManager），外加 findAll。
+ * mock 面沿用 sessionServiceEnabledTools.test.ts（内存行表 + 会话运行时换成假宿主），外加 findAll。
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -61,7 +61,7 @@ vi.mock('../messageService', () => ({ messageService: { clear: vi.fn() } }))
 vi.mock('../sessionStorage', () => ({
   isDurableSession: () => true,
   readSessionRunConfig: mocks.readSessionRunConfig,
-  appendModelChange: vi.fn()
+  recordSessionModel: vi.fn()
 }))
 vi.mock('../../i18n', () => ({ t: (key: string) => key }))
 vi.mock('../../utils/paths', () => ({

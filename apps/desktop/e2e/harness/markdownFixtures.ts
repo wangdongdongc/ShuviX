@@ -11,7 +11,7 @@
  *
  * 协作编辑（`markdown-coedit`）另外用到两件：`captureEvents`（在 md 窗口里把本会话余下的 ChatEvent 记进
  * 页面全局 —— run 的起止（`agent_start` / `agent_end`）从这里读；P3-08 起流式参数、工具的起止与询问都不再是
- * 事件，`toolStart` / `toolEnd` / `liveArgs` / `view` 经 md 窗口自己的 `window.api.sync` 读会话视图）与
+ * 事件，`toolStarted` / `toolResult` / `liveArgs` / `view` 经 md 窗口自己的 `window.api.sync` 读会话视图）与
  * `readOnlyDir`（让自动保存失败：保存是「同目录临时文件 + rename」，所以要锁的是**目录**而不是文件 ——
  * 只读文件照样被 rename 盖掉）。
  */
@@ -156,6 +156,17 @@ export interface CapturedEvent {
   hasToolCallId: boolean
 }
 
+/** 探针在会话视图里看见一次工具调用的某个时刻（开始执行 / 结果落盘）—— 不是事件 */
+export interface ToolCallSighting {
+  /** 探针看见它的时刻（Date.now()） */
+  at: number
+  toolCallId: string
+  toolName?: string
+  /** 只在结果落盘时给出 */
+  isError?: boolean
+  result?: string
+}
+
 export interface EventLog {
   /** 到目前为止记下的全部事件（按到达顺序） */
   all(): Promise<CapturedEvent[]>
@@ -169,14 +180,14 @@ export interface EventLog {
   ): Promise<CapturedEvent>
   /**
    * 某次工具调用开始执行（视图的 `toolRuns[id]` 到了 running / done，或块上已有结果）；`at` = 探针
-   * 看见它的时刻（40ms 一拍，加上视图约 10Hz 的节流）。形状沿用旧的 `tool_start` 事件
+   * 看见它的时刻（40ms 一拍，加上视图约 10Hz 的节流）
    */
-  toolStart(toolCallId: string, timeoutMs?: number): Promise<CapturedEvent>
+  toolStarted(toolCallId: string, timeoutMs?: number): Promise<ToolCallSighting>
   /**
-   * 某次工具调用的结果落盘（视图消息里那个工具块带上了 `result`）；`at` = 探针看见它的时刻。形状沿用
-   * 旧的 `tool_end` 事件（`isError` / `result`）
+   * 某次工具调用的结果落盘（视图消息里那个工具块带上了 `result`，交出 `isError` / `result`）；
+   * `at` = 探针看见它的时刻
    */
-  toolEnd(toolCallId: string, timeoutMs?: number): Promise<CapturedEvent>
+  toolResult(toolCallId: string, timeoutMs?: number): Promise<ToolCallSighting>
   /** 正在流式的那张卡上，这次调用还没解析完的参数原文（`live.argsText[id]`）；没有 → undefined */
   liveArgs(toolCallId: string): Promise<string | undefined>
   /** 会话此刻的视图 */
@@ -232,7 +243,7 @@ export async function captureEvents(client: CdpClient, sid: string): Promise<Eve
       await client.eval(`(window.__e2eCoEvents = [], true)`)
     },
     waitFor,
-    toolStart: (toolCallId, timeoutMs) =>
+    toolStarted: (toolCallId, timeoutMs) =>
       fastUntil(
         async () => {
           const v = await view()
@@ -240,34 +251,30 @@ export async function captureEvents(client: CdpClient, sid: string): Promise<Eve
           const run = v.toolRuns[toolCallId]
           const done = toolResultsIn(v.messages).find((r) => r.toolCallId === toolCallId)
           if (!done && run?.status !== 'running' && run?.status !== 'done') return null
-          const event: CapturedEvent = {
+          const sighting: ToolCallSighting = {
             at: Date.now(),
-            type: 'tool_start',
             toolCallId,
-            ...(done ? { toolName: done.toolName } : {}),
-            hasToolCallId: true
+            ...(done ? { toolName: done.toolName } : {})
           }
-          return event
+          return sighting
         },
         `tool ${toolCallId} started (view)`,
         timeoutMs
       ),
-    toolEnd: (toolCallId, timeoutMs) =>
+    toolResult: (toolCallId, timeoutMs) =>
       fastUntil(
         async () => {
           const v = await view()
           const done = v && toolResultsIn(v.messages).find((r) => r.toolCallId === toolCallId)
           if (!done) return null
-          const event: CapturedEvent = {
+          const sighting: ToolCallSighting = {
             at: Date.now(),
-            type: 'tool_end',
             toolCallId,
             toolName: done.toolName,
             isError: done.isError,
-            result: done.result,
-            hasToolCallId: true
+            result: done.result
           }
-          return event
+          return sighting
         },
         `tool ${toolCallId} result (view)`,
         timeoutMs

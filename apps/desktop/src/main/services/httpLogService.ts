@@ -15,7 +15,7 @@ export const HTTP_LOG_ENABLED_KEY = 'httpLog.enabled'
  * 用户在「LLM 日志」页手动开启后才记录。
  *
  * 写路径（`logRequest` / `updateUsage`）自 pi-durable 切换起没有调用方：旧运行时的请求钩子随
- * HarnessSession 删了，durable 没有 provider payload 钩子，这期间不记新请求（迁移时接受的取舍），
+ * 旧运行时（pi 0.80 harness）删了，durable 没有 provider payload 钩子，这期间不记新请求（迁移时接受的取舍），
  * 已有的记录照常可查、可清。TODO(pi-durable p5): 在 Models 包装层注入 onPayload，重新接上这两个口。
  */
 export class HttpLogService {

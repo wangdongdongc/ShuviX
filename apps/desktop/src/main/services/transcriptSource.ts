@@ -6,7 +6,7 @@
  *    agent-runtime 的 `readTranscriptDigest`（当前对话的活上下文）。**只 peek**：存储不存在就是空转写；
  *    从不打开 / 创建存储、从不建 agent（`open` / `ensureAgentSession` / `openSessionStorage` 一个都不碰，
  *    P2-14-37 扫源码钉住）。peek 会重开一条关掉了但存储还在的会话，这是允许的（LRU 照常回收它）。
- *  - `harness-v3-jsonl`，或查不到行（与 `storageKindOf` / messageService 同一口径）：照旧
+ *  - `harness-v3-jsonl`，或查不到行（`isLegacySession` 的缺省口径，与 messageService 同一份）：照旧
  *    `messageService.listBySession`（冻结投影），经 `transcriptItemsOf` 换成同一种形状。
  *  - 不认识的存储类型（更新的版本写的）：空转写，哪个读者都不跑。
  *
@@ -19,14 +19,11 @@ import {
   type TranscriptAssistantItem,
   type TranscriptUserItem
 } from '@shuvix/agent-runtime'
-import {
-  DURABLE_SQLITE_1,
-  HARNESS_V3_JSONL,
-  storageKindOf
-} from '@shuvix/chat-protocol/sessionStorageKind'
+import { DURABLE_SQLITE_1, storageKindOf } from '@shuvix/chat-protocol/sessionStorageKind'
 import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
 import { messageService } from './messageService'
 import { getSessionHost } from './sessionHost'
+import { isLegacySession } from './legacySession'
 import { sessionRecords } from './sessionRecords'
 
 /**
@@ -79,11 +76,12 @@ export function transcriptItemsOf(messages: readonly ChatMessage[]): TranscriptI
 
 /** 一条会话的转写（当前上下文，旧 → 新）；路由见文件头 */
 export async function readSessionTranscript(sessionId: string): Promise<TranscriptItem[]> {
-  const kind = storageKindOf(sessionRecords.pick(sessionId, ['storageKind']) ?? {})
-  if (kind === HARNESS_V3_JSONL) {
+  if (isLegacySession(sessionId)) {
     return transcriptItemsOf(await messageService.listBySession(sessionId))
   }
-  if (kind !== DURABLE_SQLITE_1) return [] // 更新的版本写的格式：不认识就不读（PIN-08）
+  if (storageKindOf(sessionRecords.pick(sessionId, ['storageKind']) ?? {}) !== DURABLE_SQLITE_1) {
+    return [] // 更新的版本写的格式：不认识就不读（PIN-08）
+  }
   const session = await getSessionHost().peek(sessionId)
   if (session === undefined) return [] // 从未发过消息（存储不存在）/ 宿主已封存
   return (await readTranscriptDigest(session)).items

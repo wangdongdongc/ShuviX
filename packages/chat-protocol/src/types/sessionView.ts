@@ -8,11 +8,12 @@
  */
 import type { AssistantMessage, ChatMessage, ToolResultDetails } from './chatMessage'
 import type { InputRequest } from './inputRequest'
+import { capabilitiesOfStorageKind } from '../sessionStorageKind'
 
 /** 视图从哪来：durable 存储 / 旧格式存储（只读）/ 还没有存储（新会话） */
 export type SessionViewSource = 'durable' | 'legacy' | 'none'
 
-/** 这条会话能做什么（按存储种类定，见决策 #10） */
+/** 这条会话能做什么（按存储种类定，见决策 #10；表在 `sessionStorageKind.ts` 的 `capabilitiesOfStorageKind`） */
 export interface SessionViewCapabilities {
   send: boolean
   rollback: boolean
@@ -118,7 +119,7 @@ export function emptySessionView(sessionId: string): SessionView {
     v: 1,
     sessionId,
     source: 'none',
-    capabilities: { send: true, rollback: false, continue: false },
+    capabilities: capabilitiesOfStorageKind(null),
     conversationId: null,
     messages: [],
     live: null,

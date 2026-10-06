@@ -458,7 +458,7 @@ describe('doc_edit / doc_insert 在缓冲上执行', () => {
       },
       { text: 'ok' }
     ])
-    await w.ev.toolEnd('mc4_edit')
+    await w.ev.toolResult('mc4_edit')
     // 痕迹：看见之后 2.6s 才移除 —— 趁早看
     const marks = await poll(
       async () => {
@@ -572,7 +572,7 @@ describe('doc_edit / doc_insert 在缓冲上执行', () => {
       ['mc7_both', 'not both']
     ]
     for (const [id, words] of expected) {
-      const end = await w.ev.toolEnd(id)
+      const end = await w.ev.toolResult(id)
       expect(end.isError, id).toBe(true)
       const msg = toolMessage(id)
       expect(msg, id).toBeDefined()
@@ -685,7 +685,7 @@ describe('生成期间的虚影', () => {
     expect(await w.pane.ghosts()).toHaveLength(1)
 
     await releaseHold()
-    await w.ev.toolEnd('mc9_edit')
+    await w.ev.toolResult('mc9_edit')
     await poll(async () => (await w.pane.ghosts()).length === 0, 'ghost gone after the edit ran')
     expect(await w.pane.targetText()).toBe('')
     const text = await w.pane.docText()
@@ -723,8 +723,8 @@ describe('生成期间的虚影', () => {
       await sleep(100)
     }
     await releaseHold()
-    expect((await w.ev.toolEnd('mc10_twice')).isError).toBe(true)
-    expect((await w.ev.toolEnd('mc10_none')).isError).toBe(true)
+    expect((await w.ev.toolResult('mc10_twice')).isError).toBe(true)
+    expect((await w.ev.toolResult('mc10_none')).isError).toBe(true)
     await w.ev.runEnd()
     expect(await w.pane.docText()).toBe(before)
   })
@@ -767,7 +767,7 @@ describe('生成期间的虚影', () => {
 
     await releaseHold()
     for (const id of ['mc11_after', 'mc11_before', 'mc11_end']) {
-      expect((await w.ev.toolEnd(id)).isError, id).toBeFalsy()
+      expect((await w.ev.toolResult(id)).isError, id).toBeFalsy()
     }
     await poll(async () => (await w.pane.ghosts()).length === 0, 'insert ghosts gone')
     const text = await w.pane.docText()
@@ -886,7 +886,7 @@ describe('用户正在那一段打字就等他停手', () => {
     expect(await w.pane.docText()).not.toContain('TWO-WAITED-13')
 
     const { typed, lastAt } = await typing
-    const end = await w.ev.toolEnd('mc13_edit', 15_000)
+    const end = await w.ev.toolResult('mc13_edit', 15_000)
     expect(end.isError).toBeFalsy()
     const delay = end.at - lastAt
     expect(delay).toBeGreaterThanOrEqual(1300)
@@ -919,7 +919,7 @@ describe('用户正在那一段打字就等他停手', () => {
     // 等着的时候，把光标挪进原文中间 —— 之后打的字把原文改掉
     await w.pane.placeCaret({ after: 'two body' })
     await typing
-    const end = await w.ev.toolEnd('mc14_edit', 15_000)
+    const end = await w.ev.toolResult('mc14_edit', 15_000)
     expect(end.isError).toBe(true)
     await w.ev.runEnd()
     expect(await waitToolMessage('mc14_edit')).toContain('does not match')
@@ -939,8 +939,8 @@ describe('用户正在那一段打字就等他停手', () => {
       },
       { text: 'ok' }
     ])
-    const start = await w.ev.toolStart('mc15_edit')
-    const end = await w.ev.toolEnd('mc15_edit', 20_000)
+    const start = await w.ev.toolStarted('mc15_edit')
+    const end = await w.ev.toolResult('mc15_edit', 20_000)
     expect(end.isError).toBeFalsy()
     const took = end.at - start.at
     expect(took).toBeGreaterThanOrEqual(9500)
@@ -1006,7 +1006,7 @@ describe('用户正在那一段打字就等他停手', () => {
     )
     expect(await w.pane.docText()).not.toContain('item bravo-16c')
     await w.pane.insertText('か')
-    const end = await w.ev.toolEnd('mc16_ime', 15_000)
+    const end = await w.ev.toolResult('mc16_ime', 15_000)
     expect(end.isError).toBeFalsy()
     await w.ev.runEnd()
     expect(await waitToolMessage('mc16_ime')).toContain('(waited ')
@@ -1029,7 +1029,7 @@ describe('用户正在那一段打字就等他停手', () => {
       { text: 'ok' }
     ])
     for (const id of ['mc17_edit', 'mc17_insert']) {
-      expect((await w.ev.toolEnd(id)).isError, id).toBeFalsy()
+      expect((await w.ev.toolResult(id)).isError, id).toBeFalsy()
     }
     expect(await w.pane.docText()).toContain('- item ALPHA-17\n- item inserted-17\n- item bravo')
   })
@@ -1051,7 +1051,7 @@ describe('改动痕迹与指路条', () => {
       },
       { text: 'ok' }
     ])
-    await w.ev.toolEnd('mc18_on')
+    await w.ev.toolResult('mc18_on')
     const fadingAt = await poll(
       async () => {
         const ms = await w.pane.changeMarks()
@@ -1122,7 +1122,7 @@ describe('改动痕迹与指路条', () => {
       { toolCalls: [call('mc18_del', 'doc_edit', { find: `${row(5)}\n`, replace: '' })] },
       { text: 'ok' }
     ])
-    await w.ev.toolEnd('mc18_del')
+    await w.ev.toolResult('mc18_del')
     await poll(async () => (await w.pane.deletionBars()) > barsBefore, 'deletion bar drawn', 3000)
     const text = await w.pane.docText()
     expect(text).not.toContain(row(5))
@@ -1153,7 +1153,7 @@ describe('改动痕迹与指路条', () => {
       return ind?.direction === 'down' && ind.text === 'ShuviX is working below'
     }, 'indicator: working below')
     await releaseHold()
-    await w.ev.toolEnd('mc19_edit')
+    await w.ev.toolResult('mc19_edit')
     await poll(
       async () => (await w.pane.indicator())?.text === 'ShuviX changed 1 place below',
       'indicator: changed 1 place below'

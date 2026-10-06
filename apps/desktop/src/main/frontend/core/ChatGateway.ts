@@ -80,13 +80,13 @@ export interface ChatGateway {
   // ─── 运行时调整 ────────────────────────────────
 
   /**
-   * 切换模型：往会话树追加 model_change entry。**只在会话没有 Agent 运行时的时候接受** ——
+   * 切换模型：写会话设置 `settings.model`（recordSessionModel）。**只在会话没有 Agent 运行时的时候接受** ——
    * 模型与扩展能力一样只在创建 Agent 那一刻读一次；运行时已存在 / 正在创建 / 正在关停时
    * 什么也不写、返回 false。想换模型先 `destroyAgent`。
    */
   setModel(sessionId: string, provider: string, model: string): Promise<boolean>
 
-  /** 设置思考深度（同上，落 thinking_level_change entry） */
+  /** 设置思考深度（写会话设置 `settings.thinkingLevel`，recordSessionThinkingLevel） */
   setThinkingLevel(sessionId: string, level: ThinkingLevel): Promise<void>
 
   // 注：没有 setEnabledTools —— 扩展能力勾选是会话设置，只在 Agent 未创建时可改

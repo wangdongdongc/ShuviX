@@ -12,8 +12,8 @@
  *  2. **没有标题特例** —— 自动标题是 hook 派发的 titler agent，发的是普通的对话请求（带 `session`
  *     工具），与根会话的请求一样从队列取脚本。要让它不打乱 FIFO，用例给 titler 写带 `when` 的脚本
  *     按内容认领（见 hooks/autoTitle、chat/chat-stream）。
- *  3. **usage 远小于 contextWindow** —— 否则 `maybeAutoCompact` 会在轮末触发，
- *     用例被压缩污染。脚本里写几百的数字即可（模型 contextWindow 由
+ *  3. **usage 远小于 contextWindow** —— 否则 durable 的自动压缩（阈值按上下文窗口算）会在
+ *     轮末触发，用例被压缩污染。脚本里写几百的数字即可（模型 contextWindow 由
  *     `seedFakeProvider` 设成 200k）。
  *
  * SSE 形状对齐 pi-ai 的 openai-completions 适配器（`dist/api/openai-completions.js`）：

@@ -36,7 +36,7 @@
  * 达不到上沿，边界不推进，这个模块等于不存在，也就不会为了省几十 token 去打穿缓存。
  *
  * 现状：pi-durable 切换（P1-01）之后**不接线**，这是迁移时的决定，不是遗漏 —— 旧接线点是 AgentHarness 的
- * `before_provider_payload` 钩子，随 harnessSession.ts 一并删除；durable 自带后台压缩，先看压缩频率再说。
+ * `before_provider_payload` 钩子，随旧运行时（`harness/`）一并删除；durable 自带后台压缩，先看压缩频率再说。
  * 纯函数与单测原样保留。TODO(pi-durable p5): 观察压缩频率后决定是否恢复；恢复的话接 durable 的
  * `beforeRequest` 钩子，边界存在对话级文档里（重启之后边界不能跳）。
  */

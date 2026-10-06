@@ -48,7 +48,7 @@ export type InterruptedSendPolicy = 'abort-then-send' | 'continue-then-queue'
 
 export const DEFAULT_INTERRUPTED_SEND_POLICY: InterruptedSendPolicy = 'abort-then-send'
 
-/** LRU 保留的空闲会话数上限（与旧 sessionTreeRegistry 相同） */
+/** LRU 保留的空闲会话数上限（与旧运行时的会话树缓存相同） */
 export const DEFAULT_MAX_IDLE_OPEN = 8
 
 /** 系统通知自动续跑的合并窗口（几条后台任务同一时刻跑完时只起一轮） */

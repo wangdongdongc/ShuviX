@@ -7,7 +7,7 @@
  * 如今可以带图、也可以是多段文字，这个分歧就从边角变成了常态。
  *
  * 这里钉函数本身（TRT-1 ~ 3）；重开投影对着同一个函数断言 → legacy/harnessV3/__tests__/projection.test.ts
- *（TRT-5）。旧运行时的广播路径（缺省转换 TRT-4、桌面实时管线 TRT-6）随 HarnessSession 一起退场；
+ *（TRT-5）。旧运行时的广播路径（缺省转换 TRT-4、桌面实时管线 TRT-6）随旧运行时（pi 0.80 harness）一起退场；
  * durable 条目的投影（phase 3）同样该用这个函数。
  */
 import { describe, it, expect } from 'vitest'

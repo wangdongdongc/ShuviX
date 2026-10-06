@@ -12,8 +12,8 @@
  *   - 写入是**整份替换**：去首尾空白、去空、去重保序，不按「这个库此刻在不在」过滤 ——
  *     库改了名还留在选择里，用的时候才发现；过滤掉就是永久丢项。
  *
- * mock 面照抄 sessionServiceEnabledTools.test.ts（import 图全换假件、真 SessionManager、
- * `AgentSession.create` 可捕获、sessionDao / projectDao 是一张内存行表）。
+ * mock 面照抄 sessionServiceEnabledTools.test.ts（import 图全换假件、会话运行时换成假宿主、
+ * sessionDao / projectDao 是一张内存行表）。
  */
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest'
 import { fakeHost, gate, lockRecord, resetFakeHost } from './support/fakeSessionHost'
@@ -65,7 +65,7 @@ vi.mock('../messageService', () => ({ messageService: { clear: vi.fn() } }))
 vi.mock('../sessionStorage', () => ({
   isDurableSession: () => true,
   readSessionRunConfig: mocks.readSessionRunConfig,
-  appendModelChange: vi.fn()
+  recordSessionModel: vi.fn()
 }))
 vi.mock('../../i18n', () => ({ t: (key: string) => key }))
 vi.mock('../../utils/paths', () => ({

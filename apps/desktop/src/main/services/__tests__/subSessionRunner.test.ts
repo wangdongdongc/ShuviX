@@ -37,8 +37,8 @@ const mocks = vi.hoisted(() => ({
   ensureAgentSession: vi.fn(),
   deliver: vi.fn(),
   gatewayPrompt: vi.fn(),
-  appendModelChange: vi.fn(),
-  appendThinkingLevelChange: vi.fn(),
+  recordSessionModel: vi.fn(),
+  recordSessionThinkingLevel: vi.fn(),
   findLastBySession: vi.fn(),
   warn: vi.fn(),
   durable: { value: true }
@@ -69,8 +69,8 @@ vi.mock('../../services/messageService', () => ({
 vi.mock('../../services/sessionStorage', () => ({
   // 缺省都是新格式会话（答复问门面的 lastAnswer）；旧格式那一条用例把它关掉（PIN-12）
   isDurableSession: () => mocks.durable.value,
-  appendModelChange: mocks.appendModelChange,
-  appendThinkingLevelChange: mocks.appendThinkingLevelChange
+  recordSessionModel: mocks.recordSessionModel,
+  recordSessionThinkingLevel: mocks.recordSessionThinkingLevel
 }))
 vi.mock('../../logger', () => ({
   createLogger: () => ({ info: vi.fn(), warn: mocks.warn, error: vi.fn(), debug: vi.fn() })
@@ -264,7 +264,7 @@ describe('create —— 继承与上限', () => {
       thinkingLevel: 'medium'
     })
     await runner.create(PARENT, {})
-    expect(mocks.appendModelChange).toHaveBeenCalledWith(CHILD, 'p', 'opus')
+    expect(mocks.recordSessionModel).toHaveBeenCalledWith(CHILD, 'p', 'opus')
   })
 
   /** 父会话此刻的模型类运行配置（模型 / 思考档位）—— 种子的来源 */
@@ -282,8 +282,8 @@ describe('create —— 继承与上限', () => {
     parentConfig()
     await runner.create(PARENT, {})
     expect(mocks.pinAgentProfile).not.toHaveBeenCalled()
-    expect(mocks.appendModelChange).toHaveBeenCalledWith(CHILD, 'p', 'opus')
-    expect(mocks.appendThinkingLevelChange).toHaveBeenCalledWith(CHILD, 'medium')
+    expect(mocks.recordSessionModel).toHaveBeenCalledWith(CHILD, 'p', 'opus')
+    expect(mocks.recordSessionThinkingLevel).toHaveBeenCalledWith(CHILD, 'medium')
   })
 
   it('SR-2 点名即钉且 trim：恰一次，顺序在 create 之后、resolveRunConfig 之前', async () => {
@@ -305,17 +305,17 @@ describe('create —— 继承与上限', () => {
       applied: { model: { provider: 'p', model: 'declared', capabilities: {} }, tools: ['skill:x'] }
     })
     await runner.create(PARENT, { agentProfile: 'declared-prof' })
-    expect(mocks.appendModelChange).not.toHaveBeenCalled()
+    expect(mocks.recordSessionModel).not.toHaveBeenCalled()
     // 档案没声明思考档位 ⇒ 随父
-    expect(mocks.appendThinkingLevelChange).toHaveBeenCalledWith(CHILD, 'medium')
+    expect(mocks.recordSessionThinkingLevel).toHaveBeenCalledWith(CHILD, 'medium')
   })
 
   it('SR-4 档案没声明模型 ⇒ 模型与思考档位随父（工具的「空声明不算意见」归 pinAgentProfile，见 PIN-7）', async () => {
     parentConfig()
     mocks.pinAgentProfile.mockResolvedValue({ success: true, applied: { tools: [] } })
     await runner.create(PARENT, { agentProfile: 'coding' })
-    expect(mocks.appendModelChange).toHaveBeenCalledWith(CHILD, 'p', 'opus')
-    expect(mocks.appendThinkingLevelChange).toHaveBeenCalledWith(CHILD, 'medium')
+    expect(mocks.recordSessionModel).toHaveBeenCalledWith(CHILD, 'p', 'opus')
+    expect(mocks.recordSessionThinkingLevel).toHaveBeenCalledWith(CHILD, 'medium')
   })
 
   it('SR-5 被拒不失败：会话已建好且可用（落在自己形态的基座上），照常返回 id，模型与思考档位按父级种，并留一行 warn', async () => {
@@ -328,8 +328,8 @@ describe('create —— 继承与上限', () => {
     const res = await runner.create(PARENT, { agentProfile: 'work' })
     expect(res).toEqual({ id: CHILD, title: 'Child' })
     // 拒绝 = 档案没有意见：继承照旧（模型与思考档位都按父会话种）
-    expect(mocks.appendModelChange).toHaveBeenCalledWith(CHILD, 'p', 'opus')
-    expect(mocks.appendThinkingLevelChange).toHaveBeenCalledWith(CHILD, 'medium')
+    expect(mocks.recordSessionModel).toHaveBeenCalledWith(CHILD, 'p', 'opus')
+    expect(mocks.recordSessionThinkingLevel).toHaveBeenCalledWith(CHILD, 'medium')
     // 日志是「点名没生效」唯一可查的线索：带上点的名字与拒绝理由
     const warned = mocks.warn.mock.calls.map((c) => String(c[0]))
     expect(warned.some((m) => m.includes('work') && m.includes('base profile'))).toBe(true)
@@ -349,8 +349,8 @@ describe('create —— 继承与上限', () => {
       applied: { thinkingLevel: 'off', tools: [] }
     })
     await runner.create(PARENT, { agentProfile: 'quiet-prof' })
-    expect(mocks.appendThinkingLevelChange).not.toHaveBeenCalled()
-    expect(mocks.appendModelChange).toHaveBeenCalledWith(CHILD, 'p', 'opus')
+    expect(mocks.recordSessionThinkingLevel).not.toHaveBeenCalled()
+    expect(mocks.recordSessionModel).toHaveBeenCalledWith(CHILD, 'p', 'opus')
   })
 
   it('SR-8 档案模型与思考档位都声明了 ⇒ runner 两个种子都不写（两项都是档案的意见）', async () => {
@@ -364,8 +364,8 @@ describe('create —— 继承与上限', () => {
       }
     })
     await runner.create(PARENT, { agentProfile: 'full-prof' })
-    expect(mocks.appendModelChange).not.toHaveBeenCalled()
-    expect(mocks.appendThinkingLevelChange).not.toHaveBeenCalled()
+    expect(mocks.recordSessionModel).not.toHaveBeenCalled()
+    expect(mocks.recordSessionThinkingLevel).not.toHaveBeenCalled()
   })
 
   it('总数上限：到顶就拒绝并列出现有子会话（让模型复用而不是继续开）', async () => {

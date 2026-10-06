@@ -1365,8 +1365,8 @@ export async function createPinnedChildSession(
  *
  *  - 先 `ensureDefaultModel`：没有可用模型时 durable 的锁不建 agent（P3-06 PIN-01），prompt 当场被拒、
  *    用户条目根本不落盘；有了占位模型，失败才落在 LLM 那一步（本 helper 一直假定的形状）。
- *  - `agent.prompt` 在这一轮**落定**时才返回；占位提供商连不上（`bad port`），而连接错误可重试（P3-06 的
- *    退避：1 s、2 s、4 s …），这一轮会挂好几分钟。所以不 await 它：等用户条目出现在 `message.list` 里（或
+ *  - `agent.prompt` 在这一轮**落定**时才返回；占位提供商连不上（`bad port`），而连接错误可重试（durable 的
+ *    退避：从 2 s 起翻倍，封顶 60 s），这一轮会挂好几分钟。所以不 await 它：等用户条目出现在 `message.list` 里（或
  *    prompt 先落定），再给这一轮 1.5 s 自己落定（接了 fake provider 的会话照常跑完），还没落定就
  *    `agent.abort` 掉并等 prompt 返回 —— 运行时留着（`created` 不变），会话不再忙。
  */
