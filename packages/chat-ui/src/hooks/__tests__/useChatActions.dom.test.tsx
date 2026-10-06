@@ -3,15 +3,18 @@
  * useChatActions 的回退 / 重新生成（P3-10b，docs/pi-durable/p3-10b1112-test-design.md「Renderer」）。
  *
  *   P3-10b-12 confirmRollback：message.rollback → agent.init → requestDraftRestore（原文 + 内联 Token）；
- *             从不 message.list、从不 setMessages —— 列表等视图推过来（P3-08 的 applySessionView）
+ *             从不 message.list —— 列表等视图推过来（P3-08 的 applySessionView 是唯一写入口）
  *   P3-10b-13 守卫不变：目标不在 / 是助手消息 / 不是用户文本 / 没有 HostApi（渠道端）→ 零 IPC、不回填
  *   P3-10b-14 回退被拒（`{success:false}`，PIN-02）：不回填草稿、不 init，输入框原样
  *   P3-10b-15 重新生成 = 回退 + 重发：rollback(最近的 user/text) → init → 乐观占位（原文 + Token）→ prompt 一次，
  *             没有 message.list；占位在 finally 撤（prompt reject 也撤）；回退被拒 → 没有占位、不 prompt
  *   P3-10b-16 重新生成的重入（PIN-07）：第一次没落定前连点两下 → 一次回退、一次 prompt
- *   P3-10b-17 重挂之后的 store（待 P3-08：applySessionView 是唯一写入口，见 it.todo）
- *   P3-10b-19 回退入口的门控（PIN-07）：乐观占位没有回退；会话不能回退（旧格式）→ 没有回退 / 重新生成；
- *             durable 会话有（ThreadDrawer 与 Conversation 同一接线）
+ *   P3-10b-17 重挂之后的 store：重新生成期间视图送来不含 U / A 的列表 → messages 换掉、占位还在；之后的视图
+ *             带上新 user 条目 → 占位撤（Q-P3-07）；inputText 与草稿不动
+ *   P3-10b-19 回退入口的门控（PIN-07）：乐观占位没有回退；视图 `capabilities.rollback` 为 false（旧格式 /
+ *             none / 还没有视图）→ 没有回退 / 重新生成；durable 视图有（ThreadDrawer 与 Conversation 同一接线）
+ *
+ * store 只经视图喂：`seed()` 把消息装进一份 `SessionView`，经 `applySessionView` 写进去（同生产路径）。
  *
  * 后端整个是假的：`window.api` 一个对象同时充当 HostApi 与 SessionChannelApi，调用按到达顺序记进同一条
  * timeline；包入口 `@shuvix/chat-ui` 顶掉（同 inputAreaWelcomeSend.dom.test.tsx）。
@@ -29,6 +32,7 @@ import type {
   InlineToken,
   UserTextMessage
 } from '@shuvix/chat-protocol/types/chatMessage'
+import { emptySessionView, type SessionView } from '@shuvix/chat-protocol/types/sessionView'
 
 interface Call {
   name: string
@@ -49,7 +53,14 @@ vi.mock('@shuvix/chat-ui', () => {
   }
 })
 
-import { PENDING_PROMPT_ID, useChatStore, type Session } from '../../stores/chatStore'
+import {
+  PENDING_PROMPT_ID,
+  applySessionView,
+  selectPendingPrompt,
+  useChatStore,
+  type Session
+} from '../../stores/chatStore'
+import { V, resetStore } from '../../__tests__/support/views'
 import { selectRollbackCapable, useChatActions, type UseChatActionsReturn } from '../useChatActions'
 import { MessageRenderer } from '../../components/chat/MessageRenderer'
 import { ThreadDrawer } from '../../components/chat/ThreadDrawer'
@@ -100,17 +111,23 @@ const errorEvent = (id: string): ErrorEventMessage => ({
   metadata: null
 })
 
-const row = (id: string, storageKind?: string): Session => ({
+const row = (id: string): Session => ({
   id,
   title: id,
   projectId: null,
   parentId: null,
-  ...(storageKind ? { storageKind } : {}),
   settings: { enabledTools: [] },
   createdAt: 0,
   updatedAt: 0,
   lastActiveAt: 0
 })
+
+/** 旧格式（harness-v3-jsonl）会话的视图：只读，三项能力都关（同 agent-runtime 的 legacySessionView） */
+const LEGACY: Partial<SessionView> = {
+  source: 'legacy',
+  capabilities: { send: false, rollback: false, continue: false },
+  conversationId: null
+}
 
 // ─── 假后端 ────────────────────────────────────────────────────────────────
 
@@ -151,19 +168,12 @@ const names = (): string[] => timeline.map((c) => c.name)
 const callsOf = (name: string): unknown[][] =>
   timeline.filter((c) => c.name === name).map((c) => c.args)
 
-/** 被记进 timeline 的两个 store 写入口（模块级只包一次） */
-const original = {
-  requestDraftRestore: useChatStore.getState().requestDraftRestore,
-  setMessages: useChatStore.getState().setMessages
-}
+/** 被记进 timeline 的 store 写入口（模块级只包一次） */
+const originalRequestDraftRestore = useChatStore.getState().requestDraftRestore
 useChatStore.setState({
   requestDraftRestore: (content, tokens) => {
     timeline.push({ name: 'store.requestDraftRestore', args: [content, tokens] })
-    original.requestDraftRestore(content, tokens)
-  },
-  setMessages: (messages) => {
-    timeline.push({ name: 'store.setMessages', args: [messages] })
-    original.setMessages(messages)
+    originalRequestDraftRestore(content, tokens)
   }
 })
 
@@ -216,16 +226,12 @@ async function pickRollback(messageId: string): Promise<void> {
 
 const store = (): ReturnType<typeof useChatStore.getState> => useChatStore.getState()
 
-function seed(messages: ChatMessage[], sessions: Session[] = [row(SID, 'durable-sqlite-1')]): void {
-  useChatStore.setState({
-    sessions,
-    messages,
-    sessionPendingPrompt: {},
-    sessionThreadOpen: {},
-    draftRestoreRequest: null,
-    inputText: ''
-  })
+/** 选中 SID，把 `messages` 装进它的视图（缺省 durable，可回退）经 applySessionView 写进 store */
+function seed(messages: ChatMessage[], view: Partial<SessionView> = {}): void {
+  resetStore()
+  useChatStore.setState({ sessions: [row(SID)], sessionThreadOpen: {}, draftRestoreRequest: null })
   store().setActiveSessionId(SID)
+  applySessionView(SID, V(SID, { messages, ...view }))
 }
 
 beforeAll(async () => {
@@ -257,9 +263,11 @@ afterEach(() => {
 // ─── 回退 ───────────────────────────────────────────────────────────────────
 
 describe('P3-10b-12 confirmRollback', () => {
-  it('P3-10b-12 rollback → agent.init → requestDraftRestore(原文, Token)；从不 message.list / setMessages，store 的消息原样', async () => {
+  it('P3-10b-12 rollback → agent.init → requestDraftRestore(原文, Token)；从不 message.list，store 的消息原样（等下一份视图）', async () => {
     const messages = [user('5', 'hi', T), assistant('6')]
     seed(messages)
+    const before = store().messages
+    expect(before).toEqual(messages)
     await mountProbe()
     await pickRollback('5')
     await act(async () => actions.confirmRollback())
@@ -268,7 +276,7 @@ describe('P3-10b-12 confirmRollback', () => {
     expect(callsOf('message.rollback')).toEqual([[{ sessionId: SID, messageId: '5' }]])
     expect(callsOf('agent.init')).toEqual([[{ sessionId: SID }]])
     expect(callsOf('store.requestDraftRestore')).toEqual([['hi', T]])
-    expect(store().messages).toBe(messages)
+    expect(store().messages).toBe(before)
     expect(store().draftRestoreRequest).toMatchObject({ content: 'hi', inlineTokens: T })
     expect(actions.pendingRollbackId).toBeNull()
   })
@@ -379,22 +387,71 @@ describe('P3-10b-16 重新生成的重入（PIN-07）', () => {
 })
 
 describe('P3-10b-17 重挂之后的 store', () => {
-  it.todo(
-    'P3-10b-17 重新生成期间 applySessionView 送来不含 U / A 的视图：messages 被替换、占位仍在；之后的视图带上新 user 条目时占位撤（Q-P3-07）；inputText 与草稿不动 —— 待 P3-08 合并（applySessionView 是唯一写入口）'
-  )
+  it('P3-10b-17 重新生成期间视图送来不含 U / A 的列表：messages 换掉、占位仍在；之后的视图带上新 user 条目 → 占位撤（Q-P3-07）；inputText 与草稿不动', async () => {
+    seed([user('3', 'older'), assistant('4'), user('5', 'hi', T), assistant('6')])
+    store().setInputText('typing something')
+    const sent = deferred<{ success: boolean }>()
+    promptImpl = () => sent.promise
+    await mountProbe()
+    let regenerating!: Promise<void>
+    await act(async () => {
+      regenerating = actions.handleRegenerate('6')
+    })
+    // prompt 在途：占位已顶上
+    expect(names()).toEqual(['message.rollback', 'agent.init', 'agent.prompt'])
+    expect(selectPendingPrompt(store())).toMatchObject({ id: PENDING_PROMPT_ID, content: 'hi' })
+
+    // 回退后的视图：fork 上没有 U('5') / A('6')
+    const forked = [user('3', 'older'), assistant('4')]
+    await act(async () => applySessionView(SID, V(SID, { messages: forked, conversationId: 2 })))
+    expect(store().messages).toEqual(forked)
+    expect(selectPendingPrompt(store())).toMatchObject({
+      id: PENDING_PROMPT_ID,
+      content: 'hi',
+      metadata: { inlineTokens: T }
+    })
+
+    // 重发的用户条目落库（新 id），运行开始：占位在同一次更新里撤
+    await act(async () =>
+      applySessionView(
+        SID,
+        V(SID, {
+          messages: [...forked, user('7', 'hi', T)],
+          conversationId: 2,
+          run: { state: 'busy' }
+        })
+      )
+    )
+    expect(store().messages.map((m) => m.id)).toEqual(['3', '4', '7'])
+    expect(selectPendingPrompt(store())).toBeNull()
+
+    await act(async () => {
+      sent.resolve({ success: true })
+      await regenerating
+    })
+    expect(store().sessionPendingPrompt[SID] ?? null).toBeNull()
+    expect(store().inputText).toBe('typing something')
+    expect(store().pendingImages).toEqual([])
+    expect(store().draftRestoreRequest).toBeNull()
+    expect(callsOf('store.requestDraftRestore')).toEqual([])
+  })
 })
 
 // ─── 门控 ───────────────────────────────────────────────────────────────────
 
 describe('P3-10b-19 回退入口的门控（PIN-07）', () => {
-  it('P3-10b-19 selectRollbackCapable：durable 行 → true；旧格式 / 缺省（= 旧格式）/ 不认识的类型 → false；行不在列表里 → true；没有会话 → false', () => {
-    const state = (sessions: Session[]): ReturnType<typeof store> => ({ ...store(), sessions })
-    expect(selectRollbackCapable(state([row(SID, 'durable-sqlite-1')]), SID)).toBe(true)
-    expect(selectRollbackCapable(state([row(SID, 'harness-v3-jsonl')]), SID)).toBe(false)
-    expect(selectRollbackCapable(state([row(SID)]), SID)).toBe(false)
-    expect(selectRollbackCapable(state([row(SID, 'durable-sqlite-99')]), SID)).toBe(false)
-    expect(selectRollbackCapable(state([]), SID)).toBe(true)
-    expect(selectRollbackCapable(state([row(SID, 'durable-sqlite-1')]), null)).toBe(false)
+  it('P3-10b-19 selectRollbackCapable 读视图的 capabilities.rollback：durable → true；旧格式 / none / 还没有视图 → false；没有会话 → false', () => {
+    const withView = (view?: SessionView): ReturnType<typeof store> => {
+      resetStore(SID)
+      if (view) applySessionView(SID, view)
+      return store()
+    }
+    expect(selectRollbackCapable(withView(V(SID)), SID)).toBe(true)
+    expect(selectRollbackCapable(withView(V(SID, LEGACY)), SID)).toBe(false)
+    expect(selectRollbackCapable(withView(emptySessionView(SID)), SID)).toBe(false)
+    expect(selectRollbackCapable(withView(), SID)).toBe(false)
+    expect(selectRollbackCapable(withView(V(SID)), 'other')).toBe(false)
+    expect(selectRollbackCapable(withView(V(SID)), null)).toBe(false)
   })
 
   it('P3-10b-19 乐观占位（id pending-prompt）的气泡没有回退按钮，即便给了 onRollback', async () => {
@@ -413,8 +470,8 @@ describe('P3-10b-19 回退入口的门控（PIN-07）', () => {
   })
 
   /** ThreadDrawer 展开着（与 Conversation 同一接线：canRollback 决定传不传 onRollback / onRegenerate） */
-  async function mountDrawer(sessions: Session[]): Promise<void> {
-    seed([user('5', 'hi'), assistant('6')], sessions)
+  async function mountDrawer(view: Partial<SessionView>): Promise<void> {
+    seed([user('5', 'hi'), assistant('6')], view)
     useChatStore.setState({ sessionThreadOpen: { [SID]: true } })
     await act(async () => {
       root.render(createElement(ThreadDrawer, { sessionId: SID }))
@@ -427,15 +484,15 @@ describe('P3-10b-19 回退入口的门控（PIN-07）', () => {
       (b) => b.getAttribute('title') === i18n.t('message.regenerate')
     )
 
-  it('P3-10b-19 durable 会话：用户气泡有回退、末条助手卡有重新生成', async () => {
-    await mountDrawer([row(SID, 'durable-sqlite-1')])
+  it('P3-10b-19 durable 视图：用户气泡有回退、末条助手卡有重新生成', async () => {
+    await mountDrawer({})
     expect(container.textContent).toContain('hi')
     expect(container.querySelector('.lucide-rotate-ccw')).not.toBeNull()
     expect(regenerateButton()).toBeDefined()
   })
 
-  it('P3-10b-19 不能回退的会话（旧格式只读）：没有回退、没有重新生成', async () => {
-    await mountDrawer([row(SID, 'harness-v3-jsonl')])
+  it('P3-10b-19 视图不能回退（旧格式只读）：没有回退、没有重新生成', async () => {
+    await mountDrawer(LEGACY)
     expect(container.textContent).toContain('hi')
     expect(container.querySelector('.lucide-rotate-ccw')).toBeNull()
     expect(regenerateButton()).toBeUndefined()

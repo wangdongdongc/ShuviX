@@ -362,11 +362,6 @@ interface ChatState {
   requestScrollToMessage: (sessionId: string, messageId: string) => void
   /** 滚完或目标不在当前上下文后清掉，避免 visibleItems 再变时把用户弹回去 */
   clearScrollToMessage: () => void
-  /**
-   * 整份替换当前消息列表 —— **临时**的：下一次 `applySessionView` 会按视图重算（P3-08-22）。只留给回退 /
-   * 重新生成那条路在视图跟上之前先换一眼（P3-10b 收掉）
-   */
-  setMessages: (messages: ChatMessage[]) => void
   /** 本端关掉一行（错误行的关闭按钮）：本地错误行直接删掉；视图里的行在这个会话里不再显示，切走即恢复 */
   removeMessage: (id: string) => void
   /** 标记某会话的运行时正在关停 / 关停完毕（后端 agent_closing 事件驱动） */
@@ -802,7 +797,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
     })),
   clearScrollToMessage: () => set({ scrollToMessageRequest: null }),
   clearDraftRestore: () => set({ draftRestoreRequest: null }),
-  setMessages: (messages) => set({ messages }),
   removeMessage: (id) =>
     set((state) => {
       const sid = state.activeSessionId
