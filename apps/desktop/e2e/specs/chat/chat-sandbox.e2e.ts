@@ -68,7 +68,9 @@ let outsideHome = ''
 const sids: Record<string, string> = {}
 
 type InputRequestEvent = RecordedEvent & { request: { id: string; unsandboxed?: boolean } }
-type ToolEndEvent = RecordedEvent & {
+/** 一次调用落盘的工具结果（从会话视图的工具块读） */
+interface ToolResultRecord {
+  sessionId: string
   toolCallId: string
   result?: unknown
   isError?: boolean
@@ -174,16 +176,15 @@ async function sendTurn(
   await chat.typeAndSend(prompt)
 }
 
-/** 这次工具调用落盘的结果（P3-08：从会话视图的工具块读，不再是 tool_end 事件） */
-async function toolEnd(sid: string, toolCallId: string): Promise<ToolEndEvent> {
+/** 这次工具调用落盘的结果（P3-08：从会话视图的工具块读，工具结果不再是事件） */
+async function toolResult(sid: string, toolCallId: string): Promise<ToolResultRecord> {
   const hit = await probe.waitToolResult(sid, toolCallId, 10_000)
   return {
-    type: 'tool_end',
     sessionId: sid,
     toolCallId,
     result: hit.result,
     isError: hit.isError,
-    ...(hit.details === undefined ? {} : { details: hit.details as ToolEndEvent['details'] })
+    ...(hit.details === undefined ? {} : { details: hit.details as ToolResultRecord['details'] })
   }
 }
 
@@ -276,7 +277,7 @@ describe('E2E-1 受限命令不问就跑', () => {
     await events.waitFor('agent_end', { sessionId: sids.confined })
     await chat.waitIdle()
     expect(await askCount(sids.confined)).toBe(0)
-    const inside = await toolEnd(sids.confined, 'call_in')
+    const inside = await toolResult(sids.confined, 'call_in')
     expect(inside.isError).toBeFalsy()
     expect(readFileSync(join(projDir, 'inside.txt'), 'utf8').trim()).toBe('SBX')
     expect(String(inside.result)).toMatch(/TMP=\/private\/tmp\/shuvix-\d+\/[0-9a-f]{8}\//)
@@ -292,7 +293,7 @@ describe('E2E-1 受限命令不问就跑', () => {
     await events.waitFor('agent_end', { sessionId: sids.confined })
     await chat.waitIdle()
     expect(await askCount(sids.confined)).toBe(0)
-    const out = String((await toolEnd(sids.confined, 'call_out')).result)
+    const out = String((await toolResult(sids.confined, 'call_out')).result)
     expect(out).toContain('[Exit code: 1]')
     expect(out).toContain('[sandbox]')
     expect(out).toContain(`cannot write: ${probe}`)
@@ -304,7 +305,7 @@ describe('E2E-1 受限命令不问就跑', () => {
     await events.waitFor('agent_end', { sessionId: sids.confined })
     await chat.waitIdle()
     expect(await askCount(sids.confined)).toBe(0)
-    const tmp = String((await toolEnd(sids.confined, 'call_tmp')).result)
+    const tmp = String((await toolResult(sids.confined, 'call_tmp')).result)
     expect(tmp).toContain('[Exit code: 1]')
     expect(tmp).toContain(`cannot write: ${tmpProbe}`)
     expect(tmp).toContain('can read and write only the working directory and $TMPDIR')
@@ -332,7 +333,7 @@ describe('E2E-2 申请完全访问：要问，卡片带「完全访问」标签'
     await answer(sids.full, denied.request.id, false)
     await events.waitFor('agent_end', { sessionId: sids.full })
     await chat.waitIdle()
-    expect((await toolEnd(sids.full, 'call_deny')).isError).toBe(true)
+    expect((await toolResult(sids.full, 'call_deny')).isError).toBe(true)
     expect(existsSync(target)).toBe(false)
 
     await sendTurn(
@@ -348,7 +349,7 @@ describe('E2E-2 申请完全访问：要问，卡片带「完全访问」标签'
     await answer(sids.full, allowed.request.id, true)
     await events.waitFor('agent_end', { sessionId: sids.full })
     await chat.waitIdle()
-    const end = await toolEnd(sids.full, 'call_allow')
+    const end = await toolResult(sids.full, 'call_allow')
     expect(end.isError).toBeFalsy()
     expect(String(end.result)).not.toContain('[sandbox]')
     expect(existsSync(target)).toBe(true)
@@ -386,11 +387,11 @@ describe('E2E-3 文件工具与沙箱同一份会话目录', () => {
     await events.waitFor('agent_end', { sessionId: sids.files })
     await chat.waitIdle()
     expect(await askCount(sids.files)).toBe(0)
-    expect((await toolEnd(sids.files, 'call_plain')).isError).toBeFalsy()
+    expect((await toolResult(sids.files, 'call_plain')).isError).toBeFalsy()
     expect(readFileSync(plain, 'utf8')).toBe('PLAIN')
-    expect((await toolEnd(sids.files, 'call_hook')).isError).toBeFalsy()
+    expect((await toolResult(sids.files, 'call_hook')).isError).toBeFalsy()
     expect(readFileSync(hook, 'utf8')).toBe('# hook\n')
-    const git = await toolEnd(sids.files, 'call_git')
+    const git = await toolResult(sids.files, 'call_git')
     expect(String(git.result)).toContain('GIT-OK')
     expect(String(git.result)).not.toContain('[sandbox]')
     expect(git.details?.sandbox).toBe('confined')
@@ -407,7 +408,7 @@ describe('E2E-3 文件工具与沙箱同一份会话目录', () => {
     await answer(sids.files, ask.request.id, true)
     await events.waitFor('agent_end', { sessionId: sids.files })
     await chat.waitIdle()
-    expect((await toolEnd(sids.files, 'call_outside')).isError).toBeFalsy()
+    expect((await toolResult(sids.files, 'call_outside')).isError).toBeFalsy()
     expect(readFileSync(outside, 'utf8')).toBe('OUT')
     expect(decisionsOf('call_outside')).toEqual([
       expect.objectContaining({
@@ -429,7 +430,7 @@ describe('E2E-4 按会话固定', () => {
     await events.waitFor('agent_end', { sessionId: sids.pinA })
     await chat.waitIdle()
     expect(await askCount(sids.pinA)).toBe(0)
-    expect(String((await toolEnd(sids.pinA, 'call_a1')).result)).toMatch(
+    expect(String((await toolResult(sids.pinA, 'call_a1')).result)).toMatch(
       /TMP=\/private\/tmp\/shuvix-\d+\//
     )
 
@@ -439,7 +440,7 @@ describe('E2E-4 按会话固定', () => {
     await events.waitFor('agent_end', { sessionId: sids.pinA })
     await chat.waitIdle()
     expect(await askCount(sids.pinA)).toBe(0)
-    expect(String((await toolEnd(sids.pinA, 'call_a2')).result)).toMatch(
+    expect(String((await toolResult(sids.pinA, 'call_a2')).result)).toMatch(
       /TMP=\/private\/tmp\/shuvix-\d+\//
     )
 
@@ -451,7 +452,7 @@ describe('E2E-4 按会话固定', () => {
     await answer(sids.pinB, ask.request.id, true)
     await events.waitFor('agent_end', { sessionId: sids.pinB })
     await chat.waitIdle()
-    const b = String((await toolEnd(sids.pinB, 'call_b1')).result)
+    const b = String((await toolResult(sids.pinB, 'call_b1')).result)
     // 不受限：TMPDIR 是宿主自己的，不是沙箱给的本会话临时目录
     expect(b).not.toMatch(/TMP=\/private\/tmp\/shuvix-\d+\/[0-9a-f]{8}\//)
   })
@@ -494,18 +495,18 @@ describe('E2E-5 受限命令经宿主停本会话的后台任务（shuvix task s
     // 三条命令都在沙箱里，一条都不问
     expect(await askCount(sids.stop)).toBe(0)
 
-    const bg = await toolEnd(sids.stop, 'call_bg')
+    const bg = await toolResult(sids.stop, 'call_bg')
     expect(bg.isError).toBeFalsy()
     expect(String(bg.result)).toContain('Background task started, pid')
     const pid = Number(readFileSync(pidFile, 'utf8').trim())
     expect(Number.isInteger(pid) && pid > 0).toBe(true)
 
-    const stop = String((await toolEnd(sids.stop, 'call_stop')).result)
+    const stop = String((await toolResult(sids.stop, 'call_stop')).result)
     expect(stop).toContain(`stopping background task ${pid}`)
     expect(stop).not.toContain('[Exit code:')
     expect(stop).not.toContain('[sandbox]')
 
-    const other = String((await toolEnd(sids.stop, 'call_stop_other')).result)
+    const other = String((await toolResult(sids.stop, 'call_stop_other')).result)
     expect(other).toContain('no background task with pid 1 in this session')
     expect(other).toContain('[Exit code: 1]')
 
@@ -543,7 +544,7 @@ describe('E2E-6 工具卡上的沙箱标记与「实际执行的命令」', () =
     expect(await askCount(sid)).toBe(0)
     expect(readFileSync(join(projDir, 'inv.txt'), 'utf8')).toBe("it's 2\n")
 
-    const end = await toolEnd(sid, 'call_inv')
+    const end = await toolResult(sid, 'call_inv')
     expect(end.details?.sandbox).toBe('confined')
     expect((await persistedBlock(sid, 'call_inv')).details?.sandbox).toBe('confined')
 
@@ -605,7 +606,7 @@ describe('E2E-7 沙箱关着 + 一条没跑起来的命令', () => {
     await answer(sid, denied.request.id, false)
     await events.waitFor('agent_end', { sessionId: sid })
     await chat.waitIdle()
-    expect((await toolEnd(sid, 'call_off_deny')).isError).toBe(true)
+    expect((await toolResult(sid, 'call_off_deny')).isError).toBe(true)
     expect(await readInvocation(sid, 'call_off_deny')).toBeNull()
     expect((await persistedBlock(sid, 'call_off_deny')).details?.sandbox).toBeUndefined()
 
@@ -616,7 +617,7 @@ describe('E2E-7 沙箱关着 + 一条没跑起来的命令', () => {
     await answer(sid, allowed.request.id, true)
     await events.waitFor('agent_end', { sessionId: sid })
     await chat.waitIdle()
-    const end = await toolEnd(sid, 'call_off')
+    const end = await toolResult(sid, 'call_off')
     expect(end.isError).toBeFalsy()
     expect(end.details?.sandbox).toBe(expected)
     expect((await persistedBlock(sid, 'call_off')).details?.sandbox).toBe(expected)
@@ -677,17 +678,17 @@ describe('E2E-8 读的那一面：家目录里只有会话目录读得到', () =
       ['call_key', key, 'KEY-E2E'],
       ['call_state', state, null]
     ] as const) {
-      const out = String((await toolEnd(sid, id)).result)
+      const out = String((await toolResult(sid, id)).result)
       expect(out, id).toContain('[Exit code: 1]')
       expect(out, id).toContain(`cannot read: ${path}`)
       if (mark) expect(out, id).not.toContain(mark)
     }
 
     // 家目录以外：受限命令照读，read 工具也不问
-    const worldOut = String((await toolEnd(sid, 'call_world')).result)
+    const worldOut = String((await toolResult(sid, 'call_world')).result)
     expect(worldOut).toContain('WORLD-E2E')
     expect(worldOut).not.toContain('[sandbox]')
-    const readWorld = await toolEnd(sid, 'call_read_world')
+    const readWorld = await toolResult(sid, 'call_read_world')
     expect(readWorld.isError).toBeFalsy()
     expect(String(readWorld.result)).toContain('WORLD-E2E')
 
@@ -699,7 +700,7 @@ describe('E2E-8 读的那一面：家目录里只有会话目录读得到', () =
     await answer(sid, ask.request.id, false)
     await events.waitFor('agent_end', { sessionId: sid })
     await chat.waitIdle()
-    const readKey = await toolEnd(sid, 'call_read_key')
+    const readKey = await toolResult(sid, 'call_read_key')
     expect(readKey.isError).toBe(true)
     expect(String(readKey.result)).not.toContain('KEY-E2E')
     expect(decisionsOf('call_read_key')).toEqual([
@@ -728,7 +729,7 @@ describe('E2E-9 「允许并记住」两面生效', () => {
     await sendTurn('S-grants', bashCall('call_aws_1', 'cat "$HOME/.aws/credentials"'), 'aws 1')
     await events.waitFor('agent_end', { sessionId: sid })
     await chat.waitIdle()
-    const before = String((await toolEnd(sid, 'call_aws_1')).result)
+    const before = String((await toolResult(sid, 'call_aws_1')).result)
     expect(before).toContain('[Exit code: 1]')
     expect(before).toContain(`cannot read: ${aws}`)
 
@@ -739,7 +740,7 @@ describe('E2E-9 「允许并记住」两面生效', () => {
     await answer(sid, readAsk.request.id, true, true)
     await events.waitFor('agent_end', { sessionId: sid })
     await chat.waitIdle()
-    expect(String((await toolEnd(sid, 'call_read_aws')).result)).toContain('AWS-E2E')
+    expect(String((await toolResult(sid, 'call_read_aws')).result)).toContain('AWS-E2E')
     expect(await allowList(sid)).toContain(`Read(${aws})`)
 
     // ③ write 工具写会话目录以外 → 问 → 允许并记住：多一条 Write(…)
@@ -766,14 +767,14 @@ describe('E2E-9 「允许并记住」两面生效', () => {
     await events.waitFor('agent_end', { sessionId: sid })
     await chat.waitIdle()
     expect(await askCount(sid)).toBe(0)
-    const after = String((await toolEnd(sid, 'call_aws_2')).result)
+    const after = String((await toolResult(sid, 'call_aws_2')).result)
     expect(after).toContain('AWS-E2E')
     expect(after).not.toContain('[sandbox]')
-    const append = await toolEnd(sid, 'call_append')
+    const append = await toolResult(sid, 'call_append')
     expect(String(append.result)).not.toContain('[Exit code:')
     expect(append.details?.sandbox).toBe('confined')
     expect(readFileSync(out, 'utf8')).toBe('W1\nW2\n')
-    expect(String((await toolEnd(sid, 'call_read_aws_2')).result)).toContain('AWS-E2E')
+    expect(String((await toolResult(sid, 'call_read_aws_2')).result)).toContain('AWS-E2E')
 
     // ⑤ 在会话配置里撤掉读授权：同一会话，下一条命令又读不到（授权按命令现读）
     await app.main.eval(
@@ -784,7 +785,7 @@ describe('E2E-9 「允许并记住」两面生效', () => {
     await sendTurn('S-grants', bashCall('call_aws_3', 'cat "$HOME/.aws/credentials"'), 'aws 3')
     await events.waitFor('agent_end', { sessionId: sid })
     await chat.waitIdle()
-    const reverted = String((await toolEnd(sid, 'call_aws_3')).result)
+    const reverted = String((await toolResult(sid, 'call_aws_3')).result)
     expect(reverted).toContain('[Exit code: 1]')
     expect(reverted).toContain(`cannot read: ${aws}`)
     expect(await askCount(sid)).toBe(0)
@@ -813,10 +814,10 @@ describe('E2E-10 写的范围两面一致：项目根里别家工具的配置不
     await chat.waitIdle()
     expect(await askCount(sid)).toBe(0)
 
-    expect((await toolEnd(sid, 'call_vscode')).isError).toBeFalsy()
+    expect((await toolResult(sid, 'call_vscode')).isError).toBeFalsy()
     expect(readFileSync(vscode, 'utf8')).toBe('{"e2e": true}\n')
 
-    const bash = await toolEnd(sid, 'call_rootcfg')
+    const bash = await toolResult(sid, 'call_rootcfg')
     expect(bash.isError).toBeFalsy()
     expect(String(bash.result)).not.toContain('[Exit code:')
     expect(String(bash.result)).not.toContain('[sandbox]')

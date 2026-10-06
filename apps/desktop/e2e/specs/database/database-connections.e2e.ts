@@ -35,7 +35,7 @@ import {
   type RecordedEvent,
   type SecurityDecisionEntry
 } from '../../harness/seed'
-import { browserDriver, type BrowserDriver, type ToolEndEvent } from '../../harness/browserFixtures'
+import { browserDriver, type BrowserDriver, type ToolResultRecord } from '../../harness/browserFixtures'
 import {
   DATABASE_SERVER_ID,
   DATABASE_TOOL_NAMES,
@@ -135,7 +135,7 @@ const runQuery = async (
   connection: string,
   sql: string,
   description = 'e2e query'
-): Promise<ToolEndEvent> => {
+): Promise<ToolResultRecord> => {
   provider.reset()
   const { ends, since } = await driver.run(sid, [
     { id, tool: QUERY, args: { connection, sql, description } }

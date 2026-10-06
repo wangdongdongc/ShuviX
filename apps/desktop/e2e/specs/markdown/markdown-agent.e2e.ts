@@ -251,7 +251,7 @@ describe('关窗 = 删会话', () => {
       `(window.api.agent.prompt({ sessionId: ${JSON.stringify(sids.c)}, text: 'ag4: edit while I type' }).catch(() => undefined), true)`
     )
     // 工具的起止不再是事件（P3-08）：md 窗口自己订阅的会话视图里 toolRuns 到了 running
-    await ev.toolStart('ag4_wait')
+    await ev.toolStarted('ag4_wait')
     await until(
       async () => (await panes.c!.ghosts()).some((g) => g.mode === 'waiting'),
       'waiting ghost on screen'

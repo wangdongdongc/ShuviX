@@ -50,7 +50,7 @@ import {
   uidOf,
   type BrowserDriver,
   type FixtureServer,
-  type ToolEndEvent
+  type ToolResultRecord
 } from '../../harness/browserFixtures'
 
 const MODEL = 'e2e-model'
@@ -117,13 +117,13 @@ const everythingSince = async (since: number): Promise<string> => {
   return ends.map((e) => e.result).join('\n')
 }
 
-/** 一次调用、一张卡、一个应答：回这次调用的 tool_end 与那张卡 */
+/** 一次调用、一张卡、一个应答：回这次调用的工具结果与那张卡 */
 const askOnce = async (
   call: { id: string; tool: string; args: Record<string, unknown> },
   allow: boolean,
   remember = false
 ): Promise<{
-  end: ToolEndEvent
+  end: ToolResultRecord
   ask: Awaited<ReturnType<BrowserDriver['waitAsk']>>
   since: number
 }> => {
@@ -138,7 +138,7 @@ const askOnce = async (
 /** 一次不该有询问的调用：跑完，断言确实没有卡 */
 const noAsk = async (
   calls: Array<{ id: string; tool: string; args: Record<string, unknown> }>
-): Promise<Record<string, ToolEndEvent>> => {
+): Promise<Record<string, ToolResultRecord>> => {
   provider.reset()
   const { ends, since } = await driver.run(sid, calls)
   expect(await driver.asksSince(since, sid)).toBe(0)
