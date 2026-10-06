@@ -24,6 +24,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import {
   BRIDGE_ERROR_ALREADY_CONNECTED,
   chromeBridgeAddressFile,
+  CHROME_BRIDGE_PROTOCOL,
   CHROME_BRIDGE_HOST_NAME,
   CHROME_EXTENSION_ID
 } from '@shuvix/chat-protocol/chromeBridge'
@@ -161,7 +162,7 @@ describe.skipIf(process.platform === 'win32')('本地组件的安装与握手', 
     expect(chromeA.hostStatuses().map((h) => h.desktop)).toEqual(['connected'])
 
     const welcome = await chromeA.hello()
-    expect(welcome).toEqual({ type: 'welcome', protocol: 1, ok: true })
+    expect(welcome).toEqual({ type: 'welcome', protocol: CHROME_BRIDGE_PROTOCOL, ok: true })
     const s = await status()
     expect(s.browsers).toEqual([
       {
@@ -171,7 +172,7 @@ describe.skipIf(process.platform === 'win32')('本地组件的安装与握手', 
         extensionVersion: '0.0.0-e2e',
         connectedAt: expect.any(Number),
         state: 'ready',
-        protocol: 1
+        protocol: CHROME_BRIDGE_PROTOCOL
       }
     ])
     // 设置页据此刷新
@@ -217,7 +218,7 @@ describe.skipIf(process.platform === 'win32')('本地组件的安装与握手', 
     const welcome = await old.hello({ protocol: 99 })
     expect(welcome).toEqual({
       type: 'welcome',
-      protocol: 1,
+      protocol: CHROME_BRIDGE_PROTOCOL,
       ok: false,
       error: 'protocol-mismatch'
     })
@@ -282,7 +283,7 @@ describe.skipIf(process.platform === 'win32')('本地组件的安装与握手', 
     // 接手它那些标签页会话的历史
     expect(await impostor.hello()).toEqual({
       type: 'welcome',
-      protocol: 1,
+      protocol: CHROME_BRIDGE_PROTOCOL,
       ok: false,
       error: BRIDGE_ERROR_ALREADY_CONNECTED
     })

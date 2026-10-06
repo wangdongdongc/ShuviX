@@ -804,9 +804,13 @@ describe('中文不走样', () => {
       toolText = toolTextsOf(reqs[1]).join('\n')
       requestTools = toolNamesOf(reqs[1])
 
-      // 截断标记与省略标记：模型知道中间少了一段
-      expect(toolText).toMatch(/^\[Output truncated: \d+ lines \/ [\d.]+ ?[KM]B\]/)
+      // 截断说明与省略标记：模型知道中间少了一段。pi-durable 之后说明不再是正文开头的表头，而是结果末尾
+      // `<harness>` 段里的诊断（wrapDurableOutput 的 truncationDiagnostic）—— 正文以页头开始
+      expect(toolText).toMatch(
+        /<harness>[\s\S]*Output truncated: \d+ lines \/ [\d.]+ ?[KM]B; showing the beginning and end only\. The full output was not kept\.[\s\S]*<\/harness>\s*$/
+      )
       expect(toolText).toMatch(/\.\.\. \[\d+ lines omitted\] \.\.\./)
+      expect(toolText.startsWith(`Page: 超长页面\nURL: ${HUGE}\n\n`)).toBe(true)
       // 截断保留的首尾就是浏览器一路送过来的原文：开头是页头，首尾的段落整段、按序出现
       expect(toolText.includes(`Page: 超长页面\nURL: ${HUGE}\n\n`)).toBe(true)
       const kept = HUGE_PARAS.filter((para) => toolText.includes(para))
@@ -863,7 +867,6 @@ describe('中文不走样', () => {
     expect(req.lastUserText === pasted).toBe(true)
 
     // 回到侧边栏视图的用户消息超过 1 MB：只可能是一帧分片过来的 `sync.frame`
-    const chunksBeforeSnapshot = () => chromeA.chunkFrames()
     const live = await chromeA.waitView(
       sid,
       (v) => v.messages.some((m) => m.role === 'user' && m.content === pasted),
@@ -871,9 +874,10 @@ describe('中文不走样', () => {
     )
     expect(live.messages.filter((m) => m.role === 'user')).toHaveLength(1)
     expect(chromeA.syncFrames({ sessionId: sid, since }).length).toBeGreaterThan(0)
+    expect(chromeA.chunkFrames() - chunksBefore).toBeGreaterThanOrEqual(2)
 
     // 侧边栏重开：新订阅的快照（订阅的回复）同样超过 1 MB，同样分片
-    const chunksAtReopen = chunksBeforeSnapshot()
+    const chunksAtReopen = chromeA.chunkFrames()
     await chromeA.releaseView(sid)
     const reopened = await chromeA.viewOf(sid)
     expect(reopened?.messages.find((m) => m.role === 'user')?.content === pasted).toBe(true)
