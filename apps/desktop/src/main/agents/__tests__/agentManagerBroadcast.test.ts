@@ -1,7 +1,7 @@
 /**
  * AgentManager 的接线：派生 agent 路由自己发的事件（sub_session_register /
  * sub_session_end）必须走 **electronEventSink**，也就是同时落到聊天前端**和**通知决策器（P2-05-25）；
- * 路由的依赖恰好那五样、会话宿主惰性取（P2-05-51）。
+ * 路由的依赖恰好那六样（P3-14 加了 sessionReady）、会话宿主惰性取（P2-05-51）。
  *
  * 断言看着琐碎，坏起来却完全无声 —— 决策器只能靠 register 记 sub→root 血缘（事件流里
  * 子 agent 与根会话完全同构，同一套 HarnessSession，只是 sessionId 是子会话 id）。
@@ -35,7 +35,11 @@ vi.mock('@shuvix/agent-runtime', () => ({
 }))
 // 路由接线之外的依赖：都只在真跑一轮时才用得上。刻意**没有** `../agentHost` 的替身 —— 路由不再经旧的
 // 创建入口派发（P2-05-51）
-vi.mock('../../services/sessionHost', () => ({ getSessionHost: mocks.getSessionHost }))
+vi.mock('../../services/sessionHost', () => ({
+  getSessionHost: mocks.getSessionHost,
+  peekSessionHost: () => undefined
+}))
+
 vi.mock('../../services/taskRegistry', () => ({ taskRegistry: { tag: 'tasks' } }))
 // electronEventSink 的两个下游出口 —— 断言就下在这里
 vi.mock('../../frontend/core', () => ({
@@ -88,11 +92,12 @@ describe('AgentManager —— 派生 agent 事件的出口', () => {
 })
 
 describe('AgentManager —— 路由的接线（P2-05-51）', () => {
-  it('工厂依赖恰好是 broadcast / getAbortedNote / logger / sessions / tasks', () => {
+  it('工厂依赖恰好是 broadcast / getAbortedNote / logger / sessionReady / sessions / tasks（P3-14 加了 sessionReady）', () => {
     expect(Object.keys(mocks.deps.value ?? {}).sort()).toEqual([
       'broadcast',
       'getAbortedNote',
       'logger',
+      'sessionReady',
       'sessions',
       'tasks'
     ])

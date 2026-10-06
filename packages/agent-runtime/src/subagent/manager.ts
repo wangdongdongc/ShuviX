@@ -11,8 +11,15 @@
  *    agent 视图）；结果契约的追问（nudge）不广播（PIN-06）。
  *  - **任务登记**：每个子 agent 在 taskRegistry 里一条 `'agent'` 任务，taskId = agentId，归属可见会话
  *    （嵌套派生也一样）；停 = 软停止（interrupt）。每条路径都要落定 —— 没落定的任务会把会话钉在 LRU 里。
- *  - **agentId 索引**：agentId → (sessionId, conversationId)，进程内（PIN-12：重启之后只靠重跑重新填）。
- *    面板的追问 / 中断 / 销毁按 agentId 找到会话与子对话。
+ *  - **agentId 索引**：agentId → (sessionId, conversationId)，进程内。面板的追问 / 中断 / 销毁、agent 视图
+ *    （SyncHub 的 `resolveAgent`）按 agentId 找到会话与子对话。两条来源：派发时的 `onCreated`（权威，覆盖），
+ *    以及**会话打开时的重建**（P3-14，`indexSession`：宿主的 `onSessionOpened` 交进来）—— 从这条会话
+ *    AgentDirectory 缓存里的派生记录（`spawnedRecords()`）补上还没有的条目。重建是惰性的：只读缓存，不提交、
+ *    不装扩展、不广播、不登记任务（重启之后面板没有新行，C2；重建只服务路由与视图）。
+ *  - **墓碑**（PIN-11）：本进程里 `destroy` 过的 agentId 再也不被重建收回（会话 LRU 关了再开也一样）；跨进程
+ *    不记 —— 重启之后它又可路由（转写还在，只是扩展被卸了）。
+ *  - **关闭原因**：`onSessionClosed(id, 'remove')`（LRU / 显式 / 全部关闭）留着索引；`'destroy'`（删除 /
+ *    清空：存储没了或换了）丢掉这条会话的全部条目（只这一条会话的）。
  *  - **忙**：路由自己记哪个 agentId 正在跑（PIN-08），忙时追问在任何广播之前就拒绝。
  *
  * 成败只判一处（`settleOf`）：结果契约捕获 > 中止 > 软停止（PIN-05）。中止 = 派发工具的 signal 落下或协调器
@@ -58,6 +65,12 @@ export interface SubAgentManagerDeps {
   logger?: RuntimeLogger
   /** 中止时交回的文案（懒解析以反映当前 i18n 语言；缺省英文） */
   getAbortedNote?: () => string
+  /**
+   * 宿主的「这条会话的信号接好了没有」（可选；从不拒绝）。面板追问与宿主派发在驱动会话之前等它 —— 会话可能
+   * 刚被 peek 打开（重启之后的追问正是如此），宿主的生命周期投影还没挂上，这一轮的 `agent_start` 就没人发
+   * （桌面：`sessionSignalsReady`，P3-08 PIN-09 的同一张表）。缺省不等
+   */
+  sessionReady?: (sessionId: string) => Promise<void>
 }
 
 /** 模型调派发工具：子对话由这次工具调用的任务拥有 */
@@ -153,6 +166,18 @@ export interface SubAgentManager {
   locate: (agentId: string) => SubAgentLocation | undefined
   /** 派生 agent 的运行时快照（会话的 `agentInfo`）。不认识 / 已销毁 / 会话关着 → null（从不打开会话） */
   getRuntimeInfo: (agentId: string) => Promise<AgentRuntimeInfo | null>
+  /**
+   * 会话打开时重建索引（P3-14；宿主的 `onSessionOpened` 每次真正打开调一次）：这条会话的派生记录里**还没有
+   * 条目**的 agentId 补进来（已有的 —— 派发的 `onCreated` 记下的 —— 原样留着，连同它的运行标记）；本进程
+   * 销毁过的跳过（PIN-11）。同步、只读缓存：不提交、不装扩展、不广播、不登记任务。写坏了的记录不在
+   * `spawnedRecords()` 里（目录打开时已经警告过一次），这里不再记。
+   */
+  indexSession: (session: DurableSession) => void
+  /**
+   * 会话关掉了（宿主的 `onSessionClosed`）：`'remove'` 什么都不做（索引熬过 LRU）；`'destroy'`（删除 / 清空）
+   * 丢掉这条会话的全部条目、运行标记与墓碑。
+   */
+  onSessionClosed: (sessionId: string, reason: 'remove' | 'destroy') => void
 }
 
 // ─────────────────────────── 实现 ───────────────────────────
@@ -187,6 +212,8 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
   const running = new Set<string>()
   /** 这一轮被软停止的 agentId（PIN-05 的文本：中止时保留部分结果） */
   const soft = new Set<string>()
+  /** 本进程里销毁过的 agentId → 它的会话（PIN-11：重建不收回；会话被删 / 清空时一起丢） */
+  const tombstones = new Map<string, string>()
 
   /**
    * 一轮收尾的成败（全模块只此一处）：捕获 > 中止 > 软停止 / 成功（PIN-05）。`aborted` = 派发工具的
@@ -296,6 +323,7 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
       const text = `Session not found: ${sessionId}`
       return { result: text, error: text }
     }
+    await deps.sessionReady?.(sessionId)
     const hosted: NonNullable<SpawnParams['hosted']> = {
       ...(modelConfig === undefined
         ? {}
@@ -329,6 +357,8 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
     const onCreated = (info: SpawnCreatedInfo): void => {
       const { agentId } = info
       parentSessionId = parentOf(session, info.parentConversationId, sessionId)
+      // 重新挂上 = 它又活了（墓碑只拦重建，不拦派发）
+      tombstones.delete(agentId)
       index.set(agentId, {
         sessionId,
         conversationId: info.conversationId,
@@ -427,6 +457,8 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
     if (entry === undefined) return
     index.delete(agentId)
     soft.delete(agentId)
+    // 墓碑（PIN-11）：会话关了再开，重建也不把它收回来
+    tombstones.set(agentId, entry.sessionId)
     try {
       const session = deps.sessions.get(entry.sessionId)
       if (session !== undefined) await session.agents.destroy(entry.conversationId)
@@ -434,6 +466,37 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
       // 任务条目随之消失（用户从面板关掉了这条）。先落定再销：还在跑的那次 runTask 正挂在这条任务上等着
       deps.tasks?.settle(agentId, { status: 'killed' })
       deps.tasks?.dismiss(agentId)
+    }
+  }
+
+  function indexSession(session: DurableSession): void {
+    const { sessionId } = session
+    for (const record of session.spawnedRecords()) {
+      const { agentId } = record
+      // 派发记下的条目是权威（P3-14-04）；本进程销毁过的不收回（PIN-11）
+      if (index.has(agentId) || tombstones.has(agentId)) continue
+      index.set(agentId, {
+        sessionId,
+        conversationId: record.conversationId,
+        parentSessionId: parentOf(session, record.parentConversationId, sessionId),
+        displayName: record.displayName,
+        profileName: record.profileName,
+        depth: record.depth
+      })
+    }
+  }
+
+  function onSessionClosed(sessionId: string, reason: 'remove' | 'destroy'): void {
+    // LRU / 显式 / 全部关闭：索引留着（P2-05-05），之后的追问 peek 重开
+    if (reason !== 'destroy') return
+    for (const [agentId, entry] of index) {
+      if (entry.sessionId !== sessionId) continue
+      index.delete(agentId)
+      running.delete(agentId)
+      soft.delete(agentId)
+    }
+    for (const [agentId, owner] of tombstones) {
+      if (owner === sessionId) tombstones.delete(agentId)
     }
   }
 
@@ -455,6 +518,8 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
       let session: DurableSession | undefined
       try {
         session = deps.sessions.get(entry.sessionId) ?? (await deps.sessions.peek(entry.sessionId))
+        // 刚被 peek 打开（重启之后的追问）：等宿主的信号接好，这一轮的生命周期才有人发（P3-14-12）
+        if (session !== undefined) await deps.sessionReady?.(entry.sessionId)
       } catch (error) {
         running.delete(agentId)
         throw error
@@ -501,6 +566,10 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
     interrupt,
 
     destroy,
+
+    indexSession,
+
+    onSessionClosed,
 
     has(agentId: string): boolean {
       return index.has(agentId)

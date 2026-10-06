@@ -343,7 +343,10 @@ export async function spawnWorld(options: SpawnWorldOptions = {}): Promise<Spawn
     destroy: (agentId) => current.router!.router.destroy(agentId),
     has: (agentId) => current.router!.router.has(agentId),
     locate: (agentId) => current.router!.router.locate(agentId),
-    getRuntimeInfo: (agentId) => current.router!.router.getRuntimeInfo(agentId)
+    getRuntimeInfo: (agentId) => current.router!.router.getRuntimeInfo(agentId),
+    indexSession: (session) => current.router!.router.indexSession(session),
+    onSessionClosed: (sessionId, reason) =>
+      current.router!.router.onSessionClosed(sessionId, reason)
   }
 
   // eslint-disable-next-line prefer-const -- 世界建好之后才赋值（工具闭包晚绑定）

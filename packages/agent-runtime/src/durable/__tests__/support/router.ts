@@ -38,6 +38,7 @@ import { createTaskRegistry, type TaskRegistry } from '../../../task/registry'
 import { toolCallScope, type ToolCallScope } from '../../../tools/toolCall'
 import { backgroundContext as BG } from '../../context'
 import type { DurableSession } from '../../durableSession'
+import type { SpawnedAgentRecord } from '../../agentRecord'
 import type { AgentConfig } from '../../seams'
 import type { SpawnCreatedInfo, SpawnOutcome, SpawnParams } from '../../spawn'
 import { markerVars, type MarkerVars } from './agentConfig'
@@ -103,6 +104,10 @@ export interface RouterKitOptions {
   wrapTasks?: (tasks: TaskRegistry) => TaskRegistry
   /** 包一层路由会话面（spy） */
   wrapSessions?: (sessions: SubAgentManagerDeps['sessions']) => SubAgentManagerDeps['sessions']
+  /** 路由的日志（P3-14-03：重建不记警告） */
+  logger?: SubAgentManagerDeps['logger']
+  /** 宿主的信号就绪（P3-14-12） */
+  sessionReady?: SubAgentManagerDeps['sessionReady']
 }
 
 /** 建一个路由及它的观察数组（`sessions` 给真宿主或会话桩） */
@@ -138,6 +143,8 @@ export function routerKit(
     sessions: options.wrapSessions?.(recorded) ?? recorded,
     broadcast: (event) => events.push(event),
     ...(tasks === undefined ? {} : { tasks }),
+    ...(options.logger === undefined ? {} : { logger: options.logger }),
+    ...(options.sessionReady === undefined ? {} : { sessionReady: options.sessionReady }),
     getAbortedNote: () => ABORTED_NOTE
   })
   const byType = <T extends ChatEvent['type']>(type: T): Extract<ChatEvent, { type: T }>[] =>
@@ -182,6 +189,11 @@ export interface HostROptions extends RouterKitOptions {
   noPrime?: boolean
   vars?: MarkerVars
   rpm?: FakeRpm
+  /**
+   * 宿主的开 / 关钩子接到这个进程的路由（P3-14：`onSessionOpened` → `indexSession`，`onSessionClosed` →
+   * `onSessionClosed`），与桌面的 AgentManager 接线同形；缺省不接（P2-05 的用例照旧）。`restart()` 沿用。
+   */
+  indexOnOpen?: boolean
 }
 
 export interface HostR extends RouterKit {
@@ -205,8 +217,11 @@ export async function hostR(options: HostROptions = {}): Promise<HostR> {
   const profiles = options.profiles ?? profileTable()
   const vars = options.vars ?? markerVars('M1')
   const rpm = options.rpm ?? fakeRpm()
-  /** 这个进程派发工具看到的路由（重启时换） */
-  const current: { manager: SubAgentManager | undefined } = { manager: undefined }
+  /** 这个进程派发工具看到的路由（重启时换）；`router` = 没包过的那个（开 / 关钩子接它） */
+  const current: { manager: SubAgentManager | undefined; router: SubAgentManager | undefined } = {
+    manager: undefined,
+    router: undefined
+  }
   const proxy: SubAgentManager = {
     runTask: (params) => current.manager!.runTask(params),
     continueTask: (params) => current.manager!.continueTask(params),
@@ -214,7 +229,9 @@ export async function hostR(options: HostROptions = {}): Promise<HostR> {
     destroy: (agentId) => current.manager!.destroy(agentId),
     has: (agentId) => current.manager!.has(agentId),
     locate: (agentId) => current.manager!.locate(agentId),
-    getRuntimeInfo: (agentId) => current.manager!.getRuntimeInfo(agentId)
+    getRuntimeInfo: (agentId) => current.manager!.getRuntimeInfo(agentId),
+    indexSession: (session) => current.manager!.indexSession(session),
+    onSessionClosed: (sessionId, reason) => current.manager!.onSessionClosed(sessionId, reason)
   }
   const registry = {
     list: () => [...profiles.values()],
@@ -235,11 +252,19 @@ export async function hostR(options: HostROptions = {}): Promise<HostR> {
     resolveProfileModel: rpm.resolve,
     toolHost: { agentTools, dispatchTool: dispatchFor },
     agentConfig: options.config ?? configD(),
+    ...(options.indexOnOpen === true
+      ? {
+          onSessionOpened: (session: DurableSession) => current.router?.indexSession(session),
+          onSessionClosed: (sessionId: string, reason: 'remove' | 'destroy') =>
+            current.router?.onSessionClosed(sessionId, reason)
+        }
+      : {}),
     ...options.host
   })
 
   const build = async (host: TestHost, routerOptions: HostROptions): Promise<HostR> => {
     const kit = routerKit(host.host, routerOptions)
+    current.router = kit.router
     current.manager = routerOptions.wrapManager?.(kit.router) ?? kit.router
     const session = await host.open('s1')
     if (options.noPrime !== true) await primeRoot(session)
@@ -317,6 +342,8 @@ export interface FakeSpawnScript {
   continue?: (conversationId: number, text: string) => Promise<SpawnOutcome>
   /** `agentInfo` 的快照（缺省 `fakeAgentInfo`；返回 undefined = 那个对话没有 agent） */
   info?: (conversationId: number) => AgentRuntimeInfo | undefined
+  /** `spawnedRecords()` 交回的派生记录（P3-14 的重建；缺省没有） */
+  records?: () => SpawnedAgentRecord[]
 }
 
 export interface FakeSession {
@@ -371,6 +398,7 @@ export function fakeSession(script: FakeSpawnScript = {}): FakeSession {
     closed: false,
     agents,
     agentIdentity: () => undefined,
+    spawnedRecords: () => script.records?.() ?? [],
     agentInfo: async (conversationId: number) => {
       infoCalls.push(conversationId)
       return script.info?.(conversationId) ?? fakeAgentInfo(conversationId)

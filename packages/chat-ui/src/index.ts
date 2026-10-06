@@ -72,7 +72,7 @@ export type {
 // ── 对话域 hooks ──
 export { useSessionInit } from './hooks/useSessionInit'
 export { useSessionView } from './hooks/useSessionView'
-export { useAgentView } from './hooks/useAgentView'
+export { useAgentView, type AgentViewBinding } from './hooks/useAgentView'
 export { useSessionTools, refreshSessionTools } from './hooks/useSessionTools'
 export type { SessionToolsState } from './hooks/useSessionTools'
 export { useAgentEvents } from './hooks/useAgentEvents'

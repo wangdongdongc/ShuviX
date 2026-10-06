@@ -6,7 +6,7 @@
  * 工具卡退化成普通形态（参数 + 结果文本），实时状态挂在摘要行尾。
  * 见 docs/background-task-hub-design.md §6。
  */
-import { memo, useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import ReactMarkdown from 'react-markdown'
 import { ChevronDown, ChevronRight, Send, Settings } from 'lucide-react'
@@ -121,8 +121,28 @@ function UserBubble({
   )
 }
 
-/** 单条子会话消息渲染 —— 一条 entry 一项；assistant 卡内按 blocks 顺序展开 */
-function SubMessageBubble({ msg }: { msg: ChatMessage }): React.JSX.Element | null {
+/**
+ * 视图里那条「派发时的任务 prompt」（PIN-15）：子对话的第一条用户条目就是它（结果契约在它末尾追加了一段）。
+ * 起始指令已经由 register 的 `prompt` 气泡画过（带内联 Token 标签、不带契约段），转写里跳过这一条；只认
+ * 第一条用户条目，且正文就是 prompt（或 prompt + 空行 + 契约段）—— 之后同样文字的追问照常显示。没有 prompt
+ * （没有登记条目，从视图渲染）→ 一条都不跳。
+ */
+export function withoutSpawnPrompt(messages: ChatMessage[], prompt: string): ChatMessage[] {
+  if (!prompt) return messages
+  const index = messages.findIndex((m) => m.role === 'user')
+  if (index < 0) return messages
+  const first = messages[index]!
+  if (first.type !== 'text') return messages
+  if (first.content !== prompt && !first.content.startsWith(`${prompt}\n\n`)) return messages
+  return [...messages.slice(0, index), ...messages.slice(index + 1)]
+}
+
+/** 单条子会话消息渲染 —— 一条 entry 一项；assistant 卡内按 blocks 顺序展开（视图逐项共享，没变的不重渲染） */
+const SubMessageBubble = memo(function SubMessageBubble({
+  msg
+}: {
+  msg: ChatMessage
+}): React.JSX.Element | null {
   // 用户后续追问：复用 UserBubble（与起始指令同形）
   if (msg.role === 'user' && msg.type === 'text') {
     const tokens = (msg.metadata as { inlineTokens?: Record<string, InlineToken> } | null)
@@ -167,7 +187,7 @@ function SubMessageBubble({ msg }: { msg: ChatMessage }): React.JSX.Element | nu
       })}
     </div>
   )
-}
+})
 
 /** 子会话流式内容视图（消息列表 + 当前流式 text/thinking/tool 调用） */
 export const SubSessionStream = memo(function SubSessionStream({
@@ -180,12 +200,30 @@ export const SubSessionStream = memo(function SubSessionStream({
 }): React.JSX.Element {
   const { t } = useTranslation()
   const scrollerRef = useRef<HTMLDivElement>(null)
+  // 起始指令由 register 的 prompt 气泡画（PIN-15）：转写里跳过视图里的那一条
+  const messages = useMemo(
+    () => withoutSpawnPrompt(sub.messages, sub.prompt),
+    [sub.messages, sub.prompt]
+  )
+  // 实时卡里已经开始执行的工具（视图的 toolRuns 里有它、还没落盘成一条消息）：正在跑 / 刚跑完的工具卡
+  const liveRuns = useMemo(() => {
+    if (sub.toolExecutions.length === 0) return sub.toolExecutions
+    const committed = new Set<string>()
+    for (const m of sub.messages) {
+      if (m.role !== 'assistant') continue
+      for (const block of m.blocks) if (block.type === 'tool') committed.add(block.toolCallId)
+    }
+    return sub.toolExecutions.filter((run) => !committed.has(run.toolCallId))
+  }, [sub.messages, sub.toolExecutions])
+  // 在跑：本轮还没收尾（register / 子 agent 的 agent_start 之后、sub_session_end 之前），或视图说它忙 ——
+  // 视图比余项新时以视图为准（PIN-14：状态还停在 done 而它已经在跑了）
+  const busy = sub.status === 'running' || sub.view?.run.state === 'busy'
 
   // 新增内容自动滚到底部
   useEffect(() => {
     const el = scrollerRef.current
     if (el) el.scrollTop = el.scrollHeight
-  }, [sub.messages.length, sub.streamingContent, sub.streamingThinking])
+  }, [messages.length, sub.streamingContent, sub.streamingThinking, liveRuns.length])
 
   return (
     <div
@@ -220,7 +258,7 @@ export const SubSessionStream = memo(function SubSessionStream({
         <UserBubble content={sub.prompt} inlineTokens={sub.promptInlineTokens} />
 
         {/* 已落盘的消息（每条卡内自行按块展开） */}
-        {sub.messages.map((m) => (
+        {messages.map((m) => (
           <SubMessageBubble key={m.id} msg={m} />
         ))}
 
@@ -254,6 +292,19 @@ export const SubSessionStream = memo(function SubSessionStream({
           </div>
         )}
 
+        {/* 实时卡里已经开始执行的工具（落盘之后由上面那张卡接着画，同一个 toolCallId 只有一处） */}
+        {liveRuns.map((run) => (
+          <ToolCallBlock
+            key={run.toolCallId}
+            toolName={run.toolName}
+            toolCallId={run.toolCallId}
+            args={run.args}
+            result={run.result}
+            details={run.details}
+            status={run.status}
+          />
+        ))}
+
         {/* 生成中的工具调用 */}
         {sub.streamingToolCall && (
           <ToolCallBlock
@@ -273,23 +324,21 @@ export const SubSessionStream = memo(function SubSessionStream({
         ))}
 
         {/* 结束态结果（如果无流式消息且已结束，显示 result 作为 fallback） */}
-        {sub.status !== 'running' &&
-          sub.messages.length === 0 &&
-          !sub.streamingContent &&
-          sub.result && (
-            /* 实心 tertiary（不带 alpha）：会话面板内 bg-primary/secondary 被对调，
+        {!busy && sub.messages.length === 0 && !sub.streamingContent && sub.result && (
+          /* 实心 tertiary（不带 alpha）：会话面板内 bg-primary/secondary 被对调，
                半透明 tertiary 叠在卡片上差值会腰斩到 ~5/255 */
-            <pre className="text-[11px] text-text-secondary bg-bg-tertiary rounded px-2 py-1 whitespace-pre-wrap break-words">
-              {sub.result}
-            </pre>
-          )}
+          <pre className="text-[11px] text-text-secondary bg-bg-tertiary rounded px-2 py-1 whitespace-pre-wrap break-words">
+            {sub.result}
+          </pre>
+        )}
 
         {/* 空状态兜底 */}
-        {sub.messages.length === 0 &&
+        {messages.length === 0 &&
           !sub.streamingContent &&
           !sub.streamingThinking &&
           !sub.streamingToolCall &&
-          sub.status === 'running' && (
+          liveRuns.length === 0 &&
+          busy && (
             <div className="text-[11px] text-text-tertiary italic">
               {t('panel.subAgentStatusRunning')}…
             </div>
@@ -297,7 +346,7 @@ export const SubSessionStream = memo(function SubSessionStream({
       </div>
 
       {/* 追问输入框置于转写末尾（随内容滚动，非固定贴底）：仅本轮结束后出现，滚到底即可见 */}
-      {sub.status !== 'running' && <SubAgentReplyInput subSessionId={sub.subSessionId} />}
+      {!busy && <SubAgentReplyInput subSessionId={sub.subSessionId} />}
     </div>
   )
 })

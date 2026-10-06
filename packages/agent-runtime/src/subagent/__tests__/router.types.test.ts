@@ -70,8 +70,9 @@ describe('router · type contract', () => {
     expectTypeOf<SubAgentManagerDeps>().not.toHaveProperty('createAgent')
     expectTypeOf<SubAgentManagerDeps>().not.toHaveProperty('requestUserInput')
     expectTypeOf<SubAgentManagerDeps>().not.toHaveProperty('maxAgentDepth')
+    // P3-14 加了 sessionReady（追问 / 宿主派发等宿主的信号接好）
     expectTypeOf<keyof SubAgentManagerDeps>().toEqualTypeOf<
-      'sessions' | 'broadcast' | 'tasks' | 'logger' | 'getAbortedNote'
+      'sessions' | 'broadcast' | 'tasks' | 'logger' | 'getAbortedNote' | 'sessionReady'
     >()
   })
 

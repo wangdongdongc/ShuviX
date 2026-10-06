@@ -13,6 +13,7 @@
  *   21 结构共享：流式追加 / 落盘一条 / 等值 reset
  *   22 单一写入口（类型层 + 外部写的行熬不过下一次视图）
  *   23 applyAgentView：只改转写与实时态，元信息不动；没登记的不建
+ *   P3-14 订阅着视图时 agent_start 照样拨回 running（PIN-14）；detachAgentView；deriveAgentViewFields 的共享
  *   25 legacy 视图：消息照显，能力 send:false，没有流式态
  *
  * 不起 jsdom：纯 store 读写。
@@ -42,7 +43,12 @@ import {
   selectToolExecutions,
   useChatStore
 } from '../chatStore'
-import { applyAgentView, useSubSessionStore } from '../subSessionStore'
+import {
+  applyAgentView,
+  deriveAgentViewFields,
+  detachAgentView,
+  useSubSessionStore
+} from '../subSessionStore'
 import {
   V,
   assistant,
@@ -408,6 +414,58 @@ describe('P3-08-23 applyAgentView（PIN-07 的范围）', () => {
   it('没登记过的 agent：不建条目', () => {
     applyAgentView('ghost', { ...agentView('x'), agentId: 'ghost' })
     expect(useSubSessionStore.getState().subSessions.ghost).toBeUndefined()
+  })
+
+  const registerA1 = (): void =>
+    useSubSessionStore.getState().register({
+      subSessionId: 'a1',
+      parentSessionId: 's1',
+      subAgentName: 'explore',
+      displayName: 'Explore',
+      description: 'find',
+      systemPrompt: 'SYS',
+      prompt: 'PROMPT'
+    })
+
+  it('P3-14 PIN-14 订阅着视图时 agent_start 照样把状态拨回 running（流式标记仍以视图为准）', () => {
+    registerA1()
+    useSubSessionStore.getState().markEnded({ subSessionId: 'a1', result: 'r' })
+    applyAgentView('a1', { ...agentView(''), live: null, run: { state: 'idle' } })
+    expect(useSubSessionStore.getState().subSessions.a1.status).toBe('done')
+    useSubSessionStore.getState().setRunning('a1', true)
+    const entry = useSubSessionStore.getState().subSessions.a1
+    expect(entry.status).toBe('running')
+    expect(entry.result).toBeUndefined()
+    expect(entry.isStreaming).toBe(false)
+    // agent_end 不动状态（sub_session_end 才收尾）
+    useSubSessionStore.getState().setRunning('a1', false)
+    expect(useSubSessionStore.getState().subSessions.a1.status).toBe('running')
+  })
+
+  it('P3-14 detachAgentView：实时态收掉、落盘的消息留着、条目不删；之后余项重新维护流式标记', () => {
+    registerA1()
+    applyAgentView('a1', agentView('wor'))
+    detachAgentView('a1')
+    const entry = useSubSessionStore.getState().subSessions.a1
+    expect(entry.view).toBeUndefined()
+    expect(entry.messages.map((m) => m.id)).toEqual(['7', '8'])
+    expect(entry.streamingContent).toBe('')
+    expect(entry.isStreaming).toBe(false)
+    useSubSessionStore.getState().setRunning('a1', true)
+    expect(useSubSessionStore.getState().subSessions.a1.isStreaming).toBe(true)
+    // 没订阅过的：无事
+    const before = useSubSessionStore.getState().subSessions
+    detachAgentView('ghost')
+    expect(useSubSessionStore.getState().subSessions).toBe(before)
+  })
+
+  it('P3-14 deriveAgentViewFields：同一份值交回 prev 本身；消息逐项共享', () => {
+    const first = deriveAgentViewFields(undefined, agentView('wor'))
+    expect(deriveAgentViewFields(first, agentView('wor'))).toBe(first)
+    const next = deriveAgentViewFields(first, agentView('world'))
+    expect(next).not.toBe(first)
+    expect(next.messages).toBe(first.messages)
+    expect(next.streamingContent).toBe('world')
   })
 })
 

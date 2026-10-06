@@ -9,7 +9,8 @@
  *   P3-05-19 legacyView（真文件的那一半：旧格式视图、不 peek / open、不建 .sqlite、.jsonl 字节不变；读坏了 →
  *            空消息）
  *   P3-05-20 none → durable（没有存储 → none 视图、不建 .sqlite；发送之后 replaced 成 durable，门面不变）
- *   P3-05-21 resolveAgent（重启之后认不出，PIN-10；经 IPC 信封以 service_not_found 拒绝）
+ *   P3-14-11 resolveAgent 重启之后（翻转 P3-05-21 / PIN-10）：根会话没打开前订 agent → service_not_found
+ *            （PIN-12）；订过会话（peek → 重建）之后订 agent → 它的 AgentView
  *   P3-05-22 删除（宿主 delete 挂着时 hub.deleteSession 还没调；放开后恰一次、在删行之前，PIN-07；客户端收到
  *            unavailable、再订阅 → service_not_found；没开过的会话也调；父子：先子后父）
  *   P3-05-23 清空 durable 会话（从不 deleteSession；replaced 成 none 视图、不是 unavailable；下一次发送 replaced
@@ -41,7 +42,12 @@ import {
 } from '@earendil-works/chord'
 import { CHAT_VIEW_SERVICE_ID, type SyncTarget } from '@shuvix/chat-protocol/sync'
 import type { AgentView, SessionView } from '@shuvix/chat-protocol/types/sessionView'
-import { answer, waitFor, withTimeout } from '../../../services/__tests__/support/realHost'
+import {
+  answer,
+  callTool,
+  waitFor,
+  withTimeout
+} from '../../../services/__tests__/support/realHost'
 import {
   assistant as legacyAssistant,
   legacyJsonl,
@@ -286,38 +292,65 @@ describe('P3-05-20 none → durable（S）', () => {
   )
 })
 
-describe('P3-05-21 resolveAgent（S）', () => {
+describe('P3-05-21 / P3-14-11 resolveAgent after a restart（S）', () => {
   it(
-    'P3-05-21 重启之后路由认不出 agent（PIN-10）：订阅经 IPC 信封以 service_not_found 拒绝',
+    'P3-14-11 (flips P3-05-21 / PIN-10) process 2: an agent subscribe before the root is open → service_not_found (PIN-12); after the session subscribe (peek → rebuild) → the AgentView',
     async () => {
-      await bootProcess()
+      // 进程 1：s1 派发一个 explore（a1），答完
+      const p1 = await bootProcess()
       insert('s1')
-      await seed(proc(), 's1')
-      // 进程 1：路由认得 a1（索引在内存里）
-      const p1 = proc()
-      vi.spyOn(p1.agentManager, 'locate').mockImplementation((id) =>
-        id === 'a1' ? { sessionId: 's1', conversationId: 2 } : undefined
+      p1.router.on('explore', role('explore'), answer('found'))
+      p1.router.on(
+        'root',
+        role('chat'),
+        callTool('agent', { name: 'explore', prompt: 'find', description: 'look' }, 'call-agent'),
+        answer('done')
       )
-      expect(await (await import('../syncWiring')).resolveAgentOf('a1')).toEqual({
+      expect(await withTimeout(p1.chatGateway.prompt('s1', 'go'), 15000, 'prompt')).toEqual({})
+      const a1 = rig.broadcasts.find((e) => e.type === 'sub_session_register')!.sessionId as string
+      expect(await (await import('../syncWiring')).resolveAgentOf(a1)).toEqual({
         sessionId: 's1',
-        conversationId: 2
+        conversationId: expect.any(Number)
       })
 
-      // 重启：新进程的路由索引是空的
+      // 重启：根会话还没在这个进程里打开过 → 认不出（PIN-12：不加持久的 agentId → 会话查找）
       await crash()
-      const { ipc, window } = await wire()
+      const { p, ipc, window } = await wire()
+      expect(p.host.openSessionIds()).toEqual([])
       const w = window(7)
+      const agentTarget: SyncTarget = { kind: 'agent', agentId: a1 }
       const call = createServiceSubscribeCall(
         'sub-a1',
         CHAT_VIEW_SERVICE_ID,
         'singleton'
       ) as unknown as JsonValue
-      const reply = await ipc.invokeAs(w.wc, 'sync:invoke', { kind: 'agent', agentId: 'a1' }, call)
+      const reply = await ipc.invokeAs(w.wc, 'sync:invoke', agentTarget, call)
       expect(reply).toMatchObject({ ok: false, error: { code: 'service_not_found' } })
-      const rejected = await w.sync
-        .invoke({ kind: 'agent', agentId: 'a1' }, call)
-        .catch((error: unknown) => error)
+      const rejected = await w.sync.invoke(agentTarget, call).catch((error: unknown) => error)
       expect(codeOf(rejected)).toBe('service_not_found')
+
+      // 先订会话（peek → 打开 → 重建），再订 agent：快照是 a1 的 AgentView
+      const root = await bound(w, S('s1'))
+      expect(viewOf(root)?.source).toBe('durable')
+      const agent = await bound(w, agentTarget)
+      const view = agent.value() as AgentView
+      expect(view.agentId).toBe(a1)
+      expect(view.sessionId).toBe('s1')
+      expect(view.conversationId).toBe(p.agentManager.locate(a1)!.conversationId)
+      expect(view.messages.map((m) => [m.role, m.content])).toEqual([
+        ['user', 'find'],
+        ['assistant', 'found']
+      ])
+      // 与这条会话自己对 a1 的投影同一份
+      const session = p.host.get('s1')!
+      const projector = (await session.agentProjector(a1))!
+      const handle = projector.acquire()
+      try {
+        expect(view.messages).toEqual(JSON.parse(JSON.stringify(handle.state.value.messages)))
+      } finally {
+        handle.release()
+      }
+      expect(agent.errors).toEqual([])
     },
     T
   )

@@ -7516,3 +7516,119 @@ export function notebookOutlinePane(main: CdpClient): NotebookOutlinePane {
       })()`)
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// 会话面板 · 任务页（BgTaskPanel，P3-14）
+//
+// 锚点：工具栏按钮 `[data-session-tool="tasks"]`；每一行 `[data-task-row=<kind>]` + `[data-task-status=<status>]`
+// （枢纽的状态，不随语言变）；派生 agent 的行另有 `[data-subagent-run=<档案名>]` /
+// `[data-subagent-expanded]`；子会话行的「打开」是 `[data-task-open]`。详情（派生 agent 的转写）是行根节点下
+// 标题行之后的那一块；「不在了」的文案是 `[data-subagent-gone]`。
+
+/** 任务页的一行（子会话等非派生 agent 的行按标题认） */
+export interface TaskRowShot {
+  kind: string
+  status: string
+  title: string
+}
+
+export interface TasksPanelPane {
+  /** 打开当前会话面板的任务页（工具栏出现 tasks 按钮之后点它；已在任务页就不动） */
+  open(timeoutMs?: number): Promise<void>
+  /** 任务页里的行（按显示次序） */
+  rows(): Promise<TaskRowShot[]>
+  /** 派生 agent 的行在不在 */
+  hasAgentRow(profile: string): Promise<boolean>
+  /** 展开某个派生 agent 的行（已展开就不动），等它的详情出来 */
+  expand(profile: string): Promise<void>
+  /** 某个派生 agent 行的详情文本（没展开 → ''） */
+  transcriptText(profile: string): Promise<string>
+  /** 在某个派生 agent 的追问框里发一条（输入框不在 → 抛错） */
+  reply(profile: string, text: string): Promise<void>
+  /** 某个派生 agent 的详情里有没有追问框 */
+  hasReply(profile: string): Promise<boolean>
+  /** 点某个子会话行的「打开」（按标题认）；没有这一行 → false */
+  openSubSession(title: string): Promise<boolean>
+}
+
+export function tasksPanelPane(main: CdpClient): TasksPanelPane {
+  const TOOL = `document.querySelector('[data-session-tool="tasks"]')`
+  const AGENT_ROW = (profile: string): string =>
+    `document.querySelector('[data-subagent-run=${JSON.stringify(profile)}]')`
+  /** 行根节点下：第一个子节点是标题行，其余是详情 */
+  const DETAIL_TEXT = (profile: string): string => `(() => {
+    const row = ${AGENT_ROW(profile)}
+    if (!row) return ''
+    return [...row.children].slice(1).map((c) => c.textContent ?? '').join('\\n')
+  })()`
+
+  return {
+    open: async (timeoutMs = 15_000) => {
+      await until(() => main.eval<boolean>(`!!${TOOL}`), 'tasks toolbar button', timeoutMs)
+      await main.eval(`(() => {
+        const btn = ${TOOL}
+        // 已经在任务页（按钮是激活态）就别再点：收起态点它是展开，展开态点它是切页，都不会收起
+        if (btn && !btn.className.includes('text-accent')) btn.click()
+        return true
+      })()`)
+      await until(
+        () => main.eval<boolean>(`!!document.querySelector('[data-task-row]')`),
+        'tasks panel rows',
+        timeoutMs
+      )
+    },
+    rows: () =>
+      main.eval<TaskRowShot[]>(
+        `[...document.querySelectorAll('[data-task-row]')].map((r) => ({
+          kind: r.getAttribute('data-task-row') ?? '',
+          status: r.getAttribute('data-task-status') ?? '',
+          title: r.querySelector('.truncate')?.textContent ?? ''
+        }))`
+      ),
+    hasAgentRow: (profile) => main.eval<boolean>(`!!${AGENT_ROW(profile)}`),
+    expand: async (profile) => {
+      await until(() => main.eval<boolean>(`!!${AGENT_ROW(profile)}`), `agent row ${profile}`)
+      await main.eval(`(() => {
+        const row = ${AGENT_ROW(profile)}
+        if (row.getAttribute('data-subagent-expanded') !== 'true') row.firstElementChild.click()
+        return true
+      })()`)
+      await until(
+        () =>
+          main.eval<boolean>(
+            `${AGENT_ROW(profile)}?.getAttribute('data-subagent-expanded') === 'true'`
+          ),
+        `agent row ${profile} expanded`
+      )
+    },
+    transcriptText: (profile) => main.eval<string>(DETAIL_TEXT(profile)),
+    hasReply: (profile) => main.eval<boolean>(`!!${AGENT_ROW(profile)}?.querySelector('textarea')`),
+    reply: async (profile, text) => {
+      const ok = await main.eval<boolean>(`(() => {
+        const box = ${AGENT_ROW(profile)}?.querySelector('textarea')
+        if (!box) return false
+        const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set
+        setter.call(box, ${JSON.stringify(text)})
+        box.dispatchEvent(new Event('input', { bubbles: true }))
+        return true
+      })()`)
+      if (!ok) throw new Error(`no reply box in agent row ${profile}`)
+      await sleep(30)
+      await main.eval(`(() => {
+        const box = ${AGENT_ROW(profile)}?.querySelector('textarea')
+        box?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+        return true
+      })()`)
+    },
+    openSubSession: (title) =>
+      main.eval<boolean>(`(() => {
+        const row = [...document.querySelectorAll('[data-task-row="sub-session"]')].find(
+          (r) => r.querySelector('.truncate')?.textContent === ${JSON.stringify(title)}
+        )
+        const btn = row?.querySelector('[data-task-open]')
+        if (!btn) return false
+        btn.click()
+        return true
+      })()`)
+  }
+}

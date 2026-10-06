@@ -17,9 +17,12 @@
  *   waitAskGone(sid, id)     等这条询问从视图里消失（替代 `waitFor('input_request_resolved')`）
  *   toolResults(sid)         落盘的工具块（带结果的）：toolCallId / toolName / result / isError / details
  *                            （替代 `tool_end` 事件）
+ *   agentViewOf(agentId)     一个派生 agent 的视图（`{kind:'agent'}` 目标，P3-14；根会话要先在主进程里打开过，
+ *                            否则订阅以 service_not_found 拒绝 —— 抛出）
+ *   waitAgentView(id, pred)  轮询直到 agent 视图满足 pred
  */
-import type { SyncFrame, SyncTarget } from '@shuvix/chat-protocol/sync'
-import type { SessionView } from '@shuvix/chat-protocol/types/sessionView'
+import { syncTargetKey, type SyncFrame, type SyncTarget } from '@shuvix/chat-protocol/sync'
+import type { AgentView, SessionView } from '@shuvix/chat-protocol/types/sessionView'
 import type { InputRequest } from '@shuvix/chat-protocol/types/inputRequest'
 import type { AssistantToolBlock, ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
 import type { WireServiceProviderUpdate } from '@earendil-works/chord'
@@ -60,6 +63,15 @@ export interface SyncProbe {
   toolResults(sessionId: string): Promise<ToolResult[]>
   /** 等某个工具调用落盘出结果 */
   waitToolResult(sessionId: string, toolCallId?: string, timeoutMs?: number): Promise<ToolResult>
+  /** 一个派生 agent 此刻的视图（第一次读时订阅；订阅失败抛出，错误带 `.code`） */
+  agentViewOf(agentId: string): Promise<AgentView | undefined>
+  /** 等 agent 视图满足 `pred`；超时抛错 */
+  waitAgentView(
+    agentId: string,
+    pred: (view: AgentView) => boolean,
+    timeoutMs?: number,
+    what?: string
+  ): Promise<AgentView>
   /** 放掉一条会话的订阅 */
   release(sessionId: string): Promise<void>
   /** 已订阅的会话 id */
@@ -151,6 +163,9 @@ export function syncProbe(main: CdpClient): SyncProbe {
     for (const frame of frames) receiver?.(frame)
   }
 
+  /** agent 目标的绑定（按 `syncTargetKey` 记，与会话的分开） */
+  const agentBindings = new Map<string, TestBinding>()
+
   async function bind(sessionId: string): Promise<TestBinding> {
     await install()
     let binding = bindings.get(sessionId)
@@ -161,6 +176,31 @@ export function syncProbe(main: CdpClient): SyncProbe {
       await binding.ready()
     }
     return binding
+  }
+
+  async function bindAgent(agentId: string): Promise<TestBinding> {
+    await install()
+    const target: SyncTarget = { kind: 'agent', agentId }
+    const key = syncTargetKey(target)
+    let binding = agentBindings.get(key)
+    if (!binding) {
+      binding = client.bind(target)
+      try {
+        await binding.ready()
+      } catch (error) {
+        // 订阅被拒：不留绑定，下一次重订
+        await binding.dispose().catch(() => undefined)
+        throw error
+      }
+      agentBindings.set(key, binding)
+    }
+    return binding
+  }
+
+  async function agentViewOf(agentId: string): Promise<AgentView | undefined> {
+    const binding = await bindAgent(agentId)
+    await drain()
+    return binding.value() as AgentView | undefined
   }
 
   async function viewOf(sessionId: string): Promise<SessionView | undefined> {
@@ -250,6 +290,28 @@ export function syncProbe(main: CdpClient): SyncProbe {
       return toolResultsIn(view.messages).find(
         (r) => toolCallId === undefined || r.toolCallId === toolCallId
       )!
+    },
+    agentViewOf,
+    waitAgentView: async (agentId, pred, timeoutMs = 30_000, what) => {
+      let last: AgentView | undefined
+      try {
+        return await until(
+          async () => {
+            last = await agentViewOf(agentId)
+            return last !== undefined && pred(last) ? last : null
+          },
+          what ?? `agent view of ${agentId}`,
+          timeoutMs
+        )
+      } catch (error) {
+        const summary = last
+          ? JSON.stringify({
+              run: last.run,
+              messages: last.messages.map((m) => `${m.role}:${m.content.slice(0, 40)}`)
+            })
+          : 'no view'
+        throw new Error(`${(error as Error).message}\nlast agent view: ${summary}`)
+      }
     },
     release: async (sessionId) => {
       const binding = bindings.get(sessionId)
