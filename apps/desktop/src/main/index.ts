@@ -64,6 +64,7 @@ import { randomBytes } from 'crypto'
 import { chromeBridgeAddressFile, chromeBridgeSocketPath } from '@shuvix/chat-protocol/chromeBridge'
 import { closeAllWatchers } from './services/filesWatcherService'
 import { hookService } from './services/hookService'
+import { runLegacySwitchover } from './services/legacySwitchover'
 import { reviewPermissionRequest } from './services/permissionReview'
 import { setPermissionReviewer } from './services/toolContext'
 import { installLlmNetwork } from './services/models'
@@ -776,6 +777,11 @@ app.whenReady().then(async () => {
   // 命令沙箱读开关的口子：模块本身不碰设置表（它在很多导入链上），由这里注入。
   // 没注入就是关闭 —— 只有真正起来的应用才套沙箱
   setSandboxSettingReader(() => settingsDao.findByKey(SANDBOX_ENABLED_KEY))
+
+  // 旧格式会话的启动切换（services/legacySwitchover）：绑着文件的原地重置、Chrome 标签页会话删掉。
+  // 必须 await 完、排在 CLI 服务 / Chrome 桥 / 任何窗口之前 —— 否则 shuvix-cli、侧边栏或界面可能在
+  // 切换途中碰到这些会话（订阅一条马上就不再是旧格式的会话）。它从不 reject，启动不会因此中止
+  await runLegacySwitchover()
 
   // 启动 CLI IPC 服务 —— 给 shuvix-cli 提供 Unix socket / named pipe
   cliServer.start().catch((err) => {
