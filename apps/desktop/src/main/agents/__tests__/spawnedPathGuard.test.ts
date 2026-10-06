@@ -60,7 +60,7 @@ describe('P2-05-51 no callers of the old spawned path', () => {
     )
   })
 
-  it('P2-08-52 the Q16 debt is paid: permissionReview.ts and the hook runner carry no p2 marker; nothing throws PhasePendingError for host dispatch', () => {
+  it('P2-08-52 the Q16 debt is paid: permissionReview.ts and the hook runner carry no p2 marker; host dispatch is never refused as unimplemented', () => {
     for (const path of [
       join(MAIN, 'services/permissionReview.ts'),
       join(RUNTIME, 'hook/hookRunner.ts'),

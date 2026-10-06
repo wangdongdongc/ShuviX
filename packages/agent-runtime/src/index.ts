@@ -5,11 +5,10 @@
  * 本包负责 agent 档案 / 工具 / 安全 / 提示词这些 ShuviX 自己的东西，并通过注入接口
  * （event sink / env / 存储 / 网络）脱离 Node/Electron。桌面端与 Chrome 扩展共享同一套编排逻辑。
  *
- * pi-durable 切换进行中（P1-01 起）：会话运行时尚在重建，未就绪的入口抛 `PhasePendingError`。
+ * 新会话跑在 pi-durable 上（`durable/`）；切换前的旧格式（harness-v3）会话只读，由 `legacy/` 里冻结的
+ * 投影显示。
  */
 export * from './types'
-// 迁移期「这条路径还没实现」的统一标记（见 errors/phasePending.ts）
-export { PhasePendingError, isPhasePendingError } from './errors/phasePending'
 // 会话运行时生命周期簿记（Map + 懒创建 + 失效/销毁）—— 桌面/扩展共享，构造与清理经注入
 export {
   SessionManager,
