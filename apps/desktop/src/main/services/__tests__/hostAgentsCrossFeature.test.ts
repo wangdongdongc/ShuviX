@@ -608,7 +608,7 @@ describe('K5 spawned agents through the real desktop ToolHost', () => {
 
 describe('P2-08 desktop integration cases', () => {
   it(
-    'P2-08-16 标题经 session 工具落下：titler 的请求恰 [session]；行标题 Hooked title / auto；titleChanged 一次；日志 start / ok、没有 PhasePendingError；根的摘要没有 titler 的字；turn-completed 事实 {1, 2}',
+    'P2-08-16 标题经 session 工具落下：titler 的请求恰 [session]；行标题 Hooked title / auto；titleChanged 一次；日志 start / ok、没有「尚未实现」的拒绝；根的摘要没有 titler 的字；turn-completed 事实 {1, 2}',
     async () => {
       await titledTurn()
       const p = proc()
@@ -623,7 +623,7 @@ describe('P2-08 desktop integration cases', () => {
       const lines = logLines()
       expect(lines.some((l) => /hook "auto-title" run=\S+ start/.test(l))).toBe(true)
       expect(lines.some((l) => /hook "auto-title" run=\S+ ok/.test(l))).toBe(true)
-      expect(lines.some((l) => l.includes('PhasePendingError'))).toBe(false)
+      expect(lines.some((l) => l.includes('not available yet'))).toBe(false)
       const digest = await p.transcriptSource.readSessionTranscript('s1')
       const texts = JSON.stringify(digest)
       expect(texts).not.toContain('Hooked title')

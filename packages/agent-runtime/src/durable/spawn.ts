@@ -247,14 +247,25 @@ function messageParts(message: AssistantMessage): { text: string; toolCalls: num
  *
  * 压缩条目之前的停止原因与报错不算数（P2-11 J5-02）：溢出 → 阻塞压缩 → 重试成功时，那条报错的 assistant
  * 条目留在转写里，但它已经被这次压缩收复了 —— 旧运行时里它不在消息表里，回答不该再带一条 `error=` 注记。
+ *
+ * 被重试收复的失败尝试同理（P3-16 裁定）：报错的 assistant 条目之后同一 `byTaskId` 还有更晚的 assistant
+ * 条目 = 这次运行重试过、接着往下跑了 —— 这条尝试整条不算（不计数、不取文本、不带注记），与界面投影的
+ * 重试折叠同一口径（Q-P3-06）。最后一次尝试仍失败的运行，那条报错就是同一任务的最后一条，注记照留。
  */
 export function extractSpawnResult(entries: readonly EntryRecord[], execError?: string): string {
+  // 每个任务最后一条 assistant 条目的位置：更早的报错条目是被重试收复的尝试
+  const lastOfTask = new Map<number, number>()
+  entries.forEach((entry, index) => {
+    if (entry.kind === AssistantEntry.kind && entry.byTaskId !== undefined) {
+      lastOfTask.set(entry.byTaskId, index)
+    }
+  })
   let lastText = ''
   let lastStopReason = ''
   let lastErrorMessage = ''
   let assistantCount = 0
   let toolUseCount = 0
-  for (const entry of entries) {
+  for (const [index, entry] of entries.entries()) {
     if (entry.kind === CompactionEntry.kind) {
       lastStopReason = ''
       lastErrorMessage = ''
@@ -262,6 +273,14 @@ export function extractSpawnResult(entries: readonly EntryRecord[], execError?: 
     }
     const message = assistantOf(entry)
     if (message === undefined) continue
+    const task = entry.byTaskId
+    if (
+      message.stopReason === 'error' &&
+      task !== undefined &&
+      (lastOfTask.get(task) ?? -1) > index
+    ) {
+      continue
+    }
     assistantCount++
     if (message.stopReason) lastStopReason = message.stopReason
     if (message.errorMessage) lastErrorMessage = message.errorMessage

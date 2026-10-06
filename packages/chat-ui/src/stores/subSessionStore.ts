@@ -17,13 +17,7 @@ import { create } from 'zustand'
 import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
 import type { AgentView } from '@shuvix/chat-protocol/types/sessionView'
 import type { ChatMessage, ToolExecution } from './chatStore'
-import {
-  EMPTY_IMAGES,
-  EMPTY_TOOLS,
-  deriveStream,
-  deriveToolExecutions,
-  shareStructure
-} from './viewDerivation'
+import { EMPTY_TOOLS, deriveStream, deriveToolExecutions, shareStructure } from './viewDerivation'
 
 /** 子智能体运行时状态 */
 export type SubSessionStatus = 'running' | 'done' | 'error'
@@ -66,7 +60,6 @@ export interface SubSessionState {
 }
 
 const EMPTY_TOOL_EXECUTIONS: ToolExecution[] = []
-const EMPTY_MESSAGES: ChatMessage[] = []
 const EMPTY_COMPLETED: Array<{ toolName: string; args?: Record<string, unknown> }> = []
 
 interface SubSessionStore {
@@ -223,7 +216,6 @@ export function deriveAgentViewFields(
           content: prev.streamingContent,
           thinking: prev.streamingThinking,
           isStreaming: prev.isStreaming,
-          images: EMPTY_IMAGES,
           streamingToolCall: prev.streamingToolCall,
           completedStreamingToolCalls: prev.completedStreamingToolCalls
         }
@@ -291,40 +283,3 @@ export function isSubSession(sessionId: string): boolean {
 /** 子会话数量 */
 export const selectSubSessionCount = (s: SubSessionStore): number =>
   Object.keys(s.subSessions).length
-
-/** 特定子会话的流式状态（用于 AssistantBubble 的 StreamSource 供给） */
-export const selectSubSessionStream =
-  (subSessionId: string) =>
-  (
-    s: SubSessionStore
-  ): {
-    content: string
-    thinking: string
-    isStreaming: boolean
-    streamingToolCall: { toolName: string; argsText: string } | null
-    completedStreamingToolCalls: Array<{ toolName: string; args?: Record<string, unknown> }>
-    toolExecutions: ToolExecution[]
-    messages: ChatMessage[]
-  } => {
-    const entry = s.subSessions[subSessionId]
-    if (!entry) {
-      return {
-        content: '',
-        thinking: '',
-        isStreaming: false,
-        streamingToolCall: null,
-        completedStreamingToolCalls: EMPTY_COMPLETED,
-        toolExecutions: EMPTY_TOOL_EXECUTIONS,
-        messages: EMPTY_MESSAGES
-      }
-    }
-    return {
-      content: entry.streamingContent,
-      thinking: entry.streamingThinking,
-      isStreaming: entry.isStreaming,
-      streamingToolCall: entry.streamingToolCall,
-      completedStreamingToolCalls: entry.completedStreamingToolCalls,
-      toolExecutions: entry.toolExecutions,
-      messages: entry.messages
-    }
-  }

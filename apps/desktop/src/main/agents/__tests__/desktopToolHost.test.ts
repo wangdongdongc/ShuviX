@@ -147,7 +147,6 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprot
 import type { McpServer } from '@shuvix/chat-protocol/types/mcp'
 import {
   composeAgentTools,
-  isPhasePendingError,
   LAZY_CONNECT_TIMEOUT_MS,
   McpManager,
   normalizeToolNames,
@@ -270,6 +269,11 @@ let unregister: () => void
 
 const names = (tools: readonly { name: string }[]): string[] => tools.map((t) => t.name)
 const signal = (): AbortSignal => new AbortController().signal
+/**
+ * 迁移期「这条路径还没实现」的拒绝文案（`… is not available yet (pi-durable migration, phase N)`）。
+ * 派生路径早已实现：解析 / 重建要是失败，只能是真故障，绝不是这句
+ */
+const NOT_IMPLEMENTED = /not available yet|pi-durable migration/
 
 /** 一次 registrationsFromDeclarations 调用的 callerIdOf */
 function callerIdOfCall(i: number): (conversationId: number) => string | undefined {
@@ -584,7 +588,7 @@ describe('resolveAgentTools', () => {
       { signal: signal() }
     )
     const resolved = await resolving.catch((e: unknown) => {
-      expect(isPhasePendingError(e), 'no PhasePendingError any more').toBe(false)
+      expect(String(e), 'never refused as unimplemented').not.toMatch(NOT_IMPLEMENTED)
       throw e
     })
     expect('agent' in resolved).toBe(false)
@@ -927,7 +931,7 @@ describe('rebuildAgentTools', () => {
     const set = await Promise.resolve()
       .then(() => host.rebuildAgentTools(lock, { sessionId: 's1' }))
       .catch((e: unknown) => {
-        expect(isPhasePendingError(e), 'no PhasePendingError any more').toBe(false)
+        expect(String(e), 'never refused as unimplemented').not.toMatch(NOT_IMPLEMENTED)
         throw e
       })
     expect(set.agent).toBeUndefined()

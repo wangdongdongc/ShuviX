@@ -235,8 +235,8 @@ export function createNotificationCenter(deps: NotificationCenterDeps): Notifica
         }
 
         case 'error': {
-          // 运行中出的错等 agent_end 一起弹（同一次失败可能先后广播 message_end 的
-          // error 和 prompt() catch 的 error，攒着才不会弹两条）；
+          // 运行中出的错等 agent_end 一起弹（同一轮可能广播不止一条 error，攒着只弹最后一条，
+          // 不会弹两条）；
           // 不在运行中说明这轮压根没起来（模型解析失败等），没有 agent_end 兜底，立刻弹。
           if (runningSessions.has(event.sessionId)) pendingErrors.set(event.sessionId, event.error)
           // 派生 agent 的错同样不弹（与 agent_end 分支同因）：它以 tool error 回到父 agent，

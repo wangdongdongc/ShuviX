@@ -5,7 +5,7 @@
  * pi-durable 时移入本目录并冻结）：旧会话永不迁移，「旧会话现在怎么显示，以后就怎么显示」
  * 由这份冻结的投影保证（黄金用例 `__tests__/golden.test.ts` 钉住）。类型改用本目录的
  * `HarnessV3Entry`（与 pi 0.80 的 `SessionTreeEntry` 逐字段同形），消息载荷沿用 pi-ai 的类型。
- * 不要在这里加新行为 —— 新存储的投影另起（TODO(pi-durable p3)）。
+ * 不要在这里加新行为 —— durable 会话的投影在 `durable/projection/`（P3-02 起）。
  *
  * **一条 entry = 一条 ChatMessage = UI 上一项**。这是投影层唯一的结构规则：
  * 会话树里没有「一次 agent 循环」这种东西，所以 UI 也不再有 —— 一次 LLM 调用

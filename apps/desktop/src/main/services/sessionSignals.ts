@@ -257,10 +257,3 @@ export function sessionRunErrorText(sessionId: string): string | undefined {
  * 不是打开着的会话 → 立刻落定（读的是 `sessionSignalSeams` 那张表 —— AgentSession 直接引它）
  */
 export { sessionSignalsReady, setRegisteredAgentCheck } from './sessionSignalSeams'
-
-/** 丢掉单例（先 dispose）与观察者 —— 仅供单测 */
-export function resetSessionSignalsForTests(): void {
-  installed?.dispose()
-  installed = undefined
-  askObserver = null
-}

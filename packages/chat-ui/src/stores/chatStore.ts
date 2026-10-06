@@ -32,7 +32,6 @@ import {
   type SessionViewSource
 } from '@shuvix/chat-protocol/types/sessionView'
 import {
-  EMPTY_IMAGES,
   EMPTY_COMPLETED_TOOL_CALLS,
   EMPTY_TOOLS,
   deriveStream,
@@ -471,11 +470,8 @@ export function pendingPromptMessage(
   }
 }
 
-export const selectStreamingImages = (s: ChatState): Array<{ data: string; mimeType: string }> =>
-  s.activeSessionId ? s.sessionStreams[s.activeSessionId]?.images || EMPTY_IMAGES : EMPTY_IMAGES
-
 /**
- * 当前流式是否已经产出了可见内容（正文 / 思考 / 工具调用 / 图片）。
+ * 当前流式是否已经产出了可见内容（正文 / 思考 / 工具调用）。
  *
  * 用来决定「渲染一张流式占位卡」还是「只显示等待动画」：刚发出请求、首 token
  * 未到时占位卡里什么都没有，画出来就是一张空卡。
@@ -487,8 +483,7 @@ export const selectHasLiveStreamContent = (s: ChatState): boolean => {
     st.content ||
     st.thinking ||
     st.streamingToolCall ||
-    st.completedStreamingToolCalls.length > 0 ||
-    st.images.length > 0
+    st.completedStreamingToolCalls.length > 0
   )
 }
 

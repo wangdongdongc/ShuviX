@@ -33,7 +33,7 @@ vi.mock('../hookService', () => ({
   hookTriggers: { fire: vi.fn() },
   hookService: { abortSessionRuns: vi.fn() }
 }))
-vi.mock('../sessionDayPromptService', () => ({ recordPromptAdmitted: vi.fn() }))
+vi.mock('../sessionDayPromptService', () => ({ recordUserEntry: vi.fn() }))
 vi.mock('../sessionRecords', () => ({ sessionRecords: { pick: () => undefined } }))
 vi.mock('../../dao/providerDao', () => ({ providerDao: { pick: () => undefined } }))
 vi.mock('../agentService', () => ({ agentService: { getProfile: () => undefined } }))

@@ -30,7 +30,7 @@ const mocks = vi.hoisted(() => ({
   broadcast: vi.fn<(event: Record<string, unknown>) => void>(),
   getProfile: vi.fn<(name: string) => unknown>(),
   fire: vi.fn(),
-  recordPromptAdmitted: vi.fn()
+  recordUserEntry: vi.fn()
 }))
 
 vi.mock('../../dao/database', () => {
@@ -88,8 +88,7 @@ vi.mock('../agentRuntimeAdapters', () => ({
 }))
 vi.mock('../settingsService', () => ({ settingsService: { get: () => undefined } }))
 vi.mock('../sessionDayPromptService', () => ({
-  recordPromptAdmitted: mocks.recordPromptAdmitted,
-  recordFromUserMessageEvent: vi.fn()
+  recordUserEntry: mocks.recordUserEntry
 }))
 vi.mock('../toolAggregator', () => ({ filterAvailableTools: (tools: string[]) => tools }))
 vi.mock('../mcpService', () => ({
@@ -245,7 +244,7 @@ beforeEach(() => {
   clearMemoryStoragesForTests()
   mocks.broadcast.mockClear()
   mocks.fire.mockClear()
-  mocks.recordPromptAdmitted.mockClear()
+  mocks.recordUserEntry.mockClear()
   mocks.getProfile.mockImplementation((name) => profile(name))
   kit = fauxKit()
   resetSessionHostForTests(overrides(kit))

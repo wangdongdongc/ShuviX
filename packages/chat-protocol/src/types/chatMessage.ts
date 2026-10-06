@@ -15,8 +15,8 @@ export interface ImageMeta {
 /**
  * token 用量统计。
  *
- * 挂在**一条** assistant 消息上时就是那一次 LLM 调用的用量（一条 entry = 一次调用）；
- * `details` 只在事件层的整轮聚合（agent_end 的 ChatTokenUsage）里出现。
+ * 挂在**一条** assistant 消息上时就是那一次 LLM 调用的用量（一条 entry = 一次调用）。
+ * `details`（逐次明细）是旧事件层整轮聚合留下的可选字段：durable 投影与冻结的旧投影都不写它。
  */
 export interface UsageInfo {
   input: number
