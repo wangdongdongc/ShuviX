@@ -3,8 +3,9 @@
  *
  *   P3-05-10 sync.invoke（ipcRenderer.invoke 恰一次、同一组参数；{ok:true, value} → value）
  *   P3-05-11 sync.onFrame（每个回调各一次、只给帧；注销只摘自己的；重复注销无事）
- *   P3-05-12 契约（类型层 + 静态检查：SessionChannelApi.sync 的形状、index.d.ts 声明了 sync、白名单里没有
- *            sync.invoke —— 那是 P3-09）。扩展侧边栏的桩子在 apps/extension 的 channelApiSync.test.ts。
+ *   P3-05-12 契约（类型层 + 静态检查：SessionChannelApi.sync 的形状、index.d.ts 声明了 sync；P3-09 之后
+ *            白名单里有 sync.invoke —— 帧经桥事件推，没有 sync.onFrame 这条路径）。扩展侧边栏的那一半在
+ *            apps/extension 的 channelApiSync.test.ts。
  */
 import { describe, expect, expectTypeOf, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
@@ -107,7 +108,7 @@ describe('P3-05-11 preload sync.onFrame', () => {
 })
 
 describe('P3-05-12 契约', () => {
-  it('P3-05-12 SessionChannelApi.sync 的形状；window.api（ShuviXAPI）声明了 sync；白名单里没有 sync.invoke', () => {
+  it('P3-05-12 / P3-09-01 SessionChannelApi.sync 的形状；window.api（ShuviXAPI）声明了 sync；白名单里有 sync.invoke、没有 sync.onFrame', () => {
     expectTypeOf<SessionChannelApi['sync']['invoke']>().toEqualTypeOf<
       (target: SyncTarget, call: JsonValue) => Promise<JsonValue | undefined>
     >()
@@ -122,7 +123,7 @@ describe('P3-05-12 契约', () => {
     // sync 是必选成员（PIN-08）
     expectTypeOf<undefined>().not.toMatchTypeOf<SessionChannelApi['sync']>()
 
-    expect(CHROME_PANEL_CHANNEL_PATHS as readonly string[]).not.toContain('sync.invoke')
+    expect(CHROME_PANEL_CHANNEL_PATHS as readonly string[]).toContain('sync.invoke')
     expect(CHROME_PANEL_CHANNEL_PATHS as readonly string[]).not.toContain('sync.onFrame')
   })
 })

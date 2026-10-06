@@ -22,7 +22,10 @@ export interface ResettableSyncClient {
 }
 
 /** 登记重绑；返回注销 */
-export function resetSyncOnReconnect(link: ResettableLink, client: ResettableSyncClient): () => void {
+export function resetSyncOnReconnect(
+  link: ResettableLink,
+  client: ResettableSyncClient
+): () => void {
   let everReady = link.state === 'ready'
   let lost = false
   return link.onState((state) => {

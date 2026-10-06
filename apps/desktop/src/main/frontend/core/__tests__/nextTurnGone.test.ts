@@ -31,6 +31,8 @@ const ASSERTS_ABSENCE = [
   'apps/desktop/src/main/services/__tests__/agentSessionFacade.test.ts',
   'apps/desktop/src/main/services/__tests__/sessionRuntimeWiring.test.ts',
   'packages/chat-protocol/src/chatApiQueue.test.ts',
+  // CB-22：Chrome 侧边栏的白名单里没有它（P3-09-01）
+  'packages/chat-protocol/src/chromeBridge.test.ts',
   'packages/chat-protocol/src/i18n/locales.test.ts',
   'packages/chat-protocol/src/types/agentMonitor.test.ts',
   'packages/chat-protocol/src/types/sessionView.test.ts'

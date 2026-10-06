@@ -23,7 +23,7 @@
  * 协议版本。握手时两边比对，对不上就不接受命令（侧边栏与设置页提示「请更新扩展」）。
  *
  * 2（P3-09）：侧边栏的会话内容改走视图同步 —— 白名单多了 `sync.invoke` / `agent.continue` /
- * `agent.withdrawQueued`、少了 `agent.nextTurn`，桌面多推一种事件 `sync.frame`。版本 1 的扩展收不到帧，
+ * `agent.withdrawQueued`、少了「下一轮」那一档，桌面多推一种事件 `sync.frame`。版本 1 的扩展收不到帧，
  * 侧边栏会一片空白，所以宁可让它提示更新。
  */
 export const CHROME_BRIDGE_PROTOCOL = 2
