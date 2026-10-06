@@ -33,12 +33,7 @@
  * 共享与回收：`DurableSession.projector()` 惰性建一个、同一时刻只有一个；`acquire()` / `release()` 计数，
  * 最后一个 release 之后拆掉（状态保留最后的值）；会话关停时一并拆掉。不依赖 Node / Electron。
  */
-import {
-  copyJson,
-  replicatedState,
-  type JsonValue,
-  type MutableReplicatedState
-} from '@earendil-works/chord'
+import { replicatedState, type MutableReplicatedState } from '@earendil-works/chord'
 import {
   AssistantEntry,
   LiveDoc,
@@ -145,11 +140,6 @@ export interface ProjectorHost {
 }
 
 // ─────────────────────────── 共用的投影核心 ───────────────────────────
-
-/** 一份与投影的对象不共享任何容器的拷贝（交给 chord 接管的初值 / 换挂载的整份值） */
-function detached<V extends object>(view: V): V {
-  return copyJson(view as unknown as JsonValue) as unknown as V
-}
 
 const ROOT_REVISION_FAILED = 'projector revision failed'
 
@@ -445,8 +435,9 @@ export abstract class ProjectorCore<V extends object> {
     this.mount = mount
     this.rootRun = this.initialRun(mount)
     const next = this.project(mount, this.runStateOf(mount.conversationId))
-    // chord 接管初值不拷贝：交一份拷贝，投影留着的对象（memo 之后还会复用）就永远不归状态所有
-    const state = replicatedState(detached(next))
+    // chord 接管初值不拷贝（「不可变的所有权」）：它从不改动接管的值，投影也从不改动交出去过的对象，所以
+    // memo 之后接着复用它们在契约之内（挂载不为 P4-09b 多付一次整份拷贝）
+    const state = replicatedState(next)
     this.stateRef = state
     this.applied = { view: next, root: state.value }
     this.listen(mount)
@@ -470,7 +461,7 @@ export abstract class ProjectorCore<V extends object> {
     this.rootRun = this.initialRun(mount)
     const state = this.requireState()
     const next = this.project(mount, this.runStateOf(mount.conversationId))
-    this.write(state, next, () => state.replace(BG, detached(next)))
+    this.write(state, next, () => state.replace(BG, next))
     this.listen(mount)
   }
 
@@ -539,7 +530,7 @@ export abstract class ProjectorCore<V extends object> {
    * 对齐可以拿来按引用跳过的上一份视图（P4-09b）：只有状态的根值还是上次写完时那一个才给 —— chord 每次
    * 生效的修订（change / replace）都换一个新的根值，所以任何别的写者动过状态，这里都会退回整棵比较。
    * 「上一份视图与状态深相等」于是不靠约定：根值没换 = 状态从那以后没被改过，而那一刻它与 `view` 深相等；
-   * `view` 里的对象投影从不改动（memo 只沿用、不修改；状态里存的是拷贝，见 `detached`）。
+   * `view` 里的对象没人改动（memo 只沿用、不修改；chord 只做不可变的修订，赋值时按值拷贝）。
    */
   private prevForState(state: MutableReplicatedState<V>): V | undefined {
     const applied = this.applied
