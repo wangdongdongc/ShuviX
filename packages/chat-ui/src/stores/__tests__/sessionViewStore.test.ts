@@ -37,7 +37,6 @@ import {
   selectSessionRun,
   selectSessionSource,
   selectStreamingContent,
-  selectStreamingImages,
   selectStreamingThinking,
   selectStreamingToolCall,
   selectToolExecutions,
@@ -128,18 +127,16 @@ describe('P3-08-12 / 13 消息', () => {
 })
 
 describe('P3-08-14…17 流式状态、工具、队列', () => {
-  it('P3-08-14 正文 / 思考来自实时卡；图片是稳定的空常量', () => {
+  it('P3-08-14 正文 / 思考来自实时卡；流式状态没有图片槽（恒空的 images 在 P3-16 删了）', () => {
     const base = V('s1', { run: { state: 'busy' } })
     applySessionView('s1', { ...base, live: liveCard(1, [thinking('t'), text('Hel')]) })
     expect(selectStreamingThinking(store())).toBe('t')
     expect(selectStreamingContent(store())).toBe('Hel')
     expect(selectHasLiveStreamContent(store())).toBe(true)
     expect(selectIsStreaming(store())).toBe(true)
-    const images = selectStreamingImages(store())
-    expect(images).toEqual([])
+    expect('images' in store().sessionStreams.s1).toBe(false)
     applySessionView('s1', { ...base, live: liveCard(1, [thinking('t'), text('Hello')]) })
     expect(selectStreamingContent(store())).toBe('Hello')
-    expect(selectStreamingImages(store())).toBe(images)
   })
 
   it('P3-08-15 正在生成的工具调用：argsText 原文；进了 toolRuns → 执行记录；之前的工具块是已生成；没有 argsText → 参数序列化', () => {

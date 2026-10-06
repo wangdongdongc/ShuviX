@@ -77,15 +77,12 @@ export interface SessionStreamState {
   content: string
   thinking: string
   isStreaming: boolean
-  images: Array<{ data: string; mimeType: string }>
   /** 当前正在生成的工具调用（模型还在吐它的参数） */
   streamingToolCall: { toolName: string; argsText: string } | null
   /** 已生成完、还没开始执行的工具调用（多工具顺序生成时累积） */
   completedStreamingToolCalls: Array<{ toolName: string; args?: Record<string, unknown> }>
 }
 
-/** 空图片数组常量（选择器不能每次给新引用） */
-export const EMPTY_IMAGES: Array<{ data: string; mimeType: string }> = []
 export const EMPTY_COMPLETED_TOOL_CALLS: SessionStreamState['completedStreamingToolCalls'] = []
 
 export function emptyStream(isStreaming = false): SessionStreamState {
@@ -93,7 +90,6 @@ export function emptyStream(isStreaming = false): SessionStreamState {
     content: '',
     thinking: '',
     isStreaming,
-    images: EMPTY_IMAGES,
     streamingToolCall: null,
     completedStreamingToolCalls: EMPTY_COMPLETED_TOOL_CALLS
   }
@@ -168,7 +164,6 @@ export function deriveStream(
     prev.content === content &&
     prev.thinking === thinking &&
     prev.isStreaming === isStreaming &&
-    prev.images === EMPTY_IMAGES &&
     sameToolCall &&
     prev.completedStreamingToolCalls === completed
   ) {
@@ -178,7 +173,6 @@ export function deriveStream(
     content,
     thinking,
     isStreaming,
-    images: EMPTY_IMAGES,
     streamingToolCall: sameToolCall ? prev!.streamingToolCall : streamingToolCall,
     completedStreamingToolCalls: completed
   }

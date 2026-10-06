@@ -19,7 +19,6 @@ import {
   useChatStore,
   selectStreamingContent,
   selectStreamingThinking,
-  selectStreamingImages,
   selectStreamingToolCall,
   selectCompletedStreamingToolCalls,
   selectMcpConnecting,
@@ -66,7 +65,6 @@ export const AssistantBubble = memo(function AssistantBubble({
   // 流式模式下从 store 直接读取状态
   const storeStreamingContent = useChatStore(selectStreamingContent)
   const storeStreamingThinking = useChatStore(selectStreamingThinking)
-  const storeStreamingImages = useChatStore(selectStreamingImages)
   const streamingToolCall = useChatStore(selectStreamingToolCall)
   const completedStreamingToolCalls = useChatStore(selectCompletedStreamingToolCalls)
   const mcpConnecting = useChatStore(selectMcpConnecting)
@@ -118,7 +116,6 @@ export const AssistantBubble = memo(function AssistantBubble({
   // 落盘后的思考已经是过程区里的块（按原序），这里只补流式期间还在缓冲里的那段
   const liveThinking =
     isStreaming && hasThinkingContent(storeStreamingThinking) ? storeStreamingThinking : null
-  const liveImages = isStreaming ? storeStreamingImages : []
 
   // 「重试 ×N」（Q-P3-06 / PIN-21）：失败的尝试折叠掉，由随后的卡带上次数。一张卡覆盖几条消息就把
   // 它们的次数加起来；流式中的卡读实时卡的 `metadata.retried`。实时卡落盘那一刻 store 先换、msgs 晚
@@ -244,9 +241,9 @@ export const AssistantBubble = memo(function AssistantBubble({
           />
         )}
 
-        {/* 图片（流式用 store，非流式用持久化 metadata） */}
+        {/* 图片（持久化 metadata；流式期间实时卡不带图） */}
         {(() => {
-          const images = isStreaming ? liveImages : anchor.metadata?.images
+          const images = isStreaming ? undefined : anchor.metadata?.images
           if (!images || images.length === 0) return null
           return (
             <div className="flex flex-wrap gap-2 mt-2">

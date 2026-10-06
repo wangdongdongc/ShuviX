@@ -2,7 +2,7 @@
  * ChromeFrontend —— 一条标签页会话在一条桥连接上的推送口。
  *
  * 契约：
- *   - id `chrome:<连接 id>:<会话 id>`，能力 {streaming, userInput}（询问卡片在侧边栏里弹、里答）；
+ *   - id `chrome:<连接 id>:<会话 id>`，能力 {userInput}（询问卡片在侧边栏里弹、里答）；
  *   - 收到的每条事件都原样经桥发出：`chat.event {sessionId: <绑定的会话>, event}` —— 子会话的事件
  *     被注册表回溯送到父会话的前端时，外层 sessionId 仍是它绑定的那条，事件自带自己的 id；
  *   - 它**只管推送**：不记轮次、不碰浏览器状态（调试租约由桌面事件流旁听，见 observeChromeTabRun）；
