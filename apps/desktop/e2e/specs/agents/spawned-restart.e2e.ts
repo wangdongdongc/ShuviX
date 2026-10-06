@@ -115,16 +115,19 @@ describe('派生 agent 熬过重启（P3-14-23）', () => {
     await waitRendererReady(main)
 
     // 根会话还没打开：agent 目标认不出（PIN-12）
-    // 在页面里直接调。主进程的信封是 {ok:false, error:{code:'service_not_found'}}（syncWiringIntegration 的
-    // P3-14-11 断了 code）；但预载层抛出的 Error 过 contextBridge 时只剩 message，`.code` 到不了渲染端 ——
-    // 这里只能断「被拒、且是主进程认不出它」那句
+    // 在页面里直接调。主进程的信封是 {ok:false, error:{code:'service_not_found'}}；预载层以纯对象
+    // {code, message} 拒绝（P3-15：Error 过 contextBridge 只剩 message），所以 code 到得了渲染端 ——
+    // syncClient 再把它还原成带 `.code` 的 Error（单测 P3-15-CB1）
     const call = createServiceSubscribeCall('e2e-early', CHAT_VIEW_SERVICE_ID, 'singleton')
-    const before = await main.eval<string>(
+    const before = await main.eval<{ code?: string; message: string } | 'subscribed'>(
       `window.api.sync
         .invoke(${JSON.stringify({ kind: 'agent', agentId: A })}, ${JSON.stringify(call)})
-        .then(() => 'subscribed', (error) => String(error?.message ?? error))`
+        .then(() => 'subscribed', (error) => ({ code: error?.code, message: String(error?.message ?? error) }))`
     )
-    expect(before).toContain(`Unknown agent ${A}`)
+    expect(before).not.toBe('subscribed')
+    const failure = before as { code?: string; message: string }
+    expect(failure.code).toBe('service_not_found')
+    expect(failure.message).toContain(`Unknown agent ${A}`)
 
     // 侧栏打开根会话 → peek → 重建
     const sidebar = sidebarPane(main)

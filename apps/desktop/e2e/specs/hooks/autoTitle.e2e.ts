@@ -626,12 +626,14 @@ describe('运行归属、去重与收尾', () => {
     await renameSession(sid, 'HA-7 failing hook')
     provider.script(
       { text: 'e1r', when: rootRequest('e1') },
-      { httpStatus: 500, when: echoRequest(sid) }
+      // 4xx：不可重试的模型错误。5xx 会被 durable 按退避重试（P3-06）、第二次拿到默认的 OK 就恢复了 ——
+      // 这条要的是「hook run 里模型真的报错」那条路
+      { httpStatus: 400, when: echoRequest(sid) }
     )
 
     await promptTurn(sid, 'e1')
     const [reg] = await settledRegisters(sid, { description: 'echo' }, 1, 'failed echo run settled')
-    // 注入的 500 确实打在了 hook agent 身上（它的结果带着模型的 stopReason=error）—— 不是悄悄没发生
+    // 注入的 400 确实打在了 hook agent 身上（它的结果带着模型的 stopReason=error）—— 不是悄悄没发生
     expect((await endOf(reg.sessionId))?.result).toContain('stopReason=error')
     // 同一次失败在主进程日志里记为失败的 run：runTask 照常 resolve，失败原因在 outcome.error 上
     const runId = await runIdOf('echo', TURN_COMPLETED, sid)

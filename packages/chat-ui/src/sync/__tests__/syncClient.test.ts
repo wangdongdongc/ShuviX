@@ -152,6 +152,38 @@ describe('syncClient', () => {
     expect(other.state().code).toBeUndefined()
   })
 
+  it('P3-15-CB1 渠道以纯对象 {code, message} 拒绝（preload 过 contextBridge 的形状）→ 状态仍带 code；没码 → undefined', async () => {
+    const server = fakeServer()
+    server.serve(S1, streaming('s1'))
+    server.serve(S2, streaming('s2'))
+    // contextBridge 拷一个 Error 只留 message：preload 改以纯对象拒绝，客户端负责还原
+    let plain: { code?: string; message: string } | undefined = {
+      code: 'service_not_found',
+      message: 'Unknown agent a1'
+    }
+    const channel = {
+      invoke: (
+        target: Parameters<typeof server.channel.invoke>[0],
+        call: Parameters<typeof server.channel.invoke>[1]
+      ) =>
+        plain === undefined
+          ? server.channel.invoke(target, call)
+          : Promise.reject(structuredClone(plain)),
+      onFrame: server.channel.onFrame
+    }
+    const client = createSyncClient({ channel, logger: quietLogger() })
+    const sub = client.acquire<SessionView>(S1)
+    await server.settle()
+    expect(sub.state()).toEqual({ status: 'error', code: 'service_not_found' })
+    expect(sub.value()).toBeUndefined()
+
+    plain = { message: 'no code here' }
+    const other = client.acquire<SessionView>(S2)
+    await server.settle()
+    expect(other.state().status).toBe('error')
+    expect(other.state().code).toBeUndefined()
+  })
+
   it('P3-08-05 同一订阅上的 reset：值换成快照，不重订，之后的更新照常解码', async () => {
     const server = fakeServer()
     server.serve(S1, streaming('s1'))

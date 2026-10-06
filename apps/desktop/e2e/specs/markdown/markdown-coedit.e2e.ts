@@ -21,7 +21,8 @@
  * 一个实例、五个窗口：short.md（大多数用例）、long.md（300 行，屏幕外的改动）、ghost.md（虚影用例 ——
  * 用户从不在里面打字，撤销栈是空的）、ext.md（外部写盘）、ro/mc1.md（自己的目录，可设成只读让自动保存失败）。
  * 界面语言钉成 en（指路条按字面断言）。「问了没有」读主进程日志的安全决策；工具结果读下一次请求里
- * 模型真正看到的那条 tool 消息；工具的起止与 run 的结束读 md 窗口里记下的 ChatEvent（captureEvents）。
+ * 模型真正看到的那条 tool 消息；工具的起止与流式参数读 md 窗口自己订阅的会话视图（`toolRuns` / 工具块的
+ * 结果 / `live.argsText`，P3-08 起它们不再是事件），run 的结束读 md 窗口里记下的 `agent_end`（captureEvents）。
  *
  *   MC1  doc_read 读的是活缓冲：自动保存失败时照样读到刚打的字（盘上没有）；新开的窗口说「没打过字」
  *   MC1b 自动保存失败之后，目录恢复可写、在别处再打一个字 → 两处输入都在（失败的保存不能让自己的字被当成外部改动退回去）
@@ -45,7 +46,7 @@
  *   MC18 痕迹与指路条：屏幕上的改动淡出后移除；屏幕外的 3s 后仍亮着、指路条「changed 1 place below」、
  *        不自动滚动；点它 → 滚过去、开始淡出、指路条消失；两处 → 「2 places」；replace 为空 → 删除竖线
  *   MC19 虚影在屏幕外 → 「working below」，落下后 → 「changed 1 place below」；doc_read 时一闪「reading」
- *   MC20 toolcall_generating 的 toolCallId 与 tool_start 的是同一个
+ *   MC20 生成中的参数（live.argsText）与执行的调用（toolRuns / 落盘的工具块）是同一个 toolCallId，片段归到对的那次调用
  *   EX1  没有本地改动时外部写盘 → 并进来（不重挂载）、external 痕迹、不进指路条、⌘Z 撤不掉、之后不再反复写盘
  *   EX2  一直在打字时别的程序改了另一段 → 最后缓冲与文件两边都有
  *   EX3  单纯打字永远不出 external 痕迹、不重复
@@ -63,7 +64,6 @@ import {
   launchMarkdownWithProvider,
   readOnlyDir,
   userDir,
-  type CapturedEvent,
   type EventLog,
   type UserDir
 } from '../../harness/markdownFixtures'
@@ -317,11 +317,6 @@ async function resetDoc(w: Win, text: string): Promise<void> {
 
 const askDecisions = (toolCallId: string): ReturnType<typeof securityDecisions> =>
   securityDecisions(app).filter((d) => d.toolCallId === toolCallId && d.effect === 'ask')
-
-const eventsOf = async (w: Win, type: string, toolCallId?: string): Promise<CapturedEvent[]> =>
-  (await w.ev.all()).filter(
-    (e) => e.type === type && (toolCallId === undefined || e.toolCallId === toolCallId)
-  )
 
 // ─── doc_read ─────────────────────────────────────────────
 
@@ -658,11 +653,8 @@ describe('生成期间的虚影', () => {
     ])
     // 第一片到了：find 还没写完 → 不画
     await poll(
-      async () =>
-        (await eventsOf(w, 'toolcall_generating', 'mc9_edit')).some(
-          (e) => e.argsDelta === pieces[0]
-        ),
-      'first args piece arrived'
+      async () => (await w.ev.liveArgs('mc9_edit')) === pieces[0],
+      'first args piece arrived (live.argsText)'
     )
     await sleep(150)
     expect(await w.pane.ghosts()).toEqual([])
@@ -719,8 +711,9 @@ describe('生成期间的虚影', () => {
       { text: 'ok' }
     ])
     await poll(
-      async () => (await eventsOf(w, 'toolcall_generating', 'mc10_none')).length >= 3,
-      'both calls fully streamed'
+      async () =>
+        (await w.ev.liveArgs('mc10_none')) === '{"find": "nowhere-mc10", "replace": "Y-MC10"}',
+      'both calls fully streamed (live.argsText)'
     )
     // 给画虚影留几帧：该画的话早画了
     const t0 = Date.now()
@@ -808,35 +801,66 @@ describe('生成期间的虚影', () => {
     expect(await w.pane.docText()).not.toContain('NEVER-MC12')
   })
 
-  it('MC20 toolcall_generating 的 toolCallId 与 tool_start 的是同一个', async () => {
+  it('MC20 生成中的参数（live.argsText）与执行的调用是同一个 toolCallId；每一片都归到对的那次调用', async () => {
     const w = wins.ghost
-    await runToEnd(w, [
+    const full = {
+      mc20_a: '{"find": "one body", "replace": "one body 20"}',
+      mc20_b: '{"after": "one body 20", "text": " +b"}'
+    } as const
+    await run(w, [
       {
         toolCalls: [
           call('mc20_a', 'doc_edit', ['{"find": "one body", ', '"replace": "one body 20"}']),
           call('mc20_b', 'doc_insert', ['{"after": "one body 20", ', '"text": " +b"}'])
         ],
-        chunkDelayMs: 100
+        // 片间隔要比视图的节流（约 10Hz）宽，才看得到生成中的中间态
+        chunkDelayMs: 400
       },
       { text: 'ok' }
     ])
-    const all = await w.ev.all()
-    for (const id of ['mc20_a', 'mc20_b']) {
-      const gen = all.filter((e) => e.type === 'toolcall_generating' && e.toolCallId === id)
-      const start = all.filter((e) => e.type === 'tool_start' && e.toolCallId === id)
-      expect(gen.length, id).toBeGreaterThanOrEqual(2)
-      expect(start, id).toHaveLength(1)
-      expect(gen.every((e) => e.hasToolCallId)).toBe(true)
+    // 跑的过程中采样视图：生成中的参数原文按 toolCallId 记、执行进度按 toolCallId 记
+    const argsSeen = new Map<string, string[]>()
+    const runIdsSeen = new Set<string>()
+    let ended = false
+    const ending = w.ev.runEnd().then(() => {
+      ended = true
+    })
+    while (!ended) {
+      const v = await w.ev.view()
+      for (const [id, text] of Object.entries(v?.live?.argsText ?? {})) {
+        const seen = argsSeen.get(id) ?? []
+        if (seen[seen.length - 1] !== text) seen.push(text)
+        argsSeen.set(id, seen)
+      }
+      for (const id of Object.keys(v?.toolRuns ?? {})) runIdsSeen.add(id)
+      await sleep(40)
     }
-    // 生成事件里每一片都归到了对的那次调用：a 的增量拼起来是 a 的参数
-    const argsOf = (id: string): string =>
-      all
-        .filter((e) => e.type === 'toolcall_generating' && e.toolCallId === id)
-        .map((e) => e.argsDelta ?? '')
-        .join('')
-    expect(argsOf('mc20_a')).toBe('{"find": "one body", "replace": "one body 20"}')
-    expect(argsOf('mc20_b')).toBe('{"after": "one body 20", "text": " +b"}')
-    expect(all.filter((e) => e.type === 'toolcall_generating' && !e.toolCallId)).toEqual([])
+    await ending
+
+    // 生成中只出现过这两次调用的 id（没有空 id、没有别的 id），且两次都真的看到了生成中的片段
+    expect([...argsSeen.keys()].sort()).toEqual(['mc20_a', 'mc20_b'])
+    for (const id of ['mc20_a', 'mc20_b'] as const) {
+      const seen = argsSeen.get(id)!
+      expect(seen.length, id).toBeGreaterThanOrEqual(1)
+      // 每一份生成中的原文都是**这次**调用参数的前缀 —— 片段没串到另一次调用上
+      for (const text of seen) expect(full[id].startsWith(text), `${id}: ${text}`).toBe(true)
+    }
+    // 执行的是同一个 id：进度与落盘的工具块都认这两个 id，参数就是生成出来的那份
+    for (const id of runIdsSeen) expect(['mc20_a', 'mc20_b']).toContain(id)
+    const results = (await w.ev.view())!.messages.flatMap((m) =>
+      m.role === 'assistant' && m.type === 'message'
+        ? m.blocks.filter((b) => b.type === 'tool')
+        : []
+    )
+    for (const id of ['mc20_a', 'mc20_b'] as const) {
+      const block = results.find((b) => b.type === 'tool' && b.toolCallId === id)
+      expect(block, id).toBeDefined()
+      if (block?.type === 'tool') {
+        expect(block.args, id).toEqual(JSON.parse(full[id]))
+        expect(block.isError, id).toBeFalsy()
+      }
+    }
+    expect(results.every((b) => b.type === 'tool' && b.toolCallId)).toBe(true)
   })
 })
 
@@ -915,10 +939,7 @@ describe('用户正在那一段打字就等他停手', () => {
       },
       { text: 'ok' }
     ])
-    const start = await w.ev.waitFor(
-      (e) => e.type === 'tool_start' && e.toolCallId === 'mc15_edit',
-      'mc15 tool_start'
-    )
+    const start = await w.ev.toolStart('mc15_edit')
     const end = await w.ev.toolEnd('mc15_edit', 20_000)
     expect(end.isError).toBeFalsy()
     const took = end.at - start.at

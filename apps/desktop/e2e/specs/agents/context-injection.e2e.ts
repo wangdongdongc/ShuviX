@@ -10,7 +10,6 @@
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { until } from '../../harness/cdp'
 import { launchApp, type E2EApp } from '../../harness/launch'
 import {
   createAgentSession,
@@ -263,8 +262,9 @@ describe('覆盖 work 的清单省略语义', () => {
  * 围栏里**只有清单、没有内容**：不列条目文件名、不报条目数、不印知识库根的绝对路径 —— 印了路径
  * 就等于邀请 agent 直接 `write` 过去，绕开只有 `create` 才担保的元数据形状。
  *
- * 选择改了之后围栏**不会当场跟上**（系统提示词在创建 Agent 那一刻定型，改选择刻意不失效运行时）：
- * KBF-E-4 走的是「清空 → 下一个运行时」这条既有手法，钉的正是这个已接受的边界。
+ * 选择改了之后围栏**当场跟上**（pi-durable 起，P3-06 PIN-08 / P3-15）：知识库是活段落
+ * （`shuvix.prompt.knowledge`，`durable/prompt/sections.ts`），只有人设冻结 —— 下一次请求把变了的那段作为
+ * `pi.system` 增量重发，不用重建运行时。KBF-E-4 钉的就是这条新边界：同一个运行时，改选择即生效、改回来即回来。
  */
 describe('知识库围栏', () => {
   const OPEN = '<knowledge_bases>'
@@ -359,35 +359,43 @@ describe('知识库围栏', () => {
     )
   })
 
-  it('KBF-E-4 改选择不动已有的运行时；下一个运行时的围栏才跟上（这里：整段消失）', async () => {
-    const sid = (
-      await createAgentSession(app.main, {
-        projectId,
-        title: 'e2e-kbf-4',
-        knowledgeBases: ['project']
-      })
-    ).sid
-    expect(await systemPromptOf(sid)).toContain(OPEN)
+  it('KBF-E-4 改选择即刻改围栏：同一个运行时里清空 → 整段消失，选回来 → 围栏回来（知识库是活段落，人设才冻结）', async () => {
+    const created = await createAgentSession(app.main, {
+      projectId,
+      title: 'e2e-kbf-4',
+      knowledgeBases: ['project']
+    })
+    const sid = created.sid
+    expect(created.systemPrompt).toContain(OPEN)
 
-    const res = await app.main.eval<{ success: boolean }>(
-      `window.api.session.updateKnowledgeBases(${JSON.stringify({ id: sid, knowledgeBases: [] })})`
-    )
-    expect(res.success).toBe(true)
-    // 已存在的运行时里那一段不变 —— 已接受的边界（工具面改完立刻生效，围栏要等重建）
-    expect(await systemPromptOf(sid)).toContain(OPEN)
+    const setBases = async (knowledgeBases: string[]): Promise<void> => {
+      const res = await app.main.eval<{ success: boolean }>(
+        `window.api.session.updateKnowledgeBases(${JSON.stringify({ id: sid, knowledgeBases })})`
+      )
+      expect(res.success).toBe(true)
+    }
+    const runtimeCreated = (): Promise<boolean> =>
+      app.main
+        .eval<{ created: boolean }>(`window.api.agent.init({ sessionId: ${JSON.stringify(sid)} })`)
+        .then((r) => r.created)
 
-    // 清空 = 关停运行时（本区既有手法）：下一个运行时按新选择重新组装
-    await app.main.eval(`window.api.message.clear(${JSON.stringify(sid)})`)
-    await until(
-      async () =>
-        !(
-          await app.main.eval<{ created: boolean }>(
-            `window.api.agent.init({ sessionId: ${JSON.stringify(sid)} })`
-          )
-        ).created,
-      'runtime closed after clear'
-    )
-    expect(await systemPromptOf(sid)).not.toContain(OPEN)
+    // 清空：运行时还是那一个（没被关停、没重建），但下一次请求的系统提示词里那一段已经没了
+    await setBases([])
+    expect(await runtimeCreated()).toBe(true)
+    const cleared = await systemPromptOf(sid)
+    expect(cleared).not.toContain(OPEN)
+    expect(cleared).not.toContain(CLOSE)
+    // 别的段落逐字不动：恰好少了围栏那一段（连同它前面那个段落分隔符）
+    const sp0 = created.systemPrompt
+    const fenceEnd = sp0.indexOf(CLOSE) + CLOSE.length
+    expect(cleared).toBe(sp0.slice(0, sp0.indexOf(OPEN)).replace(/\n\n$/, '') + sp0.slice(fenceEnd))
+
+    // 选回来：同一个运行时里围栏回来，内容与创建时一致
+    await setBases(['project'])
+    expect(await runtimeCreated()).toBe(true)
+    const restored = await systemPromptOf(sid)
+    expect(fenceBodyOf(restored)).toBe(fenceBodyOf(created.systemPrompt))
+    expect(restored).toBe(created.systemPrompt)
   })
 
   it('KBF-E-5 项目会话的围栏次序就是选择里的次序（用户库 → `project` → `shuvix`），整段仍然无条目/路径/计数', async () => {

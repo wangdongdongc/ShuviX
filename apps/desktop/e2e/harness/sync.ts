@@ -124,7 +124,8 @@ export function syncProbe(main: CdpClient): SyncProbe {
     {
       invoke: (_clientId, target, call) =>
         main.eval(
-          `window.api.sync.invoke(${JSON.stringify(target)}, ${JSON.stringify(call)}).then((v) => v === undefined ? null : v)`
+          // preload 以纯对象 {code?, message} 拒绝（P3-15）：在页面里包回 Error，CDP 的异常描述才带着码与原文
+          `window.api.sync.invoke(${JSON.stringify(target)}, ${JSON.stringify(call)}).then((v) => v === undefined ? null : v, (e) => { throw new Error((e && e.code ? e.code + ': ' : '') + (e && e.message !== undefined ? e.message : String(e))) })`
         ) as Promise<never>
     },
     {

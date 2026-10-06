@@ -37,6 +37,7 @@ import {
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import {
   CHAT_VIEW_SERVICE_ID,
+  reviveSyncInvokeError,
   syncTargetKey,
   type SyncChannel,
   type SyncFrame,
@@ -153,7 +154,16 @@ const UNAVAILABLE: ViewBindingState = { status: 'unavailable' }
 let clientCount = 0
 
 export function createSyncClient(options: SyncClientOptions): SyncClient {
-  const channel = options.channel
+  const raw = options.channel
+  // 渠道的拒绝理由在这里还原成带 `.code` 的 Error：过 contextBridge 的 preload 以纯对象 `{code?, message}`
+  // 拒绝（Error 过桥只剩 message），之后的 codeOf / chord 绑定才拿得到 `service_not_found` 那样的码
+  const channel: SyncChannel = {
+    invoke: (target, call) =>
+      raw.invoke(target, call).catch((reason: unknown) => {
+        throw reviveSyncInvokeError(reason)
+      }),
+    onFrame: (callback) => raw.onFrame(callback)
+  }
   const logger = options.logger ?? { warn: (message) => console.warn(message) }
   const prefix = options.idPrefix ?? `c${++clientCount}.${Math.random().toString(36).slice(2, 8)}`
   let nextSubscription = 0

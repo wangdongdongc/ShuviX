@@ -27,6 +27,7 @@ import {
   type RecordedEvent
 } from '../../harness/seed'
 import { policiesSidebarPane, registryNotePane } from '../../harness/pages'
+import { syncProbe, type SyncProbe } from '../../harness/sync'
 
 const MODEL = 'e2e-model'
 
@@ -69,6 +70,8 @@ interface AskRequestEvent extends RecordedEvent {
 let app: E2EApp
 let provider: FakeProvider
 let events: EventRecorder
+/** 询问从会话视图读（`input_request` 不再上前端的线，Q-P3-04） */
+let probe: SyncProbe
 let projDir = ''
 /**
  * 会话目录**之外**的写入落点。ask-on-external-path 对会话目录（工作目录、本会话临时目录 …）免询问，
@@ -92,6 +95,7 @@ beforeAll(async () => {
 
   events = eventRecorder(app.main)
   await events.install()
+  probe = syncProbe(app.main)
 })
 
 afterAll(async () => {
@@ -124,6 +128,14 @@ const createPolicy = (text: string): Promise<{ success: boolean; error?: string 
   app.main.eval(`window.api.policy.create(${JSON.stringify({ text })})`)
 const deletePolicy = (name: string): Promise<{ success: boolean; error?: string }> =>
   app.main.eval(`window.api.policy.delete(${JSON.stringify({ name })})`)
+
+/** 下一张询问卡（从视图读；形状沿用旧事件，好让下面的断言不动） */
+const waitAsk = async (sid: string): Promise<AskRequestEvent> =>
+  ({
+    type: 'input_request',
+    sessionId: sid,
+    request: await probe.nextAsk(sid)
+  }) as unknown as AskRequestEvent
 
 const newSession = (title: string): Promise<string> =>
   app.main.eval<string>(
@@ -202,7 +214,7 @@ describe('policy prompt —— 询问链路（内置 ask-on-external-path）', (
     scriptWrite('call_p1', join(outsideDir, 'p1.txt'))
     await sendPrompt(sid, 'write a file')
 
-    const event = await events.waitFor<AskRequestEvent>('input_request', { sessionId: sid })
+    const event = await waitAsk(sid)
     // 整条传输链（evaluate → enforce → gateway → preload）都不加工这段文本；读规则不命中写，
     // 卡片上只有写规则那一句
     expect(event.request.policyPrompt).toEqual({
@@ -227,7 +239,7 @@ describe('policy prompt —— 询问链路（内置 ask-on-external-path）', (
     scriptWrite('call_p2', target)
     await sendPrompt(sid, 'write a file')
 
-    const event = await events.waitFor<AskRequestEvent>('input_request', { sessionId: sid })
+    const event = await waitAsk(sid)
     await respondToInput(sid, event.request.id, { kind: 'ask', allowed: false })
     await events.waitFor('agent_end', { sessionId: sid })
 
@@ -301,7 +313,7 @@ describe('policy prompt —— 删光 prompt 的覆盖副本', () => {
     scriptWrite('call_p4a', join(projDir, 'p4a.txt'))
     await sendPrompt(askSid, 'write a file')
 
-    const event = await events.waitFor<AskRequestEvent>('input_request', { sessionId: askSid })
+    const event = await waitAsk(askSid)
     expect(event.request.policyPrompt ?? null).toBeNull()
     await respondToInput(askSid, event.request.id, { kind: 'ask', allowed: true })
     await events.waitFor('agent_end', { sessionId: askSid })
@@ -333,9 +345,7 @@ describe('policy prompt —— 删光 prompt 的覆盖副本', () => {
     scriptWrite('call_p4c', join(outsideDir, 'p4c.txt'))
     await sendPrompt(restoredSid, 'write a file')
 
-    const restored = await events.waitFor<AskRequestEvent>('input_request', {
-      sessionId: restoredSid
-    })
+    const restored = await waitAsk(restoredSid)
     expect(restored.request.policyPrompt).toEqual({
       text: builtinPrompt,
       policies: [builtin.displayName]

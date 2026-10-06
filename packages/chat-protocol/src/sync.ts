@@ -57,7 +57,9 @@ export type SyncInvokeResult =
 /**
  * 渠道的视图同步面（`SessionChannelApi.sync`）：`invoke` 把一次 chord 服务调用发给某个目标，
  * `onFrame` 收服务端推来的帧（每个订阅一个解码器，见 chat-ui 的 syncClient）。失败的调用以带 `code` 的
- * Error 拒绝。
+ * Error 拒绝 —— 或者，在会剥掉 Error 自有属性的边界上（Electron 的 contextBridge 只拷 `message`），以
+ * 信封失败分支那个**纯对象** `{code?, message}` 拒绝；消费方一律经 `reviveSyncInvokeError` 还原成带
+ * `.code` 的 Error（chat-ui 的 syncClient 就这么做）。
  */
 export interface SyncChannel {
   invoke(target: SyncTarget, call: JsonValue): Promise<JsonValue | undefined>
@@ -71,4 +73,31 @@ export function syncInvokeError(error: { code?: string; message: string }): Erro
   const thrown = new Error(error.message) as Error & { code?: string }
   if (typeof error.code === 'string') thrown.code = error.code
   return thrown
+}
+
+/** `SyncInvokeResult` 的失败分支：跨 contextBridge 拒绝时用的纯对象（不是 Error，属性才拷得过去） */
+export type SyncInvokeFailure = { code?: string; message: string }
+
+/** `SyncInvokeResult` 的失败分支 → 可以跨 contextBridge 拒绝的纯对象（只带 `code` / `message`） */
+export function syncInvokeFailure(error: { code?: string; message: string }): SyncInvokeFailure {
+  return typeof error.code === 'string'
+    ? { code: error.code, message: error.message }
+    : { message: error.message }
+}
+
+/**
+ * 渠道拒绝的理由 → 带 `.code` 的 Error（渲染端那一侧的还原）：
+ *  - 已经是 Error：原样交回（同一上下文里抛的、带 code 的那种；或别的传输错误）；
+ *  - `{message: string, code?: string}` 纯对象（preload 过 contextBridge 的拒绝）→ `syncInvokeError`；
+ *  - 其它：包成一个没有 code 的 Error。
+ */
+export function reviveSyncInvokeError(reason: unknown): Error & { code?: string } {
+  if (reason instanceof Error) return reason as Error & { code?: string }
+  if (typeof reason === 'object' && reason !== null) {
+    const { message, code } = reason as { message?: unknown; code?: unknown }
+    if (typeof message === 'string') {
+      return syncInvokeError(typeof code === 'string' ? { code, message } : { message })
+    }
+  }
+  return new Error(String(reason))
 }
