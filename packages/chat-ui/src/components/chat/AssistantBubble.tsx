@@ -127,7 +127,9 @@ export const AssistantBubble = memo(function AssistantBubble({
     isStreaming ? (selectActiveSessionView(s)?.live?.message.metadata?.retried?.count ?? 0) : 0
   )
   const liveRetriedError = useChatStore((s) =>
-    isStreaming ? (selectActiveSessionView(s)?.live?.message.metadata?.retried?.lastError ?? '') : ''
+    isStreaming
+      ? (selectActiveSessionView(s)?.live?.message.metadata?.retried?.lastError ?? '')
+      : ''
   )
   const [heldRetried, setHeldRetried] = useState<{
     msgs: AssistantMessage[]

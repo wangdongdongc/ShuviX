@@ -53,7 +53,11 @@ export function RunRetryRow({ retry }: { retry: RunRetryView }): React.JSX.Eleme
         {seconds > 0 ? t('run.retrying', { attempt, seconds }) : t('run.retryingNow', { attempt })}
       </span>
       {reason && (
-        <span data-run-retry-reason="" className="min-w-0 truncate text-error/80" title={retry.error}>
+        <span
+          data-run-retry-reason=""
+          className="min-w-0 truncate text-error/80"
+          title={retry.error}
+        >
           {reason}
         </span>
       )}
@@ -78,7 +82,8 @@ export function RunCompactingRow({
   const parts = [
     t(compacting.blocking ? 'run.compactingBlocking' : 'run.compactingBackground', { reason })
   ]
-  if (compacting.attempt > 1) parts.push(t('run.compactingAttempt', { attempt: compacting.attempt }))
+  if (compacting.attempt > 1)
+    parts.push(t('run.compactingAttempt', { attempt: compacting.attempt }))
   if (compacting.retryAt !== undefined) {
     parts.push(t('run.compactingRetry', { seconds: secondsUntil(compacting.retryAt, now) }))
   }

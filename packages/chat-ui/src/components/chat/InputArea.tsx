@@ -832,7 +832,10 @@ export function InputArea({
                   {t('run.interruptedContinue')}
                 </button>
               </div>
-              <div data-interrupted-hint="" className="mt-1 pl-[22px] text-[11px] text-text-tertiary">
+              <div
+                data-interrupted-hint=""
+                className="mt-1 pl-[22px] text-[11px] text-text-tertiary"
+              >
                 {t('run.interruptedHint')}
               </div>
             </div>
@@ -930,16 +933,16 @@ export function InputArea({
                 sendBlocked
                   ? t('chat.legacySessionReadOnly')
                   : isAgentClosing
-                  ? t('input.placeholderClosing')
-                  : activePendingInput
-                    ? t('pendingInputs.otherPlaceholder')
-                    : isStreaming
-                      ? t('input.placeholderSteer')
-                      : slashChip
-                        ? t('input.placeholder')
-                        : modelSupportsVision
-                          ? t('input.placeholderVision')
-                          : t('input.placeholder')
+                    ? t('input.placeholderClosing')
+                    : activePendingInput
+                      ? t('pendingInputs.otherPlaceholder')
+                      : isStreaming
+                        ? t('input.placeholderSteer')
+                        : slashChip
+                          ? t('input.placeholder')
+                          : modelSupportsVision
+                            ? t('input.placeholderVision')
+                            : t('input.placeholder')
               }
               rows={1}
               style={{
