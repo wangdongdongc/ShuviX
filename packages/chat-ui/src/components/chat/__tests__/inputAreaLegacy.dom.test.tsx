@@ -396,8 +396,12 @@ describe('P4-01-08 .. 11 other views and transitions', () => {
 
   it.each<[string, SessionView, 'legacy' | 'interrupted']>([
     ['a durable interrupted view', durableView({ run: { state: 'interrupted' } }), 'interrupted'],
-    ['a legacy view with run.state interrupted', legacyView({ run: { state: 'interrupted' } }), 'legacy']
-  ])('P4-01-09 %s: exactly one banner (%s)', async (_label, v, expected) => {
+    [
+      'a legacy view with run.state interrupted',
+      legacyView({ run: { state: 'interrupted' } }),
+      'legacy'
+    ]
+  ])('P4-01-09 %s: exactly one of the two banners', async (_label, v, expected) => {
     await apply(v)
     await mount()
     expect(legacyBanner() !== null).toBe(expected === 'legacy')

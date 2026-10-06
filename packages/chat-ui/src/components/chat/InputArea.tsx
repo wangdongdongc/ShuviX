@@ -999,17 +999,17 @@ export function InputArea({
                   ? ''
                   : sendBlocked
                     ? t('chat.legacySessionReadOnly')
-                  : isAgentClosing
-                    ? t('input.placeholderClosing')
-                    : activePendingInput
-                      ? t('pendingInputs.otherPlaceholder')
-                      : isStreaming
-                        ? t('input.placeholderSteer')
-                        : slashChip
-                          ? t('input.placeholder')
-                          : modelSupportsVision
-                            ? t('input.placeholderVision')
-                            : t('input.placeholder')
+                    : isAgentClosing
+                      ? t('input.placeholderClosing')
+                      : activePendingInput
+                        ? t('pendingInputs.otherPlaceholder')
+                        : isStreaming
+                          ? t('input.placeholderSteer')
+                          : slashChip
+                            ? t('input.placeholder')
+                            : modelSupportsVision
+                              ? t('input.placeholderVision')
+                              : t('input.placeholder')
               }
               rows={1}
               style={{
