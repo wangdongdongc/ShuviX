@@ -11,7 +11,8 @@
  *            输入框清空；横幅要等不再是 interrupted 的视图到了才消失
  *   P3-12-13 横幅的宿主：笔记本 / 抽屉里的 InputArea（thread 插槽）与没有 HostApi 的渠道端（Chrome 侧边栏）
  *            一样有横幅，继续走 `getSessionChannelApi()`
- *   Q-P3-21  旧格式会话（`capabilities.send:false`）：输入框禁用、占位文案是只读提示，回车发不出去
+ *   Q-P3-21  旧格式会话（`capabilities.send:false`）：输入框禁用、占位留空（文案在旧格式横幅里，P4-01 PIN-02），
+ *            回车发不出去
  *
  * 后端是假的 `window.api`（同 inputAreaPendingBubble.dom.test.tsx 的做法）；状态只经 `applySessionView` 写（PIN-23）。
  */
@@ -408,7 +409,7 @@ describe('P3-12-13 banner hosts', () => {
 })
 
 describe('Q-P3-21 legacy composer', () => {
-  it('Q-P3-21 capabilities.send:false disables the textarea with the read-only placeholder; Enter sends nothing', async () => {
+  it('Q-P3-21 capabilities.send:false disables the textarea; the copy moves to the legacy banner (empty placeholder); Enter sends nothing', async () => {
     await apply(
       view(
         { state: 'idle' },
@@ -418,7 +419,9 @@ describe('Q-P3-21 legacy composer', () => {
     await mount()
     const area = container.querySelector('textarea')!
     expect(area.disabled).toBe(true)
-    expect(area.placeholder).toBe(en.chat.legacySessionReadOnly)
+    // P4-01 PIN-02：只读提示由横幅承载，占位留空免得同一句话出现两遍
+    expect(area.placeholder).toBe('')
+    expect(container.querySelector('[data-legacy-banner]')).not.toBeNull()
     act(() => store().setInputText('hello'))
     await pressEnter()
     expect(api.agent.prompt).not.toHaveBeenCalled()
