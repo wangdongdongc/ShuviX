@@ -35,7 +35,11 @@ import {
   type RecordedEvent,
   type SecurityDecisionEntry
 } from '../../harness/seed'
-import { browserDriver, type BrowserDriver, type ToolResultRecord } from '../../harness/browserFixtures'
+import {
+  browserDriver,
+  type BrowserDriver,
+  type ToolResultRecord
+} from '../../harness/browserFixtures'
 import {
   DATABASE_SERVER_ID,
   DATABASE_TOOL_NAMES,

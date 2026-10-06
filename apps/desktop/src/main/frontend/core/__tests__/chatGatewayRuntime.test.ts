@@ -33,7 +33,8 @@ const mocks = vi.hoisted(() => ({
   hasAgentRuntime: vi.fn<(sessionId: string) => boolean>(),
   invalidateAgent: vi.fn<(sessionId: string) => Promise<void>>(),
   getAgentSession: vi.fn(),
-  recordSessionModel: vi.fn<(sessionId: string, provider: string, model: string) => Promise<void>>(),
+  recordSessionModel:
+    vi.fn<(sessionId: string, provider: string, model: string) => Promise<void>>(),
   recordSessionThinkingLevel: vi.fn<(sessionId: string, level: string) => Promise<void>>(),
   messageClear: vi.fn(),
   sshRuntimeStatuses: vi.fn<(sessionId: string) => Record<string, RuntimeStatus>>(),
@@ -330,7 +331,9 @@ describe('DefaultChatGateway.setModel —— 只在没有运行时的时候写',
   it('ML-U-4 recordSessionModel 失败 → setModel reject（错误原样上交，不吞成 false）', async () => {
     mocks.recordSessionModel.mockRejectedValue(new Error('settings write failed'))
 
-    await expect(chatGateway.setModel(SID, 'prov', 'model-b')).rejects.toThrow('settings write failed')
+    await expect(chatGateway.setModel(SID, 'prov', 'model-b')).rejects.toThrow(
+      'settings write failed'
+    )
   })
 })
 

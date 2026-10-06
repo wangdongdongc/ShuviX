@@ -81,7 +81,11 @@ describe('sessionStorageKind 契约', () => {
       continue: false
     })
     // 还没有存储的新会话（source 'none'）：能发第一条，没有可回退 / 可继续的
-    expect(capabilitiesOfStorageKind(null)).toEqual({ send: true, rollback: false, continue: false })
+    expect(capabilitiesOfStorageKind(null)).toEqual({
+      send: true,
+      rollback: false,
+      continue: false
+    })
     // 更新版本写下的值：旧版本不碰它
     for (const kind of ['durable-sqlite-2', '', 'HARNESS-V3-JSONL']) {
       expect(capabilitiesOfStorageKind(kind), kind).toEqual({
