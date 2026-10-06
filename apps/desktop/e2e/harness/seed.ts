@@ -1008,6 +1008,174 @@ export function seedLegacyTranscript(
   expect(kind.trim(), `storageKind of ${sessionId}`).toBe('harness-v3-jsonl')
 }
 
+/** 隔离实例里一条会话的旧格式转写文件（`<home>/userdata/data/sessions/<id>.jsonl`） */
+export function legacyTranscriptPathOf(home: string, sessionId: string): string {
+  return join(home, 'userdata', 'data', 'sessions', `${sessionId}.jsonl`)
+}
+
+/** 隔离实例里一条新格式会话的存储文件（`<home>/userdata/data/sessions/<id>.sqlite`） */
+export function durableStoragePathOf(home: string, sessionId: string): string {
+  return join(home, 'userdata', 'data', 'sessions', `${sessionId}.sqlite`)
+}
+
+/**
+ * 旧格式转写里的一步（`seedLegacySteps`）：
+ *  - `user`        一条用户消息；
+ *  - `calls`       一条只带工具调用的 assistant（stopReason toolUse）+ 各自的 toolResult —— 投影成一个工具块；
+ *  - `text`        一条以文字收尾的 assistant（stopReason stop）；
+ *  - `error`       一条 stopReason 'error' 的 assistant（errorMessage）—— 投影成一行错误（`error_event`）；
+ *  - `compaction`  一条压缩 entry，`firstKeptEntryId` 指向第一条消息 —— 之前的消息全都留在上下文里，
+ *                  投影在最前面多出一张压缩摘要卡（`isCompactionSummary`）。
+ */
+export type LegacyStep =
+  | { kind: 'user'; text: string }
+  | { kind: 'calls'; calls: LegacyToolCall[] }
+  | { kind: 'text'; text: string }
+  | { kind: 'error'; message: string }
+  | { kind: 'compaction'; summary: string; tokensBefore?: number }
+
+/**
+ * 按 `steps` 写一份 pi 0.80 harness 的 v3 会话树到 `sessions/<id>.jsonl`，再把会话行的 `storageKind`
+ * 改回旧值（`harness-v3-jsonl`）；回文件路径。`seedLegacyTranscript` 的通用版本：同一个头行、同一套
+ * entry 形状，只是步骤可以任意组合（压缩、错误行这些旧会话真会有的东西）。
+ *
+ * 实例停着（`stop({ keepHome: true })` 之后）或运行着都能用：只写文件 + 系统 sqlite3 直改库。运行时改的话，
+ * 须赶在会话第一次被打开之前（视图在第一次订阅时才按存储类型分流）。
+ */
+export function seedLegacySteps(
+  app: Pick<E2EApp, 'home'>,
+  sessionId: string,
+  steps: LegacyStep[]
+): string {
+  const t0 = Date.parse('2026-01-01T00:00:00.000Z')
+  let n = 0
+  let parentId: string | null = null
+  let firstMessageId: string | null = null
+  const lines: Record<string, unknown>[] = [
+    {
+      type: 'session',
+      version: 3,
+      id: sessionId,
+      timestamp: new Date(t0).toISOString(),
+      cwd: app.home
+    }
+  ]
+  const usage = { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 15 }
+  const assistant = { api: 'openai-completions', provider: 'e2e', model: 'e2e-legacy', usage }
+  const nextId = (): { id: string; ts: number } => {
+    n += 1
+    return { id: `legacy${String(n).padStart(4, '0')}`, ts: t0 + n * 1000 }
+  }
+  const pushMessage = (message: Record<string, unknown>): void => {
+    const { id, ts } = nextId()
+    lines.push({
+      type: 'message',
+      id,
+      parentId,
+      timestamp: new Date(ts).toISOString(),
+      message: { ...message, timestamp: ts }
+    })
+    firstMessageId ??= id
+    parentId = id
+  }
+  for (const step of steps) {
+    if (step.kind === 'user') {
+      pushMessage({ role: 'user', content: [{ type: 'text', text: step.text }] })
+    } else if (step.kind === 'calls') {
+      pushMessage({
+        role: 'assistant',
+        content: step.calls.map((c) => ({
+          type: 'toolCall',
+          id: c.id,
+          name: c.name,
+          arguments: c.arguments
+        })),
+        ...assistant,
+        stopReason: 'toolUse'
+      })
+      for (const c of step.calls) {
+        pushMessage({
+          role: 'toolResult',
+          toolCallId: c.id,
+          toolName: c.name,
+          content: [{ type: 'text', text: c.result }],
+          isError: c.isError === true
+        })
+      }
+    } else if (step.kind === 'text') {
+      pushMessage({
+        role: 'assistant',
+        content: [{ type: 'text', text: step.text }],
+        ...assistant,
+        stopReason: 'stop'
+      })
+    } else if (step.kind === 'error') {
+      pushMessage({
+        role: 'assistant',
+        content: [],
+        ...assistant,
+        stopReason: 'error',
+        errorMessage: step.message
+      })
+    } else {
+      const { id, ts } = nextId()
+      lines.push({
+        type: 'compaction',
+        id,
+        parentId,
+        timestamp: new Date(ts).toISOString(),
+        summary: step.summary,
+        firstKeptEntryId: firstMessageId ?? id,
+        tokensBefore: step.tokensBefore ?? 1234
+      })
+      parentId = id
+    }
+  }
+  const file = legacyTranscriptPathOf(app.home, sessionId)
+  mkdirSync(dirname(file), { recursive: true })
+  writeFileSync(file, lines.map((l) => JSON.stringify(l)).join('\n') + '\n')
+  markSessionLegacy(app.home, sessionId)
+  return file
+}
+
+/** 只把会话行的 `storageKind` 改回旧值（不写转写）—— 旧版本建了、却从没发过消息的那种会话 */
+export function markSessionLegacy(home: string, sessionId: string): void {
+  sqlite(home, `UPDATE sessions SET storageKind = 'harness-v3-jsonl' WHERE id = ${sqlLit(sessionId)}`)
+  const kind = sqlite(home, `SELECT storageKind FROM sessions WHERE id = ${sqlLit(sessionId)}`)
+  expect(kind.trim(), `storageKind of ${sessionId}`).toBe('harness-v3-jsonl')
+}
+
+/**
+ * 把停着的隔离实例的库拨回 v29：`sessions` 去掉 `storageKind` 列（SQLite 的 DROP COLUMN 就是按新形状重建
+ * 这张表），`user_version` 改成 29 —— 下次启动 v30 重跑，每一行都落成默认的旧格式。**只在
+ * `stop({ keepHome: true })` 之后对 e2e 的 HOME 用**。
+ */
+export function rewindSessionsToV29(home: string): void {
+  sqlite(home, 'ALTER TABLE sessions DROP COLUMN storageKind; PRAGMA user_version = 29;')
+  const columns = sqliteJson<{ name: string }>(home, 'PRAGMA table_info(sessions)').map(
+    (c) => c.name
+  )
+  expect(columns, 'sessions columns after the rewind').not.toContain('storageKind')
+  expect(sqlite(home, 'PRAGMA user_version').trim()).toBe('29')
+}
+
+/**
+ * 主进程日志里启动切换的汇总行（`LegacySwitchover` scope：`reset=N deleted=N failed=N`，每次启动恰一条），
+ * 按写入顺序 —— 同一个 HOME 跨几次启动共用一个日志文件，最后一条就是最近这次启动的。
+ */
+export function legacySwitchoverRuns(
+  app: Pick<E2EApp, 'mainLog'>
+): Array<{ reset: number; deleted: number; failed: number; line: string }> {
+  return app
+    .mainLog()
+    .split('\n')
+    .filter((line) => line.includes('LegacySwitchover'))
+    .flatMap((line) => {
+      const m = /reset=(\d+) deleted=(\d+) failed=(\d+)/.exec(line)
+      return m ? [{ reset: Number(m[1]), deleted: Number(m[2]), failed: Number(m[3]), line }] : []
+    })
+}
+
 /**
  * 主进程日志里的一条安全决策（`security_decision {json}`，见 agent-runtime security/decisionLog.ts）。
  *

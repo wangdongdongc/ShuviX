@@ -231,6 +231,24 @@ export interface InterruptedBannerShot {
   continueDisabled: boolean
 }
 
+/** 旧格式会话横幅（P4-01，`data-legacy-banner`）的快照 */
+export interface LegacyBannerShot {
+  /** 横幅文案（`data-legacy-text`） */
+  text: string
+  /** [新建对话]（`data-legacy-new-chat`）的文字；渠道端没有这颗按钮 → null */
+  newChatLabel: string | null
+  /** [新建对话] 是否禁用（建会话途中）；没有按钮时为 false */
+  newChatDisabled: boolean
+}
+
+/** 输入框本身的状态（textarea 的 disabled / placeholder） */
+export interface ComposerShot {
+  /** 有没有 textarea（会话没选中时没有） */
+  present: boolean
+  disabled: boolean
+  placeholder: string
+}
+
 export interface ChatPane {
   /** 输入框就绪（会话已选中、ChatView 已挂载） */
   ready(): Promise<void>
@@ -302,6 +320,17 @@ export interface ChatPane {
   interruptedBanner(): Promise<InterruptedBannerShot | null>
   /** 点横幅上的 [继续]；横幅不在返回 false */
   clickContinue(): Promise<boolean>
+  /** 输入卡片顶上的旧格式横幅（P4-01，`data-legacy-banner`）；不在屏时为 null */
+  legacyBanner(): Promise<LegacyBannerShot | null>
+  /** 点旧格式横幅上的 [新建对话]；横幅或按钮不在返回 false */
+  clickLegacyNewChat(): Promise<boolean>
+  /** 输入框（textarea）的 disabled / placeholder */
+  composer(): Promise<ComposerShot>
+  /**
+   * 对话区里还剩的「改写历史」控件：回退（lucide-rotate-ccw）、重新生成（lucide-refresh-cw）、
+   * 编辑（lucide-pencil / lucide-square-pen）各几颗。只在对话滚动区里数 —— 侧栏、顶栏另有同名图标
+   */
+  historyControls(): Promise<{ rollback: number; regenerate: number; edit: number }>
   /** StreamingFooter 里的重试倒计时行（`data-run-retry`）的文本；不在屏时为 null */
   retryRow(): Promise<string | null>
   /** 对话区里各张卡的「重试 ×N」提示（`data-retried-hint`）文本，DOM 序 */
@@ -719,6 +748,43 @@ export function chatPane(main: CdpClient): ChatPane {
         if (!btn) return false
         btn.click()
         return true
+      })()`),
+    legacyBanner: () =>
+      main.eval<LegacyBannerShot | null>(`(() => {
+        const el = document.querySelector('[data-legacy-banner]')
+        if (!el) return null
+        const btn = el.querySelector('[data-legacy-new-chat]')
+        return {
+          text: (el.querySelector('[data-legacy-text]')?.textContent ?? '').trim(),
+          newChatLabel: btn ? (btn.textContent ?? '').trim() : null,
+          newChatDisabled: !!btn?.disabled
+        }
+      })()`),
+    clickLegacyNewChat: () =>
+      main.eval<boolean>(`(() => {
+        const btn = document.querySelector('[data-legacy-banner] [data-legacy-new-chat]')
+        if (!btn) return false
+        btn.click()
+        return true
+      })()`),
+    composer: () =>
+      main.eval<ComposerShot>(`(() => {
+        const ta = ${TEXTAREA}
+        return {
+          present: !!ta,
+          disabled: !!ta?.disabled,
+          placeholder: ta?.getAttribute('placeholder') ?? ''
+        }
+      })()`),
+    historyControls: () =>
+      main.eval<{ rollback: number; regenerate: number; edit: number }>(`(() => {
+        const root = ${SCROLLER}
+        const count = (sel) => root ? root.querySelectorAll(sel).length : 0
+        return {
+          rollback: count('.lucide-rotate-ccw'),
+          regenerate: count('.lucide-refresh-cw'),
+          edit: count('.lucide-pencil, .lucide-square-pen, .lucide-pen')
+        }
       })()`),
     retryRow: () =>
       main.eval<string | null>(
