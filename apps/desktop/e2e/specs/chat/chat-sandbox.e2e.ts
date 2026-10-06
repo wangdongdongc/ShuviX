@@ -37,7 +37,9 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { until } from '../../harness/cdp'
 import { launchApp, type E2EApp } from '../../harness/launch'
 import { startFakeProvider, type FakeProvider } from '../../harness/fakeProvider'
+import { syncProbe, type SyncProbe } from '../../harness/sync'
 import {
+  asksRaisedIn,
   createProject,
   eventRecorder,
   sandboxAvailable,
@@ -56,6 +58,8 @@ const USAGE = { prompt: 90, completion: 6 }
 let app: E2EApp
 let provider: FakeProvider
 let events: EventRecorder
+/** 视图探针（询问 / 工具结果从会话视图读，P3-08） */
+let probe: SyncProbe
 let chat: ChatPane
 let sidebar: SidebarPane
 let projDir = ''
@@ -170,16 +174,29 @@ async function sendTurn(
   await chat.typeAndSend(prompt)
 }
 
+/** 这次工具调用落盘的结果（P3-08：从会话视图的工具块读，不再是 tool_end 事件） */
 async function toolEnd(sid: string, toolCallId: string): Promise<ToolEndEvent> {
-  const hit = (await sessionEvents(sid)).find(
-    (e) => e.type === 'tool_end' && (e as ToolEndEvent).toolCallId === toolCallId
-  ) as ToolEndEvent | undefined
-  expect(hit, `tool_end ${toolCallId}`).toBeDefined()
-  return hit!
+  const hit = await probe.waitToolResult(sid, toolCallId, 10_000)
+  return {
+    type: 'tool_end',
+    sessionId: sid,
+    toolCallId,
+    result: hit.result,
+    isError: hit.isError,
+    ...(hit.details === undefined ? {} : { details: hit.details as ToolEndEvent['details'] })
+  }
 }
 
-const askCount = async (sid: string): Promise<number> =>
-  (await sessionEvents(sid)).filter((e) => e.type === 'input_request').length
+/** 这条会话（recorder 缓冲里）挂起过几条询问 */
+const askCount = (sid: string): Promise<number> => asksRaisedIn(events, sid)
+
+/** 下一张询问卡（从视图读；形状沿用旧事件，好让下面的断言不动） */
+const nextAsk = async (sid: string): Promise<InputRequestEvent> =>
+  ({
+    type: 'input_request',
+    sessionId: sid,
+    request: await probe.nextAsk(sid)
+  }) as InputRequestEvent
 
 async function answer(
   sid: string,
@@ -194,7 +211,7 @@ async function answer(
       response: { kind: 'ask', allowed, ...(remember ? { extra: { rememberPath: true } } : {}) }
     })})`
   )
-  await events.waitFor('input_request_resolved', { sessionId: sid })
+  await probe.waitAskGone(sid, requestId)
 }
 
 beforeAll(async () => {
@@ -230,6 +247,8 @@ beforeAll(async () => {
 
   events = eventRecorder(app.main)
   await events.install()
+  probe = syncProbe(app.main)
+  await probe.install()
 })
 
 afterEach(async () => {
@@ -307,9 +326,7 @@ describe('E2E-2 申请完全访问：要问，卡片带「完全访问」标签'
       }),
       'full access please'
     )
-    const denied = await events.waitFor<InputRequestEvent>('input_request', {
-      sessionId: sids.full
-    })
+    const denied = await nextAsk(sids.full)
     expect(denied.request.unsandboxed).toBe(true)
     await until(() => chat.pendingAskFullAccess(), 'full access badge on the ask card')
     await answer(sids.full, denied.request.id, false)
@@ -325,9 +342,7 @@ describe('E2E-2 申请完全访问：要问，卡片带「完全访问」标签'
       }),
       'full access again'
     )
-    const allowed = await events.waitFor<InputRequestEvent>('input_request', {
-      sessionId: sids.full
-    })
+    const allowed = await nextAsk(sids.full)
     expect(allowed.request.unsandboxed).toBe(true)
     await until(() => chat.pendingAskFullAccess(), 'full access badge on the second card')
     await answer(sids.full, allowed.request.id, true)
@@ -387,9 +402,7 @@ describe('E2E-3 文件工具与沙箱同一份会话目录', () => {
     const outside = join(app.home, 'outside-sbx', 'x.txt')
     await events.clear()
     await sendTurn('S-files', writeCall('call_outside', outside, 'OUT'), 'write outside')
-    const ask = await events.waitFor<InputRequestEvent>('input_request', {
-      sessionId: sids.files
-    })
+    const ask = await nextAsk(sids.files)
     expect(ask.request.unsandboxed).toBeFalsy()
     await answer(sids.files, ask.request.id, true)
     await events.waitFor('agent_end', { sessionId: sids.files })
@@ -431,9 +444,7 @@ describe('E2E-4 按会话固定', () => {
     )
 
     await sendTurn('S-pin-B', bashCall('call_b1', 'echo "TMP=$TMPDIR"'), 'first in B')
-    const ask = await events.waitFor<InputRequestEvent>('input_request', {
-      sessionId: sids.pinB
-    })
+    const ask = await nextAsk(sids.pinB)
     expect(ask.request.unsandboxed).toBeFalsy()
     await until(async () => (await chat.pendingAskShot()) !== null, 'ask card for B')
     expect(await chat.pendingAskFullAccess()).toBe(false)
@@ -590,7 +601,7 @@ describe('E2E-7 沙箱关着 + 一条没跑起来的命令', () => {
 
     // 第一轮：询问 → 拒绝
     await sendTurn('S-off', bashCall('call_off_deny', 'echo off'), 'deny this one')
-    const denied = await events.waitFor<InputRequestEvent>('input_request', { sessionId: sid })
+    const denied = await nextAsk(sid)
     await answer(sid, denied.request.id, false)
     await events.waitFor('agent_end', { sessionId: sid })
     await chat.waitIdle()
@@ -601,7 +612,7 @@ describe('E2E-7 沙箱关着 + 一条没跑起来的命令', () => {
     // 第二轮：询问 → 允许
     await events.clear()
     await sendTurn('S-off', bashCall('call_off', 'echo off'), 'allow this one')
-    const allowed = await events.waitFor<InputRequestEvent>('input_request', { sessionId: sid })
+    const allowed = await nextAsk(sid)
     await answer(sid, allowed.request.id, true)
     await events.waitFor('agent_end', { sessionId: sid })
     await chat.waitIdle()
@@ -683,7 +694,7 @@ describe('E2E-8 读的那一面：家目录里只有会话目录读得到', () =
     // read 工具读 ~/.ssh：家目录里、会话目录以外 → ask-on-external-path 的读规则问（拒绝 → 没读到）
     await events.clear()
     await sendTurn('S-reads', readCall('call_read_key', key), 'read the key')
-    const ask = await events.waitFor<InputRequestEvent>('input_request', { sessionId: sid })
+    const ask = await nextAsk(sid)
     expect(ask.request.unsandboxed).toBeFalsy()
     await answer(sid, ask.request.id, false)
     await events.waitFor('agent_end', { sessionId: sid })
@@ -724,7 +735,7 @@ describe('E2E-9 「允许并记住」两面生效', () => {
     // ② read 工具读它 → 问 → 允许并记住：会话里多一条 Read(…)
     await events.clear()
     await sendTurn('S-grants', readCall('call_read_aws', aws), 'read aws')
-    const readAsk = await events.waitFor<InputRequestEvent>('input_request', { sessionId: sid })
+    const readAsk = await nextAsk(sid)
     await answer(sid, readAsk.request.id, true, true)
     await events.waitFor('agent_end', { sessionId: sid })
     await chat.waitIdle()
@@ -734,7 +745,7 @@ describe('E2E-9 「允许并记住」两面生效', () => {
     // ③ write 工具写会话目录以外 → 问 → 允许并记住：多一条 Write(…)
     await events.clear()
     await sendTurn('S-grants', writeCall('call_write_out', out, 'W1\n'), 'write out')
-    const writeAsk = await events.waitFor<InputRequestEvent>('input_request', { sessionId: sid })
+    const writeAsk = await nextAsk(sid)
     await answer(sid, writeAsk.request.id, true, true)
     await events.waitFor('agent_end', { sessionId: sid })
     await chat.waitIdle()

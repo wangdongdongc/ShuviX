@@ -10,8 +10,11 @@
  *    `state.change` 里，抛出去就进了会话）。
  *
  * **客户端离开**（`onClientGone`）：webContents `destroyed`、渲染进程没了（`render-process-gone`）、
- * 主框架的跨文档导航（`did-start-navigation`，`isMainFrame && !isSameDocument` —— 重载 / 换页）都算
- * （PIN-02：webContents id 熬过重载，旧页面的订阅却随 JS 一起没了）。回调至多一次，之后监听器全部摘掉；
+ * 主框架跨文档导航**落定**（`did-navigate` —— 重载 / 换页；页内导航是 `did-navigate-in-page`，子框架是
+ * `did-frame-navigate`，都不算）都算（PIN-02：webContents id 熬过重载，旧页面的订阅却随 JS 一起没了）。
+ * 不听 `did-start-navigation`（P3-08 改）：导航**开始**了不等于页面换了 —— 外部链接闸（externalOpen/gate）
+ * 在 `will-navigate` 里拦下的导航照样先报 start，按 start 判离开就把一个还活着的页面的订阅全撤了，
+ * 而页面不知道，从此再也收不到帧（chat-markdown-sanitize 点一个 `href=""` 的链接复现）。回调至多一次，之后监听器全部摘掉；
  * 返回的注销函数恢复原样。登记时 webContents 已经不在 / 已销毁 → 回调在之后的微任务里调一次，绝不在
  * `onClientGone` 里同步调（PIN-04；hub 此刻还在登记这个客户端）。
  */
@@ -69,16 +72,6 @@ function goneLater(callback: () => void): () => void {
   }
 }
 
-/** `did-start-navigation` 的参数（Electron ≥ 25：第一个参数带 isMainFrame / isSameDocument；旧的按位置） */
-function isCrossDocumentMainFrame(args: unknown[]): boolean {
-  const details = args[0] as { isMainFrame?: unknown; isSameDocument?: unknown } | undefined
-  if (details !== undefined && typeof details.isMainFrame === 'boolean') {
-    return details.isMainFrame && details.isSameDocument !== true
-  }
-  // 旧签名：(event, url, isInPlace, isMainFrame, …)
-  return args[3] === true && args[2] !== true
-}
-
 // ─── IPC ────────────────────────────────────────────────
 
 export function createIpcSyncTransport(deps: IpcSyncTransportDeps): SyncServerTransport {
@@ -127,7 +120,7 @@ export function createIpcSyncTransport(deps: IpcSyncTransportDeps): SyncServerTr
       const detach = (): void => {
         contents.removeListener('destroyed', onDestroyed)
         contents.removeListener('render-process-gone', onProcessGone)
-        contents.removeListener('did-start-navigation', onNavigation)
+        contents.removeListener('did-navigate', onNavigation)
       }
       const fire = (): void => {
         if (done) return
@@ -137,12 +130,11 @@ export function createIpcSyncTransport(deps: IpcSyncTransportDeps): SyncServerTr
       }
       const onDestroyed: Listener = () => fire()
       const onProcessGone: Listener = () => fire()
-      const onNavigation: Listener = (...args: unknown[]) => {
-        if (isCrossDocumentMainFrame(args)) fire()
-      }
+      // `did-navigate` 只报主框架的跨文档导航落定
+      const onNavigation: Listener = () => fire()
       contents.on('destroyed', onDestroyed)
       contents.on('render-process-gone', onProcessGone)
-      contents.on('did-start-navigation', onNavigation)
+      contents.on('did-navigate', onNavigation)
       return () => {
         if (done) return
         done = true

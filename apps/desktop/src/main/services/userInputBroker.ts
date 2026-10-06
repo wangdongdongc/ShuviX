@@ -16,6 +16,11 @@
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import { createLogger } from '../logger'
 
+/** 应答的附带信息（P3-08 PIN-20）：谁答的（`ipc:<id>` / `chrome:<id>`），只供审计日志 */
+export interface UserInputResponseMeta {
+  readonly clientId?: string
+}
+
 const log = createLogger('UserInput')
 
 export interface UserInputParticipant {
@@ -25,8 +30,8 @@ export interface UserInputParticipant {
   claims(sessionId: string): boolean
   /** 把请求交给该会话的输入面板，等用户答复 */
   request(sessionId: string, request: InputRequest): Promise<InputResponse>
-  /** 这个 requestId 是我发出的吗；是就送达并返回 true */
-  respond(requestId: string, response: InputResponse): boolean
+  /** 这个 requestId 是我发出的吗；是就送达并返回 true（`meta` 原样带给运行时） */
+  respond(requestId: string, response: InputResponse, meta?: UserInputResponseMeta): boolean
 }
 
 const participants: UserInputParticipant[] = []
@@ -62,13 +67,25 @@ export function requestUserInputFor(
  * 按 requestId 找归属而不是按 sessionId：requestId 全局唯一，而调用方（IPC）手上的
  * sessionId 只是它以为的那个 —— 用它来选参与方等于把前端的判断当成真相。
  */
-export function respondToUserInput(requestId: string, response: InputResponse): boolean {
+export function respondToUserInput(
+  requestId: string,
+  response: InputResponse,
+  // 带缺省值：形参个数仍是 2 —— 签名里没有 sessionId（见单测）
+  meta: UserInputResponseMeta = {}
+): boolean {
   for (const p of participants) {
-    if (p.respond(requestId, response)) return true
+    const claimed =
+      meta.clientId === undefined
+        ? p.respond(requestId, response)
+        : p.respond(requestId, response, meta)
+    if (claimed) return true
   }
-  // 无人认领：请求早已被取消（中止 / 会话拆了），而前端那张卡片还在。静默丢弃会让人
-  // 对着一个「点了没反应」的按钮查半天，留一行日志把它变成一句话就能查清的事
-  log.warn(`用户输入无处送达 requestId=${requestId}（请求可能已被取消）`)
+  // 无人认领：请求早已被取消（中止 / 会话拆了），或别的前端先答了（先到者胜）。静默丢弃会让人
+  // 对着一个「点了没反应」的按钮查半天，留一行日志把它变成一句话就能查清的事。只记身份与种类，
+  // 从不记应答内容（PIN-20）
+  log.warn(
+    `ask not claimed requestId=${requestId} by=${meta.clientId ?? 'unknown'} kind=${response.kind}（请求可能已被取消或已被别处答过）`
+  )
   return false
 }
 

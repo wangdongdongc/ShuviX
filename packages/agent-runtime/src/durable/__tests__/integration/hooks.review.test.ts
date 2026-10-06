@@ -118,7 +118,7 @@ describe('P2-11 · J7 reviewer owner edge and cascade', () => {
       expect(lastUser).toContain(REVIEW_FENCE)
       expect(lastUser).toContain('/ws/out.txt')
 
-      expect(world.t.broadcastsOf('input_request')).toEqual([])
+      expect(world.t.asksOf('input_request')).toEqual([])
       expect(session.pendingInputCount).toBe(0)
       expect(world.fs.writesTo('/ws/out.txt')).toBe(1)
       expect((await resultOf(session, 1, 'r-w')).text).toBe(
@@ -171,7 +171,7 @@ describe('P2-11 · J7 reviewer owner edge and cascade', () => {
       expect(cw.text).toBe(expected)
       expect(cw.text.startsWith('Blocked by the reviewer: too risky')).toBe(true)
       expect(world.fs.writes).toEqual([])
-      expect(world.t.broadcastsOf('input_request')).toEqual([])
+      expect(world.t.asksOf('input_request')).toEqual([])
       expect((await resultOf(session, 1, 'r-agent')).text).toBe('could not write')
     },
     TIMEOUT
@@ -200,7 +200,7 @@ describe('P2-11 · J7 reviewer owner edge and cascade', () => {
       expect(lines[2]).toBe(`pi.user:${NEXT_NUDGE_TEXT}`)
       expect(lines[3]).toBe('pi.assistant:[tool:next]')
       expect(world.model.laneRequests('reviewer')).toHaveLength(2)
-      expect(world.t.broadcastsOf('input_request')).toEqual([])
+      expect(world.t.asksOf('input_request')).toEqual([])
       expect(world.fs.writesTo('/ws/out.txt')).toBe(1)
     },
     TIMEOUT
@@ -244,7 +244,7 @@ describe('P2-11 · J7 reviewer owner edge and cascade', () => {
       )
       expect(await withTimeout(session.submitUser('save'), 8000, 'save')).toEqual({})
 
-      expect(world.t.broadcastsOf('input_request')).toEqual([])
+      expect(world.t.asksOf('input_request')).toEqual([])
       expect(world.fs.writesTo('/ws/out.txt')).toBe(1)
       await waitFor(
         () => world.mcpLog.callsOf('slow')[0]?.abortedBy === 'signal',

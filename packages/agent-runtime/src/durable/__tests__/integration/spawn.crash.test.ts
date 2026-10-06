@@ -166,7 +166,7 @@ describe('P2-11 · J4 crash, reopen, continue', () => {
       expect(world.t.statesOf('s1')).toEqual(['interrupted'])
       expect(world.toolHost.rebuildCalls).toEqual([rootLock, record])
       await sleep(150)
-      expect(world.t.broadcastsOf('input_request')).toEqual([])
+      expect(world.t.asksOf('input_request')).toEqual([])
       expect(world.t.kit.callCount).toBe(0)
 
       world.model.chatIn(
@@ -187,7 +187,7 @@ describe('P2-11 · J4 crash, reopen, continue', () => {
 
       // 审查员：没有续跑、没有卡片，终态 aborted，拥有者边不变
       expect(world.model.laneRequests('reviewer')).toEqual([])
-      expect(world.t.broadcastsOf('input_request')).toEqual([])
+      expect(world.t.asksOf('input_request')).toEqual([])
       expect((await tasksIn(reopened, R!, 'pi.generation')).map(fate)).toEqual(['aborted'])
       expect(await ownedBy(reopened, writeTask.id)).toEqual([R])
 
@@ -221,21 +221,18 @@ describe('P2-11 · J4 crash, reopen, continue', () => {
 
       const t1 = world.t
       await withTimeout(sw.restart(), 10000, 'restart')
-      const resolved = t1.broadcasts.filter((event) => event.type === 'input_request_resolved')
-      expect(resolved.map((event) => (event as { requestId: string }).requestId).sort()).toEqual([
-        'c-a',
-        'c-w'
-      ])
+      const resolved = t1.asksOf('input_request_resolved')
+      expect(resolved.map((event) => event.requestId).sort()).toEqual(['c-a', 'c-w'])
       const reopened = await sw.open()
       await sleep(150)
-      expect(world.t.broadcastsOf('input_request')).toEqual([])
+      expect(world.t.asksOf('input_request')).toEqual([])
 
       world.model.chatIn('explore', answer('ok'))
       world.chat(answer('done'))
       const continuing = reopened.continue()
       const reasked = await nextInput(world, 'c-a')
       expect(reasked).toMatchObject({ kind: 'choice', question: 'Q', options: ASK_ARGS.options })
-      expect(world.t.broadcastsOf('input_request')).toEqual([
+      expect(world.t.asksOf('input_request')).toEqual([
         expect.objectContaining({ sessionId: 's1' })
       ])
       choose(world, 'c-a', ['B'])
@@ -247,7 +244,7 @@ describe('P2-11 · J4 crash, reopen, continue', () => {
         `toolResult:${INTERRUPTED('write')}`
       ])
       expect((await resultOf(reopened, C, 'c-w')).text).toBe(INTERRUPTED('write'))
-      expect(world.t.broadcastsOf('input_request')).toHaveLength(1)
+      expect(world.t.asksOf('input_request')).toHaveLength(1)
       expect((await resultOf(reopened, 1, 'r-agent')).text).toBe('ok')
       expect((await transcriptOf(reopened, 1)).at(-1)).toBe('pi.assistant:done')
       expect(world.fs.writes).toEqual([])

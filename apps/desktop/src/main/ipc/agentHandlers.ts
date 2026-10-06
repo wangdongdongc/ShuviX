@@ -16,6 +16,7 @@ import type {
 } from '../types'
 import type { InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import { createLogger } from '../logger'
+import { clientIdOf } from '../frontend/sync/clientIdentity'
 
 const log = createLogger('AgentIPC')
 
@@ -125,9 +126,12 @@ export function registerAgentHandlers(): void {
    */
   ipcMain.handle(
     'agent:respondToInput',
-    (_event, params: { sessionId: string; requestId: string; response: InputResponse }) =>
+    (event, params: { sessionId: string; requestId: string; response: InputResponse }) =>
       operationContext.run(createElectronContext(params.sessionId), () => {
-        chatGateway.respondToInput(params.sessionId, params.requestId, params.response)
+        // 答题方 = 这个窗口（`ipc:<webContentsId>`），只进审计日志（P3-08 PIN-20）
+        chatGateway.respondToInput(params.sessionId, params.requestId, params.response, {
+          clientId: clientIdOf(event)
+        })
         return { success: true }
       })
   )

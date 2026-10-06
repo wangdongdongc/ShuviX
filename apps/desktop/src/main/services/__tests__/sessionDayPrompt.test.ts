@@ -15,7 +15,6 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ChatEvent } from '@shuvix/chat-protocol/events'
-import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
 
 const mocks = vi.hoisted(() => ({
   insert: vi.fn<
@@ -76,23 +75,6 @@ import { electronEventSink } from '../agentRuntimeAdapters'
 import { sessionRecords } from '../sessionRecords'
 import { KNOWLEDGE_PROJECT_ID } from '@shuvix/chat-protocol/knowledge'
 
-function userMsg(over: Partial<ChatMessage> & { id: string }): ChatMessage {
-  return {
-    sessionId: 's1',
-    role: 'user',
-    type: 'text',
-    content: 'hello',
-    model: '',
-    createdAt: new Date(2026, 8, 18, 12).getTime(),
-    metadata: null,
-    ...over
-  } as ChatMessage
-}
-
-function userEvent(message: ChatMessage, sessionId = 's1'): ChatEvent {
-  return { type: 'user_message', sessionId, message: JSON.stringify(message) }
-}
-
 beforeEach(() => {
   mocks.insert.mockReset().mockReturnValue(true)
   mocks.touchActive.mockReset()
@@ -143,8 +125,8 @@ describe('recordUserEntry', () => {
 })
 
 describe('P3-07-21 user_message 旁听删掉了（PIN-17）', () => {
-  it('P3-07-21 electronEventSink 广播一条 user_message：前端照发，不写任何一行、不 touchActive', () => {
-    const event = userEvent(userMsg({ id: 'e3' }))
+  it('P3-07-21 electronEventSink 广播根会话一轮的开始（user_message 已不存在，P3-08）：前端照发，不写任何一行、不 touchActive', () => {
+    const event: ChatEvent = { type: 'agent_start', sessionId: 's1' }
     electronEventSink.broadcast(event)
     expect(mocks.frontendBroadcast).toHaveBeenCalledWith(event)
     expect(mocks.notify).toHaveBeenCalledWith(event)

@@ -15,6 +15,7 @@ import type { ChatEvent } from '@shuvix/chat-protocol/events'
 import { createSubAgentManager, type InProcessAgentType } from '@shuvix/agent-runtime'
 import { electronEventSink } from '../services/agentRuntimeAdapters'
 import { getSessionHost } from '../services/sessionHost'
+import { setRegisteredAgentCheck } from '../services/sessionSignalSeams'
 import { t } from '../i18n'
 import { createLogger } from '../logger'
 import { taskRegistry } from '../services/taskRegistry'
@@ -34,3 +35,6 @@ export const agentManager = createSubAgentManager({
   getAbortedNote: () => t('agent.toolAborted') || 'Aborted by user.',
   tasks: taskRegistry
 })
+
+// 会话信号只给路由认识的派生 agent 发生命周期（P3-08 PIN-19）
+setRegisteredAgentCheck((agentId) => agentManager.has(agentId))

@@ -168,7 +168,7 @@ describe('P2-11 · J1 dispatch through the whole chain', () => {
       const sending = session.submitUser('go')
       const request = await nextInput(world, 'c-w')
       expect(request).toMatchObject({ id: 'c-w', toolName: 'write' })
-      expect(world.t.broadcastsOf('input_request')).toEqual([
+      expect(world.t.asksOf('input_request')).toEqual([
         expect.objectContaining({ sessionId: 's1' })
       ])
       expect(session.pendingInputCount).toBe(1)

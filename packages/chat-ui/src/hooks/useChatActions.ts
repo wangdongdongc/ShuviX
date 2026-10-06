@@ -171,7 +171,7 @@ export function useChatActions(activeSessionId: string | null): UseChatActionsRe
         requestId,
         response
       })
-      // 后端 resolve 后会广播 input_request_resolved → store 自动移除该 pending,无需本地手动清理
+      // 询问落定后视图里就没有它了 → store 自动移除该 pending,无需本地手动清理
     },
     [activeSessionId]
   )

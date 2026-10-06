@@ -22,6 +22,7 @@ import {
   type EventRecorder
 } from '../../harness/seed'
 import { chatPane, sidebarPane, type ChatPane, type SidebarPane } from '../../harness/pages'
+import { syncProbe } from '../../harness/sync'
 
 const MODEL = 'e2e-model'
 
@@ -102,7 +103,8 @@ describe('流式落定', () => {
     await chat.ready()
     await chat.typeAndSend('读一下 alpha')
 
-    await events.waitFor('tool_end', { sessionId: sid })
+    // 工具落盘出结果（视图里的工具块，P3-08）
+    await syncProbe(app.main).waitToolResult(sid)
     await until(
       async () => (await chat.toolRows()).some((r) => r.status === 'done'),
       'tool settled'

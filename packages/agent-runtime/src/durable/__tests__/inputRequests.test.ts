@@ -1,6 +1,7 @@
 /**
  * 挂起的用户询问：应答 / 取消 / 摘要 / 恰好一次的钩子 / 关闭受理窗口 / 全部取消 / 能力闸门 /
- * 重复 id 顶替（裁决 R12）。
+ * 重复 id 顶替（裁决 R12）。P3-08 起询问不再广播（`events` 改由一份 `subscribe` 钩子记，`broadcasts`
+ * 记 sink 的广播 —— 恒空），应答可带答题方（PIN-20）。
  *
  * 关闭窗口这一条是会话关停链路的命门：宿主按「当前绑定的运行时」路由用户应答，正在关停的运行时
  * 已不在绑定表里；中止之后若还接受新询问，那条挂起就再也没人应答 —— 双方互等，会话卡死。
@@ -12,23 +13,18 @@ import { PendingInputRequests } from '../inputRequests'
 function makeInputs(capability = true): {
   inputs: PendingInputRequests
   events: string[]
+  broadcasts: unknown[]
   requested: string[]
   resolved: [string, InputResponse][]
 } {
   const events: string[] = []
+  const broadcasts: unknown[] = []
   const requested: string[] = []
   const resolved: [string, InputResponse][] = []
   const inputs = new PendingInputRequests(
     's1',
     {
-      broadcast: (event) =>
-        events.push(
-          event.type === 'input_request'
-            ? `request:${event.request.id}`
-            : event.type === 'input_request_resolved'
-              ? `resolved:${event.requestId}`
-              : event.type
-        ),
+      broadcast: (event) => broadcasts.push(event),
       hasUserInputCapability: () => capability
     },
     {
@@ -36,7 +32,11 @@ function makeInputs(capability = true): {
       onResolved: (id, response) => resolved.push([id, response])
     }
   )
-  return { inputs, events, requested, resolved }
+  inputs.subscribe({
+    onRequest: (request) => events.push(`request:${request.id}`),
+    onResolved: (id) => events.push(`resolved:${id}`)
+  })
+  return { inputs, events, broadcasts, requested, resolved }
 }
 
 const ask = (id: string, command = 'ls'): InputRequest => ({
@@ -233,5 +233,41 @@ describe('PendingInputRequests', () => {
     void inputs.request(ask('r2'))
     expect(seen).toHaveLength(2)
     inputs.cancelAll()
+  })
+
+  it('P3-08-45 request / settle never broadcast; the constructor hooks and each subscriber fire once', async () => {
+    const { inputs, events, broadcasts, requested, resolved } = makeInputs()
+    const pending = inputs.request(ask('r1'))
+    expect(inputs.respond('r1', { kind: 'ask', allowed: true })).toBe(true)
+    await pending
+    void inputs.request(ask('r2'))
+    inputs.cancelAll()
+    expect(broadcasts).toEqual([])
+    expect(requested).toEqual(['r1', 'r2'])
+    expect(resolved.map(([id]) => id)).toEqual(['r1', 'r2'])
+    expect(events).toEqual(['request:r1', 'resolved:r1', 'request:r2', 'resolved:r2'])
+  })
+
+  it('P3-08-60 respond(…, {clientId}) hands the answerer to every onResolved as a third argument; cancels carry none', async () => {
+    const seen: unknown[][] = []
+    const inputs = new PendingInputRequests(
+      's1',
+      { broadcast: () => {}, hasUserInputCapability: () => true },
+      { onResolved: (...args) => seen.push(['ctor', ...args]) }
+    )
+    inputs.subscribe({ onResolved: (...args) => seen.push(['sub', ...args]) })
+    void inputs.request(ask('r1'))
+    void inputs.request(ask('r2'))
+    const allow: InputResponse = { kind: 'ask', allowed: true }
+    expect(inputs.respond('r1', allow, { clientId: 'ipc:7' })).toBe(true)
+    // 先到者胜：第二个答题方拿到 false，钩子不再响
+    expect(inputs.respond('r1', allow, { clientId: 'chrome:c1' })).toBe(false)
+    inputs.cancel('r2')
+    expect(seen).toEqual([
+      ['ctor', 'r1', allow, 'ipc:7'],
+      ['sub', 'r1', allow, 'ipc:7'],
+      ['ctor', 'r2', { kind: 'cancel', reason: 'aborted' }],
+      ['sub', 'r2', { kind: 'cancel', reason: 'aborted' }]
+    ])
   })
 })

@@ -129,10 +129,12 @@ describe('依赖清单 —— 迁移守卫', () => {
       expect.arrayContaining([
         'package.json',
         'apps/desktop/package.json',
-        'packages/agent-runtime/package.json'
+        'packages/agent-runtime/package.json',
+        // P3-08-11：chat-ui 的视图同步客户端直接用 chord
+        'packages/chat-ui/package.json'
       ])
     )
-    expect(rels.length).toBeGreaterThanOrEqual(3)
+    expect(rels.length).toBeGreaterThanOrEqual(4)
 
     for (const pkg of PINNED) {
       expect(
@@ -140,6 +142,12 @@ describe('依赖清单 —— 迁移守卫', () => {
         `${pkg} 在 ${rels.join(', ')} 里一处声明都没有`
       ).toBeGreaterThan(0)
     }
+  })
+
+  it('MM-1b / P3-08-11 chat-ui 精确声明 `@earendil-works/chord` 1.0.2', () => {
+    const chatUi = MANIFESTS.filter((m) => m.rel === 'packages/chat-ui/package.json')
+    expect(chatUi).toHaveLength(1)
+    expect(declarationsOf('@earendil-works/chord', chatUi).map((d) => d.version)).toEqual(['1.0.2'])
   })
 
   it('MM-2 任何清单、任何依赖字段都不再声明 `@earendil-works/pi-agent-core`', () => {

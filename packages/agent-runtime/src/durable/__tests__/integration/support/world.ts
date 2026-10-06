@@ -318,7 +318,7 @@ export async function makeWorld(options: WorldOptions = {}): Promise<World> {
 
 // ─────────────────────────── 询问 ───────────────────────────
 
-/** 等一条 `input_request` 广播（按询问 id；当前进程） */
+/** 等一条询问挂起（按询问 id；当前进程；经 `subscribeInputs` 记下，P3-08） */
 export async function nextInput(
   world: World,
   id: string,
@@ -328,7 +328,7 @@ export async function nextInput(
   let found: InputRequest | undefined
   await waitFor(
     () => {
-      for (const event of world.t.broadcasts) {
+      for (const event of world.t.asks) {
         if (
           event.type === 'input_request' &&
           event.sessionId === sessionId &&
@@ -346,9 +346,9 @@ export async function nextInput(
   return found!
 }
 
-/** 某询问 id 的 `input_request_resolved` 广播数（当前进程） */
+/** 某询问 id 的落定次数（当前进程；`subscribeInputs` 的 onResolved） */
 export function resolvedCount(world: World, id: string, sessionId = 's1'): number {
-  return world.t.broadcasts.filter(
+  return world.t.asks.filter(
     (event) =>
       event.type === 'input_request_resolved' &&
       event.sessionId === sessionId &&

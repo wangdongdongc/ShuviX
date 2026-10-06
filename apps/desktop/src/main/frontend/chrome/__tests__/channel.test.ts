@@ -444,20 +444,16 @@ describe('CH-5 init / abort / 三条队列 / respondToInput', () => {
     expect(mocks.runInContext.mock.calls[0][0]).toEqual(CHROME_CTX(OWNED))
   })
 
-  it('CH-5 respondToInput：运行时不认领（请求已取消）→ 广播 input_request_resolved 收走卡片', async () => {
+  it('CH-5 / P3-08-45 respondToInput：运行时不认领（请求已取消）→ 什么都不广播（卡片跟着视图走）', async () => {
     mocks.getAgentSession.mockReturnValue(agentWith(false))
     expect(await respond('req-gone')).toStrictEqual({ success: true })
-    expect(mocks.broadcast.mock.calls).toEqual([
-      [{ type: 'input_request_resolved', sessionId: OWNED, requestId: 'req-gone' }]
-    ])
+    expect(mocks.broadcast).not.toHaveBeenCalled()
   })
 
-  it('CH-5 respondToInput：会话此刻没有运行时 → 同样广播 resolved', async () => {
+  it('CH-5 / P3-08-45 respondToInput：会话此刻没有运行时 → 同样不广播', async () => {
     mocks.getAgentSession.mockReturnValue(undefined)
     expect(await respond('req-x')).toStrictEqual({ success: true })
-    expect(mocks.broadcast.mock.calls).toEqual([
-      [{ type: 'input_request_resolved', sessionId: OWNED, requestId: 'req-x' }]
-    ])
+    expect(mocks.broadcast).not.toHaveBeenCalled()
     expect(mocks.gateway.respondToInput).not.toHaveBeenCalled()
   })
 })
@@ -480,10 +476,8 @@ describe('CH-9 respondToInput 拿着别的会话的 requestId 也送不到那条
     expect(mocks.getAgentSession.mock.calls.every(([sid]) => sid === OWNED)).toBe(true)
     expect(theirs.respondToInput).not.toHaveBeenCalled()
     expect(mocks.gateway.respondToInput).not.toHaveBeenCalled()
-    // 本会话没有这个请求 → 只在本会话里收走这张（并不存在的）卡
-    expect(mocks.broadcast.mock.calls).toEqual([
-      [{ type: 'input_request_resolved', sessionId: OWNED, requestId: 'desktop-tool-call-9' }]
-    ])
+    // 本会话没有这个请求 → 什么都不发（P3-08：没有 input_request_resolved 了）
+    expect(mocks.broadcast).not.toHaveBeenCalled()
   })
 })
 

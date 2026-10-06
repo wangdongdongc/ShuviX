@@ -369,7 +369,7 @@ export function InputArea({
     paste.reset()
   }
 
-  /** 把一条用户消息发给主会话 Agent：清空输入态 → 置流式态 → agent.prompt */
+  /** 把一条用户消息发给主会话 Agent：清空输入态 → 乐观占位（同时即流式态）→ agent.prompt */
   const sendToMainAgent = async (
     sid: string,
     outgoing: { contentText: string; inlineTokens?: Record<string, InlineToken> },
@@ -377,10 +377,9 @@ export function InputArea({
   ): Promise<void> => {
     resetComposer()
     const store = useChatStore.getState()
-    store.setIsStreaming(sid, true)
-    store.clearStreamingContent(sid)
-    // 乐观占位：用户消息要等后端落库才经 user_message 回来，而创建运行时（含 MCP 惰性连接）
-    // 可能要几秒 —— 输入框已清空、列表里却没这句话，像是消息丢了。先顶上，落库即换成真的
+    // 乐观占位（Q-P3-07）：用户消息要等会话受理才出现在视图里，而创建运行时（含 MCP 惰性连接）
+    // 可能要几秒 —— 输入框已清空、列表里却没这句话，像是消息丢了。先顶上（它在的时候界面就是
+    // 「在跑」的形态），视图里出现这条用户消息即在同一次更新里换成真的
     store.touchSessionActive(sid)
     store.setPendingPrompt(
       sid,
@@ -405,9 +404,9 @@ export function InputArea({
         inlineTokens: outgoing.inlineTokens
       })
     } finally {
-      // 占位的唯一收尾处。正常路径上 user_message 早就把它换成真的了，这里兜两种它到不了的
-      // 情况：整轮跑完仍没落库，以及 prompt 本身抛出（IPC 把主进程的异常原样拒绝回来，
-      // 没有 finally 的话占位会一直挂着）。**不能改由 error 事件撤** —— 见 useAgentEvents
+      // 占位的兜底收尾。正常路径上视图早就把它换成真的了，这里兜两种它到不了的情况：整轮跑完仍没
+      // 受理（发送被拒、prompt 以 {error} 落定），以及 prompt 本身抛出（IPC 把主进程的异常原样拒绝
+      // 回来，没有 finally 的话占位会一直挂着）。**不能改由 error 事件撤** —— 见 useAgentEvents
       useChatStore.getState().setPendingPrompt(sid, null)
     }
   }
@@ -429,7 +428,7 @@ export function InputArea({
       requestId: activePendingInput.id,
       response: { kind: 'other', text }
     })
-    // 后端 resolve 后广播 input_request_resolved → store 自动移除该 pending
+    // 询问落定后视图里就没有它了 → store 自动移除该 pending
   }
 
   /**
@@ -488,12 +487,8 @@ export function InputArea({
   /** 中止生成（后端统一处理落库 + Agent 上下文同步） */
   const handleAbort = async (): Promise<void> => {
     if (!activeSessionId) return
-    const sid = activeSessionId
-    const store = useChatStore.getState()
-    // 已生成的部分内容由 harness 自己落成 entry（stopReason='aborted'），
-    // 经 assistant_message / agent_end 广播回来 —— 这里只收流式态
-    await getSessionChannelApi().agent.abort(sid)
-    store.finishStreaming(sid)
+    // 已生成的部分内容由运行时自己落成条目（stopReason='aborted'），流式态随视图的运行状态收起
+    await getSessionChannelApi().agent.abort(activeSessionId)
   }
 
   /**
@@ -514,8 +509,6 @@ export function InputArea({
     if (useChatStore.getState().sessionClosing[activeSessionId]) return
     const stillStreaming = store.sessionStreams[activeSessionId]?.isStreaming
     if (!stillStreaming && tier !== 'nextTurn') {
-      store.setIsStreaming(activeSessionId, true)
-      store.clearStreamingContent(activeSessionId)
       await api.prompt({ sessionId: activeSessionId, text })
       return
     }

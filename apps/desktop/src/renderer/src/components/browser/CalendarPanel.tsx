@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
-import { getChatApi, getHostApi, useAppEvent, useChatStore, type Session } from '@shuvix/chat-ui'
+import {
+  getChatApi,
+  getHostApi,
+  isSubSession,
+  useAppEvent,
+  useChatStore,
+  type Session
+} from '@shuvix/chat-ui'
 import {
   CalendarView,
   ProjectSessionGroups,
@@ -40,12 +47,15 @@ export function CalendarPanel(): React.JSX.Element {
   const [month, setMonth] = useState<Date>(() => new Date())
   const [daysWithSessions, setDaysWithSessions] = useState<Date[]>([])
   const [daySessions, setDaySessions] = useState<Session[]>([])
-  // 用户消息真正落树（user_message）或列表成员变化后再拉；发消息时的乐观 touchSessionActive 太早。
+  // 根会话一轮开跑（agent_start，PIN-06：当天那一行在受理 / 落位时就写了，早于生命周期信号）或列表
+  // 成员变化后再拉；发消息时的乐观 touchSessionActive 太早。派生 agent 的开跑不算
   const [refreshTick, setRefreshTick] = useState(0)
   useAppEvent('session.listChanged', () => setRefreshTick((n) => n + 1))
   useEffect(() => {
     return getChatApi().agent.onEvent((event) => {
-      if (event.type === 'user_message') setRefreshTick((n) => n + 1)
+      if (event.type === 'agent_start' && !isSubSession(event.sessionId)) {
+        setRefreshTick((n) => n + 1)
+      }
     })
   }, [])
 

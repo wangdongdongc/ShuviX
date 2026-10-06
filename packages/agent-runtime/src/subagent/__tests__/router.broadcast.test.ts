@@ -1,7 +1,7 @@
 /**
  * 派生 agent 路由 · register / end 广播（P2-05 C 段，21–24；25 在桌面 agentManagerBroadcast.test.ts）：每次 runTask
  * 恰 [register, end]；结果契约的追问不广播（PIN-06）；end 的 result 与交回调用方的文本逐字相同；被拒 / 建不起来的
- * 路径一条事件都没有；面板追问发 [user_message, end]（PIN-07 的内联 Token）。
+ * 路径一条事件都没有；面板追问只发 [end]（P3-08：追问不再广播 `user_message`，面板经 agent 视图看到它）。
  */
 import { fauxText, fauxToolCall } from '@earendil-works/pi-ai'
 import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
@@ -213,34 +213,27 @@ describe('router · continue broadcasts', () => {
     return { A: r.registers()[0]!.sessionId, C: C! }
   }
 
-  it('P2-05-24 continue emits [user_message, end]; no second register', async () => {
+  it('P2-05-24 continue emits only [end] (P3-08-45: no user_message); no second register', async () => {
     const r = await hostR()
     const { A } = await headline(r)
     const before = r.events.length
     r.t.kit.queue(answer('more ok'))
     await withTimeout(r.router.continueTask({ subSessionId: A, text: 'more' }), 3000, 'continue')
     const appended = r.events.slice(before)
-    expect(appended.map((event) => event.type)).toEqual(['user_message', 'sub_session_end'])
-    const message = appended[0] as Extract<(typeof appended)[number], { type: 'user_message' }>
-    expect(message.sessionId).toBe(A)
-    expect(JSON.parse(message.message)).toMatchObject({
-      sessionId: A,
-      role: 'user',
-      type: 'text',
-      content: 'more',
-      metadata: null
-    })
-    expect(appended[1]).toEqual({
-      type: 'sub_session_end',
-      sessionId: A,
-      parentSessionId: 's1',
-      result: 'more ok',
-      isError: false
-    })
+    expect(appended).toEqual([
+      {
+        type: 'sub_session_end',
+        sessionId: A,
+        parentSessionId: 's1',
+        result: 'more ok',
+        isError: false
+      }
+    ])
+    expect(r.userMessages()).toEqual([])
     expect(r.registers()).toHaveLength(1)
   })
 
-  it('P2-05-24 inline tokens: metadata carries them; the child gets the resolved text (PIN-07)', async () => {
+  it('P2-05-24 inline tokens: the child gets the resolved text (PIN-07); nothing is broadcast for the follow-up', async () => {
     const r = await hostR()
     const { A, C } = await headline(r)
     const tokens: Record<string, InlineToken> = {
@@ -253,11 +246,7 @@ describe('router · continue broadcasts', () => {
       3000,
       'continue'
     )
-    const [message] = r.userMessages()
-    expect(JSON.parse(message!.message)).toMatchObject({
-      content: text,
-      metadata: { inlineTokens: tokens }
-    })
+    expect(r.userMessages()).toEqual([])
     const lines = await transcript((await r.session.harness.conversation(C as never, BG))!)
     const resolved = resolveTokensForAgent(text, tokens)
     expect(resolved).toBe('look at NOTES BODY')

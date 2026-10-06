@@ -26,7 +26,13 @@ import { updateService } from './services/updateService'
 import { destroyTerminalsByWindow } from './services/terminalService'
 import { killAllBgTasks } from './services/bgTaskService'
 import { initPinnedChatService, unpinAll as unpinAllPinnedChat } from './services/pinnedChatService'
-import { initNotificationService } from './services/notificationService'
+import {
+  initNotificationService,
+  notifyAskRaised,
+  notifyAskResolved,
+  setRunErrorTextSource
+} from './services/notificationService'
+import { sessionRunErrorText, setSessionAskObserver } from './services/sessionSignals'
 import { initMarkdownWindowService, openMarkdownFile } from './services/markdownWindowService'
 import { markdownFilesFromArgv } from './utils/markdownFiles'
 import {
@@ -444,6 +450,9 @@ function initSharedWindowServices(): void {
       if (!mainWindow || mainWindow.isDestroyed()) createWindow()
     }
   })
+  // 询问不再是 ChatEvent（P3-08）：会话信号接线把询问的挂起 / 落定交给通知；失败通知的正文从投影读
+  setSessionAskObserver({ askRaised: notifyAskRaised, askResolved: notifyAskResolved })
+  setRunErrorTextSource(sessionRunErrorText)
 
   // 初始化 widget 独立窗口服务（owns widget app 窗口）
   initWidgetWindowService({ getThemeBgColor })

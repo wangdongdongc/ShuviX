@@ -58,8 +58,21 @@ export * from './stores/chatStore'
 export * from './stores/subSessionStore'
 export * from './stores/bgTaskStore'
 
+// ── 视图同步（P3-08） ──
+export { createSyncClient, syncClientFor } from './sync/syncClient'
+export type {
+  SyncClient,
+  SyncClientOptions,
+  ViewBindingState,
+  ViewBindingStatus,
+  ViewEvent,
+  ViewSubscription
+} from './sync/syncClient'
+
 // ── 对话域 hooks ──
 export { useSessionInit } from './hooks/useSessionInit'
+export { useSessionView } from './hooks/useSessionView'
+export { useAgentView } from './hooks/useAgentView'
 export { useSessionTools, refreshSessionTools } from './hooks/useSessionTools'
 export type { SessionToolsState } from './hooks/useSessionTools'
 export { useAgentEvents } from './hooks/useAgentEvents'

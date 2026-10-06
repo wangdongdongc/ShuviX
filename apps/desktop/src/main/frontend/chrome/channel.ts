@@ -21,7 +21,7 @@ import {
 } from '@shuvix/chat-protocol/chromeBridge'
 import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
 import type { InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
-import { chatFrontendRegistry, chatGateway, createChromeContext, operationContext } from '../core'
+import { chatGateway, createChromeContext, operationContext } from '../core'
 import { sessionService } from '../../services/sessionService'
 import { taskRegistry } from '../../services/taskRegistry'
 import { getBuiltinToolPresentations } from '../../services/toolRegistry'
@@ -130,15 +130,9 @@ export async function callPanelChannel(
       const p = params<{ sessionId: string; requestId: string; response: InputResponse }>()
       // 只送进这条会话自己的运行时。桌面的网关按 requestId 在**所有**会话里找认领者（前端以为的
       // 会话不作数 —— 那是对桌面窗口的裁决）；侧边栏却只该答它自己那条会话的询问：requestId 就是
-      // 工具调用 id，别的会话的它未必拿不到。没人认领（请求已取消）就把这张卡片收走，与网关同理
+      // 工具调用 id，别的会话的它未必拿不到。没人认领（请求已取消）什么也不发：卡片跟着视图走（P3-08）
       inContext(p.sessionId, () => {
-        const agent = sessionService.getAgentSession(p.sessionId)
-        if (agent?.respondToInput(p.requestId, p.response)) return
-        chatFrontendRegistry.broadcast({
-          type: 'input_request_resolved',
-          sessionId: p.sessionId,
-          requestId: p.requestId
-        })
+        sessionService.getAgentSession(p.sessionId)?.respondToInput(p.requestId, p.response)
       })
       return { success: true }
     }

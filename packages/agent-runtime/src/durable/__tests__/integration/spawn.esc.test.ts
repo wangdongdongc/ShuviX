@@ -129,7 +129,7 @@ async function escDuringReview(): Promise<{ cwText: string }> {
     `hook:${(runId as { run: { runId: string } }).run.runId}`
   )
   expect(reviewSubmission).toMatchObject({ status: 'unanswered', reason: 'aborted' })
-  expect(world.t.broadcastsOf('input_request')).toEqual([])
+  expect(world.t.asksOf('input_request')).toEqual([])
   const cw = await resultOf(session, C, 'c-w')
 
   expect((await tasksIn(session, C, 'pi.generation')).map(fate)).toEqual(['aborted'])

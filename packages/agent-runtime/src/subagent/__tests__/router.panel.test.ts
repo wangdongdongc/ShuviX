@@ -120,7 +120,7 @@ describe('router · continue', () => {
       new RegExp(`Sub-session is busy: ${A}`)
     )
     expect(r.events).toHaveLength(events)
-    expect(r.userMessages()).toHaveLength(1)
+    expect(r.userMessages()).toEqual([])
     step.release()
     await withTimeout(continued, 3000, 'continue')
     expect(spy).toHaveBeenCalledTimes(1)

@@ -96,12 +96,12 @@ describe('P1-12 · asks', () => {
       expect(session.pendingInputCount).toBe(0)
       expect(await withTimeout(saving, 5000, 'save')).toEqual({})
 
-      const order = world.t.broadcasts
-        .filter(
-          (event) => event.type === 'input_request' || event.type === 'input_request_resolved'
-        )
-        .map((event) => event.type)
+      const order = world.t.asks.map((event) => event.type)
       expect(order).toEqual(['input_request', 'input_request_resolved'])
+      // 询问不再上前端线路（P3-08）：只经钩子
+      expect(
+        world.t.broadcasts.filter((event) => (event.type as string).startsWith('input_request'))
+      ).toEqual([])
       const direct = await directWrite({ kind: 'ask', allowed: true })
       const entry = await entryFor(session, 'c-w')
       expect(resultMessage(entry).isError).toBe(false)
@@ -228,11 +228,8 @@ describe('P1-12 · asks', () => {
 
       const t1 = world.t
       await withTimeout(world.restart(), 10000, 'restart')
-      const resolved = t1.broadcasts.filter((event) => event.type === 'input_request_resolved')
-      expect(resolved.map((event) => (event as { requestId: string }).requestId).sort()).toEqual([
-        'c-a',
-        'c-w'
-      ])
+      const resolved = t1.asksOf('input_request_resolved')
+      expect(resolved.map((event) => event.requestId).sort()).toEqual(['c-a', 'c-w'])
       expect(world.fs.writes).toEqual([])
 
       const reopened = await world.open()
@@ -240,7 +237,7 @@ describe('P1-12 · asks', () => {
       expect(world.t.statesOf('s1')).toEqual(['interrupted'])
       expect(reopened.pendingInputCount).toBe(0)
       await sleep(150)
-      expect(world.t.broadcastsOf('input_request')).toEqual([])
+      expect(world.t.asksOf('input_request')).toEqual([])
       expect(world.t.kit.callCount).toBe(0)
 
       world.chat(
@@ -254,7 +251,7 @@ describe('P1-12 · asks', () => {
       const continuing = reopened.continue()
       const reasked = await nextInput(world, 'c-a')
       expect(reasked).toMatchObject({ kind: 'choice', question: 'Q', options: ASK_ARGS.options })
-      expect(world.t.broadcastsOf('input_request')).toHaveLength(1)
+      expect(world.t.asksOf('input_request')).toHaveLength(1)
       choose(world, 'c-a', ['A'])
       await nextInput(world, 'c-w2')
       const conversation = await reopened.currentConversation()
@@ -319,7 +316,7 @@ describe('P1-12 · asks', () => {
       const entry = await entryFor(session, 'c-w')
       expect(resultMessage(entry).isError).toBe(true)
       expect(resultMessage(entry).content).toEqual([{ type: 'text', text: 'Aborted' }])
-      expect(world.t.broadcastsOf('input_request')).toEqual([])
+      expect(world.t.asksOf('input_request')).toEqual([])
       expect(world.fs.writes).toEqual([])
       await waitFor(() => session.runState === 'idle', 1000, 'idle')
     },

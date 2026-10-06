@@ -21,6 +21,8 @@ interface Harness {
   foreground: Set<string>
   enabled: { value: boolean }
   titles: Map<string, string>
+  /** 宿主的失败文本 seam（PIN-08）：会话 → 最后一条错误行 */
+  errorTexts: Map<string, string>
 }
 
 function makeCenter(): Harness {
@@ -29,6 +31,7 @@ function makeCenter(): Harness {
   const foreground = new Set<string>()
   const enabled = { value: true }
   const titles = new Map<string, string>()
+  const errorTexts = new Map<string, string>()
   const center = createNotificationCenter({
     notifier: {
       show: (n) => shown.push(n),
@@ -37,10 +40,11 @@ function makeCenter(): Harness {
     isForeground: (sessionId) => foreground.has(sessionId),
     sessionTitle: (sessionId) => titles.get(sessionId),
     enabled: () => enabled.value,
+    runErrorText: (sessionId) => errorTexts.get(sessionId),
     // 文案断言只关心 key 与插值，不关心具体译文
     t: (key, vars) => (vars ? `${key}|${Object.values(vars).join(',')}` : key)
   })
-  return { center, shown, dismissed, foreground, enabled, titles }
+  return { center, shown, dismissed, foreground, enabled, titles, errorTexts }
 }
 
 function askRequest(id = 'req-1', command = 'rm -rf build'): InputRequest {
@@ -68,7 +72,7 @@ describe('通知决策器 — 三个触发点', () => {
     const h = makeCenter()
     h.titles.set(ROOT, '重构会话')
 
-    h.center.handleEvent({ type: 'input_request', sessionId: ROOT, request: askRequest() })
+    h.center.askRaised(ROOT, askRequest())
     expect(h.shown).toHaveLength(1)
     expect(h.shown[0]).toMatchObject({
       key: 'ask:req-1',
@@ -79,7 +83,7 @@ describe('通知决策器 — 三个触发点', () => {
     })
     expect(h.shown[0].body).toBe('notification.askBody|rm -rf build')
 
-    h.center.handleEvent({ type: 'input_request_resolved', sessionId: ROOT, requestId: 'req-1' })
+    h.center.askResolved(ROOT, 'req-1')
     expect(h.dismissed).toEqual(['ask:req-1'])
   })
 
@@ -117,10 +121,34 @@ describe('通知决策器 — 三个触发点', () => {
     expect(h.shown.map((n) => n.kind)).toEqual(['failed'])
   })
 
-  it('reason 省略（老事件）按正常结束处理', () => {
+  it('P3-08-56 失败的正文取宿主给的最后一条错误行（PIN-08）；runEnded 带的文本优先，攒下的 error 事件更优先', () => {
     const h = makeCenter()
-    h.center.handleEvent({ type: 'agent_end', sessionId: ROOT })
-    expect(h.shown.map((n) => n.kind)).toEqual(['done'])
+    h.errorTexts.set(ROOT, '429 Too Many Requests')
+    h.center.handleEvent({ type: 'agent_end', sessionId: ROOT, reason: 'error' })
+    expect(h.shown.at(-1)!.body).toBe('notification.failedBody|429 Too Many Requests')
+
+    h.center.runEnded(ROOT, 'error', 'explicit text')
+    expect(h.shown.at(-1)!.body).toBe('notification.failedBody|explicit text')
+
+    h.center.handleEvent({ type: 'agent_start', sessionId: ROOT })
+    h.center.handleEvent({ type: 'error', sessionId: ROOT, error: 'MCP down' })
+    h.center.handleEvent({ type: 'agent_end', sessionId: ROOT, reason: 'error' })
+    expect(h.shown.at(-1)!.body).toBe('notification.failedBody|MCP down')
+    // 每一轮恰一条
+    expect(h.shown.map((n) => n.kind)).toEqual(['failed', 'failed', 'failed'])
+
+    // ok / aborted 从不问 seam；ok 弹完成
+    h.errorTexts.clear()
+    h.center.runEnded(ROOT, 'aborted')
+    h.center.runEnded(ROOT, 'ok')
+    expect(h.shown.map((n) => n.kind)).toEqual(['failed', 'failed', 'failed', 'done'])
+  })
+
+  it('P3-08-56 seam 取不到 / 抛错 → 正文为空的失败通知，照弹', () => {
+    const h = makeCenter()
+    h.center.runEnded(ROOT, 'error')
+    expect(h.shown.map((n) => n.kind)).toEqual(['failed'])
+    expect(h.shown[0].body).toBe('notification.failedBody|')
   })
 })
 
@@ -128,7 +156,7 @@ describe('通知决策器 — 不打扰的条件', () => {
   it('用户正看着这个会话就不弹', () => {
     const h = makeCenter()
     h.foreground.add(ROOT)
-    h.center.handleEvent({ type: 'input_request', sessionId: ROOT, request: askRequest() })
+    h.center.askRaised(ROOT, askRequest())
     h.center.handleEvent({ type: 'agent_end', sessionId: ROOT, reason: 'ok' })
     expect(h.shown).toHaveLength(0)
   })
@@ -142,7 +170,7 @@ describe('通知决策器 — 不打扰的条件', () => {
 
   it('用户打开会话后，它名下挂着的通知一并撤回', () => {
     const h = makeCenter()
-    h.center.handleEvent({ type: 'input_request', sessionId: ROOT, request: askRequest('a') })
+    h.center.askRaised(ROOT, askRequest('a'))
     h.center.handleEvent({ type: 'agent_end', sessionId: ROOT, reason: 'ok' })
     expect(h.shown).toHaveLength(2)
 
@@ -158,11 +186,7 @@ describe('通知决策器 — 不打扰的条件', () => {
 
   it('正文压成单行并截断 —— 命令可能是多行 heredoc', () => {
     const h = makeCenter()
-    h.center.handleEvent({
-      type: 'input_request',
-      sessionId: ROOT,
-      request: askRequest('r', `cat <<'EOF'\n${'x'.repeat(300)}\nEOF`)
-    })
+    h.center.askRaised(ROOT, askRequest('r', `cat <<'EOF'\n${'x'.repeat(300)}\nEOF`))
     const detail = h.shown[0].body.split('|')[1]
     expect(detail).not.toContain('\n')
     expect(detail.length).toBeLessThanOrEqual(140)
@@ -201,7 +225,7 @@ describe('通知决策器 — 派生 agent', () => {
     const h = makeCenter()
     h.titles.set(ROOT, '根会话')
     h.center.handleEvent(register(SUB, ROOT, 'tool-call-1'))
-    h.center.handleEvent({ type: 'input_request', sessionId: SUB, request: askRequest('q') })
+    h.center.askRaised(SUB, askRequest('q'))
 
     expect(h.shown).toHaveLength(1)
     expect(h.shown[0].sessionId).toBe(ROOT)

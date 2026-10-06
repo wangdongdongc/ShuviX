@@ -31,6 +31,7 @@
     "@codemirror/search": "*",
     "@codemirror/state": "*",
     "@codemirror/view": "*",
+    "@earendil-works/chord": "1.0.2",
     "@lezer/highlight": "*",
     "@shuvix/chat-protocol": "*"
   }

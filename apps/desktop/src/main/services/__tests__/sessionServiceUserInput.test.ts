@@ -30,7 +30,8 @@ const mocks = vi.hoisted(() => ({
   findModelsByProvider: vi.fn(() => []),
   findByKey: vi.fn(() => undefined),
   agentCreate: vi.fn(),
-  warn: vi.fn()
+  warn: vi.fn(),
+  info: vi.fn()
 }))
 
 vi.mock('../../dao/sessionDao', () => ({
@@ -85,7 +86,7 @@ vi.mock('../../frontend/core/ChatFrontendRegistry', () => ({
   chatFrontendRegistry: { broadcast: vi.fn() }
 }))
 vi.mock('../../logger', () => ({
-  createLogger: () => ({ info: () => {}, warn: mocks.warn, error: () => {} })
+  createLogger: () => ({ info: mocks.info, warn: mocks.warn, error: () => {} })
 }))
 
 import { requestUserInputFor, respondToUserInput } from '../userInputBroker'
@@ -109,11 +110,13 @@ function fakeAgent(
   opts: { respond?: boolean } = {}
 ): {
   name: string
+  sessionId: string
   requestUserInput: ReturnType<typeof vi.fn>
   respondToInput: ReturnType<typeof vi.fn>
 } {
   return {
     name,
+    sessionId: `sid-${name}`,
     requestUserInput: vi.fn(async () => ANSWER),
     respondToInput: vi.fn(() => opts.respond ?? false)
   }
@@ -229,5 +232,44 @@ describe('respond —— 按 requestId 遍历活运行时', () => {
     live()
     expect(() => respondToUserInput('req-1', ANSWER)).not.toThrow()
     expect(respondToUserInput('req-1', ANSWER)).toBe(false)
+  })
+})
+
+describe('P3-08-60 / 61 应答的审计（PIN-20）', () => {
+  beforeEach(() => {
+    mocks.info.mockClear()
+    mocks.warn.mockClear()
+  })
+
+  it('P3-08-60 带身份的应答：clientId 交到运行时；一行 info「ask answered … by=ipc:7 kind=…」，不含应答内容', () => {
+    const holder = fakeAgent('a', { respond: true })
+    live(holder)
+    const response: InputResponse = { kind: 'other', text: 'SECRET-PASSWORD' }
+    expect(respondToUserInput('r', response, { clientId: 'ipc:7' })).toBe(true)
+    expect(holder.respondToInput.mock.calls).toEqual([['r', response, { clientId: 'ipc:7' }]])
+    const lines = mocks.info.mock.calls
+      .map((c) => String(c[0]))
+      .filter((l) => l.startsWith('ask answered'))
+    expect(lines).toEqual(['ask answered session=sid-a requestId=r by=ipc:7 kind=other'])
+    expect(lines[0]).not.toContain('SECRET')
+  })
+
+  it('P3-08-61 两个前端答同一条：先到的 true 并记为答题方；后到的 false、记一行「没人认领」、什么都不广播', () => {
+    let claimed = false
+    const holder = fakeAgent('a')
+    holder.respondToInput.mockImplementation(() => {
+      if (claimed) return false
+      claimed = true
+      return true
+    })
+    live(holder)
+    expect(respondToUserInput('r', ANSWER, { clientId: 'ipc:7' })).toBe(true)
+    expect(respondToUserInput('r', ANSWER, { clientId: 'chrome:c1' })).toBe(false)
+    expect(mocks.info.mock.calls.map((c) => String(c[0]))).toContain(
+      'ask answered session=sid-a requestId=r by=ipc:7 kind=ask'
+    )
+    const warns = mocks.warn.mock.calls.map((c) => String(c[0]))
+    expect(warns).toHaveLength(1)
+    expect(warns[0]).toContain('ask not claimed requestId=r by=chrome:c1 kind=ask')
   })
 })

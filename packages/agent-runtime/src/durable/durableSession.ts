@@ -114,7 +114,11 @@ import {
   type DrivenRun,
   type SessionState
 } from './docs'
-import { PendingInputRequests, type PendingInputHooks } from './inputRequests'
+import {
+  PendingInputRequests,
+  type InputResponseMeta,
+  type PendingInputHooks
+} from './inputRequests'
 import {
   AGENT_EXTENSION_PREFIX,
   AgentCreationError,
@@ -367,8 +371,11 @@ export interface DurableSession {
   setThinkingLevel(level: ThinkingLevel): Promise<void>
   /** 发起一条用户询问（工具用） */
   requestUserInput(request: InputRequest): Promise<InputResponse>
-  /** 应答一条挂起的询问；不存在时返回 false */
-  respondToInput(requestId: string, response: InputResponse): boolean
+  /**
+   * 应答一条挂起的询问；不存在时返回 false（先到者胜）。`meta.clientId` = 答题方（P3-08 PIN-20），原样交给
+   * 询问钩子的 onResolved 供审计
+   */
+  respondToInput(requestId: string, response: InputResponse, meta?: InputResponseMeta): boolean
   /** 挂起中的询问数（>0 = 卡在等人回答） */
   readonly pendingInputCount: number
   /** 待答询问的人读摘要 */
@@ -2327,8 +2334,8 @@ export class DurableSessionImpl implements DurableSession {
     return this.inputs.request(request)
   }
 
-  respondToInput(requestId: string, response: InputResponse): boolean {
-    return this.inputs.respond(requestId, response)
+  respondToInput(requestId: string, response: InputResponse, meta?: InputResponseMeta): boolean {
+    return this.inputs.respond(requestId, response, meta)
   }
 
   get pendingInputCount(): number {

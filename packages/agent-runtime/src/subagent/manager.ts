@@ -7,8 +7,8 @@
  *  - **会话 → 协调器**：`runTask` 按 `sessionId` 找到打开着的会话（`sessions.get`；派发工具总在打开的会话里
  *    跑），把这一次派发交给 `session.agents.spawn`。
  *  - **广播**：子 agent 建好（或重跑时重新挂上）的那一刻（`onCreated`）发 `sub_session_register`，每一轮
- *    收尾发 `sub_session_end`（`result` 与交回调用方的文本逐字相同）。追问另发一条 `user_message`；结果契约
- *    的追问（nudge）不广播（PIN-06）。
+ *    收尾发 `sub_session_end`（`result` 与交回调用方的文本逐字相同）。追问不另发事件（P3-08：面板的转写走
+ *    agent 视图）；结果契约的追问（nudge）不广播（PIN-06）。
  *  - **任务登记**：每个子 agent 在 taskRegistry 里一条 `'agent'` 任务，taskId = agentId，归属可见会话
  *    （嵌套派生也一样）；停 = 软停止（interrupt）。每条路径都要落定 —— 没落定的任务会把会话钉在 LRU 里。
  *  - **agentId 索引**：agentId → (sessionId, conversationId)，进程内（PIN-12：重启之后只靠重跑重新填）。
@@ -136,7 +136,7 @@ export interface SubAgentManager {
   /**
    * 面板追问一个已有的子 agent（agent:subAgentPrompt）：不认识 → `Sub-session not found`；正在跑 →
    * `Sub-session is busy`（在任何广播之前）；会话关着 → `peek` 重开；存储没了 → not found 并丢掉索引。
-   * 先广播 `user_message`，这一轮收尾再广播 `sub_session_end`；这一轮自己失败不拒绝。
+   * 这一轮收尾广播 `sub_session_end`（追问本身不广播，P3-08）；这一轮自己失败不拒绝。
    */
   continueTask: (params: {
     subSessionId: string
@@ -472,23 +472,10 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
         depth: entry.depth
       })
 
-      // 内联 Token（slash 命令等）：原文 + tokens 落进消息 metadata 供面板渲染标签；发给 agent 的是解析后的文本
+      // 内联 Token（slash 命令等）：发给 agent 的是解析后的文本。追问不再广播 `user_message`（P3-08：
+      // ChatEvent 只剩余项）—— 面板经 agent 视图看到它（P3-14 接面板，PIN-07）
       const hasTokens = inlineTokens !== undefined && Object.keys(inlineTokens).length > 0
       const promptText = hasTokens ? resolveTokensForAgent(text, inlineTokens) : text
-      deps.broadcast({
-        type: 'user_message',
-        sessionId: agentId,
-        message: JSON.stringify({
-          id: `${agentId}-user-${Date.now()}`,
-          sessionId: agentId,
-          role: 'user' as const,
-          type: 'text' as const,
-          content: text,
-          metadata: hasTokens ? { inlineTokens } : null,
-          model: '',
-          createdAt: Date.now()
-        })
-      })
 
       let verdict: Verdict
       try {

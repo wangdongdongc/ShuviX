@@ -199,18 +199,23 @@ describe('provider 报错', () => {
   it('对话流出现恰好一条错误行，输入框随即恢复可用', async () => {
     provider.reset()
     await events.clear()
-    provider.script({ httpStatus: 500 })
+    // 不可重试的失败（400）：durable 会把 5xx / 429 这类暂时性失败按退避重试（重试 10 次、起步 2 秒），
+    // 一条 500 之后脚本里没有下一条，重试就成功了 —— 那不是这条用例要的「一轮以失败收尾」
+    provider.script({ httpStatus: 400 })
 
     expect(await sidebar.openSession('I-error')).toBe(true)
     await chat.ready()
     await chat.typeAndSend('this will fail')
-    await events.waitFor('error', { sessionId: sids.error })
+    // 模型侧失败是一条错误条目（投影成 error_event，经视图上屏）：没有 `error` 事件，
+    // 这一轮以 agent_end{error} 收尾（P3-08 / F8）
+    const end = await events.waitFor<{ reason?: string }>('agent_end', { sessionId: sids.error })
+    expect(end.reason).toBe('error')
     await chat.waitIdle()
 
     const all = await sessionEvents(sids.error)
-    expect(all.filter((e) => e.type === 'error')).toHaveLength(1)
-    // live 的错误行是本地 local-error-*（不落盘）；agent_end 投影不出助手卡片，
-    // 故不会再补一条 —— 重复出现即缺陷
+    expect(all.filter((e) => e.type === 'error')).toHaveLength(0)
+    // 错误行只有视图里那一条 —— 重复出现即缺陷
+    await until(async () => (await chat.errorRows()) === 1, 'error row from the view')
     expect(await chat.errorRows()).toBe(1)
 
     await chat.type('retry?')

@@ -11,7 +11,8 @@
  * 只有那里知道）；mock 面沿用 sessionServiceEphemeral.test.ts，再加上通知服务自己的几件
  * （electron、决策器工厂、悬浮窗服务）。决策器是个间谍：「交没交」= `handleEvent` 有没有收到。
  *
- *   NE-1 内存会话的 agent_end / input_request / text_delta → 一条都不交；普通会话的原样交
+ *   NE-1 内存会话的 agent_end / ask_count / 询问（P3-08：经 `notifyAskRaised`，P3-08-55）→ 一条都不交；
+ *        普通会话的原样交
  *   NE-2 内存父会话的子会话（内存）→ 不交；对照：持久父会话的子会话 → 交
  *   NE-3 内存会话删除之后迟到的事件 → 不交（它的子会话一样）
  */
@@ -26,6 +27,7 @@ const mocks = vi.hoisted(() => {
   const clone = <T>(v: T): T => structuredClone(v)
   return {
     handleEvent: vi.fn(),
+    askRaised: vi.fn(),
     createNotificationCenter: vi.fn(),
     daoInsert: vi.fn((s: Record<string, unknown>) => {
       rows().set(s.id as string, clone(s))
@@ -158,6 +160,9 @@ let notifications: NotificationModule
 beforeAll(async () => {
   mocks.createNotificationCenter.mockReturnValue({
     handleEvent: mocks.handleEvent,
+    askRaised: mocks.askRaised,
+    askResolved: vi.fn(),
+    runEnded: vi.fn(),
     sessionOpened: vi.fn()
   })
   ;({ sessionService } = await import('../sessionService'))
@@ -169,30 +174,35 @@ beforeEach(() => {
   table.clear()
   sessionRecords.clearEphemeralForTests()
   mocks.handleEvent.mockClear()
+  mocks.askRaised.mockClear()
 })
 
 const EPH = { ephemeral: true }
 
-/** 会让决策器弹通知的那几类事件（一轮结束、等人回答）外加一条逐 token 的 */
+/** 会让决策器弹通知的那几类事件（一轮结束）外加一条高频的余项；询问另走 `notifyAskRaised` */
 function eventsFor(sessionId: string): ChatEvent[] {
   return [
-    { type: 'text_delta', sessionId, delta: 'x' } as ChatEvent,
-    {
-      type: 'input_request',
-      sessionId,
-      request: { id: `req-${sessionId}`, kind: 'ask', toolName: 'edit', createdAt: 1 }
-    } as unknown as ChatEvent,
-    { type: 'agent_end', sessionId } as ChatEvent
+    { type: 'ask_count', sessionId, count: 1 },
+    { type: 'agent_end', sessionId, reason: 'ok' }
   ]
 }
 
 function deliver(sessionId: string): void {
   for (const event of eventsFor(sessionId)) notifications.notifyOnChatEvent(event)
+  notifications.notifyAskRaised(sessionId, {
+    id: `req-${sessionId}`,
+    kind: 'ask',
+    toolName: 'edit',
+    command: 'edit',
+    createdAt: 1
+  })
 }
 
 function delivered(sessionId: string): number {
-  return mocks.handleEvent.mock.calls.filter((c) => (c[0] as ChatEvent).sessionId === sessionId)
-    .length
+  return (
+    mocks.handleEvent.mock.calls.filter((c) => (c[0] as ChatEvent).sessionId === sessionId).length +
+    mocks.askRaised.mock.calls.filter((c) => c[0] === sessionId).length
+  )
 }
 
 describe('NE-1 内存会话', () => {

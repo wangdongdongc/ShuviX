@@ -24,6 +24,7 @@ import {
 } from '@earendil-works/pi-durable'
 import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node'
 import type { ChatEvent } from '@shuvix/chat-protocol/events'
+import type { InputRequest } from '@shuvix/chat-protocol/types/inputRequest'
 import { afterEach } from 'vitest'
 import type { FakePort } from '../../../models/__tests__/fakePort'
 import type { PromptVars, PromptVarsCtx } from '../../../agentProfile/promptVars'
@@ -115,6 +116,14 @@ export interface TestHostOptions {
   maxAgentDepth?: number
 }
 
+/**
+ * 一条询问的挂起 / 落定，经会话的 `subscribeInputs` 记下（P3-08：询问不再广播，主进程的消费方挂钩子）。
+ * 形状沿用旧事件，好让既有断言只换一个数据源。
+ */
+export type AskRecord =
+  | { type: 'input_request'; sessionId: string; request: InputRequest }
+  | { type: 'input_request_resolved'; sessionId: string; requestId: string; clientId?: string }
+
 export interface TestHost {
   readonly host: SessionHost
   readonly kit: FauxKit
@@ -131,8 +140,10 @@ export interface TestHost {
   readonly toolHost: TestToolHost
   readonly port: FakePort
   readonly pinned: Set<string>
-  /** 广播给前端的 ChatEvent（询问卡片、agent_created / agent_closing、ToolHost 的 MCP 错误） */
+  /** 广播给前端的 ChatEvent（agent_created / agent_closing、ToolHost 的 MCP 错误） */
   readonly broadcasts: ChatEvent[]
+  /** 每条打开着的会话的询问挂起 / 落定（`subscribeInputs`，按顺序；本进程） */
+  readonly asks: AskRecord[]
   /** 有没有前端能展示询问面板 */
   capability: boolean
   /** 下一次打开这些会话时失败 */
@@ -148,6 +159,8 @@ export interface TestHost {
   statesOf(sessionId: string): RunState[]
   /** 某类广播（按顺序） */
   broadcastsOf(type: ChatEvent['type']): ChatEvent[]
+  /** 某类询问记录（按顺序） */
+  asksOf<T extends AskRecord['type']>(type: T): Extract<AskRecord, { type: T }>[]
   /** closeAll + 新进程（同一目录） */
   restart(options?: Partial<TestHostOptions>): Promise<TestHost>
 }
@@ -187,6 +200,7 @@ export async function makeHost(options: TestHostOptions = {}): Promise<TestHost>
   const configCalls: string[] = []
   const pinned = new Set<string>()
   const broadcasts: ChatEvent[] = []
+  const asks: AskRecord[] = []
   const failNextOpen = new Set<string>()
   const memory = new Map<string, MemoryStorage>()
   const warnings: string[] = []
@@ -211,6 +225,7 @@ export async function makeHost(options: TestHostOptions = {}): Promise<TestHost>
     port,
     pinned,
     broadcasts,
+    asks,
     capability: true,
     failNextOpen,
     memory,
@@ -221,6 +236,8 @@ export async function makeHost(options: TestHostOptions = {}): Promise<TestHost>
     file,
     statesOf: (sessionId) => states.filter(([id]) => id === sessionId).map(([, state]) => state),
     broadcastsOf: (type) => broadcasts.filter((event) => event.type === type),
+    asksOf: <T extends AskRecord['type']>(type: T) =>
+      asks.filter((record): record is Extract<AskRecord, { type: T }> => record.type === type),
     restart: async (overrides = {}) => {
       await withTimeout(testHost.host.closeAll(), 15000, 'closeAll in restart')
       liveHosts.delete(testHost)
@@ -294,7 +311,20 @@ export async function makeHost(options: TestHostOptions = {}): Promise<TestHost>
     },
     isEphemeral: (sessionId) => ephemeral.has(sessionId),
     isPinned: (sessionId) => pinned.has(sessionId) || (options.isPinned?.(sessionId) ?? false),
-    ...(options.onSessionOpened === undefined ? {} : { onSessionOpened: options.onSessionOpened }),
+    onSessionOpened: (session) => {
+      const sessionId = session.sessionId
+      session.subscribeInputs({
+        onRequest: (request) => asks.push({ type: 'input_request', sessionId, request }),
+        onResolved: (requestId, _response, clientId) =>
+          asks.push({
+            type: 'input_request_resolved',
+            sessionId,
+            requestId,
+            ...(clientId === undefined ? {} : { clientId })
+          })
+      })
+      options.onSessionOpened?.(session)
+    },
     ...(options.onSessionClosed === undefined ? {} : { onSessionClosed: options.onSessionClosed }),
     ...(options.maxIdleOpen === undefined ? {} : { maxIdleOpen: options.maxIdleOpen }),
     settingsOverrides: options.settingsOverrides ?? TEST_SETTINGS_OVERRIDES,

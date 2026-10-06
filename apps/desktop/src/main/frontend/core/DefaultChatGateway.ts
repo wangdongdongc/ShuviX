@@ -127,16 +127,19 @@ export class DefaultChatGateway implements ChatGateway {
 
   // ─── 交互响应 ─────────────────────────────────
 
-  respondToInput(sessionId: string, requestId: string, response: InputResponse): void {
-    // broker 按 requestId 找归属（各参与方各自认领）。**不拿 sessionId 去选
-    // 参与方** —— 那等于把前端以为的归属当成真相；它在这里只有一个用途：无人认领时
-    // 把那张卡片从界面上收走。
+  respondToInput(
+    _sessionId: string,
+    requestId: string,
+    response: InputResponse,
+    meta?: { clientId?: string }
+  ): boolean {
+    // broker 按 requestId 找归属（各参与方各自认领）。**不拿 sessionId 去选参与方** —— 那等于
+    // 把前端以为的归属当成真相。
     //
-    // 无人认领 = 请求早已被取消（会话停了、run 超时了），而前端那张待答卡还在：它只认
-    // `input_request_resolved`，后端既然不会再发，就在这里补一条。少了它，用户面对的是
-    // 一个点下去毫无反应的按钮，而唯一的线索在主进程日志里
-    if (respondToUserInput(requestId, response)) return
-    chatFrontendRegistry.broadcast({ type: 'input_request_resolved', sessionId, requestId })
+    // 无人认领 = 请求早已被取消（会话停了、run 超时了）或别的前端先答了：不再补发「已落定」
+    // （P3-08）—— 待答卡片来自视图的 `asks`，询问一落定视图就不再有它，每个前端的卡片自己消失。
+    // broker 记一行「没人认领」的日志
+    return respondToUserInput(requestId, response, meta)
   }
 
   // ─── 运行时调整 ────────────────────────────────

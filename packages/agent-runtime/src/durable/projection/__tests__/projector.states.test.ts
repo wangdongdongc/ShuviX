@@ -17,7 +17,14 @@ import type { SessionView } from '@shuvix/chat-protocol/types/sessionView'
 import { describe, expect, it } from 'vitest'
 import { backgroundContext as BG } from '../../context'
 import type { DurableSession } from '../../durableSession'
-import { answer, fauxKit, held, modelError, type FauxKit } from '../../__tests__/support/faux'
+import {
+  answer,
+  fauxKit,
+  held,
+  modelError,
+  stalled,
+  type FauxKit
+} from '../../__tests__/support/faux'
 import {
   makeHost,
   primeRoot,
@@ -287,6 +294,43 @@ describe('P3-03 · reopen of an interrupted session', () => {
       ])
       ops.stop()
       h.release()
+    },
+    TIMEOUT
+  )
+
+  it(
+    'P3-08-51 (runtime) crash before the first token, continue answers within one frame: still exactly started → ended{ok}; abort-then-send on the same shape gives no pair for the stale run',
+    async () => {
+      for (const how of ['continue', 'send'] as const) {
+        const first = await makeHost({})
+        const original = await first.open()
+        await primeRoot(original)
+        const stall = stalled()
+        first.kit.queue(stall.step)
+        void original.submitUser('go').catch(() => undefined)
+        await withTimeout(stall.reached, 5000, 'stalled')
+        const t = await first.restart({ kit: undefined, makeKit: (): FauxKit => fauxKit() })
+        const session = await t.open()
+        expect(session.isInterrupted()).toBe(true)
+        const proj = await session.projector()
+        const h = proj.acquire()
+        const lc = recordLifecycle(proj)
+        expect(h.state.value.live).toBeNull()
+        t.kit.queue(answer('quick'))
+        if (how === 'continue') {
+          expect(await withTimeout(session.continue(), 15000, 'continue')).toEqual({})
+        } else {
+          expect(await withTimeout(session.submitUser('again'), 15000, 'send')).toEqual({})
+        }
+        await settleFrames()
+        expect(
+          bare(lc.signals).map((s) => [s.kind, s.kind === 'ended' ? s.reason : undefined])
+        ).toEqual([
+          ['started', undefined],
+          ['ended', 'ok']
+        ])
+        h.release()
+      }
     },
     TIMEOUT
   )
