@@ -250,10 +250,8 @@ describe('关窗 = 删会话', () => {
     await clients.c!.eval(
       `(window.api.agent.prompt({ sessionId: ${JSON.stringify(sids.c)}, text: 'ag4: edit while I type' }).catch(() => undefined), true)`
     )
-    await ev.waitFor(
-      (e) => e.type === 'tool_start' && e.toolCallId === 'ag4_wait',
-      'doc_edit started (waiting for the user)'
-    )
+    // 工具的起止不再是事件（P3-08）：md 窗口自己订阅的会话视图里 toolRuns 到了 running
+    await ev.toolStart('ag4_wait')
     await until(
       async () => (await panes.c!.ghosts()).some((g) => g.mode === 'waiting'),
       'waiting ghost on screen'
@@ -302,7 +300,8 @@ describe('关窗 = 删会话', () => {
       { text: 'never reached', usage: USAGE }
     )
     await panes.d!.send('ag4: ask me something')
-    await ev.waitFor((e) => e.type === 'input_request', 'ask card pending', 30_000)
+    // 询问不再上前端的线（Q-P3-04）：从会话视图读
+    await until(async () => ((await ev.view())?.asks.length ?? 0) > 0, 'ask card pending', 30_000)
 
     const t0 = Date.now()
     await clients.d!.eval('window.close()').catch(() => undefined)

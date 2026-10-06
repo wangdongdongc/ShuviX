@@ -26,7 +26,7 @@
  *  - **压缩**：`pi.compaction` → `isCompactionSummary` 的一张卡，pi 的外壳剥掉（外壳对不上交出整段）。
  *  - **跳过**：`pi.system`、`pi.reset`（含交接文本）与其它种类。
  *  - **实时**：`live` = `pi.live.generation.message` 的节流中间态（需要 `live.run` 给出 id；没有 usage，
- *    没有签名 / partialJson —— 后者成了 `argsText`）；`toolRuns` = `pi.live.tools`；`run.retry` /
+ *    没有签名 / partialJson（openai-completions 叫 partialArgs）—— 后者成了 `argsText`）；`toolRuns` = `pi.live.tools`；`run.retry` /
  *    `run.compacting` 只在 busy 时给（PIN-06 / PIN-C2），`live` 与 `toolRuns` 不看运行状态（PIN-11）。
  *  - **队列**：`pi.inbox` 里的 steer / followUp（写入与通知形状的输入都不算用户的）；内联 Token 的发送
  *    有 `queueDisplay` 时把标记渲染成芯片文字。
@@ -193,7 +193,7 @@ interface ConvertedBlocks {
   readonly argsText: Map<string, string>
 }
 
-/** assistant 内容 → UI 块（按原序；只有空白的思考丢掉；签名 / partialJson 不进块） */
+/** assistant 内容 → UI 块（按原序；只有空白的思考丢掉；签名 / partialJson / partialArgs 不进块） */
 function convertBlocks(
   content: unknown,
   onTool?: (block: AssistantToolBlock) => void
@@ -222,7 +222,16 @@ function convertBlocks(
         ...(args === undefined ? {} : { args })
       }
       blocks.push(tool)
-      if (typeof block.partialJson === 'string') argsText.set(toolCallId, block.partialJson)
+      // 半截参数原文：pi-ai 的 anthropic / responses 适配器叫它 `partialJson`，openai-completions 适配器叫
+      // `partialArgs`（P3-15：只认前者时，走 openai 兼容协议的提供商从来没有 argsText，虚影退回解析出的
+      // 部分参数）
+      const partial =
+        typeof block.partialJson === 'string'
+          ? block.partialJson
+          : typeof block.partialArgs === 'string'
+            ? block.partialArgs
+            : undefined
+      if (partial !== undefined) argsText.set(toolCallId, partial)
       onTool?.(tool)
     }
   }

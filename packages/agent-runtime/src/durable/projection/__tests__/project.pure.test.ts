@@ -679,6 +679,45 @@ describe('P3-02 · pure projector: live card and toolRuns', () => {
     expect(serialized).not.toContain('SIG-')
   })
 
+  it('P3-15-AT1 argsText also from partialArgs (pi-ai openai-completions adapter); partialJson wins when both exist; neither leaks', () => {
+    const run = { taskId: 9, inputs: [] }
+    const partial = {
+      role: 'assistant',
+      content: [
+        {
+          type: 'toolCall',
+          id: 'e1',
+          name: 'doc_edit',
+          arguments: { find: 'two bo' },
+          partialArgs: '{"find": "two bo'
+        },
+        {
+          type: 'toolCall',
+          id: 'e2',
+          name: 'doc_edit',
+          arguments: {},
+          partialJson: '{"fi',
+          partialArgs: '{"other'
+        }
+      ],
+      provider: 'p',
+      model: 'm',
+      timestamp: 1
+    }
+    const view = P([], {
+      live: { run, generation: { attempt: 1, message: partial } },
+      runState: 'busy'
+    })
+    expect(view.live?.argsText).toStrictEqual({ e1: '{"find": "two bo', e2: '{"fi' })
+    expect(view.live?.message.blocks).toStrictEqual([
+      { type: 'tool', toolCallId: 'e1', toolName: 'doc_edit', args: { find: 'two bo' } },
+      { type: 'tool', toolCallId: 'e2', toolName: 'doc_edit', args: {} }
+    ])
+    const serialized = JSON.stringify(view)
+    expect(serialized).not.toContain('partialArgs')
+    expect(serialized).not.toContain('partialJson')
+  })
+
   it('P3-02-35 live card edge cases', () => {
     const run = { taskId: 7, inputs: [] }
     const message = (content: unknown[]): Record<string, unknown> => ({

@@ -2,7 +2,8 @@
  * 视图同步的 IPC 处理器（P3-05，docs/pi-durable/p3-050710a-test-design.md「IPC handler」）：
  *
  *   P3-05-08 `sync:invoke` 的注册与懒建（PIN-12）
- *   P3-05-09 错误带着 code 回来（PIN-01 信封；preload 再抛成带 `.code` 的 Error）
+ *   P3-05-09 错误带着 code 回来（PIN-01 信封；preload 以纯对象 `{code?, message}` 拒绝 —— 过 contextBridge
+ *            不丢 code，渲染端经 reviveSyncInvokeError 还原成带 `.code` 的 Error，P3-15）
  *
  * hub 是真的（syncWiring 的单例），宿主是假的（会话宿主模块整个换掉，记 getSessionHost / peek）。
  */
@@ -13,7 +14,11 @@ import {
   type JsonValue
 } from '@earendil-works/chord'
 import type { SyncHub } from '@shuvix/agent-runtime'
-import { CHAT_VIEW_SERVICE_ID, type SyncTarget } from '@shuvix/chat-protocol/sync'
+import {
+  CHAT_VIEW_SERVICE_ID,
+  reviveSyncInvokeError,
+  type SyncTarget
+} from '@shuvix/chat-protocol/sync'
 
 const holder = vi.hoisted(() => ({
   host: undefined as unknown,
@@ -144,7 +149,7 @@ describe('P3-05-09 错误带着 code 回来（PIN-01）', () => {
     return { ipc, wc, bridge: createSyncBridge(fakeIpcRenderer(wc, ipc)) }
   }
 
-  it("P3-05-09 hub 以 RemoteServiceError('service_not_found') 拒绝 → 信封 {ok:false, error:{code, message}}；preload 的 sync.invoke 以 .code = 'service_not_found' 的 Error 拒绝", async () => {
+  it("P3-05-09 hub 以 RemoteServiceError('service_not_found') 拒绝 → 信封 {ok:false, error:{code, message}}；preload 的 sync.invoke 以纯对象 {code:'service_not_found', message} 拒绝，还原后是带 code 的 Error", async () => {
     const error = new RemoteServiceError('service_not_found', 'Unknown agent a9')
     const { ipc, wc, bridge } = rig(
       () =>
@@ -160,9 +165,13 @@ describe('P3-05-09 错误带着 code 回来（PIN-01）', () => {
       error: { code: 'service_not_found', message: error.message }
     })
     const rejected = await bridge.invoke(s1, subscribe('b')).catch((e: unknown) => e)
-    expect(rejected).toBeInstanceOf(Error)
-    expect((rejected as Error & { code?: string }).code).toBe('service_not_found')
-    expect((rejected as Error).message).toBe(error.message)
+    // 纯对象（contextBridge 按值拷得过去）；structuredClone 近似那次拷贝
+    expect(rejected).not.toBeInstanceOf(Error)
+    expect(structuredClone(rejected)).toEqual({ code: 'service_not_found', message: error.message })
+    const revived = reviveSyncInvokeError(structuredClone(rejected))
+    expect(revived).toBeInstanceOf(Error)
+    expect(revived.code).toBe('service_not_found')
+    expect(revived.message).toBe(error.message)
   })
 
   it('P3-05-09 普通 Error → 带着 message 回来，code 为 undefined', async () => {
@@ -190,8 +199,9 @@ describe('P3-05-09 错误带着 code 回来（PIN-01）', () => {
     const rejected = await bridge
       .invoke({ kind: 'monitor' } as unknown as SyncTarget, subscribe('m'))
       .catch((e: unknown) => e)
-    expect(rejected).toBeInstanceOf(Error)
-    expect((rejected as Error).message).toMatch(/Invalid sync target/)
+    expect(rejected).not.toBeInstanceOf(Error)
+    expect((rejected as { message: string }).message).toMatch(/Invalid sync target/)
+    expect(reviveSyncInvokeError(rejected).message).toMatch(/Invalid sync target/)
     await settle()
     const hub = peekSyncHub()!
     for (const id of ['s1', 'monitor', 'ipc:7', '']) expect(hub.hasSubscribers(id)).toBe(false)
